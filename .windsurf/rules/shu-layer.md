@@ -12,8 +12,8 @@ trigger: always_on
 ## 项目结构
 
 ```
-<your-project>/
-├── 道德经.md                    # 源文本（不可修改）— 可选，放 references/ 亦可
+d:\frank\道\
+├── 道德经.md                    # 源文本（不可修改）
 └── .windsurf/
     ├── rules/                   # 项目规则（道·法·术三层）
     │   ├── dao-layer.md         # 道层·不变的原则
@@ -28,7 +28,8 @@ trigger: always_on
     └── skills/                  # 技能（术层实践）
         ├── reverse-engineering/   # 逆向拆解术·锚展交验归
         ├── boundary-probe/        # 边界探测术·识壁探路择水
-        └── frontend-aesthetics/   # 前端审美术·约层色密器
+        ├── frontend-aesthetics/   # 前端审美术·约层色密器
+        └── windsurf-extension/    # Windsurf扩展术·webview·存储·认证
 ```
 
 ## Skills 体系
@@ -38,6 +39,7 @@ trigger: always_on
 | `reverse-engineering` | 逆向拆解术 | 面对未知/混淆代码库，需理解其内部机制 |
 | `boundary-probe` | 边界探测术 | 集成外部系统前，需确认隔离边界与可行路径 |
 | `frontend-aesthetics` | 前端审美术 | 构建受限空间中的高信息密度界面 |
+| `windsurf-extension` | Windsurf扩展术 | 开发Windsurf/VSCode扩展，涉及webview、存储、认证 |
 
 三者互补：逆向（阴·理解）→ 探测（阳·验证）→ 审美（和·创造）。
 理解别人怎么做，验证你能怎么做，然后创造应该怎么做。
@@ -57,8 +59,6 @@ trigger: always_on
 | context7 | 文档 | 获取最新库/框架文档 |
 | filesystem | 文件 | 文件操作（读写移动） |
 | memory | 记忆 | 虚的载体（临时，涅槃时归位后清空） |
-
-> 按项目实际配置增减。不是每个项目都需要全部 MCP。
 
 ## 中间物管理
 
