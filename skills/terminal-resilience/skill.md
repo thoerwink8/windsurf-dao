@@ -1,5 +1,6 @@
 ---
-trigger: auto
+name: 终端韧性术
+trigger: always_on
 description: 终端卡死诊断与Agent五感降级恢复。当终端命令无响应、交互式prompt阻塞、或用户反馈"卡住了"时自动触发。
 ---
 

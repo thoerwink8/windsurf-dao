@@ -1,4 +1,5 @@
 ---
+name: 边界探测术
 trigger: auto
 description: 集成外部系统前，识别隔离机制并用最小穿透测试确认可行路径
 ---
