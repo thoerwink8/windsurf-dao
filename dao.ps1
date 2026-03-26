@@ -31,12 +31,34 @@ function Test-SymlinkSupport {
     $testTarget = Join-Path $env:TEMP "dao-test-target-$(Get-Random)"
     try {
         "" | Set-Content $testTarget
+        # Try cmd /c mklink first (works without admin on many Windows setups)
+        cmd /c "mklink `"$testLink`" `"$testTarget`"" 2>&1 | Out-Null
+        if (Test-Path $testLink) {
+            $item = Get-Item $testLink
+            if ($item.LinkType -eq "SymbolicLink") {
+                Remove-Item $testLink, $testTarget -Force
+                $script:SymlinkMethod = "cmd"
+                return $true
+            }
+        }
+        # Fallback: PowerShell New-Item
         New-Item -ItemType SymbolicLink -Path $testLink -Target $testTarget -ErrorAction Stop | Out-Null
         Remove-Item $testLink, $testTarget -Force
+        $script:SymlinkMethod = "pwsh"
         return $true
     } catch {
+        Remove-Item $testLink -Force -ErrorAction SilentlyContinue
         Remove-Item $testTarget -Force -ErrorAction SilentlyContinue
         return $false
+    }
+}
+
+function New-Symlink {
+    param([string]$Link, [string]$Target)
+    if ($script:SymlinkMethod -eq "cmd") {
+        cmd /c "mklink `"$Link`" `"$Target`"" | Out-Null
+    } else {
+        New-Item -ItemType SymbolicLink -Path $Link -Target $Target | Out-Null
     }
 }
 
@@ -136,16 +158,17 @@ function Invoke-Link {
 
     $Target = Resolve-TargetPath $Target
     $tw = Join-Path $Target ".windsurf"
+    $script:CanSymlink = Test-SymlinkSupport
 
     # 确保目标目录存在
     "rules", "skills", "workflows" | ForEach-Object { Ensure-Dir (Join-Path $tw $_) }
 
-    $linked = 0; $skipped = 0; $backed = 0
+    $linked = 0; $copied = 0; $skipped = 0; $backed = 0
     $backupRoot = Join-Path $Target "_dao_backup"
 
-    # Rules: 文件符号链接
+    # Rules: 符号链接（降级为复制）
     Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "dao-*.md" | ForEach-Object {
-        $dest = Join-Path $tw "rules" $_.Name
+        $dest = Join-Path (Join-Path $tw "rules") $_.Name
         if (Test-Path $dest) {
             $item = Get-Item $dest
             if ($item.LinkType -eq "SymbolicLink") {
@@ -159,13 +182,18 @@ function Invoke-Link {
             }
             Remove-Item $dest -Force
         }
-        New-Item -ItemType SymbolicLink -Path $dest -Target $_.FullName | Out-Null
-        Write-LinkResult "rules" $_.Name "link"; $linked++
+        if ($script:CanSymlink) {
+            New-Symlink -Link $dest -Target $_.FullName
+            Write-LinkResult "rules" $_.Name "link"; $linked++
+        } else {
+            Copy-Item $_.FullName $dest -Force
+            Write-LinkResult "rules" $_.Name "copy" "symlink unavailable"; $copied++
+        }
     }
 
     # Skills: 目录联接（无需 admin）
     Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory -Filter "dao-*" | ForEach-Object {
-        $dest = Join-Path $tw "skills" $_.Name
+        $dest = Join-Path (Join-Path $tw "skills") $_.Name
         if (Test-Path $dest) {
             $item = Get-Item $dest
             if ($item.LinkType -eq "Junction") {
@@ -183,9 +211,9 @@ function Invoke-Link {
         Write-LinkResult "skills" "$($_.Name)/" "link"; $linked++
     }
 
-    # Workflows: 文件符号链接
+    # Workflows: 符号链接（降级为复制）
     Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "dao-*.md" | ForEach-Object {
-        $dest = Join-Path $tw "workflows" $_.Name
+        $dest = Join-Path (Join-Path $tw "workflows") $_.Name
         if (Test-Path $dest) {
             $item = Get-Item $dest
             if ($item.LinkType -eq "SymbolicLink") {
@@ -199,12 +227,17 @@ function Invoke-Link {
             }
             Remove-Item $dest -Force
         }
-        New-Item -ItemType SymbolicLink -Path $dest -Target $_.FullName | Out-Null
-        Write-LinkResult "workflows" $_.Name "link"; $linked++
+        if ($script:CanSymlink) {
+            New-Symlink -Link $dest -Target $_.FullName
+            Write-LinkResult "workflows" $_.Name "link"; $linked++
+        } else {
+            Copy-Item $_.FullName $dest -Force
+            Write-LinkResult "workflows" $_.Name "copy" "symlink unavailable"; $copied++
+        }
     }
 
     # 配置 .git/info/exclude
-    $excludeFile = Join-Path $Target ".git" "info" "exclude"
+    $excludeFile = Join-Path (Join-Path (Join-Path $Target ".git") "info") "exclude"
     if (Test-Path $excludeFile) {
         $content = Get-Content $excludeFile -Raw -ErrorAction SilentlyContinue
         if ($content -and $content -notmatch "windsurf-dao") {
@@ -223,7 +256,13 @@ function Invoke-Link {
     Register-Target $Target
 
     # 汇报
-    Write-Host "`n  Done: $linked linked, $skipped unchanged" -ForegroundColor White
+    $summary = "Done: $linked linked"
+    if ($copied -gt 0) { $summary += ", $copied copied" }
+    $summary += ", $skipped unchanged"
+    Write-Host "`n  $summary" -ForegroundColor White
+    if ($copied -gt 0) {
+        Write-Host "  [info] Copies used (no symlink support). Run 'dao.ps1 sync' after editing dao files." -ForegroundColor Yellow
+    }
     if ($backed -gt 0) {
         Write-Host "  Backup: $backed modified copies saved to _dao_backup/" -ForegroundColor Magenta
         Write-Host "  Review backups, merge improvements back to windsurf-dao, then delete _dao_backup/" -ForegroundColor Magenta
@@ -275,7 +314,7 @@ function Invoke-Status {
     Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows"
 
     # 全局链接状态
-    $globalPath = Join-Path $env:USERPROFILE ".codeium" "windsurf" "memories" "global_rules.md"
+    $globalPath = Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories") "global_rules.md"
     if (Test-Path $globalPath) {
         $g = Get-Item $globalPath
         $gStatus = if ($g.LinkType -eq "SymbolicLink") { "linked" } else { "copy" }
@@ -313,7 +352,7 @@ function Invoke-Status {
 }
 
 function Invoke-LinkGlobal {
-    $globalDir = Join-Path $env:USERPROFILE ".codeium" "windsurf" "memories"
+    $globalDir = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories"
     $globalFile = Join-Path $globalDir "global_rules.md"
     $sourceFile = Join-Path $DaoRoot "global_rules.md"
 
@@ -330,7 +369,11 @@ function Invoke-LinkGlobal {
         Write-Host "  [backup] Existing -> global_rules.md.bak" -ForegroundColor Yellow
     }
 
-    New-Item -ItemType SymbolicLink -Path $globalFile -Target $sourceFile | Out-Null
+    if (!(Test-SymlinkSupport)) {
+        Write-Host "  [!] Symlinks unavailable for global link." -ForegroundColor Red
+        return
+    }
+    New-Symlink -Link $globalFile -Target $sourceFile
     Write-Host "  [link] global_rules.md -> $sourceFile" -ForegroundColor Green
 }
 
@@ -339,10 +382,6 @@ function Invoke-Sync {
     if ($targets.Count -eq 0) {
         Write-Host "`n  No registered targets. Use 'dao.ps1 link <path>' first." -ForegroundColor Yellow
         exit 0
-    }
-    if (!(Test-SymlinkSupport)) {
-        Write-Host "  [!] Symlinks unavailable. Enable Developer Mode." -ForegroundColor Red
-        exit 1
     }
     Write-Host "`n  Syncing $($targets.Count) registered target(s)..." -ForegroundColor Cyan
     foreach ($t in $targets) {
@@ -360,11 +399,6 @@ function Invoke-Sync {
 switch ($Action) {
     "link" {
         if (!$TargetPath) { Write-Host "Usage: .\dao.ps1 link <project-path>"; exit 1 }
-        if (!(Test-SymlinkSupport)) {
-            Write-Host "  [!] Symlinks unavailable. Enable Developer Mode:" -ForegroundColor Red
-            Write-Host "      Settings -> System -> For developers -> Developer Mode" -ForegroundColor Yellow
-            exit 1
-        }
         Write-Host "`n  Linking to: $TargetPath" -ForegroundColor Cyan
         Write-Host ""
         Invoke-Link -Target $TargetPath
@@ -379,6 +413,7 @@ switch ($Action) {
         Invoke-Status -Target $TargetPath
     }
     "sync" {
+        Write-Host "`n  Syncing..." -ForegroundColor Cyan
         Invoke-Sync
     }
     "link-global" {
