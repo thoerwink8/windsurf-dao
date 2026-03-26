@@ -3,7 +3,7 @@ trigger: always_on
 ---
 # 法层 · 怎么做
 
-> 此文件为法层。道层见 dao-layer.md，德层见 de-layer.md，术层见 shu-layer.md + skills。
+> 此文件为法层。道层见 dao-layer.md，德层见 dao-de-layer.md，术层见 dao-shu-layer.md + skills。
 
 ## 工作流生态
 

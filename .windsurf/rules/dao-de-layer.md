@@ -6,7 +6,7 @@ trigger: always_on
 > 上德不德，是以有德；下德不失德，是以无德。
 > 上德无为而无以为；下德无为而有以为。
 
-道层见 dao-layer.md，法层见 fa-layer.md，术层见 shu-layer.md。
+道层见 dao-layer.md，法层见 dao-fa-layer.md，术层见 dao-shu-layer.md。
 
 ## 零、活的理解
 

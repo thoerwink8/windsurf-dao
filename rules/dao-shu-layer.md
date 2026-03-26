@@ -8,7 +8,7 @@ trigger: always_on
 > 三十辐共一毂，当其无，有车之用。埏埴以为器，当其无，有器之用。
 > 故有之以为利，无之以为用。
 
-道层见 dao-layer.md，德层见 de-layer.md，法层见 fa-layer.md。
+道层见 dao-layer.md，德层见 dao-de-layer.md，法层见 dao-fa-layer.md。
 
 ## 项目结构
 
@@ -18,9 +18,9 @@ d:\frank\道\
 └── .windsurf/
     ├── rules/                   # 项目规则（道·德·法·术四层）
     │   ├── dao-layer.md         # 道层·不变的原则
-    │   ├── de-layer.md          # 德层·如何为人（行为协议）
-    │   ├── fa-layer.md          # 法层·怎么做
-    │   └── shu-layer.md         # 术层·用什么（本文件）
+    │   ├── dao-de-layer.md      # 德层·如何为人（行为协议）
+    │   ├── dao-fa-layer.md      # 法层·怎么做
+    │   └── dao-shu-layer.md     # 术层·用什么（本文件）
     ├── workflows/               # 工作流（法层实践）
     │   ├── dao-cycle.md             # 转法轮·深度迭代
     │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断
