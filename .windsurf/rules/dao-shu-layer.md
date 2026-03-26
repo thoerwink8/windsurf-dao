@@ -74,6 +74,33 @@ d:\frank\道\
 
 Memory与中间物同理——都是虚的表现，用完归位后消散。
 
+## 项目集成
+
+> 善行无辙迹，善言无瑕謫。
+
+dao 配置复制到目标项目后，需要与项目自有文件和谐共存：
+
+**命名空间**：所有 dao 来源的文件统一使用 `dao-` 前缀，一眼分清来源。
+
+| 类型 | dao 元层 | 项目操作层 |
+|------|---------|------------|
+| Rules | `dao-layer.md`、`dao-de-layer.md` 等 | `ask-next-step.md` 等 |
+| Skills | `dao-boundary-probe/` 等 | `frontend-design/` 等 |
+| Workflows | `dao-cycle.md` 等 | `commit.md`、`review.md` 等 |
+
+**本地忽略**：dao 文件通过 `.git/info/exclude` 本地忽略，不用 `.gitignore`。
+
+```
+# .git/info/exclude
+.windsurf/rules/dao-*
+.windsurf/skills/dao-*
+.windsurf/workflows/dao-*
+```
+
+- `.gitignore` 是项目共享的，dao 配置是个人的 AI 工作方式，不应强加给团队
+- 项目自有的 `.windsurf/` 文件正常追踪，只有 `dao-*` 前缀的本地忽略
+- 详见 MIGRATION.md
+
 ## 器的减法
 
 > 为学日益，为道日损。
