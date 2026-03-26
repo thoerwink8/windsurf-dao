@@ -1,6 +1,6 @@
 ---
 name: dao-windsurf-extension
-trigger: always_on
+trigger: auto
 description: Windsurf扩展开发的已验证技术约束与最佳实践
 ---
 

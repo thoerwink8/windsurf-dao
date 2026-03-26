@@ -77,7 +77,7 @@
 
 ### 德层行为倾向（`global_rules.md`）
 
-五感×器映射 + 八德（认知卸载、信息熵减、涅槃轮转…）
+五感×器映射 + 八德（认知卸载、信息熵减、结构先行、一推到底…）
 
 ### 源文本（`references/道德经.md`）
 
@@ -91,26 +91,21 @@
 git clone <repo-url>
 ```
 
-### 2. 复制规则到你的项目
+### 2. 链接规则到你的项目
 
-详见 [MIGRATION.md](MIGRATION.md)。简版：
+通过符号链接部署，所有项目共享同一份文件，编辑即时生效：
 
-```bash
-# 复制 dao-* 文件到你的项目
-cp windsurf-dao/.windsurf/rules/dao-*.md  your-project/.windsurf/rules/
-cp -r windsurf-dao/.windsurf/skills/dao-* your-project/.windsurf/skills/
-cp windsurf-dao/.windsurf/workflows/dao-*.md your-project/.windsurf/workflows/
+```powershell
+# 链接 dao 文件到目标项目（自动配置 .git/info/exclude）
+.\dao.ps1 link D:\your\project
+
+# 链接全局规则到 Windsurf 配置（一次性）
+.\dao.ps1 link-global
 ```
 
-### 3. 安装全局规则
+> 需要 Windows Developer Mode。详见 [MIGRATION.md](MIGRATION.md)。
 
-将 `global_rules.md` 的内容复制到 Windsurf 的全局规则文件：
-
-- **Windows**: `C:\Users\<用户名>\.codeium\windsurf\memories\global_rules.md`
-- **macOS**: `~/.codeium/windsurf/memories/global_rules.md`
-- **Linux**: `~/.codeium/windsurf/memories/global_rules.md`
-
-### 4. 开始使用
+### 3. 开始使用
 
 在 Windsurf 中打开你的项目，AI 会自动加载 `.windsurf/` 中的规则、工作流和技能。
 

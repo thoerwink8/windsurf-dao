@@ -1,4 +1,6 @@
 _tmp/
 _scratch/
+_dao_backup/
+.dao-targets
 .DS_Store
 Thumbs.db
