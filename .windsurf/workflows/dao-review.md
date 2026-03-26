@@ -1,5 +1,5 @@
 ---
-description: Review code changes for bugs, security issues, and improvements
+description: 代码审查：逻辑/安全/质量三层扫描，找病纳谏。当需要review代码变更时触发。
 ---
 
 # 代码审查 · Review

@@ -17,44 +17,91 @@ description: 系统健康检查：检测规则/配置/Skills是否完整，发�
 
 ### 一、检测（☲离 · 视 · 照见缺失）
 
-检查以下关键文件是否存在且内容完整：
+#### 1.1 文件完整性 + 链接状态（动态检测）
 
-**规则层：**
-- [ ] `rules/dao-layer.md` — 道层规则
-- [ ] `rules/dao-de-layer.md` — 德层规则
-- [ ] `rules/dao-fa-layer.md` — 法层规则
-- [ ] `rules/dao-shu-layer.md` — 术层规则
+不硬编码文件列表。从 windsurf-dao 源仓库动态获取应有的 dao-* 文件，与当前项目比对：
 
-**工作流：**
-- [ ] `workflows/dao-dev.md` — 开发管线
-- [ ] `workflows/dao-cycle.md` — 转法轮
-- [ ] `workflows/dao-debug-escalation.md` — 调试升级
-- [ ] `workflows/dao-doc.md` — 文档
-- [ ] `workflows/dao-distill.md` — 知识沉淀
-- [ ] `workflows/dao-evolve.md` — 进化
-- [ ] `workflows/dao-health-check.md` — 健康检查
-- [ ] `workflows/dao-review.md` — 代码审查
-- [ ] `workflows/dao-test.md` — 测试
-- [ ] `workflows/dao-refactor.md` — 重构
-- [ ] `workflows/dao-optimize.md` — 性能优化
+**定位源仓库**：从任一现有 symlink 的 Target 反推，或询问用户。
 
-**技能：**
-- [ ] `skills/` 目录下各技能的 `skill.md` 存在
+```powershell
+# 动态对比：源仓库有哪些 dao-* 文件，当前项目缺哪些
+$daoSource = "<windsurf-dao-path>\.windsurf"
+# Rules
+diff (Get-ChildItem "$daoSource\rules" -Filter "dao-*.md" -Name) (Get-ChildItem ".windsurf\rules" -Filter "dao-*.md" -Name)
+# Skills
+diff (Get-ChildItem "$daoSource\skills" -Directory -Filter "dao-*" -Name) (Get-ChildItem ".windsurf\skills" -Directory -Filter "dao-*" -Name)
+# Workflows
+diff (Get-ChildItem "$daoSource\workflows" -Filter "dao-*.md" -Name) (Get-ChildItem ".windsurf\workflows" -Filter "dao-*.md" -Name)
+```
 
-**内容完整性：**
-- 每个规则文件有 `trigger: always_on` frontmatter
-- 每个工作流文件有 `description:` frontmatter
-- 四层架构一致：道/德/法/术 文件齐全
+有差异 → 源仓库新增了文件 → 需要重新 `dao.ps1 link`。
+
+#### 1.2 链接状态
+
+dao 文件应通过符号链接指向 windsurf-dao 源仓库，而非独立副本。
+
+**检测方法**（AI 执行）：
+```powershell
+# 检查单个文件的链接状态
+Get-Item ".windsurf\rules\dao-layer.md" | Select-Object Name, LinkType, Target
+```
+
+**状态判定**：
+- `LinkType = SymbolicLink/Junction` → 🟢 已链接
+- `LinkType` 为空（普通文件/目录）→ 🟡 副本（需升级）
+- 文件不存在 → 🔴 缺失
+
+#### 1.3 全局规则
+
+```powershell
+Get-Item "$env:USERPROFILE\.codeium\windsurf\memories\global_rules.md" | Select-Object LinkType, Target
+```
+
+- 链接 → 🟢 | 副本 → 🟡 | 不存在 → 🔴
+
+#### 1.4 内容完整性
+
+- 规则文件有 `trigger: always_on` frontmatter
+- 工作流文件有 `description:` frontmatter
+- 四层架构一致：道/德/法/术 齐全
 
 ### 二、诊断（☵坎 · 听 · 听回响）
 
-- 缺失文件 → 标记为 🔴
-- 内容不完整 → 标记为 🟡
-- 正常 → 标记为 🟢
+| 状态 | 含义 | 行动 |
+|------|------|------|
+| 🟢 | 已链接，内容完整 | 无需操作 |
+| 🟡 | 副本或内容不全 | 升级为链接 |
+| � | 缺失 | 部署链接 |
 
-### 三、恢复（☳震 · 触 · 修复）
+### 三、修复（☳震 · 触 · 自动恢复）
 
-- 缺失的规则文件 → 从模板或备份恢复
+#### 定位 windsurf-dao 源仓库
+
+**优先级**：
+1. 从现有 symlink 的 Target 反推源仓库路径
+2. 检查常见位置：当前驱动器下搜索 `windsurf-dao/dao.ps1`
+3. 询问用户
+
+#### 执行修复
+
+```powershell
+# 从 windsurf-dao 源仓库执行（AI 自动定位并运行）
+// turbo
+<windsurf-dao-path>\dao.ps1 link <current-project-path>
+
+# 全局规则（如需要）
+// turbo
+<windsurf-dao-path>\dao.ps1 link-global
+```
+
+`dao.ps1 link` 会自动处理：
+- 副本与源相同 → 替换为链接
+- 副本与源不同 → 备份到 `_dao_backup/` 后替换
+- 已是链接 → 跳过
+- 配置 `.git/info/exclude`
+
+#### Memory 清理
+
 - 过时的 Memory → 归位后删除
 - 不一致的引用 → 更新
 
@@ -64,8 +111,9 @@ description: 系统健康检查：检测规则/配置/Skills是否完整，发�
 ## 🏥 健康检查报告
 | 域 | 状态 | 发现 |
 |----|------|------|
-| 规则 | 🟢/🟡/🔴 | [具体] |
-| 工作流 | 🟢/🟡/🔴 | [具体] |
-| 技能 | 🟢/🟡/🔴 | [具体] |
+| 规则 | 🟢/🟡/🔴 | [N linked / N copy / N missing] |
+| 工作流 | 🟢/🟡/🔴 | [同上] |
+| 技能 | 🟢/🟡/🔴 | [同上] |
+| 全局规则 | 🟢/🟡/🔴 | [linked/copy/missing] |
 | Memory | 🟢/🟡/🔴 | [残留/已清空] |
 ```
