@@ -21,11 +21,11 @@ d:\frank\道\
     │   ├── fa-layer.md          # 法层·怎么做
     │   └── shu-layer.md         # 术层·用什么（本文件）
     ├── workflows/               # 工作流（法层实践）
-    │   ├── cycle.md             # 转法轮·深度迭代
-    │   ├── debug-escalation.md  # 调试升级·逐层诊断
-    │   ├── dev.md               # 开发管线·全流程交付
-    │   ├── doc.md               # 文档·传灯
-    │   └── evolve.md            # 进化·自我审视
+    │   ├── dao-cycle.md             # 转法轮·深度迭代
+    │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断
+    │   ├── dao-dev.md               # 开发管线·全流程交付
+    │   ├── dao-doc.md               # 文档·传灯
+    │   └── dao-evolve.md            # 进化·自我审视
     └── skills/                  # 技能（术层实践）
         ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
         ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
