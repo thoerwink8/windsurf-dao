@@ -21,21 +21,22 @@ description: 系统健康检查：检测规则/配置/Skills是否完整，发�
 
 **规则层：**
 - [ ] `rules/dao-layer.md` — 道层规则
-- [ ] `rules/de-layer.md` — 德层规则
-- [ ] `rules/fa-layer.md` — 法层规则
-- [ ] `rules/shu-layer.md` — 术层规则
+- [ ] `rules/dao-de-layer.md` — 德层规则
+- [ ] `rules/dao-fa-layer.md` — 法层规则
+- [ ] `rules/dao-shu-layer.md` — 术层规则
 
 **工作流：**
-- [ ] `workflows/dev.md` — 开发管线
-- [ ] `workflows/cycle.md` — 转法轮
-- [ ] `workflows/debug-escalation.md` — 调试升级
-- [ ] `workflows/doc.md` — 文档
-- [ ] `workflows/evolve.md` — 进化
-- [ ] `workflows/health-check.md` — 健康检查
-- [ ] `workflows/review.md` — 代码审查
-- [ ] `workflows/test.md` — 测试
-- [ ] `workflows/refactor.md` — 重构
-- [ ] `workflows/optimize.md` — 性能优化
+- [ ] `workflows/dao-dev.md` — 开发管线
+- [ ] `workflows/dao-cycle.md` — 转法轮
+- [ ] `workflows/dao-debug-escalation.md` — 调试升级
+- [ ] `workflows/dao-doc.md` — 文档
+- [ ] `workflows/dao-distill.md` — 知识沉淀
+- [ ] `workflows/dao-evolve.md` — 进化
+- [ ] `workflows/dao-health-check.md` — 健康检查
+- [ ] `workflows/dao-review.md` — 代码审查
+- [ ] `workflows/dao-test.md` — 测试
+- [ ] `workflows/dao-refactor.md` — 重构
+- [ ] `workflows/dao-optimize.md` — 性能优化
 
 **技能：**
 - [ ] `skills/` 目录下各技能的 `skill.md` 存在
