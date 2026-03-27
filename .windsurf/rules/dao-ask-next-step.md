@@ -1,4 +1,5 @@
 ---
+trigger: always_on
 description: 每次回答后调用 ask_user_question 呈现下一步选项。模型有轮次限制时激活。
 ---
 
