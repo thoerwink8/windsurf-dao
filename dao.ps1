@@ -464,8 +464,8 @@ switch ($Action) {
   Usage:
     .\dao.ps1 link <project-path>     Link dao files to target project
     .\dao.ps1 unlink <project-path>   Remove links from target project
-    .\dao.ps1 sync                    Re-link all registered targets
-    .\dao.ps1 status [project-path]   Show link status
+    .\dao.ps1 sync                    Re-link all registered targets + show change summary
+    .\dao.ps1 status [project-path]   Show link status; omit path to see health matrix for all registered projects
     .\dao.ps1 link-global             Link global_rules.md to Windsurf config
 
   Requires: Windows Developer Mode (for file symlinks)
