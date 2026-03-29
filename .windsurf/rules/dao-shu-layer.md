@@ -21,6 +21,7 @@ trigger: always_on
     │   ├── dao-fa-layer.md      # 法层·怎么做
     │   └── dao-shu-layer.md     # 术层·用什么（本文件）
     ├── workflows/               # 工作流（法层实践）
+    │   ├── dao-commit.md            # 提交·归藏
     │   ├── dao-cycle.md             # 转法轮·深度迭代
     │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断
     │   ├── dao-dev.md               # 开发管线·全流程交付
@@ -39,26 +40,6 @@ trigger: always_on
         ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
         └── dao-terminal-resilience/   # 终端韧性术·五感降级恢复
 ```
-
-## Skills 体系
-
-| Skill                     | 域             | 触发场景                                        |
-| ------------------------- | -------------- | ----------------------------------------------- |
-| `dao-reverse-engineering` | 逆向拆解术     | 面对未知/混淆代码库，需理解其内部机制           |
-| `dao-boundary-probe`      | 边界探测术     | 集成外部系统前，需确认隔离边界与可行路径        |
-| `dao-frontend-aesthetics` | 前端审美术     | 构建受限空间中的高信息密度界面                  |
-| `dao-windsurf-extension`  | Windsurf扩展术 | 开发Windsurf/VSCode扩展，涉及webview、存储·认证 |
-| `dao-terminal-resilience` | 终端韧性术     | 终端卡死诊断与Agent五感降级恢复                 |
-
-逆向（阴·理解）→ 探测（阳·验证）→ 审美（和·创造）。
-理解别人怎么做，验证你能怎么做，然后创造应该怎么做。
-韧性术贯穿全程——确保每步操作的健壮性。
-
-**技能使用原则：**
-
-- 技能自动触发，不需要显式调用
-- 与工作流互补：工作流是流程，技能是能力
-- 善行无辙迹——最好的技能运用是不被察觉的
 
 ## MCP 工具
 
