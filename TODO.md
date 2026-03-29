@@ -42,8 +42,8 @@ dao-dev.md 涅槃阶段补入"若项目有 AGENT_GUIDE.md，写入演化条目"�
 
 **需求**：sync 完成后显示"本次传播影响了哪些内容"摘要（当源文件有 git diff 时）。
 
-- [ ] 分析 dao.ps1 sync 实现
-- [ ] 考虑是否在 sync 后运行 `git diff --stat` 给出本次变更摘要
+- [x] 分析 dao.ps1 sync 实现
+- [x] 考虑是否在 sync 后运行 `git diff --stat` 给出本次变更摘要
 
 ---
 
@@ -51,6 +51,6 @@ dao-dev.md 涅槃阶段补入"若项目有 AGENT_GUIDE.md，写入演化条目"�
 
 **需求**：`dao.ps1 status` 扩展，显示每个注册项目是否已有 TODO.md 和 AGENT_GUIDE.md（新范式的落地情况）。
 
-- [ ] 扩展 `dao.ps1 status` 命令
-- [ ] 输出：`✓ TODO.md` / `✗ AGENT_GUIDE.md` 状态矩阵
+- [x] 扩展 `dao.ps1 status` 命令
+- [x] 输出：`✓ TODO.md` / `✗ AGENT_GUIDE.md` 状态矩阵
 
