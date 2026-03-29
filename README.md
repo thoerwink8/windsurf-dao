@@ -27,17 +27,22 @@
 
 ## 包含什么
 
-### 四层规则（`.windsurf/rules/`）
+### 六个规则文件（`.windsurf/rules/`）
 
-- **道层** `dao-layer.md` — 八条不变原则（道生万物、为道日损、反者道之动…）
-- **德层** `dao-de-layer.md` — 行为协议（推理链、注意力锚点、执行协议、涅槃门、铁律）
-- **法层** `dao-fa-layer.md` — 工作流生态、静默执行、虚·知识归位机制
-- **术层** `dao-shu-layer.md` — Skills 体系、MCP 工具、中间物管理
+| 文件                   | 层   | 内容                                               |
+| ---------------------- | ---- | -------------------------------------------------- |
+| `dao-layer.md`         | 道   | 八条不变原则（道生万物、为道日损、反者道之动…）    |
+| `dao-de-layer.md`      | 德   | 行为协议（推理链·第一性原理·注意力锚点·执行协议·涅槃门·铁律·假设审计） |
+| `dao-fa-layer.md`      | 法   | 工作流生态、静默执行、虚·知识归位机制              |
+| `dao-shu-layer.md`     | 术   | Skills 体系、MCP 工具、中间物管理                  |
+| `dao-ask-next-step.md` | 续力 | 每次用户可见回答后调用 `ask_user_question`；autopilot 激活期间豁免 |
+| `dao-fa-mechanism.md`  | 参考 | Windsurf 运行机制（注入格式、激活模式、symlink 陷阱） |
 
-### 十二个工作流（`.windsurf/workflows/`）
+### 十三个工作流（`.windsurf/workflows/`）
 
 | 工作流              | 卦         | 功能                                              |
 | ------------------- | ---------- | ------------------------------------------------- |
+| `/autopilot`        | ☯ 太极·运 | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写 `[x]`，直到完成或中断 |
 | `/dev`              | ☰ 乾·创生 | 从一句话需求到完整交付的全流程管线                |
 | `/cycle`            | ☲ 离·照见 | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
 | `/debug-escalation` | ☵ 坎·听症 | 四层逐级升级的调试流程（听症→探脉→辨根→问道）     |
@@ -53,13 +58,13 @@
 
 ### 五个技能（`.windsurf/skills/`）
 
-| 技能               | 适用场景                                        |
-| ------------------ | ----------------------------------------------- |
-| **逆向拆解术**     | 面对未知/混淆代码库，五步法：锚→展→交→验→归     |
-| **边界探测术**     | 集成外部系统前，三步法：识壁→探路→择水          |
-| **前端审美术**     | 受限空间中的高信息密度界面，四步法：约→层→色→密 |
-| **终端韧性术**     | 终端卡死诊断与五感降级恢复，七类模式分类        |
-| **Windsurf扩展术** | Windsurf/VSCode 扩展开发的已验证技术约束        |
+| 技能                   | 适用场景                                        |
+| ---------------------- | ----------------------------------------------- |
+| `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归  |
+| `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水        |
+| `dao-frontend-aesthetics` | 受限空间中的高信息密度界面，四步法：约→层→色→密 |
+| `dao-terminal-resilience` | 终端卡死诊断与五感降级恢复，七类模式分类      |
+| `dao-windsurf-extension`  | Windsurf/VSCode 扩展开发的已验证技术约束      |
 
 ### MCP 配置（`mcp/`）
 
@@ -80,9 +85,22 @@
 
 五感×器映射 + 八德（认知卸载、信息熵减、结构先行、一推到底…）
 
+部署到 `~/.codeium/windsurf/memories/global_rules.md`，对所有项目全局生效。
+
+### 项目知识文件
+
+每个接入 dao 的项目推荐维护：
+
+| 文件            | 作用                                           |
+| --------------- | ---------------------------------------------- |
+| `TODO.md`       | 任务图唯一载体（待完成 / 进行中 / 已完成）     |
+| `AGENT_GUIDE.md` | 活体知识库（架构、演化记录、教训）            |
+
+windsurf-dao 自身也以此为范——身教重于言教。
+
 ### 源文本（`references/道德经.md`）
 
-老子《道德经》全文——一切规则的推导源头。
+老子《道德经》全文——一切规则的推导源头，不可修改。
 
 ## 快速开始
 
@@ -97,14 +115,27 @@ git clone <repo-url>
 通过符号链接部署，所有项目共享同一份文件，编辑即时生效：
 
 ```powershell
-# 链接 dao 文件到目标项目（自动配置 .git/info/exclude）
+# 链接 dao 文件到目标项目（自动创建目录、配置 .git/info/exclude）
 .\dao.ps1 link D:\your\project
 
 # 链接全局规则到 Windsurf 配置（一次性）
 .\dao.ps1 link-global
+
+# 查看链接状态
+.\dao.ps1 status D:\your\project
 ```
 
-> 需要 Windows Developer Mode。详见 [MIGRATION.md](MIGRATION.md)。
+> 需要 Windows Developer Mode（symlink 权限）。详见 [MIGRATION.md](MIGRATION.md)。
+
+### dao.ps1 命令
+
+| 命令                  | 作用                                          |
+| --------------------- | --------------------------------------------- |
+| `link <path>`         | 创建 symlink/junction 从目标项目指向源仓库    |
+| `unlink <path>`       | 移除链接（不影响源文件）                      |
+| `status [path]`       | 显示链接状态                                  |
+| `sync`                | 将源仓库变更传播到所有注册项目                |
+| `link-global`         | 链接 `global_rules.md` 到 Windsurf 全局配置   |
 
 ### 3. 开始使用
 
@@ -113,8 +144,37 @@ git clone <repo-url>
 试试：
 
 - 给 AI 一个需求，观察它是否自动进入 `/dev` 管线
+- 输入 `/autopilot` 让 AI 自主驾驶完成复杂目标
 - 输入 `/cycle` 观察五相迭代
 - 遇到 bug 时观察 `/debug-escalation` 是否自动触发
+
+## 部署结构
+
+链接后目标项目的目录结构：
+
+```
+target-project/
+├── TODO.md                          # (tracked) 任务图唯一载体
+├── AGENT_GUIDE.md                   # (tracked) 活体知识库
+├── .git/info/exclude                # dao-* 本地忽略规则
+└── .windsurf/
+    ├── rules/
+    │   ├── dao-layer.md             # → symlink (locally ignored)
+    │   ├── dao-de-layer.md          # → symlink (locally ignored)
+    │   ├── dao-fa-layer.md          # → symlink (locally ignored)
+    │   ├── dao-shu-layer.md         # → symlink (locally ignored)
+    │   ├── dao-ask-next-step.md     # → symlink (locally ignored)
+    │   ├── dao-fa-mechanism.md      # → symlink (locally ignored)
+    │   └── *.md                     # ← 项目规则 (tracked)
+    ├── skills/
+    │   ├── dao-*/                   # → junction (locally ignored)
+    │   └── project-skill/           # ← 项目技能 (tracked)
+    └── workflows/
+        ├── dao-*.md                 # → symlink (locally ignored)
+        └── project-workflow.md      # ← 项目工作流 (tracked)
+```
+
+**变更流**：在任意项目中编辑 `dao-*` 文件 → 物理修改的是 windsurf-dao → 所有项目即时可见 → 在 windsurf-dao 中 `git commit`。
 
 ## 自定义
 
@@ -150,6 +210,7 @@ git clone <repo-url>
 1. **AI 配对编程是关系，不是工具调用** — 人+AI=AGI，是冲气以为和
 2. **真正的进化是减法** — 规则越少越好，能力越内化越好
 3. **规则的终态是忘掉规则** — 含德之厚，比于赤子
+4. **身教重于言教** — 推广给别人的范式，自身先实践
 
 ## 许可
 
