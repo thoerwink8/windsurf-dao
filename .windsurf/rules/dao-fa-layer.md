@@ -91,54 +91,6 @@ trigger: always_on
 | 道层 | 仅深化理解，不推翻 |
 | 德法术 | 按需，通过 /evolve 或直接编辑 |
 
-## 天层机制感知
-
-> 知人者智，自知者明。
-
-- 规则文件（always_on）注入 `<user_rules>`，用户规则优先于系统默认
-- `workspace_layout` 是静态快照，长对话需主动重建文件感知
-- `// turbo` 注释可让工作流中的安全命令自动执行
-
-### 注入格式（重要）
-
-Windsurf 将 `always_on` 规则文件渲染为 `<MEMORY[filename]>` 标签注入 `<user_rules>`——这是 Windsurf 的**渲染格式**，不是 Memory MCP 的条目。当 Memory MCP 图为空、但 `<user_rules>` 中出现 `<MEMORY[...]>` 标签时，说明规则文件链接正常。
-
-### 符号链接读取陷阱
-
-Windows 符号链接/目录联接在不同工具下报告不一致：
-- `list_dir` / PowerShell `Get-Item .Length` → 显示 **0**（链接本身大小，非目标内容）
-- `mcp2_list_directory_with_sizes` → 显示**实际内容大小**（穿透链接读目标）
-- `mcp2_directory_tree` → 目录联接(Junction)可能被识别为"file"类型
-
-**判断文件是否有效**：用 `mcp2_list_directory_with_sizes` 或直接读取内容，不依赖 `list_dir` 的大小报告。
-
-### 全局规则链接状态
-
-`~/.codeium/windsurf/memories/global_rules.md` 应为指向 `windsurf-dao/global_rules.md` 的符号链接，而非副本。副本不会随源更新。用 `/health-check` 定期验证，用 `dao.ps1 link-global` 修复。
-
-### 四类激活模式（Rules）
-
-| trigger 值 | 行为 | 上下文消耗 |
-|-----------|------|-----------|
-| `always_on` | 每条消息都注入完整内容 | 每轮 |
-| `model_decision` | 仅注入 description，模型决定是否读全文 | 按需 |
-| `glob` | 匹配到指定文件类型时注入 | 按需 |
-| `manual` | 不在提示词中，需 @rule-name 触发 | 手动 |
-
-单个规则文件上限：12,000 字符。全局规则文件上限：6,000 字符。
-
-### AGENTS.md（新机制）
-
-根目录 `AGENTS.md` = always-on，子目录 `AGENTS.md` = glob（按文件位置自动范围）。无需 frontmatter。适合目录级约定，与 `.windsurf/rules/` 互补。
-
-### Cascade Hooks（新机制）
-
-`.windsurf/hooks.json` — 在 Cascade 动作前后执行自定义脚本：`pre_write_code`、`post_run_command`、`pre_user_prompt`、`post_cascade_response` 等。pre-hook 返回 exit code 2 可阻断操作。
-
-### Skills 渐进披露
-
-Skills 只向模型展示 `name` + `description`，完整内容在模型决定调用时才加载。`trigger: always_on` 对 skills 无效——需要始终注入的内容应写在 Rules 文件中。
-
 ## 一致性
 
 法不违德，德不违道，道法自然。

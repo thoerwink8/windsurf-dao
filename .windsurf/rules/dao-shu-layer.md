@@ -8,38 +8,7 @@ trigger: always_on
 > 三十辐共一毂，当其无，有车之用。埏埴以为器，当其无，有器之用。
 > 故有之以为利，无之以为用。
 
-道层见 dao-layer.md，德层见 dao-de-layer.md，法层见 dao-fa-layer.md。
-
-## 项目结构
-
-```
-<project>/
-└── .windsurf/
-    ├── rules/                   # 项目规则（道·德·法·术四层）
-    │   ├── dao-layer.md         # 道层·不变的原则
-    │   ├── dao-de-layer.md      # 德层·如何为人（行为协议）
-    │   ├── dao-fa-layer.md      # 法层·怎么做
-    │   └── dao-shu-layer.md     # 术层·用什么（本文件）
-    ├── workflows/               # 工作流（法层实践）
-    │   ├── dao-commit.md            # 提交·归藏
-    │   ├── dao-cycle.md             # 转法轮·深度迭代
-    │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断
-    │   ├── dao-dev.md               # 开发管线·全流程交付
-    │   ├── dao-distill.md           # 知识沉淀·归虚
-    │   ├── dao-doc.md               # 文档·传灯
-    │   ├── dao-evolve.md            # 进化·自我审视
-    │   ├── dao-health-check.md      # 健康检查·自知
-    │   ├── dao-review.md            # 代码审查·纳谏
-    │   ├── dao-test.md              # 测试·验证
-    │   ├── dao-refactor.md          # 重构·安全优化
-    │   └── dao-optimize.md          # 性能·调优
-    └── skills/                  # 技能（术层实践）
-        ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
-        ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
-        ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器
-        ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
-        └── dao-terminal-resilience/   # 终端韧性术·五感降级恢复
-```
+道层见 dao-layer.md，德层见 dao-de-layer.md，法层见 dao-fa-layer.md。目录结构见 dao-fa-mechanism.md。
 
 ## MCP 工具
 
