@@ -1,6 +1,5 @@
 ---
 name: dao-frontend-aesthetics
-trigger: auto
 description: 在受限空间中设计高信息密度、高辨识度的界面。当构建 VS Code 扩展 UI、仪表盘、或任何空间受限的信息界面时触发。
 ---
 

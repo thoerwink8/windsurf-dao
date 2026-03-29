@@ -1,6 +1,5 @@
 ---
 name: dao-reverse-engineering
-trigger: auto
 description: 面对未知/混淆的代码库时，系统化的逆向分析流程
 ---
 
