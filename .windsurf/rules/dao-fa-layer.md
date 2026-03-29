@@ -67,15 +67,9 @@ trigger: always_on
 
 > 万物归根，归根曰静。
 
-涅槃时（任务完成、/dev 结束、/cycle 达标），执行以下步骤：
+涅槃时：扫描存活Memory → 路由到归属文件（用 `edit`/`write_to_file` 写入） → 用 `create_memory` Action="delete" 逐条删除 → 验证为空。
 
-1. **扫描**：检查所有存活的 Memory（`create_memory` 创建的条目）
-2. **路由**：每条 Memory 对照归属表判断去向
-3. **归位**：有持久价值 → 用 `edit` 或 `write_to_file` 写入目标文件
-4. **删除**：用 `create_memory` Action="delete" 逐条删除已归位的 Memory
-5. **验证**：确认 Memory 为空
-
-**不可跳过**——涅槃报告必须包含"虚：已归位/已清空"或"虚：无残留Memory"。
+**不可跳过**——涅槃报告必须含"虚：已归位/已清空"或"虚：无残留Memory"。
 
 ### 补漏 · 会话审计
 
