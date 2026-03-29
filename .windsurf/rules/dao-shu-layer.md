@@ -72,7 +72,8 @@ trigger: always_on
 | github          | 代码   | GitHub API（含 Clash 代理自检）    |
 | memory          | 记忆   | 虚的载体（临时，涅槃时归位后清空） |
 | playwright      | 浏览器 | 无头浏览器自动化、JS渲染SPA交互    |
-| tavily          | 搜索   | Web 搜索（国内直连）               |
+
+**注**：MCP 工具集因环境而异，每次对话可从工具调用的可用列表中确认实际加载了哪些工具。
 
 ## 中间物管理
 
