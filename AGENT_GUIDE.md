@@ -67,6 +67,25 @@
 
 > 每次修改在此追加条目。格式：版本·日期·变更·根因·教训。
 
+### 2026.03.29 · W3+W4+OPT autopilot 执行
+
+**变更**：
+- `dao.ps1`: `Invoke-Sync` 末尾增加 `git diff --stat HEAD` 变更摘要——有未提交变更时显示"本次传播内容"，否则显示最新 commit（W3）
+- `dao.ps1`: `Invoke-Status` 无参数时新增注册项目健康矩阵——显示每个注册项目的 TODO.md / AGENT_GUIDE.md 存在状态（W4）
+- `dao.ps1`: help 文本更新，反映 sync/status 新能力
+- `dao-fa-mechanism.md`: 修正工作流目录列表（补入缺失的 `dao-autopilot.md`）；修正规则列表（补入 `dao-ask-next-step.md`，移除 `（本文件）` 错位注释）
+- `README.md` / `MIGRATION.md`: status/sync 命令描述更新
+- `TODO.md`: W1-W4 全部迁移到 ✅ 区，🚧 区清空
+
+**根因**：
+- W3：symlink 模式下 sync 全输出 `[skip]`，用户无法判断是"源文件已变"还是"源文件未变"。变更摘要让传播可见
+- W4：新范式（TODO.md + AGENT_GUIDE.md）落地情况无法一眼看出；status 健康矩阵给出直接答案
+- OPT：dao-fa-mechanism.md 是最容易被查阅的"地图文件"，但少了 dao-autopilot.md（最重要的工作流之一）和 dao-ask-next-step.md，是显著的文档错误
+
+**教训**：
+- **T8**: 工具的说明文字应与工具实际行为同步更新——功能变了，help/README 不跟上会造成认知错位
+- **T9**: "地图文件"（如 dao-fa-mechanism.md）比普通文档更需要精确——AI 和人都依赖它来建立心智模型，错误的地图比没有地图更危险
+
 ### 2026.03.29 · 同步前自审门
 
 **变更**：
