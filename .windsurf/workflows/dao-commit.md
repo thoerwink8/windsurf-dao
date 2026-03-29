@@ -40,24 +40,39 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 
 ### 三、铸（☳触·生成并提交）
 
-> 一推到底。分析→生成→提交一气呵成，不中断等待用户确认。
+> commit 是本地快照，可随时撤销；push 才是不可逆的发布。因此 commit 前展示预览，push 需用户显式触发。
 
 对每一组执行：
 
 1. （仅拆分时）`git reset HEAD` 取消暂存，然后 `git add <该组文件>`
 2. 生成 commit message（见下方规范）
-3. 将 message 写入临时文件（确保 UTF-8 编码）
-4. `git commit -F <临时文件>`
+3. **展示预览**（调用 `ask_user_question`）：
+   ```
+   📝 准备提交：
+   <commit message 完整内容>
+   
+   涉及文件：<文件列表>
+   ```
+   选项：确认提交 / 修改消息 / 取消
+4. 用户确认 → 将 message 写入临时文件（UTF-8）→ `git commit -F <临时文件>`
+   用户修改 → 采纳修改后的消息 → 提交
+   用户取消 → 停止，暂存区保持不变
 
-**单组时**跳过 reset/add，直接生成 message 并提交。
+**单组时**跳过 reset/add，直接生成 message 后展示预览。
+
+**注**：不自动执行 `git push`。push 是发布决策，由用户显式触发。
 
 ### 四、验（☵听·确认结果）
 
-// turbo
-
 提交完成后，运行 `git log -<N> --oneline`（N = 提交数）+ `git status --short`，展示结果。
 
-用户不满意可用 `git reset --soft HEAD~<N>` 撤销。
+**每次提交后固定输出撤销指令**：
+```
+✓ 已提交 <N> 次
+撤销最后一次：git reset --soft HEAD~1
+撤销全部 N 次：git reset --soft HEAD~<N>
+（代码变更保留，仅取消提交记录）
+```
 
 ## Commit Message 规范
 
