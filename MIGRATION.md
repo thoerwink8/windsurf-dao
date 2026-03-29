@@ -69,7 +69,7 @@ windsurf-dao (源仓库)            ← git repo，唯一真相
 |------|------|
 | `link <path>` | 创建 symlink/junction 从目标项目指向 windsurf-dao |
 | `unlink <path>` | 移除链接（不影响源文件） |
-| `status [path]` | 显示链接/复制状态 |
+| `status [path]` | 显示链接/复制状态；无 path 时显示所有注册项目的健康状态矩阵 |
 | `link-global` | 链接 `global_rules.md` 到 `~/.codeium/windsurf/memories/` |
 
 ### 工作流

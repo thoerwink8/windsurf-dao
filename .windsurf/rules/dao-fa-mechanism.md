@@ -60,8 +60,10 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-de-layer.md      # 德层·如何为人（行为协议）
     │   ├── dao-fa-layer.md      # 法层·怎么做
     │   ├── dao-fa-mechanism.md  # 法层参考·Windsurf机制（model_decision）
-    │   └── dao-shu-layer.md     # 术层·用什么（本文件）
+    │   ├── dao-ask-next-step.md # 续力·每次回答后 ask_user_question
+    │   └── dao-shu-layer.md     # 术层·用什么
     ├── workflows/               # 工作流（法层实践）
+    │   ├── dao-autopilot.md         # 自动驾驶·自主执行 TODO 中的任务图
     │   ├── dao-commit.md            # 提交·归藏
     │   ├── dao-cycle.md             # 转法轮·深度迭代
     │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断

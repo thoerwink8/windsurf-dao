@@ -1,0 +1,41 @@
+{
+  "mode": "autopilot",
+  "goal": "把待做的內容全部做完，然後再自我優化疊待，直至增無可增改無可改，再交由確認",
+  "branch": "autopilot/todo-w3-w4-optimize",
+  "started": "2026-03-29T08:24:00Z",
+  "success_criteria": [
+    "W3: dao.ps1 sync 完成后显示 git diff --stat 变更摘要（源文件有变更时）",
+    "W4: dao.ps1 status（无参数）显示每个注册项目的 TODO.md / AGENT_GUIDE.md 存在状态矩阵",
+    "自我优化：全系统（workflows/rules/skills/dao.ps1/文档）审查通过，无可改善项"
+  ],
+  "tasks": [
+    {
+      "id": "W3b",
+      "todo_line": "- [ ] 考虑是否在 sync 后运行 `git diff --stat` 给出本次变更摘要",
+      "status": "pending",
+      "commit": null,
+      "rollback_cmd": null
+    },
+    {
+      "id": "W4a",
+      "todo_line": "- [ ] 扩展 `dao.ps1 status` 命令",
+      "status": "pending",
+      "commit": null,
+      "rollback_cmd": null
+    },
+    {
+      "id": "W4b",
+      "todo_line": "- [ ] 输出：`✓ TODO.md` / `✗ AGENT_GUIDE.md` 状态矩阵",
+      "status": "pending",
+      "commit": null,
+      "rollback_cmd": null
+    },
+    {
+      "id": "OPT",
+      "todo_line": "自我优化轮次",
+      "status": "pending",
+      "commit": null,
+      "rollback_cmd": null
+    }
+  ]
+}

@@ -133,8 +133,8 @@ git clone <repo-url>
 | --------------------- | --------------------------------------------- |
 | `link <path>`         | 创建 symlink/junction 从目标项目指向源仓库    |
 | `unlink <path>`       | 移除链接（不影响源文件）                      |
-| `status [path]`       | 显示链接状态                                  |
-| `sync`                | 将源仓库变更传播到所有注册项目                |
+| `status [path]`       | 显示链接状态；无 path 时额外显示注册项目 TODO.md/AGENT_GUIDE.md 健康矩阵 |
+| `sync`                | 传播变更到所有注册项目；同步后显示源文件变更摘要（git diff --stat） |
 | `link-global`         | 链接 `global_rules.md` 到 Windsurf 全局配置   |
 
 ### 3. 开始使用
