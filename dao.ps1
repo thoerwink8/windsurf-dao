@@ -324,6 +324,26 @@ function Invoke-Status {
         Write-Host "  Global: not installed" -ForegroundColor Red
     }
 
+    # 注册项目健康状态矩阵（无目标参数时显示）
+    if (!$Target) {
+        $allTargets = Get-RegisteredTargets
+        if ($allTargets.Count -gt 0) {
+            Write-Host "`n  注册项目健康状态：" -ForegroundColor Cyan
+            foreach ($t in $allTargets) {
+                $hasTodo  = Test-Path (Join-Path $t "TODO.md")
+                $hasGuide = Test-Path (Join-Path $t "AGENT_GUIDE.md")
+                $tMark = if ($hasTodo)  { "✓" } else { "✗" }
+                $gMark = if ($hasGuide) { "✓" } else { "✗" }
+                $tColor = if ($hasTodo)  { "Green" } else { "Red" }
+                $gColor = if ($hasGuide) { "Green" } else { "Red" }
+                Write-Host "    $t" -ForegroundColor White
+                Write-Host "      " -NoNewline
+                Write-Host "$tMark TODO.md        " -ForegroundColor $tColor -NoNewline
+                Write-Host "$gMark AGENT_GUIDE.md" -ForegroundColor $gColor
+            }
+        }
+    }
+
     # 目标项目状态
     if ($Target) {
         $Target = Resolve-TargetPath $Target
@@ -391,6 +411,18 @@ function Invoke-Sync {
         }
         Write-Host "`n  >> $t" -ForegroundColor Cyan
         Invoke-Link -Target $t
+    }
+
+    # 变更摘要：显示源文件本次未提交的变更（即本次传播的内容）
+    $diffStat = git -C $DaoRoot diff --stat HEAD -- ".windsurf/" "global_rules.md" 2>$null
+    if ($diffStat) {
+        Write-Host "`n  ── 本次传播内容 ──" -ForegroundColor Cyan
+        $diffStat | ForEach-Object { Write-Host "  $_" -ForegroundColor White }
+    } else {
+        $lastCommit = (git -C $DaoRoot log --oneline -1 -- ".windsurf/" "global_rules.md" 2>$null)
+        if ($lastCommit) {
+            Write-Host "`n  [已同步] 最新版本：$lastCommit" -ForegroundColor DarkGray
+        }
     }
 }
 
