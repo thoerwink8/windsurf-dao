@@ -17,6 +17,7 @@ Windsurf 将 `always_on` 规则文件渲染为 `<MEMORY[filename]>` 标签注入
 ## 符号链接读取陷阱
 
 Windows 符号链接/目录联接在不同工具下报告不一致：
+
 - `list_dir` / PowerShell `Get-Item .Length` → 显示 **0**（链接本身大小，非目标内容）
 - `mcp2_list_directory_with_sizes` → 显示**实际内容大小**（穿透链接读目标）
 - `mcp2_directory_tree` → 目录联接(Junction)可能被识别为"file"类型
@@ -29,12 +30,12 @@ Windows 符号链接/目录联接在不同工具下报告不一致：
 
 ## 四类激活模式（Rules）
 
-| trigger 值 | 行为 | 上下文消耗 |
-|-----------|------|-----------|
-| `always_on` | 每条消息都注入完整内容 | 每轮 |
-| `model_decision` | 仅注入 description，模型决定是否读全文 | 按需 |
-| `glob` | 匹配到指定文件类型时注入 | 按需 |
-| `manual` | 不在提示词中，需 @rule-name 触发 | 手动 |
+| trigger 值       | 行为                                   | 上下文消耗 |
+| ---------------- | -------------------------------------- | ---------- |
+| `always_on`      | 每条消息都注入完整内容                 | 每轮       |
+| `model_decision` | 仅注入 description，模型决定是否读全文 | 按需       |
+| `glob`           | 匹配到指定文件类型时注入               | 按需       |
+| `manual`         | 不在提示词中，需 @rule-name 触发       | 手动       |
 
 单个规则文件上限：12,000 字符。全局规则文件上限：6,000 字符。
 
@@ -76,10 +77,12 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-test.md              # 测试·验证
     │   ├── dao-refactor.md          # 重构·安全优化
     │   └── dao-optimize.md          # 性能·调优
-    └── skills/                  # 技能（术层实践）
-        ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
-        ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
-        ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器
-        ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
-        └── dao-terminal-resilience/   # 终端韧性术·五感降级恢复
+    ├── skills/                  # 技能（术层实践）
+    │   ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
+    │   ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
+    │   ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器
+    │   ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
+    │   └── dao-terminal-resilience/   # 终端韧性术·五感降级恢复
+    └── references/              # 参考文本（源仓库 references/ 符号链接）
+        └── 道德经.md                  # 一切规则的推导源头，不可修改
 ```
