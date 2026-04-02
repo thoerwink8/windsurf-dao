@@ -70,6 +70,26 @@
 
 > 每次修改在此追加条目。格式：版本·日期·变更·根因·教训。
 
+### 2026.04.02 · 全局规则脱轨修复 + references/ 纳管
+
+**变更**：
+
+- `global_rules.md`: 将部署位置（`~/.codeium/windsurf/memories/`）的独立演化版本回写到源仓库，重新 `link-global` 建立 symlink，恢复 single source of truth
+- `dao.ps1`: 新增 `references/` 目录管理——Invoke-Link/Unlink/Status/Sync 均支持将 `$DaoRoot/references/` 下的文件符号链接到 `$Target/.windsurf/references/`
+- `.git/info/exclude` 模板新增 `.windsurf/references/` 条目
+
+**根因**：
+
+- 全局规则 `link-global` 建立的 symlink 在某次操作后断开（变回副本），之后部署版被独立扩写（增加了详细的"云层超脱"子章节），导致源仓库不再是全局规则的 single source of truth。源（2035 bytes/51 行压缩版）与部署（4161 bytes/展开版）内容完全不同
+- `references/道德经.md` 是手动复制到项目的副本，不受 `dao.ps1` 管理，无法随源更新
+- 跨层内容"冗余"经分析确认为索引模式设计意图（全局=压缩索引，层文件=展开详情），不需要删减
+
+**教训**：
+
+- **T12**: symlink 可能静默断开（Windows 更新、权限变更、工具操作等）。`/health-check` 的全局规则检查不是可选项，是必须定期执行的——这次脱轨持续了未知时长才被发现
+- **T13**: 当部署版和源版分叉时，"哪个是真相"取决于哪个在实际运行中被迭代优化。本次选择部署版为真相，回写源仓库——不是机械地"源覆盖部署"
+- **T14**: `dao.ps1` 的管理范围应覆盖所有从源仓库传播到项目的文件类型。遗漏 `references/` 导致道德经.md 成为孤立副本
+
 ### 2025.07 · 双文件模式明确化
 
 **变更**：

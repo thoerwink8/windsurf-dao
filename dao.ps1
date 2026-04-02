@@ -161,7 +161,7 @@ function Invoke-Link {
     $script:CanSymlink = Test-SymlinkSupport
 
     # 确保目标目录存在
-    "rules", "skills", "workflows" | ForEach-Object { Ensure-Dir (Join-Path $tw $_) }
+    "rules", "skills", "workflows", "references" | ForEach-Object { Ensure-Dir (Join-Path $tw $_) }
 
     $linked = 0; $copied = 0; $skipped = 0; $backed = 0
     $backupRoot = Join-Path $Target "_dao_backup"
@@ -236,6 +236,33 @@ function Invoke-Link {
         }
     }
 
+    # References: 符号链接（降级为复制）
+    $refsSource = Join-Path $DaoRoot "references"
+    if (Test-Path $refsSource) {
+        Get-ChildItem $refsSource -File | ForEach-Object {
+            $dest = Join-Path (Join-Path $tw "references") $_.Name
+            if (Test-Path $dest) {
+                $item = Get-Item $dest
+                if ($item.LinkType -eq "SymbolicLink") {
+                    Write-LinkResult "references" $_.Name "skip"; $skipped++; return
+                }
+                if (Test-FileDiff $_.FullName $dest) {
+                    Backup-Item $dest $backupRoot "references\$($_.Name)"
+                    Write-LinkResult "references" $_.Name "backup" "modified copy saved"
+                    $backed++
+                }
+                Remove-Item $dest -Force
+            }
+            if ($script:CanSymlink) {
+                New-Symlink -Link $dest -Target $_.FullName
+                Write-LinkResult "references" $_.Name "link"; $linked++
+            } else {
+                Copy-Item $_.FullName $dest -Force
+                Write-LinkResult "references" $_.Name "copy" "symlink unavailable"; $copied++
+            }
+        }
+    }
+
     # 配置 .git/info/exclude
     $excludeFile = Join-Path (Join-Path (Join-Path $Target ".git") "info") "exclude"
     if (Test-Path $excludeFile) {
@@ -247,6 +274,7 @@ function Invoke-Link {
 .windsurf/rules/dao-*
 .windsurf/skills/dao-*
 .windsurf/workflows/dao-*
+.windsurf/references/
 "@ | Add-Content $excludeFile
             Write-Host "`n  [config] .git/info/exclude updated" -ForegroundColor Cyan
         }
@@ -297,6 +325,13 @@ function Invoke-Unlink {
             Write-LinkResult "workflows" $_.Name "unlink"; $removed++
         }
 
+    # References
+    Get-ChildItem (Join-Path $tw "references") -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LinkType -eq "SymbolicLink" } | ForEach-Object {
+            Remove-Item $_.FullName -Force
+            Write-LinkResult "references" $_.Name "unlink"; $removed++
+        }
+
     # 取消注册
     Unregister-Target $Target
 
@@ -311,7 +346,9 @@ function Invoke-Status {
     $rCount = (Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "dao-*.md").Count
     $sCount = (Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory -Filter "dao-*").Count
     $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "dao-*.md").Count
-    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows"
+    $refSource = Join-Path $DaoRoot "references"
+    $refCount = if (Test-Path $refSource) { (Get-ChildItem $refSource -File).Count } else { 0 }
+    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${refCount} references"
 
     # 全局链接状态
     $globalPath = Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories") "global_rules.md"
@@ -366,6 +403,16 @@ function Invoke-Status {
                 $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
                 $suffix = if ($_ -eq "skills") { "/" } else { "" }
                 Write-Host "    $_/$($item.Name)$suffix $status" -ForegroundColor $color
+            }
+        }
+
+        # References（无 dao-* 前缀限制）
+        $refDir = Join-Path $tw "references"
+        if (Test-Path $refDir) {
+            Get-ChildItem $refDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $status = if ($_.LinkType -eq "SymbolicLink") { "linked" } else { "copy" }
+                $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
+                Write-Host "    references/$($_.Name) $status" -ForegroundColor $color
             }
         }
     }
