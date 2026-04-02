@@ -161,7 +161,7 @@ function Invoke-Link {
     $script:CanSymlink = Test-SymlinkSupport
 
     # 确保目标目录存在
-    "rules", "skills", "workflows" | ForEach-Object { Ensure-Dir (Join-Path $tw $_) }
+    "rules", "skills", "workflows", "references" | ForEach-Object { Ensure-Dir (Join-Path $tw $_) }
 
     $linked = 0; $copied = 0; $skipped = 0; $backed = 0
     $backupRoot = Join-Path $Target "_dao_backup"
@@ -236,6 +236,33 @@ function Invoke-Link {
         }
     }
 
+    # References: 符号链接（降级为复制）
+    $refsSource = Join-Path $DaoRoot "references"
+    if (Test-Path $refsSource) {
+        Get-ChildItem $refsSource -File | ForEach-Object {
+            $dest = Join-Path (Join-Path $tw "references") $_.Name
+            if (Test-Path $dest) {
+                $item = Get-Item $dest
+                if ($item.LinkType -eq "SymbolicLink") {
+                    Write-LinkResult "references" $_.Name "skip"; $skipped++; return
+                }
+                if (Test-FileDiff $_.FullName $dest) {
+                    Backup-Item $dest $backupRoot "references\$($_.Name)"
+                    Write-LinkResult "references" $_.Name "backup" "modified copy saved"
+                    $backed++
+                }
+                Remove-Item $dest -Force
+            }
+            if ($script:CanSymlink) {
+                New-Symlink -Link $dest -Target $_.FullName
+                Write-LinkResult "references" $_.Name "link"; $linked++
+            } else {
+                Copy-Item $_.FullName $dest -Force
+                Write-LinkResult "references" $_.Name "copy" "symlink unavailable"; $copied++
+            }
+        }
+    }
+
     # 配置 .git/info/exclude
     $excludeFile = Join-Path (Join-Path (Join-Path $Target ".git") "info") "exclude"
     if (Test-Path $excludeFile) {
@@ -247,6 +274,7 @@ function Invoke-Link {
 .windsurf/rules/dao-*
 .windsurf/skills/dao-*
 .windsurf/workflows/dao-*
+.windsurf/references/
 "@ | Add-Content $excludeFile
             Write-Host "`n  [config] .git/info/exclude updated" -ForegroundColor Cyan
         }
@@ -297,6 +325,13 @@ function Invoke-Unlink {
             Write-LinkResult "workflows" $_.Name "unlink"; $removed++
         }
 
+    # References
+    Get-ChildItem (Join-Path $tw "references") -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LinkType -eq "SymbolicLink" } | ForEach-Object {
+            Remove-Item $_.FullName -Force
+            Write-LinkResult "references" $_.Name "unlink"; $removed++
+        }
+
     # 取消注册
     Unregister-Target $Target
 
@@ -311,7 +346,9 @@ function Invoke-Status {
     $rCount = (Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "dao-*.md").Count
     $sCount = (Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory -Filter "dao-*").Count
     $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "dao-*.md").Count
-    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows"
+    $refSource = Join-Path $DaoRoot "references"
+    $refCount = if (Test-Path $refSource) { (Get-ChildItem $refSource -File).Count } else { 0 }
+    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${refCount} references"
 
     # 全局链接状态
     $globalPath = Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories") "global_rules.md"
@@ -328,12 +365,12 @@ function Invoke-Status {
     if (!$Target) {
         $allTargets = Get-RegisteredTargets
         if ($allTargets.Count -gt 0) {
-            Write-Host "`n  注册项目健康状态：" -ForegroundColor Cyan
+            Write-Host "`n  Registered projects health:" -ForegroundColor Cyan
             foreach ($t in $allTargets) {
                 $hasTodo  = Test-Path (Join-Path $t "TODO.md")
                 $hasGuide = Test-Path (Join-Path $t "AGENT_GUIDE.md")
-                $tMark = if ($hasTodo)  { "✓" } else { "✗" }
-                $gMark = if ($hasGuide) { "✓" } else { "✗" }
+                $tMark = if ($hasTodo)  { "[Y]" } else { "[X]" }
+                $gMark = if ($hasGuide) { "[Y]" } else { "[X]" }
                 $tColor = if ($hasTodo)  { "Green" } else { "Red" }
                 $gColor = if ($hasGuide) { "Green" } else { "Red" }
                 Write-Host "    $t" -ForegroundColor White
@@ -366,6 +403,16 @@ function Invoke-Status {
                 $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
                 $suffix = if ($_ -eq "skills") { "/" } else { "" }
                 Write-Host "    $_/$($item.Name)$suffix $status" -ForegroundColor $color
+            }
+        }
+
+        # References（无 dao-* 前缀限制）
+        $refDir = Join-Path $tw "references"
+        if (Test-Path $refDir) {
+            Get-ChildItem $refDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $status = if ($_.LinkType -eq "SymbolicLink") { "linked" } else { "copy" }
+                $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
+                Write-Host "    references/$($_.Name) $status" -ForegroundColor $color
             }
         }
     }
@@ -416,12 +463,12 @@ function Invoke-Sync {
     # 变更摘要：显示源文件本次未提交的变更（即本次传播的内容）
     $diffStat = git -C $DaoRoot diff --stat HEAD -- ".windsurf/" "global_rules.md" 2>$null
     if ($diffStat) {
-        Write-Host "`n  ── 本次传播内容 ──" -ForegroundColor Cyan
+        Write-Host "`n  -- Changes propagated --" -ForegroundColor Cyan
         $diffStat | ForEach-Object { Write-Host "  $_" -ForegroundColor White }
     } else {
         $lastCommit = (git -C $DaoRoot log --oneline -1 -- ".windsurf/" "global_rules.md" 2>$null)
         if ($lastCommit) {
-            Write-Host "`n  [已同步] 最新版本：$lastCommit" -ForegroundColor DarkGray
+            Write-Host "`n  [synced] latest: $lastCommit" -ForegroundColor DarkGray
         }
     }
 }

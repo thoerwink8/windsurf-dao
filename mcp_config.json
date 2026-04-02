@@ -1,0 +1,83 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ],
+      "command": "npx"
+    },
+    "context7": {
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "command": "npx"
+    },
+    "filesystem": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        ""
+      ],
+      "command": "npx"
+    },
+    "memory": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "command": "npx",
+      "env": {
+        "MEMORY_FILE_PATH": "C:\\frank\\memory.json"
+      }
+    },
+    "next - API 文档": {
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "apifox-mcp-server@latest",
+        "--project-id=[REDACTED:apifox-project]"
+      ],
+      "command": "cmd",
+      "env": {
+        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
+      }
+    },
+    "next - API 文档（Agent）": {
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "apifox-mcp-server@latest",
+        "--project-id=[REDACTED:apifox-project]"
+      ],
+      "command": "cmd",
+      "env": {
+        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
+      }
+    },
+    "next - API 文档（默认模块）": {
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "apifox-mcp-server@latest",
+        "--project-id=[REDACTED:apifox-project]"
+      ],
+      "command": "cmd",
+      "env": {
+        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
+      }
+    },
+    "sequential-thinking": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "command": "npx",
+      "disabled": true
+    }
+  }
+}
