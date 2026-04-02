@@ -22,10 +22,10 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
    - `git diff --cached --stat`
    - `git diff --cached`
 
-// turbo
-2. 如果暂存区为空，检查未暂存改动（`git diff --stat`）：
-   - **有**未暂存改动 → 自动 `git add -A`，重新读取暂存区
-   - **无**任何改动 → 告知用户"工作区没有任何改动"，**停止**
+// turbo 2. 如果暂存区为空，检查未暂存改动（`git diff --stat`）：
+
+- **有**未暂存改动 → 自动 `git add -A`，重新读取暂存区
+- **无**任何改动 → 告知用户"工作区没有任何改动"，**停止**
 
 ### 二、析（☶味·理解与分组）
 
@@ -47,12 +47,14 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 1. （仅拆分时）`git reset HEAD` 取消暂存，然后 `git add <该组文件>`
 2. 生成 commit message（见下方规范）
 3. **展示预览**（调用 `ask_user_question`）：
+
    ```
    📝 准备提交：
    <commit message 完整内容>
-   
+
    涉及文件：<文件列表>
    ```
+
    选项：确认提交 / 修改消息 / 取消
 4. 用户确认 → 将 message 写入**系统临时目录**的临时文件（UTF-8，路径如 `$env:TEMP\dao-commit-msg.txt`，必须在仓库目录之外）→ `git commit -F <临时文件>` → 提交成功后**立即删除临时文件**
    用户修改 → 采纳修改后的消息 → 提交（同上，临时文件写系统临时目录，用后删除）
@@ -67,6 +69,7 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 提交完成后，运行 `git log -<N> --oneline`（N = 提交数）+ `git status --short`，展示结果。
 
 **每次提交后固定输出撤销指令**：
+
 ```
 ✓ 已提交 <N> 次
 撤销最后一次：git reset --soft HEAD~1
