@@ -265,9 +265,14 @@ function Invoke-Link {
 
     # 配置 .git/info/exclude
     $excludeFile = Join-Path (Join-Path (Join-Path $Target ".git") "info") "exclude"
+    $gitInfoDir = Split-Path $excludeFile -Parent
+    if ((Test-Path (Join-Path $Target ".git")) -and -not (Test-Path $excludeFile)) {
+        if (-not (Test-Path $gitInfoDir)) { New-Item -ItemType Directory -Path $gitInfoDir -Force | Out-Null }
+        New-Item -ItemType File -Path $excludeFile -Force | Out-Null
+    }
     if (Test-Path $excludeFile) {
         $content = Get-Content $excludeFile -Raw -ErrorAction SilentlyContinue
-        if ($content -and $content -notmatch "windsurf-dao") {
+        if (-not $content -or $content -notmatch "windsurf-dao") {
             @"
 
 # windsurf-dao linked files (local only)
