@@ -66,18 +66,18 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     ├── workflows/               # 工作流（法层实践）
     │   ├── dao-autopilot.md         # 自动驾驶·自主执行 TODO 中的任务图
     │   ├── dao-commit.md            # 提交·归藏
-    │   ├── dao-cycle.md             # 转法轮·深度迭代
-    │   ├── dao-debug-escalation.md  # 调试升级·逐层诊断
+    │   ├── dao-cycle.md             # 转法轮·深度迭代（含镜头机制）
     │   ├── dao-dev.md               # 开发管线·全流程交付
     │   ├── dao-distill.md           # 知识沉淀·归虚
     │   ├── dao-doc.md               # 文档·传灯
     │   ├── dao-evolve.md            # 进化·自我审视
     │   ├── dao-health-check.md      # 健康检查·自知
-    │   ├── dao-review.md            # 代码审查·纳谏
-    │   ├── dao-test.md              # 测试·验证
-    │   ├── dao-refactor.md          # 重构·安全优化
-    │   └── dao-optimize.md          # 性能·调优
+    │   └── dao-review.md            # 代码审查·纳谏
     ├── skills/                  # 技能（术层实践）
+    │   ├── dao-debug/                 # cycle镜头·调试诊断·四层深入
+    │   ├── dao-refactor/              # cycle镜头·重构·安全优化
+    │   ├── dao-optimize/              # cycle镜头·性能·调优
+    │   ├── dao-test/                  # cycle镜头·测试·验证
     │   ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
     │   ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
     │   ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器

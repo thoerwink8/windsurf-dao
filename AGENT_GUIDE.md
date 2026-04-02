@@ -25,8 +25,8 @@
 | `.dao-targets`                 | 注册的目标项目列表                                     |
 | `global_rules.md`              | 德层全局规则（部署到 `~/.codeium/windsurf/memories/`） |
 | `.windsurf/rules/dao-*.md`     | 四层规则（道/德/法/术）                                |
-| `.windsurf/workflows/dao-*.md` | 十二个工作流                                           |
-| `.windsurf/skills/dao-*/`      | 五个可复用技能                                         |
+| `.windsurf/workflows/dao-*.md` | 九个工作流（编排/引擎/工具/元）                        |
+| `.windsurf/skills/dao-*/`      | 九个可复用技能（含四个 cycle 镜头）                    |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 
 **部署原理**：symlink（文件）+ junction（目录），windsurf-dao 是唯一真相，编辑即时传播到所有注册项目。
@@ -69,6 +69,37 @@
 ## 二、演化记录
 
 > 每次修改在此追加条目。格式：版本·日期·变更·根因·教训。
+
+### 2026.04.02 · 工作流架构重构：workflow → cycle + lens
+
+**变更**：
+
+- 将 4 个专项工作流（dao-debug-escalation、dao-refactor、dao-optimize、dao-test）从 workflow 降级为 skill（cycle 镜头），删除对应 workflow 文件
+- 新增 skills：`dao-debug/`、`dao-refactor/`、`dao-optimize/`、`dao-test/`
+- `dao-cycle.md`：新增"镜头机制（Lens）"章节，五相引擎按需加载领域 skill
+- `dao-dev.md`：所有 `/debug-escalation` 引用改为"cycle + debug 镜头"，工作流协作图重绘
+- `dao-evolve.md`：审查对象从 workflow 扩展到 skills
+- `dao-fa-layer.md`：工作流生态描述更新
+
+**根因**：
+
+- 第一性原理分析发现，专项工作流本质是 /cycle 的单次 turn + 领域知识，是 skill 伪装成 workflow
+- 作为 workflow 的代价：① 每次对话全量注入 context（~460 行）；② 跨工作流调用链（/dev → /debug → /cycle）造成 context 膨胀和上下文断裂
+
+**架构**：
+
+```
+编排者（workflow）：/dev, /autopilot
+引擎（workflow）：/cycle（五相 + 镜头机制）
+镜头（skill）：dao-debug, dao-refactor, dao-optimize, dao-test
+工具（workflow）：/commit, /distill, /doc, /review
+元（workflow）：/evolve, /health-check
+```
+
+**教训**：
+
+- **T15**: Workflow 意味着独立入口→出口流程，Skill 意味着可在任意 cycle turn 中加载的领域知识。选错载体会导致不必要的 context 消耗
+- **T16**: 渐进披露（按需加载 skill）优于全量注入（workflow 常驻 system prompt），因为 context 是稀缺资源
 
 ### 2026.04.02 · 全局规则脱轨修复 + references/ 纳管
 
