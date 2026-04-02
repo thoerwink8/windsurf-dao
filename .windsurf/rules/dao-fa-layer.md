@@ -10,13 +10,12 @@ trigger: always_on
 
 **协作规则：**
 
-- /dev 是主管线，内部可调用其他工作流
+- /dev 是主管线，驱动 /cycle 引擎执行各阶段
+- /cycle 是通用引擎，通过镜头机制加载领域技能（debug/refactor/optimize/test）
 - /autopilot 是持续自主执行模式，激活后进入扩展内观状态，退出后完全恢复正常
-- /cycle 是通用迭代器，任何工作流内部都可触发
-- /debug-escalation 遇阻时被动触发，不主动寻找bug
 - /doc 按需触发，不强制每个项目都写完整文档
 - /evolve 审查一切（包括自身），有感觉才触发，不定闹钟
-- /health-check、/review、/test、/refactor、/optimize 按需触发
+- /health-check、/review 按需触发
 
 **通信原则：**
 
@@ -44,7 +43,7 @@ trigger: always_on
 不靠感觉，靠节点。以下时刻自问"此任务暴露了系统的哪些缺口？"：
 
 - /dev 涅槃时
-- /debug 问道（第四层）时
+- debug 镜头问道（第四层）时
 - 反者道之动触发时（长对话 10 轮+）
 - 基础假设被推翻时（发现关键路径不通、核心机制理解有误——此刻是最好的进化时机，不是继续赶路的时机）
 - 逆向重实现时（AGENTS.md/changelog 是必读的第一手资料——每个版本号背后是一个真实痛点，不是可选参考）
