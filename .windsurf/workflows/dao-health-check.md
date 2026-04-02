@@ -61,9 +61,22 @@ Get-Item "$env:USERPROFILE\.codeium\windsurf\memories\global_rules.md" | Select-
 
 #### 1.4 内容完整性
 
-- 规则文件有 `trigger: always_on` frontmatter
+- 规则文件有 `trigger:` frontmatter，且值必须是四个合法值之一：`always_on` / `model_decision` / `glob` / `manual`。**非法值（如 `always`、`auto`、拼写错误）= 文件对 AI 完全隐身，是静默失效**
 - 工作流文件有 `description:` frontmatter
 - 四层架构一致：道/德/法/术 齐全
+
+**校验命令**（AI 执行）：
+```powershell
+Get-ChildItem ".windsurf\rules" -Filter "*.md" | ForEach-Object {
+  $c = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+  if ($c -match 'trigger:\s*(\S+)') {
+    $v = $Matches[1]
+    $ok = $v -in @('always_on','model_decision','glob','manual')
+    if (-not $ok) { "🔴 $($_.Name) → trigger: $v (非法值!)" }
+    else { "🟢 $($_.Name) → trigger: $v" }
+  } else { "🔴 $($_.Name) → 无 trigger frontmatter" }
+}
+```
 
 ### 二、诊断（☵坎 · 听 · 听回响）
 
