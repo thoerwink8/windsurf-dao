@@ -328,12 +328,12 @@ function Invoke-Status {
     if (!$Target) {
         $allTargets = Get-RegisteredTargets
         if ($allTargets.Count -gt 0) {
-            Write-Host "`n  注册项目健康状态：" -ForegroundColor Cyan
+            Write-Host "`n  Registered projects health:" -ForegroundColor Cyan
             foreach ($t in $allTargets) {
                 $hasTodo  = Test-Path (Join-Path $t "TODO.md")
                 $hasGuide = Test-Path (Join-Path $t "AGENT_GUIDE.md")
-                $tMark = if ($hasTodo)  { "✓" } else { "✗" }
-                $gMark = if ($hasGuide) { "✓" } else { "✗" }
+                $tMark = if ($hasTodo)  { "[Y]" } else { "[X]" }
+                $gMark = if ($hasGuide) { "[Y]" } else { "[X]" }
                 $tColor = if ($hasTodo)  { "Green" } else { "Red" }
                 $gColor = if ($hasGuide) { "Green" } else { "Red" }
                 Write-Host "    $t" -ForegroundColor White
@@ -416,12 +416,12 @@ function Invoke-Sync {
     # 变更摘要：显示源文件本次未提交的变更（即本次传播的内容）
     $diffStat = git -C $DaoRoot diff --stat HEAD -- ".windsurf/" "global_rules.md" 2>$null
     if ($diffStat) {
-        Write-Host "`n  ── 本次传播内容 ──" -ForegroundColor Cyan
+        Write-Host "`n  -- Changes propagated --" -ForegroundColor Cyan
         $diffStat | ForEach-Object { Write-Host "  $_" -ForegroundColor White }
     } else {
         $lastCommit = (git -C $DaoRoot log --oneline -1 -- ".windsurf/" "global_rules.md" 2>$null)
         if ($lastCommit) {
-            Write-Host "`n  [已同步] 最新版本：$lastCommit" -ForegroundColor DarkGray
+            Write-Host "`n  [synced] latest: $lastCommit" -ForegroundColor DarkGray
         }
     }
 }
