@@ -72,13 +72,16 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-doc.md               # 文档·传灯
     │   ├── dao-evolve.md            # 进化·自我审视
     │   ├── dao-health-check.md      # 健康检查·自知
-    │   └── dao-review.md            # 代码审查·纳谏
+    │   ├── dao-review.md            # 代码审查·纳谏
+    │   ├── dao-session-report.md   # 会话自报·写入进度
+    │   └── dao-session-sync.md     # 元会话同步·全局调度
     ├── skills/                  # 技能（术层实践）
     │   ├── dao-debug/                 # cycle镜头·调试诊断·四层深入
     │   ├── dao-refactor/              # cycle镜头·重构·安全优化
     │   ├── dao-optimize/              # cycle镜头·性能·调优
     │   ├── dao-test/                  # cycle镜头·测试·验证
     │   ├── dao-reverse-engineering/   # 逆向拆解术·锚展交验归
+    │   ├── dao-research/                # 前置研究术·问道采集融合
     │   ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
     │   ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器
     │   ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
