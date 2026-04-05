@@ -37,6 +37,8 @@
 
 非交互(git加`-m`/`--no-edit`) | 有超时(`-m 30`/`-TimeoutSec 15`) | 有界限(`git log -n 20`) | 耗时>30s非阻塞
 
+**PowerShell 专项**（Windows 硬规则）：禁用`2>&1`(假错源头) | 用`$LASTEXITCODE`判断成功 | stderr噪音用`2>$null`抑制 | 中文"所在位置 行:X"是ErrorRecord不是真错误
+
 ## 反者道之动
 
 止：冲动最强时暂停 | 弱：深度 > 广度 | 虚：context满 = 智慧零 | 归：长对话(10轮+)重读原始提示词
