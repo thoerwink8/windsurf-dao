@@ -21,3 +21,4 @@ description: dao skills 可用列表。需要调试/重构/优化/测试/逆向/
 | dao-frontend-aesthetics | 前端审美术：在受限空间中设计高信息密度、高辨识度的界面 | `.windsurf/skills/dao-frontend-aesthetics/skill.md` |
 | dao-terminal-resilience | 终端韧性术：终端卡死诊断与Agent五感降级恢复 | `.windsurf/skills/dao-terminal-resilience/skill.md` |
 | dao-windsurf-extension | Windsurf扩展术：Windsurf扩展开发的已验证技术约束与最佳实践 | `.windsurf/skills/dao-windsurf-extension/skill.md` |
+| dao-deploy | 部署术：项目上服务器的标准流程——连接→环境→推送→构建→服务→记录。首次部署生成项目级脚本和记录文件。 | `.windsurf/skills/dao-deploy/skill.md` |

@@ -62,7 +62,8 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-fa-layer.md      # 法层·怎么做
     │   ├── dao-fa-mechanism.md  # 法层参考·Windsurf机制（model_decision）
     │   ├── dao-ask-next-step.md # 续力·每次回答后 ask_user_question
-    │   └── dao-shu-layer.md     # 术层·用什么
+    │   ├── dao-shu-layer.md     # 术层·用什么
+    │   └── dao-skills-index.md  # 技能索引·硬门控路由表
     ├── workflows/               # 工作流（法层实践）
     │   ├── dao-autopilot.md         # 自动驾驶·自主执行 TODO 中的任务图
     │   ├── dao-commit.md            # 提交·归藏
@@ -74,7 +75,8 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-health-check.md      # 健康检查·自知
     │   ├── dao-review.md            # 代码审查·纳谏
     │   ├── dao-session-report.md   # 会话自报·写入进度
-    │   └── dao-session-sync.md     # 元会话同步·全局调度
+    │   ├── dao-session-sync.md     # 元会话同步·全局调度
+    │   └── dao-thread-tree.md      # 对话线索树·理清头绪
     ├── skills/                  # 技能（术层实践）
     │   ├── dao-debug/                 # cycle镜头·调试诊断·四层深入
     │   ├── dao-refactor/              # cycle镜头·重构·安全优化
@@ -84,6 +86,7 @@ Skills 只向模型展示 `name` + `description`，完整内容在模型决定�
     │   ├── dao-research/                # 前置研究术·问道采集融合
     │   ├── dao-boundary-probe/        # 边界探测术·识壁探路择水
     │   ├── dao-frontend-aesthetics/   # 前端审美术·约层色密器
+    │   ├── dao-deploy/                  # 部署术·连接→环境→推送→构建→服务
     │   ├── dao-windsurf-extension/    # Windsurf扩展术·webview·存储·认证
     │   └── dao-terminal-resilience/   # 终端韧性术·五感降级恢复
     └── references/              # 参考文本（源仓库 references/ 符号链接）
