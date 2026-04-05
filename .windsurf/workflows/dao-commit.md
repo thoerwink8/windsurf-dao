@@ -82,11 +82,13 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 ### 格式
 
 ```
-<type>(<scope>): <简要描述>
+<type>(<scope>): <简要描述> (vX.Y.Z)
 
 - <要点1>
 - <要点2>
 ```
+
+> **版本标记**：如果本次提交包含版本 bump（package.json / app.json 等版本文件变更），subject 尾部必须带 `(vX.Y.Z)`。版本和代码变更在同一个 commit 中，不单独提交。无版本变更时省略。
 
 ### type
 
@@ -109,6 +111,7 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 ### subject
 
 - 中文描述，祈使语气，不加句号，不超过 72 字符
+- 含版本 bump 时尾部加 `(vX.Y.Z)`，如 `fix(webview): 修复消耗展示 (v1.9.5)`
 
 ### body（可选）
 
