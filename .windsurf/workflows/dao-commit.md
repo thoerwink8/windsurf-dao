@@ -38,6 +38,19 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 - **不相关的模块/功能**拆分为不同组
 - 所有改动属于同一逻辑变更 → **不拆分**
 
+**版本检查门（硬门控，不可跳过）**：
+
+分组完成后，对每一组执行以下检查：
+
+1. **判断是否功能性变更**：type 属于 `feat`/`fix`/`refactor`/`perf` → 是功能性变更；`docs`/`chore`/`style`/`test` → 跳过版本检查
+2. **如果是功能性变更**：检查该组的 diff 中是否包含对应组件的版本文件（`package.json` 的 `"version"` 字段、`app.json` 的 `version` 或 `runtimeVersion` 等）
+3. **版本文件不在 diff 里** → **暂停提交流程**，先执行版本 bump：
+   - 按 `AGENT.md §版本纪律` 的组件版本地图，找到该组件对应的版本文件
+   - patch 级别：`"version": "x.y.z"` → `"version": "x.y.(z+1)"`（bug修复/小功能）
+   - 同时在 `AGENT_GUIDE.md §二 演化索引` 新增一行
+   - bump 完成后，将版本文件加入暂存区，再继续后续流程
+4. **版本文件已在 diff 里** → 直接继续，commit message 尾部带 `(vX.Y.Z)`
+
 ### 三、铸（☳触·生成并提交）
 
 > commit 是本地快照，可随时撤销；push 才是不可逆的发布。因此 commit 前展示预览，push 需用户显式触发。
