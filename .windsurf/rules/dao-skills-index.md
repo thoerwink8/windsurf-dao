@@ -22,3 +22,4 @@ description: dao skills 可用列表。需要调试/重构/优化/测试/逆向/
 | dao-terminal-resilience | 终端韧性术：终端卡死诊断与Agent五感降级恢复 | `.windsurf/skills/dao-terminal-resilience/skill.md` |
 | dao-windsurf-extension | Windsurf扩展术：Windsurf扩展开发的已验证技术约束与最佳实践 | `.windsurf/skills/dao-windsurf-extension/skill.md` |
 | dao-deploy | 部署术：项目上服务器的标准流程——连接→环境→推送→构建→服务→记录。首次部署生成项目级脚本和记录文件。 | `.windsurf/skills/dao-deploy/skill.md` |
+| express-typescript-api | Express.js + TypeScript REST API 开发规范。构建/审查后端路由、中间件、认证、错误处理、数据库操作时自动加载。 | `.windsurf/skills/express-typescript-api/skill.md` |
