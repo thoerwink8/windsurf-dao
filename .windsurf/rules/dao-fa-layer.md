@@ -14,8 +14,12 @@ trigger: always_on
 - /cycle 是通用引擎，通过镜头机制加载领域技能（debug/refactor/optimize/test）
 - /autopilot 是持续自主执行模式，激活后进入扩展内观状态，退出后完全恢复正常
 - /doc 按需触发，不强制每个项目都写完整文档
+- /commit 从变更生成 commit message 并提交
+- /distill 从对话提取可复用知识，写入规则或文档
 - /evolve 审查一切（包括自身），有感觉才触发，不定闹钟
 - /health-check、/review 按需触发
+- /session-report、/session-sync 多会话协作（自报+元会话同步）
+- /thread-tree 对话线索整理，沉淀未解决项到 TODO.md
 
 **通信原则：**
 
