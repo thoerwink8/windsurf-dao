@@ -12,7 +12,8 @@ description: dao skills 可用列表。需要调试/重构/优化/测试/逆向/
 | Skill | 描述 | 路径 |
 |-------|------|------|
 | dao-research | 前置研究术：分析"怎么做"时，自动搜索最优实践，结合当前项目上下文综合出方案。避免闭门造车。 | `.windsurf/skills/dao-research/skill.md` |
-| dao-debug | 调试诊断镜头：Bug难以定位、修了没好、错误信息不明确时，按四层逐级深入定位根因 | `.windsurf/skills/dao-debug/skill.md` |
+| dao-debug | 死磕到底：三层螺旋×15种武器，融合dao-debug+systematic-debugging，穷尽一切自主手段后才请用户介入 | `.windsurf/skills/dao-debug/skill.md` |
+| brainstorming | 苏格拉底式设计精炼：通过对话将想法变成完整设计和规格。来源: obra/superpowers | `.windsurf/skills/brainstorming/SKILL.md` |
 | dao-refactor | 重构镜头：代码重复、过长函数、命名不清时，安全改善代码结构 | `.windsurf/skills/dao-refactor/skill.md` |
 | dao-optimize | 性能优化镜头：代码运行缓慢、内存占用高时，量化瓶颈后精准优化 | `.windsurf/skills/dao-optimize/skill.md` |
 | dao-test | 测试镜头：需要为代码添加测试、验证功能正确性时，按 AAA 模式编写高覆盖测试 | `.windsurf/skills/dao-test/skill.md` |
