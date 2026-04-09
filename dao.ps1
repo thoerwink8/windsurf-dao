@@ -263,6 +263,41 @@ function Invoke-Link {
         }
     }
 
+    # Hooks: 符号链接到 .git/hooks/（降级为复制）
+    $hooksSource = Join-Path $DaoRoot "hooks"
+    if (Test-Path $hooksSource) {
+        $gitDir = Join-Path $Target ".git"
+        if (Test-Path $gitDir) {
+            $gitHooksDir = Join-Path $gitDir "hooks"
+            Ensure-Dir $gitHooksDir
+            Get-ChildItem $hooksSource -Filter "dao-*" | ForEach-Object {
+                $hookName = $_.Name -replace '^dao-', ''
+                $dest = Join-Path $gitHooksDir $hookName
+                if (Test-Path $dest) {
+                    $content = Get-Content $dest -Raw -ErrorAction SilentlyContinue
+                    $isDaoHook = $content -and $content -match "dao-managed-hook"
+                    $existing = Get-Item $dest
+                    if ($existing.LinkType -eq "SymbolicLink" -and $isDaoHook) {
+                        Write-LinkResult "hooks" $hookName "skip"; $skipped++; return
+                    }
+                    if ($isDaoHook) {
+                        Remove-Item $dest -Force
+                    } else {
+                        Write-LinkResult "hooks" $hookName "skip" "existing non-dao hook preserved"
+                        $skipped++; return
+                    }
+                }
+                if ($script:CanSymlink) {
+                    New-Symlink -Link $dest -Target $_.FullName
+                    Write-LinkResult "hooks" $hookName "link"; $linked++
+                } else {
+                    Copy-Item $_.FullName $dest -Force
+                    Write-LinkResult "hooks" $hookName "copy" "symlink unavailable"; $copied++
+                }
+            }
+        }
+    }
+
     # 配置 .git/info/exclude
     $excludeFile = Join-Path (Join-Path (Join-Path $Target ".git") "info") "exclude"
     $gitInfoDir = Split-Path $excludeFile -Parent
@@ -337,6 +372,23 @@ function Invoke-Unlink {
             Write-LinkResult "references" $_.Name "unlink"; $removed++
         }
 
+    # Hooks
+    $gitHooksDir = Join-Path (Join-Path $Target ".git") "hooks"
+    $hooksSource = Join-Path $DaoRoot "hooks"
+    if ((Test-Path $gitHooksDir) -and (Test-Path $hooksSource)) {
+        Get-ChildItem $hooksSource -Filter "dao-*" | ForEach-Object {
+            $hookName = $_.Name -replace '^dao-', ''
+            $dest = Join-Path $gitHooksDir $hookName
+            if (Test-Path $dest) {
+                $content = Get-Content $dest -Raw -ErrorAction SilentlyContinue
+                if ($content -and $content -match "dao-managed-hook") {
+                    Remove-Item $dest -Force
+                    Write-LinkResult "hooks" $hookName "unlink"; $removed++
+                }
+            }
+        }
+    }
+
     # 取消注册
     Unregister-Target $Target
 
@@ -353,7 +405,9 @@ function Invoke-Status {
     $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "dao-*.md").Count
     $refSource = Join-Path $DaoRoot "references"
     $refCount = if (Test-Path $refSource) { (Get-ChildItem $refSource -File).Count } else { 0 }
-    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${refCount} references"
+    $hooksPath = Join-Path $DaoRoot "hooks"
+    $hCount = if (Test-Path $hooksPath) { (Get-ChildItem $hooksPath -Filter "dao-*").Count } else { 0 }
+    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${refCount} references, ${hCount} hooks"
 
     # 全局链接状态
     $globalPath = Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories") "global_rules.md"
@@ -418,6 +472,30 @@ function Invoke-Status {
                 $status = if ($_.LinkType -eq "SymbolicLink") { "linked" } else { "copy" }
                 $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
                 Write-Host "    references/$($_.Name) $status" -ForegroundColor $color
+            }
+        }
+
+        # Hooks
+        $gitHooksDir = Join-Path (Join-Path $Target ".git") "hooks"
+        $hooksSource = Join-Path $DaoRoot "hooks"
+        if ((Test-Path $gitHooksDir) -and (Test-Path $hooksSource)) {
+            Get-ChildItem $hooksSource -Filter "dao-*" | ForEach-Object {
+                $hookName = $_.Name -replace '^dao-', ''
+                $dest = Join-Path $gitHooksDir $hookName
+                if (Test-Path $dest) {
+                    $content = Get-Content $dest -Raw -ErrorAction SilentlyContinue
+                    $isDaoHook = $content -and $content -match "dao-managed-hook"
+                    if ($isDaoHook) {
+                        $item = Get-Item $dest
+                        $status = if ($item.LinkType -eq "SymbolicLink") { "linked" } else { "copy" }
+                        $color = if ($status -eq "linked") { "Green" } else { "Yellow" }
+                    } else {
+                        $status = "custom"; $color = "Magenta"
+                    }
+                } else {
+                    $status = "not installed"; $color = "Red"
+                }
+                Write-Host "    hooks/$hookName $status" -ForegroundColor $color
             }
         }
     }
