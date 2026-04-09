@@ -28,6 +28,7 @@
 | `.windsurf/workflows/dao-*.md` | 九个工作流（编排/引擎/工具/元）                        |
 | `.windsurf/skills/dao-*/`      | 九个可复用技能（含四个 cycle 镜头）                    |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
+| `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）                 |
 
 **部署原理**：symlink（文件）+ junction（目录），windsurf-dao 是唯一真相，编辑即时传播到所有注册项目。
 
@@ -72,6 +73,7 @@
 
 | 日期 | 核心变更 | 关键教训 |
 |------|----------|----------|
+| 04-10 | hooks 统一管理：dao-commit-msg + dao.ps1 hook 链接支持 | — |
 | 04-02 | 工作流→cycle+lens 架构重构 | T15,T16 |
 | 04-02 | 全局规则脱轨修复 + references纳管 | T12-T14 |
 | 03-29 | W3+W4+OPT autopilot执行 | T8,T9 |
