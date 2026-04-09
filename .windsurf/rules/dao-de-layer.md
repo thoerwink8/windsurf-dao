@@ -57,13 +57,14 @@ trigger: always_on
 
 > 文件工具(无状态,总返回) ≫ 终端(有状态,可能永久挂起)
 
-**发命令前必检6项**：
+**发命令前必检7项**：
 1. **非交互**: git加`-m`/`--no-edit`, 禁止任何需键盘输入的prompt
 2. **有超时**: 网络请求必须加超时参数
 3. **有界限**: 禁止无界递归，用文件搜索工具替代终端递归命令
 4. **非阻塞**: 耗时>30s用非阻塞模式
 5. **短且简**: 3-6条/批，禁止长管道/并行组
-6. **PowerShell 专项**（Windows 环境硬规则）:
+6. **大文件边界**: 目标文件 >1MB 或二进制格式（SQLite/WASM/图片）→ 禁止内联全量读取，写查询脚本到 `_tmp/` 再 `node` 执行
+7. **PowerShell 专项**（Windows 环境硬规则）:
    - **禁用 `2>&1`**：PowerShell 会将 stderr 包装为 ErrorRecord，导致假 exit code 1 + 中文 `NativeCommandError` 噪音。用 `; echo "EXIT:$LASTEXITCODE"` 判断真实退出码
    - **判断成功用 `$LASTEXITCODE`**，不用 `$?`（`$?` 对 native command 不可靠）
    - **抑制 stderr 噪音**：不需要 stderr 时用 `2>$null`；需要看 stderr 时用非阻塞模式运行，从终端输出中人工判断
