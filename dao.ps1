@@ -1,5 +1,8 @@
 # dao.ps1 — windsurf-dao 链接管理工具
-# 符号链接消除同步问题：只有一份物理文件，所有项目指向它。
+#
+# [Sidecar 模式] (2026.04.11+)
+# 推荐用法：将 windsurf-dao 作为 sidecar workspace 打开，rules/skills/workflows
+# 自动跨 workspace 可见，无需 link 到每个项目。link/sync 仅在需要独立自足时使用。
 #
 # Usage:
 #   .\dao.ps1 link <project-path>     链接 dao 文件到目标项目（并注册）

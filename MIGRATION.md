@@ -2,7 +2,42 @@
 
 > 善行无辙迹。
 
-## 设计原理
+## Sidecar 模式（推荐，2026.04.11+）
+
+将 windsurf-dao 作为伴生 workspace 打开。Windsurf 自动跨 workspace 聚合 rules/skills/workflows，无需链接。
+
+```
+windsurf-dao (源仓库, sidecar workspace)
+├── .windsurf/rules/        ← 2 个 always_on + 4 个 model_decision
+├── .windsurf/skills/       ← 11 个 dao-* skills
+├── .windsurf/workflows/    ← 12+ 个 dao-* workflows
+├── global_rules.md         ← 全局规则源文件
+└── dao.ps1                 ← 链接管理工具（link-global 仍需）
+
+~/.codeium/windsurf/memories/
+└── global_rules.md         ← symlink → windsurf-dao/
+
+项目X/.windsurf/
+└── (仅项目自有文件)           ← git tracked，无 dao-* 链接
+```
+
+**优势**：
+- 零配置：打开 workspace 即生效
+- 零乘数：always_on 规则只注入一次（来自 windsurf-dao），不再按 workspace 数翻倍
+- 零污染：项目仓库无 dao 文件，无需 `.git/info/exclude`
+
+**步骤**：
+1. `dao.ps1 link-global`（一次性，链接全局规则）
+2. 在 IDE 中添加 windsurf-dao 为 workspace
+3. 完成
+
+---
+
+## Legacy: 链接模式
+
+> 以下为旧架构文档，保留供需要独立自足时参考。Sidecar 模式是推荐方案。
+
+### 设计原理
 
 同步问题的根因是**文件有副本**。消除副本，问题就消失。
 
@@ -24,7 +59,7 @@ windsurf-dao (源仓库)            ← git repo，唯一真相
 
 **变更流**：在任意项目中编辑 dao-* 文件 → 物理修改的是 windsurf-dao → 所有项目即时可见 → 在 windsurf-dao 中 git commit。
 
-## 核心架构
+### 核心架构
 
 ```
 .windsurf/                      # 统一 AI 配置目录
@@ -40,8 +75,6 @@ windsurf-dao (源仓库)            ← git repo，唯一真相
 ```
 
 **区分机制**：`dao-` 前缀 = 来自 windsurf-dao，通过 `.git/info/exclude` 本地忽略，不污染项目 git。
-
-## 链接模式（推荐）
 
 ### 前提
 

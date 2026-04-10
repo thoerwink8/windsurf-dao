@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 法层操作——工作流生态(dev/cycle/autopilot等协作规则)、深度工作模式、进化触点、虚·知识归位(路由表/双文件模式/Memory归位)、变更规则。使用工作流或管理知识归位时读取。
 ---
 
 # 法层 · 怎么做
@@ -11,7 +12,7 @@ trigger: always_on
 **协作规则：**
 
 - /dev 是主管线，驱动 /cycle 引擎执行各阶段
-- /cycle 是通用引擎，通过镜头机制加载领域技能（debug/refactor/optimize/test）
+- /cycle 是通用引擎，通过镜头机制加载领域技能（dao skills + 图书馆 skills 互补）
 - /autopilot 是持续自主执行模式，激活后进入扩展内观状态，退出后完全恢复正常
 - /doc 按需触发，不强制每个项目都写完整文档
 - /commit 从变更生成 commit message 并提交

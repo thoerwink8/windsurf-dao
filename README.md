@@ -27,16 +27,15 @@
 
 ## 包含什么
 
-### 六个规则文件（`.windsurf/rules/`）
+### 五个规则文件（`.windsurf/rules/`）
 
-| 文件                   | 层   | 内容                                               |
-| ---------------------- | ---- | -------------------------------------------------- |
-| `dao-layer.md`         | 道   | 八条不变原则（道生万物、为道日损、反者道之动…）    |
-| `dao-de-layer.md`      | 德   | 行为协议（推理链·第一性原理·注意力锚点·执行协议·涅槃门·铁律·假设审计） |
-| `dao-fa-layer.md`      | 法   | 工作流生态、静默执行、虚·知识归位机制              |
-| `dao-shu-layer.md`     | 术   | Skills 体系、MCP 工具、中间物管理                  |
-| `dao-ask-next-step.md` | 续力 | 每次用户可见回答后调用 `ask_user_question`；autopilot 激活期间豁免 |
-| `dao-fa-mechanism.md`  | 参考 | Windsurf 运行机制（注入格式、激活模式、symlink 陷阱） |
+| 文件              | 层 | trigger        | 内容                                            |
+| ----------------- | -- | -------------- | ----------------------------------------------- |
+| `dao-de-layer.md` | 德 | **always_on**  | 行为内核（交互三态/推理链/执行/涅槃门/续力）    |
+| `dao-layer.md`    | 道 | model_decision | 八条不变原则（道生万物、为道日损、反者道之动…） |
+| `dao-fa-layer.md` | 法 | model_decision | 工作流生态、静默执行、虚·知识归位机制           |
+| `dao-shu-layer.md`| 术 | model_decision | CLI-first 工具哲学、MCP/CLI 工具箱、skill 调用时机 |
+| `dao-quality-gate.md`| — | model_decision | 代码质量关卡：安全/数据库/测试/错误处理域检查   |
 
 ### 十三个工作流（`.windsurf/workflows/`）
 
@@ -56,15 +55,23 @@
 | `/refactor`         | ☴ 巽·损   | 安全重构：提取函数、消除重复、简化逻辑            |
 | `/optimize`         | ☳ 震·动   | 性能分析与调优：测→策→行→验                       |
 
-### 五个技能（`.windsurf/skills/`）
+### 十三个技能（`.windsurf/skills/`）
 
-| 技能                   | 适用场景                                        |
-| ---------------------- | ----------------------------------------------- |
-| `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归  |
-| `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水        |
-| `dao-frontend-aesthetics` | 受限空间中的高信息密度界面，四步法：约→层→色→密 |
-| `dao-terminal-resilience` | 终端卡死诊断与五感降级恢复，七类模式分类      |
-| `dao-windsurf-extension`  | Windsurf/VSCode 扩展开发的已验证技术约束      |
+| 技能                      | 适用场景                                        |
+| ------------------------- | ----------------------------------------------- |
+| `dao-fa-mechanism`          | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
+| `dao-research`              | 前置研究：搜索最优实践，结合项目上下文综合方案    |
+| `dao-debug`                 | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
+| `dao-refactor`              | 安全重构：提取函数、消除重复、简化逻辑        |
+| `dao-optimize`              | 性能分析与调优：测→策→行→验                  |
+| `dao-test`                  | 测试驱动：AAA 模式编写高覆盖测试              |
+| `dao-reverse-engineering`   | 面对未知/混淆代码库，五步法：锚→展→交→验→归  |
+| `dao-boundary-probe`        | 集成外部系统前，三步法：识壁→探路→择水        |
+| `dao-frontend-aesthetics`   | 受限空间中的高信息密度界面                |
+| `dao-terminal-resilience`   | 终端卡死诊断与五感降级恢复                |
+| `dao-windsurf-extension`    | Windsurf/VSCode 扩展开发的已验证技术约束      |
+| `dao-deploy`                | 项目上服务器标准流程：连接→环境→推送→构建→服务  |
+| `dao-skill-ecosystem`       | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
 
 ### MCP 配置（`mcp/`）
 
@@ -159,12 +166,11 @@ target-project/
 ├── .git/info/exclude                # dao-* 本地忽略规则
 └── .windsurf/
     ├── rules/
-    │   ├── dao-layer.md             # → symlink (locally ignored)
-    │   ├── dao-de-layer.md          # → symlink (locally ignored)
-    │   ├── dao-fa-layer.md          # → symlink (locally ignored)
-    │   ├── dao-shu-layer.md         # → symlink (locally ignored)
-    │   ├── dao-ask-next-step.md     # → symlink (locally ignored)
-    │   ├── dao-fa-mechanism.md      # → symlink (locally ignored)
+    │   ├── dao-layer.md             # → symlink (道)
+    │   ├── dao-de-layer.md          # → symlink (德, always_on)
+    │   ├── dao-fa-layer.md          # → symlink (法)
+    │   ├── dao-shu-layer.md         # → symlink (术)
+    │   ├── dao-quality-gate.md      # → symlink (质量关卡)
     │   └── *.md                     # ← 项目规则 (tracked)
     ├── skills/
     │   ├── dao-*/                   # → junction (locally ignored)

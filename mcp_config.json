@@ -20,7 +20,16 @@
         "@modelcontextprotocol/server-filesystem",
         ""
       ],
-      "command": "npx"
+      "command": "npx",
+      "disabled": true
+    },
+    "github": {
+      "args": [
+        "/c",
+        "D:\\frank\\windsurf-dao\\mcp\\github-mcp.cmd"
+      ],
+      "command": "cmd",
+      "disabled": true
     },
     "memory": {
       "args": [
@@ -28,47 +37,25 @@
         "@modelcontextprotocol/server-memory"
       ],
       "command": "npx",
+      "disabled": true,
       "env": {
         "MEMORY_FILE_PATH": "C:\\frank\\memory.json"
       }
     },
-    "next - API 文档": {
+    "playwright": {
       "args": [
-        "/c",
-        "npx",
         "-y",
-        "apifox-mcp-server@latest",
-        "--project-id=[REDACTED:apifox-project]"
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chromium"
       ],
-      "command": "cmd",
+      "command": "npx",
+      "disabled": true,
       "env": {
-        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
-      }
-    },
-    "next - API 文档（Agent）": {
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "apifox-mcp-server@latest",
-        "--project-id=[REDACTED:apifox-project]"
-      ],
-      "command": "cmd",
-      "env": {
-        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
-      }
-    },
-    "next - API 文档（默认模块）": {
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "apifox-mcp-server@latest",
-        "--project-id=[REDACTED:apifox-project]"
-      ],
-      "command": "cmd",
-      "env": {
-        "APIFOX_ACCESS_TOKEN": "[REDACTED:apifox-token]"
+        "HTTPS_PROXY": "http://127.0.0.1:7890",
+        "HTTP_PROXY": "http://127.0.0.1:7890"
       }
     },
     "sequential-thinking": {

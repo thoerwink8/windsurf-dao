@@ -2,6 +2,52 @@
 
 > 详细变更记录。索引见 [AGENT_GUIDE.md](../AGENT_GUIDE.md) §二。
 
+### 2026.04.11 · Sidecar 架构 + always_on 基数压缩
+
+**变更**：
+
+- `dao-de-layer.md`：145 行 8KB → 52 行 1.6KB，只保留行为内核（交互三态/推理链/执行核心/铁律/涅槃门/元认知）
+- `dao-layer.md`、`dao-fa-layer.md`、`dao-shu-layer.md`：`always_on` → `model_decision`，添加描述性 description
+- `dao-skills-index.md`：删除。硬门控一句话已融入 de-layer 推理链步骤 5
+- `dao-fa-mechanism.md`：移除 dao-skills-index 目录引用
+
+**根因**：
+
+- `always_on` 规则按 workspace 注入。3 个 dao-linked workspace 同时打开 = 6 个文件 × 3 = ~75KB context/轮
+- 逐文件审视"行为塑形 vs 知识参考"：只有交互三态、推理链、铁律等**真正改变 AI 行为**的内容需要 always_on；终端安全详情、注意力锚点表等是**参考知识**，按需读取即可
+- Sidecar 验证：移除无感切号的 `dao-terminal-resilience` junction 后，新对话仍可通过 windsurf-dao workspace 发现该 skill → 证明 Windsurf 跨 workspace 聚合 skills → `dao-skills-index.md` 作为"平台发现补丁"的根因被 sidecar 模式消除
+
+**教训**：
+
+- **T18**: `always_on` 的每一行都有 context 成本。一条规则的价值 = 它改变 AI 行为的概率 × 改变的重要性。概率趋零的规则是纯 context 开销——写出来的"提醒"如果 AI 99% 情况本来就会这么做，就不值得 always_on
+- **T19**: 当 workaround（如 skills-index）存在时，先问"它在补偿什么平台缺陷？" → 再问"有没有办法消除缺陷本身？" → sidecar 消除了 symlink+ignore 导致的 skill 不可见问题，补丁层的存在理由就消失了
+
+---
+
+### 2026.04.11 · CLI-first 转型：MCP 精简
+
+**变更**：
+
+- 禁用 4 个 MCP：filesystem、github、playwright、memory
+- 仅保留 2 个 MCP：chrome-devtools（CDP 实时交互不可替代）、context7（结构化文档查询无 CLI 等价）
+- 术层 `dao-shu-layer.md`：重写为"工具哲学：CLI-first"，含 MCP→CLI 映射表和 CLI 工具箱
+- IDE MCP 配置（`~/.codeium/windsurf/mcp_config.json`）+ 模板（`mcp_config.json`）同步更新
+
+**根因**：
+
+- MCP 工具定义占上下文 ~28,600 tokens（89 个工具），每轮对话消耗巨大
+- filesystem MCP 与 Windsurf 内建工具 100% 重叠
+- github MCP 与 `gh` CLI 功能完全等价（v2.88.1 已验证 auth + proxy）
+- playwright 与 chrome-devtools 高度重叠（截图/DOM/导航/填充）
+- memory MCP 与 dao 哲学矛盾（知识归文件，Memory 理想态为空）
+- 精简后 ~89 → ~32 工具，节省 ~17,500 tokens/轮
+
+**教训**：
+
+- **T17**: CLI-first 原则——`run_command` 是最通用的 MCP，shell 本身是无限工具接口。MCP 仅保留 CLI 无法提供的结构化交互能力（如 CDP 协议、结构化文档查询）。每个 MCP 的存在必须回答"CLI 为什么做不到"。
+
+---
+
 ### 2026.04.02 · 工作流架构重构：workflow → cycle + lens
 
 **变更**：
