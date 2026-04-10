@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 道层八条不变原则(道生万物/为道日损/反者道之动/上善若水/知止不殆/大制不割/复归于婴儿/致虚极)与实践公理。审视架构或引用哲学原则时读取。
 ---
 # 道层 · 为什么
 

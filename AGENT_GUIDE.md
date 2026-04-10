@@ -73,6 +73,8 @@
 
 | 日期 | 核心变更 | 关键教训 |
 |------|----------|----------|
+| 04-11 | Sidecar + 基数压缩：always_on 6文件→2文件，de-layer 8KB→1.6KB，删除 skills-index（sidecar 消除补丁根因） | T18,T19 |
+| 04-11 | CLI-first 转型：禁用 filesystem/github/playwright/memory MCP，仅保留 chrome-devtools+context7 | T17 |
 | 04-10 | hooks 统一管理：dao-commit-msg + dao.ps1 hook 链接支持 | — |
 | 04-02 | 工作流→cycle+lens 架构重构 | T15,T16 |
 | 04-02 | 全局规则脱轨修复 + references纳管 | T12-T14 |

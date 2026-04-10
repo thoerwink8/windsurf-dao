@@ -17,39 +17,24 @@ description: 系统健康检查：检测规则/配置/Skills是否完整，发�
 
 ### 一、检测（☲离 · 视 · 照见缺失）
 
-#### 1.1 文件完整性 + 链接状态（动态检测）
+#### 1.1 源仓库完整性（Sidecar 模式）
 
-不硬编码文件列表。从 windsurf-dao 源仓库动态获取应有的 dao-* 文件，与当前项目比对：
-
-**定位源仓库**：从任一现有 symlink 的 Target 反推，或询问用户。
+> Sidecar 模式下，windsurf-dao 作为 workspace 打开，rules/skills/workflows 自动跨 workspace 可见。
+> 不再需要 link 到每个项目。健康检查焦点 = 源仓库自身是否完整。
 
 ```powershell
-# 动态对比：源仓库有哪些 dao-* 文件，当前项目缺哪些
-$daoSource = "<windsurf-dao-path>\.windsurf"
-# Rules
-diff (Get-ChildItem "$daoSource\rules" -Filter "dao-*.md" -Name) (Get-ChildItem ".windsurf\rules" -Filter "dao-*.md" -Name)
-# Skills
-diff (Get-ChildItem "$daoSource\skills" -Directory -Filter "dao-*" -Name) (Get-ChildItem ".windsurf\skills" -Directory -Filter "dao-*" -Name)
-# Workflows
-diff (Get-ChildItem "$daoSource\workflows" -Filter "dao-*.md" -Name) (Get-ChildItem ".windsurf\workflows" -Filter "dao-*.md" -Name)
+# 检查源仓库 rules/skills/workflows 存在性
+$daoRoot = "<windsurf-dao-path>"
+$ws = Join-Path $daoRoot ".windsurf"
+Write-Host "Rules:"; Get-ChildItem "$ws\rules" -Filter "*.md" -Name
+Write-Host "Skills:"; Get-ChildItem "$ws\skills" -Directory -Name
+Write-Host "Workflows:"; Get-ChildItem "$ws\workflows" -Filter "*.md" -Name
 ```
 
-有差异 → 源仓库新增了文件 → 需要重新 `dao.ps1 link`。
-
-#### 1.2 链接状态
-
-dao 文件应通过符号链接指向 windsurf-dao 源仓库，而非独立副本。
-
-**检测方法**（AI 执行）：
-```powershell
-# 检查单个文件的链接状态
-Get-Item ".windsurf\rules\dao-layer.md" | Select-Object Name, LinkType, Target
-```
-
-**状态判定**：
-- `LinkType = SymbolicLink/Junction` → 🟢 已链接
-- `LinkType` 为空（普通文件/目录）→ 🟡 副本（需升级）
-- 文件不存在 → 🔴 缺失
+**期望**：
+- Rules: 5 个（dao-de-layer always_on + dao-layer/dao-fa-layer/dao-shu-layer/dao-quality-gate model_decision）
+- Skills: 13 个 dao-* 目录
+- Workflows: 12+ 个 dao-*.md
 
 #### 1.3 全局规则
 
@@ -97,21 +82,18 @@ Get-ChildItem ".windsurf\rules" -Filter "*.md" | ForEach-Object {
 
 #### 执行修复
 
-```powershell
-# 从 windsurf-dao 源仓库执行（AI 自动定位并运行）
-// turbo
-<windsurf-dao-path>\dao.ps1 link <current-project-path>
+**Sidecar 模式**（推荐）：确保 windsurf-dao 作为 workspace 打开即可，无需 link。
 
-# 全局规则（如需要）
+**全局规则**（仍需 link）：
+```powershell
 // turbo
 <windsurf-dao-path>\dao.ps1 link-global
 ```
 
-`dao.ps1 link` 会自动处理：
-- 副本与源相同 → 替换为链接
-- 副本与源不同 → 备份到 `_dao_backup/` 后替换
-- 已是链接 → 跳过
-- 配置 `.git/info/exclude`
+**Legacy link 模式**（需要独立自足时）：
+```powershell
+<windsurf-dao-path>\dao.ps1 link <current-project-path>
+```
 
 #### Memory 清理
 
