@@ -57,14 +57,6 @@
         "HTTPS_PROXY": "http://127.0.0.1:7890",
         "HTTP_PROXY": "http://127.0.0.1:7890"
       }
-    },
-    "sequential-thinking": {
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ],
-      "command": "npx",
-      "disabled": true
     }
   }
 }
