@@ -31,23 +31,25 @@ description: 重大变更可观测性：判定变更是否需要追踪日志，�
 
 ## 两级日志
 
-### 永久日志 · `logger.log` / `warn` / `error`
+| | 永久日志 | 追踪日志 |
+|---|---------|---------|
+| **用途** | 业务事件最终结果 | 关键路径耗时、中间状态、分支决策 |
+| **清退** | 不清退 | 过期可清退 |
 
-业务事件的最终结果。永远需要知道的事。
+### 多环境实现
 
-```
-用途：操作成功/失败、影响用户的状态变迁、错误和异常
-特征：生产环境始终输出，不清退，是系统可观测性的一部分
-```
+追踪日志的核心需求：**生产可关闭（或低开销），排查时可开启。** 不同环境的实现方式不同：
 
-### 追踪日志 · `logger.debug`
+| 环境 | 永久日志 | 追踪日志 | 生产屏蔽方式 | 排查开启方式 |
+|------|---------|---------|-------------|-------------|
+| **NestJS 后端** | `logger.log/warn/error` | `logger.debug` | `LOG_LEVEL` env（默认不输出 debug） | `LOG_LEVEL=debug` 重启服务 |
+| **VS Code Extension** | `outputChannel.appendLine` | 条件输出：`if (DEV) console.debug(...)` | `DEV` 编译常量（esbuild define） | 开发模式自动开启 |
+| **React Native** | `console.log/warn/error` | `if (__DEV__) console.debug(...)` | `__DEV__` 编译时剔除 | 开发模式自动开启 |
+| **浏览器前端** | `console.log/warn/error` | `localStorage.getItem('DEBUG')` 守卫 | 默认关闭（无 localStorage key） | 控制台执行 `localStorage.setItem('DEBUG','1')` |
+| **Unix 系统脚本** | `echo "..." >> /var/log/app.log` | `[ "$DEBUG" = 1 ] && echo "..."` | 默认不设 `$DEBUG` | `DEBUG=1 ./script.sh` |
+| **Nginx/系统服务** | 默认 access/error log | `error_log ... debug` | `error_log ... warn`（默认） | 临时改 `error_log ... debug` + reload |
 
-验证新功能、排查问题时需要的细节。
-
-```
-用途：关键路径耗时、中间状态数值、分支决策走向
-特征：生产环境默认不输出（零开销），LOG_LEVEL=debug 时开启
-```
+**原则**：追踪日志必须有开关。没有开关的追踪日志 = 永久日志（如果不想让它永久输出，就必须有关闭机制）。
 
 ## 日志点选择
 
@@ -95,21 +97,30 @@ this.logger.debug(`[switch] old: ${oldEmail}`);
 
 ### 平时
 
-debug 日志在代码里，生产不输出，零影响。**不需要管。**
+追踪日志在代码里，生产有开关保护，**不需要管**。
 
 ### /dao-cycle 省阶段
 
 审视当前文件时顺手检查：
 
-1. `git blame` 文件中的 `logger.debug` 行
+1. `git blame` 文件中的追踪日志行（`debug` / `__DEV__` / `DEBUG` 守卫的日志）
 2. 加了超过 7 天的 → 检查这期间有没有相关 bug/排查
 3. 没有 → 删掉
 4. 有 → 保留
 
 ### /dao-evolve
 
-全项目扫描 `logger.debug` 行，批量清退过期追踪日志。
+全项目扫描追踪日志，批量清退过期的。
 
 ### 排查模式
 
-线上出问题时：`LOG_LEVEL=debug` 临时开启，排查完恢复。
+按环境开启追踪日志：
+
+| 环境 | 开启方式 | 恢复方式 |
+|------|---------|---------|
+| NestJS | `LOG_LEVEL=debug` 重启 | 恢复默认 level 重启 |
+| Extension | 用开发模式加载 | 切回生产构建 |
+| React Native | 开发模式自带 | 发布构建自动剔除 |
+| 浏览器 | `localStorage.setItem('DEBUG','1')` | `localStorage.removeItem('DEBUG')` |
+| Unix | `DEBUG=1 ./script.sh` | 不加 `DEBUG` 即关闭 |
+| Nginx | `error_log ... debug` + reload | 恢复 `warn` + reload |
