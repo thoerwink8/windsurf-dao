@@ -77,6 +77,7 @@ description: 转法轮深度循环 — 对复杂任务进行多轮螺旋迭代�
   3. 有没有影响到其他模块？
   4. 用户拿到手能直接用吗？
   5. 涉及的域（安全/数据库/测试/性能）有隐患吗？
+  6. 可观测性：关键路径有 debug 日志吗？当前文件有过期的 debug 日志要清退吗（git blame > 7天且无相关 bug）？
 
 ### 五、改升（☴巽 · 嗅 · 风渗透）
 
@@ -99,6 +100,7 @@ cycle 的五相是通用引擎。当任务属于特定领域时，加载对应�
 | 重构 | `dao-refactor`      | —                       |
 | 优化 | `dao-optimize`      | —                       |
 | 测试 | `dao-test`          | `test-driven-development`, `webapp-testing` |
+| 可观测 | `dao-observability` | —                       |
 | 安全 | —                   | `security-audit`        |
 | 数据库 | —                 | `database-patterns`     |
 

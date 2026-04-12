@@ -96,6 +96,7 @@ dao 配置通过 `dao.ps1 link` 链接到目标项目（备用：复制），与
 |------|------------|
 | 需要理解 Windsurf 内部机制 | `dao-fa-mechanism`（注入格式/激活模式/目录结构） |
 | 任务属于特定领域 | 对应镜头 skill（见 cycle 镜头表） |
+| 代码涉及定时任务/外部API/schema/锁/操作顺序调整 | `dao-observability`（日志设计） |
 | 感知 skill 缺口 | `dao-skill-ecosystem`（供应链） |
 | 创建新 skill 后 | `dao-skill-ecosystem`（反向传播评估） |
 
