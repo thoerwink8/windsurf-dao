@@ -118,19 +118,12 @@ Get-ChildItem ".windsurf\rules" -Filter "*.md" | ForEach-Object {
 
 > 知常曰明。不读历史教训就开工，是重蹈覆辙的最快路径。
 
-健康检查完成后，加载 `dao-evolution` skill，对**每个活跃 workspace 的项目根目录**执行：
+健康检查完成后，加载 `dao-evolution` skill，读取各项目教训统计：
 
 ```
-py migrate.py "<project_root>"
+py search.py stats --data-dir <project>/data
 ```
 
-`migrate.py` 内部自动完成一切判断：
-- 自动发现 `AGENT_GUIDE.md`、`docs/evolution.md` 等数据源
-- 自动识别格式（table / section）
-- CSV 已有数据 → SKIP（幂等）
-- 有旧格式无 CSV → 自动迁移
-- 无任何数据源 → SKIP
+输出 `教训已装载：N 条 active（draft: X, mature: Y）`。
 
-迁移后运行 `search.py stats --data-dir <project>/data` 输出教训统计。
-
-**原则**：每个项目每次会话都经过这一步。不靠 AI 判断"要不要迁移"——脚本自己判断。旧文件保留不动，CSV 成为权威数据源。
+> 迁移无需在此处触发——de-layer 的「项目感知」节点在每次对话首条请求时已自动检测并迁移。health-check 只负责报告结果，不驱动迁移。
