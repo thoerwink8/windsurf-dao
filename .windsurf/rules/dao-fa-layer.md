@@ -20,7 +20,7 @@ description: 法层操作——工作流生态(dev/cycle/autopilot等协作规�
 - /evolve 审查一切（包括自身），有感觉才触发，不定闹钟
 - /health-check、/review 按需触发
 - /session-report、/session-sync 多会话协作（自报+元会话同步）
-- /thread-tree 对话线索整理，沉淀未解决项到 TODO.md
+- /thread-tree 线索追踪：处理 Open Threads 未解决项（德层实时中断感知 → thread-tree 批量处理）
 
 **通信原则：**
 
@@ -57,14 +57,16 @@ description: 法层操作——工作流生态(dev/cycle/autopilot等协作规�
 
 ## 虚 · 知识归位
 
-| 知识类型               | 归属           |
-| ---------------------- | -------------- |
-| 不变原则               | 道层           |
-| 行为倾向               | 德层           |
-| 操作流程               | workflows/     |
-| 具体技能               | skills/        |
-| 编码规则（怎么写代码） | AGENT.md       |
-| 项目知识（学到了什么） | AGENT_GUIDE.md |
+| 知识类型               | 归属                               |
+| ---------------------- | ---------------------------------- |
+| 不变原则               | 道层                               |
+| 行为倾向               | 德层                               |
+| 操作流程               | workflows/                         |
+| 具体技能               | skills/                            |
+| 编码规则（怎么写代码） | AGENT.md                           |
+| 项目知识（学到了什么） | AGENT_GUIDE.md                     |
+| 教训/踩坑              | data/evolution-lessons.csv（优先） |
+| 演化条目               | data/evolution-entries.csv         |
 
 **双文件模式**：每个项目最终都应有 `AGENT.md`（规则）+ `AGENT_GUIDE.md`（知识）。AGENT.md 存编码规范、技术栈约束、代码风格；AGENT_GUIDE.md 存项目概览、发现的模式/反模式、架构决策、演化记录。不存在时创建。
 

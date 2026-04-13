@@ -93,7 +93,14 @@ description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进�
 3. 超过 7 天且无相关 bug → 删除
 4. 仍有排查价值 → 保留
 
-**产出**：四脏审查报告 + 追踪日志清退清单
+**教训新鲜度扫描：**
+
+加载 `dao-evolution` skill，运行 `search.py stale --data-dir <project>/data`：
+1. 距最新版本 ≥5 个大版本的 active 教训 → 自动标记 `status=review`
+2. 已标 `review` 的教训 → 展示给用户决定：确认仍有效（→ active）或废弃（→ deprecated）
+3. deprecated 教训过多时 → 提示是否需要架构性清理
+
+**产出**：四脏审查报告 + 追踪日志清退清单 + 教训新鲜度报告
 
 ### 二、辨 · 识别改进点（☶艮 · 味 · 止而辨）
 

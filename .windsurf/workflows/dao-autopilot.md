@@ -301,23 +301,11 @@ git revert [N4-commit-hash] --no-edit
 
 对照成功标准逐条验证（同 Gap Analysis，但这是最终核查）。
 
-#### 5.2 写入 AGENT_GUIDE.md 演化条目
+#### 5.2 写入演化记录
 
-在 `AGENT_GUIDE.md` 的 `## 二、演化记录` 区域**最前面**插入：
+**CSV 路径**（优先）：加载 `dao-evolution` skill，调用 `write_entry` + `write_lesson` 写入 `data/` CSV。
 
-```markdown
-### v[X.Y.Z] · [日期] · [目标摘要]
-
-**变更**：
-- [文件]: [具体改动描述]
-- [文件]: [具体改动描述]
-
-**根因**：
-- [为什么做这些改动，原来的问题是什么]
-
-**教训**：
-- [这次执行中发现的可复用经验]
-```
+**AGENT_GUIDE.md**（兼容）：同时在 `## 二、演化记录` 区域最前面插入摘要条目，保持文件可读性。
 
 > 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
 
