@@ -15,6 +15,7 @@ Auto-discovers:
 Output: <project_root>/data/evolution-{entries,lessons}.csv
 
 Idempotent: skips if CSV already has data, unless --force.
+Post-migration: strips old sections from AGENT_GUIDE.md, deletes docs/evolution.md.
 """
 
 import csv
@@ -313,6 +314,65 @@ def write_csv(filepath, headers, rows):
         writer.writerows(rows)
 
 
+# ─── Post-migration cleanup ───
+
+CSV_POINTER = """\n> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
+> 使用 `search.py` 搜索教训，使用 `search.py stats` 查看统计。
+"""
+
+
+def cleanup_agent_guide(guide_path):
+    """Strip evolution table sections from AGENT_GUIDE.md, replace with CSV pointer."""
+    content = guide_path.read_text(encoding='utf-8')
+    original = content
+
+    # Replace §二 演化索引 section content (keep heading, replace body)
+    content = re.sub(
+        r'(## 二、演化索引).*?(?=## [三四五六七八九]|\Z)',
+        r'\1' + CSV_POINTER + '\n',
+        content, flags=re.DOTALL
+    )
+
+    # Replace §三 教训清单 section content (keep heading, replace body)
+    content = re.sub(
+        r'(## 三、教训清单).*?(?=## [四五六七八九]|\Z)',
+        r'\1' + CSV_POINTER + '\n',
+        content, flags=re.DOTALL
+    )
+
+    # Also handle §二 演化记录 variant
+    content = re.sub(
+        r'(## 二、演化记录).*?(?=## [三四五六七八九]|\Z)',
+        r'\1' + CSV_POINTER + '\n',
+        content, flags=re.DOTALL
+    )
+
+    # Handle bare ## 演化索引 (without 二、 prefix)
+    content = re.sub(
+        r'(## 演化索引).*?(?=## [^演]|\Z)',
+        r'\1' + CSV_POINTER + '\n',
+        content, flags=re.DOTALL
+    )
+
+    if content != original:
+        guide_path.write_text(content, encoding='utf-8')
+        print(f"  Cleaned: {guide_path.name} (演化索引/教训清单 → CSV pointer)")
+    else:
+        print(f"  {guide_path.name}: no evolution sections to clean")
+
+
+def cleanup_evolution_md(evo_path):
+    """Delete docs/evolution.md after migration."""
+    if evo_path.exists():
+        evo_path.unlink()
+        print(f"  Deleted: {evo_path}")
+        # Remove empty docs/ dir
+        parent = evo_path.parent
+        if parent.name == 'docs' and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            print(f"  Removed empty: {parent}")
+
+
 # ─── Main ───
 
 def main():
@@ -392,10 +452,20 @@ def main():
     # Cross-reference
     cross_reference(all_entries, all_lessons)
 
-    # Write
+    # Write CSV
     data_dir.mkdir(parents=True, exist_ok=True)
     write_csv(entries_path, ENTRIES_HEADERS, all_entries)
     write_csv(lessons_path, LESSONS_HEADERS, all_lessons)
+
+    # Post-migration cleanup
+    print("\nCleaning up old format...")
+    guide_path = project_root / "AGENT_GUIDE.md"
+    if guide_path.exists():
+        cleanup_agent_guide(guide_path)
+
+    evo_path = project_root / "docs" / "evolution.md"
+    if evo_path.exists():
+        cleanup_evolution_md(evo_path)
 
     # Summary
     status_counts = {}

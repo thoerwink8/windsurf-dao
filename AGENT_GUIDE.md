@@ -68,18 +68,6 @@
 ---
 
 ## 二、演化索引
+> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
+> 使用 `search.py` 搜索教训，使用 `search.py stats` 查看统计。
 
-> 详细记录见 [docs/evolution.md](docs/evolution.md)。AI 按需 `read_file` 读取具体版本。
-
-| 日期 | 核心变更 | 关键教训 |
-|------|----------|----------|
-| 04-11 | Sidecar + 基数压缩：always_on 6文件→2文件，de-layer 8KB→1.6KB，删除 skills-index（sidecar 消除补丁根因） | T18,T19 |
-| 04-11 | CLI-first 转型：禁用 filesystem/github/playwright/memory MCP，仅保留 chrome-devtools+context7 | T17 |
-| 04-10 | hooks 统一管理：dao-commit-msg + dao.ps1 hook 链接支持 | — |
-| 04-02 | 工作流→cycle+lens 架构重构 | T15,T16 |
-| 04-02 | 全局规则脱轨修复 + references纳管 | T12-T14 |
-| 03-29 | W3+W4+OPT autopilot执行 | T8,T9 |
-| 03-29 | 同步前自审门 | T7 |
-| 03-29 | W1无为化审查 + W2知识归位 | T5,T6 |
-| 03-29 | dao-autopilot重构 + dao-commit无为化 | T1-T4 |
-| 2025.07 | 双文件模式明确化 | T10,T11 |
