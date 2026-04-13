@@ -1,0 +1,33 @@
+id,status,date,version,component,title,root_cause,lesson_ids,tags,synthesized_to
+e001,mature,2026-04-11,,,Sidecar + 基数压缩：always_on 6文件→2文件，de-layer 8KB→1.6KB，删除 skills-index（sidecar 消除补丁根因）,Sidecar + 基数压缩：always_on 6文件→2文件，de-layer 8KB→1.6KB，删除 skills-index（sidecar 消除补丁根因）,,always_on;skill,
+e002,mature,2026-04-11,,,CLI-first 转型：禁用 filesystem/github/playwright/memory MCP，仅保留 chrome-devtools+context7,CLI-first 转型：禁用 filesystem/github/playwright/memory MCP，仅保留 chrome-devtools+context7,,cli;context;mcp,
+e003,mature,2026-04-10,,,hooks 统一管理：dao-commit-msg + dao.ps1 hook 链接支持,hooks 统一管理：dao-commit-msg + dao.ps1 hook 链接支持,,commit,
+e004,mature,2026-04-02,,,工作流→cycle+lens 架构重构,工作流→cycle+lens 架构重构,,cycle,
+e005,mature,2026-04-02,,,全局规则脱轨修复 + references纳管,全局规则脱轨修复 + references纳管,,,
+e006,mature,2026-03-29,,,W3+W4+OPT autopilot执行,W3+W4+OPT autopilot执行,,autopilot,
+e007,mature,2026-03-29,,,同步前自审门,同步前自审门,,,
+e008,mature,2026-03-29,,,W1无为化审查 + W2知识归位,W1无为化审查 + W2知识归位,,,
+e009,mature,2026-03-29,,,dao-autopilot重构 + dao-commit无为化,dao-autopilot重构 + dao-commit无为化,,autopilot;commit,
+e010,mature,2025.07,,,双文件模式明确化,双文件模式明确化,,,
+e011,mature,2026-04-11,,,Sidecar 架构 + always_on 基数压缩,"- `always_on` 规则按 workspace 注入。3 个 dao-linked workspace 同时打开 = 6 个文件 × 3 = ~75KB context/轮
+- 逐文件审视""行为塑形 vs 知识参考""：只有交互三态、推理链、铁律等**真正改变 AI 行为**的内容需要 always_on；终端安全详情、注意力锚点表等是**参考知识**，按需读取即可
+- Sidecar 验证：移除无感切号的 `dao-terminal-resilience` junction 后，新对话仍可通过 windsurf-dao workspace 发现该 skill → 证明 Windsurf","T18,T19",always_on;context;model_decision;skill;symlink;切号,
+e012,mature,2026-04-11,,,CLI-first 转型：MCP 精简,"- MCP 工具定义占上下文 ~28,600 tokens（89 个工具），每轮对话消耗巨大
+- filesystem MCP 与 Windsurf 内建工具 100% 重叠
+- github MCP 与 `gh` CLI 功能完全等价（v2.88.1 已验证 auth + proxy）
+- playwright 与 chrome-devtools 高度重叠（截图/DOM/导航/填充）
+- memory MCP 与 dao 哲学矛盾（知识归文件，Memory 理想态为空）
+- 精简后 ~89 → ~32 工具，节省 ~17,500 tokens/轮",T17,auth;cli;context;dom;mcp;消耗,
+e013,mature,2026-04-02,,,工作流架构重构：workflow → cycle + lens,"- 第一性原理分析发现，专项工作流本质是 /cycle 的单次 turn + 领域知识，是 skill 伪装成 workflow
+- 作为 workflow 的代价：① 每次对话全量注入 context（~460 行）；② 跨工作流调用链（/dev → /debug → /cycle）造成 context 膨胀和上下文断裂","T15,T16",autopilot;commit;context;cycle;skill;workflow;消耗,
+e014,mature,2026-04-02,,,全局规则脱轨修复 + references/ 纳管,"- 全局规则 `link-global` 建立的 symlink 在某次操作后断开（变回副本），之后部署版被独立扩写（增加了详细的""云层超脱""子章节），导致源仓库不再是全局规则的 single source of truth。源（2035 bytes/51 行压缩版）与部署（4161 bytes/展开版）内容完全不同
+- `references/道德经.md` 是手动复制到项目的副本，不受 `dao.ps1` 管理，无法随源更新
+- 跨层内容""冗余""经分析确认为索引模式设计意图（全局=压缩索引，层文件=展开详情），不需要删减","T12,T13,T14",rule;symlink,
+e015,mature,2026-03-29,,,W3+W4+OPT autopilot 执行,"- W3：symlink 模式下 sync 全输出 `[skip]`，用户无法判断是""源文件已变""还是""源文件未变""。变更摘要让传播可见
+- W4：新范式（TODO.md + AGENT_GUIDE.md）落地情况无法一眼看出；status 健康矩阵给出直接答案
+- OPT：dao-fa-mechanism.md 是最容易被查阅的""地图文件""，但少了 dao-autopilot.md（最重要的工作流之一）和 dao-ask-next-step.md，是显著的文档错误","T8,T9",autopilot;commit;symlink,
+e016,mature,2026-03-29,,,同步前自审门,- windsurf-dao 今天多次 sync 前未经自审，靠的是人工检验。这个约定不应依赖人记住，应固化为项目工作约定写在 AGENT_GUIDE.md 里，下一个 Agent 开始工作时自然读到,T7,,
+e017,mature,2026-03-29,,,W1 工作流无为化审查 + W2 dao-dev 接入知识归位,"- 11个工作流全部审查后，真正违反无为原则的只有 dao-cycle.md 和 dao-dev.md 两处。其余9个写得已经很好——减法不需要为减法而减法，有问题才改
+- dao-dev.md 缺少与 autopilot 的知识归位一致性：autopilot 完成后写 AGENT_GUIDE.md，但 dev 管线没有同等步骤","T5,T6",autopilot;cycle,
+e018,mature,2026-03-29,,,dao-autopilot.md 重构 + dao-commit.md 无为化,"- autopilot 原设计在 TODO.md / AGENT_GUIDE.md 存在时走""路径A""，不存在时走""路径B""——本质是建立了平行追踪系统，违反""单一载体""原则。真正的融合是：无论是否存在，都用这两个文件（不存在就创建）
+- ""禁止 AI 自动执行""是下德做法（法令滋彰）。行为应来自对""commit 是用户对历史的主动声明""这一道理的理解，而非显式禁令","T1,T2,T3,T4",autopilot;commit,
