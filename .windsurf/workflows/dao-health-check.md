@@ -33,7 +33,7 @@ Write-Host "Workflows:"; Get-ChildItem "$ws\workflows" -Filter "*.md" -Name
 
 **期望**：
 - Rules: 5 个（dao-de-layer always_on + dao-layer/dao-fa-layer/dao-shu-layer/dao-quality-gate model_decision）
-- Skills: 13 个 dao-* 目录
+- Skills: 15 个 dao-* 目录
 - Workflows: 12+ 个 dao-*.md
 
 #### 1.3 全局规则
@@ -118,12 +118,13 @@ Get-ChildItem ".windsurf\rules" -Filter "*.md" | ForEach-Object {
 
 > 知常曰明。不读历史教训就开工，是重蹈覆辙的最快路径。
 
-健康检查完成后，读取项目教训：
+健康检查完成后，加载 `dao-evolution` skill，读取项目教训：
 
-1. 查找 `AGENT_GUIDE.md §教训`（或等效项目教训文件）
-2. 统计教训总数，输出 `教训已装载：N 条（最新：T[n]）`
-3. 文件不存在或无教训章节 → 输出 `⬜ 无教训记录` 并跳过，不报错
+1. 运行 `search.py stats --data-dir <project>/data`
+2. CSV 存在 → 输出 `教训已装载：N 条 active（draft: X, mature: Y）`
+3. CSV 不存在 → 运行 `search.py init --data-dir <project>/data` 初始化，输出 `⬜ 已初始化空教训库`
+4. 兜底：查找 `AGENT_GUIDE.md §教训`（旧格式），存在则提示可运行 `migrate.py` 迁移
 
 **目的**：跨会话知识不依赖 Memory，依赖文件。健康检查 = 每次会话的教训刷新节点。
 
-> 此步骤只读不写，不阻塞健康检查主流程。
+> 此步骤只读不写（初始化除外），不阻塞健康检查主流程。

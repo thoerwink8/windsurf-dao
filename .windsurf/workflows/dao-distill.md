@@ -88,23 +88,21 @@ Commit 信息 + diff 是历史会话的最可靠痕迹，尤其是：
 
 | 知识类型 | 归属 |
 |---------|------|
-| 教训（踩坑/假设被推翻/反模式） | `AGENT_GUIDE.md §教训` |
+| 教训（踩坑/假设被推翻/反模式） | `data/evolution-lessons.csv`（via `dao-evolution` skill） |
+| 演化条目（变更记录） | `data/evolution-entries.csv`（via `dao-evolution` skill） |
 | 架构/设计决策 | `AGENT_GUIDE.md §架构决策` |
 | 开发操作指南 | `AGENT_GUIDE.md §开发指南` |
 | 行为准则（怎么思考/工作） | 道德法术层规则文件 |
 | 领域技能 | `skills/` |
 
-**教训写入格式**（严格对齐 `AGENT_GUIDE.md §教训` 现有格式）：
-```
-| T[下一个编号] | **教训标题** | 版本 | 踩坑现象 → 根因 → 正确做法 |
-```
-同时在演化索引对应行的「关键教训」列追加编号。
+**教训写入**：加载 `dao-evolution` skill，调用 `write_entry` + `write_lesson`。
+Git 考古来源的教训，tags 中加 `git` 标记。
+新教训推翻旧教训时，调用 `deprecate_lesson(old_id, new_id)`。
 
 写入时遵循：
-- 不重复已有内容（已在第二步去重）
-- 冲突时替换旧内容并注明
-- 追加到对应章节末尾，保持文件结构不变
-- **来源标注**：Git 考古挖掘的教训，在备注栏加 `[git]` 标记，与当前会话来源区分
+- 不重复已有内容（已在第二步去重——先用 `search.py lessons "关键词"` 搜索确认）
+- 冲突时废弃旧教训并注明
+- **来源标注**：Git 考古挖掘的教训 tags 加 `git`，与当前会话来源区分
 
 ### 四、虚（☴巽·清理残留）
 

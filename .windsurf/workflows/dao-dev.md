@@ -330,7 +330,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 
 管线结束时：
 
-1. **AGENT_GUIDE.md**（若项目有此文件）：在演化记录区追加版本条目（变更/根因/教训）
+1. **演化记录**：加载 `dao-evolution` skill，写入 `data/` CSV（write_entry + write_lesson）。同时更新 `AGENT_GUIDE.md` 演化索引摘要
 2. **虚·归位**：按法层「虚·知识归位」机制清理 Memory（见 dao-fa-layer.md）
 
 ```
