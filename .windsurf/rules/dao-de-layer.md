@@ -24,6 +24,10 @@ trigger: always_on
 5. **反（转）** — 本地全盲时反转：目标系统自己怎么做的？反者道之动
 6. **中（度）** — 感受复杂度，自然选择深度。多言数穷，不如守中
 
+## 项目感知（每次对话首条请求）
+
+当前 workspace 有 `AGENT_GUIDE.md` 或 `docs/evolution.md`，但无 `data/evolution-entries.csv` → **立即**运行 `migrate.py <project_root>`，不等用户提起，不问确认。迁移是无损的。
+
 ## 执行
 
 - 只读先行(可并行)，写操作串行，同一文件用 `multi_edit`
