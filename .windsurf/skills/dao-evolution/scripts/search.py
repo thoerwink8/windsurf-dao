@@ -8,6 +8,7 @@ Usage:
   python search.py entries "query"          Search entries only
   python search.py lessons "query"          Search lessons only
   python search.py stats                    Show summary statistics
+  python search.py ensure                   Initialize CSV or migrate legacy records
   python search.py init                     Initialize CSV files for current project
   python search.py stale [--threshold N]    Flag stale lessons for review
 
@@ -19,6 +20,7 @@ Options:
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -115,6 +117,37 @@ def cmd_init(args):
         print(f"Already initialized: {args.data_dir}")
 
 
+def cmd_ensure(args):
+    data_dir = Path(args.data_dir)
+    project_root = data_dir.parent
+    entries_path = data_dir / "evolution-entries.csv"
+    lessons_path = data_dir / "evolution-lessons.csv"
+
+    if entries_path.exists() and lessons_path.exists():
+        print(f"Already initialized: {data_dir}")
+        return
+
+    guide_path = project_root / "AGENT_GUIDE.md"
+    evolution_path = project_root / "docs" / "evolution.md"
+    has_legacy_sources = guide_path.exists() or evolution_path.exists()
+
+    if has_legacy_sources:
+        migrate_script = Path(__file__).with_name("migrate.py")
+        result = subprocess.run(
+            [sys.executable, str(migrate_script), str(project_root)],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+        return
+
+    created = init_data(data_dir)
+    if created:
+        print(f"Created: {', '.join(created)} in {data_dir}")
+    else:
+        print(f"Already initialized: {data_dir}")
+
+
 def cmd_stale(args):
     flagged = flag_stale_lessons(args.data_dir, args.threshold)
     if flagged:
@@ -124,28 +157,34 @@ def cmd_stale(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="dao-evolution: BM25 search over evolution records")
-    parser.add_argument("--data-dir", default=str(Path.cwd() / "data"),
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--data-dir", default=str(Path.cwd() / "data"),
                         help="Data directory (default: CWD/data)")
-    parser.add_argument("--max-results", type=int, default=5)
+    common.add_argument("--max-results", type=int, default=5)
+
+    parser = argparse.ArgumentParser(
+        description="dao-evolution: BM25 search over evolution records",
+        parents=[common],
+    )
 
     sub = parser.add_subparsers(dest="command")
 
-    p_search = sub.add_parser("search", help="Search entries + lessons")
+    p_search = sub.add_parser("search", help="Search entries + lessons", parents=[common])
     p_search.add_argument("query")
 
-    p_entries = sub.add_parser("entries", help="Search entries only")
+    p_entries = sub.add_parser("entries", help="Search entries only", parents=[common])
     p_entries.add_argument("query")
     p_entries.add_argument("--status", choices=["draft", "mature", "synthesized"])
 
-    p_lessons = sub.add_parser("lessons", help="Search lessons only")
+    p_lessons = sub.add_parser("lessons", help="Search lessons only", parents=[common])
     p_lessons.add_argument("query")
     p_lessons.add_argument("--include-deprecated", action="store_true")
 
-    sub.add_parser("stats", help="Summary statistics")
-    sub.add_parser("init", help="Initialize CSV files")
+    sub.add_parser("stats", help="Summary statistics", parents=[common])
+    sub.add_parser("ensure", help="Initialize CSV files or migrate legacy sources", parents=[common])
+    sub.add_parser("init", help="Initialize CSV files", parents=[common])
 
-    p_stale = sub.add_parser("stale", help="Flag stale lessons for review")
+    p_stale = sub.add_parser("stale", help="Flag stale lessons for review", parents=[common])
     p_stale.add_argument("--threshold", type=int, default=5,
                          help="Major versions behind to flag (default: 5)")
 
@@ -159,6 +198,8 @@ def main():
         cmd_lessons(args)
     elif args.command == "stats":
         cmd_stats(args)
+    elif args.command == "ensure":
+        cmd_ensure(args)
     elif args.command == "init":
         cmd_init(args)
     elif args.command == "stale":

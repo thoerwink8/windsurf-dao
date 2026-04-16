@@ -47,7 +47,6 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 3. **版本文件不在 diff 里** → **暂停提交流程**，先执行版本 bump：
    - 按 `AGENT.md §版本纪律` 的组件版本地图，找到该组件对应的版本文件
    - patch 级别：`"version": "x.y.z"` → `"version": "x.y.(z+1)"`（bug修复/小功能）
-   - 同时在 `AGENT_GUIDE.md §二 演化索引` 新增一行
    - bump 完成后，将版本文件加入暂存区，再继续后续流程
 4. **版本文件已在 diff 里** → 直接继续，commit message 尾部带 `(vX.Y.Z)`
 

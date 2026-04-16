@@ -50,7 +50,7 @@
 
 **2. 知识归位**（知识已落地）
 
-- AGENT_GUIDE.md 有本次变更的演化条目？→ 若无，先写入
+- `data/evolution-entries.csv` / `data/evolution-lessons.csv` 已写入本次演化记录？→ 若无，先运行 `search.py ensure --data-dir <project>/data` 后补写
 - TODO.md 已完成项已更新？→ 若无，先更新
 
 **3. 减法确认**（删掉了什么）
