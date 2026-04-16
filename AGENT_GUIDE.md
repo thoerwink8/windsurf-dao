@@ -30,7 +30,7 @@
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）                 |
 
-**部署原理**：symlink（文件）+ junction（目录），windsurf-dao 是唯一真相，编辑即时传播到所有注册项目。
+**部署原理（Sidecar 优先）**：将 windsurf-dao 作为 sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见，无需 link。`link/sync` 仅在目标项目需要"独立自足"（不依赖 sidecar）时使用。symlink 是 Sidecar 模式前的过渡机制，已注册项目应逐步迁移到 Sidecar 模式并清理软链接。
 
 ---
 
