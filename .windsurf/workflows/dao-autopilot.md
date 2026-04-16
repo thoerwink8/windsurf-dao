@@ -12,13 +12,13 @@ description: 自动驾驶模式：AI 自主分解目标、递归执行、反思�
 
 ## 设计哲学
 
-> TODO.md 是任务图的唯一载体。AGENT_GUIDE.md 是知识的唯一归宿。
-> autopilot 不创建平行系统——它直接操作这两个文件。
+> TODO.md 是任务图的唯一载体。AGENT_GUIDE.md 是人类可读知识库。autopilot 不创建平行系统——它直接操作这两个文件和 CSV 演化源。
 
 | 文件 | 角色 | autopilot 行为 |
 |------|------|---------------|
 | `TODO.md` | 任务图（待做 / 已做） | 读取 `- [ ]` 作为任务源；执行后回写 `- [x]` |
-| `AGENT_GUIDE.md` | 演化知识库 | 收尾时追加版本演化条目 |
+| `AGENT_GUIDE.md` | 人类可读知识库 | 维护项目概览、架构决策、开发指南与 CSV 指针 |
+| `data/evolution-*.csv` | 演化真相源 | 收尾时先 `ensure`，再写入演化条目与教训 |
 | `state.json` | 执行元数据（仅回退用） | 只存 commit hash 和 rollback_cmd；完成后删除 |
 
 两个文件不存在时 autopilot **创建**（初始化为标准格式），而非另建 plan.md / archive。
@@ -72,13 +72,15 @@ description: 自动驾驶模式：AI 自主分解目标、递归执行、反思�
 ```markdown
 # [项目名] · Agent 指南
 
-> 活体知识库。每次修改必须记录演化条目。
+> 活体知识库。记录项目概览、架构决策、开发指南，并指向 `data/` 中的演化 CSV。
 
 ## 一、项目概览
 
 [待补充]
 
-## 二、演化记录
+## 二、演化索引
+
+> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
 
 ```
 
@@ -303,9 +305,9 @@ git revert [N4-commit-hash] --no-edit
 
 #### 5.2 写入演化记录
 
-**CSV 路径**（优先）：加载 `dao-evolution` skill，调用 `write_entry` + `write_lesson` 写入 `data/` CSV。
+加载 `dao-evolution` skill，先运行 `search.py ensure --data-dir <project>/data`，再调用 `write_entry` + `write_lesson` 写入 `data/` CSV。
 
-**AGENT_GUIDE.md**（兼容）：同时在 `## 二、演化记录` 区域最前面插入摘要条目，保持文件可读性。
+`AGENT_GUIDE.md` 仅维护项目概览、架构决策、开发指南与 CSV 指针，不再兼容双写演化条目。
 
 > 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
 
@@ -431,6 +433,6 @@ Remove-Item ".windsurf\autopilot\state.json"
 | 完成偏误（AI 觉得完成了但没有） | 新鲜用户测试 + 成功标准逐条验证 |
 | 无限延伸（不断生成新任务） | 连续 2 轮无缺口新增 → 强制退出 |
 | 双重追踪（另建 plan.md / archive/） | TODO.md 是唯一任务载体，禁止创建平行任务文件 |
-| 知识遗失（执行完不写演化记录） | 5.2 写 AGENT_GUIDE.md 是强制步骤，不可跳过 |
+| 知识遗失（执行完不写演化记录） | 5.2 先 `ensure` 后写 `data/evolution-*.csv` 是强制步骤，不可跳过 |
 | 全局污染（autopilot 行为渗漏到正常对话） | 退出时删除 state.json，ask_user_question 规则恢复 |
 | 越权执行（自动决策 🔀 红灯项） | 严格按 1.2.1 权限表：🔀 绝不碰，✋ 需标注假设，🔨 才可自动 |

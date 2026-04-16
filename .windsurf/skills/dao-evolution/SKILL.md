@@ -19,20 +19,28 @@ windsurf-dao/.windsurf/skills/dao-evolution/   ← 引擎（共享）
   └── evolution-lessons.csv                     ← 教训
 ```
 
-引擎在 windsurf-dao，数据在每个项目。首次使用时自动初始化。
+引擎在 windsurf-dao，数据在每个项目。首次使用时通过 `ensure` 自动判断：迁移旧记录或初始化空 CSV。
 
 ## 初始化
 
-skill 被加载时，检查当前项目 `data/evolution-entries.csv`：
-- 不存在 → 运行 `python search.py init --data-dir <project>/data`
-- 已存在 → 正常工作
+ 首次进入项目前，先运行：
+
+ ```powershell
+ python <skill>/scripts/search.py ensure --data-dir <project>/data
+ ```
+
+ `ensure` 行为：
+- 已有 `data/evolution-entries.csv` → 不做任何事
+- 无 CSV 但有 `AGENT_GUIDE.md` / `docs/evolution.md` → 自动运行 `migrate.py <project_root>` 迁移旧记录
+- 无 CSV 且无旧记录 → 自动初始化空 CSV
 
 ## 搜索（回顾历史教训）
 
 ```powershell
-python <skill>/scripts/search.py search "heartbeat async race" --data-dir <project>/data
-python <skill>/scripts/search.py lessons "race condition" --data-dir <project>/data
-python <skill>/scripts/search.py stats --data-dir <project>/data
+ python <skill>/scripts/search.py ensure --data-dir <project>/data
+ python <skill>/scripts/search.py search "heartbeat async race" --data-dir <project>/data
+ python <skill>/scripts/search.py lessons "race condition" --data-dir <project>/data
+ python <skill>/scripts/search.py stats --data-dir <project>/data
 ```
 
 搜索结果按相关度排序，deprecated 教训默认隐藏。三级回顾深度：
