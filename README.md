@@ -119,36 +119,21 @@ windsurf-dao 自身也以此为范——身教重于言教。
 git clone <repo-url>
 ```
 
-### 2. 链接规则到你的项目
+### 2. 部署
 
-通过符号链接部署，所有项目共享同一份文件，编辑即时生效：
+**Sidecar 模式**：在 Windsurf 中将 windsurf-dao 与目标项目同时打开为多 workspace，rules/skills/workflows 自动跨 workspace 可见。
 
 ```powershell
-# 链接 dao 文件到目标项目（自动创建目录、配置 .git/info/exclude）
-.\dao.ps1 link D:\your\project
-
 # 链接全局规则到 Windsurf 配置（一次性）
 .\dao.ps1 link-global
 
-# 查看链接状态
-.\dao.ps1 status D:\your\project
+# 查看状态
+.\dao.ps1 status
 ```
-
-> 需要 Windows Developer Mode（symlink 权限）。详见 [MIGRATION.md](MIGRATION.md)。
-
-### dao.ps1 命令
-
-| 命令                  | 作用                                          |
-| --------------------- | --------------------------------------------- |
-| `link <path>`         | 创建 symlink/junction 从目标项目指向源仓库    |
-| `unlink <path>`       | 移除链接（不影响源文件）                      |
-| `status [path]`       | 显示链接状态；无 path 时额外显示注册项目 TODO.md/AGENT_GUIDE.md 健康矩阵 |
-| `sync`                | 传播变更到所有注册项目；同步后显示源文件变更摘要（git diff --stat） |
-| `link-global`         | 链接 `global_rules.md` 到 Windsurf 全局配置   |
 
 ### 3. 开始使用
 
-在 Windsurf 中打开你的项目，AI 会自动加载 `.windsurf/` 中的规则、工作流和技能。
+在 Windsurf 中打开目标项目（确保 windsurf-dao workspace 也开着），AI 自动加载规则、工作流和技能。
 
 试试：
 
@@ -159,30 +144,26 @@ git clone <repo-url>
 
 ## 部署结构
 
-链接后目标项目的目录结构：
+Sidecar 模式下，windsurf-dao 作为独立 workspace 存在，目标项目无需包含任何 dao 文件：
 
 ```
-target-project/
-├── TODO.md                          # (tracked) 任务图唯一载体
-├── AGENT_GUIDE.md                   # (tracked) 活体知识库
-├── .git/info/exclude                # dao-* 本地忽略规则
+windsurf-dao/              # Sidecar workspace——始终保持打开
+├── .windsurf/
+│   ├── rules/dao-*.md     # 自动跨 workspace 可见
+│   ├── skills/dao-*/      # 自动跨 workspace 可见
+│   └── workflows/dao-*.md # 自动跨 workspace 可见
+└── global_rules.md        # 通过 link-global 部署到 ~/.codeium/windsurf/memories/
+
+target-project/            # 你的工作项目
+├── TODO.md
+├── AGENT_GUIDE.md
 └── .windsurf/
-    ├── rules/
-    │   ├── dao-layer.md             # → symlink (道)
-    │   ├── dao-de-layer.md          # → symlink (德, always_on)
-    │   ├── dao-fa-layer.md          # → symlink (法)
-    │   ├── dao-shu-layer.md         # → symlink (术)
-    │   ├── dao-quality-gate.md      # → symlink (质量关卡)
-    │   └── *.md                     # ← 项目规则 (tracked)
-    ├── skills/
-    │   ├── dao-*/                   # → junction (locally ignored)
-    │   └── project-skill/           # ← 项目技能 (tracked)
-    └── workflows/
-        ├── dao-*.md                 # → symlink (locally ignored)
-        └── project-workflow.md      # ← 项目工作流 (tracked)
+    ├── rules/*.md          # 项目自有规则
+    ├── skills/*/           # 项目自有技能
+    └── workflows/*.md      # 项目自有工作流
 ```
 
-**变更流**：在任意项目中编辑 `dao-*` 文件 → 物理修改的是 windsurf-dao → 所有项目即时可见 → 在 windsurf-dao 中 `git commit`。
+**变更流**：编辑 windsurf-dao 中的 dao-* 文件 → 所有开着的 workspace 即时可见 → `git commit`。
 
 ## 自定义
 

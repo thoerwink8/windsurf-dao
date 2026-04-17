@@ -63,7 +63,7 @@ Memory与中间物同理——都是虚的表现，用完归位后消散。
 
 > 善行无辙迹，善言无瑕謫。
 
-dao 配置通过 `dao.ps1 link` 链接到目标项目（备用：复制），与项目自有文件和谐共存：
+windsurf-dao 作为 **Sidecar workspace** 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。
 
 **命名空间**：所有 dao 来源的文件统一使用 `dao-` 前缀，一眼分清来源。
 
@@ -73,10 +73,6 @@ dao 配置通过 `dao.ps1 link` 链接到目标项目（备用：复制），与
 | Skills | `dao-boundary-probe/` 等 | `frontend-design/` 等 |
 | Workflows | `dao-cycle.md` 等 | `commit.md`、`review.md` 等 |
 
-**本地忽略**：dao 文件通过 `.git/info/exclude` 本地忽略，不用 `.gitignore`（dao 配置是个人工作方式，不应强加给团队）。
-
-**自动同步**：在 windsurf-dao 仓库中新增或删除 dao-* 文件后，执行 `dao.ps1 sync` 将变更传播到所有已注册项目。AI 在写完新 dao-* 文件后应自动执行此命令。
-
 ### 变更守卫
 
 > 道文件是元层（怎么思考/工作），不是操作层（用什么技术栈）。两层正交，不可混淆。
@@ -84,7 +80,7 @@ dao 配置通过 `dao.ps1 link` 链接到目标项目（备用：复制），与
 **编辑 dao-* 文件前过三关**：
 1. **通用性**：换到完全不同的项目还成立吗？不成立→写项目的 AGENT.md
 2. **内容边界**：只允许思维方式/工作流程/行为准则。禁止：技术选型/框架/API/配置
-3. **影响评估**：会让其他链接项目的 AI 行为变差吗？不确定→不改
+3. **影响评估**：会让使用 dao 的其他项目行为变差吗？不确定→不改
 
 **不通过 → 路由到项目的 AGENT.md。**
 

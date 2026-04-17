@@ -1,13 +1,13 @@
 # windsurf-dao · Agent 指南
 
 > 本文件是 windsurf-dao 的活体知识库。演化详情见 [docs/evolution.md](docs/evolution.md)。
-> 项目概览见 `README.md`，部署机制见 `MIGRATION.md`。
+> 项目概览见 `README.md`。
 
 ---
 
 ## 一、项目概览
 
-**定位**：Windsurf AI 配对编程方法论——一套基于道德经哲学的 AI 行为规则体系，通过 symlink 部署到任意项目。
+**定位**：Windsurf AI 配对编程方法论——一套基于道德经哲学的 AI 行为规则体系，通过 Sidecar workspace 部署。
 
 **核心架构**：
 
@@ -21,8 +21,7 @@
 
 | 文件/目录                      | 作用                                                   |
 | ------------------------------ | ------------------------------------------------------ |
-| `dao.ps1`                      | 链接管理工具（link/unlink/sync/status）                |
-| `.dao-targets`                 | 注册的目标项目列表                                     |
+| `dao.ps1`                      | 工具脚本（status / link-global）                     |
 | `global_rules.md`              | 德层全局规则（部署到 `~/.codeium/windsurf/memories/`） |
 | `.windsurf/rules/dao-*.md`     | 四层规则（道/德/法/术）                                |
 | `.windsurf/workflows/dao-*.md` | 九个工作流（编排/引擎/工具/元）                        |
@@ -30,36 +29,33 @@
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）                 |
 
-**部署原理（Sidecar 优先）**：将 windsurf-dao 作为 sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见，无需 link。`link/sync` 仅在目标项目需要"独立自足"（不依赖 sidecar）时使用。symlink 是 Sidecar 模式前的过渡机制，已注册项目应逐步迁移到 Sidecar 模式并清理软链接。
+**部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。全局规则通过 `dao.ps1 link-global` 链接到 `~/.codeium/windsurf/memories/`。
 
 ---
 
-## 三、同步前自审门
+## 三、变更前自审门
 
-> 修道先于传道。windsurf-dao 推广给别人的标准，自己先通过，再传播。
+> 修道先于传道。推广给别人的标准，自己先通过。
 
-**每次执行 `dao.ps1 sync` 之前，必须完成以下自审。**
+**每次编辑 dao-* 文件前，必须完成以下自审。**
 
 ### 自审清单
 
-**1. 无为审视**（新改动是否引入了"法令滋彰"）
+**1. 无为审视**（新改动是否引入了“法令滋彰”）
 
-- 有没有新增"禁止 X"显式禁令？→ 改为原则表达
-- 有没有新增"路径A/路径B"条件分支？→ 统一为单一流程
+- 有没有新增“禁止 X”显式禁令？→ 改为原则表达
+- 有没有新增“路径A/路径B”条件分支？→ 统一为单一流程
 - 有没有新增平行追踪文件（plan.md / archive/ 类）？→ 路由到 TODO.md / AGENT_GUIDE.md
 
 **2. 知识归位**（知识已落地）
 
-- `data/evolution-entries.csv` / `data/evolution-lessons.csv` 已写入本次演化记录？→ 若无，先运行 `search.py ensure --data-dir <project>/data` 后补写
-- TODO.md 已完成项已更新？→ 若无，先更新
+- `data/evolution-entries.csv` / `data/evolution-lessons.csv` 已写入本次演化记录？
+- TODO.md 已完成项已更新？
 
 **3. 减法确认**（删掉了什么）
 
 - 本次变更删掉了什么冗余？（删掉 = 信息熵减）
 - 净增加了多少内容？净增加越少越好
-
-三项全过 → 执行 `dao.ps1 sync`
-任何一项不过 → 先修，再 sync
 
 ### 约定优先级
 
