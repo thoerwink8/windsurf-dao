@@ -1,6 +1,6 @@
 ---
 name: dao-fa-mechanism
-description: Windsurf运行机制参考：注入格式、激活模式、symlink陷阱、AGENTS.md、Cascade Hooks、Skills渐进披露、dao项目目录结构。健康检查/元分析/部署时加载。
+description: Windsurf运行机制参考：注入格式、激活模式、AGENTS.md、Cascade Hooks、Skills渐进披露、dao项目目录结构。健康检查/元分析/部署时加载。
 ---
 
 # Windsurf 天层机制感知
@@ -13,20 +13,6 @@ description: Windsurf运行机制参考：注入格式、激活模式、symlink�
 ## 注入格式
 
 Windsurf 将 `always_on` 规则文件渲染为 `<MEMORY[filename]>` 标签注入 `<user_rules>`——这是 Windsurf 的**渲染格式**，不是 Memory MCP 的条目。当 Memory MCP 图为空、但 `<user_rules>` 中出现 `<MEMORY[...]>` 标签时，说明规则文件链接正常。
-
-## 符号链接读取陷阱
-
-Windows 符号链接/目录联接在不同工具下报告不一致：
-
-- `list_dir` / PowerShell `Get-Item .Length` → 显示 **0**（链接本身大小，非目标内容）
-- `mcp2_list_directory_with_sizes` → 显示**实际内容大小**（穿透链接读目标）
-- `mcp2_directory_tree` → 目录联接(Junction)可能被识别为"file"类型
-
-**判断文件是否有效**：用 `mcp2_list_directory_with_sizes` 或直接读取内容，不依赖 `list_dir` 的大小报告。
-
-## 全局规则链接状态
-
-`~/.codeium/windsurf/memories/global_rules.md` 应为指向 `windsurf-dao/global_rules.md` 的符号链接，而非副本。副本不会随源更新。用 `/health-check` 定期验证，用 `dao.ps1 link-global` 修复。
 
 ## 四类激活模式（Rules）
 

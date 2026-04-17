@@ -11,11 +11,9 @@ description: 系统健康检查：global_rules.md 链接 + 规则 frontmatter �
 - 感觉系统行为异常（规则未生效、skill 消失、Memory 残留）
 - 用户显式调用 `/health-check`
 
-> Sidecar 模式下 windsurf-dao 作为 workspace 打开，rules/skills/workflows 自动跨 workspace 可见，无需 link 到项目。健康检查不再负责 symlink 部署，只检查仍需 link 的部分。
-
 ## 流程
 
-### 一、全局规则链接（唯一仍需 symlink 的项）
+### 一、全局规则链接
 
 ```powershell
 Get-Item "$env:USERPROFILE\.codeium\windsurf\memories\global_rules.md" | Select-Object LinkType, Target
