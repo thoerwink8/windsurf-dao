@@ -88,6 +88,11 @@ windsurf-dao 作为 **Sidecar workspace** 与目标项目同时打开，rules/sk
 
 > 朴散则为器。Rules 是朴，Skills 是器。
 
+### Rule 与 Skill 的边界
+
+- `.windsurf/rules/*.md` 是 **rule**：通过读取文件生效，不通过 `skill()` 调用
+- `.windsurf/skills/*/skill.md` 是 **skill**：仅当工具清单里存在对应 skill 名时才调用
+
 | 场景 | 加载 skill |
 |------|------------|
 | 需要理解 Windsurf 内部机制 | `dao-fa-mechanism`（注入格式/激活模式/目录结构） |
