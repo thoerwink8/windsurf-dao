@@ -47,6 +47,22 @@ gh api user --jq .login  # 验证连通性
 
 **注**：MCP 配置见 `mcp_config.json`，按需恢复禁用项。
 
+### SSH 远程命令防卡硬规则
+
+`run_command` + ssh + 嵌套引号 = 必炸的三件套。补充 `user_global` 终端安全章：
+
+**三层超时**：
+1. 连接层：`-o ConnectTimeout=5 -o ServerAliveInterval=3 -o ServerAliveCountMax=2`
+2. 命令层：远端命令用 `timeout <秒>` 包裹，如 `timeout 15 node /tmp/x.js`
+3. 执行层：`run_command` 用 `Blocking=false` + `WaitMsBeforeAsync=15000`
+
+**复杂命令防转义**（PowerShell + ssh + JS/SQL 嵌套引号场景）：
+- 首选 heredoc：`ssh srv "cat > /tmp/_q.js << 'SCRIPT' ... SCRIPT; node /tmp/_q.js"`
+- heredoc 内禁用反引号模板字符串、`$(...)` 插值、嵌套双引号——会被 PowerShell 第一层吃掉
+- SQL 用参数绑定 `?`，不要字符串拼接
+
+**远端 node `-e` 执行**：不在项目目录运行时必须用绝对路径 require，如 `require('/root/projects/<proj>/server/node_modules/better-sqlite3')`。
+
 ## 中间物管理
 
 > 飘风不终朝，骤雨不终日。
