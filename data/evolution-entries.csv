@@ -31,3 +31,4 @@ e017,mature,2026-03-29,,,W1 工作流无为化审查 + W2 dao-dev 接入知识�
 - dao-dev.md 缺少与 autopilot 的知识归位一致性：autopilot 完成后写 AGENT_GUIDE.md，但 dev 管线没有同等步骤","T5,T6",autopilot;cycle,
 e018,mature,2026-03-29,,,dao-autopilot.md 重构 + dao-commit.md 无为化,"- autopilot 原设计在 TODO.md / AGENT_GUIDE.md 存在时走""路径A""，不存在时走""路径B""——本质是建立了平行追踪系统，违反""单一载体""原则。真正的融合是：无论是否存在，都用这两个文件（不存在就创建）
 - ""禁止 AI 自动执行""是下德做法（法令滋彰）。行为应来自对""commit 是用户对历史的主动声明""这一道理的理解，而非显式禁令","T1,T2,T3,T4",autopilot;commit,
+e019,mature,2026-04-26,v0,rules,rules 系统重构:9 文件 + 4 trigger 各得其所,旧 6 文件结构总字符 18900 超 12K 限;always_on/model_decision 2 trigger 未充分利用;道法德术四层概念与 Windsurf 系统天性不匹配,,rules;trigger;refactor,
