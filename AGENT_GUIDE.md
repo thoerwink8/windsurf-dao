@@ -21,15 +21,18 @@
 
 | 文件/目录                      | 作用                                                   |
 | ------------------------------ | ------------------------------------------------------ |
-| `dao.ps1`                      | 工具脚本（status / link-global）                     |
-| `global_rules.md`              | 德层全局规则（部署到 `~/.codeium/windsurf/memories/`） |
-| `.windsurf/rules/dao-*.md`     | 四层规则（道/德/法/术）                                |
-| `.windsurf/workflows/dao-*.md` | 九个工作流（编排/引擎/工具/元）                        |
-| `.windsurf/skills/dao-*/`      | 九个可复用技能（含四个 cycle 镜头）                    |
+| `dao.ps1`                      | 工具脚本（status / link-global）                       |
+| `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
+| `.windsurf/rules/`             | 9 文件 5 层架构（详见 `.windsurf/rules/README.md`）     |
+| `.windsurf/workflows/dao-*.md` | 12 个工作流（dev/cycle/autopilot/distill/evolve/...）  |
+| `.windsurf/skills/dao-*/`      | 15 个可复用技能（含 cycle 镜头 + 工具 skill）          |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
-| `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）                 |
+| `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
+| `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
 
-**部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。全局规则通过 `dao.ps1 link-global` 链接到 `~/.codeium/windsurf/memories/`。
+**部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
+
+**Rules 架构（v2 · 2026-04-26 重构）**：废除"道德法术四层"概念，对齐 Windsurf 4 种 trigger 机制。详见 `.windsurf/rules/README.md`。
 
 ---
 

@@ -10,68 +10,71 @@
 
 核心理念：让 AI 从"工具"变成"搭档"。通过道德经的哲学框架，建立一套可复用、可迁移、可进化的 AI 行为准则。
 
-## 体系架构
+## 体系架构（v2 · 2026-04-26 重构）
 
 ```
-道（不变）→ 德（全局倾向）→ 法（操作流程）→ 术（具体技能）
-                    ↕
-              虚（层间流通之气）
+元规则（global_rules.md · 31 行 · 跨项目 symlink）
+        ↓
+项目铁律（execution.md · always_on）
+        ↓
+领域决策（shell/cli/skills/workflow-system/knowledge-routing · model_decision）
+        ↓
+精准触发（quality · dao-meta · glob）
+        ↓
+深度哲学（dao-philosophy · manual @ 调用）
 ```
-
-| 层     | 载体                                    | 性质 | 回答     |
-| ------ | --------------------------------------- | ---- | -------- |
-| **道** | `dao-layer.md` + `道德经.md`            | 不变 | 为什么   |
-| **德** | `dao-de-layer.md` + `global_rules.md`   | 全局 | 什么倾向 |
-| **法** | `dao-fa-layer.md` + `workflows/`        | 可变 | 怎么做   |
-| **术** | `dao-shu-layer.md` + `skills/` + `mcp/` | 可变 | 用什么   |
 
 ## 包含什么
 
-### 五个规则文件（`.windsurf/rules/`）
+### 九个规则文件（`.windsurf/rules/` · 对齐 Windsurf 4 trigger）
 
-| 文件              | 层 | trigger        | 内容                                            |
-| ----------------- | -- | -------------- | ----------------------------------------------- |
-| `dao-de-layer.md` | 德 | **always_on**  | 行为内核（交互三态/推理链/执行/涅槃门/续力）    |
-| `dao-layer.md`    | 道 | model_decision | 八条不变原则（道生万物、为道日损、反者道之动…） |
-| `dao-fa-layer.md` | 法 | model_decision | 工作流生态、静默执行、虚·知识归位机制           |
-| `dao-shu-layer.md`| 术 | model_decision | CLI-first 工具哲学、MCP/CLI 工具箱、skill 调用时机 |
-| `dao-quality-gate.md`| — | model_decision | 代码质量关卡：安全/数据库/测试/错误处理域检查   |
+| 文件                  | trigger        | 内容                                          |
+| --------------------- | -------------- | --------------------------------------------- |
+| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涅槃门/续力）       |
+| `shell.md`            | model_decision | 命令安全（超时/防卡/PowerShell/SSH）             |
+| `cli.md`              | model_decision | 工具选择（CLI-first/MCP 边界/工具箱）             |
+| `skills.md`           | model_decision | Skill 调用决策（何时加载 dao-* skill）         |
+| `workflow-system.md`  | model_decision | 工作流协作（选哪个工作流/静默深度模式）       |
+| `knowledge-routing.md`| model_decision | 知识归位（写到哪个文件/Memory 归位四步）     |
+| `quality.md`          | **glob**       | 代码质量门（编辑代码文件时自动触发）          |
+| `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
+| `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
 
-### 十三个工作流（`.windsurf/workflows/`）
+### 十二个工作流（`.windsurf/workflows/`）
 
-| 工作流              | 卦         | 功能                                              |
-| ------------------- | ---------- | ------------------------------------------------- |
-| `/autopilot`        | ☯ 太极·运 | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写 `[x]`，直到完成或中断 |
-| `/dev`              | ☰ 乾·创生 | 从一句话需求到完整交付的全流程管线                |
-| `/cycle`            | ☲ 离·照见 | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
-| `/debug-escalation` | ☵ 坎·听症 | 四层逐级升级的调试流程（听症→探脉→辨根→问道）     |
-| `/doc`              | ☴ 巽·传灯 | 文档生成与更新（读→定→写→校）                     |
-| `/distill`          | ☴ 巽·归虚 | 从对话中提取可复用知识，写入规则文件，清理 Memory |
-| `/commit`           | ☷ 坤·归藏 | 自动生成 commit message，按内聚性拆分多次提交     |
-| `/evolve`           | ☶ 艮·归根 | 系统自我进化：审查规则/Skills/MCP，减法优先       |
-| `/health-check`     | ☷ 坤·自知 | 检测规则/配置/Skills 完整性，缺失自动恢复         |
-| `/review`           | ☱ 兑·言   | 代码审查：逻辑/安全/质量三层扫描                  |
-| `/test`             | ☵ 坎·验   | 编写和运行测试（AAA 模式）                        |
-| `/refactor`         | ☴ 巽·损   | 安全重构：提取函数、消除重复、简化逻辑            |
-| `/optimize`         | ☳ 震·动   | 性能分析与调优：测→策→行→验                       |
+| 工作流              | 功能                                              |
+| ------------------- | ------------------------------------------------- |
+| `/dao-autopilot`    | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写，直到完成或中断 |
+| `/dao-dev`          | 从一句话需求到完整交付的全流程管线                |
+| `/dao-cycle`        | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
+| `/dao-distill`      | 从对话 + Git 历史中提取可复用知识 → evolution-*.csv |
+| `/dao-evolve`       | 系统自我进化：审查规则/Skills/MCP，减法优先       |
+| `/dao-commit`       | 自动生成 commit message，按内聚性拆分多次提交     |
+| `/dao-doc`          | 文档生成与更新（读→定→写→校）                     |
+| `/dao-review`       | 代码审查：逻辑/安全/质量三层扫描                  |
+| `/dao-health-check` | 检测规则/配置/Skills 完整性，缺失自动恢复         |
+| `/dao-thread-tree`  | 处理 TODO.md `Open Threads` 未解决项              |
+| `/dao-session-report` `/dao-session-sync` | 多会话协作（自报 + 元会话同步）         |
 
-### 十三个技能（`.windsurf/skills/`）
+### 十五个技能（`.windsurf/skills/`）
 
 | 技能                      | 适用场景                                        |
 | ------------------------- | ----------------------------------------------- |
-| `dao-fa-mechanism`          | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
-| `dao-research`              | 前置研究：搜索最优实践，结合项目上下文综合方案    |
-| `dao-debug`                 | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
-| `dao-refactor`              | 安全重构：提取函数、消除重复、简化逻辑        |
-| `dao-optimize`              | 性能分析与调优：测→策→行→验                  |
-| `dao-test`                  | 测试驱动：AAA 模式编写高覆盖测试              |
-| `dao-reverse-engineering`   | 面对未知/混淆代码库，五步法：锚→展→交→验→归  |
-| `dao-boundary-probe`        | 集成外部系统前，三步法：识壁→探路→择水        |
-| `dao-frontend-aesthetics`   | 受限空间中的高信息密度界面                |
-| `dao-terminal-resilience`   | 终端卡死诊断与五感降级恢复                |
-| `dao-windsurf-extension`    | Windsurf/VSCode 扩展开发的已验证技术约束      |
-| `dao-deploy`                | 项目上服务器标准流程：连接→环境→推送→构建→服务  |
-| `dao-skill-ecosystem`       | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
+| `dao-fa-mechanism`        | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
+| `dao-evolution`           | 演化条目与教训管理（`evolution-*.csv` 读写 + BM25 搜索） |
+| `dao-observability`       | 定时任务/外部 API/锁/操作顺序调整的可观测性设计   |
+| `dao-research`            | 前置研究：搜索最优实践，结合项目上下文综合方案    |
+| `dao-debug`               | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
+| `dao-refactor`            | 安全重构：提取函数、消除重复、简化逻辑            |
+| `dao-optimize`            | 性能分析与调优：测→策→行→验                       |
+| `dao-test`                | 测试驱动：AAA 模式编写高覆盖测试                  |
+| `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归      |
+| `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水            |
+| `dao-frontend-aesthetics` | 受限空间中的高信息密度界面                       |
+| `dao-terminal-resilience` | 终端卡死诊断与五感降级恢复                       |
+| `dao-windsurf-extension`  | Windsurf/VSCode 扩展开发的已验证技术约束          |
+| `dao-deploy`              | 项目上服务器标准流程：连接→环境→推送→构建→服务  |
+| `dao-skill-ecosystem`     | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
 
 ### MCP 配置（`mcp/`）
 
@@ -88,11 +91,11 @@
 | `playwright-mcp-config.json` | 配置   | Playwright 浏览器参数（viewport/timeout/args）      |
 | `tavily-mcp.cmd`             | 搜索   | Web 搜索（国内直连，1000次/月免费）                 |
 
-### 德层行为倾向（`global_rules.md`）
+### 元规则（`global_rules.md`）
 
-五感×器映射 + 八德（认知卸载、信息熵减、结构先行、一推到底…）
+31 行跨项目元规则：一·感（感官完整度） / 二·德（阳为/阴不为/和自然） / 三·动（天觉/地行/人验） / 反·归（反者道之动）。
 
-部署到 `~/.codeium/windsurf/memories/global_rules.md`，对所有项目全局生效。
+部署：`dao.ps1 link-global` 创建 symlink → `~/.codeium/windsurf/memories/global_rules.md`，对所有项目全局生效。零副本、零 UI 操作、`git pull` 自动同步。
 
 ### 项目知识文件
 
@@ -137,37 +140,40 @@ git clone <repo-url>
 
 试试：
 
-- 给 AI 一个需求，观察它是否自动进入 `/dev` 管线
-- 输入 `/autopilot` 让 AI 自主驾驶完成复杂目标
-- 输入 `/cycle` 观察五相迭代
-- 遇到 bug 时观察 `/debug-escalation` 是否自动触发
+- 给 AI 一个需求，观察它是否自动进入 `/dao-dev` 管线
+- 输入 `/dao-autopilot` 让 AI 自主驾驶完成复杂目标
+- 输入 `/dao-cycle` 观察五相迭代
+- 输入 `/dao-distill` 从对话 + Git 历史中提取教训
 
 ## 部署结构
 
 Sidecar 模式下，windsurf-dao 作为独立 workspace 存在，目标项目无需包含任何 dao 文件：
 
 ```
-windsurf-dao/              # Sidecar workspace——始终保持打开
-├── .windsurf/
-│   ├── rules/dao-*.md     # 自动跨 workspace 可见
-│   ├── skills/dao-*/      # 自动跨 workspace 可见
-│   └── workflows/dao-*.md # 自动跨 workspace 可见
-└── global_rules.md        # 通过 link-global 部署到 ~/.codeium/windsurf/memories/
-
-target-project/            # 你的工作项目
-├── TODO.md
-├── AGENT_GUIDE.md
+windsurf-dao/                  # Sidecar workspace——始终保持打开
+├── global_rules.md            # 通过 link-global 部署到 ~/.codeium/windsurf/memories/
+├── dao.ps1                    # status / link-global
+├── data/evolution-*.csv       # 演化条目 + 教训库（dao 自身演化）
 └── .windsurf/
-    ├── rules/*.md          # 项目自有规则
-    ├── skills/*/           # 项目自有技能
-    └── workflows/*.md      # 项目自有工作流
+    ├── rules/                 # 9 文件 5 层架构（v2）
+    ├── skills/dao-*/          # 自动跨 workspace 可见
+    └── workflows/dao-*.md     # 自动跨 workspace 可见
+
+target-project/                # 你的工作项目
+├── TODO.md                    # 任务图唯一载体
+├── AGENT_GUIDE.md             # 项目活体知识库
+├── data/evolution-*.csv       # 项目自身的演化与教训
+└── .windsurf/                 # 仅项目自有内容（无 dao-* 链接）
+    ├── rules/*.md
+    ├── skills/*/
+    └── workflows/*.md
 ```
 
-**变更流**：编辑 windsurf-dao 中的 dao-* 文件 → 所有开着的 workspace 即时可见 → `git commit`。
+**变更流**：编辑 windsurf-dao 中的文件 → 所有开着的 workspace 即时可见 → `/dao-commit` 提交。
 
 ## 自定义
 
-这套体系是**可进化的**。使用 `/evolve` 工作流来审查和改进：
+这套体系是**可进化的**。使用 `/dao-evolve` 工作流来审查和改进：
 
 - **删**：移除不适合你的规则或技能
 - **修**：调整工作流步骤以匹配你的习惯
@@ -180,7 +186,7 @@ target-project/            # 你的工作项目
 └── skill.md
 ```
 
-参考现有技能的格式：`trigger: auto` + 场景描述 + 步骤法 + 反模式。
+参考现有技能的格式：`name` + `description` (frontmatter) + 场景描述 + 步骤法 + 反模式。
 
 ### 添加新工作流
 

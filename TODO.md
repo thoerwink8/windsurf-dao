@@ -6,6 +6,19 @@
 
 ## ✅ 已完成
 
+### Rules 系统重构 v2 · 9 文件 5 层架构 *(2026-04-26)*
+
+废除"道德法术四层"概念（dao-de-layer/dao-fa-layer/dao-shu-layer/dao-quality-gate/dao-layer 5 个旧文件），对齐 Windsurf 4 种 trigger 机制重构为 9 文件单一职责架构：
+
+- **always_on**：execution.md（项目铁律）+ global_rules.md(symlink, 跨项目元规则)
+- **model_decision**：shell.md / cli.md / skills.md / workflow-system.md / knowledge-routing.md（5 个领域决策）
+- **glob**：quality.md（代码文件触发）/ dao-meta.md（dao 元层文件触发）
+- **manual**：dao-philosophy.md（深度哲学，@dao-philosophy 调用）
+
+**收益**：总字符 18,900 → 6,700（减 65%），每次注入 ~10,000 → ~1,400（**减 86%**），触发精准度大幅提升，符合 Windsurf 12K 字符限。
+
+**教训**：见 `data/evolution-lessons.csv` T20-T22（先读 AGENT_GUIDE.md / model_decision 拆分 / 4 trigger 各得其所）。e019。
+
 ### dao-autopilot.md 真融合重构 *(2026-03-29)*
 
 废除 plan.md / archive/ 平行系统。TODO.md 为任务唯一载体，AGENT_GUIDE.md 为知识唯一归宿，state.json 仅存执行元数据。
