@@ -92,7 +92,7 @@ Commit 信息 + diff 是历史会话的最可靠痕迹，尤其是：
 | 演化条目（变更记录） | `data/evolution-entries.csv`（via `dao-evolution` skill） |
 | 架构/设计决策 | `AGENT_GUIDE.md §架构决策` |
 | 开发操作指南 | `AGENT_GUIDE.md §开发指南` |
-| 行为准则（怎么思考/工作） | 道德法术层规则文件 |
+| 行为准则（怎么思考/工作） | `.windsurf/rules/*.md` (按 trigger 分层选目标文件) |
 | 领域技能 | `skills/` |
 
 **教训写入**：加载 `dao-evolution` skill，调用 `write_entry` + `write_lesson`。

@@ -331,7 +331,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 管线结束时：
 
 1. **演化记录**：加载 `dao-evolution` skill，先运行 `search.py ensure --data-dir <project>/data`，再写入 `data/` CSV（write_entry + write_lesson）。`AGENT_GUIDE.md` 仅保留项目概览/架构/指南与 CSV 指针，不再作为主演化账本
-2. **虚·归位**：按法层「虚·知识归位」机制清理 Memory（见 dao-fa-layer.md）
+2. **虚·归位**：按「虚·知识归位」机制清理 Memory（见 `knowledge-routing.md`）
 
 ```
 ## 🏁 涅槃

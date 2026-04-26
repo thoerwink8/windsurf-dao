@@ -51,7 +51,7 @@ description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进�
 
 **心 · Rules 审查：**
 
-1. 读 rules/\*.md（道/法/术三层）+ global_rules.md（德层）
+1. 读 `rules/*.md`（v2 · 9 文件 5 层架构）+ `global_rules.md`（31 行元规则）
 2. 检查：
    - 哪些规则在实际中经常生效？（活规则）
    - 哪些规则从未被触发？（死规则 → 考虑删除）
