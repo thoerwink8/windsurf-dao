@@ -8,11 +8,11 @@
 
 ```
 windsurf-dao (源仓库, sidecar workspace)
-├── .windsurf/rules/        ← 2 个 always_on + 4 个 model_decision
-├── .windsurf/skills/       ← 11 个 dao-* skills
-├── .windsurf/workflows/    ← 12+ 个 dao-* workflows
-├── global_rules.md         ← 全局规则源文件
-└── dao.ps1                 ← 链接管理工具（link-global 仍需）
+├── .windsurf/rules/        ← 9 个文件（1 always_on + 5 model_decision + 2 glob + 1 manual） · v2 架构
+├── .windsurf/skills/       ← 15 个 dao-* skills
+├── .windsurf/workflows/    ← 12 个 dao-* workflows
+├── global_rules.md         ← 元规则源文件（31 行）
+└── dao.ps1                 ← 链接管理工具（link-global）
 
 ~/.codeium/windsurf/memories/
 └── global_rules.md         ← symlink → windsurf-dao/
