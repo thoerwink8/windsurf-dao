@@ -37,44 +37,28 @@ Windsurf 将 `always_on` 规则文件渲染为 `<MEMORY[filename]>` 标签注入
 
 Skills 只向模型展示 `name` + `description`，完整内容在模型决定调用时才加载。`trigger` 字段在 skills 中无效——需要始终注入的内容应写在 Rules 文件中。
 
-## dao 项目目录结构
+## dao 项目目录结构（v2 · 2026-04-26 重构后）
+
+> 废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `.windsurf/rules/README.md`。
 
 ```
-<project>/
+windsurf-dao/
+├── global_rules.md             # 31 行元规则（symlink → ~/.codeium/windsurf/memories/）
 └── .windsurf/
-    ├── rules/                   # 道德法术 + 质量关卡（内核）
-    │   ├── dao-layer.md         # 道层·不变的原则
-    │   ├── dao-de-layer.md      # 德层·行为内核（含续力）
-    │   ├── dao-fa-layer.md      # 法层·怎么做
-    │   ├── dao-shu-layer.md     # 术层·用什么
-    │   └── dao-quality-gate.md  # 质量关卡·域检查
-    ├── workflows/               # 工作流（法层实践）
-    │   ├── dao-autopilot.md         # 自动驾驶
-    │   ├── dao-commit.md            # 提交·归藏
-    │   ├── dao-cycle.md             # 转法轮·深度迭代（含镜头机制）
-    │   ├── dao-dev.md               # 开发管线·全流程交付
-    │   ├── dao-distill.md           # 知识沉淀·归虚
-    │   ├── dao-doc.md               # 文档·传灯
-    │   ├── dao-evolve.md            # 进化·自我审视
-    │   ├── dao-health-check.md      # 健康检查·自知
-    │   ├── dao-review.md            # 代码审查·纳谏
-    │   ├── dao-session-report.md   # 会话自报
-    │   ├── dao-session-sync.md     # 元会话同步
-    │   └── dao-thread-tree.md      # 对话线索树
-    ├── skills/                  # 技能（术层实践）
-    │   ├── dao-debug/               # cycle镜头·调试
-    │   ├── dao-refactor/            # cycle镜头·重构
-    │   ├── dao-optimize/            # cycle镜头·性能
-    │   ├── dao-test/                # cycle镜头·测试
-    │   ├── dao-fa-mechanism/        # Windsurf机制参考
-    │   ├── dao-reverse-engineering/ # 逆向拆解术
-    │   ├── dao-research/            # 前置研究术
-    │   ├── dao-boundary-probe/      # 边界探测术
-    │   ├── dao-frontend-aesthetics/ # 前端审美术
-    │   ├── dao-deploy/              # 部署术
-    │   ├── dao-windsurf-extension/  # Windsurf扩展术
-    │   ├── dao-terminal-resilience/ # 终端韧性术
-    │   └── dao-skill-ecosystem/     # 技能供应链
-    └── references/              # 参考文本
-        └── 道德经.md                # 推导源头，不可修改
+    ├── rules/                   # 9 文件 5 层架构
+    │   ├── execution.md         # always_on · 项目铁律
+    │   ├── shell.md             # model_decision · 命令安全
+    │   ├── cli.md               # model_decision · 工具选择
+    │   ├── skills.md            # model_decision · skill 调用
+    │   ├── workflow-system.md   # model_decision · 工作流协作
+    │   ├── knowledge-routing.md # model_decision · 知识归位
+    │   ├── quality.md           # glob · 代码质量门
+    │   ├── dao-meta.md          # glob · dao 元层守卫
+    │   └── dao-philosophy.md    # manual · 八条不变原则
+    ├── workflows/               # 12 个工作流
+    │   └── dao-{autopilot,commit,cycle,dev,distill,doc,evolve,health-check,review,session-*,thread-tree}.md
+    └── skills/                  # 15 个 skills
+        └── dao-{debug,refactor,optimize,test,fa-mechanism,reverse-engineering,research,boundary-probe,frontend-aesthetics,deploy,windsurf-extension,terminal-resilience,skill-ecosystem,evolution,observability}/
+references/
+└── 道德经.md                    # 推导源头，不可修改
 ```

@@ -50,7 +50,7 @@ py search.py stats --data-dir <project>/data
 
 输出 `教训已装载：N 条 active（draft: X, mature: Y）`。
 
-> 迁移由 de-layer「项目感知」自动触发，此处只读统计。
+> 迁移由 `execution.md` §项目感知自动触发，此处只读统计。
 
 ## 报告格式
 

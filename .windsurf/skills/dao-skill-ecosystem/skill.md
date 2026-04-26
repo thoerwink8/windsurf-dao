@@ -5,7 +5,7 @@ description: 技能供应链——任务中发现技能缺口时查图书馆、j
 
 # 技能生态 · Skill Ecosystem
 
-> 德层推理链第4步"器"的延伸：skill（已装）→ 图书馆 → 创建 → 写代码。
+> `dao-philosophy.md` §推理链第 4 步"器"的延伸：skill（已装）→ 图书馆 → 创建 → 写代码。
 
 ## 正向供给（感知缺口时）
 
@@ -100,7 +100,7 @@ dao skills 提供方法论（HOW），kit skills 提供实现（WHAT）。加载
 
 | 机制 | 角色 |
 |------|------|
-| 德层第4步 | 触发点：推理链"器"步感知缺口 |
+| `dao-philosophy.md` §推理链第 4 步 | 触发点：推理链"器"步感知缺口 |
 | 本 skill | 供应链：查库 → junction → 创建 → 反哺 |
 | `add-skill.ps1` | 执行层：junction 操作 |
 | `/dao-evolve` | 定期审查：批量检查所有项目的 skill 健康度 |
