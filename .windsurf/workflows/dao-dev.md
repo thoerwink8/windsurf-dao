@@ -137,13 +137,12 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 
    | 基建需求 | 检测方式 | 缺失时的动作 |
    |---------|---------|-------------|
-   | Web 前端 | `web/package.json` 是否存在 | `/dao-frontend-init` 全量（含 create-next-app） |
-   | 前端 UI 系统 | `web/components/ui/button.tsx` + `globals.css` 有色彩变量 | `/dao-frontend-init` 增量（跳过 create-next-app） |
-   | 后端 | `server/go.mod` 或 `server/package.json` | 按架构创建后端骨架 |
-   | 数据库 | migration 目录 + sqlc/prisma 配置 | 创建 migration 框架 |
+   | Web 前端 | 前端目录 + 基础配置是否存在 | `/dao-frontend-init`（脚本自动判定全量/增量） |
+   | 后端 | `server/` 下有语言入口文件 | 按架构创建后端骨架 |
+   | 数据库 | migration 目录 + ORM/SQL 配置 | 创建 migration 框架 |
    | CI/CD | `.github/workflows/` | 按部署方案创建 |
 
-   **原则**：已有的不动，缺失的补全。审计结果决定后续步骤顺序。
+   **原则**：已有的不动，缺失的补全。子管线自带探测逻辑，dao 只负责调度。
 
 2. **依赖安装**
    - 基础设施审计中触发的子管线（如 `/dao-frontend-init`）会自行处理依赖
@@ -157,8 +156,8 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
    - **原则**：一触推到底——开始一个组件就做完，不留半成品
 
 4. **UI/交互层**（如适用）
-   - `/dao-frontend-init` 已在步骤 1 完成基础设施。此处聚焦业务页面构建
-   - 遵循 `nextjs-shadcn-standards.md` 中的 Type Scale / 按钮尺寸 / 布局约束
+   - `/dao-frontend-init` 已在基建审计阶段完成脚手架 + 设计系统。此处聚焦业务页面
+   - 具体标准由 `ui-ux-pro-max` skill 的规范文件提供（dao 不重复）
    - 美观现代的界面（不是毛坯）
    - 响应式、无障碍
    - 最佳UX实践
