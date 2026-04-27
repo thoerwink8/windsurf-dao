@@ -131,26 +131,39 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 
 按设计方案的顺序，逐模块实现。
 
-1. **依赖先行**
-   - 创建项目骨架（package.json / requirements.txt 等）
-   - 安装依赖
-     // turbo
-   - 配置基础设施（linter、tsconfig 等）
-   - **🔗 前端检测**：若项目包含 Web 前端（Next.js / React），**立即调用 `/dao-frontend-init`** 子管线。该管线自动：`create-next-app` → shadcn/ui init → 设计系统生成 → 组件尺寸覆写 → 色彩系统 → 验证。完成后回到此处继续。
+1. **基础设施审计**（编码第一步，不写代码先扫描）
+   - 读取架构文档（ARCHITECTURE.md / 设计方案），提取需要的基建清单
+   - 扫描项目目录，逐项判定基建是否就绪：
 
-2. **核心模块**
+   | 基建需求 | 检测方式 | 缺失时的动作 |
+   |---------|---------|-------------|
+   | Web 前端 | `web/package.json` 是否存在 | `/dao-frontend-init` 全量（含 create-next-app） |
+   | 前端 UI 系统 | `web/components/ui/button.tsx` + `globals.css` 有色彩变量 | `/dao-frontend-init` 增量（跳过 create-next-app） |
+   | 后端 | `server/go.mod` 或 `server/package.json` | 按架构创建后端骨架 |
+   | 数据库 | migration 目录 + sqlc/prisma 配置 | 创建 migration 框架 |
+   | CI/CD | `.github/workflows/` | 按部署方案创建 |
+
+   **原则**：已有的不动，缺失的补全。审计结果决定后续步骤顺序。
+
+2. **依赖安装**
+   - 基础设施审计中触发的子管线（如 `/dao-frontend-init`）会自行处理依赖
+     // turbo
+   - 其余依赖在此安装
+   - 配置基础设施（linter、tsconfig 等）
+
+3. **核心模块**
    - 按设计的组件顺序，逐个实现
    - 每个组件：接口 → 实现 → 基本验证
    - **原则**：一触推到底——开始一个组件就做完，不留半成品
 
-3. **UI/交互层**（如适用）
+4. **UI/交互层**（如适用）
    - `/dao-frontend-init` 已在步骤 1 完成基础设施。此处聚焦业务页面构建
    - 遵循 `nextjs-shadcn-standards.md` 中的 Type Scale / 按钮尺寸 / 布局约束
    - 美观现代的界面（不是毛坯）
    - 响应式、无障碍
    - 最佳UX实践
 
-4. **集成**
+5. **集成**
    - 连接各模块
    - 端到端基本流程能跑通
 
