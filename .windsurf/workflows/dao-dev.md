@@ -136,6 +136,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
    - 安装依赖
      // turbo
    - 配置基础设施（linter、tsconfig 等）
+   - **🔗 前端检测**：若项目包含 Web 前端（Next.js / React），**立即调用 `/dao-frontend-init`** 子管线。该管线自动：`create-next-app` → shadcn/ui init → 设计系统生成 → 组件尺寸覆写 → 色彩系统 → 验证。完成后回到此处继续。
 
 2. **核心模块**
    - 按设计的组件顺序，逐个实现
@@ -143,6 +144,8 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
    - **原则**：一触推到底——开始一个组件就做完，不留半成品
 
 3. **UI/交互层**（如适用）
+   - `/dao-frontend-init` 已在步骤 1 完成基础设施。此处聚焦业务页面构建
+   - 遵循 `nextjs-shadcn-standards.md` 中的 Type Scale / 按钮尺寸 / 布局约束
    - 美观现代的界面（不是毛坯）
    - 响应式、无障碍
    - 最佳UX实践
@@ -290,6 +293,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 遇到bug → /cycle + debug 镜头
 测试覆盖 → /cycle + test 镜头
 文档生成 → /doc
+前端初始化 → /dao-frontend-init（自动触发）
 ```
 
 镜头（lens）是 /cycle 的领域插件，按需自动加载，详见 dao-cycle.md 镜头机制。

@@ -17,6 +17,25 @@ description: 前端 Next.js 项目 UI/UX 初始化 — 新项目创建时自动�
 
 ---
 
+## Phase 0.5 · 创建项目（仅新项目）
+
+若目标目录下**尚无 `package.json`**，则从零创建：
+
+```bash
+pnpm create next-app@latest web --typescript --tailwind --eslint=false --app --use-pnpm --skip-install
+cd web
+pnpm install
+```
+
+> - 始终用 `@latest`，确保最新 Next.js 版本
+> - `--eslint=false`：项目用 Biome 替代 ESLint
+> - `--app`：App Router（Next.js 标准）
+> - 安装后删除 Google Fonts 导入（layout.tsx），改用系统字体栈（Phase 4 处理）
+
+若目标目录已有 `package.json` → 跳过此步。
+
+---
+
 ## Phase 1 · 项目信息收集
 
 2. 确定以下维度（未指定则从项目文档/README 推断，仍不确定则问用户）：
