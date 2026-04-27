@@ -17,9 +17,17 @@ description: 前端 Next.js 项目 UI/UX 初始化 — 新项目创建时自动�
 
 ---
 
-## Phase 0.5 · 创建项目（仅新项目）
+## Phase 0.5 · 基建探测 + 创建（智能判定）
 
-若目标目录下**尚无 `package.json`**，则从零创建：
+扫描目标目录，判定入口模式：
+
+| 条件 | 模式 | 动作 |
+|------|------|------|
+| `web/package.json` 不存在 | **全量** | Phase 0.5a → 全部 Phase |
+| `web/package.json` 存在，但 `components/ui/button.tsx` 不存在 | **增量** | 跳过 0.5a，从 Phase 2 开始 |
+| `web/package.json` + `components/ui/button.tsx` + `globals.css` 含 oklch | **就绪** | 跳过全部，直接回到调用方 |
+
+### Phase 0.5a · create-next-app（仅全量模式）
 
 ```bash
 pnpm create next-app@latest web --typescript --tailwind --eslint=false --app --use-pnpm --skip-install
@@ -31,8 +39,6 @@ pnpm install
 > - `--eslint=false`：项目用 Biome 替代 ESLint
 > - `--app`：App Router（Next.js 标准）
 > - 安装后删除 Google Fonts 导入（layout.tsx），改用系统字体栈（Phase 4 处理）
-
-若目标目录已有 `package.json` → 跳过此步。
 
 ---
 
