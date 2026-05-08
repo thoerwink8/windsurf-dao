@@ -124,6 +124,7 @@ npm test src/utils/retry.test.ts
 
 写 spec 前必读以下 dao-* skill:
 
+- `.windsurf/skills/dao-plan/SKILL.md` ⭐ — 你的 spec 是 dao-plan 任务清单的细化版,2-5 分钟粒度 + 完整代码模板 + 验证命令的标准源于此
 - `.windsurf/skills/dao-test/SKILL.md` — 你的 spec 必须含 RED 失败测试设计(RED-GREEN-REFACTOR 是 worker 必走流程)
 - `.windsurf/skills/dao-pyramid/SKILL.md` — 派活四要素(Objective / Output Format / Tools-Sources / Task Boundaries),你的 spec 模板由此推导
 - `.windsurf/skills/dao-verify/SKILL.md` — 你写的 Verification 段就是涅槃门 5 步的具体实例

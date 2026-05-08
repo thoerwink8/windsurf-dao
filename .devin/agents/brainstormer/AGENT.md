@@ -136,8 +136,9 @@ Round 3-N: 重复直到收敛
 
 挖需求前必读:
 
-- `.windsurf/workflows/dao-dev.md` §一·谋·析 — 你做的就是 dao-dev §1.1"析 · 需求分析"的具体落地(解构需求 / 知彼 / 补全缺失 / 拆解范围)
-- `.windsurf/skills/dao-pyramid/SKILL.md` — 你的产物 design 文档是后续 plan-writer 的输入,看金字塔上下游协作
+- `.windsurf/skills/dao-brainstorm/SKILL.md` ⭐ — 你的核心方法论:9 步检查清单 / HARD-GATE / 苏格拉底式提问纪律 / design 文档格式 / 自审 4 项 / 用户审批门
+- `.windsurf/workflows/dao-dev.md` §一·谋·析 — dao-dev §1.1 是本 skill 的工作流定位
+- `.windsurf/skills/dao-pyramid/SKILL.md` — 你的产物 design 文档是 plan-writer 的输入
 
 ## 元提醒
 

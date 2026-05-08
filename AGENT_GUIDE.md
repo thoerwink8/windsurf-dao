@@ -172,13 +172,18 @@ Superpowers 开发范式已**吸收为 dao 内生方法论**，不再作为外�
 |---------|-------------|-----------------|
 | 7 步工作流 | `dao-dev` 谋造成三段 + 关卡 + 涅槃 | obra/superpowers 7 步 |
 | 根因调试 | `dao-debug`(三层螺旋 × 15 武器,**已超越**) | superpowers systematic-debugging 4 phases |
-| 红绿循环 TDD | `dao-test`(升级版,知其雄守其雌推导) | superpowers test-driven-development |
+| 苏格拉底设计精炼 | `dao-brainstorm`(不知常妄作凶 + 知人者智) | superpowers brainstorming |
+| 实施 plan 撰写 | `dao-plan`(图难于其易 + 千里之行始于足下) | superpowers writing-plans |
+| 按 plan 执行 | `dao-execute`(行不言之教 + 功成而弗居) | superpowers executing-plans |
+| 红绿循环 TDD | `dao-test`(知其雄守其雌推导) | superpowers test-driven-development |
 | 完成前验证 | `dao-verify`(慎终如始推导) | superpowers verification-before-completion |
 | 隔离工作区 | `dao-worktree`(致虚极守静笃) | superpowers using-git-worktrees |
-| 金字塔调度 | `dao-pyramid`(小国寡民 + 无为而无不为) | Anthropic 多 agent 论文 + superpowers |
-| 两阶段评审 | `dao-review`(知人者智 + 受国之垢) | superpowers requesting-code-review |
+| 金字塔调度 + SDD | `dao-pyramid`(小国寡民 + SDD 完整流程) | Anthropic 多 agent 论文 + superpowers subagent-driven-development |
+| 并行调度 | `dao-parallel`(江海善下 + 实测 ≤1 并发) | superpowers dispatching-parallel-agents |
+| 两阶段评审 + 受批评 | `dao-review`(知人者智 + 受国之垢) | superpowers requesting/receiving-code-review |
+| 收尾决策 | `dao-finish`(功遂身退 + 四选一) | superpowers finishing-a-development-branch |
 | 派活四要素 | `dao-pyramid` 派活四要素段 | Anthropic 多 agent 论文 |
-| 2-5 分钟任务粒度 | plan-writer profile + dao-dev §一·谋·设 | superpowers writing-plans |
+| 2-5 分钟任务粒度 | `dao-plan` 粒度判据 | superpowers writing-plans |
 | Junior engineer 心智模型 | worker-batch profile 强制人格化 | superpowers |
 | 模型档位按对抗性挑剔分配 | `dao-pyramid` 金字塔结构 | Sonnet vs Opus 实测分水岭 |
 | Adaptive 兜底 + 不确定时降级 | 主会话默认 Adaptive | Windsurf Adaptive 文档 |

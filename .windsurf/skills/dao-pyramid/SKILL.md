@@ -107,6 +107,73 @@ debugger 失败 ≥3 次          → strategist(质疑架构本身)
 
 不可跳层。worker 不应该直接被升级到 strategist——必须经过中间层让信息浓缩。
 
+## Subagent-Driven Development 完整流程
+
+> 来自 superpowers `subagent-driven-development` 核心 + dao 升级。
+
+每个 plan task 都派**全新 subagent**(不复用),通过两阶段 review 闭环:
+
+```
+plan 输出 N 个 task
+   ↓
+对每个 task:
+  ┌──────────────────────────────────────┐
+  │ 1. 派 fresh subagent(不复用旧 agent) │
+  │    - 新 context 窗口                  │
+  │    - 派活四要素齐                     │
+  │    - 引用 dao-test (RED) + dao-verify │
+  └────────────┬─────────────────────────┘
+               ↓
+  ┌──────────────────────────────────────┐
+  │ 2. subagent 走 RED-GREEN-REFACTOR    │
+  │    - RED:写失败测试,跑必看到 fail    │
+  │    - GREEN:最小代码,跑必看到 pass    │
+  │    - REFACTOR:清理,跑仍 pass         │
+  └────────────┬─────────────────────────┘
+               ↓
+  ┌──────────────────────────────────────┐
+  │ 3. 派 reviewer Stage 1(spec合规)     │
+  │    - 对照 plan 任务清单逐项勾         │
+  │    - FAIL → 回打 worker(执行偏)     │
+  └────────────┬─────────────────────────┘
+               ↓ PASS
+  ┌──────────────────────────────────────┐
+  │ 4. 派 reviewer Stage 2(代码质量)     │
+  │    - P0/P1/P2/P3 分级                │
+  │    - 核心模块 → reviewer-critical    │
+  │    - FAIL 普通 → 回 spec-writer      │
+  │    - FAIL 严重 → 升级 strategist     │
+  └────────────┬─────────────────────────┘
+               ↓ PASS
+  ┌──────────────────────────────────────┐
+  │ 5. 接收批评(若 review 有 issue)     │
+  │    - dao-review "受国之垢" 流程       │
+  │    - 全读不抢话 / 逐条分类            │
+  │    - 修后必走 dao-verify 重跑         │
+  └────────────┬─────────────────────────┘
+               ↓ Task DONE
+  → 下一个 task(回 1)
+```
+
+### 关键原则
+
+1. **Fresh subagent per task** —— 每个 task 起新 subagent,**不复用**。理由:旧 subagent context 含上一任务上下文,会污染新任务判断。
+2. **状态通过 plan + 文件传递** —— subagent 间不直接对话,通过 plan 文档 + 共享文件系统协调。
+3. **review 是 gate 不是建议** —— Stage 1/2 是硬关卡,不过不进下一 task。
+4. **失败回打方向决定层级** —— spec 不清回 spec-writer,执行偏回 worker,架构问题升 strategist。
+
+### 与 dao-execute 的关系
+
+```
+dao-execute        作为执行调度入口(决定何时进入 SDD 流程)
+   ↓
+dao-pyramid SDD    作为单 task 执行的微观闭环
+   ↓
+dao-review         两阶段评审是 SDD 的核心 gate
+   ↓
+dao-finish         所有 task 完成后的收尾决策
+```
+
 ## Two-Stage Review 机制
 
 每个 worker 任务完成后:

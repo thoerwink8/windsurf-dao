@@ -184,8 +184,9 @@ Task 1 → Task 2 → Task 3
 
 写 plan 前必读:
 
-- `.windsurf/workflows/dao-dev.md` §一·谋(析 + 设)— 你的 plan 是 dao-dev §一 的具体落地,5 段式(背景/目标/方案/风险/验收)与 dao 三段式(谋造成)对齐
-- `.windsurf/skills/dao-pyramid/SKILL.md` — 你的 plan 任务粒度 2-5 分钟是为 worker 量身定制,看金字塔工人层的能力边界
+- `.windsurf/skills/dao-plan/SKILL.md` ⭐ — 你的核心方法论:2-5 分钟粒度判据 / 必含 4 模式 / 拆任务 3 原则 / 任务依赖图
+- `.windsurf/workflows/dao-dev.md` §一·谋(析 + 设)— 5 段式与 dao 三段式对齐
+- `.windsurf/skills/dao-pyramid/SKILL.md` — 你的 plan 任务粒度是为 worker 能力边界量身定制
 
 ## 元提醒
 
