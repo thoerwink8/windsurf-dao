@@ -60,25 +60,51 @@
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
-### 十五个技能（`.windsurf/skills/`）
+### 二十四个技能（`.windsurf/skills/`）
+
+**元层与调度**
 
 | 技能                      | 适用场景                                        |
 | ------------------------- | ----------------------------------------------- |
 | `dao-fa-mechanism`        | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
+| `dao-pyramid`             | Subagent 金字塔调度：高级出 spec，低级按 spec 执行 |
 | `dao-evolution`           | 演化条目与教训管理（`evolution-*.csv` 读写 + BM25 搜索） |
-| `dao-observability`       | 定时任务/外部 API/锁/操作顺序调整的可观测性设计   |
-| `dao-research`            | 前置研究：搜索最优实践，结合项目上下文综合方案    |
+| `dao-skill-ecosystem`     | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
+
+**开发流程（/cycle 镜头）**
+
+| 技能                      | 适用场景                                        |
+| ------------------------- | ----------------------------------------------- |
 | `dao-debug`               | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
 | `dao-refactor`            | 安全重构：提取函数、消除重复、简化逻辑            |
 | `dao-optimize`            | 性能分析与调优：测→策→行→验                       |
-| `dao-test`                | 测试驱动：AAA 模式编写高覆盖测试                  |
+| `dao-test`                | 测试驱动：RED-GREEN-REFACTOR + AAA 模式          |
+| `dao-observability`       | 定时任务/外部 API/锁/操作顺序调整的可观测性设计   |
+
+**工程方法论**
+
+| 技能                      | 适用场景                                        |
+| ------------------------- | ----------------------------------------------- |
+| `dao-brainstorm`          | 苏格拉底式设计精炼：模糊想法→可实施 design 文档  |
+| `dao-plan`                | 把 design 拆成 2-5 分钟粒度的可执行任务清单      |
+| `dao-execute`             | 按 plan 逐 Task 执行 + checkpoint                |
+| `dao-review`              | 两阶段评审：spec compliance → code quality       |
+| `dao-verify`              | 涅槃门：声明完成前必有 fresh 验证证据             |
+| `dao-finish`              | 分支收尾：merge/PR/keep/discard 四选一 + cleanup  |
+| `dao-worktree`            | git worktree 隔离工作区：创建→基线→工作→清理     |
+| `dao-parallel`            | 多 subagent 并行调度（受 Windsurf 账户配额限制） |
+
+**领域专项**
+
+| 技能                      | 适用场景                                        |
+| ------------------------- | ----------------------------------------------- |
+| `dao-research`            | 前置研究：搜索最优实践，结合项目上下文综合方案    |
 | `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归      |
 | `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水            |
 | `dao-frontend-aesthetics` | 受限空间中的高信息密度界面                       |
 | `dao-terminal-resilience` | 终端卡死诊断与五感降级恢复                       |
 | `dao-windsurf-extension`  | Windsurf/VSCode 扩展开发的已验证技术约束          |
 | `dao-deploy`              | 项目上服务器标准流程：连接→环境→推送→构建→服务  |
-| `dao-skill-ecosystem`     | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
 
 ### MCP 配置（`mcp/`）
 

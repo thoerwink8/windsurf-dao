@@ -1,6 +1,6 @@
 ---
 name: dao-debug
-description: 死磕到底：三层螺旋×15种武器，融合dao-debug+systematic-debugging，穷尽一切自主手段后才请用户介入。
+description: 死磕到底：三层螺旋×15种武器，穷尽一切自主手段后才请用户介入。
 ---
 
 # 死磕到底 · Relentless Debugging
