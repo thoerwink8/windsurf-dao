@@ -120,30 +120,9 @@ Open Threads 中的 🔨 项与 `🚧 待实现` 中的普通任务同等对待�
 
 #### 1.3 构建任务图（写入 state.json）
 
-```json
-{
-  "mode": "autopilot",
-  "goal": "[原始目标]",
-  "branch": "autopilot/[goal-slug]",
-  "started": "[ISO timestamp]",
-  "success_criteria": ["标准A", "标准B"],
-  "tasks": [
-    {
-      "id": "N1",
-      "desc": "对应 TODO.md 中的描述",
-      "todo_line": "- [ ] **N1**: ...",
-      "depends_on": [],
-      "status": "pending",
-      "commit": null,
-      "rollback_cmd": null
-    }
-  ]
-}
-```
+state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` / `tasks[]`。每个 task 含：`id` `desc` `todo_line`（精确定位回写用）`depends_on` `status` `commit` `rollback_cmd`。
 
-> `todo_line` 记录 TODO.md 中对应行的原文，用于精确定位回写位置。
-
-依赖关系从任务语义推断（"需先完成 X 才能做 Y"）；无明确依赖则设为空。
+依赖关系从任务语义推断；无明确依赖则设为空。
 
 **分解原则**：
 - 每个 Task 是独立的逻辑单元（一个功能、一个模块、一个修复）
@@ -387,7 +366,7 @@ Remove-Item ".windsurf\autopilot\state.json"
 
 `.windsurf/autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
 
-> `state.json` schema 见 §1.3。权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
+权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
 
 ---
 
