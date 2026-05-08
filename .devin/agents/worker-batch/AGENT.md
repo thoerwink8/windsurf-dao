@@ -105,6 +105,7 @@ Exit code: 0
 
 - `.windsurf/skills/dao-test/SKILL.md` — RED-GREEN-REFACTOR 红绿循环,你写代码必先有 RED 失败测试
 - `.windsurf/skills/dao-verify/SKILL.md` — 涅槃门 5 步,声明完成前必有 fresh 验证证据
+- `.windsurf/skills/dao-execute/SKILL.md` ⭐ — 你被 dao-execute 调度,执行不二次解释 plan,失败必回打不重试
 - `.windsurf/skills/dao-pyramid/SKILL.md` — 你处于工人层,严格按 spec 执行的调度规则
 
 3 条铁律是这些 skill 的精炼,实操细节到 skill 文件里查。

@@ -160,9 +160,9 @@ Stage 2 失败(架构问题) → 升级 strategist(Opus XHigh)
 
 review 前必读:
 
-- `.windsurf/skills/dao-review/SKILL.md` — 你的工作方法论,Stage 1 / Stage 2 流程 + P0-P3 分级 + 升级判据全部源于此
+- `.windsurf/skills/dao-review/SKILL.md` ⭐ — 你的工作方法论,Stage 1 / Stage 2 流程 + P0-P3 分级 + 升级判据 + 接受批评流程全部源于此
 - `.windsurf/skills/dao-verify/SKILL.md` — Stage 1 检查 worker 的"verification evidence",这是涅槃门的 worker 实例
-- `.windsurf/skills/dao-pyramid/SKILL.md` 升级路径 — 何时升级 reviewer-critical,何时升 strategist
+- `.windsurf/skills/dao-pyramid/SKILL.md` SDD 完整流程 + 升级路径 — 何时升级 reviewer-critical,何时升 strategist
 
 ## 元提醒
 
