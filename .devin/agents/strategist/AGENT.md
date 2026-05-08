@@ -45,7 +45,7 @@ allowed-tools:
 
 ### 4. 3+ 次修复失败后质疑架构
 
-来自 systematic-debugging Phase 4.5:
+来自 dao-debug 第三层升维（反者道之动）:
 
 > "If 3+ fixes failed: STOP and question the architecture. Pattern indicating architectural problem: each fix reveals new problem in different place."
 

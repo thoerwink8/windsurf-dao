@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 工作流的选择与协作机制——/dev /cycle /autopilot /commit /distill /evolve /doc /review /health-check /session-* /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
+description: 工作流的选择与协作机制——/dev /cycle /autopilot /commit /distill /evolve /doc /session-sync /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
 ---
 
 # 工作流生态 · 怎么协作
@@ -15,12 +15,13 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 - `/cycle` — **通用引擎**，通过镜头机制加载领域技能（dao skills + 图书馆 skills 互补）
 - `/autopilot` — **持续自主执行模式**，激活后进入扩展内观状态，退出后完全恢复正常
 - `/commit` — 从变更生成 commit message 并提交
-- `/distill` — 从对话提取可复用知识，写入规则或文档
-- `/evolve` — 审查一切（包括自身），有感觉才触发，不定闹钟
+- `/distill` — 会话级知识沉淀（跨会话 Git 考古已并入 `/evolve`）
+- `/evolve` — 审查一切（包括自身） + 快速体检（`/health-check`），有感觉才触发
 - `/doc` — 按需触发，不强制每个项目都写完整文档
-- `/review` `/health-check` — 按需触发
-- `/session-report` `/session-sync` — 多会话协作（自报 + 元会话同步）
+- `/session-sync` — 多会话协作（git 为共享状态，无需其他会话配合）
 - `/thread-tree` — 处理 TODO.md Open Threads 未解决项
+
+**技术栈处方**（`.windsurf/stacks/`）：`/dev` 基建审计时按需加载，不是工作流。
 
 ## 通信原则
 
