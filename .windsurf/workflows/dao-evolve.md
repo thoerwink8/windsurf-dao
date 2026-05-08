@@ -23,6 +23,7 @@ description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP�
 - 新工具/MCP引入后需要整合
 - 多次遇到同类问题但缺少对应工作流/技能
 - 用户显式调用 `/evolve`
+- 用户说 `/health-check` → 直接跳到§快速体检
 
 ## 审查域 · 四脏与虚
 
@@ -34,6 +35,7 @@ description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP�
 | 肺  | **Workflows（工作流）** | .windsurf/workflows/          | 做事的标准流程   |
 | 肝  | **Skills（技能）**      | .windsurf/skills/             | 具体能力的封装   |
 | 肾  | **MCP（外部工具）**     | MCP Server配置                | 与外部系统的连接 |
+| 骨  | **Stacks（技术栈处方）** | .windsurf/stacks/             | 固定的项目技术选型 |
 
 **虚**（Memory）不是第五脏，是层间流通的气。涅槃时归位清空，不在此审查——虚是每次涅槃的内置步骤，不是定期体检的器官。
 
