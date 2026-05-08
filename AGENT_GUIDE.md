@@ -1,6 +1,6 @@
 # windsurf-dao · Agent 指南
 
-> 本文件是 windsurf-dao 的活体知识库。演化详情见 [docs/evolution.md](docs/evolution.md)。
+> 本文件是 windsurf-dao 的活体知识库。演化记录见 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
 > 项目概览见 `README.md`。
 
 ---
@@ -9,12 +9,12 @@
 
 **定位**：Windsurf AI 配对编程方法论——一套基于道德经哲学的 AI 行为规则体系，通过 Sidecar workspace 部署。
 
-**核心架构**：
+**核心架构**（v2 · 2026-04-26）：
 
 ```
-道（不变）→ 德（全局倾向）→ 法（操作流程）→ 术（具体技能）
-                    ↕
-              虚（层间流通之气）
+心·Rules（元规则）→ 肺·Workflows（编排）→ 肝·Skills（实现）→ 肾·MCP（外部）→ 骨·Stacks（技术栈）
+                                    ↕
+                              虚·Memory（层间流通之气）
 ```
 
 **关键文件**：
@@ -24,8 +24,8 @@
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
 | `.windsurf/rules/`             | 9 文件 5 层架构（详见 `.windsurf/rules/README.md`）     |
-| `.windsurf/workflows/dao-*.md` | 12 个工作流（dev/cycle/autopilot/distill/evolve/...）  |
-| `.windsurf/skills/dao-*/`      | 15 个可复用技能（含 cycle 镜头 + 工具 skill）          |
+| `.windsurf/workflows/dao-*.md` | 9 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree） |
+| `.windsurf/skills/dao-*/`      | 24 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7） |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
@@ -88,7 +88,7 @@
         Sonnet 4.6 Thinking    ── brainstormer      Step 1 苏格拉底问需求
                                ── spec-writer       把 plan 翻成 worker 可执行 spec
                                ── reviewer          two-stage review 主力
-                               ── debugger          systematic-debugging 4 phases
+                               ── debugger          三层螺旋×15武器 深度调试
         GPT 5.5 Low/High       ── plan-writer       PRD/方案/选型/2-5 分钟任务清单
 ─────────────────────────────────────────────────────────────────
 调度层  Adaptive               ── 主会话默认         调度 + 不确定时兜底

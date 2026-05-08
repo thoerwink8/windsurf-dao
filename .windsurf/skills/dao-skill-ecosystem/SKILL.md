@@ -85,7 +85,7 @@ dao skills 提供方法论（HOW），kit skills 提供实现（WHAT）。加载
 
 | 领域 | dao (方法论) | kit (实现) |
 |------|------------|-----------|
-| 调试 | dao-debug | systematic-debugging |
+| 调试 | dao-debug | —（已完全内化） |
 | 重构 | dao-refactor | — |
 | 优化 | dao-optimize | — |
 | 测试 | dao-test | test-driven-development, webapp-testing |

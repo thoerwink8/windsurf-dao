@@ -46,7 +46,7 @@ description: Subagent 金字塔调度铁律：高级模型出 spec 与决策,低
         Sonnet 4.6 Thinking    ── brainstormer      Step 1 苏格拉底问需求
                                ── spec-writer       把 plan 翻成 worker 可执行 spec
                                ── reviewer          two-stage review 主力
-                               ── debugger          systematic-debugging 4 phases
+                               ── debugger          三层螺旋×15武器 深度调试
         GPT 5.5 Low/High       ── plan-writer       PRD/方案/选型/2-5 分钟任务清单
 ─────────────────────────────────────────────────────────────────
 调度层  Adaptive               ── 主会话默认         调度 + 不确定时兜底

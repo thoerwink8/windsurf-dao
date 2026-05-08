@@ -1,6 +1,6 @@
 ---
 name: debugger
-description: 横切流程的根因分析 agent — 任意阶段遇到 bug/test failure/unexpected behavior 都派给我。强制走 systematic-debugging 4 phases:Root Cause / Pattern / Hypothesis / Implementation。3 次修复失败自动升级 strategist 质疑架构。绝不症状修复。
+description: 横切流程的根因分析 agent — 任意阶段遇到 bug/test failure/unexpected behavior 都派给我。强制走 4 阶段:Root Cause / Pattern / Hypothesis / Implementation。3 次修复失败自动升级 strategist 质疑架构。绝不症状修复。
 model: sonnet
 allowed-tools:
   - read
@@ -20,7 +20,7 @@ allowed-tools:
             ↓
             派 debugger (你)
             ↓
-       systematic-debugging 4 phases
+       dao-debug 4 phases (根因→模式→假设→实施)
             ↓
          根因清晰 → 走 TDD 流程修(回到主流)
             ↓

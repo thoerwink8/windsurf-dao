@@ -59,8 +59,11 @@ windsurf-dao/
     │   └── dao-{autopilot,commit,cycle,dev,distill,doc,evolve,session-sync,thread-tree}.md
     ├── stacks/                  # 技术栈处方（/dev 基建审计按需加载）
     │   └── frontend-nextjs.md
-    └── skills/                  # 15 个 skills
-        └── dao-{debug,refactor,optimize,test,fa-mechanism,reverse-engineering,research,boundary-probe,frontend-aesthetics,deploy,windsurf-extension,terminal-resilience,skill-ecosystem,evolution,observability}/
+    └── skills/                  # 24 个 skills（4 类）
+        ├── 元层: dao-{fa-mechanism,pyramid,evolution,skill-ecosystem}/
+        ├── 镜头: dao-{debug,refactor,optimize,test,observability}/
+        ├── 方法论: dao-{brainstorm,plan,execute,review,verify,finish,worktree,parallel}/
+        └── 专项: dao-{research,reverse-engineering,boundary-probe,frontend-aesthetics,terminal-resilience,windsurf-extension,deploy}/
 references/
 └── 道德经.md                    # 推导源头，不可修改
 ```
