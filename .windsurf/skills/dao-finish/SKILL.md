@@ -130,32 +130,6 @@ git log --oneline -5  # 看最近 commit 历史清晰
 
 任一失败 = **不进 finish**,回对应阶段。
 
-## PR 描述模板(选项 B 用)
-
-派 plan-writer 写 PR,用以下模板:
-
-```markdown
-# <PR title,祈使语气,含 type>
-
-## 背景
-<为什么做这件事>
-
-## 改动概要
-<高层描述做了什么,分点列>
-
-## 技术细节
-<关键决策 + 设计取舍>
-
-## 测试
-<怎么验证的,贴命令输出>
-
-## 风险
-<可能影响的模块 / 回滚方案>
-
-## 关联
-Closes #<issue> / Related to #<discussion>
-```
-
 ## Cleanup 清单(归根)
 
 不管选 A/B/D(C 除外),完成后检查:
