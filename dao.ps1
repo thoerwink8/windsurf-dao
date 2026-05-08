@@ -79,7 +79,8 @@ function Invoke-Status {
     $rCount = (Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "*.md").Count
     $sCount = (Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory).Count
     $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "*.md").Count
-    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows"
+    $stCount = (Get-ChildItem (Join-Path $DaoWindsurf "stacks") -Filter "*.md" -ErrorAction SilentlyContinue).Count
+    Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${stCount} stacks"
 
     # 全局链接状态
     $globalPath = Join-Path (Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories") "global_rules.md"
