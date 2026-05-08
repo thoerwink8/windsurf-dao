@@ -17,6 +17,7 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 | 命令安全 / 工具选择 / Skill 调用 | `shell.md` / `cli.md` / `skills.md` |
 | 操作流程 | `workflows/` |
 | 具体技能（实现层） | `skills/` |
+| 固定技术栈选型（框架/脚手架） | `stacks/` |
 | 编码规则（怎么写代码） | `AGENT.md` |
 | 项目知识（学到了什么） | `AGENT_GUIDE.md` |
 | 教训 / 踩坑 | `data/evolution-lessons.csv`（优先） |
