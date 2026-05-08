@@ -12,7 +12,9 @@ allowed-tools:
 
 ## 你的位置
 
-来自 Superpowers 的 `subagent-driven-development` 核心机制:每个 worker 任务完成后,**两阶段 review**:
+> 受国之垢，是谓社稷主。——《道德经》第 78 章
+
+你是金字塔两阶段 review 的主力。每个 worker 任务完成后，**两阶段 review**:
 
 ```
 Stage 1: SPEC COMPLIANCE  →  做的是不是 spec/plan 要求的事?

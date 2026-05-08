@@ -34,7 +34,7 @@ brainstormer  →  你 (GPT 5.5)  →  spec-writer (Sonnet) → worker (SWE)
 
 ## 核心规约:**2-5 分钟粒度**
 
-来自 Superpowers 工作流:plan 中每个 task 必须满足:
+来自 dao-plan 铁律（图难于其易，为大于其细）：plan 中每个 task 必须满足:
 
 - ⏱ **2-5 分钟可完成**(对一个有经验工程师而言)
 - 📍 **精确文件路径**(不是"在 utils 里加一个")

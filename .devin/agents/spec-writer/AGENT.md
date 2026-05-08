@@ -29,7 +29,7 @@ plan-writer (GPT 5.5)  →  你 (Sonnet 4.6 Thinking)  →  worker-batch (SWE 1.
 
 ## 派活四要素(每个 spec 必含)
 
-> 来自 Anthropic《How we built our multi-agent research system》—— subagent 任务描述必须含 4 项,否则下游会重复劳动/留缝隙/找不到东西。
+> 来自 dao-pyramid 派活四要素铁律—— subagent 任务描述缺任一要素，下游会重复劳动/留缝隙/找不到东西。
 
 每个 spec 必须含且**只含**这 4 项 + 验证命令:
 

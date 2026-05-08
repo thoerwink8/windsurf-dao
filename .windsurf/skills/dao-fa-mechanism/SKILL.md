@@ -55,8 +55,10 @@ windsurf-dao/
     │   ├── quality.md           # glob · 代码质量门
     │   ├── dao-meta.md          # glob · dao 元层守卫
     │   └── dao-philosophy.md    # manual · 八条不变原则
-    ├── workflows/               # 12 个工作流
-    │   └── dao-{autopilot,commit,cycle,dev,distill,doc,evolve,health-check,review,session-*,thread-tree}.md
+    ├── workflows/               # 9 个工作流
+    │   └── dao-{autopilot,commit,cycle,dev,distill,doc,evolve,session-sync,thread-tree}.md
+    ├── stacks/                  # 技术栈处方（/dev 基建审计按需加载）
+    │   └── frontend-nextjs.md
     └── skills/                  # 15 个 skills
         └── dao-{debug,refactor,optimize,test,fa-mechanism,reverse-engineering,research,boundary-probe,frontend-aesthetics,deploy,windsurf-extension,terminal-resilience,skill-ecosystem,evolution,observability}/
 references/

@@ -29,7 +29,7 @@
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
-| `.devin/agents/*/AGENT.md`     | 8 个 subagent 金字塔 profile（Superpowers × 模型算力分配，详见 §四）|
+| `.devin/agents/*/AGENT.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
 
 **部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
 
@@ -73,10 +73,10 @@
 
 ---
 
-## 四、Subagent 金字塔（Superpowers × 模型算力分配）
+## 四、Subagent 金字塔（小国寡民 × 算力分配）
 
-> 高级模型指挥低级模型干活，自己执行攻坚任务。
-> 流程骨架来自 obra/superpowers，模型分配按算力金字塔。
+> 小国寡民，使有什佰之器而不用。无为而无不为。
+> 高级模型出决策，低级模型忠实落地，主会话不亲为而万事成。
 
 ### 4.1 调度图
 
@@ -96,18 +96,23 @@
 工人层  SWE 1.6 Fast (free)    ── worker-batch      严格按 spec 执行，零自主判断
 ```
 
-### 4.2 全流程 7 步（Superpowers 骨架）
+### 4.2 全流程七步（谋·造·成展开）
 
 ```
-1. brainstorming      → brainstormer    挖真实意图，出 design 文档
-2. using-git-worktrees → worker-batch    隔离工作区 + 测试基线
-3. writing-plans      → plan-writer     2-5 分钟粒度任务清单
-4. subagent-dispatch  → 主会话调度       并行派活 + 两阶段 review
-5. test-driven-dev    → spec-writer + worker  RED → GREEN → REFACTOR
-6. two-stage review   → reviewer / reviewer-critical  spec compliance + code quality
-7. finishing-branch   → 主会话           verification → merge/PR/cleanup
+谋（析+设）:
+  1. 析 · brainstormer    不知常妄作凶——挖真实意图，出 design 文档
+  2. 设 · plan-writer     图难于其易——2-5 分钟粒度任务清单
 
-横切：systematic-debugging（任意阶段遇 bug 派 debugger，3 次失败升 strategist）
+造（编+验）:
+  3. 隔 · worker-batch    致虚极守静笃——隔离工作区 + 测试基线
+  4. 编 · spec-writer + worker  知其雄守其雌——RED → GREEN → REFACTOR
+  5. 调 · 主会话调度       江海善下——并行派活 + 两阶段 review
+
+成（审+归）:
+  6. 审 · reviewer / reviewer-critical  受国之垢——spec compliance + code quality
+  7. 归 · 主会话           功遂身退——verification → merge/PR/cleanup
+
+横切：dao-debug（任意阶段遇 bug 派 debugger，反者道之动，3 次失败升 strategist）
 ```
 
 ### 4.3 三条铁律（嵌入每个 worker profile）
@@ -164,31 +169,23 @@ New-Item -ItemType Junction -Path "$env:APPDATA\devin\agents" `
 
 源文件单一存放，更新 windsurf-dao 后所有项目自动同步。
 
-### 4.8 设计要点与 dao 内生方法论映射
+### 4.8 设计要点
 
-Superpowers 开发范式已**吸收为 dao 内生方法论**，不再作为外部依赖。对应关系：
+金字塔体系的每个环节都从道德经章句推导而来，不是流程指南，是哲学层约束：
 
-| 设计要点 | dao 内生实现 | 外部参考(已吸收) |
-|---------|-------------|-----------------|
-| 7 步工作流 | `dao-dev` 谋造成三段 + 关卡 + 涅槃 | obra/superpowers 7 步 |
-| 根因调试 | `dao-debug`(三层螺旋 × 15 武器,**已超越**) | superpowers systematic-debugging 4 phases |
-| 苏格拉底设计精炼 | `dao-brainstorm`(不知常妄作凶 + 知人者智) | superpowers brainstorming |
-| 实施 plan 撰写 | `dao-plan`(图难于其易 + 千里之行始于足下) | superpowers writing-plans |
-| 按 plan 执行 | `dao-execute`(行不言之教 + 功成而弗居) | superpowers executing-plans |
-| 红绿循环 TDD | `dao-test`(知其雄守其雌推导) | superpowers test-driven-development |
-| 完成前验证 | `dao-verify`(慎终如始推导) | superpowers verification-before-completion |
-| 隔离工作区 | `dao-worktree`(致虚极守静笃) | superpowers using-git-worktrees |
-| 金字塔调度 + SDD | `dao-pyramid`(小国寡民 + SDD 完整流程) | Anthropic 多 agent 论文 + superpowers subagent-driven-development |
-| 并行调度 | `dao-parallel`(江海善下 + 实测 ≤1 并发) | superpowers dispatching-parallel-agents |
-| 两阶段评审 + 受批评 | `dao-review`(知人者智 + 受国之垢) | superpowers requesting/receiving-code-review |
-| 收尾决策 | `dao-finish`(功遂身退 + 四选一) | superpowers finishing-a-development-branch |
-| 派活四要素 | `dao-pyramid` 派活四要素段 | Anthropic 多 agent 论文 |
-| 2-5 分钟任务粒度 | `dao-plan` 粒度判据 | superpowers writing-plans |
-| Junior engineer 心智模型 | worker-batch profile 强制人格化 | superpowers |
-| 模型档位按对抗性挑剔分配 | `dao-pyramid` 金字塔结构 | Sonnet vs Opus 实测分水岭 |
-| Adaptive 兜底 + 不确定时降级 | 主会话默认 Adaptive | Windsurf Adaptive 文档 |
+| 环节 | dao 实现 | 道德经推导 |
+|------|----------|------------|
+| 析 | `dao-brainstorm` | 不知常，妄作凶（第16章）|
+| 设 | `dao-plan` | 图难于其易，为大于其细（第63章）|
+| 隔 | `dao-worktree` | 致虚极，守静笃（第16章）|
+| 编 | `dao-execute` + `dao-test` | 行不言之教 + 知其雄守其雌（第2、28章）|
+| 调 | `dao-parallel` + `dao-pyramid` | 江海善下 + 小国寡民（第66、80章）|
+| 审 | `dao-review` | 受国之垢，是谓社稷主（第78章）|
+| 归 | `dao-finish` | 功遂身退，天之道（第9章）|
+| 横切 | `dao-debug` | 反者道之动（第40章）|
+| 验 | `dao-verify` | 慎终如始，则无败事（第64章）|
 
-**吸收原则**:不照搬,用道德经底色**升级**(见 T28 教训)——哲学层推导让推理深度超越原版。
+哲学底色不是装饰——它在推理时提供更深层的约束（见 T28 教训）。
 
 ### 4.9 subagent 调度的判断准则(不强制)
 

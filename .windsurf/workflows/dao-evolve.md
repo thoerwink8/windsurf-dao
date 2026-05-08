@@ -1,5 +1,5 @@
 ---
-description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进点并实施。定期或感觉系统需要升级时触发。
+description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP，发现改进点并实施。定期、感觉系统异常、或用户说"health-check"时触发。
 ---
 
 # 进化 · Evolve
@@ -100,7 +100,17 @@ description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进�
 2. 已标 `review` 的教训 → 展示给用户决定：确认仍有效（→ active）或废弃（→ deprecated）
 3. deprecated 教训过多时 → 提示是否需要架构性清理
 
-**产出**：四脏审查报告 + 追踪日志清退清单 + 教训新鲜度报告
+**Git 考古（跨会话教训挖掘）：**
+
+> 温故而知新。各 Cascade 会话彼此隔离，但产出沉淀在 Git 历史中。
+
+1. `git log -n 20 --oneline` 取近 20 条 commit
+2. 按前缀分类：`fix` → 踩坑教训 | `refactor` → 架构决策 | `feat` → 设计决策
+3. 模式检测：同一模块多次 fix → 系统性弱点 | 同类 fix 重复 → 根因未解决
+4. 选择性深挖（最多 5 个 commit）：`git show <sha> --stat` + `git show <sha> -- <文件>`
+5. 与已有教训对照 `search.py lessons "关键词"`，只有 gap 才写入
+
+**产出**：四脏审查报告 + 追踪日志清退清单 + 教训新鲜度报告 + Git 考古洞察
 
 ### 二、辨 · 识别改进点（☶艮 · 味 · 止而辨）
 
@@ -163,12 +173,37 @@ description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进�
 
 ---
 
+## 快速体检（/health-check 模式）
+
+> 知人者智，自知者明。胜人者有力，自胜者强。
+
+轻量触发（感觉行为异常 / 用户说 `/health-check`）时，只跑以下 4 项，不进入完整五步：
+
+```powershell
+# 1. 全局规则链接
+Get-Item "$env:USERPROFILE\.codeium\windsurf\memories\global_rules.md" | Select-Object LinkType, Target
+# 🟢 链接→正常 | 🟡 副本→dao.ps1 link-global | 🔴 不存在→同上
+
+# 2. 规则 frontmatter 校验（非法 trigger = 规则隐身）
+Get-ChildItem "$env:USERPROFILE\.codeium\windsurf\workspaces\*\rules" -Filter "*.md" -EA Silent |
+ForEach-Object { $c=Get-Content $_.FullName -Raw; if($c -match 'trigger:\s*(\S+)'){$v=$Matches[1]; if($v -notin @('always_on','model_decision','glob','manual')){"🔴 $($_.Name) → $v"}} else {"🔴 $($_.Name) → 无trigger"} }
+
+# 3. Memory 清理（理想态为空）
+# 4. 教训统计
+py search.py stats --data-dir <project>/data
+```
+
+报告格式：`| 全局规则 🟢/🔴 | 规则校验 🟢/🔴 | Memory 🟢/🟡 | 教训 N条 |`
+
+---
+
 ## 进化节律
 
 不是每次都需要全面审查：
 
 | 触发         | 范围            | 深度     |
 | ------------ | --------------- | -------- |
+| 行为异常     | 快速体检 4 项   | 1 分钟   |
 | 感觉某处不对 | 单一脏器        | 快速修正 |
 | 新能力引入   | 相关脏器        | 整合适配 |
 | 定期审查     | 全四脏          | 完整进化 |
@@ -178,12 +213,11 @@ description: 系统自我进化：审查规则/Skills/Memory/MCP，发现改进�
 
 ```
 /evolve 是元工作流——审查和改进所有其他工作流与技能（包括自身）
+含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
 
-/evolve 审查 → /cycle    （引擎还好用吗？镜头机制运转正常吗？）
-/evolve 审查 → /dev      （管线还合理吗？）
-/evolve 审查 → /doc      （文档还准确吗？）
-/evolve 审查 → /evolve   （进化流程本身需要进化吗？）
-/evolve 审查 → skills    （dao-debug/refactor/optimize/test 镜头还有效吗？）
+/evolve 审查 → /dev /cycle /autopilot /commit /distill /doc /session-sync /thread-tree + stacks/
+/evolve 审查 → skills（dao-debug/refactor/optimize/test 镜头还有效吗？）
+/evolve 审查 → /evolve（进化流程本身需要进化吗？）
 ```
 
 > 这是道的自指性：道法自然——自然包括道自身。

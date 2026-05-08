@@ -109,7 +109,7 @@ debugger 失败 ≥3 次          → strategist(质疑架构本身)
 
 ## Subagent-Driven Development 完整流程
 
-> 来自 superpowers `subagent-driven-development` 核心 + dao 升级。
+> 小国寡民，每个 task 起新 subagent，互不干涉，的严核闭环。
 
 每个 plan task 都派**全新 subagent**(不复用),通过两阶段 review 闭环:
 

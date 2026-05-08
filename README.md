@@ -40,21 +40,25 @@
 | `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
 | `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
 
-### 十二个工作流（`.windsurf/workflows/`）
+### 九个工作流（`.windsurf/workflows/`）
 
 | 工作流              | 功能                                              |
 | ------------------- | ------------------------------------------------- |
 | `/dao-autopilot`    | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写，直到完成或中断 |
 | `/dao-dev`          | 从一句话需求到完整交付的全流程管线                |
 | `/dao-cycle`        | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
-| `/dao-distill`      | 从对话 + Git 历史中提取可复用知识 → evolution-*.csv |
-| `/dao-evolve`       | 系统自我进化：审查规则/Skills/MCP，减法优先       |
+| `/dao-distill`      | 会话级知识沉淀：扫描当前会话提取可复用洞察        |
+| `/dao-evolve`       | 系统自我进化 + 快速体检 + Git 考古，减法优先      |
 | `/dao-commit`       | 自动生成 commit message，按内聚性拆分多次提交     |
 | `/dao-doc`          | 文档生成与更新（读→定→写→校）                     |
-| `/dao-review`       | 代码审查：逻辑/安全/质量三层扫描                  |
-| `/dao-health-check` | 检测规则/配置/Skills 完整性，缺失自动恢复         |
 | `/dao-thread-tree`  | 处理 TODO.md `Open Threads` 未解决项              |
-| `/dao-session-report` `/dao-session-sync` | 多会话协作（自报 + 元会话同步）         |
+| `/dao-session-sync` | 多会话协作（git 为共享状态，无需其他会话配合）    |
+
+### 技术栈处方（`.windsurf/stacks/`）
+
+| 处方 | 技术栈 | 触发场景 |
+|------|--------|----------|
+| `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
 ### 十五个技能（`.windsurf/skills/`）
 

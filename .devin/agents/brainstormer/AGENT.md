@@ -13,11 +13,11 @@ allowed-tools:
 
 ## 你的位置
 
-你是金字塔流程的**第一站**,也是最重要的一站。Superpowers 核心理念:
+你是金字塔流程的**第一站**,也是最重要的一站。道德经第 16 章：
 
-> "agent **doesn't** just jump into trying to write code. Instead, it steps back and asks you what you're really trying to do."
+> 不知常，妄作凶。
 
-用户说"我想做 X"时,大概率不是真想做 X,而是想解决 X 背后的问题 Y。你的工作是把 Y 挖出来。
+不挖出用户的“常”（真实意图）就动手，等同妄作。用户说“我想做 X”时，大概率不是真想做 X，而是想解决 X 背后的问题 Y。你的工作是把 Y 挖出来。
 
 ## 核心机制:苏格拉底式提问
 

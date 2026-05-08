@@ -51,81 +51,23 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 ## Subagent 调度（按需而动，不强制）
 
 > 动善时。治大国若烹小鲜。
-> 不该动则不动，该动一次即止。
 
-主会话(dispatcher)在每个阶段**自评**是否派 subagent。**不是每阶段都必须派**——rate limit 实测 ≤1 并发,盲目派既浪费配额又增加调度开销。
+主会话在每个阶段**自评**是否派 subagent。详细调度机制见 `dao-pyramid` skill + `.devin/agents/` profiles。
 
-### 判断准则(进入阶段前自评,满足 ≥3 项才派)
+**核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。
 
-```
-□ 任务足够模板化?(能写出清晰 spec 给 worker)
-□ 任务需要不同模型档?(深推理/结构化文档/批量廉价)
-□ 主会话 context 已臃肿?(派 subagent 节省主 context)
-□ rate limit 窗口内还有预算?(最近 1h 派过几次)
-□ 任务价值高到值 15× token 成本?(单次调用约烧 4-15× 主会话)
-□ 任务可真并行或串行可接受延迟?(否则主会话直接做更快)
-```
+**阶段默认倾向**（参考，自评优先）：
 
-满足少于 3 项 → **主会话直接做**(更快,无 rate limit 风险)。
+| 阶段 | 主会话直接做 | 派 subagent |
+|------|-------------|-------------|
+| 析 | 需求清晰 | 模糊 → brainstormer |
+| 设 | 架构常规 | 关键架构 → strategist |
+| 编 | 单一小改 | 批量同质 → worker-batch |
+| 筑/部 | 默认（环境敏感） | build 失败 → debugger |
+| 试/验 | 默认 | 核心模块 → reviewer-critical |
+| 书 | 文档量小 | 完整 README → plan-writer |
 
-### 场景建议(参考,不强制)
-
-当你决定派 subagent 时,参考这张映射选 profile:
-
-| 典型场景 | 推荐 profile | 模型 |
-|---------|-------------|------|
-| 挖真实需求 / 探索性方向 | `brainstormer` | Sonnet Thinking |
-| 写 PRD / 接口设计 / 方案对比 | `plan-writer` | GPT Low/High |
-| 一次性架构决策 / 卡死攻坚 | `strategist` | Opus XHigh/Max |
-| 把 plan 翻成 worker 可执行 spec | `spec-writer` | Sonnet Thinking |
-| 普通两阶段 review | `reviewer` | Sonnet Thinking |
-| 核心模块(支付/认证/安全)review | `reviewer-critical` | Opus High |
-| bug / 意外行为根因分析 | `debugger` | Sonnet Thinking |
-| 严格按 spec 批量执行 | `worker-batch` | SWE Fast (free) |
-
-### 派活四要素(每次派 subagent 必含)
-
-1. **Objective** — 可观测完成判据
-2. **Output Format** — 文件路径 + 完整代码模板
-3. **Tools / Sources** — 用什么工具、读哪些文件、跑哪些命令
-4. **Task Boundaries** — 显式说"不该做什么"
-
-缺一 → subagent 大概率出轨。详见 `.devin/agents/<name>/AGENT.md` 和 `.windsurf/skills/dao-pyramid/SKILL.md`。
-
-### 阶段默认倾向(仅供参考,自评优先)
-
-dao-dev 七阶段在**典型情况**下的倾向:
-
-```
-§1.1 析:  用户需求清晰 → 主会话直接做;模糊/探索性 → 派 brainstormer
-§1.2 设:  架构常规 → 主会话 + plan-writer;一次性关键架构 → 派 strategist
-§2.1 编:  单一小改 → 主会话直接写;批量同质 → spec-writer + worker-batch 流水
-§2.2 筑:  主会话跑 build(环境敏感);build 失败 → 派 debugger
-§2.3 部:  主会话直接做(部署需实时反应,subagent 不擅)
-§3.1 试:  主会话跑测试;大量测试产物 → 派 reviewer Stage 1
-§3.2 验:  主会话 + dao-verify 自审;核心模块 → 派 reviewer-critical
-§3.3 书:  文档量小 → 主会话;完整 README/PR/commit → 派 plan-writer
-```
-
-**横切触发**(任意阶段):
-
-```
-遇 bug / test failure / 意外行为   →  派 debugger(走 dao-debug 三层螺旋)
-debugger 失败 ≥3 次                →  升级 strategist(质疑架构)
-关键模块改动(支付/认证/安全)       →  派 reviewer-critical
-跨多文件强耦合重构                 →  dao-worktree 隔离 + worker 批量
-```
-
-### ⚠️ 实测限制(Windsurf 个人账户)
-
-subagent 派发受 **1 小时滚动 rate limit**,**实际并发上限 ≈ 1**:
-
-- 1 小时内总派发次数有上限(打满后返回 "try again in about an hour")
-- "no credits used" —— 节流不扣费,但配额耗尽 1 小时内不能再派
-- **多任务采用串行 + 节流**,不要假设可并发
-- Pro 账户上限可能更高,自行测试
-
-→ 这是上面"判断准则"第 4 项(rate limit 预算)权重较重的原因。
+**横切**：bug → debugger | 3次失败 → strategist | 核心模块 → reviewer-critical
 
 ---
 
@@ -218,7 +160,7 @@ subagent 派发受 **1 小时滚动 rate limit**,**实际并发上限 ≈ 1**:
 
    | 基建需求 | 检测方式 | 缺失时的动作 |
    |---------|---------|-------------|
-   | Web 前端 | 前端目录 + 基础配置是否存在 | `/dao-frontend-init`（脚本自动判定全量/增量） |
+   | Web 前端 | 前端目录 + 基础配置是否存在 | 加载 `stacks/frontend-nextjs.md` 处方（脚本自动判定全量/增量） |
    | 后端 | `server/` 下有语言入口文件 | 按架构创建后端骨架 |
    | 数据库 | migration 目录 + ORM/SQL 配置 | 创建 migration 框架 |
    | CI/CD | `.github/workflows/` | 按部署方案创建 |
@@ -226,7 +168,7 @@ subagent 派发受 **1 小时滚动 rate limit**,**实际并发上限 ≈ 1**:
    **原则**：已有的不动，缺失的补全。子管线自带探测逻辑，dao 只负责调度。
 
 2. **依赖安装**
-   - 基础设施审计中触发的子管线（如 `/dao-frontend-init`）会自行处理依赖
+   - 基础设施审计中触发的技术栈处方（如 `stacks/frontend-nextjs.md`）会自行处理依赖
      // turbo
    - 其余依赖在此安装
    - 配置基础设施（linter、tsconfig 等）
@@ -237,7 +179,7 @@ subagent 派发受 **1 小时滚动 rate limit**,**实际并发上限 ≈ 1**:
    - **原则**：一触推到底——开始一个组件就做完，不留半成品
 
 4. **UI/交互层**（如适用）
-   - `/dao-frontend-init` 已在基建审计阶段完成脚手架 + 设计系统。此处聚焦业务页面
+   - 前端处方已在基建审计阶段完成脚手架 + 设计系统。此处聚焦业务页面
    - 具体标准由 `ui-ux-pro-max` skill 的规范文件提供（dao 不重复）
    - 美观现代的界面（不是毛坯）
    - 响应式、无障碍
@@ -386,7 +328,7 @@ subagent 派发受 **1 小时滚动 rate limit**,**实际并发上限 ≈ 1**:
 遇到bug → /cycle + debug 镜头
 测试覆盖 → /cycle + test 镜头
 文档生成 → /doc
-前端初始化 → /dao-frontend-init（自动触发）
+前端初始化 → stacks/frontend-nextjs.md（基建审计自动触发）
 ```
 
 镜头（lens）是 /cycle 的领域插件，按需自动加载，详见 dao-cycle.md 镜头机制。

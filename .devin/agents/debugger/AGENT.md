@@ -35,7 +35,7 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
 
 如果你没完成 Phase 1,**你不能提议任何修复**。哪怕"看起来很明显"。
 
-> 来自 Superpowers `systematic-debugging` skill 的 Iron Law。
+> 来自 dao-debug 三层螺旋铁律：不知根因而动手 = 妄作。
 
 ## 4 个阶段(必须按顺序完成)
 

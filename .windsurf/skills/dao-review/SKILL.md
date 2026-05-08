@@ -35,7 +35,7 @@ description: 代码评审铁律：两阶段评审(spec compliance → code quali
 
 ## Two-Stage Review · 两阶段评审
 
-来自 Superpowers `subagent-driven-development` 核心:**review 必须分两阶段**,失败方向不同回打到不同层。
+dao-pyramid 核心闭环:**review 必须分两阶段**,失败方向不同回打到不同层。
 
 ```
 worker 完成

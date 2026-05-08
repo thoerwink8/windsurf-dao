@@ -387,28 +387,7 @@ Remove-Item ".windsurf\autopilot\state.json"
 
 `.windsurf/autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
 
-### `state.json`（仅执行元数据，不含任务定义）
-
-```json
-{
-  "mode": "autopilot",
-  "goal": "[原始目标]",
-  "branch": "autopilot/[goal-slug]",
-  "started": "[ISO timestamp]",
-  "success_criteria": ["标准A", "标准B"],
-  "tasks": [
-    {
-      "id": "N1",
-      "todo_line": "- [ ] **N1**: ...",
-      "status": "done|pending|blocked|removed",
-      "commit": "abc123",
-      "rollback_cmd": "git revert abc123 --no-edit"
-    }
-  ]
-}
-```
-
-> **注意**：任务描述、依赖关系、完成状态的权威来源是 `TODO.md`。`state.json` 仅记录 commit hash 以支持回退。
+> `state.json` schema 见 §1.3。权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
 
 ---
 
