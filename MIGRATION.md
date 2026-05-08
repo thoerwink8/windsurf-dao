@@ -9,8 +9,9 @@
 ```
 windsurf-dao (源仓库, sidecar workspace)
 ├── .windsurf/rules/        ← 9 个文件（1 always_on + 5 model_decision + 2 glob + 1 manual） · v2 架构
-├── .windsurf/skills/       ← 15 个 dao-* skills
-├── .windsurf/workflows/    ← 12 个 dao-* workflows
+├── .windsurf/skills/       ← 24 个 dao-* skills（4 类）
+├── .windsurf/stacks/       ← 技术栈处方（/dev 基建审计按需加载）
+├── .windsurf/workflows/    ← 9 个 dao-* workflows
 ├── global_rules.md         ← 元规则源文件（31 行）
 └── dao.ps1                 ← 链接管理工具（link-global）
 
@@ -183,11 +184,11 @@ Copy-Item "windsurf-dao\.windsurf\workflows\dao-*.md" -Destination "target\.wind
 
 | 类型 | dao 元层 | 项目操作层 |
 |------|---------|------------|
-| Rules | `dao-layer.md` 等 | `ask-next-step.md` 等 |
-| Skills | `dao-boundary-probe/` 等 | `frontend-design/` 等 |
-| Workflows | `dao-cycle.md` 等 | `commit.md`、`review.md` 等 |
+| Rules | `execution.md` / `shell.md` 等 | `ask-next-step.md` 等 |
+| Skills | `dao-debug/` / `dao-review/` 等 | `frontend-design/` 等 |
+| Workflows | `dao-cycle.md` / `dao-dev.md` 等 | `commit.md`、`review.md` 等 |
 
-**三原则**：dao 文件必须有 `dao-` 前缀 / 项目文件不加 `dao-` 前缀 / `skill.md` 的 `name` 字段与目录名一致。
+**三原则**：dao skills 和 workflows 使用 `dao-` 前缀（rules 除外，v2 后按职责命名）/ 项目文件不加 `dao-` 前缀 / `SKILL.md` 的 `name` 字段与目录名一致。
 
 ## 本地忽略
 
@@ -215,10 +216,7 @@ target-project/
 ├── .git/info/exclude                # dao-* 本地忽略规则
 └── .windsurf/
     ├── rules/
-    │   ├── dao-layer.md             # → symlink (locally ignored)
-    │   ├── dao-de-layer.md          # → symlink (locally ignored)
-    │   ├── dao-fa-layer.md          # → symlink (locally ignored)
-    │   ├── dao-shu-layer.md         # → symlink (locally ignored)
+    │   ├── (dao rules via sidecar)  # Sidecar 模式无需链接
     │   └── ask-next-step.md         # ← 项目 (tracked)
     ├── skills/
     │   ├── dao-boundary-probe/      # → junction (locally ignored)
