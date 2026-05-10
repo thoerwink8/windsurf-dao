@@ -129,6 +129,48 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 - 依赖关系尽量扁平（宽而浅，优于深依赖链）
 - Task 粒度：≤ 1 小时工作量，确保 context 内可完成
 
+#### 1.3.1 mode 状态机（autopilot-watchdog 依据）
+
+> **背景**：「无感切号」插件 v2.15.0+ 内置 `autopilot-watchdog`，扫描 `.windsurf/autopilot/state.json`，当 `mode === "running"` 且 Cascade 静默 ≥120s（state.json mtime + state.vscdb mtime 双信号）时，自动注入 `continue` 让 autopilot 恢复推进。
+> 单 run 注入上限 50 次（防失控）。详见 `d:\frank\道\无感切号\docs\specs\2026-05-11-autopilot-watchdog-plan.md`。
+
+**mode 字段必须显式管理**，让 watchdog 知道何时该注入、何时该避让：
+
+| 阶段 | mode 值 | watchdog 行为 |
+|------|---------|--------------|
+| 1.6 激活后进入执行循环 | `"running"` | ✅ 监听是否 stalled，stalled 则注入 continue |
+| 2.2 错误处理（系统级阻断写 checkpoint）| `"running"` | 同上（错误恢复也算 stalled 的一种） |
+| §三 用户中断 → `ask_user_question` 前 | `"awaiting_user_decision"` | ❌ **不注入**——这是设计上的用户决策点 |
+| §三 ask 返回后继续执行 | `"running"` | 恢复 ✅ |
+| §四 用户范围调整 ask | `"awaiting_user_decision"` | ❌ 不注入 |
+| §五 收尾 ask（合并/继续/回退）| `"awaiting_user_decision"` | ❌ 不注入 |
+| §五.4 完成清理前 | `"completed"` | ❌ 不注入 |
+| §四 用户主动 abort | `"aborted"` | ❌ 不注入 |
+| §五.4 完成清理后 | _state.json 删除_ | 文件不存在 = watchdog 跳过 |
+
+**mode 转换操作**：
+
+```powershell
+# 进入 ask_user_question 前
+$state = Get-Content ".windsurf/autopilot/state.json" -Raw | ConvertFrom-Json
+$state.mode = "awaiting_user_decision"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+
+# ask 返回后继续
+$state.mode = "running"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+
+# 完成时
+$state.mode = "completed"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+# 紧接着 §5.4 删除 state.json
+```
+
+**watchdog 写入的字段**（autopilot 流程读到时透传保留）：
+
+- `_stalled_inject_count`: number — watchdog 注入次数计数
+- `_last_stalled_inject_at`: ISO 时间戳 — 最近一次注入时间
+
 #### 1.4 创建工作分支
 
 ```powershell
