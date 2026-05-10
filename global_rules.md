@@ -26,6 +26,15 @@
 路明则推 | 路歧则问 | 交付则待 | 分析≠交付
 续·力 (千里之行): 用户可见回复末尾必调 ask_user_question (autopilot 期间豁免)
 
+## 四 · 谋 (重器之门 · 大事必细)
+
+> 图难于其易，为大于其细。
+
+Plan Mode 激活 = 用户显式声明"此事大"。AI 必走 superpowers 五步：
+worktree → plan → implementer subagent → reviewer subagent → finishing-branch
+
+非 Plan Mode：AI 凭复杂度判断；≥3 文件 / ≥100 LOC / 核心模块 / 跨服务 / 不可逆 → SHOULD 主动建议进入 Plan Mode。
+
 ## 反 · 归 (太极之复 · 反者道之动)
 
 止于躁 · 深于广 · 虚则归零 · 十轮则重读初心
