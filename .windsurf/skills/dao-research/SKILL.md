@@ -39,6 +39,16 @@ description: 前置研究术：分析"怎么做"时，自动搜索最优实践�
 
 ### 二、采集（☵听·多源采集最优实践）
 
+> **前置**：采集**外部**信息前，**先盘点本项目已有底层资产**——
+> 外部插件/库可能有看起来诱人的"灵感"，但本项目可能早已有更深更稳的实现。
+> 先 `grep_search`/`find_by_name` 扫一遍 `src/`、`docs/specs/`、`data/evolution-*.csv`，
+> 列出**本项目已有的相关基础设施**，再决定要不要去外面找新方案。
+
+**典型反例**：研究 a8-windsurf-helper 的 auto-continue.js（DOM 注入 textarea + Enter）
+作为新功能灵感时，先盘点本项目 `s0-patch.ts`——发现 `__wgqhScope()` + textarea 注入
+**早就实现了，且更深（修改 workbench.desktop.main.js 而非 workbench.html）**。
+外部插件应被定位为**路径启发**，而非必须复用。
+
 用搜索工具采集信息，**多源交叉验证**。
 
 **工具选择**：
@@ -132,3 +142,4 @@ dao-research（阴·知）  ←→  dao-boundary-probe（阳·验）
 | 过度研究 | 搜了10篇文章还在搜 | 最多3轮，够用即止 |
 | 时效盲区 | 用了5年前的过时方案 | 检查发布日期，context7查最新文档 |
 | 权威崇拜 | 因为大厂用所以我也用 | 回到项目约束，适合的才是好的 |
+| 跳过资产盘点 | 直接采集外部方案，不查本项目已有 | 采集前先 grep src/ + docs/specs/ + evolution-*.csv，本项目可能早已实现且更深 |
