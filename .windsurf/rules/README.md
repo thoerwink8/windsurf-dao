@@ -1,4 +1,4 @@
-# .windsurf/rules/ · 10 文件导航
+# .windsurf/rules/ · 11 文件导航
 
 > 给人看的总览。AI 自动通过 trigger 加载，不读本文件。
 
@@ -11,9 +11,12 @@
    ~/.codeium/windsurf/memories/global_rules.md
    → Windsurf 自动加载到所有项目（每条消息注入）
 
-第 2 层 · 项目铁律（always_on）
-├─ execution.md         ← 项目级血泪经验
-└─ superpowers-gate.md  ← superpowers 触发门控（与 Windsurf Plan Mode 解耦）
+第 2 层 · always_on（每条消息注入，仅 dao sidecar）
+├─ 2a · 心怀
+│  └─ dao-mantra.md      ← 道德经八句根基 + 场景速查表
+└─ 2b · 铁律
+   ├─ execution.md        ← 项目级血泪经验
+   └─ superpowers-gate.md ← superpowers 触发门控（与 Windsurf Plan Mode 解耦）
 
 第 3 层 · 操作领域（AI 按场景判断）
 ├─ shell.md            ← 怎么不卡死
@@ -35,6 +38,7 @@
 | Trigger | 文件 | 何时加载 |
 |---|---|---|
 | `user_global`（symlink） | `../../../global_rules.md` | 每条消息（跨所有项目，无需 dao sidecar） |
+| `always_on` | `dao-mantra.md` | 每条消息（心怀八句根基，仅 dao sidecar） |
 | `always_on` | `execution.md` | 每条消息（仅 dao sidecar 打开时） |
 | `always_on` | `superpowers-gate.md` | 每条消息（仅 dao sidecar 打开时） |
 | `model_decision` | `shell.md` | 运行命令时 |
@@ -50,7 +54,7 @@
 
 废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `data/evolution-lessons.csv` T20-T22。
 
-| 维度 | 旧（5 文件混杂层） | 新（9 文件 5 层架构） |
+| 维度 | 旧（5 文件混杂层） | 新（11 文件 5 层架构） |
 |---|---|---|
 | 触发精准度 | 低（model_decision 全量加载） | 高（4 trigger 各得其所） |
 | 单一职责 | 弱（多领域混杂） | 强（每文件单职责） |
