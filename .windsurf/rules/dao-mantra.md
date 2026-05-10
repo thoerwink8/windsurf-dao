@@ -28,13 +28,13 @@ trigger: always_on
 | 用户视角 E2E 测试 | `dao-user-simulation` | 以身观身 (54) |
 | 收尾交付 | `dao-finish` | 功遂身退 (9) / 善行无辙迹 (27) |
 | 接受批评 / review | `dao-review` | 受国之垢 (78) |
-| 工程仪式五步 | `/dao-superpowers` | 致虚守静 (16) + 慎终如始 (64) |
+| 工程仪式五步 | `superpowers-gate.md` 判定 + `/dao-superpowers` 落地 | 致虚守静 (16) + 慎终如始 (64) |
 
 ## 协同（与现有 rules 边界）
 
 - `global_rules.md` (31 行元规则) — 跨项目根基；本文件深化为 sidecar 专用
 - `execution.md` (always_on 项目铁律) — 本文件是"心境"，那个是"行为约束"
 - `dao-philosophy.md` (manual @调用) — 本文件日常心怀，那个深度反思
-- `superpowers-gate.md` (always_on 门控) — 本文件 mantra 心境，那个触发判定
+- `superpowers-gate.md` (always_on 门控) — 本文件是**心境**先行（内化哲学），那个是**判定**在后（流程触发）。always_on 顺序：mantra 内化 → gate 判定 → workflow 落地
 
 法不违德，德不违道，道法自然。
