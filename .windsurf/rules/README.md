@@ -13,7 +13,7 @@
 
 第 2 层 · 项目铁律（always_on）
 ├─ execution.md         ← 项目级血泪经验
-└─ plan-mode-gate.md    ← Plan Mode 硬门控（superpowers 五步流程）
+└─ superpowers-gate.md  ← superpowers 触发门控（与 Windsurf Plan Mode 解耦）
 
 第 3 层 · 操作领域（AI 按场景判断）
 ├─ shell.md            ← 怎么不卡死
@@ -36,7 +36,7 @@
 |---|---|---|
 | `user_global`（symlink） | `../../../global_rules.md` | 每条消息（跨所有项目，无需 dao sidecar） |
 | `always_on` | `execution.md` | 每条消息（仅 dao sidecar 打开时） |
-| `always_on` | `plan-mode-gate.md` | 每条消息（仅 dao sidecar 打开时） |
+| `always_on` | `superpowers-gate.md` | 每条消息（仅 dao sidecar 打开时） |
 | `model_decision` | `shell.md` | 运行命令时 |
 | `model_decision` | `cli.md` | 选择工具时 |
 | `model_decision` | `skills.md` | 决策加载哪个 skill |
