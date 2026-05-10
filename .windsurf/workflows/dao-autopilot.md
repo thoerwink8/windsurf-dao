@@ -47,6 +47,31 @@ description: 自动驾驶模式：AI 自主分解目标、递归执行、反思�
 
 ---
 
+## 单 Task 闭环铁律
+
+> 慎终如始，则无败事矣。— 第 64 章
+
+dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。
+**绝对不允许「批量推进」**——连做多个 task 才一次 commit / update / 验证。
+
+### 为什么不可跨 task 合并
+
+1. **回退最小单位 = 一个 task**：合并多 task 一 commit，丢失精确 git revert 能力；用户说「撤销 Task X」时无法做到
+2. **state.json 是跨 session 真相源**：攒着不写，session 中断时下次恢复看到的是「上一批没完成」的假象，可能重做或漏做
+3. **TODO.md 是用户审查唯一接口**：攒着不更新，用户看到的是「假进度」——他以为还在 Task A，其实 Task A/B/C/D 都做了但都没标
+4. **验证不能合并**：dao-test 铁律「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
+
+合并多 task = 用「效率」的虚名，损「可审计 / 可回退 / 可恢复」的实质，是反 dao 的「成事而败之」。
+
+### 唯一允许的合并场景
+
+**强耦合组合 task**：A 的 verify 隐含 B 的前置（如「装包 + 写 config」，写 config 的 verify 必然包含装包成功）。
+- 必须在 commit message 显式写组合 ID：`autopilot(TG-1+TG-2): ...`
+- 必须在 §2.1.1 涅槃门中标明这是组合 task
+- ≤ 2 个 task 合并；超过 2 个一律拆开
+
+---
+
 ## 流程
 
 ### 一、激活（☲视 · 建立意图锚）
@@ -231,6 +256,24 @@ N1 → N3 → N4
    ```
 4. **回写 TODO.md**：将 `- [ ]` 改为 `- [x]`（定位用 `todo_line` 字段）
 5. 更新 `state.json`：`status: "done"`，记录 commit hash 和 rollback_cmd
+
+#### 2.1.1 Task 涅槃门（每 task 必过，5 项全勾才能进下一 task）
+
+完成一个 task 时，AI 必须显式输出以下涅槃证据，作为本 task 闭环的实证：
+
+```
+Task <ID> 涅槃 ✅
+- [x] 1. 实现完成（文件路径：...）
+- [x] 2. 验证通过（命令：xxx，关键输出：xxx）
+- [x] 3. Git commit（hash: xxxxxxx）
+- [x] 4. TODO.md 已 - [x]
+- [x] 5. state.json 已 status: done + commit hash
+```
+
+**任一未勾 → 留在当前 task，禁止开始下一个。**
+**跨 task 推进 = 违反 §2.1，等同于「假涅槃」。**
+
+这个门对应 dao-test 的「不见绿不言完成」——使「是否完成」从 AI 内部判断变为可外部审计的显式证据。
 
 #### 2.2 错误处理
 
@@ -437,3 +480,4 @@ Remove-Item ".windsurf\autopilot\state.json"
 | 知识遗失（执行完不写演化记录） | 5.2 先 `ensure` 后写 `data/evolution-*.csv` 是强制步骤，不可跳过 |
 | 全局污染（autopilot 行为渗漏到正常对话） | 退出时删除 state.json，ask_user_question 规则恢复 |
 | 越权执行（自动决策 🔀 红灯项） | 严格按 1.2.1 权限表：🔀 绝不碰，✋ 需标注假设，🔨 才可自动 |
+| 批量跳过（连做多个 task 才一次 commit / update / 验证） | 严格按 §2.1.1 涅槃门：每 task 5 步全勾才能进下一个，禁止跨 task 推进；合并 commit 等于损失精确回退能力 |
