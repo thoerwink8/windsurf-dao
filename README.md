@@ -26,11 +26,13 @@
 
 ## 包含什么
 
-### 九个规则文件（`.windsurf/rules/` · 对齐 Windsurf 4 trigger）
+### 十一个规则文件（`.windsurf/rules/` · 对齐 Windsurf 4 trigger）
 
 | 文件                  | trigger        | 内容                                          |
 | --------------------- | -------------- | --------------------------------------------- |
-| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涅槃门/续力）       |
+| `dao-mantra.md`       | **always_on**  | dao 协作 mantra（道德经八句根基 + 场景速查）         |
+| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涪槃门/续力）       |
+| `superpowers-gate.md` | **always_on**  | superpowers 触发门控（与 Plan Mode 解耦）          |
 | `shell.md`            | model_decision | 命令安全（超时/防卡/PowerShell/SSH）             |
 | `cli.md`              | model_decision | 工具选择（CLI-first/MCP 边界/工具箱）             |
 | `skills.md`           | model_decision | Skill 调用决策（何时加载 dao-* skill）         |
@@ -40,12 +42,13 @@
 | `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
 | `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
 
-### 九个工作流（`.windsurf/workflows/`）
+### 十个工作流（`.windsurf/workflows/`）
 
 | 工作流              | 功能                                              |
 | ------------------- | ------------------------------------------------- |
 | `/dao-autopilot`    | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写，直到完成或中断 |
-| `/dao-dev`          | 从一句话需求到完整交付的全流程管线                |
+| `/dao-dev`          | 从一句话需求到完整交付的全流程管线（道·哲学三阶九步）  |
+| `/dao-superpowers`  | 五步工程仪式：worktree→plan→execute→review→finish（术·代码重构） |
 | `/dao-cycle`        | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
 | `/dao-distill`      | 会话级知识沉淀：扫描当前会话提取可复用洞察        |
 | `/dao-evolve`       | 系统自我进化 + 快速体检 + Git 考古，减法优先      |
@@ -60,7 +63,7 @@
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
-### 二十四个技能（`.windsurf/skills/`）
+### 二十七个技能（`.windsurf/skills/`）
 
 **元层与调度**
 
@@ -99,6 +102,9 @@
 | 技能                      | 适用场景                                        |
 | ------------------------- | ----------------------------------------------- |
 | `dao-research`            | 前置研究：搜索最优实践，结合项目上下文综合方案    |
+| `dao-empathy`             | 用户五感共情术（以百姓心为心 49章）：以身观身五步 + Persona  |
+| `dao-full-coverage`       | 主动全面体检术（病病 71章）：8 维度扫描业务项目     |
+| `dao-user-simulation`     | 用户视角仿真术（以身观身 54章）：chrome-devtools/playwright 实跑 E2E |
 | `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归      |
 | `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水            |
 | `dao-frontend-aesthetics` | 受限空间中的高信息密度界面                       |
@@ -185,7 +191,7 @@ windsurf-dao/                  # Sidecar workspace——始终保持打开
 ├── dao.ps1                    # status / link-global
 ├── data/evolution-*.csv       # 演化条目 + 教训库（dao 自身演化）
 └── .windsurf/
-    ├── rules/                 # 9 文件 5 层架构（v2）
+    ├── rules/                 # 11 文件 5 层架构（v2 + dao-mantra）
     ├── skills/dao-*/          # 自动跨 workspace 可见
     └── workflows/dao-*.md     # 自动跨 workspace 可见
 

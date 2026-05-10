@@ -23,9 +23,9 @@
 | ------------------------------ | ------------------------------------------------------ |
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
-| `.windsurf/rules/`             | 9 文件 5 层架构（详见 `.windsurf/rules/README.md`）     |
-| `.windsurf/workflows/dao-*.md` | 9 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree） |
-| `.windsurf/skills/dao-*/`      | 24 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7） |
+| `.windsurf/rules/`             | 11 文件 5 层架构（详见 `.windsurf/rules/README.md`，含 dao-mantra） |
+| `.windsurf/workflows/dao-*.md` | 10 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree/superpowers） |
+| `.windsurf/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
