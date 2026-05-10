@@ -1,4 +1,4 @@
-# .windsurf/rules/ · 9 文件导航
+# .windsurf/rules/ · 10 文件导航
 
 > 给人看的总览。AI 自动通过 trigger 加载，不读本文件。
 
@@ -6,13 +6,14 @@
 
 ```
 第 1 层 · 跨项目根基（用户级 user_global Memory）
-└─ ../../../global_rules.md（31 行元规则）
+└─ ../../../global_rules.md（41 行元规则）
    ↓ dao.ps1 link-global（一次性 symlink）
    ~/.codeium/windsurf/memories/global_rules.md
    → Windsurf 自动加载到所有项目（每条消息注入）
 
 第 2 层 · 项目铁律（always_on）
-└─ execution.md（项目级血泪经验）
+├─ execution.md         ← 项目级血泪经验
+└─ plan-mode-gate.md    ← Plan Mode 硬门控（superpowers 五步流程）
 
 第 3 层 · 操作领域（AI 按场景判断）
 ├─ shell.md            ← 怎么不卡死
@@ -35,6 +36,7 @@
 |---|---|---|
 | `user_global`（symlink） | `../../../global_rules.md` | 每条消息（跨所有项目，无需 dao sidecar） |
 | `always_on` | `execution.md` | 每条消息（仅 dao sidecar 打开时） |
+| `always_on` | `plan-mode-gate.md` | 每条消息（仅 dao sidecar 打开时） |
 | `model_decision` | `shell.md` | 运行命令时 |
 | `model_decision` | `cli.md` | 选择工具时 |
 | `model_decision` | `skills.md` | 决策加载哪个 skill |
