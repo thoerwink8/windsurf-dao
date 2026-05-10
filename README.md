@@ -4,6 +4,8 @@
 
 一套基于道德经哲学的 AI 配对编程方法论体系，为 [Windsurf](https://codeium.com/windsurf) IDE 设计。
 
+> 📖 **新用户从这里开始**：[使用手册 USAGE.md](docs/USAGE.md) · 3 分钟入门，不需要懂道德经
+
 ## 这是什么
 
 这不是一个代码库，而是一套 **AI 行为规则系统**——定义 AI 如何思考、如何行动、如何与人协作。
@@ -31,7 +33,7 @@
 | 文件                  | trigger        | 内容                                          |
 | --------------------- | -------------- | --------------------------------------------- |
 | `dao-mantra.md`       | **always_on**  | dao 协作 mantra（道德经八句根基 + 场景速查）         |
-| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涪槃门/续力）       |
+| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涅槃门/续力）       |
 | `superpowers-gate.md` | **always_on**  | superpowers 触发门控（与 Plan Mode 解耦）          |
 | `shell.md`            | model_decision | 命令安全（超时/防卡/PowerShell/SSH）             |
 | `cli.md`              | model_decision | 工具选择（CLI-first/MCP 边界/工具箱）             |
