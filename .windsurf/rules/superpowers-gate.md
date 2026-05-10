@@ -7,6 +7,16 @@ trigger: always_on
 > 配合 global_rules.md "四 · 谋（重器之门）"。本文件提供执行清单与判据。
 > 仅在 dao sidecar 项目内加载；非 dao 项目走 global_rules.md 精炼版即可。
 
+## 与 dao-mantra 的关系（先读心境再走判定）
+
+`dao-mantra.md` 与本文件都 always_on，加载顺序认知如下：
+
+1. **mantra 先**：内化心怀八句（道法自然 / 慎终如始 / 太上不知有之 等）作为底层心境
+2. **gate 后**：本文件按显式信号 + 复杂度信号判定是否走 superpowers 五步
+3. **workflow 落地**：触发后由 `/dao-superpowers` workflow 实施
+
+无心境裸走仪式 = 形似神离。本 gate 判定 yes 才动用 workflow，但 mantra 永远在场。
+
 ## 与 Windsurf Plan Mode 的边界（先讲清楚）
 
 | 维度 | Windsurf Plan Mode | superpowers |
@@ -41,6 +51,8 @@ trigger: always_on
 用户拒绝即走轻量路径。
 
 ## 显式触发后的强制流程（缺一为流程缺陷）
+
+> 五步落地实现见 `/dao-superpowers` workflow；心怀根基见 `dao-mantra.md`。
 
 > **skill 名双列**：obra superpowers 是架构概念标准名；dao-* 是本环境实际可加载的 skill 名。
 > AI 调用 skill 时用 dao-* 名（obra 名仅作概念识别，本环境未实装 superpowers:* 名空间）。
@@ -88,6 +100,7 @@ trigger: always_on
 | 路径偷懒 | 把 plan 随手写到个别位置 | 必须 `docs/specs/<topic>-plan.md`（不是 docs/plan/ 或 docs/superpowers/plans/） |
 | 跳 reviewer | 自己 git diff 一眼就 push | reviewer subagent 是质量门；自检不算 |
 | 直推 master | finishing-a-branch 跳过 | merge / PR 二选一，仪式必须 |
+| 离心境裸走仪式 | 机械走五步无神 | 先内化 `dao-mantra` 八句心怀，再走本 gate 判定；无心境的仪式是形似 |
 
 ## 触发"补救协议"
 
