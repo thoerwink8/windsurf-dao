@@ -163,6 +163,26 @@ TypeScript
 
 这是 `dao-terminal-resilience` 的兄弟原则：终端阻塞 → 降级 → 求助，不盲猜。
 
+### git scaffolding 红线（CLI 代答协议的盲区补丁）
+
+CLI Prompt 代答协议覆盖外部 CLI 的交互问题，但**不覆盖**应该继承全局已有设置的"用户身份"配置（如 `git config user.name / user.email`）。
+
+❌ 反模式：`git init` 后立刻 `git config user.email "foo@local"` 用占位值
+✅ 正解（必查序列）：
+1. `git init` 后先查 `git config --global user.name` + `user.email`
+2. 已设全局 → **绝不设 local**，让 git 自动继承（这是绝大多数情况）
+3. 全局也未设 → 才主动 `ask_user_question` 让用户给值
+4. 用户明确希望此项目用不同 author → 才设 local config（且 commit message 明示）
+
+**核心**：global config 是用户对自身身份的主张；脚手架不能用占位值 override 用户身份。
+**类比**：CLI prompt 代答 = 替用户回答工具问题；git author 替用户表达身份 = 越权。
+
+### 教训源（实例）
+
+**TraceyU M1（2026-05-11）**：autopilot 在 `git init` 时擅自跑 `git config user.email 'frank@traceyu.local'` + `user.name 'Frank'`，导致首批 5 个 commit 与用户其他项目（`thoerwink8 <rmtbsmgo374@outlook.com>`）不一致，必须 rewrite 历史修复（rebase --root --exec reset-author）。
+
+**教训**：脚手架协议要扩展到所有「用户身份相关」环境配置（git author / npm author / 项目作者元数据 / 等），不只是 CLI 交互。**默认继承全局，不擅自填占位值**。
+
 ## 脚手架蒸馏节奏
 
 ```
