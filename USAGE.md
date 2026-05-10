@@ -250,11 +250,11 @@ dao-meta 是 dao 体系自我守卫机制，改 `.windsurf/rules/**` 等核心�
 
 想深入了解 dao 体系内部机制：
 
-- 体系架构：[README.md](../README.md)
-- AI 自身指南：[AGENT_GUIDE.md](../AGENT_GUIDE.md)
-- 规则总览：[`.windsurf/rules/README.md`](../.windsurf/rules/README.md)
-- 道德经原文：[`references/道德经.md`](../references/道德经.md)
-- 演化记录：[`data/evolution-entries.csv`](../data/evolution-entries.csv)
+- 体系架构：[README.md](README.md)
+- AI 自身指南：[AGENT_GUIDE.md](AGENT_GUIDE.md)
+- 规则总览：[`.windsurf/rules/README.md`](.windsurf/rules/README.md)
+- 道德经原文：[`references/道德经.md`](references/道德经.md)
+- 演化记录：[`data/evolution-entries.csv`](data/evolution-entries.csv)
 
 ---
 
