@@ -30,10 +30,12 @@
 
 > 图难于其易，为大于其细。
 
-Plan Mode 激活 = 用户显式声明"此事大"。AI 必走 superpowers 五步：
+显式触发 superpowers = 用户口头说「走 superpowers / 开 worktree 走」或 AI 自身写出 plan 到 `docs/superpowers/plans/`。触发后必走五步：
 worktree → plan → implementer subagent → reviewer subagent → finishing-branch
 
-非 Plan Mode：AI 凭复杂度判断；≥3 文件 / ≥100 LOC / 核心模块 / 跨服务 / 不可逆 → SHOULD 主动建议进入 Plan Mode。
+复杂度 SHOULD 建议：≥3 文件 / ≥100 LOC / 核心模块 / 跨服务 / 不可逆 → 主动建议走 superpowers，用户拒绝即轻量路径。
+
+Windsurf Plan Mode（IDE 模式切换器）≠ superpowers。两套独立体系，AI 也无法可靠检测自身是否在 Plan Mode，故不依赖。
 
 ## 反 · 归 (太极之复 · 反者道之动)
 
