@@ -154,9 +154,23 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 - 依赖关系尽量扁平（宽而浅，优于深依赖链）
 - Task 粒度：≤ 1 小时工作量，确保 context 内可完成
 
+#### 1.3.0 state 文件为什么不放 `.windsurf/`（重要设计约束）
+
+> **铁律**：autopilot state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放 `.windsurf/autopilot/state.json`（v1 旧路径已废弃）。
+
+**原因**：windsurf-dao 走 **Sidecar workspace** 模式 — windsurf-dao 作为伴生 workspace 打开时，目标项目**只有不存在 `.windsurf/` 目录**，Cascade 才会从 sidecar 加载 always_on rules（如 `execution.md` 含「禁 create_memory」铁律）。
+
+如果 autopilot 把 state.json 放 `.windsurf/autopilot/`：
+- 目录被创建 → 目标项目变成「有自己 .windsurf 配置」
+- Cascade 切换为仅扫描本项目 `.windsurf/rules/`（空）
+- **sidecar rules 整体被屏蔽** → autopilot 期间 Cascade 失去 dao 体系约束
+- 实测后果：2026-05-11 TraceyU M1 autopilot 期间，Cascade 多次违反「禁 create_memory」铁律（属于 sidecar 的 `execution.md` 完全没注入）
+
+→ 移到 `.dao-autopilot/` 后，`.windsurf/` 保持不存在，sidecar 持续生效。
+
 #### 1.3.1 mode 状态机（autopilot-watchdog 依据）
 
-> **背景**：「无感切号」插件 v2.15.0+ 内置 `autopilot-watchdog`，扫描 `.windsurf/autopilot/state.json`，当 `mode === "running"` 且 Cascade 静默 ≥120s（state.json mtime + state.vscdb mtime 双信号）时，自动注入 `continue` 让 autopilot 恢复推进。
+> **背景**：「无感切号」插件 v2.15.0+ 内置 `autopilot-watchdog`，扫描 `.dao-autopilot/state.json`（v2.16.0+；旧版本扫 `.windsurf/autopilot/state.json` 兼容），当 `mode === "running"` 且 Cascade 静默 ≥120s（state.json mtime + state.vscdb mtime 双信号）时，自动注入 `continue` 让 autopilot 恢复推进。
 > 单 run 注入上限 50 次（防失控）。详见 `d:\frank\道\无感切号\docs\specs\2026-05-11-autopilot-watchdog-plan.md`。
 
 **mode 字段必须显式管理**，让 watchdog 知道何时该注入、何时该避让：
@@ -177,17 +191,17 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 
 ```powershell
 # 进入 ask_user_question 前
-$state = Get-Content ".windsurf/autopilot/state.json" -Raw | ConvertFrom-Json
+$state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
 $state.mode = "awaiting_user_decision"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
 
 # ask 返回后继续
 $state.mode = "running"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
 
 # 完成时
 $state.mode = "completed"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".windsurf/autopilot/state.json" -Encoding UTF8
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
 # 紧接着 §5.4 删除 state.json
 ```
 
@@ -203,11 +217,11 @@ git checkout -b autopilot/[goal-slug]
 
 # 确保 state.json 不进入 git 历史
 $excludeFile = ".git\info\exclude"
-$excludeEntry = ".windsurf/autopilot/"
+$excludeEntry = ".dao-autopilot/"
 if (-not (Select-String -Path $excludeFile -Pattern [regex]::Escape($excludeEntry) -Quiet)) {
     Add-Content $excludeFile "`n# autopilot state (generated)`n$excludeEntry"
 }
-New-Item -ItemType Directory -Force ".windsurf\autopilot" | Out-Null
+New-Item -ItemType Directory -Force ".dao-autopilot" | Out-Null
 ```
 
 #### 🔒 唯一激活关卡
@@ -424,7 +438,7 @@ Remove-Item ".windsurf\autopilot\state.json"
 
 如果 session 中断，下次对话开始时：
 
-1. 检查 `.windsurf/autopilot/state.json` 是否存在
+1. 检查 `.dao-autopilot/state.json` 是否存在
 2. 有 → 读取 state.json + TODO.md 当前状态，告知用户：
    ```
    检测到未完成的自动驾驶任务（目标：[...]）
@@ -444,12 +458,11 @@ Remove-Item ".windsurf\autopilot\state.json"
 项目根/
 ├── TODO.md              ← 任务图（激活前存在或新建，永久保留）
 ├── AGENT_GUIDE.md       ← 知识库（激活前存在或新建，永久保留）
-└── .windsurf/
-    └── autopilot/
-        └── state.json   ← 执行元数据（激活期间存在，完成后删除）
+└── .dao-autopilot/
+    └── state.json   ← 执行元数据（激活期间存在，完成后删除）
 ```
 
-`.windsurf/autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
+`.dao-autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
 
 权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
 
