@@ -463,6 +463,11 @@ git revert [N4-commit-hash] --no-edit
 ✓ 标准A：[验证方式 + 结果]
 ✓ 标准B：[验证方式 + 结果]
 
+### lesson 上提评估（见 §5.2.5，§5.3 前必须完成 — 即便结论"仅留 CSV"也必须显式说明）
+- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
+- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
+- ...
+
 ### 工作产物
 分支：autopilot/[goal-slug]
 Commits：[hash 列表]
