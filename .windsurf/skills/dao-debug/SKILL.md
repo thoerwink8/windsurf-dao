@@ -201,6 +201,58 @@ AI 的系统性弱点是**过早放弃**——降级为建议、转嫁给用户�
 
 **操作处方**：每次新增降级路径时，grep 所有 `setFrozen`/`markFailed` 调用点，逐个审查冻结条件是否仍有效。
 
+### P3 · HTTP 客户端等 socket.on('end') 而 server 走 keep-alive（T176/T181）
+
+**模式**：自己实现 HTTP 客户端（用 `net.createConnection` 绕过库），等 `'end'` 事件才解析响应——但 server 走 `Connection: keep-alive` 不主动关 socket。
+
+**病理**：
+```
+GET / HTTP/1.1\r\nConnection: close\r\n   ← 客户端请求头
+HTTP/1.1 200 OK ... Connection: keep-alive  ← Express/nginx 默认无视 close
+socket 一直开着 → on('end') 永不触发 → 8s 兜底 timeout → 报「连接超时」
+```
+
+**误诊倾向**：先怀疑 server 卡死、网络抖动、DNS。实际 server 完全正常（外网 curl 89ms 通），是客户端等错了事件。
+
+**操作处方**：
+1. 先用 `curl -I` 看响应头有没有 `Connection: keep-alive` + `Content-Length`
+2. 自实现 HTTP 客户端必须靠 `Content-Length` 字节数到位即处理 + 主动 `socket.destroy()`
+3. 保留 `on('end')` 作为 chunked / 无 CL 兜底，不作为主路径
+4. 项目特定：nginx + Express 默认 keep-alive 是常态，记 AGENT.md「项目特定坑」段
+
+**核心**：**HTTP 终止判定靠协议层（Content-Length / chunked），不靠传输层（socket close）。**
+
+### P4 · CPU 100% ≠ event loop 阻塞（T177）
+
+**模式**：监控工具（pm2、top）显示 Node 进程 CPU 100%，第一假设"server 卡死/雪崩"。实际 Node 单线程占满 1 核 = 100% 是**常态**，与 event loop 是否阻塞无关。
+
+**病理**：
+```
+pm2 list:  cpu 100%  ← 瞬时采样,Node 单核 100% = 设计如此
+↓ 第一假设
+"server 卡死,event loop 被阻塞"
+↓ 实际验证
+ssh curl http://127.0.0.1:3800/health → 200 OK 5ms
+event loop 完全健康,HTTP 处理正常
+```
+
+**真实占用算法**：
+```bash
+ps -p <PID> -o pid,etime,time,%cpu
+# TIME / ELAPSED 比值才是累积平均 CPU 占用
+# 例: ELAPSED 27min / TIME 14:39 ≈ 54%
+```
+
+多个 `@Interval` / `setInterval` 后台任务合理满载也会刷出 100% —— 不是 bug。
+
+**操作处方**：
+1. 看到 pm2 / top CPU 100% 先**不要**假设"卡死"
+2. 用本地 `curl 127.0.0.1:<port>/<快接口>` 试探 event loop 是否真阻塞（应秒级返回）
+3. 若秒级返回 → 性能问题不存在，CPU 100% 是常态
+4. 若超时 → 确实 event loop 阻塞，再用 W11 诊断工具（CPU profile、async_hooks）
+
+**核心**：**Node CPU 100% 是单核满载，不是 event loop 阻塞。诊断前用本地快接口试探。**
+
 ## 武器速查表
 
 ```
