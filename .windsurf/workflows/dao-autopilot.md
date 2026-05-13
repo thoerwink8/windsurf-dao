@@ -483,24 +483,50 @@ git checkout main && git branch -D autopilot/[goal-slug]
 
 ```powershell
 # 删除执行元数据（任务状态已在 TODO.md，知识已在 AGENT_GUIDE.md）
-Remove-Item ".windsurf\autopilot\state.json"
+Remove-Item ".dao-autopilot\state.json"
+# 顺手删除空目录(mode=completed 后整个 .dao-autopilot/ 应该不再需要)
+if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) {
+  Remove-Item ".dao-autopilot" -ErrorAction SilentlyContinue
+}
 ```
 
 **退出自动驾驶模式，ask_user_question 规则恢复正常。**
 
 ---
 
-### 六、跨 Session 恢复
+### 六、跨 Session 恢复（含 stale 检测）
+
+> 慎终如始 + 不知常妄作。30 天前的死 state.json 视为待恢复任务,等于妄作。
 
 如果 session 中断，下次对话开始时：
 
+#### 6.1 stale 检测（先做,避免误恢复死文件）
+
 1. 检查 `.dao-autopilot/state.json` 是否存在
-2. 有 → 读取 state.json + TODO.md 当前状态，告知用户：
+2. 不存在 → 跳过此节,正常进入新对话
+3. 存在 → **先看 mtime + mode 判 stale**：
+   ```powershell
+   $state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
+   $age = ((Get-Date) - (Get-Item ".dao-autopilot/state.json").LastWriteTime).TotalDays
+   $isStale = $age -gt 7 -and $state.mode -in @("idle","aborted","completed")
+   ```
+4. 若 stale (≥7 天 + mode 非 running/awaiting_user_decision) → **不视为待恢复任务**,直接 ask:
+   ```
+   检测到 stale autopilot state（mode=idle，36 天前最后修改，目标：...）
+   该任务图已经长期遗弃,task 状态可能已过时(对照 TODO.md 看真实进度)。
+   建议: 删除 state.json + 视该 autopilot 周期已结束。
+   ```
+   `ask_user_question` 选项: 删除 stale state / 强制视为活跃任务恢复 / 留着做参考
+5. 若非 stale (<7 天 + mode=running 或 awaiting_user_decision) → 走 §6.2 正常恢复
+
+#### 6.2 正常跨 session 恢复
+
+1. 读取 state.json + TODO.md 当前状态，告知用户：
    ```
    检测到未完成的自动驾驶任务（目标：[...]）
    TODO.md 进度：N/M 已完成（见 [x] 数量）
    ```
-3. `ask_user_question`：继续 / 查看进度 / 放弃
+2. `ask_user_question`：继续 / 查看进度 / 放弃
 
 恢复执行时：从第一个 `status: pending` 且依赖已满足的 Task 继续（state.json 与 TODO.md 双重确认）。
 
