@@ -390,6 +390,57 @@ git revert [N4-commit-hash] --no-edit
 
 > 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
 
+
+#### 5.2.5 lesson 上提评估关卡（强制）
+
+> 知常曰明。重要 lesson 不上提 = 失明。
+
+§5.2 把 lesson 写入 `data/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
+
+**评估三问**(逐条 lesson 过):
+
+1. **跨项目可复用方法论？** → 评估上提到 `windsurf-dao/.windsurf/skills/dao-*/SKILL.md` 对应 skill
+   - 例: HTTP socket.on(end) 误诊 → dao-debug skill 加 P 模式
+   - 例: SQL 节流 > JS Map → dao-execute 或新 skill
+
+2. **项目反复会撞的特定坑？** → 评估上提到该项目 `AGENT.md` 「项目特定坑」段
+   - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
+   - 例: 项目 schema 反复踩的 migration 坑 → 项目 AGENT.md
+
+3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `windsurf-dao/.windsurf/rules/*.md` 对应规则
+   - 例: superpowers 实战见证 → `superpowers-gate.md` 末尾加见证段
+   - 例: 发现 worktree 流程漏洞 → `dao-mantra.md` 或新建 sidecar rule
+
+**输出格式**(autopilot §5.3 报告内必含):
+
+```
+### lesson 上提评估
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- ...
+```
+
+**上提归位表**(参考 `windsurf-dao/.windsurf/rules/knowledge-routing.md`):
+
+| 性质 | 位置 |
+|---|---|
+| 跨项目通用调试模式 | `.windsurf/skills/dao-debug/SKILL.md` |
+| 跨项目通用执行模式 | `.windsurf/skills/dao-execute/SKILL.md` |
+| 跨项目通用 review/finish | `.windsurf/skills/dao-review/dao-finish/SKILL.md` |
+| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
+| 流程规则修订 | `.windsurf/rules/*.md` 对应文件 |
+| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
+| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
+
+**反模式**:
+
+| 病 | 症状 | 对治 |
+|---|---|---|
+| 写完 CSV 就跑 | 单 task 写完 entry/lesson 直接进 §5.3 报告,不评估上提 | §5.2.5 是 §5.3 的硬前置,跳过 = §5 整体未完成 |
+| 全判"无需上提" | 默认全 skip,跳过显式评估 | 必须**逐条说出**判定依据,即便结论是"仅留 CSV" |
+| 边界模糊就不提 | "我不确定是不是跨项目通用" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
+
+
 #### 5.3 最终报告
 
 ```

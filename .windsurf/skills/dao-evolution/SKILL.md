@@ -70,6 +70,54 @@ deprecate_lesson(data_dir, "T120", "T138")
 mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
 ```
 
+## 上提评估（每条 lesson 写入后必走）
+
+> "各复归其根" — 知识归位是 dao-evolution 的硬步骤。CSV 是历史可追溯,**不等于该 lesson 已经"被使用"**。重要 lesson 必须上提到能在未来主动注入的位置。
+
+每次 `write_lesson()` 后,**必须**对该 lesson 走一次上提评估,即便结论是"仅留 CSV"也要**显式说出来**。
+
+### 评估三问
+
+1. **跨项目可复用方法论？** → 上提到 `windsurf-dao/.windsurf/skills/dao-*/SKILL.md`
+2. **项目反复会撞的特定坑？** → 上提到该项目 `AGENT.md` 「项目特定坑」段
+3. **打破现有不变量 / 修改流程信念？** → 上提到 `windsurf-dao/.windsurf/rules/*.md` 对应规则
+
+### 归位映射表
+
+| lesson 性质 | 上提位置 |
+|---|---|
+| 跨项目通用调试模式 | `.windsurf/skills/dao-debug/SKILL.md` |
+| 跨项目通用执行模式 | `.windsurf/skills/dao-execute/SKILL.md` |
+| 跨项目通用 review/finish | `.windsurf/skills/dao-review/dao-finish/SKILL.md` |
+| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(无则新建) |
+| 流程规则修订/补充 | `.windsurf/rules/*.md` 对应文件 |
+| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
+| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
+
+### 显式输出格式
+
+```
+### lesson 上提评估
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- ...
+```
+
+### 与上层流程的协作
+
+- **dao-autopilot §5.2.5**: autopilot 收尾时强制走本评估关卡(详见 `workflows/dao-autopilot.md`)
+- **/cycle 涅槃后合成**: 合成 mature 条目时同步评估每个被合并 lesson 是否需上提
+- **/distill 主动整理**: distill 阶段批量走上提评估
+
+### 反模式
+
+| 病 | 症状 | 对治 |
+|---|---|---|
+| 写 CSV 就跑 | 调 `write_lesson` 完直接 return,不评估上提 | 上提评估是 `write_lesson` 的硬后置,等同流程的一部分 |
+| 全判"无需上提" | 默认全部 skip,跳过显式评估 | 必须**逐条**说出判定依据,即便结论"仅留 CSV" |
+| 自我审视盲区 | "我不确定是不是跨项目通用,先不提" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
+| 滥提 | 把所有 lesson 都上提到 skill | 仅 CSV 是合理大多数;只有**跨项目方法论 / 项目特定反复踩 / 流程修订**才上提 |
+
 ## 遗忘机制
 
 ### 写入时
