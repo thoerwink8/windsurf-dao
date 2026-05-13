@@ -109,3 +109,13 @@ trigger: always_on
 1. 立即停手（不再继续改代码）
 2. 告知用户："此任务满足 X 条件，建议走 superpowers。已改的 N 行需要决定：(a) 撤回到 worktree 重做 (b) 接受当前结果但补 reviewer"
 3. 由用户决策回滚程度
+
+## 实战见证
+
+> 2026-05-13 · 无感切号 hub cold-hot-refresh 优化（CPU 54%→5.1%）
+
+**reviewer-critical 抓到的 P1**：backfill SQL 子查询无 `idx_lease_history_account_id` 索引，会阻塞 onModuleInit 几秒。这是 AI 自检难以发现的（SQL 看着没问题，生产数据放大才暴露）。如果跳过 reviewer-critical 直接合入，**上线后才发现启动卡顿，且不易归因**。
+
+→ 核心模块改动走完整五步流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住。
+
+完整案例见 `README.md` 「实战案例」段；技术教训见无感切号项目 `data/evolution-lessons.csv` T183。

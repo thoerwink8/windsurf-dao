@@ -261,6 +261,27 @@ target-project/                # 你的工作项目
 3. **规则的终态是忘掉规则** — 含德之厚，比于赤子
 4. **身教重于言教** — 推广给别人的范式，自身先实践
 
+## 实战案例
+
+### superpowers 五步流程的实战价值（2026-05-13 · wuganjiqie hub CPU 优化）
+
+> "图难于其易，为大于其细" — 完整流程不是浪费，是让难事变易、大事变细。
+
+**起源**：用户提到 wuganjiqie hub 进程 CPU ~33% 常态负载，问"能优化吗"。AI 显式触发 superpowers，按五步走完一个完整周期：
+
+| 步 | 产出 | 关键决定 |
+|---|---|---|
+| 1 brainstorm | `docs/specs/2026-05-13-cold-hot-refresh-design.md` (135 行) | 3 方案对比 (拉长 interval / 热冷分档 / 全按需)，用户选热冷分档 |
+| 2 worktree | `feature/cold-hot-refresh` 分支在 `~/.config/superpowers/worktrees/` | 主线不动 |
+| 3 plan | `docs/specs/2026-05-13-cold-hot-refresh-plan.md` (205 行) | 9 个 2-5 min Task + 完整代码模板 + 依赖图 |
+| 4 execute | 6 个 server commit (T1-T6) | 单 task 5 步闭环 (autopilot §2.1.1) |
+| 5 review | reviewer-critical APPROVE_WITH_FIXES → 普通 reviewer Stage1+2 PASS | **抓到 P1-3: backfill SQL 子查询无 `idx_lease_history_account_id` 索引，会阻塞 onModuleInit 几秒** |
+| 6 finish | merge master + GHA 4m42s + ssh fresh 验证 + worktree cleanup | CPU 实测 **54% → 5.1%**（远超 25% 目标） |
+
+**关键学到的事**：reviewer-critical 抓到的 P1-3 索引问题，是 AI 自检难以发现的——backfill SQL 看着没问题，但放到生产 lease_history 表（永久归档）就会扫几百万行阻塞启动。**如果跳过 reviewer-critical 直接合入，上线后才发现启动卡顿，且不易归因**。核心模块改动走完整流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住（见 [`dao-mantra.md`](.windsurf/rules/dao-mantra.md) 与 [`superpowers-gate.md`](.windsurf/rules/superpowers-gate.md)）。
+
+**完整教训沉淀**：见 wuganjiqie 项目 `data/evolution-lessons.csv` T176-T183 与 dao-debug skill 新增的 P3/P4 模式。
+
 ## 许可
 
 私人使用。
