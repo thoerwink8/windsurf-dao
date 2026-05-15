@@ -79,6 +79,39 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2 步 · 写 plan」
 
+#### 2.0 · 形（dao-ui-mockup · UI 任务专用前置）⭐
+
+> 大象无形。让无形的设计语言显形，再写 plan。——《道德经》第 41 章
+
+**触发**：任务关键词含 主题/样式/色板/视觉/重设计/换肤/UI 重构/首屏改版/界面优化 等 UI 视觉决策类。非 UI 任务跳过。
+
+**announce**：「开始 dao-superpowers 第 2.0 步 · 形（生成 mockup）」
+
+```
+六步走（v0.2 · 详见 dao-ui-mockup skill）：
+  一·察 → 读 TODO + AGENT_GUIDE + 关键源码 + 截图当前 UI（项目画像）
+  二·援 → fetch awesome-design-md（VoltAgent）按画像筛 3-5 候选 + 附原描述
+          🔒 用户拍板 refCombo（single / fusion / parallel · 推翻则带气质回筛）
+  三·拟 → 基于 refCombo 合成 N 套方向（color/typography 都从参考 DESIGN.md 抽取）
+          N 与 strategy 同步：single|fusion=1 主+变体；parallel=用户选定参考数
+  四·显 → 生成 _tmp/ui-mockup-<topic>-<ts>.html（方向切换 + 暗色 + 完整组件库 + 真实场景）
+  五·择 → 用户在浏览器审视 → 选定方向 + 给微调反馈
+  六·固 → 导出 3 个文件喂给 dao-plan：
+          _tmp/design-tokens-<topic>.json
+          _tmp/index-css-draft.css
+          _tmp/component-deltas.md
+```
+
+**🔒 双关卡**：
+- 援步骤：用户必须显式拍板 refCombo（"走 α" / "用 β 但 accent 换紫色" / "推翻，要 <气质>"），不得替选
+- 择步骤：用户必须显式选定方向，不得替选
+
+**铁律**：mockup 即实施 ground truth——避免"设计稿漂亮但代码走样"的常见 AI 失败模式。
+
+详见 `dao-ui-mockup` skill。
+
+#### 2.1 · 写 plan
+
 ```
 位置：docs/specs/<topic>-plan.md
 内容：
@@ -88,6 +121,7 @@ npm test
   - 风险与缓解
   - 验收条件
   - 执行顺序
+  - UI 任务额外：plan 第一句话必须 "读 _tmp/design-tokens-<topic>.json"
 ```
 
 **🔒 关卡**：plan 写完必须用户审批，不得跳过。
@@ -187,8 +221,10 @@ rule 是"什么时候走 + 不能怎么走"，workflow 是"怎么一步步走"�
 ## 反原则
 
 - **不为五步而五步**——单文件 typo 不必走五步
-- **不替代 /dao-dev**——含 UI/文档/前端嗢架的任务走 /dao-dev
+- **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 workflow 聚焦「现有代码核心改动」，含主题重构/视觉重设计（2.0 步会自动激活 dao-ui-mockup）
 - **不并行五步**——一步完成才进下一步，不可跳过
+- **不跳 2.0 形**——UI 视觉决策类任务必走 dao-ui-mockup，避免"设计稿漂亮代码走样"
+- **不跳 2.0.2 援**——UI 任务的"援"必先于"拟"。从 awesome-design-md 借真实视觉哲学，胜过 AI 闭门造车（v0.2 核心改进）
 
 ## 完整执行模板
 
@@ -196,19 +232,28 @@ rule 是"什么时候走 + 不能怎么走"，workflow 是"怎么一步步走"�
 🚀 /dao-superpowers 启动
 任务：<topic>
 预估复杂度：<低/中/高>
+UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
 
 ▶ 第 1 步 · 隔（dao-worktree）
   [创建 worktree + 干净 install + 测试基线]
 
-▶ 第 2 步 · 谋（dao-plan）
-  [写 docs/specs/<topic>-plan.md]
-  🔒 用户审批 plan
+▶ 第 2 步 · 谋
+  ├─ 2.0 · 形（dao-ui-mockup · 仅 UI 任务 · 六步法）⭐
+  │  [察 → 援 → 拟 → 显 → 择 → 固]
+  │  🔒 援：用户拍板 refCombo（参考组合）
+  │  🔒 择：用户选定方向
+  │  产出：_tmp/design-tokens-<topic>.json + index-css-draft.css + component-deltas.md
+  └─ 2.1 · 写 plan（dao-plan）
+     [写 docs/specs/<topic>-plan.md]
+     🔒 用户审批 plan
 
 ▶ 第 3 步 · 造（dao-execute + dao-pyramid 可选）
   [逐 task 执行 + checkpoint]
+  [UI 任务：implementer 拿 design tokens + mockup HTML 作 ground truth]
 
 ▶ 第 4 步 · 审（dao-review）
   [派 reviewer / reviewer-critical]
+  [UI 任务：reviewer 对照 mockup 验收视觉一致性]
 
 ▶ 第 5 步 · 归（dao-finish）
   [merge / PR / cleanup]

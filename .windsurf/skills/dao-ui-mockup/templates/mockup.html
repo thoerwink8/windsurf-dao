@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-direction="a" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{PROJECT_NAME}} · UI Mockup · {{TOPIC}}</title>
+<style>
+/* ============================================================
+   dao-ui-mockup · HTML 骨架 v1
+   生成日期: {{CREATED_AT}}
+   项目: {{PROJECT_NAME}}
+   主题任务: {{TOPIC}}
+   方向数: {{DIRECTION_COUNT}}
+   ============================================================ */
+
+/* ---- Reset & Base ---- */
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; -webkit-font-smoothing: antialiased; }
+body {
+  font-family: var(--font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif);
+  font-size: var(--text-body-size, 0.9375rem);
+  line-height: var(--text-body-line, 1.6);
+  color: var(--fg);
+  background: var(--bg);
+  transition: background-color 240ms ease, color 240ms ease;
+  min-height: 100vh;
+}
+button { font: inherit; cursor: pointer; border: 0; background: transparent; color: inherit; }
+input, textarea { font: inherit; }
+a { color: var(--primary); text-decoration: none; }
+code { font-family: var(--font-mono, ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace); }
+
+/* ============================================================
+   方向 A · 学院派纸感（示例方向，AI 替换为真实方向）
+   ============================================================ */
+:root[data-direction="a"][data-theme="light"] {
+  --bg: #FBF7F0;
+  --fg: #1A2238;
+  --muted: #6B7280;
+  --primary: #1A2238;
+  --primary-fg: #FBF7F0;
+  --accent: #C9A047;
+  --accent-fg: #1A1410;
+  --surface: #FFFFFF;
+  --surface-2: #F5EFE3;
+  --border: #E0D9C7;
+  --success: #2D7A4E;
+  --success-bg: #E5F2EA;
+  --warning: #B58300;
+  --warning-bg: #FBF1D6;
+  --danger: #B53037;
+  --danger-bg: #F8E0E2;
+  --shadow-low: 0 1px 2px rgba(26, 34, 56, 0.06);
+  --shadow-mid: 0 2px 8px rgba(26, 34, 56, 0.08), 0 1px 2px rgba(26, 34, 56, 0.04);
+  --shadow-high: 0 8px 24px rgba(26, 34, 56, 0.12), 0 2px 4px rgba(26, 34, 56, 0.04);
+  --font-display: "Source Serif 4", "Source Serif Pro", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+:root[data-direction="a"][data-theme="dark"] {
+  --bg: #1A1410;
+  --fg: #F5E6A8;
+  --muted: #B8A878;
+  --primary: #F5E6A8;
+  --primary-fg: #1A1410;
+  --accent: #D4AF6A;
+  --accent-fg: #1A1410;
+  --surface: #2A1F18;
+  --surface-2: #3A2D22;
+  --border: #4A3E2E;
+  --success: #88C99A;
+  --success-bg: #2A3E32;
+  --warning: #E5C266;
+  --warning-bg: #3E332A;
+  --danger: #E08088;
+  --danger-bg: #3E2A2C;
+}
+
+/* ============================================================
+   方向 B · 极简空气流（示例方向，AI 替换为真实方向）
+   ============================================================ */
+:root[data-direction="b"][data-theme="light"] {
+  --bg: #FAFAFA;
+  --fg: #0A0A0A;
+  --muted: #71717A;
+  --primary: #0A0A0A;
+  --primary-fg: #FAFAFA;
+  --accent: #10B981;
+  --accent-fg: #FFFFFF;
+  --surface: #FFFFFF;
+  --surface-2: #F4F4F5;
+  --border: #E4E4E7;
+  --success: #059669;
+  --success-bg: #ECFDF5;
+  --warning: #D97706;
+  --warning-bg: #FFFBEB;
+  --danger: #DC2626;
+  --danger-bg: #FEF2F2;
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-mid: 0 2px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-high: 0 8px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --font-display: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --font-body: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+:root[data-direction="b"][data-theme="dark"] {
+  --bg: #0A0A0A;
+  --fg: #FAFAFA;
+  --muted: #A1A1AA;
+  --primary: #FAFAFA;
+  --primary-fg: #0A0A0A;
+  --accent: #34D399;
+  --accent-fg: #052E1A;
+  --surface: #18181B;
+  --surface-2: #27272A;
+  --border: #3F3F46;
+  --success: #34D399;
+  --success-bg: #064E3B;
+  --warning: #FBBF24;
+  --warning-bg: #451A03;
+  --danger: #F87171;
+  --danger-bg: #450A0A;
+}
+
+/* ============================================================
+   方向 C · 暗夜思绪（示例方向，AI 替换为真实方向）
+   ============================================================ */
+:root[data-direction="c"][data-theme="light"] {
+  --bg: #F5F2E8;
+  --fg: #2A2418;
+  --muted: #6B6048;
+  --primary: #2A2418;
+  --primary-fg: #F5F2E8;
+  --accent: #B8923A;
+  --accent-fg: #FFFFFF;
+  --surface: #FFFEF8;
+  --surface-2: #EDE7D2;
+  --border: #DDD3B5;
+  --success: #4A7C5C;
+  --success-bg: #E8F0EA;
+  --warning: #B8893A;
+  --warning-bg: #FBF1D8;
+  --danger: #A8423B;
+  --danger-bg: #F5DCD8;
+  --shadow-low: 0 1px 2px rgba(42, 36, 24, 0.08);
+  --shadow-mid: 0 4px 12px rgba(42, 36, 24, 0.12);
+  --shadow-high: 0 12px 32px rgba(42, 36, 24, 0.16);
+  --font-display: "Geist Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+:root[data-direction="c"][data-theme="dark"] {
+  --bg: #0E0E10;
+  --fg: #F5E6A8;
+  --muted: #9C9275;
+  --primary: #F5E6A8;
+  --primary-fg: #0E0E10;
+  --accent: #FFD580;
+  --accent-fg: #0E0E10;
+  --surface: #1A1815;
+  --surface-2: #26221C;
+  --border: #38332A;
+  --success: #88C99A;
+  --success-bg: #1F2C24;
+  --warning: #E5C266;
+  --warning-bg: #2C2620;
+  --danger: #E08088;
+  --danger-bg: #2C2024;
+  --shadow-low: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-mid: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-high: 0 12px 40px rgba(245, 230, 168, 0.12), 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* ---- Type scale (use across all directions) ---- */
+.text-display { font-family: var(--font-display); font-size: 2.5rem; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
+.text-h1 { font-family: var(--font-display); font-size: 1.875rem; font-weight: 700; line-height: 1.2; letter-spacing: -0.015em; }
+.text-h2 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
+.text-h3 { font-size: 1.125rem; font-weight: 600; line-height: 1.4; }
+.text-body-lg { font-size: 1rem; line-height: 1.65; }
+.text-body { font-size: 0.9375rem; line-height: 1.6; }
+.text-caption { font-size: 0.8125rem; line-height: 1.5; color: var(--muted); }
+.text-mono { font-family: var(--font-mono); font-size: 0.8125rem; }
+
+/* ============================================================
+   Layout
+   ============================================================ */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+.topbar-brand-tag {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  margin-left: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.tab-list {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+  padding: 0.25rem;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+}
+.tab {
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border-radius: calc(var(--radius-md) - 0.125rem);
+  transition: all 180ms ease;
+}
+.tab[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-low);
+}
+.tab:hover:not([aria-selected="true"]) { color: var(--fg); }
+.theme-toggle, .export-btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--fg);
+  transition: all 180ms ease;
+}
+.theme-toggle:hover, .export-btn:hover { border-color: var(--accent); color: var(--accent); }
+.export-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+.export-btn:hover { opacity: 0.9; color: var(--accent-fg); }
+
+.main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  width: 100%;
+}
+
+.direction-panel { display: none; }
+.direction-panel[data-active="true"] { display: block; }
+
+/* ---- Sections ---- */
+.section {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+.section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.section-title .text-h2 { color: var(--fg); }
+.section-title .section-num {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.section-desc {
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+  max-width: 60ch;
+}
+
+/* ---- Direction meta card ---- */
+.direction-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  padding: 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-mid);
+}
+.direction-meta-info { display: flex; flex-direction: column; gap: 0.5rem; }
+.direction-meta-info .name { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; }
+.direction-meta-info .vibe { color: var(--muted); }
+.direction-meta-info .fit-tag {
+  align-self: flex-start;
+  padding: 0.25rem 0.625rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 999px;
+}
+.direction-meta-swatch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+.swatch-square {
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  padding: 0.375rem;
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+}
+
+/* ---- Color tokens grid ---- */
+.color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
+.color-swatch {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.color-swatch-fill { height: 64px; }
+.color-swatch-meta { padding: 0.625rem 0.75rem; font-size: 0.75rem; }
+.color-swatch-meta .name { font-weight: 600; }
+.color-swatch-meta .hex { font-family: var(--font-mono); color: var(--muted); margin-top: 2px; }
+.color-swatch-meta .contrast {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  font-size: 0.6875rem;
+  background: var(--surface-2);
+  border-radius: 999px;
+}
+
+/* ---- Type scale ---- */
+.type-scale { display: flex; flex-direction: column; gap: 1rem; }
+.type-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 1.5rem;
+  align-items: baseline;
+  padding-bottom: 1rem;
+  border-bottom: 1px dashed var(--border);
+}
+.type-row:last-child { border-bottom: 0; }
+.type-row .label { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+.type-row .sample {}
+
+/* ---- Spacing ---- */
+.spacing-row { display: flex; align-items: center; gap: 1rem; }
+.spacing-block { background: var(--accent); height: 24px; border-radius: var(--radius-sm); }
+.spacing-row .label { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); min-width: 48px; }
+
+/* ---- Radius ---- */
+.radius-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.radius-block {
+  width: 80px;
+  height: 80px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ---- Elevation ---- */
+.elevation-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
+.elevation-card {
+  height: 100px;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.elevation-card.flat { box-shadow: none; }
+.elevation-card.low { box-shadow: var(--shadow-low); }
+.elevation-card.mid { box-shadow: var(--shadow-mid); }
+.elevation-card.high { box-shadow: var(--shadow-high); }
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: all 180ms ease;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); color: var(--primary-fg); }
+.btn-primary:not(:disabled):hover { opacity: 0.9; }
+.btn-secondary { background: var(--surface-2); color: var(--fg); }
+.btn-secondary:not(:disabled):hover { background: color-mix(in srgb, var(--surface-2) 50%, var(--border) 50%); }
+.btn-outline { background: transparent; color: var(--fg); border-color: var(--border); }
+.btn-outline:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+.btn-ghost { background: transparent; color: var(--fg); }
+.btn-ghost:not(:disabled):hover { background: var(--surface-2); }
+.btn-destructive { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 20%, transparent); }
+.btn-destructive:not(:disabled):hover { background: color-mix(in srgb, var(--danger) 15%, var(--danger-bg)); }
+
+/* ---- Form & Input ---- */
+.input, .textarea {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: 0;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.input:focus, .textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.label { display: block; font-size: 0.8125rem; font-weight: 500; margin-bottom: 0.375rem; }
+.textarea { min-height: 90px; resize: vertical; }
+
+/* ---- Badge ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.badge-success { background: var(--success-bg); color: var(--success); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
+.badge-warning { background: var(--warning-bg); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 25%, transparent); }
+.badge-danger { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 25%, transparent); }
+.badge-neutral { background: var(--surface-2); color: var(--muted); border-color: var(--border); }
+
+/* ---- Card ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-low);
+}
+.card-elevated { box-shadow: var(--shadow-mid); }
+
+/* ---- Dialog mock ---- */
+.dialog-mock {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-high);
+  padding: 1.5rem;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.dialog-mock-title { font-family: var(--font-display); font-size: 1.125rem; font-weight: 600; margin-bottom: 0.375rem; }
+.dialog-mock-desc { color: var(--muted); margin-bottom: 1rem; }
+.dialog-mock-footer { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.25rem; }
+
+/* ---- Sidebar mock (live scene) ---- */
+.scene-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-mid);
+  min-height: 480px;
+}
+.scene-sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.scene-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.scene-sidebar-logo {
+  width: 32px;
+  height: 32px;
+  background: var(--primary);
+  color: var(--primary-fg);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+.scene-sidebar-list { display: flex; flex-direction: column; gap: 0.25rem; }
+.scene-sidebar-item {
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.scene-sidebar-item:hover { background: var(--surface-2); }
+.scene-sidebar-item.active { background: var(--accent); color: var(--accent-fg); }
+
+.scene-main {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* ---- Tokens viewer ---- */
+.tokens-viewer {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.tokens-actions { display: flex; justify-content: flex-end; margin-bottom: 0.5rem; gap: 0.5rem; }
+
+/* ---- Toast for copy feedback ---- */
+.toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  padding: 0.75rem 1.25rem;
+  background: var(--primary);
+  color: var(--primary-fg);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-high);
+  font-size: 0.875rem;
+  opacity: 0;
+  transition: opacity 200ms ease, transform 200ms ease;
+  pointer-events: none;
+  z-index: 200;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+<!-- ============================================================
+     顶栏：方向标签页 + 暗色切换 + 导出
+     ============================================================ -->
+<header class="topbar" role="banner">
+  <div class="topbar-brand">
+    {{PROJECT_NAME}}<span class="topbar-brand-tag">{{TOPIC}}</span>
+  </div>
+  <div class="tab-list" role="tablist" aria-label="设计方向">
+    <button class="tab" role="tab" aria-selected="true" data-direction="a">A · {{DIR_A_NAME}}</button>
+    <button class="tab" role="tab" aria-selected="false" data-direction="b">B · {{DIR_B_NAME}}</button>
+    <button class="tab" role="tab" aria-selected="false" data-direction="c">C · {{DIR_C_NAME}}</button>
+  </div>
+  <button class="theme-toggle" type="button" aria-label="切换主题">☼ 浅色</button>
+  <button class="export-btn" type="button">导出当前方向</button>
+</header>
+
+<!-- ============================================================
+     主体：每个方向一个 panel
+     注意：示例只展示方向 A 的完整结构
+     AI 生成时复制此结构给 b、c 两个 panel
+     ============================================================ -->
+<main class="main">
+
+  <!-- ============== 方向 A panel ============== -->
+  <div class="direction-panel" data-direction="a" data-active="true">
+
+    <!-- 元信息卡 -->
+    <section class="direction-meta">
+      <div class="direction-meta-info">
+        <div class="name">{{DIR_A_NAME}}</div>
+        <div class="text-caption">灵感参考：{{DIR_A_INSPIRATION}}</div>
+        <div class="vibe">"{{DIR_A_VIBE}}"</div>
+        <div class="fit-tag">适合：{{DIR_A_FIT}}</div>
+      </div>
+      <div class="direction-meta-swatch">
+        <div class="swatch-square" style="background: var(--bg); color: var(--fg);">bg</div>
+        <div class="swatch-square" style="background: var(--primary); color: var(--primary-fg);">primary</div>
+        <div class="swatch-square" style="background: var(--accent); color: var(--accent-fg);">accent</div>
+        <div class="swatch-square" style="background: var(--surface); color: var(--fg); border: 1px solid var(--border);">surface</div>
+      </div>
+    </section>
+
+    <!-- ====== Foundations ====== -->
+    <section class="section">
+      <div class="section-title"><span class="section-num">01</span><h2 class="text-h2">Foundations</h2></div>
+      <p class="section-desc">设计基石——颜色、字体、间距、圆角、层次、动效。改 token 全局生效。</p>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Colors</h3>
+      <div class="color-grid" style="margin-bottom: 2rem;">
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--bg);"></div><div class="color-swatch-meta"><div class="name">Background</div><div class="hex">{{COLOR_BG_A}}</div><span class="contrast">AAA</span></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--fg);"></div><div class="color-swatch-meta"><div class="name">Foreground</div><div class="hex">{{COLOR_FG_A}}</div><span class="contrast">AAA</span></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--primary);"></div><div class="color-swatch-meta"><div class="name">Primary</div><div class="hex">{{COLOR_PRIMARY_A}}</div><span class="contrast">AA</span></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--accent);"></div><div class="color-swatch-meta"><div class="name">Accent</div><div class="hex">{{COLOR_ACCENT_A}}</div><span class="contrast">AA</span></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--success);"></div><div class="color-swatch-meta"><div class="name">Success</div><div class="hex">{{COLOR_SUCCESS_A}}</div></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--warning);"></div><div class="color-swatch-meta"><div class="name">Warning</div><div class="hex">{{COLOR_WARNING_A}}</div></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--danger);"></div><div class="color-swatch-meta"><div class="name">Danger</div><div class="hex">{{COLOR_DANGER_A}}</div></div></div>
+        <div class="color-swatch"><div class="color-swatch-fill" style="background: var(--muted);"></div><div class="color-swatch-meta"><div class="name">Muted</div><div class="hex">{{COLOR_MUTED_A}}</div></div></div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Type Scale</h3>
+      <div class="type-scale" style="margin-bottom: 2rem;">
+        <div class="type-row"><span class="label">Display</span><div class="sample text-display">追踪你的思考</div></div>
+        <div class="type-row"><span class="label">H1</span><div class="sample text-h1">从问题开始的探索</div></div>
+        <div class="type-row"><span class="label">H2</span><div class="sample text-h2">每个想法都是种子</div></div>
+        <div class="type-row"><span class="label">H3</span><div class="sample text-h3">本轮决策清单</div></div>
+        <div class="type-row"><span class="label">Body</span><div class="sample text-body">在一杯咖啡的时间里，把模糊的想法走成可执行的方案。一次只问一个好问题，一次只做一个小决定。</div></div>
+        <div class="type-row"><span class="label">Caption</span><div class="sample text-caption">3 分钟前 · 由 LLM 生成 · 第 4 轮</div></div>
+        <div class="type-row"><span class="label">Mono</span><div class="sample text-mono">{ "decision": 5, "pending": 2, "rejected": 1 }</div></div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Spacing</h3>
+      <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem;">
+        <div class="spacing-row"><span class="label">4</span><div class="spacing-block" style="width: 4px;"></div></div>
+        <div class="spacing-row"><span class="label">8</span><div class="spacing-block" style="width: 8px;"></div></div>
+        <div class="spacing-row"><span class="label">12</span><div class="spacing-block" style="width: 12px;"></div></div>
+        <div class="spacing-row"><span class="label">16</span><div class="spacing-block" style="width: 16px;"></div></div>
+        <div class="spacing-row"><span class="label">24</span><div class="spacing-block" style="width: 24px;"></div></div>
+        <div class="spacing-row"><span class="label">32</span><div class="spacing-block" style="width: 32px;"></div></div>
+        <div class="spacing-row"><span class="label">48</span><div class="spacing-block" style="width: 48px;"></div></div>
+        <div class="spacing-row"><span class="label">64</span><div class="spacing-block" style="width: 64px;"></div></div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Radius</h3>
+      <div class="radius-row" style="margin-bottom: 2rem;">
+        <div class="radius-block" style="border-radius: var(--radius-sm);">sm</div>
+        <div class="radius-block" style="border-radius: var(--radius-md);">md</div>
+        <div class="radius-block" style="border-radius: var(--radius-lg);">lg</div>
+        <div class="radius-block" style="border-radius: var(--radius-xl);">xl</div>
+        <div class="radius-block" style="border-radius: 999px;">full</div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Elevation</h3>
+      <div class="elevation-row" style="margin-bottom: 1rem;">
+        <div class="elevation-card flat">flat</div>
+        <div class="elevation-card low">low</div>
+        <div class="elevation-card mid">mid</div>
+        <div class="elevation-card high">high</div>
+      </div>
+    </section>
+
+    <!-- ====== Atoms ====== -->
+    <section class="section">
+      <div class="section-title"><span class="section-num">02</span><h2 class="text-h2">Atoms</h2></div>
+      <p class="section-desc">原子级组件——按钮、输入框、徽章等不可再分的基本单元。</p>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Buttons</h3>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.625rem; margin-bottom: 2rem;">
+        <button class="btn btn-primary">Primary</button>
+        <button class="btn btn-secondary">Secondary</button>
+        <button class="btn btn-outline">Outline</button>
+        <button class="btn btn-ghost">Ghost</button>
+        <button class="btn btn-destructive">Destructive</button>
+        <button class="btn btn-primary" disabled>Disabled</button>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Form</h3>
+      <div style="max-width: 400px; display: flex; flex-direction: column; gap: 0.875rem; margin-bottom: 2rem;">
+        <div>
+          <label class="label" for="demo-name">项目名称</label>
+          <input id="demo-name" class="input" placeholder="为这次思考起个名字" value="重构主页设计" />
+        </div>
+        <div>
+          <label class="label" for="demo-seed">起始问题</label>
+          <textarea id="demo-seed" class="textarea" placeholder="一句话开始这次探索...">如何让用户在 30 秒内理解产品价值？</textarea>
+        </div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Badges</h3>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+        <span class="badge badge-success">已采纳</span>
+        <span class="badge badge-warning">待评估</span>
+        <span class="badge badge-danger">已否决</span>
+        <span class="badge badge-neutral">中性</span>
+      </div>
+    </section>
+
+    <!-- ====== Organisms（含 Molecules）====== -->
+    <section class="section">
+      <div class="section-title"><span class="section-num">03</span><h2 class="text-h2">Organisms</h2></div>
+      <p class="section-desc">组合级组件——卡片、对话框、导航等多个原子组成的有意义单元。</p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 2rem;">
+        <div class="card">
+          <h3 class="text-h3" style="margin-bottom: 0.5rem;">想法 · 用图标代替文字</h3>
+          <p class="text-caption" style="margin-bottom: 1rem;">第 3 轮 · 主题相关</p>
+          <p class="text-body" style="margin-bottom: 1rem;">用户对图标的认知负担比文字低。但要建立约定后才有效。</p>
+          <div style="display: flex; gap: 0.375rem;">
+            <button class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.625rem;">采纳</button>
+            <button class="btn btn-outline" style="font-size: 0.75rem; padding: 0.25rem 0.625rem;">待评估</button>
+            <button class="btn btn-ghost" style="font-size: 0.75rem; padding: 0.25rem 0.625rem;">否决</button>
+          </div>
+        </div>
+        <div class="card card-elevated">
+          <h3 class="text-h3" style="margin-bottom: 0.5rem;">想法 · 三色信号系统</h3>
+          <p class="text-caption" style="margin-bottom: 1rem;">第 3 轮 · 视觉相关</p>
+          <p class="text-body" style="margin-bottom: 1rem;">绿/黄/红三色对应充裕/注意/危险，比文字快 200ms 被识别。</p>
+          <div style="display: flex; gap: 0.375rem;">
+            <span class="badge badge-success">已采纳</span>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">Dialog</h3>
+      <div class="dialog-mock">
+        <h3 class="dialog-mock-title">完成本次思考？</h3>
+        <p class="dialog-mock-desc">将根据已采纳的决策生成总结报告，可以稍后重新打开继续探索。</p>
+        <div class="dialog-mock-footer">
+          <button class="btn btn-ghost">取消</button>
+          <button class="btn btn-primary">生成报告</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====== Live Scenes ====== -->
+    <section class="section">
+      <div class="section-title"><span class="section-num">04</span><h2 class="text-h2">Live Scenes</h2></div>
+      <p class="section-desc">项目真实场景的高保真复刻。这是落地后用户实际看到的样子。</p>
+
+      <h3 class="text-h3" style="margin-bottom: 0.75rem;">{{SCENE_A_NAME}}</h3>
+      <div class="scene-shell">
+        <aside class="scene-sidebar">
+          <div class="scene-sidebar-header">
+            <div class="scene-sidebar-logo">{{LOGO_LETTER}}</div>
+            <div>
+              <div class="text-h3" style="font-size: 0.9375rem;">{{PROJECT_NAME}}</div>
+              <div class="text-caption" style="font-size: 0.6875rem; margin-top: 1px;">{{PROJECT_SLOGAN}}</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="justify-content: center; width: 100%;">+ 新建项目</button>
+          <div class="scene-sidebar-list">
+            <div class="scene-sidebar-item active">主页重设计</div>
+            <div class="scene-sidebar-item">营销文案探索</div>
+            <div class="scene-sidebar-item">定价策略</div>
+            <div class="scene-sidebar-item">用户分群</div>
+          </div>
+        </aside>
+        <div class="scene-main">
+          <div>
+            <span class="badge badge-success" style="margin-bottom: 0.5rem;">brainstorming</span>
+            <h1 class="text-h1" style="margin-bottom: 0.5rem;">主页重设计</h1>
+            <p class="text-body" style="color: var(--muted);">如何让用户在 30 秒内理解产品价值？</p>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem;">
+            <div class="card">
+              <h3 class="text-h3" style="margin-bottom: 0.5rem;">想法 · 单一关键句</h3>
+              <p class="text-caption">用一句话讲清"做什么/给谁/为什么"</p>
+            </div>
+            <div class="card">
+              <h3 class="text-h3" style="margin-bottom: 0.5rem;">想法 · 演示视频</h3>
+              <p class="text-caption">15 秒视频展示核心交互</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====== Tokens viewer ====== -->
+    <section class="section">
+      <div class="section-title"><span class="section-num">05</span><h2 class="text-h2">Design Tokens</h2></div>
+      <p class="section-desc">完整 tokens 一览（JSON 格式，dao-plan 直接消费）。</p>
+      <div class="tokens-actions">
+        <button class="btn btn-outline" type="button" onclick="copyTokens('a')">复制方向 A 的 tokens JSON</button>
+      </div>
+      <pre class="tokens-viewer" id="tokens-a">{{TOKENS_A_JSON}}</pre>
+    </section>
+
+  </div>
+  <!-- ============== /方向 A panel ============== -->
+
+  <!-- 方向 B panel（AI 生成时复制方向 A 结构） -->
+  <div class="direction-panel" data-direction="b" data-active="false">
+    <section class="direction-meta">
+      <div class="direction-meta-info">
+        <div class="name">{{DIR_B_NAME}}</div>
+        <div class="text-caption">灵感参考：{{DIR_B_INSPIRATION}}</div>
+        <div class="vibe">"{{DIR_B_VIBE}}"</div>
+        <div class="fit-tag">适合：{{DIR_B_FIT}}</div>
+      </div>
+      <div class="direction-meta-swatch">
+        <div class="swatch-square" style="background: var(--bg); color: var(--fg);">bg</div>
+        <div class="swatch-square" style="background: var(--primary); color: var(--primary-fg);">primary</div>
+        <div class="swatch-square" style="background: var(--accent); color: var(--accent-fg);">accent</div>
+        <div class="swatch-square" style="background: var(--surface); color: var(--fg); border: 1px solid var(--border);">surface</div>
+      </div>
+    </section>
+    <p class="text-caption" style="margin-top: 2rem; padding: 1rem; background: var(--surface-2); border-radius: var(--radius-md);">
+      ℹ️ 方向 B 的完整组件矩阵在 AI 实际生成时会复制方向 A 的结构填充。本骨架仅展示元信息卡作为占位。
+    </p>
+  </div>
+
+  <!-- 方向 C panel（同上） -->
+  <div class="direction-panel" data-direction="c" data-active="false">
+    <section class="direction-meta">
+      <div class="direction-meta-info">
+        <div class="name">{{DIR_C_NAME}}</div>
+        <div class="text-caption">灵感参考：{{DIR_C_INSPIRATION}}</div>
+        <div class="vibe">"{{DIR_C_VIBE}}"</div>
+        <div class="fit-tag">适合：{{DIR_C_FIT}}</div>
+      </div>
+      <div class="direction-meta-swatch">
+        <div class="swatch-square" style="background: var(--bg); color: var(--fg);">bg</div>
+        <div class="swatch-square" style="background: var(--primary); color: var(--primary-fg);">primary</div>
+        <div class="swatch-square" style="background: var(--accent); color: var(--accent-fg);">accent</div>
+        <div class="swatch-square" style="background: var(--surface); color: var(--fg); border: 1px solid var(--border);">surface</div>
+      </div>
+    </section>
+    <p class="text-caption" style="margin-top: 2rem; padding: 1rem; background: var(--surface-2); border-radius: var(--radius-md);">
+      ℹ️ 方向 C 同上。
+    </p>
+  </div>
+
+</main>
+</div>
+
+<div class="toast" id="toast">已复制到剪贴板</div>
+
+<script>
+(function() {
+  const root = document.documentElement;
+  const tabs = document.querySelectorAll('[role="tab"]');
+  const panels = document.querySelectorAll('.direction-panel');
+  const themeBtn = document.querySelector('.theme-toggle');
+  const exportBtn = document.querySelector('.export-btn');
+  const toast = document.getElementById('toast');
+
+  function setDirection(dir) {
+    root.setAttribute('data-direction', dir);
+    tabs.forEach(t => t.setAttribute('aria-selected', t.dataset.direction === dir ? 'true' : 'false'));
+    panels.forEach(p => p.setAttribute('data-active', p.dataset.direction === dir ? 'true' : 'false'));
+    try { localStorage.setItem('dao-mockup-direction', dir); } catch (_) {}
+  }
+  function setTheme(theme) {
+    root.setAttribute('data-theme', theme);
+    if (themeBtn) themeBtn.textContent = theme === 'dark' ? '☾ 暗色' : '☼ 浅色';
+    try { localStorage.setItem('dao-mockup-theme', theme); } catch (_) {}
+  }
+  function showToast(msg) {
+    toast.textContent = msg || '已复制到剪贴板';
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => setDirection(t.dataset.direction)));
+  if (themeBtn) themeBtn.addEventListener('click', () => {
+    setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+  if (exportBtn) exportBtn.addEventListener('click', () => {
+    const dir = root.getAttribute('data-direction');
+    const el = document.getElementById('tokens-' + dir);
+    if (el) {
+      navigator.clipboard.writeText(el.textContent).then(() => showToast('方向 ' + dir.toUpperCase() + ' 的 tokens 已复制'));
+    }
+  });
+
+  window.copyTokens = function(dir) {
+    const el = document.getElementById('tokens-' + dir);
+    if (el) navigator.clipboard.writeText(el.textContent).then(() => showToast('已复制方向 ' + dir.toUpperCase() + ' 的 tokens'));
+  };
+
+  // 恢复偏好
+  try {
+    const savedDir = localStorage.getItem('dao-mockup-direction');
+    if (savedDir) setDirection(savedDir);
+    const savedTheme = localStorage.getItem('dao-mockup-theme');
+    if (savedTheme) setTheme(savedTheme);
+  } catch (_) {}
+
+  // 键盘快捷键
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key === '1') setDirection('a');
+    if (e.key === '2') setDirection('b');
+    if (e.key === '3') setDirection('c');
+    if (e.key === 't' || e.key === 'T') {
+      setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    }
+  });
+})();
+</script>
+</body>
+</html>
