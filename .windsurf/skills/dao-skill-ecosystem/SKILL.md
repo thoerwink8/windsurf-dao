@@ -90,6 +90,7 @@ dao skills 提供方法论（HOW），kit skills 提供实现（WHAT）。加载
 | 优化 | dao-optimize | — |
 | 测试 | dao-test | test-driven-development, webapp-testing |
 | 审美 | dao-frontend-aesthetics | ui-ux-pro-max |
+| UI 决策 | dao-ui-mockup | ui-ux-pro-max（消费方向库） |
 | 设计 | dao-research | brainstorming |
 | 安全 | — | security-audit |
 | 数据库 | — | database-patterns |

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://windsurf-dao/skills/dao-ui-mockup/design-tokens.schema.json",
+  "title": "dao-ui-mockup design tokens",
+  "description": "Design tokens 输出格式 · 供 dao-plan / dao-execute 消费的统一结构。dao-ui-mockup 第六步「固」的产物（v0.2 六步法：察→援→拟→显→择→固）。",
+  "type": "object",
+  "required": ["meta", "colors", "typography", "spacing", "radius", "elevation"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["name", "topic", "createdAt"],
+      "properties": {
+        "name": { "type": "string", "description": "方向名（如『极简空气流』）" },
+        "inspiration": { "type": "string", "description": "灵感参考（如 'Linear · Arc · Vercel'）" },
+        "vibe": { "type": "string", "description": "一句话气质" },
+        "fit": { "type": "string", "description": "适合谁" },
+        "topic": { "type": "string", "description": "任务主题（用于文件名 / 引用）" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "selectedAt": { "type": "string", "format": "date-time", "description": "用户选定时间" },
+        "projectName": { "type": "string" },
+        "projectPath": { "type": "string", "description": "目标项目根路径" }
+      }
+    },
+    "colors": {
+      "type": "object",
+      "required": ["light", "dark"],
+      "properties": {
+        "light": { "$ref": "#/$defs/colorPalette" },
+        "dark": { "$ref": "#/$defs/colorPalette" }
+      },
+      "description": "明暗双套色板。所有颜色用 hex 或 hsl() 字符串。"
+    },
+    "typography": {
+      "type": "object",
+      "required": ["fontFamilies", "scale"],
+      "properties": {
+        "fontFamilies": {
+          "type": "object",
+          "properties": {
+            "display": { "type": "string", "description": "标题字体栈" },
+            "body": { "type": "string", "description": "正文字体栈" },
+            "mono": { "type": "string", "description": "等宽字体栈" }
+          }
+        },
+        "scale": {
+          "type": "object",
+          "properties": {
+            "display": { "$ref": "#/$defs/typeStyle" },
+            "h1": { "$ref": "#/$defs/typeStyle" },
+            "h2": { "$ref": "#/$defs/typeStyle" },
+            "h3": { "$ref": "#/$defs/typeStyle" },
+            "bodyLg": { "$ref": "#/$defs/typeStyle" },
+            "body": { "$ref": "#/$defs/typeStyle" },
+            "caption": { "$ref": "#/$defs/typeStyle" },
+            "mono": { "$ref": "#/$defs/typeStyle" }
+          }
+        }
+      }
+    },
+    "spacing": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 6,
+      "description": "间距阶梯（单位 px），如 [4, 8, 12, 16, 24, 32, 48, 64]"
+    },
+    "radius": {
+      "type": "object",
+      "properties": {
+        "sm": { "type": "string", "description": "如 '0.25rem'" },
+        "md": { "type": "string" },
+        "lg": { "type": "string" },
+        "xl": { "type": "string" },
+        "full": { "type": "string", "description": "如 '999px'" }
+      }
+    },
+    "elevation": {
+      "type": "object",
+      "properties": {
+        "flat": { "type": "string", "description": "box-shadow 字符串" },
+        "low": { "type": "string" },
+        "mid": { "type": "string" },
+        "high": { "type": "string" }
+      }
+    },
+    "motion": {
+      "type": "object",
+      "properties": {
+        "durationFast": { "type": "string", "description": "如 '120ms'" },
+        "durationNormal": { "type": "string" },
+        "durationSlow": { "type": "string" },
+        "easing": { "type": "string", "description": "如 'cubic-bezier(0.4, 0, 0.2, 1)'" }
+      }
+    }
+  },
+  "$defs": {
+    "colorPalette": {
+      "type": "object",
+      "required": ["background", "foreground", "primary", "accent", "surface", "border"],
+      "properties": {
+        "background": { "type": "string" },
+        "foreground": { "type": "string" },
+        "primary": { "type": "string" },
+        "primaryFg": { "type": "string", "description": "primary 上的前景色" },
+        "accent": { "type": "string" },
+        "accentFg": { "type": "string" },
+        "surface": { "type": "string", "description": "卡片/面板基础背景" },
+        "surface2": { "type": "string", "description": "二级面板背景" },
+        "muted": { "type": "string", "description": "次要文字色" },
+        "border": { "type": "string" },
+        "success": { "type": "string" },
+        "successBg": { "type": "string", "description": "success 浅色背景" },
+        "warning": { "type": "string" },
+        "warningBg": { "type": "string" },
+        "danger": { "type": "string" },
+        "dangerBg": { "type": "string" }
+      }
+    },
+    "typeStyle": {
+      "type": "object",
+      "properties": {
+        "size": { "type": "string", "description": "如 '2.5rem'" },
+        "weight": { "type": ["string", "number"], "description": "100-900 或 'bold' 等" },
+        "lineHeight": { "type": ["string", "number"] },
+        "letterSpacing": { "type": "string", "description": "如 '-0.02em'" }
+      }
+    }
+  }
+}

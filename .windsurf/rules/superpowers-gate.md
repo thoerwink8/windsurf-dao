@@ -60,12 +60,15 @@ trigger: always_on
 | 步 | obra 概念名 ≡ dao 本地实现 | 产出 |
 |---|---|---|
 | 1 | `superpowers:using-git-worktrees` ≡ `dao-worktree` | 隔离 worktree（路径优先 `~/.config/superpowers/worktrees/`，回落 `.worktrees/`） |
-| 2 | `superpowers:writing-plans` ≡ `dao-plan` | `docs/specs/<topic>-plan.md`（与项目惯例 + dao-plan skill 一致） |
+| 2.0 ⭐ | (无 obra 对应) ≡ `dao-ui-mockup`（六步法 v0.2） | **UI 任务专用前置**——六步：察→援→拟→显→择→固。🔒×2 用户关卡：援（拍板 refCombo）+ 择（拍板方向）。产出：`_tmp/ui-mockup-<topic>-<ts>.html` + `_tmp/design-tokens-<topic>.json` + `_tmp/index-css-draft.css` + `_tmp/component-deltas.md`。非 UI 任务跳过 |
+| 2.1 | `superpowers:writing-plans` ≡ `dao-plan` | `docs/specs/<topic>-plan.md`（与项目惯例 + dao-plan skill 一致；UI 任务 plan 第一句必须 "读 _tmp/design-tokens-<topic>.json"） |
 | 3 | `superpowers:subagent-driven-development` ≡ `dao-pyramid` | 每 task 派 implementer subagent，task 间 checkpoint 让用户 review |
 | 4 | `superpowers:requesting-code-review` ≡ `dao-review` | 提交前派 reviewer subagent；核心模块（auth/payment/security/core orchestration）走 reviewer-critical |
 | 5 | `superpowers:finishing-a-development-branch` ≡ `dao-finish` | merge / PR / cleanup 仪式，**不可直接 push master** |
 
 补充：`superpowers:brainstorming` ≡ `dao-brainstorm`（需要在 plan 前 brainstorm 架构时）。
+
+**2.0 · 形 触发判据**：任务关键词含 主题/样式/色板/视觉/重设计/换肤/UI 重构/首屏改版/界面优化/Theme/Style 等 UI 视觉决策类。AI 在第 1 步完成后自评：是 UI 任务 → 必走 2.0；非 UI 任务 → 跳到 2.1。
 
 每步必有"announce at start"——明示用户当前在哪个 skill 里。
 
