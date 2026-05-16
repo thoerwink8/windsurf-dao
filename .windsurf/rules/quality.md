@@ -18,7 +18,7 @@ globs: **/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,c,cpp,h,hpp,cs,rb,php,swift,kt,
 | 测试 | 核心路径有测试吗？边界情况覆盖了吗？ | test-driven-development, webapp-testing |
 | 错误处理 | 异常不吞没？用户看到友好消息？服务端日志够？ | express-typescript-api |
 | 性能 | 大数据集分页了吗？重复计算？ | dao-optimize |
-| 前端 | 响应式？无障碍？视觉层次？**html `font-size: 16px` 显式声明了吗？** 有 `text-[< 12px]` 任意值或 Tailwind step 序列外字号吗？**shadcn 项目里有未走 `ui/*` wrap 的原生 `<select>`/`<textarea>`/`<button>`/`<input>` 吗？**（typecheck pass ≠ 体系一致） | ui-ux-pro-max, dao-ui-mockup |
+| 前端 | 响应式？视觉层次？**写前端代码 → 必走 dao-ui-mockup**（档 0 默认行为含 a11y 字号 / shadcn ui/* wrap / html 16px 锚定 / 跟 spec 不估算；六·固 6.2 mockup-vs-impl diff 验证闭环捕获偏差）。typecheck pass ≠ 视觉一致 ≠ 体系一致 | dao-ui-mockup, ui-ux-pro-max |
 
 ## 原则
 

@@ -288,25 +288,27 @@ direction:
 
 如用户要重新出方向 → 回第三步「拟」；如要重新选参考源 → 回第二步「援」。
 
-### 六、固（☴巽 · 导出 design tokens）
+### 六、固（☴巽 · 导出 + 验证闭环）
 
-> 慎终如始。把已选方向固化成可被消费的产物。
+> 慎终如始。把已选方向固化成可被消费的产物。**实施完必回头对照——闭环才能涅槃**。
 
-#### 铁律 · 转换三档（AI 不二之判）
+#### 档 0 · 默认行为（肌肉记忆 · 无需思考）
 
-> 道常无为而无不为。本步骤的技术决策由 AI 自决，不再增用户负担。
+> 道法自然。这些不是「检查项」，是 AI 写代码时的呼吸。
 
-**🔒 验证铁律 · 眼见为实（先于三档清单）**
+UI 实施前 AI 已内化的默认动作（不需每次想起）：
 
-UI 决策禁用 calculator 思维（如 `rem × 16 = 12.8 ≈ 合规` 这种理论估算）。任何关于「实际渲染像素」「字体表现」「颜色对比度」「视觉密度」的判断，必跑 chrome MCP / playwright 量 computed style 后再下结论。理论估算只能用于扫描定位，不能用作结论。**实战见证**：lesson T36（2026-05-16 TraceyU 主题字号 a11y 反例三连击）。
+- **跟 spec 走，不靠估算** —— mockup 写啥就实施啥。判断「实际渲染像素」「字体表现」「对比度」「视觉密度」必跑 chrome MCP / playwright 量 computed style，禁 calculator 思维（如 `rem × 16 = 12.8 ≈ 合规`）
+- **a11y 是底线** —— 写字号 < 12px 直接不写（无论 mockup 给啥）。`text-xs` 是最小，不用 `text-[10px]`/`text-[11px]`
+- **shadcn 项目里写 form element 第一查 `ui/`** —— `<select>`/`<textarea>`/`<input>`/`<button>` 须先看 `components/ui/<name>.tsx`，无则用项目已用的 Primitive 库（`@base-ui/react` / `@radix-ui`）创建 wrap，**不写原生**
+- **任何前端项目 `index.css` / `globals.css` 必显式 `html { font-size: 16px }`** —— 不依赖浏览器默认（防用户改 chrome://settings 默认字号 / 防 DPI 异常）。1rem = 16px 显式锚定 Tailwind step 基准
 
-把 mockup tokens 落到项目（特别是 Tailwind + shadcn/ui 项目）时按三档处理，**不得**把全部决策上抛给用户：
+**这些是「行为」不是「规则」**——若哪天 AI 又写出 `text-[10px]` 或原生 `<select>`，根因不在「忘了看规则」，而在「肌肉记忆没建立」。修法：实战中犯一次 + lesson 沉淀 + 这段强化（如本段当前 4 条肌肉记忆来自 lessons T35/T36/T37）。
 
-**档 1 · AI 必自决（不问）**
+#### 档 1 · AI 必自决（不问）
 
-- **🔒 html font-size 显式 16px 铁律**（跨项目 · 2026-05-16 拍板）：任何新前端项目或 UI 重构，必在 `index.css` / `globals.css` 显式声明 `html { font-size: 16px }`。不依赖浏览器默认值（防 chrome://settings 改默认字号、防系统 DPI 异常）。1rem = 16px 显式锚定 Tailwind 默认 step 计算基准
-- **🔒 字号体系扫描铁律**（跨项目）：实施前必扫 `text-\[.*?\]` Tailwind 任意值与 `font-size:` inline 数值。命中 < 12px → 强修；命中不在 Tailwind 0.125rem step 序列（0.75/0.875/1/1.125/1.25/1.5/1.875/2.25...）的任意值 → flag 为档 1 必修
-- **🔒 shadcn 体系裂痕扫描铁律**（跨项目 · 2026-05-16 拍板）：shadcn-style 项目内必扫原生 form element 裂痕——`grep -E '<(select\|textarea\|button(?!.*type="submit")\|input)\b'` 找未走 `ui/*` wrap 的原生元素。命中需 wrap：① 项目已用 `@base-ui/react` 或 `@radix-ui` Primitive → 创 `ui/<name>.tsx` wrap；② 无 Primitive 可用 → 原生 + shadcn className 复刻 input 风格（h-* / rounded-* / border-input / text-sm / px-2.5）。**typecheck pass ≠ 体系一致 ≠ 视觉一致 ≠ a11y 合格**。实战见证：lesson T37（TraceyU BYOK Settings 原生 `<select>` 与 shadcn `<Input>`/`<Button>` 视觉断层）
+> 道常无为而无不为。技术决策由 AI 自决，不再增用户负担。
+
 - shadcn/ui 标准 token 名映射（`--primary` / `--accent` / `--ring` 等）按"含义对齐"映射——mockup 里 `--accent`（CTA 主色）映射到 shadcn 的 `--primary`，而不是字面同名的 shadcn `--accent`（hover 浅底色）
 - HSL 三分量字符串转换（hex → `H S% L%`）：直接算
 - 生态色（`success` / `warning` / `danger` 及 `-surface`）：沿用项目现有色系微调，参考源未提供则不强行套
@@ -328,10 +330,11 @@ UI 决策禁用 calculator 思维（如 `rem × 16 = 12.8 ≈ 合规` 这种理�
 
 | 病 | 症状 | 对治 |
 |---|---|---|
-| 决策上抛 | 把 hex→HSL / 含义对齐这种自决项做成决策面板 | 对照三档表，档 1 / 档 2 全自决 |
+| 决策上抛 | 把 hex→HSL / 含义对齐这种自决项做成决策面板 | 对照三档表，档 0 / 档 1 / 档 2 全自决 |
 | 字面对齐 | 把 mockup 的 `--accent` 直接填到 shadcn 的 `--accent` | 含义对齐：mockup `--accent`（CTA）→ shadcn `--primary` |
 | 强套参考源 | 参考源没给 success 色就强行造一个 | 沿用项目现有 success，仅微调饱和度匹配新主色族 |
-| 决策面板 ≥ 4 项 | "请选 ABCD" 把活甩回用户 | 重新对照三档表——大概率档 1 / 档 2 项被误归到档 3 |
+| 决策面板 ≥ 4 项 | "请选 ABCD" 把活甩回用户 | 重新对照三档表——大概率档 0 / 档 1 / 档 2 项被误归到档 3 |
+| 加补丁式铁律 | 每发现一次 a11y/体系问题就在档 1 加 🔒 铁律段 | 反——内化为档 0 默认行为 + 6.2 验证闭环捕获，**为道日损** |
 
 #### 产出 3 文件
 
@@ -342,6 +345,68 @@ _tmp/design-tokens-<topic>.json        # 结构化 tokens（JSON Schema 见 temp
 _tmp/index-css-draft.css               # CSS variables 草稿（可直接替换项目 index.css 的 :root + .dark 段）
 _tmp/component-deltas.md               # 哪些组件需要改 + 改什么（按当前项目代码库扫描出 diff 清单）
 ```
+
+#### 6.2 · 验（实施后必跑 · 道法自然的反向闭环）
+
+> 大象无形（41 章）。无形的 spec 须有形的验证。**没有 6.2，整个 dao-ui-mockup 是开环的**——mockup 写得再美，实施可走样而无人察觉。
+
+实施代码完成后（`pnpm typecheck` 通过、commit 前），**必跑 mockup-vs-impl diff**：
+
+```javascript
+// _tmp/verify-visual-<topic>.mjs（模板见 templates/verify-visual.mjs）
+import { chromium } from '@playwright/test'
+
+const browser = await chromium.launch({ headless: true })
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+
+// 1. 截 mockup HTML（用户已选定方向）
+const mockupPage = await ctx.newPage()
+await mockupPage.goto('file://' + path.resolve('_tmp/ui-mockup-<topic>-<ts>.html'))
+await mockupPage.evaluate(() => document.documentElement.dataset.direction = '<selected>')
+
+// 2. 截 dev server
+const implPage = await ctx.newPage()
+await implPage.goto('http://localhost:1420')
+
+// 3. 量同名元素的 computed style
+const checks = [
+  { name: 'Button.primary',   mockSel: '.btn-primary',          implSel: 'button[data-slot="button"][data-variant="default"]' },
+  { name: 'Input',            mockSel: '.qa-textarea',           implSel: 'input[data-slot="input"]' },
+  { name: 'Dialog',           mockSel: '.scene-window',          implSel: '[data-slot="dialog-content"]' },
+  { name: 'SelectTrigger',    mockSel: '.dir-tabs button',       implSel: '[data-slot="select-trigger"]' },
+  // ... 关键组件全列
+]
+
+for (const c of checks) {
+  const mock = await mockupPage.locator(c.mockSel).first().evaluate(getComputedStyleSubset)
+  const impl = await implPage.locator(c.implSel).first().evaluate(getComputedStyleSubset)
+  // diff borderRadius / fontSize / padding / boxShadow / fontFamily / height
+}
+```
+
+**输出 `_tmp/visual-diff-<topic>.md`**：
+
+```markdown
+| 元素 | 维度 | mockup | 实施 | Δ | 处置 |
+|---|---|---|---|---|---|
+| Button.primary | fontSize | 13px | 14px | +1 | ✅ 设计噪音 |
+| Dialog | borderRadius | 8px | 6px | -2 | ❌ 修 `--radius` |
+| SelectTrigger | fontFamily | Inter | -webkit-system | -- | ❌ 用 ui/Select wrap |
+| StatusBadge | fontSize | 12px | 10px | -2 | ❌ a11y 改 text-xs |
+```
+
+**通过条件**（unanimously）：
+
+- 关键 token 差异 ≤ 1px = 设计噪音可接受
+- 任何 fontSize < 12px = ❌ 必修（a11y 红线）
+- shadcn 项目内 form element fontFamily 与 `ui/*` wrap 一致 = ❌ 否则用 wrap
+- borderRadius / boxShadow / padding 差异 > 2px = ❌ 必修
+
+**6.3 关卡**：visual-diff 报告全绿 → 进 dao-finish 归根；任一 ❌ → 回炉（修代码或修 mockup）。
+
+**这一步是 dao-ui-mockup 的灵魂**——没有 6.2，前面五步都是开环。有了 6.2，T35（< 12px）/ T37（shadcn 裂痕）/ radius 偏紧 等问题**自动捕获**，无需在档 1 加补丁铁律。
+
+**为道日损**：每加一次 6.2 自动捕获，可考虑减一条档 1 铁律段（lesson 入 csv 留备忘）。
 
 **`design-tokens-<topic>.json` 结构**：
 
