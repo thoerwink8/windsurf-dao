@@ -336,15 +336,43 @@ UI 实施前 AI 已内化的默认动作（不需每次想起）：
 | 决策面板 ≥ 4 项 | "请选 ABCD" 把活甩回用户 | 重新对照三档表——大概率档 0 / 档 1 / 档 2 项被误归到档 3 |
 | 加补丁式铁律 | 每发现一次 a11y/体系问题就在档 1 加 🔒 铁律段 | 反——内化为档 0 默认行为 + 6.2 验证闭环捕获，**为道日损** |
 
-#### 产出 3 文件
+#### 产出 4 文件
 
-用户选定后，AI 必须导出以下 3 个文件（喂给 dao-plan / dao-execute）：
+用户选定后，AI 必须导出以下 4 个文件（喂给 dao-plan / dao-execute / 6.2 验证）：
 
 ```
 _tmp/design-tokens-<topic>.json        # 结构化 tokens（JSON Schema 见 templates/design-tokens.schema.json）
 _tmp/index-css-draft.css               # CSS variables 草稿（可直接替换项目 index.css 的 :root + .dark 段）
 _tmp/component-deltas.md               # 哪些组件需要改 + 改什么（按当前项目代码库扫描出 diff 清单）
+_tmp/selector-mapping-<topic>.json     # mockup selector ↔ impl data-slot 映射表（v0.3 加 · 喂给 6.2 验证 · schema templates/selector-mapping.schema.json）
 ```
+
+**selector-mapping 是什么**：6.2 验证脚本要量「mockup 上 `.btn-primary` vs impl 上 `button[data-slot="button"]`」这种映射。这件事手工成分有点重——你要走过 mockup HTML + 项目代码库两边才能准确对上。作为第五选抩后的给付成果，这个工作勢势唯一。schema 示例：
+
+```json
+{
+  "meta": {
+    "topic": "<topic>",
+    "direction": "<linear|notion|claude|raycast>",
+    "mockupHtml": "_tmp/ui-mockup-<topic>-<ts>.html",
+    "implUrl": "http://localhost:1420"
+  },
+  "scopes": {
+    "homepage": {
+      "checks": [
+        { "name": "brand-mark", "mockSel": ".brand-mark", "implSel": "header [data-slot=\"logo\"]", "notes": "32x32 logo" },
+        { "name": "btn-primary", "mockSel": ".btn.btn-primary", "implSel": "aside button[data-slot=\"button\"]", "skipDims": ["padding", "height"] }
+      ]
+    },
+    "dialog-byok": {
+      "openBy": { "click": "button[aria-label*='LLM']", "wait": 500 },
+      "checks": [ ... ]
+    }
+  }
+}
+```
+
+`skipDims` 是跳过「已接受体系差异」的法宝——如 spacing 用 Tailwind step 不要求与 mockup px 任意值一致，标 `"skipDims": ["padding", "height"]` 让 6.2 不报 ⚠️。
 
 #### 6.2 · 验（实施后必跑 · 道法自然的反向闭环）
 
@@ -383,6 +411,8 @@ for (const c of checks) {
   // diff borderRadius / fontSize / padding / boxShadow / fontFamily / height
 }
 ```
+
+**输入**：`_tmp/selector-mapping-<topic>.json`（第六步固已产出·验证脚本本身只是薄运行器）。
 
 **输出 `_tmp/visual-diff-<topic>.md`**：
 

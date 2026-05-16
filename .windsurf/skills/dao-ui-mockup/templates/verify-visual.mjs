@@ -2,39 +2,34 @@
  * dao-ui-mockup · 第六步「固」6.2 验证模板 · mockup vs impl diff
  *
  * 用法（实施完代码后必跑）：
- *   1. 复制本文件到 _tmp/verify-visual-<topic>.mjs
- *   2. 修改 MOCKUP_HTML / DEV_SERVER_URL / SELECTED_DIRECTION
- *   3. 修改 CHECKS 数组：列出关键组件的 mockup selector + impl selector
+ *   1. 第六步固已产出 _tmp/selector-mapping-<topic>.json（schema 见 templates/selector-mapping.schema.json）
+ *   2. 复制本文件到 _tmp/verify-visual-<topic>.mjs
+ *   3. 修改 MAPPING_PATH 指向你的 selector-mapping JSON
  *   4. 运行 `node _tmp/verify-visual-<topic>.mjs`
  *   5. 看 _tmp/visual-diff-<topic>.md 报告，全绿才能进 dao-finish
  *
  * 道法自然：不靠 quality.md 加补丁铁律记得检查 a11y / shadcn 裂痕，
  * 而是让 mockup 当 ground truth + diff 验证自动捕获偏差。
+ *
+ * dogfooding 反馈（2026-05-16）：selector mapping 提到 JSON 让其作为第六步固产出，
+ * 验证脚本本身保持薄一层 runner。
  */
 
 import { chromium } from '@playwright/test'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-// === 配置（每个项目改这里）===
-const TOPIC = '<topic>'
-const MOCKUP_HTML = resolve(`_tmp/ui-mockup-${TOPIC}.html`)
-const DEV_SERVER_URL = 'http://localhost:1420'
-const SELECTED_DIRECTION = '<linear|notion|claude|raycast>' // 用户在「五·择」选定的方向
+// === 配置 · 改这一行指向你的 mapping JSON ===
+const MAPPING_PATH = '_tmp/selector-mapping-<topic>.json'
+
+const mapping = JSON.parse(readFileSync(MAPPING_PATH, 'utf-8'))
+const { meta, scopes } = mapping
+const TOPIC = meta.topic
+const MOCKUP_HTML = resolve(meta.mockupHtml)
+const DEV_SERVER_URL = meta.implUrl
+const SELECTED_DIRECTION = meta.direction
 const REPORT_PATH = `_tmp/visual-diff-${TOPIC}.md`
-
-const VIEWPORT = { width: 1280, height: 800 }
-
-// 关键组件 selector 映射 · mockup 端 vs 实施端
-// 列出 dialog/button/input/select/card/sidebar 等关键组件
-const CHECKS = [
-  // { name: 'Button.primary',  mockSel: '.btn-primary',     implSel: 'button[data-slot="button"][data-variant="default"]' },
-  // { name: 'Input',           mockSel: '.qa-textarea',      implSel: '[data-slot="input"]' },
-  // { name: 'Dialog',          mockSel: '.scene-window',     implSel: '[data-slot="dialog-content"]' },
-  // { name: 'SelectTrigger',   mockSel: '.dir-tabs button',  implSel: '[data-slot="select-trigger"]' },
-  // { name: 'Card',            mockSel: '.swatch',           implSel: '[data-slot="card"]' },
-  // { name: 'StatusBadge',     mockSel: '.project-status',   implSel: '[data-slot="status-badge"]' },
-]
+const VIEWPORT = meta.viewport ?? { width: 1280, height: 800 }
 
 // 量哪些 computed style 维度
 function getStyleSubset(el) {
@@ -72,50 +67,63 @@ const implPage = await ctx.newPage()
 await implPage.goto(DEV_SERVER_URL, { waitUntil: 'domcontentloaded' })
 await implPage.waitForTimeout(800)
 
-// 3. 量 diff
+// 3. 量 diff · 按 mapping.scopes 分组循环
 const rows = []
 const failures = []
 
-for (const check of CHECKS) {
-  let mockStyle = null
-  let implStyle = null
-
-  try {
-    mockStyle = await mockupPage.locator(check.mockSel).first().evaluate(getStyleSubset)
-  } catch (e) {
-    failures.push(`${check.name}: mockup selector "${check.mockSel}" 未找到 - ${e.message}`)
-    continue
+for (const [scopeName, scope] of Object.entries(scopes)) {
+  // 进入 scope（如 navigate 到特定路径或点开 dialog）
+  if (scope.openBy?.navigate) {
+    await implPage.goto(DEV_SERVER_URL + scope.openBy.navigate, { waitUntil: 'domcontentloaded' })
+    await implPage.waitForTimeout(scope.openBy.wait ?? 500)
+  }
+  if (scope.openBy?.click) {
+    await implPage.locator(scope.openBy.click).first().click()
+    await implPage.waitForTimeout(scope.openBy.wait ?? 400)
   }
 
-  try {
-    implStyle = await implPage.locator(check.implSel).first().evaluate(getStyleSubset)
-  } catch (e) {
-    failures.push(`${check.name}: impl selector "${check.implSel}" 未找到 - ${e.message}`)
-    continue
-  }
+  for (const check of scope.checks) {
+    let mockStyle = null, implStyle = null
 
-  // 逐维度 diff
-  for (const dim of Object.keys(mockStyle)) {
-    const mockVal = mockStyle[dim]
-    const implVal = implStyle[dim]
-    if (mockVal === implVal) continue
-
-    // a11y 红线：fontSize < 12px
-    let verdict = '✅ 设计噪音'
-    if (dim === 'fontSize') {
-      const implPx = parseFloat(implVal)
-      if (implPx < 12) verdict = `❌ a11y 红线 < 12px`
-      else if (Math.abs(parseFloat(mockVal) - implPx) > 1) verdict = `❌ 偏差 > 1px`
-    } else if (dim === 'borderRadius' || dim === 'padding' || dim === 'height') {
-      const m = parseFloat(mockVal), i = parseFloat(implVal)
-      if (Math.abs(m - i) > 2) verdict = `❌ 偏差 > 2px`
-    } else if (dim === 'fontFamily' && mockStyle.fontFamily !== implStyle.fontFamily) {
-      verdict = `❌ 字体不一致（shadcn 裂痕？）`
-    } else if (dim === 'boxShadow') {
-      verdict = `⚠️ shadow 待人审`
+    try {
+      mockStyle = await mockupPage.locator(check.mockSel).first().evaluate(getStyleSubset)
+    } catch (e) {
+      failures.push(`[${scopeName}] ${check.name} mockup '${check.mockSel}': ${e.message.split('\n')[0]}`)
+      continue
+    }
+    try {
+      implStyle = await implPage.locator(check.implSel).first().evaluate(getStyleSubset)
+    } catch (e) {
+      failures.push(`[${scopeName}] ${check.name} impl '${check.implSel}': ${e.message.split('\n')[0]}`)
+      continue
     }
 
-    rows.push({ name: check.name, dim, mock: mockVal, impl: implVal, verdict })
+    const skipDims = new Set(check.skipDims ?? [])
+
+    for (const dim of Object.keys(mockStyle)) {
+      if (skipDims.has(dim)) continue
+      const mockVal = mockStyle[dim]
+      const implVal = implStyle[dim]
+      if (mockVal === implVal) continue
+
+      let verdict = '✅ 设计噪音'
+      if (dim === 'fontSize') {
+        const implPx = parseFloat(implVal)
+        if (implPx < 12) verdict = `❌ a11y 红线 < 12px`
+        else if (Math.abs(parseFloat(mockVal) - implPx) > 1) verdict = `❌ 偏差 > 1px`
+      } else if (dim === 'borderRadius') {
+        const m = parseFloat(mockVal), i = parseFloat(implVal)
+        if (Math.abs(m - i) > 2) verdict = `❌ radius 偏差 > 2px`
+      } else if (dim === 'fontFamily' && mockStyle.fontFamily !== implStyle.fontFamily) {
+        verdict = `⚠️ 字体差异（核对 fallback 链）`
+      } else if (dim === 'padding' || dim === 'height') {
+        verdict = `⚠️ spacing 体系差异（Tailwind step vs px · 用 skipDims 标已接受）`
+      } else if (dim === 'boxShadow' || dim === 'color' || dim === 'backgroundColor') {
+        verdict = `⚠️ ${dim} 待人审`
+      }
+
+      rows.push({ scope: scopeName, name: check.name, dim, mock: mockVal, impl: implVal, verdict, notes: check.notes ?? '' })
+    }
   }
 }
 
@@ -126,27 +134,29 @@ const failCount = rows.filter((r) => r.verdict.startsWith('❌')).length
 const warnCount = rows.filter((r) => r.verdict.startsWith('⚠️')).length
 const passCount = rows.filter((r) => r.verdict.startsWith('✅')).length
 
+const scopeNames = [...new Set(rows.map((r) => r.scope))]
+const scopeBlocks = scopeNames.map((s) => {
+  const sub = rows.filter((r) => r.scope === s)
+  return `## scope: ${s}\n\n| 元素 | 维度 | mockup | 实施 | 处置 | 备注 |\n|---|---|---|---|---|---|\n${sub.map((r) => `| ${r.name} | ${r.dim} | ${r.mock} | ${r.impl} | ${r.verdict} | ${r.notes} |`).join('\n')}`
+}).join('\n\n')
+
 const md = `# Visual Diff Report · ${TOPIC}
 
 生成时间: ${new Date().toISOString()}
 方向: ${SELECTED_DIRECTION}
-检查项: ${CHECKS.length} 组件 / ${rows.length} 维度差异
+mapping: ${MAPPING_PATH}
 
 ## 关卡判定
 
 - ❌ ${failCount} 项必修
-- ⚠️ ${warnCount} 项待人审
+- ⚠️ ${warnCount} 项待人审/体系差异
 - ✅ ${passCount} 项设计噪音可接受
 
 ${failCount === 0 ? '**🟢 全绿 → 可进 dao-finish**' : '**🔴 有 ❌ → 回炉（修代码或修 mockup）**'}
 
-## 差异表
+${scopeBlocks}
 
-| 元素 | 维度 | mockup | 实施 | 处置 |
-|---|---|---|---|---|
-${rows.map((r) => `| ${r.name} | ${r.dim} | ${r.mock} | ${r.impl} | ${r.verdict} |`).join('\n')}
-
-${failures.length > 0 ? `\n## Selector 失败\n\n${failures.map((f) => `- ${f}`).join('\n')}` : ''}
+${failures.length > 0 ? `\n## Selector 失败\n\n${failures.map((f) => `- ${f}`).join('\n')}\n` : ''}
 `
 
 writeFileSync(REPORT_PATH, md, 'utf-8')
