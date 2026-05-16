@@ -306,6 +306,7 @@ UI 决策禁用 calculator 思维（如 `rem × 16 = 12.8 ≈ 合规` 这种理�
 
 - **🔒 html font-size 显式 16px 铁律**（跨项目 · 2026-05-16 拍板）：任何新前端项目或 UI 重构，必在 `index.css` / `globals.css` 显式声明 `html { font-size: 16px }`。不依赖浏览器默认值（防 chrome://settings 改默认字号、防系统 DPI 异常）。1rem = 16px 显式锚定 Tailwind 默认 step 计算基准
 - **🔒 字号体系扫描铁律**（跨项目）：实施前必扫 `text-\[.*?\]` Tailwind 任意值与 `font-size:` inline 数值。命中 < 12px → 强修；命中不在 Tailwind 0.125rem step 序列（0.75/0.875/1/1.125/1.25/1.5/1.875/2.25...）的任意值 → flag 为档 1 必修
+- **🔒 shadcn 体系裂痕扫描铁律**（跨项目 · 2026-05-16 拍板）：shadcn-style 项目内必扫原生 form element 裂痕——`grep -E '<(select\|textarea\|button(?!.*type="submit")\|input)\b'` 找未走 `ui/*` wrap 的原生元素。命中需 wrap：① 项目已用 `@base-ui/react` 或 `@radix-ui` Primitive → 创 `ui/<name>.tsx` wrap；② 无 Primitive 可用 → 原生 + shadcn className 复刻 input 风格（h-* / rounded-* / border-input / text-sm / px-2.5）。**typecheck pass ≠ 体系一致 ≠ 视觉一致 ≠ a11y 合格**。实战见证：lesson T37（TraceyU BYOK Settings 原生 `<select>` 与 shadcn `<Input>`/`<Button>` 视觉断层）
 - shadcn/ui 标准 token 名映射（`--primary` / `--accent` / `--ring` 等）按"含义对齐"映射——mockup 里 `--accent`（CTA 主色）映射到 shadcn 的 `--primary`，而不是字面同名的 shadcn `--accent`（hover 浅底色）
 - HSL 三分量字符串转换（hex → `H S% L%`）：直接算
 - 生态色（`success` / `warning` / `danger` 及 `-surface`）：沿用项目现有色系微调，参考源未提供则不强行套
