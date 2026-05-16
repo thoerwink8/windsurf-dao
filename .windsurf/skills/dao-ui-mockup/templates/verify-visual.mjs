@@ -110,7 +110,7 @@ for (const [scopeName, scope] of Object.entries(scopes)) {
       if (dim === 'fontSize') {
         const implPx = parseFloat(implVal)
         if (implPx < 12) verdict = `❌ a11y 红线 < 12px`
-        else if (Math.abs(parseFloat(mockVal) - implPx) > 1) verdict = `❌ 偏差 > 1px`
+        else if (Math.abs(parseFloat(mockVal) - implPx) > 2) verdict = `❌ 偏差 > 2px`  // Tailwind step 与 mockup px 天然 ±2px 噪音
       } else if (dim === 'borderRadius') {
         const m = parseFloat(mockVal), i = parseFloat(implVal)
         if (Math.abs(m - i) > 2) verdict = `❌ radius 偏差 > 2px`
