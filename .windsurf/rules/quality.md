@@ -18,7 +18,7 @@ globs: **/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,c,cpp,h,hpp,cs,rb,php,swift,kt,
 | 测试 | 核心路径有测试吗？边界情况覆盖了吗？ | test-driven-development, webapp-testing |
 | 错误处理 | 异常不吞没？用户看到友好消息？服务端日志够？ | express-typescript-api |
 | 性能 | 大数据集分页了吗？重复计算？ | dao-optimize |
-| 前端 | 响应式？无障碍？视觉层次？ | ui-ux-pro-max |
+| 前端 | 响应式？无障碍？视觉层次？**html `font-size: 16px` 显式声明了吗？** 有 `text-[< 12px]` 任意值或 Tailwind step 序列外字号吗？ | ui-ux-pro-max, dao-ui-mockup |
 
 ## 原则
 

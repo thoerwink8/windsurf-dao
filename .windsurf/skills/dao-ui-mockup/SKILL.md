@@ -300,6 +300,8 @@ direction:
 
 **档 1 · AI 必自决（不问）**
 
+- **🔒 html font-size 显式 16px 铁律**（跨项目 · 2026-05-16 拍板）：任何新前端项目或 UI 重构，必在 `index.css` / `globals.css` 显式声明 `html { font-size: 16px }`。不依赖浏览器默认值（防 chrome://settings 改默认字号、防系统 DPI 异常）。1rem = 16px 显式锚定 Tailwind 默认 step 计算基准
+- **🔒 字号体系扫描铁律**（跨项目）：实施前必扫 `text-\[.*?\]` Tailwind 任意值与 `font-size:` inline 数值。命中 < 12px → 强修；命中不在 Tailwind 0.125rem step 序列（0.75/0.875/1/1.125/1.25/1.5/1.875/2.25...）的任意值 → flag 为档 1 必修
 - shadcn/ui 标准 token 名映射（`--primary` / `--accent` / `--ring` 等）按"含义对齐"映射——mockup 里 `--accent`（CTA 主色）映射到 shadcn 的 `--primary`，而不是字面同名的 shadcn `--accent`（hover 浅底色）
 - HSL 三分量字符串转换（hex → `H S% L%`）：直接算
 - 生态色（`success` / `warning` / `danger` 及 `-surface`）：沿用项目现有色系微调，参考源未提供则不强行套
