@@ -155,16 +155,21 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 **announce**：「开始 dao-superpowers 第 4 步 · 派 reviewer」
 
 ```
-两阶段 review：
+三阶段 review：
   1. spec compliance：是否实现了 plan 里的所有点？
   2. code quality：代码质量、命名、错误处理、边界
+  3. visual compliance（UI 任务必加）：调 dao-ui-mockup 第六步 6.2 跑 mockup-vs-impl diff
+     看 _tmp/visual-diff-<topic>.md 报告，报告任一 ❌ 回打
 
 派活：
   - 普通模块 → reviewer profile
   - 核心模块 (auth/payment/security/core) → reviewer-critical profile
+  - UI 模块 → reviewer 额外负责 visual compliance（不是只看 git diff）
 ```
 
-如 review 不通过，按"升级路径"回打到对应阶段（spec 不清→plan-writer / 需求不明→brainstormer）。
+如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **visual diff 不过→dao-execute 修代码 或 dao-ui-mockup 修 mockup**。
+
+**铁律**：UI 任务跳 visual compliance review = 跳 reviewer，不可。原因：reviewer agent 看 git diff 看不见像素，视觉断层 / a11y / shadcn 裂痕 只在实际渲染中暴露。
 
 详见 `dao-review` skill。
 
@@ -173,6 +178,8 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 > 完工即归根，不留死 worktree。
 
 **announce**：「开始 dao-superpowers 第 5 步 · 归根」
+
+**前置关卡**（UI 任务专需）：归根前必有 `_tmp/visual-diff-<topic>.md` 全绿证明。无该报告 = 五步未闭环，不可进本步。
 
 ```
 四选一：
@@ -206,6 +213,8 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 | 任务太小论 | 显式触发 = 流程承诺，与代码量无关 |
 | 路径偷懒 | 必须 `docs/specs/<topic>-plan.md` 标准位置 |
 | 跳 reviewer | reviewer subagent 是质量门；自检不算 |
+| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见像素裂层；UI 任务必调 dao-ui-mockup 6.2 mockup-vs-impl diff |
+| **无 visual-diff 报告直进 finish** | UI 任务归根前必有 `_tmp/visual-diff-<topic>.md` 全绿证明，开环 = 后续新盲点 |
 | 直推 master | merge / PR 二选一，仪式必须 |
 | node_modules 继承污染 | worktree 首次 install 前必 rm -rf node_modules（参 e163） |
 
