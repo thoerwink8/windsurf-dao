@@ -76,7 +76,7 @@
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
-### 二十七个技能（`.windsurf/skills/`）
+### 二十八个技能（`.windsurf/skills/`）
 
 **元层与调度**
 
@@ -93,6 +93,7 @@
 | ------------------------- | ----------------------------------------------- |
 | `dao-debug`               | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
 | `dao-refactor`            | 安全重构：提取函数、消除重复、简化逻辑            |
+| `dao-decouple`            | 解耦镜头：六维耦合扫描→结构化解耦方案→派 refactor |
 | `dao-optimize`            | 性能分析与调优：测→策→行→验                       |
 | `dao-test`                | 测试驱动：RED-GREEN-REFACTOR + AAA 模式          |
 | `dao-observability`       | 定时任务/外部 API/锁/操作顺序调整的可观测性设计   |
