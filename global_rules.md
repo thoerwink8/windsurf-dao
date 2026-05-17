@@ -26,6 +26,16 @@
 路明则推 | 路歧则问 | 交付则待 | 分析≠交付
 续·力 (千里之行): 用户可见回复末尾必调 ask_user_question (autopilot 期间豁免)
 
+### subagent 并发铁律
+
+> 少则得，多则惑。(22 章)
+
+**同时存活的 background subagent ≤ 2 个。违者必触限流，全军覆没。**
+
+- 需 ≥3 路并行时：先派 2 个 background，等任一完成后再派下一个（串行补位）
+- 或：2 个 background + 主会话自己做第 3 路（foreground 不占 subagent 额度）
+- 计数口径：`run_subagent(is_background=true)` 且尚未收到 `subagent_completion_notification` 的 = 存活
+
 ## 四 · 谋 (重器之门 · 大事必细)
 
 > 图难于其易，为大于其细。
@@ -36,6 +46,18 @@ worktree → plan → implementer subagent → reviewer subagent → finishing-b
 复杂度 SHOULD 建议：≥3 文件 / ≥100 LOC / 核心模块 / 跨服务 / 不可逆 → 主动建议走 superpowers，用户拒绝即轻量路径。
 
 Windsurf Plan Mode（IDE 模式切换器）≠ superpowers。两套独立体系，AI 也无法可靠检测自身是否在 Plan Mode，故不依赖。
+
+## 五 · 言 (名可名 · 言之则)
+
+会话标题（conversation title）必须使用中文。无论用户用什么语言提问，自动生成的标题一律为简洁的中文短语。
+
+文档命名同理。AI 产出的 spec / archive / plan / design 等 `.md` 文件，**主标题部分用中文**，专有名词（API 名 / 库名 / 协议名）保留原文，日期 / 版本号前缀照旧。
+
+- ✅ `2026-05-17-LS-API精准注入方案-技术档案.md`
+- ✅ `2026-05-10-S0误判与会话锚定-design.md`
+- ❌ `2026-05-17-ls-api-injection-archive.md`（全英文，非中文项目语境违和）
+
+适用范围：`docs/specs/`、`docs/superpowers/specs/`、`docs/evolution.md` 等所有 AI 主动产出的知识/规划文档。已存在的英文文件名重命名时机由用户决定，不强制改造。
 
 ## 反 · 归 (太极之复 · 反者道之动)
 
