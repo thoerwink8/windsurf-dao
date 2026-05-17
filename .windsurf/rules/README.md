@@ -1,4 +1,4 @@
-# .windsurf/rules/ · 11 文件导航
+# .windsurf/rules/ · 13 文件导航
 
 > 给人看的总览。AI 自动通过 trigger 加载，不读本文件。
 
@@ -19,11 +19,13 @@
    └─ superpowers-gate.md ← superpowers 触发门控（与 Windsurf Plan Mode 解耦）
 
 第 3 层 · 操作领域（AI 按场景判断）
-├─ shell.md            ← 怎么不卡死
-├─ cli.md              ← 用什么工具
-├─ skills.md           ← 加载哪个 skill
-├─ workflow-system.md  ← 用哪个工作流
-└─ knowledge-routing.md ← 知识写到哪
+├─ shell.md              ← 怎么不卡死
+├─ cli.md                ← 用什么工具
+├─ skills.md             ← 加载哪个 skill
+├─ workflow-system.md    ← 用哪个工作流
+├─ knowledge-routing.md  ← 知识写到哪
+├─ project-structure.md  ← 文件放哪里
+└─ design-assets.md      ← 怎么做设计
 
 第 4 层 · 精准触发（系统自动）
 ├─ quality.md  ← 编辑代码文件
@@ -46,6 +48,8 @@
 | `model_decision` | `skills.md` | 决策加载哪个 skill |
 | `model_decision` | `workflow-system.md` | 决策用哪个工作流 |
 | `model_decision` | `knowledge-routing.md` | 决策知识写到哪 |
+| `model_decision` | `project-structure.md` | 创建文件/新项目/讨论文件位置 |
+| `model_decision` | `design-assets.md` | 涉及 UI 设计/组件/样式 |
 | `glob` | `quality.md` | 编辑代码文件（.ts/.py/...） |
 | `glob` | `dao-meta.md` | 编辑 dao 元层文件 |
 | `manual` | `dao-philosophy.md` | 用户输入 `@dao-philosophy` |
@@ -54,7 +58,7 @@
 
 废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `data/evolution-lessons.csv` T20-T22。
 
-| 维度 | 旧（5 文件混杂层） | 新（11 文件 5 层架构） |
+| 维度 | 旧（5 文件混杂层） | 新（13 文件 5 层架构） |
 |---|---|---|
 | 触发精准度 | 低（model_decision 全量加载） | 高（4 trigger 各得其所） |
 | 单一职责 | 弱（多领域混杂） | 强（每文件单职责） |

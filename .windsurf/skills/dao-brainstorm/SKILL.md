@@ -148,12 +148,34 @@ spec 自审通过后,**必须**问用户:
 
 任一未通 = 不进 dao-plan。
 
+## pencil 设计阶段(design 审批后、plan 前)
+
+design spec 批准后,如果项目涉及 UI,在进 dao-plan 之前先做 pencil 设计:
+
+```
+design spec 审批通过
+    ↓
+pencil 设计(有 UI 时)
+    ├── Token 层 → pen 变量(色板/字体/间距/圆角)
+    ├── 业务组件 → reusable 组件(PoolColumn / RoundSection / ...)
+    └── 页面设计稿 → 完整屏幕 × light/dark
+    ↓
+dao-plan(拆任务时引用 pencil 设计稿)
+```
+
+**何时做 pencil 设计**:design spec 含 UI 变更(新页面/新组件/视觉重设计)
+**何时跳过**:纯后端/纯逻辑/配置变更/bug 修复
+
+详见 `.windsurf/rules/design-assets.md`。
+
 ## 与其他 dao-* 协作
 
 ```
 dao-brainstorm (你)
    │
    ├── 输出: design 文档(已审批)
+   │
+   ├── [有 UI] pencil 设计阶段
    │
    ▼
 dao-plan
