@@ -49,15 +49,45 @@ Windsurf Plan Mode（IDE 模式切换器）≠ superpowers。两套独立体系�
 
 ## 五 · 言 (名可名 · 言之则)
 
-会话标题（conversation title）必须使用中文。无论用户用什么语言提问，自动生成的标题一律为简洁的中文短语。
+> 名可名，非恒名。语境为母，专名为子。母守中文，子守原文。
 
-文档命名同理。AI 产出的 spec / archive / plan / design 等 `.md` 文件，**主标题部分用中文**，专有名词（API 名 / 库名 / 协议名）保留原文，日期 / 版本号前缀照旧。
+中文项目语境下，AI 产出物按三层处理。**专有名词（API 名 / 库名 / 协议名 / 字段名）始终保留原文**，不强译。
 
-- ✅ `2026-05-17-LS-API精准注入方案-技术档案.md`
-- ✅ `2026-05-10-S0误判与会话锚定-design.md`
-- ❌ `2026-05-17-ls-api-injection-archive.md`（全英文，非中文项目语境违和）
+### 五·一 显性 · 必须中文
 
-适用范围：`docs/specs/`、`docs/superpowers/specs/`、`docs/evolution.md` 等所有 AI 主动产出的知识/规划文档。已存在的英文文件名重命名时机由用户决定，不强制改造。
+| 类型 | 规则 | 示例 |
+|---|---|---|
+| 会话标题 | 简洁中文短语 | `会话标题中文化规则` |
+| 文档命名 | `.md` 主标题中文，日期/版本前缀照旧 | ✅ `2026-05-17-LS-API精准注入方案-技术档案.md` ❌ `ls-api-injection-archive.md` |
+| commit message | 标题中文+原文专名，正文中文段落 | ✅ `revert(dev): v2.19.77 软回滚 LS API 精准注入方案` |
+| TODO 条目 | `TODO.md` / `Open Threads` 用中文 | ✅ `- 切号冷却期续传逻辑确认` |
+| 用户可见 log | webview / console 给用户看的 message | ✅ `[TitleLocalizer] ✅ 拦截 windsurf metadata` |
+
+### 五·二 半显性 · 推荐中文
+
+| 类型 | 规则 |
+|---|---|
+| 代码注释 | 中文写"为什么"，必要时英文写"是什么"。复杂逻辑必须中文标注意图。版本号 + 日期前缀（如 `v2.19.71 (2026-05-17):`）有助追溯 |
+| 调试日志 (`log()` / `console.log`) | 面向开发者也用中文，简短直接，关键变量值用原文 |
+| 错误消息 (面向用户) | 中文 + 原始错误码并列：`throw new Error('cascade metadata 未缓存 (user 尚未发消息)—走 fallback')` |
+
+### 五·三 隐性 · 保留英文
+
+**不强译**：
+
+- 标识符：变量名 / 函数名 / 类名 / 文件名（除 `.md` 文档）/ 包名 / 模块名
+- 协议字段：protobuf / JSON / API 字段名（`requestedModelUid` / `cascadeId` / `lastGeneratorModelUid`）
+- 第三方命令：`git revert` / `npm run dev` / `tsc --noEmit`
+- 错误码 / HTTP 状态：`500` / `invalid_argument` / `executor is not idle`
+- 文件扩展名：`.md` / `.ts` / `.json`
+
+### 边界判据（迷茫时）
+
+问"这是给谁看的？"：
+- **人（用户 / 中文协作者 / 中文 AI 自检）** → 中文
+- **机器（编译器 / 解析器 / 协议方）** → 原文
+
+**适用范围**: 所有 AI 主动产出。已存在的英文资产重命名时机由用户决定，不强制改造（"和大怨必有余怨，是以圣人执左契而不责于人"）。
 
 ## 反 · 归 (太极之复 · 反者道之动)
 
