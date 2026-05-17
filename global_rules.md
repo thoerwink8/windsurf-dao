@@ -26,16 +26,6 @@
 路明则推 | 路歧则问 | 交付则待 | 分析≠交付
 续·力 (千里之行): 用户可见回复末尾必调 ask_user_question (autopilot 期间豁免)
 
-### subagent 并发铁律
-
-> 少则得，多则惑。(22 章)
-
-**同时存活的 background subagent ≤ 2 个。违者必触限流，全军覆没。**
-
-- 需 ≥3 路并行时：先派 2 个 background，等任一完成后再派下一个（串行补位）
-- 或：2 个 background + 主会话自己做第 3 路（foreground 不占 subagent 额度）
-- 计数口径：`run_subagent(is_background=true)` 且尚未收到 `subagent_completion_notification` 的 = 存活
-
 ## 四 · 谋 (重器之门 · 大事必细)
 
 > 图难于其易，为大于其细。
