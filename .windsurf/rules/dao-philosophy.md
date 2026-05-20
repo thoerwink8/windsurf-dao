@@ -57,7 +57,7 @@ description: 道德经哲学——八条不变原则、实践公理、推理链(
 | `dao-philosophy.md`（本文件） | 仅深化理解，不推翻 |
 | `dao-meta.md`（治理） | 极慎重——影响所有 dao 项目守卫 |
 | `execution.md`（项目铁律） | 严肃——影响每条消息（dao sidecar 打开时） |
-| `shell.md` / `cli.md` / `skills.md` / `workflow-system.md` / `knowledge-routing.md` | 按需，通过 `/evolve` 或直接编辑 |
+| `shell.md` / `cli.md` / `workflow-system.md` / `knowledge-routing.md` | 按需，通过 `/evolve` 或直接编辑 |
 | `quality.md` | 按需 |
 
 ## 元规则加载机制（dao.ps1 link-global）

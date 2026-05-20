@@ -1,6 +1,6 @@
 ---
-trigger: model_decision
-description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / AGENT_GUIDE.md / skills/ / workflows/ / data/evolution-*.csv)、双文件模式、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
+trigger: always_on
+description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / AGENT_GUIDE.md / skills/ / workflows/ / data/evolution-*.csv)、双文件模式、Rule vs Skill 边界、中间物 _tmp/ 管理、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
 ---
 
 # 知识归位 · 写到哪
@@ -14,7 +14,7 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 | 不变原则 / 道德经哲学 | `dao-philosophy.md` / `道德经.md` |
 | 项目级铁律 | `execution.md` |
 | 普适哲学 | `global_rules.md`（用户级，跨项目） |
-| 命令安全 / 工具选择 / Skill 调用 | `shell.md` / `cli.md` / `skills.md` |
+| 命令安全 / 工具选择 | `shell.md` / `cli.md` |
 | 操作流程 | `workflows/` |
 | 具体技能（实现层） | `skills/` |
 | 固定技术栈选型（框架/脚手架） | `stacks/` |
@@ -37,6 +37,24 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 §概览（always）→ §演化索引（路由表）→ §教训 → §决策 → §指南
 
 演化详情超 200 行时分离到 `docs/evolution.md`，§索引保留每版本一行（版本 | 日期 | 摘要 | 教训号），AI 按需读取——主文件不因历史增长而膨胀。
+
+## Rule 与 Skill 边界
+
+> 朴散则为器。Rules 是朴，Skills 是器。
+
+- `.windsurf/rules/*.md` 是 **rule**：通过读取文件生效，不通过 `skill()` 调用
+- `.windsurf/skills/*/skill.md` 是 **skill**：仅当工具清单里存在对应 skill 名时才调用
+- skill 调用时机由 system prompt 中 skill 列表的 description 决定，本文不重复
+
+## 中间物 · _tmp/ 归位
+
+> 飘风不终朝。
+
+分析脚本 / 临时查询 / 调试辅助——皆为中间物：
+
+- **生时有序**：集中放 `_tmp/` 或 `_scratch/`，不散落项目根目录
+- **用后即清**：任务完成或方向确定后清理，不留熵
+- **知识不随器灭**：洞察归入项目文件或规则，脚本本身可弃
 
 ## 虚 · Memory 归位
 
