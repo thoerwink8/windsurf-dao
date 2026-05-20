@@ -16,14 +16,13 @@
 │  └─ dao-mantra.md      ← 道德经八句根基 + 场景速查表
 └─ 2b · 铁律
    ├─ execution.md        ← 项目级血泪经验
+   ├─ shell.md            ← 命令安全·全面防卡死
+   ├─ knowledge-routing.md ← 知识/中间物/Memory 归位
    └─ superpowers-gate.md ← superpowers 触发门控（与 Windsurf Plan Mode 解耦）
 
 第 3 层 · 操作领域（AI 按场景判断）
-├─ shell.md              ← 怎么不卡死
 ├─ cli.md                ← 用什么工具
-├─ skills.md             ← 加载哪个 skill
 ├─ workflow-system.md    ← 用哪个工作流
-├─ knowledge-routing.md  ← 知识写到哪
 ├─ project-structure.md  ← 文件放哪里
 └─ design-assets.md      ← 怎么做设计
 
@@ -43,11 +42,10 @@
 | `always_on` | `dao-mantra.md` | 每条消息（心怀八句根基，仅 dao sidecar） |
 | `always_on` | `execution.md` | 每条消息（仅 dao sidecar 打开时） |
 | `always_on` | `superpowers-gate.md` | 每条消息（仅 dao sidecar 打开时） |
-| `model_decision` | `shell.md` | 运行命令时 |
+| `always_on` | `shell.md` | 每条消息（命令安全为底层铁律） |
+| `always_on` | `knowledge-routing.md` | 每条消息（知识/Memory 归位为底层铁律） |
 | `model_decision` | `cli.md` | 选择工具时 |
-| `model_decision` | `skills.md` | 决策加载哪个 skill |
 | `model_decision` | `workflow-system.md` | 决策用哪个工作流 |
-| `model_decision` | `knowledge-routing.md` | 决策知识写到哪 |
 | `model_decision` | `project-structure.md` | 创建文件/新项目/讨论文件位置 |
 | `model_decision` | `design-assets.md` | 涉及 UI 设计/组件/样式 |
 | `glob` | `quality.md` | 编辑代码文件（.ts/.py/...） |

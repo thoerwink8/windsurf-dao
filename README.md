@@ -46,11 +46,10 @@
 | `dao-mantra.md`       | **always_on**  | dao 协作 mantra（道德经八句根基 + 场景速查）         |
 | `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涅槃门/续力）       |
 | `superpowers-gate.md` | **always_on**  | superpowers 触发门控（与 Plan Mode 解耦）          |
-| `shell.md`            | model_decision | 命令安全（超时/防卡/PowerShell/SSH）             |
+| `shell.md`            | **always_on**  | 命令安全（超时/防卡/交互黑名单/服务命令/PowerShell/SSH/Inline 长命令） |
 | `cli.md`              | model_decision | 工具选择（CLI-first/MCP 边界/工具箱）             |
-| `skills.md`           | model_decision | Skill 调用决策（何时加载 dao-* skill）         |
 | `workflow-system.md`  | model_decision | 工作流协作（选哪个工作流/静默深度模式）       |
-| `knowledge-routing.md`| model_decision | 知识归位（写到哪个文件/Memory 归位四步）     |
+| `knowledge-routing.md`| **always_on**  | 知识归位（写到哪/Rule vs Skill 边界/_tmp 归位/Memory 归位四步） |
 | `quality.md`          | **glob**       | 代码质量门（编辑代码文件时自动触发）          |
 | `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
 | `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |

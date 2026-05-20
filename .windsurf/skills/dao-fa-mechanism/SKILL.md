@@ -49,7 +49,6 @@ windsurf-dao/
     │   ├── execution.md         # always_on · 项目铁律
     │   ├── shell.md             # model_decision · 命令安全
     │   ├── cli.md               # model_decision · 工具选择
-    │   ├── skills.md            # model_decision · skill 调用
     │   ├── workflow-system.md   # model_decision · 工作流协作
     │   ├── knowledge-routing.md # model_decision · 知识归位
     │   ├── quality.md           # glob · 代码质量门

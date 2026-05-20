@@ -11,7 +11,7 @@
 废除"道德法术四层"概念（dao-de-layer/dao-fa-layer/dao-shu-layer/dao-quality-gate/dao-layer 5 个旧文件），对齐 Windsurf 4 种 trigger 机制重构为 9 文件单一职责架构：
 
 - **always_on**：execution.md（项目铁律）+ global_rules.md(symlink, 跨项目元规则)
-- **model_decision**：shell.md / cli.md / skills.md / workflow-system.md / knowledge-routing.md（5 个领域决策）
+- **model_decision**：cli.md / workflow-system.md（2 个领域决策；shell.md 与 knowledge-routing.md 已升级 always_on；skills.md 已并入 knowledge-routing.md）
 - **glob**：quality.md（代码文件触发）/ dao-meta.md（dao 元层文件触发）
 - **manual**：dao-philosophy.md（深度哲学，@dao-philosophy 调用）
 
