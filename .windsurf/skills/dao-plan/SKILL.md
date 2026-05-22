@@ -47,6 +47,13 @@ plan 必依赖已审批 design,不允许凭空 plan。
 
 无 design 就来 plan = 凭空,**回打 dao-brainstorm**。
 
+若由 `/dao-goal` 自动路由进入，且 Goal Contract 带有 `委托授权：delegated-continuous`：
+
+- `已审批 design` 可由 Goal Contract + 当前上下文 + AI 自审替代
+- `用户已批准方向` 可由 `delegated-continuous` 委托授权替代
+- plan 写完后不等待用户审批，记录“由 dao-goal delegated-continuous 自动通过”
+- 只有方向互斥、权限/安全/费用/不可逆风险、或无法根据 Goal Contract 裁剪时才问用户
+
 ## plan 文档格式(强制)
 
 ```markdown
@@ -152,7 +159,7 @@ Task 1 (前置) ─┬─→ Task 2 (依赖 1) ─→ Task 3
 - [ ] 每个 Task 含可执行验证命令
 - [ ] 任务依赖图清晰
 - [ ] Out of Scope 已明确(避免 worker 出轨)
-- [ ] plan 文档已 commit (`docs/specs/<topic>-plan.md`)
+- [ ] plan 文档已 commit (`docs/specs/<topic>-plan.md`)，或在 delegated-continuous 下已记录为自动通过的执行依据
 
 任一未通 = 不进 dao-execute。
 
