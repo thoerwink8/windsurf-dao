@@ -42,7 +42,7 @@ trigger: always_on
 此规则优先于简洁、格式等表达偏好。
 
 - **触发**：输出含用户可直接阅读/执行的内容 = 用户可见回答
-- **豁免**：内观模式 | `/autopilot` 工作流激活期间 | `/dao-goal` 的 `delegated-continuous` 委托连续模式 | 用户明确拒绝
+- **豁免**：内观模式 | `/autopilot` 工作流激活期间 | `/dao-goal` 的 `delegated-continuous` 委托连续模式（包含最终交付消息本身） | 用户明确拒绝
 - **选项**：2-4 个，至少一个深入 + 一个收尾/切换。用户始终可自由输入（含粘贴图片）
 
 ### 发送前门检查
@@ -56,4 +56,5 @@ trigger: always_on
 - 若发生遗漏，下一条消息的第一优先级不是继续任务，而是**先补 `ask_user_question`**
 - 根因默认判定：**执行层未做收尾门检查**，不是规则缺失
 - `/autopilot` 退出后，收尾规则立即恢复
-- `/dao-goal` 的 `delegated-continuous` 完成、遇到阻断、或用户主动中断后，收尾规则立即恢复
+- `/dao-goal` 的 `delegated-continuous` 最终交付消息仍处于豁免内，不补 ask、不问“下一步方向”；从用户下一条新请求开始，收尾规则恢复
+- `/dao-goal` 的 `delegated-continuous` 若遇到阻断或用户主动中断，退出委托连续模式后收尾规则恢复

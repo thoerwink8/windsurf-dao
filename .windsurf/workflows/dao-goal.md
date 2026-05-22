@@ -103,6 +103,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 - 不再询问“是否进入 dao-cycle / dao-plan / dao-debug”
 - 不再在 design / plan / checkpoint 处默认等待用户审批
 - 不再在阶段性收尾处调用 `ask_user_question`
+- 不再在最终交付后询问“下一步方向/是否继续”
 - 只有凭证、权限、不可逆、安全/隐私/费用风险、目标互斥歧义、用户主动中断时才询问
 
 ### 七、处理不确定点
@@ -154,7 +155,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 4. cycle 的「省」逐项回答成功标准是否满足。
 5. 范围外被误触时，必须停止并说明。
 6. 若推进模式是“持续推进”，不得把阶段性偏好问题升级为用户决策点；AI 应自行选择最小可逆路径继续。
-7. 若委托授权是 `delegated-continuous`，下游 checkpoint / 审批 / 收尾 ask 必须降级为 AI 自审记录，不中断。
+7. 若委托授权是 `delegated-continuous`，下游 checkpoint / 审批 / 收尾 ask 必须降级为 AI 自审记录，不中断；最终交付后直接停止，不问“下一步方向”。
 
 持续推进模式下，只有以下阻断允许询问用户：
 
@@ -184,6 +185,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 | 默认求确认 | 输出 Goal Contract 后问“是否准确？” | 持续推进模式下直接进入下一步 |
 | 转嫁路由 | 问用户“要不要用 dao-cycle/dao-plan” | AI 自动选择合适 dao-* |
 | 下游反问 | 自动路由后下游又触发 checkpoint/审批 ask | 继承 `delegated-continuous`，仅阻断时问 |
+| 交付后追问 | 最终报告后问“下一步方向？” | delegated-continuous 下最终交付即停止，等待用户自然发起下一轮 |
 | 无反目标 | 没有范围外 | 必写范围外 |
 | 无验收 | 没有成功标准 | 必写可验证标准 |
 

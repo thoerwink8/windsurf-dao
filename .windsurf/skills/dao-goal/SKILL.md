@@ -130,7 +130,7 @@ bug/异常现象 → dao-debug
 | 用户审批 design / plan | 降级为 AI 自审，记录“由 dao-goal delegated-continuous 自动通过” |
 | checkpoint 暂停 | 降级为 checkpoint 记录，不中断执行 |
 | 阶段性“要不要继续” | 不问，继续直到成功标准满足或遇到阻断 |
-| 收尾 ask | 不问，输出结果后停止或继续下一轮验证 |
+| 收尾 ask | 不问，输出最终交付后停止；不问“下一步方向” |
 
 ### 允许询问的阻断条件
 
@@ -148,7 +148,7 @@ bug/异常现象 → dao-debug
 | ---- | ---- | ---- |
 | 下游反问 | `dao-goal` 已持续推进，下游又问“是否继续” | 继承 delegated-continuous，自动继续 |
 | 关卡复活 | plan/design/checkpoint 又变成人类审批 | 改为 AI 自审记录 |
-| 收尾拉扯 | 每次阶段报告末尾都 ask | 仅最终交付；无阻断不问 |
+| 收尾拉扯 | 每次阶段报告末尾都 ask，或最终交付后问“下一步方向” | 仅最终交付；无阻断不问 |
 
 ## 与 /dao-cycle 的衔接
 
