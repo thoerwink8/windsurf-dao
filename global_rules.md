@@ -24,7 +24,7 @@
 人·验 (动之后): 察回响 · 验终态 · 异常即止
 
 路明则推 | 路歧则问 | 交付则待 | 分析≠交付
-续·力 (千里之行): 用户可见回复末尾必调 ask_user_question (autopilot / dao-goal delegated-continuous 期间豁免)
+续·力 (千里之行): 用户可见回复末尾必调 ask_user_question (autopilot / dao-goal delegated-continuous 期间豁免；delegated-continuous 最终交付不问“下一步方向”)
 
 ## 四 · 谋 (重器之门 · 大事必细)
 
