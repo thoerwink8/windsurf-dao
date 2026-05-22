@@ -61,7 +61,7 @@ checkpoint 是用户的关卡,不是建议。
    ├─ 跑验证命令(走 dao-verify 涅槃门)
    └─ 通过 → 进下一个;失败 → 回打
 
-4. Checkpoint(用户关卡)
+4. Checkpoint(用户关卡；若继承 dao-goal delegated-continuous，则记录但不等待)
    ├─ 阶段性完成(N 个相关 Task 一组)
    ├─ 大改动前后(改动范围超 5 文件)
    └─ 用户主动要求审视
@@ -82,7 +82,8 @@ checkpoint 是用户的关卡,不是建议。
 | 新发现 | 执行中发现 plan 缺漏 | 决定补 plan / 跳过 |
 | 关键决策点 | 多种可行实现路径未在 plan 中决策 | 选一种 |
 
-每个 Checkpoint 必须**显式呈现给用户**,不静默通过:
+每个 Checkpoint 必须**显式呈现给用户**,不静默通过。
+但若本次执行继承 `/dao-goal` 的 `delegated-continuous` 委托连续模式，Checkpoint 降级为执行记录，不调用 `ask_user_question`，不中断流程；只有权限、不可逆、安全/隐私/费用、目标互斥歧义等阻断才问用户。
 
 ```
 🔒 Checkpoint
@@ -149,15 +150,15 @@ Task 失败
 | 顺手优化 | "这里可以一起改" | 失边界 | 严守 Out of Scope |
 | 跳验证 | "改了应该好了" | 假涅槃 | 必走 dao-verify |
 | 失败再试 | "再跑一次看看" | 不诚 | 找原因,不试运气 |
-| 跳 checkpoint | 一口气跑到底 | 不慎 | 关键节点必停 |
+| 跳 checkpoint | 一口气跑到底且无记录 | 不慎 | 关键节点必记录；delegated-continuous 下记录但不停 |
 | 抢 plan 功 | "我重新设计了实现" | 不弗居 | 执行不抢功,有想法回 dao-plan |
 | 范围爬 | 加了 plan 没说的事 | 失止 | 严格止于 plan |
-| 沉默推进 | 不报 checkpoint 给用户 | 独行 | 用户要看见进度 |
+| 沉默推进 | 非委托模式下不报 checkpoint 给用户 | 独行 | 用户要看见进度；delegated-continuous 下最终报告汇总 checkpoint |
 
 ## 涅槃门(全 plan 完成前)
 
 - [ ] 所有 Task 都过了对应的 Verification
-- [ ] 每个 checkpoint 用户都已确认或显式跳过
+- [ ] 每个 checkpoint 用户都已确认、显式跳过，或在 delegated-continuous 下已记录并自动通过
 - [ ] 没有"差不多了"未验证的 Task
 - [ ] Out of Scope 边界未被破坏(主分支没意外改动)
 - [ ] 失败的 Task 都已有处置(回打 / 升级 / 跳过 + 记录)
