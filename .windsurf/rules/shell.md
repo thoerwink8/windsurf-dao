@@ -75,6 +75,16 @@ Remove-Item _tmp/probe.mjs
 - **用 `$LASTEXITCODE` 判断成功**：不是看输出有没有 "error" 字样
 - **stderr 噪音用 `2>$null` 抑制**：不要用 `2>&1` 重定向
 - **中文"所在位置 行:X" 是 ErrorRecord，不是真错误**
+- **关键验证命令自带路径锚点**：跨 workspace 或刚发生终端异常时，优先用 `git -C <repo>`、`pnpm --dir <repo>`、`npm --prefix <repo>`，不要只依赖 `Cwd` 或 shell 当前目录
+- **禁止并行跑同一终端敏感验证**：测试、typecheck、install、build 这类会产生大量 stdout/stderr 的命令串行执行；并行只用于短小只读命令，避免输出串线导致假结论
+- **验证输出加唯一 marker**：关键验证用 `BEGIN/EXIT=$LASTEXITCODE` 包裹；若 marker 缺失或输出来自错误目录，判定为终端感知异常，不判定业务失败
+
+```powershell
+Write-Output 'VERIFY_BEGIN'
+pnpm --dir "d:\path\project" test:run -- --reporter=dot
+Write-Output "VERIFY_EXIT=$LASTEXITCODE"
+exit $LASTEXITCODE
+```
 
 ## SSH 远程命令防卡
 
