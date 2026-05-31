@@ -2,7 +2,7 @@
 
 > 道法自然。人为一，AI为二，冲气以为和。
 
-一套基于道德经哲学的 AI 配对编程方法论体系，为 [Windsurf](https://codeium.com/windsurf) IDE 设计。
+一套基于道德经哲学的 AI 配对编程方法论体系，最初为 [Windsurf](https://codeium.com/windsurf) IDE 设计，现已扩展为 **Windsurf + Claude Code 双栈共存**（同源不同壳，见[Claude Code 侧](#claude-code-侧双栈共存)）。
 
 > 📖 **新用户从这里开始**：[使用手册 USAGE.md](USAGE.md) · 3 分钟入门，不需要懂道德经
 
@@ -163,6 +163,22 @@ windsurf-dao 自身也以此为范——身教重于言教。
 ### 源文本（`references/道德经.md`）
 
 老子《道德经》全文——一切规则的推导源头，不可修改。
+
+## Claude Code 侧（双栈共存）
+
+> 同源不同壳。`claude/` 与 `.windsurf/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+
+迁移到 Claude Code CLI 后新增 `claude/` 目录作为 Claude Code 侧真相源，与上面的 `.windsurf/` 并列。规则内核同源，外壳按宿主能力裁剪（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，dao 只保留不重叠的独有增量）。部署见 [MIGRATION.md · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
+
+| 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
+|---|---|---|---|
+| 场域根基 | `claude/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
+| 技能 | `claude/skills/dao-*/` | 37 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含 28 原 dao + 部分 rule 转 skill + 自检 skill） |
+| 命令 | `claude/commands/dao-*.md` | 11 | slash command，`/dao-dev` `/dao-goal` `/dao-commit` 等（≈ manual + 由 10 workflow 平移） |
+| 子代理 | `claude/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
+| 技术栈处方 | `claude/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
+
+部署入口：`dao.ps1 link-claude` 一键 symlink 上述对象到 `~/.claude/`，并幂等追加 `dao.md` 的 `@import`。
 
 ## 快速开始
 

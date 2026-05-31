@@ -6,6 +6,17 @@
 
 ---
 
+## 启用（一次性）
+
+dao 现在双栈共存，按你用的工具选一条：
+
+- **Windsurf**：跑 `dao.ps1 link-global`，并把 windsurf-dao 作为 sidecar workspace 一起打开。详见 [README · 快速开始](README.md#快速开始)。
+- **Claude Code**：跑 `dao.ps1 link-claude`，然后**重启会话**（或 `/clear`）让新 skills/commands/agents 生效。详见 [MIGRATION · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
+
+启用之后下面的用法两边通用——dao 的哲学内核同源，你正常说话就行。
+
+---
+
 ## 目录
 
 - [一 · 提需求三种姿势](#一--提需求三种姿势)
