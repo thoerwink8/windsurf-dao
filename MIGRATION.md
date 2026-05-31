@@ -2,6 +2,51 @@
 
 > 善行无辙迹。
 
+## Claude Code CLI 模式（2026.05.31+ · 双栈共存)
+
+windsurf-dao 现在**同时支持 Windsurf 与 Claude Code CLI**,同源不同壳。`claude/` 目录是 Claude Code 侧真相源,与 `.windsurf/` 并存,均由本仓库 git 管理。
+
+```
+windsurf-dao/                          ← 唯一真相源(git)
+├── claude/                            ← Claude Code 侧
+│   ├── dao.md                         ← always_on 道德经场域(@import 注入)
+│   ├── skills/dao-*/SKILL.md          ← 39 skills(渐进披露)
+│   ├── commands/dao-*.md              ← 11 slash commands
+│   ├── agents/dao-*.md                ← 8 subagents(金字塔调度)
+│   └── stacks/                        ← 技术栈处方
+├── .windsurf/                         ← Windsurf 侧(rules/skills/workflows/stacks)
+├── global_rules.md                    ← Windsurf 元规则源
+└── dao.ps1                            ← 链接管理(双栈)
+
+~/.claude/                             ← Claude Code 用户级(全局生效)
+├── CLAUDE.md                          ← 末尾 @import → windsurf-dao/claude/dao.md
+├── skills/dao-*    ── symlink ──▶ windsurf-dao/claude/skills/dao-*
+├── commands/dao-*  ── symlink ──▶ windsurf-dao/claude/commands/
+└── agents/dao-*    ── symlink ──▶ windsurf-dao/claude/agents/
+```
+
+**部署(一步)**:
+```powershell
+.\dao.ps1 link-claude          # symlink skills/commands/agents + 幂等追加 dao.md @import
+.\dao.ps1 link-claude -DryRun  # 预览
+```
+之后重启 Claude Code 会话(或 `/clear`)即生效。所有项目全局可用,无论在哪个目录工作。
+
+**机制对照(Windsurf 4 trigger → Claude Code)**:
+
+| Windsurf trigger | Claude Code 落点 |
+|---|---|
+| `always_on` | `claude/dao.md` 经 `~/.claude/CLAUDE.md` @import(每条消息常驻) |
+| `model_decision` | Skills(渐进披露,只读 name+description,相关才载全文) |
+| `manual`(@) | Slash command / 加载对应 skill |
+| `glob`(文件类型触发) | 转 skill(description 写明场景)+ 可选 PreToolUse hook 兜底 |
+
+**迁移取舍(为道日损)**:与 Claude Code 内置能力(shell 沙箱 / git 安全 / 破坏性操作确认)重叠的规则已删,只留 dao 独有增量。道德经场域从 486 行精简到 126 行(砍 74%)。续力铁律「每条必问」降级为「路歧则问」,对齐 Claude Code 克制原则。
+
+详见 `claude/skills/dao-fa-mechanism/SKILL.md`(Claude Code 机制全解)。
+
+---
+
 ## Sidecar 模式（推荐，2026.04.11+）
 
 将 windsurf-dao 作为伴生 workspace 打开。Windsurf 自动跨 workspace 聚合 rules/skills/workflows，无需链接。
@@ -31,6 +76,84 @@ windsurf-dao (源仓库, sidecar workspace)
 1. `dao.ps1 link-global`（一次性，链接全局规则）
 2. 在 IDE 中添加 windsurf-dao 为 workspace
 3. 完成
+
+---
+
+## Claude Code 部署（双栈共存）
+
+> 同源不同壳。`claude/` 与 `.windsurf/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+
+windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Code 双栈**。新增 `claude/` 目录作为 Claude Code 侧真相源，与 `.windsurf/` 并列共存，规则内核同源，只是按各自宿主的能力裁剪外壳（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，`claude/dao.md` 只保留与之不重叠的 dao 独有增量）。
+
+### 一键部署
+
+```powershell
+# 部署 dao 到 Claude Code（全局生效）
+.\dao.ps1 link-claude
+
+# 预览不写入
+.\dao.ps1 link-claude -DryRun
+```
+
+`link-claude` 做两件事，幂等可重复跑：
+
+1. **symlink** `claude/{skills,commands,agents}` 下的 `dao-*` 项到 `~/.claude/{skills,commands,agents}`（skills 链目录，commands/agents 链文件）。
+2. **幂等追加** `claude/dao.md` 的 `@import` 到 `~/.claude/CLAUDE.md`——已存在则跳过，不重复写。
+
+跑完**重启 Claude Code 会话**（或 `/clear`）才能让新的 skills/commands/agents 被识别。
+
+前提与 Windsurf 侧一致：Windows Developer Mode（symlink 权限）。
+
+### @import 机制
+
+Claude Code 没有 Windsurf 的 always_on trigger，但支持在 `~/.claude/CLAUDE.md` 中用 `@<path>` 语法导入外部文件。`link-claude` 写入的那行：
+
+```
+@D:/frank/windsurf-dao/claude/dao.md
+```
+
+让 `dao.md`（道德经场域根基）成为**每条消息常驻**的全局上下文——等价于 Windsurf 侧 always_on 规则的角色。因为是 symlink 之外的 `@import` 引用，编辑 `claude/dao.md` 即时生效，无需重新部署。
+
+### 四种 Windsurf trigger 的映射
+
+Windsurf 用 frontmatter 的 4 种 trigger 控制规则加载时机。Claude Code 机制不同，dao 把它们映射为：
+
+| Windsurf trigger | 语义 | Claude Code 对应 | 落地 |
+|---|---|---|---|
+| `always_on` | 每条消息常驻 | `CLAUDE.md` 的 `@import` | `claude/dao.md` 全局注入 |
+| `model_decision` | 模型判断相关才加载 | **skills 渐进披露** | `claude/skills/dao-*/`，按 `description` 自动调度全文 |
+| `manual` | 用户显式调用 | **slash command** | `claude/commands/dao-*.md`，`/dao-dev` 等 |
+| `glob` | 匹配文件路径时触发 | skill + 可选 hook | 做成 skill 按需加载；需路径硬触发时配 hook |
+
+核心差异：Windsurf 的 model_decision/glob 由 IDE 按规则元数据决定注入；Claude Code 的 skill 走**渐进披露**——平时只读 `description`，模型判断相关才加载 skill 全文，更省上下文。
+
+### 双栈共存关系
+
+```
+windsurf-dao/
+├── .windsurf/              ← Windsurf 侧外壳
+│   ├── rules/              ← 11 文件 4 trigger（always_on/model_decision/glob/manual）
+│   ├── skills/dao-*/       ← 28 skills
+│   ├── workflows/dao-*.md  ← 10 workflows
+│   └── stacks/             ← 技术栈处方
+├── claude/                 ← Claude Code 侧外壳（同源不同壳）
+│   ├── dao.md              ← always_on 根基（经 @import 全局注入）
+│   ├── skills/dao-*/       ← 37 skills（28 原 dao + 部分 rule 转 skill + 自检 skill）
+│   ├── commands/dao-*.md   ← 11 slash commands（由 10 workflow 平移）
+│   ├── agents/dao-*.md     ← 8 subagents（服务 dao-pyramid 金字塔调度）
+│   └── stacks/             ← 技术栈处方
+├── global_rules.md         ← Windsurf 元规则（link-global 部署）
+└── dao.ps1                 ← link-global / link-rules-all / link-claude
+```
+
+两栈各自部署、互不干扰：用 Windsurf 跑 `link-global` + sidecar workspace；用 Claude Code 跑 `link-claude`。同一套 dao 哲学内核，两边都保留。
+
+### 迁移的四个决策
+
+1. **symlink 真相源**：`claude/` 是唯一真相，`~/.claude/` 下全是 symlink，编辑源文件即时生效，零副本。
+2. **借机精简**：删掉与 Claude Code 内置能力（shell 沙箱 / git 安全 / 破坏性操作确认）重叠的规则，为道日损。
+3. **双栈共存**：不删 `.windsurf/`，两套外壳并存，按宿主选用。
+4. **续力铁律降级**：从 Windsurf 的"每条回复必问下一步"降为"路歧则问"——对齐 Claude Code 回合制的克制原则，路明则静默推进，只在方向不明 / 多方案待拍板 / 不可逆决策时才问。
 
 ---
 

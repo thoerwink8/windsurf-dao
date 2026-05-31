@@ -1,0 +1,572 @@
+---
+description: 自动驾驶模式：AI 自主分解目标、递归执行、反思间隙、语义回退，直到目标完全达成或用户中断。当用户说"自动驾驶"、"autopilot"、"帮我自动完成"时触发。
+argument-hint: ""
+---
+
+# 自动驾驶 · Autopilot
+
+> 为无为，则无不治。知常曰明，益生曰祥，心使气曰强。
+
+**此 command 是隔离模式**：激活期间 AskUserQuestion 工具豁免（等同于内观模式），退出后完全恢复正常。
+
+---
+
+## 设计哲学
+
+> TODO.md 是任务图的唯一载体。AGENT_GUIDE.md 是人类可读知识库。autopilot 不创建平行系统——它直接操作这两个文件和 CSV 演化源。
+
+| 文件 | 角色 | autopilot 行为 |
+|------|------|---------------|
+| `TODO.md` | 任务图（待做 / 已做） | 读取 `- [ ]` 作为任务源；执行后回写 `- [x]` |
+| `AGENT_GUIDE.md` | 人类可读知识库 | 维护项目概览、架构决策、开发指南与 CSV 指针 |
+| `data/evolution-*.csv` | 演化真相源 | 收尾时先 `ensure`，再写入演化条目与教训 |
+| `state.json` | 执行元数据（仅回退用） | 只存 commit hash 和 rollback_cmd；完成后删除 |
+
+两个文件不存在时 autopilot **创建**（初始化为标准格式），而非另建 plan.md / archive。
+
+---
+
+## 激活条件
+
+- 用户显式说"自动驾驶"、"autopilot"、"帮我自动完成"
+- 用户给出模糊目标，期望 AI 自主推进到完成
+
+---
+
+## 核心原则
+
+| 原则 | 含义 |
+|------|------|
+| **目标锚** | 原始用户目标是不变的参照系，所有判断都对照它，防止漂移 |
+| **单一载体** | TODO.md 是任务的唯一来源和状态，AGENT_GUIDE.md 是知识的唯一归宿，不建平行文件 |
+| **任务图** | 任务有依赖关系，不是线性队列；移除一个任务需分析级联影响 |
+| **一任务一 commit** | 每个 task 对应一个 git commit，是语义回退的最小单位 |
+| **feature branch** | 所有工作在独立分支，主干不受影响 |
+| **新鲜用户启发** | 反思时以"只读过原始需求的用户"为视角，防止 AI 完成偏误 |
+| **工件先行** | 设计方案前必须先挖掘：参考实现（_tmp/、竞品）→ 本项目已有基础设施 → 上下游系统实际存储的数据。从实物推导方案，不从理论协议推导。闭门造车是最贵的第一性原理。 |
+| **隔离** | 本模式行为只在 command 激活期间有效，不污染全局规则 |
+
+---
+## 单 Task 闭环铁律
+
+> 慎终如始，则无败事矣。— 第 64 章
+
+dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。
+**绝对不允许「批量推进」**——连做多个 task 才一次 commit / update / 验证。
+
+### 为什么不可跨 task 合并
+
+1. **回退最小单位 = 一个 task**：合并多 task 一 commit，丢失精确 git revert 能力；用户说「撤销 Task X」时无法做到
+2. **state.json 是跨 session 真相源**：攒着不写，session 中断时下次恢复看到的是「上一批没完成」的假象，可能重做或漏做
+3. **TODO.md 是用户审查唯一接口**：攒着不更新，用户看到的是「假进度」——他以为还在 Task A，其实 Task A/B/C/D 都做了但都没标
+4. **验证不能合并**：dao-test 铁律「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
+
+合并多 task = 用「效率」的虚名，损「可审计 / 可回退 / 可恢复」的实质，是反 dao 的「成事而败之」。
+
+### 唯一允许的合并场景
+
+**强耦合组合 task**：A 的 verify 隐含 B 的前置（如「装包 + 写 config」，写 config 的 verify 必然包含装包成功）。
+- 必须在 commit message 显式写组合 ID：`autopilot(TG-1+TG-2): ...`
+- 必须在 §2.1.1 涅槃门中标明这是组合 task
+- ≤ 2 个 task 合并；超过 2 个一律拆开
+
+---
+
+## 流程
+
+### 一、激活（☲视 · 建立意图锚）
+
+#### 1.1 初始化项目文件
+
+读取或创建两个核心文件：
+
+**TODO.md**（若不存在则创建）：
+```markdown
+# [项目名] · TODO
+
+> 任务清单。
+
+## ✅ 已完成
+
+## ❌ 已作废
+
+## 🚧 待实现
+
+```
+
+**AGENT_GUIDE.md**（若不存在则创建）：
+```markdown
+# [项目名] · Agent 指南
+
+> 活体知识库。记录项目概览、架构决策、开发指南，并指向 `data/` 中的演化 CSV。
+
+## 一、项目概览
+
+[待补充]
+
+## 二、演化索引
+
+> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
+
+```
+
+#### 1.2 意图建模
+
+读取 TODO.md 中 `🚧 待实现` 下的 `- [ ]` 条目，结合用户当前目标，建立**意图模型**：
+
+```
+原始目标：[用户原话，不改动]
+成功标准：[具体可验证的完成条件，与 TODO.md 条目对应]
+范围：[本次执行哪些 TODO 条目，ID 列表]
+范围外：[明确不做什么]
+风险容忍：[从上下文推断：保守/正常/激进]
+```
+
+- TODO.md 有对应条目 → 直接映射，保留原 ID（如 `N1`、`F4`）
+- 目标是全新内容 → 先在 TODO.md `🚧 待实现` 区追加条目，再映射
+
+小缺失 → AI 自行补全并注明。大缺失（影响方向）→ 一轮 AskUserQuestion 工具询问。
+
+#### 1.2.1 Open Threads 扫描
+
+如果 TODO.md 存在 `## 🌳 Open Threads` 区域（由 `/dao-thread-tree` 沉淀），扫描其中的 `- [ ]` 条目并按类型前缀分类：
+
+| 前缀 | 权限 | autopilot 行为 |
+|------|------|---------------|
+| 🔀 | 🔴 红灯 | **绝不自动执行**。跳过，累积到"需人类决策"报告 |
+| ✋ | 🟡 黄灯 | 评估置信度：高置信→执行并标注 `⚡ AI assumed` + 理由；低置信→跳过，加入待决报告 |
+| 🔨 | 🟢 绿灯 | 纳入任务图，正常自动执行 |
+
+**置信度评估标准**（仅 ✋ 黄灯项）：
+- **高置信**：上下文中有强暗示用户倾向某方案，或方案是讨论中的唯一候选
+- **低置信**：存在多个未排除的方案，或用户曾表达犹豫
+
+Open Threads 中的 🔨 项与 `🚧 待实现` 中的普通任务同等对待，合并进任务图。
+
+#### 1.3 构建任务图（写入 state.json）
+
+state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` / `tasks[]`。每个 task 含：`id` `desc` `todo_line`（精确定位回写用）`depends_on` `status` `commit` `rollback_cmd`。
+
+依赖关系从任务语义推断；无明确依赖则设为空。
+
+**分解原则**：
+- 每个 Task 是独立的逻辑单元（一个功能、一个模块、一个修复）
+- 依赖关系尽量扁平（宽而浅，优于深依赖链）
+- Task 粒度：≤ 1 小时工作量，确保 context 内可完成
+
+#### 1.3.0 state 文件为什么放 `.dao-autopilot/`（重要设计约束）
+
+> **铁律**：autopilot state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放进任何 AI 配置目录。
+
+**原因**：state.json 是执行元数据，不是项目产物——它只服务于回退与跨 session 恢复。把它放进项目根的独立 `.dao-autopilot/` 目录，并通过 `.git/info/exclude` 本地排除，可以做到：
+
+- 不进入 git 历史，不污染 commit
+- 不与项目自身配置（CLAUDE.md / settings.json / 其它工具配置目录）混淆，AI 的 dao 体系约束（见 `claude/dao.md`）始终正常加载
+- 完成后整目录可删，项目回到干净态
+
+> 历史教训（2026-05-11 TraceyU M1）：早期把 state 写进 AI 配置目录，导致项目级配置被误判为"自带配置"，dao 体系规则（如「禁文件式 memory 滥写」铁律）整体失效。移到独立 `.dao-autopilot/` 后问题消失。
+
+#### 1.3.1 mode 状态机（自动续推依据）
+
+> **背景**：当存在外部自动续推机制（监视 `.dao-autopilot/state.json`，在 `mode === "running"` 且 AI 长时间静默时自动注入 `continue` 让 autopilot 恢复推进）时，`mode` 字段是它判断「该注入 / 该避让」的依据。单 run 注入有上限以防失控。即便没有外部机制，显式管理 mode 也让跨 session 恢复更可靠。
+
+**mode 字段必须显式管理**，让续推机制知道何时该注入、何时该避让：
+
+| 阶段 | mode 值 | 续推机制行为 |
+|------|---------|--------------|
+| 1.6 激活后进入执行循环 | `"running"` | ✅ 监听是否 stalled，stalled 则注入 continue |
+| 2.2 错误处理（系统级阻断写 checkpoint）| `"running"` | 同上（错误恢复也算 stalled 的一种） |
+| §三 用户中断 → AskUserQuestion 前 | `"awaiting_user_decision"` | ❌ **不注入**——这是设计上的用户决策点 |
+| §三 ask 返回后继续执行 | `"running"` | 恢复 ✅ |
+| §四 用户范围调整 ask | `"awaiting_user_decision"` | ❌ 不注入 |
+| §五 收尾 ask（合并/继续/回退）| `"awaiting_user_decision"` | ❌ 不注入 |
+| §五.4 完成清理前 | `"completed"` | ❌ 不注入 |
+| §四 用户主动 abort | `"aborted"` | ❌ 不注入 |
+| §五.4 完成清理后 | _state.json 删除_ | 文件不存在 = 续推机制跳过 |
+
+**mode 转换操作**（用 Bash 工具执行；以下为 PowerShell 写法，其它 shell 等价处理）：
+
+```powershell
+# 进入 AskUserQuestion 前
+$state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
+$state.mode = "awaiting_user_decision"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
+
+# ask 返回后继续
+$state.mode = "running"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
+
+# 完成时
+$state.mode = "completed"
+$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
+# 紧接着 §5.4 删除 state.json
+```
+
+**续推机制写入的字段**（autopilot 流程读到时透传保留）：
+
+- `_stalled_inject_count`: number — 注入次数计数
+- `_last_stalled_inject_at`: ISO 时间戳 — 最近一次注入时间
+
+#### 1.4 创建工作分支
+
+```powershell
+git checkout -b autopilot/[goal-slug]
+
+# 确保 state.json 不进入 git 历史
+$excludeFile = ".git\info\exclude"
+$excludeEntry = ".dao-autopilot/"
+if (-not (Select-String -Path $excludeFile -Pattern [regex]::Escape($excludeEntry) -Quiet)) {
+    Add-Content $excludeFile "`n# autopilot state (generated)`n$excludeEntry"
+}
+New-Item -ItemType Directory -Force ".dao-autopilot" | Out-Null
+```
+
+#### 🔒 唯一激活关卡
+
+向用户展示：
+
+```
+## 🚗 自动驾驶准备就绪
+
+### 意图模型
+目标：[原始目标]
+成功标准：
+  - [ ] 标准A（对应 TODO.md N1）
+  - [ ] 标准B（对应 TODO.md N2）
+范围外：[明确不做的事]
+
+### 任务图（共 N 个，来自 TODO.md）
+N1 → N2 → N4
+N1 → N3 → N4
+
+### 工作分支：autopilot/[goal-slug]
+
+→ 确认后开始，过程中静默执行，发任何消息可中断查看进度
+```
+
+用户确认 → 进入执行循环
+用户调整 → 修订后重新确认
+
+---
+### 二、执行循环（☳触 · 静默推进）
+
+> 大音希声。善行无辙迹。
+
+**激活期间：不发 chat 消息，不调用 AskUserQuestion 工具。进度只写文件。**
+
+#### 2.1 单任务执行
+
+对每个 `status: pending` 且依赖已满足的 Task：
+
+1. 执行任务（编码/构建/测试，视任务而定）
+2. 验证任务结果（构建通过、功能可运行）
+3. Git commit：
+   ```powershell
+   git commit -m "autopilot([ID]): [task description]"
+   ```
+4. **回写 TODO.md**：将 `- [ ]` 改为 `- [x]`（定位用 `todo_line` 字段）
+5. 更新 `state.json`：`status: "done"`，记录 commit hash 和 rollback_cmd
+
+#### 2.1.1 Task 涅槃门（每 task 必过，5 项全勾才能进下一 task）
+
+完成一个 task 时，AI 必须显式输出以下涅槃证据，作为本 task 闭环的实证：
+
+```
+Task <ID> 涅槃 ✅
+- [x] 1. 实现完成（文件路径：...）
+- [x] 2. 验证通过（命令：xxx，关键输出：xxx）
+- [x] 3. Git commit（hash: xxxxxxx）
+- [x] 4. TODO.md 已 - [x]
+- [x] 5. state.json 已 status: done + commit hash
+```
+
+**任一未勾 → 留在当前 task，禁止开始下一个。**
+**跨 task 推进 = 违反 §2.1，等同于「假涅槃」。**
+
+这个门对应 dao-test 的「不见绿不言完成」——使「是否完成」从 AI 内部判断变为可外部审计的显式证据。
+
+#### 2.2 错误处理
+
+| 错误类型 | 行为 |
+|---------|------|
+| 可恢复（构建失败、小 bug）| 自动修复，记录日志，继续 |
+| 需判断（需求歧义，多种可行路径） | 跳过此 Task，标记 `blocked`，继续其他 Task |
+| 系统级阻断（核心依赖缺失） | 写 checkpoint，**主动发消息**告知用户，等待 |
+| Risk ≥ 2（不可逆操作） | 暂停，**必须**用户确认后才执行 |
+
+#### 2.3 间隙分析（Gap Analysis）—— 每轮结束后
+
+每完成一批 Task 后，AI 执行反思：
+
+**新鲜用户测试**：
+> "如果一个只读过原始目标的用户，现在看到系统/代码，他会说'是的，这就是我要的'吗？"
+
+逐条检查成功标准：
+
+```
+✓ 标准A：[已达成/未达成/部分]
+✗ 标准B：[缺口描述]
+？标准C：[不确定，需要...]
+```
+
+- 全部 ✓ → 退出循环，进入「收尾」
+- 有缺口 → 在 TODO.md `🚧 待实现` 追加新条目，加入任务图，继续循环
+
+**防止无限循环**：连续 2 轮 Gap Analysis 后新增 Task 数为 0 且仍有缺口 → 退出并报告，让用户决策。
+
+---
+
+### 三、用户中断（☵坎 · 随时响应）
+
+用户在执行期间发送任何消息：
+
+1. 读取 `state.json` + 当前 `TODO.md` 状态
+2. 展示当前进度摘要（TODO.md 中 `[x]` vs `[ ]` 数量即是进度）：
+   ```
+   ## 📊 自动驾驶当前状态
+   完成：N1 N2 N3（3/7，见 TODO.md ✅ 区）
+   进行中：N4
+   待执行：N5 N6 N7
+   
+   当前分支：autopilot/[goal-slug]
+   ```
+3. 处理用户消息（可能是：查看/调整/回退/停止）
+4. AskUserQuestion 工具：继续/调整/回退/停止
+
+---
+
+### 四、语义回退（☴巽 · 精确撤除）
+
+用户说"移除 N2 和 N4"时：
+
+#### 4.1 依赖影响分析
+
+```
+N2 被移除
+  直接影响：N4（依赖 N2）→ 已标记移除
+  间接影响：N5（依赖 N2+N3）→ 待重新评估
+  无影响：N1 N3 N6
+```
+
+展示影响分析，用 AskUserQuestion 工具确认移除范围。
+
+#### 4.2 技术回退
+
+```powershell
+git revert [N2-commit-hash] --no-edit
+git revert [N4-commit-hash] --no-edit
+```
+
+#### 4.3 同步 TODO.md
+
+回退后，将 TODO.md 中对应 `- [x]` 改回 `- [ ]`（或标记为 `- [~] 已移除`）。
+
+#### 4.4 目标重推演
+
+移除后重新执行 Gap Analysis：
+- 原始目标是否仍可达成（不含 N2 N4）？
+- 是 → 追加新 Task 到 TODO.md，继续
+- 否 → 告知用户，等待决策
+
+---
+### 五、收尾（☶艮 · 涅槃交付）
+
+退出执行循环后：
+
+#### 5.1 最终验证
+
+对照成功标准逐条验证（同 Gap Analysis，但这是最终核查）。
+
+#### 5.2 写入演化记录
+
+加载 `dao-evolution` skill，先运行 `search.py ensure --data-dir <project>/data`，再调用 `write_entry` + `write_lesson` 写入 `data/` CSV。
+
+`AGENT_GUIDE.md` 仅维护项目概览、架构决策、开发指南与 CSV 指针，不再兼容双写演化条目。
+
+> 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
+
+
+#### 5.2.5 lesson 上提评估关卡（强制）
+
+> 知常曰明。重要 lesson 不上提 = 失明。
+
+§5.2 把 lesson 写入 `data/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
+
+**评估三问**(逐条 lesson 过):
+
+1. **跨项目可复用方法论？** → 评估上提到 `claude/skills/dao-*/SKILL.md` 对应 skill
+   - 例: HTTP socket.on(end) 误诊 → dao-debug skill 加 P 模式
+   - 例: SQL 节流 > JS Map → dao-execute 或新 skill
+
+2. **项目反复会撞的特定坑？** → 评估上提到该项目 `AGENT.md` 「项目特定坑」段
+   - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
+   - 例: 项目 schema 反复踩的 migration 坑 → 项目 AGENT.md
+
+3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `claude/dao.md` 对应规则段或某 skill
+   - 例: superpowers 实战见证 → `claude/dao.md` superpowers-gate 段末尾加见证
+   - 例: 发现 worktree 流程漏洞 → `claude/dao.md` 心法段或对应 skill
+
+**输出格式**(autopilot §5.3 报告内必含):
+
+```
+### lesson 上提评估
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
+- ...
+```
+
+**上提归位表**(参考 `claude/dao.md` 知识归位段):
+
+| 性质 | 位置 |
+|---|---|
+| 跨项目通用调试模式 | `claude/skills/dao-debug/SKILL.md` |
+| 跨项目通用执行模式 | `claude/skills/dao-execute/SKILL.md` |
+| 跨项目通用 review/finish | `claude/skills/dao-review`/`dao-finish/SKILL.md` |
+| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
+| 流程规则修订 | `claude/dao.md` 对应规则段 |
+| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
+| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
+
+**反模式**:
+
+| 病 | 症状 | 对治 |
+|---|---|---|
+| 写完 CSV 就跑 | 单 task 写完 entry/lesson 直接进 §5.3 报告,不评估上提 | §5.2.5 是 §5.3 的硬前置,跳过 = §5 整体未完成 |
+| 全判"无需上提" | 默认全 skip,跳过显式评估 | 必须**逐条说出**判定依据,即便结论是"仅留 CSV" |
+| 边界模糊就不提 | "我不确定是不是跨项目通用" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
+
+
+#### 5.3 最终报告
+
+```
+## 🏁 自动驾驶完成
+
+### 原始目标
+[用户原话]
+
+### 完成情况（见 TODO.md）
+✓ 已完成：N1 N2 N3 N5（共 4 个，已标记 [x]）
+～ 已移除：N4（用户决策，已标记 [~]）
+✗ 未完成：N6（blocked，已保留 [ ] 待下次）
+
+### Open Threads 处理（若有）
+🟢 已执行：🔨 [任务标题]（已标记 [x]）
+🟡 已推进：✋ [确认项]（⚡ AI assumed：[理由]，请验证）
+🔴 需你决策：🔀 [决策项]（未触碰，仍为 [ ]）
+
+### 成功标准验证
+✓ 标准A：[验证方式 + 结果]
+✓ 标准B：[验证方式 + 结果]
+
+### lesson 上提评估（见 §5.2.5，§5.3 前必须完成 — 即便结论"仅留 CSV"也必须显式说明）
+- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
+- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
+- ...
+
+### 工作产物
+分支：autopilot/[goal-slug]
+Commits：[hash 列表]
+合并到主干：git merge autopilot/[goal-slug] --no-ff
+
+### 撤销整个 autopilot 的方式
+git checkout main && git branch -D autopilot/[goal-slug]
+```
+
+AskUserQuestion 工具：合并到 main / 继续完善 / 回退某些任务 / 保持现状
+
+#### 5.4 清理
+
+```powershell
+# 删除执行元数据（任务状态已在 TODO.md，知识已在 AGENT_GUIDE.md）
+Remove-Item ".dao-autopilot\state.json"
+# 顺手删除空目录(mode=completed 后整个 .dao-autopilot/ 应该不再需要)
+if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) {
+  Remove-Item ".dao-autopilot" -ErrorAction SilentlyContinue
+}
+```
+
+**退出自动驾驶模式，AskUserQuestion 工具规则恢复正常。**
+
+---
+### 六、跨 Session 恢复（含 stale 检测）
+
+> 慎终如始 + 不知常妄作。30 天前的死 state.json 视为待恢复任务,等于妄作。
+
+如果 session 中断，下次对话开始时：
+
+#### 6.1 stale 检测（先做,避免误恢复死文件）
+
+1. 检查 `.dao-autopilot/state.json` 是否存在
+2. 不存在 → 跳过此节,正常进入新对话
+3. 存在 → **先看 mtime + mode 判 stale**：
+   ```powershell
+   $state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
+   $age = ((Get-Date) - (Get-Item ".dao-autopilot/state.json").LastWriteTime).TotalDays
+   $isStale = $age -gt 7 -and $state.mode -in @("idle","aborted","completed")
+   ```
+4. 若 stale (≥7 天 + mode 非 running/awaiting_user_decision) → **不视为待恢复任务**,直接 ask:
+   ```
+   检测到 stale autopilot state（mode=idle，36 天前最后修改，目标：...）
+   该任务图已经长期遗弃,task 状态可能已过时(对照 TODO.md 看真实进度)。
+   建议: 删除 state.json + 视该 autopilot 周期已结束。
+   ```
+   AskUserQuestion 工具选项: 删除 stale state / 强制视为活跃任务恢复 / 留着做参考
+5. 若非 stale (<7 天 + mode=running 或 awaiting_user_decision) → 走 §6.2 正常恢复
+
+#### 6.2 正常跨 session 恢复
+
+1. 读取 state.json + TODO.md 当前状态，告知用户：
+   ```
+   检测到未完成的自动驾驶任务（目标：[...]）
+   TODO.md 进度：N/M 已完成（见 [x] 数量）
+   ```
+2. AskUserQuestion 工具：继续 / 查看进度 / 放弃
+
+恢复执行时：从第一个 `status: pending` 且依赖已满足的 Task 继续（state.json 与 TODO.md 双重确认）。
+
+---
+
+## 文件规范
+
+### 目录结构
+
+```
+项目根/
+├── TODO.md              ← 任务图（激活前存在或新建，永久保留）
+├── AGENT_GUIDE.md       ← 知识库（激活前存在或新建，永久保留）
+└── .dao-autopilot/
+    └── state.json   ← 执行元数据（激活期间存在，完成后删除）
+```
+
+`.dao-autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
+
+权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
+
+---
+
+## 任务评分标准（决定是否自动执行）
+
+| 维度 | 3 | 2 | 1 | 0 |
+|------|---|---|---|---|
+| **相关性** | 达成原始目标必须 | 直接改善目标 | 松散相关 | 不相关 |
+| **可逆性** | 完全可逆（加代码） | 基本可逆（有依赖） | 难以逆转 | 不可逆 |
+| **置信度** | 明确要求/强烈暗示 | 合理推断 | 不确定 | 纯猜测 |
+
+**自动执行**：相关性 ≥ 2 AND 可逆性 ≥ 1 AND 置信度 ≥ 2
+
+其余 → 追加到 TODO.md 候选区，不自动执行，最终报告时呈现给用户。
+
+---
+
+## 反模式
+
+| 病 | 对治 |
+|----|------|
+| 目标漂移（执行中忘记原始目标） | 每次 Gap Analysis 重读原始目标原文 |
+| 完成偏误（AI 觉得完成了但没有） | 新鲜用户测试 + 成功标准逐条验证 |
+| 无限延伸（不断生成新任务） | 连续 2 轮无缺口新增 → 强制退出 |
+| 双重追踪（另建 plan.md / archive/） | TODO.md 是唯一任务载体，禁止创建平行任务文件 |
+| 知识遗失（执行完不写演化记录） | 5.2 先 `ensure` 后写 `data/evolution-*.csv` 是强制步骤，不可跳过 |
+| 全局污染（autopilot 行为渗漏到正常对话） | 退出时删除 state.json，AskUserQuestion 工具规则恢复 |
+| 越权执行（自动决策 🔀 红灯项） | 严格按 1.2.1 权限表：🔀 绝不碰，✋ 需标注假设，🔨 才可自动 |
+| 批量跳过（连做多个 task 才一次 commit / update / 验证） | 严格按 §2.1.1 涅槃门：每 task 5 步全勾才能进下一个，禁止跨 task 推进；合并 commit 等于损失精确回退能力 |

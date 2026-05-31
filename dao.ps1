@@ -103,7 +103,29 @@ function Invoke-Status {
         Write-Host "  Global: not installed (run: dao.ps1 link-global)" -ForegroundColor Red
     }
 
-    Write-Host "`n  Mode: Sidecar workspace" -ForegroundColor Cyan
+    Write-Host "`n  Mode: Sidecar workspace (Windsurf)" -ForegroundColor Cyan
+
+    # ── Claude Code 侧部署状态 ──
+    $claudeSrc = Join-Path $DaoRoot "claude"
+    if (Test-Path $claudeSrc) {
+        $cSkills = (Get-ChildItem (Join-Path $claudeSrc "skills") -Directory -ErrorAction SilentlyContinue).Count
+        $cCmds = (Get-ChildItem (Join-Path $claudeSrc "commands") -Filter "*.md" -ErrorAction SilentlyContinue).Count
+        $cAgents = (Get-ChildItem (Join-Path $claudeSrc "agents") -Filter "*.md" -ErrorAction SilentlyContinue).Count
+        Write-Host "`n  Claude Code source: ${cSkills} skills, ${cCmds} commands, ${cAgents} agents" -ForegroundColor Cyan
+
+        $userClaude = Join-Path $env:USERPROFILE ".claude"
+        $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" }).Count
+        $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
+        $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "claude/dao.md")
+
+        if ($linkedSkills -gt 0 -and $importOk) {
+            Write-Host "  Claude Code deploy: linked ($linkedSkills dao skills) + dao.md @import OK" -ForegroundColor Green
+        } elseif ($linkedSkills -gt 0 -or $importOk) {
+            Write-Host "  Claude Code deploy: partial (run: dao.ps1 link-claude)" -ForegroundColor Yellow
+        } else {
+            Write-Host "  Claude Code deploy: not installed (run: dao.ps1 link-claude)" -ForegroundColor Red
+        }
+    }
 }
 
 function Find-DaoProjects {
@@ -252,6 +274,153 @@ function Invoke-LinkRulesAll {
     }
 }
 
+function Invoke-LinkClaude {
+    # 把 claude/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
+    # 并幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md。
+    # 这是 Claude Code 侧的部署入口（对应 Windsurf 侧 link-rules-all + link-global）。
+    param([bool]$IsDryRun = $false)
+
+    $claudeSrc = Join-Path $DaoRoot "claude"
+    if (!(Test-Path $claudeSrc)) {
+        Write-Host "  [error] claude/ source not found: $claudeSrc" -ForegroundColor Red
+        exit 1
+    }
+
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    Ensure-Dir $userClaude
+
+    $linked = 0; $skipped = 0; $conflict = 0; $err = 0
+
+    # ── 三类目录 symlink（skills/agents 链目录，commands 链文件）──
+    $specs = @(
+        @{ Name = "skills";   Kind = "dir";  Filter = "dao-*" },
+        @{ Name = "commands"; Kind = "file"; Filter = "dao-*.md" },
+        @{ Name = "agents";   Kind = "file"; Filter = "dao-*.md" }
+    )
+    foreach ($spec in $specs) {
+        $srcDir = Join-Path $claudeSrc $spec.Name
+        if (!(Test-Path $srcDir)) { continue }
+        $dstDir = Join-Path $userClaude $spec.Name
+        if (-not $IsDryRun) { Ensure-Dir $dstDir }
+
+        Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
+        $items = if ($spec.Kind -eq "dir") {
+            Get-ChildItem $srcDir -Directory -Filter $spec.Filter -ErrorAction SilentlyContinue
+        } else {
+            Get-ChildItem $srcDir -File -Filter $spec.Filter -ErrorAction SilentlyContinue
+        }
+
+        foreach ($it in $items) {
+            $linkPath = Join-Path $dstDir $it.Name
+            if (Test-Path $linkPath) {
+                $existing = Get-Item $linkPath -Force
+                if ($existing.LinkType -eq "SymbolicLink") {
+                    if ($existing.Target -eq $it.FullName) {
+                        Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
+                        $skipped++
+                    } else {
+                        Write-Host "    [diff ] $($it.Name)  -> $($existing.Target)" -ForegroundColor Yellow
+                        $conflict++
+                    }
+                } else {
+                    Write-Host "    [keep ] $($it.Name)  (real file, preserved)" -ForegroundColor Yellow
+                    $conflict++
+                }
+                continue
+            }
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] $($it.Name)  -> $($it.FullName)" -ForegroundColor Cyan
+                $linked++
+            } else {
+                try {
+                    New-Symlink -Link $linkPath -Target $it.FullName
+                    Write-Host "    [link ] $($it.Name)" -ForegroundColor Green
+                    $linked++
+                } catch {
+                    Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        }
+    }
+
+    # ── 幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md ──
+    $daoMd = Join-Path $claudeSrc "dao.md"
+    $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
+    $importLine = "@$($daoMd -replace '\\', '/')"
+
+    if (Test-Path $daoMd) {
+        Write-Host "  [import]" -ForegroundColor Cyan
+        $hasImport = $false
+        if (Test-Path $userClaudeMd) {
+            $content = Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue
+            if ($content -match [regex]::Escape("claude/dao.md")) { $hasImport = $true }
+        }
+        if ($hasImport) {
+            Write-Host "    [skip ] dao.md @import already present" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] append: $importLine" -ForegroundColor Cyan
+            $linked++
+        } else {
+            $block = "`n# windsurf-dao Tao field (always_on root, single source of truth)`n$importLine`n"
+            Add-Content -Path $userClaudeMd -Value $block -Encoding UTF8
+            Write-Host "    [add  ] $importLine" -ForegroundColor Green
+            $linked++
+        }
+    }
+
+    # ── 幂等注册 dao-glob-gate PostToolUse hook 到 ~/.claude/settings.json ──
+    # 补 Windsurf glob trigger 缺口:编辑代码/dao 文件后注入 dao-quality / dao-meta 提醒
+    $hookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-glob-gate.js") -replace '\\', '/'
+    $settingsPath = Join-Path $userClaude "settings.json"
+    if (Test-Path $hookScript) {
+        Write-Host "  [hook]" -ForegroundColor Cyan
+        $hookCmd = "node `"$hookScript`""
+        $alreadyHooked = $false
+        if (Test-Path $settingsPath) {
+            $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+            if ($sraw -match [regex]::Escape("dao-glob-gate.js")) { $alreadyHooked = $true }
+        }
+        if ($alreadyHooked) {
+            Write-Host "    [skip ] dao-glob-gate hook already registered" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] register PostToolUse hook -> $hookScript" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                if (Test-Path $settingsPath) {
+                    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+                } else {
+                    $settings = [PSCustomObject]@{}
+                }
+                $hookEntry = [PSCustomObject]@{
+                    matcher = "Edit|Write|MultiEdit"
+                    hooks   = @([PSCustomObject]@{ type = "command"; command = $hookCmd; timeout = 10 })
+                }
+                if (-not $settings.PSObject.Properties['hooks']) {
+                    $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{})
+                }
+                if (-not $settings.hooks.PSObject.Properties['PostToolUse']) {
+                    $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @()
+                }
+                $settings.hooks.PostToolUse = @($settings.hooks.PostToolUse) + $hookEntry
+                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                Write-Host "    [add  ] PostToolUse hook -> dao-glob-gate.js" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] hook register failed: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
+    Write-Host "  Claude Code: restart session (or /clear) to pick up new skills/commands/agents." -ForegroundColor DarkGray
+}
+
 function Invoke-LinkGlobal {
     $globalDir = Join-Path (Join-Path (Join-Path $env:USERPROFILE ".codeium") "windsurf") "memories"
     $globalFile = Join-Path $globalDir "global_rules.md"
@@ -276,6 +445,123 @@ function Invoke-LinkGlobal {
     }
     New-Symlink -Link $globalFile -Target $sourceFile
     Write-Host "  [link] global_rules.md -> $sourceFile" -ForegroundColor Green
+}
+
+function Invoke-UnlinkClaude {
+    # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、@import 行、hook 注册。
+    # 只删 dao 引入的链接/条目,不碰用户自有 skill/command/agent,不碰 env/token。
+    # 与 link-claude 对称。源文件 claude/ 不受影响。
+    param([bool]$IsDryRun = $false)
+
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    $claudeSrc = Join-Path $DaoRoot "claude"
+    $removed = 0; $skipped = 0; $err = 0
+
+    # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
+    $specs = @(
+        @{ Name = "skills";   Filter = "dao-*" },
+        @{ Name = "commands"; Filter = "dao-*.md" },
+        @{ Name = "agents";   Filter = "dao-*.md" }
+    )
+    foreach ($spec in $specs) {
+        $dstDir = Join-Path $userClaude $spec.Name
+        if (!(Test-Path $dstDir)) { continue }
+        Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
+        Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            # 只删 symlink,且 target 指向本 dao 源;真实文件/他处链接不动
+            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and $_.Target -like "$claudeSrc*") {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
+                    $removed++
+                } else {
+                    try {
+                        # symlink 用 Remove-Item;目录 symlink 加 -Recurse 仅删链不删源
+                        if ($_.PSIsContainer) { $_.Delete() } else { Remove-Item $_.FullName -Force }
+                        Write-Host "    [unlink] $($_.Name)" -ForegroundColor Green
+                        $removed++
+                    } catch {
+                        Write-Host "    [error] $($_.Name) : $_" -ForegroundColor Red
+                        $err++
+                    }
+                }
+            } else {
+                Write-Host "    [keep ] $($_.Name)  (not a dao symlink)" -ForegroundColor DarkGray
+                $skipped++
+            }
+        }
+    }
+
+    # ── 移除 ~/.claude/CLAUDE.md 里的 dao.md @import 块 ──
+    $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
+    if (Test-Path $userClaudeMd) {
+        Write-Host "  [import]" -ForegroundColor Cyan
+        $lines = Get-Content $userClaudeMd
+        $kept = New-Object System.Collections.ArrayList
+        $dropped = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $ln = $lines[$i]
+            if ($ln -match "windsurf-dao Tao field" -or ($ln -match "^@.*claude/dao\.md")) {
+                $dropped = $true
+                continue
+            }
+            [void]$kept.Add($ln)
+        }
+        if ($dropped) {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] remove dao.md @import block" -ForegroundColor Cyan
+                $removed++
+            } else {
+                # 去掉因删块残留的连续空行尾巴
+                ($kept -join "`n").TrimEnd() + "`n" | Set-Content $userClaudeMd -Encoding UTF8
+                Write-Host "    [remove] dao.md @import block" -ForegroundColor Green
+                $removed++
+            }
+        } else {
+            Write-Host "    [skip ] no dao.md @import found" -ForegroundColor DarkGray
+            $skipped++
+        }
+    }
+
+    # ── 移除 settings.json 里的 dao-glob-gate hook ──
+    $settingsPath = Join-Path $userClaude "settings.json"
+    if (Test-Path $settingsPath) {
+        Write-Host "  [hook]" -ForegroundColor Cyan
+        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+        if ($sraw -match "dao-glob-gate") {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] remove dao-glob-gate hook" -ForegroundColor Cyan
+                $removed++
+            } else {
+                try {
+                    $settings = $sraw | ConvertFrom-Json
+                    if ($settings.hooks -and $settings.hooks.PostToolUse) {
+                        $settings.hooks.PostToolUse = @($settings.hooks.PostToolUse | Where-Object {
+                            -not ($_.hooks | Where-Object { $_.command -like "*dao-glob-gate*" })
+                        })
+                        if ($settings.hooks.PostToolUse.Count -eq 0) {
+                            $settings.hooks.PSObject.Properties.Remove('PostToolUse')
+                        }
+                        if (-not $settings.hooks.PSObject.Properties.Name) {
+                            $settings.PSObject.Properties.Remove('hooks')
+                        }
+                    }
+                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    Write-Host "    [remove] dao-glob-gate hook" -ForegroundColor Green
+                    $removed++
+                } catch {
+                    Write-Host "    [error] hook removal failed: $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        } else {
+            Write-Host "    [skip ] no dao-glob-gate hook found" -ForegroundColor DarkGray
+            $skipped++
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: removed=$removed skipped=$skipped error=$err" -ForegroundColor Cyan
+    Write-Host "  Claude Code: restart session to apply. Source claude/ untouched (git-tracked)." -ForegroundColor DarkGray
 }
 
 # ── 入口 ──
@@ -312,6 +598,18 @@ switch ($Action) {
         Write-Host "`n  Bulk linking dao rules into all projects..." -ForegroundColor Cyan
         Invoke-LinkRulesAll -ScanRoot $Root -OnlyAlwaysOn:$AlwaysOnOnly.IsPresent -IsDryRun:$DryRun.IsPresent
     }
+    "link-claude" {
+        if (!(Test-SymlinkSupport)) {
+            Write-Host "  [!] Symlinks unavailable. Enable Developer Mode." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "`n  Linking dao claude/ config into ~/.claude ..." -ForegroundColor Cyan
+        Invoke-LinkClaude -IsDryRun:$DryRun.IsPresent
+    }
+    "unlink-claude" {
+        Write-Host "`n  Unlinking dao claude/ config from ~/.claude ..." -ForegroundColor Cyan
+        Invoke-UnlinkClaude -IsDryRun:$DryRun.IsPresent
+    }
     default {
         Write-Host @"
 
@@ -324,8 +622,15 @@ switch ($Action) {
     .\dao.ps1 link-rules-all [-Root <dir>]    Bulk scan & symlink all projects under <Root>
                                                -AlwaysOnOnly  only link always_on rules (5 files)
                                                -DryRun        print without doing anything
+    .\dao.ps1 link-claude [-DryRun]           Symlink dao claude/{skills,commands,agents} into ~/.claude
+                                               and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
+    .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, dao.md @import, and dao-glob-gate hook
+                                               from ~/.claude (reverse of link-claude; source claude/ untouched)
 
   Examples:
+    .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
+    .\dao.ps1 link-claude -DryRun             preview Claude Code deploy
+    .\dao.ps1 unlink-claude -DryRun           preview Claude Code uninstall
     .\dao.ps1 link-rules-all                  scan default root (dao's parent dir)
     .\dao.ps1 link-rules-all -DryRun          preview without writing
     .\dao.ps1 link-rules d:\frank\TraceyU     single project
