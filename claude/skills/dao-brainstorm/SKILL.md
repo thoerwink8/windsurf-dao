@@ -125,12 +125,12 @@ spec 自审通过后,**必须**问用户:
 
 **等用户响应**。改了就重审,直到用户批。**不偷跑**。
 
-若本次由 `/dao-goal` 自动路由进入，且 Goal Contract 带有 `委托授权：delegated-continuous`：
+若本次处于 `delegated-continuous`（用户已授权持续推进 / autopilot 隔离模式）：
 
 - 不把 design 审批作为默认用户关卡
-- 以 Goal Contract 的成功标准和范围外作为审批标准
-- spec 自审 4 项全过后，记录“由 dao-goal delegated-continuous 自动通过”
-- 只有方向互斥、权限/安全/费用/不可逆风险、或无法根据 Goal Contract 裁剪时才问用户
+- 以当前任务的成功标准和范围外作为审批标准
+- spec 自审 4 项全过后，记录“delegated-continuous 下自动通过”
+- 只有方向互斥、权限/安全/费用/不可逆风险、或无法根据当前上下文裁剪时才问用户
 
 ## 反模式表
 

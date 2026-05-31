@@ -83,7 +83,6 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`
 | 场景 | skill / command | 章句根 |
 |---|---|---|
 | 接到新任务 / 架构构思 | `dao-brainstorm` | 图难于其易 (63) |
-| 锚定模糊目标 | `dao-goal` / `/dao-goal` | 知止可以不殆 (44) |
 | 理解需求 / UX 决策 | `dao-empathy` | 以百姓心为心 (49) |
 | 写实施 plan | `dao-plan` | 为大于其细 (63) |
 | 执行编码 | `dao-execute` | 上善若水 (8) |
