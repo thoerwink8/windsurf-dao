@@ -173,8 +173,8 @@ windsurf-dao 自身也以此为范——身教重于言教。
 | 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
 |---|---|---|---|
 | 场域根基 | `claude/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
-| 技能 | `claude/skills/dao-*/` | 37 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含 28 原 dao + 部分 rule 转 skill + 自检 skill） |
-| 命令 | `claude/commands/dao-*.md` | 11 | slash command，`/dao-dev` `/dao-goal` `/dao-commit` 等（≈ manual + 由 10 workflow 平移） |
+| 技能 | `claude/skills/dao-*/` | 36 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含 28 原 dao + 部分 rule 转 skill + 自检 skill） |
+| 命令 | `claude/commands/dao-*.md` | 10 | slash command，`/dao-dev` `/dao-cycle` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
 | 子代理 | `claude/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
 | 技术栈处方 | `claude/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 

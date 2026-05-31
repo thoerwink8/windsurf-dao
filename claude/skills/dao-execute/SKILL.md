@@ -61,7 +61,7 @@ checkpoint 是用户的关卡,不是建议。
    ├─ 跑验证命令(走 dao-verify 涅槃门)
    └─ 通过 → 进下一个;失败 → 回打
 
-4. Checkpoint(用户关卡；若继承 dao-goal delegated-continuous，则记录但不等待)
+4. Checkpoint(用户关卡；若处于 delegated-continuous，则记录但不等待)
    ├─ 阶段性完成(N 个相关 Task 一组)
    ├─ 大改动前后(改动范围超 5 文件)
    └─ 用户主动要求审视
@@ -83,7 +83,7 @@ checkpoint 是用户的关卡,不是建议。
 | 关键决策点 | 多种可行实现路径未在 plan 中决策 | 选一种 |
 
 每个 Checkpoint 必须**显式呈现给用户**,不静默通过。
-但若本次执行继承 `/dao-goal` 的 `delegated-continuous` 委托连续模式，Checkpoint 降级为执行记录，不调用 AskUserQuestion 工具，不中断流程；只有权限、不可逆、安全/隐私/费用、目标互斥歧义等阻断才问用户。
+但若本次执行处于 `delegated-continuous`（用户已授权持续推进 / autopilot 隔离模式）委托连续模式，Checkpoint 降级为执行记录，不调用 AskUserQuestion 工具，不中断流程；只有权限、不可逆、安全/隐私/费用、目标互斥歧义等阻断才问用户。
 
 ```
 🔒 Checkpoint
