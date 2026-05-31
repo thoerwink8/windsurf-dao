@@ -116,6 +116,8 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`
 
 AI 主动产出（文档 / commit message / TODO / 代码注释 / 调试日志）在中文项目语境下用中文；专有名词（API / 库名 / 协议字段 / 错误码 / 标识符 / shell 命令 / 文件扩展名）保留原文。迷茫时问"给谁看"：人 → 中文，机器 → 原文。
 
+**Commit 标识铁律**：Claude Code 创建的每个 commit，subject 行**必须以 `[cc] ` 前缀开头**（cc = Claude Code），一眼识别 AI 提交。格式：`[cc] type(scope): 描述`（如 `[cc] feat(auth): 加登录`）。--amend 修补已有 commit 时若原 subject 无 `[cc]` 则补上。此标识独立于 Claude Code 内置 footer（后者可按需关闭，前缀始终保留）。
+
 ## 反 · 归（太极之复）
 
 > 反者道之动。
