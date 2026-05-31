@@ -42,7 +42,12 @@ agent 用 wrapper 跑命令时检测不到 fd 等待 stdin 就**永远挂死**�
 
 PowerShell 处理 `node -e "..."` / `python -c "..."` **超过 ~300 字符**或含嵌套引号 `${...}` 时，会被 PSReadLine 截断/转义错误，命令卡住或行为异常。
 
-**铁律**：内容 >300 字符 或 含模板字符串/反斜杠转义 → **写脚本文件**：
+**铁律**：内容 >300 字符 或 含模板字符串/反斜杠转义 → **写脚本文件**。
+
+落点选择：
+- 文件工具可写：优先写项目内非 `.gitignore` 路径
+- 文件工具提示 `prohibited` / gitignored：不要硬写 `_tmp/`，改用 `apply_patch` / `edit`，或请求批准后写 `$env:TEMP`
+- Windows PowerShell 禁止 Bash heredoc（如 `python - <<'PY'`），必须用 here-string + `Set-Content`
 
 ```powershell
 # ❌ 错：长 inline 必卡
@@ -53,6 +58,8 @@ node -e "const fs=require('fs');const data=...(几百字符)...console.log(JSON.
 node _tmp/probe.mjs
 Remove-Item _tmp/probe.mjs
 ```
+
+若 `_tmp/` 被文件工具禁止写入，不代表终端不可写；它代表该路径被工具安全层过滤。此时不要反复重试同一路径，按 `dao-terminal-resilience` 的 C12 降级。
 
 ## 环境变量批量降噪（一次性套入）
 
@@ -78,6 +85,8 @@ Remove-Item _tmp/probe.mjs
 - **关键验证命令自带路径锚点**：跨 workspace 或刚发生终端异常时，优先用 `git -C <repo>`、`pnpm --dir <repo>`、`npm --prefix <repo>`，不要只依赖 `Cwd` 或 shell 当前目录
 - **禁止并行跑同一终端敏感验证**：测试、typecheck、install、build 这类会产生大量 stdout/stderr 的命令串行执行；并行只用于短小只读命令，避免输出串线导致假结论
 - **验证输出加唯一 marker**：关键验证用 `BEGIN/EXIT=$LASTEXITCODE` 包裹；若 marker 缺失或输出来自错误目录，判定为终端感知异常，不判定业务失败
+- **禁止 Bash heredoc 幻觉**：PowerShell 中 `python - <<'PY'` 会被当作重定向/比较符解析并报 `ParserError`；用 here-string 写临时脚本
+- **工具失败熔断**：同一编辑工具/同一文件连续失败 2 次，立即停手换策略，不得第三次盲试
 
 ```powershell
 Write-Output 'VERIFY_BEGIN'
