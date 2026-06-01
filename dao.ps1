@@ -125,6 +125,19 @@ function Invoke-Status {
         } else {
             Write-Host "  Claude Code deploy: not installed (run: dao.ps1 link-claude)" -ForegroundColor Red
         }
+
+        # ── Codex 侧部署状态(与 claude 共用 claude/skills 源)──
+        $userCodex = Join-Path $env:USERPROFILE ".codex"
+        $codexSkillsDir = Join-Path $userCodex "skills"
+        $srcSkillsDir = Join-Path $claudeSrc "skills"
+        $codexLinked = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" -and $_.Target -like "$srcSkillsDir*"
+        }).Count
+        if ($codexLinked -gt 0) {
+            Write-Host "  Codex deploy: linked ($codexLinked dao skills, shared source)" -ForegroundColor Green
+        } else {
+            Write-Host "  Codex deploy: not installed (run: dao.ps1 link-codex)" -ForegroundColor Red
+        }
     }
 }
 
@@ -416,9 +429,166 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── 幂等注册 dao-cn-title UserPromptSubmit hook 到 ~/.claude/settings.json ──
+    # 会话标题中文化:发首条消息时调 Claude 生成简体中文短标题,经 hookSpecificOutput.sessionTitle 注入
+    $titleHookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-cn-title.js") -replace '\\', '/'
+    if (Test-Path $titleHookScript) {
+        $titleHookCmd = "node `"$titleHookScript`""
+        $titleHooked = $false
+        if (Test-Path $settingsPath) {
+            $sraw2 = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+            if ($sraw2 -match [regex]::Escape("dao-cn-title.js")) { $titleHooked = $true }
+        }
+        if ($titleHooked) {
+            Write-Host "    [skip ] dao-cn-title hook already registered" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] register UserPromptSubmit hook -> $titleHookScript" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                if (Test-Path $settingsPath) {
+                    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+                } else {
+                    $settings = [PSCustomObject]@{}
+                }
+                $titleHookEntry = [PSCustomObject]@{
+                    hooks = @([PSCustomObject]@{ type = "command"; command = $titleHookCmd; timeout = 12 })
+                }
+                if (-not $settings.PSObject.Properties['hooks']) {
+                    $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{})
+                }
+                if (-not $settings.hooks.PSObject.Properties['UserPromptSubmit']) {
+                    $settings.hooks | Add-Member -NotePropertyName UserPromptSubmit -NotePropertyValue @()
+                }
+                $settings.hooks.UserPromptSubmit = @($settings.hooks.UserPromptSubmit) + $titleHookEntry
+                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                Write-Host "    [add  ] UserPromptSubmit hook -> dao-cn-title.js" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] title hook register failed: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
     Write-Host ""
     Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
     Write-Host "  Claude Code: restart session (or /clear) to pick up new skills/commands/agents." -ForegroundColor DarkGray
+}
+
+function Invoke-LinkCodex {
+    # 把 claude/skills 下的 dao-* skill symlink 到 ~/.codex/skills。
+    # codex 与 claude 共用同一份 skill 源(git 单源),codex 侧不需要 commands/agents/hooks/@import。
+    # 撞名处理:若已存在的同名是指向别处(如 cc-switch)的软链,按 dao 单源原则覆盖为仓库版;
+    #          若是用户真实文件,保留不动。
+    param([bool]$IsDryRun = $false)
+
+    $claudeSrc = Join-Path $DaoRoot "claude"
+    $srcDir = Join-Path $claudeSrc "skills"
+    if (!(Test-Path $srcDir)) {
+        Write-Host "  [error] claude/skills source not found: $srcDir" -ForegroundColor Red
+        exit 1
+    }
+
+    $userCodex = Join-Path $env:USERPROFILE ".codex"
+    $dstDir = Join-Path $userCodex "skills"
+    if (-not $IsDryRun) { Ensure-Dir $dstDir }
+
+    $linked = 0; $skipped = 0; $conflict = 0; $err = 0
+    Write-Host "  [skills -> ~/.codex/skills]" -ForegroundColor Cyan
+
+    $items = Get-ChildItem $srcDir -Directory -Filter "dao-*" -ErrorAction SilentlyContinue
+    foreach ($it in $items) {
+        $linkPath = Join-Path $dstDir $it.Name
+        if (Test-Path $linkPath) {
+            $existing = Get-Item $linkPath -Force
+            if ($existing.LinkType -in "SymbolicLink", "Junction") {
+                if ($existing.Target -eq $it.FullName) {
+                    Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
+                    $skipped++
+                    continue
+                }
+                # 指向别处的软链/联接(如 cc-switch 外部版):dao 单源原则,覆盖为仓库版
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] override $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
+                    $linked++
+                    continue
+                }
+                try {
+                    if ($existing.PSIsContainer) { $existing.Delete() } else { Remove-Item $linkPath -Force }
+                    New-Symlink -Link $linkPath -Target $it.FullName
+                    Write-Host "    [override] $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
+                    $linked++
+                } catch {
+                    Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
+                    $err++
+                }
+                continue
+            }
+            # 用户真实文件/目录:不动
+            Write-Host "    [keep ] $($it.Name)  (real file, preserved)" -ForegroundColor Yellow
+            $conflict++
+            continue
+        }
+        if ($IsDryRun) {
+            Write-Host "    [DRYRUN] $($it.Name)  -> $($it.FullName)" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                New-Symlink -Link $linkPath -Target $it.FullName
+                Write-Host "    [link ] $($it.Name)" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
+    Write-Host "  Codex: restart session to pick up new skills. Source claude/skills shared with Claude Code (git single source)." -ForegroundColor DarkGray
+}
+
+function Invoke-UnlinkCodex {
+    # 卸载 codex 侧 dao skill 软链。只删指向本 dao 源的软链,不碰用户文件、不碰 cc-switch 等他处软链。
+    param([bool]$IsDryRun = $false)
+
+    $claudeSrc = Join-Path $DaoRoot "claude"
+    $srcDir = Join-Path $claudeSrc "skills"
+    $userCodex = Join-Path $env:USERPROFILE ".codex"
+    $dstDir = Join-Path $userCodex "skills"
+    $removed = 0; $skipped = 0; $err = 0
+
+    if (!(Test-Path $dstDir)) {
+        Write-Host "  [skip ] ~/.codex/skills not found" -ForegroundColor DarkGray
+        return
+    }
+    Write-Host "  [skills]" -ForegroundColor Cyan
+    Get-ChildItem $dstDir -Filter "dao-*" -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        if (($_.LinkType -in "SymbolicLink", "Junction") -and $_.Target -and $_.Target -like "$srcDir*") {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
+                $removed++
+            } else {
+                try {
+                    if ($_.PSIsContainer) { $_.Delete() } else { Remove-Item $_.FullName -Force }
+                    Write-Host "    [unlink] $($_.Name)" -ForegroundColor Green
+                    $removed++
+                } catch {
+                    Write-Host "    [error] $($_.Name) : $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        } else {
+            Write-Host "    [keep ] $($_.Name)  (not a dao symlink)" -ForegroundColor DarkGray
+            $skipped++
+        }
+    }
+    Write-Host ""
+    Write-Host "  summary: removed=$removed skipped=$skipped error=$err" -ForegroundColor Cyan
+    Write-Host "  Codex: restart session to apply. Source claude/skills untouched (git-tracked)." -ForegroundColor DarkGray
 }
 
 function Invoke-LinkGlobal {
@@ -557,6 +727,39 @@ function Invoke-UnlinkClaude {
             Write-Host "    [skip ] no dao-glob-gate hook found" -ForegroundColor DarkGray
             $skipped++
         }
+
+        # ── 移除 settings.json 里的 dao-cn-title hook(重读,因上方可能已改写)──
+        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+        if ($sraw -match "dao-cn-title") {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] remove dao-cn-title hook" -ForegroundColor Cyan
+                $removed++
+            } else {
+                try {
+                    $settings = $sraw | ConvertFrom-Json
+                    if ($settings.hooks -and $settings.hooks.UserPromptSubmit) {
+                        $settings.hooks.UserPromptSubmit = @($settings.hooks.UserPromptSubmit | Where-Object {
+                            -not ($_.hooks | Where-Object { $_.command -like "*dao-cn-title*" })
+                        })
+                        if ($settings.hooks.UserPromptSubmit.Count -eq 0) {
+                            $settings.hooks.PSObject.Properties.Remove('UserPromptSubmit')
+                        }
+                        if (-not $settings.hooks.PSObject.Properties.Name) {
+                            $settings.PSObject.Properties.Remove('hooks')
+                        }
+                    }
+                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    Write-Host "    [remove] dao-cn-title hook" -ForegroundColor Green
+                    $removed++
+                } catch {
+                    Write-Host "    [error] title hook removal failed: $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        } else {
+            Write-Host "    [skip ] no dao-cn-title hook found" -ForegroundColor DarkGray
+            $skipped++
+        }
     }
 
     Write-Host ""
@@ -610,6 +813,18 @@ switch ($Action) {
         Write-Host "`n  Unlinking dao claude/ config from ~/.claude ..." -ForegroundColor Cyan
         Invoke-UnlinkClaude -IsDryRun:$DryRun.IsPresent
     }
+    "link-codex" {
+        if (!(Test-SymlinkSupport)) {
+            Write-Host "  [!] Symlinks unavailable. Enable Developer Mode." -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "`n  Linking dao skills into ~/.codex/skills ..." -ForegroundColor Cyan
+        Invoke-LinkCodex -IsDryRun:$DryRun.IsPresent
+    }
+    "unlink-codex" {
+        Write-Host "`n  Unlinking dao skills from ~/.codex/skills ..." -ForegroundColor Cyan
+        Invoke-UnlinkCodex -IsDryRun:$DryRun.IsPresent
+    }
     default {
         Write-Host @"
 
@@ -626,10 +841,14 @@ switch ($Action) {
                                                and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
     .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, dao.md @import, and dao-glob-gate hook
                                                from ~/.claude (reverse of link-claude; source claude/ untouched)
+    .\dao.ps1 link-codex [-DryRun]            Symlink dao skills into ~/.codex/skills (Codex shares claude/skills)
+    .\dao.ps1 unlink-codex [-DryRun]          Remove dao skill symlinks from ~/.codex/skills (source untouched)
 
   Examples:
     .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
     .\dao.ps1 link-claude -DryRun             preview Claude Code deploy
+    .\dao.ps1 link-codex                      deploy dao skills to Codex (shared git source)
+    .\dao.ps1 link-codex -DryRun              preview Codex deploy
     .\dao.ps1 unlink-claude -DryRun           preview Claude Code uninstall
     .\dao.ps1 link-rules-all                  scan default root (dao's parent dir)
     .\dao.ps1 link-rules-all -DryRun          preview without writing
