@@ -80,6 +80,66 @@ Agent 通过五种感官与系统交互，每种感官有不同的可靠性：
 7. **方言匹配**: Windows PowerShell 禁用 Bash heredoc；复杂脚本先落文件
 8. **失败熔断**: 同一工具/同一文件连续失败 2 次，必须换策略，不得第三次盲试
 
+## Windows 编码诊断（C9 配套命令）
+
+遇到中文乱码、测试快照变更、CLI 输出变问号、文件读写后编码漂移时，先采样，不要立刻全局改环境：
+
+```powershell
+$PSVersionTable.PSVersion
+[Console]::InputEncoding.WebName
+[Console]::OutputEncoding.WebName
+chcp
+$OutputEncoding.WebName
+```
+
+判断规则：
+
+- Windows PowerShell 5.1 默认文本编码常不是 UTF-8，`Set-Content`/`Out-File`/重定向尤其要显式 `-Encoding UTF8`。
+- PowerShell 7+ 默认更接近 UTF-8，但外部程序仍受 Console code page 和程序自身编码影响。
+- Console code page `65001` 表示 UTF-8；输入和输出编码可独立影响 native 命令。
+- 不要为修一个命令永久改用户系统设置；优先在当前进程或当前命令作用域设置。
+
+当前会话 UTF-8 边界 + 常见运行时开关：
+
+```powershell
+[Console]::InputEncoding  = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding           = [Text.UTF8Encoding]::new($false)
+chcp 65001 | Out-Null
+$env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'
+$env:LC_ALL = 'C.UTF-8'; $env:LANG = 'C.UTF-8'
+```
+
+## 非交互命令模板（C1 配套命令）
+
+先关分页器、编辑器、凭据 prompt 和动态输出：
+
+```powershell
+$env:CI = '1'; $env:NO_COLOR = '1'
+$env:GIT_TERMINAL_PROMPT = '0'; $env:GIT_PAGER = 'cat'; $env:PAGER = 'cat'
+```
+
+各工具非交互写法：
+
+```powershell
+# Git
+git -c core.pager=cat -c credential.interactive=false status --short
+git -c core.pager=cat commit -m "message"
+git -c core.pager=cat merge --no-edit branch-name
+
+# npm/pnpm/yarn
+$env:npm_config_yes = 'true'
+npm install --no-audit --no-fund --foreground-scripts=false
+pnpm install --config.confirmModulesPurge=false
+
+# Python/pip
+python -X utf8 -m pip install --disable-pip-version-check --no-input package
+
+# 网络请求必须设超时
+Invoke-WebRequest -Uri $url -TimeoutSec 20
+curl.exe --connect-timeout 10 --max-time 60 -L $url
+```
+
 ## 降级路径
 
 当终端不可用时，按以下顺序降级：
