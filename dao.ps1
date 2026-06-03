@@ -289,6 +289,7 @@ function Invoke-LinkRulesAll {
 
 function Invoke-LinkClaude {
     # 把 claude/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
+    # 复制 references/*.md 经文到 ~/.claude/references/，
     # 并幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md。
     # 这是 Claude Code 侧的部署入口（对应 Windsurf 侧 link-rules-all + link-global）。
     param([bool]$IsDryRun = $false)
@@ -357,6 +358,109 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── 复制 references/ 经文到 ~/.claude/references/ ──
+    $refSrc = Join-Path $DaoRoot "references"
+    if (Test-Path $refSrc) {
+        $refDst = Join-Path $userClaude "references"
+        if (-not $IsDryRun) { Ensure-Dir $refDst }
+        Write-Host "  [references]" -ForegroundColor Cyan
+        $refFiles = Get-ChildItem $refSrc -File -Filter "*.md" -ErrorAction SilentlyContinue
+        foreach ($ref in $refFiles) {
+            $dstFile = Join-Path $refDst $ref.Name
+            if (Test-Path $dstFile) {
+                # 对比文件内容，如果不同则更新
+                $srcHash = (Get-FileHash $ref.FullName -Algorithm MD5).Hash
+                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                if ($srcHash -eq $dstHash) {
+                    Write-Host "    [skip ] $($ref.Name)  (same content)" -ForegroundColor DarkGray
+                    $skipped++
+                } else {
+                    if ($IsDryRun) {
+                        Write-Host "    [DRYRUN] update $($ref.Name)" -ForegroundColor Cyan
+                        $linked++
+                    } else {
+                        Copy-Item $ref.FullName -Destination $dstFile -Force
+                        Write-Host "    [update] $($ref.Name)" -ForegroundColor Yellow
+                        $linked++
+                    }
+                }
+            } else {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] copy $($ref.Name)" -ForegroundColor Cyan
+                    $linked++
+                } else {
+                    Copy-Item $ref.FullName -Destination $dstFile
+                    Write-Host "    [copy ] $($ref.Name)" -ForegroundColor Green
+                    $linked++
+                }
+            }
+        }
+    }
+
+    # ── 复制 styles/ 到 ~/.claude/styles/ ──
+    $stylesSrc = Join-Path $claudeSrc "styles"
+    if (Test-Path $stylesSrc) {
+        $stylesDst = Join-Path $userClaude "styles"
+        if (-not $IsDryRun) { Ensure-Dir $stylesDst }
+        Write-Host "  [styles]" -ForegroundColor Cyan
+        $styleFiles = Get-ChildItem $stylesSrc -File -Filter "*.md" -ErrorAction SilentlyContinue
+        foreach ($style in $styleFiles) {
+            $dstFile = Join-Path $stylesDst $style.Name
+            if (Test-Path $dstFile) {
+                $srcHash = (Get-FileHash $style.FullName -Algorithm MD5).Hash
+                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                if ($srcHash -eq $dstHash) {
+                    Write-Host "    [skip ] $($style.Name)  (same content)" -ForegroundColor DarkGray
+                    $skipped++
+                } else {
+                    if ($IsDryRun) {
+                        Write-Host "    [DRYRUN] update $($style.Name)" -ForegroundColor Cyan
+                        $linked++
+                    } else {
+                        Copy-Item $style.FullName -Destination $dstFile -Force
+                        Write-Host "    [update] $($style.Name)" -ForegroundColor Yellow
+                        $linked++
+                    }
+                }
+            } else {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] copy $($style.Name)" -ForegroundColor Cyan
+                    $linked++
+                } else {
+                    Copy-Item $style.FullName -Destination $dstFile
+                    Write-Host "    [copy ] $($style.Name)" -ForegroundColor Green
+                    $linked++
+                }
+            }
+        }
+    }
+
+    # ── 幂等设置 outputStyle 到 ~/.claude/settings.json ──
+    if (Test-Path $settingsPath) {
+        Write-Host "  [outputStyle]" -ForegroundColor Cyan
+        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+        $hasOutputStyle = $false
+        if ($sraw -match '"outputStyle"\s*:\s*"dao-field"') { $hasOutputStyle = $true }
+        if ($hasOutputStyle) {
+            Write-Host "    [skip ] outputStyle already set to dao-field" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] set outputStyle: dao-field" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                $settings = $sraw | ConvertFrom-Json
+                $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "dao-field" -Force
+                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                Write-Host "    [set  ] outputStyle: dao-field" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] outputStyle set failed: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
     # ── 幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md ──
     $daoMd = Join-Path $claudeSrc "dao.md"
     $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
@@ -385,8 +489,8 @@ function Invoke-LinkClaude {
 
     # ── 幂等注册 dao-glob-gate PostToolUse hook 到 ~/.claude/settings.json ──
     # 补 Windsurf glob trigger 缺口:编辑代码/dao 文件后注入 dao-quality / dao-meta 提醒
-    $hookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-glob-gate.js") -replace '\\', '/'
     $settingsPath = Join-Path $userClaude "settings.json"
+    $hookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-glob-gate.js") -replace '\\', '/'
     if (Test-Path $hookScript) {
         Write-Host "  [hook]" -ForegroundColor Cyan
         $hookCmd = "node `"$hookScript`""
@@ -618,7 +722,7 @@ function Invoke-LinkGlobal {
 }
 
 function Invoke-UnlinkClaude {
-    # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、@import 行、hook 注册。
+    # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、references/ 经文、@import 行、hook 注册。
     # 只删 dao 引入的链接/条目,不碰用户自有 skill/command/agent,不碰 env/token。
     # 与 link-claude 对称。源文件 claude/ 不受影响。
     param([bool]$IsDryRun = $false)
@@ -656,6 +760,33 @@ function Invoke-UnlinkClaude {
                 }
             } else {
                 Write-Host "    [keep ] $($_.Name)  (not a dao symlink)" -ForegroundColor DarkGray
+                $skipped++
+            }
+        }
+    }
+
+    # ── 移除 ~/.claude/references/ 下的经文文件 ──
+    $refDst = Join-Path $userClaude "references"
+    if (Test-Path $refDst) {
+        Write-Host "  [references]" -ForegroundColor Cyan
+        Get-ChildItem $refDst -File -Filter "*.md" -ErrorAction SilentlyContinue | ForEach-Object {
+            # 只删明确由 dao 引入的经文（帛书老子、阴符经、道德经）
+            if ($_.Name -match "^(帛书老子|阴符经|道德经)\.md$") {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] remove $($_.Name)" -ForegroundColor Cyan
+                    $removed++
+                } else {
+                    try {
+                        Remove-Item $_.FullName -Force
+                        Write-Host "    [remove] $($_.Name)" -ForegroundColor Green
+                        $removed++
+                    } catch {
+                        Write-Host "    [error] $($_.Name) : $_" -ForegroundColor Red
+                        $err++
+                    }
+                }
+            } else {
+                Write-Host "    [keep ] $($_.Name)  (not a dao file)" -ForegroundColor DarkGray
                 $skipped++
             }
         }
@@ -837,9 +968,10 @@ switch ($Action) {
     .\dao.ps1 link-rules-all [-Root <dir>]    Bulk scan & symlink all projects under <Root>
                                                -AlwaysOnOnly  only link always_on rules (5 files)
                                                -DryRun        print without doing anything
-    .\dao.ps1 link-claude [-DryRun]           Symlink dao claude/{skills,commands,agents} into ~/.claude
+    .\dao.ps1 link-claude [-DryRun]           Symlink dao claude/{skills,commands,agents} into ~/.claude,
+                                               copy references/*.md to ~/.claude/references/,
                                                and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
-    .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, dao.md @import, and dao-glob-gate hook
+    .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, references/, dao.md @import, and hooks
                                                from ~/.claude (reverse of link-claude; source claude/ untouched)
     .\dao.ps1 link-codex [-DryRun]            Symlink dao skills into ~/.codex/skills (Codex shares claude/skills)
     .\dao.ps1 unlink-codex [-DryRun]          Remove dao skill symlinks from ~/.codex/skills (source untouched)
