@@ -1,6 +1,6 @@
 ---
 name: dao-reverse-engineering
-description: 面对未知/混淆的代码库时，系统化的逆向分析流程
+description: 面对未知/混淆/无文档的代码库时的系统化逆向分析流程。接手陌生项目、阅读第三方源码、理解遗留系统、还原构建产物时加载。
 ---
 
 # 逆向拆解术 · Reverse Engineering
