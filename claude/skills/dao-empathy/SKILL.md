@@ -92,7 +92,7 @@ description: 用户视角共情术——以百姓心为心 (49 章)，把 AI 代
 
 - `dao-brainstorm` — empathy 出 Persona + 痛点，brainstorm 收敛成 design
 - `dao-user-simulation` — empathy 提供 Persona 和路径，simulation 用 playwright 实测走一遍
-- `dao-frontend-aesthetics` — empathy 出"用户期待的氛围"，aesthetics 出具体视觉
+- `dao-design-taste` — empathy 出"用户期待的氛围"，taste 基石出具体判据与视觉
 - `dao-full-coverage` — empathy 找的"用户视角问题"是 8 维度体检的一个维度
 - `dao-review` — empathy 视角的失误是 review 的检查项
 

@@ -1,6 +1,6 @@
 ---
 name: dao-deploy
-description: 部署术：判断项目部署策略（直推/Hook自动/CI-CD），按策略执行连接→环境→推送→构建→服务→记录全流程。
+description: 部署术：判断项目部署策略（直推/Hook自动/CI-CD），按策略执行连接→环境→推送→构建→服务→记录全流程。需要上线、发布、部署到服务器/云/CDN，或配置 CI-CD 流水线时加载。
 ---
 
 # 部署术 · Deploy Skill
