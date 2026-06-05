@@ -1,4 +1,4 @@
----
+ ---
 name: dao-skill-ecosystem
 description: 技能供应链——任务中发现技能缺口时查图书馆、junction或创建；创建新技能后评估通用性、提议入库。感知技能不足时加载。
 ---

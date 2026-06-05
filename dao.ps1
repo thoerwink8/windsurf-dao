@@ -1,4 +1,4 @@
-# dao.ps1 — windsurf-dao 工具脚本
+﻿# dao.ps1 — windsurf-dao 工具脚本
 #
 # Usage:
 #   .\dao.ps1 status                          查看状态
@@ -58,8 +58,10 @@ function Test-SymlinkSupport {
 
 function New-Symlink {
     param([string]$Link, [string]$Target)
+    $isDirectoryTarget = (Test-Path -LiteralPath $Target -PathType Container)
     if ($script:SymlinkMethod -eq "cmd") {
-        cmd /c "mklink `"$Link`" `"$Target`"" | Out-Null
+        $dirFlag = if ($isDirectoryTarget) { "/D " } else { "" }
+        cmd /c "mklink $dirFlag`"$Link`" `"$Target`"" | Out-Null
     } else {
         New-Item -ItemType SymbolicLink -Path $Link -Target $Target | Out-Null
     }
@@ -126,15 +128,16 @@ function Invoke-Status {
             Write-Host "  Claude Code deploy: not installed (run: dao.ps1 link-claude)" -ForegroundColor Red
         }
 
-        # ── Codex 侧部署状态(与 claude 共用 claude/skills 源)──
+        # ── Codex 侧部署状态(镜像 ~/.claude/skills 源)──
         $userCodex = Join-Path $env:USERPROFILE ".codex"
         $codexSkillsDir = Join-Path $userCodex "skills"
-        $srcSkillsDir = Join-Path $claudeSrc "skills"
+        $userClaudeSkillsDir = Join-Path $userClaude "skills"
+        $repoClaudeSkillsDir = Join-Path $claudeSrc "skills"
         $codexLinked = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" -and $_.Target -like "$srcSkillsDir*"
+            ($_.LinkType -in "SymbolicLink", "Junction") -and ($_.Target -like "$userClaudeSkillsDir*" -or $_.Target -like "$repoClaudeSkillsDir*")
         }).Count
         if ($codexLinked -gt 0) {
-            Write-Host "  Codex deploy: linked ($codexLinked dao skills, shared source)" -ForegroundColor Green
+            Write-Host "  Codex deploy: linked ($codexLinked Claude user skills)" -ForegroundColor Green
         } else {
             Write-Host "  Codex deploy: not installed (run: dao.ps1 link-codex)" -ForegroundColor Red
         }
@@ -582,16 +585,16 @@ function Invoke-LinkClaude {
 }
 
 function Invoke-LinkCodex {
-    # 把 claude/skills 下的 dao-* skill symlink 到 ~/.codex/skills。
-    # codex 与 claude 共用同一份 skill 源(git 单源),codex 侧不需要 commands/agents/hooks/@import。
-    # 撞名处理:若已存在的同名是指向别处(如 cc-switch)的软链,按 dao 单源原则覆盖为仓库版;
+    # 把 ~/.claude/skills 下的 Claude 用户侧 skill 镜像到 ~/.codex/skills。
+    # codex 侧不需要 commands/agents/hooks/@import；commands 单独由 link-codex-prompts 生成 prompt。
+    # 撞名处理:若已存在的同名是指向别处(如 cc-switch)的软链,按 Claude 用户侧单源原则覆盖;
     #          若是用户真实文件,保留不动。
     param([bool]$IsDryRun = $false)
 
-    $claudeSrc = Join-Path $DaoRoot "claude"
-    $srcDir = Join-Path $claudeSrc "skills"
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    $srcDir = Join-Path $userClaude "skills"
     if (!(Test-Path $srcDir)) {
-        Write-Host "  [error] claude/skills source not found: $srcDir" -ForegroundColor Red
+        Write-Host "  [error] ~/.claude/skills source not found: $srcDir" -ForegroundColor Red
         exit 1
     }
 
@@ -600,29 +603,40 @@ function Invoke-LinkCodex {
     if (-not $IsDryRun) { Ensure-Dir $dstDir }
 
     $linked = 0; $skipped = 0; $conflict = 0; $err = 0
-    Write-Host "  [skills -> ~/.codex/skills]" -ForegroundColor Cyan
+    Write-Host "  [~/.claude/skills -> ~/.codex/skills]" -ForegroundColor Cyan
 
-    $items = Get-ChildItem $srcDir -Directory -Filter "dao-*" -ErrorAction SilentlyContinue
+    $items = Get-ChildItem $srcDir -Force -ErrorAction SilentlyContinue | Where-Object {
+        $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
+    }
     foreach ($it in $items) {
         $linkPath = Join-Path $dstDir $it.Name
+        $skillTarget = $it.FullName
+        if (($it.LinkType -in "SymbolicLink", "Junction") -and $it.Target) {
+            $targetPath = @($it.Target)[0]
+            if (Test-Path -LiteralPath $targetPath -PathType Container) {
+                $skillTarget = $targetPath
+            }
+        }
         if (Test-Path $linkPath) {
             $existing = Get-Item $linkPath -Force
             if ($existing.LinkType -in "SymbolicLink", "Junction") {
-                if ($existing.Target -eq $it.FullName) {
+                if ($existing.Target -eq $skillTarget -and $existing.PSIsContainer) {
                     Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
                     $skipped++
                     continue
                 }
-                # 指向别处的软链/联接(如 cc-switch 外部版):dao 单源原则,覆盖为仓库版
+                # 指向别处的软链/联接(如 cc-switch 外部版):覆盖为 Claude 用户侧源
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] override $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
                     $linked++
                     continue
                 }
                 try {
+                    $oldLinkType = $existing.LinkType
+                    $oldTarget = $existing.Target
                     if ($existing.PSIsContainer) { $existing.Delete() } else { Remove-Item $linkPath -Force }
-                    New-Symlink -Link $linkPath -Target $it.FullName
-                    Write-Host "    [override] $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
+                    New-Symlink -Link $linkPath -Target $skillTarget
+                    Write-Host "    [override] $($it.Name)  (was $oldLinkType -> $oldTarget)" -ForegroundColor Yellow
                     $linked++
                 } catch {
                     Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
@@ -636,11 +650,11 @@ function Invoke-LinkCodex {
             continue
         }
         if ($IsDryRun) {
-            Write-Host "    [DRYRUN] $($it.Name)  -> $($it.FullName)" -ForegroundColor Cyan
+            Write-Host "    [DRYRUN] $($it.Name)  -> $skillTarget" -ForegroundColor Cyan
             $linked++
         } else {
             try {
-                New-Symlink -Link $linkPath -Target $it.FullName
+                New-Symlink -Link $linkPath -Target $skillTarget
                 Write-Host "    [link ] $($it.Name)" -ForegroundColor Green
                 $linked++
             } catch {
@@ -652,15 +666,15 @@ function Invoke-LinkCodex {
 
     Write-Host ""
     Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
-    Write-Host "  Codex: restart session to pick up new skills. Source claude/skills shared with Claude Code (git single source)." -ForegroundColor DarkGray
+    Write-Host "  Codex: restart session to pick up new skills. Source is ~/.claude/skills; Claude deployment files are untouched." -ForegroundColor DarkGray
 }
 
 function Invoke-UnlinkCodex {
-    # 卸载 codex 侧 dao skill 软链。只删指向本 dao 源的软链,不碰用户文件、不碰 cc-switch 等他处软链。
+    # 卸载 codex 侧 Claude skill 软链。只删指向 ~/.claude/skills 管理源的软链,不碰用户真实文件。
     param([bool]$IsDryRun = $false)
 
-    $claudeSrc = Join-Path $DaoRoot "claude"
-    $srcDir = Join-Path $claudeSrc "skills"
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    $srcDir = Join-Path $userClaude "skills"
     $userCodex = Join-Path $env:USERPROFILE ".codex"
     $dstDir = Join-Path $userCodex "skills"
     $removed = 0; $skipped = 0; $err = 0
@@ -670,8 +684,24 @@ function Invoke-UnlinkCodex {
         return
     }
     Write-Host "  [skills]" -ForegroundColor Cyan
-    Get-ChildItem $dstDir -Filter "dao-*" -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        if (($_.LinkType -in "SymbolicLink", "Junction") -and $_.Target -and $_.Target -like "$srcDir*") {
+    $managedTargets = @{}
+    if (Test-Path $srcDir) {
+        Get-ChildItem $srcDir -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
+        } | ForEach-Object {
+            $target = $_.FullName
+            if (($_.LinkType -in "SymbolicLink", "Junction") -and $_.Target) {
+                $targetPath = @($_.Target)[0]
+                if (Test-Path -LiteralPath $targetPath -PathType Container) {
+                    $target = $targetPath
+                }
+            }
+            $managedTargets[$target] = $true
+        }
+    }
+    Get-ChildItem $dstDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $target = if ($_.Target) { @($_.Target)[0] } else { $null }
+        if (($_.LinkType -in "SymbolicLink", "Junction") -and $target -and ($_.Target -like "$srcDir*" -or $managedTargets.ContainsKey($target))) {
             if ($IsDryRun) {
                 Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
                 $removed++
@@ -692,7 +722,186 @@ function Invoke-UnlinkCodex {
     }
     Write-Host ""
     Write-Host "  summary: removed=$removed skipped=$skipped error=$err" -ForegroundColor Cyan
-    Write-Host "  Codex: restart session to apply. Source claude/skills untouched (git-tracked)." -ForegroundColor DarkGray
+    Write-Host "  Codex: restart session to apply. ~/.claude/skills and Claude deployment files are untouched." -ForegroundColor DarkGray
+}
+
+function Get-CodexPromptNames {
+    return @(
+        "dao-superpowers",
+        "dao-cycle",
+        "dao-dev",
+        "dao-philosophy",
+        "dao-evolve",
+        "dao-commit"
+    )
+}
+
+function New-ManagedCodexPrompt {
+    param([string]$Name)
+    if ($Name -eq "dao-philosophy") {
+        return @"
+---
+description: 深度哲学反思 / 质疑规则根基时调用 dao-philosophy skill
+argument-hint: "[问题/主题]"
+---
+
+<!-- codex-managed: windsurf-dao -->
+
+`$dao-philosophy
+
+用户输入：`$ARGUMENTS
+"@
+    }
+    return $null
+}
+
+function ConvertTo-CodexManagedPrompt {
+    param([string]$SourcePath, [string]$Name)
+    $raw = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
+    $marker = "<!-- codex-managed: windsurf-dao -->"
+    if ($raw -match '(?s)^---\s*\r?\n.*?\r?\n---\s*\r?\n') {
+        $regex = [regex]::new('(?s)^---\s*\r?\n.*?\r?\n---\s*\r?\n')
+        return $regex.Replace($raw, { param($m) "$($m.Value.TrimEnd())`n`n$marker`n`n" }, 1)
+    }
+    return @"
+---
+description: windsurf-dao prompt $Name
+---
+
+$marker
+
+$raw
+"@
+}
+
+function Invoke-LinkCodexPrompts {
+    # 将高频手动 dao workflow 写入 ~/.codex/prompts 的实体 Markdown 文件。
+    # Codex 入口是 /prompts:<name>；此操作不修改 Claude commands 或部署文件。
+    param([bool]$IsDryRun = $false)
+
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    $srcDir = Join-Path $userClaude "commands"
+    $userCodex = Join-Path $env:USERPROFILE ".codex"
+    $dstDir = Join-Path $userCodex "prompts"
+    if (-not $IsDryRun) { Ensure-Dir $dstDir }
+
+    $linked = 0; $skipped = 0; $conflict = 0; $err = 0
+    Write-Host "  [dao manual entries -> ~/.codex/prompts]" -ForegroundColor Cyan
+
+    foreach ($name in Get-CodexPromptNames) {
+        $dstFile = Join-Path $dstDir "$name.md"
+        $srcFile = Join-Path $srcDir "$name.md"
+        $hasSource = Test-Path $srcFile -PathType Leaf
+        $promptText = if ($hasSource) { ConvertTo-CodexManagedPrompt -SourcePath $srcFile -Name $name } else { New-ManagedCodexPrompt -Name $name }
+        if ($null -eq $promptText) {
+            Write-Host "    [skip ] $name  (no Claude command or generated prompt)" -ForegroundColor DarkGray
+            $skipped++
+            continue
+        }
+
+        if (Test-Path $dstFile) {
+            $existing = Get-Item $dstFile -Force
+            $isLink = $existing.LinkType -in "SymbolicLink", "Junction"
+            $existingText = if (-not $isLink) { Get-Content $dstFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { $null }
+            if (-not $isLink -and $existingText -eq $promptText) {
+                Write-Host "    [skip ] $name  (already written)" -ForegroundColor DarkGray
+                $skipped++
+                continue
+            }
+            $isLegacyManagedPhilosophy = $name -eq "dao-philosophy" -and -not $isLink -and $existingText -match '\$dao-philosophy'
+            $isManagedFile = -not $isLink -and ($existingText -match 'codex-managed:\s*windsurf-dao' -or $existingText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->' -or $isLegacyManagedPhilosophy)
+            if ($isLink -or $isManagedFile) {
+                if ($IsDryRun) {
+                    $oldLabel = if ($isLink) { "$($existing.LinkType) -> $($existing.Target)" } else { "managed file" }
+                    Write-Host "    [DRYRUN] update $name  (was $oldLabel)" -ForegroundColor Yellow
+                    $linked++
+                    continue
+                }
+                try {
+                    $oldLabel = if ($isLink) { "$($existing.LinkType) -> $($existing.Target)" } else { "managed file" }
+                    Remove-Item $dstFile -Force
+                    $promptText | Set-Content -Path $dstFile -Encoding UTF8
+                    Write-Host "    [update] $name  (was $oldLabel)" -ForegroundColor Yellow
+                    $linked++
+                } catch {
+                    Write-Host "    [error] $name : $_" -ForegroundColor Red
+                    $err++
+                }
+                continue
+            }
+            Write-Host "    [keep ] $name  (real prompt, preserved)" -ForegroundColor Yellow
+            $conflict++
+            continue
+        }
+
+        if ($IsDryRun) {
+            Write-Host "    [DRYRUN] write $name" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                $promptText | Set-Content -Path $dstFile -Encoding UTF8
+                Write-Host "    [write] $name" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] $name : $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
+    Write-Host "  Codex: restart session to see /prompts:<name> slash entries. Claude deployment files are untouched." -ForegroundColor DarkGray
+}
+
+function Invoke-UnlinkCodexPrompts {
+    # 只删除本脚本生成/管理的高频 dao Codex prompts，不碰用户自有 prompt。
+    param([bool]$IsDryRun = $false)
+
+    $userClaude = Join-Path $env:USERPROFILE ".claude"
+    $srcDir = Join-Path $userClaude "commands"
+    $userCodex = Join-Path $env:USERPROFILE ".codex"
+    $dstDir = Join-Path $userCodex "prompts"
+    $removed = 0; $skipped = 0; $err = 0
+
+    if (!(Test-Path $dstDir)) {
+        Write-Host "  [skip ] ~/.codex/prompts not found" -ForegroundColor DarkGray
+        return
+    }
+    Write-Host "  [prompts]" -ForegroundColor Cyan
+
+    foreach ($name in Get-CodexPromptNames) {
+        $dstFile = Join-Path $dstDir "$name.md"
+        $srcFile = Join-Path $srcDir "$name.md"
+        if (!(Test-Path $dstFile)) { continue }
+        $existing = Get-Item $dstFile -Force
+        $isManagedLink = ($existing.LinkType -in "SymbolicLink", "Junction") -and $existing.Target -eq $srcFile
+        $existingPromptText = if (-not ($existing.LinkType -in "SymbolicLink", "Junction")) { Get-Content $dstFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { $null }
+        $isLegacyManagedPhilosophy = $name -eq "dao-philosophy" -and -not ($existing.LinkType -in "SymbolicLink", "Junction") -and $existingPromptText -match '\$dao-philosophy'
+        $isManagedFile = -not ($existing.LinkType -in "SymbolicLink", "Junction") -and ($existingPromptText -match 'codex-managed:\s*windsurf-dao' -or $existingPromptText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->' -or $isLegacyManagedPhilosophy)
+        if ($isManagedLink -or $isManagedFile) {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] unlink $name" -ForegroundColor Cyan
+                $removed++
+            } else {
+                try {
+                    Remove-Item $dstFile -Force
+                    Write-Host "    [unlink] $name" -ForegroundColor Green
+                    $removed++
+                } catch {
+                    Write-Host "    [error] $name : $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        } else {
+            Write-Host "    [keep ] $name  (not a managed Codex prompt)" -ForegroundColor DarkGray
+            $skipped++
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: removed=$removed skipped=$skipped error=$err" -ForegroundColor Cyan
+    Write-Host "  Codex: restart session to apply. Claude deployment files are untouched." -ForegroundColor DarkGray
 }
 
 function Invoke-LinkGlobal {
@@ -836,9 +1045,14 @@ function Invoke-UnlinkClaude {
                 try {
                     $settings = $sraw | ConvertFrom-Json
                     if ($settings.hooks -and $settings.hooks.PostToolUse) {
-                        $settings.hooks.PostToolUse = @($settings.hooks.PostToolUse | Where-Object {
-                            -not ($_.hooks | Where-Object { $_.command -like "*dao-glob-gate*" })
-                        })
+                        $keptPostToolUse = @()
+                        foreach ($entry in @($settings.hooks.PostToolUse)) {
+                            $commands = @($entry.hooks | ForEach-Object { $_.command })
+                            if (-not ($commands -like "*dao-glob-gate*")) {
+                                $keptPostToolUse += $entry
+                            }
+                        }
+                        $settings.hooks.PostToolUse = $keptPostToolUse
                         if ($settings.hooks.PostToolUse.Count -eq 0) {
                             $settings.hooks.PSObject.Properties.Remove('PostToolUse')
                         }
@@ -869,9 +1083,14 @@ function Invoke-UnlinkClaude {
                 try {
                     $settings = $sraw | ConvertFrom-Json
                     if ($settings.hooks -and $settings.hooks.UserPromptSubmit) {
-                        $settings.hooks.UserPromptSubmit = @($settings.hooks.UserPromptSubmit | Where-Object {
-                            -not ($_.hooks | Where-Object { $_.command -like "*dao-cn-title*" })
-                        })
+                        $keptUserPromptSubmit = @()
+                        foreach ($entry in @($settings.hooks.UserPromptSubmit)) {
+                            $commands = @($entry.hooks | ForEach-Object { $_.command })
+                            if (-not ($commands -like "*dao-cn-title*")) {
+                                $keptUserPromptSubmit += $entry
+                            }
+                        }
+                        $settings.hooks.UserPromptSubmit = $keptUserPromptSubmit
                         if ($settings.hooks.UserPromptSubmit.Count -eq 0) {
                             $settings.hooks.PSObject.Properties.Remove('UserPromptSubmit')
                         }
@@ -949,12 +1168,20 @@ switch ($Action) {
             Write-Host "  [!] Symlinks unavailable. Enable Developer Mode." -ForegroundColor Red
             exit 1
         }
-        Write-Host "`n  Linking dao skills into ~/.codex/skills ..." -ForegroundColor Cyan
+        Write-Host "`n  Linking Claude user skills into ~/.codex/skills ..." -ForegroundColor Cyan
         Invoke-LinkCodex -IsDryRun:$DryRun.IsPresent
     }
     "unlink-codex" {
-        Write-Host "`n  Unlinking dao skills from ~/.codex/skills ..." -ForegroundColor Cyan
+        Write-Host "`n  Unlinking Claude user skill links from ~/.codex/skills ..." -ForegroundColor Cyan
         Invoke-UnlinkCodex -IsDryRun:$DryRun.IsPresent
+    }
+    "link-codex-prompts" {
+        Write-Host "`n  Linking high-frequency dao prompts into ~/.codex/prompts ..." -ForegroundColor Cyan
+        Invoke-LinkCodexPrompts -IsDryRun:$DryRun.IsPresent
+    }
+    "unlink-codex-prompts" {
+        Write-Host "`n  Unlinking high-frequency dao prompts from ~/.codex/prompts ..." -ForegroundColor Cyan
+        Invoke-UnlinkCodexPrompts -IsDryRun:$DryRun.IsPresent
     }
     default {
         Write-Host @"
@@ -973,14 +1200,17 @@ switch ($Action) {
                                                and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
     .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, references/, dao.md @import, and hooks
                                                from ~/.claude (reverse of link-claude; source claude/ untouched)
-    .\dao.ps1 link-codex [-DryRun]            Symlink dao skills into ~/.codex/skills (Codex shares claude/skills)
-    .\dao.ps1 unlink-codex [-DryRun]          Remove dao skill symlinks from ~/.codex/skills (source untouched)
+    .\dao.ps1 link-codex [-DryRun]            Mirror ~/.claude/skills into ~/.codex/skills
+    .\dao.ps1 unlink-codex [-DryRun]          Remove Codex skill links that point into ~/.claude/skills
+    .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts
+    .\dao.ps1 unlink-codex-prompts [-DryRun]  Remove managed dao prompt files
 
   Examples:
     .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
     .\dao.ps1 link-claude -DryRun             preview Claude Code deploy
-    .\dao.ps1 link-codex                      deploy dao skills to Codex (shared git source)
+    .\dao.ps1 link-codex                      deploy Claude user skills to Codex
     .\dao.ps1 link-codex -DryRun              preview Codex deploy
+    .\dao.ps1 link-codex-prompts              expose /prompts:dao-dev style entries in Codex
     .\dao.ps1 unlink-claude -DryRun           preview Claude Code uninstall
     .\dao.ps1 link-rules-all                  scan default root (dao's parent dir)
     .\dao.ps1 link-rules-all -DryRun          preview without writing
@@ -989,3 +1219,4 @@ switch ($Action) {
 "@
     }
 }
+

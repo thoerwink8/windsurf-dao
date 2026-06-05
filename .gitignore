@@ -5,3 +5,5 @@ _dao_backup/
 .DS_Store
 Thumbs.db
 image/
+__pycache__/
+*.pyc
