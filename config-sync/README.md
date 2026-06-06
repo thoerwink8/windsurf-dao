@@ -14,6 +14,7 @@ config-sync/
   导出配置.bat
   恢复配置.bat
   体检.bat
+  同步客户端 MCP.bat
   同步Desktop MCP.bat
   盘点来源.bat
 ```
@@ -71,20 +72,24 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 恢复后请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置。
 
-### 同步 Desktop MCP
+### 同步客户端 MCP
 
 双击：
 
 ```text
-同步Desktop MCP.bat
+同步客户端 MCP.bat
 ```
 
-效果：从 cc-switch 的 `mcp_servers` 表读取 `enabled_claude=1` 的 MCP，写入两个 Desktop 配置文件：
+效果：从 cc-switch 的 `mcp_servers` 表读取已启用 MCP，并写入本机客户端配置：
 
+- `enabled_claude=1` 写入 `~/.claude.json`
 - `%APPDATA%\Claude\claude_desktop_config.json`
 - `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json`
+- `enabled_codex=1` 写入 `~/.codex/config.toml`
 
-脚本只替换生成的 `mcpServers` 字段，保留 Desktop 配置文件里的其他字段；写入前会生成 `*.before-desktop-mcp-YYYYMMDD_HHMMSS.bak` 备份。当前策略是所有 MCP 先注册到 cc-switch，能用的启用，死配置保留但不启用。
+JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_servers]` 区块，保留其他配置字段；写入前会生成 `*.before-*-YYYYMMDD_HHMMSS.bak` 备份。当前策略是所有 MCP 先注册到 cc-switch，能用的启用，死配置保留但不启用。
+
+`同步Desktop MCP.bat` 是兼容旧入口，调用同一个脚本，也会同步 Claude Code CLI / Claude Desktop / Claude-3p / Codex。
 
 ### 体检
 
@@ -103,7 +108,8 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 - `common/settings.json` 是否已脱敏（无明文密钥）、占位符与 `common-secrets.json` 是否配套；
 - `settings.claude_desktop_gateway_token` 是否存在，且未进入 `common/settings.json`；
 - `common/mcp_servers.json` 是否已把项目路径 / home 路径占位符化；
-- Desktop 配置文件里的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
+- Claude Code CLI / Claude Desktop / Claude-3p 的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
+- Codex 的 `[mcp_servers]` 是否与 cc-switch 中 `enabled_codex=1` 的 MCP 一致；
 - `providers/providers.json` 是否存在且非空。
 
 `claude_desktop_gateway_token` 是本机运行态密钥，只存在于当前 cc-switch db 中，不进入 `common/`，也不由恢复脚本覆盖。恢复脚本只 upsert `common_config_` 开头的 settings key，避免把 Desktop Gateway 认证 token 清空后导致 401。
