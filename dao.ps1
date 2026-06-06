@@ -361,6 +361,9 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── settings.json 路径(后续 outputStyle / hook / 通用配置固化共用,提前定义避免未赋值引用)──
+    $settingsPath = Join-Path $userClaude "settings.json"
+
     # ── 复制 references/ 经文到 ~/.claude/references/ ──
     $refSrc = Join-Path $DaoRoot "references"
     if (Test-Path $refSrc) {
@@ -492,7 +495,6 @@ function Invoke-LinkClaude {
 
     # ── 幂等注册 dao-glob-gate PostToolUse hook 到 ~/.claude/settings.json ──
     # 补 Windsurf glob trigger 缺口:编辑代码/dao 文件后注入 dao-quality / dao-meta 提醒
-    $settingsPath = Join-Path $userClaude "settings.json"
     $hookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-glob-gate.js") -replace '\\', '/'
     if (Test-Path $hookScript) {
         Write-Host "  [hook]" -ForegroundColor Cyan
@@ -575,6 +577,72 @@ function Invoke-LinkClaude {
             } catch {
                 Write-Host "    [error] title hook register failed: $_" -ForegroundColor Red
                 $err++
+            }
+        }
+    }
+
+    # ── 通用配置固化:以 claude/settings.base.json 为真相源,幂等合并回 settings.json ──
+    # env 段子键合并(护住 cc-switch 注入的 token/base_url/模型),其余顶层键基线强制覆盖。
+    # 这一步会顺带补齐 SessionStart 自愈 hook(base.json 已声明),实现每次启动 CC 自动复原。
+    $syncScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-settings-sync.js")
+    $baseSettings = Join-Path $claudeSrc "settings.base.json"
+    if ((Test-Path $syncScript) -and (Test-Path $baseSettings)) {
+        Write-Host "  [settings-base]" -ForegroundColor Cyan
+        if ($IsDryRun) {
+            Write-Host "    [DRYRUN] merge settings.base.json -> settings.json (env 保留凭证, 通用键强制覆盖)" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                & node $syncScript $baseSettings $settingsPath 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "    [sync ] 通用配置已对齐基线 (token/base_url 保留)" -ForegroundColor Green
+                    $linked++
+                } else {
+                    Write-Host "    [error] settings sync exited $LASTEXITCODE" -ForegroundColor Red
+                    $err++
+                }
+            } catch {
+                Write-Host "    [error] settings sync failed: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    # ── 第二层兜底:Windows 登录计划任务,每次登录静默重建通用配置 ──
+    # 应对升级把整个 settings.json 删光(连 SessionStart hook 一起没)的极端场景:
+    # 登录任务独立于 settings.json 存在,开机即把通用配置 + hook 一起重建,闭合自举缺口。
+    $taskName = "dao-settings-sync"
+    if (Test-Path $syncScript) {
+        Write-Host "  [logon-task]" -ForegroundColor Cyan
+        $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+        if (-not $nodeExe) {
+            Write-Host "    [skip ] node not found on PATH, 跳过登录任务注册" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] register logon scheduled task '$taskName'" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if ($existing) {
+                    Write-Host "    [skip ] logon task '$taskName' already registered" -ForegroundColor DarkGray
+                    $skipped++
+                } else {
+                    $taskArg = "`"$syncScript`" `"$baseSettings`" `"$settingsPath`""
+                    $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $taskArg
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+                    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+                    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "dao: 登录时把 claude/settings.base.json 通用配置幂等合并回 ~/.claude/settings.json(护住 cc-switch 凭证)" -Force | Out-Null
+                    Write-Host "    [add  ] logon task '$taskName' -> node dao-settings-sync.js" -ForegroundColor Green
+                    $linked++
+                }
+            } catch {
+                # 登录任务触发器在部分机器(组策略/非管理员)会"拒绝访问"。
+                # 这是预期内的环境约束,非脚本错误:第一层 SessionStart hook 已覆盖
+                # 升级/重启/cc-switch 冲突等绝大多数场景。降级为提示,不计 error。
+                Write-Host "    [skip ] 登录任务需管理员权限,跳过(第一层 SessionStart hook 已生效)" -ForegroundColor DarkGray
+                Write-Host "           如需第二层兜底:以管理员身份跑一次 .\dao.ps1 link-claude" -ForegroundColor DarkGray
+                $skipped++
             }
         }
     }
@@ -1110,6 +1178,67 @@ function Invoke-UnlinkClaude {
             Write-Host "    [skip ] no dao-cn-title hook found" -ForegroundColor DarkGray
             $skipped++
         }
+
+        # ── 移除 settings.json 里的 dao-settings-sync SessionStart hook(重读,因上方可能已改写)──
+        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+        if ($sraw -match "dao-settings-sync") {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] remove dao-settings-sync SessionStart hook" -ForegroundColor Cyan
+                $removed++
+            } else {
+                try {
+                    $settings = $sraw | ConvertFrom-Json
+                    if ($settings.hooks -and $settings.hooks.SessionStart) {
+                        $keptSessionStart = @()
+                        foreach ($entry in @($settings.hooks.SessionStart)) {
+                            $commands = @($entry.hooks | ForEach-Object { $_.command })
+                            if (-not ($commands -like "*dao-settings-sync*")) {
+                                $keptSessionStart += $entry
+                            }
+                        }
+                        $settings.hooks.SessionStart = $keptSessionStart
+                        if ($settings.hooks.SessionStart.Count -eq 0) {
+                            $settings.hooks.PSObject.Properties.Remove('SessionStart')
+                        }
+                        if (-not $settings.hooks.PSObject.Properties.Name) {
+                            $settings.PSObject.Properties.Remove('hooks')
+                        }
+                    }
+                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    Write-Host "    [remove] dao-settings-sync SessionStart hook" -ForegroundColor Green
+                    $removed++
+                } catch {
+                    Write-Host "    [error] sync hook removal failed: $_" -ForegroundColor Red
+                    $err++
+                }
+            }
+        } else {
+            Write-Host "    [skip ] no dao-settings-sync hook found" -ForegroundColor DarkGray
+            $skipped++
+        }
+    }
+
+    # ── 反注册登录计划任务 ──
+    $taskName = "dao-settings-sync"
+    Write-Host "  [logon-task]" -ForegroundColor Cyan
+    $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existing) {
+        if ($IsDryRun) {
+            Write-Host "    [DRYRUN] unregister logon task '$taskName'" -ForegroundColor Cyan
+            $removed++
+        } else {
+            try {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                Write-Host "    [remove] logon task '$taskName'" -ForegroundColor Green
+                $removed++
+            } catch {
+                Write-Host "    [error] logon task unregister failed: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    } else {
+        Write-Host "    [skip ] no logon task '$taskName' found" -ForegroundColor DarkGray
+        $skipped++
     }
 
     Write-Host ""
