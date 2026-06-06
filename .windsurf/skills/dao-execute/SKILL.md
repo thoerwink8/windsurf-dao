@@ -52,7 +52,7 @@ checkpoint 是用户的关卡,不是建议。
    └─ 读完整 task 清单 + 依赖图
 
 2. 串行 / 并行 调度
-   ├─ 无依赖且独立 → dao-parallel(并行派 worker)
+   ├─ 无依赖且独立 → dao-pyramid 并行调度模式(推荐单 worker 批量)
    └─ 有依赖 → 串行,前置完成才开下一个
 
 3. 对每个 Task:
@@ -172,7 +172,7 @@ dao-plan (上游)
    │ 任务清单
    ▼
 dao-execute (你)
-   ├─ dao-parallel: 并行可拆 task
+   ├─ dao-pyramid: 并行可拆 task(并行调度模式)
    ├─ dao-test: 每个 Task 走 RED-GREEN
    ├─ dao-verify: 每次完成必有证据
    ├─ dao-debug: 任意 Task 出 bug

@@ -79,36 +79,36 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2 步 · 写 plan」
 
-#### 2.0 · 形（dao-ui-mockup · UI 任务专用前置）⭐
+#### 2.0 · 形（dao-design-taste 分诊 → 按档调 dao-ui-mockup）⭐
 
 > 大象无形。让无形的设计语言显形，再写 plan。——《道德经》第 41 章
 
-**触发**：任务关键词含 主题/样式/色板/视觉/重设计/换肤/UI 重构/首屏改版/界面优化 等 UI 视觉决策类。非 UI 任务跳过。
+**触发**：UI/视觉相关任务，先过 `dao-design-taste` §0 分诊门，由分诊结果决定走多重流程（不再"凡 UI 必走 mockup"）。
 
-**announce**：「开始 dao-superpowers 第 2.0 步 · 形（生成 mockup）」
+**announce**：「开始 dao-superpowers 第 2.0 步 · 形（分诊）」
 
 ```
-六步走（v0.2 · 详见 dao-ui-mockup skill）：
-  一·察 → 读 TODO + AGENT_GUIDE + 关键源码 + 截图当前 UI（项目画像）
-  二·援 → fetch awesome-design-md（VoltAgent）按画像筛 3-5 候选 + 附原描述
-          🔒 用户拍板 refCombo（single / fusion / parallel · 推翻则带气质回筛）
-  三·拟 → 基于 refCombo 合成 N 套方向（color/typography 都从参考 DESIGN.md 抽取）
-          N 与 strategy 同步：single|fusion=1 主+变体；parallel=用户选定参考数
-  四·显 → 生成 _tmp/ui-mockup-<topic>-<ts>.html（方向切换 + 暗色 + 完整组件库 + 真实场景）
-  五·择 → 用户在浏览器审视 → 选定方向 + 给微调反馈
-  六·固 → 导出 3 个文件喂给 dao-plan：
-          _tmp/design-tokens-<topic>.json
-          _tmp/index-css-draft.css
-          _tmp/component-deltas.md
+dao-design-taste §0 分诊：本次引入多少未知？
+  ├─ DIRECT（已知形态里做事）→ 跳过原型，查 gallery 复用 → 直接进 2.1 写 plan
+  ├─ SCOPED（一块形态未知的新东西）→ 调 dao-ui-mockup，只画这一块
+  └─ FULL（项目启动/换肤/大重构）→ 调 dao-ui-mockup 全量
+
+FULL/SCOPED 档走 dao-ui-mockup 五步（详见该 skill）：
+  一·察 → 项目画像（产品本质 + 用户 + 关键场景）
+  二·援 → 配色/字体方向从供给源取候选：ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则
+          🔒 用户拍板方向
+  三·拟 → 合成 N 套方向（受基石 §2 三旋钮 + §4 判据约束）
+  四·显 → 生成 _tmp/ui-mockup-<topic>-<ts>.html（throwaway 思考脚手架）
+  五·择 → 用户在浏览器审视形态/交互 → 选定 → 导出 design tokens
 ```
 
-**🔒 双关卡**：
-- 援步骤：用户必须显式拍板 refCombo（"走 α" / "用 β 但 accent 换紫色" / "推翻，要 <气质>"），不得替选
+**🔒 双关卡**（仅 FULL/SCOPED）：
+- 援步骤：用户必须显式拍板配色/字体方向，不得替选
 - 择步骤：用户必须显式选定方向，不得替选
 
-**铁律**：mockup 即实施 ground truth——避免"设计稿漂亮但代码走样"的常见 AI 失败模式。
+**唯一长期产物**：`_tmp/design-tokens-<topic>.json`（喂给 dao-plan）。HTML 是 throwaway，用完归档，**不是 ground truth、不写像素契约**。
 
-详见 `dao-ui-mockup` skill。
+详见 `dao-design-taste`（分诊+判据）与 `dao-ui-mockup`（探索工具）。
 
 #### 2.1 · 写 plan
 
@@ -158,18 +158,19 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 三阶段 review：
   1. spec compliance：是否实现了 plan 里的所有点？
   2. code quality：代码质量、命名、错误处理、边界
-  3. visual compliance（UI 任务必加）：调 dao-ui-mockup 第六步 6.2 跑 mockup-vs-impl diff
-     看 _tmp/visual-diff-<topic>.md 报告，报告任一 ❌ 回打
+  3. visual compliance（UI 任务必加）：过 dao-design-taste §6 验收——
+     逐条过 §4 体检表（禁 AI 紫 / 单一强调 / 交互状态全周期 / 对比度 a11y / 文案自审）
+     + preview 真实渲染肉眼看。不做 mockup-vs-impl 像素 diff。
 
 派活：
   - 普通模块 → reviewer profile
   - 核心模块 (auth/payment/security/core) → reviewer-critical profile
-  - UI 模块 → reviewer 额外负责 visual compliance（不是只看 git diff）
+  - UI 模块 → reviewer 额外负责 visual compliance（过 §6，看真实渲染不是只看 git diff）
 ```
 
-如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **visual diff 不过→dao-execute 修代码 或 dao-ui-mockup 修 mockup**。
+如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→dao-execute 修代码或修 token**。
 
-**铁律**：UI 任务跳 visual compliance review = 跳 reviewer，不可。原因：reviewer agent 看 git diff 看不见像素，视觉断层 / a11y / shadcn 裂痕 只在实际渲染中暴露。
+**铁律**：UI 任务跳 visual compliance review = 跳 reviewer，不可。原因：reviewer agent 看 git diff 看不见真实渲染，视觉断层 / a11y / 组件裂痕只在 preview 里暴露——故必过 §6 的 preview 验收。
 
 详见 `dao-review` skill。
 
@@ -179,7 +180,7 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 
 **announce**：「开始 dao-superpowers 第 5 步 · 归根」
 
-**前置关卡**（UI 任务专需）：归根前必有 `_tmp/visual-diff-<topic>.md` 全绿证明。无该报告 = 五步未闭环，不可进本步。
+**前置关卡**（UI 任务专需）：归根前必过 `dao-design-taste` §6 验收（§4 体检表 + preview 真实渲染）。未过 = 未闭环，不可进本步。
 
 ```
 四选一：
@@ -213,8 +214,8 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 | 任务太小论 | 显式触发 = 流程承诺，与代码量无关 |
 | 路径偷懒 | 必须 `docs/specs/<topic>-plan.md` 标准位置 |
 | 跳 reviewer | reviewer subagent 是质量门；自检不算 |
-| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见像素裂层；UI 任务必调 dao-ui-mockup 6.2 mockup-vs-impl diff |
-| **无 visual-diff 报告直进 finish** | UI 任务归根前必有 `_tmp/visual-diff-<topic>.md` 全绿证明，开环 = 后续新盲点 |
+| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见真实渲染；UI 任务必过 dao-design-taste §6（§4 体检表 + preview） |
+| **未过 §6 验收直进 finish** | UI 任务归根前必过 dao-design-taste §6，未过 = 开环 = 后续新盲点 |
 | 直推 master | merge / PR 二选一，仪式必须 |
 | node_modules 继承污染 | worktree 首次 install 前必 rm -rf node_modules（参 e163） |
 
@@ -232,8 +233,8 @@ rule 是"什么时候走 + 不能怎么走"，workflow 是"怎么一步步走"�
 - **不为五步而五步**——单文件 typo 不必走五步
 - **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 workflow 聚焦「现有代码核心改动」，含主题重构/视觉重设计（2.0 步会自动激活 dao-ui-mockup）
 - **不并行五步**——一步完成才进下一步，不可跳过
-- **不跳 2.0 形**——UI 视觉决策类任务必走 dao-ui-mockup，避免"设计稿漂亮代码走样"
-- **不跳 2.0.2 援**——UI 任务的"援"必先于"拟"。从 awesome-design-md 借真实视觉哲学，胜过 AI 闭门造车（v0.2 核心改进）
+- **不跳 2.0 分诊**——UI 任务必先过 dao-design-taste §0 分诊定档（DIRECT 跳原型 / SCOPED 局部 / FULL 全量），不再"凡 UI 必走 mockup"
+- **援从供给源取，不凭空发明**——FULL/SCOPED 档的"援"先于"拟"：配色/字体方向从 ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则取候选，胜过 AI 闭门造车
 
 ## 完整执行模板
 
@@ -247,18 +248,18 @@ UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
   [创建 worktree + 干净 install + 测试基线]
 
 ▶ 第 2 步 · 谋
-  ├─ 2.0 · 形（dao-ui-mockup · 仅 UI 任务 · 六步法）⭐
-  │  [察 → 援 → 拟 → 显 → 择 → 固]
-  │  🔒 援：用户拍板 refCombo（参考组合）
-  │  🔒 择：用户选定方向
-  │  产出：_tmp/design-tokens-<topic>.json + index-css-draft.css + component-deltas.md
+  ├─ 2.0 · 形（dao-design-taste §0 分诊 → 按档调 dao-ui-mockup）⭐
+  │  [DIRECT 跳原型查 gallery / SCOPED 局部 / FULL 全量]
+  │  [FULL·SCOPED 走五步：察 → 援 → 拟 → 显 → 择]
+  │  🔒 援：用户拍板配色/字体方向    🔒 择：用户选定方向
+  │  唯一长期产物：_tmp/design-tokens-<topic>.json（HTML 是 throwaway）
   └─ 2.1 · 写 plan（dao-plan）
      [写 docs/specs/<topic>-plan.md]
      🔒 用户审批 plan
 
 ▶ 第 3 步 · 造（dao-execute + dao-pyramid 可选）
   [逐 task 执行 + checkpoint]
-  [UI 任务：implementer 拿 design tokens + mockup HTML 作 ground truth]
+  [UI 任务：implementer 拿 design tokens 实现，引用 token + 复用 gallery 组件]
 
 ▶ 第 4 步 · 审（dao-review）
   [派 reviewer / reviewer-critical]
