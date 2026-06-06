@@ -1,11 +1,10 @@
 {
-  "exportedAt": "2026-06-06T20:57:21.042Z",
   "source": "cc-switch.settings",
   "note": "敏感字段已脱敏为占位符，真实值在 providers/common-secrets.json（不入 git）。",
   "rows": [
     {
       "key": "common_config_claude",
-      "value": "{\"env\":{\"CLAUDE_CODE_ATTRIBUTION_HEADER\":\"0\",\"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK\":\"1\",\"CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING\":\"1\"},\"permissions\":{\"allow\":[\"Bash(*)\",\"Read\",\"Write\",\"Edit\",\"Glob\",\"Grep\",\"WebFetch\",\"WebSearch\",\"Agent\",\"Workflow\",\"NotebookEdit\"],\"deny\":[],\"defaultMode\":\"default\",\"additionalDirectories\":[\"C:\\\\Users\\\\Administrator\\\\.claude\"]},\"model\":\"claude-opus-4-8\",\"hooks\":{\"PostToolUse\":[{\"matcher\":\"Edit|Write|MultiEdit\",\"hooks\":[{\"type\":\"command\",\"command\":\"node \\\"D:/frank/windsurf-dao/claude/hooks/dao-glob-gate.js\\\"\",\"timeout\":10}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"node \\\"D:/frank/windsurf-dao/claude/hooks/dao-cn-title.js\\\"\",\"timeout\":12}]}]},\"statusLine\":{\"type\":\"command\",\"command\":\"~/.claude/statusline.sh\",\"padding\":0},\"enabledPlugins\":{\"ralph-loop@claude-plugins-official\":false},\"theme\":\"dark-ansi\",\"enableWorkflows\":true,\"includeCoAuthoredBy\":false}"
+      "value": "{\"env\":{\"CLAUDE_CODE_ATTRIBUTION_HEADER\":\"0\",\"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK\":\"1\",\"CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING\":\"1\"},\"permissions\":{\"allow\":[\"Bash(*)\",\"Read\",\"Write\",\"Edit\",\"Glob\",\"Grep\",\"WebFetch\",\"WebSearch\",\"Agent\",\"Workflow\",\"NotebookEdit\"],\"deny\":[],\"defaultMode\":\"default\",\"additionalDirectories\":[\"C:\\\\Users\\\\Administrator\\\\.claude\"]},\"model\":\"claude-opus-4-8\",\"hooks\":{\"PostToolUse\":[{\"matcher\":\"Edit|Write|MultiEdit\",\"hooks\":[{\"type\":\"command\",\"command\":\"node \\\"D:/frank/windsurf-dao/claude/hooks/dao-glob-gate.js\\\"\",\"timeout\":10}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"node \\\"D:/frank/windsurf-dao/claude/hooks/dao-cn-title.js\\\"\",\"timeout\":12}]}]},\"statusLine\":{\"type\":\"command\",\"command\":\"~/.claude/statusline.sh\",\"padding\":0},\"enabledPlugins\":{\"ralph-loop@claude-plugins-official\":false},\"theme\":\"dark-ansi\",\"enableWorkflows\":true,\"includeCoAuthoredBy\":false,\"outputStyle\":\"dao-field\"}"
     },
     {
       "key": "common_config_codex",

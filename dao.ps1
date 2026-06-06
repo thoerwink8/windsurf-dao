@@ -581,71 +581,11 @@ function Invoke-LinkClaude {
         }
     }
 
-    # ── 通用配置固化:以 claude/settings.base.json 为真相源,幂等合并回 settings.json ──
-    # env 段子键合并(护住 cc-switch 注入的 token/base_url/模型),其余顶层键基线强制覆盖。
-    # 这一步会顺带补齐 SessionStart 自愈 hook(base.json 已声明),实现每次启动 CC 自动复原。
-    $syncScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-settings-sync.js")
-    $baseSettings = Join-Path $claudeSrc "settings.base.json"
-    if ((Test-Path $syncScript) -and (Test-Path $baseSettings)) {
-        Write-Host "  [settings-base]" -ForegroundColor Cyan
-        if ($IsDryRun) {
-            Write-Host "    [DRYRUN] merge settings.base.json -> settings.json (env 保留凭证, 通用键强制覆盖)" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                & node $syncScript $baseSettings $settingsPath 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "    [sync ] 通用配置已对齐基线 (token/base_url 保留)" -ForegroundColor Green
-                    $linked++
-                } else {
-                    Write-Host "    [error] settings sync exited $LASTEXITCODE" -ForegroundColor Red
-                    $err++
-                }
-            } catch {
-                Write-Host "    [error] settings sync failed: $_" -ForegroundColor Red
-                $err++
-            }
-        }
-    }
-
-    # ── 第二层兜底:Windows 登录计划任务,每次登录静默重建通用配置 ──
-    # 应对升级把整个 settings.json 删光(连 SessionStart hook 一起没)的极端场景:
-    # 登录任务独立于 settings.json 存在,开机即把通用配置 + hook 一起重建,闭合自举缺口。
-    $taskName = "dao-settings-sync"
-    if (Test-Path $syncScript) {
-        Write-Host "  [logon-task]" -ForegroundColor Cyan
-        $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
-        if (-not $nodeExe) {
-            Write-Host "    [skip ] node not found on PATH, 跳过登录任务注册" -ForegroundColor DarkGray
-            $skipped++
-        } elseif ($IsDryRun) {
-            Write-Host "    [DRYRUN] register logon scheduled task '$taskName'" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                if ($existing) {
-                    Write-Host "    [skip ] logon task '$taskName' already registered" -ForegroundColor DarkGray
-                    $skipped++
-                } else {
-                    $taskArg = "`"$syncScript`" `"$baseSettings`" `"$settingsPath`""
-                    $action = New-ScheduledTaskAction -Execute $nodeExe -Argument $taskArg
-                    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-                    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-                    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description "dao: 登录时把 claude/settings.base.json 通用配置幂等合并回 ~/.claude/settings.json(护住 cc-switch 凭证)" -Force | Out-Null
-                    Write-Host "    [add  ] logon task '$taskName' -> node dao-settings-sync.js" -ForegroundColor Green
-                    $linked++
-                }
-            } catch {
-                # 登录任务触发器在部分机器(组策略/非管理员)会"拒绝访问"。
-                # 这是预期内的环境约束,非脚本错误:第一层 SessionStart hook 已覆盖
-                # 升级/重启/cc-switch 冲突等绝大多数场景。降级为提示,不计 error。
-                Write-Host "    [skip ] 登录任务需管理员权限,跳过(第一层 SessionStart hook 已生效)" -ForegroundColor DarkGray
-                Write-Host "           如需第二层兜底:以管理员身份跑一次 .\dao.ps1 link-claude" -ForegroundColor DarkGray
-                $skipped++
-            }
-        }
-    }
+    # ── 通用配置已退役 dao-settings-sync 自愈机制 ──
+    # 现以 cc-switch 为唯一下发引擎:common_config_claude 完整覆盖 env/permissions/model/
+    # hooks/statusLine/enabledPlugins/theme/enableWorkflows/includeCoAuthoredBy/outputStyle。
+    # 版本化备份/恢复改由 windsurf-dao/config-sync 模块负责(导出/恢复/体检 .bat)。
+    # 旧机器若仍残留 SessionStart 自愈 hook 或登录任务,运行 `.\dao.ps1 unlink-claude` 清理。
 
     Write-Host ""
     Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan

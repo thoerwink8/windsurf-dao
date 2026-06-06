@@ -41,39 +41,33 @@ function main() {
   const { redactedRows, secrets, skippedNonJson } = redactSettings(settings);
 
   writeJson(snapshotPaths.settings, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.settings',
     note: '敏感字段已脱敏为占位符，真实值在 providers/common-secrets.json（不入 git）。',
     rows: redactedRows,
   });
 
   writeJson(commonSecretsPath, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.settings 中被脱敏的字段真实值',
     secrets,
   });
 
   writeJson(snapshotPaths.mcpServers, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.mcp_servers',
     rows: mcpServers,
   });
 
   writeJson(snapshotPaths.skills, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.skills + cc-switch.skill_repos',
     skills,
     skill_repos: skillRepos,
   });
 
   writeJson(snapshotPaths.prompts, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.prompts',
     rows: prompts,
   });
 
   writeJson(snapshotPaths.proxy, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.proxy_config + provider_endpoints + model_pricing',
     proxy_config: proxyConfig,
     provider_endpoints: providerEndpoints,
@@ -81,7 +75,6 @@ function main() {
   });
 
   writeJson(snapshotPaths.providers, {
-    exportedAt: new Date().toISOString(),
     source: 'cc-switch.providers',
     rows: providers,
   });
