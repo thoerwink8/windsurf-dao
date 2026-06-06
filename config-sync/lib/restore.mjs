@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { readJsonIfExists, snapshotPaths } from './paths.mjs';
+import { readJsonIfExists, snapshotPaths, decodePaths } from './paths.mjs';
 import {
   backupDb,
   clearTableStatement,
@@ -36,7 +36,7 @@ function main() {
   const backupPath = backupDb();
   const statements = [];
 
-  appendSimpleTableRestore(statements, 'settings', snapshots.settings);
+  appendSettingsRestore(statements, snapshots.settings);
   appendSimpleTableRestore(statements, 'mcp_servers', snapshots.mcp_servers);
   appendSimpleTableRestore(statements, 'skills', snapshots.skills);
   appendSimpleTableRestore(statements, 'skill_repos', snapshots.skill_repos);
@@ -82,7 +82,9 @@ function loadSnapshots() {
 
   return {
     settings: rehydrateSettings(asRows(settingsDoc)),
-    mcp_servers: asRows(mcpDoc),
+    mcp_servers: asRows(mcpDoc).map((m) => (
+      m.server_config ? { ...m, server_config: decodePaths(m.server_config) } : m
+    )),
     skills: Array.isArray(skillsDoc.skills) ? skillsDoc.skills : [],
     skill_repos: Array.isArray(skillsDoc.skill_repos) ? skillsDoc.skill_repos : [],
     prompts: asRows(promptsDoc),
@@ -115,6 +117,23 @@ function appendSimpleTableRestore(statements, tableName, rows) {
   }
   statements.push(clearTableStatement(tableName));
   statements.push(...upsertStatements(tableName, rows));
+}
+
+function appendSettingsRestore(statements, rows) {
+  if (!rows.length) return;
+  if (!tableExists('settings')) {
+    console.warn('跳过 settings：当前 cc-switch db 没有该表，可能 schema 已变化。');
+    return;
+  }
+
+  const syncRows = rows.filter((row) => String(row.key || '').startsWith('common_config_'));
+  const skipped = rows.length - syncRows.length;
+  if (skipped > 0) {
+    console.warn(`跳过 ${skipped} 条非 common_config_ settings，避免覆盖本机运行态密钥。`);
+  }
+  if (!syncRows.length) return;
+
+  statements.push(...upsertStatements('settings', syncRows));
 }
 
 function appendProvidersRestore(statements, providers, providerEndpoints) {

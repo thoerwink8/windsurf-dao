@@ -48,3 +48,32 @@ export function stripBom(text) {
 export function hasBomBuffer(buffer) {
   return buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
 }
+
+// ── 路径占位符 ──
+// cc-switch DB 里 MCP server_config 含本机绝对路径（projectRoot / home），
+// 直接进 git 换机失效。导出时把真实路径 → 占位符，恢复时还原。
+// 同时处理正斜杠与反斜杠两种写法（Windows JSON 里两者都可能出现）。
+export const PLACEHOLDER_PROJECT = '${PROJECT_ROOT}';
+export const PLACEHOLDER_HOME = '${HOME}';
+
+function pathVariants(absPath) {
+  const fwd = absPath.replace(/\\/g, '/');
+  const back = absPath.replace(/\//g, '\\');
+  return [...new Set([absPath, fwd, back])];
+}
+
+// 真实路径 → 占位符（导出）。projectRoot 先于 home，避免 home 截断 projectRoot。
+export function encodePaths(text) {
+  let out = String(text);
+  for (const v of pathVariants(projectRoot)) out = out.split(v).join(PLACEHOLDER_PROJECT);
+  for (const v of pathVariants(homeDir)) out = out.split(v).join(PLACEHOLDER_HOME);
+  return out;
+}
+
+// 占位符 → 真实路径（恢复）。统一用正斜杠还原（跨工具最稳）。
+export function decodePaths(text) {
+  return String(text)
+    .split(PLACEHOLDER_PROJECT).join(projectRoot.replace(/\\/g, '/'))
+    .split(PLACEHOLDER_HOME).join(homeDir.replace(/\\/g, '/'));
+}
+

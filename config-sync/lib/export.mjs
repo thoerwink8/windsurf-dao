@@ -1,4 +1,4 @@
-import { ensureSnapshotDirs, snapshotPaths, writeJson } from './paths.mjs';
+import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths } from './paths.mjs';
 import { selectRows, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, redactValue } from './secrets.mjs';
 
@@ -53,7 +53,8 @@ function main() {
 
   writeJson(snapshotPaths.mcpServers, {
     source: 'cc-switch.mcp_servers',
-    rows: mcpServers,
+    note: 'server_config 里的本机绝对路径已占位符化（${PROJECT_ROOT}/${HOME}），恢复时还原。',
+    rows: mcpServers.map((m) => ({ ...m, server_config: encodePaths(m.server_config) })),
   });
 
   writeJson(snapshotPaths.skills, {
