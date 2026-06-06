@@ -14,6 +14,8 @@ config-sync/
   导出配置.bat
   恢复配置.bat
   体检.bat
+  同步Desktop MCP.bat
+  盘点来源.bat
 ```
 
 ## 两类配置
@@ -69,6 +71,21 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 恢复后请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置。
 
+### 同步 Desktop MCP
+
+双击：
+
+```text
+同步Desktop MCP.bat
+```
+
+效果：从 cc-switch 的 `mcp_servers` 表读取 `enabled_claude=1` 的 MCP，写入两个 Desktop 配置文件：
+
+- `%APPDATA%\Claude\claude_desktop_config.json`
+- `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json`
+
+脚本只替换生成的 `mcpServers` 字段，保留 Desktop 配置文件里的其他字段；写入前会生成 `*.before-desktop-mcp-YYYYMMDD_HHMMSS.bak` 备份。当前策略是所有 MCP 先注册到 cc-switch，能用的启用，死配置保留但不启用。
+
 ### 体检
 
 双击：
@@ -84,7 +101,29 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 - 当前 `~/.claude/settings.json` 是否无 BOM 且包含通用开关；
 - `common/` 快照与 cc-switch db 中 MCP / skills 是否一致；
 - `common/settings.json` 是否已脱敏（无明文密钥）、占位符与 `common-secrets.json` 是否配套；
+- `settings.claude_desktop_gateway_token` 是否存在，且未进入 `common/settings.json`；
+- `common/mcp_servers.json` 是否已把项目路径 / home 路径占位符化；
+- Desktop 配置文件里的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - `providers/providers.json` 是否存在且非空。
+
+`claude_desktop_gateway_token` 是本机运行态密钥，只存在于当前 cc-switch db 中，不进入 `common/`，也不由恢复脚本覆盖。恢复脚本只 upsert `common_config_` 开头的 settings key，避免把 Desktop Gateway 认证 token 清空后导致 401。
+
+`common/mcp_servers.json` 里的 `server_config` 会把项目路径与 home 路径分别写成 `${PROJECT_ROOT}` / `${HOME}`，恢复时再还原成本机路径，避免把 `D:/frank/windsurf-dao` 或用户 home 直接提交到 git。Pencil 这类安装在 `D:/Program Files/...` 的本机特定路径无法自动泛化，体检只会提醒；换机后需要按新机器安装路径重配。
+
+### 盘点来源
+
+双击：
+
+```text
+盘点来源.bat
+```
+
+只读盘点 skills / MCP 的多来源分布，标出重复 / 冲突 / 孤儿 / 悬空链，不改任何下发链。用于看清碎片化现状：
+
+- Skills 四来源：windsurf-dao(git) 软链 / cc-switch DB 通用 skill / 旧 `.agents/skills`(已废,留悬空链) / 真实拷贝。
+- MCP 三处：cc-switch DB / `windsurf-dao/mcp` / `~/.claude.json` global。同名工具多处定义会标 `[重复]`，cc-switch 未纳管的标 `[孤儿]`。
+
+判定符号链接有效性用 readlink 目标存在性，不用 `existsSync(链路径)`——跨盘符号链接在普通进程下解引用会 EPERM 假性报错。
 
 ## 安全约束
 

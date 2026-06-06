@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom } from './paths.mjs';
+import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 
@@ -23,6 +23,9 @@ function main() {
     return;
   }
 
+  section('cc-switch 运行态密钥保护门');
+  checkRuntimeSettingsGuard();
+
   section('Claude common env');
   checkCommonClaudeEnv();
 
@@ -38,6 +41,12 @@ function main() {
 
   section('common 脱敏门（防 token 进 git）');
   checkCommonRedaction();
+
+  section('MCP 路径占位门（防绝对路径进 git）');
+  checkMcpPathLeak();
+
+  section('Desktop MCP 同步');
+  checkDesktopMcpSync();
 
   finish();
 }
@@ -101,7 +110,11 @@ function compareSnapshot(tableName, snapshotPath, rowsOfSnapshot) {
 
   const snapshot = readJsonIfExists(snapshotPath, null);
   const snapshotRows = rowsOfSnapshot(snapshot);
-  const dbRows = selectRows(tableName, tableName === 'mcp_servers' ? 'ORDER BY name, id' : '');
+  let dbRows = selectRows(tableName, tableName === 'mcp_servers' ? 'ORDER BY name, id' : '');
+  // mcp_servers 快照是占位符形态，db 是真实路径；比较前把 db 也 encode，否则恒不一致。
+  if (tableName === 'mcp_servers') {
+    dbRows = dbRows.map((m) => (m.server_config ? { ...m, server_config: encodePaths(m.server_config) } : m));
+  }
 
   if (stableJson(snapshotRows) === stableJson(dbRows)) pass(`${tableName} 与 common 快照一致（${dbRows.length} 条）。`);
   else warn(`${tableName} 与 common 快照不一致：db=${dbRows.length}，snapshot=${snapshotRows.length}。如刚改过 cc-switch，请运行“导出配置.bat”。`);
@@ -132,6 +145,28 @@ function checkProvidersSnapshot() {
   const rows = asRows(doc);
   if (!rows.length) fail('providers/providers.json 存在但为空。');
   else pass(`providers/providers.json 存在（${rows.length} 个 provider）。注意：该目录含 token，不应提交到 git。`);
+}
+
+function checkRuntimeSettingsGuard() {
+  const runtimeRows = selectRows('settings', "WHERE key = 'claude_desktop_gateway_token'");
+  if (!runtimeRows.length || !String(runtimeRows[0].value || '').trim()) {
+    fail('settings.claude_desktop_gateway_token 缺失。Desktop 到 cc-switch Gateway 认证会 401。');
+  } else {
+    pass('settings.claude_desktop_gateway_token 存在（仅检查存在，不打印值）。');
+  }
+
+  if (!fs.existsSync(snapshotPaths.settings)) {
+    warn(`缺少 ${snapshotPaths.settings}，跳过 settings 快照运行态 key 检查。`);
+    return;
+  }
+  const doc = readJsonIfExists(snapshotPaths.settings, { rows: [] });
+  const rows = asRows(doc);
+  const bad = rows.map((row) => String(row.key || '')).filter((key) => key && !key.startsWith('common_config_'));
+  if (bad.length) {
+    fail(`common/settings.json 含非 common_config_ settings key（会破坏本机运行态）：${bad.join(', ')}`);
+  } else {
+    pass('common/settings.json 只包含 common_config_ settings key，不会覆盖运行态密钥。');
+  }
 }
 
 function checkCommonRedaction() {
@@ -166,6 +201,47 @@ function checkCommonRedaction() {
     else fail(`脱敏占位符 ${placeholders} 个，但 common-secrets.json 只有 ${have} 个真实值，恢复会失败。`);
   } else {
     fail(`common/settings.json 有 ${placeholders} 个脱敏占位符，但缺少 providers/common-secrets.json。换机时需手动复制 providers/ 目录。`);
+  }
+}
+
+function checkMcpPathLeak() {
+  if (!fs.existsSync(snapshotPaths.mcpServers)) {
+    warn(`缺少 ${snapshotPaths.mcpServers}，请先运行“导出配置.bat”。`);
+    return;
+  }
+  const raw = fs.readFileSync(snapshotPaths.mcpServers, 'utf8');
+
+  // 一级（fail）：projectRoot / home 的真实路径残留 —— 说明 encode 漏了，这类本可泛化。
+  const encodable = encodePaths(raw);
+  if (encodable !== raw) {
+    fail('mcp_servers.json 残留 projectRoot/home 真实路径，应已占位符化。请重新运行导出。');
+    return;
+  }
+  pass('mcp_servers.json 无 projectRoot/home 真实路径残留（已占位符化）。');
+
+  // 二级（warn）：其他盘符绝对路径（如 D:/Program Files 的 pencil）—— 本机特定，无法泛化。
+  const others = [...raw.matchAll(/"([A-Za-z]:[\\/][^"]*)"/g)].map((m) => m[1]);
+  if (others.length) {
+    warn(`mcp_servers.json 含本机特定绝对路径（换机需重配）：${[...new Set(others)].join(' ; ')}`);
+  }
+}
+
+function checkDesktopMcpSync() {
+  const expected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
+  const targets = [
+    `${process.env.APPDATA || ''}\\Claude\\claude_desktop_config.json`,
+    `${process.env.LOCALAPPDATA || ''}\\Claude-3p\\claude_desktop_config.json`,
+  ].filter(Boolean);
+  for (const target of targets) {
+    if (!fs.existsSync(target)) { warn(`Desktop config 不存在，跳过：${target}`); continue; }
+    let doc;
+    try { doc = JSON.parse(stripBom(fs.readFileSync(target, 'utf8'))); }
+    catch (error) { fail(`Desktop config 不是合法 JSON：${target} (${error.message})`); continue; }
+    const actual = Object.keys(doc.mcpServers || {}).sort();
+    const missing = expected.filter((name) => !actual.includes(name));
+    const extra = actual.filter((name) => !expected.includes(name));
+    if (!missing.length && !extra.length) pass(`Desktop MCP 与 cc-switch enabled_claude 一致：${target}（${actual.length} 个）`);
+    else warn(`Desktop MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
   }
 }
 
