@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://windsurf-dao/skills/dao-ui-mockup/design-tokens.schema.json",
   "title": "dao-ui-mockup design tokens",
-  "description": "Design tokens 输出格式 · 供 dao-plan / dao-execute 消费的统一结构。dao-ui-mockup 第六步「固」的产物（v0.2 六步法：察→援→拟→显→择→固）。",
+  "description": "Design tokens 输出格式 · 供 dao-plan / dao-execute 消费的统一结构。dao-ui-mockup 第五步「择」的产物(唯一长期真相源;五步法:察→援→拟→显→择)。",
   "type": "object",
   "required": ["meta", "colors", "typography", "spacing", "radius", "elevation"],
   "properties": {

@@ -60,7 +60,7 @@ trigger: always_on
 | 步 | obra 概念名 ≡ dao 本地实现 | 产出 |
 |---|---|---|
 | 1 | `superpowers:using-git-worktrees` ≡ `dao-worktree` | 隔离 worktree（路径优先 `~/.config/superpowers/worktrees/`，回落 `.worktrees/`） |
-| 2.0 ⭐ | (无 obra 对应) ≡ `dao-ui-mockup`（六步法 v0.2） | **UI 任务专用前置**——六步：察→援→拟→显→择→固。🔒×2 用户关卡：援（拍板 refCombo）+ 择（拍板方向）。产出：`_tmp/ui-mockup-<topic>-<ts>.html` + `_tmp/design-tokens-<topic>.json` + `_tmp/index-css-draft.css` + `_tmp/component-deltas.md`。非 UI 任务跳过 |
+| 2.0 ⭐ | (无 obra 对应) ≡ `dao-design-taste` §0 分诊 → `dao-ui-mockup` | **UI 任务前置分诊**——先过 dao-design-taste §0：DIRECT 跳原型/SCOPED 局部/FULL 全量。FULL·SCOPED 走五步：察→援→拟→显→择，🔒×2 用户关卡：援（拍板配色/字体方向）+ 择（拍板方向）。唯一长期产物：`_tmp/design-tokens-<topic>.json`（HTML 是 throwaway）。DIRECT 直接查 gallery 跳过 |
 | 2.1 | `superpowers:writing-plans` ≡ `dao-plan` | `docs/specs/<topic>-plan.md`（与项目惯例 + dao-plan skill 一致；UI 任务 plan 第一句必须 "读 _tmp/design-tokens-<topic>.json"） |
 | 3 | `superpowers:subagent-driven-development` ≡ `dao-pyramid` | 每 task 派 implementer subagent，task 间 checkpoint 让用户 review |
 | 4 | `superpowers:requesting-code-review` ≡ `dao-review` | 提交前派 reviewer subagent；核心模块（auth/payment/security/core orchestration）走 reviewer-critical |

@@ -136,7 +136,7 @@ Task 1 (前置) ─┬─→ Task 2 (依赖 1) ─→ Task 3
                └─→ Task 4 (依赖 1, 与 Task 2 并行)
 ```
 
-并行任务标识 = dao-parallel 调度的输入。
+并行任务标识 = dao-pyramid「并行调度模式」的输入。
 
 ## 反模式表
 
@@ -173,7 +173,7 @@ dao-plan (你)
    │ 2-5 分钟粒度任务清单
    ▼
 dao-execute / 主会话调度
-   │ 串行 / 并行 (dao-parallel)
+   │ 串行 / 并行 (dao-pyramid 并行调度)
    ▼
 dao-test (RED-GREEN) + dao-verify (验证)
    │

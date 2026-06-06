@@ -155,7 +155,7 @@ const networkReqs = mcp0_list_network_requests()
 - `dao-test`（互补）— TDD 是开发者视角，simulation 是用户视角；可同时跑
 - `dao-full-coverage`（数据源）— simulation 报告填到 8 维度的"测试 + 性能"维度
 - `dao-debug` — simulation 发现的高严重度 bug 派给 dao-debug 死磕
-- `dao-frontend-aesthetics` — simulation 发现的"视"维度问题反馈给 aesthetics
+- `dao-design-taste` — simulation 发现的"视"维度问题反馈给 taste 基石
 
 ## 反原则
 
