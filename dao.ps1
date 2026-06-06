@@ -88,9 +88,9 @@ function Resolve-TargetPath {
 function Invoke-Status {
     # 源仓库信息
     Write-Host "`n  Source: $DaoRoot" -ForegroundColor Cyan
-    $rCount = (Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "*.md").Count
-    $sCount = (Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory).Count
-    $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "*.md").Count
+    $rCount = (Get-ChildItem (Join-Path $DaoWindsurf "rules") -Filter "*.md" -ErrorAction SilentlyContinue).Count
+    $sCount = (Get-ChildItem (Join-Path $DaoWindsurf "skills") -Directory -ErrorAction SilentlyContinue).Count
+    $wCount = (Get-ChildItem (Join-Path $DaoWindsurf "workflows") -Filter "*.md" -ErrorAction SilentlyContinue).Count
     $stCount = (Get-ChildItem (Join-Path $DaoWindsurf "stacks") -Filter "*.md" -ErrorAction SilentlyContinue).Count
     Write-Host "  Files: ${rCount} rules, ${sCount} skills, ${wCount} workflows, ${stCount} stacks"
 
@@ -1288,4 +1288,3 @@ switch ($Action) {
 "@
     }
 }
-

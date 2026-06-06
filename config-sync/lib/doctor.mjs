@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths } from './paths.mjs';
+import path from 'node:path';
+import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 
@@ -45,8 +46,8 @@ function main() {
   section('MCP 路径占位门（防绝对路径进 git）');
   checkMcpPathLeak();
 
-  section('Desktop MCP 同步');
-  checkDesktopMcpSync();
+  section('客户端 MCP 同步');
+  checkClientMcpSync();
 
   finish();
 }
@@ -226,23 +227,48 @@ function checkMcpPathLeak() {
   }
 }
 
-function checkDesktopMcpSync() {
-  const expected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
-  const targets = [
-    `${process.env.APPDATA || ''}\\Claude\\claude_desktop_config.json`,
-    `${process.env.LOCALAPPDATA || ''}\\Claude-3p\\claude_desktop_config.json`,
-  ].filter(Boolean);
-  for (const target of targets) {
-    if (!fs.existsSync(target)) { warn(`Desktop config 不存在，跳过：${target}`); continue; }
-    let doc;
-    try { doc = JSON.parse(stripBom(fs.readFileSync(target, 'utf8'))); }
-    catch (error) { fail(`Desktop config 不是合法 JSON：${target} (${error.message})`); continue; }
-    const actual = Object.keys(doc.mcpServers || {}).sort();
-    const missing = expected.filter((name) => !actual.includes(name));
-    const extra = actual.filter((name) => !expected.includes(name));
-    if (!missing.length && !extra.length) pass(`Desktop MCP 与 cc-switch enabled_claude 一致：${target}（${actual.length} 个）`);
-    else warn(`Desktop MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
+function checkClientMcpSync() {
+  const expectedClaude = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
+  const expectedCodex = selectRows('mcp_servers', 'WHERE enabled_codex = 1 ORDER BY name').map((row) => row.name);
+  const jsonTargets = [
+    { label: 'Claude Code CLI', path: path.join(homeDir, '.claude.json'), expected: expectedClaude },
+    { label: 'Roaming Claude Desktop', path: path.join(homeDir, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json'), expected: expectedClaude },
+    { label: 'Local Claude-3p Desktop', path: path.join(homeDir, 'AppData', 'Local', 'Claude-3p', 'claude_desktop_config.json'), expected: expectedClaude },
+  ];
+  for (const target of jsonTargets) {
+    checkJsonMcpTarget(target);
   }
+
+  checkCodexMcpTarget(path.join(homeDir, '.codex', 'config.toml'), expectedCodex);
+}
+
+function checkJsonMcpTarget({ label, path: target, expected }) {
+  if (!fs.existsSync(target)) { warn(`${label} config 不存在，跳过：${target}`); return; }
+  let doc;
+  try { doc = JSON.parse(stripBom(fs.readFileSync(target, 'utf8'))); }
+  catch (error) { fail(`${label} config 不是合法 JSON：${target} (${error.message})`); return; }
+  const actual = Object.keys(doc.mcpServers || {}).sort();
+  reportMcpDiff(label, target, expected, actual);
+}
+
+function checkCodexMcpTarget(target, expected) {
+  if (!fs.existsSync(target)) { warn(`Codex config 不存在，跳过：${target}`); return; }
+  const raw = stripBom(fs.readFileSync(target, 'utf8'));
+  const actual = [...raw.matchAll(/^\[mcp_servers\.([^\].]+)\]\s*$/gm)].map((m) => unquoteTomlKey(m[1])).sort();
+  reportMcpDiff('Codex config', target, expected, actual);
+}
+
+function unquoteTomlKey(key) {
+  if (!key.startsWith('"')) return key;
+  try { return JSON.parse(key); } catch { return key; }
+}
+
+function reportMcpDiff(label, target, expected, actual) {
+  const expectedSorted = [...expected].sort();
+  const missing = expectedSorted.filter((name) => !actual.includes(name));
+  const extra = actual.filter((name) => !expectedSorted.includes(name));
+  if (!missing.length && !extra.length) pass(`${label} MCP 与 cc-switch 一致：${target}（${actual.length} 个）`);
+  else warn(`${label} MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
 }
 
 function asRows(doc) {
