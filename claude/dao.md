@@ -119,7 +119,9 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`
 
 AI 主动产出（文档 / commit message / TODO / 代码注释 / 调试日志）在中文项目语境下用中文；专有名词（API / 库名 / 协议字段 / 错误码 / 标识符 / shell 命令 / 文件扩展名）保留原文。迷茫时问"给谁看"：人 → 中文，机器 → 原文。
 
-**Commit 标识铁律**：AI 创建的每个 commit，subject 行**必须以当前宿主标识前缀开头**，一眼识别 AI 提交。Claude Code 用 `[cc] `，Codex / Code X 用 `[codex] `。格式：`[宿主] type(scope): 描述`（如 `[codex] feat(auth): 加登录`）。--amend 修补已有 commit 时若原 subject 无宿主前缀则补上。此标识独立于 Claude Code 内置 footer（后者可按需关闭，前缀始终保留）。
+**Commit 标识铁律**：AI 创建的每个 commit，subject 行**必须以当前宿主标识前缀开头**，一眼识别 AI 提交。Claude Code 用 `[cc] `，Codex / Code X 用 `[codex] `。格式：`[宿主] type(scope): 描述`（如 `[codex] feat(auth): 加登录`）。
+
+提交前必须先做一次宿主自检：回答“我当前运行在哪个宿主？”再生成 subject。禁止凭最近历史或旧示例沿用 `[cc]`；在 Codex / Code X 里即使修改的是 `claude/` 目录，也必须用 `[codex]`。提交后用 `git log -1 --oneline` 核对前缀，不符则在 push 前 amend 修正；已 push 后不改历史，另起修正并沉淀教训。--amend 修补已有 commit 时若原 subject 无宿主前缀则补上。此标识独立于 Claude Code 内置 footer（后者可按需关闭，前缀始终保留）。
 
 ## 反 · 归（太极之复）
 
