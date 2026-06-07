@@ -59,7 +59,11 @@ export const PLACEHOLDER_HOME = '${HOME}';
 function pathVariants(absPath) {
   const fwd = absPath.replace(/\\/g, '/');
   const back = absPath.replace(/\//g, '\\');
-  return [...new Set([absPath, fwd, back])];
+  const escapedBack = back.replace(/\\/g, '\\\\');
+  const extendedBack = `\\\\?\\${back}`;
+  const escapedExtendedBack = extendedBack.replace(/\\/g, '\\\\');
+  // 长路径前缀先替换，避免只替掉其中的 home/projectRoot 后残留 \\?\ 前缀。
+  return [...new Set([escapedExtendedBack, extendedBack, escapedBack, absPath, fwd, back])];
 }
 
 // 真实路径 → 占位符（导出）。projectRoot 先于 home，避免 home 截断 projectRoot。
