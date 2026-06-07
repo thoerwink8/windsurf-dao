@@ -62,6 +62,7 @@ CLI 是回合制，用户自然会接着输入，**不必每条回复都问下�
 | 项目知识（学到了什么 / 模式 / 决策） | `AGENT_GUIDE.md` |
 | 操作流程 | `commands/`（slash command） |
 | 具体技能（实现层） | `skills/` |
+| 会话记忆 / 用户偏好 / 协作流程 | `memory/`（`dao-memory` skill 管理） |
 | 教训 / 踩坑 | `data/evolution-lessons.csv`（`dao-evolution` skill 管理） |
 
 **Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
@@ -95,9 +96,10 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`
 | review / 接受批评 | `dao-review` | 受国之垢 (78) |
 | UI / 界面 / 组件 / 主题 | `dao-design-taste`(基石总闸,先分诊) | 大象无形 (41) |
 | 教训 / 演化记录 | `dao-evolution` | 知常曰明 (16) |
+| 会话复盘 / 长期记忆 | `dao-memory` | 各复归其根 (16) |
 | 深度哲学反思 | `dao-philosophy` | 八条不变之道 |
 
-**不知道该用哪个 skill?** → 查 `dao-skill-ecosystem` 的「全景地图」:37 个 skill 按阶段/领域分类 + 触发类型(🤖自动/✋手动/🔗被调)。本表只列高频入口,完整清单由 Claude Code 渐进披露按 description 自动调度。
+**不知道该用哪个 skill?** → 查 `dao-skill-ecosystem` 的「全景地图」:38 个 skill 按阶段/领域分类 + 触发类型(🤖自动/✋手动/🔗被调)。本表只列高频入口,完整清单由 Claude Code 渐进披露按 description 自动调度。
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 
@@ -126,4 +128,3 @@ AI 主动产出（文档 / commit message / TODO / 代码注释 / 调试日志�
 止于躁 · 深于广 · 长对话（10 轮+）重读初心 · 基础假设被推翻时即停重估 · 任务暴露系统缺口时考虑 `/dao-evolve`。
 
 法不违德，德不违道，道法自然。
-

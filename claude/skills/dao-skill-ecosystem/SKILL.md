@@ -201,6 +201,7 @@ dao skills 提供方法论（HOW），kit skills 提供实现（WHAT）。加载
 | `dao-fa-mechanism` | Claude Code 运行机制参考 | ✋ |
 | `dao-cli` | 工具选择(CLI-first/MCP边界/工具箱) | 🤖 |
 | `dao-evolution` | 教训/经验/历史问题检索 | 🤖✋ |
+| `dao-memory` | 会话复盘/长期记忆/协作偏好/skill 缺口沉淀 | 🤖✋ |
 | `dao-compliance-check` | 用户问"是否遵守 CLAUDE.md" | 🤖 |
 
 ## 减量提案(待用户拍板,AI 不擅自删)
@@ -215,5 +216,4 @@ dao skills 提供方法论（HOW），kit skills 提供实现（WHAT）。加载
 | `dao-boundary-probe` + `dao-reverse-engineering` + `dao-windsurf-extension` 合并探测族 | ⏸️ **暂不动** | 主题相近但各有独立触发场景,暂保留 |
 
 > 体检后已修的 description(触发词偏弱):`dao-debug` / `dao-deploy` / `dao-verify` / `dao-research` / `dao-reverse-engineering` 补触发场景,`dao-compliance-check` 清理 trigger 残留文本。
-
 
