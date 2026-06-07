@@ -50,9 +50,50 @@ description: 任务结束、会话复盘、定时回顾、用户反馈后，用�
 - 不根据一次行为推断用户性格。
 - 不把项目临时细节写入 `user-profile.md`。
 - 不把未经验证的猜测写成长期规则。
+- 不把不同工具、产品、项目或会话来源混为一谈；例如 Codex、Claude Code、Claude Desktop、cc-switch、Pencil 是不同对象，必须按用户原话和证据分清边界。
+- 不把已被用户废弃的方案继续作为默认路径；只能作为历史背景或反例记录。
 - 不自动安装 skill，只记录到 `skill-backlog.md`。
 - 不写空泛结论，例如“注意沟通”“提高效率”。
 - 长期记忆必须短、具体、可执行、可删除。
+
+## 证据来源与边界
+
+复盘跨会话、跨工具或跨项目内容时，先写清楚证据范围：
+
+```markdown
+## 证据范围
+
+- 已读取：<线程、日志、文件、数据库、截图、工具输出>
+- 未读取：<不可访问、未命中、被截断或未授权的来源>
+- 只能推断：<基于现有证据的判断，不写成事实>
+- 明确废弃：<用户已经否定或弃用的方案>
+```
+
+如果用户要求“读历史”“继续会话”“从上次接着做”，优先按实际可访问入口恢复上下文：
+
+- Codex 线程：用线程列表和 `read_thread` 读取最近 turn 摘要。
+- Claude Code / Claude Desktop：查 `~/.claude/projects/**.jsonl`、桌面端配置和 cc-switch 同步索引。
+- cc-switch：查 `cc-switch.db`、`session_log_sync`、skills/prompts/settings 等表，只读定位来源。
+- 本地项目：查 `git status`、相关文档、最近改动和会话中提到的产物。
+
+边界不清时，不要直接沉淀偏好；先把“可见证据不足”写入 session 复盘。
+
+## 用户纠偏优先
+
+用户纠正 agent 时，优先沉淀“下次不要再错的边界”，而不是为当前错误找解释。
+
+需要记录：
+
+- 用户原话纠偏了什么。
+- agent 当时错把什么对象当成了什么对象。
+- 下次遇到同类请求时应该先验证哪个边界。
+- 这条规则应该进 `collaboration-style.md`、`workflow-rules.md`，还是只保留在 `sessions/`。
+
+示例：
+
+```markdown
+- 用户问 Claude Code 桌面端配置时，不要默认查 Codex 的 `.codex/config.toml`；应先区分 Codex、Claude Desktop、Claude Code CLI 和 cc-switch 的配置路径。
+```
 
 ## 推荐目录
 
