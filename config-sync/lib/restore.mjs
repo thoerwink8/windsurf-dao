@@ -9,16 +9,17 @@ import {
 } from './sqlite.mjs';
 import { applySecrets, commonSecretsPath, countPlaceholders } from './secrets.mjs';
 
-// 把脱敏的 settings 行还原成真实值。JSON 行用 common-secrets.json 合并；非 JSON 原样保留。
+// 把脱敏的 settings 行还原成真实值，并把 ${PROJECT_ROOT}/${HOME} 路径占位符还原成本机路径。JSON 行用 common-secrets.json 合并；非 JSON（如 codex TOML）只还原路径。
 function rehydrateSettings(rows) {
   const doc = readJsonIfExists(commonSecretsPath, null);
   const secretsMap = doc?.secrets || {};
   return rows.map((row) => {
+    const decodedValue = decodePaths(row.value);
     let parsed;
     try {
-      parsed = JSON.parse(row.value);
+      parsed = JSON.parse(decodedValue);
     } catch {
-      return { key: row.key, value: row.value };
+      return { key: row.key, value: decodedValue };
     }
     const restored = applySecrets(row.key, parsed, secretsMap);
     const remaining = countPlaceholders(restored);

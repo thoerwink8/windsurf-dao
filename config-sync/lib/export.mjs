@@ -2,7 +2,7 @@ import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths } from './pat
 import { selectRows, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, redactValue } from './secrets.mjs';
 
-// 对 settings 行脱敏：value 是 JSON 的逐字段脱敏，非 JSON（如 codex TOML）原样保留。
+// 对 settings 行脱敏并占位符化路径：value 是 JSON 的逐字段脱敏，非 JSON（如 codex TOML）原样保留但仍做路径占位。
 // 返回 { redactedRows, secrets, skippedNonJson }。
 function redactSettings(rows) {
   const redactedRows = [];
@@ -13,14 +13,14 @@ function redactSettings(rows) {
     try {
       parsed = JSON.parse(row.value);
     } catch {
-      // 非 JSON（codex 用 TOML 字符串）：不脱敏，原样保留。这类 common 不含 token。
-      redactedRows.push({ key: row.key, value: row.value });
+      // 非 JSON（codex 用 TOML 字符串）：不脱敏，但仍占位符化 home/project 路径，避免快照绑定本机。
+      redactedRows.push({ key: row.key, value: encodePaths(row.value) });
       skippedNonJson.push(row.key);
       continue;
     }
     const { redacted, secrets: rowSecrets } = redactValue(row.key, parsed);
     Object.assign(secrets, rowSecrets);
-    redactedRows.push({ key: row.key, value: JSON.stringify(redacted) });
+    redactedRows.push({ key: row.key, value: encodePaths(JSON.stringify(redacted)) });
   }
   return { redactedRows, secrets, skippedNonJson };
 }
