@@ -1,0 +1,20 @@
+{
+  "name": "openai-curated-remote",
+  "interface": {
+    "displayName": "OpenAI Curated"
+  },
+  "plugins": [
+    {
+      "name": "product-design",
+      "source": {
+        "source": "local",
+        "path": "./plugins/product-design"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Design"
+    }
+  ]
+}
