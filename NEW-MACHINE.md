@@ -147,9 +147,8 @@ config-sync 在导出时把两类本机路径替换成占位符，恢复时还�
 
 **给 AI 的执行约定**（写给未来接手的 AI）：
 - 每次被要求「更新 X 配置 / 加 Y 工具 / 改部署方式」，完成后**自检**：这条改动会影响新机器搭建吗？会 → 同步改本文对应节，一起 commit。
-- commit message 里注明文档已同步（如 `[cc] feat(config-sync): 加 X + 同步 NEW-MACHINE.md`）。
+- commit message 里注明文档已同步，并使用当前宿主前缀（如 `[codex] feat(config-sync): 加 X + 同步 NEW-MACHINE.md`）。
 - 不确定要不要更新 → 默认更新。漏更比多更代价大。
 
 > 这条机制本身也写进了仓库 `AGENT_GUIDE.md`（AI 加载时自读），形成闭环。
-
 

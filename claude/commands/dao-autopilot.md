@@ -66,7 +66,7 @@ dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 �
 ### 唯一允许的合并场景
 
 **强耦合组合 task**：A 的 verify 隐含 B 的前置（如「装包 + 写 config」，写 config 的 verify 必然包含装包成功）。
-- 必须在 commit message 显式写组合 ID：`autopilot(TG-1+TG-2): ...`
+- 必须在 commit message 显式写组合 ID，且保留当前宿主前缀：`[宿主] autopilot(TG-1+TG-2): ...`
 - 必须在 §2.1.1 涅槃门中标明这是组合 task
 - ≤ 2 个 task 合并；超过 2 个一律拆开
 
@@ -262,7 +262,8 @@ N1 → N3 → N4
 2. 验证任务结果（构建通过、功能可运行）
 3. Git commit：
    ```powershell
-   git commit -m "autopilot([ID]): [task description]"
+   # 提交前先按当前宿主替换 [宿主]：Claude Code 用 [cc]，Codex / Code X 用 [codex]
+   git commit -m "[宿主] autopilot([ID]): [task description]"
    ```
 4. **回写 TODO.md**：将 `- [ ]` 改为 `- [x]`（定位用 `todo_line` 字段）
 5. 更新 `state.json`：`status: "done"`，记录 commit hash 和 rollback_cmd
