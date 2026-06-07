@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
@@ -233,12 +234,12 @@ function checkClientMcpSync() {
   const jsonTargets = [
     { label: 'Claude Code CLI', path: path.join(homeDir, '.claude.json'), expected: expectedClaude },
     { label: 'Roaming Claude Desktop', path: path.join(homeDir, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json'), expected: expectedClaude },
-    { label: 'Local Claude-3p Desktop', path: path.join(homeDir, 'AppData', 'Local', 'Claude-3p', 'claude_desktop_config.json'), expected: expectedClaude },
   ];
   for (const target of jsonTargets) {
     checkJsonMcpTarget(target);
   }
 
+  checkClaude3pRuntimeMcp(expectedClaude);
   checkCodexMcpTarget(path.join(homeDir, '.codex', 'config.toml'), expectedCodex);
 }
 
@@ -249,6 +250,53 @@ function checkJsonMcpTarget({ label, path: target, expected }) {
   catch (error) { fail(`${label} config 不是合法 JSON：${target} (${error.message})`); return; }
   const actual = Object.keys(doc.mcpServers || {}).sort();
   reportMcpDiff(label, target, expected, actual);
+}
+
+function checkClaude3pRuntimeMcp(expected) {
+  if (process.platform !== 'win32') return;
+  let commandLines = [];
+  try {
+    const ps = [
+      'Get-CimInstance Win32_Process',
+      '| Where-Object { $_.CommandLine -like "*Local\\Claude-3p\\claude-code*" -and $_.CommandLine -like "*--mcp-config*" }',
+      '| Select-Object -ExpandProperty CommandLine',
+      '| ConvertTo-Json -Compress',
+    ].join(' ');
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim();
+    if (raw) commandLines = JSON.parse(raw);
+    if (typeof commandLines === 'string') commandLines = [commandLines];
+  } catch (error) {
+    warn(`Claude-3p 运行态 MCP 检查失败：${error.message}`);
+    return;
+  }
+
+  if (!commandLines.length) {
+    warn('未发现运行中的 Claude-3p claude-code --mcp-config 进程；跳过 Claude-3p 运行态 MCP 检查。');
+    return;
+  }
+
+  const actual = extractClaude3pRuntimeMcpNames(commandLines[0]);
+  if (!actual.length) {
+    warn('发现 Claude-3p claude-code 进程，但无法解析 --mcp-config 中的 mcpServers；跳过一致性判定。');
+    return;
+  }
+  reportMcpDiff('Claude-3p runtime --mcp-config', 'process command line', expected, actual);
+}
+
+function extractClaude3pRuntimeMcpNames(commandLine) {
+  const match = String(commandLine).match(/--mcp-config\s+"((?:\\.|[^"])*)"/);
+  if (match) {
+    try {
+      const unescaped = JSON.parse(`"${match[1]}"`);
+      const doc = JSON.parse(unescaped);
+      return Object.keys(doc.mcpServers || {}).sort();
+    } catch {
+      // fallback below
+    }
+  }
+
+  const known = selectRows('mcp_servers', 'ORDER BY name').map((row) => row.name);
+  return known.filter((name) => String(commandLine).includes(`"${name}"`) || String(commandLine).includes(`\\"${name}\\"`)).sort();
 }
 
 function checkCodexMcpTarget(target, expected) {
