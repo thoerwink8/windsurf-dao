@@ -12,6 +12,8 @@
 |---|---|---|
 | **[USAGE.md](USAGE.md)** | 普通用户 | 想知道怎么用 dao 时（3 分钟入门）⭐ |
 | [README.md](README.md)（本文） | 开发者 / 贡献者 | 想了解架构和文件清单 |
+| [NEW-MACHINE.md](NEW-MACHINE.md) | 换机部署者 | 新机器从零搭建完整环境时 🖥️ |
+| [MIGRATION.md](MIGRATION.md) | 部署者 | 把 dao 规则部署进某个项目时 |
 | [AGENT_GUIDE.md](AGENT_GUIDE.md) | AI 自身 | AI 加载时自动读（人也可看） |
 | [docs/specs/](docs/specs/) | 开发者 | 查历史 plan 归档 |
 
