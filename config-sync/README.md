@@ -73,6 +73,8 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 恢复后请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置。
 
+恢复时还会把仓库里的 `local-marketplaces/` 目录（如 Codex 本地插件市场 `oai-product-design`）铺回本机 `~/.codex/local-marketplaces/`。这类远程市场插件（如 Product Design）只缓存在本机、不随 cc-switch DB 走，纳入仓库后换机即可自动恢复；恢复后需在 Codex 里确认对应插件已启用。
+
 ### 同步客户端 MCP
 
 双击：

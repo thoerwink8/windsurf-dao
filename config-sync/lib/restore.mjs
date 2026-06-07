@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { readJsonIfExists, snapshotPaths, decodePaths } from './paths.mjs';
+import path from 'node:path';
+import { readJsonIfExists, snapshotPaths, decodePaths, localMarketplacesRepoDir, localMarketplacesHomeDir } from './paths.mjs';
 import {
   backupDb,
   clearTableStatement,
@@ -30,6 +31,34 @@ function rehydrateSettings(rows) {
   });
 }
 
+function copyDirRecursive(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(s, d);
+    else if (entry.isFile()) fs.copyFileSync(s, d);
+  }
+}
+
+// 把仓库里的本地市场目录铺回本机 ~/.codex/local-marketplaces/。
+// 不存在源目录则跳过（老快照无此目录时不报错）；复制失败抛出，不静默吞。
+function restoreLocalMarketplaces() {
+  if (!fs.existsSync(localMarketplacesRepoDir)) {
+    return { restored: 0, skipped: true };
+  }
+  const names = fs.readdirSync(localMarketplacesRepoDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
+  for (const name of names) {
+    copyDirRecursive(
+      path.join(localMarketplacesRepoDir, name),
+      path.join(localMarketplacesHomeDir, name),
+    );
+  }
+  return { restored: names.length, skipped: false, names };
+}
+
 function main() {
   const snapshots = loadSnapshots();
   validateProviders(snapshots.providers);
@@ -54,6 +83,8 @@ function main() {
 
   transaction(statements);
 
+  const mkt = restoreLocalMarketplaces();
+
   console.log('config-sync 恢复完成');
   console.log(`  数据库备份：${backupPath}`);
   console.log(`  settings: ${snapshots.settings.length}`);
@@ -65,6 +96,7 @@ function main() {
   console.log(`  model_pricing: ${snapshots.model_pricing.length}`);
   console.log(`  providers: ${snapshots.providers.length}`);
   console.log(`  provider_endpoints: ${snapshots.provider_endpoints.length}`);
+  console.log(`  local_marketplaces: ${mkt.skipped ? '(无，跳过)' : mkt.restored + ' 个 -> ' + localMarketplacesHomeDir}`);
   console.log('');
   console.log('请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置到各端。');
 }

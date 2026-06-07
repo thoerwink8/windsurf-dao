@@ -15,6 +15,12 @@ export const claudeSettingsPath = path.join(homeDir, '.claude', 'settings.json')
 export const commonDir = path.join(configSyncRoot, 'common');
 export const providersDir = path.join(configSyncRoot, 'providers');
 
+// 本地插件市场资产：进 git 的仓库副本 + 本机 Codex 实际读取位置。
+// Codex 的远程市场插件（如 product-design）只缓存在本机，不随 cc-switch DB 走，
+// 故把市场目录纳入仓库，换机 restore 时铺回本机，config.toml 里的 source 指向后者。
+export const localMarketplacesRepoDir = path.join(configSyncRoot, 'local-marketplaces');
+export const localMarketplacesHomeDir = path.join(homeDir, '.codex', 'local-marketplaces');
+
 export const snapshotPaths = {
   settings: path.join(commonDir, 'settings.json'),
   mcpServers: path.join(commonDir, 'mcp_servers.json'),
