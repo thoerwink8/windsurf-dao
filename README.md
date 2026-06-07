@@ -77,7 +77,7 @@
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
-### 二十八个技能（`.windsurf/skills/`）
+### 技能（`.windsurf/skills/`）
 
 **元层与调度**
 
@@ -86,6 +86,7 @@
 | `dao-fa-mechanism`        | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
 | `dao-pyramid`             | Subagent 金字塔调度：高级出 spec，低级按 spec 执行 |
 | `dao-evolution`           | 演化条目与教训管理（`evolution-*.csv` 读写 + BM25 搜索） |
+| `dao-memory`              | 会话复盘与长期记忆沉淀：偏好、流程、skill 缺口、资料线索 |
 | `dao-skill-ecosystem`     | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
 
 **开发流程（/cycle 镜头）**
@@ -175,7 +176,7 @@ windsurf-dao 自身也以此为范——身教重于言教。
 | 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
 |---|---|---|---|
 | 场域根基 | `claude/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
-| 技能 | `claude/skills/dao-*/` | 36 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含 28 原 dao + 部分 rule 转 skill + 自检 skill） |
+| 技能 | `claude/skills/dao-*/` | 38 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含原 dao + 部分 rule 转 skill + 自检 skill） |
 | 命令 | `claude/commands/dao-*.md` | 10 | slash command，`/dao-dev` `/dao-cycle` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
 | 子代理 | `claude/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
 | 技术栈处方 | `claude/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
