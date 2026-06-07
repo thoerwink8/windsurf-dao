@@ -9,8 +9,11 @@ const CLAUDE_JSON_PATH = path.join(home, '.claude.json');
 const CODEX_CONFIG_PATH = path.join(home, '.codex', 'config.toml');
 const DESKTOP_TARGETS = [
   { label: 'Roaming Claude Desktop', path: path.join(home, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json') },
-  { label: 'Local Claude-3p Desktop', path: path.join(home, 'AppData', 'Local', 'Claude-3p', 'claude_desktop_config.json') },
 ];
+
+// Claude-3p / CloudCode Desktop 不以 Local/Claude-3p/claude_desktop_config.json 作为 MCP 真相源。
+// 运行态会启动 Local/Claude-3p/claude-code/<version>/claude.exe，并通过 --mcp-config 注入 MCP。
+// 该 claude_desktop_config.json 会被桌面端运行时重写成自身偏好结构，硬写 mcpServers 会被覆盖。
 
 function readJson(filePath) {
   if (!fs.existsSync(filePath)) return {};

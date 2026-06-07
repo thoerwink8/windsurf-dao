@@ -14,6 +14,7 @@ config-sync/
   导出配置.bat
   恢复配置.bat
   体检.bat
+  检查Goal任务状态.bat
   同步客户端 MCP.bat
   同步Desktop MCP.bat
   盘点来源.bat
@@ -84,8 +85,9 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 - `enabled_claude=1` 写入 `~/.claude.json`
 - `%APPDATA%\Claude\claude_desktop_config.json`
-- `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json`
 - `enabled_codex=1` 写入 `~/.codex/config.toml`
+
+Claude-3p / CloudCode Desktop 不把 `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json` 作为 MCP 真相源；运行时会通过 `Local\Claude-3p\claude-code\<version>\claude.exe --mcp-config ...` 注入 MCP，因此体检只检查运行态 `--mcp-config`，不硬写这个会被应用重写的文件。
 
 JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_servers]` 区块，保留其他配置字段；写入前会生成 `*.before-*-YYYYMMDD_HHMMSS.bak` 备份。当前策略是所有 MCP 先注册到 cc-switch，能用的启用，死配置保留但不启用。
 
@@ -108,13 +110,32 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 - `common/settings.json` 是否已脱敏（无明文密钥）、占位符与 `common-secrets.json` 是否配套；
 - `settings.claude_desktop_gateway_token` 是否存在，且未进入 `common/settings.json`；
 - `common/mcp_servers.json` 是否已把项目路径 / home 路径占位符化；
-- Claude Code CLI / Claude Desktop / Claude-3p 的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
+- Claude Code CLI / Claude Desktop 的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
+- Claude-3p / CloudCode Desktop 运行态 `--mcp-config` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - Codex 的 `[mcp_servers]` 是否与 cc-switch 中 `enabled_codex=1` 的 MCP 一致；
 - `providers/providers.json` 是否存在且非空。
 
 `claude_desktop_gateway_token` 是本机运行态密钥，只存在于当前 cc-switch db 中，不进入 `common/`，也不由恢复脚本覆盖。恢复脚本只 upsert `common_config_` 开头的 settings key，避免把 Desktop Gateway 认证 token 清空后导致 401。
 
 `common/mcp_servers.json` 里的 `server_config` 会把项目路径与 home 路径分别写成 `${PROJECT_ROOT}` / `${HOME}`，恢复时再还原成本机路径，避免把 `D:/frank/windsurf-dao` 或用户 home 直接提交到 git。Pencil 这类安装在 `D:/Program Files/...` 的本机特定路径无法自动泛化，体检只会提醒；换机后需要按新机器安装路径重配。
+
+### Goal 任务状态检查
+
+双击：
+
+```text
+检查Goal任务状态.bat
+```
+
+用途：在 Claude Code Desktop 的 goal 模式卡住、异常中断或疑似空转后，扫描 `~/.claude/tasks` 与 `~/.claude/projects`，确认是否存在会让 goal 误判“目标未完成”的任务状态残留。
+
+检查项：
+
+- task JSON 是否能正常解析（兼容 UTF-8 BOM）；
+- 是否存在超过 15 分钟未更新的 `in_progress` 任务；
+- transcript 里是否出现“文字声称 `TaskUpdate #N completed`，但没有真实 TaskUpdate 工具调用，且任务文件仍未 completed”的风险。
+
+检查脚本只读，不自动修改。出现问题时，应先核对对应 transcript 是否真的完成，再决定补标 completed 或保留未完成状态；不要批量盲标。
 
 ### 盘点来源
 
