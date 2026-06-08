@@ -49,6 +49,8 @@ Agent 通过五种感官与系统交互，每种感官有不同的可靠性：
 | C10 编辑工具卡死/反复失败 | `apply_patch` 连续 2 次失败，或同一文件匹配失败后仍重试 | 上下文锚点不稳、CRLF/不可见字符、工具语法误判、一次 patch 过大 | 立即停止同法重试；重读目标行；拆成单文件/单 hunk；优先用更小锚点或整文件重写；必要时让用户批准外部脚本 |
 | C11 Shell 方言错配 | PowerShell 报 `ParserError`、`MissingExpressionAfterToken`，或 bash heredoc 语法失效 | 把 Bash 写法用于 PowerShell，如 `python - <<'PY'` | 改为 PowerShell 原生 here-string + `Set-Content`，或使用文件工具创建脚本；命令前先确认当前 OS/Shell |
 | C12 临时文件落点被拒 | `write_to_file` 提示 gitignored / prohibited，或临时脚本无法创建 | 文件工具不能写 `.gitignore` 覆盖路径；项目 `_tmp/` 被忽略 | 不再坚持该路径；改用非忽略的项目 scratch、系统临时目录（需命令批准），或直接用编辑工具；完成后清理 |
+| C13 项目流程绕行 | 用户要安装/升级/生效，Agent 只跑了通用 typecheck/build | 未先读项目根规范，误把局部验证当发布证据 | 读 `AGENT_GUIDE.md`/README/scripts/`ship.*`，执行项目封装发布链路；用版本、产物、安装目录、同步 hash、退出码判定 |
+| C14 Wrapper 幽灵后台 | `command_status` 长期 RUNNING 且无输出，OS 进程查不到，产物无变化 | shell wrapper 状态漂移或 IDE shell integration 异常 | 用脚本名/项目名/产物名查进程 + 检查产物状态；确认幽灵后重新启动同一项目流程并立即读输出 |
 
 ## 诊断协议（到第一个匹配停下）
 
@@ -64,7 +66,9 @@ Agent 通过五种感官与系统交互，每种感官有不同的可靠性：
 9. 临时文件路径是否被 `.gitignore` / 权限拒绝？ → C12 → 换落点或改工具
 10. 是否在读取 >1MB 或二进制文件？ → C8 → 写脚本到可写临时路径
 11. 输出路径、prompt、marker 是否与目标项目不一致？ → C9 → 路径锚定串行重跑
-12. 以上都不是 → C7 → 非阻塞等待
+12. 用户诉求是否是安装/升级/生效，当前只跑了通用验证？ → C13 → 读项目规范并跑封装发布链路
+13. 后台命令是否 RUNNING 无输出且 OS 进程/产物无变化？ → C14 → 判定幽灵后台并重启同一项目流程
+14. 以上都不是 → C7 → 非阻塞等待
 ```
 
 ## 发命令前必检清单
@@ -79,6 +83,8 @@ Agent 通过五种感官与系统交互，每种感官有不同的可靠性：
 6. **短且简**: 一次 3-6 条命令，禁止长管道
 7. **方言匹配**: Windows PowerShell 禁用 Bash heredoc；复杂脚本先落文件
 8. **失败熔断**: 同一工具/同一文件连续失败 2 次，必须换策略，不得第三次盲试
+9. **项目流程**: 安装/升级/发布/生效类任务先找项目封装脚本，通用 typecheck/build 只作局部验证
+10. **静默后台核验**: 后台命令无输出时同时查 OS 进程和产物变化，再决定等待或重启
 
 ## 降级路径
 
@@ -108,6 +114,8 @@ Agent 通过五种感官与系统交互，每种感官有不同的可靠性：
 | 内联大文件 | PowerShell `ReadAllBytes` 加载 5MB 二进制 | 写 `_tmp/query.js` + `node _tmp/query.js` 、用后删除 |
 | 目录幻觉 | `Cwd` 写了 A，但输出像 B | 用工具自带路径参数串行重跑，不信 shell prompt |
 | 并行验错 | 并行 test/typecheck/install 后输出互串 | 关键验证串行 + marker + exit code |
+| 发布绕行 | 需要插件/客户端生效时只跑 typecheck/build | 读项目规范，执行封装 ship/dev/install 脚本，用安装产物判定 |
+| 幽灵后台 | `command_status` RUNNING 无输出但进程和产物都没动 | 判 wrapper 异常，重启同一项目流程并立即读输出 |
 | 编辑撞墙 | `apply_patch` 失败后继续用同样上下文重试 | 两次失败即 C10 熔断，重读目标行并换策略 |
 | Bash 幻觉 | 在 PowerShell 里写 `python - <<'PY'` | 使用 PowerShell here-string 写临时脚本 |
 | `_tmp` 执念 | 文件工具不能写 gitignored `_tmp/` 仍坚持 | 改可写非忽略路径或系统临时目录，必要时请求批准 |

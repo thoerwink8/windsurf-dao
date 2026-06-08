@@ -13,6 +13,7 @@ description: 命令执行的安全性——超时/防卡/交互黑名单/服务�
 - **有超时**：`-m 30` / `-TimeoutSec 15` / `timeout 15s`
 - **有界限**：`git log -n 20` / `head -n 50`
 - **非阻塞**：耗时 > 30s 用 `Blocking=false` + `WaitMsBeforeAsync=15000`
+- **项目流程优先**：改动要生效到插件/客户端/服务时，先读项目根规范（`AGENT_GUIDE.md` / `README` / `package.json scripts` / `ship.*`），执行项目封装的验证/打包/安装脚本；通用 `typecheck` 只作为代码检查证据
 
 ## 交互命令黑名单（业界共识·会触发 PTY 死锁）
 
@@ -37,6 +38,17 @@ agent 用 wrapper 跑命令时检测不到 fd 等待 stdin 就**永远挂死**�
 2. **任务结束必收尾**：用 `command_status` 拿 PID → `Stop-Process -Id $PID` (Windows) / `kill $PID` (Unix)
 3. **临时验证用**：套 `timeout 30 npm start` 强行限期，避免遗留
 4. **永远不要**直接 `Blocking=true` 跑服务命令——会无限挂
+
+## 项目本地发布流程优先
+
+用户问“装了吗 / 升级了吗 / 生效了吗”时，判据是项目定义的发布链路完成，而非单个类型检查或构建命令完成。
+
+执行顺序：
+1. 读项目根规范入口：`AGENT_GUIDE.md`、`README*`、`package.json` scripts、`ship.*`、`Makefile`、`justfile`。
+2. 找到封装脚本后优先执行它，例如 VS Code/Windsurf 插件常见链路是 `build → package → install → sync workbench/script hash → clean old version`。
+3. 面向用户的功能新增按项目版本规则 bump；版本号、安装目录、VSIX 文件、同步 hash 是完成证据。
+4. 单独 `npm run typecheck`、`npm run build`、`tsc --noEmit` 属于局部验证证据，不能替代安装/发布证据。
+5. 发布脚本输出要求完整读取，最终报告包含版本、产物路径、安装路径、同步结果、退出码。
 
 ## Inline 长命令陷阱（PowerShell 必踩）
 
@@ -109,6 +121,16 @@ exit $LASTEXITCODE
 - heredoc 内禁反引号模板字符串、`$(...)` 插值、嵌套双引号——会被 PowerShell 第一层吃掉
 - SQL 用参数绑定 `?`，不字符串拼接
 - 远端 node `-e` 必须用绝对路径 require（如 `require('/root/projects/<proj>/server/node_modules/better-sqlite3')`）
+
+## 后台命令静默/幽灵运行判定
+
+`Blocking=false` 后 `command_status` 连续返回 RUNNING 且无输出时，按 C7/C9 处理：
+
+1. 读取一次 `command_status`，保留命令 ID 和当前输出。
+2. 用有界只读命令查目标进程，查询条件包含脚本名、项目名、产物名；避免被 MCP/npm 噪声淹没。
+3. 同时检查项目产物状态：版本号、VSIX/构建文件时间、安装目录、日志文件。
+4. 若 OS 进程缺席且产物无变化，判为 wrapper 幽灵后台；重新以同一项目流程启动一次，并立即读取输出。
+5. 若 OS 进程存在或产物持续变化，判为真实长任务；继续定期读取，不重复启动同一流程。
 
 ## 背景命令收尾铁律
 
