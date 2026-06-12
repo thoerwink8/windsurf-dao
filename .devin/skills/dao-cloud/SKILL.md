@@ -90,6 +90,7 @@ curl -s -X POST "$DAO_HUB_URL/api/exec-sync" \
 | Hub Token | `dao-ps-agent-2026` | 代码硬编码默认值 |
 | Agent ID | `DESKTOP-GET3DBC` | 本机 hostname |
 | 插件端口 | `7848` | 本机完整 API |
+| IDE 路径 | `D:\Windsurf\Devin.exe` | Devin Desktop 可执行文件 |
 
 ### Step 1：验证 Hub 在线
 
@@ -112,9 +113,45 @@ curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
 期望返回 `desktop-get3dbc\administrator`。
 返回 `unauthorized` → Hub token 被用户改过，请用户提供新 token。
 
-### Step 3（可选）：发现 Bridge 公网 URL
+### Step 3：检查 IDE / 插件是否在运行
+
+```bash
+curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
+  -H "Authorization: Bearer dao-ps-agent-2026" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"curl -s --max-time 3 http://127.0.0.1:7848/api/ping"}'
+```
+
+期望 stdout 含 `"ok":true`。
+
+**如果插件没响应**（stdout 为空或 exit_code 非 0）→ IDE 未启动，执行 Step 3a。
+
+#### Step 3a：通过 Hub 远程启动 IDE
+
+```bash
+curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
+  -H "Authorization: Bearer dao-ps-agent-2026" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"start \"\" \"D:\\Windsurf\\Devin.exe\""}'
+```
+
+启动后**等待 15-30 秒**让 IDE 加载扩展，然后轮询插件就绪：
+
+```bash
+# 每 5 秒轮询一次，最多重试 6 次（30 秒）
+curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
+  -H "Authorization: Bearer dao-ps-agent-2026" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"curl -s --max-time 3 http://127.0.0.1:7848/api/ping"}'
+```
+
+返回 `{"ok":true,...}` → 插件就绪，继续。
+超过 60 秒仍无响应 → 通知用户手动检查 IDE。
+
+### Step 4（可选）：发现 Bridge 公网 URL
 
 > 仅当需要**不经 Hub 直连**时执行。Hub exec-sync 已足够完成所有操作。
+> Bridge 的 trycloudflare URL 是**动态的**，每次 IDE 重启会变。不要缓存，每次需要时重新发现。
 
 ```bash
 curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
@@ -124,8 +161,8 @@ curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
 ```
 
 从返回 JSON 的 `result.stdout` 解析：
-- `url` → Bridge trycloudflare 公网 URL
-- `token` → Bridge Bearer token
+- `url` → Bridge trycloudflare 公网 URL（**动态，不要存 secret**）
+- `token` → Bridge Bearer token（已锁定，重启不变）
 
 验证 Bridge：
 ```bash
@@ -138,7 +175,7 @@ curl -s --max-time 8 -H "User-Agent: Mozilla/5.0" \
 
 > trycloudflare 入口**必须带 `User-Agent`**，否则被拦截页挡住。
 
-### Step 4（可选）：验证完整插件 API
+### Step 5（可选）：验证完整插件 API
 
 经 Hub/Bridge exec-sync 中转访问本机 7848 端口的完整插件 API：
 
@@ -264,7 +301,9 @@ curl -s -X POST "$DAO_HUB_URL/api/exec-sync" \
 | Hub health 超时 | 本机未开机 / ngrok 未启动 | 通知用户开机或手动启动 ngrok |
 | Hub 返回 `unauthorized` | Hub token 被改 | 请用户提供新 token 或检查 `PS_AGENT_MASTER_TOKEN` 环境变量 |
 | exec-sync 超时 / pending>0 | 前一条命令卡住堵队列 | 等几分钟自动超时，或请用户结束卡住进程 |
-| Bridge URL 失效 | IDE 重启 trycloudflare 变了 | 重跑 Step 3 重新发现 |
+| 插件 ping 无响应 | IDE 未启动 | 执行 Step 3a 远程启动 IDE，轮询等待就绪 |
+| 启动 IDE 后仍无响应 | 扩展未安装/崩溃 | 通知用户手动检查 IDE 扩展状态 |
+| Bridge URL 失效 | IDE 重启 trycloudflare 变了 | 重跑 Step 4 重新发现（动态值不缓存） |
 | Secret 不存在 | 切了账户/org | 重跑第二节存 secret |
 | 插件 API 返回 `invalid token` | 插件 token 与 Hub/Bridge token 不同 | 经 exec-sync 读插件 token 或锁定 `daoDevin.accessToken` |
 
