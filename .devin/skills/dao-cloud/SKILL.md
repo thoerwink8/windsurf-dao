@@ -38,9 +38,9 @@ Hub 是门，Bridge 是路，conn.json 是钥匙。
 │  token: dao-ps-agent-2026       token: 见 conn.json           │
 │  ─ 常驻，IDE 没开也在           ─ 随 IDE 启停                  │
 │                                                               │
-│  Bridge (exec-sync 精简网关)                                   │
-│  port: 动态 (见 conn.json)                                     │
-│  token: 见 conn.json                                           │
+│  Bridge (dao.dao-bridge 扩展, exec-sync 网关)                   │
+│  port: daoBridge.localPort (已锁定)                             │
+│  token: daoBridge.accessToken (已锁定,重启不变)                  │
 │  tunnel: *.trycloudflare.com (动态URL)                         │
 │  ─ 随 IDE 启停                                                 │
 └───────────────────────────────────────────────────────────────┘
@@ -153,8 +153,12 @@ curl -s -X POST https://encircle-wasting-paging.ngrok-free.dev/api/exec-sync \
 期望：`{"ok":true,"service":"dao-devin-export bridge"}`
 
 > 注意：插件 7848 端口的 token 与 conn.json 中 Bridge 的 token **不同**。
-> 如需调用需鉴权的插件接口（/api/status, /api/sessions 等），先经 exec-sync 读取 7848 的 token，
-> 或让用户在 IDE 设置 `daoDevin.accessToken` 锁定为已知值。
+> 本机有两个独立扩展：
+> - `dao.dao-bridge`（exec-sync 网关，端口由 `daoBridge.localPort` 配置，token 由 `daoBridge.accessToken` 锁定）
+> - `dao-natural.dao-devin-export`（完整 API，端口由 `daoDevin.bridgePort` 配置，默认 7848）
+>
+> 如需调用需鉴权的插件接口（/api/status, /api/sessions 等），先经 exec-sync 读取 7848 的 token。
+> Bridge 的 token 已通过 `daoBridge.accessToken` 锁定为固定值，重启不变。
 
 ---
 
