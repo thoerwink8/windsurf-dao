@@ -1,16 +1,75 @@
-# CF-DaoHub 永久固定 URL（ngrok）—— 部署与运维
+# 远程接入本机：插件优先 + ngrok/hub 兜底
 
-本机（[REDACTED:machine]）通过 ngrok 把 CF-DaoHub 暴露成一个**永久固定的公网地址**，并在登录时自启。
-解决的问题：以前用 Cloudflare Quick Tunnel，URL 每次重启都变；现在固定不变，无需每次重发连接信息。
+> 本文件是「如何远程连进 Logan 这台机器」的**权威接入手册**。
+> 包含两条通道：**主通道 = DAO Bridge 插件**（第〇节），**兜底通道 = ngrok+hub**（第一节起）。
 
-> ⚠️ **安全：本文档不含真实密钥。** 下文中的 `<DAO_HUB_TOKEN>` 与 ngrok authtoken 均为占位符。
+> ⚠️ **安全：本文档不含真实密钥。** 下文中的 `<DAO_HUB_TOKEN>`、`<PLUGIN_TOKEN>` 与 ngrok authtoken 均为占位符。
 > 真实值只保存在本机，不要提交到 git：
-> - hub token：`C:\Users\Administrator\.dao\cf-hub-conn.json` 的 `token` 字段
+> - hub / 插件 token：`C:\Users\Administrator\.dao\cf-hub-conn.json` 的 `token` 字段
 > - ngrok authtoken：`%LOCALAPPDATA%\ngrok\ngrok.yml`（由 `ngrok.yml.template` 填充）
+
+> 🔁 **账户迁移（最重要）**：本文件在 `windsurf-dao` 仓库里，是接入知识的**权威备份，跨 Devin 账户不丢**。
+> Devin 知识库笔记只是「跨仓库自动注入」的便利镜像，**绑账户、换号即失**。
+> 新账户上没有笔记时：在任意仓库的会话里 `git clone windsurf-dao` 读本文件即可接入，**不要求把会话建在 windsurf-dao 上**；接入后顺手把知识库笔记在新账户里重建一遍，之后又全自动。
 
 ---
 
-## 一、连接参数
+## 〇、主通道：插件优先（DAO Bridge）
+
+> 2026-06 决策：以 **DAO Bridge 插件**为主工作通道；下面的 ngrok+hub 作为**静默兜底 + 地址发现**保留，**不删不退役**。
+
+### 为什么以插件为主
+- 能力上插件 ≥ hub：全机 `exec`、工作区文件接口、PowerShell 截屏/GUI 操作均已实测可行；且**自描述**（自动写连接文件）、**随 IDE 自启**、cloudflared 隧道比 ngrok 免费版更稳。
+- 唯一短板：插件只在 **Devin Desktop 开着时**在线。故保留 hub 当兜底，并可用 hub 在 IDE 没开时把它拉起来。
+
+### 插件连接参数（动态，从本机自动发现，勿硬编码）
+插件每次启动把当前连接信息写入两个文件（内容互为镜像）：
+- `C:\Users\Administrator\.dao\cf-hub-conn.json`
+- `C:\Users\Administrator\.dao\bridge\conn.json`
+
+字段：`url`（公网入口）、`token`（Bearer）、`local_url` / `port`、`root`（IDE 工作区根，当前 `d:\frank\windsurf-dao`）、`host`。
+
+- **URL**：quick 模式是 `*.trycloudflare.com`，**每次重启都会变** → 永远读上面文件里的 `url`，别硬编码。
+- **Token**：复用 conn.json 里保存的值，**重启后稳定**；也可在 IDE 设置 `daoBridge.accessToken` 锁死。
+- **API 契约**：与 hub **完全相同**（见第七节）。`/api/health` 免鉴权；`/api/exec-sync` 用 `cmd` 字段 + `Authorization: Bearer <token>`。
+  - 注意：插件 `/api/ls /read /write` 被沙箱限制在工作区 `root`；要**全盘**读写，用 `/api/exec-sync` 跑 PowerShell 绕过。
+
+### 标准接入流程（每次会话）
+1. **经 hub 发现插件最新地址**（hub 常驻，IDE 没开它也在）：
+   ```bash
+   curl -s -X POST https://[REDACTED:hub-host]/api/exec-sync \
+     -H "Authorization: Bearer <DAO_HUB_TOKEN>" -H "Content-Type: application/json" \
+     -d '{"agent_id":"[REDACTED:machine]","cmd":"powershell -NoProfile -Command \"Get-Content $env:USERPROFILE\\.dao\\cf-hub-conn.json -Raw\""}'
+   ```
+2. 从返回里取 `url`+`token`，**直接连插件**：
+   ```bash
+   curl -s -X POST <PLUGIN_URL>/api/exec-sync \
+     -H "Authorization: Bearer <PLUGIN_TOKEN>" -H "Content-Type: application/json" \
+     -H "User-Agent: Mozilla/5.0" \
+     -d '{"cmd":"powershell -NoProfile -Command \"whoami\""}'
+   ```
+   > trycloudflare 入口建议带 `User-Agent`，避免被拦插页。
+3. **IDE 没开时**：先用 hub `Start-Process` 拉起 Devin Desktop → 轮询 conn.json 直到 `url` 刷新成 trycloudflare 地址，再走第 2 步。
+
+### GUI / 截屏（操作软件、复现问题）
+- 两条通道都**没有**原生鼠标/键盘/截屏，靠 PowerShell 脚本在 exec 通道补：
+  - 截屏：`System.Drawing` 截 `VirtualScreen` 存 PNG → base64 回传。
+  - 输入：`SetCursorPos`+`mouse_event` 点击、`SendKeys` 键入、滚轮、`AppActivate` 切焦点。
+- 已实测：通过插件 exec 截到整屏（1920×1080）。复杂命令必须写成脚本文件经 `-EncodedCommand` 传，别拼长 inline（PSReadLine 会截断）。
+
+### 彻底退役 hub 的前提（暂未做，需 Logan 拍板）
+插件 quick 模式 URL 会变、发现它依赖读 conn.json；**退役 hub 前必须先给插件一个固定 URL**，否则冷启动连不进去：
+- 路线 A：复用现有 ngrok 静态域名，转发到插件固定 `localPort`（$0，不需域名）。
+- 路线 B：cloudflared 命名隧道（需自有 Cloudflare 域名，更稳、最终可彻底不要 ngrok）。
+
+固定 URL 落定并验证稳定前，**保留 hub**。
+
+---
+
+## 一、连接参数（兜底通道：ngrok+hub）
+
+> 本机（[REDACTED:machine]）通过 ngrok 把 CF-DaoHub 暴露成一个**永久固定的公网地址**，并在登录时自启。以前用 Cloudflare Quick Tunnel URL 每次重启都变，故用固定 ngrok 域名解决。现作为插件的兜底 + 地址发现通道保留。
+
 - **固定 URL：** `https://[REDACTED:hub-host]`
 - **Token：** `<DAO_HUB_TOKEN>`（请求头 `Authorization: Bearer <DAO_HUB_TOKEN>`）
 - **Agent ID：** `[REDACTED:machine]`
