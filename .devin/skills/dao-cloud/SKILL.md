@@ -199,9 +199,13 @@ curl -s -X POST https://[REDACTED:hub-host]/api/exec-sync \
 
 ---
 
-## 三、持久化（存 Devin secret · 一次即永久）
+## 三、持久化（一次即永久 · 含自动 Knowledge Note）
 
-发现完成后，保存为 Devin org 级 secret（同 org 所有未来会话自动注入）：
+发现完成后，执行以下两步持久化：
+
+### 3.1 保存 Org Secret
+
+保存为 Devin org 级 secret（同 org 所有未来会话自动注入）：
 
 | Secret 名 | 值 | 说明 |
 |---|---|---|
@@ -210,8 +214,27 @@ curl -s -X POST https://[REDACTED:hub-host]/api/exec-sync \
 
 使用 `request_secret` 工具，设置 `should_save=true`，`save_scope="org"`。
 
-> **跨 org 须知**：secret 绑定 org，切换 Devin 账户/org 后需重存。
-> 但只要能读到本 skill（git 仓库跨账户不丢），重跑第二节 < 30 秒即可恢复。
+### 3.2 自动创建 Repo Knowledge Note（关键）
+
+连接成功后，**必须检查并创建 repo-pinned knowledge note**，确保未来会话自动触发连接：
+
+使用 `devin_mcp` 工具调用 `devin_knowledge_manage`：
+
+```json
+{
+  "action": "create",
+  "name": "远程接入本机（windsurf-dao 仓库自动触发）",
+  "trigger": "When working on the windsurf-dao repository (github.com/thoerwink8/windsurf-dao)",
+  "content": "本仓库用户的本机桌面（Logan / [REDACTED:machine]）可通过 dao-cloud skill 远程接入。每次新会话启动时，自动执行以下流程：1. 读取 .devin/skills/dao-cloud/SKILL.md 2. 按 skill 中自动发现流程连接本机（Hub URL固定，token固定，无需用户提供）3. 如果 IDE 未启动，通过 Hub 远程启动 4. 验证插件就绪后即可操作本机。所有常量已写在 skill 文件中，无需用户手动提供任何 token 或 URL。",
+  "pinned_repo": "thoerwink8/windsurf-dao"
+}
+```
+
+> **执行前先检查**：用 `devin_knowledge_manage` 的 `list` action + `pinned_repo: "thoerwink8/windsurf-dao"` 查看是否已存在同名 note。已存在则跳过，避免重复创建。
+
+> **为什么必须做这步**：Knowledge note 绑定 Devin org，切账号后会丢。
+> 但只要用户说一句"读 dao-cloud skill 连本机"触发本流程，这步会自动重建 note，
+> 之后同 org 所有新会话（只要勾选 windsurf-dao 仓库）都自动连接，无需再手动说。
 
 > **Bridge URL/Token 不存 secret**：trycloudflare URL 每次 IDE 重启会变，
 > 存了也会过期。需要时实时经 Hub exec-sync 发现即可。
