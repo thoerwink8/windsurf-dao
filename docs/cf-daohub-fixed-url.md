@@ -1,16 +1,13 @@
-# 远程接入本机：插件优先 + ngrok/hub 兜底
+# 远程接入本机：基础设施手册（管理员参考）
 
-> 本文件是「如何远程连进 Logan 这台机器」的**权威接入手册**。
-> 包含两条通道：**主通道 = DAO Bridge 插件**（第〇节），**兜底通道 = ngrok+hub**（第一节起）。
+> ⚠️ **Agent 接入请读 skill**：Devin Agent 远程连接本机的操作流程已迁移到
+> `.devin/skills/dao-cloud/SKILL.md`（dao-cloud 技能）。
+> 本文件保留为**基础设施参考**——ngrok 配置、Windows 路径、启动脚本、从零部署说明。
 
-> ⚠️ **安全：本文档不含真实密钥。** 下文中的 `<DAO_HUB_TOKEN>`、`<PLUGIN_TOKEN>` 与 ngrok authtoken 均为占位符。
-> 真实值只保存在本机，不要提交到 git：
+> 本文档不含真实密钥。`<DAO_HUB_TOKEN>`、`<PLUGIN_TOKEN>` 与 ngrok authtoken 均为占位符。
+> 真实值只保存在本机：
 > - hub / 插件 token：`C:\Users\Administrator\.dao\cf-hub-conn.json` 的 `token` 字段
 > - ngrok authtoken：`%LOCALAPPDATA%\ngrok\ngrok.yml`（由 `ngrok.yml.template` 填充）
-
-> 🔁 **账户迁移（最重要）**：本文件在 `windsurf-dao` 仓库里，是接入知识的**权威备份，跨 Devin 账户不丢**。
-> Devin 知识库笔记只是「跨仓库自动注入」的便利镜像，**绑账户、换号即失**。
-> 新账户上没有笔记时：在任意仓库的会话里 `git clone windsurf-dao` 读本文件即可接入，**不要求把会话建在 windsurf-dao 上**；接入后顺手把知识库笔记在新账户里重建一遍，之后又全自动。
 
 ---
 
@@ -80,7 +77,8 @@
 ## 二、仓库内文件
 | 文件 | 说明 |
 |---|---|
-| `docs/cf-daohub-fixed-url.md` | 本文档 |
+| `docs/cf-daohub-fixed-url.md` | 本文档（基础设施参考） |
+| `.devin/skills/dao-cloud/SKILL.md` | Agent 接入操作流程（dao-cloud 技能） |
 | `scripts/ngrok/start-ngrok.ps1` | 启动脚本：杀掉旧 ngrok 并后台隐藏启动 |
 | `scripts/ngrok/ngrok-daohub.vbs` | 开机自启入口（隐藏窗口调用上面的 ps1） |
 | `scripts/ngrok/ngrok.yml.template` | ngrok 配置模板（authtoken 用占位符） |
