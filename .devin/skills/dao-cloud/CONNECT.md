@@ -8,6 +8,8 @@
 用户本机桌面 **Logan / `DESKTOP-GET3DBC`**（Windows 11）通过 **DAO Hub** 远程接入；
 连接所需的全部常量都在本文件 + `SKILL.md` 里，token 已存为 Devin org secret。
 
+> 触发词：用户说"连接本机/连本机/接入桌面/连 Logan"，或"读 dao-cloud / dao-cloud / dao cloud" → 读 `SKILL.md` 走连接流程。
+
 ## 常量（稳定值）
 
 | 项 | 值 |
