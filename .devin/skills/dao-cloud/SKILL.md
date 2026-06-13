@@ -449,6 +449,7 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 | `dao_winshot.exe` | `dao_winshot.exe <pid> [输出路径] [质量]` | 按窗口截图（PrintWindow），不抢焦点 |
 | `dao_focus.exe` | `dao_focus.exe <pid> [showCmd]` | 抬窗口到前台/最大化(3)/还原(9)/最小化(6)，绕过前台锁 |
 | `dao_click.exe` | `dao_click.exe <x> <y>` | 屏幕绝对坐标左键单击 |
+| `dao_keys.exe` | `dao_keys.exe <pid> "<keys>"` | 向 PID 窗口发送按键（SendKeys：`^`=Ctrl `+`=Shift `%`=Alt `~`=Enter），如 `"^+`"` 新建终端 |
 
 > 真相源是仓库 `.devin/skills/dao-cloud/tools/`（`screenshot/` + `input/`），不是机器磁盘。
 
@@ -481,7 +482,7 @@ curl -s --max-time 60 -X POST "$DAO_HUB_URL/api/exec-sync" \
 2. 同理把该目录的 build.cmd 推过去，然后跑它（内部用 csc 编译，不触发 AMSI）：
    cmd /c C:\Users\Administrator\.dao\bin\build.cmd
    （screenshot/build.cmd 产出 dao_shot.exe + dao_winshot.exe；
-     input/build.cmd 产出 dao_focus.exe + dao_click.exe；都装到 %USERPROFILE%\.dao\bin\）
+     input/build.cmd 产出 dao_focus.exe + dao_click.exe + dao_keys.exe；都装到 %USERPROFILE%\.dao\bin\）
 3. 之后直接调用 C:\Users\Administrator\.dao\bin\<tool>.exe 即可。
    （绝不用 PowerShell 内联跑截屏/输入逻辑——可能被 Defender 拦）
 ```

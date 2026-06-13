@@ -18,9 +18,11 @@
 | 按窗口截图 | `screenshot/dao_winshot.cs` + `screenshot/build.cmd` | PrintWindow 抓单个窗口，不抢焦点，`dao_winshot.exe <pid> [输出路径] [质量]` |
 | 抬前台/最大化 | `input/dao_focus.cs` + `input/build.cmd` | 把窗口抬到前台/最大化/还原，绕过前台锁，`dao_focus.exe <pid> [showCmd]`（9=还原 3=最大化 6=最小化） |
 | 坐标点击 | `input/dao_click.cs` + `input/build.cmd` | 屏幕绝对坐标左键单击，`dao_click.exe <x> <y>` |
+| 键盘按键 | `input/dao_keys.cs` + `input/build.cmd` | 向 PID 窗口发送按键（SendKeys 语法），`dao_keys.exe <pid> "<keys>"`（`^`=Ctrl `+`=Shift `%`=Alt `~`=Enter，如 `"^+`"` 新建终端） |
 
 > 配合用法：抓画面优先 `dao_focus`（抬到前台/最大化）→ `dao_shot`（全屏截，定位坐标可靠）；
-> 不想打断用户时用 `dao_winshot` 按窗口截。点击前一般先 `dao_focus` 抬窗口，再 `dao_click`。
+> 不想打断用户时用 `dao_winshot` 按窗口截。点击前一般先 `dao_focus` 抬窗口，再 `dao_click`；
+> 需要键盘动作（开终端/命令面板/回车）时同理先 `dao_focus` 再 `dao_keys`。
 
 ## 新机器接入时如何自动安装（无需用户操作）
 
