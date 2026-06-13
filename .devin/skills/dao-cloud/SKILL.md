@@ -479,6 +479,50 @@ curl -s --max-time 30 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 ---
 
+## 八、继续未完成的会话（跨账号）
+
+当用户说"继续 session XXX"或提供一个 session ID 时，按以下流程操作：
+
+> **背景：** 本机插件存储了所有 Devin Desktop 会话数据（不区分账号）。即使会话来自其他账号，只要 IDE 在运行，就能通过插件 API 读取。
+
+### 流程
+
+```
+1. 连接本机（按第一/二节流程）
+2. 确认插件在线（ping 7848）
+3. 读取目标会话的 worklog：
+   curl -s --max-time 10 -H "Authorization: Bearer <plugin_token>" \
+     http://127.0.0.1:7848/api/session/<SESSION_ID>/worklog
+4. 读取目标会话的 changes（如需要）：
+   curl -s --max-time 10 -H "Authorization: Bearer <plugin_token>" \
+     http://127.0.0.1:7848/api/session/<SESSION_ID>/changes
+5. 分析 worklog 中的 TODO 列表，识别已完成和未完成的任务
+6. 继续未完成的任务
+```
+
+### 插件 token 获取
+
+插件 7848 的 token 与 Hub token 不同。通过 exec-sync 读取：
+
+```bash
+curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
+  -H "Authorization: Bearer $DAO_HUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"powershell -NoProfile -Command \"(Get-Content $env:USERPROFILE\\.dao\\cf-hub-conn.json -Raw | ConvertFrom-Json).token\""}'
+```
+
+或直接尝试无 token 访问（部分插件版本 /api/session 不需要鉴权）。
+
+### 用户提示词模板
+
+用户只需说：
+
+> 连接本机，继续 session devin-4cab8cbc13d342599b26637dcb606754 的未完成任务。仓库：https://github.com/thoerwink8/devin-byok
+
+Agent 就会自动完成所有连接、读取、分析、继续的工作。
+
+---
+
 ## 附录：基础设施参考
 
 - Hub 代码仓库：`https://github.com/thoerwink8/dao-hub`（private）
