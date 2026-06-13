@@ -6,6 +6,7 @@ REM comments here would be mis-parsed as commands and break the build.
 REM   dao_focus.exe  raise/maximize/restore a window (bypass foreground lock)
 REM   dao_click.exe  left-click at absolute screen coordinates
 REM   dao_idle.exe   print system idle milliseconds (etiquette idle gate)
+REM   dao_keys.exe   send keystrokes (SendKeys syntax) to a window by pid
 setlocal
 set DIR=%USERPROFILE%\.dao\bin
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
@@ -14,6 +15,7 @@ if not exist "%DIR%" mkdir "%DIR%"
 copy /Y "%~dp0dao_focus.cs" "%DIR%\dao_focus.cs" >nul
 copy /Y "%~dp0dao_click.cs" "%DIR%\dao_click.cs" >nul
 copy /Y "%~dp0dao_idle.cs" "%DIR%\dao_idle.cs" >nul
+copy /Y "%~dp0dao_keys.cs" "%DIR%\dao_keys.cs" >nul
 "%CSC%" /nologo /target:winexe /out:"%DIR%\dao_focus.exe" "%DIR%\dao_focus.cs"
 echo FOCUS_EXIT=%errorlevel% OUT=%DIR%\dao_focus.exe
 "%CSC%" /nologo /target:winexe /out:"%DIR%\dao_click.exe" "%DIR%\dao_click.cs"
@@ -21,4 +23,7 @@ echo CLICK_EXIT=%errorlevel% OUT=%DIR%\dao_click.exe
 REM dao_idle uses console exe (/target:exe) so its stdout can be captured
 "%CSC%" /nologo /target:exe /out:"%DIR%\dao_idle.exe" "%DIR%\dao_idle.cs"
 echo IDLE_EXIT=%errorlevel% OUT=%DIR%\dao_idle.exe
+REM dao_keys references WinForms (SendKeys); console exe so stdout is captured
+"%CSC%" /nologo /target:exe /r:System.Windows.Forms.dll /out:"%DIR%\dao_keys.exe" "%DIR%\dao_keys.cs"
+echo KEYS_EXIT=%errorlevel% OUT=%DIR%\dao_keys.exe
 endlocal
