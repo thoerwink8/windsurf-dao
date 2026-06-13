@@ -1,13 +1,19 @@
 @echo off
-REM 把 dao_shot.cs 编译成 dao_shot.exe，安装到 %USERPROFILE%\.dao\bin\
-REM 用 .NET Framework 自带的 csc.exe，无需安装任何东西，编译不触发 AMSI。
+REM Compile screenshot helper sources to exe, install into %USERPROFILE%\.dao\bin\
+REM Uses the .NET Framework built-in csc.exe (no install needed, no AMSI trigger).
+REM ASCII-only on purpose: cmd.exe parses .cmd in the OEM codepage, so non-ASCII
+REM comments here would be mis-parsed as commands and break the build.
+REM   dao_shot.exe    full-screen capture (VirtualScreen -> JPEG)
+REM   dao_winshot.exe per-window capture (PrintWindow, does not steal focus)
 setlocal
 set DIR=%USERPROFILE%\.dao\bin
-set SRC=%~dp0dao_shot.cs
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 if not exist "%CSC%" set CSC=C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe
 if not exist "%DIR%" mkdir "%DIR%"
-copy /Y "%SRC%" "%DIR%\dao_shot.cs" >nul
+copy /Y "%~dp0dao_shot.cs" "%DIR%\dao_shot.cs" >nul
+copy /Y "%~dp0dao_winshot.cs" "%DIR%\dao_winshot.cs" >nul
 "%CSC%" /nologo /target:winexe /out:"%DIR%\dao_shot.exe" /reference:System.Drawing.dll /reference:System.Windows.Forms.dll "%DIR%\dao_shot.cs"
-echo BUILD_EXIT=%errorlevel% OUT=%DIR%\dao_shot.exe
+echo SHOT_EXIT=%errorlevel% OUT=%DIR%\dao_shot.exe
+"%CSC%" /nologo /target:winexe /out:"%DIR%\dao_winshot.exe" /reference:System.Drawing.dll "%DIR%\dao_winshot.cs"
+echo WINSHOT_EXIT=%errorlevel% OUT=%DIR%\dao_winshot.exe
 endlocal

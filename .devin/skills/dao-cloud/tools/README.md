@@ -14,15 +14,22 @@
 
 | 工具 | 源码 | 作用 |
 |---|---|---|
-| 截屏 | `screenshot/dao_shot.cs` + `screenshot/build.cmd` | 截全屏 → JPEG，`dao_shot.exe [输出路径] [质量]` |
+| 全屏截图 | `screenshot/dao_shot.cs` + `screenshot/build.cmd` | 截全屏 → JPEG，`dao_shot.exe [输出路径] [质量]` |
+| 按窗口截图 | `screenshot/dao_winshot.cs` + `screenshot/build.cmd` | PrintWindow 抓单个窗口，不抢焦点，`dao_winshot.exe <pid> [输出路径] [质量]` |
+| 抬前台/最大化 | `input/dao_focus.cs` + `input/build.cmd` | 把窗口抬到前台/最大化/还原，绕过前台锁，`dao_focus.exe <pid> [showCmd]`（9=还原 3=最大化 6=最小化） |
+| 坐标点击 | `input/dao_click.cs` + `input/build.cmd` | 屏幕绝对坐标左键单击，`dao_click.exe <x> <y>` |
+
+> 配合用法：抓画面优先 `dao_focus`（抬到前台/最大化）→ `dao_shot`（全屏截，定位坐标可靠）；
+> 不想打断用户时用 `dao_winshot` 按窗口截。点击前一般先 `dao_focus` 抬窗口，再 `dao_click`。
 
 ## 新机器接入时如何自动安装（无需用户操作）
 
 会话在 Devin 侧已 clone 本仓库，所以源码就在手边。装到 Windows 机的流程：
 
 1. 经 Hub 把对应 `.cs` 源码推到 Windows 机（base64 → `certutil -decode`，避免转义/AMSI）。
-2. 经 Hub 跑 `build.cmd`（内部用 `csc` 编译，安装到 `%USERPROFILE%\.dao\bin\`）。
-3. 之后直接调用 `%USERPROFILE%\.dao\bin\dao_shot.exe`。
+2. 经 Hub 跑对应 `build.cmd`（`screenshot/build.cmd` 编译 dao_shot+dao_winshot；`input/build.cmd`
+   编译 dao_focus+dao_click；内部用 `csc` 编译，安装到 `%USERPROFILE%\.dao\bin\`）。
+3. 之后直接调用 `%USERPROFILE%\.dao\bin\<工具>.exe`。
 
 详见 `../SKILL.md` 第 4.4 节。新增 helper 时：在本目录加 `<工具>/<工具>.cs` + `build.cmd`，
 并在上表和 SKILL.md 登记，保持"仓库即真相、新机器自愈"。

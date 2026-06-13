@@ -421,14 +421,16 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 #### 截屏（标准流程）
 
-本机已固化一个截屏 helper（首次由 dao-cloud 会话编译生成，重启不丢）：
+本机已固化一组 helper（首次由 dao-cloud 会话编译生成，重启不丢；都装在 `%USERPROFILE%\.dao\bin\`）：
 
-| 项 | 值 |
-|---|---|
-| Helper exe | `C:\Users\Administrator\.dao\bin\dao_shot.exe` |
-| 源码 | `C:\Users\Administrator\.dao\bin\dao_shot.cs` |
-| 重建脚本 | `C:\Users\Administrator\.dao\bin\build_shot.cmd` |
-| 用法 | `dao_shot.exe [输出jpg路径] [jpeg质量1-100]`，默认写 `.dao\bin\last_shot.jpg` 质量 55 |
+| Helper | 用法 | 作用 |
+|---|---|---|
+| `dao_shot.exe` | `dao_shot.exe [输出jpg路径] [质量1-100]` | 全屏截图 → JPEG（默认 `.dao\bin\last_shot.jpg` 质量 55） |
+| `dao_winshot.exe` | `dao_winshot.exe <pid> [输出路径] [质量]` | 按窗口截图（PrintWindow），不抢焦点 |
+| `dao_focus.exe` | `dao_focus.exe <pid> [showCmd]` | 抬窗口到前台/最大化(3)/还原(9)/最小化(6)，绕过前台锁 |
+| `dao_click.exe` | `dao_click.exe <x> <y>` | 屏幕绝对坐标左键单击 |
+
+> 真相源是仓库 `.devin/skills/dao-cloud/tools/`（`screenshot/` + `input/`），不是机器磁盘。
 
 ```bash
 # 1) 截屏到本机文件
@@ -451,15 +453,17 @@ curl -s --max-time 60 -X POST "$DAO_HUB_URL/api/exec-sync" \
 #### 新机器 / Helper 缺失 / 被杀软隔离 → 自动重建
 
 ```
-1. 把仓库里的 tools/screenshot/dao_shot.cs base64 后经 Hub 推到 Windows 机：
-   base64 -w0 <repo>/.devin/skills/dao-cloud/tools/screenshot/dao_shot.cs   # Devin 侧
-   → exec-sync: (echo <b64>)>C:\Users\Administrator\.dao\bin\s_b64.txt
-   → exec-sync: certutil -f -decode ...\s_b64.txt ...\dao_shot.cs
-2. 同理把 tools/screenshot/build.cmd 推过去，然后跑它（内部用 csc 编译，不触发 AMSI）：
+对每个工具目录（screenshot/ 与 input/）重复：
+1. 把仓库里的 .cs 源码 base64 后经 Hub 推到 Windows 机：
+   base64 -w0 <repo>/.devin/skills/dao-cloud/tools/<dir>/<tool>.cs   # Devin 侧
+   → exec-sync: (echo <b64>)>C:\Users\Administrator\.dao\bin\<tool>_b64.txt
+   → exec-sync: certutil -f -decode ...\<tool>_b64.txt ...\<tool>.cs
+2. 同理把该目录的 build.cmd 推过去，然后跑它（内部用 csc 编译，不触发 AMSI）：
    cmd /c C:\Users\Administrator\.dao\bin\build.cmd
-   （build.cmd 会自动建 %USERPROFILE%\.dao\bin\ 并产出 dao_shot.exe）
-3. 之后调用 C:\Users\Administrator\.dao\bin\dao_shot.exe 即可。
-   （绝不用 PowerShell 内联跑截屏逻辑——必被 Defender 拦）
+   （screenshot/build.cmd 产出 dao_shot.exe + dao_winshot.exe；
+     input/build.cmd 产出 dao_focus.exe + dao_click.exe；都装到 %USERPROFILE%\.dao\bin\）
+3. 之后直接调用 C:\Users\Administrator\.dao\bin\<tool>.exe 即可。
+   （绝不用 PowerShell 内联跑截屏/输入逻辑——可能被 Defender 拦）
 ```
 
 下面是 `dao_shot.cs` 的内联失败兜底副本（仓库文件不可用时直接用 `certutil -decode` 还原编译）：
@@ -489,10 +493,34 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe ^
   C:\Users\Administrator\.dao\bin\dao_shot.cs
 ```
 
-#### 输入（点击 / 键入）
+#### 输入（点击 / 抬窗口 / 键入）
 
-- 鼠标：`SetCursorPos` + `mouse_event`；键盘：`SendKeys`
-- 若输入脚本同样被 AMSI 拦，按本节同理编译成 helper exe，不要内联 PowerShell
+- 抬窗口/最大化：`dao_focus.exe <pid> [showCmd]`（用 `Get-Process <name> | ? {$_.MainWindowTitle}` 拿 PID）
+- 鼠标点击：先 `dao_focus` 把目标窗口抬到前台，再 `dao_click.exe <x> <y>`（坐标用全屏 `dao_shot` 截图定位）
+- 键盘：`SendKeys`（短文本）；长文本/特殊键另行处理
+- 抓画面定位坐标：优先 `dao_focus`（最大化）→ `dao_shot`（全屏，坐标可靠）；不想打断用户时用 `dao_winshot` 按窗口截
+
+#### ⚠️ 实时桌面交互礼仪（铁律 · 控制用户在用的机器时必守）
+
+用户的本机是**活的**——他可能正在用。控制时绝不和用户抢操作。
+核心语义（用户两次纠正后的精确版）：**「停 10 秒」是给用户的反应时间，不是中断任务；停完由 Agent 自己重跑聚焦操作继续推进，绝不要求用户手动切回页面。**
+
+1. **检测到用户在操作就让路**：`dao_focus` 输出 `ok=False`、或截图发现前台变成了别的窗口
+   （用户在打字/点击抢了前台锁），说明用户正在用——这是正常现象，不是 bug。
+2. **停 ~10 秒 → 自己重试聚焦 → 继续**：停 10 秒只为给用户反应时间；停完 **Agent 自己再次执行
+   `dao_focus`**（必要时循环：聚焦 → 检测 `ok` → 不行再停 10 秒重跑），直到 `ok=True` 再截图。
+   任务全程**不中断、不挂起、不把活儿丢回给用户**。
+3. **idle 闸门**：重试前可先 `dao_idle.exe` 看系统空闲毫秒；`idle < ~2000ms`（用户正在操作）就停 10 秒，
+   `idle` 够大才抢焦点，避免顶掉用户正在输入的窗口。
+4. **抓完尽快归位**：临时为截图最大化/抬起的窗口，验证完可还原；用户原本在用的窗口（如浏览器视频）
+   尽量帮他切回前台。
+5. **能不抢就不抢**：只需要看某个窗口内容、不需要它在前台时，优先用 `dao_winshot`（PrintWindow，
+   不抢焦点）而不是 `dao_focus`+全屏截。
+
+> 反模式（曾经理解错）：把「停 10 秒」做成"用户活跃就退避/中断任务"，或让用户手动切回操作页面。
+> 正解：10 秒=用户反应时间，之后 **Agent 自己重复聚焦动作**把任务推下去。
+> 来历：用户两次明确纠正——「等 10 秒是给用户反应时间，不是中断任务；是你再次重复你之前的聚焦操作」。
+> 固化于此，换账号/换会话同样遵守。
 
 ---
 
