@@ -479,6 +479,87 @@ curl -s --max-time 30 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 ---
 
+## 八、继续未完成的会话（跨账号、零配置）
+
+当用户说"继续 `devin-xxx`"或提供任何 session ID 时，按以下流程自动操作。
+
+> **用户只需说一句话，不需要提供仓库名、不需要指定数据源。**
+
+### 用户提示词
+
+用户可以用以下方式触发：
+
+| 用户说 | Agent 行为 |
+|---|---|
+| "从插件继续 devin-xxx" | 直接走本机插件 API，不问 |
+| "从当前账号继续 devin-xxx" | 直接走当前 Devin 账号 API，不问 |
+| "继续 devin-xxx"（无前缀）| **先问用户**再执行 |
+
+### 无前缀时：先问再做
+
+当用户只说"继续 devin-xxx"但没有明确来源时，Agent **必须先问**：
+
+> 这个会话在哪里？
+> 1. 本机插件（其他账号的会话）
+> 2. 当前 Devin 账号的会话
+
+用户回答后再执行对应流程。**不要猜测、不要默认尝试一个再换另一个。**
+
+### 查找流程
+
+```
+来源 = 本机插件：
+  1. 连接本机（按第一/二节流程）
+  2. 确认插件在线（ping 7848）
+  3. 读取 session worklog/changes
+
+来源 = 当前账号：
+  1. 通过 devin_mcp 工具查找该 session
+  2. 读取会话内容
+```
+
+### 读取并继续
+
+```
+1. 读取 worklog（完整工作日志）
+2. 读取 changes（代码变更列表，如果有）
+3. 从 worklog 自动推断仓库：
+   - 找 git clone / git push 记录中的仓库 URL
+   - 找 PR 链接（如 github.com/owner/repo/pull/N）
+   - 找 session metadata 中的 repo/tags 字段
+   - 都没有 → 问用户仓库地址（只问这一次）
+4. 从 worklog 中的 TODO 列表识别已完成/未完成任务
+5. 继续未完成的任务
+```
+
+### 插件 token 获取
+
+插件 7848 的 token 与 Hub token 不同。获取方式：
+
+```bash
+# 方式1：经 exec-sync 读取（推荐）
+curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
+  -H "Authorization: Bearer $DAO_HUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"powershell -NoProfile -Command \"(Get-Content $env:USERPROFILE\\.dao\\bs.json -Raw | ConvertFrom-Json).token\""}'
+```
+
+```bash
+# 方式2：先试无 token 访问（部分插件版本不需要鉴权）
+curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
+  -H "Authorization: Bearer $DAO_HUB_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"DESKTOP-GET3DBC","cmd":"curl -s --max-time 5 http://127.0.0.1:7848/api/sessions"}'
+```
+
+### 注意事项
+
+- 本机插件存储**所有** Devin Desktop 会话（不区分账号），只要 IDE 在运行就能读
+- 仓库信息从 worklog 自动提取，不需要用户手动提供
+- 如果 session 涉及代码修改，Agent 应在本机编译验证后提 PR
+
+---
+
 ## 附录：基础设施参考
 
 - Hub 代码仓库：`https://github.com/thoerwink8/dao-hub`（private）
