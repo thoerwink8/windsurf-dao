@@ -1,6 +1,6 @@
 ---
 name: dao-cloud
-description: 一键连接本机 — Devin Agent 读此 skill 即可远程接入 Logan 桌面（跨账户、跨会话持久化）
+description: 一键连接本机 — Devin Agent 读此 skill 即可远程接入 Logan 桌面（跨账户、跨会话持久化）。当用户说"连接本机/连本机/接入桌面/连 Logan"，或说"读 dao-cloud / dao-cloud / dao cloud"时触发。
 ---
 
 # dao-cloud · 云接入术
@@ -9,7 +9,8 @@ description: 一键连接本机 — Devin Agent 读此 skill 即可远程接入 
 
 ## 适用场景
 
-- 用户说"连接本机"、"接入桌面"、"连 Logan"
+- 用户说"连接本机"、"连本机"、"接入桌面"、"连 Logan"
+- 用户说"读 dao-cloud"、"dao-cloud"、"dao cloud"（直接点名本 skill）
 - 新账户 / 新 org 首次接入（无 secret、无 knowledge）
 - Secret 过期或 URL 变化需要重新发现
 - 需要在用户本机执行命令、读写文件、操作 GUI
