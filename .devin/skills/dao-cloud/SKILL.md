@@ -318,28 +318,47 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 > **Token 变更同步规则：** Hub token 变更后必须同步写回 `dao-hub\token.txt`，并同步到 Devin org secret `DAO_HUB_TOKEN`。Hub URL 变更后必须同步写回 `dao-hub\conn.json` / `endpoints.json`，并同步到 org secret `DAO_HUB_URL`。
 
-### 3.2 自动创建 Repo Knowledge Note（关键）
+### 3.2 创建 Repo Knowledge Note（关键）
 
-连接成功后，**必须检查并创建 repo-pinned knowledge note**，确保未来会话自动触发连接：
+连接成功后，**必须检查并创建 repo-pinned knowledge note**，确保未来会话自动触发连接。
 
-使用 `suggest_knowledge` 工具：
+> ⚠️ **血泪教训（2026-06-13）**：早期版本只写「用 `suggest_knowledge`」。但 `suggest_knowledge`
+> 走的是「知识库建议卡片」机制——需要 webapp 端弹一张 Approve 卡片让用户点。**部分 webapp 版本
+> 不渲染这张卡片 = 用户看不到任何按钮，note 永远卡在 pending**。所以**不要把 `suggest_knowledge`
+> 当主路径**。
+
+**正确做法（按优先级）：**
+
+**① 首选——直接落库（不依赖那张卡片）：** 用 Devin MCP 工具 `devin_knowledge_manage`，
+`action="create"`，把 note 直接写进 org 知识库。它只弹一次「MCP 工具授权确认」（这个按钮在 webapp 里
+正常显示），用户点一下即可。先用 `action="list"` + `search`/`pinned_repo` 查重，已存在则 `action="update"`。
 
 ```
-trigger: "When working on the windsurf-dao repository (github.com/thoerwink8/windsurf-dao)"
-value: 本仓库用户的本机桌面（Logan / DESKTOP-GET3DBC）可通过 dao-cloud skill 远程接入。
-      1. 读取 .devin/skills/dao-cloud/SKILL.md
-      2. 按 skill 中自动发现流程连接（Hub 优先，Bridge 备用）
-      3. Hub token 真相源：C:\Users\Administrator\.dao\dao-hub\token.txt
-      4. 配置文件职责：dao-hub\conn.json = Hub，cf-hub-conn.json = legacy Bridge
-      5. endpoints.json = 统一注册表
-      所有常量已写在 skill 文件中，org secret DAO_HUB_TOKEN/DAO_HUB_URL 已持久化。
+devin_knowledge_manage(
+  action="create",
+  name="dao-cloud 连本机（DESKTOP-GET3DBC / Logan）",
+  pinned_repo="thoerwink8/windsurf-dao",
+  trigger="When working on the windsurf-dao or devin-byok repository, or when the user says 连接本机/接入桌面/连 Logan",
+  content="""本仓库用户本机桌面（Logan / DESKTOP-GET3DBC, Win11）可经 dao-cloud skill 远程接入。
+  1. 读取 .devin/skills/dao-cloud/SKILL.md（权威）+ 同目录 CONNECT.md（速查）
+  2. 按 skill 自动发现连接（Hub 优先，Bridge 备用）
+  3. Hub 固定 URL：https://encircle-wasting-paging.ngrok-free.dev
+  4. Hub token = org secret DAO_HUB_TOKEN（真相源 C:\\Users\\Administrator\\.dao\\dao-hub\\token.txt；默认值 dao-ps-agent-2026 已失效）
+  5. exec-sync 必带 --max-time；字段名是 cmd 不是 command;本机 devin-byok 在 D:\\frank\\devin-byok"""
+)
 ```
 
-> **执行前先检查**：`list_knowledge_notes` 查看是否已存在同名 note。已存在则 update，避免重复。
+**② 次选——建议卡片（仅当无法用 MCP 直接 create 时）：** 用 `suggest_knowledge` 发建议，
+**但必须同时提示用户**：「请到会话顶部找 Approve 卡片；如果看不到卡片，告诉我，我改用直接 create」。
+不要发完就当完成——它可能一直 pending。
 
-> **为什么必须做这步**：Knowledge note 绑定 Devin org，切账号后会丢。
-> 但只要用户说一句"读 dao-cloud skill 连本机"触发本流程，这步会自动重建 note，
-> 之后同 org 所有新会话（只要勾选 windsurf-dao 仓库）都自动连接，无需再手动说。
+**③ 永久兜底——仓库文件（完全不用点）：** 同目录的 `CONNECT.md` 已把全部连接常量固化进仓库。
+知识库 note 绑 org、换账号会丢；仓库文件不会。所以连接信息**始终**要保证 `CONNECT.md` 是最新的，
+它是 note 丢失时的真相源。
+
+> **为什么必须做这步**：Knowledge note 绑定 Devin org，切账号后会丢。但只要用户说一句"读 dao-cloud
+> skill 连本机"触发本流程，这步会用 ① 自动重建 note，之后同 org 所有新会话（勾选 windsurf-dao 仓库）
+> 都自动连接，无需再手动说。`CONNECT.md`（③）则保证即使 note 丢了也能立刻查到连接方式。
 
 > **Bridge URL/Token 不存 secret**：trycloudflare URL 每次 IDE 重启会变，
 > 存了也会过期。需要时实时经 Hub exec-sync 发现即可。
