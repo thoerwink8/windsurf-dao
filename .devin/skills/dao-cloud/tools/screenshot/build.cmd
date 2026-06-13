@@ -1,8 +1,10 @@
 @echo off
-REM 把截屏 helper 源码编译成 exe，安装到 %USERPROFILE%\.dao\bin\
-REM 用 .NET Framework 自带的 csc.exe，无需安装任何东西，编译不触发 AMSI。
-REM   dao_shot.exe    全屏截图（VirtualScreen -> JPEG）
-REM   dao_winshot.exe 按窗口截图（PrintWindow，不抢焦点）
+REM Compile screenshot helper sources to exe, install into %USERPROFILE%\.dao\bin\
+REM Uses the .NET Framework built-in csc.exe (no install needed, no AMSI trigger).
+REM ASCII-only on purpose: cmd.exe parses .cmd in the OEM codepage, so non-ASCII
+REM comments here would be mis-parsed as commands and break the build.
+REM   dao_shot.exe    full-screen capture (VirtualScreen -> JPEG)
+REM   dao_winshot.exe per-window capture (PrintWindow, does not steal focus)
 setlocal
 set DIR=%USERPROFILE%\.dao\bin
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
