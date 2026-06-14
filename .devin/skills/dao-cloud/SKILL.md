@@ -135,8 +135,11 @@ Hub 是门（机器级），Bridge 是路（IDE 级）。
 
 ### 执行铁律：动手前必问用户选哪种模式（不自动替用户决定）
 
-> 要在本机干活前，**先停下来问用户用哪种模式，等用户选定再执行**。这是强制门，每次新会话/当前会话执行任务前都要过。
+> 要在本机干**实质任务**前，**先停下来问用户用哪种模式，等用户选定再执行**。这是强制门，每个会话首次要干实质活时过一次。
+> **询问门只针对「会真正干活、产生多动作」的任务**：开发 / 调查 / 逆向 / 批量操作 / 多文件改动。
+> **豁免（直接走，不问）**：只读探活与单条命令——`health`/`ping`/`whoami`、读一个文件、查一次状态这类一两个动作就完的事。
 > 唯一例外：用户已在指令里明确指定（如"用模式②"/"委派 reclaude"/"本地自己干"）→ 不必再问，直接照办。
+> 选定后同一会话内沿用该模式，除非用户改口；不必每条命令都重问。
 
 **询问模板**（在本机执行任何任务前抛给用户，附成本提示帮其判断）：
 
@@ -156,7 +159,7 @@ Hub 是门（机器级），Bridge 是路（IDE 级）。
 1. **胖命令，少往返**：多步打包成一个脚本一次发，本机跑完只回汇总结果（20 次往返 → 2 次）。
 2. **本机先过滤再回传**：命令里带 `grep/select/head`，只回需要的几行，别回整个文件（输出小 = 上下文小 = 便宜）。
 3. **精确指路，禁止探索**：直接给路径/命令，别让它 `find`/到处读来定位（探索 = 动作爆炸）。
-4. **换便宜模型**：纯"操作机器"不用 opus-thinking，把 opus 留给真要深推理的活。
+4. **换便宜模型**：纯"操作机器"不用 opus-thinking，把 opus 留给真要深推理的活。（⚠️ 此条是**用户侧杠杆**——模型在**建会话时**选定，云端 Agent 中途**不能自切**；提醒用户下次建会话挑便宜模型。）
 5. **Message usage limit 设 $2–3**：硬熔断，杜绝单条消息失控。
 6. **一会话一任务，跑完即停**：别让上下文滚到十几轮（雪球越滚每轮越贵）。
 7. **能命令行就别 GUI**：截图/点击是 vision + 多动作，最贵。
@@ -204,6 +207,8 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 ```
 
 这套保证：① 不碰 GUI 终端；② 不堵 Hub 队列；③ reclaude 在本机干重活**不烧 ACU**；④ 云端回来只做云原生收尾。
+
+> ⚠️ **轮询本身也烧一点 ACU**：第 3 步的轮询是云端 Agent 在发动作，也计费，且频繁轮询会把空闲会睡的 Devin 撑醒。所以**长任务稀疏轮询**（几分钟一次，别每 30 秒戳）；reclaude 干得越久，轮询间隔放越大。比云端亲自干仍省很多，但不是零。
 
 > 想"肉眼看 reclaude 实时滚动"是监控需求，不是干活必需——回来 `cat D:\tmp\rc-out.json` 或日志一样看全过程，更稳。
 
@@ -445,7 +450,7 @@ devin_knowledge_manage(
   3. Hub 固定 URL：https://encircle-wasting-paging.ngrok-free.dev
   4. Hub token = org secret DAO_HUB_TOKEN（真相源 C:\\Users\\Administrator\\.dao\\dao-hub\\token.txt；默认值 dao-ps-agent-2026 已失效）
   5. exec-sync 必带 --max-time；字段名是 cmd 不是 command;本机 devin-byok 在 D:\\frank\\devin-byok
-  6. 【成本路由·强制询问门】每次要在本机执行任务前，必须先停下来问用户用哪种模式，等用户选定再执行，不自动替用户决定；唯一例外是用户已在指令里指定（"用模式②"/"委派 reclaude"/"本地自己干"）则照办不再问。两个钱袋：A=Devin Cloud ACU（跑云端会话时烧）；B=本地 agent（reclaude=本机 Claude Code CLI / Cascade=Devin Desktop，不烧 ACU）。模式①（云端直控本机，较贵·烧 ACU）：Devin 当大脑逐条遥控，适合边看边判断/操作 GUI；选了必用省钱七条（胖命令少往返、本机先 grep/select/head 过滤再回传、精确指路禁 find 探索、换便宜模型勿用 opus-thinking、Message limit 设低硬熔断、一会话一任务跑完即停、能命令行就别 GUI）。模式②（云端委派本地 reclaude，最省·重活不烧 ACU，离机/无人值守用）：重读取/改代码/逆向/诊断外包给 reclaude，截图分析/开PR/跑测试/检验/review diff/编排留云端；委派用 headless 子进程不驱动 GUI 终端（reclaude -p "任务" --output-format json；复用上下文 --resume <id> -p；接最近 -c -p），无人值守必须后台 Start-Process + -RedirectStandardOutput 到文件 + 轮询，避免堵死 Hub 阻塞单队列。详见 SKILL.md 〇.二节。"""
+  6. 【成本路由·询问门】每次要在本机干**实质任务**（开发/调查/逆向/批量/多文件改动）前，必须先停下来问用户用哪种模式，等用户选定再执行，不自动替用户决定；**只读探活与单条命令（health/ping/whoami/读一个文件）豁免，直接走不问**；同一会话选定后沿用，除非用户改口；用户已在指令里指定（"用模式②"/"委派 reclaude"/"本地自己干"）则照办不再问。两个钱袋：A=Devin Cloud ACU（跑云端会话时烧）；B=本地 agent（reclaude=本机 Claude Code CLI / Cascade=Devin Desktop，不烧 ACU）。模式①（云端直控本机，较贵·烧 ACU）：Devin 当大脑逐条遥控，适合边看边判断/操作 GUI；选了必用省钱七条（胖命令少往返、本机先 grep/select/head 过滤再回传、精确指路禁 find 探索、换便宜模型勿用 opus-thinking、Message limit 设低硬熔断、一会话一任务跑完即停、能命令行就别 GUI）。模式②（云端委派本地 reclaude，最省·重活不烧 ACU，离机/无人值守用）：重读取/改代码/逆向/诊断外包给 reclaude，截图分析/开PR/跑测试/检验/review diff/编排留云端；委派用 headless 子进程不驱动 GUI 终端（reclaude -p "任务" --output-format json；复用上下文 --resume <id> -p；接最近 -c -p），无人值守必须后台 Start-Process + -RedirectStandardOutput 到文件 + 轮询，避免堵死 Hub 阻塞单队列。详见 SKILL.md 〇.二节。"""
 )
 ```
 
