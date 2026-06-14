@@ -19,7 +19,7 @@ description: 一键连接本机 — Devin Agent 读此 skill 即可远程接入 
 
 ```
 先探后连，先连后存。
-连本机干活前，必先停下来问用户选模式①还是②（成本路由），不自动替用户决定。
+识别为实质本机任务后，第一动作就是问用户选模式①/②（先问后连·问之前别读全 skill、别连 Hub），不自动替用户决定。
 Hub 是门（机器级），Bridge 是路（IDE 级）。
 不硬编码动态值，不手动要 token。
 所有 exec-sync 调用必须带 --max-time（防止队列阻塞）。
@@ -122,6 +122,19 @@ Hub 是门（机器级），Bridge 是路（IDE 级）。
 > 计费铁律：Devin Cloud 按 **动作数 × 复杂度** 计，VM 时间只占一小部分。
 > 省额度 = 让云端少做动作 / 把重活搬到本地 agent，**不是换隧道（Hub↔Bridge 同款 exec 成本）**。
 > 注：这是**唯一**要主动问用户的地方（成本决策），与 〇.一「技术问题自主解决、不问用户」不冲突——技术照样自主，模式由用户拍板。
+
+### ⚡ 顺序铁律：先问后连，别在问之前做任何准备
+
+> 一旦识别为「实质本机任务」，**问模式就是第一个动作**——它不需要任何连接，是一句话、零成本、瞬间的事。
+> **问之前禁止**：读完整 SKILL.md、跑 Hub health、连接发现、起 IDE、任何"准备工作"。这些一律等用户选完模式再做。
+> ❌ 反面案例（实测踩过）：先花 1 分钟「读 skill + 准备连接」**然后**才弹模式选择——把本该省钱的门自己变成了浪费，还烧了 ACU。
+> ✅ 正确节奏：识别实质任务 → **立刻**抛模式选择（不连接）→ 用户选 → 再按所选模式去连/干。
+
+### 先判断：这任务真的需要本机吗？（很多调查并不需要）
+
+- 任务只是**读 committed 代码 / 跑只读分析** → 云端会话**已经 clone 了仓库**，直接读云端副本即可，**根本不用连本机、也不用问①/②**（最省、最快）。
+- 只有需要**本机特有状态**才上①/②：未提交的本地改动、本地运行时/进程、本地配置文件、GUI、本机服务。
+- 拿不准 → 一句话问用户"看你本机实时状态，还是看 committed 代码就行？"，省得白连。
 
 ### 两个独立的钱袋，先认清
 
@@ -450,7 +463,7 @@ devin_knowledge_manage(
   3. Hub 固定 URL：https://[REDACTED:hub-host]
   4. Hub token = org secret DAO_HUB_TOKEN（真相源 C:\\Users\\Administrator\\.dao\\dao-hub\\token.txt；默认值 [REDACTED:hub-token] 已失效）
   5. exec-sync 必带 --max-time；字段名是 cmd 不是 command;本机 devin-byok 在 D:\\frank\\devin-byok
-  6. 【成本路由·询问门】每次要在本机干**实质任务**（开发/调查/逆向/批量/多文件改动）前，必须先停下来问用户用哪种模式，等用户选定再执行，不自动替用户决定；**只读探活与单条命令（health/ping/whoami/读一个文件）豁免，直接走不问**；同一会话选定后沿用，除非用户改口；用户已在指令里指定（"用模式②"/"委派 reclaude"/"本地自己干"）则照办不再问。两个钱袋：A=Devin Cloud ACU（跑云端会话时烧）；B=本地 agent（reclaude=本机 Claude Code CLI / Cascade=Devin Desktop，不烧 ACU）。模式①（云端直控本机，较贵·烧 ACU）：Devin 当大脑逐条遥控，适合边看边判断/操作 GUI；选了必用省钱七条（胖命令少往返、本机先 grep/select/head 过滤再回传、精确指路禁 find 探索、换便宜模型勿用 opus-thinking、Message limit 设低硬熔断、一会话一任务跑完即停、能命令行就别 GUI）。模式②（云端委派本地 reclaude，最省·重活不烧 ACU，离机/无人值守用）：重读取/改代码/逆向/诊断外包给 reclaude，截图分析/开PR/跑测试/检验/review diff/编排留云端；委派用 headless 子进程不驱动 GUI 终端（reclaude -p "任务" --output-format json；复用上下文 --resume <id> -p；接最近 -c -p），无人值守必须后台 Start-Process + -RedirectStandardOutput 到文件 + 轮询，避免堵死 Hub 阻塞单队列。详见 SKILL.md 〇.二节。"""
+  6. 【成本路由·询问门】**先问后连**：识别为实质本机任务后，问模式是第一个动作，不需要连接、一句话瞬间完成；问之前禁止读完整 skill / 连 Hub / 做任何准备（否则把省钱门变成浪费、还烧 ACU）。**先判断要不要本机**：只读 committed 代码用云端已 clone 的副本即可，不连本机也不问①/②（最省最快）；只有需要本机特有状态（未提交改动/本地配置/运行时/GUI/本机服务）才上①/②。实质任务=开发/调查本机状态/逆向/批量/多文件改动；只读探活（health/ping/whoami/读单文件）豁免、直接走不问。选定后同一会话沿用，除非用户改口；用户已指定（"用模式②"/"委派 reclaude"/"本地自己干"）则照办不再问。两个钱袋：A=Devin Cloud ACU（跑云端会话时烧）；B=本地 agent（reclaude=本机 Claude Code CLI / Cascade=Devin Desktop，不烧 ACU）。模式①（云端直控本机，较贵·烧 ACU）：Devin 当大脑逐条遥控，适合边看边判断/操作 GUI；选了必用省钱七条（胖命令少往返、本机先 grep/select/head 过滤再回传、精确指路禁 find 探索、换便宜模型勿用 opus-thinking、Message limit 设低硬熔断、一会话一任务跑完即停、能命令行就别 GUI）。模式②（云端委派本地 reclaude，最省·重活不烧 ACU，离机/无人值守用）：重读取/改代码/逆向/诊断外包给 reclaude，截图分析/开PR/跑测试/检验/review diff/编排留云端；委派用 headless 子进程不驱动 GUI 终端（reclaude -p "任务" --output-format json；复用上下文 --resume <id> -p；接最近 -c -p），无人值守必须后台 Start-Process + -RedirectStandardOutput 到文件 + 轮询，避免堵死 Hub 阻塞单队列。详见 SKILL.md 〇.二节。"""
 )
 ```
 
