@@ -24,6 +24,37 @@
 
 ---
 
+## ★ AI 自助安装 / 自检（一段读完即可执行）
+
+> 给未来接手的 AI：在一台新机器上完整复刻本套配置，按下面顺序执行即可，每步可自检。
+> 详细解释见后续各节；只想快速跑通，照这一段。
+
+**前置**：已装 `git` / `node` / `cc-switch`（启动过一次，DB 已建）；已把旧机的 `config-sync/providers/`（含密钥，不进 git）手动拷到本仓库同位置。
+
+```powershell
+# 1. 取仓库（路径不强制，dao 用占位符/动态根适配；建议 D:\frank\windsurf-dao）
+git clone <windsurf-dao 仓库地址> D:\frank\windsurf-dao
+cd D:\frank\windsurf-dao
+
+# 2. 恢复 cc-switch 全部配置（settings/hooks/MCP/skills/providers）→ cc-switch DB
+#    （双击 config-sync\恢复配置.bat 等价；AI 直接调 lib 跳过 pause）
+node config-sync\lib\restore.mjs
+
+# 3. 软链 dao 规则到 ~/.claude（skills / commands[含 /dao-remove] / agents + dao.md @import）
+.\dao.ps1 link-claude
+
+# 4. 让 cc-switch 下发到各端：重启 cc-switch 并切换一次 provider（GUI 一步，下发 env/hooks/model 等）
+
+# 5. 自检（问题 0 项为准）
+node config-sync\lib\doctor.mjs
+```
+
+**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 4 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Pencil 本机安装路径、Codex node_repl 等）属正常机器差异，非问题。
+
+**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `.\dao.ps1 link-claude`；hook/env 没生效 → 确认第 4 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
+
+---
+
 ## 1. 前置依赖（先装好这些）
 
 | 依赖 | 用途 | 检查命令 |
