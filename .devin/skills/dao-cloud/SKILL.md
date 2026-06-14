@@ -19,6 +19,7 @@ description: 一键连接本机 — Devin Agent 读此 skill 即可远程接入 
 
 ```
 先探后连，先连后存。
+连本机干活前，必先停下来问用户选模式①还是②（成本路由），不自动替用户决定。
 Hub 是门（机器级），Bridge 是路（IDE 级）。
 不硬编码动态值，不手动要 token。
 所有 exec-sync 调用必须带 --max-time（防止队列阻塞）。
@@ -112,6 +113,99 @@ Hub 是门（机器级），Bridge 是路（IDE 级）。
 3. 更新知识库 note（如需要）
 同理，Hub URL 变更后写回 dao-hub\conn.json + endpoints.json + org secret DAO_HUB_URL。
 ```
+
+---
+
+## 〇.二、成本路由 · 两种模式（连本机干活前必先问用户）
+
+> 连本机 ≠ 烧 Devin Cloud ACU。「能连本机」和「算谁的钱」是两件正交的事。
+> 计费铁律：Devin Cloud 按 **动作数 × 复杂度** 计，VM 时间只占一小部分。
+> 省额度 = 让云端少做动作 / 把重活搬到本地 agent，**不是换隧道（Hub↔Bridge 同款 exec 成本）**。
+> 注：这是**唯一**要主动问用户的地方（成本决策），与 〇.一「技术问题自主解决、不问用户」不冲突——技术照样自主，模式由用户拍板。
+
+### 两个独立的钱袋，先认清
+
+| | A. Devin Cloud ACU | B. 本地 agent（reclaude / Cascade） |
+|---|---|---|
+| 何时烧 | 跑**云端 Devin 会话**时 | **本机 agent** 干活时 |
+| 怎么碰文件 | 经 Hub/Bridge 隧道**远程遥控** | **原生**直接读写 |
+| 算谁的钱 | Devin on-demand 余额 | 用户的 BYOK / 订阅，**不烧 ACU** |
+
+> `reclaude` = 本机的 Claude Code CLI（headless 可调）；`Cascade` = Devin Desktop 本地 agent。两者都是"本地 agent"，进程跑在本机、不烧 ACU。
+
+### 执行铁律：动手前必问用户选哪种模式（不自动替用户决定）
+
+> 要在本机干活前，**先停下来问用户用哪种模式，等用户选定再执行**。这是强制门，每次新会话/当前会话执行任务前都要过。
+> 唯一例外：用户已在指令里明确指定（如"用模式②"/"委派 reclaude"/"本地自己干"）→ 不必再问，直接照办。
+
+**询问模板**（在本机执行任何任务前抛给用户，附成本提示帮其判断）：
+
+> 这个任务要在你本机干，先选执行模式：
+> - **模式①——云端 Devin 直控本机**：我（云端）当大脑逐条遥控你本机，适合要我边看边判断 / 操作 GUI。**较贵（烧 ACU）**。
+> - **模式②——云端委派本地 reclaude**：我当项目经理，把读码/开发/逆向这类重活交给你本机的 reclaude，我只做截图分析 / 跑测试 / 检验 / 开 PR 的收尾。**最省（重活不烧 ACU）**。
+> - （也可以让本机 reclaude 完全自己干，我不介入。）
+
+选定后：用户选 **①** → 按下方「模式①省钱七条」执行；选 **②** → 按下方「模式②分工 + headless 委派」执行。
+
+---
+
+### 模式① · 云端直控本机（省钱七条）
+
+**为什么默认会贵**：云端每发一条命令 = 一次 Hub 往返 = 一个动作；吞大输出 = 每动作复杂度飙升；默认 opus-thinking 再乘一道单价。
+
+1. **胖命令，少往返**：多步打包成一个脚本一次发，本机跑完只回汇总结果（20 次往返 → 2 次）。
+2. **本机先过滤再回传**：命令里带 `grep/select/head`，只回需要的几行，别回整个文件（输出小 = 上下文小 = 便宜）。
+3. **精确指路，禁止探索**：直接给路径/命令，别让它 `find`/到处读来定位（探索 = 动作爆炸）。
+4. **换便宜模型**：纯"操作机器"不用 opus-thinking，把 opus 留给真要深推理的活。
+5. **Message usage limit 设 $2–3**：硬熔断，杜绝单条消息失控。
+6. **一会话一任务，跑完即停**：别让上下文滚到十几轮（雪球越滚每轮越贵）。
+7. **能命令行就别 GUI**：截图/点击是 vision + 多动作，最贵。
+
+> 一句话：模式①省钱 = 把云端 Devin 的脑力活压到最小——少往返、小输出、精确指令、便宜模型。
+
+---
+
+### 模式② · 云端委派本地 reclaude（编排 + 本地执行）
+
+**本质是分工，不是全外包**：重读取/开发外包给 reclaude，**云端独有/有界的步骤留云端**。云端始终是项目经理。
+
+| 留云端 Devin（独有 / 动作有界） | 外包本地 reclaude（信息量大 / 啃本地内容） |
+|---|---|
+| 分析你贴的**截图**（vision） | 读整库、跨文件搜索 |
+| 开 **PR**、GitHub 操作 | 改代码 / 多文件开发修复 |
+| 云端**跑测试**、CI 式验证 | 逆向、配置诊断、定位 bug 行号 |
+| **做检验**、review reclaude 的 diff | 任何"重读取换上下文"的活 |
+| 跟用户对话、规划、编排 | |
+
+> 分工判据一条线：**要大量啃本地内容 → reclaude；云端独有能力或有界收尾 → 云端留。**
+
+**委派机制 = headless 子进程，不驱动可见 GUI 终端**（"打开终端往里敲"那条路脆：窗口焦点/敲错位，无人值守必崩）。reclaude 可非交互调用：
+
+| 要什么 | 命令 |
+|---|---|
+| 全新任务 | `reclaude -p "完整任务描述" --output-format json` |
+| 复用某会话上下文 | `reclaude --resume <session-id> -p "继续干 X"` |
+| 接最近一次 | `reclaude -c -p "..."` |
+
+**无人值守必须「后台拉起 + 轮询文件」**（Hub exec-sync 是阻塞单队列，reclaude 跑几分钟会堵死队列）：
+
+```bash
+# 1) 经 Hub 把任务写成本机文件（避免多层引号地狱）
+curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
+  -H "Authorization: Bearer $DAO_HUB_TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id":"[REDACTED:machine]","cmd":"powershell -NoProfile -Command \"Set-Content D:\\tmp\\rc-task.txt -Value '\''调查X，只回结论和diff'\''\""}'
+
+# 2) 后台起 reclaude 读该任务，输出写文件，立即返回（不阻塞 Hub）
+curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
+  -H "Authorization: Bearer $DAO_HUB_TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id":"[REDACTED:machine]","cmd":"powershell -NoProfile -Command \"Start-Process reclaude -ArgumentList @('\''-p'\'',(Get-Content D:\\tmp\\rc-task.txt -Raw),'\''--output-format'\'','\''json'\'') -RedirectStandardOutput D:\\tmp\\rc-out.json -WindowStyle Hidden\""}'
+
+# 3) 每隔 N 秒经 Hub 轮询 D:\tmp\rc-out.json 是否写完 → 读结果 → 看 diff / 跑测试 / 开 PR
+```
+
+这套保证：① 不碰 GUI 终端；② 不堵 Hub 队列；③ reclaude 在本机干重活**不烧 ACU**；④ 云端回来只做云原生收尾。
+
+> 想"肉眼看 reclaude 实时滚动"是监控需求，不是干活必需——回来 `cat D:\tmp\rc-out.json` 或日志一样看全过程，更稳。
 
 ---
 
@@ -321,6 +415,11 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 ### 3.2 创建 Repo Knowledge Note（关键）
 
+> ⚠️ **每次改完本 skill（尤其 〇.二 成本路由 / 询问门），必须重跑一次「更新知识库」流程刷新这个 note**
+> （`devin_knowledge_manage` 先 `list` 查重 → `update` 或先删旧再 `create`）。
+> note 是创建那一刻的**死快照**，存在 Devin org 知识库里，不随 SKILL.md 自动更新；不刷新 → 线上新会话注入的还是旧行为。
+> 且 SKILL.md 改动要先 push 到 GitHub，Devin 才 clone 得到新版。
+
 连接成功后，**必须检查并创建 repo-pinned knowledge note**，确保未来会话自动触发连接。
 
 > ⚠️ **血泪教训（2026-06-13）**：早期版本只写「用 `suggest_knowledge`」。但 `suggest_knowledge`
@@ -345,7 +444,8 @@ devin_knowledge_manage(
   2. 按 skill 自动发现连接（Hub 优先，Bridge 备用）
   3. Hub 固定 URL：https://[REDACTED:hub-host]
   4. Hub token = org secret DAO_HUB_TOKEN（真相源 C:\\Users\\Administrator\\.dao\\dao-hub\\token.txt；默认值 [REDACTED:hub-token] 已失效）
-  5. exec-sync 必带 --max-time；字段名是 cmd 不是 command;本机 devin-byok 在 D:\\frank\\devin-byok"""
+  5. exec-sync 必带 --max-time；字段名是 cmd 不是 command;本机 devin-byok 在 D:\\frank\\devin-byok
+  6. 【成本路由·强制询问门】每次要在本机执行任务前，必须先停下来问用户用哪种模式，等用户选定再执行，不自动替用户决定；唯一例外是用户已在指令里指定（"用模式②"/"委派 reclaude"/"本地自己干"）则照办不再问。两个钱袋：A=Devin Cloud ACU（跑云端会话时烧）；B=本地 agent（reclaude=本机 Claude Code CLI / Cascade=Devin Desktop，不烧 ACU）。模式①（云端直控本机，较贵·烧 ACU）：Devin 当大脑逐条遥控，适合边看边判断/操作 GUI；选了必用省钱七条（胖命令少往返、本机先 grep/select/head 过滤再回传、精确指路禁 find 探索、换便宜模型勿用 opus-thinking、Message limit 设低硬熔断、一会话一任务跑完即停、能命令行就别 GUI）。模式②（云端委派本地 reclaude，最省·重活不烧 ACU，离机/无人值守用）：重读取/改代码/逆向/诊断外包给 reclaude，截图分析/开PR/跑测试/检验/review diff/编排留云端；委派用 headless 子进程不驱动 GUI 终端（reclaude -p "任务" --output-format json；复用上下文 --resume <id> -p；接最近 -c -p），无人值守必须后台 Start-Process + -RedirectStandardOutput 到文件 + 轮询，避免堵死 Hub 阻塞单队列。详见 SKILL.md 〇.二节。"""
 )
 ```
 
