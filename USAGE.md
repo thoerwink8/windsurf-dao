@@ -305,7 +305,7 @@ AI 检测到任务复杂度满足阈值（≥3 文件 / ≥100 LOC / 核心模�
 
 **不要。** AI 按场景自动加载，你不需要知道它们的名字。
 
-如果好奇可以看 `.windsurf/skills/` 目录，但日常使用不需要。
+如果好奇可以看 `.devin/skills/` 目录，但日常使用不需要。
 
 ### Q6 · /dao-dev 和 /dao-superpowers 同时用吗？
 
@@ -317,7 +317,7 @@ AI 检测到任务复杂度满足阈值（≥3 文件 / ≥100 LOC / 核心模�
 
 ### Q7 · 我看到 AI 报「dao-meta 三关过审」是什么意思？
 
-dao-meta 是 dao 体系自我守卫机制，改 `.windsurf/rules/**` 等核心文件时自动触发，确保改动满足：
+dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文件时自动触发，确保改动满足：
 1. 通用性（不是项目特殊巫态）
 2. 内容边界（不与现有规则冲突）
 3. 影响评估（其他文件是否需协同）
@@ -354,7 +354,7 @@ dao-meta 是 dao 体系自我守卫机制，改 `.windsurf/rules/**` 等核心�
 
 - 体系架构：[README.md](README.md)
 - AI 自身指南：[AGENT_GUIDE.md](AGENT_GUIDE.md)
-- 规则总览：[`.windsurf/rules/README.md`](.windsurf/rules/README.md)
+- 规则总览：[`.devin/rules/README.md`](.devin/rules/README.md)
 - 道德经原文：[`references/道德经.md`](references/道德经.md)
 - 演化记录：[`data/evolution-entries.csv`](data/evolution-entries.csv)
 
