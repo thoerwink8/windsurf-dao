@@ -41,7 +41,9 @@
 
 ## 包含什么
 
-### 十一个规则文件（`.devin/rules/` · 对齐 Windsurf 4 trigger）
+### 规则文件（`.devin/rules/` · 对齐 Windsurf 4 trigger）
+
+> 数量以目录为准：`ls .devin/rules/`。下表列核心几条，trigger 全分配见 `.devin/rules/README.md`。
 
 | 文件                  | trigger        | 内容                                          |
 | --------------------- | -------------- | --------------------------------------------- |
@@ -56,7 +58,9 @@
 | `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
 | `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
 
-### 十个工作流（`.devin/workflows/`）
+### 工作流（`.devin/workflows/` · Claude Code 侧 `claude/commands/dao-*.md`）
+
+> 数量以目录为准：`ls .devin/workflows/`。下表列核心几条。
 
 | 工作流              | 功能                                              |
 | ------------------- | ------------------------------------------------- |
