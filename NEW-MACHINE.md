@@ -14,7 +14,7 @@
 
 | # | 组件 | 真相源 | 是否进 git |
 |---|---|---|---|
-| 1 | dao 规则体系（skills/commands/agents/dao.md） | 本仓库 `claude/` `.windsurf/` | ✅ 是 |
+| 1 | dao 规则体系（skills/commands/agents/dao.md） | 本仓库 `claude/` `.devin/` | ✅ 是 |
 | 2 | cc-switch 通用配置（env/hooks/model/permissions） | 本仓库 `config-sync/common/` | ✅ 是 |
 | 3 | cc-switch 供应商（含 token/API key） | `config-sync/providers/` | ❌ **手动复制** |
 | 4 | Codex 本地插件市场（如 product-design） | 本仓库 `config-sync/local-marketplaces/` | ✅ 是 |

@@ -41,7 +41,7 @@
 
 ## 包含什么
 
-### 十一个规则文件（`.windsurf/rules/` · 对齐 Windsurf 4 trigger）
+### 十一个规则文件（`.devin/rules/` · 对齐 Windsurf 4 trigger）
 
 | 文件                  | trigger        | 内容                                          |
 | --------------------- | -------------- | --------------------------------------------- |
@@ -56,7 +56,7 @@
 | `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
 | `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
 
-### 十个工作流（`.windsurf/workflows/`）
+### 十个工作流（`.devin/workflows/`）
 
 | 工作流              | 功能                                              |
 | ------------------- | ------------------------------------------------- |
@@ -71,13 +71,13 @@
 | `/dao-thread-tree`  | 处理 TODO.md `Open Threads` 未解决项              |
 | `/dao-session-sync` | 多会话协作（git 为共享状态，无需其他会话配合）    |
 
-### 技术栈处方（`.windsurf/stacks/`）
+### 技术栈处方（`.devin/stacks/`）
 
 | 处方 | 技术栈 | 触发场景 |
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
 
-### 技能（`.windsurf/skills/`）
+### 技能（`.devin/skills/`）
 
 **元层与调度**
 
@@ -169,9 +169,9 @@ windsurf-dao 自身也以此为范——身教重于言教。
 
 ## Claude Code 侧（双栈共存）
 
-> 同源不同壳。`claude/` 与 `.windsurf/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+> 同源不同壳。`claude/` 与 `.devin/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
 
-迁移到 Claude Code CLI 后新增 `claude/` 目录作为 Claude Code 侧真相源，与上面的 `.windsurf/` 并列。规则内核同源，外壳按宿主能力裁剪（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，dao 只保留不重叠的独有增量）。部署见 [MIGRATION.md · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
+迁移到 Claude Code CLI 后新增 `claude/` 目录作为 Claude Code 侧真相源，与上面的 `.devin/` 并列。规则内核同源，外壳按宿主能力裁剪（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，dao 只保留不重叠的独有增量）。部署见 [MIGRATION.md · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
 
 | 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
 |---|---|---|---|
@@ -227,7 +227,7 @@ windsurf-dao/                  # Sidecar workspace——始终保持打开
 ├── global_rules.md            # 通过 link-global 部署到 ~/.codeium/windsurf/memories/
 ├── dao.ps1                    # status / link-global
 ├── data/evolution-*.csv       # 演化条目 + 教训库（dao 自身演化）
-└── .windsurf/
+└── .devin/
     ├── rules/                 # 11 文件 5 层架构（v2 + dao-mantra）
     ├── skills/dao-*/          # 自动跨 workspace 可见
     └── workflows/dao-*.md     # 自动跨 workspace 可见
@@ -236,7 +236,7 @@ target-project/                # 你的工作项目
 ├── TODO.md                    # 任务图唯一载体
 ├── AGENT_GUIDE.md             # 项目活体知识库
 ├── data/evolution-*.csv       # 项目自身的演化与教训
-└── .windsurf/                 # 仅项目自有内容（无 dao-* 链接）
+└── .devin/                 # 仅项目自有内容（无 dao-* 链接）
     ├── rules/*.md
     ├── skills/*/
     └── workflows/*.md
@@ -255,7 +255,7 @@ target-project/                # 你的工作项目
 ### 添加新技能
 
 ```
-.windsurf/skills/your-skill/
+.devin/skills/your-skill/
 └── skill.md
 ```
 
@@ -264,7 +264,7 @@ target-project/                # 你的工作项目
 ### 添加新工作流
 
 ```
-.windsurf/workflows/your-workflow.md
+.devin/workflows/your-workflow.md
 ```
 
 格式：YAML frontmatter（description）+ Markdown 正文。
@@ -297,7 +297,7 @@ target-project/                # 你的工作项目
 | 5 review | reviewer-critical APPROVE_WITH_FIXES → 普通 reviewer Stage1+2 PASS | **抓到 P1-3: backfill SQL 子查询无 `idx_lease_history_account_id` 索引，会阻塞 onModuleInit 几秒** |
 | 6 finish | merge master + GHA 4m42s + ssh fresh 验证 + worktree cleanup | CPU 实测 **54% → 5.1%**（远超 25% 目标） |
 
-**关键学到的事**：reviewer-critical 抓到的 P1-3 索引问题，是 AI 自检难以发现的——backfill SQL 看着没问题，但放到生产 lease_history 表（永久归档）就会扫几百万行阻塞启动。**如果跳过 reviewer-critical 直接合入，上线后才发现启动卡顿，且不易归因**。核心模块改动走完整流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住（见 [`dao-mantra.md`](.windsurf/rules/dao-mantra.md) 与 [`superpowers-gate.md`](.windsurf/rules/superpowers-gate.md)）。
+**关键学到的事**：reviewer-critical 抓到的 P1-3 索引问题，是 AI 自检难以发现的——backfill SQL 看着没问题，但放到生产 lease_history 表（永久归档）就会扫几百万行阻塞启动。**如果跳过 reviewer-critical 直接合入，上线后才发现启动卡顿，且不易归因**。核心模块改动走完整流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住（见 [`dao-mantra.md`](.devin/rules/dao-mantra.md) 与 [`superpowers-gate.md`](.devin/rules/superpowers-gate.md)）。
 
 **完整教训沉淀**：见 wuganjiqie 项目 `data/evolution-lessons.csv` T176-T183 与 dao-debug skill 新增的 P3/P4 模式。
 

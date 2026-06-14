@@ -23,9 +23,9 @@
 | ------------------------------ | ------------------------------------------------------ |
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
-| `.windsurf/rules/`             | 11 文件 5 层架构（详见 `.windsurf/rules/README.md`，含 dao-mantra） |
-| `.windsurf/workflows/dao-*.md` | 10 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree/superpowers） |
-| `.windsurf/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
+| `.devin/rules/`             | 11 文件 5 层架构（详见 `.devin/rules/README.md`，含 dao-mantra） |
+| `.devin/workflows/dao-*.md` | 10 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree/superpowers） |
+| `.devin/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
 | `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
@@ -33,7 +33,7 @@
 
 **部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
 
-**Rules 架构（v2 · 2026-04-26 重构）**：废除"道德法术四层"概念，对齐 Windsurf 4 种 trigger 机制。详见 `.windsurf/rules/README.md`。
+**Rules 架构（v2 · 2026-04-26 重构）**：废除"道德法术四层"概念，对齐 Windsurf 4 种 trigger 机制。详见 `.devin/rules/README.md`。
 
 ---
 
@@ -209,4 +209,4 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 否则 → 主会话直接做(更快,无 rate limit 风险)
 ```
 
-详见 `.windsurf/workflows/dao-dev.md` Subagent 调度段 和 `.windsurf/skills/dao-pyramid/SKILL.md`。
+详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `.devin/skills/dao-pyramid/SKILL.md`。
