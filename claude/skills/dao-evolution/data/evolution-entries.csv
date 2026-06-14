@@ -1,2 +1,0 @@
-id,status,date,version,component,title,root_cause,lesson_ids,tags,synthesized_to
-e001,draft,2026-06-06,dao-settings-sync,dao.ps1/settings-sync,"settings.json 通用配置固化+SessionStart 自愈,踩 BOM 致 token 丢失","PowerShell -Encoding UTF8 写 BOM,node JSON.parse 失败被 catch 静默当空",T1,"powershell,bom,settings,cc-switch,self-heal",

@@ -4,7 +4,7 @@
 
 ## Claude Code CLI 模式（2026.05.31+ · 双栈共存)
 
-windsurf-dao 现在**同时支持 Windsurf 与 Claude Code CLI**,同源不同壳。`claude/` 目录是 Claude Code 侧真相源,与 `.windsurf/` 并存,均由本仓库 git 管理。
+windsurf-dao 现在**同时支持 Windsurf 与 Claude Code CLI**,同源不同壳。`claude/` 目录是 Claude Code 侧真相源,与 `.devin/` 并存,均由本仓库 git 管理。
 
 ```
 windsurf-dao/                          ← 唯一真相源(git)
@@ -14,7 +14,7 @@ windsurf-dao/                          ← 唯一真相源(git)
 │   ├── commands/dao-*.md              ← 11 slash commands
 │   ├── agents/dao-*.md                ← 8 subagents(金字塔调度)
 │   └── stacks/                        ← 技术栈处方
-├── .windsurf/                         ← Windsurf 侧(rules/skills/workflows/stacks)
+├── .devin/                         ← Windsurf 侧(rules/skills/workflows/stacks)
 ├── global_rules.md                    ← Windsurf 元规则源
 └── dao.ps1                            ← 链接管理(双栈)
 
@@ -53,17 +53,17 @@ windsurf-dao/                          ← 唯一真相源(git)
 
 ```
 windsurf-dao (源仓库, sidecar workspace)
-├── .windsurf/rules/        ← 9 个文件（1 always_on + 5 model_decision + 2 glob + 1 manual） · v2 架构
-├── .windsurf/skills/       ← 24 个 dao-* skills（4 类）
-├── .windsurf/stacks/       ← 技术栈处方（/dev 基建审计按需加载）
-├── .windsurf/workflows/    ← 9 个 dao-* workflows
+├── .devin/rules/        ← 9 个文件（1 always_on + 5 model_decision + 2 glob + 1 manual） · v2 架构
+├── .devin/skills/       ← 24 个 dao-* skills（4 类）
+├── .devin/stacks/       ← 技术栈处方（/dev 基建审计按需加载）
+├── .devin/workflows/    ← 9 个 dao-* workflows
 ├── global_rules.md         ← 元规则源文件（31 行）
 └── dao.ps1                 ← 链接管理工具（link-global）
 
 ~/.codeium/windsurf/memories/
 └── global_rules.md         ← symlink → windsurf-dao/
 
-项目X/.windsurf/
+项目X/.devin/
 └── (仅项目自有文件)           ← git tracked，无 dao-* 链接
 ```
 
@@ -81,9 +81,9 @@ windsurf-dao (源仓库, sidecar workspace)
 
 ## Claude Code 部署（双栈共存）
 
-> 同源不同壳。`claude/` 与 `.windsurf/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+> 同源不同壳。`claude/` 与 `.devin/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
 
-windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Code 双栈**。新增 `claude/` 目录作为 Claude Code 侧真相源，与 `.windsurf/` 并列共存，规则内核同源，只是按各自宿主的能力裁剪外壳（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，`claude/dao.md` 只保留与之不重叠的 dao 独有增量）。
+windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Code 双栈**。新增 `claude/` 目录作为 Claude Code 侧真相源，与 `.devin/` 并列共存，规则内核同源，只是按各自宿主的能力裁剪外壳（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，`claude/dao.md` 只保留与之不重叠的 dao 独有增量）。
 
 ### 一键部署
 
@@ -131,7 +131,7 @@ Windsurf 用 frontmatter 的 4 种 trigger 控制规则加载时机。Claude Cod
 
 ```
 windsurf-dao/
-├── .windsurf/              ← Windsurf 侧外壳
+├── .devin/              ← Windsurf 侧外壳
 │   ├── rules/              ← 11 文件 4 trigger（always_on/model_decision/glob/manual）
 │   ├── skills/dao-*/       ← 28 skills
 │   ├── workflows/dao-*.md  ← 10 workflows
@@ -152,7 +152,7 @@ windsurf-dao/
 
 1. **symlink 真相源**：`claude/` 是唯一真相，`~/.claude/` 下全是 symlink，编辑源文件即时生效，零副本。
 2. **借机精简**：删掉与 Claude Code 内置能力（shell 沙箱 / git 安全 / 破坏性操作确认）重叠的规则，为道日损。
-3. **双栈共存**：不删 `.windsurf/`，两套外壳并存，按宿主选用。
+3. **双栈共存**：不删 `.devin/`，两套外壳并存，按宿主选用。
 4. **续力铁律降级**：从 Windsurf 的"每条回复必问下一步"降为"路歧则问"——对齐 Claude Code 回合制的克制原则，路明则静默推进，只在方向不明 / 多方案待拍板 / 不可逆决策时才问。
 
 ---
@@ -167,14 +167,14 @@ windsurf-dao/
 
 ```
 windsurf-dao (源仓库)            ← git repo，唯一真相
-├── .windsurf/dao-*              ← 真实文件
+├── .devin/dao-*              ← 真实文件
 ├── global_rules.md              ← 全局规则真实文件
 └── dao.ps1                      ← 链接管理工具
 
 ~/.codeium/windsurf/memories/
 └── global_rules.md              ← symlink → windsurf-dao/
 
-项目X/.windsurf/
+项目X/.devin/
 ├── rules/dao-*.md               ← symlink → windsurf-dao/
 ├── skills/dao-*/                ← junction → windsurf-dao/
 ├── workflows/dao-*.md           ← symlink → windsurf-dao/
@@ -186,7 +186,7 @@ windsurf-dao (源仓库)            ← git repo，唯一真相
 ### 核心架构
 
 ```
-.windsurf/                      # 统一 AI 配置目录
+.devin/                      # 统一 AI 配置目录
 ├── rules/
 │   ├── dao-*.md               # dao 元层（symlink，本地忽略）
 │   └── *.md                   # 项目操作层（git 追踪）
@@ -283,17 +283,17 @@ windsurf-dao (源仓库)            ← git repo，唯一真相
 
 ```powershell
 # 复制
-Copy-Item "windsurf-dao\.windsurf\rules\dao-*.md" -Destination "target\.windsurf\rules\"
-Copy-Item "windsurf-dao\.windsurf\skills\dao-*" -Destination "target\.windsurf\skills\" -Recurse
-Copy-Item "windsurf-dao\.windsurf\workflows\dao-*.md" -Destination "target\.windsurf\workflows\"
+Copy-Item "windsurf-dao\.devin\rules\dao-*.md" -Destination "target\.devin\rules\"
+Copy-Item "windsurf-dao\.devin\skills\dao-*" -Destination "target\.devin\skills\" -Recurse
+Copy-Item "windsurf-dao\.devin\workflows\dao-*.md" -Destination "target\.devin\workflows\"
 
 # 配置本地忽略
 @"
 
 # windsurf-dao files (local only)
-.windsurf/rules/dao-*
-.windsurf/skills/dao-*
-.windsurf/workflows/dao-*
+.devin/rules/dao-*
+.devin/skills/dao-*
+.devin/workflows/dao-*
 "@ | Add-Content "target\.git\info\exclude"
 ```
 
@@ -328,8 +328,8 @@ Copy-Item "windsurf-dao\.windsurf\workflows\dao-*.md" -Destination "target\.wind
 目标项目的项目特定规则应独立管理：
 
 - `AGENT.md`（tracked）= 项目完整规范文档
-- `.windsurf/rules/ask-next-step.md`（tracked）= AI 交互行为规则
-- `.windsurf/rules/dao-*.md`（locally ignored）= dao 元层规则
+- `.devin/rules/ask-next-step.md`（tracked）= AI 交互行为规则
+- `.devin/rules/dao-*.md`（locally ignored）= dao 元层规则
 
 ## 迁移后的目录结构
 
@@ -337,7 +337,7 @@ Copy-Item "windsurf-dao\.windsurf\workflows\dao-*.md" -Destination "target\.wind
 target-project/
 ├── AGENT.md                         # (tracked) 项目完整规范
 ├── .git/info/exclude                # dao-* 本地忽略规则
-└── .windsurf/
+└── .devin/
     ├── rules/
     │   ├── (dao rules via sidecar)  # Sidecar 模式无需链接
     │   └── ask-next-step.md         # ← 项目 (tracked)
