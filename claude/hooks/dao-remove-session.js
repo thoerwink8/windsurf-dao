@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// remove-session.js — SessionStart hook. When a new session starts (e.g. after /clear),
-// if a previous session was marked for deletion by /remove, delete that (now non-live)
-// transcript file. Safe: never deletes the current live session, and no-ops if no marker.
+// dao-remove-session.js - SessionStart hook for the /dao-remove flow.
+// When a new session starts (e.g. after /clear), if a previous session was marked for deletion
+// by /dao-remove, delete that (now non-live) transcript. Safe: never deletes the current live
+// session, and no-ops if nothing is marked. Wired into settings.json by dao-ensure-hooks.js.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -9,7 +10,6 @@ const path = require('path');
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const marker = path.join(configDir, '.remove-pending');
 
-// Read hook input from stdin (best-effort; used only as a safety check).
 let raw = '';
 try { raw = fs.readFileSync(0, 'utf8'); } catch (e) { /* no stdin */ }
 let currentTranscript = '';
@@ -20,11 +20,9 @@ function cleanup() {
   if (!fs.existsSync(marker)) return;            // nothing marked
   let target = '';
   try { target = fs.readFileSync(marker, 'utf8').trim(); } catch (e) {}
-  // Always consume the marker so it can't accumulate / fire repeatedly.
-  try { fs.unlinkSync(marker); } catch (e) {}
+  try { fs.unlinkSync(marker); } catch (e) {}    // consume marker so it never fires twice
   if (!target) return;
-  // Safety: never delete the live session we are currently starting.
-  if (currentTranscript && norm(target) === norm(currentTranscript)) return;
+  if (currentTranscript && norm(target) === norm(currentTranscript)) return;  // never delete the live session
   try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch (e) {}
 }
 
