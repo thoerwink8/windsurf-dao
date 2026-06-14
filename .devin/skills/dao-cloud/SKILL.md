@@ -668,6 +668,7 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe ^
 | 现象 | 原因 | 自动处理（Agent 自己做）|
 |---|---|---|
 | Hub health 超时 | 本机未开机 / ngrok 未启动 | 尝试 Bridge 通道；都不通则通知用户 |
+| 公网 Hub URL 返回 ngrok 离线页 (`ERR_NGROK_3200`) | **Hub 在跑、机器开着，只是 ngrok 隧道断了**（≠机器没开机，别误报）| 云端**无法自愈**（够本机的唯一通道就是这条隧道）。本机有看门狗（`dao-hub/keepalive-loop.ps1`，每5分钟自愈）通常会自动拉回；让用户等1-2分钟重试，或点桌面「Start DAO Hub」/ 本地 agent 跑 `D:\frank\dao-hub\ensure-hub.ps1` |
 | Hub 返回 `unauthorized` | Token 变了 | 自动发现：经 Bridge 读 `dao-hub\token.txt`；失败则提示用户运行 `type` 命令 |
 | exec-sync 超时 / pending>0 | 前一条命令卡住堵队列 | 等 30s → 发 `taskkill /F /IM curl.exe` → 仍阻塞则切 Bridge |
 | 插件 ping 无响应 | IDE 未启动 | 执行 Step 3a 远程启动 IDE，轮询等待就绪 |
