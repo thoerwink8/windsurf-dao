@@ -1,0 +1,2 @@
+# bash 脚本必须保持 LF 行尾,避免 Windows clone 时 CRLF 化导致 shebang 失效
+*.sh text eol=lf
