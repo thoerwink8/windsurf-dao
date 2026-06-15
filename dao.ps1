@@ -108,7 +108,7 @@ function Invoke-Status {
     Write-Host "`n  Mode: Sidecar workspace (Windsurf)" -ForegroundColor Cyan
 
     # ── Claude Code 侧部署状态 ──
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     if (Test-Path $claudeSrc) {
         $cSkills = (Get-ChildItem (Join-Path $claudeSrc "skills") -Directory -ErrorAction SilentlyContinue).Count
         $cCmds = (Get-ChildItem (Join-Path $claudeSrc "commands") -Filter "*.md" -ErrorAction SilentlyContinue).Count
@@ -118,7 +118,7 @@ function Invoke-Status {
         $userClaude = Join-Path $env:USERPROFILE ".claude"
         $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" }).Count
         $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
-        $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "claude/dao.md")
+        $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "(claude|ccswitch)/dao\.md")
 
         if ($linkedSkills -gt 0 -and $importOk) {
             Write-Host "  Claude Code deploy: linked ($linkedSkills dao skills) + dao.md @import OK" -ForegroundColor Green
@@ -297,9 +297,9 @@ function Invoke-LinkClaude {
     # 这是 Claude Code 侧的部署入口（对应 Windsurf 侧 link-rules-all + link-global）。
     param([bool]$IsDryRun = $false)
 
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     if (!(Test-Path $claudeSrc)) {
-        Write-Host "  [error] claude/ source not found: $claudeSrc" -ForegroundColor Red
+        Write-Host "  [error] ccswitch/ source not found: $claudeSrc" -ForegroundColor Red
         exit 1
     }
 
@@ -477,7 +477,7 @@ function Invoke-LinkClaude {
         $hasImport = $false
         if (Test-Path $userClaudeMd) {
             $content = Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue
-            if ($content -match [regex]::Escape("claude/dao.md")) { $hasImport = $true }
+            if ($content -match [regex]::Escape("ccswitch/dao.md")) { $hasImport = $true }
         }
         if ($hasImport) {
             Write-Host "    [skip ] dao.md @import already present" -ForegroundColor DarkGray
@@ -945,7 +945,7 @@ function Invoke-UnlinkClaude {
     param([bool]$IsDryRun = $false)
 
     $userClaude = Join-Path $env:USERPROFILE ".claude"
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     $removed = 0; $skipped = 0; $err = 0
 
     # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
@@ -1018,7 +1018,7 @@ function Invoke-UnlinkClaude {
         $dropped = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $ln = $lines[$i]
-            if ($ln -match "windsurf-dao Tao field" -or ($ln -match "^@.*claude/dao\.md")) {
+            if ($ln -match "windsurf-dao Tao field" -or ($ln -match "^@.*(claude|ccswitch)/dao\.md")) {
                 $dropped = $true
                 continue
             }

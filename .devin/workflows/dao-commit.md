@@ -102,7 +102,7 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 ```
 
 > **宿主前缀铁律**：AI 创建的每个 commit，subject 行必须以当前宿主标识前缀开头。Claude Code 用 `[cc] `，Codex / Code X 用 `[codex] `，一眼识别 AI 提交来源。
-> **提交前自检门**：生成 subject 前先确认当前运行宿主。禁止凭最近历史、旧示例或目标文件路径沿用前缀；在 Codex / Code X 中修改 `claude/` 或 `.devin/` 文件也必须用 `[codex]`。提交后立即用 `git log -1 --oneline` 核对前缀，不符且未 push 时立刻 amend。
+> **提交前自检门**：生成 subject 前先确认当前运行宿主。禁止凭最近历史、旧示例或目标文件路径沿用前缀；在 Codex / Code X 中修改 `ccswitch/` 或 `.devin/` 文件也必须用 `[codex]`。提交后立即用 `git log -1 --oneline` 核对前缀，不符且未 push 时立刻 amend。
 > **版本标记**：如果本次提交包含版本 bump（package.json / app.json 等版本文件变更），subject 尾部必须带 `(vX.Y.Z)`。版本和代码变更在同一个 commit 中，不单独提交。无版本变更时省略。
 
 ### type

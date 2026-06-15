@@ -11,8 +11,8 @@ const home = os.homedir();
 const claudeSkillsDir = path.join(home, '.claude', 'skills');
 const claudeJsonPath = path.join(home, '.claude.json');
 // 项目源用 projectRoot 推导，不硬编码本机路径（换机可移植）。
-const daoSkillsSrc = path.join(projectRoot, 'claude', 'skills');
-const daoMcpDir = path.join(projectRoot, 'mcp');
+const daoSkillsSrc = path.join(projectRoot, 'ccswitch', 'skills');
+const daoMcpDir = path.join(projectRoot, 'ccswitch', 'mcp');
 
 function linkInfo(full) {
   const st = fs.lstatSync(full);

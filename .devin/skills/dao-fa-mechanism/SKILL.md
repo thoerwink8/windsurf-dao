@@ -63,6 +63,6 @@ windsurf-dao/
         ├── 镜头: dao-{debug,refactor,optimize,test,observability}/
         ├── 方法论: dao-{brainstorm,plan,execute,review,verify,finish,worktree,parallel}/
         └── 专项: dao-{research,reverse-engineering,boundary-probe,frontend-aesthetics,terminal-resilience,windsurf-extension,deploy}/
-references/
+docs/classics/
 └── 道德经.md                    # 推导源头，不可修改
 ```

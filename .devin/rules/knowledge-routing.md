@@ -1,6 +1,6 @@
 ---
 trigger: always_on
-description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / AGENT_GUIDE.md / skills/ / workflows/ / data/evolution-*.csv)、双文件模式、Rule vs Skill 边界、中间物 _tmp/ 管理、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
+description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / AGENT_GUIDE.md / skills/ / workflows/ / docs/evolution/evolution-*.csv)、双文件模式、Rule vs Skill 边界、中间物 _tmp/ 管理、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
 ---
 
 # 知识归位 · 写到哪
@@ -20,8 +20,8 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 | 固定技术栈选型（框架/脚手架） | `stacks/` |
 | 编码规则（怎么写代码） | `AGENT.md` |
 | 项目知识（学到了什么） | `AGENT_GUIDE.md` |
-| 教训 / 踩坑 | `data/evolution-lessons.csv`（优先） |
-| 演化条目 | `data/evolution-entries.csv` |
+| 教训 / 踩坑 | `docs/evolution/evolution-lessons.csv`（优先） |
+| 演化条目 | `docs/evolution/evolution-entries.csv` |
 
 ## 双文件模式
 

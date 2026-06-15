@@ -17,7 +17,7 @@
 
 **收益**：总字符 18,900 → 6,700（减 65%），每次注入 ~10,000 → ~1,400（**减 86%**），触发精准度大幅提升，符合 Windsurf 12K 字符限。
 
-**教训**：见 `data/evolution-lessons.csv` T20-T22（先读 AGENT_GUIDE.md / model_decision 拆分 / 4 trigger 各得其所）。e019。
+**教训**：见 `docs/evolution/evolution-lessons.csv` T20-T22（先读 AGENT_GUIDE.md / model_decision 拆分 / 4 trigger 各得其所）。e019。
 
 ### dao-autopilot.md 真融合重构 *(2026-03-29)*
 
@@ -58,21 +58,21 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 **原始目标**:把 windsurf-dao 整体迁移到 Claude Code CLI,融入社区优秀方案,修复 dao 体系孤岛。理想态——**每次提问会下意识用《道德经》作为规则场域回答**。
 
 **成功标准**:
-- `claude/` 成为 Claude Code 侧真相源,`dao.ps1 link-claude` 一键全局部署(symlink + @import),幂等可用。
-- 道德经场域 `claude/dao.md` 经 `~/.claude/CLAUDE.md` @import 每条消息常驻。
+- `ccswitch/` 成为 Claude Code 侧真相源,`dao.ps1 link-claude` 一键全局部署(symlink + @import),幂等可用。
+- 道德经场域 `ccswitch/dao.md` 经 `~/.ccswitch/CLAUDE.md` @import 每条消息常驻。
 - 28 skills + 10 workflows + 8 subagents 全部平移,无 Windsurf 专有名残留,交叉引用无断链。
 - 双栈共存:`.windsurf/` 保留可用,同源不同壳。
 
 **四个决策**:① symlink 真相源 ② 借机精简(为道日损,删与 Claude Code 内置 shell/git 安全重叠项) ③ 双栈共存 ④ 续力铁律降级为「路歧则问」(对齐 Claude Code 克制原则)。
 
 **进度**:
-- [x] T1 骨架:`claude/{skills,commands,agents}` + `dao.ps1 link-claude`(跑通+幂等验证)
-- [x] T2 道德经场域:`claude/dao.md`(486→126 行,砍 74%)+ @import 接通
+- [x] T1 骨架:`ccswitch/{skills,commands,agents}` + `dao.ps1 link-claude`(跑通+幂等验证)
+- [x] T2 道德经场域:`ccswitch/dao.md`(486→126 行,砍 74%)+ @import 接通
 - [x] T3 skills:37 个全平移(28 dao + 6 rules转skill + windsurf-extension + smoke),frontmatter 全检通过
-- [x] T4 commands:11 个(10 workflows 平移)→ `claude/commands/dao-*.md`
+- [x] T4 commands:11 个(10 workflows 平移)→ `ccswitch/commands/dao-*.md`
 - [x] T5 收尾:8 subagents 平移 + stacks 迁移 + 修孤岛 15 项 + 文档更新(README/MIGRATION/USAGE)+ status 双栈显示 + 全量部署(55 链接)+ 端到端验证全绿
 
-**✅ 迁移完成 (2026-05-31)**:Claude Code 侧 37 skills + 11 commands + 8 agents + stacks 全部就位并 symlink 到 `~/.claude/`,`claude/dao.md` 经 @import 每条消息常驻——理想态「每次提问下意识用道德经回答」已落地。Windsurf 侧双栈共存,同源不同壳。`dao.ps1 status` 可查双栈健康度。
+**✅ 迁移完成 (2026-05-31)**:Claude Code 侧 37 skills + 11 commands + 8 agents + stacks 全部就位并 symlink 到 `~/.ccswitch/`,`ccswitch/dao.md` 经 @import 每条消息常驻——理想态「每次提问下意识用道德经回答」已落地。Windsurf 侧双栈共存,同源不同壳。`dao.ps1 status` 可查双栈健康度。
 
 ---
 
