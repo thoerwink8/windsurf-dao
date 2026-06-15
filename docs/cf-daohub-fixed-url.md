@@ -79,9 +79,9 @@
 |---|---|
 | `docs/cf-daohub-fixed-url.md` | 本文档（基础设施参考） |
 | `.devin/skills/dao-cloud/SKILL.md` | Agent 接入操作流程（dao-cloud 技能） |
-| `scripts/ngrok/start-ngrok.ps1` | 启动脚本：杀掉旧 ngrok 并后台隐藏启动 |
-| `scripts/ngrok/ngrok-daohub.vbs` | 开机自启入口（隐藏窗口调用上面的 ps1） |
-| `scripts/ngrok/ngrok.yml.template` | ngrok 配置模板（authtoken 用占位符） |
+| `scripts/hub/start-ngrok.ps1` | 启动脚本：杀掉旧 ngrok 并后台隐藏启动 |
+| `scripts/hub/ngrok-daohub.vbs` | 开机自启入口（隐藏窗口调用上面的 ps1） |
+| `scripts/hub/ngrok.yml.template` | ngrok 配置模板（authtoken 用占位符） |
 
 ## 三、本机实际路径（机器特定）
 | 用途 | 路径 |
@@ -106,8 +106,8 @@
 ## 五、从零部署（换机/重装时）
 1. 下载 ngrok 到 `C:\Users\Administrator\ngrok\`。
 2. `ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>`（或把 `ngrok.yml.template` 填好放到 `%LOCALAPPDATA%\ngrok\ngrok.yml`）。
-3. 复制 `scripts/ngrok/start-ngrok.ps1` 到 `C:\Users\Administrator\ngrok\`。
-4. 复制 `scripts/ngrok/ngrok-daohub.vbs` 到 Startup 文件夹。
+3. 复制 `scripts/hub/start-ngrok.ps1` 到 `C:\Users\Administrator\ngrok\`。
+4. 复制 `scripts/hub/ngrok-daohub.vbs` 到 Startup 文件夹。
 5. 运行一次 ps1 验证（见下）。
 
 ---

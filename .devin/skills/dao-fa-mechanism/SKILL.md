@@ -37,32 +37,35 @@ Windsurf 将 `always_on` 规则文件渲染为 `<MEMORY[filename]>` 标签注入
 
 Skills 只向模型展示 `name` + `description`，完整内容在模型决定调用时才加载。`trigger` 字段在 skills 中无效——需要始终注入的内容应写在 Rules 文件中。
 
-## dao 项目目录结构（v2 · 2026-04-26 重构后）
+## dao 项目目录结构（v3 · 2026-06 重构后）
 
-> 废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `.windsurf/rules/README.md`。
+> 废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `.devin/rules/README.md`。
 
 ```
 windsurf-dao/
+├── dao.ps1                     # 链接管理（部署 dao 到各宿主）
+├── dao-sync.bat                # 配置同步四合一（export/restore/doctor/inventory）
 ├── global_rules.md             # 31 行元规则（symlink → ~/.codeium/windsurf/memories/）
-└── .windsurf/
-    ├── rules/                   # 9 文件 5 层架构
-    │   ├── execution.md         # always_on · 项目铁律
-    │   ├── shell.md             # model_decision · 命令安全
-    │   ├── cli.md               # model_decision · 工具选择
-    │   ├── workflow-system.md   # model_decision · 工作流协作
-    │   ├── knowledge-routing.md # model_decision · 知识归位
-    │   ├── quality.md           # glob · 代码质量门
-    │   ├── dao-meta.md          # glob · dao 元层守卫
-    │   └── dao-philosophy.md    # manual · 八条不变原则
-    ├── workflows/               # 9 个工作流
-    │   └── dao-{autopilot,commit,cycle,dev,distill,doc,evolve,session-sync,thread-tree}.md
-    ├── stacks/                  # 技术栈处方（/dev 基建审计按需加载）
-    │   └── frontend-nextjs.md
-    └── skills/                  # 24 个 skills（4 类）
-        ├── 元层: dao-{fa-mechanism,pyramid,evolution,skill-ecosystem}/
-        ├── 镜头: dao-{debug,refactor,optimize,test,observability}/
-        ├── 方法论: dao-{brainstorm,plan,execute,review,verify,finish,worktree,parallel}/
-        └── 专项: dao-{research,reverse-engineering,boundary-probe,frontend-aesthetics,terminal-resilience,windsurf-extension,deploy}/
-references/
-└── 道德经.md                    # 推导源头，不可修改
+├── .devin/                     # Windsurf 侧
+│   ├── rules/                  # always_on/model_decision/glob/manual 规则
+│   ├── workflows/              # 9 个工作流
+│   ├── stacks/                 # 技术栈处方
+│   └── skills/                 # 24+ skills（4 类）
+├── ccswitch/                   # 多客户端部署源（Claude Code / Codex / 未来平台）
+│   ├── dao.md                  # 道德经场域根基（@import 注入）
+│   ├── skills/dao-*/           # 技能
+│   ├── commands/dao-*.md       # slash command
+│   ├── agents/dao-*.md         # subagent profiles
+│   ├── hooks/                  # commit-msg + PostToolUse hooks
+│   ├── mcp/                    # MCP 服务器启动脚本
+│   └── stacks/                 # 技术栈处方
+├── config-sync/                # cc-switch 配置同步引擎
+│   ├── lib/                    # sync.mjs + 子模块
+│   └── common/                 # 结构模板
+├── docs/
+│   ├── evolution/              # 演化 CSV
+│   ├── specs/                  # 设计文档
+│   └── classics/               # 道德经等原典（推导源头，不可修改）
+├── scripts/hub/                # dao-hub 隧道（ngrok）
+└── tests/                      # 测试
 ```
