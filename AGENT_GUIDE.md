@@ -210,3 +210,79 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 ```
 
 详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `.devin/skills/dao-pyramid/SKILL.md`。
+
+---
+
+## 五、配置同步 · 让新机器也能一键复刻
+
+> 各复归其根。dao 的代码归 git，运行态配置归 cc-switch，cc-switch 的快照归 `config-sync/`。
+
+### 5.1 两层同步
+
+| 层级 | 位置 | 工具 | 同步内容 |
+|---|---|---|---|
+| **规则/技能/命令** | `claude/` → `~/.claude/` | `dao.ps1 link-claude` | skills、commands、agents、references、styles、hooks、`@import` |
+| **运行态配置** | `~/.cc-switch/cc-switch.db` ↔ `config-sync/` | `config-sync/*.bat` 或 `node lib/*.mjs` | env、hooks、model、statusLine、MCP、providers、prompts |
+
+**关键原则**：`cc-switch` 是运行态真相源；`config-sync` 是它的版本化备份 / 换机恢复工具。日常修改 cc-switch 后，应导出快照到 `config-sync/common/` 并提交；换机时再从快照恢复。
+
+### 5.2 当前机器同步步骤
+
+```powershell
+cd C:\frank\windsurf-dao\config-sync
+
+# 1. 确保 sqlite3 可用（项目已自带安装包）
+.\setup-sqlite.ps1
+
+# 2. 导出当前 cc-switch 配置（生成/更新 providers/ + common-secrets.json）
+node lib/export.mjs
+
+# 3. 把仓库快照写回 cc-switch DB（让 DB 与仓库意图对齐）
+node lib/restore.mjs
+
+# 4. 验证
+node lib/doctor.mjs
+
+# 5. 重启 cc-switch，切换一次 provider，让它把 common_config_claude 下发到 Claude Code 各端
+```
+
+**注意**：
+- `providers/` 与 `common-secrets.json` 含 token，已被 `.gitignore` 忽略，**不要提交**。
+- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.claude/settings.json`。
+- 终端状态栏 (`statusLine`) 是 `common_config_claude` 的一部分，同步后生效。
+
+### 5.3 新机器复刻步骤
+
+见 `NEW-MACHINE.md` 完整流程；核心四步：
+
+1. `git clone` 本仓库，运行 `dao.ps1 link-claude`。
+2. 把旧机的 `config-sync/providers/` 手动复制到新机同位置（含 token，不进 git）。
+3. 启动一次 cc-switch 创建空 DB，然后运行 `config-sync/恢复配置.bat`。
+4. 重启 cc-switch 并切换 provider，运行 `config-sync/体检.bat` 确认问题 0 项。
+
+### 5.4 Agent 遇到同步问题时的 checklist
+
+- `找不到 sqlite3` → 运行 `config-sync/setup-sqlite.ps1`（项目已内置安装包）。
+- `common-secrets.json 缺少占位符对应的真实值` → 说明 `common/settings.json` 里有某个 `common_config_*` 含占位符但当前 DB 没有该 key；应删除或补充对应 secret。
+- `settings.json.env.* 缺失` → cc-switch 未下发；先确认 DB 已对齐，再重启 cc-switch 切 provider。
+- `MCP 不一致 / extra=[pencil]` → 通常是因为客户端本地多注册了未纳管 MCP；体检会提醒，不是错误，按需求决定是否纳入 cc-switch。
+
+---
+
+## 六、工具使用铁律（Grep-first）
+
+> 上善若水。用对工具，比用更多工具更接近无为。
+
+在 windsurf-dao 以及所有使用本 dao 配置的项目中工作，必须遵守以下工具选择优先级：
+
+1. **搜索优先用 Grep / Glob**：查找文件内容用 `Grep`，查找文件路径用 `Glob`。
+2. **禁止用 shell 做搜索**：不要通过 Bash/PowerShell 运行 `grep`、`find`、`rg`、`ag`、`ack`、`Select-String` 等命令搜索文件。
+3. **大文件分段读**：读取大文件使用 `Read` 工具的 `offset`/`limit`；禁止用 `cat`、`head`、`tail` 等 shell 命令一次性读取大文件。
+4. **Windows 不拼转义**：需要搜索时直接用 `Grep`，不要试图在 Bash/PowerShell 里拼接复杂的正则或路径转义。
+
+**原因**：
+- `Grep` 底层是 ripgrep，跨平台、快、内存友好。
+- Bash/PowerShell 的 `grep` 在 Windows 下常遇到引号、反斜杠、管道转义问题，且大文件容易卡死。
+- 权限层面，`common_config_claude.permissions` 已 deny 掉 `Bash(grep:*)`、`Bash(find:*)`、`PowerShell(Select-String:*)` 等，强制模型走 Grep-first。
+
+本条同时写入了 `~/.claude/CLAUDE.md`，每条消息常驻提醒。
