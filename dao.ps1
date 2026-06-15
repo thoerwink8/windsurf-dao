@@ -291,8 +291,8 @@ function Invoke-LinkRulesAll {
 }
 
 function Invoke-LinkClaude {
-    # 把 claude/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
-    # 复制 references/*.md 经文到 ~/.claude/references/，
+    # 把 ccswitch/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
+    # 复制 docs/classics/*.md 经文到 ~/.claude/references/，
     # 并幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md。
     # 这是 Claude Code 侧的部署入口（对应 Windsurf 侧 link-rules-all + link-global）。
     param([bool]$IsDryRun = $false)
@@ -364,8 +364,8 @@ function Invoke-LinkClaude {
     # ── settings.json 路径(后续 outputStyle / hook / 通用配置固化共用,提前定义避免未赋值引用)──
     $settingsPath = Join-Path $userClaude "settings.json"
 
-    # ── 复制 references/ 经文到 ~/.claude/references/ ──
-    $refSrc = Join-Path $DaoRoot "references"
+    # ── 复制 docs/classics/ 经文到 ~/.claude/references/ ──
+    $refSrc = Join-Path $DaoRoot "docs" "classics"
     if (Test-Path $refSrc) {
         $refDst = Join-Path $userClaude "references"
         if (-not $IsDryRun) { Ensure-Dir $refDst }
@@ -941,7 +941,7 @@ function Invoke-LinkGlobal {
 function Invoke-UnlinkClaude {
     # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、references/ 经文、@import 行、hook 注册。
     # 只删 dao 引入的链接/条目,不碰用户自有 skill/command/agent,不碰 env/token。
-    # 与 link-claude 对称。源文件 claude/ 不受影响。
+    # 与 link-claude 对称。源文件 ccswitch/ 不受影响。
     param([bool]$IsDryRun = $false)
 
     $userClaude = Join-Path $env:USERPROFILE ".claude"
@@ -1264,11 +1264,11 @@ switch ($Action) {
     .\dao.ps1 link-rules-all [-Root <dir>]    Bulk scan & symlink all projects under <Root>
                                                -AlwaysOnOnly  only link always_on rules (5 files)
                                                -DryRun        print without doing anything
-    .\dao.ps1 link-claude [-DryRun]           Symlink dao claude/{skills,commands,agents} into ~/.claude,
-                                               copy references/*.md to ~/.claude/references/,
+    .\dao.ps1 link-claude [-DryRun]           Symlink dao ccswitch/{skills,commands,agents} into ~/.claude,
+                                               copy docs/classics/*.md to ~/.claude/references/,
                                                and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
     .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, references/, dao.md @import, and hooks
-                                               from ~/.claude (reverse of link-claude; source claude/ untouched)
+                                               from ~/.claude (reverse of link-claude; source ccswitch/ untouched)
     .\dao.ps1 link-codex [-DryRun]            Mirror ~/.claude/skills into ~/.codex/skills
     .\dao.ps1 unlink-codex [-DryRun]          Remove Codex skill links that point into ~/.claude/skills
     .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts
