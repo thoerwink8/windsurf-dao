@@ -7,7 +7,6 @@ export const SCOPES = [
   { key: 'skills', label: 'Skills / Skill 仓库', tables: ['skills', 'skill_repos'] },
   { key: 'prompts', label: 'Prompts', tables: ['prompts'] },
   { key: 'proxy', label: 'Proxy / 端点 / 定价', tables: ['proxy_config', 'provider_endpoints', 'model_pricing'] },
-  { key: 'providers', label: '供应商 (含 token，本地私密)', tables: ['providers', 'provider_endpoints'] },
 ];
 
 export const SCOPE_KEYS = SCOPES.map((s) => s.key);
