@@ -1,5 +1,5 @@
 ---
-name: dao-ide-extension
+name: dao-windsurf-extension
 description: VSCode 系 IDE 扩展开发的已验证技术约束与最佳实践
 ---
 
