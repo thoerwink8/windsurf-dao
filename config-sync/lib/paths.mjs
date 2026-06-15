@@ -30,7 +30,11 @@ export function readJsonIfExists(filePath, fallback = null) {
   if (!fs.existsSync(filePath)) return fallback;
   const text = fs.readFileSync(filePath, 'utf8');
   if (!text.trim()) return fallback;
-  return JSON.parse(stripBom(text));
+  try {
+    return JSON.parse(stripBom(text));
+  } catch (error) {
+    throw new Error(`JSON 解析失败 ${path.basename(filePath)}: ${error.message}`);
+  }
 }
 
 export function writeJson(filePath, value) {

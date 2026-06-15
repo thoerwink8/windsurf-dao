@@ -7,6 +7,7 @@ import {
   tableExists,
   transaction,
   upsertStatements,
+  validateJsonFields,
 } from './sqlite.mjs';
 import { applySecrets, commonSecretsPath, countPlaceholders } from './secrets.mjs';
 import { parseScopeArg, wants } from './scope.mjs';
@@ -33,8 +34,16 @@ function rehydrateSettings(rows) {
 }
 
 // 仓库 snapshot → cc-switch DB。only=null 恢复全部；否则只恢复命中的 scope。
-export function runRestore({ only = null } = {}) {
+// dryRun=true 时只加载、验证、预览，不写 DB。
+export function runRestore({ only = null, dryRun = false } = {}) {
   const snapshots = loadSnapshots(only);
+
+  validateSnapshots(snapshots, only);
+
+  if (dryRun) {
+    printRestorePreview(snapshots, only);
+    return;
+  }
 
   const backupPath = backupDb();
   const statements = [];
@@ -113,6 +122,41 @@ function asRows(doc) {
   return [];
 }
 
+function validateSnapshots(snapshots, only) {
+  if (wants(only, 'settings')) validateJsonFields('settings', snapshots.settings);
+  if (wants(only, 'mcp')) validateJsonFields('mcp_servers', snapshots.mcp_servers);
+  if (wants(only, 'skills')) {
+    validateJsonFields('skills', snapshots.skills);
+    validateJsonFields('skill_repos', snapshots.skill_repos);
+  }
+  if (wants(only, 'prompts')) validateJsonFields('prompts', snapshots.prompts);
+  if (wants(only, 'proxy')) {
+    validateJsonFields('proxy_config', snapshots.proxy_config);
+    validateJsonFields('model_pricing', snapshots.model_pricing);
+  }
+}
+
+function printRestorePreview(snapshots, only) {
+  const items = [
+    { scope: 'settings', label: 'settings (common_config_*)', rows: snapshots.settings, detail: (r) => r.key },
+    { scope: 'mcp', label: 'mcp_servers', rows: snapshots.mcp_servers, detail: (r) => r.name },
+    { scope: 'skills', label: 'skills', rows: snapshots.skills, detail: (r) => r.name },
+    { scope: 'skills', label: 'skill_repos', rows: snapshots.skill_repos, detail: (r) => `${r.owner}/${r.name}` },
+    { scope: 'prompts', label: 'prompts', rows: snapshots.prompts, detail: (r) => r.name },
+    { scope: 'proxy', label: 'proxy_config', rows: snapshots.proxy_config, detail: (r) => r.app_type },
+    { scope: 'proxy', label: 'model_pricing', rows: snapshots.model_pricing, detail: (r) => r.model_id },
+  ];
+
+  for (const { scope, label, rows, detail } of items) {
+    if (!wants(only, scope)) continue;
+    if (!rows.length) { console.log(`  ${label}: 无数据`); continue; }
+    const names = rows.slice(0, 5).map(detail).filter(Boolean).join(', ');
+    const more = rows.length > 5 ? ` …+${rows.length - 5}` : '';
+    console.log(`  ${label}: ${rows.length} 条 [${names}${more}]`);
+  }
+  console.log('\n  JSON 验证通过。实际写入请去掉 --dry-run。');
+}
+
 function appendSimpleTableRestore(statements, tableName, rows) {
   if (!rows.length) return;
   if (!tableExists(tableName)) {
@@ -147,7 +191,8 @@ function isCli() {
 
 if (isCli()) {
   try {
-    runRestore({ only: parseScopeArg() });
+    const dryRun = process.argv.includes('--dry-run');
+    runRestore({ only: parseScopeArg(), dryRun });
   } catch (error) {
     console.error(`恢复失败：${error.message}`);
     process.exit(1);
