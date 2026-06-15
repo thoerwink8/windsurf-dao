@@ -221,6 +221,12 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 这套保证：① 不碰 GUI 终端；② 不堵 Hub 队列；③ reclaude 在本机干重活**不烧 ACU**；④ 云端回来只做云原生收尾。
 
+> ⚠️ **`-WindowStyle Hidden` vs `-NoNewWindow` 陷阱**：必须用 `-WindowStyle Hidden`。`-NoNewWindow` 继承父进程 stdout，Hub 的 exec-sync 会等待子进程结束才返回，导致队列阻塞。同理 `cmd /C "start /B ..."` 有 stdout 重定向时 cmd.exe 也会等——都不行。
+>
+> ⚠️ **PowerShell `-replace` + `$` 陷阱**：replacement string 中 `$` 是 regex backreference。写入 JSON 文件时会产生非法 `\$` 转义（JSON 不认）。修正：用 `.Replace()` 方法（字面量替换）或 `$$` 表示单个 `$`。
+>
+> ⚠️ **禁触 `~/.claude/settings.json`**：任何写操作会导致正在运行的 reclaude/Claude Code 立即断开会话。只读查看可以，修改必须让用户手动或通过 cc-switch/dao-sync 触发。
+
 > ⚠️ **轮询本身也烧一点 ACU**：第 3 步的轮询是云端 Agent 在发动作，也计费，且频繁轮询会把空闲会睡的 Devin 撑醒。所以**长任务稀疏轮询**（几分钟一次，别每 30 秒戳）；reclaude 干得越久，轮询间隔放越大。比云端亲自干仍省很多，但不是零。
 
 > 想"肉眼看 reclaude 实时滚动"是监控需求，不是干活必需——回来 `cat D:\tmp\rc-out.json` 或日志一样看全过程，更稳。
