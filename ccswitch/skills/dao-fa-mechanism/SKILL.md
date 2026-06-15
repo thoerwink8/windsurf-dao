@@ -22,11 +22,11 @@ dao 体系迁移自 Windsurf,本 skill 记录 Claude Code 的运行机制,以及
 - 这正是 Windsurf `model_decision` 的对应物——dao 的 4 个 model_decision rules(cli/workflow-system/project-structure/design-assets)都转成了 skill。
 - frontmatter:`name` + `description` 必填,`allowed-tools` 可选(限制工具)。**无 Windsurf 的 `trigger`/`globs` 字段**。
 - skill 目录可带辅助脚本/模板(如 `dao-evolution/scripts/*.py`、`dao-ui-mockup/templates/`),调用时按需读取或执行。
-- 位置:项目级 `.ccswitch/skills/` 或用户级 `~/.claude/skills/`。dao 用 symlink 把 `ccswitch/skills/dao-*` 链到 `~/.claude/skills/`。
+- 位置:项目级 `.claude/skills/` 或用户级 `~/.claude/skills/`。dao 用 symlink 把 `ccswitch/skills/dao-*` 链到 `~/.claude/skills/`。
 
 ## Slash Commands
 
-- `.ccswitch/commands/` 或 `~/.claude/commands/` 下的 `.md`,文件名即命令名(`dao-dev.md` → `/dao-dev`)。子目录构成命名空间。
+- `.claude/commands/` 或 `~/.claude/commands/` 下的 `.md`,文件名即命令名(`dao-dev.md` → `/dao-dev`)。子目录构成命名空间。
 - frontmatter:`description` / `argument-hint` / `allowed-tools` / `model` / `disable-model-invocation`。
 - 正文占位符:`$ARGUMENTS`(全部参数)、`$1` `$2`(位置参数);`!` 前缀执行 bash;`@` 引用文件。
 - 用户 `/命令` 显式触发;除非 `disable-model-invocation: true`,也可能被模型自动调用。
@@ -34,7 +34,7 @@ dao 体系迁移自 Windsurf,本 skill 记录 Claude Code 的运行机制,以及
 
 ## Subagents
 
-- `.ccswitch/agents/`(项目)/ `~/.claude/agents/`(用户),带 frontmatter 的 markdown。
+- `.claude/agents/`(项目)/ `~/.claude/agents/`(用户),带 frontmatter 的 markdown。
 - frontmatter:`name` / `description`(必填);`tools`(逗号分隔,省略则继承全部);`model`(sonnet/opus/haiku/inherit)。
 - 调用:主 agent 按 `description` 自动委派(写明 "use proactively" 提高命中),或用户显式"用 X subagent"。
 - dao 落点:`.devin/agents/` 8 个 → `ccswitch/agents/dao-*.md`,服务于 `dao-pyramid` 金字塔调度。
@@ -48,7 +48,7 @@ dao 体系迁移自 Windsurf,本 skill 记录 Claude Code 的运行机制,以及
 
 ## settings.json
 
-- `~/.claude/settings.json`(用户级) / `.ccswitch/settings.json`(项目共享) / `.ccswitch/settings.local.json`(项目本地,不入 git)。
+- `~/.claude/settings.json`(用户级) / `.claude/settings.json`(项目共享) / `.claude/settings.local.json`(项目本地,不入 git)。
 - 优先级(高→低):企业策略 > 命令行 > 项目 local > 项目 > 用户。
 - 关键项:`permissions`(allow/deny/ask) / `hooks` / `model` / `env` / `statusLine` 等。
 
