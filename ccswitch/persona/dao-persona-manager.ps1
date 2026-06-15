@@ -48,13 +48,14 @@ $ProfileBlock = @"
 $ProfileMarker
 # Auto-injected by dao-persona-manager. DO NOT edit manually.
 # To remove: run dao-persona-manager.ps1 uninstall
-function Invoke-ClaudeWithPersona {
+function Invoke-DaoPersonaWrap {
+    param([string]`$TargetName)
     `$personaFile = "`$env:USERPROFILE\.claude\persona\active-system-prompt.md"
-    `$origCmd = Get-Command claude.ps1 -ErrorAction SilentlyContinue
-    if (-not `$origCmd) { `$origCmd = Get-Command claude.exe -ErrorAction SilentlyContinue }
-    if (-not `$origCmd) { `$origCmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue }
+    `$origCmd = Get-Command "`$TargetName.ps1" -ErrorAction SilentlyContinue
+    if (-not `$origCmd) { `$origCmd = Get-Command "`$TargetName.exe" -ErrorAction SilentlyContinue }
+    if (-not `$origCmd) { `$origCmd = Get-Command `$TargetName -CommandType Application -ErrorAction SilentlyContinue }
     if (-not `$origCmd) {
-        Write-Host "claude not found in PATH" -ForegroundColor Red
+        Write-Host "`$TargetName not found in PATH" -ForegroundColor Red
         return
     }
     if (Test-Path `$personaFile) {
@@ -63,7 +64,10 @@ function Invoke-ClaudeWithPersona {
         & `$origCmd.Source @args
     }
 }
+function Invoke-ClaudeWithPersona { Invoke-DaoPersonaWrap 'claude' @args }
+function Invoke-ReclaudeWithPersona { Invoke-DaoPersonaWrap 'reclaude' @args }
 Set-Alias -Name claude -Value Invoke-ClaudeWithPersona -Scope Global -Force
+Set-Alias -Name reclaude -Value Invoke-ReclaudeWithPersona -Scope Global -Force
 $ProfileMarkerEnd
 "@
 
