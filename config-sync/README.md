@@ -9,22 +9,21 @@
 ```text
 config-sync/
   common/       # 通用配置，进入 git
-  providers/    # 供应商配置，含 token，不进入 git
   vendor/       # sqlite3 等本机工具安装包（进 git，免换机再下载）
   lib/          # Node.js 脚本（sync.mjs 编排器 + export/restore/doctor/inventory）
   setup-sqlite.ps1
-  dao-sync.bat       # 统一入口：DB ↔ 仓库 ↔ origin 同步 + 体检 + 盘点
   同客端MCP.bat       # DB → 桌面端客户端 MCP 分发（独立）
   同Desktop MCP.bat   # 同上（兼容旧入口）
   检Goal任状.bat       # Goal 任务状态检查（独立，与配置同步无关）
 ```
 
-> 旧的 `导配.bat` / `恢配.bat` / `体.bat` / `盘来.bat` 已融合进 `dao-sync.bat`，不再单独存在。
+> 统一入口 `dao-sync.bat` 已移至仓库根目录，与 `dao.ps1` 并列。
 
-## 两类配置
+## 配置存储
 
-- `common/`：通用配置，可进 git，例如 common settings、MCP、skills、prompts、proxy 相关配置。
-- `providers/`：供应商配置，包含 token / API key，已被 `.gitignore` 忽略。换机时请手动复制整个目录。
+- `common/`：通用配置快照，可进 git，例如 common settings、MCP、skills、prompts、proxy 相关配置。
+- `common-secrets.json`：settings 脱敏占位符对应的真实值，已被 `.gitignore` 忽略，换机时需手动复制。
+- 供应商配置不再同步：新机器应直接通过 cc-switch 配置自己的供应商，避免旧配置污染。
 
 ## common 密钥脱敏（重要）
 
@@ -33,10 +32,10 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 导出时 config-sync 会自动处理：
 
 - 把 common 配置里字段名命中 `apiKey / token / secret / password / appSecret / authToken / bearer` 的值，替换成占位符 `__CONFIG_SYNC_SECRET__` 后写入 `common/settings.json`（进 git）。
-- 真实值单独写入 `providers/common-secrets.json`（被 `.gitignore` 忽略，不进 git）。
+- 真实值单独写入 `config-sync/common-secrets.json`（被 `.gitignore` 忽略，不进 git）。
 - 恢复时自动把真实值合并回 cc-switch；若缺少 `common-secrets.json`，恢复会报错并提示。
 
-所以换机时，`providers/` 目录（含 `providers.json` 和 `common-secrets.json`）必须手动复制，缺一不可。
+换机时，`common-secrets.json` 需手动复制到新机器的 `config-sync/` 目录下。
 
 ## 前置条件
 
@@ -66,7 +65,7 @@ dao-sync.bat
    - `[2] 上行`（慎重）：`本机 cc-switch → origin`。export → 展示 diff → 确认 → commit → push。
    - `[3] 体检`：只读 doctor。
    - `[4] 盘点`：只读 inventory。
-3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy / providers`。
+3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy`。
 
 #### 三档护栏
 
@@ -88,12 +87,12 @@ node lib/sync.mjs --doctor                          只读体检
 node lib/sync.mjs --inventory                       只读盘点
 ```
 
-选项：`--scope=settings,mcp,skills,prompts,proxy,providers`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
+选项：`--scope=settings,mcp,skills,prompts,proxy`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
 
 #### 导出 / 恢复落点
 
-- **下行（恢复）**：读取 `common/` 与 `providers/` 快照写回 `~/.cc-switch/cc-switch.db`，写前自动备份到 `~/.cc-switch/backups/`。全量恢复时还会把仓库 `local-marketplaces/` 铺回 `~/.codex/local-marketplaces/`（部分 scope 恢复时跳过，避免误动）。
-- **上行（导出）**：从 `~/.cc-switch/cc-switch.db` 导出快照到 `common/settings.json`、`common/mcp_servers.json`、`common/skills.json`、`common/prompts.json`、`common/proxy.json`、`providers/providers.json`、`providers/common-secrets.json`（后两者在 `providers/`，被 `.gitignore` 忽略，不会进 commit）。
+- **下行（恢复）**：读取 `common/` 快照写回 `~/.cc-switch/cc-switch.db`，写前自动备份到 `~/.cc-switch/backups/`。
+- **上行（导出）**：从 `~/.cc-switch/cc-switch.db` 导出快照到 `common/settings.json`、`common/mcp_servers.json`、`common/skills.json`、`common/prompts.json`、`common/proxy.json`（脱敏真实值写入 `common-secrets.json`，被 `.gitignore` 忽略）。
 
 ### 同步客户端 MCP
 
@@ -131,8 +130,6 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 - Claude Code CLI / Claude Desktop 的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - Claude-3p / CloudCode Desktop 运行态 `--mcp-config` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - Codex 的 `[mcp_servers]` 是否与 cc-switch 中 `enabled_codex=1` 的 MCP 一致；
-- `providers/providers.json` 是否存在且非空。
-
 `claude_desktop_gateway_token` 是本机运行态密钥，只存在于当前 cc-switch db 中，不进入 `common/`，也不由恢复脚本覆盖。恢复脚本只 upsert `common_config_` 开头的 settings key，避免把 Desktop Gateway 认证 token 清空后导致 401。
 
 `common/mcp_servers.json` 里的 `server_config` 会把项目路径与 home 路径分别写成 `${PROJECT_ROOT}` / `${HOME}`，恢复时再还原成本机路径，避免把 `D:/frank/windsurf-dao` 或用户 home 直接提交到 git。Pencil 这类安装在 `D:/Program Files/...` 的本机特定路径无法自动泛化，体检只会提醒；换机后需要按新机器安装路径重配。
@@ -168,17 +165,18 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 ## 安全约束
 
-- 不要把 `providers/` 提交到 git。
+- 不要把 `common-secrets.json` 提交到 git。
 - 脚本不会在控制台打印完整 token / API key。
 - 恢复脚本只写 cc-switch 配置表，不写运行日志、健康检查日志、usage 统计等运行态表。
 - 第一版不创建 cc-switch schema；如果 db 不存在，请先安装并启动一次 cc-switch。
 
 ## 换机流程
 
-1. 在旧机器双击 `导出配置.bat`。
-2. 提交 `common/` 和脚本到 git。
-3. 手动复制 `providers/` 到新机器同一模块目录（含 `providers.json` 与 `common-secrets.json`）。
+1. 在旧机器运行 `dao-sync.bat` 选上行导出。
+2. 提交 `common/` 到 git。
+3. 手动复制 `config-sync/common-secrets.json` 到新机器同一位置。
 4. 新机器先安装并启动一次 cc-switch，让它创建基础 db。
-5. 双击 `恢复配置.bat`。
-6. 重启 cc-switch，并切换一次 provider。
-7. 双击 `体检.bat` 确认状态。
+5. 运行 `dao-sync.bat` 选下行恢复。
+6. 在新机器的 cc-switch 中配置供应商（token/API key）。
+7. 重启 cc-switch，并切换一次 provider。
+8. `dao-sync.bat --doctor` 确认状态。

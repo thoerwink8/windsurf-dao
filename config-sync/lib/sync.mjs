@@ -70,7 +70,7 @@ function printHelp() {
   node lib/sync.mjs --inventory                        只读盘点（inventory）
 
 选项：
-  --scope=all|settings,mcp,skills,prompts,proxy,providers   同步范围（默认 all）
+  --scope=all|settings,mcp,skills,prompts,proxy             同步范围（默认 all）
   --yes        非交互模式下跳过确认（🟡 档护栏）
   --dry-run    只演练，不写 DB、不动 git
   --no-fetch   跳过 git fetch（离线时用，状态可能过时）
@@ -288,7 +288,7 @@ async function runUp({ only, state, interactive, yes, dryRun, message }) {
   console.log('\n从 cc-switch DB 导出到仓库 snapshot……');
   runExport({ only });
 
-  // 导出后看仓库里 snapshot 改了什么（providers/ 被 .gitignore，不会进来）。
+  // 导出后看仓库里 snapshot 改了什么（common-secrets.json 被 .gitignore，不会进来）。
   const changed = git(['status', '--porcelain', '--', 'config-sync/common'], { allowFail: true }) || '';
   const changedFiles = changed.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!changedFiles.length) {

@@ -1,7 +1,6 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readJsonIfExists, snapshotPaths, decodePaths, localMarketplacesRepoDir, localMarketplacesHomeDir } from './paths.mjs';
+import { readJsonIfExists, snapshotPaths, decodePaths } from './paths.mjs';
 import {
   backupDb,
   clearTableStatement,
@@ -27,44 +26,15 @@ function rehydrateSettings(rows) {
     const restored = applySecrets(row.key, parsed, secretsMap);
     const remaining = countPlaceholders(restored);
     if (remaining > 0) {
-      throw new Error(`settings "${row.key}" 仍有 ${remaining} 个未还原的占位符。请确认 providers/common-secrets.json 已从源机器复制到本机。`);
+      throw new Error(`settings "${row.key}" 仍有 ${remaining} 个未还原的占位符。请确认 config-sync/common-secrets.json 已从源机器复制到本机。`);
     }
     return { key: row.key, value: JSON.stringify(restored) };
   });
 }
 
-function copyDirRecursive(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirRecursive(s, d);
-    else if (entry.isFile()) fs.copyFileSync(s, d);
-  }
-}
-
-// 把仓库里的本地市场目录铺回本机 ~/.codex/local-marketplaces/。
-// 不存在源目录则跳过（老快照无此目录时不报错）；复制失败抛出，不静默吞。
-function restoreLocalMarketplaces() {
-  if (!fs.existsSync(localMarketplacesRepoDir)) {
-    return { restored: 0, skipped: true };
-  }
-  const names = fs.readdirSync(localMarketplacesRepoDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name);
-  for (const name of names) {
-    copyDirRecursive(
-      path.join(localMarketplacesRepoDir, name),
-      path.join(localMarketplacesHomeDir, name),
-    );
-  }
-  return { restored: names.length, skipped: false, names };
-}
-
 // 仓库 snapshot → cc-switch DB。only=null 恢复全部；否则只恢复命中的 scope。
 export function runRestore({ only = null } = {}) {
   const snapshots = loadSnapshots(only);
-  if (wants(only, 'providers')) validateProviders(snapshots.providers);
 
   const backupPath = backupDb();
   const statements = [];
@@ -80,7 +50,6 @@ export function runRestore({ only = null } = {}) {
     appendSimpleTableRestore(statements, 'proxy_config', snapshots.proxy_config);
     appendSimpleTableRestore(statements, 'model_pricing', snapshots.model_pricing);
   }
-  if (wants(only, 'providers')) appendProvidersRestore(statements, snapshots.providers, snapshots.provider_endpoints);
 
   if (!statements.length) {
     console.log('没有可恢复的 snapshot 内容，未写入数据库。');
@@ -89,9 +58,6 @@ export function runRestore({ only = null } = {}) {
   }
 
   transaction(statements);
-
-  // 本地 marketplace 文件只在全量恢复时重布，避免部分 scope 恢复时意外改动。
-  const mkt = (!only) ? restoreLocalMarketplaces() : { skipped: true, restored: 0 };
 
   console.log('config-sync 恢复完成');
   console.log(`  数据库备份：${backupPath}`);
@@ -102,9 +68,6 @@ export function runRestore({ only = null } = {}) {
   console.log(`  prompts: ${snapshots.prompts.length}`);
   console.log(`  proxy_config: ${snapshots.proxy_config.length}`);
   console.log(`  model_pricing: ${snapshots.model_pricing.length}`);
-  console.log(`  providers: ${snapshots.providers.length}`);
-  console.log(`  provider_endpoints: ${snapshots.provider_endpoints.length}`);
-  console.log(`  local_marketplaces: ${mkt.skipped ? '(无，跳过)' : mkt.restored + ' 个 -> ' + localMarketplacesHomeDir}`);
   console.log('');
   console.log('请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置到各端。');
 }
@@ -122,10 +85,6 @@ function loadSnapshots(only = null) {
     provider_endpoints: [],
     model_pricing: [],
   });
-  const providersDoc = wants(only, 'providers')
-    ? mustRead(snapshotPaths.providers, 'providers/providers.json')
-    : readJsonIfExists(snapshotPaths.providers, { rows: [] });
-
   return {
     settings: rehydrateSettings(asRows(settingsDoc)),
     mcp_servers: asRows(mcpDoc).map((m) => (
@@ -137,13 +96,12 @@ function loadSnapshots(only = null) {
     proxy_config: Array.isArray(proxyDoc.proxy_config) ? proxyDoc.proxy_config : [],
     provider_endpoints: Array.isArray(proxyDoc.provider_endpoints) ? proxyDoc.provider_endpoints : [],
     model_pricing: Array.isArray(proxyDoc.model_pricing) ? proxyDoc.model_pricing : [],
-    providers: asRows(providersDoc),
   };
 }
 
 function mustRead(filePath, label) {
   if (!fs.existsSync(filePath)) {
-    throw new Error(`缺少 ${label}。请先在源机器运行“导出配置.bat”，并确认 providers/ 已手动复制到本机。`);
+    throw new Error(`缺少 ${label}。请先在源机器运行 dao-sync.bat 导出。`);
   }
   return readJsonIfExists(filePath, null);
 }
@@ -182,56 +140,6 @@ function appendSettingsRestore(statements, rows) {
   statements.push(...upsertStatements('settings', syncRows));
 }
 
-function appendProvidersRestore(statements, providers, providerEndpoints) {
-  const hasProvidersTable = tableExists('providers');
-  const hasEndpointsTable = tableExists('provider_endpoints');
-
-  if (!hasProvidersTable) {
-    console.warn('跳过 providers：当前 cc-switch db 没有 providers 表，可能 schema 已变化。');
-    return;
-  }
-
-  // 先删子表 provider_endpoints，再删父表 providers；恢复时先写 providers，再写 endpoints。
-  if (hasEndpointsTable) statements.push(clearTableStatement('provider_endpoints'));
-  statements.push(clearTableStatement('providers'));
-  statements.push(...upsertStatements('providers', providers));
-
-  if (providerEndpoints.length) {
-    if (hasEndpointsTable) statements.push(...upsertStatements('provider_endpoints', providerEndpoints));
-    else console.warn('跳过 provider_endpoints：当前 cc-switch db 没有该表，可能 schema 已变化。');
-  }
-}
-
-function validateProviders(providers) {
-  if (!providers.length) {
-    throw new Error('providers/providers.json 中没有 provider。供应商配置含 token，不进 git；请从源机器手动复制 providers/ 目录。');
-  }
-
-  for (const provider of providers) {
-    for (const key of ['id', 'app_type', 'name', 'settings_config']) {
-      if (provider[key] === undefined || provider[key] === null || provider[key] === '') {
-        throw new Error(`provider 缺少必要字段 ${key}：${provider.name || provider.id || '(unknown)'}`);
-      }
-    }
-
-    if (String(provider.app_type).toLowerCase() === 'claude') {
-      let parsed = null;
-      try {
-        parsed = JSON.parse(provider.settings_config);
-      } catch (error) {
-        throw new Error(`Claude provider settings_config 不是合法 JSON：${provider.name} (${error.message})`);
-      }
-      const token = parsed?.env?.ANTHROPIC_AUTH_TOKEN;
-      if (!token) {
-        console.warn(`提示：Claude provider “${provider.name}” 没有 env.ANTHROPIC_AUTH_TOKEN；如果它走官方登录或无 token 模式，可忽略。`);
-      }
-    } else {
-      if (typeof provider.settings_config !== 'string' || !provider.settings_config.trim()) {
-        throw new Error(`provider settings_config 为空：${provider.name}`);
-      }
-    }
-  }
-}
 
 function isCli() {
   return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;

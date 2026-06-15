@@ -16,11 +16,10 @@
 |---|---|---|---|
 | 1 | dao 规则体系（skills/commands/agents/dao.md） | 本仓库 `ccswitch/` `.devin/` | ✅ 是 |
 | 2 | cc-switch 通用配置（env/hooks/model/permissions） | 本仓库 `config-sync/common/` | ✅ 是 |
-| 3 | cc-switch 供应商（含 token/API key） | `config-sync/providers/` | ❌ **手动复制** |
-| 4 | Codex 本地插件市场（如 product-design） | 本仓库 `config-sync/local-marketplaces/` | ✅ 是 |
-| 5 | MCP servers / skills / prompts / proxy | cc-switch DB（经 config-sync 快照） | ✅ 是（脱敏） |
+| 3 | settings 脱敏真实值 | `config-sync/common-secrets.json` | ❌ **手动复制** |
+| 4 | MCP servers / skills / prompts / proxy | cc-switch DB（经 config-sync 快照） | ✅ 是（脱敏） |
 
-**核心原则**：能进 git 的都进 git，换机靠 `git clone` + 一条恢复命令带回；只有 `providers/`（含真实密钥）必须手动拷贝，缺它恢复会报错提示。
+**核心原则**：能进 git 的都进 git，换机靠 `git clone` + 一条恢复命令带回；只有 `common-secrets.json`（含 settings 脱敏真实值）需手动拷贝；供应商配置在新机器直接配置。
 
 ---
 
@@ -29,14 +28,14 @@
 > 给未来接手的 AI：在一台新机器上完整复刻本套配置，按下面顺序执行即可，每步可自检。
 > 详细解释见后续各节；只想快速跑通，照这一段。
 
-**前置**：已装 `git` / `node` / `cc-switch`（启动过一次，DB 已建）；已把旧机的 `config-sync/providers/`（含密钥，不进 git）手动拷到本仓库同位置。
+**前置**：已装 `git` / `node` / `cc-switch`（启动过一次，DB 已建）；已把旧机的 `config-sync/common-secrets.json`（含 settings 真实值，不进 git）手动拷到本仓库同位置。
 
 ```powershell
 # 1. 取仓库（路径不强制，dao 用占位符/动态根适配；建议 D:\frank\windsurf-dao）
 git clone <windsurf-dao 仓库地址> D:\frank\windsurf-dao
 cd D:\frank\windsurf-dao
 
-# 2. 恢复 cc-switch 全部配置（settings/hooks/MCP/skills/providers）→ cc-switch DB
+# 2. 恢复 cc-switch 通用配置（settings/hooks/MCP/skills）→ cc-switch DB
 #    （双击 config-sync\恢复配置.bat 等价；AI 直接调 lib 跳过 pause）
 node config-sync\lib\restore.mjs
 
@@ -85,19 +84,15 @@ cd D:\frank\windsurf-dao
 
 > **路径不强制**：克隆到哪个目录都行。dao 的 `@import` 和 hooks 路径都用占位符/动态根，恢复时自动适配新位置（见 §4 路径机制）。但若想和旧机完全一致、少踩坑，建议仍用 `D:\frank\windsurf-dao`。
 
-### 步骤 2 · 手动补回 providers/（含密钥，不在 git）
+### 步骤 2 · 手动补回 common-secrets.json（含脱敏真实值，不在 git）
 
-从旧机器把整个 `config-sync/providers/` 目录复制到新机器同一位置：
+从旧机器把 `config-sync/common-secrets.json` 复制到新机器同一位置。
 
-```
-config-sync/providers/
-├── providers.json          ← 各供应商配置（含 token）
-└── common-secrets.json     ← 通用配置里被脱敏字段的真实值
-```
+> 没有这一步，恢复 settings 时会因占位符无法还原而报错。用 U 盘 / 私密渠道传，**不要进 git**（已被 `.gitignore` 忽略）。
 
-> 没有这一步，下一步恢复会报错并提示缺 `common-secrets.json`。用 U 盘 / 私密渠道传，**不要进 git**（已被 `.gitignore` 忽略）。
+供应商配置（token/API key）不再随仓库同步，在新机器上通过 cc-switch 直接配置即可。
 
-### 步骤 3 · 恢复 cc-switch 配置 + 本地插件市场
+### 步骤 3 · 恢复 cc-switch 配置
 
 ```powershell
 config-sync\dao-sync.bat restore
@@ -106,8 +101,7 @@ config-sync\dao-sync.bat restore
 
 它会：
 1. 备份当前 cc-switch DB 到 `~/.cc-switch/backups/`
-2. 把 `common/` + `providers/` 快照写回 `~/.cc-switch/cc-switch.db`（hooks/env 等路径占位符自动还原成本机仓库路径）
-3. 把 `local-marketplaces/`（如 product-design 插件市场）铺回 `~/.codex/local-marketplaces/`
+2. 把 `common/` 快照写回 `~/.cc-switch/cc-switch.db`（hooks/env 等路径占位符自动还原成本机仓库路径）
 
 完成后**重启 cc-switch**，并切换一次 provider，让它重新下发配置到各端。
 
@@ -149,15 +143,15 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Pencil 本�
 | 仓库根路径 | `D:/frank/windsurf-dao` | 可能不同 | 占位符/动态根自动适配，无需手改 |
 | 用户名 | `Administrator` | 可能不同 | `${HOME}` 占位，恢复时还原 |
 | Pencil MCP 路径 | `D:/Program Files/Pencil/...` | 必不同 | 本机特定，换机后按新安装位置在 cc-switch 重配 |
-| 供应商 token | providers/ 内 | — | 手动复制 providers/（§2 步骤 2） |
-| Codex 插件登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
+| 供应商配置 | cc-switch DB | 需重配 | 新机器在 cc-switch 中重新配置供应商 |
+| Codex 登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
 
 ## 4. 路径占位机制（为什么换机不怕路径变）
 
 config-sync 在导出时把两类本机路径替换成占位符，恢复时还原成新机实际路径：
 
 - `${PROJECT_ROOT}` → windsurf-dao 仓库根（如 hooks 命令 `node "${PROJECT_ROOT}/ccswitch/hooks/dao-glob-gate.js"`）
-- `${HOME}` → 用户主目录（如 Codex 本地市场源 `${HOME}/.codex/local-marketplaces/...`）
+- `${HOME}` → 用户主目录
 
 所以 `common/settings.json`、`mcp_servers.json` 进 git 的都是占位符形态，`恢复配置.bat` 在新机自动解回真实路径。**这是换机不强制同路径的根本保障。**
 

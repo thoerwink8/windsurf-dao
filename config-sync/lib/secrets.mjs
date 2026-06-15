@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { providersDir } from './paths.mjs';
+import { configSyncRoot } from './paths.mjs';
 
-export const commonSecretsPath = path.join(providersDir, 'common-secrets.json');
+export const commonSecretsPath = path.join(configSyncRoot, 'common-secrets.json');
 
 // 占位符：进 git 的 common 快照里，敏感字段值会被替换成这个常量。
-// 真实值按 "<settingsKey> :: <dot.path>" 存到 providers/common-secrets.json（不入 git）。
+// 真实值按 "<settingsKey> :: <dot.path>" 存到 config-sync/common-secrets.json（不入 git）。
 export const SECRET_PLACEHOLDER = '__CONFIG_SYNC_SECRET__';
 
 // 字段名命中即视为敏感（大小写不敏感）。
