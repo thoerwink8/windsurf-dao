@@ -3,7 +3,7 @@
   "proxy_config": [
     {
       "app_type": "claude",
-      "proxy_enabled": 1,
+      "proxy_enabled": 0,
       "listen_address": "127.0.0.1",
       "listen_port": 15721,
       "enable_logging": 1,
@@ -18,94 +18,66 @@
       "circuit_timeout_seconds": 90,
       "circuit_error_rate_threshold": 0.7,
       "circuit_min_requests": 15,
-      "created_at": "2026-03-15 04:44:37",
-      "updated_at": "2026-06-06 20:47:00",
-      "live_takeover_active": 0,
       "default_cost_multiplier": "1",
-      "pricing_model_source": "response"
+      "pricing_model_source": "response",
+      "created_at": "2026-05-15 02:23:05",
+      "updated_at": "2026-06-15 01:06:51",
+      "live_takeover_active": 0
     },
     {
       "app_type": "codex",
-      "proxy_enabled": 1,
+      "proxy_enabled": 0,
       "listen_address": "127.0.0.1",
       "listen_port": 15721,
       "enable_logging": 1,
       "enabled": 0,
       "auto_failover_enabled": 0,
-      "max_retries": 3,
-      "streaming_first_byte_timeout": 60,
-      "streaming_idle_timeout": 120,
+      "max_retries": 6,
+      "streaming_first_byte_timeout": 90,
+      "streaming_idle_timeout": 180,
       "non_streaming_timeout": 600,
       "circuit_failure_threshold": 4,
       "circuit_success_threshold": 2,
       "circuit_timeout_seconds": 60,
       "circuit_error_rate_threshold": 0.6,
       "circuit_min_requests": 10,
-      "created_at": "2026-03-15 04:44:37",
-      "updated_at": "2026-06-06 20:47:00",
-      "live_takeover_active": 0,
       "default_cost_multiplier": "1",
-      "pricing_model_source": "response"
+      "pricing_model_source": "response",
+      "created_at": "2026-05-15 02:23:05",
+      "updated_at": "2026-06-15 01:06:51",
+      "live_takeover_active": 0
     },
     {
       "app_type": "gemini",
-      "proxy_enabled": 1,
+      "proxy_enabled": 0,
       "listen_address": "127.0.0.1",
       "listen_port": 15721,
       "enable_logging": 1,
       "enabled": 0,
       "auto_failover_enabled": 0,
-      "max_retries": 5,
-      "streaming_first_byte_timeout": 60,
-      "streaming_idle_timeout": 120,
+      "max_retries": 6,
+      "streaming_first_byte_timeout": 90,
+      "streaming_idle_timeout": 180,
       "non_streaming_timeout": 600,
       "circuit_failure_threshold": 4,
       "circuit_success_threshold": 2,
       "circuit_timeout_seconds": 60,
       "circuit_error_rate_threshold": 0.6,
       "circuit_min_requests": 10,
-      "created_at": "2026-03-15 04:44:37",
-      "updated_at": "2026-06-06 20:47:00",
-      "live_takeover_active": 0,
       "default_cost_multiplier": "1",
-      "pricing_model_source": "response"
+      "pricing_model_source": "response",
+      "created_at": "2026-05-15 02:23:05",
+      "updated_at": "2026-06-15 01:06:51",
+      "live_takeover_active": 0
     }
   ],
   "provider_endpoints": [
     {
-      "id": 6,
-      "provider_id": "63ac2861-5979-46ad-8673-37b71999933d",
+      "id": 2,
+      "provider_id": "7e6a25eb-bf3f-40fa-973e-eed3d463fce3",
       "app_type": "claude",
-      "url": "https://www.bytecatcode.org",
-      "added_at": 1780237559379
-    },
-    {
-      "id": 9,
-      "provider_id": "2d6f4bac-454b-4a91-b890-5f0e37bc73ca",
-      "app_type": "claude-desktop",
-      "url": "http://yangchl-pro.shop:8080",
-      "added_at": 1780412915425
-    },
-    {
-      "id": 8,
-      "provider_id": "63ac2861-5979-46ad-8673-37b71999933d",
-      "app_type": "claude-desktop",
-      "url": "https://www.bytecatcode.org",
-      "added_at": 1780237559379
-    },
-    {
-      "id": 4,
-      "provider_id": "33bb8ee4-5df7-431e-bd46-6f3f681ed38a",
-      "app_type": "codex",
-      "url": "https://w.ciykj.cn",
-      "added_at": 1779731511266
-    },
-    {
-      "id": 5,
-      "provider_id": "42146a08-a974-4b6b-8622-af75341a392a",
-      "app_type": "codex",
-      "url": "https://shaobianer.com",
-      "added_at": 1779900392773
+      "url": "http://10.213.196.114:3000/v1",
+      "added_at": 1779161996872
     }
   ],
   "model_pricing": [
@@ -1100,6 +1072,14 @@
       "output_cost_per_million": "2.40",
       "cache_read_cost_per_million": "0.06",
       "cache_creation_cost_per_million": "0.375"
+    },
+    {
+      "model_id": "minimax-m3",
+      "display_name": "MiniMax M3",
+      "input_cost_per_million": "0.60",
+      "output_cost_per_million": "2.40",
+      "cache_read_cost_per_million": "0.12",
+      "cache_creation_cost_per_million": "0"
     },
     {
       "model_id": "mistral-large-3-2512",

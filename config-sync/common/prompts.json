@@ -2,14 +2,14 @@
   "source": "cc-switch.prompts",
   "rows": [
     {
-      "id": "auto-imported-1778992585",
-      "app_type": "codex",
-      "name": "Auto-imported Prompt 2026-05-17 12:36",
-      "content": "## Documentation Language\n\nWhen creating, updating, translating, reviewing, or planning project documentation, specs, design notes, README files, implementation plans, task docs, changelogs, architecture docs, or files under `docs/`, use `$chinese-documentation` and write generated documentation in Simplified Chinese by default.\n\nKeep code identifiers, commands, file paths, API names, package names, branch names, and required source quotes in their original language. Use another language only when the user explicitly requests it for that artifact.\n",
+      "id": "auto-imported-1780707677",
+      "app_type": "claude",
+      "name": "Auto-imported Prompt 2026-06-06 09:01",
+      "content": "﻿\n# windsurf-dao Tao field (always_on root, single source of truth)\n@C:/frank/windsurf-dao/claude/dao.md\n\n",
       "description": "Automatically imported on first launch",
       "enabled": 1,
-      "created_at": 1778992585,
-      "updated_at": 1778992585
+      "created_at": 1780707677,
+      "updated_at": 1780707677
     }
   ]
 }

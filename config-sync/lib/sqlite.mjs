@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ccSwitchBackupDir, ccSwitchDbPath } from './paths.mjs';
+import { ccSwitchBackupDir, ccSwitchDbPath, configSyncRoot } from './paths.mjs';
+
+const VENDOR_SQLITE = path.join(configSyncRoot, 'vendor', 'sqlite', 'sqlite3.exe');
 
 const FALLBACK_SQLITE_PATHS = [
+  VENDOR_SQLITE,
   path.join(os.homedir(), 'AppData', 'Local', 'Android', 'platform-tools', 'sqlite3.exe'),
   path.join(os.homedir(), 'AppData', 'Local', 'Android', 'platform-tools', 'sqlite3'),
 ];
