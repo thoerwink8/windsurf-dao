@@ -222,7 +222,7 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 | 层级 | 位置 | 工具 | 同步内容 |
 |---|---|---|---|
 | **规则/技能/命令** | `claude/` → `~/.claude/` | `dao.ps1 link-claude` | skills、commands、agents、references、styles、hooks、`@import` |
-| **运行态配置** | `~/.cc-switch/cc-switch.db` ↔ `config-sync/` | `config-sync/*.bat` 或 `node lib/*.mjs` | env、hooks、model、statusLine、MCP、providers、prompts |
+| **运行态配置** | `~/.cc-switch/cc-switch.db` ↔ `config-sync/` | `dao-sync.bat`（四合一）或 `node lib/sync.mjs --<cmd>` | env、hooks、model、statusLine、MCP、providers、prompts |
 
 **关键原则**：`cc-switch` 是运行态真相源；`config-sync` 是它的版本化备份 / 换机恢复工具。日常修改 cc-switch 后，应导出快照到 `config-sync/common/` 并提交；换机时再从快照恢复。
 
@@ -231,19 +231,19 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 ```powershell
 cd C:\frank\windsurf-dao\config-sync
 
-# 1. 确保 sqlite3 可用（项目已自带安装包）
-.\setup-sqlite.ps1
+# 统一入口（四合一）
+dao-sync.bat export    # 导出当前 cc-switch 配置
+dao-sync.bat restore   # 把仓库快照写回 cc-switch DB
+dao-sync.bat doctor    # 配置一致性体检
+dao-sync.bat inventory # 盘点当前配置状态
 
-# 2. 导出当前 cc-switch 配置（生成/更新 providers/ + common-secrets.json）
-node lib/export.mjs
+# 或直接调用编排器：
+node lib/sync.mjs --export
+node lib/sync.mjs --restore
+node lib/sync.mjs --doctor
+node lib/sync.mjs --inventory
 
-# 3. 把仓库快照写回 cc-switch DB（让 DB 与仓库意图对齐）
-node lib/restore.mjs
-
-# 4. 验证
-node lib/doctor.mjs
-
-# 5. 重启 cc-switch，切换一次 provider，让它把 common_config_claude 下发到 Claude Code 各端
+# 跑完重启 cc-switch，切换一次 provider，让它把 common_config_claude 下发到各端
 ```
 
 **注意**：
@@ -257,8 +257,8 @@ node lib/doctor.mjs
 
 1. `git clone` 本仓库，运行 `dao.ps1 link-claude`。
 2. 把旧机的 `config-sync/providers/` 手动复制到新机同位置（含 token，不进 git）。
-3. 启动一次 cc-switch 创建空 DB，然后运行 `config-sync/恢复配置.bat`。
-4. 重启 cc-switch 并切换 provider，运行 `config-sync/体检.bat` 确认问题 0 项。
+3. 启动一次 cc-switch 创建空 DB，然后运行 `dao-sync.bat restore`。
+4. 重启 cc-switch 并切换 provider，运行 `dao-sync.bat doctor` 确认问题 0 项。
 
 ### 5.4 Agent 遇到同步问题时的 checklist
 
