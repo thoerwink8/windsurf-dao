@@ -248,7 +248,7 @@ node lib/sync.mjs --inventory
 
 **注意**：
 - `providers/` 与 `common-secrets.json` 含 token，已被 `.gitignore` 忽略，**不要提交**。
-- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.ccswitch/settings.json`。
+- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.claude/settings.json`。
 - 终端状态栏 (`statusLine`) 是 `common_config_claude` 的一部分，同步后生效。
 
 ### 5.3 新机器复刻步骤
@@ -285,4 +285,4 @@ node lib/sync.mjs --inventory
 - Bash/PowerShell 的 `grep` 在 Windows 下常遇到引号、反斜杠、管道转义问题，且大文件容易卡死。
 - 权限层面，`common_config_claude.permissions` 已 deny 掉 `Bash(grep:*)`、`Bash(find:*)`、`PowerShell(Select-String:*)` 等，强制模型走 Grep-first。
 
-本条同时写入了 `~/.ccswitch/CLAUDE.md`，每条消息常驻提醒。
+本条同时写入了 `~/.claude/CLAUDE.md`，每条消息常驻提醒。
