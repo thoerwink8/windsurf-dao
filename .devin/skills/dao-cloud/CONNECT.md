@@ -39,7 +39,8 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 curl -s --max-time 10 "$DAO_HUB_URL/api/agents" -H "Authorization: Bearer $DAO_HUB_TOKEN"
 ```
 
-默认 `cmd.exe`；要 PowerShell 用 `powershell -NoProfile -Command "..."`。
+Hub exec-sync 默认 `cmd.exe`；要 PowerShell 用 `powershell -NoProfile -Command "..."`。
+IDE 集成终端如需改为 Git Bash，在本机运行 `.\dao.ps1 set-terminal`。
 
 ## 防阻塞铁律
 

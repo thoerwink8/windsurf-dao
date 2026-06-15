@@ -504,7 +504,8 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 
 **注意：**
 - 字段名是 `cmd`，**不是** `command`（用错会静默无输出）
-- 默认 cmd.exe 执行；要 PowerShell：`powershell -NoProfile -Command "..."`
+- Hub exec-sync 默认 cmd.exe；要 PowerShell：`powershell -NoProfile -Command "..."`
+- IDE 集成终端默认也是 cmd.exe → 在本机运行 `.\dao.ps1 set-terminal` 切到 Git Bash
 - Hub 一次只跑一条命令，前一条卡住会堵队列
 - 长任务用 `Start-Process ... -WindowStyle Hidden` 后台拉起再轮询
 - 别发前台阻塞 / 等待输入的命令
