@@ -61,7 +61,7 @@ node config-sync\lib\doctor.mjs
 |---|---|---|
 | **Git** | 克隆仓库 | `git --version` |
 | **Node.js** | config-sync 脚本、dao hooks | `node --version` |
-| **sqlite3** | 读写 cc-switch DB | `sqlite3 -version` |
+| **sqlite3** | 读写 cc-switch DB | `sqlite3 -version`，或运行 `config-sync/setup-sqlite.ps1`（项目已内置安装包） |
 | **cc-switch** 桌面端 | 配置中心与下发引擎 | 已安装并能启动 |
 | **Windows Developer Mode** | symlink 权限（dao.ps1 链接） | 设置 → 系统 → 开发者选项 → 开 |
 
@@ -70,7 +70,7 @@ node config-sync\lib\doctor.mjs
 - **Codex / Codex++**——用 dao + Codex
 - **Windsurf**——用 dao + Windsurf
 
-> sqlite3 找不到时，config-sync 会回退查 `~/AppData/Local/Android/platform-tools/sqlite3.exe`，或设环境变量 `SQLITE3_PATH` 指定。
+> sqlite3 找不到时，运行 `config-sync/setup-sqlite.ps1` 即可从项目内置安装包自动解压并设置 `SQLITE3_PATH`；也可手动安装后设环境变量 `SQLITE3_PATH` 指定。
 
 <!-- APPEND-MARKER-1 -->
 

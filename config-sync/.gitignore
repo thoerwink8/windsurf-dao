@@ -1,3 +1,4 @@
 providers/
 *.local.json
 _tmp/
+vendor/sqlite/

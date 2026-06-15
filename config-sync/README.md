@@ -10,7 +10,9 @@
 config-sync/
   common/       # 通用配置，进入 git
   providers/    # 供应商配置，含 token，不进入 git
+  vendor/       # sqlite3 等本机工具安装包（进 git，免换机再下载）
   lib/          # Node.js 脚本
+  setup-sqlite.ps1
   导出配置.bat
   恢复配置.bat
   体检.bat
@@ -36,6 +38,16 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 - 恢复时自动把真实值合并回 cc-switch；若缺少 `common-secrets.json`，恢复会报错并提示。
 
 所以换机时，`providers/` 目录（含 `providers.json` 和 `common-secrets.json`）必须手动复制，缺一不可。
+
+## 前置条件
+
+脚本需要 `sqlite3` 命令行工具。项目已内置 Windows 64 位安装包，运行一次即可：
+
+```powershell
+.\setup-sqlite.ps1
+```
+
+它会优先使用系统已有的 `sqlite3`；找不到时自动从 `vendor/sqlite-tools-win-x64-*.zip` 解压到 `vendor/sqlite/`，并设置用户级 `SQLITE3_PATH`。`lib/sqlite.mjs` 也已把 `vendor/sqlite/sqlite3.exe` 加入 fallback 路径，解压后新终端无需额外配置即可运行 `node lib/*.mjs`。
 
 ## 使用方式
 
