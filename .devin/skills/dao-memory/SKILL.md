@@ -228,7 +228,7 @@ memory/
 - 设计模糊时先用 `dao-brainstorm`，不要让记忆替代需求澄清。
 - 需要外部资料时用 `dao-research`，再把可靠结论写入 `research-log.md`。
 - 遇到 bug 时用 `dao-debug`，复盘阶段再用本 skill 沉淀调试经验。
-- 教训/踩坑需要可搜索、可追溯时，用 `dao-evolution` 写入 `docs/evolution/evolution-*.csv`。
+- 教训/踩坑需要可搜索、可追溯时，用 `dao-evolution` 写入 `data/evolution-*.csv`。
 - 发现 skill 缺口时，联动 `dao-skill-ecosystem` 判断查库、安装还是创建。
 - 创建或修改 skill 时用 `skill-creator` 和 `dao-meta`。
 - 声明完成前用 `dao-verify` 确认实际结果。
