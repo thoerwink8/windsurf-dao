@@ -39,14 +39,12 @@ export function runExport({ only = null } = {}) {
   const proxyConfig = selectRows('proxy_config', 'ORDER BY app_type');
   const providerEndpoints = selectRows('provider_endpoints', 'ORDER BY app_type, provider_id, id');
   const modelPricing = selectRows('model_pricing', 'ORDER BY model_id');
-  const providers = selectRows('providers', 'ORDER BY app_type, sort_index, name, id');
-
   const { redactedRows, secrets, skippedNonJson } = redactSettings(settings);
 
   if (wants(only, 'settings')) {
     writeJson(snapshotPaths.settings, {
       source: 'cc-switch.settings',
-      note: '敏感字段已脱敏为占位符，真实值在 providers/common-secrets.json（不入 git）。',
+      note: '敏感字段已脱敏为占位符，真实值在 config-sync/common-secrets.json（不入 git）。',
       rows: redactedRows,
     });
     writeJson(commonSecretsPath, {
@@ -87,16 +85,9 @@ export function runExport({ only = null } = {}) {
     });
   }
 
-  if (wants(only, 'providers')) {
-    writeJson(snapshotPaths.providers, {
-      source: 'cc-switch.providers',
-      rows: providers,
-    });
-  }
-
   console.log('config-sync 导出完成');
   console.log(`  settings common keys: ${settings.length}`);
-  console.log(`  common 脱敏字段: ${Object.keys(secrets).length}（真实值写入 providers/common-secrets.json）`);
+  console.log(`  common 脱敏字段: ${Object.keys(secrets).length}（真实值写入 config-sync/common-secrets.json）`);
   if (skippedNonJson.length) {
     console.log(`  非 JSON common（未脱敏，原样保留）: ${skippedNonJson.join(', ')}`);
   }
@@ -104,14 +95,8 @@ export function runExport({ only = null } = {}) {
   console.log(`  skills: ${skills.length}`);
   console.log(`  skill repos: ${skillRepos.length}`);
   console.log(`  prompts: ${prompts.length}`);
-  console.log(`  providers: ${providers.length}`);
   console.log('');
-  console.log('安全提醒：providers/ 包含供应商 token/API key，已由 config-sync/.gitignore 忽略，请不要手动提交。');
-  console.log('下一步建议：运行 git status，确认 common/ 与脚本进入版本管理，providers/ 不显示。');
-
-  if (!tableExists('providers')) {
-    console.warn('警告：cc-switch db 中没有 providers 表，可能 schema 与预期不同。');
-  }
+  console.log('安全提醒：common-secrets.json 含脱敏真实值，已由 config-sync/.gitignore 忽略，请不要手动提交。');
 }
 
 function isCli() {

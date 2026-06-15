@@ -38,9 +38,6 @@ function main() {
   compareSnapshot('mcp_servers', snapshotPaths.mcpServers, (doc) => asRows(doc));
   compareSkillsSnapshot();
 
-  section('providers 本地私密快照');
-  checkProvidersSnapshot();
-
   section('common 脱敏门（防 token 进 git）');
   checkCommonRedaction();
 
@@ -137,22 +134,6 @@ function compareSkillsSnapshot() {
   if (skillsSame && reposSame) pass(`skills / skill_repos 与 common 快照一致（skills=${dbSkills.length}, repos=${dbRepos.length}）。`);
   else warn(`skills / skill_repos 与 common 快照不一致：db skills=${dbSkills.length}, snapshot skills=${(snapshot.skills || []).length}; db repos=${dbRepos.length}, snapshot repos=${(snapshot.skill_repos || []).length}。`);
 }
-
-function checkProvidersSnapshot() {
-  if (!fs.existsSync(snapshotPaths.providers)) {
-    fail('缺少 providers/providers.json。供应商配置含 token，不进 git；换机时需手动复制 providers/ 目录。');
-    return;
-  }
-  const doc = readJsonIfExists(snapshotPaths.providers, { rows: [] });
-  const rows = asRows(doc);
-  if (!rows.length) fail('providers/providers.json 存在但为空。');
-  else pass(`providers/providers.json 存在（${rows.length} 个 provider）。注意：该目录含 token，不应提交到 git。`);
-}
-
-function checkRuntimeSettingsGuard() {
-  const runtimeRows = selectRows('settings', "WHERE key = 'claude_desktop_gateway_token'");
-  if (!runtimeRows.length || !String(runtimeRows[0].value || '').trim()) {
-    fail('settings.claude_desktop_gateway_token 缺失。Desktop 到 cc-switch Gateway 认证会 401。');
   } else {
     pass('settings.claude_desktop_gateway_token 存在（仅检查存在，不打印值）。');
   }
@@ -202,7 +183,7 @@ function checkCommonRedaction() {
     if (have >= placeholders) pass(`脱敏占位符 ${placeholders} 个，common-secrets.json 提供 ${have} 个真实值。`);
     else fail(`脱敏占位符 ${placeholders} 个，但 common-secrets.json 只有 ${have} 个真实值，恢复会失败。`);
   } else {
-    fail(`common/settings.json 有 ${placeholders} 个脱敏占位符，但缺少 providers/common-secrets.json。换机时需手动复制 providers/ 目录。`);
+    fail(`common/settings.json 有 ${placeholders} 个脱敏占位符，但缺少 config-sync/common-secrets.json。换机时需手动复制该文件。`);
   }
 }
 
