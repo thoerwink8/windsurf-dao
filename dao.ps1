@@ -1187,6 +1187,73 @@ function Invoke-UnlinkClaude {
     Write-Host "  Claude Code: restart session to apply. Source claude/ untouched (git-tracked)." -ForegroundColor DarkGray
 }
 
+# ── IDE 终端配置 ──
+
+function Invoke-SetTerminal {
+    # 将 IDE 集成终端默认 profile 从 cmd.exe 切换为 Git Bash
+    # 支持 Windsurf / Devin Desktop / VS Code / Cursor
+    $gitBash = "C:\Program Files\Git\bin\bash.exe"
+    if (!(Test-Path $gitBash)) {
+        Write-Host "  [error] Git Bash not found: $gitBash" -ForegroundColor Red
+        return
+    }
+
+    # 按优先级检测 IDE settings 目录
+    $candidates = @(
+        @{ Name = "Windsurf / Devin Desktop"; Dir = (Join-Path $env:APPDATA "Windsurf\User") },
+        @{ Name = "VS Code";                  Dir = (Join-Path $env:APPDATA "Code\User") },
+        @{ Name = "Cursor";                   Dir = (Join-Path $env:APPDATA "Cursor\User") }
+    )
+
+    $touched = 0
+    foreach ($c in $candidates) {
+        if (!(Test-Path $c.Dir)) { continue }
+        $settingsFile = Join-Path $c.Dir "settings.json"
+        Write-Host "  [$($c.Name)] $settingsFile" -ForegroundColor Cyan
+
+        # 已经是 Git Bash？
+        if ((Test-Path $settingsFile) -and
+            (Get-Content $settingsFile -Raw -Encoding UTF8) -match '"terminal\.integrated\.defaultProfile\.windows"\s*:\s*"Git Bash"') {
+            Write-Host "    [skip ] already Git Bash" -ForegroundColor DarkGray
+            continue
+        }
+
+        # 用 node 安全处理 JSONC（settings.json 可能含注释/尾逗号）
+        $nodeCode = @'
+const fs=require("fs"),f=process.argv[1];
+let t=fs.existsSync(f)?fs.readFileSync(f,"utf8"):"{}";
+if(t.charCodeAt(0)===0xFEFF)t=t.slice(1);
+t=t.replace(/\/\/.*$/gm,"").replace(/\/\*[\s\S]*?\*\//g,"").replace(/,(\s*[}\]])/g,"$1");
+let o;try{o=JSON.parse(t)}catch(e){process.stderr.write("parse: "+e.message);process.exit(1)}
+const prev=o["terminal.integrated.defaultProfile.windows"]||"(none)";
+o["terminal.integrated.defaultProfile.windows"]="Git Bash";
+fs.writeFileSync(f,JSON.stringify(o,null,4)+"\n","utf8");
+console.log(prev);
+'@
+        $tmp = Join-Path $env:TEMP "dao-set-term-$([guid]::NewGuid().ToString('N').Substring(0,8)).cjs"
+        try {
+            $nodeCode | Out-File -Encoding utf8 $tmp
+            $prev = (& node $tmp $settingsFile 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "    [error] $prev" -ForegroundColor Red
+            } else {
+                Write-Host "    [done ] $prev -> Git Bash" -ForegroundColor Green
+                $touched++
+            }
+        } finally {
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($touched -eq 0 -and ($candidates | Where-Object { Test-Path $_.Dir }).Count -eq 0) {
+        Write-Host "  [error] No IDE settings directory found" -ForegroundColor Red
+        Write-Host "  Checked: $($candidates.Dir -join ', ')" -ForegroundColor Red
+    }
+
+    Write-Host ""
+    Write-Host "  Restart IDE terminal (or open a new one) to apply." -ForegroundColor DarkGray
+}
+
 # ── 入口 ──
 
 switch ($Action) {
@@ -1253,6 +1320,10 @@ switch ($Action) {
         Write-Host "`n  Unlinking high-frequency dao prompts from ~/.codex/prompts ..." -ForegroundColor Cyan
         Invoke-UnlinkCodexPrompts -IsDryRun:$DryRun.IsPresent
     }
+    "set-terminal" {
+        Write-Host "`n  Setting IDE default terminal to Git Bash ..." -ForegroundColor Cyan
+        Invoke-SetTerminal
+    }
     default {
         Write-Host @"
 
@@ -1274,6 +1345,7 @@ switch ($Action) {
     .\dao.ps1 unlink-codex [-DryRun]          Remove Codex skill links that point into ~/.claude/skills
     .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts
     .\dao.ps1 unlink-codex-prompts [-DryRun]  Remove managed dao prompt files
+    .\dao.ps1 set-terminal                    Set IDE default terminal to Git Bash (Windsurf/Code/Cursor)
 
   Examples:
     .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
