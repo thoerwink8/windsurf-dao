@@ -69,17 +69,22 @@ Claude Code 没有"编辑 `*.ts` 时自动注入规则"的声明式机制。dao 
 2. **子目录 CLAUDE.md**:把某类代码放特定目录 + 该目录 CLAUDE.md。按目录路径触发,非扩展名。
 3. **PreToolUse hook**(强保证,可选):matcher `Edit|Write`,hook 脚本检查目标路径是否匹配 glob,匹配则注入规则文本。能真正复现"编辑 .tsx 时才注入 X"。dao-meta 这类"编辑 dao 文件时守卫"可用此法,或直接靠 `ccswitch/` 目录的项目级 CLAUDE.md。
 
-## dao 项目目录结构(Claude Code 侧)
+## dao 项目目录结构(v3 · 2026-06)
 
 ```
 windsurf-dao/
-├── ccswitch/                      # Claude Code 侧真相源(git 管理)
+├── dao.ps1                      # 链接管理(部署 dao 到各宿主)
+├── dao-sync.bat                 # 配置同步四合一(export/restore/doctor/inventory)
+├── ccswitch/                    # 多客户端部署源(Claude Code / Codex / 未来平台)
 │   ├── dao.md                   # always_on 道德经场域(@import 注入)
-│   ├── skills/dao-*/            # 30+ skills(model_decision 渐进披露)
-│   ├── commands/dao-*.md        # 10 workflows → slash commands
-│   └── agents/dao-*.md          # subagents(金字塔调度)
-├── .windsurf/                   # Windsurf 侧(双栈共存,同源不同壳)
+│   ├── skills/dao-*/            # 38 skills(渐进披露)
+│   ├── commands/dao-*.md        # slash commands
+│   ├── agents/dao-*.md          # subagents(金字塔调度)
+│   ├── hooks/                   # commit-msg + PostToolUse hooks
+│   └── mcp/                     # MCP 服务器启动脚本
+├── .devin/                      # Windsurf 侧(双栈共存,同源不同壳)
+├── config-sync/                 # cc-switch 配置同步引擎
+├── docs/{evolution,specs,classics}/ # 演化CSV / 设计文档 / 道德经原典
 ├── global_rules.md              # Windsurf 元规则源
-└── dao.ps1                      # link-claude(Claude 侧) / link-global·link-rules(Windsurf 侧)
-docs/classics/道德经.md             # 推导源头,不可修改
+└── scripts/hub/                 # dao-hub 隧道(ngrok)
 ```

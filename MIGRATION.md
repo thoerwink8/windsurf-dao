@@ -18,7 +18,7 @@ windsurf-dao/                          ← 唯一真相源(git)
 ├── global_rules.md                    ← Windsurf 元规则源
 └── dao.ps1                            ← 链接管理(双栈)
 
-~/.ccswitch/                             ← Claude Code 用户级(全局生效)
+~/.claude/                             ← Claude Code 用户级(全局生效)
 ├── CLAUDE.md                          ← 末尾 @import → windsurf-dao/ccswitch/dao.md
 ├── skills/dao-*    ── symlink ──▶ windsurf-dao/ccswitch/skills/dao-*
 ├── commands/dao-*  ── symlink ──▶ windsurf-dao/ccswitch/commands/
@@ -36,7 +36,7 @@ windsurf-dao/                          ← 唯一真相源(git)
 
 | Windsurf trigger | Claude Code 落点 |
 |---|---|
-| `always_on` | `ccswitch/dao.md` 经 `~/.ccswitch/CLAUDE.md` @import(每条消息常驻) |
+| `always_on` | `ccswitch/dao.md` 经 `~/.claude/CLAUDE.md` @import(每条消息常驻) |
 | `model_decision` | Skills(渐进披露,只读 name+description,相关才载全文) |
 | `manual`(@) | Slash command / 加载对应 skill |
 | `glob`(文件类型触发) | 转 skill(description 写明场景)+ 可选 PreToolUse hook 兜底 |
@@ -97,8 +97,8 @@ windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Cod
 
 `link-claude` 做两件事，幂等可重复跑：
 
-1. **symlink** `ccswitch/{skills,commands,agents}` 下的 `dao-*` 项到 `~/.ccswitch/{skills,commands,agents}`（skills 链目录，commands/agents 链文件）。
-2. **幂等追加** `ccswitch/dao.md` 的 `@import` 到 `~/.ccswitch/CLAUDE.md`——已存在则跳过，不重复写。
+1. **symlink** `ccswitch/{skills,commands,agents}` 下的 `dao-*` 项到 `~/.claude/{skills,commands,agents}`（skills 链目录，commands/agents 链文件）。
+2. **幂等追加** `ccswitch/dao.md` 的 `@import` 到 `~/.claude/CLAUDE.md`——已存在则跳过，不重复写。
 
 跑完**重启 Claude Code 会话**（或 `/clear`）才能让新的 skills/commands/agents 被识别。
 
@@ -106,7 +106,7 @@ windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Cod
 
 ### @import 机制
 
-Claude Code 没有 Windsurf 的 always_on trigger，但支持在 `~/.ccswitch/CLAUDE.md` 中用 `@<path>` 语法导入外部文件。`link-claude` 写入的那行：
+Claude Code 没有 Windsurf 的 always_on trigger，但支持在 `~/.claude/CLAUDE.md` 中用 `@<path>` 语法导入外部文件。`link-claude` 写入的那行：
 
 ```
 @D:/frank/windsurf-dao/ccswitch/dao.md
@@ -150,7 +150,7 @@ windsurf-dao/
 
 ### 迁移的四个决策
 
-1. **symlink 真相源**：`ccswitch/` 是唯一真相，`~/.ccswitch/` 下全是 symlink，编辑源文件即时生效，零副本。
+1. **symlink 真相源**：`ccswitch/` 是唯一真相，`~/.claude/` 下全是 symlink，编辑源文件即时生效，零副本。
 2. **借机精简**：删掉与 Claude Code 内置能力（shell 沙箱 / git 安全 / 破坏性操作确认）重叠的规则，为道日损。
 3. **双栈共存**：不删 `.devin/`，两套外壳并存，按宿主选用。
 4. **续力铁律降级**：从 Windsurf 的"每条回复必问下一步"降为"路歧则问"——对齐 Claude Code 回合制的克制原则，路明则静默推进，只在方向不明 / 多方案待拍板 / 不可逆决策时才问。

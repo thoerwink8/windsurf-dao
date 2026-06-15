@@ -123,7 +123,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 - cc-switch db 是否存在；
 - Claude common env 是否包含流式关键开关；
-- 当前 `~/.ccswitch/settings.json` 是否无 BOM 且包含通用开关；
+- 当前 `~/.claude/settings.json` 是否无 BOM 且包含通用开关；
 - `common/` 快照与 cc-switch db 中 MCP / skills 是否一致；
 - `common/settings.json` 是否已脱敏（无明文密钥）、占位符与 `common-secrets.json` 是否配套；
 - `settings.claude_desktop_gateway_token` 是否存在，且未进入 `common/settings.json`；
@@ -145,7 +145,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 检Goal任状.bat
 ```
 
-用途：在 Claude Code Desktop 的 goal 模式卡住、异常中断或疑似空转后，扫描 `~/.ccswitch/tasks` 与 `~/.ccswitch/projects`，确认是否存在会让 goal 误判“目标未完成”的任务状态残留。
+用途：在 Claude Code Desktop 的 goal 模式卡住、异常中断或疑似空转后，扫描 `~/.claude/tasks` 与 `~/.claude/projects`，确认是否存在会让 goal 误判“目标未完成”的任务状态残留。
 
 检查项：
 

@@ -59,7 +59,7 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 
 **成功标准**:
 - `ccswitch/` 成为 Claude Code 侧真相源,`dao.ps1 link-claude` 一键全局部署(symlink + @import),幂等可用。
-- 道德经场域 `ccswitch/dao.md` 经 `~/.ccswitch/CLAUDE.md` @import 每条消息常驻。
+- 道德经场域 `ccswitch/dao.md` 经 `~/.claude/CLAUDE.md` @import 每条消息常驻。
 - 28 skills + 10 workflows + 8 subagents 全部平移,无 Windsurf 专有名残留,交叉引用无断链。
 - 双栈共存:`.windsurf/` 保留可用,同源不同壳。
 
@@ -72,7 +72,7 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 - [x] T4 commands:11 个(10 workflows 平移)→ `ccswitch/commands/dao-*.md`
 - [x] T5 收尾:8 subagents 平移 + stacks 迁移 + 修孤岛 15 项 + 文档更新(README/MIGRATION/USAGE)+ status 双栈显示 + 全量部署(55 链接)+ 端到端验证全绿
 
-**✅ 迁移完成 (2026-05-31)**:Claude Code 侧 37 skills + 11 commands + 8 agents + stacks 全部就位并 symlink 到 `~/.ccswitch/`,`ccswitch/dao.md` 经 @import 每条消息常驻——理想态「每次提问下意识用道德经回答」已落地。Windsurf 侧双栈共存,同源不同壳。`dao.ps1 status` 可查双栈健康度。
+**✅ 迁移完成 (2026-05-31)**:Claude Code 侧 37 skills + 11 commands + 8 agents + stacks 全部就位并 symlink 到 `~/.claude/`,`ccswitch/dao.md` 经 @import 每条消息常驻——理想态「每次提问下意识用道德经回答」已落地。Windsurf 侧双栈共存,同源不同壳。`dao.ps1 status` 可查双栈健康度。
 
 ---
 
