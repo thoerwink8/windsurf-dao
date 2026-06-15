@@ -13,6 +13,8 @@
 //   node lib/sync.mjs --direction=down [--scope=all|settings,mcp] [--yes] [--dry-run] [--no-fetch]
 //   node lib/sync.mjs --direction=up   [--scope=...] [--yes] [--dry-run] [--message="..."]
 
+import fs from 'node:fs';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -39,6 +41,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     else if (arg === '--no-fetch') opts.fetch = false;
     else if (arg === '--doctor') opts.action = 'doctor';
     else if (arg === '--inventory') opts.action = 'inventory';
+    else if (arg === '--persona') opts.action = 'persona';
     else if ((m = /^--direction=(.*)$/.exec(arg))) opts.direction = m[1].trim().toLowerCase();
     else if ((m = /^--(?:scope|only)=(.*)$/.exec(arg))) opts.scope = m[1];
     else if ((m = /^--message=(.*)$/.exec(arg))) opts.message = m[1];
@@ -68,6 +71,7 @@ function printHelp() {
 
   node lib/sync.mjs --doctor                           只读体检（doctor）
   node lib/sync.mjs --inventory                        只读盘点（inventory）
+  node lib/sync.mjs --persona                          Claude Code persona 切换
 
 选项：
   --scope=all|settings,mcp,skills,prompts,proxy             同步范围（默认 all）
@@ -190,6 +194,96 @@ function printStateBoard(state, sc) {
   console.log('================================================\n');
 }
 
+// ---------- 系统全貌 ----------
+
+const home = os.homedir();
+const claudeJsonPath = path.join(home, '.claude.json');
+const claudeSettingsPath = path.join(home, '.claude', 'settings.json');
+const personaStateFile = path.join(home, '.claude', 'persona', '.current-mode');
+const personaActiveFile = path.join(home, '.claude', 'persona', 'active-system-prompt.md');
+const claudeSkillsDir = path.join(home, '.claude', 'skills');
+
+function readJsonSafe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^﻿/, ''));
+  } catch { return null; }
+}
+
+function printDashboard() {
+  console.log('──────────── 系统全貌 ────────────');
+
+  // 1. MCP servers
+  const cj = readJsonSafe(claudeJsonPath);
+  const mcpNames = cj ? Object.keys(cj.mcpServers || {}) : [];
+  if (mcpNames.length) {
+    console.log(`  MCP (${mcpNames.length}):  ${mcpNames.join(' · ')}`);
+  } else {
+    console.log('  MCP:           无');
+  }
+
+  // 2. Skills
+  let skillCount = 0;
+  const skillNames = [];
+  if (fs.existsSync(claudeSkillsDir)) {
+    for (const entry of fs.readdirSync(claudeSkillsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
+        skillNames.push(entry.name);
+        skillCount++;
+      }
+    }
+  }
+  if (skillCount > 10) {
+    console.log(`  Skills (${skillCount}): ${skillNames.slice(0, 8).join(' · ')} … +${skillCount - 8}`);
+  } else if (skillCount > 0) {
+    console.log(`  Skills (${skillCount}): ${skillNames.join(' · ')}`);
+  } else {
+    console.log('  Skills:        无');
+  }
+
+  // 3. Hooks
+  const settings = readJsonSafe(claudeSettingsPath);
+  if (settings?.hooks) {
+    const hookEvents = Object.keys(settings.hooks);
+    let hookTotal = 0;
+    for (const ev of hookEvents) {
+      const groups = settings.hooks[ev];
+      if (Array.isArray(groups)) {
+        for (const g of groups) hookTotal += (g.hooks || []).length;
+      }
+    }
+    console.log(`  Hooks (${hookTotal}):  ${hookEvents.join(' · ')}`);
+  } else {
+    console.log('  Hooks:         无');
+  }
+
+  // 4. Model
+  if (settings?.model) {
+    console.log(`  Model:         ${settings.model}`);
+  }
+
+  // 5. Persona
+  let personaMode = 'off';
+  if (fs.existsSync(personaStateFile)) {
+    personaMode = fs.readFileSync(personaStateFile, 'utf8').trim() || 'off';
+  }
+  let personaSize = '';
+  if (personaMode !== 'off' && fs.existsSync(personaActiveFile)) {
+    const bytes = fs.statSync(personaActiveFile).size;
+    personaSize = ` (${(bytes / 1024).toFixed(1)}KB)`;
+  }
+  console.log(`  Persona:       ${personaMode}${personaSize}`);
+
+  // 6. Plugins
+  if (settings?.enabledPlugins) {
+    const enabled = Object.entries(settings.enabledPlugins).filter(([, v]) => v).map(([k]) => k.split('@')[0]);
+    if (enabled.length) {
+      console.log(`  Plugins:       ${enabled.join(' · ')}`);
+    }
+  }
+
+  console.log('──────────────────────────────────\n');
+}
+
 // ---------- 交互 ----------
 
 let rl = null;
@@ -230,10 +324,12 @@ async function chooseAction() {
   console.log('  [2] 上行  本机 cc-switch → origin（慎重：把本机配置发布到 GitHub）');
   console.log('  [3] 体检  doctor（只读检查 DB / snapshot / 各端一致性）');
   console.log('  [4] 盘点  inventory（只读盘存 skills / MCP 链接）');
-  const answer = await ask('输入 1-4（回车默认 1）：');
+  console.log('  [5] persona 切换（Claude Code CLI 人设注入：dao / fable5 / off）');
+  const answer = await ask('输入 1-5（回车默认 1）：');
   if (answer === '2' || answer === 'up') return 'up';
   if (answer === '3') return 'doctor';
   if (answer === '4') return 'inventory';
+  if (answer === '5') return 'persona';
   return 'down';
 }
 
@@ -343,6 +439,44 @@ async function runUp({ only, state, interactive, yes, dryRun, message }) {
   return 0;
 }
 
+// ---------- persona ----------
+
+const personaScript = path.join(projectRoot, 'ccswitch', 'persona', 'dao-persona-manager.ps1');
+
+function runPersonaCmd(action, mode) {
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', personaScript, action];
+  if (mode) args.push(mode);
+  try {
+    execFileSync('powershell.exe', args, { stdio: 'inherit', timeout: 30000 });
+  } catch (error) {
+    const code = typeof error.status === 'number' ? error.status : 1;
+    if (code !== 0) console.error(`  persona ${action} 失败（exit ${code}）`);
+  }
+}
+
+async function runPersona() {
+  console.log('\n>>> persona — Claude Code CLI 人设注入管理\n');
+  runPersonaCmd('status');
+
+  console.log('选操作：');
+  console.log('  [1] 切换到 dao（道德经 + 阴符经 ~22KB）');
+  console.log('  [2] 切换到 fable5（Fable 5 泄露原文 ~122KB）');
+  console.log('  [3] 关闭注入（vanilla claude）');
+  console.log('  [4] 安装 / 重装 profile hook');
+  console.log('  [5] 卸载（移除 hook，还原 vanilla claude）');
+  console.log('  [0] 返回');
+  const answer = await ask('输入 0-5：');
+
+  switch (answer) {
+    case '1': runPersonaCmd('switch', 'dao'); break;
+    case '2': runPersonaCmd('switch', 'fable5'); break;
+    case '3': runPersonaCmd('switch', 'off'); break;
+    case '4': runPersonaCmd('install'); break;
+    case '5': runPersonaCmd('uninstall'); break;
+    default: console.log('已返回。');
+  }
+}
+
 // ---------- 主流程 ----------
 
 async function main() {
@@ -359,17 +493,20 @@ async function main() {
     process.exit(1);
   }
 
-  // 纯只读体检/盘点：直接转交，不需状态板/方向。
+  // 纯只读体检/盘点/persona：直接转交，不需状态板/方向。
   if (opts.action === 'doctor') { runChild('doctor.mjs'); return; }
   if (opts.action === 'inventory') { runChild('inventory.mjs'); return; }
+  if (opts.action === 'persona') { await runPersona(); closeRl(); return; }
 
   const state = gitState({ fetch: opts.fetch });
   const sc = settingsConsistency();
   printStateBoard(state, sc);
+  printDashboard();
 
   const action = opts.direction || (await chooseAction());
   if (action === 'doctor') { closeRl(); runChild('doctor.mjs'); return; }
   if (action === 'inventory') { closeRl(); runChild('inventory.mjs'); return; }
+  if (action === 'persona') { await runPersona(); closeRl(); return; }
   const direction = action;
   if (!['up', 'down'].includes(direction)) {
     console.error(`未知方向：${direction}（应为 up 或 down）`);

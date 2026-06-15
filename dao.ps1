@@ -18,6 +18,9 @@ param(
     [Parameter(Position=1)]
     [string]$TargetPath,
 
+    [Parameter(Position=2)]
+    [string]$SubArg,
+
     [string]$Root,
 
     [switch]$AlwaysOnOnly,
@@ -126,6 +129,17 @@ function Invoke-Status {
             Write-Host "  Claude Code deploy: partial (run: dao.ps1 link-claude)" -ForegroundColor Yellow
         } else {
             Write-Host "  Claude Code deploy: not installed (run: dao.ps1 link-claude)" -ForegroundColor Red
+        }
+
+        # ── Persona 注入状态 ──
+        $personaState = "$env:USERPROFILE\.claude\persona\.current-mode"
+        $personaActive = "$env:USERPROFILE\.claude\persona\active-system-prompt.md"
+        if (Test-Path $personaState) {
+            $pMode = (Get-Content $personaState -Raw).Trim()
+            $pSize = if (Test-Path $personaActive) { "$([math]::Round((Get-Item $personaActive).Length / 1024, 1))KB" } else { "n/a" }
+            Write-Host "  Persona inject: $pMode ($pSize)" -ForegroundColor Green
+        } else {
+            Write-Host "  Persona inject: off (run: dao.ps1 persona install)" -ForegroundColor Gray
         }
 
         # ── Codex 侧部署状态(镜像 ~/.claude/skills 源)──
@@ -1324,6 +1338,10 @@ switch ($Action) {
         Write-Host "`n  Setting IDE default terminal to Git Bash ..." -ForegroundColor Cyan
         Invoke-SetTerminal
     }
+    "persona" {
+        Write-Host "  persona 管理已统一到 dao-sync.bat（选 [5] persona 切换）" -ForegroundColor Yellow
+        Write-Host "  运行: dao-sync.bat  或  node config-sync/lib/sync.mjs --persona" -ForegroundColor Gray
+    }
     default {
         Write-Host @"
 
@@ -1346,6 +1364,10 @@ switch ($Action) {
     .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts
     .\dao.ps1 unlink-codex-prompts [-DryRun]  Remove managed dao prompt files
     .\dao.ps1 set-terminal                    Set IDE default terminal to Git Bash (Windsurf/Code/Cursor)
+    .\dao.ps1 persona install [dao|fable5]    Install system prompt injection (default: dao mode)
+    .\dao.ps1 persona switch <dao|fable5|off> Switch persona mode
+    .\dao.ps1 persona status                  Show persona injection state
+    .\dao.ps1 persona uninstall               Remove injection, restore vanilla claude
 
   Examples:
     .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
@@ -1357,6 +1379,11 @@ switch ($Action) {
     .\dao.ps1 link-rules-all                  scan default root (dao's parent dir)
     .\dao.ps1 link-rules-all -DryRun          preview without writing
     .\dao.ps1 link-rules d:\frank\TraceyU     single project
+    .\dao.ps1 persona install                 install persona injection (dao mode)
+    .\dao.ps1 persona install fable5          install with Fable 5 prompt
+    .\dao.ps1 persona switch fable5           switch to Fable 5 mode (~122KB, ~30K tokens)
+    .\dao.ps1 persona switch dao              switch to 道德经 mode (~22KB, ~4K tokens)
+    .\dao.ps1 persona switch off              disable injection (vanilla claude)
 
 "@
     }
