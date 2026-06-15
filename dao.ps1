@@ -365,7 +365,7 @@ function Invoke-LinkClaude {
     $settingsPath = Join-Path $userClaude "settings.json"
 
     # ── 复制 docs/classics/ 经文到 ~/.claude/references/ ──
-    $refSrc = Join-Path $DaoRoot "docs" "classics"
+    $refSrc = Join-Path (Join-Path $DaoRoot "docs") "classics"
     if (Test-Path $refSrc) {
         $refDst = Join-Path $userClaude "references"
         if (-not $IsDryRun) { Ensure-Dir $refDst }
