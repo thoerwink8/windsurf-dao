@@ -30,7 +30,7 @@ windsurf-dao/.windsurf/skills/dao-evolution/   ← 引擎（共享）
  ```
 
  `ensure` 行为：
-- 已有 `data/evolution-entries.csv` → 不做任何事
+- 已有 `docs/evolution/evolution-entries.csv` → 不做任何事
 - 无 CSV 但有 `AGENT_GUIDE.md` / `docs/evolution.md` → 自动运行 `migrate.py <project_root>` 迁移旧记录
 - 无 CSV 且无旧记录 → 自动初始化空 CSV
 

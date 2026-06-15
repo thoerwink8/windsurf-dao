@@ -54,7 +54,7 @@
 
 ## 重构收益（v2 · 2026-04-26）
 
-废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `data/evolution-lessons.csv` T20-T22。
+废除"道德法术四层"概念，对齐 Windsurf 4 trigger 机制。详见 `docs/evolution/evolution-lessons.csv` T20-T22。
 
 | 维度 | 旧（5 文件混杂层） | 新（13 文件 5 层架构） |
 |---|---|---|
