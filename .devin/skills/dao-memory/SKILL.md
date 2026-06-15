@@ -72,7 +72,7 @@ description: 任务结束、会话复盘、定时回顾、用户反馈后，用�
 如果用户要求“读历史”“继续会话”“从上次接着做”，优先按实际可访问入口恢复上下文：
 
 - Codex 线程：用线程列表和 `read_thread` 读取最近 turn 摘要。
-- Claude Code / Claude Desktop：查 `~/.ccswitch/projects/**.jsonl`、桌面端配置和 cc-switch 同步索引。
+- Claude Code / Claude Desktop：查 `~/.claude/projects/**.jsonl`、桌面端配置和 cc-switch 同步索引。
 - cc-switch：查 `cc-switch.db`、`session_log_sync`、skills/prompts/settings 等表，只读定位来源。
 - 本地项目：查 `git status`、相关文档、最近改动和会话中提到的产物。
 
