@@ -8,21 +8,20 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 
 ## 触发条件
 
-- 用户显式调用 `/commit`
-- `/dev` 管线的交付阶段
+- 用户显式调用 `/dao-commit`
+- `/dao-dev` 管线的交付阶段
 - 用户说"提交"、"commit"、"generate commit message"
 
 ## 流程
 
 ### 一、采（☲视·读取变更）
 
-// turbo
+读取变更的命令是只读安全命令，按 settings.json 的 permissions 配置自动执行（无需逐条确认的命令已在 allow 列表）。
 
 1. **并行**获取暂存区状态：
    - `git diff --cached --stat`
    - `git diff --cached`
 
-// turbo
 2. 如果暂存区为空，检查未暂存改动（`git diff --stat`）：
 
 - **有**未暂存改动 → 自动 `git add -A`，重新读取暂存区
@@ -59,7 +58,7 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 
 1. （仅拆分时）`git reset HEAD` 取消暂存，然后 `git add <该组文件>`
 2. 生成 commit message（见下方规范）
-3. **展示预览**（调用 `ask_user_question`）：
+3. **展示预览**：
 
    ```
    📝 准备提交：
@@ -68,8 +67,9 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
    涉及文件：<文件列表>
    ```
 
-   选项：确认提交 / 修改消息 / 取消
-4. 用户确认 → 将 message 写入**系统临时目录**的临时文件（UTF-8，路径如 `$env:TEMP\dao-commit-msg.txt`，必须在仓库目录之外）→ `git commit -F <临时文件>` → 提交成功后**立即删除临时文件**
+   - **单组、内聚清晰、用户已显式触发** `/dao-commit`（路明）→ 展示预览后直接提交，不打断。
+   - **路歧则问**（多组拆分需用户确认分组方案 / message 需用户拍板 / 改动归类有歧义）→ 用 AskUserQuestion 工具给出选项：确认提交 / 修改消息 / 取消。
+4. 提交：将 message 写入**系统临时目录**的临时文件（UTF-8，路径如 `$env:TEMP\dao-commit-msg.txt`，必须在仓库目录之外）→ `git commit -F <临时文件>` → 提交成功后**立即删除临时文件**
    用户修改 → 采纳修改后的消息 → 提交（同上，临时文件写系统临时目录，用后删除）
    用户取消 → 停止，暂存区保持不变（无需创建临时文件）
 
@@ -101,8 +101,8 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 - <要点2>
 ```
 
-> **宿主前缀铁律**：AI 创建的每个 commit，subject 行必须以当前宿主标识前缀开头。Claude Code 用 `[cc] `，Codex / Code X 用 `[codex] `，一眼识别 AI 提交来源。
-> **提交前自检门**：生成 subject 前先确认当前运行宿主。禁止凭最近历史、旧示例或目标文件路径沿用前缀；在 Codex / Code X 中修改 `ccswitch/` 或 `.devin/` 文件也必须用 `[codex]`。提交后立即用 `git log -1 --oneline` 核对前缀，不符且未 push 时立刻 amend。
+> **宿主前缀铁律**：AI 创建的每个 commit，subject 行必须以当前宿主标识前缀开头（见 `ccswitch/dao.md`「Commit 标识铁律」）。Claude Code 用 `[cc] `，Codex / Code X 用 `[codex] `，一眼识别 AI 提交来源。
+> **提交前自检门**：生成 subject 前先确认当前运行宿主。禁止凭最近历史、旧示例或目标文件路径沿用前缀；在 Codex / Code X 中修改 `ccswitch/` 文件也必须用 `[codex]`。提交后立即用 `git log -1 --oneline` 核对前缀，不符且未 push 时立刻 amend。
 > **版本标记**：如果本次提交包含版本 bump（package.json / app.json 等版本文件变更），subject 尾部必须带 `(vX.Y.Z)`。版本和代码变更在同一个 commit 中，不单独提交。无版本变更时省略。
 
 ### type

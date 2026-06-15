@@ -108,7 +108,7 @@ function Invoke-Status {
     Write-Host "`n  Mode: Sidecar workspace (Windsurf)" -ForegroundColor Cyan
 
     # ── Claude Code 侧部署状态 ──
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     if (Test-Path $claudeSrc) {
         $cSkills = (Get-ChildItem (Join-Path $claudeSrc "skills") -Directory -ErrorAction SilentlyContinue).Count
         $cCmds = (Get-ChildItem (Join-Path $claudeSrc "commands") -Filter "*.md" -ErrorAction SilentlyContinue).Count
@@ -118,7 +118,7 @@ function Invoke-Status {
         $userClaude = Join-Path $env:USERPROFILE ".claude"
         $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" }).Count
         $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
-        $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "claude/dao.md")
+        $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "(claude|ccswitch)/dao\.md")
 
         if ($linkedSkills -gt 0 -and $importOk) {
             Write-Host "  Claude Code deploy: linked ($linkedSkills dao skills) + dao.md @import OK" -ForegroundColor Green
@@ -291,15 +291,15 @@ function Invoke-LinkRulesAll {
 }
 
 function Invoke-LinkClaude {
-    # 把 claude/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
-    # 复制 references/*.md 经文到 ~/.claude/references/，
+    # 把 ccswitch/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
+    # 复制 docs/classics/*.md 经文到 ~/.claude/references/，
     # 并幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md。
     # 这是 Claude Code 侧的部署入口（对应 Windsurf 侧 link-rules-all + link-global）。
     param([bool]$IsDryRun = $false)
 
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     if (!(Test-Path $claudeSrc)) {
-        Write-Host "  [error] claude/ source not found: $claudeSrc" -ForegroundColor Red
+        Write-Host "  [error] ccswitch/ source not found: $claudeSrc" -ForegroundColor Red
         exit 1
     }
 
@@ -364,8 +364,8 @@ function Invoke-LinkClaude {
     # ── settings.json 路径(后续 outputStyle / hook / 通用配置固化共用,提前定义避免未赋值引用)──
     $settingsPath = Join-Path $userClaude "settings.json"
 
-    # ── 复制 references/ 经文到 ~/.claude/references/ ──
-    $refSrc = Join-Path $DaoRoot "references"
+    # ── 复制 docs/classics/ 经文到 ~/.claude/references/ ──
+    $refSrc = Join-Path (Join-Path $DaoRoot "docs") "classics"
     if (Test-Path $refSrc) {
         $refDst = Join-Path $userClaude "references"
         if (-not $IsDryRun) { Ensure-Dir $refDst }
@@ -477,7 +477,7 @@ function Invoke-LinkClaude {
         $hasImport = $false
         if (Test-Path $userClaudeMd) {
             $content = Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue
-            if ($content -match [regex]::Escape("claude/dao.md")) { $hasImport = $true }
+            if ($content -match [regex]::Escape("ccswitch/dao.md")) { $hasImport = $true }
         }
         if ($hasImport) {
             Write-Host "    [skip ] dao.md @import already present" -ForegroundColor DarkGray
@@ -941,14 +941,15 @@ function Invoke-LinkGlobal {
 function Invoke-UnlinkClaude {
     # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、references/ 经文、@import 行、hook 注册。
     # 只删 dao 引入的链接/条目,不碰用户自有 skill/command/agent,不碰 env/token。
-    # 与 link-claude 对称。源文件 claude/ 不受影响。
+    # 与 link-claude 对称。源文件 ccswitch/ 不受影响。
     param([bool]$IsDryRun = $false)
 
     $userClaude = Join-Path $env:USERPROFILE ".claude"
-    $claudeSrc = Join-Path $DaoRoot "claude"
+    $claudeSrc = Join-Path $DaoRoot "ccswitch"
     $removed = 0; $skipped = 0; $err = 0
 
     # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
+    $oldClaudeSrc = Join-Path $DaoRoot "claude"   # 兼容旧路径(重构前 claude/ → ccswitch/)
     $specs = @(
         @{ Name = "skills";   Filter = "dao-*" },
         @{ Name = "commands"; Filter = "dao-*.md" },
@@ -959,8 +960,8 @@ function Invoke-UnlinkClaude {
         if (!(Test-Path $dstDir)) { continue }
         Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            # 只删 symlink,且 target 指向本 dao 源;真实文件/他处链接不动
-            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and $_.Target -like "$claudeSrc*") {
+            # 只删 symlink,且 target 指向本 dao 源(新旧路径均匹配);真实文件/他处链接不动
+            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*")) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
                     $removed++
@@ -1018,7 +1019,7 @@ function Invoke-UnlinkClaude {
         $dropped = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $ln = $lines[$i]
-            if ($ln -match "windsurf-dao Tao field" -or ($ln -match "^@.*claude/dao\.md")) {
+            if ($ln -match "windsurf-dao Tao field" -or ($ln -match "^@.*(claude|ccswitch)/dao\.md")) {
                 $dropped = $true
                 continue
             }
@@ -1264,11 +1265,11 @@ switch ($Action) {
     .\dao.ps1 link-rules-all [-Root <dir>]    Bulk scan & symlink all projects under <Root>
                                                -AlwaysOnOnly  only link always_on rules (5 files)
                                                -DryRun        print without doing anything
-    .\dao.ps1 link-claude [-DryRun]           Symlink dao claude/{skills,commands,agents} into ~/.claude,
-                                               copy references/*.md to ~/.claude/references/,
+    .\dao.ps1 link-claude [-DryRun]           Symlink dao ccswitch/{skills,commands,agents} into ~/.claude,
+                                               copy docs/classics/*.md to ~/.claude/references/,
                                                and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
     .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, references/, dao.md @import, and hooks
-                                               from ~/.claude (reverse of link-claude; source claude/ untouched)
+                                               from ~/.claude (reverse of link-claude; source ccswitch/ untouched)
     .\dao.ps1 link-codex [-DryRun]            Mirror ~/.claude/skills into ~/.codex/skills
     .\dao.ps1 unlink-codex [-DryRun]          Remove Codex skill links that point into ~/.claude/skills
     .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts

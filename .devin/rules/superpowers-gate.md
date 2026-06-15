@@ -121,4 +121,4 @@ trigger: always_on
 
 → 核心模块改动走完整五步流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住。
 
-完整案例见 `README.md` 「实战案例」段；技术教训见无感切号项目 `data/evolution-lessons.csv` T183。
+完整案例见 `README.md` 「实战案例」段；技术教训见无感切号项目 `docs/evolution/evolution-lessons.csv` T183。

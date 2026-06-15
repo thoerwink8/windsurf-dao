@@ -7,7 +7,7 @@ description: 道德经哲学——八条不变原则、实践公理、推理链(
 
 > 道法自然。
 
-源文本 `references/道德经.md` 不可修改。一切规则从此推导。
+源文本 `docs/classics/道德经.md` 不可修改。一切规则从此推导。
 
 ## 八条不变原则
 
@@ -52,7 +52,7 @@ description: 道德经哲学——八条不变原则、实践公理、推理链(
 
 | 变更对象 | 门槛 |
 |---|---|
-| `references/道德经.md` | 不改 |
+| `docs/classics/道德经.md` | 不改 |
 | `../../../global_rules.md`（31 行元规则） | 极慎重——是 dao 体系的根；通过 symlink 影响所有项目 |
 | `dao-philosophy.md`（本文件） | 仅深化理解，不推翻 |
 | `dao-meta.md`（治理） | 极慎重——影响所有 dao 项目守卫 |
