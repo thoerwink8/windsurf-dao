@@ -1,22 +1,22 @@
 ---
-name: dao-windsurf-extension
-description: Windsurf扩展开发的已验证技术约束与最佳实践
+name: dao-ide-extension
+description: VSCode 系 IDE 扩展开发的已验证技术约束与最佳实践
 ---
 
-# Windsurf 扩展开发术
+# IDE 扩展开发术
 
 > 知人者智，自知者明。
 
 ## 适用场景
 
-- 开发 Windsurf / VSCode 扩展
-- 涉及 webview、存储、认证等宿主系统交互
+- 开发 VSCode 系 IDE 扩展（VSCode、Cursor 等）
+- 涉及 webview、存储等宿主系统交互
 
 ## 已验证约束
 
 ### 一、Webview 内联脚本禁令
 
-**约束**：Windsurf 静默阻止 webview 中的内联 `<script>` 执行。不报错、不警告，脚本直接不运行。`enableScripts: true` 和 CSP nonce 均无效。
+**约束**：VSCode 系 IDE 默认阻止 webview 中的内联 `<script>` 执行。不报错、不警告，脚本直接不运行。`enableScripts: true` 和 CSP nonce 均无效。
 
 **症状**：
 
@@ -58,22 +58,12 @@ const scriptUri = webview.asWebviewUri(
 
 ### 二、globalState 存储
 
-**机制**：`context.globalState` 底层存储在 `%APPDATA%\Windsurf\User\globalStorage\state.vscdb`（SQLite），按扩展 ID 隔离为 JSON 键值。
+**机制**：`context.globalState` 底层存储在 `%APPDATA%\<IDE>\User\globalStorage\state.vscdb`（SQLite），按扩展 ID 隔离为 JSON 键值。具体路径随 IDE 不同（VSCode 为 `Code`，Cursor 为 `Cursor`）。
 
 **约束**：
 
 - 大数据量触发警告（>2MB 会输出 `large extension state detected`）
 - 敏感数据建议用 `context.secrets`（OS 密钥链）或 `globalStorageUri`（文件系统）
-
-### 三、Token 注入
-
-**机制**：Windsurf 认证状态存储在同一 `state.vscdb` 中，键名以 `codeium.windsurf` 前缀。
-
-**约束**：
-
-- 直写 SQLite 需在进程外操作或使用 `sql.js`（纯 JS SQLite）
-- 热切换需触发 `codeium.restartLanguageServer` 命令
-- `sql.js` 的 `.wasm` 文件需包含在 vsix 中
 
 ## 构建与发布
 
@@ -82,7 +72,6 @@ const scriptUri = webview.asWebviewUri(
 **打包检查清单**：
 
 - [ ] `media/` 目录包含在 vsix 中
-- [ ] `node_modules/sql.js/dist/sql-wasm.wasm` 包含在 vsix 中
 - [ ] `enableScripts: true` + `localResourceRoots` 正确设置
 - [ ] CSP 使用 `webview.cspSource` 而非硬编码
 
@@ -121,6 +110,6 @@ const scriptUri = webview.asWebviewUri(
 ```
 边界探测术 → 发现约束 → 记录于此
 逆向拆解术 → 理解机制 → 记录于此
-此技能 → 为未来 Windsurf 扩展开发提供已验证的路径图
+此技能 → 为 IDE 扩展开发提供已验证的路径图
 平台探测方法论 → 穿过库抽象，获得协议级理解
 ```
