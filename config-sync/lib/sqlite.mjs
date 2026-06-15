@@ -155,6 +155,29 @@ export function sortDeep(value) {
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortDeep(value[key])]));
 }
 
+export function validateJsonFields(label, rows) {
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowId = row.key || row.name || row.id || `[${i}]`;
+    for (const [col, val] of Object.entries(row)) {
+      if (typeof val !== 'string') continue;
+      const trimmed = val.trimStart();
+      if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) continue;
+      try {
+        JSON.parse(val);
+      } catch (e) {
+        errors.push(`${label}.${rowId}.${col}: ${e.message}`);
+      }
+    }
+  }
+  if (errors.length) {
+    throw new Error(
+      `JSON 验证失败，拒绝写入 DB（防止损坏数据入库）：\n  ${errors.join('\n  ')}`,
+    );
+  }
+}
+
 function formatStamp(date) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
