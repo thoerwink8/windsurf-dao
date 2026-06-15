@@ -145,7 +145,7 @@
     {
       "id": "codegraph",
       "name": "codegraph",
-      "server_config": "{\"type\":\"stdio\",\"command\":\"codegraph\",\"args\":[\"serve\",\"--mcp\"]}",
+      "server_config": "{\"type\":\"stdio\",\"command\":\"${HOME}/AppData/Local/codegraph/current/bin/codegraph.exe\",\"args\":[\"serve\",\"--mcp\"]}",
       "description": null,
       "homepage": null,
       "docs": null,
