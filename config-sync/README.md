@@ -11,16 +11,15 @@ config-sync/
   common/       # 通用配置，进入 git
   providers/    # 供应商配置，含 token，不进入 git
   vendor/       # sqlite3 等本机工具安装包（进 git，免换机再下载）
-  lib/          # Node.js 脚本
+  lib/          # Node.js 脚本（sync.mjs 编排器 + export/restore/doctor/inventory）
   setup-sqlite.ps1
-  导出配置.bat
-  恢复配置.bat
-  体检.bat
-  检查Goal任务状态.bat
-  同步客户端 MCP.bat
-  同步Desktop MCP.bat
-  盘点来源.bat
+  dao-sync.bat       # 统一入口：DB ↔ 仓库 ↔ origin 同步 + 体检 + 盘点
+  同客端MCP.bat       # DB → 桌面端客户端 MCP 分发（独立）
+  同Desktop MCP.bat   # 同上（兼容旧入口）
+  检Goal任状.bat       # Goal 任务状态检查（独立，与配置同步无关）
 ```
+
+> 旧的 `导配.bat` / `恢配.bat` / `体.bat` / `盘来.bat` 已融合进 `dao-sync.bat`，不再单独存在。
 
 ## 两类配置
 
@@ -51,48 +50,57 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 ## 使用方式
 
-### 导出
+### 统一入口：dao-sync.bat
 
 双击：
 
 ```text
-导出配置.bat
+dao-sync.bat
 ```
 
-效果：从 `~/.cc-switch/cc-switch.db` 导出配置快照到：
+这是 DB ↔ 仓库快照 ↔ origin 三层同步的**唯一入口**，把旧的导出 / 恢复 / 体检 / 盘点融成一扇门，并加上 git 感知与三档护栏。流程：
 
-- `common/settings.json`
-- `common/mcp_servers.json`
-- `common/skills.json`
-- `common/prompts.json`
-- `common/proxy.json`
-- `providers/providers.json`
-- `providers/common-secrets.json`（common 配置里被脱敏字段的真实值）
+1. **状态板**（永远先打印）：当前分支、与 origin 的领先/落后、工作区是否干净、DB 通用配置与仓库快照是否一致。先看清三方真相，再动手。
+2. **选操作**：
+   - `[1] 下行`（默认 / 安全）：`origin → 本机 cc-switch`。落后 origin 时先 `git pull --ff-only` 对齐，再 restore。
+   - `[2] 上行`（慎重）：`本机 cc-switch → origin`。export → 展示 diff → 确认 → commit → push。
+   - `[3] 体检`：只读 doctor。
+   - `[4] 盘点`：只读 inventory。
+3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy / providers`。
 
-### 恢复
+#### 三档护栏
 
-双击：
+- 🔴 **硬拦（直接拒绝）**：上行时若本机**落后 origin**，直接拒绝执行——这正是「用旧 DB 盖掉 origin 新配置」这类分叉 bug 的命门。无 upstream、push 被拒同样硬拦。
+- 🟡 **确认（摊开 diff 再动）**：任何写操作（写 DB / commit+push）前展示差异，交互需点 `y`、非交互需 `--yes` 才继续。工作区脏时下行也会先确认。
+- 🟢 **提示（只告知）**：还原完成后提醒「重启 cc-switch，并切换一次 provider」。
+
+#### 真相源
+
+**origin = 共享配置唯一真相，cc-switch DB = 本地缓存。** 所以「下行」是默认安全路径，「上行」是少数、慎重、必须先对齐 origin 的发布路径。
+
+#### 命令行用法（可选，给脚本/自动化）
 
 ```text
-恢复配置.bat
+node lib/sync.mjs                                  交互式（推荐）
+node lib/sync.mjs --direction=down [--scope=all]    下行
+node lib/sync.mjs --direction=up   [--scope=settings,mcp] [--message="..."]  上行
+node lib/sync.mjs --doctor                          只读体检
+node lib/sync.mjs --inventory                       只读盘点
 ```
 
-效果：读取 `common/` 与 `providers/` 快照，写回 `~/.cc-switch/cc-switch.db`。恢复前会先备份数据库到：
+选项：`--scope=settings,mcp,skills,prompts,proxy,providers`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
 
-```text
-~/.cc-switch/backups/
-```
+#### 导出 / 恢复落点
 
-恢复后请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置。
-
-恢复时还会把仓库里的 `local-marketplaces/` 目录（如 Codex 本地插件市场 `oai-product-design`）铺回本机 `~/.codex/local-marketplaces/`。这类远程市场插件（如 Product Design）只缓存在本机、不随 cc-switch DB 走，纳入仓库后换机即可自动恢复；恢复后需在 Codex 里确认对应插件已启用。
+- **下行（恢复）**：读取 `common/` 与 `providers/` 快照写回 `~/.cc-switch/cc-switch.db`，写前自动备份到 `~/.cc-switch/backups/`。全量恢复时还会把仓库 `local-marketplaces/` 铺回 `~/.codex/local-marketplaces/`（部分 scope 恢复时跳过，避免误动）。
+- **上行（导出）**：从 `~/.cc-switch/cc-switch.db` 导出快照到 `common/settings.json`、`common/mcp_servers.json`、`common/skills.json`、`common/prompts.json`、`common/proxy.json`、`providers/providers.json`、`providers/common-secrets.json`（后两者在 `providers/`，被 `.gitignore` 忽略，不会进 commit）。
 
 ### 同步客户端 MCP
 
 双击：
 
 ```text
-同步客户端 MCP.bat
+同客端MCP.bat
 ```
 
 效果：从 cc-switch 的 `mcp_servers` 表读取已启用 MCP，并写入本机客户端配置：
@@ -105,15 +113,11 @@ Claude-3p / CloudCode Desktop 不把 `%LOCALAPPDATA%\Claude-3p\claude_desktop_co
 
 JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_servers]` 区块，保留其他配置字段；写入前会生成 `*.before-*-YYYYMMDD_HHMMSS.bak` 备份。当前策略是所有 MCP 先注册到 cc-switch，能用的启用，死配置保留但不启用。
 
-`同步Desktop MCP.bat` 是兼容旧入口，调用同一个脚本，也会同步 Claude Code CLI / Claude Desktop / Claude-3p / Codex。
+`同Desktop MCP.bat` 是兼容旧入口，调用同一个脚本，也会同步 Claude Code CLI / Claude Desktop / Claude-3p / Codex。
 
 ### 体检
 
-双击：
-
-```text
-体检.bat
-```
+在 `dao-sync.bat` 菜单选 `[3] 体检`，或跑 `dao-sync.bat --doctor` / `node lib/sync.mjs --doctor`。
 
 体检只读，不自动修改。它会检查：
 
@@ -138,7 +142,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 双击：
 
 ```text
-检查Goal任务状态.bat
+检Goal任状.bat
 ```
 
 用途：在 Claude Code Desktop 的 goal 模式卡住、异常中断或疑似空转后，扫描 `~/.claude/tasks` 与 `~/.claude/projects`，确认是否存在会让 goal 误判“目标未完成”的任务状态残留。
@@ -153,11 +157,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 ### 盘点来源
 
-双击：
-
-```text
-盘点来源.bat
-```
+在 `dao-sync.bat` 菜单选 `[4] 盘点`，或跑 `dao-sync.bat --inventory` / `node lib/sync.mjs --inventory`。
 
 只读盘点 skills / MCP 的多来源分布，标出重复 / 冲突 / 孤儿 / 悬空链，不改任何下发链。用于看清碎片化现状：
 
