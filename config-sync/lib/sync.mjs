@@ -97,11 +97,34 @@ function git(args, { allowFail = false } = {}) {
   }
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function gitWithRetry(args, { retries = 2, delay = 2000, allowFail = false } = {}) {
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      return git(args);
+    } catch (error) {
+      if (attempt <= retries) {
+        const wait = delay * attempt;
+        console.log(`  git ${args[0]} 失败（${attempt}/${retries + 1}）：${error.message.split('\n')[0]}`);
+        console.log(`  ${wait}ms 后重试……`);
+        sleepSync(wait);
+      } else if (allowFail) {
+        return null;
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
 function gitState({ fetch = true } = {}) {
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], { allowFail: true });
   let fetchError = null;
   if (fetch) {
-    const ok = git(['fetch', '--quiet'], { allowFail: true });
+    const ok = gitWithRetry(['fetch', '--quiet'], { allowFail: true });
     if (ok === null) fetchError = '（git fetch 失败：可能离线/无凭证；以下基于上次已知 origin）';
   }
   const upstream = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { allowFail: true });
@@ -248,7 +271,7 @@ async function runDown({ only, state, interactive, yes, dryRun }) {
     if (dryRun) {
       console.log('  [dry-run] 跳过 git pull。');
     } else {
-      const pulled = git(['pull', '--ff-only'], { allowFail: true });
+      const pulled = gitWithRetry(['pull', '--ff-only'], { allowFail: true });
       if (pulled === null) {
         hardBlock('git pull --ff-only 失败：本机与 origin 已分叉（无法快进）。请先手动 reconcile（rebase/merge）再来同步，避免旧盖新。');
       }
@@ -259,7 +282,8 @@ async function runDown({ only, state, interactive, yes, dryRun }) {
   }
 
   if (dryRun) {
-    console.log(`\n[dry-run] 接下来会：runRestore(${describeScope(only)}) 把 snapshot 写入 cc-switch DB（会先自动备份 DB）。`);
+    console.log(`\n[dry-run] 下行预览（范围：${describeScope(only)}）：`);
+    runRestore({ only, dryRun: true });
     return 0;
   }
 
@@ -281,7 +305,10 @@ async function runUp({ only, state, interactive, yes, dryRun, message }) {
   }
 
   if (dryRun) {
-    console.log('\n[dry-run] 接下来会：runExport 导出到 snapshot → 展示 diff → 确认 → git commit → git push（仅 config-sync/common）。');
+    console.log('\n[dry-run] 上行预览（不写 snapshot、不动 git）：');
+    console.log('  步骤：runExport 导出 DB → snapshot → 展示 diff → 确认 → git commit → git push');
+    console.log(`  范围：config-sync/common（${describeScope(only)}）`);
+    console.log('  实际执行请去掉 --dry-run。');
     return 0;
   }
 
@@ -308,7 +335,7 @@ async function runUp({ only, state, interactive, yes, dryRun, message }) {
   // 只提交 snapshot 路径，避免裹进无关的已暂存改动。
   git(['commit', '-m', commitMessage, '--', 'config-sync/common']);
   console.log('\n推送到 origin……');
-  const pushed = git(['push'], { allowFail: true });
+  const pushed = gitWithRetry(['push'], { allowFail: true });
   if (pushed === null) {
     hardBlock('git push 失败（可能 origin 又有新提交）。请 git pull 对齐后重试。本地已提交，不会丢失。');
   }
