@@ -99,8 +99,9 @@ config-sync/providers/
 
 ### 步骤 3 · 恢复 cc-switch 配置 + 本地插件市场
 
-```
-双击 config-sync/恢复配置.bat
+```powershell
+config-sync\dao-sync.bat restore
+# 或直接：node config-sync\lib\sync.mjs --restore
 ```
 
 它会：
@@ -133,7 +134,7 @@ config-sync/providers/
 
 ```powershell
 .\dao.ps1 status                       # dao 链接健康矩阵
-node config-sync\lib\doctor.mjs        # 配置一致性体检（0 问题为准）
+config-sync\dao-sync.bat doctor         # 配置一致性体检（0 问题为准）
 node config-sync\lib\goal-task-health.mjs   # （Codex 用户）goal 任务状态体检
 ```
 

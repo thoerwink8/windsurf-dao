@@ -348,15 +348,24 @@ dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文�
 
 ---
 
+## 工具速览
+
+| 工具 | 干什么 | 用法 |
+|---|---|---|
+| `dao.ps1` | 链接管理（部署 dao 到各宿主） | `.\dao.ps1 status` / `link-claude` / `link-codex` 等 |
+| `dao-sync.bat` | 配置同步（四合一） | `dao-sync.bat export\|restore\|doctor\|inventory` |
+
+完整命令见 [README · dao.ps1 命令一览](README.md#daops1-命令一览)。
+配置同步详情见 [`config-sync/README.md`](config-sync/README.md)。
+
 ## 参考文档
 
-想深入了解 dao 体系内部机制：
-
 - 体系架构：[README.md](README.md)
+- 部署/迁移：[MIGRATION.md](MIGRATION.md)
+- 新机器复刻：[NEW-MACHINE.md](NEW-MACHINE.md)
 - AI 自身指南：[AGENT_GUIDE.md](AGENT_GUIDE.md)
 - 规则总览：[`.devin/rules/README.md`](.devin/rules/README.md)
 - 道德经原文：[`references/道德经.md`](references/道德经.md)
-- 演化记录：[`data/evolution-entries.csv`](data/evolution-entries.csv)
 
 ---
 
