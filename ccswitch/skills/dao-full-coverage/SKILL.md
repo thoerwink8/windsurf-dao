@@ -157,7 +157,7 @@ dao-evolve 审查 dao 自己；本 skill 审查业务项目。两者正交，不
 | 全维度全深度 | 每次都 8 维度都深扫 | 浪费；按当前任务挑 |
 | 盲扫无结论 | 跑了一堆工具但不出报告 | 必须出统一格式报告 |
 | 不分严重度 | 把 typo 和 SQL 注入混在一起 | 必须打严重度标 |
-| 一次性 | 体检后不沉淀，下次重做 | 体检结果归位 `docs/evolution/evolution-entries.csv` |
+| 一次性 | 体检后不沉淀，下次重做 | 体检结果归位 `data/evolution-entries.csv` |
 
 ## 与其他 dao-* 协作
 

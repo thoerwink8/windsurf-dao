@@ -33,8 +33,8 @@ const isCode = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swi
 
 // dao 元层文件:ccswitch/dao.md 或 ccswitch/{skills,commands,agents}/dao-*
 // 路径可能是绝对(D:/.../ccswitch/dao.md)或相对(ccswitch/dao.md),故用 (^|/) 兼容两者
-const isDaoMeta = /(^|\/)claude\/dao\.md$/.test(norm) ||
-                  /(^|\/)claude\/(skills|commands|agents)\/dao-/.test(norm) ||
+const isDaoMeta = /(^|\/)ccswitch\/dao\.md$/.test(norm) ||
+                  /(^|\/)ccswitch\/(skills|commands|agents)\/dao-/.test(norm) ||
                   /(^|\/)\.windsurf\/(rules|skills|workflows)\//.test(norm);
 
 let context = "";

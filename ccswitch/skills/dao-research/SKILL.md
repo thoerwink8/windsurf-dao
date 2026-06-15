@@ -41,7 +41,7 @@ description: 前置研究术：分析"怎么做"时，自动搜索最优实践�
 
 > **前置**：采集**外部**信息前，**先盘点本项目已有底层资产**——
 > 外部插件/库可能有看起来诱人的"灵感"，但本项目可能早已有更深更稳的实现。
-> 先用 Grep / Glob 扫一遍 `src/`、`docs/specs/`、`docs/evolution/evolution-*.csv`，
+> 先用 Grep / Glob 扫一遍 `src/`、`docs/specs/`、`data/evolution-*.csv`，
 > 列出**本项目已有的相关基础设施**，再决定要不要去外面找新方案。
 
 **典型反例**：研究 a8-windsurf-helper 的 auto-continue.js（DOM 注入 textarea + Enter）

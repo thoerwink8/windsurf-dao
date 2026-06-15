@@ -17,8 +17,8 @@
 
 ## 一、背景与根因（已实测）
 
-- cc-switch 是常驻代理（端口 15721），同时是**多端配置中心**：维护 `common_config_ccswitch/codex/...`，切换 provider 时自动把 common 合并进各端配置文件。
-- cc-switch 已原生管理：`mcp_servers`（带 enabled_ccswitch/codex/gemini/opencode/hermes 各端开关）、`skills` + `skill_repos`、各端 common。
+- cc-switch 是常驻代理（端口 15721），同时是**多端配置中心**：维护 `common_config_claude/codex/...`，切换 provider 时自动把 common 合并进各端配置文件。
+- cc-switch 已原生管理：`mcp_servers`（带 enabled_claude/codex/gemini/opencode/hermes 各端开关）、`skills` + `skill_repos`、各端 common。
 - **痛点**：cc-switch 配置全在本地 SQLite（`~/.cc-switch/cc-switch.db`），不进 git、不可版本化、换机器丢失。
 - **流式开关丢失根因**：开关原只写在单个 provider 的 env，切到别的 provider 就丢。已修复——写进 `common_config_claude.env`（公共层，所有 provider 自动继承）。
 

@@ -18,7 +18,7 @@ description: 自动驾驶模式：AI 自主分解目标、递归执行、反思�
 |------|------|---------------|
 | `TODO.md` | 任务图（待做 / 已做） | 读取 `- [ ]` 作为任务源；执行后回写 `- [x]` |
 | `AGENT_GUIDE.md` | 人类可读知识库 | 维护项目概览、架构决策、开发指南与 CSV 指针 |
-| `docs/evolution/evolution-*.csv` | 演化真相源 | 收尾时先 `ensure`，再写入演化条目与教训 |
+| `data/evolution-*.csv` | 演化真相源 | 收尾时先 `ensure`，再写入演化条目与教训 |
 | `state.json` | 执行元数据（仅回退用） | 只存 commit hash 和 rollback_cmd；完成后删除 |
 
 两个文件不存在时 autopilot **创建**（初始化为标准格式），而非另建 plan.md / archive。
@@ -106,7 +106,7 @@ dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 �
 
 ## 二、演化索引
 
-> 演化记录已迁移至 `docs/evolution/evolution-entries.csv` + `docs/evolution/evolution-lessons.csv`。
+> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
 
 ```
 
@@ -396,7 +396,7 @@ git revert [N4-commit-hash] --no-edit
 
 > 知常曰明。重要 lesson 不上提 = 失明。
 
-§5.2 把 lesson 写入 `docs/evolution/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
+§5.2 把 lesson 写入 `data/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
 
 **评估三问**(逐条 lesson 过):
 
@@ -573,7 +573,7 @@ if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) 
 | 完成偏误（AI 觉得完成了但没有） | 新鲜用户测试 + 成功标准逐条验证 |
 | 无限延伸（不断生成新任务） | 连续 2 轮无缺口新增 → 强制退出 |
 | 双重追踪（另建 plan.md / archive/） | TODO.md 是唯一任务载体，禁止创建平行任务文件 |
-| 知识遗失（执行完不写演化记录） | 5.2 先 `ensure` 后写 `docs/evolution/evolution-*.csv` 是强制步骤，不可跳过 |
+| 知识遗失（执行完不写演化记录） | 5.2 先 `ensure` 后写 `data/evolution-*.csv` 是强制步骤，不可跳过 |
 | 全局污染（autopilot 行为渗漏到正常对话） | 退出时删除 state.json，ask_user_question 规则恢复 |
 | 越权执行（自动决策 🔀 红灯项） | 严格按 1.2.1 权限表：🔀 绝不碰，✋ 需标注假设，🔨 才可自动 |
 | 批量跳过（连做多个 task 才一次 commit / update / 验证） | 严格按 §2.1.1 涅槃门：每 task 5 步全勾才能进下一个，禁止跨 task 推进；合并 commit 等于损失精确回退能力 |

@@ -55,4 +55,4 @@ curl -s --max-time 10 "$DAO_HUB_URL/api/agents" -H "Authorization: Bearer $DAO_H
 
 ## 相关仓库的纪律
 
-- **devin-byok**（`github.com/thoerwink8/devin-byok`）：功能性代码变更必须 bump `package.json` `version` + 在 `docs/evolution/evolution-entries.csv` 追加一行 + commit message 带 `(vX.Y.Z)` 后缀；PR 的 version 必须高于目标分支，否则 `version-check` CI 拒绝合并。首次克隆跑 `npm install` 装 git hooks（`core.hooksPath scripts/hooks`）。
+- **devin-byok**（`github.com/thoerwink8/devin-byok`）：功能性代码变更必须 bump `package.json` `version` + 在 `data/evolution-entries.csv` 追加一行 + commit message 带 `(vX.Y.Z)` 后缀；PR 的 version 必须高于目标分支，否则 `version-check` CI 拒绝合并。首次克隆跑 `npm install` 装 git hooks（`core.hooksPath scripts/hooks`）。
