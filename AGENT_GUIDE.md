@@ -247,7 +247,7 @@ node lib/sync.mjs --inventory
 ```
 
 **注意**：
-- `providers/` 与 `common-secrets.json` 含 token，已被 `.gitignore` 忽略，**不要提交**。
+- `common-secrets.json` 含 settings 脱敏真实值，已被 `.gitignore` 忽略，**不要提交**。
 - 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.claude/settings.json`。
 - 终端状态栏 (`statusLine`) 是 `common_config_claude` 的一部分，同步后生效。
 
@@ -256,7 +256,7 @@ node lib/sync.mjs --inventory
 见 `NEW-MACHINE.md` 完整流程；核心四步：
 
 1. `git clone` 本仓库，运行 `dao.ps1 link-claude`。
-2. 把旧机的 `config-sync/providers/` 手动复制到新机同位置（含 token，不进 git）。
+2. 把旧机的 `config-sync/common-secrets.json` 手动复制到新机同位置（不进 git）。
 3. 启动一次 cc-switch 创建空 DB，然后运行 `dao-sync.bat restore`。
 4. 重启 cc-switch 并切换 provider，运行 `dao-sync.bat doctor` 确认问题 0 项。
 

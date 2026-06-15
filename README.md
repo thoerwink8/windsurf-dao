@@ -97,7 +97,7 @@ config-sync/
   dao-sync.bat           # 唯一入口（DB ↔ 仓库 ↔ origin 三层同步）
   lib/sync.mjs           # 编排器（也可 node lib/sync.mjs --doctor 直接调用）
   common/                # 通用配置快照（进 git）
-  providers/             # 供应商 token（不进 git，换机手动复制）
+  common-secrets.json    # settings 脱敏真实值（不进 git，换机手动复制）
 ```
 
 详见 [`config-sync/README.md`](config-sync/README.md)。

@@ -1,4 +1,4 @@
-providers/
+common-secrets.json
 *.local.json
 _tmp/
 vendor/sqlite/
