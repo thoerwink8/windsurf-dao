@@ -949,6 +949,7 @@ function Invoke-UnlinkClaude {
     $removed = 0; $skipped = 0; $err = 0
 
     # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
+    $oldClaudeSrc = Join-Path $DaoRoot "claude"   # 兼容旧路径(重构前 claude/ → ccswitch/)
     $specs = @(
         @{ Name = "skills";   Filter = "dao-*" },
         @{ Name = "commands"; Filter = "dao-*.md" },
@@ -959,8 +960,8 @@ function Invoke-UnlinkClaude {
         if (!(Test-Path $dstDir)) { continue }
         Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            # 只删 symlink,且 target 指向本 dao 源;真实文件/他处链接不动
-            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and $_.Target -like "$claudeSrc*") {
+            # 只删 symlink,且 target 指向本 dao 源(新旧路径均匹配);真实文件/他处链接不动
+            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*")) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
                     $removed++
