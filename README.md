@@ -41,135 +41,85 @@
 
 ## 包含什么
 
-### 规则文件（`.devin/rules/` · 对齐 Windsurf 4 trigger）
+### 规则文件（`.devin/rules/`）
 
-> 数量以目录为准：`ls .devin/rules/`。下表列核心几条，trigger 全分配见 `.devin/rules/README.md`。
+> 数量以目录为准：`ls .devin/rules/`。trigger 全分配见 `.devin/rules/README.md`。
 
-| 文件                  | trigger        | 内容                                          |
-| --------------------- | -------------- | --------------------------------------------- |
-| `dao-mantra.md`       | **always_on**  | dao 协作 mantra（道德经八句根基 + 场景速查）         |
-| `execution.md`        | **always_on**  | 项目铁律（项目感知/执行原则/涅槃门/续力）       |
-| `superpowers-gate.md` | **always_on**  | superpowers 触发门控（与 Plan Mode 解耦）          |
-| `shell.md`            | **always_on**  | 命令安全（超时/防卡/交互黑名单/服务命令/PowerShell/SSH/Inline 长命令） |
-| `cli.md`              | model_decision | 工具选择（CLI-first/MCP 边界/工具箱）             |
-| `workflow-system.md`  | model_decision | 工作流协作（选哪个工作流/静默深度模式）       |
-| `knowledge-routing.md`| **always_on**  | 知识归位（写到哪/Rule vs Skill 边界/_tmp 归位/Memory 归位四步） |
-| `quality.md`          | **glob**       | 代码质量门（编辑代码文件时自动触发）          |
-| `dao-meta.md`         | **glob**       | dao 元层守卫（编辑 dao-* 文件时自动触发）     |
-| `dao-philosophy.md`   | **manual**     | 八条不变原则（`@dao-philosophy` 显式调用）     |
+| 文件 | trigger | 内容 |
+|---|---|---|
+| `dao-mantra.md` | always_on | 道德经八句根基 + 场景速查 |
+| `execution.md` | always_on | 项目铁律（感知/执行/涅槃门/续力） |
+| `superpowers-gate.md` | always_on | superpowers 五步触发门控 |
+| `shell.md` | always_on | 命令安全（超时/防卡/PowerShell/SSH） |
+| `knowledge-routing.md` | always_on | 知识归位路由 |
+| `cli.md` | model_decision | 工具选择（CLI-first/MCP） |
+| `workflow-system.md` | model_decision | 工作流协作 |
+| `quality.md` | glob | 代码质量门 |
+| `dao-meta.md` | glob | dao 元层守卫 |
+| `dao-philosophy.md` | manual | 八条不变原则 |
 
-### 工作流（`.devin/workflows/` · Claude Code 侧 `claude/commands/dao-*.md`）
+### 工作流（`.devin/workflows/`）
 
-> 数量以目录为准：`ls .devin/workflows/`。下表列核心几条。
+> Claude Code 侧等价物在 `claude/commands/dao-*.md`。
 
-| 工作流              | 功能                                              |
-| ------------------- | ------------------------------------------------- |
-| `/dao-autopilot`    | 自主驾驶：探测 TODO.md/AGENT_GUIDE.md，映射任务 → 执行 → 回写，直到完成或中断 |
-| `/dao-dev`          | 从一句话需求到完整交付的全流程管线（道·哲学三阶九步）  |
-| `/dao-superpowers`  | 五步工程仪式：worktree→plan→execute→review→finish（术·代码重构） |
-| `/dao-cycle`        | 五相深度迭代（观→行→验→省→改升），直到涅槃        |
-| `/dao-distill`      | 会话级知识沉淀：扫描当前会话提取可复用洞察        |
-| `/dao-evolve`       | 系统自我进化 + 快速体检 + Git 考古，减法优先      |
-| `/dao-commit`       | 自动生成 commit message，按内聚性拆分多次提交     |
-| `/dao-doc`          | 文档生成与更新（读→定→写→校）                     |
-| `/dao-thread-tree`  | 处理 TODO.md `Open Threads` 未解决项              |
-| `/dao-session-sync` | 多会话协作（git 为共享状态，无需其他会话配合）    |
-
-### 技术栈处方（`.devin/stacks/`）
-
-| 处方 | 技术栈 | 触发场景 |
-|------|--------|----------|
-| `frontend-nextjs.md` | Next.js + shadcn + Tailwind | `/dev` 基建审计发现"需要前端" |
+| 工作流 | 功能 |
+|---|---|
+| `/dao-autopilot` | 自主驾驶：探测 TODO/AGENT_GUIDE → 执行 → 回写 |
+| `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
+| `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
+| `/dao-cycle` | 五相迭代（观→行→验→省→改升） |
+| `/dao-distill` | 会话级知识沉淀 |
+| `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
+| `/dao-commit` | 自动 commit message + 内聚拆分 |
+| `/dao-doc` | 文档生成与更新 |
+| `/dao-thread-tree` | 处理 Open Threads |
+| `/dao-session-sync` | 多会话协作（git 共享状态） |
 
 ### 技能（`.devin/skills/`）
 
-**元层与调度**
+> 共 27+ 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
 
-| 技能                      | 适用场景                                        |
-| ------------------------- | ----------------------------------------------- |
-| `dao-fa-mechanism`        | Windsurf 运行机制参考：注入格式/激活模式/目录结构 |
-| `dao-pyramid`             | Subagent 金字塔调度：高级出 spec，低级按 spec 执行 |
-| `dao-evolution`           | 演化条目与教训管理（`evolution-*.csv` 读写 + BM25 搜索） |
-| `dao-memory`              | 会话复盘与长期记忆沉淀：偏好、流程、skill 缺口、资料线索 |
-| `dao-skill-ecosystem`     | 技能供应链：缺口感知→查图书馆→junction/创建→反向入库 |
+| 类别 | 代表 skill | 一句话 |
+|---|---|---|
+| 元层调度 | `dao-pyramid` · `dao-fa-mechanism` | 金字塔 subagent / 机制参考 |
+| 开发镜头 | `dao-debug` · `dao-refactor` · `dao-test` · `dao-optimize` | cycle 内按需加载 |
+| 工程方法 | `dao-brainstorm` → `dao-plan` → `dao-execute` → `dao-review` → `dao-finish` | superpowers 五步 |
+| 领域专项 | `dao-research` · `dao-deploy` · `dao-cloud` · `dao-user-simulation` 等 | 按场景触发 |
 
-**开发流程（/cycle 镜头）**
+### 配置同步（`config-sync/`）
 
-| 技能                      | 适用场景                                        |
-| ------------------------- | ----------------------------------------------- |
-| `dao-debug`               | 死磕到底：三层螺旋×15种武器，穷尽自主手段        |
-| `dao-refactor`            | 安全重构：提取函数、消除重复、简化逻辑            |
-| `dao-decouple`            | 解耦镜头：六维耦合扫描→结构化解耦方案→派 refactor |
-| `dao-optimize`            | 性能分析与调优：测→策→行→验                       |
-| `dao-test`                | 测试驱动：RED-GREEN-REFACTOR + AAA 模式          |
-| `dao-observability`       | 定时任务/外部 API/锁/操作顺序调整的可观测性设计   |
+跨端配置备份 / 恢复 / 体检模块。以 cc-switch 为运行态真相源，把配置导出为可版本化的文件，换机时再恢复。
 
-**工程方法论**
+**统一入口**：`dao-sync.bat`（四合一：下行恢复 / 上行导出 / 体检 / 盘点）
 
-| 技能                      | 适用场景                                        |
-| ------------------------- | ----------------------------------------------- |
-| `dao-brainstorm`          | 苏格拉底式设计精炼：模糊想法→可实施 design 文档  |
-| `dao-plan`                | 把 design 拆成 2-5 分钟粒度的可执行任务清单      |
-| `dao-execute`             | 按 plan 逐 Task 执行 + checkpoint                |
-| `dao-review`              | 两阶段评审：spec compliance → code quality       |
-| `dao-verify`              | 涅槃门：声明完成前必有 fresh 验证证据             |
-| `dao-finish`              | 分支收尾：merge/PR/keep/discard 四选一 + cleanup  |
-| `dao-worktree`            | git worktree 隔离工作区：创建→基线→工作→清理     |
-| `dao-parallel`            | 多 subagent 并行调度（受 Windsurf 账户配额限制） |
+```text
+config-sync/
+  dao-sync.bat           # 唯一入口（DB ↔ 仓库 ↔ origin 三层同步）
+  lib/sync.mjs           # 编排器（也可 node lib/sync.mjs --doctor 直接调用）
+  common/                # 通用配置快照（进 git）
+  providers/             # 供应商 token（不进 git，换机手动复制）
+```
 
-**领域专项**
-
-| 技能                      | 适用场景                                        |
-| ------------------------- | ----------------------------------------------- |
-| `dao-research`            | 前置研究：搜索最优实践，结合项目上下文综合方案    |
-| `dao-empathy`             | 用户五感共情术（以百姓心为心 49章）：以身观身五步 + Persona  |
-| `dao-full-coverage`       | 主动全面体检术（病病 71章）：8 维度扫描业务项目     |
-| `dao-user-simulation`     | 用户视角仿真术（以身观身 54章）：chrome-devtools/playwright 实跑 E2E |
-| `dao-reverse-engineering` | 面对未知/混淆代码库，五步法：锚→展→交→验→归      |
-| `dao-boundary-probe`      | 集成外部系统前，三步法：识壁→探路→择水            |
-| `dao-frontend-aesthetics` | 受限空间中的高信息密度界面                       |
-| `dao-terminal-resilience` | 终端卡死诊断与五感降级恢复                       |
-| `dao-windsurf-extension`  | Windsurf/VSCode 扩展开发的已验证技术约束          |
-| `dao-deploy`              | 项目上服务器标准流程：连接→环境→推送→构建→服务  |
+详见 [`config-sync/README.md`](config-sync/README.md)。
 
 ### MCP 配置（`mcp/`）
 
-预配置的 MCP 服务器启动脚本，直接 node 执行（绕过 npx 超时）：
-
-| 文件                         | 域     | 说明                                                |
-| ---------------------------- | ------ | --------------------------------------------------- |
-| `chrome-devtools-mcp.cmd`    | 浏览器 | 页面交互、性能分析、截图（--isolated 临时 profile） |
-| `context7-mcp.cmd`           | 文档   | 获取最新库/框架文档                                 |
-| `github-mcp.cmd`             | 代码   | GitHub API（含 Clash 代理自检 + proxy bootstrap）   |
-| `github-proxy-bootstrap.js`  | 代理   | 为 GitHub MCP 补丁 fetch 走 Clash 代理              |
-| `gitee-mcp.cmd`              | 代码   | Gitee API（国内直连，无需代理）                     |
-| `playwright-mcp.cmd`         | 浏览器 | 无头浏览器自动化（Multi-Agent 隔离版）              |
-| `playwright-mcp-config.json` | 配置   | Playwright 浏览器参数（viewport/timeout/args）      |
-| `tavily-mcp.cmd`             | 搜索   | Web 搜索（国内直连，1000次/月免费）                 |
+预配置的 MCP 启动脚本（绕过 npx 超时）：chrome-devtools / context7 / github / playwright / tavily 等。
 
 ### 元规则（`global_rules.md`）
 
-31 行跨项目元规则：一·感（感官完整度） / 二·德（阳为/阴不为/和自然） / 三·动（天觉/地行/人验） / 反·归（反者道之动）。
-
-部署：`dao.ps1 link-global` 创建 symlink → `~/.codeium/windsurf/memories/global_rules.md`，对所有项目全局生效。零副本、零 UI 操作、`git pull` 自动同步。
+31 行跨项目元规则。部署：`dao.ps1 link-global` → symlink 到 `~/.codeium/windsurf/memories/`，所有项目全局生效。
 
 ### 项目知识文件
 
 每个接入 dao 的项目推荐维护：
 
-| 文件            | 作用                                           |
-| --------------- | ---------------------------------------------- |
-| `USAGE.md`      | 用户使用手册（提需姿势 / FAQ / workflow 区别）⭐ |
-| `TODO.md`       | 任务图唯一载体（待完成 / 进行中 / 已完成）     |
-| `AGENT_GUIDE.md` | 活体知识库（项目概览、架构决策、开发指南、CSV 指针） |
-| `data/evolution-entries.csv` | 演化条目的结构化真相源                  |
-| `data/evolution-lessons.csv` | 教训的结构化真相源                      |
-
-windsurf-dao 自身也以此为范——身教重于言教。
-
-### 源文本（`references/道德经.md`）
-
-老子《道德经》全文——一切规则的推导源头，不可修改。
+| 文件 | 作用 |
+|---|---|
+| `USAGE.md` | 用户使用手册 ⭐ |
+| `TODO.md` | 任务图唯一载体 |
+| `AGENT_GUIDE.md` | 活体知识库 |
+| `data/evolution-*.csv` | 演化条目 + 教训 |
 
 ## Claude Code 侧（双栈共存）
 
@@ -189,121 +139,78 @@ windsurf-dao 自身也以此为范——身教重于言教。
 
 ## 快速开始
 
-### 0. 先看使用手册（推荐）
-
-[USAGE.md](USAGE.md) · 3 分钟入门，不需要懂道德经。读过之后再看下面部署步骤。
-
-### 1. 克隆仓库
+> [USAGE.md](USAGE.md) · 3 分钟入门，不需要懂道德经。
 
 ```bash
 git clone <repo-url>
+cd windsurf-dao
 ```
 
-### 2. 部署
-
-**Sidecar 模式**：在 Windsurf 中将 windsurf-dao 与目标项目同时打开为多 workspace，rules/skills/workflows 自动跨 workspace 可见。
+**按宿主选部署命令**：
 
 ```powershell
-# 链接全局规则到 Windsurf 配置（一次性）
-.\dao.ps1 link-global
+# Windsurf（Sidecar 模式：打开 workspace 即生效）
+.\dao.ps1 link-global            # 一次性，链接元规则
 
-# 查看状态
-.\dao.ps1 status
+# Claude Code（全局生效）
+.\dao.ps1 link-claude            # symlink skills/commands/agents + @import dao.md
+
+# Codex
+.\dao.ps1 link-codex             # mirror skills → ~/.codex/skills
+.\dao.ps1 link-codex-prompts     # 高频 dao prompts → ~/.codex/prompts
+
+# 验证
+.\dao.ps1 status                 # 链接健康矩阵
 ```
 
-### 3. 开始使用
+## dao.ps1 命令一览
 
-在 Windsurf 中打开目标项目（确保 windsurf-dao workspace 也开着），AI 自动加载规则、工作流和技能。
+| 命令 | 作用 |
+|---|---|
+| `status` | 查看 dao 链接健康状态 |
+| `link-global` | 链接 `global_rules.md` → Windsurf 全局配置 |
+| `link-rules <project>` | symlink dao rules 到指定项目 |
+| `link-rules-all [-Root <dir>]` | 批量扫描并 symlink 所有项目 |
+| `link-claude [-DryRun]` | 部署 dao 到 Claude Code（skills/commands/agents + @import） |
+| `unlink-claude [-DryRun]` | 反向移除 Claude Code 中的 dao 链接 |
+| `link-codex [-DryRun]` | mirror Claude skills → Codex |
+| `unlink-codex [-DryRun]` | 移除 Codex skill 链接 |
+| `link-codex-prompts [-DryRun]` | 高频 dao 命令写入 Codex prompts |
+| `unlink-codex-prompts [-DryRun]` | 移除 Codex prompts |
 
-试试：
-
-- 给 AI 一个需求，观察它是否自动进入 `/dao-dev` 管线
-- 输入 `/dao-autopilot` 让 AI 自主驾驶完成复杂目标
-- 输入 `/dao-cycle` 观察五相迭代
-- 输入 `/dao-distill` 从对话 + Git 历史中提取教训
+通用选项：`-AlwaysOnOnly`（仅 link always_on 类）、`-DryRun`（预览不写入）。
 
 ## 部署结构
 
-Sidecar 模式下，windsurf-dao 作为独立 workspace 存在，目标项目无需包含任何 dao 文件：
-
 ```
-windsurf-dao/                  # Sidecar workspace——始终保持打开
-├── global_rules.md            # 通过 link-global 部署到 ~/.codeium/windsurf/memories/
-├── dao.ps1                    # status / link-global
-├── data/evolution-*.csv       # 演化条目 + 教训库（dao 自身演化）
-└── .devin/
-    ├── rules/                 # 11 文件 5 层架构（v2 + dao-mantra）
-    ├── skills/dao-*/          # 自动跨 workspace 可见
-    └── workflows/dao-*.md     # 自动跨 workspace 可见
+windsurf-dao/                  # Sidecar / 真相源
+├── .devin/rules|skills|workflows  # Windsurf 侧
+├── claude/skills|commands|agents  # Claude Code 侧
+├── config-sync/               # 配置同步（dao-sync.bat 四合一入口）
+├── dao.ps1                    # 链接管理
+└── global_rules.md            # 元规则
 
-target-project/                # 你的工作项目
-├── TODO.md                    # 任务图唯一载体
-├── AGENT_GUIDE.md             # 项目活体知识库
-├── data/evolution-*.csv       # 项目自身的演化与教训
-└── .devin/                 # 仅项目自有内容（无 dao-* 链接）
-    ├── rules/*.md
-    ├── skills/*/
-    └── workflows/*.md
+target-project/                # 你的工作项目（无 dao 文件）
+└── .devin/                    # 仅项目自有内容
 ```
 
-**变更流**：编辑 windsurf-dao 中的文件 → 所有开着的 workspace 即时可见 → `/dao-commit` 提交。
+**变更流**：编辑 windsurf-dao → 所有 workspace 即时可见 → `/dao-commit` 提交。
 
 ## 自定义
 
-这套体系是**可进化的**。使用 `/dao-evolve` 工作流来审查和改进：
+体系可进化。`/dao-evolve` 审查改进。为道日损——删 > 改 > 增。
 
-- **删**：移除不适合你的规则或技能
-- **修**：调整工作流步骤以匹配你的习惯
-- **增**：添加新的 skills 或 workflows（但记住：为道日损）
-
-### 添加新技能
-
-```
-.devin/skills/your-skill/
-└── skill.md
-```
-
-参考现有技能的格式：`name` + `description` (frontmatter) + 场景描述 + 步骤法 + 反模式。
-
-### 添加新工作流
-
-```
-.devin/workflows/your-workflow.md
-```
-
-格式：YAML frontmatter（description）+ Markdown 正文。
+添加 skill：`.devin/skills/your-skill/skill.md`（frontmatter: name + description）。
+添加 workflow：`.devin/workflows/your-workflow.md`（YAML frontmatter + Markdown）。
 
 ## 哲学基础
 
 > 为学日益，为道日损。损之又损，以至于无为。无为而无不为。
 
-这套系统的核心信念：
-
-1. **AI 配对编程是关系，不是工具调用** — 人+AI=AGI，是冲气以为和
-2. **真正的进化是减法** — 规则越少越好，能力越内化越好
-3. **规则的终态是忘掉规则** — 含德之厚，比于赤子
-4. **身教重于言教** — 推广给别人的范式，自身先实践
-
-## 实战案例
-
-### superpowers 五步流程的实战价值（2026-05-13 · wuganjiqie hub CPU 优化）
-
-> "图难于其易，为大于其细" — 完整流程不是浪费，是让难事变易、大事变细。
-
-**起源**：用户提到 wuganjiqie hub 进程 CPU ~33% 常态负载，问"能优化吗"。AI 显式触发 superpowers，按五步走完一个完整周期：
-
-| 步 | 产出 | 关键决定 |
-|---|---|---|
-| 1 brainstorm | `docs/specs/2026-05-13-cold-hot-refresh-design.md` (135 行) | 3 方案对比 (拉长 interval / 热冷分档 / 全按需)，用户选热冷分档 |
-| 2 worktree | `feature/cold-hot-refresh` 分支在 `~/.config/superpowers/worktrees/` | 主线不动 |
-| 3 plan | `docs/specs/2026-05-13-cold-hot-refresh-plan.md` (205 行) | 9 个 2-5 min Task + 完整代码模板 + 依赖图 |
-| 4 execute | 6 个 server commit (T1-T6) | 单 task 5 步闭环 (autopilot §2.1.1) |
-| 5 review | reviewer-critical APPROVE_WITH_FIXES → 普通 reviewer Stage1+2 PASS | **抓到 P1-3: backfill SQL 子查询无 `idx_lease_history_account_id` 索引，会阻塞 onModuleInit 几秒** |
-| 6 finish | merge master + GHA 4m42s + ssh fresh 验证 + worktree cleanup | CPU 实测 **54% → 5.1%**（远超 25% 目标） |
-
-**关键学到的事**：reviewer-critical 抓到的 P1-3 索引问题，是 AI 自检难以发现的——backfill SQL 看着没问题，但放到生产 lease_history 表（永久归档）就会扫几百万行阻塞启动。**如果跳过 reviewer-critical 直接合入，上线后才发现启动卡顿，且不易归因**。核心模块改动走完整流程不是仪式感，是让看不见的 bug 在 review 阶段被抓住（见 [`dao-mantra.md`](.devin/rules/dao-mantra.md) 与 [`superpowers-gate.md`](.devin/rules/superpowers-gate.md)）。
-
-**完整教训沉淀**：见 wuganjiqie 项目 `data/evolution-lessons.csv` T176-T183 与 dao-debug skill 新增的 P3/P4 模式。
+1. **AI 配对编程是关系** — 人+AI=AGI，冲气以为和
+2. **进化是减法** — 规则越少越好，能力越内化越好
+3. **规则终态是忘掉规则** — 含德之厚，比于赤子
+4. **身教重于言教** — 推广的范式，自身先实践
 
 ## 许可
 
