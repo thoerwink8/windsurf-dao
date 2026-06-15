@@ -251,7 +251,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 - rules 9 → 10，加 dao-mantra 行
 - 在 5 层架构归类——属于"协作 mantra"层（新设），位于"元规则" / "项目铁律"之间
 
-### ✏️ 文件 9：`data/evolution-entries.csv`（新增 e164）
+### ✏️ 文件 9：`docs/evolution/evolution-entries.csv`（新增 e164）
 
 ```
 e164,new,2026-05-10,dao-system-v3,🌐,dao 体系道德经化系统升级 — 11 关键词→8 根基+7 增补+3 缺口 skill+1 工程 workflow,

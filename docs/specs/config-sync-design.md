@@ -12,7 +12,7 @@
 | 触发 | 切换中转后流式开关丢失 → 用户提出"统一治理三端配置"想法 |
 | 状态 | **待用户审批** |
 | 模式 | 乙：cc-switch 为真相主中心，config-sync 做 db ⇄ 文件 + 体检 |
-| 位置 | `windsurf-dao/config-sync/`（与 claude/、.devin/ 平级的中性模块） |
+| 位置 | `windsurf-dao/config-sync/`（与 ccswitch/、.devin/ 平级的中性模块） |
 | 交互 | 双击 .bat 入口，脚本 `__dirname` 自动定位，跨机零硬编码路径 |
 
 ## 一、背景与根因（已实测）
