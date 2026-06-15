@@ -134,6 +134,11 @@ function compareSkillsSnapshot() {
   if (skillsSame && reposSame) pass(`skills / skill_repos 与 common 快照一致（skills=${dbSkills.length}, repos=${dbRepos.length}）。`);
   else warn(`skills / skill_repos 与 common 快照不一致：db skills=${dbSkills.length}, snapshot skills=${(snapshot.skills || []).length}; db repos=${dbRepos.length}, snapshot repos=${(snapshot.skill_repos || []).length}。`);
 }
+
+function checkRuntimeSettingsGuard() {
+  const runtimeRows = selectRows('settings', "WHERE key = 'claude_desktop_gateway_token'");
+  if (!runtimeRows.length || !String(runtimeRows[0].value || '').trim()) {
+    fail('settings.claude_desktop_gateway_token 缺失。Desktop 到 cc-switch Gateway 认证会 401。');
   } else {
     pass('settings.claude_desktop_gateway_token 存在（仅检查存在，不打印值）。');
   }

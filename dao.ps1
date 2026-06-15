@@ -457,7 +457,7 @@ function Invoke-LinkClaude {
             try {
                 $settings = $sraw | ConvertFrom-Json
                 $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "dao-field" -Force
-                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                 Write-Host "    [set  ] outputStyle: dao-field" -ForegroundColor Green
                 $linked++
             } catch {
@@ -528,7 +528,7 @@ function Invoke-LinkClaude {
                     $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @()
                 }
                 $settings.hooks.PostToolUse = @($settings.hooks.PostToolUse) + $hookEntry
-                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                 Write-Host "    [add  ] PostToolUse hook -> dao-glob-gate.js" -ForegroundColor Green
                 $linked++
             } catch {
@@ -571,7 +571,7 @@ function Invoke-LinkClaude {
                     $settings.hooks | Add-Member -NotePropertyName UserPromptSubmit -NotePropertyValue @()
                 }
                 $settings.hooks.UserPromptSubmit = @($settings.hooks.UserPromptSubmit) + $titleHookEntry
-                $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                 Write-Host "    [add  ] UserPromptSubmit hook -> dao-cn-title.js" -ForegroundColor Green
                 $linked++
             } catch {
@@ -1069,7 +1069,7 @@ function Invoke-UnlinkClaude {
                             $settings.PSObject.Properties.Remove('hooks')
                         }
                     }
-                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                     Write-Host "    [remove] dao-glob-gate hook" -ForegroundColor Green
                     $removed++
                 } catch {
@@ -1107,7 +1107,7 @@ function Invoke-UnlinkClaude {
                             $settings.PSObject.Properties.Remove('hooks')
                         }
                     }
-                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                     Write-Host "    [remove] dao-cn-title hook" -ForegroundColor Green
                     $removed++
                 } catch {
@@ -1145,7 +1145,7 @@ function Invoke-UnlinkClaude {
                             $settings.PSObject.Properties.Remove('hooks')
                         }
                     }
-                    $settings | ConvertTo-Json -Depth 20 | Set-Content $settingsPath -Encoding UTF8
+                    [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
                     Write-Host "    [remove] dao-settings-sync SessionStart hook" -ForegroundColor Green
                     $removed++
                 } catch {
