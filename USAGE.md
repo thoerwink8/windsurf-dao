@@ -365,7 +365,7 @@ dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文�
 - 新机器复刻：[NEW-MACHINE.md](NEW-MACHINE.md)
 - AI 自身指南：[AGENT_GUIDE.md](AGENT_GUIDE.md)
 - 规则总览：[`.devin/rules/README.md`](.devin/rules/README.md)
-- 道德经原文：[`references/道德经.md`](references/道德经.md)
+- 道德经原文：[`docs/classics/道德经.md`](docs/classics/道德经.md)
 
 ---
 

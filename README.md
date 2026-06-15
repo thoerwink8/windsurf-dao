@@ -60,7 +60,7 @@
 
 ### 工作流（`.devin/workflows/`）
 
-> Claude Code 侧等价物在 `claude/commands/dao-*.md`。
+> Claude Code 侧等价物在 `ccswitch/commands/dao-*.md`。
 
 | 工作流 | 功能 |
 |---|---|
@@ -119,23 +119,27 @@ config-sync/
 | `USAGE.md` | 用户使用手册 ⭐ |
 | `TODO.md` | 任务图唯一载体 |
 | `AGENT_GUIDE.md` | 活体知识库 |
-| `data/evolution-*.csv` | 演化条目 + 教训 |
+| `docs/evolution/evolution-*.csv` | 演化条目 + 教训 |
+
+### 源文本（`docs/classics/道德经.md`）
+
+老子《道德经》全文——一切规则的推导源头，不可修改。
 
 ## Claude Code 侧（双栈共存）
 
-> 同源不同壳。`claude/` 与 `.devin/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+> 同源不同壳。`ccswitch/` 与 `.devin/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
 
-迁移到 Claude Code CLI 后新增 `claude/` 目录作为 Claude Code 侧真相源，与上面的 `.devin/` 并列。规则内核同源，外壳按宿主能力裁剪（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，dao 只保留不重叠的独有增量）。部署见 [MIGRATION.md · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
+迁移到 Claude Code CLI 后新增 `ccswitch/` 目录作为 Claude Code 侧真相源，与上面的 `.devin/` 并列。规则内核同源，外壳按宿主能力裁剪（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，dao 只保留不重叠的独有增量）。部署见 [MIGRATION.md · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
 
 | 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
 |---|---|---|---|
-| 场域根基 | `claude/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
-| 技能 | `claude/skills/dao-*/` | 38 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含原 dao + 部分 rule 转 skill + 自检 skill） |
-| 命令 | `claude/commands/dao-*.md` | 10 | slash command，`/dao-dev` `/dao-cycle` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
-| 子代理 | `claude/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
-| 技术栈处方 | `claude/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
+| 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.ccswitch/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
+| 技能 | `ccswitch/skills/dao-*/` | 38 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含原 dao + 部分 rule 转 skill + 自检 skill） |
+| 命令 | `ccswitch/commands/dao-*.md` | 10 | slash command，`/dao-dev` `/dao-cycle` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
+| 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
+| 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 
-部署入口：`dao.ps1 link-claude` 一键 symlink 上述对象到 `~/.claude/`，并幂等追加 `dao.md` 的 `@import`。
+部署入口：`dao.ps1 link-claude` 一键 symlink 上述对象到 `~/.ccswitch/`，并幂等追加 `dao.md` 的 `@import`。
 
 ## 快速开始
 
@@ -185,7 +189,7 @@ cd windsurf-dao
 ```
 windsurf-dao/                  # Sidecar / 真相源
 ├── .devin/rules|skills|workflows  # Windsurf 侧
-├── claude/skills|commands|agents  # Claude Code 侧
+├── ccswitch/skills|commands|agents  # Claude Code 侧
 ├── config-sync/               # 配置同步（dao-sync.bat 四合一入口）
 ├── dao.ps1                    # 链接管理
 └── global_rules.md            # 元规则

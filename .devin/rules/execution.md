@@ -9,7 +9,7 @@ trigger: always_on
 
 ## 项目感知（每次对话首条请求）
 
-当前 workspace 有 `AGENT_GUIDE.md` 或 `docs/evolution.md`，但无 `data/evolution-entries.csv` → **立即**运行 `migrate.py <project_root>`，不等用户提起，不问确认。迁移是无损的。
+当前 workspace 有 `AGENT_GUIDE.md` 或 `docs/evolution.md`，但无 `docs/evolution/evolution-entries.csv` → **立即**运行 `migrate.py <project_root>`，不等用户提起，不问确认。迁移是无损的。
 
 ## 执行原则
 

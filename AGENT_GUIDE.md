@@ -1,6 +1,6 @@
 # windsurf-dao · Agent 指南
 
-> 本文件是 windsurf-dao 的活体知识库。演化记录见 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
+> 本文件是 windsurf-dao 的活体知识库。演化记录见 `docs/evolution/evolution-entries.csv` + `docs/evolution/evolution-lessons.csv`。
 > 项目概览见 `README.md`。
 
 ---
@@ -26,9 +26,9 @@
 | `.devin/rules/`             | 11 文件 5 层架构（详见 `.devin/rules/README.md`，含 dao-mantra） |
 | `.devin/workflows/dao-*.md` | 10 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/session-sync/thread-tree/superpowers） |
 | `.devin/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
-| `references/道德经.md`         | 一切规则的推导源头，不可修改                           |
+| `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
-| `data/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
+| `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
 | `.devin/agents/*/AGENT.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
 
 **部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
@@ -53,7 +53,7 @@
 
 **2. 知识归位**（知识已落地）
 
-- `data/evolution-entries.csv` / `data/evolution-lessons.csv` 已写入本次演化记录？
+- `docs/evolution/evolution-entries.csv` / `docs/evolution/evolution-lessons.csv` 已写入本次演化记录？
 - TODO.md 已完成项已更新？
 
 **3. 减法确认**（删掉了什么）
@@ -74,7 +74,7 @@
 ---
 
 ## 二、演化索引
-> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
+> 演化记录已迁移至 `docs/evolution/evolution-entries.csv` + `docs/evolution/evolution-lessons.csv`。
 > 使用 `search.py` 搜索教训，使用 `search.py stats` 查看统计。
 
 ---
@@ -221,7 +221,7 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 
 | 层级 | 位置 | 工具 | 同步内容 |
 |---|---|---|---|
-| **规则/技能/命令** | `claude/` → `~/.claude/` | `dao.ps1 link-claude` | skills、commands、agents、references、styles、hooks、`@import` |
+| **规则/技能/命令** | `ccswitch/` → `~/.claude/` | `dao.ps1 link-claude` | skills、commands、agents、references、styles、hooks、`@import` |
 | **运行态配置** | `~/.cc-switch/cc-switch.db` ↔ `config-sync/` | `dao-sync.bat`（四合一）或 `node lib/sync.mjs --<cmd>` | env、hooks、model、statusLine、MCP、providers、prompts |
 
 **关键原则**：`cc-switch` 是运行态真相源；`config-sync` 是它的版本化备份 / 换机恢复工具。日常修改 cc-switch 后，应导出快照到 `config-sync/common/` 并提交；换机时再从快照恢复。
@@ -248,7 +248,7 @@ node lib/sync.mjs --inventory
 
 **注意**：
 - `providers/` 与 `common-secrets.json` 含 token，已被 `.gitignore` 忽略，**不要提交**。
-- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.claude/settings.json`。
+- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.ccswitch/settings.json`。
 - 终端状态栏 (`statusLine`) 是 `common_config_claude` 的一部分，同步后生效。
 
 ### 5.3 新机器复刻步骤
@@ -285,4 +285,4 @@ node lib/sync.mjs --inventory
 - Bash/PowerShell 的 `grep` 在 Windows 下常遇到引号、反斜杠、管道转义问题，且大文件容易卡死。
 - 权限层面，`common_config_claude.permissions` 已 deny 掉 `Bash(grep:*)`、`Bash(find:*)`、`PowerShell(Select-String:*)` 等，强制模型走 Grep-first。
 
-本条同时写入了 `~/.claude/CLAUDE.md`，每条消息常驻提醒。
+本条同时写入了 `~/.ccswitch/CLAUDE.md`，每条消息常驻提醒。

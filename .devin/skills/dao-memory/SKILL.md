@@ -72,7 +72,7 @@ description: 任务结束、会话复盘、定时回顾、用户反馈后，用�
 如果用户要求“读历史”“继续会话”“从上次接着做”，优先按实际可访问入口恢复上下文：
 
 - Codex 线程：用线程列表和 `read_thread` 读取最近 turn 摘要。
-- Claude Code / Claude Desktop：查 `~/.claude/projects/**.jsonl`、桌面端配置和 cc-switch 同步索引。
+- Claude Code / Claude Desktop：查 `~/.ccswitch/projects/**.jsonl`、桌面端配置和 cc-switch 同步索引。
 - cc-switch：查 `cc-switch.db`、`session_log_sync`、skills/prompts/settings 等表，只读定位来源。
 - 本地项目：查 `git status`、相关文档、最近改动和会话中提到的产物。
 
@@ -228,7 +228,7 @@ memory/
 - 设计模糊时先用 `dao-brainstorm`，不要让记忆替代需求澄清。
 - 需要外部资料时用 `dao-research`，再把可靠结论写入 `research-log.md`。
 - 遇到 bug 时用 `dao-debug`，复盘阶段再用本 skill 沉淀调试经验。
-- 教训/踩坑需要可搜索、可追溯时，用 `dao-evolution` 写入 `data/evolution-*.csv`。
+- 教训/踩坑需要可搜索、可追溯时，用 `dao-evolution` 写入 `docs/evolution/evolution-*.csv`。
 - 发现 skill 缺口时，联动 `dao-skill-ecosystem` 判断查库、安装还是创建。
 - 创建或修改 skill 时用 `skill-creator` 和 `dao-meta`。
 - 声明完成前用 `dao-verify` 确认实际结果。

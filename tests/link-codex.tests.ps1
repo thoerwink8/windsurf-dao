@@ -107,7 +107,7 @@ try {
     Assert-Equal $beforeAgent (Get-Content -Path (Join-Path $claudeDir "agents\dao-test.md") -Raw) "link-codex must not edit Claude agents"
 
     $repoOnlyDaoSkill = Join-Path $TmpRoot ".codex\skills\dao-boundary-probe"
-    Assert-True (-not (Test-Path $repoOnlyDaoSkill)) "link-codex should mirror ~/.claude/skills, not repo-only dao skills"
+    Assert-True (-not (Test-Path $repoOnlyDaoSkill)) "link-codex should mirror ~/.ccswitch/skills, not repo-only dao skills"
 
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript unlink-codex | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "unlink-codex should exit successfully"
