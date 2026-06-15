@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { readJsonIfExists, snapshotPaths, decodePaths, localMarketplacesRepoDir, localMarketplacesHomeDir } from './paths.mjs';
 import {
   backupDb,
@@ -9,6 +10,7 @@ import {
   upsertStatements,
 } from './sqlite.mjs';
 import { applySecrets, commonSecretsPath, countPlaceholders } from './secrets.mjs';
+import { parseScopeArg, wants } from './scope.mjs';
 
 // 把脱敏的 settings 行还原成真实值，并把 ${PROJECT_ROOT}/${HOME} 路径占位符还原成本机路径。JSON 行用 common-secrets.json 合并；非 JSON（如 codex TOML）只还原路径。
 function rehydrateSettings(rows) {
@@ -59,21 +61,26 @@ function restoreLocalMarketplaces() {
   return { restored: names.length, skipped: false, names };
 }
 
-function main() {
-  const snapshots = loadSnapshots();
-  validateProviders(snapshots.providers);
+// 仓库 snapshot → cc-switch DB。only=null 恢复全部；否则只恢复命中的 scope。
+export function runRestore({ only = null } = {}) {
+  const snapshots = loadSnapshots(only);
+  if (wants(only, 'providers')) validateProviders(snapshots.providers);
 
   const backupPath = backupDb();
   const statements = [];
 
-  appendSettingsRestore(statements, snapshots.settings);
-  appendSimpleTableRestore(statements, 'mcp_servers', snapshots.mcp_servers);
-  appendSimpleTableRestore(statements, 'skills', snapshots.skills);
-  appendSimpleTableRestore(statements, 'skill_repos', snapshots.skill_repos);
-  appendSimpleTableRestore(statements, 'prompts', snapshots.prompts);
-  appendSimpleTableRestore(statements, 'proxy_config', snapshots.proxy_config);
-  appendSimpleTableRestore(statements, 'model_pricing', snapshots.model_pricing);
-  appendProvidersRestore(statements, snapshots.providers, snapshots.provider_endpoints);
+  if (wants(only, 'settings')) appendSettingsRestore(statements, snapshots.settings);
+  if (wants(only, 'mcp')) appendSimpleTableRestore(statements, 'mcp_servers', snapshots.mcp_servers);
+  if (wants(only, 'skills')) {
+    appendSimpleTableRestore(statements, 'skills', snapshots.skills);
+    appendSimpleTableRestore(statements, 'skill_repos', snapshots.skill_repos);
+  }
+  if (wants(only, 'prompts')) appendSimpleTableRestore(statements, 'prompts', snapshots.prompts);
+  if (wants(only, 'proxy')) {
+    appendSimpleTableRestore(statements, 'proxy_config', snapshots.proxy_config);
+    appendSimpleTableRestore(statements, 'model_pricing', snapshots.model_pricing);
+  }
+  if (wants(only, 'providers')) appendProvidersRestore(statements, snapshots.providers, snapshots.provider_endpoints);
 
   if (!statements.length) {
     console.log('没有可恢复的 snapshot 内容，未写入数据库。');
@@ -83,7 +90,8 @@ function main() {
 
   transaction(statements);
 
-  const mkt = restoreLocalMarketplaces();
+  // 本地 marketplace 文件只在全量恢复时重布，避免部分 scope 恢复时意外改动。
+  const mkt = (!only) ? restoreLocalMarketplaces() : { skipped: true, restored: 0 };
 
   console.log('config-sync 恢复完成');
   console.log(`  数据库备份：${backupPath}`);
@@ -101,8 +109,11 @@ function main() {
   console.log('请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置到各端。');
 }
 
-function loadSnapshots() {
-  const settingsDoc = mustRead(snapshotPaths.settings, 'common/settings.json');
+function loadSnapshots(only = null) {
+  // 只在 scope 命中时强制要求对应快照存在，避免部分同步时被无关文件缺失阻断。
+  const settingsDoc = wants(only, 'settings')
+    ? mustRead(snapshotPaths.settings, 'common/settings.json')
+    : readJsonIfExists(snapshotPaths.settings, { rows: [] });
   const mcpDoc = readJsonIfExists(snapshotPaths.mcpServers, { rows: [] });
   const skillsDoc = readJsonIfExists(snapshotPaths.skills, { skills: [], skill_repos: [] });
   const promptsDoc = readJsonIfExists(snapshotPaths.prompts, { rows: [] });
@@ -111,7 +122,9 @@ function loadSnapshots() {
     provider_endpoints: [],
     model_pricing: [],
   });
-  const providersDoc = mustRead(snapshotPaths.providers, 'providers/providers.json');
+  const providersDoc = wants(only, 'providers')
+    ? mustRead(snapshotPaths.providers, 'providers/providers.json')
+    : readJsonIfExists(snapshotPaths.providers, { rows: [] });
 
   return {
     settings: rehydrateSettings(asRows(settingsDoc)),
@@ -220,9 +233,15 @@ function validateProviders(providers) {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`恢复失败：${error.message}`);
-  process.exit(1);
+function isCli() {
+  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isCli()) {
+  try {
+    runRestore({ only: parseScopeArg() });
+  } catch (error) {
+    console.error(`恢复失败：${error.message}`);
+    process.exit(1);
+  }
 }

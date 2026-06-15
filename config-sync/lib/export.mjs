@@ -1,10 +1,12 @@
+import { pathToFileURL } from 'node:url';
 import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths } from './paths.mjs';
 import { selectRows, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, redactValue } from './secrets.mjs';
+import { parseScopeArg, wants } from './scope.mjs';
 
 // 对 settings 行脱敏并占位符化路径：value 是 JSON 的逐字段脱敏，非 JSON（如 codex TOML）原样保留但仍做路径占位。
 // 返回 { redactedRows, secrets, skippedNonJson }。
-function redactSettings(rows) {
+export function redactSettings(rows) {
   const redactedRows = [];
   const secrets = {};
   const skippedNonJson = [];
@@ -25,7 +27,8 @@ function redactSettings(rows) {
   return { redactedRows, secrets, skippedNonJson };
 }
 
-function main() {
+// cc-switch DB → 仓库 snapshot。only=null 导出全部；否则只导出命中的 scope。
+export function runExport({ only = null } = {}) {
   ensureSnapshotDirs();
 
   const settings = selectRows('settings', "WHERE key LIKE 'common_config_%' ORDER BY key");
@@ -40,45 +43,56 @@ function main() {
 
   const { redactedRows, secrets, skippedNonJson } = redactSettings(settings);
 
-  writeJson(snapshotPaths.settings, {
-    source: 'cc-switch.settings',
-    note: '敏感字段已脱敏为占位符，真实值在 providers/common-secrets.json（不入 git）。',
-    rows: redactedRows,
-  });
+  if (wants(only, 'settings')) {
+    writeJson(snapshotPaths.settings, {
+      source: 'cc-switch.settings',
+      note: '敏感字段已脱敏为占位符，真实值在 providers/common-secrets.json（不入 git）。',
+      rows: redactedRows,
+    });
+    writeJson(commonSecretsPath, {
+      source: 'cc-switch.settings 中被脱敏的字段真实值',
+      secrets,
+    });
+  }
 
-  writeJson(commonSecretsPath, {
-    source: 'cc-switch.settings 中被脱敏的字段真实值',
-    secrets,
-  });
+  if (wants(only, 'mcp')) {
+    writeJson(snapshotPaths.mcpServers, {
+      source: 'cc-switch.mcp_servers',
+      note: 'server_config 里的本机绝对路径已占位符化（${PROJECT_ROOT}/${HOME}），恢复时还原。',
+      rows: mcpServers.map((m) => ({ ...m, server_config: encodePaths(m.server_config) })),
+    });
+  }
 
-  writeJson(snapshotPaths.mcpServers, {
-    source: 'cc-switch.mcp_servers',
-    note: 'server_config 里的本机绝对路径已占位符化（${PROJECT_ROOT}/${HOME}），恢复时还原。',
-    rows: mcpServers.map((m) => ({ ...m, server_config: encodePaths(m.server_config) })),
-  });
+  if (wants(only, 'skills')) {
+    writeJson(snapshotPaths.skills, {
+      source: 'cc-switch.skills + cc-switch.skill_repos',
+      skills,
+      skill_repos: skillRepos,
+    });
+  }
 
-  writeJson(snapshotPaths.skills, {
-    source: 'cc-switch.skills + cc-switch.skill_repos',
-    skills,
-    skill_repos: skillRepos,
-  });
+  if (wants(only, 'prompts')) {
+    writeJson(snapshotPaths.prompts, {
+      source: 'cc-switch.prompts',
+      rows: prompts,
+    });
+  }
 
-  writeJson(snapshotPaths.prompts, {
-    source: 'cc-switch.prompts',
-    rows: prompts,
-  });
+  if (wants(only, 'proxy')) {
+    writeJson(snapshotPaths.proxy, {
+      source: 'cc-switch.proxy_config + provider_endpoints + model_pricing',
+      proxy_config: proxyConfig,
+      provider_endpoints: providerEndpoints,
+      model_pricing: modelPricing,
+    });
+  }
 
-  writeJson(snapshotPaths.proxy, {
-    source: 'cc-switch.proxy_config + provider_endpoints + model_pricing',
-    proxy_config: proxyConfig,
-    provider_endpoints: providerEndpoints,
-    model_pricing: modelPricing,
-  });
-
-  writeJson(snapshotPaths.providers, {
-    source: 'cc-switch.providers',
-    rows: providers,
-  });
+  if (wants(only, 'providers')) {
+    writeJson(snapshotPaths.providers, {
+      source: 'cc-switch.providers',
+      rows: providers,
+    });
+  }
 
   console.log('config-sync 导出完成');
   console.log(`  settings common keys: ${settings.length}`);
@@ -100,9 +114,15 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`导出失败：${error.message}`);
-  process.exit(1);
+function isCli() {
+  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isCli()) {
+  try {
+    runExport({ only: parseScopeArg() });
+  } catch (error) {
+    console.error(`导出失败：${error.message}`);
+    process.exit(1);
+  }
 }
