@@ -163,6 +163,9 @@ cd windsurf-dao
 .\dao.ps1 link-codex             # mirror skills → ~/.codex/skills
 .\dao.ps1 link-codex-prompts     # 高频 dao prompts → ~/.codex/prompts
 
+# IDE 终端
+.\dao.ps1 set-terminal           # 默认终端 cmd → Git Bash
+
 # 验证
 .\dao.ps1 status                 # 链接健康矩阵
 ```
@@ -181,6 +184,7 @@ cd windsurf-dao
 | `unlink-codex [-DryRun]` | 移除 Codex skill 链接 |
 | `link-codex-prompts [-DryRun]` | 高频 dao 命令写入 Codex prompts |
 | `unlink-codex-prompts [-DryRun]` | 移除 Codex prompts |
+| `set-terminal` | IDE 默认终端 cmd.exe → Git Bash（Windsurf/Code/Cursor） |
 
 通用选项：`-AlwaysOnOnly`（仅 link always_on 类）、`-DryRun`（预览不写入）。
 

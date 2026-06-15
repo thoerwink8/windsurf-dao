@@ -119,6 +119,9 @@ config-sync\dao-sync.bat restore
 .\dao.ps1 link-global
 .\dao.ps1 link-rules-all
 
+# IDE 终端（cmd → Git Bash）
+.\dao.ps1 set-terminal
+
 # 任意命令加 -DryRun 先预览不写入
 ```
 
