@@ -1,157 +1,112 @@
 ---
 name: dao-evolution
-description: 演化记录搜索与管理。当任务涉及教训、经验、回顾历史问题、知识积累、演化记录时加载。关键词：教训、经验、evolution、回顾、之前遇到过、历史问题、踩坑、T编号。
+description: 演化知识管理（三层归位）。当任务涉及教训沉淀、经验回顾、知识积累、踩坑记录、distill、evolve 时加载。
 ---
 
-# dao-evolution · 演化记录
+# dao-evolution · 演化知识管理
 
 > 知常曰明。历史教训 = 已付代价的真。
 
-## 架构
+## 三层架构
 
-```
-windsurf-dao/ccswitch/skills/dao-evolution/   ← 引擎（共享）
-  ├── SKILL.md（本文件）
-  ├── scripts/search.py, core.py               ← BM25 搜索
-  └── schema/README.md                         ← 列定义
+| 层 | 载体 | 注入方式 | 什么放这里 |
+|---|---|---|---|
+| **行为层** | `dao.md` / skill SKILL.md | always_on / 按需加载 | 已验证铁律，直接改变 AI 行为 |
+| **记忆层** | `~/.claude/.../memory/` | MEMORY.md 索引每轮可见 | 跨会话有用的模式、踩坑、决策依据 |
+| **档案层** | `docs/evolution/*.csv` | 不自动注入，按需搜索 | 完整因果链，Obsidian 数据源 |
 
-每个项目/data/                                  ← 数据（项目自有）
-  ├── evolution-entries.csv                     ← 演化条目
-  └── evolution-lessons.csv                     ← 教训
-```
+行为层真正塑造 AI。记忆层让 AI 有机会想起来。档案层给人回溯用。
 
-引擎在 windsurf-dao，数据在每个项目。首次使用时通过 `ensure` 自动判断：迁移旧记录或初始化空 CSV。
+## 路由判据（每条教训必须显式走一次）
 
-## 初始化
+写完教训后，逐条回答三问：
 
- 首次进入项目前，先运行：
+1. **能直接改变 AI 行为？**（铁律级，每次都该遵守）→ **行为层**：写入 dao.md 或对应 skill
+2. **跨会话反复有用但不是铁律？**（模式、坑、决策依据）→ **记忆层**：写 memory 文件
+3. **需要详细记录因果链以备回溯？** → **档案层**：写 CSV
 
- ```powershell
- python <skill>/scripts/search.py ensure --data-dir <project>/data
- ```
-
- `ensure` 行为：
-- 已有 `data/evolution-entries.csv` → 不做任何事
-- 无 CSV 但有 `AGENT_GUIDE.md` / `docs/evolution.md` → 自动运行 `migrate.py <project_root>` 迁移旧记录
-- 无 CSV 且无旧记录 → 自动初始化空 CSV
-
-## 搜索（回顾历史教训）
-
-```powershell
- python <skill>/scripts/search.py ensure --data-dir <project>/data
- python <skill>/scripts/search.py search "heartbeat async race" --data-dir <project>/data
- python <skill>/scripts/search.py lessons "race condition" --data-dir <project>/data
- python <skill>/scripts/search.py stats --data-dir <project>/data
-```
-
-搜索结果按相关度排序，deprecated 教训默认隐藏。三级回顾深度：
-- **L1 提醒**（1-2 条匹配）：一句话提及
-- **L2 展示**（3+ 条或高相关度）：展示教训摘要
-- **L3 阻断**（critical 且直接匹配）：阻断式警告
-
-## 写入（记录新教训）
-
-使用 `core.py` API 直接调用：
-
-```python
-from core import write_entry, write_lesson, deprecate_lesson, mark_synthesized
-
-# 写草稿条目
-eid = write_entry(data_dir, "draft", "v1.23.1", "ext",
-    "心跳间隔suspend后不重置", "setInterval累积", "T144", "heartbeat;timer")
-
-# 写教训
-lid = write_lesson(data_dir, "suspend后timer累积", "v1.23.1", "ext",
-    "系统休眠期间setInterval不暂停...", "heartbeat;timer", eid)
-
-# 废弃旧教训
-deprecate_lesson(data_dir, "T120", "T138")
-
-# 合成草稿
-mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
-```
-
-## 上提评估（每条 lesson 写入后必走）
-
-> "各复归其根" — 知识归位是 dao-evolution 的硬步骤。CSV 是历史可追溯,**不等于该 lesson 已经"被使用"**。重要 lesson 必须上提到能在未来主动注入的位置。
-
-每次 `write_lesson()` 后,**必须**对该 lesson 走一次上提评估,即便结论是"仅留 CSV"也要**显式说出来**。
-
-### 评估三问
-
-1. **跨项目可复用方法论？** → 上提到 `windsurf-dao/ccswitch/skills/dao-*/SKILL.md`
-2. **项目反复会撞的特定坑？** → 上提到该项目 `AGENT.md` 「项目特定坑」段
-3. **打破现有不变量 / 修改流程信念？** → 上提到 `windsurf-dao/ccswitch/dao.md` 对应规则
-
-### 归位映射表
-
-| lesson 性质 | 上提位置 |
-|---|---|
-| 跨项目通用方法论 | `ccswitch/skills/dao-*/SKILL.md`（7 个 skill）或 `ccswitch/dao.md` 对应规则段 |
-| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(无则新建) |
-| 流程规则修订/补充 | `ccswitch/dao.md` 对应段落 |
-| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
-| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
+三层可叠加：重要教训同时写行为层 + 档案层。大多数教训至少写记忆层 + 档案层。
 
 ### 显式输出格式
 
 ```
-### lesson 上提评估
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- ...
+### 教训归位
+- "<title>": 行为层（写入 dao.md §XX） + 档案层
+- "<title>": 记忆层（memory/evolution-xx.md） + 档案层
+- "<title>": 仅档案层，因 <理由>
 ```
 
-### 与上层流程的协作
+## 记忆层写入
 
-- **dao-autopilot §5.2.5**: autopilot 收尾时强制走本评估关卡(详见 `commands/dao-autopilot.md`)
-- **/dao-cycle 涅槃后合成**: 合成 mature 条目时同步评估每个被合并 lesson 是否需上提
-- **/dao-distill 主动整理**: distill 阶段批量走上提评估
+按 Claude Code memory 规范写入 `~/.claude/projects/<project>/memory/`：
 
-### 反模式
+```markdown
+---
+name: evolution-<slug>
+description: <一行摘要——用于 MEMORY.md 索引判断相关性>
+metadata:
+  type: feedback  # 或 project
+---
 
-| 病 | 症状 | 对治 |
-|---|---|---|
-| 写 CSV 就跑 | 调 `write_lesson` 完直接 return,不评估上提 | 上提评估是 `write_lesson` 的硬后置,等同流程的一部分 |
-| 全判"无需上提" | 默认全部 skip,跳过显式评估 | 必须**逐条**说出判定依据,即便结论"仅留 CSV" |
-| 自我审视盲区 | "我不确定是不是跨项目通用,先不提" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
-| 滥提 | 把所有 lesson 都上提到 skill | 仅 CSV 是合理大多数;只有**跨项目方法论 / 项目特定反复踩 / 流程修订**才上提 |
+<教训正文>
 
-## 遗忘机制
+**Why:** <根因/背景>
+**How to apply:** <未来什么场景下应用>
+```
 
-### 写入时
-新教训推翻旧教训 → 调用 `deprecate_lesson(old_id, new_id)`
+同步更新 `MEMORY.md` 索引（一行，<150 字符）。
 
-### 搜索时
-- `active` → 正常显示
-- `deprecated` → 默认隐藏，用 `--include-deprecated` 显示
-- `review` → 带 ⚠️ 警告显示
+## 档案层写入（Obsidian-ready）
 
-### /dao-evolve 审查时
+CSV 是未来 Obsidian vault 的数据源，每条必须详细到**独立可读**：
+
+**`docs/evolution/evolution-lessons.csv`**：
+```
+id,date,title,context,root_cause,fix,lesson,tags,links,status
+```
+
+- **id**: L001, L002...（从 L001 重新编号）
+- **date**: YYYY-MM-DD
+- **title**: 一句话标题
+- **context**: 什么场景触发了这个教训（完整描述）
+- **root_cause**: 根因分析
+- **fix**: 怎么修的
+- **lesson**: 提炼出的可复用洞察
+- **tags**: 分号分隔（未来直接转 Obsidian #tag）
+- **links**: 相关条目 ID，分号分隔（未来转 `[[wikilink]]`）
+- **status**: active / deprecated / superseded
+
+**`docs/evolution/evolution-entries.csv`**：
+```
+id,date,title,summary,lesson_ids,tags
+```
+
+- **id**: E001, E002...
+- 演化条目是多条教训的聚合叙事，记录一次完整的演化事件
+
+### 搜索
+
 ```powershell
-python <skill>/scripts/search.py stale --data-dir <project>/data --threshold 5
+py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evolution
 ```
-距最新版本 ≥5 个大版本的 active 教训 → 自动标记为 `review`。
 
-## 合成触发器
+## 遗忘
 
-| 触发 | 条件 |
-|------|------|
-| 事件驱动 | /dao-cycle 涅槃、/dao-distill、deploy 完成 |
-| 密度触发 | 同一标签 3+ 条 draft |
-| 时间触发 | 会话结束检查点 |
+- 新教训推翻旧教训 → 旧条目 status 改为 `superseded`，新条目 links 列引用旧 ID
+- 记忆层：更新或删除对应 memory 文件
+- 行为层：直接改写 dao.md / skill 正文
 
-合成流程：相关草稿 → AI 分析共同模式 → 生成 mature 条目 + 教训 → 原草稿标记 synthesized。
+## 与上层流程的协作
 
-## 日制节律
+- **/dao-distill**：会话级全量扫描 → 走本 skill 三层路由
+- **/dao-evolve**：跨会话审查 → 检查档案层是否有该提升到记忆/行为层的遗漏
+- **dao-cycle 涅槃**：单次任务教训 → 走本 skill 三层路由
 
-**会话开始**：skill 加载时运行 `stats`，内心记录草稿数量。未合成草稿 ≥5 → 等任务间隙提醒合成。
+## 反模式
 
-**会话结束**：本次有值得记录的观察？→ 写入 draft 条目。达到合成阈值？→ 提议合成。
-
-## CSV 列定义
-
-详见 `schema/README.md`。
-
-**entries 关键列**：id, status(draft/mature/synthesized), date, version, title, root_cause, tags
-**lessons 关键列**：id, title, detail, tags, status(active/deprecated/review), superseded_by
+| 病 | 对治 |
+|---|---|
+| 只写 CSV 不写 memory | CSV 是死档案，memory 才能被想起 |
+| 全写 memory 不分层 | 铁律级写行为层，记忆层放模式/坑 |
+| memory 索引写太长 | MEMORY.md 每条 <150 字符，详情在文件里 |
+| 教训写一句话 | 档案层要完整因果链（context→root_cause→fix→lesson） |
