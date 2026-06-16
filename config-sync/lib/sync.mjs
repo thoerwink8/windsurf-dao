@@ -43,6 +43,8 @@ function parseArgs(argv = process.argv.slice(2)) {
     else if (arg === '--doctor') opts.action = 'doctor';
     else if (arg === '--inventory') opts.action = 'inventory';
     else if (arg === '--persona') opts.action = 'persona';
+    else if (arg === '--deploy') opts.action = 'deploy';
+    else if (arg === '--status') opts.action = 'status';
     else if ((m = /^--direction=(.*)$/.exec(arg))) opts.direction = m[1].trim().toLowerCase();
     else if ((m = /^--(?:scope|only)=(.*)$/.exec(arg))) opts.scope = m[1];
     else if ((m = /^--message=(.*)$/.exec(arg))) opts.message = m[1];
@@ -62,17 +64,31 @@ function runChild(scriptFile) {
   }
 }
 
+function runDaoPs1(action) {
+  const daoPs1 = path.join(projectRoot, 'dao.ps1');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daoPs1, action,
+    ], { cwd: projectRoot, stdio: 'inherit', timeout: 60000 });
+  } catch (error) {
+    const code = typeof error.status === 'number' ? error.status : 1;
+    if (code !== 0) console.error(`  dao.ps1 ${action} 失败（exit ${code}）：${error.message}`);
+  }
+}
+
 function printHelp() {
-  console.log(`dao-sync —— cc-switch DB ↔ 仓库 ↔ origin 同步
+  console.log(`dao-sync —— windsurf-dao 统一入口（配置同步 + 部署 + 状态）
 
 用法：
-  node lib/sync.mjs                                    交互式（推荐）
-  node lib/sync.mjs --direction=down [选项]            下行：origin → 本机 DB（默认安全）
-  node lib/sync.mjs --direction=up   [选项]            上行：本机 DB → origin（慎重，落后即拒）
+  dao-sync.bat                                         交互式菜单（推荐）
+  dao-sync.bat --direction=down [选项]                 下行：origin → 本机 DB + 部署（默认安全）
+  dao-sync.bat --direction=up   [选项]                 上行：本机 DB → origin（慎重，落后即拒）
 
-  node lib/sync.mjs --doctor                           只读体检（doctor）
-  node lib/sync.mjs --inventory                        只读盘点（inventory）
-  node lib/sync.mjs --persona                          Claude Code persona 切换
+  dao-sync.bat --deploy                                仅重新部署 skills/commands/hooks 到 ~/.claude
+  dao-sync.bat --status                                dao 双栈链接健康矩阵
+  dao-sync.bat --doctor                                只读体检（doctor）
+  dao-sync.bat --inventory                             只读盘点（inventory）
+  dao-sync.bat --persona                               Claude Code persona 切换
 
 选项：
   --scope=all|settings,mcp,skills,prompts,proxy             同步范围（默认 all）
@@ -323,14 +339,18 @@ async function chooseAction() {
   console.log('选操作：');
   console.log('  [1] 下行  拉取最新（git pull + 恢复配置 + 部署 skills/hooks）');
   console.log('  [2] 上行  发布配置（导出本机 → commit → push）');
-  console.log('  [3] 体检  doctor（只读检查一致性）');
-  console.log('  [4] 盘点  inventory（只读盘存）');
-  console.log('  [5] persona 切换（dao / fable5 / off）');
-  const answer = await ask('输入 1-5（回车默认 1）：');
+  console.log('  [3] 部署  仅重新部署 skills/commands/hooks 到 ~/.claude（不动 DB/git）');
+  console.log('  [4] 状态  dao 双栈链接健康矩阵');
+  console.log('  [5] 体检  doctor（只读检查一致性）');
+  console.log('  [6] 盘点  inventory（只读盘存）');
+  console.log('  [7] persona 切换（dao / fable5 / off）');
+  const answer = await ask('输入 1-7（回车默认 1）：');
   if (answer === '2' || answer === 'up') return 'up';
-  if (answer === '3') return 'doctor';
-  if (answer === '4') return 'inventory';
-  if (answer === '5') return 'persona';
+  if (answer === '3') return 'deploy';
+  if (answer === '4') return 'status';
+  if (answer === '5') return 'doctor';
+  if (answer === '6') return 'inventory';
+  if (answer === '7') return 'persona';
   return 'down';
 }
 
@@ -387,16 +407,8 @@ async function runDown({ only, state, interactive, yes, dryRun }) {
   console.log('\n写入 cc-switch DB……');
   runRestore({ only });
 
-  // 自动部署 skills/commands/agents/hooks 到 ~/.claude（等同 dao.ps1 link-claude）
   console.log('\n部署 dao skills/commands/agents/hooks 到 ~/.claude……');
-  try {
-    const daoPs1 = path.join(projectRoot, 'dao.ps1');
-    execFileSync('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daoPs1, 'link-claude',
-    ], { cwd: projectRoot, stdio: 'inherit', timeout: 60000 });
-  } catch (error) {
-    console.error(`  dao.ps1 link-claude 失败（非致命，可手动重跑）：${error.message}`);
-  }
+  runDaoPs1('link-claude');
 
   console.log(`\n${NOTIFY} 完成。请重启 cc-switch 并切换一次 provider 下发配置，然后重启 Claude Code 会话（/clear）生效。`);
   return 0;
@@ -591,10 +603,12 @@ async function main() {
     process.exit(1);
   }
 
-  // 纯只读体检/盘点/persona：直接转交，不需状态板/方向。
+  // 纯只读/部署操作：直接转交，不需 DB preflight/git 状态板。
   if (opts.action === 'doctor') { runChild('doctor.mjs'); return; }
   if (opts.action === 'inventory') { runChild('inventory.mjs'); return; }
   if (opts.action === 'persona') { await runPersona(); closeRl(); return; }
+  if (opts.action === 'deploy') { runDaoPs1('link-claude'); return; }
+  if (opts.action === 'status') { runDaoPs1('status'); return; }
 
   if (!preflight()) { closeRl(); process.exit(1); }
 
@@ -607,6 +621,8 @@ async function main() {
   if (action === 'doctor') { closeRl(); runChild('doctor.mjs'); return; }
   if (action === 'inventory') { closeRl(); runChild('inventory.mjs'); return; }
   if (action === 'persona') { await runPersona(); closeRl(); return; }
+  if (action === 'deploy') { runDaoPs1('link-claude'); closeRl(); return; }
+  if (action === 'status') { runDaoPs1('status'); closeRl(); return; }
   const direction = action;
   if (!['up', 'down'].includes(direction)) {
     console.error(`未知方向：${direction}（应为 up 或 down）`);
