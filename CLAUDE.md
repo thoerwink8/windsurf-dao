@@ -32,8 +32,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 项目铁律 / 本仓库约定 | 本 `CLAUDE.md` |
 | 项目活体知识（架构/模式/决策） | `AGENT_GUIDE.md` |
 | 任务清单（唯一载体） | `TODO.md`（**不要新建 plan.md / archive/ 等平行追踪文件**） |
-| 教训 / 踩坑 | `docs/evolution/evolution-lessons.csv`（`dao-evolution` skill 维护；注意：旧引用里的 `data/` 已废弃，data/ 为空） |
-| 演化条目 | `docs/evolution/evolution-entries.csv` |
+| 教训（行为级） | `dao.md` / 对应 skill 正文（直接改变 AI 行为的铁律） |
+| 教训（记忆级） | `memory/`（跨会话模式/坑，MEMORY.md 索引每轮可见） |
+| 教训（档案级） | `docs/evolution/*.csv`（完整因果链，Obsidian 数据源） |
 | 换机部署变更 | `NEW-MACHINE.md`（见下方自审门第 4 条） |
 
 ## 常用命令
@@ -67,7 +68,7 @@ node config-sync/lib/sync.mjs --persona         # 系统提示词人设切换（
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（两侧 frontmatter / 交叉引用）
 .\tests\link-codex.tests.ps1                  # 单个 PowerShell 测试（自带 Assert-* 断言，独立可跑）
 .\tests\link-codex-prompts.tests.ps1
-py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜教训库（用 py，不用 python——本机 python 是 stub）
+py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 ```
 
 ## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
@@ -75,7 +76,7 @@ py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜教训库（
 > 修道先于传道。这是**本仓库工作约定**，只约束在 windsurf-dao 内工作的 Agent。
 
 1. **无为审视**：是否新增了"禁止 X"显式禁令 / "路径A/B"条件分支 / 平行追踪文件？→ 改为原则表达、单一流程、路由到 TODO.md/AGENT_GUIDE.md。
-2. **知识归位**：演化记录写入 `docs/evolution/evolution-*.csv`？TODO.md 已完成项更新？
+2. **知识归位**：教训走三层路由（行为层 dao.md/skill → 记忆层 memory/ → 档案层 CSV）？TODO.md 已完成项更新？
 3. **减法确认**：本次删了什么冗余？净增越少越好。
 4. **文档同步**：改动若涉及前置依赖 / 部署命令 / 进 git 的配置类别 / config-sync 行为 / 须手动复制的本机资产 → **必须在同一次提交里更新 `NEW-MACHINE.md`**（不确定就更新）。
 

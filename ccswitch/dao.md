@@ -63,7 +63,9 @@ CLI 是回合制，用户自然会接着输入，**不必每条回复都问下�
 | 操作流程 | `commands/`（slash command） |
 | 具体技能（实现层） | `skills/` |
 | 会话记忆 / 用户偏好 / 协作流程 | `memory/`（Claude Code 文件式 memory） |
-| 教训 / 踩坑 | `data/evolution-lessons.csv`（`dao-evolution` skill 管理） |
+| 教训 / 踩坑（行为级） | 本文件 / 对应 skill（直接改变 AI 行为的铁律） |
+| 教训 / 踩坑（记忆级） | `memory/`（跨会话模式/坑，MEMORY.md 索引可见） |
+| 教训 / 踩坑（档案级） | `docs/evolution/*.csv`（完整因果链，Obsidian 数据源） |
 
 **Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
 
