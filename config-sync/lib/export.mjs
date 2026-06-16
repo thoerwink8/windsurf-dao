@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths } from './paths.mjs';
+import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths, findWtSettingsPath, readJsonIfExists } from './paths.mjs';
 import { selectRows, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, redactValue } from './secrets.mjs';
 import { parseScopeArg, wants } from './scope.mjs';
@@ -85,6 +85,11 @@ export function runExport({ only = null } = {}) {
     });
   }
 
+  let terminalExported = false;
+  if (wants(only, 'terminal')) {
+    terminalExported = exportTerminal();
+  }
+
   console.log('config-sync 导出完成');
   console.log(`  settings common keys: ${settings.length}`);
   console.log(`  common 脱敏字段: ${Object.keys(secrets).length}（真实值写入 config-sync/common-secrets.json）`);
@@ -95,8 +100,48 @@ export function runExport({ only = null } = {}) {
   console.log(`  skills: ${skills.length}`);
   console.log(`  skill repos: ${skillRepos.length}`);
   console.log(`  prompts: ${prompts.length}`);
+  console.log(`  terminal: ${terminalExported ? '已导出' : '跳过（未找到 Windows Terminal）'}`);
   console.log('');
   console.log('安全提醒：common-secrets.json 含脱敏真实值，已由 config-sync/.gitignore 忽略，请不要手动提交。');
+}
+
+// Windows Terminal 配色/字体子集导出（文件型，不走 DB）。
+// 只提取外观相关字段，不碰 GUID / commandline / actions / keybindings 等本机特定信息。
+function exportTerminal() {
+  const wtPath = findWtSettingsPath();
+  if (!wtPath) {
+    console.warn('  未找到 Windows Terminal settings.json，跳过 terminal 导出。');
+    return false;
+  }
+  const wt = readJsonIfExists(wtPath, null);
+  if (!wt) return false;
+
+  const defaults = wt.profiles?.defaults || {};
+  const snapshot = {
+    source: 'Windows Terminal settings.json',
+    note: '只含配色/字体子集。restore 时字段级合并回本机，不覆盖 GUID/commandline 等本机信息。',
+    defaults: {},
+    profileOverrides: [],
+    schemes: wt.schemes || [],
+    themes: wt.themes || [],
+  };
+
+  if (defaults.colorScheme) snapshot.defaults.colorScheme = defaults.colorScheme;
+  if (defaults.font) snapshot.defaults.font = defaults.font;
+  if (defaults.opacity !== undefined) snapshot.defaults.opacity = defaults.opacity;
+  if (defaults.useAcrylic !== undefined) snapshot.defaults.useAcrylic = defaults.useAcrylic;
+
+  for (const p of wt.profiles?.list || []) {
+    if (p.colorScheme || p.font) {
+      const entry = { name: p.name };
+      if (p.colorScheme) entry.colorScheme = p.colorScheme;
+      if (p.font) entry.font = p.font;
+      snapshot.profileOverrides.push(entry);
+    }
+  }
+
+  writeJson(snapshotPaths.terminal, snapshot);
+  return true;
 }
 
 function isCli() {
