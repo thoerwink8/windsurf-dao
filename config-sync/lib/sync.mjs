@@ -498,6 +498,25 @@ function preflight() {
     issues.push({ msg: 'sqlite3 不可用', fix: e.message });
   }
 
+  // 2b. gh CLI（GitHub 操作用 gh 而非 MCP）
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', ['gh'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
+    try {
+      execFileSync('gh', ['auth', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    } catch {
+      fixed.push('gh CLI 已安装但未登录（gh auth login）');
+    }
+  } catch {
+    fixed.push('gh CLI 未安装（winget install GitHub.cli）——GitHub 操作不可用');
+  }
+
+  // 2c. uvx（fetch MCP server 依赖）
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', ['uvx'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
+  } catch {
+    fixed.push('uvx 未安装（powershell -c "irm https://astral.sh/uv/install.ps1 | iex"）——fetch MCP 不可用');
+  }
+
   // 3. cc-switch DB（自动从 snapshot 创建空表结构）
   if (!fs.existsSync(ccSwitchDbPath)) {
     if (issues.length) {
