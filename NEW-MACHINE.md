@@ -49,7 +49,7 @@ node config-sync\lib\doctor.mjs
 
 **自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Pencil 本机安装路径、Codex node_repl 等）属正常机器差异，非问题。
 
-**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao-sync.bat` 选 1（或 `.\dao.ps1 link-claude`）；hook/env 没生效 → 确认第 3 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
+**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao-sync.bat` 选 3（部署）或 `dao-sync.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
 
 ---
 
@@ -131,8 +131,8 @@ node config-sync\lib\sync.mjs --direction=down --yes
 ### 步骤 5 · 验证
 
 ```powershell
-.\dao.ps1 status                       # dao 链接健康矩阵
-config-sync\dao-sync.bat doctor         # 配置一致性体检（0 问题为准）
+dao-sync.bat --status                  # dao 链接健康矩阵
+dao-sync.bat --doctor                  # 配置一致性体检（0 问题为准）
 node config-sync\lib\goal-task-health.mjs   # （Codex 用户）goal 任务状态体检
 ```
 

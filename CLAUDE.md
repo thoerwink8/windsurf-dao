@@ -39,28 +39,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 常用命令
 
-部署/链接管理（`dao.ps1`，PowerShell，所有命令支持 `-DryRun` 预览）：
+统一入口（`dao-sync.bat`，双击即用，融合配置同步 + 部署 + 状态）：
 
 ```powershell
-.\dao.ps1 status              # 双栈链接健康矩阵（先跑这个看现状）
-.\dao.ps1 link-claude         # 部署到 Claude Code：symlink skills/commands/agents + 拷 references + @import dao.md
-.\dao.ps1 unlink-claude       # 反向移除上述链接
+.\dao-sync.bat                    # 交互菜单（推荐，覆盖所有操作）
+.\dao-sync.bat --direction=down   # origin → 本机 DB + 部署（恢复/换机，默认安全）
+.\dao-sync.bat --direction=up     # 本机 DB → origin（发布，落后即拒；可加 --dry-run）
+.\dao-sync.bat --deploy           # 仅重新部署 skills/commands/hooks 到 ~/.claude（不动 DB/git）
+.\dao-sync.bat --status           # dao 双栈链接健康矩阵
+.\dao-sync.bat --doctor           # 配置一致性体检
+.\dao-sync.bat --inventory        # 只读盘点
+.\dao-sync.bat --persona          # 系统提示词人设切换（dao / fable5 / off）
+```
+（前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
+
+底层工具（`dao.ps1`，一般不需直接调用，dao-sync.bat 内部使用）：
+
+```powershell
+.\dao.ps1 link-claude         # 部署到 Claude Code（dao-sync.bat --deploy 等效）
+.\dao.ps1 unlink-claude       # 反向移除 dao 链接
 .\dao.ps1 link-global         # 链接 global_rules.md 到 Windsurf 全局配置
 .\dao.ps1 link-codex          # 镜像 skills 到 Codex
 .\dao.ps1 set-terminal        # IDE 默认终端 cmd.exe → Git Bash
 ```
-
-配置同步（`config-sync/`，cc-switch 运行态 DB ↔ 仓库快照）：
-
-```powershell
-.\config-sync\dao-sync.bat                   # 交互菜单（无参 sync.mjs 也走交互模式）
-node config-sync/lib/sync.mjs --direction=down  # origin → 本机 cc-switch DB（恢复/换机，默认安全）
-node config-sync/lib/sync.mjs --direction=up    # 本机 DB → origin（发布，落后即拒；可加 --dry-run）
-node config-sync/lib/sync.mjs --doctor          # 配置一致性体检
-node config-sync/lib/sync.mjs --inventory       # 只读盘点
-node config-sync/lib/sync.mjs --persona         # 系统提示词人设切换（dao / fable5 / off）
-```
-（前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
 自检与测试（无 test runner 框架，直接跑）：
 
