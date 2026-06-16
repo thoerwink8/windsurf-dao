@@ -368,9 +368,23 @@ function Invoke-LinkClaude {
                     if ($existing.Target -eq $it.FullName) {
                         Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
                         $skipped++
+                        continue
+                    }
+                    # 指向错误目标 → 自愈：删旧建新
+                    $oldTarget = $existing.Target
+                    if ($IsDryRun) {
+                        Write-Host "    [DRYRUN] fix $($it.Name)  ($oldTarget -> $($it.FullName))" -ForegroundColor Yellow
+                        $linked++
                     } else {
-                        Write-Host "    [diff ] $($it.Name)  -> $($existing.Target)" -ForegroundColor Yellow
-                        $conflict++
+                        try {
+                            if ($existing.PSIsContainer) { $existing.Delete() } else { Remove-Item $linkPath -Force }
+                            New-Symlink -Link $linkPath -Target $it.FullName
+                            Write-Host "    [fix  ] $($it.Name)  ($oldTarget -> $($it.FullName))" -ForegroundColor Yellow
+                            $linked++
+                        } catch {
+                            Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
+                            $err++
+                        }
                     }
                 } else {
                     Write-Host "    [keep ] $($it.Name)  (real file, preserved)" -ForegroundColor Yellow
@@ -389,6 +403,38 @@ function Invoke-LinkClaude {
                 } catch {
                     Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
                     $err++
+                }
+            }
+        }
+    }
+
+    # ── 清理源里已不存在的废弃 dao-* symlink（精简后残留自愈）──
+    $oldClaudeSrc = Join-Path $DaoRoot "claude"
+    foreach ($spec in $specs) {
+        $dstDir = Join-Path $userClaude $spec.Name
+        if (!(Test-Path $dstDir)) { continue }
+        $srcDir = Join-Path $claudeSrc $spec.Name
+        $srcNames = @()
+        if (Test-Path $srcDir) {
+            $srcNames = @(if ($spec.Kind -eq "dir") {
+                Get-ChildItem $srcDir -Directory -Filter $spec.Filter -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            } else {
+                Get-ChildItem $srcDir -File -Filter $spec.Filter -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            })
+        }
+        Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.LinkType -ne "SymbolicLink") { return }
+            if ($_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*") -and $_.Name -notin $srcNames) {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] prune $($_.Name)  (source removed)" -ForegroundColor Yellow
+                } else {
+                    try {
+                        if ($_.PSIsContainer) { $_.Delete() } else { Remove-Item $_.FullName -Force }
+                        Write-Host "    [prune] $($_.Name)  (source removed)" -ForegroundColor Yellow
+                    } catch {
+                        Write-Host "    [error] prune $($_.Name) : $_" -ForegroundColor Red
+                        $err++
+                    }
                 }
             }
         }
