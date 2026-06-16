@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+setx PYTHONUTF8 1 >nul 2>nul
 where node >nul 2>nul
 if errorlevel 1 (
   echo [预检] 缺少 Node.js，请安装：https://nodejs.org/
