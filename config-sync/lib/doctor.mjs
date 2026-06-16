@@ -41,6 +41,9 @@ function main() {
   section('common 脱敏门（防 token 进 git）');
   checkCommonRedaction();
 
+  section('外部工具链');
+  checkExternalTools();
+
   section('MCP 路径占位门（防绝对路径进 git）');
   checkMcpPathLeak();
 
@@ -189,6 +192,32 @@ function checkCommonRedaction() {
     else fail(`脱敏占位符 ${placeholders} 个，但 common-secrets.json 只有 ${have} 个真实值，恢复会失败。`);
   } else {
     fail(`common/settings.json 有 ${placeholders} 个脱敏占位符，但缺少 config-sync/common-secrets.json。换机时需手动复制该文件。`);
+  }
+}
+
+function checkExternalTools() {
+  const tools = [
+    { cmd: 'gh', label: 'GitHub CLI (gh)', installHint: 'winget install GitHub.cli' },
+    { cmd: 'uvx', label: 'uv/uvx (Python MCP)', installHint: 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"' },
+  ];
+  for (const { cmd, label, installHint } of tools) {
+    try {
+      execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      pass(`${label} 已安装。`);
+    } catch {
+      fail(`${label} 未安装。→ ${installHint}`);
+      continue;
+    }
+    if (cmd === 'gh') {
+      try {
+        execFileSync('gh', ['auth', 'status'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        pass('gh 已登录 GitHub。');
+      } catch {
+        warn('gh 未登录。→ gh auth login');
+      }
+    }
   }
 }
 
