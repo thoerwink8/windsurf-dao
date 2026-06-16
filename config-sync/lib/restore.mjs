@@ -1,6 +1,7 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readJsonIfExists, snapshotPaths, decodePaths } from './paths.mjs';
+import { readJsonIfExists, snapshotPaths, decodePaths, findWtSettingsPath, stripBom } from './paths.mjs';
 import {
   backupDb,
   clearTableStatement,
@@ -56,6 +57,7 @@ export function runRestore({ only = null, dryRun = false } = {}) {
 
   if (dryRun) {
     printRestorePreview(snapshots, only);
+    if (wants(only, 'terminal')) restoreTerminal({ dryRun: true });
     return;
   }
 
@@ -74,13 +76,14 @@ export function runRestore({ only = null, dryRun = false } = {}) {
     appendSimpleTableRestore(statements, 'model_pricing', snapshots.model_pricing);
   }
 
-  if (!statements.length) {
-    console.log('没有可恢复的 snapshot 内容，未写入数据库。');
-    console.log(`已创建备份：${backupPath}`);
-    return;
+  if (statements.length) {
+    transaction(statements);
   }
 
-  transaction(statements);
+  let terminalResult = null;
+  if (wants(only, 'terminal')) {
+    terminalResult = restoreTerminal({ dryRun });
+  }
 
   console.log('config-sync 恢复完成');
   console.log(`  数据库备份：${backupPath}`);
@@ -91,6 +94,7 @@ export function runRestore({ only = null, dryRun = false } = {}) {
   console.log(`  prompts: ${snapshots.prompts.length}`);
   console.log(`  proxy_config: ${snapshots.proxy_config.length}`);
   console.log(`  model_pricing: ${snapshots.model_pricing.length}`);
+  console.log(`  terminal: ${terminalResult || '跳过'}`);
   console.log('');
   console.log('请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置到各端。');
 }
@@ -198,6 +202,78 @@ function appendSettingsRestore(statements, rows) {
   statements.push(...upsertStatements('settings', syncRows));
 }
 
+
+// Windows Terminal 配色/字体恢复：字段级合并回本机 settings.json，不碰 GUID/commandline/actions 等。
+function restoreTerminal({ dryRun = false } = {}) {
+  const snap = readJsonIfExists(snapshotPaths.terminal, null);
+  if (!snap) {
+    console.log('  terminal: 无快照，跳过。');
+    return null;
+  }
+
+  const wtPath = findWtSettingsPath();
+  if (!wtPath) {
+    console.warn('  terminal: 本机未安装 Windows Terminal，跳过。');
+    return null;
+  }
+
+  const raw = fs.readFileSync(wtPath, 'utf8');
+  const wt = JSON.parse(stripBom(raw));
+
+  if (!wt.profiles) wt.profiles = {};
+  if (!wt.profiles.defaults) wt.profiles.defaults = {};
+
+  const changes = [];
+
+  if (snap.defaults?.colorScheme) {
+    wt.profiles.defaults.colorScheme = snap.defaults.colorScheme;
+    changes.push(`defaults.colorScheme → ${snap.defaults.colorScheme}`);
+  }
+  if (snap.defaults?.font) {
+    wt.profiles.defaults.font = snap.defaults.font;
+    changes.push(`defaults.font → ${snap.defaults.font.face || '(set)'}`);
+  }
+  if (snap.defaults?.opacity !== undefined) {
+    wt.profiles.defaults.opacity = snap.defaults.opacity;
+    changes.push(`defaults.opacity → ${snap.defaults.opacity}`);
+  }
+  if (snap.defaults?.useAcrylic !== undefined) {
+    wt.profiles.defaults.useAcrylic = snap.defaults.useAcrylic;
+    changes.push(`defaults.useAcrylic → ${snap.defaults.useAcrylic}`);
+  }
+
+  if (Array.isArray(snap.schemes)) {
+    wt.schemes = snap.schemes;
+    changes.push(`schemes → ${snap.schemes.length} 个`);
+  }
+  if (Array.isArray(snap.themes)) {
+    wt.themes = snap.themes;
+    changes.push(`themes → ${snap.themes.length} 个`);
+  }
+
+  for (const override of snap.profileOverrides || []) {
+    const target = (wt.profiles.list || []).find((p) => p.name === override.name);
+    if (!target) {
+      changes.push(`profile "${override.name}" 未找到，跳过`);
+      continue;
+    }
+    if (override.colorScheme) { target.colorScheme = override.colorScheme; changes.push(`${override.name}.colorScheme → ${override.colorScheme}`); }
+    if (override.font) { target.font = override.font; changes.push(`${override.name}.font → ${override.font.face || '(set)'}`); }
+  }
+
+  if (dryRun) {
+    console.log(`  terminal (dry-run): ${changes.length} 项变更`);
+    for (const c of changes) console.log(`    ${c}`);
+    return `dry-run ${changes.length} 项`;
+  }
+
+  const backupName = `settings.before-dao-sync-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.bak`;
+  const backupPath = path.join(path.dirname(wtPath), backupName);
+  fs.writeFileSync(backupPath, raw, 'utf8');
+  fs.writeFileSync(wtPath, JSON.stringify(wt, null, 2), 'utf8');
+  console.log(`  terminal 备份：${backupPath}`);
+  return `已合并 ${changes.length} 项`;
+}
 
 function isCli() {
   return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;

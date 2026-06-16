@@ -7,6 +7,7 @@ export const SCOPES = [
   { key: 'skills', label: 'Skills / Skill 仓库', tables: ['skills', 'skill_repos'] },
   { key: 'prompts', label: 'Prompts', tables: ['prompts'] },
   { key: 'proxy', label: 'Proxy / 端点 / 定价', tables: ['proxy_config', 'provider_endpoints', 'model_pricing'] },
+  { key: 'terminal', label: 'Windows Terminal 配色/字体', tables: [] },
 ];
 
 export const SCOPE_KEYS = SCOPES.map((s) => s.key);

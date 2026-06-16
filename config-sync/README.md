@@ -65,7 +65,7 @@ dao-sync.bat
    - `[2] 上行`（慎重）：`本机 cc-switch → origin`。export → 展示 diff → 确认 → commit → push。
    - `[3] 体检`：只读 doctor。
    - `[4] 盘点`：只读 inventory。
-3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy`。
+3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy / terminal`。
 
 #### 三档护栏
 
@@ -87,12 +87,13 @@ node lib/sync.mjs --doctor                          只读体检
 node lib/sync.mjs --inventory                       只读盘点
 ```
 
-选项：`--scope=settings,mcp,skills,prompts,proxy`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
+选项：`--scope=settings,mcp,skills,prompts,proxy,terminal`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
 
 #### 导出 / 恢复落点
 
 - **下行（恢复）**：读取 `common/` 快照写回 `~/.cc-switch/cc-switch.db`，写前自动备份到 `~/.cc-switch/backups/`。
 - **上行（导出）**：从 `~/.cc-switch/cc-switch.db` 导出快照到 `common/settings.json`、`common/mcp_servers.json`、`common/skills.json`、`common/prompts.json`、`common/proxy.json`（脱敏真实值写入 `common-secrets.json`，被 `.gitignore` 忽略）。
+- **terminal**（文件型，不走 DB）：从 Windows Terminal `settings.json` 提取配色/字体子集到 `common/terminal.json`；恢复时字段级合并回本机，不覆盖 GUID/commandline/actions 等本机特定信息。写前自动备份原文件（`settings.before-dao-sync-*.bak`）。支持商店版与 Preview 版路径自动发现。
 
 ### 同步客户端 MCP
 
