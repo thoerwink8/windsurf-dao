@@ -98,11 +98,11 @@ cycle 的五相是通用引擎。当任务属于特定领域时，加载对应�
 
 | 领域 | 镜头 skill（方法论） | 互补 skill（图书馆实现） |
 | ---- | ------------------- | ----------------------- |
-| 调试 | `dao-debug`         | —（已完全内化）         |
-| 重构 | `dao-refactor`      | —                       |
-| 优化 | `dao-optimize`      | —                       |
-| 测试 | `dao-test`          | `test-driven-development`, `webapp-testing` |
-| 可观测 | `dao-observability` | —                       |
+| 调试 | —（已内化到 dao.md） | —                       |
+| 重构 | —（已内化到 dao.md） | —                       |
+| 优化 | —（已内化到 dao.md） | —                       |
+| 测试 | —（已内化到 dao.md） | `test-driven-development`, `webapp-testing` |
+| 可观测 | —（已内化到 dao.md） | —                       |
 | 安全 | —                   | `security-audit`        |
 | 数据库 | —                 | `database-patterns`     |
 

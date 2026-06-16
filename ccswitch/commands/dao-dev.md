@@ -56,22 +56,9 @@ argument-hint: "[目标/需求描述]"
 
 > 动善时。治大国若烹小鲜。
 
-主会话在每个阶段**自评**是否派 subagent。详细调度机制见 `dao-pyramid` skill + `ccswitch/agents/` profiles。
+主会话在每个阶段**自评**是否派 subagent。
 
-**核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。
-
-**阶段默认倾向**（参考，自评优先）：
-
-| 阶段 | 主会话直接做 | 派 subagent |
-|------|-------------|-------------|
-| 析 | 需求清晰 | 模糊 → brainstormer |
-| 设 | 架构常规 | 关键架构 → strategist |
-| 编 | 单一小改 | 批量同质 → worker-batch |
-| 筑/部 | 默认（环境敏感） | build 失败 → debugger |
-| 试/验 | 默认 | 核心模块 → reviewer-critical |
-| 书 | 文档量小 | 完整 README → plan-writer |
-
-**横切**：bug → debugger | 3次失败 → strategist | 核心模块 → reviewer-critical
+**核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。见 `ccswitch/agents/` profiles。
 
 ---
 
@@ -305,22 +292,11 @@ argument-hint: "[目标/需求描述]"
 ## 工作流协作
 
 ```
-/dao-dev 管线 ── 驱动 ──→ /dao-cycle（引擎）
-                         │
-                   ┌─────┼─────┬─────┐
-                   ↓     ↓     ↓     ↓
-                 debug refactor test optimize
-                 lens   lens   lens  lens
-                (skill) (skill)(skill)(skill)
-
+/dao-dev 管线 ── 驱动 ──→ /dao-cycle（引擎，领域知识按任务自动融入）
 深度打磨 → /dao-cycle 多转
-遇到bug → /dao-cycle + debug 镜头
-测试覆盖 → /dao-cycle + test 镜头
 文档生成 → /dao-doc
 前端初始化 → stacks/frontend-nextjs.md（基建审计自动触发）
 ```
-
-镜头（lens）是 /dao-cycle 的领域插件，按需自动加载，详见 dao-cycle 镜头机制。
 
 ## 反模式
 

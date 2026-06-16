@@ -16,7 +16,7 @@ tools: Read, Grep, Glob, Bash
             ↓
             派 dao-debugger (你)
             ↓
-       dao-debug 4 phases (根因→模式→假设→实施)
+       4 phases (根因→模式→假设→实施)
             ↓
          根因清晰 → 走 TDD 流程修(回到主流)
             ↓
@@ -31,7 +31,7 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
 
 如果你没完成 Phase 1,**你不能提议任何修复**。哪怕"看起来很明显"。
 
-> 来自 dao-debug 三层螺旋铁律：不知根因而动手 = 妄作。
+> 不知根因而动手 = 妄作。——道场域「不知常妄作凶」
 
 ## 4 个阶段(必须按顺序完成)
 
@@ -230,10 +230,8 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
 
 debug 前必读:
 
-- `ccswitch/skills/dao-debug/SKILL.md` — 你的核心方法论,完整三层螺旋 + 15 武器 + 螺旋计数器 + 实战洞见 P1/P2(上游逆向 / 冻结自愈遗漏)
-- `ccswitch/skills/dao-test/SKILL.md` — Phase 4 写复现测试时走 RED-GREEN
+- `ccswitch/dao.md` §动·三才之机 — 三层螺旋、升级路径、3 次失败升级 dao-strategist 等方法论已归入 dao 场域根文件
 - `ccswitch/skills/dao-verify/SKILL.md` — 修复后必走涅槃门验证(根因/修复/不再触发/无副作用/教训)
-- `ccswitch/skills/dao-pyramid/SKILL.md` — 3 次失败升级 dao-strategist 的判据
 
 ## 元提醒
 

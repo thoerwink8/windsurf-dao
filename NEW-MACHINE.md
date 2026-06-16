@@ -35,22 +35,21 @@
 git clone <windsurf-dao 仓库地址> D:\frank\windsurf-dao
 cd D:\frank\windsurf-dao
 
-# 2. 恢复 cc-switch 通用配置（settings/hooks/MCP/skills）→ cc-switch DB
-#    （双击 config-sync\恢复配置.bat 等价；AI 直接调 lib 跳过 pause）
-node config-sync\lib\restore.mjs
+# 2. 一键恢复：双击 dao-sync.bat → 选 1（下行）
+#    自动完成：git pull + 恢复 cc-switch DB + 部署 skills/hooks 到 ~/.claude
+#    （悬空 Junction 也会自动清理，无需手动处理）
+#    AI 直接调：node config-sync\lib\sync.mjs --direction=down --yes
+dao-sync.bat
 
-# 3. 软链 dao 规则到 ~/.claude（skills / commands[含 /dao-remove] / agents + dao.md @import）
-.\dao.ps1 link-claude
+# 3. 让 cc-switch 下发到各端：重启 cc-switch 并切换一次 provider（GUI 一步，下发 env/hooks/model 等）
 
-# 4. 让 cc-switch 下发到各端：重启 cc-switch 并切换一次 provider（GUI 一步，下发 env/hooks/model 等）
-
-# 5. 自检（问题 0 项为准）
+# 4. 自检（问题 0 项为准）
 node config-sync\lib\doctor.mjs
 ```
 
-**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 4 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Pencil 本机安装路径、Codex node_repl 等）属正常机器差异，非问题。
+**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Pencil 本机安装路径、Codex node_repl 等）属正常机器差异，非问题。
 
-**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `.\dao.ps1 link-claude`；hook/env 没生效 → 确认第 4 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
+**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao-sync.bat` 选 1（或 `.\dao.ps1 link-claude`）；hook/env 没生效 → 确认第 3 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
 
 ---
 
@@ -95,22 +94,24 @@ cd D:\frank\windsurf-dao
 ### 步骤 3 · 恢复 cc-switch 配置
 
 ```powershell
-config-sync\dao-sync.bat restore
-# 或直接：node config-sync\lib\sync.mjs --restore
+# 推荐：双击 dao-sync.bat → 选 1（下行）
+# 自动完成：git pull + 恢复 DB + 部署 skills/hooks + 清理悬空 Junction
+dao-sync.bat
+
+# 或 AI 直接调：
+node config-sync\lib\sync.mjs --direction=down --yes
 ```
 
 它会：
-1. 备份当前 cc-switch DB 到 `~/.cc-switch/backups/`
-2. 把 `common/` 快照写回 `~/.cc-switch/cc-switch.db`（hooks/env 等路径占位符自动还原成本机仓库路径）
+1. `git pull --ff-only` 对齐 origin
+2. 备份当前 cc-switch DB → 把 `common/` 快照写回 DB（占位符自动还原）
+3. 自动调 `dao.ps1 link-claude`（部署 skills/commands/agents/hooks 到 `~/.claude/`，含悬空 Junction 自愈清理）
 
 完成后**重启 cc-switch**，并切换一次 provider，让它重新下发配置到各端。
 
-### 步骤 4 · 部署 dao 规则到各栈（按需）
+### 步骤 4 · 部署其他栈（按需，Claude Code 已由步骤 3 自动完成）
 
 ```powershell
-# Claude Code（全局生效）
-.\dao.ps1 link-claude
-
 # Codex（把 skills 链入 ~/.codex/skills）
 .\dao.ps1 link-codex
 .\dao.ps1 link-codex-prompts

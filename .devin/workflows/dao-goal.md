@@ -78,14 +78,14 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 
 | 目标形态 | 自动路由 |
 | ---- | ---- |
-| bug、异常、现象不符合预期 | `dao-debug` |
+| bug、异常、现象不符合预期 | 直接排查修复 |
 | 开放想法、需要方案取舍 | `dao-brainstorm` |
 | 复杂任务、需要多轮校准 | `/dao-cycle` |
 | 清晰方案、需要拆任务 | `dao-plan` |
-| 已有 plan 或任务足够明确 | `dao-execute` / 直接执行 |
+| 已有 plan 或任务足够明确 | 直接执行 |
 | 完成声明前 | `dao-verify` |
-| 测试相关 | `dao-test` |
-| 部署相关 | `dao-deploy` |
+| 测试相关 | 直接执行测试 |
+| 部署相关 | 直接执行部署 |
 
 持续推进模式下，选中路由后立即执行；不要问“要不要用这个路由”。
 
@@ -100,7 +100,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 这表示 `/dao-goal` 已代表用户授权 AI 持续推进。后续自动路由调用的 `dao-*` workflow / skill 必须继承：
 
 - 不再询问“Goal Contract 是否准确”
-- 不再询问“是否进入 dao-cycle / dao-plan / dao-debug”
+- 不再询问”是否进入 dao-cycle / dao-plan / 排查修复”
 - 不再在 design / plan / checkpoint 处默认等待用户审批
 - 不再在阶段性收尾处调用 `ask_user_question`
 - 不再在最终交付后询问“下一步方向/是否继续”
@@ -143,7 +143,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 | 目标清楚、用户要求持续推进 | 直接进入自动路由，不等待确认 |
 | 目标仍需方案探索 | `dao-brainstorm` |
 | 已有 design | `dao-plan` |
-| 已有 plan | `dao-execute` |
+| 已有 plan | 直接执行 |
 
 ## 与 /dao-cycle 协作
 

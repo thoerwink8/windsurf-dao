@@ -53,7 +53,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 - 范围外：<这次明确不做什么>
 - 推进模式：<持续推进 / 关卡确认 / 等待用户决策>
 - 用户决策策略：<默认不问 / 仅阻断时问 / 每阶段确认>
-- 自动路由：<dao-debug / dao-brainstorm / dao-plan / dao-execute / dao-cycle / dao-verify / 直接执行>
+- 自动路由：<dao-brainstorm / dao-plan / dao-verify / /dao-cycle / 直接执行>
 - 委托授权：<delegated-continuous / none>
 - 当前不确定点：<无 / 一句话列出关键不确定>
 - 下一步动作：<AI 将立即执行的动作，而不是给用户的选择题>
@@ -87,28 +87,26 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 
 | 目标形态 | 自动路由 | 行为 |
 | ---- | ---- | ---- |
-| 用户反馈 bug、异常、现象不符合预期 | `dao-debug` | 先复现/定位根因，再修复 |
+| 用户反馈 bug、异常、现象不符合预期 | 直接排查修复 | 先复现/定位根因，再修复 |
 | 目标仍是开放想法，需要方案取舍 | `dao-brainstorm` | 只在方向真不清时进入需求澄清 |
 | 目标清楚但需要多步实施计划 | `dao-plan` | 生成可执行任务清单 |
-| 已有 plan 或任务足够明确 | `dao-execute` / 直接执行 | 直接落地，不再询问 |
+| 已有 plan 或任务足够明确 | 直接执行 | 直接落地，不再询问 |
 | 任务复杂、需要持续推进和多轮校准 | `/dao-cycle` | 围绕 Goal Contract 观行验省改升 |
 | 需要验证是否完成 | `dao-verify` | 按成功标准拿 fresh evidence |
-| 涉及测试策略或补测试 | `dao-test` | 按测试铁律推进 |
-| 涉及部署上线 | `dao-deploy` | 按项目部署策略推进 |
-| UI 视觉方向不清 | `dao-ui-mockup` | 只有视觉方向需要拍板时才进入 |
+| UI 视觉方向不清 | `dao-design-taste` | 只有视觉方向需要拍板时才进入 |
 
 ### 路由优先级
 
 ```text
-bug/异常现象 → dao-debug
+bug/异常现象 → 直接排查修复
 目标不清/方案互斥 → dao-brainstorm
 复杂持续推进 → /dao-cycle
 已有清晰方案但需拆任务 → dao-plan
-已有清晰任务 → dao-execute / 直接执行
+已有清晰任务 → 直接执行
 完成声明前 → dao-verify
 ```
 
-**持续推进模式下**：选定路由后立即执行。不要问“要不要进 dao-cycle / dao-plan / dao-debug”，除非命中阻断条件。
+**持续推进模式下**：选定路由后立即执行。不要问”要不要进哪条路由”，除非命中阻断条件。
 
 ## 委托连续模式（delegated continuous mode）
 
@@ -180,7 +178,7 @@ bug/异常现象 → dao-debug
 | `dao-goal` | 锁目标：成功标准、范围、反目标 |
 | `dao-brainstorm` | 挖需求：探索方案、形成 design |
 | `dao-plan` | 拆任务：把已定方案拆成 2-5 分钟任务 |
-| `dao-execute` | 执行：按 plan 或明确目标落地 |
+| 直接执行 | 执行：按 plan 或明确目标落地 |
 | `dao-verify` | 验证：按成功标准拿 fresh evidence |
 | `/dao-cycle` | 循环：围绕目标观行验省改升 |
 

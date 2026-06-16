@@ -87,9 +87,7 @@ mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
 
 | lesson 性质 | 上提位置 |
 |---|---|
-| 跨项目通用调试模式 | `ccswitch/skills/dao-debug/SKILL.md` |
-| 跨项目通用执行模式 | `ccswitch/skills/dao-execute/SKILL.md` |
-| 跨项目通用 review/finish | `ccswitch/skills/dao-review/dao-finish/SKILL.md` |
+| 跨项目通用方法论 | `ccswitch/skills/dao-*/SKILL.md`（7 个 skill）或 `ccswitch/dao.md` 对应规则段 |
 | 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(无则新建) |
 | 流程规则修订/补充 | `ccswitch/dao.md` 对应段落 |
 | 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
