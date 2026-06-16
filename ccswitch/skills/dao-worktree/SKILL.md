@@ -158,10 +158,8 @@ git branch          # 主分支视角看分支
 
 ## 与其他 dao-* 的协作
 
-- **dao-test**:worktree 内必须先跑红绿循环(基线 + 红 + 绿 + refactor)
-- **dao-verify**:`worktree remove` 不是终点,必须 `worktree list` 确认归根
-- **dao-debug**:复杂 bug 复现时,新建 worktree 切到旧 commit,主分支保留进度
-- **dao-pyramid**:派 subagent 在隔离 worktree 干批量改动,失败可整体丢弃
+- **dao-verify**：`worktree remove` 不是终点,必须 `worktree list` 确认归根
+- **dao-review**：worktree 内完成后派 reviewer 评审再归根
 
 ## 反原则(保留 dao 风格)
 

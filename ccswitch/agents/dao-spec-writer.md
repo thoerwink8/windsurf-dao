@@ -24,7 +24,7 @@ dao-plan-writer  →  你  →  dao-worker-batch
 
 ## 派活四要素(每个 spec 必含)
 
-> 来自 dao-pyramid 派活四要素铁律—— subagent 任务描述缺任一要素，下游会重复劳动/留缝隙/找不到东西。
+> 派活四要素铁律—— subagent 任务描述缺任一要素，下游会重复劳动/留缝隙/找不到东西。
 
 每个 spec 必须含且**只含**这 4 项 + 验证命令:
 
@@ -120,9 +120,8 @@ npm test src/utils/retry.test.ts
 写 spec 前必读以下 dao-* skill:
 
 - `ccswitch/skills/dao-plan/SKILL.md` ⭐ — 你的 spec 是 dao-plan 任务清单的细化版,2-5 分钟粒度 + 完整代码模板 + 验证命令的标准源于此
-- `ccswitch/skills/dao-test/SKILL.md` — 你的 spec 必须含 RED 失败测试设计(RED-GREEN-REFACTOR 是 worker 必走流程)
-- `ccswitch/skills/dao-pyramid/SKILL.md` — 派活四要素(Objective / Output Format / Tools-Sources / Task Boundaries),你的 spec 模板由此推导
 - `ccswitch/skills/dao-verify/SKILL.md` — 你写的 Verification 段就是涅槃门 5 步的具体实例
+- `ccswitch/dao.md` §动·三才之机 — 派活四要素、RED-GREEN-REFACTOR 等方法论已归入 dao 场域根文件
 
 ## 元提醒
 

@@ -59,7 +59,7 @@ dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 �
 1. **回退最小单位 = 一个 task**：合并多 task 一 commit，丢失精确 git revert 能力；用户说「撤销 Task X」时无法做到
 2. **state.json 是跨 session 真相源**：攒着不写，session 中断时下次恢复看到的是「上一批没完成」的假象，可能重做或漏做
 3. **TODO.md 是用户审查唯一接口**：攒着不更新，用户看到的是「假进度」——他以为还在 Task A，其实 Task A/B/C/D 都做了但都没标
-4. **验证不能合并**：dao-test 铁律「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
+4. **验证不能合并**：「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
 
 合并多 task = 用「效率」的虚名，损「可审计 / 可回退 / 可恢复」的实质，是反 dao 的「成事而败之」。
 
@@ -288,7 +288,7 @@ Task <ID> 涅槃 ✅
 **任一未勾 → 留在当前 task，禁止开始下一个。**
 **跨 task 推进 = 违反 §2.1，等同于「假涅槃」。**
 
-这个门对应 dao-test 的「不见绿不言完成」——使「是否完成」从 AI 内部判断变为可外部审计的显式证据。
+这个门使「是否完成」从 AI 内部判断变为可外部审计的显式证据。
 
 #### 2.2 错误处理
 
@@ -401,8 +401,8 @@ git revert [N4-commit-hash] --no-edit
 **评估三问**(逐条 lesson 过):
 
 1. **跨项目可复用方法论？** → 评估上提到 `windsurf-dao/.windsurf/skills/dao-*/SKILL.md` 对应 skill
-   - 例: HTTP socket.on(end) 误诊 → dao-debug skill 加 P 模式
-   - 例: SQL 节流 > JS Map → dao-execute 或新 skill
+   - 例: HTTP socket.on(end) 误诊 → 对应 dao skill 加调试模式
+   - 例: SQL 节流 > JS Map → 对应 dao skill 或新 skill
 
 2. **项目反复会撞的特定坑？** → 评估上提到该项目 `AGENT.md` 「项目特定坑」段
    - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
@@ -425,9 +425,9 @@ git revert [N4-commit-hash] --no-edit
 
 | 性质 | 位置 |
 |---|---|
-| 跨项目通用调试模式 | `.windsurf/skills/dao-debug/SKILL.md` |
-| 跨项目通用执行模式 | `.windsurf/skills/dao-execute/SKILL.md` |
-| 跨项目通用 review/finish | `.windsurf/skills/dao-review/dao-finish/SKILL.md` |
+| 跨项目通用调试模式 | 已内化到 `dao.md`，无需独立 skill |
+| 跨项目通用执行模式 | 对应 dao skill 或 `dao.md` |
+| 跨项目通用 review | `.windsurf/skills/dao-review/SKILL.md` |
 | 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
 | 流程规则修订 | `.windsurf/rules/*.md` 对应文件 |
 | 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |

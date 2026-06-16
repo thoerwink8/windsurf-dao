@@ -57,12 +57,12 @@ CLI 是回合制，用户自然会接着输入，**不必每条回复都问下�
 
 | 知识类型 | 归属 |
 |---|---|
-| 不变原则 / 道德经哲学 | 本文件 / `dao-philosophy` skill / `docs/classics/帛书老子.md` + `docs/classics/阴符经.md` |
+| 不变原则 / 道德经哲学 | 本文件 / `docs/classics/帛书老子.md` + `docs/classics/阴符经.md` |
 | 项目级铁律、编码规范 | 项目根 `CLAUDE.md` 或 `AGENT.md` |
 | 项目知识（学到了什么 / 模式 / 决策） | `AGENT_GUIDE.md` |
 | 操作流程 | `commands/`（slash command） |
 | 具体技能（实现层） | `skills/` |
-| 会话记忆 / 用户偏好 / 协作流程 | `memory/`（`dao-memory` skill 管理） |
+| 会话记忆 / 用户偏好 / 协作流程 | `memory/`（Claude Code 文件式 memory） |
 | 教训 / 踩坑 | `data/evolution-lessons.csv`（`dao-evolution` skill 管理） |
 
 **Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
@@ -77,7 +77,7 @@ CLI 是回合制，用户自然会接着输入，**不必每条回复都问下�
 **复杂度 SHOULD 建议**：≥3 文件 / ≥100 LOC / 核心模块（auth/payment/security/core）/ 跨服务 / 不可逆 → 主动建议走，用户拒绝即轻量路径。
 
 五步（落地见 `/dao-superpowers` command）：
-worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`dao-pyramid`）→ reviewer subagent（`dao-review`）→ finishing-branch（`dao-finish`）。UI 任务在 plan 前插 `dao-ui-mockup`（形）。
+worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent → reviewer subagent（`dao-review`）→ 归根 cleanup。UI 任务在 plan 前过 `dao-design-taste` 分诊。
 
 进入即承诺，不中途偷工：不跳 reviewer、不跳 worktree、不直推 master。
 
@@ -86,20 +86,14 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent（`
 | 场景 | skill / command | 章句根 |
 |---|---|---|
 | 接到新任务 / 架构构思 | `dao-brainstorm` | 图难于其易 (63) |
-| 理解需求 / UX 决策 | `dao-empathy` | 以百姓心为心 (49) |
 | 写实施 plan | `dao-plan` | 为大于其细 (63) |
-| 执行编码 | `dao-execute` | 上善若水 (8) |
-| 死磕 debug | `dao-debug` | 天下之至柔驰骋至坚 (43) |
-| 全面体检 | `dao-full-coverage` | 病病 (71) |
-| E2E 用户视角测试 | `dao-user-simulation` | 以身观身 (54) |
-| 收尾交付 | `dao-finish` | 功遂身退 (9) |
+| 全面体检 / 验证完成 | `dao-verify` | 慎终如始 (64) |
 | review / 接受批评 | `dao-review` | 受国之垢 (78) |
 | UI / 界面 / 组件 / 主题 | `dao-design-taste`(基石总闸,先分诊) | 大象无形 (41) |
+| 隔离工作区 | `dao-worktree` | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 知常曰明 (16) |
-| 会话复盘 / 长期记忆 | `dao-memory` | 各复归其根 (16) |
-| 深度哲学反思 | `dao-philosophy` | 八条不变之道 |
 
-**不知道该用哪个 skill?** → 查 `dao-skill-ecosystem` 的「全景地图」:38 个 skill 按阶段/领域分类 + 触发类型(🤖自动/✋手动/🔗被调)。本表只列高频入口,完整清单由 Claude Code 渐进披露按 description 自动调度。
+7 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 

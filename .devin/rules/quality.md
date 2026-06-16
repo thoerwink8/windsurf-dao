@@ -17,8 +17,8 @@ globs: **/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,c,cpp,h,hpp,cs,rb,php,swift,kt,
 | 数据库 | 有 N+1 吗？索引合理吗？Migration 可逆吗？ | database-patterns |
 | 测试 | 核心路径有测试吗？边界情况覆盖了吗？ | test-driven-development, webapp-testing |
 | 错误处理 | 异常不吞没？用户看到友好消息？服务端日志够？ | express-typescript-api |
-| 性能 | 大数据集分页了吗？重复计算？ | dao-optimize |
-| 前端 | 响应式？视觉层次？**写前端代码 → 有 pencil 设计稿时照稿实现（`docs/design/*.pen` 为 source of truth）；无设计稿时走 dao-ui-mockup 快速原型**。shadcn 组件按需 add（见 `design-assets.md`）；a11y 字号 / shadcn ui/* wrap / html 16px 锚定 / 跟 spec 不估算。typecheck pass ≠ 视觉一致 ≠ 体系一致 | design-assets, dao-ui-mockup, ui-ux-pro-max |
+| 性能 | 大数据集分页了吗？重复计算？ | —（已内化到 dao.md） |
+| 前端 | 响应式？视觉层次？**写前端代码 → 有 pencil 设计稿时照稿实现（`docs/design/*.pen` 为 source of truth）；无设计稿时走 dao-design-taste 快速原型**。shadcn 组件按需 add（见 `design-assets.md`）；a11y 字号 / shadcn ui/* wrap / html 16px 锚定 / 跟 spec 不估算。typecheck pass ≠ 视觉一致 ≠ 体系一致 | design-assets, dao-design-taste, ui-ux-pro-max |
 
 ## 原则
 

@@ -321,11 +321,11 @@ function hardBlock(message) {
 
 async function chooseAction() {
   console.log('选操作：');
-  console.log('  [1] 下行  origin → 本机 cc-switch（默认 / 安全：拉最新配置进本机）');
-  console.log('  [2] 上行  本机 cc-switch → origin（慎重：把本机配置发布到 GitHub）');
-  console.log('  [3] 体检  doctor（只读检查 DB / snapshot / 各端一致性）');
-  console.log('  [4] 盘点  inventory（只读盘存 skills / MCP 链接）');
-  console.log('  [5] persona 切换（Claude Code CLI 人设注入：dao / fable5 / off）');
+  console.log('  [1] 下行  拉取最新（git pull + 恢复配置 + 部署 skills/hooks）');
+  console.log('  [2] 上行  发布配置（导出本机 → commit → push）');
+  console.log('  [3] 体检  doctor（只读检查一致性）');
+  console.log('  [4] 盘点  inventory（只读盘存）');
+  console.log('  [5] persona 切换（dao / fable5 / off）');
   const answer = await ask('输入 1-5（回车默认 1）：');
   if (answer === '2' || answer === 'up') return 'up';
   if (answer === '3') return 'doctor';
@@ -386,7 +386,19 @@ async function runDown({ only, state, interactive, yes, dryRun }) {
 
   console.log('\n写入 cc-switch DB……');
   runRestore({ only });
-  console.log(`\n${NOTIFY} 完成。请重启 cc-switch，并切换一次 provider，让它把配置重新下发到 ~/.claude/settings.json 等各端。`);
+
+  // 自动部署 skills/commands/agents/hooks 到 ~/.claude（等同 dao.ps1 link-claude）
+  console.log('\n部署 dao skills/commands/agents/hooks 到 ~/.claude……');
+  try {
+    const daoPs1 = path.join(projectRoot, 'dao.ps1');
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daoPs1, 'link-claude',
+    ], { cwd: projectRoot, stdio: 'inherit', timeout: 60000 });
+  } catch (error) {
+    console.error(`  dao.ps1 link-claude 失败（非致命，可手动重跑）：${error.message}`);
+  }
+
+  console.log(`\n${NOTIFY} 完成。请重启 cc-switch 并切换一次 provider 下发配置，然后重启 Claude Code 会话（/clear）生效。`);
   return 0;
 }
 

@@ -19,7 +19,7 @@ pencil 设计阶段
     ↓
 dao-plan → 任务清单
     ↓
-dao-execute → 代码实现
+代码实现
     ├── shadcn add（按需装基础件）
     ├── 业务组件代码（照 pencil 实现）
     └── 页面代码（组合组件）
@@ -145,9 +145,9 @@ foundation-standard.md
 - 导出 PNG 到同目录，用于 git diff 可视化
 - 设计稿变更时先改 pen → 再改代码（pen 是 source of truth）
 
-## 与 dao-ui-mockup 的关系
+## 与 HTML mockup 的关系
 
-| | dao-ui-mockup（HTML） | pencil（.pen） |
+| | HTML mockup（dao-design-taste 探索产物） | pencil（.pen） |
 |---|---|---|
 | 用途 | **快速原型探索**：多套视觉方向让用户选 | **正式设计**：持续维护的设计源 |
 | 时机 | brainstorm 阶段，探索视觉风格 | brainstorm 之后，确定方向后 |

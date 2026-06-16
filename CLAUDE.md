@@ -1,0 +1,88 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、Grep-first、commit 前缀、八句根基等不在此重复。本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
+
+## 这是什么（先读这一段）
+
+这**不是代码库，是一套 AI 行为规则系统**——用《道德经》《阴符经》哲学定义 AI 如何思考/行动/协作的规则、技能、命令、子代理。没有 `package.json`、没有构建产物、没有应用入口。"产物"就是 Markdown 规则文件 + 把它们部署到各宿主（Claude Code / Windsurf / Codex）的 PowerShell/Node 链接脚本。
+
+判断改动是否合理的尺子不是"能不能跑"，而是 dao 场域八句根基（尤其**为道日损**：删 > 改 > 增，新建文件门槛高于删除）。
+
+## 核心架构：双栈同源（最重要的大局）
+
+同一套 dao 内核，两副外壳，**git 单一真相源**：
+
+| 外壳 | 目录 | 宿主 | 加载机制 |
+|---|---|---|---|
+| Claude Code 侧 | `ccswitch/` | Claude Code CLI | `dao.ps1 link-claude` → symlink 到 `~/.claude/` + `dao.md` 的 `@import` |
+| Windsurf 侧 | `.devin/` | Windsurf IDE | Sidecar workspace 自动可见 + `dao.ps1 link-global` |
+| Codex 侧 | （镜像 ccswitch） | Codex | `dao.ps1 link-codex` → 镜像到 `~/.codex/skills` |
+
+**关键推论**：`ccswitch/` 与 `.devin/` 是镜像关系（skills/commands↔workflows/agents/stacks 一一对应）。改一条规则的语义，通常要在**两侧都改**以保持同源；只改一侧会造成双栈漂移。`scripts/dao-smoke.mjs` 会校验两侧 frontmatter 与交叉引用一致性。
+
+部署是 **symlink/Junction**，不是拷贝：编辑仓库内文件 → 已链接的宿主立即可见，无需重新部署。
+
+## 知识归位（改之前先确认写到哪）
+
+| 知识类型 | 归属文件 |
+|---|---|
+| 不变原则 / 哲学场域 | `ccswitch/dao.md`、`docs/classics/{帛书老子,道德经,阴符经}.md`（源文本不可改） |
+| 项目铁律 / 本仓库约定 | 本 `CLAUDE.md` |
+| 项目活体知识（架构/模式/决策） | `AGENT_GUIDE.md` |
+| 任务清单（唯一载体） | `TODO.md`（**不要新建 plan.md / archive/ 等平行追踪文件**） |
+| 教训 / 踩坑 | `docs/evolution/evolution-lessons.csv`（`dao-evolution` skill 维护；注意：旧引用里的 `data/` 已废弃，data/ 为空） |
+| 演化条目 | `docs/evolution/evolution-entries.csv` |
+| 换机部署变更 | `NEW-MACHINE.md`（见下方自审门第 4 条） |
+
+## 常用命令
+
+部署/链接管理（`dao.ps1`，PowerShell，所有命令支持 `-DryRun` 预览）：
+
+```powershell
+.\dao.ps1 status              # 双栈链接健康矩阵（先跑这个看现状）
+.\dao.ps1 link-claude         # 部署到 Claude Code：symlink skills/commands/agents + 拷 references + @import dao.md
+.\dao.ps1 unlink-claude       # 反向移除上述链接
+.\dao.ps1 link-global         # 链接 global_rules.md 到 Windsurf 全局配置
+.\dao.ps1 link-codex          # 镜像 skills 到 Codex
+.\dao.ps1 set-terminal        # IDE 默认终端 cmd.exe → Git Bash
+```
+
+配置同步（`config-sync/`，cc-switch 运行态 DB ↔ 仓库快照）：
+
+```powershell
+.\config-sync\dao-sync.bat                   # 交互菜单（无参 sync.mjs 也走交互模式）
+node config-sync/lib/sync.mjs --direction=down  # origin → 本机 cc-switch DB（恢复/换机，默认安全）
+node config-sync/lib/sync.mjs --direction=up    # 本机 DB → origin（发布，落后即拒；可加 --dry-run）
+node config-sync/lib/sync.mjs --doctor          # 配置一致性体检
+node config-sync/lib/sync.mjs --inventory       # 只读盘点
+node config-sync/lib/sync.mjs --persona         # 系统提示词人设切换（dao / fable5 / off）
+```
+（前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
+
+自检与测试（无 test runner 框架，直接跑）：
+
+```powershell
+node scripts/dao-smoke.mjs                    # dao 生态完整性自检（两侧 frontmatter / 交叉引用）
+.\tests\link-codex.tests.ps1                  # 单个 PowerShell 测试（自带 Assert-* 断言，独立可跑）
+.\tests\link-codex-prompts.tests.ps1
+py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜教训库（用 py，不用 python——本机 python 是 stub）
+```
+
+## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
+
+> 修道先于传道。这是**本仓库工作约定**，只约束在 windsurf-dao 内工作的 Agent。
+
+1. **无为审视**：是否新增了"禁止 X"显式禁令 / "路径A/B"条件分支 / 平行追踪文件？→ 改为原则表达、单一流程、路由到 TODO.md/AGENT_GUIDE.md。
+2. **知识归位**：演化记录写入 `docs/evolution/evolution-*.csv`？TODO.md 已完成项更新？
+3. **减法确认**：本次删了什么冗余？净增越少越好。
+4. **文档同步**：改动若涉及前置依赖 / 部署命令 / 进 git 的配置类别 / config-sync 行为 / 须手动复制的本机资产 → **必须在同一次提交里更新 `NEW-MACHINE.md`**（不确定就更新）。
+
+## 本仓库工程注意
+
+- **改规则要顾及双栈**：`ccswitch/`（Claude Code，本宿主主战场）与 `.devin/`（Windsurf）同源，语义改动两侧同步，改完跑 `node scripts/dao-smoke.mjs` 验证。
+- **commit 前缀**：本宿主是 Claude Code，subject 必须以 `[cc] ` 开头（提交前自检宿主，详见 dao.md「言·名之则」）。
+- **PowerShell 假错**：`dao.ps1` / `*.ps1` 用 `$LASTEXITCODE` 判成败，不看输出有无 "error"；中文「所在位置 行:X」是 ErrorRecord 非真错；禁 `2>&1`（混流致假错）。
+- **bash 脚本 LF 行尾**：`.gitattributes` 强制 `*.sh eol=lf`，避免 Windows clone 后 CRLF 化导致 shebang 失效。
+- **`config-sync/common-secrets.json` 不进 git**（含脱敏真实值），换机手动复制。

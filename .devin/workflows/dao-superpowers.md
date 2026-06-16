@@ -17,7 +17,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 ### 显式触发（强信号 · 必走五步）
 
 - 用户口头：「走 superpowers」「开 worktree 走」「走完整流程」「派 subagent」「启 dao 五步」
-- 用户引用任一 dao 五步 skill 名（dao-worktree / dao-plan / dao-pyramid / dao-review / dao-finish）
+- 用户引用任一 dao 五步 skill 名（dao-worktree / dao-plan / dao-review）
 - 用户输入 `/dao-superpowers`
 
 ### 复杂度触发（弱信号 · SHOULD 主动建议）
@@ -79,7 +79,7 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2 步 · 写 plan」
 
-#### 2.0 · 形（dao-design-taste 分诊 → 按档调 dao-ui-mockup）⭐
+#### 2.0 · 形（dao-design-taste 分诊）⭐
 
 > 大象无形。让无形的设计语言显形，再写 plan。——《道德经》第 41 章
 
@@ -90,10 +90,10 @@ npm test
 ```
 dao-design-taste §0 分诊：本次引入多少未知？
   ├─ DIRECT（已知形态里做事）→ 跳过原型，查 gallery 复用 → 直接进 2.1 写 plan
-  ├─ SCOPED（一块形态未知的新东西）→ 调 dao-ui-mockup，只画这一块
-  └─ FULL（项目启动/换肤/大重构）→ 调 dao-ui-mockup 全量
+  ├─ SCOPED（一块形态未知的新东西）→ 走 dao-design-taste 探索流程，只画这一块
+  └─ FULL（项目启动/换肤/大重构）→ 走 dao-design-taste 全量探索
 
-FULL/SCOPED 档走 dao-ui-mockup 五步（详见该 skill）：
+FULL/SCOPED 档走 dao-design-taste 探索流程：
   一·察 → 项目画像（产品本质 + 用户 + 关键场景）
   二·援 → 配色/字体方向从供给源取候选：ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则
           🔒 用户拍板方向
@@ -108,7 +108,7 @@ FULL/SCOPED 档走 dao-ui-mockup 五步（详见该 skill）：
 
 **唯一长期产物**：`_tmp/design-tokens-<topic>.json`（喂给 dao-plan）。HTML 是 throwaway，用完归档，**不是 ground truth、不写像素契约**。
 
-详见 `dao-design-taste`（分诊+判据）与 `dao-ui-mockup`（探索工具）。
+详见 `dao-design-taste`。
 
 #### 2.1 · 写 plan
 
@@ -128,7 +128,7 @@ FULL/SCOPED 档走 dao-ui-mockup 五步（详见该 skill）：
 
 详见 `dao-plan` skill。
 
-### 三·造（dao-execute + dao-pyramid 可选 · 上善若水勤而行之）
+### 三·造（上善若水勤而行之）
 
 > 按 plan 逐 task 执行，task 间 checkpoint。
 
@@ -141,12 +141,10 @@ FULL/SCOPED 档走 dao-ui-mockup 五步（详见该 skill）：
   - 实施后：fresh 验证（参 dao-verify）
   - task 间 checkpoint：让用户随时可调
 
-subagent 调度（按需，参 dao-pyramid 判据）：
+subagent 调度（按需）：
   - 满足 ≥3 项才派（模板化? 不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?）
   - 否则主会话直接做（更快，无 rate limit 风险）
 ```
-
-详见 `dao-execute` + `dao-pyramid` skills。
 
 ### 四·审（dao-review · 受国之垢）
 
@@ -168,13 +166,13 @@ subagent 调度（按需，参 dao-pyramid 判据）：
   - UI 模块 → reviewer 额外负责 visual compliance（过 §6，看真实渲染不是只看 git diff）
 ```
 
-如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→dao-execute 修代码或修 token**。
+如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→修代码或修 token**。
 
 **铁律**：UI 任务跳 visual compliance review = 跳 reviewer，不可。原因：reviewer agent 看 git diff 看不见真实渲染，视觉断层 / a11y / 组件裂痕只在 preview 里暴露——故必过 §6 的 preview 验收。
 
 详见 `dao-review` skill。
 
-### 五·归（dao-finish · 功遂身退）
+### 五·归（功遂身退）
 
 > 完工即归根，不留死 worktree。
 
@@ -203,8 +201,6 @@ subagent 调度（按需，参 dao-pyramid 判据）：
 
 **铁律**：不可直推 master。merge / PR 二选一，仪式必走。
 
-详见 `dao-finish` skill。
-
 ## 反模式
 
 详见 `superpowers-gate.md` rule 反模式表。核心几条：
@@ -231,7 +227,7 @@ rule 是"什么时候走 + 不能怎么走"，workflow 是"怎么一步步走"�
 ## 反原则
 
 - **不为五步而五步**——单文件 typo 不必走五步
-- **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 workflow 聚焦「现有代码核心改动」，含主题重构/视觉重设计（2.0 步会自动激活 dao-ui-mockup）
+- **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 workflow 聚焦「现有代码核心改动」，含主题重构/视觉重设计（2.0 步会自动激活 dao-design-taste 分诊）
 - **不并行五步**——一步完成才进下一步，不可跳过
 - **不跳 2.0 分诊**——UI 任务必先过 dao-design-taste §0 分诊定档（DIRECT 跳原型 / SCOPED 局部 / FULL 全量），不再"凡 UI 必走 mockup"
 - **援从供给源取，不凭空发明**——FULL/SCOPED 档的"援"先于"拟"：配色/字体方向从 ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则取候选，胜过 AI 闭门造车
@@ -248,7 +244,7 @@ UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
   [创建 worktree + 干净 install + 测试基线]
 
 ▶ 第 2 步 · 谋
-  ├─ 2.0 · 形（dao-design-taste §0 分诊 → 按档调 dao-ui-mockup）⭐
+  ├─ 2.0 · 形（dao-design-taste §0 分诊）⭐
   │  [DIRECT 跳原型查 gallery / SCOPED 局部 / FULL 全量]
   │  [FULL·SCOPED 走五步：察 → 援 → 拟 → 显 → 择]
   │  🔒 援：用户拍板配色/字体方向    🔒 择：用户选定方向
@@ -257,15 +253,15 @@ UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
      [写 docs/specs/<topic>-plan.md]
      🔒 用户审批 plan
 
-▶ 第 3 步 · 造（dao-execute + dao-pyramid 可选）
+▶ 第 3 步 · 造
   [逐 task 执行 + checkpoint]
   [UI 任务：implementer 拿 design tokens 实现，引用 token + 复用 gallery 组件]
 
 ▶ 第 4 步 · 审（dao-review）
   [派 reviewer / reviewer-critical]
-  [UI 任务：reviewer 对照 mockup 验收视觉一致性]
+  [UI 任务：reviewer 过 dao-design-taste §6 验收真实渲染]
 
-▶ 第 5 步 · 归（dao-finish）
+▶ 第 5 步 · 归
   [merge / PR / cleanup]
 
 🏁 涅槃
