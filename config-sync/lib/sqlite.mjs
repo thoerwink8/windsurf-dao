@@ -56,6 +56,112 @@ export function findSqlite3() {
   throw new Error('找不到 sqlite3。请安装 sqlite3，或设置环境变量 SQLITE3_PATH 指向 sqlite3 可执行文件。');
 }
 
+export function ensureSqlite3() {
+  try {
+    return findSqlite3();
+  } catch (originalError) {
+    if (process.platform !== 'win32') throw originalError;
+
+    const vendorDir = path.join(configSyncRoot, 'vendor');
+    let zipName;
+    try {
+      zipName = fs.readdirSync(vendorDir).find((f) => /^sqlite-tools-win.*\.zip$/i.test(f));
+    } catch { throw originalError; }
+    if (!zipName) throw originalError;
+
+    const zipPath = path.join(vendorDir, zipName);
+    const destDir = path.dirname(VENDOR_SQLITE);
+    console.log(`  sqlite3 未找到，从 vendor/${zipName} 解压……`);
+    fs.mkdirSync(destDir, { recursive: true });
+
+    try {
+      const ps = [
+        'Add-Type -Assembly System.IO.Compression.FileSystem;',
+        `$z=[System.IO.Compression.ZipFile]::OpenRead('${zipPath.replace(/'/g, "''")}');`,
+        'foreach($e in $z.Entries){',
+        "if($e.Name -match '\\.exe$'){",
+        `$out=Join-Path '${destDir.replace(/'/g, "''")}' $e.Name;`,
+        '[System.IO.Compression.ZipFileExtensions]::ExtractToFile($e,$out,$true)',
+        '}}',
+        '$z.Dispose()',
+      ].join(' ');
+      execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30000,
+      });
+    } catch (extractError) {
+      throw new Error(`sqlite3 解压失败：${extractError.message}。请手动解压 ${zipPath} 到 ${destDir}`);
+    }
+
+    return findSqlite3();
+  }
+}
+
+export function bootstrapDb() {
+  if (fs.existsSync(ccSwitchDbPath)) return false;
+
+  const sqlite = ensureSqlite3();
+  fs.mkdirSync(path.dirname(ccSwitchDbPath), { recursive: true });
+
+  const cDir = path.join(configSyncRoot, 'common');
+  const specs = [
+    { file: 'settings.json', tables: [{ name: 'settings', key: 'rows' }] },
+    { file: 'mcp_servers.json', tables: [{ name: 'mcp_servers', key: 'rows' }] },
+    { file: 'skills.json', tables: [{ name: 'skills', key: 'skills' }, { name: 'skill_repos', key: 'skill_repos' }] },
+    { file: 'prompts.json', tables: [{ name: 'prompts', key: 'rows' }] },
+    { file: 'proxy.json', tables: [
+      { name: 'proxy_config', key: 'proxy_config' },
+      { name: 'provider_endpoints', key: 'provider_endpoints' },
+      { name: 'model_pricing', key: 'model_pricing' },
+    ] },
+  ];
+
+  const stmts = [];
+  for (const spec of specs) {
+    const fp = path.join(cDir, spec.file);
+    if (!fs.existsSync(fp)) continue;
+    let doc;
+    try { doc = JSON.parse(fs.readFileSync(fp, 'utf8').replace(/^﻿/, '')); } catch { continue; }
+
+    for (const t of spec.tables) {
+      let rows = doc[t.key];
+      if (!rows && Array.isArray(doc)) rows = doc;
+      if (!rows && Array.isArray(doc.rows)) rows = doc.rows;
+      if (!Array.isArray(rows) || !rows.length) continue;
+
+      const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+      const pk = bootstrapPK(t.name, cols);
+      const defs = cols.map((c) => {
+        const isPk = pk?.length === 1 && pk[0] === c;
+        return `${quoteIdent(c)} TEXT${isPk ? ' PRIMARY KEY' : ''}`;
+      });
+      if (pk && pk.length > 1) {
+        defs.push(`PRIMARY KEY(${pk.map(quoteIdent).join(', ')})`);
+      }
+      stmts.push(`CREATE TABLE IF NOT EXISTS ${quoteIdent(t.name)} (${defs.join(', ')});`);
+    }
+  }
+
+  stmts.push('CREATE TABLE IF NOT EXISTS "providers" ("id" TEXT PRIMARY KEY, "name" TEXT, "settings_config" TEXT);');
+
+  if (!stmts.length) return false;
+
+  execFileSync(sqlite, [ccSwitchDbPath], {
+    input: stmts.join('\n'),
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  return true;
+}
+
+function bootstrapPK(tableName, columns) {
+  const map = { settings: ['key'], skill_repos: ['owner', 'name', 'branch'], proxy_config: ['app_type'], model_pricing: ['model_id'] };
+  if (map[tableName]) return map[tableName];
+  if (columns.includes('id')) return ['id'];
+  return null;
+}
+
 export function assertDbExists(dbPath = ccSwitchDbPath) {
   if (!fs.existsSync(dbPath)) {
     throw new Error(`找不到 cc-switch 数据库：${dbPath}\n请先安装并启动一次 cc-switch，让它创建基础数据库。`);

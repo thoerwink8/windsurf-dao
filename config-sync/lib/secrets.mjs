@@ -45,7 +45,8 @@ export function redactValue(settingsKey, value) {
 }
 
 // 把 secrets 合并回 redacted 文档（restore 用）。返回新对象。
-export function applySecrets(settingsKey, redacted, secretsMap) {
+// strict=true（默认）：缺少真实值时抛错。strict=false：缺少时保留占位符，不抛错。
+export function applySecrets(settingsKey, redacted, secretsMap, { strict = true } = {}) {
   function walk(node, dotPath) {
     if (Array.isArray(node)) {
       return node.map((item, index) => walk(item, `${dotPath}[${index}]`));
@@ -58,9 +59,11 @@ export function applySecrets(settingsKey, redacted, secretsMap) {
         if (child === SECRET_PLACEHOLDER) {
           const lookup = `${settingsKey} :: ${childPath}`;
           if (!Object.prototype.hasOwnProperty.call(secretsMap, lookup)) {
-            throw new Error(`common-secrets.json 缺少占位符对应的真实值：${lookup}`);
+            if (strict) throw new Error(`common-secrets.json 缺少占位符对应的真实值：${lookup}`);
+            out[key] = SECRET_PLACEHOLDER;
+          } else {
+            out[key] = secretsMap[lookup];
           }
-          out[key] = secretsMap[lookup];
         } else {
           out[key] = walk(child, childPath);
         }
