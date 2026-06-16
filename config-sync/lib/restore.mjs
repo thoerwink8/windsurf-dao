@@ -12,25 +12,39 @@ import {
 import { applySecrets, commonSecretsPath, countPlaceholders } from './secrets.mjs';
 import { parseScopeArg, wants } from './scope.mjs';
 
-// 把脱敏的 settings 行还原成真实值，并把 ${PROJECT_ROOT}/${HOME} 路径占位符还原成本机路径。JSON 行用 common-secrets.json 合并；非 JSON（如 codex TOML）只还原路径。
+// 把脱敏的 settings 行还原成真实值，并把 ${PROJECT_ROOT}/${HOME} 路径占位符还原成本机路径。
+// JSON 行用 common-secrets.json 合并；非 JSON（如 codex TOML）只还原路径。
+// 缺少 secrets 时跳过含占位符的行（降级恢复），不阻塞整个流程。
 function rehydrateSettings(rows) {
   const doc = readJsonIfExists(commonSecretsPath, null);
   const secretsMap = doc?.secrets || {};
-  return rows.map((row) => {
+  const hasSecrets = Object.keys(secretsMap).length > 0 || doc !== null;
+  const restored = [];
+  const skipped = [];
+  for (const row of rows) {
     const decodedValue = decodePaths(row.value);
     let parsed;
     try {
       parsed = JSON.parse(decodedValue);
     } catch {
-      return { key: row.key, value: decodedValue };
+      restored.push({ key: row.key, value: decodedValue });
+      continue;
     }
-    const restored = applySecrets(row.key, parsed, secretsMap);
-    const remaining = countPlaceholders(restored);
+    const merged = applySecrets(row.key, parsed, secretsMap, { strict: false });
+    const remaining = countPlaceholders(merged);
     if (remaining > 0) {
-      throw new Error(`settings "${row.key}" 仍有 ${remaining} 个未还原的占位符。请确认 config-sync/common-secrets.json 已从源机器复制到本机。`);
+      skipped.push(row.key);
+      continue;
     }
-    return { key: row.key, value: JSON.stringify(restored) };
-  });
+    restored.push({ key: row.key, value: JSON.stringify(merged) });
+  }
+  if (skipped.length) {
+    console.warn(`⚠ 跳过 ${skipped.length} 条含未还原占位符的 settings（缺少 common-secrets.json）：${skipped.join(', ')}`);
+    if (!hasSecrets) {
+      console.warn('  → 请从源机器复制 config-sync/common-secrets.json 到本机，然后重新下行。');
+    }
+  }
+  return restored;
 }
 
 // 仓库 snapshot → cc-switch DB。only=null 恢复全部；否则只恢复命中的 scope。

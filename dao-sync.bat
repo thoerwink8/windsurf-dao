@@ -2,7 +2,14 @@
 chcp 65001 >nul
 where node >nul 2>nul
 if errorlevel 1 (
-  echo 请安 Node.js，后新行脚。
+  echo [预检] 缺少 Node.js，请安装：https://nodejs.org/
+  echo.
+  pause
+  exit /b 1
+)
+where git >nul 2>nul
+if errorlevel 1 (
+  echo [预检] 缺少 Git，请安装：https://git-scm.com/download/win
   echo.
   pause
   exit /b 1

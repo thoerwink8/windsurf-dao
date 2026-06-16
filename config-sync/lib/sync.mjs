@@ -19,11 +19,12 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { projectRoot, snapshotPaths, readJsonIfExists } from './paths.mjs';
-import { selectRows, tableExists, stableJson } from './sqlite.mjs';
+import { projectRoot, snapshotPaths, readJsonIfExists, ccSwitchDbPath } from './paths.mjs';
+import { selectRows, tableExists, stableJson, ensureSqlite3, bootstrapDb } from './sqlite.mjs';
 import { runExport, redactSettings } from './export.mjs';
 import { runRestore } from './restore.mjs';
 import { SCOPES, SCOPE_KEYS, parseScope, describeScope } from './scope.mjs';
+import { commonSecretsPath, countPlaceholders } from './secrets.mjs';
 
 const HARD = '🔴';
 const CONFIRM = '🟡';
@@ -477,6 +478,72 @@ async function runPersona() {
   }
 }
 
+// ---------- 环境预检 ----------
+
+function preflight() {
+  const issues = [];
+  const fixed = [];
+
+  // 1. git
+  try {
+    execFileSync('git', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
+  } catch {
+    issues.push({ msg: 'git 未安装', fix: '请安装 Git：https://git-scm.com/download/win' });
+  }
+
+  // 2. sqlite3（自动从 vendor zip 解压）
+  try {
+    ensureSqlite3();
+  } catch (e) {
+    issues.push({ msg: 'sqlite3 不可用', fix: e.message });
+  }
+
+  // 3. cc-switch DB（自动从 snapshot 创建空表结构）
+  if (!fs.existsSync(ccSwitchDbPath)) {
+    if (issues.length) {
+      issues.push({ msg: `cc-switch 数据库不存在：${ccSwitchDbPath}`, fix: '请先安装并启动一次 cc-switch。' });
+    } else {
+      try {
+        const created = bootstrapDb();
+        if (created) fixed.push(`cc-switch 数据库不存在，已从 snapshot 自动创建空表：${ccSwitchDbPath}`);
+      } catch (e) {
+        issues.push({ msg: 'cc-switch 数据库自动创建失败', fix: `${e.message}\n    请手动安装并启动一次 cc-switch。` });
+      }
+    }
+  }
+
+  // 4. common-secrets.json（占位符存在时提醒，不阻塞——restore 会跳过未还原的行）
+  if (!issues.length && !fs.existsSync(commonSecretsPath)) {
+    try {
+      const doc = readJsonIfExists(snapshotPaths.settings, { rows: [] });
+      const rows = Array.isArray(doc) ? doc : (doc.rows || []);
+      let placeholders = 0;
+      for (const row of rows) {
+        try { placeholders += countPlaceholders(JSON.parse(row.value)); } catch {}
+      }
+      if (placeholders > 0) {
+        fixed.push(`缺少 common-secrets.json（settings 含 ${placeholders} 个脱敏占位符），下行时会跳过这些 settings 行`);
+      }
+    } catch {}
+  }
+
+  if (!issues.length && !fixed.length) return true;
+
+  console.log('\n================ 环境预检 ================');
+  for (const msg of fixed) console.log(`  ✓ ${msg}`);
+  for (const issue of issues) {
+    console.log(`  ✗ ${issue.msg}`);
+    console.log(`    → ${issue.fix}`);
+  }
+  console.log('============================================');
+
+  if (issues.length) {
+    console.log('\n存在阻塞问题，请先解决后重试。');
+    return false;
+  }
+  return true;
+}
+
 // ---------- 主流程 ----------
 
 async function main() {
@@ -497,6 +564,8 @@ async function main() {
   if (opts.action === 'doctor') { runChild('doctor.mjs'); return; }
   if (opts.action === 'inventory') { runChild('inventory.mjs'); return; }
   if (opts.action === 'persona') { await runPersona(); closeRl(); return; }
+
+  if (!preflight()) { closeRl(); process.exit(1); }
 
   const state = gitState({ fetch: opts.fetch });
   const sc = settingsConsistency();
