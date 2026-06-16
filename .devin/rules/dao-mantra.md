@@ -22,11 +22,8 @@ trigger: always_on
 | 场景 | skill / workflow | 章句根 |
 |---|---|---|
 | 接到新任务 | `dao-brainstorm` | 图难于其易 (63) / 豫兮冬涉川 (15) |
-| 理解需求 / UX 决策 | `dao-empathy` | 以百姓心为心 (49) |
-| 执行编码 | `dao-execute` | 上善若水 (8) / 勤而行之 (41) |
-| 主动全面体检 | `dao-full-coverage` | 病病 (71) / 方而不割 (58) |
-| 用户视角 E2E 测试 | `dao-user-simulation` | 以身观身 (54) |
-| 收尾交付 | `dao-finish` | 功遂身退 (9) / 善行无辙迹 (27) |
+| 执行编码 | 直接执行 | 上善若水 (8) / 勤而行之 (41) |
+| 收尾交付 | 归根收尾 | 功遂身退 (9) / 善行无辙迹 (27) |
 | 接受批评 / review | `dao-review` | 受国之垢 (78) |
 | 工程仪式五步 | `superpowers-gate.md` 判定 + `/dao-superpowers` 落地 | 致虚守静 (16) + 慎终如始 (64) |
 

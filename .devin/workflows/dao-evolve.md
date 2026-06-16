@@ -218,7 +218,7 @@ py search.py stats --data-dir <project>/data
 含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
 
 /evolve 审查 → /dev /cycle /autopilot /commit /distill /doc /session-sync /thread-tree + stacks/
-/evolve 审查 → skills（dao-debug/refactor/optimize/test 镜头还有效吗？）
+/evolve 审查 → skills（7 个 skill 的 description 触发还准吗？内容还对吗？）
 /evolve 审查 → /evolve（进化流程本身需要进化吗？）
 ```
 

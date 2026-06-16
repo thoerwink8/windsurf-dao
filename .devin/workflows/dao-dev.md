@@ -53,7 +53,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 
 > 动善时。治大国若烹小鲜。
 
-主会话在每个阶段**自评**是否派 subagent。详细调度机制见 `dao-pyramid` skill + `.devin/agents/` profiles。
+主会话在每个阶段**自评**是否派 subagent。详细调度机制见 `.devin/agents/` profiles。
 
 **核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。
 

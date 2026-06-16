@@ -98,10 +98,8 @@ Exit code: 0
 
 执行前必读以下 dao-* skill,这些是你的硬规则源:
 
-- `ccswitch/skills/dao-test/SKILL.md` — RED-GREEN-REFACTOR 红绿循环,你写代码必先有 RED 失败测试
 - `ccswitch/skills/dao-verify/SKILL.md` — 涅槃门 5 步,声明完成前必有 fresh 验证证据
-- `ccswitch/skills/dao-execute/SKILL.md` ⭐ — 你被 dao-execute 调度,执行不二次解释 plan,失败必回打不重试
-- `ccswitch/skills/dao-pyramid/SKILL.md` — 你处于工人层,严格按 spec 执行的调度规则
+- `ccswitch/dao.md` §动·三才之机 — RED-GREEN-REFACTOR、执行调度(执行不二次解释 plan,失败必回打不重试)、工人层调度规则等方法论已归入 dao 场域根文件
 
 3 条铁律是这些 skill 的精炼,实操细节到 skill 文件里查。
 

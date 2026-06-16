@@ -161,7 +161,7 @@ review 前必读:
 
 - `ccswitch/skills/dao-review/SKILL.md` ⭐ — 你的工作方法论,Stage 1 / Stage 2 流程 + P0-P3 分级 + 升级判据 + 接受批评流程全部源于此
 - `ccswitch/skills/dao-verify/SKILL.md` — Stage 1 检查 worker 的"verification evidence",这是涅槃门的 worker 实例
-- `ccswitch/skills/dao-pyramid/SKILL.md` SDD 完整流程 + 升级路径 — 何时升级 dao-reviewer-critical,何时升 dao-strategist
+- `ccswitch/dao.md` §动·三才之机 — 金字塔流程与升级路径(何时升级 dao-reviewer-critical / dao-strategist)已归入 dao 场域根文件
 
 ## 元提醒
 

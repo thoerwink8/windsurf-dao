@@ -322,6 +322,25 @@ function Invoke-LinkClaude {
 
     $linked = 0; $skipped = 0; $conflict = 0; $err = 0
 
+    # ── 清理悬空 Junction（cc-switch 旧版残留，自愈）──
+    $skillsDst = Join-Path $userClaude "skills"
+    if (Test-Path $skillsDst) {
+        $broken = @(Get-ChildItem $skillsDst -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint } |
+            Where-Object { (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0 })
+        if ($broken.Count -gt 0) {
+            Write-Host "  [cleanup] 清理 $($broken.Count) 个悬空 Junction" -ForegroundColor Yellow
+            foreach ($b in $broken) {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] remove $($b.Name)" -ForegroundColor Cyan
+                } else {
+                    cmd /c "rmdir `"$($b.FullName)`"" 2>&1 | Out-Null
+                    Write-Host "    [remove] $($b.Name)" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
     # ── 三类目录 symlink（skills/agents 链目录，commands 链文件）──
     $specs = @(
         @{ Name = "skills";   Kind = "dir";  Filter = "dao-*" },

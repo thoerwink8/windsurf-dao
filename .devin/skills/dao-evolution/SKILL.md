@@ -1,4 +1,5 @@
 ---
+name: dao-evolution
 description: 演化记录搜索与管理。当任务涉及教训、经验、回顾历史问题、知识积累、演化记录时加载。关键词：教训、经验、evolution、回顾、之前遇到过、历史问题、踩坑、T编号。
 ---
 
@@ -9,7 +10,7 @@ description: 演化记录搜索与管理。当任务涉及教训、经验、回�
 ## 架构
 
 ```
-windsurf-dao/.windsurf/skills/dao-evolution/   ← 引擎（共享）
+windsurf-dao/ccswitch/skills/dao-evolution/   ← 引擎（共享）
   ├── SKILL.md（本文件）
   ├── scripts/search.py, core.py               ← BM25 搜索
   └── schema/README.md                         ← 列定义
@@ -78,19 +79,17 @@ mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
 
 ### 评估三问
 
-1. **跨项目可复用方法论？** → 上提到 `windsurf-dao/.windsurf/skills/dao-*/SKILL.md`
+1. **跨项目可复用方法论？** → 上提到 `windsurf-dao/ccswitch/skills/dao-*/SKILL.md`
 2. **项目反复会撞的特定坑？** → 上提到该项目 `AGENT.md` 「项目特定坑」段
-3. **打破现有不变量 / 修改流程信念？** → 上提到 `windsurf-dao/.windsurf/rules/*.md` 对应规则
+3. **打破现有不变量 / 修改流程信念？** → 上提到 `windsurf-dao/ccswitch/dao.md` 对应规则
 
 ### 归位映射表
 
 | lesson 性质 | 上提位置 |
 |---|---|
-| 跨项目通用调试模式 | `.windsurf/skills/dao-debug/SKILL.md` |
-| 跨项目通用执行模式 | `.windsurf/skills/dao-execute/SKILL.md` |
-| 跨项目通用 review/finish | `.windsurf/skills/dao-review/dao-finish/SKILL.md` |
+| 跨项目通用方法论 | `ccswitch/skills/dao-*/SKILL.md`（7 个 skill）或 `ccswitch/dao.md` 对应规则段 |
 | 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(无则新建) |
-| 流程规则修订/补充 | `.windsurf/rules/*.md` 对应文件 |
+| 流程规则修订/补充 | `ccswitch/dao.md` 对应段落 |
 | 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
 | 仅历史可追溯 | 仅 CSV 即可,无需上提 |
 
@@ -105,9 +104,9 @@ mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
 
 ### 与上层流程的协作
 
-- **dao-autopilot §5.2.5**: autopilot 收尾时强制走本评估关卡(详见 `workflows/dao-autopilot.md`)
-- **/cycle 涅槃后合成**: 合成 mature 条目时同步评估每个被合并 lesson 是否需上提
-- **/distill 主动整理**: distill 阶段批量走上提评估
+- **dao-autopilot §5.2.5**: autopilot 收尾时强制走本评估关卡(详见 `commands/dao-autopilot.md`)
+- **/dao-cycle 涅槃后合成**: 合成 mature 条目时同步评估每个被合并 lesson 是否需上提
+- **/dao-distill 主动整理**: distill 阶段批量走上提评估
 
 ### 反模式
 
@@ -128,7 +127,7 @@ mark_synthesized(data_dir, ["e001", "e002", "e003"], "e004")
 - `deprecated` → 默认隐藏，用 `--include-deprecated` 显示
 - `review` → 带 ⚠️ 警告显示
 
-### /evolve 审查时
+### /dao-evolve 审查时
 ```powershell
 python <skill>/scripts/search.py stale --data-dir <project>/data --threshold 5
 ```
@@ -138,7 +137,7 @@ python <skill>/scripts/search.py stale --data-dir <project>/data --threshold 5
 
 | 触发 | 条件 |
 |------|------|
-| 事件驱动 | /cycle 涅槃、/distill、deploy 完成 |
+| 事件驱动 | /dao-cycle 涅槃、/dao-distill、deploy 完成 |
 | 密度触发 | 同一标签 3+ 条 draft |
 | 时间触发 | 会话结束检查点 |
 

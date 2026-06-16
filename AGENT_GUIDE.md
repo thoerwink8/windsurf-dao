@@ -209,7 +209,7 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 否则 → 主会话直接做(更快,无 rate limit 风险)
 ```
 
-详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `.devin/skills/dao-pyramid/SKILL.md`。
+详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
 
 ---
 

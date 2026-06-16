@@ -184,8 +184,8 @@ worker 完成
 review 前必读:
 
 - `ccswitch/skills/dao-review/SKILL.md` Stage 2 部分 — 你做的是普通 dao-reviewer 的升级版,流程相同但思维更对抗
-- `ccswitch/skills/dao-debug/SKILL.md` 三层螺旋 — 找隐性 bug 时借鉴第二层 W6-W11(二分/最小复现/隔离/逆向/诊断)和第三层 W13(质疑前提)
 - `ccswitch/skills/dao-verify/SKILL.md` — 你的"假设清单"输出是涅槃门的高级形式
+- `ccswitch/dao.md` §动·三才之机 — 三层螺旋(二分/最小复现/隔离/逆向/诊断/质疑前提)等方法论已归入 dao 场域根文件
 
 ## 元提醒
 

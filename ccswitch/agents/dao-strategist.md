@@ -41,7 +41,7 @@ tools: Read, Grep, Glob, Write
 
 ### 4. 3+ 次修复失败后质疑架构
 
-来自 dao-debug 第三层升维（反者道之动）:
+来自 dao 场域「反者道之动」（第三层升维）:
 
 > "If 3+ fixes failed: STOP and question the architecture. Pattern indicating architectural problem: each fix reveals new problem in different place."
 
@@ -145,8 +145,7 @@ tools: Read, Grep, Glob, Write
 
 召唤前必读:
 
-- `ccswitch/skills/dao-debug/SKILL.md` 第三层升维 — 你接手 dao-debugger 3 次失败升级时,本质是用 W12-W15(换方向/质疑前提/降级方案/重建)质疑架构
-- `ccswitch/skills/dao-pyramid/SKILL.md` 升级路径 — 你是金字塔顶端,看清楚自己接什么样的活、不该接什么样的活
+- `ccswitch/dao.md` §反·归(太极之复) — 三层升维(换方向/质疑前提/降级方案/重建)与金字塔升级路径已归入 dao 场域根文件
 - `ccswitch/commands/dao-dev.md` 反模式 — 用 dao 反模式表对照"是不是问题陈述本身有错"
 
 ## 元提醒
