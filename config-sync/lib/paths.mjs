@@ -20,7 +20,17 @@ export const snapshotPaths = {
   skills: path.join(commonDir, 'skills.json'),
   prompts: path.join(commonDir, 'prompts.json'),
   proxy: path.join(commonDir, 'proxy.json'),
+  terminal: path.join(commonDir, 'terminal.json'),
 };
+
+// Windows Terminal settings.json 路径（UWP 商店版 + Preview 版）。
+const wtCandidates = [
+  path.join(homeDir, 'AppData', 'Local', 'Packages', 'Microsoft.WindowsTerminal_8wekyb3d8bbwe', 'LocalState', 'settings.json'),
+  path.join(homeDir, 'AppData', 'Local', 'Packages', 'Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe', 'LocalState', 'settings.json'),
+];
+export function findWtSettingsPath() {
+  return wtCandidates.find((p) => fs.existsSync(p)) || null;
+}
 
 export function ensureSnapshotDirs() {
   fs.mkdirSync(commonDir, { recursive: true });

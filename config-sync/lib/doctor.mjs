@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir } from './paths.mjs';
+import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 
@@ -49,6 +49,9 @@ function main() {
 
   section('客户端 MCP 同步');
   checkClientMcpSync();
+
+  section('Windows Terminal 配色');
+  checkTerminalSync();
 
   finish();
 }
@@ -332,6 +335,45 @@ function reportMcpDiff(label, target, expected, actual) {
   const extra = actual.filter((name) => !expectedSorted.includes(name));
   if (!missing.length && !extra.length) pass(`${label} MCP 与 cc-switch 一致：${target}（${actual.length} 个）`);
   else warn(`${label} MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
+}
+
+function checkTerminalSync() {
+  const wtPath = findWtSettingsPath();
+  if (!wtPath) {
+    warn('未找到 Windows Terminal settings.json（未安装或非商店版）。');
+    return;
+  }
+  pass(`Windows Terminal: ${wtPath}`);
+
+  const snap = readJsonIfExists(snapshotPaths.terminal, null);
+  if (!snap) {
+    warn('缺少 common/terminal.json 快照，请运行 dao-sync.bat 上行导出 terminal。');
+    return;
+  }
+
+  let wt;
+  try {
+    wt = JSON.parse(stripBom(fs.readFileSync(wtPath, 'utf8')));
+  } catch (error) {
+    fail(`Windows Terminal settings.json 解析失败：${error.message}`);
+    return;
+  }
+
+  const localScheme = wt.profiles?.defaults?.colorScheme;
+  const snapScheme = snap.defaults?.colorScheme;
+  if (localScheme && snapScheme && localScheme === snapScheme) {
+    pass(`默认配色一致：${localScheme}`);
+  } else if (localScheme && snapScheme) {
+    warn(`默认配色不一致：本机 "${localScheme}" ≠ 快照 "${snapScheme}"。如需同步，运行 dao-sync.bat 上行或下行。`);
+  }
+
+  const localSchemes = (wt.schemes || []).map((s) => s.name).sort();
+  const snapSchemes = (snap.schemes || []).map((s) => s.name).sort();
+  if (stableJson(localSchemes) === stableJson(snapSchemes)) {
+    pass(`自定义 schemes 一致（${localSchemes.length} 个）。`);
+  } else {
+    warn(`自定义 schemes 不一致：本机 [${localSchemes.join(',')}] ≠ 快照 [${snapSchemes.join(',')}]。`);
+  }
 }
 
 function asRows(doc) {
