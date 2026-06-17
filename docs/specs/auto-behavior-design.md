@@ -481,3 +481,23 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"src/App.tsx"}}' | node ccsw
 - CLOSING 强收尾信号→distill 保守提醒（需真实使用调误触率）。
 - SessionStart(source=compact)→教训回点（救长对话压缩丢失）。
 - 既有 drift：`.devin/rules/knowledge-routing.md` 仍引旧 `data/evolution-*.csv` 路径，与 CC 侧三层路由（docs/evolution/）不一致，待统一。
+
+---
+
+## v2 试验版实施记录（2026-06-17）· 自报告闭环
+
+用户授权做 v2 试验版。只上 CLOSING（收尾→distill 保守提醒），并内建**自报告机制**回答"用户怎么知道该验证了"：
+
+- **CLOSING 分支**：强收尾正则命中→注入 distill 保守提醒；每会话一次（os.tmpdir 状态文件去重）；每次触发埋点到 `_tmp/rhythm-closing.log`（时间+session+触发语，供复盘误触率）。
+- **READY 自报告**（最高优先·一次性）：埋点攒够 `CLOSING_THRESHOLD=12` 条→hook 自己注入"v2 验证就绪"播报，让仪器举手。**用户无需主动回忆何时验证**（太上不知有之）。一次性 marker `_tmp/.rhythm-v2-announced` 防重复播报。
+- **优先级**：READY > RECALL > CLOSING，≤1 指针/回合。
+- compact 救教训仍未做（收益低、触发稀少，再缓）。
+
+### 验证生命周期（谁触发·谁动手）
+1. 现在起：hook 静默收集，用户无感。
+2. 攒够 12 条：hook 自注入就绪播报→当时会话的 AI 看到→主动报告用户（不靠用户记忆；backstop：dao-evolve 健康检查可查 log 行数 / 用户随时可问）。
+3. 用户说"验证"：AI 与用户一起复盘 `_tmp/rhythm-closing.log` 误触率→决定 转正/调参/回退。
+4. 收尾清理：删埋点 log + marker（中间物用后即清）；按裁决改代码（转正则去日志保留分支；回退则删 CLOSING 分支）。**删除发生在验证那一步、用户在场，非后台静默删。**
+
+### 测试（全过·测后已清数据）
+回顾✓ / 歧义"好了开始吧"静默✓ / 收尾埋点✓ / 会话去重✓ / 跨会话埋点✓ / 攒够12条自动播报✓ / 播报一次性✓。
