@@ -90,11 +90,11 @@
 
 跨端配置备份 / 恢复 / 体检模块。以 cc-switch 为运行态真相源，把配置导出为可版本化的文件，换机时再恢复。
 
-**统一入口**：`dao-sync.bat`（四合一：下行恢复 / 上行导出 / 体检 / 盘点）
+**统一入口**：`dao.bat`（四合一：下行恢复 / 上行导出 / 体检 / 盘点）
 
 ```text
 config-sync/
-  dao-sync.bat           # 唯一入口（DB ↔ 仓库 ↔ origin 三层同步）
+  dao.bat           # 唯一入口（DB ↔ 仓库 ↔ origin 三层同步）
   lib/sync.mjs           # 编排器（也可 node lib/sync.mjs --doctor 直接调用）
   common/                # 通用配置快照（进 git）
   common-secrets.json    # settings 脱敏真实值（不进 git，换机手动复制）
@@ -194,7 +194,7 @@ cd windsurf-dao
 windsurf-dao/                  # Sidecar / 真相源
 ├── .devin/rules|skills|workflows  # Windsurf 侧
 ├── ccswitch/skills|commands|agents  # Claude Code 侧
-├── config-sync/               # 配置同步（dao-sync.bat 四合一入口）
+├── config-sync/               # 配置同步（dao.bat 四合一入口）
 ├── dao.ps1                    # 链接管理
 └── global_rules.md            # 元规则
 

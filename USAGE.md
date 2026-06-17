@@ -353,7 +353,7 @@ dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文�
 | 工具 | 干什么 | 用法 |
 |---|---|---|
 | `dao.ps1` | 链接管理（部署 dao 到各宿主） | `.\dao.ps1 status` / `link-claude` / `link-codex` 等 |
-| `dao-sync.bat` | 配置同步（四合一） | `dao-sync.bat export\|restore\|doctor\|inventory` |
+| `dao.bat` | 配置同步（四合一） | `dao.bat export\|restore\|doctor\|inventory` |
 
 完整命令见 [README · dao.ps1 命令一览](README.md#daops1-命令一览)。
 配置同步详情见 [`config-sync/README.md`](config-sync/README.md)。

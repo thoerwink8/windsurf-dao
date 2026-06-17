@@ -1,4 +1,4 @@
-// 同步范围（scope）：dao-sync 第二步「同步什么」的取值。
+// 同步范围（scope）：dao 第二步「同步什么」的取值。
 // 一个 scope 对应一组 snapshot 文件 / cc-switch 表，导出与恢复共用同一套定义。
 
 export const SCOPES = [
