@@ -31,6 +31,9 @@ const norm = filePath.replace(/\\/g, "/");
 // 代码文件扩展名(对齐原 quality.md globs)
 const isCode = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|scala|vue|svelte|sql)$/i.test(norm);
 
+// 前端/UI 文件:除代码型组件外,纯样式文件(.css/.scss/.less)也算 —— 触发 dao-design-taste
+const isFrontend = /\.(tsx|jsx|vue|svelte|css|scss|less)$/i.test(norm);
+
 // dao 元层文件:ccswitch/dao.md 或 ccswitch/{skills,commands,agents}/dao-*
 // 路径可能是绝对(D:/.../ccswitch/dao.md)或相对(ccswitch/dao.md),故用 (^|/) 兼容两者
 const isDaoMeta = /(^|\/)ccswitch\/dao\.md$/.test(norm) ||
@@ -40,8 +43,16 @@ const isDaoMeta = /(^|\/)ccswitch\/dao\.md$/.test(norm) ||
 let context = "";
 if (isDaoMeta) {
   context = "【dao-meta 守卫】本次改动涉及 dao 元层文件。收尾前过三关:① 通用性(换项目还成立吗) ② 内容边界(只许思维/流程/准则,禁技术选型/API/配置) ③ 影响评估(会让其他 dao 项目变差吗)。不通过 → 路由到项目 AGENT.md/CLAUDE.md。双栈共存:ccswitch/ 与 .windsurf/ 哲学需一致。";
-} else if (isCode) {
-  context = "【dao-quality 质量门】本次改动涉及代码文件。收尾前按任务领域过检查清单:安全(输入验证/认证/无硬编码密钥)· 数据库(N+1/索引/migration 可逆)· 测试(核心路径+边界)· 错误处理(不吞异常)· 性能(分页/无重复计算)· 前端(照 pencil 稿/a11y)。匹配领域而非全扫;发现问题当场修;改完跑构建/测试再声明完成。";
+} else {
+  // 非元层文件:按文件性质叠加提示(代码型→质量门;前端/UI→design-taste,二者可同时命中如 .tsx)
+  const parts = [];
+  if (isCode) {
+    parts.push("【dao-quality 质量门】本次改动涉及代码文件。收尾前按任务领域过检查清单:安全(输入验证/认证/无硬编码密钥)· 数据库(N+1/索引/migration 可逆)· 测试(核心路径+边界)· 错误处理(不吞异常)· 性能(分页/无重复计算)。匹配领域而非全扫;发现问题当场修;改完跑构建/测试再声明完成。");
+  }
+  if (isFrontend) {
+    parts.push("【dao-design-taste】UI/前端改动:照 pencil 设计稿 · 字号体系(禁 text-[<12px]、走 Tailwind step) · a11y · 表单/控件走项目 ui/* 体系勿用原生 element。改完用 playwright 量 computed style 对齐 mockup 再声明完成。");
+  }
+  context = parts.join(" ");
 }
 
 if (context) {
