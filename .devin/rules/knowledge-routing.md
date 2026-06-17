@@ -23,6 +23,14 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 | 教训 / 踩坑 | `data/evolution-lessons.csv`（优先） |
 | 演化条目 | `data/evolution-entries.csv` |
 
+## 回顾即检索
+
+> 知常曰明。存了要能被想起才算闭环。
+
+遇回顾类提问（之前/上次/当时/记得吗/为什么当时）先搜 Memory + 演化教训库再答，勿凭记忆直接断言。
+
+（Claude Code 侧由 `dao-rhythm` hook 在 UserPromptSubmit 确定性触发此行为；Windsurf 无 hook 生命周期，靠本软规则在 always_on 中倡导——同一意图·双栈异构触发：触发机制随宿主能力而异，意图共享。）
+
 ## 双文件模式
 
 每个项目最终都应有 `AGENT.md`（规则）+ `AGENT_GUIDE.md`（知识）：
