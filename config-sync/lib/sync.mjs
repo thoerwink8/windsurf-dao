@@ -1,4 +1,4 @@
-// dao-sync 编排器：cc-switch DB ↔ 仓库 snapshot ↔ GitHub(origin) 三层同步的唯一入口。
+// dao 编排器：cc-switch DB ↔ 仓库 snapshot ↔ GitHub(origin) 三层同步的唯一入口。
 //
 // 设计要点（见 docs/specs 与 PR 说明）：
 //   - 三层不是两层：DB ↔ 工作区 snapshot ↔ origin。每个方向动手前必先 git fetch 看分叉。
@@ -54,7 +54,7 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 const libDir = path.dirname(fileURLToPath(import.meta.url));
 // 转交给子脚本（doctor/inventory）。子脚本自己的退出码就是结果（doctor 发现问题会退 1），
-// 原样透传，不当作 dao-sync 自身崩溃。
+// 原样透传，不当作 dao 自身崩溃。
 function runChild(scriptFile) {
   try {
     execFileSync('node', [path.join(libDir, scriptFile)], { cwd: projectRoot, stdio: 'inherit' });
@@ -77,18 +77,18 @@ function runDaoPs1(action) {
 }
 
 function printHelp() {
-  console.log(`dao-sync —— windsurf-dao 统一入口（配置同步 + 部署 + 状态）
+  console.log(`dao —— windsurf-dao 统一入口（配置同步 + 部署 + 状态）
 
 用法：
-  dao-sync.bat                                         交互式菜单（推荐）
-  dao-sync.bat --direction=down [选项]                 下行：origin → 本机 DB + 部署（默认安全）
-  dao-sync.bat --direction=up   [选项]                 上行：本机 DB → origin（慎重，落后即拒）
+  dao.bat                                         交互式菜单（推荐）
+  dao.bat --direction=down [选项]                 下行：origin → 本机 DB + 部署（默认安全）
+  dao.bat --direction=up   [选项]                 上行：本机 DB → origin（慎重，落后即拒）
 
-  dao-sync.bat --deploy                                仅重新部署 skills/commands/hooks 到 ~/.claude
-  dao-sync.bat --status                                dao 双栈链接健康矩阵
-  dao-sync.bat --doctor                                只读体检（doctor）
-  dao-sync.bat --inventory                             只读盘点（inventory）
-  dao-sync.bat --persona                               Claude Code persona 切换
+  dao.bat --deploy                                仅重新部署 skills/commands/hooks 到 ~/.claude
+  dao.bat --status                                dao 双栈链接健康矩阵
+  dao.bat --doctor                                只读体检（doctor）
+  dao.bat --inventory                             只读盘点（inventory）
+  dao.bat --persona                               Claude Code persona 切换
 
 选项：
   --scope=all|settings,mcp,skills,prompts,proxy             同步范围（默认 all）
@@ -185,7 +185,7 @@ function settingsConsistency() {
 // ---------- 状态板 ----------
 
 function printStateBoard(state, sc) {
-  console.log('\n================ dao-sync 状态板 ================');
+  console.log('\n================ dao 状态板 ================');
   console.log(`  分支        : ${state.branch || '(未知)'}`);
   console.log(`  upstream    : ${state.upstream || '(无 upstream)'}`);
   if (state.hasUpstream) {
@@ -647,7 +647,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`dao-sync 失败：${error.message}`);
+  console.error(`dao 失败：${error.message}`);
   closeRl();
   process.exit(1);
 });

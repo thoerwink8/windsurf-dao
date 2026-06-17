@@ -17,7 +17,7 @@ config-sync/
   检Goal任状.bat       # Goal 任务状态检查（独立，与配置同步无关）
 ```
 
-> 统一入口 `dao-sync.bat` 已移至仓库根目录，与 `dao.ps1` 并列。
+> 统一入口 `dao.bat` 已移至仓库根目录，与 `dao.ps1` 并列。
 
 ## 配置存储
 
@@ -49,12 +49,12 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 ## 使用方式
 
-### 统一入口：dao-sync.bat
+### 统一入口：dao.bat
 
 双击：
 
 ```text
-dao-sync.bat
+dao.bat
 ```
 
 这是 DB ↔ 仓库快照 ↔ origin 三层同步的**唯一入口**，把旧的导出 / 恢复 / 体检 / 盘点融成一扇门，并加上 git 感知与三档护栏。流程：
@@ -117,7 +117,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 ### 体检
 
-在 `dao-sync.bat` 菜单选 `[3] 体检`，或跑 `dao-sync.bat --doctor` / `node lib/sync.mjs --doctor`。
+在 `dao.bat` 菜单选 `[3] 体检`，或跑 `dao.bat --doctor` / `node lib/sync.mjs --doctor`。
 
 体检只读，不自动修改。它会检查：
 
@@ -155,7 +155,7 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 ### 盘点来源
 
-在 `dao-sync.bat` 菜单选 `[4] 盘点`，或跑 `dao-sync.bat --inventory` / `node lib/sync.mjs --inventory`。
+在 `dao.bat` 菜单选 `[4] 盘点`，或跑 `dao.bat --inventory` / `node lib/sync.mjs --inventory`。
 
 只读盘点 skills / MCP 的多来源分布，标出重复 / 冲突 / 孤儿 / 悬空链，不改任何下发链。用于看清碎片化现状：
 
@@ -173,11 +173,11 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 ## 换机流程
 
-1. 在旧机器运行 `dao-sync.bat` 选上行导出。
+1. 在旧机器运行 `dao.bat` 选上行导出。
 2. 提交 `common/` 到 git。
 3. 手动复制 `config-sync/common-secrets.json` 到新机器同一位置。
 4. 新机器先安装并启动一次 cc-switch，让它创建基础 db。
-5. 运行 `dao-sync.bat` 选下行恢复。
+5. 运行 `dao.bat` 选下行恢复。
 6. 在新机器的 cc-switch 中配置供应商（token/API key）。
 7. 重启 cc-switch，并切换一次 provider。
-8. `dao-sync.bat --doctor` 确认状态。
+8. `dao.bat --doctor` 确认状态。

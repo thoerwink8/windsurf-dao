@@ -347,7 +347,7 @@ function checkTerminalSync() {
 
   const snap = readJsonIfExists(snapshotPaths.terminal, null);
   if (!snap) {
-    warn('缺少 common/terminal.json 快照，请运行 dao-sync.bat 上行导出 terminal。');
+    warn('缺少 common/terminal.json 快照，请运行 dao.bat 上行导出 terminal。');
     return;
   }
 
@@ -364,7 +364,7 @@ function checkTerminalSync() {
   if (localScheme && snapScheme && localScheme === snapScheme) {
     pass(`默认配色一致：${localScheme}`);
   } else if (localScheme && snapScheme) {
-    warn(`默认配色不一致：本机 "${localScheme}" ≠ 快照 "${snapScheme}"。如需同步，运行 dao-sync.bat 上行或下行。`);
+    warn(`默认配色不一致：本机 "${localScheme}" ≠ 快照 "${snapScheme}"。如需同步，运行 dao.bat 上行或下行。`);
   }
 
   const localSchemes = (wt.schemes || []).map((s) => s.name).sort();
