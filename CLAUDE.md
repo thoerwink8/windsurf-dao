@@ -39,24 +39,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 常用命令
 
-统一入口（`dao-sync.bat`，双击即用，融合配置同步 + 部署 + 状态）：
+统一入口（`dao.bat`，双击即用，融合配置同步 + 部署 + 状态）：
 
 ```powershell
-.\dao-sync.bat                    # 交互菜单（推荐，覆盖所有操作）
-.\dao-sync.bat --direction=down   # origin → 本机 DB + 部署（恢复/换机，默认安全）
-.\dao-sync.bat --direction=up     # 本机 DB → origin（发布，落后即拒；可加 --dry-run）
-.\dao-sync.bat --deploy           # 仅重新部署 skills/commands/hooks 到 ~/.claude（不动 DB/git）
-.\dao-sync.bat --status           # dao 双栈链接健康矩阵
-.\dao-sync.bat --doctor           # 配置一致性体检
-.\dao-sync.bat --inventory        # 只读盘点
-.\dao-sync.bat --persona          # 系统提示词人设切换（dao / fable5 / off）
+.\dao.bat                    # 交互菜单（推荐，覆盖所有操作）
+.\dao.bat --direction=down   # origin → 本机 DB + 部署（恢复/换机，默认安全）
+.\dao.bat --direction=up     # 本机 DB → origin（发布，落后即拒；可加 --dry-run）
+.\dao.bat --deploy           # 仅重新部署 skills/commands/hooks 到 ~/.claude（不动 DB/git）
+.\dao.bat --status           # dao 双栈链接健康矩阵
+.\dao.bat --doctor           # 配置一致性体检
+.\dao.bat --inventory        # 只读盘点
+.\dao.bat --persona          # 系统提示词人设切换（dao / fable5 / off）
 ```
 （前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
-底层工具（`dao.ps1`，一般不需直接调用，dao-sync.bat 内部使用）：
+底层工具（`dao.ps1`，一般不需直接调用，dao.bat 内部使用）：
 
 ```powershell
-.\dao.ps1 link-claude         # 部署到 Claude Code（dao-sync.bat --deploy 等效）
+.\dao.ps1 link-claude         # 部署到 Claude Code（dao.bat --deploy 等效）
 .\dao.ps1 unlink-claude       # 反向移除 dao 链接
 .\dao.ps1 link-global         # 链接 global_rules.md 到 Windsurf 全局配置
 .\dao.ps1 link-codex          # 镜像 skills 到 Codex

@@ -128,7 +128,7 @@ function loadSnapshots(only = null) {
 
 function mustRead(filePath, label) {
   if (!fs.existsSync(filePath)) {
-    throw new Error(`缺少 ${label}。请先在源机器运行 dao-sync.bat 导出。`);
+    throw new Error(`缺少 ${label}。请先在源机器运行 dao.bat 导出。`);
   }
   return readJsonIfExists(filePath, null);
 }

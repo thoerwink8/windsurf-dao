@@ -225,7 +225,7 @@ curl -s --max-time 15 -X POST "$DAO_HUB_URL/api/exec-sync" \
 >
 > ⚠️ **PowerShell `-replace` + `$` 陷阱**：replacement string 中 `$` 是 regex backreference。写入 JSON 文件时会产生非法 `\$` 转义（JSON 不认）。修正：用 `.Replace()` 方法（字面量替换）或 `$$` 表示单个 `$`。
 >
-> ⚠️ **禁触 `~/.claude/settings.json`**：任何写操作会导致正在运行的 reclaude/Claude Code 立即断开会话。只读查看可以，修改必须让用户手动或通过 cc-switch/dao-sync 触发。
+> ⚠️ **禁触 `~/.claude/settings.json`**：任何写操作会导致正在运行的 reclaude/Claude Code 立即断开会话。只读查看可以，修改必须让用户手动或通过 cc-switch/dao.bat 触发。
 
 > ⚠️ **轮询本身也烧一点 ACU**：第 3 步的轮询是云端 Agent 在发动作，也计费，且频繁轮询会把空闲会睡的 Devin 撑醒。所以**长任务稀疏轮询**（几分钟一次，别每 30 秒戳）；reclaude 干得越久，轮询间隔放越大。比云端亲自干仍省很多，但不是零。
 

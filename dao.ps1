@@ -1,14 +1,15 @@
-﻿# dao.ps1 — windsurf-dao 工具脚本
+﻿# dao.ps1 — windsurf-dao 统一工具脚本
 #
-# Usage:
-#   .\dao.ps1 status                          查看状态
-#   .\dao.ps1 link-global                     链接 global_rules.md 到 Windsurf 全局配置
-#   .\dao.ps1 link-rules <project>            把 dao .windsurf/rules/*.md 全部 symlink 到 <project>/.windsurf/rules
-#   .\dao.ps1 link-rules-all [-Root <dir>]    扫 <Root>（默认: dao 父目录）下所有 git/.windsurf 项目，批量 symlink
-#                                              -AlwaysOnOnly  仅 link always_on 类（5 个）
-#                                              -DryRun        只打印不执行
+# 主入口：dao.bat（双击即用，自动路由）
+#   dao.bat                                   配置同步交互菜单（= 原 dao-sync.bat）
+#   dao.bat --direction=down                  下行恢复
+#   dao.bat status                            查看状态（→ dao.ps1 status）
+#   dao.bat codegraph                         安装/修复 CodeGraph（→ dao.ps1 codegraph）
+#   dao.bat link-claude                       部署到 Claude Code（→ dao.ps1 link-claude）
 #
-# 部署模式：Sidecar workspace 不再是必需。link-rules-all 后 dao rules 在所有项目都跨载。
+# 直接调用 dao.ps1 也可以：
+#   .\dao.ps1 status / link-claude / codegraph / ...
+#
 # 前提：Windows Developer Mode（symlink 权限）
 
 param(
@@ -140,6 +141,18 @@ function Invoke-Status {
             Write-Host "  Persona inject: $pMode ($pSize)" -ForegroundColor Green
         } else {
             Write-Host "  Persona inject: off (run: dao.ps1 persona install)" -ForegroundColor Gray
+        }
+
+        # ── CodeGraph 状态 ──
+        $cgDir = Join-Path $env:LOCALAPPDATA "codegraph\current"
+        $cgNode = Join-Path $cgDir "node.exe"
+        $cgEntry = Join-Path $cgDir "lib\dist\bin\codegraph.js"
+        if ((Test-Path $cgNode) -and (Test-Path $cgEntry)) {
+            Write-Host "  CodeGraph: installed" -ForegroundColor Green
+        } elseif (Test-Path $cgNode) {
+            Write-Host "  CodeGraph: incomplete (run: dao.ps1 codegraph)" -ForegroundColor Yellow
+        } else {
+            Write-Host "  CodeGraph: not installed (run: dao.ps1 codegraph)" -ForegroundColor Red
         }
 
         # ── Codex 侧部署状态(镜像 ~/.claude/skills 源)──
@@ -1266,6 +1279,176 @@ function Invoke-UnlinkClaude {
     Write-Host "  Claude Code: restart session to apply. Source claude/ untouched (git-tracked)." -ForegroundColor DarkGray
 }
 
+# ── CodeGraph 安装与自愈 ──
+
+function Invoke-Codegraph {
+    # 完整自愈：检测 → 下载 → 解压 → 注册 MCP → init 当前项目
+    param([bool]$IsDryRun = $false)
+
+    $repo = "colbymchenry/codegraph"
+    $installBase = Join-Path $env:LOCALAPPDATA "codegraph"
+    $installDir = Join-Path $installBase "current"
+    $binNode = Join-Path $installDir "node.exe"
+    $binEntry = Join-Path $installDir "lib\dist\bin\codegraph.js"
+    $linked = 0; $skipped = 0; $err = 0
+
+    # ── 1. 检测安装完整性 ──
+    Write-Host "  [check]" -ForegroundColor Cyan
+    $needInstall = $false
+    if (!(Test-Path $binNode)) {
+        Write-Host "    node.exe 不存在" -ForegroundColor Yellow
+        $needInstall = $true
+    } elseif (!(Test-Path $binEntry)) {
+        Write-Host "    lib/dist/bin/codegraph.js 缺失（安装不完整）" -ForegroundColor Yellow
+        $needInstall = $true
+    } else {
+        Write-Host "    [skip ] 安装完整" -ForegroundColor DarkGray
+        $skipped++
+    }
+
+    # ── 2. 安装（停占用进程 → 清理 → 下载 → 解压）──
+    if ($needInstall) {
+        if ($IsDryRun) {
+            Write-Host "    [DRYRUN] 将下载并安装 codegraph" -ForegroundColor Cyan
+            $linked++
+        } else {
+            # 停掉占用 codegraph node.exe 的进程
+            $cgProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" }
+            if ($cgProcs) {
+                Write-Host "    停止 $($cgProcs.Count) 个占用进程..." -ForegroundColor Yellow
+                $cgProcs | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 500
+            }
+
+            # 清理旧目录
+            if (Test-Path $installDir) {
+                Remove-Item -Recurse -Force $installDir -Confirm:$false -ErrorAction SilentlyContinue
+            }
+            Ensure-Dir $installDir
+
+            # 获取最新版本号
+            Write-Host "    获取最新版本..." -ForegroundColor Cyan
+            $version = $null
+            try {
+                $r = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -MaximumRedirection 0 -ErrorAction Stop
+            } catch {
+                $loc = $_.Exception.Response.Headers.Location
+                if ($loc) { $version = ($loc.AbsolutePath -split '/')[-1] }
+            }
+            if (-not $version) {
+                Write-Host "    [error] 无法获取版本号（GitHub 可能限流）" -ForegroundColor Red
+                $err++
+            } else {
+                # 判断架构
+                $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+                $zipName = "codegraph-win32-$arch.zip"
+                $url = "https://github.com/$repo/releases/download/$version/$zipName"
+                $zipPath = Join-Path $env:TEMP $zipName
+
+                Write-Host "    下载 $version ($zipName)..." -ForegroundColor Cyan
+                try {
+                    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+                } catch {
+                    Write-Host "    [error] 下载失败: $_" -ForegroundColor Red
+                    $err++
+                    $zipPath = $null
+                }
+
+                if ($zipPath -and (Test-Path $zipPath)) {
+                    Write-Host "    解压..." -ForegroundColor Cyan
+                    Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
+
+                    # 处理可能的嵌套目录（zip 内有一层 codegraph-win32-x64/）
+                    $nested = Join-Path $installDir "codegraph-win32-$arch"
+                    if ((Test-Path $nested) -and !(Test-Path $binEntry)) {
+                        Get-ChildItem $nested | Move-Item -Destination $installDir -Force
+                        Remove-Item $nested -Force -Confirm:$false -ErrorAction SilentlyContinue
+                    }
+
+                    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+                    if (Test-Path $binEntry) {
+                        Write-Host "    [done ] 安装成功 $version" -ForegroundColor Green
+                        $linked++
+                    } else {
+                        Write-Host "    [error] 解压后仍缺 codegraph.js" -ForegroundColor Red
+                        $err++
+                    }
+                }
+            }
+        }
+    }
+
+    # ── 3. 注册 Claude Code MCP ──
+    Write-Host "  [mcp]" -ForegroundColor Cyan
+    if (!(Test-Path $binEntry)) {
+        Write-Host "    [skip ] codegraph 未安装，跳过 MCP 注册" -ForegroundColor DarkGray
+    } else {
+        $mcpRegistered = $false
+        try {
+            $mcpOut = & claude mcp get codegraph 2>&1
+            if ($LASTEXITCODE -eq 0 -and ($mcpOut -match 'codegraph\.js')) {
+                $mcpRegistered = $true
+            }
+        } catch {}
+
+        if ($mcpRegistered) {
+            Write-Host "    [skip ] MCP 已注册" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] 将注册 codegraph MCP" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                $nodeExe = $binNode -replace '\\', '/'
+                $entryJs = $binEntry -replace '\\', '/'
+                & claude mcp add codegraph -s user -- cmd /c "$nodeExe --liftoff-only $entryJs serve --mcp" 2>&1 | Out-Null
+                Write-Host "    [add  ] MCP codegraph 已注册" -ForegroundColor Green
+                $linked++
+            } catch {
+                Write-Host "    [error] MCP 注册失败: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    # ── 4. init 当前项目（如有 $TargetPath 或 cwd 是 git 仓库）──
+    $initTarget = if ($TargetPath -and (Test-Path $TargetPath)) { (Resolve-Path $TargetPath).Path } else { $null }
+    if (-not $initTarget) {
+        $cwd = (Get-Location).Path
+        if (Test-Path (Join-Path $cwd ".git")) { $initTarget = $cwd }
+    }
+
+    if ($initTarget -and (Test-Path $binEntry)) {
+        $cgDir = Join-Path $initTarget ".codegraph"
+        Write-Host "  [init] $initTarget" -ForegroundColor Cyan
+        if (Test-Path $cgDir) {
+            Write-Host "    [skip ] .codegraph/ 已存在" -ForegroundColor DarkGray
+            $skipped++
+        } elseif ($IsDryRun) {
+            Write-Host "    [DRYRUN] codegraph init $initTarget" -ForegroundColor Cyan
+            $linked++
+        } else {
+            try {
+                & $binNode $binEntry init $initTarget 2>&1 | Out-Null
+                if (Test-Path $cgDir) {
+                    Write-Host "    [done ] codegraph init 完成" -ForegroundColor Green
+                    $linked++
+                } else {
+                    Write-Host "    [warn ] init 未生成 .codegraph/（可能项目太小）" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "    [error] init 失败: $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  summary: done=$linked skipped=$skipped error=$err" -ForegroundColor Cyan
+    return ($err -eq 0)
+}
+
 # ── IDE 终端配置 ──
 
 function Invoke-SetTerminal {
@@ -1403,52 +1586,58 @@ switch ($Action) {
         Write-Host "`n  Setting IDE default terminal to Git Bash ..." -ForegroundColor Cyan
         Invoke-SetTerminal
     }
+    "codegraph" {
+        Write-Host "`n  CodeGraph: 检测 / 安装 / 注册 MCP ..." -ForegroundColor Cyan
+        $ok = Invoke-Codegraph -IsDryRun:$DryRun.IsPresent
+        if (-not $ok -and -not $DryRun.IsPresent) { exit 1 }
+    }
+    "sync" {
+        Write-Host "  请直接运行 dao.bat（不带参数）进入配置同步菜单。" -ForegroundColor Yellow
+        Write-Host "  dao.bat                      交互菜单" -ForegroundColor Gray
+        Write-Host "  dao.bat --direction=down      下行恢复" -ForegroundColor Gray
+        Write-Host "  dao.bat --deploy              重新部署" -ForegroundColor Gray
+        Write-Host "  dao.bat --doctor              配置体检" -ForegroundColor Gray
+        Write-Host "  dao.bat --persona             人设切换" -ForegroundColor Gray
+    }
     "persona" {
-        Write-Host "  persona 管理已统一到 dao-sync.bat（选 [5] persona 切换）" -ForegroundColor Yellow
-        Write-Host "  运行: dao-sync.bat  或  node config-sync/lib/sync.mjs --persona" -ForegroundColor Gray
+        Write-Host "  请运行 dao.bat（不带参数）→ 选 persona 切换" -ForegroundColor Yellow
+        Write-Host "  或: dao.bat --persona" -ForegroundColor Gray
     }
     default {
         Write-Host @"
 
   windsurf-dao tool
 
-  Usage:
-    .\dao.ps1 status                          Show dao source info and global link status
-    .\dao.ps1 link-global                     Link global_rules.md to Windsurf config
-    .\dao.ps1 link-rules <project>            Symlink dao .windsurf/rules/*.md into <project>/.windsurf/rules
-    .\dao.ps1 link-rules-all [-Root <dir>]    Bulk scan & symlink all projects under <Root>
-                                               -AlwaysOnOnly  only link always_on rules (5 files)
-                                               -DryRun        print without doing anything
-    .\dao.ps1 link-claude [-DryRun]           Symlink dao ccswitch/{skills,commands,agents} into ~/.claude,
-                                               copy docs/classics/*.md to ~/.claude/references/,
-                                               and append dao.md @import to ~/.claude/CLAUDE.md (Claude Code)
-    .\dao.ps1 unlink-claude [-DryRun]         Remove dao symlinks, references/, dao.md @import, and hooks
-                                               from ~/.claude (reverse of link-claude; source ccswitch/ untouched)
-    .\dao.ps1 link-codex [-DryRun]            Mirror ~/.claude/skills into ~/.codex/skills
-    .\dao.ps1 unlink-codex [-DryRun]          Remove Codex skill links that point into ~/.claude/skills
-    .\dao.ps1 link-codex-prompts [-DryRun]    Write high-frequency dao manual entries into ~/.codex/prompts
-    .\dao.ps1 unlink-codex-prompts [-DryRun]  Remove managed dao prompt files
-    .\dao.ps1 set-terminal                    Set IDE default terminal to Git Bash (Windsurf/Code/Cursor)
-    .\dao.ps1 persona install [dao|fable5]    Install system prompt injection (default: dao mode)
-    .\dao.ps1 persona switch <dao|fable5|off> Switch persona mode
-    .\dao.ps1 persona status                  Show persona injection state
-    .\dao.ps1 persona uninstall               Remove injection, restore vanilla claude
+  Primary entry: dao.bat (double-click or CLI)
+    dao.bat                                   Config sync interactive menu
+    dao.bat --direction=down                  Sync: origin -> local
+    dao.bat --deploy                          Redeploy skills/commands/hooks
+    dao.bat --doctor                          Config health check
+    dao.bat --persona                         Persona mode switch
+
+  Actions (via dao.bat <action> or .\dao.ps1 <action>):
+    status                                    Show dao source info and global link status
+    codegraph [-DryRun]                       Install/repair CodeGraph + register MCP + init project
+    codegraph <project-path>                  Install + init specified project
+    link-claude [-DryRun]                     Deploy dao to Claude Code (~/.claude)
+    unlink-claude [-DryRun]                   Remove dao from Claude Code
+    link-codex [-DryRun]                      Mirror ~/.claude/skills into ~/.codex/skills
+    unlink-codex [-DryRun]                    Remove Codex skill links
+    link-codex-prompts [-DryRun]              Write dao prompts into ~/.codex/prompts
+    unlink-codex-prompts [-DryRun]            Remove managed dao prompts
+    link-global                               Link global_rules.md to Windsurf config
+    link-rules <project>                      Symlink dao rules into project
+    link-rules-all [-Root <dir>]              Bulk symlink all projects
+                                               -AlwaysOnOnly  only always_on rules
+    set-terminal                              Set IDE terminal to Git Bash
 
   Examples:
-    .\dao.ps1 link-claude                     deploy dao to Claude Code (global)
-    .\dao.ps1 link-claude -DryRun             preview Claude Code deploy
-    .\dao.ps1 link-codex                      deploy Claude user skills to Codex
-    .\dao.ps1 link-codex -DryRun              preview Codex deploy
-    .\dao.ps1 link-codex-prompts              expose /prompts:dao-dev style entries in Codex
-    .\dao.ps1 unlink-claude -DryRun           preview Claude Code uninstall
-    .\dao.ps1 link-rules-all                  scan default root (dao's parent dir)
-    .\dao.ps1 link-rules-all -DryRun          preview without writing
-    .\dao.ps1 link-rules d:\frank\TraceyU     single project
-    .\dao.ps1 persona install                 install persona injection (dao mode)
-    .\dao.ps1 persona install fable5          install with Fable 5 prompt
-    .\dao.ps1 persona switch fable5           switch to Fable 5 mode (~122KB, ~30K tokens)
-    .\dao.ps1 persona switch dao              switch to 道德经 mode (~22KB, ~4K tokens)
-    .\dao.ps1 persona switch off              disable injection (vanilla claude)
+    dao.bat                                   config sync (interactive menu)
+    dao.bat status                            show deployment status
+    dao.bat codegraph                         install/repair CodeGraph
+    dao.bat link-claude                       deploy dao to Claude Code
+    dao.bat link-claude -DryRun               preview deploy
+    dao.bat link-rules-all                    bulk link all projects
 
 "@
     }
