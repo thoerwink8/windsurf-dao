@@ -357,7 +357,7 @@ function Invoke-LinkClaude {
     # ── 三类目录 symlink（skills/agents 链目录，commands 链文件）──
     $specs = @(
         @{ Name = "skills";   Kind = "dir";  Filter = "dao-*" },
-        @{ Name = "commands"; Kind = "file"; Filter = "dao-*.md" },
+        @{ Name = "commands"; Kind = "file"; Filter = "*.md" },
         @{ Name = "agents";   Kind = "file"; Filter = "dao-*.md" }
     )
     foreach ($spec in $specs) {
@@ -1044,7 +1044,7 @@ function Invoke-UnlinkClaude {
     $oldClaudeSrc = Join-Path $DaoRoot "claude"   # 兼容旧路径(重构前 claude/ → ccswitch/)
     $specs = @(
         @{ Name = "skills";   Filter = "dao-*" },
-        @{ Name = "commands"; Filter = "dao-*.md" },
+        @{ Name = "commands"; Filter = "*.md" },
         @{ Name = "agents";   Filter = "dao-*.md" }
     )
     foreach ($spec in $specs) {
