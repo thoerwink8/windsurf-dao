@@ -155,6 +155,20 @@
       "enabled_gemini": 0,
       "enabled_opencode": 1,
       "enabled_hermes": 0
+    },
+    {
+      "id": "windows-mcp",
+      "name": "windows-mcp",
+      "server_config": "{\"type\":\"stdio\",\"command\":\"${HOME}/AppData/Local/Programs/Python/Python313/python.exe\",\"args\":[\"-m\",\"windows_mcp\",\"serve\",\"--transport\",\"stdio\"]}",
+      "description": null,
+      "homepage": null,
+      "docs": null,
+      "tags": "[]",
+      "enabled_claude": 1,
+      "enabled_codex": 0,
+      "enabled_gemini": 0,
+      "enabled_opencode": 0,
+      "enabled_hermes": 0
     }
   ]
 }
