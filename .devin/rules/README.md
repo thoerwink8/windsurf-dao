@@ -1,4 +1,4 @@
-# .windsurf/rules/ · 13 文件导航
+# .devin/rules/ · 13 文件导航
 
 > 给人看的总览。AI 自动通过 trigger 加载，不读本文件。
 

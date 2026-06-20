@@ -32,10 +32,10 @@ description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP�
 | 脏  | 域                      | 位置                          | 职能             |
 | --- | ----------------------- | ----------------------------- | ---------------- |
 | 心  | **Rules（元规则）**     | rules/\*.md + global_rules.md | 行为的根本准则   |
-| 肺  | **Workflows（工作流）** | .windsurf/workflows/          | 做事的标准流程   |
-| 肝  | **Skills（技能）**      | .windsurf/skills/             | 具体能力的封装   |
+| 肺  | **Workflows（工作流）** | .devin/workflows/             | 做事的标准流程   |
+| 肝  | **Skills（技能）**      | .devin/skills/                | 具体能力的封装   |
 | 肾  | **MCP（外部工具）**     | MCP Server配置                | 与外部系统的连接 |
-| 骨  | **Stacks（技术栈处方）** | .windsurf/stacks/             | 固定的项目技术选型 |
+| 骨  | **Stacks（技术栈处方）** | .devin/stacks/                | 固定的项目技术选型 |
 
 **虚**（Memory）不是第五脏，是层间流通的气。涅槃时归位清空，不在此审查——虚是每次涅槃的内置步骤，不是定期体检的器官。
 

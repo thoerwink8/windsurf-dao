@@ -1,6 +1,6 @@
 ---
 trigger: glob
-globs: .windsurf/rules/**/*.md, .windsurf/skills/dao-**/*.md, .windsurf/workflows/dao-*.md
+globs: .devin/rules/**/*.md, .devin/skills/dao-**/*.md, .devin/workflows/dao-*.md
 ---
 
 # Dao 元层 · 变更守卫

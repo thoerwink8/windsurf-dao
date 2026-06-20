@@ -400,7 +400,7 @@ git revert [N4-commit-hash] --no-edit
 
 **评估三问**(逐条 lesson 过):
 
-1. **跨项目可复用方法论？** → 评估上提到 `windsurf-dao/.windsurf/skills/dao-*/SKILL.md` 对应 skill
+1. **跨项目可复用方法论？** → 评估上提到 `windsurf-dao/.devin/skills/dao-*/SKILL.md` 对应 skill
    - 例: HTTP socket.on(end) 误诊 → 对应 dao skill 加调试模式
    - 例: SQL 节流 > JS Map → 对应 dao skill 或新 skill
 
@@ -408,7 +408,7 @@ git revert [N4-commit-hash] --no-edit
    - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
    - 例: 项目 schema 反复踩的 migration 坑 → 项目 AGENT.md
 
-3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `windsurf-dao/.windsurf/rules/*.md` 对应规则
+3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `windsurf-dao/.devin/rules/*.md` 对应规则
    - 例: superpowers 实战见证 → `superpowers-gate.md` 末尾加见证段
    - 例: 发现 worktree 流程漏洞 → `dao-mantra.md` 或新建 sidecar rule
 
@@ -421,15 +421,15 @@ git revert [N4-commit-hash] --no-edit
 - ...
 ```
 
-**上提归位表**(参考 `windsurf-dao/.windsurf/rules/knowledge-routing.md`):
+**上提归位表**(参考 `windsurf-dao/.devin/rules/knowledge-routing.md`):
 
 | 性质 | 位置 |
 |---|---|
 | 跨项目通用调试模式 | 已内化到 `dao.md`，无需独立 skill |
 | 跨项目通用执行模式 | 对应 dao skill 或 `dao.md` |
-| 跨项目通用 review | `.windsurf/skills/dao-review/SKILL.md` |
+| 跨项目通用 review | `.devin/skills/dao-review/SKILL.md` |
 | 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
-| 流程规则修订 | `.windsurf/rules/*.md` 对应文件 |
+| 流程规则修订 | `.devin/rules/*.md` 对应文件 |
 | 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
 | 仅历史可追溯 | 仅 CSV 即可,无需上提 |
 

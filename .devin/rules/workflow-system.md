@@ -7,7 +7,7 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 
 > 希言自然。故飘风不终朝，骤雨不终日。
 
-**本文件 vs `.windsurf/workflows/dao-*.md`**：本文件是**元协作层**（讨论"用哪个工作流/工作流如何配合"）；`workflows/dao-*.md` 是**具体定义**（单个工作流的步骤）。本文件不重复 workflow 内容，只描述选择决策。
+**本文件 vs `.devin/workflows/dao-*.md`**：本文件是**元协作层**（讨论"用哪个工作流/工作流如何配合"）；`workflows/dao-*.md` 是**具体定义**（单个工作流的步骤）。本文件不重复 workflow 内容，只描述选择决策。
 
 ## 工作流定位
 
@@ -21,7 +21,7 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 - `/session-sync` — 多会话协作（git 为共享状态，无需其他会话配合）
 - `/thread-tree` — 处理 TODO.md Open Threads 未解决项
 
-**技术栈处方**（`.windsurf/stacks/`）：`/dev` 基建审计时按需加载，不是工作流。
+**技术栈处方**（`.devin/stacks/`）：`/dev` 基建审计时按需加载，不是工作流。
 
 ## 通信原则
 
