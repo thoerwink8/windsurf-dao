@@ -1,16 +1,24 @@
-// dao 脚手架检查 hook — SessionStart · 进入项目时静默检查标准结构
+// dao 脚手架检查 hook — SessionStart · 两种模式
 //
-// 两种模式：
-// A) 普通项目：检查 dao-project-scaffold 标准（CLAUDE.md / rules / 无冗余入口 / docs 扁平）
-// B) windsurf-dao 元仓库：检查 hook 文件是否都已注册到 settings.json
+// A) windsurf-dao 元仓库：全面同步漂移检测（双向）
+//    - hook 文件 vs settings.json 注册
+//    - settings.json 快照 vs 本地部署（双向：谁领先提醒谁）
+//    - windsurf-dao 未提交改动（本地领先 → 提醒上行）
+//    - windsurf-dao 落后 origin（远程领先 → 提醒下行）
 //
-// 发现缺项 → 注入 additionalContext 提醒 AI 在首次回答末尾告知用户。
-// 全部通过 → 静默退出，不污染 context。
+// B) 普通项目：检查 dao-project-scaffold 标准
+//    - CLAUDE.md 存在且 <80 行
+//    - .claude/rules/ 存在
+//    - 无冗余入口（AGENT_GUIDE.md 等）
+//    - docs/ 结构扁平
+//
+// 发现问题 → 注入 additionalContext。全通过 → 静默退出。
 //
 // 真相源：windsurf-dao/ccswitch/hooks/dao-scaffold-check.js
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
 let raw = "";
 try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}
@@ -19,6 +27,7 @@ let input = {};
 try { input = JSON.parse(raw); } catch (_) {}
 
 const cwd = String(input.cwd || process.cwd());
+const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 
 function inject(context) {
   process.stdout.write(JSON.stringify({
@@ -28,40 +37,123 @@ function inject(context) {
 }
 function done() { process.exit(0); }
 
-function checkHookSync() {
+// ══════════════════════════════════════════════════════════════
+// 模式 B: windsurf-dao 元仓库 — 全面同步漂移检测
+// ══════════════════════════════════════════════════════════════
+
+function checkDaoSync() {
+  const daoRoot = cwd;
+  const drifts = [];
+
+  // 1. Hook 文件 vs settings.json 注册
   try {
-    const hooksDir = path.join(cwd, "ccswitch", "hooks");
-    if (!fs.existsSync(hooksDir)) return;
-
-    const settingsPath = path.join(
-      process.env.HOME || process.env.USERPROFILE || "",
-      ".claude", "settings.json"
-    );
-    if (!fs.existsSync(settingsPath)) return;
-
-    const settingsRaw = fs.readFileSync(settingsPath, "utf8");
-
-    const hookFiles = fs.readdirSync(hooksDir)
-      .filter(f => f.endsWith(".js"))
-      .map(f => f.replace(/\.js$/, ""));
-
-    const unregistered = hookFiles.filter(name => !settingsRaw.includes(name));
-
-    if (unregistered.length === 0) return;
-
-    inject(
-      "【dao 同步检查】以下 hook 文件存在于 ccswitch/hooks/ 但未在 settings.json 中注册：\n" +
-      unregistered.map(n => "- " + n + ".js").join("\n") +
-      "\n请提醒用户是否需要注册到 ~/.claude/settings.json 的 hooks 配置中。"
-    );
+    const hooksDir = path.join(daoRoot, "ccswitch", "hooks");
+    const settingsPath = path.join(homeDir, ".claude", "settings.json");
+    if (fs.existsSync(hooksDir) && fs.existsSync(settingsPath)) {
+      const settingsRaw = fs.readFileSync(settingsPath, "utf8");
+      const hookFiles = fs.readdirSync(hooksDir)
+        .filter(f => f.endsWith(".js"))
+        .map(f => f.replace(/\.js$/, ""));
+      const unregistered = hookFiles.filter(name => !settingsRaw.includes(name));
+      if (unregistered.length > 0) {
+        drifts.push("⬇ Hook 未注册：" + unregistered.map(n => n + ".js").join(", ") + " → 需注册到 settings.json");
+      }
+    }
   } catch (_) {}
+
+  // 2. settings.json 快照 vs 本地部署（双向漂移）
+  try {
+    const snapshotPath = path.join(daoRoot, "config-sync", "common", "settings.json");
+    const deployedPath = path.join(homeDir, ".claude", "settings.json");
+    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
+      const snapshotMtime = fs.statSync(snapshotPath).mtimeMs;
+      const deployedMtime = fs.statSync(deployedPath).mtimeMs;
+      const snapshotHash = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
+      const deployedHash = simpleHash(fs.readFileSync(deployedPath, "utf8"));
+      if (snapshotHash !== deployedHash) {
+        if (snapshotMtime > deployedMtime) {
+          drifts.push("⬇ settings.json 快照比本地部署新 → 运行 dao.bat 下行同步");
+        } else {
+          drifts.push("⬆ 本地 settings.json 比仓库快照新 → 运行 dao.bat --direction=up 上行同步");
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 3. MCP 配置快照 vs 本地（同理）
+  try {
+    const snapshotPath = path.join(daoRoot, "config-sync", "common", "mcp_servers.json");
+    const deployedPath = path.join(homeDir, ".claude", "mcp_servers.json");
+    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
+      const snapshotHash = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
+      const deployedHash = simpleHash(fs.readFileSync(deployedPath, "utf8"));
+      if (snapshotHash !== deployedHash) {
+        const snapshotMtime = fs.statSync(snapshotPath).mtimeMs;
+        const deployedMtime = fs.statSync(deployedPath).mtimeMs;
+        if (snapshotMtime > deployedMtime) {
+          drifts.push("⬇ mcp_servers.json 快照比本地新 → 下行同步");
+        } else {
+          drifts.push("⬆ 本地 mcp_servers.json 比快照新 → 上行同步");
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 4. windsurf-dao 未提交改动
+  try {
+    const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
+      encoding: "utf8", timeout: 5000
+    }).trim();
+    if (status) {
+      const changedCount = status.split(/\r?\n/).length;
+      drifts.push("⬆ windsurf-dao 有 " + changedCount + " 个未提交改动 → 考虑提交并上行同步");
+    }
+  } catch (_) {}
+
+  // 5. windsurf-dao 落后 origin（用 last fetch 数据，不联网）
+  try {
+    const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
+      encoding: "utf8", timeout: 5000
+    }).trim();
+    if (parseInt(behind, 10) > 0) {
+      drifts.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交 → 运行 dao.bat 下行同步");
+    }
+    const ahead = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "origin/master..HEAD"], {
+      encoding: "utf8", timeout: 5000
+    }).trim();
+    if (parseInt(ahead, 10) > 0) {
+      drifts.push("⬆ windsurf-dao 领先 origin " + ahead + " 个提交 → 考虑 git push 或 dao.bat --direction=up");
+    }
+  } catch (_) {}
+
+  if (drifts.length === 0) return;
+
+  inject(
+    "【dao 同步漂移检测】windsurf-dao 存在以下同步差异：\n" +
+    drifts.join("\n") +
+    "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。" +
+    "请在回答末尾简洁提醒用户。"
+  );
 }
 
-// windsurf-dao 元仓库：不检查项目模板，改为检查 hook 注册同步
+function simpleHash(text) {
+  let h = 0;
+  const s = text.replace(/\s+/g, "");
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+// windsurf-dao 元仓库：走同步漂移检测
 if (path.basename(cwd) === "windsurf-dao") {
-  checkHookSync();
+  checkDaoSync();
   done();
 }
+
+// ══════════════════════════════════════════════════════════════
+// 模式 A: 普通项目 — dao-project-scaffold 标准检查
+// ══════════════════════════════════════════════════════════════
 
 // 跳过非 git 项目
 try {
@@ -69,6 +161,9 @@ try {
 } catch (_) { done(); }
 
 const issues = [];
+
+// 同时检查 windsurf-dao 的同步状态（从任意项目都能检测）
+checkDaoDrift();
 
 // 1. CLAUDE.md 存在且不超 80 行
 const claudeMd = path.join(cwd, "CLAUDE.md");
@@ -125,3 +220,55 @@ inject(
   issues.map((s, i) => (i + 1) + ". " + s).join("\n") +
   "\n详细模板参考 dao-project-scaffold skill。提醒语气简洁友好，不阻塞用户当前任务。"
 );
+
+// ── 从任意项目检测 windsurf-dao 同步漂移 ──
+function checkDaoDrift() {
+  try {
+    // 通过 hook 自身路径定位 windsurf-dao
+    const daoRoot = path.resolve(__dirname, "..", "..");
+    if (!fs.existsSync(path.join(daoRoot, "ccswitch"))) return;
+
+    const driftItems = [];
+
+    // settings.json 快照 vs 部署
+    const snapshotPath = path.join(daoRoot, "config-sync", "common", "settings.json");
+    const deployedPath = path.join(homeDir, ".claude", "settings.json");
+    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
+      const sh = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
+      const dh = simpleHash(fs.readFileSync(deployedPath, "utf8"));
+      if (sh !== dh) {
+        const sm = fs.statSync(snapshotPath).mtimeMs;
+        const dm = fs.statSync(deployedPath).mtimeMs;
+        driftItems.push(sm > dm
+          ? "⬇ settings.json 快照比本地新 → dao.bat 下行"
+          : "⬆ 本地 settings.json 比快照新 → dao.bat --direction=up"
+        );
+      }
+    }
+
+    // windsurf-dao 未提交
+    try {
+      const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
+        encoding: "utf8", timeout: 5000
+      }).trim();
+      if (status) {
+        driftItems.push("⬆ windsurf-dao 有未提交改动");
+      }
+    } catch (_) {}
+
+    // windsurf-dao 落后 origin
+    try {
+      const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
+        encoding: "utf8", timeout: 5000
+      }).trim();
+      if (parseInt(behind, 10) > 0) {
+        driftItems.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交");
+      }
+    } catch (_) {}
+
+    if (driftItems.length > 0) {
+      // 不单独 inject（会终止），而是追加到 issues 里一起报
+      issues.push("windsurf-dao 同步漂移：" + driftItems.join("；"));
+    }
+  } catch (_) {}
+}
