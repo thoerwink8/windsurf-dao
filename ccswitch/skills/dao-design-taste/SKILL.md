@@ -222,17 +222,44 @@ components/
 - **内容居中** — 用 `flex items-center justify-center`，不用 `margin: auto` hack
 - **间距一致性** — 同一层级的元素间距保持一致，不出现 8px/12px/8px 这种跳跃
 
-### 4.6 表单
+### 4.6 Icon 纪律
+
+> 上善若水。用对的库，让容器控制尺寸，AI 不画图标。
+
+**一库制**：一个项目只用一套图标库（Lucide / Phosphor / Heroicons 等），禁止自制 SVG、禁止混用多库。选定后写入项目 CLAUDE.md。
+
+**尺寸阶梯**：icon 只用标准 Tailwind 尺寸阶梯，禁止任意像素值：
+
+| 允许 | 禁止 |
+|---|---|
+| `size-3`(12px) / `size-3.5`(14px) / `size-4`(16px) / `size-5`(20px) | `h-[13px]` / `w-[17px]` / 任何 `h-[Npx]` 写法 |
+
+**容器自动控制**：按钮/SurfaceIcon 等容器组件通过 `[&_svg]:size-*` 自动控制子 icon 尺寸——icon 本身**不需要**显式设尺寸 class，让容器的 size variant 接管。只有容器外的独立 icon 才显式声明尺寸。
+
+**颜色语义化**：icon 颜色必须走语义 token（`text-foreground` / `text-muted-foreground` / `text-primary` 等），禁止硬编码灰色（`text-gray-500`）。按钮内 icon 继承按钮文字色，不需显式设色。
+
+**契约测试守护**：项目应有 `icon-system-contract.spec.*` 测试文件，至少覆盖：
+- 容器组件的 SVG 自动尺寸机制（各 size variant）
+- 无任意像素值出现在 icon className 上
+- icon 颜色走语义 token
+
+**审计清单**（组件审计 §6 的 icon 专项补充）：
+1. 全库扫描图标库导入 → 确认单一库源
+2. 扫描所有 icon className → 标记非标尺寸和硬编码颜色
+3. 检查容器内 icon 是否多余设了显式尺寸（应让容器控制）
+4. 检查 icon 与文字的 gap 是否在同类组件间一致
+
+### 4.7 表单
 
 - label 在输入框**上方**，错误文字在**下方**
 - **禁 placeholder 当 label**
 - 全部过 WCAG AA 对比度
 
-### 4.7 文案自审（出货前强制）
+### 4.8 文案自审（出货前强制）
 
 重读页面每一处可见字符串，标记并改写：语法不通 / AI 幻觉 / LLM 腔 / 假精确数字。**em-dash 全禁作设计点缀。**
 
-### 4.8 主题锁
+### 4.9 主题锁
 
 整个页面**一个主题**。section 不许中途反色。同主题家族内的背景微调可以；跳到对立色 = 破相。
 
