@@ -101,7 +101,7 @@ trigger: always_on
 
 ```
 ┌─ 层 1 · mantra（1 rule, ≤30 行 always_on） ─┐
-│ .windsurf/rules/dao-mantra.md                │
+│ .devin/rules/dao-mantra.md                │
 │ 8 句根基 + 场景表（指向，不展开）              │
 └──────────┬───────────────────────────────────┘
            ↓ 场景表指向
@@ -119,9 +119,9 @@ trigger: always_on
 
 ## 文件清单（5 新建 + 4 修改，同 v1 数量）
 
-### 🆕 文件 1：`.windsurf/rules/dao-mantra.md` (≤30 行，内容见上)
+### 🆕 文件 1：`.devin/rules/dao-mantra.md` (≤30 行，内容见上)
 
-### 🆕 文件 2：`.windsurf/skills/dao-empathy/SKILL.md`
+### 🆕 文件 2：`.devin/skills/dao-empathy/SKILL.md`
 
 **Frontmatter**：
 ```yaml
@@ -150,7 +150,7 @@ description: 用户视角共情术——以百姓心为心 (49 章)，把 AI 代
 6. 反模式：开发者自我中心 / 想当然式假设 / 不验证就动手
 7. 与 dao-brainstorm / dao-frontend-aesthetics / dao-user-simulation 协作
 
-### 🆕 文件 3：`.windsurf/skills/dao-full-coverage/SKILL.md`
+### 🆕 文件 3：`.devin/skills/dao-full-coverage/SKILL.md`
 
 **Frontmatter**：
 ```yaml
@@ -178,7 +178,7 @@ description: 主动全面体检术——病病 (71 章)，认识到自己看不�
 7. 报告产出格式（统一表格：维度 + 严重度 + 修复建议）
 8. 反模式：「看见就修」（破坏当前任务焦点）vs「记录排队修」原则
 
-### 🆕 文件 4：`.windsurf/skills/dao-user-simulation/SKILL.md`
+### 🆕 文件 4：`.devin/skills/dao-user-simulation/SKILL.md`
 
 **Frontmatter**：
 ```yaml
@@ -202,7 +202,7 @@ description: 用户视角端到端仿真术——以身观身 (54 章)，用 chr
 6. 反模式：只走主流程 / 看截图就行（必须看 console + network） / 用户假设
 7. 何时激活（清单）
 
-### 🆕 文件 5：`.windsurf/workflows/dao-superpowers.md`
+### 🆕 文件 5：`.devin/workflows/dao-superpowers.md`
 
 **Frontmatter**：
 ```yaml
@@ -246,7 +246,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 - §四·全流程七步：在"析"之前增"共"（dao-empathy 共情阶段）
 - 新加一段：mantra 心怀八句的 always_on 加载机制说明
 
-### ✏️ 文件 8：`.windsurf/rules/README.md`（修改）
+### ✏️ 文件 8：`.devin/rules/README.md`（修改）
 
 - rules 9 → 10，加 dao-mantra 行
 - 在 5 层架构归类——属于"协作 mantra"层（新设），位于"元规则" / "项目铁律"之间
@@ -284,7 +284,7 @@ e163,worktree;dao-empathy;dao-full-coverage;dao-user-simulation;dao-superpowers;
 - [ ] 3 新 skill 各有边界差异说明
 - [ ] /dao-superpowers 与 /dao-dev 有差异表
 - [ ] dao-meta 三关全过
-- [ ] README + AGENT_GUIDE + .windsurf/rules/README 表格同步
+- [ ] README + AGENT_GUIDE + .devin/rules/README 表格同步
 - [ ] evolution-entries.csv 加 e164（含道德经研究过程）
 - [ ] commit 走 dao-commit 规范，不直推 master
 - [ ] 用户最终审批
