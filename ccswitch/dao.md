@@ -119,10 +119,13 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 全面体检 / 验证完成 | `dao-verify` | 慎终如始 (64) |
 | review / 接受批评 | `dao-review` | 受国之垢 (78) |
 | UI / 界面 / 组件 / 主题 | `dao-design-taste`(基石总闸,先分诊) | 大象无形 (41) |
+| UI 视觉问题修复 | `dao-design-qa`(截图→设计工具→代码回填) | 反者道之动 (40) |
 | 隔离工作区 | `dao-worktree` | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 知常曰明 (16) |
 
-7 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
+8 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
+
+**UI 视觉问题自动触发**：发现 UI 视觉 bug（布局错位、颜色不对、文字截断、间距不一致等）或用户发截图反馈时，自动走 `dao-design-qa` 三步循环（截图找问题 → 设计工具修设计 → 代码回填），不直接改代码。有设计工具 MCP 时走完整三步；无设计工具时跳过设计步直接改代码。
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 
