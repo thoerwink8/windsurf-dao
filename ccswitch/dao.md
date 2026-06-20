@@ -95,7 +95,14 @@
 | 教训 / 踩坑（记忆级） | `memory/`（跨会话模式/坑，MEMORY.md 索引可见） |
 | 教训 / 踩坑（档案级） | `docs/evolution/*.csv`（完整因果链，Obsidian 数据源） |
 
-**项目标准结构**（首次进入项目时对照检查，缺则建议创建）：详见 `skills/dao-project-scaffold/` 模板。原则：根目录只放活文档，CLAUDE.md + `.claude/rules/` 是唯一的 AI 上下文通道。
+**项目标准结构**（首次进入项目 · 必检）：每次进入一个项目的**首轮交互**，在回答用户问题之前，先静默检查以下四项。缺项则在回答末尾追加提醒（不阻塞用户任务）：
+
+1. `CLAUDE.md`（或 Devin 侧 `AGENT.md`）存在且 <80 行
+2. `.claude/rules/`（或 `.devin/rules/`）目录存在
+3. 根目录无冗余 AI 入口（`AGENT_GUIDE.md` / `KNOWLEDGE.md` 等应归入 rules）
+4. `docs/` 结构扁平（无 specs/superpowers 分裂，统一用 `plans/`）
+
+详细模板见 `skills/dao-project-scaffold/`。原则：根目录只放活文档，AI 入口 + rules 是唯一上下文通道。
 
 **Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
 
