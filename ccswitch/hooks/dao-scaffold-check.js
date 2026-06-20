@@ -1,10 +1,8 @@
 // dao 脚手架检查 hook — SessionStart · 进入项目时静默检查标准结构
 //
-// 每次 session 启动时检查当前项目是否符合 dao-project-scaffold 标准：
-// 1. CLAUDE.md 存在且不超 80 行
-// 2. .claude/rules/ 目录存在
-// 3. 根目录无冗余 AI 入口（AGENT_GUIDE.md / KNOWLEDGE.md）
-// 4. docs/ 结构扁平（无 specs/superpowers 分裂）
+// 两种模式：
+// A) 普通项目：检查 dao-project-scaffold 标准（CLAUDE.md / rules / 无冗余入口 / docs 扁平）
+// B) windsurf-dao 元仓库：检查 hook 文件是否都已注册到 settings.json
 //
 // 发现缺项 → 注入 additionalContext 提醒 AI 在首次回答末尾告知用户。
 // 全部通过 → 静默退出，不污染 context。
@@ -30,8 +28,40 @@ function inject(context) {
 }
 function done() { process.exit(0); }
 
-// 跳过 windsurf-dao 自身（元仓库不需要项目模板）
-if (path.basename(cwd) === "windsurf-dao") done();
+function checkHookSync() {
+  try {
+    const hooksDir = path.join(cwd, "ccswitch", "hooks");
+    if (!fs.existsSync(hooksDir)) return;
+
+    const settingsPath = path.join(
+      process.env.HOME || process.env.USERPROFILE || "",
+      ".claude", "settings.json"
+    );
+    if (!fs.existsSync(settingsPath)) return;
+
+    const settingsRaw = fs.readFileSync(settingsPath, "utf8");
+
+    const hookFiles = fs.readdirSync(hooksDir)
+      .filter(f => f.endsWith(".js"))
+      .map(f => f.replace(/\.js$/, ""));
+
+    const unregistered = hookFiles.filter(name => !settingsRaw.includes(name));
+
+    if (unregistered.length === 0) return;
+
+    inject(
+      "【dao 同步检查】以下 hook 文件存在于 ccswitch/hooks/ 但未在 settings.json 中注册：\n" +
+      unregistered.map(n => "- " + n + ".js").join("\n") +
+      "\n请提醒用户是否需要注册到 ~/.claude/settings.json 的 hooks 配置中。"
+    );
+  } catch (_) {}
+}
+
+// windsurf-dao 元仓库：不检查项目模板，改为检查 hook 注册同步
+if (path.basename(cwd) === "windsurf-dao") {
+  checkHookSync();
+  done();
+}
 
 // 跳过非 git 项目
 try {
