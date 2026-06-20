@@ -22,7 +22,7 @@ trigger: always_on
 | 维度 | Windsurf Plan Mode | superpowers |
 |---|---|---|
 | 性质 | IDE 内置功能（模式切换器图标） | obra 团队的工作流标准 |
-| plan 文件 | `~/.windsurf/plans/`（用户全局） | `docs/specs/<topic>-plan.md`（项目内，与 dao-plan + 项目惯例一致） |
+| plan 文件 | `~/.windsurf/plans/`（用户全局，Windsurf 旧路径） | `docs/specs/<topic>-plan.md`（项目内，与 dao-plan + 项目惯例一致） |
 | 工具 | "All tools enabled" 同 Code 模式 | 同 Code 模式 |
 | 退出 | 点 Implement / 切 Code / agent 自动 | 走完 finishing-a-branch / 用户喊停 |
 | 重量 | 轻（讨论 + 单文件 markdown） | 重（worktree + subagent + reviewer） |

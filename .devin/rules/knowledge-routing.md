@@ -50,8 +50,8 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 
 > 朴散则为器。Rules 是朴，Skills 是器。
 
-- `.windsurf/rules/*.md` 是 **rule**：通过读取文件生效，不通过 `skill()` 调用
-- `.windsurf/skills/*/skill.md` 是 **skill**：仅当工具清单里存在对应 skill 名时才调用
+- `.devin/rules/*.md` 是 **rule**：通过读取文件生效，不通过 `skill()` 调用
+- `.devin/skills/*/skill.md` 是 **skill**：仅当工具清单里存在对应 skill 名时才调用
 - skill 调用时机由 system prompt 中 skill 列表的 description 决定，本文不重复
 
 ## 中间物 · _tmp/ 归位
