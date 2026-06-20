@@ -40,9 +40,17 @@ const isDaoMeta = /(^|\/)ccswitch\/dao\.md$/.test(norm) ||
                   /(^|\/)ccswitch\/(skills|commands|agents)\/dao-/.test(norm) ||
                   /(^|\/)\.windsurf\/(rules|skills|workflows)\//.test(norm);
 
+// settings.json / windsurf-dao 文件改动 → 提醒同步
+const isSettingsJson = /[\\/]\.claude[\\/]settings\.json$/.test(norm) || /[\\/]\.claude[\\/]mcp_servers\.json$/.test(norm);
+const isWindsurfDaoFile = /[\\/]windsurf-dao[\\/]/.test(norm) && !/(node_modules|_tmp|\.git)[\\/]/.test(norm);
+
 let context = "";
 if (isDaoMeta) {
   context = "【dao-meta 守卫】本次改动涉及 dao 元层文件。收尾前过三关:① 通用性(换项目还成立吗) ② 内容边界(只许思维/流程/准则,禁技术选型/API/配置) ③ 影响评估(会让其他 dao 项目变差吗)。不通过 → 路由到项目 AGENT.md/CLAUDE.md。双栈共存:ccswitch/ 与 .windsurf/ 哲学需一致。";
+} else if (isSettingsJson) {
+  context = "【dao 同步提醒】你刚修改了 " + norm.split("/").pop() + "，本地配置已领先于 windsurf-dao 快照。任务完成后提醒用户运行 dao.bat --direction=up 上行同步，或在回答末尾追加同步建议。";
+} else if (isWindsurfDaoFile) {
+  context = "【dao 同步提醒】你刚修改了 windsurf-dao 仓库文件。任务完成后提醒用户:① 提交改动 ② 运行 dao.bat --direction=up 上行同步 ③ 如果改了 hooks/skills/commands，确认 settings.json 注册或 deploy 已更新。";
 } else {
   // 非元层文件:按文件性质叠加提示(代码型→质量门;前端/UI→design-taste,二者可同时命中如 .tsx)
   const parts = [];
