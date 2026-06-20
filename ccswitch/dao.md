@@ -40,7 +40,9 @@
 → <归属地一句话说明>
 ```
 
-判据：这个产物未来会被**其他项目 / 其他会话 / 其他人**复用吗？会 → 提醒。纯一次性 → 不提。常见归属地：windsurf-dao（共享 skill/command/配置）、release 仓库（可交付二进制）、Obsidian vault（笔记/文档）、dotfiles（个人环境配置）——不限于此，AI 根据上下文判断。指令必须是用户可以**零编辑直接粘贴**给任意 AI 会话执行的 prompt。
+判据：这个产物未来会被**其他项目 / 其他会话 / 其他人**复用吗？会 → 提醒。纯一次性 → 不提。常见归属地：windsurf-dao（共享 skill/command/配置）、release 仓库（可交付二进制）、Obsidian vault（笔记/文档）、dotfiles（个人环境配置）、`.claude/rules/`（项目级规范，随 git 共享）——不限于此，AI 根据上下文判断。指令必须是用户可以**零编辑直接粘贴**给任意 AI 会话执行的 prompt。
+
+**项目规范自动沉淀**（各复归其根 × 道常无为而无不为）：当对话中产出了**项目级规范性内容**（设计 token 体系 / 组件契约 / 编码约定 / 测试策略等），AI 应主动判断是否需要沉淀到 `.claude/rules/` 下的独立文件。判据：这个规范会被后续开发反复引用、且不适合塞进 CLAUDE.md 主文件 → 沉淀。加 `paths:` frontmatter 可按路径条件加载，不加则无条件加载。首次进入一个项目时，若 `.claude/rules/` 不存在且项目已有规范性内容散落在 CLAUDE.md 中，建议拆分。
 
 ## 动 · 三才之机
 
@@ -84,6 +86,7 @@
 |---|---|
 | 不变原则 / 道德经哲学 | 本文件 / `docs/classics/帛书老子.md` + `docs/classics/阴符经.md` |
 | 项目级铁律、编码规范 | 项目根 `CLAUDE.md` 或 `AGENT.md` |
+| 项目级规范（设计 token / 组件契约 / 测试约定等） | `.claude/rules/`（条件加载，随 git 共享） |
 | 项目知识（学到了什么 / 模式 / 决策） | `AGENT_GUIDE.md` |
 | 操作流程 | `commands/`（slash command） |
 | 具体技能（实现层） | `skills/` |
@@ -91,6 +94,8 @@
 | 教训 / 踩坑（行为级） | 本文件 / 对应 skill（直接改变 AI 行为的铁律） |
 | 教训 / 踩坑（记忆级） | `memory/`（跨会话模式/坑，MEMORY.md 索引可见） |
 | 教训 / 踩坑（档案级） | `docs/evolution/*.csv`（完整因果链，Obsidian 数据源） |
+
+**项目标准结构**（首次进入项目时对照检查，缺则建议创建）：详见 `skills/dao-project-scaffold/` 模板。原则：根目录只放活文档，CLAUDE.md + `.claude/rules/` 是唯一的 AI 上下文通道。
 
 **Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
 
