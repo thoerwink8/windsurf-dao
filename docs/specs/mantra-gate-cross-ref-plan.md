@@ -14,7 +14,7 @@ v3 升级中创建了 `dao-mantra.md`（心怀八句，always_on）。`superpowe
 
 2 文件，预计 ≤20 行净增。
 
-### 改动 1 · `.windsurf/rules/dao-mantra.md`
+### 改动 1 · `.devin/rules/dao-mantra.md`
 
 **1a · 场景速查表 L31 补充 gate 引用**
 
@@ -30,7 +30,7 @@ v3 升级中创建了 `dao-mantra.md`（心怀八句，always_on）。`superpowe
 + - `superpowers-gate.md` (always_on 门控) — 本文件是**心境**先行（内化哲学），那个是**判定**在后（流程触发）。always_on 顺序：mantra 内化 → gate 判定 → workflow 落地
 ```
 
-### 改动 2 · `.windsurf/rules/superpowers-gate.md`
+### 改动 2 · `.devin/rules/superpowers-gate.md`
 
 **2a · 在文件顶部说明位置加「与 dao-mantra 的关系」段**
 
@@ -72,8 +72,8 @@ v3 升级中创建了 `dao-mantra.md`（心怀八句，always_on）。`superpowe
 ## 验证
 
 1. 两文件 grep 互相文件名命中 ≥1 次：
-   - `grep "superpowers-gate" .windsurf/rules/dao-mantra.md` → ≥1
-   - `grep "dao-mantra" .windsurf/rules/superpowers-gate.md` → ≥2
+   - `grep "superpowers-gate" .devin/rules/dao-mantra.md` → ≥1
+   - `grep "dao-mantra" .devin/rules/superpowers-gate.md` → ≥2
 2. dao-mantra.md 行数 ≤45（场景表 + 协同段微增）
 3. superpowers-gate.md 反模式表多 1 行
 4. `/dao-superpowers` workflow 在两文件均可被找到

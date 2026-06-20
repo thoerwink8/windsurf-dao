@@ -75,8 +75,8 @@ shadcn 组件**按需 add**，不提前装不用的。Token 层保证任何新�
 
 | 文件 | 类型 | 说明 |
 |---|---|---|
-| `.windsurf/rules/project-structure.md` | 规则 | 项目目录约定 |
-| `.windsurf/rules/design-assets.md` | 规则 | 设计资产管理 + pencil 工作流 |
+| `.devin/rules/project-structure.md` | 规则 | 项目目录约定 |
+| `.devin/rules/design-assets.md` | 规则 | 设计资产管理 + pencil 工作流 |
 | 更新 `dao-brainstorm/SKILL.md` | 技能更新 | 加入 pencil 设计环节引导 |
 | 更新 `quality.md` | 规则更新 | 前端质量关卡引用 pencil 设计 |
 | 更新 `README.md` | 规则索引 | 新增规则导航 |
