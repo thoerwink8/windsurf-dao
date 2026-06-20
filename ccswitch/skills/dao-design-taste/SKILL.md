@@ -320,30 +320,113 @@ components/
 
 ---
 
-## §7 · 设计资产（代码即真相）
+## §7 · 设计资产（双模式）
 
 > 道生一（tokens），一生二（基础件），二生三（业务件），三生万物（页面）。
 
-### 范式：reflect，不是 push
+### 双模式范式
 
-设计资产的真相**在代码里**，不在代码之外的任何稿子里。
+设计资产有两条路径，按场景选择：
 
 ```
-✗ push 模型（已废弃）：外部设计稿 = 真相 → 推代码逼近 → 永远有 gap
-✓ reflect 模型（现行）：代码 = 真相 → gallery 渲染真组件 → 永不漂移
+Mode R · Reflect（维护态）：代码 = 真相 → gallery 渲染真组件 → 永不漂移
+Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设计系统 → 指导代码实现
 ```
 
-统一性靠"约束输入"（只准用 token），不靠"事后比对"。
+| 场景 | 模式 | 真相源 |
+|---|---|---|
+| 已有产品，日常迭代 | R | 代码 |
+| 新产品从零设计 | C → R | 先设计后代码，稳定后转 R |
+| 已有产品重新设计（redesign） | C + R | 截图→设计系统→代码对齐，双向校验 |
 
-### 三层真相源
+**不混淆两条路径。** C 模式产出设计系统后必须同步到代码（转 R）；R 模式下不维护代码之外的真相源。
+
+### 三层真相源（R 模式 + C 模式共用）
 
 | 层 | 真相 | 统一性保证 | 维护成本 |
 |---|---|---|---|
 | **① Design Tokens** | token 定义（色/字/间距/圆角/阴影） | 所有组件只引用 token，**禁硬编码** | O(1)：改一处全局生效 |
-| **② 基础组件** | 项目 `ui/` 目录 | variant 一次定制，只引用 token | 趋近 0 |
-| **③ 业务组件** | 真实业务代码 | 组合①②，不引入新样式 | 随业务走 |
+| **② 基础组件** | 项目 `ui/` 目录 / 设计工具 Library Components | variant 一次定制，只引用 token | 趋近 0 |
+| **③ 业务组件** | 真实业务代码 / 设计工具复合组件 | 组合①②，不引入新样式 | 随业务走 |
 
-### 组件画廊（gallery）
+---
+
+### §7C · Construct 模式：设计系统构建流程（S1→S5）★
+
+> 朴散则为器。先造器，再用器造物。**禁止跳过组件直接画页面。**
+
+**铁律：先资产后页面。** 这是设计师的基本工作流——tokens → 组件 → 页面，每层只引用上一层，不越级。跳过组件层直接用原始矩形/文字画页面 = 产出线框级垃圾，不是设计稿。
+
+#### S1 · Design Tokens（基础设施）
+
+在设计工具中建立完整的 token 体系，与代码 CSS 变量一一对应：
+
+| token 类型 | 设计工具产物 | 代码对应 |
+|---|---|---|
+| 颜色 | Library Colors（语义命名） | CSS `--primary` 等 HSL 变量 |
+| 字体排版 | Library Typographies（字族/字重/字号/行高/字间距） | Tailwind 字号体系 |
+| 间距 | Design Tokens（spacing 类型） | Tailwind spacing scale |
+| 圆角 | Design Tokens（borderRadius 类型） | `--radius-control` 等 |
+| 阴影 | Design Tokens（shadow 类型） | `--shadow-*` |
+
+**验收**：设计工具中的 token 数量 ≥ 代码中 CSS 变量数量。每个代码 token 有设计工具对应物。
+
+#### S2 · 图标库（原子视觉元素）
+
+将项目使用的所有图标导入设计工具：
+
+1. **审计代码**：`grep` 所有 Lucide import，产出完整图标清单
+2. **获取 SVG**：从图标库官方获取每个图标的 SVG 源码
+3. **导入设计工具**：每个图标做成可复用组件（SVG 导入 → 转组件）
+4. **命名规范**：`Icon/<图标名>`（如 `Icon/Layers3`、`Icon/Plus`）
+5. **尺寸标准化**：默认 16×16，通过 resize 适配不同 size variant
+
+**验收**：设计工具图标组件数 = 代码 Lucide import 去重数。
+
+#### S3 · 原子组件（基础 UI 元素）
+
+将代码 `ui/` 目录下的每个组件在设计工具中创建为 Library Component：
+
+1. **逐个组件创建**：Button、Input、Card、Badge、Dialog 等
+2. **含所有 variant**：用设计工具的 Variants 系统（或按 variant 命名）创建每个变体
+   - Button：primary / secondary / tertiary / danger / icon × default / sm / lg
+   - Card：default / sm
+   - Alert：danger / info / success / neutral
+3. **引用 S1 token**：颜色、圆角、阴影全部引用 Library Color 和 Design Token，不硬编码
+4. **引用 S2 图标**：需要图标的组件使用图标 Library Component 实例
+5. **四态覆盖**（§4.4）：loading / empty / error / success 各画一版
+
+**命名规范**：`UI/<组件名>` 或 `UI/<组件名>/<Variant>`
+
+**验收**：每个代码 ui/ 组件在设计工具中有对应 Library Component；variant 覆盖率 ≥ 80%。
+
+#### S4 · 复合组件（业务组件）
+
+用 S3 原子组件的**实例**组合成业务级组件：
+
+1. **组合而非重造**：SidebarHeader = BrandMark 实例 + Text + Icon 实例 × 3
+2. **不引入新样式值**：颜色/间距/圆角全来自 S1 token 和 S3 组件，不新增裸值
+3. **含真实内容**：用代表性文案和数据，不用 lorem ipsum
+
+**典型复合组件**：AppShell（Sidebar + Workspace）、WelcomeCard、ProjectListItem、BrainstormCard、OptionCard、StatusBar、各 Dialog 内容
+
+**命名规范**：`Block/<组件名>`
+
+#### S5 · 页面组合（最终交付）
+
+用 S3/S4 组件**实例**拼装完整页面：
+
+1. **每个页面一个画板**：尺寸与应用窗口一致
+2. **只用实例不用原始形状**：页面里不出现裸矩形/裸文字（除了页面级背景和布局容器）
+3. **覆盖所有状态**：每个页面的关键状态各画一版（空态/有数据/loading/error）
+
+**验收**：页面中 90%+ 元素是组件实例（可回溯到 Library Component）。
+
+---
+
+### §7R · Reflect 模式（维护态）
+
+#### 组件画廊（gallery）
 
 一个展示页，**直接引用项目真实组件**，把所有 variant、所有状态摆出来一屏看全。
 
@@ -351,7 +434,7 @@ components/
 - 用开发态开关隔离，生产构建排除
 - 兼任 §0 分诊裁判：能拼出 = DIRECT；拼不出 = 升档
 
-### MCP 双向校验（条件式）
+#### MCP 双向校验（条件式）
 
 如果有设计工具 MCP 可用（Penpot/Figma），可选执行以下校验：
 
@@ -362,9 +445,38 @@ components/
 
 这不是强制步骤——没有 MCP 时跳过，有时作为辅助检查。
 
-### lint 守护统一性
+#### lint 守护统一性
 
 **禁止硬编码颜色/间距/圆角等设计值，只准引用 token。** 用项目 lint 体系机器化，出货前自动拦截。
+
+---
+
+### §7L · Design Loop（三轮设计循环）★
+
+> 反者道之动。设计不是一次性的，是循环精进的。
+
+当任务涉及**产品 redesign**（已有产品重新设计），走三轮循环：
+
+```
+Phase 1 · 复刻（Replicate）
+  截图所有页面 → S1-S5 构建设计系统 → 代码 token 对齐
+  目标：设计工具中的资产 = 代码当前状态的忠实映射
+
+Phase 2 · 精修（Refine）→ 走 dao-design-qa 循环
+  在设计工具中改进 UX/UI → 研究竞品最佳实践 → 添加缺失功能
+  目标：设计稿 > 当前代码（设计领先于代码）
+
+Phase 3 · 回填（Backfill）→ 走 dao-design-qa 循环
+  将 Phase 2 的设计改进实现到代码中 → 验收
+  目标：代码追上设计稿，转入 Reflect 维护态
+```
+
+**Phase 2/3 的迭代执行细节见 `dao-design-qa` skill**（截图找问题 → 设计工具修 → 代码回填，三步循环）。
+
+**每个 Phase 完成后过 §8 验收再进入下一个 Phase。**
+**Phase 间不回退：** Phase 1 完成后不再改 Phase 1 的产物，Phase 2 在 Phase 1 基础上改进。
+
+**日常维护态（非 redesign）**：进入 Reflect 模式后，发现 UI 视觉问题时直接触发 `dao-design-qa` 循环，无需走完整 §7L。
 
 ---
 
