@@ -1,6 +1,6 @@
 ---
 trigger: always_on
-description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / AGENT_GUIDE.md / skills/ / workflows/ / data/evolution-*.csv)、双文件模式、Rule vs Skill 边界、中间物 _tmp/ 管理、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
+description: 知识归位决策——判断"这个知识/经验应该写到哪个文件"。归属表(AGENT.md / .devin/rules/ / skills/ / workflows/ / data/evolution-*.csv)、Rule vs Skill 边界、中间物 _tmp/ 管理、Memory 归位四步。需要写新知识或处理 SYSTEM-RETRIEVED-MEMORY 时读取
 ---
 
 # 知识归位 · 写到哪
@@ -12,16 +12,24 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 | 知识类型 | 归属 |
 |---|---|
 | 不变原则 / 道德经哲学 | `dao-philosophy.md` / `道德经.md` |
-| 项目级铁律 | `execution.md` |
+| 项目级铁律、编码规范 | `AGENT.md`（<80 行，精简入口） |
+| 项目级领域规范（设计 token / 架构 / 测试约定等） | `.devin/rules/`（按领域拆分） |
 | 普适哲学 | `global_rules.md`（用户级，跨项目） |
 | 命令安全 / 工具选择 | `shell.md` / `cli.md` |
 | 操作流程 | `workflows/` |
 | 具体技能（实现层） | `skills/` |
 | 固定技术栈选型（框架/脚手架） | `stacks/` |
-| 编码规则（怎么写代码） | `AGENT.md` |
-| 项目知识（学到了什么） | `AGENT_GUIDE.md` |
 | 教训 / 踩坑 | `data/evolution-lessons.csv`（优先） |
 | 演化条目 | `data/evolution-entries.csv` |
+
+## AI 上下文通道
+
+`AGENT.md` + `.devin/rules/` 是唯一的 AI 上下文通道。
+
+- **AGENT.md**：项目入口（<80 行），存编码规范、技术栈约束、快速命令，指向 rules
+- **`.devin/rules/`**：按领域拆分的详细规范（设计 token / 架构决策 / 测试策略等）
+
+禁止在根目录维护 `AGENT_GUIDE.md` / `KNOWLEDGE.md` 等冗余入口——它们的内容应归入 `AGENT.md` 或 `.devin/rules/`。项目知识（学到了什么 / 模式 / 架构决策）写入 `.devin/rules/` 下的对应文件。
 
 ## 回顾即检索
 
@@ -30,21 +38,6 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 遇回顾类提问（之前/上次/当时/记得吗/为什么当时）先搜 Memory + 演化教训库再答，勿凭记忆直接断言。
 
 （Claude Code 侧由 `dao-rhythm` hook 在 UserPromptSubmit 确定性触发此行为；Windsurf 无 hook 生命周期，靠本软规则在 always_on 中倡导——同一意图·双栈异构触发：触发机制随宿主能力而异，意图共享。）
-
-## 双文件模式
-
-每个项目最终都应有 `AGENT.md`（规则）+ `AGENT_GUIDE.md`（知识）：
-
-- **AGENT.md** 存：编码规范、技术栈约束、代码风格
-- **AGENT_GUIDE.md** 存：项目概览、发现的模式/反模式、架构决策、演化记录
-
-不存在时**创建**。
-
-## AGENT_GUIDE.md 结构
-
-§概览（always）→ §演化索引（路由表）→ §教训 → §决策 → §指南
-
-演化详情超 200 行时分离到 `docs/evolution.md`，§索引保留每版本一行（版本 | 日期 | 摘要 | 教训号），AI 按需读取——主文件不因历史增长而膨胀。
 
 ## Rule 与 Skill 边界
 
