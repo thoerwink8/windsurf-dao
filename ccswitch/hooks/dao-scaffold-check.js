@@ -61,45 +61,12 @@ function checkDaoSync() {
     }
   } catch (_) {}
 
-  // 2. settings.json 快照 vs 本地部署（双向漂移）
-  try {
-    const snapshotPath = path.join(daoRoot, "config-sync", "common", "settings.json");
-    const deployedPath = path.join(homeDir, ".claude", "settings.json");
-    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
-      const snapshotMtime = fs.statSync(snapshotPath).mtimeMs;
-      const deployedMtime = fs.statSync(deployedPath).mtimeMs;
-      const snapshotHash = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
-      const deployedHash = simpleHash(fs.readFileSync(deployedPath, "utf8"));
-      if (snapshotHash !== deployedHash) {
-        if (snapshotMtime > deployedMtime) {
-          drifts.push("⬇ settings.json 快照比本地部署新 → 运行 dao.bat 下行同步");
-        } else {
-          drifts.push("⬆ 本地 settings.json 比仓库快照新 → 运行 dao.bat --direction=up 上行同步");
-        }
-      }
-    }
-  } catch (_) {}
+  // 2. settings.json / mcp_servers.json 快照比较已移除
+  // 原因：config-sync/common/settings.json 是 cc-switch DB 导出格式（含 source/rows 结构
+  // + ${HOME}/${PROJECT_ROOT} 占位符），与 ~/.claude/settings.json 结构完全不同，
+  // simpleHash 比较永远不同 → 假阳性。git 状态检查已覆盖漂移检测。
 
-  // 3. MCP 配置快照 vs 本地（同理）
-  try {
-    const snapshotPath = path.join(daoRoot, "config-sync", "common", "mcp_servers.json");
-    const deployedPath = path.join(homeDir, ".claude", "mcp_servers.json");
-    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
-      const snapshotHash = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
-      const deployedHash = simpleHash(fs.readFileSync(deployedPath, "utf8"));
-      if (snapshotHash !== deployedHash) {
-        const snapshotMtime = fs.statSync(snapshotPath).mtimeMs;
-        const deployedMtime = fs.statSync(deployedPath).mtimeMs;
-        if (snapshotMtime > deployedMtime) {
-          drifts.push("⬇ mcp_servers.json 快照比本地新 → 下行同步");
-        } else {
-          drifts.push("⬆ 本地 mcp_servers.json 比快照新 → 上行同步");
-        }
-      }
-    }
-  } catch (_) {}
-
-  // 4. windsurf-dao 未提交改动
+  // 3. windsurf-dao 未提交改动
   try {
     const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
       encoding: "utf8", timeout: 5000
@@ -134,15 +101,6 @@ function checkDaoSync() {
     "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。" +
     "请在回答末尾简洁提醒用户。"
   );
-}
-
-function simpleHash(text) {
-  let h = 0;
-  const s = text.replace(/\s+/g, "");
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  }
-  return h;
 }
 
 // windsurf-dao 元仓库：走同步漂移检测
@@ -230,21 +188,7 @@ function checkDaoDrift() {
 
     const driftItems = [];
 
-    // settings.json 快照 vs 部署
-    const snapshotPath = path.join(daoRoot, "config-sync", "common", "settings.json");
-    const deployedPath = path.join(homeDir, ".claude", "settings.json");
-    if (fs.existsSync(snapshotPath) && fs.existsSync(deployedPath)) {
-      const sh = simpleHash(fs.readFileSync(snapshotPath, "utf8"));
-      const dh = simpleHash(fs.readFileSync(deployedPath, "utf8"));
-      if (sh !== dh) {
-        const sm = fs.statSync(snapshotPath).mtimeMs;
-        const dm = fs.statSync(deployedPath).mtimeMs;
-        driftItems.push(sm > dm
-          ? "⬇ settings.json 快照比本地新 → dao.bat 下行"
-          : "⬆ 本地 settings.json 比快照新 → dao.bat --direction=up"
-        );
-      }
-    }
+    // settings.json 快照 vs 部署比较已移除（快照是 cc-switch DB 格式，结构不同导致假阳性）
 
     // windsurf-dao 未提交
     try {
