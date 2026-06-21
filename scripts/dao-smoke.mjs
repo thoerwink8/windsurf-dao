@@ -160,8 +160,9 @@ console.log('\n📋 4. ccswitch/skills mirror check');
 const ccSkillDirs = new Set(await listDirs(CC_SKILLS));
 
 const KNOWN_CC_EXTRAS = new Set([
-  'dao-cli', 'dao-compliance-check', 'dao-meta',
-  'dao-philosophy', 'dao-project-structure', 'dao-quality',
+  'dao-cli', 'dao-compliance-check', 'dao-loop',
+  'dao-meta', 'dao-philosophy', 'dao-project-scaffold',
+  'dao-project-structure', 'dao-quality',
   'dao-workflow-system',
 ]);
 
