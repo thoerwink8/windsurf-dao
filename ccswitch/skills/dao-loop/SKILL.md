@@ -108,8 +108,8 @@ PROJECT.md 自动更新
 📋 Loop 计划：
 - 名称：<topic>（kebab-case）
 - 描述：<一句话>
+- 分支：feat/<topic>（造线用，谋线在 main）
 - 文件集：spec.md + acceptance.md + plan.md（+ optional: <如有>）
-- 分支策略：谋线 main / 造线 feat/<topic>
 - 与已有 loop 关系：parallel / merge / depends_on <which>
 - 轮询间隔：<N>s（<理由>）
 
