@@ -11,6 +11,8 @@
 //    - .claude/rules/ 存在
 //    - 无冗余入口（AGENT_GUIDE.md 等）
 //    - docs/ 结构扁平
+//    - 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned）
+//    - 活跃 plan（docs/plans/*.md 含「待实施/进行中」状态标记）
 //
 // 发现问题 → 注入 additionalContext。全通过 → 静默退出。
 //
@@ -171,13 +173,70 @@ try {
   }
 } catch (_) {}
 
-if (issues.length === 0) done();
+// ── 活跃工作检测（loop + plan） ──
 
-inject(
-  "【dao 脚手架检查】本项目存在以下结构问题，请在回答用户问题后追加提醒：\n" +
-  issues.map((s, i) => (i + 1) + ". " + s).join("\n") +
-  "\n详细模板参考 dao-project-scaffold skill。提醒语气简洁友好，不阻塞用户当前任务。"
-);
+const activeWork = [];
+
+// 6. 活跃 loop：docs/specs/*/STATUS.json mode 非 done/abandoned
+try {
+  const specsDir = path.join(cwd, "docs", "specs");
+  if (fs.existsSync(specsDir) && fs.statSync(specsDir).isDirectory()) {
+    for (const topic of fs.readdirSync(specsDir)) {
+      if (topic.startsWith("_")) continue;
+      const statusFile = path.join(specsDir, topic, "STATUS.json");
+      try {
+        if (!fs.existsSync(statusFile)) continue;
+        const st = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+        if (st.mode && st.mode !== "done" && st.mode !== "abandoned") {
+          const summary = st.summary || topic;
+          const thread = st.thread ? "（" + st.thread + "线）" : "";
+          activeWork.push("Loop [" + topic + "] " + summary + " — mode: " + st.mode + thread);
+        }
+      } catch (_) {}
+    }
+  }
+} catch (_) {}
+
+// 7. 活跃 plan：docs/plans/*.md 含待实施/进行中状态标记（跳过 _legacy/）
+try {
+  const plansDir = path.join(cwd, "docs", "plans");
+  if (fs.existsSync(plansDir) && fs.statSync(plansDir).isDirectory()) {
+    const activePatterns = /\*{0,2}状态\*{0,2}\s*[：:]\s*.*(待实施|进行中|draft|active|wip|in.?progress)/i;
+    for (const f of fs.readdirSync(plansDir)) {
+      if (!f.endsWith(".md")) continue;
+      try {
+        const head = fs.readFileSync(path.join(plansDir, f), "utf8").slice(0, 1000);
+        const match = head.match(activePatterns);
+        if (match) {
+          const titleMatch = head.match(/^#\s+(.+)/m);
+          const title = titleMatch ? titleMatch[1].trim() : f;
+          activeWork.push("Plan [" + f + "] " + title + " — " + match[0].trim());
+        }
+      } catch (_) {}
+    }
+  }
+} catch (_) {}
+
+// ── 汇总输出 ──
+
+if (issues.length === 0 && activeWork.length === 0) done();
+
+const parts = [];
+if (issues.length > 0) {
+  parts.push(
+    "【dao 脚手架检查】本项目存在以下结构问题，请在回答用户问题后追加提醒：\n" +
+    issues.map((s, i) => (i + 1) + ". " + s).join("\n") +
+    "\n详细模板参考 dao-project-scaffold skill。提醒语气简洁友好，不阻塞用户当前任务。"
+  );
+}
+if (activeWork.length > 0) {
+  parts.push(
+    "【活跃工作提醒】本项目有未完成的 loop/plan，请在回答用户问题后主动提醒：\n" +
+    activeWork.map((s, i) => (i + 1) + ". " + s).join("\n") +
+    "\n提醒用户当前进度和可能的下一步，语气简洁，不阻塞当前任务。"
+  );
+}
+inject(parts.join("\n"));
 
 // ── 从任意项目检测 windsurf-dao 同步漂移 ──
 function checkDaoDrift() {
