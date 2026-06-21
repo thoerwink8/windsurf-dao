@@ -19,15 +19,18 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 根目录/
   README.md              ← 人看的项目介绍
   CLAUDE.md              ← AI 入口（<80 行，精简指向 rules）
-  TODO.md                ← 路线图 + 里程碑（活文档）
 
   .claude/
     rules/               ← AI 自动加载的领域规范
       *.md               ← 按领域拆分，paths: frontmatter 条件加载
 
   docs/
+    PROJECT.md           ← 项目仪表盘（替代 TODO.md，Loop 状态变更时自动更新）
     prd.md               ← 产品需求文档（如有）
     plans/               ← 实施计划（按日期命名：YYYY-MM-DD-主题.md）
+    specs/               ← Loop 工作区（dao-loop 管理）
+      _archive/          ← 已完成 Loop 归档 + INDEX.md
+      <topic>/           ← 活跃 Loop（spec.md + acceptance.md + plan.md + STATUS.json）
 ```
 
 ## 原则
@@ -37,9 +40,8 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 根目录只放**活文档**——每天可能打开的文件：
 - `README.md`：给人看的项目介绍
 - `CLAUDE.md`：给 AI 看的入口（<80 行）
-- `TODO.md`：路线图和里程碑
 
-历史文档、参考资料、产品文档全部进 `docs/`。
+历史文档、参考资料、产品文档全部进 `docs/`。项目追踪用 `docs/PROJECT.md`（Loop 体系自动更新），不在根目录放 TODO.md。
 
 ### 唯一 AI 通道
 
@@ -54,9 +56,10 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 
 ### Docs 组织
 
+- `docs/PROJECT.md`：项目仪表盘（活跃 Loop + Backlog + 里程碑，dao-loop 自动更新）
 - `docs/prd.md`：产品需求
-- `docs/plans/`：所有实施计划，统一按日期命名 `YYYY-MM-DD-主题.md`
-- 不设 `specs/` 和 `plans/` 两套目录——它们是同一件事的不同阶段，放在一起
+- `docs/plans/`：实施计划，按日期命名 `YYYY-MM-DD-主题.md`
+- `docs/specs/`：Loop 工作区（活跃 loop 目录 + `_archive/` 归档），由 dao-loop 管理
 
 ## 检查清单
 
@@ -65,7 +68,8 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 - [ ] `CLAUDE.md` 存在且 <80 行
 - [ ] `.claude/rules/` 存在（可空，但目录要有）
 - [ ] 根目录无冗余 AI 入口文件（AGENT.md / AGENT_GUIDE.md 等）
-- [ ] `docs/` 结构扁平清晰（无嵌套 specs/plans 分裂）
-- [ ] TODO.md 存在且内容为路线图而非临时任务（临时任务用内置 Task 系统）
+- [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
+- [ ] `docs/specs/` 存在（Loop 工作区）
+- [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理）
 
-缺项不自动创建，而是**建议用户创建**并说明理由。
+缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。
