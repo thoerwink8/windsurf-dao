@@ -453,6 +453,44 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── hooks 文件复制（ccswitch/hooks/dao-*.js → ~/.claude/hooks/）──
+    $hooksSrc = Join-Path $claudeSrc "hooks"
+    if (Test-Path $hooksSrc) {
+        $hooksDst = Join-Path $userClaude "hooks"
+        if (-not $IsDryRun) { Ensure-Dir $hooksDst }
+        Write-Host "  [hooks]" -ForegroundColor Cyan
+        $hookFiles = Get-ChildItem $hooksSrc -File -Filter "dao-*" -ErrorAction SilentlyContinue
+        foreach ($hf in $hookFiles) {
+            $dstFile = Join-Path $hooksDst $hf.Name
+            if (Test-Path $dstFile) {
+                $srcHash = (Get-FileHash $hf.FullName -Algorithm MD5).Hash
+                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                if ($srcHash -eq $dstHash) {
+                    Write-Host "    [skip ] $($hf.Name)  (same content)" -ForegroundColor DarkGray
+                    $skipped++
+                } else {
+                    if ($IsDryRun) {
+                        Write-Host "    [DRYRUN] update $($hf.Name)" -ForegroundColor Cyan
+                        $linked++
+                    } else {
+                        Copy-Item $hf.FullName -Destination $dstFile -Force
+                        Write-Host "    [update] $($hf.Name)" -ForegroundColor Green
+                        $linked++
+                    }
+                }
+            } else {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] copy $($hf.Name)" -ForegroundColor Cyan
+                    $linked++
+                } else {
+                    Copy-Item $hf.FullName -Destination $dstFile -Force
+                    Write-Host "    [copy ] $($hf.Name)" -ForegroundColor Green
+                    $linked++
+                }
+            }
+        }
+    }
+
     # ── settings.json 路径(后续 outputStyle / hook / 通用配置固化共用,提前定义避免未赋值引用)──
     $settingsPath = Join-Path $userClaude "settings.json"
 
