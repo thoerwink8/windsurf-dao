@@ -98,11 +98,11 @@ PROJECT.md 自动更新
 
 **所有终止（主动/被动）由用户确认**，AI 只给建议。
 
-## §1.5 Loop 计划确认（🔒 必止）
+## §1.5 Loop 计划确认 + 提示词分发（🔒 必止）
 
-预飞 + 情境感知完成后，**必须展示 Loop 计划并等待用户确认**，确认前不创建 STATUS.json、不生成任何文档。
+预飞 + 情境感知完成后，**必须展示 Loop 计划 + 生成 copy-ready 提示词**，然后**暂停当前 loop**。当前 session 是调度台，不是执行者。
 
-展示格式：
+### 展示格式
 
 ```
 📋 Loop 计划：
@@ -112,16 +112,44 @@ PROJECT.md 自动更新
 - 文件集：spec.md + acceptance.md + plan.md（+ optional: <如有>）
 - 与已有 loop 关系：parallel / merge / depends_on <which>
 - 轮询间隔：<N>s（<理由>）
-
-确认后开始创建 STATUS.json + 谋线第一步。
 ```
 
-用户可以：
-- 确认 → 开始
-- 修改名称/描述/间隔 → AI 调整后再确认
-- 取消 → 不创建 loop
+### 生成提示词
 
-**此检查点不可跳过**，即使用户语气急迫（"直接做"）——计划展示本身只需几秒，但能防止方向偏差。
+确认后生成 copy-ready 的 `/dao-loop` 提示词，用户复制到新会话执行：
+
+```
+/dao-loop <需求一句话描述>
+Loop 名称：<topic>
+分支：feat/<topic>
+间隔：<N>s
+```
+
+### 分发流程
+
+```
+当前 session（调度台）          新 session（执行者）
+  │                                │
+  ├─ 预飞 + 情境感知               │
+  ├─ 展示 Loop 计划                │
+  ├─ 用户确认                      │
+  ├─ 生成提示词 ──→ 用户复制 ──→   ├─ /dao-loop <prompt>
+  ├─ 暂停此 loop                   ├─ 创建 STATUS.json
+  ├─ 可继续分发 loop B …           ├─ 谋线 → Go → 造线
+  │                                │
+```
+
+### 用户操作
+
+| 操作 | 效果 |
+|------|------|
+| 确认 → 复制提示词 | 新开会话执行，当前 session 可继续分发其他 loop |
+| 确认 → 当前继续 | 单 loop 场景，当前 session 直接创建 STATUS.json 并执行 |
+| 修改 | 调整名称/描述/间隔后重新生成提示词 |
+| 取消 | 不创建 loop |
+
+**此检查点不可跳过**——计划展示只需几秒，但能防止方向偏差。
+**默认行为是分发**——生成提示词后暂停，不自动继续执行。
 
 ## §2 核心文件集
 
@@ -303,6 +331,19 @@ AI 根据复杂度判断，常见：
 
 **触发**：`go_ready = true`
 
+### 造线入口门控（Go Gate）
+
+> 不知常妄作凶。环境没备好就动笔 = 妄作。
+
+状态从 `go → executing` 之前，**必须逐项完成并在 STATUS.json 记录**：
+
+1. **切分支** — `git checkout -b feat/<topic>`，确认 `git branch --show-current` 输出 `feat/<topic>`
+2. **STATUS.json 写入 `dispatch.branch`** — 值 = 实际分支名，后续每次恢复 session 时验证当前分支与此值一致
+3. **基线验证** — 项目有构建/测试的先跑一次确认绿灯（无构建的跳过）
+4. **三项全过 → 才写 `mode: executing`**
+
+违反检测：任何时刻发现 `mode = executing` 但当前 git 分支是 `main`/`master` → **立即停止任务执行**，先补创分支再继续。
+
 ### 分诊规则
 
 | 条件 | 调度到 |
@@ -343,7 +384,8 @@ Go → 环境准备(worktree/install/基线测试)
 ### 分支策略
 
 - 谋线在 **main** 操作（文档不冲突）
-- 造线在**独立 feature 分支**（`feat/<topic>`）
+- 造线在**独立 feature 分支**（`feat/<topic>`）— 由 §5 Go Gate 强制创建并写入 `dispatch.branch`
+- **session 恢复时必验**：`git branch --show-current` ≠ `dispatch.branch` → 先 checkout 再继续
 
 ### 跨 session 发现
 
