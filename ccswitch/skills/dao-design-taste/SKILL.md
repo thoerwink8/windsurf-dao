@@ -13,6 +13,42 @@ description: UI 全流程执行引擎——分诊·形态探索·品味判据·�
 
 ---
 
+## §0-pre · 组件系统健康扫描（Component Health Scan）★ 无条件首步
+
+> 不知常妄作凶。动手前先看清全貌——用户无法感知项目的组件把控情况，AI 必须主动发现。
+
+**每次 skill 被触发时无条件执行本步骤**，不管后续分诊结果是 FULL/SCOPED/DIRECT。扫描结果作为分诊和实施的上下文注入后续所有步骤。
+
+### 扫描三步法（用 Grep/Glob，30 秒内完成）
+
+**一、组件盘点**
+- `Glob` 扫描 `components/ui/` 目录，列出所有基础组件
+- 快速统计：总组件数、有 variant 系统的组件数、有 contract 测试的组件数
+
+**二、重复模式检测**（用户感知不到但影响维护性）
+- Grep 五类高频重复：focus ring(`focus-visible:ring`)、hover overlay(`hover:bg-foreground/[`)、transition 串(`transition-[`)、inset shadow(`shadow-[inset`)、Surface variant map
+- 产出：**重复模式清单**（哪些模式在 N 个文件里各自定义了一遍）
+- **3 次护栏**：同一模式 3+ 组件才标记"需提取"。提取走组件常量或 CVA variant，**不用 `@apply`**
+
+**三、健康度结论**（一段话，注入后续流程）
+- 格式：`「组件健康度：<等级>。<N> 个基础组件，<M> 处重复模式。<建议>」`
+- 等级判定：
+  - **健康** — 重复模式 ≤ 2 处，无 Surface variant 重复
+  - **需整理** — 重复模式 3-5 处，或 Surface variant 有 ≥ 50% 重叠
+  - **各自为战** — 重复模式 > 5 处，多个组件独立维护相同的样式常量
+
+### 扫描结论的消费方式
+
+| 健康度 | 对后续流程的影响 |
+|---|---|
+| **健康** | 正常进入 §0 分诊，无额外步骤 |
+| **需整理** | 在 §0 分诊后、实施前，先花一步提取公用常量（如 `styles.ts`），再做功能改动 |
+| **各自为战** | 强烈建议先做一轮组件合并（抽公用常量 + 合并 Surface variants），再做任何样式改动。跳过合并 = 新改动继续各自为战 |
+
+**扫描静默完成**——用户不需要知道有这道门。健康时一笔带过（"组件系统状态良好"一句话融入回答）；有问题时主动报告并建议先整理。
+
+---
+
 ## §0 · 分诊门 + 形态探索（Triage Gate）★ 入口
 
 > 治之于未乱。动手前先问：这次引入了多少未知？
@@ -155,113 +191,9 @@ components/
 
 > 反者道之动。AI 默认会滑向套路，这一节是反套路的体检表。
 
-### 4.1 颜色纪律
+覆盖 9 个维度：颜色纪律（LILA RULE + 单主色 + 灰阶梯 + 语义色）、字体（同族强调 + 层级对比）、形状/阴影（半径锁 + 克制）、交互状态（四态强制 + 全周期反馈 + a11y）、组件摆放（按钮位置语义 + 间距一致性）、Icon 纪律（一库制 + 尺寸阶梯 + 容器控制）、表单（label 上方 + 禁 placeholder 当 label）、文案自审（出货前强制）、主题锁。
 
-**禁的一面（LILA RULE）：**
-- 默认禁用 AI 紫蓝渐变。用中性灰基底 + 单一高对比强调色
-- 饱和度默认 < 80%，选定 → 锁死 → 出货前逐组件审
-
-**立的一面（颜色正面纪律）：**
-- **单主色原则** — 整个 app 只一个强调色（primary），其余走灰度体系
-- **灰阶梯** — 禁 `#000`（纯黑太硬），用 5 级灰覆盖所有灰度需求
-- **一个项目一套灰** — 不冷灰暖灰来回横跳
-- **颜色必须有语义** — 状态色各司其义（success/warning/danger），禁拿 primary 当状态色
-- **阴影染背景色** — 阴影色取自 `foreground` 的低透明度（4-6%），别糊纯黑阴影
-
-### 4.2 字体
-
-- **不把"中性默认体"当默认就完事** — 有性格的字体能拉开辨识度。除非 Design Read 明确要"中性/克制"
-- **同族强调** — 用同字体的粗体拉层级，别塞异族字体
-- **层级靠对比** — display 用大字重负间距，正文克制行宽（中文约 30-40 字/行）
-- **letter-spacing** — product UI 正文用负间距（-0.011em 左右）收紧，标题看情况
-
-### 4.3 形状 / 阴影
-
-- **形状半径锁** — 全页定一套圆角刻度并贯彻（如 control 6px / panel 8px / dialog 12px）
-- **卡片只在表达层级时用** — 否则用 `border-t` / `divide-y` / 留白分组
-- **阴影克制** — "看得见就太多了"，opacity 4-6%，别做拟物
-
-### 4.4 交互状态（全周期 · 四态强制）
-
-> 大成若缺。只做"成功态"的界面是残缺的。
-
-**四态强制覆盖**——每个组件/区域必须设计以下四种状态，不只画 happy path：
-
-| 状态 | 设计要求 | 反模式 |
-|---|---|---|
-| **Loading** | 骨架屏或 spinner，位置、尺寸与内容态一致 | 空白无反馈 |
-| **Empty** | 引导文案 + CTA，告诉用户可以做什么 | 只显示"暂无数据" |
-| **Error** | 内联提示（红色 danger surface），含重试操作 | 弹 alert/toast 了事 |
-| **Success** | 内容正常展示，无额外干扰 | 成功后弹庆祝动画 |
-
-**交互反馈全周期**：
-- `:hover` — 背景/边框微变，Silk 级过渡
-- `:active` — `translate-y: 1px` 下沉反馈，Snap 级
-- `:focus-visible` — 焦点环必须可见（a11y 底线），用 `ring-2 ring-ring/35`
-- `:disabled` — `opacity: 0.45 + pointer-events: none`
-- 过渡 — 200-300ms，只动 `transform`/`opacity`
-
-**按钮对比度（a11y 强制）** — WCAG AA（正文 4.5:1，大字 3:1）。白底白字、透明无边框、幽灵按钮压图片无衬底 → 全禁。
-
-### 4.5 组件摆放规则
-
-> 按钮不是随便放的。每个组件在布局中有自己的位置语义。
-
-**按钮摆放：**
-- **主 CTA** — 在容器内居中或右对齐，取决于上下文：
-  - 空态/引导卡片 → 居中，全宽或 auto 宽度均可
-  - 表单底部 → 右对齐，与输入框右边缘齐平
-  - 对话框底部 → 右对齐，主操作在最右
-  - 工具栏 → 左对齐，按重要性从左到右排列
-- **按钮组间距** — 同级按钮用 `gap-2`（8px），主次按钮用 `gap-3`（12px）
-- **按钮与内容间距** — 按钮上方至少 `mt-4`（16px），与所属内容保持呼吸感
-- **图标按钮** — 必须有 `aria-label` 和 `title`，尺寸走 size variant 不走自定义
-
-**通用摆放：**
-- **垂直居中** — 同行元素用 `items-center`，文字与图标的视觉居中靠 `leading` 调整
-- **内容居中** — 用 `flex items-center justify-center`，不用 `margin: auto` hack
-- **间距一致性** — 同一层级的元素间距保持一致，不出现 8px/12px/8px 这种跳跃
-
-### 4.6 Icon 纪律
-
-> 上善若水。用对的库，让容器控制尺寸，AI 不画图标。
-
-**一库制**：一个项目只用一套图标库（Lucide / Phosphor / Heroicons 等），禁止自制 SVG、禁止混用多库。选定后写入项目 CLAUDE.md。
-
-**尺寸阶梯**：icon 只用标准 Tailwind 尺寸阶梯，禁止任意像素值：
-
-| 允许 | 禁止 |
-|---|---|
-| `size-3`(12px) / `size-3.5`(14px) / `size-4`(16px) / `size-5`(20px) | `h-[13px]` / `w-[17px]` / 任何 `h-[Npx]` 写法 |
-
-**容器自动控制**：按钮/SurfaceIcon 等容器组件通过 `[&_svg]:size-*` 自动控制子 icon 尺寸——icon 本身**不需要**显式设尺寸 class，让容器的 size variant 接管。只有容器外的独立 icon 才显式声明尺寸。
-
-**颜色语义化**：icon 颜色必须走语义 token（`text-foreground` / `text-muted-foreground` / `text-primary` 等），禁止硬编码灰色（`text-gray-500`）。按钮内 icon 继承按钮文字色，不需显式设色。
-
-**契约测试守护**：项目应有 `icon-system-contract.spec.*` 测试文件，至少覆盖：
-- 容器组件的 SVG 自动尺寸机制（各 size variant）
-- 无任意像素值出现在 icon className 上
-- icon 颜色走语义 token
-
-**审计清单**（组件审计 §6 的 icon 专项补充）：
-1. 全库扫描图标库导入 → 确认单一库源
-2. 扫描所有 icon className → 标记非标尺寸和硬编码颜色
-3. 检查容器内 icon 是否多余设了显式尺寸（应让容器控制）
-4. 检查 icon 与文字的 gap 是否在同类组件间一致
-
-### 4.7 表单
-
-- label 在输入框**上方**，错误文字在**下方**
-- **禁 placeholder 当 label**
-- 全部过 WCAG AA 对比度
-
-### 4.8 文案自审（出货前强制）
-
-重读页面每一处可见字符串，标记并改写：语法不通 / AI 幻觉 / LLM 腔 / 假精确数字。**em-dash 全禁作设计点缀。**
-
-### 4.9 主题锁
-
-整个页面**一个主题**。section 不许中途反色。同主题家族内的背景微调可以；跳到对立色 = 破相。
+→ 详见 `references/design-criteria.md`（完整 4.1-4.9 详细规则与清单）
 
 ---
 
@@ -301,49 +233,9 @@ components/
 
 > 不知常妄作凶。改 token 不审计组件 = 妄作。
 
-**本节解决的核心问题：token 改了但组件没跟。** 每次 token 变更后、每次设计语言升级后，必须走组件审计。
+**核心问题：token 改了但组件没跟。** 每次 token 变更后必走审计六步法（盘点 → 硬编码扫描 → 一致性 → 四态 → a11y → 实施清单）+ 暗色模式同步检查。
 
-### 审计六步法
-
-**一、盘点**（Inventory）
-- 列出项目 `ui/` 目录下所有组件
-- 每个组件标注：variant 数量、size 数量、当前引用的 token 列表
-- 产出：组件清单表
-
-**二、硬编码扫描**（Hardcode Scan）
-- 用 Grep 搜索 `ui/` 目录下所有硬编码的设计值：
-  - `rounded-[Npx]` — 应引用 `--radius-*` token
-  - `text-[Npx]` — 应走 Tailwind 字号体系（禁 `text-[<12px]`）
-  - `gap-[N]` / `p-[N]` / `m-[N]` 中的非标准值
-  - `hsl(...)` / `rgb(...)` / `#xxx` — 应引用 CSS 变量
-  - `shadow-[...]` — 应引用 `--shadow-*` token
-- 产出：硬编码违规清单
-
-**三、一致性检查**（Consistency Check）
-- 同类组件（如所有按钮 variant）的间距、圆角、字号是否遵循同一套刻度
-- 同级元素的间距是否一致（不出现 8/12/8 跳跃）
-- 颜色引用是否都走语义 token（不直接引用 `--primary` 做状态色）
-
-**四、四态覆盖检查**
-- 对照 §4.4，每个组件是否覆盖了 loading/empty/error/success 四态
-- 重点检查：空态有没有引导 CTA、错误态是不是只弹 toast
-
-**五、a11y 扫描**
-- 对比度：所有 foreground/background 组合过 WCAG AA（4.5:1）
-- 焦点环：所有可交互元素有 `focus-visible` 样式
-- 字号底线：正文 ≥ 12px
-- 按钮：有 `aria-label` 或可见文字
-
-**六、产出实施清单**
-- 每个违规项标注：文件路径 + 行号 + 当前值 + 应改为的值
-- 按优先级排序：a11y 红线 > 硬编码 > 一致性 > 四态
-
-### 暗色模式同步检查
-
-**铁律：改 `:root` 必改 `.dark`。** 审计时专门检查：
-- 每个 `:root` 下的 token 在 `.dark` 中是否有对应值
-- dark 模式下的对比度是否仍满足 WCAG AA
-- 阴影在暗色下是否还能看见（暗色下阴影需加深或换用 border）
+→ 详见 `references/component-audit.md`（完整六步 + 暗色同步检查）
 
 ---
 
@@ -380,74 +272,9 @@ Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设�
 
 ### §7C · Construct 模式：设计系统构建流程（S1→S5）★
 
-> 朴散则为器。先造器，再用器造物。**禁止跳过组件直接画页面。**
+**铁律：先资产后页面。** tokens → 组件 → 页面，每层只引用上一层，不越级。五步流程：S1 Design Tokens → S2 图标库 → S3 原子组件 → S4 复合组件 → S5 页面组合。
 
-**铁律：先资产后页面。** 这是设计师的基本工作流——tokens → 组件 → 页面，每层只引用上一层，不越级。跳过组件层直接用原始矩形/文字画页面 = 产出线框级垃圾，不是设计稿。
-
-#### S1 · Design Tokens（基础设施）
-
-在设计工具中建立完整的 token 体系，与代码 CSS 变量一一对应：
-
-| token 类型 | 设计工具产物 | 代码对应 |
-|---|---|---|
-| 颜色 | Library Colors（语义命名） | CSS `--primary` 等 HSL 变量 |
-| 字体排版 | Library Typographies（字族/字重/字号/行高/字间距） | Tailwind 字号体系 |
-| 间距 | Design Tokens（spacing 类型） | Tailwind spacing scale |
-| 圆角 | Design Tokens（borderRadius 类型） | `--radius-control` 等 |
-| 阴影 | Design Tokens（shadow 类型） | `--shadow-*` |
-
-**验收**：设计工具中的 token 数量 ≥ 代码中 CSS 变量数量。每个代码 token 有设计工具对应物。
-
-#### S2 · 图标库（原子视觉元素）
-
-将项目使用的所有图标导入设计工具：
-
-1. **审计代码**：`grep` 所有 Lucide import，产出完整图标清单
-2. **获取 SVG**：从图标库官方获取每个图标的 SVG 源码
-3. **导入设计工具**：每个图标做成可复用组件（SVG 导入 → 转组件）
-4. **命名规范**：`Icon/<图标名>`（如 `Icon/Layers3`、`Icon/Plus`）
-5. **尺寸标准化**：默认 16×16，通过 resize 适配不同 size variant
-
-**验收**：设计工具图标组件数 = 代码 Lucide import 去重数。
-
-#### S3 · 原子组件（基础 UI 元素）
-
-将代码 `ui/` 目录下的每个组件在设计工具中创建为 Library Component：
-
-1. **逐个组件创建**：Button、Input、Card、Badge、Dialog 等
-2. **含所有 variant**：用设计工具的 Variants 系统（或按 variant 命名）创建每个变体
-   - Button：primary / secondary / tertiary / danger / icon × default / sm / lg
-   - Card：default / sm
-   - Alert：danger / info / success / neutral
-3. **引用 S1 token**：颜色、圆角、阴影全部引用 Library Color 和 Design Token，不硬编码
-4. **引用 S2 图标**：需要图标的组件使用图标 Library Component 实例
-5. **四态覆盖**（§4.4）：loading / empty / error / success 各画一版
-
-**命名规范**：`UI/<组件名>` 或 `UI/<组件名>/<Variant>`
-
-**验收**：每个代码 ui/ 组件在设计工具中有对应 Library Component；variant 覆盖率 ≥ 80%。
-
-#### S4 · 复合组件（业务组件）
-
-用 S3 原子组件的**实例**组合成业务级组件：
-
-1. **组合而非重造**：SidebarHeader = BrandMark 实例 + Text + Icon 实例 × 3
-2. **不引入新样式值**：颜色/间距/圆角全来自 S1 token 和 S3 组件，不新增裸值
-3. **含真实内容**：用代表性文案和数据，不用 lorem ipsum
-
-**典型复合组件**：AppShell（Sidebar + Workspace）、WelcomeCard、ProjectListItem、BrainstormCard、OptionCard、StatusBar、各 Dialog 内容
-
-**命名规范**：`Block/<组件名>`
-
-#### S5 · 页面组合（最终交付）
-
-用 S3/S4 组件**实例**拼装完整页面：
-
-1. **每个页面一个画板**：尺寸与应用窗口一致
-2. **只用实例不用原始形状**：页面里不出现裸矩形/裸文字（除了页面级背景和布局容器）
-3. **覆盖所有状态**：每个页面的关键状态各画一版（空态/有数据/loading/error）
-
-**验收**：页面中 90%+ 元素是组件实例（可回溯到 Library Component）。
+→ 详见 `references/construct-mode.md`（完整 S1-S5 操作步骤与验收标准）
 
 ---
 
@@ -530,22 +357,11 @@ Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设�
 
 ### 8.2 工具联动验收（按可用工具自动选择）
 
-**Chrome DevTools MCP（如可用）：**
-- 截图当前页面，肉眼检查整体视觉
-- `evaluate_script` 量测关键元素的 computed style：
-  - 按钮的实际 padding、border-radius、font-size
-  - 间距是否与 token 定义一致
-  - 颜色值是否正确引用了 CSS 变量
-- 切换暗色模式，再截图验证
-
-**Penpot MCP（如可用）：**
-- 将最终实现截图与 Penpot 设计方案对照
-- 确认方向一致（不做像素 diff，验方向不验像素）
-
-**无 MCP 时的基本验收：**
-- 跑起来看真实渲染（`pnpm dev` 或等效命令）
-- 浏览器 DevTools 手动检查关键值
-- 暗色模式切换验证
+| 工具 | 验收动作 |
+|---|---|
+| Chrome DevTools MCP | 截图 + `evaluate_script` 量测 computed style（padding/radius/font-size/色值）+ 暗色模式截图 |
+| Penpot MCP | 实现截图 vs 设计方案，验方向不验像素 |
+| 无 MCP | `pnpm dev` 真实渲染 + DevTools 手检关键值 + 暗色切换 |
 
 ### 8.3 a11y 红线（不可破）
 
@@ -562,23 +378,9 @@ Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设�
 
 ## §A · 附录（默认不启用）
 
-### A.1 营销落地页 / 作品集专属版式
+营销落地页/作品集专属版式规则 + 可替换的具体清单。product UI 默认不启用。
 
-**仅**用于营销落地页、作品集，product UI 默认不启用：
-
-- hero 首屏内（标题≤2行、副文≤20词、CTA 不滚动可见）、hero 文本元素≤4
-- 导航单行；bento 有节奏不单边重复
-- eyebrow 克制（每 3 section 最多 1 个）、版式家族不重复、zigzag ≤ 2
-- 证言≤3 行、真图优先（禁 div 假截图）
-
-### A.2 可替换的具体清单（示例性）
-
-本文件只写准则。以下是具体落地示例，会随生态更替而过时，**在项目层固化实际选择，不回写本文件**：
-
-- 字体：有性格的几何无衬线优于中性默认体；等宽用于数据/代码
-- 图标：统一一套库、统一描边粗细；一个项目一个图标家族
-- 强调色：中性灰基底 + 单一高对比强调，避开 AI 紫蓝渐变
-- 禁用默认：别无脑用最常见 UI 无衬线体；别给所有东西套玻璃拟态
+→ 详见 `references/landing-page-rules.md`
 
 ---
 
