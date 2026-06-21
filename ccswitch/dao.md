@@ -89,6 +89,8 @@
 ### 豁免
 
 - `/dao-goal` 的 `delegated-continuous` 委托连续模式（AI 自主推进，不中断）
+- `/dao-loop` 造线轮询模式（ScheduleWakeup 自驱循环，AskUserQuestion 会阻塞下一轮唤醒）
+- 任何 ScheduleWakeup 驱动的自主循环（`/loop` 等），同理
 - 用户明确说"不要选项"（本会话后续回答不再给，直到用户重新要求）
 
 ## 知识归位 · 写到哪（各复归其根）
