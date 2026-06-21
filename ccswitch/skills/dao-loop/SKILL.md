@@ -316,14 +316,26 @@ AI 根据复杂度判断，常见：
 
 > 图难于其易，为大于其细。
 
-**流程**：AI 自动生成 → 用户确认 → 修改 → 再确认
+**流程**：主线程编排 → subagent 生成 → 用户确认 → 修改 → 再确认
 
 1. 创建 `docs/specs/<topic>/` + STATUS.json，文档标 `skeleton`
-2. 生成 spec.md（调用 `dao-brainstorm` 逻辑）→ 用户确认 → 标 `done`
-3. 生成 acceptance.md → 用户确认 → 标 `done`
-4. 生成 plan.md（调用 `dao-plan` 逻辑）→ 用户确认 → 标 `done`
+2. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
+3. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
+4. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
 5. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
 6. 全部 done + 校验通过 → `go_ready: true`
+
+### subagent 调度指令
+
+谋线中主线程是**编排者**，不亲自写大段文档：
+
+| 步骤 | 工具调用 | 说明 |
+|------|---------|------|
+| spec.md | `Agent(subagent_type="dao-brainstormer", model="sonnet", prompt="基于以下需求生成 spec：<需求>。项目背景：<CLAUDE.md 摘要>。输出到 docs/specs/<topic>/spec.md，按模板格式。")` | brainstormer 做苏格拉底式挖掘 + 方案对比 |
+| acceptance.md | 主线程直接写 | 从 spec 机械推导验收标准，无需 subagent |
+| plan.md | `Agent(subagent_type="dao-plan-writer", model="sonnet", prompt="基于已确认的 spec.md 和 acceptance.md 生成实施计划。读取 docs/specs/<topic>/ 下两个文件，输出 plan.md，含 2-5 分钟粒度任务、代码模板、覆盖矩阵。")` | plan-writer 拆任务 + 写代码模板 |
+
+**subagent 返回后**，主线程展示关键段落给用户确认，不全文贴出。用户确认后更新 STATUS.json。
 
 ### summary 字段
 
@@ -348,33 +360,54 @@ AI 根据复杂度判断，常见：
 
 违反检测：任何时刻发现 `mode = executing` 但当前 git 分支是 `main`/`master` → **立即停止任务执行**，先补创分支再继续。
 
-### 分诊规则
+### 分诊与 subagent 调度
 
-| 条件 | 调度到 |
-|------|--------|
-| < 3 文件、非核心模块 | `dao-dev` |
-| ≥ 3 文件或核心模块 | `dao-superpowers`（含 worktree + reviewer） |
+造线中主线程是**调度器**，按 plan.md 逐 Task 派发 subagent 执行：
+
+| 条件 | 调度方式 |
+|------|---------|
+| 单 Task < 3 文件、非核心模块 | `Agent(subagent_type="dao-worker-batch", model="sonnet", prompt="执行 Task T<N>：<任务描述>。Spec: <路径>。验证命令: <命令>。")` |
+| 单 Task ≥ 3 文件或核心模块 | 主线程走 `dao-superpowers` 流程（含 worktree + reviewer） |
+| 多个独立 Task 无依赖 | **并行派发**多个 `dao-worker-batch`（同一消息多个 Agent 调用） |
+| 有依赖的 Task | 串行：前序完成后再派发后续 |
 
 ### 执行管线
 
 ```
-Go → 环境准备(worktree/install/基线测试)
-  → 逐 Task 执行(写码→typecheck→test→commit)
-  → 全量验证
+Go → 环境准备(install/基线测试)
+  → 逐 Task 派发 subagent(写码→typecheck→test→commit)
+  → 全量验证（主线程）
   → 逐条验收(对照 acceptance.md)
-  → 交叉 Review(dao-reviewer)
+  → 交叉 Review → Agent(subagent_type="dao-reviewer")
+  → 核心模块追加 → Agent(subagent_type="dao-reviewer-critical")
   → 归根(merge/PR) → 归档
 ```
+
+### subagent 调度指令
+
+| 阶段 | 工具调用 | 触发条件 |
+|------|---------|---------|
+| Task 执行 | `Agent(subagent_type="dao-worker-batch", model="sonnet")` | 每个 Task |
+| 代码审查 | `Agent(subagent_type="dao-reviewer", model="sonnet")` | 所有 Task 完成后 |
+| 深度审查 | `Agent(subagent_type="dao-reviewer-critical", model="sonnet")` | 涉及 auth/payment/security/core |
+| Bug 诊断 | `Agent(subagent_type="dao-debugger", model="sonnet")` | 同一 Task 失败 3 次 |
+| 架构升级 | `Agent(subagent_type="dao-strategist")` | reviewer 报告架构级问题（不降模型） |
+
+**subagent prompt 模板**：每个 subagent 调用必须包含：
+1. 明确的任务边界（做什么、不做什么）
+2. 输入文件路径（spec/plan 中对应段落）
+3. 验证命令（怎么确认做对了）
+4. 输出预期（改了哪些文件、返回什么）
 
 ### 失败处理
 
 | 失败场景 | 处理 |
 |---------|------|
 | 单 task 失败 | 自动修复，最多 3 次 |
-| 3 次失败 | 升级 dao-debugger |
+| 3 次失败 | 升级 `Agent(subagent_type="dao-debugger", model="sonnet")` |
 | 验收项 fail | 回到对应 Task |
 | 验收项不可实现 | **回退谋线**重新评估 |
-| review 架构问题 | 升级 dao-strategist |
+| review 架构问题 | 升级 `Agent(subagent_type="dao-strategist")`（保持主模型） |
 | 5 轮无进展 | 强制停止 + 诊断报告 |
 
 回退到谋线后，谋线自行判断：plan 拆解问题（改 plan）/ spec 方案问题（改 spec）/ 代码 bug（重试/换方案）。
