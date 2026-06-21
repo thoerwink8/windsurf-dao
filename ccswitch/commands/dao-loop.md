@@ -26,9 +26,13 @@ argument-hint: "[需求描述 或 loop名称]"
 
 检测中断的 loop → 弹出警告 + 建议（继续/回退/废弃）。
 
+### 2.5 Loop 计划确认（🔒 必止）
+
+展示 Loop 计划（名称/描述/文件集/分支/间隔），**等待用户确认**后才创建 STATUS.json。用户可确认、修改或取消。此检查点不可跳过。
+
 ### 3. 创建或恢复 Loop
 
-**新建**：
+**新建**（用户已确认计划后）：
 - 从用户需求提取语义化命名（kebab-case, 2-4 词）
 - 创建 `docs/specs/<topic>/STATUS.json`
 - 评估与已有 loop 的关系（merge / parallel / depends_on）
