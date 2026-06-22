@@ -102,6 +102,24 @@ PROJECT.md 自动更新
 
 **所有终止（主动/被动）由用户确认**，AI 只给建议。
 
+### 关联归档 loop
+
+当用户提到的内容关联到已归档 loop（关键词/文件路径匹配），追加展示：
+
+```
+📦 关联归档 Loop：
+| Loop           | 描述         | 归档日期   | 重启次数 | 关联度 |
+|----------------|-------------|-----------|---------|--------|
+| report-export  | 报告多格式导出 | 2026-06-20 | 0       | 高     |
+
+建议：
+1. 就地小修（不开 loop）
+2. 重启原 loop（Reopen）
+3. 派生新 loop（Fork）
+```
+
+路由判据见 §7.5。
+
 ## §1.5 Loop 计划确认 + 提示词分发（🔒 必止）
 
 预飞 + 情境感知完成后，**必须展示 Loop 计划 + 生成 copy-ready 提示词**，然后**暂停当前 loop**。当前 session 是调度台，不是执行者。
@@ -488,6 +506,8 @@ docs/specs/
 ## 关键决策
 ## 验收结果
 ## 关键词
+## 后续补丁
+<!-- 就地小修时在此记录，格式：日期 | 改了什么 | 为什么 -->
 ```
 
 ### 关联触发
@@ -505,6 +525,77 @@ docs/specs/
 | 影响文件已删除 | 降权 |
 
 永不自动删除，低相关只降展示优先级。
+
+## §7.5 Loop 续写（Follow-up）
+
+已完成/已归档的 loop 发现后续问题时，按严重程度三层路由：
+
+### 决策树
+
+```
+Loop 已完成（mode: done / archived）→ 发现后续问题
+    │
+    ├─ 小修（≤2 文件，≤30min，不涉及方案变更）
+    │   └─ 就地修（任意 session 直接改，不开/续 loop）
+    │      记一笔到 HANDOFF.md「后续补丁」段
+    │
+    ├─ 中修（3+ 文件，但仍在原 spec 范围内）
+    │   └─ 重启原 loop（Reopen）
+    │
+    └─ 大改（超出原 spec 范围 / 新需求）
+        └─ 派生新 loop（Fork）
+```
+
+### Reopen（重启原 loop）
+
+适用：问题在原 spec 范围内，需要 3+ 文件改动。
+
+**操作流程**：
+
+1. 从 `_archive/<topic>/` 移回 `docs/specs/<topic>/`
+2. STATUS.json 更新：
+
+```jsonc
+{
+  "mode": "reopened",        // done → reopened
+  "reopen_count": 1,         // 累计重启次数
+  "reopen_reason": "...",    // 重启原因
+  "reopen_at": "YYYY-MM-DD",
+  "phase": "dev"             // 直接进造线（spec 不变）
+}
+```
+
+3. `plan.md` 追加「Reopen Round N」段落 + 新 Task（编号 T-R1, T-R2...）
+4. `acceptance.md` 追加新验收项（如有）
+5. 跳过谋线，直接进造线
+6. 完成后再次归档，`reopen_count` +1
+
+**约束**：
+
+- Reopen ≤ 3 次。第 4 次强制 Fork 新 loop（原 spec 已不够用）
+- 每次 Reopen 必须写明 `reopen_reason`
+- INDEX.md 更新日期和版本，标注 `(reopened×N)`
+
+### Fork（派生新 loop）
+
+适用：问题超出原 spec 范围，或需要重新设计方案。
+
+就是开新 loop，但多两件事：
+
+1. 新 `spec.md` 头部加 `extends: <original-topic>`
+2. 谋线阶段自动读取原 loop 的 `HANDOFF.md` + `spec.md` 作为背景输入
+
+INDEX.md 记录关联：`extends: <original-topic>` 列。
+
+### 路由规则
+
+| 角色 | 适合处理 |
+|------|---------|
+| 调度台 session | 路由判断（小修/中修/大改）+ 分发 Reopen/Fork 提示词 |
+| 原执行 session（如果还活着） | 小修就地改 / Reopen 后继续造线 |
+| 新 session | 接 Reopen/Fork 提示词执行 |
+
+**触发方式**：用户在任意 session 说"之前的 XX loop 还有问题"，AI 扫描 `_archive/INDEX.md` 找到对应 loop → 展示 HANDOFF.md 摘要 → 判断路由 → 执行或分发。
 
 ## §8 PROJECT.md 仪表盘
 
