@@ -23,7 +23,7 @@ description: 项目目录结构约定——文件放哪里、根目录放什么�
     prd.md               ← 产品需求文档（如有）
     plans/               ← 所有实施计划（统一目录，按日期命名）
       YYYY-MM-DD-主题.md
-    design/              ← 设计资产（pen 文件 + 导出 PNG）
+    design/              ← 设计资产（HTML 原型 + 截图）
 ```
 
 ## 根目录法则
@@ -48,8 +48,8 @@ docs/
 │   ├── YYYY-MM-DD-*-plan.md     # 实施 plan（dao-plan 产出）
 │   └── foundation-standard.md   # Token 规范等长期参考
 └── design/                      # 设计资产（设计层 source of truth）
-    ├── <project>.pen            # Pencil 设计源文件
-    └── *.png                    # 导出截图
+    ├── *.html                   # Open Design HTML 原型
+    └── *.png                    # 截图
 ```
 
 **不再分 `specs/` 和 `superpowers/` 两套目录**——它们是同一件事的不同阶段，统一放 `plans/`。
@@ -67,12 +67,12 @@ src/components/        或  apps/<app>/src/components/
 - 直接放 `components/` = 项目特有的业务组件
 - 不要把业务组件塞进 `ui/`，不要把 shadcn 件拿出 `ui/`
 
-## pen 文件约定
+## 设计资产约定
 
-- **一个项目一个 pen 文件**：`docs/design/<project>.pen`
-- pen 文件包含：Design System（token 层）+ 可复用组件 + 所有页面设计稿
-- 导出的 PNG 放同目录
-- pen 文件**应 commit 到 git**
+- 设计产物统一存放在 `design/` 目录（HTML 原型 + 截图）
+- HTML 原型是 source of truth，代码实现必须对齐原型
+- 通过 `dao-design-open` skill 读取 Open Design 产出并执行三维对齐
+- 设计资产**应 commit 到 git**
 
 ## 不该出现的文件位置
 
@@ -80,7 +80,7 @@ src/components/        或  apps/<app>/src/components/
 |---|---|
 | `AGENT_GUIDE.md` 在根目录 | 内容归入 `AGENT.md` 或 `.devin/rules/` |
 | `PRD.md` 在根目录 | `docs/prd.md` |
-| `.pen` 在根目录 | `docs/design/` |
+| 设计 HTML 在根目录 | `design/` |
 | 业务组件在 `ui/` 下 | `components/` 根层 |
-| 设计导出 PNG 在 `src/` 下 | `docs/design/` |
+| 设计截图在 `src/` 下 | `design/` |
 | specs/ 和 superpowers/ 分裂 | 统一到 `docs/plans/` |
