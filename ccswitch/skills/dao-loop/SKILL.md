@@ -200,7 +200,7 @@ Loop 名称：<topic>
 
 AI 根据复杂度判断，常见：
 - `api-spec.md`（涉及 API）
-- `ui-spec.md`（涉及 UI，走 dao-design-taste）
+- `ui-spec.md`（涉及 UI，有 design/ 目录走 dao-design-open）
 - `schema.md`（涉及数据库）
 - `migration-plan.md`（数据迁移）
 

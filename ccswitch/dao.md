@@ -133,7 +133,7 @@
 **复杂度 SHOULD 建议**：≥3 文件 / ≥100 LOC / 核心模块（auth/payment/security/core）/ 跨服务 / 不可逆 → 主动建议走，用户拒绝即轻量路径。
 
 五步（落地见 `/dao-superpowers` command）：
-worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent → reviewer subagent（`dao-review`）→ 归根 cleanup。UI 任务在 plan 前过 `dao-design-taste` 分诊。
+worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent → reviewer subagent（`dao-review`）→ 归根 cleanup。UI 任务有 `design/` 目录时先过 `dao-design-open` 读取设计资产。
 
 进入即承诺，不中途偷工：不跳 reviewer、不跳 worktree、不直推 master。
 
@@ -145,15 +145,15 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 写实施 plan | `dao-plan` | 为大于其细 (63) |
 | 全面体检 / 验证完成 | `dao-verify` | 慎终如始 (64) |
 | review / 接受批评 | `dao-review` | 受国之垢 (78) |
-| UI / 界面 / 组件 / 主题 | `dao-design-taste`(基石总闸,先分诊) | 大象无形 (41) |
-| UI 视觉问题修复 | `dao-design-qa`(截图→设计工具→代码回填) | 反者道之动 (40) |
+| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 Open Design 产出→三维对齐→验证) | 道法自然 (25) |
 | 隔离工作区 | `dao-worktree` | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 知常曰明 (16) |
 | 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 道生一 (42) |
+| 组件结构健康 / 原生 HTML 检测 | `dao-component-radar`(原生 HTML→组件提炼,token 冲突) | 不知常妄作凶 (16) |
 
-9 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
+8 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
 
-**UI 视觉问题自动触发**：发现 UI 视觉 bug（布局错位、颜色不对、文字截断、间距不一致等）或用户发截图反馈时，自动走 `dao-design-qa` 三步循环（截图找问题 → 设计工具修设计 → 代码回填），不直接改代码。有设计工具 MCP 时走完整三步；无设计工具时跳过设计步直接改代码。
+**UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 

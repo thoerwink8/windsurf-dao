@@ -41,4 +41,4 @@ autopilot 隔离模式下：AI 自审替代用户审批,只在方向互斥 / 不
 
 ## UI 任务
 
-design 审批后、plan 前,先过 `dao-design-taste` 分诊门决定是否需要原型探索。
+design 审批后、plan 前,若项目有 `design/` 目录则先过 `dao-design-open` 读取设计资产。
