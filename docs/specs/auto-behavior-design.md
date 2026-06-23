@@ -65,9 +65,9 @@
 
 全部靠 `description` 语义被 AI 判断加载（model_decision 性质）。无一有确定性触发。
 
-### 11 个 command
+### 10 个 command
 
-dao-commit, dao-distill, dao-doc, dao-remove, dao-session-sync, dao-thread-tree, dao-dev, dao-evolve, dao-cycle, dao-autopilot, dao-superpowers——全部 `/` 手动调。
+dao-commit, dao-distill, dao-doc, dao-remove, dao-thread-tree, dao-dev, dao-evolve, dao-cycle, dao-autopilot, dao-superpowers——全部 `/` 手动调。
 
 ---
 
@@ -143,7 +143,6 @@ dao-commit, dao-distill, dao-doc, dao-remove, dao-session-sync, dao-thread-tree,
 | dao-commit | command | 手动（用户说"提交"触发） | **C**：手动入口已足；commit 是发布决策，不宜自动 | — |
 | dao-doc | command | 手动 | **C**：文档生成重，显式触发 | — |
 | dao-remove | command | 手动 | **C**：纯工具（标记删会话），手动 | — |
-| dao-session-sync | command | 手动 | **C**：多会话汇总，按需手动 | — |
 | dao-thread-tree | command | 手动（处理 Open Threads） | **C 处理 + A 触发上游**：它*回顾*线索；但它依赖的「实时中断感知→自动写 Open Threads」是 vaporware（见下），那一步才是节律 hook 的活 | 上游「中断感知」归节律 hook |
 
 ---
