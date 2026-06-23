@@ -217,7 +217,7 @@ py search.py stats --data-dir <project>/data
 /evolve 是元工作流——审查和改进所有其他工作流与技能（包括自身）
 含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
 
-/evolve 审查 → /dev /cycle /autopilot /commit /distill /doc /session-sync /thread-tree + stacks/
+/evolve 审查 → /dev /cycle /autopilot /commit /distill /doc /thread-tree + stacks/
 /evolve 审查 → skills（7 个 skill 的 description 触发还准吗？内容还对吗？）
 /evolve 审查 → /evolve（进化流程本身需要进化吗？）
 ```

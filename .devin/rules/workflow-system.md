@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 工作流的选择与协作机制——/dev /cycle /autopilot /commit /distill /evolve /doc /session-sync /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
+description: 工作流的选择与协作机制——/dev /cycle /autopilot /commit /distill /evolve /doc /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
 ---
 
 # 工作流生态 · 怎么协作
@@ -18,7 +18,6 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 - `/distill` — 会话级知识沉淀（跨会话 Git 考古已并入 `/evolve`）
 - `/evolve` — 审查一切（包括自身） + 快速体检（`/health-check`），有感觉才触发
 - `/doc` — 按需触发，不强制每个项目都写完整文档
-- `/session-sync` — 多会话协作（git 为共享状态，无需其他会话配合）
 - `/thread-tree` — 处理 TODO.md Open Threads 未解决项
 
 **技术栈处方**（`.devin/stacks/`）：`/dev` 基建审计时按需加载，不是工作流。

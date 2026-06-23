@@ -73,7 +73,6 @@
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
 | `/dao-doc` | 文档生成与更新 |
 | `/dao-thread-tree` | 处理 Open Threads |
-| `/dao-session-sync` | 多会话协作（git 共享状态） |
 
 ### 技能（`.devin/skills/`）
 

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 设计资产管理——pencil 设计工作流、Token 同步、组件添加策略、foundation-standard.md 的定位。涉及 UI 设计、创建组件、修改样式时读取
+description: 设计资产管理——Open Design HTML 原型工作流、Token 同步、组件添加策略、foundation-standard.md 的定位。涉及 UI 设计、创建组件、修改样式时读取
 ---
 
 # 设计资产 · 怎么做设计
@@ -12,16 +12,16 @@ description: 设计资产管理——pencil 设计工作流、Token 同步、组
 ```
 dao-brainstorm → design spec (docs/specs/)
     ↓
-pencil 设计阶段
-    ├── ① Token 层（色板/字体/间距/圆角）   → pen 变量，一次性设定
-    ├── ② 业务组件（reusable 组件）          → 在 pen 里定义，代码照着实现
+Open Design 设计阶段（HTML 原型为唯一视觉真相源）
+    ├── ① Token 层（色板/字体/间距/圆角）   → CSS 变量，一次性设定
+    ├── ② 业务组件（reusable 组件）          → HTML 原型定义，代码照着实现
     └── ③ 页面设计稿（完整屏幕 × light/dark）→ 组合组件成页面
     ↓
 dao-plan → 任务清单
     ↓
 代码实现
     ├── shadcn add（按需装基础件）
-    ├── 业务组件代码（照 pencil 实现）
+    ├── 业务组件代码（照 HTML 原型实现）
     └── 页面代码（组合组件）
 ```
 
@@ -31,7 +31,7 @@ dao-plan → 任务清单
 |---|---|---|
 | **shadcn 通用交互** | Radix UI 内核 | 不管——键盘导航、ARIA、焦点管理已内置 |
 | **Token + 交互定制** | foundation-standard.md | Token 全表 + 暗色规则 + 对 shadcn 默认值的覆盖 |
-| **业务组件** | pencil 设计 + 代码 | 设计稿 → 代码实现 → 规范文档 |
+| **业务组件** | Open Design HTML 原型 + 代码 | 设计稿 → 代码实现 → 规范文档 |
 
 ## 组件添加策略
 
@@ -42,7 +42,7 @@ dao-plan → 任务清单
 | 页面设计稿需要 Tabs | `npx shadcn add tabs` → 自动放入 `components/ui/` |
 | 页面需要 Skeleton | `npx shadcn add skeleton` → 装完即用 |
 | 想浏览有什么可用 | 查 shadcn 官网或 `npx shadcn add --help` |
-| 业务组件（PoolColumn 等） | 先在 pencil 设计 → 再写代码到 `components/` 根层 |
+| 业务组件（PoolColumn 等） | 先在 HTML 原型设计 → 再写代码到 `components/` 根层 |
 
 **铁律**：
 - 不提前装不用的 shadcn 组件（YAGNI）
@@ -91,7 +91,7 @@ foundation-standard.md
 | **disabled** | 不可操作 | 降低不透明度 |
 | **多实例不同状态** | 同类元素处于不同状态 | 侧边栏项目列表：选中/完成/进行中/归档 |
 
-### 实现方式（Figma/Storybook 标准）
+### 实现方式
 
 **每种状态是独立的画布帧，并排摆放，绝不嵌套进同一组件内部。**
 
@@ -121,13 +121,13 @@ foundation-standard.md
    - 报告页：生成中骨架 / 已生成报告 → 各自独立成帧
    - 设置页：未保存 / 验证中 / 已保存 → 各自独立成帧
 
-**❌ 禁止的做法：**
+**禁止的做法：**
 ```
 // 错误：把备选状态追加进同一组件尾部
 <Dialog>
   <NormalForm />
-  <Divider /> ← ❌
-  <ErrorForm /> ← ❌ 备选状态不能嵌套在组件里
+  <Divider />
+  <ErrorForm /> ← 备选状态不能嵌套在组件里
 </Dialog>
 ```
 
@@ -136,22 +136,20 @@ foundation-standard.md
 - **不需要穷举所有排列组合**——每种状态至少出现一次即可
 - **Dark 模式通过 theme 切换**——不为每个状态单独做 dark 版
 
-## pencil 设计稿管理
+## 设计资产管理
 
-- **一个项目一个 pen 文件**：`docs/design/<project>.pen`
-- pen 内部结构：Design System（token）→ Reusable Components → Screen 1~N
-- 每个屏幕做 light + dark 两版（通过 pen theme 切换）
-- 每个屏幕展示多种交互状态（见「屏幕状态覆盖」节）
-- 导出 PNG 到同目录，用于 git diff 可视化
-- 设计稿变更时先改 pen → 再改代码（pen 是 source of truth）
+- 设计产物统一存放在 `design/` 目录（HTML 原型 + 截图）
+- HTML 原型是 source of truth，代码实现必须对齐原型
+- 通过 `dao-design-open` skill 读取 Open Design 产出并执行三维对齐（结构/样式/交互）
+- 设计变更时先改 HTML 原型 → 再改代码
 
-## 与 HTML mockup 的关系
+## 与快速原型的关系
 
-| | HTML mockup（dao-design-taste 探索产物） | pencil（.pen） |
+| | HTML mockup（dao-design-taste 探索产物） | Open Design HTML 原型 |
 |---|---|---|
 | 用途 | **快速原型探索**：多套视觉方向让用户选 | **正式设计**：持续维护的设计源 |
 | 时机 | brainstorm 阶段，探索视觉风格 | brainstorm 之后，确定方向后 |
-| 产物 | 一次性 HTML，不持续维护 | .pen 文件，持续更新 |
-| 组件 | HTML 里 copy-paste | reusable 组件，实例化引用 |
+| 产物 | 一次性 HTML，不持续维护 | HTML 原型文件，持续更新 |
+| 组件 | HTML 里 copy-paste | 结构化组件，实例化引用 |
 
-两者互补，不是替代。快速探索用 HTML mockup，确定后用 pencil 做正式设计。
+两者互补，不是替代。快速探索用 HTML mockup，确定后用 Open Design 做正式设计。
