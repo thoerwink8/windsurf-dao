@@ -342,11 +342,28 @@ AI 根据复杂度判断，常见：
 **流程**：主线程编排 → subagent 生成 → 用户确认 → 修改 → 再确认
 
 1. 创建 `docs/specs/<topic>/` + STATUS.json，文档标 `skeleton`
-2. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
-3. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
-4. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
-5. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
-6. 全部 done + 校验通过 → `go_ready: true`
+2. **🎨 设计目录检测**（见下方增强段）
+3. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
+4. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
+5. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
+6. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
+7. 全部 done + 校验通过 → `go_ready: true`
+
+### 设计对齐增强（design/ 自动检测）
+
+**谋线步骤 2 自动执行**：若 Loop 范围涉及 `design/` 目录（需求含"设计还原 / 对齐 / 1:1 / UI 翻译 / design-to-code"等信号），**必须加载 `dao-design-open` §1（Read）+ §1.5（全覆盖规划）**，在 spec 生成前完成全页面清点和三层 Diff。
+
+触发后谋线流程变化：
+
+| 步骤 | 标准流程 | 设计对齐增强 |
+|------|---------|------------|
+| spec 前 | — | 加载 dao-design-open §1 + §1.5，完成全页面清点 + 三层 Diff |
+| spec 输入 | 用户需求 | 用户需求 **+ §1.5 Diff 结果** |
+| plan 约束 | 覆盖矩阵对验收项 | 覆盖矩阵增加**页面 × 层级**维度（§1.5.3） |
+| 任务排序 | 按依赖 | 强制 **top-down**：共享结构→布局→节→组件（§1.5.4） |
+| 交叉校验 | 验收项全覆盖 | 验收项全覆盖 **+ 所有页面三层均有 Task 或显式 deferred** |
+
+**为什么强制**：未做全页面清点的设计 Loop 极易只覆盖"最显眼"的页面而悄悄跳过其余，导致造线结束后才发现大面积遗漏——此时已耗尽 budget，返工成本极高。
 
 ### subagent 调度指令
 
