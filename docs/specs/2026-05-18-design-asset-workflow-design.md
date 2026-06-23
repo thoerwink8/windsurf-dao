@@ -1,4 +1,12 @@
-# Design: 设计资产工作流 + 项目目录约定
+---
+status: archived
+archived_date: 2026-06-23
+superseded_by: Open Design 工作流（dao-design-open skill + design/ 目录 HTML 原型）
+---
+
+# [已归档] Design: 设计资产工作流 + 项目目录约定
+
+> **归档说明**：本 spec 描述的 Pencil (.pen) 工作流已被 Open Design（HTML 原型 + dao-design-open skill）取代。保留作为历史记录，不再作为实施依据。
 
 > 审批状态：✅ 用户已审批（2026-05-18 00:36 UTC+8）
 

@@ -221,7 +221,7 @@ py search.py stats --data-dir <project>/data
 /dao-evolve 是元工作流——审查和改进所有其他命令与技能（包括自身）
 含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
 
-/dao-evolve 审查 → /dao-dev /dao-cycle /dao-autopilot /dao-commit /dao-distill /dao-doc /dao-session-sync /dao-thread-tree + stacks/
+/dao-evolve 审查 → /dao-dev /dao-cycle /dao-autopilot /dao-commit /dao-distill /dao-doc /dao-thread-tree + stacks/
 /dao-evolve 审查 → skills（7 个 skill 的 description 触发还准吗？内容还对吗？）
 /dao-evolve 审查 → /dao-evolve（进化流程本身需要进化吗？）
 ```
