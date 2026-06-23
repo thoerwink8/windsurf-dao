@@ -79,36 +79,23 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2 步 · 写 plan」
 
-#### 2.0 · 形（dao-design-taste 分诊）⭐
+#### 2.0 · 形（dao-design-open 读取）⭐
 
-> 大象无形。让无形的设计语言显形，再写 plan。——《道德经》第 41 章
+> 道法自然。设计已成，代码当如水就形。——《道德经》第 25 章
 
-**触发**：UI/视觉相关任务，先过 `dao-design-taste` §0 分诊门，由分诊结果决定走多重流程（不再"凡 UI 必走 mockup"）。
+**触发**：UI/视觉相关任务且项目有 `design/` 目录（Open Design 产出），先过 `dao-design-open` §1 读取设计资产，再写 plan。
 
-**announce**：「开始 dao-superpowers 第 2.0 步 · 形（分诊）」
+**announce**：「开始 dao-superpowers 第 2.0 步 · 形（读取设计资产）」
 
 ```
-dao-design-taste §0 分诊：本次引入多少未知？
-  ├─ DIRECT（已知形态里做事）→ 跳过原型，查 gallery 复用 → 直接进 2.1 写 plan
-  ├─ SCOPED（一块形态未知的新东西）→ 走 dao-design-taste 探索流程，只画这一块
-  └─ FULL（项目启动/换肤/大重构）→ 走 dao-design-taste 全量探索
-
-FULL/SCOPED 档走 dao-design-taste 探索流程：
-  一·察 → 项目画像（产品本质 + 用户 + 关键场景）
-  二·援 → 配色/字体方向从供给源取候选：ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则
-          🔒 用户拍板方向
-  三·拟 → 合成 N 套方向（受基石 §2 三旋钮 + §4 判据约束）
-  四·显 → 生成 _tmp/ui-mockup-<topic>-<ts>.html（throwaway 思考脚手架）
-  五·择 → 用户在浏览器审视形态/交互 → 选定 → 导出 design tokens
+dao-design-open §1 读取：
+  1. 读 design/css/<project>.css — 提取设计系统（token/组件/布局）
+  2. 读目标页面 design/*.html — 提取结构/视觉/交互规格
+  3. 读 *.artifact.json — 确认页面状态（complete 才翻译）
+  → 产出：设计系统速查 + 页面翻译清单 → 喂给 2.1 写 plan
 ```
 
-**🔒 双关卡**（仅 FULL/SCOPED）：
-- 援步骤：用户必须显式拍板配色/字体方向，不得替选
-- 择步骤：用户必须显式选定方向，不得替选
-
-**唯一长期产物**：`_tmp/design-tokens-<topic>.json`（喂给 dao-plan）。HTML 是 throwaway，用完归档，**不是 ground truth、不写像素契约**。
-
-详见 `dao-design-taste`。
+**无 `design/` 目录时**：跳过本步，直接进 2.1 写 plan。
 
 #### 2.1 · 写 plan
 
@@ -156,9 +143,9 @@ subagent 调度（按需）：
 三阶段 review：
   1. spec compliance：是否实现了 plan 里的所有点？
   2. code quality：代码质量、命名、错误处理、边界
-  3. visual compliance（UI 任务必加）：过 dao-design-taste §6 验收——
-     逐条过 §4 体检表（禁 AI 紫 / 单一强调 / 交互状态全周期 / 对比度 a11y / 文案自审）
-     + preview 真实渲染肉眼看。不做 mockup-vs-impl 像素 diff。
+  3. visual compliance（UI 任务必加）：过 dao-design-open §4 验证——
+     截图对比 Open Design 原型 vs 项目渲染，三维检查（结构/视觉/交互）。
+     以 design/ 目录为唯一视觉真相源。
 
 派活：
   - 普通模块 → reviewer profile
@@ -178,7 +165,7 @@ subagent 调度（按需）：
 
 **announce**：「开始 dao-superpowers 第 5 步 · 归根」
 
-**前置关卡**（UI 任务专需）：归根前必过 `dao-design-taste` §6 验收（§4 体检表 + preview 真实渲染）。未过 = 未闭环，不可进本步。
+**前置关卡**（UI 任务专需）：归根前必过 `dao-design-open` §4 验证（截图对比 + 三维对齐检查）。未过 = 未闭环，不可进本步。
 
 ```
 四选一：
@@ -210,8 +197,8 @@ subagent 调度（按需）：
 | 任务太小论 | 显式触发 = 流程承诺，与代码量无关 |
 | 路径偷懒 | 必须 `docs/specs/<topic>-plan.md` 标准位置 |
 | 跳 reviewer | reviewer subagent 是质量门；自检不算 |
-| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见真实渲染；UI 任务必过 dao-design-taste §6（§4 体检表 + preview） |
-| **未过 §6 验收直进 finish** | UI 任务归根前必过 dao-design-taste §6，未过 = 开环 = 后续新盲点 |
+| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见真实渲染；UI 任务必过 dao-design-open §4 验证（截图对比 + 三维对齐） |
+| **未过验证直进 finish** | UI 任务归根前必过 dao-design-open §4，未过 = 开环 = 后续新盲点 |
 | 直推 master | merge / PR 二选一，仪式必须 |
 | node_modules 继承污染 | worktree 首次 install 前必 rm -rf node_modules（参 e163） |
 
@@ -227,10 +214,9 @@ rule 是"什么时候走 + 不能怎么走"，command 是"怎么一步步走"。
 ## 反原则
 
 - **不为五步而五步**——单文件 typo 不必走五步
-- **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 command 聚焦「现有代码核心改动」，含主题重构/视觉重设计（2.0 步会自动激活 dao-design-taste 分诊）
+- **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 command 聚焦「现有代码核心改动」，含视觉对齐（2.0 步会自动读取 Open Design 资产）
 - **不并行五步**——一步完成才进下一步，不可跳过
-- **不跳 2.0 分诊**——UI 任务必先过 dao-design-taste §0 分诊定档（DIRECT 跳原型 / SCOPED 局部 / FULL 全量），不再"凡 UI 必走 mockup"
-- **援从供给源取，不凭空发明**——FULL/SCOPED 档的"援"先于"拟"：配色/字体方向从 ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则取候选，胜过 AI 闭门造车
+- **不跳 2.0 读取**——UI 任务有 design/ 目录时必先过 dao-design-open §1 读取设计资产，AI 不自行做设计判断
 
 ## 完整执行模板
 
@@ -244,22 +230,21 @@ UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
   [创建 worktree + 干净 install + 测试基线]
 
 ▶ 第 2 步 · 谋
-  ├─ 2.0 · 形（dao-design-taste §0 分诊）⭐
-  │  [DIRECT 跳原型查 gallery / SCOPED 局部 / FULL 全量]
-  │  [FULL·SCOPED 走五步：察 → 援 → 拟 → 显 → 择]
-  │  🔒 援：用户拍板配色/字体方向    🔒 择：用户选定方向
-  │  唯一长期产物：_tmp/design-tokens-<topic>.json（HTML 是 throwaway）
+  ├─ 2.0 · 形（dao-design-open §1 读取）⭐
+  │  [读 design/css/ 设计系统 + 目标页面 HTML 原型]
+  │  [产出：设计系统速查 + 页面翻译清单]
+  │  无 design/ 目录时跳过本步
   └─ 2.1 · 写 plan（dao-plan）
      [写 docs/specs/<topic>-plan.md]
      🔒 用户审批 plan
 
 ▶ 第 3 步 · 造
   [逐 task 执行 + checkpoint]
-  [UI 任务：implementer 拿 design tokens 实现，引用 token + 复用 gallery 组件]
+  [UI 任务：按 dao-design-open §3 三维对齐翻译]
 
 ▶ 第 4 步 · 审（dao-review）
   [派 reviewer / reviewer-critical]
-  [UI 任务：reviewer 过 dao-design-taste §6 验收真实渲染]
+  [UI 任务：reviewer 过 dao-design-open §4 截图对比验证]
 
 ▶ 第 5 步 · 归
   [merge / PR / cleanup]
