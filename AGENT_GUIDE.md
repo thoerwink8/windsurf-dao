@@ -24,7 +24,7 @@
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
 | `.devin/rules/`             | 11 文件 5 层架构（详见 `.devin/rules/README.md`，含 dao-mantra） |
-| `.devin/workflows/dao-*.md` | 9 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/thread-tree/superpowers） |
+| `.devin/workflows/dao-*.md` | 10 个工作流（dev/cycle/autopilot/commit/distill/doc/evolve/goal/thread-tree/superpowers） |
 | `.devin/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |

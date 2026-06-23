@@ -65,9 +65,9 @@
 
 全部靠 `description` 语义被 AI 判断加载（model_decision 性质）。无一有确定性触发。
 
-### 10 个 command
+### 12 个 command
 
-dao-commit, dao-distill, dao-doc, dao-remove, dao-thread-tree, dao-dev, dao-evolve, dao-cycle, dao-autopilot, dao-superpowers——全部 `/` 手动调。
+dao-commit, dao-distill, dao-doc, dao-remove, dao-thread-tree, dao-dev, dao-evolve, dao-cycle, dao-autopilot, dao-superpowers, dao-loop, gs——全部 `/` 手动调。
 
 ---
 
