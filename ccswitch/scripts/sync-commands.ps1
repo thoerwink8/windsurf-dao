@@ -4,7 +4,7 @@
 .DESCRIPTION
     扫描 ccswitch/commands/*.md，对每个文件在目标目录创建符号链接。
     已存在的非 symlink 文件会被替换；已存在的正确 symlink 跳过。
-    跳过目标目录中不属于 windsurf-dao 的独立文件（如 dao-pencil.md）。
+    跳过目标目录中不属于 windsurf-dao 的独立文件。
 .EXAMPLE
     powershell -File sync-commands.ps1
     powershell -File sync-commands.ps1 -DryRun

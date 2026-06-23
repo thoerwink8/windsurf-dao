@@ -47,7 +47,7 @@ dao.bat
 node config-sync\lib\doctor.mjs
 ```
 
-**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Pencil 本机安装路径、Codex node_repl 等）属正常机器差异，非问题。
+**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl 等）属正常机器差异，非问题。
 
 **自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao.bat` 选 3（部署）或 `dao.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
 
@@ -136,7 +136,7 @@ dao.bat --doctor                  # 配置一致性体检（0 问题为准）
 node config-sync\lib\goal-task-health.mjs   # （Codex 用户）goal 任务状态体检
 ```
 
-doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Pencil 本机路径、Codex node_repl）属正常差异。
+doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Codex node_repl）属正常差异。
 
 <!-- APPEND-MARKER-2 -->
 
@@ -146,7 +146,6 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Pencil 本�
 |---|---|---|---|
 | 仓库根路径 | `D:/frank/windsurf-dao` | 可能不同 | 占位符/动态根自动适配，无需手改 |
 | 用户名 | `Administrator` | 可能不同 | `${HOME}` 占位，恢复时还原 |
-| Pencil MCP 路径 | `D:/Program Files/Pencil/...` | 必不同 | 本机特定，换机后按新安装位置在 cc-switch 重配 |
 | 供应商配置 | cc-switch DB | 需重配 | 新机器在 cc-switch 中重新配置供应商 |
 | Codex 登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
 

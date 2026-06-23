@@ -294,7 +294,7 @@ SessionStart(source=compact) ── （可选，后续轮评估）
 
 2. dao-glob-gate.js（扩展）· PostToolUse
    - 现有 isCode / isDaoMeta 分支保留
-   - 加 isFrontend（.tsx/.jsx/.vue/.svelte/.css/.scss）→ 注入「过 dao-design-taste：照 pencil 稿 / 字号体系 / a11y」
+   - 加 isFrontend（.tsx/.jsx/.vue/.svelte/.css/.scss）→ 注入「过 dao-design-taste：照 Open Design 原型 / 字号体系 / a11y」
 
 3. settings.json 注册
    - UserPromptSubmit 数组追加 dao-rhythm.js（cn-title 之后）
@@ -386,7 +386,7 @@ hookSpecificOutput.hookEventName = "UserPromptSubmit"
 const isFrontend = /\.(tsx|jsx|vue|svelte|css|scss|less)$/i.test(norm);
 // isDaoMeta / isCode 判定之后，新增分支（注意优先级：前端文件也是 code，
 // 应在 isCode 命中时附加 design-taste 提示，而非互斥）→ 倾向：isFrontend 时
-// 在 quality 门基础上追加一句「UI 改动另过 dao-design-taste：照 pencil 稿/字号体系/a11y」
+// 在 quality 门基础上追加一句「UI 改动另过 dao-design-taste：照 Open Design 原型/字号体系/a11y」
 ```
 
 ### 文件 3：改 `config-sync/common/settings.json`
