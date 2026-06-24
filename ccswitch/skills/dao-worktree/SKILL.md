@@ -64,17 +64,7 @@ Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue    # Powe
 <跑测试基线,如 npm test / pnpm test>
 ```
 
-> **⚠⚠⚠ worktree 首次 install 前必清 node_modules ⚠⚠⚠**
->
-> `git worktree add` 默认不复制 node_modules，**但**如果你用 junction/symlink 或工具自动同步过 node_modules，或之前的 worktree 残留了 node_modules，就会从主分支继承旧依赖。此时跑 `npm install --save-dev <新包>` 会出现：
-> - npm dedup 逻辑复用旧 node_modules 里的旧版本依赖
-> - **lockfile 写入残缺**：新包自身条目在，但其 transitive deps（尤其 peer dep 带来的新版本依赖）缺失
-> - **本地 `npm test` / `tsc` 全绿**（用嵌套的旧版本就能跑）——假象
-> - **CI 跑 `npm ci`** 严格校验 lockfile 和 package.json 一致性 → EUSAGE 直挂
->
-> **对治**：worktree 首次 install 前先删 node_modules，或用 `npm install --force` 强制从零解析。看评判：
-> - `npm ci --dry-run` 在本地跑不通 → lockfile 残缺，必修
-> - lockfile 中有 `extraneous: true` 而非 `optional: true` 的平台包 → 版本冲突，必修
+> **⚠ worktree 首次 install 前必清 node_modules**（e163 教训）：继承的旧 node_modules 会导致 lockfile 残缺——本地绿但 CI `npm ci` 挂。对治：先删 node_modules 或 `npm install --force`。校验：`npm ci --dry-run` 本地跑通。
 
 **确认 clean**:测试基线必须**全绿**才能开工——否则你不知道后续 bug 是新引入的还是旧问题。
 
@@ -107,31 +97,9 @@ git worktree list   # 看当前所有 worktree
 git branch          # 主分支视角看分支
 ```
 
-## 完整工作流(Gate 形式)
+## 完整工作流
 
-```
-┌─ 虚 · 创建沙箱 ───────────┐
-│ git worktree add ...      │
-│ → 新目录、新分支、新起点    │
-└──────────┬────────────────┘
-           ↓
-┌─ 静 · 测试基线 ───────────┐
-│ install + test            │
-│ → 必须全绿才开工            │
-└──────────┬────────────────┘
-           ↓
-┌─ 观 · 隔离工作 ───────────┐
-│ 在 worktree 内开发          │
-│ → 主分支永不被污染          │
-└──────────┬────────────────┘
-           ↓
-┌─ 复 · 归根 ──────────────┐
-│ merge / 丢弃 / cleanup    │
-│ → 必须 worktree remove    │
-└──────────────────────────┘
-```
-
-每个关卡都有"止"——基线不绿不开工、worktree 不删不算结束。
+虚（worktree add）→ 静（install + test 全绿）→ 观（隔离开发）→ 复（merge/丢弃 + worktree remove）。每关有"止"——基线不绿不开工、worktree 不删不算结束。
 
 ## 反模式表
 
@@ -144,7 +112,7 @@ git branch          # 主分支视角看分支
 | 强删未合并 | `worktree remove --force` 没 merge 的成果 | 慎终如始 | 先 merge 再 remove |
 | 嵌套 worktree | 在 worktree 里再 add 新 worktree | 失虚静 | 回主目录再开新的 |
 | 同名分支冲突 | branch 已存在用同名 add | 不知名 | 先 `git branch -a` 确认 |
-| **node_modules 继承污染** | 用继承的旧 node_modules 跑 `npm install <新包>` → lockfile 残缺，本地跑成但 CI `npm ci` 挂 | 不致虚 | **install 前必清 node_modules**（e163 教训，见 §2） |
+| node_modules 继承污染 | lockfile 残缺，本地绿 CI 挂 | 不致虚 | install 前必清（e163） |
 
 ## 涅槃门(完工前)
 
