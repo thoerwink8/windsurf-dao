@@ -87,29 +87,13 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2.0 步 · 形（读取设计资产）」
 
-```
-dao-design-open §1 读取：
-  1. 读 design/css/<project>.css — 提取设计系统（token/组件/布局）
-  2. 读目标页面 design/*.html — 提取结构/视觉/交互规格
-  3. 读 *.artifact.json — 确认页面状态（complete 才翻译）
-  → 产出：设计系统速查 + 页面翻译清单 → 喂给 2.1 写 plan
-```
+加载 `dao-design-open` §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/交互）→ 读 artifact.json（确认 complete）→ 产出设计系统速查 + 页面翻译清单，喂给 2.1 写 plan。
 
 **无 `design/` 目录时**：跳过本步，直接进 2.1 写 plan。
 
 #### 2.1 · 写 plan
 
-```
-位置：docs/specs/<topic>-plan.md
-内容：
-  - 元信息（创建日期、触发、状态、文件改动估计）
-  - 目标与范围（MVP / Nice-to-have / 不做）
-  - 文件清单（路径 + 改动类型 + 关键内容点）
-  - 风险与缓解
-  - 验收条件
-  - 执行顺序
-  - UI 任务额外：plan 第一句话必须 "读 _tmp/design-tokens-<topic>.json"
-```
+写入 `docs/specs/<topic>-plan.md`，含：元信息 → 目标与范围（MVP/Nice-to-have/不做）→ 文件清单（路径+改动类型+关键点）→ 风险与缓解 → 验收条件 → 执行顺序。UI 任务额外：plan 第一句话必须"读 _tmp/design-tokens-<topic>.json"。
 
 **🔒 关卡**：plan 写完必须用户审批，不得跳过。
 
@@ -121,17 +105,7 @@ dao-design-open §1 读取：
 
 **announce**：「开始 dao-superpowers 第 3 步 · 执行第 N 个 task」
 
-```
-逐 task：
-  - 实施前 announce 当前 task
-  - 实施中：写代码 + 跑测试（红→绿→refactor）
-  - 实施后：fresh 验证（参 dao-verify）
-  - task 间 checkpoint：让用户随时可调
-
-subagent 调度（按需）：
-  - 满足 ≥3 项才派（模板化? 不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?）
-  - 否则主会话直接做（更快，无 rate limit 风险）
-```
+逐 task 执行：announce → 写代码+跑测试（红→绿→refactor）→ fresh 验证（参 dao-verify）→ task 间 checkpoint 让用户可调。subagent 调度按需：满足 ≥3 项才派（模板化/不同模型/context 臃肿/rate limit 有预算/值 15× token/可并行），否则主会话直接做。
 
 ### 四·审（dao-review · 受国之垢）
 
@@ -139,19 +113,7 @@ subagent 调度（按需）：
 
 **announce**：「开始 dao-superpowers 第 4 步 · 派 reviewer」
 
-```
-三阶段 review：
-  1. spec compliance：是否实现了 plan 里的所有点？
-  2. code quality：代码质量、命名、错误处理、边界
-  3. visual compliance（UI 任务必加）：过 dao-design-open §4 验证——
-     截图对比 Open Design 原型 vs 项目渲染，三维检查（结构/视觉/交互）。
-     以 design/ 目录为唯一视觉真相源。
-
-派活：
-  - 普通模块 → reviewer profile
-  - 核心模块 (auth/payment/security/core) → reviewer-critical profile
-  - UI 模块 → reviewer 额外负责 visual compliance（过 §6，看真实渲染不是只看 git diff）
-```
+三阶段 review：① spec compliance（plan 所有点都实现？）② code quality（质量/命名/边界）③ visual compliance（UI 必加：dao-design-open §4 截图对比，design/ 为唯一视觉真相源）。派活：普通→reviewer，核心(auth/payment/security/core)→reviewer-critical，UI→reviewer 额外负责 visual compliance。
 
 如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→修代码或修 token**。
 
