@@ -74,6 +74,18 @@ src/components/        或  apps/<app>/src/components/
 - 通过 `dao-design-open` skill 读取 Open Design 产出并执行三维对齐
 - 设计资产**应 commit 到 git**
 
+## design/ 目录条件检查（⚡ 首检软规则）
+
+有 `design/` 目录的项目，检查以下规范文件是否存在于 `.devin/rules/`（或 `.claude/rules/`）：
+
+| 文件 | 用途 | 缺失时 |
+|---|---|---|
+| `design-tokens.md` | Token 定义与引用规范 | 建议创建（从 CSS 变量或 Tailwind 配置提取） |
+| `design-spirit.md` | 四维设计精神（视觉/交互/导航/无障碍） | 建议创建（用 dao-design-taste §4 判据填充） |
+| `component-health.md` | 组件包装决策与健康度基线 | 可选（组件体系成熟后再建） |
+
+这是软检查——缺失不阻断工作，但在回答末尾追加一行提醒。
+
 ## 不该出现的文件位置
 
 | 错误位置 | 应该在 |
