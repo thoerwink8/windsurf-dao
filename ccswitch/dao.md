@@ -66,6 +66,27 @@
 - **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成
 - **目·观**（GUI 场景）：调试/验证/操作桌面应用或网页时，**先截图看实际状态再行动**，不要只看代码猜——能看就先看
 
+  **浏览器工具选择门**（瞽者善听，聋者善视。绝利一源，用师十倍 ——阴符经）
+
+  两个全局 MCP 可用：
+
+  | 工具 | 本质 | 核心优势 |
+  |------|------|----------|
+  | `chrome-devtools` | 调试器·有头 | 用户可见窗口、Lighthouse 性能审计、Performance trace、堆快照 |
+  | `playwright` | 驱动器·可无头 | 可复现、auto-wait 稳定、accessibility tree 省 token、像素 diff 原生 |
+
+  **首次门控**：AI 感知到需要浏览器操作（截图 / E2E / 性能审计 / 交互验证 / 页面检查）时，**本会话首次**必须 `AskUserQuestion` 让用户选择工具。选择后本会话沿用；用户可随时说"换 playwright"或"换 chrome"即时切换。
+
+  **硬覆盖**（不论用户选择，以下场景强制指定工具，执行时告知用户）：
+
+  | 场景 | 强制 | 原因 |
+  |------|------|------|
+  | 像素级截图 diff（`dao-design-fidelity` L3+） | playwright | 可复现性前提 |
+  | Lighthouse / Core Web Vitals | chrome-devtools | 原生集成，playwright 无此能力 |
+  | 堆快照 / Performance trace | chrome-devtools | 独有能力 |
+
+  **项目级覆盖**：项目可在 `.claude/rules/browser-preference.md` 指定默认（如 `default: playwright`），跳过首次询问。
+
 ## 续力 · 每答必续
 
 > 千里之行，始于足下。
@@ -123,6 +144,16 @@
 | 教训 / 踩坑（档案级） | `docs/evolution/*.csv`（完整因果链，Obsidian 数据源） |
 
 **规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design-taste skill"），比复制粘贴更符合"各复归其根"。
+
+**流程缺口修复必须归因到正确层级**（反就近写）：发现流程缺口（Loop 跳步 / 验收遗漏 / 检查缺失）时，修复**必须先写到定义该流程的层级**（通常是 windsurf-dao skill），再在项目 rules 补实现细节。禁止只改项目 rules 而不改全局 skill——这是「就近写」陷阱：症状在项目暴露，但病根在流程定义层。判据树：
+
+```
+发现流程缺口？
+  └─ 这个缺口属于哪个 skill 的职责？
+       ├─ 能定位到具体 skill → 先改 skill，再改项目 rules 补实现
+       ├─ 属于 dao.md 根基级 → 改 dao.md
+       └─ 纯项目特有（如特定阈值/页面清单）→ 改项目 rules
+```
 
 **项目标准结构**（首次进入项目 · 必检）：每次进入一个项目的**首轮交互**，在回答用户问题之前，先静默检查以下四项。缺项则在回答末尾追加提醒（不阻塞用户任务）：
 
@@ -187,6 +218,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 - **Inline 长命令**：PS 处理 `node -e "..."` >300 字符或含嵌套引号会被 PSReadLine 截断 → 写脚本文件再跑
 - **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
+- **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。理由：跟项目走、gitignore 已覆盖、用户找得到。项目 `.gitignore` 必须含 `**/_tmp/`
 
 ## 言 · 名之则
 

@@ -178,32 +178,44 @@ Loop 归档前（§6.5 验收比对）应 L1 ~ L5 全覆盖。
 
 ---
 
-## §6 · 截图对比的概念流程
+## §6 · 截图对比标准流程
 
 > 不知常妄作凶。看到截图才有发言权。
 
+**标准工具：Playwright headless**（dao.md 目·观门控的硬覆盖场景——像素级 diff 强制 playwright，不论用户会话偏好）。所有 L3~L5 验证统一使用 Playwright headless browser 截图 + `toHaveScreenshot()` 像素级 diff。不使用人工截图、浏览器插件或其他非 headless 方式——可复现性是自动化的前提。
+
 ### 6.1 建立基线
 
-1. 将设计原型目录通过 HTTP 服务可访问
-2. 以项目固定 viewport 逐页截图，存为**设计基线**
-3. 基线纳入版本管理（或 CI 产物存储）
+1. Playwright `webServer` 自动启停 HTTP server 托管 `design/` 目录
+2. 以项目固定 viewport（`playwright.config.ts` 中配置）逐页截图
+3. 基线存入 `*-snapshots/` 目录，纳入版本管理
+4. **基线更新（设计稿变更后）**：`npx playwright test --update-snapshots --config <config>`，人工确认截图合理后 commit
 
-### 6.2 对比实现
+### 6.2 对比实现（代码 vs 设计）
 
-1. 启动项目 dev server
-2. 以相同 viewport 截图对应的 app 页面
-3. 逐页与设计基线做像素 diff，超阈值则 fail
+1. Playwright 启动设计原型 HTTP server + 项目 dev server（双 webServer 或串行）
+2. 以相同 viewport 分别截图：设计原型页面 + 对应 app 页面
+3. 逐页像素 diff，超阈值则 fail，产出三件套：expected / actual / diff
 
 ### 6.3 偏差分类与处置
-
-截图 diff 产出三件套：expected（设计）、actual（实现）、diff（差异高亮）。
 
 | 偏差类型 | 表现 | 处置 |
 |----------|------|------|
 | Token 偏差 | 字号/颜色/圆角不对 | 回到 L1 修复 |
 | 布局偏差 | 间距/对齐/尺寸不对 | L2 修复 |
-| 渲染差异 | 字体渲染/抗锯齿/亚像素 | 可接受，调高该页阈值 |
+| 渲染差异 | 字体渲染/抗锯齿/亚像素 | 可接受，调高该页阈值并备注原因 |
 | 内容差异 | demo 数据不同 | 排除——用固定 mock 数据 |
+
+### 6.4 Token 体系变更的特殊处理
+
+**当 Loop 涉及 token 体系变更（收敛/重命名/值调整）时**：
+
+1. **变更前**：用 Playwright 截图全量页面存为「变更前基线」
+2. **变更后**：重新截图，与变更前基线 diff
+3. **纯改名（值不变）**：diff 应为零。非零 → 说明改名过程引入了值变化，必须定位修复
+4. **值变更（如字号收敛 19→6）**：diff 必然非零。逐页审查 diff 标红区域，判断是否可接受。不可接受 → 调整 token 值或组件用法
+
+**禁止假设"只是改名不改值"**——必须用 Playwright 截图实证。
 
 具体命令和工具配置见项目 `.claude/rules/design-fidelity.md`。
 
