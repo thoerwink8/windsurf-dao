@@ -47,62 +47,17 @@ OD 有两个独立的文件空间，理解这一点是正确加载的前提：
 
 **关键问题**：用户项目的 `design/` 目录在链接代码目录里，OD 能读但不能在右侧面板预览。必须先复制到项目工作目录。
 
-### 提示词中内置的双向同步指令
+### 双向同步（提示词内置）
 
-以下两段写入每份输出提示词：`## 工作区准备`（顶部）和 `## 回写同步`（输出要求末尾）。
+输出提示词顶部嵌入「工作区准备」（OD 项目目录 ↔ 链接代码目录的文件复制），末尾嵌入「回写同步」（改动文件写回代码目录）。完整模板见 §6。
 
-```markdown
-## 工作区准备
+### design/ 版本控制
 
-开始设计任务之前，先确保设计文件在你的项目工作目录中（右侧面板可预览）：
+选择性入 git：`*.html` / `css/*.css` / `js/*.js` 入库；`.od-skills/` / `screenshots/` / `*.artifact.json` / `*.png` 忽略。首次接入检查 `.gitignore` 是否全忽略 `/design/`。
 
-1. **检查右侧「设计文件」面板**：是否已有 .html / .css / .js 文件？
-2. **如果面板为空**：
-   - 从链接的代码目录中读取 design/ 下的所有文件（.html、css/*.css、js/*.js）
-   - 将它们写入到你的项目工作目录中（保持相同的目录结构）
-   - 写入后右侧面板即可预览
-3. **如果面板已有文件**：直接在现有文件基础上修改，不重建
-4. **确认**：开始设计任务前，在右侧面板预览至少 1 个 HTML 页面，确认文件已就位
-```
+### skill 侧行为
 
-```markdown
-## 回写同步
-
-所有修改完成后，将改动过的文件同步回链接的代码目录（覆盖原文件）：
-
-1. 对照你修改过的文件清单，逐个将项目工作目录中的最终版本写回链接代码目录的对应路径
-2. 只回写**实际改动过的文件**，未动的不碰
-3. 回写后报告：哪些文件已同步、每个文件的变更摘要
-```
-
-### design/ 版本控制规则（全局）
-
-`design/` 目录选择性入 git——设计产物入库，工具产物忽略：
-
-```gitignore
-# Open Design — 选择性跟踪
-/design/.od-skills/
-/design/screenshots/
-/design/*.artifact.json
-/design/*.png
-```
-
-| 入库（git 跟踪） | 忽略 | 原因 |
-|-----------------|------|------|
-| `*.html`（页面原型） | `screenshots/*.png` | 二进制，可重新截取 |
-| `css/*.css`（设计 token 源） | `.od-skills/` | OD 内部 skill，非项目内容 |
-| `js/*.js`（交互逻辑） | `*.artifact.json` | OD 元数据 |
-| | `*.png`（根目录散图） | OD 绘图产物 |
-
-**首次接入项目时**，检查 `.gitignore` 是否有 `/design/` 全忽略。有则替换为上述选择性规则。
-
-### skill 侧做的事
-
-当检测到项目有 `design/` 目录时：
-
-1. 在提示词的 `## 项目上下文` 段**列出完整文件清单**（文件名 + 页面描述 + 在代码目录中的完整路径），让 OD 知道要复制哪些文件
-2. 标注哪些是核心文件（CSS 设计系统、最复杂的 HTML 页面），建议 OD 优先加载和预览这些
-3. **检查 `.gitignore`**：若 design/ 被全忽略，提醒用户改为选择性跟踪（见上方规则）
+有 `design/` 时：① 提示词 `## 项目上下文` 列出完整文件清单（路径+描述+核心标记）② 检查 `.gitignore` 规则
 
 ---
 
@@ -178,148 +133,20 @@ OD 生成 CSS 变量时**必须使用以下类别前缀和角色名**，不可�
 | danger | （warning / danger 同结构） | 每组 4 层 |
 | **画布** | `--color-canvas` | 工作区/编辑器底色（可选） |
 
-#### 字号阶梯（T-shirt）
+### 3.1-3.10 各类别规则速查
 
-| 变量名 | 典型值 | 角色 |
-|--------|-------|------|
-| `--text-xs` | 12px | badge、时间戳、tag、帮助文字 |
-| `--text-sm` | 14px | 正文、输入框、按钮、列表 |
-| `--text-base` | 16px | 区块标题、对话框标题 |
-| `--text-lg` | 20px | 页面标题 |
-| `--text-xl` | 24px | 统计数字、hero 指标 |
-| `--text-2xl` | 30px | 报告大标题 |
-
-#### 圆角阶梯（T-shirt）
-
-| 变量名 | 典型值 | 角色 |
-|--------|-------|------|
-| `--radius-xs` | 4px | 微元素（badge、标签内） |
-| `--radius-sm` | 6px | 小控件（tag、chip） |
-| `--radius-md` | 9px | 默认控件（按钮、输入框） |
-| `--radius-lg` | 13px | 面板、卡片 |
-| `--radius-xl` | 18px | 大容器、对话框 |
-| `--radius-full` | 999px | 药丸/圆形 |
-
-#### 间距阶梯（N × 4px）
-
-| 变量名 | 值 |
-|--------|---|
-| `--space-1` | 4px |
-| `--space-2` | 8px |
-| `--space-3` | 12px |
-| `--space-4` | 16px |
-| `--space-5` | 20px |
-| `--space-6` | 24px |
-| `--space-8` | 32px |
-
-#### 阴影/层级阶梯
-
-| 变量名 | 角色 |
-|--------|------|
-| `--elevation-xs` | 贴面微影（hairline） |
-| `--elevation-sm` | 轻浮（卡片默认） |
-| `--elevation-md` | 悬浮（下拉、弹出） |
-| `--elevation-lg` | 弹窗（tooltip、通知） |
-| `--elevation-xl` | 遮罩（模态框、抽屉） |
-
-#### 动效
-
-| 变量名 | 角色 |
-|--------|------|
-| `--duration-fast` | 微交互（100~150ms） |
-| `--duration-base` | 过渡（200~300ms） |
-| `--duration-slow` | 展开/折叠（400~600ms） |
-| `--ease-default` | 主缓动（ease-out 为主） |
-
-### 3.1 字号 Typography
-
-| 规则 | 说明 |
-|------|------|
-| **≤ 8 级** | 日常 UI ≤5 级，display/hero 额外 2~3 级 |
-| **最小 12px**（CJK） | Chrome 中文默认最小 12px |
-| **最小 14px**（纯英文） | WCAG 可读性建议 |
-| **对齐 Tailwind 内置尺寸** | 12/14/16/18/20/24/30/36px |
-| **相邻级差 ≥ 1.5px** | 确保肉眼可辨 |
-| **行高**：正文 1.4~1.6，标题 1.1~1.3 | 通用可读性标准 |
-| **字重**：仅用 400/500/600 | 过多字重增加复杂度 |
-| **命名**：`--text-{t-shirt}` | 见 §3.0 字号阶梯 |
-
-### 3.2 字体 Font Family
-
-| 规则 | 说明 |
-|------|------|
-| **三栈必备** | `--font-ui`（标题/按钮）、`--font-body`（正文）、`--font-mono`（代码） |
-| **系统字体优先** | 减少加载，保持原生感 |
-| **中文回退** | CJK 项目须含中文字体回退 |
-
-### 3.3 色彩 Color
-
-| 规则 | 说明 |
-|------|------|
-| **命名**：`--color-{role}[-{modifier}]` | 见 §3.0 色彩角色清单 |
-| **语义状态 ×3** | success / warning / danger，每组 4 层 |
-| **亮暗双主题** | CSS 变量 + `data-theme` 切换 |
-| **对比度** | 文字/背景 ≥ 4.5:1（WCAG AA） |
-| **表面层级** | bg → surface → surface-alt → sunken，至少 3 层 |
-| **前景分级** | fg → fg-secondary → fg-muted → fg-faint，至少 3 级 |
-
-### 3.4 间距 Spacing
-
-| 规则 | 说明 |
-|------|------|
-| **基于 4px** | 所有间距为 4 的倍数 |
-| **命名**：`--space-{N}` | N = 倍数（1=4px, 2=8px...），见 §3.0 |
-| **Tailwind 内置** | 优先 Tailwind spacing scale |
-
-### 3.5 圆角 Shape
-
-| 规则 | 说明 |
-|------|------|
-| **命名**：`--radius-{t-shirt}` | xs→sm→md→lg→xl→full，见 §3.0 |
-| **3~6 级** | 控件 → 面板 → 容器 → pill |
-| **等差或倍数递增** | 不做 1px 微调 |
-
-### 3.6 阴影 Elevation
-
-| 规则 | 说明 |
-|------|------|
-| **命名**：`--elevation-{t-shirt}` | xs→sm→md→lg→xl，见 §3.0 |
-| **3~5 层** | hairline → raised → float → overlay |
-| **暗色模式** | 阴影减弱或用边框替代 |
-
-### 3.7 图标 Iconography
-
-| 规则 | 说明 |
-|------|------|
-| **单一图标库源** | 一个项目只用一个图标库 |
-| **描边粗细一致** | 全局统一 stroke-width |
-| **尺寸阶梯** | 与字号体系联动：3~4 个尺寸 |
-
-### 3.8 动效 Motion
-
-| 规则 | 说明 |
-|------|------|
-| **命名**：`--duration-{speed}` + `--ease-{style}` | 见 §3.0 |
-| **三档时长** | fast / base / slow |
-| **reduced-motion** | 必须有 `prefers-reduced-motion: reduce` 降级 |
-| **不做无意义动画** | 动效为反馈服务 |
-
-### 3.9 布局 Layout
-
-| 规则 | 说明 |
-|------|------|
-| **三种策略** | Cap+Center / Stretch / Multi-column |
-| **max-width 必须 mx-auto** | 有上限的内容区必须水平居中 |
-| **三视口验证** | min / default / max 视口各截图一次 |
-
-详见 `dao-design-layout` skill。
-
-### 3.10 边框 Border
-
-| 规则 | 说明 |
-|------|------|
-| **命名**：`--color-border[-{modifier}]` | soft / default / strong，归入色彩体系 |
-| **宽度统一** | 1px 为主，不混用 2px/3px |
+| 类别 | 命名 | 关键约束 |
+|------|------|---------|
+| **字号** | `--text-{t-shirt}` xs→2xl | ≤8 级，CJK 最小 12px，英文最小 14px，行高正文 1.4~1.6 / 标题 1.1~1.3，字重仅 400/500/600 |
+| **字体** | `--font-{ui\|body\|mono}` | 三栈必备，系统字体优先，CJK 须含中文回退 |
+| **色彩** | `--color-{role}[-{mod}]` | 见上方角色清单，状态 ×3（success/warning/danger 各 4 层），亮暗双主题，对比度 ≥4.5:1 |
+| **间距** | `--space-{N}` N=倍数 | 基于 4px（1=4/2=8/.../8=32），对齐 Tailwind spacing |
+| **圆角** | `--radius-{t-shirt}` | xs(4)→sm(6)→md(9)→lg(13)→xl(18)→full(999)，3~6 级 |
+| **阴影** | `--elevation-{t-shirt}` | xs(hairline)→sm(card)→md(float)→lg(tooltip)→xl(modal)，3~5 层，暗色模式减弱 |
+| **图标** | — | 单一库源，描边粗细一致，尺寸联动字号 3~4 级 |
+| **动效** | `--duration-{speed}` + `--ease-{style}` | fast(100~150ms)/base(200~300ms)/slow(400~600ms)，必须有 `prefers-reduced-motion` 降级 |
+| **布局** | — | 三种策略 Cap+Center / Stretch / Multi-column，详见 `dao-design-layout` |
+| **边框** | `--color-border[-{mod}]` | soft/default/strong 归入色彩体系，宽度 1px 为主 |
 
 ---
 
@@ -483,109 +310,27 @@ Skill 最终输出一份 Markdown 格式的提示词，结构如下：
 > 道生一，一生二，二生三，三生万物。
 > 五个 skill 是一条流水线，不是五个孤岛。
 
-### 全生命周期
+### 流水线总览
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │            Design Pipeline                   │
-                    │                                              │
-  Phase 0           │  Phase 1          Phase 2         Phase 3    │
-  ┌──────────┐      │  ┌──────────┐     ┌──────────┐   ┌────────┐ │
-  │ design-  │──OD──│→ │ design-  │──→  │ design-  │──→│ comp-  │ │
-  │ system   │ 提示词│  │ open     │代码  │ fidelity │   │ radar  │ │
-  │ (基础层) │      │  │ (翻译)   │     │ (验证)   │   │ (健康) │ │
-  └──────────┘      │  └──────────┘     └──────────┘   └────────┘ │
-       │            │       │                                      │
-       │            │  ┌──────────┐                                │
-       └───────────────│ design-  │ (布局子系统，任何 Phase 可调用) │
-                    │  │ layout   │                                │
-                    │  └──────────┘                                │
-                    └─────────────────────────────────────────────┘
-```
+| Phase | Skill | 流向 | 触发 |
+|-------|-------|------|------|
+| 0 | **design-system** | 用户上下文 → OD 提示词 | 新项目 / 体系升级 |
+| 1 | **design-open** | `design/` → React 代码 | UI 任务涉及 design/ |
+| 2 | **design-fidelity** | 代码+截图 → 偏差报告 | UI 变更后 / Loop 归档前 |
+| 3 | **component-radar** | 代码 → 健康报告 | 编辑 tsx 时 |
+| — | **design-layout** | 横切布局子系统 | 任何 Phase 需布局决策 |
 
-### 阶段说明
+**衔接**：P0→OD→P1（不变层规则成为合规基线）→ P2（翻译完必跑 L1+L2）→ P3（fidelity 发现组件问题触发 radar）。layout 横切所有 Phase。
 
-| Phase | Skill | 职责 | 输入 | 输出 | 触发条件 |
-|-------|-------|------|------|------|---------|
-| 0 | **dao-design-system** | 定义基础层 + 生成 OD 提示词 | 用户上下文 | OD 提示词 | 新项目 / 设计体系缺失 / 用户调用 |
-| 1 | **dao-design-open** | 读 OD 产出 → 翻译为 React | `design/` 目录 | 代码 + project token | UI 任务涉及 design/ |
-| 2 | **dao-design-fidelity** | L1~L5 逐层验证 | 代码 + 设计截图 | 偏差报告 | UI 变更完成后 / Loop 归档前 |
-| 3 | **dao-component-radar** | 组件提炼 + token 冲突 | 代码 | 健康报告 | 编辑 tsx 文件时 |
-| — | **dao-design-layout** | 布局行为规约 | 页面列表 | 布局策略 + layout token | 任何 Phase 需要布局决策时 |
-
-### 编排规则（AI 必须遵循）
-
-**Phase 0 → Phase 1 衔接**：
-- design-system 输出提示词后，用户将提示词交给 OD
-- OD 产出落入 `design/` 目录后，自动触发 dao-design-open
-- design-system 的不变层规则成为 design-open 翻译时的合规基线
-
-**Phase 1 → Phase 2 衔接**：
-- design-open 翻译完成后，必须跑 dao-design-fidelity L1（token 合规）
-- 声明完成前必须至少通过 L1+L2
-
-**Phase 2 → Phase 3 衔接**：
-- fidelity 验证发现组件级问题（原生 HTML 应组件化）→ 触发 component-radar
-- component-radar 发现 token 冲突 → 反馈回 design-system 的豁免列表
-
-**dao-design-layout 横切**：
-- Phase 0：layout 是 10 类基础之一，design-system §3.9 引用 layout skill 的方法论
-- Phase 1：design-open 翻译布局时，查 layout skill 的三种策略
-- Phase 2：fidelity 验证需含三视口检查（layout skill 定义的 min/default/max）
-
-### 用户入口（只有 2 个）
-
-用户日常只需接触两个 skill，其余自动运行：
-
-| 入口 | 何时用 | 频率 |
-|------|-------|------|
-| `/dao-design-system` | 新项目建基础层 / 设计体系升级 | 低频 |
-| `/dao-design-open` | 日常 Design→Code 翻译 | 高频 |
-
-`dao-design-fidelity` 和 `dao-component-radar` 由 design-open §4.5 auto-gate 自动触发，无需手动调用。独立调用仅限全面审计场景（Loop 归档、设计体系大改）。
-
-`dao-design-layout` 是横切子系统，被 design-system §3.9 和 design-open 内部引用。
+**用户入口只有 2 个**：`/dao-design-system`（低频）+ `/dao-design-open`（高频）。fidelity 和 radar 由 design-open auto-gate 自动触发。
 
 ### 典型场景
 
-**场景 A：新项目从零开始**
-```
-用户: /dao-design-system  → AskUserQuestion → 输出 OD 提示词
-用户: 复制给 OD           → OD 产出 design/
-用户: /dao-design-open    → 翻译为代码
-                          → §4.5 auto-gate 自动跑 fidelity L1 + radar 检查
-                          → 声明完成
-```
-
-**场景 B：已有项目设计体系升级**
-```
-用户: /dao-design-system  → 审计现有 token → 输出改造提示词
-用户: 复制给 OD           → OD 更新 design/
-用户: /dao-design-open    → 增量翻译 + auto-gate
-```
-
-**场景 C：日常 UI 开发**
-```
-用户编辑 tsx 文件  → design-open 按需触发（涉及 design/）
-                   → §4.5 auto-gate 自动验证
-                   → 声明完成
-```
-
-**场景 D：全面审计（Loop 归档 / 版本发布）**
-```
-独立调用 /dao-design-fidelity   → L1~L5 全金字塔验证
-独立调用 /dao-component-radar   → 全项目组件健康扫描
-```
-
----
+- **新项目**：system → OD 提示词 → OD 产出 design/ → open 翻译 → auto-gate 验证
+- **体系升级**：system 审计 → 改造提示词 → OD 更新 → open 增量翻译
+- **日常 UI**：编辑 tsx → open 按需触发 → auto-gate
+- **全面审计**：独立调用 fidelity L1~L5 + radar 全扫
 
 ## §8 · 演化
 
-本 skill 的不变层规则基于 2026 年行业共识：
-
-- Ant Design 字号阶梯（12→14→16→20→24→32）
-- Material Design 3 token 三层架构（Reference → System → Component）
-- W3C Design Tokens Specification v1（2025.10）
-- WCAG 2.1 AA 对比度标准
-
-规则随行业演化更新，但保持**减法原则**——只在有充分理由时增加规则。
+不变层规则基于 Ant Design 字号阶梯 + Material Design 3 token 三层 + W3C Design Tokens v1 + WCAG 2.1 AA。减法原则更新。
