@@ -17,7 +17,7 @@ windsurf-dao 作为 **Sidecar workspace** 与目标项目同时打开，rules/sk
 |---|---|---|
 | Rules | 本目录所有 `.md` | 项目特定 rules |
 | Skills | `dao-verify/` 等 | `frontend-design/` 等 |
-| Workflows | `dao-cycle.md` 等 | `commit.md`、`review.md` 等 |
+| Workflows | `dao-dev.md` 等 | `commit.md`、`review.md` 等 |
 
 ## 编辑 dao 元层文件前过三关
 

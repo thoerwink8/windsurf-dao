@@ -11,7 +11,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 
 `dao-goal` 的职责不是设计方案，也不是拆任务，而是先回答一个更根本的问题：**这一次到底要到哪里才算到，以及该自动调用哪条 dao 路径推进？**
 
-目标不清，后续的 `/dao-cycle` 会空转，`dao-plan` 会乱拆，`dao-verify` 会假完成。目标先定，万法归一。
+目标不清，后续的 `/dao-dev` 会空转，`dao-plan` 会乱拆，`dao-verify` 会假完成。目标先定，万法归一。
 
 ## 铁律
 
@@ -28,7 +28,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 
 - 用户显式调用 `/dao-goal`
 - 用户说“目标是 X”“这轮我们要达成 X”“帮我锁一下目标”
-- `/dao-cycle` 前，任务复杂且容易漂移
+- `/dao-dev` 前，任务复杂且容易漂移
 - 多轮对话后，原始目标开始模糊
 - 验收前，需要回到最初成功标准
 
@@ -53,7 +53,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 - 范围外：<这次明确不做什么>
 - 推进模式：<持续推进 / 关卡确认 / 等待用户决策>
 - 用户决策策略：<默认不问 / 仅阻断时问 / 每阶段确认>
-- 自动路由：<dao-brainstorm / dao-plan / dao-verify / /dao-cycle / 直接执行>
+- 自动路由：<dao-brainstorm / dao-plan / dao-verify / /dao-dev / 直接执行>
 - 委托授权：<delegated-continuous / none>
 - 当前不确定点：<无 / 一句话列出关键不确定>
 - 下一步动作：<AI 将立即执行的动作，而不是给用户的选择题>
@@ -91,7 +91,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 | 目标仍是开放想法，需要方案取舍 | `dao-brainstorm` | 只在方向真不清时进入需求澄清 |
 | 目标清楚但需要多步实施计划 | `dao-plan` | 生成可执行任务清单 |
 | 已有 plan 或任务足够明确 | 直接执行 | 直接落地，不再询问 |
-| 任务复杂、需要持续推进和多轮校准 | `/dao-cycle` | 围绕 Goal Contract 观行验省改升 |
+| 任务复杂、需要持续推进和多轮校准 | `/dao-dev` | 围绕 Goal Contract 观行验省改升 |
 | 需要验证是否完成 | `dao-verify` | 按成功标准拿 fresh evidence |
 | UI 视觉方向不清 | `dao-design-taste` | 只有视觉方向需要拍板时才进入 |
 
@@ -100,7 +100,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 ```text
 bug/异常现象 → 直接排查修复
 目标不清/方案互斥 → dao-brainstorm
-复杂持续推进 → /dao-cycle
+复杂持续推进 → /dao-dev
 已有清晰方案但需拆任务 → dao-plan
 已有清晰任务 → 直接执行
 完成声明前 → dao-verify
@@ -148,9 +148,9 @@ bug/异常现象 → 直接排查修复
 | 关卡复活 | plan/design/checkpoint 又变成人类审批 | 改为 AI 自审记录 |
 | 收尾拉扯 | 每次阶段报告末尾都 ask，或最终交付后问“下一步方向” | 仅最终交付；无阻断不问 |
 
-## 与 /dao-cycle 的衔接
+## 与 /dao-dev 的衔接
 
-当用户在 Goal Contract 后调用 `/dao-cycle`，cycle 的「观」必须先读取并复述目标锚点：
+当用户在 Goal Contract 后调用 `/dao-dev`，cycle 的「观」必须先读取并复述目标锚点：
 
 ```text
 本轮目标锚点：<Goal Contract 摘要>
@@ -169,7 +169,7 @@ bug/异常现象 → 直接排查修复
 
 任一成功标准未满足，不得宣布涅槃。
 
-若推进模式是“持续推进”，`/dao-cycle` 中途不得因为“Goal Contract 是否准确”“要不要继续”“是否进入下一轮”而停下；只能在权限、安全、不可逆、方向歧义、外部凭证缺失等阻断条件下询问用户。
+若推进模式是“持续推进”，`/dao-dev` 中途不得因为“Goal Contract 是否准确”“要不要继续”“是否进入下一轮”而停下；只能在权限、安全、不可逆、方向歧义、外部凭证缺失等阻断条件下询问用户。
 
 ## 与其他 dao-* 的边界
 
@@ -180,15 +180,15 @@ bug/异常现象 → 直接排查修复
 | `dao-plan` | 拆任务：把已定方案拆成 2-5 分钟任务 |
 | 直接执行 | 执行：按 plan 或明确目标落地 |
 | `dao-verify` | 验证：按成功标准拿 fresh evidence |
-| `/dao-cycle` | 循环：围绕目标观行验省改升 |
+| `/dao-dev` | 循环：围绕目标观行验省改升 |
 
 ## 决策路由
 
 ```text
 用户说了一个目标
-  ├─ 目标清楚 + 可直接执行 → dao-goal 生成契约 → 直接做 / 进 dao-cycle
-  ├─ 目标清楚 + 用户要求持续推进 → dao-goal 生成契约 → 直接进入 /dao-cycle 或执行
-  ├─ 目标清楚但任务复杂 → dao-goal 生成契约 → dao-plan 或 /dao-cycle
+  ├─ 目标清楚 + 可直接执行 → dao-goal 生成契约 → 直接做 / 进 dao-dev
+  ├─ 目标清楚 + 用户要求持续推进 → dao-goal 生成契约 → 直接进入 /dao-dev 或执行
+  ├─ 目标清楚但任务复杂 → dao-goal 生成契约 → dao-plan 或 /dao-dev
   ├─ 目标不清，需要探索方案 → dao-brainstorm
   └─ 只是事实问答 → 不启用 dao-goal
 ```
