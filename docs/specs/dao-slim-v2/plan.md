@@ -91,7 +91,7 @@
 
 ## Phase 3: Commands 整理
 
-### T13: 删除 dao-remove + gs (≈2min) → A3, A4
+### T13: 删除 dao-remove + gs (≈2min) → A3, A4 ✅
 - 文件: `ccswitch/commands/dao-remove.md` (DELETE), `ccswitch/commands/gs.md` (DELETE)
 - 操作: 直接删除两个文件（共 44 行）
 - 验证: `ls ccswitch/commands/*.md | wc -l`（应为 10）
