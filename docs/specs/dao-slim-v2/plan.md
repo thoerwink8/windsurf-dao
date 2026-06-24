@@ -43,7 +43,7 @@
 - 操作: §2 核心文件集中的 spec/strategy/acceptance/plan 四套模板（~120 行）外置到 `templates/` 子目录，skill 内替换为结构概要 + "详见 templates/xxx-template.md"
 - 验证: `wc -l ccswitch/skills/dao-loop/SKILL.md`（应减 ~100 行）; 4 个模板文件存在且非空
 
-### T7: dao-loop 协议压缩 + 护栏合并 (≈5min) → A2
+### T7: dao-loop 协议压缩 + 护栏合并 (≈5min) → A2 ✅
 - 文件: `ccswitch/skills/dao-loop/SKILL.md` (MODIFY)
 - 操作:
   1. §3 STATUS.json 协议：JSON 示例保留，状态转换图压缩（去重复描述），锁机制压缩到 3 行（~80→45 行）
