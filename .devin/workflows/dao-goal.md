@@ -13,7 +13,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 
 - 用户显式调用 `/dao-goal`
 - 用户希望“锁目标”“定目标”“像 Codex /goal 一样”
-- `/dao-cycle` 前需要一个目标锚点
+- `/dao-dev` 前需要一个目标锚点
 - 长对话中需要防止目标漂移
 - 用户希望持续推进，中途不需要用户决策
 
@@ -58,7 +58,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 - 本次范围：这轮会做什么
 - 范围外：这轮明确不做什么
 
-范围外是硬边界。后续 `/dao-cycle` 的行相不得越界。
+范围外是硬边界。后续 `/dao-dev` 的行相不得越界。
 
 ### 五、确定推进模式
 
@@ -80,7 +80,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 | ---- | ---- |
 | bug、异常、现象不符合预期 | 直接排查修复 |
 | 开放想法、需要方案取舍 | `dao-brainstorm` |
-| 复杂任务、需要多轮校准 | `/dao-cycle` |
+| 复杂任务、需要多轮校准 | `/dao-dev` |
 | 清晰方案、需要拆任务 | `dao-plan` |
 | 已有 plan 或任务足够明确 | 直接执行 |
 | 完成声明前 | `dao-verify` |
@@ -100,7 +100,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 这表示 `/dao-goal` 已代表用户授权 AI 持续推进。后续自动路由调用的 `dao-*` workflow / skill 必须继承：
 
 - 不再询问“Goal Contract 是否准确”
-- 不再询问”是否进入 dao-cycle / dao-plan / 排查修复”
+- 不再询问”是否进入 dao-dev / dao-plan / 排查修复”
 - 不再在 design / plan / checkpoint 处默认等待用户审批
 - 不再在阶段性收尾处调用 `ask_user_question`
 - 不再在最终交付后询问“下一步方向/是否继续”
@@ -139,15 +139,15 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 | 情况 | 下一步 |
 | ---- | ---- |
 | 目标清楚、任务小 | 直接执行 |
-| 目标清楚、任务复杂 | `/dao-cycle` 或 `dao-plan` |
+| 目标清楚、任务复杂 | `/dao-dev` 或 `dao-plan` |
 | 目标清楚、用户要求持续推进 | 直接进入自动路由，不等待确认 |
 | 目标仍需方案探索 | `dao-brainstorm` |
 | 已有 design | `dao-plan` |
 | 已有 plan | 直接执行 |
 
-## 与 /dao-cycle 协作
+## 与 /dao-dev 协作
 
-如果用户随后调用 `/dao-cycle`：
+如果用户随后调用 `/dao-dev`：
 
 1. cycle 的「观」先复述 Goal Contract。
 2. cycle 的「行」只做本次范围内事项。
@@ -183,7 +183,7 @@ description: 目标锚定 — 类似 Codex /goal，把一句目标压成会话�
 | 目标变 plan | 开始拆 Task | 交给 `dao-plan` |
 | 目标变执行 | 目标未定就直接改文件 | 先输出目标契约，再按自动路由行动 |
 | 默认求确认 | 输出 Goal Contract 后问“是否准确？” | 持续推进模式下直接进入下一步 |
-| 转嫁路由 | 问用户“要不要用 dao-cycle/dao-plan” | AI 自动选择合适 dao-* |
+| 转嫁路由 | 问用户”要不要用 dao-dev/dao-plan” | AI 自动选择合适 dao-* |
 | 下游反问 | 自动路由后下游又触发 checkpoint/审批 ask | 继承 `delegated-continuous`，仅阻断时问 |
 | 交付后追问 | 最终报告后问“下一步方向？” | delegated-continuous 下最终交付即停止，等待用户自然发起下一轮 |
 | 无反目标 | 没有范围外 | 必写范围外 |
