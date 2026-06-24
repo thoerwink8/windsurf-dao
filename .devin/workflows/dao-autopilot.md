@@ -80,47 +80,15 @@ dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 �
 
 读取或创建两个核心文件：
 
-**TODO.md**（若不存在则创建）：
-```markdown
-# [项目名] · TODO
+**TODO.md**（若不存在则创建）：标准三段结构——`## ✅ 已完成` / `## ❌ 已作废` / `## 🚧 待实现`。
 
-> 任务清单。
-
-## ✅ 已完成
-
-## ❌ 已作废
-
-## 🚧 待实现
-
-```
-
-**AGENT_GUIDE.md**（若不存在则创建）：
-```markdown
-# [项目名] · Agent 指南
-
-> 活体知识库。记录项目概览、架构决策、开发指南，并指向 `data/` 中的演化 CSV。
-
-## 一、项目概览
-
-[待补充]
-
-## 二、演化索引
-
-> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
-
-```
+**AGENT_GUIDE.md**（若不存在则创建）：标准两段——`## 一、项目概览` / `## 二、演化索引`（指向 `data/evolution-*.csv`）。
 
 #### 1.2 意图建模
 
 读取 TODO.md 中 `🚧 待实现` 下的 `- [ ]` 条目，结合用户当前目标，建立**意图模型**：
 
-```
-原始目标：[用户原话，不改动]
-成功标准：[具体可验证的完成条件，与 TODO.md 条目对应]
-范围：[本次执行哪些 TODO 条目，ID 列表]
-范围外：[明确不做什么]
-风险容忍：[从上下文推断：保守/正常/激进]
-```
+五字段：`原始目标`（用户原话不改）/ `成功标准`（可验证条件，对应 TODO 条目）/ `范围`（TODO ID 列表）/ `范围外` / `风险容忍`（保守/正常/激进）。
 
 - TODO.md 有对应条目 → 直接映射，保留原 ID（如 `N1`、`F4`）
 - 目标是全新内容 → 先在 TODO.md `🚧 待实现` 区追加条目，再映射
@@ -187,23 +155,7 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 | §四 用户主动 abort | `"aborted"` | ❌ 不注入 |
 | §五.4 完成清理后 | _state.json 删除_ | 文件不存在 = watchdog 跳过 |
 
-**mode 转换操作**：
-
-```powershell
-# 进入 ask_user_question 前
-$state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
-$state.mode = "awaiting_user_decision"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-
-# ask 返回后继续
-$state.mode = "running"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-
-# 完成时
-$state.mode = "completed"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-# 紧接着 §5.4 删除 state.json
-```
+**mode 转换操作**：读 state.json → `ConvertFrom-Json` → 改 `.mode` 为目标值（`awaiting_user_decision` / `running` / `completed`）→ `ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8` 写回。完成时紧接 §5.4 删除 state.json。
 
 **watchdog 写入的字段**（autopilot 流程读到时透传保留）：
 
@@ -212,40 +164,11 @@ $state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Enc
 
 #### 1.4 创建工作分支
 
-```powershell
-git checkout -b autopilot/[goal-slug]
-
-# 确保 state.json 不进入 git 历史
-$excludeFile = ".git\info\exclude"
-$excludeEntry = ".dao-autopilot/"
-if (-not (Select-String -Path $excludeFile -Pattern [regex]::Escape($excludeEntry) -Quiet)) {
-    Add-Content $excludeFile "`n# autopilot state (generated)`n$excludeEntry"
-}
-New-Item -ItemType Directory -Force ".dao-autopilot" | Out-Null
-```
+`git checkout -b autopilot/[goal-slug]`，然后确保 `.dao-autopilot/` 写入 `.git/info/exclude`（检查已有则跳过，否则 `Add-Content`），最后 `New-Item -ItemType Directory -Force ".dao-autopilot"`。
 
 #### 🔒 唯一激活关卡
 
-向用户展示：
-
-```
-## 🚗 自动驾驶准备就绪
-
-### 意图模型
-目标：[原始目标]
-成功标准：
-  - [ ] 标准A（对应 TODO.md N1）
-  - [ ] 标准B（对应 TODO.md N2）
-范围外：[明确不做的事]
-
-### 任务图（共 N 个，来自 TODO.md）
-N1 → N2 → N4
-N1 → N3 → N4
-
-### 工作分支：autopilot/[goal-slug]
-
-→ 确认后开始，过程中静默执行，发任何消息可中断查看进度
-```
+向用户展示「🚗 自动驾驶准备就绪」：含意图模型（目标/成功标准 checklist 对应 TODO ID/范围外）、任务图（依赖箭头）、工作分支名。末尾提示"确认后开始，过程中静默执行，发任何消息可中断"。
 
 用户确认 → 进入执行循环
 用户调整 → 修订后重新确认
@@ -264,31 +187,13 @@ N1 → N3 → N4
 
 1. 执行任务（编码/构建/测试，视任务而定）
 2. 验证任务结果（构建通过、功能可运行）
-3. Git commit：
-   ```powershell
-   # 提交前先按当前宿主替换 [宿主]：Claude Code 用 [cc]，Codex / Code X 用 [codex]
-   git commit -m "[宿主] autopilot([ID]): [task description]"
-   ```
+3. Git commit：`git commit -m "[宿主] autopilot([ID]): [task description]"`（宿主前缀：Claude Code → `[cc]`，Codex → `[codex]`）
 4. **回写 TODO.md**：将 `- [ ]` 改为 `- [x]`（定位用 `todo_line` 字段）
 5. 更新 `state.json`：`status: "done"`，记录 commit hash 和 rollback_cmd
 
 #### 2.1.1 Task 涅槃门（每 task 必过，5 项全勾才能进下一 task）
 
-完成一个 task 时，AI 必须显式输出以下涅槃证据，作为本 task 闭环的实证：
-
-```
-Task <ID> 涅槃 ✅
-- [x] 1. 实现完成（文件路径：...）
-- [x] 2. 验证通过（命令：xxx，关键输出：xxx）
-- [x] 3. Git commit（hash: xxxxxxx）
-- [x] 4. TODO.md 已 - [x]
-- [x] 5. state.json 已 status: done + commit hash
-```
-
-**任一未勾 → 留在当前 task，禁止开始下一个。**
-**跨 task 推进 = 违反 §2.1，等同于「假涅槃」。**
-
-这个门使「是否完成」从 AI 内部判断变为可外部审计的显式证据。
+完成一个 task 时，AI 必须显式输出「Task \<ID\> 涅槃 ✅」+ 5 项 checklist：1.实现完成（文件路径）2.验证通过（命令+关键输出）3.Git commit（hash）4.TODO.md 已 `[x]` 5.state.json 已 `done` + hash。**任一未勾 → 留在当前 task，禁止开始下一个。** 跨 task 推进 = 违反 §2.1（假涅槃）。此门使完成判断从 AI 内部变为可外部审计的显式证据。
 
 #### 2.2 错误处理
 
@@ -306,13 +211,7 @@ Task <ID> 涅槃 ✅
 **新鲜用户测试**：
 > "如果一个只读过原始目标的用户，现在看到系统/代码，他会说'是的，这就是我要的'吗？"
 
-逐条检查成功标准：
-
-```
-✓ 标准A：[已达成/未达成/部分]
-✗ 标准B：[缺口描述]
-？标准C：[不确定，需要...]
-```
+逐条检查成功标准（`✓` 已达成 / `✗` 缺口描述 / `？` 不确定）：
 
 - 全部 ✓ → 退出循环，进入「收尾」
 - 有缺口 → 在 TODO.md `🚧 待实现` 追加新条目，加入任务图，继续循环
@@ -326,15 +225,7 @@ Task <ID> 涅槃 ✅
 用户在执行期间发送任何消息：
 
 1. 读取 `state.json` + 当前 `TODO.md` 状态
-2. 展示当前进度摘要（TODO.md 中 `[x]` vs `[ ]` 数量即是进度）：
-   ```
-   ## 📊 自动驾驶当前状态
-   完成：N1 N2 N3（3/7，见 TODO.md ✅ 区）
-   进行中：N4
-   待执行：N5 N6 N7
-   
-   当前分支：autopilot/[goal-slug]
-   ```
+2. 展示「📊 自动驾驶当前状态」：已完成 ID 列表（n/m）+ 进行中 + 待执行 + 当前分支（进度以 TODO.md `[x]` vs `[ ]` 数量为准）
 3. 处理用户消息（可能是：查看/调整/回退/停止）
 4. `ask_user_question`：继续/调整/回退/停止
 
@@ -346,21 +237,11 @@ Task <ID> 涅槃 ✅
 
 #### 4.1 依赖影响分析
 
-```
-N2 被移除
-  直接影响：N4（依赖 N2）→ 已标记移除
-  间接影响：N5（依赖 N2+N3）→ 待重新评估
-  无影响：N1 N3 N6
-```
-
-展示影响分析，`ask_user_question` 确认移除范围。
+展示每个被移除 Task 的直接影响（依赖它的 Task）、间接影响（需重新评估的）、无影响列表，`ask_user_question` 确认移除范围。
 
 #### 4.2 技术回退
 
-```powershell
-git revert [N2-commit-hash] --no-edit
-git revert [N4-commit-hash] --no-edit
-```
+逐个 `git revert [commit-hash] --no-edit`。
 
 #### 4.3 同步 TODO.md
 
@@ -412,14 +293,7 @@ git revert [N4-commit-hash] --no-edit
    - 例: superpowers 实战见证 → `superpowers-gate.md` 末尾加见证段
    - 例: 发现 worktree 流程漏洞 → `dao-mantra.md` 或新建 sidecar rule
 
-**输出格式**(autopilot §5.3 报告内必含):
-
-```
-### lesson 上提评估
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- ...
-```
+**输出格式**（§5.3 报告内必含）：`### lesson 上提评估` 下逐条 `- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]`。
 
 **上提归位表**(参考 `windsurf-dao/.devin/rules/knowledge-routing.md`):
 
@@ -444,52 +318,13 @@ git revert [N4-commit-hash] --no-edit
 
 #### 5.3 最终报告
 
-```
-## 🏁 自动驾驶完成
-
-### 原始目标
-[用户原话]
-
-### 完成情况（见 TODO.md）
-✓ 已完成：N1 N2 N3 N5（共 4 个，已标记 [x]）
-～ 已移除：N4（用户决策，已标记 [~]）
-✗ 未完成：N6（blocked，已保留 [ ] 待下次）
-
-### Open Threads 处理（若有）
-🟢 已执行：🔨 [任务标题]（已标记 [x]）
-🟡 已推进：✋ [确认项]（⚡ AI assumed：[理由]，请验证）
-🔴 需你决策：🔀 [决策项]（未触碰，仍为 [ ]）
-
-### 成功标准验证
-✓ 标准A：[验证方式 + 结果]
-✓ 标准B：[验证方式 + 结果]
-
-### lesson 上提评估（见 §5.2.5，§5.3 前必须完成 — 即便结论"仅留 CSV"也必须显式说明）
-- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
-- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
-- ...
-
-### 工作产物
-分支：autopilot/[goal-slug]
-Commits：[hash 列表]
-合并到主干：git merge autopilot/[goal-slug] --no-ff
-
-### 撤销整个 autopilot 的方式
-git checkout main && git branch -D autopilot/[goal-slug]
-```
+展示「🏁 自动驾驶完成」，六段：① 原始目标（用户原话）② 完成情况（`✓` 已完成 / `～` 已移除 / `✗` 未完成，对应 TODO.md 标记）③ Open Threads 处理（若有：🟢已执行/🟡已推进含 AI assumed 理由/🔴需决策）④ 成功标准逐条验证 ⑤ lesson 上提评估（§5.2.5 产出，必含）⑥ 工作产物（分支/commits/合并命令 `--no-ff` + 撤销命令）。
 
 `ask_user_question`：合并到 main / 继续完善 / 回退某些任务 / 保持现状
 
 #### 5.4 清理
 
-```powershell
-# 删除执行元数据（任务状态已在 TODO.md，知识已在 AGENT_GUIDE.md）
-Remove-Item ".dao-autopilot\state.json"
-# 顺手删除空目录(mode=completed 后整个 .dao-autopilot/ 应该不再需要)
-if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) {
-  Remove-Item ".dao-autopilot" -ErrorAction SilentlyContinue
-}
-```
+删除 `.dao-autopilot/state.json`，若目录为空则删除 `.dao-autopilot/`（任务状态已在 TODO.md，知识已在 AGENT_GUIDE.md）。
 
 **退出自动驾驶模式，ask_user_question 规则恢复正常。**
 
@@ -505,28 +340,13 @@ if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) 
 
 1. 检查 `.dao-autopilot/state.json` 是否存在
 2. 不存在 → 跳过此节,正常进入新对话
-3. 存在 → **先看 mtime + mode 判 stale**：
-   ```powershell
-   $state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
-   $age = ((Get-Date) - (Get-Item ".dao-autopilot/state.json").LastWriteTime).TotalDays
-   $isStale = $age -gt 7 -and $state.mode -in @("idle","aborted","completed")
-   ```
-4. 若 stale (≥7 天 + mode 非 running/awaiting_user_decision) → **不视为待恢复任务**,直接 ask:
-   ```
-   检测到 stale autopilot state（mode=idle，36 天前最后修改，目标：...）
-   该任务图已经长期遗弃,task 状态可能已过时(对照 TODO.md 看真实进度)。
-   建议: 删除 state.json + 视该 autopilot 周期已结束。
-   ```
-   `ask_user_question` 选项: 删除 stale state / 强制视为活跃任务恢复 / 留着做参考
+3. 存在 → 读 state.json，算 mtime 距今天数，判 stale：`mtime ≥ 7 天 AND mode ∈ (idle, aborted, completed)` → stale
+4. 若 stale → **不视为待恢复任务**，展示 mode/天数/目标摘要，`ask_user_question`：删除 stale state / 强制恢复 / 留着参考
 5. 若非 stale (<7 天 + mode=running 或 awaiting_user_decision) → 走 §6.2 正常恢复
 
 #### 6.2 正常跨 session 恢复
 
-1. 读取 state.json + TODO.md 当前状态，告知用户：
-   ```
-   检测到未完成的自动驾驶任务（目标：[...]）
-   TODO.md 进度：N/M 已完成（见 [x] 数量）
-   ```
+1. 读取 state.json + TODO.md，告知用户目标及 `[x]` 进度（N/M）
 2. `ask_user_question`：继续 / 查看进度 / 放弃
 
 恢复执行时：从第一个 `status: pending` 且依赖已满足的 Task 继续（state.json 与 TODO.md 双重确认）。
@@ -537,17 +357,7 @@ if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) 
 
 ### 目录结构
 
-```
-项目根/
-├── TODO.md              ← 任务图（激活前存在或新建，永久保留）
-├── AGENT_GUIDE.md       ← 知识库（激活前存在或新建，永久保留）
-└── .dao-autopilot/
-    └── state.json   ← 执行元数据（激活期间存在，完成后删除）
-```
-
-`.dao-autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
-
-权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
+三文件：`TODO.md`（任务图，永久）/ `AGENT_GUIDE.md`（知识库，永久）/ `.dao-autopilot/state.json`（执行元数据，完成后删除，通过 `.git/info/exclude` 排除）。权威任务状态在 TODO.md，state.json 仅记录 commit hash 支持回退。
 
 ---
 
