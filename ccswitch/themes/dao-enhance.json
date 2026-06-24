@@ -1,0 +1,13 @@
+{
+  "name": "Dao Enhance",
+  "base": "dark-ansi",
+  "overrides": {
+    "promptBorder": "ansi:magentaBright",
+    "userMessageBackground": "#2C313A",
+    "userMessageBackgroundHover": "#313640",
+    "messageActionsBackground": "#2C313A",
+    "bashMessageBackgroundColor": "#2C313A",
+    "memoryBackgroundColor": "#2C313A",
+    "selectionBg": "#3E4451"
+  }
+}

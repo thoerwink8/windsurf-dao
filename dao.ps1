@@ -577,6 +577,44 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── 复制 themes/ 到 ~/.claude/themes/ ──
+    $themesSrc = Join-Path $claudeSrc "themes"
+    if (Test-Path $themesSrc) {
+        $themesDst = Join-Path $userClaude "themes"
+        if (-not $IsDryRun) { Ensure-Dir $themesDst }
+        Write-Host "  [themes]" -ForegroundColor Cyan
+        $themeFiles = Get-ChildItem $themesSrc -File -Filter "*.json" -ErrorAction SilentlyContinue
+        foreach ($tf in $themeFiles) {
+            $dstFile = Join-Path $themesDst $tf.Name
+            if (Test-Path $dstFile) {
+                $srcHash = Get-FileMD5 $tf.FullName
+                $dstHash = Get-FileMD5 $dstFile
+                if ($srcHash -eq $dstHash) {
+                    Write-Host "    [skip ] $($tf.Name)  (same content)" -ForegroundColor DarkGray
+                    $skipped++
+                } else {
+                    if ($IsDryRun) {
+                        Write-Host "    [DRYRUN] update $($tf.Name)" -ForegroundColor Cyan
+                        $linked++
+                    } else {
+                        Copy-Item $tf.FullName -Destination $dstFile -Force
+                        Write-Host "    [update] $($tf.Name)" -ForegroundColor Yellow
+                        $linked++
+                    }
+                }
+            } else {
+                if ($IsDryRun) {
+                    Write-Host "    [DRYRUN] copy $($tf.Name)" -ForegroundColor Cyan
+                    $linked++
+                } else {
+                    Copy-Item $tf.FullName -Destination $dstFile
+                    Write-Host "    [copy ] $($tf.Name)" -ForegroundColor Green
+                    $linked++
+                }
+            }
+        }
+    }
+
     # ── 幂等设置 outputStyle 到 ~/.claude/settings.json ──
     if (Test-Path $settingsPath) {
         Write-Host "  [outputStyle]" -ForegroundColor Cyan
