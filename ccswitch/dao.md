@@ -163,13 +163,16 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 写实施 plan | `dao-plan` | 为大于其细 (63) |
 | 全面体检 / 验证完成 | `dao-verify` | 慎终如始 (64) |
 | review / 接受批评 | `dao-review` | 受国之垢 (78) |
-| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 Open Design 产出→三维对齐→验证) | 道法自然 (25) |
+| 设计系统基础层（新项目 / 体系升级） | `dao-design-system`(交互问答→OD 提示词,10 类基础 token) | 道生一 (42) |
+| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 OD 产出→翻译→auto-gate 验证) | 道法自然 (25) |
+| 布局行为规约 | `dao-design-layout`(三种策略+Layout Token+三视口) | 至柔驰骋至坚 (43) |
+| 设计还原度验证（审计场景） | `dao-design-fidelity`(L1~L5 金字塔,日常由 open auto-gate 覆盖) | 大成若缺 (45) |
+| 组件结构健康（审计场景） | `dao-component-radar`(原生 HTML→组件提炼,日常由 open auto-gate 覆盖) | 不知常妄作凶 (16) |
 | 隔离工作区 | `dao-worktree` | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 知常曰明 (16) |
 | 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 道生一 (42) |
-| 组件结构健康 / 原生 HTML 检测 | `dao-component-radar`(原生 HTML→组件提炼,token 冲突) | 不知常妄作凶 (16) |
 
-8 个 skill 由 Claude Code 按 description 语义自动调度，无需手动选择。
+12 个 skill 由 Claude Code 按 description 语义自动调度。其中设计流水线只需 2 个入口（`design-system` + `design-open`），其余自动触发。
 
 **UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
 

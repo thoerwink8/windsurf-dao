@@ -11,6 +11,8 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 **核心原则：AI 不做设计决策，只做设计翻译。** Open Design 已完成所有设计判断（色彩、字体、圆角、间距、布局、交互态、组件形态），AI 的职责是将 HTML 原型 **结构性地** 翻译为 React 组件，不是只翻译 CSS token。
 
+**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-layout`。详见 `dao-design-system` §7。
+
 ---
 
 ## §0 · Open Design 产出格式
@@ -345,6 +347,32 @@ Open Design 的布局原语 → 项目的布局组件。
 ```
 
 循环退出条件：截图对比无明显偏差 + 测试全绿。
+
+### 4.5 收尾自检（auto-gate）
+
+> 慎终如始。翻译完成 ≠ 声明完成。以下两关在 §4.4 退出后**自动执行**，不需用户手动调用 fidelity 或 radar skill。
+
+**关一：Token 合规（来自 dao-design-fidelity L1）**
+
+| 检查 | 方法 | pass 条件 |
+|------|------|----------|
+| 硬编码字号 | grep `text-\[` 在改动文件范围内 | 零结果 |
+| 硬编码色值 | grep `#[0-9a-fA-F]` 在 tsx 文件中 | 零结果（排除注释和 SVG） |
+| 硬编码圆角 | grep `rounded-\[` 在改动文件范围内 | 零结果 |
+
+不过 → 修 → 重跑，不声明完成。
+
+**关二：组件健康（来自 dao-component-radar 关一）**
+
+| 检查 | 方法 | pass 条件 |
+|------|------|----------|
+| 原生 `<button>` 带 className | grep 改动文件（排除 `ui/`） | 零结果或有 ARIA 豁免 |
+| 原生 `<input>` 带 className | 同上 | 零结果 |
+| 重复 className 组合 | 改动文件中 ≥3 token 的相同组合出现 2+ 次 | 零或已提炼组件 |
+
+不过 → 提炼组件 → 重跑，不声明完成。
+
+**两关都过 → 声明翻译完成。** 全面审计（Loop 归档 / 设计体系升级）仍需独立调用 `dao-design-fidelity` 和 `dao-component-radar` 做深度检查。
 
 ---
 
