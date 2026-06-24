@@ -109,82 +109,184 @@ OD 有两个独立的文件空间，理解这一点是正确加载的前提：
 
 以下规则写入每份输出的提示词中，OD 必须遵守，不可修改。
 
+### 3.0 统一命名规范（Token Naming Convention）
+
+> 名可名，非恒名。但 token 命名必须恒——跨项目统一命名，只有值不同。
+
+**命名模式**：`--{category}-{role}[-{modifier}]`
+
+OD 生成 CSS 变量时**必须使用以下类别前缀和角色名**，不可自创命名。值由项目决定，名字由 dao 统一。
+
+#### 类别前缀总览
+
+| 前缀 | 类别 | 示例 |
+|------|------|------|
+| `--color-` | 色彩 | `--color-bg`, `--color-fg`, `--color-accent` |
+| `--text-` | 字号 | `--text-xs`, `--text-sm`, `--text-base` |
+| `--font-` | 字体栈 | `--font-ui`, `--font-body`, `--font-mono` |
+| `--radius-` | 圆角 | `--radius-sm`, `--radius-md`, `--radius-lg` |
+| `--space-` | 间距 | `--space-1`, `--space-2`, `--space-4` |
+| `--elevation-` | 阴影层级 | `--elevation-xs`, `--elevation-md`, `--elevation-xl` |
+| `--duration-` | 动效时长 | `--duration-fast`, `--duration-base` |
+| `--ease-` | 缓动函数 | `--ease-default` |
+
+#### 色彩角色清单（完整 · 所有项目通用）
+
+| 分组 | 变量名 | 角色说明 |
+|------|--------|---------|
+| **背景** | `--color-bg` | 最底层背景 |
+| | `--color-surface` | 卡片/面板表面 |
+| | `--color-surface-alt` | 备选表面 |
+| | `--color-sunken` | 下沉/内凹区域 |
+| **前景** | `--color-fg` | 主文字 |
+| | `--color-fg-secondary` | 次要文字 |
+| | `--color-fg-muted` | 弱化文字 |
+| | `--color-fg-faint` | 最弱文字/占位符 |
+| **边框** | `--color-border` | 默认边框 |
+| | `--color-border-soft` | 柔和分隔线 |
+| | `--color-border-strong` | 强调边框 |
+| **强调** | `--color-accent` | 主品牌/操作色 |
+| | `--color-accent-emphasis` | hover/active 加深 |
+| | `--color-accent-fg` | 强调色上的文字 |
+| | `--color-accent-subtle` | 强调色浅底 |
+| **状态** | `--color-success` | 成功 base |
+| ×3 组 | `--color-success-subtle` | 成功浅底 |
+| success | `--color-success-border` | 成功边框 |
+| warning | `--color-success-fg` | 成功前景 |
+| danger | （warning / danger 同结构） | 每组 4 层 |
+| **画布** | `--color-canvas` | 工作区/编辑器底色（可选） |
+
+#### 字号阶梯（T-shirt）
+
+| 变量名 | 典型值 | 角色 |
+|--------|-------|------|
+| `--text-xs` | 12px | badge、时间戳、tag、帮助文字 |
+| `--text-sm` | 14px | 正文、输入框、按钮、列表 |
+| `--text-base` | 16px | 区块标题、对话框标题 |
+| `--text-lg` | 20px | 页面标题 |
+| `--text-xl` | 24px | 统计数字、hero 指标 |
+| `--text-2xl` | 30px | 报告大标题 |
+
+#### 圆角阶梯（T-shirt）
+
+| 变量名 | 典型值 | 角色 |
+|--------|-------|------|
+| `--radius-xs` | 4px | 微元素（badge、标签内） |
+| `--radius-sm` | 6px | 小控件（tag、chip） |
+| `--radius-md` | 9px | 默认控件（按钮、输入框） |
+| `--radius-lg` | 13px | 面板、卡片 |
+| `--radius-xl` | 18px | 大容器、对话框 |
+| `--radius-full` | 999px | 药丸/圆形 |
+
+#### 间距阶梯（N × 4px）
+
+| 变量名 | 值 |
+|--------|---|
+| `--space-1` | 4px |
+| `--space-2` | 8px |
+| `--space-3` | 12px |
+| `--space-4` | 16px |
+| `--space-5` | 20px |
+| `--space-6` | 24px |
+| `--space-8` | 32px |
+
+#### 阴影/层级阶梯
+
+| 变量名 | 角色 |
+|--------|------|
+| `--elevation-xs` | 贴面微影（hairline） |
+| `--elevation-sm` | 轻浮（卡片默认） |
+| `--elevation-md` | 悬浮（下拉、弹出） |
+| `--elevation-lg` | 弹窗（tooltip、通知） |
+| `--elevation-xl` | 遮罩（模态框、抽屉） |
+
+#### 动效
+
+| 变量名 | 角色 |
+|--------|------|
+| `--duration-fast` | 微交互（100~150ms） |
+| `--duration-base` | 过渡（200~300ms） |
+| `--duration-slow` | 展开/折叠（400~600ms） |
+| `--ease-default` | 主缓动（ease-out 为主） |
+
 ### 3.1 字号 Typography
 
 | 规则 | 说明 |
 |------|------|
-| **≤ 8 级** | 日常 UI（正文+标签+注释）≤5 级，display/hero 额外 2~3 级 |
-| **最小 12px**（CJK 项目） | Chrome 中文默认最小 12px，笔画密度要求 |
-| **最小 14px**（纯英文项目） | WCAG 可读性建议 |
-| **对齐 Tailwind 内置尺寸** | 12/14/16/18/20/24/30/36px，减少自定义 class |
+| **≤ 8 级** | 日常 UI ≤5 级，display/hero 额外 2~3 级 |
+| **最小 12px**（CJK） | Chrome 中文默认最小 12px |
+| **最小 14px**（纯英文） | WCAG 可读性建议 |
+| **对齐 Tailwind 内置尺寸** | 12/14/16/18/20/24/30/36px |
 | **相邻级差 ≥ 1.5px** | 确保肉眼可辨 |
 | **行高**：正文 1.4~1.6，标题 1.1~1.3 | 通用可读性标准 |
 | **字重**：仅用 400/500/600 | 过多字重增加复杂度 |
-
-参考阶梯：Ant Design 12→14→16→20→24→32（6 级）。
+| **命名**：`--text-{t-shirt}` | 见 §3.0 字号阶梯 |
 
 ### 3.2 字体 Font Family
 
 | 规则 | 说明 |
 |------|------|
-| **三栈必备** | UI 栈（标题/按钮）、正文栈（段落/描述）、等宽栈（代码/数据） |
+| **三栈必备** | `--font-ui`（标题/按钮）、`--font-body`（正文）、`--font-mono`（代码） |
 | **系统字体优先** | 减少加载，保持原生感 |
-| **中文回退** | CJK 项目必须包含中文字体回退（PingFang SC / Microsoft YaHei / Noto Sans SC） |
+| **中文回退** | CJK 项目须含中文字体回退 |
 
 ### 3.3 色彩 Color
 
 | 规则 | 说明 |
 |------|------|
-| **语义色必备** | success / warning / danger 三组，每组 4 层（base/surface/border/ink） |
-| **亮暗双主题** | 通过 CSS 变量 + `data-theme` 切换 |
-| **对比度** | 文字/背景对比度 ≥ 4.5:1（WCAG AA） |
-| **表面层级** | background → surface → surface-raised → overlay，至少 3 层 |
-| **前景色分级** | foreground（主文字）→ fg-2（次文字）→ muted（辅助）→ faint（最弱），至少 3 级 |
+| **命名**：`--color-{role}[-{modifier}]` | 见 §3.0 色彩角色清单 |
+| **语义状态 ×3** | success / warning / danger，每组 4 层 |
+| **亮暗双主题** | CSS 变量 + `data-theme` 切换 |
+| **对比度** | 文字/背景 ≥ 4.5:1（WCAG AA） |
+| **表面层级** | bg → surface → surface-alt → sunken，至少 3 层 |
+| **前景分级** | fg → fg-secondary → fg-muted → fg-faint，至少 3 级 |
 
 ### 3.4 间距 Spacing
 
 | 规则 | 说明 |
 |------|------|
-| **基于 4px 单位** | 所有间距为 4 的倍数（4/8/12/16/20/24/32/40/48/64） |
-| **命名语义化** | shell（最外层）/ panel（面板内）/ gap（元素间） |
-| **Tailwind 内置** | 优先使用 Tailwind spacing scale（p-1~p-16），非标值用 `p-[Npx]` |
+| **基于 4px** | 所有间距为 4 的倍数 |
+| **命名**：`--space-{N}` | N = 倍数（1=4px, 2=8px...），见 §3.0 |
+| **Tailwind 内置** | 优先 Tailwind spacing scale |
 
 ### 3.5 圆角 Shape
 
 | 规则 | 说明 |
 |------|------|
-| **3~5 级** | 控件（按钮/输入框）→ 面板（卡片）→ 容器（对话框）→ pill |
-| **等差或倍数递增** | 如 6→9→13→18→999，不做 1px 微调 |
+| **命名**：`--radius-{t-shirt}` | xs→sm→md→lg→xl→full，见 §3.0 |
+| **3~6 级** | 控件 → 面板 → 容器 → pill |
+| **等差或倍数递增** | 不做 1px 微调 |
 
 ### 3.6 阴影 Elevation
 
 | 规则 | 说明 |
 |------|------|
-| **3~5 层** | hairline（贴面）→ raised（浮起）→ float（悬浮）→ overlay（遮罩） |
-| **暗色模式** | 阴影减弱或用边框替代（暗底上阴影不可见） |
+| **命名**：`--elevation-{t-shirt}` | xs→sm→md→lg→xl，见 §3.0 |
+| **3~5 层** | hairline → raised → float → overlay |
+| **暗色模式** | 阴影减弱或用边框替代 |
 
 ### 3.7 图标 Iconography
 
 | 规则 | 说明 |
 |------|------|
-| **单一图标库源** | 一个项目只用一个图标库（如 Lucide / Phosphor / Material Symbols） |
-| **描边粗细一致** | 全局统一 stroke-width（通常 1.5 或 2） |
-| **尺寸阶梯** | 与字号体系联动：3~4 个尺寸（如 14/16/20/24） |
+| **单一图标库源** | 一个项目只用一个图标库 |
+| **描边粗细一致** | 全局统一 stroke-width |
+| **尺寸阶梯** | 与字号体系联动：3~4 个尺寸 |
 
 ### 3.8 动效 Motion
 
 | 规则 | 说明 |
 |------|------|
-| **三档时长** | fast（100~150ms 微交互）/ base（200~300ms 过渡）/ slow（400~600ms 展开） |
-| **缓动函数** | ease-out 为主（出场），ease-in-out 用于双向 |
-| **reduced-motion** | 所有动画必须有 `prefers-reduced-motion: reduce` 降级 |
-| **不做无意义动画** | 动效为反馈服务，不为装饰 |
+| **命名**：`--duration-{speed}` + `--ease-{style}` | 见 §3.0 |
+| **三档时长** | fast / base / slow |
+| **reduced-motion** | 必须有 `prefers-reduced-motion: reduce` 降级 |
+| **不做无意义动画** | 动效为反馈服务 |
 
 ### 3.9 布局 Layout
 
 | 规则 | 说明 |
 |------|------|
-| **三种策略** | Cap+Center（封顶居中）/ Stretch（流式拉伸）/ Multi-column（多栏） |
+| **三种策略** | Cap+Center / Stretch / Multi-column |
 | **max-width 必须 mx-auto** | 有上限的内容区必须水平居中 |
 | **三视口验证** | min / default / max 视口各截图一次 |
 
@@ -194,7 +296,7 @@ OD 有两个独立的文件空间，理解这一点是正确加载的前提：
 
 | 规则 | 说明 |
 |------|------|
-| **语义分级** | soft（微弱分隔）/ default（标准边界）/ strong（强调） |
+| **命名**：`--color-border[-{modifier}]` | soft / default / strong，归入色彩体系 |
 | **宽度统一** | 1px 为主，不混用 2px/3px |
 
 ---
@@ -227,8 +329,24 @@ OD 有两个独立的文件空间，理解这一点是正确加载的前提：
 | 设计侧 token | `design/css/*.css` | 提取 CSS 变量和 font-size 值 |
 | 代码侧 token | `**/index.css` + `tailwind.config.*` | 提取 CSS 变量和 theme.extend |
 | 已有规范 | `.claude/rules/design-*.md` | 读取已沉淀的规范文件 |
+| **命名合规** | 所有 CSS 变量定义 | 对照 §3.0 统一命名规范，标记不合规命名 |
 | 字号合规 | 全局 grep `font-size` / `text-` | 统计 token 使用率 vs 硬编码率 |
 | 色彩合规 | grep 硬编码色值 `#[0-9a-f]` / `rgb(` | 应全部走 CSS 变量 |
+
+### 命名迁移映射
+
+已有项目的旧命名需迁移到 §3.0 统一规范。审计时自动生成迁移映射表：
+
+| 类别 | 旧命名模式 | 新命名模式 | 示例 |
+|------|-----------|-----------|------|
+| 色彩 | `--bg`, `--fg-2`, `--muted` | `--color-bg`, `--color-fg-secondary`, `--color-fg-muted` | `--accent-on` → `--color-accent-fg` |
+| 字号 | `--fs-xs`, `--fs-base` | `--text-xs`, `--text-sm` | `--fs-lg` → `--text-base` |
+| 圆角 | `--r-sm`, `--r-md` | `--radius-md`, `--radius-lg` | `--r-pill` → `--radius-full` |
+| 间距 | `--sp-1`, `--sp-2` | `--space-1`, `--space-2` | 前缀改变 |
+| 阴影 | `--shadow-xs`, `--shadow` | `--elevation-xs`, `--elevation-md` | `--shadow-pop` → `--elevation-lg` |
+| 动效 | `--t-fast`, `--ease` | `--duration-fast`, `--ease-default` | 前缀改变 |
+
+**迁移策略**：设计侧（`design/css/*.css`）和代码侧（`index.css` + `tailwind.config`）同步迁移。OD 改设计文件命名，AI 改代码侧命名，确保双向一致。
 
 ### 合规判定
 
@@ -293,6 +411,28 @@ Skill 最终输出一份 Markdown 格式的提示词，结构如下：
 ### 现状审计
 [每类 token 的合规状态 + 具体数据]
 
+## 命名规范（铁律）
+
+所有 CSS 变量必须使用以下标准命名，不可自创。值由你设计，名字不可改。
+
+| 类别 | 前缀 | 命名模式 | 示例 |
+|------|------|---------|------|
+| 色彩 | `--color-` | `--color-{role}[-{modifier}]` | `--color-bg`, `--color-fg-secondary`, `--color-accent` |
+| 字号 | `--text-` | `--text-{t-shirt}` | `--text-xs`(12px), `--text-sm`(14px), `--text-base`(16px) |
+| 字体 | `--font-` | `--font-{role}` | `--font-ui`, `--font-body`, `--font-mono` |
+| 圆角 | `--radius-` | `--radius-{t-shirt}` | `--radius-sm`, `--radius-md`, `--radius-full` |
+| 间距 | `--space-` | `--space-{N}` (N×4px) | `--space-1`(4px), `--space-4`(16px) |
+| 阴影 | `--elevation-` | `--elevation-{t-shirt}` | `--elevation-xs`, `--elevation-md` |
+| 动效 | `--duration-` / `--ease-` | `--duration-{speed}` | `--duration-fast`, `--ease-default` |
+
+色彩完整角色清单：bg / surface / surface-alt / sunken / fg / fg-secondary / fg-muted / fg-faint / border / border-soft / border-strong / accent / accent-emphasis / accent-fg / accent-subtle / success×4 / warning×4 / danger×4
+
+[有旧命名时追加]
+### 命名迁移
+| 旧变量 | 新变量 |
+|--------|--------|
+| [逐个列出旧→新映射] |
+
 ## 规则（必须遵守）
 [从 §3 不变层规则中输出与本项目相关的规则]
 
@@ -300,8 +440,8 @@ Skill 最终输出一份 Markdown 格式的提示词，结构如下：
 [从 §4 可变层中输出本项目需要 OD 设计的任务清单]
 
 ## 输出要求
-1. 新 token 表：每类给出 token 名 / 值 / CSS 变量 / 适用角色
-2. 迁移映射（有现有 token 时）：旧值 → 新值对照表
+1. 新 token 表：每类给出 token 名 / 值 / CSS 变量 / 适用角色（**变量名必须符合命名规范**）
+2. 迁移映射（有现有 token 时）：旧变量名 → 新变量名 + 新值对照表
 3. 在设计文件中应用新体系（工作区有文件时）
 4. 审计报告（有改动文件时）：每个文件的变更摘要
 
