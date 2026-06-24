@@ -7,7 +7,9 @@ description: 结构健康门——检测原生 HTML 应提炼为组件、重复 
 
 > 不知常妄作凶。未识别的原生 HTML 是隐性技术债。
 
-本 skill 专注**结构健康**——组件是否被正确提炼、复用。与 `dao-design-open`（设计翻译引擎）独立触发、各管各的。
+本 skill 专注**结构健康**——组件是否被正确提炼、复用。
+
+**流水线位置**：Design Pipeline **Phase 3（健康）**。上游是 `dao-design-fidelity`（Phase 2，fidelity 发现组件级问题时触发本 skill），token 冲突反馈回 `dao-design-system`（Phase 0）的豁免列表。详见 `dao-design-system` §7。
 
 ## 触发条件
 
