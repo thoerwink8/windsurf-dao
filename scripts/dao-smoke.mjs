@@ -117,7 +117,7 @@ console.log('\n📋 3. Cross-references (skill → skill)');
 
 const refPattern = /(?:派|回|进|→|->|调|拉起|启动|触发|参见|见|转)\s*(dao-[a-z][-a-z0-9]*)/g;
 // commands / 外部仓库名等非 skill 的 dao-* 名称，不算交叉引用
-const knownNonSkills = new Set(['dao-cycle', 'dao-dev', 'dao-evolve', 'dao-superpowers', 'dao-autopilot', 'dao-hub']);
+const knownNonSkills = new Set(['dao-cycle', 'dao-dev', 'dao-evolve', 'dao-superpowers', 'dao-autopilot', 'dao-hub', 'dao-loop']);
 
 let refTotal = 0;
 let refBroken = 0;
