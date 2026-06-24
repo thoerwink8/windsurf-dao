@@ -175,9 +175,12 @@
 - 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY)
 - 操作: 最终报告模板33行→3行prose, 目录结构7行→2行, Gap Analysis格式5行→1行
 
-### T30+: 动态追加
+### T30: dao-superpowers + dao-evolve 压缩 ✅
+- 文件: `ccswitch/commands/dao-superpowers.md` (MODIFY, 221→183, -38), `ccswitch/commands/dao-evolve.md` (MODIFY, 228→219, -9)
+- 操作: superpowers 四个步骤代码块→prose; evolve 关系代码块→prose
+
+### T31+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
-- 根据发现追加新 Task
 
 ---
 
