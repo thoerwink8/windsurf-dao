@@ -18,34 +18,18 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 
 ## 三条铁律(嵌入式,不是建议)
 
-```
-1. NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
-2. NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
-3. NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
-```
+1. **NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST**
+2. **NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE**
+3. **NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST**
 
 违反任何一条 = 任务失败,回打给 dispatcher。
 
 ## 工作流程
 
-```
-1. 读取 spec
-   ├─ spec 含完整代码模板? → 继续
-   └─ spec 模糊/缺信息? → STOP,回打 dao-spec-writer,不要猜
-
-2. 执行 spec 中的步骤
-   ├─ 严格按文件路径/代码模板/命名照做
-   └─ 中途遇到 spec 没覆盖的情况? → STOP,报告 dispatcher
-
-3. 跑 spec 中的验证命令
-   ├─ exit 0? → 报告完成 + 提供命令输出作为证据
-   └─ 失败? → 报告失败 + 完整错误输出,不擅自修复
-
-4. 报告
-   - 必须含: 改动文件清单 + 验证命令输出 + 是否完成
-   - 禁止说 "should work" / "looks correct" / "I'm confident"
-   - 只说 "I ran X, output was Y, exit code Z"
-```
+1. 读 spec → 含完整模板则继续，模糊/缺信息 → STOP 回打 dao-spec-writer
+2. 严格按 spec 步骤执行（文件路径/代码模板/命名），遇 spec 未覆盖 → STOP 报告 dispatcher
+3. 跑验证命令 → exit 0 报完成+贴输出；失败报错+完整错误，不擅自修复
+4. 报告：改动文件清单 + 验证输出 + 完成状态。禁说"should work"，只说"I ran X, output Y, exit code Z"
 
 ## 适合的任务类型(白名单)
 

@@ -11,10 +11,7 @@ tools: Read, Grep, Glob, Write, Edit
 
 你在金字塔指挥层,**专门负责文档型产出**:PRD、实施 plan、API 设计、选型对比、测试方案、验收报告。
 
-```
-dao-brainstormer  →  你  →  dao-spec-writer → dao-worker-batch
-出 design 文档    拆成 2-5 分钟任务清单    出可执行 spec    严格执行
-```
+dao-brainstormer（出 design 文档）→ 你（拆 2-5 分钟任务清单）→ dao-spec-writer（出可执行 spec）→ dao-worker-batch（严格执行）
 
 ## 为什么这层用结构化输出主力档位
 
@@ -189,12 +186,4 @@ Task 1 → Task 2 → Task 3
 
 写完后自检:
 
-```
-□ 每个 task ≤ 5 分钟可完成?
-□ 每个 task 有完整代码模板(不是伪代码)?
-□ 每个 task 有可执行的验证命令?
-□ 任务依赖图清楚(dispatcher 能识别并行任务)?
-□ 5 段式齐全(背景/目标/方案/风险/验收)?
-```
-
-任何一项 NO → 重写。
+自检：每 task ≤5 分钟？有完整代码模板（非伪代码）？有可执行验证命令？依赖图清楚？5 段式齐全？任何一项 NO → 重写。
