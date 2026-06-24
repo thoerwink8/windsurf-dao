@@ -66,7 +66,7 @@
   3. §A 反模式：删与其他 skill 重复项，仅保留本 skill 独有（-25 行）
 - 验证: `wc -l`（目标 ≤330 行）; grep "组件策略" 指向 design-taste
 
-### T10: dao-design-taste 压缩 (≈4min) → A2
+### T10: dao-design-taste 压缩 (≈4min) → A2 ✅
 - 文件: `ccswitch/skills/dao-design-taste/SKILL.md` (MODIFY)
 - 操作:
   1. §7L 设计工具哲学段（~80 行）：压缩到 3 条核心原则（-60 行）
