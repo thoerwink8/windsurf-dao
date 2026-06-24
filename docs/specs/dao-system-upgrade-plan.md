@@ -192,7 +192,7 @@ description: 用户视角端到端仿真术——以身观身 (54 章)，用 chr
 1. 章首引语（54 章「以身观身」）
 2. 与 dao-test 边界（TDD 单元/集成 vs 用户视角 E2E）
 3. 与 dao-empathy 协作（empathy 提供 Persona，simulation 走 Persona）
-4. 工具栈（chrome-devtools MCP 主用 / playwright MCP 跨浏览器时用）
+4. 工具栈（遵循 dao.md 目·观浏览器门控：首次询问用户偏好，硬覆盖场景自动选择）
 5. **仿真五步**：
    - 1. 列路径（穷举所有用户旅程：登录/主流程/边界/异常）
    - 2. 起浏览器（mcp0_navigate_page / browser_preview）
