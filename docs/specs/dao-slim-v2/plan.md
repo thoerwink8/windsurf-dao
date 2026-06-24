@@ -58,7 +58,7 @@
   2. §1.5 OD 工作区准备（~90 行）：压缩到 10 行核心步骤
 - 验证: `wc -l`（目标 ≤400 行）
 
-### T9: dao-design-open 去重 + 压缩 (≈5min) → A2, A6
+### T9: dao-design-open 去重 + 压缩 (≈5min) → A2, A6 ✅
 - 文件: `ccswitch/skills/dao-design-open/SKILL.md` (MODIFY)
 - 操作:
   1. §1.5.0 组件策略矩阵（native/extend/wrap/custom）：与 dao-design-taste 重复，删除本处，加"组件策略见 dao-design-taste §0-pre"引用（-50 行）
