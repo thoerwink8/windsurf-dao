@@ -910,7 +910,6 @@ function Invoke-UnlinkCodex {
 function Get-CodexPromptNames {
     return @(
         "dao-superpowers",
-        "dao-cycle",
         "dao-dev",
         "dao-philosophy",
         "dao-evolve",

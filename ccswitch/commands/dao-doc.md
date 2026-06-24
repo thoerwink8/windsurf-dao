@@ -137,7 +137,7 @@ argument-hint: "[文档需求/范围描述]"
 
 ```
 /dao-dev 管线 → 「三·成」阶段的「书」 → 调用 /dao-doc
-/dao-doc 内部 → 复杂架构文档可触发 /dao-cycle 迭代
+/dao-doc 内部 → 复杂架构文档可触发 /dao-dev §2.5 深度迭代
 /dao-doc 独立 → 任何时候需要文档都可直接触发
 ```
 
