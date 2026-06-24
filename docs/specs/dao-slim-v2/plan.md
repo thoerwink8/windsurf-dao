@@ -51,7 +51,7 @@
   3. 重复护栏（"禁用 AskUserQuestion" 出现 3+ 次）合并到 §0 铁律一处
 - 验证: `wc -l`（目标 ≤700 行）; grep "AskUserQuestion" 只在铁律段出现
 
-### T8: dao-design-system 压缩 (≈5min) → A2
+### T8: dao-design-system 压缩 (≈5min) → A2 ✅
 - 文件: `ccswitch/skills/dao-design-system/SKILL.md` (MODIFY)
 - 操作:
   1. §3.0-3.10 token 命名完整表（~280 行）：每类保留 1 行定义 + 命名模式，删除详细示例和解释（→~100 行）
