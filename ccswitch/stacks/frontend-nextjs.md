@@ -73,6 +73,6 @@ python <skills-root>/ui-ux-pro-max/scripts/search.py "<product_type> <industry> 
 
 7. 依次运行：`pnpm typecheck` → `pnpm format` → `pnpm lint` → `pnpm build`
 
-8. 视觉验证（三选一）：Chrome DevTools 截图 / curl SSR 输出 / 用户贴截图
+8. 视觉验证（三选一）：浏览器 MCP 截图（遵循 dao.md 目·观门控选择工具）/ curl SSR 输出 / 用户贴截图
 
 9. 若项目大（>5 页面），用 `--persist` 持久化设计系统到 `design-system/MASTER.md`。
