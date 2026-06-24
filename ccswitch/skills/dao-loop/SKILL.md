@@ -660,7 +660,7 @@ git push/pull STATUS.json。新 loop push 到 main 后，其他 session pull 即
 
 **trivial + minor 修完后重新打分。major 追加 Task 后继续造线循环。critical 直接归档当前进度并开新 Loop。**
 
-**UI/设计类 Loop 特殊要求**：打分必须包含 `dao-design-fidelity` **L1~L5 全量验证**——L3 使用 Playwright headless 截图逐页对比（当前 app vs 设计原型），不可用代码审查或人工目视替代自动化截图 diff。Token 体系变更（收敛/重命名/值调整）还须执行 `dao-design-fidelity` §6.4 的变更前后 diff 流程。
+**UI/设计类 Loop 特殊要求**：打分必须包含 `dao-design-fidelity` **L1~L5 全量验证**——L3 使用 Playwright headless 截图逐页对比（当前 app vs 设计原型），不可用代码审查或人工目视替代自动化截图 diff。Token 体系变更（收敛/重命名/值调整）还须执行 `dao-design-fidelity` §6.5 的变更前后 diff 流程。L3 截图前必须先执行 §6.4 状态矩阵枚举——不枚举状态就截图 = 只验了默认态。
 
 #### 7.3 学习提取（AI 自主判断 + 用户确认）
 
