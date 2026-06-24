@@ -93,6 +93,10 @@ description: UI 视觉问题迭代修复——截图找问题 → 设计工具�
 
 **退出判据**：代码渲染与设计稿无可见差距 → 循环结束。
 
+### 截图存放路径
+
+QA 循环中所有截图（Step 1 实际界面截图、Step 2 修复前后对比、Step 3 代码渲染验证）统一存放到 `<项目根>/_tmp/qa/design-qa/`。命名格式：`<type>-<description>.png`（type: `compare` 或 `verify`）。循环结束后由 `dao-verify` 统一清理。
+
 ---
 
 ## 与其他 skill 的关系

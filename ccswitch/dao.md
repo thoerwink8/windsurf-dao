@@ -219,6 +219,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 - **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。理由：跟项目走、gitignore 已覆盖、用户找得到。项目 `.gitignore` 必须含 `**/_tmp/`
+- **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 按场景填写：Loop 验证用 `<loop-topic>`、设计审计用 `fidelity`、设计 QA 用 `design-qa`、调试用 `debug`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若 `_tmp/qa/<context>/` 不存在则自动创建
 
 ## 言 · 名之则
 
