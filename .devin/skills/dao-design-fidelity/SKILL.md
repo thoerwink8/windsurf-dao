@@ -41,8 +41,9 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 | 层级 | React 组件树 ↔ 设计 HTML 层级一一映射 | 人工比对 or DOM snapshot |
 | 间距 | padding/margin/gap 与设计 CSS 值差 ≤ 2px | DevTools 量取 or 截图标注 |
 | 尺寸 | width/height 与设计一致（或 responsive 等效） | 同上 |
+| 布局完整性 | 窗口边缘无 >20px 死区（§6.4） | `assertNoLayoutGap` 自动化断言 |
 
-**自动化**：Storybook 组件级 + snapshot 测试可覆盖，无 Storybook 项目则人工走查。
+**自动化**：Storybook 组件级 + snapshot 测试可覆盖，无 Storybook 项目则人工走查。布局完整性检查（§6.4）可全自动化 CI。
 
 ### L3 · 视觉像素（Visual Pixels）
 
@@ -206,7 +207,21 @@ Loop 归档前（§6.5 验收比对）应 L1 ~ L5 全覆盖。
 | 渲染差异 | 字体渲染/抗锯齿/亚像素 | 可接受，调高该页阈值并备注原因 |
 | 内容差异 | demo 数据不同 | 排除——用固定 mock 数据 |
 
-### 6.4 Token 体系变更的特殊处理
+### 6.4 布局完整性检查（Layout Integrity）
+
+**L2 结构层的自动化补充**。检测窗口边缘的布局死区——CSS Grid/Flex 容器缺少行/列模板时，子元素无法填满容器，在窗口边缘留下可见空白。
+
+**特征**：Token 全对、像素 diff 可能通过（死区在边缘不显眼），仅在特定数据状态下暴露。
+
+**检测方法**：取最外层布局容器的最后一个可见子元素的 bottom，与容器自身的 bottom 做差值。差值超过阈值（默认 20px）→ fail。
+
+**适用范围**：**所有页面、所有状态**——不分有无设计原型。模态对话框豁免。
+
+**项目落地**：在验证脚本中实现 `assertNoLayoutGap` 工具函数，每个截图步骤后调用。阈值和容器选择器可在项目 `.claude/rules/design-fidelity.md` 中覆盖。
+
+**为什么放在 L2**：布局完整性是结构层断言（DOM 几何），不需要基线或设计原型——属于结构布局（L2）的自动化延伸。
+
+### 6.5 Token 体系变更的特殊处理
 
 **当 Loop 涉及 token 体系变更（收敛/重命名/值调整）时**：
 
