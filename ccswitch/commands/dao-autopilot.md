@@ -198,13 +198,7 @@ Task <ID> 涅槃 ✅
 **新鲜用户测试**：
 > "如果一个只读过原始目标的用户，现在看到系统/代码，他会说'是的，这就是我要的'吗？"
 
-逐条检查成功标准：
-
-```
-✓ 标准A：[已达成/未达成/部分]
-✗ 标准B：[缺口描述]
-？标准C：[不确定，需要...]
-```
+逐条检查成功标准（✓已达成 / ✗缺口+描述 / ？不确定）：
 
 - 全部 ✓ → 退出循环，进入「收尾」
 - 有缺口 → 在 TODO.md `🚧 待实现` 追加新条目，加入任务图，继续循环
@@ -286,39 +280,7 @@ git revert [N4-commit-hash] --no-edit
 
 #### 5.3 最终报告
 
-```
-## 🏁 自动驾驶完成
-
-### 原始目标
-[用户原话]
-
-### 完成情况（见 TODO.md）
-✓ 已完成：N1 N2 N3 N5（共 4 个，已标记 [x]）
-～ 已移除：N4（用户决策，已标记 [~]）
-✗ 未完成：N6（blocked，已保留 [ ] 待下次）
-
-### Open Threads 处理（若有）
-🟢 已执行：🔨 [任务标题]（已标记 [x]）
-🟡 已推进：✋ [确认项]（⚡ AI assumed：[理由]，请验证）
-🔴 需你决策：🔀 [决策项]（未触碰，仍为 [ ]）
-
-### 成功标准验证
-✓ 标准A：[验证方式 + 结果]
-✓ 标准B：[验证方式 + 结果]
-
-### lesson 上提评估（见 §5.2.5，§5.3 前必须完成 — 即便结论"仅留 CSV"也必须显式说明）
-- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
-- T<id> "<title>"：[上提到 <位置> | 仅留 CSV 因 <理由>]
-- ...
-
-### 工作产物
-分支：autopilot/[goal-slug]
-Commits：[hash 列表]
-合并到主干：git merge autopilot/[goal-slug] --no-ff
-
-### 撤销整个 autopilot 的方式
-git checkout main && git branch -D autopilot/[goal-slug]
-```
+输出 `## 🏁 自动驾驶完成` 报告，包含七段：原始目标（用户原话）→ 完成情况（✓已完成/～已移除/✗未完成，对应 TODO.md 状态）→ Open Threads 处理（🟢已执行/🟡AI assumed+理由/🔴需决策）→ 成功标准验证 → lesson 上提评估（§5.2.5，逐条标注上提位置或"仅留 CSV 因…"）→ 工作产物（分支+commits+merge 命令）→ 撤销指令。
 
 AskUserQuestion 工具：合并到 main / 继续完善 / 回退某些任务 / 保持现状
 
@@ -350,17 +312,7 @@ AskUserQuestion 工具：合并到 main / 继续完善 / 回退某些任务 / �
 
 ### 目录结构
 
-```
-项目根/
-├── TODO.md              ← 任务图（激活前存在或新建，永久保留）
-├── AGENT_GUIDE.md       ← 知识库（激活前存在或新建，永久保留）
-└── .dao-autopilot/
-    └── state.json   ← 执行元数据（激活期间存在，完成后删除）
-```
-
-`.dao-autopilot/` 通过 `.git/info/exclude` 本地排除，不进入 git 历史。
-
-权威任务状态在 `TODO.md`，`state.json` 仅记录 commit hash 支持回退。
+项目根下 `TODO.md`（任务图，永久）+ `AGENT_GUIDE.md`（知识库，永久）+ `.dao-autopilot/state.json`（执行元数据，完成后删除，`.git/info/exclude` 排除）。权威任务状态在 TODO.md，state.json 仅记录 commit hash 支持回退。
 
 ---
 
