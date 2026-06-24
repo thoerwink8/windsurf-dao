@@ -129,9 +129,18 @@
 
 ## Phase 5: 持续优化（动态）
 
-### T19+: 动态追加
+### T19: dao-autopilot 压缩 (577→451, -126 lines) ✅
+- 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY)
+- 操作: 単Task闭環铁律 22→4行、模板代码块→2行摘要、状态机表格压缩、教训上提評估 46→7行
+- 验证: `wc -l`（451 行）
+
+### T20: dao-evolve + dao-superpowers 压缩 ✅
+- 文件: `ccswitch/commands/dao-evolve.md` (MODIFY, 272→228, -44), `ccswitch/commands/dao-superpowers.md` (MODIFY, 257→221, -36)
+- 操作: evolve 追踪日志/教训新鲜度/Git考古/执行格式压缩; superpowers 删35行重复执行模板
+- 验证: `wc -l`（evolve 228, superpowers 221）
+
+### T21+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
-- 网上查 Claude Code / AI 规则系统最佳实践
 - 根据发现追加新 Task
 
 ---
