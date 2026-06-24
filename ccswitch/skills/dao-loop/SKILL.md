@@ -550,6 +550,8 @@ Go → 环境准备(install/基线测试)
 - 交互验证（design Loop）：关键交互路径走查（`dao-design-fidelity` L4）
 - 动态组件提炼：Phase 边界是发现跨 Task 重复模式的最佳时机——**造线中发现可复用模式立即提炼**，不推迟到下一个 Loop
 
+**造线截图路径**：Phase 级检查点产出的所有截图统一存放到 `<项目根>/_tmp/qa/<loop-topic>/`（`<loop-topic>` = STATUS.json 中的 `topic` 字段）。禁止截图落到项目根目录或 `_tmp/` 根级。命名格式：`<type>-<description>.png`（type: `audit|compare|verify`）。
+
 **禁止 file 级验证**：不在每次文件保存后跑 typecheck/test。subagent 内部可跑快速语法检查，但完整验证管线在 Task commit 后统一执行。
 
 ### Spec 三文件同步（🔒 每 Task commit 后必执行）
