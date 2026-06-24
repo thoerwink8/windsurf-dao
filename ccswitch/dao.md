@@ -21,7 +21,7 @@
 
 **产出归位提醒**：完成可复用产物时，若写入位置 ≠ 归属地，交付末尾追加 `💡 归位：「<零编辑可执行指令>」→ <归属地>`。判据：跨项目/跨会话复用 → 提醒；纯一次性 → 不提。关键信号：写在 `~/.claude/` 等非项目目录但内容属于某个 git 项目 → 必须提醒。
 
-**项目规范自动沉淀**（各复归其根 × 道常无为而无不为）：当对话中产出了**项目级规范性内容**（设计 token 体系 / 组件契约 / 编码约定 / 测试策略等），AI 应主动判断是否需要沉淀到 `.claude/rules/` 下的独立文件。判据：这个规范会被后续开发反复引用、且不适合塞进 CLAUDE.md 主文件 → 沉淀。加 `paths:` frontmatter 可按路径条件加载，不加则无条件加载。首次进入一个项目时，若 `.claude/rules/` 不存在且项目已有规范性内容散落在 CLAUDE.md 中，建议拆分。
+**项目规范自动沉淀**：产出项目级规范 → 判断是否沉淀到 `.claude/rules/`（反复引用且不宜塞 CLAUDE.md → 沉淀）。
 
 ## 动 · 三才之机
 
@@ -60,34 +60,13 @@
 
 **规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design-taste skill"），比复制粘贴更符合"各复归其根"。
 
-**流程缺口修复必须归因到正确层级**（反就近写）：发现流程缺口（Loop 跳步 / 验收遗漏 / 检查缺失）时，修复**必须先写到定义该流程的层级**（通常是 windsurf-dao skill），再在项目 rules 补实现细节。禁止只改项目 rules 而不改全局 skill——这是「就近写」陷阱：症状在项目暴露，但病根在流程定义层。判据树：
+**流程缺口归因**（反就近写）：缺口归属 skill → 先改 skill 再补项目 rules；归属 dao.md → 改 dao.md；纯项目特有 → 改项目 rules。禁止只改项目 rules 而不改全局 skill。
 
-```
-发现流程缺口？
-  └─ 这个缺口属于哪个 skill 的职责？
-       ├─ 能定位到具体 skill → 先改 skill，再改项目 rules 补实现
-       ├─ 属于 dao.md 根基级 → 改 dao.md
-       └─ 纯项目特有（如特定阈值/页面清单）→ 改项目 rules
-```
+**项目标准结构**：首次进入项目静默检查，详见 `dao-project-scaffold` skill。
 
-**项目标准结构**（首次进入项目 · 必检）：每次进入一个项目的**首轮交互**，在回答用户问题之前，先静默检查以下四项。缺项则在回答末尾追加提醒（不阻塞用户任务）：
+**Rule vs Skill 边界**：always_on 写本文件（每轮注入）；按需知识做 skill（渐进披露）。
 
-1. `CLAUDE.md`（或 Devin 侧 `AGENT.md`）存在且 <80 行
-2. `.claude/rules/`（或 `.devin/rules/`）目录存在
-3. 根目录无冗余 AI 入口（`AGENT_GUIDE.md` / `KNOWLEDGE.md` 等应归入 rules）
-4. `docs/` 结构扁平（无 specs/superpowers 分裂，统一用 `plans/`）
-5. **有 `design/` 目录时额外检查**（⚡ 软性，提醒不阻塞）：
-   - `.claude/rules/design-tokens.md` 存在（设计 token 体系）
-   - `.claude/rules/design-spirit.md` 存在（四维检查清单，模板见 `dao-design-open` §B）
-   - `.claude/rules/component-health.md` 存在（组件清单 + 替代映射）
-
-详细模板见 `skills/dao-project-scaffold/`。原则：根目录只放活文档，AI 入口 + rules 是唯一上下文通道。
-
-**Rule vs Skill 边界**（朴散则为器）：always_on 根基写在本文件（每轮注入）；按需领域知识做成 skill（渐进披露，模型判断相关才加载全文）。
-
-**文件式 Memory 归位**：Claude Code 的 memory 是 `~/.claude/.../memory/` 下的文件，与 Windsurf 的 Memory MCP 性质不同——它**就是**知识载体，不是"理想态为空"的虚位。判据仍在：这条知识属于哪个项目文件？知道 → 直接写入目标文件（项目内，随 git 共享）；只对你自己跨会话有用、且不属于任何项目文件 → 才写 memory。中间物（临时脚本/调试辅助）集中放 `_tmp/`，用后即清，洞察归文件、脚本可弃。
-
-**回顾即检索**：遇回顾类提问（之前/上次/当时/记得吗/为什么当时）先搜 `memory/` 索引 + `docs/evolution/*.csv` 再答，勿凭记忆直接断言——存了要能被想起才算闭环。（Claude Code 侧由 `dao-rhythm` hook 在 UserPromptSubmit 确定性触发；此软规则为 Windsurf 侧及通用倡导，体现「同一意图·双栈异构触发」：触发随宿主能力而异，意图共享。）
+**Memory 归位**：知识属于项目文件 → 写项目文件；仅跨会话自用 → 才写 memory。回顾类提问先搜 `memory/` + `docs/evolution/*.csv`。
 
 ## 谋 · 重器之门（superpowers 门控精要）
 
