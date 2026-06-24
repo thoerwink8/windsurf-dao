@@ -171,7 +171,11 @@
 - 文件: `ccswitch/commands/dao-loop.md` (MODIFY, 137→102, -35), `ccswitch/skills/dao-design-qa/SKILL.md` (MODIFY, 134→118, -16), `ccswitch/skills/dao-design-layout/SKILL.md` (MODIFY, 161→158, -3)
 - 操作: 孤儿展示/续做模板/汇总/总览表 code blocks→prose; QA ASCII流程图→1行prose; layout引言压缩
 
-### T29+: 动态追加
+### T29: dao-autopilot 三次压缩 (392→344, -48) ✅
+- 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY)
+- 操作: 最终报告模板33行→3行prose, 目录结构7行→2行, Gap Analysis格式5行→1行
+
+### T30+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
 - 根据发现追加新 Task
 
