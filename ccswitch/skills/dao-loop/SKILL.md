@@ -1,6 +1,6 @@
 ---
 name: dao-loop
-description: 双线程循环开发法——文档驱动的编排层。谋线生成 spec/acceptance/plan，造线自动执行。支持多 loop 并发、跨 session 协调、归档交接。当用户说"做一个功能/loop/双线程/文档驱动开发"时触发。
+description: 双线程循环开发法——文档驱动的编排层。谋线生成 spec/strategy/acceptance/plan（五文档体系），造线按 Task 级验证 + Phase 级检查点自动执行。支持多 loop 并发、跨 session 协调、目标达成度评估归档。当用户说"做一个功能/loop/双线程/文档驱动开发"时触发。
 ---
 
 # 环 · Loop Engineering
@@ -30,17 +30,21 @@ description: 双线程循环开发法——文档驱动的编排层。谋线生�
     ↓
 🔒 Loop 计划确认（展示名称/描述/文件集/分支/间隔 → 用户确认后才创建 STATUS.json）
     ↓
-┌─ 谋线 ──────────────────┐
-│ spec.md → acceptance.md  │  AI 生成 → 用户确认
-│ → plan.md → 交叉校验     │
-└────────┬────────────────┘
+┌─ 谋线 ─────────────────────────┐
+│ spec.md → acceptance.md        │  AI 生成 → 用户确认
+│ → strategy.md → plan.md       │  达成度维度 + ADR
+│ → 交叉校验 → rule 检查         │
+└────────┬──────────────────────┘
          ↓ Go 检查点
-┌─ 造线 ──────────────────┐
-│ dao-dev / dao-superpowers│  按复杂度分诊
-│ → dao-review → dao-verify│
-└────────┬────────────────┘
+┌─ 造线 ─────────────────────────┐
+│ Task 级执行 + 验证              │  按复杂度分诊
+│ Phase 级检查点（组件健康+视觉）   │
+│ → dao-review → dao-verify      │
+└────────┬──────────────────────┘
          ↓
-归档（_archive + HANDOFF.md + INDEX.md）
+目标达成度评估（多维打分 → 严重度分流）
+         ↓
+归档（学习提取 + 规范同步 + _archive + HANDOFF.md）
 PROJECT.md 自动更新
 ```
 
@@ -131,7 +135,7 @@ PROJECT.md 自动更新
 - 名称：<topic>（kebab-case）
 - 描述：<一句话>
 - 分支：feat/<topic>（造线用，谋线在 main）
-- 文件集：spec.md + acceptance.md + plan.md（+ optional: <如有>）
+- 文件集：spec.md + strategy.md + acceptance.md + plan.md（+ optional: <如有>）
 - 与已有 loop 关系：parallel / merge / depends_on <which>
 - 轮询间隔：<N>s（<理由>）
 ```
@@ -190,9 +194,10 @@ Loop 名称：<topic>
 | 文件 | 必须 | 职责 |
 |------|------|------|
 | `spec.md` | ✅ | 定位、背景、目标、方案、范围、风险、依赖 |
+| `strategy.md` | ✅ | HOW 决策：技术选型、组件策略、验证策略、ADR |
 | `acceptance.md` | ✅ | 功能验收、回归验收、边界条件 |
 | `plan.md` | ✅ | 2-5 分钟粒度任务清单、覆盖矩阵 |
-| `STATUS.json` | ✅ | 状态机 + 锁 + 进度 + 调度 |
+| `STATUS.json` | ✅ | 状态机 + 锁 + 进度 + 调度 + Loop 类型 |
 
 ### 命名规则
 
@@ -240,6 +245,49 @@ AI 根据复杂度判断，常见：
 ## 依赖
 ```
 
+#### strategy.md
+
+```markdown
+# Strategy: <topic>
+
+## 达成度维度（Loop 出口判据）
+
+> 定义"做完 = 什么样"，由 §7 归档时逐维度打分。
+
+| 维度 | 定义 | 度量方式 | 达标线 |
+|------|------|---------|--------|
+| 功能完整度 | plan 所有 Task ✅ | completed / total | 100% |
+<!-- 以下维度按 Loop 类型按需填写 -->
+
+## 技术决策记录（ADR）
+
+### ADR-001: <决策标题>
+
+- **背景**：<为什么需要做决策>
+- **备选方案**：A) ... / B) ... / C) ...
+- **决策**：选 A，因为 ...
+- **后果**：<正面/负面/需关注的>
+
+## 组件策略（design Loop 必填）
+
+| 组件 | 策略 | 说明 |
+|------|------|------|
+<!-- native: 直接用设计稿 HTML 结构 -->
+<!-- extend: 扩展现有 shadcn/ui 组件 variant -->
+<!-- wrap: 二次封装（动效/复合交互） -->
+<!-- custom: 从零构建 -->
+
+## 验证策略
+
+| 层级 | 工具/方式 | 频率 |
+|------|---------|------|
+| 静态分析 | typecheck + lint | 每 Task |
+| 契约测试 | vitest 组件契约 | 每 Task |
+| 交互测试 | Playwright | 每 Phase |
+| 视觉回归 | 截图对比 | 每 Phase |
+| E2E | 全流程冒烟 | 归档前 |
+```
+
 #### acceptance.md
 
 ```markdown
@@ -267,7 +315,7 @@ AI 根据复杂度判断，常见：
 ```markdown
 # Plan: <topic>
 
-> 依赖: spec.md, acceptance.md
+> 依赖: spec.md, strategy.md, acceptance.md
 
 ## 任务清单
 
@@ -292,6 +340,7 @@ AI 根据复杂度判断，常见：
 {
   "version": "1.0",
   "topic": "report-export",
+  "type": "feature",
   "summary": "报告导出支持多文档格式",
   "created": "2026-06-22T02:00:00Z",
   "lock": {
@@ -301,10 +350,12 @@ AI 根据复杂度判断，常见：
     "expires_at": "...",
     "heartbeat": "..."
   },
+  "type": "design | feature | refactor | fix | infra",
   "thread": "spec | dev | done",
   "mode": "skeleton | filling | ready | go | executing | reviewing | done | abandoned",
   "docs": {
     "spec":       { "status": "skeleton | draft | done", "required": true },
+    "strategy":   { "status": "...", "required": true },
     "acceptance": { "status": "...", "required": true },
     "plan":       { "status": "...", "required": true }
   },
@@ -346,13 +397,15 @@ AI 根据复杂度判断，常见：
 
 **流程**：主线程编排 → subagent 生成 → 用户确认 → 修改 → 再确认
 
-1. 创建 `docs/specs/<topic>/` + STATUS.json，文档标 `skeleton`
+1. 创建 `docs/specs/<topic>/` + STATUS.json（含 `type` 字段），文档标 `skeleton`
 2. **🎨 设计目录检测**（见下方增强段）
 3. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
 4. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
-5. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
-6. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
-7. 全部 done + 校验通过 → `go_ready: true`
+5. **主线程生成 strategy.md** → 用户确认 → 标 `done`（见下方「strategy.md 生成」段）
+6. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
+7. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
+8. **项目 rule 检查**：按 Loop type 检查是否需要创建/更新项目级 rule 文件（见下方）
+9. 全部 done + 校验通过 → `go_ready: true`
 
 ### 设计对齐增强（design/ 自动检测）
 
@@ -370,6 +423,56 @@ AI 根据复杂度判断，常见：
 
 **为什么强制**：未做全页面清点的设计 Loop 极易只覆盖"最显眼"的页面而悄悄跳过其余，导致造线结束后才发现大面积遗漏——此时已耗尽 budget，返工成本极高。
 
+### strategy.md 生成
+
+**步骤 5 详细流程**：主线程根据 spec + acceptance 生成 strategy.md，内容由 Loop 的 `type` 字段驱动：
+
+| Loop type | strategy.md 重点板块 |
+|-----------|---------------------|
+| `design` | 组件策略（native/extend/wrap/custom）+ 视觉验证策略 |
+| `feature` | 技术选型 ADR + API 契约 + 性能预算 |
+| `refactor` | 迁移路径 + 兼容策略 + 回退方案 |
+| `fix` | 根因分析 + 修复方案对比 + 回归防护 |
+| `infra` | 工具链评估 + CI/CD 影响 + 渐进部署 |
+
+**达成度维度定义**（strategy.md 核心段）：
+
+每个 Loop 必须定义"完成 = 什么样"的多维度判据。§7 归档时逐维度打分，未达标则不可归档。通用维度：
+
+| 维度 | 适用 type | 示例度量 |
+|------|-----------|---------|
+| 功能完整度 | 全部 | Task 完成率 100% |
+| 验收通过率 | 全部 | acceptance.md 全 ✅ |
+| 视觉保真度 | design | 截图对比无偏差 |
+| 测试覆盖 | feature/refactor | 新增代码有测试 |
+| 回归安全 | refactor/fix | 现有测试全绿 |
+| 文档同步 | 全部 | spec/plan/acceptance 三文件同步 |
+
+AI 从 spec 中提取目标，自动推荐维度组合，用户确认后写入 strategy.md。
+
+### 项目 rule 检查（三层同步机制）
+
+> 各复归其根——规范归 rule 文件不归会话。
+
+**触发时机**：谋线步骤 8，Go Gate 之前最后检查。
+
+**三层同步**：
+
+| 层级 | 触发时机 | 强度 | 行为 |
+|------|---------|------|------|
+| 谋线脚手架 | 步骤 8 | 🔒 硬性 | 按 Loop type 检查 `.claude/rules/` 下是否缺必要 rule 文件 → 缺则自动创建 |
+| 归档同步 | §7 归档 | 🔒 硬性 | 造线中产生的规范性沉淀写入 rule 文件 |
+| 首检感知 | 首轮交互 | ⚡ 软性 | 进入项目时扫描 rule 完整度（见 dao.md 项目标准结构） |
+
+**按 Loop type 的 rule 脚手架**：
+
+| Loop type | 检查的 rule 文件 | 缺失时动作 |
+|-----------|-----------------|-----------|
+| `design` | `design-tokens.md`、`design-spirit.md` | 从模板创建（模板见 dao-design-open §B） |
+| `feature` | `architecture.md` | 提醒创建 |
+| `refactor` | `architecture.md`、`testing.md` | 提醒创建 |
+| 全部 | `CLAUDE.md` < 80 行 | 提醒精简 |
+
 ### subagent 调度指令
 
 谋线中主线程是**编排者**，不亲自写大段文档：
@@ -378,7 +481,8 @@ AI 根据复杂度判断，常见：
 |------|---------|------|
 | spec.md | `Agent(subagent_type="dao-brainstormer", model="sonnet", prompt="基于以下需求生成 spec：<需求>。项目背景：<CLAUDE.md 摘要>。输出到 docs/specs/<topic>/spec.md，按模板格式。")` | brainstormer 做苏格拉底式挖掘 + 方案对比 |
 | acceptance.md | 主线程直接写 | 从 spec 机械推导验收标准，无需 subagent |
-| plan.md | `Agent(subagent_type="dao-plan-writer", model="sonnet", prompt="基于已确认的 spec.md 和 acceptance.md 生成实施计划。读取 docs/specs/<topic>/ 下两个文件，输出 plan.md，含 2-5 分钟粒度任务、代码模板、覆盖矩阵。")` | plan-writer 拆任务 + 写代码模板 |
+| strategy.md | 主线程直接写 | 从 spec + acceptance 推导 HOW 决策：达成度维度 + 组件/验证策略 + ADR |
+| plan.md | `Agent(subagent_type="dao-plan-writer", model="sonnet", prompt="基于已确认的 spec.md、acceptance.md 和 strategy.md 生成实施计划。读取 docs/specs/<topic>/ 下三个文件，输出 plan.md，含 2-5 分钟粒度任务、代码模板、覆盖矩阵。")` | plan-writer 拆任务 + 写代码模板 |
 
 **subagent 返回后**，主线程展示关键段落给用户确认，不全文贴出。用户确认后更新 STATUS.json。
 
@@ -420,14 +524,33 @@ AI 根据复杂度判断，常见：
 
 ```
 Go → 环境准备(install/基线测试)
-  → 逐 Task 派发 subagent(写码→typecheck→test→commit→spec三文件同步)
+  → 逐 Task 派发 subagent(写码→commit→spec三文件同步)
+  → Task 完成后验证(typecheck→test→契约测试)
+  → Phase 边界检查点(组件健康→视觉回归→动态组件提炼)
   → 全量验证（主线程）
   → 逐条验收(对照 acceptance.md)
   → 交叉 Review → Agent(subagent_type="dao-reviewer")
   → 核心模块追加 → Agent(subagent_type="dao-reviewer-critical")
-  → 验收比对（归档前必须）
+  → 目标达成度评估（§7 归档门控）
   → 归根(merge/PR) → 归档
 ```
+
+### 验证节奏（Task 级 + Phase 级）
+
+> 为道日损——file 级验证浪费 token，Task 级恰到好处。
+
+**Task 级验证**（每 Task commit 后）：
+- `typecheck`（全量，快，必做）
+- `test`（受影响范围，用 `--changedSince` 或全量）
+- 契约测试（有则跑）
+
+**Phase 级检查点**（每个 Phase 最后一个 Task 完成后）：
+- 组件健康扫描：检查新增的原生 HTML 是否应提炼为组件（`dao-component-radar`）
+- 视觉回归：截图对比（design Loop）
+- 交互验证：关键交互路径走查（design Loop）
+- 动态组件提炼：Phase 边界是发现跨 Task 重复模式的最佳时机——**造线中发现可复用模式立即提炼**，不推迟到下一个 Loop
+
+**禁止 file 级验证**：不在每次文件保存后跑 typecheck/test。subagent 内部可跑快速语法检查，但完整验证管线在 Task commit 后统一执行。
 
 ### Spec 三文件同步（🔒 每 Task commit 后必执行）
 
@@ -502,20 +625,76 @@ git push/pull STATUS.json。新 loop push 到 main 后，其他 session pull 即
 
 ## §7 归档
 
-### 验收比对（🔒 归档前必须）
+### 目标达成度评估（🔒 归档前必须）
 
-> 慎终如始——plan 全 ✅ ≠ 真完成。原始 plan 基于初始分析拆解，执行过程中会产生新偏差（代码副作用、初始遗漏）。
+> 慎终如始——plan 全 ✅ ≠ 真完成。"所有任务做完" ≠ "目标达成"。
 
-**当 plan.md 所有 Task 标记 ✅ 时，禁止直接归档**。必须插入验收比对阶段：
+**当 plan.md 所有 Task 标记 ✅ 时，禁止直接归档**。必须完成以下四步评估：
 
-1. **终态验证**：对照 acceptance.md 逐条核验（跑命令、截图对比、代码审查）
-2. **发现新偏差** → 追加新 Task 到 plan.md + acceptance.md + STATUS.json → 继续造线
-3. **无新偏差** → 验收通过 → 进入归档流程
-4. 循环直到偏差清零
+#### 7.1 多维度打分
 
-**UI/设计类 Loop 特殊要求**：终态验证必须包含**全量截图审计**（当前 app 状态 vs 设计稿，逐页对比），不可只做代码审查。
+对照 strategy.md 中定义的「达成度维度」逐维度打分：
 
-**违反检测**：若 `completed_tasks.length ≥ total_tasks` 且 AI 准备写 `mode: done` → 检查是否执行过验收比对 → 未执行则强制回到验收步骤。
+```
+📊 目标达成度评估：
+| 维度 | 达标线 | 实际 | 状态 |
+|------|--------|------|------|
+| 功能完整度 | 100% | 100% | ✅ |
+| 视觉保真度 | 截图无偏差 | 3处微偏差 | ⚠️ |
+| 测试覆盖 | 新代码有测试 | 92% | ✅ |
+| … | … | … | … |
+```
+
+**全 ✅ → 进入 7.3 学习提取。有 ⚠️ 或 ❌ → 进入 7.2 严重度分流。**
+
+#### 7.2 严重度分流
+
+对每个未达标项，按严重度决定处理方式：
+
+| 严重度 | 判据 | 处理 | 示例 |
+|--------|------|------|------|
+| `trivial` | ≤1 文件，≤5 行，纯样式微调 | 就地修，不开 Task | 间距差 2px |
+| `minor` | 2-3 行，当前 Task 范围内 | 追加 micro-task（T-M1），当场修完 | 缺一个 hover 态 |
+| `major` | 新增功能点或 3+ 文件 | 追加正式 Task（T31+），继续造线 | 漏了一个页面 |
+| `critical` | 超出 spec 范围，需重新设计 | 结束当前 Loop + 开新 Loop | 交互模型需重构 |
+
+**trivial + minor 修完后重新打分。major 追加 Task 后继续造线循环。critical 直接归档当前进度并开新 Loop。**
+
+**UI/设计类 Loop 特殊要求**：打分必须包含**全量截图审计**（当前 app 状态 vs 设计稿，逐页对比），不可只做代码审查。
+
+#### 7.3 学习提取（AI 自主判断 + 用户确认）
+
+> 知常曰明——做完了要知道学到了什么。
+
+达成度全 ✅ 后，AI **自主**执行以下步骤：
+
+1. **扫描 git log**：提取本 Loop 分支的全部 commit，按类别归纳
+2. **识别可沉淀知识**：从执行过程中提取模式/教训/决策/坑
+3. **分类归位建议**：
+
+| 类别 | 归位目标 | 示例 |
+|------|---------|------|
+| 项目级模式 | `.claude/rules/` 或 `CLAUDE.md` | "本项目 Button 的 size variant 命名规则" |
+| 跨项目教训 | `memory/`（Claude Code）或 Memory MCP | "Windows PowerShell 的 heredoc 假错" |
+| 方法论改进 | windsurf-dao skill/dao.md | "Phase 级检查点比 file 级更高效" |
+| 纯事实记录 | 不写 | "修了 30 个 Task" |
+
+4. **起草 memory 条目**（含 frontmatter），通过 **AskUserQuestion** 让用户确认：
+   - 选项 A：确认写入
+   - 选项 B：修改后写入
+   - 选项 C：不需要沉淀
+
+**AI 判断要不要写、怎么写；用户决定写不写。** 纯事实（改了几个文件、花了多久）不写——那是 HANDOFF.md 的职责。
+
+#### 7.4 规范同步
+
+归档时检查造线过程中是否产生了应沉淀的规范：
+
+- 新增的 CSS token → 更新 `design-tokens.md`
+- 新增的组件 → 更新 `component-health.md`
+- 新发现的架构约束 → 更新 `architecture.md`
+
+**违反检测**：若 `completed_tasks.length ≥ total_tasks` 且 AI 准备写 `mode: done` → 检查是否执行过达成度评估 → 未执行则强制回到 7.1。
 
 ### 流程
 
@@ -532,7 +711,7 @@ docs/specs/
 ├── _archive/
 │   ├── INDEX.md
 │   └── report-export/
-│       ├── spec.md / acceptance.md / plan.md / STATUS.json
+│       ├── spec.md / strategy.md / acceptance.md / plan.md / STATUS.json
 │       └── HANDOFF.md
 └── sidebar-search/           ← 活跃
 ```
