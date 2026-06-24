@@ -100,7 +100,7 @@ py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evo
 
 - **/dao-distill**：会话级全量扫描 → 走本 skill 三层路由
 - **/dao-evolve**：跨会话审查 → 检查档案层是否有该提升到记忆/行为层的遗漏
-- **dao-cycle 涅槃**：单次任务教训 → 走本 skill 三层路由
+- **dao-dev §2.5 涅槃**：单次任务教训 → 走本 skill 三层路由
 
 ## 反模式
 

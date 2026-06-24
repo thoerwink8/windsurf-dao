@@ -32,6 +32,29 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 **自动化**：100% CI。契约测试（`*contract*.spec.*`）断言组件 className 包含正确 token class。
 
+### L1.5 · 结构快照（Structural Snapshot）
+
+**判据**：App 关键区块的无障碍树（ARIA tree）与基线匹配，零结构偏差。
+
+| 维度 | pass 条件 | 验证手段 |
+|------|----------|---------|
+| 元素存在性 | 基线中每个节点在当前快照中存在 | `toMatchAriaSnapshot()` diff |
+| 元素唯一性 | 不出现基线中不存在的重复节点 | 同上（自动检测新增节点） |
+| 嵌套层级 | 父子关系与基线一致 | 同上 |
+
+**方法论**：利用 Playwright 内置 `toMatchAriaSnapshot()` 对 App 页面的关键语义区块（topbar / candidate-feed / workspace-rail 等）拍无障碍树快照，存为 YAML 基线。后续运行自动 diff——任何结构变动（元素重复/缺失/嵌套错位/语义角色变化）立刻报出。
+
+**为什么需要这一层**：L1 检查"token 值对不对"，L3 检查"像素看起来像不像"——但两者都无法检测"语义内容是否重复出现"。实例：seed 描述在 Topbar 和 BrainstormView 各渲染一次，token 全对、像素 diff 不报错，但用户看到了两段相同内容。ARIA 快照基线会自动发现这类结构性偏差。
+
+**快照粒度**：按语义区块拍（ADR-002 决策），不拍整页。区块粒度更细但更稳定——单区块更新不影响其他区块，动态内容用正则匹配降低脆性。
+
+**基线管理**：
+- 首次：`npx playwright test --update-snapshots` 生成 `*.aria.yml` 基线
+- 更新：结构有意变更时重新生成，commit message 说明变更原因
+- 存放：`*-snapshots/` 目录，纳入版本管理
+
+**自动化**：100% CI。零人工判断——结构不匹配即 fail。
+
 ### L2 · 结构布局（Structural Layout）
 
 **判据**：DOM 层级/嵌套与设计原型 HTML 对应，间距误差 ≤ 2px。
@@ -100,8 +123,8 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 | 触发场景 | 必须覆盖的层级 | 说明 |
 |----------|--------------|------|
 | UI 组件修改后 | L1 + L3 | 最小验证集 |
-| UI 任务声明完成前 | L1 + L2 + L3 | dao-verify 涅槃门前置 |
-| Loop 归档前 | L1 ~ L5 全覆盖 | 归档是承诺，不留债 |
+| UI 任务声明完成前 | L1 + L1.5 + L2 + L3 | dao-verify 涅槃门前置 |
+| Loop 归档前 | L1 ~ L5 全覆盖（含 L1.5） | 归档是承诺，不留债 |
 | 设计稿更新后 | 更新 L3 基线 + L1 ~ L3 | 基线随设计演化 |
 | 新页面首次实现 | L1 ~ L4 | 建立基线 + 状态矩阵 |
 | 发版前 | L1 ~ L5 全覆盖 | 最终门控 |
@@ -115,6 +138,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 | 层级 | 需要的能力 | 自动化目标 |
 |------|----------|-----------|
 | L1 | 源码文本搜索 + 单元/契约测试 | 100% CI |
+| L1.5 | Playwright ARIA snapshot (`toMatchAriaSnapshot`) | 100% CI |
 | L2 | DOM 结构快照 or 人工量取 | 按需 |
 | L3 | 固定 viewport 截图 + 像素级 diff + 阈值判定 | 90% CI |
 | L4 | 可编程 UI 交互（hover/focus/click）+ 逐状态截图 | 80% CI |
@@ -134,6 +158,10 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 - [ ] 所有字号使用项目 token，无 text-[Npx]
 - [ ] 圆角/阴影使用项目 token
 - [ ] 契约测试通过
+
+### L1.5 · 结构快照
+- [ ] ARIA 快照基线已建立（关键区块）
+- [ ] `toMatchAriaSnapshot()` diff 通过
 
 ### L2 · 结构
 - [ ] 组件层级与设计原型对应

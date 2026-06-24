@@ -313,14 +313,14 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
                  lens   lens   lens  lens
                 (skill) (skill)(skill)(skill)
 
-深度打磨 → /cycle 多转
-遇到bug → /cycle + debug 镜头
-测试覆盖 → /cycle + test 镜头
+深度打磨 → 深度迭代多转
+遇到bug → 深度迭代 + debug 镜头
+测试覆盖 → 深度迭代 + test 镜头
 文档生成 → /doc
 前端初始化 → stacks/frontend-nextjs.md（基建审计自动触发）
 ```
 
-镜头（lens）是 /cycle 的领域插件，按需自动加载，详见 dao-cycle.md 镜头机制。
+镜头（lens）是深度迭代的领域插件，按需自动加载。
 
 ## 反模式
 
