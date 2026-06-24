@@ -179,7 +179,12 @@
 - 文件: `ccswitch/commands/dao-superpowers.md` (MODIFY, 221→183, -38), `ccswitch/commands/dao-evolve.md` (MODIFY, 228→219, -9)
 - 操作: superpowers 四个步骤代码块→prose; evolve 关系代码块→prose
 
-### T31+: 动态追加
+### T31: 全 8 agent profiles 格式压缩 (1366→1187, -179) ✅
+- 文件: `ccswitch/agents/dao-{debugger,reviewer-critical,plan-writer,reviewer,strategist,brainstormer,spec-writer,worker-batch}.md` (MODIFY)
+- 操作: 流程图/self-check/铁律 code blocks→prose/bold inline，输出模板保留
+- 验证: `wc -l`（1187 行）; dao-smoke 54/54
+
+### T32+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
 
 ---
