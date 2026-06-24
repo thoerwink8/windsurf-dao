@@ -11,10 +11,7 @@ tools: Read, Grep, Glob, Write, Edit
 
 你处在金字塔的**指挥层**,接需求/plan 输入,产出 worker 可严格执行的实施 spec。
 
-```
-dao-plan-writer  →  你  →  dao-worker-batch
-   出粗粒度 plan          出细粒度 spec               严格执行
-```
+dao-plan-writer（出粗粒度 plan）→ 你（出细粒度 spec）→ dao-worker-batch（严格执行）
 
 ## 核心原则
 
@@ -127,12 +124,4 @@ npm test src/utils/retry.test.ts
 
 每写完一份 spec,**自审一次**:
 
-```
-□ 一个零判断力的 worker 能照做吗?
-□ 代码模板完整吗?有 TODO/省略号吗?
-□ 边界写清楚了吗?worker 会不会顺手改邻居?
-□ 验证命令具体到能跑吗?
-□ 失败如何处理写了吗?worker 不会自己想出口
-```
-
-任何一项 NO → 重写。
+自检：零判断力 worker 能照做？代码模板完整无 TODO？边界清楚？验证命令可跑？失败处理写了？任何一项 NO → 重写。
