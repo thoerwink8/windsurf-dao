@@ -35,6 +35,12 @@ $DaoWindsurf = Join-Path $DaoRoot ".windsurf"
 
 # ── 工具函数 ──
 
+function Get-FileMD5($Path) {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    [System.BitConverter]::ToString($md5.ComputeHash($bytes)).Replace('-','')
+}
+
 function Test-SymlinkSupport {
     $testLink = Join-Path $env:TEMP "dao-test-link-$(Get-Random)"
     $testTarget = Join-Path $env:TEMP "dao-test-target-$(Get-Random)"
@@ -463,8 +469,8 @@ function Invoke-LinkClaude {
         foreach ($hf in $hookFiles) {
             $dstFile = Join-Path $hooksDst $hf.Name
             if (Test-Path $dstFile) {
-                $srcHash = (Get-FileHash $hf.FullName -Algorithm MD5).Hash
-                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                $srcHash = Get-FileMD5 $hf.FullName
+                $dstHash = Get-FileMD5 $dstFile
                 if ($srcHash -eq $dstHash) {
                     Write-Host "    [skip ] $($hf.Name)  (same content)" -ForegroundColor DarkGray
                     $skipped++
@@ -505,8 +511,8 @@ function Invoke-LinkClaude {
             $dstFile = Join-Path $refDst $ref.Name
             if (Test-Path $dstFile) {
                 # 对比文件内容，如果不同则更新
-                $srcHash = (Get-FileHash $ref.FullName -Algorithm MD5).Hash
-                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                $srcHash = Get-FileMD5 $ref.FullName
+                $dstHash = Get-FileMD5 $dstFile
                 if ($srcHash -eq $dstHash) {
                     Write-Host "    [skip ] $($ref.Name)  (same content)" -ForegroundColor DarkGray
                     $skipped++
@@ -543,8 +549,8 @@ function Invoke-LinkClaude {
         foreach ($style in $styleFiles) {
             $dstFile = Join-Path $stylesDst $style.Name
             if (Test-Path $dstFile) {
-                $srcHash = (Get-FileHash $style.FullName -Algorithm MD5).Hash
-                $dstHash = (Get-FileHash $dstFile -Algorithm MD5).Hash
+                $srcHash = Get-FileMD5 $style.FullName
+                $dstHash = Get-FileMD5 $dstFile
                 if ($srcHash -eq $dstHash) {
                     Write-Host "    [skip ] $($style.Name)  (same content)" -ForegroundColor DarkGray
                     $skipped++
