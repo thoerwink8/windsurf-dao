@@ -73,7 +73,7 @@
   2. references 引用段（~80 行散布各处）：统一为文末索引表（-30 行）
 - 验证: `wc -l`（目标 ≤330 行）
 
-### T11: dao-design-fidelity 压缩 (≈4min) → A2
+### T11: dao-design-fidelity 压缩 (≈4min) → A2 ✅
 - 文件: `ccswitch/skills/dao-design-fidelity/SKILL.md` (MODIFY)
 - 操作:
   1. §6.5 验证脚本段（~100 行）：压缩到核心 workflow + 决策树（-70 行）
