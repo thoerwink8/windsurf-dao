@@ -96,7 +96,7 @@
 - 操作: 直接删除两个文件（共 44 行）
 - 验证: `ls ccswitch/commands/*.md | wc -l`（应为 10）
 
-### T14: dao-thread-tree 并入 dao-autopilot (≈5min) → A3, A4, R6
+### T14: dao-thread-tree 并入 dao-autopilot (≈5min) → A3, A4, R6 ✅
 - 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY), `ccswitch/commands/dao-thread-tree.md` (DELETE)
 - 操作: 将 thread-tree 的 Open Threads 扫描逻辑（红/黄/绿标记处理）整合到 autopilot §1.2.1，然后删除 thread-tree 文件
 - 验证: grep "Open Threads" autopilot.md 有结果; `ls ccswitch/commands/*.md | wc -l`（应为 9）
