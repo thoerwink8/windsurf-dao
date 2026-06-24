@@ -130,6 +130,10 @@
 2. `.claude/rules/`（或 `.devin/rules/`）目录存在
 3. 根目录无冗余 AI 入口（`AGENT_GUIDE.md` / `KNOWLEDGE.md` 等应归入 rules）
 4. `docs/` 结构扁平（无 specs/superpowers 分裂，统一用 `plans/`）
+5. **有 `design/` 目录时额外检查**（⚡ 软性，提醒不阻塞）：
+   - `.claude/rules/design-tokens.md` 存在（设计 token 体系）
+   - `.claude/rules/design-spirit.md` 存在（四维检查清单，模板见 `dao-design-open` §B）
+   - `.claude/rules/component-health.md` 存在（组件清单 + 替代映射）
 
 详细模板见 `skills/dao-project-scaffold/`。原则：根目录只放活文档，AI 入口 + rules 是唯一上下文通道。
 

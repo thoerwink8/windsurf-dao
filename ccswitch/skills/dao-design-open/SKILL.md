@@ -83,6 +83,38 @@ design/
 
 **当 Loop 涉及 design/ 目录的设计对齐时（由 `dao-loop` 谋线自动触发），本节提供系统化的全覆盖规划方法论，取代零散的单页翻译。**
 
+### 1.5.0 跨页组件整合扫描
+
+> 上善若水——先看全局水流，再看每条支流。
+
+**在 1.5.1 全页面清点之前**，先做跨页面维度的组件整合分析。这一步捕捉的是「神」——不是单页像素，而是跨页面共享的交互模式和组件复用机会。
+
+**步骤**：
+
+1. **通读全部 `design/*.html`**，提取所有页面共同使用的 CSS 类和 DOM 模式
+2. **建立组件复用矩阵**：
+
+```
+| 组件模式 | 出现页面 | 设计 CSS 类 | 项目组件 | 策略 |
+|---------|---------|------------|---------|------|
+| 顶栏导航 | 全部 | .topbar | — | custom |
+| Tab 切换 | 3 页 | .tabs .tab | Tabs.tsx | extend |
+| 池状态条 | 2 页 | .pool-bar | — | wrap |
+```
+
+3. **包装决策矩阵**：对每个组件决定策略级别：
+
+| 策略 | 判据 | 示例 |
+|------|------|------|
+| `native` | 设计稿结构简单，直接用 HTML/CSS 翻译 | 静态信息展示区 |
+| `extend` | 项目已有基础组件，扩展 variant 即可 | Button 增加 icon-only variant |
+| `wrap` | 需要二次封装（组合多个基础组件 / 添加动效 / 封装复合交互） | 带动画的 Popover |
+| `custom` | 项目无对应组件，设计稿有独特交互 | 拖拽排序池 |
+
+4. **将决策写入 strategy.md 的「组件策略」段**
+
+**为什么在清点前做**：如果先清点页面再逐页分析，跨页共享的组件会在每个页面被当作"新发现"重复处理，浪费 Task 粒度。先整合后清点，plan 中的共享组件 Task 天然排在第一梯队。
+
 ### 1.5.1 全页面清点
 
 枚举 `design/*.html` 中**所有**页面（排除 `gallery.html` 索引页和纯组件展示页），建立完整清单：
@@ -211,11 +243,56 @@ Open Design 的布局原语 → 项目的布局组件。
 - 项目 token 不覆盖时，用 `design/css/` 的精确值建新 token
 - **禁止硬编码**：不用内联像素值或 hex 色值，必须走 token
 
-### 3.3 交互对齐
+### 3.3 交互对齐（三层）
 
-对标 HTML 原型的 hover / focus / disabled / active 状态。
+> 形而下者谓之器，形而上者谓之道。交互是设计之神，不止于 hover 色。
 
-**注意**：HTML 原型的交互态通常写在 CSS 里（`:hover`、`:focus-visible`），项目组件可能用 variant 系统或框架 state modifier。只要视觉效果一致即可，实现方式可以不同。
+#### 3.3.1 状态层
+
+对标 HTML 原型的 hover / focus / disabled / active / loading / empty / error 状态。
+
+| 状态类型 | 检查内容 | 常见遗漏 |
+|---------|---------|---------|
+| 交互态 | `:hover`、`:focus-visible`、`:active`、`:disabled` | focus ring 缺失 |
+| 数据态 | empty state、loading skeleton、error fallback | 只做了 happy path |
+| 组合态 | disabled + hover（不应变色）、loading + click（不应触发） | 态叠加逻辑缺失 |
+
+**注意**：HTML 原型的交互态通常写在 CSS 里，项目组件可能用 variant 系统或框架 state modifier。只要视觉效果一致即可，实现方式可以不同。
+
+#### 3.3.2 动效层
+
+对标 HTML 原型中的 CSS transition / animation / keyframes。
+
+| 动效类型 | 检查内容 |
+|---------|---------|
+| 微交互 | 按钮点击反馈、hover 渐变、focus 过渡 |
+| 转场 | 页面/视图切换动画、面板展开/收起 |
+| 反馈 | loading 旋转、进度动画、toast 滑入 |
+
+**shadcn/ui 动效边界**：若设计稿动效超出 shadcn 原生能力（如弹簧物理曲线、复杂序列动画），strategy.md 中应标记为 `wrap` 策略并记录二次封装方案。
+
+**无障碍**：所有动效必须尊重 `prefers-reduced-motion: reduce`。
+
+#### 3.3.3 导航层
+
+对标 HTML 原型的页面间导航关系，确保导航闭环。
+
+| 检查维度 | 内容 |
+|---------|------|
+| 导航入口 | 每个页面的所有可点击导航元素（link/button/tab）→ 目标页面 |
+| 导航闭环 | A→B 有路径，B→A 也有路径（或有合理的返回机制） |
+| 面包屑/后退 | 深层页面有返回上级的路径 |
+| 404/空态 | 导航到不存在内容时的 fallback |
+
+**导航矩阵**（写入项目 rule 文件 `design-spirit.md`）：
+
+```
+| 起点页 | 终点页 | 触发元素 | 实现状态 |
+|--------|--------|---------|---------|
+| index | workspace | 项目卡片点击 | ✅ |
+| workspace | overview | Tab 切换 | ✅ |
+| overview | history | "完整历史→"链接 | ✅ |
+```
 
 ### 3.4 批量翻译策略
 
@@ -294,3 +371,68 @@ Open Design 的布局原语 → 项目的布局组件。
 3. **AI 自行做设计判断** — Open Design 产出与项目代码不一致时，以 Open Design 为准。AI 不应自行决定"这个颜色应该更深"或"这个间距太大"——设计决策属于设计工具，不属于编码 agent。
 
 4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-code-to-prototype`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
+
+---
+
+## §B · 项目 rule 脚手架模板
+
+> 各复归其根。设计精神归 rule 文件，不归会话。
+
+**当 dao-loop 谋线 rule 检查（§4 步骤 8）检测到 design Loop 缺少 `design-spirit.md` 时，按以下模板自动创建。**
+
+模板路径：`.claude/rules/design-spirit.md`，`paths:` 设为 `apps/*/src/**`（或项目实际前端路径）。
+
+```markdown
+---
+paths:
+  - "apps/*/src/**"
+  - "packages/*/src/**"
+---
+
+# 设计精神（四维检查清单）
+
+> 本文件由 dao-design-open 谋线自动创建，造线过程中持续更新。
+
+## 视觉维度
+- [ ] 所有色彩使用语义 token，禁止硬编码 hex/hsl
+- [ ] 字号使用 design-tokens.md 定义的 token
+- [ ] 圆角/阴影/间距使用项目 token 体系
+- [ ] 亮暗双主题视觉一致
+
+## 交互维度
+- [ ] 所有可交互元素有 hover/focus/active/disabled 四态
+- [ ] 动效尊重 prefers-reduced-motion
+- [ ] Loading/Empty/Error 三态有设计覆盖
+- [ ] 键盘可达性（Tab 序 + Enter/Escape 响应）
+
+## 导航维度
+- [ ] 页面间导航形成闭环（去得了就回得来）
+- [ ] 深层页面有返回上级路径
+- [ ] 导航矩阵（下方）覆盖所有页面跳转
+
+## 无障碍维度
+- [ ] 图标按钮有 aria-label
+- [ ] 对话框有 aria-modal + aria-labelledby
+- [ ] 进度指示有 role="progressbar" + aria-valuenow
+- [ ] 状态变更有 aria-live 通知
+
+## 组件策略判据
+
+| 场景 | 策略 | 判断标准 |
+|------|------|---------|
+| 设计稿结构简单，直接翻译 | native | 无交互、无状态、无复用 |
+| 项目已有组件可扩展 | extend | 增加 variant/size 即可覆盖 |
+| 需要组合或添加动效 | wrap | 单个基础组件不够，需封装 |
+| 全新独特交互 | custom | 无现有组件可复用 |
+
+## 导航闭环矩阵
+
+<!-- 造线过程中持续填写 -->
+| 起点页 | 终点页 | 触发元素 | 实现状态 |
+|--------|--------|---------|---------|
+```
+
+**更新时机**：
+- 谋线创建（§4 步骤 8）：初始化模板
+- 造线 Phase 检查点（§5）：更新导航矩阵 + 勾选已覆盖的检查项
+- 归档规范同步（§7.4）：最终更新，标记未覆盖项为 deferred
