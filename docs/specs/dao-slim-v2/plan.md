@@ -184,10 +184,15 @@
 - 操作: 流程图/self-check/铁律 code blocks→prose/bold inline，输出模板保留
 - 验证: `wc -l`（1187 行）; dao-smoke 54/54
 
-### T32: 终态评估 — 全维度验收 + 改无可改确认 ✅
+### T32: 终态评估 — 全维度验收 + ccswitch 改无可改确认 ✅
 - 操作: 逐项验收 A1-A8 + R1-R6，交叉引用扫描，跨文件冗余排查，并发改动检查
 - 结果: 全 ✅（dao.md 128/180, skills 2912/3600, cmds 8≤9 + 1490/1900, smoke 54/54, 0 断链）
-- 结论: 所有维度达标，剩余代码块均为功能性输出模板不可压缩，Loop 达到改无可改
+- 结论: ccswitch 维度达标，发现 .devin/rules/ always-on + CLAUDE.md 新维度
+
+### T33: .devin/rules always-on + CLAUDE.md 格式压缩 (-55行) ✅
+- 文件: `.devin/rules/shell.md` (147→118, -29), `superpowers-gate.md` (124→118, -6), `knowledge-routing.md` (88→76, -12), `CLAUDE.md` (90→82, -8)
+- 操作: shell 3个 code blocks→inline + 幽灵判定→prose; gate 实战见证→1段; routing 涅槃+补漏→inline; CLAUDE dao.ps1 block→1行
+- 验证: dao-smoke 54/54
 
 ---
 

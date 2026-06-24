@@ -53,15 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 （前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
-底层工具（`dao.ps1`，一般不需直接调用，dao.bat 内部使用）：
-
-```powershell
-.\dao.ps1 link-claude         # 部署到 Claude Code（dao.bat --deploy 等效）
-.\dao.ps1 unlink-claude       # 反向移除 dao 链接
-.\dao.ps1 link-global         # 链接 global_rules.md 到 Windsurf 全局配置
-.\dao.ps1 link-codex          # 镜像 skills 到 Codex
-.\dao.ps1 set-terminal        # IDE 默认终端 cmd.exe → Git Bash
-```
+底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `link-global` / `link-codex` / `set-terminal`
 
 自检与测试（无 test runner 框架，直接跑）：
 
