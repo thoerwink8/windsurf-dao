@@ -29,7 +29,7 @@ try {
     '{"sentinel":true}' | Set-Content -Path (Join-Path $claudeDir "settings.json") -Encoding UTF8
     "sentinel agent" | Set-Content -Path (Join-Path $claudeDir "agents\dao-test.md") -Encoding UTF8
 
-    foreach ($name in @("dao-superpowers", "dao-cycle", "dao-dev", "dao-evolve", "dao-commit")) {
+    foreach ($name in @("dao-superpowers", "dao-dev", "dao-evolve", "dao-commit")) {
         @"
 ---
 description: 测试命令 $name
@@ -42,8 +42,6 @@ argument-hint: "[ARG]"
 "@ | Set-Content -Path (Join-Path $claudeDir "commands\$name.md") -Encoding UTF8
     }
 
-    "low frequency" | Set-Content -Path (Join-Path $claudeDir "commands\dao-thread-tree.md") -Encoding UTF8
-
     $realConflict = Join-Path $TmpRoot ".codex\prompts\dao-dev.md"
     New-Item -ItemType Directory -Path (Split-Path $realConflict -Parent) -Force | Out-Null
     "do not replace" | Set-Content -Path $realConflict -Encoding UTF8
@@ -55,7 +53,7 @@ argument-hint: "[ARG]"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript link-codex-prompts | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "link-codex-prompts should exit successfully"
 
-    foreach ($name in @("dao-superpowers", "dao-cycle", "dao-evolve", "dao-commit")) {
+    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit")) {
         $prompt = Join-Path $TmpRoot ".codex\prompts\$name.md"
         Assert-True (Test-Path $prompt) "$name prompt should be written into Codex"
         $item = Get-Item $prompt -Force
@@ -85,7 +83,7 @@ argument-hint: "[ARG]"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript unlink-codex-prompts | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "unlink-codex-prompts should exit successfully"
 
-    foreach ($name in @("dao-superpowers", "dao-cycle", "dao-evolve", "dao-commit", "dao-philosophy")) {
+    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit", "dao-philosophy")) {
         Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\$name.md"))) "$name prompt should be unlinked from Codex"
     }
     Assert-True (Test-Path $realConflict) "unlink-codex-prompts must preserve real prompt files"

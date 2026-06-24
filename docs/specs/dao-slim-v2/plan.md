@@ -101,7 +101,7 @@
 - 操作: 将 thread-tree 的 Open Threads 扫描逻辑（红/黄/绿标记处理）整合到 autopilot §1.2.1，然后删除 thread-tree 文件
 - 验证: grep "Open Threads" autopilot.md 有结果; `ls ccswitch/commands/*.md | wc -l`（应为 9）
 
-### T15: dao-cycle 并入 dao-dev (≈5min) → A3, A4, R6
+### T15: dao-cycle 并入 dao-dev (≈5min) → A3, A4, R6 ✅
 - 文件: `ccswitch/commands/dao-dev.md` (MODIFY), `ccswitch/commands/dao-cycle.md` (DELETE)
 - 操作: dao-cycle 五阶段核心（观/行/验/省/改升）并入 dao-dev 作为 §2.5 深度迭代模式段（~30 行精华），删除 cycle 独立文件
 - 验证: grep "观.*行.*验.*省" dao-dev.md 有结果; `ls ccswitch/commands/*.md | wc -l`（应为 8）
