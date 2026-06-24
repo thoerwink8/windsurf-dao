@@ -167,7 +167,11 @@
 - 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY)
 - 操作: 唯一激活关卡/用户中断/清理/stale检测/跨session恢复 展示格式压缩
 
-### T28+: 动态追加
+### T28: dao-loop cmd + dao-design-qa + dao-design-layout 压缩 ✅
+- 文件: `ccswitch/commands/dao-loop.md` (MODIFY, 137→102, -35), `ccswitch/skills/dao-design-qa/SKILL.md` (MODIFY, 134→118, -16), `ccswitch/skills/dao-design-layout/SKILL.md` (MODIFY, 161→158, -3)
+- 操作: 孤儿展示/续做模板/汇总/总览表 code blocks→prose; QA ASCII流程图→1行prose; layout引言压缩
+
+### T29+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
 - 根据发现追加新 Task
 
