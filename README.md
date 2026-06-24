@@ -67,7 +67,6 @@
 | `/dao-autopilot` | 自主驾驶：探测 TODO/AGENT_GUIDE → 执行 → 回写 |
 | `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
 | `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
-| `/dao-cycle` | 五相迭代（观→行→验→省→改升） |
 | `/dao-distill` | 会话级知识沉淀 |
 | `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
@@ -133,7 +132,7 @@ config-sync/
 |---|---|---|---|
 | 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
 | 技能 | `ccswitch/skills/dao-*/` | 38 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含原 dao + 部分 rule 转 skill + 自检 skill） |
-| 命令 | `ccswitch/commands/dao-*.md` | 10 | slash command，`/dao-dev` `/dao-cycle` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
+| 命令 | `ccswitch/commands/dao-*.md` | 8 | slash command，`/dao-dev` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
 | 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
 | 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 
