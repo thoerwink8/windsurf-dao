@@ -21,7 +21,7 @@
   2. 续力门控感知（~18 行，含门控表格和豁免列表）从 dao.md 删除，门控表格已在各 skill 内自带（dao-loop §1.5 已有必止声明）
 - 验证: `wc -l ccswitch/dao.md`（应再减 ~38 行）; grep "浏览器" dao.md 应无结果
 
-### T4: 八句根基 + 德·行止 + 言·名之则压缩 (≈4min) → A1, R1, R3
+### T4: 八句根基 + 德·行止 + 言·名之则压缩 (≈4min) → A1, R1, R3 ✅
 - 文件: `ccswitch/dao.md` (MODIFY)
 - 操作:
   1. 八句根基：去掉章号 `(25 章)` 等，每句压到一行（12→8 行）
@@ -29,7 +29,7 @@
   3. 言·名之则：删哲学引言、压缩 commit 前缀规则说明（9→5 行）
 - 验证: grep "道法自然" dao.md 仍存在; grep "\[cc\]" dao.md 仍存在; `wc -l`（应再减 ~12 行）
 
-### T5: dao.md 项目规范沉淀段压缩 (≈3min) → A1
+### T5: dao.md 项目规范沉淀段压缩 (≈3min) → A1 ✅
 - 文件: `ccswitch/dao.md` (MODIFY)
 - 操作: 「项目规范自动沉淀」段（~8 行）压缩到 2 行核心规则；「流程缺口修复归因」段判据树（~12 行）压缩到 3 行决策要点；「项目标准结构」首次检查清单（~10 行）已有 dao-project-scaffold skill 覆盖，dao.md 内仅保留一句引用
 - 验证: `wc -l ccswitch/dao.md` 目标 ≤180 行
@@ -38,7 +38,7 @@
 
 ## Phase 2: Skills 压缩
 
-### T6: dao-loop 模板外置 (≈5min) → A2, A7
+### T6: dao-loop 模板外置 (≈5min) → A2, A7 ✅
 - 文件: `ccswitch/skills/dao-loop/SKILL.md` (MODIFY), `ccswitch/skills/dao-loop/templates/` (NEW, 4 files)
 - 操作: §2 核心文件集中的 spec/strategy/acceptance/plan 四套模板（~120 行）外置到 `templates/` 子目录，skill 内替换为结构概要 + "详见 templates/xxx-template.md"
 - 验证: `wc -l ccswitch/skills/dao-loop/SKILL.md`（应减 ~100 行）; 4 个模板文件存在且非空
