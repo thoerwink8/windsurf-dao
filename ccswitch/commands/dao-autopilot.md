@@ -49,26 +49,11 @@ argument-hint: ""
 ---
 ## 单 Task 闭环铁律
 
-> 慎终如始，则无败事矣。— 第 64 章
+> 慎终如始，则无败事矣。
 
-dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。
-**绝对不允许「批量推进」**——连做多个 task 才一次 commit / update / 验证。
+所有推进遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。**绝对不允许批量推进**——每 task 必须独立 commit + state 更新 + TODO 勾选 + 验证。原因：回退粒度 / 跨 session 恢复真相 / 用户看到的进度必须实时准确。
 
-### 为什么不可跨 task 合并
-
-1. **回退最小单位 = 一个 task**：合并多 task 一 commit，丢失精确 git revert 能力；用户说「撤销 Task X」时无法做到
-2. **state.json 是跨 session 真相源**：攒着不写，session 中断时下次恢复看到的是「上一批没完成」的假象，可能重做或漏做
-3. **TODO.md 是用户审查唯一接口**：攒着不更新，用户看到的是「假进度」——他以为还在 Task A，其实 Task A/B/C/D 都做了但都没标
-4. **验证不能合并**：「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
-
-合并多 task = 用「效率」的虚名，损「可审计 / 可回退 / 可恢复」的实质，是反 dao 的「成事而败之」。
-
-### 唯一允许的合并场景
-
-**强耦合组合 task**：A 的 verify 隐含 B 的前置（如「装包 + 写 config」，写 config 的 verify 必然包含装包成功）。
-- 必须在 commit message 显式写组合 ID，且保留当前宿主前缀：`[宿主] autopilot(TG-1+TG-2): ...`
-- 必须在 §2.1.1 涅槃门中标明这是组合 task
-- ≤ 2 个 task 合并；超过 2 个一律拆开
+**唯一例外**：强耦合 ≤2 task（A 的 verify 隐含 B 的前置），commit message 写 `[宿主] autopilot(TG-1+TG-2): ...`。
 
 ---
 
@@ -80,35 +65,9 @@ dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 �
 
 读取或创建两个核心文件：
 
-**TODO.md**（若不存在则创建）：
-```markdown
-# [项目名] · TODO
+**TODO.md**（若不存在则创建）：含 `✅ 已完成` / `❌ 已作废` / `🚧 待实现` 三段，每段下 `- [ ]` 条目。
 
-> 任务清单。
-
-## ✅ 已完成
-
-## ❌ 已作废
-
-## 🚧 待实现
-
-```
-
-**AGENT_GUIDE.md**（若不存在则创建）：
-```markdown
-# [项目名] · Agent 指南
-
-> 活体知识库。记录项目概览、架构决策、开发指南，并指向 `data/` 中的演化 CSV。
-
-## 一、项目概览
-
-[待补充]
-
-## 二、演化索引
-
-> 演化记录已迁移至 `data/evolution-entries.csv` + `data/evolution-lessons.csv`。
-
-```
+**AGENT_GUIDE.md**（若不存在则创建）：项目概览 + 演化索引（指向 `data/*.csv`）。
 
 #### 1.2 意图建模
 
@@ -160,72 +119,25 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 - 依赖关系尽量扁平（宽而浅，优于深依赖链）
 - Task 粒度：≤ 1 小时工作量，确保 context 内可完成
 
-#### 1.3.0 state 文件为什么放 `.dao-autopilot/`（重要设计约束）
+#### 1.3.0 state 文件位置
 
-> **铁律**：autopilot state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放进任何 AI 配置目录。
+> **铁律**：state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放进 AI 配置目录（历史教训：写进配置目录导致 dao 体系规则整体失效）。通过 `.git/info/exclude` 本地排除，不进 git、不混淆项目配置、完成后整目录可删。
 
-**原因**：state.json 是执行元数据，不是项目产物——它只服务于回退与跨 session 恢复。把它放进项目根的独立 `.dao-autopilot/` 目录，并通过 `.git/info/exclude` 本地排除，可以做到：
+#### 1.3.1 mode 状态机
 
-- 不进入 git 历史，不污染 commit
-- 不与项目自身配置（CLAUDE.md / settings.json / 其它工具配置目录）混淆，AI 的 dao 体系约束（见 `ccswitch/dao.md`）始终正常加载
-- 完成后整目录可删，项目回到干净态
+**mode 字段必须显式管理**（续推机制据此判断注入/避让）：
 
-> 历史教训（2026-05-11 TraceyU M1）：早期把 state 写进 AI 配置目录，导致项目级配置被误判为"自带配置"，dao 体系规则（如「禁文件式 memory 滥写」铁律）整体失效。移到独立 `.dao-autopilot/` 后问题消失。
+| mode 值 | 何时设 | 续推行为 |
+|---------|-------|---------|
+| `"running"` | 激活后 / ask 返回后 | ✅ stalled 则注入 continue |
+| `"awaiting_user_decision"` | AskUserQuestion 前 / 中断 / 收尾 ask | ❌ 不注入 |
+| `"completed"` / `"aborted"` | §五完成 / §四用户 abort | ❌ 不注入 |
 
-#### 1.3.1 mode 状态机（自动续推依据）
-
-> **背景**：当存在外部自动续推机制（监视 `.dao-autopilot/state.json`，在 `mode === "running"` 且 AI 长时间静默时自动注入 `continue` 让 autopilot 恢复推进）时，`mode` 字段是它判断「该注入 / 该避让」的依据。单 run 注入有上限以防失控。即便没有外部机制，显式管理 mode 也让跨 session 恢复更可靠。
-
-**mode 字段必须显式管理**，让续推机制知道何时该注入、何时该避让：
-
-| 阶段 | mode 值 | 续推机制行为 |
-|------|---------|--------------|
-| 1.6 激活后进入执行循环 | `"running"` | ✅ 监听是否 stalled，stalled 则注入 continue |
-| 2.2 错误处理（系统级阻断写 checkpoint）| `"running"` | 同上（错误恢复也算 stalled 的一种） |
-| §三 用户中断 → AskUserQuestion 前 | `"awaiting_user_decision"` | ❌ **不注入**——这是设计上的用户决策点 |
-| §三 ask 返回后继续执行 | `"running"` | 恢复 ✅ |
-| §四 用户范围调整 ask | `"awaiting_user_decision"` | ❌ 不注入 |
-| §五 收尾 ask（合并/继续/回退）| `"awaiting_user_decision"` | ❌ 不注入 |
-| §五.4 完成清理前 | `"completed"` | ❌ 不注入 |
-| §四 用户主动 abort | `"aborted"` | ❌ 不注入 |
-| §五.4 完成清理后 | _state.json 删除_ | 文件不存在 = 续推机制跳过 |
-
-**mode 转换操作**（用 Bash 工具执行；以下为 PowerShell 写法，其它 shell 等价处理）：
-
-```powershell
-# 进入 AskUserQuestion 前
-$state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
-$state.mode = "awaiting_user_decision"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-
-# ask 返回后继续
-$state.mode = "running"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-
-# 完成时
-$state.mode = "completed"
-$state | ConvertTo-Json -Depth 10 | Set-Content ".dao-autopilot/state.json" -Encoding UTF8
-# 紧接着 §5.4 删除 state.json
-```
-
-**续推机制写入的字段**（autopilot 流程读到时透传保留）：
-
-- `_stalled_inject_count`: number — 注入次数计数
-- `_last_stalled_inject_at`: ISO 时间戳 — 最近一次注入时间
+mode 转换：读 state.json → 改 mode 字段 → 写回。续推机制写入的 `_stalled_inject_count` / `_last_stalled_inject_at` 字段透传保留。
 
 #### 1.4 创建工作分支
 
-```powershell
-git checkout -b autopilot/[goal-slug]
-
-# 确保 state.json 不进入 git 历史
-$excludeFile = ".git\info\exclude"
-$excludeEntry = ".dao-autopilot/"
-if (-not (Select-String -Path $excludeFile -Pattern [regex]::Escape($excludeEntry) -Quiet)) {
-    Add-Content $excludeFile "`n# autopilot state (generated)`n$excludeEntry"
-}
-New-Item -ItemType Directory -Force ".dao-autopilot" | Out-Null
-```
+`git checkout -b autopilot/[goal-slug]` → 创建 `.dao-autopilot/` 目录 → 将 `.dao-autopilot/` 追加到 `.git/info/exclude`（幂等）。
 
 #### 🔒 唯一激活关卡
 
@@ -393,52 +305,14 @@ git revert [N4-commit-hash] --no-edit
 > 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
 
 
-#### 5.2.5 lesson 上提评估关卡（强制）
+#### 5.2.5 lesson 上提评估（强制 · §5.3 硬前置）
 
-> 知常曰明。重要 lesson 不上提 = 失明。
+每条新 lesson 必须过三问（即便结论"仅留 CSV"也须显式说明）：
+1. **跨项目可复用？** → 上提到 `ccswitch/skills/dao-*/SKILL.md` 或 `ccswitch/dao.md`
+2. **项目反复会撞？** → 上提到项目 `AGENT.md`
+3. **打破现有流程信念？** → 上提到 `ccswitch/dao.md` 或对应 skill
 
-§5.2 把 lesson 写入 `data/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
-
-**评估三问**(逐条 lesson 过):
-
-1. **跨项目可复用方法论？** → 评估上提到 `ccswitch/skills/dao-*/SKILL.md` 对应 skill 或 `ccswitch/dao.md` 对应规则段
-   - 例: HTTP socket.on(end) 误诊 → dao.md 调试规则段或 dao-verify skill
-   - 例: 评审发现通用模式 → dao-review skill
-
-2. **项目反复会撞的特定坑？** → 评估上提到该项目 `AGENT.md` 「项目特定坑」段
-   - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
-   - 例: 项目 schema 反复踩的 migration 坑 → 项目 AGENT.md
-
-3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `ccswitch/dao.md` 对应规则段或某 skill
-   - 例: superpowers 实战见证 → `ccswitch/dao.md` superpowers-gate 段末尾加见证
-   - 例: 发现 worktree 流程漏洞 → `ccswitch/dao.md` 心法段或对应 skill
-
-**输出格式**(autopilot §5.3 报告内必含):
-
-```
-### lesson 上提评估
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]
-- ...
-```
-
-**上提归位表**(参考 `ccswitch/dao.md` 知识归位段):
-
-| 性质 | 位置 |
-|---|---|
-| 跨项目通用方法论 | `ccswitch/skills/dao-*/SKILL.md`（7 个 skill）或 `ccswitch/dao.md` 对应规则段 |
-| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
-| 流程规则修订 | `ccswitch/dao.md` 对应规则段 |
-| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
-| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
-
-**反模式**:
-
-| 病 | 症状 | 对治 |
-|---|---|---|
-| 写完 CSV 就跑 | 单 task 写完 entry/lesson 直接进 §5.3 报告,不评估上提 | §5.2.5 是 §5.3 的硬前置,跳过 = §5 整体未完成 |
-| 全判"无需上提" | 默认全 skip,跳过显式评估 | 必须**逐条说出**判定依据,即便结论是"仅留 CSV" |
-| 边界模糊就不提 | "我不确定是不是跨项目通用" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
+判据："另一个项目踩到同样坑时帮得上吗？"帮得上 = 上提。归位路由详见 `ccswitch/dao.md` 知识归位段。
 
 
 #### 5.3 最终报告
