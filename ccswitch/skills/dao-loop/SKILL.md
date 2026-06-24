@@ -283,7 +283,7 @@ AI 根据复杂度判断，常见：
 |------|---------|------|
 | 静态分析 | typecheck + lint | 每 Task |
 | 契约测试 | vitest 组件契约 | 每 Task |
-| 交互测试 | Playwright | 每 Phase |
+| 交互测试 | 浏览器 MCP（遵循目·观门控） | 每 Phase |
 | 视觉回归 | 截图对比 | 每 Phase |
 | E2E | 全流程冒烟 | 归档前 |
 ```
@@ -545,9 +545,9 @@ Go → 环境准备(install/基线测试)
 - 契约测试（有则跑）
 
 **Phase 级检查点**（每个 Phase 最后一个 Task 完成后）：
-- 组件健康扫描：检查新增的原生 HTML 是否应提炼为组件（`dao-component-radar`）
-- 视觉回归：截图对比（design Loop）
-- 交互验证：关键交互路径走查（design Loop）
+- 组件健康扫描：检查新增的原生 HTML 是否应提炼为组件（`dao-component-radar`），同时检查已有 `ui/` 组件是否被业务组件内联重复实现
+- 视觉回归（design Loop）：**必须执行 `dao-design-fidelity` L1+L3**——L1 grep 零硬编码 + L3 Playwright headless 截图 diff。不可用"代码审查"替代截图实证
+- 交互验证（design Loop）：关键交互路径走查（`dao-design-fidelity` L4）
 - 动态组件提炼：Phase 边界是发现跨 Task 重复模式的最佳时机——**造线中发现可复用模式立即提炼**，不推迟到下一个 Loop
 
 **禁止 file 级验证**：不在每次文件保存后跑 typecheck/test。subagent 内部可跑快速语法检查，但完整验证管线在 Task commit 后统一执行。
@@ -660,7 +660,7 @@ git push/pull STATUS.json。新 loop push 到 main 后，其他 session pull 即
 
 **trivial + minor 修完后重新打分。major 追加 Task 后继续造线循环。critical 直接归档当前进度并开新 Loop。**
 
-**UI/设计类 Loop 特殊要求**：打分必须包含**全量截图审计**（当前 app 状态 vs 设计稿，逐页对比），不可只做代码审查。
+**UI/设计类 Loop 特殊要求**：打分必须包含 `dao-design-fidelity` **L1~L5 全量验证**——L3 使用 Playwright headless 截图逐页对比（当前 app vs 设计原型），不可用代码审查或人工目视替代自动化截图 diff。Token 体系变更（收敛/重命名/值调整）还须执行 `dao-design-fidelity` §6.4 的变更前后 diff 流程。
 
 #### 7.3 学习提取（AI 自主判断 + 用户确认）
 
