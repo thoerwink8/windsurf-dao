@@ -546,7 +546,7 @@ Go → 环境准备(install/基线测试)
 
 **Phase 级检查点**（每个 Phase 最后一个 Task 完成后）：
 - 组件健康扫描：检查新增的原生 HTML 是否应提炼为组件（`dao-component-radar`），同时检查已有 `ui/` 组件是否被业务组件内联重复实现
-- 视觉回归（design Loop）：**必须执行 `dao-design-fidelity` L1+L3**——L1 grep 零硬编码 + L3 Playwright headless 截图 diff。不可用"代码审查"替代截图实证
+- 视觉回归（design Loop）：**必须执行 `dao-design-fidelity` L1+L2+L3**——L1 grep 零硬编码 + L2 布局完整性检查（§6.4.1 `assertNoLayoutGap`，检测窗口边缘死区）+ L3 Playwright headless 截图 diff。不可用"代码审查"替代截图实证
 - 交互验证（design Loop）：关键交互路径走查（`dao-design-fidelity` L4）
 - 动态组件提炼：Phase 边界是发现跨 Task 重复模式的最佳时机——**造线中发现可复用模式立即提炼**，不推迟到下一个 Loop
 
