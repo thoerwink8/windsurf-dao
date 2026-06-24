@@ -141,29 +141,7 @@ mode 转换：读 state.json → 改 mode 字段 → 写回。续推机制写入
 
 #### 🔒 唯一激活关卡
 
-向用户展示：
-
-```
-## 🚗 自动驾驶准备就绪
-
-### 意图模型
-目标：[原始目标]
-成功标准：
-  - [ ] 标准A（对应 TODO.md N1）
-  - [ ] 标准B（对应 TODO.md N2）
-范围外：[明确不做的事]
-
-### 任务图（共 N 个，来自 TODO.md）
-N1 → N2 → N4
-N1 → N3 → N4
-
-### 工作分支：autopilot/[goal-slug]
-
-→ 确认后开始，过程中静默执行，发任何消息可中断查看进度
-```
-
-用户确认 → 进入执行循环
-用户调整 → 修订后重新确认
+向用户展示：意图模型（目标+成功标准+范围外）+ 任务图（ID 依赖关系）+ 工作分支名。确认→进入执行循环，调整→修订后重新确认。
 
 ---
 ### 二、执行循环（☳触 · 静默推进）
@@ -239,18 +217,9 @@ Task <ID> 涅槃 ✅
 
 用户在执行期间发送任何消息：
 
-1. 读取 `state.json` + 当前 `TODO.md` 状态
-2. 展示当前进度摘要（TODO.md 中 `[x]` vs `[ ]` 数量即是进度）：
-   ```
-   ## 📊 自动驾驶当前状态
-   完成：N1 N2 N3（3/7，见 TODO.md ✅ 区）
-   进行中：N4
-   待执行：N5 N6 N7
-   
-   当前分支：autopilot/[goal-slug]
-   ```
-3. 处理用户消息（可能是：查看/调整/回退/停止）
-4. AskUserQuestion 工具：继续/调整/回退/停止
+1. 读取 `state.json` + `TODO.md`，展示进度摘要（完成/进行中/待执行 + 分支名）
+2. 处理用户消息（查看/调整/回退/停止）
+3. AskUserQuestion：继续/调整/回退/停止
 
 ---
 
@@ -355,16 +324,7 @@ AskUserQuestion 工具：合并到 main / 继续完善 / 回退某些任务 / �
 
 #### 5.4 清理
 
-```powershell
-# 删除执行元数据（任务状态已在 TODO.md，知识已在 AGENT_GUIDE.md）
-Remove-Item ".dao-autopilot\state.json"
-# 顺手删除空目录(mode=completed 后整个 .dao-autopilot/ 应该不再需要)
-if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) {
-  Remove-Item ".dao-autopilot" -ErrorAction SilentlyContinue
-}
-```
-
-**退出自动驾驶模式，AskUserQuestion 工具规则恢复正常。**
+删除 `.dao-autopilot/state.json`（任务状态已在 TODO.md），空目录一并删除。**退出自动驾驶模式，AskUserQuestion 规则恢复正常。**
 
 ---
 ### 六、跨 Session 恢复（含 stale 检测）
@@ -377,31 +337,12 @@ if ((Get-ChildItem ".dao-autopilot" -ErrorAction SilentlyContinue).Count -eq 0) 
 
 1. 检查 `.dao-autopilot/state.json` 是否存在
 2. 不存在 → 跳过此节,正常进入新对话
-3. 存在 → **先看 mtime + mode 判 stale**：
-   ```powershell
-   $state = Get-Content ".dao-autopilot/state.json" -Raw | ConvertFrom-Json
-   $age = ((Get-Date) - (Get-Item ".dao-autopilot/state.json").LastWriteTime).TotalDays
-   $isStale = $age -gt 7 -and $state.mode -in @("idle","aborted","completed")
-   ```
-4. 若 stale (≥7 天 + mode 非 running/awaiting_user_decision) → **不视为待恢复任务**,直接 ask:
-   ```
-   检测到 stale autopilot state（mode=idle，36 天前最后修改，目标：...）
-   该任务图已经长期遗弃,task 状态可能已过时(对照 TODO.md 看真实进度)。
-   建议: 删除 state.json + 视该 autopilot 周期已结束。
-   ```
-   AskUserQuestion 工具选项: 删除 stale state / 强制视为活跃任务恢复 / 留着做参考
-5. 若非 stale (<7 天 + mode=running 或 awaiting_user_decision) → 走 §6.2 正常恢复
+3. 存在 → 读 mtime + mode 判 stale：≥7 天 + mode 非 running/awaiting_user_decision → stale，提示用户删除/强制恢复/留做参考
+4. 非 stale → 走 §6.2 正常恢复
 
 #### 6.2 正常跨 session 恢复
 
-1. 读取 state.json + TODO.md 当前状态，告知用户：
-   ```
-   检测到未完成的自动驾驶任务（目标：[...]）
-   TODO.md 进度：N/M 已完成（见 [x] 数量）
-   ```
-2. AskUserQuestion 工具：继续 / 查看进度 / 放弃
-
-恢复执行时：从第一个 `status: pending` 且依赖已满足的 Task 继续（state.json 与 TODO.md 双重确认）。
+读取 state.json + TODO.md，告知用户目标和进度。AskUserQuestion：继续/查看进度/放弃。恢复时从第一个 pending 且依赖已满足的 Task 继续。
 
 ---
 
