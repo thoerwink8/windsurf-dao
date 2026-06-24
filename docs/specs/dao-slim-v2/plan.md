@@ -80,7 +80,7 @@
   2. §6.4 状态矩阵段（~80 行）：压缩到 checklist + 示例（-30 行）
 - 验证: `wc -l`（目标 ≤290 行）
 
-### T12: dao-code-to-prototype 压缩 (≈4min) → A2
+### T12: dao-code-to-prototype 压缩 (≈4min) → A2 ✅
 - 文件: `ccswitch/skills/dao-code-to-prototype/SKILL.md` (MODIFY)
 - 操作:
   1. §0 配置发现段（~120 行）：压缩为 strategy 概要 + 核心步骤（-90 行）
