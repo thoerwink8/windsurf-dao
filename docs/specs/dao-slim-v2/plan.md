@@ -139,7 +139,35 @@
 - 操作: evolve 追踪日志/教训新鲜度/Git考古/执行格式压缩; superpowers 删35行重复执行模板
 - 验证: `wc -l`（evolve 228, superpowers 221）
 
-### T21+: 动态追加
+### T21: dao-loop §7-§8 模板外置 + §1/§1.5/§9 压缩 (511→403, -108) ✅
+- 文件: `ccswitch/skills/dao-loop/SKILL.md` (MODIFY), `ccswitch/skills/dao-loop/templates/` (NEW, 3 files)
+- 操作: INDEX.md/HANDOFF.md/PROJECT.md 模板外置; §1 展示格式/§1.5 分发流程/§9 prompt 压缩
+
+### T22: dao-design-system-playbook 压缩 (197→135, -62) ✅
+- 文件: `ccswitch/skills/dao-design-system-playbook/SKILL.md` (MODIFY)
+- 操作: 全景流程图/附录A流程+表格/关系表/验收三关压缩
+
+### T23: dao-verify 压缩 (193→153, -40) ✅
+- 文件: `ccswitch/skills/dao-verify/SKILL.md` (MODIFY)
+- 操作: 红灯词/报告格式/临时文件清理压缩
+
+### T24: dao-doc 压缩 (186→136, -50) ✅
+- 文件: `ccswitch/commands/dao-doc.md` (MODIFY)
+- 操作: 校验步骤/损之又损/关系/执行格式压缩
+
+### T25: dao-worktree 压缩 (173→141, -32) ✅
+- 文件: `ccswitch/skills/dao-worktree/SKILL.md` (MODIFY)
+- 操作: e163教训详解/工作流ASCII/反模式行压缩
+
+### T26: dao-dev 压缩 (351→301, -50) ✅
+- 文件: `ccswitch/commands/dao-dev.md` (MODIFY)
+- 操作: 关卡一/二/三展示格式/工作流协作/执行格式 code blocks 压缩
+
+### T27: dao-autopilot 二次压缩 (451→392, -59) ✅
+- 文件: `ccswitch/commands/dao-autopilot.md` (MODIFY)
+- 操作: 唯一激活关卡/用户中断/清理/stale检测/跨session恢复 展示格式压缩
+
+### T28+: 动态追加
 - 每轮造线结束后反问：还有什么可以优化？
 - 根据发现追加新 Task
 
