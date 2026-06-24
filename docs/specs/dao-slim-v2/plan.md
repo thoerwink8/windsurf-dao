@@ -4,17 +4,17 @@
 
 ## Phase 1: dao.md 瘦身（乘数效应最高）
 
-### T1: 删除全局重复段 (≈3min) → A1, R1
+### T1: 删除全局重复段 (≈3min) → A1, R1 ✅
 - 文件: `ccswitch/dao.md` (MODIFY)
 - 操作: 删除与 `~/.claude/CLAUDE.md` 重复的语言规则（"所有回复必须用中文" 出现 2 处）、删除与项目 `CLAUDE.md` 重复的知识归位表（约 12 行）
 - 验证: `wc -l ccswitch/dao.md`（应减少 ~14 行）
 
-### T2: 压缩产出归位段 (≈4min) → A1
+### T2: 压缩产出归位段 (≈4min) → A1 ✅
 - 文件: `ccswitch/dao.md` (MODIFY)
 - 操作: 产出归位提醒（当前 ~22 行）压缩到 5 行启发式规则，删除决策树图（文件写入位置判断逻辑）和详细示例
 - 验证: `wc -l ccswitch/dao.md`（应再减 ~17 行）
 
-### T3: 外置浏览器门 + 续力门控回归 (≈5min) → A1, A7
+### T3: 外置浏览器门 + 续力门控回归 (≈5min) → A1, A7 ✅
 - 文件: `ccswitch/dao.md` (MODIFY), `ccswitch/skills/dao-loop/SKILL.md` (MODIFY), `ccswitch/skills/dao-design-fidelity/SKILL.md` (MODIFY)
 - 操作:
   1. 浏览器工具选择门（~20 行）从 dao.md 删除（项目侧已有 `.claude/rules/` 覆盖机制，且 dao.md 里的描述是给项目用的，不是全局 always-on 内容）
