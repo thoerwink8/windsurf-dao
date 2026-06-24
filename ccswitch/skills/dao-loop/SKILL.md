@@ -420,13 +420,28 @@ AI 根据复杂度判断，常见：
 
 ```
 Go → 环境准备(install/基线测试)
-  → 逐 Task 派发 subagent(写码→typecheck→test→commit)
+  → 逐 Task 派发 subagent(写码→typecheck→test→commit→spec三文件同步)
   → 全量验证（主线程）
   → 逐条验收(对照 acceptance.md)
   → 交叉 Review → Agent(subagent_type="dao-reviewer")
   → 核心模块追加 → Agent(subagent_type="dao-reviewer-critical")
+  → 验收比对（归档前必须）
   → 归根(merge/PR) → 归档
 ```
+
+### Spec 三文件同步（🔒 每 Task commit 后必执行）
+
+> 为道日损——不是多做一步，是消灭"下次再说"的信息熵。
+
+**每完成一个 Task 并 commit 后，立即同步更新以下三个文件**，不可推迟到"做完几个再一起更新"：
+
+1. **STATUS.json**：`current_task` → 下一个 Task，`completed_tasks` 追加刚完成的
+2. **plan.md**：已完成 Task 标题追加 `✅`
+3. **acceptance.md**：对应验收项勾选 `[x]`
+
+**违反检测**：若发现 `STATUS.json.completed_tasks` 长度 > plan.md 中 `✅` 标记数量 → 有 Task 完成了但 plan 没同步 → 立即补齐。
+
+**为什么不能只更新 STATUS.json**：STATUS.json 是机器读的调度状态，plan.md 和 acceptance.md 是人读的进度文档。跨 session 恢复时，新 AI 需要从三个文件交叉确认"做到哪了、质量如何"。只更新一个 = 信息断裂。
 
 ### subagent 调度指令
 
@@ -487,9 +502,24 @@ git push/pull STATUS.json。新 loop push 到 main 后，其他 session pull 即
 
 ## §7 归档
 
+### 验收比对（🔒 归档前必须）
+
+> 慎终如始——plan 全 ✅ ≠ 真完成。原始 plan 基于初始分析拆解，执行过程中会产生新偏差（代码副作用、初始遗漏）。
+
+**当 plan.md 所有 Task 标记 ✅ 时，禁止直接归档**。必须插入验收比对阶段：
+
+1. **终态验证**：对照 acceptance.md 逐条核验（跑命令、截图对比、代码审查）
+2. **发现新偏差** → 追加新 Task 到 plan.md + acceptance.md + STATUS.json → 继续造线
+3. **无新偏差** → 验收通过 → 进入归档流程
+4. 循环直到偏差清零
+
+**UI/设计类 Loop 特殊要求**：终态验证必须包含**全量截图审计**（当前 app 状态 vs 设计稿，逐页对比），不可只做代码审查。
+
+**违反检测**：若 `completed_tasks.length ≥ total_tasks` 且 AI 准备写 `mode: done` → 检查是否执行过验收比对 → 未执行则强制回到验收步骤。
+
 ### 流程
 
-Loop 完成后三步：
+验收比对通过后三步：
 
 1. STATUS.json 标 `mode: done`
 2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>/`
