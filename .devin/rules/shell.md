@@ -61,17 +61,7 @@ PowerShell 处理 `node -e "..."` / `python -c "..."` **超过 ~300 字符**或�
 - 文件工具提示 `prohibited` / gitignored：不要硬写 `_tmp/`，改用 `apply_patch` / `edit`，或请求批准后写 `$env:TEMP`
 - Windows PowerShell 禁止 Bash heredoc（如 `python - <<'PY'`），必须用 here-string + `Set-Content`
 
-```powershell
-# ❌ 错：长 inline 必卡
-node -e "const fs=require('fs');const data=...(几百字符)...console.log(JSON.stringify(x))"
-
-# ✅ 对：写到 _tmp/，跑完即删
-"内容..." | Out-File -Encoding utf8 _tmp/probe.mjs
-node _tmp/probe.mjs
-Remove-Item _tmp/probe.mjs
-```
-
-若 `_tmp/` 被文件工具禁止写入，不代表终端不可写；它代表该路径被工具安全层过滤。此时不要反复重试同一路径，改用 `$env:TEMP` 或其他可写路径降级。
+例：❌ `node -e "..."` 超长必卡 → ✅ 内容写 `_tmp/probe.mjs` → `node _tmp/probe.mjs` → `Remove-Item`。若 `_tmp/` 被工具安全层禁止，改用 `$env:TEMP` 降级（不要反复重试同一路径）。
 
 ## 环境变量批量降噪（一次性套入）
 
@@ -100,12 +90,7 @@ Remove-Item _tmp/probe.mjs
 - **禁止 Bash heredoc 幻觉**：PowerShell 中 `python - <<'PY'` 会被当作重定向/比较符解析并报 `ParserError`；用 here-string 写临时脚本
 - **工具失败熔断**：同一编辑工具/同一文件连续失败 2 次，立即停手换策略，不得第三次盲试
 
-```powershell
-Write-Output 'VERIFY_BEGIN'
-pnpm --dir "d:\path\project" test:run -- --reporter=dot
-Write-Output "VERIFY_EXIT=$LASTEXITCODE"
-exit $LASTEXITCODE
-```
+模板：`Write-Output 'VERIFY_BEGIN'; <验证命令>; Write-Output "VERIFY_EXIT=$LASTEXITCODE"; exit $LASTEXITCODE`
 
 ## SSH 远程命令防卡
 
@@ -124,24 +109,10 @@ exit $LASTEXITCODE
 
 ## 后台命令静默/幽灵运行判定
 
-`Blocking=false` 后 `command_status` 连续返回 RUNNING 且无输出时，按 C7/C9 处理：
-
-1. 读取一次 `command_status`，保留命令 ID 和当前输出。
-2. 用有界只读命令查目标进程，查询条件包含脚本名、项目名、产物名；避免被 MCP/npm 噪声淹没。
-3. 同时检查项目产物状态：版本号、VSIX/构建文件时间、安装目录、日志文件。
-4. 若 OS 进程缺席且产物无变化，判为 wrapper 幽灵后台；重新以同一项目流程启动一次，并立即读取输出。
-5. 若 OS 进程存在或产物持续变化，判为真实长任务；继续定期读取，不重复启动同一流程。
+`Blocking=false` 后 `command_status` 连续 RUNNING 无输出 → 读 `command_status` 保留 ID → 有界只读查目标进程（脚本名/项目名/产物名）+ 检查产物状态（版本/文件时间/日志）→ 进程缺席且产物无变化 = 幽灵后台，重启一次并读输出；进程存在或产物变化 = 真长任务，继续读取不重复启动。
 
 ## 背景命令收尾铁律
 
 `Blocking=false` 启动的后台进程**任务结束前必须收尾**，否则遗留僵尸进程：
 
-```powershell
-# 启动
-$svr = run_command -CommandLine "node server.js" -Blocking $false
-# ... 验证、测试 ...
-# 收尾（无论成功失败都要）
-Stop-Process -Id $svr.PID -Force -ErrorAction SilentlyContinue
-```
-
-不确定 PID → `command_status` 拿 → `Stop-Process` 兜底。**没收尾的后台进程 = 下次会话踩雷源**。
+模板：`$svr = run_command ... -Blocking $false` → 验证/测试 → `Stop-Process -Id $svr.PID -Force -ErrorAction SilentlyContinue`。不确定 PID → `command_status` 拿。**没收尾的后台进程 = 下次会话踩雷源**。

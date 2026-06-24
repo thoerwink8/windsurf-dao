@@ -69,20 +69,8 @@ description: 知识归位决策——判断"这个知识/经验应该写到哪�
 
 ### 执行 · 涅槃归位
 
-涅槃时四步：
-1. 扫描存活 Memory
-2. 路由到归属文件（用 `edit` / `write_to_file` 写入）
-3. 用 `create_memory` Action="delete" 逐条删除
-4. 验证为空
-
-**不可跳过**——涅槃报告必须含"虚：已归位/已清空"或"虚：无残留 Memory"。
+涅槃时四步：扫描存活 Memory → 路由到归属文件（`edit`/`write_to_file`）→ `create_memory` Action="delete" 逐条删 → 验证为空。**不可跳过**——涅槃报告必须含"虚：已归位/已清空"或"虚：无残留 Memory"。
 
 ### 补漏 · 会话审计
 
-会话开始时若注入了 `SYSTEM-RETRIEVED-MEMORY`：
-
-- 已过时 → 直接 `create_memory` Action="delete"
-- 有价值但属于文件 → 归位后删除
-- 仍需跨会话 → 保留（极少数情况）
-
-**不主动创建新 Memory 来替代旧的**——归位是写文件，不是换一条 Memory。
+会话注入 `SYSTEM-RETRIEVED-MEMORY` 时：过时 → 直接删；有价值但属于文件 → 归位后删；仍需跨会话 → 保留（极少）。**不主动创建新 Memory 替代旧的**——归位是写文件，不是换 Memory。
