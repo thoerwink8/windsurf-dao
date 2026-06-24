@@ -199,16 +199,7 @@ py search.py stats --data-dir <project>/data
 
 ## 与其他命令的关系
 
-```
-/dao-evolve 是元工作流——审查和改进所有其他命令与技能（包括自身）
-含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
-
-/dao-evolve 审查 → /dao-dev /dao-autopilot /dao-commit /dao-distill /dao-doc + stacks/
-/dao-evolve 审查 → skills（7 个 skill 的 description 触发还准吗？内容还对吗？）
-/dao-evolve 审查 → /dao-evolve（进化流程本身需要进化吗？）
-```
-
-> 这是道的自指性：道法自然——自然包括道自身。
+元工作流：审查并改进所有 commands + skills + stacks（含自身），含 /health-check 快速体检 + Git 考古跨会话教训挖掘。道的自指性——自然包括道自身。
 
 ## 反模式
 
