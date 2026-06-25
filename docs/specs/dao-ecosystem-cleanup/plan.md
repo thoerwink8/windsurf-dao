@@ -17,7 +17,7 @@
 - 操作: 删前 grep 确认无活跃引用（排除自引用/归档/README），确认 design-system 已覆盖其编排逻辑
 - 验证: `node scripts/dao-smoke.mjs` + Grep `playbook` 确认无悬空引用
 
-#### T2: autopilot command 退役 (≈5min) → A2, A8, A9
+#### ✅ T2: autopilot command 退役 (≈5min) → A2, A8, A9
 
 - 文件:
   - `ccswitch/commands/dao-autopilot.md` (DELETE)

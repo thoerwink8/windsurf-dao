@@ -22,7 +22,7 @@
   },
   "go_ready": true,
   "dispatch": { "branch": "feat/dao-ecosystem-cleanup", "dispatched_at": "2026-06-25T13:00:00Z", "worker": "session-9c374d22" },
-  "execution": { "current_task": "T2", "completed_tasks": ["T1"], "total_tasks": 7 },
+  "execution": { "current_task": "T3", "completed_tasks": ["T1", "T2"], "total_tasks": 7 },
   "depends_on": null,
   "merged_into": null
 }

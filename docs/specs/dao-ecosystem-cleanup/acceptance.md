@@ -5,7 +5,7 @@
 | ID | 标准 | 验证方法 | 通过条件 |
 |----|------|---------|---------|
 | A1 | playbook skill 退役 | `Glob ccswitch/skills/dao-design-system-playbook/` + `.devin/skills/dao-design-system-playbook/` | ✅ 双栈目录均不存在 |
-| A2 | autopilot command 退役 | `Glob ccswitch/commands/dao-autopilot.md` + `.devin/workflows/dao-autopilot.md` | 双栈文件均不存在 |
+| A2 | autopilot command 退役 | `Glob ccswitch/commands/dao-autopilot.md` + `.devin/workflows/dao-autopilot.md` | ✅ 双栈文件均不存在 |
 | A3 | distill 声明为 evolution 子集 | 读 `ccswitch/commands/dao-distill.md` 头部 | 有明确子集声明 |
 | A4 | evolve 声明为 evolution 子集 | 读 `ccswitch/commands/dao-evolve.md` 头部 | 有明确子集声明 |
 | A5 | qa 引用链完整 | Grep `dao-design-qa` 在活跃 skill/command 中 | ≥1 非自引用的活跃引用 |
