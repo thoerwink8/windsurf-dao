@@ -69,6 +69,16 @@
 - 操作: `node scripts/dao-smoke.mjs` 全量检查 + Grep 确认无悬空引用 + dao.md 场景表核对
 - 验证: 0 failures
 
+#### ✅ T8: AGENT_GUIDE 计数/路径修正 (≈3min) — micro-audit R1 F1-F4
+
+- 文件: `AGENT_GUIDE.md`
+- 修正: rules 计数 11→13, workflows 计数 9→7 + 列表更新, skills 计数 27→16, agents 路径 .devin→ccswitch
+
+#### ✅ T9: dao-loop frontmatter + README 补齐 (≈2min) — micro-audit R1 F5-F6
+
+- 文件: `ccswitch/commands/dao-loop.md`, `README.md`
+- 修正: frontmatter description 补 strategy, README workflow 表补 dao-goal
+
 #### T+: 持续推进（动态追加）
 
 - 每 Task 完成后 micro-audit 改动影响区域
