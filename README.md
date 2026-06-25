@@ -64,7 +64,6 @@
 
 | 工作流 | 功能 |
 |---|---|
-| `/dao-autopilot` | 自主驾驶：探测 TODO/AGENT_GUIDE → 执行 → 回写 |
 | `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
 | `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
 | `/dao-distill` | 会话级知识沉淀 |
