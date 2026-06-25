@@ -88,29 +88,11 @@ description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP�
    - 有没有新的MCP可以增强能力？
    - 配置是否最优？
 
-**追踪日志清退：**
+**追踪日志清退**：`git blame` 扫描 `logger.debug` 行，超 7 天且无相关 bug → 删除，仍有排查价值 → 保留。
 
-1. 全项目扫描 `logger.debug` 行
-2. `git blame` 检查每行的添加时间
-3. 超过 7 天且无相关 bug → 删除
-4. 仍有排查价值 → 保留
+**教训新鲜度扫描**：`search.py stale --data-dir <project>/data` — 距最新版本 ≥5 大版本的 active 教训→标 `review`，展示给用户决定保留或废弃。
 
-**教训新鲜度扫描：**
-
-加载 `dao-evolution` skill，运行 `search.py stale --data-dir <project>/data`：
-1. 距最新版本 ≥5 个大版本的 active 教训 → 自动标记 `status=review`
-2. 已标 `review` 的教训 → 展示给用户决定：确认仍有效（→ active）或废弃（→ deprecated）
-3. deprecated 教训过多时 → 提示是否需要架构性清理
-
-**Git 考古（跨会话教训挖掘）：**
-
-> 温故而知新。各 Cascade 会话彼此隔离，但产出沉淀在 Git 历史中。
-
-1. `git log -n 20 --oneline` 取近 20 条 commit
-2. 按前缀分类：`fix` → 踩坑教训 | `refactor` → 架构决策 | `feat` → 设计决策
-3. 模式检测：同一模块多次 fix → 系统性弱点 | 同类 fix 重复 → 根因未解决
-4. 选择性深挖（最多 5 个 commit）：`git show <sha> --stat` + `git show <sha> -- <文件>`
-5. 与已有教训对照 `search.py lessons "关键词"`，只有 gap 才写入
+**Git 考古**（跨会话教训挖掘）：`git log -n 20` 按前缀分类（fix→踩坑/refactor→架构/feat→设计），模式检测（同模块多次 fix→系统弱点），选择性深挖（≤5 commit），与 `search.py lessons` 对照只写 gap。
 
 **产出**：四脏审查报告 + 追踪日志清退清单 + 教训新鲜度报告 + Git 考古洞察
 
@@ -213,14 +195,7 @@ py search.py stats --data-dir <project>/data
 
 ## 与其他工作流的关系
 
-```
-/evolve 是元工作流——审查和改进所有其他工作流与技能（包括自身）
-含 /health-check 快速体检模式 + Git 考古跨会话教训挖掘
-
-/evolve 审查 → /dev /cycle /autopilot /commit /distill /doc /thread-tree + stacks/
-/evolve 审查 → skills（7 个 skill 的 description 触发还准吗？内容还对吗？）
-/evolve 审查 → /evolve（进化流程本身需要进化吗？）
-```
+/evolve 是元工作流——审查所有其他工作流、技能（description 触发准确性 + 内容时效）和自身（道的自指性）。含 /health-check 快速体检 + Git 考古。
 
 > 这是道的自指性：道法自然——自然包括道自身。
 
@@ -236,32 +211,4 @@ py search.py stats --data-dir <project>/data
 
 ## 执行格式
 
-启动时：
-
-```
-## 🔄 /evolve 启动
-### 触发原因：[为什么现在进化]
-### 审查范围：[全四脏 / 指定脏器]
-```
-
-审查报告：
-
-```
-### 四脏审查
-| 脏 | 状态 | 发现 |
-|----|------|------|
-| 心·Rules | [健康/需调理] | [具体发现] |
-| 肺·Workflows | ... | ... |
-| 肝·Skills | ... | ... |
-| 肾·MCP | ... | ... |
-```
-
-进化完成：
-
-```
-## 🔄 /evolve 完成
-### 删：[删除了什么]
-### 修：[修改了什么]
-### 增：[增加了什么]（希望这一栏最短）
-### 熵变：[系统变简洁了/变复杂了]
-```
+启动时报：触发原因 + 审查范围（全四脏/指定脏器）。审查报告：四脏表（心Rules/肺Workflows/肝Skills/肾MCP × 状态+发现）。完成时报：删/修/增（增栏最短为佳）+ 熵变（系统变简洁还是复杂）。
