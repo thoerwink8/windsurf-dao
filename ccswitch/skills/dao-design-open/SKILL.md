@@ -183,13 +183,16 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 ## §5 · 与其他 skill 的关系
 
+交接契约见 `dao-design-system` §7。
+
 | Skill | 关系 |
 |---|---|
-| `dao-code-to-prototype` | **正反互补**。本 skill 是 Design→Code（消费原型），code-to-prototype 是 Code→Design（还原原型）。共享 `design/` 目录，用户编排切换方向 |
+| `dao-design-taste` | 翻译时的视觉判据来源（§4 通用体检表） |
+| `dao-code-to-prototype` | **正反互补**。本 skill 是 Design→Code，code-to-prototype 是 Code→Design。共享 `design/` 目录 |
 | `dao-component-radar` | 翻译过程中自动触发，检测原生 HTML → 组件提炼 |
 | `dao-verify` | 翻译完成后走涅槃门验证 |
-| `dao-loop` | **双向联动**。dao-loop 谋线检测到 design/ 时自动加载本 skill §1 + §1.5；造线逐页面执行 §3 翻译。见 dao-loop §4「设计对齐增强」 |
-| `dao-brainstorm` | Open Design 产出已是设计决策，brainstorm 用于澄清功能需求而非设计需求 |
+| `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
+| `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
 
 ---
 

@@ -328,14 +328,20 @@ Skill 最终输出一份 Markdown 格式的提示词，结构如下：
 
 **衔接**：P0→OD→P1（不变层规则成为合规基线）→ P2（翻译完必跑 L1+L2）→ P3（fidelity 发现组件问题触发 radar）。layout 横切所有 Phase。
 
-**用户入口只有 2 个**：`/dao-design-system`（低频）+ `/dao-design-open`（高频）。fidelity 和 radar 由 design-open auto-gate 自动触发。
+**用户入口只有 2 个**：`/dao-design-system`（低频）+ `/dao-design-open`（高频）。fidelity / radar / qa 由 design-open auto-gate 自动触发。判据来源统一引用 `dao-design-taste` §4。
+
+### 交接契约（Handoff Schema）
+
+| 衔接点 | 上游输出 | 下游输入 | 格式定义 |
+|--------|---------|---------|---------|
+| P0→OD | OD 提示词（§6 格式） | OD 消费 | 本 skill §6 |
+| OD→P1 | `design/` 目录 | design-open §1 读取 | design-open §0 |
+| P1→P2 | 变更文件列表 + token 映射 | fidelity L1-L5 验证 | design-fidelity §1 |
+| P2→P3 | 组件级 fail 项 | component-radar 三关 | component-radar §检测模式 |
 
 ### 典型场景
 
-- **新项目**：system → OD 提示词 → OD 产出 design/ → open 翻译 → auto-gate 验证
-- **体系升级**：system 审计 → 改造提示词 → OD 更新 → open 增量翻译
-- **日常 UI**：编辑 tsx → open 按需触发 → auto-gate
-- **全面审计**：独立调用 fidelity L1~L5 + radar 全扫
+新项目：system→OD→design/→open 翻译→auto-gate。体系升级：system 审计→OD 更新→open 增量翻译。日常 UI：open 按需触发→auto-gate。全面审计：独立调 fidelity L1~L5 + radar 全扫。
 
 ## §8 · 演化
 
