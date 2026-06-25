@@ -37,7 +37,7 @@
 - 操作: 在 `## 触发条件` 前加一行：`> 本命令是 `dao-evolution` skill 的 <会话级/系统级> 子集。`
 - 验证: 读取确认声明存在
 
-#### T4: qa 补引用 (≈3min) → A5
+#### ✅ T4: qa 补引用 (≈3min) → A5
 
 - 文件:
   - `ccswitch/skills/dao-design-open/SKILL.md` §5 关系表 (MODIFY — 加 qa 行)

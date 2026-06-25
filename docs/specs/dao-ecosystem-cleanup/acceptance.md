@@ -8,7 +8,7 @@
 | A2 | autopilot command 退役 | `Glob ccswitch/commands/dao-autopilot.md` + `.devin/workflows/dao-autopilot.md` | ✅ 双栈文件均不存在 |
 | A3 | distill 声明为 evolution 子集 | 读 `ccswitch/commands/dao-distill.md` 头部 | ✅ 有明确子集声明 |
 | A4 | evolve 声明为 evolution 子集 | 读 `ccswitch/commands/dao-evolve.md` 头部 | ✅ 有明确子集声明 |
-| A5 | qa 引用链完整 | Grep `dao-design-qa` 在活跃 skill/command 中 | ≥1 非自引用的活跃引用 |
+| A5 | qa 引用链完整 | Grep `dao-design-qa` 在活跃 skill/command 中 | ✅ ≥1 非自引用的活跃引用 |
 | A6 | dao-loop command 含 strategy.md | 读 `ccswitch/commands/dao-loop.md` §4 | 文档列表包含 strategy.md |
 | A7 | brainstormer 知道诊断报告 | 读 `ccswitch/agents/dao-brainstormer.md` | 有 refactor 型诊断报告处理逻辑 |
 | A8 | dao-smoke 全过 | `node scripts/dao-smoke.mjs` | 0 failures |
