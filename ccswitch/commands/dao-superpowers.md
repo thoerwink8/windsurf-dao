@@ -33,22 +33,9 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 用户拒绝即走轻量路径。详见 `ccswitch/dao.md` superpowers-gate 段。
 
-## 与 /dao-dev 的差异（重要 · 别选错入口）
+## 与 /dao-dev 的差异（别选错入口）
 
-| 维度 | `/dao-dev` | **`/dao-superpowers`** |
-|---|---|---|
-| 切面 | 道（哲学三阶九步：析→设→编→筑→部→试→验→书） | 术（工程五步：worktree→plan→execute→review→finish） |
-| 适用 | 从需求到交付的完整管线（含 UI 嗢架、文档生成等） | 代码类核心改动的标准化流程 |
-| 含 UI/前端嗢架 | 是（基建审计 + 前端处方） | 否（纯代码改动） |
-| 含文档生成 | 是（书阶段调 /dao-doc） | 否（commit 信息够用） |
-| 产出关卡 | 🔒×3（方向 / 预览 / 验收） | worktree+plan+review+finish |
-| 哲学源 | 道生一、一生二、二生三 | 致虚守静观复 + 受国之垢 |
-| 适合任务 | 新功能、跨多层级改动、初创项目 | 核心重构、复杂 bug、架构归一、关键模块改动 |
-
-**选哪个**：
-- 任务包含"做一个新功能/页面/界面" → `/dao-dev`
-- 任务包含"重构/修复/归一/优化代码" → `/dao-superpowers`
-- 不确定？两个都适用 → `/dao-dev`（更全面，含 superpowers 步骤的精神）
+`/dao-dev` = 道（三阶九步，含 UI 脚手架 + 文档生成 + 🔒×3 关卡），适合新功能/新页面/初创项目。`/dao-superpowers` = 术（工程五步 worktree→plan→execute→review→finish），适合核心重构/复杂 bug/架构归一。不确定 → `/dao-dev`（更全面）。
 
 ## 五步详细
 
@@ -129,49 +116,15 @@ npm test
 
 **前置关卡**（UI 任务专需）：归根前必过 `dao-design-open` §4 验证（截图对比 + 三维对齐检查）。未过 = 未闭环，不可进本步。
 
-```
-四选一：
-  A. 成果合入主分支：
-     git checkout master && git merge <topic-branch>
-     git worktree remove ~/.config/superpowers/worktrees/<topic>
-     git branch -d <topic-branch>
-
-  B. 走 PR 流程（远程 review）：
-     git push origin <topic-branch>
-     gh pr create --base master --title ... --body ...
-     等 PR merge 后再清理 worktree
-
-  C. 保留待续：worktree 暂存（罕见）
-
-  D. 丢弃：
-     git worktree remove --force ~/.config/superpowers/worktrees/<topic>
-     git branch -D <topic-branch>
-```
-
-**铁律**：不可直推 master。merge / PR 二选一，仪式必走。
+四选一：A. merge 合入主分支（`git checkout master && git merge` → remove worktree → delete branch）/ B. PR 流程（push → `gh pr create` → merge 后清理）/ C. 保留待续（罕见）/ D. 丢弃（`--force` remove）。**铁律**：不可直推 master，merge / PR 二选一。
 
 ## 反模式
 
-详见 `ccswitch/dao.md` superpowers-gate 段反模式表。核心几条：
-
-| 病 | 对治 |
-|---|---|
-| 任务太小论 | 显式触发 = 流程承诺，与代码量无关 |
-| 路径偷懒 | 必须 `docs/specs/<topic>-plan.md` 标准位置 |
-| 跳 reviewer | reviewer subagent 是质量门；自检不算 |
-| **UI 任务跳 visual compliance** | reviewer 只看 git diff 看不见真实渲染；UI 任务必过 dao-design-open §4 验证（截图对比 + 三维对齐） |
-| **未过验证直进 finish** | UI 任务归根前必过 dao-design-open §4，未过 = 开环 = 后续新盲点 |
-| 直推 master | merge / PR 二选一，仪式必须 |
-| node_modules 继承污染 | worktree 首次 install 前必 rm -rf node_modules（参 e163） |
+详见 `ccswitch/dao.md` superpowers-gate 段。核心：任务太小论（显式触发=承诺）| 路径偷懒（必须 `docs/specs/<topic>-plan.md`）| 跳 reviewer（subagent 是质量门）| UI 跳 visual compliance（必过 dao-design-open §4 验证）| 未过验证直进 finish（开环=盲点）| 直推 master（merge/PR 二选一）| node_modules 污染（worktree 首次 install 前 rm -rf，参 e163）
 
 ## 与 superpowers-gate 规则的协同
 
-| 文件 | 角色 | 触发机制 |
-|---|---|---|
-| `ccswitch/dao.md` superpowers-gate 段 | 触发判定 + 反模式约束 | 随 dao.md 注入自动加载 |
-| **本 command** | 主动唤起 + 步骤模板 | `/dao-superpowers` slash |
-
-rule 是"什么时候走 + 不能怎么走"，command 是"怎么一步步走"。两者互补，不冲突。
+`ccswitch/dao.md` superpowers-gate 段（随 dao.md 注入）= 触发判定 + 反模式约束；本 command（`/dao-superpowers` slash）= 步骤模板。rule 管"何时走+不能怎么走"，command 管"怎么一步步走"。
 
 ## 反原则
 
