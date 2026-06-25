@@ -185,29 +185,46 @@ AI 根据复杂度判断，常见：
 
 1. 创建 `docs/specs/<topic>/` + STATUS.json（含 `type` 字段），文档标 `skeleton`
 2. **🎨 设计目录检测**（见下方增强段）
-3. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
-4. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
-5. **主线程生成 strategy.md** → 用户确认 → 标 `done`（见下方「strategy.md 生成」段）
-6. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
-7. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
-8. **项目 rule 检查**：按 Loop type 检查是否需要创建/更新项目级 rule 文件（见下方）
-9. 全部 done + 校验通过 → `go_ready: true`
+3. **🔍 诊断扫描**（`type: refactor | audit` 必做，见下方增强段）
+4. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
+5. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
+6. **主线程生成 strategy.md** → 用户确认 → 标 `done`（见下方「strategy.md 生成」段）
+7. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
+8. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
+9. **项目 rule 检查**：按 Loop type 检查是否需要创建/更新项目级 rule 文件（见下方）
+10. 全部 done + 校验通过 → `go_ready: true`
 
 ### 设计对齐增强（design/ 自动检测）
 
 **谋线步骤 2**：若需求涉及 `design/` 目录，**必须先加载 `dao-design-open` §1 + §1.5**（全页面清点 + 三层 Diff），结果注入 spec 输入。plan 覆盖矩阵增加页面×层级维度，任务排序强制 top-down（共享结构→布局→节→组件），交叉校验要求所有页面三层均有 Task 或显式 deferred。
 
+### 诊断扫描（refactor / audit 型必做）
+
+> 不知常，妄作凶。未诊断就开方 = 妄作。
+
+**谋线步骤 3**（`type: refactor` 或 `type: audit` 时必做，`feature` / `fix` 跳过）：在 brainstormer 生成 spec 之前，先派 subagent 扫描目标系统现状，产出诊断报告。
+
+**扫描维度**（按目标系统调整）：
+- **引用图谱**：模块/文件/skill 之间的引用关系，谁引用谁、被引用几次
+- **孤岛检测**：被引用 0 次且无触发路径的模块
+- **重叠分析**：description 或职责高度相似的模块对
+- **缺口扫描**：常见场景无覆盖、单向引用（A→B 但 B 不知 A）
+
+**产出**：结构化诊断报告，注入步骤 4 brainstormer 的输入。brainstormer 必须**从诊断发现推导 spec 方向**，不从用户目标直接推导解法。
+
+**跳过条件**：`type: feature`（用户需求明确）、`type: fix`（根因分析由 debugger 覆盖）。
+
 ### strategy.md 生成
 
-**步骤 5**：主线程根据 spec + acceptance 按 `type` 生成——design 侧重组件策略+视觉验证，feature 侧重 ADR+API 契约，refactor 侧重迁移路径+兼容，fix 侧重根因+回归防护，infra 侧重工具链+CI/CD。每个 Loop 必须定义达成度维度（功能完整度/验收通过率/视觉保真度/测试覆盖/回归安全/文档同步），§7 归档时逐维度打分，未达标不可归档。
+**步骤 6**：主线程根据 spec + acceptance 按 `type` 生成——design 侧重组件策略+视觉验证，feature 侧重 ADR+API 契约，refactor 侧重迁移路径+兼容，fix 侧重根因+回归防护，infra 侧重工具链+CI/CD。每个 Loop 必须定义达成度维度（功能完整度/验收通过率/视觉保真度/测试覆盖/回归安全/文档同步），§7 归档时逐维度打分，未达标不可归档。
 
 ### 项目 rule 检查
 
-**谋线步骤 8**（Go Gate 前最后检查）：按 `type` 检查 `.claude/rules/` 是否缺必要文件——design 需 `design-tokens.md`+`design-spirit.md`，feature/refactor 需 `architecture.md`（+`testing.md`），全部需 `CLAUDE.md` <80 行。缺则创建/提醒。归档时同步造线中新增的规范。
+**谋线步骤 9**（Go Gate 前最后检查）：按 `type` 检查 `.claude/rules/` 是否缺必要文件——design 需 `design-tokens.md`+`design-spirit.md`，feature/refactor 需 `architecture.md`（+`testing.md`），全部需 `CLAUDE.md` <80 行。缺则创建/提醒。归档时同步造线中新增的规范。
 
 ### subagent 调度
 
-谋线主线程是**编排者**：spec.md 派 `dao-brainstormer`（苏格拉底式挖掘），acceptance.md 主线程直接写，strategy.md 主线程直接写，plan.md 派 `dao-plan-writer`（拆任务+代码模板）。subagent 返回后展示关键段落给用户确认，确认后更新 STATUS.json。
+谋线主线程是**编排者**：诊断扫描派 fork subagent（refactor/audit 型），spec.md 派 `dao-brainstormer`（苏格拉底式挖掘，refactor 型必须以诊断报告为输入），acceptance.md 主线程直接写，strategy.md 主线程直接写，plan.md 派 `dao-plan-writer`（拆任务+代码模板）。subagent 返回后展示关键段落给用户确认，确认后更新 STATUS.json。
 
 ## §5 造线（Dev Thread）
 
