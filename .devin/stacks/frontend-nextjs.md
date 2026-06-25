@@ -1,5 +1,5 @@
 ---
-description: 前端技术栈处方：Next.js + shadcn + Tailwind 初始化。/dev 基建审计发现"需要前端"时加载。
+description: 前端技术栈处方：Next.js + shadcn + Tailwind 初始化。/dao-dev 基建审计发现"需要前端"时加载。
 ---
 
 # Next.js 前端处方
@@ -26,7 +26,6 @@ description: 前端技术栈处方：Next.js + shadcn + Tailwind 初始化。/de
 
 脚本自动完成所有机械操作，内置探测逻辑（全量/增量/就绪自动判定）。
 
-// turbo
 1. 运行脚手架脚本：
 
 ```bash
@@ -71,9 +70,8 @@ python <skills-root>/ui-ux-pro-max/scripts/search.py "<product_type> <industry> 
 
 ## 阶段 C · 验证
 
-// turbo
 7. 依次运行：`pnpm typecheck` → `pnpm format` → `pnpm lint` → `pnpm build`
 
-8. 视觉验证（三选一）：浏览器 MCP 截图（首次询问用户偏好：有头 vs 无头）/ curl SSR 输出 / 用户贴截图
+8. 视觉验证（三选一）：浏览器 MCP 截图（遵循 dao.md 目·观门控选择工具）/ curl SSR 输出 / 用户贴截图
 
 9. 若项目大（>5 页面），用 `--persist` 持久化设计系统到 `design-system/MASTER.md`。
