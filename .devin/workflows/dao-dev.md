@@ -41,16 +41,7 @@ description: 全流程开发管线 — 从一句话需求到完整交付。用�
 
 **核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。
 
-**阶段默认倾向**（参考，自评优先）：
-
-| 阶段 | 主会话直接做 | 派 subagent |
-|------|-------------|-------------|
-| 析 | 需求清晰 | 模糊 → brainstormer |
-| 设 | 架构常规 | 关键架构 → strategist |
-| 编 | 单一小改 | 批量同质 → worker-batch |
-| 筑/部 | 默认（环境敏感） | build 失败 → debugger |
-| 试/验 | 默认 | 核心模块 → reviewer-critical |
-| 书 | 文档量小 | 完整 README → plan-writer |
+**阶段默认倾向**（参考，自评优先）：析（模糊→brainstormer）· 设（关键架构→strategist）· 编（批量同质→worker-batch）· 筑/部（build 失败→debugger）· 试/验（核心模块→reviewer-critical）· 书（完整 README→plan-writer）。其余主会话直接做。
 
 **横切**：bug → debugger | 3次失败 → strategist | 核心模块 → reviewer-critical
 

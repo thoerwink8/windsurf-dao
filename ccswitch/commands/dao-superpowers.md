@@ -45,20 +45,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 **announce**：「开始 dao-superpowers 第 1 步 · 隔离 worktree」
 
-```bash
-# 优先 ~/.config/superpowers/worktrees/<topic>/，回落 .worktrees/<topic>/
-git worktree add ~/.config/superpowers/worktrees/<topic> -b <topic-branch>
-
-# !!! 干净进场（参 e163 教训）
-cd ~/.config/superpowers/worktrees/<topic>
-Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-npm install --no-audit --no-fund
-
-# 测试基线必须全绿才开工
-npm test
-```
-
-详见 `dao-worktree` skill。
+`git worktree add` 到隔离目录 → 干净进场（rm node_modules + npm install，参 e163）→ 测试基线全绿才开工。详见 `dao-worktree` skill。
 
 ### 二·谋（dao-plan · 不知常妄作凶）
 
