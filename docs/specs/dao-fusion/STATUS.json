@@ -5,8 +5,8 @@
   "summary": "道体融合——skill 交接协议 / 概念去重 / 入口收敛 / 管线闭环 / 恢复表格",
   "created": "2026-06-25",
   "lock": { "holder": null, "host": "claude-code", "acquired_at": "2026-06-25", "expires_at": null, "heartbeat": null },
-  "thread": "dev",
-  "mode": "executing",
+  "thread": "done",
+  "mode": "done",
   "docs": {
     "spec": { "status": "done" },
     "strategy": { "status": "done" },
@@ -15,7 +15,7 @@
   },
   "go_ready": true,
   "dispatch": { "branch": "feat/dao-fusion", "dispatched_at": null, "worker": null },
-  "execution": { "current_task": null, "completed_tasks": [], "total_tasks": 10 },
+  "execution": { "current_task": null, "completed_tasks": ["T1","T2","T3","T4","T5","T6","T7","T8","T9","T10"], "total_tasks": 10 },
   "depends_on": "dao-slim-v2",
   "merged_into": null
 }
