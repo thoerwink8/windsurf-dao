@@ -246,6 +246,23 @@ AI 根据复杂度判断，常见：
 
 违反检测：任何时刻发现 `mode = executing` 但当前 git 分支是 `main`/`master` → **立即停止任务执行**，先补创分支再继续。
 
+### 造线 Git 自动化
+
+> 善行无辙迹。——Loop 的 git 生命周期在 Go Gate 切分支时已完全确定，造线中不再逐步确认。
+
+**造线内 git 操作全部预授权**，AI 直接执行，禁止用 AskUserQuestion 询问 commit/push/merge/删分支：
+
+| 操作 | 时机 | 行为 |
+|------|------|------|
+| **commit** | 每 Task 完成 + 验证通过后 | 自动 commit（message 含 Loop topic + Task ID） |
+| **push** | 每 commit 后 | 自动 push 到 `origin feat/<topic>` |
+| **PR + merge** | §7.2.5 用户确认归档后 | 归档流程自动执行（见 §7.4.5） |
+| **删分支** | PR merged 后 | 自动删除本地 + 远端分支 |
+
+**预授权边界**：仅限 `feat/<topic>` 分支。若检测到当前在 `main`/`master`，所有写操作立即停止。
+
+**冲突处理**：push 遇冲突 → 尝试 rebase；rebase 失败 → 停止轮询，在回答正文中说明情况，等用户介入。
+
 ### 分诊与 subagent 调度
 
 造线中主线程是**调度器**，按 plan.md 逐 Task 派发 subagent 执行：
@@ -346,13 +363,27 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 
 归档时将造线新增的规范（token / 组件 / 架构约束）同步到对应 rule 文件。**违反检测**：`completed_tasks.length ≥ total_tasks` 且准备写 `mode: done` → 未执行达成度评估则强制回到 7.1。
 
-### 流程
+### 归档流程（用户确认归档后全自动）
 
-验收比对通过后三步：
+> 功遂身退，天之道也。——用户在 §7.2.5 说「确认归档」是唯一决策点，之后全部自动执行，不再逐步询问。
 
-1. STATUS.json 标 `mode: done`
-2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`
-3. 自动生成 `HANDOFF.md`
+在 `feat/<topic>` 分支上完成：
+
+1. 归档文件操作：`docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`
+2. 生成 `HANDOFF.md`、更新 `INDEX.md`
+3. STATUS.json 标 `mode: done`，写入 `user_approved_at`
+4. 更新 `PROJECT.md`
+5. commit + push（message: `[cc] chore(<topic>): Loop 归档`）
+
+PR + 分支归根：
+
+6. 创建 PR：`feat/<topic>` → `master`/`main`，description 从 HANDOFF.md 自动生成
+7. merge PR（默认 merge commit，保留完整历史）
+8. 删除本地 + 远端 `feat/<topic>` 分支
+
+**PR 即记录**：分支删除后，PR 及其 diff、description、review comments 永久保留在 GitHub 上。这是 Loop 的最终交付物。
+
+**异常处理**：merge 冲突 → 停止自动流程，在回答正文中说明情况，等用户介入解决后继续。
 
 ### 归档目录与模板
 
