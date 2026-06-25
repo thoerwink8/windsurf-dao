@@ -11,9 +11,9 @@
 | A5 | qa 引用链完整 | Grep `dao-design-qa` 在活跃 skill/command 中 | ✅ ≥1 非自引用的活跃引用 |
 | A6 | dao-loop command 含 strategy.md | 读 `ccswitch/commands/dao-loop.md` §4 | ✅ 文档列表包含 strategy.md |
 | A7 | brainstormer 知道诊断报告 | 读 `ccswitch/agents/dao-brainstormer.md` | ✅ 有 refactor 型诊断报告处理逻辑 |
-| A8 | dao-smoke 全过 | `node scripts/dao-smoke.mjs` | 0 failures |
+| A8 | dao-smoke 全过 | `node scripts/dao-smoke.mjs` | ✅ 0 failures (51/51) |
 | A9 | 双栈一致 | dao-smoke 交叉引用检查 | ✅ |
-| A10 | dao.md 场景表同步 | 读 `ccswitch/dao.md` 场景速查表 | 退役模块已移除，类型列准确 |
+| A10 | dao.md 场景表同步 | 读 `ccswitch/dao.md` 场景速查表 | ✅ 退役模块已移除，类型列准确 |
 
 ## 回归验收
 
