@@ -107,16 +107,7 @@ description: 从代码变更自动生成 commit message 并提交。当用户说
 
 ### type
 
-| type       | 场景               |
-| ---------- | ------------------ |
-| `feat`     | 新功能             |
-| `fix`      | 修复 bug           |
-| `refactor` | 重构（不改变功能） |
-| `style`    | 样式/格式调整      |
-| `docs`     | 文档变更           |
-| `test`     | 测试相关           |
-| `chore`    | 构建/依赖/配置     |
-| `perf`     | 性能优化           |
+`feat`（新功能）/ `fix`（修复）/ `refactor`（重构）/ `style`（样式格式）/ `docs`（文档）/ `test`（测试）/ `chore`（构建依赖配置）/ `perf`（性能）
 
 ### scope
 
