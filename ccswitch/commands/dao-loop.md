@@ -81,9 +81,11 @@ plan.md 所有 Task 标 ✅ ≠ 真完成。必须插入验收比对：对照 ac
 
 ### 7. 用户交付审查 + 归档
 
+**造线 Git 全自动**：commit / push / PR / merge / 删分支均为预授权，造线中不逐步询问。详见 skill §5「造线 Git 自动化」。
+
 达成度评估全 ✅ 后，**禁止直接归档**。必须展示交付报告（打分表 + 变更摘要 + 验证结果）并通过 AskUserQuestion 让用户四选一：确认归档 / 指出问题 / 追加需求 / 暂不归档。详见 skill §7.2.5。
 
-用户确认归档后 → 学习提取 → 归档到 `_archive/` → 生成 HANDOFF.md + 更新 INDEX.md + 刷新 PROJECT.md。
+**用户确认归档 = 唯一决策点**，之后全自动：学习提取 → 规范同步 → 归档文件移动 + HANDOFF.md → commit + push → 创建 PR → merge → 删分支。PR 是 Loop 的永久记录。详见 skill §7 归档流程。
 
 ## 轮询集成
 
