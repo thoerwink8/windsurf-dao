@@ -13,7 +13,8 @@
     "heartbeat": "2026-06-25T13:05:00Z"
   },
   "thread": "dev",
-  "mode": "reviewing",
+  "mode": "done",
+  "user_approved_at": "2026-06-25T17:02:00Z",
   "docs": {
     "spec": { "status": "done" },
     "strategy": { "status": "done" },
