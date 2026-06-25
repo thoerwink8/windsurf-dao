@@ -29,7 +29,7 @@
 
 ### Phase 2: 关系梳理（⚠️ 中优先）
 
-#### T3: distill/evolve 声明为 evolution 子集 (≈3min) → A3, A4
+#### ✅ T3: distill/evolve 声明为 evolution 子集 (≈3min) → A3, A4
 
 - 文件:
   - `ccswitch/commands/dao-distill.md` (MODIFY — 头部加子集声明)
