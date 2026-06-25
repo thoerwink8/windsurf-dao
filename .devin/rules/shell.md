@@ -15,40 +15,17 @@ description: 命令执行的安全性——超时/防卡/交互黑名单/服务�
 - **非阻塞**：耗时 > 30s 用 `Blocking=false` + `WaitMsBeforeAsync=15000`
 - **项目流程优先**：改动要生效到插件/客户端/服务时，先读项目根规范（`AGENT_GUIDE.md` / `README` / `package.json scripts` / `ship.*`），执行项目封装的验证/打包/安装脚本；通用 `typecheck` 只作为代码检查证据
 
-## 交互命令黑名单（业界共识·会触发 PTY 死锁）
+## 交互命令黑名单（PTY 死锁）
 
-agent 用 wrapper 跑命令时检测不到 fd 等待 stdin 就**永远挂死**。以下命令默认禁用，必须用非交互替代：
-
-| 黑名单 | 非交互替代 |
-|---|---|
-| `sudo` / `su` / `passwd` | 提前配 NOPASSWD 或让用户手动跑 |
-| `apt install` / `dnf install` | `apt install -y` + `DEBIAN_FRONTEND=noninteractive` |
-| `git push`（SSH 密码） | 用 ssh-agent 或 HTTPS + token |
-| `vim` / `nano` / `emacs` | `edit` 工具改文件，不开编辑器 |
-| `less` / `more` / `man` / `top` / `htop` | `cat` / `head -n N` / `--help` |
-| `mysql` / `psql`（交互模式） | `mysql -e "SQL"` / `psql -c "SQL"` / `< file.sql` |
-| `npm init` / `yarn init`（向导） | `npm init -y` 或写 package.json |
-| `gh repo create`（向导） | `gh repo create name --public --confirm` |
+agent 检测不到 stdin 等待就**永远挂死**。禁用：`sudo/su/passwd`（配 NOPASSWD 或用户手动）、`apt/dnf install`（加 `-y` + `DEBIAN_FRONTEND=noninteractive`）、`git push` SSH 密码（用 ssh-agent/HTTPS+token）、`vim/nano/emacs`（用 edit 工具）、`less/more/man/top`（用 `cat`/`head -n N`/`--help`）、`mysql/psql` 交互（用 `-e`/`-c`/`< file.sql`）、`npm/yarn init` 向导（用 `-y`）、`gh repo create` 向导（加 `--confirm`）。
 
 ## 服务/长进程命令（必 Blocking=false + 必收尾）
 
-`npm start` / `npm run dev` / `flask run` / `uvicorn` / `python -m http.server` / `php -S` 这类**永不退出**的进程：
-
-1. **必 `Blocking=false`** + `WaitMsBeforeAsync=15000`（看 15s 内有没有早期错误）
-2. **任务结束必收尾**：用 `command_status` 拿 PID → `Stop-Process -Id $PID` (Windows) / `kill $PID` (Unix)
-3. **临时验证用**：套 `timeout 30 npm start` 强行限期，避免遗留
-4. **永远不要**直接 `Blocking=true` 跑服务命令——会无限挂
+永不退出的进程（`npm start`/`dev`/`flask run`/`uvicorn` 等）：必 `Blocking=false` + `WaitMsBeforeAsync=15000`；任务结束必 `command_status` 拿 PID → kill；临时验证套 `timeout 30`。**永不** `Blocking=true` 跑服务。
 
 ## 项目本地发布流程优先
 
-用户问“装了吗 / 升级了吗 / 生效了吗”时，判据是项目定义的发布链路完成，而非单个类型检查或构建命令完成。
-
-执行顺序：
-1. 读项目根规范入口：`AGENT_GUIDE.md`、`README*`、`package.json` scripts、`ship.*`、`Makefile`、`justfile`。
-2. 找到封装脚本后优先执行它，例如 VS Code/Windsurf 插件常见链路是 `build → package → install → sync workbench/script hash → clean old version`。
-3. 面向用户的功能新增按项目版本规则 bump；版本号、安装目录、VSIX 文件、同步 hash 是完成证据。
-4. 单独 `npm run typecheck`、`npm run build`、`tsc --noEmit` 属于局部验证证据，不能替代安装/发布证据。
-5. 发布脚本输出要求完整读取，最终报告包含版本、产物路径、安装路径、同步结果、退出码。
+用户问”装了吗/生效了吗” → 判据是**项目发布链路完成**，非单个 typecheck/build。先读根规范入口（AGENT_GUIDE/README/package.json scripts/ship.*），找到封装脚本优先执行。版本号+安装目录+产物路径+同步结果是完成证据；单独 `tsc --noEmit` 属局部验证，不能替代。
 
 ## Inline 长命令陷阱（PowerShell 必踩）
 
@@ -63,18 +40,9 @@ PowerShell 处理 `node -e "..."` / `python -c "..."` **超过 ~300 字符**或�
 
 例：❌ `node -e "..."` 超长必卡 → ✅ 内容写 `_tmp/probe.mjs` → `node _tmp/probe.mjs` → `Remove-Item`。若 `_tmp/` 被工具安全层禁止，改用 `$env:TEMP` 降级（不要反复重试同一路径）。
 
-## 环境变量批量降噪（一次性套入）
+## 环境变量降噪
 
-发现命令易卡时，先看是否能用环境变量降噪：
-
-| 环境变量 | 作用 |
-|---|---|
-| `PAGER=cat` | 禁 less/man 分页（system prompt 已默认设置）|
-| `GIT_PAGER=cat` | 禁 git 分页（log/diff/show） |
-| `DEBIAN_FRONTEND=noninteractive` | 禁 apt/dpkg 配置向导 |
-| `CI=true` | 让支持 CI 检测的工具走 batch 模式（npm/jest/playwright 等）|
-| `NO_COLOR=1` | 禁 ANSI 颜色（避免输出乱码）|
-| `TERM=dumb` | 极端降级，禁所有 TTY 特性 |
+命令易卡时先降噪：`PAGER=cat`（禁分页）、`GIT_PAGER=cat`（禁 git 分页）、`DEBIAN_FRONTEND=noninteractive`（禁 apt 向导）、`CI=true`（batch 模式）、`NO_COLOR=1`（禁 ANSI）、`TERM=dumb`（极端降级）。
 
 ## Windows PowerShell 专项
 
@@ -94,25 +62,8 @@ PowerShell 处理 `node -e "..."` / `python -c "..."` **超过 ~300 字符**或�
 
 ## SSH 远程命令防卡
 
-`run_command` + ssh + 嵌套引号 = 必炸的三件套。
+三层超时：连接层 `ConnectTimeout=5`、命令层远端 `timeout <秒>`、执行层 `Blocking=false`。复杂命令首选 heredoc 落远端文件（禁反引号模板/`$()` 插值），SQL 用参数绑定 `?`，远端 `node -e` 用绝对路径 require。
 
-**三层超时**：
-1. 连接层：`-o ConnectTimeout=5 -o ServerAliveInterval=3 -o ServerAliveCountMax=2`
-2. 命令层：远端命令用 `timeout <秒>` 包裹（如 `timeout 15 node /tmp/x.js`）
-3. 执行层：`run_command` 用 `Blocking=false` + `WaitMsBeforeAsync=15000`
+## 后台命令收尾
 
-**复杂命令防转义**（PowerShell + ssh + JS/SQL 嵌套引号场景）：
-- 首选 heredoc：`ssh srv "cat > /tmp/_q.js << 'SCRIPT' ... SCRIPT; node /tmp/_q.js"`
-- heredoc 内禁反引号模板字符串、`$(...)` 插值、嵌套双引号——会被 PowerShell 第一层吃掉
-- SQL 用参数绑定 `?`，不字符串拼接
-- 远端 node `-e` 必须用绝对路径 require（如 `require('/root/projects/<proj>/server/node_modules/better-sqlite3')`）
-
-## 后台命令静默/幽灵运行判定
-
-`Blocking=false` 后 `command_status` 连续 RUNNING 无输出 → 读 `command_status` 保留 ID → 有界只读查目标进程（脚本名/项目名/产物名）+ 检查产物状态（版本/文件时间/日志）→ 进程缺席且产物无变化 = 幽灵后台，重启一次并读输出；进程存在或产物变化 = 真长任务，继续读取不重复启动。
-
-## 背景命令收尾铁律
-
-`Blocking=false` 启动的后台进程**任务结束前必须收尾**，否则遗留僵尸进程：
-
-模板：`$svr = run_command ... -Blocking $false` → 验证/测试 → `Stop-Process -Id $svr.PID -Force -ErrorAction SilentlyContinue`。不确定 PID → `command_status` 拿。**没收尾的后台进程 = 下次会话踩雷源**。
+`Blocking=false` 后 `command_status` 连续 RUNNING 无输出 → 查进程+产物（进程缺席+产物无变化 = 幽灵，重启一次；否则继续读取）。**任务结束前必须 kill 后台进程**（`Stop-Process -Id $PID`），否则遗留僵尸。
