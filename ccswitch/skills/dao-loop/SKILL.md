@@ -256,7 +256,7 @@ AI 根据复杂度判断，常见：
 |------|------|------|
 | **commit** | 每 Task 完成 + 验证通过后 | 自动 commit（message 含 Loop topic + Task ID） |
 | **push** | 每 commit 后 | 自动 push 到 `origin feat/<topic>` |
-| **PR + merge** | §7.2.5 用户确认归档后 | 归档流程自动执行（见 §7.4.5） |
+| **PR + merge** | §7.2.5 用户确认归档后 | 归档流程自动执行（见 §7 归档流程） |
 | **删分支** | PR merged 后 | 自动删除本地 + 远端分支 |
 
 **预授权边界**：仅限 `feat/<topic>` 分支。若检测到当前在 `main`/`master`，所有写操作立即停止。
