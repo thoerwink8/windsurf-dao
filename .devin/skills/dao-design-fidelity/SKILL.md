@@ -34,26 +34,13 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 ### L1.5 · 结构快照（Structural Snapshot）
 
-**判据**：App 关键区块的无障碍树（ARIA tree）与基线匹配，零结构偏差。
+**判据**：App 关键区块的 ARIA tree 与基线匹配，零结构偏差（元素存在性 + 唯一性 + 嵌套层级）。
 
-| 维度 | pass 条件 | 验证手段 |
-|------|----------|---------|
-| 元素存在性 | 基线中每个节点在当前快照中存在 | `toMatchAriaSnapshot()` diff |
-| 元素唯一性 | 不出现基线中不存在的重复节点 | 同上（自动检测新增节点） |
-| 嵌套层级 | 父子关系与基线一致 | 同上 |
+**方法**：Playwright `toMatchAriaSnapshot()` 按语义区块拍快照（不拍整页），存为 YAML 基线（`*-snapshots/`，tracked）。结构变动（重复/缺失/嵌套错位）自动报出。
 
-**方法论**：利用 Playwright 内置 `toMatchAriaSnapshot()` 对 App 页面的关键语义区块（topbar / candidate-feed / workspace-rail 等）拍无障碍树快照，存为 YAML 基线。后续运行自动 diff——任何结构变动（元素重复/缺失/嵌套错位/语义角色变化）立刻报出。
+**为什么需要**：L1 查"值对不对"，L3 查"像素像不像"，都无法检测语义内容重复出现——ARIA 快照补上这个盲区。
 
-**为什么需要这一层**：L1 检查"token 值对不对"，L3 检查"像素看起来像不像"——但两者都无法检测"语义内容是否重复出现"。实例：seed 描述在 Topbar 和 BrainstormView 各渲染一次，token 全对、像素 diff 不报错，但用户看到了两段相同内容。ARIA 快照基线会自动发现这类结构性偏差。
-
-**快照粒度**：按语义区块拍（ADR-002 决策），不拍整页。区块粒度更细但更稳定——单区块更新不影响其他区块，动态内容用正则匹配降低脆性。
-
-**基线管理**：
-- 首次：`npx playwright test --update-snapshots` 生成 `*.aria.yml` 基线
-- 更新：结构有意变更时重新生成，commit message 说明变更原因
-- 存放：`*-snapshots/` 目录，纳入版本管理
-
-**自动化**：100% CI。零人工判断——结构不匹配即 fail。
+**自动化**：100% CI。
 
 ### L2 · 结构布局（Structural Layout）
 
@@ -70,7 +57,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 ### L3 · 视觉像素（Visual Pixels）
 
-**判据**：设计原型截图 vs 实现截图，像素差异率 ≤ 阈值。
+**判据**：设计原型截图 vs 实现截图，像素差异率 ≤ 阈值。**必须覆盖状态矩阵中的所有态，不只是默认态**（详见 §6.4）。
 
 | 页面类型 | 阈值 | 说明 |
 |----------|------|------|
@@ -81,11 +68,13 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 **真相源**：`design/*.html` 原型截图（通过 HTTP server + Playwright 截图）。
 
 **验证流程**：
-1. 启动 HTTP server 托管 `design/` 目录
-2. Playwright 以固定 viewport（项目默认窗口尺寸）截图每个 `design/*.html`
-3. 启动 dev server
-4. Playwright 以相同 viewport 截图对应的 app 页面
-5. `toHaveScreenshot()` 或 pixel diff 工具对比，超阈值则 fail
+1. **枚举状态矩阵**（§6.4）——列出每个页面的所有数据量/流程态/条件分支
+2. 启动 HTTP server 托管 `design/` 目录
+3. Playwright 以固定 viewport（项目默认窗口尺寸）截图每个 `design/*.html`
+4. 启动 dev server
+5. Playwright 以相同 viewport **逐态**截图对应的 app 页面
+6. `toHaveScreenshot()` 或 pixel diff 工具对比，超阈值则 fail
+7. **无原型的代码独有态**：检查是否有合理的视觉处理，空白大面积留空 = fail
 
 **自动化**：90% CI。新页面首次需人工确认基线；后续 CI 自动回归。
 
@@ -146,64 +135,19 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 ---
 
-## §4 · 设计交付验收清单（通用模板）
+## §4 · 设计交付验收清单
 
-每个 UI 变更提交前，过这张清单：
-
-```markdown
-## Design Fidelity Checklist
-
-### L1 · Token
-- [ ] 所有颜色使用语义 token，无硬编码 hex
-- [ ] 所有字号使用项目 token，无 text-[Npx]
-- [ ] 圆角/阴影使用项目 token
-- [ ] 契约测试通过
-
-### L1.5 · 结构快照
-- [ ] ARIA 快照基线已建立（关键区块）
-- [ ] `toMatchAriaSnapshot()` diff 通过
-
-### L2 · 结构
-- [ ] 组件层级与设计原型对应
-- [ ] 间距与设计误差 ≤ 2px
-
-### L3 · 视觉
-- [ ] 截图 diff 率 ≤ 阈值（核心 0.05% / 次要 0.1%）
-- [ ] 新页面已建立截图基线
-
-### L4 · 交互
-- [ ] hover/focus/active/disabled 四态视觉正确
-- [ ] empty/loading/error 三态覆盖
-
-### L5 · 主题
-- [ ] Light + dark 双主题截图通过
-```
+每个 UI 变更提交前，逐层过关：L1 token 零硬编码 + 契约测试通过 → L1.5 ARIA 快照 diff 通过 → L2 层级/间距与设计对应（误差 ≤2px）→ L3 截图 diff ≤ 阈值 → L4 四态+三态覆盖 → L5 双主题通过。按 §2 触发场景决定覆盖范围。
 
 ---
 
 ## §5 · 项目落地指南
 
-本 skill 定义方法论（WHAT + WHY），项目侧定义实现（HOW）。
+本 skill 定义方法论（WHAT + WHY），项目侧在 `.claude/rules/design-fidelity.md` 定义实现（HOW），包含：页面清单（design/*.html ↔ app 路由）、阈值配置（核心/次要/动态）、Viewport 尺寸、基线位置、运行命令。
 
-每个有 `design/` 目录的项目，应在 `.claude/rules/design-fidelity.md` 中写明：
+**验证脚本**：项目必须在 `tests/fidelity/` 维护可执行脚本。数据从 design-fidelity.md 状态矩阵提取，覆盖全部态（不只默认态）。审计截图 → `_tmp/qa/fidelity/`，回归基线 → `*-snapshots/`（tracked）。命名：`<type>-<page>-<state>.png`。模板见 `templates/`。
 
-1. **页面清单**：哪些 design/*.html 对应哪些 app 路由/组件
-2. **阈值配置**：每个页面属于哪一档（核心/次要/动态）
-3. **Viewport**：截图的固定尺寸（通常是项目默认窗口尺寸）
-4. **基线位置**：截图基线文件存放路径
-5. **运行命令**：一键执行全量对比的命令
-
-### 与 dao-design-open 的关系
-
-`dao-design-open` 负责 **design → code 翻译**（读设计资产 → 产出 React 代码）。
-`dao-design-fidelity` 负责 **code → design 验证**（对比实现是否忠于设计）。
-
-两者构成闭环：翻译 → 验证 → 偏差修复 → 再验证。
-
-### 与 dao-loop 的关系
-
-Loop 的 UI 任务在造线阶段，每个 Task 完成后应至少过 L1 + L3。
-Loop 归档前（§6.5 验收比对）应 L1 ~ L5 全覆盖。
+**与其他 skill 的关系**：`dao-design-open`（翻译）→ 本 skill（验证）→ 偏差修复 → 再验证，构成闭环。Loop 造线每 Task 至少过 L1+L3，归档前 L1~L5 全覆盖。
 
 ---
 
@@ -235,21 +179,35 @@ Loop 归档前（§6.5 验收比对）应 L1 ~ L5 全覆盖。
 | 渲染差异 | 字体渲染/抗锯齿/亚像素 | 可接受，调高该页阈值并备注原因 |
 | 内容差异 | demo 数据不同 | 排除——用固定 mock 数据 |
 
-### 6.4 布局完整性检查（Layout Integrity）
+### 6.4 状态矩阵枚举（State Matrix）
 
-**L2 结构层的自动化补充**。检测窗口边缘的布局死区——CSS Grid/Flex 容器缺少行/列模板时，子元素无法填满容器，在窗口边缘留下可见空白。
+**L3~L5 截图前的强制前置步骤**——不枚举就截图 = 只验了默认态。
 
-**特征**：Token 全对、像素 diff 可能通过（死区在边缘不显眼），仅在特定数据状态下暴露。
+每页按四维度枚举：**数据量**（empty/single/normal/overflow）、**流程态**（idle/loading/error/complete）、**条件分支**（页面内不同模式/条件渲染）、**组合态**（关键交叉）。
 
-**检测方法**：取最外层布局容器的最后一个可见子元素的 bottom，与容器自身的 bottom 做差值。差值超过阈值（默认 20px）→ fail。
+**流程**：对照代码条件渲染逻辑列出所有视觉分支 → 标注每态是否有设计原型（有→截图对比，无→标记为代码独有态检查空白处理，代码未处理→上报缺失态）→ 逐态截图。
 
-**适用范围**：**所有页面、所有状态**——不分有无设计原型。模态对话框豁免。
+**项目落地**：`design-fidelity.md` 应含完整状态矩阵表，新页面首次实现时同步建立。
 
-**项目落地**：在验证脚本中实现 `assertNoLayoutGap` 工具函数，每个截图步骤后调用。阈值和容器选择器可在项目 `.claude/rules/design-fidelity.md` 中覆盖。
+### 6.4.1 布局完整性检查（Layout Integrity）
 
-**为什么放在 L2**：布局完整性是结构层断言（DOM 几何），不需要基线或设计原型——属于结构布局（L2）的自动化延伸。
+L2 结构层自动化补充——检测窗口边缘死区（Grid/Flex 容器子元素未填满）。
 
-### 6.5 Token 体系变更的特殊处理
+**方法**：取最外层布局容器最后一个可见子元素的 `bottom`/`right` 与容器自身做差值，超 20px → fail。所有页面、所有状态均执行。模态对话框豁免。
+
+**项目落地**：实现 `assertNoLayoutGap` 工具函数，fidelity 脚本每步截图后调用。容器选择器和阈值可在 `design-fidelity.md` 中覆盖。
+
+### 6.5 验证脚本标准流程
+
+**Playwright headless 是 L3~L5 主路径**（可复现/可 CI/可编程遍历状态矩阵）。windows-mcp Screenshot 仅限调试辅助（Tauri 原生窗口等 headless 无法触及的场景）。`toHaveScreenshot()` 是 CI 回归门，验证脚本是人可读审计产出——两者互补。
+
+**脚本数据结构**：页面-状态清单，每条含页面标识 / 状态标识 / 导航方式 / 状态注入 / 设计原型路径 / 阈值档位。清单从 `design-fidelity.md` 状态矩阵提取。清单为空或只有一态 = 不合规。
+
+**每条记录执行步骤**：① 状态注入 → ② 导航（等渲染稳定）→ ③ 截图（`_tmp/qa/fidelity/verify-<page>-<state>.png`）→ ④ 布局完整性检查（§6.4.1）→ ⑤ 有原型→像素 diff / 无原型→空白检测（内容区 >30%）→ ⑥ 设计原型截图存基线（`*-snapshots/`，tracked）
+
+**执行规范**：覆盖状态矩阵全部态；审计截图 → `_tmp/qa/fidelity/`，基线 → `*-snapshots/`；命名 `<type>-<page>-<state>.png`（audit/compare/verify）；Loop 造线跑子集，归档跑全量。
+
+### 6.6 Token 体系变更的特殊处理
 
 **当 Loop 涉及 token 体系变更（收敛/重命名/值调整）时**：
 
