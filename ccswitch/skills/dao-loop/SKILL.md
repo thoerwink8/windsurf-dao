@@ -307,12 +307,18 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 验收比对通过后三步：
 
 1. STATUS.json 标 `mode: done`
-2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>/`
+2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`
 3. 自动生成 `HANDOFF.md`
 
 ### 归档目录与模板
 
-归档位置：`docs/specs/_archive/<topic>/`（含全套文件 + HANDOFF.md）。活跃 loop 在 `docs/specs/<topic>/`。
+归档位置：`docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`（含全套文件 + HANDOFF.md）。活跃 loop 在 `docs/specs/<topic>/`。
+
+**命名格式**：`<topic>_YYYYMMDD-HHmm`
+- 分隔符：话题名与时间戳之间用 `_`，话题名内部保留 `-`，时间戳内部用 `-` 隔开日期和时分
+- 精度：到分钟，不含秒
+- 时间来源优先级：HANDOFF.md 归档时间 > STATUS.json `lock.acquired_at` > `git log --follow` 首次 commit 时间
+- 示例：`chat-ui-polish_20260622-1519`、`design-full-alignment_20260624-1106`
 
 - **INDEX.md**（归档索引表）：详见 `templates/index-template.md`
 - **HANDOFF.md**（交接文档）：详见 `templates/handoff-template.md`
