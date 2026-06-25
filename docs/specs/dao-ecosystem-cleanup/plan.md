@@ -55,7 +55,7 @@
 - 操作: §4 谋线文档列表从 `spec.md → acceptance.md → plan.md` 改为 `spec.md → acceptance.md → strategy.md → plan.md`
 - 验证: 读取确认 strategy.md 在列表中
 
-#### T6: brainstormer agent 加诊断报告处理 (≈3min) → A7
+#### ✅ T6: brainstormer agent 加诊断报告处理 (≈3min) → A7
 
 - 文件:
   - `ccswitch/agents/dao-brainstormer.md` (MODIFY)
