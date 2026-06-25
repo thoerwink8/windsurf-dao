@@ -37,7 +37,7 @@ description: 模糊需求→设计文档的苏格拉底式精炼。一次一问�
 
 ## delegated-continuous 豁免
 
-autopilot 隔离模式下：AI 自审替代用户审批,只在方向互斥 / 不可逆风险时才问。
+delegated-continuous 模式下：AI 自审替代用户审批,只在方向互斥 / 不可逆风险时才问。
 
 ## UI 任务
 
