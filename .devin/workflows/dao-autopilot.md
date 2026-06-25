@@ -49,26 +49,11 @@ description: 自动驾驶模式：AI 自主分解目标、递归执行、反思�
 
 ## 单 Task 闭环铁律
 
-> 慎终如始，则无败事矣。— 第 64 章
+> 慎终如始，则无败事矣。
 
-dao-autopilot 的所有任务推进必须遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。
-**绝对不允许「批量推进」**——连做多个 task 才一次 commit / update / 验证。
+所有推进遵循 **§2.1 五步循环 + §2.1.1 涅槃门** 单 task 闭环。**绝对不允许批量推进**——每 task 必须独立 commit + state 更新 + TODO 勾选 + 验证。原因：回退粒度 / 跨 session 恢复真相 / 用户看到的进度必须实时准确。
 
-### 为什么不可跨 task 合并
-
-1. **回退最小单位 = 一个 task**：合并多 task 一 commit，丢失精确 git revert 能力；用户说「撤销 Task X」时无法做到
-2. **state.json 是跨 session 真相源**：攒着不写，session 中断时下次恢复看到的是「上一批没完成」的假象，可能重做或漏做
-3. **TODO.md 是用户审查唯一接口**：攒着不更新，用户看到的是「假进度」——他以为还在 Task A，其实 Task A/B/C/D 都做了但都没标
-4. **验证不能合并**：「不见 GREEN 不算闭环」——把多 task 攒着只跑一次 verify，等于把错代码当 baseline 累积下游 task
-
-合并多 task = 用「效率」的虚名，损「可审计 / 可回退 / 可恢复」的实质，是反 dao 的「成事而败之」。
-
-### 唯一允许的合并场景
-
-**强耦合组合 task**：A 的 verify 隐含 B 的前置（如「装包 + 写 config」，写 config 的 verify 必然包含装包成功）。
-- 必须在 commit message 显式写组合 ID，且保留当前宿主前缀：`[宿主] autopilot(TG-1+TG-2): ...`
-- 必须在 §2.1.1 涅槃门中标明这是组合 task
-- ≤ 2 个 task 合并；超过 2 个一律拆开
+**唯一例外**：强耦合 ≤2 task（A 的 verify 隐含 B 的前置），commit message 写 `[宿主] autopilot(TG-1+TG-2): ...`。
 
 ---
 
@@ -122,45 +107,21 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 - 依赖关系尽量扁平（宽而浅，优于深依赖链）
 - Task 粒度：≤ 1 小时工作量，确保 context 内可完成
 
-#### 1.3.0 state 文件为什么不放 `.windsurf/`（重要设计约束）
+#### 1.3.0 state 文件位置
 
-> **铁律**：autopilot state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放 `.windsurf/autopilot/state.json`（v1 旧路径已废弃）。
+> **铁律**：state 文件**必须**放 `.dao-autopilot/state.json`，**不得**放进 `.windsurf/` 目录（历史教训：写进 `.windsurf/` 导致 Sidecar workspace 模式下 dao 体系规则整体被屏蔽——目标项目有了自己的 `.windsurf/` 后 Cascade 不再从 sidecar 加载 always_on rules）。通过 `.git/info/exclude` 本地排除，不进 git、不混淆项目配置、完成后整目录可删。
 
-**原因**：windsurf-dao 走 **Sidecar workspace** 模式 — windsurf-dao 作为伴生 workspace 打开时，目标项目**只有不存在 `.windsurf/` 目录**，Cascade 才会从 sidecar 加载 always_on rules（如 `execution.md` 含「禁 create_memory」铁律）。
+#### 1.3.1 mode 状态机
 
-如果 autopilot 把 state.json 放 `.windsurf/autopilot/`：
-- 目录被创建 → 目标项目变成「有自己 .windsurf 配置」
-- Cascade 切换为仅扫描本项目 `.windsurf/rules/`（空）
-- **sidecar rules 整体被屏蔽** → autopilot 期间 Cascade 失去 dao 体系约束
-- 实测后果：2026-05-11 TraceyU M1 autopilot 期间，Cascade 多次违反「禁 create_memory」铁律（属于 sidecar 的 `execution.md` 完全没注入）
+**mode 字段必须显式管理**（续推机制据此判断注入/避让）：
 
-→ 移到 `.dao-autopilot/` 后，`.windsurf/` 保持不存在，sidecar 持续生效。
+| mode 值 | 何时设 | 续推行为 |
+|---------|-------|---------|
+| `"running"` | 激活后 / ask 返回后 | ✅ stalled 则注入 continue |
+| `"awaiting_user_decision"` | `ask_user_question` 前 / 中断 / 收尾 ask | ❌ 不注入 |
+| `"completed"` / `"aborted"` | §五完成 / §四用户 abort | ❌ 不注入 |
 
-#### 1.3.1 mode 状态机（autopilot-watchdog 依据）
-
-> **背景**：「无感切号」插件 v2.15.0+ 内置 `autopilot-watchdog`，扫描 `.dao-autopilot/state.json`（v2.16.0+；旧版本扫 `.windsurf/autopilot/state.json` 兼容），当 `mode === "running"` 且 Cascade 静默 ≥120s（state.json mtime + state.vscdb mtime 双信号）时，自动注入 `continue` 让 autopilot 恢复推进。
-> 单 run 注入上限 50 次（防失控）。详见 `d:\frank\道\无感切号\docs\specs\2026-05-11-autopilot-watchdog-plan.md`。
-
-**mode 字段必须显式管理**，让 watchdog 知道何时该注入、何时该避让：
-
-| 阶段 | mode 值 | watchdog 行为 |
-|------|---------|--------------|
-| 1.6 激活后进入执行循环 | `"running"` | ✅ 监听是否 stalled，stalled 则注入 continue |
-| 2.2 错误处理（系统级阻断写 checkpoint）| `"running"` | 同上（错误恢复也算 stalled 的一种） |
-| §三 用户中断 → `ask_user_question` 前 | `"awaiting_user_decision"` | ❌ **不注入**——这是设计上的用户决策点 |
-| §三 ask 返回后继续执行 | `"running"` | 恢复 ✅ |
-| §四 用户范围调整 ask | `"awaiting_user_decision"` | ❌ 不注入 |
-| §五 收尾 ask（合并/继续/回退）| `"awaiting_user_decision"` | ❌ 不注入 |
-| §五.4 完成清理前 | `"completed"` | ❌ 不注入 |
-| §四 用户主动 abort | `"aborted"` | ❌ 不注入 |
-| §五.4 完成清理后 | _state.json 删除_ | 文件不存在 = watchdog 跳过 |
-
-**mode 转换操作**：读 state.json → `ConvertFrom-Json` → 改 `.mode` 为目标值（`awaiting_user_decision` / `running` / `completed`）→ `ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8` 写回。完成时紧接 §5.4 删除 state.json。
-
-**watchdog 写入的字段**（autopilot 流程读到时透传保留）：
-
-- `_stalled_inject_count`: number — watchdog 注入次数计数
-- `_last_stalled_inject_at`: ISO 时间戳 — 最近一次注入时间
+mode 转换：读 state.json → 改 mode 字段 → 写回。续推机制写入的 `_stalled_inject_count` / `_last_stalled_inject_at` 字段透传保留。
 
 #### 1.4 创建工作分支
 
@@ -273,47 +234,14 @@ state.json 字段：`mode` / `goal` / `branch` / `started` / `success_criteria` 
 > 版本号规则：若项目有 `package.json` 则读取并递增 patch 版本；否则按日期格式 `YYYY.MM.DD`。
 
 
-#### 5.2.5 lesson 上提评估关卡（强制）
+#### 5.2.5 lesson 上提评估（强制 · §5.3 硬前置）
 
-> 知常曰明。重要 lesson 不上提 = 失明。
+每条新 lesson 必须过三问（即便结论"仅留 CSV"也须显式说明）：
+1. **跨项目可复用？** → 上提到 `.devin/skills/dao-*/SKILL.md` 或 `dao.md`
+2. **项目反复会撞？** → 上提到项目 `AGENT.md`
+3. **打破现有流程信念？** → 上提到 `.devin/rules/*.md` 或对应 skill
 
-§5.2 把 lesson 写入 `data/evolution-lessons.csv` 后,**必须**对每条新写入 lesson 走一次"上提评估"。即便所有 lesson 都判"无需上提",也必须**显式说明**(不允许跳过)。
-
-**评估三问**(逐条 lesson 过):
-
-1. **跨项目可复用方法论？** → 评估上提到 `windsurf-dao/.devin/skills/dao-*/SKILL.md` 对应 skill
-   - 例: HTTP socket.on(end) 误诊 → 对应 dao skill 加调试模式
-   - 例: SQL 节流 > JS Map → 对应 dao skill 或新 skill
-
-2. **项目反复会撞的特定坑？** → 评估上提到该项目 `AGENT.md` 「项目特定坑」段
-   - 例: nginx keep-alive 项目特有配置 → 项目 AGENT.md
-   - 例: 项目 schema 反复踩的 migration 坑 → 项目 AGENT.md
-
-3. **打破现有不变量 / 修改流程信念？** → 评估上提到 `windsurf-dao/.devin/rules/*.md` 对应规则
-   - 例: superpowers 实战见证 → `superpowers-gate.md` 末尾加见证段
-   - 例: 发现 worktree 流程漏洞 → `dao-mantra.md` 或新建 sidecar rule
-
-**输出格式**（§5.3 报告内必含）：`### lesson 上提评估` 下逐条 `- T<id> "<title>": [上提到 <位置> | 仅留 CSV 因 <理由>]`。
-
-**上提归位表**(参考 `windsurf-dao/.devin/rules/knowledge-routing.md`):
-
-| 性质 | 位置 |
-|---|---|
-| 跨项目通用调试模式 | 已内化到 `dao.md`，无需独立 skill |
-| 跨项目通用执行模式 | 对应 dao skill 或 `dao.md` |
-| 跨项目通用 review | `.devin/skills/dao-review/SKILL.md` |
-| 项目反复会撞的坑 | 项目 `AGENT.md` 「项目特定坑」段(若无则新建) |
-| 流程规则修订 | `.devin/rules/*.md` 对应文件 |
-| 实战案例展示 | `windsurf-dao/README.md` 「实战案例」段 |
-| 仅历史可追溯 | 仅 CSV 即可,无需上提 |
-
-**反模式**:
-
-| 病 | 症状 | 对治 |
-|---|---|---|
-| 写完 CSV 就跑 | 单 task 写完 entry/lesson 直接进 §5.3 报告,不评估上提 | §5.2.5 是 §5.3 的硬前置,跳过 = §5 整体未完成 |
-| 全判"无需上提" | 默认全 skip,跳过显式评估 | 必须**逐条说出**判定依据,即便结论是"仅留 CSV" |
-| 边界模糊就不提 | "我不确定是不是跨项目通用" | 用户视角问: "另一个项目踩到同样坑时,这条 lesson 帮得上吗?" 帮得上 = 上提 |
+判据："另一个项目踩到同样坑时帮得上吗？"帮得上 = 上提。归位路由详见 `.devin/rules/knowledge-routing.md`。
 
 
 #### 5.3 最终报告
