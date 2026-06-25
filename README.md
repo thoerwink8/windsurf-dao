@@ -74,14 +74,14 @@
 
 ### 技能（`.devin/skills/`）
 
-> 共 27+ 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
+> 共 17 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
 
 | 类别 | 代表 skill | 一句话 |
 |---|---|---|
-| 元层调度 | `dao-pyramid` · `dao-fa-mechanism` | 金字塔 subagent / 机制参考 |
-| 开发镜头 | `dao-debug` · `dao-refactor` · `dao-test` · `dao-optimize` | cycle 内按需加载 |
-| 工程方法 | `dao-brainstorm` → `dao-plan` → `dao-execute` → `dao-review` → `dao-finish` | superpowers 五步 |
-| 领域专项 | `dao-research` · `dao-deploy` · `dao-cloud` · `dao-user-simulation` 等 | 按场景触发 |
+| 工程方法 | `dao-brainstorm` → `dao-plan` → `dao-review` → `dao-verify` | superpowers 五步核心 |
+| 设计流水线 | `dao-design-system` → `dao-design-open` → `dao-design-fidelity` | 设计系统→翻译→验证 |
+| 设计辅助 | `dao-design-taste` · `dao-design-layout` · `dao-design-qa` · `dao-component-radar` | 判据/布局/QA/组件健康 |
+| 领域专项 | `dao-cloud` · `dao-evolution` · `dao-worktree` · `dao-goal` | 按场景触发 |
 
 ### 配置同步（`config-sync/`）
 
@@ -131,9 +131,9 @@ config-sync/
 | 对象 | 路径 | 数量 | 角色（对应 Windsurf 侧） |
 |---|---|---|---|
 | 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻（≈ always_on 规则） |
-| 技能 | `ccswitch/skills/dao-*/` | 38 | 渐进披露，模型按 `description` 自动加载（≈ model_decision；含原 dao + 部分 rule 转 skill + 自检 skill） |
+| 技能 | `ccswitch/skills/dao-*/` | 17 | 渐进披露，模型按 `description` 自动加载（≈ model_decision） |
 | 命令 | `ccswitch/commands/dao-*.md` | 8 | slash command，`/dao-dev` `/dao-commit` 等（≈ manual + 由 workflow 平移） |
-| 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 `dao-pyramid` 金字塔调度（由 `.devin/agents` 平移） |
+| 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 dao-loop 金字塔调度 |
 | 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 
 部署入口：`dao.ps1 link-claude` 一键 symlink 上述对象到 `~/.claude/`，并幂等追加 `dao.md` 的 `@import`。
