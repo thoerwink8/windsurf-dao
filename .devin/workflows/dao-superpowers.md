@@ -87,20 +87,7 @@ npm test
 
 **announce**：「开始 dao-superpowers 第 2.0 步 · 形（分诊）」
 
-```
-dao-design-taste §0 分诊：本次引入多少未知？
-  ├─ DIRECT（已知形态里做事）→ 跳过原型，查 gallery 复用 → 直接进 2.1 写 plan
-  ├─ SCOPED（一块形态未知的新东西）→ 走 dao-design-taste 探索流程，只画这一块
-  └─ FULL（项目启动/换肤/大重构）→ 走 dao-design-taste 全量探索
-
-FULL/SCOPED 档走 dao-design-taste 探索流程：
-  一·察 → 项目画像（产品本质 + 用户 + 关键场景）
-  二·援 → 配色/字体方向从供给源取候选：ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则
-          🔒 用户拍板方向
-  三·拟 → 合成 N 套方向（受基石 §2 三旋钮 + §4 判据约束）
-  四·显 → 生成 _tmp/ui-mockup-<topic>-<ts>.html（throwaway 思考脚手架）
-  五·择 → 用户在浏览器审视形态/交互 → 选定 → 导出 design tokens
-```
+加载 `dao-design-taste` §0 分诊——DIRECT（已知形态→跳原型查 gallery→直接 2.1）/ SCOPED（局部探索）/ FULL（全量探索）。FULL/SCOPED 走五步：察（画像）→ 援（🔒用户拍板配色/字体方向，从供给源取候选）→ 拟（合成 N 套方向）→ 显（生成 throwaway HTML mockup）→ 择（🔒用户选定→导出 design tokens）。
 
 **🔒 双关卡**（仅 FULL/SCOPED）：
 - 援步骤：用户必须显式拍板配色/字体方向，不得替选
@@ -112,17 +99,7 @@ FULL/SCOPED 档走 dao-design-taste 探索流程：
 
 #### 2.1 · 写 plan
 
-```
-位置：docs/specs/<topic>-plan.md
-内容：
-  - 元信息（创建日期、触发、状态、文件改动估计）
-  - 目标与范围（MVP / Nice-to-have / 不做）
-  - 文件清单（路径 + 改动类型 + 关键内容点）
-  - 风险与缓解
-  - 验收条件
-  - 执行顺序
-  - UI 任务额外：plan 第一句话必须 "读 _tmp/design-tokens-<topic>.json"
-```
+写入 `docs/specs/<topic>-plan.md`，含：元信息 → 目标与范围（MVP/Nice-to-have/不做）→ 文件清单（路径+改动类型+关键点）→ 风险与缓解 → 验收条件 → 执行顺序。UI 任务额外：plan 第一句话必须"读 _tmp/design-tokens-<topic>.json"。
 
 **🔒 关卡**：plan 写完必须用户审批，不得跳过。
 
@@ -134,17 +111,7 @@ FULL/SCOPED 档走 dao-design-taste 探索流程：
 
 **announce**：「开始 dao-superpowers 第 3 步 · 执行第 N 个 task」
 
-```
-逐 task：
-  - 实施前 announce 当前 task
-  - 实施中：写代码 + 跑测试（红→绿→refactor）
-  - 实施后：fresh 验证（参 dao-verify）
-  - task 间 checkpoint：让用户随时可调
-
-subagent 调度（按需）：
-  - 满足 ≥3 项才派（模板化? 不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?）
-  - 否则主会话直接做（更快，无 rate limit 风险）
-```
+逐 task 执行：announce → 写代码+跑测试（红→绿→refactor）→ fresh 验证（参 dao-verify）→ task 间 checkpoint 让用户可调。subagent 调度按需：满足 ≥3 项才派（模板化/不同模型/context 臃肿/rate limit 有预算/值 15× token/可并行），否则主会话直接做。
 
 ### 四·审（dao-review · 受国之垢）
 
@@ -152,19 +119,7 @@ subagent 调度（按需）：
 
 **announce**：「开始 dao-superpowers 第 4 步 · 派 reviewer」
 
-```
-三阶段 review：
-  1. spec compliance：是否实现了 plan 里的所有点？
-  2. code quality：代码质量、命名、错误处理、边界
-  3. visual compliance（UI 任务必加）：过 dao-design-taste §6 验收——
-     逐条过 §4 体检表（禁 AI 紫 / 单一强调 / 交互状态全周期 / 对比度 a11y / 文案自审）
-     + preview 真实渲染肉眼看。不做 mockup-vs-impl 像素 diff。
-
-派活：
-  - 普通模块 → reviewer profile
-  - 核心模块 (auth/payment/security/core) → reviewer-critical profile
-  - UI 模块 → reviewer 额外负责 visual compliance（过 §6，看真实渲染不是只看 git diff）
-```
+三阶段 review：① spec compliance（plan 所有点都实现？）② code quality（质量/命名/边界）③ visual compliance（UI 必加：dao-design-taste §6 验收——§4 体检表 + preview 真实渲染，不做像素 diff）。派活：普通→reviewer，核心(auth/payment/security/core)→reviewer-critical，UI→reviewer 额外负责 visual compliance（过 §6 看真实渲染不是只看 git diff）。
 
 如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→修代码或修 token**。
 
@@ -231,42 +186,5 @@ rule 是"什么时候走 + 不能怎么走"，workflow 是"怎么一步步走"�
 - **不并行五步**——一步完成才进下一步，不可跳过
 - **不跳 2.0 分诊**——UI 任务必先过 dao-design-taste §0 分诊定档（DIRECT 跳原型 / SCOPED 局部 / FULL 全量），不再"凡 UI 必走 mockup"
 - **援从供给源取，不凭空发明**——FULL/SCOPED 档的"援"先于"拟"：配色/字体方向从 ui-ux-pro-max（若注入）/ 用户参考 / 基石 §4 准则取候选，胜过 AI 闭门造车
-
-## 完整执行模板
-
-```
-🚀 /dao-superpowers 启动
-任务：<topic>
-预估复杂度：<低/中/高>
-UI 视觉决策：<是/否>   ← 决定是否激活 2.0 · 形
-
-▶ 第 1 步 · 隔（dao-worktree）
-  [创建 worktree + 干净 install + 测试基线]
-
-▶ 第 2 步 · 谋
-  ├─ 2.0 · 形（dao-design-taste §0 分诊）⭐
-  │  [DIRECT 跳原型查 gallery / SCOPED 局部 / FULL 全量]
-  │  [FULL·SCOPED 走五步：察 → 援 → 拟 → 显 → 择]
-  │  🔒 援：用户拍板配色/字体方向    🔒 择：用户选定方向
-  │  唯一长期产物：_tmp/design-tokens-<topic>.json（HTML 是 throwaway）
-  └─ 2.1 · 写 plan（dao-plan）
-     [写 docs/specs/<topic>-plan.md]
-     🔒 用户审批 plan
-
-▶ 第 3 步 · 造
-  [逐 task 执行 + checkpoint]
-  [UI 任务：implementer 拿 design tokens 实现，引用 token + 复用 gallery 组件]
-
-▶ 第 4 步 · 审（dao-review）
-  [派 reviewer / reviewer-critical]
-  [UI 任务：reviewer 过 dao-design-taste §6 验收真实渲染]
-
-▶ 第 5 步 · 归
-  [merge / PR / cleanup]
-
-🏁 涅槃
-经历：<5 步回顾>
-成果：<文件/commit/PR>
-```
 
 法不违德，德不违道，道法自然。
