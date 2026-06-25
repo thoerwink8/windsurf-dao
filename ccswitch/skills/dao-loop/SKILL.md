@@ -239,10 +239,11 @@ AI 根据复杂度判断，常见：
 
 状态从 `go → executing` 之前，**必须逐项完成并在 STATUS.json 记录**：
 
-1. **切分支** — `git checkout -b feat/<topic>`，确认 `git branch --show-current` 输出 `feat/<topic>`
-2. **STATUS.json 写入 `dispatch.branch`** — 值 = 实际分支名，后续每次恢复 session 时验证当前分支与此值一致
-3. **基线验证** — 项目有构建/测试的先跑一次确认绿灯（无构建的跳过）
-4. **三项全过 → 才写 `mode: executing`**
+1. **谋线文档在 main** — 确认 `docs/specs/<topic>/` 已 commit + push 到 `main`/`master`。违反检测：`git log main -- docs/specs/<topic>/STATUS.json` 无输出 → 先在 main 上补提交谋线文档再继续。理由：孤儿检测、多 Loop 并发感知、可恢复性都依赖文档在 main 上可见
+2. **切分支** — `git checkout -b feat/<topic>`，确认 `git branch --show-current` 输出 `feat/<topic>`
+3. **STATUS.json 写入 `dispatch.branch`** — 值 = 实际分支名，后续每次恢复 session 时验证当前分支与此值一致
+4. **基线验证** — 项目有构建/测试的先跑一次确认绿灯（无构建的跳过）
+5. **五项全过 → 才写 `mode: executing`**
 
 违反检测：任何时刻发现 `mode = executing` 但当前 git 分支是 `main`/`master` → **立即停止任务执行**，先补创分支再继续。
 
