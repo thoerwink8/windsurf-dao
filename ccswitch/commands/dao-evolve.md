@@ -29,15 +29,7 @@ description: 系统自我进化 + 健康检查：审查规则/Commands/Skills/MC
 
 系统由四个实体结构和一个流通机制组成：
 
-| 脏  | 域                      | 位置                              | 职能             |
-| --- | ----------------------- | --------------------------------- | ---------------- |
-| 心  | **Rules（元规则）**     | ccswitch/dao.md + 项目 CLAUDE.md/AGENT.md | 行为的根本准则   |
-| 肺  | **Commands（工作流）**  | ccswitch/commands/                  | 做事的标准流程   |
-| 肝  | **Skills（技能）**      | ccswitch/skills/                    | 具体能力的封装   |
-| 肾  | **MCP（外部工具）**     | settings.json 的 MCP 配置         | 与外部系统的连接 |
-| 骨  | **Stacks（技术栈处方）** | ccswitch/stacks/                    | 固定的项目技术选型 |
-
-**虚**（Memory）不是第五脏，是层间流通的气。在 Claude Code 下，文件式 memory（`~/.claude/.../memory/`）就是知识载体——知识归位时写入项目文件，不在此审查。虚是每次涅槃的内置步骤，不是定期体检的器官。
+五脏：**心** Rules（`ccswitch/dao.md` + 项目 `CLAUDE.md`/`AGENT.md`，行为准则）· **肺** Commands（`ccswitch/commands/`，标准流程）· **肝** Skills（`ccswitch/skills/`，能力封装）· **肾** MCP（`settings.json` MCP 配置，外部工具连接）· **骨** Stacks（`ccswitch/stacks/`，技术选型）。**虚**（Memory `~/.claude/.../memory/`）是层间流通的气，涅槃时归位清空，不在此审查。
 
 ---
 
@@ -189,13 +181,7 @@ py search.py stats --data-dir <project>/data
 
 不是每次都需要全面审查：
 
-| 触发         | 范围            | 深度     |
-| ------------ | --------------- | -------- |
-| 行为异常     | 快速体检 4 项   | 1 分钟   |
-| 感觉某处不对 | 单一脏器        | 快速修正 |
-| 新能力引入   | 相关脏器        | 整合适配 |
-| 定期审查     | 全四脏          | 完整进化 |
-| 重大理念变化 | 心（Rules）为主 | 深层重构 |
+行为异常 → 快速体检 4 项（1 分钟）· 感觉某处不对 → 单一脏器快速修正 · 新能力引入 → 相关脏器整合 · 定期审查 → 全四脏完整进化 · 重大理念变化 → 心（Rules）深层重构。
 
 ## 与其他命令的关系
 

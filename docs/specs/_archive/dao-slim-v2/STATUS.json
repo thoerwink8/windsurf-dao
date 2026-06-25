@@ -12,7 +12,7 @@
     "heartbeat": "2026-06-25T11:00:00Z"
   },
   "thread": "dev",
-  "mode": "reviewing",
+  "mode": "done",
   "docs": {
     "spec": { "status": "done", "required": true },
     "strategy": { "status": "done", "required": true },
