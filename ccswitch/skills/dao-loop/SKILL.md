@@ -358,6 +358,8 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 | **追加需求** | 用户想在当前 Loop 扩展范围 | 用户描述需求 → 追加正式 Task 到 plan.md → `mode: executing` 回造线 |
 | **暂不归档** | 用户需要时间判断或外部确认 | 保留 `mode: reviewing`，不 ScheduleWakeup，用户主动恢复 |
 
+**主动追加提醒**：reviewing 讨论中浮现新改进想法时（用户提问引发、AI 分析发现），AI 主动评估规模并提醒："这个改动约 N 个文件，要追加为 T<X> 当场做，还是记入 HANDOFF 留给下个 Loop？"——不默默归类为"未来话题"。
+
 **状态机变更**：`reviewing` 不再是过渡态，而是用户决策等待态。只有用户选择「确认归档」后才进入 `done`。选择「指出问题」或「追加需求」时回退到 `executing`。
 
 **轮询行为**：`mode: reviewing` 时**不自动 ScheduleWakeup**——此阶段等待用户输入，轮询会空转。用户做出选择后，若回到 `executing` 则恢复轮询。

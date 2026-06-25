@@ -84,6 +84,17 @@
 - 文件: `README.md`
 - 修正: skill 计数 17→16
 
+#### ✅ T11: evolution 档案层 memory+A+C 改造 (≈10min) — 用户审查追加
+
+- 文件:
+  - `ccswitch/skills/dao-evolution/SKILL.md` + `.devin/` 镜像 (MODIFY — 路由判据+CSV schema+遗忘+反模式)
+  - `ccswitch/skills/dao-evolution/scripts/core.py` + `.devin/` 镜像 (REWRITE — 旧 schema 对不上)
+  - `ccswitch/skills/dao-evolution/scripts/search.py` + `.devin/` 镜像 (REWRITE — 匹配新字段)
+  - `docs/evolution/evolution-lessons.csv` (MIGRATE — 10→5 字段)
+  - `ccswitch/skills/dao-loop/SKILL.md` §7.2.5 (MODIFY — 加主动追加提醒)
+- 操作: CSV 默认写入 + lessons 10→5 字段(insight 合并因果链) + 脚本修复(旧schema→新schema) + dao-loop 加主动提醒规则
+- 验证: `py search.py search "格式块"` 返回正确结果 + `dao-smoke` 通过
+
 #### T+: 持续推进（动态追加）
 
 - 每 Task 完成后 micro-audit 改动影响区域

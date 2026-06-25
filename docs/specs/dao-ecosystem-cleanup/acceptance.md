@@ -14,6 +14,7 @@
 | A8 | dao-smoke 全过 | `node scripts/dao-smoke.mjs` | ✅ 0 failures (51/51) |
 | A9 | 双栈一致 | dao-smoke 交叉引用检查 | ✅ |
 | A10 | dao.md 场景表同步 | 读 `ccswitch/dao.md` 场景速查表 | ✅ 退役模块已移除，类型列准确 |
+| A11 | evolution CSV 默认写入+5字段 | 读 SKILL.md 路由判据+CSV schema; `py search.py search "格式块"` | ✅ 默认写入规则+5字段schema+搜索正常 |
 
 ## 回归验收
 
@@ -30,3 +31,4 @@
 | playbook 有独有价值内容 | 提取到 design-system 后再删除 |
 | autopilot 有独有价值内容 | 提取到 dao-dev 后再删除 |
 | 持续推进无收敛 | 连续 2 轮 micro-audit 无新发现 → 停止 |
+| 审查中浮现新想法 | AI 主动评估规模并提醒追加，不默默归类为未来话题 |
