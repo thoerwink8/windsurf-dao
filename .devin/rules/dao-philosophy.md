@@ -62,21 +62,6 @@ description: 道德经哲学——八条不变原则、实践公理、推理链(
 
 ## 元规则加载机制（dao.ps1 link-global）
 
-> 善行无辙迹。symlink 让源文件即真相。
-
-```
-windsurf-dao/global_rules.md（源文件，git 版本控制）
-        ↓ dao.ps1 link-global（一次性 symlink）
-        ↓
-~/.codeium/windsurf/memories/global_rules.md（Windsurf 用户级配置）
-        ↓
-所有项目自动加载为 user_global Memory（每条消息注入）
-```
-
-- **零副本**：编辑源文件即编辑全局规则，无需复制
-- **零 UI 操作**：废除了"复制粘贴到 Windsurf UI Settings"的手动路径
-- **跨项目一致**：所有项目自动加载同一份元规则，无论是否打开 dao sidecar
-- **跨设备同步**：`git pull` 同步源文件，symlink 自动指向新内容
-- **诊断**：`dao.ps1 status` 查看 symlink 状态
+`windsurf-dao/global_rules.md`（git 版本控制）→ `dao.ps1 link-global`（一次性 symlink）→ `~/.codeium/windsurf/memories/global_rules.md` → 所有项目每条消息自动注入。零副本、零 UI 操作、跨项目一致、`git pull` 即跨设备同步。诊断：`dao.ps1 status`。
 
 法不违德，德不违道，道法自然。
