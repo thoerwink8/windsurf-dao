@@ -103,7 +103,7 @@
     {
       "id": "playwright",
       "name": "playwright",
-      "server_config": "{\"type\":\"stdio\",\"command\":\"cmd\",\"args\":[\"/c\",\"npx\",\"-y\",\"@playwright/mcp@latest\"]}",
+      "server_config": "{\"type\":\"stdio\",\"command\":\"cmd\",\"args\":[\"/c\",\"npx\",\"-y\",\"@playwright/mcp@latest\",\"--headless\"]}",
       "description": null,
       "homepage": null,
       "docs": null,
