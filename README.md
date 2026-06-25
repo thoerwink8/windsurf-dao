@@ -64,17 +64,17 @@
 
 | 工作流 | 功能 |
 |---|---|
-| `/dao-autopilot` | 自主驾驶：探测 TODO/AGENT_GUIDE → 执行 → 回写 |
 | `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
 | `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
 | `/dao-distill` | 会话级知识沉淀 |
 | `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
 | `/dao-doc` | 文档生成与更新 |
+| `/dao-goal` | 目标导向持续推进 |
 
 ### 技能（`.devin/skills/`）
 
-> 共 17 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
+> 共 16 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
 
 | 类别 | 代表 skill | 一句话 |
 |---|---|---|

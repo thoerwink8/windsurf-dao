@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 工作流的选择与协作机制——/dev /cycle /autopilot /commit /distill /evolve /doc /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
+description: 工作流的选择与协作机制——/dev /cycle /commit /distill /evolve /doc /thread-tree 各自定位、深度工作模式判断(何时进入静默)、进化触点决策(何时该 /evolve)。讨论"用哪个工作流"或"是否进入静默深度模式"时读取
 ---
 
 # 工作流生态 · 怎么协作
@@ -13,7 +13,6 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 
 - `/dev` — **主管线**，驱动 `/cycle` 引擎执行各阶段
 - `/cycle` — **通用引擎**，通过镜头机制加载领域技能（dao skills + 图书馆 skills 互补）
-- `/autopilot` — **持续自主执行模式**，激活后进入扩展内观状态，退出后完全恢复正常
 - `/commit` — 从变更生成 commit message 并提交
 - `/distill` — 会话级知识沉淀（跨会话 Git 考古已并入 `/evolve`）
 - `/evolve` — 审查一切（包括自身） + 快速体检（`/health-check`），有感觉才触发
@@ -29,7 +28,7 @@ description: 工作流的选择与协作机制——/dev /cycle /autopilot /comm
 
 ## 深度工作模式（静默执行）
 
-任务明确+方向已定 → 计划→静默执行（工具为主，文字趋零）→最终报告。收尾不豁免 `ask_user_question`。`/autopilot` 是独立工作流，不属于静默执行。不适用：方向不明/需求有歧义/首次合作。
+任务明确+方向已定 → 计划→静默执行（工具为主，文字趋零）→最终报告。收尾不豁免 `ask_user_question`。不适用：方向不明/需求有歧义/首次合作。
 
 ## 进化触点
 

@@ -1,5 +1,5 @@
 ---
-description: 双线程循环开发——文档驱动的全自动开发闭环。谋线生成 spec/acceptance/plan，造线自动执行代码。支持多 loop 并发、跨 session 协调。
+description: 双线程循环开发——文档驱动的全自动开发闭环。谋线生成 spec/acceptance/strategy/plan，造线自动执行代码。支持多 loop 并发、跨 session 协调。
 argument-hint: "[需求描述 或 loop名称]"
 ---
 
@@ -61,7 +61,7 @@ argument-hint: "[需求描述 或 loop名称]"
 ### 4. 谋线
 
 加载 `dao-loop` skill §4，AI 自动生成文档 → 用户确认：
-- spec.md → acceptance.md → plan.md → 交叉校验
+- spec.md → acceptance.md → strategy.md → plan.md → 交叉校验
 - 每完成一个文档更新 STATUS.json
 - 全部 done + 校验通过 → `go_ready: true`
 
