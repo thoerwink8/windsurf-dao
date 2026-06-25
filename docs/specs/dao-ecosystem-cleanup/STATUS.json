@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "topic": "dao-ecosystem-cleanup",
+  "type": "refactor",
+  "summary": "基于 v2 诊断报告清理 dao 生态孤岛、退役冗余模块、明确子集关系、补齐引用缺口",
+  "created": "2026-06-25T12:00:00Z",
+  "extends": "dao-fusion",
+  "lock": {
+    "holder": "session-9c374d22",
+    "host": "claude-code",
+    "acquired_at": "2026-06-25T13:00:00Z",
+    "expires_at": "2026-06-25T13:10:00Z",
+    "heartbeat": "2026-06-25T13:05:00Z"
+  },
+  "thread": "dev",
+  "mode": "executing",
+  "docs": {
+    "spec": { "status": "done" },
+    "strategy": { "status": "done" },
+    "acceptance": { "status": "done" },
+    "plan": { "status": "done" }
+  },
+  "go_ready": true,
+  "dispatch": { "branch": "feat/dao-ecosystem-cleanup", "dispatched_at": "2026-06-25T13:00:00Z", "worker": "session-9c374d22" },
+  "execution": { "current_task": "T2", "completed_tasks": ["T1"], "total_tasks": 7 },
+  "depends_on": null,
+  "merged_into": null
+}
