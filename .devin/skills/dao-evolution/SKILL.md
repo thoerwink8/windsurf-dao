@@ -19,21 +19,20 @@ description: 演化知识管理（三层归位）。当任务涉及教训沉淀�
 
 ## 路由判据（每条教训必须显式走一次）
 
-写完教训后，逐条回答三问：
+**档案层默认写入**——每条教训无条件写 CSV（5 字段低摩擦），然后追问两个加层问题：
 
-1. **能直接改变 AI 行为？**（铁律级，每次都该遵守）→ **行为层**：写入 dao.md 或对应 skill
-2. **跨会话反复有用但不是铁律？**（模式、坑、决策依据）→ **记忆层**：写 memory 文件
-3. **需要详细记录因果链以备回溯？** → **档案层**：写 CSV
+1. **能直接改变 AI 行为？**（铁律级）→ **+行为层**：写入 dao.md 或对应 skill
+2. **跨会话反复有用？**（模式、坑、决策依据）→ **+记忆层**：写 memory 文件
 
-三层可叠加：重要教训同时写行为层 + 档案层。大多数教训至少写记忆层 + 档案层。
+三层可叠加：大多数教训 = 档案层 + 记忆层。重要教训 = 三层全写。
 
 ### 显式输出格式
 
 ```
-### 教训归位
-- "<title>": 行为层（写入 dao.md §XX） + 档案层
-- "<title>": 记忆层（memory/evolution-xx.md） + 档案层
-- "<title>": 仅档案层，因 <理由>
+### 教训归位（CSV 已默认写入）
+- "<title>": +行为层（写入 dao.md §XX）+记忆层
+- "<title>": +记忆层（memory/evolution-xx.md）
+- "<title>": 仅档案层
 ```
 
 ## 记忆层写入
@@ -58,30 +57,25 @@ metadata:
 
 ## 档案层写入（Obsidian-ready）
 
-CSV 是未来 Obsidian vault 的数据源，每条必须详细到**独立可读**：
+CSV 默认写入，5 字段低摩擦。每条教训独立可读。
 
-**`docs/evolution/evolution-lessons.csv`**：
+**`docs/evolution/evolution-lessons.csv`**（5 字段）：
 ```
-id,date,title,context,root_cause,fix,lesson,tags,links,status
+id,date,title,insight,tags
 ```
 
-- **id**: L001, L002...（从 L001 重新编号）
+- **id**: L1, L2...（递增序号）
 - **date**: YYYY-MM-DD
 - **title**: 一句话标题
-- **context**: 什么场景触发了这个教训（完整描述）
-- **root_cause**: 根因分析
-- **fix**: 怎么修的
-- **lesson**: 提炼出的可复用洞察
-- **tags**: 分号分隔（未来直接转 Obsidian #tag）
-- **links**: 相关条目 ID，分号分隔（未来转 `[[wikilink]]`）
-- **status**: active / deprecated / superseded
+- **insight**: 因果叙事——什么情况+为什么出错+怎么解决+可复用洞察（1-3 句）
+- **tags**: 分号分隔（Obsidian #tag），交叉引用用 `→L<id>` / `→E<id>`
 
-**`docs/evolution/evolution-entries.csv`**：
+**`docs/evolution/evolution-entries.csv`**（6 字段）：
 ```
 id,date,title,summary,lesson_ids,tags
 ```
 
-- **id**: E001, E002...
+- **id**: E1, E2...（递增序号）
 - 演化条目是多条教训的聚合叙事，记录一次完整的演化事件
 
 ### 搜索
@@ -92,7 +86,7 @@ py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evo
 
 ## 遗忘
 
-- 新教训推翻旧教训 → 旧条目 status 改为 `superseded`，新条目 links 列引用旧 ID
+- 新教训推翻旧教训 → 新条目 tags 加 `→L<旧id>(superseded)`，旧条目留原样（git 是审计轨迹）
 - 记忆层：更新或删除对应 memory 文件
 - 行为层：直接改写 dao.md / skill 正文
 
@@ -106,7 +100,7 @@ py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evo
 
 | 病 | 对治 |
 |---|---|
-| 只写 CSV 不写 memory | CSV 是死档案，memory 才能被想起 |
+| 跳过 CSV 只写 memory | CSV 是默认写入，不可跳过 |
 | 全写 memory 不分层 | 铁律级写行为层，记忆层放模式/坑 |
 | memory 索引写太长 | MEMORY.md 每条 <150 字符，详情在文件里 |
-| 教训写一句话 | 档案层要完整因果链（context→root_cause→fix→lesson） |
+| insight 写一句话 | 要因果叙事（情况→根因→解法→洞察），1-3 句 |
