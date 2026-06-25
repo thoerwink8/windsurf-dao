@@ -8,6 +8,8 @@ description: 系统自我进化 + 健康检查：审查规则/Skills/Memory/MCP�
 > 夫物芸芸，各复归其根。归根曰静，静曰复命。
 > 复命曰常，知常曰明。不知常，妄作凶。
 
+> **子集关系**：本工作流是 `dao-evolution` skill 的**系统级**子集——执行跨会话审查 + 健康检查 + 减法进化。会话级知识沉淀见 `/distill`，完整演化协议见 `dao-evolution` skill。
+
 ## 铁律
 
 ```
