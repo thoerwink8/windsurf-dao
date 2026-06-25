@@ -79,6 +79,11 @@
 - 文件: `ccswitch/commands/dao-loop.md`, `README.md`
 - 修正: frontmatter description 补 strategy, README workflow 表补 dao-goal
 
+#### ✅ T10: README skill 计数修正 (≈1min) — micro-audit R2 F1
+
+- 文件: `README.md`
+- 修正: skill 计数 17→16
+
 #### T+: 持续推进（动态追加）
 
 - 每 Task 完成后 micro-audit 改动影响区域

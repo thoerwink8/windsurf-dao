@@ -74,7 +74,7 @@
 
 ### 技能（`.devin/skills/`）
 
-> 共 17 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
+> 共 16 个 skill，按场景自动加载。完整清单见 `ls .devin/skills/`。
 
 | 类别 | 代表 skill | 一句话 |
 |---|---|---|
