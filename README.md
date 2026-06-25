@@ -70,6 +70,7 @@
 | `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
 | `/dao-doc` | 文档生成与更新 |
+| `/dao-goal` | 目标导向持续推进 |
 
 ### 技能（`.devin/skills/`）
 

@@ -17,13 +17,13 @@
 | ------------------------------ | ------------------------------------------------------ |
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
-| `.devin/rules/`             | 11 文件 5 层架构（详见 `.devin/rules/README.md`，含 dao-mantra） |
-| `.devin/workflows/dao-*.md` | 9 个工作流（dev/cycle/commit/distill/doc/evolve/goal/thread-tree/superpowers） |
-| `.devin/skills/dao-*/`      | 27 个可复用技能（元层 4 + 镜头 5 + 方法论 8 + 专项 7 + 道德经化缺口 3） |
+| `.devin/rules/`             | 13 文件（12 rules + README 索引，详见 `.devin/rules/README.md`，含 dao-mantra） |
+| `.devin/workflows/dao-*.md` | 7 个工作流（dev/commit/distill/doc/evolve/goal/superpowers） |
+| `.devin/skills/dao-*/`      | 16 个可复用技能 |
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
-| `.devin/agents/*/AGENT.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
+| `ccswitch/agents/dao-*.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
 
 **部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
 

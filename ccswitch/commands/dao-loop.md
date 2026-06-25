@@ -1,5 +1,5 @@
 ---
-description: 双线程循环开发——文档驱动的全自动开发闭环。谋线生成 spec/acceptance/plan，造线自动执行代码。支持多 loop 并发、跨 session 协调。
+description: 双线程循环开发——文档驱动的全自动开发闭环。谋线生成 spec/acceptance/strategy/plan，造线自动执行代码。支持多 loop 并发、跨 session 协调。
 argument-hint: "[需求描述 或 loop名称]"
 ---
 
