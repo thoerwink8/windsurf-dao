@@ -50,4 +50,4 @@ plan 必依赖已审批 design,不允许凭空 plan。
 
 ## delegated-continuous 豁免
 
-autopilot 隔离模式下：AI 自审替代用户审批,记录"delegated-continuous 下自动通过"。
+delegated-continuous 模式下：AI 自审替代用户审批,记录"delegated-continuous 下自动通过"。
