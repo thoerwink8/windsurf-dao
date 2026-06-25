@@ -193,6 +193,7 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 | `dao-verify` | 翻译完成后走涅槃门验证 |
 | `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
 | `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
+| `dao-design-qa` | 视觉偏差修复循环——翻译后发现 UI 偏差时自动触发（截图→定位→修代码→再验证） |
 
 ---
 
