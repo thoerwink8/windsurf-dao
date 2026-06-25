@@ -9,22 +9,7 @@ description: 项目目录结构约定——文件放哪里、根目录放什么�
 
 ## 标准项目结构
 
-```
-根目录/
-  README.md              ← 人看的项目介绍
-  AGENT.md               ← AI 入口（<80 行，指向 rules）
-  TODO.md                ← 路线图 + 里程碑（活文档）
-
-  .devin/
-    rules/               ← AI 自动加载的领域规范（按文件分领域）
-      *.md               ← 设计 token / 测试约定 / 架构决策等
-
-  docs/
-    prd.md               ← 产品需求文档（如有）
-    plans/               ← 所有实施计划（统一目录，按日期命名）
-      YYYY-MM-DD-主题.md
-    design/              ← 设计资产（HTML 原型 + 截图）
-```
+根目录放活文档（`README.md` 项目介绍、`AGENT.md` AI 入口 <80 行、`TODO.md` 路线图）。`.devin/rules/*.md` 放 AI 自动加载的领域规范。`docs/` 下放 `prd.md`、`plans/YYYY-MM-DD-主题.md`（统一实施计划）、`design/`（HTML 原型 + 截图）。
 
 ## 根目录法则
 
@@ -40,32 +25,11 @@ description: 项目目录结构约定——文件放哪里、根目录放什么�
 
 ## docs/ 结构
 
-```
-docs/
-├── prd.md                       # 产品需求（从根目录移入）
-├── plans/                       # 所有实施计划（统一，不分 specs/superpowers）
-│   ├── YYYY-MM-DD-*-design.md   # 功能 design spec（dao-brainstorm 产出）
-│   ├── YYYY-MM-DD-*-plan.md     # 实施 plan（dao-plan 产出）
-│   └── foundation-standard.md   # Token 规范等长期参考
-└── design/                      # 设计资产（设计层 source of truth）
-    ├── *.html                   # Open Design HTML 原型
-    └── *.png                    # 截图
-```
-
-**不再分 `specs/` 和 `superpowers/` 两套目录**——它们是同一件事的不同阶段，统一放 `plans/`。
+`docs/prd.md`（产品需求）、`docs/plans/`（统一实施计划，不分 specs/superpowers：`YYYY-MM-DD-*-design.md` / `*-plan.md` / `foundation-standard.md`）、`docs/design/`（HTML 原型 + 截图，设计层 source of truth）。
 
 ## 组件代码目录
 
-```
-src/components/        或  apps/<app>/src/components/
-├── ui/                # shadcn 基础件（npx shadcn add 产出，不手动改结构）
-├── pool-column.tsx    # 业务组件（设计 → 代码实现）
-└── ...
-```
-
-- `ui/` = shadcn 管理的基础件
-- 直接放 `components/` = 项目特有的业务组件
-- 不要把业务组件塞进 `ui/`，不要把 shadcn 件拿出 `ui/`
+`src/components/ui/` = shadcn 基础件（`npx shadcn add` 产出，不手动改结构）；业务组件直接放 `components/` 根层，不放 `ui/` 子目录。
 
 ## 设计资产约定
 

@@ -9,13 +9,7 @@
 
 **定位**：Windsurf AI 配对编程方法论——一套基于道德经哲学的 AI 行为规则体系，通过 Sidecar workspace 部署。
 
-**核心架构**（v2 · 2026-04-26）：
-
-```
-心·Rules（元规则）→ 肺·Workflows（编排）→ 肝·Skills（实现）→ 肾·MCP（外部）→ 骨·Stacks（技术栈）
-                                    ↕
-                              虚·Memory（层间流通之气）
-```
+**核心架构**（v2 · 2026-04-26）：心·Rules（元规则）→ 肺·Workflows（编排）→ 肝·Skills（实现）→ 肾·MCP（外部）→ 骨·Stacks（技术栈），虚·Memory 为层间流通之气。
 
 **关键文件**：
 
@@ -86,50 +80,25 @@
 
 ### 4.1 调度图
 
-```
-战略层  Opus 4.7 XHigh/Max     ── strategist        架构定调 / 卡死攻坚
-                                                   稀少召唤，贵但值
-─────────────────────────────────────────────────────────────────
-指挥层  Opus 4.7 High          ── reviewer-critical 核心模块对抗性 review
-        Sonnet 4.6 Thinking    ── brainstormer      Step 1 苏格拉底问需求
-                               ── spec-writer       把 plan 翻成 worker 可执行 spec
-                               ── reviewer          two-stage review 主力
-                               ── debugger          三层螺旋×15武器 深度调试
-        GPT 5.5 Low/High       ── plan-writer       PRD/方案/选型/2-5 分钟任务清单
-─────────────────────────────────────────────────────────────────
-调度层  Adaptive               ── 主会话默认         调度 + 不确定时兜底
-─────────────────────────────────────────────────────────────────
-工人层  SWE 1.6 Fast (free)    ── worker-batch      严格按 spec 执行，零自主判断
-```
+| 层级 | 模型/档位 | Agent | 职责 |
+|---|---|---|---|
+| 战略 | Opus 4.7 XHigh/Max | strategist | 架构定调/卡死攻坚（稀少召唤） |
+| 指挥 | Opus 4.7 High | reviewer-critical | 核心模块对抗性 review |
+| 指挥 | Sonnet 4.6 Thinking | brainstormer / spec-writer / reviewer / debugger | 需求挖掘 / spec 翻译 / two-stage review / 深度调试 |
+| 指挥 | GPT 5.5 Low/High | plan-writer | PRD/方案/选型/任务清单 |
+| 调度 | Adaptive | 主会话 | 调度 + 兜底 |
+| 工人 | SWE 1.6 Fast (free) | worker-batch | 严格按 spec 执行，零自主判断 |
 
 ### 4.2 全流程七步（谋·造·成展开）
 
-```
-谋（析+设）:
-  1. 析 · brainstormer    不知常妄作凶——挖真实意图，出 design 文档
-  2. 设 · plan-writer     图难于其易——2-5 分钟粒度任务清单
-
-造（编+验）:
-  3. 隔 · worker-batch    致虚极守静笃——隔离工作区 + 测试基线
-  4. 编 · spec-writer + worker  知其雄守其雌——RED → GREEN → REFACTOR
-  5. 调 · 主会话调度       江海善下——并行派活 + 两阶段 review
-
-成（审+归）:
-  6. 审 · reviewer / reviewer-critical  受国之垢——spec compliance + code quality
-  7. 归 · 主会话           功遂身退——verification → merge/PR/cleanup
-
-横切：dao-debug（任意阶段遇 bug 派 debugger，反者道之动，3 次失败升 strategist）
-```
+**谋**：① 析（brainstormer，挖意图出 design）→ ② 设（plan-writer，2-5min 粒度任务清单）
+**造**：③ 隔（worker-batch，worktree + 测试基线）→ ④ 编（spec-writer + worker，RED→GREEN→REFACTOR）→ ⑤ 调（主会话，并行派活 + review）
+**成**：⑥ 审（reviewer / reviewer-critical，spec compliance + code quality）→ ⑦ 归（主会话，verification → merge/PR/cleanup）
+**横切**：dao-debug（任意阶段遇 bug 派 debugger，3 次失败升 strategist）
 
 ### 4.3 三条铁律（嵌入每个 worker profile）
 
-不是建议，是硬约束。worker 违反任一即任务失败：
-
-```
-1. NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
-2. NO COMPLETION CLAIMS WITHOUT FRESH VERIFICATION EVIDENCE
-3. NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
-```
+不是建议，是硬约束。worker 违反任一即任务失败：**① 无失败测试不写生产代码 ② 无 fresh 证据不声明完成 ③ 无根因调查不修 bug**
 
 ### 4.4 何时**不**走金字塔
 
@@ -144,14 +113,7 @@
 
 ### 4.5 升级路径（失败回打方向）
 
-```
-worker 失败              → spec-writer（spec 不清）
-spec-writer 失败         → plan-writer（plan 不细）
-plan-writer 失败         → brainstormer（需求不明）
-普通 reviewer 失败       → reviewer-critical（核心模块）
-reviewer-critical 失败   → strategist（架构嫌疑）
-debugger 失败 3 次       → strategist（质疑架构本身）
-```
+worker → spec-writer（spec 不清）→ plan-writer（plan 不细）→ brainstormer（需求不明）。reviewer → reviewer-critical（核心模块）→ strategist（架构嫌疑）。debugger 失败 3 次 → strategist。
 
 ### 4.6 召唤方式
 
@@ -161,19 +123,7 @@ debugger 失败 3 次       → strategist（质疑架构本身）
 
 ### 4.7 部署到其他项目
 
-windsurf-dao 是货架项目。把这套金字塔带到其他项目两条路：
-
-```powershell
-# 路径 A：项目级 Junction（推荐 — 单一源，自动同步）
-New-Item -ItemType Junction -Path "D:\target-project\.devin\agents" `
-                            -Target "C:\frank\windsurf-dao\.devin\agents"
-
-# 路径 B：全局 Junction（所有 Devin 会话可用）
-New-Item -ItemType Junction -Path "$env:APPDATA\devin\agents" `
-                            -Target "C:\frank\windsurf-dao\.devin\agents"
-```
-
-源文件单一存放，更新 windsurf-dao 后所有项目自动同步。
+windsurf-dao 是货架项目。两条路：**A) 项目级 Junction**（推荐）`New-Item -ItemType Junction -Path "<project>\.devin\agents" -Target "<dao>\.devin\agents"`；**B) 全局 Junction** `New-Item -ItemType Junction -Path "$env:APPDATA\devin\agents" -Target "<dao>\.devin\agents"`。源文件单一存放，更新后自动同步。
 
 ### 4.8 设计要点
 
@@ -195,21 +145,7 @@ New-Item -ItemType Junction -Path "$env:APPDATA\devin\agents" `
 
 ### 4.9 subagent 调度的判断准则(不强制)
 
-rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"每阶段强制派":
-
-```
-□ 任务足够模板化?(能写出清晰 spec)
-□ 任务需要不同模型档?
-□ 主会话 context 已臃肿?
-□ rate limit 窗口内还有预算?
-□ 任务价值高到值 15× token 成本?
-□ 任务可真并行/串行可接受延迟?
-
-同时满足 3+ → 派 subagent
-否则 → 主会话直接做(更快,无 rate limit 风险)
-```
-
-详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
+rate limit 实测 ≤ 1 并发(T29 教训)，采用"按需判断"而非"每阶段强制派"。六项检查（模板化?/需不同模型?/context 臃肿?/rate limit 有预算?/值 15× token?/可真并行?）同时满足 3+ → 派 subagent；否则主会话直接做。详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
 
 ---
 
@@ -228,61 +164,15 @@ rate limit 实测 ≤ 1 并发(T29 教训)，因此采用"按需判断"而非"�
 
 ### 5.2 当前机器同步步骤
 
-```powershell
-cd C:\frank\windsurf-dao\config-sync
+统一入口：`dao.bat export/restore/doctor/inventory`（或 `node lib/sync.mjs --<cmd>`）。跑完重启 cc-switch 切 provider 下发。
 
-# 统一入口（四合一）
-dao.bat export    # 导出当前 cc-switch 配置
-dao.bat restore   # 把仓库快照写回 cc-switch DB
-dao.bat doctor    # 配置一致性体检
-dao.bat inventory # 盘点当前配置状态
+**注意**：`common-secrets.json` 不进 git（含脱敏真实值）。`doctor` 报 `settings.json.env.* 缺失` → 重启 cc-switch 切 provider 即可。
 
-# 或直接调用编排器：
-node lib/sync.mjs --export
-node lib/sync.mjs --restore
-node lib/sync.mjs --doctor
-node lib/sync.mjs --inventory
+### 5.3 新机器复刻
 
-# 跑完重启 cc-switch，切换一次 provider，让它把 common_config_claude 下发到各端
-```
+见 `NEW-MACHINE.md` 完整流程。核心：clone → `dao.ps1 link-claude` → 复制 `common-secrets.json` → `dao.bat restore` → 重启 cc-switch 切 provider → `dao.bat doctor` 确认 0 问题。
 
-**注意**：
-- `common-secrets.json` 含 settings 脱敏真实值，已被 `.gitignore` 忽略，**不要提交**。
-- 若 `doctor.mjs` 报 `settings.json.env.* 缺失`，说明 cc-switch 还未下发；重启 cc-switch 切 provider 即可，或临时用 `config-sync/lib/merge-settings.mjs` 合并到 `~/.claude/settings.json`。
-- 终端状态栏 (`statusLine`) 是 `common_config_claude` 的一部分，同步后生效。
+### 5.4 同步问题速查
 
-### 5.3 新机器复刻步骤
+`找不到 sqlite3` → `config-sync/setup-sqlite.ps1`。`secrets 缺真实值` → 补 DB 或删占位符。`env.* 缺失` → 重启 cc-switch 切 provider。`MCP extra=[pencil]` → 客户端本地多注册，非错误。
 
-见 `NEW-MACHINE.md` 完整流程；核心四步：
-
-1. `git clone` 本仓库，运行 `dao.ps1 link-claude`。
-2. 把旧机的 `config-sync/common-secrets.json` 手动复制到新机同位置（不进 git）。
-3. 启动一次 cc-switch 创建空 DB，然后运行 `dao.bat restore`。
-4. 重启 cc-switch 并切换 provider，运行 `dao.bat doctor` 确认问题 0 项。
-
-### 5.4 Agent 遇到同步问题时的 checklist
-
-- `找不到 sqlite3` → 运行 `config-sync/setup-sqlite.ps1`（项目已内置安装包）。
-- `common-secrets.json 缺少占位符对应的真实值` → 说明 `common/settings.json` 里有某个 `common_config_*` 含占位符但当前 DB 没有该 key；应删除或补充对应 secret。
-- `settings.json.env.* 缺失` → cc-switch 未下发；先确认 DB 已对齐，再重启 cc-switch 切 provider。
-- `MCP 不一致 / extra=[pencil]` → 通常是因为客户端本地多注册了未纳管 MCP；体检会提醒，不是错误，按需求决定是否纳入 cc-switch。
-
----
-
-## 六、工具使用铁律（Grep-first）
-
-> 上善若水。用对工具，比用更多工具更接近无为。
-
-在 windsurf-dao 以及所有使用本 dao 配置的项目中工作，必须遵守以下工具选择优先级：
-
-1. **搜索优先用 Grep / Glob**：查找文件内容用 `Grep`，查找文件路径用 `Glob`。
-2. **禁止用 shell 做搜索**：不要通过 Bash/PowerShell 运行 `grep`、`find`、`rg`、`ag`、`ack`、`Select-String` 等命令搜索文件。
-3. **大文件分段读**：读取大文件使用 `Read` 工具的 `offset`/`limit`；禁止用 `cat`、`head`、`tail` 等 shell 命令一次性读取大文件。
-4. **Windows 不拼转义**：需要搜索时直接用 `Grep`，不要试图在 Bash/PowerShell 里拼接复杂的正则或路径转义。
-
-**原因**：
-- `Grep` 底层是 ripgrep，跨平台、快、内存友好。
-- Bash/PowerShell 的 `grep` 在 Windows 下常遇到引号、反斜杠、管道转义问题，且大文件容易卡死。
-- 权限层面，`common_config_claude.permissions` 已 deny 掉 `Bash(grep:*)`、`Bash(find:*)`、`PowerShell(Select-String:*)` 等，强制模型走 Grep-first。
-
-本条同时写入了 `~/.claude/CLAUDE.md`，每条消息常驻提醒。

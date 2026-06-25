@@ -30,7 +30,7 @@
 
 > 图难于其易，为大于其细。
 
-显式触发 superpowers = 用户口头说「走 superpowers / 开 worktree 走」或 AI 自身写出 plan 到 `docs/superpowers/plans/`。触发后必走五步：
+显式触发 superpowers = 用户口头说「走 superpowers / 开 worktree 走」或 AI 自身写出 plan 到 `docs/specs/<topic>-plan.md`。触发后必走五步：
 worktree → plan → implementer subagent → reviewer subagent → finishing-branch
 
 复杂度 SHOULD 建议：≥3 文件 / ≥100 LOC / 核心模块 / 跨服务 / 不可逆 → 主动建议走 superpowers，用户拒绝即轻量路径。
