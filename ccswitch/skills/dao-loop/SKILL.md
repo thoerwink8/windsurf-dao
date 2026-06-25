@@ -14,14 +14,15 @@ description: 双线程循环开发法——文档驱动的编排层。谋线生�
 无文档不开工。
 谋线完成才造线。
 所有终止由用户确认。
-造线轮询禁用 AskUserQuestion。
+造线 executing 阶段轮询禁用 AskUserQuestion。
+reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 ```
 
-**轮询自主推进**：造线进入 ScheduleWakeup 循环后，AI 自主执行，**禁止调用 `AskUserQuestion`**——它会阻塞下一轮唤醒，导致 loop 卡死。用户无需回答即可推进是 loop 的核心契约。需要用户决策时，在回答正文中说明情况并列出选项，用户可随时打字介入。谋线阶段的用户确认（spec/plan 审批）不受此限，因为那些确认点是设计上的必要门控。
+**轮询自主推进**：造线 `executing` 阶段进入 ScheduleWakeup 循环后，AI 自主执行，**禁止调用 `AskUserQuestion`**——它会阻塞下一轮唤醒，导致 loop 卡死。用户无需回答即可推进是 loop 的核心契约。需要用户决策时，在回答正文中说明情况并列出选项，用户可随时打字介入。谋线阶段的用户确认（spec/plan 审批）和 `reviewing` 阶段的用户交付审查（§7.2.5）不受此限，因为那些是设计上的必要门控。
 
 ## 总览
 
-用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（多维打分→严重度分流）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
+用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（多维打分→严重度分流）→ 🔒 用户交付审查（用户决定归档/追加/暂留）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
 
 ## §0 预飞检查
 
@@ -175,7 +176,7 @@ AI 根据复杂度判断，常见：
 
 **锁**：TTL 10 分钟 + 心跳续期，过期即可抢，崩溃自动释放。
 
-**状态转换**：谋线 `skeleton→filling→ready→[用户确认]→go` | 造线 `go→executing→reviewing→done` | 回退 `executing→filling` | 终止 `任意→[用户确认]→abandoned`
+**状态转换**：谋线 `skeleton→filling→ready→[用户确认]→go` | 造线 `go→executing→reviewing→[用户确认归档]→done` | 回退 `executing→filling` | 用户追加 `reviewing→executing` | 终止 `任意→[用户确认]→abandoned`
 
 ## §4 谋线（Spec Thread）
 
@@ -185,29 +186,46 @@ AI 根据复杂度判断，常见：
 
 1. 创建 `docs/specs/<topic>/` + STATUS.json（含 `type` 字段），文档标 `skeleton`
 2. **🎨 设计目录检测**（见下方增强段）
-3. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
-4. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
-5. **主线程生成 strategy.md** → 用户确认 → 标 `done`（见下方「strategy.md 生成」段）
-6. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
-7. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
-8. **项目 rule 检查**：按 Loop type 检查是否需要创建/更新项目级 rule 文件（见下方）
-9. 全部 done + 校验通过 → `go_ready: true`
+3. **🔍 诊断扫描**（`type: refactor | audit` 必做，见下方增强段）
+4. **派发 `dao-brainstormer` subagent** 生成 spec.md → 用户确认 → 标 `done`
+5. 主线程从 spec 推导 acceptance.md → 用户确认 → 标 `done`
+6. **主线程生成 strategy.md** → 用户确认 → 标 `done`（见下方「strategy.md 生成」段）
+7. **派发 `dao-plan-writer` subagent** 生成 plan.md → 用户确认 → 标 `done`
+8. 交叉校验：plan 覆盖矩阵 ↔ acceptance 每项都有 Task 覆盖
+9. **项目 rule 检查**：按 Loop type 检查是否需要创建/更新项目级 rule 文件（见下方）
+10. 全部 done + 校验通过 → `go_ready: true`
 
 ### 设计对齐增强（design/ 自动检测）
 
 **谋线步骤 2**：若需求涉及 `design/` 目录，**必须先加载 `dao-design-open` §1 + §1.5**（全页面清点 + 三层 Diff），结果注入 spec 输入。plan 覆盖矩阵增加页面×层级维度，任务排序强制 top-down（共享结构→布局→节→组件），交叉校验要求所有页面三层均有 Task 或显式 deferred。
 
+### 诊断扫描（refactor / audit 型必做）
+
+> 不知常，妄作凶。未诊断就开方 = 妄作。
+
+**谋线步骤 3**（`type: refactor` 或 `type: audit` 时必做，`feature` / `fix` 跳过）：在 brainstormer 生成 spec 之前，先派 subagent 扫描目标系统现状，产出诊断报告。
+
+**扫描维度**（按目标系统调整）：
+- **引用图谱**：模块/文件/skill 之间的引用关系，谁引用谁、被引用几次
+- **孤岛检测**：被引用 0 次且无触发路径的模块
+- **重叠分析**：description 或职责高度相似的模块对
+- **缺口扫描**：常见场景无覆盖、单向引用（A→B 但 B 不知 A）
+
+**产出**：结构化诊断报告，注入步骤 4 brainstormer 的输入。brainstormer 必须**从诊断发现推导 spec 方向**，不从用户目标直接推导解法。
+
+**跳过条件**：`type: feature`（用户需求明确）、`type: fix`（根因分析由 debugger 覆盖）。
+
 ### strategy.md 生成
 
-**步骤 5**：主线程根据 spec + acceptance 按 `type` 生成——design 侧重组件策略+视觉验证，feature 侧重 ADR+API 契约，refactor 侧重迁移路径+兼容，fix 侧重根因+回归防护，infra 侧重工具链+CI/CD。每个 Loop 必须定义达成度维度（功能完整度/验收通过率/视觉保真度/测试覆盖/回归安全/文档同步），§7 归档时逐维度打分，未达标不可归档。
+**步骤 6**：主线程根据 spec + acceptance 按 `type` 生成——design 侧重组件策略+视觉验证，feature 侧重 ADR+API 契约，refactor 侧重迁移路径+兼容，fix 侧重根因+回归防护，infra 侧重工具链+CI/CD。每个 Loop 必须定义达成度维度（功能完整度/验收通过率/视觉保真度/测试覆盖/回归安全/文档同步），§7 归档时逐维度打分，未达标不可归档。
 
 ### 项目 rule 检查
 
-**谋线步骤 8**（Go Gate 前最后检查）：按 `type` 检查 `.claude/rules/` 是否缺必要文件——design 需 `design-tokens.md`+`design-spirit.md`，feature/refactor 需 `architecture.md`（+`testing.md`），全部需 `CLAUDE.md` <80 行。缺则创建/提醒。归档时同步造线中新增的规范。
+**谋线步骤 9**（Go Gate 前最后检查）：按 `type` 检查 `.claude/rules/` 是否缺必要文件——design 需 `design-tokens.md`+`design-spirit.md`，feature/refactor 需 `architecture.md`（+`testing.md`），全部需 `CLAUDE.md` <80 行。缺则创建/提醒。归档时同步造线中新增的规范。
 
 ### subagent 调度
 
-谋线主线程是**编排者**：spec.md 派 `dao-brainstormer`（苏格拉底式挖掘），acceptance.md 主线程直接写，strategy.md 主线程直接写，plan.md 派 `dao-plan-writer`（拆任务+代码模板）。subagent 返回后展示关键段落给用户确认，确认后更新 STATUS.json。
+谋线主线程是**编排者**：诊断扫描派 fork subagent（refactor/audit 型），spec.md 派 `dao-brainstormer`（苏格拉底式挖掘，refactor 型必须以诊断报告为输入），acceptance.md 主线程直接写，strategy.md 主线程直接写，plan.md 派 `dao-plan-writer`（拆任务+代码模板）。subagent 返回后展示关键段落给用户确认，确认后更新 STATUS.json。
 
 ## §5 造线（Dev Thread）
 
@@ -241,7 +259,7 @@ AI 根据复杂度判断，常见：
 
 ### 执行管线
 
-Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件同步）→ Task 级验证 → Phase 级检查点 → 全量验证 → 逐条验收 → Review（`dao-reviewer` + 核心模块追加 `dao-reviewer-critical`）→ 目标达成度评估（§7）→ 归根 → 归档
+Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件同步）→ Task 级验证 → Phase 级检查点 → 全量验证 → 逐条验收 → Review（`dao-reviewer` + 核心模块追加 `dao-reviewer-critical`）→ 目标达成度评估（§7）→ 🔒 用户交付审查（§7.2.5）→ 归根 → 归档
 
 ### 验证节奏
 
@@ -279,7 +297,7 @@ Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件�
 
 #### 7.1 多维度打分
 
-对照 strategy.md 达成度维度逐项打分（维度 | 达标线 | 实际 | ✅/⚠️/❌）。全 ✅ → 7.3 学习提取。有 ⚠️/❌ → 7.2 严重度分流。
+对照 strategy.md 达成度维度逐项打分（维度 | 达标线 | 实际 | ✅/⚠️/❌）。全 ✅ → 7.2.5 用户交付审查。有 ⚠️/❌ → 7.2 严重度分流。
 
 **design Loop**：打分必须含 `dao-design-fidelity` L1~L5 全量验证（L3 Playwright 截图 diff，L3 前先 §6.4 状态矩阵枚举）。Token 变更须执行 §6.5 diff 流程。
 
@@ -294,9 +312,35 @@ Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件�
 
 trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 
+#### 7.2.5 用户交付审查（🔒 必止）
+
+> 圣人无常心，以百姓心为心。——AI 做验证、打分、呈现，"这事儿算不算完"的判断权在用户。
+
+**当 §7.1 打分全 ✅（或 §7.2 分流的 trivial/minor 修完后重新打分全 ✅）时**，禁止直接进入学习提取和归档。必须展示交付报告并通过 **AskUserQuestion** 让用户决策。
+
+**展示内容**：
+- 达成度打分表（§7.1 的完整结果）
+- 关键变更摘要（git diff stat / 影响文件列表）
+- 验证结果汇总（测试通过/截图 diff/回归状态）
+
+**用户四选一**：
+
+| 选项 | 语义 | 后续 |
+|------|------|------|
+| **确认归档** | 用户认可交付质量 | → §7.3 学习提取 → 归档 |
+| **指出问题** | 用户发现 AI 未捕获的偏差 | 用户描述问题 → 追加 micro-task → `mode: executing` 回造线 |
+| **追加需求** | 用户想在当前 Loop 扩展范围 | 用户描述需求 → 追加正式 Task 到 plan.md → `mode: executing` 回造线 |
+| **暂不归档** | 用户需要时间判断或外部确认 | 保留 `mode: reviewing`，不 ScheduleWakeup，用户主动恢复 |
+
+**状态机变更**：`reviewing` 不再是过渡态，而是用户决策等待态。只有用户选择「确认归档」后才进入 `done`。选择「指出问题」或「追加需求」时回退到 `executing`。
+
+**轮询行为**：`mode: reviewing` 时**不自动 ScheduleWakeup**——此阶段等待用户输入，轮询会空转。用户做出选择后，若回到 `executing` 则恢复轮询。
+
+**违反检测**：准备写 `mode: done` 时，若 STATUS.json 无 `user_approved_at` 字段 → 强制回到 §7.2.5。
+
 #### 7.3 学习提取
 
-达成度全 ✅ 后，AI 扫 git log 提取可沉淀知识（项目级→`.claude/rules/`，跨项目→`memory/`，方法论→skill/dao.md），起草条目通过 **AskUserQuestion** 让用户确认。纯事实不写——那是 HANDOFF.md 的职责。
+用户确认归档后，AI 扫 git log 提取可沉淀知识（项目级→`.claude/rules/`，跨项目→`memory/`，方法论→skill/dao.md），起草条目通过 **AskUserQuestion** 让用户确认。纯事实不写——那是 HANDOFF.md 的职责。
 
 #### 7.4 规范同步
 
@@ -307,12 +351,18 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 验收比对通过后三步：
 
 1. STATUS.json 标 `mode: done`
-2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>/`
+2. `docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`
 3. 自动生成 `HANDOFF.md`
 
 ### 归档目录与模板
 
-归档位置：`docs/specs/_archive/<topic>/`（含全套文件 + HANDOFF.md）。活跃 loop 在 `docs/specs/<topic>/`。
+归档位置：`docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`（含全套文件 + HANDOFF.md）。活跃 loop 在 `docs/specs/<topic>/`。
+
+**命名格式**：`<topic>_YYYYMMDD-HHmm`
+- 分隔符：话题名与时间戳之间用 `_`，话题名内部保留 `-`，时间戳内部用 `-` 隔开日期和时分
+- 精度：到分钟，不含秒
+- 时间来源优先级：HANDOFF.md 归档时间 > STATUS.json `lock.acquired_at` > `git log --follow` 首次 commit 时间
+- 示例：`chat-ui-polish_20260622-1519`、`design-full-alignment_20260624-1106`
 
 - **INDEX.md**（归档索引表）：详见 `templates/index-template.md`
 - **HANDOFF.md**（交接文档）：详见 `templates/handoff-template.md`
@@ -346,6 +396,7 @@ AI 判断 + 用户确认。用户显式指定时以用户为准。
 | 谋线-等用户确认 | 1200s |
 | 造线-执行 | 270s |
 | 造线-等 review | 270s |
+| reviewing-等用户交付审查 | 不 wakeup（等用户决策） |
 | 结束 | 不 wakeup |
 
 ### /loop prompt
