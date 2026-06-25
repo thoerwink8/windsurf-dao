@@ -47,7 +47,7 @@
 
 ### Phase 3: 流程补齐（⚠️ 中优先）
 
-#### T5: dao-loop command 补 strategy.md (≈3min) → A6
+#### ✅ T5: dao-loop command 补 strategy.md (≈3min) → A6
 
 - 文件:
   - `ccswitch/commands/dao-loop.md` §4 (MODIFY)
