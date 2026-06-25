@@ -17,7 +17,18 @@ description: 命令执行的安全性——超时/防卡/交互黑名单/服务�
 
 ## 交互命令黑名单（PTY 死锁）
 
-agent 检测不到 stdin 等待就**永远挂死**。禁用：`sudo/su/passwd`（配 NOPASSWD 或用户手动）、`apt/dnf install`（加 `-y` + `DEBIAN_FRONTEND=noninteractive`）、`git push` SSH 密码（用 ssh-agent/HTTPS+token）、`vim/nano/emacs`（用 edit 工具）、`less/more/man/top`（用 `cat`/`head -n N`/`--help`）、`mysql/psql` 交互（用 `-e`/`-c`/`< file.sql`）、`npm/yarn init` 向导（用 `-y`）、`gh repo create` 向导（加 `--confirm`）。
+agent 检测不到 stdin 等待就**永远挂死**。以下命令默认禁用，必须用非交互替代：
+
+| 黑名单 | 非交互替代 |
+|---|---|
+| `sudo` / `su` / `passwd` | 提前配 NOPASSWD 或让用户手动跑 |
+| `apt install` / `dnf install` | `apt install -y` + `DEBIAN_FRONTEND=noninteractive` |
+| `git push`（SSH 密码） | 用 ssh-agent 或 HTTPS + token |
+| `vim` / `nano` / `emacs` | `edit` 工具改文件，不开编辑器 |
+| `less` / `more` / `man` / `top` / `htop` | `cat` / `head -n N` / `--help` |
+| `mysql` / `psql`（交互模式） | `mysql -e "SQL"` / `psql -c "SQL"` / `< file.sql` |
+| `npm init` / `yarn init`（向导） | `npm init -y` 或写 package.json |
+| `gh repo create`（向导） | `gh repo create name --public --confirm` |
 
 ## 服务/长进程命令（必 Blocking=false + 必收尾）
 
