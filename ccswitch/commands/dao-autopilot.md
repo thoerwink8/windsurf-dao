@@ -15,12 +15,7 @@ argument-hint: ""
 
 > TODO.md 是任务图的唯一载体。AGENT_GUIDE.md 是人类可读知识库。autopilot 不创建平行系统——它直接操作这两个文件和 CSV 演化源。
 
-| 文件 | 角色 | autopilot 行为 |
-|------|------|---------------|
-| `TODO.md` | 任务图（待做 / 已做） | 读取 `- [ ]` 作为任务源；执行后回写 `- [x]` |
-| `AGENT_GUIDE.md` | 人类可读知识库 | 维护项目概览、架构决策、开发指南与 CSV 指针 |
-| `data/evolution-*.csv` | 演化真相源 | 收尾时先 `ensure`，再写入演化条目与教训 |
-| `state.json` | 执行元数据（仅回退用） | 只存 commit hash 和 rollback_cmd；完成后删除 |
+`TODO.md`（任务图，读 `- [ ]` → 执行 → 回写 `- [x]`）· `AGENT_GUIDE.md`（人类可读知识库，维护概览/架构/指南）· `data/evolution-*.csv`（演化真相源，收尾时 ensure → 写入）· `state.json`（执行元数据，仅存 commit hash + rollback_cmd，完成后删除）
 
 两个文件不存在时 autopilot **创建**（初始化为标准格式），而非另建 plan.md / archive。
 
@@ -159,12 +154,7 @@ Task <ID> 涅槃 ✅
 
 #### 2.2 错误处理
 
-| 错误类型 | 行为 |
-|---------|------|
-| 可恢复（构建失败、小 bug）| 自动修复，记录日志，继续 |
-| 需判断（需求歧义，多种可行路径） | 跳过此 Task，标记 `blocked`，继续其他 Task |
-| 系统级阻断（核心依赖缺失） | 写 checkpoint，**主动发消息**告知用户，等待 |
-| Risk ≥ 2（不可逆操作） | 暂停，**必须**用户确认后才执行 |
+可恢复（构建失败/小 bug → 自动修复继续）· 需判断（歧义 → 跳过标 `blocked`，继续其他）· 系统级阻断（核心依赖缺失 → checkpoint + 主动告知用户）· Risk ≥ 2（不可逆 → 暂停，必须用户确认）
 
 #### 2.3 间隙分析（Gap Analysis）—— 每轮结束后
 
