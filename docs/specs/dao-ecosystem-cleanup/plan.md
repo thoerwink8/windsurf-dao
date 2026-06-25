@@ -64,7 +64,7 @@
 
 ### Phase 4: 同步验证 + 持续推进
 
-#### T7: 全量同步验证 (≈3min) → A8, A9, A10
+#### ✅ T7: 全量同步验证 (≈3min) → A8, A9, A10
 
 - 操作: `node scripts/dao-smoke.mjs` 全量检查 + Grep 确认无悬空引用 + dao.md 场景表核对
 - 验证: 0 failures
