@@ -115,6 +115,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。理由：跟项目走、gitignore 已覆盖、用户找得到。项目 `.gitignore` 必须含 `**/_tmp/`
 - **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 按场景填写：Loop 验证用 `<loop-topic>`、设计审计用 `fidelity`、设计 QA 用 `design-qa`、调试用 `debug`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若 `_tmp/qa/<context>/` 不存在则自动创建
+- **settings.json 运行时禁触**：活跃 Claude Code 会话内 **绝不修改** `~/.claude/settings.json`（Edit / Write / 脚本写入均禁）。Claude Code file watcher 检测到变更会触发重认证 → `401 device was revoked` 强制登出。需改配置时：写到暂存位置（`_tmp/settings-patch.json`）+ 提供会话外执行命令，或告知用户退出后手动 apply。CC Switch config-sync 同理——不应在 Claude Code 运行时触发
 
 ## 言 · 名之则
 
