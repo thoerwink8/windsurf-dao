@@ -30,7 +30,7 @@ if (-not $DryRun) {
     New-Item -ItemType Directory -Path $packDir -Force | Out-Null
 }
 
-$daoDir = Join-Path $packDir 'dao'
+$daoDir = Join-Path $packDir '_setup\dao'
 $counts = @{ files = 0; skills = 0 }
 
 function Pack-File($src, $dst, $label) {
@@ -118,7 +118,7 @@ if (Test-Path $personaSrc) {
 # ── 安装脚本 ──
 
 Pack-File (Join-Path $DaoRoot 'scripts\dao-install.bat') (Join-Path $packDir 'install.bat') 'install.bat'
-Pack-File (Join-Path $DaoRoot 'scripts\dao-install.ps1') (Join-Path $packDir 'install.ps1') 'install.ps1'
+Pack-File (Join-Path $DaoRoot 'scripts\dao-install.ps1') (Join-Path $packDir '_setup\install.ps1') '_setup/install.ps1'
 
 # ── 打包 ──
 
