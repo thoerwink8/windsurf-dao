@@ -168,7 +168,7 @@ AI 根据复杂度判断，常见：
   "mode": "skeleton | filling | ready | go | executing | reviewing | done | abandoned",
   "docs": { "spec": {"status":"skeleton|draft|done"}, "strategy": {...}, "acceptance": {...}, "plan": {...} },
   "go_ready": false,
-  "dispatch": { "branch": "feat/<topic>", "dispatched_at": null, "worker": null },
+  "dispatch": { "branch": "feat/<topic>", "worktree_path": null, "dispatched_at": null, "worker": null },
   "execution": { "current_task": null, "completed_tasks": [], "total_tasks": 0 },
   "depends_on": null, "merged_into": null
 }
@@ -240,27 +240,39 @@ AI 根据复杂度判断，常见：
 状态从 `go → executing` 之前，**必须逐项完成并在 STATUS.json 记录**：
 
 1. **谋线文档在 main** — 确认 `docs/specs/<topic>/` 已 commit + push 到 `main`/`master`。违反检测：`git log main -- docs/specs/<topic>/STATUS.json` 无输出 → 先在 main 上补提交谋线文档再继续。理由：孤儿检测、多 Loop 并发感知、可恢复性都依赖文档在 main 上可见
-2. **切分支** — `git checkout -b feat/<topic>`，确认 `git branch --show-current` 输出 `feat/<topic>`
-3. **STATUS.json 写入 `dispatch.branch`** — 值 = 实际分支名，后续每次恢复 session 时验证当前分支与此值一致
-4. **基线验证** — 项目有构建/测试的先跑一次确认绿灯（无构建的跳过）
-5. **五项全过 → 才写 `mode: executing`**
+2. **创建 worktree** — `git worktree add ../<topic>-loop -b feat/<topic>`，确认 worktree 目录存在且分支正确。**禁止 `git checkout -b`**——checkout 是全局操作，会影响所有指向同一仓库的 session（见「为什么用 worktree」段）
+3. **STATUS.json 写入 `dispatch.branch` + `dispatch.worktree_path`** — branch = 实际分支名，worktree_path = worktree 绝对路径。后续每次恢复 session 时验证 worktree 存在且分支一致
+4. **worktree 环境准备** — 进入 worktree 目录，清理继承的 node_modules（dao-worktree e163 教训），执行 install
+5. **基线验证** — 项目有构建/测试的先跑一次确认绿灯（无构建的跳过）
+6. **六项全过 → 才写 `mode: executing`**
 
-违反检测：任何时刻发现 `mode = executing` 但当前 git 分支是 `main`/`master` → **立即停止任务执行**，先补创分支再继续。
+违反检测：任何时刻发现 `mode = executing` 但 `dispatch.worktree_path` 为空或 worktree 目录不存在 → **立即停止任务执行**，先补创 worktree 再继续。
+
+### 为什么用 worktree 而非 checkout
+
+> 天下神器，不可为也，不可执也。——仓库的 HEAD 是全局共享状态，不是某个 session 的私产。
+
+`git checkout` 改变整个仓库目录的文件内容，**所有指向同一目录的 session、IDE、终端都受影响**。这导致三个问题：
+- 用户在另一个 session 写代码，造线切分支会让用户的文件突然全变
+- 多 Loop 并发造线，各自 checkout 不同分支互相覆盖
+- 谋线要在 main 写文档，造线把 HEAD 切走了
+
+`git worktree add` 在**另一个目录**创建同一仓库的独立工作副本，共享 .git 数据库但各自有独立的 HEAD、工作目录、暂存区。主目录不受影响。
 
 ### 造线 Git 自动化
 
-> 善行无辙迹。——Loop 的 git 生命周期在 Go Gate 切分支时已完全确定，造线中不再逐步确认。
+> 善行无辙迹。——Loop 的 git 生命周期在 Go Gate 创建 worktree 时已完全确定，造线中不再逐步确认。
 
-**造线内 git 操作全部预授权**，AI 直接执行，禁止用 AskUserQuestion 询问 commit/push/merge/删分支：
+**所有造线 git 操作在 worktree 目录中执行**（`dispatch.worktree_path`），使用 `git -C <worktree_path>` 或先 cd 进入。AI 直接执行，禁止用 AskUserQuestion 询问 commit/push/merge/删分支：
 
 | 操作 | 时机 | 行为 |
 |------|------|------|
-| **commit** | 每 Task 完成 + 验证通过后 | 自动 commit（message 含 Loop topic + Task ID） |
+| **commit** | 每 Task 完成 + 验证通过后 | 在 worktree 中自动 commit（message 含 Loop topic + Task ID） |
 | **push** | 每 commit 后 | 自动 push 到 `origin feat/<topic>` |
 | **PR + merge** | §7.2.5 用户确认归档后 | 归档流程自动执行（见 §7 归档流程） |
-| **删分支** | PR merged 后 | 自动删除本地 + 远端分支 |
+| **删分支 + worktree** | PR merged 后 | 先 `git worktree remove`，再删本地 + 远端分支 |
 
-**预授权边界**：仅限 `feat/<topic>` 分支。若检测到当前在 `main`/`master`，所有写操作立即停止。
+**预授权边界**：仅限 worktree 内的 `feat/<topic>` 分支。若检测到在主目录或 `main`/`master` 分支，所有写操作立即停止。
 
 **冲突处理**：push 遇冲突 → 尝试 rebase；rebase 失败 → 停止轮询，在回答正文中说明情况，等用户介入。
 
@@ -270,10 +282,12 @@ AI 根据复杂度判断，常见：
 
 | 条件 | 调度方式 |
 |------|---------|
-| 单 Task < 3 文件、非核心模块 | `Agent(subagent_type="dao-worker-batch", model="sonnet", prompt="执行 Task T<N>：<任务描述>。Spec: <路径>。验证命令: <命令>。")` |
-| 单 Task ≥ 3 文件或核心模块 | 主线程走 `dao-superpowers` 流程（含 worktree + reviewer） |
-| 多个独立 Task 无依赖 | **并行派发**多个 `dao-worker-batch`（同一消息多个 Agent 调用） |
+| 单 Task < 3 文件、非核心模块 | `Agent(subagent_type="dao-worker-batch", model="sonnet", prompt="执行 Task T<N>：<任务描述>。工作目录: <worktree_path>。Spec: <路径>。验证命令: <命令>。")` |
+| 单 Task ≥ 3 文件或核心模块 | 主线程走 `dao-superpowers` 流程（**跳过 worktree 创建**——Go Gate 已建，传入 worktree 路径 + reviewer） |
+| 多个独立 Task 无依赖 | **并行派发**多个 `dao-worker-batch`（同一消息多个 Agent 调用，均在同一 worktree 中） |
 | 有依赖的 Task | 串行：前序完成后再派发后续 |
+
+> **所有 subagent 在 Go Gate 创建的 worktree 中工作**，不另建 worktree。禁止嵌套 worktree（dao-worktree 反模式表）。
 
 ### 执行管线
 
@@ -303,7 +317,7 @@ Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件�
 
 ## §6 并发模型
 
-无固定 master，任何 session 抢锁即可工作。谋线在 main（文档不冲突），造线在 `feat/<topic>`（Go Gate 强制）。session 恢复时必验分支一致。多 loop 默认并行，冲突合并时解决。`depends_on`：谋线不阻塞，造线前检查依赖——已 done 正常走，还在造线看文件重叠（无重叠并行/有重叠标 blocked），还在谋线则轮询等待。
+无固定 master，任何 session 抢锁即可工作。谋线在主目录 main 分支（文档不冲突），造线在**独立 worktree** `../<topic>-loop/` 的 `feat/<topic>` 分支（Go Gate 强制创建）。主目录 HEAD 始终不动，多 session / 多 Loop 互不干扰。session 恢复时验证 worktree 存在 + 分支一致。多 loop 默认并行（各自独立 worktree），冲突合并时解决。`depends_on`：谋线不阻塞，造线前检查依赖——已 done 正常走，还在造线看文件重叠（无重叠并行/有重叠标 blocked），还在谋线则轮询等待。
 
 ## §7 归档
 
@@ -378,7 +392,7 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 
 > 功遂身退，天之道也。——用户在 §7.2.5 说「确认归档」是唯一决策点，之后全部自动执行，不再逐步询问。
 
-在 `feat/<topic>` 分支上完成：
+在 worktree（`dispatch.worktree_path`）的 `feat/<topic>` 分支上完成：
 
 1. 归档文件操作：`docs/specs/<topic>/` 移到 `docs/specs/_archive/<topic>_YYYYMMDD-HHmm/`
 2. 生成 `HANDOFF.md`、更新 `INDEX.md`
@@ -386,11 +400,12 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 4. 更新 `PROJECT.md`
 5. commit + push（message: `[cc] chore(<topic>): Loop 归档`）
 
-PR + 分支归根：
+PR + 分支 + worktree 归根：
 
 6. 创建 PR：`feat/<topic>` → `master`/`main`，description 从 HANDOFF.md 自动生成
 7. merge PR（默认 merge commit，保留完整历史）
-8. 删除本地 + 远端 `feat/<topic>` 分支
+8. **回到主目录**，`git worktree remove ../<topic>-loop`（worktree 必须在主目录删除）
+9. 删除本地 + 远端 `feat/<topic>` 分支
 
 **PR 即记录**：分支删除后，PR 及其 diff、description、review comments 永久保留在 GitHub 上。这是 Loop 的最终交付物。
 
