@@ -91,13 +91,14 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 设计系统基础层（新项目 / 体系升级） | `dao-design-system`(交互问答→OD 提示词,10 类基础 token) | 入口 | 道生一 (42) |
 | UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 OD 产出→翻译→auto-gate 验证) | 入口 | 道法自然 (25) |
 | 布局行为规约 | `dao-design-layout`(三种策略+Layout Token+三视口) | 知识源 | 至柔驰骋至坚 (43) |
+| 设计变更结构提取（翻译前） | `dao-design-sync`(HTML+CSS→结构化实施规格,open §2.5 自动调用) | 自动 | 至柔驰骋至坚 (43) |
 | 设计还原度验证（审计场景） | `dao-design-fidelity`(L1~L5 金字塔,日常由 open auto-gate 覆盖) | 自动 | 大成若缺 (45) |
 | 组件结构健康（审计场景） | `dao-component-radar`(原生 HTML→组件提炼,日常由 open auto-gate 覆盖) | 自动 | 不知常妄作凶 (16) |
 | 隔离工作区 | `dao-worktree` | 入口 | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 入口 | 知常曰明 (16) |
 | 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 入口 | 道生一 (42) |
 
-12 个 skill 三类角色：**入口**（用户直接调用）、**自动**（管线内触发：fidelity / radar / qa）、**知识源**（被引用不被调用：taste §4 判据 / layout 策略）。设计管线只需 2 个入口（`design-system` + `design-open`）。
+13 个 skill 三类角色：**入口**（用户直接调用）、**自动**（管线内触发：fidelity / radar / sync / qa）、**知识源**（被引用不被调用：taste §4 判据 / layout 策略）。设计管线只需 2 个入口（`design-system` + `design-open`）。
 
 **UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
 
