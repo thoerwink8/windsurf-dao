@@ -59,7 +59,7 @@ function Copy-DaoFiles($srcDir, $dstDir, $filter, $label) {
 
 Write-Host ''
 Write-Host '  ══════════════════════════════════════' -ForegroundColor DarkCyan
-Write-Host '   道 · windsurf-dao 一键安装器' -ForegroundColor White
+Write-Host '   道 · windsurf-dao 一键安装器  v3' -ForegroundColor White
 Write-Host '   道法自然 · 从零到可用' -ForegroundColor DarkGray
 Write-Host '  ══════════════════════════════════════' -ForegroundColor DarkCyan
 Write-Host ''
