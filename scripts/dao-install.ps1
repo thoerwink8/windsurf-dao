@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
-$ScriptDir = $ScriptDir.TrimEnd('\')
+$ScriptDir = $ScriptDir.Replace('"', '').TrimEnd('\')
 $DaoSrc = Join-Path $ScriptDir 'dao'
 if ($TargetDir) {
     $ClaudeDir = $TargetDir
