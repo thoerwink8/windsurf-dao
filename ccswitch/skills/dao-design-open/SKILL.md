@@ -177,7 +177,21 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 不过 → 提炼组件 → 重跑，不声明完成。
 
-**两关都过 → 声明翻译完成。** 全面审计（Loop 归档 / 设计体系升级）仍需独立调用 `dao-design-fidelity` 和 `dao-component-radar` 做深度检查。
+**关三：动效 & 阴影存在性验证**
+
+> 防回归根因：Token 合规只检"合法性"（不硬编码 px），不检"正确性"（值是否与设计一致）。本关补齐存在性维度。
+
+| 检查 | 方法 | pass 条件 |
+|------|------|----------|
+| 硬编码 cubic-bezier | grep `cubic-bezier` 在 tsx 文件中 | 零结果（排除 tailwind.config / CSS 变量定义 / JS 对象中与 token 值一致的 spring 缓动） |
+| 非 token 缓动函数 | grep `ease-out\|ease-in-out` 在改动文件 className 中 | 零结果，或有非设计覆盖场景豁免（如 page-level fade-in 动画） |
+| 阴影等级匹配 | 对照设计稿 `:hover { box-shadow }` 检查 hover shadow 类 | `shadow-hairline`↔xs, `shadow-raised`↔sm, `shadow-float`↔md, `shadow-drag`↔lg, `shadow-overlay`↔xl |
+| 焦点环宽度 | 对照设计稿 `:focus-visible { box-shadow: 0 0 0 Npx }` | N=3 → `ring-[3px]`，N=2 → `ring-2`。禁止不查设计直接写 `ring-2` |
+| 非 token duration | grep `duration-(100\|150\|200\|300\|500)` 在改动文件中 | 零结果，必须用 `duration-fast/base/slow` |
+
+不过 → 修 → 重跑，不声明完成。
+
+**三关都过 → 声明翻译完成。** 全面审计（Loop 归档 / 设计体系升级）仍需独立调用 `dao-design-fidelity` 和 `dao-component-radar` 做深度检查。
 
 ---
 
