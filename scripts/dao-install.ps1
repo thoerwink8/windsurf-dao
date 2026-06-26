@@ -6,15 +6,11 @@
 # 前提：Windows 10/11（内置 PowerShell 5.1 + winget）
 
 param(
-    [Parameter(Position=0)]
-    [string]$ScriptDir,
-
     [string]$TargetDir
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
-$ScriptDir = $ScriptDir.Replace('"', '').TrimEnd('\')
+$ScriptDir = $PSScriptRoot
 $DaoSrc = Join-Path $ScriptDir 'dao'
 if ($TargetDir) {
     $ClaudeDir = $TargetDir
