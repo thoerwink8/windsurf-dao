@@ -14,6 +14,8 @@ description: 设计资产生命周期管理——反向可视化（Code→Protot
 
 **核心原则：AI 不做设计决策。** 反向生成反映代码实际渲染，升格执行文件操作+生成交接包。
 
+**sync 接入（完整模式）**：当 `dao-design-sync` 以完整模式委托时，传入漂移上下文（已检测的变更组件列表 + git diff）。接收后可跳过：§A.0.0 方向预检（sync 已确认 Code→Design）。从 §A.1 扫描开始，以传入的变更组件为输入。后续流程（§A.2 翻译 → §A.3 生成 → §A.4 验证 → §B 升格）正常执行。
+
 ---
 
 ## 命名约定（全局规范）
@@ -594,3 +596,4 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 | `dao-component-radar` | §A 扫描阶段可并行触发 radar，检测应提炼为组件的原生 HTML |
 | `dao-project-scaffold` | 项目无 `workspaces/` 结构时先按其 Open Design 附加结构补齐 |
 | `dao-verify` | 生成/升格完成后可走涅槃门做完整体检 |
+| `dao-design-sync` | **快捷入口**。sync 完整模式委托本 skill §A 执行 Code→Design，传入漂移上下文跳过方向预检 |

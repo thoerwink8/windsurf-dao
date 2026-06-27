@@ -13,6 +13,8 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 **流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-standards §L`。详见 `dao-design-system` §7。
 
+**sync 接入（完整模式）**：当 `dao-design-sync` 以完整模式委托时，传入漂移上下文（已检测的变更文件列表 + git diff + 人话描述）。接收后可跳过：§0 格式概览（已知）、§1 全量读取（只读变更文件）、变更检测（已完成）。从结构提取开始，以传入的变更文件为输入。后续流程（翻译 → 验证 → auto-gate）正常执行。
+
 ---
 
 ## §0 · Open Design 产出格式
@@ -193,6 +195,7 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 | `dao-verify` | 翻译完成后走涅槃门验证 |
 | `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
 | `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
+| `dao-design-sync` | **快捷入口**。sync 完整模式委托本 skill 执行 Design→Code，传入漂移上下文跳过前置扫描 |
 
 ---
 
