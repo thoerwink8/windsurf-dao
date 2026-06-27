@@ -31,7 +31,7 @@ const norm = filePath.replace(/\\/g, "/");
 // 代码文件扩展名(对齐原 quality.md globs)
 const isCode = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|scala|vue|svelte|sql)$/i.test(norm);
 
-// 前端/UI 文件:除代码型组件外,纯样式文件(.css/.scss/.less)也算 —— 触发 dao-design-open
+// 前端/UI 文件:除代码型组件外,纯样式文件(.css/.scss/.less)也算 —— 触发 dao-design（open.md）
 const isFrontend = /\.(tsx|jsx|vue|svelte|css|scss|less)$/i.test(norm);
 
 // dao 元层文件:ccswitch/dao.md 或 ccswitch/{skills,commands,agents}/dao-*
@@ -58,7 +58,7 @@ if (isDaoMeta) {
     parts.push("【dao-quality 质量门】本次改动涉及代码文件。收尾前按任务领域过检查清单:安全(输入验证/认证/无硬编码密钥)· 数据库(N+1/索引/migration 可逆)· 测试(核心路径+边界)· 错误处理(不吞异常)· 性能(分页/无重复计算)。匹配领域而非全扫;发现问题当场修;改完跑构建/测试再声明完成。");
   }
   if (isFrontend) {
-    parts.push("【dao-design-open】UI/前端改动:有 design/ 目录时以 Open Design 原型为视觉真相源 · 三维对齐(结构/视觉/交互) · a11y · 表单/控件走项目 ui/* 体系勿用原生 element。改完截图对比 design/*.html 再声明完成。");
+    parts.push("【dao-design】UI/前端改动:有 design/ 目录时以 Open Design 原型为视觉真相源 · 三维对齐(结构/视觉/交互) · a11y · 表单/控件走项目 ui/* 体系勿用原生 element。改完截图对比 design/*.html 再声明完成。");
   }
   context = parts.join(" ");
 }
