@@ -53,15 +53,15 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 **announce**：「开始 dao-superpowers 第 2 步 · 写 plan」
 
-#### 2.0 · 形（dao-design-open 读取）⭐
+#### 2.0 · 形（dao-design open.md 读取）⭐
 
 > 道法自然。设计已成，代码当如水就形。——《道德经》第 25 章
 
-**触发**：UI/视觉相关任务且项目有 `design/` 目录（Open Design 产出），先过 `dao-design-open` §1 读取设计资产，再写 plan。
+**触发**：UI/视觉相关任务且项目有 `design/` 目录（Open Design 产出），先走 `/dao-design`（Read open.md §1）读取设计资产，再写 plan。
 
 **announce**：「开始 dao-superpowers 第 2.0 步 · 形（读取设计资产）」
 
-加载 `dao-design-open` §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/交互）→ 读 artifact.json（确认 complete）→ 产出设计系统速查 + 页面翻译清单，喂给 2.1 写 plan。
+Read open.md §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/交互）→ 读 artifact.json（确认 complete）→ 产出设计系统速查 + 页面翻译清单，喂给 2.1 写 plan。
 
 **无 `design/` 目录时**：跳过本步，直接进 2.1 写 plan。
 
@@ -87,7 +87,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 **announce**：「开始 dao-superpowers 第 4 步 · 派 reviewer」
 
-三阶段 review：① spec compliance（plan 所有点都实现？）② code quality（质量/命名/边界）③ visual compliance（UI 必加：dao-design-open §4 截图对比，design/ 为唯一视觉真相源）。派活：普通→reviewer，核心(auth/payment/security/core)→reviewer-critical，UI→reviewer 额外负责 visual compliance。
+三阶段 review：① spec compliance（plan 所有点都实现？）② code quality（质量/命名/边界）③ visual compliance（UI 必加：`dao-design` open.md §4 截图对比，design/ 为唯一视觉真相源）。派活：普通→reviewer，核心(auth/payment/security/core)→reviewer-critical，UI→reviewer 额外负责 visual compliance。
 
 如 review 不通过，按"升级路径"回打到对应阶段：spec 不清→plan-writer / 需求不明→brainstormer / **视觉不达标→修代码或修 token**。
 
@@ -101,13 +101,13 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 **announce**：「开始 dao-superpowers 第 5 步 · 归根」
 
-**前置关卡**（UI 任务专需）：归根前必过 `dao-design-open` §4 验证（截图对比 + 三维对齐检查）。未过 = 未闭环，不可进本步。
+**前置关卡**（UI 任务专需）：归根前必过 `/dao-design`（open.md §4）验证（截图对比 + 三维对齐检查）。未过 = 未闭环，不可进本步。
 
 四选一：A. merge 合入主分支（`git checkout master && git merge` → remove worktree → delete branch）/ B. PR 流程（push → `gh pr create` → merge 后清理）/ C. 保留待续（罕见）/ D. 丢弃（`--force` remove）。**铁律**：不可直推 master，merge / PR 二选一。
 
 ## 反模式
 
-详见 `ccswitch/dao.md` superpowers-gate 段。核心：任务太小论（显式触发=承诺）| 路径偷懒（必须 `docs/specs/<topic>-plan.md`）| 跳 reviewer（subagent 是质量门）| UI 跳 visual compliance（必过 dao-design-open §4 验证）| 未过验证直进 finish（开环=盲点）| 直推 master（merge/PR 二选一）| node_modules 污染（worktree 首次 install 前 rm -rf，参 e163）
+详见 `ccswitch/dao.md` superpowers-gate 段。核心：任务太小论（显式触发=承诺）| 路径偷懒（必须 `docs/specs/<topic>-plan.md`）| 跳 reviewer（subagent 是质量门）| UI 跳 visual compliance（必过 `/dao-design`（open.md §4）验证）| 未过验证直进 finish（开环=盲点）| 直推 master（merge/PR 二选一）| node_modules 污染（worktree 首次 install 前 rm -rf，参 e163）
 
 ## 与 superpowers-gate 规则的协同
 
@@ -118,6 +118,6 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 - **不为五步而五步**——单文件 typo 不必走五步
 - **不替代 /dao-dev**——新功能/新页面/含完整基建审计的任务走 /dao-dev；本 command 聚焦「现有代码核心改动」，含视觉对齐（2.0 步会自动读取 Open Design 资产）
 - **不并行五步**——一步完成才进下一步，不可跳过
-- **不跳 2.0 读取**——UI 任务有 design/ 目录时必先过 dao-design-open §1 读取设计资产，AI 不自行做设计判断
+- **不跳 2.0 读取**——UI 任务有 design/ 目录时必先走 `/dao-design`（open.md §1）读取设计资产，AI 不自行做设计判断
 
 法不违德，德不违道，道法自然。
