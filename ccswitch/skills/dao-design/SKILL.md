@@ -66,7 +66,8 @@ AskUserQuestion（选项由上下文动态构建）
 ```
 
 选项：
-- 「确认，继续执行」→ 路由执行
+- 「确认，直接实施（§C）」→ 路由 dao-design-asset §C
+- 「走 dao-loop 完整流程」→ 路由 dao-loop（以 HANDOFF.md + WORKSPACE.md 为起点，自动生成 spec/plan/验收）
 - 「先看草稿摘要」→ 展示 WORKSPACE.md + HANDOFF.md 摘要后再次确认
 - 「取消」→ 停止
 
@@ -135,6 +136,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 **动态选项**（按草稿数量构建）：
 - 「实施「{scope1}」代码」→ 路由 dao-design-asset §C {scope1}
+- 「走 dao-loop 实施「{scope1}」」→ 路由 dao-loop（传入 scope + 草稿路径，谋线以设计文档为输入起点）
 - 「先看草稿详情再决定」→ 读 WORKSPACE.md + HANDOFF.md 摘要后再次呈现
 - 若有多个：「依次实施全部 {N} 个」→ 串行路由 §C
 - 「做点别的」→ 展示模式 D 的选项
@@ -221,7 +223,8 @@ AskUserQuestion（选项由上下文动态构建）
 
 | 意图 | 路由目标 | 传递上下文 |
 |---|---|---|
-| 实施草稿代码 | `dao-design-asset §C` | scope / 草稿路径 |
+| 实施草稿代码（轻量） | `dao-design-asset §C` | scope / 草稿路径 |
+| 实施草稿代码（完整流程） | `dao-loop` | scope / 草稿路径 / HANDOFF.md 摘要 |
 | 升格草稿 | `dao-design-asset §B` | 工作区名 |
 | 反向生成设计原型 | `dao-design-asset §A` | 目标页面 |
 | 同步漂移 | `dao-design-sync` | — |
