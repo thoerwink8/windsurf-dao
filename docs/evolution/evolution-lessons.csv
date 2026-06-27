@@ -1,3 +1,4 @@
 id,date,title,insight,tags
 L1,2026-06-25,格式块压缩模式,展示格式与交付模板未区分导致行数膨胀。判据：输出模板(IS the deliverable)不压;展示格式(display format)压为1-2行prose。always-on文件优先压格式块——每条消息注入的ROI最高,瘦身;格式块;always-on
 L2,2026-06-25,双栈差异≠漂移,平台特性差异是有意设计(命令命名/turbo标记/工具名/Memory系统)非漂移。建立intentional-diff清单后不反复审查;dao-smoke已覆盖真漂移检测,双栈;漂移;platform-specific
+L3,2026-06-27,合并skill须验证跨skill耦合,skill合并后必须验证跨skill引用链——不只是名称替换(grep旧名)还要检查流程衔接。§P生成OD提示词时不知道§B.0的worktree机制存在导致OD产出绕过草稿区生命周期。判据：两个skill共享同一输出空间(如design/)时合并后必须走一遍端到端流程验证联动,合并;耦合;引用链;worktree;端到端验证
