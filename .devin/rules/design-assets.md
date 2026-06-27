@@ -67,4 +67,4 @@ Token 规范 → 交互定制（对 shadcn 默认值的覆盖）→ 组件选型
 
 ## 与快速原型的关系
 
-HTML mockup（dao-design-taste 探索产物）= 一次性快速原型，brainstorm 阶段多方向让用户选。Open Design HTML 原型 = 正式设计源，确定方向后持续维护。两者互补。
+HTML mockup（dao-design-standards 探索产物）= 一次性快速原型，brainstorm 阶段多方向让用户选。Open Design HTML 原型 = 正式设计源，确定方向后持续维护。两者互补。

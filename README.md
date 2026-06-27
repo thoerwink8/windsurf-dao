@@ -80,7 +80,7 @@
 |---|---|---|
 | 工程方法 | `dao-brainstorm` → `dao-plan` → `dao-review` → `dao-verify` | superpowers 五步核心 |
 | 设计流水线 | `dao-design-system` → `dao-design-open` → `dao-design-fidelity` | 设计系统→翻译→验证 |
-| 设计辅助 | `dao-design-taste` · `dao-design-layout` · `dao-design-qa` · `dao-component-radar` | 判据/布局/QA/组件健康 |
+| 设计辅助 | `dao-design-standards` · `dao-design-asset` · `dao-component-radar` | 判据/布局/资产/组件健康 |
 | 领域专项 | `dao-cloud` · `dao-evolution` · `dao-worktree` · `dao-goal` | 按场景触发 |
 
 ### 配置同步（`config-sync/`）

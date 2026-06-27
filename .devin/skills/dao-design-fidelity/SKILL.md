@@ -11,7 +11,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 "Pixel-perfect" 已被行业抛弃（W3C Design Tokens 2025.10 stable）。
 但 token 对齐 ≠ 视觉对齐。真正的还原度是**五层金字塔**——逐层叠加，缺一不可。
 
-**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `dao-design-open`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `dao-component-radar`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `dao-design-system`（Phase 0）的不变层规则。视觉判据引用 `dao-design-taste` §4。交接契约见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `dao-design-open`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `dao-component-radar`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `dao-design-system`（Phase 0）的不变层规则。视觉判据引用 `dao-design-standards` §4。交接契约见 `dao-design-system` §7。
 
 ---
 

@@ -38,7 +38,7 @@ trigger: always_on
 
 > AI 调用 skill 时用 dao-* 名（obra 名仅作概念识别）。
 
-**五步**：① `dao-worktree`（隔离 worktree）→ ②⭐ UI 任务先过 `dao-design-taste` §0 分诊（DIRECT/SCOPED/FULL，🔒×2 用户关卡）→ ②.1 `dao-plan`（`docs/specs/<topic>-plan.md`，UI 任务首句读 `_tmp/design-tokens-<topic>.json`）→ ③ 派 implementer subagent（task 间 checkpoint）→ ④ `dao-review`（核心模块走 reviewer-critical）→ ⑤ merge/PR/cleanup（**不可直推 master**）。补充：`dao-brainstorm` 在 plan 前按需。
+**五步**：① `dao-worktree`（隔离 worktree）→ ②⭐ UI 任务先过 `dao-design-standards` §0 分诊（DIRECT/SCOPED/FULL，🔒×2 用户关卡）→ ②.1 `dao-plan`（`docs/specs/<topic>-plan.md`，UI 任务首句读 `_tmp/design-tokens-<topic>.json`）→ ③ 派 implementer subagent（task 间 checkpoint）→ ④ `dao-review`（核心模块走 reviewer-critical）→ ⑤ merge/PR/cleanup（**不可直推 master**）。补充：`dao-brainstorm` 在 plan 前按需。
 
 **2.0 触发判据**：任务含 主题/样式/色板/视觉/换肤/UI 重构等关键词 → 必走；非 UI → 跳到 2.1。每步必 announce。
 
