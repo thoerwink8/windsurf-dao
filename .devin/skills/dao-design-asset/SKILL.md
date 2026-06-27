@@ -344,6 +344,12 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 
 工作区命名建议：`feature-{描述}` 或 `{page}-v{N}`
 
+**自动注册到活跃草稿区**：工作区创建后，在 `design/CONTEXT.md` 活跃草稿区追加一行（若章节不存在则先创建）：
+
+| 「{scope}」 | `design/workspaces/{name}/{page}.html` | `design/{page}.html` | — | 进行中 |
+
+注册失败不阻断工作区创建，仅提示用户手动补充。
+
 ---
 
 ### §B.1 · 识别目标
@@ -650,6 +656,32 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 ---
 
+### §C.0.6 · 多草稿冲突检测
+
+> 慎终如始。两个草稿同时指向同一正式稿时，先升格者会重置基线，后升格者的 HANDOFF.md diff 将失真。
+
+扫描 `design/CONTEXT.md` 活跃草稿区，检查是否有**其他草稿**的「目标正式稿」列与当前草稿相同。
+
+**命中冲突时**（其他草稿也指向同一 `design/{page}.html`）：停止升格，展示：
+
+```
+⚠️  冲突：同时有多个草稿指向 design/{page}.html
+
+当前草稿：design/workspaces/{name}/（即将升格）
+冲突草稿：design/workspaces/{other-name}/
+
+升格先到者会更新正式稿基线；后升格者的 HANDOFF.md diff 描述将基于旧基线，实施时差异失真。
+
+选项：
+  A. 继续升格当前草稿（知晓风险，冲突草稿届时需重新 diff）
+  B. 先查看冲突草稿状态再决定
+  C. 取消，手动协调顺序后再执行
+```
+
+**未命中冲突时**：静默通过，进入 §C.1。
+
+---
+
 ### §C.1 · 验证升格条件
 
 读 `design/workspaces/{name}/WORKSPACE.md`，确认：
@@ -677,6 +709,43 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 | 注意事项 | token 命名、兼容性、数据绑定约束 |
 
 **HANDOFF.md 不存在时**：停止执行，提示用户先在草稿目录补充 HANDOFF.md。没有工程规格不实施。
+
+---
+
+### §C.2.5 · Token 孤岛扫描
+
+> 不知常妄作凶。草稿引入的新 CSS 变量若不同步到 token 层，代码侧运行时视觉静默失效——无报错、无类型错误，只是"看起来不对"。
+
+读草稿 HTML（`design/workspaces/{name}/{page}.html`）的 `:root` 块，提取全部 CSS 变量名。
+
+读项目 token 文件（路径来自项目 `CLAUDE.md` 或 `design/css/` 下的主 CSS）已有的 CSS 变量名。
+
+**对比结果**：
+
+| 情况 | 动作 |
+|------|------|
+| 草稿 `:root` 无新变量 | 静默通过，进入 §C.3 |
+| 有新变量（token 层未定义） | 列出缺失变量，询问用户处理方式 |
+
+**缺失变量展示格式**：
+
+```
+⚠️  草稿引入了 {N} 个项目 token 层中不存在的 CSS 变量：
+
+  {--variable-name}: {value}   （草稿用法：{使用场景描述}）
+  ...
+
+不同步到 token 层 → 代码侧 fallback 到 unset，视觉静默失效。
+
+选项：
+  A. 同步到 token 文件再继续  → AI 追加上述变量到项目 token CSS
+  B. 跳过，我手动处理        → 记录为 TODO，继续 §C.3
+  C. 取消整次执行
+```
+
+**选 A 时**：将新变量追加到项目 token 文件，询问用户确认后写入，再进入 §C.3。
+
+**无法定位 token 文件时**：询问用户提供路径，或改选 B 跳过。
 
 ---
 
@@ -737,6 +806,9 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 4. **并行跑构建/测试** — 输出串线致假结论，必须串行
 5. **§B 未完成就进入 §C.5** — §C 是 §B 的顺延，升格失败不进实施
 6. **实施后不更新 CONTEXT.md 活跃草稿区** — 遗留条目误导下次 CLI 发现草稿
+7. **跳过 §C.2.5 token 扫描** — 新 CSS 变量不同步到 token 层，代码运行时视觉静默失效，无报错无类型错误，极难排查
+8. **跳过 §C.0.6 冲突检测** — 多草稿并存时不检测，先升格者重置基线后，后升格者 HANDOFF.md diff 失真，代码实施结果与设计意图不符
+9. **§B.0 不写 CONTEXT.md** — 开工作区不注册，§C.0 关键词匹配零命中，退化到目录列表，功能名检索失效
 
 ---
 
