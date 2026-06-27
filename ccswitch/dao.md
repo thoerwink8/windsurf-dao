@@ -58,7 +58,7 @@
 
 > 万物归根，归根曰静。
 
-**规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design-taste skill"），比复制粘贴更符合"各复归其根"。
+**规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design-standards skill"），比复制粘贴更符合"各复归其根"。
 
 **流程缺口归因**（反就近写）：缺口归属 skill → 先改 skill 再补项目 rules；归属 dao.md → 改 dao.md；纯项目特有 → 改项目 rules。禁止只改项目 rules 而不改全局 skill。
 
@@ -89,18 +89,18 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 全面体检 / 验证完成 | `dao-verify` | 入口 | 慎终如始 (64) |
 | review / 接受批评 | `dao-review` | 入口 | 受国之垢 (78) |
 | 设计系统基础层（新项目 / 体系升级） | `dao-design-system`(交互问答→OD 提示词,10 类基础 token) | 入口 | 道生一 (42) |
-| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 OD 产出→翻译→auto-gate 验证) | 入口 | 道法自然 (25) |
-| 布局行为规约 | `dao-design-layout`(三种策略+Layout Token+三视口) | 知识源 | 至柔驰骋至坚 (43) |
-| 设计变更结构提取（翻译前） | `dao-design-sync`(HTML+CSS→结构化实施规格,open §2.5 自动调用) | 自动 | 至柔驰骋至坚 (43) |
+| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 OD 产出→结构提取→翻译→QA 循环→auto-gate 验证) | 入口 | 道法自然 (25) |
+| 设计判据 / 审美标准 / 布局方法论 | `dao-design-standards`(三旋钮·体检表§4·布局§L·组件审计·资产管理) | 知识源 | 少则得 (22) |
 | 设计还原度验证（审计场景） | `dao-design-fidelity`(L1~L5 金字塔,日常由 open auto-gate 覆盖) | 自动 | 大成若缺 (45) |
 | 组件结构健康（审计场景） | `dao-component-radar`(原生 HTML→组件提炼,日常由 open auto-gate 覆盖) | 自动 | 不知常妄作凶 (16) |
+| 设计资产生命周期 | `dao-design-asset`(Code→Prototype 反向生成 + 草稿升格 + 双向闭环) | 手动 | 反者道之动 (40) |
 | 隔离工作区 | `dao-worktree` | 入口 | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 入口 | 知常曰明 (16) |
 | 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 入口 | 道生一 (42) |
 
-13 个 skill 三类角色：**入口**（用户直接调用）、**自动**（管线内触发：fidelity / radar / sync / qa）、**知识源**（被引用不被调用：taste §4 判据 / layout 策略）。设计管线只需 2 个入口（`design-system` + `design-open`）。
+设计管线 6 skill 三类角色：**入口**（`design-system` + `design-open`）、**自动**（`fidelity` / `component-radar`，管线内触发）、**知识源**（`design-standards`，被引用不被调用）、**手动**（`design-asset`，按需调用）。结构提取（原 sync）和 QA 循环（原 qa）已内联到 `design-open`。
 
-**UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
+**UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证；有设计工具 MCP 时走 §4.4.1 设计工具先行路径）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 

@@ -93,7 +93,7 @@ description: 目标锚定术：把一句模糊目标压成会话内 Goal Contrac
 | 已有 plan 或任务足够明确 | 直接执行 | 直接落地，不再询问 |
 | 任务复杂、需要持续推进和多轮校准 | `/dao-dev` | 围绕 Goal Contract 观行验省改升 |
 | 需要验证是否完成 | `dao-verify` | 按成功标准拿 fresh evidence |
-| UI 视觉方向不清 | `dao-design-taste` | 只有视觉方向需要拍板时才进入 |
+| UI 视觉方向不清 | `dao-design-standards` | 只有视觉方向需要拍板时才进入 |
 
 ### 路由优先级
 

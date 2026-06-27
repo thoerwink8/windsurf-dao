@@ -1,17 +1,119 @@
 ---
 name: dao-design-open
-description: Open Design 设计消费引擎——读取 Open Design 产出的设计资产（HTML 原型 + CSS 设计系统），翻译为生产级 React 代码，三维对齐验证。UI 任务涉及 design/ 目录时触发
+description: Open Design 设计消费引擎——读取 Open Design 产出的设计资产（HTML 原型 + CSS 设计系统），翻译为生产级 React 代码，含结构提取与视觉 QA 循环。UI 任务涉及 design/ 目录时触发
 ---
 
-# Open Design 消费引擎 · Design-to-Code
+# Open Design 双向引擎 · Prompt-to-Design + Design-to-Code
 
-> 道法自然。设计已成，代码当如水就形。
+> 道法自然。未有设计时，以追问凝形；设计已成时，代码当如水就形。
 
-本 skill 定义以 **Open Design (open-design.ai)** 产出为唯一设计真相源、AI 忠实翻译为生产代码的标准流程。
+本 skill 覆盖 Open Design 的**双向流程**：
+- **§P · Prompt→Design**：讨论收敛后，生成 OD 提示词 + 会话初始化指引，帮用户在 OD 中出设计稿
+- **§0~§5 · Design→Code**：OD 产出设计资产后，忠实翻译为生产级 React 代码
 
-**核心原则：AI 不做设计决策，只做设计翻译。** Open Design 已完成所有设计判断（色彩、字体、圆角、间距、布局、交互态、组件形态），AI 的职责是将 HTML 原型 **结构性地** 翻译为 React 组件，不是只翻译 CSS token。
+**核心原则：AI 不做设计决策。** 向上（§P）把讨论结论翻译为 OD 提示词，由 OD 做视觉判断；向下（§0~§5）把 OD 产出翻译为代码，不自行改设计。
 
-**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-layout`。详见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-standards §L`。结构提取见 §2.5（已内联）。视觉 QA 循环见 §4.4。详见 `dao-design-system` §7。
+
+---
+
+## §P · OD 提示词生成（Prompt→Design）
+
+> 图难于其易。讨论收敛了，设计还没形，补这一程。
+
+**触发条件**：讨论中三个信号同时满足时，AI 主动建议出设计稿（询问用户确认后执行）：
+1. 有了确定的 UI/交互变更（具体的交互决策，不是概念讨论）
+2. 用户确认了方向（"对"/"方向对了"/"就这么做"）
+3. 变更涉及视觉组件（新组件/新布局/新交互模式）
+
+### §P.0 基线同步（强制前置）
+
+> Code-first, sync before change. 代码是真相源，设计稿可能落后。
+
+**生成 OD 提示词之前，必须先确认设计基线与代码一致。** 代码领先于设计稿时，OD 基于过时基线产出的新设计会引入结构冲突。
+
+流程：
+1. 检查涉及的 `design/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
+2. 如有漂移 → 调用 `dao-design-asset` 反向生成将代码现状同步回 `design/*.html`
+3. 同步完成后再进入 §P.1 生成提示词
+
+跳过条件：全新页面（`design/` 中不存在对应文件，无漂移可言）。
+
+### §P.1 产出结构
+
+AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`），包含两个部分：
+
+**Part A · OD 会话初始化指引**（给用户操作的步骤）
+
+```markdown
+## OD 会话初始化
+
+1. 在 Open Design 中新建会话（或使用已有的项目会话）
+2. 点击左下角「选择工作目录」→ 选择 `<项目根>/design`
+3. 将以下文件拖到右侧「设计文件」面板作为参考资产：
+
+| 文件 | 用途 |
+|------|------|
+| `css/<project>.css` | 设计系统 token（必须） |
+| `<要修改的页面>.html` | 当前页面设计（修改时必须，新建时无） |
+| `<相关页面>.html` | 需要视觉一致的相关页面（按需） |
+
+4. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
+```
+
+**Part B · 设计提示词**（粘贴给 OD AI 的内容）
+
+提示词模板（AI 根据具体任务填充）：
+
+```
+你要为 <项目名> 设计 <什么>。<项目名> 是 <一句话产品定位>。
+
+## 设计系统
+
+沿用工作目录中的设计系统（`css/<project>.css`）。不要自创 token，所有色彩/字号/圆角/间距/动效使用 CSS 中已定义的变量。双主题（data-theme="light|dark"）。
+
+## 要设计什么
+
+<具体的设计需求描述——从讨论结论中提炼>
+
+## 参考
+
+<如果右侧有参考文件> 参考已有的 <页面名>.html 保持视觉一致。
+<具体哪些元素要保持一致>
+
+## 示例数据
+
+<用于填充设计稿的示例内容>
+
+## 输出
+
+生成 `<文件名>.html`，与现有设计文件格式一致（自包含、可独立浏览、亮暗双主题）。
+```
+
+### §P.2 文件扫描
+
+生成提示词前，**自动扫描** `design/` 目录：
+
+1. `Glob design/css/*.css` — 找到设计系统 CSS 文件名
+2. `Glob design/*.html` — 列出所有现有页面
+3. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
+4. 写入 Part A 的文件清单
+
+### §P.3 提示词必含要素
+
+每次生成的 OD 提示词必须包含以下四个部分（缺一不可）：
+
+1. **文件加载指令**：告诉 OD 从工作目录读取哪些文件（CSS token + 要修改的页面 + 相关参考页面）
+2. **设计需求描述**：要设计什么、新旧差异、具体交互细节、示例数据
+3. **讨论口**：提示词末尾加一句"如果有任何不清楚的地方先讨论，不要猜测后直接画"，给 OD 留提问空间
+4. **实施交接指令**：要求 OD 设计完成后额外输出一段实施交接提示词（变更摘要、CSS 类、DOM 结构、组件映射、交互行为、注意事项），用于粘贴回编码 AI
+
+### §P.4 不做的事
+
+- 不替代 OD 做视觉判断——提示词描述"什么"和"约束"，不描述"怎么画"
+- 不在提示词中硬编码 CSS 属性值——只引用 token 名，具体值由 OD 从 CSS 文件读取
+- 不把流程拆成"第一步/第二步"给用户——产出是一段完整的提示词，用户复制粘贴到 OD 即可
+- 不假设 OD 会话已有上下文——每次都包含完整的文件加载指令
 
 ---
 
@@ -66,11 +168,11 @@ design/
 
 枚举 `design/*.html` 所有页面（排除 gallery 索引页），建立清单（页面 | 设计文件 | React 对应 | 当前状态）。**铁律**：每个 html 必须出现，遗漏 = 不得进造线。
 
-### 1.5.2 三层结构 Diff（调用 dao-design-sync）
+### 1.5.2 三层结构 Diff（§2.5 结构提取）
 
 每页自顶向下：**布局层**（grid/flex 骨架、容器、导航）→ **节层**（区块结构、面板、tabs）→ **组件层**（props/样式/交互态）。只做组件层 = 遗漏结构偏差。
 
-**执行方式**：调用 `dao-design-sync` 对每个变更的 design/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
+**执行方式**：按 §2.5 结构提取流程对每个变更的 design/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
 
 ### 1.5.3 页面维度覆盖矩阵
 
@@ -92,16 +194,151 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 > 天下之至柔，驰骋天下之至坚。读源码不猜意图。
 
-**翻译前必须先提取结构化规格。** 调用 `dao-design-sync` 对目标页面做结构提取：
-
-1. **DOM 层级树**：元素父子/兄弟关系 + React 组件映射
-2. **CSS→Tailwind 映射**：每个选择器的完整属性值 → Tailwind 类名对照表
-3. **约束链**（涉及滚动时）：从 root 到滚动容器的 min-height/flex 链
-4. **CSS 变量变更**（有重命名时）：旧名→新名 + 引用范围
-
-产出的实施规格是 §3 的直接输入。**§3 翻译者按规格逐条写代码，不需要回头看设计截图"理解意图"。**
+**AI 不该"解读"设计意图，应该"提取"设计结构。** 翻译前必须先提取结构化规格——产出的实施规格是 §3 的直接输入，翻译者按规格逐条写代码，不需要回头看设计截图"理解意图"。
 
 跳过条件：纯文案/数据变更（无 CSS/DOM 变化）。
+
+### 2.5.0 核心原则
+
+1. **读 CSS 源码，不看截图猜**——`design/*.html` 的 `<style>` 块和链接的 CSS 文件是精确数据源
+2. **提取属性值，不描述视觉效果**——输出 `padding: 10px 26px` 而不是"增加一些内边距"
+3. **映射 DOM 结构，不只映射样式**——sibling/child 关系决定布局行为（sticky vs flex）
+4. **追踪约束链，不只看单个元素**——overflow-scroll 依赖从 root 到容器的完整 min-height:0 链
+
+### 2.5.1 变更检测
+
+**识别变更范围**：
+
+```bash
+# 设计文件变更
+git diff [base]..HEAD -- design/*.html design/css/*.css
+
+# 或指定文件
+git diff HEAD~1 -- design/workspace.html
+```
+
+**变更分类**：
+
+| 变更类型 | 判据 | 提取深度 |
+|---------|------|---------|
+| 新增元素 | diff 中有新选择器或新 DOM 节点 | 完整提取（2.5.2 全流程） |
+| 属性修改 | diff 中现有选择器的属性值变化 | 属性级提取（2.5.2.2） |
+| 结构重组 | DOM 层级变化（父子→兄弟、拆分/合并容器） | 结构级提取（2.5.2.1 + 2.5.2.3） |
+| CSS 变量重命名 | `--var-old` → `--var-new` | 全局搜索替换范围（2.5.2.4） |
+
+### 2.5.2 结构提取（核心）
+
+#### 2.5.2.1 DOM 层级提取
+
+从 design HTML 源码提取元素层级关系，输出为结构树：
+
+```
+.main                          ← 对应 React: WorkspaceMain
+├── .topbar                    ← 对应: TopBar (sibling, 不在滚动区内)
+├── .dim-nav                   ← 对应: DimNav (sibling, 不在滚动区内)
+│   ├── .dn-no                 ← badge: 维度序号
+│   ├── h2                     ← 维度标题
+│   └── button.next            ← 下一维度
+└── .board                     ← 对应: candidate-feed (flex:1, overflow:auto)
+    └── .card-list             ← 卡片列表
+```
+
+**关键输出**：每个元素的**父子/兄弟关系**（决定布局行为）、与 React 组件的**映射关系**、布局角色标注（`shrink-0` / `flex-1` / `overflow:auto` / `min-height:0`）。
+
+#### 2.5.2.2 CSS 属性提取
+
+从 `<style>` 块和链接 CSS 文件中，提取每个选择器的**完整属性列表**：
+
+```
+.dim-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;                   → Tailwind: gap-[10px]
+  padding: 10px 26px;          → Tailwind: px-[26px] py-[10px]
+  border-bottom: 1px solid var(--color-border-soft);  → border-b border-border-soft
+  background: var(--color-bg); → bg-background
+  flex-shrink: 0;              → shrink-0
+}
+```
+
+**输出格式**：选择器 → CSS 属性 → Tailwind 等效类名（三列对照表）。
+
+#### 2.5.2.3 约束链分析
+
+对于涉及滚动的布局，追踪从 root 到滚动容器的完整约束链：
+
+```
+约束链：overflow-y:auto 生效条件
+──────────────────────────────────
+AppShell        → h-screen, grid
+├── SidePanel   → (resizable, 独立滚动)
+└── MainPanel   → h-full, min-h-0 ⚠️ (必须！缺失则 flex 子级不收缩)
+    └── div     → h-full, min-h-0, min-w-0, flex-col
+        └── WorkspaceMain → min-h-0, flex-1, flex-col
+            ├── TopBar      → shrink-0
+            ├── DimNav      → shrink-0
+            └── Board       → min-h-0, flex-1, overflow-y-auto ✅
+```
+
+**关键输出**：链中每一层的 `min-height` / `height` / `flex` 约束、标记缺失的必要约束（如 `min-h-0`）、标记滚动容器的位置和哪些元素在其内/外。
+
+#### 2.5.2.4 CSS 变量变更提取
+
+检测 CSS 变量的重命名或新增：
+
+```
+CSS 变量变更：
+  --color-fg         → --fg          (重命名)
+  --color-border-light → --color-border-soft (重命名)
+  --radius-button    → (删除，合并到 --radius-sm)
+
+影响范围搜索：
+  grep --include="*.tsx" --include="*.css" "color-fg\b" apps/ packages/
+```
+
+### 2.5.3 输出规格
+
+每次提取产出一份**实施规格**：
+
+```markdown
+## 实施规格：<组件名> (<design-file>)
+
+### 1. DOM 结构
+<2.5.2.1 的结构树>
+
+### 2. CSS → Tailwind 映射
+<2.5.2.2 的三列对照表>
+
+### 3. 约束链
+<2.5.2.3 的约束链（仅涉及滚动时）>
+
+### 4. CSS 变量变更
+<2.5.2.4 的变更列表（仅有变更时）>
+
+### 5. 验证检查点
+- [ ] <从结构中推导的关键检查点>
+- [ ] <例：dim-nav 是 board 的 sibling 不是 child>
+- [ ] <例：MainPanel div 有 min-h-0>
+```
+
+**消费方式**：
+
+| 消费者 | 如何使用 |
+|--------|---------|
+| §3 翻译 | 直接按规格写代码，不需要"理解设计意图" |
+| `dao-loop` 造线 worker | 规格作为 Task 的输入 spec |
+| `dao-design-fidelity` L2 | 验证检查点用于结构验证 |
+| 人工 review | 规格即 diff 说明，reviewer 可逐条对照 |
+
+### 2.5.4 提取流程
+
+**前置：读取项目 Token 映射**
+
+提取前先读项目的 token 配置（CSS 变量 → Tailwind 类名映射）：`index.css`（CSS 变量定义）+ `tailwind.config.*`（自定义 theme extend）+ `.claude/rules/design-tokens.md`（如有）。
+
+**Diff 驱动提取**（增量）：git diff 获取变更范围 → 对变更的每个选择器提取完整 CSS 属性（不只是 diff 行）并映射 Tailwind → 对变更的 DOM 结构提取前后层级对比 → 涉及滚动的追踪完整约束链 → 对 CSS 变量变更列出所有引用位置 → 组装实施规格。
+
+**全量提取**（新页面/首次对齐）：读取页面完整 `<style>` 块 + 链接 CSS → 逐选择器提取 CSS 属性并映射 → 提取完整 DOM 结构树 → 分析所有约束链 → 组装实施规格。
 
 ---
 
@@ -172,6 +409,24 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 循环退出条件：截图对比无明显偏差 + 测试全绿。
 
+### 4.4.1 设计工具先行路径（有 MCP 时）
+
+> 反者道之动。直接改代码是症状修复，设计工具修是根因修复。
+
+当有设计工具 MCP（Penpot / Figma）且偏差涉及设计决策（不只是代码实现错误）时：
+
+1. **在设计工具中定位对应页面/组件**
+2. **在设计工具中修复**：修前截图 → 实施修改 → 修后截图确认改进。用 Library Component / token，不硬编码
+3. **回填代码**：优先改 token/CSS 变量 → 其次改 ui/ 共享组件 → 最后改业务层
+4. **验证三关**：测试套件 + 类型检查 + 截图对齐。改亮必查暗
+
+**何时走此路径 vs 直接改代码**：
+- 偏差是设计决策问题（颜色/间距/布局方向不对）→ 设计工具先行
+- 偏差是代码实现问题（组件用错/props 漏传）→ 直接改代码
+- 无设计工具 MCP → 直接改代码
+
+截图存放路径：`<项目根>/_tmp/qa/design-qa/`，命名格式：`<type>-<description>.png`
+
 ### 4.5 收尾自检（auto-gate）
 
 > 慎终如始。翻译完成 ≠ 声明完成。以下两关在 §4.4 退出后**自动执行**，不需用户手动调用 fidelity 或 radar skill。
@@ -220,14 +475,12 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 | Skill | 关系 |
 |---|---|
-| `dao-design-sync` | **§2.5 结构提取**。翻译前从 HTML+CSS 源码提取结构化实施规格，§3 按规格写代码 |
-| `dao-design-taste` | 翻译时的视觉判据来源（§4 通用体检表） |
-| `dao-code-to-prototype` | **正反互补**。本 skill 是 Design→Code，code-to-prototype 是 Code→Design。共享 `design/` 目录 |
+| `dao-design-standards` | 翻译时的视觉判据来源（§4 通用体检表）+ 布局策略（§L） |
+| `dao-design-asset` | **正反互补**。本 skill 是 Design→Code，asset 的反向生成是 Code→Design。共享 `design/` 目录 |
 | `dao-component-radar` | 翻译过程中自动触发，检测原生 HTML → 组件提炼 |
 | `dao-verify` | 翻译完成后走涅槃门验证 |
 | `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
 | `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
-| `dao-design-qa` | 视觉偏差修复循环——翻译后发现 UI 偏差时自动触发（截图→定位→修代码→再验证） |
 
 ---
 
@@ -241,7 +494,11 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 3. **AI 自行做设计判断** — Open Design 产出与项目代码不一致时，以 Open Design 为准。AI 不应自行决定"这个颜色应该更深"或"这个间距太大"——设计决策属于设计工具，不属于编码 agent。
 
-4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-code-to-prototype`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
+4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-design-asset`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
+
+5. **只读 diff 行不读完整选择器** — CSS 属性有上下文依赖（`display:flex` + `gap` 组合），只看变更行会丢失组合语义。结构提取时必须提取选择器的全部属性。
+
+6. **跳过约束链分析** — 单个元素的 `overflow:auto` 写对了也不滚动，因为父级缺 `min-height:0`。涉及滚动的翻译必须追踪完整约束链。
 
 ---
 
