@@ -1,6 +1,7 @@
 ---
 name: dao-review
 description: 代码评审铁律：两阶段评审(spec compliance → code quality),失败方向决定回打到哪一层。普通模块用 reviewer,核心模块(支付/认证/安全)派 reviewer-critical。"受国之垢,是谓社稷主"。
+disable-model-invocation: true
 ---
 
 # 评审 · Review Lens

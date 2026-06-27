@@ -1,5 +1,5 @@
 ---
-name: dao-design-system
+name: system.md
 description: 设计系统基础层生成器——通过交互问答收集项目上下文，输出完整的设计系统提示词供 Open Design 消费。覆盖字号/色彩/间距/圆角/阴影/图标/动效/字体/布局/边框十类基础 token
 ---
 
@@ -17,7 +17,7 @@ description: 设计系统基础层生成器——通过交互问答收集项目�
 
 ### 触发方式
 
-用户在 CLI 调用 `/dao-design-system`。
+用户在 CLI 调用 `/dao-design system`。
 
 ### 流程
 
@@ -145,7 +145,7 @@ OD 生成 CSS 变量时**必须使用以下类别前缀和角色名**，不可�
 | **阴影** | `--elevation-{t-shirt}` | xs(hairline)→sm(card)→md(float)→lg(tooltip)→xl(modal)，3~5 层，暗色模式减弱 |
 | **图标** | — | 单一库源，描边粗细一致，尺寸联动字号 3~4 级 |
 | **动效** | `--duration-{speed}` + `--ease-{style}` | fast(100~150ms)/base(200~300ms)/slow(400~600ms)，必须有 `prefers-reduced-motion` 降级 |
-| **布局** | — | 三种策略 Cap+Center / Stretch / Multi-column，详见 `dao-design-standards` §L |
+| **布局** | — | 三种策略 Cap+Center / Stretch / Multi-column，详见 `standards.md` §L |
 | **边框** | `--color-border[-{mod}]` | soft/default/strong 归入色彩体系，宽度 1px 为主 |
 
 ---
@@ -322,7 +322,7 @@ Skill 最终输出一份 Markdown 格式的提示词，结构如下：
 
 **衔接**：P0→OD→P1（不变层规则成为合规基线）→ P2（翻译完必跑 L1+L2）→ P3（fidelity 发现组件问题触发 radar）。layout 横切所有 Phase。
 
-**用户入口只有 2 个**：`/dao-design-system`（低频）+ `/dao-design-open`（高频）。fidelity / radar / qa 由 design-open auto-gate 自动触发。判据来源统一引用 `dao-design-standards` §4。
+**用户入口只有 2 个**：`/dao-design system`（低频）+ `/dao-design open`（高频）。fidelity / radar / qa 由 design-open auto-gate 自动触发。判据来源统一引用 `standards.md` §4。
 
 ### 交接契约（Handoff Schema）
 

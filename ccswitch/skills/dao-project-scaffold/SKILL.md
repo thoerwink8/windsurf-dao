@@ -1,6 +1,7 @@
 ---
 name: dao-project-scaffold
 description: 项目标准结构模板。首次进入项目时对照检查，缺则建议创建。也可手动调用进行结构审计。
+disable-model-invocation: true
 ---
 
 # 器 · 项目脚手架
@@ -82,13 +83,13 @@ design/
   CHANGELOG.md             ← 升格日志
 ```
 
-> **结构与升格流程的单一真相源 = `dao-design-asset` skill**。本 skill 只在进项目时做存在性检查，不重复定义流程。完整命名约定、升格三步、交接包模板均见该 skill §B。
+> **结构与升格流程的单一真相源 = `dao-design`（asset.md）**。本 skill 只在进项目时做存在性检查，不重复定义流程。完整命名约定、升格三步、交接包模板均见 asset.md §B。
 
-**双向闭环**：`design/` 同时支持正向（设计→代码，`dao-design-open` 消费）与反向（代码→设计，`dao-design-asset` §A 生成）。两向草稿都汇入 `workspaces/`，共用 `dao-design-asset` §B 升格——`workspaces/` 是收敛点。
+**双向闭环**：`design/` 同时支持正向（设计→代码，`dao-design` open.md 消费）与反向（代码→设计，`dao-design` asset.md §A 生成）。两向草稿都汇入 `workspaces/`，共用 asset.md §B 升格——`workspaces/` 是收敛点。
 
 ### 代码层映射（设计侧消费，写入 CONTEXT.md 或 CLAUDE.md）
 
-交接包按代码层分文件（components / types / store / prompts / i18n），各层对应的**实际代码目录因技术栈而异**，必须声明一次供 `dao-design-asset` §B 生成 handoff 时填对路径：
+交接包按代码层分文件（components / types / store / prompts / i18n），各层对应的**实际代码目录因技术栈而异**，必须声明一次供 `dao-design` asset.md §B 生成 handoff 时填对路径：
 
 - **设计/代码同仓（monorepo）** → 写项目根 `CLAUDE.md`
 - **设计/代码分仓**（design/ 与代码在不同目录，如本类 Open Design 项目）→ 写 `design/CONTEXT.md`（升格在设计侧运行，读 CONTEXT.md）

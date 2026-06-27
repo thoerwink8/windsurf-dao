@@ -1,6 +1,7 @@
 ---
 name: dao-worktree
 description: 隔离工作区铁律：开始一项独立工作前,用 git worktree 创建干净分支沙箱,跑测试基线确认 clean。完工后必 cleanup 归根。借助"致虚极守静笃"的道家观,把每次工作变成可隔离、可丢弃、不污染主线的独立沙盒。
+disable-model-invocation: true
 ---
 
 # 隔离工作区 · Worktree Lens

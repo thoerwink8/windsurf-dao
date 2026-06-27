@@ -1,6 +1,7 @@
 ---
 name: dao-verify
 description: 涅槃门验证 + 8 维度全面体检。声明完成前必有 fresh 证据；重大版本前扫盲点。
+disable-model-invocation: true
 ---
 
 # 验前 · Verification Before Claims

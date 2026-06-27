@@ -1,5 +1,5 @@
 ---
-name: dao-design-open
+name: open.md
 description: Open Design 设计消费引擎——读取 Open Design 产出的设计资产（HTML 原型 + CSS 设计系统），翻译为生产级 React 代码，含结构提取与视觉 QA 循环。UI 任务涉及 design/ 目录时触发
 ---
 
@@ -13,9 +13,9 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 **核心原则：AI 不做设计决策。** 向上（§P）把讨论结论翻译为 OD 提示词，由 OD 做视觉判断；向下（§0~§5）把 OD 产出翻译为代码，不自行改设计。
 
-**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-standards §L`。结构提取见 §2.5（已内联）。视觉 QA 循环见 §4.4。详见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `system.md`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `fidelity.md`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `standards.md §L`。结构提取见 §2.5（已内联）。视觉 QA 循环见 §4.4。详见 `system.md` §7。
 
-**sync 接入（完整模式）**：当 `dao-design-sync` 以完整模式委托时，传入漂移上下文（已检测的变更文件列表 + git diff + 人话描述）。接收后可跳过：§0 格式概览（已知）、§1 全量读取（只读变更文件）、§2.5.1 变更检测（已完成）。从 §2.5.2 结构提取开始，以传入的变更文件为输入。后续流程（§3 翻译 → §4 验证 → §4.5 auto-gate）正常执行。
+**sync 接入（完整模式）**：当 `sync.md` 以完整模式委托时，传入漂移上下文（已检测的变更文件列表 + git diff + 人话描述）。接收后可跳过：§0 格式概览（已知）、§1 全量读取（只读变更文件）、§2.5.1 变更检测（已完成）。从 §2.5.2 结构提取开始，以传入的变更文件为输入。后续流程（§3 翻译 → §4 验证 → §4.5 auto-gate）正常执行。
 
 ---
 
@@ -39,20 +39,20 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 代码领先于设计稿时，OD 基于过时基线产出的新设计会引入结构冲突。
 
 1. 检查涉及的 `design/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
-2. 如有漂移 → 调用 `dao-design-asset` 反向生成将代码现状同步回 `design/*.html`
+2. 如有漂移 → 调用 `asset.md` 反向生成将代码现状同步回 `design/*.html`
 3. 同步完成后进入下一步
 
 跳过条件：全新页面（`design/` 中不存在对应文件，无漂移可言）。
 
 #### 草稿区建立（worktree）
 
-**OD 产出不直接落正式稿，必须走 `dao-design-asset` §B.0 的 worktree 机制。**
+**OD 产出不直接落正式稿，必须走 `asset.md` §B.0 的 worktree 机制。**
 
 1. 创建工作区目录 `design/workspaces/{name}/`（`{name}` 按功能命名，如 `round-regen`）
 2. 修改已有页面 → 复制正式稿到工作区作为 OD 编辑起点：`design/workspaces/{name}/{page}.html`
 3. 全新页面 → 工作区内从零创建，无需复制
 
-这一步确保 Part A 的参考资产指向工作区副本，Part B 的输出落工作区，正式稿不被触碰。升格由 `dao-design-asset` §B 在 OD 产出验收后执行。
+这一步确保 Part A 的参考资产指向工作区副本，Part B 的输出落工作区，正式稿不被触碰。升格由 `asset.md` §B 在 OD 产出验收后执行。
 
 ### §P.1 产出结构
 
@@ -66,7 +66,7 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 0. 先建工作区草稿目录（worktree）
 在项目中创建：`design/workspaces/{name}/`
 把当前基准复制进去作为起点：`design/workspaces/{name}/{page}.html`
-本次产出全部落在 `workspaces/{name}/` 草稿区，定稿后再按 dao-design-asset §B 升格到 `design/` 根目录，不直接改正式稿。
+本次产出全部落在 `workspaces/{name}/` 草稿区，定稿后再按 asset.md §B 升格到 `design/` 根目录，不直接改正式稿。
 
 1. 在 Open Design 中打开项目会话
 2. 点击左下角「选择工作目录」→ 选择 `<项目根>/design`
@@ -143,7 +143,7 @@ source: design
 2. **设计需求描述**：要设计什么、新旧差异、具体交互细节、示例数据
 3. **讨论口**：提示词末尾加一句"如果有任何不清楚的地方先讨论，不要猜测后直接画"，给 OD 留提问空间
 4. **实施交接指令**：要求 OD 设计完成后额外输出一段实施交接提示词（变更摘要、CSS 类、DOM 结构、组件映射、交互行为、注意事项），用于粘贴回编码 AI
-5. **工作区指令**：产出必须落 `workspaces/{name}/` 草稿区 + 生成 WORKSPACE.md，不直接改正式稿。升格由 `dao-design-asset` §B 负责
+5. **工作区指令**：产出必须落 `workspaces/{name}/` 草稿区 + 生成 WORKSPACE.md，不直接改正式稿。升格由 `asset.md` §B 负责
 6. **自包含性要求**：workspace HTML 是自包含文件，不链接外部 CSS。OD 读取设计系统 CSS 后必须把所有用到的 token 定义也写入 workspace HTML 的 `:root`，不得只引用 `var(--*)` 而不补全定义。提示词中须显式加一句："workspace HTML 是自包含文件，所有 CSS 变量须在 `:root` 中定义，不依赖外部样式表。读取项目设计系统 CSS，把所有用到的 token 按分类（字号、字体、颜色与前景色、圆角、间距、动效、阴影）逐类写入 `:root`，不漏分类。" **验收**：§P.7 关一自动覆盖此项
 7. **锚点重置原则**：`<a>` 元素作为交互控件（按钮、导航项等）使用时，其 CSS 样式类必须显式重置浏览器对锚点的默认装饰（下划线、字体颜色继承等），不可依赖浏览器默认行为。提示词中加一句："用作交互控件的 `<a>` 元素，CSS 须显式重置浏览器默认锚点装饰。" **验收**：§P.7 关四自动覆盖此项
 
@@ -153,7 +153,7 @@ source: design
 - 不在提示词中硬编码 CSS 属性值——只引用 token 名，具体值由 OD 从 CSS 文件读取
 - 不把流程拆成"第一步/第二步"给用户——产出是一段完整的提示词，用户复制粘贴到 OD 即可
 - 不假设 OD 会话已有上下文——每次都包含完整的文件加载指令
-- 不让 OD 直接输出到 `design/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `dao-design-asset` §B 负责
+- 不让 OD 直接输出到 `design/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `asset.md` §B 负责
 
 ### §P.5 · workspace 验收后的强制交付物（HANDOFF.md）
 
@@ -445,7 +445,7 @@ CSS 变量变更：
 |--------|---------|
 | §3 翻译 | 直接按规格写代码，不需要"理解设计意图" |
 | `dao-loop` 造线 worker | 规格作为 Task 的输入 spec |
-| `dao-design-fidelity` L2 | 验证检查点用于结构验证 |
+| `fidelity.md` L2 | 验证检查点用于结构验证 |
 | 人工 review | 规格即 diff 说明，reviewer 可逐条对照 |
 
 ### 2.5.4 提取流程
@@ -549,7 +549,7 @@ CSS 变量变更：
 
 > 慎终如始。翻译完成 ≠ 声明完成。以下两关在 §4.4 退出后**自动执行**，不需用户手动调用 fidelity 或 radar skill。
 
-**关一：Token 合规（来自 dao-design-fidelity L1）**
+**关一：Token 合规（来自 fidelity.md L1）**
 
 | 检查 | 方法 | pass 条件 |
 |------|------|----------|
@@ -559,7 +559,7 @@ CSS 变量变更：
 
 不过 → 修 → 重跑，不声明完成。
 
-**关二：组件健康（来自 dao-component-radar 关一）**
+**关二：组件健康（来自 component-radar.md 关一）**
 
 | 检查 | 方法 | pass 条件 |
 |------|------|----------|
@@ -583,23 +583,23 @@ CSS 变量变更：
 
 不过 → 修 → 重跑，不声明完成。
 
-**三关都过 → 声明翻译完成。** 全面审计（Loop 归档 / 设计体系升级）仍需独立调用 `dao-design-fidelity` 和 `dao-component-radar` 做深度检查。
+**三关都过 → 声明翻译完成。** 全面审计（Loop 归档 / 设计体系升级）仍需独立调用 `fidelity.md` 和 `component-radar.md` 做深度检查。
 
 ---
 
 ## §5 · 与其他 skill 的关系
 
-交接契约见 `dao-design-system` §7。
+交接契约见 `system.md` §7。
 
 | Skill | 关系 |
 |---|---|
-| `dao-design-standards` | 翻译时的视觉判据来源（§4 通用体检表）+ 布局策略（§L） |
-| `dao-design-asset` | **正反互补**。本 skill 是 Design→Code，asset 的反向生成是 Code→Design。共享 `design/` 目录 |
-| `dao-component-radar` | 翻译过程中自动触发，检测原生 HTML → 组件提炼 |
+| `standards.md` | 翻译时的视觉判据来源（§4 通用体检表）+ 布局策略（§L） |
+| `asset.md` | **正反互补**。本 skill 是 Design→Code，asset 的反向生成是 Code→Design。共享 `design/` 目录 |
+| `component-radar.md` | 翻译过程中自动触发，检测原生 HTML → 组件提炼 |
 | `dao-verify` | 翻译完成后走涅槃门验证 |
 | `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
 | `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
-| `dao-design-sync` | **快捷入口**。sync 完整模式委托本 skill 执行 Design→Code，传入漂移上下文跳过前置扫描 |
+| `sync.md` | **快捷入口**。sync 完整模式委托本 skill 执行 Design→Code，传入漂移上下文跳过前置扫描 |
 
 ---
 
@@ -613,7 +613,7 @@ CSS 变量变更：
 
 3. **AI 自行做设计判断** — Open Design 产出与项目代码不一致时，以 Open Design 为准。AI 不应自行决定"这个颜色应该更深"或"这个间距太大"——设计决策属于设计工具，不属于编码 agent。
 
-4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-design-asset`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
+4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`asset.md`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
 
 5. **只读 diff 行不读完整选择器** — CSS 属性有上下文依赖（`display:flex` + `gap` 组合），只看变更行会丢失组合语义。结构提取时必须提取选择器的全部属性。
 
@@ -638,7 +638,7 @@ paths:
 
 # 设计精神（四维检查清单）
 
-> 本文件由 dao-design-open 谋线自动创建，造线过程中持续更新。
+> 本文件由 open.md 谋线自动创建，造线过程中持续更新。
 
 ## 视觉维度
 - [ ] 所有色彩使用语义 token，禁止硬编码 hex/hsl

@@ -29,14 +29,16 @@
 
 - **天·觉**（动之前）：交互否 · 耗时几何 · 输出几何 · 可逆否
 - **地·行**（动之中）：只读先行可并行，写操作串行 · 同一文件用一次 Edit 聚合 · 长进程用 `run_in_background` 不阻塞 · 有界限（`git log -n 20` / `head -n 50`）
-- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成 · **有 `design/` 目录且改了 UI 组件 → 必须同步设计原型再声明完成**（走 `dao-design-asset` §A 或手动更新 `design/*.html`，不可跳过）
+- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成 · **有 `design/` 目录且改了 UI 组件 → 必须同步设计原型再声明完成**（走 `/dao-design 反向生成` 或手动更新 `design/*.html`，不可跳过）
 - **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。浏览器工具选择见项目 `.claude/rules/browser-preference.md` 或各设计 skill 内置门控
 
 ## 续力 · 每答必续
 
 > 千里之行，始于足下。
 
-**每次用户可见回答的末尾，必须调用 `AskUserQuestion` 给出 2-4 个选项。无例外。**
+**主对话中每次用户可见回答的末尾，必须调用 `AskUserQuestion` 给出 2-4 个选项。无例外。**
+
+**Subagent 豁免**：fork / Agent / Workflow 内的 subagent 回答对象是 coordinator 而非用户——subagent 内禁止调用 `AskUserQuestion`，直接返回结果即可。
 
 选项是快捷入口，不是拦路关卡——用户可以忽略选项直接打字，但选项不能缺席。
 
@@ -58,7 +60,7 @@
 
 > 万物归根，归根曰静。
 
-**规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design-standards skill"），比复制粘贴更符合"各复归其根"。
+**规范层级判据**（产出规范/方法论时必须先过）：每次要写入规范、规则、流程模板时，先问"换个项目/换个技术栈还能用吗"：能 → 归 windsurf-dao（skill 或本文件）；只在当前技术选型下有意义 → 归项目 `CLAUDE.md` 或 `.claude/rules/`。犹豫时倾向全局——项目侧只需一行引用（如"icon 规范见 dao-design standards.md"），比复制粘贴更符合"各复归其根"。
 
 **流程缺口归因**（反就近写）：缺口归属 skill → 先改 skill 再补项目 rules；归属 dao.md → 改 dao.md；纯项目特有 → 改项目 rules。禁止只改项目 rules 而不改全局 skill。
 
@@ -76,33 +78,40 @@
 **复杂度 SHOULD 建议**：≥3 文件 / ≥100 LOC / 核心模块（auth/payment/security/core）/ 跨服务 / 不可逆 → 主动建议走，用户拒绝即轻量路径。
 
 五步（落地见 `/dao-superpowers` command）：
-worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent → reviewer subagent（`dao-review`）→ 归根 cleanup。UI 任务有 `design/` 目录时先过 `dao-design-open` 读取设计资产。
+worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent → reviewer subagent（`dao-review`）→ 归根 cleanup。UI 任务有 `design/` 目录时先过 `/dao-design`（内部 Read open.md）读取设计资产。
 
 进入即承诺，不中途偷工：不跳 reviewer、不跳 worktree、不直推 master。
 
-## 场景速查（按需 · 自动加载对应 skill）
+## 场景速查（人类索引 · AI 不自动加载）
 
-| 场景 | skill / command | 类型 | 章句根 |
-|---|---|---|---|
-| 接到新任务 / 架构构思 | `dao-brainstorm` | 入口 | 图难于其易 (63) |
-| 写实施 plan | `dao-plan` | 入口 | 为大于其细 (63) |
-| 全面体检 / 验证完成 | `dao-verify` | 入口 | 慎终如始 (64) |
-| review / 接受批评 | `dao-review` | 入口 | 受国之垢 (78) |
-| 设计系统基础层（新项目 / 体系升级） | `dao-design-system`(交互问答→OD 提示词,10 类基础 token) | 入口 | 道生一 (42) |
-| UI / 设计翻译（有 design/ 目录时） | `dao-design-open`(读 OD 产出→结构提取→翻译→QA 循环→auto-gate 验证) | 入口 | 道法自然 (25) |
-| 设计判据 / 审美标准 / 布局方法论 | `dao-design-standards`(三旋钮·体检表§4·布局§L·组件审计·资产管理) | 知识源 | 少则得 (22) |
-| 设计还原度验证（审计场景） | `dao-design-fidelity`(L1~L5 金字塔,日常由 open auto-gate 覆盖) | 自动 | 大成若缺 (45) |
-| 组件结构健康（审计场景） | `dao-component-radar`(原生 HTML→组件提炼,日常由 open auto-gate 覆盖) | 自动 | 不知常妄作凶 (16) |
-| 设计-代码漂移同步 | `dao-design-sync`(漂移检测→人话描述→一键同步,方向由宿主自判,支持追加范围指令) | 入口 | 上善若水 (8) |
-| 设计资产生命周期 | `dao-design-asset`(Code→Prototype 反向生成 + 草稿升格 + 双向闭环) | 手动 | 反者道之动 (40) |
-| **设计工作统一入口（推荐）** | **`dao-design`**（静默扫描→识别模式→动态选项；支持 `/dao-design 实现"xxx"` 带参数直接路由；OD 端 + CLI 端通用） | **统一入口** | 太上不知有之 (17) |
-| 隔离工作区 | `dao-worktree` | 入口 | 致虚极守静笃 (16) |
-| 教训 / 演化记录 | `dao-evolution` | 入口 | 知常曰明 (16) |
-| 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 入口 | 道生一 (42) |
+所有 skill 均 `disable-model-invocation: true`，用户通过 `/name` 手动触发。
 
-设计管线：**`dao-design`** 是统一入口（不记子命令，动态路由）；底层 skill 角色：**快捷入口**（`design-sync`）、**入口**（`design-system` + `design-open`）、**自动**（`fidelity` / `component-radar`，管线内触发）、**知识源**（`design-standards`，被引用不被调用）、**手动**（`design-asset`，按需调用）。底层 skill 也可直接调用。结构提取和 QA 循环已内联到 `design-open`。
+| 场景 | `/` 命令 |
+|---|---|
+| 新任务 / 架构构思 | `/dao-brainstorm` |
+| 写实施 plan | `/dao-plan` |
+| 全面体检 | `/dao-verify` |
+| review | `/dao-review` |
+| 设计统一入口 | `/dao-design [参数]` |
+| 隔离工作区 | `/dao-worktree` |
+| 教训 / 演化 | `/dao-evolution` |
+| 循环开发 | `/dao-loop` |
+| 项目结构 | `/dao-project-scaffold` |
 
-**UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证；有设计工具 MCP 时走 §4.4.1 设计工具先行路径）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
+**设计管线架构**：`/dao-design` 是唯一入口。原独立 skill（design-asset / design-open / design-sync / design-system / design-fidelity / design-standards / component-radar）已合并为 `dao-design/` 下的 supporting files，由 SKILL.md 按需 Read 加载。用户只需记 `/dao-design [参数]`，参数路由覆盖全部子功能（`/dao-design sync` = 漂移同步，`/dao-design 实现 X` = 代码实施，等）。
+
+UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真相源。
+
+## 路由铁律（跨 skill 调用）
+
+> 鱼不可脱于渊。skill 不可脱于 Skill 工具。
+
+所有 dao skill 设置 `disable-model-invocation: true`，Claude 不能自动加载。跨 skill 调用遵循以下规则：
+
+1. **同 skill 内部路由**：已加载 skill 的 supporting files，直接 Read 文件路径。如 `/dao-design` 加载后，路由到 asset.md 只需 Read 同目录文件
+2. **跨 skill 外部路由**：输出**交接信息**（上下文摘要 + 下一个 `/命令`），引导用户输入。格式：`📋 {摘要} → 请输入 /dao-loop {scope}`
+3. **禁止即兴发挥**：无法加载目标 skill 时，绝不从记忆碎片拼凑协议。输出交接信息或明确报错
+4. **禁止隐式依赖**：不假设任何 skill 在可用列表中。dao.md 场景表是人类索引，不是 AI 自动加载清单
 
 ## Shell · dao 独有项（Claude Code 沙箱未覆盖的）
 
