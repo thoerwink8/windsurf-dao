@@ -1,2 +1,3 @@
 id,date,title,summary,lesson_ids,tags
 E1,2026-06-25,dao-slim-v2 全局三层瘦身,36轮任务40commits净删4132行——dao.md 486→128/skills -35%/commands -32%/.devin rules -31%/AGENT_GUIDE -38%。核心手法：格式块压缩(ASCII流程图→prose),L1-L2,瘦身;压缩;格式块;always-on;双栈
+E2,2026-06-27,设计skill 10→6合并,taste+layout→standards/sync+qa→open/promote+code-to-prototype→asset。OD实测暴露§P↔§B.0 worktree耦合断裂已修复。2commits净删4个独立skill目录,L3,合并;设计管线;worktree;耦合修复
