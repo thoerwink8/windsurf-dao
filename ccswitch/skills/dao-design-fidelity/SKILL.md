@@ -11,7 +11,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 "Pixel-perfect" 已被行业抛弃（W3C Design Tokens 2025.10 stable）。
 但 token 对齐 ≠ 视觉对齐。真正的还原度是**五层金字塔**——逐层叠加，缺一不可。
 
-**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `dao-design-open`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `dao-component-radar`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `dao-design-system`（Phase 0）的不变层规则。视觉判据引用 `dao-design-taste` §4。交接契约见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `dao-design-open`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `dao-component-radar`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `dao-design-system`（Phase 0）的不变层规则。视觉判据引用 `dao-design-standards` §4。交接契约见 `dao-design-system` §7。
 
 ---
 
@@ -21,7 +21,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 ### L1 · Token 语义（Semantic Tokens）
 
-**判据**：所有视觉属性使用项目 design token，零硬编码。
+**判据**：所有视觉属性使用项目 design token，零硬编码，且 **token 名属于规范词汇集**。
 
 | 维度 | pass 条件 | 验证手段 |
 |------|----------|---------|
@@ -29,8 +29,29 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 | 颜色 | 无硬编码 hex/hsl/rgb | `grep -rE "#[0-9a-fA-F]{3,8}\b" --include="*.tsx"` |
 | 圆角 | 使用项目 rounded-* token | 契约测试 |
 | 阴影 | 使用项目 shadow-* token | 契约测试 |
+| **命名合规** | **每个 `var(--x)`/`--x:` 的名字都在规范集内，无自创名** | **见 L1.1** |
 
 **自动化**：100% CI。契约测试（`*contract*.spec.*`）断言组件 className 包含正确 token class。
+
+### L1.1 · Token 命名合规（Naming Compliance）
+
+**判据**：设计稿与代码用**同一套 token 名**——单一词汇集，零映射表。
+
+**为什么**：「无硬编码」不等于「名字对」。`--go`/`--r-md`/`--fs-xs` 是合法 token，能过 L1 硬编码检查，但它们是**自创短名**，代码侧不存在同名 → 交接时要么靠翻译映射表（脆弱、易错位），要么设计稿引用到代码不认的变量。两套词汇本身就是缺陷。
+
+**唯一命名权威 = `dao-design-system` §3.0**：`--{category}-{role}[-{modifier}]`（如 `--color-success`/`--radius-lg`/`--text-xs`/`--motion-duration-fast`/`--elevation-md`）。设计稿 CSS 和代码 CSS 都遵循它，谁都不许另起短名。
+
+**pass 条件**：设计稿（`design/*.html` + `design/css/*.css`）里出现的每个 token 名，都能在项目规范 token CSS（代码侧 `index.css` 或设计侧等价物）的定义集中找到。出现规范集外的名字（`--go`/`--r-*`/`--fs-*`/`--sp-*`/`--ease`/`--shadow` 等旧式短名）= **P0 失败**。
+
+**验证手段**：
+```bash
+# 抽取设计稿用到的所有 token 名，与规范集求差
+grep -rhoE '\-\-[a-z0-9-]+' design/ | sort -u   > /tmp/used.txt
+grep -rhoE '^\s*\-\-[a-z0-9-]+\s*:' <规范tokenCSS> | grep -oE '\-\-[a-z0-9-]+' | sort -u > /tmp/canon.txt
+comm -23 /tmp/used.txt /tmp/canon.txt   # 输出 = 自创名，应为空（仅允许 --font-* 等约定豁免）
+```
+
+**改名修复铁律**：把自创名统一到规范名时，**按值映射，不按字面**——圆角/字号常有差级（设计 `--r-xs:6px` → 规范 `--radius-sm:6px`，不是 `--radius-xs:4px`）。改完必走 §6.6 截图实证 diff 为零（纯改名零像素变化）。
 
 ### L1.5 · 结构快照（Structural Snapshot）
 

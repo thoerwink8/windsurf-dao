@@ -1,6 +1,6 @@
 ---
 name: dao-design-open
-description: Open Design 设计消费引擎——读取 Open Design 产出的设计资产（HTML 原型 + CSS 设计系统），翻译为生产级 React 代码，三维对齐验证。UI 任务涉及 design/ 目录时触发
+description: Open Design 设计消费引擎——读取 Open Design 产出的设计资产（HTML 原型 + CSS 设计系统），翻译为生产级 React 代码，含结构提取与视觉 QA 循环。UI 任务涉及 design/ 目录时触发
 ---
 
 # Open Design 消费引擎 · Design-to-Code
@@ -11,7 +11,7 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 **核心原则：AI 不做设计决策，只做设计翻译。** Open Design 已完成所有设计判断（色彩、字体、圆角、间距、布局、交互态、组件形态），AI 的职责是将 HTML 原型 **结构性地** 翻译为 React 组件，不是只翻译 CSS token。
 
-**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-layout`。详见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 1（翻译）**。上游是 `dao-design-system`（Phase 0，基础层规则 = 翻译时的合规基线），下游是 `dao-design-fidelity`（Phase 2，翻译完成后必须通过 L1+L2 验证）。布局决策查 `dao-design-standards §L`。详见 `dao-design-system` §7。
 
 ---
 
@@ -187,13 +187,12 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 | Skill | 关系 |
 |---|---|
-| `dao-design-taste` | 翻译时的视觉判据来源（§4 通用体检表） |
-| `dao-code-to-prototype` | **正反互补**。本 skill 是 Design→Code，code-to-prototype 是 Code→Design。共享 `design/` 目录 |
+| `dao-design-standards` | 翻译时的视觉判据来源（§4 通用体检表）+ 布局策略（§L） |
+| `dao-design-asset` | **正反互补**。本 skill 是 Design→Code，asset 的反向生成是 Code→Design。共享 `design/` 目录 |
 | `dao-component-radar` | 翻译过程中自动触发，检测原生 HTML → 组件提炼 |
 | `dao-verify` | 翻译完成后走涅槃门验证 |
 | `dao-loop` | **双向联动**。谋线检测 design/ 时加载 §1+§1.5；造线逐页面执行 §3。见 dao-loop §4 |
 | `dao-brainstorm` | OD 产出已是设计决策，brainstorm 用于澄清功能需求 |
-| `dao-design-qa` | 视觉偏差修复循环——翻译后发现 UI 偏差时自动触发（截图→定位→修代码→再验证） |
 
 ---
 
@@ -207,7 +206,7 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 3. **AI 自行做设计判断** — Open Design 产出与项目代码不一致时，以 Open Design 为准。AI 不应自行决定"这个颜色应该更深"或"这个间距太大"——设计决策属于设计工具，不属于编码 agent。
 
-4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-code-to-prototype`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
+4. **在翻译流程中修改 design/ 目录** — 执行 design-open（Design→Code）翻译时，`design/` 是只读的设计真相源，不可改动。需要改设计时回 Open Design 重新生成。注意：`dao-design-asset`（Code→Design 反向流程）有权更新 `design/` 下的文件——两个方向不会同时执行，用户是编排者。
 
 ---
 

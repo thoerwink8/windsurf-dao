@@ -61,6 +61,45 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 - `docs/plans/`：实施计划，按日期命名 `YYYY-MM-DD-主题.md`
 - `docs/specs/`：Loop 工作区（活跃 loop 目录 + `_archive/` 归档），由 dao-loop 管理
 
+## Open Design 项目附加结构（条件触发）
+
+**触发条件**：项目根存在 `design/` 目录（即由 Open Design 产出设计资产的项目）。
+
+此类项目除上述通用结构外，`design/` 内必须遵循设计稿生命周期结构：
+
+```
+design/
+  {page}.html              ← 正式稿（稳定基准，代码侧唯一参考）
+  workspaces/              ← 草稿区（临时，升格后整目录删除）
+    README.md              ← 草稿区说明（onboarding）
+    {name}/                ← 单个工作区（草稿原型 + WORKSPACE.md）
+  archive/                 ← 旧正式稿降格保留（永不删除）
+    README.md              ← 归档说明
+    {page}-{YYYYMMDD}.html
+  handoff/                 ← 交接包（一次升格一个目录）
+    {scope}-{YYYYMMDD}/    ← _index / components / types / prompts / acceptance
+  CONTEXT.md               ← 会话对齐（新开会话第一眼读）
+  CHANGELOG.md             ← 升格日志
+```
+
+> **结构与升格流程的单一真相源 = `dao-design-asset` skill**。本 skill 只在进项目时做存在性检查，不重复定义流程。完整命名约定、升格三步、交接包模板均见该 skill §B。
+
+**双向闭环**：`design/` 同时支持正向（设计→代码，`dao-design-open` 消费）与反向（代码→设计，`dao-design-asset` §A 生成）。两向草稿都汇入 `workspaces/`，共用 `dao-design-asset` §B 升格——`workspaces/` 是收敛点。
+
+### 代码层映射（设计侧消费，写入 CONTEXT.md 或 CLAUDE.md）
+
+交接包按代码层分文件（components / types / store / prompts / i18n），各层对应的**实际代码目录因技术栈而异**，必须声明一次供 `dao-design-asset` §B 生成 handoff 时填对路径：
+
+- **设计/代码同仓（monorepo）** → 写项目根 `CLAUDE.md`
+- **设计/代码分仓**（design/ 与代码在不同目录，如本类 Open Design 项目）→ 写 `design/CONTEXT.md`（升格在设计侧运行，读 CONTEXT.md）
+
+```markdown
+## 设计交接代码层映射
+- components → <项目实际组件目录>
+- types → <项目实际类型目录>
+- prompts → <项目实际 prompt 目录>
+```
+
 ## 检查清单
 
 首次进入项目时逐项检查：
@@ -71,5 +110,14 @@ description: 项目标准结构模板。首次进入项目时对照检查，缺�
 - [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
 - [ ] `docs/specs/` 存在（Loop 工作区）
 - [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理）
+
+**若检测到 `design/` 目录，额外检查：**
+
+- [ ] `design/workspaces/` 存在（含 README.md）
+- [ ] `design/archive/` 存在（含 README.md）
+- [ ] `design/handoff/` 存在
+- [ ] `design/CONTEXT.md` 存在（会话对齐入口）
+- [ ] `design/CHANGELOG.md` 存在
+- [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
 
 缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。

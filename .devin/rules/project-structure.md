@@ -45,7 +45,7 @@ description: 项目目录结构约定——文件放哪里、根目录放什么�
 | 文件 | 用途 | 缺失时 |
 |---|---|---|
 | `design-tokens.md` | Token 定义与引用规范 | 建议创建（从 CSS 变量或 Tailwind 配置提取） |
-| `design-spirit.md` | 四维设计精神（视觉/交互/导航/无障碍） | 建议创建（用 dao-design-taste §4 判据填充） |
+| `design-spirit.md` | 四维设计精神（视觉/交互/导航/无障碍） | 建议创建（用 dao-design-standards §4 判据填充） |
 | `component-health.md` | 组件包装决策与健康度基线 | 可选（组件体系成熟后再建） |
 
 这是软检查——缺失不阻断工作，但在回答末尾追加一行提醒。
