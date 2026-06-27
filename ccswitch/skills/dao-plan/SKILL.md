@@ -1,6 +1,7 @@
 ---
 name: dao-plan
 description: 实施 plan 撰写铁律：把已审批的 design 拆成 2-5 分钟粒度的可执行任务清单,每个任务含精确文件路径、完整代码模板、验证命令。"图难于其易,为大于其细"。
+disable-model-invocation: true
 ---
 
 # 划 · Plan Lens

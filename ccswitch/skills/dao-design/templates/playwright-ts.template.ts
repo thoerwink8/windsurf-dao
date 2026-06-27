@@ -2,7 +2,7 @@
  * Fidelity 验证脚本参考模板 — Playwright + TypeScript
  *
  * 使用方式：复制到项目 tests/fidelity/ 目录，填入 PAGE_STATES。
- * 遵循 dao-design-fidelity §6.5 步骤规范，项目可加步骤不可减。
+ * 遵循 fidelity.md §6.5 步骤规范，项目可加步骤不可减。
  */
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'fs';
