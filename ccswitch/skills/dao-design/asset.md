@@ -1,7 +1,3 @@
----
-name: dao-design-asset
-description: 设计资产生命周期管理——反向可视化（Code→Prototype）+ 草稿升格（Draft→Release）+ 一键发布实施（Draft→Code）。管理 design/workspaces/ 的完整生命周期
----
 
 # 设计资产 · Design Asset Lifecycle
 
@@ -14,7 +10,7 @@ description: 设计资产生命周期管理——反向可视化（Code→Protot
 
 **核心原则：AI 不做设计决策。** 反向生成反映代码实际渲染，升格执行文件操作+生成交接包。
 
-**sync 接入（完整模式）**：当 `dao-design-sync` 以完整模式委托时，传入漂移上下文（已检测的变更组件列表 + git diff）。接收后可跳过：§A.0.0 方向预检（sync 已确认 Code→Design）。从 §A.1 扫描开始，以传入的变更组件为输入。后续流程（§A.2 翻译 → §A.3 生成 → §A.4 验证 → §B 升格）正常执行。
+**sync 接入（完整模式）**：当 `sync.md` 以完整模式委托时，传入漂移上下文（已检测的变更组件列表 + git diff）。接收后可跳过：§A.0.0 方向预检（sync 已确认 Code→Design）。从 §A.1 扫描开始，以传入的变更组件为输入。后续流程（§A.2 翻译 → §A.3 生成 → §A.4 验证 → §B 升格）正常执行。
 
 ---
 
@@ -174,7 +170,7 @@ OD 验收完成后，在 `design/CONTEXT.md` 活跃草稿区将条目状态更�
 - [ ] `HANDOFF.md` 已补充工程实施规格（即使是最简版）
 - [ ] `CONTEXT.md` 活跃草稿区状态已更新为「✅ 验收通过，待升格 + 代码实施」
 
-以上完成 → 切换到 CLI 侧运行 `/dao-design-asset §C {功能名}`。
+以上完成 → 切换到 CLI 侧运行 `/asset.md §C {功能名}`。
 
 ---
 
@@ -190,7 +186,7 @@ OD 验收完成后，在 `design/CONTEXT.md` 活跃草稿区将条目状态更�
 
 ## §A · 反向生成（Code→Prototype）
 
-> 反者道之动。消费引擎（dao-design-open）从设计到代码，本章反向——从代码到设计。
+> 反者道之动。消费引擎（open.md）从设计到代码，本章反向——从代码到设计。
 
 本章从项目组件代码中提取视觉结构，生成可浏览的 HTML 设计快照——**页面级视觉布局，不只是设计系统元数据。**
 
@@ -211,7 +207,7 @@ OD 验收完成后，在 `design/CONTEXT.md` 活跃草稿区将条目状态更�
 | 情况 | 动作 |
 |---|---|
 | 无对应原型 / 代码新增了原型没有的区块 | ✅ 继续本章 |
-| 原型有代码没渲染的区块（设计领先） | ⛔ 改走 `dao-design-open` |
+| 原型有代码没渲染的区块（设计领先） | ⛔ 改走 `open.md` |
 | 两边结构一致 | ⛔ 不需要，告知用户 |
 
 **比法**：轻量扫描主视图顶层功能区块（结构性独立区域），数谁多谁少。边缘状态（empty/loading/error）、交互行为（拖拽/动画）、条件分支变体不算功能区块。
@@ -957,9 +953,9 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 | Skill | 关系 |
 |---|---|
-| `dao-design-open` | **正反互补 + 入口互补**。open 是 OD 会话驱动的 Design→Code；本 skill §C 是 CLI 驱动的 Draft→Formal+Code。两者覆盖不同入口，共享 `design/` 目录 |
-| `dao-design-standards` | 翻译和验证的视觉判据来源 |
-| `dao-component-radar` | §A 扫描阶段可并行触发 radar，检测应提炼为组件的原生 HTML |
+| `open.md` | **正反互补 + 入口互补**。open 是 OD 会话驱动的 Design→Code；本 skill §C 是 CLI 驱动的 Draft→Formal+Code。两者覆盖不同入口，共享 `design/` 目录 |
+| `standards.md` | 翻译和验证的视觉判据来源 |
+| `component-radar.md` | §A 扫描阶段可并行触发 radar，检测应提炼为组件的原生 HTML |
 | `dao-project-scaffold` | 项目无 `workspaces/` 结构时先按其 Open Design 附加结构补齐 |
 | `dao-verify` | 生成/升格完成后可走涅槃门做完整体检 |
-| `dao-design-sync` | **快捷入口**。sync 完整模式委托本 skill §A 执行 Code→Design，传入漂移上下文跳过方向预检 |
+| `sync.md` | **快捷入口**。sync 完整模式委托本 skill §A 执行 Code→Design，传入漂移上下文跳过方向预检 |

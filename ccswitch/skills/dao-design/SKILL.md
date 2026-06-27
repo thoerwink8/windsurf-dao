@@ -1,11 +1,47 @@
 ---
 name: dao-design
 description: 设计工作双端统一入口——静默扫描上下文后识别模式，动态呈现最相关的操作选项。OD 端原型设计与 CLI 端实施同步从这里路由，用户无需记住子命令。
+argument-hint: "[sync|实现 X|升格|反向生成|审计|系统|OD提示词]"
+disable-model-invocation: true
 ---
 
 # 设计工作统一入口 · dao-design
 
 > 太上不知有之。最好的路由让用户感觉不到路由在运转——只看到「对，就是这个」的选项。
+
+## Supporting Files
+
+本 skill 包含以下 supporting files（按需 Read，不预加载）：
+
+| 文件 | 原 skill | 职责 | 何时读取 |
+|---|---|---|---|
+| [asset.md](asset.md) | dao-design-asset | 设计资产生命周期（§A 反向生成 / §B 升格 / §C 一键实施） | 路由到实施/升格/反向生成时 |
+| [open.md](open.md) | dao-design-open | Open Design 消费引擎（结构提取 + QA 循环） | UI 任务涉及 design/ 目录时 |
+| [sync.md](sync.md) | Read [sync.md](sync.md) | 设计-代码漂移同步 | 路由到同步/漂移检测时 |
+| [system.md](system.md) | Read [system.md](system.md) | 设计系统基础层生成器（10 类 token） | 路由到设计系统时 |
+| [fidelity.md](fidelity.md) | Read [fidelity.md](fidelity.md) | 还原度五层金字塔 | 还原度验证/审计时 |
+| [standards.md](standards.md) | dao-design-standards | 审美判据·体检表·布局方法论 | 需要设计判据时 |
+| [component-radar.md](component-radar.md) | dao-component-radar | 结构健康门（组件提炼检测） | UI 文件编辑时 |
+
+## 跨 skill 路由铁律
+
+> 鱼不可脱于渊。跨 skill 调用必须走交接模式，绝不即兴发挥。
+
+**当路由目标是本 skill 内的 supporting file**：直接 Read 对应文件，按其中的章节指令执行。
+
+**当路由目标是外部 skill（如 dao-loop）**：输出交接信息 + 提示用户输入 `/命令名`。格式：
+
+```
+📋 {功能名} · 准备就绪
+
+  {上下文摘要：草稿路径、状态、关键信息}
+
+→ 请输入 `/dao-loop {功能名}` 启动双线程开发
+```
+
+**禁止**：尝试通过 Skill 工具调用不在可用列表的 skill、在无法加载目标 skill 时从记忆即兴发挥协议。
+
+---
 
 **没有固定子命令**。执行路径由参数决定：
 
@@ -36,14 +72,14 @@ AskUserQuestion（选项由上下文动态构建）
 
 | 参数模式 | 识别结果 | 路由目标 |
 |---|---|---|
-| `实现 X` / `代码实施 X` / `跑 §C X` | intent=实施, scope=X | dao-design-asset §C |
-| `同步` / `sync` / `漂移` / `检测` | intent=同步漂移 | dao-design-sync |
-| `新建 X` / `开工作区 X` / `新增 X` | intent=新建, name=X | dao-design-asset §B.0 |
-| `升格 X` / `合并 X` / `发布 X` | intent=升格, workspace=X | dao-design-asset §B |
+| `实现 X` / `代码实施 X` / `跑 §C X` | intent=实施, scope=X | Read [asset.md](asset.md) §C |
+| `同步` / `sync` / `漂移` / `检测` | intent=同步漂移 | Read [sync.md](sync.md) |
+| `新建 X` / `开工作区 X` / `新增 X` | intent=新建, name=X | Read [asset.md](asset.md) §B.0 |
+| `升格 X` / `合并 X` / `发布 X` | intent=升格, workspace=X | Read [asset.md](asset.md) §B |
 | `验收 X` / `标记完成 X` | intent=验收, scope=X | 更新 CONTEXT.md 状态 |
-| `反向生成` / `从代码生成` / `§A` | intent=反向生成 | dao-design-asset §A |
+| `反向生成` / `从代码生成` / `§A` | intent=反向生成 | Read [asset.md](asset.md) §A |
 | `看状态` / `列草稿` / `状态` | intent=查看状态 | 读 CONTEXT.md 展示 |
-| `设计系统` / `token` / `system` | intent=设计系统 | dao-design-system |
+| `设计系统` / `token` / `system` | intent=设计系统 | Read [system.md](system.md) |
 
 提取到 intent 后，进入 §P.2 定位 scope；未能提取 intent，进入 §P.3 纯功能名解析。
 
@@ -66,8 +102,8 @@ AskUserQuestion（选项由上下文动态构建）
 ```
 
 选项：
-- 「确认，直接实施（§C）」→ 路由 dao-design-asset §C
-- 「走 dao-loop 完整流程」→ 路由 dao-loop（以 HANDOFF.md + WORKSPACE.md 为起点，自动生成 spec/plan/验收）
+- 「确认，直接实施（§C）」→ Read [asset.md](asset.md) §C
+- 「走 dao-loop 完整流程」→ **交接**：输出上下文摘要，提示用户输入 `/dao-loop {scope}`
 - 「先看草稿摘要」→ 展示 WORKSPACE.md + HANDOFF.md 摘要后再次确认
 - 「取消」→ 停止
 
@@ -135,10 +171,10 @@ AskUserQuestion（选项由上下文动态构建）
 ```
 
 **动态选项**（按草稿数量构建）：
-- 「实施「{scope1}」代码」→ 路由 dao-design-asset §C {scope1}
-- 「走 dao-loop 实施「{scope1}」」→ 路由 dao-loop（传入 scope + 草稿路径，谋线以设计文档为输入起点）
+- 「实施「{scope1}」代码」→ Read [asset.md](asset.md) §C
+- 「走 dao-loop 实施「{scope1}」」→ **交接**：输出上下文摘要，提示用户输入 `/dao-loop {scope1}`
 - 「先看草稿详情再决定」→ 读 WORKSPACE.md + HANDOFF.md 摘要后再次呈现
-- 若有多个：「依次实施全部 {N} 个」→ 串行路由 §C
+- 若有多个：「依次实施全部 {N} 个」→ 串行 Read [asset.md](asset.md) §C
 - 「做点别的」→ 展示模式 D 的选项
 
 ---
@@ -157,8 +193,8 @@ AskUserQuestion（选项由上下文动态构建）
 
 **动态选项**：
 - 「查看「{scope}」完成标志」→ 展示 WORKSPACE.md 升格条件列表
-- 「标记验收通过 → 升格 + 实施」→ 路由 dao-design-asset §C（§C.1 会校验条件）
-- 「只升格不实施代码」→ 路由 dao-design-asset §B
+- 「标记验收通过 → 升格 + 实施」→ Read [asset.md](asset.md) §C
+- 「只升格不实施代码」→ Read [asset.md](asset.md) §B
 - 「做点别的」→ 展示模式 D 的选项
 
 ---
@@ -177,7 +213,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 **动态选项**：
 - 「继续迭代「{name1}」」→ 提示打开 workspaces/{name1}/workspace.html
-- 「验收当前草稿 + 补充 HANDOFF.md」→ 走 §O.4 检查清单（dao-design-asset §O.4）
+- 「验收当前草稿 + 补充 HANDOFF.md」→ 走 §O.4 检查清单（Read [asset.md](asset.md) §O.4）
 - 「新建功能原型」→ 走模式 E 新建流程
 - 「做点别的」→ 展示模式 E/F 选项
 
@@ -188,10 +224,10 @@ AskUserQuestion（选项由上下文动态构建）
 **命中条件**：无活跃草稿，所在 CLI 端。
 
 **动态选项**：
-- 「检测设计/代码漂移」→ 路由 dao-design-sync
-- 「从代码反向生成设计原型」→ 路由 dao-design-asset §A
-- 「新建功能工作区」→ 路由 dao-design-asset §B.0
-- 「查看设计系统 token」→ 路由 dao-design-system
+- 「检测设计/代码漂移」→ Read [sync.md](sync.md)
+- 「从代码反向生成设计原型」→ Read [asset.md](asset.md) §A
+- 「新建功能工作区」→ Read [asset.md](asset.md) §B.0
+- 「查看设计系统 token」→ Read [system.md](system.md)
 
 ---
 
@@ -213,26 +249,34 @@ AskUserQuestion（选项由上下文动态构建）
 **动态选项**：
 - 「我在 OD 端，要开始设计」→ 走模式 E
 - 「我在 CLI 端，要实施/同步」→ 走模式 D
-- 「帮我初始化项目设计结构」→ 路由 dao-project-scaffold
+- 「帮我初始化项目设计结构」→ **交接**：提示用户输入 `/dao-project-scaffold`
 
 ---
 
 ## §2 · 路由执行
 
-用户从动态选项中选择后，路由到对应 skill 或章节，**传递所需上下文**（草稿名、功能名、扫描结果），不让用户重复输入。
+用户从动态选项中选择后，路由到对应章节或交接到外部 skill，**传递所需上下文**（草稿名、功能名、扫描结果），不让用户重复输入。
+
+### 内部路由（Read supporting file）
 
 | 意图 | 路由目标 | 传递上下文 |
 |---|---|---|
-| 实施草稿代码（轻量） | `dao-design-asset §C` | scope / 草稿路径 |
-| 实施草稿代码（完整流程） | `dao-loop` | scope / 草稿路径 / HANDOFF.md 摘要 |
-| 升格草稿 | `dao-design-asset §B` | 工作区名 |
-| 反向生成设计原型 | `dao-design-asset §A` | 目标页面 |
-| 同步漂移 | `dao-design-sync` | — |
-| 新建工作区 | `dao-design-asset §B.0` | 功能名 |
-| 还原度验证 | `dao-design-fidelity` | 目标页面 |
-| 设计系统 token | `dao-design-system` | — |
-| OD 新原型（§O.0） | 在当前 OD 会话内执行 | 功能名 |
-| OD 验收 + HANDOFF（§O.4） | 在当前 OD 会话内执行 | 工作区名 |
+| 实施草稿代码（轻量） | Read [asset.md](asset.md) §C | scope / 草稿路径 |
+| 升格草稿 | Read [asset.md](asset.md) §B | 工作区名 |
+| 反向生成设计原型 | Read [asset.md](asset.md) §A | 目标页面 |
+| 同步漂移 | Read [sync.md](sync.md) | — |
+| 新建工作区 | Read [asset.md](asset.md) §B.0 | 功能名 |
+| 还原度验证 | Read [fidelity.md](fidelity.md) | 目标页面 |
+| 设计系统 token | Read [system.md](system.md) | — |
+| OD 新原型（§O.0） | Read [asset.md](asset.md) §O.0 | 功能名 |
+| OD 验收 + HANDOFF（§O.4） | Read [asset.md](asset.md) §O.4 | 工作区名 |
+
+### 外部交接（handoff to another `/` command）
+
+| 意图 | 交接目标 | 输出内容 |
+|---|---|---|
+| 完整流程实施 | `/dao-loop {scope}` | scope + 草稿路径 + HANDOFF.md 摘要 |
+| 初始化项目结构 | `/dao-project-scaffold` | — |
 
 ---
 

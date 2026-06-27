@@ -1,5 +1,5 @@
 ---
-name: dao-component-radar
+name: component-radar.md
 description: 结构健康门——检测原生 HTML 应提炼为组件、重复 className、token 冲突，在 UI 文件编辑时自动触发
 ---
 
@@ -9,7 +9,7 @@ description: 结构健康门——检测原生 HTML 应提炼为组件、重复 
 
 本 skill 专注**结构健康**——组件是否被正确提炼、复用。
 
-**流水线位置**：Design Pipeline **Phase 3（健康）**。上游是 `dao-design-fidelity`（Phase 2，fidelity 发现组件级问题时触发本 skill），token 冲突反馈回 `dao-design-system`（Phase 0）的豁免列表。交接契约见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 3（健康）**。上游是 `fidelity.md`（Phase 2，fidelity 发现组件级问题时触发本 skill），token 冲突反馈回 `system.md`（Phase 0）的豁免列表。交接契约见 `system.md` §7。
 
 ## 触发条件
 
@@ -64,12 +64,12 @@ Grep "rounded-full.*px-.*text-caption" 限定 components/ 排除 ui/
 - Token 冲突：<N> 处（<冲突对 → 修复方案>）
 ```
 
-## 与 dao-design-open 的关系
+## 与 open.md 的关系
 
 | skill | 关注点 | 触发时机 |
 |---|---|---|
-| dao-design-open | 设计翻译（Open Design 产出→项目代码三维对齐） | 涉及 design/ 目录 |
-| dao-component-radar | 结构健康（组件提炼、原生 HTML、复用度） | UI 文件编辑 |
+| open.md | 设计翻译（Open Design 产出→项目代码三维对齐） | 涉及 design/ 目录 |
+| component-radar.md | 结构健康（组件提炼、原生 HTML、复用度） | UI 文件编辑 |
 
 两者独立触发，可同时生效。design-open 侧重**设计→代码的忠实翻译**，component-radar 侧重**逐文件原生 HTML 识别和具体替代建议**。
 

@@ -1,6 +1,7 @@
 ---
 name: dao-brainstorm
 description: 模糊需求→设计文档的苏格拉底式精炼。一次一问、必探 2-3 方案、用户审批后才进 plan。
+disable-model-invocation: true
 ---
 
 # 析 · Brainstorming Lens
@@ -41,4 +42,4 @@ delegated-continuous 模式下：AI 自审替代用户审批,只在方向互斥 
 
 ## UI 任务
 
-design 审批后、plan 前,若项目有 `design/` 目录则先过 `dao-design-open` 读取设计资产。
+design 审批后、plan 前,若项目有 `design/` 目录则先过 `/dao-design`（open.md）读取设计资产。

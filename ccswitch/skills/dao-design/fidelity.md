@@ -1,5 +1,5 @@
 ---
-name: dao-design-fidelity
+name: fidelity.md
 description: 设计还原度五层金字塔——从 token 语义到视觉像素到跨主题的完整验证体系。UI 变更声明完成前、Loop 归档前、设计审计时触发
 ---
 
@@ -11,7 +11,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 "Pixel-perfect" 已被行业抛弃（W3C Design Tokens 2025.10 stable）。
 但 token 对齐 ≠ 视觉对齐。真正的还原度是**五层金字塔**——逐层叠加，缺一不可。
 
-**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `dao-design-open`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `dao-component-radar`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `dao-design-system`（Phase 0）的不变层规则。视觉判据引用 `dao-design-standards` §4。交接契约见 `dao-design-system` §7。
+**流水线位置**：Design Pipeline **Phase 2（验证）**。上游是 `open.md`（Phase 1，翻译完成后必须通过本 skill L1+L2），下游是 `component-radar.md`（Phase 3，fidelity 发现组件级问题时触发）。L1 合规基线来自 `system.md`（Phase 0）的不变层规则。视觉判据引用 `standards.md` §4。交接契约见 `system.md` §7。
 
 ---
 
@@ -39,7 +39,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 **为什么**：「无硬编码」不等于「名字对」。`--go`/`--r-md`/`--fs-xs` 是合法 token，能过 L1 硬编码检查，但它们是**自创短名**，代码侧不存在同名 → 交接时要么靠翻译映射表（脆弱、易错位），要么设计稿引用到代码不认的变量。两套词汇本身就是缺陷。
 
-**唯一命名权威 = `dao-design-system` §3.0**：`--{category}-{role}[-{modifier}]`（如 `--color-success`/`--radius-lg`/`--text-xs`/`--motion-duration-fast`/`--elevation-md`）。设计稿 CSS 和代码 CSS 都遵循它，谁都不许另起短名。
+**唯一命名权威 = `system.md` §3.0**：`--{category}-{role}[-{modifier}]`（如 `--color-success`/`--radius-lg`/`--text-xs`/`--motion-duration-fast`/`--elevation-md`）。设计稿 CSS 和代码 CSS 都遵循它，谁都不许另起短名。
 
 **pass 条件**：设计稿（`design/*.html` + `design/css/*.css`）里出现的每个 token 名，都能在项目规范 token CSS（代码侧 `index.css` 或设计侧等价物）的定义集中找到。出现规范集外的名字（`--go`/`--r-*`/`--fs-*`/`--sp-*`/`--ease`/`--shadow` 等旧式短名）= **P0 失败**。
 
@@ -168,7 +168,7 @@ comm -23 /tmp/used.txt /tmp/canon.txt   # 输出 = 自创名，应为空（仅�
 
 **验证脚本**：项目必须在 `tests/fidelity/` 维护可执行脚本。数据从 design-fidelity.md 状态矩阵提取，覆盖全部态（不只默认态）。审计截图 → `_tmp/qa/fidelity/`，回归基线 → `*-snapshots/`（tracked）。命名：`<type>-<page>-<state>.png`。模板见 `templates/`。
 
-**与其他 skill 的关系**：`dao-design-open`（翻译）→ 本 skill（验证）→ 偏差修复 → 再验证，构成闭环。Loop 造线每 Task 至少过 L1+L3，归档前 L1~L5 全覆盖。
+**与其他 skill 的关系**：`open.md`（翻译）→ 本 skill（验证）→ 偏差修复 → 再验证，构成闭环。Loop 造线每 Task 至少过 L1+L3，归档前 L1~L5 全覆盖。
 
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: dao-evolution
 description: 演化知识管理（三层归位）。当任务涉及教训沉淀、经验回顾、知识积累、踩坑记录、distill、evolve 时加载。
+disable-model-invocation: true
 ---
 
 # dao-evolution · 演化知识管理

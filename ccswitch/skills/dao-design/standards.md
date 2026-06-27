@@ -1,13 +1,9 @@
----
-name: dao-design-standards
-description: UI 设计标准库——审美判据·三旋钮定调·通用体检表·自适应布局·组件审计·设计资产管理。design-open / fidelity / open 的判据与知识来源
----
 
 # 设计标准 · Design Standards
 
 > 少则得，多则惑。读而后行，最小变更。
 
-本 skill 是 UI 设计的**标准与判据库**——定义"什么是好设计"（§4 通用判据），提供分诊、形态探索、自适应布局（§L）、组件审计、资产管理的完整方法论。`dao-design-open` 和 `dao-design-fidelity` 引用本 skill 判据做翻译和验证。
+本 skill 是 UI 设计的**标准与判据库**——定义"什么是好设计"（§4 通用判据），提供分诊、形态探索、自适应布局（§L）、组件审计、资产管理的完整方法论。`open.md` 和 `fidelity.md` 引用本 skill 判据做翻译和验证。
 
 **适用范围**：product UI（桌面/Web 应用、工具、仪表盘、多步骤流程、数据密集界面）为主。营销落地页专属规则见 §A 附录，默认不启用。
 
@@ -29,7 +25,7 @@ description: UI 设计标准库——审美判据·三旋钮定调·通用体检
 
 ### 跨页组件整合扫描（3+ 页面时追加）
 
-任务涉及 3+ 页面时，清点全部设计页面 → 识别跨页共享模式（≥2 次出现）→ 按 native/extend/wrap/custom 四策略决策（native: 原生够用 / extend: 组件库加 variant / wrap: 组合封装 / custom: 从零建）→ Top-Down 排序（共享优先）。详见 `dao-design-open` §1.5.0。
+任务涉及 3+ 页面时，清点全部设计页面 → 识别跨页共享模式（≥2 次出现）→ 按 native/extend/wrap/custom 四策略决策（native: 原生够用 / extend: 组件库加 variant / wrap: 组合封装 / custom: 从零建）→ Top-Down 排序（共享优先）。详见 `open.md` §1.5.0。
 
 ---
 
@@ -290,7 +286,7 @@ token 值由项目定义，本章只规定分类。具体语法（CSS 变量 / T
 | **default** | 设计稿的参考尺寸 | 像素对齐设计稿（现有 L3） |
 | **max** | 常见大屏（如 1920×1080） | 无空洞、居中合理、拉伸自然 |
 
-#### 与 dao-design-fidelity 的集成
+#### 与 fidelity.md 的集成
 
 - L3 视觉验证扩展为三视口
 - 设计原型基线仍在 default 视口建立
