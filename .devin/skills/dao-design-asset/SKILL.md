@@ -1,6 +1,6 @@
 ---
 name: dao-design-asset
-description: 设计资产生命周期管理——反向可视化（Code→Prototype）+ 草稿升格（Draft→Release）+ 双向闭环。管理 design/workspaces/ 的完整生命周期
+description: 设计资产生命周期管理——反向可视化（Code→Prototype）+ 草稿升格（Draft→Release）+ 一键发布实施（Draft→Code）。管理 design/workspaces/ 的完整生命周期
 ---
 
 # 设计资产 · Design Asset Lifecycle
@@ -10,7 +10,7 @@ description: 设计资产生命周期管理——反向可视化（Code→Protot
 本 skill 管理 Open Design 项目的**设计资产生命周期**，包含两个方向：
 - **§A · 反向生成（Code→Prototype）**：从代码提取视觉结构，生成设计草稿
 - **§B · 升格（Draft→Release）**：把工作区草稿升格为正式稿
-- **§C · 闭环流程**：正反两个方向如何汇合
+- **§C · 一键发布 + 实施（CLI 专用）**：草稿 → 正式稿 + 代码落地，一条命令走完
 
 **核心原则：AI 不做设计决策。** 反向生成反映代码实际渲染，升格执行文件操作+生成交接包。
 
@@ -564,9 +564,11 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 ---
 
-## §C · 闭环流程
+## §C · 一键发布 + 实施（CLI 专用）
 
-> 反者道之动。正反双向共用同一升格机制，这是双向闭环的关键。
+> 为道日损。草稿 → 正式稿 → 代码落地，消除「升格完 → 再开新会话 → 再找 HANDOFF → 再开始实施」三次切换摩擦。
+
+**正向闭环概念**：正反双向共用同一升格机制（§B），区别在 `source` 字段和收尾形态：
 
 ```
 正向 Design→Code：  手动/OD 改草稿 ──┐
@@ -574,16 +576,99 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 反向 Code→Design：  §A 生成草稿 ─────┘   （收敛点）        （按 source 分方向收尾）
 ```
 
-**完整流程**：
+§C 是**正向流程**（`source: design`）的最后一公里，不适用于反向（`source: code` 升格后代码无需动作）。
 
-| 方向 | 触发 | 草稿生成 | 审阅 | 升格 | 收尾 |
-|------|------|---------|------|------|------|
-| **正向**（设计先行） | 用户开工作区（§B.0） | 手动编辑或 OD 生成 | 浏览器审阅 | §B 升格 | handoff 含代码任务 |
-| **反向**（代码先行） | 代码领先设计时 | §A 自动生成 | 浏览器审阅（§A.4） | §B 升格 | handoff 标「代码已实现」 |
+**触发条件**：用户说「升格并实施」/「§C」/「一键发布实施」，且 `design/CONTEXT.md` 活跃草稿区有对应条目。
 
-升格时 §B.5.4 读 `WORKSPACE.md` 的 `source` 字段自动分方向：
-- `source: design` → 正向，handoff 含完整代码任务清单
-- `source: code` → 反向，CHANGELOG 记 `[SYNC]`，handoff 标「代码已实现，无需动作」
+---
+
+### §C.1 · 验证升格条件
+
+读 `design/workspaces/{name}/WORKSPACE.md`，确认：
+
+- `source` 字段为 `design`（反向流程不走本节）
+- 所有升格条件 `- [ ]` 已改为 `- [x]`（无未完成项）
+
+任一不满足 → 列出缺失项，停止执行。
+
+---
+
+### §C.2 · 提取实施计划（§B 执行前）
+
+> 先读 HANDOFF.md，再执行 §B——§B.3.3 会删除草稿目录，HANDOFF.md 随之消失。
+
+读 `design/workspaces/{name}/HANDOFF.md`，提取：
+
+| 字段 | 用途 |
+|------|------|
+| 变更摘要 | 了解功能范围与边界 |
+| 新增 CSS 类 | 组件样式对照 |
+| DOM 结构变更 | 组件结构实现依据 |
+| 组件映射 | 对应代码文件定位 |
+| 状态机（如有） | 交互逻辑实现依据 |
+| 注意事项 | token 命名、兼容性、数据绑定约束 |
+
+**HANDOFF.md 不存在时**：停止执行，提示用户先在草稿目录补充 HANDOFF.md。没有工程规格不实施。
+
+---
+
+### §C.3 · 执行 §B 升格
+
+完整执行 §B 流程（§B.1 ~ §B.5），产出：
+- `design/{page}.html`（新正式稿到位）
+- `design/archive/{page}-{today}.html`（旧正式稿归档）
+- `design/handoff/{scope}-{today}/`（交接包）
+- `design/CHANGELOG.md`、`design/CONTEXT.md`（已更新）
+
+---
+
+### §C.4 · 定位目标文件
+
+读项目 `CLAUDE.md` 中"设计交接代码层映射"表，将 §C.2 提取的改动按代码层分配到对应目录。
+
+**映射表不存在时**：停止执行，提示用户在项目 CLAUDE.md 中添加"设计交接代码层映射"表。不猜测文件路径。
+
+---
+
+### §C.5 · 逐层实施
+
+**实施顺序**：按 CLAUDE.md 映射表从底层到上层依次实施（通常：类型层 → 业务逻辑层 → 组件层 → 样式层）。
+
+每层完成后 checkpoint，确认无编译/类型错误后再进入下一层。
+
+**实施边界（铁律）**：
+- 只实施 HANDOFF.md 明确声明的改动
+- 不自行扩展 HANDOFF.md 未覆盖的 UI 细节
+- 不修改 HANDOFF.md 范围外的文件
+
+---
+
+### §C.6 · 验证
+
+按项目 `CLAUDE.md` 中记录的构建与测试命令**串行执行**（并行输出会交叉导致假结论）：
+- 类型检查
+- 单元 / 集成测试
+- 全量构建
+
+任一失败 → 修复后重跑，不声明完成。
+
+---
+
+### §C.7 · 收尾归位
+
+1. 从 `design/CONTEXT.md` **活跃草稿区**删除该条目（已升格 + 已实施）
+2. 提示用户 commit：格式 `[cc] feat({scope}): 实施 {功能名} · 对齐设计稿 {date}`
+
+---
+
+### §C.8 · 反模式
+
+1. **HANDOFF.md 在 §B 后读** — §B.3.3 删草稿目录，HANDOFF.md 随之消失；必须在 §C.2 先读
+2. **HANDOFF.md 缺失时强行实施** — 没有工程规格不实施，停下来让用户补充
+3. **CLAUDE.md 无映射表时猜路径** — 猜测路径改错地方，停下来让用户添加映射表
+4. **并行跑构建/测试** — 输出串线致假结论，必须串行
+5. **§B 未完成就进入 §C.5** — §C 是 §B 的顺延，升格失败不进实施
+6. **实施后不更新 CONTEXT.md 活跃草稿区** — 遗留条目误导下次 CLI 发现草稿
 
 ---
 
@@ -591,7 +676,7 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 | Skill | 关系 |
 |---|---|
-| `dao-design-open` | **正反互补**。open 是 Design→Code（消费原型），本 skill §A 是 Code→Design（还原原型）。共享 `design/` 目录 |
+| `dao-design-open` | **正反互补 + 入口互补**。open 是 OD 会话驱动的 Design→Code；本 skill §C 是 CLI 驱动的 Draft→Formal+Code。两者覆盖不同入口，共享 `design/` 目录 |
 | `dao-design-standards` | 翻译和验证的视觉判据来源 |
 | `dao-component-radar` | §A 扫描阶段可并行触发 radar，检测应提炼为组件的原生 HTML |
 | `dao-project-scaffold` | 项目无 `workspaces/` 结构时先按其 Open Design 附加结构补齐 |
