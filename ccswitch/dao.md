@@ -29,7 +29,7 @@
 
 - **天·觉**（动之前）：交互否 · 耗时几何 · 输出几何 · 可逆否
 - **地·行**（动之中）：只读先行可并行，写操作串行 · 同一文件用一次 Edit 聚合 · 长进程用 `run_in_background` 不阻塞 · 有界限（`git log -n 20` / `head -n 50`）
-- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成
+- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成 · **有 `design/` 目录且改了 UI 组件 → 必须同步设计原型再声明完成**（走 `dao-design-asset` §A 或手动更新 `design/*.html`，不可跳过）
 - **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。浏览器工具选择见项目 `.claude/rules/browser-preference.md` 或各设计 skill 内置门控
 
 ## 续力 · 每答必续
@@ -93,12 +93,13 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 设计判据 / 审美标准 / 布局方法论 | `dao-design-standards`(三旋钮·体检表§4·布局§L·组件审计·资产管理) | 知识源 | 少则得 (22) |
 | 设计还原度验证（审计场景） | `dao-design-fidelity`(L1~L5 金字塔,日常由 open auto-gate 覆盖) | 自动 | 大成若缺 (45) |
 | 组件结构健康（审计场景） | `dao-component-radar`(原生 HTML→组件提炼,日常由 open auto-gate 覆盖) | 自动 | 不知常妄作凶 (16) |
+| 设计-代码漂移同步 | `dao-design-sync`(漂移检测→人话描述→一键同步,方向由宿主自判,支持追加范围指令) | 入口 | 上善若水 (8) |
 | 设计资产生命周期 | `dao-design-asset`(Code→Prototype 反向生成 + 草稿升格 + 双向闭环) | 手动 | 反者道之动 (40) |
 | 隔离工作区 | `dao-worktree` | 入口 | 致虚极守静笃 (16) |
 | 教训 / 演化记录 | `dao-evolution` | 入口 | 知常曰明 (16) |
 | 双线程循环开发 / Loop | `dao-loop`(文档驱动编排,谋线+造线+归档) | 入口 | 道生一 (42) |
 
-设计管线 6 skill 三类角色：**入口**（`design-system` + `design-open`）、**自动**（`fidelity` / `component-radar`，管线内触发）、**知识源**（`design-standards`，被引用不被调用）、**手动**（`design-asset`，按需调用）。结构提取（原 sync）和 QA 循环（原 qa）已内联到 `design-open`。
+设计管线 7 skill 四类角色：**快捷入口**（`design-sync`，漂移检测→一键同步，日常首选）、**入口**（`design-system` + `design-open`，完整流程）、**自动**（`fidelity` / `component-radar`，管线内触发）、**知识源**（`design-standards`，被引用不被调用）、**手动**（`design-asset`，按需调用）。结构提取和 QA 循环已内联到 `design-open`。
 
 **UI 视觉偏差处理**：发现 UI 视觉偏差时，若项目有 `design/` 目录（Open Design 产出），走 `dao-design-open` §4 QA 循环（截图对比 → 定位偏差 → 修代码 → 再验证；有设计工具 MCP 时走 §4.4.1 设计工具先行路径）。以 Open Design 原型为唯一视觉真相源，AI 不自行做设计判断。
 
