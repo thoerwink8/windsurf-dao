@@ -104,12 +104,13 @@ PR + 分支 + worktree 归根：
 
 6. 创建 PR：`feat/<topic>` → `master`/`main`，description 从 HANDOFF.md 自动生成
 7. merge PR（默认 merge commit，保留完整历史）
-8. **回到主目录**，`git worktree remove ../<topic>-loop`（worktree 必须在主目录删除）
-9. 删除本地 + 远端 `feat/<topic>` 分支
+8. **杀 worktree 内残留进程**（Windows 文件锁必须先释放）：检测 worktree 路径下是否有运行中进程（dev server / cargo / node / vite），有则终止。未杀干净直接 `worktree remove` 会报 "Invalid argument"
+9. **回到主目录**，`git worktree remove ../<topic>-loop`（worktree 必须在主目录删除）。若仍失败 → `git worktree prune` + `Remove-Item -Recurse -Force`
+10. 删除本地 + 远端 `feat/<topic>` 分支
 
 **PR 即记录**：分支删除后，PR 及其 diff、description、review comments 永久保留在 GitHub 上。这是 Loop 的最终交付物。
 
-**异常处理**：merge 冲突 → 停止自动流程，在回答正文中说明情况，等用户介入解决后继续。
+**异常处理**：merge 冲突 → 停止自动流程，在回答正文中说明情况，等用户介入解决后继续。worktree remove 失败 → 不阻塞归档，prune + 手动删除目录兜底。
 
 ### 归档目录与模板
 
