@@ -20,7 +20,10 @@
 
 > 各复归其根——代码改了，原型必须跟。
 
-**触发条件**：项目有 `design/` 目录 **且** Loop 的 git diff 涉及 UI 组件文件（`**/components/**`、`**/*.tsx` 中含 JSX）。两条都满足才触发，否则跳过。
+**触发条件**（与 dao.md ② 设计同步门控一致）：
+1. **有设计稿？** `Glob("design/*.html")` 有结果？若无结果（worktree 可能缺文件），fallback 检查 `git ls-tree HEAD -- design/*.html`
+2. **改了 UI 组件？** `git diff main --name-only` 含 `**/components/**` 或 `**/*.tsx`（分支级全量，不是单次 session 的增量）
+3. 两条都满足才触发，否则跳过。
 
 **执行步骤**：
 
