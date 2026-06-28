@@ -125,7 +125,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **Inline 长命令**：PS 处理 `node -e "..."` >300 字符或含嵌套引号会被 PSReadLine 截断 → 写脚本文件再跑
 - **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
-- **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。理由：跟项目走、gitignore 已覆盖、用户找得到。项目 `.gitignore` 必须含 `**/_tmp/`
+- **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。`<项目根>` = **被操作的目标项目**，不是会话的 cwd。跨项目场景（如在 windsurf-dao 会话中操作 TraceyU）→ `_tmp/` 归目标项目（TraceyU）。若 MCP workspace roots 阻止直接写入目标项目，先写到可写位置再 `Copy-Item` 到目标项目 `_tmp/`。项目 `.gitignore` 必须含 `**/_tmp/`
 - **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 默认取 **`<branch>--<topic>`** 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`、`main--history-topbar`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若目录不存在则自动创建
 - **settings.json 运行时禁触**：活跃 Claude Code 会话内 **绝不修改** `~/.claude/settings.json`（Edit / Write / 脚本写入均禁）。Claude Code file watcher 检测到变更会触发重认证 → `401 device was revoked` 强制登出。需改配置时：写到暂存位置（`_tmp/settings-patch.json`）+ 提供会话外执行命令，或告知用户退出后手动 apply。CC Switch config-sync 同理——不应在 Claude Code 运行时触发
 
