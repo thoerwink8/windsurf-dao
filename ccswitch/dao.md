@@ -31,7 +31,48 @@
 - **地·行**（动之中）：只读先行可并行，写操作串行 · 同一文件用一次 Edit 聚合 · 长进程用 `run_in_background` 不阻塞 · 有界限（`git log -n 20` / `head -n 50`）
 - **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 完成流水线（顺序强制，不可跳步）：**① 构建/测试通过 → ② 设计同步门控 → ③ 声明完成**（含提交问询 / AskUserQuestion / 结果报告——任何向用户表示"做完了"的信号）。② 未完成时禁止进入 ③
   - **② 设计同步门控**（自检步骤，每次进入 ③ 前必过）：`Glob("design/*.html")` 有结果？→ 本轮改动含 `components/` 或 `.tsx` 中有 JSX 的文件？→ **两条都满足**则必须执行设计同步（反向同步原型 + 更新 CONTEXT.md），交接信息：`📋 代码改了 UI 组件且有 design/ 目录 → 请输入 /dao-design sync` 或当场执行。**两条任一不满足** → 跳过，直接进 ③。Loop 场景的详细流程见 `dao-loop` closing.md §7.1.5
-- **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。浏览器工具选择见项目 `.claude/rules/browser-preference.md` 或各设计 skill 内置门控
+- **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。工具选择走下方决策树，不在项目 rules 重复
+
+### 目·观 · GUI 工具决策树
+
+> 绝利一源，用师十倍。三器不争，各归其位。
+
+桌面端 GUI 验证有三个 MCP 工具可用，功能重叠但能力边界不同。**每次截图/交互前走此决策树，不凭习惯选工具**：
+
+```
+应用有 WebView 层吗？（Tauri / Electron / CEF / WebView2）
+├─ 是 → 远程调试端口开了吗？
+│   ├─ 是 → chrome-devtools MCP（直连 WebView，DOM 级精度）   ← 首选
+│   └─ 否 → 提示用户设环境变量开端口（见下方 Shell 条目），再用 chrome-devtools
+├─ 否（纯 Web 应用 / Vite dev server）
+│   └─ playwright MCP（自管浏览器，E2E 流程最佳）              ← Web 首选
+└─ 否（原生 Win32 / WPF / 无 Web 层）
+    └─ windows-mcp Screenshot（最后手段，仅截图不交互）         ← 兜底
+
+⚠ windows-mcp 已知缺陷：切换窗口焦点、全屏截图含任务栏、无 DOM 访问。
+   有 WebView 的应用绝不用 windows-mcp 做常规验证。
+```
+
+**工具能力对比**：
+
+| 能力 | chrome-devtools | playwright | windows-mcp |
+|---|---|---|---|
+| DOM 查询 | ✅ | ✅ (snapshot) | ❌ |
+| JS 执行 | ✅ | ✅ (evaluate) | ❌ |
+| 元素级截图 | ✅ | ✅ | ❌（全窗口） |
+| 表单交互 | ✅ | ✅ | ⚠（坐标点击） |
+| 需要调试端口 | ✅ CDP | ❌ 自管 | ❌ |
+| 连 WebView2 | ✅（设环境变量） | ❌ | ❌ |
+| 窗口切换/焦点 | 无 | 无 | ⚠ 有 |
+
+**防断路规则**：
+- 同一会话内**只用一个浏览器工具**，不中途换（换工具 = 端口/锁冲突 = 排障循环 = 烧 context）
+- 进程管理（启动 dev server / 开调试端口）在会话最开头做一次，不在中途反复杀重启
+- MCP 连接失败 2 次 → 停下检查端口/进程状态，不盲目重试（反者道之动）
+
+**桌面端基建自检**（首次接触 GUI 任务时静默执行）：
+- 检测到 `src-tauri/` 或 `electron` 依赖 → 检查 `.claude/rules/desktop-debugging.md` 是否存在
+- 存在 → 按规则走；**不存在 → 提醒**：`📋 检测到桌面端项目但缺调试规则 → 请输入 /dao-project-scaffold`
 
 ## 续力 · 每答必续
 
@@ -126,6 +167,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。`<项目根>` = **被操作的目标项目**，不是会话的 cwd。跨项目场景（如在 windsurf-dao 会话中操作 TraceyU）→ `_tmp/` 归目标项目（TraceyU）。若 MCP workspace roots 阻止直接写入目标项目，先写到可写位置再 `Copy-Item` 到目标项目 `_tmp/`。项目 `.gitignore` 必须含 `**/_tmp/`
+- **WebView2 远程调试**：Tauri / Electron 等 WebView2 应用，启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView（含 SQLite/IPC 等原生能力）。**不要另开 Chrome 当代理**——多一个进程就多一个断点。项目应将此固化为 `dev:debug` 脚本，而非每次会话手动设
 - **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 默认取 **`<branch>--<topic>`** 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`、`main--history-topbar`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若目录不存在则自动创建
 - **settings.json 运行时禁触**：活跃 Claude Code 会话内 **绝不修改** `~/.claude/settings.json`（Edit / Write / 脚本写入均禁）。Claude Code file watcher 检测到变更会触发重认证 → `401 device was revoked` 强制登出。需改配置时：写到暂存位置（`_tmp/settings-patch.json`）+ 提供会话外执行命令，或告知用户退出后手动 apply。CC Switch config-sync 同理——不应在 Claude Code 运行时触发
 
