@@ -404,9 +404,9 @@ source: code
 - 亮暗主题切换正常
 - 字体加载正确
 
-#### A.4.2 可选：对比验证
+#### A.4.2 对比验证（SKILL.md §V）
 
-若项目 dev server 可运行，截图同一页面并排对比：
+若项目 dev server 可运行，执行 SKILL.md §V 截图同一页面并排对比：
 
 | 比对维度 | 判定标准 |
 |---|---|
@@ -925,6 +925,8 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 - 全量构建
 
 任一失败 → 修复后重跑，不声明完成。
+
+**构建全部通过后**，执行 SKILL.md §V 验收截图（Playwright 截受影响页面 → `_tmp/qa/<context>/`），告知用户截图目录。
 
 ---
 

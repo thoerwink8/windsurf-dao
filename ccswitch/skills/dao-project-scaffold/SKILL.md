@@ -101,6 +101,32 @@ design/
 - prompts → <项目实际 prompt 目录>
 ```
 
+## 跨层一致性脚手架（技术栈检测）
+
+> 不知常，妄作凶。——跨层注册是"常"，忘注册是"妄"。
+
+某些技术栈天然存在**跨层注册缝隙**——Layer A 的文件存在 ≠ Layer B 知道它存在。静态类型检查和编译器都无法捕获这类断路，必须有专用校验脚本。
+
+首次进入项目时，按技术栈指纹检测并脚手架对应的一致性检查：
+
+| 技术栈指纹 | 跨层缝隙 | 需要的检查 |
+|-----------|---------|-----------|
+| `src-tauri/migrations/*.sql` 存在 | SQL 迁移文件 ↔ Rust `lib.rs` 注册 | `check-migrations` vitest 测试 |
+| _(未来按需扩展)_ | | |
+
+### Tauri 项目检测
+
+若检测到 `apps/*/src-tauri/migrations/` 或 `src-tauri/migrations/`：
+
+1. 检查 `scripts/check-migrations.ts` 存在
+2. 检查 `scripts/__tests__/check-migrations.spec.ts` 存在
+3. 检查 `package.json` 含 `check:migrations` 脚本
+4. 缺项 → 建议创建，提供 TraceyU 参考模板
+
+### 扩展模式
+
+发现新的跨层断路时（如 Next.js route ↔ middleware、Prisma schema ↔ seed 等），在此表中追加一行。原则：**能自动检测的不写文档提醒，能测试的不写 check 脚本**。
+
 ## 检查清单
 
 首次进入项目时逐项检查：
@@ -111,6 +137,7 @@ design/
 - [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
 - [ ] `docs/specs/` 存在（Loop 工作区）
 - [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理）
+- [ ] **跨层一致性检查**脚手架就位（按上方技术栈检测结果）
 
 **若检测到 `design/` 目录，额外检查：**
 

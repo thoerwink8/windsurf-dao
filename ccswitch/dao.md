@@ -29,7 +29,8 @@
 
 - **天·觉**（动之前）：交互否 · 耗时几何 · 输出几何 · 可逆否
 - **地·行**（动之中）：只读先行可并行，写操作串行 · 同一文件用一次 Edit 聚合 · 长进程用 `run_in_background` 不阻塞 · 有界限（`git log -n 20` / `head -n 50`）
-- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 改完必跑构建/测试再声明完成 · **有 `design/` 目录且改了 UI 组件 → 必须同步设计原型再声明完成**（走 `/dao-design 反向生成` 或手动更新 `design/*.html`，不可跳过）
+- **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 完成流水线（顺序强制，不可跳步）：**① 构建/测试通过 → ② 设计同步门控 → ③ 声明完成**（含提交问询 / AskUserQuestion / 结果报告——任何向用户表示"做完了"的信号）。② 未完成时禁止进入 ③
+  - **② 设计同步门控**（自检步骤，每次进入 ③ 前必过）：`Glob("design/*.html")` 有结果？→ 本轮改动含 `components/` 或 `.tsx` 中有 JSX 的文件？→ **两条都满足**则必须执行设计同步（反向同步原型 + 更新 CONTEXT.md），交接信息：`📋 代码改了 UI 组件且有 design/ 目录 → 请输入 /dao-design sync` 或当场执行。**两条任一不满足** → 跳过，直接进 ③。Loop 场景的详细流程见 `dao-loop` closing.md §7.1.5
 - **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。浏览器工具选择见项目 `.claude/rules/browser-preference.md` 或各设计 skill 内置门控
 
 ## 续力 · 每答必续
@@ -125,7 +126,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。理由：跟项目走、gitignore 已覆盖、用户找得到。项目 `.gitignore` 必须含 `**/_tmp/`
-- **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 按场景填写：Loop 验证用 `<loop-topic>`、设计审计用 `fidelity`、设计 QA 用 `design-qa`、调试用 `debug`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若 `_tmp/qa/<context>/` 不存在则自动创建
+- **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 默认取 **`<branch>--<topic>`** 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`、`main--history-topbar`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若目录不存在则自动创建
 - **settings.json 运行时禁触**：活跃 Claude Code 会话内 **绝不修改** `~/.claude/settings.json`（Edit / Write / 脚本写入均禁）。Claude Code file watcher 检测到变更会触发重认证 → `401 device was revoked` 强制登出。需改配置时：写到暂存位置（`_tmp/settings-patch.json`）+ 提供会话外执行命令，或告知用户退出后手动 apply。CC Switch config-sync 同理——不应在 Claude Code 运行时触发
 
 ## 言 · 名之则

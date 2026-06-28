@@ -16,6 +16,20 @@
 
 **design Loop**：打分必须含 `dao-design` fidelity.md L1~L5 全量验证（L3 Playwright 截图 diff，L3 前先 §6.4 状态矩阵枚举）。Token 变更须执行 §6.5 diff 流程。
 
+#### 7.1.5 设计原型反向同步（🔒 有 design/ 时必须）
+
+> 各复归其根——代码改了，原型必须跟。
+
+**触发条件**：项目有 `design/` 目录 **且** Loop 的 git diff 涉及 UI 组件文件（`**/components/**`、`**/*.tsx` 中含 JSX）。两条都满足才触发，否则跳过。
+
+**执行步骤**：
+
+1. **漂移检测**：对比 Loop 改动的组件列表与 `design/*.html` 中对应的 DOM/CSS，识别代码→原型的漂移点
+2. **同步执行**：按 `dao-design sync`（或项目级 `code-to-prototype` rule）将代码变更反映到对应原型 HTML
+3. **CONTEXT.md 更新**：更新页面状态表的版本号和对齐状态
+
+**违反检测**：进入 §7.2.5 用户审查时，若 Loop diff 含 UI 组件但 `design/` 目录无变更 commit → 强制回到此步。不可跳过，不可询问用户是否跳过。
+
 #### 7.2 严重度分流
 
 | 严重度 | 判据 | 处理 |
