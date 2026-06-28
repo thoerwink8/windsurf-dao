@@ -204,6 +204,7 @@ git log -1 --format="%ai" -- src/components/Button.tsx
 5. 报告完成
 
 **跳过**：QA 截图循环（§4.4）、auto-gate 三关（§4.5）、完整结构提取文档
+**保留**：SKILL.md §V 验收截图（同步完成后截受影响页面，存 `_tmp/qa/<context>/`）
 
 **Code→Design（OD 端）**：
 
@@ -233,6 +234,7 @@ git log -1 --format="%ai" -- src/components/Button.tsx
   Card   — 阴影 + 间距调整 → src/components/Card.tsx ✓
 
 typecheck: ✓ 通过
+截图验收：_tmp/qa/{branch}--sync/ （{N} 张）
 
 💡 如需完整 QA 验证，说"仔细同步"走完整流程。
 ```
