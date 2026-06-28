@@ -1,3 +1,4 @@
 id,date,title,summary,lesson_ids,tags
 E1,2026-06-25,dao-slim-v2 全局三层瘦身,36轮任务40commits净删4132行——dao.md 486→128/skills -35%/commands -32%/.devin rules -31%/AGENT_GUIDE -38%。核心手法：格式块压缩(ASCII流程图→prose),L1-L2,瘦身;压缩;格式块;always-on;双栈
 E2,2026-06-27,设计skill 10→6合并,taste+layout→standards/sync+qa→open/promote+code-to-prototype→asset。OD实测暴露§P↔§B.0 worktree耦合断裂已修复。2commits净删4个独立skill目录,L3,合并;设计管线;worktree;耦合修复
+E3,2026-06-29,桌面端调试体系+意图升维机制,起因：TraceyU调试$24/2h烧context。根因：Chrome代理4进程链→改WebView2 CDP直连2进程。产出：dao.md GUI决策树+工具对比表+防断路规则+Shell WebView2条目+scaffold桌面端检测+stacks/desktop-tauri.md处方+hook自动检测。进而暴露沟通断点——用户说实例(TraceyU)意图是类(dao体系)但AI就事论事。新增天·觉「归属层（意图升维）」：显式触发+信号≥2升维+知识归位兜底双保险。7文件跨2仓库3commits,"L4,L5",调试;WebView2;升维;信号检测;归属层
