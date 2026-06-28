@@ -2,12 +2,60 @@
   "name": "Dao Enhance",
   "base": "dark-ansi",
   "overrides": {
-    "promptBorder": "ansi:magentaBright",
+    "claude": "#C678DD",
+    "claudeShimmer": "#D98EE8",
+    "text": "#ABB2BF",
+    "inverseText": "#282C34",
+    "inactive": "#5C6370",
+    "inactiveShimmer": "#6B7385",
+    "subtle": "#3E4451",
+    "suggestion": "#61AFEF",
+
+    "success": "#98C379",
+    "error": "#E06C75",
+    "warning": "#E5C07B",
+    "warningShimmer": "#EDD19A",
+    "merged": "#C678DD",
+
+    "promptBorder": "#C678DD",
+    "promptBorderShimmer": "#D98EE8",
+    "planMode": "#61AFEF",
+    "autoAccept": "#98C379",
+    "bashBorder": "#E5C07B",
+    "ide": "#56B6C2",
+    "fastMode": "#E5C07B",
+    "fastModeShimmer": "#EDD19A",
+
+    "permission": "#C678DD",
+    "permissionShimmer": "#D98EE8",
+    "remember": "#56B6C2",
+
+    "diffAdded": "#2A3A2E",
+    "diffRemoved": "#3A2A2D",
+    "diffAddedDimmed": "#2C332F",
+    "diffRemovedDimmed": "#332C2E",
+    "diffAddedWord": "#3D5740",
+    "diffRemovedWord": "#57303A",
+
     "userMessageBackground": "#2C313A",
     "userMessageBackgroundHover": "#313640",
     "messageActionsBackground": "#2C313A",
     "bashMessageBackgroundColor": "#2C313A",
     "memoryBackgroundColor": "#2C313A",
-    "selectionBg": "#3E4451"
+    "selectionBg": "#3E4451",
+
+    "rate_limit_fill": "#98C379",
+    "rate_limit_empty": "#3E4451",
+    "briefLabelYou": "#ABB2BF",
+    "briefLabelClaude": "#C678DD",
+
+    "red_FOR_SUBAGENTS_ONLY": "#E06C75",
+    "blue_FOR_SUBAGENTS_ONLY": "#61AFEF",
+    "green_FOR_SUBAGENTS_ONLY": "#98C379",
+    "yellow_FOR_SUBAGENTS_ONLY": "#E5C07B",
+    "purple_FOR_SUBAGENTS_ONLY": "#C678DD",
+    "orange_FOR_SUBAGENTS_ONLY": "#D19A66",
+    "pink_FOR_SUBAGENTS_ONLY": "#E06C9F",
+    "cyan_FOR_SUBAGENTS_ONLY": "#56B6C2"
   }
 }
