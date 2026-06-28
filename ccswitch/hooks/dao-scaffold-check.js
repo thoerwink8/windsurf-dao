@@ -173,6 +173,33 @@ try {
   }
 } catch (_) {}
 
+// 8. 桌面端调试基建检测（Tauri / Electron）
+try {
+  var tauriPaths = ["src-tauri", path.join("apps", "desktop", "src-tauri")];
+  var hasTauri = tauriPaths.some(function(d) {
+    try { return fs.existsSync(path.join(cwd, d)); } catch (_) { return false; }
+  });
+  var hasElectron = false;
+  try {
+    var pkgE = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+    var allDeps = Object.assign({}, pkgE.dependencies, pkgE.devDependencies);
+    hasElectron = !!allDeps.electron;
+  } catch (_) {}
+
+  if (hasTauri || hasElectron) {
+    var framework = hasTauri ? "Tauri" : "Electron";
+    if (!fs.existsSync(path.join(cwd, ".claude", "rules", "desktop-debugging.md"))) {
+      issues.push(framework + " 桌面端项目缺少 .claude/rules/desktop-debugging.md（MCP 工具选择规则）→ 运行 /dao-project-scaffold");
+    }
+    try {
+      var pkgS = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+      if (!pkgS.scripts || !pkgS.scripts["dev:debug"]) {
+        issues.push(framework + " 项目缺少 dev:debug 脚本（WebView2 远程调试端口）→ 参考 stacks/desktop-tauri.md");
+      }
+    } catch (_) {}
+  }
+} catch (_) {}
+
 // ── 活跃工作检测（loop + plan） ──
 
 const activeWork = [];
