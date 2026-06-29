@@ -102,7 +102,7 @@ function Invoke-Status {
         Write-Host "`n  Claude Code source: ${cSkills} skills, ${cCmds} commands, ${cAgents} agents" -ForegroundColor Cyan
 
         $userClaude = Join-Path $env:USERPROFILE ".claude"
-        $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -eq "SymbolicLink" }).Count
+        $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -in "SymbolicLink", "Junction" }).Count
         $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
         $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "(claude|ccswitch)/dao\.md")
 
@@ -212,7 +212,7 @@ function Invoke-LinkClaude {
             $linkPath = Join-Path $dstDir $it.Name
             if (Test-Path $linkPath) {
                 $existing = Get-Item $linkPath -Force
-                if ($existing.LinkType -eq "SymbolicLink") {
+                if ($existing.LinkType -in "SymbolicLink", "Junction") {
                     if ($existing.Target -eq $it.FullName) {
                         Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
                         $skipped++
@@ -271,7 +271,7 @@ function Invoke-LinkClaude {
             })
         }
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.LinkType -ne "SymbolicLink") { return }
+            if ($_.LinkType -notin "SymbolicLink", "Junction") { return }
             if ($_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*") -and $_.Name -notin $srcNames) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] prune $($_.Name)  (source removed)" -ForegroundColor Yellow
