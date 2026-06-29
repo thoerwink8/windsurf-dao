@@ -92,6 +92,22 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 沿用工作目录中的设计系统（`css/<project>.css`）。不要自创 token，所有色彩/字号/圆角/间距/动效使用 CSS 中已定义的变量。双主题（data-theme="light|dark"）。
 
+## 样式方式：Tailwind + 项目 token
+
+**所有 HTML 元素的样式通过 Tailwind 类名应用，不手写 CSS 选择器做布局/样式。** 仅 Tailwind 无法覆盖的（如 @keyframes、复杂伪元素）才用 `<style>` 补丁。
+
+HTML `<head>` 必须遵循三层结构：
+
+层 1 — 项目 CSS 变量（链接 `css/<project>.css`，含主题 token + 组件基类）
+层 2 — Tailwind CDN + 项目自定义 config（读取 `css/<project>.css` 中的 CSS 变量名，映射为 Tailwind 语义类如 `bg-surface`、`rounded-panel`、`text-sm`）
+层 3 — 补丁 `<style>`（仅 Tailwind 无法覆盖的，如 keyframes、prefers-reduced-motion guard）
+
+<如果项目有 design/PROTOTYPE-SPEC.md>
+读取工作目录中的 `PROTOTYPE-SPEC.md`，按其中的三层 HTML 模板和类名速查表输出。
+<否则>
+读取 `css/<project>.css`，自行构建 tailwind.config 映射：提取所有 CSS 变量名，按类别（colors / borderRadius / fontSize / spacing / boxShadow / transitionDuration / transitionTimingFunction）映射为 Tailwind theme.extend。
+</如果>
+
 ## 要设计什么
 
 <具体的设计需求描述——从讨论结论中提炼>
@@ -107,7 +123,12 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 ## 输出
 
-在工作区 `workspaces/{name}/` 中修改 `{page}.html`，与现有设计文件格式一致（自包含、可独立浏览、亮暗双主题）。
+在工作区 `workspaces/{name}/` 中修改 `{page}.html`。
+- **样式用 Tailwind 类名**，与代码侧 React 组件 className 一致
+- **自包含**：workspace HTML 可独立浏览（内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 脚本）
+- **亮暗双主题**：`data-theme="light|dark"`
+- **禁止手写 CSS 类做布局/样式**——用 `flex`、`grid`、`gap-4`、`bg-surface`、`rounded-panel` 等 Tailwind 类名
+- **禁止硬编码**：颜色（`#xxx`/`hsl()`）→ 用 `bg-surface` 等；字号（`text-[14px]`）→ 用 `text-sm` 等 token 级别类名
 
 完成后在同目录创建 WORKSPACE.md：
 ```yaml
@@ -128,12 +149,14 @@ source: design
 
 ### §P.2 文件扫描
 
-生成提示词前，**自动扫描** `design/` 目录：
+生成提示词前，**自动扫描** `design/` 目录和项目根：
 
 1. `Glob design/css/*.css` — 找到设计系统 CSS 文件名
 2. `Glob design/*.html` — 列出所有现有页面
-3. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
-4. 写入 Part A 的文件清单
+3. `Read design/PROTOTYPE-SPEC.md`（如存在）— 读取项目级原型输出规范（含 tailwind.config 映射 + 类名速查）
+4. `Glob **/tailwind.config.*`（如 PROTOTYPE-SPEC.md 不存在）— 探测项目 tailwind.config，用于自动构建 OD 提示词中的层 2 配置
+5. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
+6. 写入 Part A 的文件清单；PROTOTYPE-SPEC.md 存在时加入 Part A 参考资产
 
 ### §P.3 提示词必含要素
 
@@ -144,7 +167,7 @@ source: design
 3. **讨论口**：提示词末尾加一句"如果有任何不清楚的地方先讨论，不要猜测后直接画"，给 OD 留提问空间
 4. **实施交接指令**：要求 OD 设计完成后额外输出一段实施交接提示词（变更摘要、CSS 类、DOM 结构、组件映射、交互行为、注意事项），用于粘贴回编码 AI
 5. **工作区指令**：产出必须落 `workspaces/{name}/` 草稿区 + 生成 WORKSPACE.md，不直接改正式稿。升格由 `asset.md` §B 负责
-6. **自包含性要求**：workspace HTML 是自包含文件，不链接外部 CSS。OD 读取设计系统 CSS 后必须把所有用到的 token 定义也写入 workspace HTML 的 `:root`，不得只引用 `var(--*)` 而不补全定义。提示词中须显式加一句："workspace HTML 是自包含文件，所有 CSS 变量须在 `:root` 中定义，不依赖外部样式表。读取项目设计系统 CSS，把所有用到的 token 按分类（字号、字体、颜色与前景色、圆角、间距、动效、阴影）逐类写入 `:root`，不漏分类。" **验收**：§P.7 关一自动覆盖此项
+6. **三层 Tailwind 自包含**：workspace HTML 是自包含文件，可独立在浏览器中打开。自包含通过三层结构实现：① 内联 `:root` CSS 变量定义（从项目 `css/<project>.css` 提取）；② 内联 `tailwind.config` + Tailwind CDN 脚本引用；③ 补丁 `<style>`（仅 Tailwind 无法覆盖的）。HTML 元素样式通过 Tailwind 类名应用（如 `bg-surface`、`rounded-panel`），不手写 CSS 选择器做布局/样式。提示词中须显式加一句："workspace HTML 是自包含文件，通过内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 实现。所有样式用 Tailwind 类名，禁止手写 CSS 选择器做布局/样式。读取项目设计系统 CSS，把所有用到的 token 按分类逐类写入 `:root` 和 tailwind.config，不漏分类。" **验收**：§P.7 关一+关五自动覆盖此项
 7. **锚点重置原则**：`<a>` 元素作为交互控件（按钮、导航项等）使用时，其 CSS 样式类必须显式重置浏览器对锚点的默认装饰（下划线、字体颜色继承等），不可依赖浏览器默认行为。提示词中加一句："用作交互控件的 `<a>` 元素，CSS 须显式重置浏览器默认锚点装饰。" **验收**：§P.7 关四自动覆盖此项
 
 ### §P.4 不做的事
@@ -217,14 +240,15 @@ HANDOFF.md 已写入 `design/workspaces/{name}/HANDOFF.md`，可直接交工程�
 
 **触发条件**：OD 产出或修改 workspace HTML 后，声明"设计完成"之前，必须执行本节。
 
-**四关顺序执行**（任一不过，修 workspace.html 后重检，不得声明完成）：
+**五关顺序执行**（任一不过，修 workspace.html 后重检，不得声明完成）：
 
 | 关 | 检查项 | Pass 条件 |
 |---|---|---|
 | 一 | **变量自包含**：读 workspace.html，提取所有 `var(--*)` 引用名与 `:root` 定义名，求差集 | 差集为空——所有被引用的 token 在 `:root` 中有定义 |
-| 二 | **无硬编码字号**：在 workspace.html CSS 区域搜索 `font-size` 后直接接数字单位的写法 | 零结果——所有字号通过 token 引用 |
-| 三 | **无硬编码颜色**：在 `<style>` 块内搜索颜色字面量写法（排除注释） | 零结果——所有颜色通过 token 引用 |
-| 四 | **锚点重置**：找出带 `class` 属性的 `<a>` 元素，检查其匹配 CSS 规则是否显式重置了浏览器默认锚点装饰 | 每个带样式类的 `<a>` 对应 CSS 规则已完成重置 |
+| 二 | **无硬编码字号**：在 workspace.html 中搜索 `font-size` 硬编码（CSS 区域）和 `text-[` Tailwind 任意值（class 属性中） | 零结果——所有字号通过 token 类名（如 `text-sm`） |
+| 三 | **无硬编码颜色**：在 `<style>` 块内搜索颜色字面量 + 在 class 属性中搜索 `bg-[#`、`text-[#`、`border-[#` 等 Tailwind 任意颜色值 | 零结果——所有颜色通过语义类名（如 `bg-surface`） |
+| 四 | **锚点重置**：找出带 `class` 属性的 `<a>` 元素，检查其 Tailwind 类或 CSS 规则是否显式重置了浏览器默认锚点装饰 | 每个 `<a>` 有 `no-underline` 或等效重置 |
+| 五 | **Tailwind 三层完整**：检查 `<head>` 中是否包含三层结构——`:root` CSS 变量定义 + `tailwind.config` 内联脚本 + Tailwind CDN `<script>` 引用 | 三层均存在且顺序正确 |
 
 **修复后同步铁律**：本节发现问题并修复后，必须同步到 workspace HTML 的所有副本（OD 项目数据目录副本 + 外部代码仓副本），两份内容必须一致。
 
