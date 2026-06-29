@@ -41,7 +41,7 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 **唯一命名权威 = `system.md` §3.0**：`--{category}-{role}[-{modifier}]`（如 `--color-success`/`--radius-lg`/`--text-xs`/`--motion-duration-fast`/`--elevation-md`）。设计稿 CSS 和代码 CSS 都遵循它，谁都不许另起短名。
 
-**pass 条件**：设计稿（`design/*.html` + `design/css/*.css`）里出现的每个 token 名，都能在项目规范 token CSS（代码侧 `index.css` 或设计侧等价物）的定义集中找到。出现规范集外的名字（`--go`/`--r-*`/`--fs-*`/`--sp-*`/`--ease`/`--shadow` 等旧式短名）= **P0 失败**。
+**pass 条件**：设计稿（`design/{pages,components,ref}/*.html` + `design/css/*.css`）里出现的每个 token 名，都能在项目规范 token CSS（代码侧 `index.css` 或设计侧等价物）的定义集中找到。出现规范集外的名字（`--go`/`--r-*`/`--fs-*`/`--sp-*`/`--ease`/`--shadow` 等旧式短名）= **P0 失败**。
 
 **验证手段**：
 ```bash
@@ -86,12 +86,12 @@ comm -23 /tmp/used.txt /tmp/canon.txt   # 输出 = 自创名，应为空（仅�
 | 次要页面（设置/日志） | ≤ 0.1% | 低频使用 |
 | 动态内容区（markdown） | ≤ 0.3% | 内容不可控，只检查容器 |
 
-**真相源**：`design/*.html` 原型截图（通过 HTTP server + Playwright 截图）。
+**真相源**：`design/pages/*.html` 原型截图（通过 HTTP server + Playwright 截图）。
 
 **验证流程**：
 1. **枚举状态矩阵**（§6.4）——列出每个页面的所有数据量/流程态/条件分支
 2. 启动 HTTP server 托管 `design/` 目录
-3. Playwright 以固定 viewport（项目默认窗口尺寸）截图每个 `design/*.html`
+3. Playwright 以固定 viewport（项目默认窗口尺寸）截图每个 `design/pages/*.html`
 4. 启动 dev server
 5. Playwright 以相同 viewport **逐态**截图对应的 app 页面
 6. `toHaveScreenshot()` 或 pixel diff 工具对比，超阈值则 fail
@@ -164,7 +164,7 @@ comm -23 /tmp/used.txt /tmp/canon.txt   # 输出 = 自创名，应为空（仅�
 
 ## §5 · 项目落地指南
 
-本 skill 定义方法论（WHAT + WHY），项目侧在 `.claude/rules/design-fidelity.md` 定义实现（HOW），包含：页面清单（design/*.html ↔ app 路由）、阈值配置（核心/次要/动态）、Viewport 尺寸、基线位置、运行命令。
+本 skill 定义方法论（WHAT + WHY），项目侧在 `.claude/rules/design-fidelity.md` 定义实现（HOW），包含：页面清单（design/pages/*.html ↔ app 路由）、阈值配置（核心/次要/动态）、Viewport 尺寸、基线位置、运行命令。
 
 **验证脚本**：项目必须在 `tests/fidelity/` 维护可执行脚本。数据从 design-fidelity.md 状态矩阵提取，覆盖全部态（不只默认态）。审计截图 → `_tmp/qa/fidelity/`，回归基线 → `*-snapshots/`（tracked）。命名：`<type>-<page>-<state>.png`。模板见 `templates/`。
 
