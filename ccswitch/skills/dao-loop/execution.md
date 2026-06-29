@@ -70,6 +70,8 @@ Go → 环境准备 → 逐 Task 派发 subagent（写码→commit→三文件�
 
 **Task 级**（每 commit 后）：typecheck + test（`--changedSince`）+ 契约测试。**禁止 file 级验证**。
 
+**运行验证**（bugfix Loop 必须，全 Task 完成后）：启动应用 → 复现原 bug 场景 → 确认修复生效 → 截图存证到 `_tmp/qa/<loop-topic>/verify-*.png`。纯后端 / 纯库的 bugfix 可用集成测试替代，但前端 / UI 相关 bug 必须实际启动应用验证。**违反检测**：`STATUS.json type = "bugfix"` 且 plan 全 ✅ 但无运行验证截图或测试记录 → 强制补验。
+
 **Phase 级**（每 Phase 末尾）：组件健康（`dao-design` component-radar.md）+ 视觉回归（design Loop 必须 `dao-design` fidelity.md L1~L3 截图 diff）+ 交互验证（L4）+ 动态组件提炼。截图路径：`_tmp/qa/<loop-topic>/<type>-<desc>.png`。
 
 ### Spec 三文件同步（🔒 每 Task commit 后）
