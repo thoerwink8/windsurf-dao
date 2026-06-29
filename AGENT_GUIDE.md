@@ -17,9 +17,8 @@
 | ------------------------------ | ------------------------------------------------------ |
 | `dao.ps1`                      | 工具脚本（status / link-global）                       |
 | `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
-| `.devin/rules/`             | 13 文件（12 rules + README 索引，详见 `.devin/rules/README.md`，含 dao-mantra） |
-| `.devin/workflows/dao-*.md` | 7 个工作流（dev/commit/distill/doc/evolve/goal/superpowers） |
-| `.devin/skills/dao-*/`      | 16 个可复用技能 |
+| `ccswitch/commands/dao-*.md` | 9 个命令（dev/commit/distill/doc/evolve/loop/remove/superpowers/gs） |
+| `ccswitch/skills/dao-*/`    | 9 个可复用技能（brainstorm/design/evolution/loop/plan/project-scaffold/review/verify/worktree） |
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
@@ -27,7 +26,7 @@
 
 **部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
 
-**Rules 架构（v2 · 2026-04-26 重构）**：废除"道德法术四层"概念，对齐 Windsurf 4 种 trigger 机制。详见 `.devin/rules/README.md`。
+**Rules 架构**：废除早期"道德法术四层"概念。当前规则通过 `ccswitch/dao.md`（全局场域，`@import` 每轮注入）+ 项目 `.claude/rules/`（项目级按需加载）两层投递。
 
 ---
 
@@ -123,7 +122,7 @@ worker → spec-writer（spec 不清）→ plan-writer（plan 不细）→ brain
 
 ### 4.7 部署到其他项目
 
-windsurf-dao 是货架项目。两条路：**A) 项目级 Junction**（推荐）`New-Item -ItemType Junction -Path "<project>\.devin\agents" -Target "<dao>\.devin\agents"`；**B) 全局 Junction** `New-Item -ItemType Junction -Path "$env:APPDATA\devin\agents" -Target "<dao>\.devin\agents"`。源文件单一存放，更新后自动同步。
+windsurf-dao 是货架项目。部署方式：`dao.ps1 link-claude` 将 `ccswitch/` 下的 skills、commands、agents 等通过 symlink 部署到 `~/.claude/`，源文件单一存放，编辑即生效。详见 §五 配置同步。
 
 ### 4.8 设计要点
 
@@ -145,7 +144,7 @@ windsurf-dao 是货架项目。两条路：**A) 项目级 Junction**（推荐）
 
 ### 4.9 subagent 调度的判断准则(不强制)
 
-rate limit 实测 ≤ 1 并发(T29 教训)，采用"按需判断"而非"每阶段强制派"。六项检查（模板化?/需不同模型?/context 臃肿?/rate limit 有预算?/值 15× token?/可真并行?）同时满足 3+ → 派 subagent；否则主会话直接做。详见 `.devin/workflows/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
+rate limit 实测 ≤ 1 并发(T29 教训)，采用"按需判断"而非"每阶段强制派"。六项检查（模板化?/需不同模型?/context 臃肿?/rate limit 有预算?/值 15× token?/可真并行?）同时满足 3+ → 派 subagent；否则主会话直接做。详见 `ccswitch/commands/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
 
 ---
 
