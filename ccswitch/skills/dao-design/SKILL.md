@@ -197,6 +197,7 @@ AskUserQuestion（选项由上下文动态构建）
 - 「查看「{scope}」完成标志」→ 展示 WORKSPACE.md 升格条件列表
 - 「标记验收通过 → 升格 + 实施」→ Read [asset.md](asset.md) §C
 - 「只升格不实施代码」→ Read [asset.md](asset.md) §B
+- 「同步设计稿到 OD 面板」→ Read [od-panel-sync.md](od-panel-sync.md)
 - 「做点别的」→ 展示模式 D 的选项
 
 ---
@@ -227,6 +228,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 **动态选项**：
 - 「检测设计/代码漂移」→ Read [sync.md](sync.md)
+- 「同步设计稿到 OD 面板」→ Read [od-panel-sync.md](od-panel-sync.md)
 - 「从代码反向生成设计原型」→ Read [asset.md](asset.md) §A
 - 「新建功能工作区」→ Read [asset.md](asset.md) §B.0
 - 「查看设计系统 token」→ Read [system.md](system.md)
