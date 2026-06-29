@@ -38,11 +38,11 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 代码领先于设计稿时，OD 基于过时基线产出的新设计会引入结构冲突。
 
-1. 检查涉及的 `design/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
-2. 如有漂移 → 调用 `asset.md` 反向生成将代码现状同步回 `design/*.html`
+1. 检查涉及的 `design/pages/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
+2. 如有漂移 → 调用 `asset.md` 反向生成将代码现状同步回 `design/pages/*.html`
 3. 同步完成后进入下一步
 
-跳过条件：全新页面（`design/` 中不存在对应文件，无漂移可言）。
+跳过条件：全新页面（`design/pages/` 中不存在对应文件，无漂移可言）。
 
 #### 草稿区建立（worktree）
 
@@ -76,7 +76,7 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 |------|------|
 | `css/<project>.css` | 设计系统 token（必须） |
 | `workspaces/{name}/{page}.html` | 当前修改基准（已复制的副本） |
-| `<相关页面>.html` | 需要视觉一致的相关页面（按需） |
+| `pages/<相关页面>.html` | 需要视觉一致的相关页面（按需） |
 
 4. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
 ```
@@ -152,7 +152,7 @@ source: design
 生成提示词前，**自动扫描** `design/` 目录和项目根：
 
 1. `Glob design/css/*.css` — 找到设计系统 CSS 文件名
-2. `Glob design/*.html` — 列出所有现有页面
+2. `Glob design/pages/*.html` — 列出所有现有页面
 3. `Read design/PROTOTYPE-SPEC.md`（如存在）— 读取项目级原型输出规范（含 tailwind.config 映射 + 类名速查）
 4. `Glob **/tailwind.config.*`（如 PROTOTYPE-SPEC.md 不存在）— 探测项目 tailwind.config，用于自动构建 OD 提示词中的层 2 配置
 5. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
@@ -176,7 +176,7 @@ source: design
 - 不在提示词中硬编码 CSS 属性值——只引用 token 名，具体值由 OD 从 CSS 文件读取
 - 不把流程拆成"第一步/第二步"给用户——产出是一段完整的提示词，用户复制粘贴到 OD 即可
 - 不假设 OD 会话已有上下文——每次都包含完整的文件加载指令
-- 不让 OD 直接输出到 `design/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `asset.md` §B 负责
+- 不让 OD 直接输出到 `design/pages/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `asset.md` §B 负责
 
 ### §P.5 · workspace 验收后的强制交付物（HANDOFF.md）
 
@@ -270,9 +270,14 @@ design/
 ├── css/<project>.css     # 共享设计系统（CSS 变量 + 组件类 + 布局原语）
 ├── js/<project>.js       # 共享行为（主题切换 + 持久化）
 ├── screenshots/          # 参考截图
-├── *.html                # 各页面原型（自包含、可独立浏览）
-├── *.html.artifact.json  # 每页元数据（版本、状态、时间戳）
-└── gallery.html          # 全页面索引画廊
+├── pages/                # 页面设计稿（对应代码路由）
+│   └── {page}.html       # 各页面原型（自包含、可独立浏览）
+├── components/           # 组件/弹窗设计稿（覆盖层，非独立页面）
+│   └── {component}.html
+├── ref/                  # 参考工具（不对应代码，辅助开发）
+│   ├── gallery.html      # 全页面索引画廊
+│   └── component-gallery.html
+└── *.html.artifact.json  # 每页元数据（版本、状态、时间戳）
 ```
 
 **设计系统 CSS** 是最关键的文件——包含：
@@ -291,7 +296,7 @@ design/
 **每次涉及 design/ 目录的 UI 任务，无条件执行本步。**
 
 1. **读 CSS**（`design/css/<project>.css`）：提取全部 token（色彩/字体/圆角/阴影/动画）+ 组件 CSS 类 + 布局结构
-2. **读 HTML**（`design/*.html`）：提取 DOM 层级 + 组件使用 + 交互态 + 响应式 + 主题差异
+2. **读 HTML**（`design/pages/*.html`）：提取 DOM 层级 + 组件使用 + 交互态 + 响应式 + 主题差异
 3. **读 artifact**（`*.artifact.json`）：确认 `status: "complete"` 才翻译
 
 ---
@@ -304,17 +309,17 @@ design/
 
 ### 1.5.0 跨页组件整合扫描
 
-清点前先通读全部 `design/*.html`，提取跨页共享的 CSS 类和 DOM 模式，建立组件复用矩阵（组件模式 | 出现页面 | 设计 CSS 类 | 项目组件 | 策略）。每个组件按 `native/extend/wrap/custom` 四级决策（判据见 §B design-spirit 模板），结果写入 strategy.md。先整合后清点，共享组件 Task 排第一梯队。
+清点前先通读全部 `design/pages/*.html`，提取跨页共享的 CSS 类和 DOM 模式，建立组件复用矩阵（组件模式 | 出现页面 | 设计 CSS 类 | 项目组件 | 策略）。每个组件按 `native/extend/wrap/custom` 四级决策（判据见 §B design-spirit 模板），结果写入 strategy.md。先整合后清点，共享组件 Task 排第一梯队。
 
 ### 1.5.1 全页面清点
 
-枚举 `design/*.html` 所有页面（排除 gallery 索引页），建立清单（页面 | 设计文件 | React 对应 | 当前状态）。**铁律**：每个 html 必须出现，遗漏 = 不得进造线。
+枚举 `design/pages/*.html` 所有页面（排除 gallery 索引页），建立清单（页面 | 设计文件 | React 对应 | 当前状态）。**铁律**：每个 html 必须出现，遗漏 = 不得进造线。
 
 ### 1.5.2 三层结构 Diff（§2.5 结构提取）
 
 每页自顶向下：**布局层**（grid/flex 骨架、容器、导航）→ **节层**（区块结构、面板、tabs）→ **组件层**（props/样式/交互态）。只做组件层 = 遗漏结构偏差。
 
-**执行方式**：按 §2.5 结构提取流程对每个变更的 design/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
+**执行方式**：按 §2.5 结构提取流程对每个变更的 design/pages/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
 
 ### 1.5.3 页面维度覆盖矩阵
 
@@ -342,7 +347,7 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 ### 2.5.0 核心原则
 
-1. **读 CSS 源码，不看截图猜**——`design/*.html` 的 `<style>` 块和链接的 CSS 文件是精确数据源
+1. **读 CSS 源码，不看截图猜**——`design/pages/*.html` 的 `<style>` 块和链接的 CSS 文件是精确数据源
 2. **提取属性值，不描述视觉效果**——输出 `padding: 10px 26px` 而不是"增加一些内边距"
 3. **映射 DOM 结构，不只映射样式**——sibling/child 关系决定布局行为（sticky vs flex）
 4. **追踪约束链，不只看单个元素**——overflow-scroll 依赖从 root 到容器的完整 min-height:0 链
@@ -353,10 +358,10 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 ```bash
 # 设计文件变更
-git diff [base]..HEAD -- design/*.html design/css/*.css
+git diff [base]..HEAD -- design/pages/*.html design/components/*.html design/css/*.css
 
 # 或指定文件
-git diff HEAD~1 -- design/workspace.html
+git diff HEAD~1 -- design/pages/workspace.html
 ```
 
 **变更分类**：
@@ -520,7 +525,7 @@ CSS 变量变更：
 
 ### 4.2 视觉验证（截图对比）
 
-1. 在浏览器中打开 `design/*.html`（Open Design 原型）
+1. 在浏览器中打开 `design/pages/*.html`（Open Design 原型）
 2. 运行项目应用（开发服务器或桌面端）
 3. 截图同一页面，并排对比
 

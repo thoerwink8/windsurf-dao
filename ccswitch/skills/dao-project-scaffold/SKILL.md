@@ -70,7 +70,15 @@ disable-model-invocation: true
 
 ```
 design/
-  {page}.html              ← 正式稿（稳定基准，代码侧唯一参考）
+  pages/                   ← 页面设计稿（对应代码路由）
+    {page}.html            ← 正式稿（稳定基准，代码侧唯一参考）
+  components/              ← 组件/弹窗设计稿（覆盖层，非独立页面）
+    {component}.html
+  ref/                     ← 参考工具（不对应代码，辅助开发）
+    gallery.html
+    component-gallery.html
+  css/{project}.css        ← 共享样式
+  js/{project}.js          ← 共享行为
   workspaces/              ← 草稿区（临时，升格后整目录删除）
     README.md              ← 草稿区说明（onboarding）
     {name}/                ← 单个工作区（草稿原型 + WORKSPACE.md）
@@ -163,6 +171,9 @@ design/
 
 **若检测到 `design/` 目录，额外检查：**
 
+- [ ] `design/pages/` 存在（页面设计稿）
+- [ ] `design/components/` 存在（组件/弹窗设计稿）
+- [ ] `design/ref/` 存在（参考工具）
 - [ ] `design/workspaces/` 存在（含 README.md）
 - [ ] `design/archive/` 存在（含 README.md）
 - [ ] `design/handoff/` 存在

@@ -19,8 +19,9 @@
 每个 HTML 页面的 `<head>` 必须包含三层结构：
 
 ```
-层 1 — <link rel="stylesheet" href="css/<project>.css">
+层 1 — <link rel="stylesheet" href="../css/<project>.css">
        项目 CSS 变量（主题 token + 组件基类）
+       （正式稿在 pages/ 子目录，href 上跳一层；workspace 用内联 :root 不用 <link>）
 
 层 2 — <script>tailwind.config = {...}</script>
        <script src="https://cdn.tailwindcss.com"></script>
@@ -43,11 +44,16 @@
 
 ## 工作区模型
 
-**产出不直接修改正式稿（`design/*.html`），必须落在草稿区。**
+**产出不直接修改正式稿（`design/pages/*.html`），必须落在草稿区。**
 
 ```
 design/
-  {page}.html              ← 正式稿（只读，不直接改）
+  pages/                   ← 页面设计稿（对应代码路由，只读）
+    {page}.html
+  components/              ← 组件/弹窗设计稿（覆盖层）
+    {component}.html
+  ref/                     ← 参考工具（不对应代码）
+    gallery.html
   workspaces/
     {功能名}/
       {page}.html          ← 草稿（你的产出在这里）

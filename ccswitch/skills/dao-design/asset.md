@@ -18,7 +18,13 @@
 
 ```
 design/
-  {page}.html                     ← 正式稿（当前对外基准，只读参考）
+  pages/                          ← 页面设计稿（对应代码路由）
+    {page}.html                   ← 正式稿（当前对外基准，只读参考）
+  components/                     ← 组件/弹窗设计稿（覆盖层，非独立页面）
+    {component}.html
+  ref/                            ← 参考工具（不对应代码，辅助开发）
+    gallery.html
+    component-gallery.html
   workspaces/                     ← 草稿区（临时，升格后整目录删除）
     {name}/
       {page}.html                 ← 草稿原型
@@ -35,6 +41,15 @@ design/
   CHANGELOG.md                    ← 每次升格自动追加
   CONTEXT.md                      ← 每次升格自动更新
 ```
+
+### HTML 文件分类标准
+
+| 判断标准 | 分类 | 存放位置 |
+|---------|------|---------|
+| 对应代码侧路由/页面？ | Page | `design/pages/` |
+| 覆盖层/弹窗/抽屉/组件？ | Component | `design/components/` |
+| 不对应代码，辅助开发/展示？ | Reference | `design/ref/` |
+| 已被取代 / 不在 CONTEXT.md？ | Obsolete | `design/archive/` |
 
 **工作区 = 设计 worktree**：
 - 开始迭代 → 在 `workspaces/{name}/` 内创建草稿（开 worktree）
@@ -65,7 +80,7 @@ design/workspaces/
     HANDOFF.md            ← 工程实施规格（验收通过后补充）
 ```
 
-**OD 与 CLI 的文件名差异**：OD 侧固定用 `workspace.html`（OD 不持有页面路由概念）；CLI 升格时通过读 `WORKSPACE.md` 的 `page` 字段确定目标正式稿路径（`design/{page}.html`）。
+**OD 与 CLI 的文件名差异**：OD 侧固定用 `workspace.html`（OD 不持有页面路由概念）；CLI 升格时通过读 `WORKSPACE.md` 的 `page` 字段确定目标正式稿路径（`design/pages/{page}.html`）。
 
 ---
 
@@ -76,7 +91,7 @@ OD 设计**开始时**创建，**验收通过后**更新完成标志：
 ```markdown
 ---
 started: YYYY-MM-DD
-page: {page}           # 对应正式稿 design/{page}.html（如 workspace、preferences）
+page: {page}           # 对应正式稿 design/pages/{page}.html（如 workspace、preferences）
 scope: {一句话描述}     # 须与 CONTEXT.md 功能列关键词保持一致（供 §C.0 匹配）
 source: design         # OD 产出固定填 design（设计先行）
 ---
@@ -85,7 +100,7 @@ source: design         # OD 产出固定填 design（设计先行）
 {设计目标描述}
 
 ## 受影响页面
-- design/{page}.html
+- design/pages/{page}.html
 
 ## 完成标志（升格条件）
 - [x] 设计稿在 OD 浏览器中目测通过（亮/暗主题各一遍）
@@ -154,7 +169,7 @@ HANDOFF.md 是 CLI 侧 §C.2 的**唯一实施依据**——缺失则 §C 拒绝
 OD 验收完成后，在 `design/CONTEXT.md` 活跃草稿区将条目状态更新为「✅ 验收通过，待升格 + 代码实施」：
 
 ```
-| 「{scope}」 | design/workspaces/{name}/workspace.html | design/{page}.html | design/workspaces/{name}/HANDOFF.md | ✅ 验收通过，待升格 + 代码实施 |
+| 「{scope}」 | design/workspaces/{name}/workspace.html | design/pages/{page}.html | design/workspaces/{name}/HANDOFF.md | ✅ 验收通过，待升格 + 代码实施 |
 ```
 
 此行是 CLI 侧 §C.0 关键词发现的基础——不注册则 §C.0 关键词匹配零命中，退化到目录扫描。
@@ -321,7 +336,7 @@ OD 验收完成后，在 `design/CONTEXT.md` 活跃草稿区将条目状态更�
 **写入权限**：
 - 在 `workspaces/{name}/` 下生成草稿 HTML + `WORKSPACE.md`（`source: code`）
 - 更新 `design/css/<project>.css`（从代码侧真相源同步最新 token）
-- **不直接写 `design/{page}.html` 正式稿**，**不删除 OD 产出的文件**
+- **不直接写 `design/pages/{page}.html` 正式稿**，**不删除 OD 产出的文件**
 
 若项目尚无 `workspaces/` 结构（旧项目），先按 `dao-project-scaffold` 的 Open Design 附加结构补齐。
 
@@ -431,7 +446,7 @@ source: code
 1. **不查配置就动手** — 技术栈假设错误会导致全部重做。§A.0 配置发现是第一步，不可跳过。
 2. **配置不存在时直接报错** — 应进入引导创建模式（§A.0.3），协助用户建立配置后再执行。
 3. **扫描后重复问已能推断的问题** — package.json 里有 `tailwindcss`，就不要再问"你用什么 CSS 框架"。只问不确定的。
-4. **直接覆盖正式稿** — 反向生成只写 `workspaces/{page}-from-code/` 草稿，绝不直接覆盖 `design/{page}.html` 正式稿。升格由 §B 负责，归档旧正式稿后才替换。
+4. **直接覆盖正式稿** — 反向生成只写 `workspaces/{page}-from-code/` 草稿，绝不直接覆盖 `design/pages/{page}.html` 正式稿。升格由 §B 负责，归档旧正式稿后才替换。
 5. **展开超过 4 层** — 原子 UI 组件（Button/Input/Badge 等）映射到 CSS 类即止，不读内部实现。
 6. **自行做设计判断** — 代码里是 `gap-3`，原型里就是 `gap-3`，不改成"看起来更好"的 `gap-4`。
 7. **硬编码色值** — 翻译时优先找 CSS 变量对应项。无对应时保留原值并标注 `/* TODO: token化 */`。
@@ -454,7 +469,7 @@ source: code
 New-Item -ItemType Directory "design\workspaces\{name}"
 
 # 2. 复制正式稿作为起点
-Copy-Item "design\{page}.html" "design\workspaces\{name}\{page}.html"
+Copy-Item "design\pages\{page}.html" "design\workspaces\{name}\{page}.html"
 ```
 
 然后在 `workspaces/{name}/` 下创建 `WORKSPACE.md`：
@@ -483,7 +498,7 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 
 **自动注册到活跃草稿区**：工作区创建后，在 `design/CONTEXT.md` 活跃草稿区追加一行（若章节不存在则先创建）：
 
-| 「{scope}」 | `design/workspaces/{name}/{page}.html` | `design/{page}.html` | — | 进行中 |
+| 「{scope}」 | `design/workspaces/{name}/{page}.html` | `design/pages/{page}.html` | — | 进行中 |
 
 注册失败不阻断工作区创建，仅提示用户手动补充。
 
@@ -495,7 +510,7 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 
 从活跃文件上下文判断：
 - 当前打开的是 `design/workspaces/{name}/{page}.html` → 目标 = `{page}`，工作区 = `{name}`
-- 当前打开的是 `design/{page}.html`（正式稿）→ 询问用户要升格哪个工作区
+- 当前打开的是 `design/pages/{page}.html`（正式稿）→ 询问用户要升格哪个工作区
 
 #### B.1.2 无法自动识别时
 
@@ -510,7 +525,7 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 | 检查项 | 目的 |
 |---|---|
 | `design/workspaces/{name}/{page}.html` 存在 | 确认草稿真实存在 |
-| `design/{page}.html` 存在 | 确认有正式稿可归档（首次升格则跳过归档步骤） |
+| `design/pages/{page}.html` 存在 | 确认有正式稿可归档（首次升格则跳过归档步骤） |
 | `design/archive/{page}-{today}.html` **不存在** | 避免覆盖同日归档（同日二次升格需确认） |
 
 ---
@@ -523,14 +538,14 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 
 ```powershell
 $today = Get-Date -Format "yyyyMMdd"
-Copy-Item "design\{page}.html" "design\archive\{page}-$today.html"
-Remove-Item "design\{page}.html"
+Copy-Item "design\pages\{page}.html" "design\archive\{page}-$today.html"
+Remove-Item "design\pages\{page}.html"
 ```
 
 #### B.3.2 升格草稿为正式稿
 
 ```powershell
-Copy-Item "design\workspaces\{name}\{page}.html" "design\{page}.html"
+Copy-Item "design\workspaces\{name}\{page}.html" "design\pages\{page}.html"
 ```
 
 #### B.3.3 关闭工作区（删除草稿目录）
@@ -551,7 +566,7 @@ Remove-Item -Recurse -Force "design\workspaces\{name}"
 
 #### B.4.2 其他引用
 
-Grep 所有 `design/*.html` 中对工作区草稿路径的引用（`workspaces/{name}/{page}.html`），若有则询问是否改为正式稿路径。
+Grep 所有 `design/pages/*.html` 中对工作区草稿路径的引用（`workspaces/{name}/{page}.html`），若有则询问是否改为正式稿路径。
 
 ---
 
@@ -589,7 +604,7 @@ Grep 所有 `design/*.html` 中对工作区草稿路径的引用（`workspaces/{
 date: YYYY-MM-DD
 scope: {page}（+受影响页面）
 type: BREAKING | MINOR | PATCH
-design-file: design/{page}.html
+design-file: design/pages/{page}.html
 archive: design/archive/{page}-{YYYYMMDD}.html
 ---
 
@@ -677,7 +692,7 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 ✅ 升格完成
 
 工作区（worktree）：design/workspaces/{name}/ → 已关闭（删除）
-正式稿：design/{page}.html
+正式稿：design/pages/{page}.html
 归档：design/archive/{page}-{YYYYMMDD}.html
 
 📋 交接包：design/handoff/{scope}-{YYYYMMDD}/
@@ -799,10 +814,10 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 扫描 `design/CONTEXT.md` 活跃草稿区，检查是否有**其他草稿**的「目标正式稿」列与当前草稿相同。
 
-**命中冲突时**（其他草稿也指向同一 `design/{page}.html`）：停止升格，展示：
+**命中冲突时**（其他草稿也指向同一 `design/pages/{page}.html`）：停止升格，展示：
 
 ```
-⚠️  冲突：同时有多个草稿指向 design/{page}.html
+⚠️  冲突：同时有多个草稿指向 design/pages/{page}.html
 
 当前草稿：design/workspaces/{name}/（即将升格）
 冲突草稿：design/workspaces/{other-name}/
@@ -889,7 +904,7 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 ### §C.3 · 执行 §B 升格
 
 完整执行 §B 流程（§B.1 ~ §B.5），产出：
-- `design/{page}.html`（新正式稿到位）
+- `design/pages/{page}.html`（新正式稿到位）
 - `design/archive/{page}-{today}.html`（旧正式稿归档）
 - `design/handoff/{scope}-{today}/`（交接包）
 - `design/CHANGELOG.md`、`design/CONTEXT.md`（已更新）
