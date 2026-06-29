@@ -14,7 +14,7 @@
 
 | # | 组件 | 真相源 | 是否进 git |
 |---|---|---|---|
-| 1 | dao 规则体系（skills/commands/agents/dao.md） | 本仓库 `ccswitch/` `.devin/` | ✅ 是 |
+| 1 | dao 规则体系（skills/commands/dao.md） | 本仓库 `ccswitch/` | ✅ 是 |
 | 2 | cc-switch 通用配置（env/hooks/model/permissions） | 本仓库 `config-sync/common/` | ✅ 是 |
 | 3 | settings 脱敏真实值 | `config-sync/common-secrets.json` | ❌ **手动复制** |
 | 4 | MCP servers / skills / prompts / proxy | cc-switch DB（经 config-sync 快照） | ✅ 是（脱敏） |
@@ -49,7 +49,7 @@ node config-sync\lib\doctor.mjs
 
 **自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl 等）属正常机器差异，非问题。
 
-**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao.bat` 选 3（部署）或 `dao.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号；连本机相关见 `.devin/skills/dao-cloud/SKILL.md` 故障排查。
+**自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao.bat` 选 3（部署）或 `dao.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号。
 
 ---
 

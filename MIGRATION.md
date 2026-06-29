@@ -2,6 +2,8 @@
 
 > 善行无辙迹。
 
+> **⚠ 状态更新（2026-06-29）**：`.devin/` 目录已退役删除，`ccswitch/` 是唯一真相源。Windsurf 侧（Sidecar 模式、双栈共存描述）不再适用。以下内容保留为迁移历史记录，不反映当前架构。当前部署方式见本文件「Claude Code 部署」章节。
+
 ## Claude Code CLI 模式（2026.05.31+ · 双栈共存)
 
 windsurf-dao 现在**同时支持 Windsurf 与 Claude Code CLI**,同源不同壳。`ccswitch/` 目录是 Claude Code 侧真相源,与 `.devin/` 并存,均由本仓库 git 管理。

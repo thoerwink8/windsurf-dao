@@ -61,7 +61,7 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 - `ccswitch/` 成为 Claude Code 侧真相源,`dao.ps1 link-claude` 一键全局部署(symlink + @import),幂等可用。
 - 道德经场域 `ccswitch/dao.md` 经 `~/.claude/CLAUDE.md` @import 每条消息常驻。
 - 28 skills + 10 workflows + 8 subagents 全部平移,无 Windsurf 专有名残留,交叉引用无断链。
-- 双栈共存:`.devin/` 保留可用,同源不同壳。
+- ~~双栈共存~~ `.devin/` 已于 2026-06-29 退役删除，ccswitch 为唯一真相源。
 
 **四个决策**:① symlink 真相源 ② 借机精简(为道日损,删与 Claude Code 内置 shell/git 安全重叠项) ③ 双栈共存 ④ 续力铁律降级为「路歧则问」(对齐 Claude Code 克制原则)。
 
