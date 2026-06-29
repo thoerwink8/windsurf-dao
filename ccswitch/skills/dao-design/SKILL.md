@@ -1,7 +1,7 @@
 ---
 name: dao-design
 description: 设计工作双端统一入口——静默扫描上下文后识别模式，动态呈现最相关的操作选项。OD 端原型设计与 CLI 端实施同步从这里路由，用户无需记住子命令。
-argument-hint: "[sync|实现 X|升格|反向生成|审计|系统|OD提示词]"
+argument-hint: "[sync|实现 X|升格|反向生成|审计|系统|OD提示词|od-sync]"
 disable-model-invocation: true
 ---
 
@@ -22,6 +22,7 @@ disable-model-invocation: true
 | [fidelity.md](fidelity.md) | Read [fidelity.md](fidelity.md) | 还原度五层金字塔 | 还原度验证/审计时 |
 | [standards.md](standards.md) | dao-design-standards | 审美判据·体检表·布局方法论 | 需要设计判据时 |
 | [component-radar.md](component-radar.md) | dao-component-radar | 结构健康门（组件提炼检测） | UI 文件编辑时 |
+| [od-panel-sync.md](od-panel-sync.md) | — | OD 面板同步（design/ → OD 项目工作目录） | 路由到 OD 面板同步时 |
 
 ## 跨 skill 路由铁律
 
@@ -80,6 +81,7 @@ AskUserQuestion（选项由上下文动态构建）
 | `反向生成` / `从代码生成` / `§A` | intent=反向生成 | Read [asset.md](asset.md) §A |
 | `看状态` / `列草稿` / `状态` | intent=查看状态 | 读 CONTEXT.md 展示 |
 | `设计系统` / `token` / `system` | intent=设计系统 | Read [system.md](system.md) |
+| `od同步` / `面板同步` / `od-sync` / `刷新面板` | intent=OD面板同步 | Read [od-panel-sync.md](od-panel-sync.md) |
 
 提取到 intent 后，进入 §P.2 定位 scope；未能提取 intent，进入 §P.3 纯功能名解析。
 
@@ -270,6 +272,7 @@ AskUserQuestion（选项由上下文动态构建）
 | 设计系统 token | Read [system.md](system.md) | — |
 | OD 新原型（§O.0） | Read [asset.md](asset.md) §O.0 | 功能名 |
 | OD 验收 + HANDOFF（§O.4） | Read [asset.md](asset.md) §O.4 | 工作区名 |
+| OD 面板同步 | Read [od-panel-sync.md](od-panel-sync.md) | odProjectId（可选） |
 
 ### 外部交接（handoff to another `/` command）
 
