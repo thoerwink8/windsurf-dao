@@ -6,23 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 这是什么（先读这一段）
 
-这**不是代码库，是一套 AI 行为规则系统**——用《道德经》《阴符经》哲学定义 AI 如何思考/行动/协作的规则、技能、命令、子代理。没有 `package.json`、没有构建产物、没有应用入口。"产物"就是 Markdown 规则文件 + 把它们部署到各宿主（Claude Code / Windsurf / Codex）的 PowerShell/Node 链接脚本。
+这**不是代码库，是一套 AI 行为规则系统**——用《道德经》《阴符经》哲学定义 AI 如何思考/行动/协作的规则、技能、命令、子代理。没有 `package.json`、没有构建产物、没有应用入口。"产物"就是 Markdown 规则文件 + 把它们部署到各宿主（Claude Code / Codex）的 PowerShell/Node 链接脚本。
 
 判断改动是否合理的尺子不是"能不能跑"，而是 dao 场域八句根基（尤其**为道日损**：删 > 改 > 增，新建文件门槛高于删除）。
 
-## 核心架构：双栈同源（最重要的大局）
+## 核心架构（最重要的大局）
 
-同一套 dao 内核，两副外壳，**git 单一真相源**：
+dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，**git 单一真相源**：
 
-| 外壳 | 目录 | 宿主 | 加载机制 |
-|---|---|---|---|
-| Claude Code 侧 | `ccswitch/` | Claude Code CLI | `dao.ps1 link-claude` → symlink 到 `~/.claude/` + `dao.md` 的 `@import` |
-| Windsurf 侧 | `.devin/` | Windsurf IDE | Sidecar workspace 自动可见 + `dao.ps1 link-global` |
-| Codex 侧 | （镜像 ccswitch） | Codex | `dao.ps1 link-codex` → 镜像到 `~/.codex/skills` |
+| 目录 | 宿主 | 加载机制 |
+|---|---|---|
+| `ccswitch/` | Claude Code CLI | `dao.ps1 link-claude` → symlink 到 `~/.claude/` + `dao.md` 的 `@import` |
+| （镜像 ccswitch） | Codex | `dao.ps1 link-codex` → 镜像到 `~/.codex/skills` |
 
-**关键推论**：`ccswitch/` 与 `.devin/` 是镜像关系（skills/commands↔workflows/agents/stacks 一一对应）。改一条规则的语义，通常要在**两侧都改**以保持同源；只改一侧会造成双栈漂移。`scripts/dao-smoke.mjs` 会校验两侧 frontmatter 与交叉引用一致性。
+部署是 **symlink/Junction**，不是拷贝：编辑仓库内文件 → 已链接的宿主立即可见，无需重新部署。`scripts/dao-smoke.mjs` 校验 ccswitch skills 的 frontmatter 与交叉引用一致性。
 
-部署是 **symlink/Junction**，不是拷贝：编辑仓库内文件 → 已链接的宿主立即可见，无需重新部署。
+> 历史：`.devin/`（Windsurf 侧）已于 2026-06-29 退役删除，内容早已迁移至 ccswitch。需要时可从 git 历史恢复。
 
 ## 知识归位（改之前先确认写到哪）
 
@@ -58,10 +57,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 自检与测试（无 test runner 框架，直接跑）：
 
 ```powershell
-node scripts/dao-smoke.mjs                    # dao 生态完整性自检（两侧 frontmatter / 交叉引用）
+node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 .\tests\link-codex.tests.ps1                  # 单个 PowerShell 测试（自带 Assert-* 断言，独立可跑）
 .\tests\link-codex-prompts.tests.ps1
-py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
+py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 ```
 
 ## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
@@ -75,7 +74,7 @@ py .devin/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教
 
 ## 本仓库工程注意
 
-- **改规则要顾及双栈**：`ccswitch/`（Claude Code，本宿主主战场）与 `.devin/`（Windsurf）同源，语义改动两侧同步，改完跑 `node scripts/dao-smoke.mjs` 验证。
+- **改规则后跑 smoke test**：改完跑 `node scripts/dao-smoke.mjs` 验证 ccswitch skills frontmatter 与交叉引用。
 - **commit 前缀**：本宿主是 Claude Code，subject 必须以 `[cc] ` 开头（提交前自检宿主，详见 dao.md「言·名之则」）。
 - **PowerShell 假错**：`dao.ps1` / `*.ps1` 用 `$LASTEXITCODE` 判成败，不看输出有无 "error"；中文「所在位置 行:X」是 ErrorRecord 非真错；禁 `2>&1`（混流致假错）。
 - **bash 脚本 LF 行尾**：`.gitattributes` 强制 `*.sh eol=lf`，避免 Windows clone 后 CRLF 化导致 shebang 失效。
