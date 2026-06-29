@@ -196,3 +196,15 @@ design/
 ```
 
 SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含：核心原则、三层 HTML 模板、Tailwind 类名速查（颜色/圆角/字号/阴影/动效）、组件模式、禁止项。
+
+### OD 端协议（.od-skills/dao-design-protocol.md）
+
+`design/.od-skills/` 目录下放置 `dao-design-protocol.md`，让 OD Claude 自动加载 dao-design 方法论。内容包含：三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、与 CLI 端的协作模型。
+
+`.gitignore` 需否定规则使此文件入库（OD 自动生成的其他 skills 仍 gitignore）：
+```
+/design/.od-skills/
+!/design/.od-skills/dao-design-protocol.md
+```
+
+此文件与 `PROTOTYPE-SPEC.md` 互补：protocol 定义**流程**（怎么工作），SPEC 定义**内容**（具体的 config 和类名映射）。
