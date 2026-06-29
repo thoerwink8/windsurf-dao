@@ -80,6 +80,7 @@ design/
   handoff/                 ← 交接包（一次升格一个目录）
     {scope}-{YYYYMMDD}/    ← _index / components / types / prompts / acceptance
   CONTEXT.md               ← 会话对齐（新开会话第一眼读）
+  PROTOTYPE-SPEC.md        ← OD 原型输出规范（三层 Tailwind 策略 + 项目 config 映射）
   CHANGELOG.md             ← 升格日志
 ```
 
@@ -167,6 +168,7 @@ design/
 - [ ] `design/handoff/` 存在
 - [ ] `design/CONTEXT.md` 存在（会话对齐入口）
 - [ ] `design/CHANGELOG.md` 存在
+- [ ] `design/PROTOTYPE-SPEC.md` 存在（OD 原型输出规范：三层 Tailwind 策略 + 项目 tailwind.config 映射 + 类名速查。缺项时从项目 `tailwind.config.*` 自动生成骨架——见下方模板）
 - [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
 
 **若检测到 `src-tauri/` 或 `electron` 依赖，额外检查：**
@@ -176,3 +178,21 @@ design/
 - [ ] `CLAUDE.md` 记录了 `dev:debug` 命令及说明
 
 缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。
+
+### PROTOTYPE-SPEC.md 生成指引
+
+`design/PROTOTYPE-SPEC.md` 缺失时，按以下方式生成骨架：
+
+1. 探测项目 `tailwind.config.*`
+2. 有 config → 提取 `theme.extend`（colors / borderRadius / fontSize / spacing / boxShadow / transitionDuration / transitionTimingFunction），生成包含三层 HTML 模板 + Tailwind 类名速查的 SPEC
+3. 无 config → 生成最小骨架（三层模板 + 标准 Tailwind 类名，无自定义映射），标注 `<!-- 项目成熟后补充自定义 config -->`
+
+三层结构原则（所有项目通用）：
+
+```
+层 1 — 项目 CSS 变量（<link> 引用共享 CSS，含主题 token + 组件基类）
+层 2 — Tailwind CDN + 项目 tailwind.config（CSS 变量 → 语义类名映射）
+层 3 — 补丁 <style>（仅 Tailwind 无法覆盖的，如 keyframes）
+```
+
+SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含：核心原则、三层 HTML 模板、Tailwind 类名速查（颜色/圆角/字号/阴影/动效）、组件模式、禁止项。
