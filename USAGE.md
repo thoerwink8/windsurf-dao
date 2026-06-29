@@ -260,7 +260,7 @@ AI 在编码遇阻时自动启动（跨 ≥3 文件 / 尝试失败 / 复杂算�
 
 **不要。** AI 按场景自动加载，你不需要知道它们的名字。
 
-如果好奇可以看 `.devin/skills/` 目录，但日常使用不需要。
+如果好奇可以看 `ccswitch/skills/` 目录，但日常使用不需要。
 
 ### Q6 · /dao-dev 和 /dao-superpowers 同时用吗？
 
@@ -272,7 +272,7 @@ AI 在编码遇阻时自动启动（跨 ≥3 文件 / 尝试失败 / 复杂算�
 
 ### Q7 · 我看到 AI 报「dao-meta 三关过审」是什么意思？
 
-dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文件时自动触发，确保改动满足：
+dao-meta 是 dao 体系自我守卫机制，改 `ccswitch/` 下核心文件（dao.md / skills / commands）时自动触发，确保改动满足：
 1. 通用性（不是项目特殊巫态）
 2. 内容边界（不与现有规则冲突）
 3. 影响评估（其他文件是否需协同）
@@ -319,7 +319,7 @@ dao-meta 是 dao 体系自我守卫机制，改 `.devin/rules/**` 等核心文�
 - 部署/迁移：[MIGRATION.md](MIGRATION.md)
 - 新机器复刻：[NEW-MACHINE.md](NEW-MACHINE.md)
 - AI 自身指南：[AGENT_GUIDE.md](AGENT_GUIDE.md)
-- 规则总览：[`.devin/rules/README.md`](.devin/rules/README.md)
+- 规则总览：[`ccswitch/dao.md`](ccswitch/dao.md)（场域元规则 + skill 正文内嵌行为规则）
 - 道德经原文：[`docs/classics/道德经.md`](docs/classics/道德经.md)
 
 ---
