@@ -15,13 +15,36 @@ Open Design 右侧「设计文件」面板的文件扫描器不跟随 junction /
 
 ## §1 · 解析目标 OD 项目 ID
 
-按以下优先级取得 `odProjectId`：
+按以下优先级取得 `odProjectId`（**用户不需要知道 UUID 的存在**）：
 
-1. **命令参数**：`/dao-design od-sync <od-project-id>` 直接给出
-2. **项目配置文件**：读 `design/.od-sync.json`，取 `odProjectId` 字段
-3. **交互询问**：上述都没有 → AskUserQuestion 让用户输入，并提示可写入配置免得每次问
+1. **项目配置文件**：读 `design/.od-sync.json`，取 `odProjectId` 字段。有则直接用，跳过后续步骤
+2. **命令参数**：`/dao-design od-sync <od-project-id>` 显式给出（高级用法）
+3. **自动发现**：上述都没有 → 查询 OD 本地数据库，列出项目名让用户选
 
-### design/.od-sync.json 示例
+### §1.1 · 自动发现流程（首选路径）
+
+OD 的项目元数据存在 SQLite 数据库中：
+
+```
+$env:APPDATA\Open Design\namespaces\release-stable-win\data\app.sqlite
+```
+
+查询项目列表：
+
+```powershell
+$odDb = "$env:APPDATA\Open Design\namespaces\release-stable-win\data\app.sqlite"
+$projects = sqlite3 $odDb "SELECT id, name FROM projects;"
+```
+
+每行格式 `<uuid>|<项目名>`。解析后用 AskUserQuestion 呈现项目名列表让用户选——**用户看到的是项目名，不是 UUID**。
+
+选定后自动：
+1. 写入 `design/.od-sync.json`（下次直接走优先级 1，不再问）
+2. 继续执行 §2 → §3 同步
+
+**数据库不存在或查询失败** → 降级为 AskUserQuestion 让用户手动输入 UUID，并提示去 OD 数据目录查看。
+
+### §1.2 · design/.od-sync.json 格式
 
 ```json
 {
@@ -32,16 +55,16 @@ Open Design 右侧「设计文件」面板的文件扫描器不跟随 junction /
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `odProjectId` | 是 | OD 项目 UUID |
+| `odProjectId` | 是 | OD 项目 UUID（自动发现会自动填入） |
 | `targetSubdir` | 否 | OD 工作目录下的子目录名，默认 `design` |
 
 取到 `odProjectId` 后，首次同步前用 `Test-Path` 校验目标目录存在：
 
 ```
-C:\Users\Administrator\AppData\Roaming\Open Design\namespaces\release-stable-win\data\projects\<odProjectId>\
+$env:APPDATA\Open Design\namespaces\release-stable-win\data\projects\<odProjectId>\
 ```
 
-不存在 → 报错并提示用户核对 ID，不盲目创建。
+不存在 → 报错并提示用户核对，不盲目创建。
 
 ---
 
