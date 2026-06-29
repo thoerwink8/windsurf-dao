@@ -197,14 +197,18 @@ design/
 
 SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含：核心原则、三层 HTML 模板、Tailwind 类名速查（颜色/圆角/字号/阴影/动效）、组件模式、禁止项。
 
-### OD 端协议（.od-skills/dao-design-protocol.md）
+### OD 端协议（symlink → windsurf-dao）
 
-`design/.od-skills/` 目录下放置 `dao-design-protocol.md`，让 OD Claude 自动加载 dao-design 方法论。内容包含：三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、与 CLI 端的协作模型。
+OD Claude 自动加载 `design/.od-skills/dao-design-protocol.md`，感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型）。
 
-`.gitignore` 需否定规则使此文件入库（OD 自动生成的其他 skills 仍 gitignore）：
-```
-/design/.od-skills/
-!/design/.od-skills/dao-design-protocol.md
-```
+**唯一真相源**：`windsurf-dao/ccswitch/skills/dao-design/protocol-od.md`。
+**项目侧**：`design/.od-skills/dao-design-protocol.md` 是 symlink，不是副本。
+
+创建 symlink（scaffold 自动执行）：
+1. 发现 windsurf-dao 路径——从 `~/.claude/CLAUDE.md` 解析 `@<path>/ccswitch/dao.md` 提取根目录
+2. 创建目录：`mkdir design/.od-skills`（如不存在）
+3. 创建 symlink：`cmd /c mklink "design\.od-skills\dao-design-protocol.md" "<daoRoot>\ccswitch\skills\dao-design\protocol-od.md"`
+
+`.od-skills/` 整个目录 gitignore（symlink 是机器本地指针，不入库）。换机器重跑 scaffold 即恢复。
 
 此文件与 `PROTOTYPE-SPEC.md` 互补：protocol 定义**流程**（怎么工作），SPEC 定义**内容**（具体的 config 和类名映射）。
