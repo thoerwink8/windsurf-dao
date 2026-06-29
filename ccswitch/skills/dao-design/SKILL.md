@@ -95,7 +95,7 @@ AskUserQuestion（选项由上下文动态构建）
 ✅ 找到草稿「{scope}」
 
   草稿路径：design/workspaces/{name}/workspace.html
-  目标正式稿：design/{page}.html
+  目标正式稿：design/pages/{page}.html
   当前状态：{CONTEXT.md 状态列内容}
 
 即将执行：{路由目标}（{路由动作描述}）
@@ -242,7 +242,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 **动态选项**：
 - 「新建功能原型」→ 询问功能名 → 创建 workspaces/{name}/（§O.0）+ WORKSPACE.md（§O.1）
-- 「迭代已有正式稿」→ 列出 design/*.html 供选择，复制为草稿起点
+- 「迭代已有正式稿」→ 列出 design/pages/*.html 供选择，复制为草稿起点
 - 「查看当前所有正式稿状态」→ 读 design/CONTEXT.md 完整展示
 
 ---
