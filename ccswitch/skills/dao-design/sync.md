@@ -209,7 +209,7 @@ git log -1 --format="%ai" -- src/components/Button.tsx
 **Code→Design（OD 端）**：
 
 1. 读代码组件的 git diff
-2. 定位对应的 `design/*.html`
+2. 定位对应的 `design/pages/*.html`
 3. 直接更新 HTML 中对应的 CSS 属性和 DOM 结构
 4. 浏览器打开验证外观
 5. 报告完成
@@ -258,5 +258,5 @@ typecheck: ✓ 通过
 2. **让用户指定文件名** — 漂移检测自动发现，用户只确认范围
 3. **让用户思考方向** — 宿主决定方向，用户不需要知道 Design→Code 还是 Code→Design
 4. **快速模式做 QA 截图** — 快速模式的价值就是快。需要 QA 时用完整模式
-5. **输出文件路径不可点击** — 所有 design/*.html 路径必须输出绝对路径，用户可直接点开浏览器查看
+5. **输出文件路径不可点击** — 所有 design/pages/*.html 路径必须输出绝对路径，用户可直接点开浏览器查看
 6. **描述变更用代码语言** — 说"圆角变大了"不说"border-radius changed"
