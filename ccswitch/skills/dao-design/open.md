@@ -126,7 +126,7 @@ HTML `<head>` 必须遵循三层结构：
 
 在工作区 `workspaces/{name}/` 中修改 `{page}.html`。
 - **样式用 Tailwind 类名**，与代码侧 React 组件 className 一致
-- **自包含**：workspace HTML 可独立浏览（内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 脚本）
+- **自包含**：workspace HTML 可独立浏览（内联 `:root` CSS 变量 + Tailwind CDN 脚本 + 内联 tailwind.config）
 - **亮暗双主题**：`data-theme="light|dark"`
 - **禁止手写 CSS 类做布局/样式**——用 `flex`、`grid`、`gap-4`、`bg-surface`、`rounded-panel` 等 Tailwind 类名
 - **禁止硬编码**：颜色（`#xxx`/`hsl()`）→ 用 `bg-surface` 等；字号（`text-[14px]`）→ 用 `text-sm` 等 token 级别类名
@@ -168,7 +168,7 @@ source: design
 3. **讨论口**：提示词末尾加一句"如果有任何不清楚的地方先讨论，不要猜测后直接画"，给 OD 留提问空间
 4. **实施交接指令**：要求 OD 设计完成后额外输出一段实施交接提示词（变更摘要、CSS 类、DOM 结构、组件映射、交互行为、注意事项），用于粘贴回编码 AI
 5. **工作区指令**：产出必须落 `workspaces/{name}/` 草稿区 + 生成 WORKSPACE.md，不直接改正式稿。升格由 `asset.md` §B 负责
-6. **三层 Tailwind 自包含**：workspace HTML 是自包含文件，可独立在浏览器中打开。自包含通过三层结构实现：① 内联 `:root` CSS 变量定义（从项目 `css/<project>.css` 提取）；② 内联 `tailwind.config` + Tailwind CDN 脚本引用；③ 补丁 `<style>`（仅 Tailwind 无法覆盖的）。HTML 元素样式通过 Tailwind 类名应用（如 `bg-surface`、`rounded-panel`），不手写 CSS 选择器做布局/样式。提示词中须显式加一句："workspace HTML 是自包含文件，通过内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 实现。所有样式用 Tailwind 类名，禁止手写 CSS 选择器做布局/样式。读取项目设计系统 CSS，把所有用到的 token 按分类逐类写入 `:root` 和 tailwind.config，不漏分类。" **验收**：§P.7 关一+关五自动覆盖此项
+6. **三层 Tailwind 自包含**：workspace HTML 是自包含文件，可独立在浏览器中打开。自包含通过三层结构实现：① 内联 `:root` CSS 变量定义（从项目 `css/<project>.css` 提取）；② Tailwind CDN 脚本 + 内联 `tailwind.config`（CDN 必须在 config 前，否则全局 `tailwind` 对象不存在致 config 静默失效）；③ 补丁 `<style>`（仅 Tailwind 无法覆盖的）。HTML 元素样式通过 Tailwind 类名应用（如 `bg-surface`、`rounded-panel`），不手写 CSS 选择器做布局/样式。提示词中须显式加一句："workspace HTML 是自包含文件，通过内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 实现。所有样式用 Tailwind 类名，禁止手写 CSS 选择器做布局/样式。读取项目设计系统 CSS，把所有用到的 token 按分类逐类写入 `:root` 和 tailwind.config，不漏分类。" **验收**：§P.7 关一+关五自动覆盖此项
 7. **锚点重置原则**：`<a>` 元素作为交互控件（按钮、导航项等）使用时，其 CSS 样式类必须显式重置浏览器对锚点的默认装饰（下划线、字体颜色继承等），不可依赖浏览器默认行为。提示词中加一句："用作交互控件的 `<a>` 元素，CSS 须显式重置浏览器默认锚点装饰。" **验收**：§P.7 关四自动覆盖此项
 
 ### §P.4 不做的事
