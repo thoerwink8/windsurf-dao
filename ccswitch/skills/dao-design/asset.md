@@ -31,13 +31,13 @@ design/
       WORKSPACE.md                ← 本次迭代目标与验收条件草稿
   archive/                        ← 旧正式稿降格保留（永不删除）
     {page}-{YYYYMMDD}.html
-  handoff/                        ← 交接包（一次升格一个目录）
+  handoff/                        ← 交接包（持久保留，一次升格一个目录）
     {scope}-{YYYYMMDD}/
-      _index.md                   ← 总览、影响范围、ADR
-      components.md               ← apps/desktop/src/components/ 改动（如有）
-      types.md                    ← packages/shared-types/ 改动（如有）
-      prompts.md                  ← LLM prompt 改动（如有）
-      acceptance.md               ← 可测试验收标准（每次必有）
+      _index.md                   ← 总览 + ADR（必须）
+      acceptance.md               ← 可测试验收标准（必须）
+      components.md               ← 组件改动（如有，具体路径由项目 CLAUDE.md 定义）
+      types.md                    ← 类型变更（如有）
+      prompts.md                  ← LLM 变更（如有）
   CHANGELOG.md                    ← 每次升格自动追加
   CONTEXT.md                      ← 每次升格自动更新
 ```

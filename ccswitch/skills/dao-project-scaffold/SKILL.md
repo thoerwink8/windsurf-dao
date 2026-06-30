@@ -210,7 +210,7 @@ SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含�
 
 ### OD 端协议（symlink → windsurf-dao）
 
-OD Claude 自动加载 `design/.od-skills/dao-design-protocol.md`，感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型）。
+OD 不会自动加载协议——需在会话开头发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」手动激活。激活后 OD 感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型）。
 
 **唯一真相源**：`windsurf-dao/ccswitch/skills/dao-design/protocol-od.md`。
 **项目侧**：`design/.od-skills/dao-design-protocol.md` 是 symlink，不是副本。
