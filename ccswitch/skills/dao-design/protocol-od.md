@@ -5,7 +5,10 @@
 >
 > **部署方式**：本文件位于 windsurf-dao（唯一真相源），各项目 `design/.od-skills/` 通过 symlink 引用。
 >
-> **如何激活**：在 OD 会话开头发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」即可。后续该会话内持续生效。
+> **如何激活**：
+> - **设计模式**：「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」→ 激活协议，进入设计模式
+> - **审计模式**：「读一下 design/.od-skills/dao-design-protocol.md，执行 dao-design」→ 激活 + 立即审计修复全部设计文件
+> - 已激活的会话中直接发 `dao-design` 即可再次触发审计（见末尾 §维护命令）
 
 ---
 
@@ -187,3 +190,50 @@ workspace 验收通过后，立即在同目录写入 `HANDOFF.md`，六节缺一
 ```
 
 你和 CLI 端是**同一个 dao-design 管线的上下游**。你做上游（设计），CLI 做下游（实施）。HANDOFF.md 是交接物，Tailwind 类名是共同语言。
+
+---
+
+## 维护命令（用户发送触发词时执行）
+
+> 以下不是斜杠命令，是 OD 会话中的**触发短语**。用户发送时按对应流程执行。
+
+| 触发词 | 行为 |
+|---|---|
+| `dao-design` / `审计` / `检查所有页面` / `纠错` | 设计文件审计修复（下方定义） |
+
+### 设计文件审计修复
+
+对 design/ 下**所有正式稿**执行纠错 + 标准对齐。不动 workspaces/ 草稿和 archive/ 归档。
+
+**扫描范围**：`pages/*.html` + `components/*.html` + `ref/*.html`
+
+**逐文件检查 + 修复**：
+
+| # | 检查项 | 修复方式 |
+|---|---|---|
+| 1 | **层 2 脚本顺序**：CDN 在 config 之前？ | 交换 `<script>` 位置 |
+| 2 | **三层齐全**：层 1（CSS）+ 层 2（CDN + config）+ 层 3（补丁 style）| 补缺失层 |
+| 3 | **模板一致**：`<head>` 结构与 PROTOTYPE-SPEC.md 模板对齐（meta / 主题脚本 / font link） | 对齐模板 |
+| 4 | **config 一致**：`tailwind.config` 的 token 映射与 PROTOTYPE-SPEC.md 一致 | 对齐 PROTOTYPE-SPEC.md 中的 config |
+| 5 | **变量自包含**（关一）：`var(--*)` 引用均有定义 | 报告缺失（需确认 token 来源，不盲补） |
+| 6 | **无硬编码**（关二+三）：无 `text-[Npx]`、`bg-[#xxx]`、内联字号/颜色 | 替换为语义 token 类名 |
+| 7 | **锚点重置**（关四）：交互 `<a>` 有 `no-underline` 或等效 | 加重置类 |
+| 8 | **文件分类**：文件在正确目录（§工作区模型 文件分类标准）？ | 仅报告建议，不自动移动 |
+
+**渲染验证**（关六）：修复后对每个文件执行渲染自检——页面非空白 + 抽检自定义类 computed 值 ≠ 默认值。
+
+**输出格式**：
+
+```
+## 设计文件审计报告
+
+| 文件 | 问题 | 状态 |
+|---|---|---|
+| pages/workspace.html | 层 2 脚本顺序反 | ✅ 已修复 |
+| pages/index.html | — | ✅ 通过 |
+| ... | ... | ... |
+
+修复 {N} 个文件，{M} 个已通过。
+```
+
+修复后的文件自动反映在 OD「设计文件」面板。
