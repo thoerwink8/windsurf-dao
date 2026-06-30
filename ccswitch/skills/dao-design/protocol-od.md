@@ -1,9 +1,11 @@
 # dao-design · OD 端协议
 
-> 本文件是 OD Claude 自动加载的设计协议。定义你如何输出设计原型、如何与代码侧 Claude Code 协作。
+> 本文件是 OD 端的设计协议。OD **不会自动加载**本文件——需要在会话开头手动引用（见下方「如何激活」）。
 > 对应 CLI 端 skill: `dao-design`（open.md §P）。
 >
 > **部署方式**：本文件位于 windsurf-dao（唯一真相源），各项目 `design/.od-skills/` 通过 symlink 引用。
+>
+> **如何激活**：在 OD 会话开头发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」即可。后续该会话内持续生效。
 
 ---
 
@@ -48,18 +50,56 @@
 
 ```
 design/
-  pages/                   ← 页面设计稿（对应代码路由，只读）
+  pages/                   ← 页面设计稿（对应代码路由，只读真相源）
     {page}.html
-  components/              ← 组件/弹窗设计稿（覆盖层）
+  components/              ← 组件/弹窗设计稿（覆盖层，非独立页面）
     {component}.html
-  ref/                     ← 参考工具（不对应代码）
+  ref/                     ← 参考工具（不对应代码，辅助开发）
     gallery.html
-  workspaces/
+    component-gallery.html
+  workspaces/              ← 草稿区（临时，升格后删除）
     {功能名}/
       {page}.html          ← 草稿（你的产出在这里）
       WORKSPACE.md         ← 迭代目标 + 完成标志
-      HANDOFF.md           ← 工程交接文档（设计完成后必须生成）
+  archive/                 ← 旧正式稿（升格时自动降格至此，永不删除/编辑）
+    {page}-{YYYYMMDD}.html
+  handoff/                 ← 交接包（持久保留，一次升格一个目录）
+    {scope}-{YYYYMMDD}/
+      _index.md            ← 总览 + ADR
+      acceptance.md        ← 验收标准（必须）
+      components.md        ← 组件改动（如有）
+      types.md             ← 类型变更（如有）
+      prompts.md           ← LLM 变更（如有）
+  css/<project>.css        ← 共享设计系统（CSS 变量 + 组件类 + 布局原语）
+  js/<project>.js          ← 共享行为（主题切换 + 持久化）
+  CONTEXT.md               ← 全局上下文（会话恢复 + 页面状态追踪）
+  CHANGELOG.md             ← 升格日志（每次 promote 自动追加）
+  PROTOTYPE-SPEC.md        ← 项目专属 OD 输出规范（如有）
 ```
+
+### 文件分类标准
+
+| 判据 | 分类 | 位置 |
+|------|------|------|
+| 对应代码侧一个路由/页面？ | 页面设计稿 | `pages/` |
+| 是叠加层/弹窗/抽屉/组件？ | 组件设计稿 | `components/` |
+| 不对应代码，辅助开发/展示？ | 参考工具 | `ref/` |
+| 已被取代/不在 CONTEXT.md？ | 归档稿 | `archive/` |
+
+### archive 规则
+
+- **永不删除**：归档有历史价值（设计决策时间线证据）
+- **永不编辑**：只读历史快照
+- 命名格式：`{page}-{YYYYMMDD}.html`（降格日期 = 新版升格当天）
+- 升格时自动完成：旧 `pages/{page}.html` → `archive/{page}-{YYYYMMDD}.html`
+
+### handoff 规则
+
+交接包与 workspace 分离——workspace 是临时的（升格后删除），交接文档有持久价值（历史参考、决策回溯）。
+
+- 升格时将交接内容从 workspace 移入 `handoff/{scope}-{YYYYMMDD}/`
+- `_index.md` 总览 + ADR（必须）；`acceptance.md` 验收标准（必须）；其余按需
+- HANDOFF.md 的六节内容（§下方定义）在 workspace 中先生成，升格时拆分或直接移入
 
 ### 草稿自包含要求
 
