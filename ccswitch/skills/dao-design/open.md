@@ -70,7 +70,8 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 1. 在 Open Design 中打开项目会话
 2. 点击左下角「选择工作目录」→ 选择 `<项目根>/design`
-3. 将以下文件拖到右侧「设计文件」面板作为参考资产：
+3. **激活设计协议**：发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」（项目有 `.od-skills/` symlink 时；无则跳过，Part B 提示词已内含关键规范）
+4. 将以下文件拖到右侧「设计文件」面板作为参考资产：
 
 | 文件 | 用途 |
 |------|------|
@@ -78,7 +79,7 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 | `workspaces/{name}/{page}.html` | 当前修改基准（已复制的副本） |
 | `pages/<相关页面>.html` | 需要视觉一致的相关页面（按需） |
 
-4. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
+5. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
 ```
 
 **Part B · 设计提示词**（粘贴给 OD AI 的内容）
@@ -261,23 +262,31 @@ HANDOFF.md 已写入 `design/workspaces/{name}/HANDOFF.md`，可直接交工程�
 
 ## §0 · Open Design 产出格式
 
-Open Design 的产出是一个自包含的设计资产目录，典型结构：
+Open Design 的产出是一个自包含的设计资产目录。完整目录规范见 `protocol-od.md` §工作区模型，此处列出 CLI 端关注的结构：
 
 ```
 design/
 ├── .od-skills/           # Open Design 的设计技能（审美标准参考，只读）
-├── .claude/              # Claude Code 集成配置（预留）
 ├── css/<project>.css     # 共享设计系统（CSS 变量 + 组件类 + 布局原语）
 ├── js/<project>.js       # 共享行为（主题切换 + 持久化）
-├── screenshots/          # 参考截图
-├── pages/                # 页面设计稿（对应代码路由）
-│   └── {page}.html       # 各页面原型（自包含、可独立浏览）
+├── pages/                # 页面设计稿（对应代码路由，只读真相源）
+│   └── {page}.html
 ├── components/           # 组件/弹窗设计稿（覆盖层，非独立页面）
 │   └── {component}.html
 ├── ref/                  # 参考工具（不对应代码，辅助开发）
-│   ├── gallery.html      # 全页面索引画廊
+│   ├── gallery.html
 │   └── component-gallery.html
-└── *.html.artifact.json  # 每页元数据（版本、状态、时间戳）
+├── workspaces/           # 草稿区（临时，升格后删除）
+│   └── {name}/
+│       ├── {page}.html   # 草稿原型
+│       └── WORKSPACE.md  # 迭代目标 + source（design|code）
+├── archive/              # 旧正式稿（升格时降格至此，永不删除/编辑）
+│   └── {page}-{YYYYMMDD}.html
+├── handoff/              # 交接包（持久保留，一次升格一个目录）
+│   └── {scope}-{YYYYMMDD}/
+├── CONTEXT.md            # 全局上下文（会话恢复 + 页面状态追踪）
+├── CHANGELOG.md          # 升格日志（每次 promote 自动追加）
+└── PROTOTYPE-SPEC.md     # 项目专属 OD 输出规范（如有）
 ```
 
 **设计系统 CSS** 是最关键的文件——包含：
