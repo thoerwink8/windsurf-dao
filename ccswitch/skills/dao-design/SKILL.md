@@ -302,7 +302,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 > 善行无辙迹。截图不是额外步骤，是 AI 完成 UI 改动后的自然收尾——用户看图验收，不看代码猜效果。
 
-**触发条件**：本次会话通过 dao-design 任一流程（sync / 实施 / 升格后实施 / 还原度验证）修改了含 JSX 的 `.tsx` 文件或 CSS 文件。
+**触发条件**：本次会话通过 dao-design 任一流程（sync / 实施 / 升格后实施 / 还原度验证）修改了含 JSX 的 `.tsx` 文件或 CSS 文件，**或 OD 端新建/迭代了 workspace 草稿**（protocol-od.md 关六 · 渲染自检）。
 
 ### §V.1 · 截图目录
 
@@ -323,6 +323,7 @@ AskUserQuestion（选项由上下文动态构建）
 | asset.md §C 一键实施 | 实施完成、typecheck 通过后执行 §V |
 | fidelity.md 审计 | 审计本身产出截图，`<context>` 固定 `fidelity` |
 | 非 dao-design 的 ad-hoc UI 改动 | 改了 UI 组件就截，不限于 `/dao-design` 触发 |
+| OD workspace 草稿（protocol-od.md 关六） | OD 端自检用渲染工具；CLI 端 sync/promote 处理 workspace 草稿时同样验证渲染 |
 
 ### §V.4 · 不做什么
 
