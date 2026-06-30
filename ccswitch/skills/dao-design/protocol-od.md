@@ -25,9 +25,10 @@
        项目 CSS 变量（主题 token + 组件基类）
        （正式稿在 pages/ 子目录，href 上跳一层；workspace 用内联 :root 不用 <link>）
 
-层 2 — <script>tailwind.config = {...}</script>
-       <script src="https://cdn.tailwindcss.com"></script>
+层 2 — <script src="https://cdn.tailwindcss.com"></script>
+       <script>tailwind.config = {...}</script>
        Tailwind CDN + 项目自定义 config
+       （顺序不可反：CDN 脚本创建全局 tailwind 对象，config 必须在其后，否则 ReferenceError 致自定义 token 静默失效）
 
 层 3 — <style>/* 补丁 */</style>
        仅 Tailwind 无法覆盖的（keyframes、prefers-reduced-motion 等）
@@ -136,6 +137,9 @@ source: design
 | 三 | **无硬编码颜色**：class 中无 `bg-[#xxx]`，style 中无颜色字面量 | 零结果 |
 | 四 | **锚点重置**：交互控件 `<a>` 有 `no-underline` 或等效重置 | 全覆盖 |
 | 五 | **三层完整**：head 中三层结构均存在且顺序正确 | 三层齐全 |
+| 六 | **渲染自检**：对本轮产出的每个 workspace HTML 执行真实渲染（OD 用渲染工具，CLI 用 playwright/chrome-devtools）。必查：① 页面非空白、非全无样式（排除 config 未加载）；② 抽检一个依赖自定义 config 的 Tailwind 类（如 `bg-accent`、自定义 `rounded-*`），其 computed 值 ≠ 浏览器默认值 | 渲染成功 + 抽检的自定义类已解析为设计 token 值（非 Tailwind 内置默认值） |
+
+> 关一–五是静态文本检查，关六是运行时验证。两者互补：文本检查拦硬编码，渲染自检拦"写对了但没生效"（如脚本顺序错误致 config 静默失效）。
 
 ---
 
