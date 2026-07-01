@@ -70,7 +70,7 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 1. 在 Open Design 中打开项目会话
 2. 点击左下角「选择工作目录」→ 选择 `<项目根>/design`
-3. **激活设计协议**：发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」（项目有 `.od-skills/` symlink 时；无则跳过，Part B 提示词已内含关键规范）
+3. **激活设计协议**：发送 `/dao-design`（项目有 `.od-skills/` symlink 时；无则跳过，Part B 提示词已内含关键规范）
 4. 将以下文件拖到右侧「设计文件」面板作为参考资产：
 
 | 文件 | 用途 |

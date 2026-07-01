@@ -210,7 +210,7 @@ SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含�
 
 ### OD 端协议（symlink → windsurf-dao）
 
-OD 不会自动加载协议——需在会话开头发送「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」手动激活。激活后 OD 感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型）。
+OD 不会自动加载协议——需在会话开头发送 `/dao-design` 手动激活（README.md 路由到 dao-design-protocol.md）。激活后 OD 感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型、维护命令）。
 
 **唯一真相源**：`windsurf-dao/ccswitch/skills/dao-design/protocol-od.md`。
 **项目侧**：`design/.od-skills/dao-design-protocol.md` 是 symlink，不是副本。
@@ -218,7 +218,11 @@ OD 不会自动加载协议——需在会话开头发送「读一下 design/.od
 创建 symlink（scaffold 自动执行）：
 1. 发现 windsurf-dao 路径——从 `~/.claude/CLAUDE.md` 解析 `@<path>/ccswitch/dao.md` 提取根目录
 2. 创建目录：`mkdir design/.od-skills`（如不存在）
-3. 创建 symlink：`cmd /c mklink "design\.od-skills\dao-design-protocol.md" "<daoRoot>\ccswitch\skills\dao-design\protocol-od.md"`
+3. 创建 symlink（两个）：
+   - `cmd /c mklink "design\.od-skills\README.md" "<daoRoot>\ccswitch\skills\dao-design\od-readme.md"`
+   - `cmd /c mklink "design\.od-skills\dao-design-protocol.md" "<daoRoot>\ccswitch\skills\dao-design\protocol-od.md"`
+
+README.md 是路由入口——用户在 OD 发送 `/dao-design` 时，OD 搜索 `.od-skills/` 发现 README → 被指引读取 `dao-design-protocol.md`。
 
 `.od-skills/` 整个目录 gitignore（symlink 是机器本地指针，不入库）。换机器重跑 scaffold 即恢复。
 

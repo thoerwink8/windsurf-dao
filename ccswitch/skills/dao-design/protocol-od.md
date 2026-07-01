@@ -1,14 +1,11 @@
 # dao-design · OD 端协议
 
-> 本文件是 OD 端的设计协议。OD **不会自动加载**本文件——需要在会话开头手动引用（见下方「如何激活」）。
+> 本文件是 OD 端的设计协议，由 `.od-skills/README.md` 路由到此。
 > 对应 CLI 端 skill: `dao-design`（open.md §P）。
 >
 > **部署方式**：本文件位于 windsurf-dao（唯一真相源），各项目 `design/.od-skills/` 通过 symlink 引用。
 >
-> **如何激活**：
-> - **设计模式**：「读一下 design/.od-skills/dao-design-protocol.md，按里面的规范工作」→ 激活协议，进入设计模式
-> - **审计模式**：「读一下 design/.od-skills/dao-design-protocol.md，执行 dao-design」→ 激活 + 立即审计修复全部设计文件
-> - 已激活的会话中直接发 `dao-design` 即可再次触发审计（见末尾 §维护命令）
+> **激活方式**：用户在 OD 会话中发送 `/dao-design`（或 `/dao-design 阅读初始化规则`），由 README.md 路由到本文件。读取后在本会话内持续生效。
 
 ---
 
