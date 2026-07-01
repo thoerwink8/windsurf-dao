@@ -181,6 +181,7 @@ design/
 - [ ] `design/CHANGELOG.md` 存在
 - [ ] `design/PROTOTYPE-SPEC.md` 存在（OD 原型输出规范：三层 Tailwind 策略 + 项目 tailwind.config 映射 + 类名速查。缺项时从项目 `tailwind.config.*` 自动生成骨架——见下方模板）
 - [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
+- [ ] `.vscode/settings.json` 用 `files.exclude` 隐藏 Open Design 生成的 `*.artifact.json`（及同类工具自动生成、已在 `.gitignore` 但仍会出现在 Explorer 树里的文件）。这类文件不受 git 追踪，属于本地视觉干扰而非仓库结构债务，不要误判为"目录混乱"去做大规模重排——`.vscode/settings.json` 已在多数项目 `.gitignore` 中被显式排除跟踪（`!.vscode/settings.json`），可安全共享（TraceyU project-structure-overhaul Loop 实证：`design/` 根目录 19 个 `.artifact.json` 全部已 gitignore，真正需要改的只有这一个 IDE 配置文件）
 
 **若检测到 `src-tauri/` 或 `electron` 依赖，额外检查：**
 
