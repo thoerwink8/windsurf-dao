@@ -26,6 +26,7 @@ description: 设计系统基础层生成器——通过交互问答收集项目�
 ```
 
 1. **检测上下文**：查 `design/css/*.css`、`**/index.css`、`tailwind.config.*`、`.claude/rules/design-*.md` 是否存在
+   - **开工包输入**：无 css/config 的新项目，若存在 `docs/kit/DESIGN-BRIEF.md` → 以其 token 意向节为底稿生成 `css/<project>.css` 基础层（提示词「项目上下文」注明来源），§2 中 kit 已答的必问项不再问——这填上 protocol-od.md 无 SPEC 且无 css 时的 fallback 空洞
 2. **问用户**（见 §2）
 3. **有 design/ 时 · 审计**：扫描当前 token，生成合规报告
 4. **输出**：一份可直接复制给 OD 的完整提示词（含自适应文件感知指令，见 §1.5）

@@ -40,6 +40,16 @@ disable-model-invocation: true
 
 delegated-continuous 模式下：AI 自审替代用户审批,只在方向互斥 / 不可逆风险时才问。
 
+## 开工包豁免（凭 kit manifest 学分认定）
+
+输入若是含 `kit.json` manifest 的开工包（如 TraceyU 导出,文档落位 `docs/kit/`）→ 苏格拉底挖掘**降级为差距扫描**：
+
+- 只对三类发问：kit 未覆盖的新约束 / 内部矛盾项 / OPEN-QUESTIONS 中标 `open` 的条目
+- design 文档由 kit 文件引用拼装：`理解`/`真正问题`/`备选方案` 摘自 DECISIONS.md + FRONTEND/BACKEND（引决策 ID,不全文复述）
+- 用户审批的是「AI 对 kit 的理解摘要 + 差距清单」；扫描通过 = design 已审批,可进 plan
+
+铁律不破：仍然"不挖出真实意图不进 plan",只是意图的证据来源从对话换成文档（同 refactor 型 loop 以诊断报告为输入的先例）。无 manifest 的散装文档不享豁免。
+
 ## UI 任务
 
 design 审批后、plan 前,若项目有 `design/` 目录则先过 `/dao-design`（open.md）读取设计资产。

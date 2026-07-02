@@ -56,6 +56,8 @@ argument-hint: "[目标/需求描述]"
 
 从一句话中提取完整信息。
 
+**开工包探测**（析之前先看）：项目根存在 `kit.json` manifest（开工包文档在 `docs/kit/`）→ 1.1/1.2 的产出以 kit 文档为底稿做增量补全，关卡一呈现的是差距清单而非全量理解。
+
 1. **解构需求**
    - 用户要什么？（功能目标）
    - 给谁用？（用户画像）
@@ -123,7 +125,7 @@ argument-hint: "[目标/需求描述]"
 
    | 基建需求 | 检测方式 | 缺失时的动作 |
    |---------|---------|-------------|
-   Web 前端（前端目录+配置 → `stacks/frontend-nextjs.md` 处方）/ 后端（`server/` 入口 → 骨架）/ 数据库（migration+ORM → 框架）/ CI/CD（`.github/workflows/` → 按部署方案）。已有的不动，缺失的补全，子管线自带探测逻辑。
+   Web 前端（前端目录+配置 → `stacks/frontend-nextjs.md` 处方）/ 后端（`server/` 入口 → `stacks/backend-ts.md` 默认处方，命中 Go 信号则 `stacks/backend-go.md`；kit STACK.md 有 `stack:` 声明时按声明挂）/ 数据库（migration+ORM → 框架）/ CI/CD（`.github/workflows/` → 按部署方案）。已有的不动，缺失的补全，子管线自带探测逻辑。
 
 2. **依赖安装**（安全命令按 settings.json 的 permissions 配置自动执行，无需逐条确认的命令已在 allow 列表）
    - 基础设施审计中触发的技术栈处方（如 `stacks/frontend-nextjs.md`）会自行处理依赖
