@@ -20,7 +20,7 @@ interface PageState {
   route: string;
   /** 状态注入函数（mock 数据 / 触发 loading / 设置条件） */
   setup?: (page: import('@playwright/test').Page) => Promise<void>;
-  /** 对应 design/*.html 路径（无则为代码独有态） */
+  /** 对应 design/pages/*.html 路径（无则为代码独有态） */
   designHtml?: string;
   /** 阈值档位 */
   tier: 'core' | 'secondary' | 'dynamic';

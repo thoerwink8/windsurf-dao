@@ -38,11 +38,11 @@ description: Open Design 设计消费引擎——读取 Open Design 产出的设
 
 代码领先于设计稿时，OD 基于过时基线产出的新设计会引入结构冲突。
 
-1. 检查涉及的 `design/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
-2. 如有漂移 → 调用 `asset.md` 反向生成将代码现状同步回 `design/*.html`
+1. 检查涉及的 `design/pages/*.html` 页面是否与当前代码实现一致（快速对比 DOM 结构和关键组件）
+2. 如有漂移 → 调用 `asset.md` 反向生成将代码现状同步回 `design/pages/*.html`
 3. 同步完成后进入下一步
 
-跳过条件：全新页面（`design/` 中不存在对应文件，无漂移可言）。
+跳过条件：全新页面（`design/pages/` 中不存在对应文件，无漂移可言）。
 
 #### 草稿区建立（worktree）
 
@@ -70,15 +70,16 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 1. 在 Open Design 中打开项目会话
 2. 点击左下角「选择工作目录」→ 选择 `<项目根>/design`
-3. 将以下文件拖到右侧「设计文件」面板作为参考资产：
+3. **激活设计协议**：发送 `/dao-design`（项目有 `.od-skills/` symlink 时；无则跳过，Part B 提示词已内含关键规范）
+4. 将以下文件拖到右侧「设计文件」面板作为参考资产：
 
 | 文件 | 用途 |
 |------|------|
 | `css/<project>.css` | 设计系统 token（必须） |
 | `workspaces/{name}/{page}.html` | 当前修改基准（已复制的副本） |
-| `<相关页面>.html` | 需要视觉一致的相关页面（按需） |
+| `pages/<相关页面>.html` | 需要视觉一致的相关页面（按需） |
 
-4. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
+5. 将下方「Part B · 设计提示词」的内容粘贴到 OD 输入框，发送
 ```
 
 **Part B · 设计提示词**（粘贴给 OD AI 的内容）
@@ -91,6 +92,22 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 ## 设计系统
 
 沿用工作目录中的设计系统（`css/<project>.css`）。不要自创 token，所有色彩/字号/圆角/间距/动效使用 CSS 中已定义的变量。双主题（data-theme="light|dark"）。
+
+## 样式方式：Tailwind + 项目 token
+
+**所有 HTML 元素的样式通过 Tailwind 类名应用，不手写 CSS 选择器做布局/样式。** 仅 Tailwind 无法覆盖的（如 @keyframes、复杂伪元素）才用 `<style>` 补丁。
+
+HTML `<head>` 必须遵循三层结构：
+
+层 1 — 项目 CSS 变量（链接 `css/<project>.css`，含主题 token + 组件基类）
+层 2 — Tailwind CDN + 项目自定义 config（读取 `css/<project>.css` 中的 CSS 变量名，映射为 Tailwind 语义类如 `bg-surface`、`rounded-panel`、`text-sm`）
+层 3 — 补丁 `<style>`（仅 Tailwind 无法覆盖的，如 keyframes、prefers-reduced-motion guard）
+
+<如果项目有 design/PROTOTYPE-SPEC.md>
+读取工作目录中的 `PROTOTYPE-SPEC.md`，按其中的三层 HTML 模板和类名速查表输出。
+<否则>
+读取 `css/<project>.css`，自行构建 tailwind.config 映射：提取所有 CSS 变量名，按类别（colors / borderRadius / fontSize / spacing / boxShadow / transitionDuration / transitionTimingFunction）映射为 Tailwind theme.extend。
+</如果>
 
 ## 要设计什么
 
@@ -107,7 +124,12 @@ AI 产出一份 OD 提示词文档（写入 `docs/specs/od-prompt-<topic>.md`）
 
 ## 输出
 
-在工作区 `workspaces/{name}/` 中修改 `{page}.html`，与现有设计文件格式一致（自包含、可独立浏览、亮暗双主题）。
+在工作区 `workspaces/{name}/` 中修改 `{page}.html`。
+- **样式用 Tailwind 类名**，与代码侧 React 组件 className 一致
+- **自包含**：workspace HTML 可独立浏览（内联 `:root` CSS 变量 + Tailwind CDN 脚本 + 内联 tailwind.config）
+- **亮暗双主题**：`data-theme="light|dark"`
+- **禁止手写 CSS 类做布局/样式**——用 `flex`、`grid`、`gap-4`、`bg-surface`、`rounded-panel` 等 Tailwind 类名
+- **禁止硬编码**：颜色（`#xxx`/`hsl()`）→ 用 `bg-surface` 等；字号（`text-[14px]`）→ 用 `text-sm` 等 token 级别类名
 
 完成后在同目录创建 WORKSPACE.md：
 ```yaml
@@ -128,12 +150,14 @@ source: design
 
 ### §P.2 文件扫描
 
-生成提示词前，**自动扫描** `design/` 目录：
+生成提示词前，**自动扫描** `design/` 目录和项目根：
 
 1. `Glob design/css/*.css` — 找到设计系统 CSS 文件名
-2. `Glob design/*.html` — 列出所有现有页面
-3. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
-4. 写入 Part A 的文件清单
+2. `Glob design/pages/*.html` — 列出所有现有页面
+3. `Read design/PROTOTYPE-SPEC.md`（如存在）— 读取项目级原型输出规范（含 tailwind.config 映射 + 类名速查）
+4. `Glob **/tailwind.config.*`（如 PROTOTYPE-SPEC.md 不存在）— 探测项目 tailwind.config，用于自动构建 OD 提示词中的层 2 配置
+5. 判断哪些页面与当前任务相关（要修改的页面 + 视觉上下文页面）
+6. 写入 Part A 的文件清单；PROTOTYPE-SPEC.md 存在时加入 Part A 参考资产
 
 ### §P.3 提示词必含要素
 
@@ -144,7 +168,7 @@ source: design
 3. **讨论口**：提示词末尾加一句"如果有任何不清楚的地方先讨论，不要猜测后直接画"，给 OD 留提问空间
 4. **实施交接指令**：要求 OD 设计完成后额外输出一段实施交接提示词（变更摘要、CSS 类、DOM 结构、组件映射、交互行为、注意事项），用于粘贴回编码 AI
 5. **工作区指令**：产出必须落 `workspaces/{name}/` 草稿区 + 生成 WORKSPACE.md，不直接改正式稿。升格由 `asset.md` §B 负责
-6. **自包含性要求**：workspace HTML 是自包含文件，不链接外部 CSS。OD 读取设计系统 CSS 后必须把所有用到的 token 定义也写入 workspace HTML 的 `:root`，不得只引用 `var(--*)` 而不补全定义。提示词中须显式加一句："workspace HTML 是自包含文件，所有 CSS 变量须在 `:root` 中定义，不依赖外部样式表。读取项目设计系统 CSS，把所有用到的 token 按分类（字号、字体、颜色与前景色、圆角、间距、动效、阴影）逐类写入 `:root`，不漏分类。" **验收**：§P.7 关一自动覆盖此项
+6. **三层 Tailwind 自包含**：workspace HTML 是自包含文件，可独立在浏览器中打开。自包含通过三层结构实现：① 内联 `:root` CSS 变量定义（从项目 `css/<project>.css` 提取）；② Tailwind CDN 脚本 + 内联 `tailwind.config`（CDN 必须在 config 前，否则全局 `tailwind` 对象不存在致 config 静默失效）；③ 补丁 `<style>`（仅 Tailwind 无法覆盖的）。HTML 元素样式通过 Tailwind 类名应用（如 `bg-surface`、`rounded-panel`），不手写 CSS 选择器做布局/样式。提示词中须显式加一句："workspace HTML 是自包含文件，通过内联 `:root` CSS 变量 + 内联 tailwind.config + Tailwind CDN 实现。所有样式用 Tailwind 类名，禁止手写 CSS 选择器做布局/样式。读取项目设计系统 CSS，把所有用到的 token 按分类逐类写入 `:root` 和 tailwind.config，不漏分类。" **验收**：§P.7 关一+关五自动覆盖此项
 7. **锚点重置原则**：`<a>` 元素作为交互控件（按钮、导航项等）使用时，其 CSS 样式类必须显式重置浏览器对锚点的默认装饰（下划线、字体颜色继承等），不可依赖浏览器默认行为。提示词中加一句："用作交互控件的 `<a>` 元素，CSS 须显式重置浏览器默认锚点装饰。" **验收**：§P.7 关四自动覆盖此项
 
 ### §P.4 不做的事
@@ -153,7 +177,7 @@ source: design
 - 不在提示词中硬编码 CSS 属性值——只引用 token 名，具体值由 OD 从 CSS 文件读取
 - 不把流程拆成"第一步/第二步"给用户——产出是一段完整的提示词，用户复制粘贴到 OD 即可
 - 不假设 OD 会话已有上下文——每次都包含完整的文件加载指令
-- 不让 OD 直接输出到 `design/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `asset.md` §B 负责
+- 不让 OD 直接输出到 `design/pages/{page}.html` 正式稿——产出落草稿区 `workspaces/{name}/`，升格由 `asset.md` §B 负责
 
 ### §P.5 · workspace 验收后的强制交付物（HANDOFF.md）
 
@@ -217,14 +241,15 @@ HANDOFF.md 已写入 `design/workspaces/{name}/HANDOFF.md`，可直接交工程�
 
 **触发条件**：OD 产出或修改 workspace HTML 后，声明"设计完成"之前，必须执行本节。
 
-**四关顺序执行**（任一不过，修 workspace.html 后重检，不得声明完成）：
+**五关顺序执行**（任一不过，修 workspace.html 后重检，不得声明完成）：
 
 | 关 | 检查项 | Pass 条件 |
 |---|---|---|
 | 一 | **变量自包含**：读 workspace.html，提取所有 `var(--*)` 引用名与 `:root` 定义名，求差集 | 差集为空——所有被引用的 token 在 `:root` 中有定义 |
-| 二 | **无硬编码字号**：在 workspace.html CSS 区域搜索 `font-size` 后直接接数字单位的写法 | 零结果——所有字号通过 token 引用 |
-| 三 | **无硬编码颜色**：在 `<style>` 块内搜索颜色字面量写法（排除注释） | 零结果——所有颜色通过 token 引用 |
-| 四 | **锚点重置**：找出带 `class` 属性的 `<a>` 元素，检查其匹配 CSS 规则是否显式重置了浏览器默认锚点装饰 | 每个带样式类的 `<a>` 对应 CSS 规则已完成重置 |
+| 二 | **无硬编码字号**：在 workspace.html 中搜索 `font-size` 硬编码（CSS 区域）和 `text-[` Tailwind 任意值（class 属性中） | 零结果——所有字号通过 token 类名（如 `text-sm`） |
+| 三 | **无硬编码颜色**：在 `<style>` 块内搜索颜色字面量 + 在 class 属性中搜索 `bg-[#`、`text-[#`、`border-[#` 等 Tailwind 任意颜色值 | 零结果——所有颜色通过语义类名（如 `bg-surface`） |
+| 四 | **锚点重置**：找出带 `class` 属性的 `<a>` 元素，检查其 Tailwind 类或 CSS 规则是否显式重置了浏览器默认锚点装饰 | 每个 `<a>` 有 `no-underline` 或等效重置 |
+| 五 | **Tailwind 三层完整**：检查 `<head>` 中是否包含三层结构——`:root` CSS 变量定义 + `tailwind.config` 内联脚本 + Tailwind CDN `<script>` 引用 | 三层均存在且顺序正确 |
 
 **修复后同步铁律**：本节发现问题并修复后，必须同步到 workspace HTML 的所有副本（OD 项目数据目录副本 + 外部代码仓副本），两份内容必须一致。
 
@@ -237,18 +262,31 @@ HANDOFF.md 已写入 `design/workspaces/{name}/HANDOFF.md`，可直接交工程�
 
 ## §0 · Open Design 产出格式
 
-Open Design 的产出是一个自包含的设计资产目录，典型结构：
+Open Design 的产出是一个自包含的设计资产目录。完整目录规范见 `protocol-od.md` §工作区模型，此处列出 CLI 端关注的结构：
 
 ```
 design/
 ├── .od-skills/           # Open Design 的设计技能（审美标准参考，只读）
-├── .claude/              # Claude Code 集成配置（预留）
 ├── css/<project>.css     # 共享设计系统（CSS 变量 + 组件类 + 布局原语）
 ├── js/<project>.js       # 共享行为（主题切换 + 持久化）
-├── screenshots/          # 参考截图
-├── *.html                # 各页面原型（自包含、可独立浏览）
-├── *.html.artifact.json  # 每页元数据（版本、状态、时间戳）
-└── gallery.html          # 全页面索引画廊
+├── pages/                # 页面设计稿（对应代码路由，只读真相源）
+│   └── {page}.html
+├── components/           # 组件/弹窗设计稿（覆盖层，非独立页面）
+│   └── {component}.html
+├── ref/                  # 参考工具（不对应代码，辅助开发）
+│   ├── gallery.html
+│   └── component-gallery.html
+├── workspaces/           # 草稿区（临时，升格后删除）
+│   └── {name}/
+│       ├── {page}.html   # 草稿原型
+│       └── WORKSPACE.md  # 迭代目标 + source（design|code）
+├── archive/              # 旧正式稿（升格时降格至此，永不删除/编辑）
+│   └── {page}-{YYYYMMDD}.html
+├── handoff/              # 交接包（持久保留，一次升格一个目录）
+│   └── {scope}-{YYYYMMDD}/
+├── CONTEXT.md            # 全局上下文（会话恢复 + 页面状态追踪）
+├── CHANGELOG.md          # 升格日志（每次 promote 自动追加）
+└── PROTOTYPE-SPEC.md     # 项目专属 OD 输出规范（如有）
 ```
 
 **设计系统 CSS** 是最关键的文件——包含：
@@ -267,7 +305,7 @@ design/
 **每次涉及 design/ 目录的 UI 任务，无条件执行本步。**
 
 1. **读 CSS**（`design/css/<project>.css`）：提取全部 token（色彩/字体/圆角/阴影/动画）+ 组件 CSS 类 + 布局结构
-2. **读 HTML**（`design/*.html`）：提取 DOM 层级 + 组件使用 + 交互态 + 响应式 + 主题差异
+2. **读 HTML**（`design/pages/*.html`）：提取 DOM 层级 + 组件使用 + 交互态 + 响应式 + 主题差异
 3. **读 artifact**（`*.artifact.json`）：确认 `status: "complete"` 才翻译
 
 ---
@@ -280,17 +318,17 @@ design/
 
 ### 1.5.0 跨页组件整合扫描
 
-清点前先通读全部 `design/*.html`，提取跨页共享的 CSS 类和 DOM 模式，建立组件复用矩阵（组件模式 | 出现页面 | 设计 CSS 类 | 项目组件 | 策略）。每个组件按 `native/extend/wrap/custom` 四级决策（判据见 §B design-spirit 模板），结果写入 strategy.md。先整合后清点，共享组件 Task 排第一梯队。
+清点前先通读全部 `design/pages/*.html`，提取跨页共享的 CSS 类和 DOM 模式，建立组件复用矩阵（组件模式 | 出现页面 | 设计 CSS 类 | 项目组件 | 策略）。每个组件按 `native/extend/wrap/custom` 四级决策（判据见 §B design-spirit 模板），结果写入 strategy.md。先整合后清点，共享组件 Task 排第一梯队。
 
 ### 1.5.1 全页面清点
 
-枚举 `design/*.html` 所有页面（排除 gallery 索引页），建立清单（页面 | 设计文件 | React 对应 | 当前状态）。**铁律**：每个 html 必须出现，遗漏 = 不得进造线。
+枚举 `design/pages/*.html` 所有页面（排除 gallery 索引页），建立清单（页面 | 设计文件 | React 对应 | 当前状态）。**铁律**：每个 html 必须出现，遗漏 = 不得进造线。
 
 ### 1.5.2 三层结构 Diff（§2.5 结构提取）
 
 每页自顶向下：**布局层**（grid/flex 骨架、容器、导航）→ **节层**（区块结构、面板、tabs）→ **组件层**（props/样式/交互态）。只做组件层 = 遗漏结构偏差。
 
-**执行方式**：按 §2.5 结构提取流程对每个变更的 design/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
+**执行方式**：按 §2.5 结构提取流程对每个变更的 design/pages/*.html 做结构提取，产出实施规格。规格包含 DOM 层级树、CSS→Tailwind 三列映射、约束链分析、CSS 变量变更。这些规格是 §3 Translate 的直接输入——翻译者按规格写代码，不需要"理解设计意图"。
 
 ### 1.5.3 页面维度覆盖矩阵
 
@@ -318,7 +356,7 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 ### 2.5.0 核心原则
 
-1. **读 CSS 源码，不看截图猜**——`design/*.html` 的 `<style>` 块和链接的 CSS 文件是精确数据源
+1. **读 CSS 源码，不看截图猜**——`design/pages/*.html` 的 `<style>` 块和链接的 CSS 文件是精确数据源
 2. **提取属性值，不描述视觉效果**——输出 `padding: 10px 26px` 而不是"增加一些内边距"
 3. **映射 DOM 结构，不只映射样式**——sibling/child 关系决定布局行为（sticky vs flex）
 4. **追踪约束链，不只看单个元素**——overflow-scroll 依赖从 root 到容器的完整 min-height:0 链
@@ -329,10 +367,10 @@ plan 覆盖矩阵增加 页面×层级 维度。空白且未标 `deferred` = pla
 
 ```bash
 # 设计文件变更
-git diff [base]..HEAD -- design/*.html design/css/*.css
+git diff [base]..HEAD -- design/pages/*.html design/components/*.html design/css/*.css
 
 # 或指定文件
-git diff HEAD~1 -- design/workspace.html
+git diff HEAD~1 -- design/pages/workspace.html
 ```
 
 **变更分类**：
@@ -496,7 +534,7 @@ CSS 变量变更：
 
 ### 4.2 视觉验证（截图对比）
 
-1. 在浏览器中打开 `design/*.html`（Open Design 原型）
+1. 在浏览器中打开 `design/pages/*.html`（Open Design 原型）
 2. 运行项目应用（开发服务器或桌面端）
 3. 截图同一页面，并排对比
 
