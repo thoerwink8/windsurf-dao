@@ -5,8 +5,13 @@
 // 本 hook 扫描每条用户消息,在高置信信号出现时注入 ONE 短指针,把"靠 AI 记忆的软行为"
 // 变成确定性触发。指针只指路(该做什么→走哪个 skill),不嵌流程(怎么做留给 skill)。
 //
-// 信号优先级(≤1 指针/回合):就绪播报 > 回顾 > 收尾。
+// 信号优先级(≤1 指针/回合):就绪播报 > 回顾 > 新建项目 > 收尾。
 //   - RECALL(v1·稳定):回顾类提问 → 先搜 memory/evolution 再答。
+//   - SCAFFOLD(v3·试验):新建/搭建意图 → 提醒先过 /dao-project-scaffold。
+//     覆盖 dao-scaffold-check.js(SessionStart)跳过非 git 目录的盲区——
+//     "还没 git init 的全新项目"这个更早的时间点，只有 UserPromptSubmit 能覆盖到。
+//     判定标准(2026-07-02 用户定):说出动词就够,不必带"项目/仓库"宾语;
+//     误触发防护从"宾语白名单"反转为"项目内部产物黑名单"(注入只是一句指路提示,宁滥勿漏)。
 //   - CLOSING(v2·试验):强收尾信号 → 提醒 distill。每会话一次,并埋点到 _tmp/rhythm-closing.log。
 //   - READY(v2 自报告):收尾样本攒够阈值 → 一次性播报"可验证调参",让仪器自己举手,
 //     用户无需主动回忆何时该验证(太上不知有之)。
@@ -73,7 +78,7 @@ try {
 
 // ── RECALL(v1·稳定):回顾类提问 → 先搜 memory/evolution 再答 ──
 const RECALL_STEM = /之前|以前|上次|上回|当时|早先|历史上/;
-const RECALL_STRONG = /记得吗|还记得|遇到过吗|碰到过吗|有没有遇到|为什么当时|当初为什么/;
+const RECALL_STRONG = /记得吗|还记得|遇到过吗|碰到过吗|有没有遇到|为什么当时|当初为什么|上个会话|之前的会话|当时怎么|当初怎么|之前怎么|怎么解决的/;
 const Q_MARK = /吗|呢|？|\?|是不是|有没有|为什么|为何|是否/;
 const RECALL_EN = /\b(did|have)\s+we\b|\bremember\b|\blast time\b|\bpreviously\b/i;
 
@@ -87,9 +92,29 @@ if (isRecall) {
   );
 }
 
+// ── SCAFFOLD(v3·试验):新建/搭建意图 → 提醒先过 /dao-project-scaffold ──
+// 三层判定(2026-07-02 标准:动词即够,黑名单防误触):
+//   1. STRONG:动词+项目级宾语(项目/仓库/工具/应用/网站/插件/库/包…)近距同现 → 必触发,黑名单不拦
+//   2. VERB:动词出现且全句无内部产物词 → 触发(如"帮我新起一个"/"创建一下")
+//   3. INTERNAL:组件/函数/文件/分支/环境/变量…在句中 → 视为项目内日常创建,不触发
+const SCAFFOLD_STRONG = /(新建|新起|起个新|另起|搭建?|搭个|初始化|创建)[^。！？!?，,]{0,16}(项目|仓库|工具|应用|网站|站点|博客|平台|系统|插件|repo|app)|脚手架|\bscaffold\b|\bgit\s+init\b|\bbootstrap\s+(a\s+)?(new\s+)?(project|repo|app)\b|(create|start)\s+(a\s+)?(new\s+)?(project|repo(sitory)?|app|site|library|package|tool)|\bnew\s+repo(sitory)?\b/i;
+const SCAFFOLD_VERB = /新建(?!议)|新起|起个新|另起|搭建|搭个|初始化|创建/;
+const SCAFFOLD_INTERNAL = /文件|文件夹|目录|组件|函数|方法|接口|页面|路由|分支|标签|测试|用例|模块|脚本|命令|会话|窗口|弹窗|按钮|卡片|列表|表单|字段|索引|视图|文档|笔记|任务|工单|环境|变量|状态|配置|参数|数据库|一段|一行|hook|skill|rule|command|branch|file|folder|component|function|module|script|table/i;
+
+const isScaffold =
+  SCAFFOLD_STRONG.test(clean) || (SCAFFOLD_VERB.test(clean) && !SCAFFOLD_INTERNAL.test(clean));
+
+if (isScaffold) {
+  inject(
+    "【dao 节律·新建项目】检测到新建项目/仓库意图——建议先执行 /dao-project-scaffold 确认目录结构规范," +
+    "避免事后大规模重排(TraceyU project-structure-overhaul Loop 的教训:设计资产/生成物混杂容易积累成" +
+    "\"看起来乱\"的债务)。"
+  );
+}
+
 // ── CLOSING(v2·试验):强收尾信号 → 提醒 distill,每会话一次,并埋点 ──
 // 仅最高置信收尾短语;显式不收 好了/完成/行了/OK/可以了(高歧义,可能是开始或中途确认)
-const CLOSING = /收工|今天到这|今天先到这|今天就到这|先到这了?|睡了|睡觉|该睡|下班了?|明天继续|明早继续|告一段落|就这样吧|收尾了|大功告成|全部搞定|都搞定了/;
+const CLOSING = /收工|今天到这|今天先到这|今天就到这|今晚(先)?到这|先到这了?|睡了|睡觉|该睡|去睡|准备睡|晚安|下班了?|明天继续|明早继续|回头继续|改天继续|告一段落|就这样吧|收尾了|大功告成|全部搞定|都搞定了|我先撤|先撤了/;
 
 if (CLOSING.test(clean)) {
   const sessMark = path.join(os.tmpdir(), "dao-rhythm", sessionId + ".closed");
