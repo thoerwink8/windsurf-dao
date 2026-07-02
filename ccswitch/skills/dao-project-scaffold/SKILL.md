@@ -70,7 +70,15 @@ disable-model-invocation: true
 
 ```
 design/
-  {page}.html              ← 正式稿（稳定基准，代码侧唯一参考）
+  pages/                   ← 页面设计稿（对应代码路由）
+    {page}.html            ← 正式稿（稳定基准，代码侧唯一参考）
+  components/              ← 组件/弹窗设计稿（覆盖层，非独立页面）
+    {component}.html
+  ref/                     ← 参考工具（不对应代码，辅助开发）
+    gallery.html
+    component-gallery.html
+  css/{project}.css        ← 共享样式
+  js/{project}.js          ← 共享行为
   workspaces/              ← 草稿区（临时，升格后整目录删除）
     README.md              ← 草稿区说明（onboarding）
     {name}/                ← 单个工作区（草稿原型 + WORKSPACE.md）
@@ -80,6 +88,7 @@ design/
   handoff/                 ← 交接包（一次升格一个目录）
     {scope}-{YYYYMMDD}/    ← _index / components / types / prompts / acceptance
   CONTEXT.md               ← 会话对齐（新开会话第一眼读）
+  PROTOTYPE-SPEC.md        ← OD 原型输出规范（三层 Tailwind 策略 + 项目 config 映射）
   CHANGELOG.md             ← 升格日志
 ```
 
@@ -162,12 +171,17 @@ design/
 
 **若检测到 `design/` 目录，额外检查：**
 
+- [ ] `design/pages/` 存在（页面设计稿）
+- [ ] `design/components/` 存在（组件/弹窗设计稿）
+- [ ] `design/ref/` 存在（参考工具）
 - [ ] `design/workspaces/` 存在（含 README.md）
 - [ ] `design/archive/` 存在（含 README.md）
 - [ ] `design/handoff/` 存在
 - [ ] `design/CONTEXT.md` 存在（会话对齐入口）
 - [ ] `design/CHANGELOG.md` 存在
+- [ ] `design/PROTOTYPE-SPEC.md` 存在（OD 原型输出规范：三层 Tailwind 策略 + 项目 tailwind.config 映射 + 类名速查。缺项时从项目 `tailwind.config.*` 自动生成骨架——见下方模板）
 - [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
+- [ ] `.vscode/settings.json` 用 `files.exclude` 隐藏 Open Design 生成的 `*.artifact.json`（及同类工具自动生成、已在 `.gitignore` 但仍会出现在 Explorer 树里的文件）。这类文件不受 git 追踪，属于本地视觉干扰而非仓库结构债务，不要误判为"目录混乱"去做大规模重排——`.vscode/settings.json` 已在多数项目 `.gitignore` 中被显式排除跟踪（`!.vscode/settings.json`），可安全共享（TraceyU project-structure-overhaul Loop 实证：`design/` 根目录 19 个 `.artifact.json` 全部已 gitignore，真正需要改的只有这一个 IDE 配置文件）
 
 **若检测到 `src-tauri/` 或 `electron` 依赖，额外检查：**
 
@@ -176,3 +190,41 @@ design/
 - [ ] `CLAUDE.md` 记录了 `dev:debug` 命令及说明
 
 缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。
+
+### PROTOTYPE-SPEC.md 生成指引
+
+`design/PROTOTYPE-SPEC.md` 缺失时，按以下方式生成骨架：
+
+1. 探测项目 `tailwind.config.*`
+2. 有 config → 提取 `theme.extend`（colors / borderRadius / fontSize / spacing / boxShadow / transitionDuration / transitionTimingFunction），生成包含三层 HTML 模板 + Tailwind 类名速查的 SPEC
+3. 无 config → 生成最小骨架（三层模板 + 标准 Tailwind 类名，无自定义映射），标注 `<!-- 项目成熟后补充自定义 config -->`
+
+三层结构原则（所有项目通用）：
+
+```
+层 1 — 项目 CSS 变量（<link> 引用共享 CSS，含主题 token + 组件基类）
+层 2 — Tailwind CDN + 项目 tailwind.config（CSS 变量 → 语义类名映射）
+层 3 — 补丁 <style>（仅 Tailwind 无法覆盖的，如 keyframes）
+```
+
+SPEC 文件内容由项目填充（不由 dao 固化），但结构必须包含：核心原则、三层 HTML 模板、Tailwind 类名速查（颜色/圆角/字号/阴影/动效）、组件模式、禁止项。
+
+### OD 端协议（symlink → windsurf-dao）
+
+OD 不会自动加载协议——需在会话开头发送 `/dao-design` 手动激活（README.md 路由到 dao-design-protocol.md）。激活后 OD 感知完整 dao-design 方法论（三层输出策略、工作区模型、完成门控、HANDOFF.md 模板、CLI 协作模型、维护命令）。
+
+**唯一真相源**：`windsurf-dao/ccswitch/skills/dao-design/protocol-od.md`。
+**项目侧**：`design/.od-skills/dao-design-protocol.md` 是 symlink，不是副本。
+
+创建 symlink（scaffold 自动执行）：
+1. 发现 windsurf-dao 路径——从 `~/.claude/CLAUDE.md` 解析 `@<path>/ccswitch/dao.md` 提取根目录
+2. 创建目录：`mkdir design/.od-skills`（如不存在）
+3. 创建 symlink（两个）：
+   - `cmd /c mklink "design\.od-skills\README.md" "<daoRoot>\ccswitch\skills\dao-design\od-readme.md"`
+   - `cmd /c mklink "design\.od-skills\dao-design-protocol.md" "<daoRoot>\ccswitch\skills\dao-design\protocol-od.md"`
+
+README.md 是路由入口——用户在 OD 发送 `/dao-design` 时，OD 搜索 `.od-skills/` 发现 README → 被指引读取 `dao-design-protocol.md`。
+
+`.od-skills/` 整个目录 gitignore（symlink 是机器本地指针，不入库）。换机器重跑 scaffold 即恢复。
+
+此文件与 `PROTOTYPE-SPEC.md` 互补：protocol 定义**流程**（怎么工作），SPEC 定义**内容**（具体的 config 和类名映射）。
