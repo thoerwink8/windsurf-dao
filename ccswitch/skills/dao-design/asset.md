@@ -496,6 +496,8 @@ source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
 
 工作区命名建议：`feature-{描述}` 或 `{page}-v{N}`
 
+**开工包提示词注入**：若 `docs/kit/design-prompts/{page}.md` 存在（新项目无正式稿可复制）→ 将其复制为工作区内 `PROMPT.md`（保留首行「提示稿非真实设计」标注）作为设计起点，OD 端激活协议后优先读取之。
+
 **自动注册到活跃草稿区**：工作区创建后，在 `design/CONTEXT.md` 活跃草稿区追加一行（若章节不存在则先创建）：
 
 | 「{scope}」 | `design/workspaces/{name}/{page}.html` | `design/pages/{page}.html` | — | 进行中 |

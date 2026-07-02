@@ -164,6 +164,7 @@ design/
 - [ ] `CLAUDE.md` 存在且 <80 行
 - [ ] `.claude/rules/` 存在（可空，但目录要有）
 - [ ] 根目录无冗余 AI 入口文件（AGENT.md / AGENT_GUIDE.md 等）
+- [ ] **开工包白名单**：根目录存在 `kit.json` manifest → `docs/kit/`（DECISIONS / STACK / INIT / FRONTEND / BACKEND / OPEN-QUESTIONS + acceptance/ + design-prompts/）视为合规结构，不判冗余；kit 文件散落根目录 → 建议按上述映射归位到 `docs/kit/`，不建议删除
 - [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
 - [ ] `docs/specs/` 存在（Loop 工作区）
 - [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理）

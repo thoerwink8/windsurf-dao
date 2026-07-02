@@ -101,6 +101,10 @@ AI 根据复杂度判断，常见：
 
 **跳过条件**：`type: feature`（用户需求明确）、`type: fix`（根因分析由 debugger 覆盖）。
 
+### 开工包注入（项目含 kit.json 时）
+
+项目存在开工包（根目录 `kit.json` manifest，文档落位 `docs/kit/`）→ 步骤 4 的 brainstormer 输入 = kit 文档集（同 refactor 型注入诊断报告的方式），spec.md 从 kit 对应功能块推导（FRONTEND/BACKEND 每块的 定位/目标/范围 与 spec-template 字段对齐，可机械抽取），不从用户目标从零挖掘。步骤 5 的 acceptance.md：kit ACCEPTANCE 对应功能块分节若已是 acceptance-template 三表格式 → 直接采用，只补「待 dao 补命令」占位的验证命令。
+
 ### strategy.md 生成
 
 **步骤 6**：主线程根据 spec + acceptance 按 `type` 生成——design 侧重组件策略+视觉验证，feature 侧重 ADR+API 契约，refactor 侧重迁移路径+兼容，fix 侧重根因+回归防护，infra 侧重工具链+CI/CD。每个 Loop 必须定义达成度维度（功能完整度/验收通过率/视觉保真度/测试覆盖/回归安全/文档同步），§7 归档时逐维度打分，未达标不可归档。

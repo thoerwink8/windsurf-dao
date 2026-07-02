@@ -156,6 +156,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 教训 / 演化 | `/dao-evolution` |
 | 循环开发 | `/dao-loop` |
 | 项目结构 | `/dao-project-scaffold` |
+| 拿到开工包（含 `kit.json`）开工 | 先 `/dao-project-scaffold` 归位 → 再 `/dao-loop`（谋线凭 manifest 走差距扫描，不重挖需求） |
 
 **设计管线架构**：`/dao-design` 是唯一入口。原独立 skill（design-asset / design-open / design-sync / design-system / design-fidelity / design-standards / component-radar）已合并为 `dao-design/` 下的 supporting files，由 SKILL.md 按需 Read 加载。用户只需记 `/dao-design [参数]`，参数路由覆盖全部子功能（`/dao-design sync` = 漂移同步，`/dao-design 实现 X` = 代码实施，等）。
 
