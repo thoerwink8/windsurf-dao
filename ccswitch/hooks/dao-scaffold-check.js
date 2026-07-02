@@ -10,8 +10,8 @@
 //    - CLAUDE.md 存在且 <80 行
 //    - .claude/rules/ 存在
 //    - 无冗余入口（AGENT_GUIDE.md 等）
-//    - docs/ 结构扁平
-//    - 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned）
+//    - docs/ 结构扁平（specs/ 是 dao-loop 正规结构，不算分裂）
+//    - 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned/archived）
 //    - 活跃 plan（docs/plans/*.md 含「待实施/进行中」状态标记）
 //
 // 发现问题 → 注入 additionalContext。全通过 → 静默退出。
@@ -155,8 +155,8 @@ for (const f of redundant) {
   } catch (_) {}
 }
 
-// 4. docs/ 结构检查（无 specs/superpowers 分裂）
-const splitDirs = ["docs/specs", "docs/superpowers"];
+// 4. docs/ 结构检查（无 superpowers 分裂；specs/ 是 dao-loop 双线程的正规谋线目录，不算分裂）
+const splitDirs = ["docs/superpowers"];
 for (const d of splitDirs) {
   try {
     const full = path.join(cwd, d);
@@ -204,7 +204,7 @@ try {
 
 const activeWork = [];
 
-// 6. 活跃 loop：docs/specs/*/STATUS.json mode 非 done/abandoned
+// 6. 活跃 loop：docs/specs/*/STATUS.json mode 非 done/abandoned/archived
 try {
   const specsDir = path.join(cwd, "docs", "specs");
   if (fs.existsSync(specsDir) && fs.statSync(specsDir).isDirectory()) {
@@ -214,7 +214,7 @@ try {
       try {
         if (!fs.existsSync(statusFile)) continue;
         const st = JSON.parse(fs.readFileSync(statusFile, "utf8"));
-        if (st.mode && st.mode !== "done" && st.mode !== "abandoned") {
+        if (st.mode && st.mode !== "done" && st.mode !== "abandoned" && st.mode !== "archived") {
           const summary = st.summary || topic;
           const thread = st.thread ? "（" + st.thread + "线）" : "";
           activeWork.push("Loop [" + topic + "] " + summary + " — mode: " + st.mode + thread);
