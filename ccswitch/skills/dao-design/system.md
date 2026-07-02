@@ -53,7 +53,7 @@ OD 有两个独立的文件空间，理解这一点是正确加载的前提：
 
 ### design/ 版本控制
 
-选择性入 git：`*.html` / `css/*.css` / `js/*.js` 入库；`.od-skills/` / `screenshots/` / `*.artifact.json` / `*.png` 忽略。首次接入检查 `.gitignore` 是否全忽略 `/design/`。
+选择性入 git：`pages/*.html` / `components/*.html` / `ref/*.html` / `css/*.css` / `js/*.js` 入库；`.od-skills/` / `screenshots/` / `*.artifact.json` / `*.png` 忽略。首次接入检查 `.gitignore` 是否全忽略 `/design/`。
 
 ### skill 侧行为
 
