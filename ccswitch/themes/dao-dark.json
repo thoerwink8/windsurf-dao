@@ -1,0 +1,9 @@
+{
+  "name": "dao-dark",
+  "base": "dark",
+  "overrides": {
+    "subtle": "#313846",
+    "inactive": "#9CA7B8",
+    "inactiveShimmer": "#C6CEDC"
+  }
+}
