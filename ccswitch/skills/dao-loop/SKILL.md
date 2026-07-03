@@ -41,6 +41,7 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 
 首次在项目中触发 loop 时**必须执行**：
 
+0. **开工包探测**（吸收 scaffold 步，两步咒语塌缩为一步）：项目内存在 `kit.json` manifest → 静默执行归位（kit 文档按 `docs/kit/` 布局校正、根目录只留 README+CLAUDE.md，即 dao-project-scaffold 的开工包白名单语义），归位动作在计划展示时一并报告；谋线随后按 planning.md「开工包注入」凭 manifest 走差距扫描，不重挖需求。无 kit.json → 跳过本步
 1. `docs/specs/` 目录存在？不存在 → 创建
 2. `docs/PROJECT.md` 存在？不存在 → 按模板创建
 3. 扫描遗留物：
