@@ -90,6 +90,8 @@
 
 **Subagent 豁免**：fork / Agent / Workflow 内的 subagent 回答对象是 coordinator 而非用户——subagent 内禁止调用 `AskUserQuestion`，直接返回结果即可。
 
+**显式授权豁免**：用户给出**全局**自主授权（「你全程决定」「不必询问我」「直到改无可改」类）→ 续力挂起，AI 以状态陈述代替提问，直至授权撤回、任务完结或触及 🔒 必止门控。单点授权（「这个你定」）不挂起——只豁免那一个决策。用户把方向盘交出来了，就不要每步问路。
+
 选项是快捷入口，不是拦路关卡——用户可以忽略选项直接打字，但选项不能缺席。
 
 ### 选项构成
@@ -133,6 +135,8 @@ Skill spec 编写动态选项列表时，**写完必须数一遍**，超 4 即�
 
 > 图难于其易，为大于其细。
 
+**三管线三选一**（用户不该为"走哪条"付认知税，AI 按此默认、不问）：一句话需求要从零到完整交付 → `/dao-dev`；已有 spec/设计资产/开工包，要文档驱动多轮迭代 → `/dao-loop`；单个核心改动要仪式化保险（worktree+双审）→ `/dao-superpowers`。拿不准时取 loop——它的谋线会自己判断要不要先补 brainstorm。
+
 **显式触发**（必走五步）：用户说「走 superpowers / 开 worktree 走 / 走完整流程 / 派 subagent」，或 AI 已写出 `docs/specs/<topic>-plan.md`。
 **复杂度 SHOULD 建议**：≥3 文件 / ≥100 LOC / 核心模块（auth/payment/security/core）/ 跨服务 / 不可逆 → 主动建议走，用户拒绝即轻量路径。
 
@@ -156,7 +160,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 教训 / 演化 | `/dao-evolution` |
 | 循环开发 | `/dao-loop` |
 | 项目结构 | `/dao-project-scaffold` |
-| 拿到开工包（含 `kit.json`）开工 | 先 `/dao-project-scaffold` 归位 → 再 `/dao-loop`（谋线凭 manifest 走差距扫描，不重挖需求） |
+| 拿到开工包（含 `kit.json`）开工 | 直接 `/dao-loop`——谋线预飞探测 `kit.json` 自动归位（吸收 scaffold 步）+ 凭 manifest 走差距扫描，不重挖需求 |
 
 **设计管线架构**：`/dao-design` 是唯一入口。原独立 skill（design-asset / design-open / design-sync / design-system / design-fidelity / design-standards / component-radar）已合并为 `dao-design/` 下的 supporting files，由 SKILL.md 按需 Read 加载。用户只需记 `/dao-design [参数]`，参数路由覆盖全部子功能（`/dao-design sync` = 漂移同步，`/dao-design 实现 X` = 代码实施，等）。
 

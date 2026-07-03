@@ -105,11 +105,19 @@ const isScaffold =
   SCAFFOLD_STRONG.test(clean) || (SCAFFOLD_VERB.test(clean) && !SCAFFOLD_INTERNAL.test(clean));
 
 if (isScaffold) {
-  inject(
-    "【dao 节律·新建项目】检测到新建项目/仓库意图——建议先执行 /dao-project-scaffold 确认目录结构规范," +
-    "避免事后大规模重排(TraceyU project-structure-overhaul Loop 的教训:设计资产/生成物混杂容易积累成" +
-    "\"看起来乱\"的债务)。"
-  );
+  // per-session 去重(2026-07-03):对齐 CLOSING 的 sessMark 范式——一个会话最多提醒一次。
+  // 实测教训:长自主会话里"创建/新建"动词高频出现,无守卫时每回合重复注入,噪音违反「太上不知有之」。
+  const scaffoldMark = path.join(os.tmpdir(), "dao-rhythm", sessionId + ".scaffold");
+  let scaffoldFirst = true;
+  try { if (fs.existsSync(scaffoldMark)) scaffoldFirst = false; } catch (_) {}
+  if (scaffoldFirst) {
+    try { fs.mkdirSync(path.dirname(scaffoldMark), { recursive: true }); fs.writeFileSync(scaffoldMark, String(Date.now())); } catch (_) {}
+    inject(
+      "【dao 节律·新建项目】检测到新建项目/仓库意图——建议先执行 /dao-project-scaffold 确认目录结构规范," +
+      "避免事后大规模重排(TraceyU project-structure-overhaul Loop 的教训:设计资产/生成物混杂容易积累成" +
+      "\"看起来乱\"的债务)。(本提醒每会话仅一次)"
+    );
+  }
 }
 
 // ── CLOSING(v2·试验):强收尾信号 → 提醒 distill,每会话一次,并埋点 ──
