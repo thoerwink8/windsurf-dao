@@ -139,6 +139,22 @@ components/
 - **禁硬编码** — `rounded-[8px]` 应为 `rounded-[var(--radius-control)]` 或对应 Tailwind class
 - 出货前 lint 拦截裸值
 
+### 组件规格层（约束性默认值）铁律
+
+> 组件不只是样式复用，是约束的载体。约束靠调用方自觉 = 没有约束。
+
+成熟组件库（antd/MUI）真正值钱的不是皮肤，是多年沉淀的**规格层**——把"不会出错的默认值"写死在组件里。自建组件库（headless 基座 + token）必须补齐这一层，否则"下一个装动态内容的弹窗必然溢出屏幕"：
+
+1. **弹窗（Dialog/Modal）**：必须有默认高度上限（如 `max-h-[80vh]`）+ 超长内容滚动兜底；宽度走语义档位（`size="sm|md|lg|xl"`），禁止每个调用方手写 arbitrary 宽度
+2. **弹层（Select/Dropdown/Popover/Tooltip）**：必须有默认 `max-height`（优先用定位引擎的 `--available-height`）+ `overflow-y-auto`；Tooltip 必须有默认 `max-width`
+3. **长文本**：截断策略（truncate/line-clamp）是组件默认值，不是调用方补丁
+4. **覆盖语义**：默认值可被 className 覆盖（tailwind-merge 保证后者胜出）——"默认约束 + 显式逃生舱"，不是"禁止覆盖"
+5. **契约测试锁规格**：每条约束性默认值必须有 contract spec 断言（如 `toContain('max-h-')`），防止后续重构静默丢失
+
+**审计口诀**：见 `overflow-y-auto` 找 `max-h`——有滚动无上限 = 滚动永不触发 = 假约束。
+
+**参考蓝本**：对照 antd 5.x 组件总表做缺口审计（把 antd 当"规格捐赠者"，不当依赖，禁止因缺组件直接引入整套重库）；逐组件问三个问题——有档位吗？有约束性默认吗？约束有契约测试吗？审计结论落项目 `.claude/rules/component-health.md`「组件规格层」节。
+
 ---
 
 ## §4 · 通用判据（核心体检表）
