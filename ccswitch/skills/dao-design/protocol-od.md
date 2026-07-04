@@ -25,10 +25,12 @@
        项目 CSS 变量（主题 token + 组件基类）
        （正式稿在 pages/ 子目录，href 上跳一层；workspace 用内联 :root 不用 <link>）
 
-层 2 — <script src="https://cdn.tailwindcss.com"></script>
+层 2 — <script src="../js/tailwind-play.js"></script>（项目已自托管时，字体同理用 ../css/fonts.css）
        <script>tailwind.config = {...}</script>
-       Tailwind CDN + 项目自定义 config
-       （顺序不可反：CDN 脚本创建全局 tailwind 对象，config 必须在其后，否则 ReferenceError 致自定义 token 静默失效）
+       Tailwind 脚本 + 项目自定义 config
+       （顺序不可反：脚本创建全局 tailwind 对象，config 必须在其后，否则 ReferenceError 致自定义 token 静默失效）
+       （资产优先项目自托管：远程 CDN（cdn.tailwindcss.com / fonts.googleapis.com）是截图回归的不确定源——
+        某轮加载失败=整页降级=基线随机挂；项目未自托管时才允许 CDN 兜底，并建议尽早落地自托管）
 
 层 3 — <style>/* 补丁 */</style>
        仅 Tailwind 无法覆盖的（keyframes、prefers-reduced-motion 等）
