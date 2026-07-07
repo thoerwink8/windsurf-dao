@@ -36,7 +36,7 @@
 - **地·行**（动之中）：只读先行可并行，写操作串行 · 同一文件用一次 Edit 聚合 · 长进程用 `run_in_background` 不阻塞 · 有界限（`git log -n 20` / `head -n 50`）
 - **人·验**（动之后）：察回响 · 验终态 · 异常即止 · 完成流水线（顺序强制，不可跳步）：**① 构建/测试通过 → ② 设计同步门控 → ③ 声明完成**（含提交问询 / AskUserQuestion / 结果报告——任何向用户表示"做完了"的信号）。② 未完成时禁止进入 ③
   - **② 设计同步门控**（自检步骤，每次进入 ③ 前必过）：
-    1. **有设计稿？** `Glob("design/*.html")` 有结果？若无结果（worktree/分支可能缺文件），fallback 检查 `git ls-tree HEAD -- design/*.html`，任一有结果即满足
+    1. **有设计稿？** `Glob("design/**/*.html")` 有结果？（`**` 必须——正式稿常在 `design/pages/` 子目录，单层 `*` 匹配不到曾致门控静默空转）若无结果（worktree/分支可能缺文件），fallback 检查 `git ls-files 'design/*.html'`（ls-files 的 pathspec 跨子目录；`ls-tree` 不带 `-r` 不列子树，禁用），任一有结果即满足
     2. **改了 UI 组件？** 本轮改动含 `components/` 或 `.tsx` 中有 JSX 的文件。**「本轮改动」定义**：Loop/worktree 场景 → `git diff main --name-only`（分支级全量）；非 Loop → 当前 session 的 unstaged + staged diff
     3. **两条都满足** → 必须执行设计同步（反向同步原型 + 更新 CONTEXT.md），交接信息：`📋 代码改了 UI 组件且有 design/ 目录 → 请输入 /dao-design sync` 或当场执行。**两条任一不满足** → 跳过，直接进 ③。Loop 场景的详细流程见 `dao-loop` closing.md §7.1.5
 - **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。工具选择走下方决策树，不在项目 rules 重复
@@ -160,6 +160,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 | 教训 / 演化 | `/dao-evolution` |
 | 循环开发 | `/dao-loop` |
 | 项目结构 | `/dao-project-scaffold` |
+| worktree 启动 dev server | `/dao-serve` |
 | 拿到开工包（含 `kit.json`）开工 | 直接 `/dao-loop`——谋线预飞探测 `kit.json` 自动归位（吸收 scaffold 步）+ 凭 manifest 走差距扫描，不重挖需求 |
 
 **设计管线架构**：`/dao-design` 是唯一入口。原独立 skill（design-asset / design-open / design-sync / design-system / design-fidelity / design-standards / component-radar）已合并为 `dao-design/` 下的 supporting files，由 SKILL.md 按需 Read 加载。用户只需记 `/dao-design [参数]`，参数路由覆盖全部子功能（`/dao-design sync` = 漂移同步，`/dao-design 实现 X` = 代码实施，等）。
