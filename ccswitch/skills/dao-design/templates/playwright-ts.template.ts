@@ -59,14 +59,17 @@ async function assertNoLayoutGap(page: import('@playwright/test').Page): Promise
   const selector = SHELL_SELECTOR;
   const gap = await page.evaluate((sel) => {
     const shell = document.querySelector(sel);
-    if (!shell) return 0;
+    // 根容器不存在 = 白屏/错误页/未渲染——绝不静默放行（L10 律二：曾把空白页
+    // 存成基线、404 截图恒等通过多日），返回哨兵值让外层 fail 出可读信息
+    if (!shell) return -1;
     const children = Array.from(shell.children).filter(
       (el) => getComputedStyle(el).display !== 'none',
     );
     const last = children[children.length - 1];
-    if (!last) return 0;
+    if (!last) return -1;
     return shell.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
   }, selector);
+  expect(gap, `页面根容器（${selector}）不存在或为空——疑似白屏/错误页，禁止入基线`).toBeGreaterThanOrEqual(0);
   expect(gap, `窗口底部布局死区 ${gap}px 超过阈值 ${LAYOUT_GAP_THRESHOLD}px`).toBeLessThan(
     LAYOUT_GAP_THRESHOLD,
   );

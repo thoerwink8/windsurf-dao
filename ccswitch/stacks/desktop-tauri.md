@@ -50,6 +50,20 @@ pnpm tauri dev
 
 windows-mcp 的 Screenshot 会切换窗口焦点、全屏截图含任务栏、无 DOM 访问能力。对有 WebView 的应用是降级方案，不是首选。仅在 WebView 远程调试完全不可用时作为最后手段。
 
+## GUI 工具能力对比（自 dao.md 下沉，2026-07-07）
+
+| 能力 | chrome-devtools | playwright | windows-mcp |
+|---|---|---|---|
+| DOM 查询 | ✅ | ✅ (snapshot) | ❌ |
+| JS 执行 | ✅ | ✅ (evaluate) | ❌ |
+| 元素级截图 | ✅ | ✅ | ❌（全窗口） |
+| 表单交互 | ✅ | ✅ | ⚠（坐标点击） |
+| 需要调试端口 | ✅ CDP | ❌ 自管 | ❌ |
+| 连 WebView2 | ✅（设环境变量） | ❌ | ❌ |
+| 窗口切换/焦点 | 无 | 无 | ⚠ 有 |
+
+选型走 dao.md「目·观」决策树；本表只做能力细节备查。
+
 ## 分层测试策略
 
 | 验证什么 | 工具 | Claude Code 能力 | 环境完整度 |
@@ -60,6 +74,15 @@ windows-mcp 的 Screenshot 会切换窗口焦点、全屏截图含任务栏、�
 | 完整回归 | WebdriverIO + tauri-driver | 写测试 + 跑结果 | **完整** |
 
 **选择原则**：能用轻量层验证的不用重量层。改了 CSS → Vitest 快照或 playwright；改了 Rust migration → 必须 WebView2 CDP。
+
+## 实机长任务 · 源码冻结窗口（L9，血泪）
+
+实机 E2E / 长生成任务运行期间**禁止编辑前端源码**——保存即触发 Vite HMR 全页 reload：
+
+- 运行中的流式任务被杀，早期中断连 partial 都没有，无从续传
+- 更隐蔽：被杀的流平台照计费但拿不到 usage chunk = 账单结构性盲区（对完成调用精确、对中断流失明）
+
+**判据**：触发实机 E2E / 长生成前声明「源码冻结窗口」；确需编辑先确认无实机任务在跑。
 
 ## 会话纪律
 

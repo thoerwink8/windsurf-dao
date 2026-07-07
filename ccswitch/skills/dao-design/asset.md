@@ -572,7 +572,7 @@ Grep 所有 `design/pages/*.html` 中对工作区草稿路径的引用（`worksp
 
 ---
 
-### §B.5 · 收尾三件套（每次必做）
+### §B.5 · 收尾清单（每次必做）
 
 #### B.5.1 写 CHANGELOG.md
 
@@ -667,7 +667,20 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 - 如有新设计决策，追加到"核心设计决策"表
 - 更新"设计与代码侧最大差距"中的交接文档路径
 
-#### B.5.4 按 source 分方向收尾（双向闭环）
+#### B.5.4 fidelity 登记（项目有截图回归体系时必做）
+
+> 不知常妄作凶。新正式稿不入 fidelity 三清单 = 在截图回归体系里隐形，漂移永远测不出来。
+
+若项目存在 fidelity 体系（判据：`.claude/rules/design-fidelity.md` 或 `tests/fidelity/` 存在），升格产生的**新页面或新状态**必须同步登记三处：
+
+1. **页面清单**：`design-fidelity.md` 的「设计原型 ↔ App 路由映射」表补行（含档位与阈值）
+2. **状态矩阵**：该页面的逐态行（正常/空态/生成中/错误等，含触发条件与代码组件）
+3. **基线建立**：design-baseline 用例（原型截图）+ app-fidelity 用例（app 侧逐态截图），跑 `--update-snapshots` 建立基线并目测确认
+
+既有页面的增量升格（原型更新、无新态）只需重建对应基线（第 3 项），清单与矩阵不动。
+来源教训：TraceyU devkit 三态草稿实施完成后长期未入 fidelity（full-audit-fixes #16/#17）。
+
+#### B.5.5 按 source 分方向收尾（双向闭环）
 
 读 `WORKSPACE.md` 的 `source` 字段，决定收尾形态：
 
@@ -715,7 +728,7 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 1. **直接编辑正式稿** — 迭代应在 `workspaces/{name}/` 草稿上进行
 2. **升格前不检查归档名冲突** — §B.2 三项检查必须通过
-3. **跳过收尾三件套** — 无 handoff 包则代码侧无法对齐
+3. **跳过收尾清单（§B.5）** — 无 handoff 包则代码侧无法对齐；无 fidelity 登记则新稿在截图回归里隐形
 4. **删除归档稿** — `archive/` 目录永不删除
 5. **handoff 无 acceptance.md** — 纯文字描述对开发者无效，必须有可勾选验收标准
 6. **handoff 用单文件** — 大型变更必须按代码目录分文件，否则开发者无法按模块认领
