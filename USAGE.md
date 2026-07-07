@@ -192,7 +192,7 @@
 
 **99% 时候你只需「直接说」**，AI 自己判断上哪个层级。显式调用 workflow 通常发生在你想要**高仪式感**（走 dev 的 3 个关卡）时。
 
-其他 skill 是**镜头**，不是 workflow。AI 按场景自动加载（如调 bug 加载 dao-debug，重构加载 dao-refactor），不需要你显式调用。
+其他 skill 用 `/name` 手动触发（如 `/dao-verify` 全面体检、`/dao-design` 设计入口）——但你不用背：正常描述需求，AI 会在合适时机给出交接提示「请输入 /dao-xxx」。调 bug 类横切能力走 subagent（dao-debugger），AI 自动派活。
 
 ---
 
@@ -254,9 +254,9 @@ AI 在编码遇阻时自动启动（跨 ≥3 文件 / 尝试失败 / 复杂算�
 
 可以。任何时候说「退出 superpowers」「不走流程了」即解除。已建的 worktree 让 AI 帮你 cleanup（说「cleanup」即可）。
 
-### Q5 · 27 个 skill 我都要记吗？
+### Q5 · 9 个 skill 我都要记吗？
 
-**不要。** AI 按场景自动加载，你不需要知道它们的名字。
+**不要。** dao.md 场景速查表会把你的话路由到对应 `/命令`，你不需要背名字。
 
 如果好奇可以看 `ccswitch/skills/` 目录，但日常使用不需要。
 
