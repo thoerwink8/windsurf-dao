@@ -1,19 +1,19 @@
 # Windsurf-Dao 使用手册
 
+> ⚠️ **口径说明（2026-07-07）**：Windsurf 侧已于 2026-06-29 退役，本手册按**单栈 Claude Code** 口径维护；
+> 文中涉及分层加载的段落已对齐现状（dao.md always_on + 9 skills + 10 commands）。
+>
 > **3 分钟看完。看不下去直接跳到「最少要知道的 3 件事」。**
 >
-> 你不需要懂道德经，不需要记 27 个 skill。你只需要正常说话，AI 自己知道该怎么走。
+> 你不需要懂道德经，不需要记 9 个 skill。你只需要正常说话，AI 自己知道该怎么走。
 
 ---
 
 ## 启用（一次性）
 
-dao 现在双栈共存，按你用的工具选一条：
+**Claude Code**：跑 `dao.ps1 link-claude`，然后**重启会话**（或 `/clear`）让新 skills/commands/agents 生效。详见 [README · 快速开始](README.md#快速开始)。
 
-- **Windsurf**：跑 `dao.ps1 link-global`，并把 windsurf-dao 作为 sidecar workspace 一起打开。详见 [README · 快速开始](README.md#快速开始)。
-- **Claude Code**：跑 `dao.ps1 link-claude`，然后**重启会话**（或 `/clear`）让新 skills/commands/agents 生效。详见 [MIGRATION · Claude Code 部署](MIGRATION.md#claude-code-部署双栈共存)。
-
-启用之后下面的用法两边通用——dao 的哲学内核同源，你正常说话就行。
+启用之后你正常说话就行——dao.md 经 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻。
 
 ---
 
@@ -88,28 +88,26 @@ dao 现在双栈共存，按你用的工具选一条：
 ┌──────────────────────────────────────────────────────┐
 │  第 1 层 · 心怀（always_on，每条消息自动加载）          │
 │                                                       │
-│  • global_rules.md   跨项目元规则                     │
-│  • dao-mantra.md     道德经八句根基 + 场景速查表        │
-│  • execution.md      项目铁律                          │
-│  • superpowers-gate.md  仪式触发判定                   │
+│  • ccswitch/dao.md   场域根基：八句根基 + 三才之机     │
+│    + 续力 + 三管线门控 + 场景速查（@import 常驻）      │
 └─────────────────────┬────────────────────────────────┘
                       │ 内化为 AI 的"心境"
                       ▼
 ┌──────────────────────────────────────────────────────┐
-│  第 2 层 · 判定（gate 按你的话和任务规模决策）          │
+│  第 2 层 · 判定（按你的话和任务规模决策）               │
 │                                                       │
-│  显式触发词？  → 走对应 workflow                      │
+│  显式触发词？  → 走对应管线                            │
 │  ≥3 文件？    → 主动建议 superpowers                  │
 │  否则         → 直接动手                               │
 └─────────────────────┬────────────────────────────────┘
                       │
                       ▼
 ┌──────────────────────────────────────────────────────┐
-│  第 3 层 · 落地（按需加载 workflow + skill）            │
+│  第 3 层 · 落地（用户 /命令 手动触发 skill）            │
 │                                                       │
-│  workflow：/dao-superpowers / /dao-dev                │
-│  skill 镜头：dao-debug / dao-refactor / dao-test ...  │
-│             （27 个 skill，按场景自动加载）             │
+│  管线：/dao-dev · /dao-loop · /dao-superpowers        │
+│  skill：dao-brainstorm / dao-plan / dao-design ...    │
+│         （9 个 skill，全部 /name 手动触发）             │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -208,7 +206,7 @@ dao 现在双栈共存，按你用的工具选一条：
 | 「走 dao-dev」「从头做」 | 走三阶九步管线 |
 | 「深度迭代」「跑五相」 | 思考过程可见输出（dao-dev §2.5） |
 | 「派 reviewer」「自审一下」 | 加 reviewer 自审环节 |
-| 「@dao-philosophy」 | 加载道德经八条不变原则深度反思 |
+| 深度经文反思 | 直接让 AI Read `~/.claude/references/` 下的帛书老子/阴符经全文（旧 @dao-philosophy 已随双栈退役） |
 
 ### 降级开关（让 AI 走轻）
 
@@ -246,7 +244,7 @@ dao 现在双栈共存，按你用的工具选一条：
 
 AI 检测到任务复杂度满足阈值（≥3 文件 / ≥100 LOC / 核心模块）时会问：「这事满足 X 条件，建议走 superpowers，要不要？」你点头才走，你拒绝就走轻量路径。
 
-这是 dao-mantra 第 5 句「**用户无为而 AI 无不为**」——AI 不替你拍板仪式重量。
+这是八句根基第 5 句「**道常无为而无不为**」（用户无为，AI 无不为）——AI 不替你拍板仪式重量。
 
 ### Q3 · 深度迭代（五相循环）什么时候会启动？
 

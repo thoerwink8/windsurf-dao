@@ -1,7 +1,7 @@
 # 远程接入本机：基础设施手册（管理员参考）
 
-> ⚠️ **Agent 接入请读 skill**：Devin Agent 远程连接本机的操作流程已迁移到
-> `.devin/skills/dao-cloud/SKILL.md`（dao-cloud 技能）。
+> ⚠️ **接入流程已随双栈退役下线（2026-07-07 注）**：原 `.devin/skills/dao-cloud/SKILL.md`
+> 已随 `.devin/` 目录于 2026-06-29 退役删除（需要时从 git 历史恢复）。
 > 本文件保留为**基础设施参考**——ngrok 配置、Windows 路径、启动脚本、从零部署说明。
 
 > 本文档不含真实密钥。`<DAO_HUB_TOKEN>`、`<PLUGIN_TOKEN>` 与 ngrok authtoken 均为占位符。
@@ -78,7 +78,7 @@
 | 文件 | 说明 |
 |---|---|
 | `docs/cf-daohub-fixed-url.md` | 本文档（基础设施参考） |
-| `.devin/skills/dao-cloud/SKILL.md` | Agent 接入操作流程（dao-cloud 技能） |
+| ~~`.devin/skills/dao-cloud/SKILL.md`~~ | 已随双栈退役删除（git 历史可恢复） |
 | `scripts/hub/start-ngrok.ps1` | 启动脚本：杀掉旧 ngrok 并后台隐藏启动 |
 | `scripts/hub/ngrok-daohub.vbs` | 开机自启入口（隐藏窗口调用上面的 ps1） |
 | `scripts/hub/ngrok.yml.template` | ngrok 配置模板（authtoken 用占位符） |
