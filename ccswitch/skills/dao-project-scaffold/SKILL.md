@@ -182,6 +182,8 @@ design/
 - [ ] `design/CHANGELOG.md` 存在
 - [ ] `design/PROTOTYPE-SPEC.md` 存在（OD 原型输出规范：三层 Tailwind 策略 + 项目 tailwind.config 映射 + 类名速查。缺项时从项目 `tailwind.config.*` 自动生成骨架——见下方模板）
 - [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
+- [ ] `design/.od-skills/` 两个 symlink 有效（README.md + dao-design-protocol.md，`Get-Item` 的 LinkType=SymbolicLink 且目标存在——symlink 不入 git，换机/克隆后必然缺失，本检查是唯一恢复触发点；创建步骤见下方「OD 协议 symlink」节）
+- [ ] `design/.od-sync.json` 存在且 `odProjectId` 指向的 OD 工作目录存在（配置了 OD 面板同步的项目；指针过期——如 OD 项目重建后 UUID 变化——同步会静默落到废弃目录）
 - [ ] `.vscode/settings.json` 用 `files.exclude` 隐藏 Open Design 生成的 `*.artifact.json`（及同类工具自动生成、已在 `.gitignore` 但仍会出现在 Explorer 树里的文件）。这类文件不受 git 追踪，属于本地视觉干扰而非仓库结构债务，不要误判为"目录混乱"去做大规模重排——`.vscode/settings.json` 已在多数项目 `.gitignore` 中被显式排除跟踪（`!.vscode/settings.json`），可安全共享（TraceyU project-structure-overhaul Loop 实证：`design/` 根目录 19 个 `.artifact.json` 全部已 gitignore，真正需要改的只有这一个 IDE 配置文件）
 
 **若检测到 `src-tauri/` 或 `electron` 依赖，额外检查：**
