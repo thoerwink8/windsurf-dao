@@ -184,6 +184,7 @@ comm -23 /tmp/used.txt /tmp/canon.txt   # 输出 = 自创名，应为空（仅�
 2. 以项目固定 viewport（`playwright.config.ts` 中配置）逐页截图
 3. 基线存入 `*-snapshots/` 目录，纳入版本管理
 4. **基线更新（设计稿变更后）**：`npx playwright test --update-snapshots --config <config>`，人工确认截图合理后 commit
+5. **基线防假页面（L10 律二，两度血泪）**：建基线或重构路径后必须验证基线是**真页面**——曾有 13 张 404 截图入库当基线、套件以 404==404 恒等通过多日（2026-07-05）；又有 app 侧把字体未就绪的空白页存成基线、后续全部改动被判 2% diff（2026-07-07）。两道防线缺一不可：① 建基线后人工抽查截图内容（非只看测试绿）；② 结构 guard 前置——页面根容器（如 `[data-slot="app-shell"]`）不存在即 fail，白屏/错误页永远不允许静默成为基线；截图前等 `document.fonts.ready` + 双帧重绘
 
 ### 6.2 对比实现（代码 vs 设计）
 

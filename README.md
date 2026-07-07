@@ -25,63 +25,61 @@
 
 核心理念：让 AI 从"工具"变成"搭档"。通过道德经的哲学框架，建立一套可复用、可迁移、可进化的 AI 行为准则。
 
-## 体系架构（v2 · 2026-04-26 重构）
+## 体系架构（v3 · 单栈 ccswitch，2026-07-07 对齐现状）
 
 ```
-元规则（global_rules.md · 31 行 · 跨项目 symlink）
+场域根基（ccswitch/dao.md · always_on，经 @import 每条消息常驻）
         ↓
-项目铁律（execution.md · always_on）
+按需知识（ccswitch/skills/ · 9 个 skill，全部 disable-model-invocation，用户 /命令 触发）
         ↓
-领域决策（shell/cli/skills/workflow-system/knowledge-routing · model_decision）
+入口命令（ccswitch/commands/ · 10 个 slash command）
         ↓
-精准触发（quality · dao-meta · glob）
+精准注入（hooks：dao-quality 质量门 / dao-meta 守卫 / dao 同步提醒等，按文件类型触发）
         ↓
-深度哲学（dao-philosophy · manual @ 调用）
+技术栈处方（ccswitch/stacks/ · desktop-tauri / remote-ops / frontend / backend）
 ```
+
+> Windsurf 时代的「9 文件 5 层规则架构」（global_rules/execution/shell/quality…）已随双栈退役归入历史，
+> `global_rules.md` 留档但带 DEPRECATED 标记。
 
 ## 包含什么
 
-### 规则文件（`ccswitch/`）
+### 场域根基（`ccswitch/dao.md`）
 
-> Claude Code 侧规则内嵌于 `ccswitch/dao.md`（场域根基，always_on）及各 skill/command 中，不再有独立 rules 目录。
+always_on 唯一入口：八句根基、三才之机、续力、知识归位、三管线门控、GUI 决策树、Shell 血泪增量、路由铁律。
 
-| 文件 | trigger | 内容 |
-|---|---|---|
-| `dao-mantra.md` | always_on | 道德经八句根基 + 场景速查 |
-| `execution.md` | always_on | 项目铁律（感知/执行/涅槃门/续力） |
-| `superpowers-gate.md` | always_on | superpowers 五步触发门控 |
-| `shell.md` | always_on | 命令安全（超时/防卡/PowerShell/SSH） |
-| `knowledge-routing.md` | always_on | 知识归位路由 |
-| `cli.md` | model_decision | 工具选择（CLI-first/MCP） |
-| `workflow-system.md` | model_decision | 工作流协作 |
-| `quality.md` | glob | 代码质量门 |
-| `dao-meta.md` | glob | dao 元层守卫 |
-| `dao-philosophy.md` | manual | 八条不变原则 |
-
-### 命令（`ccswitch/commands/`）
+### 命令（`ccswitch/commands/` · 10 个）
 
 > slash command，用户通过 `/dao-*` 手动触发。
 
-| 工作流 | 功能 |
+| 命令 | 功能 |
 |---|---|
 | `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
+| `/dao-loop` | 文档驱动多轮迭代（spec/开工包续跑） |
 | `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
+| `/dao-serve` | 在 worktree 一键启动 dev server |
 | `/dao-distill` | 会话级知识沉淀 |
 | `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
 | `/dao-doc` | 文档生成与更新 |
-| `/dao-goal` | 目标导向持续推进 |
+| `/dao-remove` | 减法专用：安全移除 |
+| `/gs` | git status 速查 |
 
-### 技能（`ccswitch/skills/`）
+### 技能（`ccswitch/skills/` · 9 个）
 
-> 按场景自动加载。完整清单见 `ls ccswitch/skills/`。
+> 全部 `disable-model-invocation: true`，用户 `/name` 手动触发；跨 skill 靠交接信息路由。
 
-| 类别 | 代表 skill | 一句话 |
-|---|---|---|
-| 工程方法 | `dao-brainstorm` → `dao-plan` → `dao-review` → `dao-verify` | superpowers 五步核心 |
-| 设计流水线 | `dao-design-system` → `dao-design-open` → `dao-design-fidelity` | 设计系统→翻译→验证 |
-| 设计辅助 | `dao-design-standards` · `dao-design-asset` · `dao-component-radar` | 判据/布局/资产/组件健康 |
-| 领域专项 | `dao-cloud` · `dao-evolution` · `dao-worktree` · `dao-goal` | 按场景触发 |
+| skill | 一句话 |
+|---|---|
+| `dao-brainstorm` | 苏格拉底式挖需求 → design 文档 |
+| `dao-plan` | design → 2-5 分钟粒度实施任务清单 |
+| `dao-loop` | 谋线/造线双阶段循环开发 |
+| `dao-review` | two-stage 评审（spec 合规 + 代码质量） |
+| `dao-verify` | 全面体检 / 涅槃门 |
+| `dao-design` | 设计统一入口（原 7 个设计 skill 合并为 supporting files） |
+| `dao-worktree` | 隔离工作区 |
+| `dao-evolution` | 教训 / 演化沉淀 |
+| `dao-project-scaffold` | 项目标准结构脚手架 |
 
 ### 配置同步（`config-sync/`）
 
@@ -129,8 +127,8 @@ config-sync/
 | 对象 | 路径 | 数量 | 角色 |
 |---|---|---|---|
 | 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻 |
-| 技能 | `ccswitch/skills/dao-*/` | 17 | 渐进披露，模型按 `description` 自动加载 |
-| 命令 | `ccswitch/commands/dao-*.md` | 8 | slash command，`/dao-dev` `/dao-commit` 等 |
+| 技能 | `ccswitch/skills/dao-*/` | 9 | 渐进披露；全部 `disable-model-invocation`，用户 `/name` 手动触发 |
+| 命令 | `ccswitch/commands/` | 10 | slash command，`/dao-dev` `/dao-loop` `/dao-serve` 等 |
 | 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 dao-loop 金字塔调度 |
 | 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 

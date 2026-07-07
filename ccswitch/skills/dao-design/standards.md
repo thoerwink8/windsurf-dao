@@ -438,6 +438,16 @@ Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设�
 
 ---
 
+## 截图规格（自 dao.md 下沉，2026-07-07）
+
+> dao.md 只留一行铁律：浏览器 MCP 截图必须落 `<项目根>/_tmp/qa/<context>/`。本节是规格细则。
+
+- **`<context>` 命名**：默认 `<branch>--<topic>` 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`
+- **文件命名**：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一
+- **目录自动创建**：截图前若目录不存在则先建
+- **`<项目根>` = 被操作的目标项目**，不是会话 cwd；跨项目场景截图归目标项目的 `_tmp/`
+- 项目 `.gitignore` 必须含 `**/_tmp/`；生命周期（何时清理/何类入库）可由项目级 rule（如 screenshot-lifecycle.md）细化
+
 ## 反原则
 
 - **简则简** — DIRECT 档别强行走流程，改个间距就是改个间距
