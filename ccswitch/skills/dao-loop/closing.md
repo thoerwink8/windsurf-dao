@@ -23,7 +23,7 @@
 > 各复归其根——代码改了，原型必须跟。
 
 **触发条件**（与 dao.md ② 设计同步门控一致）：
-1. **有设计稿？** `Glob("design/*.html")` 有结果？若无结果（worktree 可能缺文件），fallback 检查 `git ls-tree HEAD -- design/*.html`
+1. **有设计稿？** `Glob("design/**/*.html")` 有结果？（`**` 必须，正式稿常在 `design/pages/` 子目录）若无结果（worktree 可能缺文件），fallback 检查 `git ls-files 'design/*.html'`（跨子目录；禁用不带 `-r` 的 ls-tree）
 2. **改了 UI 组件？** `git diff main --name-only` 含 `**/components/**` 或 `**/*.tsx`（分支级全量，不是单次 session 的增量）
 3. 两条都满足才触发，否则跳过。
 
