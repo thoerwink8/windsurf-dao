@@ -61,17 +61,7 @@
    有 WebView 的应用绝不用 windows-mcp 做常规验证。
 ```
 
-**工具能力对比**：
-
-| 能力 | chrome-devtools | playwright | windows-mcp |
-|---|---|---|---|
-| DOM 查询 | ✅ | ✅ (snapshot) | ❌ |
-| JS 执行 | ✅ | ✅ (evaluate) | ❌ |
-| 元素级截图 | ✅ | ✅ | ❌（全窗口） |
-| 表单交互 | ✅ | ✅ | ⚠（坐标点击） |
-| 需要调试端口 | ✅ CDP | ❌ 自管 | ❌ |
-| 连 WebView2 | ✅（设环境变量） | ❌ | ❌ |
-| 窗口切换/焦点 | 无 | 无 | ⚠ 有 |
+**工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（含分层测试策略与直连原理），选型只走上方决策树。
 
 **防断路规则**：
 - 同一会话内**只用一个浏览器工具**，不中途换（换工具 = 端口/锁冲突 = 排障循环 = 烧 context）
@@ -187,11 +177,11 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **验证加 marker**：关键验证用 `VERIFY_BEGIN ... VERIFY_EXIT=$LASTEXITCODE` 包裹；marker 缺失或来自错误目录 → 判为终端感知异常，不判业务失败
 - **禁 PowerShell 里的 Bash heredoc**：`python - <<'PY'` 在 PS 中报 ParserError，改用 here-string + `Set-Content`
 - **Inline 长命令**：PS 处理 `node -e "..."` >300 字符或含嵌套引号会被 PSReadLine 截断 → 写脚本文件再跑
-- **SSH 嵌套引号**：三层超时（ConnectTimeout / 远端 `timeout` / 后台执行）；复杂命令首选 heredoc 落远端文件，禁反引号模板与 `$()` 插值
+- **SSH 远程执行**：三层超时 + heredoc 工艺已下沉 `stacks/remote-ops.md`，触远程场景先读它
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。`<项目根>` = **被操作的目标项目**，不是会话的 cwd。跨项目场景（如在 windsurf-dao 会话中操作 TraceyU）→ `_tmp/` 归目标项目（TraceyU）。若 MCP workspace roots 阻止直接写入目标项目，先写到可写位置再 `Copy-Item` 到目标项目 `_tmp/`。项目 `.gitignore` 必须含 `**/_tmp/`
 - **WebView2 远程调试**：Tauri / Electron 等 WebView2 应用，启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView（含 SQLite/IPC 等原生能力）。**不要另开 Chrome 当代理**——多一个进程就多一个断点。项目应将此固化为 `dev:debug` 脚本，而非每次会话手动设
-- **截图路径强制**：浏览器 MCP（chrome-devtools / playwright）截图时，`outputPath`（或等效参数）**必须**指向 `<项目根>/_tmp/qa/<context>/`，禁止落到项目根目录或其他非 `_tmp/` 位置。`<context>` 默认取 **`<branch>--<topic>`** 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`、`main--history-topbar`。命名格式：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一。截图前若目录不存在则自动创建
+- **截图路径强制**：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置；`<context>` 命名与 `<type>-<description>.png` 规格细则已下沉 dao-design standards.md §截图规格
 - **settings.json 运行时改动 · 确认门禁（非禁令）**：改 `~/.claude/settings.json` 前先向用户说明风险（file watcher 可能触发重认证 → `401 device was revoked` 强制登出所有活跃会话）并询问是否代做。**用户明确授权 → 直接帮用户改完**：一次 Edit 聚合完成，改后立即 JSON 校验 + 受影响 hook 冒烟验证——用户无为，AI 无不为，不再让用户手动操作。未授权/被拒 → 退回暂存方案：写 `_tmp/settings-patch.json` + 提供会话外执行命令。CC Switch config-sync 同理——先问，授权即做。（2026-07-02 实测：运行时写入并未触发登出，风险按最坏情况告知即可）
 
 ## 言 · 名之则
