@@ -7,7 +7,7 @@
 
 ## 一、项目概览
 
-**定位**：Windsurf AI 配对编程方法论——一套基于道德经哲学的 AI 行为规则体系，通过 Sidecar workspace 部署。
+**定位**：基于道德经哲学的 AI 配对编程方法论——单栈部署到 Claude Code（Windsurf 侧已于 2026-06-29 退役，`ccswitch/` 为唯一真相源）。
 
 **核心架构**（v2 · 2026-04-26）：心·Rules（元规则）→ 肺·Workflows（编排）→ 肝·Skills（实现）→ 肾·MCP（外部）→ 骨·Stacks（技术栈），虚·Memory 为层间流通之气。
 
@@ -15,8 +15,8 @@
 
 | 文件/目录                      | 作用                                                   |
 | ------------------------------ | ------------------------------------------------------ |
-| `dao.ps1`                      | 工具脚本（status / link-global）                       |
-| `global_rules.md`              | 元规则源文件（symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目） |
+| `dao.ps1`                      | 工具脚本（status / link-claude / link-codex）          |
+| `global_rules.md`              | 旧 Windsurf 元规则（已 DEPRECATED，仅历史参考，不再被任何端加载） |
 | `ccswitch/commands/dao-*.md` | 9 个命令（dev/commit/distill/doc/evolve/loop/remove/superpowers/gs） |
 | `ccswitch/skills/dao-*/`    | 9 个可复用技能（brainstorm/design/evolution/loop/plan/project-scaffold/review/verify/worktree） |
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
@@ -24,7 +24,7 @@
 | `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
 | `ccswitch/agents/dao-*.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
 
-**部署原理**：将 windsurf-dao 作为 Sidecar workspace 与目标项目同时打开，rules/skills/workflows 自动跨 workspace 可见。元规则通过 `dao.ps1 link-global` symlink 到 `~/.codeium/windsurf/memories/`，自动加载到所有项目（无需 UI 操作）。
+**部署原理**：`dao.ps1 link-claude` 把 skills/commands/agents symlink 到 `~/.claude/`，并在 `~/.claude/CLAUDE.md` 经 `@import` 常驻 `ccswitch/dao.md`——每条消息自动注入场域根基，skill 由用户 `/name` 手动触发。（旧 Sidecar workspace / link-global 部署随 Windsurf 退役作废。）
 
 **Rules 架构**：废除早期"道德法术四层"概念。当前规则通过 `ccswitch/dao.md`（全局场域，`@import` 每轮注入）+ 项目 `.claude/rules/`（项目级按需加载）两层投递。
 
@@ -93,7 +93,7 @@
 **谋**：① 析（brainstormer，挖意图出 design）→ ② 设（plan-writer，2-5min 粒度任务清单）
 **造**：③ 隔（worker-batch，worktree + 测试基线）→ ④ 编（spec-writer + worker，RED→GREEN→REFACTOR）→ ⑤ 调（主会话，并行派活 + review）
 **成**：⑥ 审（reviewer / reviewer-critical，spec compliance + code quality）→ ⑦ 归（主会话，verification → merge/PR/cleanup）
-**横切**：dao-debug（任意阶段遇 bug 派 debugger，3 次失败升 strategist）
+**横切**：dao-debugger agent（任意阶段遇 bug 派 debugger，3 次失败升 strategist）
 
 ### 4.3 三条铁律（嵌入每个 worker profile）
 
@@ -128,17 +128,17 @@ windsurf-dao 是货架项目。部署方式：`dao.ps1 link-claude` 将 `ccswitc
 
 金字塔体系的每个环节都从道德经章句推导而来，不是流程指南，是哲学层约束：
 
-| 环节 | dao 实现 | 道德经推导 |
+| 环节 | dao 实现（现名） | 道德经推导 |
 |------|----------|------------|
-| 析 | `dao-brainstorm` | 不知常，妄作凶（第16章）|
-| 设 | `dao-plan` | 图难于其易，为大于其细（第63章）|
-| 隔 | `dao-worktree` | 致虚极，守静笃（第16章）|
-| 编 | `dao-execute` + `dao-test` | 行不言之教 + 知其雄守其雌（第2、28章）|
-| 调 | `dao-parallel` + `dao-pyramid` | 江海善下 + 小国寡民（第66、80章）|
-| 审 | `dao-review` | 受国之垢，是谓社稷主（第78章）|
-| 归 | `dao-finish` | 功遂身退，天之道（第9章）|
-| 横切 | `dao-debug` | 反者道之动（第40章）|
-| 验 | `dao-verify` | 慎终如始，则无败事（第64章）|
+| 析 | `dao-brainstorm` skill / `dao-brainstormer` agent | 不知常，妄作凶（第16章）|
+| 设 | `dao-plan` skill / `dao-plan-writer` agent | 图难于其易，为大于其细（第63章）|
+| 隔 | `dao-worktree` skill | 致虚极，守静笃（第16章）|
+| 编 | `dao-spec-writer` + `dao-worker-batch` agents | 行不言之教 + 知其雄守其雌（第2、28章）|
+| 调 | 主会话并行派活（agents 金字塔） | 江海善下 + 小国寡民（第66、80章）|
+| 审 | `dao-review` skill / `dao-reviewer(-critical)` agents | 受国之垢，是谓社稷主（第78章）|
+| 归 | 主会话 cleanup（dao-loop closing） | 功遂身退，天之道（第9章）|
+| 横切 | `dao-debugger` agent | 反者道之动（第40章）|
+| 验 | `dao-verify` skill | 慎终如始，则无败事（第64章）|
 
 哲学底色不是装饰——它在推理时提供更深层的约束（见 T28 教训）。
 
