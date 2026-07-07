@@ -1,6 +1,8 @@
 # 换机部署指南 · 从零搭建 windsurf-dao 完整环境
 
-> 各复归其根。一台新机器，把 dao 的全部环境（Claude Code / Codex / Windsurf 三栈 + cc-switch 配置 + 插件）恢复到与旧机一致。
+> 各复归其根。一台新机器，把 dao 的全部环境（Claude Code 主栈 + Codex 镜像 + cc-switch 配置 + 插件）恢复到与旧机一致。
+>
+> ⚠️ Windsurf 栈已于 2026-06-29 退役——本文涉及 Windsurf 的步骤仅为历史保留，新机不需要执行。
 
 本文档与 [MIGRATION.md](MIGRATION.md) 分工：
 - **MIGRATION.md** = 把 dao 规则部署进「某个目标项目」。
@@ -64,9 +66,9 @@ node config-sync\lib\doctor.mjs
 | **Windows Developer Mode** | symlink 权限（dao.ps1 链接） | 设置 → 系统 → 开发者选项 → 开 |
 
 可选（按需用哪栈装哪个）：
-- **Claude Code**（CLI / 桌面端）——用 dao + Claude
-- **Codex / Codex++**——用 dao + Codex
-- **Windsurf**——用 dao + Windsurf
+- **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
+- **Codex / Codex++**——用 dao + Codex（镜像）
+- ~~**Windsurf**~~（已退役，无需安装）
 
 > sqlite3 找不到时，运行 `config-sync/setup-sqlite.ps1` 即可从项目内置安装包自动解压并设置 `SQLITE3_PATH`；也可手动安装后设环境变量 `SQLITE3_PATH` 指定。
 
@@ -116,9 +118,9 @@ node config-sync\lib\sync.mjs --direction=down --yes
 .\dao.ps1 link-codex
 .\dao.ps1 link-codex-prompts
 
-# Windsurf（元规则 + 全项目 rules）
-.\dao.ps1 link-global
-.\dao.ps1 link-rules-all
+# ~~Windsurf~~（已退役，勿执行——link-global 落地的 global_rules.md 已 DEPRECATED）
+# .\dao.ps1 link-global
+# .\dao.ps1 link-rules-all
 
 # IDE 终端（cmd → Git Bash）
 .\dao.ps1 set-terminal

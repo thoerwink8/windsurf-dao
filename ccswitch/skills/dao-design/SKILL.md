@@ -22,7 +22,7 @@ disable-model-invocation: true
 | [fidelity.md](fidelity.md) | Read [fidelity.md](fidelity.md) | 还原度五层金字塔 | 还原度验证/审计时 |
 | [standards.md](standards.md) | dao-design-standards | 审美判据·体检表·布局方法论 | 需要设计判据时 |
 | [component-radar.md](component-radar.md) | dao-component-radar | 结构健康门（组件提炼检测） | UI 文件编辑时 |
-| [od-panel-sync.md](od-panel-sync.md) | — | OD 面板同步（design/ → OD 项目工作目录） | 路由到 OD 面板同步时 |
+| [od-panel-sync.md](od-panel-sync.md) | — | OD 面板同步（design/ ↔ OD 工作目录，§3 出向快照 + §5 od-pull 回搬） | 路由到 OD 面板同步/回搬时 |
 
 ## 跨 skill 路由铁律
 
@@ -81,7 +81,8 @@ AskUserQuestion（选项由上下文动态构建）
 | `反向生成` / `从代码生成` / `§A` | intent=反向生成 | Read [asset.md](asset.md) §A |
 | `看状态` / `列草稿` / `状态` | intent=查看状态 | 读 CONTEXT.md 展示 |
 | `设计系统` / `token` / `system` | intent=设计系统 | Read [system.md](system.md) |
-| `od同步` / `面板同步` / `od-sync` / `刷新面板` | intent=OD面板同步 | Read [od-panel-sync.md](od-panel-sync.md) |
+| `od同步` / `面板同步` / `od-sync` / `刷新面板` | intent=OD面板同步 | Read [od-panel-sync.md](od-panel-sync.md) §3 |
+| `od-pull` / `回搬` / `把OD改动搬回来` | intent=OD回搬 | Read [od-panel-sync.md](od-panel-sync.md) §5 |
 
 提取到 intent 后，进入 §P.2 定位 scope；未能提取 intent，进入 §P.3 纯功能名解析。
 
@@ -311,7 +312,7 @@ AskUserQuestion（选项由上下文动态构建）
 
 ### §V.1 · 截图目录
 
-路径：`<项目根>/_tmp/qa/<context>/`。`<context>` 规则见 dao.md Shell 节"截图路径强制"——默认 `<branch>--<topic>` 双段标识。
+路径：`<项目根>/_tmp/qa/<context>/`。`<context>` 命名与 `<type>-<description>.png` 规格细则见 [standards.md](standards.md) §截图规格（默认 `<branch>--<topic>` 双段标识；铁律本体在 dao.md Shell 节）。
 
 ### §V.2 · 执行步骤
 
