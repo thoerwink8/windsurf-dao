@@ -9,6 +9,11 @@ Open Design 右侧「设计文件」面板的文件扫描器不跟随 junction /
 
 这是**快照副本**——代码仓改动后会漂移，需要重新同步。
 
+> ⚠ **双轨待裁决（2026-07-07 审计 #29）**：OD 新版已有原生 **linkedDirs** 能力（项目直挂代码仓目录，
+> app-config.json 可见多个项目已直挂），可能使 robocopy 快照管线过时。待用户开 OD 实机验证
+> linkedDirs 的面板可见性与编辑回写行为后裁决去留——验证通过则本管线降级为「无 linkedDirs 的
+> 旧版兜底」，验证不通过则维持现状。裁决前本文件照常可用。
+
 与 `sync.md`（设计↔代码漂移同步）是两回事，互不干涉。
 
 ---
@@ -156,7 +161,40 @@ if ($LASTEXITCODE -ge 8) {
 
 ---
 
-## §5 · 反模式
+## §5 · 回搬（od-pull：OD 工作目录 → 代码仓 design/）
+
+> 反者道之动。OD 侧改了快照副本（用户在 OD 面板里让 AI 直接编辑文件）时，改动困在
+> OD 工作目录里——此前回搬纯手动，是断链点。
+
+用户说「od-pull」「把 OD 里的改动搬回来」时：
+
+1. **解析路径**：同 §1 取 `odProjectId` 与 `targetSubdir`，得 `$targetDir`
+2. **冲突检测（先看后搬，不盲覆盖）**：
+
+   ```powershell
+   robocopy $targetDir "$projectRoot\design" /E /L /XF *.artifact.json /XO /NDL /NJH /NJS
+   ```
+
+   `/L` 只列不拷，`/XO` 排除旧文件——输出即「OD 端较新、将覆盖代码仓」的文件清单。
+   逐文件核对：代码仓侧该文件在 git 里有未提交改动（`git status --short design/<file>`）
+   → **冲突**，列给用户裁决（AskUserQuestion：以 OD 为准 / 以代码仓为准 / 逐个看 diff）；
+   干净文件直接进入下一步
+3. **执行回搬**（仅无冲突或用户已裁决后）：
+
+   ```powershell
+   robocopy $targetDir "$projectRoot\design" /E /XF *.artifact.json /XO
+   ```
+
+   `/XO` 保证只搬 OD 端更新的文件，不用旧快照倒灌覆盖代码仓的新改动
+4. **回搬后**：`git status design/` 展示改动清单让用户确认；改动含 workspace 草稿时提示走 `asset.md` §B 升格流程
+
+**artifact.json 孤儿清理**：`*.artifact.json` 是 OD 的产物元数据，双向都排除（§3 已排除出向）。
+回搬时若发现 OD 端存在**无对应 HTML** 的孤儿 artifact.json（HTML 已删/改名），提示用户可在
+OD 端删除，不自动删（OD 自己的数据 OD 做主）。
+
+---
+
+## §6 · 反模式
 
 1. **用 symlink/junction 代替 robocopy** — OD 面板不跟随链接，这是做此 skill 的原因
 2. **同步时不排除 *.artifact.json** — 会覆盖 OD 自己的元数据
