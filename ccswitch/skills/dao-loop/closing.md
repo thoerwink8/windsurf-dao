@@ -104,13 +104,15 @@ trivial/minor 修完重新打分，major 继续循环，critical 开新 Loop。
 
 PR + 分支 + worktree 归根：
 
-6. 创建 PR：`feat/<topic>` → `master`/`main`，description 从 HANDOFF.md 自动生成
-7. merge PR（默认 merge commit，保留完整历史）
+6. **先判已合并**：`git merge-base --is-ancestor feat/<topic> master`（或 `main`）——exit 0 = 已经以任意方式并入主线（直接 merge / squash-merge / rebase，不止 PR 一条路）。
+   - **未合并** → 走 PR：创建 PR：`feat/<topic>` → `master`/`main`，description 从 HANDOFF.md 自动生成 → merge PR（默认 merge commit，保留完整历史）
+   - **已合并**（PR 之外的方式已并入）→ **跳过 PR 创建**，直接进入步骤 8 归根。不因为"没走 PR"就放弃清理——清理步骤原先被绑死在 PR 路径后面，直接本地 merge 的分支从未触达步骤 10，是分支永久遗留的根因（教训 L13）
+7. （已合并分支跳过本步）
 8. **杀 worktree 内残留进程**（Windows 文件锁必须先释放）：检测 worktree 路径下是否有运行中进程（dev server / cargo / node / vite），有则终止。未杀干净直接 `worktree remove` 会报 "Invalid argument"
 9. **回到主目录**，`git worktree remove ../<topic>-loop`（worktree 必须在主目录删除）。若仍失败 → `git worktree prune` + `Remove-Item -Recurse -Force`
-10. 删除本地 + 远端 `feat/<topic>` 分支
+10. 删除本地 + 远端 `feat/<topic>` 分支——**无论走的是哪条合并路径，本步骤都不可跳过**
 
-**PR 即记录**：分支删除后，PR 及其 diff、description、review comments 永久保留在 GitHub 上。这是 Loop 的最终交付物。
+**PR 即记录**：走 PR 路径时，分支删除后 PR 及其 diff、description、review comments 永久保留在 GitHub 上，是 Loop 的最终交付物。直接 merge 路径下无 PR 记录，commit 历史本身即交付物（message 与 HANDOFF.md 已含等价信息）。
 
 **异常处理**：merge 冲突 → 停止自动流程，在回答正文中说明情况，等用户介入解决后继续。worktree remove 失败 → 不阻塞归档，prune + 手动删除目录兜底。
 
