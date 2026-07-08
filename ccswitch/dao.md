@@ -184,6 +184,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **WebView2 远程调试**：Tauri / Electron 等 WebView2 应用，启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView（含 SQLite/IPC 等原生能力）。**不要另开 Chrome 当代理**——多一个进程就多一个断点。项目应将此固化为 `dev:debug` 脚本，而非每次会话手动设
 - **截图路径强制**：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置；`<context>` 命名与 `<type>-<description>.png` 规格细则已下沉 dao-design standards.md §截图规格
 - **settings.json 运行时改动 · 确认门禁（非禁令）**：改 `~/.claude/settings.json` 前先向用户说明风险（file watcher 可能触发重认证 → `401 device was revoked` 强制登出所有活跃会话）并询问是否代做。**用户明确授权 → 直接帮用户改完**：一次 Edit 聚合完成，改后立即 JSON 校验 + 受影响 hook 冒烟验证——用户无为，AI 无不为，不再让用户手动操作。未授权/被拒 → 退回暂存方案：写 `_tmp/settings-patch.json` + 提供会话外执行命令。CC Switch config-sync 同理——先问，授权即做。（2026-07-02 实测：运行时写入并未触发登出，风险按最坏情况告知即可）
+- **PR 自主合并即删分支**：agent 用 `gh pr merge` 合并 PR（无论 dao-loop 内还是临时会话）固定加 `--delete-branch`——删远端的动作绑在合并动作本身上，不留"合并了但没删"的中间态。随即本地跟进 `git checkout main`（或 master）+ `git branch -d <branch>` + `git fetch --prune`，删本地、清残余 tracking ref。PR 通过的瞬间就是清理的天然时机，比事后回溯扫描更彻底（教训 L13：清理曾被绑死在"走了 PR 路径"这个前提上，直接本地合并的分支从未触达清理步骤）。**边界**：用户在 GitHub 网页端自行点 merge，agent 不在场感知不到——这种情况无法在合并瞬间清理，只能靠 dao-verify 的孤儿分支扫描（回溯式兜底）下次接触仓库时补一遍
 
 ## 言 · 名之则
 
