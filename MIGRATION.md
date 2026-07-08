@@ -45,7 +45,7 @@ windsurf-dao/                          ← 唯一真相源(git)
 
 **迁移取舍(为道日损)**:与 Claude Code 内置能力(shell 沙箱 / git 安全 / 破坏性操作确认)重叠的规则已删,只留 dao 独有增量。道德经场域从 486 行精简到 126 行(砍 74%)。续力铁律「每条必问」降级为「路歧则问」,对齐 Claude Code 克制原则。
 
-详见 `ccswitch/skills/dao-fa-mechanism/SKILL.md`(Claude Code 机制全解)。
+四种 trigger 的完整映射见下方「Claude Code 部署」章节的「四种 Windsurf trigger 的映射」表（原指向的 `dao-fa-mechanism` skill 已随重构合并，不再独立存在）。
 
 ---
 
@@ -81,11 +81,11 @@ windsurf-dao (源仓库, sidecar workspace)
 
 ---
 
-## Claude Code 部署（双栈共存）
+## Claude Code 部署
 
-> 同源不同壳。`ccswitch/` 与 `.devin/` 是同一套 dao 的两副外壳，各自适配宿主的加载机制。
+> ⚠️ **本节是当前唯一有效的部署方式**（本文件其余章节均为迁移历史，见文首横幅）。
 
-windsurf-dao 自 2026.05 起从 Windsurf 单栈扩展为 **Windsurf + Claude Code 双栈**。新增 `ccswitch/` 目录作为 Claude Code 侧真相源，与 `.devin/` 并列共存，规则内核同源，只是按各自宿主的能力裁剪外壳（Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，`ccswitch/dao.md` 只保留与之不重叠的 dao 独有增量）。
+`ccswitch/` 是唯一真相源（Windsurf 侧 `.devin/` 已于 2026-06-29 退役删除）。Claude Code 已内置 shell 沙箱 / git 安全 / 破坏性操作确认，`ccswitch/dao.md` 只保留与之不重叠的 dao 独有增量。
 
 ### 一键部署
 
@@ -129,32 +129,26 @@ Windsurf 用 frontmatter 的 4 种 trigger 控制规则加载时机。Claude Cod
 
 核心差异：Windsurf 的 model_decision/glob 由 IDE 按规则元数据决定注入；Claude Code 的 skill 走**渐进披露**——平时只读 `description`，模型判断相关才加载 skill 全文，更省上下文。
 
-### 双栈共存关系
+### 当前目录结构
 
 ```
 windsurf-dao/
-├── .devin/              ← Windsurf 侧外壳
-│   ├── rules/              ← 11 文件 4 trigger（always_on/model_decision/glob/manual）
-│   ├── skills/dao-*/       ← 28 skills
-│   ├── workflows/dao-*.md  ← 10 workflows
-│   └── stacks/             ← 技术栈处方
-├── ccswitch/                 ← Claude Code 侧外壳（同源不同壳）
+├── ccswitch/                 ← 唯一真相源
 │   ├── dao.md              ← always_on 根基（经 @import 全局注入）
-│   ├── skills/dao-*/       ← 37 skills（28 原 dao + 部分 rule 转 skill + 自检 skill）
-│   ├── commands/dao-*.md   ← 11 slash commands（由 10 workflow 平移）
+│   ├── skills/dao-*/       ← 9 skills（disable-model-invocation，用户 /name 手动触发）
+│   ├── commands/dao-*.md   ← 10 slash commands
 │   ├── agents/dao-*.md     ← 8 subagents（服务 dao-pyramid 金字塔调度）
 │   └── stacks/             ← 技术栈处方
-├── global_rules.md         ← Windsurf 元规则（link-global 部署）
-└── dao.ps1                 ← link-global / link-rules-all / link-claude
+└── dao.ps1                 ← link-claude / link-codex
 ```
 
-两栈各自部署、互不干扰：用 Windsurf 跑 `link-global` + sidecar workspace；用 Claude Code 跑 `link-claude`。同一套 dao 哲学内核，两边都保留。
+（`global_rules.md`、`.devin/`、`link-global` 均已退役，仅作历史参考。）
 
-### 迁移的四个决策
+### 迁移的四个决策（历史记录）
 
 1. **symlink 真相源**：`ccswitch/` 是唯一真相，`~/.claude/` 下全是 symlink，编辑源文件即时生效，零副本。
 2. **借机精简**：删掉与 Claude Code 内置能力（shell 沙箱 / git 安全 / 破坏性操作确认）重叠的规则，为道日损。
-3. **双栈共存**：不删 `.devin/`，两套外壳并存，按宿主选用。
+3. ~~双栈共存：不删 `.devin/`，两套外壳并存~~（2026-06-29 已单栈化，`.devin/` 删除）。
 4. **续力铁律降级**：从 Windsurf 的"每条回复必问下一步"降为"路歧则问"——对齐 Claude Code 回合制的克制原则，路明则静默推进，只在方向不明 / 多方案待拍板 / 不可逆决策时才问。
 
 
