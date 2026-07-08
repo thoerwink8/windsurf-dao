@@ -107,7 +107,7 @@ disable-model-invocation: true
 
 按**当前项目特征**挑相关维度，不必每次全扫。
 
-1. **代码**：Lint 全绿 · TypeCheck 全绿 · 死代码 · 重复代码 · 圈复杂度 > 10 · 命名一致性 · **跨层注册一致**（SQL↔Rust↔TS 等多层项目：check 脚本存在且全绿）
+1. **代码**：Lint 全绿 · TypeCheck 全绿 · 死代码 · 重复代码 · 圈复杂度 > 10 · 命名一致性 · **跨层注册一致**（SQL↔Rust↔TS 等多层项目：check 脚本存在且全绿）· **孤儿分支/worktree 扫描**（回溯式兜底，见下方独立小节）
 2. **测试**：覆盖率（核心 > 80%）· 边界测试 · 假阳性检验 · E2E 路径全覆盖
 3. **文档**：README 当前态 · API doc 与实现一致 · 注释陈旧度 · AGENT_GUIDE/docs 一致
 4. **依赖**：漏洞扫描 · 过期依赖 · lockfile 健康 · peer dep 冲突 · 单一版本
@@ -115,6 +115,23 @@ disable-model-invocation: true
 6. **部署**：CI/CD 全绿 · 环境变量一致 · 回滚机制 · 健康检查端点
 7. **性能**：启动时间 · 内存占用 · 慢查询 · 前端 LCP/INP/CLS · 后端 p95/p99
 8. **安全**：认证校验 · 授权边界 · 输入校验（注入/XSS/穿越）· 加密 · 密钥管理
+
+### 孤儿分支/worktree 扫描（回溯式兜底，教训 L13）
+
+> 各复归其根。dao-worktree 的归根门控只在当次 session 主动收尾时触发；dao-loop 的归档清理原先绑死在 PR 路径后面（已修，见 closing.md）。两者都是**前瞻式**——session 被打断、或走了非常规合并路径，分支/worktree 就永久遗留，无人发现。本项是唯一**回溯式**检查，周期性体检时必跑。
+
+```powershell
+# 已并入主线（merge/squash/rebase 任意方式）且当前无活跃 worktree 关联的本地分支
+$mainBranch = if (git show-ref --verify --quiet refs/heads/main) { 'main' } else { 'master' }
+$worktreeBranches = git worktree list --porcelain |
+  Select-String '^branch refs/heads/(.+)$' |
+  ForEach-Object { $_.Matches[0].Groups[1].Value }
+git branch --merged $mainBranch |
+  ForEach-Object { $_.Trim().TrimStart('* ', '+ ') } |
+  Where-Object { $_ -ne $mainBranch -and $worktreeBranches -notcontains $_ }
+```
+
+命中的分支交 AskUserQuestion 让用户确认（批量删除 / 逐个看 / 跳过）——分支删除不可逆，不自动执行。同时核对 `git worktree list` 是否有路径已不存在于磁盘的残留条目（`git worktree prune` 清理）。squash-merge 的分支 `--merged` 判不出来（内容已并入但 commit 非祖先），若怀疑存在，改用 `git log main --grep="<topic 关键词>"` 或直接问用户该分支是否已完成。
 
 ### 报告格式
 
