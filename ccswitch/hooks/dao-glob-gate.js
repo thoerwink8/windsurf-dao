@@ -1,6 +1,6 @@
 // dao glob-gate hook — 补 Windsurf glob trigger 缺口
 //
-// Claude Code 无原生 "编辑某类文件时注入规则" 机制(见 dao-fa-mechanism「glob 缺口」)。
+// Claude Code 无原生 "编辑某类文件时注入规则" 机制(Windsurf glob trigger 的对应缺口)。
 // 本 hook 在 Edit/Write/MultiEdit 后,按目标文件类型注入 dao 提醒:
 //   - 代码文件(.ts/.py/...) → 提醒过 dao-quality 质量门
 //   - dao 元层文件(ccswitch/dao.md / dao-* skill·command·agent) → 提醒过 dao-meta 三关
