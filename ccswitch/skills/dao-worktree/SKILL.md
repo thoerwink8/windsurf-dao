@@ -127,7 +127,8 @@ git branch          # 主分支视角看分支
 
 ## 与其他 dao-* 的协作
 
-- **dao-verify**：`worktree remove` 不是终点,必须 `worktree list` 确认归根
+- **dao-verify**：`worktree remove` 不是终点,必须 `worktree list` 确认归根;本skill的门控只在当次 session 主动收尾时触发——session 被打断或走非常规合并路径导致的遗留,靠 dao-verify 周期体检的「孤儿分支/worktree 扫描」回溯兜底(教训 L13)
+- **dao-loop**：归档流程的分支清理不绑死在 PR 路径上——已合并(任意方式)即可清理,见 closing.md 步骤6判定
 - **dao-review**：worktree 内完成后派 reviewer 评审再归根
 
 ## 反原则(保留 dao 风格)
