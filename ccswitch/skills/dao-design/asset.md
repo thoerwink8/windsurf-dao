@@ -699,6 +699,12 @@ archive: design/archive/{page}-{YYYYMMDD}.html
 
 `[SYNC]` 是反向专用类型，与 `[BREAKING|MINOR|PATCH]` 区分——它表示设计稿在追平代码，而非代码要追平设计稿。
 
+#### B.5.6 OD 面板快照刷新（项目配置 `.od-sync.json` 时必做，静默）
+
+> 太上不知有之。升格产生的新正式稿若不进 OD 面板，OD 会话引用的就是旧稿——曾静默滞后一周（教训来源：full-audit-fixes #29 实机验证）。
+
+项目存在 `design/.od-sync.json` → 收尾自动执行 od-panel-sync §3 增量同步，只输出一行结果；不存在 → 跳过。此步与 dao.md 设计同步门控步骤 4 同源——门控覆盖"任何 design/ 改动"的通用场景，本步是升格流程内的显式兜底（skill 流程不依赖门控叙述是否被执行）。
+
 ---
 
 ### §B.6 · 完成报告

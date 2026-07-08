@@ -39,6 +39,7 @@
     1. **有设计稿？** `Glob("design/**/*.html")` 有结果？（`**` 必须——正式稿常在 `design/pages/` 子目录，单层 `*` 匹配不到曾致门控静默空转）若无结果（worktree/分支可能缺文件），fallback 检查 `git ls-files 'design/*.html'`（ls-files 的 pathspec 跨子目录；`ls-tree` 不带 `-r` 不列子树，禁用），任一有结果即满足
     2. **改了 UI 组件？** 本轮改动含 `components/` 或 `.tsx` 中有 JSX 的文件。**「本轮改动」定义**：Loop/worktree 场景 → `git diff main --name-only`（分支级全量）；非 Loop → 当前 session 的 unstaged + staged diff
     3. **两条都满足** → 必须执行设计同步（反向同步原型 + 更新 CONTEXT.md），交接信息：`📋 代码改了 UI 组件且有 design/ 目录 → 请输入 /dao-design sync` 或当场执行。**两条任一不满足** → 跳过，直接进 ③。Loop 场景的详细流程见 `dao-loop` closing.md §7.1.5
+    4. **OD 面板快照刷新（门控附属，静默无感）**：与上面两条件独立判定——本轮改动含 `design/**` 且项目存在 `design/.od-sync.json` → 进入 ③ 前自动执行 od-panel-sync 增量同步（细则见 dao-design od-panel-sync.md §3，`$LASTEXITCODE ≥8` 才算失败），只输出一行结果。同步靠人记必忘（OD 端曾静默滞后一周）——太上不知有之，让用户在 OD 永远看到与仓库一致的稿
 - **目·观**（GUI 场景）：先截图看实际状态再行动，不只看代码猜。工具选择走下方决策树，不在项目 rules 重复
 
 ### 目·观 · GUI 工具决策树
