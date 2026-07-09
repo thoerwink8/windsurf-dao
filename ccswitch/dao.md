@@ -195,6 +195,8 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **截图路径强制**：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置；`<context>` 命名与 `<type>-<description>.png` 规格细则已下沉 dao-design standards.md §截图规格
 - **settings.json 运行时改动 · 确认门禁（非禁令）**：改 `~/.claude/settings.json` 前先向用户说明风险（file watcher 可能触发重认证 → `401 device was revoked` 强制登出所有活跃会话）并询问是否代做。**用户明确授权 → 直接帮用户改完**：一次 Edit 聚合完成，改后立即 JSON 校验 + 受影响 hook 冒烟验证——用户无为，AI 无不为，不再让用户手动操作。未授权/被拒 → 退回暂存方案：写 `_tmp/settings-patch.json` + 提供会话外执行命令。CC Switch config-sync 同理——先问，授权即做。（2026-07-02 实测：运行时写入并未触发登出，风险按最坏情况告知即可）
 - **PR 自主合并即删分支**：agent 用 `gh pr merge` 合并 PR（无论 dao-loop 内还是临时会话）固定加 `--delete-branch`——删远端的动作绑在合并动作本身上，不留"合并了但没删"的中间态。随即本地跟进 `git checkout main`（或 master）+ `git branch -d <branch>` + `git fetch --prune`，删本地、清残余 tracking ref。PR 通过的瞬间就是清理的天然时机，比事后回溯扫描更彻底（教训 L13：清理曾被绑死在"走了 PR 路径"这个前提上，直接本地合并的分支从未触达清理步骤）。**边界**：用户在 GitHub 网页端自行点 merge，agent 不在场感知不到——这种情况无法在合并瞬间清理，只能靠 dao-verify 的孤儿分支扫描（回溯式兜底）下次接触仓库时补一遍
+- **PR-first 节律（全局默认，非禁令）**：代码类改动默认走「分支 → PR → `gh pr merge --delete-branch`」，不直推主干；文档/配置微改可直推。认清其价值：agent 自开自合的 PR **不是质量门**（质量门是测试 + dogfood），而是给用户留**异步审查锚点与独立回滚点**——用户可事后逐 PR 审、不满即 revert。项目可在 `.claude/rules/` 强化为强制（产品型项目建议强制）
+- **Dogfood 自审（产品型项目 PR 收尾附带）**：合并前构建并本机安装试用一轮，体验发现写入项目 `TODO.md`（发现不阻塞本 PR，下轮择优吸收）；`PROGRESS.md` 一行记账：版本 / 变更 / dogfood 发现 / 回滚点——用户读一个文件总览全部战况。产品未发布期，AI 既是开发者也是第一用户
 
 ## 言 · 名之则
 
