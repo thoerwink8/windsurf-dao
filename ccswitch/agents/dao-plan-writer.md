@@ -1,7 +1,7 @@
 ---
 name: dao-plan-writer
 description: 把已确认的 design 文档拆成 2-5 分钟粒度的实施任务清单。每个任务有精确路径/完整代码模板/验证命令。专门写方案、PRD、API 设计、技术选型对比表。结构化输出主力。Use proactively 当已有确认的 design 文档需要拆解为可执行任务清单,或需要产出 PRD/API 设计/选型对比。
-model: opus
+model: sonnet
 tools: Read, Grep, Glob, Write, Edit
 ---
 

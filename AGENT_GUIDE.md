@@ -22,7 +22,7 @@
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
-| `ccswitch/agents/dao-*.md`     | 8 个 subagent 金字塔 profile（小国寡民 × 算力分配，详见 §四）|
+| `ccswitch/agents/dao-*.md`     | 8 个 subagent profile（指挥官体系 orchestrator-workers，详见 §四）|
 
 **部署原理**：`dao.ps1 link-claude` 把 skills/commands/agents symlink 到 `~/.claude/`，并在 `~/.claude/CLAUDE.md` 经 `@import` 常驻 `ccswitch/dao.md`——每条消息自动注入场域根基，skill 由用户 `/name` 手动触发。（旧 Sidecar workspace / link-global 部署随 Windsurf 退役作废。）
 
@@ -72,53 +72,66 @@
 
 ---
 
-## 四、Subagent 金字塔（小国寡民 × 算力分配）
+## 四、指挥官体系（Orchestrator-Workers × 小国寡民）
 
-> 小国寡民，使有什佰之器而不用。无为而无不为。
-> 高级模型出决策，低级模型忠实落地，主会话不亲为而万事成。
+> 小国寡民，使有什佰之器而不用。善用人者，为之下。
+> 主会话为帅：谋定、遣将、合成，不亲执批量实现。帅强将轻，官方实证有效。
 
-### 4.1 调度图
+### 4.0 官方出处（体系依据，非社区推断）
 
-| 层级 | 模型/档位 | Agent | 职责 |
+| 官方原则 | 出处 |
+|---|---|
+| orchestrator-subagent 是覆盖面最广的起点模式 | claude.com/blog/multi-agent-coordination-patterns |
+| Opus lead + Sonnet subagents 胜纯 Opus 单兵 90.2% | anthropic.com/engineering/multi-agent-research-system |
+| 难题路由强模型，简单任务路由轻模型 | anthropic.com/engineering/building-effective-agents |
+| subagent 独立 context，description 决定自动委派 | code.claude.com/docs/en/sub-agents |
+| 大规模编排用 workflow 脚本，逐轮决策用 subagent | code.claude.com/docs/en/workflows |
+| 反向备选 Advisor：轻模型主驾 + 强模型顾问（性能 +2.7pp / 成本 -11.9%） | claude.com/blog/the-advisor-strategy |
+
+### 4.1 调度图（模型无关：谁坐主会话谁为帅）
+
+| 层级 | model 档 | Agent | 职责 |
 |---|---|---|---|
-| 战略 | Opus 4.7 XHigh/Max | strategist | 架构定调/卡死攻坚（稀少召唤） |
-| 指挥 | Opus 4.7 High | reviewer-critical | 核心模块对抗性 review |
-| 指挥 | Sonnet 4.6 Thinking | brainstormer / spec-writer / reviewer / debugger | 需求挖掘 / spec 翻译 / two-stage review / 深度调试 |
-| 指挥 | GPT 5.5 Low/High | plan-writer | PRD/方案/选型/任务清单 |
-| 调度 | Adaptive | 主会话 | 调度 + 兜底 |
-| 工人 | SWE 1.6 Fast (free) | worker-batch | 严格按 spec 执行，零自主判断 |
+| 帅 | 主会话当前最强（Fable 5 / Opus，随代滚动） | 主会话 | 分解 / 委派 / 合成 / 验证 / 兜底，不亲执批量实现 |
+| 战略 | opus | strategist / reviewer-critical | 架构定调、卡死攻坚 / 核心模块对抗性 review |
+| 中坚 | sonnet | brainstormer / plan-writer / spec-writer / reviewer / debugger | 需求挖掘 / 任务清单 / spec 翻译 / two-stage review / 根因调试 |
+| 工人 | haiku | worker-batch | 严格按 spec 执行，零自主判断 |
 
-### 4.2 全流程七步（谋·造·成展开）
+档位写死在 `ccswitch/agents/*.md` frontmatter `model:`；帅位不写档——天然继承主会话模型，Fable 换 Opus 或换下一代，体系零改动。用较轻模型坐主会话时即官方 Advisor 变体：帅位遇高难决策临时召 opus strategist 咨询即可。
+
+### 4.2 指挥官三职（每次派活的前中后）
+
+1. **谋**（派前）：拆成**相互独立**的子任务——独立性是官方明说的前提；强耦合不拆，主会话直做
+2. **遣**（派中）：prompt 给足四要素（目标 / 边界 / 输出格式 / 工具来源）；独立任务一条消息并行同发；告知 worker「最终文本即返回数据」，只回精炼结果不回过程
+3. **合**（派后）：验证-去重-排序-综合。帅的 context 是战略资产，不让 worker 的搜索日志与文件原文灌爆它——context 隔离正是官方强调的核心收益
+
+### 4.3 全流程七步（谋·造·成展开）
 
 **谋**：① 析（brainstormer，挖意图出 design）→ ② 设（plan-writer，2-5min 粒度任务清单）
 **造**：③ 隔（worker-batch，worktree + 测试基线）→ ④ 编（spec-writer + worker，RED→GREEN→REFACTOR）→ ⑤ 调（主会话，并行派活 + review）
 **成**：⑥ 审（reviewer / reviewer-critical，spec compliance + code quality）→ ⑦ 归（主会话，verification → merge/PR/cleanup）
-**横切**：dao-debugger agent（任意阶段遇 bug 派 debugger，3 次失败升 strategist）
+**横切**：dao-debugger（任意阶段遇 bug，3 次失败升 strategist）
+**回打**：worker → spec-writer（spec 不清）→ plan-writer（plan 不细）→ brainstormer（需求不明）；reviewer → reviewer-critical（核心模块）→ strategist（架构嫌疑）
 
-### 4.3 三条铁律（嵌入每个 worker profile）
+### 4.4 三条铁律（嵌入每个 worker profile）
 
 不是建议，是硬约束。worker 违反任一即任务失败：**① 无失败测试不写生产代码 ② 无 fresh 证据不声明完成 ③ 无根因调查不修 bug**
 
-### 4.4 何时**不**走金字塔
+### 4.5 何时**不**走（帅的派前自评）
 
-金字塔不是免费的（Anthropic 实测多 agent 比单 agent 烧 15× token）。**任务价值 < 15× token 成本时不走**：
+体系不是免费的（Anthropic 官方实测多 agent ≈ 单 agent 15× token）。**任务价值 < 15× token 成本时不走**：
 
-- ❌ 简单问答 / 闲聊 / 临时澄清 → 主会话 Adaptive 直接答
-- ❌ 紧耦合架构设计（不可拆） → 主会话深度对话
-- ❌ 跨多文件 debug 但状态依赖强 → 不要拆 subagent
-- ❌ 探索性、不确定要做啥 → 先 brainstormer 别拆 task
+- ❌ 简单问答 / 闲聊 / 临时澄清 → 主会话直接答
+- ❌ 紧耦合架构设计 / 强状态依赖 debug（不可拆）→ 主会话直做
+- ❌ 探索性、不确定要做啥 → 先派 brainstormer，别拆 task
 
-适合金字塔的：**批量同质化 + 可拆分 + 价值高** 的任务。
+**六项自评**（模板化? / 需不同档模型? / 主 context 臃肿? / 子任务真独立? / 值 15× token? / 可真并行?）满足 3+ → 派；否则主会话直做。并发由 harness 自动封顶排队，旧 rate-limit 手控约束（T29，Windsurf 时代）作废。
 
-### 4.5 升级路径（失败回打方向）
+### 4.6 召唤方式（Claude Code 原生）与 Workflow 编排
 
-worker → spec-writer（spec 不清）→ plan-writer（plan 不细）→ brainstormer（需求不明）。reviewer → reviewer-critical（核心模块）→ strategist（架构嫌疑）。debugger 失败 3 次 → strategist。
-
-### 4.6 召唤方式
-
-- **派 subagent**：让主会话明确说"派 spec-writer subagent 处理 X"，Devin 会按 profile 起后台/前台 subagent
-- **手动切模型**：核心模块 review 时手动切到 chip "Claude Opus 4.7 High"，再派 reviewer-critical
-- **配 effort 档**：strategist / reviewer-critical 派活前用 Alt+T 切到 XHigh/High
+- **自动委派**：description 写清「何时用我」，主会话按匹配自动派（官方机制，description 质量 = 委派命中率）
+- **显式委派**：Agent 工具指定 subagent_type，独立任务一条消息并行多发；调用时可临场覆盖 model / effort（战略任务给高档，机械任务给 low）
+- **升级 Workflow**（重器，须用户明示授权——「用 workflow / ultracode」）：同构子任务 ≥3 可流水线 / 发现类任务需对抗验证（N 怀疑者驳斥投票）/ 编排需可复现可续跑。默认 pipeline 不设 barrier，仅当下一阶段真需全量上游结果（去重 / 汇总 / 早退）才 parallel
 
 ### 4.7 部署到其他项目
 
@@ -141,10 +154,6 @@ windsurf-dao 是货架项目。部署方式：`dao.ps1 link-claude` 将 `ccswitc
 | 验 | `dao-verify` skill | 慎终如始，则无败事（第64章）|
 
 哲学底色不是装饰——它在推理时提供更深层的约束（见 T28 教训）。
-
-### 4.9 subagent 调度的判断准则(不强制)
-
-rate limit 实测 ≤ 1 并发(T29 教训)，采用"按需判断"而非"每阶段强制派"。六项检查（模板化?/需不同模型?/context 臃肿?/rate limit 有预算?/值 15× token?/可真并行?）同时满足 3+ → 派 subagent；否则主会话直接做。详见 `ccswitch/commands/dao-dev.md` Subagent 调度段 和 `ccswitch/agents/` profiles。
 
 ---
 

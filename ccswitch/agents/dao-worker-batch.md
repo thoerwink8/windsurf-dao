@@ -1,7 +1,7 @@
 ---
 name: dao-worker-batch
 description: 严格按 spec 执行的工人 agent。零自主判断、不做设计、不做决策。适合批量、模板化、确定性任务(改名/格式化/套模板写测试/批量改 import)。spec 不清晰即拒绝执行,回打给 dao-spec-writer。Use proactively 当已有详尽到位的 spec,需要确定性、模板化的批量执行时。
-model: opus
+model: haiku
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
