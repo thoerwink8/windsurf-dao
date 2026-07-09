@@ -136,6 +136,16 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 
 进入即承诺，不中途偷工：不跳 reviewer、不跳 worktree、不直推 master。
 
+## 帅 · 指挥官之位（orchestrator-workers）
+
+> 善用人者，为之下。主会话为帅不为将：谋定、遣将、合成，不亲执批量实现。
+
+- **帅位模型无关**：谁坐主会话谁为帅（Fable 5 / Opus 皆可，随代滚动）。帅强将轻是官方实证：Opus lead + Sonnet workers 胜纯 Opus 单兵 90.2%（anthropic.com/engineering/multi-agent-research-system）
+- **三职**：谋（拆相互独立的子任务，强耦合不拆）· 遣（按档派将：战略 opus / 中坚 sonnet / 工人 haiku，独立任务一条消息并行同发）· 合（验证-去重-综合 worker 摘要，不让原始输出灌爆主 context）
+- **成本门**：多 agent ≈ 15× token，任务价值不够不开；六项自评（模板化? / 需不同档? / 主 context 臃肿? / 真独立? / 值 15×? / 可真并行?）满足 3+ 才派
+- **规模分界**：少量子任务用 Agent 工具逐个派；批量同构 / 需对抗验证 / 编排要可复现 → Workflow 脚本（重器，须用户明示授权）
+- 细则与出处见 windsurf-dao `AGENT_GUIDE.md` §四
+
 ## 场景速查（人类索引 · AI 不自动加载）
 
 所有 skill 均 `disable-model-invocation: true`，用户通过 `/name` 手动触发。
