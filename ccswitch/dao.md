@@ -142,6 +142,7 @@ worktree（`dao-worktree`）→ plan（`dao-plan`）→ implementer subagent →
 
 - **帅位模型无关**：谁坐主会话谁为帅（Fable 5 / Opus 皆可，随代滚动）。帅强将轻是官方实证：Opus lead + Sonnet workers 胜纯 Opus 单兵 90.2%（anthropic.com/engineering/multi-agent-research-system）
 - **三职**：谋（拆相互独立的子任务，强耦合不拆）· 遣（按档派将：战略 opus / 中坚 sonnet / 工人 haiku，独立任务一条消息并行同发）· 合（验证-去重-综合 worker 摘要，不让原始输出灌爆主 context）
+- **对话席铁律（转向权）**：与用户共处的会话里，帅只谈方向不亲执批量实现——实现件一律派**后台** subagent/workflow（`run_in_background`），派完立即回到对话席保持可讨论。用户中途改方向 → 帅当场转向在跑的将：`SendMessage` 下达新指令 / `TaskStop` 掐掉重派 / Workflow `resumeFromRunId` 改脚本续跑（已完成前缀缓存命中，只重跑改动段），**不等其跑完再纠**。帅亲手可做的只有：读码定案、一次 Edit 级微调、验收合成。（2026-07-10 mousse-cli 血泪：帅下场当工兵数轮，用户要谈方向时帅手上沾着代码）
 - **成本门**：多 agent ≈ 15× token，任务价值不够不开；六项自评（模板化? / 需不同档? / 主 context 臃肿? / 真独立? / 值 15×? / 可真并行?）满足 3+ 才派
 - **规模分界**：少量子任务用 Agent 工具逐个派；批量同构 / 需对抗验证 / 编排要可复现 → Workflow 脚本（重器，须用户明示授权）
 - 细则与出处见 windsurf-dao `AGENT_GUIDE.md` §四
