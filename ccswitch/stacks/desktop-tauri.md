@@ -33,6 +33,23 @@ pnpm tauri dev
 ```
 
 **项目固化**：应在 `package.json` 添加 `dev:debug` 脚本，而非每次手动设环境变量。
+跨平台用 `cross-env`：`"dev:debug": "cross-env WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 tauri dev"`。
+
+### ⚠ 端口争用 · chrome-devtools 连到"错的应用"（L14 血泪，2026-07-10）
+
+**关键认知**：`chrome-devtools` MCP 若无 `--browser-url` 参数（默认配置就没有），会连**固定 9222 端口**的 CDP。9222 是**全局独占**资源——多个 Tauri 应用（或残留的 `msedgewebview2` 僵尸进程）抢同一端口，**谁先绑定谁拥有**。后启动的应用 `--remote-debugging-port=9222` 静默失败（端口已占）→ 拿不到调试端口 → chrome-devtools 连到的是**先占住 9222 的那个应用**。
+
+**症状**：`list_pages` 显示的是**别的 Tauri 应用**（如 TraceyU）而非你正在调试的应用。
+
+**这不是"CDP 不可用"——是端口争用。** 误判为 CDP 不可用而降级到 windows-mcp 是错的（本条即由此教训而生）。
+
+**dogfood 前置检查（每次起 WebView2 调试前必做）**：
+1. **清端口**：`Get-NetTCPConnection -LocalPort 9222 -State Listen` → 有占用者则 `Stop-Process -Force`（含残留 msedgewebview2 僵尸 + 其他 Tauri 应用的调试进程）
+2. **独占启动**：`pnpm dev:debug`，只让目标应用占 9222
+3. **验证归属**：`curl -s http://localhost:9222/json` → 确认返回的 `title`/`url` 是**你的应用**（如 mousse/localhost:5173），不是别的
+4. **再连 MCP**：`chrome-devtools list_pages` 应显示你的应用。若仍是别的 → 回步骤 1 端口没清干净
+
+**根治（可选，避免每次清端口）**：给每个 Tauri 项目分配**唯一调试端口**（mousse=9222、TraceyU=9223…），并为需要连非默认端口的应用配一个带 `--browser-url http://127.0.0.1:<port>` 的专用 chrome-devtools MCP 条目。默认 9222 留给"当前主调试应用"。
 
 ### 为什么不用 Chrome 做代理
 
@@ -89,4 +106,5 @@ windows-mcp 的 Screenshot 会切换窗口焦点、全屏截图含任务栏、�
 - 进程管理在**会话最开头做一次**，不在中途反复杀重启
 - 同一会话只用一个浏览器 MCP 工具，不中途换
 - MCP 连接失败 2 次 → 检查端口/进程，不盲目重试
+- **chrome-devtools 连到错的应用 ≠ CDP 不可用**：先按上方「端口争用」前置检查清端口独占，**不要**因此降级到 windows-mcp（L14）。windows-mcp 仅在 WebView2 CDP **物理不可用**（非 Windows / WebView2 不支持 CDP）时才用
 - 截图路径遵循 dao.md 截图路径强制规则
