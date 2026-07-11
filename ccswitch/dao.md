@@ -191,6 +191,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 > 慎终如始，则无败事。通用安全（超时/非交互/破坏性确认）由 Claude Code 内置，此处仅留 dao 血泪增量：
 
 - **Windows PowerShell 假错**：用 `$LASTEXITCODE` 判成败，不看输出有无 "error" 字样；中文「所在位置 行:X」是 ErrorRecord 非真错；禁 `2>&1`（混流致假错），噪音用 `2>$null`
+- **PS 管道禁改含中文/无 BOM 文件**：PS5.1 `Get-Content` 对无 BOM UTF-8 按 ANSI 读、`Set-Content -Encoding utf8` 写出带 BOM——`Get-Content|-replace|Set-Content` 管道改写会把中文变乱码入库且 BOM 弄坏 JSON/TOML 消费方。文件内容替换一律用编辑工具（实证 2026-07-12：Cargo.toml 中文注释乱码+三 JSON 带 BOM 致 tauri dev 崩，已入库后返工）
 - **路径锚点**：跨 workspace 或终端异常后，用 `git -C <repo>` / `pnpm --dir <repo>` / `npm --prefix <repo>`，不只依赖 cwd
 - **验证加 marker**：关键验证用 `VERIFY_BEGIN ... VERIFY_EXIT=$LASTEXITCODE` 包裹；marker 缺失或来自错误目录 → 判为终端感知异常，不判业务失败
 - **禁 PowerShell 里的 Bash heredoc**：`python - <<'PY'` 在 PS 中报 ParserError，改用 here-string + `Set-Content`
