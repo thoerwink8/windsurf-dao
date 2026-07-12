@@ -1,7 +1,7 @@
 ---
 name: dao-strategist
 description: 战略层 agent。仅在以下情况召唤:架构选型一次定调、跨多文件 5+ 强耦合重构、复杂状态机/并发推导、3 次修复失败后质疑架构。配合最高思考强度使用。这是金字塔顶端,稀少召唤,贵但值。Use proactively 仅当决策错了代价 ≥ 100 小时影响、需长链推理或对抗性挑剔且普通 reviewer 不够时。
-model: opus
+model: fable
 tools: Read, Grep, Glob, Write
 ---
 
