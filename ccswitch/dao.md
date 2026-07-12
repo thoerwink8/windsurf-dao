@@ -120,6 +120,8 @@ Skill spec 编写动态选项列表时，**写完必须数一遍**，超 4 即�
 
 **项目标准结构**：首次进入项目静默检查，详见 `dao-project-scaffold` skill。
 
+**前端技术栈自检**（首次接触前端项目时静默执行）：检测到 `react`/`vue`/`svelte` 依赖或 `src-ui/`/`apps/desktop/` 等目录 → 检查 `.claude/rules/frontend-style.md` 是否存在（样式技术路线以 `stacks/` 对应处方为准，Tailwind 优先，禁手写布局 CSS）；**不存在 → 提醒**：`📋 检测到前端项目但缺样式技术路线约定 → 请输入 /dao-project-scaffold`（血泪见 mousse-cli 断链事故）。
+
 **Rule vs Skill 边界**：always_on 写本文件（每轮注入）；按需知识做 skill（渐进披露）。
 
 **Memory 归位**：知识属于项目文件 → 写项目文件；仅跨会话自用 → 才写 memory。回顾类提问先搜 `memory/` + `docs/evolution/*.csv`。
