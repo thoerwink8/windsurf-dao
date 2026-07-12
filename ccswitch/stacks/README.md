@@ -14,3 +14,15 @@
 | `backend-go.md` | go mod + net/http(chi) + sqlc | 高并发/CPU 密集/系统级/单二进制分发（任一信号即切） |
 
 > 未来扩展：`mobile-expo.md` 等，按实际项目需要新增。kit STACK.md 的 `stack:` 声明按处方名挂载。
+
+## 这些文件如何被强制执行
+
+`stacks/` 全部按需加载（不进 always_on），单靠"存在"不会自动生效——必须有触发点把处方翻译成项目侧可持续加载的约束，否则规范形同虚设（2026-07-12 mousse-cli 血泪：`frontend-react-vite.md` 的 Tailwind 铁律从 v0.1 写到 v1.23 从未落地，手写 2000+ 行布局 CSS 才被发现）。
+
+强制执行链：
+
+1. **scaffold 门控**：`dao-project-scaffold` 首次进入项目时检测前端信号（`react`/`vue`/`svelte` 依赖等），检查 `.claude/rules/frontend-style.md` 是否存在
+2. **派生**：缺失时提醒从对应处方（如 `frontend-react-vite.md`）派生该 rule——声明样式技术路线（Tailwind 优先，禁手写布局 CSS），frontmatter 带 `description` + `paths:` 条件加载（参考 TraceyU `.claude/rules/code-to-prototype.md` 形式）
+3. **always_on 兜底**：`dao.md`「前端技术栈自检」条目每轮注入，跳过 scaffold 直接进项目的场景也能兜住
+
+`.claude/rules/frontend-style.md` 派生后才是项目侧真正持续生效的约束；`stacks/` 本身只是处方库，不直接作用于项目会话。
