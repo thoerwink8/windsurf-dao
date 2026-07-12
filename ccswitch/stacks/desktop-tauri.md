@@ -23,6 +23,13 @@ Tauri dev 由**两个独立进程**组成：
 
 **铁律**：修改 Rust 侧后必须重启 `pnpm tauri dev`。HMR 只覆盖前端。
 
+## 真机验证构建 · custom-protocol feature 是必需项（L18 血泪，2026-07-13）
+
+plain `cargo build --release`（不带 `--features tauri/custom-protocol`）不会把 `frontendDist` 嵌入产物——产物里的 `devUrl`（如 `http://localhost:5173`）仍生效，启动后加载的是**别人正在跑的 Vite dev server**，且与之共享同一应用 DB，验证结果全部作废（险些验证了错误代码）。
+
+- **正解**：真机验证构建必须 `cargo build -p <app> --release --features tauri/custom-protocol`
+- **信号**：`chrome-devtools list_pages` 若看到 `localhost:5173` 而非 `tauri.localhost` 即中招，立即停止验证、重新按上述命令构建
+
 ## 调试通道 · WebView2 远程调试
 
 在 Windows 上，WebView2 支持 Chrome DevTools Protocol。设环境变量后 chrome-devtools MCP 可直连 Tauri 窗口内的 WebView：
