@@ -93,10 +93,10 @@
 | 层级 | model 档 | Agent | 职责 |
 |---|---|---|---|
 | 帅 | 主会话当前最强（Fable 5 / Opus，随代滚动） | 主会话 | 分解 / 委派 / 合成 / 验证 / 兜底，不亲执批量实现 |
-| 军师 | fable | strategist | 架构定调、卡死攻坚（决策代价≥100h 才召，2026-07-12 军师报告调档） |
-| 将 | opus | reviewer-critical + 复杂混合实现件 | 核心模块对抗性 review / 独当一面硬活 |
-| 兵 | sonnet | brainstormer / plan-writer / spec-writer / reviewer / debugger + 常规实现侦察 | 主力 ~80% 流量 |
-| 工兵 | haiku | worker-batch | 严格按含完整模板的 spec 执行，零自主判断（spec 无模板则升兵） |
+| 将 | fable | strategist | 架构定调、卡死攻坚（决策代价≥100h 才召，2026-07-12 战略报告调档） |
+| 校 | opus | reviewer-critical + 复杂混合实现件 | 核心模块对抗性 review / 扛硬仗 |
+| 尉 | sonnet | brainstormer / plan-writer / spec-writer / reviewer / debugger + 常规实现侦察 | 主力 ~80% 流量 |
+| 兵 | haiku | worker-batch | 严格按含完整模板的 spec 执行，零自主判断（spec 无模板则升尉） |
 
 档位写死在 `ccswitch/agents/*.md` frontmatter `model:`；帅位不写档——天然继承主会话模型，Fable 换 Opus 或换下一代，体系零改动。用较轻模型坐主会话时即官方 Advisor 变体：帅位遇高难决策临时召 opus strategist 咨询即可。
 
