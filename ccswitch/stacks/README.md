@@ -10,6 +10,7 @@
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | 需要前端 + SSR/SEO/文件路由诉求 |
 | `frontend-react-vite.md` | React 19 + Vite + zustand + Tailwind | 工具型 SPA/内部应用/桌面 WebView（kit 默认前端） |
 | `desktop-tauri.md` | Tauri 2 + WebView2 调试 | 桌面端开发/调试/GUI 验证 |
+| `frontend-ui-testing.md` | 逻辑/组件/视觉回归/E2E 四层测试 | 前端项目建立或补齐 UI 测试策略 |
 | `backend-ts.md` | Hono + Drizzle + pnpm monorepo | 需要后端（**默认**，AI-agent-first 单语言链） |
 | `backend-go.md` | go mod + net/http(chi) + sqlc | 高并发/CPU 密集/系统级/单二进制分发（任一信号即切） |
 | `ci-github-actions.md` | GitHub Actions CI 矩阵/计费策略 | 项目含 `.github/workflows/*.yml`，尤其涉及 macOS/多平台矩阵 |
