@@ -101,7 +101,7 @@ disable-model-invocation: true
 - [ ] **开工包白名单**：根目录存在 `kit.json` manifest → `docs/kit/`（DECISIONS / STACK / INIT / FRONTEND / BACKEND / OPEN-QUESTIONS + acceptance/ + design-prompts/）视为合规结构，不判冗余；kit 文件散落根目录 → 建议按上述映射归位到 `docs/kit/`，不建议删除
 - [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
 - [ ] `docs/specs/` 存在（Loop 工作区）
-- [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理）
+- [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理；**豁免**：项目 CLAUDE.md 将 TODO.md 用作候选池/dogfood 记账制者——此时它是活账本非遗留，不得建议清理。2026-07-22 查冲突 spike 抓获本条与 dao.md 帅节记账制的结构性矛盾，mousse-cli 类项目首当其冲）
 - [ ] 上表命中的每个技术栈指纹，其对应 supporting file 的检查清单已过一遍
 
 缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。
