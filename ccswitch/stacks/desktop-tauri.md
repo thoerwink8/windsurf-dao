@@ -80,6 +80,18 @@ PowerShell + .NET 截图脚本，不行则诚实挂账「需用户目视」。
 
 **下方能力对比表的 windows-mcp 列仅作历史存档**，不再是可选项。
 
+#### 无 MCP 的原生桌面能力兜底（2026-07-25 实测通过，替代 windows-mcp 的两项能力）
+
+真遇到「必须截桌面」或「必须操控原生窗口」的小概率场景，走 PowerShell 原生路径，**不要为此装回 windows-mcp**。
+
+**① 截图（比 windows-mcp 更好：不切换窗口焦点、可指定区域、可裁掉任务栏）**：
+`Add-Type -AssemblyName System.Windows.Forms,System.Drawing` → 取 `[System.Windows.Forms.SystemInformation]::VirtualScreen` 得真实画布尺寸 → `New-Object System.Drawing.Bitmap` + `[System.Drawing.Graphics]::FromImage($bmp)` → `$g.CopyFromScreen($vs.X,$vs.Y,0,0,$bmp.Size)` → `$bmp.Save(path, Png)` → **务必 `Dispose()` 释放 GDI 句柄**。截区域只需换 `CopyFromScreen` 的源坐标与 `$bmp` 尺寸。产物落项目 `_tmp/qa/`；**含用户桌面隐私内容的探针截图用完即删**。
+
+**② 原生窗口操控（比坐标点击更可靠：按控件而非像素）**：
+`Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes` → `[System.Windows.Automation.AutomationElement]::RootElement` → `FindAll/FindFirst` + `PropertyCondition`（按 `NameProperty`/`ClassNameProperty`/`AutomationIdProperty` 定位）→ 取 `InvokePattern`（点按）/`ValuePattern`（填值）/`ExpandCollapsePattern` 等执行。元素级操作不依赖屏幕坐标，不会误点到邻居窗口——这正是 windows-mcp 坐标盲操作反复出事的地方。
+
+**能力等价性结论**：windows-mcp 无任何不可替代能力。截图、GUI 操控、进程、注册表、文件读写六项各有等质或更优替代（后四项走内置 PowerShell 与 Read/Grep/Glob）。因此它是**可移除项**而非必需依赖。
+
 ## GUI 工具能力对比（自 dao.md 下沉，2026-07-07）
 
 | 能力 | chrome-devtools | playwright | windows-mcp |
