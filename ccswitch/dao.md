@@ -49,7 +49,7 @@
 
 > 绝利一源，用师十倍。三器不争，各归其位。
 
-桌面端 GUI 验证有三个 MCP 工具可用，功能重叠但能力边界不同。**每次截图/交互前走此决策树，不凭习惯选工具**：
+桌面端 GUI 验证有**两个** MCP 工具可用（windows-mcp 已弃用，见下方禁令），**每次截图/交互前走此决策树，不凭习惯选工具**：
 
 ```
 应用有 WebView 层吗？（Tauri / Electron / CEF / WebView2）
@@ -59,11 +59,18 @@
 ├─ 否（纯 Web 应用 / Vite dev server）
 │   └─ playwright MCP（自管浏览器，E2E 流程最佳）              ← Web 首选
 └─ 否（原生 Win32 / WPF / 无 Web 层）
-    └─ windows-mcp Screenshot（最后手段，仅截图不交互）         ← 兜底
-
-⚠ windows-mcp 已知缺陷：切换窗口焦点、全屏截图含任务栏、无 DOM 访问。
-   有 WebView 的应用绝不用 windows-mcp 做常规验证。
+    └─ 无 MCP 工具 → PowerShell + .NET 截图脚本（System.Drawing
+       CopyFromScreen 落 _tmp/qa/）；脚本也不可行时诚实挂账「需用户目视」，
+       不得为此复活 windows-mcp
 ```
+
+**🚫 windows-mcp 禁令（用户拍板 2026-07-25，一票否决）**：**任何场景不得使用 windows-mcp
+任何工具**（Screenshot / Click / Type / PowerShell / Process / Registry / FileSystem…），
+该 MCP 已从用户机器卸载。替代分工：DOM 与截图走 chrome-devtools / playwright；进程与注册表
+走内置 PowerShell 工具；文件读写搜索走内置 Read / Grep / Glob。
+**弃用理由**（缺陷 + 用户明确要求双重）：切换窗口焦点污染被测状态、全屏截图含任务栏、无 DOM
+访问、位图证据不如 DOM 文本可复核且更烧 token。凡本文件/skills/stacks 提到它的历史段落，一律
+按本禁令读作「已弃用，不得选用」。
 
 **工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（含分层测试策略与直连原理），选型只走上方决策树。
 

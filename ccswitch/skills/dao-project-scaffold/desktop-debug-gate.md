@@ -22,7 +22,7 @@
 3. 检查 `CLAUDE.md` 记录了 `dev:debug` 命令
 4. 缺项 → 建议创建，参考 `stacks/desktop-tauri.md` 处方
 
-**为什么必须在 scaffold 阶段就位**：桌面端调试工具选择（chrome-devtools vs playwright vs windows-mcp）是高频决策。没有规则文件 → AI 每次会话自行判断 → 选错工具 → 排障循环 → 烧 context + 烧钱。一次 scaffold 省百次重试。
+**为什么必须在 scaffold 阶段就位**：桌面端调试工具选择（chrome-devtools vs playwright，windows-mcp 已弃用见 `dao.md` §目·观）是高频决策。没有规则文件 → AI 每次会话自行判断 → 选错工具 → 排障循环 → 烧 context + 烧钱。一次 scaffold 省百次重试。
 
 模板（`dev:debug` 脚本内容，Windows cmd.exe 语法）：
 ```
