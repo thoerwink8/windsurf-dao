@@ -223,7 +223,7 @@ L2 结构层自动化补充——检测窗口边缘死区（Grid/Flex 容器子�
 
 ### 6.5 验证脚本标准流程
 
-**Playwright headless 是 L3~L5 主路径**（可复现/可 CI/可编程遍历状态矩阵）。windows-mcp Screenshot 仅限调试辅助（Tauri 原生窗口等 headless 无法触及的场景）。`toHaveScreenshot()` 是 CI 回归门，验证脚本是人可读审计产出——两者互补。
+**Playwright headless 是 L3~L5 主路径**（可复现/可 CI/可编程遍历状态矩阵）。headless 触不到的场景（Tauri 原生窗口等）走 chrome-devtools 直连 WebView 取 DOM/截图——**windows-mcp 已弃用，禁令见 `dao.md` §目·观**。`toHaveScreenshot()` 是 CI 回归门，验证脚本是人可读审计产出——两者互补。
 
 **脚本数据结构**：页面-状态清单，每条含页面标识 / 状态标识 / 导航方式 / 状态注入 / 设计原型路径 / 阈值档位。清单从 `design-fidelity.md` 状态矩阵提取。清单为空或只有一态 = 不合规。
 

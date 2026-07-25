@@ -48,7 +48,7 @@ pnpm tauri dev
 
 **症状**：`list_pages` 显示的是**别的 Tauri 应用**（如 TraceyU）而非你正在调试的应用。
 
-**这不是"CDP 不可用"——是端口争用。** 误判为 CDP 不可用而降级到 windows-mcp 是错的（本条即由此教训而生）。
+**这不是"CDP 不可用"——是端口争用。** 误判为 CDP 不可用而放弃直连、降级到位图截图类手段是错的（本条即由此教训而生；当年的降级目标 windows-mcp 现已弃用）。
 
 **dogfood 前置检查（每次起 WebView2 调试前必做）**：
 1. **清端口**：`Get-NetTCPConnection -LocalPort 9222 -State Listen` → 有占用者则 `Stop-Process -Force`（含残留 msedgewebview2 僵尸 + 其他 Tauri 应用的调试进程）
@@ -70,9 +70,15 @@ pnpm tauri dev
   优势：真实环境（SQLite/IPC 全可用）、少两个进程、无连接中间人
 ```
 
-### 为什么不用 windows-mcp
+### windows-mcp 已弃用（用户拍板 2026-07-25，一票否决）
 
-windows-mcp 的 Screenshot 会切换窗口焦点、全屏截图含任务栏、无 DOM 访问能力。对有 WebView 的应用是降级方案，不是首选。仅在 WebView 远程调试完全不可用时作为最后手段。
+**任何场景不得使用 windows-mcp 任何工具**——该 MCP 已从用户机器卸载，禁令见 `dao.md` §目·观。
+弃用理由：Screenshot 切换窗口焦点污染被测状态、全屏截图含任务栏、无 DOM 访问、位图证据不如
+DOM 文本可复核且更烧 token。替代分工：DOM 与截图 → chrome-devtools / playwright；进程与注册表
+→ 内置 PowerShell 工具；文件读写搜索 → 内置 Read / Grep / Glob；纯 Win32 无 Web 层 →
+PowerShell + .NET 截图脚本，不行则诚实挂账「需用户目视」。
+
+**下方能力对比表的 windows-mcp 列仅作历史存档**，不再是可选项。
 
 ## GUI 工具能力对比（自 dao.md 下沉，2026-07-07）
 
