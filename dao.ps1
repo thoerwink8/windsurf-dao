@@ -410,30 +410,14 @@ function Invoke-LinkClaude {
         }
     }
 
-    # ── 幂等设置 outputStyle 到 ~/.claude/settings.json ──
-    if (Test-Path $settingsPath) {
-        Write-Host "  [outputStyle]" -ForegroundColor Cyan
-        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
-        $hasOutputStyle = $false
-        if ($sraw -match '"outputStyle"\s*:\s*"dao-field"') { $hasOutputStyle = $true }
-        if ($hasOutputStyle) {
-            Write-Host "    [skip ] outputStyle already set to dao-field" -ForegroundColor DarkGray
-            $skipped++
-        } elseif ($IsDryRun) {
-            Write-Host "    [DRYRUN] set outputStyle: dao-field" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                $settings = $sraw | ConvertFrom-Json
-                $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "dao-field" -Force
-                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
-                Write-Host "    [set  ] outputStyle: dao-field" -ForegroundColor Green
-                $linked++
-            } catch {
-                Write-Host "    [error] outputStyle set failed: $_" -ForegroundColor Red
-                $err++
-            }
-        }
+    # ── settings.json 键位（outputStyle/hooks/permissions 等）统一归 cc-switch 单引擎 ──
+    # dao.ps1 不再直接写 ~/.claude/settings.json（fortify2-20260726 D3 退役：原 outputStyle
+    # 直写段 + dao-glob-gate/dao-cn-title 两段 hook 注册段共 ~140 行，均是 common_config_claude
+    # 快照早已完整覆盖的键位——env/permissions/model/hooks/statusLine/enabledPlugins/theme/
+    # enableWorkflows/includeCoAuthoredBy/outputStyle 全部由 cc-switch 下发，版本化备份/恢复
+    # 由 config-sync 模块负责）。裸机场景（未装 cc-switch）只提示，不代写。
+    if (-not (Test-Path $settingsPath)) {
+        Write-Host "  [settings] 未检测到 ~/.claude/settings.json —— 请运行 cc-switch 下发配置（outputStyle/hooks 等键位统一由其管理）" -ForegroundColor Yellow
     }
 
     # ── 幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md ──
@@ -461,100 +445,6 @@ function Invoke-LinkClaude {
             $linked++
         }
     }
-
-    # ── 幂等注册 dao-glob-gate PostToolUse hook 到 ~/.claude/settings.json ──
-    # 编辑代码/dao 文件后注入 dao-quality / dao-meta 提醒
-    $hookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-glob-gate.js") -replace '\\', '/'
-    if (Test-Path $hookScript) {
-        Write-Host "  [hook]" -ForegroundColor Cyan
-        $hookCmd = "node `"$hookScript`""
-        $alreadyHooked = $false
-        if (Test-Path $settingsPath) {
-            $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
-            if ($sraw -match [regex]::Escape("dao-glob-gate.js")) { $alreadyHooked = $true }
-        }
-        if ($alreadyHooked) {
-            Write-Host "    [skip ] dao-glob-gate hook already registered" -ForegroundColor DarkGray
-            $skipped++
-        } elseif ($IsDryRun) {
-            Write-Host "    [DRYRUN] register PostToolUse hook -> $hookScript" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                if (Test-Path $settingsPath) {
-                    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-                } else {
-                    $settings = [PSCustomObject]@{}
-                }
-                $hookEntry = [PSCustomObject]@{
-                    matcher = "Edit|Write|MultiEdit"
-                    hooks   = @([PSCustomObject]@{ type = "command"; command = $hookCmd; timeout = 10 })
-                }
-                if (-not $settings.PSObject.Properties['hooks']) {
-                    $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{})
-                }
-                if (-not $settings.hooks.PSObject.Properties['PostToolUse']) {
-                    $settings.hooks | Add-Member -NotePropertyName PostToolUse -NotePropertyValue @()
-                }
-                $settings.hooks.PostToolUse = @($settings.hooks.PostToolUse) + $hookEntry
-                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
-                Write-Host "    [add  ] PostToolUse hook -> dao-glob-gate.js" -ForegroundColor Green
-                $linked++
-            } catch {
-                Write-Host "    [error] hook register failed: $_" -ForegroundColor Red
-                $err++
-            }
-        }
-    }
-
-    # ── 幂等注册 dao-cn-title UserPromptSubmit hook 到 ~/.claude/settings.json ──
-    # 会话标题中文化:发首条消息时调 Claude 生成简体中文短标题,经 hookSpecificOutput.sessionTitle 注入
-    $titleHookScript = (Join-Path (Join-Path $claudeSrc "hooks") "dao-cn-title.js") -replace '\\', '/'
-    if (Test-Path $titleHookScript) {
-        $titleHookCmd = "node `"$titleHookScript`""
-        $titleHooked = $false
-        if (Test-Path $settingsPath) {
-            $sraw2 = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
-            if ($sraw2 -match [regex]::Escape("dao-cn-title.js")) { $titleHooked = $true }
-        }
-        if ($titleHooked) {
-            Write-Host "    [skip ] dao-cn-title hook already registered" -ForegroundColor DarkGray
-            $skipped++
-        } elseif ($IsDryRun) {
-            Write-Host "    [DRYRUN] register UserPromptSubmit hook -> $titleHookScript" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                if (Test-Path $settingsPath) {
-                    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
-                } else {
-                    $settings = [PSCustomObject]@{}
-                }
-                $titleHookEntry = [PSCustomObject]@{
-                    hooks = @([PSCustomObject]@{ type = "command"; command = $titleHookCmd; timeout = 12 })
-                }
-                if (-not $settings.PSObject.Properties['hooks']) {
-                    $settings | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{})
-                }
-                if (-not $settings.hooks.PSObject.Properties['UserPromptSubmit']) {
-                    $settings.hooks | Add-Member -NotePropertyName UserPromptSubmit -NotePropertyValue @()
-                }
-                $settings.hooks.UserPromptSubmit = @($settings.hooks.UserPromptSubmit) + $titleHookEntry
-                [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
-                Write-Host "    [add  ] UserPromptSubmit hook -> dao-cn-title.js" -ForegroundColor Green
-                $linked++
-            } catch {
-                Write-Host "    [error] title hook register failed: $_" -ForegroundColor Red
-                $err++
-            }
-        }
-    }
-
-    # ── 通用配置已退役 dao-settings-sync 自愈机制 ──
-    # 现以 cc-switch 为唯一下发引擎:common_config_claude 完整覆盖 env/permissions/model/
-    # hooks/statusLine/enabledPlugins/theme/enableWorkflows/includeCoAuthoredBy/outputStyle。
-    # 版本化备份/恢复改由 windsurf-dao/config-sync 模块负责(导出/恢复/体检 .bat)。
-    # 旧机器若仍残留 SessionStart 自愈 hook 或登录任务,运行 `.\dao.ps1 unlink-claude` 清理。
 
     Write-Host ""
     Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
