@@ -1,7 +1,7 @@
 # dao-design · OD 端协议
 
 > 本文件是 OD 端的设计协议，由 `.od-skills/README.md` 路由到此。
-> 对应 CLI 端 skill: `dao-design`（open.md §P）。
+> 对应 CLI 端 skill: `dao-design`（`od-prompt.md`，Prompt→Design 提示词生成器）。
 >
 > **部署方式**：本文件位于 windsurf-dao（唯一真相源），各项目 `design/.od-skills/` 通过 symlink 引用。
 >
