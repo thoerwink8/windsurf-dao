@@ -36,8 +36,8 @@
 
 ## 检查清单
 
-- [ ] `package.json` 含 `dev:debug` 脚本（WebView2 远程调试端口）
-- [ ] `.claude/rules/desktop-debugging.md` 存在（MCP 工具选择 + 启动命令）
+- [ ] 🤖 `package.json` 含 `dev:debug` 脚本（WebView2 远程调试端口）
+- [ ] 🤖 `.claude/rules/desktop-debugging.md` 存在（MCP 工具选择 + 启动命令）
 - [ ] `CLAUDE.md` 记录了 `dev:debug` 命令及说明
 - [ ] （若有 `migrations/`）跨层一致性检查脚手架就位（见上方）
 
