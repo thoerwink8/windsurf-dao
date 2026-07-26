@@ -50,7 +50,7 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
    - 散落的 spec/design 文件 → 提议归并
 4. 检查活跃/中断 loop（展示总览表，见 §1）
 5. 验证 git 工作区干净度
-6. **命令同步检查**：验证 `~/.claude/commands/dao-loop.md` 存在且非 0 字节。缺失或空文件 → 提示运行 `powershell -File <windsurf-dao>/ccswitch/scripts/sync-commands.ps1`
+6. **命令同步检查**：验证 `~/.claude/commands/dao-loop.md` 存在且非 0 字节。缺失或空文件 → 提示运行 `powershell -File <windsurf-dao>/dao.ps1 link-claude`（fortify2-20260726 D6：sync-commands.ps1 已删除，覆盖面更窄且被 link-claude 完全取代）
 
 结构不合理 → 提出改造方案 → **用户确认后执行** → 再进 loop。已符合标准 → 跳过。
 

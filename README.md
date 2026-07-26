@@ -97,10 +97,6 @@ config-sync/
 
 详见 [`config-sync/README.md`](config-sync/README.md)。
 
-### MCP 配置（`ccswitch/mcp/`）
-
-预配置的 MCP 启动脚本（绕过 npx 超时）：chrome-devtools / context7 / github / playwright / tavily 等。
-
 ### 元规则（`global_rules.md`）
 
 31 行跨项目元规则。Claude Code 侧已整合进 `ccswitch/dao.md`，此文件保留为历史参考。
