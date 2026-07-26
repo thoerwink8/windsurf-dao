@@ -115,6 +115,9 @@ node config-sync\lib\sync.mjs --direction=down --yes
 
 ```powershell
 # Codex（把 skills 链入 ~/.codex/skills）
+# 该目录的写入方是 cc-switch store（2026-07-27 拍板）——步骤 3 的下行同步已把 store 铺好。
+# link-codex 是补位动作：只填 store 未占的名字（如 dao-* skills），撞名让行不覆盖。
+# 故本行可选；跳过不会导致缺件，dao.ps1 status 也不再红字催跑。
 .\dao.ps1 link-codex
 .\dao.ps1 link-codex-prompts
 
