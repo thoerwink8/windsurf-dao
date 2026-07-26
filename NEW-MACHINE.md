@@ -114,11 +114,13 @@ node config-sync\lib\sync.mjs --direction=down --yes
 ### 步骤 4 · 部署其他栈（按需，Claude Code 已由步骤 3 自动完成）
 
 ```powershell
-# Codex（把 skills 链入 ~/.codex/skills）
-# 该目录的写入方是 cc-switch store（2026-07-27 拍板）——步骤 3 的下行同步已把 store 铺好。
-# link-codex 是补位动作：只填 store 未占的名字（如 dao-* skills），撞名让行不覆盖。
-# 故本行可选；跳过不会导致缺件，dao.ps1 status 也不再红字催跑。
-.\dao.ps1 link-codex
+# Codex skills：无需任何 dao 命令。
+# 该目录的写入方是 cc-switch store（2026-07-27 拍板）——步骤 3 的下行同步已把 store 铺好，
+# dao.ps1 已退出这块的写入业务。下面两条都不是部署动作：
+.\dao.ps1 link-codex             # 只读报告：现状 + store 缺哪些名字（不建链，跑不跑都不影响部署）
+.\dao.ps1 unlink-codex           # 换机一般用不上；老机器上用它清 dao 早年自建的链和悬空坟
+
+# Codex prompts（这个仍由 dao 写，与 skills 不是一回事）
 .\dao.ps1 link-codex-prompts
 
 # ~~Windsurf~~（已退役，勿执行——link-global 落地的 global_rules.md 已 DEPRECATED）

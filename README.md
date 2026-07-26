@@ -145,11 +145,12 @@ cd windsurf-dao
 # Claude Code（主宿主，全局生效）
 .\dao.ps1 link-claude            # symlink skills/commands/agents + @import dao.md
 
-# Codex（镜像部署）
-# 注意：~/.codex/skills 的写入方是 cc-switch store（2026-07-27 拍板）。
-# link-codex 只补 store 没有的名字；store 已占的名字一律让行，不再覆盖。
-.\dao.ps1 link-codex             # 补 store 未覆盖的 skills → ~/.codex/skills
-.\dao.ps1 link-codex-prompts     # 高频 dao prompts → ~/.codex/prompts
+# Codex
+# 注意：~/.codex/skills 由 cc-switch store 部署，dao.ps1 不写它（2026-07-27 拍板）。
+# skills 要出现在 Codex，加到 cc-switch store；dao.ps1 这边只剩看和清。
+.\dao.ps1 link-codex             # 只读报告：谁拥有 ~/.codex/skills、有哪些可清、store 缺哪些名字
+.\dao.ps1 unlink-codex           # 清 dao 早年自建的链 + 悬空坟（唯一还写这个目录的动作，且只删）
+.\dao.ps1 link-codex-prompts     # 高频 dao prompts → ~/.codex/prompts（prompts 与 skills 无关，仍由 dao 写）
 
 # IDE 终端
 .\dao.ps1 set-terminal           # 默认终端 cmd → Git Bash
@@ -165,8 +166,8 @@ cd windsurf-dao
 | `status` | 查看 dao 链接健康状态 |
 | `link-claude [-DryRun]` | 部署 dao 到 Claude Code（skills/commands/agents + @import） |
 | `unlink-claude [-DryRun]` | 反向移除 Claude Code 中的 dao 链接 |
-| `link-codex [-DryRun]` | 补 Claude skills → Codex（**只填 cc-switch store 未占的名字**，store 已占则让行） |
-| `unlink-codex [-DryRun]` | 移除 Codex skill 链接（只删 dao 管理的链 + 悬空链，不碰 cc-switch store 的链） |
+| `link-codex` | **只读报告**：`~/.codex/skills` 归属与现状（不建链——该目录的写入方是 cc-switch store） |
+| `unlink-codex [-DryRun]` | 移除 Codex skill 链接（只删 dao 自建的链 + 悬空链，不碰 cc-switch store 的链） |
 | `link-codex-prompts [-DryRun]` | 高频 dao 命令写入 Codex prompts |
 | `unlink-codex-prompts [-DryRun]` | 移除 Codex prompts |
 | `set-terminal` | IDE 默认终端 cmd.exe → Git Bash（Windsurf/Code/Cursor） |

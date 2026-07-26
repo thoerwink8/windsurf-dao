@@ -139,7 +139,7 @@ windsurf-dao/
 │   ├── commands/dao-*.md   ← 10 slash commands
 │   ├── agents/dao-*.md     ← 8 subagents（服务 dao-pyramid 金字塔调度）
 │   └── stacks/             ← 技术栈处方
-└── dao.ps1                 ← link-claude / link-codex
+└── dao.ps1                 ← link-claude（Codex skills 由 cc-switch store 写，dao 不参与）
 ```
 
 （`global_rules.md`、`.devin/`、`link-global` 均已退役，仅作历史参考。）
