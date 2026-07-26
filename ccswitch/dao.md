@@ -72,7 +72,9 @@
 访问、位图证据不如 DOM 文本可复核且更烧 token。凡本文件/skills/stacks 提到它的历史段落，一律
 按本禁令读作「已弃用，不得选用」。
 
-**工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（含分层测试策略与直连原理），选型只走上方决策树。
+**工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（本文件下文及各 skill 提到的 `stacks/`
+均指 `D:/frank/windsurf-dao/ccswitch/stacks/`，跨项目会话中不与目标项目自身的 `stacks/` 目录混淆，
+fortify2-20260726 D8）（含分层测试策略与直连原理），选型只走上方决策树。
 
 **防断路规则**：
 - 同一会话内**只用一个浏览器工具**，不中途换（换工具 = 端口/锁冲突 = 排障循环 = 烧 context）
