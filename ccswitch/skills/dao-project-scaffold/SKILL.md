@@ -89,15 +89,23 @@ disable-model-invocation: true
 | `.github/workflows/*.yml` 存在 | PR 触发多平台矩阵烧穿计费额度 | [ci-cost-gate.md](ci-cost-gate.md) |
 | _(未来按需扩展)_ | | |
 
-**扩展模式**：发现新的跨层断路或配置陷阱时，在此表中追加一行 + 对应 supporting file。原则：**能自动检测的不写文档提醒，能测试的不写 check 脚本**。
+**扩展模式**：发现新的跨层断路或配置陷阱时，先问「这条能不能机器判」——
+
+- **能机器判**（文件/目录存在、`package.json` 键位、行数、子串包含）→ 往 `ccswitch/scaffold-manifest.json` 加一条，**不要在本表加行、也不要往 `dao.md` 加「首次进项目静默执行」条款**。清单由 `dao-scaffold-check` hook 每次 SessionStart 自动求值，不依赖任何人记得跑本 skill。
+- **需语义理解**（判断 rule 内容对不对、资产结构是否自洽、workflow 收敛得精不精确）→ 才在此表追加一行 + 对应 supporting file。
+
+原则：**能自动检测的不写文档提醒，能测试的不写 check 脚本**。
 
 ## 检查清单
 
+> **下列带 🤖 的条目已由共性 rule 备案清单 `ccswitch/scaffold-manifest.json` 机器化**：`dao-scaffold-check` hook 每次 SessionStart 自动求值并报缺项，本 skill 手动跑时不必重复核对（核对了也无害，只是冗余）。未带 🤖 的仍需人判。
+
 首次进入项目时逐项检查：
 
-- [ ] `CLAUDE.md` 存在且 <80 行
-- [ ] `.claude/rules/` 存在（可空，但目录要有）
-- [ ] 根目录无冗余 AI 入口文件（AGENT.md / AGENT_GUIDE.md 等）
+- [ ] 🤖 `CLAUDE.md` 存在且 <80 行
+- [ ] 🤖 `.claude/rules/` 存在（可空，但目录要有）
+- [ ] 🤖 根目录无冗余 AI 入口文件（AGENT.md / AGENT_GUIDE.md 等。清单当前只机器化了 `AGENT_GUIDE.md` / `KNOWLEDGE.md` 两个具名文件，其他变体仍靠人眼）
+- [ ] 🤖 `.gitignore` 含 `**/_tmp/`（AI 临时产出不入库，见 `dao.md` Shell §临时文件归项目）
 - [ ] **开工包白名单**：根目录存在 `kit.json` manifest → `docs/kit/`（DECISIONS / STACK / INIT / FRONTEND / BACKEND / OPEN-QUESTIONS + acceptance/ + design-prompts/）视为合规结构，不判冗余；kit 文件散落根目录 → 建议按上述映射归位到 `docs/kit/`，不建议删除
 - [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
 - [ ] `docs/specs/` 存在（Loop 工作区）

@@ -56,7 +56,7 @@ design/
 - [ ] `design/workspaces/` 存在（含 README.md）
 - [ ] `design/archive/` 存在（含 README.md）
 - [ ] `design/handoff/` 存在
-- [ ] `design/CONTEXT.md` 存在（会话对齐入口）
+- [ ] 🤖 `design/CONTEXT.md` 存在（会话对齐入口。本条已进共性 rule 备案清单 `ccswitch/scaffold-manifest.json`；本清单其余各条**刻意未机器化**——十条存在性检查一次性全报会淹没其他项，且 symlink 有效性需 lstat + 目标可达判定，属深度检查，理由记在清单的 `_doc.rejected`）
 - [ ] `design/CHANGELOG.md` 存在
 - [ ] `design/PROTOTYPE-SPEC.md` 存在（OD 原型输出规范：三层 Tailwind 策略 + 项目 tailwind.config 映射 + 类名速查。缺项时从项目 `tailwind.config.*` 自动生成骨架——见下方模板）
 - [ ] 「设计交接代码层映射」已声明（同仓→CLAUDE.md；分仓→CONTEXT.md）
