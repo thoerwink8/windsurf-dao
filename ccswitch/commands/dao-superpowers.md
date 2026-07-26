@@ -79,7 +79,7 @@ Read open.md §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/
 
 **announce**：「开始 dao-superpowers 第 3 步 · 执行第 N 个 task」
 
-逐 task 执行：announce → 写代码+跑测试（红→绿→refactor）→ fresh 验证（参 dao-verify）→ task 间 checkpoint 让用户可调。subagent 调度按需：满足 ≥3 项才派（模板化/不同模型/context 臃肿/rate limit 有预算/值 15× token/可并行），否则主会话直接做。
+逐 task 执行：announce → 写代码+跑测试（红→绿→refactor）→ fresh 验证（参 dao-verify）→ task 间 checkpoint 让用户可调。subagent 调度按需：六项自评（见 `ccswitch/dao.md` 帅节成本门，避免与本文件分叉）满足 ≥3 项才派，否则主会话直接做。
 
 ### 四·审（dao-review · 受国之垢）
 
