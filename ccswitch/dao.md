@@ -240,7 +240,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **WebView2 远程调试**：WebView2 应用启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView。**不要另开 Chrome 当代理**；项目应固化为 `dev:debug` 脚本，非每次手动设
 - **截图路径强制**：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置；`<context>` 命名与 `<type>-<description>.png` 规格细则已下沉 dao-design standards.md §截图规格
 - **settings.json 运行时改动 · 确认门禁（非禁令）**：改前先向用户说明风险（可能触发 `401 device was revoked` 强制登出）并问是否代做。**授权→一次 Edit 改完+JSON 校验+hook 冒烟**；未授权→写 `_tmp/settings-patch.json` + 会话外命令。config-sync 同理，先问授权即做
-- **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警（如 `~/.claude/settings.json` 是 cc-switch DB 经 `config-sync/lib/export.mjs` 的投影，只识别 `common_config_*` 键）；正道是改 git 快照层+由用户 restore 写源。凡「本地文件+集中配置库」双存在系统皆同病（2026-07-26 帅亲手造债实证，详见 mousse `docs/rules/dispatch-clauses.md` 通用节）
+- **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警（如 `~/.claude/settings.json` 是 cc-switch DB 经 `config-sync/lib/export.mjs` 的投影，只识别 `common_config_*` 键）；正道是改 git 快照层+由用户 restore 写源。凡「本地文件+集中配置库」双存在系统皆同病（2026-07-26 帅亲手造债实证，判据本条为唯一真相源）
 - **PR 自主合并即删分支**：`gh pr merge` 固定加 `--delete-branch`，随即本地跟进 `git checkout main` + `git branch -d <branch>` + `git fetch --prune`——删除动作绑在合并动作本身上，PR 通过瞬间就是清理天然时机（出处：L13）。**边界**：用户网页端自行点 merge 时 agent 不在场感知不到，只能靠 dao-verify 孤儿分支扫描回溯式兜底
 - **PR-first 节律（全局默认，非禁令）**：代码类改动默认「分支→PR→`gh pr merge --delete-branch`」不直推主干，文档/配置微改可直推。价值不是质量门（质量门是测试+dogfood），而是给用户留**异步审查锚点+独立回滚点**；产品型项目可在 `.claude/rules/` 强化为强制
 - **Dogfood 自审（产品型项目 PR 收尾附带）**：合并前构建并本机安装试用一轮，体验发现写入项目 `TODO.md`（发现不阻塞本 PR，下轮择优吸收）；`PROGRESS.md` 一行记账：版本 / 变更 / dogfood 发现 / 回滚点——用户读一个文件总览全部战况。产品未发布期，AI 既是开发者也是第一用户
