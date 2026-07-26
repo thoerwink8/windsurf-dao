@@ -15,7 +15,7 @@
 
 | 文件/目录                      | 作用                                                   |
 | ------------------------------ | ------------------------------------------------------ |
-| `dao.ps1`                      | 工具脚本（status / link-claude / link-codex）          |
+| `dao.ps1`                      | 工具脚本（status / link-claude / codegraph；Codex skills 归 cc-switch store，dao 只报告不写） |
 | `global_rules.md`              | 旧 Windsurf 元规则（已 DEPRECATED，仅历史参考，不再被任何端加载） |
 | `ccswitch/commands/dao-*.md` | 9 个命令（dev/commit/distill/doc/evolve/loop/remove/superpowers/gs） |
 | `ccswitch/skills/dao-*/`    | 9 个可复用技能（brainstorm/design/evolution/loop/plan/project-scaffold/review/verify/worktree） |

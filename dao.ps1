@@ -89,15 +89,18 @@ function Test-CcSwitchStoreTarget {
     # ~/.codex/skills 的**写入方归属判据**(用户 2026-07-27 拍板:归 cc-switch store)。
     #
     # 治的病:该目录此前有两个写入方按不同真相源争夺——cc-switch 链到 ~/.cc-switch/skills/,
-    # link-codex 链到 ~/.claude/skills/,而 link-codex 的 override 分支会**主动覆盖**前者
-    # (原注释「指向别处的软链/联接(如 cc-switch 外部版):覆盖为 Claude 用户侧源」)。
+    # link-codex 链到 ~/.claude/skills/,而 link-codex 的 override 分支会**主动覆盖**前者。
     # 谁最后跑谁赢 ⇒ 同一个 skill 名在 Codex 里指向什么,取决于运行顺序而非任何声明。
-    # 拍板后 link-codex 让出该面:命中本判据的既有链一律保留,不再覆盖。
+    #
+    # 强形态落地后(见 Invoke-CodexSkillsReport 头注),dao.ps1 已不再往该目录写任何东西,
+    # 本判据因此只剩**报告用途**:在 status / link-codex 报告里把条目归到「store 所有」一栏。
+    # 它不再决定任何写动作的去留——写动作只剩 unlink-codex 的删除方向,那边按
+    # 「dao 自己建的链 + 悬空链」判定,不看本函数。
     #
     # 判据是**前缀匹配**,不是等值:store 下每个 skill 各占一个子目录。
     # 近似性说明:仅按路径前缀认定归属,不校验链是否真由 cc-switch 所建——
-    # 用户手工在 store 下建的链同样会被让行(这是预期,store 即归属地);
-    # 反方向,cc-switch 若改用别的 store 路径,本判据认不出来,会退回旧的覆盖行为。
+    # 用户手工在 store 下建的链同样会被算作 store 所有(这是预期,store 即归属地);
+    # 反方向,cc-switch 若改用别的 store 路径,本判据认不出来,那些条目会在报告里落到「其他」一栏。
     param([object]$Target)
     if (-not $Target) { return $false }
     $t = @($Target)[0]
@@ -106,6 +109,49 @@ function Test-CcSwitchStoreTarget {
     $store = $store.TrimEnd('\').ToLowerInvariant()
     $norm = ([string]$t -replace '/', '\').TrimEnd('\').ToLowerInvariant()
     return $norm.StartsWith($store + '\')
+}
+
+function Get-ClaudeSkillTargets {
+    # ~/.claude/skills 下每个 skill 条目的**解析后目标**集合(条目本身是软链时取其目标)。
+    # 用途:判定 ~/.codex/skills 里某条链是不是 dao 自己建的——dao 建链时写的是解析后的目标,
+    # 所以光比对 ~/.claude/skills 路径前缀会漏掉「~/.claude/skills/x 是软链、codex 侧直指其目标」那一类。
+    param([string]$SrcDir)
+    $targets = @{}
+    if (-not (Test-Path $SrcDir)) { return $targets }
+    Get-ChildItem $SrcDir -Force -ErrorAction SilentlyContinue | Where-Object {
+        $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
+    } | ForEach-Object {
+        $target = $_.FullName
+        if (($_.LinkType -in "SymbolicLink", "Junction") -and $_.Target) {
+            $targetPath = @($_.Target)[0]
+            if (Test-Path -LiteralPath $targetPath -PathType Container) {
+                $target = $targetPath
+            }
+        }
+        $targets[$target] = $true
+    }
+    return $targets
+}
+
+function Get-CodexLinkClass {
+    # ~/.codex/skills 单个条目的归类。**判据单一源**:unlink-codex 按此决定删/留,
+    # status 与 link-codex 报告按此计数——报告说「会被清掉几条」和 unlink 真会清掉几条因此不分叉。
+    # (此前报告按路径前缀数、unlink 按解析目标数,同一条链两处归类不同。)
+    #   dao      : dao 自己建的链(目标落在 ~/.claude/skills 下,或等于其条目的解析目标)
+    #   dangling : 目标已不存在的坟(旧代目录改名遗留)
+    #   store    : cc-switch store 拥有的链(见 Test-CcSwitchStoreTarget 的近似性说明)
+    #   other    : 其他软链——用户或第三方所建,dao 一概不碰
+    #   real     : 真实文件/目录,不是链
+    # 顺序即优先级,与 unlink-codex 原有行为一致:dao 判定先于 dangling(dao 自建链即使目标没了
+    # 也按 dao 清),dangling 先于 store(目标已死的 store 链同样按坟清掉)。
+    param([object]$Entry, [string]$SrcDir, [hashtable]$ManagedTargets)
+    if ($Entry.LinkType -notin "SymbolicLink", "Junction") { return "real" }
+    $t = if ($Entry.Target) { @($Entry.Target)[0] } else { $null }
+    if (-not $t) { return "other" }
+    if (($t -like "$SrcDir*") -or $ManagedTargets.ContainsKey($t)) { return "dao" }
+    if (-not (Test-Path -LiteralPath $t)) { return "dangling" }
+    if (Test-CcSwitchStoreTarget $t) { return "store" }
+    return "other"
 }
 
 # ── 核心操作 ──
@@ -157,25 +203,30 @@ function Invoke-Status {
             Write-Host "  CodeGraph: not installed (run: dao.ps1 codegraph)" -ForegroundColor Red
         }
 
-        # ── Codex 侧部署状态(镜像 ~/.claude/skills 源)──
+        # ── Codex 侧 skills 现状(只报告,不催跑:该目录的写入方是 cc-switch store)──
+        # dao.ps1 已退出 ~/.codex/skills 的写入业务,故这一栏不再是「dao 的部署状态」,
+        # 而是「一个外部拥有的目录当前长什么样」。唯一还指向 dao 动作的提示是清理方向的
+        # unlink-codex(清 dao 早年自己建的链 + 悬空坟),不存在任何催跑建链的话术。
         $userCodex = Join-Path $env:USERPROFILE ".codex"
         $codexSkillsDir = Join-Path $userCodex "skills"
         $userClaudeSkillsDir = Join-Path $userClaude "skills"
-        $repoClaudeSkillsDir = Join-Path $claudeSrc "skills"
-        $codexLinked = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
-            ($_.LinkType -in "SymbolicLink", "Junction") -and ($_.Target -like "$userClaudeSkillsDir*" -or $_.Target -like "$repoClaudeSkillsDir*")
-        }).Count
-        $codexCcSwitch = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
-            ($_.LinkType -in "SymbolicLink", "Junction") -and (Test-CcSwitchStoreTarget $_.Target)
-        }).Count
-        if ($codexLinked -gt 0) {
-            Write-Host "  Codex deploy: linked ($codexLinked Claude user skills, $codexCcSwitch from cc-switch store)" -ForegroundColor Green
+        $codexManagedTargets = Get-ClaudeSkillTargets $userClaudeSkillsDir
+        $codexClasses = @(Get-ChildItem $codexSkillsDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-CodexLinkClass -Entry $_ -SrcDir $userClaudeSkillsDir -ManagedTargets $codexManagedTargets
+        })
+        $codexCcSwitch = @($codexClasses | Where-Object { $_ -eq "store" }).Count
+        # 「可清」= unlink-codex 会删的那些(dao 自建链 + 悬空坟),用同一判据算,
+        # 免得这行报了个数而 unlink 实际清出另一个数。
+        $codexRemovable = @($codexClasses | Where-Object { $_ -in "dao", "dangling" }).Count
+        if ($codexCcSwitch -gt 0 -and $codexRemovable -gt 0) {
+            Write-Host "  Codex skills: cc-switch store owns it ($codexCcSwitch skills); $codexRemovable dao/dangling links left (clear: dao.ps1 unlink-codex)" -ForegroundColor Yellow
         } elseif ($codexCcSwitch -gt 0) {
-            # cc-switch store 是本目录的写入方(2026-07-27 拍板)。它已铺好 ⇒ 不是缺件,
-            # 不再红字催跑 link-codex——那条催促曾把用户推向覆盖 cc-switch 链的动作。
-            Write-Host "  Codex deploy: cc-switch store owns it ($codexCcSwitch skills); link-codex only fills names the store lacks" -ForegroundColor Green
+            Write-Host "  Codex skills: cc-switch store owns it ($codexCcSwitch skills)" -ForegroundColor Green
+        } elseif ($codexRemovable -gt 0) {
+            Write-Host "  Codex skills: $codexRemovable dao/dangling links, no cc-switch store entry (clear: dao.ps1 unlink-codex; deploy via cc-switch)" -ForegroundColor Yellow
         } else {
-            Write-Host "  Codex deploy: not installed (run: dao.ps1 link-codex)" -ForegroundColor Red
+            # 不判红:dao.ps1 不写这个目录,「没有 dao 链」不是 dao 侧的缺件。
+            Write-Host "  Codex skills: no dao/store links detected (this directory is deployed by cc-switch, not dao.ps1)" -ForegroundColor Gray
         }
     }
 }
@@ -481,100 +532,77 @@ function Invoke-LinkClaude {
     if ($err -gt 0) { exit 1 }
 }
 
-function Invoke-LinkCodex {
-    # 把 ~/.claude/skills 下的 Claude 用户侧 skill 镜像到 ~/.codex/skills。
-    # codex 侧不需要 commands/agents/hooks/@import；commands 单独由 link-codex-prompts 生成 prompt。
-    # 撞名处理:若已存在的同名是指向别处(如 cc-switch)的软链,按 Claude 用户侧单源原则覆盖;
-    #          若是用户真实文件,保留不动。
-    param([bool]$IsDryRun = $false)
-
+function Invoke-CodexSkillsReport {
+    # link-codex 的**强形态**(用户 2026-07-27 拍板):dao.ps1 退出 ~/.codex/skills 的写入业务。
+    # 本函数只读:不建链、不删链、不改任何文件——一次调用后该目录应当逐字节不变。
+    #
+    # 三态沿革:
+    #   ① 争夺态:link-codex 主动覆盖 cc-switch 建的链。两个写入方按不同真相源写同一目录,
+    #      同名 skill 在 Codex 里指向什么取决于谁最后跑,而不取决于任何声明。
+    #   ② 补位态(3722bab):撞名让行,只补 store 没有的名字。仍是第二个写入方——
+    #      让行只是不抢已占的名字,新名字照写,目录的内容依旧由「跑没跑过 link-codex」决定。
+    #   ③ 本形态:一行不写。写入方只剩 cc-switch store 一个。
+    #
+    # 为什么保留动作名而不是删掉 switch 分支:link-codex 在用户记忆和历史文档里 = 「把 skills 弄进 Codex」。
+    # 删掉分支会让这条命令掉进通用 help,读不到「为什么没了」,可能转而手工建链——那正是要消灭的第二写入方。
+    # 故降级为只读诊断:声明归属 + 报告现状 + 明写本次退出所放弃的能力(store 未覆盖的名字),不藏代价。
+    #
+    # 清理归 unlink-codex(dao 自建链 + 悬空坟),那是 dao.ps1 在该目录仅存的写动作,方向只有删。
     $userClaude = Join-Path $env:USERPROFILE ".claude"
     $srcDir = Join-Path $userClaude "skills"
-    if (!(Test-Path $srcDir)) {
-        Write-Host "  [error] ~/.claude/skills source not found: $srcDir" -ForegroundColor Red
-        exit 1
-    }
+    $storeDir = Join-Path $env:USERPROFILE ".cc-switch\skills"
+    $dstDir = Join-Path (Join-Path $env:USERPROFILE ".codex") "skills"
 
-    $userCodex = Join-Path $env:USERPROFILE ".codex"
-    $dstDir = Join-Path $userCodex "skills"
-    if (-not $IsDryRun) { Ensure-Dir $dstDir }
-
-    $linked = 0; $skipped = 0; $conflict = 0; $err = 0
-    Write-Host "  [~/.claude/skills -> ~/.codex/skills]" -ForegroundColor Cyan
-
-    $items = Get-ChildItem $srcDir -Force -ErrorAction SilentlyContinue | Where-Object {
-        $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
-    }
-    foreach ($it in $items) {
-        $linkPath = Join-Path $dstDir $it.Name
-        $skillTarget = $it.FullName
-        if (($it.LinkType -in "SymbolicLink", "Junction") -and $it.Target) {
-            $targetPath = @($it.Target)[0]
-            if (Test-Path -LiteralPath $targetPath -PathType Container) {
-                $skillTarget = $targetPath
-            }
-        }
-        if (Test-Path $linkPath) {
-            $existing = Get-Item $linkPath -Force
-            if ($existing.LinkType -in "SymbolicLink", "Junction") {
-                if ($existing.Target -eq $skillTarget -and $existing.PSIsContainer) {
-                    Write-Host "    [skip ] $($it.Name)  (already linked)" -ForegroundColor DarkGray
-                    $skipped++
-                    continue
-                }
-                # cc-switch store 是 ~/.codex/skills 的写入方(用户 2026-07-27 拍板):一律让行。
-                # 见 Test-CcSwitchStoreTarget 头注——这是本函数退出争夺的那一步。
-                if (Test-CcSwitchStoreTarget $existing.Target) {
-                    Write-Host "    [yield ] $($it.Name)  (cc-switch store owns it -> $($existing.Target))" -ForegroundColor DarkGray
-                    $skipped++
-                    continue
-                }
-                # 指向别处(非 cc-switch store)的软链/联接:仍覆盖为 Claude 用户侧源
-                if ($IsDryRun) {
-                    Write-Host "    [DRYRUN] override $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
-                    $linked++
-                    continue
-                }
-                try {
-                    $oldLinkType = $existing.LinkType
-                    $oldTarget = $existing.Target
-                    if ($existing.PSIsContainer) { $existing.Delete() } else { Remove-Item $linkPath -Force }
-                    New-Symlink -Link $linkPath -Target $skillTarget
-                    Write-Host "    [override] $($it.Name)  (was $oldLinkType -> $oldTarget)" -ForegroundColor Yellow
-                    $linked++
-                } catch {
-                    Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
-                    $err++
-                }
-                continue
-            }
-            # 用户真实文件/目录:不动
-            Write-Host "    [keep ] $($it.Name)  (real file, preserved)" -ForegroundColor Yellow
-            $conflict++
-            continue
-        }
-        if ($IsDryRun) {
-            Write-Host "    [DRYRUN] $($it.Name)  -> $skillTarget" -ForegroundColor Cyan
-            $linked++
-        } else {
-            try {
-                New-Symlink -Link $linkPath -Target $skillTarget
-                Write-Host "    [link ] $($it.Name)" -ForegroundColor Green
-                $linked++
-            } catch {
-                Write-Host "    [error] $($it.Name) : $_" -ForegroundColor Red
-                $err++
-            }
-        }
-    }
-
+    Write-Host "  [read-only] dao.ps1 does not write ~/.codex/skills (writer: cc-switch store)" -ForegroundColor Yellow
+    Write-Host "  Deploy Codex skills through cc-switch -> $storeDir" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
-    Write-Host "  Codex: restart session to pick up new skills. Source is ~/.claude/skills; Claude deployment files are untouched." -ForegroundColor DarkGray
+
+    if (!(Test-Path $dstDir)) {
+        Write-Host "  ~/.codex/skills: not present ($dstDir)" -ForegroundColor DarkGray
+        return
+    }
+
+    $entries = @(Get-ChildItem $dstDir -Force -ErrorAction SilentlyContinue)
+    $managedTargets = Get-ClaudeSkillTargets $srcDir
+    $classes = @($entries | ForEach-Object { Get-CodexLinkClass -Entry $_ -SrcDir $srcDir -ManagedTargets $managedTargets })
+    $countOf = { param($c) @($classes | Where-Object { $_ -eq $c }).Count }
+    $legacyCount = & $countOf "dao"
+    $danglingCount = & $countOf "dangling"
+
+    Write-Host "  ~/.codex/skills: $($entries.Count) entries" -ForegroundColor Cyan
+    Write-Host "    cc-switch store links : $(& $countOf 'store')" -ForegroundColor DarkGray
+    Write-Host "    legacy dao links      : $legacyCount  (dao built these before the retirement)" -ForegroundColor DarkGray
+    Write-Host "    dangling (dead target): $danglingCount" -ForegroundColor DarkGray
+    Write-Host "    other links           : $(& $countOf 'other')  (someone else's; dao does not touch them)" -ForegroundColor DarkGray
+    Write-Host "    real files/dirs       : $(& $countOf 'real')" -ForegroundColor DarkGray
+    if ($legacyCount -gt 0 -or $danglingCount -gt 0) {
+        Write-Host "  Clear those $($legacyCount + $danglingCount) with: dao.ps1 unlink-codex" -ForegroundColor Yellow
+    }
+
+    # 本次退出所放弃的能力,明写不藏:~/.claude/skills 里有、~/.codex/skills 里没有同名条目的那些。
+    # 这是**名字集差集**,不是「Codex 看不见它们」的判定——同一能力可能经别的机制到达 Codex。
+    if (Test-Path $srcDir) {
+        $present = @{}
+        foreach ($e in $entries) { $present[$e.Name] = $true }
+        $gap = @(Get-ChildItem $srcDir -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
+        } | Where-Object { -not $present.ContainsKey($_.Name) } | ForEach-Object { $_.Name })
+        Write-Host ""
+        if ($gap.Count -eq 0) {
+            Write-Host "  Every ~/.claude/skills name has a ~/.codex/skills entry." -ForegroundColor DarkGray
+        } else {
+            $shown = if ($gap.Count -gt 8) { (($gap[0..7]) -join ", ") + ", ... (+$($gap.Count - 8) more)" } else { $gap -join ", " }
+            Write-Host "  $($gap.Count) name(s) in ~/.claude/skills have no ~/.codex/skills entry:" -ForegroundColor DarkGray
+            Write-Host "    $shown" -ForegroundColor DarkGray
+            Write-Host "  Filling these used to be link-codex's job; add them to the cc-switch store if Codex needs them." -ForegroundColor DarkGray
+        }
+    }
 }
 
 function Invoke-UnlinkCodex {
     # 卸载 codex 侧 Claude skill 软链。只删指向 ~/.claude/skills 管理源的软链,不碰用户真实文件。
+    # 强形态落地后这是 dao.ps1 在 ~/.codex/skills 仅存的写动作,且方向只有删:
+    # 清 dao 自己早年建的链(managed)+ 清悬空坟(dangling)。cc-switch store 的链两条都不命中,保留。
     param([bool]$IsDryRun = $false)
 
     $userClaude = Join-Path $env:USERPROFILE ".claude"
@@ -588,34 +616,18 @@ function Invoke-UnlinkCodex {
         return
     }
     Write-Host "  [skills]" -ForegroundColor Cyan
-    $managedTargets = @{}
-    if (Test-Path $srcDir) {
-        Get-ChildItem $srcDir -Force -ErrorAction SilentlyContinue | Where-Object {
-            $_.PSIsContainer -or (Test-Path (Join-Path $_.FullName "SKILL.md") -PathType Leaf)
-        } | ForEach-Object {
-            $target = $_.FullName
-            if (($_.LinkType -in "SymbolicLink", "Junction") -and $_.Target) {
-                $targetPath = @($_.Target)[0]
-                if (Test-Path -LiteralPath $targetPath -PathType Container) {
-                    $target = $targetPath
-                }
-            }
-            $managedTargets[$target] = $true
-        }
-    }
+    $managedTargets = Get-ClaudeSkillTargets $srcDir
     Get-ChildItem $dstDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
         $target = if ($_.Target) { @($_.Target)[0] } else { $null }
-        $isLinkOrJunction = $_.LinkType -in "SymbolicLink", "Junction"
-        $isManaged = $isLinkOrJunction -and $target -and ($_.Target -like "$srcDir*" -or $managedTargets.ContainsKey($target))
-        # fortify2-20260726 D7：readlink 目标不存在即删——只清坟，不动写入方取舍（cc-switch vs
-        # ~/.claude/skills 二选一仍由 $isManaged 分支处理）。旧代目录改名（windsurf-dao/claude/ →
-        # ccswitch/）后遗留的悬空链既不匹配当前 $srcDir 前缀也不在 managedTargets 里，此前会被
-        # 误判「not a dao symlink」永久保留（60 个悬空链实证：readlink 目标全部指向早已不存在
-        # 的 windsurf-dao/claude/skills/ 旧路径）。
-        $isDangling = $isLinkOrJunction -and $target -and -not (Test-Path -LiteralPath $target)
-        if ($isManaged -or $isDangling) {
-            $label = if ($isManaged) { "unlink" } else { "prune " }
-            $suffix = if ($isDangling -and -not $isManaged) { "  (dangling target: $target)" } else { "" }
+        # 归类走 Get-CodexLinkClass 单一判据源(status / link-codex 报告用的是同一个)。
+        # fortify2-20260726 D7：dangling 类 = readlink 目标不存在即删——只清坟，不动写入方取舍。
+        # 旧代目录改名（windsurf-dao/claude/ → ccswitch/）后遗留的悬空链既不匹配当前 $srcDir 前缀
+        # 也不在 managedTargets 里，此前会被误判「not a dao symlink」永久保留（60 个悬空链实证：
+        # readlink 目标全部指向早已不存在的 windsurf-dao/claude/skills/ 旧路径）。
+        $class = Get-CodexLinkClass -Entry $_ -SrcDir $srcDir -ManagedTargets $managedTargets
+        if ($class -in "dao", "dangling") {
+            $label = if ($class -eq "dao") { "unlink" } else { "prune " }
+            $suffix = if ($class -eq "dangling") { "  (dangling target: $target)" } else { "" }
             if ($IsDryRun) {
                 Write-Host "    [DRYRUN] $label $($_.Name)$suffix" -ForegroundColor Cyan
                 $removed++
@@ -630,7 +642,7 @@ function Invoke-UnlinkCodex {
                 }
             }
         } else {
-            Write-Host "    [keep ] $($_.Name)  (not a dao symlink)" -ForegroundColor DarkGray
+            Write-Host "    [keep ] $($_.Name)  (not a dao link: $class)" -ForegroundColor DarkGray
             $skipped++
         }
     }
@@ -1308,12 +1320,10 @@ switch ($Action) {
         Invoke-UnlinkClaude -IsDryRun:$DryRun.IsPresent
     }
     "link-codex" {
-        if (!(Test-SymlinkSupport)) {
-            Write-Host "  [!] Symlinks unavailable. Enable Developer Mode." -ForegroundColor Red
-            exit 1
-        }
-        Write-Host "`n  Linking Claude user skills into ~/.codex/skills ..." -ForegroundColor Cyan
-        Invoke-LinkCodex -IsDryRun:$DryRun.IsPresent
+        # 强形态(2026-07-27 拍板):本动作不再写 ~/.codex/skills,只报告归属与现状。
+        # 不再有 Test-SymlinkSupport 前置——只读诊断不需要 symlink 权限。
+        Write-Host "`n  ~/.codex/skills ownership report (dao.ps1 writes nothing here) ..." -ForegroundColor Cyan
+        Invoke-CodexSkillsReport
     }
     "unlink-codex" {
         Write-Host "`n  Unlinking Claude user skill links from ~/.codex/skills ..." -ForegroundColor Cyan
@@ -1366,8 +1376,8 @@ switch ($Action) {
     codegraph <project-path>                  Install + init specified project
     link-claude [-DryRun]                     Deploy dao to Claude Code (~/.claude)
     unlink-claude [-DryRun]                   Remove dao from Claude Code
-    link-codex [-DryRun]                      Mirror ~/.claude/skills into ~/.codex/skills
-    unlink-codex [-DryRun]                    Remove Codex skill links
+    link-codex                                Report ~/.codex/skills ownership (read-only; cc-switch store owns it)
+    unlink-codex [-DryRun]                    Remove dao-built Codex skill links + prune dangling ones
     link-codex-prompts [-DryRun]              Write dao prompts into ~/.codex/prompts
     unlink-codex-prompts [-DryRun]            Remove managed dao prompts
     set-terminal                              Set IDE terminal to Git Bash
