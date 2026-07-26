@@ -10,7 +10,8 @@ if "%a:~0,1%"=="-" goto sync
 
 REM Named action → delegate to dao.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" %*
-goto :eof
+set "ACTION_EXIT=%ERRORLEVEL%"
+exit /b %ACTION_EXIT%
 
 :sync
 where node >nul 2>nul
@@ -45,5 +46,7 @@ if not exist "%LOCALAPPDATA%\codegraph\current\lib\dist\bin\codegraph.js" (
   powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" codegraph
 )
 node "%~dp0config-sync\lib\sync.mjs" %*
+set "SYNC_EXIT=%ERRORLEVEL%"
 echo.
 pause
+exit /b %SYNC_EXIT%
