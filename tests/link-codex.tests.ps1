@@ -63,6 +63,22 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $overrideLink -Parent) -Force | Out-Null
     New-Item -ItemType Junction -Path $overrideLink -Target $otherSrc | Out-Null
 
+    # cc-switch store ownership yield (user decision 2026-07-27: cc-switch store owns ~/.codex/skills).
+    # Positive case: a same-named skill exists under ~/.claude/skills, but the Codex-side link points
+    # into ~/.cc-switch/skills/ => link-codex must yield and leave it alone.
+    # The negative control is the existing override-skill case: it points at other-source (NOT the
+    # store) and must still be overridden -- proving the yield rule is not a blanket
+    # "never touch any foreign link" relaxation.
+    # NOTE: keep this file ASCII-only. It has no UTF-8 BOM (unlike dao.ps1 and
+    # link-codex-prompts.tests.ps1), so PS 5.1 would decode non-ASCII comments as ANSI and
+    # corrupt parsing.
+    $ccSwitchStoreSkill = Join-Path $TmpRoot ".cc-switch\skills\ccswitch-owned"
+    New-Item -ItemType Directory -Path $ccSwitchStoreSkill -Force | Out-Null
+    "cc-switch store version" | Set-Content -Path (Join-Path $ccSwitchStoreSkill "SKILL.md") -Encoding UTF8
+    New-TestSkill "ccswitch-owned" | Out-Null
+    $ccSwitchLink = Join-Path $TmpRoot ".codex\skills\ccswitch-owned"
+    New-Item -ItemType Junction -Path $ccSwitchLink -Target $ccSwitchStoreSkill | Out-Null
+
     $sameTargetFileLinkSrc = New-TestSkill "same-target-file-link"
     $sameTargetFileLink = Join-Path $TmpRoot ".codex\skills\same-target-file-link"
     cmd /c "mklink `"$sameTargetFileLink`" `"$sameTargetFileLinkSrc`"" | Out-Null
@@ -96,6 +112,13 @@ try {
         Assert-Equal $case.Source $item.Target "$($case.Name) should point to the Claude skill source"
     }
 
+    # Yield positive case: the cc-switch store link must survive untouched, not be overridden
+    # by the ~/.claude/skills source.
+    $ccSwitchItem = Get-Item $ccSwitchLink -Force
+    Assert-True ($ccSwitchItem.LinkType -in @("SymbolicLink", "Junction")) "cc-switch owned entry should remain a link"
+    Assert-Equal $ccSwitchStoreSkill $ccSwitchItem.Target "link-codex must yield to cc-switch store, not override it"
+    Assert-Equal "cc-switch store version`r`n" (Get-Content -Path (Join-Path $ccSwitchLink "SKILL.md") -Raw) "cc-switch store content should be what Codex sees"
+
     $conflictItem = Get-Item $realConflict -Force
     Assert-True ([string]::IsNullOrEmpty($conflictItem.LinkType)) "real Codex skill directory should be preserved"
     Assert-Equal "do not replace`r`n" (Get-Content -Path (Join-Path $realConflict "SKILL.md") -Raw) "real conflict content should remain"
@@ -116,6 +139,10 @@ try {
         Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\skills\$name"))) "$name should be unlinked from Codex"
     }
     Assert-True (Test-Path $realConflict) "unlink-codex must preserve real Codex skill directories"
+    # unlink side must not harm cc-switch store links either: they are neither dao-managed
+    # nor dangling (their target exists).
+    Assert-True (Test-Path $ccSwitchLink) "unlink-codex must preserve cc-switch store links"
+    Assert-Equal $ccSwitchStoreSkill (Get-Item $ccSwitchLink -Force).Target "unlink-codex must not repoint cc-switch store links"
     Assert-Equal $beforeClaudeMd (Get-Content -Path (Join-Path $claudeDir "CLAUDE.md") -Raw) "unlink-codex must not edit Claude CLAUDE.md"
 
     Write-Host "PASS link-codex mirrors Claude skills without modifying Claude deployment files" -ForegroundColor Green
