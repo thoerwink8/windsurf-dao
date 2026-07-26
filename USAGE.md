@@ -206,7 +206,7 @@
 | 「走 dao-dev」「从头做」 | 走三阶九步管线 |
 | 「深度迭代」「跑五相」 | 思考过程可见输出（dao-dev §2.5） |
 | 「派 reviewer」「自审一下」 | 加 reviewer 自审环节 |
-| 深度经文反思 | 直接让 AI Read `~/.claude/references/` 下的帛书老子/阴符经全文（旧 @dao-philosophy 已随双栈退役） |
+| 深度经文反思 | 直接让 AI Read `~/.claude/references/` 下的道德经（王弼本，人格注入同源）/阴符经全文；要与帛书本对读再点名 `帛书老子.md`（旧 @dao-philosophy 已随双栈退役） |
 
 ### 降级开关（让 AI 走轻）
 
