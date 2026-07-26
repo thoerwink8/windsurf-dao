@@ -568,14 +568,24 @@ function Invoke-UnlinkCodex {
     }
     Get-ChildItem $dstDir -Force -ErrorAction SilentlyContinue | ForEach-Object {
         $target = if ($_.Target) { @($_.Target)[0] } else { $null }
-        if (($_.LinkType -in "SymbolicLink", "Junction") -and $target -and ($_.Target -like "$srcDir*" -or $managedTargets.ContainsKey($target))) {
+        $isLinkOrJunction = $_.LinkType -in "SymbolicLink", "Junction"
+        $isManaged = $isLinkOrJunction -and $target -and ($_.Target -like "$srcDir*" -or $managedTargets.ContainsKey($target))
+        # fortify2-20260726 D7：readlink 目标不存在即删——只清坟，不动写入方取舍（cc-switch vs
+        # ~/.claude/skills 二选一仍由 $isManaged 分支处理）。旧代目录改名（windsurf-dao/claude/ →
+        # ccswitch/）后遗留的悬空链既不匹配当前 $srcDir 前缀也不在 managedTargets 里，此前会被
+        # 误判「not a dao symlink」永久保留（60 个悬空链实证：readlink 目标全部指向早已不存在
+        # 的 windsurf-dao/claude/skills/ 旧路径）。
+        $isDangling = $isLinkOrJunction -and $target -and -not (Test-Path -LiteralPath $target)
+        if ($isManaged -or $isDangling) {
+            $label = if ($isManaged) { "unlink" } else { "prune " }
+            $suffix = if ($isDangling -and -not $isManaged) { "  (dangling target: $target)" } else { "" }
             if ($IsDryRun) {
-                Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
+                Write-Host "    [DRYRUN] $label $($_.Name)$suffix" -ForegroundColor Cyan
                 $removed++
             } else {
                 try {
                     if ($_.PSIsContainer) { $_.Delete() } else { Remove-Item $_.FullName -Force }
-                    Write-Host "    [unlink] $($_.Name)" -ForegroundColor Green
+                    Write-Host "    [$label] $($_.Name)$suffix" -ForegroundColor Green
                     $removed++
                 } catch {
                     Write-Host "    [error] $($_.Name) : $_" -ForegroundColor Red
