@@ -69,12 +69,10 @@ argument-hint: "[ARG]"
     Assert-Equal "do not replace`r`n" (Get-Content -Path $realConflict -Raw) "real prompt conflict should be preserved"
     Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\dao-thread-tree.md"))) "low-frequency commands should not be linked by default"
 
-    $philosophyPrompt = Join-Path $TmpRoot ".codex\prompts\dao-philosophy.md"
-    Assert-True (Test-Path $philosophyPrompt) "dao-philosophy generated prompt should exist"
-    $philosophyText = Get-Content -Path $philosophyPrompt -Raw
-    Assert-True ($philosophyText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->') "dao-philosophy prompt should carry the managed marker outside frontmatter"
-    Assert-True (-not ($philosophyText -match '(?s)^---.*?codex-managed:\s*windsurf-dao.*?---')) "dao-philosophy prompt should not put the managed marker in frontmatter"
-    Assert-True ($philosophyText -match '\$dao-philosophy') "dao-philosophy prompt should invoke the skill"
+    # fortify2-20260726 D6：dao-philosophy 特判（New-ManagedCodexPrompt 里唯一的生成式条目，
+    # 对应的 skill 早已不存在）已从 Get-CodexPromptNames 移除，New-ManagedCodexPrompt 现恒返回
+    # $null——本测试原「dao-philosophy generated prompt should exist」一段随之移除，不再有
+    # 无 Claude command 源文件也能生成 prompt 的路径需要覆盖。
 
     Assert-Equal $beforeClaudeMd (Get-Content -Path (Join-Path $claudeDir "CLAUDE.md") -Raw) "link-codex-prompts must not edit Claude CLAUDE.md"
     Assert-Equal $beforeSettings (Get-Content -Path (Join-Path $claudeDir "settings.json") -Raw) "link-codex-prompts must not edit Claude settings"
@@ -83,7 +81,7 @@ argument-hint: "[ARG]"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript unlink-codex-prompts | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "unlink-codex-prompts should exit successfully"
 
-    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit", "dao-philosophy")) {
+    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit")) {
         Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\$name.md"))) "$name prompt should be unlinked from Codex"
     }
     Assert-True (Test-Path $realConflict) "unlink-codex-prompts must preserve real prompt files"
