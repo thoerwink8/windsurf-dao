@@ -8,15 +8,22 @@
 //      （ccswitch/lib/settings-drift.js；旧版整文件 hash 比较因快照是 DB 导出格式而必然假阳性、
 //        已于早前移除，本次以「结构面 + dao 归属过滤」重做，见该文件头注）
 //
-// B) 普通项目：检查 dao-project-scaffold 标准（另含上面最后一项，从任意项目都能查）
-//    - CLAUDE.md 存在且 <80 行
-//    - .claude/rules/ 存在
-//    - 无冗余入口（AGENT_GUIDE.md 等）
-//    - docs/ 结构扁平（specs/ 是 dao-loop 正规结构，不算分裂）
-//    - 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned/archived）
-//    - 活跃 plan（docs/plans/*.md 含「待实施/进行中」状态标记）
+// B) 普通项目：**共性 rule 备案清单**逐条求值（另含上面最后一项，从任意项目都能查）
+//    - 清单在 ccswitch/scaffold-manifest.json，求值器在 ccswitch/lib/scaffold-manifest.js
+//    - universal 条目（CLAUDE.md / .claude/rules/ / 无冗余入口 / _tmp 已 gitignore …）无条件查
+//    - conditional 条目（桌面端调试基建 / 前端样式路线 / CI 矩阵成本 …）按 when 指纹命中才查
+//    - 另有两项活跃工作提醒不属备案清单，仍硬编码在本文件：
+//      · 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned/archived）
+//      · 活跃 plan（docs/plans/*.md 含「待实施/进行中」状态标记）
 //
 // 发现问题 → 注入 additionalContext。全通过 → 静默退出。
+//
+// ── 2026-07-27：检查项为什么从代码里搬进 JSON ────────────────────────────────
+// 原来「查什么」硬编码在本文件里，加一条共性 rule 要改代码 ⇒ 实际没人加；同期 dao.md 里
+// 还并行躺着两条「首次接触项目时静默执行」的文字自检条款（前端样式路线 / 桌面端基建），
+// 那是**无标记时刻的自由裁量**，本仓 2026-07-26 遵守率实测该形态携带率 9-24%。两条路都通向
+// 同一个结果：共性 rule 写了但不会自然补上。清单化后，加共性项 = 往 JSON 加一条对象，
+// 触发时机焊在 SessionStart 上，不依赖任何人记得。
 //
 // 真相源：windsurf-dao/ccswitch/hooks/dao-scaffold-check.js
 
@@ -53,6 +60,28 @@ try {
 function selfCheckLines() {
   try { return daoSelfCheckLines({ real: isRealHook, cwd: cwd }) || []; }
   catch (e) { return ["✗ dao 配置漂移自检抛错：" + (e && e.message ? e.message : String(e))]; }
+}
+
+// ── 共性 rule 备案清单（数据驱动）──────────────────────────────────────────
+// 与 settings-drift 同一手法：加载失败必须响，不许静默吞——一个查漏的检查器
+// 自己静默失效，比没有它更糟（它会让人以为"已经有人在查了"）。
+let manifestCheck;
+try {
+  manifestCheck = require("../lib/scaffold-manifest").check;
+} catch (e) {
+  const why = e && e.message ? e.message : String(e);
+  manifestCheck = function () { return { findings: [], errors: ["共性 rule 备案清单求值器加载失败：" + why + "（ccswitch/lib/scaffold-manifest.js）"] }; };
+}
+// 返回本项目缺失的共性 rule 报文行（含加载/校验错误行）。severity=info 的近似判据
+// 加「（建议）」前缀，与确定性缺项区分开——近似判据不该和存在性判据同等语气。
+function manifestIssueLines(projectRoot) {
+  let res;
+  try { res = manifestCheck(projectRoot, process.env.DAO_SCAFFOLD_MANIFEST || null); }
+  catch (e) { return ["✗ 共性 rule 备案清单抛错：" + (e && e.message ? e.message : String(e))]; }
+  const lines = [];
+  for (const err of res.errors || []) lines.push("✗ " + err);
+  for (const f of res.findings || []) lines.push(f.severity === "info" ? "（建议）" + f.message : f.message);
+  return lines;
 }
 
 function inject(context) {
@@ -163,80 +192,11 @@ const issues = [];
 // 同时检查 windsurf-dao 的同步状态（从任意项目都能检测）
 checkDaoDrift();
 
-// 1. CLAUDE.md 存在且不超 80 行
-const claudeMd = path.join(cwd, "CLAUDE.md");
-try {
-  if (!fs.existsSync(claudeMd)) {
-    issues.push("缺少 CLAUDE.md（AI 入口文件）");
-  } else {
-    const lines = fs.readFileSync(claudeMd, "utf8").split(/\r?\n/).length;
-    if (lines > 80) {
-      issues.push("CLAUDE.md 超过 80 行（当前 " + lines + " 行），建议拆分详细规范到 .claude/rules/");
-    }
-  }
-} catch (_) {}
-
-// 2. .claude/rules/ 目录存在
-try {
-  if (!fs.existsSync(path.join(cwd, ".claude", "rules"))) {
-    issues.push("缺少 .claude/rules/ 目录（领域规范存放处）");
-  }
-} catch (_) {}
-
-// 3. 根目录无冗余 AI 入口
-const redundant = ["AGENT_GUIDE.md", "KNOWLEDGE.md"];
-for (const f of redundant) {
-  try {
-    if (fs.existsSync(path.join(cwd, f))) {
-      issues.push("根目录存在冗余 AI 入口 " + f + "，内容应归入 CLAUDE.md 或 .claude/rules/");
-    }
-  } catch (_) {}
-}
-
-// 4. docs/ 结构检查（无 superpowers 分裂；specs/ 是 dao-loop 双线程的正规谋线目录，不算分裂）
-const splitDirs = ["docs/superpowers"];
-for (const d of splitDirs) {
-  try {
-    const full = path.join(cwd, d);
-    if (fs.existsSync(full) && fs.statSync(full).isDirectory()) {
-      issues.push("docs/ 下存在 " + path.basename(d) + "/ 分裂目录，应统一到 docs/plans/");
-    }
-  } catch (_) {}
-}
-
-// 5. PRD.md 在根目录（应移到 docs/）
-try {
-  if (fs.existsSync(path.join(cwd, "PRD.md"))) {
-    issues.push("PRD.md 在根目录，应移到 docs/prd.md");
-  }
-} catch (_) {}
-
-// 8. 桌面端调试基建检测（Tauri / Electron）
-try {
-  var tauriPaths = ["src-tauri", path.join("apps", "desktop", "src-tauri")];
-  var hasTauri = tauriPaths.some(function(d) {
-    try { return fs.existsSync(path.join(cwd, d)); } catch (_) { return false; }
-  });
-  var hasElectron = false;
-  try {
-    var pkgE = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
-    var allDeps = Object.assign({}, pkgE.dependencies, pkgE.devDependencies);
-    hasElectron = !!allDeps.electron;
-  } catch (_) {}
-
-  if (hasTauri || hasElectron) {
-    var framework = hasTauri ? "Tauri" : "Electron";
-    if (!fs.existsSync(path.join(cwd, ".claude", "rules", "desktop-debugging.md"))) {
-      issues.push(framework + " 桌面端项目缺少 .claude/rules/desktop-debugging.md（MCP 工具选择规则）→ 运行 /dao-project-scaffold");
-    }
-    try {
-      var pkgS = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
-      if (!pkgS.scripts || !pkgS.scripts["dev:debug"]) {
-        issues.push(framework + " 项目缺少 dev:debug 脚本（WebView2 远程调试端口）→ 参考 stacks/desktop-tauri.md");
-      }
-    } catch (_) {}
-  }
-} catch (_) {}
+// 1. 共性 rule 备案清单逐条求值（原「CLAUDE.md / .claude/rules/ / 冗余入口 / docs 分裂 /
+//    PRD 位置 / 桌面端调试基建」六组硬编码检查全部迁入 ccswitch/scaffold-manifest.json，
+//    另新增 _tmp gitignore、前端样式路线、前端测试入口、CI 矩阵成本、design/CONTEXT.md）。
+//    加共性项改清单不改这里。
+for (const line of manifestIssueLines(cwd)) issues.push(line);
 
 // ── 活跃工作检测（loop + plan） ──
 
@@ -289,9 +249,11 @@ if (issues.length === 0 && activeWork.length === 0) done();
 const parts = [];
 if (issues.length > 0) {
   parts.push(
-    "【dao 脚手架检查】本项目存在以下结构问题，请在回答用户问题后追加提醒：\n" +
+    "【dao 脚手架检查】本项目存在以下结构问题（共性 rule 备案清单 ccswitch/scaffold-manifest.json 逐条求值所得），" +
+    "请在回答用户问题后追加提醒：\n" +
     issues.map((s, i) => (i + 1) + ". " + s).join("\n") +
-    "\n详细模板参考 dao-project-scaffold skill。提醒语气简洁友好，不阻塞用户当前任务。"
+    "\n「（建议）」前缀者为近似判据（子串/入口级），不当硬判定；详细模板参考 dao-project-scaffold skill。" +
+    "提醒语气简洁友好，不阻塞用户当前任务。"
   );
 }
 if (activeWork.length > 0) {
