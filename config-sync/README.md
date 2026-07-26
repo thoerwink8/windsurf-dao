@@ -164,6 +164,26 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 
 判定符号链接有效性用 readlink 目标存在性，不用 `existsSync(链路径)`——跨盘符号链接在普通进程下解引用会 EPERM 假性报错。
 
+## 第三方 hook 写入方（Coffee CLI 等）
+
+`~/.claude/settings.json` 的 `hooks` 段除 dao 自有脚本外，还可能被**第三方工具自行注册**。2026-07-27 清掉了 Coffee CLI 写入的 5 条 hook（`Notification` / `PostToolUse(*)` / `PreToolUse(*)` / `Stop` / `UserPromptSubmit` 各一条，命令串均为 `"…/Coffee CLI/coffee-cli.exe" __hook`）。
+
+删除判据三条：
+
+- **场景不匹配**：用户运行竞品是为走查其形态，不需要它跟踪自己的 Claude 会话；删除这些 hook 不影响启动 Coffee CLI 本身。
+- **数据面**：`PreToolUse` / `PostToolUse` 的 `*` matcher 意味着载荷是**全部开发活动流水**（每次工具调用的输入输出）。
+- **成本**：每次工具调用都要拉起一次竞品 exe 进程。
+
+⚠️ **复发不会被 settings-drift 自动报出**。`ccswitch/lib/settings-drift.js` 的 `daoScriptOf()` 对不含 `.js/.mjs/.cjs/.ps1` 的命令串返回 `null`，`hookIndex()` 随即跳过该条目；`tests/settings-drift.tests.js` 还有一条负例断言（「负例·第三方 exe 命令不误伤」）**明确钉住**第三方 exe 命令不得进入硬发现——这是刻意设计（避免把用户自装工具当漂移），不是缺陷。刀F 补的命令串全等判据只作用于 dao 自有脚本，覆盖不到本类。
+
+因此：Coffee CLI 下次启动**有可能**自动重新注册（未实测其是否每次启动都写），届时需**手动**发现。复查一行：
+
+```bash
+node -e "const s=require('fs').readFileSync(process.env.USERPROFILE+'/.claude/settings.json','utf8');console.log('coffee hook 条数 =',(s.match(/coffee-cli/gi)||[]).length)"
+```
+
+若要让检测器自动覆盖此类，需另立「live 侧非 dao hook 白名单」判据面——尚未实现，属显式挂账。
+
 ## 安全约束
 
 - 不要把 `common-secrets.json` 提交到 git。
