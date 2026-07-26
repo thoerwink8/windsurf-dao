@@ -82,9 +82,7 @@ fortify2-20260726 D8）（含分层测试策略与直连原理），选型只走
 - 进程管理（启动 dev server / 开调试端口）在会话最开头做一次，不在中途反复杀重启
 - MCP 连接失败 2 次 → 停下检查端口/进程状态，不盲目重试（反者道之动）
 
-**桌面端基建自检**（首次接触 GUI 任务时静默执行）：
-- 检测到 `src-tauri/` 或 `electron` 依赖 → 检查 `.claude/rules/desktop-debugging.md` 是否存在
-- 存在 → 按规则走；**不存在 → 提醒**：`📋 检测到桌面端项目但缺调试规则 → 请输入 /dao-project-scaffold`
+**桌面端基建自检**：已并入共性 rule 备案清单（见「知识归位」节），SessionStart 自动核对缺项。
 
 ## 续力 · 每答必续
 
@@ -129,9 +127,7 @@ Skill spec 编写动态选项列表时，**写完必须数一遍**，超 4 即�
 
 **流程缺口归因**（反就近写）：缺口归属 skill → 先改 skill 再补项目 rules；归属 dao.md → 改 dao.md；纯项目特有 → 改项目 rules。禁止只改项目 rules 而不改全局 skill。
 
-**项目标准结构**：首次进入项目静默检查，详见 `dao-project-scaffold` skill。
-
-**前端技术栈自检**（首次接触前端项目时静默执行）：检测到 `react`/`vue`/`svelte` 依赖或 `src-ui/`/`apps/desktop/` 等目录 → 检查 `.claude/rules/frontend-style.md` 是否存在（样式路线以 `stacks/` 处方为准，Tailwind 优先，禁手写布局 CSS）；不存在 → 提醒 `请输入 /dao-project-scaffold`（血泪见 mousse-cli 断链事故）。
+**共性 rule 备案（清单驱动，SessionStart 自动核对）**：跨项目共性的 rule 与基建项一律登记在 `ccswitch/scaffold-manifest.json`（`universal`=任何项目都该有 / `conditional`=检测到 X 才必须有 Y，`when` 须机器可判），由 `dao-scaffold-check` hook 逐条求值，缺项即报并给补齐指引。**新增共性项改清单不改代码，且不再往本文件加「首次进项目静默执行」类条款**——无标记时刻的自由裁量本仓实测携带率 9-24%，写成条款约等于没写。项目特有 rule 不进清单，归项目 `.claude/rules/`；需语义理解的深度检查仍在 `dao-project-scaffold` skill 的 supporting files。
 
 **Rule vs Skill 边界**：always_on 写本文件（每轮注入）；按需知识做 skill（渐进披露）。
 
