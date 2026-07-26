@@ -449,6 +449,9 @@ function Invoke-LinkClaude {
     Write-Host ""
     Write-Host "  summary: linked=$linked skipped=$skipped conflict=$conflict error=$err" -ForegroundColor Cyan
     Write-Host "  Claude Code: restart session (or /clear) to pick up new skills/commands/agents." -ForegroundColor DarkGray
+    # fortify2-20260726 D4：部署有失败不许静默退出 0——调用方（sync.mjs/dao.bat）靠退出码
+    # 判断是否要把「🟢 完成」降级成「⚠ 部署有 N 处失败」。
+    if ($err -gt 0) { exit 1 }
 }
 
 function Invoke-LinkCodex {

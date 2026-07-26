@@ -65,15 +65,20 @@ function runChild(scriptFile) {
   }
 }
 
+// 返回值：0=成功，非 0=失败。调用方（如 runDown）据此判断是否要把
+// 「🟢 完成」降级成「⚠ 部署有失败」——此前静默吞掉非 0 退出码，用户看到的
+// 永远是完成提示，即便 dao.ps1 link-claude 内部有 error（fortify2-20260726 D4）。
 function runDaoPs1(action) {
   const daoPs1 = path.join(projectRoot, 'dao.ps1');
   try {
     execFileSync('powershell.exe', [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daoPs1, action,
     ], { cwd: projectRoot, stdio: 'inherit', timeout: 60000 });
+    return 0;
   } catch (error) {
     const code = typeof error.status === 'number' ? error.status : 1;
     if (code !== 0) console.error(`  dao.ps1 ${action} 失败（exit ${code}）：${error.message}`);
+    return code;
   }
 }
 
@@ -424,10 +429,14 @@ async function runDown({ only, state, interactive, yes, dryRun }) {
   runRestore({ only });
 
   console.log('\n部署 dao skills/commands/agents/hooks 到 ~/.claude……');
-  runDaoPs1('link-claude');
+  const deployCode = runDaoPs1('link-claude');
 
-  console.log(`\n${NOTIFY} 完成。请重启 cc-switch 并切换一次 provider 下发配置，然后重启 Claude Code 会话（/clear）生效。`);
-  return 0;
+  if (deployCode === 0) {
+    console.log(`\n${NOTIFY} 完成。请重启 cc-switch 并切换一次 provider 下发配置，然后重启 Claude Code 会话（/clear）生效。`);
+    return 0;
+  }
+  console.log(`\n⚠ 部署有失败（dao.ps1 link-claude 退出码 ${deployCode}，具体失败项见上方 summary 行 error=N）。settings/skills/hooks 可能未完整生效，请修复后重跑 dao.bat --direction=down 或 dao.bat link-claude。`);
+  return 1;
 }
 
 async function runUp({ only, state, interactive, yes, dryRun, message }) {
