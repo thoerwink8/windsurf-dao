@@ -1,7 +1,7 @@
 # dao-design · OD 端协议
 
 > 本文件是 OD 端的设计协议，由 `.od-skills/README.md` 路由到此。
-> 对应 CLI 端 skill: `dao-design`（open.md §P）。
+> 对应 CLI 端 skill: `dao-design`（`od-prompt.md`，Prompt→Design 提示词生成器）。
 >
 > **部署方式**：本文件位于 windsurf-dao（唯一真相源），各项目 `design/.od-skills/` 通过 symlink 引用。
 >
@@ -113,6 +113,8 @@ workspace HTML 必须可独立在浏览器中打开：
 
 ### WORKSPACE.md 模板
 
+> 本节与 HANDOFF.md 模板（下方）**有意保持自包含**，不引用 `asset.md` §O.1/§O.2——OD 端 AI 只能读到 `.od-skills/` 下 symlink 的文件（本文件 + README.md），无法访问 windsurf-dao 仓库其余部分。CLI 侧的 od-prompt.md/asset.md 已把各自的同类模板收口为「引用 asset.md §O.1/§O.2」（fortify2-20260726 skills F3），但本文件是跨系统边界的例外——收口在这里会制造 OD 端读不到的死引用。
+
 ```yaml
 ---
 started: YYYY-MM-DD
@@ -159,7 +161,7 @@ workspace 验收通过后，立即在同目录写入 `HANDOFF.md`，六节缺一
 | 2 | 新增 CSS 类 | 表格：类名 + 作用（仅层 3 补丁类） |
 | 3 | DOM 变更 | 代码块：新增/修改的 HTML 骨架 |
 | 4 | 组件映射 | 表格：UI 元素 → React 实现方式 |
-| 5 | 交互说明 | 状态机 + 过渡 + hover/focus/disabled 行为 |
+| 5 | 状态机（如有交互变更） | 状态机 + 过渡 + hover/focus/disabled 行为 |
 | 6 | 注意事项 | Token 待办、原型专用元素（生产需删除） |
 
 **禁止只在回复中输出交接内容而不写文件。**
