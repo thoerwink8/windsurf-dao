@@ -42,6 +42,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     else if (arg === '--no-fetch') opts.fetch = false;
     else if (arg === '--doctor') opts.action = 'doctor';
     else if (arg === '--inventory') opts.action = 'inventory';
+    else if (arg === '--goal-health') opts.action = 'goal-health';
     else if (arg === '--persona') opts.action = 'persona';
     else if (arg === '--deploy') opts.action = 'deploy';
     else if (arg === '--status') opts.action = 'status';
@@ -106,6 +107,7 @@ function printHelp() {
   dao.bat --status                                dao 双栈链接健康矩阵
   dao.bat --doctor                                只读体检（doctor）
   dao.bat --inventory                             只读盘点（inventory）
+  dao.bat --goal-health                           只读扫描 goal 任务健康（stale in-progress / 声称完成但状态未更新的 transcript 风险，Codex 用户）
   dao.bat --persona                               Claude Code persona 切换
   dao.bat --pack                                  打包分发安装包（zip，发给新用户）
 
@@ -364,7 +366,8 @@ async function chooseAction() {
   console.log('  [6] 盘点  inventory（只读盘存）');
   console.log('  [7] persona 切换（dao / fable5 / off）');
   console.log('  [8] 打包  生成分发安装包（zip，发给新用户）');
-  const answer = await ask('输入 1-8（回车默认 1）：');
+  console.log('  [9] goal 任务体检（只读扫描 stale/transcript 风险，Codex 用户）');
+  const answer = await ask('输入 1-9（回车默认 1）：');
   if (answer === '2' || answer === 'up') return 'up';
   if (answer === '3') return 'deploy';
   if (answer === '4') return 'status';
@@ -372,6 +375,7 @@ async function chooseAction() {
   if (answer === '6') return 'inventory';
   if (answer === '7') return 'persona';
   if (answer === '8') return 'pack';
+  if (answer === '9') return 'goal-health';
   return 'down';
 }
 
@@ -631,6 +635,7 @@ async function main() {
   // 纯只读/部署操作：直接转交，不需 DB preflight/git 状态板。
   if (opts.action === 'doctor') { runChild('doctor.mjs'); return; }
   if (opts.action === 'inventory') { runChild('inventory.mjs'); return; }
+  if (opts.action === 'goal-health') { runChild('goal-task-health.mjs'); return; }
   if (opts.action === 'persona') { await runPersona(); closeRl(); return; }
   if (opts.action === 'deploy') { runDaoPs1('link-claude'); return; }
   if (opts.action === 'status') { runDaoPs1('status'); return; }
@@ -646,6 +651,7 @@ async function main() {
   const action = opts.direction || (await chooseAction());
   if (action === 'doctor') { closeRl(); runChild('doctor.mjs'); return; }
   if (action === 'inventory') { closeRl(); runChild('inventory.mjs'); return; }
+  if (action === 'goal-health') { closeRl(); runChild('goal-task-health.mjs'); return; }
   if (action === 'persona') { await runPersona(); closeRl(); return; }
   if (action === 'deploy') { runDaoPs1('link-claude'); closeRl(); return; }
   if (action === 'status') { runDaoPs1('status'); closeRl(); return; }
