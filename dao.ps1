@@ -19,9 +19,6 @@ param(
     [Parameter(Position=1)]
     [string]$TargetPath,
 
-    [Parameter(Position=2)]
-    [string]$SubArg,
-
     [switch]$DryRun
 )
 
@@ -599,28 +596,16 @@ function Get-CodexPromptNames {
     return @(
         "dao-superpowers",
         "dao-dev",
-        "dao-philosophy",
         "dao-evolve",
         "dao-commit"
     )
 }
 
 function New-ManagedCodexPrompt {
+    # 扩展点：为没有对应 ~/.claude/commands/<name>.md 源文件的条目生成 Codex prompt 内容。
+    # fortify2-20260726 D6 移除了 dao-philosophy 特判（该 skill 已死，死 prompt 一并清理）；
+    # 当前 Get-CodexPromptNames 里的条目均有真实 Claude command 源文件，故本函数恒返回 $null。
     param([string]$Name)
-    if ($Name -eq "dao-philosophy") {
-        return @"
----
-description: 深度哲学反思 / 质疑规则根基时调用 dao-philosophy skill
-argument-hint: "[问题/主题]"
----
-
-<!-- codex-managed: windsurf-dao -->
-
-`$dao-philosophy
-
-用户输入：`$ARGUMENTS
-"@
-    }
     return $null
 }
 
@@ -677,8 +662,7 @@ function Invoke-LinkCodexPrompts {
                 $skipped++
                 continue
             }
-            $isLegacyManagedPhilosophy = $name -eq "dao-philosophy" -and -not $isLink -and $existingText -match '\$dao-philosophy'
-            $isManagedFile = -not $isLink -and ($existingText -match 'codex-managed:\s*windsurf-dao' -or $existingText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->' -or $isLegacyManagedPhilosophy)
+            $isManagedFile = -not $isLink -and ($existingText -match 'codex-managed:\s*windsurf-dao' -or $existingText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->')
             if ($isLink -or $isManagedFile) {
                 if ($IsDryRun) {
                     $oldLabel = if ($isLink) { "$($existing.LinkType) -> $($existing.Target)" } else { "managed file" }
@@ -746,8 +730,7 @@ function Invoke-UnlinkCodexPrompts {
         $existing = Get-Item $dstFile -Force
         $isManagedLink = ($existing.LinkType -in "SymbolicLink", "Junction") -and $existing.Target -eq $srcFile
         $existingPromptText = if (-not ($existing.LinkType -in "SymbolicLink", "Junction")) { Get-Content $dstFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { $null }
-        $isLegacyManagedPhilosophy = $name -eq "dao-philosophy" -and -not ($existing.LinkType -in "SymbolicLink", "Junction") -and $existingPromptText -match '\$dao-philosophy'
-        $isManagedFile = -not ($existing.LinkType -in "SymbolicLink", "Junction") -and ($existingPromptText -match 'codex-managed:\s*windsurf-dao' -or $existingPromptText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->' -or $isLegacyManagedPhilosophy)
+        $isManagedFile = -not ($existing.LinkType -in "SymbolicLink", "Junction") -and ($existingPromptText -match 'codex-managed:\s*windsurf-dao' -or $existingPromptText -match '<!--\s*codex-managed:\s*windsurf-dao\s*-->')
         if ($isManagedLink -or $isManagedFile) {
             if ($IsDryRun) {
                 Write-Host "    [DRYRUN] unlink $name" -ForegroundColor Cyan
