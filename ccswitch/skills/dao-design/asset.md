@@ -371,26 +371,16 @@ design/workspaces/{page}-from-code/
   WORKSPACE.md       ← source: code，记录代码漂移
 ```
 
-`WORKSPACE.md` 由本章生成，`source` 必须为 `code`：
+`WORKSPACE.md` 字段与格式以 §O.1 为唯一 canonical 模板，本节只列**差异字段**（`source` 必须为 `code`，非 §O.1 默认的 `design`）：
 
-```markdown
----
-started: YYYY-MM-DD
-page: {page}
-scope: 从代码反向同步 {page}
-source: code
----
+| 字段 | 本章（反向）取值 | §O.1 默认（正向）取值 |
+|------|----------------|---------------------|
+| `scope` | `从代码反向同步 {page}` | `{一句话描述}` |
+| `source` | `code` | `design` |
 
-## 本次迭代目标
-将代码现状还原为设计稿，追平设计/代码漂移。
-
-## 代码漂移（设计稿缺失或过时的部分）
-- {代码已实现但原型没有的区块/变更}
-
-## 完成标志（升格条件）
+正文额外新增一节「## 代码漂移（设计稿缺失或过时的部分）」记录 `{代码已实现但原型没有的区块/变更}`（§O.1 模板无此节，是反向流程特有的追平记录）；「完成标志」改为：
 - [ ] 草稿在浏览器目测通过（§A.4.1）
 - [ ] 设计师确认草稿如实反映代码
-```
 
 工作区命名约定：`{page}-from-code`，明确标识来源。升格由 §B 接手。
 
@@ -472,21 +462,7 @@ New-Item -ItemType Directory "design\workspaces\{name}"
 Copy-Item "design\pages\{page}.html" "design\workspaces\{name}\{page}.html"
 ```
 
-然后在 `workspaces/{name}/` 下创建 `WORKSPACE.md`：
-
-```markdown
----
-started: YYYY-MM-DD
-page: {page}
-scope: {一句话描述}
-source: design   # design = 手动/OD 设计迭代；code = 由 §A 反向生成
----
-
-## 本次迭代目标
-## 受影响页面
-## 完成标志（升格条件）
-- [ ] ...
-```
+然后在 `workspaces/{name}/` 下创建 `WORKSPACE.md`（字段与格式见 §O.1 唯一 canonical 模板；`source` 填 `design`，`page`/`scope` 按本次迭代填写）。
 
 `source` 字段是双向闭环的方向开关（详见 §C）：
 - `source: design` — 正向（设计先行），升格后代码需改造
