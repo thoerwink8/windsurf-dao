@@ -28,6 +28,8 @@
 // 启用后是「静默死层」，而「插件已启用 + 脚本存在」的检查会对它报绿。
 // 本 hook 出错时三重留痕：stderr + systemMessage（用户可见）+ _tmp/rule-echo/errors.log，
 // 但**不取阻断语义**（PostToolUse 阶段工具已执行完，不该报错误态污染工具结果），故仍 exit 0。
+// 上述加固层已抽为公共库 ccswitch/lib/hook-selfcheck.js（fortify2-20260726 刀F F1），
+// 本文件只留业务判据；两者的分工与「有意保留的差异」见该库头注。
 //
 // ── 未接线自检 ───────────────────────────────────────────────────────────────
 // `node dao-rule-echo.js --selfcheck` 两路核验：① settings.json 里是否真注册（读注册串）
@@ -38,9 +40,7 @@
 // 由 settings.json 的 PostToolUse hook 调用（注册 JSON 片段见本文件末尾「注册片段」注释块）。
 // 自证：node tests/dao-rule-echo.tests.js（46 断言，两态 + 错误可见性）。
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+const { createHookScaffold } = require("../lib/hook-selfcheck.js");
 
 // ── 常量：回灌预算 ──────────────────────────────────────────────────────────
 // 取值理由：4000 字符 ≈ 1000~1400 token。单条新增条款通常 200~800 字符，
@@ -50,12 +50,13 @@ const MAX_ECHO_SEG = 2000;     // MultiEdit 单段上限（防一段吃光预算
 const WRITE_FULL_LIMIT = 4000; // Write：内容 ≤ 此值全量回灌，超过转摘要模式
 const WRITE_SUMMARY_HEAD = 1000; // 摘要模式回灌开头多少字符
 
-const ROOT = path.resolve(__dirname, "..", ".."); // 本脚本在 <root>/ccswitch/hooks/
-const STATE_DIR = path.join(ROOT, "_tmp", "rule-echo");
-const FIRED_LOG = path.join(STATE_DIR, "fired.log");
-const LAST_JSON = path.join(STATE_DIR, "last.json");
-const ERROR_LOG = path.join(STATE_DIR, "errors.log");
-const FIRED_LOG_MAX_LINES = 2000;
+const H = createHookScaffold({
+  name: "dao-rule-echo",
+  stateSubdir: "rule-echo",
+  failTail: "本次规则回灌未执行；hook 不阻断工具调用",
+  forceErrorEnv: "DAO_RULE_ECHO_FORCE_ERROR",
+  selfTestEnv: "DAO_RULE_ECHO_SELFTEST",
+});
 
 // ── 规则文件判据 ────────────────────────────────────────────────────────────
 // 只收「宿主会在会话启动时快照注入」的那一类文件——它们才有「中途写入不可见」的病。
@@ -84,62 +85,6 @@ function classifyRuleFile(norm) {
     if (re.test(norm)) return label;
   }
   return null;
-}
-
-// ── 失败留痕：stderr + systemMessage + 磁盘日志，不阻断 ─────────────────────
-let stdoutUsed = false;
-function emit(obj) {
-  if (stdoutUsed) return;
-  stdoutUsed = true;
-  try { process.stdout.write(JSON.stringify(obj)); } catch (_) {}
-}
-
-function appendErrorLog(msg, err) {
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    const stack = err && err.stack ? "\n" + err.stack : "";
-    fs.appendFileSync(ERROR_LOG, `[${new Date().toISOString()}] ${msg}${stack}\n`, "utf8");
-  } catch (_) {}
-}
-
-function fail(stage, err) {
-  const detail = err && err.message ? err.message : String(err);
-  const msg = `[dao-rule-echo] ${stage} 失败：${detail}`;
-  try { process.stderr.write(msg + "\n"); } catch (_) {}
-  appendErrorLog(msg, err);
-  emit({
-    systemMessage: msg + `（本次规则回灌未执行；hook 不阻断工具调用。日志：${ERROR_LOG}）`
-  });
-  process.exit(0);
-}
-
-// 自检用故障闸：DAO_RULE_ECHO_FORCE_ERROR=1 时在主流程内抛错，用来验证「出错不静默」。
-function maybeForceError(stage) {
-  if (process.env.DAO_RULE_ECHO_FORCE_ERROR === "1") {
-    throw new Error(`人为注入故障（DAO_RULE_ECHO_FORCE_ERROR=1）@${stage}`);
-  }
-}
-
-// ── 心跳：只有真被宿主调用过才写得出来，是「已接线」的硬证据 ────────────────
-// 自测/手工空跑也会走到这里，若不加区分，单元测试的心跳会让 --selfcheck 误报「已生效」
-// ——那正是本 hook 要治的那类假绿。故心跳标注 synthetic，自检只采信非 synthetic 记录。
-// 判据：显式自测环境变量，或缺 transcript_path（真实宿主调用必带）。
-function isSynthetic(input) {
-  if (process.env.DAO_RULE_ECHO_SELFTEST === "1") return true;
-  return !(input && input.transcript_path);
-}
-
-function heartbeat(rec) {
-  try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(LAST_JSON, JSON.stringify(rec, null, 2), "utf8");
-    fs.appendFileSync(FIRED_LOG, JSON.stringify(rec) + "\n", "utf8");
-    // 轻量裁剪，避免日志无界增长
-    const lines = fs.readFileSync(FIRED_LOG, "utf8").split(/\r?\n/).filter(Boolean);
-    if (lines.length > FIRED_LOG_MAX_LINES) {
-      fs.writeFileSync(FIRED_LOG, lines.slice(-Math.floor(FIRED_LOG_MAX_LINES / 2)).join("\n") + "\n", "utf8");
-    }
-  } catch (_) { /* 心跳失败不该拖垮回灌本身 */ }
 }
 
 // ── 载荷提取：只取本次写入的内容，按工具形态分流 ────────────────────────────
@@ -208,86 +153,26 @@ function buildPayload(toolName, ti) {
 }
 
 // ── --selfcheck：查注册 + 查心跳，不看「文件是否存在」 ──────────────────────
-function selfcheck() {
-  const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
-  const settingsPath = path.join(HOME, ".claude", "settings.json");
-  const lines = [];
-  let bad = 0;
-
-  // ① 注册核验
-  try {
-    const j = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    const groups = (j.hooks && j.hooks.PostToolUse) || [];
-    let hit = null;
-    for (const g of groups) {
-      for (const h of (g.hooks || [])) {
-        if (typeof h.command === "string" && /dao-rule-echo\.js/.test(h.command)) hit = { g, h };
-      }
-    }
-    if (!hit) {
-      lines.push(`✗ 未注册：${settingsPath} 的 hooks.PostToolUse 里没有引用 dao-rule-echo.js 的 command。`);
-      bad++;
-    } else {
-      const m = hit.g.matcher == null ? "" : String(hit.g.matcher);
-      const covers = m === "*" || (/Edit/.test(m) && /Write/.test(m));
-      lines.push(`${covers ? "✓" : "✗"} 已注册于 PostToolUse，matcher="${m}"${covers ? "" : " —— 该 matcher 未同时覆盖 Edit/Write，规则写入可能漏触发"}`);
-      if (!covers) bad++;
-    }
-  } catch (e) {
-    lines.push(`✗ 读取/解析 settings.json 失败：${e.message}`);
-    bad++;
-  }
-
-  // ② 心跳核验：只采信非 synthetic 记录（自测心跳不算「已生效」）
-  try {
-    const all = fs.existsSync(FIRED_LOG)
-      ? fs.readFileSync(FIRED_LOG, "utf8").split(/\r?\n/).filter(Boolean).map(l => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean)
-      : [];
-    const real = all.filter(r => r.synthetic !== true);
-    if (!real.length) {
-      lines.push(`✗ 无真实触发记录（日志共 ${all.length} 条，其中自测/手工 ${all.length - real.length} 条）—— ` +
-                 `尚未被宿主真实调用过；注册了也可能因 matcher/路径判据不匹配而从未触发。日志：${FIRED_LOG}`);
-      bad++;
-    } else {
-      const last = real[real.length - 1];
-      const days = (Date.now() - Date.parse(last.at)) / 86400000;
-      lines.push(`✓ 有真实触发记录：末次 ${last.at}（${days.toFixed(1)} 天前）· ${last.tool} · ${last.file}；真实 ${real.length} 条 / 共 ${all.length} 条。`);
-      if (days > 30) lines.push(`  ⚠ 末次真实触发距今 ${days.toFixed(0)} 天；若期间改过规则文件，说明已失联，请核 settings.json 注册。`);
-    }
-  } catch (e) {
-    lines.push(`✗ 心跳日志读取失败：${e.message}`);
-    bad++;
-  }
-
-  process.stdout.write("[dao-rule-echo --selfcheck]\n" + lines.map(s => "  " + s).join("\n") + "\n");
-  process.exit(bad ? 1 : 0);
+if (process.argv.includes("--selfcheck")) {
+  H.runSelfcheckCli({
+    event: "PostToolUse",
+    scriptName: "dao-rule-echo.js",
+    // 规则写入靠 Edit 与 Write 两路，缺一路就有整类写入漏触发
+    covers: (m) => m === "*" || (/Edit/.test(m) && /Write/.test(m)),
+    matcherLabel: (m) => m,
+    coversFailNote: " —— 该 matcher 未同时覆盖 Edit/Write，规则写入可能漏触发",
+    logPath: H.firedLog,
+    missNote: "matcher/路径判据",
+    describeLast: (last) => `${last.tool} · ${last.file}`,
+    // 规则文件不是每天都改 ⇒ 30 天才算可疑（阈值低了会变噪音源，随即被人删掉）
+    staleDays: 30,
+    staleNote: (d) => `⚠ 末次真实触发距今 ${d} 天；若期间改过规则文件，说明已失联，请核 settings.json 注册。`,
+    logReadFailLabel: "心跳日志读取失败",
+  });
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
-if (process.argv.includes("--selfcheck")) {
-  try { selfcheck(); } catch (e) {
-    process.stderr.write(`[dao-rule-echo] selfcheck 异常：${e.message}\n`);
-    process.exit(1);
-  }
-}
-
-let raw = "";
-try {
-  raw = fs.readFileSync(0, "utf8");
-} catch (e) {
-  fail("读取 stdin", e);
-}
-
-let input;
-try {
-  maybeForceError("parse");
-  input = JSON.parse(raw);
-  if (!input || typeof input !== "object") throw new Error("stdin JSON 不是对象");
-} catch (e) {
-  // 真实 PostToolUse 一定给合法 JSON；解析不了说明协议对不上或被手工空跑，
-  // 属该报的错，不做静默降级（静默＝死层）。
-  fail("解析 stdin JSON", e);
-}
+const input = H.readStdinJson();
 
 try {
   const toolName = String(input.tool_name || "");
@@ -304,7 +189,7 @@ try {
   const label = classifyRuleFile(norm);
   if (!label) process.exit(0); // 非规则文件：静默，一个字都不输出
 
-  maybeForceError("payload");
+  H.maybeForceError("payload");
   const payload = buildPayload(toolName, ti);
   if (!payload) process.exit(0);
 
@@ -320,17 +205,17 @@ try {
     ? `${head}\n----- 本次写入内容 begin -----\n${payload.body}\n----- 本次写入内容 end -----`
     : head;
 
-  heartbeat({
+  H.heartbeat({
     at: new Date().toISOString(),
     tool: toolName,
     file: norm,
     label,
     bytes: Buffer.byteLength(context, "utf8"),
     session: String(input.session_id || ""),
-    synthetic: isSynthetic(input)
+    synthetic: H.isSynthetic(input)
   });
 
-  emit({
+  H.emit({
     hookSpecificOutput: {
       hookEventName: "PostToolUse",
       additionalContext: context
@@ -338,7 +223,7 @@ try {
   });
   process.exit(0);
 } catch (e) {
-  fail("构造回灌载荷", e);
+  H.fail("构造回灌载荷", e);
 }
 
 // ── 注册片段（供 ~/.claude/settings.json 的 hooks.PostToolUse 数组使用）────────
