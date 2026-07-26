@@ -103,3 +103,66 @@ README.md 是路由入口——用户在 OD 发送 `/dao-design` 时，OD 搜索
 `.od-skills/` 整个目录 gitignore（symlink 是机器本地指针，不入库）。换机器重跑 scaffold 即恢复。
 
 此文件与 `PROTOTYPE-SPEC.md` 互补：protocol 定义**流程**（怎么工作），SPEC 定义**内容**（具体的 config 和类名映射）。
+
+## design-spirit.md 模板（rule 脚手架，迁移自 `dao-design` open.md §B）
+
+> 各复归其根。设计精神归 rule 文件，不归会话。原属 `dao-design` open.md §B——因该文件按"消费引擎"单一职责瘦身（fortify2-20260726 skills F2），脚手架模板迁移至此：本节服务的是项目脚手架场景，归属 scaffold 家族比归属消费引擎更贴切。触发条件、模板内容、更新时机原样保留。
+
+**当 `dao-loop` planning.md §4 谋线步骤 9（rule 检查）检测到 design Loop 缺少 `design-spirit.md` 时，按以下模板自动创建。**
+
+模板路径：`.claude/rules/design-spirit.md`，`paths:` 设为 `apps/*/src/**`（或项目实际前端路径）。
+
+```markdown
+---
+paths:
+  - "apps/*/src/**"
+  - "packages/*/src/**"
+---
+
+# 设计精神（四维检查清单）
+
+> 本文件由 dao-design 谋线自动创建，造线过程中持续更新。
+
+## 视觉维度
+- [ ] 所有色彩使用语义 token，禁止硬编码 hex/hsl
+- [ ] 字号使用 design-tokens.md 定义的 token
+- [ ] 圆角/阴影/间距使用项目 token 体系
+- [ ] 亮暗双主题视觉一致
+
+## 交互维度
+- [ ] 所有可交互元素有 hover/focus/active/disabled 四态
+- [ ] 动效尊重 prefers-reduced-motion
+- [ ] Loading/Empty/Error 三态有设计覆盖
+- [ ] 键盘可达性（Tab 序 + Enter/Escape 响应）
+
+## 导航维度
+- [ ] 页面间导航形成闭环（去得了就回得来）
+- [ ] 深层页面有返回上级路径
+- [ ] 导航矩阵（下方）覆盖所有页面跳转
+
+## 无障碍维度
+- [ ] 图标按钮有 aria-label
+- [ ] 对话框有 aria-modal + aria-labelledby
+- [ ] 进度指示有 role="progressbar" + aria-valuenow
+- [ ] 状态变更有 aria-live 通知
+
+## 组件策略判据
+
+| 场景 | 策略 | 判断标准 |
+|------|------|---------|
+| 设计稿结构简单，直接翻译 | native | 无交互、无状态、无复用 |
+| 项目已有组件可扩展 | extend | 增加 variant/size 即可覆盖 |
+| 需要组合或添加动效 | wrap | 单个基础组件不够，需封装 |
+| 全新独特交互 | custom | 无现有组件可复用 |
+
+## 导航闭环矩阵
+
+<!-- 造线过程中持续填写 -->
+| 起点页 | 终点页 | 触发元素 | 实现状态 |
+|--------|--------|---------|---------|
+```
+
+**更新时机**：
+- 谋线创建（`dao-loop` planning.md §4 步骤 9）：初始化模板
+- 造线 Phase 检查点（`dao-loop` execution.md §5 造线）：更新导航矩阵 + 勾选已覆盖的检查项
+- 归档规范同步（`dao-loop` closing.md §7.4 规范同步）：最终更新，标记未覆盖项为 deferred
