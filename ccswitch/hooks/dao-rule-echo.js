@@ -68,6 +68,11 @@ const RULE_PATTERNS = [
   [/(^|\/)\.claude\/projects\/[^/]+\/memory\/.+\.md$/i,           "auto-memory（常驻注入）"],
   [/(^|\/)memory\/MEMORY\.md$/i,                                  "memory 索引（常驻注入）"],
   [/(^|\/)\.windsurf\/rules\/.+$/i,                               "Windsurf 规则（双栈对位）"],
+  // fortify-20260726 A1：条款库存根化后，全文迁到 docs/rules/（不再 always-on 快照，
+  // subagent 按「必带首行」现场 Read）。本条并非补「快照延迟」病——而是覆盖同一会话内
+  // 帅自己边写边用的场景：写完条款不代表当轮已生效，回灌能让帅立即看到刚落盘的内容，
+  // 不必等下一次显式 Read。
+  [/(^|\/)docs\/rules\/.+\.md$/i,                                 "条款库正文（docs/rules，现场 Read 型，非快照型）"],
 ];
 
 // 排除面：临时产物/依赖/构建物里的同名文件不是生效中的规则文件
