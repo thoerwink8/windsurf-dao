@@ -77,6 +77,24 @@ console.log("\n=== 真实清单：结构性质（不断言条目数，见头注�
       .every((e) => e.severity === "info"));
   check("清单带「什么不该进」说明段（个性 rule 边界）",
     !!(manifest && manifest._doc && manifest._doc["什么不该进本清单"]));
+  check("清单带「文件名契约」原则声明（裁定 A：跨项目核对的前提）",
+    !!(manifest && manifest._doc && manifest._doc["文件名契约（原则声明，不是检查项）"]));
+  // 每条 exempt 都必须带非空 why：无理由的例外就是隐形例外换了个写法，
+  // 而本字段存在的全部理由是「例外显式化 > 例外隐形」。
+  check("每条 exempt 的每个例外都带非空 why",
+    es.filter((e) => e.exempt).every((e) => e.exempt.every((x) => typeof x.why === "string" && x.why.length > 0)),
+    "offenders=" + es.filter((e) => e.exempt && !e.exempt.every((x) => x.why)).map((e) => e.id).join(","));
+  // 元仓库不再整体豁免（hook 侧取消早退），故它对 AGENT_GUIDE.md 那条的例外
+  // **必须**以数据形式在场——否则元仓库每次 SessionStart 都会被报一条刻意保留的文件。
+  const ag = es.find((e) => e.id === "no-redundant-agent-guide");
+  check("no-redundant-agent-guide 为 windsurf-dao 显式声明例外（取消整体豁免的配套）",
+    !!(ag && Array.isArray(ag.exempt) && ag.exempt.some((x) => x.repo === "windsurf-dao")),
+    "exempt=" + JSON.stringify(ag && ag.exempt));
+  check("该例外的 why 说明了它为何刻意保留（提到 dao.md 引用它）",
+    !!(ag && ag.exempt && ag.exempt.some((x) => x.repo === "windsurf-dao" && /dao\.md/.test(x.why))));
+  check("rejected 段记下裁定 C（rule frontmatter 挂账不立）且写明解冻条件",
+    !!(manifest && manifest._doc && (manifest._doc.rejected || []).some(
+      (r) => /frontmatter/.test(r["候选"] || "") && /解冻条件/.test(r["不收原因"] || ""))));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -114,6 +132,22 @@ console.log("\n=== schema 校验：合法通过 / 各类非法被挡（两态）
     M.validate({ entries: [entry({ require: { maxLines: { path: "a", n: 0 } } })] }).some((e) => /maxLines\.n/.test(e)));
   check("label 非字符串 → 报错",
     M.validate({ entries: [entry({ require: { file: "a", label: 7 } })] }).some((e) => /label 必须是字符串/.test(e)));
+
+  // exempt 的 schema 两态。空数组也判非法：写个空壳等于没声明例外，
+  // 却会让读者以为「这条有例外」——比不写更糟。
+  check("负控：合法 exempt 零错误",
+    M.validate({ entries: [entry({ exempt: [{ repo: "some-repo", why: "理由" }] })] }).length === 0,
+    JSON.stringify(M.validate({ entries: [entry({ exempt: [{ repo: "some-repo", why: "理由" }] })] })));
+  check("exempt 非数组 → 报错",
+    M.validate({ entries: [entry({ exempt: { repo: "x", why: "y" } })] }).some((e) => /exempt 必须是非空数组/.test(e)));
+  check("exempt 空数组 → 报错（空壳例外比不写更糟）",
+    M.validate({ entries: [entry({ exempt: [] })] }).some((e) => /exempt 必须是非空数组/.test(e)));
+  check("exempt 缺 repo → 报错",
+    M.validate({ entries: [entry({ exempt: [{ why: "理由" }] })] }).some((e) => /exempt\[0\]\.repo/.test(e)));
+  check("exempt 缺 why → 报错（无理由的例外就是隐形例外）",
+    M.validate({ entries: [entry({ exempt: [{ repo: "x" }] })] }).some((e) => /exempt\[0\]\.why/.test(e)));
+  check("exempt 元素非对象 → 报错",
+    M.validate({ entries: [entry({ exempt: ["windsurf-dao"] })] }).some((e) => /exempt\[0\] 不是对象/.test(e)));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -215,6 +249,45 @@ console.log("\n=== evaluate 端到端：缺项报出 / 齐备不报 / 条件不�
   });
   check("有 react 依赖但缺 frontend-style.md → conditional 条目报出",
     ids(M.evaluate(manifest, noRule)).indexOf("c-frontend") !== -1);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== exempt 求值：命中仓跳过 / 别的仓照报（两态 + 范围不越界）===");
+// 为什么这一组必须两态：只验「被豁免的仓不报」挡不住 exempt 写错范围——
+// 一个匹配过宽的 exempt（或求值器忽略 repo 直接跳过）同样让那一条「不报」，
+// 于是该规则对所有项目静默失效，而输出看起来完全正常。
+{
+  const manifest = {
+    entries: [
+      entry({
+        id: "no-agent-guide", require: { not: { file: "AGENT_GUIDE.md" } },
+        msg: "根目录存在冗余 AI 入口 AGENT_GUIDE.md",
+        exempt: [{ repo: "meta-repo-probe", why: "夹具：该仓刻意保留此文件" }],
+      }),
+      entry({ id: "u-claude", require: { file: "CLAUDE.md" }, msg: "缺 CLAUDE.md" }),
+    ],
+  };
+  const build = (r) => { w(r, "AGENT_GUIDE.md", "冗余入口\n"); };   // 两个项目都违规
+  const exempted = mkproj("meta-repo-probe", build);
+  const other = mkproj("ordinary-repo-probe", build);
+
+  const rEx = M.evaluate(manifest, exempted);
+  const rOther = M.evaluate(manifest, other);
+  check("exempt 命中（basename 相符）→ 该条跳过", ids(rEx).indexOf("no-agent-guide") === -1, JSON.stringify(rEx));
+  check("同一违规、仓名不符 → 照报（exempt 不越界）",
+    ids(rOther).indexOf("no-agent-guide") !== -1, JSON.stringify(rOther));
+  check("exempt 只豁免它自己那一条，同项目其他缺项照报",
+    ids(rEx).indexOf("u-claude") !== -1, JSON.stringify(rEx));
+  check("删掉 exempt 声明 → 原本被豁免的仓重新被报（mutation 方向）", (() => {
+    const noEx = JSON.parse(JSON.stringify(manifest));
+    delete noEx.entries[0].exempt;
+    return ids(M.evaluate(noEx, exempted)).indexOf("no-agent-guide") !== -1;
+  })());
+  check("repoNameOf 取项目根 basename（exempt 的匹配键，近似判据见 lib 头注）",
+    M.repoNameOf(exempted) === "meta-repo-probe", "got=" + M.repoNameOf(exempted));
+  check("exemptReason 命中回传理由、不命中回 null",
+    /夹具/.test(M.exemptReason(manifest.entries[0], "meta-repo-probe") || "") &&
+    M.exemptReason(manifest.entries[0], "ordinary-repo-probe") === null);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
