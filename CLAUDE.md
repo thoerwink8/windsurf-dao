@@ -17,7 +17,7 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 | 目录 | 宿主 | 加载机制 |
 |---|---|---|
 | `ccswitch/` | Claude Code CLI | `dao.ps1 link-claude` → symlink 到 `~/.claude/` + `dao.md` 的 `@import` |
-| （镜像 ccswitch） | Codex | `dao.ps1 link-codex` → 镜像到 `~/.codex/skills` |
+| （镜像 ccswitch） | Codex | `~/.codex/skills` 的写入方是 **cc-switch store**（用户 2026-07-27 拍板）；`dao.ps1 link-codex` 降为**补位**角色，只填 store 未占的名字，撞名一律让行不覆盖 |
 
 部署是 **symlink/Junction**，不是拷贝：编辑仓库内文件 → 已链接的宿主立即可见，无需重新部署。`scripts/dao-smoke.mjs` 校验 ccswitch skills 的 frontmatter 与交叉引用一致性。
 

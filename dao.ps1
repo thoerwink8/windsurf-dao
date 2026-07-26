@@ -85,6 +85,29 @@ function Resolve-TargetPath {
     return (Resolve-Path $Path).Path
 }
 
+function Test-CcSwitchStoreTarget {
+    # ~/.codex/skills 的**写入方归属判据**(用户 2026-07-27 拍板:归 cc-switch store)。
+    #
+    # 治的病:该目录此前有两个写入方按不同真相源争夺——cc-switch 链到 ~/.cc-switch/skills/,
+    # link-codex 链到 ~/.claude/skills/,而 link-codex 的 override 分支会**主动覆盖**前者
+    # (原注释「指向别处的软链/联接(如 cc-switch 外部版):覆盖为 Claude 用户侧源」)。
+    # 谁最后跑谁赢 ⇒ 同一个 skill 名在 Codex 里指向什么,取决于运行顺序而非任何声明。
+    # 拍板后 link-codex 让出该面:命中本判据的既有链一律保留,不再覆盖。
+    #
+    # 判据是**前缀匹配**,不是等值:store 下每个 skill 各占一个子目录。
+    # 近似性说明:仅按路径前缀认定归属,不校验链是否真由 cc-switch 所建——
+    # 用户手工在 store 下建的链同样会被让行(这是预期,store 即归属地);
+    # 反方向,cc-switch 若改用别的 store 路径,本判据认不出来,会退回旧的覆盖行为。
+    param([object]$Target)
+    if (-not $Target) { return $false }
+    $t = @($Target)[0]
+    if ([string]::IsNullOrWhiteSpace($t)) { return $false }
+    $store = (Join-Path $env:USERPROFILE ".cc-switch\skills") -replace '/', '\'
+    $store = $store.TrimEnd('\').ToLowerInvariant()
+    $norm = ([string]$t -replace '/', '\').TrimEnd('\').ToLowerInvariant()
+    return $norm.StartsWith($store + '\')
+}
+
 # ── 核心操作 ──
 
 function Invoke-Status {
@@ -142,8 +165,15 @@ function Invoke-Status {
         $codexLinked = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
             ($_.LinkType -in "SymbolicLink", "Junction") -and ($_.Target -like "$userClaudeSkillsDir*" -or $_.Target -like "$repoClaudeSkillsDir*")
         }).Count
+        $codexCcSwitch = (Get-ChildItem $codexSkillsDir -ErrorAction SilentlyContinue | Where-Object {
+            ($_.LinkType -in "SymbolicLink", "Junction") -and (Test-CcSwitchStoreTarget $_.Target)
+        }).Count
         if ($codexLinked -gt 0) {
-            Write-Host "  Codex deploy: linked ($codexLinked Claude user skills)" -ForegroundColor Green
+            Write-Host "  Codex deploy: linked ($codexLinked Claude user skills, $codexCcSwitch from cc-switch store)" -ForegroundColor Green
+        } elseif ($codexCcSwitch -gt 0) {
+            # cc-switch store 是本目录的写入方(2026-07-27 拍板)。它已铺好 ⇒ 不是缺件,
+            # 不再红字催跑 link-codex——那条催促曾把用户推向覆盖 cc-switch 链的动作。
+            Write-Host "  Codex deploy: cc-switch store owns it ($codexCcSwitch skills); link-codex only fills names the store lacks" -ForegroundColor Green
         } else {
             Write-Host "  Codex deploy: not installed (run: dao.ps1 link-codex)" -ForegroundColor Red
         }
@@ -492,7 +522,14 @@ function Invoke-LinkCodex {
                     $skipped++
                     continue
                 }
-                # 指向别处的软链/联接(如 cc-switch 外部版):覆盖为 Claude 用户侧源
+                # cc-switch store 是 ~/.codex/skills 的写入方(用户 2026-07-27 拍板):一律让行。
+                # 见 Test-CcSwitchStoreTarget 头注——这是本函数退出争夺的那一步。
+                if (Test-CcSwitchStoreTarget $existing.Target) {
+                    Write-Host "    [yield ] $($it.Name)  (cc-switch store owns it -> $($existing.Target))" -ForegroundColor DarkGray
+                    $skipped++
+                    continue
+                }
+                # 指向别处(非 cc-switch store)的软链/联接:仍覆盖为 Claude 用户侧源
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] override $($it.Name)  (was $($existing.LinkType) -> $($existing.Target))" -ForegroundColor Yellow
                     $linked++
