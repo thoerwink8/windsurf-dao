@@ -83,9 +83,8 @@ function checkDaoSync() {
     const settingsPath = path.join(homeDir, ".claude", "settings.json");
     // 已知非 Claude-hook 注册项的 dao-* 文件（原因见各条）。不满足「dao- 前缀」的文件
     // 本就不会进 hookFiles——本名单只处理「像 hook 却不是」的例外，不是放宽判据的后门。
-    // 当前为空：ccswitch/hooks/dao-commit-msg 目前仍在盘上且确实未注册，修复后的判据会
-    // 如实把它列进「未注册」——这是真发现不是误报，随 fortify2-20260726 D6 删除该文件后
-    // 自然消失，无需在此预先加白名单掩盖。
+    // 当前为空：D5 修复当时曾正确捕获 ccswitch/hooks/dao-commit-msg（无扩展名、确实未注册）
+    // 这一真发现，随即在 D6 里删除了该死文件本身，故无需白名单条目。
     const NON_HOOK_FILES = new Set([]);
     if (fs.existsSync(hooksDir) && fs.existsSync(settingsPath)) {
       const settingsRaw = fs.readFileSync(settingsPath, "utf8");
