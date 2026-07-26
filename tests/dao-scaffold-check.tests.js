@@ -2,9 +2,15 @@
 //
 // 跑法：node tests/dao-scaffold-check.tests.js   （全绿 exit 0，任一红 exit 1）
 //
-// 验的是哪一层：**双模式分派 + 各条结构判据的两态 + hook 注册检测器的扩展名盲区**。
+// 验的是哪一层：**双模式分派 + 各条结构判据的两态 + hook 注册检测器的扩展名盲区
+// + 共性 rule 备案清单真的在驱动 hook（换清单即换行为）**。
 // 它证明「有缺陷即报出对应条目 / 缺陷补齐即不再报 / 非 git 目录完全静默」，
 // **不证明** 注入的提醒真被宿主投递给模型。
+//
+// ⚠ 模式 B 的结构判据断言（CLAUDE.md/rules 目录/冗余入口/桌面端基建…）现在验的是
+// **真实 ccswitch/scaffold-manifest.json 的内容**——那些检查项 2026-07-27 已从本 hook
+// 的代码里搬进清单。清单删条目会让对应断言变红，这是有意的：清单是承重件，不是配置糖。
+// 清单本身的 schema 校验与谓词求值两态另见 tests/scaffold-manifest.tests.js。
 //
 // ── 隔离手法（不许污染真实仓库状态）─────────────────────────────────────────
 // 这个 hook 会跑 git 子进程、读 live settings.json、并 require 真实的 settings-drift。
@@ -96,7 +102,7 @@ function mkMetaRepo(tag, hookFileNames) {
   return root;
 }
 
-function run(cwd) {
+function run(cwd, extraEnv) {
   const payload = JSON.stringify({
     session_id: "knifeF-scaffold",
     transcript_path: "C:/fake/transcript.jsonl",
@@ -111,7 +117,7 @@ function run(cwd) {
       HOME: FAKE_HOME,                                              // ③ 受控 settings
       DAO_SETTINGS_DRIFT_STATE_DIR: path.join(SANDBOX, "drift-state"), // ④ 心跳重定向
       DAO_SETTINGS_DRIFT_SELFTEST: "1",                             // ④ 强制 synthetic
-    }),
+    }, extraEnv || {}),
   });
   let json = null;
   if (r.stdout && r.stdout.trim()) { try { json = JSON.parse(r.stdout); } catch (_) {} }
@@ -344,6 +350,68 @@ console.log("\n=== 模式 B · 活跃 loop / plan 两态 ===");
     fs.writeFileSync(path.join(d, "p2.md"), "# 已完成计划\n\n**状态**：已完成\n", "utf8");
   });
   check("负控：状态=已完成 → 不报活跃 plan", !/Plan \[/.test(ctx(run(cwd))));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 模式 B · 清单真的在驱动 hook（换清单即换行为）===");
+// 上面所有模式 B 断言用的都是**真实** ccswitch/scaffold-manifest.json。这一组换成
+// 构造的假清单（DAO_SCAFFOLD_MANIFEST 指路），证明 hook 报什么完全由清单决定——
+// 同一个项目目录，清单里有该条目就报、删掉就不报。这是「清单驱动」这句话的机器证据；
+// 若哪天有人把检查项写回 hook 代码里，本组会立刻变红。
+{
+  const proj = mkproj("manifest-driven", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+    fs.mkdirSync(path.join(root, "src-ui"), { recursive: true });
+  });
+  const withEntry = path.join(SANDBOX, "mf-with.json");
+  const withoutEntry = path.join(SANDBOX, "mf-without.json");
+  const probeEntry = {
+    id: "probe-frontend", class: "conditional",
+    when: { anyOf: [{ dir: "src-ui", label: "前端" }] },
+    require: { file: ".claude/rules/probe-style.md" },
+    msg: "{label}项目缺少探针 rule PROBE-MARKER",
+    why: "测试夹具", severity: "warn",
+  };
+  const infoEntry = {
+    id: "probe-info", class: "universal",
+    require: { file: "NOPE-INFO.md" },
+    msg: "INFO-MARKER 这是近似判据",
+    why: "测试夹具", severity: "info",
+  };
+  fs.writeFileSync(withEntry, JSON.stringify({ entries: [probeEntry, infoEntry] }), "utf8");
+  fs.writeFileSync(withoutEntry, JSON.stringify({ entries: [infoEntry] }), "utf8");
+
+  const cWith = ctx(run(proj, { DAO_SCAFFOLD_MANIFEST: withEntry }));
+  const cWithout = ctx(run(proj, { DAO_SCAFFOLD_MANIFEST: withoutEntry }));
+  check("清单含该条目 → 报出（含 {label} 渲染）",
+    /前端项目缺少探针 rule PROBE-MARKER/.test(cWith), "ctx=" + cWith.slice(0, 300));
+  check("同一项目、清单删掉该条目 → 不报（证明检查项来自清单不是代码）",
+    !/PROBE-MARKER/.test(cWithout), "ctx=" + cWithout.slice(0, 300));
+  check("severity=info → 报文带「（建议）」前缀",
+    /（建议）INFO-MARKER/.test(cWith), "ctx=" + cWith.slice(0, 300));
+  check("severity=warn → 报文不带「（建议）」前缀",
+    !/（建议）前端项目缺少探针/.test(cWith), "ctx=" + cWith.slice(0, 300));
+  check("负控：真实清单下不出现测试探针条目",
+    !/PROBE-MARKER/.test(ctx(run(proj))), "ctx=" + ctx(run(proj)).slice(0, 300));
+}
+{
+  // 加载失败必须响：坏清单不能让 hook 静默变成"什么都不查"
+  const proj = mkproj("manifest-broken", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+  });
+  const bad = path.join(SANDBOX, "mf-bad.json");
+  fs.writeFileSync(bad, "{ 这不是 JSON", "utf8");
+  const c = ctx(run(proj, { DAO_SCAFFOLD_MANIFEST: bad }));
+  check("坏清单 → 报出加载失败行（不静默吞成零缺项）",
+    /共性 rule 备案清单/.test(c) && /解析失败/.test(c), "ctx=" + c.slice(0, 300));
+
+  const invalid = path.join(SANDBOX, "mf-invalid.json");
+  fs.writeFileSync(invalid, JSON.stringify({ entries: [{ id: "x", class: "个性", require: { file: "a" }, msg: "m", why: "w" }] }), "utf8");
+  const c2 = ctx(run(proj, { DAO_SCAFFOLD_MANIFEST: invalid }));
+  check("清单 class 非法（个性 rule 混进来）→ 报出校验错误",
+    /class 非法/.test(c2), "ctx=" + c2.slice(0, 300));
 }
 
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");

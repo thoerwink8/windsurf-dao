@@ -1,0 +1,192 @@
+{
+  "$schema": "见 ccswitch/lib/scaffold-manifest.js 的 validate()——本仓不引外部 schema 工具，校验由 tests/scaffold-manifest.tests.js 每次跑测试时强制",
+  "version": 1,
+  "_doc": {
+    "这是什么": "共性 rule 备案清单。每次 SessionStart 由 ccswitch/hooks/dao-scaffold-check.js 逐条求值，缺项即报并给补齐指引——「之前没做的共性 rule 自然补上」这件事的载体。",
+    "怎么加一条": "往 entries 加一个对象即可，不改代码。字段：id / class / when(仅 conditional) / require / msg / why / severity。求值语义与谓词种类见 ccswitch/lib/scaffold-manifest.js 头注。",
+    "三分类": {
+      "universal": "无条件共性——任何 git 项目都该有。不得带 when。",
+      "conditional": "条件共性——检测到 X 才必须有 Y。when 必须机器可判（依赖名/目录/文件/package.json 键位），禁止写成需要 AI 判断的描述（如「这算不算前端项目」）。",
+      "个性 rule": "不进本清单。判据：换个项目还成立吗？不成立即为个性。反例（都不该进）：mousse-cli 的「进程名固定 mousse-app.exe」「PR 必附真机截图」「版本号四处一体」；TraceyU 的 design-tokens 具体取值。个性 rule 归项目自己的 .claude/rules/。"
+    },
+    "severity": {
+      "warn": "判据确定（存在性/键位/行数），缺了就是缺了。",
+      "info": "判据是近似或启发式（子串匹配、只查入口不查内容），两个方向都构造得出反例。hook 会给这类报文自动加「（建议）」前缀（前缀由 hook 加，不要写进 msg），不当硬判定用。"
+    },
+    "什么不该进本清单": [
+      "需要语义理解才能判的（「这个 rule 写得对不对」「design 资产结构是否自洽」）——归 dao-project-scaffold skill 的 supporting files。",
+      "带人工豁免条件的（如「根目录无遗留 TODO.md」，但把 TODO.md 当活账本的项目合法持有它）——机器判不了豁免，硬塞必误报。见下方 rejected。",
+      "会话动作类要求（「触远程场景先读 remote-ops.md」）——那是时机不是项目状态，SessionStart 判不了。",
+      "项目特有的一切。"
+    ],
+    "rejected": [
+      { "候选": "根目录无遗留 TODO.md", "出处": "dao-project-scaffold SKILL.md 检查清单", "不收原因": "该条自带豁免（把 TODO.md 用作候选池/dogfood 记账的项目属合法持有，mousse-cli 即是），豁免条件机器判不了 ⇒ 收进来对 mousse-cli 必然误报。" },
+      { "候选": "docs/PROJECT.md 存在", "出处": "dao-project-scaffold SKILL.md 检查清单", "不收原因": "与上一条同源冲突——它是 TODO.md 的替代品，而 TODO.md 在部分项目是活账本；且未跑过 loop 的项目不需要它。收进来会对相当一部分健康项目常态报错。" },
+      { "候选": "docs/specs/ 存在", "出处": "同上", "不收原因": "dao-loop 工作区，没开过 loop 的项目本就不该有。" },
+      { "候选": "commit subject 带宿主前缀 [cc]/[codex]", "出处": "dao.md 言·名之则", "不收原因": "不是项目状态而是每次提交的动作，SessionStart 无从核对（要查得挂 git hook 或复审 range，另一条链）。" },
+      { "候选": "design/ 完整资产结构（pages/components/ref/workspaces/archive/handoff/CHANGELOG/PROTOTYPE-SPEC/.od-skills symlink…）", "出处": "dao-project-scaffold design-assets.md 检查清单", "不收原因": "十条存在性检查一次性全报会淹没其他项；且 symlink 有效性需 lstat + 目标可达判定，属深度检查。本清单只收其中最承重的一条（design/CONTEXT.md，新开会话第一眼读的对齐入口），其余留 design-assets.md。" }
+    ]
+  },
+
+  "entries": [
+    {
+      "id": "claude-md",
+      "class": "universal",
+      "require": { "file": "CLAUDE.md" },
+      "msg": "缺少 CLAUDE.md（AI 入口文件）",
+      "why": "CLAUDE.md + .claude/rules/ 是唯一 AI 上下文通道（dao-project-scaffold SKILL.md §唯一 AI 通道）。",
+      "severity": "warn"
+    },
+    {
+      "id": "claude-md-size",
+      "class": "universal",
+      "require": { "maxLines": { "path": "CLAUDE.md", "n": 80 } },
+      "msg": "CLAUDE.md 超过 80 行（当前 {n} 行），建议拆分详细规范到 .claude/rules/",
+      "why": "CLAUDE.md 每轮注入，越长越挤压有效 context；细则该下沉 .claude/rules/ 按 paths 条件加载（dao-project-scaffold SKILL.md §根目录法则）。",
+      "severity": "warn"
+    },
+    {
+      "id": "claude-rules-dir",
+      "class": "universal",
+      "require": { "dir": ".claude/rules" },
+      "msg": "缺少 .claude/rules/ 目录（领域规范存放处）",
+      "why": "2026-07-12 mousse-cli 断链事故：.claude/rules/ 全程为空，stacks 处方的 Tailwind 铁律 23 个版本从未落地（frontend-gate.md 记载）。",
+      "severity": "warn"
+    },
+    {
+      "id": "no-redundant-agent-guide",
+      "class": "universal",
+      "require": { "not": { "file": "AGENT_GUIDE.md" } },
+      "msg": "根目录存在冗余 AI 入口 AGENT_GUIDE.md，内容应归入 CLAUDE.md 或 .claude/rules/",
+      "why": "多入口 = AI 上下文通道分裂，规范写在哪一份全凭运气（dao-project-scaffold SKILL.md §唯一 AI 通道）。",
+      "severity": "warn"
+    },
+    {
+      "id": "no-redundant-knowledge-md",
+      "class": "universal",
+      "require": { "not": { "file": "KNOWLEDGE.md" } },
+      "msg": "根目录存在冗余 AI 入口 KNOWLEDGE.md，内容应归入 CLAUDE.md 或 .claude/rules/",
+      "why": "同 no-redundant-agent-guide。",
+      "severity": "warn"
+    },
+    {
+      "id": "no-docs-superpowers",
+      "class": "universal",
+      "require": { "not": { "dir": "docs/superpowers" } },
+      "msg": "docs/ 下存在 superpowers/ 分裂目录，应统一到 docs/plans/",
+      "why": "历史 superpowers 管线遗留的第二个计划目录；docs/specs/ 是 dao-loop 正规结构不算分裂（dao-project-scaffold SKILL.md §Docs 组织）。",
+      "severity": "warn"
+    },
+    {
+      "id": "no-root-prd",
+      "class": "universal",
+      "require": { "not": { "file": "PRD.md" } },
+      "msg": "PRD.md 在根目录，应移到 docs/prd.md",
+      "why": "根目录只放活文档（README/CLAUDE.md），产品文档归 docs/（dao-project-scaffold SKILL.md §根目录法则）。",
+      "severity": "warn"
+    },
+    {
+      "id": "tmp-gitignored",
+      "class": "universal",
+      "require": { "fileContains": { "path": ".gitignore", "text": "_tmp/" } },
+      "msg": "`.gitignore` 未忽略 `_tmp/`（AI 产出的临时文件/截图/中间产物统一落 <项目根>/_tmp/，不入库）→ 补一行 `**/_tmp/`",
+      "why": "dao.md Shell 独有项「临时文件归项目」明写「项目 .gitignore 必须含 **/_tmp/」，但此前无任何检查点；漏掉即把截图与中间产物提交进仓库。",
+      "severity": "warn"
+    },
+
+    {
+      "id": "desktop-debugging-rule",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dir": "src-tauri", "label": "Tauri" },
+          { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
+          { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "dep": "electron", "label": "Electron" }
+        ]
+      },
+      "require": { "file": ".claude/rules/desktop-debugging.md" },
+      "msg": "{label} 桌面端项目缺少 .claude/rules/desktop-debugging.md（MCP 工具选择规则）→ 运行 /dao-project-scaffold",
+      "why": "无规则文件 ⇒ AI 每次会话自行判断调试工具 ⇒ 选错 ⇒ 排障循环烧 context（desktop-debug-gate.md「一次 scaffold 省百次重试」）。tauri.conf.json 这一路指纹是 2026-07-27 清单化时补的：原判据只认 src-tauri/ 与 apps/desktop/src-tauri/，而 mousse-cli 的 Tauri 根是 crates/mousse-app/ ⇒ 本仓最主要的 Tauri 项目从未触发过这条检查，该 rule 也就一直缺着。",
+      "severity": "warn"
+    },
+    {
+      "id": "desktop-dev-debug-script",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dir": "src-tauri", "label": "Tauri" },
+          { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
+          { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "dep": "electron", "label": "Electron" }
+        ]
+      },
+      "require": {
+        "anyOf": [
+          { "not": { "file": "package.json" } },
+          { "pkgScript": "dev:debug" }
+        ]
+      },
+      "msg": "{label} 项目缺少 dev:debug 脚本（WebView2 远程调试端口）→ 参考 stacks/desktop-tauri.md",
+      "why": "没有 dev:debug 就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项。",
+      "severity": "warn"
+    },
+    {
+      "id": "frontend-style-rule",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dep": "react" }, { "dep": "vue" }, { "dep": "svelte" },
+          { "dir": "src-ui" }, { "dir": "apps/desktop" }
+        ]
+      },
+      "require": { "file": ".claude/rules/frontend-style.md" },
+      "msg": "前端项目缺少 .claude/rules/frontend-style.md（样式技术路线：Tailwind 优先、禁手写布局 CSS）→ 运行 /dao-project-scaffold，从 stacks/frontend-*.md 处方派生",
+      "why": "2026-07-12 mousse-cli 血泪：从 v0.1 到 v1.23 手写 2000+ 行布局 CSS，stacks/frontend-react-vite.md 的 Tailwind 铁律 23 个版本从未落地。本条原是 dao.md「前端技术栈自检」文字条款（要求 AI 首次接触项目时静默执行），2026-07-27 清单化——那种无标记时刻的自由裁量形态本仓实测携带率 9-24%。",
+      "severity": "warn"
+    },
+    {
+      "id": "frontend-ui-test-entry",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dep": "react" }, { "dep": "vue" }, { "dep": "svelte" },
+          { "dir": "src-ui" }, { "dir": "apps/desktop" }
+        ]
+      },
+      "require": {
+        "anyOf": [
+          { "not": { "file": "package.json" } },
+          { "pkgScript": "test" }, { "pkgScript": "test:run" }, { "pkgScript": "test:unit" }, { "pkgScript": "vitest" }
+        ]
+      },
+      "msg": "前端项目无任何测试入口脚本 → Read stacks/frontend-ui-testing.md 按四层处方选层建栈（连组件冒烟都没有时，UI 改动没有自动回归面）",
+      "why": "frontend-ui-testing.md 是 stacks/ 八个处方里最后一个补上强制执行链的（2026-07-27 前只躺在 README 目录表里）。**本判据是近似**：只查 package.json 有无测试入口脚本，不查是否真存在 *.test.tsx 等测试文件，也不查①②③④哪一层——脚本存在但零测试文件会被放过。完整四层判据见 dao-project-scaffold frontend-gate.md 检测点 B。",
+      "severity": "info"
+    },
+    {
+      "id": "ci-pr-matrix-cost",
+      "class": "conditional",
+      "when": { "glob": ".github/workflows/*.yml" },
+      "require": {
+        "noFileMatching": {
+          "glob": ".github/workflows/*.yml",
+          "contains": ["pull_request", "macos-"],
+          "notContains": ["if:"]
+        }
+      },
+      "msg": "workflow `{file}` 疑似 PR 触发多平台矩阵且无 job 级 if 收敛 → 对照 stacks/ci-github-actions.md 收敛（PR 只跑主开发平台，交叉矩阵挂 main push / release tag / workflow_dispatch）",
+      "why": "2026-07-13 mousse-cli 账单烧穿实证：macOS runner 计费系数 ×10，mac job 占 31% 运行分钟却吃掉 72% 额度，月中额度耗尽致全线 CI 拒启。**本判据是启发式**：靠「文件同时含 pull_request 与 macos- 且全文无 if:」的子串组合，两个方向都构造得出反例（if: 写来干别的会被放过；矩阵写在 reusable workflow 里也会被放过），故 severity=info。精确判据见 ci-cost-gate.md。",
+      "severity": "info"
+    },
+    {
+      "id": "design-context",
+      "class": "conditional",
+      "when": { "dir": "design" },
+      "require": { "file": "design/CONTEXT.md" },
+      "msg": "项目有 design/ 但缺 design/CONTEXT.md（新开会话第一眼读的设计对齐入口）→ 运行 /dao-project-scaffold",
+      "why": "design-assets.md 检查清单的最承重一条：没有 CONTEXT.md，每个新会话都要重新猜设计资产的现状与代码层映射。其余九条 design 结构检查刻意不收（见 _doc.rejected）。",
+      "severity": "info"
+    }
+  ]
+}
