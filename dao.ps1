@@ -288,43 +288,8 @@ function Invoke-LinkClaude {
         }
     }
 
-    # ── hooks 文件复制（ccswitch/hooks/dao-*.js → ~/.claude/hooks/）──
-    $hooksSrc = Join-Path $claudeSrc "hooks"
-    if (Test-Path $hooksSrc) {
-        $hooksDst = Join-Path $userClaude "hooks"
-        if (-not $IsDryRun) { Ensure-Dir $hooksDst }
-        Write-Host "  [hooks]" -ForegroundColor Cyan
-        $hookFiles = Get-ChildItem $hooksSrc -File -Filter "dao-*" -ErrorAction SilentlyContinue
-        foreach ($hf in $hookFiles) {
-            $dstFile = Join-Path $hooksDst $hf.Name
-            if (Test-Path $dstFile) {
-                $srcHash = Get-FileMD5 $hf.FullName
-                $dstHash = Get-FileMD5 $dstFile
-                if ($srcHash -eq $dstHash) {
-                    Write-Host "    [skip ] $($hf.Name)  (same content)" -ForegroundColor DarkGray
-                    $skipped++
-                } else {
-                    if ($IsDryRun) {
-                        Write-Host "    [DRYRUN] update $($hf.Name)" -ForegroundColor Cyan
-                        $linked++
-                    } else {
-                        Copy-Item $hf.FullName -Destination $dstFile -Force
-                        Write-Host "    [update] $($hf.Name)" -ForegroundColor Green
-                        $linked++
-                    }
-                }
-            } else {
-                if ($IsDryRun) {
-                    Write-Host "    [DRYRUN] copy $($hf.Name)" -ForegroundColor Cyan
-                    $linked++
-                } else {
-                    Copy-Item $hf.FullName -Destination $dstFile -Force
-                    Write-Host "    [copy ] $($hf.Name)" -ForegroundColor Green
-                    $linked++
-                }
-            }
-        }
-    }
+    # ── hooks 已单路径化:settings.json 注册直指 ccswitch/hooks/ 仓库路径,不再复制到
+    # ~/.claude/hooks/(fortify2-20260726 D1;旧拷贝层曾 12/13 死、无 prune、2 份 MD5 DIFF)。
 
     # ── settings.json 路径(后续 outputStyle / hook / 通用配置固化共用,提前定义避免未赋值引用)──
     $settingsPath = Join-Path $userClaude "settings.json"
