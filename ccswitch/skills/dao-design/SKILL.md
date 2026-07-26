@@ -17,12 +17,15 @@ disable-model-invocation: true
 |---|---|---|---|
 | [asset.md](asset.md) | dao-design-asset | 设计资产生命周期（§A 反向生成 / §B 升格 / §C 一键实施） | 路由到实施/升格/反向生成时 |
 | [open.md](open.md) | dao-design-open | Open Design 消费引擎（结构提取 + QA 循环） | UI 任务涉及 design/ 目录时 |
-| [sync.md](sync.md) | Read [sync.md](sync.md) | 设计-代码漂移同步 | 路由到同步/漂移检测时 |
-| [system.md](system.md) | Read [system.md](system.md) | 设计系统基础层生成器（10 类 token） | 路由到设计系统时 |
-| [fidelity.md](fidelity.md) | Read [fidelity.md](fidelity.md) | 还原度五层金字塔 | 还原度验证/审计时 |
+| [od-prompt.md](od-prompt.md) | —（open.md §P 拆分，fortify2-20260726） | OD 提示词生成（Prompt→Design） | 讨论收敛但设计稿未出时 |
+| [sync.md](sync.md) | dao-design-sync | 设计-代码漂移同步 | 路由到同步/漂移检测时 |
+| [system.md](system.md) | dao-design-system | 设计系统基础层生成器（10 类 token） | 路由到设计系统时 |
+| [fidelity.md](fidelity.md) | dao-design-fidelity | 还原度五层金字塔 | 还原度验证/审计时 |
 | [standards.md](standards.md) | dao-design-standards | 审美判据·体检表·布局方法论 | 需要设计判据时 |
 | [component-radar.md](component-radar.md) | dao-component-radar | 结构健康门（组件提炼检测） | UI 文件编辑时 |
 | [od-panel-sync.md](od-panel-sync.md) | — | OD 面板同步（design/ ↔ OD 工作目录，§3 出向快照 + §5 od-pull 回搬） | 路由到 OD 面板同步/回搬时 |
+| [protocol-od.md](protocol-od.md) | — | OD 端设计协议唯一真相源，经 symlink 供 Open Design 的 AI 读取（本文件是 CLI 侧索引，不代表 OD 端能直接 Read 它） | OD 端会话发送 `/dao-design` 激活时 |
+| [od-readme.md](od-readme.md) | — | OD 端路由入口（symlink 为项目 `.od-skills/README.md`），指引 OD AI 去读 protocol-od.md | 同上，OD 端 `/dao-design` 首次触发 |
 
 ## 跨 skill 路由铁律
 
