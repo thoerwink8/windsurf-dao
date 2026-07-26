@@ -72,17 +72,29 @@ function checkDaoSync() {
   const drifts = [];
 
   // 1. Hook 文件 vs settings.json 注册
+  // fortify2-20260726 D5：原判据 `.filter(f => f.endsWith(".js"))` 只认 .js 扩展名，
+  // 是「写了没挂」两案（marshal-guard.mjs 14 天 / compact-log.js 6 周）都能存活 14 天+
+  // 未被本检测器发现的共同根因——.mjs 文件、无扩展名文件（如曾经的 dao-commit-msg）
+  // 全部落在过滤器盲区外，从未进入过 hookFiles 数组，也就永远不会被判「未注册」。
+  // 改按 dao- 前缀识别（不限扩展名），并显式列出「像 hook 却不该被当 hook 查」的白名单
+  // （逐条注明原因，而不是放宽判据到失去意义）。
   try {
     const hooksDir = path.join(daoRoot, "ccswitch", "hooks");
     const settingsPath = path.join(homeDir, ".claude", "settings.json");
+    // 已知非 Claude-hook 注册项的 dao-* 文件（原因见各条）。不满足「dao- 前缀」的文件
+    // 本就不会进 hookFiles——本名单只处理「像 hook 却不是」的例外，不是放宽判据的后门。
+    // 当前为空：ccswitch/hooks/dao-commit-msg 目前仍在盘上且确实未注册，修复后的判据会
+    // 如实把它列进「未注册」——这是真发现不是误报，随 fortify2-20260726 D6 删除该文件后
+    // 自然消失，无需在此预先加白名单掩盖。
+    const NON_HOOK_FILES = new Set([]);
     if (fs.existsSync(hooksDir) && fs.existsSync(settingsPath)) {
       const settingsRaw = fs.readFileSync(settingsPath, "utf8");
       const hookFiles = fs.readdirSync(hooksDir)
-        .filter(f => f.endsWith(".js"))
-        .map(f => f.replace(/\.js$/, ""));
+        .filter(f => f.startsWith("dao-") && !NON_HOOK_FILES.has(f))
+        .map(f => f.replace(/\.(js|mjs|cjs)$/, ""));
       const unregistered = hookFiles.filter(name => !settingsRaw.includes(name));
       if (unregistered.length > 0) {
-        drifts.push("⬇ Hook 未注册：" + unregistered.map(n => n + ".js").join(", ") + " → 需注册到 settings.json");
+        drifts.push("⬇ Hook 未注册：" + unregistered.join(", ") + " → 需注册到 settings.json（或若确非 hook，加入 NON_HOOK_FILES 白名单并注明原因）");
       }
     }
   } catch (_) {}
