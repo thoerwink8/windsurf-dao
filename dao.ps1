@@ -333,10 +333,11 @@ function Invoke-LinkClaude {
         }
     }
 
-    # ── 复制 styles/ 到 ~/.claude/styles/ ──
+    # ── 复制 styles/ 到 ~/.claude/output-styles/（Claude Code 真实加载位；
+    # 旧版误写 ~/.claude/styles/ 是送错门，fortify2-20260726 D2 订正）──
     $stylesSrc = Join-Path $claudeSrc "styles"
     if (Test-Path $stylesSrc) {
-        $stylesDst = Join-Path $userClaude "styles"
+        $stylesDst = Join-Path $userClaude "output-styles"
         if (-not $IsDryRun) { Ensure-Dir $stylesDst }
         Write-Host "  [styles]" -ForegroundColor Cyan
         $styleFiles = Get-ChildItem $stylesSrc -File -Filter "*.md" -ErrorAction SilentlyContinue
