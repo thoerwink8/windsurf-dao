@@ -52,7 +52,7 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 ```
 （前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
-底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `link-global` / `link-codex` / `set-terminal`
+底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `link-codex` / `set-terminal`
 
 自检与测试（无 test runner 框架，直接跑）：
 
