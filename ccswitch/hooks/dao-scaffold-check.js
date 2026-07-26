@@ -2,11 +2,13 @@
 //
 // A) windsurf-dao 元仓库：全面同步漂移检测（双向）
 //    - hook 文件 vs settings.json 注册
-//    - settings.json 快照 vs 本地部署（双向：谁领先提醒谁）
 //    - windsurf-dao 未提交改动（本地领先 → 提醒上行）
 //    - windsurf-dao 落后 origin（远程领先 → 提醒下行）
+//    - live ~/.claude/settings.json ↔ config-sync 快照 双向漂移 + dao-rule-echo 接线心跳
+//      （ccswitch/lib/settings-drift.js；旧版整文件 hash 比较因快照是 DB 导出格式而必然假阳性、
+//        已于早前移除，本次以「结构面 + dao 归属过滤」重做，见该文件头注）
 //
-// B) 普通项目：检查 dao-project-scaffold 标准
+// B) 普通项目：检查 dao-project-scaffold 标准（另含上面最后一项，从任意项目都能查）
 //    - CLAUDE.md 存在且 <80 行
 //    - .claude/rules/ 存在
 //    - 无冗余入口（AGENT_GUIDE.md 等）
@@ -30,6 +32,28 @@ try { input = JSON.parse(raw); } catch (_) {}
 
 const cwd = String(input.cwd || process.cwd());
 const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+
+// ── dao 配置自检聚合（新增）──────────────────────────────────────────────────
+// live ~/.claude/settings.json ↔ config-sync/common/settings.json 双向漂移 + dao-rule-echo 接线心跳。
+// 实测 ~90ms（含一次 node spawn）。挂在本 hook 而非新建 hook：新 hook 要写 live+快照+DB 三处注册，
+// 那正是本检测器要治的那笔债 —— 新检查器不该一出生就欠着自己要查的账。
+// 加载失败必须响，不许静默吞（反面教材：hookify stop.py 的 finally: sys.exit(0)）。
+// 「真实调用」判据取 hook_event_name + transcript_path 双条件（与 dao-rule-echo 同标准）：
+// 手工/测试拼的 payload 通常不带 transcript_path ⇒ 默认落到 synthetic，不会把自检染绿。
+// 实测教训：初版只看 hook_event_name，接线冒烟时自造的 payload 立刻写出 synthetic:false，
+// 等于自己给自己发了「已生效」证明 —— 那正是本检测器要防的病。仍**可被刻意伪造**，见 --selfcheck 盲区。
+const isRealHook = !!(input && input.hook_event_name && input.transcript_path);
+let daoSelfCheckLines;
+try {
+  daoSelfCheckLines = require("../lib/settings-drift").hookLines;
+} catch (e) {
+  const why = e && e.message ? e.message : String(e);
+  daoSelfCheckLines = function () { return ["✗ dao 配置漂移自检器加载失败：" + why + "（ccswitch/lib/settings-drift.js）"]; };
+}
+function selfCheckLines() {
+  try { return daoSelfCheckLines({ real: isRealHook, cwd: cwd }) || []; }
+  catch (e) { return ["✗ dao 配置漂移自检抛错：" + (e && e.message ? e.message : String(e))]; }
+}
 
 function inject(context) {
   process.stdout.write(JSON.stringify({
@@ -94,6 +118,9 @@ function checkDaoSync() {
       drifts.push("⬆ windsurf-dao 领先 origin " + ahead + " 个提交 → 考虑 git push 或 dao.bat --direction=up");
     }
   } catch (_) {}
+
+  // 6. live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）
+  for (const line of selfCheckLines()) drifts.push(line);
 
   if (drifts.length === 0) return;
 
@@ -301,4 +328,8 @@ function checkDaoDrift() {
       issues.push("windsurf-dao 同步漂移：" + driftItems.join("；"));
     }
   } catch (_) {}
+
+  // live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）。
+  // 放在上面的 try/catch 之外：那个 catch 会吞掉一切，自检结果不能被它吞。
+  for (const line of selfCheckLines()) issues.push("dao 配置自检：" + line);
 }
