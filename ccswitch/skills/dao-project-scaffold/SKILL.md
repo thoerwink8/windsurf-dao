@@ -22,7 +22,7 @@ disable-model-invocation: true
 |---|---|---|
 | [design-assets.md](design-assets.md) | Open Design 项目结构（design/ 目录树、代码层映射、PROTOTYPE-SPEC 生成、OD 协议 symlink）+ 检查清单 | 检测到 `design/` 目录时 |
 | [desktop-debug-gate.md](desktop-debug-gate.md) | 桌面端（Tauri/Electron）调试基建门控 + migrations 跨层一致性 + 检查清单 | 检测到 `src-tauri/` 或 electron 依赖时 |
-| [frontend-gate.md](frontend-gate.md) | 前端技术栈门控（frontend-style.md rule 派生）+ 检查清单 | 检测到 react/vue/svelte 依赖或前端目录时 |
+| [frontend-gate.md](frontend-gate.md) | 前端技术栈门控（A 样式路线 → frontend-style.md rule 派生；B UI 测试分层 → frontend-ui-testing.md 处方选层）+ 检查清单 | 检测到 react/vue/svelte 依赖或前端目录时 |
 | [ci-cost-gate.md](ci-cost-gate.md) | CI 成本门控（PR 多平台矩阵检测）+ 检查清单 | 检测到 `.github/workflows/*.yml` 时 |
 
 ## 标准结构
@@ -85,7 +85,7 @@ disable-model-invocation: true
 |-----------|---------|------|
 | `design/` 目录存在 | 设计资产结构完整性 | [design-assets.md](design-assets.md) |
 | `src-tauri/` 或 electron 依赖 | 调试基建 + `migrations/*.sql` ↔ Rust 注册 | [desktop-debug-gate.md](desktop-debug-gate.md) |
-| `react`/`vue`/`svelte` 依赖或前端目录 | 样式技术路线未固化为 rule | [frontend-gate.md](frontend-gate.md) |
+| `react`/`vue`/`svelte` 依赖或前端目录 | 样式技术路线未固化为 rule；UI 测试分层缺失（改动无自动回归面） | [frontend-gate.md](frontend-gate.md) |
 | `.github/workflows/*.yml` 存在 | PR 触发多平台矩阵烧穿计费额度 | [ci-cost-gate.md](ci-cost-gate.md) |
 | _(未来按需扩展)_ | | |
 
