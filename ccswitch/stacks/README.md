@@ -23,8 +23,8 @@
 
 强制执行链：
 
-1. **scaffold 门控**：`dao-project-scaffold` 首次进入项目时检测前端信号（`react`/`vue`/`svelte` 依赖等），检查 `.claude/rules/frontend-style.md` 是否存在
-2. **派生**：缺失时提醒从对应处方（如 `frontend-react-vite.md`）派生该 rule——声明样式技术路线（Tailwind 优先，禁手写布局 CSS），frontmatter 带 `description` + `paths:` 条件加载（参考 TraceyU `.claude/rules/code-to-prototype.md` 形式）
+1. **scaffold 门控**：`dao-project-scaffold` 首次进入项目时检测前端信号（`react`/`vue`/`svelte` 依赖等），进 `frontend-gate.md` 走两个检测点——**A 样式路线**（`.claude/rules/frontend-style.md` 是否存在）、**B UI 测试分层**（①②层测试信号是否全无）
+2. **派生**：A 缺失时提醒从对应处方（如 `frontend-react-vite.md`）派生该 rule——声明样式技术路线（Tailwind 优先，禁手写布局 CSS），frontmatter 带 `description` + `paths:` 条件加载（参考 TraceyU `.claude/rules/code-to-prototype.md` 形式）；B 缺失时提醒 Read `frontend-ui-testing.md` 按四层处方选层建栈（③层像素回归非普遍必需，判据见门控）
 3. **always_on 兜底**：`dao.md`「前端技术栈自检」条目每轮注入，跳过 scaffold 直接进项目的场景也能兜住
 
 `.claude/rules/frontend-style.md` 派生后才是项目侧真正持续生效的约束；`stacks/` 本身只是处方库，不直接作用于项目会话。
