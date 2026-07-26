@@ -18,6 +18,16 @@
 // （含 `if:` 但不是收敛条件的 workflow 会被放过；把 `if:` 写在别处的会被放过），
 // 故其条目一律 severity=info，不当硬判定用。
 //
+// ── 2026-07-27：`exempt` 字段（例外显式化 > 例外隐形）─────────────────────────
+// 条目可带 `exempt: [{repo, why}]`，命中的仓库跳过该条。它替换掉的是 hook 里
+// 「仓名 === windsurf-dao 就整体 done()」那个早退——那种整体豁免的后果是**检查从不
+// 跑到立法者头上，所以没人发现它自己违规**（实测元仓库自身会中两条，其中一条有个
+// 从未写下来的例外）。逐条 exempt 之后，「哪些规则有例外、为什么」变成清单里可读的
+// 数据，下次有人想删那个文件时会先看到理由。
+// **匹配判据是项目根目录的 basename，不是 remote URL**（近似）：换个目录名 clone 的
+// 同一仓库匹配不上、于是照报——失败方向选的是「多报」而不是「少报」，因为漏掉一条
+// 该报的缺项是静默的，多报一条只是噪音且当场可辨。两个方向都构造得出反例。
+//
 // 真相源：windsurf-dao/ccswitch/lib/scaffold-manifest.js
 
 "use strict";
@@ -119,6 +129,20 @@ function validate(m) {
     if (typeof e.why !== "string" || !e.why) errs.push(at + " 缺 why（出处/理由——无出处的条目不该进清单）");
     if (e.severity !== undefined && !SEVERITIES.includes(e.severity)) {
       errs.push(at + " severity 非法（只允许 " + SEVERITIES.join("/") + "）");
+    }
+    // exempt：例外必须显式且带理由。空数组视为非法（写了个空壳等于没声明例外，
+    // 只会让读者以为"这条有例外"）；缺 why 同样非法——无理由的例外就是隐形例外换个写法。
+    if (e.exempt !== undefined) {
+      if (!Array.isArray(e.exempt) || e.exempt.length === 0) {
+        errs.push(at + ".exempt 必须是非空数组（无例外就别写这个字段）");
+      } else {
+        e.exempt.forEach((x, j) => {
+          const xat = at + ".exempt[" + j + "]";
+          if (!x || typeof x !== "object" || Array.isArray(x)) { errs.push(xat + " 不是对象"); return; }
+          if (typeof x.repo !== "string" || !x.repo) errs.push(xat + ".repo 必须是非空字符串（项目根目录名）");
+          if (typeof x.why !== "string" || !x.why) errs.push(xat + ".why 必须是非空字符串（例外理由——无理由的例外就是隐形例外）");
+        });
+      }
     }
     if (e.when) errs.push.apply(errs, predErrors(e.when, at + ".when"));
     if (e.require) errs.push.apply(errs, predErrors(e.require, at + ".require"));
@@ -278,11 +302,26 @@ function render(tpl, vars) {
   return String(tpl).replace(/\{(\w+)\}/g, (m, k) => (vars[k] === undefined || vars[k] === null ? m : String(vars[k])));
 }
 
+// 项目根的 basename——`exempt` 的匹配键。近似判据，弱点见文件头注。
+function repoNameOf(projectRoot) {
+  return path.basename(path.resolve(String(projectRoot || "")));
+}
+
+function exemptReason(entry, repoName) {
+  if (!Array.isArray(entry.exempt)) return null;
+  for (const x of entry.exempt) {
+    if (x && x.repo === repoName) return x.why || "（无理由，schema 本该挡下）";
+  }
+  return null;
+}
+
 // 返回 [{ id, class, severity, message }]，只含**缺项**（require 求值为 false 的条目）。
 function evaluate(manifest, projectRoot) {
   const ctx = makeCtx(projectRoot);
+  const repoName = repoNameOf(projectRoot);
   const out = [];
   for (const e of manifest.entries || []) {
+    if (exemptReason(e, repoName) !== null) continue;   // 本仓已显式声明例外 ⇒ 该条不查
     let label = null;
     if (e.when) {
       const w = evalPred(e.when, ctx);
@@ -329,7 +368,7 @@ function check(projectRoot, manifestPath) {
 }
 
 module.exports = {
-  validate, evaluate, load, check, defaultManifestPath,
+  validate, evaluate, load, check, defaultManifestPath, repoNameOf, exemptReason,
   _internal: { evalPred, makeCtx, globFiles, findFile, render, predErrors },
   CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS,
 };

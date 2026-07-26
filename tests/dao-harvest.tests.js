@@ -209,6 +209,17 @@ async function main() {
       /pr-history-postmortem/.test(raw) && /重合度.*0|重合度为 0/.test(raw));
     check("收割 prompt 禁自造量化论断（那是另一路的活）",
       /禁自造量化论断/.test(raw));
+    // 互补关系必须**双向**写明。首版只在 dao-harvest 这一侧写了，而选型的人
+    // 大概率是先看到另一侧（复盘那路是先建的）——单向指针 = 从那一侧进来的人
+    // 不知道还有这一半，与本仓「留一个指向空气的指针比没有指针更糟」同族。
+    // 2026-07-27 沉淀官补齐；此断言防它日后被压缩掉。
+    {
+      const sibling = fs.readFileSync(
+        path.join(REPO, "ccswitch", "workflows", "pr-history-postmortem.js"), "utf8");
+      check("互补声明是双向的：pr-history-postmortem 侧也点名 dao-harvest 且说明分工",
+        /dao-harvest/.test(sibling) && /重合度为 0/.test(sibling),
+        "sibling 里 dao-harvest=" + /dao-harvest/.test(sibling) + " 重合度=" + /重合度为 0/.test(sibling));
+    }
   }
 
   console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);

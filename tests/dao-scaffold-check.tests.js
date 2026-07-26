@@ -169,6 +169,48 @@ console.log("\n=== 模式 A · 元仓库：hook 文件 vs settings 注册（含 
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 元仓库不再整体豁免：A 段 + B 段同时跑，例外走 exempt（两态）===");
+// 2026-07-27 裁定 B。原行为：仓名 === windsurf-dao ⇒ 跑完同步漂移就 done()，
+// 清单一条不查 ⇒ 检查从不跑到立法者头上。若哪天有人把早退加回来，下面
+// 「元仓库也报清单缺项」会立刻变红。
+// exempt 那两条用的是**真实清单**：它同时证明 ①元仓库确实在跑 B 段
+// ②AGENT_GUIDE.md 这条被数据层的 exempt 挡住，而不是被整体豁免挡住。
+{
+  // 这个沙箱刻意同时具备两段的素材：①一个未注册 hook ⇒ A 段有内容
+  // ②只有 ccswitch/hooks/* ⇒ 必然缺 CLAUDE.md 与 .claude/rules/ ⇒ B 段有内容。
+  // 两段必须出现在**同一次注入**里——原实现的 A 段是 inject()+exit(0)，
+  // 有漂移时 B 段永远到不了；这条断言正是那个早退的守卫。
+  const cwd = mkMetaRepo("also-runs-manifest", [`${REGISTERED}.js`, "dao-knifef-unregistered.js"]);
+  const c = ctx(run(cwd));
+  check("元仓库也跑清单：缺 CLAUDE.md 被报出（早退加回来即变红）",
+    /缺少 CLAUDE\.md/.test(c), "ctx=" + c.slice(0, 400));
+  check("元仓库也跑清单：缺 .claude/rules/ 被报出", /缺少 \.claude\/rules\//.test(c));
+  check("A 段与 B 段并存于同一次注入（有漂移时 B 段不再被 A 段的 inject+exit 抢走）",
+    /Hook 未注册/.test(c) && /dao 同步漂移检测/.test(c) && /dao 脚手架检查/.test(c),
+    "ctx=" + c.slice(0, 500));
+}
+{
+  const cwd = mkMetaRepo("exempt-agent-guide", [`${REGISTERED}.js`]);
+  fs.writeFileSync(path.join(cwd, "AGENT_GUIDE.md"), "元仓库刻意保留\n", "utf8");
+  const c = ctx(run(cwd));
+  check("元仓库有 AGENT_GUIDE.md → 被 exempt 挡住，不报冗余入口",
+    !/冗余 AI 入口 AGENT_GUIDE/.test(c), "ctx=" + c.slice(0, 400));
+  check("负控（同一次运行）：exempt 只豁免那一条，缺 CLAUDE.md 照报",
+    /缺少 CLAUDE\.md/.test(c), "ctx=" + c.slice(0, 400));
+}
+{
+  // exempt 的范围两态：同样叫别的名字的仓库放同一个文件 → 必须照报。
+  // 只验「元仓库不报」挡不住 exempt 写错范围（那会让该规则对所有项目静默失效）。
+  const cwd = mkproj("not-the-meta-repo", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+    fs.writeFileSync(path.join(root, "AGENT_GUIDE.md"), "冗余入口\n", "utf8");
+  });
+  check("普通仓有 AGENT_GUIDE.md → 照报（exempt 不越界到别的仓）",
+    /冗余 AI 入口 AGENT_GUIDE/.test(ctx(run(cwd))));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 console.log("\n=== 模式 B · 普通项目：非 git 目录必须完全静默 ===");
 {
   const root = path.join(SANDBOX, "projects", "not-a-git-repo");
