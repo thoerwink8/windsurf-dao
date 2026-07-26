@@ -54,14 +54,20 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 
 底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `link-codex` / `set-terminal`
 
-自检与测试（无 test runner 框架，直接跑）：
+自检与测试（无 test runner 框架，node 测试有聚合入口，PowerShell 测试仍各自跑）：
 
 ```powershell
+node scripts/run-tests.mjs                    # ★ node 测试聚合入口：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
+node scripts/run-tests.mjs --list             # 只列清单不跑
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
-.\tests\link-codex.tests.ps1                  # 单个 PowerShell 测试（自带 Assert-* 断言，独立可跑）
+.\tests\link-codex.tests.ps1                  # PowerShell 测试（自带 Assert-* 断言，独立可跑，聚合入口不代跑）
 .\tests\link-codex-prompts.tests.ps1
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 ```
+
+新增 node 测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.js` 扫目录，不维护清单。
+（此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；
+故改为扫目录而非手维护清单——手维护的清单本仓已被咬过两次。）
 
 ## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
 
