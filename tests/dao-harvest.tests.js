@@ -201,6 +201,14 @@ async function main() {
     check("meta.name 与文件名一致", /name:\s*'dao-harvest'/.test(raw));
     check("meta.whenToUse 声明 repoPath 必填", /whenToUse[\s\S]{0,400}repoPath.*必填/.test(raw));
     check("meta.phases 两段", (raw.match(/\{ title: '/g) || []).length === 2);
+    // 2026-07-27 首轮实测：本 workflow 与量化那一路（pr-history-postmortem）的候选
+    // **重合度为 0**，两类模式在对方的取数对象里结构上不可见。不写明分工的话，下一个人
+    // 跑完看到 is_form 占比极低会误判成「收割没用」——故把这层交代钉成断言，防它在
+    // 将来的措辞压缩里被当成啰嗦话删掉（本仓已有条款正文压缩丢细节的实证）。
+    check("meta 声明了「只覆盖单次叙事半边」并点名互补 workflow",
+      /pr-history-postmortem/.test(raw) && /重合度.*0|重合度为 0/.test(raw));
+    check("收割 prompt 禁自造量化论断（那是另一路的活）",
+      /禁自造量化论断/.test(raw));
   }
 
   console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
