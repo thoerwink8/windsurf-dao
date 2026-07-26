@@ -1,4 +1,9 @@
-// dao 脚手架检查 hook — SessionStart · 两种模式
+// dao 脚手架检查 hook — SessionStart · 一条主干 + 一段元仓库专属
+//
+// 模式命名以本段为准（2026-07-27 统一）：代码里的分节横幅此前把 A/B 写反了——
+// 头注写 A=元仓库、B=普通项目，横幅却写 模式B=元仓库、模式A=普通项目，而
+// tests/dao-scaffold-check.tests.js 与 dao-growth-loop.md 的裁定文本都按头注这套读。
+// 三处里两处一致、代码横幅是那个离群值，故本次把横幅改齐，不动语义。
 //
 // A) windsurf-dao 元仓库：全面同步漂移检测（双向）
 //    - hook 文件 vs settings.json 注册
@@ -8,7 +13,14 @@
 //      （ccswitch/lib/settings-drift.js；旧版整文件 hash 比较因快照是 DB 导出格式而必然假阳性、
 //        已于早前移除，本次以「结构面 + dao 归属过滤」重做，见该文件头注）
 //
-// B) 普通项目：**共性 rule 备案清单**逐条求值（另含上面最后一项，从任意项目都能查）
+// B) **所有 git 项目，含元仓库自己**：共性 rule 备案清单逐条求值
+//    （另含上面最后一项，从任意项目都能查）
+//    ⚠ 2026-07-27 起元仓库不再整体豁免：原来 `basename === "windsurf-dao"` 走完 A 段
+//    就 `done()`，B 段一行不跑 ⇒ **检查从不跑到立法者头上，所以没人发现它自己违规**。
+//    实测它自身会中两条，其中「根目录无冗余 AI 入口」有个从未写下来的例外
+//    （AGENT_GUIDE.md 系刻意保留，dao.md 帅节末行引用它）。现改为：A 段照跑，
+//    随后与普通项目走同一条主干，例外逐条写进清单的 `exempt` 字段。
+//    （裁定见调用方 mousse-cli `docs/ops/dao-growth-loop.md` §四.6 裁定 B）
 //    - 清单在 ccswitch/scaffold-manifest.json，求值器在 ccswitch/lib/scaffold-manifest.js
 //    - universal 条目（CLAUDE.md / .claude/rules/ / 无冗余入口 / _tmp 已 gitignore …）无条件查
 //    - conditional 条目（桌面端调试基建 / 前端样式路线 / CI 矩阵成本 …）按 when 指纹命中才查
@@ -93,10 +105,13 @@ function inject(context) {
 function done() { process.exit(0); }
 
 // ══════════════════════════════════════════════════════════════
-// 模式 B: windsurf-dao 元仓库 — 全面同步漂移检测
+// 模式 A: windsurf-dao 元仓库 — 全面同步漂移检测
 // ══════════════════════════════════════════════════════════════
 
-function checkDaoSync() {
+// 返回漂移行数组（**不 inject 不 exit**）。原版直接 inject + exit(0)，那是元仓库
+// 整体豁免的另一半：一旦有漂移就抢先注入并退出，后面的清单求值永远到不了。
+// 改成返回值后，调用方把它与清单缺项拼在同一次注入里。
+function daoSyncLines() {
   const daoRoot = cwd;
   const drifts = [];
 
@@ -162,35 +177,29 @@ function checkDaoSync() {
   // 6. live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）
   for (const line of selfCheckLines()) drifts.push(line);
 
-  if (drifts.length === 0) return;
-
-  inject(
-    "【dao 同步漂移检测】windsurf-dao 存在以下同步差异：\n" +
-    drifts.join("\n") +
-    "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。" +
-    "请在回答末尾简洁提醒用户。"
-  );
-}
-
-// windsurf-dao 元仓库：走同步漂移检测
-if (path.basename(cwd) === "windsurf-dao") {
-  checkDaoSync();
-  done();
+  return drifts;
 }
 
 // ══════════════════════════════════════════════════════════════
-// 模式 A: 普通项目 — dao-project-scaffold 标准检查
+// 模式 B: 所有 git 项目（含元仓库）— 共性 rule 备案清单
 // ══════════════════════════════════════════════════════════════
 
-// 跳过非 git 项目
-try {
-  if (!fs.existsSync(path.join(cwd, ".git"))) done();
-} catch (_) { done(); }
+const isMetaRepo = path.basename(cwd) === "windsurf-dao";
+
+// 跳过非 git 项目。元仓库按仓名识别，不受此闸约束——否则「目录里没有 .git」
+// 这种异常态会连同步漂移一起静默掉，而那正是最该报的时候。
+if (!isMetaRepo) {
+  try {
+    if (!fs.existsSync(path.join(cwd, ".git"))) done();
+  } catch (_) { done(); }
+}
 
 const issues = [];
+const daoSync = isMetaRepo ? daoSyncLines() : [];
 
-// 同时检查 windsurf-dao 的同步状态（从任意项目都能检测）
-checkDaoDrift();
+// 非元仓库时顺带检查 windsurf-dao 的同步状态（从任意项目都能检测）。
+// 元仓库自己不走这一路：daoSyncLines() 已是同一检测的完整版，两路都跑会重复报。
+if (!isMetaRepo) checkDaoDrift();
 
 // 1. 共性 rule 备案清单逐条求值（原「CLAUDE.md / .claude/rules/ / 冗余入口 / docs 分裂 /
 //    PRD 位置 / 桌面端调试基建」六组硬编码检查全部迁入 ccswitch/scaffold-manifest.json，
@@ -244,9 +253,17 @@ try {
 
 // ── 汇总输出 ──
 
-if (issues.length === 0 && activeWork.length === 0) done();
+if (issues.length === 0 && activeWork.length === 0 && daoSync.length === 0) done();
 
 const parts = [];
+if (daoSync.length > 0) {
+  parts.push(
+    "【dao 同步漂移检测】windsurf-dao 存在以下同步差异：\n" +
+    daoSync.join("\n") +
+    "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。" +
+    "请在回答末尾简洁提醒用户。"
+  );
+}
 if (issues.length > 0) {
   parts.push(
     "【dao 脚手架检查】本项目存在以下结构问题（共性 rule 备案清单 ccswitch/scaffold-manifest.json 逐条求值所得），" +
