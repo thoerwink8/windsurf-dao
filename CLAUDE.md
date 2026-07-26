@@ -17,7 +17,7 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 | 目录 | 宿主 | 加载机制 |
 |---|---|---|
 | `ccswitch/` | Claude Code CLI | `dao.ps1 link-claude` → symlink 到 `~/.claude/` + `dao.md` 的 `@import` |
-| （镜像 ccswitch） | Codex | `~/.codex/skills` 的写入方是 **cc-switch store**（用户 2026-07-27 拍板）；`dao.ps1 link-codex` 降为**补位**角色，只填 store 未占的名字，撞名一律让行不覆盖 |
+| （不由 dao 部署） | Codex | `~/.codex/skills` 的写入方是 **cc-switch store**（用户 2026-07-27 拍板）；`dao.ps1` 已退出该目录的写入业务——`link-codex` 只剩只读报告（不建链），`unlink-codex` 是仅存的写动作且只删（清 dao 早年自建链 + 悬空坟） |
 
 部署是 **symlink/Junction**，不是拷贝：编辑仓库内文件 → 已链接的宿主立即可见，无需重新部署。`scripts/dao-smoke.mjs` 校验 ccswitch skills 的 frontmatter 与交叉引用一致性。
 
@@ -52,7 +52,7 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 ```
 （前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
-底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `link-codex` / `set-terminal`
+底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `set-terminal`；Codex 侧只剩 `link-codex`（只读报告）/ `unlink-codex`（清 dao 旧链与悬空坟）/ `link-codex-prompts`（这个仍写 `~/.codex/prompts`，与 skills 无关）
 
 自检与测试（无 test runner 框架，node 测试有聚合入口，PowerShell 测试仍各自跑）：
 
