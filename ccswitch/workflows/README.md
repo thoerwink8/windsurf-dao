@@ -15,6 +15,18 @@ Copy-Item "D:\frank\windsurf-dao\ccswitch\workflows\pr-history-postmortem.js" `
           "<目标项目>\.claude\workflows\" -Force
 ```
 
+**编排契约测试**（目前只 `dao-harvest` 有，其余三个仍是「只做过语法核验」）：workflow 靠
+harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证明不了 args 契约与编排
+数据流。`tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍，验到：必填
+校验、未知参数报错、缺省源集、零候选跳过核验、超 `CHUNK` **分批且逐条可追不丢失**、prompt
+真带上了该带的硬要求、路径推导与 args 覆盖。它由 `scripts/run-tests.mjs` 扫目录自动纳入
+——**刻意不放 `_tmp/` 当一次性脚本**：躺在 `_tmp/` 里要靠有人想起来跑，那正是本仓实测
+携带率 9-24% 的那一类形态。
+
+它**验不到**的（别把全绿读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、schema
+是否被模型遵守、`pipeline` 在真 harness 下的并发度（stub 是串行实现），以及最重要的一条
+**收割出来的候选质量**。
+
 **尚未接上的**：`dao.ps1 link-claude` 目前只 symlink `ccswitch/{skills,commands,agents}`
 三类，**没有** workflows 这一类；`~/.claude/workflows/` 是不是用户级发现路径也**未经本机
 验证**（workflow 由 Agent SDK harness 装载，不在 `@anthropic-ai/claude-code` 的 cli.js 里，
@@ -103,3 +115,110 @@ Copy-Item "D:\frank\windsurf-dao\ccswitch\workflows\pr-history-postmortem.js" `
   流水账文件占满 Top 15，错排会吞掉真实热点）
 - 核验官抽验的是 instances 的**存在性与支持度**，不重跑挖掘——挖掘阶段系统性的取数偏差
   （例如只拉了近半数 PR 的 body）核验官通常看不出来
+
+---
+
+## `dao-harvest.js` —— 好实践收割
+
+### 它解的问题
+
+**坏经验有天然触发器（出事了、返工了、用户骂了——有痛感），好经验没有。** 做对的事做完就
+过去了，除非有人专门停下来说「这值得固化」，而那个人一直是用户。
+
+活证据（2026-07-27 同日实测）：官们做对的三件事——拒绝编造派单令要求的错误映射（查码证其
+结构上不可达）／发现 `MERGEABLE` 只证明无文本冲突所以合 main 后重跑整套／把测试从「断言
+建链」改成 before/after 全量快照——**一条都没进 dao**，全停在项目层的 commit message 与
+工作面板里。
+
+本 workflow 是那个「专门停下来的动作」的形态化：扫四个源 → 按升格三判据预筛 → 去重对抗
+核验 → 产出**可直接粘贴的条款原文 + 该放哪层的判断**。用户的动作从「想起来 + 判断 + 描述」
+缩到「看一眼 + 批/否」。
+
+设计定稿见调用方仓库的闭环设计文档（首个实例：mousse-cli `docs/ops/dao-growth-loop.md` §二①）。
+
+### 四个收割源
+
+| 源 key | 捞什么 | 实测产量（2026-07-27 首轮，mousse-cli） |
+|---|---|---|
+| `transcript` | 会话记录里的 subagent 交付报告原文：超出要求做的、拒绝错误指令的、自曝未尽处的 | **富矿**（最富的一路，也最贵） |
+| `pr-commit` | PR body 与 commit body 里被论证过的做法、显式拒绝的加法 | 富矿（本仓 commit body 常有长篇取舍论证） |
+| `workboard` | 问题树面板 `🆕 过程中新发现` 段——编排侧**已经在挂**「官做对的一件事」，只是没有下一跳 | 富矿且最便宜（一次 Read） |
+| `intent-log` | 用户意图账本：每条用户纠正都指向一个当时没做到位的地方，**好实践在纠正之后的改法里** | 中等（判据要从项目需求里剥出来） |
+
+### ⚠ `transcript` 一路的取数路径（实测校正，别照旧认知找）
+
+- **subagent 交付报告不在 `tasks/*.output` 里**。那个目录装的是①后台 bash 输出（文件名多
+  以 `b` 开头）②workflow 运行日志（多 `w` 开头，单个可达 100-200KB）③以 agentId 命名的
+  sidechain 转写（多 `a` 开头）——**实测正常结束的 agent 对应文件为 0 字节**，只有异常或
+  被接续过的才有内容。把它当交付报告来源会得到一个几乎空的源。
+- **实际在主会话记录里**：`~/.claude/projects/<slug>/<session-uuid>.jsonl`，以 Agent 工具
+  `toolUseResult` 形式落在主会话流（帅读到的那份原文）。`<slug>` = 项目绝对路径逐字符把
+  非字母数字换成 `-`（`D:\frank\mousse-cli` → `D--frank-mousse-cli`）。**这是观测来的近似
+  规则不是公开契约**，两个方向都可能失配，故 `sessionLogDir` 可由 args 直接覆盖。
+- 该文件极大（实测单个数十 MB），**禁全量读**。已验证可用的提取手法：内置 Grep 的 `-o` +
+  **有界小窗口** —— `pattern: ".{0,30}(信号词A|信号词B).{0,150}"`、`-o: true`、`-n: false`、
+  `head_limit: 20~30`。**窗口要小**：实测 `.{0,80}…{0,260}` 会大量返回
+  `Omitted long matching line` 而看不到内容；要更多上下文就换更具体的关键词再打一枪，
+  不要放大窗口。
+
+### 升格三判据（写进 schema 的 `required`，不是建议）
+
+1. `cross_project`（bool）—— 跨项目适用，不依赖特定技术栈
+2. `evidence`（string）—— 有实证：做出来并验证过的，不是想出来的。**填不出具体出处即判不成立**
+3. `is_form`（bool）+ `trigger`（string）—— **是形态不是判断**：存在「不需要自由裁量就必然
+   到达」的时刻使它被执行吗？**这是硬门槛**——实测形态类携带率 100%、判断类 9-24%。
+   `is_form=false` 的**仍可提交**（判据层在事后核验与争议裁定里独立有用），但 `trigger` 填
+   `无` 且 clause_text 同行标 `[仅判据·无触发]`，不许假装它会改变行为。
+
+### args 契约
+
+| 参数 | 必填 | 缺省行为 |
+|---|---|---|
+| `repoPath` | **是** | 无默认，缺省即抛错（同 `pr-history-postmortem` 的取舍） |
+| `sources` | 否 | 上表四个 key 的子集；缺省全跑。未知 key 抛错并列合法值 |
+| `sessionLogDir` | 否 | 由 `repoPath` 推导 `~/.claude/projects/<slug>`；推导是近似规则，失配时用本参数覆盖 |
+| `taskOutputDir` | 否 | `%TEMP%/claude/<slug>/<session-uuid>/tasks`（次要参考，workflow 日志里有核验官裁定原文） |
+| `workboardFile` | 否 | `docs/ops/WORKBOARD.md`；不存在则 agent 自行 Glob 同类看板，找不到即判该源不可达 |
+| `intentLogFile` | 否 | `docs/user-intent-log.md`；同上。**这个源是可选形态，不是每个项目都有** |
+| `clauseFile` | 否 | `docs/rules/dispatch-clauses.md`（判重靶子之一） |
+| `daoFile` | 否 | `D:/frank/windsurf-dao/ccswitch/dao.md`（判重靶子之二） |
+| `since` | 否 | 缺省 = 最近一个工作窗，由 agent 按修改时刻自行定界并**在 summary 里写明实际区间**（后续收割靠这个区间续接） |
+| `extraSignals` | 否 | 追加信号词（词表是捞取入口不是判据，命中后要读上下文再判） |
+| `goal` | 否 | 一句话重述「好实践」在本项目指什么 |
+| `model` / `verifyModel` | 否 | 收割缺省由 harness 决定（`pr-commit`/`workboard`/`intent-log` 三路已内置降 sonnet）；核验缺省 sonnet |
+
+调用示例：
+
+```json
+{
+  "repoPath": "D:/frank/mousse-cli",
+  "clauseFile": "docs/rules/dispatch-clauses.md",
+  "since": "2026-07-26 起本窗",
+  "sources": ["transcript", "workboard"]
+}
+```
+
+### 三个触发点（强度递减；设计侧由帅拍定，用户可推翻）
+
+1. **窗口收官**（强制）—— dao.md 长窗节③「窗口末段留 ~25% 给收官」旁已补一句指针：收官段
+   必跑一次收割
+2. **每 N 个 PR**（机器可判）—— 调用方仓库的 `verify-all` 加一道**观察线**打印「距上次收割
+   N 个 PR」，N≥20 变提示。观察线不硬闸（`exit 0` 恒真），与 `check-core-loc` 同哲学。
+   首个实现：mousse-cli `scripts/check-harvest-due.ps1` + `.harvest-marker`
+3. **用户纠正时**（最强信号，已在运转）—— 用户说「你这样不对」「我希望」即触发落档，
+   `docs/user-intent-log.md` 型账本就是这个机制的现役实例。**本 workflow 不改动它**，
+   只是把它同时当成第 4 个收割源读回来
+
+### 已知弱点（用之前知道）
+
+- **`transcript` 一路的取数路径是观测来的近似**：harness 换了落盘位置或 slug 算法即失效，
+  且失效形态是「返回零候选」而不是报错——所以 `source_health.yield: "零"` 一定要看 `note`
+  区分「源本身空」与「取数路径不可达」，两者处置相反
+- **信号词表两个方向都不完备**：换个人写交付报告可能一个词都不命中（漏），而「顺带」「反而」
+  之类的词也大量出现在与好实践无关的语境（噪音）。故它只是捞取入口，判据仍靠三条
+- **判重靠 Grep 关键词，会漏同义表述**：核验 prompt 已硬要求「至少两个不同关键词、同义词也
+  要试」，但仍构造得出反例（「基点对齐」vs「merge-base」这类已在 prompt 里点名，别的没有）
+- **`is_form` 最容易被高报**：收割官倾向于给自己捞到的候选说「能挂上」，核验 prompt 因此把
+  它列为专项复核项，但这仍是人（模型）判断而非机检
+- **无法自动判「值不值得」**：跨项目是否适用最终是价值判断，用户拍板不可让渡。本 workflow
+  承诺的是候选自动浮出 + 按判据预筛 + 给出可直接批准的形态，**不承诺「以后用户再也不用提醒」**
