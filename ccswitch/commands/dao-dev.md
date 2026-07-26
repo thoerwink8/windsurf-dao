@@ -42,7 +42,7 @@ argument-hint: "[目标/需求描述]"
 
 主会话在每个阶段**自评**是否派 subagent。
 
-**核心判据**：满足 ≥3 项才派（模板化? 需不同模型? context 臃肿? rate limit 有预算? 值 15× token? 可并行?），否则主会话直接做。见 `ccswitch/agents/` profiles。
+**核心判据**：六项自评（见 `ccswitch/dao.md` 帅节成本门，避免与本文件分叉）满足 ≥3 项才派，否则主会话直接做。见 `ccswitch/agents/` profiles。
 
 ---
 
@@ -139,7 +139,7 @@ argument-hint: "[目标/需求描述]"
 
 4. **UI/交互层**（如适用）
    - 前端处方已在基建审计阶段完成脚手架 + 设计系统。此处聚焦业务页面
-   - 具体标准由 `ui-ux-pro-max` skill 的规范文件提供（dao 不重复）
+   - 具体标准参考 `dao-design` standards.md（域内已有审美判据库）；`ui-ux-pro-max` 是 Codex 侧增强 skill（未对 Claude Code 启用），可用时其规范文件提供更细的铁律，dao 不重复定义
    - 美观现代的界面（不是毛坯）
    - 响应式、无障碍
    - 最佳UX实践

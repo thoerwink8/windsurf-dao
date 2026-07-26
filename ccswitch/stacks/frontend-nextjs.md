@@ -8,7 +8,7 @@ description: 前端技术栈处方:Next.js + shadcn + Tailwind 初始化。/dao-
 > 卅辐同一毂，当其无有，车之用也。——脚手架是空，设计系统填空为用。
 
 **职责边界**：此文件只做编排（调度什么、什么顺序）。
-所有具体标准（尺寸、色彩、字体）由 `ui-ux-pro-max` skill 维护，此处不重复。
+所有具体标准（尺寸、色彩、字体）参考 `dao-design` standards.md（审美判据库）；`ui-ux-pro-max` 是 Codex 侧增强 skill（本仓 `config-sync/common/skills.json` 显式标注 `enabled_claude: 0`，未对 Claude Code 启用），可用时其规范文件提供更细的铁律，此处不重复定义。
 
 ## 触发
 
@@ -17,9 +17,11 @@ description: 前端技术栈处方:Next.js + shadcn + Tailwind 初始化。/dao-
 
 ## 依赖
 
-- **脚本**：`ui-ux-pro-max/scripts/scaffold-nextjs.mjs` — 确定性脚手架
-- **Skill**：`ui-ux-pro-max` — 设计系统生成 + 创意层
-- **规范**：`ui-ux-pro-max/data/nextjs-shadcn-standards.md` — 铁律参考
+> `ui-ux-pro-max` 是 Codex 侧增强 skill，dao/Claude Code 场景下不可加载（见上）。以下脚本/规范仅在该 skill 实际可用时（如经 Codex host 运行，或项目本地已装）才走得通；Claude Code 场景下阶段 A 脚手架改手工执行（`create-next-app` + `shadcn init` 等标准步骤），阶段 B 审美判据回退到 `dao-design` standards.md。
+
+- **脚本**：`ui-ux-pro-max/scripts/scaffold-nextjs.mjs` — 确定性脚手架（Codex 侧增强，可用时优先）
+- **Skill**：`ui-ux-pro-max` — 设计系统生成 + 创意层（同上）
+- **规范**：`ui-ux-pro-max/data/nextjs-shadcn-standards.md` — 铁律参考；不可用时用 `dao-design` standards.md 替代
 
 ---
 
@@ -62,10 +64,10 @@ python <skills-root>/ui-ux-pro-max/scripts/search.py "<product_type> <industry> 
 4. **按需补充查询**（有疑问才查）：`--domain typography` / `--domain ux` / `--stack shadcn`
 
 5. **落地色彩**：根据设计系统输出，编辑 `globals.css` 的 oklch 值。
-   校验标准见 `nextjs-shadcn-standards.md`（AI 读取该文件获取 chroma 下限等约束）。
+   校验标准见 `nextjs-shadcn-standards.md`（AI 读取该文件获取 chroma 下限等约束，Codex 侧增强可用时）；不可用时用 `dao-design` standards.md §4 通用判据。
 
 6. **构建页面**：按设计系统的 Pattern 构建。
-   页面构建标准见 `nextjs-shadcn-standards.md`（Type Scale / 布局约束）。
+   页面构建标准见 `nextjs-shadcn-standards.md`（Type Scale / 布局约束，Codex 侧增强可用时）；不可用时用 `dao-design` standards.md §L 布局方法论。
 
 ---
 
