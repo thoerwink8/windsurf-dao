@@ -231,6 +231,72 @@ console.log("\n=== 正态 · 承重字面键 ===");
   const { r } = runPair(live, snapClaude());
   check("同 hook 挂载点漂移 → VALUE_DIFF", hasHard(r, "VALUE_DIFF", "hook:dao-scaffold-check.js"), JSON.stringify(hardIds(r)));
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// F3（fortify2-20260726 刀F）：命令串全等判据 —— basename 判据的原盲区
+// 原判据只比 basename + 挂载点 + timeout，故「同名但路径被改回旧值」三项全同 ⇒ 零发现。
+// 实证：dao-timecode 的 DB 侧仍指 ~/.claude/hooks 副本（该副本层已被刀D 整体删除，
+// 实测该文件已不存在），live/快照侧指仓库路径 —— 同步过去即得一个指向不存在文件的死 hook。
+console.log("\n=== F3 正态：同名不同路径必须报出（basename 判据看不出的那一类）===");
+{
+  const live = liveEquivalent();
+  // 只改路径：basename / 挂载点 / timeout 全部保持与快照一致
+  live.hooks.Stop[0].hooks[0].command = 'node "' + REPO.replace(/\\/g, "/") + '/ccswitch/hooks/dao-timecode.js" claude';
+  const { r, lines } = runPair(live, snapClaude());
+  check("同名不同路径 → hook-cmd VALUE_DIFF 硬报",
+    hasHard(r, "VALUE_DIFF", "hook-cmd:dao-timecode.js"), JSON.stringify(hardIds(r)));
+  check("不与挂载点漂移混淆（不产 hook:dao-timecode.js）",
+    !hasHard(r, "VALUE_DIFF", "hook:dao-timecode.js"), JSON.stringify(hardIds(r)));
+  const d = (r.hard.find((f) => f.id === "hook-cmd:dao-timecode.js") || {}).detail || "";
+  check("报文点名「脚本路径」不一致（而非笼统说命令串不同）", /脚本路径/.test(d), d);
+  check("报文给出两侧真实路径，便于人判哪侧是现行真相",
+    /ccswitch\/hooks\/dao-timecode\.js/.test(d) && /\.claude\/hooks\/dao-timecode\.js/.test(d), d);
+  check("报文警示「同步过去即成静默死 hook」", /静默死/.test(d), d);
+  check("进 SessionStart 提醒（⚙ 方向不定，需人判）", lines.some((l) => l.startsWith("⚙")), JSON.stringify(lines));
+}
+{
+  // 路径相同、只有参数不同 ⇒ 也该报，但报文不该谎称是路径问题
+  const live = liveEquivalent();
+  live.hooks.Stop[0].hooks[0].command = 'node "' + HOME + '\\.claude\\hooks\\dao-timecode.js" codex';
+  const { r } = runPair(live, snapClaude());
+  check("同路径但参数不同 → 仍硬报", hasHard(r, "VALUE_DIFF", "hook-cmd:dao-timecode.js"), JSON.stringify(hardIds(r)));
+  const d = (r.hard.find((f) => f.id === "hook-cmd:dao-timecode.js") || {}).detail || "";
+  check("同路径不同参数 → 报文归因为「调用形态/参数」，不误指路径",
+    /参数/.test(d) && !/\*\*脚本路径\*\*/.test(d), d);
+}
+
+console.log("\n=== F3 负控：同一文件的不同写法不许误报（护栏两侧代价都是真的）===");
+{
+  // 无引号 + 全反斜杠：与快照的「占位符 + 引号 + 混合分隔符」是同一个文件的不同写法
+  const live = liveEquivalent();
+  live.hooks.Stop[0].hooks[0].command = "node " + HOME.replace(/\//g, "\\") + "\\.claude\\hooks\\dao-timecode.js claude";
+  const { r, lines } = runPair(live, snapClaude());
+  check("仅引号/分隔符写法不同 → 零硬报", r.hard.length === 0, JSON.stringify(hardIds(r)));
+  check("仅引号/分隔符写法不同 → 零提醒噪音", lines.length === 0, JSON.stringify(lines));
+}
+{
+  // 路径大小写不同（Windows 路径大小写不敏感）⇒ 不许报
+  const live = liveEquivalent();
+  live.hooks.Stop[0].hooks[0].command = 'node "' + HOME.toUpperCase() + '\\.CLAUDE\\HOOKS\\DAO-TIMECODE.JS" claude';
+  const { r } = runPair(live, snapClaude());
+  check("路径大小写不同 → 零硬报（Windows 语义）",
+    !r.hard.some((f) => f.id === "hook-cmd:dao-timecode.js"), JSON.stringify(hardIds(r)));
+}
+{
+  // 多余空白 ⇒ 不许报
+  const live = liveEquivalent();
+  live.hooks.Stop[0].hooks[0].command = 'node   "' + HOME + '\\.claude\\hooks\\dao-timecode.js"    claude ';
+  const { r } = runPair(live, snapClaude());
+  check("多余空白 → 零硬报", r.hard.length === 0, JSON.stringify(hardIds(r)));
+}
+{
+  // 第三方命令串变化不许被 F3 判据卷进来（归属判据仍是第一道闸）
+  const live = liveEquivalent();
+  live.hooks.PostToolUse[1] = { matcher: "*", hooks: [{ type: "command", command: '"C:/Other/Path/coffee-cli.exe" __hook --verbose' }] };
+  const { r } = runPair(live, snapClaude());
+  check("第三方命令串变化 → 不进 F3 硬报（归属判据先挡）",
+    !r.hard.some((f) => /^hook-cmd:/.test(f.id)), JSON.stringify(hardIds(r)));
+}
 {
   const live = liveEquivalent();
   delete live.env.ANTHROPIC_DEFAULT_SONNET_MODEL;

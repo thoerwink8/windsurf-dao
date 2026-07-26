@@ -20,6 +20,10 @@
 // · dao-scaffold-check.js 的「Hook 未注册」：查 hook **文件**是否被 settings 提及，
 //   只看 live 一侧，不看快照，也不看方向。
 // · 本文件：live ↔ git 快照 双向比对 + 方向判定，可选 `--db` 三方。
+//   hook 面比三样：**是否都有**（basename 身份）· **挂载点/timeout** · **归一化命令串**。
+//   最后一项是 fortify2-20260726 刀F F3 补的：原先只比 basename，于是「同名但路径被改回
+//   旧值」静默通过（dao-timecode 实证：live/快照指仓库路径、DB 仍指已被删除的
+//   ~/.claude/hooks 副本，三项旧判据全同 ⇒ 零发现）。判据与其近似性见 normCommand 头注。
 //
 // ── 不造第七种载体 ───────────────────────────────────────────────────────────
 // 产出是「检测脚本 + 接入既有入口」，不落任何 git 追踪的状态文件。
@@ -69,7 +73,9 @@ const FIRED_LOG_MAX_LINES = 2000;
 
 // 探针最少断言条数。若哪天有人把探针清空/注释光，failed.length===0 会「真空为真」地报绿
 // ——那正是 check-core-loc 被 `-Last 60` 截断致盲的同一形状（信号被削成空，却仍判通过）。
-const MIN_PROBE_CHECKS = 8;
+// 取值＝当前实际断言条数：任何**删除**都会跌破而变红；新增断言不受影响（count > floor）。
+// F3 补入 3 条（同名不同路径正例 ×2 + 写法差异负例 ×1）后由 8 抬到 11。
+const MIN_PROBE_CHECKS = 11;
 
 // 软预算：超了就降级并把降级本身报出来（不静默截断 —— check-core-loc 的死法）
 const DEADLINE_MS = 1500;
@@ -116,6 +122,8 @@ function verifyContractLiterals() {
 
 // 命令串 → dao 自有脚本文件名；非 dao 命令（Coffee CLI 之类第三方写入）返回 null。
 // 只取 basename ⇒ 天然免疫路径占位符化与正反斜杠差异。
+// **注意**：basename 是「这两侧说的是不是同一个 hook」的身份判据，不是「它们内容相同」的
+// 判据。后者由下面的 normCommand 负责——两者分工别混（混淆的后果见 normCommand 头注）。
 function daoScriptOf(command) {
   if (command == null) return null;
   const s = String(command).replace(/\\/g, "/");
@@ -124,6 +132,48 @@ function daoScriptOf(command) {
   const base = m[m.length - 1];
   const daoish = /ccswitch\//i.test(s) || /\.claude\/hooks\//i.test(s) || /^dao-/i.test(base);
   return daoish ? base : null;
+}
+
+// ── 命令串全等判据（fortify2-20260726 刀F F3）─────────────────────────────────
+// 治的病：此前 hook 比对**只看 basename**，于是「同名但路径被改回旧值」这类回归静默通过。
+// 实证形态：刀D 把 dao-timecode 的注册从 `~/.claude/hooks/` 副本改为仓库路径（副本层已被
+// 整体删除），而 DB 里仍是旧路径。两侧 basename 都是 dao-timecode.js、挂载点与 timeout 也
+// 都一样 ⇒ 检测器零发现。此时若有人跑同步，旧路径会覆盖过来，hook 指向一个**已不存在的
+// 文件** —— 静默死层，且本检测器看不见。
+//
+// 归一化要抹掉的是「同一件事的不同写法」，共四类，每类都在 runSelfProbe 里有负例钉着：
+//   ① 占位符 vs 展开态（${PROJECT_ROOT}/${HOME}）—— 快照侧必然占位符化
+//   ② 正反斜杠混用 —— DB 里实测存在 `C:/Users/Administrator\.claude\hooks\x.js` 这种混写
+//   ③ 引号有无 —— `node "X"` 与 `node X` 指向同一文件
+//   ④ 多余空白 / 重复斜杠
+//
+// ── 近似说明（两个方向都构造得出反例，勿当判定）──────────────────────────────
+// · 归一化里的 `toLowerCase()` 是为 Windows 路径大小写不敏感而设，代价是**参数的大小写
+//   差异也一并被抹掉**（`--Flag` vs `--flag` 不会被报出）。dao hook 现有参数均为小写，
+//   故当下无损；将来若有大小写敏感的参数，这里会漏。
+// · 去引号同理：一个**确实需要引号**的含空格路径若丢了引号，运行时会坏，但本判据看不出来。
+// · 反方向：宿主/cc-switch 若哪天改变命令串的生成形态（换 node 绝对路径、加 --flag），
+//   会被报成漂移——那是真差异，但可能属预期变更，需人判后同步两侧，不是误报。
+// 结论：本判据抓的是「同名不同串」这一类回归，不声称覆盖全部命令串等价性判定。
+function normCommand(command) {
+  if (command == null) return null;
+  let s = decodePaths(String(command));
+  s = s.replace(/\\/g, "/");        // ② 分隔符
+  s = s.replace(/"/g, "");          // ③ 引号
+  s = s.replace(/\s+/g, " ").trim(); // ④ 空白
+  s = s.replace(/\/{2,}/g, "/");     // ④ 重复斜杠
+  return s.toLowerCase();
+}
+
+// 命令串 → 该 dao 脚本的解析后完整路径。只为让报文能说「差在路径」而不是笼统说
+// 「命令串不同」——路径差异是会导致 hook 指向不存在文件的那一种，值得单独点名。
+function scriptPathOf(command) {
+  if (command == null) return null;
+  const s = decodePaths(String(command)).replace(/\\/g, "/");
+  // 优先取引号内整段：Windows 路径可能含空格，引号是唯一可靠的边界
+  const quoted = s.match(/"([^"]*\.(?:js|mjs|cjs|ps1))"/i);
+  const raw = quoted ? quoted[1] : (s.match(/\S*\.(?:js|mjs|cjs|ps1)/i) || [null])[0];
+  return raw == null ? null : raw.replace(/\/{2,}/g, "/").toLowerCase();
 }
 
 // provider 运行态 env 键：cc-switch 切供应商时会往 live 写，且值在快照里被脱敏 ⇒ 不比对。
@@ -160,7 +210,7 @@ function short(v, n) {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-// hooks 面：script → 该脚本出现过的 "event|matcher" 集合 + timeout
+// hooks 面：script → 该脚本出现过的 "event|matcher" 集合 + timeout + 归一化命令串 + 脚本路径
 function hookIndex(obj) {
   const idx = new Map();
   const hooks = obj && obj.hooks && typeof obj.hooks === "object" ? obj.hooks : {};
@@ -173,10 +223,13 @@ function hookIndex(obj) {
         if (!h || h.type !== "command") continue;
         const script = daoScriptOf(h.command);
         if (!script) continue;
-        if (!idx.has(script)) idx.set(script, { mounts: new Set(), timeouts: new Set() });
+        if (!idx.has(script)) idx.set(script, { mounts: new Set(), timeouts: new Set(), cmds: new Set(), paths: new Set() });
         const rec = idx.get(script);
         rec.mounts.add(`${event}|${matcher}`);
         rec.timeouts.add(h.timeout == null ? "(无)" : String(h.timeout));
+        rec.cmds.add(normCommand(h.command));
+        const p = scriptPathOf(h.command);
+        if (p) rec.paths.add(p);
       }
     }
   }
@@ -219,6 +272,21 @@ function compare(live, snap, opts) {
     if (stable([...lm].sort()) !== stable([...sm].sort())) {
       add("hard", "hooks", "VALUE_DIFF", `hook:${script}`,
         `${script} 挂载点不一致：live=[${[...lm].join(", ")}] ${otherLabel}=[${[...sm].join(", ")}]`);
+    }
+    // 命令串全等（F3）：basename 相同不代表内容相同。同名不同路径会让 hook 指向不存在的
+    // 文件而本检测器此前完全看不见（dao-timecode 实证），故列**硬**发现。
+    const lc = L.get(script).cmds, sc = S.get(script).cmds;
+    if (stable([...lc].sort()) !== stable([...sc].sort())) {
+      const lp = L.get(script).paths, sp = S.get(script).paths;
+      const pathDiffers = stable([...lp].sort()) !== stable([...sp].sort());
+      add("hard", "hooks", "VALUE_DIFF", `hook-cmd:${script}`,
+        pathDiffers
+          // 这一支是「静默死层」形态：同名不同路径，旧路径可能已不存在
+          ? `${script} **脚本路径**不一致（同名不同路径，basename 判据看不出）：` +
+            `live=[${[...lp].join(", ")}] ${otherLabel}=[${[...sp].join(", ")}]` +
+            `。若指向已删除的旧位置，同步过去即成静默死 hook —— 请先确认哪一侧是现行真相再对齐`
+          : `${script} 命令串不一致（脚本路径相同，差异在调用形态/参数）：` +
+            `live=[${[...lc].join(" ; ")}] ${otherLabel}=[${[...sc].join(" ; ")}]`);
     }
     const lt = L.get(script).timeouts, st = S.get(script).timeouts;
     if (stable([...lt].sort()) !== stable([...st].sort())) {
@@ -363,6 +431,31 @@ function runSelfProbe() {
     const live = clone(fixtureBase()); live.hooks.SessionStart[0].matcher = "resume";
     t("正例·挂载点漂移 → VALUE_DIFF",
       compare(live, fixtureBase()).some((x) => x.tier === "hard" && x.kind === "VALUE_DIFF" && x.id === "hook:dao-probe-alpha.js"));
+  }
+  // 正例 5（F3 核心）：同名**不同路径** ⇒ 必须报出。这是 basename 判据的原盲区：
+  // 挂载点、timeout、basename 三者全同，只有路径不同（dao-timecode 实证形态）。
+  {
+    const live = clone(fixtureBase());
+    live.hooks.SessionStart[0].hooks[0].command = 'node "' + PH_HOME + '/.claude/hooks/dao-probe-alpha.js"';
+    const f = compare(live, fixtureBase());
+    t("正例·同名不同路径 → hook-cmd VALUE_DIFF（F3 原盲区）",
+      f.some((x) => x.tier === "hard" && x.kind === "VALUE_DIFF" && x.id === "hook-cmd:dao-probe-alpha.js"),
+      "实得：" + JSON.stringify(f.map((x) => x.kind + ":" + x.id)));
+    t("正例·同名不同路径 → 报文点名「脚本路径」而非笼统说命令串不同",
+      f.some((x) => x.id === "hook-cmd:dao-probe-alpha.js" && /脚本路径/.test(x.detail)),
+      "实得 detail：" + JSON.stringify(f.filter((x) => x.id === "hook-cmd:dao-probe-alpha.js").map((x) => x.detail)));
+  }
+  // 负例 5：仅引号 / 分隔符 / 大小写写法不同（同一文件的不同写法）⇒ 不许报。
+  // 少了这条，归一化一旦被削弱，检测器会对每个 hook 永久唠叨，随即被人删掉。
+  {
+    const live = clone(fixtureBase());
+    live.hooks.SessionStart[0].hooks[0].command =
+      "node " + ROOT.replace(/\//g, "\\") + "\\ccswitch\\hooks\\dao-probe-alpha.js"; // 无引号 + 反斜杠
+    live.statusLine.command = "node " + ROOT.replace(/\\/g, "/") + "/ccswitch/statusline.js";
+    live.permissions.additionalDirectories = [HOME.replace(/\\/g, "/") + "\\.claude"];
+    const f = hardOf(compare(live, fixtureBase())).filter((x) => x.face === "hooks");
+    t("负例·仅引号/分隔符写法不同 → 零硬报（归一化生效）",
+      f.length === 0, "误报：" + f.map((x) => x.detail).join(" | "));
   }
 
   const failed = checks.filter((c) => !c.ok);
@@ -605,6 +698,8 @@ function selfcheck() {
   out.push("  · 心跳只证明「跑过」，证明不了注入的提醒真被宿主投递给了模型/用户。");
   out.push("  · 比对面是白名单（hooks / statusLine / permissions.deny / additionalDirectories / env 键集）；");
   out.push("    白名单外的键只在本命令的软区可见，不触发 SessionStart 提醒。");
+  out.push("  · hook 命令串比对（F3）走归一化后全等：占位符/分隔符/引号/空白/大小写差异被有意抹掉。");
+  out.push("    代价是**参数**的大小写差异、以及「确实需要的引号丢了」这两类真差异看不出来（见 normCommand 头注）。");
   out.push("  · 只覆盖 common_config_claude ↔ ~/.claude/settings.json 一条腿；codex/opencode/openclaw 未覆盖。");
   out.push("  · 不查 DB（除非 --db）⇒ LIVE_ONLY 分不清「手改 live、DB 也没有」与「DB 已有、export 未跑」。");
 
