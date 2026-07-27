@@ -13,7 +13,9 @@ argument-hint: "[需求描述 或 loop名称]"
 
 ### 1. 预飞检查
 
-检查项目结构是否就绪（`docs/specs/`、`docs/PROJECT.md`），检测遗留物（`TODO.md`、散 plan 文件）。不合理 → 提出改造方案 → 用户确认后执行。
+检查项目结构是否就绪（`docs/specs/`、`docs/PROJECT.md`），检测遗留物（散 plan 文件等）。不合理 → 提出改造方案 → 用户确认后执行。
+
+`TODO.md` **不默认算遗留物**：它可能是在役候选池（活账本），判据见 `dao-project-scaffold` SKILL.md §TODO.md 存废判据；三条判据未逐条实测过就不提清理。
 
 ### 2. 情境感知 + 孤儿检测
 

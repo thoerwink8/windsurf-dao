@@ -37,7 +37,7 @@ disable-model-invocation: true
       *.md               ← 按领域拆分，paths: frontmatter 条件加载
 
   docs/
-    PROJECT.md           ← 项目仪表盘（替代 TODO.md，Loop 状态变更时自动更新）
+    PROJECT.md           ← 项目仪表盘（替代遗留型 TODO.md；与「在役候选池」型 TODO.md 并存，Loop 状态变更时自动更新）
     prd.md               ← 产品需求文档（如有）
     plans/               ← 实施计划（按日期命名：YYYY-MM-DD-主题.md）
     specs/               ← Loop 工作区（dao-loop 管理）
@@ -53,7 +53,25 @@ disable-model-invocation: true
 - `README.md`：给人看的项目介绍
 - `CLAUDE.md`：给 AI 看的入口（<80 行）
 
-历史文档、参考资料、产品文档全部进 `docs/`。项目追踪用 `docs/PROJECT.md`（Loop 体系自动更新），不在根目录放 TODO.md。
+历史文档、参考资料、产品文档全部进 `docs/`。项目追踪用 `docs/PROJECT.md`（Loop 体系自动更新）；根目录的 `TODO.md` **不一刀切**——幽灵型（遗留静态清单）该清，在役候选池型是活账本、属于「每天可能打开」的活文档，合法留在根目录。两者怎么分见下一节「TODO.md 存废判据」。
+
+### TODO.md 存废判据
+
+> **唯一真相源**：本 skill 检查清单、`dao-loop` §0 预飞、`dao-loop` closing.md §8 三处都指向这里，改判据只改本节。
+
+根目录的 `TODO.md` 有两种身份，**先判身份再谈存废**：
+
+- **在役候选池（活账本）** —— 下列任一成立即是，**不得建议清理**：
+  1. 被项目 `CLAUDE.md` / `.claude/rules/**` / `PROGRESS.md` 引用（一次 Grep `TODO\.md` 即可判）
+  2. 近 30 天内有过提交改动（`git log -1 --since="30 days ago" -- TODO.md` 有输出）
+  3. 条目带来源标记（`[用户]` / `[dogfood]` / `[AI推测]` / `[竞品]` 之类），说明它在跑候选池准入流程
+- **幽灵 TODO.md（遗留静态清单）** —— 上述三条**全不成立**才算，此时才建议清理，且**只建议不代删**。
+
+**建议清理前必须先报这三条的实测值**，不许只给「应清理」这个结论——结论不可复核，三行实测值可以。
+
+**这是近似判据，两个方向都构造得出反例**：刚建立、还没被任何文件引用过的活账本会被误判成幽灵；早已死透但仍被 `CLAUDE.md` 提过一嘴的幽灵会被放过。**失败方向刻意选「留」**——误删活账本丢的是候选池与 dogfood 记账（不可从别处重建），多留一个幽灵文件只是碍眼。
+
+**为什么要有这一节**：`dao.md` 帅节「TODO 候选池三级准入」与 Shell 节「dogfood 发现写入 TODO.md」**要求**部分项目把它当活账本主动维护，而本 skill 与 `dao-loop` 预飞曾**无条件**建议清理它——两条同级规则在同一触发条件下给出相反指令。2026-07-22 查冲突 spike 首次抓获，当时只给下方检查清单那一条打了补丁；2026-07-27 复核发现另外四处（本文件 §根目录法则、检查清单 PROJECT.md 条、`dao-loop` SKILL.md §0 预飞、`dao-loop` closing.md §8）仍是无条件表述，**其中 `dao-loop` §0 预飞恰好就是 spike 点名「下次跑 loop 就会撞上」的那条路径**——补丁打在了不会被触发的地方。本节的存在是为了让「多处各说一半」在结构上不可能再发生；`tests/skills-todo-ledger.tests.js` 扫 `ccswitch/skills/**` 钉住这一点。
 
 ### 唯一 AI 通道
 
@@ -107,9 +125,9 @@ disable-model-invocation: true
 - [ ] 🤖 根目录无冗余 AI 入口文件（AGENT.md / AGENT_GUIDE.md 等。清单当前只机器化了 `AGENT_GUIDE.md` / `KNOWLEDGE.md` 两个具名文件，其他变体仍靠人眼）
 - [ ] 🤖 `.gitignore` 含 `**/_tmp/`（AI 临时产出不入库，见 `dao.md` Shell §临时文件归项目）
 - [ ] **开工包白名单**：根目录存在 `kit.json` manifest → `docs/kit/`（DECISIONS / STACK / INIT / FRONTEND / BACKEND / OPEN-QUESTIONS + acceptance/ + design-prompts/）视为合规结构，不判冗余；kit 文件散落根目录 → 建议按上述映射归位到 `docs/kit/`，不建议删除
-- [ ] `docs/PROJECT.md` 存在（替代旧 TODO.md）
+- [ ] `docs/PROJECT.md` 存在（替代遗留型 TODO.md；与在役候选池型 TODO.md 并存不冲突，判据见 §TODO.md 存废判据）
 - [ ] `docs/specs/` 存在（Loop 工作区）
-- [ ] 根目录无遗留 `TODO.md`（已完成的静态清单应清理；**豁免**：项目 CLAUDE.md 将 TODO.md 用作候选池/dogfood 记账制者——此时它是活账本非遗留，不得建议清理。2026-07-22 查冲突 spike 抓获本条与 dao.md 帅节记账制的结构性矛盾，mousse-cli 类项目首当其冲）
+- [ ] 根目录的 `TODO.md` **先判身份再谈存废**：三条判据全不成立才是幽灵、才建议清理；在役候选池型是活账本，不得建议清理。判据与实测报法见 §TODO.md 存废判据（本条不重述，避免两处各说一半）
 - [ ] 上表命中的每个技术栈指纹，其对应 supporting file 的检查清单已过一遍
 
 缺项不自动创建，而是**建议用户创建**并说明理由。dao-loop 预飞检查会自动处理迁移。
