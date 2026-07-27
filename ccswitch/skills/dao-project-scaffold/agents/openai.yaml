@@ -1,0 +1,20 @@
+# Codex 侧的「只许用户显式调用」声明，与 SKILL.md frontmatter 的
+# `disable-model-invocation: true` 表达同一语义。
+#
+# 为什么需要这个文件：`disable-model-invocation` 是 Claude Code 专有字段，
+# Codex **静默忽略**它（不报错、不警告），于是同一个 skill 在 Codex 侧默认
+# 允许模型自动调用——比 Claude 侧更松。用 Codex 自己的 policy 补齐语义。
+#
+# 效果（2026-07-27 本机实测，codex-cli 0.144.0-alpha.4）：
+#   - 不再出现在注入模型上下文的 "Available skills" 列表 ⇒ AI 不会自动调用
+#   - 仍留在 app-server `skills/list` 注册表且 enabled=true ⇒ 用户 `$dao-project-scaffold` 显式调用不受影响
+#
+# 字段判据出处（随 Codex 一起分发的官方参考）：
+#   ~/.codex/skills/.system/skill-creator/references/openai_yaml.md
+#   「When false, the skill is not injected into the model context by default,
+#     but can still be invoked explicitly via `$skill`. Defaults to true.」
+#
+# Claude Code 侧对本文件无感（2026-07-27 实测 2.1.220：探针 skill 加此文件后
+# 可见性与可调用性均无变化、`claude doctor` 无异常）——它只读 SKILL.md。
+policy:
+  allow_implicit_invocation: false
