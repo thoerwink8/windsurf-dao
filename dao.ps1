@@ -231,6 +231,27 @@ function Invoke-Status {
     }
 }
 
+function Get-InternalOnlySkills {
+    # **不部署为用户 `/` 命令**的 skill（2026-07-27 用户拍板的生态减法）。
+    #
+    # 它们仍留在 ccswitch/skills/ 原地、内容一字未动，仍由 dao-superpowers / dao-loop
+    # 与 dao-plan-writer / dao-reviewer 等 subagent 人格**按路径 Read**（那些人格的 ⭐
+    # 方法论真相源就指着这几个 SKILL.md），只是不再 symlink 进 ~/.claude/skills/。
+    #
+    # 判据是**使用面不是引用面**：这四个在 ~/.claude/history.jsonl（用户键盘全史）里
+    # 零调用，在 ~/.claude/projects/**/*.jsonl 里仅 dao-brainstorm 有 1 次 AI 发起的
+    # Skill 调用。把它们摆在用户命令表上只是噪音。
+    #
+    # ⚠ **本清单只管「部署与否」，不管「存在与否」**——往这里加名字 = 从用户面收起来，
+    # 不等于删除；真要删除必须先查使用面并过用户（本仓两次误删实证，见 README 退役纪律）。
+    return @(
+        "dao-worktree",
+        "dao-plan",
+        "dao-review",
+        "dao-brainstorm"
+    )
+}
+
 function Invoke-LinkClaude {
     # 把 ccswitch/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
     # 复制 docs/classics/*.md 经文到 ~/.claude/references/，
@@ -267,6 +288,32 @@ function Invoke-LinkClaude {
         }
     }
 
+    # ── 收起「AI 内部件」的旧链接（自愈，幂等）────────────────────────────
+    # **只处理这一类**：源文件还在、只是不再部署（Get-InternalOnlySkills）。
+    # 「源文件已删」那一类不在这里——本函数每个 spec 循环末尾已有 prune 段
+    # （`$_.Name -notin $srcNames` → [prune] source removed），退役一个 command
+    # 的链接由它负责；两处各管一半，别重复实现（重复的那版会先删一次、prune 再
+    # 空跑一次，输出里出现两行看起来像两件事的日志）。
+    $internalSkills = Get-InternalOnlySkills
+    $internalDst = Join-Path $userClaude "skills"
+    if (Test-Path $internalDst) {
+        foreach ($entry in @(Get-ChildItem $internalDst -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.LinkType -in "SymbolicLink", "Junction" } |
+                Where-Object { $internalSkills -contains $_.Name })) {
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] unlink $($entry.Name)  (AI 内部件，不再部署为用户命令)" -ForegroundColor Yellow
+                continue
+            }
+            try {
+                if ($entry.PSIsContainer) { $entry.Delete() } else { Remove-Item $entry.FullName -Force }
+                Write-Host "    [unlink] $($entry.Name)  (AI 内部件，不再部署为用户命令)" -ForegroundColor Yellow
+            } catch {
+                Write-Host "    [error] unlink $($entry.Name) : $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
     # ── 三类目录 symlink（skills/agents 链目录，commands 链文件）──
     $specs = @(
         @{ Name = "skills";   Kind = "dir";  Filter = "dao-*" },
@@ -287,6 +334,12 @@ function Invoke-LinkClaude {
         }
 
         foreach ($it in $items) {
+            # AI 内部件不部署（判据与理由见 Get-InternalOnlySkills）。
+            if ($spec.Name -eq "skills" -and ($internalSkills -contains $it.Name)) {
+                Write-Host "    [inner] $($it.Name)  (AI 内部件，按路径 Read，不进用户命令表)" -ForegroundColor DarkGray
+                $skipped++
+                continue
+            }
             $linkPath = Join-Path $dstDir $it.Name
             if (Test-Path $linkPath) {
                 $existing = Get-Item $linkPath -Force
@@ -652,10 +705,13 @@ function Invoke-UnlinkCodex {
 }
 
 function Get-CodexPromptNames {
+    # 高频手动 dao 入口在 Codex 侧的镜像。**名字必须有对应的 ~/.claude/commands/<name>.md**，
+    # 否则 Invoke-LinkCodexPrompts 只会每次打印一行 [skip]（静默失效，没人会注意到）。
+    # 2026-07-27：`dao-evolve` 退役（正文并入 dao-evolution/system-review.md），同批移出本表；
+    # 同域的手动入口 `dao-distill` 保留在 Claude 侧，是否要镜像进 Codex 未有需求出处，不预先加。
     return @(
         "dao-superpowers",
         "dao-dev",
-        "dao-evolve",
         "dao-commit"
     )
 }
@@ -756,6 +812,33 @@ function Invoke-LinkCodexPrompts {
                 $linked++
             } catch {
                 Write-Host "    [error] $name : $_" -ForegroundColor Red
+                $err++
+            }
+        }
+    }
+
+    # ── prune：清掉「我们写过、但已不在管理清单里」的 Codex prompt ──────────
+    # 病灶（2026-07-27 实测）：`dao-evolve` 退役后，~/.codex/prompts/dao-evolve.md
+    # 仍带着 codex-managed 标记躺在那里——link 只按清单写、unlink 也只按清单删，
+    # **两个方向都不会碰一个已经离开清单的名字**，于是用户在 Codex 侧仍能敲出
+    # 一个已死的流程，且没有任何机制会报出来。与 link-claude 的 [prune] 段同形。
+    # 判据刻意收窄为「带 managed 标记」：用户自己写的同名 prompt 不归我们删。
+    $managedNames = @(Get-CodexPromptNames)
+    if (Test-Path $dstDir) {
+        foreach ($f in @(Get-ChildItem $dstDir -File -Filter "*.md" -ErrorAction SilentlyContinue)) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
+            if ($managedNames -contains $base) { continue }
+            $body = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($null -eq $body -or -not ($body -match 'codex-managed:\s*windsurf-dao')) { continue }
+            if ($IsDryRun) {
+                Write-Host "    [DRYRUN] prune $base  (managed but no longer in Get-CodexPromptNames)" -ForegroundColor Yellow
+                continue
+            }
+            try {
+                Remove-Item $f.FullName -Force
+                Write-Host "    [prune] $base  (managed but no longer in Get-CodexPromptNames)" -ForegroundColor Yellow
+            } catch {
+                Write-Host "    [error] prune $base : $_" -ForegroundColor Red
                 $err++
             }
         }

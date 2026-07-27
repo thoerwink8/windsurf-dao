@@ -86,7 +86,10 @@ for (const dir of ccSkillDirs) {
 console.log('\n📋 2. Cross-references (skill → skill)');
 
 const refPattern = /(?:派|回|进|→|->|调|拉起|启动|触发|参见|见|转)\s*(dao-[a-z][-a-z0-9]*)/g;
-const knownNonSkills = new Set(['dao-dev', 'dao-evolve', 'dao-superpowers', 'dao-hub', 'dao-loop']);
+// command / workflow 之类「不是 skill 的 dao-* 名字」，被 skill 正文引用时不算断链。
+// 2026-07-27：`dao-evolve` 退役并从各处引用面移除，同批移出本表——留着等于给一个已死的
+// 名字继续开豁免口子（往后谁再写「见 dao-evolve」将被本检查报为断链，那正是想要的）。
+const knownNonSkills = new Set(['dao-dev', 'dao-superpowers', 'dao-hub', 'dao-loop', 'dao-distill', 'dao-harvest']);
 
 let refTotal = 0;
 let refBroken = 0;
