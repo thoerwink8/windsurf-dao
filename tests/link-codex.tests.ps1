@@ -18,6 +18,18 @@ $TmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-link-codex-
 # harder to satisfy than what it replaced: a full before/after snapshot (name + link type + target +
 # container-ness) must be identical, which fails on creation, deletion, repointing and repair alike.
 #
+# !! DISK REALITY DIVERGES FROM THE CONTRACT ABOVE -- READ BEFORE "FIXING" ANYTHING (2026-07-27) !!
+#   ~/.codex/skills now contains 9 junctions -> D:\frank\windsurf-dao\ccswitch\skills\dao-*.
+#   dao.ps1 did NOT create them and its write capability was NOT restored; the contract above and
+#   every assertion in this file are untouched. They were placed by hand, ONCE, after the user was
+#   explicitly told this conflicts with the single-writer decision recorded above and chose to
+#   proceed anyway. Full record -- who, when, told what, chose what, why, plus rollback commands:
+#     mousse-cli  docs/ops/dao-ecosystem-audit.md  section 8
+#   Do NOT treat those 9 junctions as drift and do NOT "repair" them away. Note that
+#   `dao.ps1 unlink-codex` classifies by target and WOULD delete the subset whose targets match
+#   ~/.claude/skills entries -- that is a documented, user-typed command, not a silent risk,
+#   but it does undo part of this. See section 8.3 for the mechanism.
+#
 # NOTE: keep this file ASCII-only. It has no UTF-8 BOM (unlike dao.ps1 and
 # link-codex-prompts.tests.ps1), so PS 5.1 would decode non-ASCII comments as ANSI and
 # corrupt parsing.
