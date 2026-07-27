@@ -144,4 +144,6 @@ PR + 分支 + worktree 归根：
 
 ## §8 PROJECT.md 仪表盘
 
-替代 TODO.md，成为项目追踪唯一入口。自动生成（Backlog 除外），Loop 状态变更时 AI 自动更新。详见 `templates/project-template.md`。
+替代**幽灵型**（遗留静态清单）TODO.md，成为 **Loop 追踪**入口。自动生成（Backlog 除外），Loop 状态变更时 AI 自动更新。详见 `templates/project-template.md`。
+
+**不是「项目追踪唯一入口」**（原措辞已改）：项目若把 `TODO.md` 用作在役候选池/dogfood 记账（判据见 `dao-project-scaffold` SKILL.md §TODO.md 存废判据），二者并存，PROJECT.md 不吞并它、也不构成删除它的理由。
