@@ -28,6 +28,22 @@
 // 同一仓库匹配不上、于是照报——失败方向选的是「多报」而不是「少报」，因为漏掉一条
 // 该报的缺项是静默的，多报一条只是噪音且当场可辨。两个方向都构造得出反例。
 //
+// ── 2026-07-27：第四类 `product-type`（用户拍板）─────────────────────────────
+// 要解的中间态：像「PR 必附真机证据」这种——**对所有产品型项目合理，对内部工具/基建
+// 项目不合理**。它既不是 universal（会对一堆内部仓常态误报），也不是纯个性（每个产品型
+// 项目都该有，个性化的只是具体证据形式）。
+// 判定**不引入需要 AI 判断的条件**：按项目 `CLAUDE.md` 里的**自我声明**识别（子串
+// 「产品型项目」），即 opt-in。理由——「这算不算产品型项目」是语义判断，正是本文件
+// 头注列为"不在此列"的那一类；换成一句写在 CLAUDE.md 里的自陈之后，判据退回纯子串
+// 匹配，机器可判且可审（谁声明的、在哪一行，都查得到）。
+// **近似与失败方向**：没写那四个字的产品型项目一律不查（漏报），写了那四个字的内部
+// 工具仓会被查（误报，但那是它自己声明的）。这里选**漏报侧**，与 `exempt` 的"多报"
+// 取舍相反且是有意的：exempt 漏掉一条该报的缺项是静默的，而 product-type 条目对不
+// 适用的仓是纯噪音，噪音会训练人忽略整个 hook 的输出。
+// product-type 条目**不得带 when**（与 universal 同规则）：类别本身即条件，再叠一层
+// 自定义条件会让「为什么这条没报」变成两处判据的合取，排查成本翻倍。需要再收窄的
+// 场合请写成 conditional，并把产品型指纹显式写进 when。
+//
 // 真相源：windsurf-dao/ccswitch/lib/scaffold-manifest.js
 
 "use strict";
@@ -35,8 +51,11 @@
 const fs = require("fs");
 const path = require("path");
 
-const CLASSES = ["universal", "conditional"];
+const CLASSES = ["universal", "conditional", "product-type"];
 const SEVERITIES = ["warn", "info"];
+
+// product-type 类别的内建条件（唯一定义处，清单里不重复写）。
+const PRODUCT_TYPE_WHEN = { fileContains: { path: "CLAUDE.md", text: "产品型项目" } };
 
 // 谓词种类。每个谓词节点是一个对象，**恰好带一个种类键**，外加可选的 "label"
 // （label 用于让报文说出「是哪一路信号命中的」，如 Tauri vs Electron）。
@@ -119,10 +138,12 @@ function validate(m) {
     if (!CLASSES.includes(e.class)) {
       errs.push(at + " class 非法（只允许 " + CLASSES.join("/") + "；项目特有 rule 不进本清单）");
     }
-    // 三分类的机器闸：conditional 必须给 when，universal 必须不给 when。
+    // 四分类的机器闸：conditional 必须给 when；universal 与 product-type 必须不给 when
+    // （前者对任何项目都成立，后者的条件由类别本身内建）。
     // 「无条件共性却带条件」和「条件共性却没条件」都是分类错误，不是笔误。
     if (e.class === "conditional" && !e.when) errs.push(at + " class=conditional 必须带 when（条件共性的触发指纹）");
     if (e.class === "universal" && e.when) errs.push(at + " class=universal 不得带 when（无条件共性对任何项目都成立）");
+    if (e.class === "product-type" && e.when) errs.push(at + " class=product-type 不得带 when（类别本身即条件：项目 CLAUDE.md 自我声明为「产品型项目」；要再收窄请改写成 conditional 并把指纹显式写进 when）");
 
     if (!e.require) errs.push(at + " 缺 require");
     if (typeof e.msg !== "string" || !e.msg) errs.push(at + " 缺 msg");
@@ -322,6 +343,9 @@ function evaluate(manifest, projectRoot) {
   const out = [];
   for (const e of manifest.entries || []) {
     if (exemptReason(e, repoName) !== null) continue;   // 本仓已显式声明例外 ⇒ 该条不查
+    // product-type：类别内建条件，项目未在 CLAUDE.md 自我声明为「产品型项目」即不适用。
+    // 顺序在 exempt 之后、when 之前：exempt 是"这个仓说了不查"，优先级最高。
+    if (e.class === "product-type" && !evalPred(PRODUCT_TYPE_WHEN, ctx).ok) continue;
     let label = null;
     if (e.when) {
       const w = evalPred(e.when, ctx);
@@ -370,5 +394,5 @@ function check(projectRoot, manifestPath) {
 module.exports = {
   validate, evaluate, load, check, defaultManifestPath, repoNameOf, exemptReason,
   _internal: { evalPred, makeCtx, globFiles, findFile, render, predErrors },
-  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS,
+  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS, PRODUCT_TYPE_WHEN,
 };

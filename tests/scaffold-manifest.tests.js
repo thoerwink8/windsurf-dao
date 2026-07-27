@@ -60,13 +60,25 @@ console.log("\n=== 真实清单：结构性质（不断言条目数，见头注�
     "errors=" + JSON.stringify(errors).slice(0, 400));
   const es = (manifest && manifest.entries) || [];
   check("清单非空", es.length > 0, "len=" + es.length);
-  check("三分类：universal 与 conditional 各至少一条",
-    es.some((e) => e.class === "universal") && es.some((e) => e.class === "conditional"),
+  // 2026-07-27 由「universal 与 conditional 各至少一条」改为三类各至少一条。
+  // 断言跟随契约（加了第四类 product-type），且**新断言的通过集是旧断言通过集的真子集**
+  // ——原断言放行「没有任何 product-type 条目」的清单，新断言不放行。改断言的合法性判据
+  // 见 mousse-cli dispatch-clauses.md 对抗验证官节「改既有断言必须证明新断言更难满足」。
+  check("四分类：universal / conditional / product-type 各至少一条",
+    es.some((e) => e.class === "universal") && es.some((e) => e.class === "conditional") &&
+    es.some((e) => e.class === "product-type"),
     "classes=" + JSON.stringify(es.map((e) => e.class)));
   check("每条 conditional 都带机器可判的 when",
     es.filter((e) => e.class === "conditional").every((e) => !!e.when));
   check("每条 universal 都不带 when（无条件共性）",
     es.filter((e) => e.class === "universal").every((e) => !e.when));
+  check("每条 product-type 都不带 when（条件由类别内建）",
+    es.filter((e) => e.class === "product-type").every((e) => !e.when),
+    "offenders=" + es.filter((e) => e.class === "product-type" && e.when).map((e) => e.id).join(","));
+  check("清单带「四分类」说明段且含 product-type 定义（改名后不留两处各说一半的分类定义）",
+    !!(manifest && manifest._doc && manifest._doc["四分类"] && manifest._doc["四分类"]["product-type"]));
+  check("旧的「三分类」键已不存在（避免同一定义存两份、改一处忘一处）",
+    !!(manifest && manifest._doc && manifest._doc["三分类"] === undefined));
   check("每条都带 why（出处/理由）", es.every((e) => typeof e.why === "string" && e.why.length > 0));
   check("id 全局唯一", new Set(es.map((e) => e.id)).size === es.length);
   check("msg 不自带「（建议）」前缀（该前缀由 hook 按 severity 加，写进 msg 会重复）",
@@ -105,10 +117,16 @@ console.log("\n=== schema 校验：合法通过 / 各类非法被挡（两态）
   check("entries 非数组 → 报错", M.validate({}).length > 0);
   check("class 非法值（如 project-specific）→ 报错",
     M.validate({ entries: [entry({ class: "project-specific" })] }).some((e) => /class 非法/.test(e)));
-  check("conditional 缺 when → 报错（三分类机器闸的一侧）",
+  check("conditional 缺 when → 报错（分类机器闸的一侧）",
     M.validate({ entries: [entry({ class: "conditional" })] }).some((e) => /必须带 when/.test(e)));
-  check("universal 带 when → 报错（三分类机器闸的另一侧）",
+  check("universal 带 when → 报错（分类机器闸的另一侧）",
     M.validate({ entries: [entry({ when: { dir: "src-ui" } })] }).some((e) => /不得带 when/.test(e)));
+  check("负控：合法 product-type（不带 when）零错误",
+    M.validate({ entries: [entry({ class: "product-type" })] }).length === 0,
+    JSON.stringify(M.validate({ entries: [entry({ class: "product-type" })] })));
+  check("product-type 带 when → 报错（条件由类别内建，叠第二层条件会让「为什么没报」变成两处判据的合取）",
+    M.validate({ entries: [entry({ class: "product-type", when: { dir: "src-ui" } })] })
+      .some((e) => /class=product-type 不得带 when/.test(e)));
   check("id 重复 → 报错",
     M.validate({ entries: [entry(), entry()] }).some((e) => /id 重复/.test(e)));
   check("缺 why → 报错（无出处的条目不该进清单）",
@@ -288,6 +306,55 @@ console.log("\n=== exempt 求值：命中仓跳过 / 别的仓照报（两态 + 
   check("exemptReason 命中回传理由、不命中回 null",
     /夹具/.test(M.exemptReason(manifest.entries[0], "meta-repo-probe") || "") &&
     M.exemptReason(manifest.entries[0], "ordinary-repo-probe") === null);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== product-type 求值：自我声明才查 / 未声明即跳过（两态 + 判别力）===");
+// 为什么这一组必须两态：只验「声明了就报」挡不住判据被放宽——一个忽略自我声明、
+// 对所有仓一律查的实现同样能让"声明了的仓被报"，而那恰是本类别要避免的后果
+// （对内部工具仓常态误报 ⇒ 噪音训练人忽略整个 hook 的输出）。
+{
+  const manifest = {
+    entries: [
+      entry({
+        id: "pt-evidence", class: "product-type",
+        require: { file: ".claude/rules/pr-evidence.md" }, msg: "缺 pr-evidence.md",
+      }),
+      entry({ id: "u-claude", require: { file: "CLAUDE.md" }, msg: "缺 CLAUDE.md" }),
+    ],
+  };
+  const declared = mkproj("pt-declared", (r) => { w(r, "CLAUDE.md", "# 某产品\n\n产品型项目，代码改动一律走 PR。\n"); });
+  const silent = mkproj("pt-silent", (r) => { w(r, "CLAUDE.md", "# 某内部工具\n\n随手改随手推。\n"); });
+  const noClaude = mkproj("pt-no-claude");
+
+  check("自我声明为「产品型项目」→ product-type 条目照查并报出缺项",
+    ids(M.evaluate(manifest, declared)).indexOf("pt-evidence") !== -1,
+    JSON.stringify(M.evaluate(manifest, declared)));
+  check("未自我声明 → product-type 条目跳过（内部工具仓不被这类报文淹没）",
+    ids(M.evaluate(manifest, silent)).indexOf("pt-evidence") === -1,
+    JSON.stringify(M.evaluate(manifest, silent)));
+  check("连 CLAUDE.md 都没有 → product-type 条目同样跳过（fileContains 读不到文件即 false）",
+    ids(M.evaluate(manifest, noClaude)).indexOf("pt-evidence") === -1,
+    JSON.stringify(M.evaluate(manifest, noClaude)));
+  check("product-type 的门只管自己那一类：同项目的 universal 条目照常判定",
+    ids(M.evaluate(manifest, silent)).indexOf("u-claude") === -1 &&
+    ids(M.evaluate(manifest, noClaude)).indexOf("u-claude") !== -1);
+  check("mutation 方向：把自我声明从 CLAUDE.md 里删掉 → 原本被报的仓不再被报", (() => {
+    w(declared, "CLAUDE.md", "# 某产品\n\n（声明已删）\n");
+    return ids(M.evaluate(manifest, declared)).indexOf("pt-evidence") === -1;
+  })());
+  check("mutation 复原：声明写回 → 重新被报（两态都看到才算验过）", (() => {
+    w(declared, "CLAUDE.md", "# 某产品\n\n产品型项目，代码改动一律走 PR。\n");
+    return ids(M.evaluate(manifest, declared)).indexOf("pt-evidence") !== -1;
+  })());
+  check("PRODUCT_TYPE_WHEN 是条件的唯一定义处且判据为 CLAUDE.md 子串（清单里不重复写条件）",
+    !!(M.PRODUCT_TYPE_WHEN && M.PRODUCT_TYPE_WHEN.fileContains &&
+       M.PRODUCT_TYPE_WHEN.fileContains.path === "CLAUDE.md" &&
+       M.PRODUCT_TYPE_WHEN.fileContains.text === "产品型项目"),
+    "got=" + JSON.stringify(M.PRODUCT_TYPE_WHEN));
+  check("CLASSES 恰为三类（个性 rule 不进清单这条边界没被第四类冲掉）",
+    M.CLASSES.length === 3 && M.CLASSES.indexOf("product-type") !== -1,
+    "CLASSES=" + JSON.stringify(M.CLASSES));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
