@@ -96,7 +96,11 @@ console.log("\n[判据函数正负控]");
 console.log("\n[唯一真相源]");
 {
   const canon = fs.existsSync(CANON_FILE) ? fs.readFileSync(CANON_FILE, "utf8") : "";
-  check("判据正文存在于 dao-project-scaffold SKILL.md", canon.includes(CANON_ANCHOR), CANON_FILE);
+  // 必须是**标题行**，不是「文件里某处出现过这几个字」。首版写成 canon.includes(ANCHOR)，
+  // mutation 实测：把标题改名成「根目录待办清单的处置」后测试照样全绿——因为下方几处
+  // 指针文本里还留着这几个字，`includes` 认得出。那一刻五个指针已全部指向空气而守卫沉默。
+  const headingRe = new RegExp("^#{2,4}\\s+.*" + CANON_ANCHOR.replace(/\./g, "\\.") + "\\s*$", "m");
+  check("判据正文以标题形式存在于 dao-project-scaffold SKILL.md", headingRe.test(canon), CANON_FILE);
   // 三条判据缺任何一条，「三条全不成立才是幽灵」这句话就落不了地。
   for (const needle of ["CLAUDE.md", "30 天", "来源标记"]) {
     check("判据正文含第三方可核对的条件：" + needle, canon.includes(needle));
