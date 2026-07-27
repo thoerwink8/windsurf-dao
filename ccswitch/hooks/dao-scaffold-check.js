@@ -24,6 +24,8 @@
 //    - 清单在 ccswitch/scaffold-manifest.json，求值器在 ccswitch/lib/scaffold-manifest.js
 //    - universal 条目（CLAUDE.md / .claude/rules/ / 无冗余入口 / _tmp 已 gitignore …）无条件查
 //    - conditional 条目（桌面端调试基建 / 前端样式路线 / CI 矩阵成本 …）按 when 指纹命中才查
+//    - product-type 条目（PR 真机证据三态 …，2026-07-27 加的第四类）只对在 CLAUDE.md 里
+//      **自我声明**为「产品型项目」的仓库查——中间态：对所有产品型项目合理、对内部工具仓不合理
 //    - 另有两项活跃工作提醒不属备案清单，仍硬编码在本文件：
 //      · 活跃 loop（docs/specs/*/STATUS.json mode 非 done/abandoned/archived）
 //      · 活跃 plan（docs/plans/*.md 含「待实施/进行中」状态标记）
