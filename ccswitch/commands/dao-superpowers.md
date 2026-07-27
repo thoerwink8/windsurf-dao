@@ -17,7 +17,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 ### 显式触发（强信号 · 必走五步）
 
 - 用户口头：「走 superpowers」「开 worktree 走」「走完整流程」「派 subagent」「启 dao 五步」
-- 用户引用任一 dao 五步 skill 名（dao-worktree / dao-plan / dao-review）
+- 用户引用任一 dao 五步件名（dao-worktree / dao-plan / dao-review——2026-07-27 起是 AI 内部读取件，用户提到名字仍算强信号）
 - 用户输入 `/dao-superpowers`
 
 ### 复杂度触发（弱信号 · SHOULD 主动建议）
@@ -45,7 +45,7 @@ description: 五步工程仪式——隔离 worktree → 写 plan → 派 implem
 
 **announce**：「开始 dao-superpowers 第 1 步 · 隔离 worktree」
 
-`git worktree add` 到隔离目录 → 干净进场（rm node_modules + npm install，参 e163）→ 测试基线全绿才开工。详见 `dao-worktree` skill。
+`git worktree add` 到隔离目录 → 干净进场（rm node_modules + npm install，参 e163）→ 测试基线全绿才开工。详细铁律 Read `ccswitch/skills/dao-worktree/SKILL.md`（AI 内部读取件，不是 `/` 命令）。
 
 ### 二·谋（dao-plan · 不知常妄作凶）
 
@@ -71,7 +71,7 @@ Read open.md §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/
 
 **🔒 关卡**：plan 写完必须用户审批，不得跳过。
 
-详见 `dao-plan` skill。
+详细铁律 Read `ccswitch/skills/dao-plan/SKILL.md`（AI 内部读取件，不是 `/` 命令）。
 
 ### 三·造（上善若水勤而行之）
 
@@ -93,7 +93,7 @@ Read open.md §1：读 CSS（token/组件/布局）→ 读 HTML（结构/视觉/
 
 **铁律**：UI 任务跳 visual compliance review = 跳 reviewer，不可。原因：reviewer agent 看 git diff 看不见真实渲染，视觉断层 / a11y / 组件裂痕只在 preview 里暴露——故必过 §6 的 preview 验收。
 
-详见 `dao-review` skill。
+详细铁律 Read `ccswitch/skills/dao-review/SKILL.md`（AI 内部读取件，不是 `/` 命令）。
 
 ### 五·归（功遂身退）
 

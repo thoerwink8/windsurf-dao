@@ -106,8 +106,9 @@
 │  第 3 层 · 落地（用户 /命令 手动触发 skill）            │
 │                                                       │
 │  管线：/dao-dev · /dao-loop · /dao-superpowers        │
-│  skill：dao-brainstorm / dao-plan / dao-design ...    │
-│         （9 个 skill，全部 /name 手动触发）             │
+│  skill：dao-design / dao-verify / dao-evolution ...   │
+│         （9 个 skill，其中 5 个部署为 /name 命令；      │
+│          五步链 4 个是 AI 内部读取件，见 dao.md）        │
 └──────────────────────────────────────────────────────┘
 ```
 

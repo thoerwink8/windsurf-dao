@@ -91,10 +91,18 @@ py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evo
 - 记忆层：更新或删除对应 memory 文件
 - 行为层：直接改写 dao.md / skill 正文
 
+## 支撑件（按需 Read，2026-07-27 演化域四合一后本 skill 是唯一知识库）
+
+| 文件 | 什么时候读 |
+|---|---|
+| `session-distill.md` | 会话级全量扫描沉淀（`/dao-distill` 的正文，命令本身只剩薄壳） |
+| `system-review.md` | 系统级四脏审查 + 快速体检（原 `/dao-evolve` 正文，该命令 2026-07-27 退役） |
+
 ## 与上层流程的协作
 
-- **/dao-distill**：会话级全量扫描 → 走本 skill 三层路由
-- **/dao-evolve**：跨会话审查 → 检查档案层是否有该提升到记忆/行为层的遗漏
+- **/dao-distill**：会话级全量扫描 → 读 `session-distill.md` → 走本 skill 三层路由
+- **/dao-evolution**（本 skill）：跨会话审查 → 读 `system-review.md` → 检查档案层是否有该提升到记忆/行为层的遗漏
+- **dao-harvest workflow**：跨窗好实践收割（收官段唯一触发点，见 dao.md 长窗节③）→ 候选按三层路由归位
 - **dao-dev §2.5 涅槃**：单次任务教训 → 走本 skill 三层路由
 
 ## 反模式

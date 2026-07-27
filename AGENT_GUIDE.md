@@ -154,6 +154,11 @@ windsurf-dao 是货架项目。部署方式：`dao.ps1 link-claude` 将 `ccswitc
 | 横切 | `dao-debugger` agent | 反者道之动（第40章）|
 | 验 | `dao-verify` skill | 慎终如始，则无败事（第64章）|
 
+> **表里的 `dao-brainstorm` / `dao-plan` / `dao-worktree` / `dao-review` 四个 skill 自 2026-07-27 起是 AI 内部读取件**
+> （用户拍板的生态减法）：文件仍在 `ccswitch/skills/` 原地、内容未动、仍按路径 Read，
+> 但**不再 symlink 进 `~/.claude/skills/`**，因此不是用户 `/` 命令。判据是使用面——
+> 它们在用户键盘全史（`~/.claude/history.jsonl`）里零调用。用户命令表以 `ccswitch/dao.md` 为准。
+
 哲学底色不是装饰——它在推理时提供更深层的约束（见 T28 教训）。
 
 ---
