@@ -46,6 +46,22 @@ argument-hint: "[ARG]"
     New-Item -ItemType Directory -Path (Split-Path $realConflict -Parent) -Force | Out-Null
     "do not replace" | Set-Content -Path $realConflict -Encoding UTF8
 
+    # ── prune 用的两个 fixture（2026-07-27 加）──────────────────────────────
+    # ① 我们写过、但名字已离开 Get-CodexPromptNames（退役残留）⇒ 应被 prune
+    # ② 用户自己写的同名类文件，无 managed 标记 ⇒ 绝不能碰
+    $retiredManaged = Join-Path $TmpRoot ".codex\prompts\dao-retired-xyz.md"
+    @"
+---
+description: 已退役的 dao prompt
+---
+
+<!-- codex-managed: windsurf-dao -->
+
+# 已退役
+"@ | Set-Content -Path $retiredManaged -Encoding UTF8
+    $userOwned = Join-Path $TmpRoot ".codex\prompts\my-own-prompt.md"
+    "user's own prompt, no managed marker" | Set-Content -Path $userOwned -Encoding UTF8
+
     $beforeClaudeMd = Get-Content -Path (Join-Path $claudeDir "CLAUDE.md") -Raw
     $beforeSettings = Get-Content -Path (Join-Path $claudeDir "settings.json") -Raw
     $beforeAgent = Get-Content -Path (Join-Path $claudeDir "agents\dao-test.md") -Raw
@@ -53,7 +69,7 @@ argument-hint: "[ARG]"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript link-codex-prompts | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "link-codex-prompts should exit successfully"
 
-    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit")) {
+    foreach ($name in @("dao-superpowers", "dao-commit")) {
         $prompt = Join-Path $TmpRoot ".codex\prompts\$name.md"
         Assert-True (Test-Path $prompt) "$name prompt should be written into Codex"
         $item = Get-Item $prompt -Force
@@ -69,6 +85,21 @@ argument-hint: "[ARG]"
     Assert-Equal "do not replace`r`n" (Get-Content -Path $realConflict -Raw) "real prompt conflict should be preserved"
     Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\dao-thread-tree.md"))) "low-frequency commands should not be linked by default"
 
+    # 负控（2026-07-27 加）：夹子的两侧不对称，这一侧此前是空的。
+    # 上面那条 dao-thread-tree 验的是「~/.claude/commands 里压根没有这个文件」——
+    # 它不区分「不在管理清单」与「文件不存在」两种原因。本条补的是**文件在、但不在
+    # Get-CodexPromptNames 里**：fixture 上面确实写了 dao-evolve.md 这个命令文件
+    # （该命令 2026-07-27 退役、同批移出管理清单）。若有人把它加回清单、或把清单改成
+    # 「扫目录全量镜像」，本条会变红。
+    Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\dao-evolve.md"))) "a command file that is NOT in Get-CodexPromptNames must not be mirrored into Codex"
+
+    # prune 双侧（2026-07-27 加，出处：dao-evolve 退役后 ~/.codex/prompts/dao-evolve.md
+    # 带着 managed 标记留在本机——link 按清单写、unlink 按清单删，两个方向都不碰
+    # 一个已离开清单的名字）：managed 残留必须被清掉，用户自有文件必须原样保留。
+    Assert-True (-not (Test-Path $retiredManaged)) "a managed prompt whose name left Get-CodexPromptNames must be pruned"
+    Assert-True (Test-Path $userOwned) "a prompt without the managed marker must never be pruned"
+    Assert-Equal "user's own prompt, no managed marker`r`n" (Get-Content -Path $userOwned -Raw) "user-owned prompt content must be untouched"
+
     # fortify2-20260726 D6：dao-philosophy 特判（New-ManagedCodexPrompt 里唯一的生成式条目，
     # 对应的 skill 早已不存在）已从 Get-CodexPromptNames 移除，New-ManagedCodexPrompt 现恒返回
     # $null——本测试原「dao-philosophy generated prompt should exist」一段随之移除，不再有
@@ -81,7 +112,7 @@ argument-hint: "[ARG]"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $DaoScript unlink-codex-prompts | Out-String | Write-Host
     Assert-Equal 0 $LASTEXITCODE "unlink-codex-prompts should exit successfully"
 
-    foreach ($name in @("dao-superpowers", "dao-evolve", "dao-commit")) {
+    foreach ($name in @("dao-superpowers", "dao-commit")) {
         Assert-True (-not (Test-Path (Join-Path $TmpRoot ".codex\prompts\$name.md"))) "$name prompt should be unlinked from Codex"
     }
     Assert-True (Test-Path $realConflict) "unlink-codex-prompts must preserve real prompt files"

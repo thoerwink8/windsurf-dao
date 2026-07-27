@@ -48,7 +48,7 @@
 
 always_on 唯一入口：八句根基、三才之机、续力、知识归位、三管线门控、GUI 决策树、Shell 血泪增量、路由铁律。
 
-### 命令（`ccswitch/commands/` · 10 个）
+### 命令（`ccswitch/commands/` · 8 个）
 
 > slash command，用户通过 `/dao-*` 手动触发。
 
@@ -57,29 +57,41 @@ always_on 唯一入口：八句根基、三才之机、续力、知识归位、�
 | `/dao-dev` | 一句话需求 → 完整交付（三阶九步） |
 | `/dao-loop` | 文档驱动多轮迭代（spec/开工包续跑） |
 | `/dao-superpowers` | 五步工程仪式：worktree→plan→exec→review→finish |
-| `/dao-serve` | 在 worktree 一键启动 dev server |
-| `/dao-distill` | 会话级知识沉淀 |
-| `/dao-evolve` | 系统自我进化 + 体检 + 减法 |
+| `/dao-serve` | 在 worktree 一键启动 dev server（**AI 内部件**：实测调用 100% 来自 subagent） |
+| `/dao-distill` | 会话级知识沉淀（薄壳，正文在 `dao-evolution/session-distill.md`） |
 | `/dao-commit` | 自动 commit message + 内聚拆分 |
-| `/dao-doc` | 文档生成与更新 |
 | `/dao-remove` | 减法专用：安全移除 |
 | `/gs` | git status 速查 |
 
-### 技能（`ccswitch/skills/` · 9 个）
+> **2026-07-27 退役两个**（用户拍板，判据是**使用面**不是引用面——见下方「退役纪律」）：
+> `/dao-doc`（全生态唯一三零孤岛：零使用 + 零曝光 + 零索引；四步骨架已内联进 `/dao-dev` §3.3）·
+> `/dao-evolve`（与演化域另三个载体重叠，正文并入 `dao-evolution/system-review.md`）。
 
-> 全部 `disable-model-invocation: true`，用户 `/name` 手动触发；跨 skill 靠交接信息路由。
+### 技能（`ccswitch/skills/` · 9 个，其中 5 个部署为用户命令）
 
-| skill | 一句话 |
-|---|---|
-| `dao-brainstorm` | 苏格拉底式挖需求 → design 文档 |
-| `dao-plan` | design → 2-5 分钟粒度实施任务清单 |
-| `dao-loop` | 谋线/造线双阶段循环开发 |
-| `dao-review` | two-stage 评审（spec 合规 + 代码质量） |
-| `dao-verify` | 全面体检 / 涅槃门 |
-| `dao-design` | 设计统一入口（原 7 个设计 skill 合并为 supporting files） |
-| `dao-worktree` | 隔离工作区 |
-| `dao-evolution` | 教训 / 演化沉淀 |
-| `dao-project-scaffold` | 项目标准结构脚手架 |
+> 全部 `disable-model-invocation: true`；**用户命令表见 `ccswitch/dao.md`**（唯一真相源）。
+
+| skill | 一句话 | 面向 |
+|---|---|---|
+| `dao-loop` | 谋线/造线双阶段循环开发 | 用户 |
+| `dao-design` | 设计统一入口（原 7 个设计 skill 合并为 supporting files） | 用户 |
+| `dao-verify` | 全面体检 / 涅槃门（**含孤儿分支回溯扫描**：清理已完成但没删的分支） | 用户 |
+| `dao-evolution` | 教训 / 演化沉淀（含 `session-distill.md` + `system-review.md`） | 用户 |
+| `dao-project-scaffold` | 项目标准结构脚手架 | 用户 |
+| `dao-brainstorm` | 苏格拉底式挖需求 → design 文档 | **AI 内部**（按路径 Read） |
+| `dao-plan` | design → 2-5 分钟粒度实施任务清单 | **AI 内部**（按路径 Read） |
+| `dao-review` | two-stage 评审（spec 合规 + 代码质量） | **AI 内部**（按路径 Read） |
+| `dao-worktree` | 隔离工作区 | **AI 内部**（按路径 Read） |
+
+> **「AI 内部」的含义**（2026-07-27 用户拍板降级）：文件仍在 `ccswitch/skills/` 原地、内容一字未动、
+> 仍由 `dao-superpowers` / `dao-loop` 与 `dao-plan-writer` / `dao-reviewer` 等 subagent 人格按路径 Read
+> （那些人格的 ⭐ 方法论真相源就指着它们），**只是不再 symlink 进 `~/.claude/skills/`**，
+> 于是不再占用户 `/` 命令表的位置。四者在用户键盘全史里零调用。
+>
+> **退役纪律（两次误删换来的）**：判「还有没有人用」一律先查**使用面**——`~/.claude/history.jsonl`
+> （用户键盘全史）与 `~/.claude/projects/**/*.jsonl`（区分谁调用的），**再**看仓内引用数。
+> 2026-06-25 曾以「44 行、功能已被内置覆盖」删掉 `/dao-remove` + `/gs`，**当天回滚**——
+> `dao-remove` 是用户实敲第 2 名而全仓仅 10 处引用。**引用面 ≠ 使用面。**
 
 ### 配置同步（`config-sync/`）
 
@@ -192,7 +204,7 @@ windsurf-dao/                  # 真相源
 
 ## 自定义
 
-体系可进化。`/dao-evolve` 审查改进。为道日损——删 > 改 > 增。
+体系可进化。`/dao-evolution` 审查改进（四脏审查与快速体检读其 `system-review.md`）。为道日损——删 > 改 > 增。
 
 添加 skill：`ccswitch/skills/your-skill/SKILL.md`（frontmatter: name + description）。
 添加 command：`ccswitch/commands/your-command.md`（YAML frontmatter + Markdown）。
