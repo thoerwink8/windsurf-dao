@@ -22,11 +22,18 @@
 //     这一层守的是「Codex 改语义了 / 这个字段哪天不认了」——A 层结构上看不见这种事。
 //
 // ── 已知缺口，照直写（别当它全包）────────────────────────────────────────────
-// ① **环境跳过在 run-tests.mjs 的汇总表里不可见**：那张表只打 exit code 与 PASS/FAIL 计数，
-//    不打 stdout。B 层跳过时本测试仍 exit 0。**唯一的可见信号是 PASS 计数变小**：
-//    A 层恒 14 条（5×2 + 4），B 层全跑时 +9 = **23**，B 层跳过时就是 **14**。
-//    （这两个数字随上面两个数组的长度走，改数组要同步改这里。）
-//    要确认 B 层到底跑没跑，别看汇总表，直接单跑本文件看输出。
+// ① **环境跳过在 run-tests.mjs 的汇总表里不可见**：那张表只打 exit code 与 PASS/FAIL 计数、
+//    不打 stdout。B 层跳过时本测试仍 exit 0，**唯一的可见信号是 PASS 计数变小**
+//    （A 层条数 vs A+B 条数）。要知道 B 层到底跑没跑，别看汇总表，直接单跑本文件。
+//    **这两个数字刻意不写死在本头注里**——它们由 `USER_FACING`/`AI_INTERNAL` 两个数组的长度
+//    **算**出来，并由「A 层条数自检」那条断言钉住（往数组里加 skill，期望值自动跟上，
+//    这个信号不会悄悄过期）。缘由是第一人称的：本头注一度把 SKIP 态条数写成 11（实为 14），
+//    **一个「唯一可见信号」的数字写错，比不写更糟**，而任何写死的数字都必然随数组增减过期。
+//    **自检的射程，两组 mutation 实测过，照直写**：往数组加一个名字 ⇒ 期望值自动跟到 15，
+//    **不变红**（这正是设计目标，不是漏）；把 A 层断言循环删掉一条 check、数组不动 ⇒ **变红**
+//    （14 vs 9，exit 1）。即它守的是「**断言循环悄悄缩水**」，不是「数组被改了」。
+//    ⚠️ 仍未解决的那一半：自检只保证「数字是对的」，**不保证「有人会去看它」**——
+//    汇总表看不见 stdout 这一点没变，那一面无护栏。
 // ② A 层用正则读 YAML（本仓无 yaml 依赖），**先剥注释再匹配**，故注释里写 `allow_implicit_
 //    invocation: false` 不会被误当成生效声明；但真 YAML 的锚点/多文档/引号形态它读不了。
 //    当前 5 份文件都是同一份 20 行模板，这个近似够用——**形态一变就得改这里**。
@@ -126,7 +133,17 @@ function parseInjectedSkillNames(promptJson) {
   return names;
 }
 
+// ── A 层条数自检 ──────────────────────────────────────────────────────────────
+// 把「B 层跑没跑」那个唯一可见信号（PASS 计数）变成**算出来的**数，而不是头注里写死的数。
+// `pass + fail` = 已执行的断言数，与「通过数」不同，故 A 层里真有一条红时本条不会连带变红。
+const ranA = pass + fail;
+const expectedA = USER_FACING.length * 2 + AI_INTERNAL.length;
+check(`A 层条数自检：实际执行 ${ranA} 条 === 由两个数组长度算出的 ${expectedA} 条`,
+  ranA === expectedA,
+  "数组长度变了而 A 层断言没跟上（或反之）⇒ 头注里那个『PASS 计数变小』的信号已失真");
+
 console.log("\n=== B 层 · 效果侧：注入模型上下文的 Available skills 列表 ===");
+let bLayerRan = false;
 const codex = resolveCodex();
 if (!codex) {
   console.log("  ⏭ SKIP  本机找不到 codex 可执行（查过：$CODEX_CLI_PATH / ~/.codex/config.toml / PATH）");
@@ -147,6 +164,7 @@ if (!codex) {
       console.log(`          exe=${codex.exe}（来源：${codex.from}） exit=${r.status} err=${String(r.stderr || "").slice(0, 200)}`);
       console.log(`          ⇒ 若是 Codex 改了输出形态，本层从此静默失效，得来改 parseInjectedSkillNames()。`);
     } else {
+      bLayerRan = true;
       console.log(`  ⓘ codex=${codex.exe}（来源：${codex.from}）；注入面共 ${names.length} 个 skill`);
       for (const n of USER_FACING) {
         if (!installed(n)) { console.log(`  ⏭ skip  ${n} 未装进 ~/.codex/skills，注入面断言 N/A`); continue; }
@@ -174,5 +192,8 @@ if (!codex) {
   }
 }
 
-console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+// 这一行是给「只看得到计数」的人留的解码钥匙：它说清本次的计数由哪两段构成。
+console.log(`\nⓘ 断言构成：A 层 ${ranA} 条（源侧，永不跳过）+ B 层 ${pass + fail - ranA - 1} 条` +
+  `（效果侧，${bLayerRan ? "本次已跑" : "**本次已跳过** ⇒ 契约只在文件层受检"}）+ 条数自检 1 条`);
+console.log(`=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);
