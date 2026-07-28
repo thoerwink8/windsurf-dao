@@ -235,7 +235,9 @@ harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证�
    必跑一次收割
 2. **每 N 个 PR**（机器可判）—— 调用方仓库的 `verify-all` 加一道**观察线**打印「距上次收割
    N 个 PR」，N≥20 变提示。观察线不硬闸（`exit 0` 恒真），与 `check-core-loc` 同哲学。
-   首个实现：mousse-cli `scripts/check-harvest-due.ps1` + `.harvest-marker`
+   首个实现：mousse-cli `scripts/check-harvest-status.ps1` + `.harvest-marker`
+   （原名 `check-harvest-due.ps1`，2026-07-27 随「到期」语义删除一并改名；此处曾滞后
+   一天指向一个已不存在的路径 —— 出处 mousse-cli issue #274）
 3. **用户纠正时**（最强信号，已在运转）—— 用户说「你这样不对」「我希望」即触发落档，
    `docs/user-intent-log.md` 型账本就是这个机制的现役实例。**本 workflow 不改动它**，
    只是把它同时当成第 4 个收割源读回来
