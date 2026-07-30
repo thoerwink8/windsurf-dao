@@ -10,6 +10,20 @@
 出现在可调用列表里（本仓 `incremental-review` / `code-quality-audit` / `outward-sweep`
 三个就是这样在 mousse-cli 生效的）。
 
+🔴 **「重开会话」是硬要求，不是保守说法 —— 而它的失效形态会骗人**（2026-07-30 实测）：
+`dao-harvest.js` 确实躺在 mousse-cli 的 `.claude/workflows/` 里，`Workflow` 工具照样报
+`"dao-harvest" not found. Available: deep-research, code-review, code-quality-audit,
+incremental-review, outward-sweep` —— **列表是会话启动时快照的**，会话中途复制进去的看不到。
+
+**这个信号答的是另一个问题**（L31 那一族）：`not found` 说的是「**本会话的装载列表里**没有」，
+而人会把它读成「**盘上**没有 / 没部署好」，于是跑去检查文件、检查路径、怀疑文件名 —— 那些
+全都是对的，而它照样 not found。
+
+⇒ **对策挂在开窗仪式上，不是挂在遇到问题时**：长窗开窗那一刻顺手核一眼「本窗预计要用的
+workflow 在不在 `Available` 列表里」。理由是**时机不可逆**——它总在**收官**时刻才被发现
+（收官段强制跑一次收割），而收官恰恰是最不能重开会话的时候：重开就丢掉整窗上下文。
+本次的处置是手工派三路 agent 代跑四源，多付了一次编排税。 [自定@07-30]
+
 ```powershell
 Copy-Item "D:\frank\windsurf-dao\ccswitch\workflows\pr-history-postmortem.js" `
           "<目标项目>\.claude\workflows\" -Force
@@ -186,6 +200,22 @@ harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证�
   `toolUseResult` 形式落在主会话流（帅读到的那份原文）。`<slug>` = 项目绝对路径逐字符把
   非字母数字换成 `-`（`D:\frank\mousse-cli` → `D--frank-mousse-cli`）。**这是观测来的近似
   规则不是公开契约**，两个方向都可能失配，故 `sessionLogDir` 可由 args 直接覆盖。
+- 🔴 **别用 `Glob("*.jsonl", path=<那个目录>)` 去找顶层会话文件 —— 它会给你 100 个文件，
+  而你要的那个不在里面**（2026-07-30 收割官实测 + 帅复核坐实）：单星号在这个 Glob 实现里
+  **等价于 `**/*.jsonl`**，本机实测该目录返回 **930 个匹配**，几乎全部来自
+  `<uuid>/subagents/` 与更深的 `subagents/workflows/wf_*/`；而结果**按修改时间排序**，
+  subagent 与 workflow 日志的写入频率远高于顶层会话文件 ⇒ **顶层文件几乎不可能出现在前
+  100 条可见结果里**（实测 100 条里只挤进 1 个，而非递归实际列出 ≥10 个）。
+  **失效形态是「拿到一大堆文件、看起来完全成功」**，不是报错 —— 又一个「它没说谎，它答的是
+  另一个问题」：那个结果诚实回答的是「这棵**目录树**里所有 `.jsonl`」，而你问的是
+  「这个**目录**里的 `.jsonl`」。
+  ⇒ 正解：用非递归列举（`PowerShell Get-ChildItem -File`，或 shell `ls -1 <dir>/*.jsonl`）
+  拿顶层清单，再按修改时刻挑覆盖目标窗口的那一个。 [自定@07-30]
+- ⚠️ **transcript 源会捞到「会话里读过的历史文本」，不只是「本窗新产生的东西」**（同轮实测）：
+  会话流里包含大量被 Read 进来的旧 commit body、旧 PR、旧账本正文，故这一路的候选可能
+  **溯源到窗口起点之前**。这不是缺陷（那些内容确实从未被收割过，补收有价值），但
+  **收割官必须逐条核 evidence 的真实日期并显式标注时序**，否则会把三天前的历史交付当成
+  本窗新鲜产出记账。实测一轮 5 条候选里 **3 条**属此类。 [自定@07-30]
 - 该文件极大（实测单个数十 MB），**禁全量读**。已验证可用的提取手法：内置 Grep 的 `-o` +
   **有界小窗口** —— `pattern: ".{0,30}(信号词A|信号词B).{0,150}"`、`-o: true`、`-n: false`、
   `head_limit: 20~30`。**窗口要小**：实测 `.{0,80}…{0,260}` 会大量返回
