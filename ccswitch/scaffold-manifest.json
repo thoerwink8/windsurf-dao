@@ -253,6 +253,16 @@
     },
 
     {
+      "id": "agents-md-generated",
+      "class": "conditional",
+      "when": { "file": "AGENTS.md", "label": "有 AGENTS.md" },
+      "require": { "fileContains": { "path": "AGENTS.md", "text": "dao:generated-from CLAUDE.md" } },
+      "msg": "{label} 的项目：根目录那份 AGENTS.md 是**手写的第二份真相源**（开头没有生成标记）→ 双份必漂移：两份规则文件第 1 天完全一致，此后每次只改其中一份，而没有任何东西会告诉你另一份已过期。改成从 CLAUDE.md 生成：把它的内容并进 CLAUDE.md → 删掉 AGENTS.md → 跑 `node <windsurf-dao 根>/ccswitch/scripts/gen-agents-md.mjs <项目根>`（脚本对非生成物的 AGENTS.md 会拒绝覆盖，不会吃掉手写内容）",
+      "why": "架构优化 P8（2026-08-01）。AGENTS.md 是非 Claude 宿主（Codex CLI 等）读项目规则的事实标准入口，60k+ 仓库在用；想让别的宿主读到同一套规则只有两条路——手写第二份，或从同一真相源生成。**本条不查「AGENTS.md 在不在」**：那要先判「这个项目有没有第二个 agent 宿主」，是语义判断，属本清单 _doc 明令不收的一类（也正因如此本条是 conditional 而非 universal/product-type——集合不同：内部工具仓也可能多宿主，产品型项目也可能只用一个宿主）。故 when 取「已经有 AGENTS.md」这个纯存在性指纹，require 只问一件机器判得了的事：**那一份是不是生成的**。**与 no-redundant-agent-guide / no-redundant-knowledge-md 那两条的关系（看似打架，实为同一判据）**：那两条禁的是根目录第二个 AI 入口，理由是「多入口 = 上下文通道分裂，规范写在哪一份全凭运气」；判据的实质是**能不能被单独改而不被发现**——AGENT_GUIDE.md / KNOWLEDGE.md 手写、可单独编辑 ⇒ 真·第二个真相源；带源 hash 的生成投影手改会被 `--check` 逮到、下次生成即覆盖 ⇒ 是投影不是源（同 dao.md Shell 节「改配置先认源与投影」）。本条正是把那条判据落到 AGENTS.md 上：允许它存在，但只允许它是投影。**判据的近似与失败方向照直写**：`fileContains` 只查生成标记这个子串在不在，**查不了新鲜度**——标记还在、源却已经改了的过期投影，本条判它通过；新鲜度要跑 `gen-agents-md.mjs --check`（查源 hash / 生成器版本 / 正文逐字三样），而那是**会话动作不是项目状态**，SessionStart 判不了，属 _doc「什么不该进本清单」第三条。另一向：手写文件里恰好抄了那行标记会被误放行（脚本侧「标记只在开头 512 字符内才认」这条更严的判据，清单侧的纯子串匹配够不着）。两向都选放行侧，理由同 product-type：对不适用的仓报缺项是纯噪音，噪音会训练人忽略整个 hook 的输出。",
+      "severity": "warn"
+    },
+
+    {
       "id": "design-context",
       "class": "conditional",
       "when": { "dir": "design" },
