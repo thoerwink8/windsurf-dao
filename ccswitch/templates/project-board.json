@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "_doc": {
+    "这是什么": "issue 派单中枢的 canonical 看板规格（纯数据）。dao.md「工作项三态归位」把「看板=观测中心、标签驱动自动归列」写成通用条款却不含任何列名 ⇒ 新项目要靠猜。本文件把六列与「标签→列」映射固定下来，由 ccswitch/scripts/dao-issue-bootstrap.ps1 消费。",
+    "为什么六列": "三层结构（行动层 / 蓄水池 / 酝酿层）各要一个可见位置，行动层再按生命周期切三段（待办→在途→待验）+ 一个终态。少一列就会有一批单没有归处、只能靠人记；多一列则每列都稀疏，一眼看不出全局。",
+    "auto 字段的诚实含义": "`auto:true` 只表示**这一列的归属可由标签/状态机械判定**，不表示 GitHub 会自动把单放进来。Projects v2 的「新 issue 自动入板」workflow **没有 API**（gh CLI 建不了），必须在网页点一次 —— 见 manual_steps。在那之前新单靠 `gh project item-add` 手动灌入。这个区分很重要：把「判据可机械化」读成「已经自动了」会让人以为看板在自己更新，而它其实停在建板那一刻。",
+    "为什么「待验」是 manual": "它是三节点留痕里「官交付评论」到「帅关单」之间的一段，**刻意不给它标签**——给了就等于用标签复刻看板的列，而这正是 dao.md 明禁的「别用更多常驻 issue（或标签）凑观测中心」。它靠关联 PR 的存在可见。",
+    "字段名与 GitHub 内建字段（两条路都成立，选一条别都做）": "新建的 Projects v2 自带一个名为 `Status` 的单选字段（Todo/In Progress/Done）。**路 A（脚本默认）**：另建一个名为 `field.name` 的单选字段——纯 CLI 可做，代价是板上并排两个状态类字段，需把内建 `Status` 从视图隐掉（已列进 manual_steps）。**路 B**：直接把内建 `Status` 的三个选项改成下面六列——网页几次点击，好处是板上只有一个状态字段、默认视图开箱即用（首个实例走的正是这条）。**bootstrap 脚本对两条路都幂等**：它判「六列在不在」是按**选项集合**判的而不是按字段名，所以走过路 B 的看板重跑脚本会报「六列已存在于字段 Status」并跳过，不会多建一个。这个判据是刻意选的——按名字判会在路 B 上静默多建一个字段，而板上两个状态字段这种错误没有任何东西会报出来。"
+  },
+
+  "project": {
+    "title_pattern": "<PROJECT_TITLE>",
+    "default_title_pattern": "<REPO_NAME> 观测中心",
+    "owner_hint": "org 名或 @me。org 看板的可见性跟随 org 权限；个人看板只有本人可见。",
+    "link_to_repo": true,
+    "link_note": "`gh project link` 让看板出现在仓库的 Projects 标签页（不是 Issues 页）。不 link 的话用户只能从 org/个人的 Projects 列表找到它。"
+  },
+
+  "field": {
+    "name": "阶段",
+    "dataType": "SINGLE_SELECT",
+    "note": "选项顺序即列顺序。改名请同步改项目侧 DISPATCH-HUB.md 里的引用。"
+  },
+
+  "columns": [
+    {
+      "order": 1,
+      "name": "候选",
+      "meaning": "酝酿层：还没到能派人做的",
+      "auto": true,
+      "source": "label",
+      "match": { "labels_any": ["候选"] }
+    },
+    {
+      "order": 2,
+      "name": "待办",
+      "meaning": "行动层已入队、还没派出去",
+      "auto": true,
+      "source": "label-combo",
+      "match": { "state": "open", "labels_any": ["缺陷", "任务", "欠账"], "labels_none": ["在途"] }
+    },
+    {
+      "order": 3,
+      "name": "在途",
+      "meaning": "已派官在干",
+      "auto": true,
+      "source": "label",
+      "match": { "labels_any": ["在途"] }
+    },
+    {
+      "order": 4,
+      "name": "待验",
+      "meaning": "官已交付 / PR 已开，等终审复验",
+      "auto": false,
+      "source": "manual",
+      "match": null,
+      "why_manual": "无对应标签且刻意不设——它由关联 PR 的存在体现。帅终审前手动移进来，合并即移「完成」。"
+    },
+    {
+      "order": 5,
+      "name": "蓄水池",
+      "meaning": "等用户的：拍板 / 动手",
+      "auto": true,
+      "source": "label",
+      "match": { "labels_any": ["待拍板", "需用户"] }
+    },
+    {
+      "order": 6,
+      "name": "完成",
+      "meaning": "已关单（每单都有关单结论评论）",
+      "auto": true,
+      "source": "state",
+      "match": { "state": "closed" }
+    }
+  ],
+
+  "manual_steps": [
+    {
+      "id": "auto-add-workflow",
+      "title": "打开「新 issue 自动入板」",
+      "why": "Projects v2 的内建 workflow 无 REST/GraphQL API，gh CLI 建不了。不开的话新建 issue 不会进板，看板会静静地过期。",
+      "how": "打开看板 → 右上 ⋯ → Workflows → 选 `Auto-add to project` → 过滤条件填 `is:issue is:open repo:<OWNER>/<REPO>` → Save 并启用。",
+      "minutes": 2
+    },
+    {
+      "id": "hide-builtin-status",
+      "title": "把内建 `Status` 字段从视图里隐掉",
+      "why": "新建看板自带 Todo/In Progress/Done 三选项的 `Status`，与本规格的六列字段并列会让人不知道该看哪个。",
+      "how": "看板视图 → 列头 ⋯ → Hide field → `Status`；再把视图 Group by 设为本规格的字段。",
+      "minutes": 1
+    },
+    {
+      "id": "verify-pins",
+      "title": "核对置顶顺序",
+      "why": "GitHub 按置顶时间排序，脚本按「待拍板 → 需用户 → 总览 hub」依次置顶；顺序不合意可在 issue 页面 unpin/repin 调整。",
+      "how": "打开仓库 Issues 页，看顶部三个置顶单的顺序。",
+      "minutes": 1
+    }
+  ]
+}
