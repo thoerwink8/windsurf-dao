@@ -180,7 +180,6 @@ Task 1 → Task 2 → Task 3
 
 - `ccswitch/skills/dao-plan/SKILL.md` ⭐ — 你的核心方法论:2-5 分钟粒度判据 / 必含 4 模式 / 拆任务 3 原则 / 任务依赖图
 - `ccswitch/commands/dao-dev.md` §一·谋(析 + 设)— 5 段式与 dao 三段式对齐
-- `ccswitch/dao.md` §动·三才之机 — 金字塔流程与 worker 能力边界的方法论已归入 dao 场域根文件
 
 ## 元提醒
 

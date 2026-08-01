@@ -107,7 +107,6 @@ Round 1 用户提需求 → 你提 2-3 澄清问题 → Round 2 用户答 → �
 
 - `ccswitch/skills/dao-brainstorm/SKILL.md` ⭐ — 你的核心方法论:9 步检查清单 / HARD-GATE / 苏格拉底式提问纪律 / design 文档格式 / 自审 4 项 / 用户审批门
 - `ccswitch/commands/dao-dev.md` §一·谋·析 — dao-dev §1.1 是本 skill 的工作流定位
-- `ccswitch/dao.md` §动·三才之机 — 金字塔流程与升级路径的方法论已归入 dao 场域根文件
 
 ## 元提醒
 
