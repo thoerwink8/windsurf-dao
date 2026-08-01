@@ -496,6 +496,7 @@ export function defaultSources() {
     { file: "ccswitch/dao.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-dispatch.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-guard-writing.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
+    { file: "ccswitch/rules/dao-legislation.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-longwindow.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     // 下面几份当前**零条款**（纯细则正文，元字段一个都没有）。**刻意留在清单里**：
     // 移出去等于「这几份文件从此没人看着」，而它们随时可能长出条款。零条款不是问题，
