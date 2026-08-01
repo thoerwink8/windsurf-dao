@@ -1,21 +1,11 @@
 export const meta = {
   name: 'dao-harvest',
   description: '好实践收割(参数化):从会话记录/PR/工作面板/用户意图账本里捞「做对了但没人固化」的实践,按升格三判据预筛 → 去重对抗核验 → 产出可直接粘贴的条款原文 + 归属层判断',
+  // ⚠ 本字段必须是**单个字符串字面量**——Workflow 工具校验 meta 为纯字面量，
+  // 字符串 `+` 拼接是 BinaryExpression，会被整脚本拒载（2026-08-01 实测报
+  // "meta must be a pure literal: non-literal node type in meta: BinaryExpression"）。
   whenToUse:
-    '需要 args: {repoPath}(必填,不设默认——跨项目资产不该内置某一个仓的路径)。' +
-    '可选 args: {sources:[...], sessionLogDir, taskOutputDir, workboardFile, intentLogFile, ' +
-    'clauseFile, daoFile, daoRulesDir, since, extraSignals:[...], goal, model, verifyModel}。' +
-    '何时跑:①窗口收官段(设计定的强制触发点)②`verify-all` 的收割计数观察线提示「距上次收割 ≥N 个 PR」时' +
-    '③刚结束一批多 agent 并行、交付报告里明显有「我超出要求做了 X」「我拒绝了派单令要求的 Y」这类痕迹时。' +
-    '解的问题:坏经验有天然触发器(出事了/返工了/被骂了——有痛感),好经验没有,做对的事做完就过去了。' +
-    '⚠ **它只覆盖好实践的「单次叙事」半边**(某次某个官在某个岔路口选对了),' +
-    '**「量化聚合」半边由 `pr-history-postmortem` 覆盖**(N 个 PR 都有某个毛病这类只在把全史排成一列后才存在的模式)。' +
-    '两个都跑才拿得到完整候选面:2026-07-27 首轮实测,本 workflow 的 10 条与量化手工版的 7 条**重合度为 0**——' +
-    '互不相交而非子集关系,因为两类模式在对方的取数对象里结构上不可见。' +
-    '连带效应:量化聚合天然产出**形态类**候选(能被计数就意味着有可机械识别的特征,那特征本身就是机检判据),' +
-    '单次叙事天然产出**判断类**(一次判断之所以是判断,正因为它没有可机械识别的特征)。' +
-    '故只跑本 workflow 会看到 `is_form=true` 占比很低,**那是分工使然,不是收割失效**。' +
-    '设计出处见调用方仓库的 dao 生长闭环设计文档(mousse-cli `docs/ops/dao-growth-loop.md` §二①)。',
+    '需要 args: {repoPath}(必填,不设默认——跨项目资产不该内置某一个仓的路径)。可选 args: {sources:[...], sessionLogDir, taskOutputDir, workboardFile, intentLogFile, clauseFile, daoFile, daoRulesDir, since, extraSignals:[...], goal, model, verifyModel}。何时跑:①窗口收官段(设计定的强制触发点)②`verify-all` 的收割计数观察线提示「距上次收割 ≥N 个 PR」时③刚结束一批多 agent 并行、交付报告里明显有「我超出要求做了 X」「我拒绝了派单令要求的 Y」这类痕迹时。解的问题:坏经验有天然触发器(出事了/返工了/被骂了——有痛感),好经验没有,做对的事做完就过去了。⚠ **它只覆盖好实践的「单次叙事」半边**(某次某个官在某个岔路口选对了),**「量化聚合」半边由 `pr-history-postmortem` 覆盖**(N 个 PR 都有某个毛病这类只在把全史排成一列后才存在的模式)。两个都跑才拿得到完整候选面:2026-07-27 首轮实测,本 workflow 的 10 条与量化手工版的 7 条**重合度为 0**——互不相交而非子集关系,因为两类模式在对方的取数对象里结构上不可见。连带效应:量化聚合天然产出**形态类**候选(能被计数就意味着有可机械识别的特征,那特征本身就是机检判据),单次叙事天然产出**判断类**(一次判断之所以是判断,正因为它没有可机械识别的特征)。故只跑本 workflow 会看到 `is_form=true` 占比很低,**那是分工使然,不是收割失效**。设计出处见调用方仓库的 dao 生长闭环设计文档(mousse-cli `docs/ops/dao-growth-loop.md` §二①)。',
   phases: [
     { title: '收割', detail: '按源并行:会话记录/PR 与 commit/工作面板/用户意图账本' },
     { title: '核验', detail: '逐条对抗核验:先判重(已有同类即毙),再复核三判据与归属层' },
