@@ -239,7 +239,7 @@ harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证�
 | `sources` | 否 | 上表四个 key 的子集；缺省全跑。未知 key 抛错并列合法值 |
 | `sessionLogDir` | 否 | 由 `repoPath` 推导 `~/.claude/projects/<slug>`；推导是近似规则，失配时用本参数覆盖 |
 | `taskOutputDir` | 否 | `%TEMP%/claude/<slug>/<session-uuid>/tasks`（次要参考，workflow 日志里有核验官裁定原文） |
-| `workboardFile` | 否 | `docs/ops/WORKBOARD.md`；不存在则 agent 自行 Glob 同类看板，找不到即判该源不可达 |
+| `workboardFile` | 否 | **无硬缺省**（2026-08-01 改）。缺省时 agent 按序探：①issue 区/看板（`gh issue list` / `gh project`，GitHub-backed 项目的现役承接物）②Glob `docs/ops/*.md` ③**捞到的文件先看头部有没有「已退役/历史存档」字样**，有就当历史快照读并在 `source_health.note` 写明，不当现役面板 ④都不可达即判该源不可达。**原缺省 `docs/ops/WORKBOARD.md` 已删**——见下方「已知弱点」第一条 |
 | `intentLogFile` | 否 | `docs/user-intent-log.md`；同上。**这个源是可选形态，不是每个项目都有** |
 | `clauseFile` | 否 | `docs/rules/dispatch-clauses.md`（判重靶子之一） |
 | `daoFile` | 否 | `D:/frank/windsurf-dao/ccswitch/dao.md`（判重靶子之二） |
@@ -276,6 +276,14 @@ harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证�
 
 ### 已知弱点（用之前知道）
 
+- 🔴 **「文件存在」不等于「它还是现役承接物」——`workboard` 一路曾因此静默返回零候选**
+  （2026-08-01 修）：原缺省硬编码 `docs/ops/WORKBOARD.md`，回退判据写的是「**不存在**则 Glob
+  同类看板」。调用方仓库把活账迁去 issue 区/看板后，那个文件**退役为历史存档却没有删** ⇒
+  回退条件恒假 ⇒ 这一路一直在读一份冻结的历史快照，**失效形态是「零候选」不是报错**，
+  与「这个窗真的没攒下好实践」在输出上不可区分。处置：缺省改为按序探测（issue 区 → `docs/ops/*.md`），
+  并要求 agent **读到文件先查头部退役字样**。**残留风险照直写**：退役字样的识别是**关键词近似**
+  （「已退役 / 历史存档 / 不要再往本文件挂新问题」），换个措辞写退役声明就认不出；
+  反向也有假阳性——正文里**引用**这些词的现役面板会被误判为快照。两个方向都构造得出反例。
 - **`transcript` 一路的取数路径是观测来的近似**：harness 换了落盘位置或 slug 算法即失效，
   且失效形态是「返回零候选」而不是报错——所以 `source_health.yield: "零"` 一定要看 `note`
   区分「源本身空」与「取数路径不可达」，两者处置相反
