@@ -179,7 +179,18 @@ async function main() {
     check("sessionLogDir 覆盖生效且推导值不再出现",
       b.includes("/custom/dir") && !b.includes("projects/D-x"));
     const c = (await run({ repoPath: "D:/x", sources: ["workboard"], workboardFile: "docs/BOARD.md" }, 0)).calls.agents[0].prompt;
-    check("workboardFile 覆盖生效", c.includes("docs/BOARD.md") && !c.includes("docs/ops/WORKBOARD.md"));
+    // 负半边**不能**再写 `!c.includes("docs/ops/WORKBOARD.md")`：2026-08-01 删掉硬缺省后那个
+    // 字符串在**两个分支里都不存在** ⇒ 该断言恒真、判别力归零（把覆盖逻辑改坏它也照绿）。
+    // 改钉「缺省分支的探测清单不得出现」——那段文案只在未指定 workboardFile 时渲染，覆盖失效即红。
+    check("workboardFile 覆盖生效（且不掉回缺省探测分支）",
+      c.includes("docs/BOARD.md") && !c.includes("按序自行探测"));
+    // 缺省分支的正向断言：删掉的硬缺省不许悄悄回来，探测清单与退役自检两段都要在。
+    const cDef = (await run({ repoPath: "D:/x", sources: ["workboard"] }, 0)).calls.agents[0].prompt;
+    check("workboardFile 缺省不再硬编码已退役文件，改为按序探测 + 退役字样自检",
+      !cDef.includes("docs/ops/WORKBOARD.md")
+      && cDef.includes("按序自行探测")
+      && cDef.includes("已退役")
+      && cDef.includes("docs/ops/*.md"));
     const d = (await run({ repoPath: "D:/x", sources: ["transcript"], extraSignals: ["我私自"] }, 0)).calls.agents[0].prompt;
     check("extraSignals 追加进信号词表", d.includes("我私自"));
   }
