@@ -407,6 +407,88 @@ console.log("\n=== 加载失败必须响（不许静默吞）===");
   check("负控：合法清单 → 零错误且有发现", r4.errors.length === 0 && r4.findings.length === 1);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== template 字段：三条机器闸 + 零编辑复制指令端到端 ===");
+{
+  // 合成 templates 根：**不拿真实 ccswitch/templates/ 当夹具**，否则真模板一改名，
+  // 这些断言的含义就跟着变（同「拿被测对象自己当基线」）。
+  const TR = path.join(SANDBOX, "_templates");
+  fs.mkdirSync(path.join(TR, "kit"), { recursive: true });
+  fs.writeFileSync(path.join(TR, "one.md"), "canonical 正文\n", "utf8");
+  fs.writeFileSync(path.join(TR, "kit", "a.yml"), "a\n", "utf8");
+  fs.writeFileSync(path.join(TR, "kit", "b.yml"), "b\n", "utf8");
+  const opts = { templatesRoot: TR };
+  const tEntry = (over) => entry(Object.assign({
+    require: { file: "X.md" }, template: { src: "one.md", dest: "X.md" },
+  }, over));
+
+  check("负控：合法 template 零错误", M.validate({ entries: [tEntry()] }, opts).length === 0,
+    JSON.stringify(M.validate({ entries: [tEntry()] }, opts)));
+
+  // 闸①：src 必须真实存在 —— 不查它，template 就是新的「指向空气的指针」
+  check("闸①：src 不在 templates/ 下 → 报错（load 时就现形，不等某个项目恰好缺这项）",
+    M.validate({ entries: [tEntry({ template: { src: "nope.md", dest: "X.md" } })] }, opts)
+      .some((e) => /template\.src .*不存在/.test(e)));
+  check("闸①附：src 含 `..` / 绝对路径 → 报错（不许把任意路径变成 canonical）",
+    M.validate({ entries: [tEntry({ template: { src: "../dao.md", dest: "X.md" } })] }, opts)
+      .some((e) => /不得含/.test(e)));
+
+  // 闸②：dest 必须与 require 查的路径相等 —— 否则报文教人复制到 A、闸查的是 B
+  check("闸②：dest 与 require 路径不一致 → 报错",
+    M.validate({ entries: [tEntry({ template: { src: "one.md", dest: "Y.md" } })] }, opts)
+      .some((e) => /与 require 查的路径.*不一致/.test(e)));
+  check("闸②附：require 是组合谓词时不许带 template（没有唯一的『该复制到哪』）",
+    M.validate({ entries: [tEntry({ require: { anyOf: [{ file: "X.md" }, { file: "Z.md" }] } })] }, opts)
+      .some((e) => /只能配在 require 为简单/.test(e)));
+  check("负控：dir 型 require + 目录型 src 合法",
+    M.validate({ entries: [tEntry({ require: { dir: "kit" }, template: { src: "kit", dest: "kit" } })] }, opts).length === 0);
+
+  // 闸③：文件 / 目录由**实际 stat** 决定，不由清单写死
+  const proj = mkproj("tpl-target");
+  const fileCmd = M._internal.copyInstruction({ src: "one.md", dest: "X.md" }, proj, TR);
+  const dirCmd = M._internal.copyInstruction({ src: "kit", dest: "kit" }, proj, TR);
+  check("闸③：文件型 src → 生成 Copy-Item -LiteralPath（单文件语义）",
+    /Copy-Item -LiteralPath/.test(fileCmd) && !/-Recurse/.test(fileCmd), fileCmd);
+  check("闸③：目录型 src → 生成 `\\*` + -Recurse（复制内容，不是复制成子目录）",
+    /-Recurse/.test(dirCmd) && dirCmd.indexOf("*") !== -1, dirCmd);
+  check("指令用绝对路径（零编辑的前提：粘到任何 cwd 都成立）",
+    fileCmd.indexOf(path.resolve(proj)) !== -1 && fileCmd.indexOf(path.resolve(TR)) !== -1, fileCmd);
+  check("src 不在盘上 → copyInstruction 返回 null（由调用方改写成显式『模板缺失』，不静默）",
+    M._internal.copyInstruction({ src: "gone.md", dest: "X.md" }, proj, TR) === null);
+  // 引号转义：路径含单引号时仍须是一条**语法合法**的 PowerShell 命令 ——
+  // 「零编辑可执行」一旦不成立，比不给指令更糟（人照着粘、跑不通、不知道怪谁）。
+  check("psQuote 双写单引号", M._internal.psQuote("a'b") === "'a''b'", M._internal.psQuote("a'b"));
+
+  // 端到端：缺项报文真的带上那一行；齐备则整条不报
+  const man = { entries: [tEntry({ id: "tpl" })] };
+  const f1 = M.evaluate(man, proj, opts);
+  check("缺项报文追加「零编辑复制 canonical：」一行",
+    f1.length === 1 && /零编辑复制 canonical：powershell/.test(f1[0].message), JSON.stringify(f1));
+  w(proj, "X.md", "已有");
+  check("齐备后不报（template 不改变 require 的判定）", M.evaluate(man, proj, opts).length === 0);
+
+  // src 缺失时的报文：**要说出来**，不许静默退回原文
+  const proj2 = mkproj("tpl-missing-src");
+  const f2 = M.evaluate({ entries: [tEntry({ id: "tpl2", template: { src: "gone.md", dest: "X.md" } })] }, proj2, opts);
+  check("canonical 模板缺失 → 报文显式说明（不静默退化成「AI 自己写一份」）",
+    f2.length === 1 && /canonical 模板缺失/.test(f2[0].message), JSON.stringify(f2));
+
+  // 真实清单侧：每条带 template 的条目，其 src 都真的在真实 templates/ 下
+  // （上面用的是合成根，这一条才是对真清单的断言）
+  const { manifest: realM } = M.load(REAL_MANIFEST);
+  const withTpl = ((realM && realM.entries) || []).filter((e) => e.template);
+  check("真实清单里带 template 的条目 ≥1（否则这套机器闸是空转的）", withTpl.length >= 1,
+    "count=" + withTpl.length);
+  check("真实清单每条 template.src 都在 ccswitch/templates/ 下真实存在",
+    withTpl.every((e) => fs.existsSync(path.join(M.TEMPLATES_ROOT, e.template.src))),
+    "missing=" + withTpl.filter((e) => !fs.existsSync(path.join(M.TEMPLATES_ROOT, e.template.src)))
+      .map((e) => e.id).join(","));
+  check("真实清单 pr-evidence-rule 的报文不再把真相源指向别的项目（dao-first）",
+    (() => { const e = (realM.entries || []).find((x) => x.id === "pr-evidence-rule");
+             return !!e && !/mousse-cli/.test(e.msg); })(),
+    JSON.stringify((realM.entries || []).find((x) => x.id === "pr-evidence-rule") || {}).slice(0, 200));
+}
+
 // ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch (_) {}
 
