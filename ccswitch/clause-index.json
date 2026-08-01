@@ -29,7 +29,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "cd468bbb83967faff1b1256e88ccf9be28c923fcd8e30790f8e71ee16599eb60",
+        "sha256": "42ae64bcb4653bcd844123443fdc4ebf1038b7a02e087c93ae48953a9cb03c75",
         "lines": 274,
         "clauses": 16,
         "observation": 0,
@@ -375,7 +375,7 @@
       "body_excerpt": "- **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警。⚠ **源可能不止一层，且看起来像源的那层可以全程不在下发路径上**（2026-08-01 windsurf-dao #49 深夜实测订正，推翻本条旧括注）：`~/.claude/setting…"
     },
     {
-      "id": "3139b4eeb129",
+      "id": "c82e40044ca5",
       "file": "ccswitch/dao.md",
       "line": 246,
       "line_end": 246,
@@ -395,7 +395,7 @@
       "body_excerpt": "- **PR 合并期的机械链走脚本，不靠记步骤**（2026-08-01 由三条文字规则 mechanize）：canonical 是 `ccswitch/scripts/dao-pr-merge.ps1`（PS 5.1；参数化 repo 路径 / 验证命令 / PR 号；先 `-DryRun`），按序跑完并逐步核验…"
     },
     {
-      "id": "afade9c2d01b",
+      "id": "e35fe51a64b0",
       "file": "ccswitch/dao.md",
       "line": 247,
       "line_end": 247,
@@ -403,7 +403,7 @@
       "role": "general",
       "zone": "clause",
       "section": "Shell · dao 独有项（Claude Code 沙箱未覆盖的）",
-      "title": "判「这份改动进没进主干」不能只问 `--is-ancestor`，更不能问「有没有开过 PR」",
+      "title": "判「这份改动进没进主干」只有 `git patch-id --stable` 答得对",
       "n": "1",
       "first_seen": "07-29",
       "trigger": "PR流程",
@@ -412,7 +412,7 @@
       "judge_only": false,
       "observing": false,
       "shape": "indent",
-      "body_excerpt": "- **判「这份改动进没进主干」不能只问 `--is-ancestor`，更不能问「有没有开过 PR」**（2026-07-29 立，**订正同日同条的一个错误叙述**：原文曾把一条孤儿分支写成「102 行测试遗失三天无人知晓」并据此立论，**当晚派官核实即被证伪**）。三个判据答的是三个不同问题：**①`gh pr…"
+      "body_excerpt": "- **判「这份改动进没进主干」只有 `git patch-id --stable` 答得对**：`gh pr list --head <branch>` 空只说明「这个**分支名**下没开过 PR」，`--is-ancestor` 判的是「这个 **commit 对象**在不在历史里」（对 cherry-pick …"
     },
     {
       "id": "c0dce7929bdc",
