@@ -98,6 +98,78 @@ function manifestIssueLines(projectRoot) {
   return lines;
 }
 
+// ── 条款库结构闸的挂载点（2026-08-01）────────────────────────────────────────
+// dao.md 反·归「规则集只增不减」那条自带 `触发:verify-all/check-clauses-structure`，
+// 而那个检查器此前**只存在于 mousse-cli/scripts/** ⇒ dao.md 这个规则集从未被它守过。
+// canonical 落在 ccswitch/scripts/check-clauses-structure.ps1 之后，**必须有东西真的调用它**——
+// 「文件存在」不是载体，那正是本仓在治的「指向空气的指针」。
+//
+// 为什么挂在这里（而不是新建 hook / 挂 dao-config-sync）：
+//   · 新建 hook 要在 live + 快照 + DB 三处注册，那正是本文件头注写的那笔债；
+//   · dao-config-sync 只在用户主动同步时跑，频率低到约等于没挂；
+//   · SessionStart 是**元仓库唯一必经**的时刻，与「退役没有触发器」这个病对症。
+// 只在**模式 A（cwd 就是 windsurf-dao）**跑：普通项目的条款库路径各不相同、由各自的
+// verify-all 管；在别人仓里跑元仓库的 dao.md 既没意义又白付一次 spawn。
+//
+// 成本照直写：本机实测 3 次 348/350/355ms（`-NoProfile` 冷起 PowerShell + 读 85KB + 正则）。
+// **刻意不做 mtime 缓存**：缓存要落一个状态文件，而「状态文件不在 ⇒ 静默跳过」正是这道闸
+// 自己要防的病（零检出 ≠ 零存在）。宁可每次付这 350ms。
+//
+// 输出策略（三态，任一态都**不静默**）：
+//   ① 硬闸红 ⇒ 报 FAIL 摘要（结构坏了属「代码错了」，必须现形）
+//   ② 绿 + 观察线有待办（候选退役 / 待升格 > 0）⇒ 报一行，让「该退役了吗」被端到眼前
+//   ③ 绿且观察线为空 ⇒ 一行不报（常路零噪音）
+// 跑不起来 / 拿不到 marker ⇒ 也报一行：**「没解析到」不等于「没问题」**。
+const CLAUSE_CHECK_TIMEOUT_MS = 20000;
+function clauseStructureLines(daoRoot) {
+  const script = path.join(daoRoot, "ccswitch", "scripts", "check-clauses-structure.ps1");
+  try {
+    if (!fs.existsSync(script)) {
+      return ["✗ 条款库结构闸脚本不在：" + script + "（dao.md 那条 `触发:…check-clauses-structure` 现在指向空气）"];
+    }
+  } catch (e) {
+    return ["✗ 条款库结构闸探测失败：" + (e && e.message ? e.message : String(e))];
+  }
+  if (process.platform !== "win32") {
+    // 不静默跳过：这一行让「本平台没跑」与「跑了且通过」区分得开。
+    return ["ⓘ 条款库结构闸未跑（非 Windows，本闸是 PowerShell 实现）→ 手动：pwsh ccswitch/scripts/check-clauses-structure.ps1"];
+  }
+  let out = "", code = 0;
+  try {
+    out = execFileSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], {
+      encoding: "utf8", timeout: CLAUSE_CHECK_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+    });
+  } catch (e) {
+    // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上。
+    out = (e && typeof e.stdout === "string") ? e.stdout : "";
+    code = (e && typeof e.status === "number") ? e.status : -1;
+    if (!out) {
+      return ["✗ 条款库结构闸跑不起来：" + (e && e.message ? e.message : String(e)) +
+              "（手动复核：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1）"];
+    }
+  }
+  // **只解析这一行**（纯 ASCII 键值）。不去正则匹配中文正文——两个文件之间拿文案当契约，
+  // 正是「被引用方一改、引用方静默失效」的温床。
+  const m = /CLAUSE_STRUCTURE_SUMMARY exit=(\d+) clauses=(\d+) violations=(\d+) notrigger=(\d+) retire=(\d+) promote=(\d+)/.exec(out);
+  if (!m) {
+    return ["✗ 条款库结构闸跑完但没拿到 CLAUSE_STRUCTURE_SUMMARY 末行（真退出码 " + code +
+            "）→ 契约可能被改坏了，手动跑一次看输出"];
+  }
+  const sExit = m[1], sClauses = m[2], sViol = m[3], sRetire = m[5], sPromote = m[6];
+  if (sExit !== "0" || code !== 0) {
+    const detail = out.split(/\r?\n/).filter((l) => /^\s+- \[/.test(l)).slice(0, 5).join("\n");
+    return ["✗ 条款库结构闸 FAIL：ccswitch/dao.md 命中 " + sViol + " 处已知失效形态（条款 " + sClauses + " 条）" +
+            (detail ? "\n" + detail : "") +
+            "\n  → 详情：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1"];
+  }
+  if (Number(sRetire) > 0 || Number(sPromote) > 0) {
+    return ["ⓘ 条款库观察线：dao.md 有 " + sRetire + " 条够老了、该问一句「还有用吗」，" + sPromote +
+            " 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
+            "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"];
+  }
+  return [];   // 绿且无待办 ⇒ 常路零噪音
+}
+
 function inject(context) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
@@ -178,6 +250,10 @@ function daoSyncLines() {
 
   // 6. live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）
   for (const line of selfCheckLines()) drifts.push(line);
+
+  // 7. 条款库结构闸（2026-08-01 挂载，判据与三态输出策略见 clauseStructureLines 头注）。
+  //    只在元仓库跑；它守的是 ccswitch/dao.md 自己，而 dao.md 此前从未被任何闸守过。
+  for (const line of clauseStructureLines(daoRoot)) drifts.push(line);
 
   return drifts;
 }
