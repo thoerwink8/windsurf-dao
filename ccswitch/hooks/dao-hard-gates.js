@@ -19,14 +19,19 @@
 // ── 五道闸（逐条的判据出处写在各自的 GATES 条目里）──────────────────────────
 //   G1 windows-mcp 全面禁令          dao.md「目·观」§windows-mcp 禁令（一票否决）
 //   G2 live ~/.claude/settings.json  dao.md Shell 节「确认门禁」+「改配置先认源与投影」
-//   G3 对外发布类命令                dao.md 帅节 ⑤自主边界「对外发布 / 需用户在场」
+//   G3 对外发布类命令                dao.md 帅节留守判据 ㈣自主边界「对外发布 / 需用户在场」
+//                                    （正文 2026-08-02 迁 ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁）
 //   G4 浏览器 MCP 截图落盘路径        dao.md Shell 节「截图路径强制」
 //   G5 只读载体未勾待办               dao.md「言·名之则」§只读载体禁写待办
 //
 // ── 各闸的判据全文（2026-08-02 dao.md 瘦身批 #7 迁入；dao.md 那三段已压成一行指针）──
 // 迁入前逐段核对过：dao.md 当时写着「全文见该 hook 头注，本行不复述」，而**头注里其实没有**
 // —— 一个指向空气的指针比没有指针更糟（读者以为有兜底）。下面补的就是那几句。
-// 拦截判定逻辑（各 gate 的 test()）与 stderr 文案（why / how）本次一字未动，只加注释。
+// 拦截判定逻辑（各 gate 的 test()）与 stderr 文案（why / how）**#7 那一批**一字未动，只加注释。
+// ⚠️ 后续动过的照直记：**瘦身批 #1（2026-08-02）改了 G3 的 why 与 how 里的三处指针文字**——
+// 「dao.md 帅节 ⑤自主边界」在 #1 之后已不是 dao.md 里的编号（⑤ 随正文迁去
+// ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁，dao.md 只剩留守判据 ㈣）。
+// **test() 的 matcher 与判定分支仍未动过一个字符**，改的只有指向哪里的那几句话。
 //
 // G1 · windows-mcp 禁令 —— **弃用理由**：用户 2026-07-25 一票否决，该 MCP 已从机器卸载
 //   （完整因果链见 docs/evolution/dao-clause-rationales.md §动-2）。**替代分工**见下方 G1 的
@@ -203,7 +208,7 @@ const GATES = [
 
   {
     id: "G3-publish",
-    why: "dao.md 帅节 长窗自主排程 ⑤「自主边界（永不进自主窗）」——对外发布属不可逆决策 + 需用户在场件",
+    why: "dao.md 帅节留守判据 ㈣「自主边界（永不进自主窗）」（正文见 ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁）——对外发布属不可逆决策 + 需用户在场件",
     escapeEnv: "DAO_PUBLISH_APPROVED",
     tools: ["Bash", "PowerShell"],
     test(input) {
@@ -225,7 +230,7 @@ const GATES = [
               "①先向用户说明要发什么版本、发到哪、怎么回滚，拿到当场同意；" +
               "②要先演练就加 `--dry-run`（本闸对 `--dry-run` 放行）；" +
               "③用户同意后由**用户**设 `DAO_PUBLISH_APPROVED=1` 再跑，或直接由用户执行该命令。" +
-              "自主窗内一律不发布——`⑤自主边界` 的原文是「永不进自主窗」。",
+              "自主窗内一律不发布——`自主边界` 的原文是「永不进自主窗」。",
           };
         }
       }
