@@ -504,6 +504,7 @@ export function defaultSources() {
     { file: "ccswitch/rules/dao-powershell.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-change-batch.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-workitem.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
+    { file: "ccswitch/rules/dao-product.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
   ];
 }
 
