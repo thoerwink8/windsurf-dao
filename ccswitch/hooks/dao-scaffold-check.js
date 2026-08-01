@@ -316,6 +316,74 @@ function deadGateLines(daoRoot) {
           " 条闸全部指向存在且可载的脚本，孤儿 0、无法核验 0"];
 }
 
+// ── always-on 字节预算的挂载点（2026-08-01 · 架构优化 P4）────────────────────
+// 上面两道守的是「条款写得对不对」与「守条款的闸自己还活着吗」，这一道守的是**总量**：
+// always-on 面只增不减，且**增长是无声的** —— 每次往 dao.md 加一条，谁都看得见那一条，
+// 没人看得见「总量又涨了 1.2KB」。与「规则集只增不减是结构必然」同源：立法有天然触发器
+// （刚踩坑、正在写复盘），减法没有，所以减法必须由一个每次都会打印的数字来端到眼前。
+//
+// 为什么挂在这里（理由与上面两道逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
+// 三处注册，那正是本文件头注写的那笔债。只在**模式 A** 跑：它量的是元仓库 dao.md +
+// 用户级 always-on 面，与当前项目是谁无关，在每个项目里各跑一遍只是重复付钱。
+//
+// 成本：本机实测整跑 ~90ms（读 4 个文件 + Buffer.byteLength，一次 node spawn；
+// 与死闸检测同量级，比 PowerShell 那道条款闸便宜一个数量级）。
+//
+// 输出策略与上面两道同构（三态，任一态都**不静默**）：
+//   ① 红（超限 / 自检半边失败 / 跑不起来 / 契约拿不到）⇒ 报摘要 + **原样带出三个出口**
+//   ② 绿 ⇒ 一行普查数（总字节 / 闸值 / 余量 / 作用域档份数）
+//   ③ **没有第三态**：这道闸每次都打印一行余量数字。**刻意不设「余量低于 X 才提醒」的
+//      阈值常量** —— 那个 X 会变成又一个没人记得依据的魔数，而余量本身就是要被看见的东西。
+// 只解析末行的纯 ASCII 契约，**不去正则匹配中文正文**（两个文件之间拿文案当契约，
+// 正是「被引用方一改、引用方静默失效」的温床）。
+const BUDGET_TIMEOUT_MS = 20000;
+
+function budgetLines(daoRoot) {
+  const script = path.join(daoRoot, "ccswitch", "scripts", "check-alwayson-budget.mjs");
+  try {
+    if (!fs.existsSync(script)) {
+      return ["✗ always-on 字节预算闸脚本不在：" + script +
+              "（预算闸此刻不存在，而它的沉默与「没超限」在这份报文里长得一样）"];
+    }
+  } catch (e) {
+    return ["✗ always-on 字节预算闸探测失败：" + (e && e.message ? e.message : String(e))];
+  }
+  let out = "", code = 0;
+  try {
+    out = execFileSync(process.execPath, [script], {
+      encoding: "utf8", timeout: BUDGET_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+    });
+  } catch (e) {
+    // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上
+    out = (e && typeof e.stdout === "string") ? e.stdout : "";
+    code = (e && typeof e.status === "number") ? e.status : -1;
+    if (!out) {
+      return ["✗ always-on 字节预算闸跑不起来：" + (e && e.message ? e.message : String(e)) +
+              "（手动复核：node ccswitch/scripts/check-alwayson-budget.mjs）"];
+    }
+  }
+  const m = /ALWAYSON_BUDGET_SUMMARY exit=(\d+) total=(\d+) limit=(\d+) files=(\d+) headroom=(-?\d+) scoped=(\d+) missing=(\d+) selfcheck=(ok|fail)/.exec(out);
+  if (!m) {
+    return ["✗ always-on 字节预算闸跑完但没拿到 ALWAYSON_BUDGET_SUMMARY 末行（真退出码 " + code +
+            "）→ 契约可能被改坏了，手动跑一次看输出：node ccswitch/scripts/check-alwayson-budget.mjs"];
+  }
+  const [, sExit, sTotal, sLimit, sFiles, sHead, sScoped, , sSelf] = m;
+  if (sExit !== "0" || code !== 0) {
+    const why = sSelf === "fail"
+      ? "检测器自检半边失败（selfcheck=fail）⇒ 此时「未超限」不可信，先修检测器"
+      : "always-on 面 " + sTotal + " B 超出闸值 " + sLimit + " B（超 " + (0 - Number(sHead)) +
+        " B）—— 它涨的不是磁盘，是每一次推理的 attention budget";
+    // 出口三行原样带出：一道只会骂人、不给出口的闸必被静音。
+    const exits = out.split(/\r?\n/).filter((l) => /^\s{4}[①②③] /.test(l)).slice(0, 3).join("\n");
+    return ["✗ always-on 字节预算闸 FAIL：" + why + (exits ? "\n" + exits : "") +
+            "\n  → 全量：node ccswitch/scripts/check-alwayson-budget.mjs"];
+  }
+  return ["ⓘ always-on 字节预算：计入 " + sFiles + " 份文件合计 " + sTotal + " B / 闸值 " + sLimit +
+          " B，**余量 " + sHead + " B**（另 " + sScoped +
+          " 份带 `paths:` 的作用域档不占配额）——闸值是**占位待用户拍板**，判据见 " +
+          "ccswitch/scripts/check-alwayson-budget.mjs 的 LIMIT_BYTES 头注"];
+}
+
 function inject(context) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
@@ -404,6 +472,11 @@ function daoSyncLines() {
   // 8. 死闸检测（2026-08-01 挂载 · 架构优化 P3，判据见 deadGateLines 头注）。
   //    上一项守「条款写得对不对」，这一项守「守条款的那些闸本身还活着吗」。
   for (const line of deadGateLines(daoRoot)) drifts.push(line);
+
+  // 9. always-on 字节预算（2026-08-01 挂载 · 架构优化 P4，判据见 budgetLines 头注）。
+  //    前两项守「写得对不对」与「闸活没活」，这一项守**总量**——它是三者里唯一
+  //    每次都打印一个数字的，因为减法没有天然触发器。
+  for (const line of budgetLines(daoRoot)) drifts.push(line);
 
   return drifts;
 }
