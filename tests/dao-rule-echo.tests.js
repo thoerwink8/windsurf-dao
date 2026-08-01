@@ -172,5 +172,81 @@ console.log("\n=== 错误可见性：出错必须留痕，且不取阻断语义 
   check("内部故障闸 → 未静默（stdout+stderr 至少一处有内容）", r.out !== "" || r.err !== "");
 }
 
+// ── P2 作用域档：`paths:` 规则不得被说成「常驻注入」──────────────────────────
+// 为什么必须落盘造夹具：readScopeGlobs 刻意**读盘**而不是看本次写入载荷——Edit 只带改动段，
+// frontmatter 多半不在里面。拿载荷断言等于验了另一条路径，会对真实缺陷失明。
+// 夹具放 tests/ 下自建目录（**不能放 `_tmp/`**：那个前缀在 hook 的 EXCLUDE 里，
+// 放进去会让被测文件直接被判为「非规则文件」，测试变成永远为真的废话）。
+console.log("\n=== P2 作用域档：有 paths ⇒ 作用域注入，无 paths ⇒ 常驻 ===");
+{
+  const fs = require("fs");
+  const os = require("os");
+  const FIX = path.resolve(__dirname, ".fixtures-scope", ".claude", "rules");
+  const userFix = path.join(os.homedir(), ".claude", "rules", "zz-test-fixture-userlevel.md");
+  fs.mkdirSync(FIX, { recursive: true });
+
+  const write = (name, body) => { const p = path.join(FIX, name); fs.writeFileSync(p, body, "utf8"); return p.replace(/\\/g, "/"); };
+
+  try {
+    // ① 块式 paths
+    const scoped = write("scoped.md", '---\npaths:\n  - "**/*.ps1"\n  - "**/check-*.mjs"\n---\n\n正文\n');
+    let r = run(ptu("Edit", { file_path: scoped, old_string: "a", new_string: "作用域条款 A" }));
+    check("有 paths → 文案出现「作用域注入」", /作用域注入/.test(ctx(r)), ctx(r).slice(0, 300));
+    // 注意断言写法：不能直接 `!/常驻注入/`——正文里写着「**不常驻注入**」，
+    // 那样写会把「正确地否认了常驻」误判为「仍在宣称常驻」。要测的是**主张**不是字串：
+    check("有 paths → 明确否认常驻", /\*\*不常驻注入\*\*/.test(ctx(r)), ctx(r).slice(0, 300));
+    check("有 paths → 不再挂 always-on 快照那套说辞",
+      !/always-on 规则是会话启动时快照注入的/.test(ctx(r)));
+    check("有 paths → 列出匹配面 glob", /\*\*\/\*\.ps1/.test(ctx(r)) && /check-\*\.mjs/.test(ctx(r)));
+    check("有 paths → 提示需部署才被宿主扫描", /dao-rules-deploy/.test(ctx(r)));
+    check("有 paths → 仍回灌本次写入原文", ctx(r).includes("作用域条款 A"));
+    check("有 paths → exit 0", r.code === 0, "code=" + r.code);
+
+    // ② 行内数组式 paths
+    const inline = write("inline.md", '---\npaths: ["src/**", "docs/**"]\n---\n\n正文\n');
+    r = run(ptu("Write", { file_path: inline, content: "行内数组 B" }));
+    check("行内数组 paths → 也判为作用域", /作用域注入/.test(ctx(r)));
+    check("行内数组 paths → glob 去引号后列出", /src\/\*\*/.test(ctx(r)) && /docs\/\*\*/.test(ctx(r)));
+
+    // ③ 无 paths 的项目规则 —— 原文案必须原样保留（防「一改就全改」的过度收割）
+    const plain = write("plain.md", "# 无 frontmatter 的项目规则\n\n正文\n");
+    r = run(ptu("Edit", { file_path: plain, old_string: "a", new_string: "常驻条款 C" }));
+    check("无 paths → 仍说「常驻注入」", /常驻注入/.test(ctx(r)), ctx(r).slice(0, 200));
+    check("无 paths → 不误报为作用域", !/作用域注入/.test(ctx(r)));
+    check("无 paths → 仍回灌原文", ctx(r).includes("常驻条款 C"));
+
+    // ④ frontmatter 存在但没有 paths 键（只有别的键）⇒ 不算作用域
+    const other = write("otherfm.md", "---\ndescription: 某说明\n---\n\n正文\n");
+    r = run(ptu("Edit", { file_path: other, old_string: "a", new_string: "条款 D" }));
+    check("frontmatter 无 paths 键 → 不判为作用域", !/作用域注入/.test(ctx(r)));
+
+    // ⑤ 文件读不到（已删）⇒ 降级为原文案，且**不得吞掉回灌本身**
+    const ghost = path.join(FIX, "ghost.md").replace(/\\/g, "/");
+    r = run(ptu("Edit", { file_path: ghost, old_string: "a", new_string: "幽灵条款 E" }));
+    check("读盘失败 → 降级不崩", r.code === 0, "code=" + r.code);
+    check("读盘失败 → 回灌仍在", ctx(r).includes("幽灵条款 E"));
+
+    // ⑥ 用户级 ~/.claude/rules 且无 paths ⇒ 必须告知「实测 subagent 3/3 未收到」
+    fs.mkdirSync(path.dirname(userFix), { recursive: true });
+    fs.writeFileSync(userFix, "# 用户级无 paths 夹具\n", "utf8");
+    r = run(ptu("Edit", { file_path: userFix.replace(/\\/g, "/"), old_string: "a", new_string: "用户级条款 F" }));
+    check("用户级无 paths → 给出未送达警告", /3\/3/.test(ctx(r)), ctx(r).slice(0, 300));
+    check("用户级无 paths → 不谎称常驻注入", !/常驻注入/.test(ctx(r)));
+    check("用户级无 paths → 仍回灌原文", ctx(r).includes("用户级条款 F"));
+
+    // ⑦ 用户级但**有** paths ⇒ 走作用域分支（优先级：scoped 高于 userLevel）
+    const userScoped = path.join(os.homedir(), ".claude", "rules", "zz-test-fixture-userscoped.md");
+    fs.writeFileSync(userScoped, '---\npaths:\n  - "**/*.ps1"\n---\n\n正文\n', "utf8");
+    try {
+      r = run(ptu("Edit", { file_path: userScoped.replace(/\\/g, "/"), old_string: "a", new_string: "用户级作用域 G" }));
+      check("用户级有 paths → 走作用域分支而非未送达警告", /作用域注入/.test(ctx(r)) && !/3\/3/.test(ctx(r)));
+    } finally { try { fs.unlinkSync(userScoped); } catch (_) {} }
+  } finally {
+    // 夹具必须清干净：残留在 ~/.claude/rules/ 下的文件会被宿主当真规则扫描
+    try { fs.unlinkSync(userFix); } catch (_) {}
+    try { fs.rmSync(path.resolve(__dirname, ".fixtures-scope"), { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);
