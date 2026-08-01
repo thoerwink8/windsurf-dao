@@ -32,9 +32,10 @@ PR 阶段 CI 的目的是**快速反馈**，不是**编译保险**。只在 PR �
 gh api /orgs/<org>/settings/billing/usage
 ```
 
-## 推荐实现形态：单 job matrix + job 级 if 条件跳过
+## 推荐实现形态：单 job + `strategy.matrix` 里直接算出矩阵成员
 
-不要拆成两个平行 job（一个 windows-only 给 PR，一个三平台给 main）——步骤清单会漂移不同步。用同一个 job + matrix + 条件表达式：
+不要拆成两个平行 job（一个 windows-only 给 PR，一个三平台给 main）——步骤清单会漂移不同步。
+用同一个 job，**在 `strategy.matrix` 里按触发事件算出矩阵成员**：
 
 ```yaml
 on:
@@ -46,16 +47,42 @@ on:
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || matrix.os == 'windows-latest'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # PR 场景只留主开发平台；push(main) / tag / 手动触发跑满交叉矩阵。
+        # ⚠ 折行用 `>-` 折叠标量，且续行**缩进必须与首行内容对齐**——YAML 折叠标量里
+        # "更深缩进的行"会保留换行而不折叠，对不齐就会把换行留在表达式里。
+        os: >-
+          ${{ github.event_name == 'pull_request'
+          && fromJSON('["windows-latest"]')
+          || fromJSON('["windows-latest","macos-latest","ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps: [...]
 ```
 
-出处：mousse-cli PR #72（`.github/workflows/ci.yml`）。yaml 顶部留一段注释钉死账单依据（数字 + 结论），防止后人"顺手"改回全矩阵——同样的注释纪律建议随处方一起搬过去。
+要点：`matrix.os` 的值本身就是一个表达式，求值结果是**数组**——故用 `fromJSON` 把 JSON
+字符串转成数组，不能直接写 YAML 列表（表达式位置不吃列表字面量）。
+
+### 🔴 铁律：matrix 上下文严禁出现在 `jobs.<job_id>.if`
+
+**`jobs.<job_id>.if` 的合法上下文只有 `github` / `needs` / `vars` / `inputs`，不含
+`matrix` / `strategy`**——GitHub 先求值 job 级 `if`，之后才展开 matrix，那一刻 `matrix`
+根本还不存在。写了即 **invalid workflow file**。
+而 `jobs.<job_id>.strategy` 的合法上下文**含 `github`**，所以同一个条件挪进 `strategy`
+就是合法的（两条同源，出自官方 **Context availability** 表：
+<https://docs.github.com/en/actions/reference/workflows-and-actions/contexts>，
+2026-08-01 实查复核）。
+
+**为什么这条要单独立成铁律**：这个错误的失败形态**极难归因**——invalid workflow 不触发
+任何 job 起跑，run 页面是 **0 jobs 直接失败、日志里什么都看不到**，很容易被当成"代码问题"
+去排查。mousse-cli 曾因此**连续九天 CI 全挂零**（2026-07-13～07-22），而这段错误处方
+**本身就写在本文件里**（旧版「推荐实现形态」给的正是 job 级 `if` 引 `matrix.os`），
+到 2026-08-01 才被审计捞出——**照抄一份处方之前，先确认它跑起来过。**
+
+出处：mousse-cli `.github/workflows/ci.yml`（PR #72 立形态，此后按上述教训订正为 matrix 表达式）。
+yaml 顶部留一段注释钉死账单依据（数字 + 结论）**与这条失败教训**，防止后人"顺手"改回全矩阵
+或改回 job 级 `if`——同样的注释纪律建议随处方一起搬过去。
 
 ## 私有仓库额外提醒：额度烧穿时的代偿
 
