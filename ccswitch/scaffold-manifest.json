@@ -115,8 +115,31 @@
       "class": "product-type",
       "require": { "file": ".github/pull_request_template.md" },
       "msg": "产品型项目缺少 .github/pull_request_template.md（人读的 PR 模板：STAR 结构 + 说人话 + 技术证据折叠段）→ 从 canonical `ccswitch/templates/pull_request_template.md` 派生（下沉时加本项目特有自检项）",
-      "why": "product-type 第二条（用户点名 2026-08-01）：GitHub issue/PR 是人读的载体，之前 AI 交付评论全是密文（mutation/canary/退出码领先）。PR 模板把「人话 STAR 在上、精度证据折叠在下」的分层结构做成默认——人扫顶部就懂、AI 展开读全部零丢失。判据是文件存在性（文件名契约），内容允许项目化。**这只是文件型 artifact 的一半**：标签体系/看板/置顶总览单是 GitHub API 对象、非文件，本清单（文件系统核对）结构上覆盖不到——那半需要一个 dao-issue-center 引导脚本，见 dao.md「工作项三态归位」条款，尚未落地。",
+      "why": "product-type 第二条（用户点名 2026-08-01）：GitHub issue/PR 是人读的载体，之前 AI 交付评论全是密文（mutation/canary/退出码领先）。PR 模板把「人话 STAR 在上、精度证据折叠在下」的分层结构做成默认——人扫顶部就懂、AI 展开读全部零丢失。判据是文件存在性（文件名契约），内容允许项目化。**这只是文件型 artifact 的一半**：标签体系/看板/置顶总览单是 GitHub API 对象、非文件，本清单（文件系统核对）结构上覆盖不到——那半由 `ccswitch/scripts/dao-issue-bootstrap.ps1` 引导（2026-08-01 落地），本清单能核对的只有它派生出的项目侧 playbook 文件，见下方 dispatch-hub-playbook 条目。",
       "severity": "warn"
+    },
+
+    {
+      "id": "dispatch-hub-playbook",
+      "class": "conditional",
+      "when": {
+        "allOf": [
+          { "dir": ".github", "label": "GitHub-backed" },
+          {
+            "anyOf": [
+              { "fileContains": { "path": "CLAUDE.md", "text": "issue 派单中枢" } },
+              { "fileContains": { "path": "CLAUDE.md", "text": "issue 做中心" } }
+            ]
+          }
+        ]
+      },
+      "require": { "file": "docs/ops/DISPATCH-HUB.md" },
+      "msg": "{label} 项目已声明用 issue 做派单中枢，却缺 docs/ops/DISPATCH-HUB.md（标签体系/三节点留痕/蓄水池纪律/三态归位的项目侧落地）→ 从 canonical `ccswitch/templates/dispatch-hub.template.md` 派生并填占位符；标签与看板本体跑 `ccswitch/scripts/dao-issue-bootstrap.ps1 -Repo <owner>/<repo> -DryRun` 建",
+      "why": "dao.md「工作项三态归位」把 issue=分配中心 / 看板=观测中心 / 文件=叙事层写成通用条款，但落地形态（四维标签、六列看板、三张置顶单、五向 triage、sub_issues 用 database id 那个坑）此前只存在于某一个项目的 md 里，dao.md 的指针直接指向**另一个仓的项目文件** ⇒ 第二个项目一个都拿不到。2026-08-01 canonical 化后（templates/labels.json + project-board.json + dispatch-hub.template.md + 两个 issue body 模板 + scripts/dao-issue-bootstrap.ps1），本条负责核对项目侧真的派生了那份 playbook。**为什么是 conditional 不是 product-type**：dao.md 自己把本模式限定为「GitHub-backed + 持续多窗/多 agent 派单」，与 product-type 的「产品型项目」自我声明**不是同一个集合**——按 product-type 登记会对非 GitHub-backed 的产品型仓误报。**when 是近似，失败方向选的是漏报**：`.github` 目录只是 GitHub-backed 的弱指纹（GitHub 仓可以没有它），CLAUDE.md 子串则是照 dao.md 自己写的触发信号（「项目 CLAUDE.md 有 issue 派单中枢型章节」）做成的 opt-in 自我声明——两个方向都构造得出反例：用了本模式但 CLAUDE.md 没写这几个字的仓不会被查（漏报），而只是在 CLAUDE.md 里提了一句这个词的仓会被查（误报，但那是它自己写的）。选漏报侧的理由同 product-type：对不适用的仓报缺项是纯噪音，噪音会训练人忽略整个 hook 的输出。**不收「本地/一次性项目」的反面判据**——那需要语义理解，是本清单明令不收的一类。",
+      "severity": "warn",
+      "exempt": [
+        { "repo": "windsurf-dao", "why": "元仓库是 canonical 的家而不是它的消费方：本条要求的项目侧 playbook 在这里的对应物就是 ccswitch/templates/dispatch-hub.template.md 本身，再建一份 docs/ops/DISPATCH-HUB.md 就是双份真相源——正是本条要治的病。当前 when 也不会命中它（windsurf-dao 的 CLAUDE.md 不含那两个子串），写下这个例外是为了让「将来有人往元仓库 CLAUDE.md 里写了这个词」时不必重新推理一遍。" }
+      ]
     },
 
     {
