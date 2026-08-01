@@ -25,9 +25,9 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "b11405b0285e1d097179dcd827362f2493b3f97e8071a4846a327a2be8baba68",
+        "sha256": "501c0157e11ba321dc7875c2536e0b82dbc9bded98c0f4912c2b4fa689bbba73",
         "lines": 314,
-        "clauses": 16,
+        "clauses": 17,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 2,
@@ -106,10 +106,10 @@
       }
     ],
     "roles": {
-      "general": 25
+      "general": 26
     },
     "totals": {
-      "clauses": 25,
+      "clauses": 26,
       "observation": 0
     }
   },
@@ -273,6 +273,26 @@
       "observing": false,
       "shape": "top",
       "body_excerpt": "- **PowerShell 脚本坑（四条）· 存根**：**新建或改动任何 `*.ps1` 之前 = Read `ccswitch/rules/dao-powershell.md` 全文**——`$LASTEXITCODE` 判成败禁看 \"error\" 字样 / PS 管道禁改含中文或无 BOM 的文件 / 禁 P…"
+    },
+    {
+      "id": "20f6d2ff03dc",
+      "file": "ccswitch/dao.md",
+      "line": 278,
+      "line_end": 278,
+      "meta_line": 278,
+      "role": "general",
+      "zone": "clause",
+      "section": "Shell · dao 独有项（Claude Code 沙箱未覆盖的）",
+      "title": "改配置先认源与投影",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "改配置",
+      "baseline": "2/2——07-26 直改投影被源覆盖、08-01 改镜像层永不下发，两次病根同为认错源",
+      "self_declared": null,
+      "judge_only": false,
+      "observing": false,
+      "shape": "top",
+      "body_excerpt": "- **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警。⚠ **源可能不止一层，且看起来像源的那层可以全程不在下发路径上**（2026-08-01 windsurf-dao #49 深夜实测订正，推翻本条旧括注）：`~/.claude/setting…"
     },
     {
       "id": "3139b4eeb129",
