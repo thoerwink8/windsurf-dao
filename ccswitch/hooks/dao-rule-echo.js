@@ -40,6 +40,8 @@
 // 由 settings.json 的 PostToolUse hook 调用（注册 JSON 片段见本文件末尾「注册片段」注释块）。
 // 自证：node tests/dao-rule-echo.tests.js（46 断言，两态 + 错误可见性）。
 
+const fs = require("node:fs");
+const os = require("node:os");
 const { createHookScaffold } = require("../lib/hook-selfcheck.js");
 
 // ── 常量：回灌预算 ──────────────────────────────────────────────────────────
@@ -85,6 +87,54 @@ function classifyRuleFile(norm) {
     if (re.test(norm)) return label;
   }
   return null;
+}
+
+// ── 作用域档识别（P2，2026-08-01）────────────────────────────────────────────
+// 病：上面 RULE_PATTERNS 把 `.claude/rules/*.md` 一律标成「常驻注入」，而自 P2 起
+// 这个目录里住着两类**性质相反**的文件：
+//   · 无 `paths:` ⇒ 常驻（会话启动快照）——原描述对它成立
+//   · 有 `paths:` ⇒ **作用域注入**，只在有人 Read 到匹配文件时才由宿主送达
+// 对后者说「常驻注入」是**假话**，而这段文案的用途正是告诉读者「这条现在生效了没有」——
+// 说反了比不说更糟：会让人以为一条只在特定路径下到达的规则已经全局生效。
+//
+// 为什么读盘而不是看本次写入载荷：Edit 只带改动段，frontmatter 多半不在里面
+// ⇒ 看载荷会把有 paths 的文件系统性误报成常驻。PostToolUse 阶段文件已落盘，读盘拿终态。
+// 读盘失败一律按「无 paths」处理（降级到原文案，不因识别失败而丢掉回灌本身）。
+function readScopeGlobs(absPath) {
+  let text;
+  try { text = fs.readFileSync(absPath, "utf8"); } catch { return []; }
+  const m = text.match(/^﻿?---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return [];
+  const fm = m[1];
+  const globs = [];
+  let inPaths = false;
+  for (const line of fm.split(/\r?\n/)) {
+    if (/^\s*paths\s*:/.test(line)) {
+      const inline = line.replace(/^\s*paths\s*:/, "").trim();
+      if (inline.startsWith("[")) {
+        for (const g of inline.replace(/^\[|\]$/g, "").split(",")) {
+          const v = g.trim().replace(/^["']|["']$/g, "");
+          if (v) globs.push(v);
+        }
+        inPaths = false;
+      } else {
+        inPaths = true;
+      }
+      continue;
+    }
+    if (!inPaths) continue;
+    if (/^\s*-\s+/.test(line)) globs.push(line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, ""));
+    else if (/^\S/.test(line)) inPaths = false; // 下一个顶层键，paths 段结束
+  }
+  return globs;
+}
+
+// 用户级 `~/.claude/rules/`：本机 2026-08-01 canary 实测——**无 `paths:` 的文件
+// 三个 subagent 观察员 3/3 均未收到**（主会话侧未验）。故这一格不能沿用「常驻注入」。
+function isUserLevelRules(norm) {
+  const home = String(os.homedir() || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!home) return false;
+  return norm.toLowerCase().startsWith(`${home.toLowerCase()}/.claude/rules/`);
 }
 
 // ── 载荷提取：只取本次写入的内容，按工具形态分流 ────────────────────────────
@@ -186,19 +236,49 @@ try {
   if (tr && typeof tr === "object" && tr.success === false) process.exit(0);
 
   const norm = filePath.replace(/\\/g, "/");
-  const label = classifyRuleFile(norm);
-  if (!label) process.exit(0); // 非规则文件：静默，一个字都不输出
+  const baseLabel = classifyRuleFile(norm);
+  if (!baseLabel) process.exit(0); // 非规则文件：静默，一个字都不输出
 
   H.maybeForceError("payload");
   const payload = buildPayload(toolName, ti);
   if (!payload) process.exit(0);
 
+  // 作用域档识别：有 `paths:` ⇒ 不是常驻注入，文案必须改口（见 readScopeGlobs 头注）
+  const scopeGlobs = readScopeGlobs(filePath);
+  const scoped = scopeGlobs.length > 0;
+  const userLevel = isUserLevelRules(norm);
+
+  let label = baseLabel;
+  let why;
+  if (scoped) {
+    label = `${baseLabel.replace(/（[^（）]*注入[^（）]*）/, "")}（**作用域注入**，非常驻 · paths: ${scopeGlobs.join(", ")}）`;
+    why =
+      `为什么会看到这段：这是一份**作用域规则**——它**不常驻注入**，只在有人 Read 到匹配 ` +
+      `\`paths:\` 的文件时才由宿主送达（本次匹配面：${scopeGlobs.join(", ")}）。你刚写了它，` +
+      `而它对本会话此前的上下文不可见，故此处把本次写入原样回灌。` +
+      `⚠️ 别把它读成「已对所有会话生效」：不匹配的路径下它一次都不会到达；` +
+      `若它的源在 \`ccswitch/rules/scoped/\`，还需 \`node ccswitch/scripts/dao-rules-deploy.mjs\` ` +
+      `部署到 \`~/.claude/rules/\` 才会被宿主扫描到。\n`;
+  } else if (userLevel) {
+    label = `${baseLabel.replace(/（[^（）]*注入[^（）]*）/, "")}（用户级 ~/.claude/rules，**无 paths**）`;
+    why =
+      `⚠️ 为什么会看到这段，以及一个必须说清的边界：这份文件在**用户级** \`~/.claude/rules/\` 下且` +
+      `**没有 \`paths:\` frontmatter**——本机 2026-08-01 canary 实测，这一格的文件` +
+      `**三个 subagent 观察员 3/3 均未收到**（主会话侧未验）。` +
+      `⇒ **别把它当 always-on 用**：要它可靠生效，要么补 \`paths:\` 走作用域档，` +
+      `要么把正文放进项目 \`.claude/rules/\` 或 dao.md。此处仍原样回灌本次写入，` +
+      `但那只保证**你自己这一轮**看得到，不代表别的会话看得到。\n`;
+  } else {
+    why =
+      `为什么会看到这段：always-on 规则是会话启动时快照注入的，会话中途写入的条款不会自动出现在你的上下文里` +
+      `（2026-07-26 双重第一人称实证：同日新增 16 条中有 16 条在注入副本里缺失）。故此处把本次写入原样回灌，` +
+      `本轮及本会话后续须按下方条款执行；若与你上下文里的旧副本冲突，以下方为新。\n`;
+  }
+
   const head =
     `【规则回灌 · rule-echo】刚以 ${toolName} 写入规则文件：${norm}\n` +
     `文件性质：${label}。\n` +
-    `为什么会看到这段：always-on 规则是会话启动时快照注入的，会话中途写入的条款不会自动出现在你的上下文里` +
-    `（2026-07-26 双重第一人称实证：同日新增 16 条中有 16 条在注入副本里缺失）。故此处把本次写入原样回灌，` +
-    `本轮及本会话后续须按下方条款执行；若与你上下文里的旧副本冲突，以下方为新。\n` +
+    why +
     `回灌范围：${payload.meta}`;
 
   const context = payload.body
