@@ -4,7 +4,7 @@ export const meta = {
   whenToUse:
     '需要 args: {repoPath}(必填,不设默认——跨项目资产不该内置某一个仓的路径)。' +
     '可选 args: {sources:[...], sessionLogDir, taskOutputDir, workboardFile, intentLogFile, ' +
-    'clauseFile, daoFile, since, extraSignals:[...], goal, model, verifyModel}。' +
+    'clauseFile, daoFile, daoRulesDir, since, extraSignals:[...], goal, model, verifyModel}。' +
     '何时跑:①窗口收官段(设计定的强制触发点)②`verify-all` 的收割计数观察线提示「距上次收割 ≥N 个 PR」时' +
     '③刚结束一批多 agent 并行、交付报告里明显有「我超出要求做了 X」「我拒绝了派单令要求的 Y」这类痕迹时。' +
     '解的问题:坏经验有天然触发器(出事了/返工了/被骂了——有痛感),好经验没有,做对的事做完就过去了。' +
@@ -74,6 +74,13 @@ const WORKBOARD_SRC = WORKBOARD
 const INTENT_LOG = (ARGS && ARGS.intentLogFile) || 'docs/user-intent-log.md'
 const CLAUSE_FILE = (ARGS && ARGS.clauseFile) || 'docs/rules/dispatch-clauses.md'
 const DAO_FILE = (ARGS && ARGS.daoFile) || 'D:/frank/windsurf-dao/ccswitch/dao.md'
+// ⚠️ dao 常驻场域的**判重扫描面不止 dao.md 一个文件**(2026-08-01 起):长窗自主排程 ①-⑥.5 已迁到
+// `ccswitch/rules/dao-longwindow.md`,dao.md 那一段只剩一行存根。只 Grep dao.md 会让那整段判据落在
+// 扫描面之外 ⇒ 收割官把「其实早就有了」的东西重新发明一遍,而 `is_new=true` 看起来完全正常
+// ——这正是 dao.md 反·归讲的「扫描面静默塌陷:检测器数到 0 个违例,和检测器根本没看到样本,输出一模一样」。
+// 故判重提示里同时给出 dao.md 与 rules/ 目录;后者用目录而非枚举文件,是为了以后再迁出别的节时不用回来改这里。
+const DAO_RULES_DIR = (ARGS && ARGS.daoRulesDir) || 'D:/frank/windsurf-dao/ccswitch/rules/'
+const DAO_SCAN = `\`${DAO_FILE}\`(dao 常驻场域正文) 与 \`${DAO_RULES_DIR}\` 下全部 .md(由 dao.md 存根指出去的细则正文,如长窗排程)`
 
 const sinceLine = (ARGS && ARGS.since)
   ? `本次收割范围:${ARGS.since} 之后的产出。`
@@ -121,7 +128,7 @@ B. \`layer\` —— **该放哪层**:\`dao.md\`(跨项目且属帅位/道层心�
 【去重(本 workflow 最容易产出噪音的地方,硬要求)】
 每条候选在提交前必须做一次判重,并把过程写进 \`dedup_checked\`:
   - Grep \`${REPO}/${CLAUSE_FILE}\`(条款库全文)找同类判据
-  - Grep \`${DAO_FILE}\`(dao 常驻场域)找同类判据
+  - Grep ${DAO_SCAN} 找同类判据 —— **两处都要扫**:dao.md 里是存根的那些节,正文在 rules/ 下,只扫 dao.md 会漏掉整段
   - 命中同类 ⇒ 两种处置:①**完全重复** → layer 填 \`not-worth\`,\`dedup_checked\` 写明命中哪一条;②**已有条款但本次实证是新的一例** → 不新立条款,改为提案「给已有条款的 \`n=\` +1 并补一句出处」,在 clause_text 里写成对既有条款的**修订**而非新增,并注明被修订条款的原文首句。
   - \`dedup_checked\` 为空或只写"查过了"的候选,核验阶段一律判不通过。
 
@@ -300,7 +307,7 @@ const results = await pipeline(
     const vPrompt = (chunk, idx) => COMMON + `
 【任务】对抗核验以下收割候选。**本次核验的头号靶子是「其实早就有了」**——本 workflow 最容易产出的噪音就是把条款库/dao.md 里已有的东西重新发明一遍。
 逐条做三件事,缺一不算核验:
-1. **独立判重**(不复用提交方的 dedup_checked,自己动手 Grep):在 \`${REPO}/${CLAUSE_FILE}\` 与 \`${DAO_FILE}\` 里用**至少两个不同的关键词**搜同类判据(同义词也要试——「基点对齐」和「merge-base」是同一件事)。命中同类 ⇒ \`is_new=false\`,\`pass=false\`,reason 里给出命中条款的原文首句与所在节。
+1. **独立判重**(不复用提交方的 dedup_checked,自己动手 Grep):在 \`${REPO}/${CLAUSE_FILE}\` 与 ${DAO_SCAN} 里用**至少两个不同的关键词**搜同类判据(同义词也要试——「基点对齐」和「merge-base」是同一件事)。命中同类 ⇒ \`is_new=false\`,\`pass=false\`,reason 里给出命中条款的原文首句与所在节。
 2. **复核三判据**:①亲手打开 \`evidence\` 给的锚点确认它真实存在且支持该结论(文件+行要真能读到该内容;PR/commit 要真能 \`gh pr view\`/\`git show\` 到)——**锚点不存在或内容不支持 ⇒ pass=false**;②\`cross_project\` 有没有高报(去掉项目专有名词后还剩判据吗);③\`is_form\` 有没有高报——**这是最常被高报的一条**:问「不需要任何人想起来,它也会被执行吗?」答不出具体载体(模板/机检/PR 流程/权限/schema)就该是 false + trigger=无。
 3. **复核归属层**:\`layer\` 是否与「换个项目还能用吗」一致。把只在本项目技术栈下成立的判成 dao 级是常见错误,反向(把通用判据塞进项目 rules)同样是错误。
 另外:\`clause_text\` 必须**真的可直接粘贴**——检查元字段 \`[n= @ 触发:]\` 齐全、格式与条款库现有行一致、\`is_form=false\` 的同行带 \`[仅判据·无触发]\`。格式不合即 pass=false(这条很便宜但很重要:格式不对的候选落地时要人返工,等于没省用户的事)。
