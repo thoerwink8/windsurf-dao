@@ -399,6 +399,77 @@ function done() { process.exit(0); }
 // 返回漂移行数组（**不 inject 不 exit**）。原版直接 inject + exit(0)，那是元仓库
 // 整体豁免的另一半：一旦有漂移就抢先注入并退出，后面的清单求值永远到不了。
 // 改成返回值后，调用方把它与清单缺项拼在同一次注入里。
+// ── per-provider hooks 漂移的挂载点（2026-08-02 · issue #50）──────────────────
+// 治的是什么病：上面第 6 项（settings-drift）比的是 live ↔ git 快照，而 #49 的实测
+// 把数据流图补上了一层——**cc-switch 真正下发的是 `providers` 表里当前 provider 那一行的
+// `settings_config`，而且是整体覆盖**。于是每个 provider 各带一份自己的 hooks 段，
+// 切一次 provider 就可能把一个钩子静默抹掉（#49 里 PostCompact 就是这么没的）。
+// 2026-08-02 那次是**手动**把两个 provider 对齐的：新 provider 加入、或某个 provider
+// 被单独改一次，漂移必然复发，而**当时没有任何机制会发现它**。
+//
+// 为什么挂在这里（理由与上面三道逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
+// 三处注册，而那正是本文件头注写的那笔债。只在**模式 A** 跑：它读的是 cc-switch DB
+// 与本仓 config-sync 快照，与当前项目是谁无关，在每个项目里各跑一遍只是重复付钱。
+//
+// 为什么走 spawn 而不是像第 6 项那样进程内 require：读 DB 要 `config-sync/lib/sqlite.mjs`
+// （ESM + spawn sqlite3），把它拉进这条同步 CJS 路径要让整个 hook async 化。
+// 与 deadGateLines 同一手法、同一理由。
+//
+// 成本：本机实测整跑 ~300ms（一次 node spawn + 一次 sqlite3 spawn）。是这几道里最贵的一道，
+// 故超时给足并单列——超时**不静默**，报成「没查成」。
+//
+// 输出策略三态，任一态都不静默（与上面几道同构）：
+//   ① exit 1（有漂移 / 自检半边失败）⇒ 报摘要 + 前几条明细
+//   ② exit 2（没查成：DB 读不到 / 零可比对 provider / canonical 缺）⇒ 报一行 ⚠
+//      —— **它与「查了没事」必须分得开**，这正是这道闸自己在治的病
+//   ③ exit 0 ⇒ 一行普查数（刻意不做成零输出：扫描面缩小必须看得见）
+// 只解析末行的纯 ASCII 契约，不去正则匹配中文正文。
+const PROVIDER_HOOKS_TIMEOUT_MS = 30000;
+
+function providerHookLines(daoRoot) {
+  const script = path.join(daoRoot, "ccswitch", "lib", "settings-drift.js");
+  try {
+    if (!fs.existsSync(script)) {
+      return ["✗ per-provider hooks 检查脚本不在：" + script];
+    }
+  } catch (e) {
+    return ["✗ per-provider hooks 检查探测失败：" + (e && e.message ? e.message : String(e))];
+  }
+  let out = "", code = 0;
+  try {
+    out = execFileSync(process.execPath, [script, "--providers"], {
+      encoding: "utf8", timeout: PROVIDER_HOOKS_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+    });
+  } catch (e) {
+    out = (e && typeof e.stdout === "string") ? e.stdout : "";
+    code = (e && typeof e.status === "number") ? e.status : -1;
+    if (!out) {
+      return ["⚠ per-provider hooks 检查跑不起来：" + (e && e.message ? e.message : String(e)) +
+              "（**不等于无漂移**。手动复核：node ccswitch/lib/settings-drift.js --providers）"];
+    }
+  }
+  const m = /PROVIDER_HOOKS_SUMMARY exit=(\d+) providers=(\d+) scoped=(\d+) drift=(\d+) cross=(\d+) selfcheck=(ok|fail) uncheckable=(\d+)/.exec(out);
+  if (!m) {
+    return ["✗ per-provider hooks 检查跑完但没拿到 PROVIDER_HOOKS_SUMMARY 末行（真退出码 " + code +
+            "）→ 契约可能被改坏了：node ccswitch/lib/settings-drift.js --providers"];
+  }
+  const [, sExit, , sScoped, sDrift, sCross, sSelf] = m;
+  if (sExit === "2") {
+    return ["⚠ per-provider hooks 检查**没查成**（uncheckable）：cc-switch DB 读不到 / 没有可比对的 provider / canonical 缺" +
+            " —— 这不是「无漂移」。看原因：node ccswitch/lib/settings-drift.js --providers"];
+  }
+  if (sExit !== "0" || code !== 0) {
+    const why = sSelf === "fail"
+      ? "检测器自检半边失败 ⇒ 此时「零漂移」不可信，先修检测器"
+      : "各 provider 的 hooks 段已经不一致了（与应注册清单差 " + sDrift + " 条、provider 互相之间差 " + sCross +
+        " 个 hook）—— 切到缺的那一侧，那些 hook 当场静默消失";
+    const detail = String(out).split(/\r?\n/).filter((l) => /^\s+· /.test(l)).slice(0, 4).map((l) => "  " + l.trim()).join("\n");
+    return ["✗ per-provider hooks 漂移：" + why + (detail ? "\n" + detail : "") +
+            "\n  → 全量：node ccswitch/lib/settings-drift.js --providers（**只读，对齐动作归人**）"];
+  }
+  return ["ⓘ per-provider hooks 检查绿：" + sScoped + " 个 claude 型 provider 的 dao hook 段互相一致、且与应注册清单一致"];
+}
+
 function daoSyncLines() {
   const daoRoot = cwd;
   const drifts = [];
@@ -477,6 +548,11 @@ function daoSyncLines() {
   //    前两项守「写得对不对」与「闸活没活」，这一项守**总量**——它是三者里唯一
   //    每次都打印一个数字的，因为减法没有天然触发器。
   for (const line of budgetLines(daoRoot)) drifts.push(line);
+
+  // 10. per-provider hooks 漂移（2026-08-02 挂载 · issue #50，判据见 providerHookLines 头注）。
+  //     第 6 项比的是 live ↔ git 快照，而 #49 实测证明**真正的下发源是
+  //     `providers.settings_config`**，那一层此前无人看着。
+  for (const line of providerHookLines(daoRoot)) drifts.push(line);
 
   return drifts;
 }
