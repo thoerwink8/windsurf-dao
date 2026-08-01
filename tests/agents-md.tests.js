@@ -276,9 +276,20 @@ console.log("\n──── ⑧ 两个文件之间的契约：清单条目 ↔ �
   check("when 是「已经有 AGENTS.md」这个纯存在性指纹（不判「该不该有」那种语义题）",
     entry && entry.when && entry.when.file === "AGENTS.md", JSON.stringify(entry && entry.when));
 
-  const needle = entry && entry.require && entry.require.fileContains && entry.require.fileContains.text;
-  check("require 用 fileContains 查生成标记", typeof needle === "string" && needle.length > 0,
-    JSON.stringify(entry && entry.require));
+  // require 刻意写成双重否定「不得存在（AGENTS.md 在场 且 不是生成物）」，
+  // 为的是让 dao-scaffold-report 的三档分级把它归到**只建议·永不代做**
+  // （分级器按 require 顶层谓词判，`not` 才归那一档）。补齐动作是「并进 CLAUDE.md 再删掉」，
+  // 动用户既有内容且不可逆 —— 若被判成「代做」，`--init` 可能直接覆写一份人手写的规则文件。
+  const req = entry && entry.require;
+  const topKind = req ? Object.keys(req).filter((k) => k !== "label")[0] : null;
+  check("require 顶层是 not（这决定了它被归为「只建议·永不代做」）", topKind === "not",
+    JSON.stringify(req));
+  const inner = req && req.not && Array.isArray(req.not.allOf) ? req.not.allOf : [];
+  const fc = inner.map((x) => x && x.not && x.not.fileContains).filter(Boolean)[0];
+  const needle = fc && fc.text;
+  check("双重否定里查的是生成标记子串", typeof needle === "string" && needle.length > 0,
+    JSON.stringify(req));
+  check("内层查的是 AGENTS.md 在场", inner.some((x) => x && x.file === "AGENTS.md"), JSON.stringify(inner));
 
   // 真靶：拿一份**真的生成出来的** AGENTS.md 去过清单那条判据
   const d = mkProject("manifest-contract", CLAUDE_SAMPLE);
@@ -295,6 +306,32 @@ console.log("\n──── ⑧ 两个文件之间的契约：清单条目 ↔ �
   const M = require(path.join(REPO, "ccswitch", "lib", "scaffold-manifest.js"));
   const errs = M.validate(manifest || {});
   check("加了新条目后整份清单仍通过 validate（0 条错）", errs.length === 0, JSON.stringify(errs).slice(0, 500));
+
+  // ── 真求值器上的四态（单测里断言 needle 命不命中，证不了真跑起来是什么行为）──
+  const REPORT = path.join(REPO, "ccswitch", "scripts", "dao-scaffold-report.mjs");
+  const runReport = (dir) => {
+    const r = spawnSync(process.execPath, [REPORT, dir], { encoding: "utf8", timeout: 60000 });
+    const o = String(r.stdout || "");
+    return { hit: /agents-md-generated/.test(o), line: (o.match(/.*agents-md-generated.*/) || [""])[0] };
+  };
+  const e2e = mkProject("manifest-e2e", "# 假项目\n\n产品型项目。\n");
+  check("e2e①：没有 AGENTS.md ⇒ when 不命中，不报缺项", !runReport(e2e).hit);
+
+  w(path.join(e2e, "AGENTS.md"), "# AGENTS.md\n\n人手写的第二份真相源。\n");
+  const hand = runReport(e2e);
+  check("e2e②：手写的 AGENTS.md ⇒ 报缺项", hand.hit, hand.line);
+  // 🔴 这一条钉的是**安全属性**，不是分类洁癖：补齐动作是「并进 CLAUDE.md 再删掉 AGENTS.md」，
+  // 归错档 ⇒ /dao-project-scaffold --init 可能直接覆写一份人手写的规则文件。
+  check("e2e③：归档为「只建议」而非「代做」（补齐动作不可逆，永不代做）",
+    /\[只建议\]/.test(hand.line), hand.line);
+
+  run(e2e);   // 对手写件跑生成器
+  check("e2e④：生成器对手写件拒绝覆盖后，文件仍原封不动",
+    readOr(path.join(e2e, "AGENTS.md"), "") === "# AGENTS.md\n\n人手写的第二份真相源。\n");
+
+  fs.rmSync(path.join(e2e, "AGENTS.md"));
+  run(e2e);
+  check("e2e⑤：改成生成物后缺项消失（闸能被真的清掉，不是永远红）", !runReport(e2e).hit);
 }
 
 // ══════════════════════════════════════════════════════════════
