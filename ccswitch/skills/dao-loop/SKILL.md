@@ -35,7 +35,9 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 
 ## 总览
 
-用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（Read planning.md：spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Read execution.md：Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（Read closing.md：多维打分→严重度分流）→ 🔒 用户交付审查（用户决定归档/追加/暂留）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
+用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→参数解析→孤儿检测→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（Read planning.md：spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Read execution.md：Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（Read closing.md：多维打分→严重度分流）→ 🔒 用户交付审查（用户决定归档/追加/暂留）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
+
+**Loop 是上层编排器，各阶段调用的方法论真相源**（**下列 `dao-worktree`/`dao-plan`/`dao-review`/`dao-brainstorm` 是 AI 内部读取件，不是 `/` 命令**——2026-07-27 用户拍板降级，只按路径 Read）：谋线 spec → `skills/dao-brainstorm/SKILL.md` · 谋线 plan → `skills/dao-plan/SKILL.md` · 造线轻量 → `/dao-dev` · 造线重量 → `/dao-superpowers`（内部走 `skills/dao-worktree|dao-plan|dao-review`）· 造线 review → `skills/dao-review/SKILL.md` 与 `dao-reviewer` agent · 最终验收 → `/dao-verify`。
 
 ## §0 预飞检查
 
@@ -176,21 +178,6 @@ AI 判断 + 用户确认。用户显式指定时以用户为准。
 4. ScheduleWakeup
 目标：<需求>
 ```
-
-## §10 与现有命令的关系
-
-Loop 是**上层编排器**，包裹现有命令不替代：
-
-| Loop 阶段 | 调用的 dao 命令 |
-|-----------|----------------|
-| 谋线 spec | dao-brainstorm |
-| 谋线 plan | dao-plan |
-| 造线（轻量） | dao-dev |
-| 造线（重量） | dao-superpowers |
-| 造线 review | dao-review / dao-reviewer |
-| 最终验收 | dao-verify |
-
-现有命令**完全不改**。用户可以跳过 Loop 直接用单个命令。
 
 ## §11 三层架构
 
