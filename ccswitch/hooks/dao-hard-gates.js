@@ -1,0 +1,393 @@
+// dao-hard-gates.js — 门控出文本层（PreToolUse · exit 2 阻断）
+//
+// ── 为什么存在这个文件 ───────────────────────────────────────────────────────
+// arxiv 2607.26819（RepoComplianceBench，49 仓 / 106 issue / 4 前沿模型）实测：
+//   · Refuse（禁止 X）类规则       无干预 0%，引原文仍 0%（最好 10%）
+//   · Handoff（关键步骤交人）类     无干预 0%，引原文 0%，一轮反馈 0%
+//   · agent 仅 3.5% 的运行打开过策略文件；97.6% 的违规发生在策略文件从未被打开时
+// 原文结论："Bans and human gates need enforcement **outside** the agent."
+// Anthropic 官方同句："A real guardrail needs to be deterministic, and the
+// enforcement methods are hooks and permissions."
+// ⇒ dao.md 里的「🚫 禁令 / 一票否决 / 永不 / 必须先问用户」写成文字 = 等于不存在。
+//    本文件把其中**机器判得了、且没有合法例外**的那几条搬到 agent 之外。
+//
+// ── 这里只放「甲类」：可机械判定 + 无合法例外 ────────────────────────────────
+// 有合法例外的（如 push 主干——文档微改允许直推）走 ccswitch/hooks/dao-tool-nudge.js
+// 的软提醒分支；机器根本判不了的（审美拍板 / 打磨到位 / 不许留空未尽处）**留在文本里**，
+// 判定表与逐条理由见本批 PR body 与 docs/specs/dao-arch-optimization-202608.md P1 行。
+//
+// ── 五道闸（逐条的判据出处写在各自的 GATES 条目里）──────────────────────────
+//   G1 windows-mcp 全面禁令          dao.md「目·观」§windows-mcp 禁令（一票否决）
+//   G2 live ~/.claude/settings.json  dao.md Shell 节「确认门禁」+「改配置先认源与投影」
+//   G3 对外发布类命令                dao.md 帅节 ⑤自主边界「对外发布 / 需用户在场」
+//   G4 浏览器 MCP 截图落盘路径        dao.md Shell 节「截图路径强制」
+//   G5 只读载体未勾待办               dao.md「言·名之则」§只读载体禁写待办
+//
+// ── 三条设计取舍，别读成疏漏 ────────────────────────────────────────────────
+// ① **逃生阀一律是环境变量，不是 agent 能创建的哨兵文件**。理由就是上面那份实证：
+//    凡 agent 自己够得着的旁路，禁令即退化回 0%。env 只有用户能在启动会话前设，
+//    agent 在 Bash 里 export 影响不到 hook 进程（hook 的 env 继承自 Claude Code 本体）。
+//    G1/G4 连 env 都不给——G1 是用户一票否决且工具已卸载，G4 的正路只是换个路径。
+// ② **本 hook 自己崩掉时是放行的（fail-open），不是拦截**。一道会因自身 bug 把
+//    Edit/Write 全部拦死的闸没有任何逃生通道 = 会话直接砖掉。代价是「放行」与
+//    「通过」在退出码上长得一样 —— 故 catch 里必打一行显眼 stderr，且 `--selfcheck`
+//    专门用来把「它到底有没有接上」摆出来（见下）。这是明知的两害相权，不是没想到。
+// ③ **判据是近似的，两侧都有反例**。命中判据基本是段首正则 + 路径归一，已知：
+//    漏报——`for x in ...; do npm publish; done` 段首不是 npm；`$(...)` 里的命令。
+//    误报——`echo "npm publish"` 这类字面量（已上负控断言，见回归网）。
+//    刻意不去真解析 shell 语法：那会把一道守卫变成一个解析器，而解析器错了会
+//    「违例数与样本数一起归零」（dao-guard-writing.md ②）。
+//
+// ── 自检 ────────────────────────────────────────────────────────────────────
+//   node ccswitch/hooks/dao-hard-gates.js --selfcheck
+// 打印：①它在 live settings.json 的 PreToolUse 里注册了没有 ②注册用的 matcher 是什么
+// ③**逐闸核对该 matcher 覆不覆盖这道闸要拦的工具名**（matcher 写窄一格 = 那道闸静默
+// 零覆盖，而零覆盖与零违例在任何日志里都长得一模一样）。未注册或有闸失覆盖 → exit 1。
+//
+// 回归网：tests/hard-gates.tests.js（每闸正控+负控双向 + mutation 判别力 + canary 恒等）。
+// 真相源：windsurf-dao/ccswitch/hooks/dao-hard-gates.js
+// 注册：settings.json 的 PreToolUse（matcher 见 REQUIRED_MATCHER_COVERAGE）。
+//       快照层已同批登记在 config-sync/common/settings.json；写进 DB 需用户跑一次
+//       `dao.bat --direction=down`（见 PR body「注册需要的一次确认动作」）。
+
+"use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
+const LIVE_SETTINGS = path.join(HOME, ".claude", "settings.json");
+
+// 归一化：反斜杠转正斜杠 + 去掉末尾斜杠。**不做大小写折叠**——只在比较时按需 toLowerCase，
+// 因为要原样回显给被拦的人看（回显一个被改过大小写的路径会让人以为拦错了对象）。
+function norm(p) {
+  return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+// 把命令拆成"命令段"，让段首判据成立。切分符与 dao-tool-nudge.js 相同（; 换行 && || |），
+// **但这里是引号感知的，nudge 那边是裸 split** —— 这处分歧是被一次实测逼出来的，不是随手写的：
+// nudge 的裸 `split(/;|\n|&&|\|\|?/)` 碰上多行正文会把正文本身切开，于是
+//   git commit -m "[cc] feat: x
+//   - [ ] 随后补测试"
+// 被切成两段，第二段段首不是 `git commit` ⇒ G5 **对最常见的那种形态直接漏报**
+// （回归网首跑当场红，见 tests/hard-gates.tests.js G5 正控）。
+// nudge 那边不改：它只认段首命令、不看正文内容，裸 split 对它够用，
+// 而两个 hook 的判据本就该各自演进（同 hook-selfcheck 库「只抽形态不抽判据」）。
+//
+// 这不是一个 shell 解析器，也刻意不做成解析器：只跟踪单/双引号与反斜杠转义，
+// 认不出 `$(...)`、heredoc、嵌套引号里的引号。已知漏报面写在头注③。
+function shellSegments(cmd) {
+  const src = String(cmd || "");
+  const out = [];
+  let cur = "";
+  let quote = null; // null | '"' | "'"
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quote) {
+      // 单引号里反斜杠不转义（POSIX 语义）
+      if (c === "\\" && quote === '"' && i + 1 < src.length) { cur += c + src[++i]; continue; }
+      if (c === quote) quote = null;
+      cur += c;
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    if (c === "\\" && i + 1 < src.length) { cur += c + src[++i]; continue; }
+    if (c === "\n" || c === ";") { out.push(cur); cur = ""; continue; }
+    if ((c === "&" && src[i + 1] === "&") || (c === "|" && src[i + 1] === "|")) {
+      out.push(cur); cur = ""; i++; continue;
+    }
+    if (c === "|") { out.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out
+    .map((s) => s.trim())
+    // 去掉前导 `cd <path> ` 与 `VAR=x ` 形式的环境变量前缀，让段首露出来
+    .map((s) => s.replace(/^cd\s+\S+\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, ""))
+    .filter(Boolean);
+}
+
+// 未勾选的待办框：行首（或紧跟引号 / 字面 `\n` 转义）的 `- [ ]` / `* [ ]` / `+ [ ]`。
+// 已勾的 `- [x]` 是陈述过去，允许。
+//
+// **为什么要加这个前缀约束，而不是裸匹配** —— 这是把 dao-guard-writing.md ③「检查器的
+// 输出不能落在它自己的扫描面内」拿来照自己一遍时发现的：本闸的**判据本身**要被写进 PR body、
+// 写进 dao.md、写进 commit message 去解释它拦什么，而那些正文里必然出现反引号包着的
+// 那个记号。裸匹配 ⇒ **每一份讨论本条规则的 PR body 都会被本条规则拦下**，而拦下的理由
+// 恰恰是「它提到了自己」。这不是理论风险：本批 PR body 首稿当场命中。
+//
+// 于是判据收窄成「它出现在**待办项该出现的位置**」：真的 checklist 项永远在行首
+// （markdown 列表语法要求），而散文里的引用永远跟在反引号/汉字/括号后面。
+// 允许的前缀里加引号与字面 `\n`，是因为单行 `--body "- [ ] x"` 这种形态里正文的
+// 第一行紧跟在引号后，没有真换行 —— 漏掉它就漏掉了最常见的那种写法。
+// **两侧仍有反例**：`echo '- [ ] x'` 之类会误报（但它不在 gh pr / git commit 段里，够不着）；
+// 正文里用 HTML 实体或全角写的复选框会漏报。近似，不是判定。
+const UNCHECKED_TODO = /(^|\n|\\n|["'])[ \t]*[-*+][ \t]+\[[ \t]\]/;
+
+// ── 五道闸 ──────────────────────────────────────────────────────────────────
+// 每条 gate：
+//   id / why（判据出处，进 stderr）/ escapeEnv（null=无逃生阀）
+//   tools（本闸要拦的工具名样本，供 --selfcheck 核对 matcher 覆盖面）
+//   test(input) → null 放行 / { what, how } 阻断（what=拦了什么，how=合法路径）
+
+const GATES = [
+  {
+    id: "G1-windows-mcp",
+    why: "dao.md「目·观 · GUI 工具决策树」§🚫 windows-mcp 禁令（用户 2026-07-25 拍板，一票否决；该 MCP 已从用户机器卸载）",
+    escapeEnv: null, // 用户一票否决，不给旁路
+    tools: ["mcp__windows-mcp__Screenshot", "mcp__windows-mcp__Click", "mcp__windows_mcp__PowerShell"],
+    test(input) {
+      if (!/^mcp__windows[-_]?mcp?[-_]*__/i.test(input.tool_name || "")) return null;
+      return {
+        what: `调用了 windows-mcp 工具 \`${input.tool_name}\``,
+        how:
+          "改走替代分工（dao.md 决策树）：DOM 与截图 → chrome-devtools MCP（WebView 应用）" +
+          "或 playwright MCP（纯 Web）；进程与注册表 → 内置 PowerShell 工具；" +
+          "文件读写搜索 → 内置 Read / Grep / Glob。" +
+          "纯 Win32/无 Web 层且脚本也不可行时，诚实挂账「需用户目视」——**不得为此复活 windows-mcp**。",
+      };
+    },
+  },
+
+  {
+    id: "G2-live-settings",
+    why: "dao.md Shell 节「settings.json 运行时改动 · 确认门禁」+「改配置先认源与投影」（`~/.claude/settings.json` 是 cc-switch DB 经 config-sync/lib/export.mjs 的**投影**；改投影立即生效但不持久、下次下发即覆盖且无告警）",
+    escapeEnv: "DAO_SETTINGS_EDIT_APPROVED",
+    tools: ["Edit", "Write", "MultiEdit", "NotebookEdit"],
+    test(input) {
+      if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(input.tool_name || "")) return null;
+      const fp = norm((input.tool_input || {}).file_path || (input.tool_input || {}).notebook_path);
+      if (!fp) return null;
+      const home = norm(HOME).toLowerCase();
+      const low = fp.toLowerCase();
+      const hit = ["settings.json", "settings.local.json"].some(
+        (n) => low === `${home}/.claude/${n}`
+      );
+      if (!hit) return null;
+      return {
+        what: `要写用户级 live 配置 \`${fp}\``,
+        how:
+          "两条正路，按用户授权与否二选一：" +
+          "①**未获用户明确授权** → 不要动它。把改动写成 `_tmp/settings-patch.json`，" +
+          "并把会话外的执行命令交给用户（dao.md Shell 节原文即此路）。" +
+          "②**只是要让改动持久** → 改的对象错了：这个文件是 cc-switch DB 的投影，" +
+          "正路是改 git 快照层 `config-sync/common/settings.json`，再由用户跑 " +
+          "`dao.bat --direction=down`（快照→DB）。**不要建议 `--direction=up`**（up 是读 DB 覆盖快照，会把你刚写的冲掉）。" +
+          "③用户已当面授权、且确实要改 live 那一份 → 由**用户**设 `DAO_SETTINGS_EDIT_APPROVED=1` 后重开会话（agent 自己 export 影响不到本 hook）。",
+      };
+    },
+  },
+
+  {
+    id: "G3-publish",
+    why: "dao.md 帅节 长窗自主排程 ⑤「自主边界（永不进自主窗）」——对外发布属不可逆决策 + 需用户在场件",
+    escapeEnv: "DAO_PUBLISH_APPROVED",
+    tools: ["Bash", "PowerShell"],
+    test(input) {
+      if (!/^(Bash|PowerShell)$/.test(input.tool_name || "")) return null;
+      const cmd = (input.tool_input || {}).command || "";
+      for (const seg of shellSegments(cmd)) {
+        // --dry-run / -WhatIf 是真演练，放行（负控在回归网里钉着）
+        if (/--dry-run\b|-WhatIf\b/i.test(seg)) continue;
+        const m =
+          /^gh\s+release\s+(create|delete|upload)\b/.test(seg) ? seg :
+          /^(npm|pnpm|yarn|bun)\s+publish\b/.test(seg) ? seg :
+          /^cargo\s+publish\b/.test(seg) ? seg :
+          null;
+        if (m) {
+          return {
+            what: `要跑对外发布命令 \`${m.slice(0, 80)}\``,
+            how:
+              "对外发布是不可逆的、且是「需用户在场」件：" +
+              "①先向用户说明要发什么版本、发到哪、怎么回滚，拿到当场同意；" +
+              "②要先演练就加 `--dry-run`（本闸对 `--dry-run` 放行）；" +
+              "③用户同意后由**用户**设 `DAO_PUBLISH_APPROVED=1` 再跑，或直接由用户执行该命令。" +
+              "自主窗内一律不发布——`⑤自主边界` 的原文是「永不进自主窗」。",
+          };
+        }
+      }
+      return null;
+    },
+  },
+
+  {
+    id: "G4-screenshot-path",
+    why: "dao.md Shell 节「截图路径强制」：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置",
+    escapeEnv: null, // 正路只是换个路径，给逃生阀等于把规则删了
+    tools: [
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__playwright__browser_take_screenshot",
+    ],
+    test(input) {
+      if (!/take_screenshot$/.test(input.tool_name || "")) return null;
+      const ti = input.tool_input || {};
+      // 不给路径 = 内联返回图片、不落盘 ⇒ 与本条无关，放行
+      const raw = ti.filePath || ti.filename || ti.path || "";
+      if (!raw) return null;
+      const p = norm(raw);
+      if (/(^|\/)_tmp\/qa\//i.test(p)) return null;
+      return {
+        what: `截图要落到 \`${p}\`，不在 \`_tmp/qa/\` 下`,
+        how:
+          "改成 `<项目根>/_tmp/qa/<context>/<type>-<description>.png`。" +
+          "`<项目根>` 指**被操作的目标项目**（不是会话 cwd），`<context>` 是本次走查的名字；" +
+          "命名规格见 dao-design standards.md §截图规格。项目 `.gitignore` 里 `**/_tmp/` 已兜住，" +
+          "落别处的截图会进版本库或散在系统 temp 里找不回来。",
+      };
+    },
+  },
+
+  {
+    id: "G5-readonly-todo",
+    why: "dao.md「言 · 名之则」§只读载体禁写待办：PR body / commit message 等**事实只读**的载体禁用 `- [ ]`（`- [x]` 允许，它陈述过去）——复选框承诺「以后有人来勾」，而那个账本没有写入端",
+    escapeEnv: "DAO_ALLOW_READONLY_TODO",
+    tools: ["Bash", "PowerShell"],
+    test(input) {
+      if (!/^(Bash|PowerShell)$/.test(input.tool_name || "")) return null;
+      const cmd = (input.tool_input || {}).command || "";
+      const cwd = input.cwd || process.cwd();
+      for (const seg of shellSegments(cmd)) {
+        const isPrBody = /^gh\s+pr\s+(create|edit)\b/.test(seg);
+        const isCommit = /^git\s+commit\b/.test(seg);
+        if (!isPrBody && !isCommit) continue; // issue / comment 是可编辑载体，不在射程内
+
+        // ① 正文直接写在命令里
+        if (UNCHECKED_TODO.test(seg)) {
+          return mk(seg, "命令里的正文");
+        }
+        // ② 正文在文件里（gh --body-file/-F、git commit -F/--file）
+        const fm = seg.match(/(?:--body-file|--file|\s-F)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/);
+        if (fm) {
+          const rel = fm[1] || fm[2] || fm[3];
+          const abs = path.isAbsolute(rel) ? rel : path.join(cwd, rel);
+          let body = null;
+          try { body = fs.readFileSync(abs, "utf8"); } catch (_) { body = null; }
+          // 读不到就放行：拿「我没读到」当「它违规了」是本体系点名的那种错
+          // （L31「我没看到 ≠ 它不存在」）。这是明写的漏报面，不是遗漏。
+          if (body != null && UNCHECKED_TODO.test(body)) {
+            return mk(seg, `正文文件 \`${rel}\``);
+          }
+        }
+      }
+      return null;
+
+      function mk(seg, where) {
+        return {
+          what: `${where}里有未勾选的 \`- [ ]\`，而目标载体（${/^git/.test(seg) ? "commit message" : "PR body"}）是只读的`,
+          how:
+            "三选一：①这几项**你已经做了** → 改成 `- [x]`（陈述过去，允许）；" +
+            "②**还没做** → 从这里删掉，写进一个**可编辑**的账本（issue / TODO.md / 问题树面板），" +
+            "只读载体里只留指针（`见 <文件>#<锚点>` 或 `#<issue 编号>`）；" +
+            "③**这一项本批不适用** → 直接删行，别留个没人会来勾的框。" +
+            "（确有理由要原样保留——例如正文在引用一段模板样例——由用户设 `DAO_ALLOW_READONLY_TODO=1`。）",
+        };
+      }
+    },
+  },
+];
+
+// --selfcheck 要核对的覆盖面：闸 id → 该闸要拦的工具名样本
+const REQUIRED_MATCHER_COVERAGE = GATES.map((g) => ({ id: g.id, tools: g.tools }));
+
+// ── --selfcheck：把「它到底接上没有」摆出来 ─────────────────────────────────
+// 「一道没跑的闸」与「一道跑了且零违例的闸」在任何日志里都长得一样，
+// 所以覆盖面必须能被独立问一次，而不是靠「没报错」推断。
+function selfcheck() {
+  const lines = [];
+  let bad = 0;
+
+  let matchers = [];
+  let regNote = "";
+  try {
+    const s = JSON.parse(fs.readFileSync(LIVE_SETTINGS, "utf8"));
+    const pre = (s.hooks && s.hooks.PreToolUse) || [];
+    for (const grp of pre) {
+      const cmds = (grp.hooks || []).map((h) => String(h.command || ""));
+      if (cmds.some((c) => /dao-hard-gates\.js/.test(c))) {
+        matchers.push(grp.matcher == null ? "*" : String(grp.matcher));
+      }
+    }
+    regNote = matchers.length
+      ? `✓ 已注册于 PreToolUse，matcher=${matchers.map((m) => JSON.stringify(m)).join(" , ")}`
+      : `✗ 未注册：${LIVE_SETTINGS} 的 hooks.PreToolUse 里没有引用 dao-hard-gates.js 的 command。` +
+        `本 hook 此刻**一道闸都不生效**（快照层 config-sync/common/settings.json 已登记 → 请用户跑一次 \`dao.bat --direction=down\` 写进 DB）。`;
+    if (!matchers.length) bad++;
+  } catch (e) {
+    regNote = `✗ 读不到 live settings.json（${LIVE_SETTINGS}）：${e.message} —— 无从判定是否注册，按未注册计。`;
+    bad++;
+  }
+  lines.push(regNote);
+
+  // 逐闸核 matcher 覆盖面。matcher 是正则串，宿主侧按正则匹配工具名。
+  for (const { id, tools } of REQUIRED_MATCHER_COVERAGE) {
+    const uncovered = tools.filter((t) => !matchers.some((m) => matcherCovers(m, t)));
+    if (!matchers.length) {
+      lines.push(`  · ${id}：未注册 ⇒ 覆盖面无从谈起`);
+    } else if (uncovered.length) {
+      bad++;
+      lines.push(`  ✗ ${id}：matcher 覆盖不到 ${uncovered.join(" , ")} ⇒ **这道闸静默零覆盖**`);
+    } else {
+      lines.push(`  ✓ ${id}：matcher 覆盖 ${tools.length} 个工具名样本`);
+    }
+  }
+
+  lines.push(`共 ${GATES.length} 道闸；逃生阀（仅用户可设）：` +
+    GATES.filter((g) => g.escapeEnv).map((g) => g.escapeEnv).join(" , ") + "。");
+
+  process.stdout.write(lines.join("\n") + "\n");
+  process.exit(bad ? 1 : 0);
+}
+
+function matcherCovers(matcher, tool) {
+  if (matcher === "*" || matcher === "") return true;
+  try {
+    // 宿主对 matcher 是全串匹配还是子串匹配未被文档担保，两种都试过才算覆盖
+    const re = new RegExp(matcher);
+    if (re.test(tool)) return true;
+    return new RegExp("^(?:" + matcher + ")$").test(tool);
+  } catch (_) {
+    return false;
+  }
+}
+
+// ── 主流程 ──────────────────────────────────────────────────────────────────
+if (process.argv.includes("--selfcheck")) selfcheck();
+
+let input = {};
+try {
+  input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+} catch (_) {
+  process.exit(0); // 读不到/解析不了输入 → 放行（见头注②）
+}
+
+try {
+  for (const gate of GATES) {
+    const hit = gate.test(input);
+    if (!hit) continue;
+    if (gate.escapeEnv && process.env[gate.escapeEnv] === "1") continue;
+
+    process.stderr.write(
+      `\n🔒 [dao-hard-gates ${gate.id}] 这一步被拦下了。\n\n` +
+      `拦的是什么：${hit.what}\n\n` +
+      `判据出处：${gate.why}\n\n` +
+      `合法路径：${hit.how}\n\n` +
+      (gate.escapeEnv
+        ? `逃生阀：环境变量 ${gate.escapeEnv}=1（**只有用户设得了**——你在 Bash 里 export 影响不到本 hook 进程）。\n`
+        : `本闸无逃生阀：它拦的事没有合法例外。\n`) +
+      `为什么是一道闸而不是一句提醒：禁令类规则写在文本里的实测遵守率是 0%（arxiv 2607.26819），` +
+      `所以这一条被搬到了 agent 之外。别绕它——绕过去就等于这条规则不存在。\n`
+    );
+    process.exit(2);
+  }
+} catch (e) {
+  // fail-open（见头注②）：一道会因自身 bug 拦死一切的闸没有逃生通道。
+  // 但绝不静默——放行与通过在退出码上长得一样，这行 stderr 是唯一的区分。
+  process.stderr.write(
+    `[dao-hard-gates] ⚠ 守卫自身出错，本次**放行**（fail-open）：${e && e.stack ? e.stack : e}\n` +
+    `⇒ 这一刻它没有在守。跑 \`node ccswitch/hooks/dao-hard-gates.js --selfcheck\` 看接线，并修掉这个错。\n`
+  );
+  process.exit(0);
+}
+
+process.exit(0);
