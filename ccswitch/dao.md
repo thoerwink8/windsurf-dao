@@ -50,11 +50,9 @@
 
 **GUI 工具选型与防断路 · 存根**：**每次截图 / GUI 交互之前 = Read `ccswitch/rules/dao-gui-verify.md` 全文**——那里是 ①三器决策树（有 WebView 层且调试端口开着 → chrome-devtools；纯 Web → playwright；原生 Win32 → PowerShell+.NET 截图脚本落 `_tmp/qa/`；**windows-mcp 任何场景都不是选项**）②防断路三条的正文，**本行不复述**。判据一句话：**先答「有没有 WebView 层、远程调试端口开没开」，答案决定工具——不凭习惯选，也不中途换**。**触发器已写但投递未通**：`ccswitch/hooks/dao-tool-nudge.js` 的浏览器 MCP 首调提醒已就位，而它注册的 matcher 只有 `Bash`、覆盖不到 `mcp__chrome-devtools__*` / `mcp__playwright__*` ⇒ **扩 matcher 属用户动作，未扩之前本行是纯文字兜底**；跑 `node ccswitch/hooks/dao-tool-nudge.js --selfcheck` 即知当前状态。
 
-**🚫 windows-mcp 禁令（用户拍板 2026-07-25，一票否决）· 已出文本层**：任何场景不得使用它的任何
-工具——**现由 `ccswitch/hooks/dao-hard-gates.js` G1 在 PreToolUse `exit 2` 阻断，无逃生阀**，被拦时
-stderr 当场给替代分工。替代分工 / 弃用理由（rationales §动-2）全文见该 hook 头注，本行不复述。
-**仍归文本的那半**：本文件、skills、stacks 里提到它的历史段落，一律读作「已弃用，不得选用」——
-那是**读法**不是动作，没有工具调用可拦。
+**🚫 windows-mcp 禁令（用户 2026-07-25 一票否决）· 已出文本层**：任何场景不得使用它的任何工具——
+由 `ccswitch/hooks/dao-hard-gates.js` G1 在 PreToolUse `exit 2` 阻断、无逃生阀，被拦时 stderr 当场给替代分工；
+**替代分工 / 弃用理由 / 「历史段落一律读作已弃用」这半个纯文字面，全文在该 hook 头注 G1**。
 
 **工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（本文件下文及各 skill 提到的 `stacks/`
 均指 `D:/frank/windsurf-dao/ccswitch/stacks/`，跨项目会话中不与目标项目自身的 `stacks/` 目录混淆，
@@ -240,8 +238,8 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。`<项目根>` = **被操作的目标项目**，不是会话的 cwd。跨项目场景（如在 windsurf-dao 会话中操作 TraceyU）→ `_tmp/` 归目标项目（TraceyU）。若 MCP workspace roots 阻止直接写入目标项目，先写到可写位置再 `Copy-Item` 到目标项目 `_tmp/`。项目 `.gitignore` 必须含 `**/_tmp/`
 - **WebView2 远程调试**：WebView2 应用启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView。**不要另开 Chrome 当代理**；项目应固化为 `dev:debug` 脚本，非每次手动设
-- **截图路径强制 · 已出文本层**：浏览器 MCP 截图落 `<项目根>/_tmp/qa/<context>/` —— 现由 `ccswitch/hooks/dao-hard-gates.js` G4 阻断（**给了路径且不在 `_tmp/qa/` 下即 `exit 2`**，无逃生阀；不给路径＝内联返回不落盘，放行）。`<context>` 命名与 `<type>-<description>.png` 规格见 dao-design standards.md §截图规格。**射程只到浏览器 MCP**：PowerShell/.NET 截图脚本走的不是工具调用，那半仍是判据
-- **settings.json 运行时改动 · 已出文本层**：写 `~/.claude/settings.json`（含 `.local`）现由 `ccswitch/hooks/dao-hard-gates.js` G2 阻断——**未授权时的正路不变**：写 `_tmp/settings-patch.json` + 把会话外命令交用户；**只是想让改动持久**说明改的对象就错了（见下条「源与投影」）；用户当面授权且确要改 live 那一份 → 由**用户**设 `DAO_SETTINGS_EDIT_APPROVED=1`（agent 自己 export 影响不到 hook 进程，这是刻意的）。风险（可能触发 `401 device was revoked` 强制登出）与三条路径全文在该 hook 头注 G2。config-sync 同理，先问授权即做
+- **截图路径强制 · 已出文本层**：浏览器 MCP 截图落 `<项目根>/_tmp/qa/<context>/`，由 `ccswitch/hooks/dao-hard-gates.js` G4 阻断（给了路径且不在 `_tmp/qa/` 下即 `exit 2`，无逃生阀）。命名规格、放行条件与**射程只到浏览器 MCP**（PS/.NET 截图脚本那半仍是判据）全文在该 hook 头注 G4
+- **settings.json 运行时改动 · 已出文本层**：写 `~/.claude/settings.json`（含 `.local`）由同一 hook 的 G2 阻断，被拦时 stderr 当场给三条合法路径。**未授权时的正路**：写 `_tmp/settings-patch.json` + 把会话外命令交用户；**只是想让改动持久**说明改的对象就错了（见下条「源与投影」）。风险（`401 device was revoked` 强制登出）、逃生阀与 config-sync 同理那条，全文在该 hook 头注 G2
 - **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警。⚠ **源可能不止一层，且看起来像源的那层可以全程不在下发路径上**（2026-08-01 windsurf-dao #49 深夜实测订正，推翻本条旧括注）：`~/.claude/settings.json` 的**真实下发源是 cc-switch DB providers 表各 provider 自带的 `settings_config`**，下发只挂在 GUI「切换 provider」动作上（启动不下发）；`common_config_claude` 键只是 config-sync export/restore 的**镜像层**——旧版「正道=改 git 快照层+由用户 restore 写源」照做会让改动**永不生效**（PR #43 实证：hooks 注册写满快照层与镜像层，live 始终未注册）。真正道：**改 providers.settings_config，且每个 provider 都要改**（per-provider hooks 天然漂移：切 provider 即被目标 provider 配置整体覆盖，PostCompact 钩子曾因此被抹）；写 DB 属用户动作（AI 侧被权限分类器全路径拦截，是「AI 不得改自己 hook 注册」的意图级保护，合理）。凡「本地文件+集中配置库」双存在系统皆同病，**认源的动作是「追下发链」不是「找长得像源的文件」**（判据本条为唯一真相源） [n=2 @07-26 触发:改配置] [基线:2/2——07-26 直改投影被源覆盖、08-01 改镜像层永不下发，两次病根同为认错源]
 - **PR 合并期的机械链走脚本，不靠记步骤**（2026-08-01 由三条文字规则 mechanize）：canonical 是 `ccswitch/scripts/dao-pr-merge.ps1`（PS 5.1；参数化 repo 路径 / 验证命令 / PR 号；先 `-DryRun`），按序跑完并逐步核验——**`git fetch` → 核 `rev-parse origin/<主干>` 真的动了 → merge 主干进本分支 → 在合并后的树上重跑验证 → 拆占用该分支的 worktree → `gh pr merge --merge --delete-branch` → `git fetch --prune` → 实查 `ls-remote` 远程分支真的空了**。链上每步都是零判断祈使句，故做成脚本；**每步防的是哪个静默失败，判据在反·归「预算型护栏必须在合并态求值」两条与脚本头注**（唯一真相源，此处不复述）。触发点是既有 hook `ccswitch/hooks/dao-tool-nudge.js`（PostToolUse·Bash matcher）：裸手跑 `gh pr merge` 会被提醒走脚本 + 补做合并后两步复核——**它是事后提醒不是守卫**。**三个不由脚本兜住的边界**（网页端自行点 merge 时脚本不在场 / 脚本不判验证命令选得对不对与该不该合 / `--delete-branch` 的沉默不可信）**正文在该脚本头注 `.DESCRIPTION`——那里同时是「每步防哪个静默失败」的唯一真相源，改动或调用它之前读那一段**。 [n=1 @07-29 触发:PR流程] [自定@07-29] [基线:同窗 3/3 个 PR 的远程分支删除静默失败]
   - **判「这份改动进没进主干」只有 `git patch-id --stable` 答得对**：`gh pr list --head <branch>` 空只说明「这个**分支名**下没开过 PR」，`--is-ancestor` 判的是「这个 **commit 对象**在不在历史里」（对 cherry-pick / 重复推送 / rebase 后的等价提交**结构性失明**）⇒ **看到「未并入」先用 patch-id 复核再动作**，分支上已有等价内容时**开 PR 反而有害**。三判据各答什么问题、订正史与实证在同一份脚本头注 §诊断。 [n=1 @07-29 触发:PR流程] [自定@07-29] [基线:1/1——本窗唯一一次「疑似遗失工作」经 patch-id 复核后为误判]
