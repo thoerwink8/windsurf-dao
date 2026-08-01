@@ -88,7 +88,9 @@ const isRecall =
 if (isRecall) {
   inject(
     "【dao 节律·回顾】这是回顾类提问——先搜 memory 索引(~/.claude/.../memory/MEMORY.md)" +
-    "与 docs/evolution/*.csv(用 dao-evolution skill 的 search.py),再据实回答,勿凭记忆直接断言。"
+    "与 docs/evolution/ 整个目录,再据实回答,勿凭记忆直接断言。" +
+    "两类档要分别取:①两个 CSV(evolution-entries / evolution-lessons)用 dao-evolution skill 的 search.py;" +
+    "②事故叙事档 incident-narratives-*.md 是 Markdown,search.py 不认它(它只读那两个 CSV),要直接 Grep/Read。"
   );
 }
 

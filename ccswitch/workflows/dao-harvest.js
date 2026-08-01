@@ -57,7 +57,20 @@ const SLUG = REPO.replace(/[^A-Za-z0-9]/g, '-')
 const SESSION_LOG_DIR = (ARGS && ARGS.sessionLogDir) || `~/.claude/projects/${SLUG}`
 const TASK_OUTPUT_DIR = (ARGS && ARGS.taskOutputDir) || `%TEMP%/claude/${SLUG}/<session-uuid>/tasks`
 
-const WORKBOARD = (ARGS && ARGS.workboardFile) || 'docs/ops/WORKBOARD.md'
+// workboardFile **刻意无硬缺省**(2026-08-01 改)。原缺省是 `docs/ops/WORKBOARD.md`,而下方 prompt
+// 的回退判据写的是「不存在则 Glob 同类看板」——该判据对一个**仍存在但已冻结**的文件恒假:
+// 调用方仓库 2026-08-01 把活账迁去 issue 区/看板后,那个文件退役为历史存档却**没有删**,于是
+// 回退永不触发、这一路静默去读一份历史快照并返回零候选(失效形态是「零候选」而不是报错)。
+// 缺省改为交给 agent 按序探测(见下方 WORKBOARD_SRC),并要求它**读到文件先看有没有退役字样**——
+// 「文件在不在」不足以判断「它还是不是现役承接物」。显式传 workboardFile 则直接用,不再探。
+const WORKBOARD = (ARGS && ARGS.workboardFile) || null
+const WORKBOARD_SRC = WORKBOARD
+  ? `:\`${REPO}/${WORKBOARD}\`(调用方显式指定,直接读它)。`
+  : `——**调用方未指定 \`workboardFile\`,按序自行探测**:
+  ①**先探 issue 区/看板**(GitHub-backed 项目的现役承接物,活账在这里):\`gh issue list --state open --limit 100\`、以及 \`gh project list\` / \`gh project item-list <n>\` 看有没有观测中心型看板。取到就以它为本路的源。
+  ②取不到(非 GitHub 项目 / 无 gh 凭据 / 仓库无 issue 区)再 Glob \`${REPO}/docs/ops/*.md\` 找问题树/看板型仓内文件。
+  ③🔴 **捞到文件先读头部十几行看有没有「已退役 / 历史存档 / 不要再往本文件挂新问题」类字样**——有就当**历史快照**读(可补收旧账,但必须在 \`source_health.note\` 里写明"读的是已退役快照"),**不得当现役面板**。「文件存在」不等于「它还是现役承接物」:2026-08-01 实证,某仓的问题树面板退役后文件仍在,使旧的「不存在则回退」判据恒假、本路静默返回零候选。
+  ④以上都不可达就判**该源不可达**并在 \`source_health\` 里写清你探了哪几步,**别硬凑**。`
 const INTENT_LOG = (ARGS && ARGS.intentLogFile) || 'docs/user-intent-log.md'
 const CLAUSE_FILE = (ARGS && ARGS.clauseFile) || 'docs/rules/dispatch-clauses.md'
 const DAO_FILE = (ARGS && ARGS.daoFile) || 'D:/frank/windsurf-dao/ccswitch/dao.md'
@@ -226,7 +239,7 @@ ${SIGNAL_WORDS.map(w => '\`' + w + '\`').join(' · ')}
   'workboard': {
     model: 'sonnet',
     prompt: `
-【源】**工作面板的「过程中新发现」段**:\`${REPO}/${WORKBOARD}\`(不存在则 Glob \`${REPO}/docs/ops/*.md\` 找同类问题树/看板文档;都没有就判该源不可达)。
+【源】**工作面板的「过程中新发现」段**${WORKBOARD_SRC}
 
 背景:编排侧已经在往那里挂「官做对的一件事」「官抓出帅方案漏洞」「官自曝的未尽处」——**这是本闭环里唯一已经在运转的收割动作**,但它挂完就停在项目文档里,没有下一跳。你这一路就是那个下一跳。
 
