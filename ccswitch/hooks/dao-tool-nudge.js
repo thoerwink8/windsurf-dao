@@ -1,4 +1,5 @@
-// dao tool-nudge hook — 三类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
+// dao tool-nudge hook — 四类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
+//                                  ④浏览器 MCP 首调 → 去读 GUI 验证细则
 //
 // ── ① 工具选择(本 hook 的原始职责)────────────────────────────────────────────
 // 背景:Claude Code 同时允许内置 Grep(ripgrep)/Glob/Read 与 Bash(*),
@@ -38,16 +39,121 @@
 // 认它只能靠猜当前分支,而猜错的代价是每次推特性分支都插一段废话然后被无视。
 // 这是同一条高精度低召回原则的第三次应用,漏报面已知且写在这里。
 //
+// ── ④ 浏览器 MCP 首调(2026-08-02 加,dao.md 瘦身批 · #5)──────────────────────
+// dao.md 动·目·观 的「GUI 工具决策树 + 防断路规则」正文迁去 ccswitch/rules/dao-gui-verify.md
+// 后,dao.md 只剩一行存根「每次截图/GUI 交互前 Read 那份文件」。**「必经动作」这四个字
+// 本身没有任何机器投递**(本仓实测无标记时刻的自由裁量携带率 9-24%),故这里给它一个投递:
+// 本会话**第一次**调到 mcp__chrome-devtools__* / mcp__playwright__* 时,把那句话送到眼前。
+//
+// **只提醒一次**:同一 session 内后续调用一律静默。GUI 走查动辄几十次截图,每次插一段
+// 等于把这个 hook 的第一原则(宁可漏报不可滥报)亲手废掉。去重状态落
+// <repo>/_tmp/tool-nudge/browser-mcp-seen.json,按 session_id 记;测试用 DAO_TOOL_NUDGE_STATE 覆写。
+// 状态**写不动时仍然提醒**(可能因此重复):一个状态目录坏掉就静默零投递,正是本 hook
+// 头注反复在说的那种死法;重复的代价是噪音,静默的代价是这条规则不存在。重复时提醒里会自陈。
+//
+// 🔴 **它此刻大概率投递不到,照直写**:本 hook 在 live settings.json 里注册的 PostToolUse
+// **matcher 是 `Bash`**,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
+// ⇒ **第 ④ 类的代码在这里、投递为零**,而「没跑的闸」与「跑了且没意见的闸」在任何日志里
+// 长得一样。要它真响,需要用户把那个 matcher 扩到覆盖两个 MCP 前缀(写入面是 cc-switch DB
+// 的 providers.settings_config,AI 侧被权限分类器全路径拦截 ⇒ 属用户动作)。
+// **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
+// 那个自检逐面核对 matcher 覆盖不覆盖 ①②③ 的 Bash 面与 ④ 的两个 MCP 面,缺一即 exit 1。
+//
 // 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
 // ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
 // 提醒的实际作用是「补做合并后那两步复核」与「下次走脚本」,不是拦截。这一点别读成守卫。
+// 第 ④ 类同理:提醒到达时那次截图已经拍完了,它买的是**这一次走查剩下的部分**和下一次的选型。
 //
 // 回归网:tests/dao-tool-nudge.tests.js(正控+误伤负控双向)。
 // 真相源:windsurf-dao/ccswitch/hooks/dao-tool-nudge.js
-// 由 settings.json 的 PostToolUse hook(matcher: Bash)调用。
+// 由 settings.json 的 PostToolUse hook 调用(当前注册 matcher: Bash,见上方 ④ 的射程说明)。
 
 const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
+// ── ④ 的常量与状态 ─────────────────────────────────────────────────────────
+const ROOT = path.resolve(__dirname, "..", ".."); // 本文件在 <root>/ccswitch/hooks/
+const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
+const LIVE_SETTINGS = path.join(HOME, ".claude", "settings.json");
+const BROWSER_MCP_RE = /^mcp__(chrome-devtools|playwright)__/;
+const SEEN_FILE = process.env.DAO_TOOL_NUDGE_STATE ||
+  path.join(ROOT, "_tmp", "tool-nudge", "browser-mcp-seen.json");
+// 去重表的条目上限:session 只增不减,不封顶就会长成一个没人看的大 JSON。
+// 超限时保留最近的一半(与 hook-selfcheck 的日志轮转同形态)。
+const SEEN_MAX = 200;
+
+// ── --selfcheck:把「④ 到底投递得到吗」摆出来 ───────────────────────────────
+// 形态照抄 dao-hard-gates.js 的 selfcheck(逐面核 matcher 覆盖),**判据各自独立**:
+// 那边核的是五道闸要拦的工具名,这边核的是四类提醒要看见的工具名。
+// 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
+const REQUIRED_COVERAGE = [
+  { face: "①②③ Bash 面(工具选择 / PR 合并链 / 直推主干)", tools: ["Bash"] },
+  {
+    face: "④ 浏览器 MCP 面(GUI 验证细则首调提醒)",
+    tools: ["mcp__chrome-devtools__take_screenshot", "mcp__playwright__browser_click"],
+  },
+];
+
+function matcherCovers(matcher, tool) {
+  if (matcher === "*" || matcher === "") return true;
+  try {
+    // 宿主对 matcher 是全串匹配还是子串匹配未被文档担保,两种都试过才算覆盖
+    const re = new RegExp(matcher);
+    if (re.test(tool)) return true;
+    return new RegExp("^(?:" + matcher + ")$").test(tool);
+  } catch (_) {
+    return false;
+  }
+}
+
+function selfcheck() {
+  const lines = [];
+  let bad = 0;
+  const matchers = [];
+  try {
+    const s = JSON.parse(fs.readFileSync(LIVE_SETTINGS, "utf8"));
+    for (const grp of (s.hooks && s.hooks.PostToolUse) || []) {
+      const cmds = (grp.hooks || []).map((h) => String(h.command || ""));
+      if (cmds.some((c) => /dao-tool-nudge\.js/.test(c))) {
+        matchers.push(grp.matcher == null ? "*" : String(grp.matcher));
+      }
+    }
+    if (matchers.length) {
+      lines.push(`✓ 已注册于 PostToolUse，matcher=${matchers.map((m) => JSON.stringify(m)).join(" , ")}`);
+    } else {
+      bad++;
+      lines.push(`✗ 未注册：${LIVE_SETTINGS} 的 hooks.PostToolUse 里没有引用 dao-tool-nudge.js 的 command ⇒ 四类提醒此刻一条都不生效。`);
+    }
+  } catch (e) {
+    bad++;
+    lines.push(`✗ 读不到 live settings.json（${LIVE_SETTINGS}）：${e.message} —— 无从判定是否注册，按未注册计。`);
+  }
+
+  for (const { face, tools } of REQUIRED_COVERAGE) {
+    if (!matchers.length) { lines.push(`  · ${face}：未注册 ⇒ 覆盖面无从谈起`); continue; }
+    const uncovered = tools.filter((t) => !matchers.some((m) => matcherCovers(m, t)));
+    if (uncovered.length) {
+      bad++;
+      lines.push(`  ✗ ${face}：matcher 覆盖不到 ${uncovered.join(" , ")} ⇒ **这一类提醒静默零投递**`);
+    } else {
+      lines.push(`  ✓ ${face}：matcher 覆盖 ${tools.length} 个工具名样本`);
+    }
+  }
+
+  lines.push(
+    "覆盖不足的修法：把 PostToolUse 里 dao-tool-nudge.js 那组的 matcher 扩成 " +
+    '"Bash|mcp__chrome-devtools__.*|mcp__playwright__.*"。' +
+    "写入面是 cc-switch DB 的 providers.settings_config（**每个 provider 都要改**，" +
+    "切 provider 会被目标 provider 的配置整体覆盖）——**属用户动作**，AI 侧被权限分类器拦截。"
+  );
+  process.stdout.write(lines.join("\n") + "\n");
+  process.exit(bad ? 1 : 0);
+}
+
+if (process.argv.includes("--selfcheck")) selfcheck();
+
+// ── 输入 ────────────────────────────────────────────────────────────────────
 let raw = "";
 try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}
 
@@ -56,6 +162,57 @@ try { input = JSON.parse(raw); } catch (_) {}
 
 const toolName = input.tool_name || "";
 const cmd = (input.tool_input && input.tool_input.command) || "";
+
+// ── ④ 浏览器 MCP 首调 ───────────────────────────────────────────────────────
+// 走在 Bash 分支之前:它与命令串无关,提前返回免得被下面那个 `!cmd` 早退吃掉。
+if (BROWSER_MCP_RE.test(toolName)) {
+  const sessionId = String(input.session_id || "unknown-session");
+  let seen = null;          // null = 读不动(与「空表」分开:前者要自陈,后者是常态)
+  try {
+    seen = JSON.parse(fs.readFileSync(SEEN_FILE, "utf8"));
+    if (!seen || typeof seen !== "object" || Array.isArray(seen)) seen = {};
+  } catch (e) {
+    seen = e && e.code === "ENOENT" ? {} : null;
+  }
+
+  if (seen && Object.prototype.hasOwnProperty.call(seen, sessionId)) process.exit(0); // 本会话已提醒过
+
+  let persisted = false;
+  try {
+    const next = seen || {};
+    next[sessionId] = new Date().toISOString();
+    const keys = Object.keys(next);
+    if (keys.length > SEEN_MAX) {
+      // 按记录时间排序后留后半。时间戳坏掉的条目排在最前、优先被丢,不影响判定语义。
+      keys.sort((a, b) => String(next[a]).localeCompare(String(next[b])));
+      for (const k of keys.slice(0, keys.length - Math.floor(SEEN_MAX / 2))) delete next[k];
+    }
+    fs.mkdirSync(path.dirname(SEEN_FILE), { recursive: true });
+    fs.writeFileSync(SEEN_FILE, JSON.stringify(next, null, 2) + "\n", "utf8");
+    persisted = true;
+  } catch (_) { persisted = false; }
+
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      additionalContext:
+        "【dao GUI 验证】本会话首次调用浏览器 MCP（" + toolName + "）。" +
+        "GUI 工具选型与防断路的正文在 `ccswitch/rules/dao-gui-verify.md`，dao.md 只留了一行存根 ⇒ " +
+        "**现在 Read 那份文件全文**，再继续这次走查。两组要点：" +
+        "①**三器决策树**——有 WebView 层且远程调试端口开着走 chrome-devtools（DOM 级精度），" +
+        "纯 Web / Vite dev server 走 playwright，原生 Win32 无 Web 层只能 PowerShell + .NET 截图脚本落 `_tmp/qa/`；" +
+        "**windows-mcp 任何场景都不是选项**（已一票否决并卸载，PreToolUse 硬闸 G1 会当场 exit 2）。" +
+        "②**防断路三条**——同一会话只用一个浏览器工具不中途换（换工具＝端口/锁冲突＝排障循环＝烧 context）；" +
+        "启动 dev server / 开调试端口在会话最开头做一次，不在中途反复杀重启；" +
+        "MCP 连接失败 2 次就停下查端口与进程状态，不盲目重试。" +
+        "另：截图落盘路径由硬闸 G4 强制在 `<项目根>/_tmp/qa/<context>/`，落别处会被 exit 2 拦下。" +
+        (persisted ? "" :
+          "（⚠ 去重状态没写成——`" + SEEN_FILE + "` 写不动，本会话后续调用可能重复看到这段提醒。" +
+          "重复是噪音，而静默是这条规则直接消失，故取前者；顺手看一眼那个目录的权限。）"),
+    },
+  }));
+  process.exit(0);
+}
 
 if (toolName !== "Bash" || !cmd) process.exit(0);
 
