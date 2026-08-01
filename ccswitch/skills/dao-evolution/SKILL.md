@@ -102,7 +102,7 @@ py <skill>/scripts/search.py lessons "<关键词>" --data-dir <project>/docs/evo
 
 - **/dao-distill**：会话级全量扫描 → 读 `session-distill.md` → 走本 skill 三层路由
 - **/dao-evolution**（本 skill）：跨会话审查 → 读 `system-review.md` → 检查档案层是否有该提升到记忆/行为层的遗漏
-- **dao-harvest workflow**：跨窗好实践收割（收官段唯一触发点，见 dao.md 长窗节③）→ 候选按三层路由归位
+- **dao-harvest workflow**：跨窗好实践收割（收官段唯一触发点，见 `ccswitch/rules/dao-longwindow.md` ③——2026-08-01 起该节由 dao.md 迁入此文件，dao.md 只剩存根）→ 候选按三层路由归位
 - **dao-dev §2.5 涅槃**：单次任务教训 → 走本 skill 三层路由
 
 ## 反模式

@@ -35,7 +35,9 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 
 ## 总览
 
-用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（Read planning.md：spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Read execution.md：Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（Read closing.md：多维打分→严重度分流）→ 🔒 用户交付审查（用户决定归档/追加/暂留）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
+用户一句话需求 → 预飞检查（项目结构→无感改造）→ 情境感知（展示已有 loop→参数解析→孤儿检测→归并判断）→ 🔒 Loop 计划确认（用户确认后才建 STATUS.json）→ **谋线**（Read planning.md：spec→acceptance→strategy→plan→交叉校验→rule 检查，AI 生成→用户确认）→ Go 检查点 → **造线**（Read execution.md：Task 级执行+验证，Phase 级检查点+组件健康+视觉，dao-review→dao-verify）→ 目标达成度评估（Read closing.md：多维打分→严重度分流）→ 🔒 用户交付审查（用户决定归档/追加/暂留）→ 归档（学习提取+规范同步+_archive+HANDOFF.md）→ PROJECT.md 自动更新。
+
+**Loop 是上层编排器，各阶段调用的方法论真相源**（**下列 `dao-worktree`/`dao-plan`/`dao-review`/`dao-brainstorm` 是 AI 内部读取件，不是 `/` 命令**——2026-07-27 用户拍板降级，只按路径 Read）：谋线 spec → `skills/dao-brainstorm/SKILL.md` · 谋线 plan → `skills/dao-plan/SKILL.md` · 造线轻量 → `/dao-dev` · 造线重量 → `/dao-superpowers`（内部走 `skills/dao-worktree|dao-plan|dao-review`）· 造线 review → `skills/dao-review/SKILL.md` 与 `dao-reviewer` agent · 最终验收 → `/dao-verify`。
 
 ## §0 预飞检查
 
@@ -67,6 +69,24 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 ```
 
 扫描方式：读取所有 `docs/specs/*/STATUS.json`（活跃）+ `docs/specs/_archive/INDEX.md`（已完成）。
+
+### §1.1 参数解析（恢复目标路由）
+
+解析 `$ARGUMENTS`，判断是否匹配已有 Loop 名称（即 `docs/specs/<name>/STATUS.json` 存在）：
+
+- **匹配已有 Loop** → 标记为「恢复目标」，进入续做流程（读 STATUS.json，从中断点继续）
+- **不匹配** → 视为新需求，进入 §1.2 孤儿检测
+
+### §1.2 孤儿检测（🔒 开新 Loop 前必过）
+
+扫描所有 `docs/specs/*/STATUS.json`，收集 `status !== "archived"` 的 Loop（**恢复目标排除在外**）。
+
+- **无孤儿** → 展示已归档 Loop 总览表 → 进入 §1.5
+- **有孤儿** → 展示总览表后**逐个**处理。对每个孤儿 Loop 用 `AskUserQuestion` 展示名称/状态/进度/描述，**四选一**：**续做**（生成续做提示词，不中断当前流程）/ **归档**（当场执行 closing.md 的验收比对 + 归档流程）/ **废弃**（标 `abandoned` + 记录原因）/ **暂不处理**（保留原样跳过）。
+  - **续做提示词模板**：生成 `/dao-loop <name>` + 上下文（描述/状态/进度/阶段），copy-ready。
+  - **全部处理完 → 汇总展示**：表格列出每个孤儿的决定和备注，续做项统一列出提示词方便复制。汇总后 → 进入 §1.5。
+
+> **递归安全**：当 §1.1 识别到参数是已有 Loop 名（续做意图），**该 Loop 不进入孤儿检测**，其他非 archived Loop 仍正常检测。这打断了「续做提示词 → 新会话 → 又检测到同一孤儿」的递归。
 
 ### 归并判断
 
@@ -147,22 +167,17 @@ AI 判断 + 用户确认。用户显式指定时以用户为准。
 
 ### /loop prompt
 
-每轮唤醒：读 STATUS.json → 按 thread+mode 执行 → 更新 STATUS.json → ScheduleWakeup。prompt 含目标需求。
+每轮唤醒：读 STATUS.json → 按 thread+mode 执行 → 更新 STATUS.json → ScheduleWakeup。
+通过 `/loop` + `ScheduleWakeup` 实现自动循环，prompt 模板（copy-ready，含目标需求）：
 
-## §10 与现有命令的关系
-
-Loop 是**上层编排器**，包裹现有命令不替代：
-
-| Loop 阶段 | 调用的 dao 命令 |
-|-----------|----------------|
-| 谋线 spec | dao-brainstorm |
-| 谋线 plan | dao-plan |
-| 造线（轻量） | dao-dev |
-| 造线（重量） | dao-superpowers |
-| 造线 review | dao-review / dao-reviewer |
-| 最终验收 | dao-verify |
-
-现有命令**完全不改**。用户可以跳过 Loop 直接用单个命令。
+```
+执行 dao-loop：
+1. 读取 docs/specs/<topic>/STATUS.json
+2. 根据 thread + mode 执行对应动作
+3. 更新 STATUS.json
+4. ScheduleWakeup
+目标：<需求>
+```
 
 ## §11 三层架构
 

@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     ── 这份 canonical 从哪来、为什么现在才有 ──────────────────────────────────
-    dao.md 反·归「规则集只增不减是结构必然」那条自带 `触发:verify-all/check-clauses-structure`，
+    「规则集只增不减是结构必然」那条自带 `触发:verify-all/check-clauses-structure`（**2026-08-01 起
+    该条正文迁 ccswitch/rules/dao-guard-writing.md**，dao.md 反·归只留存根+条款名，故按名字仍搜得到），
     而那个检查器**只存在于 mousse-cli/scripts/**（2026-08-01 审计实证：ccswitch/scripts/ 下
     只有 dao-config-sync.ps1，windsurf-dao/tests/ 无一条款库相关用例）⇒ **dao.md 这个规则集
     本身从未被它守过**，「立法者不受自己的法约束」的又一实例（同 scaffold-manifest 取消元仓库
