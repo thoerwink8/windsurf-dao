@@ -149,11 +149,12 @@
       "require": {
         "anyOf": [
           { "not": { "file": "package.json" } },
+          { "glob": "scripts/start-isolated-dev.*" },
           { "pkgScript": "dev:debug" }
         ]
       },
-      "msg": "{label} 项目缺少 dev:debug 脚本（WebView2 远程调试端口）→ 参考 stacks/desktop-tauri.md",
-      "why": "没有 dev:debug 就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项。",
+      "msg": "{label} 项目既无隔离启动脚本 scripts/start-isolated-dev.*，也无 dev:debug 脚本 → 参考 stacks/desktop-tauri.md「隔离启动器 · canonical 契约」（隔离启动器是正解，dev:debug 只是最低形态）",
+      "why": "没有调试端口入口就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。**2026-08-01 由单一 pkgScript 改为 anyOf 两态**：本 entry 原先只认 dev:debug，而 dev:debug 的通行形态（写死 9222 + 不给独立 user-data-dir）已被 mousse-cli 实证为不足——9222 的典型占用者就是用户装机实例，且 WebView2 调试端口按 user-data-dir 绑定，共用目录时光换端口号仍会静默失败（2026-07-26 实证）。故隔离启动脚本（`scripts/start-isolated-dev.*`，四条硬要求+三关自验+退出码契约见 stacks/desktop-tauri.md）与 dev:debug 任一存在即算有入口，msg 里点明前者是正解。**为什么不硬性要求隔离启动器**：那是一份千行量级、与项目自身隔离面深度耦合的脚本，对刚起步的桌面项目是过度要求；判据是「有没有调试入口」，形态优劣由 msg 引导而非闸拦。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项（该分支同时也让 glob 那一路在无 package.json 的项目上不必负责）。",
       "severity": "warn"
     },
     {
@@ -197,11 +198,11 @@
         "noFileMatching": {
           "glob": ".github/workflows/*.yml",
           "contains": ["pull_request", "macos-"],
-          "notContains": ["if:"]
+          "notContains": ["if:", "fromJSON"]
         }
       },
-      "msg": "workflow `{file}` 疑似 PR 触发多平台矩阵且无 job 级 if 收敛 → 对照 stacks/ci-github-actions.md 收敛（PR 只跑主开发平台，交叉矩阵挂 main push / release tag / workflow_dispatch）",
-      "why": "2026-07-13 mousse-cli 账单烧穿实证：macOS runner 计费系数 ×10，mac job 占 31% 运行分钟却吃掉 72% 额度，月中额度耗尽致全线 CI 拒启。**本判据是启发式**：靠「文件同时含 pull_request 与 macos- 且全文无 if:」的子串组合，两个方向都构造得出反例（if: 写来干别的会被放过；矩阵写在 reusable workflow 里也会被放过），故 severity=info。精确判据见 ci-cost-gate.md。",
+      "msg": "workflow `{file}` 疑似 PR 触发多平台矩阵且看不到任何收敛痕迹 → 对照 stacks/ci-github-actions.md 收敛（PR 只跑主开发平台，交叉矩阵挂 main push / release tag / workflow_dispatch；**收敛写在 strategy.matrix 表达式里，绝不能写成 job 级 if 引 matrix**）",
+      "why": "2026-07-13 mousse-cli 账单烧穿实证：macOS runner 计费系数 ×10，mac job 占 31% 运行分钟却吃掉 72% 额度，月中额度耗尽致全线 CI 拒启。**本判据是启发式**：靠「文件同时含 pull_request 与 macos-，且全文既无 if: 也无 fromJSON」的子串组合，两个方向都构造得出反例（if: 写来干别的会被放过；矩阵写在 reusable workflow 里也会被放过），故 severity=info。精确判据见 ci-cost-gate.md。**2026-08-01 加 fromJSON 到 notContains**：同批把 stacks 处方从「job 级 if」改成「strategy.matrix + fromJSON 三元式」后，**照新处方写且不带任何 step 级 if: 的合规 workflow 会被本判据误伤**（合成语料实跑复现：无 step if ⇒ 报违例，加一条无关的 step 级 if: ⇒ 放过 —— 即旧判据放过它靠的是巧合）。fromJSON 是新处方唯一稳定的字面痕迹，故补进放过条件。**照直写它仍然做不到的那一半**：job 级 if 引 matrix 那种 invalid workflow 因为带 if: 照样被放过 —— 本判据答的是「这个仓有没有在省 PR 额度」，答不了「这份 workflow 跑不跑得起来」，那是另一个问题，本 entry 结构上看不见。",
       "severity": "info"
     },
     {
