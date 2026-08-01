@@ -1,0 +1,86 @@
+# canonical issue 模板 · 真相源在 windsurf-dao ccswitch/templates/ISSUE_TEMPLATE/。
+# 项目 .github/ISSUE_TEMPLATE/decision.yml 从此派生。收益边界见同目录 bug.yml 抬头注释。
+
+name: 🤔 待拍板
+description: 需要人来定一件事（AI 不自定的那一类）
+labels: ["待拍板"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **这是蓄水池单：不催、不关、攒批。** 用户有空时按标签筛一批一起处理，
+        所以它可以放很久 —— 但它必须**一眼看得懂**，否则每次筛出来都要重新读一遍才想起在问什么。
+        写法要求：**说人话**。体系黑话在这里是纯负担，翻译成「这件事对你意味着什么」，
+        不要说「这个机制叫什么」。
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 要定的是什么（一句话）
+      description: |
+        写成一个能被回答的问句。**替身测试**：把这句话念给一个没参与项目的人听，
+        他能不能判断自己该选哪个？不能就是还没说人话。
+      placeholder: 那个提示要不要每次都弹？还是只在第一次弹、之后记住选择？
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: 有哪几个选项，各自的代价
+      description: |
+        每个选项写「选了它会怎样」和「付出什么」。**代价那一半不能省**——
+        只列好处的选项表是在替人做决定。
+      placeholder: |
+        A. 每次都弹 —— 不会误操作，但高频用户会烦，估计一天弹 5~8 次
+        B. 只弹一次并记住 —— 顺手，但记错了要去设置里翻才能改回来
+        C. 不弹，做成可撤销 —— 最顺，但撤销窗口过了就真没了
+    validations:
+      required: true
+
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: 我倾向哪个，为什么
+      description: |
+        **给理由，最好给你能验证的实据**（「上次我自作主张删了两个东西，一个当天就被你叫回来」
+        远胜「历史准确率偏低」）。倾向不是替你决定，是省掉你重新推一遍。
+      placeholder: 倾向 B。理由：…
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost-of-waiting
+    attributes:
+      label: 不决定会怎样
+      description: |
+        拖着的代价。**「没什么代价，可以一直放着」是合法答案**——写下来它就不会被当成催办。
+        反过来若真有截止点（某个 PR 卡在这里、某个改动越晚越贵），写清楚。
+      placeholder: 没有硬截止，但 #NNN 会一直挂着不能合。
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 技术证据 / 背景（可选，折叠）
+      description: 支撑上面判断的数字、代码位置、之前踩过的坑。折叠起来，人先读顶部。
+      placeholder: |
+        <details>
+        <summary>背景与证据</summary>
+
+        相关文件:行号 / 实测数字 / 之前那次的教训 …
+
+        </details>
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: 开单前
+      options:
+        - label: 这确实是需要人定的（执行时要现场取舍：什么算够 / 停在哪 / 删什么留什么），不是我懒得判
+          required: false
+        - label: 顶部那句问句里没有只有体系内部才懂的词
+          required: false
