@@ -64,12 +64,11 @@
        不得为此复活 windows-mcp
 ```
 
-**🚫 windows-mcp 禁令（用户拍板 2026-07-25，一票否决）**：**任何场景不得使用 windows-mcp
-任何工具**（Screenshot / Click / Type / PowerShell / Process / Registry / FileSystem…），
-该 MCP 已从用户机器卸载。替代分工：DOM 与截图走 chrome-devtools / playwright；进程与注册表
-走内置 PowerShell 工具；文件读写搜索走内置 Read / Grep / Glob。
-**弃用理由**（缺陷 + 用户明确要求双重）：四条见 rationales §动-2。凡本文件/skills/stacks
-提到它的历史段落，一律按本禁令读作「已弃用，不得选用」。
+**🚫 windows-mcp 禁令（用户拍板 2026-07-25，一票否决）· 已出文本层**：任何场景不得使用它的任何
+工具——**现由 `ccswitch/hooks/dao-hard-gates.js` G1 在 PreToolUse `exit 2` 阻断，无逃生阀**，被拦时
+stderr 当场给替代分工。替代分工 / 弃用理由（rationales §动-2）全文见该 hook 头注，本行不复述。
+**仍归文本的那半**：本文件、skills、stacks 里提到它的历史段落，一律读作「已弃用，不得选用」——
+那是**读法**不是动作，没有工具调用可拦。
 
 **工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（本文件下文及各 skill 提到的 `stacks/`
 均指 `D:/frank/windsurf-dao/ccswitch/stacks/`，跨项目会话中不与目标项目自身的 `stacks/` 目录混淆，
@@ -201,7 +200,7 @@ worktree → plan → implementer subagent → reviewer subagent → 归根 clea
 - **长窗自主排程**（用户拍板 2026-07-17：无明确目的的长窗，帅自主判断现状定任务，直到满足时长）：**开窗第一动作 = Read `ccswitch/rules/dao-longwindow.md` 全文**，那里是 ①开窗仪式 / ②选题判断框架 / ②.5外向汲取（四源+两反向源）/ ③问题树而非时间表 / ④时长循环 / ④.5截止是三段不是一刀 / ⑥双档模式 / ⑥.5窗界维度（时长窗 vs 目标窗）/ 会话形态定稿的细则正文，**本行不复述**。存根化理由：这九项**只在开窗那一刻**用得上，而 always-on 每轮注入的配额只该付给「每轮都要用」的东西；现场 Read 还顺带治掉 always-on 快照按 compaction 刷新的 ≈12 小时投递延迟。
   - **刻意留在本文件、不迁走的四条**（它们没有标记时刻，迁走＝变成携带率 9-24% 的自由裁量）：③.5 收官简报四条铁律（见下）· 长窗防停摆四层（心跳，见下条）· 在途水位线（见下下条）· ⑤自主边界（见下，硬边界射程是整段工期）。
   ③.5**收官简报四条铁律**（先行铁序/预记禁令/循环存续铁律/三明治规则，出处：叙事 N3）：窗末简报必须**先于**心跳设置、作为独立完整消息发出，ScheduleWakeup prompt 只准写未来动作不准预记「已发」；以 ScheduleWakeup 收尾的轮**视为该轮未发简报**，每次唤醒先核查上轮是否真发、未发则先补；简报"已发"只准下一轮回看核实后记账；纯文本收尾的简报轮须在**同轮更早的工具段**先设好后继心跳（否则零在途+零待触发=循环饿死）；ScheduleWakeup **永不作轮内最后一个工具调用**，其后必须再跟至少一个工具调用，心跳 prompt 末尾固定携带铁序自提醒一句。
-  ⑤**自主边界（永不进自主窗）**：不可逆决策（架构定死/对外发布/删用户数据）、需用户在场件（凭据/审美拍板/真钥）、用户未点头的新疆域——只做「沿既定方向推进+健康维护」，转向权归用户。
+  ⑤**自主边界（永不进自主窗）**：不可逆决策（架构定死/对外发布/删用户数据）、需用户在场件（凭据/审美拍板/真钥）、用户未点头的新疆域——只做「沿既定方向推进+健康维护」，转向权归用户。**其中「对外发布」这一格已出文本层**：`gh release create|delete|upload` / `npm|pnpm|yarn|bun publish` / `cargo publish` 现由 `ccswitch/hooks/dao-hard-gates.js` G3 在 PreToolUse `exit 2` 阻断（`--dry-run` 放行；用户设 `DAO_PUBLISH_APPROVED=1` 放行）。**其余各格机器判不了，仍然只是判据**——「架构定死」「审美拍板」「用户未点头的新疆域」没有任何工具调用可以对应，别把这一格的硬化读成整条已被兜住。
 - **长窗防停摆四层**（出处：L25）：核心原则——**监督信号必须独立于作业信道**，只靠 task-notification 驱动、任何一路 subagent 沉默即饿死整窗。①第一动作设 ScheduleWakeup 心跳（高性能档 900s、标准档 1200-1800s；盘点在途→悬挂介入→无事推进下批→用户接管且无欠账即 stop）。②等待超时降级交付+后台验证主动轮询到终态（armed 不算主动，出处：叙事 N5，条款详见项目侧 `docs/rules/dispatch-clauses.md` 通用节）。③在途任务 TaskCreate 登记，心跳醒来先对账不凭印象。④派单后逐路抽验 worktree 基点（`merge-base` = main tip，旧基点先 merge 再开工，出处：L24）
 - **在途水位线（用户点名固化 2026-08-01，任何项目生效）**：帅的默认态是**多路满载，单路在途是需要理由的例外——不是反过来**。心跳对账固定加一问「**在途几路 × 队列有活吗**」：队列非空且在途低于水位（高性能档 3-4 路、标准档 2 路）⇒ **当轮补派到水位**，补不满的写明理由（真机名额独占 / 文件相交须串行 / 池子实况不稳）。两个已实证的滑落形态，都不是「忘了派」而是「有理由地不派」——理由是错的：①**连环 API 死亡后只重派了死的那路，没恢复其余并发**——要恢复的是路数，不只是任务；②**环境约束被扩大解读**——「冻结 main 推送」被读成「少开工」，而冻结管的只是推送，worktree 开工止步 PR 不受限。判据一句话：**每个「不派」都要答得出「这一路为什么不能现在跑」，答不出就是水位缺口。** [基线:2026-08-01 首例——队列三件互不相交就绪（#367/#343/#440），帅单路空转约 30 分钟，用户点名「帅位只管一个将不妥」]
   - 🔴 **彻底解决三层（用户第 2 次点名「能彻底解决吗」后固化 2026-08-01；前一版是「提醒型」条款，实测仍反复滑落，正是「提醒类携带率低」的自证）**——反复滑落的根因是**帅单线程既派又合又裁，串行合并期无人补水位**，故治法是改动作次序+改水位定义+识别真瓶颈，不是加提醒：
@@ -274,8 +273,8 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 - **串行敏感验证**：test/typecheck/install/build 串行执行，并行只用于短只读命令，避免输出串线致假结论
 - **临时文件归项目**：AI 产出的临时文件（截屏 / 图表 / 中间产物 / 一次性脚本）统一放 `<项目根>/_tmp/`，不用系统 temp / scratchpad 目录。`<项目根>` = **被操作的目标项目**，不是会话的 cwd。跨项目场景（如在 windsurf-dao 会话中操作 TraceyU）→ `_tmp/` 归目标项目（TraceyU）。若 MCP workspace roots 阻止直接写入目标项目，先写到可写位置再 `Copy-Item` 到目标项目 `_tmp/`。项目 `.gitignore` 必须含 `**/_tmp/`
 - **WebView2 远程调试**：WebView2 应用启动前设 `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"`，chrome-devtools MCP 即可直连应用内 WebView。**不要另开 Chrome 当代理**；项目应固化为 `dev:debug` 脚本，非每次手动设
-- **截图路径强制**：浏览器 MCP 截图**必须**落 `<项目根>/_tmp/qa/<context>/`，禁项目根或其他非 `_tmp/` 位置；`<context>` 命名与 `<type>-<description>.png` 规格细则已下沉 dao-design standards.md §截图规格
-- **settings.json 运行时改动 · 确认门禁（非禁令）**：改前先向用户说明风险（可能触发 `401 device was revoked` 强制登出）并问是否代做。**授权→一次 Edit 改完+JSON 校验+hook 冒烟**；未授权→写 `_tmp/settings-patch.json` + 会话外命令。config-sync 同理，先问授权即做
+- **截图路径强制 · 已出文本层**：浏览器 MCP 截图落 `<项目根>/_tmp/qa/<context>/` —— 现由 `ccswitch/hooks/dao-hard-gates.js` G4 阻断（**给了路径且不在 `_tmp/qa/` 下即 `exit 2`**，无逃生阀；不给路径＝内联返回不落盘，放行）。`<context>` 命名与 `<type>-<description>.png` 规格见 dao-design standards.md §截图规格。**射程只到浏览器 MCP**：PowerShell/.NET 截图脚本走的不是工具调用，那半仍是判据
+- **settings.json 运行时改动 · 已出文本层**：写 `~/.claude/settings.json`（含 `.local`）现由 `ccswitch/hooks/dao-hard-gates.js` G2 阻断——**未授权时的正路不变**：写 `_tmp/settings-patch.json` + 把会话外命令交用户；**只是想让改动持久**说明改的对象就错了（见下条「源与投影」）；用户当面授权且确要改 live 那一份 → 由**用户**设 `DAO_SETTINGS_EDIT_APPROVED=1`（agent 自己 export 影响不到 hook 进程，这是刻意的）。风险（可能触发 `401 device was revoked` 强制登出）与三条路径全文在该 hook 头注 G2。config-sync 同理，先问授权即做
 - **改配置先认源与投影**：写前先问「这文件是源还是某个源的投影」——改投影立即生效但不持久、下次源下发即覆盖且无告警（如 `~/.claude/settings.json` 是 cc-switch DB 经 `config-sync/lib/export.mjs` 的投影，只识别 `common_config_*` 键）；正道是改 git 快照层+由用户 restore 写源。凡「本地文件+集中配置库」双存在系统皆同病（2026-07-26 帅亲手造债实证，判据本条为唯一真相源）
 - **PR 合并期的机械链走脚本，不靠记步骤**（2026-08-01 由三条文字规则 mechanize）：canonical 是 `ccswitch/scripts/dao-pr-merge.ps1`（PS 5.1；参数化 repo 路径 / 验证命令 / PR 号；先 `-DryRun`），按序跑完并逐步核验——**`git fetch` → 核 `rev-parse origin/<主干>` 真的动了 → merge 主干进本分支 → 在合并后的树上重跑验证 → 拆占用该分支的 worktree → `gh pr merge --merge --delete-branch` → `git fetch --prune` → 实查 `ls-remote` 远程分支真的空了**。链上每步都是零判断祈使句，故做成脚本；**每步防的是哪个静默失败，判据在反·归「预算型护栏必须在合并态求值」两条与脚本头注**（唯一真相源，此处不复述）。触发点是既有 hook `ccswitch/hooks/dao-tool-nudge.js`（PostToolUse·Bash matcher）：裸手跑 `gh pr merge` 会被提醒走脚本 + 补做合并后两步复核——**它是事后提醒不是守卫**。**三个不由脚本兜住的边界**：①用户在网页端自行点 merge 时 agent 不在场，只能靠 dao-verify 孤儿分支扫描回溯兜底；②脚本不判「验证命令选得对不对」，也不判「这份改动该不该合」——终审不可让渡；③`--delete-branch` 的**沉默不可信**，脚本因此先拆 worktree、末尾再独立实查一次远程，**别把它的静默读成干净**（三条的成因见 rationales §Shell-1）。 [n=1 @07-29 触发:PR流程] [自定@07-29] [基线:同窗 3/3 个 PR 的远程分支删除静默失败]
   - **判「这份改动进没进主干」不能只问 `--is-ancestor`，更不能问「有没有开过 PR」**（2026-07-29 立，**订正同日同条的一个错误叙述**：原文曾把一条孤儿分支写成「102 行测试遗失三天无人知晓」并据此立论，**当晚派官核实即被证伪**）。三个判据答的是三个不同问题：**①`gh pr list --head <branch>` 空** ⇒ 只说明「这个**分支名**下没开过 PR」，**内容可能早经另一条路进去了**；**②`git merge-base --is-ancestor <branch> main`** ⇒ 判的是「这个 **commit 对象**在不在 main 的历史里」，对 cherry-pick / 重复推送 / rebase 后的等价提交**结构性失明**；**③`git patch-id --stable`** ⇒ 才是「**这份改动**在不在」。⇒ **看到「未并入」先用 patch-id 复核再动作**；分支上有等价内容时，**开 PR 反而有害**（照令开 PR 会提议回滚一个已发布版本，经过见 rationales §Shell-2）。**这一条的价值不在删分支，在于它是「一个信号诚实地回答了另一个问题」在 git 上的实例**。 [n=1 @07-29 触发:PR流程] [自定@07-29] [基线:1/1——本窗唯一一次「疑似遗失工作」经 patch-id 复核后为误判]
@@ -287,7 +286,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 
 **Commit 标识铁律**：subject 必须以宿主前缀开头——Claude Code `[cc]`，Codex `[codex]`。格式 `[宿主] type(scope): 描述`。提交前自检宿主，提交后 `git log -1 --oneline` 核对。
 
-**只读载体禁写待办**：PR body / commit message / 已合并文档等**事实只读**的载体里禁用 `- [ ]` 及任何承诺未来动作的形态；`- [x]` 允许（它陈述过去）。待办必须写进**可编辑的仓内文件**（issue / TODO / 问题树面板），只读载体只准写指针（`见 <文件>#<锚点>`）。判据一句话：**载体能不能被后来的人改——不能改的，就只能记录过去**。复选框这个 UI 隐喻承诺了「以后有人会来勾」，而那个账本没有写入端（出处：叙事 N9-②）。 [n=20 @07-27 触发:PR流程] [基线:全库 PR body 未勾 `- [ ]` 共 46 处、分布约 20 个 PR；237 个 PR 中未见合并后编辑 body 的实践]
+**只读载体禁写待办**：PR body / commit message / 已合并文档等**事实只读**的载体里禁用 `- [ ]` 及任何承诺未来动作的形态；`- [x]` 允许（它陈述过去）。待办必须写进**可编辑的仓内文件**（issue / TODO / 问题树面板），只读载体只准写指针（`见 <文件>#<锚点>`）。判据一句话：**载体能不能被后来的人改——不能改的，就只能记录过去**。复选框这个 UI 隐喻承诺了「以后有人会来勾」，而那个账本没有写入端（出处：叙事 N9-②）。**一半已出文本层**：`gh pr create|edit` 的 body（含 `--body-file` 指向的文件）与 `git commit` 的 message 里出现未勾 `- [ ]`，现由 `ccswitch/hooks/dao-hard-gates.js` G5 `exit 2` 阻断（`- [x]` 放行；issue / PR comment 是**可编辑**载体，刻意不在射程内）。**另一半仍是判据**：「已合并文档」与其他只读载体没有对应的工具调用形态，拦不了。 [n=20 @07-27 触发:hook硬闸+PR流程] [基线:全库 PR body 未勾 `- [ ]` 共 46 处、分布约 20 个 PR；237 个 PR 中未见合并后编辑 body 的实践。**2026-08-01 加闸时复测：近 30 个 merged PR 中 0 个 body 含未勾框** ⇒ 本闸是纵深防御，不是在止血]
 
 ## 反 · 归（太极之复）
 
