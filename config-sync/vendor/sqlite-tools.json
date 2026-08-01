@@ -1,0 +1,9 @@
+{
+  "_doc": "sqlite3 命令行工具的下载清单 —— setup-sqlite.ps1 与 lib/sqlite.mjs 共用的唯一真相源，两边都不硬编码 url/sha256。zip 本体不再进 git（6.4 MB），首次用时按本清单下载到 vendor/ 并校验 SHA256，不匹配即删除拒用。",
+  "_bump": "换 sqlite 版本时 version / file / url / sha256 四个字段必须同批改。sha256 用 `Get-FileHash -Algorithm SHA256 <zip>` 对真正下到的文件实算，不要从网页抄。",
+  "_url_note": "路径里的年份目录是 sqlite.org 的发布年，不是当前年——3.53.2 发布于 2026-06-03，故在 2026/ 下。写错年份表现为 404（2025/ 与 2024/ 均实测 404）。",
+  "version": "3.53.2",
+  "file": "sqlite-tools-win-x64-3530200.zip",
+  "url": "https://www.sqlite.org/2026/sqlite-tools-win-x64-3530200.zip",
+  "sha256": "2EB7602BBE05895F4F530D8F3C4AF244DCD8697D14B858778CCD4ABE297A836D"
+}

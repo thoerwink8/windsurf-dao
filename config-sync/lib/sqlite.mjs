@@ -1,10 +1,32 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { ccSwitchBackupDir, ccSwitchDbPath, configSyncRoot } from './paths.mjs';
 
-const VENDOR_SQLITE = path.join(configSyncRoot, 'vendor', 'sqlite', 'sqlite3.exe');
+const VENDOR_DIR = path.join(configSyncRoot, 'vendor');
+const VENDOR_SQLITE = path.join(VENDOR_DIR, 'sqlite', 'sqlite3.exe');
+
+// ── sqlite-tools 的 url / 文件名 / SHA256 唯一真相源 ──────────────────────────
+// 6.4 MB 的 zip 不再进 git，改为首次用时下载 + SHA256 校验（代价：新机器首次需联网）。
+// 清单与 `../setup-sqlite.ps1` 共用；**下载+校验的实现也只有一份**，就在那个 ps1 里
+// （`-EnsureZipOnly`：只取包、不解压、不写环境变量），这里 shell out 过去调它，
+// 免得两个消费方各写一套下载逻辑然后各自漂移。换 sqlite 版本只改 vendor/sqlite-tools.json。
+const SQLITE_MANIFEST = path.join(VENDOR_DIR, 'sqlite-tools.json');
+const SETUP_SQLITE_PS1 = path.join(configSyncRoot, 'setup-sqlite.ps1');
+
+function readSqliteManifest() {
+  const manifest = JSON.parse(fs.readFileSync(SQLITE_MANIFEST, 'utf8').replace(/^﻿/, ''));
+  for (const field of ['file', 'url', 'sha256']) {
+    if (!manifest[field]) throw new Error(`下载清单缺字段 '${field}'：${SQLITE_MANIFEST}`);
+  }
+  return manifest;
+}
+
+function sha256Upper(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex').toUpperCase();
+}
 
 const FALLBACK_SQLITE_PATHS = [
   VENDOR_SQLITE,
@@ -62,16 +84,50 @@ export function ensureSqlite3() {
   } catch (originalError) {
     if (process.platform !== 'win32') throw originalError;
 
-    const vendorDir = path.join(configSyncRoot, 'vendor');
-    let zipName;
+    let manifest;
     try {
-      zipName = fs.readdirSync(vendorDir).find((f) => /^sqlite-tools-win.*\.zip$/i.test(f));
+      manifest = readSqliteManifest();
     } catch { throw originalError; }
-    if (!zipName) throw originalError;
 
-    const zipPath = path.join(vendorDir, zipName);
+    const zipPath = path.join(VENDOR_DIR, manifest.file);
+    const expected = manifest.sha256.toUpperCase();
     const destDir = path.dirname(VENDOR_SQLITE);
-    console.log(`  sqlite3 未找到，从 vendor/${zipName} 解压……`);
+
+    // 1) 确保 vendor/ 下有安装包。本地没有、或有但哈希对不上（下载中断的半截文件）→ 让 ps1 去取。
+    if (!fs.existsSync(zipPath) || sha256Upper(zipPath) !== expected) {
+      console.log(`  sqlite3 未找到，首次使用需下载 ${manifest.file}（约 6.4 MB，需联网）……`);
+      try {
+        execFileSync(
+          'powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SETUP_SQLITE_PS1, '-EnsureZipOnly'],
+          { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 300000 },
+        );
+      } catch (downloadError) {
+        const detail = String(downloadError.stderr || downloadError.stdout || downloadError.message).trim();
+        throw new Error(
+          `sqlite3 安装包获取失败：${detail}\n`
+          + `可离线自救：手动下载 ${manifest.url} 放进 ${VENDOR_DIR}（SHA256 须为 ${expected}），`
+          + '或设置环境变量 SQLITE3_PATH 指向已装好的 sqlite3。',
+        );
+      }
+    }
+
+    // 2) 到手也不白信：这一侧独立复核一次 SHA256。
+    //    绕开 ps1 直接把文件塞进 vendor/ 的路径同样被这道拦下——校验不该只长在下载那条路上。
+    if (!fs.existsSync(zipPath)) {
+      throw new Error(`获取安装包后仍未找到 ${zipPath}`);
+    }
+    const actual = sha256Upper(zipPath);
+    if (actual !== expected) {
+      fs.rmSync(zipPath, { force: true });
+      throw new Error(
+        `${manifest.file} SHA256 校验失败，已删除并拒绝使用（供应链防线）。\n`
+        + `  期望: ${expected}\n  实际: ${actual}\n`
+        + `若 sqlite.org 确实发布了新版本，请更新 ${SQLITE_MANIFEST} 的 version / file / url / sha256 四个字段。`,
+      );
+    }
+
+    console.log(`  从 vendor/${manifest.file} 解压……`);
     fs.mkdirSync(destDir, { recursive: true });
 
     try {
