@@ -205,7 +205,6 @@ tools: Read, Grep, Glob, Bash
 
 debug 前必读:
 
-- `ccswitch/dao.md` §动·三才之机 — 三层螺旋、升级路径、3 次失败升级 dao-strategist 等方法论已归入 dao 场域根文件
 - `ccswitch/skills/dao-verify/SKILL.md` — 修复后必走涅槃门验证(根因/修复/不再触发/无副作用/教训)
 
 ## 元提醒
