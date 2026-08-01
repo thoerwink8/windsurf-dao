@@ -227,6 +227,95 @@ function clauseStructureLines(daoRoot) {
           " 个 .md，合计 " + clauses + " 条，零违例（零条款的纯流程文件不检，故意不报红）"];
 }
 
+// ── 死闸检测的挂载点（2026-08-01 · 架构优化 P3）────────────────────────────
+// 治的病与上面那道条款闸同源，只是换了个身位：**一个死掉的 hook 与一个全过的 hook，
+// 在机器可读通道上完全不可区分**（ctxlint 管这叫「a dead gate silently no-ops」）。
+// 而 dao 正在把门控类条款整体往 hook 层迁（P1）——押注越重，这道安全网越必要：
+// 迁过去的条款一旦落在死 hook 上，遵守率直接掉到 0，而台账上看起来和「已经 hook 化了」
+// 一模一样。本仓同窗刚有过一次实证：`isMetaRepo` 原判据在 worktree 里恒为假，
+// 模式 A 整块从未跑过，而它的输出与「跑了且没问题」完全一致。
+//
+// 为什么挂在这里（理由与上面那道闸逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
+// 三处注册，而那正是本文件头注写的那笔债 —— 一道查「谁没挂好」的闸，不该自己先欠一笔注册账。
+// 只在**模式 A**跑：它扫的是 `~/.claude/settings.json` + 本仓 `config-sync/common/`，
+// 与当前项目是谁无关，在每个项目里各跑一遍只是重复付钱。
+//
+// 成本：本机实测整跑 ~50ms（`.js` 走进程内 vm 解析、零 spawn；只有 module goal 或
+// 解析失败的文件才落到权威的 `node --check`）。比上面那道 PowerShell 闸便宜一个数量级。
+//
+// 输出策略与上面那道闸同构（三态，任一态都**不静默**）：
+//   ① 红（有死闸 / 自检半边失败 / 跑不起来）⇒ 报摘要 + 前几条明细
+//   ② 绿 + 有待办（孤儿 hook / 无法核验条目）⇒ 报一行
+//   ③ 绿且无待办 ⇒ 一行普查数（**刻意不做成零输出**：扫描面缩小必须看得见）
+// 只解析末行的纯 ASCII 契约，**不去正则匹配中文正文** —— 两个文件之间拿文案当契约，
+// 正是「被引用方一改、引用方静默失效」的温床。
+const DEAD_GATES_TIMEOUT_MS = 30000;
+
+// 从报文里捞失败明细：只认 `✗ ` 开头的段落头 + 紧随其后的缩进条目行。
+// 不按 `· ` 前缀通吃 —— 孤儿/无法核验两节用的是同一个前缀，通吃会把提示混进红报。
+function deadGateFailDetail(out, max) {
+  const lines = String(out).split(/\r?\n/);
+  const picked = [];
+  for (let i = 0; i < lines.length && picked.length < max; i++) {
+    if (!/^✗ /.test(lines[i])) continue;
+    picked.push("  " + lines[i]);
+    for (let j = i + 1; j < lines.length && picked.length < max; j++) {
+      if (!/^\s+· /.test(lines[j])) break;
+      picked.push("  " + lines[j].trim());
+    }
+  }
+  return picked.join("\n");
+}
+
+function deadGateLines(daoRoot) {
+  const script = path.join(daoRoot, "ccswitch", "scripts", "check-dead-gates.mjs");
+  try {
+    if (!fs.existsSync(script)) {
+      return ["✗ 死闸检测脚本不在：" + script + "（查死闸的东西自己死了 —— 这一行就是它要报的那种病）"];
+    }
+  } catch (e) {
+    return ["✗ 死闸检测探测失败：" + (e && e.message ? e.message : String(e))];
+  }
+  let out = "", code = 0;
+  try {
+    out = execFileSync(process.execPath, [script], {
+      encoding: "utf8", timeout: DEAD_GATES_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+    });
+  } catch (e) {
+    // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上
+    out = (e && typeof e.stdout === "string") ? e.stdout : "";
+    code = (e && typeof e.status === "number") ? e.status : -1;
+    if (!out) {
+      return ["✗ 死闸检测跑不起来：" + (e && e.message ? e.message : String(e)) +
+              "（手动复核：node ccswitch/scripts/check-dead-gates.mjs）"];
+    }
+  }
+  const m = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+)/.exec(out);
+  if (!m) {
+    return ["✗ 死闸检测跑完但没拿到 DEAD_GATES_SUMMARY 末行（真退出码 " + code +
+            "）→ 契约可能被改坏了，手动跑一次看输出：node ccswitch/scripts/check-dead-gates.mjs"];
+  }
+  const [, sExit, sHooks, sDead, sOrphan, sSelf, sUnver] = m;
+  if (sExit !== "0" || code !== 0) {
+    const why = sDead !== "0"
+      ? "有 " + sDead + " 条 hook/permission 指向的脚本已不存在或语法坏掉 —— 它们此刻在宿主里静默 no-op"
+      : "检测器自检半边失败（selfcheck=" + sSelf + "）⇒ 此时「零死闸」不可信，先修检测器";
+    const detail = deadGateFailDetail(out, 6);
+    return ["✗ 死闸检测 FAIL（扫了 " + sHooks + " 条闸）：" + why +
+            (detail ? "\n" + detail : "") +
+            "\n  → 全量：node ccswitch/scripts/check-dead-gates.mjs"];
+  }
+  const todo = [];
+  if (sOrphan !== "0") todo.push(sOrphan + " 个 hook 文件存在但没被任何一层注册（可能是刻意存货，也可能是挂漏了，机器判不出）");
+  if (sUnver !== "0") todo.push(sUnver + " 条命令串无法核验（相对路径 / 靠 PATH 解析 ⇒ **不等于核验通过**）");
+  if (todo.length) {
+    return ["ⓘ 死闸检测绿（" + sHooks + " 条闸，零死闸），另有：" + todo.join("；") +
+            " → node ccswitch/scripts/check-dead-gates.mjs 看清单"];
+  }
+  return ["ⓘ 死闸检测绿：live + config-sync 快照合计 " + sHooks +
+          " 条闸全部指向存在且可载的脚本，孤儿 0、无法核验 0"];
+}
+
 function inject(context) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
@@ -311,6 +400,10 @@ function daoSyncLines() {
   // 7. 条款库结构闸（2026-08-01 挂载，判据与三态输出策略见 clauseStructureLines 头注）。
   //    只在元仓库跑；它守的是 ccswitch/dao.md 自己，而 dao.md 此前从未被任何闸守过。
   for (const line of clauseStructureLines(daoRoot)) drifts.push(line);
+
+  // 8. 死闸检测（2026-08-01 挂载 · 架构优化 P3，判据见 deadGateLines 头注）。
+  //    上一项守「条款写得对不对」，这一项守「守条款的那些闸本身还活着吗」。
+  for (const line of deadGateLines(daoRoot)) drifts.push(line);
 
   return drifts;
 }
