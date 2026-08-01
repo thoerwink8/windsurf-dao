@@ -224,12 +224,20 @@ export function assertDbExists(dbPath = ccSwitchDbPath) {
   }
 }
 
-export function runSql(sql, { dbPath = ccSwitchDbPath, json = false } = {}) {
+// `readonly: true` ⇒ sqlite3 以 `-readonly` 打开数据库。给纯查询型消费方用
+// （如 ccswitch/lib/settings-drift.js 的 `--providers` 面）：那类调用的「只读」若只靠
+// 「我们写的 SQL 里没有 UPDATE」保证，就是纪律性只读——一次手滑、一次 SQL 拼接就破。
+// 这个开关把它变成结构性只读：sqlite3 自己拒绝写入，而不是我们保证不写。
+// 默认 false ⇒ 既有调用方（sync / restore / doctor 要写）行为逐字节不变。
+export function runSql(sql, { dbPath = ccSwitchDbPath, json = false, readonly = false } = {}) {
   assertDbExists(dbPath);
   const sqlite = findSqlite3();
   // 不把 SQL 放进 argv：providers.settings_config 可能很长，Windows 命令行会触发 ENAMETOOLONG。
   // 通过 stdin 传给同一个 sqlite3 进程，既保留事务原子性，也避免 token 写入临时 .sql 文件。
-  const args = json ? ['-json', dbPath] : [dbPath];
+  const args = [];
+  if (readonly) args.push('-readonly');
+  if (json) args.push('-json');
+  args.push(dbPath);
   const output = execFileSync(sqlite, args, {
     input: sql,
     encoding: 'utf8',
