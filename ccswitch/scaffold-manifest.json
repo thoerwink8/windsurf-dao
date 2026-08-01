@@ -5,6 +5,7 @@
     "这是什么": "共性 rule 备案清单。每次 SessionStart 由 ccswitch/hooks/dao-scaffold-check.js 逐条求值，缺项即报并给补齐指引——「之前没做的共性 rule 自然补上」这件事的载体。",
     "怎么加一条": "往 entries 加一个对象即可，不改代码。字段：id / class / when(仅 conditional，universal 与 product-type 不得带) / require / msg / why / severity / exempt(可选) / template(可选)。求值语义与谓词种类见 ccswitch/lib/scaffold-manifest.js 头注。",
     "template 怎么用": "`template: {src, dest}` —— src 是 ccswitch/templates/ 下的**真文件或真目录**相对路径，dest 是项目根下的目标路径。命中缺项时报文自动追加一条**零编辑可执行**的 PowerShell 复制指令（绝对路径，粘贴即跑）。要治的是：缺项报文的终点原本大多是「运行 /dao-project-scaffold」「参考 stacks/xxx.md」，那等于**让下一个 AI 现场重新发明一份** ⇒ 同一条共性 rule 在每个项目里长得都不一样，文件名契约保证了名字相同、内容各自漂移。三条机器闸在 lib 里：①src 必须真实存在（load 时就报，不等某个项目恰好缺这项才现形）②dest 必须与 require 查的路径相等（否则报文教人复制到 A、闸查的是 B，照做完还是红）③文件还是目录由求值时 stat 决定、不由清单写死。**只生成指令，绝不自动复制**——SessionStart hook 静默改用户项目的文件是另一个量级的授权。**不是每条都该带 template**：只有「有 canonical 可抄」的条目才带；没有 canonical 的（如各项目自己的 desktop-debugging.md）照旧给指引。",
+    "缺项怎么补齐": "命令行核对 `node ccswitch/scripts/dao-scaffold-report.mjs [项目根]`（退出码：0=零缺项 / 1=有缺项 / **2=没查成**，三者必须区分得开）；一键补齐入口是 `/dao-project-scaffold --init`。补齐动作分三档，判据取自本清单的**数据本身**不靠 id 硬编码：带 `template` 的 ⇒ 跑那条零编辑复制指令（物化）；`require` 顶层是 `not`（删除/搬移）或 `maxLines`（拆分）⇒ **永远只建议不代做**（不可逆或改用户既有内容，属判断档）；其余 ⇒ 可代做但每条要说清写什么、依据哪一句，且与物化分开计数（两者可靠性不是一回事）。",
     "文件名契约（原则声明，不是检查项）": "共性 rule 必须由**约定文件名**承载（如样式路线 → .claude/rules/frontend-style.md）。内容可以项目化，**文件名不可**——跨项目自动核对的全部可能性都建立在文件名固定上。若某项目已把该领域规范散在多个自定义命名的文件里，正确动作是建一个约定名文件、内容写成对既有文件的指针（而非搬运，避免双份漂移）。理由：不立这条，本清单的每次「缺项」报告都是可争议的——被报方总能说「我有这个规范，只是文件名不同」，而清单的价值恰恰在于无需语义理解即可核对（实证：TraceyU 12 个 rules 把样式路线散在三个文件里，清单报它缺 frontend-style.md——那缺项是真是假，取决于一个从未被规定的东西）。裁定人：帅，2026-07-27（用户授权内代拍，醒后可推翻）。",
     "exempt 怎么用": "`exempt: [{repo, why}]` 声明某个仓库对该条的例外，repo 取项目根目录 basename。原则是**例外显式化 > 例外隐形**：此前 hook 遇仓名 windsurf-dao 直接整体早退，于是检查从不跑到立法者头上、也就没人发现它自己违规（实测它自身会中两条，其中一条有个从未写下来的例外）。写 exempt 时 why 必填且要写清「为什么这个仓可以不满足」，让下一个想动那个文件的人先看到理由。匹配是 basename 近似判据，换目录名 clone 会匹配不上而照报——失败方向刻意选「多报」，见 lib 头注。",
     "四分类": {
@@ -39,8 +40,9 @@
       "id": "claude-md",
       "class": "universal",
       "require": { "file": "CLAUDE.md" },
-      "msg": "缺少 CLAUDE.md（AI 入口文件）",
-      "why": "CLAUDE.md + .claude/rules/ 是唯一 AI 上下文通道（dao-project-scaffold SKILL.md §唯一 AI 通道）。",
+      "template": { "src": "CLAUDE.md.template", "dest": "CLAUDE.md" },
+      "msg": "缺少 CLAUDE.md（AI 入口文件）→ 从 canonical `ccswitch/templates/CLAUDE.md.template` 派生，复制后**先答骨架里那道必答题**（产品型 / 内部工具二选一）",
+      "why": "CLAUDE.md + .claude/rules/ 是唯一 AI 上下文通道（dao-project-scaffold SKILL.md §唯一 AI 通道）。**2026-08-01 加 template（B6 触发闭环）**：本清单唯一带 canonical 的那一档（product-type）靠项目 CLAUDE.md 里的自我声明子串开启，而 2026-08-01 审计实测——全生态 grep 那五个字**只命中 dao 自己的机件**，skills/commands/templates 与任何项目骨架里零命中 ⇒ **新项目结构上永不触发那一档检查**。缺的不是判据也不是授权，是「没有任何东西会把那句声明写进新项目」。修法不是让 dao 替项目判（那是语义判断，本清单明令不收），而是把声明做成**骨架里的必答题**：骨架落地那一刻问题就摆在眼前，答「不是」只需删掉那一行。骨架刻意留白（实测行数远低于 claude-md-size 的 80 行预算），让项目自己写的内容不会一落地就撞另一条闸。",
       "severity": "warn"
     },
     {
