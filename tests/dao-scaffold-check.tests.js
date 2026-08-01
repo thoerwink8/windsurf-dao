@@ -102,6 +102,20 @@ function mkMetaRepo(tag, hookFileNames) {
   return root;
 }
 
+// 元仓库识别的**第二个信号**（2026-08-01）：内容签名 ccswitch/dao.md + ccswitch/scaffold-manifest.json。
+// 造一个**目录名故意不叫 windsurf-dao** 的沙箱，用来钉住「worktree 里模式 A 也要跑」。
+// `withSignature=false` 即误伤负控：同样的怪名字、但没有签名文件 ⇒ 必须仍判为普通项目。
+function mkMetaWorktree(tag, withSignature) {
+  const root = path.join(SANDBOX, "meta", tag, "windsurf-dao-wt-" + tag);
+  fs.mkdirSync(path.join(root, "ccswitch", "hooks"), { recursive: true });
+  putFakeGit(root);
+  if (withSignature) {
+    fs.writeFileSync(path.join(root, "ccswitch", "dao.md"), "# fixture dao\n", "utf8");
+    fs.writeFileSync(path.join(root, "ccswitch", "scaffold-manifest.json"), '{"entries":[]}', "utf8");
+  }
+  return root;
+}
+
 function run(cwd, extraEnv) {
   const payload = JSON.stringify({
     session_id: "knifeF-scaffold",
@@ -208,6 +222,27 @@ console.log("\n=== 元仓库不再整体豁免：A 段 + B 段同时跑，例外
   });
   check("普通仓有 AGENT_GUIDE.md → 照报（exempt 不越界到别的仓）",
     /冗余 AI 入口 AGENT_GUIDE/.test(ctx(run(cwd))));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 模式 A · worktree 也必须被认成元仓库（内容签名，两态）===");
+// 2026-08-01 修的漏判：原判据只有 `path.basename(cwd) === "windsurf-dao"`，
+// 于是 **任何 worktree**（windsurf-dao-wt-xxx）都判不出元仓库 ⇒ 模式 A 整块静默跳过，
+// 而输出与「跑了且没问题」一模一样。判别锚点取「条款库结构闸」那一行：沙箱里没有
+// ccswitch/scripts/check-clauses-structure.ps1，模式 A 必然报「脚本不在」，模式 B 必然不报。
+{
+  const withSig = mkMetaWorktree("sig", true);
+  check("worktree 名（非 windsurf-dao）+ 内容签名 → 走模式 A（报出条款闸缺脚本）",
+    /条款库结构闸脚本不在/.test(ctx(run(withSig))));
+
+  const noSig = mkMetaWorktree("nosig", false);
+  const noSigCtx = ctx(run(noSig));
+  check("误伤负控：同样的怪目录名、但无签名文件 → 仍是普通项目（不报条款闸）",
+    !/条款库结构闸/.test(noSigCtx));
+
+  // 正向保底：老判据没被换掉（取或不是取代）——目录名叫 windsurf-dao 的仍走模式 A。
+  check("回归：目录名 windsurf-dao 但无签名文件 → 仍走模式 A",
+    /条款库结构闸脚本不在/.test(ctx(run(mkMetaRepo("orsignal", [])))));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
