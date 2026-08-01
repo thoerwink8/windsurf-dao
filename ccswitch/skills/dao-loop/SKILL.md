@@ -68,6 +68,24 @@ reviewing 阶段是用户决策点，必须用 AskUserQuestion。
 
 扫描方式：读取所有 `docs/specs/*/STATUS.json`（活跃）+ `docs/specs/_archive/INDEX.md`（已完成）。
 
+### §1.1 参数解析（恢复目标路由）
+
+解析 `$ARGUMENTS`，判断是否匹配已有 Loop 名称（即 `docs/specs/<name>/STATUS.json` 存在）：
+
+- **匹配已有 Loop** → 标记为「恢复目标」，进入续做流程（读 STATUS.json，从中断点继续）
+- **不匹配** → 视为新需求，进入 §1.2 孤儿检测
+
+### §1.2 孤儿检测（🔒 开新 Loop 前必过）
+
+扫描所有 `docs/specs/*/STATUS.json`，收集 `status !== "archived"` 的 Loop（**恢复目标排除在外**）。
+
+- **无孤儿** → 展示已归档 Loop 总览表 → 进入 §1.5
+- **有孤儿** → 展示总览表后**逐个**处理。对每个孤儿 Loop 用 `AskUserQuestion` 展示名称/状态/进度/描述，**四选一**：**续做**（生成续做提示词，不中断当前流程）/ **归档**（当场执行 closing.md 的验收比对 + 归档流程）/ **废弃**（标 `abandoned` + 记录原因）/ **暂不处理**（保留原样跳过）。
+  - **续做提示词模板**：生成 `/dao-loop <name>` + 上下文（描述/状态/进度/阶段），copy-ready。
+  - **全部处理完 → 汇总展示**：表格列出每个孤儿的决定和备注，续做项统一列出提示词方便复制。汇总后 → 进入 §1.5。
+
+> **递归安全**：当 §1.1 识别到参数是已有 Loop 名（续做意图），**该 Loop 不进入孤儿检测**，其他非 archived Loop 仍正常检测。这打断了「续做提示词 → 新会话 → 又检测到同一孤儿」的递归。
+
 ### 归并判断
 
 新 loop 创建时评估与已有 loop 的关系：
@@ -147,7 +165,17 @@ AI 判断 + 用户确认。用户显式指定时以用户为准。
 
 ### /loop prompt
 
-每轮唤醒：读 STATUS.json → 按 thread+mode 执行 → 更新 STATUS.json → ScheduleWakeup。prompt 含目标需求。
+每轮唤醒：读 STATUS.json → 按 thread+mode 执行 → 更新 STATUS.json → ScheduleWakeup。
+通过 `/loop` + `ScheduleWakeup` 实现自动循环，prompt 模板（copy-ready，含目标需求）：
+
+```
+执行 dao-loop：
+1. 读取 docs/specs/<topic>/STATUS.json
+2. 根据 thread + mode 执行对应动作
+3. 更新 STATUS.json
+4. ScheduleWakeup
+目标：<需求>
+```
 
 ## §10 与现有命令的关系
 
