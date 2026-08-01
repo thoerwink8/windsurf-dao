@@ -3,3 +3,6 @@ providers/
 *.local.json
 _tmp/
 vendor/sqlite/
+# 安装包不进 git：首次用时按 vendor/sqlite-tools.json 下载并校验 SHA256（清单本身要进 git）
+vendor/*.zip
+vendor/*.zip.part
