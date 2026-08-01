@@ -170,7 +170,7 @@ git branch --merged $mainBranch |
 
 ### 与其他 dao-* 协作
 
-- `dao-evolve`（正交）— 审 dao 体系自身，本节审业务项目
+- `/dao-evolution`（正交）— 读其 `system-review.md` 审 dao 体系自身，本节审业务项目
 - `dao-evolution` — 体检发现的教训写入 CSV
 - `dao-review` — 高严重度问题派 reviewer 深审
 
