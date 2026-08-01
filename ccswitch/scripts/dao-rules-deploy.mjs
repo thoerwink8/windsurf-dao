@@ -117,11 +117,17 @@ if (!existsSync(DEST_DIR)) {
   mkdirSync(DEST_DIR, { recursive: true });
 }
 
+// 比对刻意**规范化行尾再比**，不做字节相等：源文件受 git 的 autocrlf 摆布
+// （同一份内容在不同机器/不同 checkout 下 LF 与 CRLF 都可能），而投影是本脚本写的。
+// 拿字节相等去比，会在一次 `git checkout` 之后开始报**永远修不好的漂移**——
+// 而那种「每次都红、修了还红」的检查最终一定会被静音，等于白建。
+const norm = (s) => s.replace(/\r\n/g, "\n");
+
 const drift = [];
 for (const { name, text } of loaded) {
   const dest = join(DEST_DIR, name);
   const cur = existsSync(dest) ? readFileSync(dest, "utf8") : null;
-  if (cur === text) continue;
+  if (cur !== null && norm(cur) === norm(text)) continue;
   drift.push({ name, kind: cur === null ? "缺失" : "内容不一致" });
   if (!CHECK_ONLY) writeFileSync(dest, text, "utf8");
 }
