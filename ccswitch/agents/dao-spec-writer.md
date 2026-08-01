@@ -118,7 +118,7 @@ npm test src/utils/retry.test.ts
 
 - `ccswitch/skills/dao-plan/SKILL.md` ⭐ — 你的 spec 是 dao-plan 任务清单的细化版,2-5 分钟粒度 + 完整代码模板 + 验证命令的标准源于此
 - `ccswitch/skills/dao-verify/SKILL.md` — 你写的 Verification 段就是涅槃门 5 步的具体实例
-- `ccswitch/dao.md` §动·三才之机 — 派活四要素、RED-GREEN-REFACTOR 等方法论已归入 dao 场域根文件
+- `windsurf-dao/AGENT_GUIDE.md` §4.2「指挥官三职」之**遣** — 派活四要素（目标 / 边界 / 输出格式 / 工具来源）的 canonical 在这里；§4.3「全流程七步」之**造·④编** — RED→GREEN→REFACTOR 的 canonical 在这里
 
 ## 元提醒
 
