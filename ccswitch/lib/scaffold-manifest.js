@@ -44,6 +44,25 @@
 // 自定义条件会让「为什么这条没报」变成两处判据的合取，排查成本翻倍。需要再收窄的
 // 场合请写成 conditional，并把产品型指纹显式写进 when。
 //
+// ── 2026-08-01：`template` 字段（缺项报文的终点不该是「AI 现场重写一份」）─────
+// 审计实证：缺项报文大多以「运行 /dao-project-scaffold」「参考 stacks/xxx.md」收尾 ——
+// 那个终点是**让下一个 AI 现场重新发明一份**，于是同一个共性 rule 在每个项目里长得都不一样，
+// 而「文件名契约」保证的只是名字相同、内容各自漂移。更糟的一条：pr-evidence 那条报文原文写着
+// 「从 mousse-cli CLAUDE.md §二.5 派生」——**真相源指向另一个项目的文件**，违 dao-first。
+// 修法：条目可带 `template: {src, dest}`，src 指 ccswitch/templates/ 下的**真文件或真目录**，
+// 求值命中缺项时报文自动追加一条**零编辑可执行的复制指令**（绝对路径，粘贴即可跑）。
+//
+// 三条机器闸（缺一，这个字段就会变成新的「指向空气的指针」）：
+//   ① src 必须在 templates/ 下**真实存在** —— 在 validate() 里查，于是 load() 那一刻就报，
+//      不必等到某个项目恰好缺这一项时才现形。
+//   ② dest 与 require 必须**指同一个东西**：require 是简单 {file:X}/{dir:X} 时 dest 必须等于 X。
+//      两者漂移的后果是「报文教你把文件复制到 A，而闸查的是 B」⇒ 照做之后闸仍然红，
+//      而人会以为是闸坏了。
+//   ③ src 是目录还是文件由**求值时的实际 stat** 决定，不由清单写死 —— 清单说文件而盘上是目录
+//      （或反之）时，写死的那个会生成一条跑不通的指令，而跑不通的指令没人会回来改清单。
+// **不做的事**：本字段只生成**指令文本**，绝不自己动手复制。SessionStart hook 静默改用户项目
+// 里的文件是另一个量级的授权，不在这里开这个口子。
+//
 // 真相源：windsurf-dao/ccswitch/lib/scaffold-manifest.js
 
 "use strict";
@@ -53,6 +72,9 @@ const path = require("path");
 
 const CLASSES = ["universal", "conditional", "product-type"];
 const SEVERITIES = ["warn", "info"];
+
+// canonical 模板根。唯一定义处 —— 校验（查 src 在不在）与求值（拼绝对路径）都读它。
+const TEMPLATES_ROOT = path.join(__dirname, "..", "templates");
 
 // product-type 类别的内建条件（唯一定义处，清单里不重复写）。
 const PRODUCT_TYPE_WHEN = { fileContains: { path: "CLAUDE.md", text: "产品型项目" } };
@@ -124,7 +146,45 @@ function predErrors(node, at) {
   return errs;
 }
 
-function validate(m) {
+// require 是「简单存在性谓词」时返回它查的那个路径，否则 null。
+// 只认 {file:X} / {dir:X} —— 组合谓词（anyOf/allOf/not）没有唯一的"该复制到哪"，
+// 那种条目就不该带 template（校验会因 dest 对不上而报，见下）。
+function simpleRequirePath(node) {
+  if (!node || typeof node !== "object") return null;
+  if (typeof node.file === "string") return node.file;
+  if (typeof node.dir === "string") return node.dir;
+  return null;
+}
+
+function templateErrors(t, req, at, templatesRoot) {
+  const errs = [];
+  if (!t || typeof t !== "object" || Array.isArray(t)) return [at + ".template 必须是 {src, dest} 对象"];
+  if (typeof t.src !== "string" || !t.src) errs.push(at + ".template.src 必须是非空字符串（ccswitch/templates/ 下的相对路径）");
+  if (typeof t.dest !== "string" || !t.dest) errs.push(at + ".template.dest 必须是非空字符串（项目根下的相对路径）");
+  if (errs.length) return errs;
+  if (t.src.indexOf("..") !== -1 || path.isAbsolute(t.src)) {
+    // src 必须锁在 templates/ 里：允许 `..` 等于允许清单把任意路径变成"canonical 模板"。
+    errs.push(at + ".template.src 不得含 `..` 或写成绝对路径（必须落在 ccswitch/templates/ 之内）");
+    return errs;
+  }
+  // ① src 真实存在 —— 不查这一条，`template` 就成了新的「指向空气的指针」。
+  let st = null;
+  try { st = fs.statSync(path.join(templatesRoot, t.src)); } catch (_) { st = null; }
+  if (!st) errs.push(at + ".template.src 在 ccswitch/templates/ 下不存在：" + t.src);
+  // ② dest 必须与 require 查的是同一个东西（require 为简单谓词时才判得了）。
+  const rp = simpleRequirePath(req);
+  if (rp === null) {
+    errs.push(at + ".template 只能配在 require 为简单 {file:…}/{dir:…} 的条目上" +
+      "（组合谓词没有唯一的『该复制到哪』，报文会教人复制到一个闸并不检查的位置）");
+  } else if (rp !== t.dest) {
+    errs.push(at + ".template.dest（" + t.dest + "）与 require 查的路径（" + rp + "）不一致" +
+      "：照报文复制完之后闸仍会红，而人会以为是闸坏了");
+  }
+  return errs;
+}
+
+function validate(m, opts) {
+  const templatesRoot = (opts && opts.templatesRoot) || TEMPLATES_ROOT;
   if (!m || typeof m !== "object" || Array.isArray(m)) return ["manifest 不是对象"];
   if (!Array.isArray(m.entries)) return ["manifest.entries 不是数组"];
   const errs = [];
@@ -164,6 +224,9 @@ function validate(m) {
           if (typeof x.why !== "string" || !x.why) errs.push(xat + ".why 必须是非空字符串（例外理由——无理由的例外就是隐形例外）");
         });
       }
+    }
+    if (e.template !== undefined) {
+      errs.push.apply(errs, templateErrors(e.template, e.require, at, templatesRoot));
     }
     if (e.when) errs.push.apply(errs, predErrors(e.when, at + ".when"));
     if (e.require) errs.push.apply(errs, predErrors(e.require, at + ".require"));
@@ -336,8 +399,36 @@ function exemptReason(entry, repoName) {
   return null;
 }
 
+// PowerShell 单引号字符串里，字面单引号靠**双写**转义。路径含 `'` 极少见，但不处理的话
+// 生成的是一条语法错的指令——而「零编辑可执行」这个承诺一旦不成立，就比不给指令更糟
+// （人会照着粘、跑不通、然后不知道该怪谁）。
+function psQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+
+// 生成**零编辑可执行**的复制指令。src 是文件还是目录由**实际 stat** 决定（见头注闸③）。
+// 返回 null = 生成不了（src 不在盘上），调用方据此改写成一句显式的「模板缺失」而不是沉默。
+function copyInstruction(tpl, projectRoot, templatesRoot) {
+  const root = templatesRoot || TEMPLATES_ROOT;
+  const srcAbs = path.join(root, tpl.src);
+  const destAbs = path.resolve(projectRoot, tpl.dest);
+  let st = null;
+  try { st = fs.statSync(srcAbs); } catch (_) { return null; }
+  if (st.isDirectory()) {
+    // 目录：先建目标目录，再复制**内容**（`\*`）。不写 `Copy-Item <dir> <destParent>` ——
+    // 那条的语义随目标存不存在而变（存在则复制成子目录），是经典的"第二次跑就错"。
+    return "powershell -NoProfile -Command " + psQuote(
+      "New-Item -ItemType Directory -Force -Path " + psQuote(destAbs) + " | Out-Null; " +
+      "Copy-Item -Path " + psQuote(path.join(srcAbs, "*")) + " -Destination " + psQuote(destAbs) + " -Recurse -Force"
+    );
+  }
+  return "powershell -NoProfile -Command " + psQuote(
+    "New-Item -ItemType Directory -Force -Path " + psQuote(path.dirname(destAbs)) + " | Out-Null; " +
+    "Copy-Item -LiteralPath " + psQuote(srcAbs) + " -Destination " + psQuote(destAbs) + " -Force"
+  );
+}
+
 // 返回 [{ id, class, severity, message }]，只含**缺项**（require 求值为 false 的条目）。
-function evaluate(manifest, projectRoot) {
+function evaluate(manifest, projectRoot, opts) {
+  const templatesRoot = (opts && opts.templatesRoot) || TEMPLATES_ROOT;
   const ctx = makeCtx(projectRoot);
   const repoName = repoNameOf(projectRoot);
   const out = [];
@@ -355,11 +446,20 @@ function evaluate(manifest, projectRoot) {
     const r = evalPred(e.require, ctx);
     if (r.ok) continue;             // 已齐备
     const vars = Object.assign({ label: label }, r.vars);
+    let message = render(e.msg, vars);
+    if (e.template) {
+      const cmd = copyInstruction(e.template, projectRoot, templatesRoot);
+      // 生成不了也**要说出来**：canonical 模板不在盘上是个真问题（有人删了/改名了），
+      // 静默退回原报文会让这条 entry 悄悄退化成又一条「AI 自己写一份吧」。
+      message += cmd
+        ? "\n   ↳ 零编辑复制 canonical：" + cmd
+        : "\n   ↳ ⚠ canonical 模板缺失（ccswitch/templates/" + e.template.src + " 不在盘上），本条无法给出复制指令";
+    }
     out.push({
       id: e.id,
       class: e.class,
       severity: e.severity || "warn",
-      message: render(e.msg, vars),
+      message: message,
     });
   }
   return out;
@@ -371,7 +471,7 @@ function defaultManifestPath() {
 
 // 返回 { manifest, errors }。errors 非空时 manifest 可能为 null —— 调用方**必须把 errors
 // 报出去**，不许静默吞（反面教材：hookify stop.py 的 finally: sys.exit(0)）。
-function load(manifestPath) {
+function load(manifestPath, opts) {
   const p = manifestPath || defaultManifestPath();
   let raw;
   try { raw = fs.readFileSync(p, "utf8"); }
@@ -379,20 +479,20 @@ function load(manifestPath) {
   let m;
   try { m = JSON.parse(raw); }
   catch (e) { return { manifest: null, errors: ["共性 rule 备案清单 JSON 解析失败（" + p + "）：" + (e && e.message ? e.message : String(e))] }; }
-  const errs = validate(m);
+  const errs = validate(m, opts);
   return { manifest: errs.length ? null : m, errors: errs };
 }
 
 // 一步到位：加载 + 求值，把加载错误也转成可报的行（调用方只需拼进 issues）。
-function check(projectRoot, manifestPath) {
-  const { manifest, errors } = load(manifestPath);
+function check(projectRoot, manifestPath, opts) {
+  const { manifest, errors } = load(manifestPath, opts);
   if (!manifest) return { findings: [], errors: errors };
-  try { return { findings: evaluate(manifest, projectRoot), errors: [] }; }
+  try { return { findings: evaluate(manifest, projectRoot, opts), errors: [] }; }
   catch (e) { return { findings: [], errors: ["共性 rule 备案清单求值抛错：" + (e && e.message ? e.message : String(e))] }; }
 }
 
 module.exports = {
   validate, evaluate, load, check, defaultManifestPath, repoNameOf, exemptReason,
-  _internal: { evalPred, makeCtx, globFiles, findFile, render, predErrors },
-  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS, PRODUCT_TYPE_WHEN,
+  _internal: { evalPred, makeCtx, globFiles, findFile, render, predErrors, copyInstruction, simpleRequirePath, psQuote },
+  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS, PRODUCT_TYPE_WHEN, TEMPLATES_ROOT,
 };
