@@ -1,4 +1,4 @@
-// dao tool-nudge hook — 两类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑
+// dao tool-nudge hook — 三类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
 //
 // ── ① 工具选择(本 hook 的原始职责)────────────────────────────────────────────
 // 背景:Claude Code 同时允许内置 Grep(ripgrep)/Glob/Read 与 Bash(*),
@@ -25,6 +25,18 @@
 //
 // 两侧代价都是真的:漏报=这次合并没被提醒;滥报=每次合 PR 都插一段废话然后被无视。
 // 故取高精度低召回,与本 hook 既有的降噪原则一致。
+//
+// ── ③ 直推主干(2026-08-01 加,P1 门控出文本层 · 乙类)────────────────────────
+// dao.md Shell 节「PR-first 节律」**明写「非禁令」**:代码类改动默认走 PR,
+// **文档/配置微改可直推**。⇒ 它有真实的合法例外,机器判不出这次是哪一种
+// (hook 看得见 `git push origin main`,看不见这次改的是 CHANGELOG 还是 auth 模块),
+// 故它归**乙类:软提醒**,不进 ccswitch/hooks/dao-hard-gates.js 那道 exit 2 的闸。
+// 判定表与三档分档理由见 P1 批 PR body。
+//
+// 命中形态:段首 `git push` 且**参数里显式点名 main/master**(含 `HEAD:main` 形式)。
+// **裸 `git push` 刻意不认**——那时目标分支写在 upstream 配置里、命令串看不见,
+// 认它只能靠猜当前分支,而猜错的代价是每次推特性分支都插一段废话然后被无视。
+// 这是同一条高精度低召回原则的第三次应用,漏报面已知且写在这里。
 //
 // 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
 // ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
@@ -83,6 +95,16 @@ for (let seg of segments) {
   if (/^gh\s+pr\s+merge\b/.test(s) && !/dao-pr-merge/.test(s)) {
     flows.add("pr-merge");
   }
+
+  // ── 直推主干(段首 git push + 参数里显式点名 main/master;裸 push 不认,见头注③)──
+  // `--delete` 刻意排除:那是删远程分支,与"直推主干"是两件事(且删主干由 git 侧安全网管)。
+  if (/^git\s+push\b/.test(s) && !/\s--delete\b|\s-d\b/.test(s)) {
+    const args = s.split(/\s+/).slice(2);
+    const hitsTrunk = args.some((a) =>
+      /^\+?(main|master)$/.test(a) || /^\+?HEAD:(main|master)$/.test(a) || /^\+?(main|master):(main|master)$/.test(a)
+    );
+    if (hitsTrunk) flows.add("push-trunk");
+  }
 }
 
 if (hints.size === 0 && flows.size === 0) process.exit(0);
@@ -111,6 +133,18 @@ if (flows.has("pr-merge")) {
     "①`--delete-branch` 在本地分支被 worktree 占用时**整体失败且错误只提本地**,远程可能还在,补 `git push origin --delete <branch>`;" +
     "②预算型护栏(单文件 LOC/包体积/覆盖率下限)是按**和**判的而 PR 按**增量**审,`MERGEABLE` 只是语法层面的绿——" +
     "合并后的主干上重跑一次全套才算数。"
+  );
+}
+
+if (flows.has("push-trunk")) {
+  blocks.push(
+    "【dao PR-first】本次直推了主干(main/master)。dao.md Shell 节的 PR-first 是**默认节律不是禁令**——" +
+    "文档/配置微改直推是允许的,所以这里只提醒不阻断。**若本次推的是代码类改动**,正路是:" +
+    "开分支 → `gh pr create` → `pwsh -File ccswitch/scripts/dao-pr-merge.ps1`(它按序做完 fetch/核 rev-parse/" +
+    "合并态重跑验证/合 PR/prune/实查远程分支真的空了)。" +
+    "PR 的价值不是质量门(质量门是测试+dogfood),是给用户留**异步审查锚点 + 独立回滚点**——" +
+    "直推进去的改动,用户事后想 revert 时没有一个干净的粒度可撤。" +
+    "另:产品型项目可在自己的 `.claude/rules/` 把它强化为强制,那时本条就不是「可直推」了,以项目侧为准。"
   );
 }
 
