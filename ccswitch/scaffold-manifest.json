@@ -3,7 +3,8 @@
   "version": 1,
   "_doc": {
     "这是什么": "共性 rule 备案清单。每次 SessionStart 由 ccswitch/hooks/dao-scaffold-check.js 逐条求值，缺项即报并给补齐指引——「之前没做的共性 rule 自然补上」这件事的载体。",
-    "怎么加一条": "往 entries 加一个对象即可，不改代码。字段：id / class / when(仅 conditional，universal 与 product-type 不得带) / require / msg / why / severity / exempt(可选)。求值语义与谓词种类见 ccswitch/lib/scaffold-manifest.js 头注。",
+    "怎么加一条": "往 entries 加一个对象即可，不改代码。字段：id / class / when(仅 conditional，universal 与 product-type 不得带) / require / msg / why / severity / exempt(可选) / template(可选)。求值语义与谓词种类见 ccswitch/lib/scaffold-manifest.js 头注。",
+    "template 怎么用": "`template: {src, dest}` —— src 是 ccswitch/templates/ 下的**真文件或真目录**相对路径，dest 是项目根下的目标路径。命中缺项时报文自动追加一条**零编辑可执行**的 PowerShell 复制指令（绝对路径，粘贴即跑）。要治的是：缺项报文的终点原本大多是「运行 /dao-project-scaffold」「参考 stacks/xxx.md」，那等于**让下一个 AI 现场重新发明一份** ⇒ 同一条共性 rule 在每个项目里长得都不一样，文件名契约保证了名字相同、内容各自漂移。三条机器闸在 lib 里：①src 必须真实存在（load 时就报，不等某个项目恰好缺这项才现形）②dest 必须与 require 查的路径相等（否则报文教人复制到 A、闸查的是 B，照做完还是红）③文件还是目录由求值时 stat 决定、不由清单写死。**只生成指令，绝不自动复制**——SessionStart hook 静默改用户项目的文件是另一个量级的授权。**不是每条都该带 template**：只有「有 canonical 可抄」的条目才带；没有 canonical 的（如各项目自己的 desktop-debugging.md）照旧给指引。",
     "文件名契约（原则声明，不是检查项）": "共性 rule 必须由**约定文件名**承载（如样式路线 → .claude/rules/frontend-style.md）。内容可以项目化，**文件名不可**——跨项目自动核对的全部可能性都建立在文件名固定上。若某项目已把该领域规范散在多个自定义命名的文件里，正确动作是建一个约定名文件、内容写成对既有文件的指针（而非搬运，避免双份漂移）。理由：不立这条，本清单的每次「缺项」报告都是可争议的——被报方总能说「我有这个规范，只是文件名不同」，而清单的价值恰恰在于无需语义理解即可核对（实证：TraceyU 12 个 rules 把样式路线散在三个文件里，清单报它缺 frontend-style.md——那缺项是真是假，取决于一个从未被规定的东西）。裁定人：帅，2026-07-27（用户授权内代拍，醒后可推翻）。",
     "exempt 怎么用": "`exempt: [{repo, why}]` 声明某个仓库对该条的例外，repo 取项目根目录 basename。原则是**例外显式化 > 例外隐形**：此前 hook 遇仓名 windsurf-dao 直接整体早退，于是检查从不跑到立法者头上、也就没人发现它自己违规（实测它自身会中两条，其中一条有个从未写下来的例外）。写 exempt 时 why 必填且要写清「为什么这个仓可以不满足」，让下一个想动那个文件的人先看到理由。匹配是 basename 近似判据，换目录名 clone 会匹配不上而照报——失败方向刻意选「多报」，见 lib 头注。",
     "四分类": {
@@ -106,16 +107,27 @@
       "id": "pr-evidence-rule",
       "class": "product-type",
       "require": { "file": ".claude/rules/pr-evidence.md" },
-      "msg": "产品型项目缺少 .claude/rules/pr-evidence.md（PR 真机证据三态约定：见评论 / 豁免 / 降级挂账带真 issue 编号）→ 从 mousse-cli CLAUDE.md §二.5 派生，或写成对本项目既有约定的指针",
-      "why": "product-type 第四类的首个条目（用户拍板 2026-07-27）。要治的是「义务转移等于义务蒸发」：mousse-cli 2026-07-27 实测同窗四个 UI 可见 PR 连续 0/4 未附图，走的全是当时那个「随后补」的第四态——转移方写下那句话就获得心理结算，接收方责任面上从来没有这一项。改成三态且第三态必须带**真实 issue 编号**后，转移才有可查可回溯的落点。跨项目成立的理由：任何产品型项目都有「改动长什么样」这个只有真机能回答的问题，无 UI 面的 PR 走态二豁免即可。判据是文件存在性（文件名契约见 _doc），内容允许项目化——本条不检查内容，那需要语义理解。",
+      "template": { "src": "pr-evidence-rule.md", "dest": ".claude/rules/pr-evidence.md" },
+      "msg": "产品型项目缺少 .claude/rules/pr-evidence.md（PR 真机证据三态约定：见评论 / 豁免 / 降级挂账带真 issue 编号）→ 从 canonical `ccswitch/templates/pr-evidence-rule.md` 派生（复制后只加项目特有那一格：证据分支名 / 起隔离实例的脚本 / 本项目的「真实交互面」清单）",
+      "why": "product-type 第四类的首个条目（用户拍板 2026-07-27）。要治的是「义务转移等于义务蒸发」：某产品型项目 2026-07-27 实测同窗四个 UI 可见 PR 连续 0/4 未附图，走的全是当时那个「随后补」的第四态——转移方写下那句话就获得心理结算，接收方责任面上从来没有这一项。改成三态且第三态必须带**真实 issue 编号**后，转移才有可查可回溯的落点。跨项目成立的理由：任何产品型项目都有「改动长什么样」这个只有真机能回答的问题，无 UI 面的 PR 走态二豁免即可。判据是文件存在性（文件名契约见 _doc），内容允许项目化——本条不检查内容，那需要语义理解。**2026-08-01 修**：本条报文原写「从 mousse-cli CLAUDE.md §二.5 派生」，把真相源指向了**另一个项目的文件** ⇒ 违 dao-first（体系级 artifact 的真相源该在 dao，项目持有的只是派生副本）。canonical 已落 ccswitch/templates/pr-evidence-rule.md，报文改指它并由 template 字段自动附零编辑复制指令。",
       "severity": "warn"
     },
     {
       "id": "pr-template-star",
       "class": "product-type",
       "require": { "file": ".github/pull_request_template.md" },
+      "template": { "src": "pull_request_template.md", "dest": ".github/pull_request_template.md" },
       "msg": "产品型项目缺少 .github/pull_request_template.md（人读的 PR 模板：STAR 结构 + 说人话 + 技术证据折叠段）→ 从 canonical `ccswitch/templates/pull_request_template.md` 派生（下沉时加本项目特有自检项）",
-      "why": "product-type 第二条（用户点名 2026-08-01）：GitHub issue/PR 是人读的载体，之前 AI 交付评论全是密文（mutation/canary/退出码领先）。PR 模板把「人话 STAR 在上、精度证据折叠在下」的分层结构做成默认——人扫顶部就懂、AI 展开读全部零丢失。判据是文件存在性（文件名契约），内容允许项目化。**这只是文件型 artifact 的一半**：标签体系/看板/置顶总览单是 GitHub API 对象、非文件，本清单（文件系统核对）结构上覆盖不到——那半需要一个 dao-issue-center 引导脚本，见 dao.md「工作项三态归位」条款，尚未落地。",
+      "why": "product-type 第二条（用户点名 2026-08-01）：GitHub issue/PR 是人读的载体，之前 AI 交付评论全是密文（mutation/canary/退出码领先）。PR 模板把「人话 STAR 在上、精度证据折叠在下」的分层结构做成默认——人扫顶部就懂、AI 展开读全部零丢失。判据是文件存在性（文件名契约），内容允许项目化。**这只是文件型 artifact 的一半**：标签体系/看板/置顶总览单是 GitHub API 对象、非文件，本清单（文件系统核对）结构上覆盖不到——那半需要一个 dao-issue-center 引导脚本，见 dao.md「工作项三态归位」条款。",
+      "severity": "warn"
+    },
+    {
+      "id": "issue-template-dir",
+      "class": "product-type",
+      "require": { "dir": ".github/ISSUE_TEMPLATE" },
+      "template": { "src": "ISSUE_TEMPLATE", "dest": ".github/ISSUE_TEMPLATE" },
+      "msg": "产品型项目缺少 .github/ISSUE_TEMPLATE/（人读的开单模板：缺陷 / 任务 / 欠账 / 待拍板，STAR + 说人话 + 证据折叠段 + 类型标签预填）→ 从 canonical `ccswitch/templates/ISSUE_TEMPLATE/` 派生",
+      "why": "dao.md「工作项三态归位」末句写着「落地：PR 用 .github/pull_request_template.md（分层内建），issue 模板同理」——而 2026-08-01 审计实测：全生态**零实例、零 canonical、零清单条**，「同理」两个字下面什么都没有，新项目只能从零发明。它与 pr-template-star 同源同理由（GitHub issue 是人读的载体），且本清单此前的免责说法（标签/看板是 GitHub API 对象、文件清单覆盖不到）**恰恰不适用于 ISSUE_TEMPLATE —— 它就是文件**，清单本可覆盖却没覆盖。⚠ **收益边界照直写**（对抗验证据此把本条从 high 降到 med）：GitHub issue forms **只作用于**①网页开单 ②`gh issue create --template`；AI 用 `gh issue create -t -b -l` 建单**走不到模板**，那条路的分层结构靠 dao.md 的 STAR 条款约束、不靠本文件。所以本条的读者主要是**人**（用户自己开单、未来的协作者）。判据是目录存在性，不检查里面有几个模板——那需要语义理解。",
       "severity": "warn"
     },
 
@@ -204,6 +216,16 @@
       "why": "2026-07-13 mousse-cli 账单烧穿实证：macOS runner 计费系数 ×10，mac job 占 31% 运行分钟却吃掉 72% 额度，月中额度耗尽致全线 CI 拒启。**本判据是启发式**：靠「文件同时含 pull_request 与 macos- 且全文无 if:」的子串组合，两个方向都构造得出反例（if: 写来干别的会被放过；矩阵写在 reusable workflow 里也会被放过），故 severity=info。精确判据见 ci-cost-gate.md。",
       "severity": "info"
     },
+    {
+      "id": "dispatch-clauses",
+      "class": "conditional",
+      "when": { "dir": ".claude/worktrees", "label": "多 agent 派单" },
+      "require": { "file": "docs/rules/dispatch-clauses.md" },
+      "msg": "{label}型项目缺少 docs/rules/dispatch-clauses.md（派单条款库正文）→ 三处共享 dao 机制把这个路径当**硬编码缺省**依赖，文件不在时它们不报错、而是**静默假通过**",
+      "why": "2026-08-01 审计确认。这条路径被三处共享机制当固定依赖：①`ccswitch/workflows/dao-harvest.js` 的 `CLAUSE_FILE` 硬编码缺省为 `docs/rules/dispatch-clauses.md`，**没有任何 Glob 回退、也没有『该源不适用』的降级条款**（`pr-history-postmortem` 那条有回退，别把两者记混）②该 workflow 的判重步要求「Grep 条款库全文找同类判据，命中同类 ⇒ is_new=false, pass=false」③`ccswitch/hooks/dao-rule-echo.js` 的 `docs/rules/*.md` 一路系为某项目的一次改造而加。**真实后果比死链更坏**：文件不存在时 Grep 恒不命中 ⇒ **判重闸永远放行、每条候选都被判 is_new=true**，那是**静默假通过**不是静默跳过；而 dao.md 把 dao-harvest 定为收官收割的唯一触发点。另：元仓库 `tests/dao-rule-echo.tests.js` 有三处硬编码某个项目的该文件当 fixture——元仓库测试拿另一个仓的文件当地基。**when 取 `.claude/worktrees` 的理由**：这条 rule 只对「真的在派多 agent」的项目成立，而那个目录是这套工作流留下的机器可判指纹；不用 product-type 是因为集合不同（内部工具仓也可能派 agent，产品型项目也可能从不派）。⚠ **本条上线会立刻报一个新缺项**（实测：TraceyU 有 .claude/worktrees 而无该文件）——**那是预期行为，不 exempt**：它恰恰是本条要问的问题「这个仓在派 agent，它的条款库在哪」，答案是真缺口还是该豁免，由人看到之后裁，不由立法者预先替它答。",
+      "severity": "warn"
+    },
+
     {
       "id": "design-context",
       "class": "conditional",
