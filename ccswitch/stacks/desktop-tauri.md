@@ -75,8 +75,9 @@ pnpm tauri dev
 
 **本节是判据与约定的 canonical，不是脚本本体。** 各项目自实现（脚本语言、路径布局、
 项目自己的隔离面各不相同），但下面四条硬要求、preflight、三关自验、退出码契约要对得上；
-一份 1000 行量级的完整参考实现活在 mousse-cli `scripts/start-isolated-dev.ps1`
-（Windows + WebView2 + Tauri），要抄形态去读它，**别把它整份搬进本文件**。
+一份完整参考实现活在 mousse-cli `scripts/start-isolated-dev.ps1`（Windows + WebView2 + Tauri，
+2026-08-01 实测 1223 行 / 76 KB），要抄形态去读它，**别把它整份搬进本文件**——
+可迁移的是下面这些判据与约定，不是那份深度绑定单一项目与单一 OS 的脚本本体。
 
 **四条硬要求**（逐条对应一个已知失败模式，不是设计偏好）：
 
