@@ -63,7 +63,14 @@ node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccsw
 .\tests\link-codex.tests.ps1                  # PowerShell 测试（自带 Assert-* 断言，独立可跑，聚合入口不代跑）
 .\tests\link-codex-prompts.tests.ps1
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
+
+node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
+node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对不上 ⇒ exit 1（tests/clause-index.tests.js 每次跑它）
+node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数
+node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（原型，**尚未**接进派单流程）
 ```
+
+`ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。
 
 新增 node 测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.js` 扫目录，不维护清单。
 （此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；
