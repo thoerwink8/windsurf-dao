@@ -503,6 +503,7 @@ export function defaultSources() {
     // 「零条款」与「没扫过」分不开才是问题 —— 索引里 clauses:0 就是那个区分。
     { file: "ccswitch/rules/dao-powershell.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-change-batch.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
+    { file: "ccswitch/rules/dao-gui-verify.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-workitem.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-product.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
   ];

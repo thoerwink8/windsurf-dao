@@ -17,11 +17,18 @@
 // 这些盲区**刻意不补**：补它们要把 shell 语法真解析一遍，而本 hook 的定位是软提醒不是守卫，
 // 误伤一次的代价（污染一次 context）高于漏报一次。写在这里是为了别让读者以为覆盖是完备的。
 
+const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-tool-nudge.js");
+// ④ 的去重状态落一份**测试专属**文件：用真状态会让「本机今天已经提醒过」把正控染绿，
+// 而「结论取决于机器当时的状态」正是这份回归网要防的东西。每次开跑清空。
+const TMP = path.join(REPO, "_tmp", "tool-nudge-tests");
+const STATE = path.join(TMP, "browser-mcp-seen.json");
+fs.rmSync(TMP, { recursive: true, force: true });
+fs.mkdirSync(TMP, { recursive: true });
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -38,6 +45,19 @@ function nudge(command, toolName = "Bash") {
   try { out = JSON.parse(r.stdout || "{}"); } catch (_) { /* 无输出即无提醒 */ }
   const hs = out.hookSpecificOutput || {};
   return { code: r.status, ctx: String(hs.additionalContext || ""), raw: r.stdout };
+}
+
+// ④ 专用：按工具名 + session_id 喂一次；可指定跑哪个脚本副本（mutation 用）与哪份状态文件
+function mcpCall(toolName, sessionId, opts = {}) {
+  const input = JSON.stringify({ tool_name: toolName, session_id: sessionId, tool_input: {} });
+  const r = spawnSync(process.execPath, [opts.script || HOOK], {
+    input, encoding: "utf8",
+    env: Object.assign({}, process.env, { DAO_TOOL_NUDGE_STATE: opts.state || STATE }),
+  });
+  let out = {};
+  try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
+  const hs = out.hookSpecificOutput || {};
+  return { code: r.status, ctx: String(hs.additionalContext || ""), raw: String(r.stdout || "") };
 }
 
 console.log("\n──── ① 工具选择提醒（既有职责，此前零测试）────");
@@ -102,6 +122,86 @@ console.log("\n──── ③ 两类提醒共存 / 非 Bash 一律不响 ─�
   check("非 Bash 工具 → 零输出", nudge("gh pr merge 42", "Edit").raw.trim() === "");
   check("空命令 → 零输出", nudge("", "Bash").raw.trim() === "");
   check("普通命令 → 零输出（不滥报是这个 hook 的第一原则）", nudge("npm run build").raw.trim() === "");
+}
+
+console.log("\n──── ④ 浏览器 MCP 首调提醒（瘦身批 #5 新增）────");
+{
+  // 正控：两个 MCP 前缀各来一次（不同 session，避免互相把对方去重掉）
+  const a = mcpCall("mcp__chrome-devtools__take_screenshot", "s-cdp");
+  check("正控：chrome-devtools 首调 → 注入 GUI 验证提醒",
+    /dao GUI 验证/.test(a.ctx) && /dao-gui-verify\.md/.test(a.ctx), JSON.stringify(a.ctx.slice(0, 100)));
+  const b = mcpCall("mcp__playwright__browser_click", "s-pw");
+  check("正控：playwright 首调 → 注入 GUI 验证提醒",
+    /dao GUI 验证/.test(b.ctx) && /dao-gui-verify\.md/.test(b.ctx), JSON.stringify(b.ctx.slice(0, 100)));
+  // 提醒里必须带上两组要点的可辨识锚，否则它只是一个「去读文件」的空指针
+  check("正控：提醒里给得出决策树三支与防断路三条的锚",
+    /chrome-devtools/.test(a.ctx) && /playwright/.test(a.ctx) && /_tmp\/qa/.test(a.ctx) &&
+    /只用一个浏览器工具/.test(a.ctx) && /失败 2 次/.test(a.ctx), JSON.stringify(a.ctx.slice(0, 160)));
+  check("正控：提醒里点明 windows-mcp 不是选项（免得读者以为还有第三器）",
+    /windows-mcp/.test(a.ctx));
+
+  // 首调语义：同一 session 第二次起静默；换 session 重新提醒
+  check("同一 session 第二次调用 → 零输出（首调语义，不是每次都插一段）",
+    mcpCall("mcp__chrome-devtools__take_snapshot", "s-cdp").raw.trim() === "");
+  check("同一 session 第三次仍静默", mcpCall("mcp__playwright__browser_snapshot", "s-cdp").raw.trim() === "");
+  check("换一个 session → 重新提醒", /dao GUI 验证/.test(mcpCall("mcp__chrome-devtools__click", "s-other").ctx));
+  check("去重状态真的落了盘且三个 session 都记着",
+    (() => { try { return Object.keys(JSON.parse(fs.readFileSync(STATE, "utf8"))).length === 3; } catch (_) { return false; } })());
+
+  // 状态写不动时：仍然提醒 + 自陈可能重复（静默零投递是这个 hook 头注点名要防的死法）
+  {
+    // 把状态文件指向一个**目录**：读写都必 EISDIR，跨平台稳定，不靠权限/路径怪招
+    const r = mcpCall("mcp__chrome-devtools__take_screenshot", "s-badstate", { state: TMP });
+    check("状态写不动 → 仍然提醒，且自陈可能重复", /dao GUI 验证/.test(r.ctx) && /可能重复/.test(r.ctx),
+      JSON.stringify(r.ctx.slice(-120)));
+  }
+
+  // 负控：别的 MCP 服务器、windows-mcp（归 PreToolUse 硬闸 G1，不归本 hook）、Bash 面
+  const negatives = [
+    ["windows-mcp 归硬闸 G1 拦，本 hook 不该多嘴", "mcp__windows-mcp__Screenshot"],
+    ["非浏览器 MCP 不该提醒", "mcp__context7__query-docs"],
+    ["名字里含 playwright 但不是该服务器前缀，不该提醒", "mcp__fs__read_playwright_config"],
+    ["内置工具不该走 ④ 分支", "Read"],
+  ];
+  for (const [name, tool] of negatives) {
+    check(`负控：${name}`, mcpCall(tool, "s-neg-" + tool).raw.trim() === "");
+  }
+  check("负控：Bash 命令不该混进 GUI 提醒", !/dao GUI 验证/.test(nudge("grep -rn foo src/").ctx));
+
+  // mutation · 判别力：把 ④ 的工具名判据改成永不命中 → 正控必须从「提醒」掉成「零输出」，
+  // 而 ①②③ 的 Bash 面必须不受影响（否则「变哑」可能只是整个 hook 崩了）
+  {
+    const src = fs.readFileSync(HOOK, "utf8");
+    const from = "const BROWSER_MCP_RE = /^mcp__(chrome-devtools|playwright)__/;";
+    check("mutation 靶点在源码里唯一存在", src.split(from).length === 2, `出现 ${src.split(from).length - 1} 次`);
+    const mutant = path.join(TMP, "mutant-browser-re.js");
+    fs.writeFileSync(mutant, src.replace(from, "const BROWSER_MCP_RE = /^__NEVER_MATCHES__/;"), "utf8");
+    const before = mcpCall("mcp__chrome-devtools__take_screenshot", "s-mut", { state: path.join(TMP, "mut-a.json") });
+    const after = mcpCall("mcp__chrome-devtools__take_screenshot", "s-mut", { script: mutant, state: path.join(TMP, "mut-b.json") });
+    check("mutation：真文件提醒、改坏后不提醒 ⇒ 上面那批断言真的在测这段判据",
+      /dao GUI 验证/.test(before.ctx) && after.raw.trim() === "",
+      `before=${before.ctx.slice(0, 40)} after=${JSON.stringify(after.raw.slice(0, 40))}`);
+    const stillBash = spawnSync(process.execPath, [mutant], {
+      input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh pr merge 42" } }), encoding: "utf8",
+    });
+    check("mutation：改坏 ④ 之后 ② 仍然响（证明不是整个 hook 崩了）",
+      /dao PR 合并链/.test(String(stillBash.stdout || "")));
+  }
+}
+
+console.log("\n──── ⑤ --selfcheck：matcher 覆盖面必须能被独立问一次 ────");
+{
+  // 这里**不断言本机是绿还是红** —— 那取决于用户有没有扩 matcher，而这份测试要在两种状态下
+  // 都成立。断言的是**自检自身自洽**：它逐面报了、报的结论与退出码一致、并给得出修法。
+  const r = spawnSync(process.execPath, [HOOK, "--selfcheck"], { encoding: "utf8" });
+  const out = String(r.stdout || "");
+  check("自检逐面打印（Bash 面 + 浏览器 MCP 面）",
+    /Bash 面/.test(out) && /浏览器 MCP 面/.test(out), JSON.stringify(out.slice(0, 160)));
+  check("自检结论与退出码一致（有 ✗ 即 exit 1，全 ✓ 即 exit 0）",
+    (/✗/.test(out) ? r.status === 1 : r.status === 0), `exit=${r.status} out=${JSON.stringify(out.slice(0, 200))}`);
+  check("自检给得出修法（扩 matcher 的确切串 + 写入面归谁）",
+    /mcp__chrome-devtools__\.\*/.test(out) && /providers\.settings_config/.test(out), JSON.stringify(out.slice(-200)));
+  check("自检不读 stdin，也不会因为没有 stdin 而挂住", typeof r.status === "number");
 }
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
