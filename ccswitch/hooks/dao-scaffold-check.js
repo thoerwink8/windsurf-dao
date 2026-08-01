@@ -99,7 +99,8 @@ function manifestIssueLines(projectRoot) {
 }
 
 // ── 条款库结构闸的挂载点（2026-08-01）────────────────────────────────────────
-// dao.md 反·归「规则集只增不减」那条自带 `触发:verify-all/check-clauses-structure`，
+// 「规则集只增不减」那条自带 `触发:verify-all/check-clauses-structure`（2026-08-01 起正文迁
+// ccswitch/rules/dao-guard-writing.md，dao.md 反·归留存根+条款名），
 // 而那个检查器此前**只存在于 mousse-cli/scripts/** ⇒ dao.md 这个规则集从未被它守过。
 // canonical 落在 ccswitch/scripts/check-clauses-structure.ps1 之后，**必须有东西真的调用它**——
 // 「文件存在」不是载体，那正是本仓在治的「指向空气的指针」。
@@ -120,7 +121,41 @@ function manifestIssueLines(projectRoot) {
 //   ② 绿 + 观察线有待办（候选退役 / 待升格 > 0）⇒ 报一行，让「该退役了吗」被端到眼前
 //   ③ 绿且观察线为空 ⇒ 一行不报（常路零噪音）
 // 跑不起来 / 拿不到 marker ⇒ 也报一行：**「没解析到」不等于「没问题」**。
+//
+// ── 扫描面随第二层存根化扩到 ccswitch/rules/（2026-08-01）──────────────────
+// dao.md 把「长窗排程 / 派单契约门组 / 写守卫组」三块细则迁进 ccswitch/rules/*.md 之后，
+// **8 条带元字段的条款离开了这道闸的射程**——而本闸原先只认缺省目标 dao.md。
+// 那正是本闸自己在治的病的又一实例：**条款还在，守它的东西不在了，且台账上看不出来**。
+// 故被检对象改为「dao.md + ccswitch/rules/ 下**含 `[n=` 的** .md」。
+//
+// 「含 `[n=` 才扫」这个前置筛选的两面，照直写：
+//   · 好处：dao-longwindow.md 那类**纯流程文件本来就零条款**，直接扫它会恒报 zero-sample 红
+//     （闸说的是实话，但对那个文件不是缺陷）⇒ 生下来就吵的检查一定会被静音。
+//   · 代价：筛选器是**独立于闸的第二套实现**（这里只做一次朴素 `[n=` 存在性判断），
+//     若某个文件的条款被整体删光，它会从被检清单里消失而不是变红。故**必须**把
+//     「几个文件 / 其中几个含条款」当成一行普查数打印出来 —— 静默跳过才是那个病，
+//     打印出来的跳过不是（同 verify-all 的 SKIPPED 教训：文案骗不到读数的人）。
+// 成本：每个被检文件一次 `-NoProfile` 冷起 PowerShell（本机实测单次 ~350ms）。
 const CLAUSE_CHECK_TIMEOUT_MS = 20000;
+
+function clauseTargets(daoRoot) {
+  const targets = [path.join("ccswitch", "dao.md")];
+  const dir = path.join(daoRoot, "ccswitch", "rules");
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith(".md"));
+  } catch {
+    return { targets, total: 0, withClauses: 0 };   // rules/ 不存在 ⇒ 老形态，只检 dao.md
+  }
+  let withClauses = 0;
+  for (const n of names.sort()) {
+    let hit = false;
+    try { hit = /\[n=/.test(fs.readFileSync(path.join(dir, n), "utf8")); } catch { hit = false; }
+    if (hit) { targets.push(path.join("ccswitch", "rules", n)); withClauses++; }
+  }
+  return { targets, total: names.length, withClauses };
+}
+
 function clauseStructureLines(daoRoot) {
   const script = path.join(daoRoot, "ccswitch", "scripts", "check-clauses-structure.ps1");
   try {
@@ -134,40 +169,62 @@ function clauseStructureLines(daoRoot) {
     // 不静默跳过：这一行让「本平台没跑」与「跑了且通过」区分得开。
     return ["ⓘ 条款库结构闸未跑（非 Windows，本闸是 PowerShell 实现）→ 手动：pwsh ccswitch/scripts/check-clauses-structure.ps1"];
   }
-  let out = "", code = 0;
-  try {
-    out = execFileSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], {
-      encoding: "utf8", timeout: CLAUSE_CHECK_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
-    });
-  } catch (e) {
-    // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上。
-    out = (e && typeof e.stdout === "string") ? e.stdout : "";
-    code = (e && typeof e.status === "number") ? e.status : -1;
-    if (!out) {
-      return ["✗ 条款库结构闸跑不起来：" + (e && e.message ? e.message : String(e)) +
-              "（手动复核：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1）"];
+  // 单个被检文件跑一次闸，只解析末行契约（纯 ASCII 键值）。
+  // 不去正则匹配中文正文——两个文件之间拿文案当契约，正是「被引用方一改、引用方静默失效」的温床。
+  const runOne = (rel) => {
+    let out = "", code = 0;
+    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script];
+    if (rel !== path.join("ccswitch", "dao.md")) args.push("-TargetFile", rel);
+    try {
+      out = execFileSync("powershell", args, {
+        encoding: "utf8", timeout: CLAUSE_CHECK_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+      });
+    } catch (e) {
+      // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上。
+      out = (e && typeof e.stdout === "string") ? e.stdout : "";
+      code = (e && typeof e.status === "number") ? e.status : -1;
+      if (!out) {
+        return { err: "✗ 条款库结构闸跑不起来（" + rel + "）：" + (e && e.message ? e.message : String(e)) +
+                      "（手动复核：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1）" };
+      }
     }
+    const m = /CLAUSE_STRUCTURE_SUMMARY exit=(\d+) clauses=(\d+) violations=(\d+) notrigger=(\d+) retire=(\d+) promote=(\d+)/.exec(out);
+    if (!m) {
+      return { err: "✗ 条款库结构闸跑完但没拿到 CLAUSE_STRUCTURE_SUMMARY 末行（" + rel + "，真退出码 " + code +
+                    "）→ 契约可能被改坏了，手动跑一次看输出" };
+    }
+    const [, sExit, sClauses, sViol, , sRetire, sPromote] = m;
+    if (sExit !== "0" || code !== 0) {
+      const detail = out.split(/\r?\n/).filter((l) => /^\s+- \[/.test(l)).slice(0, 5).join("\n");
+      return { fail: "✗ 条款库结构闸 FAIL：" + rel + " 命中 " + sViol + " 处已知失效形态（条款 " + sClauses + " 条）" +
+                     (detail ? "\n" + detail : "") };
+    }
+    return { clauses: Number(sClauses), retire: Number(sRetire), promote: Number(sPromote) };
+  };
+
+  const { targets, total, withClauses } = clauseTargets(daoRoot);
+  const lines = [];
+  let clauses = 0, retire = 0, promote = 0;
+  for (const rel of targets) {
+    const r = runOne(rel);
+    if (r.err) { lines.push(r.err); continue; }
+    if (r.fail) { lines.push(r.fail); continue; }
+    clauses += r.clauses; retire += r.retire; promote += r.promote;
   }
-  // **只解析这一行**（纯 ASCII 键值）。不去正则匹配中文正文——两个文件之间拿文案当契约，
-  // 正是「被引用方一改、引用方静默失效」的温床。
-  const m = /CLAUSE_STRUCTURE_SUMMARY exit=(\d+) clauses=(\d+) violations=(\d+) notrigger=(\d+) retire=(\d+) promote=(\d+)/.exec(out);
-  if (!m) {
-    return ["✗ 条款库结构闸跑完但没拿到 CLAUSE_STRUCTURE_SUMMARY 末行（真退出码 " + code +
-            "）→ 契约可能被改坏了，手动跑一次看输出"];
+  if (lines.length) {
+    lines.push("  → 详情：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 [-TargetFile <上面那个文件>]");
+    return lines;
   }
-  const sExit = m[1], sClauses = m[2], sViol = m[3], sRetire = m[5], sPromote = m[6];
-  if (sExit !== "0" || code !== 0) {
-    const detail = out.split(/\r?\n/).filter((l) => /^\s+- \[/.test(l)).slice(0, 5).join("\n");
-    return ["✗ 条款库结构闸 FAIL：ccswitch/dao.md 命中 " + sViol + " 处已知失效形态（条款 " + sClauses + " 条）" +
-            (detail ? "\n" + detail : "") +
-            "\n  → 详情：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1"];
-  }
-  if (Number(sRetire) > 0 || Number(sPromote) > 0) {
-    return ["ⓘ 条款库观察线：dao.md 有 " + sRetire + " 条够老了、该问一句「还有用吗」，" + sPromote +
+  if (retire > 0 || promote > 0) {
+    return ["ⓘ 条款库观察线（dao.md + rules/ 合计 " + clauses + " 条）：有 " + retire +
+            " 条够老了、该问一句「还有用吗」，" + promote +
             " 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
             "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"];
   }
-  return [];   // 绿且无待办 ⇒ 常路零噪音
+  // 绿且无待办 ⇒ 常路只留一行普查数。**刻意不做成零输出**：被检文件从 1 个变成多个之后，
+  // 「哪些被检了、哪些因零条款没检」必须是可见的，否则下一次有人把条款迁走时又是静默缩面。
+  return ["ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 " + withClauses + "/" + total +
+          " 个 .md，合计 " + clauses + " 条，零违例（零条款的纯流程文件不检，故意不报红）"];
 }
 
 function inject(context) {
@@ -262,9 +319,26 @@ function daoSyncLines() {
 // 模式 B: 所有 git 项目（含元仓库）— 共性 rule 备案清单
 // ══════════════════════════════════════════════════════════════
 
-const isMetaRepo = path.basename(cwd) === "windsurf-dao";
+// **元仓库按内容签名识别，不按目录名**（2026-08-01 修）。
+// 原判据是 `path.basename(cwd) === "windsurf-dao"`，它在**任何 worktree 里都为假**
+// （`windsurf-dao-wt-slim` / `windsurf-dao-wt-xxx` 之类）⇒ 模式 A 整块在 worktree 会话里
+// **从未跑过**：同步漂移、live↔快照自检、以及 2026-08-01 才挂上的条款库结构闸，全部静默跳过。
+// 而它的输出与「跑了且没问题」**完全一样**——正是本仓反复在治的那个病
+// （「没跑的闸」与「过了的闸」在台账上长得一样）。第一次发现是因为在 worktree 里
+// 给条款闸扩扫描面后，实测 hook 只花了 0.16s：PowerShell 根本没被 spawn 过。
+// 签名取两个文件同时存在，比单文件稳（普通项目不会同时有这两个）。
+// **两个信号取或，不是取代**：旧的 basename 判据留着——它对主仓仍然成立，去掉它等于
+// 用一个新判据换掉一个已验证的判据，而本次要修的是「漏判」不是「误判」。
+// 取或的方向是**更宽**，所以不可能让原先跑得起来的场景反而跑不起来。
+const isMetaRepo = (() => {
+  if (path.basename(cwd) === "windsurf-dao") return true;
+  try {
+    return fs.existsSync(path.join(cwd, "ccswitch", "dao.md")) &&
+           fs.existsSync(path.join(cwd, "ccswitch", "scaffold-manifest.json"));
+  } catch (_) { return false; }
+})();
 
-// 跳过非 git 项目。元仓库按仓名识别，不受此闸约束——否则「目录里没有 .git」
+// 跳过非 git 项目。元仓库按上面的内容签名识别，不受此闸约束——否则「目录里没有 .git」
 // 这种异常态会连同步漂移一起静默掉，而那正是最该报的时候。
 if (!isMetaRepo) {
   try {
