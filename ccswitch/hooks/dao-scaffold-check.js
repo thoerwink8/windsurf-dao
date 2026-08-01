@@ -348,6 +348,8 @@ if (issues.length > 0) {
     "请在回答用户问题后追加提醒：\n" +
     issues.map((s, i) => (i + 1) + ". " + s).join("\n") +
     "\n「（建议）」前缀者为近似判据（子串/入口级），不当硬判定；详细模板参考 dao-project-scaffold skill。" +
+    "\n补齐入口：`/dao-project-scaffold --init`——带 canonical 的缺项零编辑物化，其余给指引，" +
+    "删除/搬移类只建议不代做；随时复核跑 `node <dao 根>/ccswitch/scripts/dao-scaffold-report.mjs`（0=零缺项 / 1=有缺项 / 2=没查成）。" +
     "提醒语气简洁友好，不阻塞用户当前任务。"
   );
 }

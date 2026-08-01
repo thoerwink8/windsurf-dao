@@ -35,4 +35,4 @@
 - [ ] 收敛写在 `strategy.matrix` 表达式里；**`jobs.<job_id>.if` 中零 `matrix.*` 引用**（写了即 invalid workflow，0 jobs 静默全挂）
 - [ ] 交叉平台完整矩阵只挂 main push / release tag / workflow_dispatch
 
-缺项不自动创建，建议用户对照 `stacks/ci-github-actions.md` 处方收敛并说明理由。
+缺项处置见 SKILL.md §缺项怎么处置。本文件的修法是**改用户既有的 workflow**（收敛矩阵），动的不是新建面 ⇒ 落**丙档：只建议不代做**，对照 `stacks/ci-github-actions.md` 处方给出改法与理由，由用户落笔。
