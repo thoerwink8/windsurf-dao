@@ -25,9 +25,42 @@
 //   旧值」静默通过（dao-timecode 实证：live/快照指仓库路径、DB 仍指已被删除的
 //   ~/.claude/hooks 副本，三项旧判据全同 ⇒ 零发现）。判据与其近似性见 normCommand 头注。
 //
+// ── 第三个面：per-provider hooks 漂移（`--providers`，issue #50）──────────────
+// 上面那条数据流图**画漏了一层**，#49 的实测把它补上了：`common_config_claude` 是**镜像层**，
+// 并不在下发路径上；cc-switch 真正下发到 `~/.claude/settings.json` 的是
+// **`providers` 表里当前 provider 那一行的 `settings_config`**，而且是**整体覆盖**。
+// ⇒ 每个 provider 各带一份自己的 hooks 段，彼此独立、天然会漂：
+//   · #49 实测：PostCompact 钩子就是这样被「切 provider」这一个动作静默抹掉的；
+//   · 2026-08-02 的修复是**手动**把两个 provider 对齐的 —— 新 provider 加入、
+//     或某个 provider 被单独改一次，漂移必然复发，而当时没有任何机制会发现它。
+// 本面因此比两组差异：
+//   ① provider ↔ provider（各自的 hooks 段互相之间）
+//   ② provider ↔ canonical（应注册的 hooks 集合）
+//
+// **canonical 真相源选定 = git 快照 `config-sync/common/settings.json` 的
+// `common_config_claude` 行**，理由与被否掉的备选（都写下来，免得下一个人重走一遍）：
+//   · 选它：它是 git 追踪的、有历史、可 review 的**声明层**——唯一一处「应该注册什么」
+//     是被人写下并审过的，而不是某个运行时状态；且它已经是本文件 live↔快照 那一面的
+//     参照侧，两面共用同一个 canonical ⇒ 两个面不可能对「什么才是 canonical」各执一词。
+//   · 否掉 `ccswitch/hooks/` 目录列表：它表达不了挂载点/matcher/timeout，只答得出
+//     「该不该存在」答不出「该挂哪」；且 check-dead-gates 已确立孤儿文件可能是刻意存货。
+//   · 否掉 live `~/.claude/settings.json`：它是投影，内容由「你最后切到哪个 provider」决定
+//     ⇒ 拿它当 canonical 等于让病灶自己定义健康。
+//   · 否掉「新写一份 manifest」：那是第七种载体，它自己又要跟快照对齐 ⇒ 凭空多一个漂移面。
+//   · 否掉 `dao-hard-gates.js --selfcheck`：它只知道自己那 5 道闸，管不到另外 8 个挂载点。
+//   ⚠ **这个选择自带一个弱点，照直写**：#49 已证 `common_config_claude` **不在下发路径上**
+//     ⇒ 没有任何机制强制它是对的。若它本身陈旧，本检查会把**全部** provider 报成漂移
+//     —— 形态是对的（确实需要人来对账），但它**判不出哪一侧才是真相**，与 VALUE_DIFF
+//     同属「方向不定，需人判」。报文里逐次声明，不许被读成「provider 错了」。
+//
 // ── 不造第七种载体 ───────────────────────────────────────────────────────────
 // 产出是「检测脚本 + 接入既有入口」，不落任何 git 追踪的状态文件。
 // 运行痕迹只写 `_tmp/settings-drift/`（已 gitignore，与 dao-rule-echo 同惯例）。
+// `--providers` 这一面**一个字节都不落盘**：它的扫描面是 cc-switch DB + 那份 git 快照，
+// 而报文只走 stdout ⇒ 报告不可能落进自己的扫描面（守卫铁律③：检查器的输出不能落在
+// 它自己的扫描面内，否则每跑一次命中更多，增长看起来像「问题在恶化」）。
+// 对 DB 是**结构性只读**，不是纪律性只读：走 `runSql(..., { readonly: true })`，
+// sqlite3 以 `-readonly` 打开 ⇒ 写不了，而不是「我们说好不写」。
 //
 // ── 谁来检查这个检查器（自指）───────────────────────────────────────────────
 // 判据**不用「文件是否存在」**（那是三例 55 天零生效事故的共同死法）。三层：
@@ -75,7 +108,11 @@ const FIRED_LOG_MAX_LINES = 2000;
 // ——那正是 check-core-loc 被 `-Last 60` 截断致盲的同一形状（信号被削成空，却仍判通过）。
 // 取值＝当前实际断言条数：任何**删除**都会跌破而变红；新增断言不受影响（count > floor）。
 // F3 补入 3 条（同名不同路径正例 ×2 + 写法差异负例 ×1）后由 8 抬到 11。
-const MIN_PROBE_CHECKS = 11;
+// issue #50 补入 per-provider hooks 面 17 条（负例 6 · 正例 8 · 零样本 1 · 自检 1 ·
+// 范围判据 1 · 解析失败 1）后由 11 抬到 28。其中 3 条（P4b/P4c/P4d）是首跑真数据
+// 撞出两个假阳性后补的——它们钉的是「仓库根归一化」与「statusLine 也算 command 条目」
+// 这两个口径，改回去当场变红。
+const MIN_PROBE_CHECKS = 28;
 
 // 软预算：超了就降级并把降级本身报出来（不静默截断 —— check-core-loc 的死法）
 const DEADLINE_MS = 1500;
@@ -458,6 +495,208 @@ function runSelfProbe() {
       f.length === 0, "误报：" + f.map((x) => x.detail).join(" | "));
   }
 
+  // ── per-provider hooks 面（issue #50）· 纯内存，无 I/O ──────────────────────
+  // 为什么这批也放进 runSelfProbe 而不是只放进 tests/：这里是**每次 SessionStart 都跑**
+  // 的那一半。provider 比对的 DB 读取进不了 SessionStart（同步 CJS 路径，见 loadProviderRows
+  // 头注），但**比对逻辑本身**可以每次都被验一遍 —— 逻辑被改瞎时，
+  // SessionStart 当场报「功能探针失败」，而不是等到某天有人手动跑 `--providers` 才发现。
+  {
+    const P = ROOT.replace(/\\/g, "/");
+    // canonical 用占位符形态（git 快照就是这样），provider 用展开态（DB 里就是这样）——
+    // 这一对本身就是最重要的负控：真实数据每天都是这个形状，判错就是每次都误报。
+    const canonicalFixture = {
+      hooks: {
+        SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-alpha.js"', timeout: 10 }] }],
+        PostCompact: [{ hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-compact.js"', timeout: 10 }] }],
+      },
+    };
+    const providerSettings = (over) => {
+      const base = {
+        env: { ANTHROPIC_BASE_URL: "https://a.example" },
+        model: "opus[1m]",
+        hooks: {
+          SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: 'node "' + P + '/ccswitch/hooks/dao-probe-alpha.js"', timeout: 10 }] }],
+          PostCompact: [{ hooks: [{ type: "command", command: 'node "' + P + '/ccswitch/hooks/dao-probe-compact.js"', timeout: 10 }] }],
+        },
+      };
+      return over ? over(clone(base)) : base;
+    };
+    const row = (id, name, over, appType) => ({
+      id, name, app_type: appType || PROVIDER_APP_TYPE,
+      settings_config: JSON.stringify(providerSettings(over)),
+    });
+    const twoAligned = () => [row("p1", "Alpha"), row("p2", "Beta")];
+
+    // 负例 P1：两 provider 对齐 + canonical 对齐（占位符 vs 展开态）⇒ 零差异、零 cross
+    {
+      const r = compareProviderHooks({ providers: twoAligned(), canonical: canonicalFixture });
+      t("负例·provider 全对齐（占位符 vs 展开态）→ 零漂移零 cross",
+        r.driftCount === 0 && r.crossCount === 0 && !r.uncheckable && r.selfIssues.length === 0,
+        "drift=" + r.driftCount + " cross=" + r.crossCount + " uncheckable=" + r.uncheckable +
+        " self=" + JSON.stringify(r.selfIssues) + " vs=" + JSON.stringify(r.vsCanonical.map((x) => x.kind + ":" + x.id)));
+    }
+    // 负例 P2：provider 之间 env / model 不同（本就该不同）⇒ 不许报
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.env.ANTHROPIC_BASE_URL = "https://b.example"; s.model = "claude-fable-5[1m]"; return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·provider 间 env/model 不同 → 零漂移（hooks 面之外不管）",
+        r.driftCount === 0 && r.crossCount === 0,
+        "drift=" + r.driftCount + " cross=" + r.crossCount);
+    }
+    // 负例 P3：某 provider 多一个**第三方**（非 dao）hook ⇒ 不许误伤，且不许被当成扫描面塌陷
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.hooks.PreToolUse = [{ matcher: "*", hooks: [{ type: "command", command: 'node "C:/Program Files/OtherTool/their-hook.js"', timeout: 5 }] }];
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·第三方非 dao hook 不误伤、不误判扫描面塌陷",
+        r.driftCount === 0 && r.crossCount === 0 && r.selfIssues.length === 0,
+        "drift=" + r.driftCount + " cross=" + r.crossCount + " self=" + JSON.stringify(r.selfIssues));
+    }
+    // 负例 P4：非 claude 型 provider（claude-desktop / codex）⇒ 不进比对面，也不制造噪音
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta"),
+        { id: "d1", name: "Desktop", app_type: "claude-desktop", settings_config: JSON.stringify({ env: { X: "1" } }) },
+        { id: "c1", name: "Codex", app_type: "codex", settings_config: JSON.stringify({ auth: {}, config: {} }) }];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·非 claude 型 provider 不进比对面（零噪音）",
+        r.driftCount === 0 && r.crossCount === 0 && r.skipped.length === 2 && r.notes.length === 0,
+        "skipped=" + r.skipped.length + " notes=" + JSON.stringify(r.notes));
+    }
+    // 负例 P4b：provider 的仓库根 ≠ 本次运行的仓库根（从 worktree 里跑就是这个形状）
+    // ⇒ 面①**不许**因此报 26 条假阳性。这一条钉的是首跑真数据当场撞到的那个坑。
+    {
+      const other = "d:/some/other/windsurf-dao";
+      const providers = [row("p1", "Alpha", (s) => {
+        s.hooks.SessionStart[0].hooks[0].command = 'node "' + other + '/ccswitch/hooks/dao-probe-alpha.js"';
+        s.hooks.PostCompact[0].hooks[0].command = 'node "' + other + '/ccswitch/hooks/dao-probe-compact.js"';
+        return s;
+      }), row("p2", "Beta", (s) => {
+        s.hooks.SessionStart[0].hooks[0].command = 'node "' + other + '/ccswitch/hooks/dao-probe-alpha.js"';
+        s.hooks.PostCompact[0].hooks[0].command = 'node "' + other + '/ccswitch/hooks/dao-probe-compact.js"';
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·仓库根前缀不同（worktree 里跑）→ 面①零假阳性，且仓库根仍被打印出来",
+        r.driftCount === 0 && r.crossCount === 0 && r.repoRoots.length === 1 && r.repoRoots[0] === other,
+        "drift=" + r.driftCount + " roots=" + JSON.stringify(r.repoRoots));
+    }
+    // 正例 P4c：两个 provider 指着**不同 checkout** ⇒ 面①看不见（已归一化），
+    // 面②必须报 —— 这条是上一条那个代价的**兜底证明**，两条必须成对存在。
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.hooks.SessionStart[0].hooks[0].command = 'node "d:/old/windsurf-dao/ccswitch/hooks/dao-probe-alpha.js"';
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·两 provider 指向不同 checkout → 面①看不见但面②报出（归一化代价的兜底）",
+        r.driftCount === 0 && r.crossProvider.some((c) => c.script === "dao-probe-alpha.js"),
+        "drift=" + r.driftCount + " cross=" + JSON.stringify(r.crossProvider.map((c) => c.script)));
+    }
+    // 负例 P4d：statusLine 也是 `"type":"command"` ⇒ 普查数得到它，结构化那半也必须数
+    // （首跑真数据 13 vs 14 恒报假「扫描面塌陷」的成因）。
+    {
+      const providers = [row("p1", "Alpha", (s) => {
+        s.statusLine = { type: "command", command: "node " + P + "/ccswitch/statusline.js" }; return s;
+      }), row("p2", "Beta", (s) => {
+        s.statusLine = { type: "command", command: "node " + P + "/ccswitch/statusline.js" }; return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·带 statusLine 时两半口径一致（不报假扫描面塌陷）",
+        r.selfIssues.length === 0 && r.scoped.every((s) => s.structural === s.census),
+        "self=" + JSON.stringify(r.selfIssues) + " counts=" + JSON.stringify(r.scoped.map((s) => s.structural + "/" + s.census)));
+    }
+    // 正例 P5：某 provider **少一个** hook —— #49 里 PostCompact 被切 provider 抹掉的原形
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => { delete s.hooks.PostCompact; return s; })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·provider 少一个 hook → 面①报 CANONICAL_ONLY 且点名该脚本",
+        r.vsCanonical.some((f) => f.kind === "CANONICAL_ONLY" && f.id === "hook:dao-probe-compact.js" && /Beta/.test(f.provider)),
+        "实得：" + JSON.stringify(r.vsCanonical.map((x) => x.provider + "/" + x.kind + ":" + x.id)));
+      t("正例·provider 少一个 hook → 面②同时报 cross 不一致",
+        r.crossProvider.some((c) => c.script === "dao-probe-compact.js" && c.missing.some((m) => /Beta/.test(m))),
+        "实得：" + JSON.stringify(r.crossProvider.map((c) => c.script + " missing=" + c.missing.join(","))));
+    }
+    // 正例 P6：挂载点（matcher）漂移 ⇒ VALUE_DIFF
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.hooks.SessionStart[0].matcher = "resume"; return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·挂载点漂移 → 面①VALUE_DIFF + 面②cross",
+        r.vsCanonical.some((f) => f.kind === "VALUE_DIFF" && f.id === "hook:dao-probe-alpha.js") &&
+        r.crossProvider.some((c) => c.script === "dao-probe-alpha.js"),
+        "vs=" + JSON.stringify(r.vsCanonical.map((x) => x.kind + ":" + x.id)) + " cross=" + JSON.stringify(r.crossProvider.map((c) => c.script)));
+    }
+    // 正例 P7：同名**不同路径**（basename 判据的原盲区）⇒ 必须报
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.hooks.SessionStart[0].hooks[0].command = 'node "' + HOME.replace(/\\/g, "/") + '/.claude/hooks/dao-probe-alpha.js"';
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·同名不同路径 → 面①hook-cmd VALUE_DIFF",
+        r.vsCanonical.some((f) => f.id === "hook-cmd:dao-probe-alpha.js" && /脚本路径/.test(f.detail)),
+        "实得：" + JSON.stringify(r.vsCanonical.map((x) => x.kind + ":" + x.id)));
+    }
+    // 正例 P8：timeout 漂移（软）⇒ 仍要报出来，不许因为「只是软的」而消失
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.hooks.PostCompact[0].hooks[0].timeout = 60; return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·timeout 漂移 → 面①报出（tier=soft 但计入 drift）",
+        r.vsCanonical.some((f) => f.id === "hook-timeout:dao-probe-compact.js") && r.driftCount > 0,
+        "实得：" + JSON.stringify(r.vsCanonical.map((x) => x.tier + "/" + x.id)));
+    }
+    // 正例 P9：canonical 缺失时，面②仍然能答话，且整批判为 uncheckable（≠ 通过）
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => { delete s.hooks.PostCompact; return s; })];
+      const r = compareProviderHooks({ providers, canonical: null });
+      t("正例·canonical 缺失 → uncheckable=true 且面②仍报 cross",
+        r.uncheckable === true && r.canonicalOk === false && r.crossCount > 0 && providerExitCode(r) === 1,
+        "uncheckable=" + r.uncheckable + " cross=" + r.crossCount + " exit=" + providerExitCode(r));
+    }
+    // 零样本 P10：一个可比对 provider 都没有 ⇒ **不许**报成通过（exit 2 而非 0）
+    {
+      const r = compareProviderHooks({ providers: [{ id: "c1", name: "Codex", app_type: "codex", settings_config: "{}" }], canonical: canonicalFixture });
+      t("零样本·没有 claude 型 provider → uncheckable 且 exit=2（不是「无漂移」）",
+        r.uncheckable === true && providerExitCode(r) === 2 && r.notes.some((n) => /零样本/.test(n)),
+        "uncheckable=" + r.uncheckable + " exit=" + providerExitCode(r) + " notes=" + JSON.stringify(r.notes));
+    }
+    // 自检半边 P11：主解析瞎掉（hooks 键被改名）而普查仍看得见样本 ⇒ 必须报扫描面塌陷。
+    // 这一条是守卫铁律②的**可执行形式**：两半若共用解析逻辑，这里会一起归零、差恒为 0。
+    {
+      const blinded = JSON.stringify({ hooksV2: providerSettings().hooks });
+      const providers = [{ id: "p1", name: "Alpha", app_type: PROVIDER_APP_TYPE, settings_config: blinded }];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("自检·hooks 键被改名（主解析瞎掉）→ 报扫描面塌陷 + exit=1",
+        r.selfIssues.some((s) => /undercount@/.test(s)) && providerExitCode(r) === 1,
+        "self=" + JSON.stringify(r.selfIssues) + " exit=" + providerExitCode(r));
+    }
+    // 范围判据 P12：出范围的行里普查数到 command 条目 ⇒ 出声（判据可能过期），但不判红
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta"),
+        { id: "x1", name: "Weird", app_type: "claude-desktop", settings_config: JSON.stringify(providerSettings()) }];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("范围·出范围行带 hooks → 出 scope-surprise 备注但不判红",
+        r.notes.some((n) => /scope-surprise/.test(n)) && r.driftCount === 0 && r.crossCount === 0,
+        "notes=" + JSON.stringify(r.notes) + " drift=" + r.driftCount);
+    }
+    // 解析失败 P13：settings_config 不是合法 JSON ⇒ uncheckable，绝不静默当成对齐
+    {
+      const providers = [row("p1", "Alpha"),
+        { id: "bad", name: "Broken", app_type: PROVIDER_APP_TYPE, settings_config: '{"hooks": ' }];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("解析失败·坏 JSON → uncheckable 且不计为对齐",
+        r.uncheckable === true && r.notes.some((n) => /解析失败/.test(n)) && providerExitCode(r) === 2,
+        "uncheckable=" + r.uncheckable + " exit=" + providerExitCode(r) + " notes=" + JSON.stringify(r.notes));
+    }
+  }
+
   const failed = checks.filter((c) => !c.ok);
   // 真空守卫：断言条数被削到阈值以下 ⇒ 判失败，不许「没有失败」等于「通过」。
   if (checks.length < MIN_PROBE_CHECKS) {
@@ -707,6 +946,462 @@ function selfcheck() {
   return bad;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// per-provider hooks 漂移（issue #50）· 判据与 canonical 选定理由见本文件头注
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 只有这个 app_type 的 `settings_config` 会被 cc-switch 投影到 `~/.claude/settings.json`。
+// 本机全域分布实测（2026-08-02，13 行）：claude 2 · claude-desktop 5 · codex 5 · gemini 1
+// —— 后三类的 settings_config 里**一个 hooks 键都没有**（claude-desktop 只有 env，
+// codex 是 auth/config 的 TOML 面，gemini 是空壳），把它们拉进 hooks 面比对只会
+// 造出 11 条恒定噪音，而生下来就吵的检查一定会被静音。
+// **但「按 app_type 划范围」本身是个判据，不是事实**，所以出范围的行也不静默丢：
+// 逐行跑一遍独立普查，普查数到 command 条目就出声（下面的 scope-surprise 备注）。
+const PROVIDER_APP_TYPE = "claude";
+
+// ── 自检那一半：独立普查 ────────────────────────────────────────────────────
+// 刻意**不 JSON.parse、不认识 hooks 结构**：它与主逻辑唯一的共同前提是「这里有文本」。
+// 守卫铁律②——自检那一半必须能在主逻辑瞎掉时仍然看得见样本。复用 hookIndex 会让两半
+// 一起瞎：解析漏掉一整段时违例数与样本数**同时归零**，二者之差恒为 0 ⇒ 自检永远为真。
+// 它是钝的，钝的方向是刻意选的：**高估**（任何字符串值里恰好出现这几个字都会被计一次）
+// 比**漏估**安全 —— 高估只会误报一次「扫描面塌陷」逼人来看一眼，漏估让「零漂移」
+// 变成一句没有分母的空话。
+function censusCommandEntries(text) {
+  const s = String(text == null ? "" : text);
+  const plain = (s.match(/"type"\s*:\s*"command"/g) || []).length;
+  const escaped = (s.match(/\\"type\\"\s*:\s*\\"command\\"/g) || []).length;
+  return plain + escaped;
+}
+
+// 主逻辑那一半：结构化遍历，数**全部** command 条目（不做 dao 归属过滤）。
+// 与 hookIndex 的分工别混：hookIndex 只留 dao 自有脚本（那是**比对面**），
+// 这里数的是**样本量**——拿 hookIndex 的条数去对普查数，会把「多了一条第三方 hook」
+// 误读成「扫描面塌陷」，把一个正常状态报成检测器坏了。
+//
+// ⚠ **`statusLine` 必须一起数，这是首跑真数据当场撞出来的**（2026-08-02）：
+// 普查是在原始文本上数 `"type":"command"`，而 `statusLine` 也长这个样子
+// ⇒ 只数 hooks 段时真实数据恒为 13 vs 14，**每一次跑都报一条假的「扫描面塌陷」**。
+// 分母口径对不上比数错更糟：一道生下来就吵的闸一定会被静音，而它被静音之后，
+// 真正的扫描面塌陷就再也没人看得见了。同 check-dead-gates 的 walkGates 口径。
+function countCommandEntries(obj) {
+  let n = 0;
+  const hooks = obj && obj.hooks && typeof obj.hooks === "object" ? obj.hooks : {};
+  for (const event of Object.keys(hooks)) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    for (const g of groups) {
+      const entries = g && Array.isArray(g.hooks) ? g.hooks : [];
+      for (const h of entries) if (h && h.type === "command") n++;
+    }
+  }
+  const sl = obj && obj.statusLine;
+  if (sl && sl.type === "command") n++;
+  return n;
+}
+
+// ── 仓库根归一化（只用在面①）────────────────────────────────────────────────
+// canonical 那份是**占位符化**的（`${PROJECT_ROOT}/ccswitch/hooks/x.js`），而
+// `decodePaths` 把占位符展开成的是**当前这个 checkout 的根**——从 worktree 里跑，
+// 展开出来就是 worktree 路径，而 DB 里存的是主树部署时写进去的路径。
+// 这不是漂移，是「我从哪儿跑的」，但两者在字符串上完全一样地不同。
+// **首跑真数据当场撞到**：在 `windsurf-dao-wt-50` 里跑，13 个 hook 全部被报成
+// 「同名不同路径」——26 条满屏假阳性，而真实状态是完全对齐的。
+//
+// 故面①把「仓库根 + /ccswitch/」整段换成一个固定 token 再比。**代价照直写**：
+// provider 指向**另一个 checkout**（如某次从 worktree 部署过去）这一格，面①看不见了。
+// 那一格不是没人管——①面②（provider 互比）**刻意不做这个归一化**，两个 provider
+// 指向不同 checkout 会被它当场报出；②目标文件到底存不存在归 check-dead-gates。
+// 归一化只吃 `/ccswitch/` 这一段：`${HOME}/.claude/hooks/` 形态的路径不受影响
+// （HOME 是机器级的，两侧展开一致），所以「hook 被改回旧的 ~/.claude 副本」仍报得出。
+const REPO_TOKEN = "<repo>";
+function agnosticCommand(cmd) {
+  if (cmd == null) return cmd;
+  const s = String(cmd).replace(/\\/g, "/");
+  return s.replace(/[^\s"']*\/ccswitch\//gi, REPO_TOKEN + "/ccswitch/");
+}
+function withAgnosticRoots(obj) {
+  const o = clone(obj);
+  const hooks = o && o.hooks && typeof o.hooks === "object" ? o.hooks : null;
+  if (!hooks) return o;
+  for (const event of Object.keys(hooks)) {
+    const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
+    for (const g of groups) {
+      const entries = g && Array.isArray(g.hooks) ? g.hooks : [];
+      for (const h of entries) if (h && h.type === "command") h.command = agnosticCommand(h.command);
+    }
+  }
+  return o;
+}
+
+// 各 provider 的 hook 命令串里出现过的「仓库根」集合。它不参与判红——只是把
+// 「这些 hook 到底指着哪棵树」端到眼前：面①已经把这个前缀归一化掉了，
+// 不打印出来的话，那条信息就在报文里彻底消失了。
+function repoRootsOf(obj) {
+  const roots = new Set();
+  const hooks = obj && obj.hooks && typeof obj.hooks === "object" ? obj.hooks : {};
+  for (const event of Object.keys(hooks)) {
+    for (const g of (Array.isArray(hooks[event]) ? hooks[event] : [])) {
+      for (const h of (g && Array.isArray(g.hooks) ? g.hooks : [])) {
+        if (!h || h.type !== "command") continue;
+        const m = String(h.command).replace(/\\/g, "/").match(/([^\s"']*)\/ccswitch\//i);
+        if (m) roots.add(m[1]);
+      }
+    }
+  }
+  return roots;
+}
+
+// provider 的 hooks 指纹：script → 归一化后的 {mounts, timeouts, cmds}。
+// 复用 hookIndex ⇒ 占位符 / 分隔符 / 引号 / 大小写差异已被抹掉（近似性见 normCommand 头注）。
+function hookSignatures(obj) {
+  const sig = new Map();
+  for (const [script, rec] of hookIndex(obj)) {
+    sig.set(script, stable({
+      mounts: [...rec.mounts].sort(),
+      timeouts: [...rec.timeouts].sort(),
+      cmds: [...rec.cmds].sort(),
+    }));
+  }
+  return sig;
+}
+
+function providerLabel(row) {
+  const name = row && row.name != null && String(row.name).trim() ? String(row.name).trim() : "(无名)";
+  const id = row && row.id != null ? String(row.id) : "(无 id)";
+  return `${name} [${id}]`;
+}
+
+function parseSettingsConfig(v) {
+  if (v && typeof v === "object") return { ok: true, obj: v, raw: JSON.stringify(v) };
+  if (typeof v !== "string") return { ok: false, obj: null, raw: "", why: `settings_config 既不是字符串也不是对象（typeof=${typeof v}）` };
+  const raw = v.charCodeAt(0) === 0xfeff ? v.slice(1) : v;
+  try { return { ok: true, obj: JSON.parse(raw), raw }; }
+  catch (e) { return { ok: false, obj: null, raw, why: `settings_config JSON 解析失败：${e.message}` }; }
+}
+
+/**
+ * 纯函数比对：只吃已取出的行 + 已解析的 canonical 对象，**不碰 DB、不读文件**
+ * ⇒ 可用内存 fixture 直测（正控/负控都不必造真库）。
+ *
+ * @param {{providers: Array<Object>, canonical: Object|null, canonicalLabel?: string}} input
+ * @returns {{
+ *   total:number, appTypeCounts:Object, scoped:Array, skipped:Array,
+ *   vsCanonical:Array, crossProvider:Array, selfIssues:Array<string>, notes:Array<string>,
+ *   canonicalOk:boolean, uncheckable:boolean, driftCount:number, crossCount:number
+ * }}
+ */
+function compareProviderHooks(input) {
+  const o = input || {};
+  const rows = Array.isArray(o.providers) ? o.providers : [];
+  const canonical = o.canonical || null;
+  const canonicalLabel = o.canonicalLabel || "canonical";
+
+  const appTypeCounts = {};
+  for (const r of rows) {
+    const t = r && r.app_type != null ? String(r.app_type) : "(空)";
+    appTypeCounts[t] = (appTypeCounts[t] || 0) + 1;
+  }
+
+  const scoped = [];
+  const skipped = [];
+  const notes = [];
+  const selfIssues = [];
+  let uncheckable = false;
+
+  for (const r of rows) {
+    const label = providerLabel(r);
+    const appType = r && r.app_type != null ? String(r.app_type) : "(空)";
+    const parsed = parseSettingsConfig(r ? r.settings_config : null);
+    const census = censusCommandEntries(parsed.raw);
+
+    if (appType !== PROVIDER_APP_TYPE) {
+      // 出范围但普查数到 command 条目 ⇒ 「按 app_type 划范围」这个判据可能已经过期。
+      // 不静默丢，也不判红：机器判不出该不该纳入，只负责端到眼前。
+      if (census > 0) {
+        notes.push(`scope-surprise：${label}（app_type=${appType}）不在 hooks 比对范围内，` +
+          `但独立普查在它的 settings_config 里数到 ${census} 条 command 条目 ` +
+          `⇒ 「只有 app_type=${PROVIDER_APP_TYPE} 才带 hooks」这个划范围判据可能已过期，请人复核`);
+      }
+      skipped.push({ label, appType, census });
+      continue;
+    }
+
+    if (!parsed.ok) {
+      // 解析不动 ≠ 对齐。它进不了比对面，故整批判为「没查全」。
+      notes.push(`${label}：${parsed.why}（独立普查在同一文本上数到 ${census} 条 command 条目 ⇒ 它们此刻不可核验）`);
+      uncheckable = true;
+      scoped.push({ label, appType, obj: null, census, structural: 0, parsed: false });
+      continue;
+    }
+
+    const structural = countCommandEntries(parsed.obj);
+    if (structural < census) {
+      selfIssues.push(`undercount@${label}：结构化遍历数到 ${structural} 条 command 条目，` +
+        `独立普查在同一文本上数到 ${census} 条 ⇒ 有样本没被看见（扫描面塌陷）`);
+    }
+    scoped.push({ label, appType, obj: parsed.obj, census, structural, parsed: true, roots: [...repoRootsOf(parsed.obj)].sort() });
+  }
+
+  const live = scoped.filter((s) => s.parsed);
+
+  // 零样本：一个可比对的 provider 都没有 ⇒ **不是「通过」**。
+  if (live.length === 0) {
+    uncheckable = true;
+    notes.push(`零样本：${rows.length} 行 providers 里没有任何 app_type=${PROVIDER_APP_TYPE} ` +
+      `且可解析的行 ⇒ 本次什么都没比对到（这不是「无漂移」）`);
+  }
+
+  // ── 面 ① provider ↔ canonical ──────────────────────────────────────────────
+  // 复用 compare() 的 hooks 面判据（basename 身份 · 挂载点 · 归一化命令串 · timeout），
+  // 只留 face==='hooks'：permissions/env/statusLine 三面**按 provider 不同是设计如此**
+  // （env 里就装着各家的 base_url 与密钥），拉进来即噪音。这是刻意的射程边界，不是遗漏。
+  const vsCanonical = [];
+  const canonicalOk = !!(canonical && typeof canonical === "object");
+  if (!canonicalOk) {
+    uncheckable = true;
+    notes.push(`canonical 不可用（${canonicalLabel}）⇒ 「与应注册清单的差异」这一面本次没查成，` +
+      `**不等于查过且没差异**；下面只剩 provider 互比那一面`);
+  } else {
+    // 两侧都先过仓库根归一化再比（理由与代价见 withAgnosticRoots 头注）。
+    const canonicalAgnostic = withAgnosticRoots(canonical);
+    for (const s of live) {
+      for (const f of compare(withAgnosticRoots(s.obj), canonicalAgnostic, { otherLabel: canonicalLabel })) {
+        if (f.face !== "hooks") continue;
+        vsCanonical.push({
+          provider: s.label,
+          tier: f.tier,
+          // 换名：compare() 的 LIVE/SNAP 是它自己那一面的措辞，照抄过来会让读者
+          // 以为在说 `~/.claude/settings.json`。这一面的两侧是 provider 与 canonical。
+          kind: f.kind === "LIVE_ONLY" ? "PROVIDER_ONLY" : f.kind === "SNAP_ONLY" ? "CANONICAL_ONLY" : "VALUE_DIFF",
+          id: f.id,
+          detail: f.detail.replace(/\blive\b/g, "provider"),
+        });
+      }
+    }
+  }
+
+  // ── 面 ② provider ↔ provider ───────────────────────────────────────────────
+  // 为什么两面都要（面①绿不蕴含面②绿的反面也成立）：canonical 自己陈旧时，各 provider
+  // 可能彼此一致却齐齐偏离 canonical（面①全红面②全绿）；反过来 canonical 缺失时面①
+  // 根本跑不了，而面②仍答得出「这几份配置互相还一样吗」。
+  const crossProvider = [];
+  if (live.length >= 2) {
+    const sigs = live.map((s) => ({ label: s.label, sig: hookSignatures(s.obj) }));
+    const allScripts = new Set();
+    for (const p of sigs) for (const k of p.sig.keys()) allScripts.add(k);
+    for (const script of [...allScripts].sort()) {
+      const bySig = new Map();
+      const missing = [];
+      for (const p of sigs) {
+        const v = p.sig.get(script);
+        if (v === undefined) { missing.push(p.label); continue; }
+        if (!bySig.has(v)) bySig.set(v, []);
+        bySig.get(v).push(p.label);
+      }
+      const groups = [...bySig.entries()].map(([signature, providers]) => ({ signature, providers }));
+      if (groups.length > 1 || (missing.length > 0 && groups.length > 0)) {
+        crossProvider.push({ script, groups, missing });
+      }
+    }
+  }
+
+  // 面①把仓库根归一化掉了 ⇒ 这个信息只剩这里还留着，报文必须打出来。
+  const repoRoots = [...new Set(live.flatMap((s) => s.roots || []))].sort();
+
+  return {
+    total: rows.length,
+    appTypeCounts,
+    repoRoots,
+    scoped,
+    skipped,
+    vsCanonical,
+    crossProvider,
+    selfIssues,
+    notes,
+    canonicalOk,
+    uncheckable,
+    driftCount: vsCanonical.length,
+    crossCount: crossProvider.length,
+  };
+}
+
+// ── DB 读取（结构性只读）──────────────────────────────────────────────────
+// sqlite.mjs 是 ESM 且 findSqlite3 找不到 sqlite3 会抛、cc-switch 运行时 DB 可能被锁
+// ⇒ 这一路只在 CLI 走，绝不进 SessionStart 的进程内路径（那条路是同步 CJS，
+// 为它整体 async 化不是最小改动，理由同 compareWithDb 头注）。
+async function loadProviderRows(dbPath) {
+  const { runSql } = await import("../../config-sync/lib/sqlite.mjs");
+  // 只选四列：settings_config 已经很大，别把 meta/notes 一起拖进内存与报文。
+  const sql = "SELECT id, app_type, name, settings_config FROM providers;";
+  return runSql(sql, dbPath ? { dbPath, json: true, readonly: true } : { json: true, readonly: true });
+}
+
+// canonical 载入：git 快照的 common_config_claude 行（选它的理由见文件头注）。
+function loadCanonicalClaude(file) {
+  return loadSnapshotClaude(file || SNAPSHOT_SETTINGS);
+}
+
+// ── 退出码 / 末行契约（消费方按字段名取值，勿按位置；新字段一律追加在末尾）──────
+//   PROVIDER_HOOKS_SUMMARY exit=<0|1|2> providers=<N> scoped=<S> drift=<D> cross=<C>
+//                          selfcheck=<ok|fail> uncheckable=<0|1>
+//   · exit 0 —— 全部比对完且零差异（**只有这一个值叫「通过」**）
+//   · exit 1 —— 有差异，或自检半边失败（此时「零差异」不可信，先修检测器）
+//   · exit 2 —— **没查成**：DB 不在/读不了/无 providers 表/零可比对 provider/canonical 缺
+//   `exit 2` 单独存在的全部理由：一个检查器数到 0 个违例，和它根本没看到样本，
+//   在只读退出码的消费方眼里必须**长得不一样**。本仓 verify-all 那条退出码教训
+//   （`-Skip` 掉 5 道硬闸与全绿逐字节相同）就是同一个病换了个身位。
+//   末行**每条路径都打印**，含 DB 读不到的失败路径 —— 只在成功时打摘要，
+//   等于让「没查成」在机器通道上表现为「什么都没说」。
+function providerSummaryLine(exitCode, r) {
+  const scopedParsed = r ? r.scoped.filter((s) => s.parsed).length : 0;
+  return "PROVIDER_HOOKS_SUMMARY exit=" + exitCode +
+    " providers=" + (r ? r.total : 0) +
+    " scoped=" + scopedParsed +
+    " drift=" + (r ? r.driftCount : 0) +
+    " cross=" + (r ? r.crossCount : 0) +
+    " selfcheck=" + (r && r.selfIssues.length === 0 ? "ok" : "fail") +
+    " uncheckable=" + (r && !r.uncheckable ? "0" : "1");
+}
+
+function providerExitCode(r) {
+  if (!r) return 2;
+  if (r.driftCount > 0 || r.crossCount > 0 || r.selfIssues.length > 0) return 1;
+  if (r.uncheckable) return 2;
+  return 0;
+}
+
+function printProviderReport(r, meta) {
+  const L = [];
+  const m = meta || {};
+  L.push("");
+  L.push("=== per-provider hooks 漂移（cc-switch DB providers.settings_config）===");
+  L.push("  DB        : " + (m.dbPath || "(默认)") + (m.readonly === false ? "" : "  [-readonly 打开]"));
+  L.push("  canonical : " + (m.canonicalPath || "(未指定)") + (r && r.canonicalOk ? "" : "  ✗ 不可用"));
+  const dist = Object.keys(r.appTypeCounts).sort().map((k) => k + "=" + r.appTypeCounts[k]).join(" · ");
+  L.push("  全域分布  : 共 " + r.total + " 行 —— " + (dist || "(空)") +
+    "；纳入 hooks 比对的是 app_type=" + PROVIDER_APP_TYPE + " 那 " + r.scoped.length + " 行");
+  for (const s of r.scoped) {
+    L.push("     · " + s.label + (s.parsed
+      ? "  结构化 " + s.structural + " 条 command / 普查 " + s.census + " 条"
+      : "  ✗ 解析不动（普查 " + s.census + " 条）"));
+  }
+  // 面①比之前把「仓库根 + /ccswitch/」归一化成 <repo> 了 ⇒ 这条信息只剩这里还留着。
+  // 不打出来的话，「hook 指着哪棵树」就在报文里彻底消失（而那正是它值得看一眼的时候）。
+  L.push("  仓库根    : " + (r.repoRoots.length ? r.repoRoots.join(" · ") : "(未出现 /ccswitch/ 形态的路径)") +
+    "；本次运行于 " + ROOT.replace(/\\/g, "/") +
+    (r.repoRoots.length === 1 && r.repoRoots[0].toLowerCase() !== ROOT.replace(/\\/g, "/").toLowerCase()
+      ? "  ⓘ 两者不同是正常的（你多半在 worktree 里跑），面①已按 <repo> 归一化，不据此判红"
+      : ""));
+
+  L.push("");
+  if (!r.canonicalOk) {
+    L.push("⚠ 面① provider ↔ canonical：**本次没查成**（canonical 不可用），不等于没差异");
+  } else if (r.driftCount === 0) {
+    L.push("✓ 面① provider ↔ canonical：0 条差异（" + r.scoped.filter((s) => s.parsed).length + " 个 provider 逐个比过）");
+  } else {
+    L.push("✗ 面① provider ↔ canonical：" + r.driftCount + " 条差异 —— " +
+      "**方向不定，需人判**：canonical 本身不在下发路径上（#49 实证），" +
+      "它陈旧时也会长成这个样子，别默认是 provider 错了");
+    for (const f of r.vsCanonical) {
+      const kindCn = f.kind === "PROVIDER_ONLY" ? "⬆ provider 有 / canonical 无"
+        : f.kind === "CANONICAL_ONLY" ? "⬇ canonical 有 / provider 无（切到这个 provider 就会被静默抹掉）"
+        : "⚙ 两侧都有但不同";
+      L.push("    · [" + f.provider + "] " + kindCn + "（" + f.tier + "）：" + f.detail);
+    }
+  }
+
+  L.push("");
+  const parsedCount = r.scoped.filter((s) => s.parsed).length;
+  if (parsedCount < 2) {
+    L.push("ⓘ 面② provider ↔ provider：只有 " + parsedCount + " 个可比对 provider，互比无从谈起（不是「已对齐」）");
+  } else if (r.crossCount === 0) {
+    L.push("✓ 面② provider ↔ provider：" + parsedCount + " 个 provider 的 dao hook 段逐项一致");
+  } else {
+    L.push("✗ 面② provider ↔ provider：" + r.crossCount + " 个 hook 在各 provider 之间不一致 —— " +
+      "切 provider 会整体覆盖 live settings ⇒ 切到缺的那一侧，这些 hook 当场静默消失：");
+    for (const c of r.crossProvider) {
+      L.push("    · " + c.script);
+      for (const g of c.groups) {
+        L.push("        有（" + g.providers.join("、") + "）：" + short(g.signature, 220));
+      }
+      if (c.missing.length) L.push("        无：" + c.missing.join("、"));
+    }
+  }
+
+  if (r.notes.length) {
+    L.push("");
+    L.push("⚠ 备注 " + r.notes.length + " 条（**不等于通过**）：");
+    for (const n of r.notes) L.push("    · " + n);
+  }
+
+  L.push("");
+  if (r.selfIssues.length === 0) {
+    L.push("✓ 自检半边：每个 provider 的结构化遍历数 ≥ 独立普查数（扫描面没塌）");
+  } else {
+    L.push("✗ 自检半边失败 " + r.selfIssues.length + " 条 —— **此时「零漂移」不可信，先修检测器**：");
+    for (const i of r.selfIssues) L.push("    · " + i);
+  }
+
+  L.push("");
+  L.push("ⓘ 射程边界（照直写，别当全包）：只比 hooks 面的 **dao 自有脚本**；" +
+    "permissions/env/statusLine 面未纳入（env 按 provider 不同是设计如此）；" +
+    "第三方 hook 不进比对面（否则每装一个工具就唠叨一次）；" +
+    "本检查**只读不修**，对齐动作归人。");
+  process.stdout.write(L.join("\n") + "\n");
+}
+
+async function runProviderCheck(argv) {
+  const dbPath = argOfCli(argv, "--db-file", null);
+  const canonicalPath = argOfCli(argv, "--canonical-file", SNAPSHOT_SETTINGS);
+  const asJson = argv.includes("--json");
+
+  let rows = null, canonical = null;
+  const loadErrors = [];
+  try { rows = await loadProviderRows(dbPath); }
+  catch (e) { loadErrors.push("读 cc-switch DB providers 表失败：" + (e && e.message ? e.message : String(e))); }
+  try { canonical = loadCanonicalClaude(canonicalPath); }
+  catch (e) { loadErrors.push("读 canonical 失败（" + canonicalPath + "）：" + (e && e.message ? e.message : String(e))); }
+
+  if (rows == null) {
+    // DB 这一侧都没读到 ⇒ 什么都没比对。**这一条路径同样打末行**，否则「没查成」
+    // 在机器通道上表现为「什么都没说」，而那正是本文件要治的病。
+    for (const e of loadErrors) process.stderr.write("[settings-drift --providers] ✗ " + e + "\n");
+    process.stdout.write("\n=== per-provider hooks 漂移 ===\n" +
+      "✗ 没查成：" + loadErrors.join("；") + "\n" +
+      "  （这不是「无漂移」。手动复核：node ccswitch/lib/settings-drift.js --providers）\n");
+    process.stdout.write(providerSummaryLine(2, null) + "\n");
+    return 2;
+  }
+
+  const r = compareProviderHooks({ providers: rows, canonical, canonicalLabel: "canonical(git 快照)" });
+  for (const e of loadErrors) r.notes.push(e);
+  const code = providerExitCode(r);
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify({
+      exit: code,
+      total: r.total,
+      appTypeCounts: r.appTypeCounts,
+      scoped: r.scoped.map((s) => ({ label: s.label, parsed: s.parsed, structural: s.structural, census: s.census })),
+      skipped: r.skipped,
+      vsCanonical: r.vsCanonical,
+      crossProvider: r.crossProvider,
+      selfIssues: r.selfIssues,
+      notes: r.notes,
+      canonicalOk: r.canonicalOk,
+      uncheckable: r.uncheckable,
+    }, null, 2) + "\n");
+  } else {
+    printProviderReport(r, { dbPath: dbPath || "(默认 ~/.cc-switch/cc-switch.db)", canonicalPath });
+  }
+  process.stdout.write(providerSummaryLine(code, r) + "\n");
+  return code;
+}
+
+function argOfCli(argv, name, dflt) {
+  const i = argv.indexOf(name);
+  return i >= 0 && argv[i + 1] != null ? argv[i + 1] : dflt;
+}
+
 // ── CLI ─────────────────────────────────────────────────────────────────────
 async function compareWithDb(findingsLabel) {
   // DB 是真源。只在 --db 时查：单次 selectRows 实测 ~150ms（tableExists + select 两次 sqlite3 spawn），
@@ -767,6 +1462,10 @@ function printReport(r) {
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes("--selfcheck")) { process.exit(selfcheck()); }
+  // `--providers` 是**独占模式**（同 --selfcheck）：它有自己的末行契约与三态退出码，
+  // 混进 live↔快照 那一面的退出码会让两个不同的问题共用一个信号，
+  // 而「两个信号挤进一个通道」正是本文件反复在治的病。
+  if (argv.includes("--providers")) { process.exit(await runProviderCheck(argv)); }
 
   const r = detect({ real: false, skipRuleEcho: argv.includes("--no-rule-echo") });
 
@@ -803,6 +1502,11 @@ module.exports = {
   detect, hookLines, compare, runSelfProbe, daoScriptOf, hookIndex, selfcheck,
   LIVE_SETTINGS, SNAPSHOT_SETTINGS, MIN_PROBE_CHECKS,
   stateDir, firedLogPath, errorLogPath, lastJsonPath,
+  // per-provider hooks 面（issue #50）。compareProviderHooks 是纯函数（不碰 DB / 不读文件）
+  // ⇒ 正控/负控都能用内存 fixture 直测；loadProviderRows 才是那条要 sqlite 的路。
+  compareProviderHooks, providerExitCode, providerSummaryLine,
+  loadProviderRows, loadCanonicalClaude, censusCommandEntries, countCommandEntries,
+  PROVIDER_APP_TYPE,
 };
 
 if (require.main === module) {
