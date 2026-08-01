@@ -9,7 +9,7 @@
 ```text
 config-sync/
   common/       # 通用配置，进入 git
-  vendor/       # sqlite3 等本机工具安装包（进 git，免换机再下载）
+  vendor/       # sqlite-tools.json 下载清单（进 git）+ 首次用时下载的安装包与解压产物（都不进 git）
   lib/          # Node.js 脚本（sync.mjs 编排器 + export/restore/doctor/inventory）
   setup-sqlite.ps1
   同客端MCP.bat       # DB → 桌面端客户端 MCP 分发（独立）
@@ -39,13 +39,24 @@ cc-switch 的 common 配置里有时会混入真实密钥（例如 `common_confi
 
 ## 前置条件
 
-脚本需要 `sqlite3` 命令行工具。项目已内置 Windows 64 位安装包，运行一次即可：
+脚本需要 `sqlite3` 命令行工具。运行一次即可：
 
 ```powershell
 .\setup-sqlite.ps1
 ```
 
-它会优先使用系统已有的 `sqlite3`；找不到时自动从 `vendor/sqlite-tools-win-x64-*.zip` 解压到 `vendor/sqlite/`，并设置用户级 `SQLITE3_PATH`。`lib/sqlite.mjs` 也已把 `vendor/sqlite/sqlite3.exe` 加入 fallback 路径，解压后新终端无需额外配置即可运行 `node lib/*.mjs`。
+查找顺序：环境变量 `SQLITE3_PATH` → `PATH` → `vendor/sqlite/sqlite3.exe`（已解压的）。都没有时，**按 `vendor/sqlite-tools.json` 从 sqlite.org 下载官方安装包**到 `vendor/`，校验 SHA256 通过后解压到 `vendor/sqlite/`，并设置用户级 `SQLITE3_PATH`。`lib/sqlite.mjs` 也已把 `vendor/sqlite/sqlite3.exe` 加入 fallback 路径，解压后新终端无需额外配置即可运行 `node lib/*.mjs`。
+
+### 安装包为什么不进 git
+
+原先 6.4 MB 的 `sqlite-tools-win-x64-*.zip` 直接进仓库（"免换机再下载"），代价是每个人每次 clone 都背着它。现改为**首次用时下载 + SHA256 校验**：
+
+- **唯一真相源是 `vendor/sqlite-tools.json`**（进 git）——`version` / `file` / `url` / `sha256` 四个字段。`setup-sqlite.ps1` 与 `lib/sqlite.mjs` 都读它，谁也不硬编码 URL 和哈希；换 sqlite 版本只改这一个文件。下载+校验的**实现**同样只有一份，在 `setup-sqlite.ps1` 里（`-EnsureZipOnly` 开关：只取包，不解压、不写环境变量），Node 侧 shell out 过去调它，然后**自己再独立复核一遍哈希**（绕开脚本直接把文件塞进 `vendor/` 的路径也会被拦下）。
+- **哈希不匹配即删除并报错拒用**（fail-closed）。下载先落 `.zip.part`，校验通过才改名——半截文件不会被当成可用缓存。
+- **代价：新机器首次跑需要联网**（已知并接受）。离线机器两条路：把同名 zip 手工放进 `vendor/`（哈希一致即直接用，不会联网），或装好 sqlite3 后设 `SQLITE3_PATH` 指过去（查找第一步就命中，压根不走下载）。
+- **URL 里的年份目录是 sqlite.org 的发布年，不是当前年**：3.53.2 发布于 2026-06-03，故在 `2026/` 下（`2025/` 与 `2024/` 实测均 404）。
+
+> ⚠️ **git 历史里的旧 blob 仍在**：本次只是把文件从工作树和索引里去掉（`git rm --cached`），历史提交仍指着那 6.4 MB，所以 `git clone` 的体积**不会立刻变小**。要彻底瘦下来需要重写历史（`filter-repo` 之类），那会改写所有已发布的 commit hash、要求全员重新 clone——是一个单独的破坏性决定，本次刻意不做。
 
 ## 使用方式
 
