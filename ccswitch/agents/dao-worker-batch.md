@@ -83,7 +83,7 @@ Exit code: 0
 执行前必读以下 dao-* skill,这些是你的硬规则源:
 
 - `ccswitch/skills/dao-verify/SKILL.md` — 涅槃门 5 步,声明完成前必有 fresh 验证证据
-- `ccswitch/dao.md` §动·三才之机 — RED-GREEN-REFACTOR、执行调度(执行不二次解释 plan,失败必回打不重试)、工人层调度规则等方法论已归入 dao 场域根文件
+- `windsurf-dao/AGENT_GUIDE.md` §4.3「全流程七步」— **造·④编** 是 RED→GREEN→REFACTOR 的 canonical；同节末行**回打**链（worker → spec-writer → plan-writer → brainstormer）是"失败必回打不重试"的 canonical。三条铁律见 §4.4
 
 3 条铁律是这些 skill 的精炼,实操细节到 skill 文件里查。
 
