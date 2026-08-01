@@ -110,6 +110,14 @@
       "why": "product-type 第四类的首个条目（用户拍板 2026-07-27）。要治的是「义务转移等于义务蒸发」：mousse-cli 2026-07-27 实测同窗四个 UI 可见 PR 连续 0/4 未附图，走的全是当时那个「随后补」的第四态——转移方写下那句话就获得心理结算，接收方责任面上从来没有这一项。改成三态且第三态必须带**真实 issue 编号**后，转移才有可查可回溯的落点。跨项目成立的理由：任何产品型项目都有「改动长什么样」这个只有真机能回答的问题，无 UI 面的 PR 走态二豁免即可。判据是文件存在性（文件名契约见 _doc），内容允许项目化——本条不检查内容，那需要语义理解。",
       "severity": "warn"
     },
+    {
+      "id": "pr-template-star",
+      "class": "product-type",
+      "require": { "file": ".github/pull_request_template.md" },
+      "msg": "产品型项目缺少 .github/pull_request_template.md（人读的 PR 模板：STAR 结构 + 说人话 + 技术证据折叠段）→ 从 mousse-cli 的模板派生（为什么改/改了什么/怎么验的 + <details> 折叠证据）",
+      "why": "product-type 第二条（用户点名 2026-08-01）：GitHub issue/PR 是人读的载体，之前 AI 交付评论全是密文（mutation/canary/退出码领先）。PR 模板把「人话 STAR 在上、精度证据折叠在下」的分层结构做成默认——人扫顶部就懂、AI 展开读全部零丢失。判据是文件存在性（文件名契约），内容允许项目化。**这只是文件型 artifact 的一半**：标签体系/看板/置顶总览单是 GitHub API 对象、非文件，本清单（文件系统核对）结构上覆盖不到——那半需要一个 dao-issue-center 引导脚本，见 dao.md「工作项三态归位」条款，尚未落地。",
+      "severity": "warn"
+    },
 
     {
       "id": "desktop-debugging-rule",
