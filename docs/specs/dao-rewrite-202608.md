@@ -54,7 +54,7 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 - **批 1 投递基建先行（正文一字不动=安全网）**：三个新 hook + G6 + scoped 档 + dao-askuser.md + PreToolUse[Task]/[AskUserQuestion] additionalContext 能力实测；每 hook selfcheck+正负控实弹+check-dead-gates 扩面。回退=撤注册零影响
 - **批 2 台账机器面**：slug 上正文、clause-ledger.json、双解析器 v2 双轨对账全绿后才许删旧元字段
 - **批 3 dao.md 重写**：先立后破（R 类先落 rules/档案再删正文）；10KB 硬闸验收；`check-dao-refs.mjs`（一次性引用面扫描）+ reconcile
-- **批 4 用户级重写+闸值落定**：deny 核对前置；LIMIT_BYTES 写用户拍板值；**「每个项目自动检肥」通用检查项**（用户拍板 2026-08-02，治「靠提醒会失忆」）：scaffold-manifest 加 universal 条目+字节/token 求值器——任何项目的常驻注入面（项目级 CLAUDE.md + .claude/rules 无 paths 档）超基准 → SessionStart 报一行+瘦身方子指针；基准值以 dao 重写后的最佳形态为参照（呈批数字）；**边界：检测全自动，改造须用户点头**（删什么留什么是判断档）
+- **批 4 用户级重写+闸值落定**：deny 核对前置；LIMIT_BYTES 写用户拍板值；**「每个项目自动检肥」通用检查项**（用户拍板 2026-08-02，治「靠提醒会失忆」）：scaffold-manifest 加 universal 条目+字节/token 求值器——任何项目的常驻注入面（项目级 CLAUDE.md + .claude/rules 无 paths 档）超基准 → SessionStart 报一行+瘦身方子指针；基准值以 dao 重写后的最佳形态为参照（呈批数字）；**边界：检测全自动，改造须用户点头**（删什么留什么是判断档）；**体检清单的自我生长机制**（用户点名 2026-08-02 第二笔）：①条款层——重写后 dao.md「归属层」判据补「发现可机器化检查的跨项目问题形态 → 默认动作=提议进 scaffold-manifest 体检清单（附条目草案）呈拍板，单次 issue 只是补充」（首证：mousse CLAUDE.md 超标被帅处理成单仓待办而非清单候选，用户当场纠正反应层级）②机器兜底——tool-nudge 在 `gh issue create` 后轻提醒「这问题所有项目都会有吗？是→提议进体检清单」，每会话至多一次；③新检查项的准入仍归用户拍板（改所有项目的开工检查面）
 - **批 5 全量自测+双通道退役裁决**（依审计数据呈用户，不预拍）
 
 ## 自测方案（「功能不丢」的操作化验收）
