@@ -358,6 +358,85 @@ console.log("\n=== product-type 求值：自我声明才查 / 未声明即跳过
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 必答题：两个答案串互不为子串 + 三态（没答 / 答是 / 答不是）===");
+// 2026-08-02 三仓自上而下审计第 2 件。要治的病：负向的旧处方是「把那一行删掉」，
+// 于是在机器侧「答了，不是」与「从没答过」**逐字节相同** ⇒ 这道题永远送不到存量项目面前。
+// 下面第一条是本设计**唯一的硬约束**——两个串若互为子串，答一个等于答两个，整套白做。
+{
+  const POS = M.PRODUCT_TYPE_WHEN.fileContains.text;
+  const NEG = M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains.text;
+
+  check("负向串有唯一定义处（PRODUCT_TYPE_NEGATIVE_WHEN，判据面同为 CLAUDE.md 子串）",
+    !!(M.PRODUCT_TYPE_NEGATIVE_WHEN && M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains &&
+       M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains.path === "CLAUDE.md" &&
+       typeof NEG === "string" && NEG.length > 0),
+    "got=" + JSON.stringify(M.PRODUCT_TYPE_NEGATIVE_WHEN));
+  // 硬约束：**互不为子串**。反例就在眼前——「非产品型项目」「不是产品型项目」这类
+  // 自然的否定写法整段含着正向串，判据是纯子串 ⇒ 会被读成「是」。
+  check(`两个答案串互不为子串（否则答「不是」会被读成「是」）：正=「${POS}」负=「${NEG}」`,
+    NEG.indexOf(POS) === -1 && POS.indexOf(NEG) === -1,
+    `NEG含POS=${NEG.indexOf(POS) !== -1} POS含NEG=${POS.indexOf(NEG) !== -1}`);
+  check("反例自证：换成「非」+ 正向串那种自然写法即违反上面那条约束（约束不是空转的）",
+    ("非" + POS).indexOf(POS) !== -1);
+
+  // 真实清单里那条 entry：三个性质各自承重，逐条验，不合成一条。
+  const { manifest: realM2 } = M.load(REAL_MANIFEST);
+  const q = ((realM2 && realM2.entries) || []).find((e) => e.id === "product-type-answered");
+  check("真实清单里有 product-type-answered 条目", !!q);
+  if (q) {
+    check("它是 universal（任何 git 项目都该答这道题）+ info（判据是子串近似）",
+      q.class === "universal" && q.severity === "info", `class=${q.class} severity=${q.severity}`);
+    check("它的 require 顶层是 not ⇒ 报告器归入「只建议·永不代做」（这一问必须人答）",
+      Object.keys(q.require).filter((k) => k !== "label")[0] === "not", "require=" + JSON.stringify(q.require));
+    // 清单按值写死两个串，与 lib 的唯一定义处对不上就是漂移（改了 lib 忘了改清单时本条会红）。
+    // **这是这两处之间唯一的连接**——JSON 引用不了 JS 常量。
+    const reqStr = JSON.stringify(q.require);
+    check("清单里那两个串与 lib 的唯一定义处逐字一致（JSON 引用不了 JS 常量，靠本条钉住）",
+      reqStr.indexOf(POS) !== -1 && reqStr.indexOf(NEG) !== -1, "require=" + reqStr);
+    check("它不带 template（这道题没有 canonical 可复制——答案不是一个文件，是一个判断）", !q.template);
+  }
+
+  // 三态求值：拿**真实清单**跑，不拿假清单 —— 本组要证的正是真实清单当下的行为。
+  const mkClaude = (name, body) => mkproj(name, (r) => {
+    fs.mkdirSync(path.join(r, ".claude", "rules"), { recursive: true });
+    w(r, ".gitignore", "**/_tmp/\n");
+    w(r, "CLAUDE.md", body);
+  });
+  const idsOf = (root) => M.evaluate(realM2, root).map((f) => f.id);
+  const silent = mkClaude("q-none", "# 某仓\n\n随手改随手推。\n");
+  const yes = mkClaude("q-yes", `# 某仓\n\n本仓是**${POS}**。\n`);
+  const no = mkClaude("q-no", `# 某仓\n\n本仓是**${NEG}**。\n`);
+  const noFile = mkproj("q-no-claude-md");
+
+  check("态一 · 两串都没有 → 报必答题", idsOf(silent).includes("product-type-answered"),
+    JSON.stringify(idsOf(silent)));
+  check("态二 · 答「是」→ 不报必答题，且 product-type 那一档开始查",
+    !idsOf(yes).includes("product-type-answered") && idsOf(yes).includes("pr-evidence-rule"),
+    JSON.stringify(idsOf(yes)));
+  check("态三 · 答「不是」→ 不报必答题，且 product-type 那一档仍不查（与态一分得开）",
+    !idsOf(no).includes("product-type-answered") && !idsOf(no).includes("pr-evidence-rule"),
+    JSON.stringify(idsOf(no)));
+  check("边界 · 连 CLAUDE.md 都没有 → 不报必答题（由 claude-md 条目管，避免同一件事报两行）",
+    !idsOf(noFile).includes("product-type-answered") && idsOf(noFile).includes("claude-md"),
+    JSON.stringify(idsOf(noFile)));
+  check("mutation · 把答案从「不是」那份里删掉 → 重新报（判别力真的挂在那个串上）", (() => {
+    w(no, "CLAUDE.md", "# 某仓\n\n（答案已删）\n");
+    return idsOf(no).includes("product-type-answered");
+  })());
+  check("mutation 复原 · 答案写回 → 又不报（两态都看到才算验过）", (() => {
+    w(no, "CLAUDE.md", `# 某仓\n\n本仓是**${NEG}**。\n`);
+    return !idsOf(no).includes("product-type-answered");
+  })());
+  // 已知失效形态，**照直写成断言**：否定句会被读成「答了·是」。这不是「通过条件」，
+  // 是把「本层挡不住这一向」钉成可见事实——将来谁要修它，先看这条为什么长这样。
+  check("已知洞（钉成事实）：否定句写法被判成「答了·是」而不是「不是」", (() => {
+    const trap = mkClaude("q-trap", `# 某仓\n\n本仓不是${POS}。\n`);
+    const r = idsOf(trap);
+    return !r.includes("product-type-answered") && r.includes("pr-evidence-rule");
+  })());
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 console.log("\n=== 报文渲染：{n} / {label} / {file} 占位符 ===");
 {
   const root = mkproj("render", (r) => {
