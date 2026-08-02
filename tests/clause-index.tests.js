@@ -35,10 +35,16 @@ const RENDER = path.join(REPO, "ccswitch", "scripts", "render-clauses.mjs");
 const PS_SCRIPT = path.join(REPO, "ccswitch", "scripts", "check-clauses-structure.ps1");
 const TMP = path.join(REPO, "_tmp", "clause-index-tests");
 const FIX = path.join(TMP, "fixtures");
-// 第三语料：项目侧的条款库。它**不在本仓**，故不进 committed 索引（绝对路径会让 --check
-// 在别的机器上必红），但它是验解析器通用性最硬的一份 —— 它是唯一「整份文件就是条款列表 +
-// 带官种分节 + 带观察区」的真实语料。
-const MOUSSE = "D:/frank/mousse-cli/docs/rules/dispatch-clauses.md";
+// 第三语料：**带官种分节**的真实条款库。它是验解析器通用性最硬的一份 —— 其余两类语料
+// （dao.md 与自带夹具）一个没有官种分节、一个规模太小。
+//
+// **2026-08-02 换了语料**：这里原先指的是 `D:/frank/mousse-cli/docs/rules/dispatch-clauses.md`
+// —— 一个**本机绝对路径 + 另一个仓的文件**，于是这一段只在「那台机器上恰好有那个仓」时
+// 才真的跑；换台机器它走 else 分支，输出一行「本轮未验」然后照常绿。**dao 的回归网不该
+// 由某个项目仓的存在与否决定跑不跑**（也正是同日拆分批要拆的倒置依赖）。官侧条款库搬进本仓后，
+// 这份语料随仓走、无条件在场，缺席分支连带消失。
+// 代价照直写：它**不带观察区**（观察区仍在项目侧），故那一格改由自带夹具覆盖，见 FIX_ROLES。
+const OFFICER = path.join(REPO, "ccswitch", "rules", "dao-officer-clauses.md");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -112,6 +118,13 @@ const FIX_ROLES_TEXT = [
   "",
   "- **候选甲**：MARK-OBS 内容。 [n=1 @07-04 触发:无] [观察中]",
   "",
+  // 📌 特殊节：整节跳过但**要报数**（静默跳过与零命中在输出上不可区分）。
+  // 这一格 2026-08-02 前只由「项目仓那份真语料」覆盖 —— 那台机器上没有那个仓就静默不验，
+  // 正是本条自己在防的病。移进自带夹具后它无条件跑。
+  "## 📌 条款元字段（元文档节，整节不算条款）",
+  "",
+  "- **这行长得像条款但住在 📌 节里**：不该被算进去。 [n=1 @07-06 触发:无] [仅判据·无触发]",
+  "",
 ].join("\n");
 
 function sourcesJson(file, list) {
@@ -165,30 +178,27 @@ async function main() {
     check("观察区条目单独分堆、不混进条款", r.stats.clauses === 4 && r.stats.observation === 1, JSON.stringify(r.stats));
     check("未归类条款**不**并进 general（并进去等于让没人认领的条款混进每一份派单）",
       r.stats.unclassified === 1, JSON.stringify(r.stats));
+    check("`## 📌` 节里长得像条款的行被跳过**且报了数**（静默跳过与零命中不可区分）",
+      r.stats.skipped_in_special_sections === 1, JSON.stringify(r.stats));
   }
   {
-    if (fs.existsSync(MOUSSE)) {
-      const m = lib.parseFile(MOUSSE, {
-        file: MOUSSE, selector: lib.SELECTOR.ALL_TOP_LEVEL, roleScheme: lib.ROLE_SCHEME.DISPATCH_SECTIONS,
-      });
-      const set = new Set(m.clauses.map((c) => c.role));
-      check("第三语料：六个官种全解析得出",
-        ["general", "reviewer", "implementer", "adversary", "scout", "dogfood"].every((r) => set.has(r)),
-        JSON.stringify([...set]));
-      check("第三语料：观察区条目 > 0 且全部 zone=observation",
-        m.stats.observation > 0 && m.observation.every((c) => c.zone === "observation"), JSON.stringify(m.stats));
-      check("第三语料：`## 📌` 节里长得像条款的行被跳过且报了数（静默跳过与零命中不可区分）",
-        m.stats.skipped_in_special_sections > 0, JSON.stringify(m.stats));
-      check("第三语料：零未归类（所有条款都落在已知官种节里）", m.stats.unclassified === 0, JSON.stringify(m.stats));
-    } else {
-      // 语料缺席不许静默跳过 —— 那与「这份语料一致」在输出上不可区分。这一支验的是
-      // 「缺席必须出声」这条行为本身。
-      const sj = sourcesJson(path.join(TMP, "src-missing.json"),
-        [{ file: MOUSSE, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
-      const r = rec(runNode(GEN, ["--reconcile", "--sources-json", sj]).rec);
-      check("第三语料缺席时：对账必须报「源缺席」且不给绿灯", !!r && r.exit !== 0 && r.mismatched > 0, JSON.stringify(r));
-      console.log("        ⓘ 本机没有 " + MOUSSE + " ⇒ 解析器对「整份文件即条款列表」这一类语料的通用性本轮未验。");
-    }
+    const m = lib.parseFile(OFFICER, {
+      file: "ccswitch/rules/dao-officer-clauses.md",
+      selector: lib.SELECTOR.MARKED, roleScheme: lib.ROLE_SCHEME.DISPATCH_SECTIONS,
+    });
+    const set = new Set(m.clauses.map((c) => c.role));
+    check("第三语料：六个官种全解析得出",
+      ["general", "reviewer", "implementer", "adversary", "scout", "dogfood"].every((r) => set.has(r)),
+      JSON.stringify([...set]));
+    check("第三语料：零未归类（所有条款都落在已知官种节里）", m.stats.unclassified === 0, JSON.stringify(m.stats));
+    check("第三语料：规模够大，够当通用性靶（条款 > 50）", m.stats.clauses > 50, JSON.stringify(m.stats));
+
+    // 「源缺席必须出声」这条行为**不能**靠"某个仓恰好不在这台机器上"来验 —— 那是不可控的
+    // 语料。指一个确定不存在的路径，两态都跑得到。
+    const sj = sourcesJson(path.join(TMP, "src-missing.json"),
+      [{ file: path.join(TMP, "no-such-corpus.md"), selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const r = rec(runNode(GEN, ["--reconcile", "--sources-json", sj]).rec);
+    check("语料缺席时：对账必须报「源缺席」且不给绿灯", !!r && r.exit !== 0 && r.mismatched > 0, JSON.stringify(r));
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -201,10 +211,13 @@ async function main() {
     check("两侧总数逐字相同", r && r.mine === r.theirs && r.mine > 0, JSON.stringify(r));
     check("对方确实跑起来了（host 不是 none）", r && r.host !== "none", JSON.stringify(r));
   }
-  if (fs.existsSync(MOUSSE)) {
-    const sj = sourcesJson(path.join(TMP, "src-mousse.json"), [
+  {
+    // 官侧档尚未进默认源清单（`ccswitch/lib/clause-parser.mjs` 的 defaultSources 由另一批改），
+    // 故这里自带一份清单把它纳进来对账 —— 交叉对账的价值在于「两套独立解析对同一份语料各数一遍」，
+    // 不依赖它有没有被登记。登记之后这一段仍成立（届时它只是与默认清单重合）。
+    const sj = sourcesJson(path.join(TMP, "src-officer.json"), [
       { file: "ccswitch/dao.md", selector: "marked", role_scheme: "general" },
-      { file: MOUSSE, selector: "all-top-level", role_scheme: "dispatch-sections" },
+      { file: "ccswitch/rules/dao-officer-clauses.md", selector: "marked", role_scheme: "dispatch-sections" },
     ]);
     const r = rec(runNode(GEN, ["--reconcile", "--sources-json", sj]).rec);
     check("含第三语料的对账通过（跨语料类型的通用性）", r && r.exit === 0 && r.mismatched === 0, JSON.stringify(r));

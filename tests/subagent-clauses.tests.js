@@ -40,7 +40,7 @@ function check(name, cond, detail) {
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
 }
 
-// ── 夹具语料：带官种分节的条款库（形态照 mousse docs/rules/dispatch-clauses.md）──
+// ── 夹具语料：带官种分节的条款库（形态照 ccswitch/rules/dao-officer-clauses.md）──
 const FIXTURE_MD = path.join(TMP, "clauses.md");
 fs.writeFileSync(FIXTURE_MD, [
   "# 夹具条款库（测试用，非真语料）",
@@ -158,15 +158,27 @@ console.log("\n──── ② 映射不出（实测占历史派单 93.8%，是
   for (const t of generics) {
     const r = fire(t);
     check(`泛型：${t || "(空 agent_type)"} → 通用节 + 指针，不静默空过`,
-      r.code === 0 && /官种=general/.test(r.ctx) && /## 通用节/.test(r.ctx) && /dispatch-clauses\.md/.test(r.ctx),
+      r.code === 0 && /官种=general/.test(r.ctx) && /## 通用节/.test(r.ctx) && /dao-officer-clauses\.md/.test(r.ctx),
       `exit=${r.code} head=${JSON.stringify(r.ctx.split("\n")[0])}`);
   }
   const g = fire("general-purpose");
   check("泛型：注入里写明「官种没映射出来」（不假装这是完整投递）", /映射不出/.test(g.ctx));
-  check("泛型：Read 指令指向条款库正文路径", /dispatch-clauses\.md/.test(g.ctx));
-  check("泛型：条款库路径按 cwd 探得到时用探到的那个（跨项目资产不写死某个仓）",
-    /〔按本次 cwd 探到〕/.test(fire("general-purpose", { cwd: "D:/frank/mousse-cli" }).ctx),
-    JSON.stringify(fire("general-purpose", { cwd: "D:/frank/mousse-cli" }).ctx.slice(-400)));
+  // 2026-08-02：降级目标从「某个项目仓的绝对路径」改为**本仓**官侧档 ⇒ 断言跟着契约改，
+  // 且**新断言的通过集是旧断言通过集的真子集**：旧的 `/dispatch-clauses\.md/` 对两种文件名
+  // 都放行，新的钉死到具体那一个。放松与收紧在 diff 上长得一样，故此处明写方向。
+  check("泛型：Read 指令指向条款库正文路径（本仓官侧档，不是某个项目仓的绝对路径）",
+    /dao-officer-clauses\.md/.test(g.ctx) && !/D:\/frank\/mousse-cli/.test(g.ctx), JSON.stringify(g.ctx.slice(-300)));
+  // cwd 探测这一支原先拿真实的 mousse-cli 仓当语料 —— dao 的回归网依赖另一个仓存在，
+  // 正是本批在拆的倒置依赖（那个仓不在的机器上这条会红，且红得毫无道理）。改用自带夹具目录。
+  {
+    const projDir = path.join(TMP, "fake-project", "docs", "rules");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, "dispatch-clauses.md"), "# 夹具项目条款库\n", "utf8");
+    const probed = fire("general-purpose", { cwd: path.join(TMP, "fake-project") });
+    check("泛型：条款库路径按 cwd 探得到时用探到的那个（跨项目资产不写死某个仓）",
+      /〔按本次 cwd 探到〕/.test(probed.ctx) && /dispatch-clauses\.md/.test(probed.ctx),
+      JSON.stringify(probed.ctx.slice(-400)));
+  }
   check("泛型：env DAO_CLAUSE_FILE 覆写优先（换机/换项目的逃生口）",
     /\/tmp\/somewhere\/clauses\.md/.test(fire("claude", { clauseFile: "/tmp/somewhere/clauses.md" }).ctx));
 }
@@ -184,7 +196,7 @@ console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成�
   // 成因二：索引根本不在
   const b = fire("mousse-implementer", { index: path.join(TMP, "no-such-index.json") });
   check("索引不存在 → 仍然注入指针（永不静默空过）",
-    b.code === 0 && b.ctx.startsWith(SIG) && /dispatch-clauses\.md/.test(b.ctx) && b.ctx.length > 100,
+    b.code === 0 && b.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(b.ctx) && b.ctx.length > 100,
     `exit=${b.code} ctx=${JSON.stringify(b.ctx.slice(0, 200))}`);
   check("索引不存在 → 注入里说清没渲染出正文（不让读者以为条款已全给）",
     /渲染不出|没能渲染|没有渲染出/.test(b.ctx), JSON.stringify(b.ctx.slice(0, 300)));
@@ -196,7 +208,7 @@ console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成�
   fs.appendFileSync(FIXTURE_MD, "\n- 夹具新增：源动了但索引没跟上。 [n=1 @07-30 触发:无] [仅判据·无触发]\n", "utf8");
   const c = fire("mousse-implementer");
   check("索引过期 → 渲染端拒绝渲染，本 hook 降级为指针而不是切错行的正文",
-    c.code === 0 && c.ctx.startsWith(SIG) && /dispatch-clauses\.md/.test(c.ctx),
+    c.code === 0 && c.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(c.ctx),
     JSON.stringify(c.ctx.slice(0, 240)));
   check("索引过期 → 注入里点名「过期」这个成因（成因可指认才修得动）",
     /过期/.test(c.ctx), JSON.stringify(c.ctx.slice(0, 300)));
@@ -210,7 +222,7 @@ console.log("\n──── ④ fail-open：喂什么都不砖会话，且仍然
 {
   const bad = fireRaw("这不是 JSON");
   check("stdin 不是 JSON → exit 0（SubagentStart 拦不了创建，砖掉的只会是这次注入）", bad.code === 0);
-  check("stdin 不是 JSON → 仍注入签名 + 条款库指针", bad.ctx.startsWith(SIG) && /dispatch-clauses\.md/.test(bad.ctx));
+  check("stdin 不是 JSON → 仍注入签名 + 条款库指针", bad.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(bad.ctx));
   check("stdin 不是 JSON → systemMessage 留痕（stderr+日志+systemMessage 三重）", /解析 stdin 失败/.test(bad.sys), JSON.stringify(bad.sys));
 
   const empty = fireRaw("");
@@ -329,7 +341,7 @@ console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测
   const before2 = fire("mousse-implementer", noIndex);
   const after2 = fire("mousse-implementer", Object.assign({ script: m2 }, noIndex));
   check("M2：真文件在渲染全失败时仍给指针、改坏后注入变空 ⇒ 「永不静默空过」是被测着的",
-    /dispatch-clauses\.md/.test(before2.ctx) && after2.ctx === "",
+    /dao-officer-clauses\.md/.test(before2.ctx) && after2.ctx === "",
     `before=${JSON.stringify(before2.ctx.slice(0, 60))} after=${JSON.stringify(after2.ctx.slice(0, 60))}`);
   // 这一条是 M2 的**环境负控**：变异体必须是"跑起来了但注入变空"，不是"根本没跑起来"。
   // 两者的 ctx 都是空串，只有退出码分得开 —— 少了它，一次 MODULE_NOT_FOUND 会被读成 mutation 成功。
