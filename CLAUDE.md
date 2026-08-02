@@ -4,6 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、Grep-first、commit 前缀、八句根基等不在此重复。本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
 
+## 项目类型（必答题 · 用户 2026-08-02 答）
+
+本仓是**内部工具型项目**。
+
+（这一行由项目主人回答，AI 不代答。答「内部工具型」⇒ dao 体检不查产品型那一档：PR 真机证据三态 / PR 模板 / issue 模板三件。判据是纯子串匹配，勿改措辞。）
+
 ## 这是什么（先读这一段）
 
 这**不是代码库，是一套 AI 行为规则系统**——用《道德经》《阴符经》哲学定义 AI 如何思考/行动/协作的规则、技能、命令、子代理。没有 `package.json`、没有构建产物、没有应用入口。"产物"就是 Markdown 规则文件 + 把它们部署到各宿主（Claude Code / Codex）的 PowerShell/Node 链接脚本。
