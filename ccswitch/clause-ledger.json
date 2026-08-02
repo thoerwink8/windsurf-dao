@@ -444,7 +444,7 @@
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "n": "?",
       "first_seen": "07-24",
-      "trigger": "权限deny",
+      "trigger": "hook硬闸",
       "judge_only": false,
       "self_authored": [],
       "baseline": null,
@@ -1150,6 +1150,19 @@
         "08-02"
       ],
       "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截（1661 次）",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-先读后写": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "31",
+      "first_seen": "08-02",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-02"
+      ],
+      "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截 1661 次",
       "source_refs": [],
       "status": "active"
     }
