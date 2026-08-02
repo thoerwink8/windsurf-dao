@@ -699,6 +699,177 @@ async function main() {
       rD && baseSlug && rD.theirslugs === baseSlug.theirslugs, JSON.stringify(rD));
     check("mutation D ⇒ 对账变红（slug 数分岔，而条款数那一层看不见它）",
       rD && rD.exit !== 0 && rD.myslugs < rD.theirslugs, JSON.stringify(rD));
+
+    // ════════════════════════════════════════════════════════════════════
+    // ⑥.5 **两侧同时错同一处**（issue #91）—— 本组是这批改动最承重的一组
+    //
+    // ── 它要钉住的形态 ──────────────────────────────────────────────────
+    // A~D 四向全都是「只改我方一侧」。它们证明的是「一侧坏了另一侧会顶出来」，
+    // **证不了**「两侧一起坏会不会被发现」—— 而后者不是假想敌：2026-08-02 之前，
+    // 本侧 `backtickSpans` 与 PS 侧 `Get-BacktickSpans` 是**逐行直译**（变量名 / 循环形状 /
+    // 分支顺序完全对应），改一处几乎必然被照抄到另一处，届时两边数出来的三个数**逐字节相同**、
+    // 对账全绿。那正是那个未闭合反引号缺陷能一路静默过去的原因之一。
+    //
+    // ── 现在靠什么抓住它 ────────────────────────────────────────────────
+    // 不是靠"两边写得不一样"（那只解掉"照抄"这条路径），是靠**第三套实现**：
+    // PS 侧 `Get-MaskedLineAlt`（逐字符扫描，普查专用）与主实现逐字节互核，结论走末行
+    // `maskdiv=`，由本脚本的 okMask 判红。下面 E/F/G 三向分别验：
+    //   E 两侧同坏 ⇒ 条款数/触发:无/slug **三个量全相等**，唯 maskdiv 分岔 ⇒ 必须红
+    //   F 把 maskdiv 这一栏从对账里摘掉（"对账坏"）⇒ 同一个 E 场景**变绿**
+    //     ⇒ 反证这条通道是承重的，而不是一条陪跑的断言
+    //   G 三套一起坏 ⇒ 全绿（已知残余，钉成断言；n 套互核抓不到 n 套同错）
+    // ════════════════════════════════════════════════════════════════════
+    console.log("\n──── ⑥.5 两侧同时错同一处：maskdiv 通道（issue #91）────");
+
+    // PS 脚本的变异副本。**必须写 BOM** —— PS 5.1 读无 BOM 的脚本本体时按系统 ANSI 代码页
+    // 解码，整份中文脚本当场报废 ⇒ 每个 mutation 都"全红"，而那是「判别力满分」的表象。
+    // 每个变异体下面都配 canary，先确认它还跑得起来再读红集。
+    function psMutant(name, edits) {
+      const dir = path.join(TMP, "mut", name, "ccswitch", "scripts");
+      fs.mkdirSync(dir, { recursive: true });
+      let src = fs.readFileSync(PS_SCRIPT, "utf8").replace(/^﻿/, "");
+      let applied = 0;
+      for (const e of edits) {
+        if (!src.includes(e.from)) continue;
+        src = src.split(e.from).join(e.to);
+        applied++;
+      }
+      const p = path.join(dir, "check-clauses-structure.ps1");
+      fs.writeFileSync(p, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(src, "utf8")]));
+      return { script: p, applied };
+    }
+
+    // ── 三处锚（各在各的实现里，语义同一个：未闭合游程 ⇒ 从它遮到行尾）──────
+    // 这不是凭空编的坏法，是 2026-08-02 之前**真实存在过的行为**，原样装回去。
+    // JS 侧：未闭合 ⇒ 吐一个"到行尾"的 span 并**收工**。`cursor = runs.length` 那一半不是
+    // 多余的 —— 2026-08-02 之前那一版就是 `break`（见 git 里 maskCodeSpans 的旧形态），
+    // 不停下的话后面的闭合 span 会让 maskCodeSpans 把行尾**原样拼回去**，缺陷就自我抵消了
+    //（本批实测踩到：不带 `cursor = runs.length` 时真实语料上 JS 侧计数纹丝不动，
+    //  而 PS 侧照样少一条 —— 那时测的就不再是"两侧同坏"了）。
+    const JS_EDIT = {
+      from: "    if (closer < 0) { unmatched.push(runs[cursor].start); cursor += 1; continue; }",
+      to: "    if (closer < 0) { unmatched.push(runs[cursor].start); spans.push({ from: runs[cursor].start, to: raw.length - 1 }); cursor = runs.length; continue; }",
+    };
+    const PS_MAIN_EDIT = {
+      from: "            $unmatched += $open.Start",
+      to: "            $unmatched += $open.Start; $spans += [PSCustomObject]@{ From = $open.Start; To = ($Raw.Length - 1) }",
+    };
+    const PS_ALT_EDIT = {
+      from: "        if ($closeAt -lt 0) {",
+      to: "        if ($closeAt -lt 0) { for ($z = $openAt; $z -lt $n; $z++) { $c[$z] = ' ' }; $i = $n; continue } elseif ($false) {",
+    };
+
+    // 靶语料：第二条带**未闭合游程** + 行尾完整元字段。缺陷态下 Marked 选择器读的就是
+    // 遮罩串 ⇒ 该行整条退出扫描面，两侧同时少一条 ⇒ 条款数仍然相等（这正是可怕之处）。
+    const fixUnclosed = path.join(FIX, "corpus-unclosed.md");
+    w(fixUnclosed, [
+      "# 夹具 · 未闭合游程（两侧同坏的靶）",
+      "",
+      "## 通用节",
+      "",
+      "- **甲条**：普通条款。 [n=1 @07-01 触发:无] [仅判据·无触发]",
+      "- **乙条**：正文写了一处 " + "`".repeat(3) + "bash 写法示例。 [n=2 @07-02 触发:PR流程]",
+      "",
+    ].join("\n"));
+    const sjU = sourcesJson(path.join(TMP, "mut", "src-unclosed.json"),
+      [{ file: fixUnclosed, selector: "marked", role_scheme: "general" }]);
+    // canary 语料：只有**闭合** span ⇒ 遮罩路径照走，但 unmatched 那一支到不了。
+    // 变异体在它上面必须仍绿 —— 证明改动精确落在那一个分支，而不是把整套遮罩弄死了
+    //（"把靶弄死"会让每条断言都红，那正是「判别力满分」的表象）。
+    const fixClosed = path.join(FIX, "corpus-closed.md");
+    w(fixClosed, [
+      "# 夹具 · 只有闭合 span",
+      "",
+      "## 通用节",
+      "",
+      "- **甲条**：正文写着 `[自定@01-01]` 字面量。 [n=1 @07-01 触发:无] [仅判据·无触发]",
+      "- **乙条**：正文写着 `[#测-不存在]` 假 slug。 [n=2 @07-02 触发:PR流程]",
+      "",
+    ].join("\n"));
+    const sjC = sourcesJson(path.join(TMP, "mut", "src-closed.json"),
+      [{ file: fixClosed, selector: "marked", role_scheme: "general" }]);
+    const runWith = (jsM, psScript, srcJson) =>
+      rec(runNode(jsM.script, ["--reconcile", "--sources-json", srcJson, "--ps-script", psScript]).rec);
+
+    // 负控：干净的两侧在这份靶上必须绿且两边都数到 2 —— 否则下面的红全都不算数。
+    const psClean = psMutant("ps-clean", []);
+    const baseU = runWith(baseM, psClean.script, sjU);
+    check("负控：干净副本（含 PS 拷贝）在未闭合游程靶上绿，两侧各 2 条",
+      baseU && baseU.exit === 0 && baseU.mine === 2 && baseU.theirs === 2, JSON.stringify(baseU));
+
+    // ── E：JS 配对层 + PS 主实现**同时**改坏 ────────────────────────────
+    const mE = mutantDir("both-sides", (t) => {
+      const before = t;
+      const text = t.split(JS_EDIT.from).join(JS_EDIT.to);
+      return { text, applied: text === before ? 0 : 1 };
+    });
+    const psE = psMutant("ps-main-broken", [PS_MAIN_EDIT]);
+    check("E：JS 侧 mutation 真的改到了", mE.applied === 1, "applied=" + mE.applied);
+    check("E：PS 侧 mutation 真的改到了", psE.applied === 1, "applied=" + psE.applied);
+    // canary 两条：①零反引号语料 —— 证明变异体还跑得起来（没被 BOM/编码弄死）；
+    //              ②只有闭合 span 的语料 —— 证明改动精确落在 unmatched 那一支。
+    // 只做①不够：一个把整套遮罩弄死的变异体在①上照样绿（那条路径压根不走）。
+    const canaryE = runWith(mE, psE.script, sj);
+    check("canary E①：变异体对在零反引号语料上仍绿且两侧同数（活着）",
+      canaryE && canaryE.exit === 0 && canaryE.mine === canaryE.theirs && canaryE.mine > 0, JSON.stringify(canaryE));
+    const canaryEc = runWith(mE, psE.script, sjC);
+    check("canary E②：只有闭合 span 的语料上仍绿且两侧各 2 条（只坏在 unmatched 那一支）",
+      canaryEc && canaryEc.exit === 0 && canaryEc.mine === 2 && canaryEc.theirs === 2, JSON.stringify(canaryEc));
+    const rE = runWith(mE, psE.script, sjU);
+    check("E：两侧同坏后**条款数仍然逐字相等**（这就是旧结构下对账全绿的原因）",
+      rE && rE.mine === rE.theirs && rE.mine === 1, JSON.stringify(rE));
+    check("E：而对账仍然变红 —— 红的唯一来源是对方的 maskdiv（第三套实现顶出来的）",
+      rE && rE.exit !== 0 && rE.mismatched === 1, JSON.stringify(rE));
+
+    // ── F：把 maskdiv 从对账里摘掉（"对账坏"）⇒ E 必须变绿 ────────────────
+    // 这一向验的不是被测逻辑，是**上面那条断言到底是谁在承重**。不做它的话，
+    // 「E 变红」可以被别的原因解释（比如 PS 退出码碰巧被算进去了），断言就只是巧合。
+    // F 的 JS 侧必须与 E 完全一样地坏（否则测的就不是同一个场景了），
+    // 差别只在**对账那一步**：把 maskdiv 那一栏摘掉。
+    const mF = mutantDir("recon-blind", (t) => {
+      const before = t;
+      const text = t.split(JS_EDIT.from).join(JS_EDIT.to);
+      return { text, applied: text === before ? 0 : 1 };
+    });
+    check("F：JS 侧与 E 同样地坏（锚命中）", mF.applied === 1, "applied=" + mF.applied);
+    // ⚠ 「摘掉 maskdiv」这一处落在 gen-clause-index.mjs 而不是 clause-parser.mjs，
+    //   而 mutantDir 的 mutate 只改 lib ⇒ 这里手工覆写那一份（它就在 mF 的目录里）。
+    {
+      const genSrc = fs.readFileSync(GEN, "utf8");
+      const patched = genSrc.split("    const okMask = ps.marker.maskdiv === 0;")
+        .join("    const okMask = true; void ps.marker.maskdiv;");
+      check("F：对账侧 mutation 真的改到了（锚还在）", patched !== genSrc, "锚没命中");
+      w(mF.script, patched);
+    }
+    const rF = runWith(mF, psE.script, sjU);
+    check("F：摘掉 maskdiv 那一栏后，同一个「两侧同坏」当场变绿 ⇒ 反证这条通道承重",
+      rF && rF.exit === 0 && rF.mismatched === 0, JSON.stringify(rF));
+
+    // ── G：三套一起坏 ⇒ 全绿（已知残余，钉成断言）────────────────────────
+    // 钉住它的两个理由（同 PS 回归网 C 组）：①这一格从"没人知道"变成"写下来了"；
+    // ②将来有人加了第四道独立判据、这一格能红了，本条会当场失败，逼着来人回来改注释。
+    // 一个没有断言的已知弱点，与一个没人知道的缺陷没有区别。
+    const psG = psMutant("ps-both-broken", [PS_MAIN_EDIT, PS_ALT_EDIT]);
+    check("G：PS 两处 mutation 都改到了", psG.applied === 2, "applied=" + psG.applied);
+    const canaryG = runWith(mE, psG.script, sj);
+    check("canary G：三变异体在零反引号语料上仍绿（活着）",
+      canaryG && canaryG.exit === 0 && canaryG.mine === canaryG.theirs, JSON.stringify(canaryG));
+    const rG = runWith(mE, psG.script, sjU);
+    check("G：三套同错 ⇒ 对账**全绿**（已知残余：n 套互核抓不到 n 套同错，是算术不是疏漏）",
+      rG && rG.exit === 0 && rG.mismatched === 0, JSON.stringify(rG));
+    check("G：而两侧确实都少数了一条（1 条，非 2 条）—— 残余的代价长这样",
+      rG && rG.mine === 1 && rG.theirs === 1, JSON.stringify(rG));
+
+    // ── 负控：对方是"没有 maskdiv 栏的老版本"时不许静默放行 ────────────────
+    // 「跑不了 ≠ 一致」在本文件是既定政策（见头注取舍③）。少一栏＝那一层无人在看，
+    // 与「看过且零分歧」必须分得开。
+    // 只摘**格式串**里的占位符、不动 `-f` 后面的实参：`String.Format` 允许实参多于占位符，
+    // 于是这个 mutation 是单行的、且产出的脚本仍是合法 PowerShell。
+    const psOld = psMutant("ps-no-maskdiv", [{ from: " maskdiv={9} maskcmp={10}", to: "" }]);
+    check("老版本负控：锚命中（marker 里那两栏被摘掉了）", psOld.applied === 1, "applied=" + psOld.applied);
+    const rOld = runWith(baseM, psOld.script, sjU);
+    check("老版本负控：对方末行没有 maskdiv 栏 ⇒ 判红，不当成一致",
+      rOld && rOld.exit !== 0 && rOld.mismatched === 1, JSON.stringify(rOld));
   }
 
   // ══════════════════════════════════════════════════════════════
