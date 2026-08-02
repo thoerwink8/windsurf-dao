@@ -32,6 +32,9 @@ const path = require("path");
 
 const REPO = path.resolve(__dirname, "..");
 const REAL_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-rhythm.js");
+// 跨文件判据一致性那一组要用到签名侧的闸（见本文件末尾）。dao-hard-gates.js 只读、无副作用，
+// 不写任何状态文件 ⇒ 不需要沙箱，直接跑真文件（沙箱是为 rhythm 的三处状态文件准备的）。
+const REAL_GATES = path.join(REPO, "ccswitch", "hooks", "dao-hard-gates.js");
 const SANDBOX_BASE = path.join(REPO, "_tmp", "knifeF-rhythm-sandbox");
 const SID_BASE = "knifeF-rhythm-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
 const SESSION_MARK_DIR = path.join(os.tmpdir(), "dao-rhythm");
@@ -92,6 +95,81 @@ console.log("\n=== 守卫：沙箱副本的前提 ===");
 }
 
 const HOOK = makeSandbox("main");
+
+console.log("\n=== 正态 · WAKEUP：心跳唤醒轮 → 留守四句 + Read §心跳对账节 ===");
+{
+  const r = run(HOOK, "[dao-heartbeat] 高性能目标窗心跳（不限时）。对账：① 三路在途……", SID_BASE + "-wake1");
+  const c = ctx(r);
+  check("签名开头 → 注入 WAKEUP", /dao 节律·WAKEUP/.test(c), "ctx=" + c.slice(0, 120));
+  check("注入带取证签名 [dao-rhythm WAKEUP v1]（可达性矩阵靠 Grep 它取证，不问 agent 本人）",
+    /\[dao-rhythm WAKEUP v1\]/.test(c));
+  check("注入含「醒来第一动作 Read dao-longwindow.md §心跳对账节」",
+    /dao-longwindow\.md/.test(c) && /心跳对账节/.test(c));
+  check("留守四句四句都在（㈠防停摆 ㈡简报铁序 ㈢在途水位 ㈣自主边界）",
+    /㈠/.test(c) && /㈡/.test(c) && /㈢/.test(c) && /㈣/.test(c), "ctx=" + c.slice(0, 200));
+  check("㈡ 写明 ScheduleWakeup 不得作本轮最后一个工具调用（铁序里最易漏的那半）",
+    /永不作本轮最后一个工具调用/.test(c));
+  check("㈢ 写明补水位排在本轮第一个工具段（次序上唯一的硬规）",
+    /第一个工具段/.test(c));
+  check("声明本文件是压缩投影、冲突以 dao-longwindow.md 为准（防两份正文各自漂移）",
+    /冲突一律以该文件为准/.test(c));
+  check("hookEventName = UserPromptSubmit",
+    r.json && r.json.hookSpecificOutput && r.json.hookSpecificOutput.hookEventName === "UserPromptSubmit");
+  check("exit 0", r.code === 0, "code=" + r.code);
+}
+{
+  // 与 SCAFFOLD/CLOSING 相反：WAKEUP **不做 per-session 去重**。留守四句要的就是每一轮都到，
+  // 心跳轮之间隔着 900-1800 秒和一整批工具调用，去重＝第二轮之后全部裸奔。
+  const sid = SID_BASE + "-wake-repeat";
+  const r1 = run(HOOK, "[dao-heartbeat] 第一轮心跳", sid);
+  const r2 = run(HOOK, "[dao-heartbeat] 第二轮心跳", sid);
+  const r3 = run(HOOK, "[dao-heartbeat] 第三轮心跳", sid);
+  check("同会话连续三轮心跳 → 三轮都注入（刻意不去重）",
+    /dao 节律·WAKEUP/.test(ctx(r1)) && /dao 节律·WAKEUP/.test(ctx(r2)) && /dao 节律·WAKEUP/.test(ctx(r3)),
+    "r2=" + ctx(r2).slice(0, 60) + " r3=" + ctx(r3).slice(0, 60));
+}
+{
+  // 优先级最高：即便 READY armed（12 条埋点 + 未播报标记）也让 WAKEUP 先出。
+  // 同时断言 **READY 的一次性标记没被烧掉** —— 被挤掉的是「这一轮」，不是「这条播报」。
+  const readyHook = makeSandbox("wakeup-vs-ready", { armReady: true, closingLogLines: 12 });
+  const r = run(readyHook, "[dao-heartbeat] 心跳轮，顺带对账", SID_BASE + "-wake-vs-ready");
+  const c = ctx(r);
+  check("WAKEUP 优先于 READY（≤1 指针/回合）",
+    /dao 节律·WAKEUP/.test(c) && !/v2 验证就绪/.test(c), "ctx=" + c.slice(0, 120));
+  const mark = path.join(SANDBOX_BASE, "wakeup-vs-ready", "_tmp", ".rhythm-v2-announced");
+  check("被挤掉的 READY 标记未被烧 ⇒ 推迟不是丢失（下一个非心跳轮仍会播报）",
+    !fs.existsSync(mark));
+  const r2 = run(readyHook, "随便说点什么都行", SID_BASE + "-wake-vs-ready-2");
+  check("下一个非心跳轮 READY 果然补上了（把上一条从「标记还在」升成「真的还会播」）",
+    /v2 验证就绪/.test(ctx(r2)), "ctx=" + ctx(r2).slice(0, 120));
+}
+{
+  const r = run(HOOK, "[dao-heartbeat] 我们之前遇到过这个问题吗", SID_BASE + "-wake-vs-recall");
+  const c = ctx(r);
+  check("WAKEUP 优先于 RECALL（确定性签名不给启发式正则让路）",
+    /dao 节律·WAKEUP/.test(c) && !/dao 节律·回顾/.test(c), "ctx=" + c.slice(0, 120));
+}
+
+console.log("\n=== 负态 · WAKEUP：只认「trim 之后以签名开头」，别的一概不认 ===");
+{
+  const NEG_WAKE = [
+    ["普通消息无签名", "帮我看看这个函数的实现"],
+    ["真实历史心跳形态（没签名的那种，正是 G6 要拦的）", "高性能目标窗心跳（不限时）。对账：① 三路在途……"],
+    ["签名不在开头", "对账：① 两路在途 [dao-heartbeat]"],
+    ["大小写不符", "[DAO-HEARTBEAT] 心跳"],
+    ["方括号不闭合", "[dao-heartbeat 心跳"],
+    ["下划线/空格变体", "[dao heartbeat] 心跳"],
+    ["只是提到这个签名（散文里引用）", "G6 要求 prompt 以 [dao-heartbeat] 开头，你记住"],
+  ];
+  for (const [name, prompt] of NEG_WAKE) {
+    const r = run(HOOK, prompt, SID_BASE + "-negwake-" + Buffer.from(name).toString("hex").slice(0, 10));
+    check("负控：" + name + " → 不注入 WAKEUP", !/dao 节律·WAKEUP/.test(ctx(r)), "ctx=" + ctx(r).slice(0, 100));
+  }
+  // 前导空白**要**认（两边都先 trim），单列一条正控免得上面那批被读成「凡不完全一致都不认」
+  const r = run(HOOK, "  \n[dao-heartbeat] 心跳", SID_BASE + "-wake-leadws");
+  check("正控（配对项）：签名前有空白仍认（判据是 trim 之后的前缀）",
+    /dao 节律·WAKEUP/.test(ctx(r)), "ctx=" + ctx(r).slice(0, 100));
+}
 
 console.log("\n=== 正态 · RECALL：回顾类提问 → 先搜 memory/evolution ===");
 {
@@ -232,6 +310,103 @@ console.log("\n=== 健壮性：坏输入不许崩（只增不阻）===");
 {
   const r = run(HOOK, "/dao-loop 我们之前遇到过这个问题吗", SID_BASE + "-slash2");
   check("slash 命令带实质内容 → 仍参与判定", /dao 节律·回顾/.test(ctx(r)));
+}
+
+console.log("\n=== mutation · WAKEUP 判别力（两个方向，改坏一处对应那组必须翻面）===");
+{
+  // 「测试存在」≠「测试有判别力」。上面 WAKEUP 的正控与负控**各自**都可能是永真的：
+  // 判据恒真时负控全瞎，判据恒假时正控全瞎，而两种瞎法在全绿输出里都看不出来。
+  // 故这里两个方向各改坏一次，断言对应那一组**真的翻面**。
+  // ⚠ 刻意两个方向都跑：只往「放松」一侧 mutate 会让负控一次都没被验到
+  //   （dispatch-clauses 对抗验证官节点名的第四件事：改法方向单一 ⇒ 某类断言结构上永远验不到）。
+  const src = fs.readFileSync(REAL_HOOK, "utf8");
+  const REAL_SHA_BEFORE = require("crypto").createHash("sha256").update(src).digest("hex");
+
+  function mutantHook(tag, from, to) {
+    check(`mutation 靶点在源码里唯一存在（${tag}）`, src.split(from).length === 2,
+      `出现 ${src.split(from).length - 1} 次`);
+    const root = path.join(SANDBOX_BASE, "mut-" + tag);
+    fs.rmSync(root, { recursive: true, force: true });
+    const hooksDir = path.join(root, "ccswitch", "hooks");
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(path.join(root, "_tmp"), { recursive: true });
+    fs.writeFileSync(path.join(root, "_tmp", ".rhythm-v2-announced"), "test");
+    fs.writeFileSync(path.join(hooksDir, "dao-rhythm.js"), src.replace(from, to), "utf8");
+    sandboxes.push(root);
+    return path.join(hooksDir, "dao-rhythm.js");
+  }
+
+  // 方向①「放松」：判据恒真 ⇒ 本不该注入的普通消息开始注入 ⇒ 证明负控那一组真的在测判据
+  {
+    const h = mutantHook("loosen", "const HEARTBEAT_SIG = /^\\[dao-heartbeat\\]/;",
+      "const HEARTBEAT_SIG = /^/;");
+    const before = ctx(run(HOOK, "帮我看看这个函数的实现", SID_BASE + "-mutL-a"));
+    const after = ctx(run(h, "帮我看看这个函数的实现", SID_BASE + "-mutL-b"));
+    check("放松方向：真文件不注入，判据改恒真后注入 ⇒ 负控组有判别力",
+      !/dao 节律·WAKEUP/.test(before) && /dao 节律·WAKEUP/.test(after),
+      `before=${before.slice(0, 40)} after=${after.slice(0, 40)}`);
+  }
+  // 方向②「关掉」：保留字面但使其不执行（`if (false)`）⇒ 正控停止注入
+  //   刻意取这一形态而不是整段删除：整段删除 code review 一眼看得见，「留着但不执行」才是
+  //   真正骗得过人眼的那种（dispatch-clauses 对抗验证官节 ②）。
+  {
+    const h = mutantHook("disable", "if (HEARTBEAT_SIG.test(String(prompt).trim())) {",
+      "if (false && HEARTBEAT_SIG.test(String(prompt).trim())) {");
+    const before = ctx(run(HOOK, "[dao-heartbeat] 心跳", SID_BASE + "-mutD-a"));
+    const after = ctx(run(h, "[dao-heartbeat] 心跳", SID_BASE + "-mutD-b"));
+    check("关掉方向：真文件注入，判据被架空后不注入 ⇒ 正控组有判别力",
+      /dao 节律·WAKEUP/.test(before) && !/dao 节律·WAKEUP/.test(after),
+      `before=${before.slice(0, 40)} after=${after.slice(0, 40)}`);
+    check("变异体还活着（canary）：架空 WAKEUP 后 RECALL 仍然照常注入，证明不是整个 hook 崩了",
+      /dao 节律·回顾/.test(ctx(run(h, "我们之前遇到过这个问题吗", SID_BASE + "-mutD-c"))));
+  }
+
+  check("canary 恒等：真 hook 文件全程未被改动",
+    require("crypto").createHash("sha256").update(fs.readFileSync(REAL_HOOK)).digest("hex") === REAL_SHA_BEFORE);
+}
+
+console.log("\n=== 跨文件一致性：G6 放行 ⇔ rhythm 注入 WAKEUP（判据有两份实现）===");
+{
+  // ── 这一组防的是什么 ──────────────────────────────────────────────────────
+  // 心跳签名这一条判据**同时活在两个文件里**：dao-hard-gates.js 的 G6（拦未签名的
+  // ScheduleWakeup）与 dao-rhythm.js 的 WAKEUP（认出签名后注入留守四句）。两边任一侧
+  // 单独改动，都会造出一种**双绿的静默失败**：
+  //   · 闸放宽而 rhythm 没跟 ⇒ prompt 过了闸却收不到注入（「过闸即安全」是错觉）
+  //   · rhythm 放宽而闸没跟 ⇒ 明明认得出的形态被闸拦下，人被教去改一个本就对的 prompt
+  // 两种都不会让任何单侧测试变红 —— 各自的正负控在各自的判据下全都成立。
+  // 故这里把**同一批 prompt 同时喂给两个 hook**，钉死双向等价：拦 ⇔ 不注入。
+  //
+  // ⚠ 它证的是「两边此刻同判」，**不证**「这条判据本身选得对」。选得对不对由 G6 头注里
+  // 那份真实语料普查（993 次 ScheduleWakeup 调用）承担，不由本组承担。
+  const CORPUS = [
+    "[dao-heartbeat] 高性能目标窗心跳。对账：① 三路在途",
+    "[dao-heartbeat]",
+    "[dao-heartbeat]无空格紧跟",
+    "  \n[dao-heartbeat] 前导空白",
+    "高性能自主窗心跳。第一动作：回看上一轮是否真有面向用户的最终文本发出",
+    "【8h 高性能自主窗 · 心跳】第一动作：回看上一轮",
+    "[DAO-HEARTBEAT] 大小写不符",
+    "对账：① 两路在途 [dao-heartbeat]",
+    "[dao-heartbeat 方括号不闭合",
+    "帮我看看这个函数的实现",
+    "",
+    "/dao-verify",
+  ];
+  let agree = 0;
+  for (const prompt of CORPUS) {
+    const g = spawnSync(process.execPath, [REAL_GATES], {
+      input: JSON.stringify({ tool_name: "ScheduleWakeup", tool_input: { delaySeconds: 900, prompt } }),
+      encoding: "utf8",
+    });
+    const blocked = g.status === 2;
+    const r = run(HOOK, prompt, SID_BASE + "-xcheck-" + Buffer.from(prompt).toString("hex").slice(0, 12));
+    const injected = /dao 节律·WAKEUP/.test(ctx(r));
+    const ok = blocked === !injected;
+    if (ok) agree++;
+    check(`一致：${JSON.stringify(prompt.slice(0, 28))} → 闸${blocked ? "拦" : "放"} / rhythm${injected ? "注入" : "不注入"}`,
+      ok, `blocked=${blocked} injected=${injected}`);
+  }
+  check(`语料全体双向一致（${agree}/${CORPUS.length}）`, agree === CORPUS.length);
 }
 
 // ── 清理：沙箱 + 本次用到的 per-session 标记 ────────────────────────────────
