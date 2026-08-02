@@ -580,10 +580,141 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
         }.Invoke()
     }.Invoke()
 
+    # ══════════════════════════════════════════════════════════════════════
+    # 遮罩规则：未闭合反引号游程（2026-08-02 反转处置）
+    #
+    # 缺陷原貌：旧规则「未闭合反引号 ⇒ 从它到行尾一律当代码」，于是正文里写一处
+    # ```bash 这样的**写法示例**（游程长 3、无等长游程闭合）就会把**行尾元字段**遮成空格。
+    # 两个后果，第二个更险：
+    #   ① AllTopLevel 下该行仍被选中 ⇒ 报 missing-meta-field **假阳性**（合法条款被判红）。
+    #   ② Marked 下选择器读的就是遮罩串 ⇒ 该行**整条退出扫描面**，条款数静默少一条而
+    #      **退出码不变**（实测 mousse 条款库：clauses=75，实际 76，两次都 exit 0）。
+    # dao.md 自己一条都不响，因为它零行含未闭合游程 —— 「守卫看不到样本」的又一实例，
+    # 故下面全部用合成夹具把样本造出来。
+    # ══════════════════════════════════════════════════════════════════════
+    Write-Host "`n=== 遮罩：未闭合反引号游程（正控 · 两种选择器 · 两种后果）==="
+    {
+        $md = Get-MonthDay 3
+        # 5 个字面反引号：``````bash → 3 个（游程长 3，无等长游程闭合）；``a`` → 2 个（合法 span）。
+        # here-string 里反引号是转义字符，故源码里数量翻倍。
+        $oddLine = "- **奇数反引号条款**：正文写了一处 ``````bash 这样的写法示例，还有 ``a`` 这种。 [n=1 @$md 触发:无] [仅判据·无触发]"
+
+        # ── 后果①：假阳性方向（AllTopLevel）──────────────────────────────
+        $f1 = New-Fixture (Base-Body $oddLine)
+        $a1 = Invoke-Checker -File $f1 -Selector AllTopLevel
+        Check '正控①：奇数反引号 + 行尾完整元字段，AllTopLevel 不许判红' ($a1.Exit -eq 0) "exit=$($a1.Exit) / $($a1.Text)"
+        Check '正控①：不得报 missing-meta-field' ($a1.Text -notmatch 'missing-meta-field') $a1.Text
+
+        # ── 后果②：静默少一条方向（Marked）── 断言的是**计数**不是退出码 ──
+        # 这一条是本批最承重的断言：旧实现在这里 exit 也是 0，只有条款数少一条。
+        # 光断言 exit 就等于没验 ——「合规」与「覆盖率在跌」正是靠这种断言区分开的。
+        $m1 = Invoke-Checker -File $f1 -Selector Marked
+        Check '正控②：Marked 下 exit 0' ($m1.Exit -eq 0) "exit=$($m1.Exit)"
+        Check '正控②：奇数反引号那条**进得了扫描面**（检出 3 条，旧实现只有 2 条）' `
+            ($m1.Text -match '本次检出 3 条') $m1.Text
+        Check '正控②：marker 报 clauses=3（退出码看不出的那个差别）' ($m1.Text -match 'clauses=3') $m1.Text
+
+        # ── 隔离态：奇数反引号那条是**唯一**一条 ⇒ 旧实现整份扫描面为空（zero-sample 红）──
+        $solo = @"
+# 测试条款库
+
+## 通用节
+
+$oddLine
+"@
+        $f2 = New-Fixture $solo
+        foreach ($sel in @('Marked', 'AllTopLevel')) {
+            $r2 = Invoke-Checker -File $f2 -Selector $sel
+            Check "隔离态（$sel）：唯一一条条款仍被看见，exit 0" ($r2.Exit -eq 0) "exit=$($r2.Exit) / $($r2.Text)"
+            Check "隔离态（$sel）：不得报 zero-sample" ($r2.Text -notmatch 'zero-sample') $r2.Text
+            Check "隔离态（$sel）：检出 1 条" ($r2.Text -match '本次检出 1 条') $r2.Text
+        }
+
+        # ── 观察线：模糊地带要被打印出来（换掉的不该是「一种静默换另一种静默」）──
+        Check '观察线：未闭合游程 + 条款签名同现被打印' `
+            ($m1.Text -match '未闭合反引号游程 \+ 条款签名同现：1 行') $m1.Text
+        Check '观察线是观察线不是闸（exit 仍 0）' ($m1.Exit -eq 0) "exit=$($m1.Exit)"
+    }.Invoke()
+
+    Write-Host "`n=== 遮罩：负控 —— 原本要防的代码 span 假阳性，防护必须仍在 ==="
+    {
+        $md = Get-MonthDay 3
+        # 这一组钉的是**反转不许把旧防护一起扔掉**：闭合 span 里的模板字面量照旧不算真标记。
+        # 单向断言（只验「合法条款不再被误判」）夹不住「遮罩被整个关掉」——
+        # 本批实现初版正是那样：一个 return 写法把遮罩全线关成 no-op，而正控全绿。
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **甲条**：正文写着 ``[自定@<月日>]`` 这个模板字面量（闭合 span 内，不该被当成真标记）。 [n=1 @$md 触发:PR流程] [基线:合成甲]
+- **乙条**：正文写着 ``[n=9 @01-01 触发:胡编]`` 这个假元字段（闭合 span 内，不该被当成真字段）。 [n=2 @$md 触发:PR流程] [基线:合成乙]
+- **丙条**：正文写着 ``[#测-不存在]`` 这个假 slug（闭合 span 内，不该被当成真 slug）。 [n=3 @$md 触发:PR流程] [基线:合成丙]
+"@
+        $f = New-Fixture $body
+        foreach ($sel in @('Marked', 'AllTopLevel')) {
+            $r = Invoke-Checker -File $f -Selector $sel
+            Check "负控（$sel）：exit 0" ($r.Exit -eq 0) "exit=$($r.Exit) / $($r.Text)"
+            Check "负控（$sel）：反引号里的 [自定@…] 未被当成真标记（0 条）" `
+                ($r.Text -match '带 \[自定@…\] 标记：0 条') $r.Text
+            Check "负控（$sel）：检出恰 3 条（假元字段没把行数撑大）" ($r.Text -match '本次检出 3 条') $r.Text
+            Check "负控（$sel）：反引号里的假 slug 未进台账面（slugs=0）" ($r.Text -match 'slugs=0') $r.Text
+            Check "负控（$sel）：n 分布按**行尾真字段**算（n=1/n=2/n>=2 各 1，非 n=9）" `
+                ($r.Text -notmatch 'n=9') $r.Text
+            Check "负控（$sel）：无未闭合游程 ⇒ 不打那条观察线" `
+                ($r.Text -notmatch '未闭合反引号游程 \+ 条款签名同现') $r.Text
+        }
+    }.Invoke()
+
+    Write-Host "`n=== 遮罩：让出的那一格（未闭合游程之后的模板字面量会被当真）==="
+    {
+        # 这不是缺陷，是**明写的取舍**：新规则让未闭合游程当字面文本，于是它之后的
+        # `[自定@…]` 会被计入。把它钉成断言，是为了让这一格**将来被改动时会响** ——
+        # 一个没有断言的取舍，与一个没人知道的缺陷没有区别。
+        $md = Get-MonthDay 3
+        $line = "- **让格条款**：一个未闭合的 ``a 之后跟着 [自定@$md] 形态的字面量。 [n=1 @$md 触发:PR流程] [基线:合成让格]"
+        $f = New-Fixture (Base-Body $line)
+        $r = Invoke-Checker -File $f -Selector Marked
+        Check '让格：exit 0（多认一个标记不判红，只进统计）' ($r.Exit -eq 0) "exit=$($r.Exit)"
+        Check '让格：该字面量被计入 [自定@…]（明写的代价，非静默）' `
+            ($r.Text -match '带 \[自定@…\] 标记：1 条') $r.Text
+        Check '让格：观察线把这一行指出来了（代价可见）' `
+            ($r.Text -match '未闭合反引号游程 \+ 条款签名同现') $r.Text
+    }.Invoke()
+
     Write-Host "`n=== 边界：目标文件不存在 ==="
     {
         $r = Invoke-Checker -File (Join-Path $TmpRoot 'no-such-file.md')
         Check '文件不存在 → exit 1（不静默报绿）' ($r.Exit -eq 1) "exit=$($r.Exit)"
+    }.Invoke()
+
+    Write-Host "`n=== 边界：参数名打错必须响（曾经是静默扫错对象）==="
+    {
+        # 没有 [CmdletBinding()] 时，PS 会把认不出的具名参数吞进 $args ⇒ -TargetFile 保持缺省
+        # ⇒ 本闸转头去扫 dao.md 并报 OK。2026-08-02 实测：这正是本批缺陷一度被误判为
+        # 「已修好」的那条路径 —— 扫错对象与零样本是同一类病（绿得不是那份文件）。
+        $f = New-Fixture (Base-Body)
+        # ⚠ 这里**不能**用 `2>&1` 收 native 命令的 stderr：PS 会把它包成 NativeCommandError，
+        #   而本文件开头是 $ErrorActionPreference='Stop' ⇒ 整个测试当场中断（本条初版实测踩到）。
+        #   照通用节那条的处方走 Start-Process + 真实文件重定向。
+        $oFile = Join-Path $TmpRoot 'wrongparam-out.txt'
+        $eFile = Join-Path $TmpRoot 'wrongparam-err.txt'
+        $proc = Start-Process -FilePath 'powershell' -NoNewWindow -Wait -PassThru `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Checker, '-Path', $f) `
+            -RedirectStandardOutput $oFile -RedirectStandardError $eFile
+        $code = $proc.ExitCode
+        # 判成败只看 ExitCode；下面读 stderr 只为断言"报了哪个参数"，不拿文案判成败。
+        $errText = if (Test-Path $eFile) { [System.IO.File]::ReadAllText($eFile) } else { '' }
+        $outText = if (Test-Path $oFile) { [System.IO.File]::ReadAllText($oFile) } else { '' }
+        Check '参数名打错 → 非零退出（不许静默落回缺省目标）' ($code -ne 0) "exit=$code"
+        Check '参数名打错 → 说清是哪个参数不认识' ($errText -match "parameter name 'Path'") $errText
+        Check '参数名打错 → 压根没产出扫描报告（不是"扫了别的文件还报 OK"）' `
+            ($outText -notmatch 'CLAUSE_STRUCTURE_SUMMARY') $outText
+        # 负控：正确参数名照常工作（否则上面那条可以靠「什么都跑不了」蒙混过关）
+        $ok = Invoke-Checker -File $f
+        Check '负控：正确参数名 -TargetFile 仍 exit 0' ($ok.Exit -eq 0) "exit=$($ok.Exit)"
+        Check '负控：且扫的确实是夹具（检出 2 条，不是 dao.md 的十几条）' `
+            ($ok.Text -match '本次检出 2 条') $ok.Text
     }.Invoke()
 
     Write-Host "`n=== 真实对象冒烟：缺省目标 ccswitch/dao.md 必须绿 ==="
