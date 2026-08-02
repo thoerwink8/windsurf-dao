@@ -399,13 +399,18 @@ function done() { process.exit(0); }
 // 返回漂移行数组（**不 inject 不 exit**）。原版直接 inject + exit(0)，那是元仓库
 // 整体豁免的另一半：一旦有漂移就抢先注入并退出，后面的清单求值永远到不了。
 // 改成返回值后，调用方把它与清单缺项拼在同一次注入里。
-// ── per-provider hooks 漂移的挂载点（2026-08-02 · issue #50）──────────────────
+// ── per-provider 漂移的挂载点（2026-08-02 · hooks=issue #50 · deny=issue #56）───
 // 治的是什么病：上面第 6 项（settings-drift）比的是 live ↔ git 快照，而 #49 的实测
 // 把数据流图补上了一层——**cc-switch 真正下发的是 `providers` 表里当前 provider 那一行的
 // `settings_config`，而且是整体覆盖**。于是每个 provider 各带一份自己的 hooks 段，
 // 切一次 provider 就可能把一个钩子静默抹掉（#49 里 PostCompact 就是这么没的）。
 // 2026-08-02 那次是**手动**把两个 provider 对齐的：新 provider 加入、或某个 provider
 // 被单独改一次，漂移必然复发，而**当时没有任何机制会发现它**。
+//
+// **「整体覆盖」对 `settings_config` 里的每一个键都成立，不是 hooks 专有**（issue #56）：
+// `permissions.deny` 同样逐 provider 各存一份，而 Grep-first 铁律的落地面就在里面。
+// 它少一条的后果比少一个 hook 更隐蔽——hook 没了会有人察觉行为变了，deny 少一条只是
+// 那道闸从此放行。故这道检查现在报**两个面**，本函数分面陈述、不合并成一句话。
 //
 // 为什么挂在这里（理由与上面三道逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
 // 三处注册，而那正是本文件头注写的那笔债。只在**模式 A** 跑：它读的是 cc-switch DB
@@ -454,20 +459,44 @@ function providerHookLines(daoRoot) {
             "）→ 契约可能被改坏了：node ccswitch/lib/settings-drift.js --providers"];
   }
   const [, sExit, , sScoped, sDrift, sCross, sSelf] = m;
+  // deny 面（issue #56）单独解析：**刻意不并进上面那条必需正则**。若把它设为必需，
+  // 一个比本 hook 旧的 lib 会让整条检查报「契约被改坏了」——那是一句假话（契约没坏，
+  // 只是还没长出这个字段），而假的红比没有红更糟。拿不到就如实说拿不到。
+  const md = /denyDrift=(\d+) denyCross=(\d+) denySampled=(\d+)/.exec(out);
+  const denyDrift = md ? Number(md[1]) : null;
+  const denyCross = md ? Number(md[2]) : null;
+  const denySampled = md ? md[3] === "1" : null;
+  // 这一条只在「本来要报绿」时才有意义，故不在这里 return，只备着往下拼。
+  const denyTail = md === null
+    ? "；⚠ 末行没有 deny 面字段（lib 比本 hook 旧？）⇒ **permissions.deny 这一面本次没被报出来**"
+    : (denySampled === false
+      ? "；ⓘ deny 面零样本：provider 与 canonical 里一条 permissions.deny 都没有 ⇒ 那一面什么都没比到（不是「已对齐」）"
+      : "；deny 规则逐条一致（" + sScoped + " 个 provider 与应注册清单）");
+
   if (sExit === "2") {
-    return ["⚠ per-provider hooks 检查**没查成**（uncheckable）：cc-switch DB 读不到 / 没有可比对的 provider / canonical 缺" +
-            " —— 这不是「无漂移」。看原因：node ccswitch/lib/settings-drift.js --providers"];
+    return ["⚠ per-provider 漂移检查**没查成**（uncheckable）：cc-switch DB 读不到 / 没有可比对的 provider / canonical 缺" +
+            " —— 这不是「无漂移」（hooks 与 permissions.deny 两面都没查成）。看原因：node ccswitch/lib/settings-drift.js --providers"];
   }
   if (sExit !== "0" || code !== 0) {
-    const why = sSelf === "fail"
-      ? "检测器自检半边失败 ⇒ 此时「零漂移」不可信，先修检测器"
-      : "各 provider 的 hooks 段已经不一致了（与应注册清单差 " + sDrift + " 条、provider 互相之间差 " + sCross +
-        " 个 hook）—— 切到缺的那一侧，那些 hook 当场静默消失";
+    // 分面陈述：把 deny 的差异塞进「hooks 段不一致」那句话里就是**说错话**——
+    // deny 全对齐而 hooks 漂了、或反过来，是两个不同的现场，处置也不同。
+    const reasons = [];
+    if (sSelf === "fail") reasons.push("检测器自检半边失败 ⇒ 此时「零漂移」不可信，先修检测器");
+    if (Number(sDrift) > 0 || Number(sCross) > 0) {
+      reasons.push("各 provider 的 **hooks** 段已经不一致了（与应注册清单差 " + sDrift + " 条、provider 互相之间差 " +
+        sCross + " 个 hook）—— 切到缺的那一侧，那些 hook 当场静默消失");
+    }
+    if (denyDrift > 0 || denyCross > 0) {
+      reasons.push("各 provider 的 **permissions.deny** 已经不一致了（与应注册清单差 " + denyDrift +
+        " 条、provider 互相之间差 " + denyCross + " 条规则）—— deny 是安全护栏（Grep-first 那几条就住在这里），" +
+        "切到缺的那一侧，那道闸从此放行且没有任何输出会提到它");
+    }
+    if (!reasons.length) reasons.push("退出码非 0 但末行未点明是哪一面（真退出码 " + code + "）");
     const detail = String(out).split(/\r?\n/).filter((l) => /^\s+· /.test(l)).slice(0, 4).map((l) => "  " + l.trim()).join("\n");
-    return ["✗ per-provider hooks 漂移：" + why + (detail ? "\n" + detail : "") +
+    return ["✗ per-provider 漂移：" + reasons.join("；且 ") + (detail ? "\n" + detail : "") +
             "\n  → 全量：node ccswitch/lib/settings-drift.js --providers（**只读，对齐动作归人**）"];
   }
-  return ["ⓘ per-provider hooks 检查绿：" + sScoped + " 个 claude 型 provider 的 dao hook 段互相一致、且与应注册清单一致"];
+  return ["ⓘ per-provider 漂移检查绿：" + sScoped + " 个 claude 型 provider 的 dao hook 段互相一致、且与应注册清单一致" + denyTail];
 }
 
 function daoSyncLines() {
@@ -549,9 +578,9 @@ function daoSyncLines() {
   //    每次都打印一个数字的，因为减法没有天然触发器。
   for (const line of budgetLines(daoRoot)) drifts.push(line);
 
-  // 10. per-provider hooks 漂移（2026-08-02 挂载 · issue #50，判据见 providerHookLines 头注）。
-  //     第 6 项比的是 live ↔ git 快照，而 #49 实测证明**真正的下发源是
-  //     `providers.settings_config`**，那一层此前无人看着。
+  // 10. per-provider 漂移（2026-08-02 挂载 · hooks=#50 / permissions.deny=#56，
+  //     判据见 providerHookLines 头注）。第 6 项比的是 live ↔ git 快照，而 #49 实测证明
+  //     **真正的下发源是 `providers.settings_config`**，那一层此前无人看着。
   for (const line of providerHookLines(daoRoot)) drifts.push(line);
 
   return drifts;
