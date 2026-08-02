@@ -164,6 +164,165 @@ console.log("\n──── G2 · live ~/.claude/settings.json（投影，非源
   for (const [name, p] of negatives) check(`负控：${name}`, gate(p).code === 0, `code=${gate(p).code}`);
 }
 
+console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向语料夹击 ────");
+// ── 这一节为什么单独存在 ─────────────────────────────────────────────────────
+// 2026-08-02 实测绕过：`Copy-Item "<源>" "$env:USERPROFILE\.claude\settings.json" -Force`
+// 一次踩中两处失明 —— ①它是 PowerShell 工具调用，进不了 Edit/Write 分支 ②路径是变量形态。
+// **承重正控用的是那条命令的原文**（下面第一条，逐字抄自 `~/.claude/projects` 转录），
+// 不是自己编的近似串 —— 编出来的语料只能证明「我写的正则匹配我写的字符串」。
+// **负控里标着「真语料」的 6 条同样逐字抄自转录**：它们全是**备份**（源位是 live），
+// 而备份恰恰是本闸 `how` 里劝人走的那条路。判据若写成「这一段提到 live settings 就拦」，
+// 这 6 条真实命令全部误伤，而逃生阀只有用户设得了 ⇒ 会话当场卡住。
+{
+  const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
+  const V = "$env:USERPROFILE";           // 拼出来，免得本文件正文自己长得像一条待拦命令
+  const LIVE_V = `"${V}\\.claude\\settings.json"`;
+  // 本次绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）
+  const BYPASS = `Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\hook-register-202608\\03-merged.live-settings.json" ${LIVE_V} -Force; "COPY_EXIT=$LASTEXITCODE $?"`;
+
+  const BLOCK = [
+    ["#87 绕过命令原文（真语料·承重正控）", ps(BYPASS)],
+    ["同一条命令走 Bash 工具送进来", bash(`Copy-Item src.json ${LIVE_V} -Force`)],
+    ["${env:USERPROFILE} 花括号形态", ps(`Copy-Item src.json "\${env:USERPROFILE}\\.claude\\settings.json" -Force`)],
+    ["%USERPROFILE% cmd 形态", ps(`Copy-Item src.json "%USERPROFILE%\\.claude\\settings.json"`)],
+    ["$HOME + 正斜杠", bash(`cp _tmp/new.json "$HOME/.claude/settings.json"`)],
+    ["~ 形态", bash("cp _tmp/new.json ~/.claude/settings.json")],
+    ["Git Bash /c/ 盘符形态", bash("cp _tmp/new.json /c/Users/Administrator/.claude/settings.json")],
+    ["已展开的字面绝对路径", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
+    ["Move-Item 目标位", ps(`Move-Item _tmp/x.json ${LIVE_V} -Force`)],
+    ["mv 目标位", bash("mv _tmp/x.json ~/.claude/settings.json")],
+    ["-Destination 具名参数", ps(`Copy-Item -Path _tmp/x.json -Destination ${LIVE_V} -Force`)],
+    ["-Destination: 冒号内联形态", ps(`Copy-Item _tmp/x.json -Destination:${LIVE_V}`)],
+    // Out-File 几乎总在管道位 —— G7 对管道段整体豁免，G2 **刻意不豁免**（管道位正是它的目标位）
+    ["Out-File 在管道位（G7 的管道豁免不适用于 G2）", ps(`$j | Out-File -FilePath ${LIVE_V} -Encoding utf8`)],
+    ["Set-Content -Path", ps(`Set-Content -Path ${LIVE_V} -Value $json`)],
+    ["Add-Content 位置参数", ps(`Add-Content ${LIVE_V} "x"`)],
+    ["重定向 > 目标", bash('node -e "console.log(1)" > ~/.claude/settings.json')],
+    ["重定向 >> 目标", bash('printf x >> "$HOME/.claude/settings.json"')],
+    ["2> 也会截断（stderr 重定向同样是写）", bash("node t.js 2> ~/.claude/settings.json")],
+    ["(Join-Path …) 折叠", ps(`Copy-Item _tmp/x.json (Join-Path ${V} '.claude\\settings.json') -Force`)],
+    ["同命令内的字面量变量间接", ps(`$p = ${LIVE_V}; Copy-Item _tmp/x.json $p -Force`)],
+    ["目标位给的是 .claude 目录（文件名由源 basename 决定）", bash("cp _tmp/settings.json ~/.claude/")],
+    ["settings.local.json 同样拦", ps(`Copy-Item x.json "${V}\\.claude\\settings.local.json" -Force`)],
+    ["cwd 恰是 home 时的相对路径", bash("cp new.json .claude/settings.json", HOME)],
+    ["tee 目标", bash("printf x | tee ~/.claude/settings.json")],
+    ["cd 前缀不影响段首判定", ps(`cd D:\\frank; Copy-Item x.json ${LIVE_V} -Force`)],
+  ];
+  for (const [name, p] of BLOCK) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  check("承重正控的 stderr 指得出是哪一段命中（不是只说「被拦了」）",
+    /这一段：/.test(gate(ps(BYPASS)).err));
+  check("逃生阀：DAO_SETTINGS_EDIT_APPROVED=1 下同一条绕过命令放行",
+    gate(ps(BYPASS), { env: { DAO_SETTINGS_EDIT_APPROVED: "1" } }).code === 0);
+  check("逃生阀只认 '1'：设成 'true' 仍拦",
+    gate(ps(BYPASS), { env: { DAO_SETTINGS_EDIT_APPROVED: "true" } }).code === 2);
+
+  const ALLOW = [
+    // ↓ 6 条「真语料」逐字抄自 ~/.claude/projects 转录：全是**备份**（源位是 live）。
+    //   全库普查结果：shell 触到 live settings.json 的命令里，写 1 条（就是上面那条绕过），
+    //   读/备份 4 条 —— 误伤面比拦截面还大，故「只看目标位」是本次最要紧的设计取舍。
+    ["真语料·备份①：live → 同目录 .bak",
+      ps(`Copy-Item ${LIVE_V} "${V}\\.claude\\settings.json.bak-20260801-hardgates" -Force; "备份就位"`)],
+    ["真语料·备份②：cp live → .bak",
+      bash('cp "C:/Users/Administrator/.claude/settings.json" "C:/Users/Administrator/.claude/settings.json.bak-20260712-marshal-scout" && echo BACKED_UP')],
+    ["真语料·备份③：cp live → _tmp",
+      bash('cp ~/.claude/settings.json "D:\\frank\\windsurf-dao\\_tmp\\settings-live-backup-$TS.json"')],
+    ["真语料·备份④：/c/ 形态 live → .bak",
+      bash("cp /c/Users/Administrator/.claude/settings.json /c/Users/Administrator/.claude/settings.json.bak-20260712-marshal-hook")],
+    ["真语料·备份⑤：Copy-Item live → (Join-Path $dst 'settings.json')",
+      ps(`Copy-Item '${HOME}\\.claude\\settings.json' (Join-Path 'D:\\frank\\x' 'settings.json')`)],
+    ["真语料·⑥写 config-sync 快照层（本闸只管 live 那一份）",
+      ps(`Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\04.json" "D:\\frank\\windsurf-dao\\config-sync\\common\\settings.json" -Force; "COPIED"`)],
+    // ↓ 以下为构造语料，照实标注（真语料里没有这些形态，但它们是判据两侧的边界）
+    ["构造：dao 指定的降级正路 _tmp/settings-patch.json",
+      ps("Set-Content -Path _tmp/settings-patch.json -Value $json -Encoding utf8")],
+    ["构造：项目级 .claude/settings.json（不是 cc-switch 投影）",
+      bash("cp _tmp/x.json D:/frank/mousse-cli/.claude/settings.json")],
+    ["构造：~/.claude 下别的文件", bash("cp _tmp/x.md ~/.claude/CLAUDE.md")],
+    ["构造：Set-Content 的 -Value 恰好是那条路径（内容不是目标）",
+      ps(`Set-Content -Path _tmp/note.txt -Value ${LIVE_V}`)],
+    ["构造：单个正参的 Copy-Item（没有目标位，是复制到当前目录）", ps(`Copy-Item ${LIVE_V}`)],
+    ["构造：正文里提到重定向写法（引号里的 `>` 不算重定向）",
+      bash('echo "别写 cp x > ~/.claude/settings.json 这种命令"')],
+    ["构造：node -e require 读 live（读不是写）",
+      bash(`node -e "const s=require('$HOME/.claude/settings.json');console.log(Object.keys(s))"`)],
+    // `sc` 同时是 C:\windows\system32\sc.exe（本机 Get-Command sc -All 实测两个都在），
+    // 故刻意不收进写入类命令表 —— 与条款「加规则/别名前必须实测该词在其他语境的含义」一致。
+    ["构造：sc.exe 服务控制（`sc` 刻意不收，此条钉住这个决定）", ps(`sc query ${LIVE_V}`)],
+  ];
+  for (const [name, p] of ALLOW) {
+    const r = gate(p);
+    check(`负控：${name} → exit 0`, r.code === 0, `code=${r.code} err=${r.err.slice(0, 160)}`);
+  }
+
+  // ── mutation（锚点用正则 + 每组一条「锚点仍在」前置断言）────────────────────
+  // ⚠️ **盘上是 CRLF**（本仓 2026-08-02 实测 1047 处 CRLF / 0 处裸 LF）。锚点若写死 `\n`
+  //    会一处都匹配不到 ⇒ 变异体 = 原文 ⇒ 被测闸照常绿，**而那与「守卫真的没塌陷」逐字节相同**
+  //    （同 issue #103 当天咬过两次的形态）。故锚点一律走正则、换行位一律写 `\r?\n`，
+  //    并且**每组先断言锚点在源码里恰好命中一次**，再断言行为翻转。
+  const src = fs.readFileSync(HOOK, "utf8");
+  function mutate(label, re, to, payload, expectBefore, expectAfter) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    const n = (src.match(g) || []).length;
+    check(`mutation 锚点在源码里恰好命中 1 次（${label}）`, n === 1, `命中 ${n} 次`);
+    if (n !== 1) return;
+    const mp = path.join(TMP, `mutant-g2-${label.replace(/[^\w]+/g, "-")}.js`);
+    fs.writeFileSync(mp, src.replace(re, () => to), "utf8");
+    const before = gate(payload).code;
+    const after = gate(payload, { script: mp }).code;
+    check(`${label}：真文件 ${expectBefore} / 改坏后 ${expectAfter} ⇒ 这条断言真的在测那段判据`,
+      before === expectBefore && after === expectAfter, `before=${before} after=${after}`);
+  }
+
+  // 正向三形态（对抗验证官节「改坏要试不止一种形态」：①移除 ②留着字面但不执行 ③结果不被消费）
+  mutate("①移除·shell 分支整个不进",
+    /if \(\/\^\(Bash\|PowerShell\)\$\/\.test\(tool\)\) \{/, "if (false) {",
+    ps(BYPASS), 2, 0);
+  mutate("②留字面不执行·目标位提取块永不进",
+    /if \(destLast \|\| allTarget\) \{/, "if (false && (destLast || allTarget)) {",
+    ps(BYPASS), 2, 0);
+  mutate("③结果不被消费·照样算目标但裁决被丢掉",
+    /if \(!g2IsLive\(hit\.path\)\) continue;/, "if (true) continue;",
+    ps(BYPASS), 2, 0);
+  // 变量展开这一层单独换靶：证明拦下绕过的是「$env: 被展开了」，不是别的分支顺手拦的
+  mutate("$env: 展开被改坏 ⇒ 变量形态漏过（而字面绝对路径仍拦）",
+    /\.replace\(\/\\\$env:\(\?:USERPROFILE\|HOME\)\(\?!\[A-Za-z0-9_\]\)\/gi, H\)/,
+    ".replace(/__never_matches__/gi, H)", ps(BYPASS), 2, 0);
+  check("上一条改坏后，已展开的字面绝对路径仍然被拦（证明只打掉了变量那一层）", (() => {
+    const re = /\.replace\(\/\\\$env:\(\?:USERPROFILE\|HOME\)\(\?!\[A-Za-z0-9_\]\)\/gi, H\)/;
+    if (!re.test(src)) return false;
+    const mp = path.join(TMP, "mutant-g2-envonly.js");
+    fs.writeFileSync(mp, src.replace(re, () => ".replace(/__never_matches__/gi, H)"), "utf8");
+    return gate(ps(`Copy-Item x.json "${HOME}\\.claude\\settings.json" -Force`), { script: mp }).code === 2;
+  })());
+
+  // 反向三条：把**豁免**改坏，对应负控必须由 exit 0 翻成 exit 2。
+  // 没有这一组，「一组永远为真的负控」与「一组真管用的负控」在全绿输出里长得一模一样。
+  mutate("反向·源位豁免（末位才是目标）改坏 ⇒ 真语料备份命令被误伤",
+    /out\.push\(\{ why: "末位参数（目标位）", raw: positional\[positional\.length - 1\] \}\);/,
+    'for (const q of positional) out.push({ why: "末位参数（目标位）", raw: q });',
+    ps(`Copy-Item ${LIVE_V} "${V}\\.claude\\settings.json.bak-20260801-hardgates" -Force; "备份就位"`), 0, 2);
+  mutate("反向·引号感知改坏 ⇒ 正文里提到的 `>` 被当成真重定向",
+    /if \(c === '"' \|\| c === "'"\) \{ quote = c; quoted = true; continue; \}/,
+    "if (false) { quote = c; quoted = true; continue; }",
+    bash('echo "别写 cp x > ~/.claude/settings.json 这种命令"'), 0, 2);
+  mutate("反向·目标位参数白名单改坏 ⇒ -Value 的内容被当成目标路径",
+    /const isTarget = destLast \? G2_DEST_PARAM\.test\(name\) : G2_TARGET_PARAM\.test\(name\);/,
+    "const isTarget = true;",
+    ps(`Set-Content -Path _tmp/note.txt -Value ${LIVE_V}`), 0, 2);
+  mutate("反向·`sc` 不收这个决定改坏 ⇒ sc.exe 服务控制命令被误伤",
+    /"new-item", "ni"\]\)/, '"new-item", "ni", "sc"])',
+    ps(`sc query ${LIVE_V}`), 0, 2);
+  mutate("反向·live 精确比对改成后缀匹配 ⇒ 项目级 .claude/settings.json 被误伤",
+    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{G2_LIVE_DIR\}\/\$\{n\}`\);/,
+    'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
+    bash("cp _tmp/x.json D:/frank/mousse-cli/.claude/settings.json"), 0, 2);
+
+  check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
+}
+
 console.log("\n──── G3 · 对外发布（⑤自主边界：不可逆 + 需用户在场）────");
 {
   const positives = [
