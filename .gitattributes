@@ -1,2 +1,7 @@
 # bash 脚本必须保持 LF 行尾,避免 Windows clone 时 CRLF 化导致 shebang 失效
 *.sh text eol=lf
+
+# git hook 模板**没有扩展名**,上面那条 `*.sh` 盖不到它 —— 而它恰恰是最不能 CRLF 的一类:
+# 被 CRLF 化之后 sh 会把行尾的 \r 当成命令的一部分,报 `\r: command not found`,
+# 且**失败发生在派生它的那个项目里、不在本仓**,本仓这边看起来一切正常。
+ccswitch/templates/githooks/* text eol=lf

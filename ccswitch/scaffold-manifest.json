@@ -219,8 +219,8 @@
         ]
       },
       "require": { "file": ".claude/rules/frontend-style.md" },
-      "msg": "前端项目缺少 .claude/rules/frontend-style.md（样式技术路线：Tailwind 优先、禁手写布局 CSS）→ 运行 /dao-project-scaffold，从 stacks/frontend-*.md 处方派生",
-      "why": "2026-07-12 mousse-cli 血泪：从 v0.1 到 v1.23 手写 2000+ 行布局 CSS，stacks/frontend-react-vite.md 的 Tailwind 铁律 23 个版本从未落地。本条原是 dao.md「前端技术栈自检」文字条款（要求 AI 首次接触项目时静默执行），2026-07-27 清单化——那种无标记时刻的自由裁量形态本仓实测携带率 9-24%。",
+      "msg": "前端项目缺少 .claude/rules/frontend-style.md（样式技术路线：Tailwind 优先、禁手写布局 CSS）→ 从零建的项目照 stacks/frontend-*.md 处方派生；**已经有样式规范、只是散在别的文件名下的项目走另一条路：建这个约定名文件，正文写成对既有那几份的指针（一行一份，写清各管什么），不要把内容搬过来**——搬运立刻产生双份，而双份必漂移且没有任何东西会告诉你哪份是旧的",
+      "why": "2026-07-12 mousse-cli 血泪：从 v0.1 到 v1.23 手写 2000+ 行布局 CSS，stacks/frontend-react-vite.md 的 Tailwind 铁律 23 个版本从未落地。本条原是 dao.md「前端技术栈自检」文字条款（要求 AI 首次接触项目时静默执行），2026-07-27 清单化——那种无标记时刻的自由裁量形态本仓实测携带率 9-24%。**2026-08-02 补报文（三仓自上而下审计第 16 件）**：本条对「规范已存在、只是文件名不同」的项目**报的是真缺项，但原报文给的处方是错的**——它只说「派生一份」，照做就是把既有内容抄一遍，于是同一套样式规范在一个仓里有两份。正解本来就写在本清单 _doc『文件名契约』里（『内容写成对既有文件的指针（而非搬运，避免双份漂移）』），**但它住在只有加条目的人才会读的元文档段里，被报缺项的项目一个字也看不到** ⇒ 那句话对它的唯一消费者结构上不可达。本次只做一件事：把那句已有的正解下沉进 msg。**刻意没做的两件**：①不补 canonical 模板——样式路线本身高度技术栈相关（Tailwind / CSS Modules / styled-components 各一套），一份模板要么空泛要么把某个栈写死，且『指针型正文』按定义不可模板化（指的是每个项目自己那几份文件）；②不改判据——仍只查文件在不在，不查内容是不是指针，那需要语义理解，属本清单明令不收的一类。",
       "severity": "warn"
     },
     {
@@ -284,6 +284,43 @@
       "require": { "file": "design/CONTEXT.md" },
       "msg": "项目有 design/ 但缺 design/CONTEXT.md（新开会话第一眼读的设计对齐入口）→ 运行 /dao-project-scaffold",
       "why": "design-assets.md 检查清单的最承重一条：没有 CONTEXT.md，每个新会话都要重新猜设计资产的现状与代码层映射。其余九条 design 结构检查刻意不收（见 _doc.rejected）。",
+      "severity": "info"
+    },
+
+    {
+      "id": "token-drift-guard",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dep": "react" }, { "dep": "vue" }, { "dep": "svelte" },
+          { "dir": "src-ui" }, { "dir": "apps/desktop" }
+        ]
+      },
+      "require": { "file": "scripts/check-token-drift.mjs" },
+      "template": { "src": "check-token-drift.mjs", "dest": "scripts/check-token-drift.mjs" },
+      "msg": "前端项目没有设计值硬编码的**棘轮守卫**（禁裸 px/hex 这条规矩在 dao 侧写了五处散文、零实现）→ 从 canonical `ccswitch/templates/check-token-drift.mjs` 派生，落地三步：复制 → `node scripts/check-token-drift.mjs --update-baseline` 建基线 → 把 `node scripts/check-token-drift.mjs` 挂进 package.json 一个脚本（**第三步不做，这个文件就只是躺在盘上**，`--selfcheck` 会把这件事说出来）。**已经有一份同类守卫（别的文件名/别的语言）的项目**：本条判的是文件名契约，报的是「不在约定名下」不是「你没有」——正确动作是**换成 canonical 并删掉旧的那份**（canonical 修了旧实现的两个真病：基线不带规则指纹 ⇒ 规则一变满屏假回归；清理后不写基线 ⇒ 清掉再加回来照样绿），**不是留两份并行**",
+      "why": "三仓自上而下审计第 13 件（2026-08-02）。病是「判据在上、实现在下」的镜像形态：`skills/dao-design/standards.md §token 收口铁律`『出货前 lint 拦截裸值』、`fidelity.md L1`、`open.md §关卡表`、`od-prompt.md`、`protocol-od.md` 五处都写着这条规矩，**没有一处说谁来跑、跑什么、什么算过** ⇒ 「零检出」与「根本没人跑」在这种形态下逐字节相同。canonical 从 TraceyU `scripts/check-token-drift.ts` 上移，落地时改了三处（都不是口味，是修病）：①**基线存规则指纹**——事故账 L12（2026-07-07）记着上游那版『棘轮基线与扫描规则脱节后恒红多日、真回归被掩护』，病根是规则一变则全库计数同时跳变而输出与真回归一模一样；现在指纹不一致走**专用退出码 4** 并只说『重建基线』，与 exit 1（真回归）在机器可读通道上分得开。②**基线自动收紧（只降不升）**——上游只在清理后打印一句『清掉了 N 个』而不写基线，那不是棘轮：清掉 1 个再加回 1 个照样绿；现在比对通过即把基线往低了写并剪掉已消失条目，升高仍只能靠人显式 `--update-baseline`。③**扫描根自动发现**——上游写死 `apps/desktop/src`，换个布局就是零覆盖而全绿；上移前跑了一次全域分布摸底（`--distribution`，2026-08-02 实测：TraceyU 自动发现 5 个根，其中 4 个 `packages/*/src` 完全在上游那版覆盖之外——**今天这 4 个恰好零违例，所以差的不是数字而是覆盖面**；mousse-cli 单根 664 处，Top 目录 `src-ui/src/panels` 376 处）。**severity 刻意停在 info，不是判据近似所致，是授权所致**：把它升成 warn/硬闸等于替所有前端项目定下『裸值必须拦』这条硬性要求，而『什么算够、存量怎么办、CI 挂不挂』是执行时的现场取舍 ⇒ 属判断档、须用户拍板（回归网 `tests/token-drift-guard.tests.js` §⑯ 把 info 钉成断言，防日后被顺手升级）。**判据本身的近似**：只查文件在不在，查不了『基线建了没』『有没有人跑它』——后两样归脚本自己的 `--selfcheck`，那是会话动作不是项目状态，本清单判不了。",
+      "severity": "info"
+    },
+
+    {
+      "id": "design-sync-precommit",
+      "class": "conditional",
+      "when": {
+        "allOf": [
+          { "dir": "design" },
+          {
+            "anyOf": [
+              { "dep": "react" }, { "dep": "vue" }, { "dep": "svelte" },
+              { "dir": "src-ui" }, { "dir": "apps/desktop" }
+            ]
+          }
+        ]
+      },
+      "require": { "file": ".githooks/pre-commit" },
+      "template": { "src": "githooks/pre-commit", "dest": ".githooks/pre-commit" },
+      "msg": "有 design/ 的前端项目缺少 .githooks/pre-commit（『改 UI 必动 design/』的 git 提交闸）→ 从 canonical `ccswitch/templates/githooks/pre-commit` 派生，**复制完还要接线**：`git config core.hooksPath .githooks`（团队仓建议同时在 package.json 加 `\"prepare\": \"git config core.hooksPath .githooks\"`，新 clone 自动接上）；类 Unix 系统另需 `chmod +x .githooks/pre-commit`。跑 `sh .githooks/pre-commit --selfcheck` 当场看接没接上",
+      "why": "三仓自上而下审计第 14 件（2026-08-02）。**与 Stop hook 互补不互替**，三通道的分工写在 `ccswitch/hooks/dao-design-sync-gate.js` 头注『三通道分工』一节（**那里是唯一真相源，本字段与模板头注都只留指针，不复述**——同一条规则已经有过『三个版本各自漂移』的实例，见该 hook 头注末段）。一句话差别：Stop hook 只在 Claude 主会话『正要说做完了』那一刻响，管不到 Codex/Cascade/裸 git 的提交，也管不到 subagent（走 SubagentStop）；git 闸管**所有宿主的所有提交**，但只看得见 staged 内容、看不见『这一轮改了什么』。**when 为什么不是原议那个形态**：原议把条件挂在『项目已经有这个钩子/已经配了 hooksPath』上 —— 那是循环依赖，条件与 require 查的是同一件事，于是它**只对已经满足的项目触发、对真正缺它的项目结构上永不报**（同 product-type 那道题『答了不是』与『从没答过』逐字节相同的病，只是这次绕了一圈）。现在的 when 只看两件与它无关的项目事实：有 design/ 目录（设计资产在）+ 是前端项目（有 UI 组件可改）。**severity=info 的理由是判据只查入口不查内容**：文件在盘上 ≠ hooksPath 接上了 ≠ 有执行位 —— 后两样清单侧够不着（`.git/config` 在 worktree 里根本不是同一个文件），故把它们放进钩子自己的 `--selfcheck` 并在 msg 里明写。**已知会漏的一面照直写**：`git commit --no-verify` 一句话就绕过去，本闸对它零覆盖；它防的是『忘了』不是『要绕』。",
       "severity": "info"
     },
 

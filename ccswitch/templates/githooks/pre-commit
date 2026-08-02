@@ -1,0 +1,88 @@
+#!/bin/sh
+# 「改 UI 必动 design/」的 git 提交闸（canonical · dao）
+#
+# 真相源：windsurf-dao/ccswitch/templates/githooks/pre-commit
+# 项目侧是派生副本（scaffold 清单条目 design-sync-precommit）。副本会漂移，
+# 故本文件带 DAO_GATE_VERSION，`--selfcheck` 打得出来，对副本时一比即知落后几版。
+#
+# ── 三通道分工：唯一真相源在别处，这里只留指针 ──────────────────────────────
+# 设计同步这条规则同时有三个执行通道（散文判据 / Stop hook / 本 git 闸），
+# 谁管什么、谁管不到什么，**全部写在 windsurf-dao `ccswitch/hooks/dao-design-sync-gate.js`
+# 头注「三通道分工」一节**。本文件刻意不复述 —— 这条规则已经有过「同一件事三个版本、
+# 各自漂移」的实例（那一节末段自己记着），再抄一份就是第四个版本。
+# 只留一句读者当场用得上的：**本闸看的是 staged 内容，Stop hook 看的是「这一轮改了什么」；
+# 两者的输入不同，所以互补不互替，任何一方都不能代替另一方。**
+#
+# ── 判定 ────────────────────────────────────────────────────────────────────
+#   ① 仓根没有 design/ ⇒ 直接放行（本闸不适用）
+#   ② staged 里有 UI 改动（下方 UI_RE）而 staged 里 design/ 下零改动 ⇒ 拦
+#   ③ 「登记欠账」天然解锁：在 design/CONTEXT.md 里加一行待反向同步队列，
+#      那本身就是改 design/ ⇒ 自动过闸。**不另设豁免开关是有意的** ——
+#      一个不产生任何记录的豁免开关，就是「义务转移即义务蒸发」的标准形态。
+#
+# ── 判据是近似，两个方向都有反例（禁笃定措辞）─────────────────────────────
+#   · UI_RE 按**路径形态**认：任何路径段为 components 的 .tsx/.jsx/.vue/.svelte，
+#     外加各层的 App.tsx/App.jsx 与 index.css/global.css/globals.css。
+#     ⇒ 组件写在 `widgets/` 下的项目**漏报**；`components/README.md` 不命中（只认那几个扩展名）。
+#     覆盖面不够时改 .githooks/pre-commit 里的 UI_RE，或在项目 CLAUDE.md 里写清为什么不改。
+#   · 只看 staged：`git commit -a` 之外的未 add 改动看不见 —— 那是 pre-commit 的形状，不是缺陷。
+#   · `git commit --no-verify` 一句话绕过。**本闸防的是「忘了」，不是「要绕」**；
+#     要绕的人本来就绕得掉，为此把闸做得更凶只会让人整体关掉钩子。
+#
+# ── 接线（复制完不做这一步，本文件就只是一段躺着的文本）──────────────────────
+#   git config core.hooksPath .githooks
+#   （类 Unix 另需 chmod +x .githooks/pre-commit）
+#   自检：sh .githooks/pre-commit --selfcheck
+
+DAO_GATE_VERSION="1.0.0"
+
+UI_RE='(^|/)components/.*\.(tsx|jsx|vue|svelte)$|(^|/)App\.(tsx|jsx)$|(^|/)(index|global|globals)\.css$'
+SPEC_RE='\.(test|spec)\.|(^|/)__(tests|mocks)__/'
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+# ── --selfcheck：接没接上、版本几何、当前 staged 会不会被拦 ──────────────────
+if [ "$1" = "--selfcheck" ]; then
+  echo "[dao design-sync pre-commit --selfcheck] version=$DAO_GATE_VERSION"
+  echo "  · 仓根：$repo_root"
+  hp=$(git config --get core.hooksPath 2>/dev/null)
+  if [ -z "$hp" ]; then
+    echo "  · 🔴 core.hooksPath 没设 —— 本文件在盘上，但 git 不会调它。跑：git config core.hooksPath .githooks"
+  else
+    echo "  · core.hooksPath = $hp"
+    [ -x "$repo_root/$hp/pre-commit" ] || echo "    ⚠ $hp/pre-commit 没有执行位（Windows 下无妨，类 Unix 下 git 会跳过它）：chmod +x $hp/pre-commit"
+  fi
+  if [ -d "$repo_root/design" ]; then
+    echo "  · design/ 在 ⇒ 本闸适用"
+  else
+    echo "  · design/ 不在 ⇒ 本闸对本仓恒放行（这不是「通过」，是「不适用」）"
+  fi
+  staged_n=$(git diff --cached --name-only | wc -l | tr -d ' ')
+  echo "  · 当前 staged 文件数：$staged_n"
+  exit 0
+fi
+
+# ① 没有 design/ ⇒ 不适用
+[ -d "$repo_root/design" ] || exit 0
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+ui_changed=$(printf '%s\n' "$staged" | grep -E "$UI_RE" | grep -Ev "$SPEC_RE")
+[ -z "$ui_changed" ] && exit 0
+
+design_changed=$(printf '%s\n' "$staged" | grep -E '^design/')
+[ -n "$design_changed" ] && exit 0
+
+echo "⛔ 设计同步门控：本次提交改了 UI，但 design/ 下零改动。"
+echo ""
+printf '%s\n' "$ui_changed" | sed 's/^/   · /'
+echo ""
+echo "两条出路（任选其一后重新提交）："
+echo "  1) 当场同步原型：/dao-design sync，并更新 design/CONTEXT.md"
+echo "  2) 登记欠账：在 design/CONTEXT.md 的「待反向同步队列」加一行"
+echo "     —— 登记本身就是改 design/，天然解锁；要的就是留下一条**可查的**记录，"
+echo "        而不是一个不留痕的豁免开关。"
+echo ""
+echo "（判据是近似，覆盖面与已知漏报写在本文件头注；接线自检：sh .githooks/pre-commit --selfcheck）"
+exit 1

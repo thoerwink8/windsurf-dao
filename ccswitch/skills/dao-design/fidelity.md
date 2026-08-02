@@ -33,6 +33,13 @@ description: 设计还原度五层金字塔——从 token 语义到视觉像素
 
 **自动化**：100% CI。契约测试（`*contract*.spec.*`）断言组件 className 包含正确 token class。
 
+> **上表那几条 `grep` 是给人现场用的探针，不是闸** —— 没有退出码语义、不区分存量与新增、
+> 也没有任何时刻会自动跑它。要把 L1 变成真的会红的东西，用 canonical 守卫
+> `ccswitch/templates/check-token-drift.mjs`（棘轮：存量准留、新增必红；基线带规则指纹，
+> 规则一变走**专用退出码**而不是报一屏假回归 —— 事故账 L12 记着上一版栽在这里）。
+> 项目侧落地走备案清单条目 `token-drift-guard`。**它是建议不是硬闸**（severity=info）：
+> 「裸值要拦到什么程度、存量怎么办、CI 挂不挂」是现场取舍，属判断档、归用户拍板。
+
 ### L1.1 · Token 命名合规（Naming Compliance）
 
 **判据**：设计稿与代码用**同一套 token 名**——单一词汇集，零映射表。
