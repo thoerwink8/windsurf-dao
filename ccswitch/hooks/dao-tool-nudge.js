@@ -1,6 +1,8 @@
-// dao tool-nudge hook — 五类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
+// dao tool-nudge hook — 五类软提醒 + 一个**动作**:
+//                                  ①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
 //                                  ④浏览器 MCP 首调 → 去读 GUI 验证细则
 //                                  ⑤热重载 dev server 起在主仓树而非专用 worktree
+//                                  ⑥`_tmp/` 新落盘工件里的裸凭据 → **就地脱敏**(唯一会改盘的一类)
 //
 // ── ① 工具选择(本 hook 的原始职责)────────────────────────────────────────────
 // 背景:Claude Code 同时允许内置 Grep(ripgrep)/Glob/Read 与 Bash(*),
@@ -52,12 +54,17 @@
 // 状态**写不动时仍然提醒**(可能因此重复):一个状态目录坏掉就静默零投递,正是本 hook
 // 头注反复在说的那种死法;重复的代价是噪音,静默的代价是这条规则不存在。重复时提醒里会自陈。
 //
-// 🔴 **它此刻大概率投递不到,照直写**:本 hook 在 live settings.json 里注册的 PostToolUse
-// **matcher 是 `Bash`**,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
-// ⇒ **第 ④ 类的代码在这里、投递为零**,而「没跑的闸」与「跑了且没意见的闸」在任何日志里
-// 长得一样。要它真响,需要用户把那个 matcher 扩到覆盖两个 MCP 前缀(写入面是 cc-switch DB
-// 的 providers.settings_config,AI 侧被权限分类器全路径拦截 ⇒ 属用户动作)。
-// **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
+// 🟢 **2026-08-02 订正:这一格已经通了,原文写的是它通之前的状态**。本段此前写着
+// 「matcher 是 `Bash` ⇒ 第 ④ 类投递为零」——**那句话现在是假的**:实跑
+// `node ccswitch/hooks/dao-tool-nudge.js --selfcheck` 对 live settings.json 求值,得到
+// matcher = `"Bash|mcp__chrome-devtools__.*|mcp__playwright__.*"`、两个 MCP 面均覆盖、exit 0。
+// 用户在此期间把它扩了,而**本文件作为「被描述者」自己没跟上** —— 正是官侧条款
+// 「改一条关于某个对象的陈述时,Grep 面要含那个对象自己的源文件与头注」讲的那个形态,
+// 只是这次反过来:对象变了而它的自述没变。**always-on / 头注里的假保障比没有保障更危险**,
+// 故订正而不是删除。⚠ **别把这次订正读成「以后不用查了」**:注册面是 cc-switch DB 的
+// providers.settings_config、**每个 provider 各存一份**,切 provider 会被目标 provider 的
+// 配置整体覆盖 ⇒ 它**随时可能再次漂移**,而漂移是静默的。
+// **判它通没通的唯一办法仍然是跑那个 --selfcheck,别凭记忆、也别凭本段。**
 // 那个自检逐面核对 matcher 覆盖不覆盖 ①②③⑤ 的 Bash 面与 ④ 的两个 MCP 面,缺一即 exit 1。
 //
 // ── ⑤ 热重载 dev server 起在主仓树(2026-08-02 加,dao 整体重写批 1-D)───────────
@@ -82,19 +89,51 @@
 // 与 ②③ 同为**事后**提醒:PostToolUse 触发时 dev server 已经起来了,提醒买的是「现在换树重起」
 // 或「在交付里写明这次观察建立在共享树上」,不是拦截。
 //
+// ── ⑥ `_tmp/` 新落盘工件的凭据脱敏(2026-08-02 加,issue #101)──────────────────
+// **本类与上面五类不同:它会改盘,不只是说话。** 判据、四条设计约束与射程全文在
+// ccswitch/lib/tmp-redact-sweep.js 的头注(**唯一真相源**),此处只说为什么挂在这个 hook 上。
+//
+// 病:PR #98 把脱敏防线做成了库,但库只保护**调用它**的链。而实际产出真凭据的,是住在
+// `_tmp/` 里、**根本不在仓内**的一次性 ops 脚本(2026-08-02 摸底:22 处 provider live dump
+// 含 `ANTHROPIC_AUTH_TOKEN` 与 JWT)—— 它们永远不会去 import 那个库,也进不了任何清单。
+//
+// 收口点:那些脚本不在仓内,但**全都经由一次工具调用被跑起来**。所以唯一对所有产出者都成立
+// 的位置不是产出者,而是**它们跑完之后那一刻** —— 也就是这里。产出者不需要合作。
+//
+// 为什么挂在本 hook 而不新起一个:新 hook 要注册,注册面是 cc-switch DB 的
+// providers.settings_config,**属用户动作**(AI 侧被权限分类器拦截)⇒ 新 hook 大概率变成
+// 「代码写好了但从没被调用过」,而那与不存在在任何日志里长得一样(第 ④ 类刚吃过这个亏)。
+// 挂在**已注册且实测覆盖 Bash 面**的本 hook 上,是当前唯一投递得到的形态。
+// ⚠ 连带射程:matcher 不含 `Write` ⇒ 用 Write 工具直接写出的 dump 要等**下一次任意 Bash 调用**
+// 才被扫到。这是已知缺口,不是疏忽 —— 扩 matcher 属用户动作。
+//
 // 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
 // ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
 // 提醒的实际作用是「补做合并后那两步复核」与「下次走脚本」,不是拦截。这一点别读成守卫。
 // 第 ④ 类同理:提醒到达时那次截图已经拍完了,它买的是**这一次走查剩下的部分**和下一次的选型。
+// 第 ⑥ 类是这句话唯一的例外:它**不只是提醒**,当场就把裸凭据擦掉了 —— 事后性在这里体现为
+// 「那份 dump 在盘上真实存在过一小段时间」,而不是「只能靠人补做」。
 //
-// 回归网:tests/dao-tool-nudge.tests.js(正控+误伤负控双向)。
+// 回归网:tests/dao-tool-nudge.tests.js(正控+误伤负控双向)· tests/tmp-redact-sweep.tests.js(⑥)。
 // 真相源:windsurf-dao/ccswitch/hooks/dao-tool-nudge.js
-// 由 settings.json 的 PostToolUse hook 调用(当前注册 matcher: Bash,见上方 ④ 的射程说明)。
+// 由 settings.json 的 PostToolUse hook 调用(注册 matcher 以 --selfcheck 实测为准,别凭本行)。
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+// ⑥ 的实现体。**加载失败不许让整个 hook 崩**：它挂在 PostToolUse 上,一个抛异常的 hook
+// 会把另外五类提醒一起带走,而那五类与 ⑥ 毫无关系。但**也不许静默降级** —— 静默失效正是
+// 本文件头注反复在说的那种死法,故失败时把加载错误一路带到输出里(见下方 ⑥ 段)。
+// (顺带:本仓的 mutation 测试会把本文件复制到别处再跑,那时 `__dirname` 变了、这个 require
+//  必然失败 —— 那条路径走的就是这里的降级分支,它同时也是这段容错的第一个真实用例。)
+let TMP_SWEEP = null;
+let TMP_SWEEP_LOAD_ERR = null;
+try {
+  TMP_SWEEP = require(path.resolve(__dirname, "..", "lib", "tmp-redact-sweep.js"));
+} catch (e) {
+  TMP_SWEEP_LOAD_ERR = String((e && e.message) || e);
+}
 
 // ── ④ 的常量与状态 ─────────────────────────────────────────────────────────
 const ROOT = path.resolve(__dirname, "..", ".."); // 本文件在 <root>/ccswitch/hooks/
@@ -364,9 +403,30 @@ if (devServerDir !== null && isLinkedWorktree(devServerDir) === false) {
   flows.add("dev-server-main-tree");
 }
 
-if (hints.size === 0 && flows.size === 0) process.exit(0);
+// ── ⑥ `_tmp/` 凭据脱敏(唯一会改盘的一类;判据全文在 lib 头注)────────────────
+// **必须走在上面那个早退之前**:它与 hints/flows 无关 —— 绝大多数命中它的命令
+// (`node _tmp/dump.mjs`)一条提醒都不触发,若放在早退之后就永远轮不到它跑。
+// 逃生阀 DAO_TMP_SWEEP_OFF=1 只有用户设得了(agent 在 Bash 里 export 影响不到本进程)。
+let sweepNotice = null;
+if (process.env.DAO_TMP_SWEEP_OFF !== "1") {
+  try {
+    if (!TMP_SWEEP) throw new Error("ccswitch/lib/tmp-redact-sweep.js 加载失败：" + TMP_SWEEP_LOAD_ERR);
+    const root = TMP_SWEEP.findRepoRoot(String((input && input.cwd) || process.cwd() || "."));
+    if (root) sweepNotice = TMP_SWEEP.renderNotice(TMP_SWEEP.sweep({ root }), root);
+  } catch (e) {
+    // 不吞:一个静默失败的脱敏器与没有脱敏器一样,而后者至少不会让人以为有兜底。
+    sweepNotice =
+      "⚠【dao 凭据脱敏】`_tmp/` 自动脱敏这一步**自己出错了**(" + (e && e.code ? e.code + " " : "") +
+      String((e && e.message) || e).slice(0, 200) + ")。⇒ 本次落盘的工件**没有**过这道过滤," +
+      "把 `_tmp/` 内容贴进 PR / issue / 报告之前先手动跑 " +
+      "`node ccswitch/scripts/dao-redact.mjs --scan _tmp`。";
+  }
+}
+
+if (hints.size === 0 && flows.size === 0 && !sweepNotice) process.exit(0);
 
 const blocks = [];
+if (sweepNotice) blocks.push(sweepNotice);
 
 if (hints.size) {
   const parts = [];
