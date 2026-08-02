@@ -16,15 +16,37 @@
 // dao-scaffold-check.js 的 `isMetaRepo` 原判据 `basename === "windsurf-dao"` 在任何
 // worktree 里恒为假，模式 A 整块从未跑过，而它的输出与「跑了且没问题」完全一样。
 //
-// ── 扫什么（三个面 + 一个反向面）────────────────────────────────────────────
+// ── 扫什么（三个配置层 + 一个横切面 + 一个反向面）───────────────────────────
 //   ① live  `~/.claude/settings.json` —— 宿主真正读的那一份（投影层）
 //   ② 快照  `config-sync/common/*.json` —— git 里的那一份（cc-switch DB 导出格式，
 //           `rows[].value` 里嵌着各宿主的完整配置字符串）。**两层都要扫**：只扫 live
 //           会漏掉「快照里指着一个已删脚本、下次 restore 下发就把 live 也带死」这一形态。
-//   ③ permissions 的 deny/allow/ask 里**路径形态**的条目（今天一条都没有，但 P1 之后
-//           permissions 会成为门控载体之一，先把面开出来）
-//   ④ 反向：`ccswitch/hooks/` 里**存在但没被任何一层注册**的孤儿文件 —— 提示不报错，
+//   ③ providers  cc-switch DB `providers` 表各行的 `settings_config`（issue #57）——
+//           **真正的下发源就是这一层**，理由见下一段。
+//   ④ permissions 的 deny/allow/ask 里**路径形态**的条目（今天一条都没有，但 P1 之后
+//           permissions 会成为门控载体之一，先把面开出来）。三个配置层都过这一面。
+//   ⑤ 反向：`ccswitch/hooks/` 里**存在但没被任何一层注册**的孤儿文件 —— 提示不报错，
 //           它可能是刻意存货（写了还没挂），也可能是挂漏了，机器判不出，只负责端到眼前
+//
+// ── 为什么必须有 providers 层（issue #57；#49/#50 已把事实坐实）──────────────
+// 上面 ①② 两层画漏了一层：`common_config_claude` 是**镜像层**，并不在下发路径上。
+// cc-switch 真正写进 `~/.claude/settings.json` 的，是 `providers` 表里**当前那个 provider
+// 自己那一行**的 `settings_config`，而且是**整份覆盖**（#49 实证：PostCompact 钩子就是被
+// 「切一次 provider」这一个动作抹掉的）。⇒ 每个 provider 各带一份 hooks 段。
+// 于是「某个 provider 的钩子指着一个已被删掉的脚本」这一形态，在 ①② 两层上**完全看不见**：
+// live 里是当前 provider 的内容（好的）、快照里是镜像层的内容（好的），而你一旦切到那个
+// provider，那条钩子当场变成死闸 —— 正是本脚本要治的那个病，只是它此前发生在一个
+// 本脚本看不到的层里，**于是「零死闸」这句话本身是有射程缺口的**。
+//
+// **不按 app_type 划范围，全表扫**（与 settings-drift `--providers` 的刻意分工，不是不一致）：
+// 那一面比的是「各 provider 的 hooks 段互相之间还一不一样」，把不带 hooks 的行拉进去会造出
+// 恒定噪音，故它按 `app_type='claude'` 收窄。本脚本问的是**每个条目自己的存在性**
+// ⇒ 不带 hooks 的行天然贡献 0 个条目、0 条普查、**0 条噪音**，收窄反而是白付一个会过期的
+// 判据（今天只有 claude 那类带 hooks，不等于明天也是）。同一份数据、两个问题、两种范围。
+//
+// **只读是结构性的不是纪律性的**：走 `config-sync/lib/sqlite.mjs` 的 `runSql(…, readonly:true)`，
+// sqlite3 以 `-readonly` 打开 ⇒ 是它自己拒绝写入，而不是「我们保证不写」。
+// 这一层也**一个字节都不落盘**（报文只走 stdout），故报告不可能落进自己的扫描面。
 //
 // ── 判「活着」的两层 ────────────────────────────────────────────────────────
 //   存在性：解析出脚本路径 → 文件在不在。**这是硬判据。**
@@ -44,26 +66,35 @@
 // 结构数会掉到普查数以下 ⇒ `selfcheck=fail`，而普查这一半仍然看得见样本。
 //
 // ── 退出码 / 末行契约 ───────────────────────────────────────────────────────
-//   DEAD_GATES_SUMMARY exit=<0|1> hooks=<N> dead=<M> orphan=<K> selfcheck=<ok|fail> unverifiable=<U>
-//   · exit  —— 与进程退出码恒等；1 = 有死闸 **或** 自检半边失败
-//   · hooks —— 本次实际扫到的闸条目总数（hooks 各挂载点 + statusLine，live+快照合计）
+//   DEAD_GATES_SUMMARY exit=<0|1|2> hooks=<N> dead=<M> orphan=<K> selfcheck=<ok|fail>
+//                      unverifiable=<U> providers=<P> providerscan=<ok|off|uncheckable>
+//   · exit  —— 与进程退出码恒等；1 = 有死闸 **或** 自检半边失败；
+//              2 = 无红，但 providers 层**没查成**（DB 读不到 / 无 providers 表 / 零行）
+//   · hooks —— 本次实际扫到的闸条目总数（hooks 各挂载点 + statusLine，三层合计）
 //   · dead  —— 存在性/语法任一不过的条目数
 //   · orphan—— 反向面：hooks 目录里没被注册的文件数（**不参与退出码**）
+//   · providers —— providers 表里实际读到并扫过的行数（`off`/`uncheckable` 时为 0）
+//   · providerscan —— `ok` 查成了 / `off` 被 `--no-providers` 显式关掉 / `uncheckable` 没查成
 //   末行**每条路径都打印**（含读不到文件的失败路径）：只在成功时打摘要，等于让「没查成」
 //   在机器通道上表现为「什么都没说」。
 //
-//   ⚠ 后两个字段是对派单契约（四字段）的**刻意扩展**，两条理由都指向同一件事——
+//   ⚠ 这些字段是对派单契约（四字段）的**刻意扩展**，理由都指向同一件事——
 //   本脚本不该在自己的输出契约上重犯它要治的病：
 //   · `selfcheck` —— 不给第二个信号的话，`dead=0 exit=1` 读者无从分辨「查了没事」
 //     与「压根没看到样本」；
 //   · `unverifiable` —— 只报 `dead=0` 会让消费方（SessionStart hook 只读末行、不读中文正文）
 //     说出「零死闸」，而其中 U 条其实**根本没被核验**。「没查成」与「查了没事」必须分得开。
+//   · `providerscan` + `exit 2` —— 同一条判据用在**整整一层**上：providers 层没查成时，
+//     「零死闸」这句话的射程比读者以为的小一层，而 `exit 0` 说不出这件事。
+//     `off` 与 `uncheckable` 也刻意分开：前者是操作者显式选的范围，后者是环境没给成。
 //   消费方按字段名取值，勿按位置取；未来加字段一律追加在末尾。
 //
 // ── 跑法 ────────────────────────────────────────────────────────────────────
 //   node ccswitch/scripts/check-dead-gates.mjs
 //   node ccswitch/scripts/check-dead-gates.mjs --json
-//   测试用覆写：--live <settings.json> --snapshot-dir <dir> --hooks-dir <dir> --project-root <dir>
+//   node ccswitch/scripts/check-dead-gates.mjs --no-providers   （只扫 live+快照两层）
+//   测试用覆写：--live <settings.json> --snapshot-dir <dir> --hooks-dir <dir>
+//               --project-root <dir> --db-file <cc-switch.db>
 //
 // 真相源：windsurf-dao/ccswitch/scripts/check-dead-gates.mjs
 // 调用方：ccswitch/hooks/dao-scaffold-check.js（SessionStart 模式 A，零新增注册）
@@ -91,6 +122,10 @@ const LIVE_SETTINGS = path.resolve(argOf("--live", path.join(HOME, ".claude", "s
 const SNAPSHOT_DIR = path.resolve(argOf("--snapshot-dir", path.join(ROOT, "config-sync", "common")));
 const HOOKS_DIR = path.resolve(argOf("--hooks-dir", path.join(ROOT, "ccswitch", "hooks")));
 const AS_JSON = ARGV.includes("--json");
+// providers 层。`--db-file` 不给时走 config-sync 的 cc-switch DB 默认路径（**不在本文件
+// 复刻那个路径**——它的唯一真相源是 config-sync/lib/paths.mjs，复刻一份就是新的漂移面）。
+const DB_FILE = argOf("--db-file", null);
+const NO_PROVIDERS = ARGV.includes("--no-providers");
 
 // 脚本形态扩展名。`.exe` 也收：一个指向已卸载 exe 的 hook 同样静默死掉，
 // 「不是我们写的」不改变它是死闸这个事实（谁去修是另一回事，报文里标了归属）。
@@ -265,17 +300,15 @@ function censusCommandEntries(text) {
   return plain + escaped;
 }
 
-// ── 一个配置文件 → 闸条目 + 普查数 ─────────────────────────────────────────
-// 两种形态：cc-switch DB 导出（顶层 `rows[]`，每行 `value` 是嵌套 JSON 字符串）
-// 与裸 settings 对象。两者都走同一个 walkGates。
-function scanConfigFile(file, label) {
-  const res = { file, label, gates: [], perms: [], census: 0, notes: [], parsedUnits: 0, unparsedUnits: 0 };
-  let raw;
-  try { raw = fs.readFileSync(file, "utf8"); }
-  catch (e) {
-    res.notes.push("读不出来：" + (e && e.message ? e.message : String(e)));
-    return res;
-  }
+// ── 一段配置文本 → 闸条目 + 普查数 ─────────────────────────────────────────
+// 三种形态都走这里：cc-switch DB 导出（顶层 `rows[]`，每行 `value` 是嵌套 JSON 字符串）、
+// 裸 settings 对象、以及 providers 表某一行的 `settings_config`（也是裸 settings 形态）。
+// 三者共用同一个 walkGates —— **口径必须是同一个**：分母（普查）与分子（结构化遍历）
+// 若在不同层用不同口径，下限断言会在某一层恒红或恒绿，两个方向都让自检失去意义。
+// `layer` 只影响报文分节与 JSON 输出，不影响判据。
+function scanConfigText(raw0, label, file, layer) {
+  const res = { file, label, layer: layer || "file", gates: [], perms: [], census: 0, notes: [], parsedUnits: 0, unparsedUnits: 0 };
+  let raw = String(raw0 == null ? "" : raw0);
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   res.census = censusCommandEntries(raw);
 
@@ -331,6 +364,97 @@ function scanConfigFile(file, label) {
   return res;
 }
 
+function scanConfigFile(file, label) {
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch (e) {
+    return { file, label, layer: "file", gates: [], perms: [], census: 0, parsedUnits: 0, unparsedUnits: 0,
+      notes: ["读不出来：" + (e && e.message ? e.message : String(e))] };
+  }
+  return scanConfigText(raw, label, file, "file");
+}
+
+// ── providers 层：cc-switch DB（结构性只读）─────────────────────────────────
+// 返回 `{ state, why, scans, total, appTypeCounts, dbPath }`。
+//   state=ok          —— 读到了 providers 表且至少一行，逐行已扫
+//   state=off         —— `--no-providers`，操作者显式缩了扫描面（**不是没查成**）
+//   state=uncheckable —— sqlite3 找不到 / DB 不在 / 无 providers 表 / 零行 / 查询报错
+// **三态刻意分开**，因为它们的处方不同：off 该问「你为什么关掉它」，uncheckable 该问
+// 「这台机器上 cc-switch 装了吗」，而两者都**不等于**「这一层查过了没事」。
+// 两个 import 都是**动态**的：sqlite.mjs 是 ESM + 要 spawn sqlite3，静态 import 会让
+// 「sqlite 那条路坏了」变成「整个死闸检测跑不起来」—— 一道检查不该被它的可选层拖死。
+// 报错原文提取：stderr 优先（真原因在那里），message 首行只当上下文。
+// 两侧都截断到可读长度 —— 但**截的是尾巴不是头**，成因永远在前几行。
+function errWhy(e) {
+  const stderr = e && e.stderr != null ? String(e.stderr) : "";
+  const head = stderr.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, 3).join(" / ");
+  const msg = (e && e.message ? String(e.message) : String(e)).split(/\r?\n/)[0].trim();
+  return (head ? head + "（" + msg + "）" : msg).slice(0, 600);
+}
+
+async function scanProviders() {
+  const empty = { scans: [], total: 0, appTypeCounts: {}, dbPath: DB_FILE || "(config-sync 默认)" };
+  if (NO_PROVIDERS) return Object.assign({ state: "off", why: "--no-providers" }, empty);
+
+  let runSql = null, defaultDbPath = null;
+  try {
+    ({ runSql } = await import("../../config-sync/lib/sqlite.mjs"));
+    ({ ccSwitchDbPath: defaultDbPath } = await import("../../config-sync/lib/paths.mjs"));
+  } catch (e) {
+    return Object.assign({ state: "uncheckable", why: "config-sync 的 sqlite/paths 模块加载失败：" + errWhy(e) }, empty);
+  }
+  const dbPath = DB_FILE ? path.resolve(DB_FILE) : defaultDbPath;
+
+  let rows = null;
+  try {
+    // 只选四列：settings_config 已经很大，别把 meta/notes 一起拖进内存与报文。
+    // `readonly: true` ⇒ sqlite3 `-readonly` 打开，写入由它自己拒绝（结构性只读）。
+    rows = runSql("SELECT id, app_type, name, settings_config FROM providers;",
+      { dbPath, json: true, readonly: true });
+  } catch (e) {
+    // DB 不在 / sqlite3 找不到 / 没有 providers 表 / DB 被锁 —— 全部走这里。
+    // **不细分**：它们对读者是同一句话「这一层这次没查成」，而原始报错里已经带着到底是
+    // 哪一种（原文照登，不做措辞转译，转译只会丢信息）。
+    // ⚠ 这里**必须先读 `e.stderr`**：`execFileSync` 的 `e.message` 首行恒是
+    // `Command failed: <整条命令行>`，真正的原因（`no such table: providers` 之类）在
+    // stderr 里。首版只取了 `e.message` 的首行，于是「没查成」这一态**每一种成因都长得
+    // 一模一样** —— 那正是本脚本要治的病，在它自己的降级路径上重演了一次（首跑 fixture
+    // 当场撞出，已配一条钉死的断言：⑬「原因原文照登」）。
+    return Object.assign({ state: "uncheckable", why: errWhy(e) }, empty, { dbPath });
+  }
+  if (!Array.isArray(rows)) {
+    return Object.assign({ state: "uncheckable", why: "providers 查询没返回数组（sqlite3 -json 输出形态变了？）" }, empty, { dbPath });
+  }
+  if (rows.length === 0) {
+    // 零行**不是**「全都活着」。一个检查器数到 0 个违例，和它根本没看到样本，
+    // 在只读退出码的消费方眼里必须长得不一样 —— 这正是本脚本自己在治的病。
+    return Object.assign({ state: "uncheckable", why: "providers 表里零行 ⇒ 没有任何样本可查（不等于「零死闸」）" }, empty, { dbPath });
+  }
+
+  const appTypeCounts = {};
+  const scans = [];
+  for (const r of rows) {
+    const appType = r && r.app_type != null && String(r.app_type) !== "" ? String(r.app_type) : "(空)";
+    appTypeCounts[appType] = (appTypeCounts[appType] || 0) + 1;
+    const name = r && r.name != null && String(r.name).trim() ? String(r.name).trim() : "(无名)";
+    const id = r && r.id != null ? String(r.id) : "(无 id)";
+    const label = "provider/" + name + " [" + id + "]";
+    const cfg = r ? r.settings_config : null;
+    if (cfg != null && typeof cfg !== "string" && typeof cfg !== "object") {
+      const s = { file: dbPath, label, layer: "provider", appType, gates: [], perms: [], census: 0,
+        parsedUnits: 0, unparsedUnits: 1,
+        notes: [label + "：settings_config 既不是字符串也不是对象（typeof=" + typeof cfg + "）⇒ 不可核验"] };
+      scans.push(s);
+      continue;
+    }
+    const raw = typeof cfg === "string" ? cfg : JSON.stringify(cfg == null ? {} : cfg);
+    const s = scanConfigText(raw, label, dbPath + " › providers." + id, "provider");
+    s.appType = appType;
+    scans.push(s);
+  }
+  return { state: "ok", why: "", scans, total: rows.length, appTypeCounts, dbPath };
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 const scans = [];
 scans.push(scanConfigFile(LIVE_SETTINGS, "live"));
@@ -341,6 +465,12 @@ try {
   snapFiles = fs.readdirSync(SNAPSHOT_DIR).filter((f) => f.toLowerCase().endsWith(".json")).sort();
 } catch (e) { snapDirErr = e && e.message ? e.message : String(e); }
 for (const f of snapFiles) scans.push(scanConfigFile(path.join(SNAPSHOT_DIR, f), "快照/" + f));
+
+// providers 层追加在末尾（顺序有意义：`scans[0]` 恒为 live，下面的 live-unreadable 判据靠它）。
+// 它与前两层**并进同一个 scans 数组**，而不是另起一套账：hooks= / 普查 / 下限断言三个数
+// 都必须把这一层算进去，否则「零死闸」仍旧只覆盖两层，而末行看不出这件事。
+const providerScan = await scanProviders();
+for (const s of providerScan.scans) scans.push(s);
 
 const gates = [];
 for (const s of scans) for (const g of s.gates) gates.push(g);
@@ -413,7 +543,12 @@ if (snapDirErr) selfIssues.push("snapshot-unreadable：快照目录读不了（"
 if (hooksDirErr) selfIssues.push("hooksdir-unreadable：hooks 目录读不了（" + HOOKS_DIR + "：" + hooksDirErr + "）");
 
 const selfOk = selfIssues.length === 0;
-const exitCode = (dead.length > 0 || !selfOk) ? 1 : 0;
+// 三态优先级：红（1）> 没查成（2）> 通过（0）。
+// **`uncheckable` 不许把 `dead>0` 盖掉**——真发现永远比「有一层没查成」更该被看见；
+// 反过来 `dead=0 && uncheckable` 也不许落成 0，那句「零死闸」的射程比读者以为的小一层。
+// `off` 刻意不进退出码：它是操作者显式选的扫描范围（如本仓 fixture 测试只测前两层），
+// 而它仍在末行 `providerscan=off` 里可见 —— 「显式缩面」与「环境没给成」是两种病。
+const exitCode = (dead.length > 0 || !selfOk) ? 1 : (providerScan.state === "uncheckable" ? 2 : 0);
 
 // ── 输出 ────────────────────────────────────────────────────────────────────
 function summaryLine() {
@@ -422,13 +557,17 @@ function summaryLine() {
     " dead=" + dead.length +
     " orphan=" + orphans.length +
     " selfcheck=" + (selfOk ? "ok" : "fail") +
-    " unverifiable=" + unverifiable.length;
+    " unverifiable=" + unverifiable.length +
+    " providers=" + providerScan.scans.length +
+    " providerscan=" + providerScan.state;
 }
 
 if (AS_JSON) {
   out(JSON.stringify({
     exit: exitCode,
-    scans: scans.map((s) => ({ file: s.file, label: s.label, gates: s.gates.length, census: s.census, parsedUnits: s.parsedUnits, unparsedUnits: s.unparsedUnits, notes: s.notes })),
+    providerScan: { state: providerScan.state, why: providerScan.why, dbPath: providerScan.dbPath,
+      total: providerScan.total, appTypeCounts: providerScan.appTypeCounts },
+    scans: scans.map((s) => ({ file: s.file, label: s.label, layer: s.layer, gates: s.gates.length, census: s.census, parsedUnits: s.parsedUnits, unparsedUnits: s.unparsedUnits, notes: s.notes })),
     dead: dead.map((d) => ({ origin: d.origin, where: d.where, command: d.command, token: d.ref.token, why: d.verify.why, detail: d.verify.detail || "", owner: d.owner })),
     unverifiable: unverifiable.map((u) => ({ origin: u.origin, where: u.where, command: u.command, kind: u.ref.kind })),
     alive: alive.map((a) => ({ origin: a.origin, where: a.where, token: a.ref.token, syntax: a.verify.syntax })),
@@ -442,21 +581,53 @@ out("");
 out("=== dao 死闸检测 ===");
 // 有内容的逐个打；零闸零普查零备注的**仍然点名**（只是并成一行）——
 // 扫描面必须可见：省掉名字，下一次有人把某个文件挪出扫描面时就是静默缩面。
-const quiet = [];
-for (const s of scans) {
-  if (s.gates.length === 0 && s.census === 0 && s.notes.length === 0) { quiet.push(s.label); continue; }
-  out("  " + s.label.padEnd(24) + " 闸 " + String(s.gates.length).padStart(3) +
+function printScanLine(s, indent) {
+  out(indent + s.label.padEnd(24) + " 闸 " + String(s.gates.length).padStart(3) +
       " · 普查 " + String(s.census).padStart(3) +
       " · 可解析单元 " + s.parsedUnits + (s.unparsedUnits ? "（另 " + s.unparsedUnits + " 个非 JSON 单元）" : "") +
       "  " + s.file);
-  for (const n of s.notes) out("      ⚠ " + n);
+  for (const n of s.notes) out(indent + "    ⚠ " + n);
+}
+const quiet = [];
+for (const s of scans) {
+  if (s.layer === "provider") continue;   // providers 层另起一节打，见下
+  if (s.gates.length === 0 && s.census === 0 && s.notes.length === 0) { quiet.push(s.label); continue; }
+  printScanLine(s, "  ");
 }
 if (quiet.length) out("  （另 " + quiet.length + " 份零闸零普查：" + quiet.join("、") + "）");
 if (snapDirErr) out("  ✗ 快照目录读不了：" + SNAPSHOT_DIR + "（" + snapDirErr + "）");
 
+// ── providers 层（真正的下发源）──────────────────────────────────────────────
+out("");
+if (providerScan.state === "off") {
+  out("  ⊘ providers 层：被 --no-providers 显式关掉（**不是「查过了没事」**，本次只扫了 live+快照两层）");
+} else if (providerScan.state === "uncheckable") {
+  out("  ⚠ providers 层：**本次没查成**（不等于零死闸；真正的下发源就是这一层）");
+  out("      DB   ：" + (providerScan.dbPath || "(未解析出路径)"));
+  out("      原因 ：" + providerScan.why);
+} else {
+  const dist = Object.keys(providerScan.appTypeCounts).sort()
+    .map((k) => k + "=" + providerScan.appTypeCounts[k]).join(" · ");
+  out("  providers 层：cc-switch DB 共 " + providerScan.total + " 行 —— " + (dist || "(空)") +
+      "  [-readonly 打开]");
+  out("      " + providerScan.dbPath);
+  const pQuiet = [];
+  for (const s of providerScan.scans) {
+    if (s.gates.length === 0 && s.census === 0 && s.notes.length === 0) { pQuiet.push(s.label.replace(/^provider\//, "").replace(/\s*\[.*$/, "")); continue; }
+    printScanLine(s, "    ");
+  }
+  // 零闸的行同样点名（只是并成一行）：**范围没被收窄**这件事必须看得见 ——
+  // 本层刻意不按 app_type 划范围，若哪天有人加了个过滤，这一行的行数会立刻对不上。
+  if (pQuiet.length) out("      （另 " + pQuiet.length + " 行零闸零普查：" + pQuiet.join("、") + "）");
+}
+
 out("");
 if (dead.length === 0) {
-  out("✓ 死闸：0（存在性 + 语法可载两层都过）");
+  // 「零死闸」这句话的射程必须跟着实际扫过的层数走，否则它就是本脚本要治的那句空话。
+  const covered = providerScan.state === "ok" ? "live + 快照 + providers 三层" : "live + 快照两层";
+  const caveat = providerScan.state === "ok" ? ""
+    : "；**providers 层" + (providerScan.state === "off" ? "被显式关掉" : "没查成") + "，这一句不覆盖它**";
+  out("✓ 死闸：0（" + covered + "，存在性 + 语法可载两道都过" + caveat + "）");
 } else {
   out("✗ 死闸 " + dead.length + " 条 —— 它们此刻在宿主里静默 no-op，与「跑过且没意见」不可区分：");
   for (const d of dead) {
@@ -501,6 +672,7 @@ if (selfOk) {
 
 out("");
 out("── 合计：闸 " + structTotal + " 条（另 permissions 路径条目 " + permRefs.length + " 条）· 死 " + dead.length +
-    " · 无法核验 " + unverifiable.length + " · 孤儿 " + orphans.length + " · 自检 " + (selfOk ? "ok" : "fail"));
+    " · 无法核验 " + unverifiable.length + " · 孤儿 " + orphans.length + " · 自检 " + (selfOk ? "ok" : "fail") +
+    " · providers " + (providerScan.state === "ok" ? providerScan.scans.length + " 行" : providerScan.state));
 out(summaryLine());
 process.exit(exitCode);
