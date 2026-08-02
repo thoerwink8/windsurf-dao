@@ -1,5 +1,6 @@
-// dao tool-nudge hook — 四类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
+// dao tool-nudge hook — 五类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
 //                                  ④浏览器 MCP 首调 → 去读 GUI 验证细则
+//                                  ⑤热重载 dev server 起在主仓树而非专用 worktree
 //
 // ── ① 工具选择(本 hook 的原始职责)────────────────────────────────────────────
 // 背景:Claude Code 同时允许内置 Grep(ripgrep)/Glob/Read 与 Bash(*),
@@ -57,7 +58,29 @@
 // 长得一样。要它真响,需要用户把那个 matcher 扩到覆盖两个 MCP 前缀(写入面是 cc-switch DB
 // 的 providers.settings_config,AI 侧被权限分类器全路径拦截 ⇒ 属用户动作)。
 // **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
-// 那个自检逐面核对 matcher 覆盖不覆盖 ①②③ 的 Bash 面与 ④ 的两个 MCP 面,缺一即 exit 1。
+// 那个自检逐面核对 matcher 覆盖不覆盖 ①②③⑤ 的 Bash 面与 ④ 的两个 MCP 面,缺一即 exit 1。
+//
+// ── ⑤ 热重载 dev server 起在主仓树(2026-08-02 加,dao 整体重写批 1-D)───────────
+// dao.md 帅节:「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起,不从主仓树
+// ——『冻结 main』靠纪律守不住,隔离构建才是彻底解」(用户点名事故后固化 2026-08-01,
+// 基线:同窗真机 wave4 被并发的主仓瞬时编辑触发 dev 重启 3 次,观测建立在污染构建上需重跑)。
+// 那条判据此前只有文字形态,而它的触发时刻**极其确定**:你正要敲那条起 dev server 的命令。
+//
+// 命中形态:段首是热重载型启动命令(pnpm/npm/yarn/bun/npx 的 dev 脚本 · tauri dev · vite
+// 不带子命令 · webpack serve/--watch),**且**那一刻所在目录经 `git rev-parse --git-dir
+// --git-common-dir` 判定为**主仓工作树**(两者相等)。链接 worktree 里两者不等 ⇒ 静默,
+// 那正是正路。目录取 hook 输入的 `cwd`,并按命令里出现过的 `cd <路径>` 段逐段推进
+// (`cd ../repo-wt-x && pnpm dev` 是常见正路形态,不推进 cwd 就会对它误报)。
+//
+// 判不出来时一律不提醒(不是 git 仓 / 没有 git / 目录不存在 / 超时):**漏报一次的代价是
+// 这次没被提醒,误报一次的代价是每次起 dev 都插一段废话然后被无视**——同本 hook 既有的
+// 高精度低召回原则。已知盲区照直写:`pnpm --dir <path> dev` / `npm --prefix` 这类**不靠 cd
+// 换树**的形态不认;`cd -` 无从推进;经 .ps1/.sh 包装脚本间接起的 dev server 不认
+// (如 mousse-cli 的 start-isolated-dev.ps1 —— 顺带一提,那个脚本隔离的是 WebView2 用户数据
+// 目录与 app 数据库,**不隔离工作树**,两件事别混,本类提醒对它依然成立)。
+//
+// 与 ②③ 同为**事后**提醒:PostToolUse 触发时 dev server 已经起来了,提醒买的是「现在换树重起」
+// 或「在交付里写明这次观察建立在共享树上」,不是拦截。
 //
 // 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
 // ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
@@ -71,6 +94,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 // ── ④ 的常量与状态 ─────────────────────────────────────────────────────────
 const ROOT = path.resolve(__dirname, "..", ".."); // 本文件在 <root>/ccswitch/hooks/
@@ -83,13 +107,62 @@ const SEEN_FILE = process.env.DAO_TOOL_NUDGE_STATE ||
 // 超限时保留最近的一半(与 hook-selfcheck 的日志轮转同形态)。
 const SEEN_MAX = 200;
 
+// ── ⑤ 的判据 ───────────────────────────────────────────────────────────────
+// 段首的热重载型启动命令。**刻意逐形态列举而不写通配**:`npm start` / 任意 `pnpm <script>`
+// 这类"可能是 dev server 也可能不是"的形态一概不认——认了就得靠猜,而猜错的代价见头注⑤。
+const DEV_SERVER_RE = new RegExp(
+  "^(?:" +
+    // pnpm dev / npm run dev / yarn dev / bun dev:debug / pnpm run dev:ui
+    "(?:pnpm|npm|yarn|bun|npx)\\s+(?:run\\s+)?dev(?::[\\w.-]+)?\\b" +
+    "|" +
+    // tauri dev(cargo tauri dev / pnpm tauri dev / npm run tauri dev / 裸 tauri dev)
+    "(?:(?:pnpm|npm|yarn|bun|npx|cargo)\\s+(?:run\\s+)?)?tauri\\s+dev\\b" +
+    "|" +
+    // vite 不带子命令或带 dev。`vite build` / `vite preview` 由后面的否定环视排除
+    "(?:(?:pnpm|npm|yarn|bun|npx)\\s+(?:run\\s+)?)?vite(?:\\s+dev)?\\b(?!\\s+[a-z])" +
+    "|" +
+    // webpack serve / webpack ... --watch
+    "(?:(?:pnpm|npm|yarn|bun|npx)\\s+(?:run\\s+)?)?webpack(?:\\s+serve\\b|\\s+[^\\n]*--watch\\b)" +
+  ")"
+);
+// 帮助信息不起进程
+const DEV_SERVER_EXEMPT_RE = /\s(?:--help|-h|--version|-v)\b/;
+
+// Git Bash 的 MSYS 路径(`/d/frank/x`)在 win32 下直接 resolve 会落到错误的盘符(`D:\d\frank\x`),
+// 先翻译成 `D:/frank/x`。本仓的 Bash 工具就是 Git Bash,这是最常见的 cd 参数形态。
+function fromMsys(p) {
+  const m = /^\/([a-zA-Z])\/(.*)$/.exec(String(p || ""));
+  return (process.platform === "win32" && m) ? `${m[1].toUpperCase()}:/${m[2]}` : p;
+}
+
+// 判定「这个目录是不是链接 worktree」。true=专用 worktree · false=主仓工作树 ·
+// null=判不了(不是 git 仓 / 没有 git / 目录不存在 / 超时)——null 一律静默,见头注⑤。
+function isLinkedWorktree(dir) {
+  try {
+    const r = spawnSync("git", ["-C", dir, "rev-parse", "--git-dir", "--git-common-dir"], {
+      encoding: "utf8", timeout: 4000, windowsHide: true,
+    });
+    if (r.status !== 0) return null;
+    const lines = String(r.stdout || "").trim().split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    if (lines.length < 2) return null;
+    // git 在主仓树里返回相对路径(`.git` / `.git`),在链接 worktree 里返回绝对路径且两者不等。
+    // 两侧都 resolve 一次再比,免得把「相对 vs 绝对」的写法差异读成「不同的树」。
+    const norm = (p) => path.normalize(path.resolve(dir, p)).replace(/[\\/]+$/, "").toLowerCase();
+    return norm(lines[0]) !== norm(lines[1]);
+  } catch (_) {
+    return null;
+  }
+}
+
 // ── --selfcheck:把「④ 到底投递得到吗」摆出来 ───────────────────────────────
 // 形态照抄 dao-hard-gates.js 的 selfcheck(逐面核 matcher 覆盖),**判据各自独立**:
 // 那边核的是各道硬闸要拦的工具名(闸数以那边的 GATES 为准,此处刻意不写死——原写「五道闸」,
-// 2026-08-02 加 G6 时才发现这个数字散在三处),这边核的是四类提醒要看见的工具名。
+// 2026-08-02 加 G6 时才发现这个数字散在三处),这边核的是本 hook 各类提醒要看见的工具名
+// (类数同理不写死,以下面的 REQUIRED_COVERAGE 为准——本行原写「四类」,同日加第 ⑤ 类即过期,
+//  与那边的「五道闸」是同一个病的两侧,一并治掉)。
 // 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
 const REQUIRED_COVERAGE = [
-  { face: "①②③ Bash 面(工具选择 / PR 合并链 / 直推主干)", tools: ["Bash"] },
+  { face: "①②③⑤ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离)", tools: ["Bash"] },
   {
     face: "④ 浏览器 MCP 面(GUI 验证细则首调提醒)",
     tools: ["mcp__chrome-devtools__take_screenshot", "mcp__playwright__browser_click"],
@@ -224,11 +297,32 @@ const segments = cmd.split(/;|\n|&&|\|\|?/);
 const hints = new Set();
 const flows = new Set();
 
+// ⑤ 用:逐段推进「此刻在哪个目录」。起点是宿主给的 cwd,`cd <路径>` 段推进它。
+let curDir = String((input && input.cwd) || process.cwd() || ".");
+let devServerDir = null;
+
 for (let seg of segments) {
   seg = seg.trim();
   if (!seg) continue;
+
+  // 段首 `cd <路径>`:推进 ⑤ 的目录游标。`cd`(回 home)与 `cd -`(回上一个)无从推进,
+  // 此时把游标置 null ⇒ 本次放弃 ⑤ 判定。**不保持旧值**:旧值若恰是主仓树就会误报,
+  // 而误报正是这个 hook 最贵的错误方向。绝对路径可以把游标救回来。
+  if (/^cd(\s|$)/.test(seg)) {
+    const m = seg.match(/^cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)/);
+    const raw = fromMsys((m ? m[1] : "").replace(/^["']|["']$/g, ""));
+    if (!raw || raw === "-") curDir = null;
+    else if (path.isAbsolute(raw)) curDir = path.resolve(raw);
+    else if (curDir !== null) curDir = path.resolve(curDir, raw);
+  }
+
   // 去掉前导 `cd <path>` 残留(`cd x && grep` 已被 && 拆开,这里兜底 `cd x; grep` 同段情况)
   const s = seg.replace(/^\s*cd\s+[^\s]+\s+/, "");
+
+  // ── ⑤ 热重载 dev server(段首;记下命中那一刻的目录,git 判定放在循环外做一次)──
+  if (curDir !== null && DEV_SERVER_RE.test(s) && !DEV_SERVER_EXEMPT_RE.test(s)) {
+    devServerDir = curDir;
+  }
 
   // ── grep 搜文件:排除 ripgrep/zgrep/--grep(git);要求段首是 grep 且带文件搜索特征 ──
   if (/^(e?grep|fgrep)\b/.test(s) && !/--grep|\bripgrep\b|\bzgrep\b/.test(s)) {
@@ -263,6 +357,11 @@ for (let seg of segments) {
     );
     if (hitsTrunk) flows.add("push-trunk");
   }
+}
+
+// ⑤ 的 git 判定放在循环外做一次:spawn 一个子进程比正则贵得多,只在真命中过启动命令时才付。
+if (devServerDir !== null && isLinkedWorktree(devServerDir) === false) {
+  flows.add("dev-server-main-tree");
 }
 
 if (hints.size === 0 && flows.size === 0) process.exit(0);
@@ -303,6 +402,22 @@ if (flows.has("push-trunk")) {
     "PR 的价值不是质量门(质量门是测试+dogfood),是给用户留**异步审查锚点 + 独立回滚点**——" +
     "直推进去的改动,用户事后想 revert 时没有一个干净的粒度可撤。" +
     "另:产品型项目可在自己的 `.claude/rules/` 把它强化为强制,那时本条就不是「可直推」了,以项目侧为准。"
+  );
+}
+
+if (flows.has("dev-server-main-tree")) {
+  blocks.push(
+    "【dao 热重载隔离】本次在**主仓工作树**里起了热重载型 dev server(" + devServerDir + ")。" +
+    "dao.md 帅节:「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起,不从主仓树」——" +
+    "那个进程 watch 的就是这棵树,而主仓树是**共享**的:你后续的每一次 Edit、另一路在途官的提交、" +
+    "一次 git pull,都会触发重编译或整页重载,**被观察的状态在你没看见的时候被重建了**,此后所有观察都可疑。" +
+    "「冻结 main」是纪律型约束(实测同一窗内被违反 ≥3 次,违反者含帅自己),**隔离构建才是彻底解**:" +
+    "`git worktree add ../<repo>-wt-<slug>` 起一棵专用树,从那里跑 dev,主仓怎么改都不进它的 watch 面,连 freeze 都不需要。" +
+    "判据一句话:**我的验证进程 watch 的是哪棵树?那棵树此刻只有它一个人写吗?**" +
+    "本提醒是**事后**的(PostToolUse),进程已经起来了 ⇒ 二选一:要么停掉换专用树重起," +
+    "要么在交付里写明「本次观察建立在共享工作树上,可能被并发写入污染」,别让它默认读成干净观测。" +
+    "⚠ 隔离**实例**的脚本(WebView2 user-data-dir / app 数据库那类,如 mousse-cli 的 " +
+    "`start-isolated-dev.ps1`)解的不是这个问题——那是实例隔离,这是**工作树**隔离,两件事。"
   );
 }
 
