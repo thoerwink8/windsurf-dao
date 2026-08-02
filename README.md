@@ -36,7 +36,7 @@
         ↓
 精准注入（hooks：dao-quality 质量门 / dao-meta 守卫 / dao 同步提醒等，按文件类型触发）
         ↓
-技术栈处方（ccswitch/stacks/ · desktop-tauri / remote-ops / frontend / backend）
+技术栈处方（ccswitch/stacks/ · desktop-webview / desktop-tauri / remote-ops / frontend / backend）
 ```
 
 > Windsurf 时代的「9 文件 5 层规则架构」（global_rules/execution/shell/quality…）已随双栈退役归入历史，

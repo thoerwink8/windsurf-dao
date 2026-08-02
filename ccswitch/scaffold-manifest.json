@@ -176,12 +176,14 @@
           { "dir": "src-tauri", "label": "Tauri" },
           { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
           { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "fileContains": { "path": "go.mod", "text": "wailsapp/wails" }, "label": "Wails" },
           { "dep": "electron", "label": "Electron" }
         ]
       },
       "require": { "file": ".claude/rules/desktop-debugging.md" },
-      "msg": "{label} 桌面端项目缺少 .claude/rules/desktop-debugging.md（MCP 工具选择规则）→ 运行 /dao-project-scaffold",
-      "why": "无规则文件 ⇒ AI 每次会话自行判断调试工具 ⇒ 选错 ⇒ 排障循环烧 context（desktop-debug-gate.md「一次 scaffold 省百次重试」）。tauri.conf.json 这一路指纹是 2026-07-27 清单化时补的：原判据只认 src-tauri/ 与 apps/desktop/src-tauri/，而 mousse-cli 的 Tauri 根是 crates/mousse-app/ ⇒ 本仓最主要的 Tauri 项目从未触发过这条检查，该 rule 也就一直缺着。",
+      "template": { "src": "desktop-debugging-rule.md", "dest": ".claude/rules/desktop-debugging.md" },
+      "msg": "{label} 桌面端项目缺少 .claude/rules/desktop-debugging.md（GUI 工具选型指针 + windows-mcp 一票否决 + 本项目起隔离实例的实况）→ 从 canonical `ccswitch/templates/desktop-debugging-rule.md` 派生（复制后只填「三、项目实况」各槽位，前两节整段照抄不改写）",
+      "why": "无规则文件 ⇒ AI 每次会话自行判断调试工具 ⇒ 选错 ⇒ 排障循环烧 context（desktop-debug-gate.md「一次 scaffold 省百次重试」）。tauri.conf.json 这一路指纹是 2026-07-27 清单化时补的：原判据只认 src-tauri/ 与 apps/desktop/src-tauri/，而 mousse-cli 的 Tauri 根是 crates/mousse-app/ ⇒ 本仓最主要的 Tauri 项目从未触发过这条检查，该 rule 也就一直缺着。**2026-08-02 补 Wails 一路指纹 + canonical 模板**：①指纹——三仓审计实测，同一个 WebView2 底座的第二生态（Wails）整个不在这两条桌面机检里，于是本条对它**结构上不可达**；判据取 `go.mod` 含 `wailsapp/wails`（**近似，失败方向选漏报**：go.mod 不在仓根的 monorepo 布局探不到；原提议的 `wails.json` 那一路对首例仓是空转——那个仓没有该文件——故不可用它代替 go.mod 路，两路都加则多一次 findFile 遍历而收益未证，本批只加已实证能命中的这一路）。②模板——本条此前的报文终点是「运行 /dao-project-scaffold」，即**让下一个 AI 现场重新发明一份**，实测后果是某项目的副本停在旧版弱一档（windows-mcp 禁令写成「常规场景禁」，而母版早已是全域一票否决）；canonical 落在 ccswitch/templates/desktop-debugging-rule.md 后，报文自动追加零编辑复制指令，母版先对副本才有对的可抄。",
       "severity": "warn"
     },
     {
@@ -192,6 +194,7 @@
           { "dir": "src-tauri", "label": "Tauri" },
           { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
           { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "fileContains": { "path": "go.mod", "text": "wailsapp/wails" }, "label": "Wails" },
           { "dep": "electron", "label": "Electron" }
         ]
       },
@@ -202,8 +205,8 @@
           { "pkgScript": "dev:debug" }
         ]
       },
-      "msg": "{label} 项目既无隔离启动脚本 scripts/start-isolated-dev.*，也无 dev:debug 脚本 → 参考 stacks/desktop-tauri.md「隔离启动器 · canonical 契约」（隔离启动器是正解，dev:debug 只是最低形态）",
-      "why": "没有调试端口入口就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。**2026-08-01 由单一 pkgScript 改为 anyOf 两态**：本 entry 原先只认 dev:debug，而 dev:debug 的通行形态（写死 9222 + 不给独立 user-data-dir）已被 mousse-cli 实证为不足——9222 的典型占用者就是用户装机实例，且 WebView2 调试端口按 user-data-dir 绑定，共用目录时光换端口号仍会静默失败（2026-07-26 实证）。故隔离启动脚本（`scripts/start-isolated-dev.*`，四条硬要求+三关自验+退出码契约见 stacks/desktop-tauri.md）与 dev:debug 任一存在即算有入口，msg 里点明前者是正解。**为什么不硬性要求隔离启动器**：那是一份千行量级、与项目自身隔离面深度耦合的脚本，对刚起步的桌面项目是过度要求；判据是「有没有调试入口」，形态优劣由 msg 引导而非闸拦。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项（该分支同时也让 glob 那一路在无 package.json 的项目上不必负责）。",
+      "msg": "{label} 项目既无隔离启动脚本 scripts/start-isolated-dev.*，也无 dev:debug 脚本 → 参考 stacks/desktop-webview.md「隔离启动器 · canonical 契约」（隔离启动器是正解，dev:debug 只是最低形态，且**禁止写死 9222**）",
+      "why": "没有调试端口入口就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。**2026-08-01 由单一 pkgScript 改为 anyOf 两态**：本 entry 原先只认 dev:debug，而 dev:debug 的通行形态（写死 9222 + 不给独立 user-data-dir）已被 mousse-cli 实证为不足——9222 的典型占用者就是用户装机实例，且 WebView2 调试端口按 user-data-dir 绑定，共用目录时光换端口号仍会静默失败（2026-07-26 实证）。故隔离启动脚本（`scripts/start-isolated-dev.*`，四条硬要求+三关自验+退出码契约见 stacks/desktop-webview.md）与 dev:debug 任一存在即算有入口，msg 里点明前者是正解。**2026-08-02 两处改动**：①指纹补 Wails 一路（`go.mod` 含 `wailsapp/wails`），理由与近似边界同上一条 desktop-debugging-rule 的 why，此处不复述；②指针从 stacks/desktop-tauri.md 改指 stacks/desktop-webview.md——那两节 2026-08-02 提级到框架无关层，因为调试端口是 **WebView2 运行时**读的环境变量、不是 Tauri 读的，锁在框架文件名下正是 Wails 那一路够不着它的成因之一。**注意本条对纯 Go 的 Wails 仓多半不报**：require 第一路 `not(file package.json)` 会放行（Wails 的 package.json 通常在 frontend/ 而非仓根）——这是刻意的漏报侧，纯 Go/Rust 桌面项目没有 npm 脚本面，不该被报缺项；对 Wails 真正生效的是上一条 desktop-debugging-rule。**为什么不硬性要求隔离启动器**：那是一份千行量级、与项目自身隔离面深度耦合的脚本，对刚起步的桌面项目是过度要求；判据是「有没有调试入口」，形态优劣由 msg 引导而非闸拦。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项（该分支同时也让 glob 那一路在无 package.json 的项目上不必负责）。",
       "severity": "warn"
     },
     {

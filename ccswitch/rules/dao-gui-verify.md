@@ -26,8 +26,8 @@
 应用有 WebView 层吗？（Tauri / Electron / CEF / WebView2）
 ├─ 是 → 远程调试端口开了吗？
 │   ├─ 是 → chrome-devtools MCP（直连 WebView，DOM 级精度）   ← 首选
-│   └─ 否 → 提示用户设环境变量开端口（见 dao.md Shell 节「WebView2 远程调试」条目），
-│           再用 chrome-devtools
+│   └─ 否 → 开端口（各框架怎么开、为什么禁止写死 9222、起完怎么验端口归属：
+│           见 `stacks/desktop-webview.md` §一），再用 chrome-devtools
 ├─ 否（纯 Web 应用 / Vite dev server）
 │   └─ playwright MCP（自管浏览器，E2E 流程最佳）              ← Web 首选
 └─ 否（原生 Win32 / WPF / 无 Web 层）
@@ -36,8 +36,10 @@
        不得为此复活 windows-mcp
 ```
 
-**工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（含分层测试策略与直连原理），
-选型只走上面这棵树。`stacks/` 的根路径约定见 dao.md 动节「工具能力对比」那一段
+**工具能力对比**：细节矩阵已下沉 `stacks/desktop-tauri.md`（含分层测试策略），
+选型只走上面这棵树。**直连原理与端口归属判据 2026-08-02 提级到 `stacks/desktop-webview.md`**
+（那两节与框架无关——调试端口是 WebView2 运行时读的环境变量，不是 Tauri 读的）。
+`stacks/` 的根路径约定见 dao.md 动节「工具能力对比」那一段
 （`D:/frank/windsurf-dao/ccswitch/stacks/`，跨项目会话中不与目标项目自身的 `stacks/` 混淆）。
 
 ## 二、防断路规则
