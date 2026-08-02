@@ -9,7 +9,8 @@
 |------|--------|----------|
 | `frontend-nextjs.md` | Next.js + shadcn + Tailwind | 需要前端 + SSR/SEO/文件路由诉求 |
 | `frontend-react-vite.md` | React 19 + Vite + zustand + Tailwind | 工具型 SPA/内部应用/桌面 WebView（kit 默认前端） |
-| `desktop-tauri.md` | Tauri 2 + WebView2 调试 | 桌面端开发/调试/GUI 验证 |
+| `desktop-webview.md` | **框架无关**：WebView 远程调试端口归属 + 隔离启动器 canonical 契约 | 任何带 WebView 层的桌面项目（Tauri / **Wails** / Electron / CEF） |
+| `desktop-tauri.md` | Tauri 2 特有面（两进程与 HMR、custom-protocol、GUI 工具能力对比、分层测试） | 桌面端开发/调试/GUI 验证（**先读 desktop-webview.md**） |
 | `frontend-ui-testing.md` | 逻辑/组件/视觉回归/E2E 四层测试 | 前端项目建立或补齐 UI 测试策略 |
 | `backend-ts.md` | Hono + Drizzle + pnpm monorepo | 需要后端（**默认**，AI-agent-first 单语言链） |
 | `backend-go.md` | go mod + net/http(chi) + sqlc | 高并发/CPU 密集/系统级/单二进制分发（任一信号即切） |
