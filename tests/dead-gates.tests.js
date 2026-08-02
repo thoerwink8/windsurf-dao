@@ -18,6 +18,8 @@
 //   live.json        —— 裸 settings 形态（绝对路径，与真实 live 同构）
 //   snap/settings.json —— cc-switch DB 导出形态（rows[].value 里嵌 JSON 字符串 + 占位符）
 //   hooks/           —— 被指向的脚本本体
+//   providers-db/*.db —— ⑬ 专用的**临时 sqlite 库**（issue #57 的 providers 层），
+//                        从不碰真库；真库那一侧由 ⑪/⑪.5 的只读实跑 + mtime 断言覆盖
 // 两层刻意用不同的路径写法（绝对 vs `${PROJECT_ROOT}` 占位符），顺带钉住占位符还原。
 //
 // ── 最后一例是真实语料自跑，刻意留着 ─────────────────────────────────────────
@@ -87,19 +89,42 @@ function mkCase(name, opts) {
 function abs(dir, name) { return path.join(dir, "hooks", name).replace(/\\/g, "/"); }
 const PH = "$" + "{PROJECT_ROOT}";   // 普通字符串里不会被插值，写成拼接免去读者的怀疑
 
+const SUMMARY_RE = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+) providers=(\d+) providerscan=(ok|off|uncheckable)/;
+function parseSummary(out) {
+  const m = SUMMARY_RE.exec(String(out));
+  return m ? {
+    exit: Number(m[1]), hooks: Number(m[2]), dead: Number(m[3]), orphan: Number(m[4]),
+    self: m[5], unver: Number(m[6]), providers: Number(m[7]), pscan: m[8],
+  } : null;
+}
+
+// ① ~ ⑩ 各例测的是 live + 快照两层的判据，故一律带 `--no-providers`：把真实 cc-switch DB
+// 拉进合成夹具，会让 hooks= 与普查数随本机 provider 数漂移，那些断言当场失去意义。
+// providers 层自己的正控/负控在 ⑬（用一个**临时 fixture DB**，从不碰真库）。
 function run(dir, extraArgs) {
   const args = [SCRIPT,
     "--live", path.join(dir, "live.json"),
     "--snapshot-dir", path.join(dir, "snap"),
     "--hooks-dir", path.join(dir, "hooks"),
-    "--project-root", dir].concat(extraArgs || []);
+    "--project-root", dir,
+    "--no-providers"].concat(extraArgs || []);
   const r = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 });
   const out = String(r.stdout || "");
-  const m = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+)/.exec(out);
-  return {
-    code: r.status, out, stderr: String(r.stderr || ""),
-    sum: m ? { exit: Number(m[1]), hooks: Number(m[2]), dead: Number(m[3]), orphan: Number(m[4]), self: m[5], unver: Number(m[6]) } : null,
-  };
+  return { code: r.status, out, stderr: String(r.stderr || ""), sum: parseSummary(out) };
+}
+
+// providers 层专用跑法：live/快照两层指向一个**空壳**夹具（零闸零普查），
+// 让断言里的每一个数字都只可能来自 providers 层。
+function runProviders(dir, dbFile, extraArgs) {
+  const args = [SCRIPT,
+    "--live", path.join(dir, "live.json"),
+    "--snapshot-dir", path.join(dir, "snap"),
+    "--hooks-dir", path.join(dir, "hooks"),
+    "--project-root", dir,
+    "--db-file", dbFile].concat(extraArgs || []);
+  const r = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 });
+  const out = String(r.stdout || "");
+  return { code: r.status, out, stderr: String(r.stderr || ""), sum: parseSummary(out) };
 }
 
 rm(TMP);
@@ -334,10 +359,9 @@ console.log("\n──── ⑪ 真实语料自跑（合成夹具证明不了它
 {
   const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 120000, cwd: REPO });
   const out = String(r.stdout || "");
-  const m = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+)/.exec(out);
-  check("真仓自跑打得出末行", m !== null, out.slice(-400) + " [stderr] " + String(r.stderr || "").slice(0, 300));
-  if (m) {
-    const sum = { exit: +m[1], hooks: +m[2], dead: +m[3], orphan: +m[4], self: m[5] };
+  const sum = parseSummary(out);
+  check("真仓自跑打得出末行", sum !== null, out.slice(-400) + " [stderr] " + String(r.stderr || "").slice(0, 300));
+  if (sum) {
     console.log("        实况：" + JSON.stringify(sum));
     if (fs.existsSync(LIVE_REAL)) {
       check("真实 live settings 在 → 必须扫到闸（零样本就是塌陷）", sum.hooks > 0, JSON.stringify(sum));
@@ -347,6 +371,42 @@ console.log("\n──── ⑪ 真实语料自跑（合成夹具证明不了它
       // 不写「跳过」——那是静默失效。没有 live 文件时，正确行为是报「没查成」
       check("无 live settings 的机器上 → 报 live-unreadable 且红", sum.self === "fail" && sum.exit === 1 && /live-unreadable/.test(out), JSON.stringify(sum));
     }
+    // ── providers 层的**负控就在这里**：真库、只读、实跑 ──────────────────────
+    // 合成夹具证不了「它读得动真的 cc-switch DB」。这一段两种结局都得有断言，
+    // 不许写「跳过」：有库就必须真读到行，没库就必须报 uncheckable 且 exit=2。
+    if (sum.pscan === "ok") {
+      check("真库负控：providers 层读到行且逐行扫过（零行会被判 uncheckable，不会走到这里）",
+        sum.providers > 0, JSON.stringify(sum));
+      check("真库负控：providers 层零死闸、退出码 0（活的 provider 钩子不许被判死）",
+        sum.dead === 0 && sum.exit === 0 && r.status === 0, JSON.stringify(sum) + "\n" + out.slice(-1200));
+      check("真库负控：报文点名 providers 层并打印 -readonly（只读是结构性的，不是纪律性的）",
+        /providers 层：cc-switch DB 共 \d+ 行/.test(out) && /-readonly 打开/.test(out), out.slice(0, 1400));
+      check("真库负控：不带 hooks 的行也在扫描面里（**不按 app_type 收窄**，收窄就是白付一个会过期的判据）",
+        /行零闸零普查/.test(out) || sum.providers > 0, out.slice(0, 1400));
+    } else {
+      check("本机没有可读的 cc-switch DB → 必须报 uncheckable + exit 2（不许冒充绿）",
+        sum.pscan === "uncheckable" && sum.exit === 2 && r.status === 2 && /本次没查成/.test(out),
+        JSON.stringify(sum) + "\n" + out.slice(-900));
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑪.5 真库只读性：跑完 mtime/size 不许变（结构性只读的实测半边）────");
+// 「我们的 SQL 里没有 UPDATE」是纪律性只读，证不了什么。这一条测的是结果：
+// 真库在一次完整运行前后**逐字节没动**。它抓不到「写了又改回来」，故只是必要条件——
+// 充分条件由 `runSql(..., readonly:true)` 让 sqlite3 自己拒绝写入来提供（判据不是这条断言）。
+{
+  const DB_REAL = path.join(process.env.USERPROFILE || process.env.HOME || "", ".cc-switch", "cc-switch.db");
+  if (fs.existsSync(DB_REAL)) {
+    const before = fs.statSync(DB_REAL);
+    const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 120000, cwd: REPO });
+    const after = fs.statSync(DB_REAL);
+    check("真库 mtime 不变", before.mtimeMs === after.mtimeMs, before.mtimeMs + " → " + after.mtimeMs);
+    check("真库 size 不变", before.size === after.size, before.size + " → " + after.size);
+    check("（顺带）这一跑仍打得出末行", parseSummary(String(r.stdout || "")) !== null, String(r.stdout || "").slice(-300));
+  } else {
+    check("本机无 cc-switch DB → 上面 ⑪ 已断言 uncheckable 路径，此处如实记零样本", true, "DB 不存在：" + DB_REAL);
   }
 }
 
@@ -417,7 +477,7 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
       'process.stdout.write("✗ 死闸 2 条 —— 它们此刻在宿主里静默 no-op：\\n");',
       'process.stdout.write("    · [live hooks.SessionStart[startup]] 脚本不存在：D:/fake/dao-stub-ghost.js（归属：dao）\\n");',
       'process.stdout.write("ⓘ 孤儿 hook：0\\n");',
-      'process.stdout.write("DEAD_GATES_SUMMARY exit=1 hooks=5 dead=2 orphan=0 selfcheck=ok unverifiable=0\\n");',
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=1 hooks=5 dead=2 orphan=0 selfcheck=ok unverifiable=0 providers=13 providerscan=ok\\n");',
       "process.exit(1);",
     ].join("\n");
     const r = runHook(mkFakeMeta("red", stub));
@@ -426,12 +486,25 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
     check("孤儿那一节不被当成红报明细混进来", !/孤儿 hook：0/.test(r.ctx), r.ctx.slice(0, 500));
   }
 
+  // ④.5 红优先于「没查成」：既有死闸、providers 又没查成时，报的必须是红不是 ⚠
+  {
+    const stub = [
+      'process.stdout.write("✗ 死闸 1 条 —— 静默 no-op：\\n");',
+      'process.stdout.write("    · [live hooks.SessionStart[startup]] 脚本不存在：D:/fake/dao-both-ghost.js（归属：dao）\\n");',
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=1 hooks=5 dead=1 orphan=0 selfcheck=ok unverifiable=0 providers=0 providerscan=uncheckable\\n");',
+      "process.exit(1);",
+    ].join("\n");
+    const r = runHook(mkFakeMeta("red-and-uncheckable", stub));
+    check("死闸 + providers 没查成 → 报红（真发现优先于「有一层没查成」）",
+      /死闸检测 FAIL/.test(r.ctx) && /dao-both-ghost\.js/.test(r.ctx), r.ctx.slice(0, 500));
+  }
+
   // ⑤ 自检半边失败（dead=0 但 exit=1）→ 措辞必须说「零死闸不可信」，不能说「有 0 条死闸」
   {
     const stub = [
       'process.stdout.write("✗ 自检半边失败 1 条：\\n");',
       'process.stdout.write("    · zero-sample：普查数到 7 条而结构化遍历一条都没拿到\\n");',
-      'process.stdout.write("DEAD_GATES_SUMMARY exit=1 hooks=0 dead=0 orphan=0 selfcheck=fail unverifiable=0\\n");',
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=1 hooks=0 dead=0 orphan=0 selfcheck=fail unverifiable=0 providers=0 providerscan=ok\\n");',
       "process.exit(1);",
     ].join("\n");
     const r = runHook(mkFakeMeta("selffail", stub));
@@ -441,14 +514,244 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
   // ⑥ 绿 + 待办：孤儿/无法核验必须浮到 SessionStart，别只藏在 CLI 正文里
   {
     const stub = [
-      'process.stdout.write("DEAD_GATES_SUMMARY exit=0 hooks=9 dead=0 orphan=2 selfcheck=ok unverifiable=3\\n");',
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=0 hooks=9 dead=0 orphan=2 selfcheck=ok unverifiable=3 providers=13 providerscan=ok\\n");',
     ].join("\n");
     const r = runHook(mkFakeMeta("todo", stub));
     check("绿 + 孤儿 2 + 无法核验 3 → 一行提示带出两个数",
       /死闸检测绿/.test(r.ctx) && /2 个 hook 文件/.test(r.ctx) && /3 条命令串无法核验/.test(r.ctx), r.ctx.slice(0, 500));
     check("提示里明说「无法核验 != 核验通过」", /不等于核验通过/.test(r.ctx), r.ctx.slice(0, 500));
   }
+
+  // ⑦ exit 2（providers 层没查成）→ 必须是 ⚠ 且明说「这不是零死闸」，不许说成绿、也不许说成自检失败
+  {
+    const stub = [
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=0 hooks=9 dead=0 orphan=0 selfcheck=ok unverifiable=0 providers=0 providerscan=uncheckable\\n");',
+      "process.exit(2);",
+    ].join("\n");
+    // 末行 exit=0 而真退出码 2 —— 先钉住「两者恒等」这条契约本身
+    const r0 = runHook(mkFakeMeta("exit2-mismatch", stub));
+    check("末行 exit= 与真退出码不一致 → 报契约被改坏（不许取一个信一个）",
+      /真退出码却是 2/.test(r0.ctx), r0.ctx.slice(0, 500));
+
+    const stub2 = [
+      'process.stdout.write("  ⚠ providers 层：**本次没查成**\\n");',
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=2 hooks=9 dead=0 orphan=0 selfcheck=ok unverifiable=0 providers=0 providerscan=uncheckable\\n");',
+      "process.exit(2);",
+    ].join("\n");
+    const r = runHook(mkFakeMeta("exit2", stub2));
+    check("providers 没查成 → ⚠ 且明说不是「零死闸」", /没查成/.test(r.ctx) && /这不是「零死闸」/.test(r.ctx), r.ctx.slice(0, 500));
+    check("没查成不许被措辞成绿", !/死闸检测绿/.test(r.ctx), r.ctx.slice(0, 500));
+    check("没查成不许被误报成自检半边失败（两种病、两种处方）", !/自检半边失败/.test(r.ctx), r.ctx.slice(0, 500));
+  }
+
+  // ⑧ providerscan=off：本 hook 从不传 --no-providers，所以看到 off 就说明调用点被改过
+  {
+    const stub = [
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=0 hooks=9 dead=0 orphan=0 selfcheck=ok unverifiable=0 providers=0 providerscan=off\\n");',
+    ].join("\n");
+    const r = runHook(mkFakeMeta("pscan-off", stub));
+    check("providerscan=off → ⚠ 并点出「谁改了调用点」（显式缩面与环境没给成是两种病）",
+      /显式关掉/.test(r.ctx) && /改了调用点/.test(r.ctx), r.ctx.slice(0, 500));
+  }
+
+  // ⑨ 旧版末行（无 providers 两字段）→ 必须报「契约被改坏」，不许当它没有就放过
+  //    这防的是「脚本比消费方旧」被静默读成「providers 层跑过了」。
+  {
+    const stub = [
+      'process.stdout.write("DEAD_GATES_SUMMARY exit=0 hooks=9 dead=0 orphan=0 selfcheck=ok unverifiable=0\\n");',
+    ].join("\n");
+    const r = runHook(mkFakeMeta("old-contract", stub));
+    check("缺 providers 字段的旧末行 → 报契约被改坏（不静默降级）",
+      /没拿到 DEAD_GATES_SUMMARY/.test(r.ctx), r.ctx.slice(0, 500));
+  }
 }
 
-console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
-process.exit(fail ? 1 : 0);
+// ══════════════════════════════════════════════════════════════
+// ⑬ providers 层（cc-switch DB）—— 正控/负控/没查成三态
+//
+// 为什么用**真的 sqlite fixture DB** 而不是内存对象：这一层新增的代码里，一半是判据
+// （谁是死闸），另一半是**读取路径**（sqlite3 spawn / -readonly / -json 解析）。
+// 拿内存对象直测只证得了前一半，而 #57 之前那个洞恰恰不在判据里，在「这一层压根没被读」。
+// fixture 库落 `_tmp/`（已 gitignore），**从不碰真库**——真库那一侧由 ⑪/⑪.5 只读实跑覆盖。
+async function providersSection() {
+  console.log("\n──── ⑬ providers 层：cc-switch DB 里的死闸（issue #57）────");
+
+  let sqlite = null;
+  try {
+    const mod = await import("../config-sync/lib/sqlite.mjs");
+    sqlite = mod.findSqlite3();
+  } catch (e) {
+    sqlite = null;
+    console.log("        ⚠ 本机找不到 sqlite3（" + (e && e.message ? e.message.split("\n")[0] : e) +
+      "）⇒ **fixture 正控本轮未跑**，下面只断言「没查成」那条降级路径。");
+  }
+
+  function lit(v) { return "'" + String(v == null ? "" : v).split("'").join("''") + "'"; }
+  function mkDb(name, rows, opts) {
+    const file = path.join(TMP, "providers-db", name + ".db");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    try { fs.rmSync(file, { force: true }); } catch (_) {}
+    const stmts = [];
+    if (!(opts && opts.noTable)) {
+      stmts.push('CREATE TABLE providers ("id" TEXT PRIMARY KEY, "name" TEXT, "app_type" TEXT, "settings_config" TEXT);');
+    } else {
+      stmts.push('CREATE TABLE "somethingelse" ("id" TEXT PRIMARY KEY);');
+    }
+    for (const r of rows || []) {
+      stmts.push("INSERT INTO providers (\"id\",\"name\",\"app_type\",\"settings_config\") VALUES (" +
+        [lit(r.id), lit(r.name), lit(r.app_type), lit(r.settings_config)].join(", ") + ");");
+    }
+    const res = spawnSync(sqlite, [file], { input: stmts.join("\n"), encoding: "utf8", timeout: 60000 });
+    if (res.status !== 0) throw new Error("fixture DB 建不起来（exit " + res.status + "）：" + String(res.stderr || "").slice(0, 300));
+    return file;
+  }
+  // provider 的 settings_config 是**裸 settings 形态**（不是快照那种 rows[].value 嵌套）
+  function pcfg(commands, extra) {
+    const s = { hooks: { SessionStart: [{ matcher: "startup", hooks: commands.map((c) => ({ type: "command", command: c, timeout: 5 })) }] } };
+    return JSON.stringify(Object.assign(s, extra || {}));
+  }
+
+  // live/快照两层用空壳夹具：下面每个数字都只可能来自 providers 层
+  const shell = mkCase("providers-shell", { files: { "dao-alpha.js": VALID_CJS, "dao-provonly.js": VALID_CJS } });
+  const ALIVE = abs(shell, "dao-alpha.js");
+  const GHOST = abs(shell, "dao-provghost.js");     // 不存在
+  const PROVONLY = abs(shell, "dao-provonly.js");   // 只被某个 provider 注册
+
+  if (sqlite) {
+    // ── 正控：某个 provider 的钩子指向已删脚本 ⇒ 红且指名（#57 关闭条件点名要的那条）──
+    {
+      const db = mkDb("dead-hook", [
+        { id: "p-ok", name: "Alpha", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"']) },
+        { id: "p-bad", name: "Beta", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"', 'node "' + GHOST + '"']) },
+      ]);
+      const r = runProviders(shell, db);
+      check("正控：provider 钩子指向已删脚本 → exit 1", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+      check("正控：dead=1（活的那条不被牵连）", r.sum && r.sum.dead === 1, JSON.stringify(r.sum));
+      check("正控：指名到具体脚本（只报个数字等于没报）", /dao-provghost\.js/.test(r.out), r.out.slice(-800));
+      check("正控：指名到具体是哪个 provider（切到它才会死，人得知道切哪个）",
+        /provider\/Beta \[p-bad\]/.test(r.out), r.out.slice(-800));
+      check("正控：说清死法是「脚本不存在」", /脚本不存在/.test(r.out), r.out.slice(-800));
+      check("正控：自检仍 ok（这是真发现，不是扫描面塌）", r.sum && r.sum.self === "ok", JSON.stringify(r.sum));
+      check("正控：末行 providers=2 providerscan=ok", r.sum && r.sum.providers === 2 && r.sum.pscan === "ok", JSON.stringify(r.sum));
+    }
+
+    // ── 负控：全活 ⇒ 不许判红（护栏两侧的代价都是真代价）──
+    {
+      const db = mkDb("all-alive", [
+        { id: "p-ok", name: "Alpha", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"']) },
+        { id: "p-ok2", name: "Gamma", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '" x'], { statusLine: { type: "command", command: "node " + ALIVE } }) },
+      ]);
+      const r = runProviders(shell, db);
+      check("负控：provider 钩子全活 → exit 0 / dead=0", r.code === 0 && r.sum && r.sum.exit === 0 && r.sum.dead === 0, JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+      check("负控：三条都被扫到（2 个 hook + 1 个 statusLine，口径与前两层一致）", r.sum && r.sum.hooks === 3, JSON.stringify(r.sum));
+      check("负控：自检 ok（不恒红）", r.sum && r.sum.self === "ok", JSON.stringify(r.sum));
+      check("负控：报文里「零死闸」这句话声明覆盖到三层", /live \+ 快照 \+ providers 三层/.test(r.out), r.out.slice(-900));
+    }
+
+    // ── 不按 app_type 收窄：非 claude 行里的死钩子照样报（与 settings-drift 的刻意分工）──
+    {
+      const db = mkDb("non-claude-dead", [
+        { id: "p-ok", name: "Alpha", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"']) },
+        { id: "p-x", name: "Weird", app_type: "opencode", settings_config: pcfg(['node "' + GHOST + '"']) },
+        { id: "p-none", name: "NoHooks", app_type: "codex", settings_config: JSON.stringify({ auth: {}, config: "model = 'x'" }) },
+      ]);
+      const r = runProviders(shell, db);
+      check("非 claude 的 provider 里的死钩子照样红（收窄 app_type 会漏掉它）",
+        r.code === 1 && /dao-provghost\.js/.test(r.out) && /provider\/Weird/.test(r.out), JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
+      check("不带 hooks 的行贡献 0 噪音，但仍在扫描面里点名（范围没被收窄要看得见）",
+        r.sum && r.sum.providers === 3 && /NoHooks/.test(r.out), JSON.stringify(r.sum) + "\n" + r.out.slice(0, 1200));
+    }
+
+    // ── provider 的 permissions 面也过同一道判据 ──
+    // 今天真实数据里这类条目是 0 条，**正因为是 0 条才必须有夹具**：真数据上零命中
+    // 与「这一面根本没接上」输出完全一样（本脚本自己治的就是这个病）。
+    {
+      const db = mkDb("provider-perms", [
+        { id: "p-perm", name: "Perm", app_type: "claude", settings_config: pcfg([], {
+          permissions: { deny: ["Bash(grep:*)", "Bash(node " + GHOST + ":*)"], allow: ["Read", "Bash(node " + ALIVE + ":*)"] } }) },
+      ]);
+      const r = runProviders(shell, db);
+      check("provider 的 permissions.deny 指向已删脚本 → 红且点名",
+        r.code === 1 && r.sum && r.sum.dead === 1 && /dao-provghost\.js/.test(r.out) && /permissions\.deny/.test(r.out),
+        JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
+      check("provider 的 permissions.allow 指向存在脚本 → 不误伤；无路径条目也不误伤",
+        r.sum && r.sum.dead === 1, JSON.stringify(r.sum));
+      check("permissions 条目不掺进 hooks 计数（那个数与普查配对）", r.sum && r.sum.hooks === 0, JSON.stringify(r.sum));
+    }
+
+    // ── 孤儿反查：只在 provider 层注册的 hook 不许被误报成孤儿 ──
+    // 「核不了/没注册」是两种病两种处方；providers 是真下发源，在那里注册就是注册了。
+    {
+      const db = mkDb("provider-only-reg", [
+        { id: "p-ok", name: "Alpha", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"', 'node "' + PROVONLY + '"']) },
+      ]);
+      const r = runProviders(shell, db);
+      check("只被 provider 注册的 hook 不算孤儿（orphan=0）", r.sum && r.sum.orphan === 0, JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+      // 对照组：live/快照两层在这个夹具里**一条都没注册**，故关掉 providers 后两个文件都成孤儿。
+      // 这一条要钉的不是「1 个」这个数，而是「orphan 从 0 变成非 0」这个**差**——
+      // 那个差就是 providers 层的注册面，它证明上一条 orphan=0 不是白捡的。
+      check("（对照）关掉 providers 层 → 这两个文件都成孤儿，差额即 providers 层的注册面",
+        (() => { const r2 = run(shell); return r2.sum && r2.sum.orphan === 2 && /dao-provonly\.js/.test(r2.out); })(), "对照组");
+    }
+
+    // ── 自检半边：provider 的 settings_config 解析不动 ⇒ 普查看得见、遍历看不见 ⇒ 必须红 ──
+    {
+      const db = mkDb("selfcheck-provider", [
+        { id: "p-ok", name: "Alpha", app_type: "claude", settings_config: pcfg(['node "' + ALIVE + '"']) },
+        { id: "p-broken", name: "Broken", app_type: "claude", settings_config: '{"hooks": [{"type": "command", "command": "node x.js"' },
+      ]);
+      const r = runProviders(shell, db);
+      check("provider 配置解析不动但普查数得到条目 → selfcheck=fail + exit 1",
+        r.code === 1 && r.sum && r.sum.self === "fail" && r.sum.exit === 1, JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
+      check("报文点名是哪个 provider 塌的", /provider\/Broken/.test(r.out), r.out.slice(-900));
+      check("此时 dead=0 而 exit=1 —— 两种红在机器通道上分得开", r.sum && r.sum.dead === 0, JSON.stringify(r.sum));
+    }
+
+    // ── 零行：**不是**「全都活着」 ──
+    {
+      const db = mkDb("zero-rows", []);
+      const r = runProviders(shell, db);
+      check("providers 表零行 → exit 2 / providerscan=uncheckable（零样本不冒充绿）",
+        r.code === 2 && r.sum && r.sum.exit === 2 && r.sum.pscan === "uncheckable", JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+      check("零行时明说「不等于零死闸」", /不等于/.test(r.out) && /没查成/.test(r.out), r.out.slice(-900));
+      check("零行时那句「零死闸」自己收窄射程到两层", /live \+ 快照两层/.test(r.out) && /这一句不覆盖它/.test(r.out), r.out.slice(-900));
+    }
+
+    // ── 没有 providers 表（DB 在，但不是 cc-switch 的库 / schema 变了）──
+    {
+      const db = mkDb("no-table", [], { noTable: true });
+      const r = runProviders(shell, db);
+      check("DB 在但没有 providers 表 → exit 2 而不是崩、也不是绿",
+        r.code === 2 && r.sum && r.sum.pscan === "uncheckable", JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+      check("原因原文照登（不做措辞转译，转译只会丢信息）", /no such table/i.test(r.out), r.out.slice(-800));
+    }
+  }
+
+  // ── DB 不在（这条不需要 sqlite3，任何机器上都跑）──
+  {
+    const r = runProviders(shell, path.join(TMP, "providers-db", "does-not-exist.db"));
+    check("DB 文件不在 → exit 2 / uncheckable（**不等于零死闸**）",
+      r.code === 2 && r.sum && r.sum.exit === 2 && r.sum.pscan === "uncheckable", JSON.stringify(r.sum) + "\n" + r.out.slice(-700));
+    check("报文给出 DB 路径与原因（人要拿这行去查是哪一种）",
+      /本次没查成/.test(r.out) && /does-not-exist\.db/.test(r.out), r.out.slice(-800));
+  }
+
+  // ── --no-providers：显式缩面，与「没查成」必须分得开 ──
+  {
+    const r = run(shell);
+    check("--no-providers → providerscan=off 且退出码不受影响（显式缩面 != 环境没给成）",
+      r.code === 0 && r.sum && r.sum.pscan === "off" && r.sum.exit === 0, JSON.stringify(r.sum));
+    check("off 时报文明说「不是查过了没事」", /被 --no-providers 显式关掉/.test(r.out) && /不是「查过了没事」/.test(r.out), r.out.slice(0, 1200));
+  }
+}
+
+providersSection().then(() => {
+  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
+  process.exit(fail ? 1 : 0);
+}).catch((e) => {
+  // 异常不许被读成「这一节没有断言」：显式记一条 FAIL 再退出
+  fail++;
+  console.log("  FAIL  ⑬ providers 段抛异常  ->  " + (e && e.stack ? e.stack : e));
+  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
+  process.exit(1);
+});
