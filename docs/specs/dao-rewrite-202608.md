@@ -19,7 +19,7 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 | 头部+八句根基 | ~950B | **八句原样保留**（经文→工程行为的操作化翻译层，persona 经文替代不了；双份消解=删各节散落的经文引言 ~400B，不删八句） |
 | 动·三才之机 | ~2.0KB | 天觉七问一行；目的否/位分否/归属层判据句；完成流水线骨架；**设计同步门控整段删**（→Stop hook）；打磨自曝/微复盘压判据句 |
 | 续力 | ~1.2KB | 每答必续+两豁免+「除 stop:true 每轮必有心跳」（每轮用）；「说人话」判据句；选项细则→新档 dao-askuser.md |
-| 知识归位 | ~1.3KB | 层级判据/dao 先行/三选一各压判据句；共性 rule 备案整段删（manifest+scaffold-check 已承载） |
+| 知识归位 | ~1.3KB | 层级判据/dao 先行/三选一各压判据句；共性 rule 备案整段删（manifest+scaffold-check 已承载）；**「dao 先行/归属层/体检落点」三条的统一判据句用用户原话为蓝本（2026-08-02）：「自下而上，同级项目无感知；自上而下，每个项目皆改造」——同级无横向通道，dao 层是唯一共享面** |
 | 谋/品/路由 | ~1.3KB | 三管线三选一；品心法一句+存根；路由四条压三行 |
 | 帅 | ~2.2KB | 三职/对话席/亲历上限（压缩版，每轮用）/⚔️模板（槽位）；派单/拍板批/长窗三存根各 200B；长窗留守四句压 450B；合验证/越权/资源独占/热重载/对抗前置**迁 dao-dispatch.md**，各留一句判据 |
 | 器·命令表 | ~800B | 8 行精简表；附注迁各 skill description（本就每轮注入，零新增成本） |
@@ -54,7 +54,7 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 - **批 1 投递基建先行（正文一字不动=安全网）**：三个新 hook + G6 + scoped 档 + dao-askuser.md + PreToolUse[Task]/[AskUserQuestion] additionalContext 能力实测；每 hook selfcheck+正负控实弹+check-dead-gates 扩面。回退=撤注册零影响
 - **批 2 台账机器面**：slug 上正文、clause-ledger.json、双解析器 v2 双轨对账全绿后才许删旧元字段
 - **批 3 dao.md 重写**：先立后破（R 类先落 rules/档案再删正文）；10KB 硬闸验收；`check-dao-refs.mjs`（一次性引用面扫描）+ reconcile
-- **批 4 用户级重写+闸值落定**：deny 核对前置；LIMIT_BYTES 写用户拍板值
+- **批 4 用户级重写+闸值落定**：deny 核对前置；LIMIT_BYTES 写用户拍板值；**「每个项目自动检肥」通用检查项**（用户拍板 2026-08-02，治「靠提醒会失忆」）：scaffold-manifest 加 universal 条目+字节/token 求值器——任何项目的常驻注入面（项目级 CLAUDE.md + .claude/rules 无 paths 档）超基准 → SessionStart 报一行+瘦身方子指针；基准值以 dao 重写后的最佳形态为参照（呈批数字）；**边界：检测全自动，改造须用户点头**（删什么留什么是判断档）；**体检清单的自我生长机制**（用户点名 2026-08-02 第二笔）：①条款层——重写后 dao.md「归属层」判据补「发现可机器化检查的跨项目问题形态 → 默认动作=提议进 scaffold-manifest 体检清单（附条目草案）呈拍板，单次 issue 只是补充」（首证：mousse CLAUDE.md 超标被帅处理成单仓待办而非清单候选，用户当场纠正反应层级）②机器兜底——tool-nudge 在 `gh issue create` 后轻提醒「这问题所有项目都会有吗？是→提议进体检清单」，每会话至多一次；③新检查项的准入仍归用户拍板（改所有项目的开工检查面）
 - **批 5 全量自测+双通道退役裁决**（依审计数据呈用户，不预拍）
 
 ## 自测方案（「功能不丢」的操作化验收）
@@ -85,6 +85,16 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 - `ccswitch/lib/clause-parser.mjs` + `scripts/check-clauses-structure.ps1`（契约 v2 双改）
 - 新档：`ccswitch/clause-ledger.json` / `ccswitch/rules/dao-askuser.md` / `ccswitch/rules/scoped/dao-scope-legislation.md`
 - `C:/Users/Administrator/.claude/CLAUDE.md`（用户级重写）
+
+## 批 0 基线（2026-08-02 实测，用户亲跑 /context）
+
+- **dao.md：28.1k tokens**（盘上 57,343B——实测比率 ≈2.0B/token，中文密集）
+- 用户级 CLAUDE.md：888 tokens（2,068B）
+- **本次改造目标面合计 ≈29.0k tokens/session**
+- 按 ≤10KB 硬闸推算：重写后 dao.md ≈5k tokens，**每 session 预计净省 ≈24k tokens（-83%）**
+- 批 4 后用户再跑一次 /context 同口径对比，即自测方案第 1 项的两个端点
+- 参考（本契约不覆盖，仅记录）：mousse 项目级 CLAUDE.md 7.1k tokens、pr-evidence 1.3k——项目级面是潜在的下一批候选
+- git tag：`pre-rewrite` @ fa4ce0e（四 PR 收口后的 master，23 套 1,375 断言全绿）
 
 ## 实施形态
 
