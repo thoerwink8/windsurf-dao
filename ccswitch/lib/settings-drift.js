@@ -25,7 +25,7 @@
 //   旧值」静默通过（dao-timecode 实证：live/快照指仓库路径、DB 仍指已被删除的
 //   ~/.claude/hooks 副本，三项旧判据全同 ⇒ 零发现）。判据与其近似性见 normCommand 头注。
 //
-// ── 第三个面：per-provider hooks 漂移（`--providers`，issue #50）──────────────
+// ── 第三个面：per-provider 漂移（`--providers`；hooks=issue #50 · deny=issue #56）─
 // 上面那条数据流图**画漏了一层**，#49 的实测把它补上了：`common_config_claude` 是**镜像层**，
 // 并不在下发路径上；cc-switch 真正下发到 `~/.claude/settings.json` 的是
 // **`providers` 表里当前 provider 那一行的 `settings_config`**，而且是**整体覆盖**。
@@ -34,8 +34,30 @@
 //   · 2026-08-02 的修复是**手动**把两个 provider 对齐的 —— 新 provider 加入、
 //     或某个 provider 被单独改一次，漂移必然复发，而当时没有任何机制会发现它。
 // 本面因此比两组差异：
-//   ① provider ↔ provider（各自的 hooks 段互相之间）
-//   ② provider ↔ canonical（应注册的 hooks 集合）
+//   ① provider ↔ canonical（应注册的清单）
+//   ② provider ↔ provider（各自那一段互相之间）
+//
+// ── 比对面里装了什么（issue #56 把 `permissions.deny` 加了进来）───────────────
+// 「整体覆盖」这个性质对 `settings_config` 里的**每一个键**都成立，不是 hooks 专有。
+// 本机实测（2026-08-02，13 行 providers）：两个 `app_type=claude` 的行**各自带着一份
+// 完整的 `permissions.deny`**（6 条，与 canonical 逐条相同）—— 即 Grep-first 铁律的
+// 落地面（`Bash(grep:*)` / `Bash(find:*)` / `PowerShell(Select-String:*)` …）
+// 就住在这里，**切一次 provider 就会被整体覆盖**。少掉一条的后果与 hooks 少一个的
+// 后果不同、更糟：hook 没了会有人察觉行为变了，而 deny 少一条只是**护栏悄悄回退**
+// —— 那道闸从此放行，且没有任何输出会提到它。#50 的未尽处点的就是这件事。
+//
+// **纳入 / 不纳入，逐条写清楚（这是刻意的射程边界，不是「还没做完」）**：
+//   · ✅ `permissions.deny` —— 纳入。全库唯一「所有 provider 都该逐字相同」的权限面：
+//        它是安全护栏，没有任何按 provider 分化的理由，且无运行时写入者往里追加。
+//   · ❌ `permissions.allow` —— 不纳入。宿主的「always allow」会往里自动追加（本机实测
+//        34 条），它天然按你在哪个 provider 下点过什么而分化 ⇒ 拉进来就是每天唠叨，
+//        而生下来就吵的检查一定会被静音。live↔快照那一面已把它降为 soft，同一理由。
+//   · ❌ `permissions.additionalDirectories` / `defaultMode` —— 不纳入。**不是因为它们
+//        该分化**，而是零证据：本机两个 provider 上恒同，没有任何一次实测的漂移出处。
+//        照「新增覆盖面须先有真实事故出处」的既定政策，不为假想敌立判据。要加的话
+//        改一行（把 id 加进 DENY_FACE_IDS）+ 补一组正负控即可。
+//   · ❌ `env` / `statusLine` / `model` —— 不纳入，**设计如此**：env 里就装着各家的
+//        base_url 与密钥，按 provider 不同才是对的。
 //
 // **canonical 真相源选定 = git 快照 `config-sync/common/settings.json` 的
 // `common_config_claude` 行**，理由与被否掉的备选（都写下来，免得下一个人重走一遍）：
@@ -112,7 +134,9 @@ const FIRED_LOG_MAX_LINES = 2000;
 // 范围判据 1 · 解析失败 1）后由 11 抬到 28。其中 3 条（P4b/P4c/P4d）是首跑真数据
 // 撞出两个假阳性后补的——它们钉的是「仓库根归一化」与「statusLine 也算 command 条目」
 // 这两个口径，改回去当场变红。
-const MIN_PROBE_CHECKS = 28;
+// issue #56 补入 permissions.deny 面 11 条（D1-D9：负例 3 · 正例 5 · 自检 1 ·
+// 零样本 1 · 普查健壮性 1）后由 28 抬到 39。
+const MIN_PROBE_CHECKS = 39;
 
 // 软预算：超了就降级并把降级本身报出来（不静默截断 —— check-core-loc 的死法）
 const DEADLINE_MS = 1500;
@@ -504,11 +528,15 @@ function runSelfProbe() {
     const P = ROOT.replace(/\\/g, "/");
     // canonical 用占位符形态（git 快照就是这样），provider 用展开态（DB 里就是这样）——
     // 这一对本身就是最重要的负控：真实数据每天都是这个形状，判错就是每次都误报。
+    // deny fixture 用真实形态（Grep-first 那几条就是本机 DB 里的原样），
+    // 两侧逐字相同 —— 这一对是 deny 面最重要的负控：真实数据每天都是这个形状。
+    const DENY_FIXTURE = ["Bash(grep:*)", "Bash(find:*)", "PowerShell(Select-String:*)"];
     const canonicalFixture = {
       hooks: {
         SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-alpha.js"', timeout: 10 }] }],
         PostCompact: [{ hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-compact.js"', timeout: 10 }] }],
       },
+      permissions: { deny: DENY_FIXTURE.slice(), allow: ["Read"], defaultMode: "default" },
     };
     const providerSettings = (over) => {
       const base = {
@@ -518,6 +546,7 @@ function runSelfProbe() {
           SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: 'node "' + P + '/ccswitch/hooks/dao-probe-alpha.js"', timeout: 10 }] }],
           PostCompact: [{ hooks: [{ type: "command", command: 'node "' + P + '/ccswitch/hooks/dao-probe-compact.js"', timeout: 10 }] }],
         },
+        permissions: { deny: DENY_FIXTURE.slice(), allow: ["Read"], defaultMode: "default" },
       };
       return over ? over(clone(base)) : base;
     };
@@ -694,6 +723,122 @@ function runSelfProbe() {
       t("解析失败·坏 JSON → uncheckable 且不计为对齐",
         r.uncheckable === true && r.notes.some((n) => /解析失败/.test(n)) && providerExitCode(r) === 2,
         "uncheckable=" + r.uncheckable + " exit=" + providerExitCode(r) + " notes=" + JSON.stringify(r.notes));
+    }
+
+    // ── permissions.deny 面（issue #56）· 同样纯内存 ──────────────────────────
+    // 上面 P1-P13 的 fixture 现在两侧都带着同一份 deny ⇒ 它们**顺带**成了 deny 面的
+    // 负控（任何一条报出 deny 漂移都会让它们变红）。下面这批钉的是 deny 独有的判据。
+
+    // 负例 D1：两侧 deny 逐条一致 ⇒ 零 deny 漂移、零 deny cross、且确实比对过（sampled）
+    {
+      const r = compareProviderHooks({ providers: twoAligned(), canonical: canonicalFixture });
+      t("负例·deny 两侧逐条一致 → 零漂移零 cross 且 denySampled=true（确实比过，不是空转）",
+        r.denyDriftCount === 0 && r.denyCrossCount === 0 && r.denySampled === true &&
+        r.canonicalDenyCount === DENY_FIXTURE.length,
+        "denyDrift=" + r.denyDriftCount + " denyCross=" + r.denyCrossCount +
+        " sampled=" + r.denySampled + " canonDeny=" + r.canonicalDenyCount);
+    }
+    // 正例 D2：某 provider 少一条 deny —— issue #56 要治的原形（护栏静默回退）
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.permissions.deny = s.permissions.deny.filter((x) => x !== "Bash(grep:*)"); return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·provider 少一条 deny → 面①CANONICAL_ONLY 且点名 permissions.deny + 那条规则",
+        r.denyVsCanonical.some((f) => f.kind === "CANONICAL_ONLY" && f.id === "permissions.deny" &&
+          /Beta/.test(f.provider) && /Bash\(grep:\*\)/.test(f.detail)),
+        "实得：" + JSON.stringify(r.denyVsCanonical.map((x) => x.provider + "/" + x.kind + ":" + x.id)));
+      t("正例·provider 少一条 deny → 面②denyCross 逐条点名（缺的是哪一条、谁缺）",
+        r.denyCross.some((c) => c.entry === "Bash(grep:*)" && c.missing.some((m) => /Beta/.test(m)) &&
+          c.has.some((h) => /Alpha/.test(h))),
+        "实得：" + JSON.stringify(r.denyCross.map((c) => c.entry + " missing=" + c.missing.join(","))));
+      t("正例·deny 漂移把退出码判红（与 hooks 漂移同级，不是「只是软的」）",
+        providerExitCode(r) === 1 && r.driftCount === 0 && r.crossCount === 0,
+        "exit=" + providerExitCode(r) + " hooksDrift=" + r.driftCount + " hooksCross=" + r.crossCount);
+    }
+    // 正例 D3：某 provider **多**一条 canonical 没有的 deny ⇒ PROVIDER_ONLY（方向不能与 D2 混淆）
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.permissions.deny.push("Bash(rg:*)"); return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·provider 多一条 deny → PROVIDER_ONLY（方向与「少一条」分得开）",
+        r.denyVsCanonical.some((f) => f.kind === "PROVIDER_ONLY" && f.id === "permissions.deny" &&
+          /Bash\(rg:\*\)/.test(f.detail)) &&
+        !r.denyVsCanonical.some((f) => f.kind === "CANONICAL_ONLY"),
+        "实得：" + JSON.stringify(r.denyVsCanonical.map((x) => x.kind + ":" + x.detail)));
+    }
+    // 负例 D4：allow / additionalDirectories / defaultMode 不同 ⇒ deny 面**必须**零报。
+    // 这条钉的是射程边界本身：把它们放进来就是每天唠叨（allow 会被宿主自动追加）。
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.permissions.allow = ["Read", "Write", "Bash(ls:*)"];
+        s.permissions.additionalDirectories = ["d:/somewhere"];
+        s.permissions.defaultMode = "acceptEdits";
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·allow/additionalDirectories/defaultMode 不同 → deny 面零报（射程边界）",
+        r.denyDriftCount === 0 && r.denyCrossCount === 0 && providerExitCode(r) === 0,
+        "denyDrift=" + r.denyDriftCount + " denyCross=" + r.denyCrossCount +
+        " vs=" + JSON.stringify(r.denyVsCanonical.map((x) => x.id)));
+    }
+    // 负例 D5：deny 顺序不同 ⇒ 不许报（集合语义，顺序在权限系统里无意义）
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.permissions.deny = s.permissions.deny.slice().reverse(); return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("负例·deny 顺序不同 → 零报（集合语义）",
+        r.denyDriftCount === 0 && r.denyCrossCount === 0,
+        "denyDrift=" + r.denyDriftCount + " denyCross=" + r.denyCrossCount);
+    }
+    // 正例 D6：deny 只有大小写不同 ⇒ **必须**报。deny 是逐字匹配的，`Bash(Grep:*)` 拦不住
+    // `grep`；这里若做了大小写归一化，一次真实的失效会被静默吃掉（与 normCommand 的
+    // toLowerCase 是刻意相反的取舍，理由见 denySetOf 头注）。
+    {
+      const providers = [row("p1", "Alpha"), row("p2", "Beta", (s) => {
+        s.permissions.deny = s.permissions.deny.map((x) => (x === "Bash(grep:*)" ? "Bash(Grep:*)" : x));
+        return s;
+      })];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("正例·deny 仅大小写不同 → 仍报（逐字匹配，不做归一化）",
+        r.denyDriftCount > 0 && r.denyCross.some((c) => c.entry === "Bash(Grep:*)"),
+        "denyDrift=" + r.denyDriftCount + " cross=" + JSON.stringify(r.denyCross.map((c) => c.entry)));
+    }
+    // 自检 D7：`permissions` 键被改名（deny 面的主解析瞎掉）⇒ 必须报 deny-undercount。
+    // 这一条是守卫铁律②在 deny 面的可执行形式：command 那一对此时**完全正常**
+    //（它俩不看 permissions），所以搭便车是不够的 —— 每个面都要自带两半。
+    {
+      const blinded = clone(providerSettings());
+      blinded.permissionsV2 = blinded.permissions; delete blinded.permissions;
+      const providers = [{ id: "p1", name: "Alpha", app_type: PROVIDER_APP_TYPE, settings_config: JSON.stringify(blinded) }];
+      const r = compareProviderHooks({ providers, canonical: canonicalFixture });
+      t("自检·permissions 键被改名（deny 主解析瞎掉）→ 报 deny-undercount + exit=1",
+        r.selfIssues.some((s) => /deny-undercount@/.test(s)) && providerExitCode(r) === 1 &&
+        r.scoped[0].structural === r.scoped[0].census,
+        "self=" + JSON.stringify(r.selfIssues) + " exit=" + providerExitCode(r) +
+        " command 两半=" + r.scoped[0].structural + "/" + r.scoped[0].census);
+    }
+    // 零样本 D8：两侧一条 deny 都没有 ⇒ denySampled=false，但**退出码仍是 0**
+    //（不许劫持 exit 2 的「没查成」语义；两个不同状态不共用一个信号）
+    {
+      const noDeny = (s) => { delete s.permissions; return s; };
+      const canon = clone(canonicalFixture); delete canon.permissions;
+      const providers = [row("p1", "Alpha", noDeny), row("p2", "Beta", noDeny)];
+      const r = compareProviderHooks({ providers, canonical: canon });
+      t("零样本·两侧都无 deny → denySampled=false + 出声，但 exit 仍 0（不劫持 exit 2）",
+        r.denySampled === false && providerExitCode(r) === 0 && r.uncheckable === false &&
+        r.notes.some((n) => /deny 面零样本/.test(n)),
+        "sampled=" + r.denySampled + " exit=" + providerExitCode(r) +
+        " uncheckable=" + r.uncheckable + " notes=" + JSON.stringify(r.notes));
+    }
+    // 普查健壮性 D9：含方括号/引号的 deny 规则不许把括号配对扫描提前截断（漏估=危险方向）
+    {
+      const tricky = '{"permissions":{"deny":["Bash(ls[a-z]:*)","Bash(echo \\"x]\\":*)","Read(//x)"]}}';
+      t("普查·含 ] 与转义引号的 deny 规则仍数得准（不漏估）",
+        censusDenyEntries(tricky) === 3 && countDenyEntries(JSON.parse(tricky)) === 3,
+        "census=" + censusDenyEntries(tricky) + " structural=" + countDenyEntries(JSON.parse(tricky)));
     }
   }
 
@@ -959,6 +1104,12 @@ function selfcheck() {
 // 逐行跑一遍独立普查，普查数到 command 条目就出声（下面的 scope-surprise 备注）。
 const PROVIDER_APP_TYPE = "claude";
 
+// 纳入 per-provider 权限比对的 `compare()` face==='keys' 条目 id（issue #56）。
+// 目前只有 `permissions.deny` —— **逐条的纳入/不纳入理由是文件头注「比对面里装了什么」，
+// 那里是唯一真相源，此处不复述**。要再加一个面：把 id 加进这个 Set + 补一组正负控，
+// 面①/末行/报文都不用动（面②的互比是逐条 deny 规则做的，加别的 id 需另写，见 denyCross）。
+const DENY_FACE_IDS = new Set(["permissions.deny"]);
+
 // ── 自检那一半：独立普查 ────────────────────────────────────────────────────
 // 刻意**不 JSON.parse、不认识 hooks 结构**：它与主逻辑唯一的共同前提是「这里有文本」。
 // 守卫铁律②——自检那一半必须能在主逻辑瞎掉时仍然看得见样本。复用 hookIndex 会让两半
@@ -996,6 +1147,65 @@ function countCommandEntries(obj) {
   const sl = obj && obj.statusLine;
   if (sl && sl.type === "command") n++;
   return n;
+}
+
+// ── deny 面的两半（issue #56）· 与上面 command 条目那两半同构 ────────────────
+// 为什么 deny 也要自带一对「主逻辑 / 独立普查」而不是搭 command 那一对的便车：
+// 两半之差是**按面**成立的。command 那一对若都数得对，只证明 hooks 段没瞎；
+// `permissions` 整个键被改名时它俩仍然一致（都不看 permissions）⇒ deny 的
+// 「结构化数到 0」会被读成「本来就没有」。守卫铁律②要的是**自检那一半能在
+// 主逻辑瞎掉时仍然看得见样本**，而「瞎掉」是逐面发生的。
+
+// 主逻辑那一半：结构化取 `permissions.deny` 的条数。
+function countDenyEntries(obj) {
+  const p = obj && obj.permissions;
+  return p && Array.isArray(p.deny) ? p.deny.length : 0;
+}
+
+// 独立普查那一半：在**原始文本**上数，刻意不 JSON.parse、不认识 permissions 结构。
+// 与 censusCommandEntries 唯一的共同前提同样是「这里有文本」。
+//
+// 钝的方向同样刻意选**高估**：任何字符串值里恰好出现 `"deny":[` 都会被计一次
+// —— 误报一次「扫描面塌陷」逼人来看一眼，好过让「deny 零漂移」变成没有分母的空话。
+// 具体形态：
+//   · 逐处找 `"deny"\s*:\s*[`，从那个 `[` 起做括号配对扫描，数其中的字符串字面量；
+//     串内的 `[` `]` 不参与配对，`\` 转义的下一个字符整体跳过 ⇒ 含方括号或引号的
+//     deny 规则（如 `Bash(ls[a-z]:*)`）不会把扫描提前截断（截断＝漏估＝危险方向）。
+//   · 同时在**去掉一层反斜杠转义**的副本上再扫一遍取 max：DB 里 settings_config 是
+//     普通 JSON 串，而快照/嵌套载体里可能是被转义过的形态（`\"deny\":[…]`）。
+//     取 max 而非二选一 ⇒ 两种形态都看得见，且永远偏高估那一侧。
+function scanDenyArrays(s) {
+  let total = 0;
+  const re = /"deny"\s*:\s*\[/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    let depth = 1, inStr = false, count = 0;
+    for (let i = m.index + m[0].length; i < s.length && depth > 0; i++) {
+      const ch = s[i];
+      if (inStr) {
+        if (ch === "\\") { i++; continue; }   // 转义字符：连同下一个字符整体跳过
+        if (ch === '"') { inStr = false; count++; }
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === "[") depth++;
+      else if (ch === "]") depth--;
+    }
+    total += count;
+  }
+  return total;
+}
+function censusDenyEntries(text) {
+  const s = String(text == null ? "" : text);
+  return Math.max(scanDenyArrays(s), scanDenyArrays(s.split('\\"').join('"')));
+}
+
+// deny 集合。与 compare() 的 `permissions.deny` 面**共用 toSet**，两面因此不可能
+// 对「什么算一条 deny」各执一词（面①走 compare、面②走这里，判据必须是同一个）。
+// 刻意不做大小写/空白归一化：deny 规则是逐字匹配的，`Bash(Grep:*)` 与 `Bash(grep:*)`
+// 是两条不同的规则，抹掉这个差异等于替权限系统做了一个它自己不做的假设。
+function denySetOf(obj) {
+  return toSet(obj && obj.permissions ? obj.permissions.deny : []);
 }
 
 // ── 仓库根归一化（只用在面①）────────────────────────────────────────────────
@@ -1112,6 +1322,7 @@ function compareProviderHooks(input) {
     const appType = r && r.app_type != null ? String(r.app_type) : "(空)";
     const parsed = parseSettingsConfig(r ? r.settings_config : null);
     const census = censusCommandEntries(parsed.raw);
+    const denyCensus = censusDenyEntries(parsed.raw);
 
     if (appType !== PROVIDER_APP_TYPE) {
       // 出范围但普查数到 command 条目 ⇒ 「按 app_type 划范围」这个判据可能已经过期。
@@ -1121,15 +1332,23 @@ function compareProviderHooks(input) {
           `但独立普查在它的 settings_config 里数到 ${census} 条 command 条目 ` +
           `⇒ 「只有 app_type=${PROVIDER_APP_TYPE} 才带 hooks」这个划范围判据可能已过期，请人复核`);
       }
-      skipped.push({ label, appType, census });
+      // deny 面同理，且这一格更该出声：出范围的行里带着 deny，意味着有一份**没人在看的
+      // 安全护栏**（本机实测非 claude 型的 5+5+1 行里一条 deny 都没有，故此格恒静默）。
+      if (denyCensus > 0) {
+        notes.push(`scope-surprise(deny)：${label}（app_type=${appType}）不在 deny 比对范围内，` +
+          `但独立普查在它的 settings_config 里数到 ${denyCensus} 条 deny 规则 ` +
+          `⇒ 划范围判据可能已过期，且那份护栏此刻无人核对，请人复核`);
+      }
+      skipped.push({ label, appType, census, denyCensus });
       continue;
     }
 
     if (!parsed.ok) {
       // 解析不动 ≠ 对齐。它进不了比对面，故整批判为「没查全」。
-      notes.push(`${label}：${parsed.why}（独立普查在同一文本上数到 ${census} 条 command 条目 ⇒ 它们此刻不可核验）`);
+      notes.push(`${label}：${parsed.why}（独立普查在同一文本上数到 ${census} 条 command 条目、` +
+        `${denyCensus} 条 deny 规则 ⇒ 它们此刻不可核验）`);
       uncheckable = true;
-      scoped.push({ label, appType, obj: null, census, structural: 0, parsed: false });
+      scoped.push({ label, appType, obj: null, census, structural: 0, denyCensus, denyStructural: 0, parsed: false });
       continue;
     }
 
@@ -1138,7 +1357,15 @@ function compareProviderHooks(input) {
       selfIssues.push(`undercount@${label}：结构化遍历数到 ${structural} 条 command 条目，` +
         `独立普查在同一文本上数到 ${census} 条 ⇒ 有样本没被看见（扫描面塌陷）`);
     }
-    scoped.push({ label, appType, obj: parsed.obj, census, structural, parsed: true, roots: [...repoRootsOf(parsed.obj)].sort() });
+    const denyStructural = countDenyEntries(parsed.obj);
+    if (denyStructural < denyCensus) {
+      selfIssues.push(`deny-undercount@${label}：结构化取 permissions.deny 得 ${denyStructural} 条，` +
+        `独立普查在同一文本上数到 ${denyCensus} 条 ⇒ deny 面有样本没被看见（扫描面塌陷）`);
+    }
+    scoped.push({
+      label, appType, obj: parsed.obj, census, structural, denyCensus, denyStructural,
+      parsed: true, roots: [...repoRootsOf(parsed.obj)].sort(),
+    });
   }
 
   const live = scoped.filter((s) => s.parsed);
@@ -1151,22 +1378,26 @@ function compareProviderHooks(input) {
   }
 
   // ── 面 ① provider ↔ canonical ──────────────────────────────────────────────
-  // 复用 compare() 的 hooks 面判据（basename 身份 · 挂载点 · 归一化命令串 · timeout），
-  // 只留 face==='hooks'：permissions/env/statusLine 三面**按 provider 不同是设计如此**
-  // （env 里就装着各家的 base_url 与密钥），拉进来即噪音。这是刻意的射程边界，不是遗漏。
+  // 复用 compare() 的两组判据：hooks 面（basename 身份 · 挂载点 · 归一化命令串 · timeout）
+  // 与 `permissions.deny` 面（集合差）。**只留这两组**，其余 face/id 一律丢——
+  // 纳入与不纳入的逐条理由见本文件头注「比对面里装了什么」，那里是唯一真相源。
   const vsCanonical = [];
+  const denyVsCanonical = [];
   const canonicalOk = !!(canonical && typeof canonical === "object");
   if (!canonicalOk) {
     uncheckable = true;
     notes.push(`canonical 不可用（${canonicalLabel}）⇒ 「与应注册清单的差异」这一面本次没查成，` +
-      `**不等于查过且没差异**；下面只剩 provider 互比那一面`);
+      `**不等于查过且没差异**（hooks 与 deny 两面都没查成）；下面只剩 provider 互比那一面`);
   } else {
     // 两侧都先过仓库根归一化再比（理由与代价见 withAgnosticRoots 头注）。
+    // deny 不含路径 ⇒ 这一步对它是恒等变换，不影响判据。
     const canonicalAgnostic = withAgnosticRoots(canonical);
     for (const s of live) {
       for (const f of compare(withAgnosticRoots(s.obj), canonicalAgnostic, { otherLabel: canonicalLabel })) {
-        if (f.face !== "hooks") continue;
-        vsCanonical.push({
+        const isHook = f.face === "hooks";
+        const isDeny = f.face === "keys" && DENY_FACE_IDS.has(f.id);
+        if (!isHook && !isDeny) continue;
+        (isDeny ? denyVsCanonical : vsCanonical).push({
           provider: s.label,
           tier: f.tier,
           // 换名：compare() 的 LIVE/SNAP 是它自己那一面的措辞，照抄过来会让读者
@@ -1204,6 +1435,38 @@ function compareProviderHooks(input) {
     }
   }
 
+  // ── 面 ② provider ↔ provider · deny（issue #56）─────────────────────────────
+  // 与 hooks 那一面**刻意不同的形态**：hooks 按脚本分组给签名，deny 逐条规则点名。
+  // 理由是可操作性——hooks 的差异是「这个钩子挂哪、跑什么」，看签名才说得清；
+  // deny 的差异永远是「**哪一条规则**在这边有、在那边没有」，而那一条规则的字面
+  // 就是人接下来要去补的东西。给它一个签名 hash 等于让人自己去 diff 两个数组。
+  const denyCross = [];
+  if (live.length >= 2) {
+    const sets = live.map((s) => ({ label: s.label, set: denySetOf(s.obj) }));
+    const allRules = new Set();
+    for (const p of sets) for (const e of p.set) allRules.add(e);
+    for (const entry of [...allRules].sort()) {
+      const missing = sets.filter((p) => !p.set.has(entry)).map((p) => p.label);
+      if (!missing.length) continue;
+      denyCross.push({ entry, has: sets.filter((p) => p.set.has(entry)).map((p) => p.label), missing });
+    }
+  }
+
+  // ── deny 面的零样本：**刻意不并进 uncheckable / exit 2** ─────────────────────
+  // 两侧一条 deny 都没声明时，「✓ 0 差异」是句谎话（什么都没比到），但它也**不是
+  // 「没查成」**——DB 读到了、canonical 读到了、结构也解析了，只是内容为空。
+  // 把它塞进 exit 2 等于让「读不到源」与「读到了但里面是空的」共用一个信号，
+  // 而**两个不同的状态挤进一个通道**正是本文件从头到尾在治的那个病（见末行契约头注）。
+  // 故它单独走一个末行字段 `denySampled=0`，由报文与 SessionStart 那一行各说一句。
+  const canonicalDenyCount = canonicalOk ? denySetOf(canonical).size : 0;
+  const providerDenyTotal = live.reduce((n, s) => n + denySetOf(s.obj).size, 0);
+  const denySampled = canonicalDenyCount > 0 || providerDenyTotal > 0;
+  if (live.length > 0 && !denySampled) {
+    notes.push(`deny 面零样本：${live.length} 个可比对 provider 与 canonical 里` +
+      `**一条 permissions.deny 都没有** ⇒ 本次 deny 面什么都没比对到（这不是「已对齐」）。` +
+      `若你预期这里应该有 Grep-first 那几条护栏，那么它此刻在每一侧都不存在`);
+  }
+
   // 面①把仓库根归一化掉了 ⇒ 这个信息只剩这里还留着，报文必须打出来。
   const repoRoots = [...new Set(live.flatMap((s) => s.roots || []))].sort();
 
@@ -1215,12 +1478,18 @@ function compareProviderHooks(input) {
     skipped,
     vsCanonical,
     crossProvider,
+    denyVsCanonical,
+    denyCross,
+    denySampled,
+    canonicalDenyCount,
     selfIssues,
     notes,
     canonicalOk,
     uncheckable,
     driftCount: vsCanonical.length,
     crossCount: crossProvider.length,
+    denyDriftCount: denyVsCanonical.length,
+    denyCrossCount: denyCross.length,
   };
 }
 
@@ -1243,6 +1512,15 @@ function loadCanonicalClaude(file) {
 // ── 退出码 / 末行契约（消费方按字段名取值，勿按位置；新字段一律追加在末尾）──────
 //   PROVIDER_HOOKS_SUMMARY exit=<0|1|2> providers=<N> scoped=<S> drift=<D> cross=<C>
 //                          selfcheck=<ok|fail> uncheckable=<0|1>
+//                          denyDrift=<DD> denyCross=<DC> denySampled=<0|1>
+//   末行**键名保持 `PROVIDER_HOOKS_SUMMARY` 不变**，尽管它现在也报 deny：改名会让每一个
+//   现有消费方（dao-scaffold-check 的正则、tests、任何人的 grep）在同一秒静默失配，
+//   而失配的表现是「拿不到末行」⇒ 报「契约被改坏了」。为一个更贴切的名字换一次全面误报
+//   不划算；`drift`/`cross` 与 `denyDrift`/`denyCross` 分列，语义不含混。
+//   · deny 的两个计数**刻意不并进 `drift`/`cross`**：那两个字段现存的含义是「hooks 面」，
+//     悄悄把 deny 加进去会让一个读 `drift=0` 的旧消费方以为它问的还是原来那个问题。
+//   · `denySampled=0` 表示「两侧一条 deny 都没声明」——它**不影响退出码**，理由见
+//     compareProviderHooks 里那段（不许让「没查成」与「查了是空的」共用一个信号）。
 //   · exit 0 —— 全部比对完且零差异（**只有这一个值叫「通过」**）
 //   · exit 1 —— 有差异，或自检半边失败（此时「零差异」不可信，先修检测器）
 //   · exit 2 —— **没查成**：DB 不在/读不了/无 providers 表/零可比对 provider/canonical 缺
@@ -1259,12 +1537,19 @@ function providerSummaryLine(exitCode, r) {
     " drift=" + (r ? r.driftCount : 0) +
     " cross=" + (r ? r.crossCount : 0) +
     " selfcheck=" + (r && r.selfIssues.length === 0 ? "ok" : "fail") +
-    " uncheckable=" + (r && !r.uncheckable ? "0" : "1");
+    " uncheckable=" + (r && !r.uncheckable ? "0" : "1") +
+    " denyDrift=" + (r ? r.denyDriftCount : 0) +
+    " denyCross=" + (r ? r.denyCrossCount : 0) +
+    " denySampled=" + (r && r.denySampled ? "1" : "0");
 }
 
 function providerExitCode(r) {
   if (!r) return 2;
-  if (r.driftCount > 0 || r.crossCount > 0 || r.selfIssues.length > 0) return 1;
+  // deny 的差异与 hooks 的差异同级判红：少一条 deny 是**护栏静默回退**，
+  // 后果不比少一个 hook 轻（见文件头注「比对面里装了什么」）。
+  if (r.driftCount > 0 || r.crossCount > 0 ||
+      r.denyDriftCount > 0 || r.denyCrossCount > 0 ||
+      r.selfIssues.length > 0) return 1;
   if (r.uncheckable) return 2;
   return 0;
 }
@@ -1273,7 +1558,7 @@ function printProviderReport(r, meta) {
   const L = [];
   const m = meta || {};
   L.push("");
-  L.push("=== per-provider hooks 漂移（cc-switch DB providers.settings_config）===");
+  L.push("=== per-provider 漂移：hooks + permissions.deny（cc-switch DB providers.settings_config）===");
   L.push("  DB        : " + (m.dbPath || "(默认)") + (m.readonly === false ? "" : "  [-readonly 打开]"));
   L.push("  canonical : " + (m.canonicalPath || "(未指定)") + (r && r.canonicalOk ? "" : "  ✗ 不可用"));
   const dist = Object.keys(r.appTypeCounts).sort().map((k) => k + "=" + r.appTypeCounts[k]).join(" · ");
@@ -1281,8 +1566,9 @@ function printProviderReport(r, meta) {
     "；纳入 hooks 比对的是 app_type=" + PROVIDER_APP_TYPE + " 那 " + r.scoped.length + " 行");
   for (const s of r.scoped) {
     L.push("     · " + s.label + (s.parsed
-      ? "  结构化 " + s.structural + " 条 command / 普查 " + s.census + " 条"
-      : "  ✗ 解析不动（普查 " + s.census + " 条）"));
+      ? "  结构化 " + s.structural + " 条 command / 普查 " + s.census + " 条" +
+        "；deny 结构化 " + s.denyStructural + " 条 / 普查 " + s.denyCensus + " 条"
+      : "  ✗ 解析不动（普查 " + s.census + " 条 command、" + s.denyCensus + " 条 deny）"));
   }
   // 面①比之前把「仓库根 + /ccswitch/」归一化成 <repo> 了 ⇒ 这条信息只剩这里还留着。
   // 不打出来的话，「hook 指着哪棵树」就在报文里彻底消失（而那正是它值得看一眼的时候）。
@@ -1327,6 +1613,44 @@ function printProviderReport(r, meta) {
     }
   }
 
+  // ── deny 面（issue #56）· 两面各自成段，与 hooks 面并列 ────────────────────
+  L.push("");
+  if (!r.denySampled) {
+    L.push("ⓘ deny 面：**零样本** —— provider 与 canonical 里一条 permissions.deny 都没有，" +
+      "本次什么都没比对到（这不是「已对齐」；它不影响退出码，理由见末行契约头注）");
+  } else {
+    if (!r.canonicalOk) {
+      L.push("⚠ deny 面① provider ↔ canonical：**本次没查成**（canonical 不可用），不等于没差异");
+    } else if (r.denyDriftCount === 0) {
+      L.push("✓ deny 面① provider ↔ canonical：0 条差异（canonical 声明 " + r.canonicalDenyCount +
+        " 条 deny，" + parsedCount + " 个 provider 逐个比过）");
+    } else {
+      L.push("✗ deny 面① provider ↔ canonical：" + r.denyDriftCount + " 条差异 —— " +
+        "deny 是安全护栏，**少一条就是那道闸从此放行、且没有任何输出会提到它**；" +
+        "方向仍需人判（canonical 不在下发路径上，它陈旧时也长这样）：");
+      for (const f of r.denyVsCanonical) {
+        const kindCn = f.kind === "PROVIDER_ONLY" ? "⬆ provider 有 / canonical 无"
+          : f.kind === "CANONICAL_ONLY" ? "⬇ canonical 有 / provider 无（切到这个 provider，这几条护栏当场静默回退）"
+            : "⚙ 两侧都有但不同";
+        L.push("    · [" + f.provider + "] " + kindCn + "（" + f.tier + "）：" + f.detail);
+      }
+    }
+
+    if (parsedCount < 2) {
+      L.push("ⓘ deny 面② provider ↔ provider：只有 " + parsedCount + " 个可比对 provider，互比无从谈起（不是「已对齐」）");
+    } else if (r.denyCrossCount === 0) {
+      L.push("✓ deny 面② provider ↔ provider：" + parsedCount + " 个 provider 的 deny 规则逐条一致");
+    } else {
+      L.push("✗ deny 面② provider ↔ provider：" + r.denyCrossCount + " 条 deny 规则在各 provider 之间不一致 —— " +
+        "切 provider 会整体覆盖 live settings ⇒ 切到缺的那一侧，这几条拦截当场失效：");
+      for (const c of r.denyCross) {
+        L.push("    · " + c.entry);
+        L.push("        有：" + c.has.join("、"));
+        L.push("        无：" + c.missing.join("、"));
+      }
+    }
+  }
+
   if (r.notes.length) {
     L.push("");
     L.push("⚠ 备注 " + r.notes.length + " 条（**不等于通过**）：");
@@ -1342,9 +1666,11 @@ function printProviderReport(r, meta) {
   }
 
   L.push("");
-  L.push("ⓘ 射程边界（照直写，别当全包）：只比 hooks 面的 **dao 自有脚本**；" +
-    "permissions/env/statusLine 面未纳入（env 按 provider 不同是设计如此）；" +
-    "第三方 hook 不进比对面（否则每装一个工具就唠叨一次）；" +
+  L.push("ⓘ 射程边界（照直写，别当全包）：比两个面 —— hooks 面的 **dao 自有脚本**、" +
+    "以及 **permissions.deny**（issue #56）；permissions 的其余子键（allow / " +
+    "additionalDirectories / defaultMode）与 env / statusLine / model **未纳入**" +
+    "（allow 会被宿主自动追加、env 按 provider 不同是设计如此，逐条理由见本文件头注" +
+    "「比对面里装了什么」）；第三方 hook 不进比对面（否则每装一个工具就唠叨一次）；" +
     "本检查**只读不修**，对齐动作归人。");
   process.stdout.write(L.join("\n") + "\n");
 }
@@ -1365,8 +1691,8 @@ async function runProviderCheck(argv) {
     // DB 这一侧都没读到 ⇒ 什么都没比对。**这一条路径同样打末行**，否则「没查成」
     // 在机器通道上表现为「什么都没说」，而那正是本文件要治的病。
     for (const e of loadErrors) process.stderr.write("[settings-drift --providers] ✗ " + e + "\n");
-    process.stdout.write("\n=== per-provider hooks 漂移 ===\n" +
-      "✗ 没查成：" + loadErrors.join("；") + "\n" +
+    process.stdout.write("\n=== per-provider 漂移：hooks + permissions.deny ===\n" +
+      "✗ 没查成（两个面都没查成）：" + loadErrors.join("；") + "\n" +
       "  （这不是「无漂移」。手动复核：node ccswitch/lib/settings-drift.js --providers）\n");
     process.stdout.write(providerSummaryLine(2, null) + "\n");
     return 2;
@@ -1381,10 +1707,17 @@ async function runProviderCheck(argv) {
       exit: code,
       total: r.total,
       appTypeCounts: r.appTypeCounts,
-      scoped: r.scoped.map((s) => ({ label: s.label, parsed: s.parsed, structural: s.structural, census: s.census })),
+      scoped: r.scoped.map((s) => ({
+        label: s.label, parsed: s.parsed, structural: s.structural, census: s.census,
+        denyStructural: s.denyStructural, denyCensus: s.denyCensus,
+      })),
       skipped: r.skipped,
       vsCanonical: r.vsCanonical,
       crossProvider: r.crossProvider,
+      denyVsCanonical: r.denyVsCanonical,
+      denyCross: r.denyCross,
+      denySampled: r.denySampled,
+      canonicalDenyCount: r.canonicalDenyCount,
       selfIssues: r.selfIssues,
       notes: r.notes,
       canonicalOk: r.canonicalOk,
@@ -1507,6 +1840,9 @@ module.exports = {
   compareProviderHooks, providerExitCode, providerSummaryLine,
   loadProviderRows, loadCanonicalClaude, censusCommandEntries, countCommandEntries,
   PROVIDER_APP_TYPE,
+  // permissions.deny 面（issue #56）。两半分别导出，测试要能各自换靶做 mutation：
+  // 只导出比对结果的话，「census 与 structural 是不是真的两套实现」就不可测。
+  censusDenyEntries, countDenyEntries, denySetOf, DENY_FACE_IDS,
 };
 
 if (require.main === module) {

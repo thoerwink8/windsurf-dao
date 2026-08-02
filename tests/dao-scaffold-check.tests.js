@@ -491,6 +491,78 @@ console.log("\n=== 模式 B · 清单真的在驱动 hook（换清单即换行�
     /class 非法/.test(c2), "ctx=" + c2.slice(0, 300));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== per-provider 漂移那一行的措辞（末行 → 提醒行，issue #50 / #56）===");
+// **为什么用 stub 而不是让它跑真的检查器**：`providerHookLines(daoRoot)` 里的 daoRoot
+// 就是 payload 的 cwd ⇒ 元仓库沙箱里放一份假的 `ccswitch/lib/settings-drift.js`，
+// 整条路径（spawn → 末行正则 → 措辞拼装）都被真的走了一遍，而结果**与本机 cc-switch DB
+// 此刻的状态无关**。真 DB 那一路由 tests/provider-hooks-drift.tests.js 的端到端层负责。
+//
+// **为什么这一组非有不可**：hook 侧那个末行正则是**独立于 settings-drift 的第二份实现**
+//（刻意的：契约被改坏时它要能报出来，共用解析就一起瞎）。独立的代价是它自己没人验——
+// 2026-08-02 一次 mutation 实测：把 deny 分支整个删掉（`if (false)`），
+// provider-hooks-drift 那套 54 条断言**一条都没红**。这一组补的就是那个洞。
+{
+  const mkStub = (tag, stdout, exitCode) => {
+    const root = path.join(SANDBOX, "meta", tag, "windsurf-dao");
+    fs.mkdirSync(path.join(root, "ccswitch", "hooks"), { recursive: true });
+    fs.mkdirSync(path.join(root, "ccswitch", "lib"), { recursive: true });
+    putFakeGit(root);
+    // stub：把预设文本原样吐出来再按预设码退出。刻意不 require 任何东西。
+    fs.writeFileSync(path.join(root, "ccswitch", "lib", "settings-drift.js"),
+      "process.stdout.write(" + JSON.stringify(stdout) + ");\nprocess.exit(" + exitCode + ");\n", "utf8");
+    return root;
+  };
+  const SUM = (o) => "PROVIDER_HOOKS_SUMMARY exit=" + o.exit + " providers=13 scoped=2 drift=" + o.drift +
+    " cross=" + o.cross + " selfcheck=" + (o.self || "ok") + " uncheckable=" + (o.unch || 0) +
+    " denyDrift=" + o.denyDrift + " denyCross=" + o.denyCross + " denySampled=" + o.sampled + "\n";
+
+  // ① 全绿：两个面都要在那一行里各说一句（deny 面绿了却不出声＝那一面在报文里不存在）
+  {
+    const c = ctx(run(mkStub("pp-green", SUM({ exit: 0, drift: 0, cross: 0, denyDrift: 0, denyCross: 0, sampled: 1 }), 0)));
+    check("绿·一行里同时报出 hooks 面与 deny 面（不许 deny 绿了却只字不提）",
+      /per-provider 漂移检查绿/.test(c) && /deny 规则逐条一致/.test(c), "ctx=" + c.slice(0, 400));
+  }
+  // ② **只有 deny 漂了**：这是 M9 mutation 抓出来的那一格。措辞必须点 permissions.deny，
+  //    且**不许**说「hooks 段已经不一致了」——那是一句错话，会把人支去查错的东西。
+  {
+    const c = ctx(run(mkStub("pp-deny", "    · [Beta [p2]] ⬇ canonical 有 / provider 无：permissions.deny 少 Bash(grep:*)\n" +
+      SUM({ exit: 1, drift: 0, cross: 0, denyDrift: 1, denyCross: 1, sampled: 1 }), 1)));
+    check("只有 deny 漂移 → 点名 permissions.deny 且说出后果（护栏放行）",
+      /permissions\.deny/.test(c) && /放行/.test(c), "ctx=" + c.slice(0, 500));
+    check("只有 deny 漂移 → **不许**说成「hooks 段不一致」（分面陈述，不说错话）",
+      !/hooks\*{0,2} 段已经不一致/.test(c), "ctx=" + c.slice(0, 500));
+    check("只有 deny 漂移 → 明细行仍被带出来（不只报计数）",
+      /Bash\(grep:\*\)/.test(c), "ctx=" + c.slice(0, 500));
+  }
+  // ③ 反向：只有 hooks 漂了 ⇒ 不许把 deny 也说成漂了
+  {
+    const c = ctx(run(mkStub("pp-hooks", SUM({ exit: 1, drift: 2, cross: 1, denyDrift: 0, denyCross: 0, sampled: 1 }), 1)));
+    check("只有 hooks 漂移 → 说 hooks，且**不许**顺带说 permissions.deny 也漂了",
+      /hooks/.test(c) && !/permissions\.deny/.test(c), "ctx=" + c.slice(0, 500));
+  }
+  // ④ 末行没有 deny 三字段（lib 比本 hook 旧）⇒ 如实说「那一面没被报出来」，
+  //    **不许**报成「契约被改坏了」（那是假的红），也不许静默当成绿。
+  {
+    const old = "PROVIDER_HOOKS_SUMMARY exit=0 providers=13 scoped=2 drift=0 cross=0 selfcheck=ok uncheckable=0\n";
+    const c = ctx(run(mkStub("pp-old", old, 0)));
+    check("末行缺 deny 字段 → 出声「那一面本次没被报出来」，不假报契约损坏、也不静默",
+      /没有 deny 面字段|没被报出来/.test(c) && !/契约可能被改坏/.test(c), "ctx=" + c.slice(0, 400));
+  }
+  // ⑤ deny 面零样本 ⇒ 绿行里必须点出「什么都没比到」，不许读成「已对齐」
+  {
+    const c = ctx(run(mkStub("pp-nosample", SUM({ exit: 0, drift: 0, cross: 0, denyDrift: 0, denyCross: 0, sampled: 0 }), 0)));
+    check("deny 零样本 → 绿行里点出「什么都没比到（不是已对齐）」",
+      /零样本/.test(c) && /不是「已对齐」/.test(c), "ctx=" + c.slice(0, 400));
+  }
+  // ⑥ 没查成（exit 2）⇒ 必须说两个面都没查成，而不是只提 hooks
+  {
+    const c = ctx(run(mkStub("pp-unch", SUM({ exit: 2, drift: 0, cross: 0, denyDrift: 0, denyCross: 0, sampled: 1, unch: 1 }), 2)));
+    check("exit 2 没查成 → 明说 hooks 与 permissions.deny 两面都没查成",
+      /没查成/.test(c) && /permissions\.deny/.test(c), "ctx=" + c.slice(0, 400));
+  }
+}
+
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");
 {
   const r = spawnSync(process.execPath, [HOOK], {
