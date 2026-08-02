@@ -25,6 +25,7 @@
 //   G5 只读载体未勾待办               dao.md「言·名之则」§只读载体禁写待办
 //   G6 心跳 prompt 缺 `[dao-heartbeat]` 签名  docs/specs/dao-rewrite-202608.md 分流表第 3 类
 //                                    「心跳投递机器化」（2026-08-02 新增 · **呈批项**，见下）
+//   G7 shell 里跑搜索/读文件工具      dao.md「八、工具使用铁律（Grep-first）」（2026-08-02 新增）
 //
 // ── 各闸的判据全文（2026-08-02 dao.md 瘦身批 #7 迁入；dao.md 那三段已压成一行指针）──
 // 迁入前逐段核对过：dao.md 当时写着「全文见该 hook 头注，本行不复述」，而**头注里其实没有**
@@ -84,6 +85,51 @@
 //      **注册那一下就是用户的批准动作**；在那之前 `--selfcheck` 会把它报成
 //      「✗ G6：matcher 覆盖不到 ScheduleWakeup ⇒ 这道闸静默零覆盖」并 exit 1 —— 刻意如此，
 //      「没接上」要在机器通道上说出来，而不是安静地等着。
+//
+// G7 · shell 里跑搜索/读文件 —— **它拦的不是一个坏动作，是一条本来就会被拦、只是不说
+//   为什么的路**。这一条与 G1-G6 都不同，理由要写清楚：
+//   ㈠ **它治的是「拒绝消息不给替代写法」，不是「没人拦」**。`~/.claude/settings.json` 的
+//      `permissions.deny` 已经有 `Bash(grep:*)` / `Bash(find:*)` / `Bash(rg:*)` / `Bash(ag:*)` /
+//      `Bash(ack:*)` / `PowerShell(Select-String:*)`；agent 撞上去只收到一句
+//      「Permission to use Bash with command grep -iE … has been denied.」——**拦对了，但不说该改用什么**，
+//      于是每个 subagent 各自摸索。实测（62 份 subagent 转录 / 186 个报错）：命令被权限拦下 65 次，
+//      是所有报错里最大的一类。**同级 agent 之间没有横向通道，一个官的教训传不给下一个官** ⇒
+//      唯一的出路是把那句「该用什么」搬到闸的 stderr 里，让它跟着每一次违例走。
+//   ㈡ **顺序是实测的，不是推的**：`docs/permissions.md` 写着「PreToolUse hooks run before the
+//      permission prompt」，且「Hook decisions don't bypass permission rules」。2026-08-02 本机
+//      实跑一条**同时命中 deny 规则与 G5** 的命令（`grep zzz && git commit -m "…- [ ] …"`），
+//      收到的是 **G5 的 stderr 而不是权限拒绝** ⇒ **hook 先于 deny 规则求值**，G7 的话说得出去。
+//      ⚠ 反过来那半也照直记：**hook 返回 allow 不能解开 deny 规则**（文档明写），
+//      所以 G7 **不去、也不能去**「放行」任何东西，它只负责在被拦的那一刻把话说清楚。
+//   ㈢ **收哪几个词是被真语料定的**（dao-guard-writing ①「建护栏前先摸全域分布」）：
+//      全量普查 `~/.claude/projects/**/*.jsonl` 的 32721 条 Bash/PowerShell 命令、26402 条唯一命令。
+//      独立段段首命中量前二是 **`ls`(3266)** 与 **`wc`(1032)**，两个**都不收**——Glob 给不出
+//      `ls -la` 的时间戳与权限位、Read 也数不了行数，**收进来等于凭空造 4298 次必然误伤**，
+//      而「生下来就吵的检查一定会被静音」。收的是 dao.md 那条铁律逐字点名的那几个。
+//   ㈣ **判据是「段首 + 前一个分隔符」，不是「命令里出现过这个词」**。五类合法用法结构性豁免：
+//      ①管道过滤（`node t.js | grep FAIL` —— 吃的是上一条命令的 stdout，Grep 工具结构上替代不了）
+//      ②stdout 落真实文件（在造给下一步吃的产物，Grep/Read 写不出文件；`2>/dev/null` 不算）
+//      ③命令替换 `$(…)` 内部（切分器不进去）④`sed -i` / `find -exec` / `tail -f`
+//      ⑤`head`/`tail` 的 `-c` 字节模式（**Read 是按行的，没有字节语义**，真语料 114 例）。
+//      外加两个**天然**豁免：`git log --grep=` 段首是 `git`（看都不看）、
+//      `until grep -q …; do …; done` 段首是 `until`（轮询，Grep 工具没有"等到出现为止"这个语义）。
+//   ㈤ **两个数字必须一起读，别只引前一个**（真语料实测，语料即上面那 26402 条）：
+//      · **召回 53%**：本会话 subagents 66 条被拒命令里 G7 命中 35 条；全库 1366 条里命中 736 条。
+//        **剩下那 47% 不是漏报，是「拦错了的那一半」**——逐条读完全部 31 条未命中项，
+//        **全部是管道过滤**（`node tests/x.js 2>&1 | grep -E "FAIL"`、`git ls-files | grep -i clause`、
+//        `until grep -q … ; do sleep 10; done`）。它们**没有内置工具替代品**，G7 刻意放行，
+//        而 `Bash(grep:*)` 这条 deny 规则照拦不误 ⇒ **这批的正解是收窄 deny 规则，不是让 G7 去拦**。
+//        那属**用户动作**（改 cc-switch DB 的 `providers.settings_config`），已作为发现交帅，本批不动。
+//      · **新增拦截面 970 条**（这些此前**能跑**——`sed`/`head`/`tail`/`cat` 本来就不在 deny 列表里）：
+//        `tail` 331 / `cat` 251 / `sed` 194 / `head` 56 / `grep` 10 / `find` 6（余 122 条本批分析
+//        脚本的正则没解出段首，**未逐条读，照记为未核**）。**其中最大的一格是 `tail -n N <日志>`
+//        330 条**，Read 做得到但要先知道总行数 —— **这是本闸最大的一处摩擦，也是最该被复核的
+//        一处判断**。它没被豁免，是因为派单令点名收了 `tail`；**若日后要松，松的应当是这一格**，
+//        且松之前先看它的对价（那正是 dao.md 铁律里"不用 tail 一次读全"直指的形态）。
+//        参考量级：加 `-c` 字节豁免（⑤）当场把新增拦截面从 1104 降到 970。
+//   ㈥ **逃生阀 `DAO_SHELL_SEARCH_OK`（仅用户可设）**。给它的理由与 G6 同型——两侧代价不对称：
+//      G7 覆盖的 `cat`/`head`/`tail`/`sed` **不在 deny 列表里**，即本闸是它们唯一的拦截者，
+//      而内置工具的能力边界（字节语义、流式、写文件）我只枚举到了我看得见的那些。
 //
 // ── 三条设计取舍，别读成疏漏 ────────────────────────────────────────────────
 // ① **逃生阀一律是环境变量，不是 agent 能创建的哨兵文件**。理由就是上面那份实证：
@@ -147,13 +193,27 @@ function norm(p) {
 // nudge 那边不改：它只认段首命令、不看正文内容，裸 split 对它够用，
 // 而两个 hook 的判据本就该各自演进（同 hook-selfcheck 库「只抽形态不抽判据」）。
 //
-// 这不是一个 shell 解析器，也刻意不做成解析器：只跟踪单/双引号与反斜杠转义，
-// 认不出 `$(...)`、heredoc、嵌套引号里的引号。已知漏报面写在头注③。
-function shellSegments(cmd) {
+// 这不是一个 shell 解析器，也刻意不做成解析器：只跟踪单/双引号、反斜杠转义与 `$(...)` 深度，
+// 认不出 heredoc 正文、嵌套引号里的引号、反引号命令替换。已知漏报面写在头注③。
+//
+// ── 2026-08-02（G7 批）改了两处，为什么改、对 G3/G5 有没有影响，照直写 ──────────
+// ① **返回 `{seg, sep}`，`sep` 是这一段前面那个分隔符**。G7 必须分开
+//    「`grep foo file`（独立命令，该用 Grep 工具）」与「`cmd | grep foo`（管道过滤，
+//    内置工具替代不了）」——这两者**段首一模一样**，唯一的区别就在前面那个分隔符上。
+//    G3/G5 不关心 sep，故留 `shellSegments()` 薄包装原样吐字符串数组，
+//    **它们的判定路径一个字符没动**（回归网有一组恒等断言钉着这句话）。
+// ② **新增 `$(...)` 深度跟踪，命令替换内部不再切分**。对 G3/G5 是零行为变化：
+//    命令替换里的命令**本来**就进不了它们的射程（`echo $(npm publish)` 整条只有一段、
+//    段首是 `echo`），头注③早把「`$(...)` 里的命令」写成已知漏报面。真正变的只有
+//    `echo "$(ls | head -1)"` 这类——以前在 `|` 处被切开（第二段段首 `head`），
+//    现在是一段。**这正是 G7 要的**：命令替换里的 `head -1` 是取一行输出，不是读文件。
+function shellSegmentsRaw(cmd) {
   const src = String(cmd || "");
   const out = [];
   let cur = "";
   let quote = null; // null | '"' | "'"
+  let sep = "";     // 当前这一段**前面**的分隔符： "" | ";" | "\n" | "&&" | "||" | "|"
+  let sub = 0;      // `$(` 深度
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (quote) {
@@ -165,19 +225,33 @@ function shellSegments(cmd) {
     }
     if (c === '"' || c === "'") { quote = c; cur += c; continue; }
     if (c === "\\" && i + 1 < src.length) { cur += c + src[++i]; continue; }
-    if (c === "\n" || c === ";") { out.push(cur); cur = ""; continue; }
-    if ((c === "&" && src[i + 1] === "&") || (c === "|" && src[i + 1] === "|")) {
-      out.push(cur); cur = ""; i++; continue;
+    if (c === "$" && src[i + 1] === "(") { sub++; cur += "$("; i++; continue; }
+    if (sub > 0) {
+      if (c === "(") sub++;
+      else if (c === ")") sub--;
+      cur += c;
+      continue;
     }
-    if (c === "|") { out.push(cur); cur = ""; continue; }
+    if (c === "\n" || c === ";") { out.push({ seg: cur, sep }); cur = ""; sep = c === "\n" ? "\n" : ";"; continue; }
+    if ((c === "&" && src[i + 1] === "&") || (c === "|" && src[i + 1] === "|")) {
+      out.push({ seg: cur, sep }); cur = ""; sep = c === "&" ? "&&" : "||"; i++; continue;
+    }
+    if (c === "|") { out.push({ seg: cur, sep }); cur = ""; sep = "|"; continue; }
     cur += c;
   }
-  out.push(cur);
+  out.push({ seg: cur, sep });
   return out
-    .map((s) => s.trim())
-    // 去掉前导 `cd <path> ` 与 `VAR=x ` 形式的环境变量前缀，让段首露出来
-    .map((s) => s.replace(/^cd\s+\S+\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, ""))
-    .filter(Boolean);
+    .map((o) => ({
+      // 去掉前导 `cd <path> ` 与 `VAR=x ` 形式的环境变量前缀，让段首露出来
+      seg: o.seg.trim().replace(/^cd\s+\S+\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, ""),
+      sep: o.sep,
+    }))
+    .filter((o) => o.seg);
+}
+
+// G3/G5 用的薄包装：只要段文本。判定路径与改造前等价，回归网 §恒等 有断言钉着。
+function shellSegments(cmd) {
+  return shellSegmentsRaw(cmd).map((o) => o.seg);
 }
 
 // 未勾选的待办框：行首（或紧跟引号 / 字面 `\n` 转义）的 `- [ ]` / `* [ ]` / `+ [ ]`。
@@ -212,6 +286,57 @@ const UNCHECKED_TODO = /(^|\n|\\n|["'])[ \t]*[-*+][ \t]+\[[ \t]\]/;
 // 故 rhythm 侧把 WAKEUP 判定**排在所有早退之前**、且同样只对 `String(prompt).trim()` 求值，
 // 直接不给不对齐留机会。别把那个位置当成随手放的：它是判据对齐的一部分。
 const HEARTBEAT_SIG = /^\[dao-heartbeat\]/;
+
+// ── G7 的判据材料（段首命令名 → 该改用哪个内置工具）─────────────────────────
+// **收哪几个词是被真语料定的，不是照 dao.md 的措辞抄的**（全域普查见头注 G7 ㈠）：
+// 32721 条真实 Bash/PowerShell 命令里，独立段段首命中量前二的是 `ls`(3266) 与 `wc`(1032)，
+// 两个都**刻意不收** —— Glob 给不出 `ls -la` 的时间戳与权限位，Read 也数不了行数，
+// 内置工具替代不了它们。收进来等于凭空制造 4298 次必然误伤，而
+// 「生下来就吵的检查一定会被静音」（dao-guard-writing §建护栏前先摸全域分布）。
+const SEARCH_TOOL_ALT = {
+  grep: "内容搜索 → **Grep 工具**：`pattern`（正则）+ `path` + 可选 `glob`/`type` 过滤 + " +
+        "`output_mode`（`content` 出行 / `files_with_matches` 出文件名 / `count` 出计数）+ " +
+        "`-n` `-i` `-A` `-B` `-C` `multiline` `head_limit`。它底层就是 ripgrep，跨平台且不吃引号转义的亏。",
+  rg: "内容搜索 → **Grep 工具**（它底层就是 ripgrep，`glob`/`type`/`output_mode` 一一对应，无需自己拼命令行）。",
+  ag: "内容搜索 → **Grep 工具**（底层 ripgrep，比 ag 快且跨平台）。",
+  ack: "内容搜索 → **Grep 工具**（底层 ripgrep）。",
+  "select-string": "内容搜索 → **Grep 工具**。PowerShell 的 `Select-String` 在本机会撞引号/编码坑" +
+        "（无 BOM 文件按 CP936 解码，中文模式静默不命中且退出码为 0）。",
+  find: "找路径 → **Glob 工具**：`pattern` 用 glob 语法（`**/*.test.ts`、`src/**/index.*`），" +
+        "结果按修改时间排序。要按内容找用 Grep，要看某个目录里有什么用 Read 读目录。",
+  sed: "读文件片段 → **Read 的 `offset`/`limit`**（`sed -n '10,40p' f` ≡ Read(f, offset:10, limit:31)）；" +
+       "**改**文件用 **Edit 工具**（`old_string`/`new_string`，或 `replace_all`）——别用 `sed` 生成 diff。",
+  head: "读文件开头 → **Read 的 `limit`**（`head -50 f` ≡ Read(f, limit:50)），带行号且可点击跳转。",
+  tail: "读文件末尾 → **Read 的 `offset`**（先 Read 一次看总行数，再 `offset` 到尾部）。",
+  cat: "读文件 → **Read**（带行号、可点击跳转、大文件用 `offset`/`limit` 分页，不会把全文灌进上下文）。",
+};
+
+// 段首取命令名：剥掉 `sudo`/`time`/`command`/`nohup` 前缀与路径、`.exe` 后缀，转小写。
+// **刻意不剥 `until`/`while`/`if`/`for`/`do`/`then`** —— 那些构造下的 `grep -q ... ` 是**轮询/判断**，
+// 内置工具做不了（Grep 工具没有"等到出现为止"这个语义），保持段首是 `until` 即天然豁免。
+// 真语料里这个形态确实存在（`until grep -q "VERIFY_ALL_EXIT=" f; do sleep 10; done`）。
+function segHead(seg) {
+  let s = String(seg);
+  for (let i = 0; i < 4; i++) {
+    const t = s.replace(/^(?:sudo|time|command|nohup)\s+/i, "");
+    if (t === s) break;
+    s = t;
+  }
+  const m = s.match(/^([^\s]+)/);
+  if (!m) return "";
+  return m[1]
+    .replace(/^["']|["']$/g, "")
+    .replace(/^.*[\/\\]/, "")   // /usr/bin/grep → grep
+    .replace(/\.exe$/i, "")
+    .toLowerCase();
+}
+
+// stdout 被重定向到**真实文件**（不是 /dev/null / $null / NUL，也不是 `2>&1` 这种 dup）。
+// 这类段是在**造一个产物给下一步吃**，而 Grep/Read 只会把结果交回模型上下文、写不出文件
+// —— 是内置工具的真实能力缺口，故豁免。`2>/dev/null` 不算（前面是 `2` 不是空白/行首）。
+const STDOUT_TO_FILE = /(^|\s)1?>>?\s*(?!&)(?!\/dev\/null)(?!\$null\b)(?!NUL\b)(?!nul\b)\S/;
+// heredoc：输入来自内联文本而不是文件（`cat > f <<'EOF'`），Read 无从替代
+const HEREDOC = /<</;
 
 // ── 各道闸（数量以 GATES.length 为准，此处刻意不写死数字）──────────────────
 // 每条 gate：
@@ -415,6 +540,53 @@ const GATES = [
           "（若确有一个**不由你构造 prompt** 的合法调用方——如内置 `/loop`——由**用户**设 " +
           "`DAO_WAKEUP_UNSIGNED_OK=1`；实测语料里这种形态出现 0 次，见本文件头注 G6 ㈣。）",
       };
+    },
+  },
+
+  {
+    id: "G7-shell-search",
+    why:
+      "dao.md「八、工具使用铁律（Grep-first）」：搜索用 Grep/Glob、读大文件用 Read 的 offset/limit，" +
+      "不用 Bash/PowerShell 的 grep/find/rg/sed/head/tail/cat/Select-String —— " +
+      "Grep 底层 ripgrep 跨平台快且内存友好，shell 版在 Windows 下常见引号/转义/编码/卡死问题",
+    escapeEnv: "DAO_SHELL_SEARCH_OK",
+    tools: ["Bash", "PowerShell"],
+    test(input) {
+      if (!/^(Bash|PowerShell)$/.test(input.tool_name || "")) return null;
+      const cmd = (input.tool_input || {}).command || "";
+      for (const { seg, sep } of shellSegmentsRaw(cmd)) {
+        // 豁免①：管道过滤（`ps | grep x`、`git log | head -20`）。这一段吃的是上一条命令的
+        // stdout，不是文件 —— 内置工具结构上替代不了。判据就是它前面那个分隔符是 `|`。
+        if (sep === "|") continue;
+        const head = segHead(seg);
+        const alt = SEARCH_TOOL_ALT[head];
+        if (!alt) continue;
+        const rest = seg.slice(seg.toLowerCase().indexOf(head) + head.length);
+        // 豁免②：stdout 落到真实文件 —— 在造给下一步吃的产物，内置工具写不出文件
+        if (STDOUT_TO_FILE.test(rest)) continue;
+        // 豁免③：heredoc（`cat > f <<'EOF'`）—— 输入是内联文本，不是文件
+        if (HEREDOC.test(rest)) continue;
+        // 豁免④：这几个不是"读"，是别的动作，替代工具对不上
+        if (head === "sed" && /(^|\s)-i(\s|$)|(^|\s)--in-place\b/.test(rest)) continue;      // 原地改文件
+        if (head === "find" && /(^|\s)-(exec|execdir|ok|delete|prune)(\s|$)/.test(rest)) continue; // 动作而非查找
+        if ((head === "tail" || head === "head") && /(^|\s)-(f|F|-follow)(\s|$)/.test(rest)) continue; // 流式跟随
+        // 豁免⑤：`-c` 字节模式（`tail -c 3000 f`）—— **Read 是按行的，没有字节语义**，
+        // 这是内置工具的结构性缺口，不是用法问题。真语料里 114 例（tail 92 / head 22）。
+        if ((head === "tail" || head === "head") && /(^|\s)-c(\s|=|\d)/.test(rest)) continue;
+        return {
+          what: `\`${head}\` 被当成主命令跑（这一段：\`${seg.slice(0, 90)}\`）`,
+          how:
+            alt +
+            "\n\n合法的 shell 用法本闸不拦，别误以为这几个命令被禁了：" +
+            "**①管道过滤**（`ps | grep node`、`node t.js | head -40`——吃的是上一条命令的输出，不是文件）；" +
+            "**②输出落文件**（`grep -c x f > _tmp/n.txt`——在造给下一步吃的产物）；" +
+            "**③命令替换**（`v=$(head -1 f)`）；**④`sed -i` 原地改 / `find -exec` / `tail -f`**；" +
+            "**⑤`git log --grep=` / `git log -S` 这类自带参数**（段首是 `git`，本闸看都不看）；" +
+            "**⑥`until grep -q ...; do ...; done` 这类轮询**（段首是 `until`）。" +
+            "\n判据是**段首 + 前一个分隔符**，不是「命令里出现过这个词」。",
+        };
+      }
+      return null;
     },
   },
 ];
