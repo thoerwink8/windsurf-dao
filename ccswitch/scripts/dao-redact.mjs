@@ -157,8 +157,16 @@ if (mode === "in-place") {
       rows.push({ path: t, ok: false, code: e.code || "EFAIL", quarantine: e.quarantine || null, message: e.message });
       if (!asJson) {
         out(`✗ ${t} —— ${e.code || "EFAIL"} ${e.message}`);
-        if (e.quarantine) out(`   → 已隔离该文件（${e.quarantine}）：宁可毁掉一份工件，不留一份裸密钥`);
-        else if (noQuarantine) out("   → 未隔离（--no-quarantine）：**这个文件现在可能是裸的，归你处置**");
+        // 三态要分开说：隔离成功 / **隔离也失败**（最坏的一格，必须喊出来）/ 显式没隔离。
+        // 首版把后两态并进「已隔离（failed）」一句 —— 那句话在最坏的一格上是**谎报成功**。
+        if (e.quarantine === "overwritten" || e.quarantine === "deleted") {
+          out(`   → 已隔离该文件（${e.quarantine}）：宁可毁掉一份工件，不留一份裸密钥`);
+        } else if (e.quarantine === "failed") {
+          out("   → 🔴 **隔离也失败了**：该文件此刻可能是裸的，且本工具动不了它（多半被占用）。");
+          out("      需要人手处置：关掉占用它的进程后删掉它，别把它 commit 进去。");
+        } else if (noQuarantine) {
+          out("   → 未隔离（--no-quarantine）：**这个文件现在可能是裸的，归你处置**");
+        }
       }
     }
   }

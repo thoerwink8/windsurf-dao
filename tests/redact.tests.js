@@ -219,6 +219,17 @@ console.log("\n=== ② fail-closed · redactFileInPlace 的隔离降级 ===");
   const t2 = threw(() => R.redactFileInPlace(p, { onFailure: "怎么都行" }));
   check("参数校验 · onFailure 非法值 ⇒ 抛 EARG（不静默当成缺省）", t2.threw && t2.code === "EARG");
 }
+{
+  // 隔离本身的三态。第三态（**隔离也失败**）是最坏的一格，必须能被喊出来而不是当成成功
+  const f = w("quarantine/target.log", `TOKEN=${CANARY_SK}\n`);
+  check("隔离 · 正控 ⇒ overwritten 且原内容没了", R.quarantine(f, "测试") === "overwritten" &&
+    !fs.readFileSync(f, "utf8").includes(CANARY_SK));
+  check("隔离 · 覆写后的内容自陈原因（下一个读到它的人知道发生了什么）",
+    fs.readFileSync(f, "utf8").includes("已被隔离"));
+  const d = sb("quarantine/is-a-dir.log");
+  fs.mkdirSync(d, { recursive: true });
+  check("隔离 · 动不了那个路径（目录）⇒ 如实返回 failed，不谎报成功", R.quarantine(d, "测试") === "failed");
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 console.log("\n=== ③ 渲染层断言 · 三态 ===");
@@ -328,6 +339,14 @@ function cli(args) {
   const k = cli(["--in-place", p]);
   check("CLI · --in-place ⇒ exit 0 且文件已脱敏",
     k.code === 0 && !fs.readFileSync(p, "utf8").includes(CANARY_SK), `code=${k.code}`);
+
+  // 最坏那一格的端到端：目标读不了**且**隔离也动不了它 ⇒ 必须 exit 2 且喊出「需要人手处置」，
+  // 不许表现成一次普通失败（那会被当成「重跑一下就好」而放过一个可能是裸的文件）
+  const dirAsFile = sb("cli/is-a-dir.log");
+  fs.mkdirSync(dirAsFile, { recursive: true });
+  const l = cli(["--in-place", dirAsFile]);
+  check("CLI · 读不了且隔离也失败 ⇒ exit 2 且明说需要人手处置",
+    l.code === 2 && /隔离也失败/.test(l.out) && /人手处置/.test(l.out), `code=${l.code} out=${l.out.slice(0, 300)}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
