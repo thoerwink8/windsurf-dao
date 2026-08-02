@@ -86,6 +86,16 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 - 新档：`ccswitch/clause-ledger.json` / `ccswitch/rules/dao-askuser.md` / `ccswitch/rules/scoped/dao-scope-legislation.md`
 - `C:/Users/Administrator/.claude/CLAUDE.md`（用户级重写）
 
+## 批 0 基线（2026-08-02 实测，用户亲跑 /context）
+
+- **dao.md：28.1k tokens**（盘上 57,343B——实测比率 ≈2.0B/token，中文密集）
+- 用户级 CLAUDE.md：888 tokens（2,068B）
+- **本次改造目标面合计 ≈29.0k tokens/session**
+- 按 ≤10KB 硬闸推算：重写后 dao.md ≈5k tokens，**每 session 预计净省 ≈24k tokens（-83%）**
+- 批 4 后用户再跑一次 /context 同口径对比，即自测方案第 1 项的两个端点
+- 参考（本契约不覆盖，仅记录）：mousse 项目级 CLAUDE.md 7.1k tokens、pr-evidence 1.3k——项目级面是潜在的下一批候选
+- git tag：`pre-rewrite` @ fa4ce0e（四 PR 收口后的 master，23 套 1,375 断言全绿）
+
 ## 实施形态
 
 多官分批派单（帅终审每批），批间用户可中断；预计批 1-2 与批 3-4 各一个执行波；全程 PR-first，windsurf-dao 仓。
