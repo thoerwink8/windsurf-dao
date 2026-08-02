@@ -116,7 +116,7 @@
         "external": false,
         "selector": "all-top-level",
         "role_scheme": "dispatch-sections",
-        "sha256": "7aec650e2dac7838a2a90f5d4b83e61e17bc36b804a16bf61dacf10cefcd2df2",
+        "sha256": "73ba2e125f0d03e3426bf4d901e8ff9110d6c64bc3e1915c8554183e982ae2fd",
         "lines": 147,
         "clauses": 59,
         "observation": 0,
@@ -1172,7 +1172,7 @@
       "body_excerpt": "- 编码铁律：改动含中文注释的文件（尤其 Cargo.toml/PowerShell 脚本）禁 `Get-Content | -replace | Set-Content` 管道——PS 5.1 对无 BOM 文件按系统 ANSI 代码页解码会把中文写成乱码；用 `[IO.File]::ReadAllText/Wri…"
     },
     {
-      "id": "c52446bb9ff7",
+      "id": "2b3c159cc9c5",
       "slug": "官通-body-file回读",
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "line": 80,
@@ -1682,7 +1682,7 @@
       "body_excerpt": "- **`git checkout -- <file>` 复原 mutation 前先确认基线是哪一态**（2026-07-27 清尾官自曝实证）。做 mutation 验证后用 `git checkout --` 复原，**复原到的是 HEAD 不是「工作区改前态」**——若该文件同时含尚未提交的本批实现，一并被冲…"
     },
     {
-      "id": "1115c1c5ae3d",
+      "id": "c6c75ad8cbd8",
       "slug": "官通-禁add全量",
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "line": 102,
