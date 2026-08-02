@@ -44,6 +44,24 @@
 // 自定义条件会让「为什么这条没报」变成两处判据的合取，排查成本翻倍。需要再收窄的
 // 场合请写成 conditional，并把产品型指纹显式写进 when。
 //
+// ── 2026-08-02：负向声明也要有机器可读形态（三仓自上而下审计第 2 件）─────────
+// 上面那套只定义了「是」怎么写。**「不是」原先的写法是「把那一行删掉」** ⇒ 在机器侧
+// 「答了，不是」与「从没答过」**逐字节相同**，于是 ①成文于该机制之前的存量项目对那一档
+// 检查结构上永不触发 ②没有任何东西能把这道题投递到它们面前（提醒谁？所有没写那五个字的
+// 仓？那里面绝大多数是已经答过「不是」的）。故补一个负向串 `PRODUCT_TYPE_NEGATIVE_WHEN`，
+// 与清单条目 `product-type-answered`（universal · info）配套：**两个串都不在 ⇒ 这道题没答**。
+//
+// **两个串必须互不为子串**，这是本设计唯一的硬约束（回归网：tests/scaffold-manifest.tests.js）。
+// 反例就在眼前：「非产品型项目」「不是产品型项目」这类**自然的否定写法整段含着正向串**，
+// 判据是纯子串 ⇒ 会被读成「是」。故负向串取「内部工具型项目」（与正向零重叠），并在骨架
+// 与报文里明写「原样抄，别自己造否定句」。**这一向本层挡不住**：写了否定句的项目会被
+// 判成产品型，而它看起来完全正常。未做检测器是有意的——全生态实测零实例，
+// 不为假想敌立判据（同 mousse-cli dispatch-clauses.md 既定政策）。
+//
+// **为什么负向串不参与 product-type 的开关判定**（即 evaluate 里只查 PRODUCT_TYPE_WHEN）：
+// 那一档的语义是「声明为产品型才查」，负向串的作用只是把「答过」这件事变得可见。
+// 两个串同时在场时按「是」处理——正向优先，判据只看正向那串在不在，与本文件此前的行为一致。
+//
 // ── 2026-08-01：`template` 字段（缺项报文的终点不该是「AI 现场重写一份」）─────
 // 审计实证：缺项报文大多以「运行 /dao-project-scaffold」「参考 stacks/xxx.md」收尾 ——
 // 那个终点是**让下一个 AI 现场重新发明一份**，于是同一个共性 rule 在每个项目里长得都不一样，
@@ -78,6 +96,11 @@ const TEMPLATES_ROOT = path.join(__dirname, "..", "templates");
 
 // product-type 类别的内建条件（唯一定义处，清单里不重复写）。
 const PRODUCT_TYPE_WHEN = { fileContains: { path: "CLAUDE.md", text: "产品型项目" } };
+
+// 「答了，不是」的机器可读形态（2026-08-02，判据与两个串的硬约束见头注）。
+// **它不参与 product-type 的开关判定**，只让「答过」这件事在机器侧可见；
+// 消费方是清单条目 `product-type-answered`（那里按值写死，本常量与它的一致性由测试钉住）。
+const PRODUCT_TYPE_NEGATIVE_WHEN = { fileContains: { path: "CLAUDE.md", text: "内部工具型项目" } };
 
 // 谓词种类。每个谓词节点是一个对象，**恰好带一个种类键**，外加可选的 "label"
 // （label 用于让报文说出「是哪一路信号命中的」，如 Tauri vs Electron）。
@@ -494,5 +517,5 @@ function check(projectRoot, manifestPath, opts) {
 module.exports = {
   validate, evaluate, load, check, defaultManifestPath, repoNameOf, exemptReason,
   _internal: { evalPred, makeCtx, globFiles, findFile, render, predErrors, copyInstruction, simpleRequirePath, psQuote },
-  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS, PRODUCT_TYPE_WHEN, TEMPLATES_ROOT,
+  CLASSES, SEVERITIES, LEAF_KINDS, COMBINATORS, PRODUCT_TYPE_WHEN, PRODUCT_TYPE_NEGATIVE_WHEN, TEMPLATES_ROOT,
 };
