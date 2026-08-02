@@ -1,4 +1,4 @@
-// dao-tool-nudge hook 回归网 — 两类提醒的正控 + 误伤负控
+// dao-tool-nudge hook 回归网 — 五类提醒的正控 + 误伤负控
 //
 // 跑法：node tests/dao-tool-nudge.tests.js   （全绿 exit 0，任一红 exit 1）
 //
@@ -27,7 +27,8 @@ const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-tool-nudge.js");
 // 而「结论取决于机器当时的状态」正是这份回归网要防的东西。每次开跑清空。
 const TMP = path.join(REPO, "_tmp", "tool-nudge-tests");
 const STATE = path.join(TMP, "browser-mcp-seen.json");
-fs.rmSync(TMP, { recursive: true, force: true });
+// maxRetries：⑤ 的夹具里有真的 .git 对象（Windows 下是只读文件），一次 rm 可能撞 EPERM。
+fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 fs.mkdirSync(TMP, { recursive: true });
 
 let pass = 0, fail = 0;
@@ -189,7 +190,122 @@ console.log("\n──── ④ 浏览器 MCP 首调提醒（瘦身批 #5 新增
   }
 }
 
-console.log("\n──── ⑤ --selfcheck：matcher 覆盖面必须能被独立问一次 ────");
+console.log("\n──── ⑤ 热重载 dev server 起在主仓树（批 1-D 新增）────");
+{
+  // 判据是「那一刻所在目录是不是链接 worktree」，所以必须造真的 git 树 —— 拿 mock 判不了
+  // `git rev-parse --git-dir --git-common-dir` 这个契约本身对不对。
+  const G = path.join(TMP, "g");
+  const MAIN = path.join(G, "mainrepo");
+  const WT = path.join(G, "wt");
+  const NOTREPO = path.join(G, "notrepo");
+
+  fs.mkdirSync(MAIN, { recursive: true });
+  // 「git 判不了」的夹具：**不能只建一个空目录**——它坐落在本仓工作树里，`git -C` 会一路
+  // 向上找到本仓的 .git，于是那条负控会以「这是个链接 worktree」的理由通过，测的根本不是
+  // null 分支。（这条是被下面的反向 mutation 当场抓出来的，原写法是空目录。）
+  // 放一个格式非法的 `.git` 文件 ⇒ git 确定性地 exit 128，走的才是真正的「判不了」。
+  fs.mkdirSync(NOTREPO, { recursive: true });
+  fs.writeFileSync(path.join(NOTREPO, ".git"), "not a gitfile\n", "utf8");
+  let fixtureErr = "";
+  for (const [name, args] of [
+    ["init", ["-c", "init.defaultBranch=main", "init", "-q", MAIN]],
+    ["commit", ["-C", MAIN, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]],
+    ["worktree", ["-C", MAIN, "worktree", "add", "-q", WT, "-b", "feat/x"]],
+  ]) {
+    const r = spawnSync("git", args, { encoding: "utf8" });
+    if (r.status !== 0) { fixtureErr = `${name} exit=${r.status} ${String(r.stderr || "").slice(0, 120)}`; break; }
+  }
+  // 造不出夹具 ≠ 这一节通过。零样本要**红**着说出来，否则「没跑」与「跑了且全过」长得一样。
+  check("夹具就位（真 git 主仓 + 真链接 worktree）", fixtureErr === "", fixtureErr);
+
+  // 走 Bash 面并带上 cwd（既有 nudge() 不传 cwd，故这里另开一个 helper，不动它）
+  function bash(command, cwd, script) {
+    const r = spawnSync(process.execPath, [script || HOOK], {
+      input: JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }), encoding: "utf8",
+    });
+    let out = {};
+    try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
+    return { ctx: String((out.hookSpecificOutput || {}).additionalContext || ""), raw: String(r.stdout || "") };
+  }
+  const hits = (cmd, cwd) => /dao 热重载隔离/.test(bash(cmd, cwd).ctx);
+
+  if (fixtureErr) {
+    check("⑤ 全部断言（夹具缺失，无从判定）", false, "夹具未就位 ⇒ 本节零样本，不按通过计");
+  } else {
+    const positives = [
+      "pnpm tauri dev", "pnpm dev", "npm run dev", "pnpm dev:debug",
+      "vite", "npx vite --port 5173", "cargo tauri dev", "webpack serve",
+      "pnpm run dev", "yarn dev", "bun dev", "webpack --config w.js --watch",
+    ];
+    for (const cmd of positives) check(`正控：主仓树里 \`${cmd}\` → 提醒`, hits(cmd, MAIN));
+
+    const negatives = [
+      ["专用 worktree 里起 dev 是正路，不该提醒", "pnpm tauri dev", WT],
+      ["专用 worktree 里 pnpm dev 同理", "pnpm dev", WT],
+      ["git 判不了（rev-parse 非零退出）→ 静默，不猜", "pnpm dev", NOTREPO],
+      ["vite build 不是 dev server", "vite build", MAIN],
+      ["vite preview 不是 dev server", "vite preview", MAIN],
+      ["pnpm build 不该提醒", "pnpm build", MAIN],
+      ["pnpm test 不该提醒", "pnpm test", MAIN],
+      ["npm start 形态可能不是 dev server，刻意不认", "npm start", MAIN],
+      ["--help 不起进程", "pnpm dev --help", MAIN],
+      ["字符串字面量里的命令不该提醒", 'echo "pnpm dev"', MAIN],
+      ["devtools 不是 dev（词边界）", "pnpm run devtools", MAIN],
+      ["dev 出现在别的脚本名里不该命中", "pnpm test:dev", MAIN],
+    ];
+    for (const [name, cmd, cwd] of negatives) {
+      check(`负控：${name}`, !hits(cmd, cwd), JSON.stringify(bash(cmd, cwd).ctx.slice(0, 80)));
+    }
+
+    // cd 跟踪：`cd ../wt && pnpm dev` 是正路形态，不跟踪 cd 就会对它误报
+    check("cd 跟踪：cd 进 worktree 再起 dev → 不提醒（相对路径）", !hits("cd ../wt && pnpm dev", MAIN));
+    check("cd 跟踪：cd 进 worktree 再起 dev → 不提醒（绝对路径）", !hits(`cd "${WT}" && pnpm tauri dev`, MAIN));
+    check("cd 跟踪：从 worktree cd 回主仓再起 dev → 提醒", hits("cd ../mainrepo && pnpm dev", WT));
+    check("cd 跟踪：`cd -` 无从推进 ⇒ 放弃判定而不是按旧目录判", !hits("cd - && pnpm dev", MAIN));
+    check("cd 跟踪：裸 `cd`（回 home）同理放弃判定", !hits("cd && pnpm dev", MAIN));
+
+    // 提醒里必须给得出可执行的出路与判据句，否则它只是一句「你错了」
+    const ctx = bash("pnpm tauri dev", MAIN).ctx;
+    check("正控：提醒里给得出专用树的建法 + 判据句 + 事后二选一",
+      /git worktree add/.test(ctx) && /watch 的是哪棵树/.test(ctx) && /并发写入污染/.test(ctx),
+      JSON.stringify(ctx.slice(0, 120)));
+    check("正控：提醒里点明「实例隔离 ≠ 工作树隔离」（免得被 start-isolated-dev 类脚本读成已解决）",
+      /实例隔离/.test(ctx) && /start-isolated-dev/.test(ctx));
+    check("正控：提醒里带上判定所用的那个目录（否则无从复核它判的是哪棵树）",
+      ctx.includes(MAIN) || ctx.includes(MAIN.replace(/\\/g, "/")), JSON.stringify(ctx.slice(0, 160)));
+
+    // mutation：把 ⑤ 的豁免正则改成恒真 ⇒ 每条启动命令都被豁免 ⇒ ⑤ 整类哑掉。
+    // 正控必须掉成静默，而 ② 的 Bash 面必须不受影响（否则「变哑」可能只是整个 hook 崩了）。
+    {
+      const src = fs.readFileSync(HOOK, "utf8");
+      const from = "const DEV_SERVER_EXEMPT_RE = /\\s(?:--help|-h|--version|-v)\\b/;";
+      check("mutation 靶点在源码里唯一存在", src.split(from).length === 2, `出现 ${src.split(from).length - 1} 次`);
+      const mutant = path.join(TMP, "mutant-devserver-re.js");
+      fs.writeFileSync(mutant, src.replace(from, "const DEV_SERVER_EXEMPT_RE = /(?:)/;"), "utf8");
+      const before = bash("pnpm tauri dev", MAIN);
+      const after = bash("pnpm tauri dev", MAIN, mutant);
+      check("mutation：真文件提醒、改坏后不提醒 ⇒ 上面那批断言真的在测这段判据",
+        /dao 热重载隔离/.test(before.ctx) && !/dao 热重载隔离/.test(after.ctx),
+        `after=${JSON.stringify(after.ctx.slice(0, 60))}`);
+      check("mutation：改坏 ⑤ 之后 ② 仍然响（证明不是整个 hook 崩了）",
+        /dao PR 合并链/.test(bash("gh pr merge 42", MAIN, mutant).ctx));
+
+      // 反向 mutation（**这一条是给上面那批负控验判别力的**）：上面 12 次 mutation 全在
+      // 「让它变哑」这一侧，那样「worktree 里静默」的负控一次都不会红 —— 它们可能只是因为
+      // 整类哑了才通过的。故把 worktree 判定改成恒返回「主仓树」，负控必须当场红。
+      const from2 = "return norm(lines[0]) !== norm(lines[1]);";
+      check("反向 mutation 靶点在源码里唯一存在", src.split(from2).length === 2, `出现 ${src.split(from2).length - 1} 次`);
+      const loose = path.join(TMP, "mutant-worktree-blind.js");
+      fs.writeFileSync(loose, src.replace(from2, "return false;"), "utf8");
+      check("反向 mutation：判定改成「一律算主仓树」后，worktree 负控真的红了 ⇒ 那批负控有判别力",
+        /dao 热重载隔离/.test(bash("pnpm tauri dev", WT, loose).ctx));
+      check("反向 mutation：git 判不了那条仍然静默（它在 return 之前就退出了，与本次改动无关）",
+        !/dao 热重载隔离/.test(bash("pnpm dev", NOTREPO, loose).ctx));
+    }
+  }
+}
+
+console.log("\n──── ⑥ --selfcheck：matcher 覆盖面必须能被独立问一次 ────");
 {
   // 这里**不断言本机是绿还是红** —— 那取决于用户有没有扩 matcher，而这份测试要在两种状态下
   // 都成立。断言的是**自检自身自洽**：它逐面报了、报的结论与退出码一致、并给得出修法。
