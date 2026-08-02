@@ -1,0 +1,96 @@
+# canonical issue 模板 · 真相源在 windsurf-dao ccswitch/templates/ISSUE_TEMPLATE/。
+# 项目 .github/ISSUE_TEMPLATE/task.yml 从此派生。收益边界见同目录 bug.yml 抬头注释。
+
+name: 🛠 任务
+description: 要做一件事（新功能 / 改造 / 补基建）
+labels: ["任务"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **这张单会被当成派单契约用** —— 派单令引用它的编号，验收对照它的「怎么算完」。
+        所以下面两栏是承重的：**怎么算完** 与 **显式不覆盖**。
+        含糊的验收判据 = 做完之后没人说得清做没做完。
+
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么要做（情境）
+      description: 现在是什么状态、哪里不舒服。人话，一两句。别直接跳到方案。
+      placeholder: 现在每次 X 都要手动 Y，一个窗里做了七八次，而且忘一次就静默出错。
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 做什么
+      description: 打算怎么解。允许写得粗，但要能让接手的人知道从哪下手。
+      placeholder: 把 Y 那一步做成脚本挂在 Z 上，调用方只需 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 怎么算完（验收判据）
+      description: |
+        **写成可以被指着说「过了/没过」的东西**：一条命令的退出码、一个能贴出来的输出、
+        一次能复现的走查。禁「做好了」「体验更顺」这类没有判据的说法。
+      placeholder: |
+        - [ ] 跑 `…` 退出码 0
+        - [ ] 走查：打开 X → 点 Y → 看到 Z（截图贴评论）
+        - [ ] 旧路径不回归：`…` 仍照原样工作
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: 显式不覆盖
+      description: |
+        本单**不**做什么。空着比写错更贵——范围没写下来，做的人会自行扩大或缩小而没人察觉。
+        真的想不出边界就写「暂无，越界时回来补这一栏」。
+      placeholder: |
+        - 不动 X 的存储格式（那是另一单）
+        - 不做 mac/linux 适配，本单只覆盖 Windows
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 有多急
+      description: ⚠ 只写进正文，**不会自动打成标签**（dropdown 设不了 label），P 标签仍要另补。
+      options:
+        - P0 — 挡住别的事，现在就要
+        - P1 — 本轮该做
+        - P2 — 排队，有空再说
+        - 说不好，请帮我判
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 背景资料 / 技术证据（可选，折叠）
+      description: 相关文件行号、竞品做法、之前的调研结论、外部链接。
+      placeholder: |
+        <details>
+        <summary>背景与证据</summary>
+
+        相关文件:行号 / 之前那次讨论 / 竞品是怎么做的 …
+
+        </details>
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: 开单前
+      options:
+        - label: 「怎么算完」那几条我自己能判过没过，不需要再问一次
+          required: false
+        - label: 这单会产生 PR（不会产生 PR 的一次性微调不该开单，否则单比活多）
+          required: false
