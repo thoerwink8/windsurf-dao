@@ -76,6 +76,11 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条�
 （此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；
 故改为扫目录而非手维护清单——手维护的清单本仓已被咬过两次。）
 
+## issue 派单中枢（2026-08-02 接入）
+
+本仓自 2026-08-02 起用 **issue 做派单中枢**（当日实况：单日 20+ 单/PR 多官派单，事实中枢先行、基建随后补齐）。标签体系/三节点留痕/蓄水池纪律照 dao 的 `ccswitch/rules/dao-workitem.md`，项目侧落地细则见 `docs/ops/DISPATCH-HUB.md`。用户只需记一件事：**筛 `待拍板` 标签（或看置顶单）即见所有等你的事**；观测看板 https://github.com/users/thoerwink8/projects/1 。
+**issue/PR 正文说人话无条件生效**（人话领先、术语首现括注、技术证据折叠——没参与项目的人扫顶部就该知道发生了什么）。
+
 ## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
 
 > 修道先于传道。这是**本仓库工作约定**，只约束在 windsurf-dao 内工作的 Agent。
