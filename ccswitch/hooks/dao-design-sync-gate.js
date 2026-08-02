@@ -15,6 +15,34 @@
 // 文字自检还在、hook 也在。两者同时命中时后果只是「AI 已经想同步了，又被拦了一次」，
 // 无害；反过来 hook 没注册时文字仍是唯一兜底 —— 这正是「先立后破」的形态。
 //
+// ── 🔴 三通道分工（2026-08-02 补第三条；**本节是这三者关系的唯一真相源**）──────
+// 「改 UI 必动 design/」现在有三个执行通道。**三条都留着是有意的，它们互补不互替** ——
+// 但那也意味着同一条规则有三份措辞，而本文件末段记着的那两处分歧（closing.md 比 dao.md 宽、
+// harvest-log 提议改判据）正是「三份各自漂移」的样品。故分工只写在这里一处，
+// 另两处（`ccswitch/templates/githooks/pre-commit` 头注、scaffold 清单条目
+// `design-sync-precommit` 的 why）**只留指针，不复述**。
+//
+//   ㈠ **散文判据**（dao.md 完成流水线 ②）
+//      时刻：AI「正要说做完了」· 输入：AI 自己回想 · 覆盖：读到 dao.md 的一切 agent
+//      够不到：无标记时刻的自由裁量 —— 本仓实测这一类携带率 9-24%
+//   ㈡ **本 Stop hook**
+//      时刻：同㈠，但由宿主事件投递 · 输入：**本轮改动**（分支级 diff ∪ staged ∪ unstaged ∪ 未跟踪）
+//      覆盖：Claude **主**会话，每会话至多 block 一次
+//      够不到：非 Claude 宿主；subagent（走 SubagentStop）；未注册时整条失效
+//   ㈢ **git pre-commit 闸**（`ccswitch/templates/githooks/pre-commit`，2026-08-02 上移自 TraceyU）
+//      时刻：`git commit` · 输入：**staged 内容**
+//      覆盖：**所有宿主的所有提交**（Codex / Cascade / 裸 git / IDE）
+//      够不到：`--no-verify`；未 `git add` 的改动；未接 `core.hooksPath` 时整条失效
+//
+// **为什么不能只留一条**（三个方向各试一次，三次都不成立）：
+//   · 只留㈢ ⇒ 「本轮改了 UI 但这次提交只 staged 了别的文件」整类漏掉，且 AI 声明完成时无人拦。
+//   · 只留㈡ ⇒ 换个宿主（本体系明确要服务 Codex/Cascade）后零覆盖，而**零覆盖与全过长得一样**。
+//   · 只留㈠ ⇒ 那就是本 hook 存在的理由本身。
+// **三者的判据允许不同，但分歧必须是有意的**：㈡按 dao.md 的窄判据（`.tsx` 且文件含 JSX），
+// ㈢按路径形态（另含 `.vue`/`.svelte`/`index.css`，见其头注 UI_RE）。**这处不一致是选出来的、
+// 不是漏出来的**：㈢在 pre-commit 那一刻只拿得到路径与 staged diff，只能按路径判；
+// 把㈡放宽到㈢那样等于**改判据**，属立法，不搭迁移的车（同下方「迁移时不顺手统一」那两笔）。
+//
 // ── 🔴 为什么这次敢用 Stop（上一次结论是「砍掉 Stop」）───────────────────────
 // docs/specs/_archive/auto-behavior-design.md 第 2 轮结论写着「**砍 Stop，全部归
 // UserPromptSubmit**」，理由是 loop 风险，出处是 memory 里那条 ralph-loop 插件的
