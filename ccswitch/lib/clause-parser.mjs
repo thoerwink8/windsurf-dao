@@ -142,9 +142,17 @@ export function backtickSpans(raw) {
  * 坏 markdown，且失败是**响的**（多一条 violation），不是静默的。
  * **闭合的** span 照旧遮罩，原先要防的假阳性防护不变。
  *
- * ⚠ 本函数与 PS 侧 `check-clauses-structure.ps1` 的 `Get-MaskedLine` 是**两套独立实现**，
- *   共享的是「未闭合游程当字面文本」这个**外部契约**，不是代码。`--reconcile` 的判别力
- *   正建立在两侧独立之上；只改一侧会让 mine≠theirs 变红（本批两侧同批对齐）。
+ * ⚠ **与 PS 侧的独立性是分层的，别整段读成「两套独立实现」**
+ *   （2026-08-02 对抗验证官核出，本注释原写了过强表述，已订正）。逐层实况：
+ *     · **游程扫描器** —— 独立（本侧正则 `/`+/g`，PS 侧手写字符循环）
+ *     · **遮罩拼装**   —— 独立（本侧按区间切片重拼，PS 侧改 char 数组）
+ *     · **配对层**（`backtickSpans` ↔ PS `Get-BacktickSpans`）—— **逐行直译，不是独立实现**：
+ *       变量名（runs/spans/unmatched/r/open/closeIdx/close/k）、循环形状、分支顺序完全对应。
+ *   ⇒ **`--reconcile` 对「配对规则本身对不对」判别力≈0**：两侧会以同一种方式一起错、差恒为 0。
+ *     它仍夹得住**只改一侧**（故本批两侧必须同批对齐），以及上面那两层的分歧。
+ *   本文件开头「为什么不复用 PS 那套解析」讲的正是禁止这件事 —— 配对层现在违反了它。
+ *   **要不要把配对层改成真正独立是判断档**（独立意味着允许两侧结论不同，那时以谁为准是新问题），
+ *   **不自定**，已开单呈裁：windsurf-dao issue #91（并含「普查与检出共用遮罩」那个同源缺口）。
  */
 export function maskCodeSpans(raw) {
   const { spans } = backtickSpans(raw);
