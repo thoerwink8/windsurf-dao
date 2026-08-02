@@ -662,6 +662,23 @@ async function providersSection() {
         r.sum && r.sum.providers === 3 && /NoHooks/.test(r.out), JSON.stringify(r.sum) + "\n" + r.out.slice(0, 1200));
     }
 
+    // ── provider 的 permissions 面也过同一道判据 ──
+    // 今天真实数据里这类条目是 0 条，**正因为是 0 条才必须有夹具**：真数据上零命中
+    // 与「这一面根本没接上」输出完全一样（本脚本自己治的就是这个病）。
+    {
+      const db = mkDb("provider-perms", [
+        { id: "p-perm", name: "Perm", app_type: "claude", settings_config: pcfg([], {
+          permissions: { deny: ["Bash(grep:*)", "Bash(node " + GHOST + ":*)"], allow: ["Read", "Bash(node " + ALIVE + ":*)"] } }) },
+      ]);
+      const r = runProviders(shell, db);
+      check("provider 的 permissions.deny 指向已删脚本 → 红且点名",
+        r.code === 1 && r.sum && r.sum.dead === 1 && /dao-provghost\.js/.test(r.out) && /permissions\.deny/.test(r.out),
+        JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
+      check("provider 的 permissions.allow 指向存在脚本 → 不误伤；无路径条目也不误伤",
+        r.sum && r.sum.dead === 1, JSON.stringify(r.sum));
+      check("permissions 条目不掺进 hooks 计数（那个数与普查配对）", r.sum && r.sum.hooks === 0, JSON.stringify(r.sum));
+    }
+
     // ── 孤儿反查：只在 provider 层注册的 hook 不许被误报成孤儿 ──
     // 「核不了/没注册」是两种病两种处方；providers 是真下发源，在那里注册就是注册了。
     {
