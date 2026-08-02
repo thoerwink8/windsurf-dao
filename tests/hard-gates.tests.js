@@ -356,10 +356,15 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
 
 console.log("\n──── G7 · shell 里跑搜索/读文件（正负控全部取自真语料）────");
 {
-  // ⚠ 本节**每一条命令都是从 `~/.claude/projects/**/*.jsonl` 里逐字抄出来的真实调用**，
-  //   一条都不是我构造的。理由是 dispatch-clauses 对抗验证官节点名的那条：
-  //   「近似手段的验证语料禁只来自本轮发现的形态」—— 自造语料只能证明「我想到的那些能拦」，
-  //   证不了「真实世界长什么样」。普查规模：32721 条命令 / 26402 条唯一命令。
+  // ⚠ **语料来源，照实说（2026-08-02 由对抗验证官抽查 27 条回查后改口）**：本节命令
+  //   **取自 `~/.claude/projects/**/*.jsonl` 的真实调用形态**，其中一部分逐字整条命中、
+  //   一部分作为子串命中、**另有约 10 条是为覆盖某个分支而构造的**（如
+  //   `echo "grep -n foo file"`、`git log --grep="fix" -S "foo"`），还有数条把真实路径
+  //   做了脱敏改写。**首版这里写的是「一条都不是我构造的」——那句是笃定措辞且不实**，
+  //   留着这行订正当实例：自证性的话最容易被后人当实证引用，所以它必须最保守。
+  //   实质影响小（构造的都是低风险负控），但「禁笃定措辞」这条对作者自己同样生效。
+  //   仍然成立的那一半：**判据是拿真语料的分布定的**（32721 条命令 / 26402 条唯一命令），
+  //   而不是拿本轮想到的形态定的 —— 那才是 dispatch-clauses「语料从哪来」要防的病。
   const positives = [
     ["sed 读文件片段（带 cd && 前缀，真语料最常见形态）",
       "cd /d/frank/mousse-cli && sed -n 130,200p crates/mousse-core/src/prompt_store/mod.rs", /Read 的/],
@@ -373,6 +378,18 @@ console.log("\n──── G7 · shell 里跑搜索/读文件（正负控全部
     // 两者只差一个字符，而放错会让绝大多数真实 grep 调用（真语料里极常带 `2>/dev/null`）整批漏掉。
     ["grep 带 2>/dev/null 仍拦（stderr 重定向 ≠ stdout 落文件）",
       'grep -rl "cdn.tailwindcss.com" "$dest/pages" 2>/dev/null', /Grep 工具/],
+    // ── 下面两条钉的是 2026-08-02 对抗验证官找出的两个过宽豁免（都已修）──────
+    // 缺陷一：HEREDOC 原为裸 `/<</`，匹配整段任意位置 ⇒ 正文里出现 `<<` 就整条放行。
+    // 这条命令是真语料（查 git 冲突标记），它**不含任何 heredoc**，必须被拦。
+    ["正文里的 `<<` 不是 heredoc（真语料，查 git 冲突标记）",
+      'grep -n "^<<<<<<<\\|^=======\\|^>>>>>>>" src-ui/src/components/TerminalPane.tsx', /Grep 工具/],
+    // 缺陷二：`-prune` 曾被列进 find 的"动作"清单 ⇒ 整条放行。
+    // 它是**谓词不是动作**，这条是纯文件搜索、100% 可 Glob 替代。
+    ["find -prune 是谓词不是动作，仍要拦",
+      "find . -path ./node_modules -prune -o -name '*.test.ts' -print", /Glob 工具/],
+    // PowerShell 赋值式段首：`Select-String` 在词表里，却曾被 `$x = ` 挡住整批漏过。
+    ["PowerShell 赋值式段首（$x = Select-String）仍要拦",
+      "$hits = Select-String -Path D:\\frank\\x\\a.md -Pattern version", /Grep 工具/],
   ];
   for (const [name, c, altRe] of positives) {
     const r = gate(bash(c));
@@ -511,6 +528,26 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
         "head -25 _tmp/branches-to-delete.txt > _tmp/batch1.txt"],
       ["-c 字节模式豁免", 'if ((head === "tail" || head === "head") && /(^|\\s)-c(\\s|=|\\d)/.test(rest)) continue;',
         "if (false) continue;", 'tail -c 3000 "C:/Users/x/out.txt"'],
+      // ── 下面三条 2026-08-02 补，补它们的理由是本 PR 最贵的一课 ──────────────
+      // 首版只给了上面三个分支反向 mutation；对抗验证官随后找出的两个真缺陷
+      // （heredoc 裸 `<<` 匹配整段任意位置、`-prune` 被误当成动作）**恰好落在剩下这几个
+      // 没配反向 mutation 的分支上**。上面那段注释写着「一组永远为真的负控与一组真管用的
+      // 负控在全绿输出里长得一模一样」—— 这句话在本文件里**自己应验了一次**。
+      // ⇒ 每个豁免分支都必须有一条反向 mutation。这不是形式主义，它就是那两个缺陷的成因。
+      // ⚠️ **这条负控是构造的，不是真语料 —— 而这一格本身就是发现**：
+      // 初版用的是真语料 `cat > _tmp/probe.js <<'JS'`，反向 mutation 当场**红**（before=0 after=0）：
+      // 它根本没走 heredoc 分支，是被 `> _tmp/probe.js` 的 STDOUT_TO_FILE 分支放行的。
+      // 顺着查下去，拿真 hook 对全库 **1147 条含 `<<` 的命令**跑了原版 vs 去掉 heredoc 的变异体，
+      // 判决差集 **0 条** ⇒ **heredoc 在真语料上是一条死分支**，每条都被别的分支盖住了。
+      // 仍然保留这个分支（`sed 's/a/b/' <<EOF` 这种"输入是内联文本"的形态是真实 shell 语义，
+      // 砍掉它就是一个真误伤），但**必须用构造语料才测得到它** —— 照实标注，
+      // 别让后人以为它被真实数据验证过。**没有这条反向 mutation，这一格永远不会被发现。**
+      ["heredoc 豁免（构造语料·见上方注释）", "if (HEREDOC.test(rest)) continue;", "if (false) continue;",
+        "sed 's/a/b/' <<'EOF'"],
+      ["find 动作豁免", 'if (head === "find" && /(^|\\s)-(exec|execdir|ok|delete)(\\s|$)/.test(rest)) continue;',
+        "if (false) continue;", 'find ccswitch -name "*.md" -exec wc -l {} \\;'],
+      ["-f 流式豁免", 'if ((head === "tail" || head === "head") && /(^|\\s)-(f|F|-follow)(\\s|$)/.test(rest)) continue;',
+        "if (false) continue;", "tail -f _tmp/dev.log"],
     ];
     for (const [name, from, to, negCmd] of REVERSE) {
       check(`反向 mutation 靶点唯一存在（G7 ${name}）`, src.split(from).length === 2,

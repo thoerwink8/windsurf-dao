@@ -17,7 +17,8 @@
 | 你要查什么 | 走哪条 | 为什么 |
 |---|---|---|
 | **库 / 框架 / SDK / API / CLI 的文档**（React、Tauri、Anthropic SDK、某个 npm 包……） | **context7 优先** | **这条一直就在，只是没人看见**：context7 自己的 MCP server instructions 原文就写着「凡用户问到库、框架、SDK、API、CLI、云服务，用本 server 取当前文档，**优先于网页搜索**；哪怕你觉得自己知道答案也用——你的训练数据可能没跟上」。它每个会话都注入，**不是本档新引入的方案，本档只是把它搬到看得见的地方**。 |
-| **普通网页**（博客、GitHub、RFC、任意站点） | **WebFetch** | 实测正常，没有问题。 |
+| **GitHub 上的内容**（某个仓的文件、目录树、issue、PR、release） | **`gh api`**（不是 WebFetch） | 走已登录的 CLI：私有仓也读得到、不吃匿名限流、拿的是原始字节而不是渲染后的页面。取文件：`gh api repos/<o>/<r>/contents/<路径> --jq '.content' \| base64 -d > _tmp/x.md`，再用 Read/Grep 读。**本档的镜像仓那条路就是这么跑通的**，而同一台机器上 `raw.githubusercontent.com` 经 WebFetch 撞过 socket hang up ⇒ **同一主机，换条路就通**。 |
+| **普通网页**（博客、RFC、任意站点） | **WebFetch** | 大体正常。**但不是全通**——同日 `firecrawl.dev/pricing` 超时，见下面清单第 2 行。取不到先换条路再试，别直接跳到重器。 |
 | **Claude Code / Claude API 自己的官方文档** | 见下面「特例」 | 官方文档站本机取不到，但有两条免费替代，都实测有效。 |
 | 以上都取不到 | 见下面「Firecrawl 的位置」 | **默认不用**；要用先过那一节的三样自检。 |
 
