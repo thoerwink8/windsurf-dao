@@ -31,7 +31,7 @@
       { "候选": "docs/specs/ 存在", "出处": "同上", "不收原因": "dao-loop 工作区，没开过 loop 的项目本就不该有。" },
       { "候选": "commit subject 带宿主前缀 [cc]/[codex]", "出处": "dao.md 言·名之则", "不收原因": "不是项目状态而是每次提交的动作，SessionStart 无从核对（要查得挂 git hook 或复审 range，另一条链）。" },
       { "候选": "design/ 完整资产结构（pages/components/ref/workspaces/archive/handoff/CHANGELOG/PROTOTYPE-SPEC/.od-skills symlink…）", "出处": "dao-project-scaffold design-assets.md 检查清单", "不收原因": "十条存在性检查一次性全报会淹没其他项；且 symlink 有效性需 lstat + 目标可达判定，属深度检查。本清单只收其中最承重的一条（design/CONTEXT.md，新开会话第一眼读的对齐入口），其余留 design-assets.md。" },
-      { "候选": ".claude/rules/*.md 必须带 frontmatter（description + paths: 条件加载）", "出处": "2026-07-27 备案清单化捞出的第五个缺口（dao-growth-loop.md §四.6 裁定 C）", "不收原因": "⏸ **挂账不立，非永久否决**。解冻条件：先验证 `paths:` 条件加载在当前宿主真的生效。理由——同日刚踩过「未验证就当兜底承诺」的坑（帅向用户宣称某漂移检测器能报竞品 hook 复发，经查其判据结构上跳过第三方 exe）；`paths:` 若实际不生效，立这条等于要求所有项目加一段无效 frontmatter。先验证，再立法。附带代价：立即收进来会对多个现有项目集中报错，而报的可能是个无效要求。" }
+      { "候选": ".claude/rules/*.md 必须带 frontmatter（description + paths: 条件加载）", "出处": "2026-07-27 备案清单化捞出的第五个缺口（本仓 docs/specs/dao-growth-loop.md §四.6 裁定 C；2026-08-02 由 mousse-cli docs/ops/ 迁入本仓）", "不收原因": "⏸ **挂账不立，非永久否决**。解冻条件：先验证 `paths:` 条件加载在当前宿主真的生效。理由——同日刚踩过「未验证就当兜底承诺」的坑（帅向用户宣称某漂移检测器能报竞品 hook 复发，经查其判据结构上跳过第三方 exe）；`paths:` 若实际不生效，立这条等于要求所有项目加一段无效 frontmatter。先验证，再立法。附带代价：立即收进来会对多个现有项目集中报错，而报的可能是个无效要求。" }
     ]
   },
 

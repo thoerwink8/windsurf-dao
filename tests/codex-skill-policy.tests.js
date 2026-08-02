@@ -10,7 +10,9 @@
 // `agents/openai.yaml`（`policy.allow_implicit_invocation: false`）补齐语义；AI 内部件
 // 4 个**刻意不加**——那个开关的效果是「禁 AI 自动调用、只留用户显式调用」，与「用户不敲、
 // AI 用」的定位正好相反。
-// 分组判据与完整证据：mousse-cli `docs/ops/dao-ecosystem-audit.md` §8.4 / §8.8。
+// 分组判据与完整证据：本仓 `docs/ops/dao-ecosystem-audit.md` §8.4 / §8.8
+// （2026-08-02 由 mousse-cli `docs/ops/` 迁入本仓——被描述的对象整个在本仓，
+//  而契约真相源此前住在一个项目仓里）。
 //
 // 加完之后**零守卫**：文件被删、被改成 true、新 skill 忘了加，都不会有任何信号。本测试补这一面。
 //
