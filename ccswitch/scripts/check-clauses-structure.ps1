@@ -174,8 +174,32 @@
         补上了一半：正文删了而台账还在会现形；两边一起删仍然静默）。
       · **台账里的数字对不对本闸同样判不了**：检查 6 只保证正文与台账说的是同一句话。
         两边一起写错、或搬录时一起搬错，闸全绿。
+      · 🔴 **检查 5 的「自检」那一半与检出复用同一个 `Get-MaskedLine`（已知缺口，本批未修）**。
+        dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」讲的正是这个：
+        普查（Get-ClauseCensus）与检出（Get-ClauseRecords）各走各的**节状态机**（那一层是
+        独立的、刻意的），但**遮罩这一层两边共用** ⇒ 遮罩错了两边一起瞎、集合差恒为 0。
+        2026-08-02 实测坐实：未闭合反引号缺陷期，Marked 模式下 census 与检出**同时**
+        少数同一行（85→86 那一行），检查 5b 全程不响、退出码干净。
+        **本批只修了遮罩本身，没有拆掉这个共用** —— 拆它要给普查另写一套遮罩，
+        而「两套遮罩该不该允许结论不同」是判断不是照做（两套都对时集合差恒 0，
+        那就白写；两套不同时以谁为准又是新问题）。故此处只把缺口写明，
+        处置交下一批/派单方裁。**别把本批的绿读成「这一层现在有自检了」。**
+        📌 **已挂账：windsurf-dao issue #91**（带关闭条件，owner 栏待派单）。同一张单还记着
+        一个**叠加**缺口：本该跨实现兜底它的 `gen-clause-index.mjs --reconcile`，其
+        **配对层与本文件是逐行直译而非独立实现**（变量名/循环形状/分支顺序完全对应）
+        ⇒ 配对规则写错时两侧以同一种方式一起错、差恒为 0。
+        ⇒ **遮罩这一层出错时，守卫自检与跨实现对账在同一个位置同时失明。**
 #>
 
+# `[CmdletBinding()]` 不是装饰：没有它，PowerShell script 会把**认不出的具名参数**
+# 静默吞进 $args ⇒ `-Path <某文件>`（把参数名记错）不报错、`$TargetFile` 保持缺省值
+# ⇒ **本闸转头去扫 dao.md 并报 OK**，而操作者以为扫的是他给的那个文件。
+# 2026-08-02 实测：`... -Path D:\...\mousse-cli\docs\rules\dispatch-clauses.md` ⇒ exit 0、
+# 输出里「目标：」那一行写着 ccswitch/dao.md —— 一次「看起来干净」的**假绿**，
+# 而它恰好就是本批缺陷被误判为「已修好」的那条路径。
+# 加上之后：参数名打错 ⇒ 绑定错误、非零退出。属本闸自己在治的那类病（扫错对象 = 零样本
+# 的另一种形态），故一并 fail-closed。
+[CmdletBinding()]
 param(
     [string]$TargetFile = '',
     [ValidateSet('Marked', 'AllTopLevel')][string]$ClauseSelector = 'Marked',
@@ -237,6 +261,68 @@ $script:SelfAuthoredPattern = '\[自定@(\d{2}-\d{2})\]'
 $script:JudgeOnlyMark  = '[仅判据·无触发]'
 $script:ObservingMark  = '[观察中]'
 
+function Get-BacktickRuns {
+    <#
+      把一行里的**反引号游程**扫出来（起点 + 长度）。单独成函数是因为遮罩与
+      「未闭合游程」观察线都要它，而判据只该写一遍。
+      返回 [PSCustomObject]@{ Start; Len } 序列，按出现次序；调用方一律 `@(...)` 收。
+
+      ⚠ **返回值别写成 `return ,@($runs)`**：那样调用方再套一层 `@()` 会得到
+        「一个元素、该元素是数组」的嵌套结构 ⇒ `.Count` 恒为 1、`.Len` 恒为 $null
+        ⇒ 配对循环一次都进不去、**整行一个字都不遮罩**。本函数初版就是这么写的，
+        表现是「目标用例修好了」（元字段不再被吃）而**闭合 span 的遮罩全线失效**，
+        靠逐行 A/B 老新两版才现形 —— 一个「看起来修好了」的假绿。
+    #>
+    param([string]$Raw)
+
+    $runs = @()
+    $i = 0
+    while ($i -lt $Raw.Length) {
+        if ($Raw[$i] -eq '`') {
+            $start = $i
+            while ($i -lt $Raw.Length -and $Raw[$i] -eq '`') { $i++ }
+            $runs += [PSCustomObject]@{ Start = $start; Len = ($i - $start) }
+        } else {
+            $i++
+        }
+    }
+    return $runs
+}
+
+function Get-BacktickSpans {
+    <#
+      按 **CommonMark 的游程配对规则**把游程配成代码 span：
+      一个长度为 L 的开启游程，由**其后第一个长度恰为 L** 的游程闭合；中间的游程都在
+      span 内部（不再单独参与配对）。找不到等长游程的开启游程是**普通文本**，
+      而扫描**继续往后走** —— 后面的游程照样能开新 span。
+
+      返回 @{ Spans = @(@{From;To}); Unmatched = @(游程起点…) }。
+    #>
+    param([string]$Raw)
+
+    $runs = @(Get-BacktickRuns -Raw $Raw)
+    $spans = @()
+    $unmatched = @()
+    $r = 0
+    while ($r -lt $runs.Count) {
+        $open = $runs[$r]
+        $closeIdx = -1
+        for ($k = $r + 1; $k -lt $runs.Count; $k++) {
+            if ($runs[$k].Len -eq $open.Len) { $closeIdx = $k; break }
+        }
+        if ($closeIdx -lt 0) {
+            # 没有等长游程闭合它 ⇒ 这串反引号是字面文本，不是分隔符。
+            $unmatched += $open.Start
+            $r++
+            continue
+        }
+        $close = $runs[$closeIdx]
+        $spans += [PSCustomObject]@{ From = $open.Start; To = ($close.Start + $close.Len - 1) }
+        $r = $closeIdx + 1
+    }
+    return @{ Spans = @($spans); Unmatched = @($unmatched) }
+}
+
 function Get-MaskedLine {
     <#
       把行内代码 span 换成**等长空格**。等长是硬要求不是讲究：下游拿遮罩串上的
@@ -246,24 +332,52 @@ function Get-MaskedLine {
       （`归-根路径消歧` 那条的基线写着「本文件 9 处裸 `docs/`」），直接取遮罩串会把
       那段吃成空格，写进台账就成了一句缺字的话。
 
-      未闭合的反引号：从它到行尾一律当代码。这是**刻意选的失败方向**——多认一个标记会
-      **凭空造出**一个台账条目（无中生有），少认一个会被 orphan-ledger 从另一侧报出来。
+      ── 未闭合反引号：2026-08-02 反转了处置，理由照直写 ──────────────────────
+      **旧行为**：从未闭合的那个反引号起，到行尾一律当代码。头注当时写的理由是
+      「刻意选的失败方向 —— 多认一个标记会凭空造出台账条目，少认一个会被
+      orphan-ledger 从另一侧报出来」。**那个理由经不起实测，两半都不成立**：
+        ① 「少认一个」的实际后果不是漏报，是**对一条完全合法的条款判红**。
+           实测锚：mousse `docs/rules/dispatch-clauses.md` 行 147（正文写了一处
+           ```bash 的写法示例 ⇒ 21 个反引号、游程未闭合）行尾元字段完整，
+           `-ClauseSelector AllTopLevel` 下被整段遮成空格 ⇒ `missing-meta-field`、exit 1。
+        ② 「会被另一侧报出来」只在**接了台账的文件**上成立。没接台账的条款库
+           （mousse 那份、任何项目自己的规则集）**根本没有另一侧**；而 Marked 模式下
+           后果更坏 —— 选择器本身读的就是遮罩串，签名被吃掉 ⇒ 该行**整条退出扫描面**，
+           检查器**静默转绿**（同一份夹具实测：AllTopLevel exit 1 / Marked exit 0）。
+           这正是本脚本检查 5 要防的那个病，发生在它自己的解析层里。
+        ③ 检查 5b 抓不到 ②，因为普查（Get-ClauseCensus）与检出走的是**同一个**
+           Get-MaskedLine ⇒ 两半一起瞎、集合差恒为 0。
+           照 dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」，
+           这是那条规则在本文件里的一个现存缺口 —— **本批未修**（见 .NOTES）。
+
+      **新行为**：按 CommonMark 的游程配对（见 Get-BacktickSpans）——
+      未闭合的游程是**普通文本**，不遮罩。判据取舍：**「合法条款不许被误判」
+      优先于「代码 span 假阳性」**（派单方定的优先级），且新行为与**人在渲染页面上
+      看到的东西一致** —— 未闭合的反引号在 GitHub 上就是显示为字面反引号，
+      那里的 `[自定@…]` 读者看着是真标记，检查器也就该当它是真标记。
+
+      **新行为让出的那一格，照直写**：一行里有**未闭合**游程、其后又跟着一个
+      模板字面量（`[自定@<月日>]` 之类）时，那个字面量现在会被当成真标记 ⇒
+      可能凭空多出一个 `[自定]` 计数或一个 orphan-slug。两点补偿：
+        · 它要求正文本身是**坏 markdown**（未闭合 span），渲染出来也是坏的；
+        · 失败是**响的**（多一条 violation / 统计里多一个数），不是静默的 —— 而旧行为
+          在 Marked 模式下的失败是静默转绿。
+        · 统计段另加一行观察线，把「未闭合游程 + 该行带条款签名」这个模糊地带打印出来
+          （实测全域分布：dao.md 0 行、7 份真实规则文件合计 1 行，噪音极低）。
+      **闭合的**代码 span 照旧遮罩 —— 原先要防的那个假阳性（反引号里的模板字面量）
+      **防护不变**，回归网两侧都有断言。
     #>
     param([string]$Raw)
 
-    $sb = New-Object System.Text.StringBuilder
-    $i = 0
-    while ($i -lt $Raw.Length) {
-        if ($Raw[$i] -eq '`') {
-            $end = $Raw.IndexOf('`', $i + 1)
-            if ($end -lt 0) { [void]$sb.Append(' ' * ($Raw.Length - $i)); break }
-            [void]$sb.Append(' ' * ($end - $i + 1))
-            $i = $end + 1
-        } else {
-            [void]$sb.Append($Raw[$i]); $i++
-        }
+    $info = Get-BacktickSpans -Raw $Raw
+    if ($info.Spans.Count -eq 0) { return $Raw }
+
+    # 等长保证：只把 span 覆盖的字符换成空格，不增删任何字符。
+    $out = $Raw.ToCharArray()
+    foreach ($s in $info.Spans) {
+        for ($p = $s.From; $p -le $s.To; $p++) { $out[$p] = ' ' }
     }
-    return $sb.ToString()
+    return (-join $out)
 }
 
 function Get-GroupValue {
@@ -982,6 +1096,36 @@ Write-Host ('  扫描面自检：带完整元字段或 slug 且合选择器的�
 $shapeGroups = @($allRecords | Group-Object -Property Shape | Sort-Object Count -Descending)
 Write-Host ('  行形态分布：' + (($shapeGroups | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · ') +
             '　（top=零缩进列表项 · indent=缩进列表项 · prose=散文段落）')
+
+# ── 未闭合反引号游程的可见面（观察线，恒不进退出码）────────────────────────────
+# 2026-08-02 起未闭合游程按**字面文本**处理（判据与反转理由见 Get-MaskedLine 头注）。
+# 那是遮罩规则**唯一**的模糊地带：这类行上的 `[自定@…]` 之类模板字面量会被当成真标记。
+# 旧规则把这一地带处理成「静默吃掉整条」，代价是条款数少一条而退出码不变；新规则把代价
+# 换成「可能多认一个标记」，而多认是**响的**。这一行是那个取舍的显式补偿面 ——
+# 换掉的不该是「一种静默换另一种静默」。
+#
+# **只报同时带条款签名的行**（闸位取舍）：全域分布实测（7 份真实规则文件）——
+# 未闭合游程共 9 行，其中同时带条款签名的只有 1 行 ⇒ 光按「有未闭合游程」报会把
+# 8 行纯散文拖进来，而「生下来就吵的检查一定会被静音」。
+# 走观察线不走硬闸：markdown 写成什么样是作者的判断，不是结构错。
+# 只打行号不打正文：检查器的输出不该落进它自己的扫描面（同 dao-guard-writing 那条）。
+$ambiguousLines = @()
+$inFenceAmb = $false
+for ($i = 0; $i -lt $lines.Count; $i++) {
+    $tAmb = $lines[$i].Trim()
+    if ($tAmb -match '^```') { $inFenceAmb = -not $inFenceAmb; continue }
+    if ($inFenceAmb) { continue }
+    if ((Get-BacktickSpans -Raw $lines[$i]).Unmatched.Count -eq 0) { continue }
+    if (-not ([regex]::IsMatch($lines[$i], $script:LedgerSignaturePattern) -or
+              [regex]::IsMatch($lines[$i], $script:SlugPattern))) { continue }
+    $ambiguousLines += ($i + 1)
+}
+if ($ambiguousLines.Count -gt 0) {
+    Write-Host ('  ⚠ 未闭合反引号游程 + 条款签名同现：{0} 行（行 {1}）' -f `
+        $ambiguousLines.Count, (($ambiguousLines | Sort-Object) -join ', '))
+    Write-Host '     ⇒ 这些行的未闭合反引号按**字面文本**处理；其后若写着 [自定@…]/[基线:…] 形态的'
+    Write-Host '        模板字面量，会被当成真标记计入统计。渲染出来同样是坏 markdown，建议补齐配对或包进围栏。'
+}
 if ($ClauseSelector -eq 'Marked') {
     # Marked 模式弱射程的**可见面**：选择器排除了多少零缩进 bullet。
     # 一份真正的条款库若显示排除了几十行，说明模式选错了（该用 AllTopLevel）。

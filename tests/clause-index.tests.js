@@ -211,6 +211,107 @@ async function main() {
   }
 
   // ══════════════════════════════════════════════════════════════
+  // 未闭合反引号游程（2026-08-02 反转处置）。缺陷原貌与判据见 clause-parser.mjs
+  // 的 maskCodeSpans 头注；这里钉的是**行为**，不是实现。
+  //
+  // ⚠ 本组与 PS 侧 tests/clause-structure.tests.ps1 同名一组是**刻意的双份**：
+  //   两套解析是独立实现，共享的只是「未闭合游程当字面文本」这个外部契约，
+  //   所以两侧各钉各的；只钉一侧，另一侧改坏了要等 --reconcile 才发现，
+  //   而 --reconcile 的默认源清单里**没有**含这种形态的语料（dao.md 零行未闭合游程）。
+  console.log("\n──── ①.5 遮罩契约：未闭合反引号游程当字面文本 ────");
+  {
+    const BT = "`";
+    // ── 单元层：等长不变量 ──────────────────────────────────────────
+    // 等长是硬要求：下游按遮罩串的 group 下标回原始串切值。改成按区间切片重拼之后，
+    // 这条**尤其**要验代理对（📌/🔴 是两个码元），按码点切会当场错位。
+    const emo = "📌 前 " + BT + "code" + BT + " 后 🔴 " + BT + "x";
+    check("等长不变量：遮罩串与原始串码元数相同（含 emoji 代理对）",
+      lib.maskCodeSpans(emo).length === emo.length,
+      `masked=${lib.maskCodeSpans(emo).length} raw=${emo.length}`);
+
+    // ── 单元层：游程配对 ────────────────────────────────────────────
+    check("闭合 span 仍被遮罩（原防护不变）",
+      lib.maskCodeSpans("a " + BT + "b" + BT + " c") === "a     c",
+      JSON.stringify(lib.maskCodeSpans("a " + BT + "b" + BT + " c")));
+    const triple = "x " + BT.repeat(3) + "bash y";
+    check("未闭合游程当字面文本（不再吃到行尾）",
+      lib.maskCodeSpans(triple) === triple, JSON.stringify(lib.maskCodeSpans(triple)));
+    check("未闭合游程被单独报出来（模糊地带可见）",
+      lib.backtickSpans(triple).unmatched.length === 1 && lib.backtickSpans(triple).spans.length === 0,
+      JSON.stringify(lib.backtickSpans(triple)));
+    // 长度 3 的游程只能被另一个长度 3 的游程闭合 —— 不是「碰到下一个反引号就闭合」。
+    const paired3 = BT.repeat(3) + "a" + BT.repeat(3);
+    check("等长游程才闭合：```a``` 整段遮罩",
+      lib.maskCodeSpans(paired3) === " ".repeat(paired3.length), JSON.stringify(lib.maskCodeSpans(paired3)));
+    check("未闭合游程之后的闭合 span 照常遮罩（扫描不中断）",
+      lib.maskCodeSpans(BT.repeat(3) + "u " + BT + "v" + BT) === BT.repeat(3) + "u    ",
+      JSON.stringify(lib.maskCodeSpans(BT.repeat(3) + "u " + BT + "v" + BT)));
+
+    // ── 解析层：两种后果各一条正控 ──────────────────────────────────
+    // 后果②（静默少一条）比后果①（假阳性）险 —— 它不改退出码，只改计数。
+    const oddLine = "- **奇数反引号条款**：正文写了一处 " + BT.repeat(3) +
+      "bash 写法示例，还有 " + BT + "a" + BT + " 这种。 [n=1 @07-09 触发:无] [仅判据·无触发]";
+    const oddText = [
+      "# 夹具条款库 · 奇数反引号", "", "## 通用节", "",
+      "- **甲条**：普通条款。 [n=1 @07-01 触发:无] [仅判据·无触发]",
+      oddLine,
+      "- **丙条**：普通条款。 [n=2 @07-02 触发:PR流程] [基线:未测]", "",
+    ].join("\n");
+    const odd = lib.parseClauses({
+      text: oddText, file: "corpus-odd.md",
+      selector: lib.SELECTOR.ALL_TOP_LEVEL, roleScheme: lib.ROLE_SCHEME.GENERAL,
+    });
+    check("正控：奇数反引号那条进得了扫描面（3 条，旧实现 2 条且不报错）",
+      odd.stats.clauses === 3, JSON.stringify(odd.stats));
+    const oc = odd.clauses.find((c) => /奇数反引号/.test(c.title));
+    check("正控：它的元字段被正确解析（旧实现整段被遮成空格）",
+      !!oc && oc.n === "1" && oc.first_seen === "07-09" && oc.trigger === "无",
+      JSON.stringify(oc || odd.clauses.map((c) => c.title)));
+
+    // ── 负控：原本要防的代码 span 假阳性，防护必须仍在 ────────────────
+    // 单向断言（只验「合法条款不再被误判」）夹不住「遮罩被整个关掉」——
+    // 本批 PS 侧实现初版正是那样：一个 return 写法把遮罩全线关成 no-op，而正控全绿。
+    const negText = [
+      "# 夹具条款库 · 代码 span 负控", "", "## 通用节", "",
+      "- **甲条**：正文写着 " + BT + "[自定@<月日>]" + BT + " 模板字面量。 [n=1 @07-01 触发:PR流程]",
+      "- **乙条**：正文写着 " + BT + "[#测-不存在]" + BT + " 假 slug。 [n=2 @07-02 触发:PR流程]", "",
+    ].join("\n");
+    const neg = lib.parseClauses({
+      text: negText, file: "corpus-neg.md",
+      selector: lib.SELECTOR.ALL_TOP_LEVEL, roleScheme: lib.ROLE_SCHEME.GENERAL,
+    });
+    check("负控：闭合 span 里的 [自定@…] 不算真标记",
+      neg.clauses.every((c) => (c.self_declared_all || []).length === 0),
+      JSON.stringify(neg.clauses.map((c) => c.self_declared_all)));
+    check("负控：闭合 span 里的假 slug 不算真 slug",
+      neg.stats.slug === 0, JSON.stringify(neg.stats));
+    check("负控：恰 2 条（假元字段没把条款数撑大）", neg.stats.clauses === 2, JSON.stringify(neg.stats));
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 两套解析对**含未闭合游程的真实语料**逐一对数。默认源清单里没有这种形态
+  // （dao.md 零行），故这一条单独对第三语料跑一次 —— 它是本次缺陷的原始现场。
+  console.log("\n──── ①.6 双解析器对账：含未闭合游程的真实语料（原始现场）────");
+  {
+    if (fs.existsSync(MOUSSE)) {
+      const sj = sourcesJson(path.join(TMP, "src-mousse.json"),
+        [{ file: MOUSSE, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+      const r = rec(runNode(GEN, ["--reconcile", "--sources-json", sj]).rec);
+      check("第三语料双解析器对账打得出末行", r !== null);
+      check("第三语料双解析器一致（PS 与 JS 对未闭合游程的处置必须同契约）",
+        r && r.exit === 0 && r.mismatched === 0 && r.mine === r.theirs, JSON.stringify(r));
+      // 数字本身也钉一下：只断言「两边相等」的话，两边一起少一条仍然绿。
+      const m = lib.parseFile(MOUSSE, {
+        file: MOUSSE, selector: lib.SELECTOR.ALL_TOP_LEVEL, roleScheme: lib.ROLE_SCHEME.DISPATCH_SECTIONS,
+      });
+      check("第三语料条款数 = 76（缺陷期为 75，两侧一起少的那一条）",
+        m.stats.clauses === 76, JSON.stringify(m.stats));
+    } else {
+      console.log("        ⓘ 本机没有 " + MOUSSE + " ⇒ 未闭合游程的真实语料对账本轮未验（合成夹具仍已覆盖）。");
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
   console.log("\n──── ② 交叉对账：两套独立解析对同一份语料各数一遍 ────");
   {
     const r = rec(runNode(GEN, ["--reconcile"]).rec);
