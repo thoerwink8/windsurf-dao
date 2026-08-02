@@ -234,9 +234,14 @@ console.log("\n⑫ 我瞎了吗 — 主遍历被打瞎时不许静默绿");
   const clean = run(root, []);
   check("负控：未变异副本在同一夹具上绿（否则下面的红不算数）", clean.code === 0, clean.sum);
 
+  // ⚠️ 行尾归一化后再找锚点：盘上是 CRLF（本仓 Windows 检出），而锚点若写死 `\n` 会**恒不命中** ⇒
+  // 本组三条断言全部空转，且失败形态是「mutation 没生效所以守卫照常绿」——与「守卫真的没塌陷」
+  // 逐字节相同。2026-08-02 主干实测撞到（分支 worktree 与主仓检出的行尾不同，分支绿、合并后红），
+  // 同型坑当天另有一例（`node -e` 锚点带 `\n` 而文件 CRLF ⇒ ANCHOR MISS）。
+  // 归一化后写回变异体也用归一化文本：守卫本身不关心行尾，但锚点匹配关心。
   const src = fs.readFileSync(GUARD, "utf8");
-  const needle = "  walk(root, 0);\n  return out;";
-  check("mutation 锚点仍在（锚失效则本组空转）", src.includes(needle), needle);
+  const needleRe = /  walk\(root, 0\);\r?\n  return out;/;
+  check("mutation 锚点仍在（锚失效则本组空转）", needleRe.test(src), String(needleRe));
 
   // 负控·针对 mutation 机制本身：**未变异的副本放在同一条路径上必须照常工作**。
   // 少了这一条，「副本根本没跑」与「变异生效了」在退出码上分不开（第一版就栽在这里）。
@@ -246,7 +251,7 @@ console.log("\n⑫ 我瞎了吗 — 主遍历被打瞎时不许静默绿");
   check("负控：未变异副本在 mutant 路径上仍 exit 0（证明副本真的被执行了）", ctrl.code === 0, ctrl.sum);
 
   const mutated = mutantPath("blind");
-  fs.writeFileSync(mutated, src.replace(needle, "  return [];"), "utf8");
+  fs.writeFileSync(mutated, src.replace(needleRe, "  return [];"), "utf8");
   const m = run(root, [], mutated);
   check("主遍历返回空 ⇒ exit 5（不是 0）", m.code === 5, m.sum);
   check("汇总行标 reason=zero-sample", /reason=zero-sample/.test(m.sum), m.sum);
