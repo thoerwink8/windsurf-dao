@@ -506,6 +506,7 @@ export function defaultSources() {
     { file: "ccswitch/rules/dao-gui-verify.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-workitem.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-product.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
+    { file: "ccswitch/rules/dao-askuser.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
   ];
 }
 
