@@ -174,21 +174,22 @@
         补上了一半：正文删了而台账还在会现形；两边一起删仍然静默）。
       · **台账里的数字对不对本闸同样判不了**：检查 6 只保证正文与台账说的是同一句话。
         两边一起写错、或搬录时一起搬错，闸全绿。
-      · 🔴 **检查 5 的「自检」那一半与检出复用同一个 `Get-MaskedLine`（已知缺口，本批未修）**。
-        dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」讲的正是这个：
-        普查（Get-ClauseCensus）与检出（Get-ClauseRecords）各走各的**节状态机**（那一层是
-        独立的、刻意的），但**遮罩这一层两边共用** ⇒ 遮罩错了两边一起瞎、集合差恒为 0。
-        2026-08-02 实测坐实：未闭合反引号缺陷期，Marked 模式下 census 与检出**同时**
-        少数同一行（85→86 那一行），检查 5b 全程不响、退出码干净。
-        **本批只修了遮罩本身，没有拆掉这个共用** —— 拆它要给普查另写一套遮罩，
-        而「两套遮罩该不该允许结论不同」是判断不是照做（两套都对时集合差恒 0，
-        那就白写；两套不同时以谁为准又是新问题）。故此处只把缺口写明，
-        处置交下一批/派单方裁。**别把本批的绿读成「这一层现在有自检了」。**
-        📌 **已挂账：windsurf-dao issue #91**（带关闭条件，owner 栏待派单）。同一张单还记着
-        一个**叠加**缺口：本该跨实现兜底它的 `gen-clause-index.mjs --reconcile`，其
-        **配对层与本文件是逐行直译而非独立实现**（变量名/循环形状/分支顺序完全对应）
-        ⇒ 配对规则写错时两侧以同一种方式一起错、差恒为 0。
-        ⇒ **遮罩这一层出错时，守卫自检与跨实现对账在同一个位置同时失明。**
+      · **遮罩这一层现在有三套实现在互核，但仍有一格是结构上盖不住的**（2026-08-02
+        issue #91 落地后的准确状态，别读成"这一层已经封死"）：
+          ① Get-MaskedLine（游程表配对）—— 检出用
+          ② Get-MaskedLineAlt（逐字符扫描）—— 普查用；①②由检查 5d 逐字节互核（硬闸）
+          ③ clause-parser.mjs 的 backtickSpans（游程按长度分桶 + 游标推进）—— node 侧用，
+            与①②的差由 `gen-clause-index.mjs --reconcile` 对数
+        ⇒ **坏掉任意一套，另外两套里至少一套会分歧**；`--reconcile` 另把 `maskdiv` 带过去，
+          于是「①③同时错同一处」（历史上它们是逐行直译，正是这么错的）也会被②顶出来。
+        🕳 **盖不住的那一格**：①②③**三套一起**按同一种方式错 —— 那时三边全等、
+          所有对账差恒为 0，全绿。这不是疏漏是算术：n 套互核抓不到 n 套同错。
+          回归网 `tests/clause-structure.tests.ps1` 把这一格**钉成了断言**（三侧同坏 ⇒ 静默），
+          将来有人加了第四道独立判据时那条断言会变红，那时改它、别把它删了。
+      · 上面这一段的历史成因照直留着，免得后来人以为这是天生的设计：
+        2026-08-02 之前**普查与检出共用同一个 Get-MaskedLine**，实测坐实过一次 ——
+        未闭合反引号缺陷期，Marked 模式下 census 与检出**同时**少数同一行（85 应为 86），
+        检查 5b 全程不响、退出码干净，缺陷是靠人逐行 A/B 老新两版遮罩找出来的。
 #>
 
 # `[CmdletBinding()]` 不是装饰：没有它，PowerShell script 会把**认不出的具名参数**
@@ -345,10 +346,12 @@ function Get-MaskedLine {
            后果更坏 —— 选择器本身读的就是遮罩串，签名被吃掉 ⇒ 该行**整条退出扫描面**，
            检查器**静默转绿**（同一份夹具实测：AllTopLevel exit 1 / Marked exit 0）。
            这正是本脚本检查 5 要防的那个病，发生在它自己的解析层里。
-        ③ 检查 5b 抓不到 ②，因为普查（Get-ClauseCensus）与检出走的是**同一个**
+        ③ 检查 5b 当时抓不到 ②，因为普查（Get-ClauseCensus）与检出走的是**同一个**
            Get-MaskedLine ⇒ 两半一起瞎、集合差恒为 0。
-           照 dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」，
-           这是那条规则在本文件里的一个现存缺口 —— **本批未修**（见 .NOTES）。
+           照 dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」，那是那条规则
+           在本文件里的一个现存缺口 —— **2026-08-02 已修（issue #91）**：普查改用
+           Get-MaskedLineAlt（第二套独立实现），两套的一致性由检查 5d 逐字节核。
+           **这一格现在会响**，回归网 `tests/clause-structure.tests.ps1` 里有正反四向 mutation。
 
       **新行为**：按 CommonMark 的游程配对（见 Get-BacktickSpans）——
       未闭合的游程是**普通文本**，不遮罩。判据取舍：**「合法条款不许被误判」
@@ -378,6 +381,112 @@ function Get-MaskedLine {
         for ($p = $s.From; $p -le $s.To; $p++) { $out[$p] = ' ' }
     }
     return (-join $out)
+}
+
+function Get-MaskedLineAlt {
+    <#
+      **遮罩的第二套实现**（2026-08-02 加，issue #91）—— 与 Get-MaskedLine 走**不同的算法
+      路径**、产出必须逐字节相同。它是普查（Get-ClauseCensus）用的那一套，检出不碰它。
+
+      ── 它为什么存在（这是刻意的重复，不是 DRY 的疏漏）─────────────────────────
+      dao-guard-writing 第②条：「守卫里『我是不是瞎了』那一半，绝不能复用被守对象的解析
+      逻辑」。**本脚本此前违反了它**：普查与检出的**节状态机**各写各的（那一层一直是对的），
+      而**遮罩这一层两边共用同一个 Get-MaskedLine** ⇒ 遮罩一错两边一起瞎、集合差恒为 0、
+      检查 5b 全程不响。2026-08-02 实测坐实：未闭合反引号缺陷期，Marked 模式下普查与检出
+      **同时**少数同一行（85 应为 86），退出码干净 —— 那个缺陷最后是靠人逐行 A/B 老新两版
+      遮罩找出来的，不是靠这道闸。
+
+      ── 「不同的算法路径」具体指什么（这一格是本函数的全部价值，改没了它就白留着）────
+        · Get-MaskedLine：先由 Get-BacktickRuns **建一张游程表**，再在**表的下标**上配对
+          （open = runs[$r]，向后找第一个等长的 runs[$k]），最后按区间改 char 数组。
+        · 本函数：**不建表**。就地量出开启游程的长度，再从它之后**逐字符**往前扫、
+          边扫边量后续游程长度，撞到长度恰等的即闭合。全程只有字符下标，没有游程下标。
+      ⇒ 「游程表建错」「表下标 off-by-one」「配对循环的边界写错」这三类错在本函数里
+        **没有可犯的位置**；反过来「字符扫描的内层循环写错」在那边也没有对应位置。
+      **共享的只有外部契约**（CommonMark：长度 L 的开启游程由其后**第一个**长度恰为 L 的
+      游程闭合；找不到的按字面文本处理，且扫描继续往后走，后面的游程照样能开新 span）——
+      这与「两个独立的 JSON 解析器都得认识 `{`」是同一类共享，不构成实现耦合。
+
+      ── 谁在核这两套一致（不核就等于白写）────────────────────────────────────
+      Get-MaskDivergence 对每一行**逐字节比对**两个实现的输出，不等即 `mask-divergence` 硬闸。
+      **「两套都对时差恒为 0」不是白写**：那正是健康态该有的样子；判别力在于**有一套坏掉
+      时差立刻非 0**，与节状态机那一层的双写同理。
+    #>
+    param([string]$Raw)
+
+    if ($Raw.IndexOf('`') -lt 0) { return $Raw }
+
+    $c = $Raw.ToCharArray()
+    $n = $c.Length
+    $i = 0
+    while ($i -lt $n) {
+        if ($c[$i] -ne '`') { $i++; continue }
+        # 开启游程：就地量长度（不建表）。量完 $i 已停在游程之后。
+        $openAt = $i
+        while ($i -lt $n -and $c[$i] -eq '`') { $i++ }
+        $openLen = $i - $openAt
+        # 从开启游程之后逐字符找**长度恰等**的闭合游程。
+        $j = $i
+        $closeAt = -1
+        while ($j -lt $n) {
+            if ($c[$j] -ne '`') { $j++; continue }
+            $runAt = $j
+            while ($j -lt $n -and $c[$j] -eq '`') { $j++ }
+            if (($j - $runAt) -eq $openLen) { $closeAt = $runAt; break }
+        }
+        if ($closeAt -lt 0) {
+            # 未闭合 ⇒ 这串反引号是字面文本，一个字符都不遮。$i 已在开启游程之后，
+            # 扫描从那里继续 —— 后面的游程照样能开新 span（与主实现同契约）。
+            continue
+        }
+        for ($z = $openAt; $z -lt ($closeAt + $openLen); $z++) { $c[$z] = ' ' }
+        $i = $closeAt + $openLen
+    }
+    return (-join $c)
+}
+
+function Get-MaskDivergence {
+    <#
+      两套遮罩实现的**逐字节对账**（检查 5d 的判据源，2026-08-02 加，issue #91）。
+
+      围栏内的行不比：那里是文档样例，两边都一致地不算数，比它只会制造噪音。
+      不含反引号的行也不比：两侧对它恒等，比了只是浪费一次扫描。
+
+      返回 @{ Compared（真正比过的行数，即含反引号的非围栏行）; Rows（不等的行）}。
+      **Compared 必须打印出来**：它是这道对账自己的分母 —— 一份零反引号的文件会让
+      「零分歧」与「一行都没比过」在输出上不可区分，那正是本脚本通篇在治的病。
+
+      Rows 只带**行号 + 首个分歧的码元下标 + 两侧长度**，**刻意不回显正文**：
+      检查器的输出不该落进它自己的扫描面（dao-guard-writing 第③条）。
+    #>
+    param([string[]]$Lines)
+
+    $rows = @()
+    $compared = 0
+    $inFence = $false
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $raw = $Lines[$i]
+        if ($raw.Trim() -match '^```') { $inFence = -not $inFence; continue }
+        if ($inFence) { continue }
+        if ($raw.IndexOf('`') -lt 0) { continue }
+        $compared++
+        $main = Get-MaskedLine    -Raw $raw
+        $alt  = Get-MaskedLineAlt -Raw $raw
+        # ⚠ **刻意不用 `-eq`**：PowerShell 的字符串 `-eq` 默认**忽略大小写**，
+        #   一道以"两边逐字节相同"为全部判据的闸不该建在一个会忽略差异的比较上
+        #   （本行现在两边的差异形态是「空格 vs 原字符」，大小写不敏感碰巧还判得对，
+        #    但那是运气不是判据 —— 判据得写成它真正要说的那句话）。
+        if ([string]::Equals($main, $alt, [System.StringComparison]::Ordinal)) { continue }
+        # 首个不等的码元下标：让人一眼定位分歧，而不必把整行正文打出来。
+        $at = -1
+        $lim = [Math]::Min($main.Length, $alt.Length)
+        for ($k = 0; $k -lt $lim; $k++) { if ($main[$k] -ne $alt[$k]) { $at = $k; break } }
+        if ($at -lt 0) { $at = $lim }
+        $rows += [PSCustomObject]@{
+            LineNo = ($i + 1); At = $at; MainLen = $main.Length; AltLen = $alt.Length
+        }
+    }
+    return [PSCustomObject]@{ Compared = $compared; Rows = @($rows) }
 }
 
 function Get-GroupValue {
@@ -542,6 +651,12 @@ function Get-ClauseCensus {
       若它复用 $inSpecialSection / $sectionAllowed，节判定一错两边一起错、集合差恒为 0，
       检查 5 就变成一句永远为真的废话 ——「拿被测对象自己当基线」。
 
+      ⚠ **2026-08-02（issue #91）：独立性此前只做到「节状态机」这一层，遮罩那一层是共用的**
+        ⇒ 遮罩坏掉时两边一起瞎，实测坐实过一次（见 Get-MaskedLineAlt 头注）。现在本函数
+        改用 **Get-MaskedLineAlt**（第二套遮罩实现），检出仍用 Get-MaskedLine ——
+        **两半各持一套遮罩，遮罩坏掉时两边给出不同的数**。两套遮罩本身的一致性由
+        Get-MaskDivergence 逐字节核（检查 5d 硬闸），不靠"应该一样"。
+
       三个集合：
         Selected —— 按当前选择器算，**且带完整元字段**的行。它应与 Get-ClauseRecords 的
                     检出逐行相等；少了谁 ⇒ 被节状态（📌 节 / 节白名单）吞掉了。
@@ -563,7 +678,8 @@ function Get-ClauseCensus {
         if ($t -match '^```') { $inFence = -not $inFence; continue }
         if ($inFence) { continue }
         if ($raw.StartsWith('- ')) { $allTop++ }
-        $masked = Get-MaskedLine -Raw $raw
+        # **刻意不是 Get-MaskedLine** —— 见本函数头注那段 ⚠。改回去等于把 issue #91 修的洞挖回来。
+        $masked = Get-MaskedLineAlt -Raw $raw
         # **v2 的分母判据**：完整元字段**或** slug。加 slug 是必须的 —— 批 2 之后一条条款
         # 可以只有 slug 而无行内元字段（台账在 ledger 里），只按完整字段数分母的话，
         # 那批条款一旦被 📌 节吞掉，检查 5b 完全看不见（分母里本来就没有它们）。
@@ -742,14 +858,20 @@ function Format-Summary {
     param([int]$ExitCode, [int]$Clauses, [int]$Violations)
     # v2 三个新字段一律**追加在末尾**：消费方（dao-scaffold-check.js / gen-clause-index.mjs）
     # 的正则不锚定行尾，追加不会让它们匹配失败 —— 而插在中间会。
-    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8}' `
+    # `maskdiv` / `maskcmp`（2026-08-02，issue #91）同理追加在最末：前者是遮罩双实现的分歧行数，
+    # 后者是它的**分母**（真正比过的行数）。两个都进 marker 是刻意的 —— `--reconcile` 拿
+    # `maskdiv` 当第四个对账量（**这是「两侧同时错同一处」唯一能被看见的通道**），
+    # 而 `maskcmp=0` 说明这一层本轮零样本，那与「比过且没分歧」是两回事。
+    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10}' `
         -f $ExitCode, $Clauses, $Violations, $script:SumNoTrig, $script:SumRetire, $script:SumPromote,
-           $script:SumSlugs, $script:SumLedgerState, $script:SumLedgerViol)
+           $script:SumSlugs, $script:SumLedgerState, $script:SumLedgerViol,
+           $script:SumMaskDiv, $script:SumMaskCmp)
 }
 
 function Test-ClausesStructure {
     param([string[]]$Lines, [object[]]$Records, [object]$Census, [string]$Selector,
-          [hashtable]$WhitelistExcluded, [hashtable]$Ledger, [bool]$LedgerActive, [string]$TargetPath)
+          [hashtable]$WhitelistExcluded, [hashtable]$Ledger, [bool]$LedgerActive, [string]$TargetPath,
+          [object]$MaskDivergence)
 
     $violations = @()
 
@@ -831,6 +953,28 @@ function Test-ClausesStructure {
     }
 
     # ---- 检查 5：扫描面塌陷（下限断言）----------------------------------------
+    # d) **遮罩双实现分歧**（2026-08-02 加，issue #91）—— 刻意排在 a/b/c 之前算，
+    #    因为 b 要用它的结果做**归因**：一行既落在分歧集里、又"普查看得见而检出没有"时，
+    #    真正的病因是遮罩不是节判定，报成 swallowed-by-section 会把人指去改节状态机。
+    #
+    #    闸位：**硬闸**。两套实现在同一份 CommonMark 契约上给出不同结果 ⇒ 其中一套坏了，
+    #    这是「代码错了」不是「人该判断一件事」。**但本闸不判谁对** —— 判哪一套对是人的活
+    #    （同 gen-clause-index.mjs --reconcile 的既定政策：「不判谁对，先读差异」）。
+    $divLines = @{}
+    if ($MaskDivergence) {
+        foreach ($d in @($MaskDivergence.Rows)) {
+            $divLines[$d.LineNo] = $true
+            $violations += [PSCustomObject]@{
+                Type = 'mask-divergence'; LineNo = $d.LineNo
+                Content = ('两套遮罩实现对本行给出不同结果（首个分歧码元下标 ' + $d.At +
+                           '；主实现 Get-MaskedLine 走游程表配对、长度 ' + $d.MainLen +
+                           '，自检实现 Get-MaskedLineAlt 走逐字符扫描、长度 ' + $d.AltLen + '）。' +
+                           '其中一套坏了 —— 本闸不判谁对，两套实现的是同一份 CommonMark 契约，' +
+                           '判哪套对是人的活。改任一套遮罩后本行变红，先读判据再改，别把另一套改成一样的。')
+            }
+        }
+    }
+
     # a) 零样本：一条都没选中。此时上面所有检查都会"零违例"，而那个绿是空的。
     if ($Records.Count -eq 0) {
         # ⚠️ 先拼模板再 `-f`：`"a{0}" -f $x + "b"` 会被解析成 `"a{0}" -f ($x + "b")`
@@ -865,6 +1009,10 @@ function Test-ClausesStructure {
     foreach ($line in $Census.Selected) {
         if ($detected.ContainsKey($line.LineNo)) { continue }
         if ($WhitelistExcluded -and $WhitelistExcluded.ContainsKey($line.LineNo)) { continue }
+        # **归因分流（2026-08-02）**：普查与检出现在各持一套遮罩，于是"普查看得见而检出没有"
+        # 多了第二个成因 —— 遮罩分歧。该行已由 5d 单独报过，这里不再按节判定报第二遍：
+        # 同一个缺陷报成两件事，人会去找两个 bug（本文件既有的同型取舍见检查 5b 头注）。
+        if ($divLines.ContainsKey($line.LineNo)) { continue }
         $violations += [PSCustomObject]@{
             Type = 'swallowed-by-section'; LineNo = $line.LineNo
             Content = ('该行带完整元字段或 slug 且合当前选择器（＝条款签名），却未被检出 → 它落在某个 📌 节内。' +
@@ -1011,6 +1159,8 @@ $script:SumNoTrig  = 0
 $script:SumSlugs   = 0   # 本文件检出的 slug 数（--reconcile 的第三个对账量）
 $script:SumLedgerState = 'na'   # ok | missing | bad | na（不适用）
 $script:SumLedgerViol  = 0      # 检查 6 命中数（是硬闸的一部分，此处只是它的机器读出端）
+$script:SumMaskDiv     = 0      # 检查 5d：两套遮罩实现的分歧行数（硬闸的机器读出端）
+$script:SumMaskCmp     = 0      # 检查 5d 的**分母**：真正比过的行数（含反引号的非围栏行）
 
 $lines = [System.IO.File]::ReadAllLines($targetFile, [System.Text.Encoding]::UTF8)
 # @() 强制数组化：函数输出恰好 1 个对象时 PowerShell 会自动解包成裸标量，裸标量的 .Count
@@ -1018,6 +1168,12 @@ $lines = [System.IO.File]::ReadAllLines($targetFile, [System.Text.Encoding]::UTF
 # 那正是本脚本要根治的静默失败同一种病，故自身必须先免疫。
 $allRecords = @(Get-ClauseRecords -Lines $lines -Selector $ClauseSelector -SectionFilter $SectionPattern)
 $census     = Get-ClauseCensus   -Lines $lines -Selector $ClauseSelector
+# 遮罩双实现对账（issue #91）：检出走 Get-MaskedLine，普查走 Get-MaskedLineAlt，
+# 这一步逐字节核这两套是不是还在说同一句话。**它必须独立于上面两次扫描**，
+# 因为它要回答的正是「上面那两次里有没有一次是瞎的」。
+$maskDiv    = Get-MaskDivergence -Lines $lines
+$script:SumMaskDiv = @($maskDiv.Rows).Count
+$script:SumMaskCmp = $maskDiv.Compared
 
 # 节白名单排除面（只在传了 -SectionPattern 时才算）：同一个函数再跑一遍、SectionFilter 清空，
 # 差集即"被白名单挡在外面的条款"。判据见 Test-ClausesStructure 检查 5b 那段注释。
@@ -1052,7 +1208,8 @@ if (-not $ledgerActive) {
 
 $violations = @(Test-ClausesStructure -Lines $lines -Records $allRecords -Census $census `
     -Selector $ClauseSelector -WhitelistExcluded $whitelistExcluded `
-    -Ledger $ledgerEntries -LedgerActive ($ledgerActive -and $ledgerDoc.Ok) -TargetPath $targetFile)
+    -Ledger $ledgerEntries -LedgerActive ($ledgerActive -and $ledgerDoc.Ok) -TargetPath $targetFile `
+    -MaskDivergence $maskDiv)
 
 # 台账在场却读不了：上面那句把 LedgerActive 关成了 $false（否则整批 slug 会被报成 orphan-slug，
 # 制造一堆假的「条款不存在」）。**但不许因此变绿** —— 这里单独补一条硬闸，说的是真正的病：
@@ -1093,6 +1250,14 @@ Write-Host ('  扫描面自检：带完整元字段或 slug 且合选择器的�
        @($allRecords | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count,
        $formal.Count,
        @($observing | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count)
+# 遮罩双实现对账的可见面（issue #91）。**先报分母**，同上一行的理由：
+# 一份零反引号的文件里，「零分歧」与「一行都没比过」在输出上不可区分。
+if ($script:SumMaskCmp -eq 0) {
+    Write-Host '  遮罩双实现对账：本轮 0 行含反引号 ⇒ **零样本，不是通过**（这一层本轮什么都没验到）'
+} else {
+    Write-Host ('  遮罩双实现对账：{0} 行含反引号已逐字节比对，分歧 {1} 行（检出走 Get-MaskedLine · 普查走 Get-MaskedLineAlt，两套算法路径不同）' `
+        -f $script:SumMaskCmp, $script:SumMaskDiv)
+}
 $shapeGroups = @($allRecords | Group-Object -Property Shape | Sort-Object Count -Descending)
 Write-Host ('  行形态分布：' + (($shapeGroups | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · ') +
             '　（top=零缩进列表项 · indent=缩进列表项 · prose=散文段落）')
@@ -1314,10 +1479,11 @@ if ($violations.Count -gt 0) {
     exit 1
 }
 
-Write-Host ('OK：焊接签名零命中、条款元字段零缺失、[观察中] 标记与所在区一致、扫描面无塌陷（零吞没·样本非空）' +
+Write-Host ('OK：焊接签名零命中、条款元字段零缺失、[观察中] 标记与所在区一致、扫描面无塌陷（零吞没·样本非空）、两套遮罩实现零分歧' +
             $(if ($ledgerActive -and $ledgerDoc.Ok) { '、正文 slug 与台账双向零孤儿且双轨零不等。' } else { '。' }))
 Write-Host '     未覆盖面（照直写，别把这行 OK 读成"条款库没问题"）：`触发:` 取值真伪本闸判不了；'
 Write-Host '     台账里的数字对不对同样判不了（检查 6 只保证两边说的是同一句话）；'
 Write-Host '     条款与台账条目**一起**被删掉时两侧同时少一行、集合差仍为 0，检查 5/6 都看不见；'
+Write-Host '     遮罩那一层同理 —— 两套实现**一起**按同一种方式错时逐字节全等、检查 5d 也看不见；'
 Write-Host '     Marked 模式另检不出「整条丢字段且无 slug」。'
 Write-Host (Format-Summary -ExitCode 0 -Clauses $formal.Count -Violations 0)

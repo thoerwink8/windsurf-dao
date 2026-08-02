@@ -28,6 +28,11 @@
 //   · 本文件：**先建节区间表（两趟）**，再按行号查表定位所属节。
 // 一个节判定写错时，两种走法的失败形态不同 —— 这正是要的。
 //
+// ⚠ **「独立」是逐层成立的，不是整份文件成立**（2026-08-02 issue #91 的教训，写在这里
+// 免得下一个人再把它读成整体断言）：节状态机那一层从第一天就是独立的，而**遮罩的配对层
+// 曾经是 PS 侧的逐行直译** —— 同一份文件里可以一层独立、另一层直译，而头注只写了前者。
+// ⇒ 加新逻辑时问的不是「本文件独不独立」，是「**我正在写的这一层**，对面是怎么走的」。
+//
 // ── 已知的近似与弱处（照直写，别把「解析出来了」读成「解析对了」）──────────────
 //   · `title` 取的是「加粗判据句首」，那是**启发式**：没有加粗的老条款回退到「首个全角冒号
 //     之前」，再退回到「前 N 个字」。两个方向都构造得出反例（标题里带冒号的会被截短；
@@ -100,22 +105,49 @@ export function backtickRuns(raw) {
  * 找不到等长游程的开启游程是**普通文本**，扫描继续往后走（后面的游程照样能开新 span）。
  *
  * 返回 { spans: [{from,to}], unmatched: [start…] }（下标含首含尾）。
+ *
+ * ── 2026-08-02 重写了配对层（issue #91），照直写为什么 ─────────────────────────
+ * **旧写法是 PS 侧 `Get-BacktickSpans` 的逐行直译**：变量名（runs/spans/unmatched/r/open/
+ * closeIdx/close/k）、循环形状、分支顺序完全对应 —— 由对抗验证官逐行核出。于是
+ * **`--reconcile` 对「配对规则本身对不对」判别力≈0**：两侧会以同一种方式一起错、差恒为 0。
+ * 而本文件开头「为什么不复用 PS 那套解析」讲的正是禁止这件事。
+ *
+ * **新写法走另一条路**：先把游程**按长度分桶**（长度 → 该长度游程在 runs 里的下标队列），
+ * 配对时**只在同长度那一桶里**取第一个下标大于游标的成员。对照 PS 侧那边是
+ * 「从开启游程往后**逐个游程比长度**」—— 一个按位置筛、一个按长度筛，两边内层循环
+ * 遍历的根本不是同一个集合：
+ *   · 「长度比较写错」在本侧没有对应位置（长度已经是桶的键，不参与比较）；
+ *   · 「桶的下标序写错」在 PS 侧没有对应位置（那边压根没有桶）。
+ *
+ * ⚠ **诚实边界，别把这次重写读成「从此两边不可能一起错」**：两侧仍在实现同一份 CommonMark
+ * 契约，**契约本身被读错时两边照样一起错**（例如都以为"碰到下一个反引号就闭合"）。
+ * 真正兜住「同错」的是**第三套实现**：PS 侧 `Get-MaskedLineAlt`（逐字符扫描，普查专用）
+ * 与它对主实现的逐字节互核（check-clauses-structure.ps1 检查 5d），其结论经末行
+ * `maskdiv=` 带进 `--reconcile` 判红。本次重写解掉的是另一条更现实的路径 ——
+ * **两边代码长得一样时，改一处几乎必然被照抄到另一处**。
  */
 export function backtickSpans(raw) {
   const runs = backtickRuns(raw);
+  // 分桶：游程长度 → 该长度的游程在 runs 里的下标（按建表顺序天然升序）。
+  const byLen = new Map();
+  for (let idx = 0; idx < runs.length; idx++) {
+    const size = runs[idx].len;
+    if (!byLen.has(size)) byLen.set(size, []);
+    byLen.get(size).push(idx);
+  }
   const spans = [];
   const unmatched = [];
-  let r = 0;
-  while (r < runs.length) {
-    const open = runs[r];
-    let closeIdx = -1;
-    for (let k = r + 1; k < runs.length; k++) {
-      if (runs[k].len === open.len) { closeIdx = k; break; }
+  let cursor = 0;
+  while (cursor < runs.length) {
+    // 桶必非空：游标所指的这个游程自己就在里面。
+    const sameLen = byLen.get(runs[cursor].len);
+    let closer = -1;
+    for (const idx of sameLen) {
+      if (idx > cursor) { closer = idx; break; }
     }
-    if (closeIdx === -1) { unmatched.push(open.start); r++; continue; }
-    const close = runs[closeIdx];
-    spans.push({ from: open.start, to: close.start + close.len - 1 });
-    r = closeIdx + 1;
+    if (closer < 0) { unmatched.push(runs[cursor].start); cursor += 1; continue; }
+    spans.push({ from: runs[cursor].start, to: runs[closer].start + runs[closer].len - 1 });
+    cursor = closer + 1;
   }
   return { spans, unmatched };
 }
@@ -142,17 +174,17 @@ export function backtickSpans(raw) {
  * 坏 markdown，且失败是**响的**（多一条 violation），不是静默的。
  * **闭合的** span 照旧遮罩，原先要防的假阳性防护不变。
  *
- * ⚠ **与 PS 侧的独立性是分层的，别整段读成「两套独立实现」**
- *   （2026-08-02 对抗验证官核出，本注释原写了过强表述，已订正）。逐层实况：
+ * ⚠ **与 PS 侧的独立性是分层的，逐层读**（2026-08-02 由 issue #91 补齐配对层那一格；
+ *   此前那一格是「逐行直译」，由对抗验证官核出）。当前实况：
  *     · **游程扫描器** —— 独立（本侧正则 `/`+/g`，PS 侧手写字符循环）
+ *     · **配对层**（`backtickSpans` ↔ PS `Get-BacktickSpans`）—— **已重写为不同算法路径**：
+ *       本侧按长度分桶后在桶内按位置取，PS 侧线性向后逐个比长度（见 `backtickSpans` 头注）。
  *     · **遮罩拼装**   —— 独立（本侧按区间切片重拼，PS 侧改 char 数组）
- *     · **配对层**（`backtickSpans` ↔ PS `Get-BacktickSpans`）—— **逐行直译，不是独立实现**：
- *       变量名（runs/spans/unmatched/r/open/closeIdx/close/k）、循环形状、分支顺序完全对应。
- *   ⇒ **`--reconcile` 对「配对规则本身对不对」判别力≈0**：两侧会以同一种方式一起错、差恒为 0。
- *     它仍夹得住**只改一侧**（故本批两侧必须同批对齐），以及上面那两层的分歧。
- *   本文件开头「为什么不复用 PS 那套解析」讲的正是禁止这件事 —— 配对层现在违反了它。
- *   **要不要把配对层改成真正独立是判断档**（独立意味着允许两侧结论不同，那时以谁为准是新问题），
- *   **不自定**，已开单呈裁：windsurf-dao issue #91（并含「普查与检出共用遮罩」那个同源缺口）。
+ *   ⇒ `--reconcile` 现在对配对规则**有**判别力（只改一侧必分岔）。
+ *   🕳 **它仍然抓不到的那一格，照直写**：两侧**同时**按同一种方式错（同一个契约误读）时
+ *     差仍为 0。兜它的是 PS 侧的**第三套遮罩实现** `Get-MaskedLineAlt` 与检查 5d 的逐字节
+ *     互核，其结论经末行 `maskdiv=` 带进本侧对账判红（见 gen-clause-index.mjs 的 okMask）。
+ *     再往上一层 —— **三套一起错** —— 没有任何对账抓得到，那是算术不是疏漏。
  */
 export function maskCodeSpans(raw) {
   const { spans } = backtickSpans(raw);

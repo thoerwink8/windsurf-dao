@@ -31,7 +31,7 @@
       { "候选": "docs/specs/ 存在", "出处": "同上", "不收原因": "dao-loop 工作区，没开过 loop 的项目本就不该有。" },
       { "候选": "commit subject 带宿主前缀 [cc]/[codex]", "出处": "dao.md 言·名之则", "不收原因": "不是项目状态而是每次提交的动作，SessionStart 无从核对（要查得挂 git hook 或复审 range，另一条链）。" },
       { "候选": "design/ 完整资产结构（pages/components/ref/workspaces/archive/handoff/CHANGELOG/PROTOTYPE-SPEC/.od-skills symlink…）", "出处": "dao-project-scaffold design-assets.md 检查清单", "不收原因": "十条存在性检查一次性全报会淹没其他项；且 symlink 有效性需 lstat + 目标可达判定，属深度检查。本清单只收其中最承重的一条（design/CONTEXT.md，新开会话第一眼读的对齐入口），其余留 design-assets.md。" },
-      { "候选": ".claude/rules/*.md 必须带 frontmatter（description + paths: 条件加载）", "出处": "2026-07-27 备案清单化捞出的第五个缺口（dao-growth-loop.md §四.6 裁定 C）", "不收原因": "⏸ **挂账不立，非永久否决**。解冻条件：先验证 `paths:` 条件加载在当前宿主真的生效。理由——同日刚踩过「未验证就当兜底承诺」的坑（帅向用户宣称某漂移检测器能报竞品 hook 复发，经查其判据结构上跳过第三方 exe）；`paths:` 若实际不生效，立这条等于要求所有项目加一段无效 frontmatter。先验证，再立法。附带代价：立即收进来会对多个现有项目集中报错，而报的可能是个无效要求。" }
+      { "候选": ".claude/rules/*.md 必须带 frontmatter（description + paths: 条件加载）", "出处": "2026-07-27 备案清单化捞出的第五个缺口（本仓 docs/specs/dao-growth-loop.md §四.6 裁定 C；2026-08-02 由 mousse-cli docs/ops/ 迁入本仓）", "不收原因": "⏸ **挂账不立，非永久否决**。解冻条件：先验证 `paths:` 条件加载在当前宿主真的生效。理由——同日刚踩过「未验证就当兜底承诺」的坑（帅向用户宣称某漂移检测器能报竞品 hook 复发，经查其判据结构上跳过第三方 exe）；`paths:` 若实际不生效，立这条等于要求所有项目加一段无效 frontmatter。先验证，再立法。附带代价：立即收进来会对多个现有项目集中报错，而报的可能是个无效要求。" }
     ]
   },
 
@@ -321,6 +321,26 @@
       "template": { "src": "githooks/pre-commit", "dest": ".githooks/pre-commit" },
       "msg": "有 design/ 的前端项目缺少 .githooks/pre-commit（『改 UI 必动 design/』的 git 提交闸）→ 从 canonical `ccswitch/templates/githooks/pre-commit` 派生，**复制完还要接线**：`git config core.hooksPath .githooks`（团队仓建议同时在 package.json 加 `\"prepare\": \"git config core.hooksPath .githooks\"`，新 clone 自动接上）；类 Unix 系统另需 `chmod +x .githooks/pre-commit`。跑 `sh .githooks/pre-commit --selfcheck` 当场看接没接上",
       "why": "三仓自上而下审计第 14 件（2026-08-02）。**与 Stop hook 互补不互替**，三通道的分工写在 `ccswitch/hooks/dao-design-sync-gate.js` 头注『三通道分工』一节（**那里是唯一真相源，本字段与模板头注都只留指针，不复述**——同一条规则已经有过『三个版本各自漂移』的实例，见该 hook 头注末段）。一句话差别：Stop hook 只在 Claude 主会话『正要说做完了』那一刻响，管不到 Codex/Cascade/裸 git 的提交，也管不到 subagent（走 SubagentStop）；git 闸管**所有宿主的所有提交**，但只看得见 staged 内容、看不见『这一轮改了什么』。**when 为什么不是原议那个形态**：原议把条件挂在『项目已经有这个钩子/已经配了 hooksPath』上 —— 那是循环依赖，条件与 require 查的是同一件事，于是它**只对已经满足的项目触发、对真正缺它的项目结构上永不报**（同 product-type 那道题『答了不是』与『从没答过』逐字节相同的病，只是这次绕了一圈）。现在的 when 只看两件与它无关的项目事实：有 design/ 目录（设计资产在）+ 是前端项目（有 UI 组件可改）。**severity=info 的理由是判据只查入口不查内容**：文件在盘上 ≠ hooksPath 接上了 ≠ 有执行位 —— 后两样清单侧够不着（`.git/config` 在 worktree 里根本不是同一个文件），故把它们放进钩子自己的 `--selfcheck` 并在 msg 里明写。**已知会漏的一面照直写**：`git commit --no-verify` 一句话就绕过去，本闸对它零覆盖；它防的是『忘了』不是『要绕』。",
+      "severity": "info"
+    },
+
+    {
+      "id": "qa-artifact-redaction",
+      "class": "conditional",
+      "when": {
+        "anyOf": [
+          { "dir": "scripts/qa", "label": "QA 脚本目录" },
+          { "glob": "scripts/qa-*.ps1", "label": "QA 工件脚本" },
+          { "glob": "scripts/qa-*.js", "label": "QA 工件脚本" },
+          { "glob": "scripts/qa-*.mjs", "label": "QA 工件脚本" },
+          { "glob": "scripts/*-smoke.ps1", "label": "冒烟脚本" },
+          { "glob": "scripts/*-smoke.js", "label": "冒烟脚本" }
+        ]
+      },
+      "require": { "file": ".claude/rules/qa-artifact-redaction.md" },
+      "template": { "src": "qa-redaction-rule.md", "dest": ".claude/rules/qa-artifact-redaction.md" },
+      "msg": "项目有 {label}（会往盘上落 QA/诊断工件）但缺少 .claude/rules/qa-artifact-redaction.md（凭据脱敏两层防线：落盘前脱敏 + 渲染面「密钥不得出现」断言）→ 从 canonical `ccswitch/templates/qa-redaction-rule.md` 派生（复制后只填「三、本项目实况」那一格，前两节整段照抄）",
+      "why": "2026-08-02 三仓自上而下审计第 8 件，上移自 devin-byok（原实现散在该仓三处、已实证漂移：Go 侧认 5 类模式、PS 侧只认 4 类）。要治的是**工件链上没有任何脱敏步**，而 QA 工件里的密钥一旦被 commit 就永久留在 git 历史（后来删文件也删不掉，除非 rewrite 全仓历史）。判据与实现的真相源是 ccswitch/lib/redact.js 头注 + ccswitch/scripts/dao-redact.mjs（fail-closed 三条契约、射程边界、摸底数字全在那两处）。**摸底实测**：dao 自己的 _tmp/ 里此刻就有真凭据（cc-switch provider 配置 live dump 22 处 + 一份 MCP 配置文档 2 处），产出它们的链一个脱敏步都没有 ⇒ 本条不是纸面风险；但它们都在 gitignore 面内、未进 git 历史 ⇒ 风险表述是「还没进历史，别让它进」，不是「已经泄漏了」。**为什么 class 用 conditional 不用 product-type**：这件事与「是不是产品」无关，与「这个仓有没有在往盘上落诊断工件」有关——内部工具仓（dao 自己就是）照样落，产品型仓也可能一个 QA 脚本都没有。**指纹是近似，两个方向都构造得出反例**：靠脚本命名（scripts/qa* 与 scripts/*-smoke.*）认 ⇒ 把工件收集写在 verify-all.ps1 之类里的仓探不到（漏报），有 scripts/qa/ 目录但只放分析工具的仓会被报（误报）。**require 只查投递面、不查接线**：文件在不在机器可判，「脚本真的调了没有」要读懂那条链 ⇒ 属语义判断，不在本清单射程内。这两点是 severity 取 info 的理由，不是因为这件事不重要。**⚠ 一个照直记的射程缺口：本条上线时实测只命中 mousse-cli 与 devin-byok 两仓，而真凭据恰恰是在 windsurf-dao 自己的 _tmp/ 里扫出来的 —— 产出它们的是住在 _tmp/ 里的一次性 ops 脚本，任何基于「仓内脚本命名」的指纹都结构上看不见它。刻意不为了把立法者自己框进来而改指纹（那是指纹造假，不是覆盖面改善）；这一格由帅另立账。**",
       "severity": "info"
     }
   ]
