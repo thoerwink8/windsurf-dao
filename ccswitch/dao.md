@@ -227,7 +227,7 @@ UI 视觉偏差 + 有 `design/` 目录 → `/dao-design`，以原型为唯一真
 
 > 慎终如始，则无败事。通用安全（超时/非交互/破坏性确认）由 Claude Code 内置，此处仅留 dao 血泪增量：
 
-- **PowerShell 脚本坑（四条）· 存根**：**新建或改动任何 `*.ps1` 之前 = Read `ccswitch/rules/dao-powershell.md` 全文**——`$LASTEXITCODE` 判成败禁看 "error" 字样 / PS 管道禁改含中文或无 BOM 的文件 / 禁 PS 里的 Bash heredoc / inline 长命令超 300 字符改写脚本文件。**已装机器触发器**（P2 作用域档，源 `ccswitch/rules/scoped/`）：Read 任何 `.ps1` 时宿主自动把「去读正文」送到眼前，不再靠谁想起来。**射程只覆盖「改已有脚本」，不覆盖「从零新建」**（新建时没有可 Read 的 `.ps1`）——那一半仍只有本行纯文字兜底。 [n=? @08-01 触发:paths作用域] [自定@08-01] [基线:未测——机制本身 2026-08-01 canary 正负控双向实测生效，但「装了触发器之后这四条的遵守率」未测，不得按已改善宣称] [#Shell-PS四坑]
+- **PowerShell 脚本坑（四条）· 存根**：**新建或改动任何 `*.ps1` 之前 = Read `ccswitch/rules/dao-powershell.md` 全文**——`$LASTEXITCODE` 判成败禁看 "error" 字样 / `Get-Content` 任何形态读无 BOM 中文文件即毁内容（不只那条管道、也不只写的时候）/ 禁 PS 里的 Bash heredoc / inline 长命令超 300 字符改写脚本文件。**已装机器触发器**（P2 作用域档，源 `ccswitch/rules/scoped/`）：Read 任何 `.ps1` 时宿主自动把「去读正文」送到眼前，不再靠谁想起来。**射程只覆盖「改已有脚本」，不覆盖「从零新建」**（新建时没有可 Read 的 `.ps1`）——那一半仍只有本行纯文字兜底。 [n=? @08-01 触发:paths作用域] [自定@08-01] [基线:未测——机制本身 2026-08-01 canary 正负控双向实测生效，但「装了触发器之后这四条的遵守率」未测，不得按已改善宣称] [#Shell-PS四坑]
 - **路径锚点**：跨 workspace 或终端异常后，用 `git -C <repo>` / `pnpm --dir <repo>` / `npm --prefix <repo>`，不只依赖 cwd
 - **验证加 marker**：关键验证用 `VERIFY_BEGIN ... VERIFY_EXIT=$LASTEXITCODE` 包裹；marker 缺失或来自错误目录 → 判为终端感知异常，不判业务失败
 - **SSH 远程执行**：三层超时 + heredoc 工艺已下沉 `stacks/remote-ops.md`，触远程场景先读它

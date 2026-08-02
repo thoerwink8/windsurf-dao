@@ -439,6 +439,691 @@
         "叙事 N9-②"
       ],
       "status": "active"
+    },
+    "官通-工具约束": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "权限deny",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-身份铁律": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-主动轮询": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "10",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-超时降级": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-禁重定向捕获": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-止步PR创建": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-编码铁律": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "3",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "全库 260 个 PR body 实扫，中招 2 例（#117、#269）＝0.77%；#175「verify-all GBK 乱码双修」是同族第三例但载体不同（进程输出重定向而非 `Get-Content`），故不计入 n",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-body-file回读": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "4",
+      "first_seen": "07-27",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "同上条 2/260（#117 / #269）+ 本条作者自己一次（shell 命令替换吃掉正文）+ 帅 2026-07-29 一次（bash 不带引号 heredoc 吃掉反引号内容），共 4 例；本条要求的回读步骤在前 2 例中执行 0 次、第 4 例中**事后**执行并抓到——都是「`gh` exit 0 就算发完」",
+      "source_refs": [
+        "issue #280"
+      ],
+      "status": "active"
+    },
+    "官通-勿嵌危险字面": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "分类器拦截",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-PR创建5xx": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-先拆worktree": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本窗同一动作两次实测——#253 未拆先合，远端残留 1 分支需手工补删；#254 先拆后合，本地/远端/worktree 三处一次清干净",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-禁笃定措辞": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "4",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-性能哨兵": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-调参三问": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "3",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [
+        "叙事档 N7"
+      ],
+      "status": "active"
+    },
+    "官通-对照组自验": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-控制字符转义": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-缓冲区校验": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-收账双向对齐": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-先证存在": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-同批查引用": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "4",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "入库时该类问题近 3 次同类动作中 3 例",
+      "source_refs": [
+        "issue #274"
+      ],
+      "status": "active"
+    },
+    "官通-投递延迟": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [
+        "叙事档 N8"
+      ],
+      "status": "active"
+    },
+    "官通-先证投递": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-查前提": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-CWD守卫": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-软链降级": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-研究门槛三问": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-用户命令实跑": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-检测器非兜底": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-复原前确认基线": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-禁add全量": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "verify-all/check-worktree-strays",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "入库时该类问题已知 1 例（89KB 垃圾文件进 main）；「多官并行收账」这一动作在本仓的历史发生次数未统计，故命中率无从算，写「未测」更诚实",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官通-闸位判断": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "IsGate槽位",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官复-range实算": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-25",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-契约引用": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-覆盖矩阵": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-基点对齐": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-基点复检": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-27",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-07-28 窗首次实测——本窗 6 个 PR 中 4 个执行了交付前基点复检（#290/#294/#288/#298），**1 次真命中硬闸红（#290，25%）**，另 3 次重跑后无变化；那 1 次 `gh` 报的是 `MERGEABLE`/`UNKNOWN`。此前长期 `[基线:未测]`",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-幂等接续": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-新词实测": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-误伤反例": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官实-禁先合后审": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本仓修复间隔呈双峰，24% 的返工发生在合并后 4 小时内",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-独立复跑": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-换靶两态": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-调用点覆盖率": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "5",
+      "first_seen": "07-30",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-30"
+      ],
+      "baseline": "本窗约 30 小时内 5 个独立实例，覆盖率分别为 60%（#310）、0%（#323）、75%首批/100%补齐后（#338）、93.75%单点/6.25%端到端（#343）",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-改坏多形态": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "14 份同型守护中 8 份对「注释掉」形态失明，且其中至少 1 份的自证 footer 明确宣告过判别力已坐实",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-变异体存活": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "某批 7/7 次 mutation 的红集因靶被弄死而失真，且该失真形态与「判别力满分」不可区分",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-字节级复原": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-负控组": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-承重字段完整": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-PASS判据显式": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "workflow-schema",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-基线是活的": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-判别力自检": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官抗-语料非自证": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "11",
+      "first_seen": "07-27",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本仓某护栏正则被 11 个 PR 触碰、其中 8 个集中在 19.8 小时内，每层修复面 100% 落在上一层刚写的行上（共享比例 0.92–1.00）",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官侦-只读红线": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官侦-结论带出处": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "workflow-schema",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官侦-零增量明说": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [
+        "07-27"
+      ],
+      "baseline": "未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "官侦-分层读取": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "?",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官侦-实测优先": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
+    },
+    "官食-不动那棵树": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "1 次疑似实证且**未确证**——issue #266：走查进行中帅在同一工作树跑 `git pull --ff-only`，触发 vite 整页 reload，与随后观察到的「终端会话变成 Codex 会话」时间上相邻；因果**没有证据链**，它只是替代候选之一，不得被引用为「已确证的根因」",
+      "source_refs": [
+        "issue #266"
+      ],
+      "status": "active"
+    },
+    "官食-第一人称抽验": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "07-24",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": null,
+      "source_refs": [],
+      "status": "active"
     }
   }
 }

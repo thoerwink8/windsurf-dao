@@ -59,16 +59,25 @@
 //     注册之后的实际注入率审计数据（契约：≥20 次注入率 100% 才谈退役），不在本批预判。
 //   · **不写 live settings.json / 不写 cc-switch DB**：注册是用户动作（硬闸 G2）。
 //
-// ── 今天官种节渲染不出来，是索引的事不是本 hook 的事（照直写，别读成 bug）────
-// 仓里那份默认索引（ccswitch/clause-index.json）的源清单**全是 role_scheme=general 的仓内文件**
-// ⇒ reviewer/implementer/adversary/scout/dogfood 一律 0 条 ⇒ 映射命中了也照样退到通用节。
-// 带官种分节的语料住在各项目仓（如 mousse-cli 的 docs/rules/dispatch-clauses.md）。要让官种
-// 那一节真的渲染出来，得先生成一份含它的索引，再用 env 指过去：
+// ── 官种节渲染得出来了，但别把它读成「这条通道已经活了」（照直写）────────────
+// **曾经的形态**：仓里那份默认索引（ccswitch/clause-index.json）的源清单**全是
+// role_scheme=general 的仓内文件** ⇒ reviewer/implementer/adversary/scout/dogfood 一律 0 条
+// ⇒ 映射命中了也照样退到通用节。成因是带官种分节的语料**只住在各项目仓**（那正是
+// 「全局层被一个项目文件治理」）。
+//
+// **2026-08-02 两步走完**：①同日拆分批把通用半边搬进 **ccswitch/rules/dao-officer-clauses.md**
+// （仓内、六个官种节齐全）；②合并态这一批把它登记进 clause-parser.mjs 的 defaultSources()
+// （all-top-level + dispatch-sections）⇒ **默认索引里六个官种现在都有条款，官种节渲染得出来。**
+//
+// 🔴 **仍然没证到的那一半，别读成已解决**：渲染得出东西 ≠ 这个 hook 被调用过。
+// 注册进 live settings.json 是**用户动作**（硬闸 G2 拦的那一格），本批照旧不代做 ⇒
+// 「注册之后它在真实 session 里真的响了」现在仍然没有人有资格说。判据在 --selfcheck 第②段：
+// 它只采信非 synthetic 的心跳记录。**「没注册」与「注册了没触发」在日志上长得一样。**
+//
+// 项目特有那半仍在各项目仓，仍然不进本仓索引（要么带本机绝对路径、要么把别人的语料复制进来）。
+// 要临时把某个项目那份也算进来：
 //   node ccswitch/scripts/gen-clause-index.mjs --sources-json <清单> --out <某处>/clause-index.json
-//   （清单条目形如 {"file":"<绝对路径>/dispatch-clauses.md","selector":"all-top-level","role_scheme":"dispatch-sections"}）
 //   然后 DAO_CLAUSE_INDEX=<某处>/clause-index.json
-// **本批刻意不把那份索引提交进仓**：它要么带一个本机绝对路径（换机即错），要么把另一个仓的
-// 语料复制进本仓（副本必漂移）。这是个真实的缺口，不是已解决的事。
 //
 // ── 这张映射表将来怎么退役 ───────────────────────────────────────────────────
 // 映射表和条款库一样只增不减。给它留的触发器是 `--selfcheck` 第③段：它逐条打印表里每个
@@ -96,10 +105,17 @@ const RENDERER = path.join(ROOT, "ccswitch", "scripts", "render-clauses.mjs");
 const MAX_CONTEXT_CHARS = Number(process.env.DAO_SUBAGENT_CLAUSES_MAX || 9000);
 const RENDER_TIMEOUT_MS = Number(process.env.DAO_SUBAGENT_CLAUSES_TIMEOUT_MS || 10000);
 
-// 条款库正文的位置：**先按 cwd 探**（跨项目资产不该把某一个仓的路径写死成唯一答案），
-// 探不到才退到已知位置。env 覆写优先级最高，测试与换机都靠它。
+// 条款库正文的位置：**先按 cwd 探项目侧那半**（跨项目资产不该把某一个仓的路径写死成唯一答案），
+// 探不到才退到 **dao 自己的官侧通用档**。env 覆写优先级最高，测试与换机都靠它。
+//
+// **2026-08-02 订正的倒置依赖**：这里原先写死 `D:/frank/mousse-cli/docs/rules/dispatch-clauses.md`
+// —— **一个本机绝对路径 + 某一个项目的文件**。它有两种坏法且都静默：换台机器指向空气
+// （降级路径本身失效，而 hook 照常 exit 0），换个项目指向别人的账本（拿 A 仓的验证入口、
+// 进程名、专有脚本去指导 B 仓的官）。现在退到**仓内相对路径**，随本仓走、随本文件搬。
+// **射程照直写**：退到通用档只补得上「怎么做」那一半，项目特有那半（跑哪个命令）没探到就是
+// 没有，注入文本里因此明写这一点，不假装两半都给了。
 const CLAUSE_FILE_CANDIDATES = ["docs/rules/dispatch-clauses.md", ".claude/rules/dispatch-clauses.md"];
-const KNOWN_CLAUSE_FILE = "D:/frank/mousse-cli/docs/rules/dispatch-clauses.md";
+const KNOWN_CLAUSE_FILE = path.join(ROOT, "ccswitch", "rules", "dao-officer-clauses.md").replace(/\\/g, "/");
 
 // ── agent_type → 官种 ────────────────────────────────────────────────────────
 // 两段式：先精确名，再关键词。**两段都是近似**，两个方向都构造得出反例：
@@ -146,7 +162,7 @@ function resolveClauseFile(cwd) {
     const p = path.join(cwd || ".", rel);
     try { if (fs.existsSync(p)) return { file: p.replace(/\\/g, "/"), how: "按本次 cwd 探到" }; } catch (_) {}
   }
-  return { file: KNOWN_CLAUSE_FILE, how: "本项目下没探到，退到已知位置（可能不适用于本项目）" };
+  return { file: KNOWN_CLAUSE_FILE, how: "本项目下没探到项目特有条款库，退到 dao 官侧通用档（通用判据仍适用；本仓具体跑什么命令这一半缺）" };
 }
 
 // 渲染端的末行契约：`CLAUSE_RENDER_SUMMARY exit=… role=… …`（见 render-clauses.mjs 头注）。
