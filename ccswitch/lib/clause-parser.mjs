@@ -33,12 +33,27 @@
 //     之前」，再退回到「前 N 个字」。两个方向都构造得出反例（标题里带冒号的会被截短；
 //     整条没有句首判据的会拿到一句半截话）。它只用于**人读的索引与渲染标题**，不参与任何判定。
 //   · `id` 是**内容指纹**不是长期标识符：改一个字（含把 `n=1` 改成 `n=2`）id 就变。
-//     要「同一条条款跨版本的稳定 id」得另立手工维护的 slug 字段 —— 本批不做（见 PR 未尽处）。
+//     「同一条条款跨版本的稳定 id」是 v2 加的**行内 slug**（`[#<域>-<短名>]`）；两者各管一件事 ——
+//     指纹答「内容变没变」，slug 答「这还是不是那一条」。
 //   · `first_seen` 原样存 `MM-DD` 字符串，**刻意不补年份**：`@` 字段本来就没有年份，
 //     补年份等于让派生物凭猜测产出原文里不存在的信息。要算年龄的消费方自己去挑年份
 //     （PS 守卫的 `Resolve-ClauseDate` 就是那个判据，本文件不重造）。
 //   · 「一行一条」是本解析器的**计数单位**：同一行出现两个元字段时只认第一个。
 //     全库现无此形态，故不为它加判据（同 PS 守卫「不为假想敌立判据」的既定政策）。
+//     ⚠ **`[自定@]` 是例外，且是实测出来的例外**：dao.md 有一行写着 `[自定@07-29] [自定@07-30]`，
+//     只认第一个会**静默丢一个日期**，而那个日期正是「按日期整批撤回」这份授权对价的抓手。
+//     故 `self_declared_all` 收全部，`self_declared` 保留首个（老消费方不变）。
+//
+// ── v2（批 2 · 台账搬家）改了哪三件事 ────────────────────────────────────────
+//   ① **行内 slug**：条款行尾 `[#<域>-<短名>]`，是条款与 `ccswitch/clause-ledger.json` 的关联键。
+//      台账数字（n / 首次入库 / 触发点 / 基线 / 自定 / 出处）的真相源自此是 ledger，正文只持 slug。
+//   ② **选择器盲区修掉**：MARKED 原判据是 `[n=`，于是「带 `[基线:]` 或 `[自定@]` 却没有完整签名」
+//      的行**结构上看不见**。可达性矩阵实测 dao.md 有 3 条这种（心跳铁律 / 越权 Grep / 在途水位线，
+//      全是承重条款），dao-longwindow.md 另有 2 条。判据改为「带任一台账字段**或** slug」。
+//   ③ **行内代码 span 一律遮罩**：正文里写 `` `[自定@<月日>]` `` 是在讲**格式**，不是一个标记。
+//      不遮罩会给立法存根凭空造一个 ledger 条目（矩阵实测的那个假阳性，dao.md L262）。
+//      遮罩形态是**等长空格**：先在遮罩串上定位，再按 group 下标回**原始串**切值 ——
+//      直接拿遮罩串取值会把基线正文里合法的反引号内容一起吃掉（`归-根路径消歧` 的基线就有）。
 
 import fs from "node:fs";
 import path from "node:path";
@@ -51,6 +66,50 @@ export const BASELINE_RE = /\[基线:([^\]]+)\]/;
 export const SELF_AUTHORED_RE = /\[自定@(\d{2}-\d{2})\]/;
 export const JUDGE_ONLY_MARK = "[仅判据·无触发]";
 export const OBSERVING_MARK = "[观察中]";
+// v2：行内 slug。取值刻意允许中文（`[#帅-热重载]` 比 `[#c17]` 可读得多，而这一串是给人看的）；
+// 唯一的形式约束是**不含空白、不含右方括号** —— 那两样会让「一行两个 slug」与「一个带空格的
+// slug」不可区分。
+export const SLUG_RE = /\[#([^\]\s]+)\]/;
+// 「这一行带台账」的签名。**比完整元字段弱是刻意的**（同 CLAUSE_SIGNATURE_RE 的理由）：
+// 字段写坏的行仍要进得了扫描面，才轮得到判据去报它。
+export const LEDGER_SIGNATURE_RE = /\[n=|\[基线:|\[自定@/;
+
+// 带 `d`（hasIndices）/ `g` 的内部副本。**不给上面那几个导出常量加标志位**：`g` 会让 `.exec`
+// 变成有状态的，而它们是被别处直接消费的公开契约；这里另建一份，改标志位不波及消费方。
+const META_FIELD_RE_D = new RegExp(META_FIELD_RE.source, "d");
+const BASELINE_RE_D = new RegExp(BASELINE_RE.source, "d");
+const SELF_AUTHORED_RE_DG = new RegExp(SELF_AUTHORED_RE.source, "dg");
+const SLUG_RE_DG = new RegExp(SLUG_RE.source, "dg");
+
+/**
+ * 把行内代码 span（一对反引号之间的内容，含反引号本身）替换成**等长空格**。
+ *
+ * 等长是硬要求，不是讲究：下游按遮罩串上的 group 下标回原始串切值，长度一变下标就错位。
+ * 未闭合的反引号：从它开始到行尾一律当代码（保守方向——宁可少认一个标记，不可凭一个
+ * 落单的反引号把后面真的标记也吃掉？两个方向都有代价，这里选「少认」是因为多认会**凭空造出**
+ * 一个 ledger 条目，而少认会被 missing-slug / orphan 检测在另一侧报出来）。
+ */
+export function maskCodeSpans(raw) {
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    if (raw[i] === "`") {
+      const end = raw.indexOf("`", i + 1);
+      if (end === -1) { out += " ".repeat(raw.length - i); break; }
+      out += " ".repeat(end - i + 1);
+      i = end + 1;
+    } else {
+      out += raw[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+// 在遮罩串上定位、回原始串取值。`idx` 是 `m.indices[k]`（可能是 undefined —— 未参与匹配的组）。
+function sliceByIndices(raw, idx) {
+  return idx ? raw.slice(idx[0], idx[1]) : null;
+}
 
 // H2 节标题：**恰两个 `#` 后跟空白**。`### 三级标题` 不重置节状态 —— 这一条与 PS 侧
 // 的 `^##\s` 语义相同，是被检文件的组织约定，不是抄来的技巧。
@@ -61,8 +120,10 @@ const FENCE_RE = /^```/;
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
 
 export const SELECTOR = {
-  // 含条款签名 `[n=` 的行即条款候选，不论缩进、不论是不是列表项。
+  // **v2 判据**：带任一台账字段（`[n=` / `[基线:` / `[自定@`）**或**行内 slug 的行即条款候选，
+  // 不论缩进、不论是不是列表项；行内代码 span 内的一律不算。
   // 适用于「条款与散文混装」的文件（dao.md / ccswitch/rules/*.md）。
+  // v1 判据只有 `[n=`，实测漏掉 5 条真条款（dao.md 3 · dao-longwindow.md 2）——见文件头 v2 ②。
   MARKED: "marked",
   // 零缩进 `- ` 行即条款候选（不论有没有字段 ⇒ 检得出「整条丢字段」）。
   // 适用于「整份文件就是条款列表」的文件（mousse dispatch-clauses.md）。
@@ -153,9 +214,9 @@ function sectionOf(sections, lineIdx) {
   return null;
 }
 
-function selectorHit(raw, selector) {
+function selectorHit(raw, masked, selector) {
   if (selector === SELECTOR.ALL_TOP_LEVEL) return raw.startsWith("- ");
-  if (selector === SELECTOR.MARKED) return CLAUSE_SIGNATURE_RE.test(raw);
+  if (selector === SELECTOR.MARKED) return LEDGER_SIGNATURE_RE.test(masked) || SLUG_RE.test(masked);
   throw new Error(`未知 selector：${selector}（合法值：${Object.values(SELECTOR).join(" / ")}）`);
 }
 
@@ -259,21 +320,28 @@ export function parseClauses({ text, file, selector, roleScheme }) {
   for (let i = 0; i < lines.length; i++) {
     if (mask[i]) continue;
     const raw = lines[i];
+    const masked = maskCodeSpans(raw);
     const t = raw.trim();
     if (H2_RE.test(t)) continue; // 标题行本身不是条款
     const sec = sectionOf(sections, i);
     if (sec && sec.kind === "special") {
       // `## 📌` 节整节跳过：那里是「怎么写条款」的元文档，里面的样例长得和条款一样。
-      if (CLAUSE_SIGNATURE_RE.test(raw)) skippedSpecial++;
+      if (LEDGER_SIGNATURE_RE.test(masked) || SLUG_RE.test(masked)) skippedSpecial++;
       continue;
     }
-    if (!selectorHit(raw, selector)) continue;
+    if (!selectorHit(raw, masked, selector)) continue;
 
-    const m = META_FIELD_RE.exec(raw);
+    const m = META_FIELD_RE_D.exec(masked);
     const bs = blockStart(lines, mask, i, sec ? sec.start : 0);
     const be = blockEnd(lines, mask, i, sec ? sec.end : lines.length - 1);
     const blockText = lines.slice(bs, be + 1).join("\n");
     const zone = sec && sec.kind === "observation" ? ZONE.OBSERVATION : ZONE.CLAUSE;
+
+    SLUG_RE_DG.lastIndex = 0;
+    const slugHits = [...masked.matchAll(SLUG_RE_DG)].map((x) => sliceByIndices(raw, x.indices[1]));
+    SELF_AUTHORED_RE_DG.lastIndex = 0;
+    const selfAll = [...masked.matchAll(SELF_AUTHORED_RE_DG)].map((x) => sliceByIndices(raw, x.indices[1]));
+    const b = BASELINE_RE_D.exec(masked);
 
     const base = {
       file,
@@ -286,24 +354,37 @@ export function parseClauses({ text, file, selector, roleScheme }) {
       role: roleOf(sec, roleScheme),
       title: extractTitle(blockText),
       body_excerpt: excerptOf(blockText),
+      // slug：一行多个是**结构错**（关联键必须唯一），如实记全部由消费方判红，
+      // 这里不替它挑一个 —— 挑一个等于把错误藏进派生物。
+      slug: slugHits.length === 1 ? slugHits[0] : null,
+      slugs: slugHits,
     };
 
-    if (!m) {
-      fieldless.push({ ...base, reason: "合选择器但无完整元字段" });
-      continue;
-    }
     const rec = {
       id: null, // 由 assignIds 填（要全局去重，单文件里定不了）
       ...base,
-      n: m[1],
-      first_seen: m[2],
-      trigger: m[3],
-      baseline: (BASELINE_RE.exec(raw) || [null, null])[1],
-      self_declared: (SELF_AUTHORED_RE.exec(raw) || [null, null])[1],
-      judge_only: raw.includes(JUDGE_ONLY_MARK),
-      observing: raw.includes(OBSERVING_MARK),
+      // v2：行内元字段可以缺席 —— 缺席时台账在 ledger 里，这三个字段如实为 null。
+      // **不从 ledger 回填进来**：回填会让「正文说的」与「台账说的」在派生物里合流，
+      // 而双轨对账要比的正是这两者。合流之后那个对账恒为真。
+      n: m ? sliceByIndices(raw, m.indices[1]) : null,
+      first_seen: m ? sliceByIndices(raw, m.indices[2]) : null,
+      trigger: m ? sliceByIndices(raw, m.indices[3]) : null,
+      has_meta_field: !!m,
+      baseline: b ? sliceByIndices(raw, b.indices[1]) : null,
+      self_declared: selfAll.length ? selfAll[0] : null,
+      self_declared_all: selfAll,
+      judge_only: masked.includes(JUDGE_ONLY_MARK),
+      observing: masked.includes(OBSERVING_MARK),
       _fingerprint_src: blockText,
     };
+
+    // 分堆判据（v2）：**有完整元字段 或 有 slug** ⇒ 它是一条条款。
+    // 两者皆无 ⇒ fieldless。这一支只在 ALL_TOP_LEVEL 下够得着（那个选择器不看字段），
+    // 它检的是「整条丢掉台账」，是 mousse 型条款库的真硬闸，v2 不动它。
+    if (!m && slugHits.length === 0) {
+      fieldless.push({ ...base, reason: "合选择器但无完整元字段、也无 slug" });
+      continue;
+    }
     (zone === ZONE.OBSERVATION ? observation : clauses).push(rec);
   }
 
@@ -317,6 +398,11 @@ export function parseClauses({ text, file, selector, roleScheme }) {
     no_trigger: clauses.filter((c) => c.trigger === "无").length,
     unclassified: clauses.filter((c) => c.role === ROLE_UNCLASSIFIED).length,
     self_declared: clauses.filter((c) => c.self_declared).length,
+    // v2 三个：`slug` 是与 ledger 对得上的那批；`no_slug` 是**还没上 slug** 的条款；
+    // `no_meta_field` 是行内元字段缺席、台账只在 ledger 里的那批（双轨期的另一头）。
+    slug: clauses.filter((c) => c.slug).length,
+    no_slug: clauses.filter((c) => !c.slug).length,
+    no_meta_field: clauses.filter((c) => !c.has_meta_field).length,
     // 落在 `## 📌` 节里、长得像条款的行数。它**不该**参与任何判定，只是让「我跳过了什么」
     // 有个数字 —— 静默跳过与「跑了且零命中」在输出上不可区分，那正是本仓反复踩的病。
     skipped_in_special_sections: skippedSpecial,
@@ -327,6 +413,110 @@ export function parseClauses({ text, file, selector, roleScheme }) {
 export function parseFile(absPath, { file, selector, roleScheme }) {
   const text = fs.readFileSync(absPath, "utf8");
   return parseClauses({ text, file: file || absPath, selector, roleScheme });
+}
+
+// ── 台账（clause-ledger.json）────────────────────────────────────────────────
+// ledger 是**台账字段的真相源**，Markdown 仍是**正文的真相源**。本文件只负责把两边对上，
+// 不负责合并它们 —— 合并之后「两边说的不一样」这个信号就没了。
+export const DEFAULT_LEDGER_REL = "ccswitch/clause-ledger.json";
+
+export function loadLedger(absPath) {
+  if (!fs.existsSync(absPath)) return { ok: false, why: "不存在", path: absPath, clauses: {} };
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(absPath, "utf8"));
+  } catch (e) {
+    return { ok: false, why: `不是合法 JSON：${e && e.message ? e.message : String(e)}`, path: absPath, clauses: {} };
+  }
+  if (!doc || typeof doc.clauses !== "object" || doc.clauses === null) {
+    return { ok: false, why: "缺 clauses 字段（或它不是对象）", path: absPath, clauses: {} };
+  }
+  return { ok: true, path: absPath, schema_version: doc.schema_version, clauses: doc.clauses };
+}
+
+const arrEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * 正文 ↔ 台账的双向对账。
+ *
+ * @param {object[]} records  一批条款记录（parseClauses 的 clauses + observation）
+ * @param {object}   ledger   loadLedger 的返回
+ * @param {string[]} scope    本次**在扫描面里**的文件标识列表。ledger 里 file 不在这个集合中的
+ *                            条目算 `out_of_scope`（不判红——守卫一次只看一份文件时它是常态），
+ *                            由调用方决定要不要在「跑的是默认全量清单」时把它升成红。
+ * @returns {{missingSlug, dupSlug, orphanSlug, orphanLedger, fileMismatch, mismatch, outOfScope, checked}}
+ *
+ * **判红面（四类结构错，两个方向都覆盖）**：
+ *   · missing-slug   正文是条款却没 slug ⇒ 它进不了台账，等于台账对它失明
+ *   · orphan-slug    正文有 slug 而台账无此条 ⇒ 指向空气的指针
+ *   · orphan-ledger  台账有条目而正文找不到它的 slug ⇒ 条款被删/改名而台账没跟上
+ *   · dup-slug / file-mismatch / 双轨值不等
+ */
+export function reconcileLedger(records, ledger, scope) {
+  const inScope = new Set(scope || []);
+  const missingSlug = [];
+  const dupSlug = [];
+  const orphanSlug = [];
+  const fileMismatch = [];
+  const mismatch = [];
+  const seen = new Map();
+
+  for (const r of records) {
+    if (r.slugs && r.slugs.length > 1) {
+      dupSlug.push({ file: r.file, line: r.meta_line, slug: r.slugs.join(" / "), why: "同一行两个 slug" });
+      continue;
+    }
+    if (!r.slug) {
+      missingSlug.push({ file: r.file, line: r.meta_line, title: r.title });
+      continue;
+    }
+    if (seen.has(r.slug)) {
+      dupSlug.push({
+        file: r.file, line: r.meta_line, slug: r.slug,
+        why: `与 ${seen.get(r.slug).file}:${seen.get(r.slug).line} 重名`,
+      });
+      continue;
+    }
+    seen.set(r.slug, { file: r.file, line: r.meta_line });
+
+    const e = ledger.clauses[r.slug];
+    if (!e) {
+      orphanSlug.push({ file: r.file, line: r.meta_line, slug: r.slug });
+      continue;
+    }
+    if (e.file !== r.file) {
+      fileMismatch.push({ slug: r.slug, inText: r.file, inLedger: e.file, line: r.meta_line });
+    }
+    // ── 双轨对账：**只比行内确实写着的那些字段** ────────────────────────────
+    // 行内没写的字段不参与（那不是「不等」，是「正文没这一栏」）；ledger 侧此时应为 null，
+    // 若 ledger 反而有值 ⇒ 那是台账替正文编了一个值，同样判红。
+    const cmp = (name, mine, theirs) => {
+      if (mine === theirs) return;
+      mismatch.push({ slug: r.slug, file: r.file, line: r.meta_line, field: name, inText: mine, inLedger: theirs });
+    };
+    cmp("n", r.n, e.n === undefined ? null : e.n);
+    cmp("first_seen", r.first_seen, e.first_seen === undefined ? null : e.first_seen);
+    cmp("trigger", r.trigger, e.trigger === undefined ? null : e.trigger);
+    cmp("judge_only", r.judge_only, !!e.judge_only);
+    cmp("baseline", r.baseline, e.baseline === undefined ? null : e.baseline);
+    const theirSelf = Array.isArray(e.self_authored) ? e.self_authored : [];
+    if (!arrEq(r.self_declared_all || [], theirSelf)) {
+      mismatch.push({
+        slug: r.slug, file: r.file, line: r.meta_line, field: "self_authored",
+        inText: (r.self_declared_all || []).join(","), inLedger: theirSelf.join(","),
+      });
+    }
+  }
+
+  const orphanLedger = [];
+  const outOfScope = [];
+  for (const [slug, e] of Object.entries(ledger.clauses)) {
+    if (e && e.status === "retired") continue; // 已退役：正文本就该没有它
+    if (!inScope.has(e && e.file)) { outOfScope.push({ slug, file: e && e.file }); continue; }
+    if (!seen.has(slug)) orphanLedger.push({ slug, file: e.file });
+  }
+
+  return { missingSlug, dupSlug, orphanSlug, orphanLedger, fileMismatch, mismatch, outOfScope, checked: seen.size };
 }
 
 // ── id：内容指纹 ─────────────────────────────────────────────────────────────
@@ -421,6 +611,9 @@ export function buildIndex(sources, { repoRoot }) {
       no_trigger: parsed.stats.no_trigger,
       unclassified: parsed.stats.unclassified,
       skipped_in_special_sections: parsed.stats.skipped_in_special_sections,
+      slug: parsed.stats.slug,
+      no_slug: parsed.stats.no_slug,
+      no_meta_field: parsed.stats.no_meta_field,
     });
     all.push(...parsed.clauses, ...parsed.observation);
   }
@@ -437,6 +630,7 @@ export function buildIndex(sources, { repoRoot }) {
 
   const clauses = all.map((c) => ({
     id: c.id,
+    slug: c.slug,
     file: c.file,
     line: c.line,
     line_end: c.line_end,
@@ -450,6 +644,8 @@ export function buildIndex(sources, { repoRoot }) {
     trigger: c.trigger,
     baseline: c.baseline,
     self_declared: c.self_declared,
+    self_declared_all: c.self_declared_all,
+    has_meta_field: c.has_meta_field,
     judge_only: c.judge_only,
     observing: c.observing,
     shape: c.shape,

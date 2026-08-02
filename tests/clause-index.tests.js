@@ -59,12 +59,12 @@ function runNode(script, args, opts) {
   return {
     code: r.status, out, err: String(r.stderr || ""),
     index: /CLAUSE_INDEX_SUMMARY exit=(\d+) sources=(\d+) clauses=(\d+) observation=(\d+) drift=(\S+) wrote=(\d+)/.exec(out),
-    rec: /CLAUSE_RECONCILE_SUMMARY exit=(\d+) host=(\S+) files=(\d+) matched=(\d+) mismatched=(\d+) mine=(\d+) theirs=(\d+)/.exec(out),
+    rec: /CLAUSE_RECONCILE_SUMMARY exit=(\d+) host=(\S+) files=(\d+) matched=(\d+) mismatched=(\d+) mine=(\d+) theirs=(\d+) myslugs=(\d+) theirslugs=(\d+)/.exec(out),
     render: /CLAUSE_RENDER_SUMMARY exit=(\d+) role=(\S+) general=(\d+) role_clauses=(\d+) stale=(\d+) unclassified=(\d+)/.exec(out),
   };
 }
 const idx = (m) => (m ? { exit: +m[1], sources: +m[2], clauses: +m[3], observation: +m[4], drift: m[5], wrote: +m[6] } : null);
-const rec = (m) => (m ? { exit: +m[1], host: m[2], files: +m[3], matched: +m[4], mismatched: +m[5], mine: +m[6], theirs: +m[7] } : null);
+const rec = (m) => (m ? { exit: +m[1], host: m[2], files: +m[3], matched: +m[4], mismatched: +m[5], mine: +m[6], theirs: +m[7], myslugs: +m[8], theirslugs: +m[9] } : null);
 const ren = (m) => (m ? { exit: +m[1], role: m[2], general: +m[3], role_clauses: +m[4], stale: +m[5], unclassified: +m[6] } : null);
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
@@ -133,9 +133,21 @@ async function main() {
       file: "ccswitch/dao.md", selector: lib.SELECTOR.MARKED, roleScheme: lib.ROLE_SCHEME.GENERAL,
     });
     check("dao.md 解析出条款（零条 = 扫描面塌了）", dao.stats.clauses > 0, JSON.stringify(dao.stats));
-    check("每条都有 n / first_seen / trigger（元字段三件套）",
-      dao.clauses.every((c) => c.n && /^\d{2}-\d{2}$/.test(c.first_seen) && c.trigger),
-      JSON.stringify(dao.clauses.find((c) => !(c.n && c.first_seen && c.trigger)) || {}));
+    // v2（批 2 · 台账搬家）改了这一条的契约：台账真相源搬进 clause-ledger.json 之后，
+    // 一条条款可以**只有 slug 没有行内元字段**。故判据从「三件套齐全」改成「两条路必居其一」。
+    // ⚠ 这不是放宽：另一半由 ⑦ 的双向孤儿检测夹住（slug 必须在台账里找得到条目）。
+    check("每条要么有行内元字段三件套、要么有 slug（v2 双轨）",
+      dao.clauses.every((c) =>
+        (c.n && /^\d{2}-\d{2}$/.test(c.first_seen) && c.trigger) || (c.slug && !c.has_meta_field)),
+      JSON.stringify(dao.clauses.find((c) =>
+        !((c.n && c.first_seen && c.trigger) || (c.slug && !c.has_meta_field))) || {}));
+    check("v1 盲区已修：带 [基线:]/[自定@] 却无 [n= @ 触发:] 的行现在解析得出（矩阵实测漏 3 条）",
+      dao.stats.no_meta_field === 3, JSON.stringify(dao.stats));
+    check("每条条款都带 slug（dao.md 已整体接入台账）",
+      dao.stats.no_slug === 0 && dao.stats.slug === dao.stats.clauses, JSON.stringify(dao.stats));
+    check("`[自定@]` 收全部不只收第一个（dao.md 有一行写着两个日期）",
+      dao.clauses.some((c) => (c.self_declared_all || []).length > 1),
+      JSON.stringify(dao.clauses.map((c) => c.self_declared_all).filter((x) => x && x.length)));
     check("行号自洽：line <= meta_line <= line_end",
       dao.clauses.every((c) => c.line <= c.meta_line && c.meta_line <= c.line_end),
       JSON.stringify(dao.clauses.find((c) => !(c.line <= c.meta_line && c.meta_line <= c.line_end)) || {}));
@@ -177,8 +189,15 @@ async function main() {
         JSON.stringify([...set]));
       check("第三语料：观察区条目 > 0 且全部 zone=observation",
         m.stats.observation > 0 && m.observation.every((c) => c.zone === "observation"), JSON.stringify(m.stats));
-      check("第三语料：`## 📌` 节里长得像条款的行被跳过且报了数（静默跳过与零命中不可区分）",
-        m.stats.skipped_in_special_sections > 0, JSON.stringify(m.stats));
+      // v2 前这里断言 `> 0`。加了行内代码 span 遮罩之后，**这份真语料的 📌 节里 4 处
+      // 长得像条款的行全部写在反引号里**（实测：raw 命中 4、遮罩后 0）⇒ 它们本来就不是条款，
+      // 数成 0 才是对的。这一条因此翻成**遮罩的真实语料正控**：断言恰为 0，
+      // 遮罩要是坏了它会立刻变成 4 而变红 —— 仍是双向的，不是把断言放宽了。
+      // 「📌 节确实会吞掉真样例」那一半由 ⑥ 的 mutation C（corpus-special.md，样例不带反引号）夹住。
+      check("第三语料：📌 节里的样例全在反引号内 ⇒ 遮罩后被跳过数恰为 0（代码 span 遮罩的真数据正控）",
+        m.stats.skipped_in_special_sections === 0, JSON.stringify(m.stats));
+      check("第三语料零 slug（它还没接入台账）⇒ 台账检查对它不适用而不是报一堆孤儿",
+        m.stats.slug === 0, JSON.stringify(m.stats));
       check("第三语料：零未归类（所有条款都落在已知官种节里）", m.stats.unclassified === 0, JSON.stringify(m.stats));
     } else {
       // 语料缺席不许静默跳过 —— 那与「这份语料一致」在输出上不可区分。这一支验的是
@@ -497,6 +516,197 @@ async function main() {
     check("canary C（📌 夹具）：变异体仍跑得起来且靶子没动", rCS && rCS.theirs === baseS.theirs, JSON.stringify(rCS));
     check("mutation C ⇒ 对账变红（📌 节里的样例被当成条款数了进来）",
       rCS && rCS.exit !== 0 && rCS.mine > rCS.theirs, JSON.stringify(rCS));
+
+    // ── mutation D（v2 加）：slug 判据被写坏 ⇒ 两侧 slug 数分岔 ──
+    // 前三向全落在「条款数」这个量上，对 slug 这一层**结构上失明**：把 slug 正则改坏，
+    // 条款数与触发:无 可以逐字不变。这一向验的正是 `--reconcile` 新加的第三个对账量。
+    const mD = mutantDir("slug-blind", (t) => {
+      const before = t;
+      const text = t.replace("export const SLUG_RE = /\\[#([^\\]\\s]+)\\]/;",
+        "export const SLUG_RE = /\\[#ZZNEVER([^\\]\\s]+)\\]/;");
+      return { text, applied: text === before ? 0 : 1 };
+    });
+    check("mutation D 真的改到了那一行", mD.applied === 1, "applied=" + mD.applied);
+    const fixSlug = path.join(FIX, "corpus-slug.md");
+    w(fixSlug, [
+      "# 夹具 · 带 slug 的条款库",
+      "",
+      "## 通用节",
+      "",
+      "- **甲条**：判据。 [n=1 @07-01 触发:PR流程] [#测-甲]",
+      "- **乙条**：只有 slug，台账在 ledger 里。 [基线:合成] [#测-乙]",
+      "",
+    ].join("\n"));
+    const sjSlug = sourcesJson(path.join(TMP, "mut", "src-slug.json"),
+      [{ file: fixSlug, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const baseSlug = runOn(baseM, sjSlug);
+    check("负控：未变异副本在 slug 夹具上绿且两侧 slug 数相同（2 == 2）",
+      baseSlug && baseSlug.exit === 0 && baseSlug.myslugs === 2 && baseSlug.theirslugs === 2, JSON.stringify(baseSlug));
+    const rD = runOn(mD, sjSlug);
+    check("canary D：变异体仍跑得起来（打得出末行）", rD !== null, "无末行");
+    check("canary D：对方的 slug 数与基线逐字相同（靶子没被动过）",
+      rD && baseSlug && rD.theirslugs === baseSlug.theirslugs, JSON.stringify(rD));
+    check("mutation D ⇒ 对账变红（slug 数分岔，而条款数那一层看不见它）",
+      rD && rD.exit !== 0 && rD.myslugs < rD.theirslugs, JSON.stringify(rD));
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  console.log("\n──── ⑦ 条款台账（clause-ledger.json）：双向孤儿 + 双轨对账 ────");
+  {
+    const LDIR = path.join(TMP, "ledger");
+    const corpus = path.join(LDIR, "corpus.md");
+    const CORPUS_TEXT = [
+      "# 夹具 · 台账语料",
+      "",
+      "## 通用节",
+      "",
+      "- **甲条**：双轨齐全。 [n=1 @07-01 触发:PR流程] [基线:合成甲] [#测-甲]",
+      "- **乙条**：只有 slug，台账在 ledger 里。 [基线:合成乙] [#测-乙]",
+      "- **丙条**：正文里写着 `[自定@<月日>]` 这个模板字面量（在反引号内，不该被当成真标记）。 [n=2 @07-02 触发:无] [仅判据·无触发] [#测-丙]",
+      "",
+    ].join("\n");
+    const sj = sourcesJson(path.join(LDIR, "src.json"),
+      [{ file: corpus, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const ledgerPath = path.join(LDIR, "ledger.json");
+    const IDX = path.join(LDIR, "index.json");
+    const baseLedger = () => ({
+      schema_version: 1,
+      clauses: {
+        "测-甲": { file: corpus, n: "1", first_seen: "07-01", trigger: "PR流程", judge_only: false, self_authored: [], baseline: "合成甲", source_refs: [], status: "active" },
+        "测-乙": { file: corpus, n: null, first_seen: null, trigger: null, judge_only: false, self_authored: [], baseline: "合成乙", source_refs: [], status: "active" },
+        "测-丙": { file: corpus, n: "2", first_seen: "07-02", trigger: "无", judge_only: true, self_authored: [], baseline: null, source_refs: [], status: "active" },
+      },
+    });
+    const writeLedger = (doc) => w(ledgerPath, JSON.stringify(doc, null, 2) + "\n");
+    // 台账检查跑在**生成模式**：--check 会先因索引过期而红，两个信号混在一个退出码里就分不开谁红了。
+    const runLedger = () => {
+      const r = runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", ledgerPath, "--out", IDX]);
+      const m = /CLAUSE_LEDGER_SUMMARY exit=(\d+) state=(\S+) entries=(\d+) slugs=(\d+) missing_slug=(\d+) orphan_slug=(\d+) orphan_ledger=(\d+) dup_slug=(\d+) mismatch=(\d+) file_mismatch=(\d+) out_of_scope=(\d+)/.exec(r.out);
+      return {
+        code: r.code, out: r.out,
+        led: m ? {
+          exit: +m[1], state: m[2], entries: +m[3], slugs: +m[4], missing_slug: +m[5],
+          orphan_slug: +m[6], orphan_ledger: +m[7], dup_slug: +m[8], mismatch: +m[9],
+          file_mismatch: +m[10], out_of_scope: +m[11],
+        } : null,
+      };
+    };
+
+    // ── 负控先行：干净态必须绿。否则下面每个红都不算数（恒红的断言 = 废话）──
+    w(corpus, CORPUS_TEXT);
+    writeLedger(baseLedger());
+    const clean = runLedger();
+    check("负控：干净态 exit 0 且末行 state=ok",
+      clean.code === 0 && clean.led && clean.led.exit === 0 && clean.led.state === "ok",
+      JSON.stringify(clean.led) + clean.out.slice(0, 500));
+    check("负控：3 条 slug 全对上、六个违规计数全 0",
+      clean.led && clean.led.slugs === 3 &&
+      [clean.led.missing_slug, clean.led.orphan_slug, clean.led.orphan_ledger,
+        clean.led.dup_slug, clean.led.mismatch, clean.led.file_mismatch].every((x) => x === 0),
+      JSON.stringify(clean.led));
+    check("代码 span 假阳性负控：反引号里的 `[自定@<月日>]` 没被当成真标记（当成了的话双轨 self_authored 会不等）",
+      clean.led && clean.led.mismatch === 0, clean.out.slice(0, 600));
+
+    // ── 方向一：正文删掉一个 slug ⇒ 台账那条成孤儿，且该条款失去 slug ──
+    w(corpus, CORPUS_TEXT.replace(" [#测-甲]", ""));
+    const dropSlug = runLedger();
+    check("正文删一个 slug ⇒ 红，且 orphan_ledger 与 missing_slug 各报一次（两个方向各说各的）",
+      dropSlug.code === 1 && dropSlug.led && dropSlug.led.orphan_ledger === 1 && dropSlug.led.missing_slug === 1,
+      JSON.stringify(dropSlug.led) + dropSlug.out.slice(0, 700));
+    w(corpus, CORPUS_TEXT);
+    check("改回去 ⇒ 又绿（负控：不是恒红）", runLedger().code === 0);
+
+    // ── 方向二：台账删掉一条 ⇒ 正文那个 slug 成了指向空气的指针 ──
+    {
+      const d = baseLedger(); delete d.clauses["测-乙"]; writeLedger(d);
+      const r = runLedger();
+      check("台账删一条 ⇒ 红且报 orphan_slug（正文有 slug 而台账无此条）",
+        r.code === 1 && r.led && r.led.orphan_slug === 1 && r.led.orphan_ledger === 0,
+        JSON.stringify(r.led) + r.out.slice(0, 600));
+      writeLedger(baseLedger());
+    }
+
+    // ── 方向三：台账值被改 ⇒ 双轨不等。**逐字段各验一次** ——
+    //    只验一个字段就宣称「对账有效」，是本仓明训里那种「改法方向单一」的错。
+    for (const [field, bad] of [["n", "9"], ["first_seen", "12-31"], ["trigger", "改配置"], ["baseline", "被改过的基线"]]) {
+      const d = baseLedger(); d.clauses["测-甲"][field] = bad; writeLedger(d);
+      const r = runLedger();
+      check("台账改 " + field + " ⇒ 红且 mismatch=1",
+        r.code === 1 && r.led && r.led.mismatch === 1, JSON.stringify(r.led) + r.out.slice(0, 400));
+    }
+    {
+      const d = baseLedger(); d.clauses["测-丙"].judge_only = false; writeLedger(d);
+      const r = runLedger();
+      check("台账改 judge_only ⇒ 红（布尔字段也在对账面里）",
+        r.code === 1 && r.led && r.led.mismatch === 1, JSON.stringify(r.led));
+      const d2 = baseLedger(); d2.clauses["测-甲"].self_authored = ["07-09"]; writeLedger(d2);
+      const r2 = runLedger();
+      check("台账凭空加一个 self_authored ⇒ 红（台账替正文编值同样判红）",
+        r2.code === 1 && r2.led && r2.led.mismatch === 1, JSON.stringify(r2.led));
+      const d3 = baseLedger(); d3.clauses["测-乙"].n = "3"; writeLedger(d3);
+      const r3 = runLedger();
+      check("行内没写的字段而台账有值 ⇒ 红（「正文没这一栏」不等于「台账可以随便填」）",
+        r3.code === 1 && r3.led && r3.led.mismatch === 1, JSON.stringify(r3.led));
+      writeLedger(baseLedger());
+    }
+
+    // ── 方向四：file 指错 / 一行两个 slug / status=retired ──
+    {
+      const d = baseLedger(); d.clauses["测-甲"].file = "ccswitch/根本不存在的文件.md"; writeLedger(d);
+      const r = runLedger();
+      check("台账 file 指错 ⇒ 红（file_mismatch 或 out_of_scope 至少一个响）",
+        r.code === 1 && r.led && (r.led.file_mismatch === 1 || r.led.out_of_scope === 1), JSON.stringify(r.led) + r.out.slice(0, 500));
+      writeLedger(baseLedger());
+    }
+    {
+      w(corpus, CORPUS_TEXT.replace(" [#测-甲]", " [#测-甲] [#测-又甲]"));
+      const r = runLedger();
+      check("一行两个 slug ⇒ 红且报 dup_slug（关联键必须唯一）",
+        r.code === 1 && r.led && r.led.dup_slug === 1, JSON.stringify(r.led) + r.out.slice(0, 500));
+      w(corpus, CORPUS_TEXT);
+    }
+    {
+      // retired：正文里确实没有它，而这是**预期**，不该报孤儿。
+      const d = baseLedger();
+      d.clauses["测-已退役"] = { file: corpus, n: "1", first_seen: "06-01", trigger: "无", judge_only: true, self_authored: [], baseline: null, source_refs: [], status: "retired" };
+      writeLedger(d);
+      const r = runLedger();
+      check("status=retired 的条目不判孤儿（退役的定义就是正文里没有它）",
+        r.code === 0 && r.led && r.led.orphan_ledger === 0, JSON.stringify(r.led) + r.out.slice(0, 500));
+      writeLedger(baseLedger());
+    }
+
+    // ── 台账本身不在 / 坏掉：不许静默变绿 ──
+    {
+      const gone = path.join(LDIR, "no-such-ledger.json");
+      const r = runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", gone, "--out", IDX]);
+      check("台账文件不在而正文有 slug ⇒ 红 + state=missing（「读不了」不等于「没问题」）",
+        r.code === 1 && /state=missing/.test(r.out), r.out.slice(0, 500));
+      const broken = path.join(LDIR, "broken.json");
+      w(broken, "{ 这不是 JSON");
+      const r2 = runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", broken, "--out", IDX]);
+      check("台账不是合法 JSON ⇒ 红 + state=bad（与「不在」分得开：两种病两种处方）",
+        r2.code === 1 && /state=bad/.test(r2.out), r2.out.slice(0, 500));
+    }
+
+    // ── 不适用：零 slug 的语料 + 台账里也没有它 ⇒ state=na 且 exit 0（负控：不是恒红）──
+    {
+      const sjPlain = sourcesJson(path.join(LDIR, "src-plain.json"),
+        [{ file: FIX_A, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+      const r = runNode(GEN, ["--quiet", "--sources-json", sjPlain, "--ledger", ledgerPath,
+        "--out", path.join(LDIR, "plain-index.json")]);
+      check("零 slug 语料 ⇒ state=na（不适用），不因整本台账把它判成一堆孤儿",
+        /state=na/.test(r.out) && r.code === 0, r.out.slice(0, 500));
+    }
+
+    // ── 真数据自跑：本节唯一的真语料断言（合成夹具证明不了它在真语料上跑得动）──
+    {
+      const r = runNode(GEN, ["--check", "--quiet"]);
+      check("真仓：索引与台账双绿（红了就是有人动了正文或台账而没跟上另一半）", r.code === 0, r.out.slice(0, 800));
+      const m = /CLAUSE_LEDGER_SUMMARY exit=(\d+) state=(\S+) entries=(\d+) slugs=(\d+)/.exec(r.out);
+      check("真仓：台账条数 == 正文 slug 数，且 > 0（零条 = 这一节的绿是空的）",
+        !!m && +m[3] === +m[4] && +m[4] > 0, m ? m[0] : r.out.slice(0, 400));
+    }
   }
 
   console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
