@@ -92,6 +92,10 @@ const CANARY = {
     delaySeconds: 1500,
     prompt: "高性能目标窗心跳（不限时，目标=除蓄水池外 issue 清零）。对账：① 三路在途……",
   }),
+  // 同样取**真实语料形态**：这条逐字抄自转录（`sed -n` 读文件片段是新增拦截面里第三大的一格）。
+  // 注意它带 `cd … &&` 前缀 —— 真语料里 grep/sed 极少单独出现，绝大多数长这样，
+  // 而这正是「段首」判据最容易写错的地方（`cd` 会把真正的命令挤到第二段去）。
+  "G7-shell-search": bash("cd /d/frank/mousse-cli && sed -n 1,140p crates/mousse-app/src/commands/session.rs"),
 };
 
 const PRISTINE_SHA = sha(HOOK);
@@ -350,6 +354,98 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
     spawnSync(process.execPath, [NUDGE], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" } }), encoding: "utf8" }).status === 0);
 }
 
+console.log("\n──── G7 · shell 里跑搜索/读文件（正负控全部取自真语料）────");
+{
+  // ⚠ 本节**每一条命令都是从 `~/.claude/projects/**/*.jsonl` 里逐字抄出来的真实调用**，
+  //   一条都不是我构造的。理由是 dispatch-clauses 对抗验证官节点名的那条：
+  //   「近似手段的验证语料禁只来自本轮发现的形态」—— 自造语料只能证明「我想到的那些能拦」，
+  //   证不了「真实世界长什么样」。普查规模：32721 条命令 / 26402 条唯一命令。
+  const positives = [
+    ["sed 读文件片段（带 cd && 前缀，真语料最常见形态）",
+      "cd /d/frank/mousse-cli && sed -n 130,200p crates/mousse-core/src/prompt_store/mod.rs", /Read 的/],
+    ["cat 读文件", "cat src-ui/package.json", /Read/],
+    ["grep 搜内容", 'grep -n "creative.libEmpty" src-ui/src/panels/creative/EquipmentLibraryColumn.tsx', /Grep 工具/],
+    ["find 找路径", "find crates/mousse-core/src/injection -type f 2>/dev/null", /Glob 工具/],
+    ["tail 读日志尾", "tail -8 _tmp/verify-all.log", /Read/],
+    ["head 读文件头", "head -5 _tmp/pr-316-readback.md", /Read/],
+    ["rg 搜内容", `rg -n "onmessage" src-ui/src --glob '!*.test.*'`, /Grep 工具/],
+    // 这一条钉的是「`2>/dev/null` 是 **stderr** 重定向，不该被当成豁免②的 stdout 落文件」。
+    // 两者只差一个字符，而放错会让绝大多数真实 grep 调用（真语料里极常带 `2>/dev/null`）整批漏掉。
+    ["grep 带 2>/dev/null 仍拦（stderr 重定向 ≠ stdout 落文件）",
+      'grep -rl "cdn.tailwindcss.com" "$dest/pages" 2>/dev/null', /Grep 工具/],
+  ];
+  for (const [name, c, altRe] of positives) {
+    const r = gate(bash(c));
+    check(`正控：${name} → exit 2`, r.code === 2, `code=${r.code}`);
+    check(`正控：${name} → stderr 给得出替代写法`, altRe.test(r.err), r.err.slice(0, 160));
+  }
+  check("正控：PowerShell 的 Select-String 同样拦",
+    gate({ tool_name: "PowerShell", tool_input: { command: "Select-String -Path D:\\frank\\mousse-cli\\package.json -Pattern version" } }).code === 2);
+  // 拒绝消息必须自带「什么情况下不拦」，否则读的人会以为这几个命令被禁了 —— 而它们没有。
+  check("正控：stderr 同时列出合法用法（免得被读成「这些命令被禁了」）",
+    /管道过滤/.test(gate(bash("cat a.md")).err) && /段首/.test(gate(bash("cat a.md")).err));
+
+  const negatives = [
+    // ① 管道过滤 —— 这 4 条全部来自「被权限拒但 G7 刻意放行」的那 31 条
+    ["管道过滤 grep（真语料）", `cd /d/frank/windsurf-dao-wt-r2 && node tests/clause-index.tests.js 2>&1 | grep -n "FAIL " | head -20`],
+    ["管道过滤 grep 之二（真语料）", `git ls-files ccswitch/ | grep -iE "test|clause|ledger"`],
+    ["管道过滤 + head（真语料）", `gh api repos/pleaseai/claude-code-docs/git/trees/main?recursive=1 --jq '.tree[].path' 2>&1 | grep -i hook | head -20`],
+    ["until 轮询（真语料）", `until grep -q "VERIFY_ALL_EXIT=" /d/frank/mousse-cli/_tmp/adv-f1/verify-all.out 2>/dev/null; do sleep 10; done; echo "DONE"`],
+    // ② stdout 落真实文件
+    ["head 输出落文件（真语料）", "head -25 _tmp/branches-to-delete.txt > _tmp/batch1.txt"],
+    ["tail 输出追加到文件（真语料）", "tail -n +2 _tmp/pr-384-body-readback.md >> _tmp/pr-384-body-new.md"],
+    // ③ heredoc / 命令替换
+    ["cat 写文件 heredoc（真语料）", "cat > _tmp/qa/issue-304/probe-buttons.js <<'JS'"],
+    ["命令替换里的 head", 'echo "$(head -1 _tmp/x.txt)"'],
+    // ④ 不是「读」的动作
+    ["sed -i 原地改（真语料）", `sed -i -E -e 's/font-size:[[:space:]]*12px/font-size:var(--text-xs)/g' a.css`],
+    ["find -exec（真语料）", `find ccswitch -name "*.md" -exec wc -l {} \\;`],
+    ["tail -f 流式（真语料）", "tail -f /dev/null & sleep 1"],
+    ["tail -c 字节模式（Read 无字节语义，真语料 92 例）", `tail -c 3000 "C:/Users/x/tasks/out.txt"`],
+    ["head -c 字节模式（真语料 22 例）", `head -c 8000 "C:/Users/x/a.jsonl"`],
+    // ⑤ 段首不是这些词
+    ["git log --grep 自带参数（段首是 git）", `git log --grep="fix" -S "foo" --oneline -20`],
+    ["ls 刻意不收（Glob 给不出时间戳/权限位；真语料 3266 例）", `ls -la "/d/frank/TraceyU/design/" 2>/dev/null`],
+    ["wc 刻意不收（Read 数不了行数；真语料 1032 例）", `wc -l "D:/frank/windsurf-dao/ccswitch/dao.md"`],
+    ["字面量里的命令不该拦", `echo "grep -n foo file"`],
+    ["普通命令", "node scripts/run-tests.mjs"],
+  ];
+  for (const [name, c] of negatives) {
+    const r = gate(bash(c));
+    check(`负控：${name} → exit 0`, r.code === 0, `code=${r.code} err=${r.err.slice(0, 130)}`);
+  }
+  check("逃生阀：设了 DAO_SHELL_SEARCH_OK=1 即放行",
+    gate(CANARY["G7-shell-search"], { env: { DAO_SHELL_SEARCH_OK: "1" } }).code === 0);
+}
+
+console.log("\n──── 段切分器升级（{seg,sep} + $() 感知）后 G3/G5 行为未变 ────");
+{
+  // 2026-08-02 为 G7 把 shellSegments 换成了 shellSegmentsRaw + 薄包装。**这一组钉的是
+  // 「G3/G5 的判定路径一个字符没动」这句自陈** —— 没有它，那句话就只是作者的声明。
+  check("G5：多行 commit 正文仍被拦（原本就是靠引号感知切分才拦得住的那一条）",
+    gate(bash('git commit -m "[cc] feat: x\n- [ ] 随后补测试"')).code === 2);
+  check("G5：`- [x]` 仍放行", gate(bash('git commit -m "做完了\n- [x] 跑了测试"')).code === 0);
+  check("G3：npm publish 仍被拦", gate(bash("npm publish --access public")).code === 2);
+  check("G3：--dry-run 仍放行", gate(bash("npm publish --dry-run")).code === 0);
+  check("G3：字面量 echo \"npm publish\" 仍放行", gate(bash('echo "npm publish"')).code === 0);
+  // $() 感知**新**带来的一处行为差异，照直断言出来（而不是假装没有）：
+  // 以前 `echo "$(ls | head -1)"` 会在 `|` 处被切成两段（第二段段首 `head`），现在是一段。
+  // 对 G3/G5 无影响（段首都是 echo），对 G7 是必须的 —— 命令替换里取一行输出不是读文件。
+  check("$() 内部不再切分：命令替换里的 head 不触发 G7", gate(bash('echo "$(ls | head -1)"')).code === 0);
+  check("$() 内部不再切分：G3 对命令替换里的 publish 仍是已知漏报（照直钉住，不假装拦得住）",
+    gate(bash('echo "$(npm publish)"')).code === 0);
+  // 管道仍然要切分（$() 感知不能把 `|` 一起吃掉），且**管道后面那一段仍进 G5 射程**。
+  // 判据取「G5 真的拦下了它」而不是「exit 0」—— 放行有两种成因（走到了判定但没命中 /
+  // 压根没走到），两者输出一样，只有拦下来才证明那一段被读过。
+  // ⚠ 初稿这里写的是 `cat body.md | git commit -F -`，**当场被自己的闸拦下**：
+  //    第一段 `cat body.md` 段首正是 G7 的靶。留着这句话当实例 —— 负控写错了会
+  //    伪装成「被测对象有问题」，而这次它只是我选错了命令。
+  const pipeBody = path.join(TMP, "pipe-body.md");
+  fs.writeFileSync(pipeBody, "做了一半\n- [ ] 剩下的随后补\n", "utf8");
+  check("管道仍然切分：`echo x | git commit -F <带未勾框的文件>` 仍被 G5 拦下",
+    gate(bash(`echo hi | git commit -F "${pipeBody}"`)).code === 2);
+}
+
 console.log("\n──── mutation · 判别力（改坏一处，对应正控必须从红变绿）────");
 {
   // 每条：把 hook 源码里的一段判据改成永假，断言那一闸的承重正控由 exit 2 掉成 exit 0。
@@ -364,6 +460,7 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
     // 把整条正则抄进测试会让「判据一改、mutation 靶点失配」变成一个静默失效面。
     ["G5-readonly-todo", "const UNCHECKED_TODO = ", "const UNCHECKED_TODO = /__NEVER_MATCH_TODO__/; const _deadPattern = "],
     ["G6-heartbeat-signature", "if (HEARTBEAT_SIG.test(p)) return null;", "if (true) return null;"],
+    ["G7-shell-search", "const alt = SEARCH_TOOL_ALT[head];", "const alt = undefined;"],
   ];
   for (const [id, from, to] of MUTANTS) {
     check(`mutation 靶点在源码里唯一存在（${id}）`, src.split(from).length === 2,
@@ -400,6 +497,33 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
       gate(wake({ prompt: "[dao-heartbeat] 心跳" }), { script: mutantPath }).code === 0);
   }
 
+  // ── G7 的反向 mutation（三条豁免分支各一条）────────────────────────────────
+  //    G7 的负控有 18 条，其中一多半靠三个豁免分支放行。**一组永远为真的负控与一组
+  //    真正管用的负控，在全绿的输出里长得一模一样** —— 所以每个豁免分支都必须被单独
+  //    改坏一次，看着对应负控从 exit 0 翻成 exit 2，才算证明「那条负控真的走到了那个分支」。
+  //    这三条同时也是 dispatch-clauses 讲的第三向 mutation：判据还在、也还在算，
+  //    只是**算出来的结果不再被消费** —— 前两向验「门在不在」，这一向验「门的答案有没有人听」。
+  {
+    const REVERSE = [
+      ["管道豁免", 'if (sep === "|") continue;', 'if (sep === "__never__") continue;',
+        'cd /d/x && node t.js 2>&1 | grep -n "FAIL " | head -20'],
+      ["stdout 落文件豁免", "if (STDOUT_TO_FILE.test(rest)) continue;", "if (false) continue;",
+        "head -25 _tmp/branches-to-delete.txt > _tmp/batch1.txt"],
+      ["-c 字节模式豁免", 'if ((head === "tail" || head === "head") && /(^|\\s)-c(\\s|=|\\d)/.test(rest)) continue;',
+        "if (false) continue;", 'tail -c 3000 "C:/Users/x/out.txt"'],
+    ];
+    for (const [name, from, to, negCmd] of REVERSE) {
+      check(`反向 mutation 靶点唯一存在（G7 ${name}）`, src.split(from).length === 2,
+        `出现 ${src.split(from).length - 1} 次`);
+      const mp = path.join(TMP, `mutant-G7-${name}.js`);
+      fs.writeFileSync(mp, src.replace(from, to), "utf8");
+      const before = gate(bash(negCmd)).code;
+      const after = gate(bash(negCmd), { script: mp }).code;
+      check(`G7 ${name}：真文件放行（0）而豁免被改坏后拦（2）⇒ 那条负控真的在测这个分支`,
+        before === 0 && after === 2, `before=${before} after=${after}`);
+    }
+  }
+
   // fail-open 路径：注入一个必抛的判定，断言"放行 + 大声喊"
   const boom = path.join(TMP, "mutant-throw.js");
   fs.writeFileSync(boom, src.replace(
@@ -430,8 +554,10 @@ console.log("\n──── --selfcheck（只断言形态，真实注册状态�
                   /^✗ 未注册：/.test(out) ||
                   /^✗ 读不到 live settings\.json/.test(out);
   check("首行为三种既定形态之一", shapeOk, JSON.stringify(out.split("\n")[0]));
-  check("逐闸都各打印一行覆盖面结论", (out.match(/· G\d-|✓ G\d-|✗ G\d-/g) || []).length >= 6, out.slice(0, 400));
-  check("末行报闸数与逃生阀清单", /共 6 道闸/.test(out) && /DAO_SETTINGS_EDIT_APPROVED/.test(out), out.slice(-200));
+  check("逐闸都各打印一行覆盖面结论", (out.match(/· G\d-|✓ G\d-|✗ G\d-/g) || []).length >= 7, out.slice(0, 400));
+  check("末行报闸数与逃生阀清单", /共 7 道闸/.test(out) && /DAO_SETTINGS_EDIT_APPROVED/.test(out), out.slice(-200));
+  check("G7 出现在逐闸覆盖面清单里", /G7-shell-search/.test(out), out.slice(0, 700));
+  check("G7 的逃生阀进了末行清单", /DAO_SHELL_SEARCH_OK/.test(out), out.slice(-200));
   // G6 的注册面（matcher 加 `|ScheduleWakeup`）**属用户动作，本批不改**。故此刻 selfcheck
   // 大概率会把 G6 报成零覆盖 —— 那正是设计意图：「没接上」要在机器通道上说出来。
   // 这里刻意**不断言它一定是零覆盖**（用户随时可能注册完），只断言 G6 出现在逐闸清单里，
