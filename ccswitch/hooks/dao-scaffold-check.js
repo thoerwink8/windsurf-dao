@@ -2,7 +2,7 @@
 //
 // 模式命名以本段为准（2026-07-27 统一）：代码里的分节横幅此前把 A/B 写反了——
 // 头注写 A=元仓库、B=普通项目，横幅却写 模式B=元仓库、模式A=普通项目，而
-// tests/dao-scaffold-check.tests.js 与 dao-growth-loop.md 的裁定文本都按头注这套读。
+// tests/dao-scaffold-check.tests.js 与 docs/specs/dao-growth-loop.md 的裁定文本都按头注这套读。
 // 三处里两处一致、代码横幅是那个离群值，故本次把横幅改齐，不动语义。
 //
 // A) windsurf-dao 元仓库：全面同步漂移检测（双向）
@@ -20,7 +20,8 @@
 //    实测它自身会中两条，其中「根目录无冗余 AI 入口」有个从未写下来的例外
 //    （AGENT_GUIDE.md 系刻意保留，dao.md 帅节末行引用它）。现改为：A 段照跑，
 //    随后与普通项目走同一条主干，例外逐条写进清单的 `exempt` 字段。
-//    （裁定见调用方 mousse-cli `docs/ops/dao-growth-loop.md` §四.6 裁定 B）
+//    （裁定见本仓 `docs/specs/dao-growth-loop.md` §四.6 裁定 B——2026-08-02 由 mousse-cli
+//     `docs/ops/` 迁入：一个 dao 级 hook 的裁定真相源此前住在调用方项目里）
 //    - 清单在 ccswitch/scaffold-manifest.json，求值器在 ccswitch/lib/scaffold-manifest.js
 //    - universal 条目（CLAUDE.md / .claude/rules/ / 无冗余入口 / _tmp 已 gitignore …）无条件查
 //    - conditional 条目（桌面端调试基建 / 前端样式路线 / CI 矩阵成本 …）按 when 指纹命中才查
@@ -397,6 +398,13 @@ function budgetLines(daoRoot) {
             "）→ 契约可能被改坏了，手动跑一次看输出：node ccswitch/scripts/check-alwayson-budget.mjs"];
   }
   const [, sExit, sTotal, sLimit, sFiles, sHead, sScoped, , sSelf] = m;
+  // 目标闸值三格（2026-08-02 加）**单独用一条容错正则取，不并进上面那条主契约正则**：
+  // 主正则一旦要求这三格存在，遇到旧版脚本就整条匹配不上 ⇒ 走进「契约被改坏了」那一支，
+  // 把一个「字段还没有」误报成「契约坏了」。分开取则旧版只是拿不到目标那一行，其余照常。
+  // `\btarget=` 的词界是必需的：`overtarget=` 里也含 `target=`，无词界会取错值。
+  const mt = /ALWAYSON_BUDGET_SUMMARY[^\r\n]*\btarget=(\d+)[^\r\n]*\bovertarget=(\d+)/.exec(out);
+  const sTarget = mt ? mt[1] : null;
+  const nOverTarget = mt ? Number(mt[2]) : 0;
   if (sExit !== "0" || code !== 0) {
     const why = sSelf === "fail"
       ? "检测器自检半边失败（selfcheck=fail）⇒ 此时「未超限」不可信，先修检测器"
@@ -407,9 +415,22 @@ function budgetLines(daoRoot) {
     return ["✗ always-on 字节预算闸 FAIL：" + why + (exits ? "\n" + exits : "") +
             "\n  → 全量：node ccswitch/scripts/check-alwayson-budget.mjs"];
   }
-  return ["ⓘ always-on 字节预算：计入 " + sFiles + " 份文件合计 " + sTotal + " B / 闸值 " + sLimit +
-          " B，**余量 " + sHead + " B**（另 " + sScoped +
-          " 份带 `paths:` 的作用域档不占配额）——闸值是**占位待用户拍板**，判据见 " +
+  // 绿态一行。**2026-08-02 起有两种绿**，必须分得开：
+  //   · 真·达标（overtarget=0）
+  //   · 过渡期（exit=0 但欠着目标闸值）—— 若与前者共用同一行文案，两档闸值就白分了，
+  //     用户会以为「一片绿」而那笔 43KB 的欠账从此不在任何人眼前经过。
+  const head = "ⓘ always-on 字节预算：计入 " + sFiles + " 份文件合计 " + sTotal + " B / 闸值 " + sLimit +
+               " B，**余量 " + sHead + " B**（另 " + sScoped + " 份带 `paths:` 的作用域档不占配额）";
+  if (nOverTarget > 0) {
+    return [head +
+      "\n  ⚠ **过渡期**：目标闸值 " + (sTarget || "?") + " B（用户 2026-08-02 拍板），当前**欠 " +
+      nOverTarget + " B** —— 退出码暂按过渡上限 " + sLimit +
+      " B 判。**这不是回归**，是 dao.md 重写批 3（docs/specs/dao-rewrite-202608.md）落地前的预期欠账；" +
+      "批 3 完成后删掉 check-alwayson-budget.mjs 的 TRANSITION_CEILING_BYTES 即生效。" +
+      "\n  → 现在就按目标判：node ccswitch/scripts/check-alwayson-budget.mjs --strict"];
+  }
+  return [head + "——目标闸值 " + (sTarget || sLimit) +
+          " B 已达标（用户 2026-08-02 拍板），判据见 " +
           "ccswitch/scripts/check-alwayson-budget.mjs 的 LIMIT_BYTES 头注"];
 }
 

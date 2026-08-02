@@ -44,16 +44,48 @@ function New-Fixture {
 
 function Invoke-Checker {
     <# 跑一次守卫，返回 @{ Exit; Text }。**判成败只看 $LASTEXITCODE**，不看输出文案
-       （中文 ErrorRecord 的「所在位置 行:X」不是真错）。 #>
+       （中文 ErrorRecord 的「所在位置 行:X」不是真错）。
+       `-Script` 缺省跑真守卫；mutation 组传变异副本的路径（见 New-MutantChecker）。 #>
     param([string]$File, [string]$Selector = 'Marked', [string]$Section = '', [int]$RetireAgeDays = 21,
-          [int]$RetireListMax = 3, [string]$Ledger = '')
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Checker,
+          [int]$RetireListMax = 3, [string]$Ledger = '', [string]$Script = '')
+    $target = if ([string]::IsNullOrWhiteSpace($Script)) { $Checker } else { $Script }
+    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
               '-TargetFile', $File, '-ClauseSelector', $Selector,
               '-RetireAgeDays', $RetireAgeDays, '-RetireListMax', $RetireListMax)
     if (-not [string]::IsNullOrWhiteSpace($Section)) { $args += @('-SectionPattern', $Section) }
     if (-not [string]::IsNullOrWhiteSpace($Ledger)) { $args += @('-LedgerFile', $Ledger) }
     $out = & powershell @args
     return @{ Exit = $LASTEXITCODE; Text = ($out -join "`n") }
+}
+
+function New-MutantChecker {
+    <#
+      把守卫复制到临时目录并做**锚定文本替换**，返回 @{ Path; Applied }。
+      `$Edits` 是 @( @{ From = '<锚>'; To = '<替换>' } )，逐条替换，Applied 是真改到几条。
+
+      ⚠ **写回必须带 BOM**（`UTF8Encoding($true)`）。这不是讲究：PS 5.1 读**脚本本体**时
+        无 BOM 即按系统 ANSI 代码页解码，整份中文脚本当场报废 ⇒ **每个 mutation 都"全红"**，
+        而那恰恰是「判别力满分」的表象（dao 对抗验证官节「先验变异体还活着」那条的原始形态：
+        某批 7/7 次 mutation 的红集因靶被弄死而失真，与"夹得密不透风"不可区分）。
+        故下面每个变异体都先过 canary，再读红集。
+
+      ⚠ 读侧用 `[IO.File]::ReadAllText(..., UTF8)`（会顺带吃掉源文件的 BOM），
+        所以写回时必须自己把 BOM 加回去 —— 少这一步就是上面那个坑。
+    #>
+    param([string]$Name, [hashtable[]]$Edits)
+
+    $dir = Join-Path $TmpRoot ("mut-{0}/ccswitch/scripts" -f $Name)
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $src = [System.IO.File]::ReadAllText($Checker, [System.Text.Encoding]::UTF8)
+    $applied = 0
+    foreach ($e in $Edits) {
+        if (-not $src.Contains($e.From)) { continue }
+        $src = $src.Replace($e.From, $e.To)
+        $applied++
+    }
+    $p = Join-Path $dir 'check-clauses-structure.ps1'
+    [System.IO.File]::WriteAllText($p, $src, (New-Object System.Text.UTF8Encoding($true)))
+    return @{ Path = $p; Applied = $applied }
 }
 
 function New-LedgerFile {
@@ -687,6 +719,131 @@ $oddLine
             ($r.Text -match '带 \[自定@…\] 标记：1 条') $r.Text
         Check '让格：观察线把这一行指出来了（代价可见）' `
             ($r.Text -match '未闭合反引号游程 \+ 条款签名同现') $r.Text
+    }.Invoke()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 检查 5d：遮罩双实现互核（issue #91）
+    #
+    # ── 这一组要钉住什么 ────────────────────────────────────────────────────
+    # 2026-08-02 之前，普查（Get-ClauseCensus，回答"我是不是瞎了"）与检出
+    # （Get-ClauseRecords，回答"哪些是条款"）**共用同一个 Get-MaskedLine**。
+    # 于是遮罩一错两边一起瞎、集合差恒为 0、检查 5b 全程不响 —— 那正是 dao-guard-writing
+    # 第②条「自检那一半绝不能复用被守对象的解析逻辑」讲的形态，而它当时就发生在这个文件里：
+    # 未闭合反引号缺陷期，Marked 下 census 与检出**同时**少数同一行（85 应为 86），退出码干净。
+    #
+    # 现在普查改用 Get-MaskedLineAlt（逐字符扫描，与主实现的游程表配对是两条路），
+    # 两套的一致性由 Get-MaskDivergence 逐字节核。本组用**四向 mutation** 证明它真的有判别力：
+    #   A 主实现坏（把 2026-08-02 那个真实缺陷原样装回去）⇒ 必须报 mask-divergence
+    #   B 自检实现坏（同一处逻辑改在另一套上）        ⇒ 也必须报（否则自检坏了没人知道）
+    #   C 两套一起坏                                   ⇒ **静默**（已知残余，见下）
+    #   D 无关变异下的负控（闭合 span 路径不受影响）   ⇒ 每个变异体的 canary
+    #
+    # ── C 为什么钉成"绿"的断言，而不是当缺陷 ────────────────────────────────
+    # n 套互核**抓不到 n 套同错**，这是算术不是疏漏。把它写成断言的意义在于：
+    # ①这一格从"没人知道"变成"写下来了"；②将来有人加了第四道独立判据、这一格能红了，
+    # 那条断言会当场失败，逼着来人回来改这段注释 —— 一个没有断言的已知弱点，
+    # 与一个没人知道的缺陷没有区别（同上面「让格」那一组的理由）。
+    # ⚠ C 只是 PS 进程内的残余：PS 两套一起坏时，**node 侧那第三套**仍会在 --reconcile
+    #   分岔（见 tests/clause-index.tests.js 的双侧同坏组）。真正全盲要三套一起坏。
+    # ══════════════════════════════════════════════════════════════════════
+    Write-Host "`n=== 检查 5d：遮罩双实现互核 · 四向 mutation + canary（issue #91）==="
+    {
+        $BT = [string][char]96
+        $md = Get-MonthDay 3
+
+        # 靶语料：第三条带**未闭合游程**（3 个反引号，无等长游程闭合）+ 行尾完整元字段。
+        # 缺陷态下它的元字段会被遮成空格 ⇒ Marked 选择器读的就是遮罩串 ⇒ 该行整条退出扫描面。
+        $oddLine = "- **奇数反引号条款**：正文写了一处 " + ($BT * 3) + "bash 这样的写法示例。 [n=1 @$md 触发:无] [仅判据·无触发]"
+        $fOdd = New-Fixture (Base-Body $oddLine)
+        # canary 语料①：**零反引号** ⇒ 遮罩这条路径压根不走。变异体在它上面必须与基线逐字同行为，
+        #                否则说明变异体是被 BOM/编码弄死的，而不是"逻辑被改坏了"。
+        $fPlain = New-Fixture (Base-Body)
+        # canary 语料②：只有**闭合** span ⇒ 遮罩路径要走，但 unmatched 分支到不了。
+        #                变异体在它上面也必须绿 —— 证明改动精确落在那一个分支上。
+        $closedLine = "- **闭合条款**：正文写着 " + $BT + "[自定@01-01]" + $BT + " 这个字面量。 [n=2 @$md 触发:PR流程] [基线:合成闭合]"
+        $fClosed = New-Fixture (Base-Body $closedLine)
+
+        # ── 缺陷态的两条锚（单行替换，改完仍是合法 PowerShell）──────────────────
+        # 主实现：未闭合游程除了记进 Unmatched，还额外吐一个"从它到行尾"的 span
+        #         —— 这就是 2026-08-02 之前的真实行为，一字不差地装回去。
+        $editMain = @{
+            From = '            $unmatched += $open.Start'
+            To   = '            $unmatched += $open.Start; $spans += [PSCustomObject]@{ From = $open.Start; To = ($Raw.Length - 1) }'
+        }
+        # 自检实现：同一个语义改在逐字符扫描那一套上（未闭合 ⇒ 从开启游程遮到行尾并收工）。
+        # 写成 `if (…) { … } elseif ($false) {` 是为了让原分支体（注释 + continue）原样留在后面，
+        # 替换仍是单行、仍是合法语法。
+        $editAlt = @{
+            From = '        if ($closeAt -lt 0) {'
+            To   = '        if ($closeAt -lt 0) { for ($z = $openAt; $z -lt $n; $z++) { $c[$z] = '' '' }; $i = $n; continue } elseif ($false) {'
+        }
+
+        # ── 负控先行：未变异的副本必须与真守卫逐字同结论 ────────────────────────
+        # 没有这一条，下面每个"红"都可能只是复制/编码过程本身把脚本弄坏了。
+        $m0 = New-MutantChecker -Name 'baseline' -Edits @()
+        $r0 = Invoke-Checker -File $fOdd -Selector Marked -Script $m0.Path
+        $rReal = Invoke-Checker -File $fOdd -Selector Marked
+        Check '负控：未变异副本 exit 与真守卫相同' ($r0.Exit -eq $rReal.Exit -and $r0.Exit -eq 0) "copy=$($r0.Exit) real=$($rReal.Exit)"
+        Check '负控：未变异副本检出 3 条（复制/BOM 链路没把脚本弄坏）' ($r0.Text -match '本次检出 3 条') $r0.Text
+        Check '负控：未变异副本 maskdiv=0（健康态两套遮罩逐字节相同）' ($r0.Text -match 'maskdiv=0 ') $r0.Text
+        Check '负控：分母非零（maskcmp>0 —— 否则"零分歧"是"一行都没比过"）' `
+            ($r0.Text -match 'maskcmp=([1-9]\d*)') $r0.Text
+
+        # ── A：主实现坏（缺陷态复现）──────────────────────────────────────────
+        $mA = New-MutantChecker -Name 'main-broken' -Edits @($editMain)
+        Check 'A：mutation 真的改到了那一行（改不动的 mutation 等于没做）' ($mA.Applied -eq 1) "applied=$($mA.Applied)"
+        $cA1 = Invoke-Checker -File $fPlain -Selector Marked -Script $mA.Path
+        Check 'A · canary①：零反引号语料上仍绿且检出 2 条（变异体活着，不是被编码弄死）' `
+            ($cA1.Exit -eq 0 -and $cA1.Text -match '本次检出 2 条') "exit=$($cA1.Exit) / $($cA1.Text)"
+        $cA2 = Invoke-Checker -File $fClosed -Selector Marked -Script $mA.Path
+        Check 'A · canary②：只有闭合 span 的语料上仍绿（改动精确落在 unmatched 那一支）' `
+            ($cA2.Exit -eq 0 -and $cA2.Text -match 'maskdiv=0 ') "exit=$($cA2.Exit) / $($cA2.Text)"
+        $rA = Invoke-Checker -File $fOdd -Selector Marked -Script $mA.Path
+        Check 'A：主实现坏 → exit 1（旧版本在这里是 exit 0 + 静默少一条）' ($rA.Exit -eq 1) "exit=$($rA.Exit) / $($rA.Text)"
+        Check 'A：报 mask-divergence' ($rA.Text -match 'mask-divergence') $rA.Text
+        Check 'A：maskdiv=1（机器可读通道也带出来了）' ($rA.Text -match 'maskdiv=1 ') $rA.Text
+        Check 'A：**不**报 swallowed-by-section（归因分流：病因是遮罩不是节判定）' `
+            ($rA.Text -notmatch 'swallowed-by-section') $rA.Text
+        # 这一条钉的是「旧版本静默」那个事实本身：检出确实少了一条，而普查（另一套遮罩）没少。
+        Check 'A：检出掉到 2 条而扫描面自检仍是 3 行（两半给出不同的数 —— 这就是要的信号）' `
+            ($rA.Text -match '扫描面自检：带完整元字段或 slug 且合选择器的行 3 行 → 本次检出 2 条') $rA.Text
+
+        # ── B：自检实现坏 ────────────────────────────────────────────────────
+        # 这一向不能省：普查比检出**少**看见东西时，检查 5b（只走 census → detected 方向）
+        # 结构上不会响 —— 自检坏掉是纯静默的，只有逐字节互核抓得到。
+        $mB = New-MutantChecker -Name 'alt-broken' -Edits @($editAlt)
+        Check 'B：mutation 真的改到了那一行' ($mB.Applied -eq 1) "applied=$($mB.Applied)"
+        $cB1 = Invoke-Checker -File $fPlain -Selector Marked -Script $mB.Path
+        Check 'B · canary①：零反引号语料上仍绿且检出 2 条' `
+            ($cB1.Exit -eq 0 -and $cB1.Text -match '本次检出 2 条') "exit=$($cB1.Exit) / $($cB1.Text)"
+        $cB2 = Invoke-Checker -File $fClosed -Selector Marked -Script $mB.Path
+        Check 'B · canary②：只有闭合 span 的语料上仍绿' `
+            ($cB2.Exit -eq 0 -and $cB2.Text -match 'maskdiv=0 ') "exit=$($cB2.Exit) / $($cB2.Text)"
+        $rB = Invoke-Checker -File $fOdd -Selector Marked -Script $mB.Path
+        Check 'B：自检实现坏 → exit 1（检出没少一条，光看条款数看不出任何异常）' ($rB.Exit -eq 1) "exit=$($rB.Exit) / $($rB.Text)"
+        Check 'B：报 mask-divergence' ($rB.Text -match 'mask-divergence') $rB.Text
+        Check 'B：检出仍是 3 条 —— 红的来源只可能是互核那一步' ($rB.Text -match '本次检出 3 条') $rB.Text
+
+        # ── C：两套一起坏（已知残余，钉成断言）────────────────────────────────
+        $mC = New-MutantChecker -Name 'both-broken' -Edits @($editMain, $editAlt)
+        Check 'C：两处 mutation 都改到了' ($mC.Applied -eq 2) "applied=$($mC.Applied)"
+        $cC1 = Invoke-Checker -File $fPlain -Selector Marked -Script $mC.Path
+        Check 'C · canary：零反引号语料上仍绿且检出 2 条（变异体活着）' `
+            ($cC1.Exit -eq 0 -and $cC1.Text -match '本次检出 2 条') "exit=$($cC1.Exit) / $($cC1.Text)"
+        $rC = Invoke-Checker -File $fOdd -Selector Marked -Script $mC.Path
+        Check 'C：两套同错 → PS 进程内**静默**（exit 0，已知残余；红了说明有人加了第四道判据，回来改这段注释）' `
+            ($rC.Exit -eq 0) "exit=$($rC.Exit) / $($rC.Text)"
+        Check 'C：maskdiv=0（两套一起错时逐字节全等 —— 这正是 n 套互核抓不到 n 套同错）' `
+            ($rC.Text -match 'maskdiv=0 ') $rC.Text
+        Check 'C：而条款数确实静默少了一条（2 条，非 3 条）—— 残余的代价长这样' `
+            ($rC.Text -match '本次检出 2 条') $rC.Text
+        Check 'C：普查也跟着少了（扫描面自检 2 行 ⇒ 集合差恒为 0，5b 同样看不见）' `
+            ($rC.Text -match '扫描面自检：带完整元字段或 slug 且合选择器的行 2 行 → 本次检出 2 条') $rC.Text
+
+        # ── 零样本可见面：一份不含反引号的文件里，这道互核本轮什么都没验到 ──────
+        Check '零样本：不含反引号的语料上明写"零样本，不是通过"（分母为 0 必须现形）' `
+            ($cA1.Text -match '本轮 0 行含反引号') $cA1.Text
+        Check '零样本：marker 里 maskcmp=0（机器读得到这个分母）' ($cA1.Text -match 'maskcmp=0') $cA1.Text
     }.Invoke()
 
     Write-Host "`n=== 边界：目标文件不存在 ==="

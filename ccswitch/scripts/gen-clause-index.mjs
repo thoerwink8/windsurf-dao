@@ -5,7 +5,8 @@
 //   （缺省）生成    node ccswitch/scripts/gen-clause-index.mjs
 //   --check  漂移   源变了而索引没跟上 ⇒ exit 1「索引过期」。**不写盘。**
 //   --reconcile 对账 与 ccswitch/scripts/check-clauses-structure.ps1（一套**独立**解析）
-//                   逐文件对 `clauses` 与 `notrigger` 两个数；不一致 ⇒ exit 1。
+//                   逐文件对 `clauses` / `notrigger` / `slugs` / `maskdiv` 四个量；
+//                   任一不一致 ⇒ exit 1。
 //
 // ── 为什么要有 --reconcile（它不是「测试的一部分」，是这套派生物的存活条件）────
 // 索引是派生物，而派生物最典型的死法是**它自己变瞎了却照样输出一份看起来正常的东西**：
@@ -13,6 +14,16 @@
 // （因为它拿自己的解析结果和自己的解析结果比）。唯一能戳破这一层的是**第二套独立读法**。
 // PS 那个守卫恰好就是：同一份语料、不同的扫描面走法、各自数出一个数。两个数一致，
 // 才叫「我没瞎」；不一致时**不判谁对**，只报差异清单 —— 判谁对是人的活。
+//
+// ── 前三个量共同的盲区，和第四个量（2026-08-02，issue #91）────────────────────
+// 前三个量全是「两边各数一遍再比」，它们有一个共同前提：**两边不会以同一种方式一起错**。
+// 那个前提**曾经不成立** —— 反引号配对层在两侧是逐行直译（变量名/循环形状/分支顺序完全
+// 对应），于是配对规则写错时两侧一起错、三个数逐字节相同、对账全绿。本批两件事一起做：
+//   ㈠ 把本侧配对层重写成另一条算法路径（见 clause-parser.mjs 的 `backtickSpans` 头注）；
+//   ㈡ 加第四个量 `maskdiv` —— 它**不是又一个计数**，是把对方的**第三套遮罩实现**
+//      （`Get-MaskedLineAlt`，逐字符扫描，普查专用）与其主实现的逐字节互核结论带过来。
+//      ㈠只解掉「照抄」这条路径，㈡才解掉「两边独立地想岔到一处」那条。
+// 🕳 三套一起错仍然全绿 —— 那是算术不是疏漏，n 套互核抓不到 n 套同错。
 //
 // ── 三条对账时刻意做的取舍，写下来免得被读成 bug ─────────────────────────────
 //   ① **对账只看数字，不看 PS 的退出码。** 零条款的源文件（ccswitch/rules/dao-powershell.md
@@ -371,9 +382,18 @@ function runPs(host, script, file, selector) {
   // v2 追加字段单独取：**用独立正则、允许缺席**，这样对方是老版本时能报出「对方没有 slugs 这一栏」，
   // 而不是整条 marker 匹配失败、退化成「对方没给末行」那种什么都看不出来的状态。
   const sm = /\bslugs=(\d+)/.exec(out);
+  // `maskdiv` / `maskcmp`（2026-08-02，issue #91）同样单独取、允许缺席 —— 理由同上：
+  // 对方是老版本时要报得出「它没有这一栏」，而不是整条 marker 匹配失败。
+  const dm = /\bmaskdiv=(\d+)/.exec(out);
+  const cm = /\bmaskcmp=(\d+)/.exec(out);
   return {
     code: r.status,
-    marker: m ? { exit: +m[1], clauses: +m[2], violations: +m[3], notrigger: +m[4], slugs: sm ? +sm[1] : null } : null,
+    marker: m ? {
+      exit: +m[1], clauses: +m[2], violations: +m[3], notrigger: +m[4],
+      slugs: sm ? +sm[1] : null,
+      maskdiv: dm ? +dm[1] : null,
+      maskcmp: cm ? +cm[1] : null,
+    } : null,
     out,
     err: String(r.stderr || ""),
   };
@@ -449,11 +469,21 @@ function runReconcile(o) {
     // 可以逐字不变，而 slug 数当场分岔。`null` = 对方是老版本、根本没这一栏，那要单独说，
     // 不能当成 0 去比（0==0 会给出一个假的一致）。
     const okSlug = ps.marker.slugs !== null && parsed.stats.slug === ps.marker.slugs;
-    if (okClauses && okNoTrig && okSlug) {
+    // ── 第四个对账量：**对方遮罩双实现的自检结论**（2026-08-02，issue #91）──────────
+    // 前三个量比的都是「两边各数出来的数」，这一个不是 —— 它是**把对方第三套实现的结论
+    // 带过来**。为什么非要有它：本侧的 `backtickSpans` 与对方的 `Get-BacktickSpans` 实现
+    // 同一份 CommonMark 契约，**契约被同时读错时两边数出来的三个数逐字节相同**
+    // （历史上这两侧是逐行直译，正是这么一起错的，而当时没有任何通道会响）。
+    // 对方那套逐字符扫描的遮罩不在这条错误路径上，它一分歧就把 maskdiv 顶起来。
+    // `null` ⇒ 对方末行没有这一栏 ⇒ 它是老版本、**这一层根本没人在看** ⇒ 同样判红
+    //（同 slugs 那栏的既定处置，也同本文件「跑不了 ≠ 一致」的政策）。
+    const okMask = ps.marker.maskdiv === 0;
+    if (okClauses && okNoTrig && okSlug && okMask) {
       matched++;
       rows.push({
         file: s.file, state: "一致",
-        detail: `条款 ${parsed.stats.clauses} · 触发:无 ${parsed.stats.no_trigger} · slug ${parsed.stats.slug} · 对方硬闸 exit=${ps.marker.exit}`,
+        detail: `条款 ${parsed.stats.clauses} · 触发:无 ${parsed.stats.no_trigger} · slug ${parsed.stats.slug}` +
+          ` · 对方遮罩双实现比过 ${ps.marker.maskcmp === null ? "?" : ps.marker.maskcmp} 行零分歧 · 对方硬闸 exit=${ps.marker.exit}`,
       });
     } else {
       mismatched++;
@@ -462,7 +492,8 @@ function runReconcile(o) {
         detail:
           `条款 我方 ${parsed.stats.clauses} vs 对方 ${ps.marker.clauses}；` +
           `触发:无 我方 ${parsed.stats.no_trigger} vs 对方 ${ps.marker.notrigger}；` +
-          `slug 我方 ${parsed.stats.slug} vs 对方 ${ps.marker.slugs === null ? "（对方末行没有 slugs 栏 ⇒ 它还是 v1）" : ps.marker.slugs}` +
+          `slug 我方 ${parsed.stats.slug} vs 对方 ${ps.marker.slugs === null ? "（对方末行没有 slugs 栏 ⇒ 它还是 v1）" : ps.marker.slugs}；` +
+          `对方遮罩双实现分歧 ${ps.marker.maskdiv === null ? "（对方末行没有 maskdiv 栏 ⇒ 它没有第三套遮罩实现，这一层无人在看）" : ps.marker.maskdiv + " 行"}` +
           `（对方硬闸 exit=${ps.marker.exit}）`,
       });
     }
