@@ -24,7 +24,9 @@ $TmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-link-codex-
 #   every assertion in this file are untouched. They were placed by hand, ONCE, after the user was
 #   explicitly told this conflicts with the single-writer decision recorded above and chose to
 #   proceed anyway. Full record -- who, when, told what, chose what, why, plus rollback commands:
-#     mousse-cli  docs/ops/dao-ecosystem-audit.md  section 8
+#     docs/ops/dao-ecosystem-audit.md  section 8   (this repo; moved here 2026-08-02 from
+#     mousse-cli docs/ops/ -- the record was living in a project repo while the thing it
+#     describes lives here, which is exactly what section 8.7 booked as an open debt)
 #   Do NOT treat those 9 junctions as drift and do NOT "repair" them away. Note that
 #   `dao.ps1 unlink-codex` classifies by target and WOULD delete the subset whose targets match
 #   ~/.claude/skills entries -- that is a documented, user-typed command, not a silent risk,
