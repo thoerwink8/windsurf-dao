@@ -237,18 +237,24 @@ function clauseStructureLines(daoRoot) {
 //
 // 为什么挂在这里（理由与上面那道闸逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
 // 三处注册，而那正是本文件头注写的那笔债 —— 一道查「谁没挂好」的闸，不该自己先欠一笔注册账。
-// 只在**模式 A**跑：它扫的是 `~/.claude/settings.json` + 本仓 `config-sync/common/`，
+// 只在**模式 A**跑：它扫的是 `~/.claude/settings.json` + 本仓 `config-sync/common/`
+// + cc-switch DB 的 `providers` 表（issue #57 加的第三层，**那才是真正的下发源**），
 // 与当前项目是谁无关，在每个项目里各跑一遍只是重复付钱。
 //
-// 成本：本机实测整跑 ~50ms（`.js` 走进程内 vm 解析、零 spawn；只有 module goal 或
-// 解析失败的文件才落到权威的 `node --check`）。比上面那道 PowerShell 闸便宜一个数量级。
+// 成本：本机实测整跑 ~120ms（其中 ~50ms 是前两层：`.js` 走进程内 vm 解析、零 spawn，
+// 只有 module goal 或解析失败的文件才落到权威的 `node --check`；另 ~70ms 是 providers 层
+// 的一次 sqlite3 spawn）。仍比上面那道 PowerShell 闸便宜一个数量级。
 //
-// 输出策略与上面那道闸同构（三态，任一态都**不静默**）：
+// 输出策略与上面那道闸同构（**四态**，任一态都**不静默**）：
 //   ① 红（有死闸 / 自检半边失败 / 跑不起来）⇒ 报摘要 + 前几条明细
-//   ② 绿 + 有待办（孤儿 hook / 无法核验条目）⇒ 报一行
-//   ③ 绿且无待办 ⇒ 一行普查数（**刻意不做成零输出**：扫描面缩小必须看得见）
+//   ② ⚠ providers 层没查成或被显式关掉（exit 2 / providerscan=off）⇒ 报一行
+//      —— 它与「查了没事」必须分得开：那一层没查成时，「零死闸」的射程少一层
+//   ③ 绿 + 有待办（孤儿 hook / 无法核验条目）⇒ 报一行
+//   ④ 绿且无待办 ⇒ 一行普查数（**刻意不做成零输出**：扫描面缩小必须看得见）
 // 只解析末行的纯 ASCII 契约，**不去正则匹配中文正文** —— 两个文件之间拿文案当契约，
 // 正是「被引用方一改、引用方静默失效」的温床。
+// 末行字段是**全字段必配**，缺 providers 两字段即判「契约被改坏」而不是当它没有 ——
+// 「脚本比本消费方旧」与「providers 层跑过了」在只读末行的眼里必须长得不一样。
 const DEAD_GATES_TIMEOUT_MS = 30000;
 
 // 从报文里捞失败明细：只认 `✗ ` 开头的段落头 + 紧随其后的缩进条目行。
@@ -290,13 +296,21 @@ function deadGateLines(daoRoot) {
               "（手动复核：node ccswitch/scripts/check-dead-gates.mjs）"];
     }
   }
-  const m = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+)/.exec(out);
+  const m = /DEAD_GATES_SUMMARY exit=(\d+) hooks=(\d+) dead=(\d+) orphan=(\d+) selfcheck=(ok|fail) unverifiable=(\d+) providers=(\d+) providerscan=(ok|off|uncheckable)/.exec(out);
   if (!m) {
     return ["✗ 死闸检测跑完但没拿到 DEAD_GATES_SUMMARY 末行（真退出码 " + code +
             "）→ 契约可能被改坏了，手动跑一次看输出：node ccswitch/scripts/check-dead-gates.mjs"];
   }
-  const [, sExit, sHooks, sDead, sOrphan, sSelf, sUnver] = m;
-  if (sExit !== "0" || code !== 0) {
+  const [, sExit, sHooks, sDead, sOrphan, sSelf, sUnver, sProviders, sPScan] = m;
+  const sumExit = Number(sExit);
+  // 末行的 `exit=` 与真退出码**契约上恒等**。不等就是契约坏了，而不是「取一个信一个」——
+  // 拿其中一个当准会静默地把另一个的失真吃掉，那正是本闸自己在治的病。
+  if (sumExit !== code) {
+    return ["✗ 死闸检测末行说 exit=" + sumExit + "，真退出码却是 " + code +
+            " —— 两者按契约恒等，说明契约被改坏了：node ccswitch/scripts/check-dead-gates.mjs"];
+  }
+  // 红（1）优先于没查成（2）：真发现永远比「有一层没查成」更该被端到眼前。
+  if (sumExit !== 0 && sumExit !== 2) {
     const why = sDead !== "0"
       ? "有 " + sDead + " 条 hook/permission 指向的脚本已不存在或语法坏掉 —— 它们此刻在宿主里静默 no-op"
       : "检测器自检半边失败（selfcheck=" + sSelf + "）⇒ 此时「零死闸」不可信，先修检测器";
@@ -305,15 +319,25 @@ function deadGateLines(daoRoot) {
             (detail ? "\n" + detail : "") +
             "\n  → 全量：node ccswitch/scripts/check-dead-gates.mjs"];
   }
+  // providers 层没查成 / 被显式关掉 —— **不是「无死闸」**。cc-switch 真正下发的就是那一层，
+  // 它没查成时「零死闸」只覆盖 live+快照两层，而那正是 #57 之前的射程缺口本身。
+  if (sumExit === 2 || sPScan !== "ok") {
+    const head = sPScan === "off"
+      ? "providers 层被 --no-providers **显式关掉**（谁改了调用点？本 hook 从不传这个参数）"
+      : "providers 层**没查成**：cc-switch DB 读不到 / 无 providers 表 / 零行";
+    return ["⚠ 死闸检测：前两层绿（" + sHooks + " 条闸，零死闸），但 " + head +
+            " —— 这不是「零死闸」，cc-switch 真正下发的就是那一层。" +
+            "看原因：node ccswitch/scripts/check-dead-gates.mjs"];
+  }
   const todo = [];
   if (sOrphan !== "0") todo.push(sOrphan + " 个 hook 文件存在但没被任何一层注册（可能是刻意存货，也可能是挂漏了，机器判不出）");
   if (sUnver !== "0") todo.push(sUnver + " 条命令串无法核验（相对路径 / 靠 PATH 解析 ⇒ **不等于核验通过**）");
   if (todo.length) {
-    return ["ⓘ 死闸检测绿（" + sHooks + " 条闸，零死闸），另有：" + todo.join("；") +
+    return ["ⓘ 死闸检测绿（" + sHooks + " 条闸 / providers " + sProviders + " 行，零死闸），另有：" + todo.join("；") +
             " → node ccswitch/scripts/check-dead-gates.mjs 看清单"];
   }
-  return ["ⓘ 死闸检测绿：live + config-sync 快照合计 " + sHooks +
-          " 条闸全部指向存在且可载的脚本，孤儿 0、无法核验 0"];
+  return ["ⓘ 死闸检测绿：live + config-sync 快照 + cc-switch providers（" + sProviders +
+          " 行）三层合计 " + sHooks + " 条闸全部指向存在且可载的脚本，孤儿 0、无法核验 0"];
 }
 
 // ── always-on 字节预算的挂载点（2026-08-01 · 架构优化 P4）────────────────────
