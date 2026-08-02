@@ -31,8 +31,10 @@
 // 把漂移比对从字节相等改成行尾规范化的那次教训）。
 // 本机实测差额：dao.md 盘上 67884 字节、LF 规范化后 67571 字节，**差 313 字节 = 313 行**。
 //
-// ── 闸值 ────────────────────────────────────────────────────────────────────
-// 见下方 `LIMIT_BYTES` 常量及其上方的完整交代。**它是占位不是裁决。**
+// ── 闸值（2026-08-02 起是两档）──────────────────────────────────────────────
+// **目标闸值 `LIMIT_BYTES` = 16KiB，用户 2026-08-02 拍板**（不再是占位）。
+// **过渡上限 `TRANSITION_CEILING_BYTES` = 旧闸值 70KiB，一个字节没改**，退出码在过渡期
+// 按它判。两档的完整交代（为什么不是「直接换成 16KiB 让它红」）见下方两个常量的上方。
 //
 // ── 自检半边为什么必须另起一套读取路径 ──────────────────────────────────────
 // dao 守卫铁律：一个检查器若同时负责「找出违例」与「确认自己真的看到了样本」，两半
@@ -43,9 +45,10 @@
 // 主逻辑分出的 counted + scoped + unreadable 三桶之和必须等于普查数，不等即 `undercount`。
 //
 // ── 退出码 / 末行契约 ───────────────────────────────────────────────────────
-//   ALWAYSON_BUDGET_SUMMARY exit=<0|1> total=<N> limit=<N> files=<N> headroom=<N> scoped=<N> missing=<N> selfcheck=<ok|fail>
-//   · exit     —— 与进程退出码恒等；1 = 超限 **或** 自检半边失败
+//   ALWAYSON_BUDGET_SUMMARY exit=<0|1> total=<N> limit=<N> files=<N> headroom=<N> scoped=<N> missing=<N> selfcheck=<ok|fail> target=<N> overtarget=<N> mode=<transition|strict>
+//   · exit     —— 与进程退出码恒等；1 = 超**有效闸值** **或** 自检半边失败
 //   · total    —— 计入预算的字节合计（LF 规范化）
+//   · limit    —— **退出码实际按哪个数判的**（过渡期=过渡上限；strict=目标闸值）
 //   · files    —— 计入预算的文件数
 //   · headroom —— limit - total（可为负；负值即超出量）
 //   前四个字段是派单契约规定的，顺序不动；后四个是**刻意扩展**，理由与 check-dead-gates 同：
@@ -53,10 +56,21 @@
 //   而消费方（SessionStart hook）只读末行。`scoped`/`missing`/`selfcheck` 就是把那三种
 //   「没查成」从「查了没事」里分出来。消费方按字段名取值，勿按位置取；未来加字段追加在末尾。
 //
+//   **2026-08-02 追加末尾三格（`target` / `overtarget` / `mode`），刻意加在 `selfcheck` 之后**：
+//   两档闸值一旦只活在中文报文里，机器通道上「过渡期欠着 43KB」与「真·未超限」就**不可区分**
+//   —— 那正是本文件反复在治的病（`total=0 exit=0` 那一格）在新维度上的复现。
+//   · target     —— 目标闸值（用户拍板值；给了 `--limit` 时即该值）
+//   · overtarget —— max(0, total - target)，**>0 就是欠账**，哪怕 exit=0
+//   · mode       —— `transition`（退出码按过渡上限判）/ `strict`（按目标闸值判）
+//   既有消费方的正则都不带 `$` 锚（hook 与 tests 各一处，2026-08-02 实查），追加在末尾不破它们。
+//
 // ── 跑法 ────────────────────────────────────────────────────────────────────
-//   node ccswitch/scripts/check-alwayson-budget.mjs
+//   node ccswitch/scripts/check-alwayson-budget.mjs            # 过渡期（默认）
+//   node ccswitch/scripts/check-alwayson-budget.mjs --strict   # 直接按 16KiB 目标判（批 3 验收用）
 //   node ccswitch/scripts/check-alwayson-budget.mjs --json
+//   环境变量 DAO_ALWAYSON_STRICT=1 等价于 --strict（给 CI / 批 3 验收脚本用）
 //   测试用覆写：--dao-md <file> --user-claude-md <file> --rules-dir <dir> --limit <字节数>
+//   **`--limit` 蕴含 strict**：显式给了数字就是「照这个数判」，不该再被过渡上限悄悄放宽。
 //
 // 真相源：windsurf-dao/ccswitch/scripts/check-alwayson-budget.mjs
 // 调用方：ccswitch/hooks/dao-scaffold-check.js（SessionStart 模式 A，零新增注册）
@@ -71,27 +85,48 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
 const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
 
-// ── 闸值（判断档 · 用户可随时改这个数）──────────────────────────────────────
-// [自定@08-01 初值待用户拍板——判断档：给自己划及格线，用户可随时改这个数]
+// ── 目标闸值（用户 2026-08-02 拍板 · 不再是占位）─────────────────────────────
+// **16KiB = 16384B**，用户拍板时给的分解是：dao.md ≤10KB + 用户级 CLAUDE.md ≤1KB
+// + 生长余量 ~5KB。同一个数字在 `docs/specs/dao-rewrite-202608.md` §预算闸新值 与
+// 批 4 行（「LIMIT_BYTES 写用户拍板值」）各写了一次，本行是它的落地。
 //
-// **这个数是占位，不是「合理值」的裁决。** spec（docs/specs/dao-arch-optimization-202608.md
-// P4 行）明写「闸值必须用户定（AI 自划及格线命中否决项①）」，本常量只是让闸先有形态。
+// **这一行此前带 `[自定@08-01 初值待用户拍板]`，现已撤下** —— 那个标记的语义是
+// 「AI 自己划的及格线，用户可整批撤回」，而这个数现在是用户自己定的，留着标记等于
+// 把用户的裁决记成 AI 的自定，会在下一次「某月某日之后你自定的全撤」时被误撤。
+const LIMIT_BYTES = 16 * 1024;
+
+// ── 过渡上限（重写批 3 落地前）──────────────────────────────────────────────
+// **值 = 71680B，即 2026-08-01 那版闸值，一个字节没改。**
 //
-// **为什么不是派单令写的 68KiB**（派单令的依据已过期，照直记）：
-//   · 派单令依据「当前 dao.md 66237B」，而 2026-08-01 实测 dao.md = **67571B**（LF 规范化）；
-//   · 且本闸射程是**三面合计**不是 dao.md 单文件，实测 dao.md 67571 + 用户 CLAUDE.md 2068
-//     = **69639B**，而 68KiB = 69632B ⇒ **68KiB 会出生即红 7 字节**。
-//   · 「生下来就吵的检查一定会被静音」是本仓明训（check-clauses-structure 候选退役区那次），
-//     而一个用户尚未拍板的数字把 SessionStart 染红，比不设闸更糟。
-// 故初值取 70KiB = 71680B = 当前 +2041B（**2.9% 余量**），形态仍是「不再增长闸」：
-// 余量小到加不进一条新条款，但不会开局就红。用户拍板后改这一行即可。
+// 为什么需要这一档，而不是「直接换成 16KiB 让它红」（那是派单令给的第一方案）：
+// 2026-08-02 实测 total = **59575B**（dao.md 57507 + 用户级 2068），换成 16KiB 当场
+// 欠 43191B，而 dao.md 瘦身要等 `docs/specs/dao-rewrite-202608.md` 的**批 3**。
+// 中间这段时间里，闸每次 SessionStart 都红。
+// **决定性的理由不是「红久了烦」，是这道闸的红色通道是共用的**：本文件的自检半边
+// （anchor-missing / undercount@rules / zero-bytes）走的是**同一个 exit=1、同一行报文**。
+// 一个持续数日的**预期红**会把那三条真警报一起腌进背景噪音里 —— 而自检半边正是本文件
+// 头注花了整节论证「必须另起一套读取路径」才建起来的东西。**用预期红淹掉它，等于把
+// 那一节的投入清零。** 这与「生下来就吵的检查一定会被静音」是同一条明训的下一步：
+// 不只是会被静音，它还会**连带**静音同信道上的真信号。
 //
-// 调参三问（dao 通用节要求，逐条答）：①改小会怎样 —— 小于 69639 即刻红，需先真的腾出位置，
-// 那是本闸的**目的**而不是事故，但该由用户选时机；②当前值够不够 —— 够「不再增长」，
-// 不够「主动缩」，缩要靠 P5 整编，不靠闸；③69639～71680 那段有无真实需求 —— 有一个：
-// 本 PR 自身不改 dao.md，但下一个批次若要往 dao.md 加一行指针（存根化的常见形态），
-// 得有几百字节的活动空间，否则每次存根化都要先动闸值。
-const LIMIT_BYTES = 70 * 1024;
+// 调参三问（dao 通用节要求，逐条答；问的是**过渡上限**这个数）：
+//   ① 改小会怎样 —— 小于 59575 即刻红，就退回上面刚否决掉的那个方案；
+//      59575~71680 之间任取一个数，都是**我自己划的及格线**（命中立法准则否决项①），
+//      故不取，直接沿用用户上一次见过的那个数。
+//   ② 当前值够不够 —— **不够，且照直记**：71680 - 59575 = **12105B 余量（20%）**。
+//      批 1/2 的存根化已经把 total 从 69639 降到 59575，于是 71680 这个数**早已不再是
+//      「不再增长闸」**（它当初的设计意图是 2.9% 余量）。也就是说：过渡期内 dao.md 还能
+//      再涨 12KB 而不触任何闸。**这是本 PR 发现但刻意不修的一件事** —— 收紧它是新的
+//      及格线决定（判断档），呈用户；这里只负责让这个数字每次运行都被打印出来。
+//   ③ 59575~71680 那段有无真实需求 —— 有：批 3 是「先立后破」（先把正文迁进 rules/
+//      与 docs/evolution/，再删 dao.md 里的原文），**迁移过程中 total 会先涨后落**。
+//      过渡上限若卡在当前值，批 3 的中间态每一步都会红。
+//
+// **怎么退役这一档**：批 3 落地、`--strict` 实跑 exit=0 之后，删掉这个常量与
+// `TRANSITION_ACTIVE` 那几行即可 —— 目标闸值自动成为唯一的闸。spec 批 4 已列了这一步。
+const TRANSITION_CEILING_BYTES = 70 * 1024;
+const TRANSITION_REASON =
+  "dao.md 重写批 3（docs/specs/dao-rewrite-202608.md）尚未落地，正文还没瘦身";
 
 // ── 参数 ────────────────────────────────────────────────────────────────────
 const ARGV = process.argv.slice(2);
@@ -107,12 +142,28 @@ const AS_JSON = ARGV.includes("--json");
 const limitArg = argOf("--limit", null);
 // `--limit` 只收正整数字节。不支持 "68kb" 之类的人性化写法：单位换算（KB=1000 还是 1024）
 // 是个没人记得住的歧义，而这个值是要被断言的。写错即报，不做「猜你想说什么」的解析。
-let LIMIT = LIMIT_BYTES;
+let TARGET = LIMIT_BYTES;
 let limitArgError = null;
 if (limitArg !== null) {
   if (!/^\d+$/.test(String(limitArg).trim())) limitArgError = "--limit 必须是正整数字节数（收到：" + limitArg + "）";
-  else LIMIT = Number(String(limitArg).trim());
+  else TARGET = Number(String(limitArg).trim());
 }
+
+// ── 两档之间怎么选（这段决定退出码按哪个数判）───────────────────────────────
+// strict = 按目标闸值判。三条触发路径，任一即 strict：
+//   ① `--strict`                     —— 人手复核 / 批 3 验收
+//   ② `DAO_ALWAYSON_STRICT=1`        —— CI 与验收脚本（没有命令行的场合）
+//   ③ 给了 `--limit <N>`             —— **显式给了数字就是「照这个数判」**。
+//      这一条不只是为了兼容既有测试（它们靠 `--limit` 制造超限/未超限两态，若过渡上限
+//      仍然生效，`--limit 500` 那一例会被放宽成绿）；它本身也是对的语义：一个人明确写下
+//      了要判的数，再拿另一个更宽的数悄悄替换掉它，就是「静默放宽」。
+// 还有一条**结构性**的：目标 ≥ 过渡上限时过渡档没有意义（批 3 落地后就是这个形态），
+// 此时自动退回 strict —— 于是删常量之前它就已经不再放宽任何东西。
+const STRICT_FLAG = ARGV.includes("--strict") || process.env.DAO_ALWAYSON_STRICT === "1";
+const TRANSITION_ACTIVE =
+  !STRICT_FLAG && limitArg === null && TRANSITION_CEILING_BYTES > TARGET;
+const LIMIT = TRANSITION_ACTIVE ? TRANSITION_CEILING_BYTES : TARGET;
+const MODE = TRANSITION_ACTIVE ? "transition" : "strict";
 
 function out(s) { process.stdout.write(s + "\n"); }
 
@@ -262,6 +313,8 @@ if (censusErr && !/ENOENT|no such file/i.test(censusErr)) {
 
 const selfOk = selfIssues.length === 0;
 const overLimit = total > LIMIT;
+// 欠目标多少字节。**过渡期里 exit=0 而这个数 >0 是常态**，它就是那笔欠账的大小。
+const overTarget = Math.max(0, total - TARGET);
 const exitCode = (overLimit || !selfOk) ? 1 : 0;
 
 // ── 出口在哪（超限时必须给，否则这道闸只是在骂人）───────────────────────────
@@ -284,12 +337,18 @@ function summaryLine() {
     " headroom=" + headroom +
     " scoped=" + scoped.length +
     " missing=" + missing.length +
-    " selfcheck=" + (selfOk ? "ok" : "fail");
+    " selfcheck=" + (selfOk ? "ok" : "fail") +
+    " target=" + TARGET +
+    " overtarget=" + overTarget +
+    " mode=" + MODE;
 }
 
 if (AS_JSON) {
   out(JSON.stringify({
     exit: exitCode, total, limit: LIMIT, headroom,
+    target: TARGET, overtarget: overTarget, mode: MODE,
+    transitionCeiling: TRANSITION_CEILING_BYTES,
+    transitionReason: TRANSITION_ACTIVE ? TRANSITION_REASON : null,
     counted: counted.map((c) => ({ label: c.label, file: c.file, bytes: c.bytes, anchor: c.anchor })),
     scoped: scoped.map((s) => ({ label: s.label, file: s.file, bytes: s.bytes })),
     missing: missing.map((m) => ({ label: m.label, file: m.file, why: m.why })),
@@ -303,7 +362,15 @@ if (AS_JSON) {
 
 out("");
 out("=== dao always-on 字节预算 ===");
-out("  闸值 " + LIMIT + " 字节（" + (LIMIT / 1024).toFixed(1) + " KiB）· 计量口径：LF 规范化后的 UTF-8 字节，BOM 不计");
+out("  目标闸值 " + TARGET + " 字节（" + (TARGET / 1024).toFixed(1) + " KiB）" +
+    (limitArg === null ? "· 用户 2026-08-02 拍板（dao.md ≤10KB + 用户级 ≤1KB + 生长余量 ~5KB）" : "· 由 --limit 指定"));
+if (TRANSITION_ACTIVE) {
+  out("  过渡上限 " + TRANSITION_CEILING_BYTES + " 字节（" + (TRANSITION_CEILING_BYTES / 1024).toFixed(1) +
+      " KiB）· **退出码按它判** —— " + TRANSITION_REASON);
+} else {
+  out("  模式 strict · **退出码按目标闸值判**（无过渡上限）");
+}
+out("  计量口径：LF 规范化后的 UTF-8 字节，BOM 不计");
 out("");
 for (const c of counted) {
   out("  " + String(c.bytes).padStart(7) + " B  " + c.label.padEnd(30) + " " + c.file);
@@ -312,6 +379,10 @@ if (counted.length === 0) out("  （零份文件计入预算 —— 这不是「
 out("  " + "".padStart(7, "─") + "    合计 " + total + " B" +
     "（占闸值 " + (LIMIT > 0 ? (total * 100 / LIMIT).toFixed(1) : "n/a") + "%，" +
     (headroom >= 0 ? "余量 " + headroom + " B" : "**超出 " + (-headroom) + " B**") + "）");
+if (TRANSITION_ACTIVE) {
+  out("  " + "".padStart(7, " ") + "    对目标闸值 " + TARGET + " B：" +
+      (overTarget > 0 ? "**欠 " + overTarget + " B**" : "已达标"));
+}
 
 if (scoped.length) {
   out("");
@@ -330,6 +401,16 @@ if (overLimit) {
   out("  它涨的不是磁盘而是**每一次推理的 attention budget**。三个出口（都已铺好，各有先例）：");
   for (const e of EXITS) out("    " + e);
   out("  想加新条款先腾位置 —— 「一进一出」正是本闸唯一要买的东西。");
+} else if (overTarget > 0) {
+  // 第三态：未超有效闸值（故 exit=0），但欠着目标闸值。**刻意不写成 ✓**——
+  // 一个欠着 43KB 的状态若和真·达标共用一个对勾，那两档闸值就白分了。
+  out("⚠ 过渡期：未超过渡上限（exit=0），但**欠目标闸值 " + overTarget + " 字节**。");
+  out("  这**不是回归、也不是绿灯**，是 " + TRANSITION_REASON + " 之下的预期欠账。");
+  out("  达标路径 = 该 spec 的**批 3**（dao.md 重写到 ≤10KiB）；批 3 落地后删掉本脚本的");
+  out("  TRANSITION_CEILING_BYTES 常量，目标闸值即成为唯一的闸。");
+  out("  想现在就按目标判：node ccswitch/scripts/check-alwayson-budget.mjs --strict");
+  out("  三个出口（都已铺好，各有先例）：");
+  for (const e of EXITS) out("    " + e);
 } else {
   out("✓ 未超限：合计 " + total + " B ≤ 闸值 " + LIMIT + " B（余量 " + headroom + " B）");
 }
@@ -345,6 +426,8 @@ if (selfOk) {
 
 out("");
 out("── 合计 " + total + " B / 闸值 " + LIMIT + " B · 计入 " + counted.length + " 份 · 作用域档 " +
-    scoped.length + " 份 · 缺席 " + missing.length + " 份 · 自检 " + (selfOk ? "ok" : "fail"));
+    scoped.length + " 份 · 缺席 " + missing.length + " 份 · 自检 " + (selfOk ? "ok" : "fail") +
+    " · 目标 " + TARGET + " B" + (overTarget > 0 ? "（欠 " + overTarget + " B）" : "（已达标）") +
+    " · 模式 " + MODE);
 out(summaryLine());
 process.exit(exitCode);
