@@ -114,6 +114,22 @@ w(path.join(MEM_A, "no-declaration.md"), [
   "",
 ].join("\n"));
 
+// 并轨 scope=all 专用夹具：**声明段外**的引用。三种形态同时在场，
+// 因为段外走的是严档（见被测模块并轨㈡），三者的归属各不相同：
+//   · `nested/ghost-outside.md` —— 含分隔符 + 有扩展名 ⇒ 严档收，且解析不到 ⇒ 该报
+//   · `deadsubdir/`             —— 目录引用 ⇒ 严档收，且解析不到 ⇒ 该报
+//   · `docs/spec.md`            —— 真实存在 ⇒ 负控，扫描面放大也不许报
+//   · `bare-ghost-name.md`      —— **裸文件名（无分隔符）⇒ 严档结构上看不见**。
+//     这是并轨后**已知的射程缺口**，不是 bug：段外是整份 memory，允许裸文件名会把
+//     散文里随口提的 `README.md` 一并当路径去查。写成断言是为了让它可见、可归因。
+w(path.join(MEM_A, "wide-only.md"), [
+  "# wide only",
+  "",
+  "本段没有那个关键词，但提到 `nested/ghost-outside.md`、`deadsubdir/`、",
+  "`docs/spec.md` 和 `bare-ghost-name.md`。",
+  "",
+].join("\n"));
+
 // 已知误认形态（判据① 的"会误认"那一侧）：正文只是在**讨论**真相源这个概念，
 // 也会被当成声明行。**本用例刻意钉住这个行为而不是修它**——修法只有"加语义判断"，
 // 那已经超出最窄那一档。写成测试是为了让它可见、可归因，而不是让下一个人以为是 bug。
@@ -268,6 +284,173 @@ console.log("\n=== 扫描面缺失：不假装通过 ===");
   check("memoryRoot 不存在 → 零发现零文件", r3.findings.length === 0 && r3.files === 0);
   const txt = M.formatReport(r3);
   check("报告明说这是『没测』不是『通过』", /这不是通过，是\*\*没测\*\*/.test(txt), txt);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 并轨（2026-08-02 · 自上而下审计第 12 件）：`scope: "all"` 与末行契约
+// ══════════════════════════════════════════════════════════════════════════════
+// 上面全部用例跑的是 `scope: "declared"`（缺省），它们**一条都没改**——这本身就是
+// 「并轨没有偷偷改掉原判据」的断言：只要 declared 那一档的行为动了，上面就会红。
+console.log("\n=== 并轨 · scope=all：全文扫，且与 declared 是包含关系 ===");
+const resAll = M.scan({ memoryRoot: MEM_ROOT, rootResolver: resolver, scope: "all" });
+const allByFile = (name) => resAll.findings.filter((f) => path.basename(f.file) === name);
+{
+  check("declared 档的 scope 字段如实回填", res.scope === "declared", String(res.scope));
+  check("all 档的 scope 字段如实回填", resAll.scope === "all", String(resAll.scope));
+  // 正控：只有 all 档看得见的那些 —— 声明段外的死路径
+  const wide = allByFile("wide-only.md");
+  check("正控 · 段外的相对死路径在 all 档被查出",
+    wide.some((f) => f.token === "nested/ghost-outside.md"), JSON.stringify(wide.map((f) => f.token)));
+  check("正控 · 段外的目录引用在 all 档被查出",
+    wide.some((f) => f.token === "deadsubdir/"), JSON.stringify(wide.map((f) => f.token)));
+  check("负控 · 同一段里真实存在的 `docs/spec.md` 不报（放大扫描面 ≠ 放宽判据）",
+    !wide.some((f) => f.token === "docs/spec.md"), JSON.stringify(wide.map((f) => f.token)));
+  check("负控 · declared 档看不见这个文件（它没有声明关键词）",
+    res.findings.filter((f) => path.basename(f.file) === "wide-only.md").length === 0);
+  // 已知射程缺口：段外的**裸文件名**严档结构上看不见。如实钉住，不假称覆盖。
+  check("已知缺口 · 段外裸文件名（无分隔符）在 all 档**仍看不见**（严档的代价，写明不假装）",
+    !wide.some((f) => f.token === "bare-ghost-name.md"), JSON.stringify(wide.map((f) => f.token)));
+  check("已知缺口 · 同理，`ghost-outside-paragraph.md` 这种段外裸名也不报",
+    !allByFile("paragraph.md").some((f) => f.token === "ghost-outside-paragraph.md"),
+    JSON.stringify(allByFile("paragraph.md").map((f) => f.token)));
+  // 负控：真实存在的路径在 all 档照样不报（放宽扫描面 ≠ 放宽判据）
+  check("负控 · 真实存在的真相源在 all 档仍零发现",
+    allByFile("live-source.md").length === 0,
+    JSON.stringify(allByFile("live-source.md").map((f) => f.token)));
+  // 声明段内**仍走宽档**：这是首版订正的那一格，裸文件名在段内必须照样查得到
+  check("声明段内的裸文件名在 all 档仍被查（严档只用在段外，见并轨㈡ 订正）",
+    allByFile("paragraph.md").some((f) => f.token === "ghost-in-paragraph.md"),
+    JSON.stringify(allByFile("paragraph.md").map((f) => f.token)));
+  check("all 档的发现数严格多于 declared 档（否则这一档等于没加）",
+    resAll.findings.length > res.findings.length,
+    `all=${resAll.findings.length} declared=${res.findings.length}`);
+  // 🔴 **真超集**：首版把严档用在整份文件上，`all` 反而比 `declared` 少 2 条
+  //    （声明段里的裸文件名被严档收掉了）—— 「扫描面放大」与「判据收窄」在总数上
+  //    互相抵消，看起来只是数字变了一点。这一条就是为那次订正立的回归网。
+  const keyOf = (f) => `${path.basename(f.file)}|${f.lineNo}|${f.token}`;
+  const allKeys = new Set(resAll.findings.map(keyOf));
+  const missing = res.findings.filter((f) => !allKeys.has(keyOf(f)));
+  check("all 档的发现集是 declared 档的**真超集**（一条都不许丢）",
+    missing.length === 0, JSON.stringify(missing.map(keyOf)));
+  // `declared` 标记：并轨㈢ 的净收益，两个方向各钉一条
+  check("段内发现带 declared=true",
+    allByFile("stale-source.md").every((f) => f.declared === true),
+    JSON.stringify(allByFile("stale-source.md").map((f) => f.declared)));
+  check("段外发现带 declared=false 且 declLine 为 null（不许硬取 declLines[0]）",
+    wide.length > 0 && wide.every((f) => f.declared === false && f.declLine === null),
+    JSON.stringify(wide.map((f) => [f.declared, f.declLine])));
+  check("declared 档里每条发现都是 declared=true（那一档本来就只看声明段）",
+    res.findings.every((f) => f.declared === true));
+}
+
+console.log("\n=== 并轨 · strict token 形态：收紧不是放宽（真子集） ===");
+{
+  // strict 的命中集必须是非 strict 的真子集 —— 若哪天有人把 strict 写成"另一套判据"，
+  // 这一条会红。样本两侧都取（该收的收掉、该留的留住）。
+  const samples = [
+    "docs/spec.md", "ccswitch/hooks/dao-*.js", "legacy/", "D:/frank/x/y.md",
+    "CLAUDE.md", "README.md", "team-donk/mousse-cli", "PromptTemplate",
+    "common_config_claude.hooks", "$env:FOO", "--flag", "a|b", "docs/a.md:12",
+  ];
+  const loose = samples.filter((s) => M.looksLikePath(s, false));
+  const strict = samples.filter((s) => M.looksLikePath(s, true));
+  check("strict 命中集 ⊆ loose 命中集", strict.every((s) => loose.includes(s)),
+    `strict=${JSON.stringify(strict)} loose=${JSON.stringify(loose)}`);
+  check("strict 严格更小（否则 strict 分支等于没写）", strict.length < loose.length,
+    `strict=${strict.length} loose=${loose.length}`);
+  check("strict 收掉裸文件名 `CLAUDE.md`（全文扫时它多半只是散文里提了一句）",
+    M.looksLikePath("CLAUDE.md", true) === false && M.looksLikePath("CLAUDE.md", false) === true);
+  check("strict 收掉仓库 slug `team-donk/mousse-cli`（像路径但不是文件系统对象）",
+    M.looksLikePath("team-donk/mousse-cli", true) === false);
+  check("strict 保留带扩展名的相对路径 `docs/spec.md`", M.looksLikePath("docs/spec.md", true) === true);
+  check("strict 保留目录引用 `legacy/`", M.looksLikePath("legacy/", true) === true);
+  check("strict 保留 glob `ccswitch/hooks/dao-*.js`",
+    M.looksLikePath("ccswitch/hooks/dao-*.js", true) === true);
+  check("默认不传 strict 时与 loose 同（缺省即并轨前行为）",
+    M.looksLikePath("CLAUDE.md") === M.looksLikePath("CLAUDE.md", false));
+}
+
+console.log("\n=== 并轨 · stripLocator：`:行号` 与 `#锚点` 剥掉再解析（消真假阳性） ===");
+{
+  check("剥 `:12`", M.stripLocator("docs/a.md:12") === "docs/a.md");
+  check("剥 `:12-20`", M.stripLocator("docs/a.md:12-20") === "docs/a.md");
+  check("剥 `#锚点`", M.stripLocator("docs/a.md#节名") === "docs/a.md");
+  check("盘符冒号不被误剥（`D:/x/y.md` 原样）", M.stripLocator("D:/x/y.md") === "D:/x/y.md");
+  check("没有定位符时原样返回", M.stripLocator("docs/a.md") === "docs/a.md");
+  // 端到端：带行号的真实路径不该被报成 dead
+  w(path.join(MEM_A, "locator.md"), [
+    "# locator", "",
+    "**真相源**：`CONTRACT.md`；细节在 `docs/spec.md:42` 与 `docs/spec.md#总则`。", "",
+  ].join("\n"));
+  const rLoc = M.scan({ memoryRoot: MEM_ROOT, rootResolver: resolver });
+  const loc = rLoc.findings.filter((f) => path.basename(f.file) === "locator.md");
+  check("端到端 · `docs/spec.md:42` / `#锚点` 解析得到 ⇒ 零发现（剥之前会被报成 dead）",
+    loc.length === 0, JSON.stringify(loc.map((f) => f.token)));
+}
+
+console.log("\n=== 并轨 · 末行契约 MEMORY_REFS_SUMMARY（消费方只解析这一行） ===");
+{
+  function runCli(extraArgs) {
+    return spawnSync(process.execPath, [MOD].concat(extraArgs || []), {
+      encoding: "utf8",
+      env: Object.assign({}, process.env, {
+        MEMORY_TRUTH_SOURCE_ROOT: MEM_ROOT,
+        MEMORY_TRUTH_SOURCE_FAKE_DRIVE: FAKE_DRIVE,
+      }),
+    });
+  }
+  const rAll = runCli(["--scope=all"]);
+  const outAll = String(rAll.stdout || "");
+  const lines = outAll.trim().split(/\r?\n/);
+  const last = lines[lines.length - 1];
+  check("末行就是契约行（消费方取最后一行即可）", /^MEMORY_REFS_SUMMARY /.test(last), last);
+  const m = /^MEMORY_REFS_SUMMARY exit=(\d+) scope=(\w+) root=(\d) projects=(\d+) files=(\d+) checked=(\d+) dead=(\d+) declared_dead=(\d+) ambiguous=(\d+) skipped=(\d+) errors=(\d+)$/.exec(last);
+  check("契约全字段齐（缺字段即判契约被改坏，不判那一格没事）", m !== null, last);
+  check("契约里的 exit= 与真退出码恒等", m !== null && Number(m[1]) === rAll.status,
+    m ? `${m[1]} vs ${rAll.status}` : "n/a");
+  check("契约回填了 scope=all", m !== null && m[2] === "all", m ? m[2] : "n/a");
+  check("有发现仍 exit 0（观察线契约在 all 档同样成立）", rAll.status === 0, "code=" + rAll.status);
+  check("all 档的 dead 数 >= declared_dead 数（后者是前者的子集）",
+    m !== null && Number(m[7]) >= Number(m[8]), m ? `${m[7]}/${m[8]}` : "n/a");
+  // 报告分栏：段内/段外处方不同，混在一起报会让人误判严重度
+  check("all 档报告把「声明段内」与「声明段外」分开列",
+    /真相源声明段内/.test(outAll) && /声明段外/.test(outAll), outAll.slice(0, 400));
+  // 缺省仍是 declared（并轨没有偷偷换掉默认行为）
+  const rDef = runCli([]);
+  check("不传 --scope 时缺省仍是 declared", /MEMORY_REFS_SUMMARY exit=\d+ scope=declared /.test(String(rDef.stdout || "")),
+    String(rDef.stdout || "").slice(-200));
+  // 未知取值不静默回落 —— 回落等于「你以为扫了全文、其实只扫了声明段」
+  const rBad = runCli(["--scope=bogus"]);
+  check("未知 --scope 值 → exit 2 且不静默回落", rBad.status === 2, "code=" + rBad.status);
+  check("未知 --scope 值 → 不打印任何 SUMMARY（免得被消费方当成跑过了）",
+    !/MEMORY_REFS_SUMMARY/.test(String(rBad.stdout || "")), String(rBad.stdout || "").slice(0, 200));
+}
+
+console.log("\n=== 并轨 · 投递可达性（「源码里有调用点」是弱判据，只有真跑过才算数） ===");
+{
+  // 判据同 dead-gates.tests.js ⑫：静态核对证不了调用点可达——它可能被提前 return 跳过、
+  // 也可能落在一个从不进入的分支里（`isMetaRepo` 那次就是这么静默了整块模式 A）。
+  // 本次并轨的整个价值就在「投递挂上了没有」，故这一条是本文件里最承重的断言。
+  const HOOK = path.join(__dirname, "..", "ccswitch", "hooks", "dao-scaffold-check.js");
+  const DAO_ROOT = path.resolve(__dirname, "..");
+  function runHook(cwd) {
+    const payload = JSON.stringify({
+      session_id: "memory-truth-source-tests", cwd, hook_event_name: "SessionStart", source: "startup",
+    });
+    const r = spawnSync(process.execPath, [HOOK], { input: payload, encoding: "utf8", timeout: 120000 });
+    let json = null;
+    if (r.stdout && r.stdout.trim()) { try { json = JSON.parse(r.stdout); } catch (_) {} }
+    const ctx = (json && json.hookSpecificOutput && json.hookSpecificOutput.additionalContext) || "";
+    return { code: r.status, ctx, err: String(r.stderr || "") };
+  }
+  const r = runHook(DAO_ROOT);
+  check("真仓 SessionStart 注入里出现 memory 那一行（调用点可达 —— 这就是「并轨不是搬个家」的证据）",
+    /memory 指针一致性/.test(r.ctx), "ctx=" + r.ctx.slice(0, 500) + " [stderr]" + r.err.slice(0, 200));
+  check("注入的是 scope=all（否则 mousse 侧原有的覆盖面在并轨时被悄悄缩小了）",
+    /memory 指针一致性（scope=all/.test(r.ctx) || /scope=all/.test(r.ctx), r.ctx.slice(0, 500));
+  check("注入行报出普查数而不是零输出（扫描面缩小必须看得见）",
+    /份 memory/.test(r.ctx) && /个路径 token/.test(r.ctx), r.ctx.slice(0, 500));
+  check("hook 自身仍 exit 0（SessionStart 只增不阻）", r.code === 0, "code=" + r.code);
 }
 
 // 清理
