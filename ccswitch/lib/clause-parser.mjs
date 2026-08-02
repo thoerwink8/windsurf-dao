@@ -82,28 +82,82 @@ const SELF_AUTHORED_RE_DG = new RegExp(SELF_AUTHORED_RE.source, "dg");
 const SLUG_RE_DG = new RegExp(SLUG_RE.source, "dg");
 
 /**
+ * 反引号**游程**（连续反引号串）扫描：返回 [{ start, len }]，按出现次序。
+ * `start`/`len` 都是 **UTF-16 码元**下标 —— 与正则 `indices` 同一套坐标系，
+ * 这样遮罩串与原始串才对得上（正文里有 📌/🔴 这类代理对，按码点切会错位）。
+ */
+export function backtickRuns(raw) {
+  const runs = [];
+  const re = /`+/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) runs.push({ start: m.index, len: m[0].length });
+  return runs;
+}
+
+/**
+ * 按 **CommonMark 的游程配对规则**把游程配成代码 span：长度为 L 的开启游程，
+ * 由其后**第一个长度恰为 L** 的游程闭合；中间的游程都在 span 内部。
+ * 找不到等长游程的开启游程是**普通文本**，扫描继续往后走（后面的游程照样能开新 span）。
+ *
+ * 返回 { spans: [{from,to}], unmatched: [start…] }（下标含首含尾）。
+ */
+export function backtickSpans(raw) {
+  const runs = backtickRuns(raw);
+  const spans = [];
+  const unmatched = [];
+  let r = 0;
+  while (r < runs.length) {
+    const open = runs[r];
+    let closeIdx = -1;
+    for (let k = r + 1; k < runs.length; k++) {
+      if (runs[k].len === open.len) { closeIdx = k; break; }
+    }
+    if (closeIdx === -1) { unmatched.push(open.start); r++; continue; }
+    const close = runs[closeIdx];
+    spans.push({ from: open.start, to: close.start + close.len - 1 });
+    r = closeIdx + 1;
+  }
+  return { spans, unmatched };
+}
+
+/**
  * 把行内代码 span（一对反引号之间的内容，含反引号本身）替换成**等长空格**。
  *
  * 等长是硬要求，不是讲究：下游按遮罩串上的 group 下标回原始串切值，长度一变下标就错位。
- * 未闭合的反引号：从它开始到行尾一律当代码（保守方向——宁可少认一个标记，不可凭一个
- * 落单的反引号把后面真的标记也吃掉？两个方向都有代价，这里选「少认」是因为多认会**凭空造出**
- * 一个 ledger 条目，而少认会被 missing-slug / orphan 检测在另一侧报出来）。
+ *
+ * ── 未闭合反引号：2026-08-02 反转了处置 ────────────────────────────────────
+ * **旧行为**：从未闭合的那个反引号起到行尾一律当代码，注释里的理由是「宁可少认一个标记，
+ * 多认会凭空造出一个 ledger 条目，而少认会被 missing-slug / orphan 从另一侧报出来」。
+ * **实测两半都不成立**：
+ *   ① 「少认」的实际后果不是漏报，是**合法条款被整条吃掉**。正文里写一处 ```bash
+ *      这样的写法示例（游程长度 3、无等长游程闭合）就够了 —— 行尾元字段被遮成空格。
+ *   ② 后果分两种，**静默那种更险**：选择器读的就是遮罩串 ⇒ 该行整条**退出扫描面**，
+ *      条款数静默少一条而**退出码不变**（实测 mousse 条款库 clauses=75，实际 76，
+ *      两次都是 exit 0）；只有当它恰好被 AllTopLevel 选中时才报成 missing-meta-field 假阳性。
+ *   ③ 「会被另一侧报出来」只在接了 ledger 的文件上成立；没接 ledger 的条款库没有另一侧。
+ *
+ * **新行为**：未闭合游程 = 普通文本，不遮罩（见 backtickSpans）。判据优先级是
+ * **「合法条款不许被误判」高于「代码 span 假阳性」**，且新行为与人在渲染页面上看到的一致。
+ * 让出的那一格照直写：未闭合游程之后的模板字面量会被当成真标记 —— 但那要求正文本身是
+ * 坏 markdown，且失败是**响的**（多一条 violation），不是静默的。
+ * **闭合的** span 照旧遮罩，原先要防的假阳性防护不变。
+ *
+ * ⚠ 本函数与 PS 侧 `check-clauses-structure.ps1` 的 `Get-MaskedLine` 是**两套独立实现**，
+ *   共享的是「未闭合游程当字面文本」这个**外部契约**，不是代码。`--reconcile` 的判别力
+ *   正建立在两侧独立之上；只改一侧会让 mine≠theirs 变红（本批两侧同批对齐）。
  */
 export function maskCodeSpans(raw) {
+  const { spans } = backtickSpans(raw);
+  if (spans.length === 0) return raw;
+  // 按区间切片重拼：`" ".repeat()` 的长度用码元数算，故 out.length === raw.length 恒成立。
   let out = "";
-  let i = 0;
-  while (i < raw.length) {
-    if (raw[i] === "`") {
-      const end = raw.indexOf("`", i + 1);
-      if (end === -1) { out += " ".repeat(raw.length - i); break; }
-      out += " ".repeat(end - i + 1);
-      i = end + 1;
-    } else {
-      out += raw[i];
-      i++;
-    }
+  let pos = 0;
+  for (const s of spans) {
+    out += raw.slice(pos, s.from);
+    out += " ".repeat(s.to - s.from + 1);
+    pos = s.to + 1;
   }
-  return out;
+  return out + raw.slice(pos);
 }
 
 // 在遮罩串上定位、回原始串取值。`idx` 是 `m.indices[k]`（可能是 undefined —— 未参与匹配的组）。
