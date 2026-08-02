@@ -62,6 +62,21 @@
               Marked 模式**不报这一条**：那里缩进条款是合法且真实存在的形态（dao.md 7 条）。
          **它证不了什么**（照直写）：只保证「带签名的行没被吞掉」，**不保证该有的条款都在**——
          有人整条删掉，两侧同时少一行、集合差仍为 0。那一面靠 git diff 与人。
+         **v2 补一句**：这个盲区被检查 6 的 `orphan-ledger` **部分**补上了 —— 整条删掉时台账里
+         那一条会变成孤儿而现形。**只是部分**：删条款的同时把台账条目一并删掉，两边仍然静默一致。
+         台账把「悄悄删一条」的成本从 0 抬到 1 次额外编辑，没有抬到不可能。
+      6. 正文 slug ↔ 台账（`ccswitch/clause-ledger.json`）双向对账 —— **v2（批 2 · 台账搬家）**。
+         台账字段的真相源搬进 JSON，正文只持一个行内 slug `[#<域>-<短名>]`。命中形态
+         （`missing-slug` / `dup-slug` / `orphan-slug` / `orphan-ledger` / `ledger-file-mismatch` /
+         `ledger-mismatch`，外加台账本身读不了的 `ledger-unreadable`）**全是结构错**，
+         没有一种需要现场取舍 ⇒ 硬闸。
+         **激活判据**：本文件有 slug，**或**台账里有条目指着本文件。两样都没有 ⇒ 打印一行
+         「不适用」并跳过（回归网夹具、别的仓的条款库属这一类）。**不静默跳过** ——
+         而无条件激活的话，每份夹具都会被整本台账判成一堆 orphan-ledger。
+         **双轨对账只比行内确实写着的字段**：行内没写的不参与（那不是「不等」，是「正文没这一栏」），
+         此时台账侧应为 null；台账反而有值 ⇒ 台账替正文编了一个值，同样判红。
+         **判不了的**：台账里的**数字对不对**（同 `触发:` 取值真伪那一格）—— 本闸只保证两边
+         说的是同一句话，不保证那句话是真的。
 
     ── 与 mousse-cli/scripts/check-clauses-structure.ps1 的关系 ────────────────
     那份是本文件的**先行实现**，判据（尤其检查 5 的集合差形态、n 归桶、日期宽限窗）
@@ -80,9 +95,12 @@
     **「哪些行算条款」的选择器。** 这是本 canonical 相对 mousse 版新增的那个参数，
     理由见 .DESCRIPTION「不能只参数化路径」。恰两个取值，没有自动模式：
 
-      Marked（缺省）—— 含 `[n=` 的行即条款候选，**不论缩进、不论是不是列表项**。
+      Marked（缺省）—— 含任一台账字段（`[n=` / `[基线:` / `[自定@`）**或** slug `[#…]` 的行即
+        条款候选，**不论缩进、不论是不是列表项**；行内代码 span 里的一律不算。
         适用于「条款与散文混装」的文件（dao.md 型）。
-        代价：整条丢掉元字段者检不出（检查 3 的射程说明）。
+        **v1 判据只有 `[n=`**，于是「带基线或自定标记却没有完整签名」的行结构上看不见 ——
+        可达性矩阵实测漏 5 条真条款（dao.md 3 · dao-longwindow.md 2），全是承重条款。
+        代价：整条丢掉元字段**且**没有 slug 者仍检不出（检查 3 的射程说明）。
       AllTopLevel —— 零缩进 `- ` 行即条款（mousse 版语义）。
         适用于「整份文件就是条款列表」的文件（dispatch-clauses.md 型）。
         代价：对散文型文件会喷一片假 FAIL。
@@ -90,6 +108,11 @@
     **缺省取 Marked 是刻意选的失败方向**：指错文件时 Marked 少报（安静但弱），
     AllTopLevel 多报（吵但假）。少报本来更危险，**故用统计段的「选择器排除了 N 行」
     这一行把它显式化** —— 一份真正的条款库若显示排除了几十行，那就是选错模式了。
+
+.PARAMETER LedgerFile
+    条款台账路径，缺省 = 本仓 `ccswitch/clause-ledger.json`。它是台账字段的**真相源**，
+    正文只持行内 slug。检查 6 用它做双向对账；本文件与台账都没有 slug 关系时自动不适用
+    （打印一行说明，不静默）。
 
 .PARAMETER SectionPattern
     可选的**节白名单**正则（匹配 `##` 标题行）。缺省空 = 全部节都扫。
@@ -147,16 +170,44 @@
       · `触发:` 的**取值真伪**完全盲 —— 编一个不存在的载体写进去，闸照样放行，
         那个假载体还会在「触发点分布」里自成一桶。挂错只能靠人复核。
       · `[自定@…]` 只认标记在不在，判不出这条**该不该**自定。
-      · 整条条款被删掉时两侧同时少一行，检查 5 看不见。
+      · 整条条款被删掉时两侧同时少一行，检查 5 看不见（v2 起检查 6 的 orphan-ledger
+        补上了一半：正文删了而台账还在会现形；两边一起删仍然静默）。
+      · **台账里的数字对不对本闸同样判不了**：检查 6 只保证正文与台账说的是同一句话。
+        两边一起写错、或搬录时一起搬错，闸全绿。
+      · 🔴 **检查 5 的「自检」那一半与检出复用同一个 `Get-MaskedLine`（已知缺口，本批未修）**。
+        dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」讲的正是这个：
+        普查（Get-ClauseCensus）与检出（Get-ClauseRecords）各走各的**节状态机**（那一层是
+        独立的、刻意的），但**遮罩这一层两边共用** ⇒ 遮罩错了两边一起瞎、集合差恒为 0。
+        2026-08-02 实测坐实：未闭合反引号缺陷期，Marked 模式下 census 与检出**同时**
+        少数同一行（85→86 那一行），检查 5b 全程不响、退出码干净。
+        **本批只修了遮罩本身，没有拆掉这个共用** —— 拆它要给普查另写一套遮罩，
+        而「两套遮罩该不该允许结论不同」是判断不是照做（两套都对时集合差恒 0，
+        那就白写；两套不同时以谁为准又是新问题）。故此处只把缺口写明，
+        处置交下一批/派单方裁。**别把本批的绿读成「这一层现在有自检了」。**
+        📌 **已挂账：windsurf-dao issue #91**（带关闭条件，owner 栏待派单）。同一张单还记着
+        一个**叠加**缺口：本该跨实现兜底它的 `gen-clause-index.mjs --reconcile`，其
+        **配对层与本文件是逐行直译而非独立实现**（变量名/循环形状/分支顺序完全对应）
+        ⇒ 配对规则写错时两侧以同一种方式一起错、差恒为 0。
+        ⇒ **遮罩这一层出错时，守卫自检与跨实现对账在同一个位置同时失明。**
 #>
 
+# `[CmdletBinding()]` 不是装饰：没有它，PowerShell script 会把**认不出的具名参数**
+# 静默吞进 $args ⇒ `-Path <某文件>`（把参数名记错）不报错、`$TargetFile` 保持缺省值
+# ⇒ **本闸转头去扫 dao.md 并报 OK**，而操作者以为扫的是他给的那个文件。
+# 2026-08-02 实测：`... -Path D:\...\mousse-cli\docs\rules\dispatch-clauses.md` ⇒ exit 0、
+# 输出里「目标：」那一行写着 ccswitch/dao.md —— 一次「看起来干净」的**假绿**，
+# 而它恰好就是本批缺陷被误判为「已修好」的那条路径。
+# 加上之后：参数名打错 ⇒ 绑定错误、非零退出。属本闸自己在治的那类病（扫错对象 = 零样本
+# 的另一种形态），故一并 fail-closed。
+[CmdletBinding()]
 param(
     [string]$TargetFile = '',
     [ValidateSet('Marked', 'AllTopLevel')][string]$ClauseSelector = 'Marked',
     [string]$SectionPattern = '',
     [int]$RetireAgeDays = 21,
     [int]$FutureGraceDays = 2,
-    [ValidateRange(0, 1000)][int]$RetireListMax = 3
+    [ValidateRange(0, 1000)][int]$RetireListMax = 3,
+    [string]$LedgerFile = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -177,6 +228,12 @@ if ([string]::IsNullOrWhiteSpace($TargetFile)) {
     $targetFile = if ([System.IO.Path]::IsPathRooted($TargetFile)) { $TargetFile }
                   else { Join-Path (Get-Location).Path $TargetFile }
 }
+if ([string]::IsNullOrWhiteSpace($LedgerFile)) {
+    $ledgerFile = Join-Path $repoRoot 'ccswitch/clause-ledger.json'
+} else {
+    $ledgerFile = if ([System.IO.Path]::IsPathRooted($LedgerFile)) { $LedgerFile }
+                  else { Join-Path (Get-Location).Path $LedgerFile }
+}
 
 # ── 字面判据（提成 script 级常量：同一判据抄两处，迟早只改一处）────────────────
 # 元字段字面：[n=<数字|?> @<MM-DD> 触发:<非右方括号串>]
@@ -185,6 +242,16 @@ $script:MetaFieldPattern = '\[n=(\d+|\?) @(\d{2}-\d{2}) 触发:([^\]]+)\]'
 # 于是「字段写坏了」的行仍进得了扫描面、被检查 3 判红。若这里也用完整 pattern，
 # 检查 3 就成了一句永远为真的废话（选择器与判据同一个东西）。
 $script:ClauseSignaturePattern = '\[n='
+# **v2 的选择器判据**（批 2 · 台账搬家）：`[n=` 之外，`[基线:` / `[自定@` / 行内 slug 同样算
+# 「这一行自称是条款」。v1 只认 `[n=`，于是「带基线或自定标记却没有完整签名」的行**结构上看不见**
+# —— 可达性矩阵实测 dao.md 3 条、dao-longwindow.md 2 条，全是承重条款。
+$script:LedgerSignaturePattern = '\[n=|\[基线:|\[自定@'
+# 行内 slug：条款与 clause-ledger.json 的关联键。取值允许中文（`[#帅-热重载]` 是给人看的），
+# 唯一形式约束是不含空白与右方括号 —— 否则「一行两个 slug」与「一个带空格的 slug」分不开。
+$script:SlugPattern = '\[#([^\]\s]+)\]'
+# 行内代码 span：`` `…` ``。正文里写 `[自定@<月日>]` 是在讲**格式**，不是一个标记；
+# 不遮罩会给立法存根凭空造一个台账条目（矩阵实测的那个假阳性）。
+$script:CodeSpanPattern = '`[^`]*`'
 # 节标题判据：**锚到行首**。mousse 侧原写法是 `-match '📌'`（匹配任意位置）⇒ 正文里任何一行
 # 出现这个装饰字符，从那行起整段被当特殊节跳过，实测 70 条静默缩到 34 条（issue #285）。
 $script:SpecialSectionPattern  = '^##\s*📌'
@@ -193,6 +260,132 @@ $script:BaselinePattern     = '\[基线:([^\]]+)\]'
 $script:SelfAuthoredPattern = '\[自定@(\d{2}-\d{2})\]'
 $script:JudgeOnlyMark  = '[仅判据·无触发]'
 $script:ObservingMark  = '[观察中]'
+
+function Get-BacktickRuns {
+    <#
+      把一行里的**反引号游程**扫出来（起点 + 长度）。单独成函数是因为遮罩与
+      「未闭合游程」观察线都要它，而判据只该写一遍。
+      返回 [PSCustomObject]@{ Start; Len } 序列，按出现次序；调用方一律 `@(...)` 收。
+
+      ⚠ **返回值别写成 `return ,@($runs)`**：那样调用方再套一层 `@()` 会得到
+        「一个元素、该元素是数组」的嵌套结构 ⇒ `.Count` 恒为 1、`.Len` 恒为 $null
+        ⇒ 配对循环一次都进不去、**整行一个字都不遮罩**。本函数初版就是这么写的，
+        表现是「目标用例修好了」（元字段不再被吃）而**闭合 span 的遮罩全线失效**，
+        靠逐行 A/B 老新两版才现形 —— 一个「看起来修好了」的假绿。
+    #>
+    param([string]$Raw)
+
+    $runs = @()
+    $i = 0
+    while ($i -lt $Raw.Length) {
+        if ($Raw[$i] -eq '`') {
+            $start = $i
+            while ($i -lt $Raw.Length -and $Raw[$i] -eq '`') { $i++ }
+            $runs += [PSCustomObject]@{ Start = $start; Len = ($i - $start) }
+        } else {
+            $i++
+        }
+    }
+    return $runs
+}
+
+function Get-BacktickSpans {
+    <#
+      按 **CommonMark 的游程配对规则**把游程配成代码 span：
+      一个长度为 L 的开启游程，由**其后第一个长度恰为 L** 的游程闭合；中间的游程都在
+      span 内部（不再单独参与配对）。找不到等长游程的开启游程是**普通文本**，
+      而扫描**继续往后走** —— 后面的游程照样能开新 span。
+
+      返回 @{ Spans = @(@{From;To}); Unmatched = @(游程起点…) }。
+    #>
+    param([string]$Raw)
+
+    $runs = @(Get-BacktickRuns -Raw $Raw)
+    $spans = @()
+    $unmatched = @()
+    $r = 0
+    while ($r -lt $runs.Count) {
+        $open = $runs[$r]
+        $closeIdx = -1
+        for ($k = $r + 1; $k -lt $runs.Count; $k++) {
+            if ($runs[$k].Len -eq $open.Len) { $closeIdx = $k; break }
+        }
+        if ($closeIdx -lt 0) {
+            # 没有等长游程闭合它 ⇒ 这串反引号是字面文本，不是分隔符。
+            $unmatched += $open.Start
+            $r++
+            continue
+        }
+        $close = $runs[$closeIdx]
+        $spans += [PSCustomObject]@{ From = $open.Start; To = ($close.Start + $close.Len - 1) }
+        $r = $closeIdx + 1
+    }
+    return @{ Spans = @($spans); Unmatched = @($unmatched) }
+}
+
+function Get-MaskedLine {
+    <#
+      把行内代码 span 换成**等长空格**。等长是硬要求不是讲究：下游拿遮罩串上的
+      `Groups[k].Index/.Length` 回**原始串**切值，长度一变下标就错位。
+
+      为什么必须回原始串切值、不能直接用遮罩串：合法的基线正文里就带反引号
+      （`归-根路径消歧` 那条的基线写着「本文件 9 处裸 `docs/`」），直接取遮罩串会把
+      那段吃成空格，写进台账就成了一句缺字的话。
+
+      ── 未闭合反引号：2026-08-02 反转了处置，理由照直写 ──────────────────────
+      **旧行为**：从未闭合的那个反引号起，到行尾一律当代码。头注当时写的理由是
+      「刻意选的失败方向 —— 多认一个标记会凭空造出台账条目，少认一个会被
+      orphan-ledger 从另一侧报出来」。**那个理由经不起实测，两半都不成立**：
+        ① 「少认一个」的实际后果不是漏报，是**对一条完全合法的条款判红**。
+           实测锚：mousse `docs/rules/dispatch-clauses.md` 行 147（正文写了一处
+           ```bash 的写法示例 ⇒ 21 个反引号、游程未闭合）行尾元字段完整，
+           `-ClauseSelector AllTopLevel` 下被整段遮成空格 ⇒ `missing-meta-field`、exit 1。
+        ② 「会被另一侧报出来」只在**接了台账的文件**上成立。没接台账的条款库
+           （mousse 那份、任何项目自己的规则集）**根本没有另一侧**；而 Marked 模式下
+           后果更坏 —— 选择器本身读的就是遮罩串，签名被吃掉 ⇒ 该行**整条退出扫描面**，
+           检查器**静默转绿**（同一份夹具实测：AllTopLevel exit 1 / Marked exit 0）。
+           这正是本脚本检查 5 要防的那个病，发生在它自己的解析层里。
+        ③ 检查 5b 抓不到 ②，因为普查（Get-ClauseCensus）与检出走的是**同一个**
+           Get-MaskedLine ⇒ 两半一起瞎、集合差恒为 0。
+           照 dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」，
+           这是那条规则在本文件里的一个现存缺口 —— **本批未修**（见 .NOTES）。
+
+      **新行为**：按 CommonMark 的游程配对（见 Get-BacktickSpans）——
+      未闭合的游程是**普通文本**，不遮罩。判据取舍：**「合法条款不许被误判」
+      优先于「代码 span 假阳性」**（派单方定的优先级），且新行为与**人在渲染页面上
+      看到的东西一致** —— 未闭合的反引号在 GitHub 上就是显示为字面反引号，
+      那里的 `[自定@…]` 读者看着是真标记，检查器也就该当它是真标记。
+
+      **新行为让出的那一格，照直写**：一行里有**未闭合**游程、其后又跟着一个
+      模板字面量（`[自定@<月日>]` 之类）时，那个字面量现在会被当成真标记 ⇒
+      可能凭空多出一个 `[自定]` 计数或一个 orphan-slug。两点补偿：
+        · 它要求正文本身是**坏 markdown**（未闭合 span），渲染出来也是坏的；
+        · 失败是**响的**（多一条 violation / 统计里多一个数），不是静默的 —— 而旧行为
+          在 Marked 模式下的失败是静默转绿。
+        · 统计段另加一行观察线，把「未闭合游程 + 该行带条款签名」这个模糊地带打印出来
+          （实测全域分布：dao.md 0 行、7 份真实规则文件合计 1 行，噪音极低）。
+      **闭合的**代码 span 照旧遮罩 —— 原先要防的那个假阳性（反引号里的模板字面量）
+      **防护不变**，回归网两侧都有断言。
+    #>
+    param([string]$Raw)
+
+    $info = Get-BacktickSpans -Raw $Raw
+    if ($info.Spans.Count -eq 0) { return $Raw }
+
+    # 等长保证：只把 span 覆盖的字符换成空格，不增删任何字符。
+    $out = $Raw.ToCharArray()
+    foreach ($s in $info.Spans) {
+        for ($p = $s.From; $p -le $s.To; $p++) { $out[$p] = ' ' }
+    }
+    return (-join $out)
+}
+
+function Get-GroupValue {
+    <# 在遮罩串上定位、回原始串取值。组没参与匹配时返回 $null。 #>
+    param([string]$Raw, [System.Text.RegularExpressions.Group]$Group)
+    if ($null -eq $Group -or -not $Group.Success) { return $null }
+    return $Raw.Substring($Group.Index, $Group.Length)
+}
 
 function Get-ClauseNBucket {
     <#
@@ -228,13 +421,15 @@ function Get-ClauseNBucket {
 function Test-ClauseLineSelected {
     <#
       选择器的**唯一判据源**（检出与普查两侧都读它，判据只写一遍）。
-      Marked      ⇒ 行内含条款签名 `[n=`，不论形态。
+      Marked      ⇒ 行内含任一台账字段（`[n=` / `[基线:` / `[自定@`）**或** slug，不论形态；
+                    行内代码 span 里的一律不算（调用方传的 $Masked 已遮罩）。
       AllTopLevel ⇒ 零缩进 `- ` 行，不论有没有字段（这样才检得出「整条丢字段」）。
     #>
-    param([string]$Raw, [string]$Selector)
+    param([string]$Raw, [string]$Masked, [string]$Selector)
 
     if ($Selector -eq 'AllTopLevel') { return $Raw.StartsWith('- ') }
-    return [regex]::IsMatch($Raw, $script:ClauseSignaturePattern)
+    return ([regex]::IsMatch($Masked, $script:LedgerSignaturePattern) -or
+            [regex]::IsMatch($Masked, $script:SlugPattern))
 }
 
 function Get-LineShape {
@@ -282,7 +477,8 @@ function Get-ClauseRecords {
         }
         if ($inSpecialSection) { continue }
         if (-not $sectionAllowed) { continue }
-        if (-not (Test-ClauseLineSelected -Raw $raw -Selector $Selector)) { continue }
+        $masked = Get-MaskedLine -Raw $raw
+        if (-not (Test-ClauseLineSelected -Raw $raw -Masked $masked -Selector $Selector)) { continue }
 
         $rec = [PSCustomObject]@{
             LineNo    = $i + 1
@@ -294,27 +490,43 @@ function Get-ClauseRecords {
             NBucket   = $null
             MonthDay  = $null
             Trigger   = $null
-            JudgeOnly = $raw.Contains($script:JudgeOnlyMark)
-            Observing = $raw.Contains($script:ObservingMark)
+            JudgeOnly = $masked.Contains($script:JudgeOnlyMark)
+            Observing = $masked.Contains($script:ObservingMark)
             Baseline  = $null
             SelfDate  = $null
+            SelfDates = @()
+            Slug      = $null
+            SlugCount = 0
         }
-        $m = [regex]::Match($raw, $script:MetaFieldPattern)
+        $m = [regex]::Match($masked, $script:MetaFieldPattern)
         if ($m.Success) {
             $rec.HasField = $true
-            $rec.N        = $m.Groups[1].Value
+            $rec.N        = Get-GroupValue -Raw $raw -Group $m.Groups[1]
             # 归桶在这里算一次、存在记录上；**所有消费方一律读 NBucket，不再自己比字符串**
             # （issue #286 的根因之一正是同一份归桶判据被抄了三处）。
             $rec.NBucket  = Get-ClauseNBucket -N $rec.N
-            $rec.MonthDay = $m.Groups[2].Value
-            $rec.Trigger  = $m.Groups[3].Value
+            $rec.MonthDay = Get-GroupValue -Raw $raw -Group $m.Groups[2]
+            $rec.Trigger  = Get-GroupValue -Raw $raw -Group $m.Groups[3]
         }
-        $b = [regex]::Match($raw, $script:BaselinePattern)
-        if ($b.Success) { $rec.Baseline = $b.Groups[1].Value.Trim() }
+        $b = [regex]::Match($masked, $script:BaselinePattern)
+        if ($b.Success) { $rec.Baseline = (Get-GroupValue -Raw $raw -Group $b.Groups[1]).Trim() }
         # 自定标记**观察区也解析**：那里的候选同样可能是 AI 自定放进去的，
         # 而回溯面的价值恰恰在于「AI 未经批准写进规则集的东西，一条都不能不可见」。
-        $s = [regex]::Match($raw, $script:SelfAuthoredPattern)
-        if ($s.Success) { $rec.SelfDate = $s.Groups[1].Value }
+        # **收全部不只收第一个**：dao.md 有一行写着 `[自定@07-29] [自定@07-30]`，只取第一个
+        # 会静默丢掉一个日期，而那个日期正是「按日期整批撤回」这份授权对价的抓手。
+        $selfAll = @()
+        foreach ($sm in [regex]::Matches($masked, $script:SelfAuthoredPattern)) {
+            $selfAll += (Get-GroupValue -Raw $raw -Group $sm.Groups[1])
+        }
+        $rec.SelfDates = $selfAll
+        if ($selfAll.Count -gt 0) { $rec.SelfDate = $selfAll[0] }
+        $slugAll = @()
+        foreach ($sg in [regex]::Matches($masked, $script:SlugPattern)) {
+            $slugAll += (Get-GroupValue -Raw $raw -Group $sg.Groups[1])
+        }
+        $rec.SlugCount = $slugAll.Count
+        # 一行多个 slug 是结构错（关联键必须唯一）⇒ 这里**不替它挑一个**，留 $null 由检查 6 判红。
+        if ($slugAll.Count -eq 1) { $rec.Slug = $slugAll[0] }
         $records += $rec
     }
     return $records
@@ -351,15 +563,63 @@ function Get-ClauseCensus {
         if ($t -match '^```') { $inFence = -not $inFence; continue }
         if ($inFence) { continue }
         if ($raw.StartsWith('- ')) { $allTop++ }
-        $hasFull = [regex]::IsMatch($raw, $script:MetaFieldPattern)
-        if ($hasFull -and (Test-ClauseLineSelected -Raw $raw -Selector $Selector)) {
+        $masked = Get-MaskedLine -Raw $raw
+        # **v2 的分母判据**：完整元字段**或** slug。加 slug 是必须的 —— 批 2 之后一条条款
+        # 可以只有 slug 而无行内元字段（台账在 ledger 里），只按完整字段数分母的话，
+        # 那批条款一旦被 📌 节吞掉，检查 5b 完全看不见（分母里本来就没有它们）。
+        # 仍**不用**弱签名 `[n=`：那样「字段写坏」会被检查 3 与检查 5 各报一次，同一个缺陷
+        # 报成两件事，人会去找两个 bug。
+        $hasFull = [regex]::IsMatch($masked, $script:MetaFieldPattern)
+        $hasSlug = [regex]::IsMatch($masked, $script:SlugPattern)
+        $shaped  = $hasFull -or $hasSlug
+        if ($shaped -and (Test-ClauseLineSelected -Raw $raw -Masked $masked -Selector $Selector)) {
             $selected += [PSCustomObject]@{ LineNo = ($i + 1); Text = $t }
         }
-        if ($hasFull -and ($raw -match '^\s+-\s')) {
+        if ($shaped -and ($raw -match '^\s+-\s')) {
             $indented += [PSCustomObject]@{ LineNo = ($i + 1); Text = $t }
         }
     }
     return [PSCustomObject]@{ Selected = @($selected); Indented = @($indented); AllTop = $allTop }
+}
+
+function Get-ClauseLedger {
+    <#
+      读台账（`ccswitch/clause-ledger.json`）。返回 @{ Ok; Why; Entries（slug → 条目）}。
+
+      **刻意不 import node 侧那份解析**：两套实现对同一份数据各读一遍，才有 `--reconcile` 的
+      判别力（同本文件与 clause-parser.mjs 的既有关系）。共享的是 JSON 这个**外部契约**，
+      不是实现。
+      PS 5.1 的 ConvertFrom-Json 给的是 PSCustomObject（没有 -AsHashtable），
+      故这里自己转成 Hashtable —— 下游一律按 key 取，不做属性名反射。
+    #>
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) { return @{ Ok = $false; Why = '不存在'; Entries = @{} } }
+    try {
+        $doc = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    } catch {
+        return @{ Ok = $false; Why = ('不是合法 JSON：' + $_.Exception.Message); Entries = @{} }
+    }
+    if ($null -eq $doc -or $null -eq $doc.clauses) {
+        return @{ Ok = $false; Why = '缺 clauses 字段'; Entries = @{} }
+    }
+    $entries = @{}
+    foreach ($p in $doc.clauses.PSObject.Properties) { $entries[$p.Name] = $p.Value }
+    return @{ Ok = $true; Why = ''; Entries = $entries }
+}
+
+function Test-LedgerFileMatch {
+    <#
+      台账条目的 `file`（仓内相对路径，正斜杠）是不是指着当前被检文件。
+      判据是**后缀匹配**：守卫可以被从任意 cwd、用绝对路径调起来，写死相对路径必然对不上。
+      两侧都归一成正斜杠再比；只比后缀的代价照直写 —— 两份同名文件在不同目录时会误判为同一份，
+      本仓无此形态（11 个源文件名互不相同），有了再收紧。
+    #>
+    param([string]$LedgerPath, [string]$ActualPath)
+    if ([string]::IsNullOrWhiteSpace($LedgerPath)) { return $false }
+    $a = $ActualPath.Replace('\', '/')
+    $b = $LedgerPath.Replace('\', '/')
+    return $a.EndsWith($b)
 }
 
 function Resolve-ClauseDate {
@@ -480,12 +740,16 @@ function Format-Summary {
       恒定输出（通过与失败都打）—— marker 缺席本身就是消费方可判的异常状态。
     #>
     param([int]$ExitCode, [int]$Clauses, [int]$Violations)
-    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5}' `
-        -f $ExitCode, $Clauses, $Violations, $script:SumNoTrig, $script:SumRetire, $script:SumPromote)
+    # v2 三个新字段一律**追加在末尾**：消费方（dao-scaffold-check.js / gen-clause-index.mjs）
+    # 的正则不锚定行尾，追加不会让它们匹配失败 —— 而插在中间会。
+    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8}' `
+        -f $ExitCode, $Clauses, $Violations, $script:SumNoTrig, $script:SumRetire, $script:SumPromote,
+           $script:SumSlugs, $script:SumLedgerState, $script:SumLedgerViol)
 }
 
 function Test-ClausesStructure {
-    param([string[]]$Lines, [object[]]$Records, [object]$Census, [string]$Selector, [hashtable]$WhitelistExcluded)
+    param([string[]]$Lines, [object[]]$Records, [object]$Census, [string]$Selector,
+          [hashtable]$WhitelistExcluded, [hashtable]$Ledger, [bool]$LedgerActive, [string]$TargetPath)
 
     $violations = @()
 
@@ -533,9 +797,12 @@ function Test-ClausesStructure {
     foreach ($c in $Records) {
         $snippet = $c.Text.Substring(0, [Math]::Min(48, $c.Text.Length))
         if (-not $c.HasField) {
+            # **v2 双轨期的例外**：带 slug 且台账里确有这一条 ⇒ n/首次入库/触发点由台账供，
+            # 行内没有它们不是缺陷。台账里没有 ⇒ 由检查 6 的 orphan-slug 报（不在这里重复报）。
+            if ($c.Slug -and $LedgerActive -and $Ledger.ContainsKey($c.Slug)) { continue }
             $violations += [PSCustomObject]@{
                 Type = 'missing-meta-field'; LineNo = $c.LineNo
-                Content = ('缺 [n=… @… 触发:…] 字段（或字段格式不合法）→ ' + $snippet)
+                Content = ('缺 [n=… @… 触发:…] 字段（或字段格式不合法），且没有可回落的台账 slug → ' + $snippet)
             }
             continue
         }
@@ -589,14 +856,18 @@ function Test-ClausesStructure {
     # $WhitelistExcluded 的算法：拿同一个 Get-ClauseRecords **再跑一遍、只把 SectionFilter 清空**，
     # 两次检出的差即"被白名单排除的"。刻意复用同一个函数而不另写一份节遍历：
     # 判据只写一遍，不制造第二处可以单独腐坏的副本。
+    # ⚠ 检出集合的判据必须与普查（Get-ClauseCensus）**同口径**：那边 v2 起数「完整元字段**或**
+    #   slug」，这边只数 HasField 的话，三条「只有 slug」的真条款会被算成「普查看得见而检出没有」
+    #   ⇒ 报成 swallowed-by-section 假阳性（本次改造当场踩到，实测 dao.md 3 条）。
+    #   **两半判据不同才有判别力，口径不同只有假警报** —— 独立的是「怎么走扫描面」，不是「什么算样本」。
     $detected = @{}
-    foreach ($r in $Records) { if ($r.HasField) { $detected[$r.LineNo] = $true } }
+    foreach ($r in $Records) { if ($r.HasField -or $r.SlugCount -gt 0) { $detected[$r.LineNo] = $true } }
     foreach ($line in $Census.Selected) {
         if ($detected.ContainsKey($line.LineNo)) { continue }
         if ($WhitelistExcluded -and $WhitelistExcluded.ContainsKey($line.LineNo)) { continue }
         $violations += [PSCustomObject]@{
             Type = 'swallowed-by-section'; LineNo = $line.LineNo
-            Content = ('该行带完整元字段且合当前选择器（＝条款签名），却未被检出 → 它落在某个 📌 节内。' +
+            Content = ('该行带完整元字段或 slug 且合当前选择器（＝条款签名），却未被检出 → 它落在某个 📌 节内。' +
                        '要么节判定错了，要么条款被写进了 📌 节。' +
                        '样例请包进 ``` 围栏或把取值写成 <占位符> 形态 → ' +
                        $line.Text.Substring(0, [Math]::Min(40, $line.Text.Length)))
@@ -612,6 +883,105 @@ function Test-ClausesStructure {
                 Content = ('带元字段的**缩进**列表项：AllTopLevel 的顶层判据是 `^- `（零缩进），此行永远进不了任何' +
                            '检查与统计（要收编它请改用 -ClauseSelector Marked）→ ' +
                            $line.Text.Substring(0, [Math]::Min(40, $line.Text.Length)))
+            }
+        }
+    }
+
+    # ---- 检查 6：正文 slug ↔ 台账（clause-ledger.json）双向对账 ----------------
+    # 四种命中形态全是**结构错**（指针指向空气 / 台账指着已删条款 / 条款进不了台账 /
+    # 同一个字段两边说的不一样），没有一种需要现场取舍 ⇒ 硬闸。
+    #
+    # **激活判据（不激活时打印一行，不静默跳过）**：本文件有 slug，或台账里有指着本文件的条目。
+    # 两样都没有 ⇒ 这份语料压根不在台账体系里（回归网夹具、别的仓的条款库），此时「零违例」
+    # 是正常态。做成无条件激活的话，每个夹具都会被整本台账判成 orphan-ledger。
+    if ($LedgerActive) {
+        $seen = @{}
+        foreach ($c in $Records) {
+            if ($c.SlugCount -gt 1) {
+                $violations += [PSCustomObject]@{
+                    Type = 'dup-slug'; LineNo = $c.LineNo
+                    Content = ('同一行出现 ' + $c.SlugCount + ' 个 slug —— 关联键必须唯一，否则台账指不到唯一一条')
+                }
+                continue
+            }
+            if (-not $c.Slug) {
+                $violations += [PSCustomObject]@{
+                    Type = 'missing-slug'; LineNo = $c.LineNo
+                    Content = ('本文件已接入台账，而这一条没有 [#<域>-<短名>] ⇒ 台账对它失明 → ' +
+                               $c.Text.Substring(0, [Math]::Min(40, $c.Text.Length)))
+                }
+                continue
+            }
+            if ($seen.ContainsKey($c.Slug)) {
+                $violations += [PSCustomObject]@{
+                    Type = 'dup-slug'; LineNo = $c.LineNo
+                    Content = ('slug [#' + $c.Slug + '] 与行 ' + $seen[$c.Slug] + ' 重名')
+                }
+                continue
+            }
+            $seen[$c.Slug] = $c.LineNo
+            if (-not $Ledger.ContainsKey($c.Slug)) {
+                $violations += [PSCustomObject]@{
+                    Type = 'orphan-slug'; LineNo = $c.LineNo
+                    Content = ('正文写着 [#' + $c.Slug + ']，而台账里没有这一条 —— 指向空气的指针')
+                }
+                continue
+            }
+            $e = $Ledger[$c.Slug]
+            if (-not (Test-LedgerFileMatch -LedgerPath $e.file -ActualPath $TargetPath)) {
+                $violations += [PSCustomObject]@{
+                    Type = 'ledger-file-mismatch'; LineNo = $c.LineNo
+                    Content = ('[#' + $c.Slug + '] 台账记的 file 是 "' + $e.file + '"，而它实际出现在 ' + $TargetPath)
+                }
+            }
+            # ── 双轨对账：**只比行内确实写着的那些字段** ──────────────────────
+            # 行内没写的不参与（那不是「不等」，是「正文没这一栏」）；此时台账侧应为 null，
+            # 台账反而有值 ⇒ 台账替正文编了一个值，同样判红。
+            $pairs = @(
+                @{ Name = 'n';          Mine = $c.N;        Theirs = $e.n },
+                @{ Name = 'first_seen'; Mine = $c.MonthDay; Theirs = $e.first_seen },
+                @{ Name = 'trigger';    Mine = $c.Trigger;  Theirs = $e.trigger },
+                @{ Name = 'baseline';   Mine = $c.Baseline; Theirs = $e.baseline }
+            )
+            foreach ($p in $pairs) {
+                $mine = $p.Mine; $theirs = $p.Theirs
+                if ($null -eq $theirs) { $theirs = $null }
+                if ([string]$mine -ne [string]$theirs) {
+                    $violations += [PSCustomObject]@{
+                        Type = 'ledger-mismatch'; LineNo = $c.LineNo
+                        Content = ('[#' + $c.Slug + '] ' + $p.Name + ' 两轨不等：正文="' + $mine + '" 台账="' + $theirs + '"')
+                    }
+                }
+            }
+            $mineJO = [bool]$c.JudgeOnly
+            $theirJO = [bool]$e.judge_only
+            if ($mineJO -ne $theirJO) {
+                $violations += [PSCustomObject]@{
+                    Type = 'ledger-mismatch'; LineNo = $c.LineNo
+                    Content = ('[#' + $c.Slug + '] judge_only 两轨不等：正文=' + $mineJO + ' 台账=' + $theirJO)
+                }
+            }
+            $mineSelf  = (@($c.SelfDates) -join ',')
+            $theirSelf = (@($e.self_authored) -join ',')
+            if ($mineSelf -ne $theirSelf) {
+                $violations += [PSCustomObject]@{
+                    Type = 'ledger-mismatch'; LineNo = $c.LineNo
+                    Content = ('[#' + $c.Slug + '] self_authored 两轨不等：正文="' + $mineSelf + '" 台账="' + $theirSelf + '"')
+                }
+            }
+        }
+        # 反向：台账有条目、正文找不到它的 slug。**只看指着本文件的那些条目** ——
+        # 守卫一次只看一份文件，拿整本台账去对一份文件必然把别的文件的条款全报成孤儿。
+        foreach ($slug in $Ledger.Keys) {
+            $e = $Ledger[$slug]
+            if ($e.status -eq 'retired') { continue }   # 已退役：正文本就该没有它
+            if (-not (Test-LedgerFileMatch -LedgerPath $e.file -ActualPath $TargetPath)) { continue }
+            if (-not $seen.ContainsKey($slug)) {
+                $violations += [PSCustomObject]@{
+                    Type = 'orphan-ledger'; LineNo = 0
+                    Content = ('台账里有 [#' + $slug + ']（它说自己在 ' + $e.file + '），而正文里找不到这个 slug ' +
+                               '—— 条款被删/改名而台账没跟上；确实要退役请把 status 改成 retired')
+                }
             }
         }
     }
@@ -638,6 +1008,9 @@ Write-Host ("   选择器：{0}{1}" -f $ClauseSelector,
 $script:SumRetire  = 0   # 候选退役区三栏合计（观察线）
 $script:SumPromote = 0   # ⬆ 待升格（观察线）
 $script:SumNoTrig  = 0
+$script:SumSlugs   = 0   # 本文件检出的 slug 数（--reconcile 的第三个对账量）
+$script:SumLedgerState = 'na'   # ok | missing | bad | na（不适用）
+$script:SumLedgerViol  = 0      # 检查 6 命中数（是硬闸的一部分，此处只是它的机器读出端）
 
 $lines = [System.IO.File]::ReadAllLines($targetFile, [System.Text.Encoding]::UTF8)
 # @() 强制数组化：函数输出恰好 1 个对象时 PowerShell 会自动解包成裸标量，裸标量的 .Count
@@ -657,8 +1030,43 @@ if (-not [string]::IsNullOrWhiteSpace($SectionPattern)) {
     }
 }
 
+# ── 台账（v2）：读 + 判激活 ────────────────────────────────────────────────────
+# 激活判据两条**或**关系（见检查 6 注释）：本文件有 slug，或台账里有条目指着本文件。
+# 「台账文件不在」而本文件确有 slug ⇒ 那些 slug 全是指向空气的指针，必须判红（不是跳过）。
+$ledgerDoc = Get-ClauseLedger -Path $ledgerFile
+$ledgerEntries = $ledgerDoc.Entries
+$slugsHere = @($allRecords | Where-Object { $_.SlugCount -gt 0 }).Count
+$script:SumSlugs = @($allRecords | Where-Object { $null -ne $_.Slug }).Count
+$pointedHere = 0
+foreach ($k in $ledgerEntries.Keys) {
+    if (Test-LedgerFileMatch -LedgerPath $ledgerEntries[$k].file -ActualPath $targetFile) { $pointedHere++ }
+}
+$ledgerActive = ($slugsHere -gt 0) -or ($pointedHere -gt 0)
+if (-not $ledgerActive) {
+    $script:SumLedgerState = 'na'
+} elseif ($ledgerDoc.Ok) {
+    $script:SumLedgerState = 'ok'
+} else {
+    $script:SumLedgerState = $(if ($ledgerDoc.Why -eq '不存在') { 'missing' } else { 'bad' })
+}
+
 $violations = @(Test-ClausesStructure -Lines $lines -Records $allRecords -Census $census `
-    -Selector $ClauseSelector -WhitelistExcluded $whitelistExcluded)
+    -Selector $ClauseSelector -WhitelistExcluded $whitelistExcluded `
+    -Ledger $ledgerEntries -LedgerActive ($ledgerActive -and $ledgerDoc.Ok) -TargetPath $targetFile)
+
+# 台账在场却读不了：上面那句把 LedgerActive 关成了 $false（否则整批 slug 会被报成 orphan-slug，
+# 制造一堆假的「条款不存在」）。**但不许因此变绿** —— 这里单独补一条硬闸，说的是真正的病：
+# 台账本身坏了/不在，而正文里有 N 个 slug 正指着它。
+if ($ledgerActive -and -not $ledgerDoc.Ok) {
+    $violations += [PSCustomObject]@{
+        Type = 'ledger-unreadable'; LineNo = 0
+        Content = ('台账读不了：' + $ledgerFile + '（' + $ledgerDoc.Why + '）—— 而正文里有 ' + $slugsHere +
+                   ' 行带 slug 指着它。「读不了」不等于「没问题」。')
+    }
+}
+$script:SumLedgerViol = @($violations | Where-Object {
+    $_.Type -in @('missing-slug', 'orphan-slug', 'orphan-ledger', 'dup-slug', 'ledger-mismatch', 'ledger-file-mismatch', 'ledger-unreadable')
+}).Count
 
 # ---- 统计段（只打印，恒不参与退出码；唯一例外是扫描面自检那一行的三个信号走硬闸）----
 $now = Get-Date
@@ -666,20 +1074,58 @@ $now = Get-Date
 # 而那个数字正是观察区存在的理由。
 $clauses   = @($allRecords | Where-Object { $_.Zone -eq 'clause' })
 $observing = @($allRecords | Where-Object { $_.Zone -eq 'observation' })
+# **v2 起「是不是一条条款」与「有没有行内元字段」是两件事**：台账搬进 ledger 之后，
+# 一条条款可以只有 slug。marker 的 `clauses=` 报的是前者（与 node 侧 stats.clauses 同口径，
+# 否则 --reconcile 恒不一致）；下面那一大段分布统计的基底仍是后者（它们读的是行内字段）。
+# 两个数都打出来，且**先报分母** —— 分母静默变化正是这套检查在治的病。
+$formal    = @($clauses | Where-Object { $_.HasField -or $_.SlugCount -gt 0 })
 $withField = @($clauses | Where-Object { $_.HasField })
 
 Write-Host ''
 Write-Host '---- 条款元字段统计（报告型，不影响退出码；观察区条目不计入本段）----'
 # **先报分母，再报比例。** mousse 侧实测教训：分母从 70 掉到 34 时，「触发:无」占比会从
 # 54.3%「改善」到 38.2%，而当时没有任何一行输出提到分母变了。
-Write-Host ('  扫描面自检：带完整元字段且合选择器的行 {0} 行 → 本次检出 {1} 条（条款区 {2} · 观察区 {3}）' `
+# ⚠ 分子与分母必须同口径。v2 把普查（分母）改成「完整元字段**或** slug」之后，分子若还只数
+#   HasField，两个数就架在不同定义上 —— 而这一行存在的全部意义是**先报分母**。
+#   本次改造当场踩到：只有 slug 的那条让分子比分母少 1，看起来像「有一条被吞了」。
+Write-Host ('  扫描面自检：带完整元字段或 slug 且合选择器的行 {0} 行 → 本次检出 {1} 条（条款区 {2} · 观察区 {3}）' `
     -f $census.Selected.Count,
-       @($allRecords | Where-Object { $_.HasField }).Count,
-       $withField.Count,
-       @($observing | Where-Object { $_.HasField }).Count)
+       @($allRecords | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count,
+       $formal.Count,
+       @($observing | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count)
 $shapeGroups = @($allRecords | Group-Object -Property Shape | Sort-Object Count -Descending)
 Write-Host ('  行形态分布：' + (($shapeGroups | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · ') +
             '　（top=零缩进列表项 · indent=缩进列表项 · prose=散文段落）')
+
+# ── 未闭合反引号游程的可见面（观察线，恒不进退出码）────────────────────────────
+# 2026-08-02 起未闭合游程按**字面文本**处理（判据与反转理由见 Get-MaskedLine 头注）。
+# 那是遮罩规则**唯一**的模糊地带：这类行上的 `[自定@…]` 之类模板字面量会被当成真标记。
+# 旧规则把这一地带处理成「静默吃掉整条」，代价是条款数少一条而退出码不变；新规则把代价
+# 换成「可能多认一个标记」，而多认是**响的**。这一行是那个取舍的显式补偿面 ——
+# 换掉的不该是「一种静默换另一种静默」。
+#
+# **只报同时带条款签名的行**（闸位取舍）：全域分布实测（7 份真实规则文件）——
+# 未闭合游程共 9 行，其中同时带条款签名的只有 1 行 ⇒ 光按「有未闭合游程」报会把
+# 8 行纯散文拖进来，而「生下来就吵的检查一定会被静音」。
+# 走观察线不走硬闸：markdown 写成什么样是作者的判断，不是结构错。
+# 只打行号不打正文：检查器的输出不该落进它自己的扫描面（同 dao-guard-writing 那条）。
+$ambiguousLines = @()
+$inFenceAmb = $false
+for ($i = 0; $i -lt $lines.Count; $i++) {
+    $tAmb = $lines[$i].Trim()
+    if ($tAmb -match '^```') { $inFenceAmb = -not $inFenceAmb; continue }
+    if ($inFenceAmb) { continue }
+    if ((Get-BacktickSpans -Raw $lines[$i]).Unmatched.Count -eq 0) { continue }
+    if (-not ([regex]::IsMatch($lines[$i], $script:LedgerSignaturePattern) -or
+              [regex]::IsMatch($lines[$i], $script:SlugPattern))) { continue }
+    $ambiguousLines += ($i + 1)
+}
+if ($ambiguousLines.Count -gt 0) {
+    Write-Host ('  ⚠ 未闭合反引号游程 + 条款签名同现：{0} 行（行 {1}）' -f `
+        $ambiguousLines.Count, (($ambiguousLines | Sort-Object) -join ', '))
+    Write-Host '     ⇒ 这些行的未闭合反引号按**字面文本**处理；其后若写着 [自定@…]/[基线:…] 形态的'
+    Write-Host '        模板字面量，会被当成真标记计入统计。渲染出来同样是坏 markdown，建议补齐配对或包进围栏。'
+}
 if ($ClauseSelector -eq 'Marked') {
     # Marked 模式弱射程的**可见面**：选择器排除了多少零缩进 bullet。
     # 一份真正的条款库若显示排除了几十行，说明模式选错了（该用 AllTopLevel）。
@@ -706,8 +1152,11 @@ if ($withField.Count -eq 0) {
     $noTrigger = @($withField | Where-Object { $_.Trigger -eq '无' })
     $script:SumNoTrig = $noTrigger.Count
     $pct = [Math]::Round($noTrigger.Count * 100.0 / $withField.Count, 1)
-    Write-Host ("  正式条款 {0} 条；触发:无 {1} 条（{2}%）—— 这批只提供判据、不提供触发点，不宜计入'条款有效性'" `
-        -f $withField.Count, $noTrigger.Count, $pct)
+    Write-Host ("  正式条款 {0} 条（行内元字段 {1} 条 · 仅 slug、台账在 ledger 里 {2} 条）" `
+        -f $formal.Count, $withField.Count, ($formal.Count - $withField.Count))
+    Write-Host ("  ↓ 下面各项分布的分母是**行内元字段那 {0} 条**（它们读的是行内字段，读不到 ledger）" -f $withField.Count)
+    Write-Host ("  触发:无 {0} 条（{1}%）—— 这批只提供判据、不提供触发点，不宜计入'条款有效性'" `
+        -f $noTrigger.Count, $pct)
 
     $byTrigger = $withField | Group-Object -Property Trigger | Sort-Object Count -Descending
     Write-Host ('  触发点分布：' + (($byTrigger | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · '))
@@ -755,6 +1204,37 @@ if ($withField.Count -eq 0) {
     Write-AgedBucket -Max $RetireListMax -Items $retireNq `
         -Header ("候选退役区（n=? 且入库 >{0} 天）" -f $RetireAgeDays) `
         -Note 'n=? 是「未标次数、不等于零次」⇒ 第一步是**回填 n** 不是删；回填后它会落回 n=0/n=1 或 n>=2'
+}
+
+# ---- 台账对账统计（v2 · 观察线；判红那部分由检查 6 走硬闸）--------------------
+Write-Host '---- 条款台账（clause-ledger.json；报告型，判红部分见上面的硬闸）----'
+if (-not $ledgerActive) {
+    Write-Host ('  台账对账不适用：本文件零 slug，台账里也没有指着它的条目（台账 {0}）。' -f `
+        $(if ($ledgerDoc.Ok) { '可读' } else { $ledgerDoc.Why }))
+    Write-Host '  （这一行刻意存在：静默跳过与「查了且没事」在输出上不可区分。）'
+} elseif (-not $ledgerDoc.Ok) {
+    Write-Host ('  ✗ 台账读不了：{0}（{1}）—— 正文里有 {2} 行带 slug 指着它，已判红。' -f $ledgerFile, $ledgerDoc.Why, $slugsHere)
+} else {
+    Write-Host ('  本文件 slug {0} 个 · 台账里指向本文件的条目 {1} 条 · 台账总条数 {2}' -f `
+        $script:SumSlugs, $pointedHere, $ledgerEntries.Count)
+    # 台账不全（有 slug、缺 n/首次入库/触发点）：**观察线不是闸**。回填还是承认未知是判断，
+    # 做成硬闸只会逼出「为过闸而编一个数字」，比不填更糟。
+    $incomplete = @()
+    foreach ($k in ($ledgerEntries.Keys | Sort-Object)) {
+        $e = $ledgerEntries[$k]
+        if ($e.status -eq 'retired') { continue }
+        if (-not (Test-LedgerFileMatch -LedgerPath $e.file -ActualPath $targetFile)) { continue }
+        if ([string]::IsNullOrEmpty([string]$e.n) -or [string]::IsNullOrEmpty([string]$e.first_seen) -or
+            [string]::IsNullOrEmpty([string]$e.trigger)) { $incomplete += $k }
+    }
+    if ($incomplete.Count -gt 0) {
+        Write-Host ('  ⓘ 台账不全 {0} 条（有 slug、缺 n/首次入库/触发点）：{1}' -f $incomplete.Count, ($incomplete -join ' · '))
+        Write-Host '     这批正是 v1 选择器结构上看不见的那种（带 [基线:]/[自定@] 却无 [n= @ 触发:] 签名）。'
+        Write-Host '     搬录时**刻意不替未知编一个值**；处置是回填还是承认未知，那是判断，故走观察线。'
+    } else {
+        Write-Host '  台账不全：0 条'
+    }
+    Write-Host '  ⚠ 本闸判不了台账里的**数字对不对**（同 `触发:` 取值真伪），只保证两边说的是同一句话。'
 }
 
 # ---- 观察区统计（观察线）----------------------------------------------------
@@ -830,11 +1310,14 @@ if ($violations.Count -gt 0) {
     foreach ($v in $violations) {
         Write-Host ("  - [{0}] 行 {1}：{2}" -f $v.Type, $v.LineNo, $v.Content)
     }
-    Write-Host (Format-Summary -ExitCode 1 -Clauses $withField.Count -Violations $violations.Count)
+    Write-Host (Format-Summary -ExitCode 1 -Clauses $formal.Count -Violations $violations.Count)
     exit 1
 }
 
-Write-Host 'OK：焊接签名零命中、条款元字段零缺失、[观察中] 标记与所在区一致、扫描面无塌陷（零吞没·样本非空）。'
+Write-Host ('OK：焊接签名零命中、条款元字段零缺失、[观察中] 标记与所在区一致、扫描面无塌陷（零吞没·样本非空）' +
+            $(if ($ledgerActive -and $ledgerDoc.Ok) { '、正文 slug 与台账双向零孤儿且双轨零不等。' } else { '。' }))
 Write-Host '     未覆盖面（照直写，别把这行 OK 读成"条款库没问题"）：`触发:` 取值真伪本闸判不了；'
-Write-Host '     整条条款被删掉时两侧同时少一行、集合差仍为 0，检查 5 看不见；Marked 模式另检不出「整条丢字段」。'
-Write-Host (Format-Summary -ExitCode 0 -Clauses $withField.Count -Violations 0)
+Write-Host '     台账里的数字对不对同样判不了（检查 6 只保证两边说的是同一句话）；'
+Write-Host '     条款与台账条目**一起**被删掉时两侧同时少一行、集合差仍为 0，检查 5/6 都看不见；'
+Write-Host '     Marked 模式另检不出「整条丢字段且无 slug」。'
+Write-Host (Format-Summary -ExitCode 0 -Clauses $formal.Count -Violations 0)

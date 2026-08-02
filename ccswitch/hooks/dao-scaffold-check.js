@@ -150,7 +150,12 @@ function clauseTargets(daoRoot) {
   let withClauses = 0;
   for (const n of names.sort()) {
     let hit = false;
-    try { hit = /\[n=/.test(fs.readFileSync(path.join(dir, n), "utf8")); } catch { hit = false; }
+    // v2（批 2 · 台账搬家）：判据从 `[n=` 扩到「台账字段**或**行内 slug」。
+    // 台账搬进 clause-ledger.json 之后，一条条款可以只有 `[#…]` 而没有 `[n=` ——
+    // 仍按 `[n=` 筛的话，那种文件会**整份从被检清单里消失**，而消失是静默的
+    // （正是本函数上面那段注释说的那个代价，只是换了触发方式）。
+    try { hit = /\[n=|\[基线:|\[自定@|\[#[^\]\s]+\]/.test(fs.readFileSync(path.join(dir, n), "utf8")); }
+    catch { hit = false; }
     if (hit) { targets.push(path.join("ccswitch", "rules", n)); withClauses++; }
   }
   return { targets, total: names.length, withClauses };

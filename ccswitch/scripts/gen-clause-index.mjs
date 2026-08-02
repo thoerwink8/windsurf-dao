@@ -23,11 +23,23 @@
 //   ③ **PS 宿主不在 ⇒ exit 2，不是 exit 0。** 「跑不了」必须与「跑了且一致」分得开；
 //      把它悄悄当成通过，等于亲手造一个死闸。
 //
+// ── v2（批 2 · 台账搬家）加了什么 ────────────────────────────────────────────
+// 台账字段的真相源搬进 `ccswitch/clause-ledger.json`，正文只持一个行内 slug `[#<域>-<短名>]`。
+// 于是本脚本多做一件事：**正文 ↔ 台账的双向孤儿检测 + 双轨值对账**（判据在 clause-parser 的
+// `reconcileLedger`）。它是**硬闸**——四种命中形态全是结构错（指针指向空气 / 台账指着已删条款 /
+// 条款进不了台账 / 同一个字段两边说的不一样），没有一种需要现场取舍。
+//
+// **台账检查按源逐份激活，不一刀切**：守卫要能跑在任意语料上（回归网夹具、别的仓的条款库），
+// 而那些语料一个 slug 都没有、台账里也没有指着它们的条目 —— 此时「零 slug」是正常态不是违规。
+// 判据：**这份源有 slug，或台账里有指着它的条目 ⇒ 台账检查对它生效**；两样都没有 ⇒ 打印一行
+// 「不适用」（**不静默跳过**：静默跳过与「查了没事」在输出上不可区分，那正是本仓反复在治的病）。
+//
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
 //   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1>
-//   对账：    CLAUSE_RECONCILE_SUMMARY exit=<n> host=<powershell|pwsh|none> files=<n> matched=<n> mismatched=<n> mine=<n> theirs=<n>
+//   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n>
+//   对账：    CLAUSE_RECONCILE_SUMMARY exit=<n> host=<powershell|pwsh|none> files=<n> matched=<n> mismatched=<n> mine=<n> theirs=<n> myslugs=<n> theirslugs=<n>
 //   **每条路径都打印**（含失败路径）：只在成功时打摘要，等于让「没查成」在机器通道上
-//   表现为「什么都没说」。
+//   表现为「什么都没说」。新字段一律**追加在末尾**，消费方按字段名取值（老正则照旧匹配得上）。
 
 import fs from "node:fs";
 import path from "node:path";
@@ -39,14 +51,18 @@ import {
   serializeIndex,
   defaultSources,
   DEFAULT_INDEX_REL,
+  DEFAULT_LEDGER_REL,
   SELECTOR,
   parseFile,
   normalizeText,
+  loadLedger,
+  reconcileLedger,
 } from "../lib/clause-parser.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const PS_SCRIPT_DEFAULT = path.join(REPO_ROOT, "ccswitch", "scripts", "check-clauses-structure.ps1");
+const LEDGER_DEFAULT = path.join(REPO_ROOT, DEFAULT_LEDGER_REL);
 
 // ── 参数 ─────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -55,6 +71,7 @@ function parseArgs(argv) {
     out: null,
     sourcesJson: null,
     psScript: PS_SCRIPT_DEFAULT,
+    ledger: LEDGER_DEFAULT,
     quiet: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -64,6 +81,7 @@ function parseArgs(argv) {
     else if (a === "--out") o.out = argv[++i];
     else if (a === "--sources-json") o.sourcesJson = argv[++i];
     else if (a === "--ps-script") o.psScript = argv[++i];
+    else if (a === "--ledger") o.ledger = argv[++i];
     else if (a === "--quiet") o.quiet = true;
     else if (a === "--help" || a === "-h") o.mode = "help";
     else {
@@ -101,8 +119,133 @@ function outPath(o) {
   return path.join(REPO_ROOT, DEFAULT_INDEX_REL);
 }
 
+// ── 台账（clause-ledger.json）双向对账 ───────────────────────────────────────
+function ledgerSummary(f) {
+  return `CLAUSE_LEDGER_SUMMARY exit=${f.exit} state=${f.state} entries=${f.entries} slugs=${f.slugs}` +
+    ` missing_slug=${f.missing_slug} orphan_slug=${f.orphan_slug} orphan_ledger=${f.orphan_ledger}` +
+    ` dup_slug=${f.dup_slug} mismatch=${f.mismatch} file_mismatch=${f.file_mismatch} out_of_scope=${f.out_of_scope}`;
+}
+
+function runLedgerCheck(o, sources, parsedBySource) {
+  // `--quiet` 只压**汇报型**输出（下面的 `note`）；违规明细与末行 marker 永远打 ——
+  // 一次什么都不说的失败，正是这套东西在治的病。
+  const write = (s) => process.stdout.write(s + "\n");
+  const note = (s) => { if (!o.quiet) process.stdout.write(s + "\n"); };
+  const scope = sources.map((s) => s.file);
+  const records = [];
+  for (const s of sources) {
+    const p = parsedBySource.get(s.file);
+    if (p) records.push(...p.clauses, ...p.observation);
+  }
+  const slugsInText = records.filter((r) => r.slug || (r.slugs && r.slugs.length)).length;
+
+  const led = loadLedger(path.isAbsolute(o.ledger) ? o.ledger : path.join(process.cwd(), o.ledger));
+  const entries = Object.keys(led.clauses).length;
+  const pointedHere = Object.values(led.clauses).filter((e) => e && scope.includes(e.file)).length;
+
+  // 激活判据：正文里有 slug，或台账里有指着本批源的条目。两样都没有 ⇒ 不适用（**打印，不静默**）。
+  if (slugsInText === 0 && pointedHere === 0) {
+    note("ⓘ 台账对账不适用：本批语料零 slug，且 " + (led.ok ? "台账里也没有指着它们的条目" : "台账不可用（" + led.why + "）") + "。");
+    note("   （这一行刻意存在：静默跳过与「查了且没事」在输出上不可区分。）");
+    const f = {
+      exit: 0, state: "na", entries, slugs: 0, missing_slug: 0, orphan_slug: 0,
+      orphan_ledger: 0, dup_slug: 0, mismatch: 0, file_mismatch: 0, out_of_scope: 0,
+    };
+    write(ledgerSummary(f));
+    return 0;
+  }
+  if (!led.ok) {
+    write("✗ 台账读不了：" + led.path + "（" + led.why + "）—— 而正文里有 " + slugsInText + " 个 slug 指着它。");
+    write("   「读不了」不等于「没问题」：那些 slug 现在全是指向空气的指针。");
+    const f = {
+      exit: 1, state: led.why === "不存在" ? "missing" : "bad", entries: 0, slugs: slugsInText,
+      missing_slug: 0, orphan_slug: slugsInText, orphan_ledger: 0, dup_slug: 0, mismatch: 0,
+      file_mismatch: 0, out_of_scope: 0,
+    };
+    write(ledgerSummary(f));
+    return 1;
+  }
+
+  const r = reconcileLedger(records, led, scope);
+  // `out_of_scope` 的闸位取舍：跑**自带源清单**（`--sources-json`，回归网/临时语料）时它是常态，
+  // 只打印；跑**默认清单**时它意味着「台账里有一条指着一份没人在扫的文件」⇒ 判红。
+  const strict = !o.sourcesJson;
+  const hard =
+    r.missingSlug.length + r.orphanSlug.length + r.orphanLedger.length +
+    r.dupSlug.length + r.mismatch.length + r.fileMismatch.length +
+    (strict ? r.outOfScope.length : 0);
+
+  const show = (label, rows, fmt) => {
+    if (!rows.length) return;
+    write("  ✗ " + label + "：" + rows.length + " 条");
+    for (const x of rows.slice(0, 12)) write("      · " + fmt(x));
+    if (rows.length > 12) write("      · …另 " + (rows.length - 12) + " 条");
+  };
+  note("== 条款台账双向对账（正文 slug ↔ ccswitch/clause-ledger.json）==");
+  show("正文是条款却没有 slug（台账对它失明）", r.missingSlug, (x) => `${x.file}:${x.line} ${x.title}`);
+  show("slug 重复 / 一行多个", r.dupSlug, (x) => `${x.file}:${x.line} [#${x.slug}] —— ${x.why}`);
+  show("正文有 slug 而台账无此条（指向空气的指针）", r.orphanSlug, (x) => `${x.file}:${x.line} [#${x.slug}]`);
+  show("台账有条目而正文找不到它（条款被删/改名而台账没跟上）", r.orphanLedger, (x) => `[#${x.slug}] 台账说它在 ${x.file}`);
+  show("台账记的 file 与 slug 实际所在文件不符", r.fileMismatch, (x) => `[#${x.slug}] 正文在 ${x.inText}，台账写 ${x.inLedger}`);
+  show("双轨值不等（行内元字段 vs 台账）", r.mismatch,
+    (x) => `${x.file}:${x.line} [#${x.slug}] ${x.field}：正文=${JSON.stringify(x.inText)} 台账=${JSON.stringify(x.inLedger)}`);
+  if (r.outOfScope.length) {
+    write((strict ? "  ✗ " : "  ⓘ ") + "台账条目指向本批扫描面之外的文件：" + r.outOfScope.length + " 条" +
+      (strict ? "（跑默认源清单时这是红：那条条款没有任何守卫在看）" : "（自带源清单，属常态）"));
+    for (const x of r.outOfScope.slice(0, 12)) write("      · [#" + x.slug + "] → " + x.file);
+  }
+
+  const f = {
+    exit: hard > 0 ? 1 : 0, state: "ok", entries, slugs: r.checked,
+    missing_slug: r.missingSlug.length, orphan_slug: r.orphanSlug.length,
+    orphan_ledger: r.orphanLedger.length, dup_slug: r.dupSlug.length,
+    mismatch: r.mismatch.length, file_mismatch: r.fileMismatch.length,
+    out_of_scope: r.outOfScope.length,
+  };
+  if (hard === 0) {
+    note("  ✓ " + r.checked + " 条 slug 与台账逐条对上，双轨零不等（台账 " + entries + " 条）。");
+    note("     它证不了的：台账里的**数字对不对**本闸判不了（同 `触发:` 取值真伪），只保证两边说的是同一句话。");
+  }
+  // 台账不全（n/first_seen/trigger 为 null）是**观察线**不是闸：回填还是承认未知，是判断。
+  const incomplete = Object.entries(led.clauses)
+    .filter(([, e]) => e && e.status !== "retired" && (!e.n || !e.first_seen || !e.trigger));
+  if (incomplete.length) {
+    note("  ⓘ 台账不全 " + incomplete.length + " 条（有 slug、缺 n/首次入库/触发点）—— 观察线，不进退出码：" +
+      incomplete.map(([k]) => "[#" + k + "]").join(" · "));
+    note("     这几条正是 v1 选择器结构上看不见的那批（带 [基线:]/[自定@] 却无 [n= @ 触发:] 签名）。");
+    note("     处置是**回填还是承认未知**——那是判断，不设闸；搬录时刻意不替未知编一个值。");
+  }
+  write(ledgerSummary(f));
+  return f.exit;
+}
+
 // ── 生成 / 校验 ──────────────────────────────────────────────────────────────
+// 索引漂移与台账对账是**两个独立信号**，各打各的末行、退出码取严的那个：
+// 「索引没跟上」与「台账对不上」是两种病、两种处方，并成一个数就分不开了。
 function runIndex(o) {
+  const indexCode = runIndexCore(o);
+  let ledgerCode = 0;
+  try {
+    const sources = loadSources(o);
+    const parsed = new Map();
+    for (const s of sources) {
+      const abs = path.isAbsolute(s.file) ? s.file : path.join(REPO_ROOT, s.file);
+      if (!fs.existsSync(abs)) continue; // 源缺席已由 runIndexCore 报过，这里不重复报
+      parsed.set(s.file, parseFile(abs, { file: s.file, selector: s.selector, roleScheme: s.role_scheme }));
+    }
+    ledgerCode = runLedgerCheck(o, sources, parsed);
+  } catch (e) {
+    process.stdout.write("✗ 台账对账抛错：" + (e && e.message ? e.message : String(e)) + "\n");
+    process.stdout.write(ledgerSummary({
+      exit: 1, state: "bad", entries: 0, slugs: 0, missing_slug: 0, orphan_slug: 0,
+      orphan_ledger: 0, dup_slug: 0, mismatch: 0, file_mismatch: 0, out_of_scope: 0,
+    }) + "\n");
+    ledgerCode = 1;
+  }
+  return Math.max(indexCode, ledgerCode);
+}
+
+function runIndexCore(o) {
   const sources = loadSources(o);
   const target = outPath(o);
   let index;
@@ -225,16 +368,20 @@ function runPs(host, script, file, selector) {
   );
   const out = String(r.stdout || "");
   const m = /CLAUSE_STRUCTURE_SUMMARY exit=(\d+) clauses=(\d+) violations=(\d+) notrigger=(\d+)/.exec(out);
+  // v2 追加字段单独取：**用独立正则、允许缺席**，这样对方是老版本时能报出「对方没有 slugs 这一栏」，
+  // 而不是整条 marker 匹配失败、退化成「对方没给末行」那种什么都看不出来的状态。
+  const sm = /\bslugs=(\d+)/.exec(out);
   return {
     code: r.status,
-    marker: m ? { exit: +m[1], clauses: +m[2], violations: +m[3], notrigger: +m[4] } : null,
+    marker: m ? { exit: +m[1], clauses: +m[2], violations: +m[3], notrigger: +m[4], slugs: sm ? +sm[1] : null } : null,
     out,
     err: String(r.stderr || ""),
   };
 }
 
-function reconcileSummary({ exit, host, files, matched, mismatched, mine, theirs }) {
-  return `CLAUSE_RECONCILE_SUMMARY exit=${exit} host=${host} files=${files} matched=${matched} mismatched=${mismatched} mine=${mine} theirs=${theirs}`;
+function reconcileSummary({ exit, host, files, matched, mismatched, mine, theirs, myslugs, theirslugs }) {
+  return `CLAUSE_RECONCILE_SUMMARY exit=${exit} host=${host} files=${files} matched=${matched}` +
+    ` mismatched=${mismatched} mine=${mine} theirs=${theirs} myslugs=${myslugs || 0} theirslugs=${theirslugs || 0}`;
 }
 
 function runReconcile(o) {
@@ -264,7 +411,7 @@ function runReconcile(o) {
   process.stdout.write(`   我方：ccswitch/lib/clause-parser.mjs      对方：${path.basename(o.psScript)}（${host}）\n`);
 
   const rows = [];
-  let matched = 0, mismatched = 0, mine = 0, theirs = 0, missingSrc = 0;
+  let matched = 0, mismatched = 0, mine = 0, theirs = 0, missingSrc = 0, mySlugs = 0, theirSlugs = 0;
   for (const s of sources) {
     const abs = path.isAbsolute(s.file) ? s.file : path.join(REPO_ROOT, s.file);
     if (!fs.existsSync(abs)) {
@@ -293,13 +440,20 @@ function runReconcile(o) {
     }
     mine += parsed.stats.clauses;
     theirs += ps.marker.clauses;
+    mySlugs += parsed.stats.slug;
+    theirSlugs += ps.marker.slugs === null ? 0 : ps.marker.slugs;
     const okClauses = parsed.stats.clauses === ps.marker.clauses;
     const okNoTrig = parsed.stats.no_trigger === ps.marker.notrigger;
-    if (okClauses && okNoTrig) {
+    // v2 第三个对账量：**slug 数**。加它是因为前两个数对 slug 这一层完全失明 ——
+    // 一边把 slug 判据写坏（比如漏了代码 span 遮罩、或 slug 正则收窄），条款数与触发:无
+    // 可以逐字不变，而 slug 数当场分岔。`null` = 对方是老版本、根本没这一栏，那要单独说，
+    // 不能当成 0 去比（0==0 会给出一个假的一致）。
+    const okSlug = ps.marker.slugs !== null && parsed.stats.slug === ps.marker.slugs;
+    if (okClauses && okNoTrig && okSlug) {
       matched++;
       rows.push({
         file: s.file, state: "一致",
-        detail: `条款 ${parsed.stats.clauses} · 触发:无 ${parsed.stats.no_trigger} · 对方硬闸 exit=${ps.marker.exit}`,
+        detail: `条款 ${parsed.stats.clauses} · 触发:无 ${parsed.stats.no_trigger} · slug ${parsed.stats.slug} · 对方硬闸 exit=${ps.marker.exit}`,
       });
     } else {
       mismatched++;
@@ -307,7 +461,8 @@ function runReconcile(o) {
         file: s.file, state: "不一致",
         detail:
           `条款 我方 ${parsed.stats.clauses} vs 对方 ${ps.marker.clauses}；` +
-          `触发:无 我方 ${parsed.stats.no_trigger} vs 对方 ${ps.marker.notrigger}` +
+          `触发:无 我方 ${parsed.stats.no_trigger} vs 对方 ${ps.marker.notrigger}；` +
+          `slug 我方 ${parsed.stats.slug} vs 对方 ${ps.marker.slugs === null ? "（对方末行没有 slugs 栏 ⇒ 它还是 v1）" : ps.marker.slugs}` +
           `（对方硬闸 exit=${ps.marker.exit}）`,
       });
     }
@@ -334,7 +489,7 @@ function runReconcile(o) {
     process.stdout.write("   **不判谁对**：两套实现之一瞎了，判哪一套是人的活。先读上面的差异，再去看那份语料的 diff。\n");
   }
   process.stdout.write(
-    reconcileSummary({ exit, host, files: sources.length, matched, mismatched, mine, theirs }) + "\n"
+    reconcileSummary({ exit, host, files: sources.length, matched, mismatched, mine, theirs, myslugs: mySlugs, theirslugs: theirSlugs }) + "\n"
   );
   return exit;
 }
@@ -353,7 +508,8 @@ if (opts.mode === "help") {
       "  --sources-json <path>  用自带的源清单（JSON 数组或 {sources:[…]}），可指仓外语料",
       "  --out <path>           输出到别处（默认 ccswitch/clause-index.json）",
       "  --ps-script <path>     对账用的第二套解析（默认本仓 ccswitch/scripts/check-clauses-structure.ps1）",
-      "  --quiet                只打末行",
+      "  --ledger <path>        条款台账（默认 ccswitch/clause-ledger.json）；生成/校验时一并双向对账",
+      "  --quiet                只打末行（违规明细仍打——一次什么都不说的失败是这套东西在治的病）",
       "",
       "索引是**派生物**：真相源是 Markdown 原文，改索引不会改变任何行为。",
     ].join("\n") + "\n"

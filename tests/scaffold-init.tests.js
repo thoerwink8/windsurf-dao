@@ -55,11 +55,16 @@ function w(root, rel, content) {
   fs.writeFileSync(p, content, "utf8");
 }
 // 让一个沙箱项目满足**全部 universal 条目**，好让后续断言只反映被测的那一维。
+// 2026-08-02：CLAUDE.md 里补了**负向自我声明**——`product-type-answered` 上线后，
+// 「这道必答题一个字都没答」本身就是一条 universal 缺项，不补的话这个夹具不再叫「齐备」，
+// 而下面那条「未声明产品型 → exit 0」验的就不再是它本来要验的东西了。
+// 判据词从 lib 实读、不硬编：写死那六个字会在负向串改动时静默过期。
 function mkCleanProj(name, extra) {
+  const neg = M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains.text;
   return mkproj(name, (root) => {
     fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
     w(root, ".gitignore", "**/_tmp/\nnode_modules/\n");
-    w(root, "CLAUDE.md", "# 某项目\n\n- 一条项目铁律\n");
+    w(root, "CLAUDE.md", `# 某项目\n\n本仓是**${neg}**。\n\n- 一条项目铁律\n`);
     if (extra) extra(root);
   });
 }
@@ -116,17 +121,33 @@ if (tplRaw !== null) {
   // 自我声明恰好一次：说明文字里若把那五个字再写一遍，**注释本身就会把开关打开**，
   // 于是「删掉那一行」这个动作失效——而它看起来完全正常。判据词从 lib 实读，不硬编。
   const decl = M.PRODUCT_TYPE_WHEN.fileContains.text;
+  const neg = M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains.text;
   const declCount = tplRaw.split(decl).length - 1;
   check(`骨架里自我声明「${decl}」恰好出现 1 次（说明文字里再写一遍 = 注释自己把开关打开）`,
     declCount === 1, "count=" + declCount);
 
+  // 负向串（2026-08-02）：骨架**必须**写出它的原文——那是给人抄的答案，不给就等于没告诉人
+  // 「不是」怎么答；但它只准活在注释里。两条一起才夹得住：**注释是施工说明，正文才是答案**。
+  // 反向若让它落进正文，骨架就同时写了两个答案（按「是」处理，而人会以为自己答了「不是」）。
+  const negCount = tplRaw.split(neg).length - 1;
+  const tplLive = tplRaw.replace(/<!--[\s\S]*?-->/g, "");
+  check(`骨架里负向串「${neg}」恰好出现 1 次（不给原文 = 没告诉人「不是」怎么答）`,
+    negCount === 1, "count=" + negCount);
+  check("负向串只出现在注释里、正向串留在正文（删掉全部注释后：正向在、负向不在）",
+    tplLive.indexOf(decl) !== -1 && tplLive.indexOf(neg) === -1,
+    `live 含正向=${tplLive.indexOf(decl) !== -1} live 含负向=${tplLive.indexOf(neg) !== -1}`);
+
   // 其余以 CLAUDE.md 为判据面的触发词：骨架里必须 0 次。
   // 清单里已有一条 dispatch-hub-playbook 用 CLAUDE.md 子串当 when —— 骨架若顺手写了那几个字，
   // 每个新项目一落地就会被报「缺 DISPATCH-HUB.md」。判据面从清单**遍历**得出，不靠人记。
+  // **两个答案串按值排除**（不是按条目 id 排除）：骨架必然含它们，那是这道必答题的答案词汇本身，
+  // 而不是「误触别的条目」。排除面刻意收到这两个值——按 id 排除会把该条目将来新增的其他
+  // 判据面一起放过去，那是把豁免开大。
+  const answerTexts = new Set([decl, neg]);
   const otherTexts = [];
   (function walk(node) {
     if (!node || typeof node !== "object") return;
-    if (node.fileContains && node.fileContains.path === "CLAUDE.md" && node.fileContains.text !== decl) {
+    if (node.fileContains && node.fileContains.path === "CLAUDE.md" && !answerTexts.has(node.fileContains.text)) {
       otherTexts.push(node.fileContains.text);
     }
     for (const k of Object.keys(node)) {
@@ -145,7 +166,7 @@ console.log("\n=== ② dao-scaffold-report 退出码三态（0 / 1 / 2 两两区
 {
   const proj = mkCleanProj("clean-internal-tool");
   const r = run(proj);
-  check("全部 universal 齐备且未声明产品型 → exit 0", r.code === 0, "code=" + r.code + " out=" + r.out.slice(-400));
+  check("全部 universal 齐备且答了「内部工具」→ exit 0", r.code === 0, "code=" + r.code + " out=" + r.out.slice(-400));
   check("exit 0 也打印汇总行（缺了就没法机器判「跑过」）", !!r.sum && r.sum.exit === 0 && r.sum.findings === 0,
     "sum=" + JSON.stringify(r.sum));
 }
@@ -233,16 +254,40 @@ console.log("\n=== ③ product-type 触发闭环：三态（不存在 → 物化
   check("态二附 · 骨架落地后不再报「缺少 CLAUDE.md」，也不撞行数闸",
     !after.includes("claude-md") && !after.includes("claude-md-size"), "after=" + JSON.stringify(after));
 
-  // 态三：答「内部工具」——删掉那一行（骨架里的处置方式）
+  // 态三：答「内部工具」——把那一行**换成负向声明**（2026-08-02 起的处置方式；
+  // 旧处方是删掉那一行，而删完之后「答了，不是」与「从没答过」在机器侧逐字节相同）。
   const decl = M.PRODUCT_TYPE_WHEN.fileContains.text;
-  const stripped = fs.readFileSync(path.join(proj, "CLAUDE.md"), "utf8")
-    .split(/\r?\n/).filter((l) => l.indexOf(decl) === -1).join("\n");
-  fs.writeFileSync(path.join(proj, "CLAUDE.md"), stripped, "utf8");
-  const afterStrip = M.evaluate(REAL, proj).map((f) => f.id);
-  check("态三 · 删掉声明行（答「内部工具」）→ product-type 那一档又全部消失",
-    PT_IDS.every((id) => !afterStrip.includes(id)), "afterStrip=" + JSON.stringify(afterStrip));
-  check("态三附 · 删的只是那一档，CLAUDE.md 本身仍算齐备（没把骨架删坏）",
-    !afterStrip.includes("claude-md"), "afterStrip=" + JSON.stringify(afterStrip));
+  const neg = M.PRODUCT_TYPE_NEGATIVE_WHEN.fileContains.text;
+  const negText = fs.readFileSync(path.join(proj, "CLAUDE.md"), "utf8")
+    .split(/\r?\n/).map((l) => (l.indexOf(decl) !== -1 ? `本仓是**${neg}**。` : l))
+    .join("\n")
+    .replace(/<!--[\s\S]*?-->/g, "");   // 骨架说「答完把注释删掉」——负向串的原文就在注释里
+  fs.writeFileSync(path.join(proj, "CLAUDE.md"), negText, "utf8");
+  const afterNeg = M.evaluate(REAL, proj).map((f) => f.id);
+  check("态三 · 换成负向声明（答「内部工具」）→ product-type 那一档又全部消失",
+    PT_IDS.every((id) => !afterNeg.includes(id)), "afterNeg=" + JSON.stringify(afterNeg));
+  check("态三附 · 换的只是那一档，CLAUDE.md 本身仍算齐备（没把骨架改坏）",
+    !afterNeg.includes("claude-md"), "afterNeg=" + JSON.stringify(afterNeg));
+  // 承重的一条：**答了「不是」不该被当成「没答」**。删注释是骨架自己教的动作，
+  // 若负向串只活在注释里，照着骨架做完的项目会被本条永久唠叨——那就是给正确答案造噪音。
+  check("态三附 · 答了「不是」⇒ 必答题条目**不**报（正确答案不该被当成没答）",
+    !afterNeg.includes("product-type-answered"), "afterNeg=" + JSON.stringify(afterNeg));
+
+  // 态四：**一个都不答**（旧处方的结果，也是所有成文于该机制之前的存量项目的现状）
+  // ⇒ 必答题条目必须报，且 product-type 那一档仍然不查。
+  // 这一态是本批（2026-08-02 审计第 2 件）的承重断言：它与态三合起来才证明
+  // 「答了，不是」与「从没答过」**分得开**——只验其中一态，两个方向都夹不住。
+  const noneText = negText.split(/\r?\n/).filter((l) => l.indexOf(neg) === -1).join("\n");
+  fs.writeFileSync(path.join(proj, "CLAUDE.md"), noneText, "utf8");
+  const afterNone = M.evaluate(REAL, proj).map((f) => f.id);
+  check("态四 · 两个串都没有（存量项目现状）→ 必答题条目报出",
+    afterNone.includes("product-type-answered"), "afterNone=" + JSON.stringify(afterNone));
+  check("态四附 · 没答 ⇒ product-type 那一档仍不查（必答题不改开关语义，只让「没答」可见）",
+    PT_IDS.every((id) => !afterNone.includes(id)), "afterNone=" + JSON.stringify(afterNone));
+  check("态二回看 · 答「是」时必答题条目也不报（三态里唯一会报的是态四）",
+    !after.includes("product-type-answered"), "after=" + JSON.stringify(after));
+  check("态四附 · 连 CLAUDE.md 都没有的空仓不报必答题（那由 claude-md 条目管，两条一起报是重复噪音）",
+    !before.includes("product-type-answered"), "before=" + JSON.stringify(before));
 }
 
 // ══════════════════════════════════════════════════════════════════════════

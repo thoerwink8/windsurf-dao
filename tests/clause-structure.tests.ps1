@@ -45,13 +45,39 @@ function New-Fixture {
 function Invoke-Checker {
     <# 跑一次守卫，返回 @{ Exit; Text }。**判成败只看 $LASTEXITCODE**，不看输出文案
        （中文 ErrorRecord 的「所在位置 行:X」不是真错）。 #>
-    param([string]$File, [string]$Selector = 'Marked', [string]$Section = '', [int]$RetireAgeDays = 21, [int]$RetireListMax = 3)
+    param([string]$File, [string]$Selector = 'Marked', [string]$Section = '', [int]$RetireAgeDays = 21,
+          [int]$RetireListMax = 3, [string]$Ledger = '')
     $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Checker,
               '-TargetFile', $File, '-ClauseSelector', $Selector,
               '-RetireAgeDays', $RetireAgeDays, '-RetireListMax', $RetireListMax)
     if (-not [string]::IsNullOrWhiteSpace($Section)) { $args += @('-SectionPattern', $Section) }
+    if (-not [string]::IsNullOrWhiteSpace($Ledger)) { $args += @('-LedgerFile', $Ledger) }
     $out = & powershell @args
     return @{ Exit = $LASTEXITCODE; Text = ($out -join "`n") }
+}
+
+function New-LedgerFile {
+    <# 写一份合成台账（UTF-8 无 BOM，同 New-Fixture 的理由：被读方显式按 UTF8 解码）。
+       $Entries 是 slug → hashtable；file 字段由调用方给（守卫按**后缀**匹配，给文件名即可）。 #>
+    param([hashtable]$Entries)
+    $script:FixtureSeq++
+    $p = Join-Path $TmpRoot ("ledger-{0}.json" -f $script:FixtureSeq)
+    $doc = [ordered]@{ schema_version = 1; clauses = [ordered]@{} }
+    foreach ($k in $Entries.Keys) { $doc.clauses[$k] = $Entries[$k] }
+    # ConvertTo-Json 的 -Depth 默认 2，嵌套两层就会被截成 "System.Collections.Hashtable" 字符串
+    # 而**不报错** —— 那正好是这套东西在治的静默失败，故显式给 6。
+    [System.IO.File]::WriteAllText($p, ($doc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    return $p
+}
+
+function New-LedgerEntry {
+    param([string]$File, $N = $null, $FirstSeen = $null, $Trigger = $null,
+          [bool]$JudgeOnly = $false, [string[]]$SelfAuthored = @(), $Baseline = $null, [string]$Status = 'active')
+    return [ordered]@{
+        file = $File; n = $N; first_seen = $FirstSeen; trigger = $Trigger
+        judge_only = $JudgeOnly; self_authored = $SelfAuthored; baseline = $Baseline
+        source_refs = @(); status = $Status
+    }
 }
 
 # ⚠ 别把这个函数叫 `MD` —— `md` 是 PowerShell 内置的 `mkdir` 别名，`Get-MonthDay 3` 会去建一个名叫
@@ -422,10 +448,291 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
         Check 'node 侧无 CP936 乱码签名字（锛/銆/馃/鈥/U+FFFD）' ($probeOut -match 'MOJIBAKE=false') $probeOut
     }.Invoke()
 
+    Write-Host "`n=== 检查 6（v2）：正文 slug ↔ 台账双向对账 ==="
+    {
+        # 夹具：三条条款，各覆盖一种形态 —— 双轨齐全 / 只有 slug（台账在 ledger 里）/
+        # 正文里带一个**写在反引号内**的模板字面量（代码 span 假阳性的靶）。
+        $md = Get-MonthDay 3
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **甲条**：双轨齐全。 [n=1 @$md 触发:PR流程] [基线:合成甲] [#测-甲]
+- **乙条**：只有 slug。 [基线:合成乙] [#测-乙]
+- **丙条**：正文里写着 ``[自定@<月日>]`` 这个模板字面量（在反引号内，不该被当成真标记）。 [n=2 @$md 触发:无] [仅判据·无触发] [#测-丙]
+"@
+        $f = New-Fixture $body
+        $leaf = Split-Path -Leaf $f
+        $mkLedger = {
+            param([hashtable]$Override)
+            $e = [ordered]@{
+                '测-甲' = New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲'
+                '测-乙' = New-LedgerEntry -File $leaf -Baseline '合成乙'
+                '测-丙' = New-LedgerEntry -File $leaf -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $true
+            }
+            if ($Override) { foreach ($k in $Override.Keys) { if ($null -eq $Override[$k]) { $e.Remove($k) } else { $e[$k] = $Override[$k] } } }
+            return (New-LedgerFile -Entries $e)
+        }
+
+        # ── 负控先行：干净态必须绿，否则下面每个红都不算数 ──
+        $okLedger = & $mkLedger $null
+        $r = Invoke-Checker -File $f -Ledger $okLedger
+        Check '负控：干净态 exit 0' ($r.Exit -eq 0) "exit=$($r.Exit) / $($r.Text)"
+        Check '负控：marker 报 slugs=3 ledger=ok ledgerviol=0' ($r.Text -match 'slugs=3 ledger=ok ledgerviol=0') $r.Text
+        Check '负控：只有 slug 的那条不再被判 missing-meta-field（台账可回落）' ($r.Text -notmatch 'missing-meta-field') $r.Text
+        Check '正式条款 3 条（行内元字段 2 条 · 仅 slug 1 条）—— 先报分母' `
+            ($r.Text -match '正式条款 3 条（行内元字段 2 条 · 仅 slug、台账在 ledger 里 1 条）') $r.Text
+        Check '代码 span 假阳性负控：反引号里的 [自定@<月日>] 没被当成真标记' `
+            ($r.Text -match '带 \[自定@…\] 标记：0 条') $r.Text
+        Check 'v1 盲区已修：只带 [基线:] 的行进得了扫描面（本次检出 3 条）' ($r.Text -match '本次检出 3 条') $r.Text
+
+        # ── 方向一：正文删一个 slug ⇒ missing-slug + orphan-ledger 各一 ──
+        $noSlug = New-Fixture ($body -replace ' \[#测-甲\]', '')
+        # 台账仍指着原夹具文件名 ⇒ 换个文件就对不上；故这一态单独造一份指向新文件名的台账。
+        $leaf2 = Split-Path -Leaf $noSlug
+        $l2 = New-LedgerFile -Entries ([ordered]@{
+            '测-甲' = New-LedgerEntry -File $leaf2 -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲'
+            '测-乙' = New-LedgerEntry -File $leaf2 -Baseline '合成乙'
+            '测-丙' = New-LedgerEntry -File $leaf2 -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $true
+        })
+        $r2 = Invoke-Checker -File $noSlug -Ledger $l2
+        Check '正文删一个 slug ⇒ exit 1' ($r2.Exit -eq 1) "exit=$($r2.Exit)"
+        Check '报 missing-slug（这一条进不了台账）' ($r2.Text -match 'missing-slug') $r2.Text
+        Check '同时报 orphan-ledger（台账那条指着一个找不到的 slug）—— 两个方向各说各的' `
+            ($r2.Text -match 'orphan-ledger') $r2.Text
+
+        # ── 方向二：台账里少一条 ⇒ orphan-slug ──
+        $l3 = & $mkLedger @{ '测-乙' = $null }
+        $r3 = Invoke-Checker -File $f -Ledger $l3
+        Check '台账删一条 ⇒ exit 1 且报 orphan-slug（指向空气的指针）' `
+            ($r3.Exit -eq 1 -and $r3.Text -match 'orphan-slug') "exit=$($r3.Exit) / $($r3.Text)"
+
+        # ── 方向三：台账值被改 ⇒ ledger-mismatch。**逐字段各验一次** ──
+        foreach ($case in @(
+            @{ Name = 'n';          Entry = (New-LedgerEntry -File $leaf -N '9'  -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲') },
+            @{ Name = 'first_seen'; Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen '12-31' -Trigger 'PR流程' -Baseline '合成甲') },
+            @{ Name = 'trigger';    Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger '改配置' -Baseline '合成甲') },
+            @{ Name = 'baseline';   Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger 'PR流程' -Baseline '被改过的基线') },
+            @{ Name = 'self_authored'; Entry = (New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @('07-09')) }
+        )) {
+            $lm = & $mkLedger @{ '测-甲' = $case.Entry }
+            $rm = Invoke-Checker -File $f -Ledger $lm
+            Check ("台账改 {0} ⇒ exit 1 且报 ledger-mismatch" -f $case.Name) `
+                ($rm.Exit -eq 1 -and $rm.Text -match 'ledger-mismatch') "exit=$($rm.Exit) / $($rm.Text)"
+        }
+        {
+            $lj = & $mkLedger @{ '测-丙' = (New-LedgerEntry -File $leaf -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $false) }
+            $rj = Invoke-Checker -File $f -Ledger $lj
+            Check '台账改 judge_only ⇒ 红（布尔字段也在对账面里）' `
+                ($rj.Exit -eq 1 -and $rj.Text -match 'ledger-mismatch') "exit=$($rj.Exit) / $($rj.Text)"
+            # 行内没写的字段而台账有值：台账替正文编了一个值，同样判红。
+            $lb = & $mkLedger @{ '测-乙' = (New-LedgerEntry -File $leaf -N '3' -Baseline '合成乙') }
+            $rb = Invoke-Checker -File $f -Ledger $lb
+            Check '行内没写的字段而台账有值 ⇒ 红（「正文没这一栏」不等于「台账可以随便填」）' `
+                ($rb.Exit -eq 1 -and $rb.Text -match 'ledger-mismatch') "exit=$($rb.Exit) / $($rb.Text)"
+        }.Invoke()
+
+        # ── 方向四：file 指错 / 一行两个 slug / status=retired / 台账不在 ──
+        {
+            $lf = & $mkLedger @{ '测-甲' = (New-LedgerEntry -File 'ccswitch/根本不存在的文件.md' -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲') }
+            $rf = Invoke-Checker -File $f -Ledger $lf
+            Check '台账 file 指错 ⇒ 红（orphan-slug 或 ledger-file-mismatch 至少一个响）' `
+                ($rf.Exit -eq 1 -and ($rf.Text -match 'ledger-file-mismatch' -or $rf.Text -match 'orphan-ledger')) "exit=$($rf.Exit) / $($rf.Text)"
+
+            $dupFix = New-Fixture ($body -replace ' \[#测-甲\]', ' [#测-甲] [#测-又甲]')
+            $leafD = Split-Path -Leaf $dupFix
+            $ld = New-LedgerFile -Entries ([ordered]@{
+                '测-甲' = New-LedgerEntry -File $leafD -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲'
+                '测-乙' = New-LedgerEntry -File $leafD -Baseline '合成乙'
+                '测-丙' = New-LedgerEntry -File $leafD -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $true
+            })
+            $rd = Invoke-Checker -File $dupFix -Ledger $ld
+            Check '一行两个 slug ⇒ 红且报 dup-slug（关联键必须唯一）' `
+                ($rd.Exit -eq 1 -and $rd.Text -match 'dup-slug') "exit=$($rd.Exit) / $($rd.Text)"
+
+            $lr = & $mkLedger @{ '测-已退役' = (New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger '无' -JudgeOnly $true -Status 'retired') }
+            $rr = Invoke-Checker -File $f -Ledger $lr
+            Check 'status=retired 的条目不判孤儿（退役的定义就是正文里没有它）' `
+                ($rr.Exit -eq 0 -and $rr.Text -notmatch 'orphan-ledger') "exit=$($rr.Exit) / $($rr.Text)"
+
+            $rmiss = Invoke-Checker -File $f -Ledger (Join-Path $TmpRoot 'no-such-ledger.json')
+            Check '台账不在而正文有 slug ⇒ 红 + ledger-unreadable + marker ledger=missing' `
+                ($rmiss.Exit -eq 1 -and $rmiss.Text -match 'ledger-unreadable' -and $rmiss.Text -match 'ledger=missing') `
+                "exit=$($rmiss.Exit) / $($rmiss.Text)"
+            Check '台账不在时**不**顺带把每个 slug 都报成 orphan-slug（一个病报成三个会掩埋真因）' `
+                ($rmiss.Text -notmatch 'orphan-slug') $rmiss.Text
+        }.Invoke()
+
+        # ── 不适用：零 slug 且台账里没有它 ⇒ 打印「不适用」且 exit 0（负控：不是恒红）──
+        {
+            $plain = New-Fixture (Base-Body)
+            $rp = Invoke-Checker -File $plain -Ledger $okLedger
+            Check '零 slug 语料 ⇒ exit 0 且 marker ledger=na' ($rp.Exit -eq 0 -and $rp.Text -match 'ledger=na') "exit=$($rp.Exit) / $($rp.Text)"
+            Check '不适用要**打印出来**（静默跳过与「查了且没事」不可区分）' ($rp.Text -match '台账对账不适用') $rp.Text
+        }.Invoke()
+
+        # ── 台账不全（观察线，不进退出码）──
+        {
+            $ri = Invoke-Checker -File $f -Ledger $okLedger
+            Check '台账不全 1 条被打印成观察线（[#测-乙] 缺 n/首次入库/触发点）' ($ri.Text -match '台账不全 1 条') $ri.Text
+            Check '台账不全是观察线不是闸（exit 仍为 0）' ($ri.Exit -eq 0) "exit=$($ri.Exit)"
+        }.Invoke()
+    }.Invoke()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 遮罩规则：未闭合反引号游程（2026-08-02 反转处置）
+    #
+    # 缺陷原貌：旧规则「未闭合反引号 ⇒ 从它到行尾一律当代码」，于是正文里写一处
+    # ```bash 这样的**写法示例**（游程长 3、无等长游程闭合）就会把**行尾元字段**遮成空格。
+    # 两个后果，第二个更险：
+    #   ① AllTopLevel 下该行仍被选中 ⇒ 报 missing-meta-field **假阳性**（合法条款被判红）。
+    #   ② Marked 下选择器读的就是遮罩串 ⇒ 该行**整条退出扫描面**，条款数静默少一条而
+    #      **退出码不变**（实测 mousse 条款库：clauses=75，实际 76，两次都 exit 0）。
+    # dao.md 自己一条都不响，因为它零行含未闭合游程 —— 「守卫看不到样本」的又一实例，
+    # 故下面全部用合成夹具把样本造出来。
+    # ══════════════════════════════════════════════════════════════════════
+    Write-Host "`n=== 遮罩：未闭合反引号游程（正控 · 两种选择器 · 两种后果）==="
+    {
+        $md = Get-MonthDay 3
+        # 5 个字面反引号：``````bash → 3 个（游程长 3，无等长游程闭合）；``a`` → 2 个（合法 span）。
+        # here-string 里反引号是转义字符，故源码里数量翻倍。
+        $oddLine = "- **奇数反引号条款**：正文写了一处 ``````bash 这样的写法示例，还有 ``a`` 这种。 [n=1 @$md 触发:无] [仅判据·无触发]"
+
+        # ── 后果①：假阳性方向（AllTopLevel）──────────────────────────────
+        $f1 = New-Fixture (Base-Body $oddLine)
+        $a1 = Invoke-Checker -File $f1 -Selector AllTopLevel
+        Check '正控①：奇数反引号 + 行尾完整元字段，AllTopLevel 不许判红' ($a1.Exit -eq 0) "exit=$($a1.Exit) / $($a1.Text)"
+        Check '正控①：不得报 missing-meta-field' ($a1.Text -notmatch 'missing-meta-field') $a1.Text
+
+        # ── 后果②：静默少一条方向（Marked）── 断言的是**计数**不是退出码 ──
+        # 这一条是本批最承重的断言：旧实现在这里 exit 也是 0，只有条款数少一条。
+        # 光断言 exit 就等于没验 ——「合规」与「覆盖率在跌」正是靠这种断言区分开的。
+        $m1 = Invoke-Checker -File $f1 -Selector Marked
+        Check '正控②：Marked 下 exit 0' ($m1.Exit -eq 0) "exit=$($m1.Exit)"
+        Check '正控②：奇数反引号那条**进得了扫描面**（检出 3 条，旧实现只有 2 条）' `
+            ($m1.Text -match '本次检出 3 条') $m1.Text
+        Check '正控②：marker 报 clauses=3（退出码看不出的那个差别）' ($m1.Text -match 'clauses=3') $m1.Text
+
+        # ── 隔离态：奇数反引号那条是**唯一**一条 ⇒ 旧实现整份扫描面为空（zero-sample 红）──
+        $solo = @"
+# 测试条款库
+
+## 通用节
+
+$oddLine
+"@
+        $f2 = New-Fixture $solo
+        foreach ($sel in @('Marked', 'AllTopLevel')) {
+            $r2 = Invoke-Checker -File $f2 -Selector $sel
+            Check "隔离态（$sel）：唯一一条条款仍被看见，exit 0" ($r2.Exit -eq 0) "exit=$($r2.Exit) / $($r2.Text)"
+            Check "隔离态（$sel）：不得报 zero-sample" ($r2.Text -notmatch 'zero-sample') $r2.Text
+            Check "隔离态（$sel）：检出 1 条" ($r2.Text -match '本次检出 1 条') $r2.Text
+        }
+
+        # ── 观察线：模糊地带要被打印出来（换掉的不该是「一种静默换另一种静默」）──
+        Check '观察线：未闭合游程 + 条款签名同现被打印' `
+            ($m1.Text -match '未闭合反引号游程 \+ 条款签名同现：1 行') $m1.Text
+        Check '观察线是观察线不是闸（exit 仍 0）' ($m1.Exit -eq 0) "exit=$($m1.Exit)"
+    }.Invoke()
+
+    Write-Host "`n=== 遮罩：负控 —— 原本要防的代码 span 假阳性，防护必须仍在 ==="
+    {
+        $md = Get-MonthDay 3
+        # 这一组钉的是**反转不许把旧防护一起扔掉**：闭合 span 里的字面量照旧不算真标记。
+        # 单向断言（只验「合法条款不再被误判」）夹不住「遮罩被整个关掉」——
+        # 本批实现初版正是那样：一个 return 写法把遮罩全线关成 no-op，而正控全绿。
+        #
+        # ⚠ 甲条的靶写**真日期** `[自定@01-01]`，不是 `[自定@<月日>]`（初版如此，对抗验证官打回）：
+        #   解析判据是 `\[自定@(\d{2}-\d{2})\]`，而 `<月日>` 不是数字 ⇒ **遮不遮罩都匹配不上**
+        #   ⇒ 那条断言在遮罩 no-op 变异下**照样绿**，是一条装饰性断言。
+        #   换成真日期后它才真的在验遮罩（no-op 下会变成 1 条而变红）。
+        #   同型：本文件检查 6 那一组里的同名负控仍写着 `<月日>`，属既有装饰性断言，
+        #   不在本批射程内（改它要动别人那批的夹具），已在交付里点名。
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **甲条**：正文写着 ``[自定@01-01]`` 这个字面量（闭合 span 内，不该被当成真标记）。 [n=1 @$md 触发:PR流程] [基线:合成甲]
+- **乙条**：正文写着 ``[n=9 @01-01 触发:胡编]`` 这个假元字段（闭合 span 内，不该被当成真字段）。 [n=2 @$md 触发:PR流程] [基线:合成乙]
+- **丙条**：正文写着 ``[#测-不存在]`` 这个假 slug（闭合 span 内，不该被当成真 slug）。 [n=3 @$md 触发:PR流程] [基线:合成丙]
+"@
+        $f = New-Fixture $body
+        foreach ($sel in @('Marked', 'AllTopLevel')) {
+            $r = Invoke-Checker -File $f -Selector $sel
+            Check "负控（$sel）：exit 0" ($r.Exit -eq 0) "exit=$($r.Exit) / $($r.Text)"
+            Check "负控（$sel）：反引号里的 [自定@…] 未被当成真标记（0 条）" `
+                ($r.Text -match '带 \[自定@…\] 标记：0 条') $r.Text
+            Check "负控（$sel）：检出恰 3 条（假元字段没把行数撑大）" ($r.Text -match '本次检出 3 条') $r.Text
+            Check "负控（$sel）：反引号里的假 slug 未进台账面（slugs=0）" ($r.Text -match 'slugs=0') $r.Text
+            Check "负控（$sel）：n 分布按**行尾真字段**算（n=1/n=2/n>=2 各 1，非 n=9）" `
+                ($r.Text -notmatch 'n=9') $r.Text
+            Check "负控（$sel）：无未闭合游程 ⇒ 不打那条观察线" `
+                ($r.Text -notmatch '未闭合反引号游程 \+ 条款签名同现') $r.Text
+        }
+    }.Invoke()
+
+    Write-Host "`n=== 遮罩：让出的那一格（未闭合游程之后的模板字面量会被当真）==="
+    {
+        # 这不是缺陷，是**明写的取舍**：新规则让未闭合游程当字面文本，于是它之后的
+        # `[自定@…]` 会被计入。把它钉成断言，是为了让这一格**将来被改动时会响** ——
+        # 一个没有断言的取舍，与一个没人知道的缺陷没有区别。
+        $md = Get-MonthDay 3
+        $line = "- **让格条款**：一个未闭合的 ``a 之后跟着 [自定@$md] 形态的字面量。 [n=1 @$md 触发:PR流程] [基线:合成让格]"
+        $f = New-Fixture (Base-Body $line)
+        $r = Invoke-Checker -File $f -Selector Marked
+        Check '让格：exit 0（多认一个标记不判红，只进统计）' ($r.Exit -eq 0) "exit=$($r.Exit)"
+        Check '让格：该字面量被计入 [自定@…]（明写的代价，非静默）' `
+            ($r.Text -match '带 \[自定@…\] 标记：1 条') $r.Text
+        Check '让格：观察线把这一行指出来了（代价可见）' `
+            ($r.Text -match '未闭合反引号游程 \+ 条款签名同现') $r.Text
+    }.Invoke()
+
     Write-Host "`n=== 边界：目标文件不存在 ==="
     {
         $r = Invoke-Checker -File (Join-Path $TmpRoot 'no-such-file.md')
         Check '文件不存在 → exit 1（不静默报绿）' ($r.Exit -eq 1) "exit=$($r.Exit)"
+    }.Invoke()
+
+    Write-Host "`n=== 边界：参数名打错必须响（曾经是静默扫错对象）==="
+    {
+        # 没有 [CmdletBinding()] 时，PS 会把认不出的具名参数吞进 $args ⇒ -TargetFile 保持缺省
+        # ⇒ 本闸转头去扫 dao.md 并报 OK。2026-08-02 实测：这正是本批缺陷一度被误判为
+        # 「已修好」的那条路径 —— 扫错对象与零样本是同一类病（绿得不是那份文件）。
+        $f = New-Fixture (Base-Body)
+        # ⚠ 这里**不能**用 `2>&1` 收 native 命令的 stderr：PS 会把它包成 NativeCommandError，
+        #   而本文件开头是 $ErrorActionPreference='Stop' ⇒ 整个测试当场中断（本条初版实测踩到）。
+        #   照通用节那条的处方走 Start-Process + 真实文件重定向。
+        $oFile = Join-Path $TmpRoot 'wrongparam-out.txt'
+        $eFile = Join-Path $TmpRoot 'wrongparam-err.txt'
+        $proc = Start-Process -FilePath 'powershell' -NoNewWindow -Wait -PassThru `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Checker, '-Path', $f) `
+            -RedirectStandardOutput $oFile -RedirectStandardError $eFile
+        $code = $proc.ExitCode
+        # 判成败只看 ExitCode；下面读 stderr 只为断言"报了哪个参数"，不拿文案判成败。
+        $errText = if (Test-Path $eFile) { [System.IO.File]::ReadAllText($eFile) } else { '' }
+        $outText = if (Test-Path $oFile) { [System.IO.File]::ReadAllText($oFile) } else { '' }
+        # ⚠ 锚**不能**取英文文案 `parameter name 'Path'`（本条初版就是这么写的，对抗验证官打回）：
+        #   ① PowerShell 的 ErrorRecord 按**宿主缓冲宽度**换行，而换行点同时取决于**被测脚本
+        #      绝对路径的长度** ⇒ 同一份代码在 worktree（74 字符）与合并后主干（66 字符）下
+        #      结论可能相反 —— 一条测试的成败取决于仓库被 clone 到哪里。
+        #      合成实测：60..160 共 101 种宽度里，该文案锚**有 26 种被切断**（约 26%）。
+        #   ② zh-CN 宿主下这句话整条渲染成中文 ⇒ 英文锚**永不匹配**（实测 False）。
+        #   正解取 `FullyQualifiedErrorId` 的取值 token：它是**标识符不是文案**，locale 不变；
+        #   且**先抹掉全部空白**再匹配 —— 换行只是插入空白，抹掉即复原，宽度再窄也切不断。
+        #   同一组合成实测：101 种宽度**零断裂**，zh-CN 样本 True。
+        $errNorm = ($errText -replace '\s+', '')
+        Check '参数名打错 → 非零退出（不许静默落回缺省目标）' ($code -ne 0) "exit=$code"
+        Check '参数名打错 → 报 NamedParameterNotFound（locale 不变、不受换行切断）' `
+            ($errNorm -match 'NamedParameterNotFound') $errText
+        Check '参数名打错 → 压根没产出扫描报告（不是"扫了别的文件还报 OK"）' `
+            ($outText -notmatch 'CLAUSE_STRUCTURE_SUMMARY') $outText
+        # 负控：正确参数名照常工作（否则上面那条可以靠「什么都跑不了」蒙混过关）
+        $ok = Invoke-Checker -File $f
+        Check '负控：正确参数名 -TargetFile 仍 exit 0' ($ok.Exit -eq 0) "exit=$($ok.Exit)"
+        Check '负控：且扫的确实是夹具（检出 2 条，不是 dao.md 的十几条）' `
+            ($ok.Text -match '本次检出 2 条') $ok.Text
     }.Invoke()
 
     Write-Host "`n=== 真实对象冒烟：缺省目标 ccswitch/dao.md 必须绿 ==="
