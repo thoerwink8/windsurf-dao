@@ -10,6 +10,8 @@
 //
 // 真相源:windsurf-dao/ccswitch/hooks/dao-glob-gate.js
 // 由 settings.json 的 PostToolUse hook 调用。
+// 回归网:tests/glob-gate.tests.js(各分支正控 + 误伤负控 + settings.json 分支文案逐条钉死
+//         + 三向 mutation 判别力 + 真文件字节恒等 canary)。
 
 const fs = require("fs");
 
@@ -48,9 +50,23 @@ let context = "";
 if (isDaoMeta) {
   context = "【dao-meta 守卫】本次改动涉及 dao 元层文件。收尾前过三关:① 通用性(换项目还成立吗) ② 内容边界(只许思维/流程/准则,禁技术选型/API/配置) ③ 影响评估(会让其他 dao 项目变差吗)。不通过 → 路由到项目 AGENT.md/CLAUDE.md。双栈共存:ccswitch/ 与 .windsurf/ 哲学需一致。";
 } else if (isSettingsJson) {
-  // live settings.json 是 cc-switch SQLite DB 的投影：改它是「改投影」,下次 provider 下发即被覆盖。
-  // 正道是改 git 快照层(config-sync/common/settings.json)再由用户 restore 写源。
-  context = "【dao 同步提醒】你刚修改了 " + norm.split("/").pop() + "。⚠ 若这是 live `~/.claude/` 下的那份,它是 cc-switch DB 的**投影**——改它立即生效但不持久,下次下发即被覆盖。正道:同步改 git 快照层 `config-sync/common/settings.json`,并提醒用户跑 `dao.bat --direction=down`(快照→DB)。**不要建议 `--direction=up`**:up 是「读 DB 覆盖快照」,DB 里还没有你的改动,跑它会把你刚写的快照冲掉。";
+  // live settings.json 是 cc-switch 下发的**投影**:改它立即生效但不持久,下次切 provider 即被整体覆盖。
+  // 真实下发源 = cc-switch DB `providers` 表**各 provider 自带**的 `settings_config`(用户在 GUI 编辑
+  // provider 配置或执行 SQL),下发只挂在「切换 provider」那一个动作上。
+  // ⚠ 2026-08-02 改文案(issue #67):本分支原文教的正路是「同步改 git 快照层
+  // config-sync/common/settings.json + 跑 dao.bat --direction=down」—— #49 的下发链实测证明,快照层与 DB 的
+  // common_config_* 镜像层**都不在下发路径上**,照它做改动永不生效(PR #43 就是照旧文案做的:注册写满这两层
+  // 而 live 始终未注册)。**一道提醒给出走不通的合法路径,比不给更糟**:照做的人会以为自己已经做完了。
+  // 同型修复见 PR #68(硬闸 G2 的 stderr),两处口径刻意保持一致。本分支的投递面比 G2 更宽 —— G2 只在有人
+  // 写 live 那一份时才打,本分支是任何 settings.json/mcp_servers.json 改动后**自动注入 additionalContext**,
+  // 不必等谁去读;而下面 isWindsurfDaoFile 分支的注释记着「错误提醒连续误导三名 subagent」,那正是这个
+  // 投递面的实测后果。
+  // 措辞刻意仍点名 `dao.bat --direction=down/up`,但把它从「正路」改成「别拿它来让配置生效」:旧说法散在
+  // 历史文档与 PR body 里,光删不说等于让下一个人再试一次(同 PR #68 的取舍,故回归断言不写成反向的 !/direction/)。
+  // ⚠ 文案里的「若这是 live 那一份」不是客套 —— isSettingsJson 正则对**项目级** .claude/settings.json 同样
+  // 命中(它分不出 live 与项目级),所以这段话必须是条件式的,不能写成无条件断言。
+  // **判定逻辑(isSettingsJson 正则、分支次序)一个字符未动,改的只有这段打给人看的话。**
+  context = "【dao 同步提醒】你刚修改了 " + norm.split("/").pop() + "。⚠ 若这是 live `~/.claude/` 下的那份,它是 cc-switch 下发的**投影**——改它立即生效但不持久,下次切 provider 即被目标 provider 的配置整体覆盖。**真实下发源是 cc-switch DB `providers` 表各 provider 自带的 `settings_config`**:请用户在 cc-switch GUI 里编辑 provider 配置(或由用户执行 SQL)写进那一列,**且每个 provider 都要改**——切 provider 时 live 会被目标 provider 的配置整体覆盖,只改一个等于没改(per-provider 漂移,长期对齐机制挂 issue #50)。写 DB 属**用户动作**:AI 侧被权限分类器全路径拦截。⚠ **改 git 快照层 `config-sync/common/settings.json` 或 DB 的 `common_config_*` 镜像层都不会生效**——两层都不在下发路径上(#49 实测;PR #43 曾把 hooks 注册写满这两层而 live 始终未注册),所以也**不要建议跑 `dao.bat --direction=down/up` 来让它生效**。判据见 dao.md「改配置先认源与投影」。";
 } else if (isWindsurfDaoFile) {
   // 2026-07-27 修:本分支原文无条件建议跑 `--direction=up`,而 up 走 config-sync/lib/export.mjs 的
   // `selectRows('settings', "WHERE key LIKE 'common_config_%'")` —— 只从 SQLite DB 读,**看不见 ccswitch/ 下的
