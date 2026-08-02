@@ -2,7 +2,7 @@
 //
 // 模式命名以本段为准（2026-07-27 统一）：代码里的分节横幅此前把 A/B 写反了——
 // 头注写 A=元仓库、B=普通项目，横幅却写 模式B=元仓库、模式A=普通项目，而
-// tests/dao-scaffold-check.tests.js 与 dao-growth-loop.md 的裁定文本都按头注这套读。
+// tests/dao-scaffold-check.tests.js 与 docs/specs/dao-growth-loop.md 的裁定文本都按头注这套读。
 // 三处里两处一致、代码横幅是那个离群值，故本次把横幅改齐，不动语义。
 //
 // A) windsurf-dao 元仓库：全面同步漂移检测（双向）
@@ -20,7 +20,8 @@
 //    实测它自身会中两条，其中「根目录无冗余 AI 入口」有个从未写下来的例外
 //    （AGENT_GUIDE.md 系刻意保留，dao.md 帅节末行引用它）。现改为：A 段照跑，
 //    随后与普通项目走同一条主干，例外逐条写进清单的 `exempt` 字段。
-//    （裁定见调用方 mousse-cli `docs/ops/dao-growth-loop.md` §四.6 裁定 B）
+//    （裁定见本仓 `docs/specs/dao-growth-loop.md` §四.6 裁定 B——2026-08-02 由 mousse-cli
+//     `docs/ops/` 迁入：一个 dao 级 hook 的裁定真相源此前住在调用方项目里）
 //    - 清单在 ccswitch/scaffold-manifest.json，求值器在 ccswitch/lib/scaffold-manifest.js
 //    - universal 条目（CLAUDE.md / .claude/rules/ / 无冗余入口 / _tmp 已 gitignore …）无条件查
 //    - conditional 条目（桌面端调试基建 / 前端样式路线 / CI 矩阵成本 …）按 when 指纹命中才查
