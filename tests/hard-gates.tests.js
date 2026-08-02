@@ -22,6 +22,9 @@
 //   证不了「所有崩法都能被 catch 到」（catch 不住的崩法：进程级 OOM/被杀）。
 // · G5 的 `--body-file` 只测真实可读文件；「文件读不到 ⇒ 放行」这个漏报面
 //   有一条负控钉着，但那是**有意为之**（见 hook 内注释），不是待修的洞。
+// · G6 与 dao-rhythm.js WAKEUP 信号的**跨文件判据一致性**不在本文件，在
+//   `tests/dao-rhythm.tests.js` 末尾那一组（那边有现成的沙箱，能避开真实埋点日志污染）。
+//   放在这里只留指针：判据有两份实现，一致性只由那一组钉着，改任一侧都要看它。
 
 const fs = require("fs");
 const path = require("path");
@@ -70,6 +73,7 @@ function nudge(command, toolName = "Bash") {
 
 const bash = (command, cwd) => ({ tool_name: "Bash", tool_input: { command }, cwd });
 const edit = (file_path) => ({ tool_name: "Edit", tool_input: { file_path } });
+const wake = (tool_input) => ({ tool_name: "ScheduleWakeup", tool_input });
 
 // 每闸的一条"承重正控"，mutation 与 canary 都拿它当靶
 const CANARY = {
@@ -81,6 +85,13 @@ const CANARY = {
     tool_input: { filePath: "D:/frank/mousse-cli/shot.png" },
   },
   "G5-readonly-todo": bash('gh pr create --title x --body "做完了\n- [ ] 还没跑测试"'),
+  // 取一条**真实语料形态**当承重正控：这段开头逐字抄自 ~/.claude/projects 里的历史心跳
+  // （全量普查 993 次 ScheduleWakeup 调用，非 stop 的 962 次全长这样，零次带签名）。
+  // 拿真实形态当靶，是为了让「闸上线后第一天会拦到什么」这件事在测试里就看得见。
+  "G6-heartbeat-signature": wake({
+    delaySeconds: 1500,
+    prompt: "高性能目标窗心跳（不限时，目标=除蓄水池外 issue 清零）。对账：① 三路在途……",
+  }),
 };
 
 const PRISTINE_SHA = sha(HOOK);
@@ -257,6 +268,54 @@ console.log("\n──── G5 · 只读载体未勾待办（PR body / commit me
   for (const [name, p] of negatives) check(`负控：${name}`, gate(p).code === 0, `code=${gate(p).code} ${gate(p).err.slice(0, 80)}`);
 }
 
+console.log("\n──── G6 · 心跳 prompt 缺 [dao-heartbeat] 签名（stop:true 豁免）────");
+{
+  // 正控语料**全部取自真实历史形态**（~/.claude/projects/**/*.jsonl 全量普查，2026-08-02，
+  // 993 次 ScheduleWakeup tool_use）。这不是形式主义：dispatch-clauses 对抗验证官节明写
+  // 「近似手段的验证语料禁只来自本轮发现的形态」——自造语料只能证明「我想到的那几种被拦住了」。
+  const positives = [
+    ["最常见的真实形态（占语料首位）", wake({ delaySeconds: 1500, prompt: "高性能自主窗心跳。第一动作：回看上一轮是否真有面向用户的最终文本发出……" })],
+    ["带方括号但不是签名（真实形态，易被误以为已签）", wake({ delaySeconds: 900, prompt: "【8h 高性能自主窗 · 心跳】第一动作：回看上一轮……" })],
+    ["签名不在开头 ⇒ 不算签名（rhythm 那边也认不出）", wake({ delaySeconds: 900, prompt: "对账：① 两路在途 [dao-heartbeat]" })],
+    ["大小写不符 ⇒ 不算（两边判据都大小写敏感）", wake({ delaySeconds: 900, prompt: "[DAO-HEARTBEAT] 心跳" })],
+    ["空 prompt 且无 stop ⇒ 无从签名也无从对账", wake({ delaySeconds: 900, prompt: "" })],
+    ["既无 prompt 也无 stop", wake({ delaySeconds: 900 })],
+    ["stop 是字符串 'true' 不算豁免（免得成为 agent 够得着的旁路）", wake({ stop: "true", prompt: "心跳" })],
+    ["stop:false 显式继续，仍要签名", wake({ stop: false, delaySeconds: 900, prompt: "心跳" })],
+  ];
+  for (const [name, p] of positives) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2, `code=${r.code} ${r.err.slice(0, 80)}`);
+  }
+  const errText = gate(CANARY["G6-heartbeat-signature"]).err;
+  check("正控：stderr 教得出**可直接照抄**的格式（含前缀本身 + 一个完整示例）",
+    /\[dao-heartbeat\]/.test(errText) && /例如/.test(errText), errText.slice(0, 200));
+  check("正控：stderr 说明它为什么不是装饰（指向 dao-rhythm 与留守四句的投递）",
+    /dao-rhythm/.test(errText) && /dao-longwindow/.test(errText), errText.slice(0, 300));
+  check("正控：stderr 点明 stop:true 是收窗的正路、不是绕签名的后门",
+    /stop:true/.test(errText) && /别拿它绕开签名/.test(errText), errText.slice(0, 400));
+  check("逃生阀：DAO_WAKEUP_UNSIGNED_OK=1 → 放行",
+    gate(CANARY["G6-heartbeat-signature"], { env: { DAO_WAKEUP_UNSIGNED_OK: "1" } }).code === 0);
+  check("逃生阀只认 '1'，不认 'true'",
+    gate(CANARY["G6-heartbeat-signature"], { env: { DAO_WAKEUP_UNSIGNED_OK: "true" } }).code === 2);
+
+  const negatives = [
+    ["签名开头 → 放行", wake({ delaySeconds: 1500, prompt: "[dao-heartbeat] 高性能目标窗心跳。对账：①……" })],
+    ["签名前有空白（两边都先 trim）→ 放行", wake({ delaySeconds: 900, prompt: "  \n[dao-heartbeat] 心跳" })],
+    ["签名后紧跟内容无空格 → 放行（判据只管前缀）", wake({ delaySeconds: 900, prompt: "[dao-heartbeat]对账" })],
+    ["只有签名没有正文 → 放行（内容够不够是人的判断，不是闸的）", wake({ prompt: "[dao-heartbeat]" })],
+    ["stop:true 收窗 → 放行", wake({ stop: true })],
+    ["stop:true 且带 prompt → 放行（仍是收窗调用）", wake({ stop: true, prompt: "收窗" })],
+    ["别的工具带同名 prompt 参数 → 放行（本闸只认 ScheduleWakeup）",
+      { tool_name: "Task", tool_input: { prompt: "高性能目标窗心跳" } }],
+    ["工具名含 ScheduleWakeup 子串但不相等 → 放行（早退用全等，不用正则）",
+      { tool_name: "mcp__x__ScheduleWakeupLater", tool_input: { prompt: "心跳" } }],
+    ["Bash 里出现 [dao-heartbeat] 字样 → 放行（不是这道闸的事）",
+      bash('echo "[dao-heartbeat] 心跳"')],
+  ];
+  for (const [name, p] of negatives) check(`负控：${name}`, gate(p).code === 0, `code=${gate(p).code} ${gate(p).err.slice(0, 80)}`);
+}
+
 console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒不阻断，两态）────");
 {
   const positives = [
@@ -304,6 +363,7 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
     // 靶点取赋值左侧而非正则字面量本身：判据被收窄过一次（见 hook 里 UNCHECKED_TODO 的注释），
     // 把整条正则抄进测试会让「判据一改、mutation 靶点失配」变成一个静默失效面。
     ["G5-readonly-todo", "const UNCHECKED_TODO = ", "const UNCHECKED_TODO = /__NEVER_MATCH_TODO__/; const _deadPattern = "],
+    ["G6-heartbeat-signature", "if (HEARTBEAT_SIG.test(p)) return null;", "if (true) return null;"],
   ];
   for (const [id, from, to] of MUTANTS) {
     check(`mutation 靶点在源码里唯一存在（${id}）`, src.split(from).length === 2,
@@ -318,6 +378,26 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
     const otherId = id === "G1-windows-mcp" ? "G3-publish" : "G1-windows-mcp";
     check(`${id}：改坏它之后其他闸仍然拦（证明不是整个 hook 崩了）`,
       gate(CANARY[otherId], { script: mutantPath }).code === 2);
+  }
+
+  // ── 反向 mutation（2026-08-02 随 G6 加）：上面那批**全在「把门改松」这一侧**，
+  //    于是「负控会不会红」这件事一次都没被验到 —— 一组永远为真的负控与一组真正管用的负控，
+  //    在全绿的输出里长得一模一样（dispatch-clauses 对抗验证官节点名的第四件事）。
+  //    故这里反着来一次：把 G6 的 stop 豁免改坏 ⇒ 原本放行的 `{stop:true}` 必须变成 exit 2。
+  {
+    const from = "if (ti.stop === true) return null;";
+    const to = "if (ti.stop === \"__never_matches__\") return null;";
+    check("反向 mutation 靶点在源码里唯一存在（G6 stop 豁免）", src.split(from).length === 2,
+      `出现 ${src.split(from).length - 1} 次`);
+    const mutantPath = path.join(TMP, "mutant-G6-stop-exemption.js");
+    fs.writeFileSync(mutantPath, src.replace(from, to), "utf8");
+    const stopOnly = wake({ stop: true });
+    const before = gate(stopOnly).code;
+    const after = gate(stopOnly, { script: mutantPath }).code;
+    check("G6：真文件放行 stop:true（exit 0）而豁免被改坏后拦（exit 2）⇒ 那条负控真的在测豁免分支",
+      before === 0 && after === 2, `before=${before} after=${after}`);
+    check("G6：改坏豁免不影响签名判据（带签名的仍放行）",
+      gate(wake({ prompt: "[dao-heartbeat] 心跳" }), { script: mutantPath }).code === 0);
   }
 
   // fail-open 路径：注入一个必抛的判定，断言"放行 + 大声喊"
@@ -350,10 +430,23 @@ console.log("\n──── --selfcheck（只断言形态，真实注册状态�
                   /^✗ 未注册：/.test(out) ||
                   /^✗ 读不到 live settings\.json/.test(out);
   check("首行为三种既定形态之一", shapeOk, JSON.stringify(out.split("\n")[0]));
-  check("逐闸都各打印一行覆盖面结论", (out.match(/· G\d-|✓ G\d-|✗ G\d-/g) || []).length >= 5, out.slice(0, 400));
-  check("末行报闸数与逃生阀清单", /共 5 道闸/.test(out) && /DAO_SETTINGS_EDIT_APPROVED/.test(out), out.slice(-200));
+  check("逐闸都各打印一行覆盖面结论", (out.match(/· G\d-|✓ G\d-|✗ G\d-/g) || []).length >= 6, out.slice(0, 400));
+  check("末行报闸数与逃生阀清单", /共 6 道闸/.test(out) && /DAO_SETTINGS_EDIT_APPROVED/.test(out), out.slice(-200));
+  // G6 的注册面（matcher 加 `|ScheduleWakeup`）**属用户动作，本批不改**。故此刻 selfcheck
+  // 大概率会把 G6 报成零覆盖 —— 那正是设计意图：「没接上」要在机器通道上说出来。
+  // 这里刻意**不断言它一定是零覆盖**（用户随时可能注册完），只断言 G6 出现在逐闸清单里，
+  // 即「这道闸的覆盖面确实被独立问过一次」。锚死任一态都会让测试随用户配置变红。
+  check("G6 出现在逐闸覆盖面清单里（注册与否都得有它一行）", /G6-heartbeat-signature/.test(out), out.slice(0, 600));
+  // ⚠ **这一条 2026-08-02 修过一个真 bug，成因值得留着**：它的名字写着「未注册 **/ 有闸失覆盖**」，
+  // 而原判据是 `/^✗/.test(out)` —— `^` 不带 `m` 标志 ⇒ **只读首行**，也就是只看得见「注册没注册」，
+  // 逐闸覆盖面那几行（`  ✗ Gn-…：matcher 覆盖不到 …`）它一行都读不到。
+  // 于是「有闸失覆盖但已注册」这一态会被判成「该 exit 0」，与 selfcheck 的实际 exit 1 相撞。
+  // **它一直没红，是因为在 G6 之前每道闸都被 matcher 覆盖着 —— 那一格从未被走到过。**
+  // 这正是本仓反复记的那种形态：一条断言的**名字**覆盖了两种情况，**判据**只覆盖一种，
+  // 而在缺一种样本的那段时间里，两者的输出逐字节相同。
+  const anyFail = /(^|\n)\s*✗/.test(out);
   check("未注册 / 有闸失覆盖 → 退出码非 0（不许把「没接上」报成通过）",
-    /^✗/.test(out) ? r.status !== 0 : r.status === 0, `code=${r.status}`);
+    anyFail ? r.status !== 0 : r.status === 0, `code=${r.status} anyFail=${anyFail}`);
 }
 
 console.log("\n──── 兜底：无关输入一律不拦 ────");

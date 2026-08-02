@@ -156,7 +156,10 @@ function isLinkedWorktree(dir) {
 
 // ── --selfcheck:把「④ 到底投递得到吗」摆出来 ───────────────────────────────
 // 形态照抄 dao-hard-gates.js 的 selfcheck(逐面核 matcher 覆盖),**判据各自独立**:
-// 那边核的是五道闸要拦的工具名,这边核的是五类提醒要看见的工具名。
+// 那边核的是各道硬闸要拦的工具名(闸数以那边的 GATES 为准,此处刻意不写死——原写「五道闸」,
+// 2026-08-02 加 G6 时才发现这个数字散在三处),这边核的是本 hook 各类提醒要看见的工具名
+// (类数同理不写死,以下面的 REQUIRED_COVERAGE 为准——本行原写「四类」,同日加第 ⑤ 类即过期,
+//  与那边的「五道闸」是同一个病的两侧,一并治掉)。
 // 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
 const REQUIRED_COVERAGE = [
   { face: "①②③⑤ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离)", tools: ["Bash"] },
