@@ -413,6 +413,88 @@ function budgetLines(daoRoot) {
           "ccswitch/scripts/check-alwayson-budget.mjs 的 LIMIT_BYTES 头注"];
 }
 
+// ── memory 指针一致性的挂载点（2026-08-02 · 自上而下审计第 12 件）────────────
+// 上面三道守的是**仓里的东西**（条款写得对不对 / 闸活没活 / always-on 总量），
+// 这一道守的是**仓外的东西**：`~/.claude/projects/<slug>/memory/*.md`。
+//
+// 为什么它非挂不可（核验官原话）：「**windsurf-dao 自己的 memory，目前只有在有人跑
+// mousse 的 verify-all 时才真的被扫过**」。memory 每次会话自动注入、却**不在任何 git 仓内**
+// ⇒ `run-tests.mjs` / 各项目的验证入口 / 本 hook 原先都不覆盖它。并轨之前盘上有两份
+// 实现，能跑的那份长在一个项目里；**把判据并进 dao 而不挂投递，只是把「无人执行」搬个家。**
+//
+// 为什么挂在这里（理由与上面三道逐条相同，不重述）：新建 hook 要在 live + 快照 + DB
+// 三处注册。只在**模式 A** 跑，而这一条比前三道更硬：它扫的是**全部项目**的 memory
+// （一次跑完 7 个项目），与当前项目是谁无关 —— 在每个项目里各跑一遍是**同一份工作重复 N 遍**。
+//
+// 成本：本机实测 ~170ms（`--scope=all`，95 份 memory、83 个路径 token；纯 fs.existsSync）。
+//
+// 输出策略（**四态，任一态都不静默**）：
+//   ① 红：模块自身出错 / 契约拿不到 / 末行 exit 与真退出码不等 ⇒ 报摘要
+//   ② ⚠ `root=0`：本机没有 memory 根 ⇒ **零可扫，这不是「通过」是「没测」**
+//   ③ ⚠ 扫到文件却零 token ⇒ 取词判据失效的信号（与「引用都健康」必须分得开）
+//   ④ ⓘ 绿：一行普查数（**刻意不做成「零发现才不打印」** —— 扫描面缩小必须看得见）
+// 发现数**永远不判红**：闸位是观察线，理由见被调模块头注「闸位」段（修复目标不在仓里
+// ⇒ 硬闸必然永久红 ⇒ 被跳过 ⇒ 连自检那一半也废掉）。
+const MEMORY_REFS_TIMEOUT_MS = 20000;
+
+function memoryRefLines(daoRoot) {
+  const script = path.join(daoRoot, "ccswitch", "lib", "memory-truth-source.js");
+  try {
+    if (!fs.existsSync(script)) {
+      return ["✗ memory 指针扫描模块不在：" + script +
+              "（它的沉默与「memory 都健康」在这份报文里长得一样）"];
+    }
+  } catch (e) {
+    return ["✗ memory 指针扫描探测失败：" + (e && e.message ? e.message : String(e))];
+  }
+  let out = "", code = 0;
+  try {
+    out = execFileSync(process.execPath, [script, "--scope=all"], {
+      encoding: "utf8", timeout: MEMORY_REFS_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+    });
+  } catch (e) {
+    out = (e && typeof e.stdout === "string") ? e.stdout : "";
+    code = (e && typeof e.status === "number") ? e.status : -1;
+    if (!out) {
+      return ["✗ memory 指针扫描跑不起来：" + (e && e.message ? e.message : String(e)) +
+              "（手动复核：node ccswitch/lib/memory-truth-source.js --scope=all）"];
+    }
+  }
+  // 全字段必配：缺字段即判「契约被改坏」，不判「那一格没事」（同 DEAD_GATES_SUMMARY）。
+  const m = /MEMORY_REFS_SUMMARY exit=(\d+) scope=(\w+) root=(\d) projects=(\d+) files=(\d+) checked=(\d+) dead=(\d+) declared_dead=(\d+) ambiguous=(\d+) skipped=(\d+) errors=(\d+)/.exec(out);
+  if (!m) {
+    return ["✗ memory 指针扫描跑完但没拿到 MEMORY_REFS_SUMMARY 末行（真退出码 " + code +
+            "）→ 契约可能被改坏了：node ccswitch/lib/memory-truth-source.js --scope=all"];
+  }
+  const [, sExit, sScope, sRoot, sProjects, sFiles, sChecked, sDead, sDeclDead, sAmb, sSkip, sErr] = m;
+  if (Number(sExit) !== code) {
+    return ["✗ memory 指针扫描末行说 exit=" + sExit + "，真退出码却是 " + code +
+            " —— 两者按契约恒等，说明契约被改坏了：node ccswitch/lib/memory-truth-source.js --scope=all"];
+  }
+  if (code !== 0 || sErr !== "0") {
+    return ["✗ memory 指针扫描自身出错（errors=" + sErr + "，退出码 " + code +
+            "）⇒ 此时「零发现」不可信，先修扫描器：node ccswitch/lib/memory-truth-source.js --scope=all"];
+  }
+  if (sRoot === "0") {
+    return ["⚠ memory 指针扫描：本机没有 `~/.claude/projects/` —— **零可扫。这不是「通过」，是「没测」**"];
+  }
+  if (sFiles !== "0" && sChecked === "0") {
+    return ["⚠ memory 指针扫描：扫到 " + sFiles + " 份 memory 却取出 0 个路径 token —— " +
+            "**这是取词判据失效的信号，不是「引用都健康」**：node ccswitch/lib/memory-truth-source.js --scope=all"];
+  }
+  const tail = " → 明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）";
+  const head = "ⓘ memory 指针一致性（scope=" + sScope + "，含 dao 自己的 memory）：" +
+    sProjects + " 个项目 / " + sFiles + " 份 memory / 实判 " + sChecked + " 个路径 token";
+  const parts = [];
+  if (sDead !== "0") parts.push(sDead + " 处指向空气（其中真相源声明段内 " + sDeclDead + " 处 ⇒ 那几处该修）");
+  if (sAmb !== "0") parts.push(sAmb + " 处相对路径没写清相对于谁");
+  if (sSkip !== "0") parts.push(sSkip + " 处因项目根不可解析未判（不计入发现，也不算通过）");
+  if (!parts.length) {
+    return [head + "，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。" + tail];
+  }
+  return [head + "；" + parts.join(" · ") + tail];
+}
+
 function inject(context) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
@@ -611,6 +693,11 @@ function daoSyncLines() {
   //     判据见 providerHookLines 头注）。第 6 项比的是 live ↔ git 快照，而 #49 实测证明
   //     **真正的下发源是 `providers.settings_config`**，那一层此前无人看着。
   for (const line of providerHookLines(daoRoot)) drifts.push(line);
+
+  // 11. memory 指针一致性（2026-08-02 挂载 · 自上而下审计第 12 件，判据见 memoryRefLines 头注）。
+  //     前十项守的都是**仓里的东西**；这一项是唯一一个守仓外的 —— memory 每次会话注入、
+  //     却不受任何 git 管，此前只有某个项目的 verify-all 才会碰它。
+  for (const line of memoryRefLines(daoRoot)) drifts.push(line);
 
   return drifts;
 }

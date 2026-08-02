@@ -74,6 +74,41 @@
 //   · **计数类声明查不了**（"skills 39 / commands 11 / agents 8"）。它们可机检，但需要
 //     把"这个 glob 的计数应等于 N"变成一条判据，属另一档，本模块不做。
 //   · 只扫 `.md`。memory 目录里若出现别的载体一律不看。
+//
+// ── 并轨（2026-08-02 · 自上而下审计第 12 件）──────────────────────────────────
+// 病灶（核验官原话）：「**windsurf-dao 自己的 memory，目前只有在有人跑 mousse 的
+// verify-all 时才真的被扫过**」。当时盘上有**两份**实现：
+//   ① 本模块（`scope: "declared"`）—— 只查「显式声明真相源」段落，**没有任何调用点**，
+//      除了 `tests/` 里喂 fixture 的那次；
+//   ② mousse-cli `scripts/check-memory-refs.ps1`（`scope: "all"`）—— 查全文所有路径形态
+//      引用，扫的是 `~/.claude/projects/D--frank-*/**`，**包括 dao 自己的 memory**，
+//      但只在有人跑那个项目的 verify-all 时执行。
+// ⇒ 全局层的 memory 被一个项目的验证脚本治理，且换个项目就没人扫。
+//
+// 本次不新建第三份实现，把 ② 的判据并进本模块，改动只有三处：
+//   ㈠ `scope` 选项：`"declared"`（缺省，与并轨前同行为）/ `"all"`（全文）。
+//      **两档共用同一个解析器与同一套解析基址** —— 这正是「不新建第三份实现」的含义：
+//      并轨若只是把另一份代码搬进同一个文件，判据仍是两份，仍会各自演进。
+//   ㈡ `scope: "all"` 下，**声明段外**的 token 走更严的形态（见 `looksLikePath` 的
+//      strict 分支），**声明段内仍走原来的宽形态**。
+//      不是随手加的：扫描面从「几个声明段」放大到「整份 memory」时，宽判据的假阳性
+//      会按比例放大 ⇒ 「生下来就吵的检查一定会被静音」。严判据取自 ②（它已在真实
+//      数据上跑过），不是本次新拟的。
+//      🔴 **严档只用在段外，是首版实测后订正的**：首版对整份文件一律用严档，
+//      结果 `all` 的发现数**少于** `declared`（严档要求含分隔符 ⇒ 声明段里
+//      `CLAUDE.md` 这种裸文件名被收掉了）。那等于「放大扫描面的同时悄悄收窄了判据」，
+//      而**两个方向的变化会在总数上互相抵消、看起来只是数字变了一点**——正是本模块
+//      通篇在防的那种「答的是另一个问题」。现在的分段用法让
+//      `all` 的发现集是 `declared` 的**真超集**（`tests/` 有断言钉住），
+//      两份实现原有的覆盖面因此一格不丢。
+//   ㈢ 每条 finding 带 `declared` 标记：它落在真相源声明段内还是段外。
+//      **这一格是并轨的净收益**：以前 ① 只看得见段内、② 分不清段内段外，
+//      现在一次扫描给出两个镜头 —— 段内的是「指针指向空气」（该修），
+//      段外的多半是「memory 记的是当时的样子」（该由人判）。
+//   另：token 尾部的 `:行号` 与 `#锚点` 现统一剥掉再解析（`file.ts:123` 是常见写法）。
+//      这是 ② 有而 ① 没有的一格，**两档都补上** —— 它消的是真假阳性，不是放宽判据。
+// 投递：`ccswitch/hooks/dao-scaffold-check.js` 模式 A（元仓库 SessionStart）调本模块，
+//      解析末行 `MEMORY_REFS_SUMMARY` 契约。**投递不挂上就只是把「无人执行」搬个家。**
 
 "use strict";
 
@@ -110,18 +145,45 @@ function backtickTokens(line) {
 }
 
 /**
+ * 剥掉 token 尾部的 `#锚点` 与 `:行号`（`file.ts:123` / `dao.md#节名` 是常见写法）。
+ * **不剥盘符**：`D:\x` 的冒号在第 2 位、后面不是纯数字，正则要求行号紧贴结尾且全是数字。
+ */
+function stripLocator(tok) {
+  let t = String(tok).trim();
+  t = t.replace(/#.*$/, "");
+  t = t.replace(/:\d+(-\d+)?$/, "");
+  return t;
+}
+
+/**
  * token 是否"看起来像路径"。
  * 近似，两向都可构造反例：含空格的真实路径会被漏掉（刻意——含空格的 token 里
  * 混着散文的概率远高于是路径的概率）；而形如 `a/b` 的非路径记号会被误当路径。
+ *
+ * `strict`（`scope: "all"` 的**声明段外**走这一档，见头注「并轨」㈡）额外要求两条：
+ *   ① **必须含分隔符**——`scope: "all"` 下全文都在扫描面内，只靠后缀白名单会把
+ *      散文里的 `README.md`、`package.json` 这类**没写路径的裸文件名**一并当路径去查；
+ *   ② 末段**要么有扩展名、要么整段以分隔符结尾（＝目录引用）、要么含 glob `*`**——
+ *      挡掉 `team-donk/mousse-cli` 这类**仓库 slug**（长得像路径但不是文件系统对象）。
+ * 两条都是收紧，不是放宽：strict 的命中集是非 strict 的**真子集**（`tests/` 有断言钉住）。
  */
-function looksLikePath(tok) {
+function looksLikePath(tok, strict) {
   const t = String(tok).trim();
   if (!t) return false;
   if (/\s/.test(t)) return false;                 // 含空白：多半是句子片段
   if (/[()<>"'|?]/.test(t)) return false;          // 含这些字符：多半是命令/表达式
   if (t.startsWith("$") || t.startsWith("-")) return false; // 变量 / 命令行开关
   if (t.includes("...") || t.includes("…")) return false;   // 省略写法，见头注判据③
-  if (t.includes("/") || t.includes("\\")) return true;
+  const hasSep = t.includes("/") || t.includes("\\");
+  if (strict) {
+    if (!hasSep) return false;
+    if (t === "/" || t === "\\") return false;
+    if (/[/\\]$/.test(t)) return true;             // 目录引用
+    const leaf = t.split(/[/\\]/).pop() || "";
+    if (leaf.includes("*")) return true;           // glob
+    return /\.[A-Za-z0-9]+$/.test(leaf);
+  }
+  if (hasSep) return true;
   const lower = t.toLowerCase();
   return PATH_EXTS.some((e) => lower.endsWith(e));
 }
@@ -203,8 +265,12 @@ function decodeSlug(slug, startOverride) {
   return cur;
 }
 
-/** 把 memory 文件切成段落（连续非空行块），并标出哪些段落含真相源声明 */
-function declarationParagraphs(lines) {
+/**
+ * 把 memory 文件切成段落（连续非空行块）。
+ * `all` 为真时返回全部段落（`declLines` 可能为空数组）；否则只返回含真相源声明的那些。
+ * **两档共用这一个切分器** —— 并轨的第一条要求就是不让两个 scope 各有一套解析。
+ */
+function declarationParagraphs(lines, all) {
   const paras = [];
   let cur = null;
   for (let i = 0; i < lines.length; i++) {
@@ -215,7 +281,7 @@ function declarationParagraphs(lines) {
   const out = [];
   for (const p of paras) {
     const decl = p.lines.filter((l) => DECL_KEYWORDS.some((k) => l.text.includes(k)));
-    if (decl.length) out.push({ start: p.start, lines: p.lines, declLines: decl });
+    if (decl.length || all) out.push({ start: p.start, lines: p.lines, declLines: decl });
   }
   return out;
 }
@@ -251,7 +317,12 @@ function resolveToken(tok, bases) {
  * "根解析不出来"是本检查自己的能力边界，不是被检对象的问题；把它算成 finding
  * 就是拿未知当已知）。
  */
-function checkFile(file, projectRoot, globalBases, otherRoots) {
+function checkFile(file, projectRoot, globalBases, otherRoots, opts) {
+  const scope = (opts && opts.scope) === "all" ? "all" : "declared";
+  // `strict` 在这里只表示「本次扫描面放大到了全文」；**具体每个 token 用哪一档，
+  // 由它所在段落是不是声明段决定**（见 `tokenStrict`）。两者刻意不合并成一个变量——
+  // 合并正是首版那个 bug 的形态：一个旗标同时管「扫多宽」与「判多严」。
+  const strict = scope === "all";
   const findings = [];
   const skipped = [];
   const fallbacks = Array.isArray(globalBases) ? globalBases.filter(Boolean) : [];
@@ -266,12 +337,14 @@ function checkFile(file, projectRoot, globalBases, otherRoots) {
   }
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
 
-  for (const para of declarationParagraphs(lines)) {
+  for (const para of declarationParagraphs(lines, strict)) {
     // 声明行里如果自己声明了一个「目录型」真相源，它就是本段落内相对路径的第二个基址。
     const extraBases = [];
     for (const d of para.declLines) {
-      for (const tok of backtickTokens(d.text)) {
-        if (!looksLikePath(tok)) continue;
+      for (const rawTok of backtickTokens(d.text)) {
+        const tok = stripLocator(rawTok);
+        // 声明行永远走宽档：这几行是人显式指出的真相源，样本少、信噪比高。
+        if (!looksLikePath(tok, false)) continue;
         const r = resolveToken(tok, projectRoot ? [projectRoot] : []);
         if (r.ok && r.resolved && !r.resolved.includes("*")) {
           try { if (fs.statSync(r.resolved).isDirectory()) extraBases.push(r.resolved); } catch (_) {}
@@ -284,9 +357,17 @@ function checkFile(file, projectRoot, globalBases, otherRoots) {
     for (const b of fallbacks) bases.push(b);   // HOME + 各项目根的父目录，见头注判据③
 
     const seen = new Set();
+    // 段内是否含真相源声明 —— 这一格就是 finding 的 `declared` 标记（并轨㈢）。
+    const isDeclPara = para.declLines.length > 0;
+    // **严档只用在声明段外**（并轨㈡ 的订正）：声明段是人显式指出的真相源，样本少、
+    // 信噪比高，收窄它只会丢覆盖面；段外是整份 memory，宽档在那里会淹掉真信号。
+    // 这样 `all` 的发现集才是 `declared` 的真超集 —— 否则「放大扫描面」与「收窄判据」
+    // 会在总数上互相抵消，谁都看不出覆盖面其实缩了一块。
+    const tokenStrict = strict && !isDeclPara;
     for (const l of para.lines) {
-      for (const tok of backtickTokens(l.text)) {
-        if (!looksLikePath(tok)) continue;
+      for (const rawTok of backtickTokens(l.text)) {
+        const tok = stripLocator(rawTok);
+        if (!looksLikePath(tok, tokenStrict)) continue;
         const key = l.lineNo + "|" + tok;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -311,7 +392,9 @@ function checkFile(file, projectRoot, globalBases, otherRoots) {
             file,
             lineNo: l.lineNo,
             token: tok,
-            declLine: para.declLines[0].lineNo,
+            // `scope: "all"` 下段内可以没有声明行 ⇒ declLine 为 null，别拿 [0] 硬取。
+            declLine: isDeclPara ? para.declLines[0].lineNo : null,
+            declared: isDeclPara,
             tried: r.tried,
             kind,
             peerHit,
@@ -331,8 +414,10 @@ function scan(opts) {
   const o = opts || {};
   const memoryRoot = o.memoryRoot || DEFAULT_MEMORY_ROOT;
   const rootResolver = o.rootResolver || decodeSlug;
+  const scope = o.scope === "all" ? "all" : "declared";
   const result = {
     memoryRoot,
+    scope,
     rootExists: fs.existsSync(memoryRoot),
     projects: [],
     files: 0,
@@ -388,7 +473,7 @@ function scan(opts) {
     for (const f of mdFiles) {
       const full = path.join(memDir, f);
       result.files++;
-      const r = checkFile(full, projectRoot, globalBases, allRoots);
+      const r = checkFile(full, projectRoot, globalBases, allRoots, { scope });
       if (r.error) { result.errors.push(`${full}: ${r.error}`); continue; }
       result.checked += r.checked;
       for (const x of r.findings) result.findings.push(Object.assign({ slug }, x));
@@ -398,16 +483,51 @@ function scan(opts) {
   return result;
 }
 
+/**
+ * 机器可读末行（契约）。消费方（SessionStart hook）**只解析这一行**，
+ * 不去正则匹配上面的中文正文 —— 两个文件之间拿文案当契约，正是「被引用方一改、
+ * 引用方静默失效」的温床（判据与形态照抄 `check-dead-gates.mjs` 的 DEAD_GATES_SUMMARY）。
+ * 字段全字段必配：**缺字段即判「契约被改坏」，不判「那一格没事」**。
+ * `exit=` 与真退出码按契约恒等，消费方要对一遍。
+ */
+function summaryLine(res, exitCode) {
+  const dead = res.findings.filter((f) => f.kind !== "ambiguous");
+  const amb = res.findings.filter((f) => f.kind === "ambiguous");
+  const declDead = dead.filter((f) => f.declared);
+  return [
+    "MEMORY_REFS_SUMMARY",
+    `exit=${exitCode}`,
+    `scope=${res.scope}`,
+    `root=${res.rootExists ? 1 : 0}`,
+    `projects=${res.projects.length}`,
+    `files=${res.files}`,
+    `checked=${res.checked}`,
+    `dead=${dead.length}`,
+    `declared_dead=${declDead.length}`,
+    `ambiguous=${amb.length}`,
+    `skipped=${res.skipped.length}`,
+    `errors=${res.errors.length}`,
+  ].join(" ");
+}
+
 /** 观察线输出：只打印，调用方决定退出码（本模块从不代人判红绿） */
 function formatReport(res) {
   const L = [];
-  L.push("== memory 真相源指针一致性（观察线：只打印，恒不参与退出码）==");
+  const scopeNote = res.scope === "all"
+    ? "全文路径引用 · scope=all"
+    : "只看「显式声明真相源」段落 · scope=declared";
+  L.push(`== memory 指针一致性（观察线：只打印，恒不参与退出码；${scopeNote}）==`);
   L.push(`  扫描面：${res.memoryRoot}`);
   if (!res.rootExists) {
     L.push("  本机无该目录 —— 零可扫。这不是通过，是**没测**（换台机器结论会不同）。");
     return L.join("\n");
   }
   L.push(`  项目 ${res.projects.length} 个 · memory 文件 ${res.files} 份 · 实判路径 token ${res.checked} 个`);
+  if (res.files > 0 && res.checked === 0) {
+    // 「扫到了文件却一个 token 都没取出来」= 取词判据失效的信号，不是「引用都健康」。
+    // 这一行与「零发现」刻意分开措辞：两种 0 长得一样，正是本模块反复在讲的那件事。
+    L.push("  ⚠️ 扫到了 memory 文件却零 token —— 这是取词判据失效的信号，不是「引用都健康」。");
+  }
   const noRoot = res.projects.filter((p) => !p.projectRoot);
   if (noRoot.length) {
     L.push(`  ⓘ 其中 ${noRoot.length} 个项目的根从 slug 解析不出（盘上已不存在？），其相对路径一律不判：`);
@@ -418,17 +538,29 @@ function formatReport(res) {
   if (!res.findings.length) {
     L.push("  [无发现] 所有「显式声明真相源」段落里的路径指针都还指得到东西。");
   }
-  if (dead.length) {
-    L.push(`  [${dead.length} 处指针指向空气 · dead] —— 声明了真相源，但该路径在本机哪儿都找不到：`);
-    for (const f of dead) {
-      L.push(`    · ${path.basename(f.file)}:${f.lineNo}  \`${f.token}\`   （声明行 :${f.declLine}，项目 ${f.slug}）`);
+  // 「段内」与「段外」分开列（并轨㈢）：处方不同，混在一起报会让人误判严重度。
+  //   段内 = 它自称是真相源指针，却指向空气 ⇒ 该修。
+  //   段外 = 多半是「memory 记的是当时的样子」，过期是常态 ⇒ 人判。
+  const declOf = (f) => (f.declared ? `声明行 :${f.declLine}` : "非声明段");
+  const deadIn = dead.filter((f) => f.declared);
+  const deadOut = dead.filter((f) => !f.declared);
+  if (deadIn.length) {
+    L.push(`  [${deadIn.length} 处指针指向空气 · dead · 真相源声明段内] —— 声明了真相源，但该路径在本机哪儿都找不到：`);
+    for (const f of deadIn) {
+      L.push(`    · ${path.basename(f.file)}:${f.lineNo}  \`${f.token}\`   （${declOf(f)}，项目 ${f.slug}）`);
       L.push(`        试过：${f.tried.join(" | ") || "（无可用基址）"}`);
+    }
+  }
+  if (deadOut.length) {
+    L.push(`  [${deadOut.length} 处路径引用解析不到 · dead · 声明段外] —— **过期是 memory 的常态**，该不该改是人的判断：`);
+    for (const f of deadOut) {
+      L.push(`    · ${path.basename(f.file)}:${f.lineNo}  \`${f.token}\`   （项目 ${f.slug}）`);
     }
   }
   if (amb.length) {
     L.push(`  [${amb.length} 处相对路径没写清相对于谁 · ambiguous] —— 本项目下解析不到，但另一个仓下能：`);
     for (const f of amb) {
-      L.push(`    · ${path.basename(f.file)}:${f.lineNo}  \`${f.token}\`   （声明行 :${f.declLine}，项目 ${f.slug}）`);
+      L.push(`    · ${path.basename(f.file)}:${f.lineNo}  \`${f.token}\`   （${declOf(f)}，项目 ${f.slug}）`);
       L.push(`        在 ${f.peerHit} 下能解析到 ⇒ 处方是把路径写全，不是改内容`);
     }
   }
@@ -436,14 +568,18 @@ function formatReport(res) {
     L.push(`  ⓘ 另有 ${res.skipped.length} 个相对路径因项目根不可解析而未判（不计入发现，也不算通过）`);
   }
   for (const e of res.errors) L.push(`  ⚠ ${e}`);
-  L.push("  射程边界：只查「显式声明真相源」段落里反引号包裹的路径是否解析得到；");
+  if (res.scope === "all") {
+    L.push("  射程边界：查 memory 全文里反引号包裹的路径形态引用是否解析得到（声明段内宽档、段外严档，见头注并轨㈡）；");
+  } else {
+    L.push("  射程边界：只查「显式声明真相源」段落里反引号包裹的路径是否解析得到；");
+  }
   L.push("  **不查**行为类断言是否仍成立、不查计数是否仍相符、不查内容语义。判据与两向反例见本模块头注。");
   return L.join("\n");
 }
 
 module.exports = {
   scan, checkFile, decodeSlug, declarationParagraphs, backtickTokens,
-  looksLikePath, resolveToken, globExists, formatReport,
+  looksLikePath, stripLocator, resolveToken, globExists, formatReport, summaryLine,
   DECL_KEYWORDS, PATH_EXTS, DEFAULT_MEMORY_ROOT, HOME,
 };
 
@@ -451,6 +587,17 @@ if (require.main === module) {
   // MEMORY_TRUTH_SOURCE_ROOT：测试注入用（把扫描面指到 fixture）。生产不设该变量。
   const rootOverride = process.env.MEMORY_TRUTH_SOURCE_ROOT || null;
   const opts = {};
+  // `--scope=all|declared`：缺省 declared（与并轨前同行为）。**未知取值不静默回落**——
+  // 回落等于「你以为扫了全文、其实只扫了声明段」，正是本模块通篇在防的那种不可区分。
+  const scopeArg = process.argv.slice(2).find((a) => a.startsWith("--scope="));
+  if (scopeArg) {
+    const v = scopeArg.slice("--scope=".length);
+    if (v !== "all" && v !== "declared") {
+      process.stderr.write(`[memory-truth-source] --scope 只认 all|declared，收到：${v}\n`);
+      process.exit(2);
+    }
+    opts.scope = v;
+  }
   if (rootOverride) {
     opts.memoryRoot = rootOverride;
     // fixture 的 slug 用假盘符，真实 decodeSlug 解不出；让它相对 fixture 根解。
@@ -460,8 +607,10 @@ if (require.main === module) {
     }
   }
   const res = scan(opts);
-  process.stdout.write(formatReport(res) + "\n");
   // 观察线：**findings 恒不改退出码**（这一行就是闸位决定本身，改它前先读头注「闸位」段）。
   // 只有本模块自己出错（读不动目录）才非零。
-  process.exit(res.errors.length ? 1 : 0);
+  const code = res.errors.length ? 1 : 0;
+  process.stdout.write(formatReport(res) + "\n");
+  process.stdout.write(summaryLine(res, code) + "\n");
+  process.exit(code);
 }
