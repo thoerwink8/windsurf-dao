@@ -1,0 +1,444 @@
+{
+  "_doc": {
+    "这是什么": "条款台账的**机器面**。它是台账字段（复发次数 / 首次入库 / 触发点 / 基线 / 自定标记 / 出处 / 状态）的唯一真相源；**条款正文仍以 Markdown 为唯一真相源**，本文件一个字的正文都不存。",
+    "怎么和正文对上": "靠行内 slug —— Markdown 条款行尾写 `[#<域>-<短名>]`，本文件按同一个 slug 建键。双向孤儿检测：正文有 slug 而本文件无条目、本文件有条目而正文找不到 slug，两边都判红。",
+    "为什么不存正文": "存正文＝手工双写，而双写必漂移。要正文的消费方回去读 Markdown（clause-index.json 存行号）。",
+    "为什么存 file": "orphan 检测要分得开「这条被删了」与「这条住在另一份文件里」（守卫一次只看一份文件）。它是**被校验的**冗余不是静默双写：slug 实际出现的文件与本字段不符即判红（ledger-file-mismatch）。",
+    "双轨期怎么读": "旧元字段（`[n= @ 触发:]` / `[基线:]` / `[自定@]` / `[仅判据·无触发]`）**原位保留未删**。两轨逐字段对账，任一条不等即红；**这份对账全绿是批 3 删旧字段的前置门**。",
+    "谁在检": "两套独立实现各查一遍：`ccswitch/scripts/gen-clause-index.mjs`（node）与 `ccswitch/scripts/check-clauses-structure.ps1`（PowerShell）。两边数不一致时 `--reconcile` 判红。",
+    "字段语义": {
+      "n": "复发次数，**字符串**（`\"?\"` 是合法取值＝未标次数、不等于零次）。`null` = 该条从来没有过这个字段。",
+      "first_seen": "首次入库月日 `MM-DD`，刻意不补年份（原文就没有年份，补年份＝派生物凭猜测造信息）。",
+      "trigger": "挂在哪个必经动作上；`\"无\"` = 答不出，此时 judge_only 应为 true。",
+      "judge_only": "对应正文的 `[仅判据·无触发]` 标记。",
+      "self_authored": "`[自定@MM-DD]` 的**全部**取值（数组）——正文里确有一行带两个日期，只取第一个会静默丢一个。",
+      "baseline": "入库时的基线数字原文；`null` = 未标（有效性无从判定，不得被引用为「有效」）。",
+      "source_refs": "可复核的出处指针（叙事 Nx / rationales §x / 文档路径 / 教训 Lxx）。空数组 = 正文没给指针。",
+      "status": "`active` = 在用（正文里必须找得到它的 slug）· `retired` = 已退役（正文应已删，不参与孤儿检测）。"
+    },
+    "台账不全的那几条": "n / first_seen / trigger 为 null 的条目，是搬录时正文里本来就没有这三个字段的条款（它们带 `[基线:]` 或 `[自定@]` 却没有 `[n= @ 触发:]` 签名，此前解析器结构上看不见）。**搬录不改写**：不替未知编一个值。守卫把它们打印成观察线（回填还是承认未知是判断，不设闸）。",
+    "改它要改哪里": "改条款正文改 Markdown；改台账数字改本文件。两者都改完跑一次两个守卫，对账不绿就是有一边没跟上。"
+  },
+  "schema_version": 1,
+  "clauses": {
+    "Shell-PS四坑": {
+      "file": "ccswitch/dao.md",
+      "n": "?",
+      "first_seen": "08-01",
+      "trigger": "paths作用域",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "未测——机制本身 2026-08-01 canary 正负控双向实测生效，但「装了触发器之后这四条的遵守率」未测，不得按已改善宣称",
+      "source_refs": [],
+      "status": "active"
+    },
+    "Shell-patch-id": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "1/1——本窗唯一一次「疑似遗失工作」经 patch-id 复核后为误判",
+      "source_refs": [],
+      "status": "active"
+    },
+    "Shell-合并链": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "同窗 3/3 个 PR 的远程分支删除静默失败",
+      "source_refs": [],
+      "status": "active"
+    },
+    "Shell-源与投影": {
+      "file": "ccswitch/dao.md",
+      "n": "2",
+      "first_seen": "07-26",
+      "trigger": "改配置",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2/2——07-26 直改投影被源覆盖、08-01 改镜像层永不下发，两次病根同为认错源",
+      "source_refs": [],
+      "status": "active"
+    },
+    "动-义务转移": {
+      "file": "ccswitch/dao.md",
+      "n": "24",
+      "first_seen": "07-27",
+      "trigger": "完成流水线③",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "24 个 UI 可见 PR 承诺「截图随帅 dogfood 补」，qa-assets 零对应目录、PR 零评论 ⇒ 兑现 0/24",
+      "source_refs": [
+        "叙事 N9-①"
+      ],
+      "status": "active"
+    },
+    "动-方案过镜": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-02",
+      "trigger": "用户提出方案",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "1/1+当轮纠偏1次——首版把触发面窄化成「抛手段句式」、把「呈对比」写成「独立选」，用户当轮指出片面（单实例句式被冻成触发条件，L27 镜像）",
+      "source_refs": [
+        "L27"
+      ],
+      "status": "active"
+    },
+    "反-fetch静默": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "本窗 1/1 次复验撞到，成因是同窗并发合并 + 一次 fetch 网络失败",
+      "source_refs": [
+        "rationales §反-3"
+      ],
+      "status": "active"
+    },
+    "反-写守卫": {
+      "file": "ccswitch/dao.md",
+      "n": "?",
+      "first_seen": "08-01",
+      "trigger": "paths作用域",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "未测——机制已双向实测，遵守率改善未测",
+      "source_refs": [],
+      "status": "active"
+    },
+    "反-预算护栏": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-28",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "某仓单文件 production 上限 300 行，一个 PR +52 行、同期 main +23 行，任一侧单独都没越线，合并后 308 行硬闸红；`gh` 全程报 MERGEABLE/UNKNOWN",
+      "source_refs": [
+        "rationales §反-2"
+      ],
+      "status": "active"
+    },
+    "守-全域分布": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "某仓 LOC 治理网只覆盖 Rust 侧，而全仓体量与改动频率前三全在零覆盖的前端层（2339行/52次、2125行/35次、1924行/22次）",
+      "source_refs": [
+        "叙事 N9-⑤"
+      ],
+      "status": "active"
+    },
+    "守-自检独立": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "07-28",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "未测——该守卫上线当轮真实数据零触发，判别力只由合成夹具验证",
+      "source_refs": [],
+      "status": "active"
+    },
+    "守-输出面外": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "某仓乱码扫描器上线首轮即自我放大，由对抗验证官测出、实现官未察觉；收敛性未验",
+      "source_refs": [],
+      "status": "active"
+    },
+    "守-退役触发": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "verify-all/check-clauses-structure",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "某仓条款库 18 次提交净删除 3 行（唯一那次是修自伤非退役）；63 条里 n≥2 仅 11 条，而最高频两个病（≥23 踩、≥10 例）合计只占 1-2 条",
+      "source_refs": [
+        "叙事 N9-⑥"
+      ],
+      "status": "active"
+    },
+    "帅-对抗前置": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "某仓修复间隔呈双峰，24% 的返工发生在合并后 4 小时内",
+      "source_refs": [
+        "叙事 N9-⑦"
+      ],
+      "status": "active"
+    },
+    "帅-拍板八步": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-01",
+      "trigger": "拍板执行批",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "P1-P8 架构优化批首例即用升级版；业界出处 docs/research/change-mgmt-survey-20260801.md",
+      "source_refs": [
+        "docs/research/change-mgmt-survey-20260801.md"
+      ],
+      "status": "active"
+    },
+    "帅-水位线": {
+      "file": "ccswitch/dao.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-01 首例——队列三件互不相交就绪（#367/#343/#440），帅单路空转约 30 分钟，用户点名「帅位只管一个将不妥」",
+      "source_refs": [],
+      "status": "active"
+    },
+    "帅-热重载": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-01",
+      "trigger": "真机派单",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "同窗真机 wave4 被并发的 #334 实现官瞬时主仓编辑触发 dev 重启 3 次，#516/#260 观测建立在污染构建上需重跑；同窗帅「冻结 main」被自己违反 2 次（docs 推送）",
+      "source_refs": [
+        "rationales §帅-5"
+      ],
+      "status": "active"
+    },
+    "帅-资源独占": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "07-28",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "某窗 6 个 PR 的真机三态填写合规率 6/6，而实际走过真机的只有 1 路 ⇒ 逐条读账本看不出任何异常",
+      "source_refs": [],
+      "status": "active"
+    },
+    "帅-越权先查": {
+      "file": "ccswitch/dao.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [
+        "07-30"
+      ],
+      "baseline": null,
+      "source_refs": [
+        "L31"
+      ],
+      "status": "active"
+    },
+    "归-dao先行": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-01",
+      "trigger": "体系改动",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "本窗 STAR 评论规范 + issue 中心先在 mousse 建成、artifact 不可迁移，用户点名「应先改 dao 内核再下沉」",
+      "source_refs": [
+        "rationales §归-2"
+      ],
+      "status": "active"
+    },
+    "归-根路径消歧": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-01",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "本文件 9 处裸 `docs/` 实测逐一 resolve——4 处仅在项目侧存在、5 处仅在 windsurf-dao 存在，零处两仓皆有",
+      "source_refs": [
+        "rationales §归-1"
+      ],
+      "status": "active"
+    },
+    "法-偏保守": {
+      "file": "ccswitch/rules/dao-legislation.md",
+      "n": "2",
+      "first_seen": "07-27",
+      "trigger": "元字段",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "首轮收割 10 条 100% 逐条送用户拍板（dao-growth-loop §四）；按本档回溯分类未做，故「其中本可自定的占比」未测。同类诉求另一次出处：2026-06-16 用户要求 `/dao-distill` 自动化「不需要人为去干预」",
+      "source_refs": [],
+      "status": "active"
+    },
+    "法-基线数字": {
+      "file": "ccswitch/rules/dao-legislation.md",
+      "n": "1",
+      "first_seen": "07-27",
+      "trigger": "元字段",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "「秒级自合」100%→13.5% 的拐点落在 PR #58，治它的条款晚 5 天入库 ⇒ 那 86.5 个百分点与条款无关；同型污染面=出处日期晚于实际拐点的全部条款",
+      "source_refs": [
+        "叙事 N9-③"
+      ],
+      "status": "active"
+    },
+    "派-写入面": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "1",
+      "first_seen": "07-29",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [
+        "07-29"
+      ],
+      "baseline": "本窗 1/1 次派测量类官即污染，且是帅自己；此前无同类条款",
+      "source_refs": [
+        "rationales §帅-4"
+      ],
+      "status": "active"
+    },
+    "派-工具面门": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "2",
+      "first_seen": "07-28",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本窗两次派对抗验证官皆选了只读 type（`dao-reviewer-critical`），三个定义性动作 3/3 落空",
+      "source_refs": [
+        "rationales §帅-3"
+      ],
+      "status": "active"
+    },
+    "派-档位调整": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "1",
+      "first_seen": "08-01",
+      "trigger": "派单",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "dao 审计舰队 6+6 官因 Explore 未显式传 model 全跑 opus-4.8，用户点名「怎么派发的是 opus4.8」",
+      "source_refs": [
+        "rationales §帅-1"
+      ],
+      "status": "active"
+    },
+    "派-语料来源": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "11",
+      "first_seen": "07-27",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "某护栏正则被 11 个 PR 触碰、其中 8 个集中在 19.8 小时内，每层修复面 100% 落在上一层刚写的行上（共享比例 0.92–1.00）",
+      "source_refs": [
+        "叙事 N9-④"
+      ],
+      "status": "active"
+    },
+    "窗-串行瓶颈": {
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-01 同窗——清掉 40+ 并行代码单后，剩余 22 行动层里 21 是真机（一实例串行），此时 1-2 路是物理天花板非纪律问题；真钥匙是 #446 双实例",
+      "source_refs": [],
+      "status": "active"
+    },
+    "窗-接力阈值": {
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "n": "0",
+      "first_seen": "08-01",
+      "trigger": "完成流水线③",
+      "judge_only": false,
+      "self_authored": [
+        "08-01"
+      ],
+      "baseline": "mousse-cli 2026-07-26..08-01 七窗实测每窗合并 PR 数 25/42/21/13/23/53/17，中位 23；取 25 回测 **3/7 窗**触发（07-26/07-27/07-31）——刻意不取中位数，取中位会让它每窗都响、随即被当背景噪音无视（同「生下来就吵的检查一定会被静音」）。**「触发之后接不接力」零实测**，本条只证明阈值不会常响，不证明它选得对",
+      "source_refs": [],
+      "status": "active"
+    },
+    "窗-目标闭包": {
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-07-31 首窗即含完整实例——L0-L3 四层推进中 L2 撞 GitHub 授权墙，绕路判无意义→回退挂账 #410 带解冻条件→继续推其余层，「挂账也是达成」当场演示",
+      "source_refs": [],
+      "status": "active"
+    },
+    "续-每轮心跳": {
+      "file": "ccswitch/dao.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [
+        "07-29",
+        "07-30"
+      ],
+      "baseline": "同一条款三次射程缺口，3/3 均为「场景表上没有的时刻」",
+      "source_refs": [
+        "叙事 N10"
+      ],
+      "status": "active"
+    },
+    "言-只读载体": {
+      "file": "ccswitch/dao.md",
+      "n": "20",
+      "first_seen": "07-27",
+      "trigger": "hook硬闸+PR流程",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "全库 PR body 未勾 `- [ ]` 共 46 处、分布约 20 个 PR；237 个 PR 中未见合并后编辑 body 的实践。**2026-08-01 加闸时复测：近 30 个 merged PR 中 0 个 body 含未勾框** ⇒ 本闸是纵深防御，不是在止血",
+      "source_refs": [
+        "叙事 N9-②"
+      ],
+      "status": "active"
+    }
+  }
+}
