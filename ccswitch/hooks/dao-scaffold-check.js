@@ -397,6 +397,13 @@ function budgetLines(daoRoot) {
             "）→ 契约可能被改坏了，手动跑一次看输出：node ccswitch/scripts/check-alwayson-budget.mjs"];
   }
   const [, sExit, sTotal, sLimit, sFiles, sHead, sScoped, , sSelf] = m;
+  // 目标闸值三格（2026-08-02 加）**单独用一条容错正则取，不并进上面那条主契约正则**：
+  // 主正则一旦要求这三格存在，遇到旧版脚本就整条匹配不上 ⇒ 走进「契约被改坏了」那一支，
+  // 把一个「字段还没有」误报成「契约坏了」。分开取则旧版只是拿不到目标那一行，其余照常。
+  // `\btarget=` 的词界是必需的：`overtarget=` 里也含 `target=`，无词界会取错值。
+  const mt = /ALWAYSON_BUDGET_SUMMARY[^\r\n]*\btarget=(\d+)[^\r\n]*\bovertarget=(\d+)/.exec(out);
+  const sTarget = mt ? mt[1] : null;
+  const nOverTarget = mt ? Number(mt[2]) : 0;
   if (sExit !== "0" || code !== 0) {
     const why = sSelf === "fail"
       ? "检测器自检半边失败（selfcheck=fail）⇒ 此时「未超限」不可信，先修检测器"
@@ -407,9 +414,22 @@ function budgetLines(daoRoot) {
     return ["✗ always-on 字节预算闸 FAIL：" + why + (exits ? "\n" + exits : "") +
             "\n  → 全量：node ccswitch/scripts/check-alwayson-budget.mjs"];
   }
-  return ["ⓘ always-on 字节预算：计入 " + sFiles + " 份文件合计 " + sTotal + " B / 闸值 " + sLimit +
-          " B，**余量 " + sHead + " B**（另 " + sScoped +
-          " 份带 `paths:` 的作用域档不占配额）——闸值是**占位待用户拍板**，判据见 " +
+  // 绿态一行。**2026-08-02 起有两种绿**，必须分得开：
+  //   · 真·达标（overtarget=0）
+  //   · 过渡期（exit=0 但欠着目标闸值）—— 若与前者共用同一行文案，两档闸值就白分了，
+  //     用户会以为「一片绿」而那笔 43KB 的欠账从此不在任何人眼前经过。
+  const head = "ⓘ always-on 字节预算：计入 " + sFiles + " 份文件合计 " + sTotal + " B / 闸值 " + sLimit +
+               " B，**余量 " + sHead + " B**（另 " + sScoped + " 份带 `paths:` 的作用域档不占配额）";
+  if (nOverTarget > 0) {
+    return [head +
+      "\n  ⚠ **过渡期**：目标闸值 " + (sTarget || "?") + " B（用户 2026-08-02 拍板），当前**欠 " +
+      nOverTarget + " B** —— 退出码暂按过渡上限 " + sLimit +
+      " B 判。**这不是回归**，是 dao.md 重写批 3（docs/specs/dao-rewrite-202608.md）落地前的预期欠账；" +
+      "批 3 完成后删掉 check-alwayson-budget.mjs 的 TRANSITION_CEILING_BYTES 即生效。" +
+      "\n  → 现在就按目标判：node ccswitch/scripts/check-alwayson-budget.mjs --strict"];
+  }
+  return [head + "——目标闸值 " + (sTarget || sLimit) +
+          " B 已达标（用户 2026-08-02 拍板），判据见 " +
           "ccswitch/scripts/check-alwayson-budget.mjs 的 LIMIT_BYTES 头注"];
 }
 
