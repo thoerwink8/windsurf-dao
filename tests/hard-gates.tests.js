@@ -114,9 +114,16 @@ console.log("\n──── G2 · live ~/.claude/settings.json（投影，非源
   for (const n of ["settings.json", "settings.local.json"]) {
     const r = gate(edit(path.join(HOME, ".claude", n)));
     check(`正控：Edit ${n} → exit 2`, r.code === 2, `code=${r.code}`);
-    check(`正控：${n} stderr 指出 config-sync 快照层这条正路`,
-      /config-sync\/common\/settings\.json/.test(r.err) && /direction=down/.test(r.err), r.err.slice(0, 200));
-    check(`正控：${n} stderr 点名不要建议 --direction=up`, /不要建议 `--direction=up`/.test(r.err));
+    // ⚠ 2026-08-02 issue #63 改钉：原先这两条钉的是「指出 config-sync 快照层 + direction=down 是正路」，
+    // 而那条路径已被 #49 的下发链实测证伪（快照层与 common_config_* 镜像层都不在下发路径上，
+    // 照它做改动永不生效，PR #43 即如此）。现在钉的是①真实下发源②那两层**被明说为不生效**。
+    // **刻意不写成 `!/direction/` 那种反向断言**：新文案仍然点名 `dao.bat --direction=down/up`，
+    // 只是把它从「正路」改成「别拿它来让 hook 生效」——禁令本身有价值（旧说法散在 PR body 与
+    // 历史文档里，光删不说等于让人再试一次）。两条断言在文案被回退成旧版时都会红（已 mutation 实测）。
+    check(`正控：${n} stderr 指出真实下发源 providers.settings_config + 每个 provider 都要改`,
+      /providers/.test(r.err) && /settings_config/.test(r.err) && /每个 provider 都要改/.test(r.err), r.err.slice(0, 300));
+    check(`正控：${n} stderr 明说快照层/镜像层不会生效（旧「正路」已被 #49 证伪）`,
+      /镜像层/.test(r.err) && /不会生效/.test(r.err), r.err.slice(0, 300));
   }
   check("正控：Write（整份覆写）同样拦",
     gate({ tool_name: "Write", tool_input: { file_path: path.join(HOME, ".claude", "settings.json") } }).code === 2);
@@ -128,7 +135,10 @@ console.log("\n──── G2 · live ~/.claude/settings.json（投影，非源
     gate(CANARY["G2-live-settings"], { env: { DAO_SETTINGS_EDIT_APPROVED: "true" } }).code === 2);
 
   const negatives = [
-    ["改 git 快照层是正路，不该拦", edit(path.join(REPO, "config-sync", "common", "settings.json"))],
+    // 名字 2026-08-02 (#63) 改过：原写「改 git 快照层是正路」——**那句话本身已被 #49 证伪**
+    // （快照层不在下发路径上）。断言不变、覆盖面不变：本闸只管 live 那一份，仓内文件本就不该拦。
+    ["改仓内 config-sync 快照层不该拦（本闸只管 live 那一份；快照层能不能生效是另一回事）",
+      edit(path.join(REPO, "config-sync", "common", "settings.json"))],
     ["改项目级 .claude/settings.json 不该拦（那不是 cc-switch 投影）",
       edit("D:/frank/mousse-cli/.claude/settings.json")],
     ["改 ~/.claude 下的别的文件不该拦", edit(path.join(HOME, ".claude", "CLAUDE.md"))],

@@ -32,6 +32,15 @@
 // 「dao.md 帅节 ⑤自主边界」在 #1 之后已不是 dao.md 里的编号（⑤ 随正文迁去
 // ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁，dao.md 只剩留守判据 ㈣）。
 // **test() 的 matcher 与判定分支仍未动过一个字符**，改的只有指向哪里的那几句话。
+// ⚠️ **第二次改文案（2026-08-02，issue #63）：G2 的 why 与 how ② 教的是一条已被证伪的路径**——
+// 原文写「正路是改 git 快照层 `config-sync/common/settings.json`，再由用户跑 `dao.bat
+// --direction=down`」，而 #49 的下发链实测证明快照层与 `common_config_claude` 镜像层**都不在
+// 下发路径上**，照它做改动**永不生效**（PR #43 即如此：写满两层而 live 始终未注册）。
+// **一道闸给出走不通的合法路径，比不给更糟**：被拦的人会照做，然后以为自己已经做完了。
+// 现改为指向真实下发源 `providers.settings_config`（每个 provider 都要改）。
+// **G2 的 tools/matcher 与 test() 判定分支同样一个字符未动**，改的只有被拦时打给人看的那段话。
+
+
 //
 // G1 · windows-mcp 禁令 —— **弃用理由**：用户 2026-07-25 一票否决，该 MCP 已从机器卸载
 //   （完整因果链见 docs/evolution/dao-clause-rationales.md §动-2）。**替代分工**见下方 G1 的
@@ -73,9 +82,14 @@
 //
 // 回归网：tests/hard-gates.tests.js（每闸正控+负控双向 + mutation 判别力 + canary 恒等）。
 // 真相源：windsurf-dao/ccswitch/hooks/dao-hard-gates.js
-// 注册：settings.json 的 PreToolUse（matcher 见 REQUIRED_MATCHER_COVERAGE）。
-//       快照层已同批登记在 config-sync/common/settings.json；写进 DB 需用户跑一次
-//       `dao.bat --direction=down`（见 PR body「注册需要的一次确认动作」）。
+// 注册：live `~/.claude/settings.json` 的 PreToolUse（matcher 见 REQUIRED_MATCHER_COVERAGE）。
+//       **注册的写入面是 cc-switch DB `providers` 表各 provider 的 `settings_config`，且每个
+//       provider 都要写**（切 provider 时 live 被目标 provider 的配置整体覆盖 ⇒ 只写一个等于没写；
+//       判据见 dao.md「改配置先认源与投影」，长期对齐机制挂 issue #50）。**属用户动作**——
+//       AI 侧写 DB 被权限分类器全路径拦截，这是「AI 不得改自己 hook 注册」的意图级保护。
+//       ⚠ `config-sync/common/settings.json`（快照层）与 DB 的 `common_config_claude` 键（镜像层）
+//       **都不在下发路径上**：2026-08-02 已注册完毕（#49），此前 PR #43 把注册写满这两层而 live
+//       始终未注册，正是这个原因。别再据此建议跑 `dao.bat --direction=down` 来「让它生效」。
 
 "use strict";
 
@@ -179,7 +193,7 @@ const GATES = [
 
   {
     id: "G2-live-settings",
-    why: "dao.md Shell 节「settings.json 运行时改动 · 确认门禁」+「改配置先认源与投影」（`~/.claude/settings.json` 是 cc-switch DB 经 config-sync/lib/export.mjs 的**投影**；改投影立即生效但不持久、下次下发即覆盖且无告警）",
+    why: "dao.md Shell 节「settings.json 运行时改动 · 确认门禁」+「改配置先认源与投影」（`~/.claude/settings.json` 是 cc-switch 下发的**投影**——真实下发源是 DB `providers` 表各 provider 的 `settings_config`，下发只挂在 GUI「切换 provider」这个动作上；改投影立即生效但不持久、下次切 provider 即被整体覆盖且无告警）",
     escapeEnv: "DAO_SETTINGS_EDIT_APPROVED",
     tools: ["Edit", "Write", "MultiEdit", "NotebookEdit"],
     test(input) {
@@ -195,12 +209,18 @@ const GATES = [
       return {
         what: `要写用户级 live 配置 \`${fp}\``,
         how:
-          "两条正路，按用户授权与否二选一：" +
+          "三条正路，按你到底想要什么三选一：" +
           "①**未获用户明确授权** → 不要动它。把改动写成 `_tmp/settings-patch.json`，" +
           "并把会话外的执行命令交给用户（dao.md Shell 节原文即此路）。" +
-          "②**只是要让改动持久** → 改的对象错了：这个文件是 cc-switch DB 的投影，" +
-          "正路是改 git 快照层 `config-sync/common/settings.json`，再由用户跑 " +
-          "`dao.bat --direction=down`（快照→DB）。**不要建议 `--direction=up`**（up 是读 DB 覆盖快照，会把你刚写的冲掉）。" +
+          "②**只是要让改动持久** → 改的对象错了：这个文件是 cc-switch 下发的投影，" +
+          "真实下发源是 **cc-switch DB `providers` 表各 provider 自带的 `settings_config`**。" +
+          "正路：请用户在 cc-switch GUI 里编辑 provider 配置（或由用户执行 SQL）写进那一列，" +
+          "**且每个 provider 都要改**——切 provider 时 live 会被目标 provider 的配置整体覆盖，" +
+          "只改一个等于没改（per-provider 漂移，长期对齐机制挂 issue #50）。" +
+          "写 DB 属**用户动作**：AI 侧被权限分类器全路径拦截，这是「AI 不得改自己 hook 注册」的意图级保护。" +
+          "⚠ **改 `config-sync/common/settings.json`（git 快照层）或 DB 的 `common_config_*` 键（镜像层）都不会生效**——" +
+          "两者都不在下发路径上（#49 实测；PR #43 曾把 hooks 注册写满这两层而 live 始终未注册），" +
+          "所以也**不要建议跑 `dao.bat --direction=down/up` 来让它生效**。判据见 dao.md「改配置先认源与投影」。" +
           "③用户已当面授权、且确实要改 live 那一份 → 由**用户**设 `DAO_SETTINGS_EDIT_APPROVED=1` 后重开会话（agent 自己 export 影响不到本 hook）。",
       };
     },
@@ -338,7 +358,10 @@ function selfcheck() {
     regNote = matchers.length
       ? `✓ 已注册于 PreToolUse，matcher=${matchers.map((m) => JSON.stringify(m)).join(" , ")}`
       : `✗ 未注册：${LIVE_SETTINGS} 的 hooks.PreToolUse 里没有引用 dao-hard-gates.js 的 command。` +
-        `本 hook 此刻**一道闸都不生效**（快照层 config-sync/common/settings.json 已登记 → 请用户跑一次 \`dao.bat --direction=down\` 写进 DB）。`;
+        `本 hook 此刻**一道闸都不生效**。修法：请用户把这组 PreToolUse 注册写进 cc-switch DB ` +
+        `\`providers\` 表**每个** provider 的 \`settings_config\`（GUI 编辑 provider 配置或执行 SQL）——` +
+        `切 provider 会用目标 provider 的配置整体覆盖 live，只写一个 provider 会在下次切换时静默失效（issue #50）。` +
+        `⚠ 写 git 快照层 config-sync/common/settings.json 或 DB 的 common_config_* 镜像层**不会让它生效**（两层都不在下发路径上，#49 实测）。`;
     if (!matchers.length) bad++;
   } catch (e) {
     regNote = `✗ 读不到 live settings.json（${LIVE_SETTINGS}）：${e.message} —— 无从判定是否注册，按未注册计。`;
