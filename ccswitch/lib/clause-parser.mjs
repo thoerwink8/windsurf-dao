@@ -756,6 +756,14 @@ export function defaultSources() {
     { file: "ccswitch/rules/dao-guard-writing.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-legislation.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-longwindow.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
+    // **唯一一份带官种分节的源**（2026-08-02 加）。此前带分节的语料只住在各项目仓，于是
+    // `render-clauses.mjs --role implementer` 之类恒为 0 条 —— 那正是 dao-subagent-clauses
+    // 这个 hook 的官种分支渲染不出东西的原因。它进清单同时打开三件事：索引里有官种、
+    // 台账（clause-ledger.json）把它纳入扫描面（不纳入的话它的 59 条会全部落进 out_of_scope
+    // 而在默认清单下判红）、`--reconcile` 拿它当第三份真语料对数。
+    // selector 用 **all-top-level** 而不是 marked：这份文件「整份就是条款列表」，该选择器
+    // 才检得出「某条整个丢掉台账」（marked 看不见没有字段的行，那条会静默不存在）。
+    { file: "ccswitch/rules/dao-officer-clauses.md", selector: SELECTOR.ALL_TOP_LEVEL, role_scheme: ROLE_SCHEME.DISPATCH_SECTIONS },
     // 下面几份当前**零条款**（纯细则正文，元字段一个都没有）。**刻意留在清单里**：
     // 移出去等于「这几份文件从此没人看着」，而它们随时可能长出条款。零条款不是问题，
     // 「零条款」与「没扫过」分不开才是问题 —— 索引里 clauses:0 就是那个区分。
