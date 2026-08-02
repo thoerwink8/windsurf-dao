@@ -372,6 +372,39 @@ console.log("\n=== 模式 B · 桌面端基建判据两态 ===");
     !/desktop-debugging\.md/.test(ctx(run(cwd))));
 }
 
+// ── Wails 指纹（2026-08-02 补）· 三态 ───────────────────────────────────────
+// 为什么必须三态而不是一态：只验「有 wails 就报」挡不住判据被放宽——一个忽略 go.mod
+// 内容、见 go.mod 就当桌面端的实现同样能让第一条通过，而那会把每个 Go 后端仓都报一遍
+// （噪音训练人忽略整个 hook 的输出，正是本清单头注点名要避免的失败方向）。
+// 第三态钉 label：报文得说得出「是哪一路信号命中的」，否则人拿到报文不知道该去查什么。
+{
+  const cwd = mkproj("wails-app", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+    fs.writeFileSync(path.join(root, "go.mod"),
+      "module example.com/app\n\ngo 1.22\n\nrequire github.com/wailsapp/wails/v2 v2.9.1\n", "utf8");
+    // 刻意不给 package.json：Wails 的前端 package.json 在 frontend/ 而非仓根，
+    // 这也顺带钉住 desktop-dev-debug-script 的 not(file package.json) 那一路会放行。
+  });
+  const c = ctx(run(cwd));
+  check("Wails 项目（go.mod 含 wailsapp/wails）缺 desktop-debugging.md → 报出",
+    /desktop-debugging\.md/.test(c), "ctx=" + c.slice(0, 400));
+  check("报文标明框架为 Wails（label 走的是 go.mod 那一路，不是 Tauri/Electron）",
+    /Wails 桌面端项目/.test(c), "ctx=" + c.slice(0, 400));
+  check("Wails 仓无仓根 package.json → 不报缺 dev:debug 脚本（刻意的漏报侧：无 npm 脚本面）",
+    !/dev:debug 脚本/.test(c), "ctx=" + c.slice(0, 400));
+}
+{
+  const cwd = mkproj("plain-go", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+    fs.writeFileSync(path.join(root, "go.mod"),
+      "module example.com/svc\n\ngo 1.22\n\nrequire github.com/go-chi/chi/v5 v5.0.0\n", "utf8");
+  });
+  check("负控：普通 Go 仓（go.mod 无 wails）→ 不触发桌面端判据（判据不是「有 go.mod」）",
+    !/desktop-debugging\.md/.test(ctx(run(cwd))));
+}
+
 console.log("\n=== 模式 B · 活跃 loop / plan 两态 ===");
 {
   const cwd = mkproj("active-loop", (root) => {
