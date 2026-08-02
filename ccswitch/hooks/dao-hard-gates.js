@@ -16,13 +16,15 @@
 // 的软提醒分支；机器根本判不了的（审美拍板 / 打磨到位 / 不许留空未尽处）**留在文本里**，
 // 判定表与逐条理由见本批 PR body 与 docs/specs/dao-arch-optimization-202608.md P1 行。
 //
-// ── 五道闸（逐条的判据出处写在各自的 GATES 条目里）──────────────────────────
+// ── 六道闸（逐条的判据出处写在各自的 GATES 条目里）──────────────────────────
 //   G1 windows-mcp 全面禁令          dao.md「目·观」§windows-mcp 禁令（一票否决）
 //   G2 live ~/.claude/settings.json  dao.md Shell 节「确认门禁」+「改配置先认源与投影」
 //   G3 对外发布类命令                dao.md 帅节留守判据 ㈣自主边界「对外发布 / 需用户在场」
 //                                    （正文 2026-08-02 迁 ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁）
 //   G4 浏览器 MCP 截图落盘路径        dao.md Shell 节「截图路径强制」
 //   G5 只读载体未勾待办               dao.md「言·名之则」§只读载体禁写待办
+//   G6 心跳 prompt 缺 `[dao-heartbeat]` 签名  docs/specs/dao-rewrite-202608.md 分流表第 3 类
+//                                    「心跳投递机器化」（2026-08-02 新增 · **呈批项**，见下）
 //
 // ── 各闸的判据全文（2026-08-02 dao.md 瘦身批 #7 迁入；dao.md 那三段已压成一行指针）──
 // 迁入前逐段核对过：dao.md 当时写着「全文见该 hook 头注，本行不复述」，而**头注里其实没有**
@@ -59,6 +61,30 @@
 //   PowerShell / .NET 的截图脚本（System.Drawing CopyFromScreen 那条路）走的**不是工具调用**，
 //   本闸看不见它，那一半仍然只是判据。同样别把「G4 已上闸」读成「截图路径已经有人管了」。
 //
+// G6 · 心跳签名（2026-08-02 新增，dao 重写批 1-C）——**它拦的不是一个坏动作，是一个坏格式**，
+//   这在本文件里是头一遭，所以理由要写清楚：
+//   ㈠ **它是另一件事的前置条件，本身不是禁令**。dao-rhythm.js（UserPromptSubmit）新增的
+//      WAKEUP 信号靠 `[dao-heartbeat]` 这个前缀认出「这一轮是心跳唤醒」，据此注入长窗留守四句
+//      + 「Read dao-longwindow.md §心跳对账节」。**没有签名 ⇒ 那一轮什么都不注入**，而心跳轮
+//      恰恰是留守四句唯一的投递时刻（dao.md 帅节长窗存根：「投递通道 = 开窗仪式 Read（第一轮）
+//      + 心跳 prompt 载荷（后续每一轮）」）。⇒ 漏一次签名 = 那一轮的留守判据静默缺席，
+//      而「缺席」与「注入了但没照做」在任何日志里长得一样。
+//   ㈡ **为什么不能靠「记得写签名」这句话**：写签名这个动作发生在**每一轮心跳**，是典型的
+//      「无标记时刻的自由裁量」——本仓实测这类携带率 9-24%。跟着模板走的才是 100%。
+//   ㈢ **stop:true 豁免**：收窗那一次调用没有 prompt、也不会产生下一轮，签它没有意义。
+//      真实语料里 `{"stop":true}` 是**唯一**的无 prompt 形态（993 次调用里 31 次，prompt 缺失 0 次）。
+//   ㈣ **误伤面：实测为零，但不等于不存在**。全量语料普查（`~/.claude/projects/**/*.jsonl`，
+//      2026-08-02，993 次 ScheduleWakeup tool_use）：非 stop 的 962 次**全部**是 dao 自主窗心跳，
+//      零次来自 `/loop` 或其他非 dao 用途。**「零观察」不是「零存在」**——若将来内置 `/loop`
+//      或别的功能自己构造 ScheduleWakeup 的 prompt（调用方拿不到那段文字），本闸会拦下它。
+//      故 G6 **给逃生阀**（G4 不给，因为 G4 拦错顶多少一张截图；G6 拦的是驱动自主循环的那个
+//      工具，两侧代价不对称）。逃生阀仍然只有用户设得了 —— 见下方设计取舍①。
+//   ㈤ **本闸未经用户拍板**（spec 里标着「呈批项」）。**它现在是惰性的**：live settings 的
+//      PreToolUse matcher 不含 `ScheduleWakeup` ⇒ 宿主根本不会为这个工具调本 hook。
+//      **注册那一下就是用户的批准动作**；在那之前 `--selfcheck` 会把它报成
+//      「✗ G6：matcher 覆盖不到 ScheduleWakeup ⇒ 这道闸静默零覆盖」并 exit 1 —— 刻意如此，
+//      「没接上」要在机器通道上说出来，而不是安静地等着。
+//
 // ── 三条设计取舍，别读成疏漏 ────────────────────────────────────────────────
 // ① **逃生阀一律是环境变量，不是 agent 能创建的哨兵文件**。理由就是上面那份实证：
 //    凡 agent 自己够得着的旁路，禁令即退化回 0%。env 只有用户能在启动会话前设，
@@ -83,6 +109,11 @@
 // 回归网：tests/hard-gates.tests.js（每闸正控+负控双向 + mutation 判别力 + canary 恒等）。
 // 真相源：windsurf-dao/ccswitch/hooks/dao-hard-gates.js
 // 注册：live `~/.claude/settings.json` 的 PreToolUse（matcher 见 REQUIRED_MATCHER_COVERAGE）。
+//       ⚠ **2026-08-02 新增 G6 后，现役 matcher 还差一格**：它当前是
+//       `Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__windows.*|mcp__chrome-devtools__take_screenshot|mcp__playwright__browser_take_screenshot`，
+//       **不含 `ScheduleWakeup`** ⇒ G6 此刻零覆盖（`--selfcheck` 会明说并 exit 1）。
+//       补法：在该正则末尾追加 `|ScheduleWakeup`（一处追加，不新增 hook 组）。**属用户动作**，
+//       且那一下**同时就是对 G6 的批准**（spec 里 G6 标着「呈批项」）。
 //       **注册的写入面是 cc-switch DB `providers` 表各 provider 的 `settings_config`，且每个
 //       provider 都要写**（切 provider 时 live 被目标 provider 的配置整体覆盖 ⇒ 只写一个等于没写；
 //       判据见 dao.md「改配置先认源与投影」，长期对齐机制挂 issue #50）。**属用户动作**——
@@ -166,7 +197,23 @@ function shellSegments(cmd) {
 // 正文里用 HTML 实体或全角写的复选框会漏报。近似，不是判定。
 const UNCHECKED_TODO = /(^|\n|\\n|["'])[ \t]*[-*+][ \t]+\[[ \t]\]/;
 
-// ── 五道闸 ──────────────────────────────────────────────────────────────────
+// 心跳签名：ScheduleWakeup 的 prompt 必须以 `[dao-heartbeat]` 开头（trim 之后，大小写敏感）。
+//
+// **判据刻意写得死板，因为它两边各有一份**：这里一份，dao-rhythm.js 的 WAKEUP 信号一份。
+// 两份必须**逐字节同判**——闸放行的每一个 prompt，rhythm 都要认得出来，否则会出现
+// 「过了闸却没注入」这种最难查的静默失败（闸绿、注入无，两者各自看都正常）。
+// 故：①同一条正则字面量 ②两边都只对 `String(prompt).trim()` 求值，不做别的归一
+// ③回归网 tests/hard-gates.tests.js 有一组**跨文件一致性**断言，把同一批 prompt 同时喂给
+// 两个 hook，钉「G6 放行 ⇔ rhythm 注入 WAKEUP」这个双向等价。判据一改而只改一边，那组当场红。
+//
+// **一处本来会不对齐的地方，是怎么消掉的**：rhythm 有几道前置早退（`^/` 开头的纯 slash 命令、
+// strip 后 <4 字符），本闸没有。原可以论证「`[dao-heartbeat]` 开头的 prompt 既不以 `/` 开头
+// 也不短于 4 字符 ⇒ 恒不触发」——但那是**推出来的**，不是测出来的，且会随那几道早退被改而失效。
+// 故 rhythm 侧把 WAKEUP 判定**排在所有早退之前**、且同样只对 `String(prompt).trim()` 求值，
+// 直接不给不对齐留机会。别把那个位置当成随手放的：它是判据对齐的一部分。
+const HEARTBEAT_SIG = /^\[dao-heartbeat\]/;
+
+// ── 各道闸（数量以 GATES.length 为准，此处刻意不写死数字）──────────────────
 // 每条 gate：
 //   id / why（判据出处，进 stderr）/ escapeEnv（null=无逃生阀）
 //   tools（本闸要拦的工具名样本，供 --selfcheck 核对 matcher 覆盖面）
@@ -330,6 +377,44 @@ const GATES = [
             "（确有理由要原样保留——例如正文在引用一段模板样例——由用户设 `DAO_ALLOW_READONLY_TODO=1`。）",
         };
       }
+    },
+  },
+
+  {
+    id: "G6-heartbeat-signature",
+    why:
+      "docs/specs/dao-rewrite-202608.md 分流表第 3 类「心跳投递机器化」——" +
+      "心跳 prompt 必须以 `[dao-heartbeat]` 开头，这是 dao-rhythm.js 的 WAKEUP 信号**唯一**的识别面；" +
+      "没有签名 ⇒ 那一轮不注入长窗留守四句 + `Read dao-longwindow.md §心跳对账节`，" +
+      "而心跳轮是这份载荷唯一的投递时刻（dao.md 帅节长窗存根「投递通道」）",
+    escapeEnv: "DAO_WAKEUP_UNSIGNED_OK", // 见头注 G6 ㈣：误伤面实测为零但不等于不存在
+    tools: ["ScheduleWakeup"],
+    test(input) {
+      if ((input.tool_name || "") !== "ScheduleWakeup") return null;
+      const ti = input.tool_input || {};
+      // 收窗调用豁免：`{"stop":true}` 没有 prompt、也不产生下一轮，签它没有意义。
+      // **只认布尔 true**，不认 "true"/1 —— 放宽这一格等于给出一个 agent 自己够得着的旁路
+      // （设计取舍①：凡 agent 自己够得着的旁路，禁令即退化回 0%）。
+      if (ti.stop === true) return null;
+      const p = String(ti.prompt == null ? "" : ti.prompt).trim();
+      if (HEARTBEAT_SIG.test(p)) return null;
+      return {
+        what:
+          p
+            ? `ScheduleWakeup 的 prompt 没有以 \`[dao-heartbeat]\` 开头（现在开头是 \`${p.slice(0, 40)}…\`）`
+            : "ScheduleWakeup 既没有 `stop:true`，也没有 prompt —— 这一轮唤醒无从签名、也无从对账",
+        how:
+          "把 `[dao-heartbeat]` 原样加在 prompt 最前面（大小写敏感，前面不要有别的字符），" +
+          "例如：`[dao-heartbeat] 高性能目标窗心跳。对账：① …`。" +
+          "**它不是装饰**：dao-rhythm.js 靠这个前缀认出「这一轮是心跳唤醒」，" +
+          "据此把长窗留守四句 + 「醒来第一动作 Read `ccswitch/rules/dao-longwindow.md` §心跳对账节」" +
+          "注入到你醒来的那一轮；漏了签名，那一轮就什么都收不到，而「没收到」和「收到了没照做」" +
+          "在日志上长得一模一样。" +
+          "真要收窗就调 `ScheduleWakeup{stop:true}`（本闸对它放行）——" +
+          "但别拿它绕开签名：dao.md 续力节的原话是「除了那一轮明确 stop:true，每一轮都要有心跳」。" +
+          "（若确有一个**不由你构造 prompt** 的合法调用方——如内置 `/loop`——由**用户**设 " +
+          "`DAO_WAKEUP_UNSIGNED_OK=1`；实测语料里这种形态出现 0 次，见本文件头注 G6 ㈣。）",
+      };
     },
   },
 ];
