@@ -12,7 +12,7 @@
       "_改名说明": "本段 2026-07-27 由「三分类」改名为「四分类」——用户拍板加入 product-type。改名而非新增一个并列段，是为了不留下两处各说一半的分类定义（改一处忘一处正是本仓在治的「被引用方一改、引用方静默失效」）。",
       "universal": "无条件共性——任何 git 项目都该有。不得带 when。",
       "conditional": "条件共性——检测到 X 才必须有 Y。when 必须机器可判（依赖名/目录/文件/package.json 键位），禁止写成需要 AI 判断的描述（如「这算不算前端项目」）。",
-      "product-type": "产品型共性——对**所有产品型项目**合理、对内部工具/基建项目不合理的那一档中间态（用户拍板 2026-07-27）。**不得带 when**：条件由类别内建，判据是项目 CLAUDE.md 含子串「产品型项目」这一**自我声明**（opt-in，唯一定义处在 ccswitch/lib/scaffold-manifest.js 的 PRODUCT_TYPE_WHEN）。为什么用自我声明：「这算不算产品型项目」是语义判断，恰是本清单明令不收的那一类；换成一句写在 CLAUDE.md 里的自陈之后，判据退回纯子串匹配。近似与失败方向：没写那四个字的产品型项目一律不查（漏报），写了的内部工具仓会被查（误报，但那是它自己声明的）——这里刻意选漏报侧，与 exempt 的「多报」取舍相反：不适用的仓收到的是纯噪音，而噪音会训练人忽略整个 hook 的输出。",
+      "product-type": "产品型共性——对**所有产品型项目**合理、对内部工具/基建项目不合理的那一档中间态（用户拍板 2026-07-27）。**不得带 when**：条件由类别内建，判据是项目 CLAUDE.md 含子串「产品型项目」这一**自我声明**（opt-in，唯一定义处在 ccswitch/lib/scaffold-manifest.js 的 PRODUCT_TYPE_WHEN）。为什么用自我声明：「这算不算产品型项目」是语义判断，恰是本清单明令不收的那一类；换成一句写在 CLAUDE.md 里的自陈之后，判据退回纯子串匹配。近似与失败方向：没写那四个字的产品型项目一律不查（漏报），写了的内部工具仓会被查（误报，但那是它自己声明的）——这里刻意选漏报侧，与 exempt 的「多报」取舍相反：不适用的仓收到的是纯噪音，而噪音会训练人忽略整个 hook 的输出。**2026-08-02 补负向串**：「不是」原先的写法是「把那一行删掉」，于是在机器侧「答了，不是」与「从没答过」逐字节相同 ⇒ 这道题永远送不到存量项目面前。现补 PRODUCT_TYPE_NEGATIVE_WHEN（子串「内部工具型项目」，同一个唯一定义处），由 universal 条目 product-type-answered 负责投递；**它不参与本类别的开关判定**——两个串都在时仍按「是」处理，本类别的判据自始至终只有正向那一串。",
       "个性 rule": "不进本清单。判据：换个项目还成立吗？不成立即为个性。反例（都不该进）：mousse-cli 的「进程名固定 mousse-app.exe」「版本号四处一体」；TraceyU 的 design-tokens 具体取值。**已迁出本反例列表的一条**：「PR 必附真机截图」原列在这里当个性反例，2026-07-27 随 product-type 落地改判为产品型共性——**改判的不是判据而是那条规则本身**：原形态（必附截图）确实只对有 UI 的项目成立，而 mousse-cli 同日把它改成「三态必填：见评论 / 豁免 / 降级挂账带真 issue 号」后，无 UI 的产品型项目走态二即可，于是它才够格跨项目。这一步是本清单的第一个「个性 → 共性」升格实例，留在这里当形态样本。"
     },
     "severity": {
@@ -42,7 +42,7 @@
       "require": { "file": "CLAUDE.md" },
       "template": { "src": "CLAUDE.md.template", "dest": "CLAUDE.md" },
       "msg": "缺少 CLAUDE.md（AI 入口文件）→ 从 canonical `ccswitch/templates/CLAUDE.md.template` 派生，复制后**先答骨架里那道必答题**（产品型 / 内部工具二选一）",
-      "why": "CLAUDE.md + .claude/rules/ 是唯一 AI 上下文通道（dao-project-scaffold SKILL.md §唯一 AI 通道）。**2026-08-01 加 template（B6 触发闭环）**：本清单唯一带 canonical 的那一档（product-type）靠项目 CLAUDE.md 里的自我声明子串开启，而 2026-08-01 审计实测——全生态 grep 那五个字**只命中 dao 自己的机件**，skills/commands/templates 与任何项目骨架里零命中 ⇒ **新项目结构上永不触发那一档检查**。缺的不是判据也不是授权，是「没有任何东西会把那句声明写进新项目」。修法不是让 dao 替项目判（那是语义判断，本清单明令不收），而是把声明做成**骨架里的必答题**：骨架落地那一刻问题就摆在眼前，答「不是」只需删掉那一行。骨架刻意留白（实测行数远低于 claude-md-size 的 80 行预算），让项目自己写的内容不会一落地就撞另一条闸。",
+      "why": "CLAUDE.md + .claude/rules/ 是唯一 AI 上下文通道（dao-project-scaffold SKILL.md §唯一 AI 通道）。**2026-08-01 加 template（B6 触发闭环）**：本清单唯一带 canonical 的那一档（product-type）靠项目 CLAUDE.md 里的自我声明子串开启，而 2026-08-01 审计实测——全生态 grep 那五个字**只命中 dao 自己的机件**，skills/commands/templates 与任何项目骨架里零命中 ⇒ **新项目结构上永不触发那一档检查**。缺的不是判据也不是授权，是「没有任何东西会把那句声明写进新项目」。修法不是让 dao 替项目判（那是语义判断，本清单明令不收），而是把声明做成**骨架里的必答题**：骨架落地那一刻问题就摆在眼前，答「不是」只需把那一行换成负向声明（**2026-08-02 起**；此前的处方是「删掉那一行」，见 product-type-answered 条目的 why）。骨架刻意留白（实测行数远低于 claude-md-size 的 80 行预算），让项目自己写的内容不会一落地就撞另一条闸。",
       "severity": "warn"
     },
     {
@@ -52,6 +52,18 @@
       "msg": "CLAUDE.md 超过 80 行（当前 {n} 行），建议拆分详细规范到 .claude/rules/",
       "why": "CLAUDE.md 每轮注入，越长越挤压有效 context；细则该下沉 .claude/rules/ 按 paths 条件加载（dao-project-scaffold SKILL.md §根目录法则）。",
       "severity": "warn"
+    },
+    {
+      "id": "product-type-answered",
+      "class": "universal",
+      "require": { "not": { "allOf": [
+        { "file": "CLAUDE.md" },
+        { "not": { "fileContains": { "path": "CLAUDE.md", "text": "产品型项目" } } },
+        { "not": { "fileContains": { "path": "CLAUDE.md", "text": "内部工具型项目" } } }
+      ] } },
+      "msg": "CLAUDE.md 里那道必答题没答：本仓是「产品型项目」还是「内部工具型项目」？**这一问归项目主人，AI 不代答**（语义判断 + 改用户可见面 ⇒ 判断档）。答法：在 CLAUDE.md 里写下一行「本仓是**产品型项目**。」**或**「本仓是**内部工具型项目**。」——两串**原样抄**，判据是纯子串；**别写「不是产品型项目」这类否定句**，那句里整段含着正向那串，机器会读成「是」。答「产品型」⇒ SessionStart 此后查产品型那一档（PR 真机证据三态 / PR 模板 / issue 模板目录）；答「内部工具」⇒ 那一档不查、本条也不再报。骨架原文见 canonical `ccswitch/templates/CLAUDE.md.template` §项目类型（必答题）",
+      "why": "2026-08-02 三仓「自上而下」审计第 2 件（windsurf-dao docs/research/top-down-audit-20260802.md）。product-type 那一档的开关是项目 CLAUDE.md 里的自我声明，而**这道题此前只有新建项目会被问**（问题摆在骨架里，靠 claude-md 条目的 template 投递）——**成文于该机制之前的存量项目从没被问过**，且负向的旧处方是「把那一行删掉」⇒ 机器侧「答了，不是」与「从没答过」逐字节相同，没有任何东西能把这道题送到它们面前（要提醒谁？所有没写那五个字的仓里，绝大多数已经答过「不是」了）。修法两步且**次序不可反**：①先让负向有机器可读形态（同批改骨架 + lib 的 PRODUCT_TYPE_NEGATIVE_WHEN）②再由本条投递；反过来做就是给每个已答「不是」的仓造永久噪音。**判据是纯子串近似，两向都构造得出反例**：把这两串写在正文别处（例如引用本条报文）的项目会被判「已答」（漏报）；带否定词的写法会被判成「是」（误报为产品型）——后一向**本条挡不住**，只在骨架与报文里以文字警告，未做检测器：全生态实测零实例，不为假想敌立判据（同 mousse-cli dispatch-clauses.md 的既定政策）。**severity=info**：判据是子串近似，不当硬判定。**require 顶层刻意写成 not（双重否定，读起来绕但不是笔误）**：dao-scaffold-report.mjs 按 require 顶层谓词分档，`not` 才归「只建议·永不代做」——而这一问必须由人答，若被归进「代做」档，`/dao-project-scaffold --init` 可能替项目主人把类型定了（同 agents-md-generated 条目用同一手法、同一理由）。**require 里显式要求 CLAUDE.md 在场**：连 CLAUDE.md 都没有的项目由 claude-md 条目管（那条带 canonical 骨架、报文已含「先答那道必答题」），两条一起报是重复噪音。**入库时基线**：本机 D:/frank 下有 CLAUDE.md 的项目 3 个（mousse-cli / TraceyU / windsurf-dao），答过这道题的 1 个（mousse-cli，正向）⇒ 未答 2/3；负向声明 0 例、否定句写法 0 例（本条上线会立刻对 TraceyU 与元仓库各报一行，**那是预期行为不 exempt**——元仓库自己也是存量项目，立法者不该豁免于自己立的必答题）。",
+      "severity": "info"
     },
     {
       "id": "claude-rules-dir",
@@ -164,12 +176,14 @@
           { "dir": "src-tauri", "label": "Tauri" },
           { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
           { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "fileContains": { "path": "go.mod", "text": "wailsapp/wails" }, "label": "Wails" },
           { "dep": "electron", "label": "Electron" }
         ]
       },
       "require": { "file": ".claude/rules/desktop-debugging.md" },
-      "msg": "{label} 桌面端项目缺少 .claude/rules/desktop-debugging.md（MCP 工具选择规则）→ 运行 /dao-project-scaffold",
-      "why": "无规则文件 ⇒ AI 每次会话自行判断调试工具 ⇒ 选错 ⇒ 排障循环烧 context（desktop-debug-gate.md「一次 scaffold 省百次重试」）。tauri.conf.json 这一路指纹是 2026-07-27 清单化时补的：原判据只认 src-tauri/ 与 apps/desktop/src-tauri/，而 mousse-cli 的 Tauri 根是 crates/mousse-app/ ⇒ 本仓最主要的 Tauri 项目从未触发过这条检查，该 rule 也就一直缺着。",
+      "template": { "src": "desktop-debugging-rule.md", "dest": ".claude/rules/desktop-debugging.md" },
+      "msg": "{label} 桌面端项目缺少 .claude/rules/desktop-debugging.md（GUI 工具选型指针 + windows-mcp 一票否决 + 本项目起隔离实例的实况）→ 从 canonical `ccswitch/templates/desktop-debugging-rule.md` 派生（复制后只填「三、项目实况」各槽位，前两节整段照抄不改写）",
+      "why": "无规则文件 ⇒ AI 每次会话自行判断调试工具 ⇒ 选错 ⇒ 排障循环烧 context（desktop-debug-gate.md「一次 scaffold 省百次重试」）。tauri.conf.json 这一路指纹是 2026-07-27 清单化时补的：原判据只认 src-tauri/ 与 apps/desktop/src-tauri/，而 mousse-cli 的 Tauri 根是 crates/mousse-app/ ⇒ 本仓最主要的 Tauri 项目从未触发过这条检查，该 rule 也就一直缺着。**2026-08-02 补 Wails 一路指纹 + canonical 模板**：①指纹——三仓审计实测，同一个 WebView2 底座的第二生态（Wails）整个不在这两条桌面机检里，于是本条对它**结构上不可达**；判据取 `go.mod` 含 `wailsapp/wails`（**近似，失败方向选漏报**：go.mod 不在仓根的 monorepo 布局探不到；原提议的 `wails.json` 那一路对首例仓是空转——那个仓没有该文件——故不可用它代替 go.mod 路，两路都加则多一次 findFile 遍历而收益未证，本批只加已实证能命中的这一路）。②模板——本条此前的报文终点是「运行 /dao-project-scaffold」，即**让下一个 AI 现场重新发明一份**，实测后果是某项目的副本停在旧版弱一档（windows-mcp 禁令写成「常规场景禁」，而母版早已是全域一票否决）；canonical 落在 ccswitch/templates/desktop-debugging-rule.md 后，报文自动追加零编辑复制指令，母版先对副本才有对的可抄。",
       "severity": "warn"
     },
     {
@@ -180,6 +194,7 @@
           { "dir": "src-tauri", "label": "Tauri" },
           { "dir": "apps/desktop/src-tauri", "label": "Tauri" },
           { "findFile": { "name": "tauri.conf.json", "maxDepth": 4 }, "label": "Tauri" },
+          { "fileContains": { "path": "go.mod", "text": "wailsapp/wails" }, "label": "Wails" },
           { "dep": "electron", "label": "Electron" }
         ]
       },
@@ -190,8 +205,8 @@
           { "pkgScript": "dev:debug" }
         ]
       },
-      "msg": "{label} 项目既无隔离启动脚本 scripts/start-isolated-dev.*，也无 dev:debug 脚本 → 参考 stacks/desktop-tauri.md「隔离启动器 · canonical 契约」（隔离启动器是正解，dev:debug 只是最低形态）",
-      "why": "没有调试端口入口就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。**2026-08-01 由单一 pkgScript 改为 anyOf 两态**：本 entry 原先只认 dev:debug，而 dev:debug 的通行形态（写死 9222 + 不给独立 user-data-dir）已被 mousse-cli 实证为不足——9222 的典型占用者就是用户装机实例，且 WebView2 调试端口按 user-data-dir 绑定，共用目录时光换端口号仍会静默失败（2026-07-26 实证）。故隔离启动脚本（`scripts/start-isolated-dev.*`，四条硬要求+三关自验+退出码契约见 stacks/desktop-tauri.md）与 dev:debug 任一存在即算有入口，msg 里点明前者是正解。**为什么不硬性要求隔离启动器**：那是一份千行量级、与项目自身隔离面深度耦合的脚本，对刚起步的桌面项目是过度要求；判据是「有没有调试入口」，形态优劣由 msg 引导而非闸拦。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项（该分支同时也让 glob 那一路在无 package.json 的项目上不必负责）。",
+      "msg": "{label} 项目既无隔离启动脚本 scripts/start-isolated-dev.*，也无 dev:debug 脚本 → 参考 stacks/desktop-webview.md「隔离启动器 · canonical 契约」（隔离启动器是正解，dev:debug 只是最低形态，且**禁止写死 9222**）",
+      "why": "没有调试端口入口就得每次手设 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS，chrome-devtools 连不上即退化为盲改（dao.md Shell §WebView2 远程调试）。**2026-08-01 由单一 pkgScript 改为 anyOf 两态**：本 entry 原先只认 dev:debug，而 dev:debug 的通行形态（写死 9222 + 不给独立 user-data-dir）已被 mousse-cli 实证为不足——9222 的典型占用者就是用户装机实例，且 WebView2 调试端口按 user-data-dir 绑定，共用目录时光换端口号仍会静默失败（2026-07-26 实证）。故隔离启动脚本（`scripts/start-isolated-dev.*`，四条硬要求+三关自验+退出码契约见 stacks/desktop-webview.md）与 dev:debug 任一存在即算有入口，msg 里点明前者是正解。**2026-08-02 两处改动**：①指纹补 Wails 一路（`go.mod` 含 `wailsapp/wails`），理由与近似边界同上一条 desktop-debugging-rule 的 why，此处不复述；②指针从 stacks/desktop-tauri.md 改指 stacks/desktop-webview.md——那两节 2026-08-02 提级到框架无关层，因为调试端口是 **WebView2 运行时**读的环境变量、不是 Tauri 读的，锁在框架文件名下正是 Wails 那一路够不着它的成因之一。**注意本条对纯 Go 的 Wails 仓多半不报**：require 第一路 `not(file package.json)` 会放行（Wails 的 package.json 通常在 frontend/ 而非仓根）——这是刻意的漏报侧，纯 Go/Rust 桌面项目没有 npm 脚本面，不该被报缺项；对 Wails 真正生效的是上一条 desktop-debugging-rule。**为什么不硬性要求隔离启动器**：那是一份千行量级、与项目自身隔离面深度耦合的脚本，对刚起步的桌面项目是过度要求；判据是「有没有调试入口」，形态优劣由 msg 引导而非闸拦。require 里显式写「无 package.json 则不判」——纯 Rust/Go 桌面项目没有 npm 脚本面，不该被报缺项（该分支同时也让 glob 那一路在无 package.json 的项目上不必负责）。",
       "severity": "warn"
     },
     {

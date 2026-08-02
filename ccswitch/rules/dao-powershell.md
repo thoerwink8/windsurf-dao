@@ -17,7 +17,7 @@
 
 ---
 
-- **Windows PowerShell 假错**：用 `$LASTEXITCODE` 判成败，不看输出有无 "error" 字样；中文「所在位置 行:X」是 ErrorRecord 非真错；禁 `2>&1`（混流致假错），噪音用 `2>$null`。**`2>&1` 具体怎么害人**：它把 native 命令的 stderr 包成 `NativeCommandError`，在 `$ErrorActionPreference='Stop'` 下把**正常的 stderr 进度行**（如 cargo 的 Locking/Updating）判成终止性错误、中断整个脚本；要捕获输出就用 `Start-Process -RedirectStandardOutput/-RedirectStandardError` 落真实文件。完整判据与出处：`ccswitch/rules/dao-officer-clauses.md` 通用节同名条款
+- **Windows PowerShell 假错**：用 `$LASTEXITCODE`（`Start-Process -PassThru` 那条路则用 `$proc.ExitCode`）判成败，不看输出有无 "error" 字样；中文「所在位置 行:X」是 ErrorRecord 非真错；禁 `2>&1`（混流致假错），噪音用 `2>$null`。**`2>&1` 具体怎么害人**：它把 native 命令的 stderr 包成 `NativeCommandError`，在 `$ErrorActionPreference='Stop'` 下把**正常的 stderr 进度行**（如 cargo 的 Locking/Updating）判成终止性错误、中断整个脚本；要捕获输出就用 `Start-Process -RedirectStandardOutput/-RedirectStandardError` 落真实文件。完整判据与出处：`ccswitch/rules/dao-officer-clauses.md` 通用节同名条款
 - **禁改含中文/无 BOM 文件 —— 真凶是 `Get-Content` 本身，不是那条管道**（2026-08-02 射程订正）：本条原写作「**PS 管道**禁改含中文/无 BOM 文件」，于是两起真实事故从它的字面射程外溜了过去——两起的写侧都规范（`[IO.File]::WriteAllText` + 无 BOM UTF8），毁在读侧。判据是：**PS5.1 的 `Get-Content` 任何形态**（含 `-Raw`、含只读不写）读无 BOM UTF-8 时按本机 ANSI 代码页解码，**内容当场就毁了**，写侧再规范也救不回来；`Set-Content -Encoding utf8` 另会写出带 BOM 的文件、弄坏 JSON/TOML 消费方。文件内容替换一律用编辑工具，非用不可时读侧走 `[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)`。**连带一个静默失败**：字符串已成乱码后，后续 `-replace '<含中文的模式>'` 一律不命中且不报错、`$LASTEXITCODE` 照样 0。三起实证、逐字复现步骤与占位符没被替换那次的下场：`ccswitch/rules/dao-officer-clauses.md` 通用节「编码铁律」（2026-07-12 Cargo.toml/JSON 中招致 tauri dev 崩那次仍是本条最早的出处）
 - **禁 PowerShell 里的 Bash heredoc**：`python - <<'PY'` 在 PS 中报 ParserError，改用 here-string + `Set-Content`
 - **Inline 长命令**：PS 处理 `node -e "..."` >300 字符或含嵌套引号会被 PSReadLine 截断 → 写脚本文件再跑

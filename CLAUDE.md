@@ -66,11 +66,18 @@ py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层�
 
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
 node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对不上 ⇒ exit 1（tests/clause-index.tests.js 每次跑它）
-node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数
+node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数（条款数 / 触发:无 / slug 数）
+powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立实现）
 node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（原型，**尚未**接进派单流程）
 ```
 
 `ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。
+
+`ccswitch/clause-ledger.json` **不是**派生物，它是**台账字段的真相源**（复发次数 / 首次入库 /
+触发点 / 基线 / 自定标记 / 出处 / 状态）；正文只在条款行尾持一个 slug `[#<域>-<短名>]` 与它关联。
+两边由**双向孤儿检测**夹住（正文有 slug 而台账无此条、台账有条目而正文找不到 ⇒ 都判红），
+node 与 PowerShell 两个守卫各查一遍。**双轨期**：旧元字段仍原位保留、逐字段与台账对账，
+不等即红 —— 那份对账全绿是后续删旧字段的前置门。**改了正文就要同步改台账，反之亦然。**
 
 新增 node 测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.js` 扫目录，不维护清单。
 （此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；

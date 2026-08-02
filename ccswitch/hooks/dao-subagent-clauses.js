@@ -59,21 +59,25 @@
 //     注册之后的实际注入率审计数据（契约：≥20 次注入率 100% 才谈退役），不在本批预判。
 //   · **不写 live settings.json / 不写 cc-switch DB**：注册是用户动作（硬闸 G2）。
 //
-// ── 今天官种节渲染不出来，是索引的事不是本 hook 的事（照直写，别读成 bug）────
-// 仓里那份默认索引（ccswitch/clause-index.json）的源清单**全是 role_scheme=general 的仓内文件**
-// ⇒ reviewer/implementer/adversary/scout/dogfood 一律 0 条 ⇒ 映射命中了也照样退到通用节。
+// ── 官种节渲染得出来了，但别把它读成「这条通道已经活了」（照直写）────────────
+// **曾经的形态**：仓里那份默认索引（ccswitch/clause-index.json）的源清单**全是
+// role_scheme=general 的仓内文件** ⇒ reviewer/implementer/adversary/scout/dogfood 一律 0 条
+// ⇒ 映射命中了也照样退到通用节。成因是带官种分节的语料**只住在各项目仓**（那正是
+// 「全局层被一个项目文件治理」）。
 //
-// **2026-08-02 变了一半**：带官种分节的语料此前**只住在各项目仓**（mousse-cli 的
-// docs/rules/dispatch-clauses.md），那正是「全局层被一个项目文件治理」；同日拆分批把它的通用
-// 半边搬进了 **ccswitch/rules/dao-officer-clauses.md**（仓内、六个官种节齐全）。
-// **但索引还没跟上**：源清单住 ccswitch/lib/clause-parser.mjs 的 defaultSources()，
-// 那个文件同期正被另一批改动，本批刻意不碰 ⇒ **今天官种节仍然渲染不出来**，成因从
-// 「语料不在本仓」变成了「语料在本仓但没登记」。**别把它读成已解决。**
-// 要现在就看到官种节，自带一份源清单指过去即可（登记进 defaultSources 是那一批的事）：
-//   node ccswitch/scripts/gen-clause-index.mjs --sources-json <清单> --out <某处>/clause-index.json
-//   （清单条目形如 {"file":"ccswitch/rules/dao-officer-clauses.md","selector":"marked","role_scheme":"dispatch-sections"}）
-//   然后 DAO_CLAUSE_INDEX=<某处>/clause-index.json
+// **2026-08-02 两步走完**：①同日拆分批把通用半边搬进 **ccswitch/rules/dao-officer-clauses.md**
+// （仓内、六个官种节齐全）；②合并态这一批把它登记进 clause-parser.mjs 的 defaultSources()
+// （all-top-level + dispatch-sections）⇒ **默认索引里六个官种现在都有条款，官种节渲染得出来。**
+//
+// 🔴 **仍然没证到的那一半，别读成已解决**：渲染得出东西 ≠ 这个 hook 被调用过。
+// 注册进 live settings.json 是**用户动作**（硬闸 G2 拦的那一格），本批照旧不代做 ⇒
+// 「注册之后它在真实 session 里真的响了」现在仍然没有人有资格说。判据在 --selfcheck 第②段：
+// 它只采信非 synthetic 的心跳记录。**「没注册」与「注册了没触发」在日志上长得一样。**
+//
 // 项目特有那半仍在各项目仓，仍然不进本仓索引（要么带本机绝对路径、要么把别人的语料复制进来）。
+// 要临时把某个项目那份也算进来：
+//   node ccswitch/scripts/gen-clause-index.mjs --sources-json <清单> --out <某处>/clause-index.json
+//   然后 DAO_CLAUSE_INDEX=<某处>/clause-index.json
 //
 // ── 这张映射表将来怎么退役 ───────────────────────────────────────────────────
 // 映射表和条款库一样只增不减。给它留的触发器是 `--selfcheck` 第③段：它逐条打印表里每个
