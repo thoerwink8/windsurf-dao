@@ -439,6 +439,34 @@
         "叙事 N9-②"
       ],
       "status": "active"
+    },
+    "Shell-查文档": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-02",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-02"
+      ],
+      "baseline": "2026-08-02 单日 30 次 `code.claude.com` 取数失败，多个 subagent 各自摸索出三种不同绕法（镜像仓/context7/放弃），零横向传递",
+      "source_refs": [
+        "ccswitch/rules/dao-docs-lookup.md"
+      ],
+      "status": "active"
+    },
+    "派-先读后写": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "31",
+      "first_seen": "08-02",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-02"
+      ],
+      "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截（1661 次）",
+      "source_refs": [],
+      "status": "active"
     }
   }
 }
