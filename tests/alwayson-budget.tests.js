@@ -48,6 +48,13 @@ const REPO = path.resolve(__dirname, "..");
 const SCRIPT = path.join(REPO, "ccswitch", "scripts", "check-alwayson-budget.mjs");
 const TMP = path.join(REPO, "_tmp", "alwayson-budget-tests");
 
+// 用户 2026-08-02 拍板的目标闸值。**写死在这里是刻意的**：它是这份回归网要钉住的那个
+// 契约本身（用户的裁决），从被测源码里解析回来再断言等于自己，等于用被守对象证明被守
+// 对象。改这个数应当同时改源码与本行 —— 改一处即红，正是想要的。
+const EXPECT_TARGET = 16384;
+// 过渡上限 = 2026-08-01 那版闸值，本批一个字节没改（见源码 TRANSITION_CEILING_BYTES 头注）。
+const EXPECT_CEILING = 71680;
+
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log("  PASS  " + name); }
@@ -403,6 +410,93 @@ console.log("\n──── ⑧ 末行契约 + --json ────");
 }
 
 // ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑧.5 两档闸值：目标(16KiB) vs 过渡上限(70KiB) ────");
+// 2026-08-02 加。这一节夹的是**新增的那半个语义**：同一份语料，过渡期 exit=0、strict 下
+// exit=1，而两态的 `overtarget` 必须**完全相同**（欠账不因为你用哪种模式看它而改变）。
+// 🔴 **最要紧的一条是「过渡期不许把欠账藏起来」**：过渡期的退出码是 0，若 `overtarget`
+// 也一并归 0，那这一整档设计就退化成「把闸值从 70KiB 改成 70KiB」——一个字都没做。
+// 这正是本文件头注说的「绿是这道闸的默认色，所以绿必须被证明」在新维度上的形态。
+{
+  // 造一份**介于两档之间**的语料：> 目标(16384)、< 过渡上限(71680)。
+  // 这是唯一能把两档分开的区间；小于 16384 或大于 71680 的语料两档表现一致，夹不住任何东西。
+  const body = "# dao\n" + "两档之间的语料。".repeat(2000);   // ≈ 48KB，稳落区间内
+  const c = mkCase("two-tier", { daoMd: body, userMd: "# user\n短。\n", mkRulesDir: true });
+  check("夹具确实落在两档之间（否则本节整节空转）",
+    c.expectTotal > EXPECT_TARGET && c.expectTotal < EXPECT_CEILING,
+    "total=" + c.expectTotal + " target=" + EXPECT_TARGET + " ceiling=" + EXPECT_CEILING);
+
+  // 不传 --limit（它蕴含 strict），只覆写三个路径 —— 于是走的是真实的默认两档逻辑。
+  function runRaw(extra, env) {
+    const args = [SCRIPT,
+      "--dao-md", path.join(c.dir, "dao.md"),
+      "--user-claude-md", path.join(c.dir, "home", "CLAUDE.md"),
+      "--rules-dir", path.join(c.dir, "rules")].concat(extra || []);
+    const r = spawnSync(process.execPath, args, {
+      encoding: "utf8", timeout: 60000,
+      env: Object.assign({}, process.env, { DAO_ALWAYSON_STRICT: "" }, env || {}),
+    });
+    const o = String(r.stdout || "");
+    const line = (/ALWAYSON_BUDGET_SUMMARY[^\r\n]*/.exec(o) || [""])[0];
+    const g = (k) => { const m = new RegExp("\\b" + k + "=(-?\\d+|transition|strict|ok|fail)").exec(line); return m ? m[1] : null; };
+    return { code: r.status, out: o, line,
+      exit: +g("exit"), total: +g("total"), limit: +g("limit"), headroom: +g("headroom"),
+      target: +g("target"), overtarget: +g("overtarget"), mode: g("mode"), self: g("selfcheck") };
+  }
+
+  const t = runRaw([]);                                    // 默认 = 过渡期
+  const s = runRaw(["--strict"]);                          // 显式 strict
+  const e = runRaw([], { DAO_ALWAYSON_STRICT: "1" });      // 环境变量 strict
+
+  check("默认即过渡期 mode=transition", t.mode === "transition", t.line);
+  check("过渡期：exit=0（不让主干长期红）", t.code === 0 && t.exit === 0, t.line);
+  check("过渡期：limit 报的是过渡上限（`limit` 的语义＝退出码按哪个数判的）",
+    t.limit === EXPECT_CEILING, t.line);
+  check("过渡期：target 报的是用户拍板值", t.target === EXPECT_TARGET, t.line);
+  // 🔴 本节最承重的一条
+  check("过渡期：overtarget **不为 0**（欠账没被 exit=0 藏起来）",
+    t.overtarget === t.total - EXPECT_TARGET && t.overtarget > 0,
+    "overtarget=" + t.overtarget + " want=" + (t.total - EXPECT_TARGET));
+  check("过渡期：报文明说是过渡期且不是回归（人读通道同样不许被读成绿灯）",
+    /过渡期/.test(t.out) && /不是回归/.test(t.out), t.out.slice(-1200));
+  check("过渡期：**不得**打「✓ 未超限」（那是真达标才有的对勾）",
+    !/✓ 未超限/.test(t.out), t.out.slice(-1200));
+  check("过渡期：仍原样给出三个出口（欠着账更需要出口）",
+    /①/.test(t.out) && /②/.test(t.out) && /③/.test(t.out), t.out.slice(-1200));
+
+  check("--strict：mode=strict 且 exit=1", s.mode === "strict" && s.code === 1 && s.exit === 1, s.line);
+  check("--strict：limit 变成目标闸值", s.limit === EXPECT_TARGET, s.line);
+  check("DAO_ALWAYSON_STRICT=1 与 --strict 等效（退出码+limit+mode 三格全等）",
+    e.mode === s.mode && e.code === s.code && e.limit === s.limit, "env=" + e.line + " flag=" + s.line);
+
+  // 两态一致性：同一份语料，欠账大小与总字节不因模式而变
+  check("两态的 total 与 overtarget 完全相同（模式只改「按哪个数判」，不改测量）",
+    t.total === s.total && t.overtarget === s.overtarget,
+    "transition=" + t.line + "\n strict=" + s.line);
+  check("headroom 恒 = limit - total（两态各自自洽）",
+    t.headroom === t.limit - t.total && s.headroom === s.limit - s.total,
+    "transition=" + t.line + "\n strict=" + s.line);
+
+  // 负控：`--limit` 蕴含 strict —— 否则既有 §② 的「超限必红」会被过渡上限静默放宽
+  {
+    const l = runRaw(["--limit", "500"]);
+    check("负控：给了 --limit 即 strict（不许被过渡上限悄悄放宽）",
+      l.mode === "strict" && l.limit === 500 && l.exit === 1, l.line);
+  }
+  // 负控：低于目标的语料，两档都绿且 overtarget=0（防「过渡期恒报欠账」的反向失效）
+  {
+    const tiny = mkCase("two-tier-under", { daoMd: "# dao\n小。\n", userMd: "# user\n短。\n", mkRulesDir: true });
+    const args = [SCRIPT, "--dao-md", path.join(tiny.dir, "dao.md"),
+      "--user-claude-md", path.join(tiny.dir, "home", "CLAUDE.md"),
+      "--rules-dir", path.join(tiny.dir, "rules")];
+    const r = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60000 });
+    const o = String(r.stdout || "");
+    check("负控：达标语料 overtarget=0 且打「✓ 未超限」（过渡档不恒报欠账）",
+      /\bovertarget=0\b/.test(o) && /✓ 未超限/.test(o) && r.status === 0, o.slice(-600));
+    check("负控：达标语料**不得**出现「过渡期」措辞", !/⚠ 过渡期/.test(o), o.slice(-600));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 console.log("\n──── ⑨ 真实语料自跑（合成夹具证明不了它在真数据上跑得动）────");
 {
   const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 60000, cwd: REPO });
@@ -468,8 +562,49 @@ console.log("\n──── ⑩ 挂载可达性（「源码里有调用点」是
       "ctx=" + r.ctx.slice(0, 500) + " [stderr]" + r.err.slice(0, 200));
     check("常路带出数字（总字节 / 闸值 / 余量），不是零输出",
       /合计 \d+ B \/ 闸值 \d+ B/.test(r.ctx) && /余量/.test(r.ctx), r.ctx.slice(0, 600));
-    check("常路明说闸值是占位待用户拍板（不让读者以为这是裁决）",
-      /占位待用户拍板/.test(r.ctx), r.ctx.slice(0, 600));
+    // 🔴 **本条 2026-08-02 换掉了原断言 `/占位待用户拍板/`，按「改既有断言必须证明新断言
+    // 更难满足」逐项交代**：旧断言钉的是「闸值尚未被用户拍板」这个**当时为真、现已为假**
+    // 的事实（用户 2026-08-02 拍板 16KiB）。留着它只有两条路——要么在源码里保留一句假话去
+    // 喂断言，要么它变红。**这不是放松断言，是它测的那个契约不存在了。**
+    // 新旧无法比通过集（对象不同），故改用更硬的判据：**新断言严格更多、且每条都钉具体数字**
+    //   ① 打出目标闸值的**精确字节数**（旧断言只要五个中文字还在就绿）
+    //   ② 打出**拍板日期**
+    //   ③ 两态互斥且各自钉死措辞：过渡期必须报**欠账字节数** + 「不是回归」 + `--strict` 出路；
+    //      已达标必须报「已达标」且**不得**出现「过渡期」
+    // ⇒「目标闸值算错 / 把过渡期说成达标 / 把欠账数吞掉」这三类改动现在都会让本节红，
+    //   而旧断言对它们**全部失明**。
+    //
+    // `EXPECT_TARGET` 刻意**写死**而不是从源码解析：本行的职责就是钉住用户拍板的那个数，
+    // 从被测源码里读回来再断言等于自己（同 dao 守卫铁律「自检那一半不许复用被守对象」）。
+    check("常路打出目标闸值的精确字节数 + 拍板日期（不是一句无数字的短语）",
+      new RegExp("目标闸值 " + EXPECT_TARGET + " B").test(r.ctx) && /2026-08-02 拍板/.test(r.ctx),
+      "want『目标闸值 " + EXPECT_TARGET + " B』+ 拍板日期; ctx=" + r.ctx.slice(0, 800));
+
+    // 两个独立消费方（脚本末行 / hook 注入文本）必须对同一实况给出一致的读数。
+    // 单看任一方都可能自洽而错；交叉核对才抓得到「hook 把过渡期渲染成达标」这类分岔。
+    const direct = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 60000, cwd: REPO });
+    const dline = /ALWAYSON_BUDGET_SUMMARY[^\r\n]*/.exec(String(direct.stdout || ""));
+    const mOver = dline ? /\bovertarget=(\d+)/.exec(dline[0]) : null;
+    check("末行带 target/overtarget/mode 三格（新契约在真实语料上真的打出来了）",
+      dline !== null && /\btarget=\d+/.test(dline[0]) && mOver !== null && /\bmode=(transition|strict)/.test(dline[0]),
+      dline ? dline[0] : "（没拿到末行）");
+    if (mOver) {
+      const owed = mOver[1];
+      console.log("        实况 overtarget=" + owed);
+      if (Number(owed) > 0) {
+        check("过渡期：hook 文本报出的欠账数与脚本末行逐字节一致（两个消费方不许分岔）",
+          new RegExp("欠 " + owed + " B").test(r.ctx), "owed=" + owed + " ctx=" + r.ctx.slice(0, 900));
+        check("过渡期：明说「不是回归」（否则会被下一个人当成新缺陷去查）",
+          /不是回归/.test(r.ctx), r.ctx.slice(0, 900));
+        check("过渡期：给出 --strict 出路（一笔没有出路的欠账等于无人认领）",
+          /--strict/.test(r.ctx), r.ctx.slice(0, 900));
+        check("过渡期**不得**渲染成「已达标」（两种绿必须分得开）",
+          !/已达标/.test(r.ctx), r.ctx.slice(0, 900));
+      } else {
+        check("已达标态：明说已达标", /已达标/.test(r.ctx), r.ctx.slice(0, 900));
+        check("已达标态**不得**渲染成过渡期", !/过渡期/.test(r.ctx), r.ctx.slice(0, 900));
+      }
+    }
   }
   // ② 自指：量预算的东西自己不在了 —— 必须响，不许静默跳过
   {
