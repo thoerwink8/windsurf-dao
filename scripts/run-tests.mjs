@@ -49,7 +49,10 @@ if (process.argv.includes("--list")) {
 const results = [];
 for (const f of jsTests) {
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, [path.join(TESTS_DIR, f)], { encoding: "utf8" });
+  // cwd 钉在仓根，**不继承调用者的**（2026-08-04 实测：从别的仓的目录敲这个入口，
+  // subagent-clauses 那套里一条依赖 process.cwd() 的断言会红，而同一份代码在仓根下全绿
+  // ⇒ 红绿取决于你在哪个目录敲的命令，且失败信息里没有任何东西指向 cwd）。
+  const r = spawnSync(process.execPath, [path.join(TESTS_DIR, f)], { encoding: "utf8", cwd: ROOT });
   const ms = Date.now() - t0;
   const out = String(r.stdout || "");
   // 从各测试自己的汇总行取断言数（格式统一为 `=== 汇总: PASS=n FAIL=m ===`）；

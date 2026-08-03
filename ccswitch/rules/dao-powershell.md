@@ -9,11 +9,17 @@
 > 那三个存根的「必经动作」四个字至今**只靠记性**（本仓实测无标记时刻的自由裁量携带率 9-24%）。
 > 部署与漂移自检见 `ccswitch/scripts/dao-rules-deploy.mjs`。
 
-> **刻意不迁进本文件、留在 dao.md Shell 节的**（它们不是「写 PS 脚本那一刻」专属）：
-> **路径锚点**（`git -C` / `pnpm --dir`，跨 workspace 通用，不限 PS）· **验证加 marker**
-> （触发时刻是「跑一条关键验证」不是「改脚本」）· **串行敏感验证** · **临时文件归项目**
-> （每轮都要用）· **截图路径强制** · **settings.json 门禁** · **改配置先认源与投影**
-> （后两条虽有文件锚点，但属交互门禁/高频判据，按「拿不准不迁」留置）。
+> **刻意不迁进本文件、留在 dao.md Shell 节的**：**临时文件归项目**（每轮都要用）·
+> **改配置先认源与投影**（高频判据）· **PR-first 节律** · 各存根行。
+>
+> ⚠️ **2026-08-02（批 3 续跑）订正了这份清单**：`路径锚点` / `验证加 marker` /
+> `串行敏感验证` 三条**此前在这份「刻意不迁」清单里**，理由是「它们不是写 PS 脚本那一刻专属」。
+> 那条理由仍然成立，**是 dao.md 的 10 KB 硬闸压过了它**——三条合计约 200 B，而 dao.md Shell 节
+> 装不下。**代价照直写：本文件的触发器是「Read 一个 `.ps1`」，盖不住「我正要跑一条验证」
+> 与「我正在跨 workspace 操作」那两刻**，迁进来等于这三条从此只在改脚本时才被送到眼前。
+> `截图路径强制`（G4）与 `settings.json 门禁`（G2）同批从 dao.md 删去，**理由不同**：
+> 它们由 `ccswitch/hooks/dao-hard-gates.js` 机械阻断，判据全文在该 hook 头注，
+> 文字层是纵深不是唯一防线。
 
 ---
 
@@ -21,6 +27,18 @@
 - **禁改含中文/无 BOM 文件 —— 真凶是 `Get-Content` 本身，不是那条管道**（2026-08-02 射程订正）：本条原写作「**PS 管道**禁改含中文/无 BOM 文件」，于是两起真实事故从它的字面射程外溜了过去——两起的写侧都规范（`[IO.File]::WriteAllText` + 无 BOM UTF8），毁在读侧。判据是：**PS5.1 的 `Get-Content` 任何形态**（含 `-Raw`、含只读不写）读无 BOM UTF-8 时按本机 ANSI 代码页解码，**内容当场就毁了**，写侧再规范也救不回来；`Set-Content -Encoding utf8` 另会写出带 BOM 的文件、弄坏 JSON/TOML 消费方。文件内容替换一律用编辑工具，非用不可时读侧走 `[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8)`。**连带一个静默失败**：字符串已成乱码后，后续 `-replace '<含中文的模式>'` 一律不命中且不报错、`$LASTEXITCODE` 照样 0。三起实证、逐字复现步骤与占位符没被替换那次的下场：`ccswitch/rules/dao-officer-clauses.md` 通用节「编码铁律」（2026-07-12 Cargo.toml/JSON 中招致 tauri dev 崩那次仍是本条最早的出处）
 - **禁 PowerShell 里的 Bash heredoc**：`python - <<'PY'` 在 PS 中报 ParserError，改用 here-string + `Set-Content`
 - **Inline 长命令**：PS 处理 `node -e "..."` >300 字符或含嵌套引号会被 PSReadLine 截断 → 写脚本文件再跑
+
+---
+
+## 三条通用 shell 实操（2026-08-02 批 3 续跑从 dao.md Shell 节迁入，身位差见上方头注）
+
+- **路径锚点**：跨 workspace 或终端异常后，用 `git -C <repo>` / `pnpm --dir <repo>` /
+  `npm --prefix <repo>`，**不只依赖 cwd**——subagent 的 cwd 在两次调用之间会被重置。
+- **验证加 marker**：关键验证用 `VERIFY_BEGIN … VERIFY_EXIT=$LASTEXITCODE` 包裹；
+  **marker 缺失、或来自错误目录 ⇒ 判为终端感知异常，不判业务失败**（配套见
+  `ccswitch/rules/dao-officer-clauses.md` 通用节「切目录跑验证必须带目录守卫 + CWD marker」）。
+- **串行敏感验证**：test / typecheck / install / build **串行执行**，并行只用于短只读命令——
+  并行时多路输出会串线，读出来的「全绿」可能来自另一条命令。
 
 ---
 

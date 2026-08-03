@@ -130,6 +130,36 @@ const FIX_ROLES_TEXT = [
   "",
 ].join("\n");
 
+// 「行内只有 `[基线:]`/`[自定@]`、没有完整签名」这个形态的专用夹具。
+//
+// ── 2026-08-04 换语料，照直写为什么 ─────────────────────────────────────────
+// 下面 ①.4 那组断言原先拿**真仓 dao.md** 当语料，判据写死「no_meta_field === 3」与
+// 「dao.md 有一行写着两个日期」。批 3 把 dao.md 正文清成**单轨**（`[n= @ 触发:]`/`[基线:]`/
+// `[自定@]` 整批删掉、只留 `[#slug]`）之后，那个形态在 dao.md 里**一条都不剩**
+// （实测 clauses:20 / no_meta_field:20 / self_declared:0）⇒ 两条断言必红。
+//
+// **红的是语料，不是解析器**：`ccswitch/rules/*.md` 与各项目仓里这种行仍大量存在，
+// 解析器必须继续读得出它们（v2 把选择器从「只认 `[n=`」放宽到「任一台账字段或 slug」正是
+// 为了它们）。故把语料换成夹具 —— 测的仍是**解析能力**，不再是「dao.md 此刻长什么样」，
+// 而后者随每一次重写批变动，本就不该被一条断言当成判据钉死。
+//
+// **删掉断言、或把它改成恒真**是另外两条路，都没走：那等于用「守卫看不到样本」冒充
+// 「守卫没发现问题」—— 本仓守卫铁律第一句点名的就是这个病。夹具之外另加一条**真语料
+// 前提检查**（见 ①.4 末），让「这个形态在真语料里彻底没了」出声而不是静默。
+const FIX_META = path.join(FIX, "corpus-meta.md");
+const FIX_META_TEXT = [
+  "# 夹具条款库 · 单轨形态（v1 选择器结构上看不见的那几格）",
+  "",
+  "## 通用节",
+  "",
+  "- **甲条**：只带基线、没有完整签名。 [基线:未测] [#夹-仅基线]",
+  "- **乙条**：只带自定、没有完整签名。 [自定@07-30] [#夹-仅自定]",
+  "- **丙条**：一行写了两个自定日期。 [自定@07-29] [自定@07-30] [#夹-双自定]",
+  "- **丁条**：对照条，签名完整（负控：它不该被算进 no_meta_field）。 [n=1 @07-05 触发:PR流程] [基线:未测] [#夹-完整签名]",
+  "- **戊条**：只带基线且连 slug 都没有 —— 两条路都不通，该落 fieldless 而不是静默消失。 [基线:未测]",
+  "",
+].join("\n");
+
 function sourcesJson(file, list) {
   w(file, JSON.stringify({ sources: list }, null, 2) + "\n");
   return file;
@@ -139,6 +169,7 @@ async function main() {
   rm(TMP);
   w(FIX_A, FIX_A_TEXT);
   w(FIX_ROLES, FIX_ROLES_TEXT);
+  w(FIX_META, FIX_META_TEXT);
 
   const lib = await import(pathToFileURL(LIB).href);
 
@@ -157,13 +188,13 @@ async function main() {
         (c.n && /^\d{2}-\d{2}$/.test(c.first_seen) && c.trigger) || (c.slug && !c.has_meta_field)),
       JSON.stringify(dao.clauses.find((c) =>
         !((c.n && c.first_seen && c.trigger) || (c.slug && !c.has_meta_field))) || {}));
-    check("v1 盲区已修：带 [基线:]/[自定@] 却无 [n= @ 触发:] 的行现在解析得出（矩阵实测漏 3 条）",
-      dao.stats.no_meta_field === 3, JSON.stringify(dao.stats));
     check("每条条款都带 slug（dao.md 已整体接入台账）",
       dao.stats.no_slug === 0 && dao.stats.slug === dao.stats.clauses, JSON.stringify(dao.stats));
-    check("`[自定@]` 收全部不只收第一个（dao.md 有一行写着两个日期）",
-      dao.clauses.some((c) => (c.self_declared_all || []).length > 1),
-      JSON.stringify(dao.clauses.map((c) => c.self_declared_all).filter((x) => x && x.length)));
+    // 批 3 之后 dao.md 是**单轨**语料：20 条条款全部只有 slug、零行内元字段。
+    // 这不是缺陷而是那一批的终态，故这里把它钉成正面断言 —— 哪天有人往 dao.md 回填
+    // 行内字段，本条会红并把「双轨又回来了」摆到眼前（而 v1 盲区那组已迁去 ①.4 的夹具）。
+    check("dao.md 是单轨语料：条款全部只有 slug、零行内元字段",
+      dao.stats.no_meta_field === dao.stats.clauses && dao.stats.clauses > 0, JSON.stringify(dao.stats));
     check("行号自洽：line <= meta_line <= line_end",
       dao.clauses.every((c) => c.line <= c.meta_line && c.meta_line <= c.line_end),
       JSON.stringify(dao.clauses.find((c) => !(c.line <= c.meta_line && c.meta_line <= c.line_end)) || {}));
@@ -182,6 +213,51 @@ async function main() {
     check("跨行条款：块首行号 < 元字段行号（title 取的是判据句首不是末行的补充说明）",
       !!multi && multi.line < multi.meta_line, JSON.stringify(multi || gw.clauses.map((c) => [c.line, c.meta_line])));
     check("跨行条款的 title 是判据句首", !!multi && /规则集只增不减/.test(multi.title), JSON.stringify(multi || {}));
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // 语料：**夹具**（换语料的完整理由见 FIX_META_TEXT 上方那段注释）。
+  console.log("\n──── ①.4 v2 选择器：只带 [基线:]/[自定@] 的行也要看得见 ────");
+  {
+    const meta = lib.parseClauses({
+      text: FIX_META_TEXT, file: "corpus-meta.md",
+      selector: lib.SELECTOR.MARKED, roleScheme: lib.ROLE_SCHEME.GENERAL,
+    });
+    check("v1 盲区已修：带 [基线:]/[自定@] 却无 [n= @ 触发:] 的行解析得出（3 条 + 1 条对照）",
+      meta.stats.clauses === 4 && meta.stats.no_meta_field === 3, JSON.stringify(meta.stats));
+    // 负控：证明这份夹具**确实在测那件事**。少了这一条，上面那条也可能只是在测一份普通语料 ——
+    // 而「测的东西其实已经不在语料里」正是本组这次红掉的成因，同一个病不该在修法里重演。
+    const blind = FIX_META_TEXT.split("\n").filter(
+      (l) => lib.LEDGER_SIGNATURE_RE.test(l) && !lib.CLAUSE_SIGNATURE_RE.test(l));
+    check("负控：那 4 行确实不带 v1 签名（旧判据只认 `[n=`，对它们结构上失明）",
+      blind.length === 4, JSON.stringify(blind));
+    check("两条路都不通的那行落 fieldless，不是静默消失",
+      meta.stats.fieldless === 1, JSON.stringify(meta.stats));
+    const dual = meta.clauses.find((c) => c.slug === "夹-双自定") || {};
+    check("`[自定@]` 收全部不只收第一个（一行两个日期，只收首个会静默丢一个）",
+      JSON.stringify(dual.self_declared_all) === JSON.stringify(["07-29", "07-30"]),
+      JSON.stringify(meta.clauses.map((c) => [c.slug, c.self_declared_all])));
+    check("`self_declared` 仍是首个（老消费方契约不变）",
+      dual.self_declared === "07-29", JSON.stringify(meta.clauses.map((c) => [c.slug, c.self_declared])));
+
+    // ── 真语料侧的**前提检查** ────────────────────────────────────────
+    // 判别力在上面那组夹具；这一条只负责让「这个形态在真语料里彻底没了」出声。
+    // 它归零时该做的是确认「形态真的退役了、v2 那半选择器可以退役了吗」，**不是删断言**。
+    const shaped = [];
+    for (const s of lib.defaultSources()) {
+      const p = lib.parseFile(path.join(REPO, s.file), {
+        file: s.file, selector: s.selector, roleScheme: s.role_scheme,
+      });
+      for (const c of p.clauses) {
+        if (!c.has_meta_field && (c.baseline !== null || (c.self_declared_all || []).length > 0)) {
+          shaped.push(`${c.file}:${c.meta_line}`);
+        }
+      }
+    }
+    // 样本数无条件打印：过了也要看得见有几个样本 —— 「零样本」与「零违例」在只看红绿时一样。
+    console.log(`  ⓘ 真语料里这个形态现有 ${shaped.length} 处：${shaped.join(" / ") || "（无）"}`);
+    check("前提仍成立：真语料里这个形态还在（归零 ⇒ 本组只剩夹具在测，得有人知道）",
+      shaped.length > 0, `样本 ${shaped.length} 处`);
   }
   {
     const r = lib.parseClauses({
@@ -882,9 +958,15 @@ async function main() {
       "",
       "## 通用节",
       "",
-      "- **甲条**：双轨齐全。 [n=1 @07-01 触发:PR流程] [基线:合成甲] [#测-甲]",
-      "- **乙条**：只有 slug，台账在 ledger 里。 [基线:合成乙] [#测-乙]",
+      "- **甲条**：行内字段齐全。 [n=1 @07-01 触发:PR流程] [基线:合成甲] [#测-甲]",
+      "- **乙条**：只有基线 + slug（`[n= @ 触发:]` 那一栏正文没写）。 [基线:合成乙] [#测-乙]",
       "- **丙条**：正文里写着 `[自定@<月日>]` 这个模板字面量（在反引号内，不该被当成真标记）。 [n=2 @07-02 触发:无] [仅判据·无触发] [#测-丙]",
+      // 丁 / 戊是 v3（批 3 · 单轨期）加的两个夹具，**两个都要**才夹得住新契约的两侧：
+      //   丁 = 批 3 之后 dao.md 的常态（行尾只剩 slug）⇒ 它证「正文没写就不比」；
+      //   戊 = 行内确实写着 `[自定@]` ⇒ 它证「正文写了就还是要比」那一半**没被放松掉**。
+      //   只留丁会让「对账被整个关掉」和「新契约」在测试里长得一样。
+      "- **丁条**：单轨形态，行尾只剩 slug。 [#测-丁]",
+      "- **戊条**：行内带真的自定标记。 [n=1 @07-05 触发:PR流程] [自定@07-05] [#测-戊]",
       "",
     ].join("\n");
     const sj = sourcesJson(path.join(LDIR, "src.json"),
@@ -897,19 +979,25 @@ async function main() {
         "测-甲": { file: corpus, n: "1", first_seen: "07-01", trigger: "PR流程", judge_only: false, self_authored: [], baseline: "合成甲", source_refs: [], status: "active" },
         "测-乙": { file: corpus, n: null, first_seen: null, trigger: null, judge_only: false, self_authored: [], baseline: "合成乙", source_refs: [], status: "active" },
         "测-丙": { file: corpus, n: "2", first_seen: "07-02", trigger: "无", judge_only: true, self_authored: [], baseline: null, source_refs: [], status: "active" },
+        // 丁：台账**有**全套值而正文一栏都没写 —— 批 2 的旧契约判这是红，v3 判绿（台账为准）。
+        "测-丁": { file: corpus, n: "7", first_seen: "07-06", trigger: "PR流程", judge_only: false, self_authored: ["07-06"], baseline: "合成丁", source_refs: [], status: "active" },
+        "测-戊": { file: corpus, n: "1", first_seen: "07-05", trigger: "PR流程", judge_only: false, self_authored: ["07-05"], baseline: null, source_refs: [], status: "active" },
       },
     });
     const writeLedger = (doc) => w(ledgerPath, JSON.stringify(doc, null, 2) + "\n");
     // 台账检查跑在**生成模式**：--check 会先因索引过期而红，两个信号混在一个退出码里就分不开谁红了。
     const runLedger = () => {
       const r = runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", ledgerPath, "--out", IDX]);
-      const m = /CLAUSE_LEDGER_SUMMARY exit=(\d+) state=(\S+) entries=(\d+) slugs=(\d+) missing_slug=(\d+) orphan_slug=(\d+) orphan_ledger=(\d+) dup_slug=(\d+) mismatch=(\d+) file_mismatch=(\d+) out_of_scope=(\d+)/.exec(r.out);
+      // v3 两栏（compared / ledgeronly）**必须捕到**：它们是 mismatch 的分母与「以台账为准」的计数。
+      // 写成必需分组而不是可选，是刻意的 —— 少了那两栏就说明有人把分母摘掉了，
+      // 那一刻 `led` 会变成 null，下面每条断言都红，而不是静默按老格式跑下去。
+      const m = /CLAUSE_LEDGER_SUMMARY exit=(\d+) state=(\S+) entries=(\d+) slugs=(\d+) missing_slug=(\d+) orphan_slug=(\d+) orphan_ledger=(\d+) dup_slug=(\d+) mismatch=(\d+) file_mismatch=(\d+) out_of_scope=(\d+) compared=(\d+) ledgeronly=(\d+)/.exec(r.out);
       return {
         code: r.code, out: r.out,
         led: m ? {
           exit: +m[1], state: m[2], entries: +m[3], slugs: +m[4], missing_slug: +m[5],
           orphan_slug: +m[6], orphan_ledger: +m[7], dup_slug: +m[8], mismatch: +m[9],
-          file_mismatch: +m[10], out_of_scope: +m[11],
+          file_mismatch: +m[10], out_of_scope: +m[11], compared: +m[12], ledgeronly: +m[13],
         } : null,
       };
     };
@@ -921,13 +1009,23 @@ async function main() {
     check("负控：干净态 exit 0 且末行 state=ok",
       clean.code === 0 && clean.led && clean.led.exit === 0 && clean.led.state === "ok",
       JSON.stringify(clean.led) + clean.out.slice(0, 500));
-    check("负控：3 条 slug 全对上、六个违规计数全 0",
-      clean.led && clean.led.slugs === 3 &&
+    check("负控：5 条 slug 全对上、六个违规计数全 0",
+      clean.led && clean.led.slugs === 5 &&
       [clean.led.missing_slug, clean.led.orphan_slug, clean.led.orphan_ledger,
         clean.led.dup_slug, clean.led.mismatch, clean.led.file_mismatch].every((x) => x === 0),
       JSON.stringify(clean.led));
-    check("代码 span 假阳性负控：反引号里的 `[自定@<月日>]` 没被当成真标记（当成了的话双轨 self_authored 会不等）",
+    check("代码 span 假阳性负控：反引号里的 `[自定@<月日>]` 没被当成真标记（当成了的话 self_authored 会不等）",
       clean.led && clean.led.mismatch === 0, clean.out.slice(0, 600));
+    // ── v3 分母断言：`mismatch=0` 有两种读法，只有分母能分开它们 ──────────────
+    // 逐条手算（改夹具就要一起改这个数，这是刻意的棘轮）：
+    //   甲 hasMeta ⇒ n/first_seen/trigger/judge_only 4 比 + baseline 1 比；self 空 ⇒ 1 记台账
+    //   乙 无 meta ⇒ 4 记台账 + baseline 1 比；self 空 ⇒ 1 记台账
+    //   丙 hasMeta ⇒ 4 比；baseline 空 1 记台账；self 空 1 记台账
+    //   丁 只剩 slug ⇒ 4+1+1 = 6 全记台账，0 比
+    //   戊 hasMeta ⇒ 4 比 + self 1 比；baseline 空 1 记台账
+    //   合计 compared = 5+1+4+0+5 = 15 · ledgeronly = 1+5+2+6+1 = 15
+    check("v3 分母：compared=15 / ledgeronly=15（写死是刻意的——把对账整个关掉时这一条先红）",
+      clean.led && clean.led.compared === 15 && clean.led.ledgeronly === 15, JSON.stringify(clean.led));
 
     // ── 方向一：正文删掉一个 slug ⇒ 台账那条成孤儿，且该条款失去 slug ──
     w(corpus, CORPUS_TEXT.replace(" [#测-甲]", ""));
@@ -961,14 +1059,36 @@ async function main() {
       const r = runLedger();
       check("台账改 judge_only ⇒ 红（布尔字段也在对账面里）",
         r.code === 1 && r.led && r.led.mismatch === 1, JSON.stringify(r.led));
+      // ── v3 单轨契约的两侧，各夹一次 ──────────────────────────────────────────
+      // 🔴 下面头两条**在批 2 是反过来的断言**（那时判红），批 3 起判绿。照直记，别当成新写的：
+      //    旧契约「行内没写 ⇒ 台账侧应为 null，台账有值即红」只在双轨期成立；批 3 把 dao.md
+      //    的行内元字段整批删掉、只留 slug 之后，那一条会把设计要的终态判成 84 处违例。
+      //    **这是放松**（新通过集是旧的真超集），补偿是上面那条 compared/ledgeronly 分母断言。
       const d2 = baseLedger(); d2.clauses["测-甲"].self_authored = ["07-09"]; writeLedger(d2);
       const r2 = runLedger();
-      check("台账凭空加一个 self_authored ⇒ 红（台账替正文编值同样判红）",
-        r2.code === 1 && r2.led && r2.led.mismatch === 1, JSON.stringify(r2.led));
+      check("v3：正文没写 [自定@] 而台账有值 ⇒ 绿（台账是真相源）",
+        r2.code === 0 && r2.led && r2.led.mismatch === 0, JSON.stringify(r2.led));
       const d3 = baseLedger(); d3.clauses["测-乙"].n = "3"; writeLedger(d3);
       const r3 = runLedger();
-      check("行内没写的字段而台账有值 ⇒ 红（「正文没这一栏」不等于「台账可以随便填」）",
-        r3.code === 1 && r3.led && r3.led.mismatch === 1, JSON.stringify(r3.led));
+      check("v3：正文没写 [n= @ 触发:] 而台账有值 ⇒ 绿（同上）",
+        r3.code === 0 && r3.led && r3.led.mismatch === 0, JSON.stringify(r3.led));
+      const d3b = baseLedger(); d3b.clauses["测-丁"].n = "99"; d3b.clauses["测-丁"].baseline = "改过"; writeLedger(d3b);
+      const r3b = runLedger();
+      check("v3：单轨条款（只剩 slug）台账怎么改都不判红 —— 这正是批 3 之后 dao.md 的常态",
+        r3b.code === 0 && r3b.led && r3b.led.mismatch === 0, JSON.stringify(r3b.led));
+      // ── 保留的那一半：正文**写了**就还得比。缺了这三条，上面三条会被读成「对账关掉了」──
+      const d4 = baseLedger(); d4.clauses["测-戊"].self_authored = ["07-09"]; writeLedger(d4);
+      const r4 = runLedger();
+      check("v3 反向：正文写了 [自定@07-05] 而台账不同 ⇒ 仍然红",
+        r4.code === 1 && r4.led && r4.led.mismatch === 1, JSON.stringify(r4.led));
+      const d5 = baseLedger(); d5.clauses["测-乙"].baseline = "被改过的基线"; writeLedger(d5);
+      const r5 = runLedger();
+      check("v3 逐字段而非整条：乙条正文只写了 [基线:]，改它 ⇒ 红（同一条上 n 改了却不红，见上）",
+        r5.code === 1 && r5.led && r5.led.mismatch === 1, JSON.stringify(r5.led));
+      const d6 = baseLedger(); d6.clauses["测-戊"].trigger = "无"; writeLedger(d6);
+      const r6 = runLedger();
+      check("v3 反向：正文写了 触发:PR流程 而台账写 无 ⇒ 仍然红",
+        r6.code === 1 && r6.led && r6.led.mismatch === 1, JSON.stringify(r6.led));
       writeLedger(baseLedger());
     }
 
