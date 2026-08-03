@@ -44,8 +44,14 @@
 //     issue #82 的关闭条件因此写的是「并行双进程同跑 20 次零互染」，不是跑一次。
 //   · 它测不到「测试之间的互染」（A 测试写的东西影响 B 测试）——本脚本每轮只跑同一个文件。
 //   · shim 只铺 `ccswitch/hooks` 与 `ccswitch/lib` 两层。被测文件若引用 `ccswitch` 下别的
-//     子目录（rules/ templates/ …），沙箱里会找不到 —— 那时对照组 A 会红，于是 exit 2，
-//     **不会被误报成互染**。
+//     子目录（rules/ scripts/ templates/ …），沙箱里会找不到 —— 那时对照组 A′ 会红，于是
+//     exit 2「无从归因」，**不会被误报成互染**。实测例：`tests/dead-gates.tests.js`
+//     （真位置 PASS=116 vs 沙箱 PASS=20/FAIL=63，它要 `ccswitch/scripts/check-dead-gates.mjs`）
+//     ⇒ **这一类测试本网给不出裁决，别把 exit 2 读成「查过了，没问题」。**
+//   · 它只覆盖**「写共享位置」**这一种互染。**还有一种它结构上看不见**：测试自己什么都不写，
+//     却对**别人拥有的**机器级可变状态做不变量断言（dead-gates 的「cc-switch DB 跑前跑后
+//     mtime/size 不变」「live settings 里零死闸」都是）。那种红由第三方（GUI 应用、主仓里
+//     另一个官的写入）触发，跟本网并发几路毫无关系 —— 调高并发数一辈子也复现不出来。
 //
 // 跑法：
 //   node scripts/repro-fixture-isolation.mjs                     # 默认 6 并发 × 3 轮
