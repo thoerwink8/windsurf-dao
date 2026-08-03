@@ -490,7 +490,7 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
 
 ## 通用节
 
-- **甲条**：双轨齐全。 [n=1 @$md 触发:PR流程] [基线:合成甲] [#测-甲]
+- **甲条**：行内字段齐全（含一个**真的**自定标记，v3 反向控要用它）。 [n=1 @$md 触发:PR流程] [基线:合成甲] [自定@$md] [#测-甲]
 - **乙条**：只有 slug。 [基线:合成乙] [#测-乙]
 - **丙条**：正文里写着 ``[自定@<月日>]`` 这个模板字面量（在反引号内，不该被当成真标记）。 [n=2 @$md 触发:无] [仅判据·无触发] [#测-丙]
 "@
@@ -499,7 +499,7 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
         $mkLedger = {
             param([hashtable]$Override)
             $e = [ordered]@{
-                '测-甲' = New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲'
+                '测-甲' = New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @($md)
                 '测-乙' = New-LedgerEntry -File $leaf -Baseline '合成乙'
                 '测-丙' = New-LedgerEntry -File $leaf -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $true
             }
@@ -515,16 +515,24 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
         Check '负控：只有 slug 的那条不再被判 missing-meta-field（台账可回落）' ($r.Text -notmatch 'missing-meta-field') $r.Text
         Check '正式条款 3 条（行内元字段 2 条 · 仅 slug 1 条）—— 先报分母' `
             ($r.Text -match '正式条款 3 条（行内元字段 2 条 · 仅 slug、台账在 ledger 里 1 条）') $r.Text
-        Check '代码 span 假阳性负控：反引号里的 [自定@<月日>] 没被当成真标记' `
-            ($r.Text -match '带 \[自定@…\] 标记：0 条') $r.Text
+        # v3 起甲条带一个**真的** [自定@]，故这里的期望值从 0 变 1 ——
+        # 判别力反而更强：遮罩一坏，丙条那个反引号里的也会被算进来，数字变 2。
+        Check '代码 span 假阳性负控：反引号里的 [自定@<月日>] 没被当成真标记（真标记只有 1 个）' `
+            ($r.Text -match '带 \[自定@…\] 标记：1 条') $r.Text
         Check 'v1 盲区已修：只带 [基线:] 的行进得了扫描面（本次检出 3 条）' ($r.Text -match '本次检出 3 条') $r.Text
+        # v3 分母：`ledgerviol=0` 有两种读法（比过且没分歧 / 一条字段都没比过），只有分母分得开。
+        # 逐条手算：甲 hasMeta ⇒ n/first_seen/trigger/judge_only 4 比 + baseline 1 比 + self 1 比 = 6 比、0 记台账；
+        # 乙 无 meta ⇒ 那 4 栏记台账 + self 空 1 记台账 = 5 记台账、baseline 1 比；
+        # 丙 hasMeta ⇒ 4 比、baseline 空 1 记台账、self 空 1 记台账 ⇒ 合计 ledgercmp=11 ledgeronly=7
+        Check 'v3 分母：marker 报 ledgercmp=11 ledgeronly=7（写死是刻意的——对账被关掉时这条先红）' `
+            ($r.Text -match 'ledgercmp=11 ledgeronly=7') $r.Text
 
         # ── 方向一：正文删一个 slug ⇒ missing-slug + orphan-ledger 各一 ──
         $noSlug = New-Fixture ($body -replace ' \[#测-甲\]', '')
         # 台账仍指着原夹具文件名 ⇒ 换个文件就对不上；故这一态单独造一份指向新文件名的台账。
         $leaf2 = Split-Path -Leaf $noSlug
         $l2 = New-LedgerFile -Entries ([ordered]@{
-            '测-甲' = New-LedgerEntry -File $leaf2 -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲'
+            '测-甲' = New-LedgerEntry -File $leaf2 -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @($md)
             '测-乙' = New-LedgerEntry -File $leaf2 -Baseline '合成乙'
             '测-丙' = New-LedgerEntry -File $leaf2 -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $true
         })
@@ -542,10 +550,13 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
 
         # ── 方向三：台账值被改 ⇒ ledger-mismatch。**逐字段各验一次** ──
         foreach ($case in @(
-            @{ Name = 'n';          Entry = (New-LedgerEntry -File $leaf -N '9'  -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲') },
-            @{ Name = 'first_seen'; Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen '12-31' -Trigger 'PR流程' -Baseline '合成甲') },
-            @{ Name = 'trigger';    Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger '改配置' -Baseline '合成甲') },
-            @{ Name = 'baseline';   Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger 'PR流程' -Baseline '被改过的基线') },
+            # 每个用例**只改一栏**（其余栏与干净态相同）⇒ 它红是因为那一栏，不是顺带带红的。
+            # `-SelfAuthored @($md)` 自 v3 起必须逐个带上：甲条正文现在有一个真的 [自定@]，
+            # 不带就会每个用例都额外红一处 self_authored，那样「改 n ⇒ 红」就不再是它自己证的。
+            @{ Name = 'n';          Entry = (New-LedgerEntry -File $leaf -N '9'  -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @($md)) },
+            @{ Name = 'first_seen'; Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen '12-31' -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @($md)) },
+            @{ Name = 'trigger';    Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger '改配置' -Baseline '合成甲' -SelfAuthored @($md)) },
+            @{ Name = 'baseline';   Entry = (New-LedgerEntry -File $leaf -N '1'  -FirstSeen $md -Trigger 'PR流程' -Baseline '被改过的基线' -SelfAuthored @($md)) },
             @{ Name = 'self_authored'; Entry = (New-LedgerEntry -File $leaf -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成甲' -SelfAuthored @('07-09')) }
         )) {
             $lm = & $mkLedger @{ '测-甲' = $case.Entry }
@@ -555,14 +566,25 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
         }
         {
             $lj = & $mkLedger @{ '测-丙' = (New-LedgerEntry -File $leaf -N '2' -FirstSeen $md -Trigger '无' -JudgeOnly $false) }
+            # 丙条正文没有真的 [自定@]（那个在反引号里），故此处不必带 -SelfAuthored。
             $rj = Invoke-Checker -File $f -Ledger $lj
             Check '台账改 judge_only ⇒ 红（布尔字段也在对账面里）' `
                 ($rj.Exit -eq 1 -and $rj.Text -match 'ledger-mismatch') "exit=$($rj.Exit) / $($rj.Text)"
-            # 行内没写的字段而台账有值：台账替正文编了一个值，同样判红。
+            # 🔴 v3（批 3，2026-08-02）**把下面这条的断言方向翻过来了**，照直记别当成新写的：
+            # 旧契约「行内没写的字段而台账有值 ⇒ 红」只在双轨期成立。批 3 把 dao.md 的行内元字段
+            # 整批删掉、只留 `[#slug]` 之后，那条会把设计要的终态判成 84 处违例。
+            # 新契约：**正文写了才比、没写以台账为准**。这是放松（新通过集是旧的真超集），
+            # 补偿是上面的 ledgercmp 分母断言 + 紧接着这条反向控。
             $lb = & $mkLedger @{ '测-乙' = (New-LedgerEntry -File $leaf -N '3' -Baseline '合成乙') }
             $rb = Invoke-Checker -File $f -Ledger $lb
-            Check '行内没写的字段而台账有值 ⇒ 红（「正文没这一栏」不等于「台账可以随便填」）' `
-                ($rb.Exit -eq 1 -and $rb.Text -match 'ledger-mismatch') "exit=$($rb.Exit) / $($rb.Text)"
+            Check 'v3：行内没写 [n= @ 触发:] 而台账有值 ⇒ 绿（台账是那一栏的真相源）' `
+                ($rb.Exit -eq 0 -and $rb.Text -notmatch 'ledger-mismatch') "exit=$($rb.Exit) / $($rb.Text)"
+            # 反向控：缺了它，上面那条会被读成「对账被整个关掉了」。同一条 `乙` 上，
+            # 正文**确实写着** `[基线:合成乙]` ⇒ 改台账的 baseline 仍然要红（逐字段判，不是整条豁免）。
+            $lb2 = & $mkLedger @{ '测-乙' = (New-LedgerEntry -File $leaf -Baseline '被改过的基线') }
+            $rb2 = Invoke-Checker -File $f -Ledger $lb2
+            Check 'v3 反向：同一条上正文写了的那一栏（[基线:]）被改 ⇒ 仍然红' `
+                ($rb2.Exit -eq 1 -and $rb2.Text -match 'ledger-mismatch') "exit=$($rb2.Exit) / $($rb2.Text)"
         }.Invoke()
 
         # ── 方向四：file 指错 / 一行两个 slug / status=retired / 台账不在 ──
