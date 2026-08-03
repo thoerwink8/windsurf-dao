@@ -9,6 +9,7 @@
 ```text
 config-sync/
   common/       # 通用配置，进入 git
+  providers/    # 🔴 历史遗留，不进 git、不是恢复源 —— 见下方「providers/ 是历史遗留」一节
   vendor/       # sqlite-tools.json 下载清单（进 git）+ 首次用时下载的安装包与解压产物（都不进 git）
   lib/          # Node.js 脚本（sync.mjs 编排器 + export/restore/doctor/inventory）
   setup-sqlite.ps1
@@ -23,7 +24,47 @@ config-sync/
 
 - `common/`：通用配置快照，可进 git，例如 common settings、MCP、skills、prompts、proxy 相关配置。
 - `common-secrets.json`：settings 脱敏占位符对应的真实值，已被 `.gitignore` 忽略，换机时需手动复制。
-- 供应商配置不再同步：新机器应直接通过 cc-switch 配置自己的供应商，避免旧配置污染。
+- 供应商配置不再同步：新机器应直接通过 cc-switch 配置自己的供应商，避免旧配置污染。**注意本机磁盘上还留着一份 2026-06-15 的旧导出 `providers/providers.json`，它不进 git、也不会被刷新 —— 详见下一节。**
+
+## 🔴 providers/ 是历史遗留，不是恢复源
+
+`config-sync/providers/` 被 `config-sync/.gitignore` 第 2 行**整体忽略**，所以你在 GitHub 上看不到它，
+但**本机磁盘上它可能还在**（2026-06-15 的一次性导出 `providers.json` + 一份更早的 `.bak` + 一份含真实凭据的
+`common-secrets.json`）。上一条说的「供应商配置不再同步」是**政策**，而那个政策留下的**残留物**就是它。
+
+**它不在 6 个同步 scope（`settings` / `mcp` / `skills` / `prompts` / `proxy` / `terminal`）里**，
+`export.mjs` 不写它、`restore.mjs` 不读它 —— 也就是说，**它永远不会被自动刷新，也从来没有人维护过**。
+2026-08-02 全树普查（1174 个文件，含被 gitignore 忽略的）实测：**零个脚本 / 文档 / hook 读它**。
+
+### 拿它恢复会发生什么（这才是它危险的地方）
+
+cc-switch 真正下发到 `~/.claude/settings.json` 的，是 `providers` 表里**当前 provider 那一行**的
+`settings_config`，而且是**整体覆盖**（出处：`ccswitch/lib/settings-drift.js` 头注第三面 · issue #49）。
+2026-08-02 实测那份快照与 DB 的差距：
+
+| | `providers/providers.json` | cc-switch DB `providers` 表 |
+|---|---|---|
+| 行数 / 唯一 id | 17 行 / **15 个**（两个 id 重复） | 13 行 / 13 个 |
+| `claude-official` 的 `settings_config` | **46 字节**，无 `permissions`、无 `hooks` | 3925 字节，`permissions.deny` **5 条** + 7 个挂载点的 hooks |
+| `dulays-1784385029046` | **整行缺失** | 有，同样带 deny 5 条 + 7 个挂载点 |
+| `nowcoding全球加速-1782696928716` | **整行缺失** | 有 |
+| 只在快照里、DB 已无的 id | **4 个** | — |
+
+⇒ 用这份快照覆盖之后，`permissions` 连同**全部 deny 规则**被静默抹掉 —— Grep-first 铁律
+（`Bash(grep:*)` / `Bash(find:*)` / `PowerShell(Select-String:*)` …）的落地面就住在那里。
+**没有告警、没有 diff**，恢复完看起来一切正常，而护栏已经没了。少一条 deny 与少一个 hook 的后果不同、更糟：
+hook 没了会有人察觉行为变了，deny 少一条只是**护栏悄悄回退**。
+
+若照 `lib/restore.mjs` 既有的「先 `DELETE FROM` 整表、再 `INSERT OR REPLACE`」写法把它接进来，
+还要多两条：DB 里那两行快照没有的 provider **被删掉不再回来**；重复 id **静默塌成**最后一次出现的那一份。
+
+### 现在该怎么做
+
+- **要 providers 的真相** → 查 cc-switch DB 的 `providers` 表，不要查这份快照。
+- **看到那个文件** → 它开头有一个 `_WARNING` 键写着同样的事；同目录还有一份
+  `请勿用于恢复-DO-NOT-RESTORE.md`（同样不进 git）。
+- **处置未定**：纳入同步 scope / 保留为历史快照 / 删除，三条路的代价与风险已备齐，**待用户拍板**
+  —— 见 issue #96。在拍板之前**不要删、也不要拿它恢复**。
 
 ## common 密钥脱敏（重要）
 
