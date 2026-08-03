@@ -58,6 +58,59 @@
 //   三条合法路径的全文在下方 G2 的 `how`。⚠ **config-sync 同理**：它写的也是配置面，
 //   动它之前同样先问用户授权 —— **问了就做**，不必来回请示，卡住不动不是谨慎是停摆。
 //
+//   ── 2026-08-02 扩面（issue #87）：原版有两处结构性失明，同一条命令一次踩中两处 ──────
+//   实测绕过命令**原文**（本机 2026-08-02，用户已授权、结果无害，但同一形态在未授权时同样放行）：
+//     `Copy-Item "<源>" "$env:USERPROFILE\.claude\settings.json" -Force; "COPY_EXIT=$LASTEXITCODE $?"`
+//   ㈠ **它是 PowerShell 工具调用，根本进不了 Edit/Write 分支** —— G2 的 test() 第一行
+//      `if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/...) return null` 当场返回。
+//      matcher 里一直有 `PowerShell`，`--selfcheck` 也一直报 G2 覆盖 ✓ —— **「闸被调用了」
+//      与「闸看得见这个形态」是两件事**，而它们在任何日志里都长得一样。
+//   ㈡ 路径是 `$env:USERPROFILE` **变量形态**，就算进了分支也比不上展开后的 home。
+//   ⇒ 本次两处都补：①新增 shell 分支（Bash/PowerShell）②路径判据换成「先展开变量再比」。
+//
+//   🔴 **最要紧的一条设计取舍：只看目标位，源位一律放行**。复制/移动类命令的**源位**出现
+//   live settings 是**读**（备份），而真语料里那才是主流形态 —— 全量普查
+//   `~/.claude/projects/**/*.jsonl` 里 shell 触到 live settings.json 的命令：
+//     · **写**（目标位）**1 条** = 本次这条绕过；
+//     · **读/备份**（源位）**4 条**：`Copy-Item "$env:USERPROFILE\.claude\settings.json"
+//       "$env:USERPROFILE\.claude\settings.json.bak-20260801-hardgates" -Force`、
+//       `cp "C:/Users/.../settings.json" "....bak-20260712-marshal-scout"`、
+//       `cp ~/.claude/settings.json "D:\frank\windsurf-dao\_tmp\settings-live-backup-$TS.json"`、
+//       `Copy-Item 'C:\Users\Administrator\.claude\settings.json' (Join-Path $dst 'settings.json')`。
+//   **若判据写成「这一段里出现了 live settings 就拦」，上面 4 条真实命令全部误伤，而备份恰恰是
+//   本闸 `how` 里劝人走的那条路**（先备份再请用户改源）。误伤代价还不对称：逃生阀只有用户设得了
+//   ⇒ 会话当场卡住（G7 已经为这个形态付过 4% 的学费，见头注 G7 ㈥）。故：**源位放行是刻意的**，
+//   它的对价是「先 `cp live x.tmp`、改 `x.tmp`、再 `cp x.tmp live`」这条两步绕法本闸拦第二步、
+//   拦得住；而单纯把 live 读走的，本来就没改任何东西。
+//
+//   **已知漏报面，照直写（近似判据，不是判定）**：
+//     ①**程序化写入**——`node -e "fs.writeFileSync(...)"` / `python -c` / 调一个自己写的
+//       `.ps1`/`.bat`：段首是 `node`/`python`/脚本名，本闸看都不看。这是最大的一格。
+//     ②**表达式右值的变量**——`$p = Join-Path $env:USERPROFILE '.claude/settings.json'` 之后
+//       `Copy-Item x $p`：变量表只认**字面量**右值（`$p = "…"`），表达式一律解不出。
+//     ③**`cd` 不传播**——`cd ~ && cp x .claude/settings.json`：切分器把 `cd` 那一段扔了，
+//       相对路径按**工具的 cwd** 解析，不按 `cd` 后的目录。
+//     ④`cp -t <目录> <源>` / `robocopy` / `New-Item -Path X -Name Y` 这类「目标位不在末位、
+//       也不在已知参数名下」的形态。
+//     ⑤混淆写法（base64 / `Invoke-Expression` / 反引号命令替换）—— 本闸刻意不追。
+//   ── 以下四格由**对抗验证官**在合并前夹击查出（2026-08-03，issue #87），实现官未列 ──
+//     ⑥**具名源吃掉正参**（最要紧的一格）——`Copy-Item -Path <源> <目标>` / `-LiteralPath <源> <目标>`：
+//       具名参数吃掉一个正参后只剩 1 个，撞上「单正参不算目标位」的早退 ⇒ **一个候选都产不出**。
+//       ⚠ **别读成「具名形态已覆盖」**：PR #106 的 body 正控清单写着「`-Destination` 具名参数」，
+//       而**具名的是源、位置的是目标**这一种混合形态正好落在两边之外。
+//     ⑦**具名 `-Destination <目录>` 没有 basename 展开** —— 该展开只写在正参分支里。
+//     ⑧**单正参 + cwd 恰在 `~/.claude`** ⇒ 隐式目标就是 live。`~/.claude` 是本机常用工作目录，
+//       这一格不是理论洞。**该不该修是判断档**：把 cwd 当隐式目标位会引入一整类新误伤面。
+//     ⑨**绝对路径不过 `path.resolve`** ⇒ `..` / `.` / `//` / 8.3 短名 / UNC 全部绕开精确比对。
+//       ⚠ 这一格**同样穿透改动前就有的 Edit/Write 分支**，不是 shell 分支独有 —— 即本闸自诞生起就漏。
+//   **别把「G2 现在管 shell 了」读成「shell 写 live 已经被兜住了」**：兜住的是**直白写法**，
+//   而直白写法正是真实违例的形态（本次那条就是）。
+//   ⚠ **两处已知误伤**（真语料上当前零发生，但逃生阀只有用户设得了 ⇒ 撞上即会话卡死）：
+//     heredoc 正文里写着那条命令会被当成真命令（G5 早为同一个病做过行首锚点收窄，G2 shell 分支
+//     没照一遍）· 写入类命令的 `-Value (表达式)` 吞掉取值后 live 路径掉进正参。
+//   **上面九格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
+//   那条会红并点名，逼他同批更新这份清单 —— **这份头注不是承诺，是一张有守卫的账**。
+//
 // G4 · 浏览器 MCP 截图路径 —— ⚠ **射程只到浏览器 MCP 这一种工具调用**：
 //   PowerShell / .NET 的截图脚本（System.Drawing CopyFromScreen 那条路）走的**不是工具调用**，
 //   本闸看不见它，那一半仍然只是判据。同样别把「G4 已上闸」读成「截图路径已经有人管了」。
@@ -327,6 +380,208 @@ const UNCHECKED_TODO = /(^|\n|\\n|["'])[ \t]*[-*+][ \t]+\[[ \t]\]/;
 // 直接不给不对齐留机会。别把那个位置当成随手放的：它是判据对齐的一部分。
 const HEARTBEAT_SIG = /^\[dao-heartbeat\]/;
 
+// ── G2 的判据材料（2026-08-02 issue #87 扩面）───────────────────────────────
+// 判据出处、真语料分布、「只看目标位」这个取舍的理由与五条已知漏报面，全在头注 G2。
+// 这里只放实现，注释只解释**这一行为什么这么写**。
+
+// live 那一份的目录与文件名。**`--selfcheck` 与 mutation 都拿它当靶**（回归网里
+// 有一条把这个数组改成不存在的文件名、断言承重正控从 exit 2 掉到 exit 0）。
+const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
+const G2_LIVE_DIR = norm(path.join(HOME, ".claude")).toLowerCase();
+
+function g2IsLive(p) {
+  if (!p) return false;
+  const low = norm(p).toLowerCase();
+  return G2_LIVE_NAMES.some((n) => low === `${G2_LIVE_DIR}/${n}`);
+}
+// 目标位给的是 `~/.claude` **目录**时（`cp x ~/.claude/`），文件名由源的 basename 决定。
+function g2IsLiveDir(p) {
+  return !!p && norm(p).toLowerCase() === G2_LIVE_DIR;
+}
+
+// 把 home 的各种变量形态展开成真实路径。
+// **替换一律用函数形式**——HOME 是从环境读来的字符串，直接当替换串会让其中的 `$&`/`$1`
+// 被 String.replace 当成引用（本机 HOME 里没有 `$`，但那是运气不是判据）。
+function g2Expand(raw, vars) {
+  let s = String(raw == null ? "" : raw).trim();
+  while (/^(["'])([\s\S]*)\1$/.test(s)) s = s.replace(/^(["'])([\s\S]*)\1$/, "$2");
+  // 同一条命令内的字面量变量（见下方 g2VarMap）。`$env` 是命名空间前缀不是变量名，跳过。
+  if (vars && vars.size) {
+    s = s.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (m, name) => {
+      if (/^env$/i.test(name)) return m;
+      const v = vars.get("$" + name);
+      return v == null ? m : v;
+    });
+  }
+  const H = () => HOME;
+  return s
+    .replace(/\$env:HOMEDRIVE\$env:HOMEPATH/gi, H)          // PowerShell 拼接形态
+    .replace(/\$\{env:(?:USERPROFILE|HOME)\}/gi, H)         // ${env:USERPROFILE}
+    .replace(/\$env:(?:USERPROFILE|HOME)(?![A-Za-z0-9_])/gi, H) // $env:USERPROFILE ← 本次绕过用的就是它
+    .replace(/%HOMEDRIVE%%HOMEPATH%/gi, H)                  // cmd 拼接形态
+    .replace(/%(?:USERPROFILE|HOME)%/gi, H)                 // %USERPROFILE%
+    .replace(/\$\{(?:HOME|USERPROFILE)\}/g, H)              // ${HOME}
+    .replace(/\$(?:HOME|USERPROFILE)(?![A-Za-z0-9_])/g, H)  // $HOME（PowerShell 的 $HOME 同义）
+    .replace(/^~(?=[\\/]|$)/, H);                           // ~/...
+}
+
+// 展开 + 归一 + 相对路径按 cwd 解析。Git Bash 的 `/c/Users/...` 与 cygwin 的
+// `/cygdrive/c/...` 都要还原成盘符形态——真语料里备份命令就是用 `/c/...` 写的。
+function g2Resolve(raw, cwd, vars) {
+  let s = g2Expand(raw, vars);
+  if (!s) return "";
+  s = norm(s);
+  s = s.replace(/^\/cygdrive\/([A-Za-z])(?=\/|$)/, (m, d) => `${d}:`);
+  s = s.replace(/^\/([A-Za-z])(?=\/)/, (m, d) => `${d}:`);
+  const abs = /^[A-Za-z]:(\/|$)/.test(s) || /^\//.test(s);
+  if (!abs) {
+    try { s = norm(path.resolve(cwd || process.cwd(), s)); } catch (_) { /* 解析不了就按原样比 */ }
+  }
+  return s;
+}
+
+// 段内 token 化。与 shellSegmentsRaw 是两层不同的事：那层切**命令段**，这层切**参数**。
+// 三个刻意的行为：
+//   ① **引号里的 `>` 不算重定向**（`echo "a > b"` 只有两个 token）——重定向必须是**未被
+//      引号包住**的，否则任何一句提到重定向的文本都会被当成写操作。
+//   ② **双引号里的反斜杠不当转义吃掉**：Windows 路径 `"$env:USERPROFILE\.claude\settings.json"`
+//      里的 `\.` 若按 POSIX 转义规则处理会变成 `.`，整条路径当场毁掉。只有 `\"` `\\` `\$`
+//      这三种在 bash 双引号里真有转义语义的才剥。
+//   ③ 重定向符前的 `1`/`2`/`&`（`2>` `&>>`）连着上一个 token，切之前先摘掉。
+function g2Tokens(seg) {
+  const src = String(seg || "");
+  const out = [];
+  let cur = "", quote = null, quoted = false;
+  const flush = () => { if (cur !== "" || quoted) { out.push({ k: "arg", v: cur }); cur = ""; quoted = false; } };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quote) {
+      if (c === "\\" && quote === '"' && (src[i + 1] === '"' || src[i + 1] === "\\" || src[i + 1] === "$")) {
+        cur += src[++i]; continue;
+      }
+      if (c === quote) { quote = null; continue; }
+      cur += c; continue;
+    }
+    if (c === '"' || c === "'") { quote = c; quoted = true; continue; }
+    if (c === ">") {
+      cur = cur.replace(/[\d&]+$/, "");
+      flush();
+      if (src[i + 1] === ">") i++;
+      out.push({ k: "redir" });
+      continue;
+    }
+    if (c === "<") { flush(); if (src[i + 1] === "<") i++; out.push({ k: "in" }); continue; }
+    if (/\s/.test(c)) { flush(); continue; }
+    cur += c;
+  }
+  flush();
+  return out;
+}
+
+// `(Join-Path A B [C])` 折成一个 token。真语料里这是本机最常见的路径拼法
+// （`Join-Path $env:USERPROFILE '.claude\projects'` 在转录里到处都是），不折就解不出。
+// 只认**带括号**的形态：裸 `$p = Join-Path a b` 是表达式右值，见头注 G2 漏报面②。
+function g2FoldJoinPath(seg) {
+  let s = String(seg || "");
+  for (let n = 0; n < 4; n++) {
+    const m = /\(\s*Join-Path\s+((?:"[^"]*"|'[^']*'|[^\s()]+)(?:\s+(?:"[^"]*"|'[^']*'|[^\s()]+))+)\s*\)/i.exec(s);
+    if (!m) break;
+    const parts = (m[1].match(/"[^"]*"|'[^']*'|\S+/g) || [])
+      .map((x) => x.replace(/^(["'])([\s\S]*)\1$/, "$2"));
+    s = s.slice(0, m.index) + '"' + parts.join("/") + '"' + s.slice(m.index + m[0].length);
+  }
+  return s;
+}
+
+// 同一条命令里的**字面量**赋值：`$p = "…"`（PowerShell）/ `P=…`（bash 独立段）。
+// 只做一层、只认字面量右值——表达式右值不解析（头注 G2 漏报面②，别读成已覆盖）。
+function g2VarMap(segs) {
+  const map = new Map();
+  for (const raw of segs) {
+    const s = String(raw || "").trim();
+    const m = /^\$([A-Za-z_]\w*)\s*=\s*("[^"]*"|'[^']*'|\S+)$/.exec(s)
+           || /^([A-Za-z_]\w*)=("[^"]*"|'[^']*'|\S+)$/.exec(s);
+    if (m) map.set("$" + m[1], m[2].replace(/^(["'])([\s\S]*)\1$/, "$2"));
+  }
+  return map;
+}
+
+// 命令分两类，因为「目标位在哪」不一样：
+//   dest-last —— 复制/移动/改名：**末位正参**（或 -Destination/-NewName）是目标，其余是源。
+//   all-target —— 写入类：没有「源路径」概念，所有路径参数都是目标。
+// **`sc` 刻意不收**：它同时是 `C:\windows\system32\sc.exe`（服务控制），本机
+// `Get-Command sc -All` 实测两个都在 —— 与条款「加规则/别名前必须实测该词在其他语境的含义」
+// 里对 `sc` 的处置一致，回归网有一条负控钉着它。`ac`/`cpi`/`mi`/`ni`/`rni` 实测只是别名。
+const G2_DEST_LAST = new Set(["copy-item", "copy", "cpi", "cp", "move-item", "move", "mi", "mv", "rename-item", "ren", "rni"]);
+const G2_ALL_TARGET = new Set(["out-file", "set-content", "add-content", "ac", "tee-object", "tee", "new-item", "ni"]);
+// 取值型参数（会吃掉下一个 token）；不在表里的 `-Xxx` 一律当开关，不吃下一个。
+const G2_VALUE_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|newname|target|value|inputobject|encoding|itemtype|name|filter|include|exclude|delimiter|width|erroraction)$/i;
+// 目标位参数：复制类只认这几个；写入类另加 -Path/-LiteralPath/-FilePath。
+const G2_DEST_PARAM = /^-{1,2}(destination|dest|newname|target)$/i;
+const G2_TARGET_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|target)$/i;
+
+const g2CmdName = (t) =>
+  String(t == null ? "" : t).replace(/^["']|["']$/g, "").replace(/^.*[\/\\]/, "").replace(/\.exe$/i, "").toLowerCase();
+
+// 一个命令段里所有**写目标**的候选路径（已解析）。返回 [{ why, path }]。
+function g2WriteTargets(seg, cwd, vars) {
+  const folded = g2FoldJoinPath(seg);
+  const toks = g2Tokens(folded);
+  const out = [];
+  const args = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (toks[i].k === "redir") {
+      const nxt = toks[i + 1];
+      // `2>&1` 这类 dup 不是文件；`> &foo` 也不是
+      if (nxt && nxt.k === "arg" && !/^&/.test(nxt.v)) out.push({ why: "重定向目标", raw: nxt.v });
+      continue;
+    }
+    if (toks[i].k === "in") { i++; continue; }   // 输入重定向/heredoc：读，不是写
+    args.push(toks[i].v);
+  }
+
+  const head = segHead(folded);
+  const destLast = G2_DEST_LAST.has(head);
+  const allTarget = G2_ALL_TARGET.has(head);
+  if (destLast || allTarget) {
+    // 从命令名之后开始读参数（段首可能带 sudo / `$x =` / `&` 之类前缀）
+    let start = args.findIndex((a) => g2CmdName(a) === head);
+    start = start >= 0 ? start + 1 : 1;
+    const positional = [];
+    for (let i = start; i < args.length; i++) {
+      const a = args[i];
+      const inline = /^(-{1,2}[A-Za-z][\w-]*)[:=]([\s\S]+)$/.exec(a);
+      let name = null, val = null;
+      if (inline) { name = inline[1]; val = inline[2]; }
+      else if (/^-{1,2}[A-Za-z]/.test(a)) {
+        name = a;
+        const nv = args[i + 1];
+        if (G2_VALUE_PARAM.test(name) && nv != null && !/^-{1,2}[A-Za-z]/.test(nv)) { val = nv; i++; }
+      } else { positional.push(a); continue; }
+      if (val == null) continue;
+      const isTarget = destLast ? G2_DEST_PARAM.test(name) : G2_TARGET_PARAM.test(name);
+      if (isTarget) out.push({ why: `参数 ${name}`, raw: val });
+    }
+    if (destLast) {
+      // 只有 ≥2 个正参才存在「目标位」；单个正参是源（`Copy-Item x` 复制到当前目录）。
+      if (positional.length >= 2) {
+        out.push({ why: "末位参数（目标位）", raw: positional[positional.length - 1] });
+        // 目标位给的是 `~/.claude` 目录时，落地文件名由源的 basename 决定
+        const destDir = g2Resolve(positional[positional.length - 1], cwd, vars);
+        if (g2IsLiveDir(destDir)) {
+          for (const src of positional.slice(0, -1)) {
+            const base = norm(g2Expand(src, vars)).split("/").pop();
+            if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
+          }
+        }
+      }
+    } else {
+      for (const p of positional) out.push({ why: "位置参数", raw: p });
+    }
+  }
+  return out.map((h) => ({ why: h.why, path: g2Resolve(h.raw, cwd, vars) }));
+}
+
 // ── G7 的判据材料（段首命令名 → 该改用哪个内置工具）─────────────────────────
 // **收哪几个词是被真语料定的，不是照 dao.md 的措辞抄的**（全域普查见头注 G7 ㈠）：
 // 32721 条真实 Bash/PowerShell 命令里，独立段段首命中量前二的是 `ls`(3266) 与 `wc`(1032)，
@@ -441,20 +696,47 @@ const GATES = [
     id: "G2-live-settings",
     why: "dao.md Shell 节「settings.json 运行时改动 · 确认门禁」+「改配置先认源与投影」（`~/.claude/settings.json` 是 cc-switch 下发的**投影**——真实下发源是 DB `providers` 表各 provider 的 `settings_config`，下发只挂在 GUI「切换 provider」这个动作上；改投影立即生效但不持久、下次切 provider 即被整体覆盖且无告警）",
     escapeEnv: "DAO_SETTINGS_EDIT_APPROVED",
-    tools: ["Edit", "Write", "MultiEdit", "NotebookEdit"],
+    // Bash/PowerShell 是 2026-08-02（#87）加的：绕过那条走的就是 PowerShell 工具，
+    // 而 `--selfcheck` 之前**照报 G2 覆盖 ✓** —— 它核的是「matcher 覆不覆盖这道闸声明要拦的
+    // 工具名」，而这道闸当时压根没声明要拦 shell。**声明面窄，自检就跟着一起瞎**。
+    tools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"],
     test(input) {
-      if (!/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(input.tool_name || "")) return null;
-      const fp = norm((input.tool_input || {}).file_path || (input.tool_input || {}).notebook_path);
-      if (!fp) return null;
-      const home = norm(HOME).toLowerCase();
-      const low = fp.toLowerCase();
-      const hit = ["settings.json", "settings.local.json"].some(
-        (n) => low === `${home}/.claude/${n}`
-      );
-      if (!hit) return null;
-      return {
-        what: `要写用户级 live 配置 \`${fp}\``,
-        how:
+      const tool = input.tool_name || "";
+      const cwd = input.cwd || process.cwd();
+
+      // ① 编辑器类：目标文件就是 file_path 本身
+      if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) {
+        const ti = input.tool_input || {};
+        const raw = ti.file_path || ti.notebook_path;
+        if (!raw) return null;
+        if (!g2IsLive(g2Resolve(raw, cwd, null))) return null;
+        return g2Blocked(`要写用户级 live 配置 \`${norm(raw)}\``);
+      }
+
+      // ② shell 类（2026-08-02 #87 新增）：重定向目标 + 写入类命令的**目标位**。
+      //    源位一律放行（备份是正路，理由与真语料分布见头注 G2）。
+      if (/^(Bash|PowerShell)$/.test(tool)) {
+        const cmd = (input.tool_input || {}).command || "";
+        const segs = shellSegments(cmd);
+        const vars = g2VarMap(segs);
+        for (const seg of segs) {
+          for (const hit of g2WriteTargets(seg, cwd, vars)) {
+            if (!g2IsLive(hit.path)) continue;
+            return g2Blocked(
+              `要用 shell 写用户级 live 配置 —— ${hit.why}解析出 \`${hit.path}\`` +
+              `（这一段：\`${seg.slice(0, 90)}\`）`
+            );
+          }
+        }
+        return null;
+      }
+      return null;
+
+      // 三条合法路径的文案对两个分支是同一份 —— 拦的是同一件事，只是入口不同。
+      function g2Blocked(what) {
+        return {
+          what,
+          how:
           "三条正路，按你到底想要什么三选一：" +
           "①**未获用户明确授权** → 不要动它。把改动写成 `_tmp/settings-patch.json`，" +
           "并把会话外的执行命令交给用户（dao.md Shell 节原文即此路）。" +
@@ -468,7 +750,8 @@ const GATES = [
           "两者都不在下发路径上（#49 实测；PR #43 曾把 hooks 注册写满这两层而 live 始终未注册），" +
           "所以也**不要建议跑 `dao.bat --direction=down/up` 来让它生效**。判据见 dao.md「改配置先认源与投影」。" +
           "③用户已当面授权、且确实要改 live 那一份 → 由**用户**设 `DAO_SETTINGS_EDIT_APPROVED=1` 后重开会话（agent 自己 export 影响不到本 hook）。",
-      };
+        };
+      }
     },
   },
 
