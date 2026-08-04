@@ -75,6 +75,17 @@ const bash = (command, cwd) => ({ tool_name: "Bash", tool_input: { command }, cw
 const edit = (file_path) => ({ tool_name: "Edit", tool_input: { file_path } });
 const wake = (tool_input) => ({ tool_name: "ScheduleWakeup", tool_input });
 
+// ── #87 绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）─────────────
+// 🔴 **2026-08-04 提到模块级，只此一份**。原先它是 G2 shell 节里的块内局部常量，
+// 于是 #117 第二轮里我想引用「#87 原文」时**另手打了一个近似串**（字面长名路径），
+// 拿它的测量结果去推翻对抗官对**原文**的判断 —— 而原文是**变量形态**，两者行为不同类，
+// 结论因此整个错掉（全过程见下方 G2 第二轮那节的长注释）。
+// ⇒ 承重语料只留**一份**，谁要引用就引用这个名字；**再有人想"照着写一条一样的"，
+//   那一刻就是本轮那个错误正在重演**。
+const V_UP = "$env:USERPROFILE";        // 拼出来，免得本文件正文自己长得像一条待拦命令
+const LIVE_V_TOP = `"${V_UP}\\.claude\\settings.json"`;
+const BYPASS_87 = `Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\hook-register-202608\\03-merged.live-settings.json" ${LIVE_V_TOP} -Force; "COPY_EXIT=$LASTEXITCODE $?"`;
+
 // 每闸的一条"承重正控"，mutation 与 canary 都拿它当靶
 const CANARY = {
   "G1-windows-mcp": { tool_name: "mcp__windows-mcp__Screenshot", tool_input: {} },
@@ -175,10 +186,12 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
 // 这 6 条真实命令全部误伤，而逃生阀只有用户设得了 ⇒ 会话当场卡住。
 {
   const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
-  const V = "$env:USERPROFILE";           // 拼出来，免得本文件正文自己长得像一条待拦命令
-  const LIVE_V = `"${V}\\.claude\\settings.json"`;
-  // 本次绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）
-  const BYPASS = `Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\hook-register-202608\\03-merged.live-settings.json" ${LIVE_V} -Force; "COPY_EXIT=$LASTEXITCODE $?"`;
+  const V = V_UP;                          // 拼出来，免得本文件正文自己长得像一条待拦命令
+  const LIVE_V = LIVE_V_TOP;
+  // 绕过命令原文引用**模块级唯一那一份**（2026-08-04 提上去的，理由见那里）——
+  // 刻意不在这里再写一遍：本节与第二轮那节必须引用**同一个字符串**，
+  // 否则「#87 原文」就有两份，而两份必漂移（本 PR 第二轮就是栽在这上面）。
+  const BYPASS = BYPASS_87;
 
   const BLOCK = [
     ["#87 绕过命令原文（真语料·承重正控）", ps(BYPASS)],
@@ -316,10 +329,12 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
     /"new-item", "ni"\]\)/, '"new-item", "ni", "sc"])',
     ps(`sc query ${LIVE_V}`), 0, 2);
   mutate("反向·live 精确比对改成后缀匹配 ⇒ 项目级 .claude/settings.json 被误伤",
-    // 锚点 2026-08-04 随 #117 阻断项修复更新：`G2_LIVE_DIR` 常量已改成惰性的 `g2LiveDir()`
-    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明）。
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{g2LiveDir\(\)\}\/\$\{n\}`\);/,
-    'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
+    // 锚点 2026-08-04 两次随 G2 常量侧改动更新：先是 `G2_LIVE_DIR` 常量 → 惰性 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明），
+    // 后又拆成「语法层 / realpath 层」两层比（第二轮对抗官指出常量侧 I/O 站点无超时守卫）。
+    // 现在把**目录相等判定**整个换成后缀匹配，等价于当年那个「精确比对被放宽」的变异。
+    /    return g2MatchesLiveDir\(low\.slice\(0, low\.length - n\.length - 1\)\);/,
+    "    return true;",
     bash("cp _tmp/x.json D:/frank/mousse-cli/.claude/settings.json"), 0, 2);
 
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
@@ -478,10 +493,12 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
 
   // ①移除：整个 live 精确比对换成后缀匹配 ⇒ 「写别的工具的同名文件」负控被误伤
   mutate2("①移除·live 精确比对 ⇒ ~/.codex/settings.json 被误伤",
-    // 锚点 2026-08-04 随 #117 阻断项修复更新：`G2_LIVE_DIR` 常量已改成惰性的 `g2LiveDir()`
-    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明）。
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{g2LiveDir\(\)\}\/\$\{n\}`\);/,
-    'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
+    // 锚点 2026-08-04 两次随 G2 常量侧改动更新：先是 `G2_LIVE_DIR` 常量 → 惰性 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明），
+    // 后又拆成「语法层 / realpath 层」两层比（第二轮对抗官指出常量侧 I/O 站点无超时守卫）。
+    // 现在把**目录相等判定**整个换成后缀匹配，等价于当年那个「精确比对被放宽」的变异。
+    /    return g2MatchesLiveDir\(low\.slice\(0, low\.length - n\.length - 1\)\);/,
+    "    return true;",
     ps(`Set-Content -Path "${V}\\.codex\\settings.json" -Value "{}"`), 0, 2);
   // ②留字面但不执行：`in`（输入重定向）分支跳过被关掉 ⇒ `<` 后的路径被当成写目标。
   // 靶必须是**写入类命令**（`tee` 在 G2_ALL_TARGET 里），否则整段根本走不到参数解析
@@ -855,11 +872,25 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
      "现于 g2Canon 里按纯字符串剥掉末尾 `::$DATA`）",
       edit(`${LIVE}::$DATA`), 2],
     ["✅已修·ADS 经 shell 重定向", ps(`"x" > "$env:USERPROFILE\\.claude\\settings.json::$DATA"`), 2],
+    // 🔴 **大小写两条是第二轮对抗官查出的「`i` 标志无守护」补的**（14 条 mutation 里唯一漏网的一条）：
+    //   去掉 `/::\$DATA$/i` 的 `i`，回归网**零红** —— 因为当时只有大写那一条语料。
+    //   而本机实测（`_tmp/probe-round2.ps1` A 组）：`::$DATA` / `::$data` / `::$Data`
+    //   **三种写法都改写原文件** ⇒ `i` 是必需的，不是顺手加的。现在它有守护了。
+    ["✅已补守护·**小写** `::$data`（实测同样改写原文件；这条一加，去掉 `i` 的变异当场红）",
+      edit(`${LIVE}::$data`), 2],
+    ["✅已补守护·**混写** `::$Data`", edit(`${LIVE}::$Data`), 2],
     // ↓ 负控：另外两种流形态**不碰原文件**（本机实测），剥它们才是误伤 —— 钉住「只剥一种」这个决定
     ["负控·单冒号 `:$DATA` 是**另一条**流，实测不改原文件 ⇒ 不许剥、不许拦",
       edit(`${LIVE}:$DATA`), 0],
     ["负控·具名旁路流 `:mystream` 实测不改原文件 ⇒ 不许剥、不许拦",
       edit(`${LIVE}:mystream`), 0],
+    // ❌ 新登记（第二轮对抗官查出，本批**不修**，理由见下方长注释）
+    ["❌新登记·**尾点** `settings.json.` —— 本机实测**确实改写原文件**（`probe-round2.ps1` C 组）；" +
+     "不修是因为尾点在 POSIX 上是**合法且不同**的文件名，剥它必须按平台分叉",
+      edit(`${LIVE}.`), 0],
+    ["ⓘ对照·**尾空格** `settings.json ` 当前被拦，但那是 `win32.resolve` **顺带** trim 掉的 —— " +
+     "**运气不是设计**，没有任何断言在保证它；这条只是把当前行为记下来",
+      edit(`${LIVE} `), 2],
     // ❌ 维持：盘根绝对路径两格，本批**刻意不修**，理由见下方长注释
     ["❌维持·盘根绝对路径（无盘符）`/Users/…` —— Node 在 Windows 上按**当前盘**解析；" +
      "g2Canon 的 posix 分支刻意不补盘符（怕在 POSIX 机器上凭空造盘符）",
@@ -873,6 +904,24 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
       ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 0],
     ["❌维持·同上的**全正参**形态：这一格**改前就误伤**、与甲⑥ 无关，基准修好前照旧",
       ps(`Rename-Item D:\\x\\foo.json settings.json`, LIVEDIR), 2],
+    // 🔴 **第二轮对抗官对这个收窄提过反对，本机实测「不复现」，维持不改** —— 详见 hook 里
+    //   `G2_NO_SRC_THRESHOLD` 上方注释。反对意见是「绝对 `-NewName` 被 PS 接受且真落在那里，
+    //   一刀切收窄等于连真拦截也退掉了」。**穷举 9 种写法全部被 PS 拒绝**
+    //   （`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，PSVersion 5.1.26100.8875）。
+    //   下面两条把「这个形态跑不起来」钉住：若哪天 PS 改了行为、或对抗官拿出能跑通的复现，
+    //   这两条的实测值不会变（本闸不认它），但**那时该改的是 hook 而不是这两条**。
+    ["ⓘ不复现·绝对 `-NewName`（PS 5.1 实测报 `represents a path or device name` ⇒ 命令跑不起来）：" +
+     "本闸当前不产候选。**刻意不为它加判定** —— 只会在一条本来就会报错的命令上多拦一次，" +
+     "而误伤代价是会话当场卡死",
+      ps(`Rename-Item -Path D:\\x\\foo.json "${LIVE}"`, LIVEDIR), 0],
+    // ⚠ **这一行的期望值我又写错了一次，留档**（同一个毛病：先写期望、后看实测）。
+    //   我以为「不复现 ⇒ 本闸不产候选 ⇒ 0」。实测是 **2**：全正参 + 两个正参
+    //   ⇒ `needed=2` 本来就满足，走的是**普通末位正参**那条老路，**和 rename 排除毫无关系**
+    //   （那个排除只在「有具名源」时才起作用）。⇒ 判决 2 是「老路顺手拦下一条跑不起来的命令」，
+    //   不是「本闸认这个形态」。**记下来是因为：同一个错我这一轮犯了两次，都是没先跑就先写。**
+    ["ⓘ不复现·同上位置绑定写法（PS 实测被拒）：本闸走普通末位正参老路仍报 2，" +
+     "**与 rename 排除无关** —— 那个排除只在有具名源时生效",
+      ps(`Rename-Item D:\\x\\foo.json "${LIVE}"`, "D:\\frank"), 2],
     // ⬇ 由 2 变 0：`lp` 已从参数表删掉（PowerShell 无此参数，bash 侧是捆绑短选项）
     // ⚠ **这一行的期望值我第一次写错了，留档**：我以为删掉 `lp` 之后这条会变 0，实测仍是 2。
     //   原因是删掉之后 `-lp` 成了**开关**（不吃取值）⇒ 正参变成两个（`src.json` 与 live）
@@ -902,6 +951,24 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   //   ⇒ 在同一批里对同一条共享归一链再做一次两侧改动，是制造下一次同型退化最省事的办法。
   //   **它是漏报方向（保守侧），已登记、可见、可被下一个人接手**；换成误伤方向我不会这么处置。
   //   `///Users/…` 同族，一并留。
+  //
+  // 🔴 **尾点 `settings.json.` 为什么也不修（同上，但理由不同）**：本机实测它**确实改写原文件**，
+  //   所以它是真绕过。但**尾点在 POSIX 上是合法且不同的文件名**（`a.json.` ≠ `a.json`），
+  //   剥它必须按 `process.platform` 分叉 —— 而本闸至今**一条平台分支都没有**，
+  //   引入第一条平台分支属设计决定，且它会立刻带出「那 8.3 那层要不要也分叉」等一串问题。
+  //   ⚠ 与 ADS 的关键差别：`::$DATA` 在两个平台上**都不是合法文件名**，所以剥它零误伤面；
+  //   尾点不是。**同为「后缀别名」，一个能顺手修、一个不能 —— 差别就在误伤面上，不在难度上。**
+  //
+  // 🔴 **常量侧那个 I/O 站点的残余风险，照直挂账（第二轮对抗官指出）**：
+  //   `fs.realpathSync.native` **同步不可中断**，`g2LongPath` 末尾那个 `try/catch`
+  //   接得住「抛错」、**接不住「卡住」**（网络盘 / 断连映射盘）；而 live 注册写着 `timeout: 10`
+  //   ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+  //   **本批做了什么**：把常量侧拆成「语法层（零 I/O）/ realpath 层（有 I/O）」两层，先比语法层
+  //   ⇒ 本机与常见部署（长名 HOME）**一次 I/O 都不落**，短名 HOME 下变量形态也不落 ——
+  //   风险面从「HOME 是短名就每次落」收窄到「HOME 是短名 **且** 候选写字面长名才落」。
+  //   **本批没做什么**：那一格真被触发时仍可能卡死，且仍接不住。彻底解只有把 I/O 移出同步路径
+  //   （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动。**上面两条 mutation 钉住的是
+  //   两层各自承重，不是"它不会卡"** —— 别把绿读成那个意思。
 
   // ㈣ ✅ 合并阻断项**已修**（2026-08-04，实现官）：常量侧改惰性 `g2LiveDir()`，走同一归一器 ──
   // **这三条曾是登记表条目（登记值 exit 0），修好后当场变红并逐条点名，逼我回来改它们** ——
@@ -916,50 +983,125 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   // 🔬 **透镜（比这个 bug 本身值钱）**：**「归一后再比」是两侧对称的动作，只改一侧即半成品**
   //    —— 每一半单独看都对，错的是**不在同一深度**。同窗另一个 bug 同形态（合并脚本 merge 了却不 push）。
   //
-  // 🔴 **一处订正对抗官报文的措辞，照直写**：报文说「整闸失明**含 #87 那条绕过原文**」，
-  //    而实现官复现时量到的更细：`#87` 那条用的是**已展开的字面长名路径**，它在短名 HOME 下
-  //    **改前就是 0**（本来就没拦住，不是 #112 弄坏的）；真正**退化**的是**变量形态**
-  //    （`$env:USERPROFILE\.claude\settings.json`）—— 改前 2、改后 0，因为变量展开出短名 HOME、
-  //    与短名常量原本恰好对得上。⇒ 「退化」这个定性成立，但**退化的格数是 2 不是 3**，
-  //    另 4 格（长名字面 × 短名/`//?/` HOME）是**改前就有的漏报，本批顺带修掉**。
-  //    出处：`_tmp/repro-blocker.mjs` 的 3 HOME 形态 × 3 payload 九宫格，修前 5/9 拦、修后 9/9 拦。
+  // 🔴🔴 **我上一轮写在这里的「订正」是错的，第二轮对抗验证官是对的。留全过程，别删。**
+  //    我当时写：「报文说含 #87 那条绕过原文，而 #87 用的是**字面长名路径**、短名 HOME 下改前就是 0，
+  //    所以退化格数是 2 不是 3」。**错在输入**：`#87` 那条绕过原文**根本不是字面长名**，
+  //    它是**变量形态** —— 常量就在本文件上方 `BYPASS`（那一行明写「真语料·承重正控」），
+  //    展开后是 `$env:USERPROFILE\.claude\settings.json`。我自己换了个 payload 去测，
+  //    却拿结果去推翻别人对**原文**的判断。
+  //    **用真原文重跑**（`_tmp/repro-round2.mjs`，3 HOME × 6 payload）：
+  //      短名 HOME 下真 #87 原文 **PRE112=2 → ROUND1=0** ⇒ **上一轮对抗官那句话完全成立。**
+  //      拦下格数 PRE112=11/18 · ROUND1=6/18 · HEAD=18/18，ROUND1 退化 **6** 格。
+  //    （对抗官自建 6 payload 报的是 12/6/18、退化 7 格 —— 与我差 1 格，因为 payload 集不同；
+  //      **判据不是「几格」而是哪一类**，这一点两边完全一致：
+  //      **凡 HOME 走变量 / `~` 展开的形态，改前拦得住、ROUND1 一律放行**；字面路径那一类 0 格退化。）
+  //    🔑 **教训（比数字值钱）**：我上一轮用「一个自己挑的 payload」去推翻「别人对某个具名原文的判断」，
+  //      而那个原文**就在我正在改的这个文件里、还标着「承重正控」**。
+  //      ⇒ **要推翻一条关于「某个具名样本」的结论，必须先把那个样本原样取出来**，不能另造一个近似的。
+  //    ⇒ 下面这组把**真 #87 原文**钉成跨 HOME 形态的承重正控 —— 这次归零，正是因为
+  //      「换 HOME 形态」这根轴上一个断言都没有。
   if (SHORT_HOME) {
     for (const [hname, hval] of [["8.3 短名", SHORT_HOME], ["`//?/` 扩展前缀", `\\\\?\\${HOME}`]]) {
       const asHome = { USERPROFILE: hval };
       const REG = [
-        ["Edit·字面长名路径（**改前就漏**，本批顺带修掉）", edit(`${HOME}\\.claude\\settings.json`)],
-        ["shell·#87 绕过原文（字面长名，同上改前就漏）", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
-        ["shell·变量形态（**这一格才是 #112 的退化**：改前 2 → 改后 0 → 现修回 2）",
+        // ↓ 这一条是**真 #87 原文**（复用上方同一个 BYPASS 常量，不另造近似串）
+        ["🔑shell·**真 #87 绕过原文**（变量形态，与上方承重正控同一个 BYPASS 常量）", ps(BYPASS_87)],
+        ["shell·变量形态精简版（ROUND1 退化的就是这一类）",
           ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)],
-        ["bash·`~` 形态", bash("cp src.json ~/.claude/settings.json")],
+        ["bash·`~` 展开形态（同属变量/展开类）", bash("cp src.json ~/.claude/settings.json")],
+        ["bash·`$HOME` 形态（同属变量/展开类）", bash('cp src.json "$HOME/.claude/settings.json"')],
+        ["Edit·字面长名路径（**改前就漏**，本批顺带修掉，走 realpath 层）", edit(`${HOME}\\.claude\\settings.json`)],
+        ["shell·字面长名路径（同上，走 realpath 层）", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
       ];
       for (const [name, p] of REG) {
         check(`阻断项已修·USERPROFILE=${hname} 时仍拦得住：${name} → exit 2`,
           gate(p, { env: asHome }).code === 2, `code=${gate(p, { env: asHome }).code}`);
       }
     }
-    check("对照：真实 HOME（长名）下同一条 payload 照旧拦得住 ⇒ 修复没把老路弄坏",
-      gate(ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)).code === 2);
+    check("对照：真实 HOME（长名）下**真 #87 原文**照旧拦得住 ⇒ 修复没把老路弄坏",
+      gate(ps(BYPASS_87)).code === 2);
 
-    // mutation：把常量侧的归一去掉 ⇒ 短名 HOME 下重新整闸失明。
-    // ⚠ 这一条**必须带 env**，否则在本机长名 HOME 下恒不翻转 —— 而「恒不翻转」与
-    //   「判据没塌陷」在全绿输出里长得一模一样（本 bug 一开始就是这么藏住的）。
+    // mutation：常量侧现在是**两层**（语法层零 I/O / realpath 层有 I/O），
+    // **每层各来一条** —— 只测一层会漏掉另一层塌陷。两条都必须带 env，否则在本机长名 HOME 下
+    // 恒不翻转，而「恒不翻转」与「判据没塌陷」在全绿输出里长得一模一样（本 bug 就是这么藏住的）。
+    //
+    // 🔑 **两层各自是什么角色 —— 我第一版把它写反了，实测纠过来的，留档**：
+    //   我原写「变量形态走语法层、字面长名走 realpath 层」。**错**。真实分工是：
+    //     · **realpath 层承重**：短名 HOME 下，候选（任何形态）都被 `g2Canon` 归成**长名**，
+    //       而语法层常量是**短名** ⇒ 语法层一律不中，**全靠 realpath 层**。
+    //     · **语法层不承重、是纯优化**：把它关掉，**没有任何判决改变**（下面有断言钉住）。
+    //       它的价值只有一个 —— 长名 HOME 下先命中就不必算第二层。
+    //     · **真正把 I/O 挡在门外的是「零 I/O 快筛」**（`/.claude` 尾巴 / 文件名尾巴），
+    //       不是分层。**因为语法层只在「命中」时短路，而绝大多数输入是不命中的。**
+    //   出处：`_tmp/probe-layers.mjs`（把 realpath 层函数体换成 throw，看谁还拦得住）。
     {
       const src4 = fs.readFileSync(HOOK, "utf8");
-      const re = /_g2LiveDirCache = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\)\)\.toLowerCase\(\);/;
-      const n = (src4.match(new RegExp(re.source, "g")) || []).length;
-      check("mutation 锚点在源码里恰好命中 1 次（阻断项·常量侧归一）", n === 1, `命中 ${n} 次`);
-      if (n === 1) {
-        const mp = path.join(TMP, "mutant-117-livedir.js");
-        fs.writeFileSync(mp, src4.replace(re,
-          () => '_g2LiveDirCache = norm(path.join(HOME, ".claude")).toLowerCase();'), "utf8");
-        const asShort = { USERPROFILE: SHORT_HOME };
-        const pay = ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`);
-        check("阻断项 mutation·常量侧退回不归一 ⇒ 短名 HOME 下由 2 翻 0（证明这条修复承重）",
-          gate(pay, { env: asShort }).code === 2 && gate(pay, { script: mp, env: asShort }).code === 0,
-          `real=${gate(pay, { env: asShort }).code} mut=${gate(pay, { script: mp, env: asShort }).code}`);
-        check("同一变异体在**长名 HOME** 下仍拦得住 ⇒ 这个 bug 是环境条件性的，不是恒失效",
-          gate(pay, { script: mp }).code === 2);
+      const asShort = { USERPROFILE: SHORT_HOME };
+      const payVar = ps(BYPASS_87);
+      const payLit = edit(`${HOME}\\.claude\\settings.json`);
+
+      // ① realpath 层：**承重**。打掉它 ⇒ 短名 HOME 下全线失明；长名 HOME 不受影响。
+      const L2 = /  return low === g2LiveDirReal\(\);/;
+      const n2 = (src4.match(new RegExp(L2.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（常量侧·realpath 层）", n2 === 1, `命中 ${n2} 次`);
+      if (n2 === 1) {
+        const mp = path.join(TMP, "mutant-117-real.js");
+        fs.writeFileSync(mp, src4.replace(L2, () => "  return false;"), "utf8");
+        for (const [nm, pay] of [["真 #87 原文（变量形态）", payVar], ["字面长名", payLit]]) {
+          check(`常量侧·realpath 层被打掉 ⇒ 短名 HOME 下「${nm}」由 2 翻 0（这一层承重）`,
+            gate(pay, { env: asShort }).code === 2 && gate(pay, { script: mp, env: asShort }).code === 0,
+            `real=${gate(pay, { env: asShort }).code} mut=${gate(pay, { script: mp, env: asShort }).code}`);
+        }
+        check("同一变异体在**长名 HOME** 下全部照拦 ⇒ 这个 bug 是环境条件性的，不是恒失效",
+          gate(payVar, { script: mp }).code === 2 && gate(payLit, { script: mp }).code === 2);
+      }
+
+      // ② realpath 层换成 throw：**用来证明「零 I/O」这个性质**，不是证明判决。
+      //    长名 HOME 下若仍拦得住 ⇒ 说明压根没走到那一层 ⇒ 那次 hook 调用一次 I/O 都没落。
+      const RE_REAL_BODY = /    _g2LiveDirCache\.real = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\)\)\.toLowerCase\(\);/;
+      const n3 = (src4.match(new RegExp(RE_REAL_BODY.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（realpath 层函数体）", n3 === 1, `命中 ${n3} 次`);
+      if (n3 === 1) {
+        const mp = path.join(TMP, "mutant-117-l2throw.js");
+        fs.writeFileSync(mp, src4.replace(RE_REAL_BODY, () => '    throw new Error("L2_WAS_CALLED");'), "utf8");
+        for (const [nm, pay] of [["真 #87 原文", payVar], ["字面长名", payLit],
+                                 ["`~` 展开", bash("cp src.json ~/.claude/settings.json")]]) {
+          const r = gate(pay, { script: mp });   // 长名 HOME（本机默认）
+          check(`零 I/O 性质·长名 HOME 下「${nm}」拦得住且 realpath 层从未被调用`,
+            r.code === 2 && !/L2_WAS_CALLED/.test(r.err), `code=${r.code} 被调用=${/L2_WAS_CALLED/.test(r.err)}`);
+        }
+        const rs = gate(payVar, { script: mp, env: asShort });
+        check("对照·短名 HOME 下它**确实**会走到 realpath 层（fail-open + 那句告警）⇒ 上面那组不是恒真",
+          rs.code === 0 && /L2_WAS_CALLED/.test(rs.err), `code=${rs.code}`);
+      }
+
+      // ③ 零 I/O 快筛：**它才是把 I/O 挡在门外的那一道**。拿掉它 ⇒ 长名 HOME 下也会走到第二层。
+      const RE_PREFILTER = /  if \(!low\.endsWith\("\/\.claude"\)\) return false;/;
+      const n4 = (src4.match(new RegExp(RE_PREFILTER.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（g2IsLiveDir 的零 I/O 快筛）", n4 === 1, `命中 ${n4} 次`);
+      if (n4 === 1) {
+        const both = src4
+          .replace(RE_PREFILTER, () => "  if (false) return false;")
+          .replace(RE_REAL_BODY, () => '    throw new Error("L2_WAS_CALLED");');
+        const mp = path.join(TMP, "mutant-117-nofilter.js");
+        fs.writeFileSync(mp, both, "utf8");
+        const r = gate(bash("cp src.json ~/.claude/settings.json"), { script: mp });
+        check("快筛被拿掉后，长名 HOME 下也会走到 realpath 层 ⇒ 证明省下那次 I/O 的是快筛不是分层",
+          /L2_WAS_CALLED/.test(r.err), `被调用=${/L2_WAS_CALLED/.test(r.err)} code=${r.code}`);
+      }
+
+      // ④ 语法层：**刻意断言它「不承重」** —— 关掉它一个判决都不变。
+      //    这是阴性结果，写下来是为了防止后来人以为它是一道防线（官抗节：差额为零也是结论）。
+      const L1 = /  if \(low === g2LiveDirSyntactic\(\)\) return true;/;
+      const n1 = (src4.match(new RegExp(L1.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（常量侧·语法层）", n1 === 1, `命中 ${n1} 次`);
+      if (n1 === 1) {
+        const mp = path.join(TMP, "mutant-117-syn.js");
+        fs.writeFileSync(mp, src4.replace(L1, () => "  if (false) return true;"), "utf8");
+        const same = [payVar, payLit].every((p) =>
+          gate(p, { script: mp }).code === gate(p).code &&
+          gate(p, { script: mp, env: asShort }).code === gate(p, { env: asShort }).code);
+        check("语法层被关掉 ⇒ **判决一个都不变**（它是纯优化不是防线，阴性结果照直钉住）", same);
       }
     }
   }

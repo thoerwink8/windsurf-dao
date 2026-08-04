@@ -132,7 +132,17 @@
 //     ⑪ ✅ **已修（#117 同批）** —— **NTFS 备用数据流 `<live>::$DATA`**：这是 NTFS 里
 //       **默认数据流的显式写法**，写它就是写原文件。本机实测确认三种流形态**判然不同**：
 //       `::$DATA` **改写原文件**（真绕过）· `:$DATA` 与 `:mystream` **不碰原文件**（真旁路流）。
-//       ⇒ `g2Canon` 只剥末尾的 `::$DATA` 这一种，多剥一种就是误伤。回归网正控 2 条 + 负控 2 条。
+//       ⇒ `g2Canon` 只剥末尾的 `::$DATA` 这一种，多剥一种就是误伤。回归网正控 4 条 + 负控 2 条。
+//       ⚠ **那个 `i` 标志曾经无守护**（第二轮对抗官查出，14 条 mutation 里唯一漏网的一条）：
+//       去掉 `i` 后回归网**零红** —— 因为当时只有大写一条语料。而实测 `::$data` / `::$Data`
+//       **同样改写原文件** ⇒ `i` 是必需的。现补大小写两条正控，**实测去掉 `i` 当场红 2 条**。
+//     ⑭ ❌ **未修（第二轮新登记）** —— **尾点 `<live>.`**：本机实测**确实改写原文件**，是真绕过。
+//       **不修的理由与 ⑪ 恰成对照，值得记**：`::$DATA` 在任何平台都不是合法文件名 ⇒ 剥它零误伤面；
+//       而**尾点在 POSIX 上是合法且不同的文件名**（`a.json.` ≠ `a.json`）⇒ 剥它必须按平台分叉，
+//       而本闸至今**一条平台分支都没有**，引入第一条属设计决定。
+//       **同为「后缀别名」，一个能顺手修一个不能 —— 差别在误伤面，不在难度。**
+//       ⓘ 顺带记一格：**尾空格**当前被拦，但那是 `win32.resolve` **顺带** trim 掉的 ——
+//       **运气不是设计**，没有任何断言在保证它；登记表里有一条只做记录、不做承诺。
 //     ⑫ ❌ **未修（本批刻意留，理由见下）** —— **盘根绝对路径 `/Users/…` 与 `///Users/…`**：
 //       Windows 上 Node 按**当前盘**解析这类路径，cwd 落 C: 时它就是 live。
 //       `g2Canon` 的 posix 分支**刻意不补盘符**（怕在 POSIX 机器上凭空造盘符），代价就是这一格。
@@ -147,16 +157,36 @@
 //       不解会漏报（真往 live 改名的拦不住）。甲⑥ 的门槛下降把这个错基准**扩到了具名源形态**，
 //       那是 #112 引入的新误伤面 ⇒ **本批用 `G2_NO_SRC_THRESHOLD` 把 rename 族排除在门槛下降之外**，
 //       退回改前射程。**基准没修**（要给 rename 单独一套「目标相对源目录」的解析，属语义改动）。
+//       ⚠ 第二轮对抗官反对过这个排除（「绝对 `-NewName` 没有基准可错，一刀切等于连真拦截也退掉」），
+//       **9 种写法实测全被 PS 拒绝、不复现**，故维持 —— 逐条写法与版本号见 `G2_NO_SRC_THRESHOLD` 注释。
+//     ⑮ ⚠️ **只收窄未根治（第二轮新登记）** —— **常量侧那个 realpath I/O 站点没有超时守卫**：
+//       `fs.realpathSync.native` **同步不可中断**，`g2LongPath` 的 `try/catch` 接得住「抛错」、
+//       **接不住「卡住」**（网络盘 / 断连映射盘）；而 live 注册写着 `timeout: 10`
+//       ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+//       **本批做的**：加一道**零 I/O 快筛**（`g2IsLive` 按文件名尾巴、`g2IsLiveDir` 按 `/.claude` 尾巴）
+//       ⇒ 只有尾巴已经长得像 live 的路径才可能走到那层 I/O，日常流量根本碰不到。
+//       实测钉住（回归网）：长名 HOME 下把 realpath 层换成 `throw`，三种形态**照样拦得住且从未调用它**。
+//       **本批没做的**：那一格真被触发时仍可能卡死。彻底解只有把 I/O 移出同步路径
+//       （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动。**别把绿读成「它不会卡」。**
 //   **别把「G2 现在管 shell 了」读成「shell 写 live 已经被兜住了」**：兜住的是**直白写法**，
 //   而直白写法正是真实违例的形态（本次那条就是）。
 //   ⚠ **两处已知误伤**（真语料上当前零发生，但逃生阀只有用户设得了 ⇒ 撞上即会话卡死）：
 //     heredoc 正文里写着那条命令会被当成真命令（G5 早为同一个病做过行首锚点收窄，G2 shell 分支
 //     没照一遍）· 写入类命令的 `-Value (表达式)` 吞掉取值后 live 路径掉进正参。
 //     **两处均未修（issue #112 乙节，判断档，与 ⑧ 一同呈用户拍板）。**
-//   **上面十三格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
+//   **上面十五格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
 //   那条会红并点名，逼他同批更新这份清单 —— **这份头注不是承诺，是一张有守卫的账**。
-//   （它在 #112/#117 上**连着触发了三次**：#112 修完三格时点名 6 行 · #117 修掉阻断项时点名 3 行 ·
-//    #117 修 ⑪⑬ 时又点名 3 行。三次都是它逼着人回来改这段字，不是人自觉想起来的。）
+//   （它在 #112/#117 上**连着触发了四次**：#112 修完三格时点名 6 行 · #117 第一轮修掉阻断项时
+//    点名 3 行 · 修 ⑪⑬ 时又点名 3 行 · 第二轮改常量侧分层时点名 3 行。
+//    **四次都是它逼着人回来改这段字，没有一次是人自觉想起来的。**）
+//
+//   🔬 **本 PR 三轮下来最该留给后来人的两条**（都是我自己栽进去才捞出来的）：
+//     ㈠ **「归一后再比」是两侧对称的动作，只改一侧即半成品** —— 每一半单独看都对，
+//        错的是**不在同一深度**。（#112 只改候选侧 ⇒ 短名 HOME 下整闸失明。）
+//     ㈡ **要推翻一条关于「某个具名样本」的结论，必须把那个样本原样取出来**，不能另造近似的。
+//        （我拿自己打的字面长名路径去测，据此宣告对抗官对「#87 原文」的判断有误 ——
+//        而原文是变量形态、就在我正在改的那个文件里、还标着「承重正控」。**是我错了。**
+//        现在那份原文提到模块级、只留一份，谁要引用就引用同一个名字。）
 //
 // G4 · 浏览器 MCP 截图路径 —— ⚠ **射程只到浏览器 MCP 这一种工具调用**：
 //   PowerShell / .NET 的截图脚本（System.Drawing CopyFromScreen 那条路）走的**不是工具调用**，
@@ -449,22 +479,66 @@ const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
 // **为什么惰性 + 记忆化，不在模块加载期算**：`g2Canon` 在含 `~<数字>` 时会落一次 realpath I/O，
 // 而 G2 只在一部分工具调用里才用得到它；加载期就算 = 每次 hook 启动都付这笔钱（含 G1/G3-G7
 // 那些根本不碰 G2 的调用）。缓存只在单次 hook 进程内有效，进程短命、不存在陈旧问题。
-let _g2LiveDirCache = null;
-function g2LiveDir() {
-  if (_g2LiveDirCache === null) {
-    _g2LiveDirCache = g2Canon(norm(path.join(HOME, ".claude"))).toLowerCase();
+//
+// 🔴 **分两层比，第一层零 I/O（2026-08-04 第二轮对抗验证官指出 I/O 站点无超时守卫后改）**：
+//   风险原文：`HOME` 含 `~<数字>` 时**每次 hook 启动**都会落一次 realpath，而
+//   `fs.realpathSync.native` 是**同步不可中断**的 —— 下面那个 `try/catch` 接得住「抛错」，
+//   **接不住「卡住」**（网络盘 / 断连的映射盘）。而 live 注册写着 `timeout: 10`
+//   ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+//   **改法两件事，缺一不可**（第二件是实测逼出来的，见下）：
+//     ㈠ **零 I/O 快筛**：`g2IsLive` 先按文件名尾巴筛（`/settings.json` 等），
+//        `g2IsLiveDir` 先按 `/.claude` 尾巴筛 —— **两者都是「能匹配」的必要条件，且是纯字符串**。
+//        筛不过直接 false，**根本走不到下面任何一层**。
+//     ㈡ 两层比：① **语法层**（`path.join`+`norm`，零 I/O）② **realpath 层**（有 I/O），
+//        先比 ①，不中才算 ②。
+//   🔴 **㈠ 是本改法的主力，㈡ 不是 —— 这一点我一开始写反了，实测才纠过来，留档**：
+//      我原以为「语法层能覆盖常见情形 ⇒ 常量侧零 I/O」。**错在 ① 只在「命中」时短路**，
+//      而绝大多数输入是**不命中**的 —— 不命中就一路落到 ②，I/O 照样发生。
+//      实测（`_tmp/probe-layers.mjs`，把 ② 的函数体换成 throw 看谁还拦得住）：加 ㈠ 之前，
+//      长名 HOME 下连「变量形态」「`~` 展开」都把 ② 调起来了。**是 ㈠ 把它挡在门外的。**
+//   ⇒ 实际效果：只有**尾巴已经长得像 live** 的路径才会走到 ②，日常流量根本碰不到那个 I/O。
+//   ⚠️ 另照直写：HOME 是**长名**时 ② 即便被调用也**不落 I/O**（`g2Canon` 里 realpath 只在
+//      路径含 `~<数字>` 时才跑）。所以真正有 I/O 的只有「HOME 是短名 **且** 尾巴像 live」这一格。
+//   ⚠️ **照直写它没解决的那一半**：第二层真被触发时**仍然可能卡住**，且 `try/catch` 依旧接不住。
+//     要彻底解只有把 I/O 移出同步路径（子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动，
+//     不在本批。**已登记**（回归网 `_tmp` 无关，条目在 hard-gates 登记表）。
+const _g2LiveDirCache = { syn: null, real: null };
+// ① 语法层：零 I/O
+function g2LiveDirSyntactic() {
+  if (_g2LiveDirCache.syn === null) {
+    _g2LiveDirCache.syn = norm(path.join(HOME, ".claude")).toLowerCase();
   }
-  return _g2LiveDirCache;
+  return _g2LiveDirCache.syn;
+}
+// ② realpath 层：有 I/O，**只在语法层没命中时才求值**
+function g2LiveDirReal() {
+  if (_g2LiveDirCache.real === null) {
+    _g2LiveDirCache.real = g2Canon(norm(path.join(HOME, ".claude"))).toLowerCase();
+  }
+  return _g2LiveDirCache.real;
+}
+// 两层依次比。**次序是判据的一部分，别调换**：调换之后第一层的「零 I/O」就白设了。
+function g2MatchesLiveDir(low) {
+  if (low === g2LiveDirSyntactic()) return true;
+  return low === g2LiveDirReal();
 }
 
 function g2IsLive(p) {
   if (!p) return false;
   const low = norm(p).toLowerCase();
-  return G2_LIVE_NAMES.some((n) => low === `${g2LiveDir()}/${n}`);
+  return G2_LIVE_NAMES.some((n) => {
+    if (!low.endsWith(`/${n}`)) return false;              // 先按文件名快筛，零 I/O
+    return g2MatchesLiveDir(low.slice(0, low.length - n.length - 1));
+  });
 }
 // 目标位给的是 `~/.claude` **目录**时（`cp x ~/.claude/`），文件名由源的 basename 决定。
 function g2IsLiveDir(p) {
-  return !!p && norm(p).toLowerCase() === g2LiveDir();
+  if (!p) return false;
+  const low = norm(p).toLowerCase();
+  // 零 I/O 快筛（见上方 ㈠）：live 目录必然以 `/.claude` 结尾 —— 这是**必要条件**，
+  // 筛不过就不可能匹配，直接 false，绝不往下走那两层（下面才是可能落 I/O 的地方）。
+  if (!low.endsWith("/.claude")) return false;
+  return g2MatchesLiveDir(low);
 }
 
 // 把 home 的各种变量形态展开成真实路径。
@@ -670,6 +744,21 @@ const G2_SRC_PARAM = /^-{1,2}(path|literalpath)$/i;
 //   **不在本批改基准**：改基准要给 rename 单独一套「目标相对源目录」的解析，属语义改动、
 //   需要自己的语料与 mutation，而本 PR 已经因为「两侧归一不同深度」出过一次退化 ——
 //   同一批里再动一次共享解析链，是制造下一次退化最省事的办法。**残余误伤已登记在回归网。**
+//
+// ⚠️ **第二轮对抗验证官对这个排除提过一条反对，本机实测「不复现」，故维持原样**（2026-08-04）：
+//   反对意见是「`-NewName` 给绝对路径时没有基准可错，一刀切排除等于连真拦截也退掉了 ——
+//   PS 5.1 接受绝对 `-NewName` 且文件真落在那里」。
+//   **实测穷举 9 种写法，全部被 PS 拒绝**（`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，
+//   PSVersion 5.1.26100.8875）：绝对反斜杠 / 绝对正斜杠 / 相对带子目录 / 相对正斜杠子目录 /
+//   UNC / 位置绑定 / `rni` / `ren`（PS 别名）—— 报的都是同一句
+//   `Cannot rename the specified target, because it represents a path or device name.`；
+//   cmd.exe 的真 `ren` 报 `The syntax of the command is incorrect.`。
+//   **唯一被接受的是「纯文件名」，落点是源目录** —— 那恰恰是上面那段理由覆盖的那一格。
+//   ⇒ 「绝对 `-NewName`」这个形态**跑都跑不起来**，不存在被退掉的真拦截。
+//   **为它加一格判定反而是净损失**：它只会在一条 PowerShell 本来就会报错的命令上多拦一次，
+//   而本闸的误伤代价是**会话当场卡死、逃生阀只有用户设得了** —— 拿真误伤换零收益。
+//   🔴 **我上一轮就是「只试一种 payload 就推翻对抗官」而犯过错**，所以这一条我列了写法与
+//   版本号，**如果对抗官手上有能跑通的复现，以它为准、我这段作废**。
 const G2_NO_SRC_THRESHOLD = new Set(["rename-item", "ren", "rni"]);
 
 const g2CmdName = (t) =>
@@ -727,6 +816,8 @@ function g2WriteTargets(seg, cwd, vars) {
       //     这里是**具名源 + 位置目标**，正好落在两边之外。
       //   ⚠ rename 族除外（`G2_NO_SRC_THRESHOLD`，理由见该常量注释：它的目标位基准是**源目录**
       //     不是 cwd，本闸解错了基准，甲⑥ 会把这个错基准扩到具名源形态上）。
+      //     ⚠ 对抗官提过「绝对 `-NewName` 该放行这个排除」，**9 种写法实测全被 PS 拒绝、不复现**，
+      //       故不加那一格 —— 出处与版本号写在该常量注释里。
       const needed = (namedSrcs.length && !G2_NO_SRC_THRESHOLD.has(head)) ? 1 : 2;
       const hasDestPos = positional.length >= needed;
       if (hasDestPos) {
