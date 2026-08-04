@@ -66,8 +66,9 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 node scripts/run-tests.mjs                    # ★ node 测试聚合入口：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
 node scripts/run-tests.mjs --list             # 只列清单不跑
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
-.\tests\link-codex.tests.ps1                  # PowerShell 测试（自带 Assert-* 断言，独立可跑，聚合入口不代跑）
-.\tests\link-codex-prompts.tests.ps1
+powershell -NoProfile -File .\tests\<名>.tests.ps1   # PowerShell 测试：自带 Assert-* 断言、独立可跑，★ 入口**不代跑**
+                                              #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
+                                              #   当前有几套、各叫什么 ⇒ `node scripts/run-tests.mjs` 末尾会**扫全并逐条列出**，以那份为准
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
@@ -85,9 +86,18 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条�
 node 与 PowerShell 两个守卫各查一遍。**双轨期**：旧元字段仍原位保留、逐字段与台账对账，
 不等即红 —— 那份对账全绿是后续删旧字段的前置门。**改了正文就要同步改台账，反之亦然。**
 
-新增 node 测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.js` 扫目录，不维护清单。
+新增测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，两侧都不维护清单
+（`.ps1` 那侧它只列不跑，清单仍是全的）。
 （此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；
 故改为扫目录而非手维护清单——手维护的清单本仓已被咬过两次。）
+
+⚠️ **2026-08-04 第三次被咬，就在同一段里**（issue #109）：上面那句只治了 JS 侧，**`.ps1` 侧仍留着
+手维护的两行**，而盘上已有 **4** 套 —— `clause-structure` 与 `pr-body-scan` 两套**从未被列进来**，
+本文件因此连续两天把「跑全套」教成只跑一半。已改为指向 `run-tests.mjs` 的末尾打印（它扫目录、
+不会过期）。**教训不是「再补一次清单」**：同一段里手维护的清单被咬三次，说明**凡是需要人记得同步的
+枚举都会过期**，正路是让它指向一个自己会更新的东西。
+**为什么这一处特别贵**：本文件是**派单令让官去查验证入口的那个落点**（见 `ccswitch/rules/dao-dispatch.md`
+的开工第二步）——**指针指对了，被指的那份内容却是旧的**，官照做反而拿到一个更权威的错答案。
 
 ## issue 派单中枢（2026-08-02 接入）
 
