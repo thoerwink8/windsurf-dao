@@ -47,7 +47,7 @@
 //
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
 //   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1>
-//   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n>
+//   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n> compared=<n> ledgeronly=<n>
 //   对账：    CLAUSE_RECONCILE_SUMMARY exit=<n> host=<powershell|pwsh|none> files=<n> matched=<n> mismatched=<n> mine=<n> theirs=<n> myslugs=<n> theirslugs=<n>
 //   **每条路径都打印**（含失败路径）：只在成功时打摘要，等于让「没查成」在机器通道上
 //   表现为「什么都没说」。新字段一律**追加在末尾**，消费方按字段名取值（老正则照旧匹配得上）。
@@ -134,7 +134,11 @@ function outPath(o) {
 function ledgerSummary(f) {
   return `CLAUSE_LEDGER_SUMMARY exit=${f.exit} state=${f.state} entries=${f.entries} slugs=${f.slugs}` +
     ` missing_slug=${f.missing_slug} orphan_slug=${f.orphan_slug} orphan_ledger=${f.orphan_ledger}` +
-    ` dup_slug=${f.dup_slug} mismatch=${f.mismatch} file_mismatch=${f.file_mismatch} out_of_scope=${f.out_of_scope}`;
+    ` dup_slug=${f.dup_slug} mismatch=${f.mismatch} file_mismatch=${f.file_mismatch} out_of_scope=${f.out_of_scope}` +
+    // v3（批 3）追加在末尾：`compared` 是 `mismatch` 的**分母**（真正比过的字段数），
+    // `ledgeronly` 是「正文没这一栏、以台账为准」的字段数。
+    // `mismatch=0 compared=0` 与 `mismatch=0 compared=300` 是两件事 —— 没有分母时它们长得一样。
+    ` compared=${f.compared || 0} ledgeronly=${f.ledgeronly || 0}`;
 }
 
 function runLedgerCheck(o, sources, parsedBySource) {
@@ -198,7 +202,7 @@ function runLedgerCheck(o, sources, parsedBySource) {
   show("正文有 slug 而台账无此条（指向空气的指针）", r.orphanSlug, (x) => `${x.file}:${x.line} [#${x.slug}]`);
   show("台账有条目而正文找不到它（条款被删/改名而台账没跟上）", r.orphanLedger, (x) => `[#${x.slug}] 台账说它在 ${x.file}`);
   show("台账记的 file 与 slug 实际所在文件不符", r.fileMismatch, (x) => `[#${x.slug}] 正文在 ${x.inText}，台账写 ${x.inLedger}`);
-  show("双轨值不等（行内元字段 vs 台账）", r.mismatch,
+  show("值不等（行内元字段 vs 台账；正文没写那一栏的不比，见 clause-parser v3）", r.mismatch,
     (x) => `${x.file}:${x.line} [#${x.slug}] ${x.field}：正文=${JSON.stringify(x.inText)} 台账=${JSON.stringify(x.inLedger)}`);
   if (r.outOfScope.length) {
     write((strict ? "  ✗ " : "  ⓘ ") + "台账条目指向本批扫描面之外的文件：" + r.outOfScope.length + " 条" +
@@ -211,10 +215,12 @@ function runLedgerCheck(o, sources, parsedBySource) {
     missing_slug: r.missingSlug.length, orphan_slug: r.orphanSlug.length,
     orphan_ledger: r.orphanLedger.length, dup_slug: r.dupSlug.length,
     mismatch: r.mismatch.length, file_mismatch: r.fileMismatch.length,
-    out_of_scope: r.outOfScope.length,
+    out_of_scope: r.outOfScope.length, compared: r.compared, ledgeronly: r.ledgerOnly,
   };
   if (hard === 0) {
-    note("  ✓ " + r.checked + " 条 slug 与台账逐条对上，双轨零不等（台账 " + entries + " 条）。");
+    note("  ✓ " + r.checked + " 条 slug 与台账逐条对上，零不等（台账 " + entries + " 条）。");
+    note("     ⓘ 字段级：比过 " + r.compared + " 处 · 正文没这一栏、以台账为准 " + r.ledgerOnly + " 处。" +
+      (r.compared === 0 ? "  ⚠ 分母为 0 —— 这一轮的「零不等」不含任何字段级证据。" : ""));
     note("     它证不了的：台账里的**数字对不对**本闸判不了（同 `触发:` 取值真伪），只保证两边说的是同一句话。");
   }
   // 台账不全（n/first_seen/trigger 为 null）是**观察线**不是闸：回填还是承认未知，是判断。

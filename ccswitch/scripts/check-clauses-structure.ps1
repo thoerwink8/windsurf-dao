@@ -73,8 +73,13 @@
          **激活判据**：本文件有 slug，**或**台账里有条目指着本文件。两样都没有 ⇒ 打印一行
          「不适用」并跳过（回归网夹具、别的仓的条款库属这一类）。**不静默跳过** ——
          而无条件激活的话，每份夹具都会被整本台账判成一堆 orphan-ledger。
-         **双轨对账只比行内确实写着的字段**：行内没写的不参与（那不是「不等」，是「正文没这一栏」），
-         此时台账侧应为 null；台账反而有值 ⇒ 台账替正文编了一个值，同样判红。
+         **对账只比行内确实写着的字段**：行内没写的不参与（那不是「不等」，是「正文没这一栏」）。
+         **v3（批 3，2026-08-02）改了这一条的另一半**：旧契约还要求「行内没写时台账侧应为 null，
+         台账有值即红」——那只在**双轨期**成立。批 3 把 dao.md 行内元字段整批删掉、只留 `[#slug]`
+         （台账搬家的终点），于是那 20 条会逐字段判红 84 处，而那正是设计要的终态。
+         新契约：**正文写了才比，没写以台账为准**。**这是放松不是加强**（新通过集是旧的真超集），
+         它仍然对是因为被比的契约本身变了，不是断言被放松以求绿。代价与补偿见 marker 的
+         `ledgercmp` / `ledgeronly` 两个新字段。
          **判不了的**：台账里的**数字对不对**（同 `触发:` 取值真伪那一格）—— 本闸只保证两边
          说的是同一句话，不保证那句话是真的。
 
@@ -862,10 +867,12 @@ function Format-Summary {
     # 后者是它的**分母**（真正比过的行数）。两个都进 marker 是刻意的 —— `--reconcile` 拿
     # `maskdiv` 当第四个对账量（**这是「两侧同时错同一处」唯一能被看见的通道**），
     # 而 `maskcmp=0` 说明这一层本轮零样本，那与「比过且没分歧」是两回事。
-    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10}' `
+    # `ledgercmp` / `ledgeronly`（2026-08-02，批 3）同理追加在最末：前者是检查 6 的**分母**
+    # （真正比过的字段数），后者是「正文没这一栏、以台账为准」的字段数。
+    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10} ledgercmp={11} ledgeronly={12}' `
         -f $ExitCode, $Clauses, $Violations, $script:SumNoTrig, $script:SumRetire, $script:SumPromote,
            $script:SumSlugs, $script:SumLedgerState, $script:SumLedgerViol,
-           $script:SumMaskDiv, $script:SumMaskCmp)
+           $script:SumMaskDiv, $script:SumMaskCmp, $script:SumLedgerCmp, $script:SumLedgerOnly)
 }
 
 function Test-ClausesStructure {
@@ -1082,16 +1089,24 @@ function Test-ClausesStructure {
                     Content = ('[#' + $c.Slug + '] 台账记的 file 是 "' + $e.file + '"，而它实际出现在 ' + $TargetPath)
                 }
             }
-            # ── 双轨对账：**只比行内确实写着的那些字段** ──────────────────────
-            # 行内没写的不参与（那不是「不等」，是「正文没这一栏」）；此时台账侧应为 null，
-            # 台账反而有值 ⇒ 台账替正文编了一个值，同样判红。
+            # ── 单轨对账（v3 · 批 3）：**正文写了才比，没写以台账为准** ────────
+            # 批 2 的旧契约是「行内没写 ⇒ 台账侧应为 null，台账有值即红」。那一条只在**双轨期**
+            # 成立；批 3 把 dao.md 的行内元字段整批删掉、只留 `[#slug]`（台账搬家的终点），
+            # 于是那 20 条会逐字段判红 84 处 —— 而那正是设计要的终态。**照直说这是放松**：
+            # 新断言的通过集是旧的真超集。它仍然对，是因为被比的**契约本身变了**（双轨→单轨），
+            # 不是断言被放松以求绿。代价：此后「有人悄悄删掉某条的行内字段」在机器通道上与
+            # 「批 3 的正常终态」不可区分 ⇒ 补偿是把 `ledgercmp`（分母）与 `ledgeronly` 打进 marker。
+            # ⚠ `judge_only` 是 boolean，缺席与显式 false 不可分 ⇒ 它跟着「整行有没有元字段」走。
+            $hasMeta = [bool]$c.HasField
             $pairs = @(
-                @{ Name = 'n';          Mine = $c.N;        Theirs = $e.n },
-                @{ Name = 'first_seen'; Mine = $c.MonthDay; Theirs = $e.first_seen },
-                @{ Name = 'trigger';    Mine = $c.Trigger;  Theirs = $e.trigger },
-                @{ Name = 'baseline';   Mine = $c.Baseline; Theirs = $e.baseline }
+                @{ Name = 'n';          Present = $hasMeta;                  Mine = $c.N;        Theirs = $e.n },
+                @{ Name = 'first_seen'; Present = $hasMeta;                  Mine = $c.MonthDay; Theirs = $e.first_seen },
+                @{ Name = 'trigger';    Present = $hasMeta;                  Mine = $c.Trigger;  Theirs = $e.trigger },
+                @{ Name = 'baseline';   Present = ('' -ne [string]$c.Baseline); Mine = $c.Baseline; Theirs = $e.baseline }
             )
             foreach ($p in $pairs) {
+                if (-not $p.Present) { $script:SumLedgerOnly++; continue }
+                $script:SumLedgerCmp++
                 $mine = $p.Mine; $theirs = $p.Theirs
                 if ($null -eq $theirs) { $theirs = $null }
                 if ([string]$mine -ne [string]$theirs) {
@@ -1101,20 +1116,30 @@ function Test-ClausesStructure {
                     }
                 }
             }
-            $mineJO = [bool]$c.JudgeOnly
-            $theirJO = [bool]$e.judge_only
-            if ($mineJO -ne $theirJO) {
-                $violations += [PSCustomObject]@{
-                    Type = 'ledger-mismatch'; LineNo = $c.LineNo
-                    Content = ('[#' + $c.Slug + '] judge_only 两轨不等：正文=' + $mineJO + ' 台账=' + $theirJO)
+            if (-not $hasMeta) {
+                $script:SumLedgerOnly++
+            } else {
+                $script:SumLedgerCmp++
+                $mineJO = [bool]$c.JudgeOnly
+                $theirJO = [bool]$e.judge_only
+                if ($mineJO -ne $theirJO) {
+                    $violations += [PSCustomObject]@{
+                        Type = 'ledger-mismatch'; LineNo = $c.LineNo
+                        Content = ('[#' + $c.Slug + '] judge_only 两轨不等：正文=' + $mineJO + ' 台账=' + $theirJO)
+                    }
                 }
             }
             $mineSelf  = (@($c.SelfDates) -join ',')
-            $theirSelf = (@($e.self_authored) -join ',')
-            if ($mineSelf -ne $theirSelf) {
-                $violations += [PSCustomObject]@{
-                    Type = 'ledger-mismatch'; LineNo = $c.LineNo
-                    Content = ('[#' + $c.Slug + '] self_authored 两轨不等：正文="' + $mineSelf + '" 台账="' + $theirSelf + '"')
+            if ('' -eq $mineSelf) {
+                $script:SumLedgerOnly++
+            } else {
+                $script:SumLedgerCmp++
+                $theirSelf = (@($e.self_authored) -join ',')
+                if ($mineSelf -ne $theirSelf) {
+                    $violations += [PSCustomObject]@{
+                        Type = 'ledger-mismatch'; LineNo = $c.LineNo
+                        Content = ('[#' + $c.Slug + '] self_authored 两轨不等：正文="' + $mineSelf + '" 台账="' + $theirSelf + '"')
+                    }
                 }
             }
         }
@@ -1161,6 +1186,11 @@ $script:SumLedgerState = 'na'   # ok | missing | bad | na（不适用）
 $script:SumLedgerViol  = 0      # 检查 6 命中数（是硬闸的一部分，此处只是它的机器读出端）
 $script:SumMaskDiv     = 0      # 检查 5d：两套遮罩实现的分歧行数（硬闸的机器读出端）
 $script:SumMaskCmp     = 0      # 检查 5d 的**分母**：真正比过的行数（含反引号的非围栏行）
+# v3（批 3）：检查 6 的字段级分母与「以台账为准」计数。**两个都进 marker** ——
+# 单轨期之后 `ledgerviol=0` 可能是「比过且没分歧」，也可能是「一条字段都没比」，
+# 没有分母时这两件事在机器通道上长得一模一样（本仓「零检出 ≠ 零存在」的同型）。
+$script:SumLedgerCmp   = 0      # 检查 6 真正比过的字段数
+$script:SumLedgerOnly  = 0      # 检查 6 里「正文没这一栏、以台账为准」的字段数
 
 $lines = [System.IO.File]::ReadAllLines($targetFile, [System.Text.Encoding]::UTF8)
 # @() 强制数组化：函数输出恰好 1 个对象时 PowerShell 会自动解包成裸标量，裸标量的 .Count
