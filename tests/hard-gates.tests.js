@@ -316,7 +316,9 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
     /"new-item", "ni"\]\)/, '"new-item", "ni", "sc"])',
     ps(`sc query ${LIVE_V}`), 0, 2);
   mutate("反向·live 精确比对改成后缀匹配 ⇒ 项目级 .claude/settings.json 被误伤",
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{G2_LIVE_DIR\}\/\$\{n\}`\);/,
+    // 锚点 2026-08-04 随 #117 阻断项修复更新：`G2_LIVE_DIR` 常量已改成惰性的 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明）。
+    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{g2LiveDir\(\)\}\/\$\{n\}`\);/,
     'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
     bash("cp _tmp/x.json D:/frank/mousse-cli/.claude/settings.json"), 0, 2);
 
@@ -476,7 +478,9 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
 
   // ①移除：整个 live 精确比对换成后缀匹配 ⇒ 「写别的工具的同名文件」负控被误伤
   mutate2("①移除·live 精确比对 ⇒ ~/.codex/settings.json 被误伤",
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{G2_LIVE_DIR\}\/\$\{n\}`\);/,
+    // 锚点 2026-08-04 随 #117 阻断项修复更新：`G2_LIVE_DIR` 常量已改成惰性的 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明）。
+    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{g2LiveDir\(\)\}\/\$\{n\}`\);/,
     'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
     ps(`Set-Content -Path "${V}\\.codex\\settings.json" -Value "{}"`), 0, 2);
   // ②留字面但不执行：`in`（输入重定向）分支跳过被关掉 ⇒ `<` 后的路径被当成写目标。
@@ -659,7 +663,7 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
 
   // 甲⑥ 三形态 —— 三条路各自独立地能让这一格重新漏掉
   mutate3("⑥①移除·门槛写死回 2（等于把本格的修复整个删掉）",
-    /const needed = namedSrcs\.length \? 1 : 2;/, "const needed = 2;", P6, 2, 0);
+    /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, "const needed = 2;", P6, 2, 0);
   mutate3("⑥②留字面不执行·具名源照旧被识别但从不入 namedSrcs ⇒ 门槛恒为 2",
     /else if \(destLast && G2_SRC_PARAM\.test\(name\)\) namedSrcs\.push\(val\);/,
     "else if (false && destLast && G2_SRC_PARAM.test(name)) namedSrcs.push(val);", P6, 2, 0);
@@ -668,7 +672,7 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     "const hasDestPos = positional.length >= 2;", P6, 2, 0);
   check("⑥ 的三个 mutation 都不该动到「正参源」那条老路（`Copy-Item <源> <目标>` 仍拦）", (() => {
     const mp = path.join(TMP, "mutant-112-6-sidecheck.js");
-    fs.writeFileSync(mp, src3.replace(/const needed = namedSrcs\.length \? 1 : 2;/, () => "const needed = 2;"), "utf8");
+    fs.writeFileSync(mp, src3.replace(/const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, () => "const needed = 2;"), "utf8");
     return gate(ps(`Copy-Item _tmp/x.json ${LIVE_V} -Force`), { script: mp }).code === 2;
   })());
 
@@ -706,10 +710,12 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   // ⚠ 官抗节点名的第四件事：检查你的 mutation 是不是全在一个方向上 —— 上面 8 条全在
   //   「让闸变松」这一侧，故这里补 3 条「让闸变紧」的，把负控也真的红一遍。
   mutate3("反向⑥·门槛恒为 1 ⇒ 甲⑧（单正参 + 隐式目标）被顺带拦下，而那一格是**判断档**",
-    /const needed = namedSrcs\.length \? 1 : 2;/, "const needed = 1;",
+    /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, "const needed = 1;",
     ps(`Copy-Item ${LIVE_V}`), 0, 2);
   mutate3("反向⑥-b·G2_SRC_PARAM 放宽成「任意具名取值参数都算源」⇒ `-Filter` 也把门槛降到 1，单正参被误伤",
-    /const G2_SRC_PARAM = \/\^-\{1,2\}\(path\|literalpath\|lp\)\$\/i;/,
+    // 锚点 2026-08-04 更新：`lp` 已从表里删掉（PowerShell 无 `-lp` 这个参数，实跑报错；
+    // bash 的 `cp -lp` 是捆绑短选项、不吃取值）——出处见 hook 里该常量上方的注释。
+    /const G2_SRC_PARAM = \/\^-\{1,2\}\(path\|literalpath\)\$\/i;/,
     "const G2_SRC_PARAM = /^-{1,2}[\\w-]+$/i;",
     ps(`Copy-Item -Filter *.json ${LIVE_V}`), 0, 2);
 
@@ -841,52 +847,121 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   // ㈢ 本轮新发现的漏报 / 误伤（登记表，自失效）────────────────────────────────
   // 与上面三节的登记表同一机制：**写的是当前实测值**，哪天有人修好了这条会红并点名，
   // 逼他同批更新 hook 头注的格号清单。**登记 ≠ 认可**，只是让它别再隐形。
+  // ⚠ **2026-08-04 实现官回改**：本表里两格已修、两格维持、一格换了值 —— 逐条说明写在各行。
+  //   「修好后这条会红并点名」在本 PR 上**真的发生了两次**（阻断项一次、本表一次）。
   const LEDGER_117 = [
-    ["漏报·NTFS 备用数据流 `<live>::$DATA`（本轮实测：写它**确实改写原文件**，" +
-     "且 `existsSync`/`realpath` 都认；只有落 realpath 的短名路径顺带挡住了它）",
-      edit(`${LIVE}::$DATA`), 0],
-    ["漏报·ADS 经 shell 重定向", ps(`"x" > "$env:USERPROFILE\\.claude\\settings.json::$DATA"`), 0],
-    ["漏报·盘根绝对路径（无盘符）`/Users/…` —— Node 在 Windows 上把它解析成**当前盘**，" +
-     "cwd 落 C: 时本轮实测 `existsSync` 为真；g2Canon 的 posix 分支**刻意不补盘符**" +
-     "（怕在 POSIX 机器上凭空造盘符），代价就是这一格",
+    // ✅ 已修：ADS 只剥 `::$DATA` 这一种（本机实测只有它改写原文件，见 g2Canon 上方注释）
+    ["✅已修·NTFS 备用数据流 `<live>::$DATA`（实测写它**确实改写原文件** ⇒ 真绕过，" +
+     "现于 g2Canon 里按纯字符串剥掉末尾 `::$DATA`）",
+      edit(`${LIVE}::$DATA`), 2],
+    ["✅已修·ADS 经 shell 重定向", ps(`"x" > "$env:USERPROFILE\\.claude\\settings.json::$DATA"`), 2],
+    // ↓ 负控：另外两种流形态**不碰原文件**（本机实测），剥它们才是误伤 —— 钉住「只剥一种」这个决定
+    ["负控·单冒号 `:$DATA` 是**另一条**流，实测不改原文件 ⇒ 不许剥、不许拦",
+      edit(`${LIVE}:$DATA`), 0],
+    ["负控·具名旁路流 `:mystream` 实测不改原文件 ⇒ 不许剥、不许拦",
+      edit(`${LIVE}:mystream`), 0],
+    // ❌ 维持：盘根绝对路径两格，本批**刻意不修**，理由见下方长注释
+    ["❌维持·盘根绝对路径（无盘符）`/Users/…` —— Node 在 Windows 上按**当前盘**解析；" +
+     "g2Canon 的 posix 分支刻意不补盘符（怕在 POSIX 机器上凭空造盘符）",
       edit("/Users/Administrator/.claude/settings.json"), 0],
-    ["漏报·三斜杠 `///Users/…`（posix 分支要求 `(?!/)` ⇒ 落在两个分支之外；本轮实测同样开得开）",
+    ["❌维持·三斜杠 `///Users/…`（posix 分支要求 `(?!/)` ⇒ 落在两个分支之外）",
       edit("///Users/Administrator/.claude/settings.json"), 0],
-    ["误伤·`Rename-Item -Path <别处> settings.json` 且 cwd 恰在 `~/.claude` —— PowerShell 的 " +
-     "`-NewName` 相对**源目录**解析（本轮真机实跑确认），本闸按 cwd 解析 ⇒ 真实落点在别处却被拦。" +
-     "⚠ 全正参形态**改前就误伤**，⑥ 把它扩到了具名源形态",
-      ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 2],
-    ["形态不存在·PowerShell `Copy-Item -lp`：本轮 `Get-Command Copy-Item` 实测 `-LiteralPath` " +
-     "的唯一别名是 `PSPath`，`lp` 既非别名也非合法前缀缩写，实跑报 " +
-     "`A parameter cannot be found that matches parameter name 'lp'` ⇒ #112 那条同名正控" +
-     "**测的是一条跑不起来的命令**（拦它无害，但别把它算进 PowerShell 侧的覆盖面）",
+    // ⬇ 由 2 变 0：本批把甲⑥ 的门槛下降从 rename 族收回去了，**我扩出来的那一格已还原**
+    ["⬇已收窄·`Rename-Item -Path <别处> settings.json` 且 cwd 恰在 `~/.claude`：" +
+     "`-NewName` 相对**源目录**解析（实跑确认），本闸按 cwd 解 ⇒ 基准就是错的。" +
+     "甲⑥ 曾把这个错基准扩到具名源形态，**本批已收回**（`G2_NO_SRC_THRESHOLD`）⇒ 由 2 变 0",
+      ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 0],
+    ["❌维持·同上的**全正参**形态：这一格**改前就误伤**、与甲⑥ 无关，基准修好前照旧",
+      ps(`Rename-Item D:\\x\\foo.json settings.json`, LIVEDIR), 2],
+    // ⬇ 由 2 变 0：`lp` 已从参数表删掉（PowerShell 无此参数，bash 侧是捆绑短选项）
+    // ⚠ **这一行的期望值我第一次写错了，留档**：我以为删掉 `lp` 之后这条会变 0，实测仍是 2。
+    //   原因是删掉之后 `-lp` 成了**开关**（不吃取值）⇒ 正参变成两个（`src.json` 与 live）
+    //   ⇒ 走**普通的「末位正参即目标位」老路**照样拦下。**判决没变，变的是走哪条路**：
+    //   改前靠「`lp` 是具名源」这条**错**规则拦，改后靠正参计数这条**对**规则拦。
+    //   ⇒ 教训：`lp` 这一格此前是「**对的结果 + 错的理由**」，而单看红绿分辨不出这两者。
+    ["✅理由已订正（判决不变）·PowerShell `Copy-Item -lp`：`-lp` **不是合法参数**（实测 " +
+     "`-LiteralPath` 唯一别名是 `PSPath`，实跑报 `A parameter cannot be found`）。" +
+     "`lp` 已从参数表删掉 ⇒ 现在它当开关、靠两个正参识别目标位，**不再靠一条编错的具名源规则**",
       ps(`Copy-Item -lp src.json "${LIVE}" -Force`), 2],
+    ["✅真实召回·GNU `cp -lp <源> <目标>`（捆绑短选项 `-l`+`-p`，**这个是真跑得起来的**）" +
+     "—— `-lp` 现在当开关，两个正参照常识别出目标位",
+      bash(`cp -lp src.json "$HOME/.claude/settings.json"`), 2],
+    ["负控·`cp -lp <live>` 单正参：那是**源**不是目标（删掉 `lp` 的取值语义后不再被误当目标位）",
+      bash(`cp -lp "$HOME/.claude/settings.json"`), 0],
   ];
   for (const [name, p, want] of LEDGER_117) {
     check(`登记表(#117)：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
   }
 
-  // ㈣ 🔴 合并阻断项：`G2_LIVE_DIR` 没跟着候选一起归一 ────────────────────────
-  // 判据：`G2_LIVE_DIR = norm(path.join(HOME, ".claude")).toLowerCase()` —— **常量侧不过
-  // `g2Canon`**，而 #112 之后**候选侧一律过**。两侧归一到的深度不同了。
-  // `path.join` 能折 `.` / `..` / 重复分隔符 / 尾分隔符，**折不了 8.3 短名，也剥不掉 `//?/`**
-  // —— 而那两样恰恰是 `g2Canon` 新加的能力 ⇒ HOME 本身是这两种形态时，候选被归成长名、
-  // 常量还是短名，**两边永远对不上，整道闸对所有形态一起失明**（含 #87 那条绕过原文）。
-  // 🔴 **这是退化不是已知缺口**：同一 payload 在 #112 之前拦得住。
-  // 下面写的是**当前实测值**，修好之后这几条会红并点名 —— 那时把 0 改成 2 即可。
+  // 🔴 **盘根绝对路径两格为什么本批不修（实现官判断，说明理由）**：
+  //   修它 = 让 `/Users/…` 在 Windows 上按「某个盘」解析。而**按哪个盘**有两个候选：
+  //   hook 进程的 `process.cwd()`，还是被拦那条工具调用的 `input.cwd`？两者不同，
+  //   且正解是后者 —— 这意味着 `g2Canon` 要多收一个 `cwd` 参数，**它的每一个调用点都要跟着改，
+  //   包括我这一批刚刚修好的常量侧 `g2LiveDir()`**。
+  //   而本 PR 的阻断项**恰恰就是**「候选侧改了、常量侧没跟上」那个病。
+  //   ⇒ 在同一批里对同一条共享归一链再做一次两侧改动，是制造下一次同型退化最省事的办法。
+  //   **它是漏报方向（保守侧），已登记、可见、可被下一个人接手**；换成误伤方向我不会这么处置。
+  //   `///Users/…` 同族，一并留。
+
+  // ㈣ ✅ 合并阻断项**已修**（2026-08-04，实现官）：常量侧改惰性 `g2LiveDir()`，走同一归一器 ──
+  // **这三条曾是登记表条目（登记值 exit 0），修好后当场变红并逐条点名，逼我回来改它们** ——
+  // 那正是自失效登记表被设计出来要干的事，这是它在本 PR 上的第二次真实触发。
+  // 现在它们是**正控**：登记值 0 → 断言值 2。
+  //
+  // 病根（留档，别删）：`G2_LIVE_DIR` 是个**常量**，`norm(path.join(HOME,".claude")).toLowerCase()`；
+  // 而 #112 让**候选**侧一律多过一层 `g2Canon`。`path.join` 折得了 `.` / `..` / 重复分隔符 /
+  // 尾分隔符，**折不了 8.3 短名、也剥不掉 `//?/`** —— 那两样恰恰是 `g2Canon` 新加的能力
+  // ⇒ HOME 本身是这两种形态时两边永远对不上，**整道闸对所有输入一起静默放行**。
+  //
+  // 🔬 **透镜（比这个 bug 本身值钱）**：**「归一后再比」是两侧对称的动作，只改一侧即半成品**
+  //    —— 每一半单独看都对，错的是**不在同一深度**。同窗另一个 bug 同形态（合并脚本 merge 了却不 push）。
+  //
+  // 🔴 **一处订正对抗官报文的措辞，照直写**：报文说「整闸失明**含 #87 那条绕过原文**」，
+  //    而实现官复现时量到的更细：`#87` 那条用的是**已展开的字面长名路径**，它在短名 HOME 下
+  //    **改前就是 0**（本来就没拦住，不是 #112 弄坏的）；真正**退化**的是**变量形态**
+  //    （`$env:USERPROFILE\.claude\settings.json`）—— 改前 2、改后 0，因为变量展开出短名 HOME、
+  //    与短名常量原本恰好对得上。⇒ 「退化」这个定性成立，但**退化的格数是 2 不是 3**，
+  //    另 4 格（长名字面 × 短名/`//?/` HOME）是**改前就有的漏报，本批顺带修掉**。
+  //    出处：`_tmp/repro-blocker.mjs` 的 3 HOME 形态 × 3 payload 九宫格，修前 5/9 拦、修后 9/9 拦。
   if (SHORT_HOME) {
-    const asShort = { USERPROFILE: SHORT_HOME };
-    const REG = [
-      ["Edit·短名 HOME 下写 live（候选归成长名，常量仍是短名）", edit(`${SHORT_HOME}\\.claude\\settings.json`)],
-      ["shell·#87 那条绕过原文", ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)],
-      ["bash·`~` 形态", bash("cp src.json ~/.claude/settings.json")],
-    ];
-    for (const [name, p] of REG) {
-      check(`🔴阻断项(#117)·USERPROFILE 是 8.3 短名时整闸失明：${name} → 当前 exit 0（应为 2）`,
-        gate(p, { env: asShort }).code === 0, `code=${gate(p, { env: asShort }).code}`);
+    for (const [hname, hval] of [["8.3 短名", SHORT_HOME], ["`//?/` 扩展前缀", `\\\\?\\${HOME}`]]) {
+      const asHome = { USERPROFILE: hval };
+      const REG = [
+        ["Edit·字面长名路径（**改前就漏**，本批顺带修掉）", edit(`${HOME}\\.claude\\settings.json`)],
+        ["shell·#87 绕过原文（字面长名，同上改前就漏）", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
+        ["shell·变量形态（**这一格才是 #112 的退化**：改前 2 → 改后 0 → 现修回 2）",
+          ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)],
+        ["bash·`~` 形态", bash("cp src.json ~/.claude/settings.json")],
+      ];
+      for (const [name, p] of REG) {
+        check(`阻断项已修·USERPROFILE=${hname} 时仍拦得住：${name} → exit 2`,
+          gate(p, { env: asHome }).code === 2, `code=${gate(p, { env: asHome }).code}`);
+      }
     }
-    check("对照：同一条 payload 在**真实 HOME** 下拦得住 ⇒ 上面三条是环境条件性的，不是恒失效",
+    check("对照：真实 HOME（长名）下同一条 payload 照旧拦得住 ⇒ 修复没把老路弄坏",
       gate(ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)).code === 2);
+
+    // mutation：把常量侧的归一去掉 ⇒ 短名 HOME 下重新整闸失明。
+    // ⚠ 这一条**必须带 env**，否则在本机长名 HOME 下恒不翻转 —— 而「恒不翻转」与
+    //   「判据没塌陷」在全绿输出里长得一模一样（本 bug 一开始就是这么藏住的）。
+    {
+      const src4 = fs.readFileSync(HOOK, "utf8");
+      const re = /_g2LiveDirCache = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\)\)\.toLowerCase\(\);/;
+      const n = (src4.match(new RegExp(re.source, "g")) || []).length;
+      check("mutation 锚点在源码里恰好命中 1 次（阻断项·常量侧归一）", n === 1, `命中 ${n} 次`);
+      if (n === 1) {
+        const mp = path.join(TMP, "mutant-117-livedir.js");
+        fs.writeFileSync(mp, src4.replace(re,
+          () => '_g2LiveDirCache = norm(path.join(HOME, ".claude")).toLowerCase();'), "utf8");
+        const asShort = { USERPROFILE: SHORT_HOME };
+        const pay = ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`);
+        check("阻断项 mutation·常量侧退回不归一 ⇒ 短名 HOME 下由 2 翻 0（证明这条修复承重）",
+          gate(pay, { env: asShort }).code === 2 && gate(pay, { script: mp, env: asShort }).code === 0,
+          `real=${gate(pay, { env: asShort }).code} mut=${gate(pay, { script: mp, env: asShort }).code}`);
+        check("同一变异体在**长名 HOME** 下仍拦得住 ⇒ 这个 bug 是环境条件性的，不是恒失效",
+          gate(pay, { script: mp }).code === 2);
+      }
+    }
   }
 
   check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
