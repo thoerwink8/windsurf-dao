@@ -107,7 +107,11 @@
 .PARAMETER VerifyCommand
     合并后要重跑的验证命令（整串，交给 shell 之外的 `Invoke-Expression` 之前会原样打印）。
     **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，dao 侧是
-    `node scripts/run-tests.mjs`，别的项目又是别的。不传即必须显式 -SkipVerify。
+    `node scripts/run-tests.mjs --env`，别的项目又是别的。不传即必须显式 -SkipVerify。
+    ⚠ **dao 侧那个 `--env` 不是可选的**（2026-08-04 · issue #116）：`run-tests.mjs` 分了两层，
+    **默认层恒返回 2**（「本次没跑完」——环境敏感断言被 defer 掉了），只有 `--env` 才拿得到 0。
+    本步的判据是 `-ne 0` 即停，所以不带 `--env` 的那一串会在这里当场停住合并链。
+    这是有意的：合并前是本仓唯一一个「必然发生 + 必然要求 exit 0」的时刻，环境敏感层就挂在这。
 
 .PARAMETER SkipVerify
     显式跳过第 4 步。跳了以后**最终退出码是 2 不是 0**——「没跑」与「跑过且过了」不许在
@@ -130,7 +134,7 @@
 
 .EXAMPLE
     # 先看会做什么
-    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath D:\frank\myrepo -VerifyCommand 'node scripts/run-tests.mjs' -DryRun
+    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath D:\frank\myrepo -VerifyCommand 'node scripts/run-tests.mjs --env' -DryRun
 
 .EXAMPLE
     # 真跑
