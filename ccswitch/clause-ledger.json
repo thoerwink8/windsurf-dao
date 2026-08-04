@@ -335,6 +335,21 @@
       ],
       "status": "active"
     },
+    "派-字段来源": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "3",
+      "first_seen": "08-04",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [
+        "08-04"
+      ],
+      "baseline": "同一批 3/3 位官全中，三份交付报告各写一句订正；入库时实算该路径在 git 全历史中从未存在过。修完之后的复发率无从预测，下一批仍有同类订正即说明方向选错",
+      "source_refs": [
+        "windsurf-dao issue #109"
+      ],
+      "status": "active"
+    },
     "派-工具面门": {
       "file": "ccswitch/rules/dao-dispatch.md",
       "n": "2",
