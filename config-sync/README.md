@@ -24,17 +24,20 @@ config-sync/
 
 - `common/`：通用配置快照，可进 git，例如 common settings、MCP、skills、prompts、proxy 相关配置。
 - `common-secrets.json`：settings 脱敏占位符对应的真实值，已被 `.gitignore` 忽略，换机时需手动复制。
-- 供应商配置不再同步：新机器应直接通过 cc-switch 配置自己的供应商，避免旧配置污染。**注意本机磁盘上还留着一份 2026-06-15 的旧导出 `providers/providers.json`，它不进 git、也不会被刷新 —— 详见下一节。**
+- 供应商配置不再同步：新机器应直接通过 cc-switch 配置自己的供应商，避免旧配置污染。**那条政策留下的残留物已于 2026-08-04 清除 —— 详见下一节。**
 
-## 🔴 providers/ 是历史遗留，不是恢复源
+## ✅ providers/ 的陈旧快照已删除（2026-08-04，用户拍板）
 
-`config-sync/providers/` 被 `config-sync/.gitignore` 第 2 行**整体忽略**，所以你在 GitHub 上看不到它，
-但**本机磁盘上它可能还在**（2026-06-15 的一次性导出 `providers.json` + 一份更早的 `.bak` + 一份含真实凭据的
-`common-secrets.json`）。上一条说的「供应商配置不再同步」是**政策**，而那个政策留下的**残留物**就是它。
+**已删**：`providers/providers.json`（50,728 B，2026-06-15 的一次性导出）· 同名 `.bak`（48,360 B，06-07）· 那份写给人看的 `请勿用于恢复-DO-NOT-RESTORE.md`。
 
-**它不在 6 个同步 scope（`settings` / `mcp` / `skills` / `prompts` / `proxy` / `terminal`）里**，
-`export.mjs` 不写它、`restore.mjs` 不读它 —— 也就是说，**它永远不会被自动刷新，也从来没有人维护过**。
-2026-08-02 全树普查（1174 个文件，含被 gitignore 忽略的）实测：**零个脚本 / 文档 / hook 读它**。
+**为什么删而不是留着标注**：普查结论确定 —— 2026-08-02 全树 1174 个文件（含被 gitignore 忽略的）实测**零个脚本 / 文档 / hook 读它**，做过放诱饵/拿走诱饵的正负控。
+且它**不是「漏了没同步」，是被删过一次的残留**：`7644d85`(06-07) 建 providers scope 时**同一提交的 `.gitignore` 就忽略了它** ⇒ 快照从第一天起就进不了 origin；`0dde09c`(06-15 PR #18) 摘掉全部代码路径而盘上目录没删；`5c7f61d`(06-15 PR #20) 残留目录以 untracked 冒出来 → **被加回 `.gitignore` 藏起来而不是清掉**。
+
+⚠️ **删除不可恢复，且刻意没有备份**：这些文件不在 git（整个目录被忽略），而 `providers.json` 本身含各 provider 的 `settings_config`（内有真实 token）—— **备份一个含凭据的陈旧快照，等于把凭据挪个地方**，那正是 issue #101 在治的事。
+
+🔴 **目录没有清空，还剩一份 `common-secrets.json`（603 B，2026-06-15）**：它与 `config-sync/common-secrets.json`（517 B）**内容不同**（MD5 各异），不是同一份的副本。它含真实凭据，**AI 不动凭据文件**，处置交用户 —— 见 issue #96。
+
+### 拿它恢复本来会发生什么（留档，解释为什么非删不可）
 
 ### 拿它恢复会发生什么（这才是它危险的地方）
 
