@@ -33,6 +33,13 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 留：中文回复 2 行 + compact 摘要中文 1 行（PostCompact 不能注入，文字是唯一通道）+ 合规检查≠身份询问 1 行 + 经文位置 1 行 + @import 行。
 删：标题中文段（dao-cn-title.js 已确定性兜住）、Grep-first 整节（**删前先核 permission deny 清单覆盖 sed/awk/Select-String，缺则先补 deny**）。
 
+> **✅ 2026-08-04 落地，那条前提已核，结论与预期不同**（issue #110，用户拍板走「甲 · 删整节+另记」）：
+> 该核的三个词**没有一个是靠 deny 覆盖的**——`sed` 归 **G7**（deny 里没有）、`Select-String` **两层都有**、
+> 🔴 **`awk` 两层都不拦**（`SEARCH_TOOL_ALT` 里无此键，探针实测放行；hook 头注 G7 ㈥ 把它当**下游聚合器**豁免）。
+> ⇒ 本行原方案「缺则先补 deny」**未执行**：补 deny 要写 cc-switch DB，属用户动作；且 `awk` 收不收进 G7 是判断档
+> （扩范围 + 已知约 4% 硬误伤 + 逃生阀只有用户设得了），**归用户拍板，本批不动、显式挂着**。
+> 覆盖面表 + 三条自验路落 `ccswitch/rules/dao-shell-search.md`，实测探针 `ccswitch/scripts/probe-shell-search.mjs`。
+
 ### 预算闸新值（呈批项）：建议总闸 **16KiB**（dao.md ≤10KB + 用户级 ≤1KB + 生长余量 ~5KB；现 70KiB）
 
 ## 分流去向（六类）
