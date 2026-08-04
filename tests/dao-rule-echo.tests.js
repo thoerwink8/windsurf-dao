@@ -8,10 +8,52 @@
 //
 // 用 spawnSync 直接喂 stdin，绕开 PowerShell 引号/编码坑。
 // 全部用例带 DAO_RULE_ECHO_SELFTEST=1，心跳标 synthetic，不污染 --selfcheck 的接线判定。
+//
+// ── 🔴 夹具隔离：共享位置的夹具名必须带进程唯一后缀（issue #82）─────────────────
+// 本测试的 P2 段要往两个地方落**真文件**（hook 的 readScopeGlobs 刻意读盘而不是看载荷，
+// 拿载荷断言等于验了另一条路径）：
+//   ① `<本目录>/.fixtures-scope-<uniq>/`             —— 仓内，同一棵树里并行才会撞
+//   ② `~/.claude/rules/zz-test-fixture-*-<uniq>.md`  —— **机器级共享，跨 worktree 也撞**
+// ② 那一格曾用固定名，于是盘上多棵 worktree 并行跑测试时，A 的收尾 unlink 会删掉 B 正在
+// 用的夹具，把 B 的 PR 染成看似「你弄坏了 rule-echo」。
+// 实测（`node scripts/repro-fixture-isolation.mjs -c 6 -r 3`）：固定名时 33%–56% 的子进程
+// 被染红，唯一后缀后零红。**改这两个路径之前先跑那个复现脚本** —— 它是这条约束唯一的机器侧守护。
 const { spawnSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 
 const HOOK = path.resolve(__dirname, "..", "ccswitch", "hooks", "dao-rule-echo.js");
+
+// 本进程的夹具唯一标识：PID 防跨进程撞名，随机段防 PID 复用（PID 回收很快，同一 PID
+// 一秒内连跑两次测试并不罕见）。两者缺一，都还留着一格撞名可能。
+const UNIQ = `${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+const USER_RULES_DIR = path.join(os.homedir(), ".claude", "rules");
+const FIXTURE_PREFIX = "zz-test-fixture-";
+
+// 唯一后缀自带的代价，同批还掉：进程被强杀（Ctrl-C / TaskStop / 宿主超时）时 finally 不跑，
+// 夹具会留在**用户真实的规则目录**里，且因为名字每次都不同而越攒越多——固定名时代至少
+// 还只留一个。故每次开跑先清一次陈旧残留。
+// 判据刻意保守，三条同时满足才删：①正好这个前缀 ②`.md` ③ mtime 超 1 小时。
+// 1 小时远大于本测试的整体耗时（~1.5s），故**绝不会删到正在跑的另一个进程的夹具**——
+// 那样就把刚修好的互染原样造了回来。只碰自己这一族的名字，不碰用户任何真规则。
+const STALE_FIXTURE_MS = 60 * 60 * 1000;
+function sweepStaleFixtures() {
+  const swept = [];
+  let entries;
+  try { entries = fs.readdirSync(USER_RULES_DIR); } catch (_) { return; }
+  for (const f of entries) {
+    if (!f.startsWith(FIXTURE_PREFIX) || !f.endsWith(".md")) continue;
+    const p = path.join(USER_RULES_DIR, f);
+    try {
+      if (Date.now() - fs.statSync(p).mtimeMs < STALE_FIXTURE_MS) continue;
+      fs.unlinkSync(p);
+      swept.push(f);
+    } catch (_) { /* 并发下被别人抢先删掉/占用都不是错误，跳过 */ }
+  }
+  if (swept.length) console.log(`  ⓘ 清掉 ${swept.length} 个超 1 小时的陈旧夹具残留：${swept.join(", ")}`);
+}
 
 function run(payload, env) {
   const input = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -177,12 +219,13 @@ console.log("\n=== 错误可见性：出错必须留痕，且不取阻断语义 
 // frontmatter 多半不在里面。拿载荷断言等于验了另一条路径，会对真实缺陷失明。
 // 夹具放 tests/ 下自建目录（**不能放 `_tmp/`**：那个前缀在 hook 的 EXCLUDE 里，
 // 放进去会让被测文件直接被判为「非规则文件」，测试变成永远为真的废话）。
+// 目录名与下面两个用户级夹具名都带 UNIQ 后缀，理由见文件头「夹具隔离」段。
 console.log("\n=== P2 作用域档：有 paths ⇒ 作用域注入，无 paths ⇒ 常驻 ===");
 {
-  const fs = require("fs");
-  const os = require("os");
-  const FIX = path.resolve(__dirname, ".fixtures-scope", ".claude", "rules");
-  const userFix = path.join(os.homedir(), ".claude", "rules", "zz-test-fixture-userlevel.md");
+  const FIX_ROOT = path.resolve(__dirname, `.fixtures-scope-${UNIQ}`);
+  const FIX = path.join(FIX_ROOT, ".claude", "rules");
+  const userFix = path.join(USER_RULES_DIR, `${FIXTURE_PREFIX}userlevel-${UNIQ}.md`);
+  sweepStaleFixtures();
   fs.mkdirSync(FIX, { recursive: true });
 
   const write = (name, body) => { const p = path.join(FIX, name); fs.writeFileSync(p, body, "utf8"); return p.replace(/\\/g, "/"); };
@@ -235,16 +278,17 @@ console.log("\n=== P2 作用域档：有 paths ⇒ 作用域注入，无 paths �
     check("用户级无 paths → 仍回灌原文", ctx(r).includes("用户级条款 F"));
 
     // ⑦ 用户级但**有** paths ⇒ 走作用域分支（优先级：scoped 高于 userLevel）
-    const userScoped = path.join(os.homedir(), ".claude", "rules", "zz-test-fixture-userscoped.md");
+    const userScoped = path.join(USER_RULES_DIR, `${FIXTURE_PREFIX}userscoped-${UNIQ}.md`);
     fs.writeFileSync(userScoped, '---\npaths:\n  - "**/*.ps1"\n---\n\n正文\n', "utf8");
     try {
       r = run(ptu("Edit", { file_path: userScoped.replace(/\\/g, "/"), old_string: "a", new_string: "用户级作用域 G" }));
       check("用户级有 paths → 走作用域分支而非未送达警告", /作用域注入/.test(ctx(r)) && !/3\/3/.test(ctx(r)));
     } finally { try { fs.unlinkSync(userScoped); } catch (_) {} }
   } finally {
-    // 夹具必须清干净：残留在 ~/.claude/rules/ 下的文件会被宿主当真规则扫描
+    // 夹具必须清干净：残留在 ~/.claude/rules/ 下的文件会被宿主当真规则扫描。
+    // 只删自己这一份（名字带 UNIQ）——绝不按前缀批删，那正是 issue #82 的病根。
     try { fs.unlinkSync(userFix); } catch (_) {}
-    try { fs.rmSync(path.resolve(__dirname, ".fixtures-scope"), { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(FIX_ROOT, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
