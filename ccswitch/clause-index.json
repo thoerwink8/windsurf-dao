@@ -116,7 +116,7 @@
         "external": false,
         "selector": "all-top-level",
         "role_scheme": "dispatch-sections",
-        "sha256": "d2c506946c7e2672a2f9c3662d9ba50fe5711c480ca24f718f8105decdcba6ac",
+        "sha256": "5a1506eaf7ff968841bf09cf7563862c0711149a987af9f0129a11cc05225266",
         "lines": 155,
         "clauses": 60,
         "observation": 0,
@@ -1088,7 +1088,7 @@
       "body_excerpt": "㈠**补水位提到每轮最前（次序硬规）**：心跳/回合的**第一个工具段**就是水位检查+补派，**在任何 merge/裁决/抽验之前**。合并期是水位最易漏的时刻（帅忙于串行终审），所以补在前面、让在跑的官在你合并时继续跑。**判据：这一轮我先补水位了吗？没有就是又滑了一次。** ㈡**自适应水位（水位是上限不是配额…"
     },
     {
-      "id": "57744ed0e93e",
+      "id": "10e74826dc8f",
       "slug": "官通-工具约束",
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "line": 73,
