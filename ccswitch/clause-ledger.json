@@ -188,6 +188,21 @@
       ],
       "status": "active"
     },
+    "守-锚点行尾": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "2",
+      "first_seen": "08-02",
+      "trigger": "run-tests/mutation-anchor",
+      "judge_only": false,
+      "self_authored": [
+        "08-02"
+      ],
+      "baseline": "2 例同日（#63 ANCHOR MISS ×2、#99 分支绿→主干红）；本仓 25 处 mutation 站点实测——跨行锚点 1 处、锚点断言写法 5 种、断言与 mutation 锚点不同一的 1 处；提议的「查缺锚点断言」形态实测误报率 84.6%→100%，故只机检窄形态",
+      "source_refs": [
+        "issue #103"
+      ],
+      "status": "active"
+    },
     "帅-对抗前置": {
       "file": "ccswitch/dao.md",
       "n": "1",

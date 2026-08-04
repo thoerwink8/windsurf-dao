@@ -65,15 +65,15 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "6dddee6eb58403bb5648a7c723e0284c4031cb3d387c4bf56daadc10b8e4c0bb",
-        "lines": 35,
-        "clauses": 4,
+        "sha256": "f8f47e1974da26afae07f5d33c0c133cb3c4297b933fff83fac79e88f8ccaff7",
+        "lines": 41,
+        "clauses": 5,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 4,
+        "slug": 5,
         "no_slug": 0,
         "no_meta_field": 0
       },
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 66,
+      "general": 67,
       "reviewer": 1,
       "implementer": 8,
       "adversary": 12,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 94,
+      "clauses": 95,
       "observation": 0
     }
   },
@@ -919,6 +919,31 @@
       "observing": false,
       "shape": "prose",
       "body_excerpt": "- **规则集只增不减是结构必然，须专门给退役造触发器**：立法有天然触发器（刚踩坑、正在写复盘），**退役没有**——「这条还有用吗」要在无标记时刻主动问，正是实测携带率约 9% 的那一类动作。故任何规则集（条款库/检查清单/lint 规则）必须自带**①复发计数字段**（新事故命中已有条款时 n+1 而非新写一条…"
+    },
+    {
+      "id": "706223fdf336",
+      "slug": "守-锚点行尾",
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "line": 35,
+      "line_end": 40,
+      "meta_line": 40,
+      "role": "general",
+      "zone": "clause",
+      "section": null,
+      "title": "mutation 的锚点必须扛得住行尾差异，且「锚点仍在」的断言要断言你真正用的那个表达式",
+      "n": "2",
+      "first_seen": "08-02",
+      "trigger": "run-tests/mutation-anchor",
+      "baseline": "2 例同日（#63 ANCHOR MISS ×2、#99 分支绿→主干红）；本仓 25 处 mutation 站点实测——跨行锚点 1 处、锚点断言写法 5 种、断言与 mutation 锚点不同一的 1 处；提议的「查缺锚点断言」形态实测误报率 84.6%→100%，故只机检窄形态",
+      "self_declared": "08-02",
+      "self_declared_all": [
+        "08-02"
+      ],
+      "has_meta_field": true,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "- **mutation 的锚点必须扛得住行尾差异，且「锚点仍在」的断言要断言你真正用的那个表达式**：mutation 靠在被测源码里找一段锚点再替换掉。锚点若写死 `\\n` 而盘上检出是 CRLF，**恒不命中** ⇒ `replace` 原样返回 ⇒ 变异体 == 原文 ⇒ 被测守卫**照常绿**——**而那与…"
     },
     {
       "id": "616d8a84bea7",
