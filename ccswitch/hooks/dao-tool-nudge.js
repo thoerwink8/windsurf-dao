@@ -408,11 +408,44 @@ if (devServerDir !== null && isLinkedWorktree(devServerDir) === false) {
 // (`node _tmp/dump.mjs`)一条提醒都不触发,若放在早退之后就永远轮不到它跑。
 // 逃生阀 DAO_TMP_SWEEP_OFF=1 只有用户设得了(agent 在 Bash 里 export 影响不到本进程)。
 let sweepNotice = null;
-if (process.env.DAO_TMP_SWEEP_OFF !== "1") {
+let sweepUserMessage = null;
+// 🔴 **没有 cwd 就不扫**(2026-08-04 立)。旧写法 `input.cwd || process.cwd()` 在**调用方
+// 没给 cwd** 时退到本进程的 cwd。对生产调用没问题(宿主一直给),但对**任何 spawn 它的测试**
+// 就是灾难:cwd 变成开发者的真仓 ⇒「跑一次测试」= 对真 `_tmp/` 做一次真实改盘,而那套测试
+// 自己是绿的。实测三次独立复发,一次比一次远:
+//   ① tests/dao-tool-nudge.tests.js  改坏官自己的三个探针(其一成语法错误)+ 一份 PR 评论草稿
+//   ② tests/subagent-clauses.tests.js 红绿取决于在哪个目录敲命令
+//   ③ tests/hard-gates.tests.js:64   本批实测:它吃掉了本 worktree `_tmp/dump/` 里的一个 canary
+// **三次都在「谁调用我」那一侧,所以修在那一侧永远修不完** —— ①② 修好之后 ③ 照样发作,
+// 而 ③ 归另一路官的在途 PR 管、本批碰不得 ⇒ 收口到这里:**拿不到显式 cwd 就不改盘**。
+// 失败方向与扫描面白名单一致——**朝窄**:最坏是「某次 dump 没被自动脱敏」(#108 之前的常态),
+// 不是「静默改坏别人的源码」。
+// **为什么只进 stderr 不进 additionalContext**:这一格报的是「我没做事」而不是「我改了盘」,
+// 每次无 cwd 调用都往模型上下文塞一段是拿噪音换可见性;改盘那一格照旧三重留痕。
+const explicitCwd = input && typeof input.cwd === "string" && input.cwd ? input.cwd : null;
+if (process.env.DAO_TMP_SWEEP_OFF !== "1" && !explicitCwd) {
+  try {
+    process.stderr.write(
+      "[dao 凭据脱敏] 本次调用的 payload 里没有 cwd ⇒ 跳过 `_tmp/` 自动脱敏" +
+      "(不拿 process.cwd() 兜底:那会让任何 spawn 本 hook 的测试改到开发者真仓的 _tmp/,已实测三次复发)。\n"
+    );
+  } catch (_) { }
+}
+if (process.env.DAO_TMP_SWEEP_OFF !== "1" && explicitCwd) {
   try {
     if (!TMP_SWEEP) throw new Error("ccswitch/lib/tmp-redact-sweep.js 加载失败：" + TMP_SWEEP_LOAD_ERR);
-    const root = TMP_SWEEP.findRepoRoot(String((input && input.cwd) || process.cwd() || "."));
-    if (root) sweepNotice = TMP_SWEEP.renderNotice(TMP_SWEEP.sweep({ root }), root);
+    const root = TMP_SWEEP.findRepoRoot(explicitCwd);
+    if (root) {
+      const sweepRes = TMP_SWEEP.sweep({ root });
+      sweepNotice = TMP_SWEEP.renderNotice(sweepRes, root);
+      // 🔴 真改了用户的盘 ⇒ 必须走**用户可见**通道,不能只进 additionalContext(模型侧,
+      // 一轮就过去了)。本仓自己的约定写在 `dao-rule-echo.js:29`:出错要 stderr +
+      // systemMessage + 落盘三重留痕;而 ⑥ 是全仓**唯一会改用户盘**的一类,比"出错"更该出声。
+      // 用户 2026-08-03 拍板接受误伤时附的义务:「既然接受误伤,误伤就必须是可发现的」。
+      // 三重留痕在本类里的落点:stderr(这里)+ systemMessage(下面 emit)+ 追加式台账(lib 判据 ⑧)。
+      sweepUserMessage = TMP_SWEEP.renderUserMessage(sweepRes, root);
+      if (sweepUserMessage) { try { process.stderr.write(sweepUserMessage + "\n"); } catch (_) { } }
+    }
   } catch (e) {
     // 不吞:一个静默失败的脱敏器与没有脱敏器一样,而后者至少不会让人以为有兜底。
     sweepNotice =
@@ -420,10 +453,14 @@ if (process.env.DAO_TMP_SWEEP_OFF !== "1") {
       String((e && e.message) || e).slice(0, 200) + ")。⇒ 本次落盘的工件**没有**过这道过滤," +
       "把 `_tmp/` 内容贴进 PR / issue / 报告之前先手动跑 " +
       "`node ccswitch/scripts/dao-redact.mjs --scan _tmp`。";
+    // 出错同样走三重留痕(dao-rule-echo.js:29 的既有约定):stderr + systemMessage + 上面那段。
+    sweepUserMessage = "[dao 凭据脱敏] `_tmp/` 自动脱敏出错,本次未生效 —— " +
+      String((e && e.message) || e).slice(0, 160);
+    try { process.stderr.write(sweepUserMessage + "\n"); } catch (_) { }
   }
 }
 
-if (hints.size === 0 && flows.size === 0 && !sweepNotice) process.exit(0);
+if (hints.size === 0 && flows.size === 0 && !sweepNotice && !sweepUserMessage) process.exit(0);
 
 const blocks = [];
 if (sweepNotice) blocks.push(sweepNotice);
@@ -486,11 +523,16 @@ if (flows.has("dev-server-main-tree")) {
 
 const context = blocks.join("\n\n");
 
-process.stdout.write(JSON.stringify({
+// systemMessage 是**顶层**字段(与 hookSpecificOutput 平级),同 dao-design-sync-gate.js 的用法。
+// 只有 ⑥ 真改了盘(或它自己出错)时才挂 —— 其余几类都是纯提醒,不该占用户的视野。
+const payload = {
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
     additionalContext: context
   }
-}));
+};
+if (sweepUserMessage) payload.systemMessage = sweepUserMessage;
+
+process.stdout.write(JSON.stringify(payload));
 
 process.exit(0);

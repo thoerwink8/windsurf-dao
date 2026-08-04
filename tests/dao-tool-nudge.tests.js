@@ -37,28 +37,57 @@ function check(name, cond, detail) {
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
 }
 
-// 喂一次 PostToolUse 输入，返回注入的 additionalContext（没注入则空串）
-function nudge(command, toolName = "Bash") {
-  const input = JSON.stringify({ tool_name: toolName, tool_input: { command } });
-  const r = spawnSync(process.execPath, [HOOK], { input, encoding: "utf8" });
-  if (r.status !== 0) return { code: r.status, ctx: "", raw: r.stdout };
+// 🔴 **每个喂给 hook 的 payload 都必须带 `cwd`** —— 这不是洁癖，是一次真实事故的处方。
+//
+// 2026-08-03 对抗验证 PR #108 时实测：本文件的 `nudge()` 喂的 payload **不带 `cwd`**，
+// 于是 hook 里的 `String((input && input.cwd) || process.cwd() ...)` 退到 `process.cwd()`
+// = **开发者的真仓**，第 ⑥ 类（`_tmp/` 凭据脱敏）就对真 `_tmp/` 做了一次真实改盘：
+// 官自己写的三个探针 `.js` 被就地改写、其中一个被改成**语法错误**，第二次发作把一份 PR
+// 评论草稿改坏了 —— **而这一套测试自己是绿的（29/29）**。
+// 同一根因同日在 `tests/subagent-clauses.tests.js` 独立复发（红绿取决于在哪个目录敲命令）
+// ⇒ **两处独立发现、同一形态,所以它是形态不是笔误**,故做成一个会当场红的断言而不是一句注释。
+//
+// 下面这个 helper 是**唯一**喂 hook 的入口:payload 缺 `cwd` 直接判红,不留"我这次特殊"的口子。
+// 沙箱根带 `.git` 与 `_tmp/` ⇒ hook 的 findRepoRoot 落在沙箱里,扫的是沙箱的 `_tmp/`。
+const SANDBOX = path.join(TMP, "cwd-sandbox");
+fs.mkdirSync(path.join(SANDBOX, ".git"), { recursive: true });
+fs.mkdirSync(path.join(SANDBOX, "_tmp"), { recursive: true });
+
+let payloadGuardTrips = 0;
+function spawnHook(payload, opts = {}) {
+  if (!payload || typeof payload.cwd !== "string" || !payload.cwd) {
+    payloadGuardTrips++;
+    return { code: -1, ctx: "", raw: "", guardTripped: true };
+  }
+  const r = spawnSync(process.execPath, [opts.script || HOOK], {
+    input: JSON.stringify(payload), encoding: "utf8",
+    env: opts.env || process.env,
+  });
   let out = {};
   try { out = JSON.parse(r.stdout || "{}"); } catch (_) { /* 无输出即无提醒 */ }
   const hs = out.hookSpecificOutput || {};
-  return { code: r.status, ctx: String(hs.additionalContext || ""), raw: r.stdout };
+  return {
+    code: r.status, ctx: String(hs.additionalContext || ""), raw: String(r.stdout || ""),
+    systemMessage: out.systemMessage, guardTripped: false,
+  };
+}
+
+// 喂一次 PostToolUse 输入，返回注入的 additionalContext（没注入则空串）
+function nudge(command, toolName = "Bash", cwd = SANDBOX) {
+  const r = spawnHook({ tool_name: toolName, cwd, tool_input: { command } });
+  if (r.code !== 0) return { code: r.code, ctx: "", raw: r.raw };
+  return r;
 }
 
 // ④ 专用：按工具名 + session_id 喂一次；可指定跑哪个脚本副本（mutation 用）与哪份状态文件
 function mcpCall(toolName, sessionId, opts = {}) {
-  const input = JSON.stringify({ tool_name: toolName, session_id: sessionId, tool_input: {} });
-  const r = spawnSync(process.execPath, [opts.script || HOOK], {
-    input, encoding: "utf8",
-    env: Object.assign({}, process.env, { DAO_TOOL_NUDGE_STATE: opts.state || STATE }),
-  });
-  let out = {};
-  try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
-  const hs = out.hookSpecificOutput || {};
-  return { code: r.status, ctx: String(hs.additionalContext || ""), raw: String(r.stdout || "") };
+  return spawnHook(
+    { tool_name: toolName, session_id: sessionId, cwd: opts.cwd || SANDBOX, tool_input: {} },
+    {
+      script: opts.script,
+      env: Object.assign({}, process.env, { DAO_TOOL_NUDGE_STATE: opts.state || STATE }),
+    }
+  );
 }
 
 console.log("\n──── ① 工具选择提醒（既有职责，此前零测试）────");
@@ -182,11 +211,10 @@ console.log("\n──── ④ 浏览器 MCP 首调提醒（瘦身批 #5 新增
     check("mutation：真文件提醒、改坏后不提醒 ⇒ 上面那批断言真的在测这段判据",
       /dao GUI 验证/.test(before.ctx) && after.raw.trim() === "",
       `before=${before.ctx.slice(0, 40)} after=${JSON.stringify(after.raw.slice(0, 40))}`);
-    const stillBash = spawnSync(process.execPath, [mutant], {
-      input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "gh pr merge 42" } }), encoding: "utf8",
-    });
+    const stillBash = spawnHook(
+      { tool_name: "Bash", cwd: SANDBOX, tool_input: { command: "gh pr merge 42" } }, { script: mutant });
     check("mutation：改坏 ④ 之后 ② 仍然响（证明不是整个 hook 崩了）",
-      /dao PR 合并链/.test(String(stillBash.stdout || "")));
+      /dao PR 合并链/.test(stillBash.raw));
   }
 }
 
@@ -218,14 +246,11 @@ console.log("\n──── ⑤ 热重载 dev server 起在主仓树（批 1-D �
   // 造不出夹具 ≠ 这一节通过。零样本要**红**着说出来，否则「没跑」与「跑了且全过」长得一样。
   check("夹具就位（真 git 主仓 + 真链接 worktree）", fixtureErr === "", fixtureErr);
 
-  // 走 Bash 面并带上 cwd（既有 nudge() 不传 cwd，故这里另开一个 helper，不动它）
+  // 走 Bash 面并带上 cwd。**2026-08-04 订正**：原注释写「既有 nudge() 不传 cwd，故这里另开
+  // 一个 helper，不动它」—— 那次绕开而不是修好，正是后来那起「跑测试改开发者真仓」的由来。
+  // 现在两者都走 spawnHook（payload 缺 cwd 即判红），这个 helper 只剩形状适配。
   function bash(command, cwd, script) {
-    const r = spawnSync(process.execPath, [script || HOOK], {
-      input: JSON.stringify({ tool_name: "Bash", cwd, tool_input: { command } }), encoding: "utf8",
-    });
-    let out = {};
-    try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
-    return { ctx: String((out.hookSpecificOutput || {}).additionalContext || ""), raw: String(r.stdout || "") };
+    return spawnHook({ tool_name: "Bash", cwd, tool_input: { command } }, { script });
   }
   const hits = (cmd, cwd) => /dao 热重载隔离/.test(bash(cmd, cwd).ctx);
 
@@ -318,6 +343,32 @@ console.log("\n──── ⑥ --selfcheck：matcher 覆盖面必须能被独�
   check("自检给得出修法（扩 matcher 的确切串 + 写入面归谁）",
     /mcp__chrome-devtools__\.\*/.test(out) && /providers\.settings_config/.test(out), JSON.stringify(out.slice(-200)));
   check("自检不读 stdin，也不会因为没有 stdin 而挂住", typeof r.status === "number");
+}
+
+console.log("\n──── ⑦ payload 必须带 cwd（2026-08-03 事故的形态化）────");
+{
+  // 这一组盯的不是 hook，是**这份测试自己**。出处见文件开头 spawnHook 那段注释。
+  const bad = spawnHook({ tool_name: "Bash", tool_input: { command: "echo hi" } });
+  check("守卫本身有判别力：缺 cwd 的 payload 会被当场拦下（而不是照跑）",
+    bad.guardTripped === true && bad.code === -1, JSON.stringify(bad).slice(0, 160));
+
+  // 上一条自己触发了守卫 1 次 ⇒ 本套**其余**调用应当一次都没触发过。
+  check("本套其余所有 hook 调用都带了 cwd（守卫计数只有上面那一次自测）",
+    payloadGuardTrips === 1, `payloadGuardTrips=${payloadGuardTrips}（>1 说明还有调用点没带 cwd）`);
+
+  // 端到端：hook 真的按 payload 里的 cwd 定位仓根 —— 否则上面两条只是形式合规。
+  // 沙箱 `_tmp/dump/` 是默认扫描面内的约定落点（见 tmp-sweep-scope.js 头注）。
+  const sk = ["sk", "FAKE", "FOR", "TEST", "000111222333"].join("-");
+  const victim = path.join(SANDBOX, "_tmp", "dump", "payload-cwd-probe.json");
+  fs.mkdirSync(path.dirname(victim), { recursive: true });
+  fs.writeFileSync(victim, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: sk } }), "utf8");
+  const r = nudge("node _tmp/dump/make.mjs");
+  check("hook 按 payload.cwd 定位仓根（沙箱里的 dump 被脱敏了 ⇒ 它真的扫的是沙箱）",
+    !fs.readFileSync(victim, "utf8").includes(sk), `ctx=${r.ctx.slice(0, 120)}`);
+  check("改了盘就走 systemMessage（用户可见通道，不只是 additionalContext）",
+    typeof r.systemMessage === "string" && r.systemMessage.length > 0,
+    `systemMessage=${JSON.stringify(r.systemMessage)}`);
+  check("systemMessage 里不含凭据值", !String(r.systemMessage || "").includes(sk));
 }
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
