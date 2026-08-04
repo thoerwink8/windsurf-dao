@@ -651,7 +651,29 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
     /宿主给 10000 ms/.test(chu) && !/宿主给 999000 ms/.test(chu), "ctx=" + chu.slice(0, 600));
 }
 {
-  // ⑤ 作用域负控：普通项目（模式 B）不跑那五道 spawn 检查，也就不该出现预算汇总行。
+  // ⑤ 源码级：**每一处**给子进程设 timeout 的地方都必须走 capFor。
+  //
+  // 为什么不得不退到读源码：2026-08-04 的 M10 mutation 实测——把其中一处 spawn 的
+  // `BUDGET.capFor(DEAD_GATES_TIMEOUT_MS)` 退回裸常量，**一条断言都没红**。
+  // 原因是结构性的：预算充足时，夹与不夹跑出来的行为**完全一样**（子进程 139 ms 就回来了），
+  // 而要让行为断言看见差别，就得构造一个「子进程恰好跑到预算边界」的环境——那种断言
+  // 本身会随机器速度飘。⇒ 行为断言在这一格**结构上失明**，只能扫源码。
+  //
+  // 它防的是**真实的复发形态**：将来有人加第六道检查、忘了夹（本文件的检查项从 2026-08-01
+  // 到 08-02 就长了三道），而那一道会在预算之外静静地跑，把整个 hook 拖过宿主的线。
+  //
+  // 照直写它的弱处：文本匹配型守护对「注释掉」这类改法天然失明（dao-guard-writing.md
+  // 那条讲的就是这个），且它只认 `timeout:` 这个写法——有人换成 `opts.timeout = x` 就绕过去了。
+  const hookSrc = fs.readFileSync(HOOK, "utf8");
+  const timeoutSites = hookSrc.match(/timeout:\s*[^,\n\r]+/g) || [];
+  const uncapped = timeoutSites.filter((s) => !/BUDGET\.capFor\(/.test(s));
+  check("源码级：扫到的 timeout: 站点数 > 0（扫描面塌陷时这一条先红，而不是假绿）",
+    timeoutSites.length > 0, "sites=" + timeoutSites.length);
+  check("源码级：每一处子进程 timeout 都走 BUDGET.capFor（加新检查忘了夹即变红）",
+    uncapped.length === 0, "未夹的：" + JSON.stringify(uncapped));
+}
+{
+  // ⑥ 作用域负控：普通项目（模式 B）不跑那五道 spawn 检查，也就不该出现预算汇总行。
   //    把它印到每个项目里只是噪音，而噪音会训练人忽略整个 hook 的输出。
   const cwd = mkproj("budget-scope", (root) => {
     fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });

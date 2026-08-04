@@ -93,6 +93,14 @@ const BUDGET = budgetLib.createBudget({
 const PS_MIN_SLICE_MS = 1200;
 const NODE_MIN_SLICE_MS = 600;
 
+// git 子进程的超时。常路上它们只花几十毫秒，但**最坏情况会咬人**：本文件里有 5 处
+// git 调用，各 5 秒 ⇒ 一个卡住的 git（锁文件 / 网络盘 / 慢仓）就能单独吃掉 25 秒，
+// 是宿主 10 秒预算的两倍半。它们同样走 capFor —— **不因为「平时很快」就放过**，
+// 那正是本 issue 一开始被记成「反正现在很快」的那个错。
+// **顺带它是 unreachableConstants 的一个活的负控**：5000 < 10000，每次运行都在证明
+// 那个自检不是「凡常量都报」。
+const GIT_TIMEOUT_MS = 5000;
+
 // ── dao 配置自检聚合（新增）──────────────────────────────────────────────────
 // live ~/.claude/settings.json ↔ config-sync/common/settings.json 双向漂移 + dao-rule-echo 接线心跳。
 // 实测 ~90ms（含一次 node spawn）。挂在本 hook 而非新建 hook：新 hook 要写 live+快照+DB 三处注册，
@@ -585,6 +593,7 @@ function budgetSummaryLines() {
     ["BUDGET_TIMEOUT_MS", BUDGET_TIMEOUT_MS],
     ["PROVIDER_HOOKS_TIMEOUT_MS", PROVIDER_HOOKS_TIMEOUT_MS],
     ["MEMORY_REFS_TIMEOUT_MS", MEMORY_REFS_TIMEOUT_MS],
+    ["GIT_TIMEOUT_MS", GIT_TIMEOUT_MS],   // 活的负控：它够得着，所以永远不该出现在报文里
   ]);
   const line = "ⓘ hook 墙钟预算：本次已花 " + BUDGET.elapsed() + " ms / 宿主给 " + BUDGET.totalMs +
     " ms（" + HOST_BUDGET.note + "），扣 " + BUDGET.reserveMs + " ms 收尾余量后**余量 " +
@@ -755,7 +764,7 @@ function daoSyncLines() {
   // 3. windsurf-dao 未提交改动
   try {
     const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
-      encoding: "utf8", timeout: 5000
+      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
     }).trim();
     if (status) {
       const changedCount = status.split(/\r?\n/).length;
@@ -766,13 +775,13 @@ function daoSyncLines() {
   // 5. windsurf-dao 落后 origin（用 last fetch 数据，不联网）
   try {
     const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
-      encoding: "utf8", timeout: 5000
+      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
     }).trim();
     if (parseInt(behind, 10) > 0) {
       drifts.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交 → 运行 dao.bat 下行同步");
     }
     const ahead = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "origin/master..HEAD"], {
-      encoding: "utf8", timeout: 5000
+      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
     }).trim();
     if (parseInt(ahead, 10) > 0) {
       drifts.push("⬆ windsurf-dao 领先 origin " + ahead + " 个提交 → 考虑 git push 或 dao.bat --direction=up");
@@ -950,7 +959,7 @@ function checkDaoDrift() {
     // windsurf-dao 未提交
     try {
       const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
-        encoding: "utf8", timeout: 5000
+        encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
       }).trim();
       if (status) {
         driftItems.push("⬆ windsurf-dao 有未提交改动");
@@ -960,7 +969,7 @@ function checkDaoDrift() {
     // windsurf-dao 落后 origin
     try {
       const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
-        encoding: "utf8", timeout: 5000
+        encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
       }).trim();
       if (parseInt(behind, 10) > 0) {
         driftItems.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交");
