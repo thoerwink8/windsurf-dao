@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 67,
+      "general": 68,
       "reviewer": 1,
       "implementer": 8,
       "adversary": 12,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 95,
+      "clauses": 96,
       "observation": 0
     }
   },
