@@ -1,5 +1,9 @@
 _tmp/
 _scratch/
+# 测试夹具与复现沙箱（跑完即删；崩溃残留也不该进版本库）
+# 刻意不放 _tmp/：被测 hook dao-rule-echo.js 的 EXCLUDE 把 _tmp/_scratch 判为非规则面
+tests/.fixtures-scope*/
+tests/.repro-sandboxes/
 _dao_backup/
 .dao-targets
 .DS_Store
