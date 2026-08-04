@@ -94,22 +94,49 @@
 //       也不在已知参数名下」的形态。
 //     ⑤混淆写法（base64 / `Invoke-Expression` / 反引号命令替换）—— 本闸刻意不追。
 //   ── 以下四格由**对抗验证官**在合并前夹击查出（2026-08-03，issue #87），实现官未列 ──
-//     ⑥**具名源吃掉正参**（最要紧的一格）——`Copy-Item -Path <源> <目标>` / `-LiteralPath <源> <目标>`：
-//       具名参数吃掉一个正参后只剩 1 个，撞上「单正参不算目标位」的早退 ⇒ **一个候选都产不出**。
-//       ⚠ **别读成「具名形态已覆盖」**：PR #106 的 body 正控清单写着「`-Destination` 具名参数」，
-//       而**具名的是源、位置的是目标**这一种混合形态正好落在两边之外。
-//     ⑦**具名 `-Destination <目录>` 没有 basename 展开** —— 该展开只写在正参分支里。
-//     ⑧**单正参 + cwd 恰在 `~/.claude`** ⇒ 隐式目标就是 live。`~/.claude` 是本机常用工作目录，
-//       这一格不是理论洞。**该不该修是判断档**：把 cwd 当隐式目标位会引入一整类新误伤面。
-//     ⑨**绝对路径不过 `path.resolve`** ⇒ `..` / `.` / `//` / 8.3 短名 / UNC 全部绕开精确比对。
-//       ⚠ 这一格**同样穿透改动前就有的 Edit/Write 分支**，不是 shell 分支独有 —— 即本闸自诞生起就漏。
+//     ⑥ ✅ **已修，见 issue #112**（2026-08-03）——**具名源吃掉正参**：
+//       `Copy-Item -Path <源> <目标>` / `-LiteralPath <源> <目标>` / `-lp`，具名参数吃掉一个正参后
+//       只剩 1 个，撞上「单正参不算目标位」的早退 ⇒ 一个候选都产不出。
+//       **修法**：目标位存在的门槛由「恒 ≥2 个正参」改成「具名源在场时 ≥1 个」（`needed`）——
+//       依据是 PowerShell 的参数绑定语义（`-Path` 具名后，剩下的第一个正参绑到 position 1
+//       = `-Destination`），不是正则猜的。
+//       ⚠ **别读成「具名形态已覆盖」这句话当初错在哪**：PR #106 的 body 正控清单写着
+//       「`-Destination` 具名参数」，而**具名的是源、位置的是目标**这一种混合形态落在两边之外。
+//       ⚠ **收窄面照直写**：只有 `-Path`/`-LiteralPath`/`-lp` 算源位（`G2_SRC_PARAM`）。
+//       收宽成「任意具名取值参数」会让 `Copy-Item -Filter *.json <live>` 这类**单正参=源**的
+//       合法命令被误伤 —— 回归网有两条负控 + 一条反向 mutation 钉着这个决定。
+//     ⑦ ✅ **已修，见 issue #112** —— **具名 `-Destination <目录>` 没有 basename 展开**：
+//       该展开原先只写在正参分支里。**修法**：具名目标与位置目标一起进 `destRaws`，
+//       basename 展开对两者跑同一段（源也含具名源）。
+//     ⑧ ❌ **未修，判断档，留给用户拍板（issue #112 甲⑧ 原样挂着）** —— **单正参 + cwd 恰在
+//       `~/.claude`** ⇒ 隐式目标就是 live。`~/.claude` 是本机常用工作目录，这一格不是理论洞。
+//       **不修的理由不是"不要紧"**：把 cwd 当隐式目标位会引入**一整类新误伤面**（所有在
+//       `~/.claude` 下的单正参写入命令都会进入判定），给 AI 自己定这条及格线属结构性利益冲突。
+//     ⑨ ✅ **已修，见 issue #112**（本格优先级最高，因为它**不是 #106 引入的**）——
+//       **绝对路径一步归一都不过**：`..` / `.` / `//` / 8.3 短名 / `\\?\` 全部绕开精确比对。
+//       ⚠ 这一格**穿透改动前就有的 Edit/Write/MultiEdit/NotebookEdit 分支**，不是 shell 分支
+//       独有 —— 即**本闸自诞生起就漏**，两个分支现在都过 `g2Canon()`。
+//       **修法与它自己的两个坑**见 `g2Canon` 的头注（为什么按根的形态分派 win32/posix 两个
+//       归一器，而不是图省事统一用一个 —— 两种统一写法各自会制造一个新漏报，本机实测过）。
+//       ⚠ **仍不覆盖：UNC 共享形态**（`\\localhost\C$\…`）。它的唯一解法是 `realpath`，
+//       而对网络路径 realpath 会把 SMB 超时（可达数十秒）拖进一个 PreToolUse 钩子 ⇒
+//       **拿会话卡死换覆盖面，刻意不换**。登记表里有一条钉着它。
+//   ── 以下一格由 **issue #112 的实现官**在攻 ⑦ 的边界时撞出（2026-08-03），#106 那份清单里没有 ──
+//     ⑩**双引号里的尾反斜杠吞掉闭引号** —— `-Destination "$env:USERPROFILE\.claude\"`：
+//       `g2Tokens` 按 **bash** 语义把 `\"` 当转义，而 PowerShell 里反斜杠不是转义符、
+//       `"C:\x\"` 是一个合法的、以 `\` 结尾的字符串 ⇒ 闭引号被吃掉，整条命令剩余部分并进一个
+//       token，目标位解不出来。**位置目标与具名目标同时中招**（证明它在 tokenizer 层，不在某个分支）。
+//       **不在 #112 范围内**：修它等于让 tokenizer 按工具名分叉 bash/PowerShell 两套转义语义，
+//       是设计改动、且两侧都有误伤代价，属判断档。登记表里有两条钉着它。
 //   **别把「G2 现在管 shell 了」读成「shell 写 live 已经被兜住了」**：兜住的是**直白写法**，
 //   而直白写法正是真实违例的形态（本次那条就是）。
 //   ⚠ **两处已知误伤**（真语料上当前零发生，但逃生阀只有用户设得了 ⇒ 撞上即会话卡死）：
 //     heredoc 正文里写着那条命令会被当成真命令（G5 早为同一个病做过行首锚点收窄，G2 shell 分支
 //     没照一遍）· 写入类命令的 `-Value (表达式)` 吞掉取值后 live 路径掉进正参。
-//   **上面九格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
+//     **两处均未修（issue #112 乙节，判断档，与 ⑧ 一同呈用户拍板）。**
+//   **上面十格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
 //   那条会红并点名，逼他同批更新这份清单 —— **这份头注不是承诺，是一张有守卫的账**。
+//   （#112 就是被它逼着回来改这段的：修完三格后登记表当场红并逐条点名那 6 行。）
 //
 // G4 · 浏览器 MCP 截图路径 —— ⚠ **射程只到浏览器 MCP 这一种工具调用**：
 //   PowerShell / .NET 的截图脚本（System.Drawing CopyFromScreen 那条路）走的**不是工具调用**，
@@ -425,6 +452,52 @@ function g2Expand(raw, vars) {
     .replace(/^~(?=[\\/]|$)/, H);                           // ~/...
 }
 
+// 8.3 短名（`C:/Users/ADMINI~1/...`）在 path 层面解不开——它是文件系统的别名，只能问文件系统。
+// **本机不是理论形态**：全量语料普查 27365 条去重命令里 `~<数字>` 路径 **1196 条**
+// （scratchpad 一律走 `C:\Users\ADMINI~1\AppData\...`），而 `ADMINI~1` 正是 HOME 的短名。
+// 三条刻意的收窄，别读成"顺手加个 realpath"：
+//   ㈠ **只在盘符绝对路径 + 真含 `~<数字>` 时才落 I/O** —— 不这么收窄的话，`//server/share/...`
+//      会把网络 SMB 超时（可达数十秒）拖进一个 PreToolUse 钩子里，等于用会话卡死换覆盖面。
+//   ㈡ **失败一律按原样比**（fail-open，同头注设计取舍②）：文件还不存在是正常的（Write 新建）。
+//   ㈢ 整条解不开时退到**目录级** —— 本机实测 `C:\Users\ADMINI~1\.claude` 解得出，
+//      故文件名本身是短名（`SETTIN~1.JSON`）以外的形态都接得住。
+// ⚠ 它顺带会解开 symlink/junction，这是 realpath 的语义、不是本函数想要的；因为它只在
+//   `~<数字>` 路径上跑，而那类路径此前**一律不匹配**，任何改变都只会往"更准"的方向走。
+function g2LongPath(p) {
+  try { return norm(fs.realpathSync.native(p)); } catch (_) { /* 文件不存在是常态 */ }
+  try {
+    const i = p.lastIndexOf("/");
+    if (i > 0) return norm(fs.realpathSync.native(p.slice(0, i))) + p.slice(i);
+  } catch (_) { /* 目录也不存在 ⇒ 按原样比 */ }
+  return p;
+}
+
+// 绝对路径归一（issue #112 甲⑨）。**改前这一步整个不存在** —— 只有相对路径过 `path.resolve`，
+// 绝对路径原样拿去跟 live 精确比对 ⇒ `..` / `.` / `//` / 8.3 短名 / `\\?\` 全部绕开。
+// 🔴 **这一格穿透的是改动前就有的 Edit/Write 分支，不是 shell 分支独有** —— 即 G2 自诞生起就漏。
+//
+// **为什么按根的形态分派两个归一器，而不是统一用一个**（本机实测逐一验过，别改成"更简洁"的写法）：
+//   · `path.posix.normalize("C:/../Users/x")` → `Users/x` —— **把盘符当成普通段吃掉了**，
+//     于是 `C:/../Users/Administrator/.claude/settings.json` 归一成一个相对路径、彻底比不上 live。
+//     用它处理盘符路径 = 把一个漏报换成另一个漏报。
+//   · `path.win32.resolve("/../home/x")` → `D:/home/x` —— **凭空补上当前进程的盘符**，
+//     在 HOME 是 POSIX 形态的机器上会把路径改写成别的东西。
+//   ⇒ 盘符绝对走 win32.resolve（在盘根处夹住 `..`），POSIX 绝对走 posix.normalize（在 `/` 处夹住）。
+// **`//` 开头（UNC）刻意不归一**：posix.normalize 会把前导 `//` 折成 `/`，而那个路径要原样回显
+// 给被拦的人看，折了会让人以为闸拦错了对象。UNC 共享形态本来就在覆盖面外（见头注 G2 ⑨）。
+function g2Canon(s) {
+  if (!s) return s;
+  // Win32 扩展长度前缀是**纯字符串**前缀，剥它不需要任何 I/O：`//?/C:/…` → `C:/…`
+  if (/^\/\/[?.]\/[A-Za-z]:\//.test(s)) s = s.slice(4);
+  if (/^[A-Za-z]:\//.test(s)) {
+    try { s = norm(path.win32.resolve(s)); } catch (_) { /* 解析不了就按原样比 */ }
+    if (/~\d/.test(s)) s = g2LongPath(s);
+  } else if (/^\/(?!\/)/.test(s)) {
+    try { s = path.posix.normalize(s); } catch (_) { /* 同上 */ }
+  }
+  return norm(s);
+}
+
 // 展开 + 归一 + 相对路径按 cwd 解析。Git Bash 的 `/c/Users/...` 与 cygwin 的
 // `/cygdrive/c/...` 都要还原成盘符形态——真语料里备份命令就是用 `/c/...` 写的。
 function g2Resolve(raw, cwd, vars) {
@@ -437,7 +510,8 @@ function g2Resolve(raw, cwd, vars) {
   if (!abs) {
     try { s = norm(path.resolve(cwd || process.cwd(), s)); } catch (_) { /* 解析不了就按原样比 */ }
   }
-  return s;
+  // ⑨：绝对路径此前直接 return，一步归一都没有 —— 两个分支现在都过这里。
+  return g2Canon(s);
 }
 
 // 段内 token 化。与 shellSegmentsRaw 是两层不同的事：那层切**命令段**，这层切**参数**。
@@ -519,6 +593,10 @@ const G2_VALUE_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|ne
 // 目标位参数：复制类只认这几个；写入类另加 -Path/-LiteralPath/-FilePath。
 const G2_DEST_PARAM = /^-{1,2}(destination|dest|newname|target)$/i;
 const G2_TARGET_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|target)$/i;
+// **源**位参数（只对 dest-last 类有意义）。issue #112 甲⑥：`-Path` 具名之后，PowerShell 的
+// 参数绑定把**剩下的第一个正参绑到 position 1 = `-Destination`** —— 即"只剩 1 个正参"这件事
+// 本身就是目标位存在的证据，而旧判据恰恰在这里早退。
+const G2_SRC_PARAM = /^-{1,2}(path|literalpath|lp)$/i;
 
 const g2CmdName = (t) =>
   String(t == null ? "" : t).replace(/^["']|["']$/g, "").replace(/^.*[\/\\]/, "").replace(/\.exe$/i, "").toLowerCase();
@@ -548,6 +626,8 @@ function g2WriteTargets(seg, cwd, vars) {
     let start = args.findIndex((a) => g2CmdName(a) === head);
     start = start >= 0 ? start + 1 : 1;
     const positional = [];
+    const namedSrcs = [];      // 具名源（`-Path <源>`）的取值 —— basename 展开要用（甲⑦）
+    const destRaws = [];       // dest-last 类的**所有**目标位候选（具名 + 位置），供 basename 展开统一走一遍
     for (let i = start; i < args.length; i++) {
       const a = args[i];
       const inline = /^(-{1,2}[A-Za-z][\w-]*)[:=]([\s\S]+)$/.exec(a);
@@ -560,19 +640,34 @@ function g2WriteTargets(seg, cwd, vars) {
       } else { positional.push(a); continue; }
       if (val == null) continue;
       const isTarget = destLast ? G2_DEST_PARAM.test(name) : G2_TARGET_PARAM.test(name);
-      if (isTarget) out.push({ why: `参数 ${name}`, raw: val });
+      if (isTarget) { out.push({ why: `参数 ${name}`, raw: val }); if (destLast) destRaws.push(val); }
+      else if (destLast && G2_SRC_PARAM.test(name)) namedSrcs.push(val);
     }
     if (destLast) {
-      // 只有 ≥2 个正参才存在「目标位」；单个正参是源（`Copy-Item x` 复制到当前目录）。
-      if (positional.length >= 2) {
+      // 「目标位」存在的门槛（issue #112 甲⑥）：
+      //   · 源在正参上（`Copy-Item <源> <目标>`）⇒ 要 ≥2 个正参，单个正参是源
+      //     （`Copy-Item x` 是复制到当前目录，没有目标位）。
+      //   · 源已被**具名**吃掉（`Copy-Item -Path <源> <目标>`）⇒ **1 个正参就是目标位**。
+      //     旧判据一律要 ≥2，于是这种混合形态**一个候选都产不出**。
+      //     ⚠ 别读成「具名形态本来就已覆盖」：已覆盖的是**具名目标**（`-Destination`），
+      //     这里是**具名源 + 位置目标**，正好落在两边之外。
+      const needed = namedSrcs.length ? 1 : 2;
+      const hasDestPos = positional.length >= needed;
+      if (hasDestPos) {
         out.push({ why: "末位参数（目标位）", raw: positional[positional.length - 1] });
-        // 目标位给的是 `~/.claude` 目录时，落地文件名由源的 basename 决定
-        const destDir = g2Resolve(positional[positional.length - 1], cwd, vars);
-        if (g2IsLiveDir(destDir)) {
-          for (const src of positional.slice(0, -1)) {
-            const base = norm(g2Expand(src, vars)).split("/").pop();
-            if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
-          }
+        destRaws.push(positional[positional.length - 1]);
+      }
+      // 目标位给的是 `~/.claude` **目录**时，落地文件名由源的 basename 决定。
+      // issue #112 甲⑦：这一段原先只写在**位置**目标位的分支里，具名 `-Destination <目录>`
+      // 拿不到它 ⇒ `Copy-Item .\settings.json -Destination ~/.claude` 整条漏过。
+      // 现在具名与位置两种目标位共用同一段展开，源也含具名源。
+      const srcs = namedSrcs.concat(hasDestPos ? positional.slice(0, -1) : positional);
+      for (const dRaw of destRaws) {
+        const destDir = g2Resolve(dRaw, cwd, vars);
+        if (!g2IsLiveDir(destDir)) continue;
+        for (const src of srcs) {
+          const base = norm(g2Expand(src, vars)).split("/").pop();
+          if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
         }
       }
     } else {
