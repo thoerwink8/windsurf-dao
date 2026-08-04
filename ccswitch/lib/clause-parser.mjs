@@ -59,6 +59,27 @@
 //      不遮罩会给立法存根凭空造一个 ledger 条目（矩阵实测的那个假阳性，dao.md L262）。
 //      遮罩形态是**等长空格**：先在遮罩串上定位，再按 group 下标回**原始串**切值 ——
 //      直接拿遮罩串取值会把基线正文里合法的反引号内容一起吃掉（`归-根路径消歧` 的基线就有）。
+//
+// ── v3（批 3 · dao.md 重写）改了一件事：双轨期 → 单轨期 ──────────────────────
+//   批 2 的对账契约是「**行内没写的字段，台账侧应为 null；台账反而有值 ⇒ 判红**」。
+//   那一条只在**双轨期**成立 —— 它防的是「台账替正文编了一个值」，前提是正文本来该写。
+//   批 3 把 dao.md 正文的 `[n= @ 触发:]` / `[基线:]` / `[自定@]` 整批删掉、只留 `[#slug]`
+//   （台账搬家的终点，`clause-ledger.json` 的 `_doc` 写着「这份对账全绿是批 3 删旧字段的
+//   前置门」）⇒ 那 20 条会逐字段判红 84 处，而那正是**设计要的终态**，不是缺陷。
+//   **新契约（两条，方向不对称）**：
+//     · 正文**写了**该字段 ⇒ 必须与台账相等，不等即红。**这一半一个字没改**，
+//       11 份仍带行内字段的语料（officer/dispatch/guard-writing/legislation/longwindow）照旧受保护。
+//     · 正文**没写**该字段 ⇒ 以台账为准，**不比对**。
+//   **照直说这是放松，不是加强**：旧契约里「正文空、台账有值」是红，新契约里是绿 ——
+//   新断言的通过集是旧断言通过集的**真超集**，与「改断言须证明更难满足」那条相反。
+//   之所以仍然是对的，是因为**被比较的契约本身变了**（双轨 → 单轨），不是断言被放松以求绿。
+//   **代价照直写**：此后「有人把某条的行内字段悄悄删掉」在机器通道上与「批 3 的正常终态」
+//   不可区分。补偿是两个计数进 marker（`compared` / `ledgeronly`）—— 让「一条都没比过」
+//   与「比过且没分歧」在输出上分得开（同本仓「零检出 ≠ 零存在」）。**它只让事情可见，
+//   不阻止**；真要拦住「悄悄删字段」得靠 ledger 侧记一个「本条正文该不该带字段」的位，
+//   那属判断档（谁来定哪份语料算单轨），本批不自定。
+//   ⚠ `judge_only` 是 boolean，**缺席与显式 false 不可分** ⇒ 它跟着 `has_meta_field` 走：
+//   整行连 `[n= @ 触发:]` 都没有时不比对。这是近似，照直标。
 
 import fs from "node:fs";
 import path from "node:path";
@@ -554,6 +575,10 @@ export function reconcileLedger(records, ledger, scope) {
   const fileMismatch = [];
   const mismatch = [];
   const seen = new Map();
+  // v3 两个计数：`compared` = 真正比过的字段数（分母）· `ledgerOnly` = 正文没这一栏、以台账为准的字段数。
+  // 两个都进 marker，是为了让「一条都没比过」与「比过且没分歧」在输出上分得开。
+  let compared = 0;
+  let ledgerOnly = 0;
 
   for (const r of records) {
     if (r.slugs && r.slugs.length > 1) {
@@ -581,24 +606,34 @@ export function reconcileLedger(records, ledger, scope) {
     if (e.file !== r.file) {
       fileMismatch.push({ slug: r.slug, inText: r.file, inLedger: e.file, line: r.meta_line });
     }
-    // ── 双轨对账：**只比行内确实写着的那些字段** ────────────────────────────
-    // 行内没写的字段不参与（那不是「不等」，是「正文没这一栏」）；ledger 侧此时应为 null，
-    // 若 ledger 反而有值 ⇒ 那是台账替正文编了一个值，同样判红。
-    const cmp = (name, mine, theirs) => {
+    // ── 单轨对账（v3）：**正文写了才比，没写以台账为准** ──────────────────────
+    // 契约与它为什么变了，见文件头 v3 段。`present` 是「正文这一栏在不在」，
+    // 每个字段各自判 —— 不用一个总开关，因为一条可以有 `[基线:]` 而没有 `[n= @ 触发:]`。
+    const cmp = (name, present, mine, theirs) => {
+      if (!present) { ledgerOnly++; return; }
+      compared++;
       if (mine === theirs) return;
       mismatch.push({ slug: r.slug, file: r.file, line: r.meta_line, field: name, inText: mine, inLedger: theirs });
     };
-    cmp("n", r.n, e.n === undefined ? null : e.n);
-    cmp("first_seen", r.first_seen, e.first_seen === undefined ? null : e.first_seen);
-    cmp("trigger", r.trigger, e.trigger === undefined ? null : e.trigger);
-    cmp("judge_only", r.judge_only, !!e.judge_only);
-    cmp("baseline", r.baseline, e.baseline === undefined ? null : e.baseline);
+    const hasMeta = !!r.has_meta_field;
+    cmp("n", hasMeta, r.n, e.n === undefined ? null : e.n);
+    cmp("first_seen", hasMeta, r.first_seen, e.first_seen === undefined ? null : e.first_seen);
+    cmp("trigger", hasMeta, r.trigger, e.trigger === undefined ? null : e.trigger);
+    // judge_only 是 boolean，缺席与显式 false 不可分 ⇒ 跟着 has_meta_field 走（近似，见头注 v3）。
+    cmp("judge_only", hasMeta, r.judge_only, !!e.judge_only);
+    cmp("baseline", r.baseline !== null, r.baseline, e.baseline === undefined ? null : e.baseline);
     const theirSelf = Array.isArray(e.self_authored) ? e.self_authored : [];
-    if (!arrEq(r.self_declared_all || [], theirSelf)) {
-      mismatch.push({
-        slug: r.slug, file: r.file, line: r.meta_line, field: "self_authored",
-        inText: (r.self_declared_all || []).join(","), inLedger: theirSelf.join(","),
-      });
+    const mineSelf = r.self_declared_all || [];
+    if (mineSelf.length === 0) {
+      ledgerOnly++;
+    } else {
+      compared++;
+      if (!arrEq(mineSelf, theirSelf)) {
+        mismatch.push({
+          slug: r.slug, file: r.file, line: r.meta_line, field: "self_authored",
+          inText: mineSelf.join(","), inLedger: theirSelf.join(","),
+        });
+      }
     }
   }
 
@@ -610,7 +645,10 @@ export function reconcileLedger(records, ledger, scope) {
     if (!seen.has(slug)) orphanLedger.push({ slug, file: e.file });
   }
 
-  return { missingSlug, dupSlug, orphanSlug, orphanLedger, fileMismatch, mismatch, outOfScope, checked: seen.size };
+  return {
+    missingSlug, dupSlug, orphanSlug, orphanLedger, fileMismatch, mismatch, outOfScope,
+    checked: seen.size, compared, ledgerOnly,
+  };
 }
 
 // ── id：内容指纹 ─────────────────────────────────────────────────────────────

@@ -29,12 +29,66 @@ function check(name, cond, detail) {
 function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
 function mkdirp(p) { fs.mkdirSync(p, { recursive: true }); }
 
-const sh = spawnSync("sh", ["-c", "echo ok"], { encoding: "utf8" });
-if (sh.error || sh.status !== 0) {
+// ── sh 探测：先 PATH，PATH 上没有就从 git.exe 反推 Git for Windows 自带的那个 ──────
+// 🔴 为什么不能只探 PATH：**同一台机器、同一份代码，换个 shell 跑就变色**——
+//    Bash 工具环境里 `sh` 在 PATH（MSYS）⇒ 全绿；PowerShell 里不在（PATH 只有
+//    `…\Git\cmd`，而 sh.exe 住在 `…\Git\usr\bin\`）⇒ 报「环境缺 sh」`PASS=0 FAIL=1`。
+//    而合并链 `dao-pr-merge.ps1` 的合并态验证正是**从 PowerShell** 跑 run-tests ⇒ 这一条
+//    会拦下每一个 PR，且拦的理由跟被测对象毫无关系。
+//    这属「测试读共享环境却不把它钉住」，与今天另两起（payload 不带 cwd ⇒ 红绿取决于在哪个
+//    目录敲命令）同族：**别人的环境变了，你的测试就变色，而变色的原因不在被测代码里。**
+// 反推判据：`git` 必在 PATH（否则下面 makeRepo 也没法跑），而 Git for Windows 的 sh 就在
+//    git.exe 之上的固定相对位置。**候选逐个实跑一次 `sh -c "echo ok"` 才算数**——「文件存在」
+//    是弱判据（本仓「只看文件在不在」已经栽过三次 55 天零生效）。
+// 下面那条「探不到就红」的行为**刻意不动**：把「没跑」报成「通过」正是本仓在治的病。
+function resolveSh() {
+  const probed = [];
+  const works = (cmd) => {
+    const r = spawnSync(cmd, ["-c", "echo ok"], { encoding: "utf8", windowsHide: true });
+    const ok = !r.error && r.status === 0 && /ok/.test(String(r.stdout || ""));
+    // 三种失败分开写：起不来 / 起来了但退出码非 0 / 退出码 0 但没吐出预期输出。
+    // 混成一句「exit 0」会让第三种在诊断行里长得像成功——探测器的输出骗不了机器，
+    // 但会骗到读它的人，而这行字存在的唯一理由就是给人读。
+    const why = r.error ? String(r.error.code || r.error.message)
+      : r.status !== 0 ? "exit " + r.status
+      : "exit 0 但未吐出预期输出";
+    probed.push(`${cmd} → ${ok ? "可用 ✓" : why}`);
+    return ok;
+  };
+  if (works("sh")) return { sh: "sh", probed };
+
+  let gitExe = "";
+  for (const finder of process.platform === "win32" ? ["where", "which"] : ["which"]) {
+    const w = spawnSync(finder, ["git"], { encoding: "utf8", windowsHide: true });
+    gitExe = String(w.stdout || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0] || "";
+    if (gitExe) break;
+  }
+  if (!gitExe) { probed.push("where/which git → 没找到 git，无从反推 sh"); return { sh: null, probed }; }
+  probed.push("git → " + gitExe);
+
+  // git.exe 可能在 <root>/cmd、<root>/bin、<root>/mingw64/bin ⇒ 往上走三级各试一轮
+  let dir = path.dirname(gitExe);
+  for (let up = 0; up < 3; up++) {
+    for (const rel of [["usr", "bin", "sh.exe"], ["bin", "sh.exe"], ["usr", "bin", "sh"], ["bin", "sh"]]) {
+      const cand = path.join(dir, ...rel);
+      if (!fs.existsSync(cand)) continue;      // 不存在的候选不进 probed，否则刷屏
+      if (works(cand)) return { sh: cand, probed };
+    }
+    dir = path.resolve(dir, "..");
+  }
+  return { sh: null, probed };
+}
+
+const { sh: SH, probed: SH_PROBED } = resolveSh();
+if (!SH) {
   console.log("  FAIL  环境缺 sh，本回归网一条都没跑（这不是「通过」）");
+  console.log("        探过这些位置（顺序即优先级）：");
+  for (const p of SH_PROBED) console.log("          · " + p);
   console.log("\n=== 汇总: PASS=0 FAIL=1 ===");
   process.exit(1);
 }
+// PATH 上没有、靠反推才找到时说一声：让操作者看得见「这一跑用的不是你以为的那个 sh」
+if (SH !== "sh") console.log(`  ⓘ PATH 上没有 sh，反推到 Git for Windows 自带的：${SH}`);
 
 function git(cwd, args) {
   return spawnSync("git", ["-C", cwd].concat(args), { encoding: "utf8", windowsHide: true });
@@ -165,13 +219,13 @@ console.log("\n⑥ 接线 — 没设 core.hooksPath 时闸整条失效，且 sel
   git(root, ["add", "-A"]);
   check("没接线 ⇒ 提交照过（文件在盘上 ≠ 闸在跑）", commit(root).code === 0);
 
-  const sc = spawnSync("sh", [path.join(root, ".githooks", "pre-commit"), "--selfcheck"],
+  const sc = spawnSync(SH, [path.join(root, ".githooks", "pre-commit"), "--selfcheck"],
     { cwd: root, encoding: "utf8" });
   const out = String(sc.stdout || "") + String(sc.stderr || "");
   check("--selfcheck 明说 core.hooksPath 没设", out.includes("core.hooksPath 没设"), out.slice(0, 400));
 
   const root2 = makeRepo();
-  const sc2 = spawnSync("sh", [path.join(root2, ".githooks", "pre-commit"), "--selfcheck"],
+  const sc2 = spawnSync(SH, [path.join(root2, ".githooks", "pre-commit"), "--selfcheck"],
     { cwd: root2, encoding: "utf8" });
   const out2 = String(sc2.stdout || "") + String(sc2.stderr || "");
   check("接了线 ⇒ selfcheck 报出 hooksPath（负控：不是恒红）",
