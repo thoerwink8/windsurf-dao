@@ -174,9 +174,17 @@ console.log("\n──── ④ mutation 判别力（三向）· 每向先 canar
   const PROVIDER_CLAUSE = "**且每个 provider 都要改**";
   check("mutation 靶点②：「每个 provider 都要改」在源码里唯一存在",
     src.split(PROVIDER_CLAUSE).length === 2, `出现 ${src.split(PROVIDER_CLAUSE).length - 1} 次`);
-  const SETTINGS_RE_LINE = "const isSettingsJson =";
-  check("mutation 靶点③：isSettingsJson 判定行在源码里唯一存在",
-    src.split(SETTINGS_RE_LINE).length === 2, `出现 ${src.split(SETTINGS_RE_LINE).length - 1} 次`);
+  // ⚠️ 靶点③ 必须与 MUT3 真正喂给 `.replace()` 的**同一个表达式**（issue #103 实测订正）：
+  //    原文这里断言的是前缀串 `"const isSettingsJson ="`，而 MUT3 用的是正则
+  //    `/const isSettingsJson = .*;/` —— **两个不同的锚**。实测把 MUT3 的正则改成永不命中，
+  //    这条断言照常 PASS、只有下面 MUT3 的行为断言 FAIL，而那条 FAIL 的报文说的是
+  //    「settings.json 掉成零输出」⇒ 指向被测 hook 的判定逻辑，**不指向「你的锚没命中」**。
+  //    「锚落空」与「判据真坏了」再次不可区分，正是本条要治的病。
+  //    ⇒ 锚点断言与 mutation 共用同一个对象，锚一改两处同时改，不可能再分岔。
+  const SETTINGS_RE = /const isSettingsJson = .*;/;
+  const settingsReHits = (src.match(new RegExp(SETTINGS_RE.source, "g")) || []).length;
+  check("mutation 靶点③：isSettingsJson 判定行在源码里恰好命中 1 次（与 MUT3 同一个正则）",
+    settingsReHits === 1, `命中 ${settingsReHits} 次`);
 
   // MUT1 · 整条回退成 #49 证伪前的旧文案（教快照层 + direction=down 是正路）
   {
@@ -208,7 +216,7 @@ console.log("\n──── ④ mutation 判别力（三向）· 每向先 canar
   {
     const mutant = path.join(TMP, "mut3-dead-branch.js");
     fs.writeFileSync(mutant, src.replace(
-      /const isSettingsJson = .*;/,
+      SETTINGS_RE,                                   // ← 与上面靶点③ 断言的是同一个对象
       "const isSettingsJson = /__NEVER_MATCHES__/.test(norm);"
     ), "utf8");
     const dead = fire(SETTINGS_PATH, { script: mutant });
