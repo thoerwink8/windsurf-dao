@@ -67,7 +67,8 @@ node scripts/run-tests.mjs                    # ★ node 测试聚合入口：�
 node scripts/run-tests.mjs --list             # 只列清单不跑
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -File .\tests\<名>.tests.ps1   # PowerShell 测试：自带 Assert-* 断言、独立可跑，★ 入口**不代跑**
-                                              #   当前有几套、各叫什么 ⇒ 看 run-tests.mjs 末尾那段打印，本文件刻意不枚举
+                                              #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
+                                              #   当前有几套、各叫什么 ⇒ `node scripts/run-tests.mjs` 末尾会**扫全并逐条列出**，以那份为准
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
