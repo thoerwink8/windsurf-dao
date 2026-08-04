@@ -66,8 +66,9 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 node scripts/run-tests.mjs                    # ★ node 测试聚合入口：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
 node scripts/run-tests.mjs --list             # 只列清单不跑
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
-.\tests\link-codex.tests.ps1                  # PowerShell 测试（自带 Assert-* 断言，独立可跑，聚合入口不代跑）
-.\tests\link-codex-prompts.tests.ps1
+.\tests\dao-pr-merge.tests.ps1                # PowerShell 测试（自带 Assert-* 断言，独立可跑，聚合入口不代跑）
+.\tests\link-codex.tests.ps1                  # ⚠ 这里**不再手维护全表** —— 手维护的清单必过期（本行此前只列了 5 套里的 2 套）；
+.\tests\link-codex-prompts.tests.ps1          #   `node scripts/run-tests.mjs` 末尾会把 tests/*.tests.ps1 **扫全并逐条列出**，以那份为准
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
