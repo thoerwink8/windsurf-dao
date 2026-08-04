@@ -203,11 +203,19 @@ function createBudget(opts) {
     /**
      * 把一个内层超时常量夹到剩余预算之内。
      * 这一步就是「内层永远先于外层响」的机器保证：返回值恒 <= 剩余预算。
+     *
+     * 🔴 **下界必须是 1，不能是 0**：`child_process` 把 `timeout: 0` 解释成**不限时**。
+     * 余量耗尽时若返回 0，子进程反而变成无上限运行 —— 与本模块的目的恰好相反，
+     * 而且它不报错，只会安静地把整个 hook 送去被宿主杀掉。
+     *
+     * **这里原本还有一行 `if (l <= 0) return 1;`，2026-08-04 的 mutation 把它删掉与
+     * 注释掉两种改法都跑了，45 条断言一条都没红 —— 因为下面这行 `Math.max(1, …)`
+     * 已经覆盖了负余量那一路，它做的是同一件事。** 删掉不是为了省一行：一段
+     * 删掉之后没有任何断言变化的代码，正是这个 issue 讲的那个形态（看着在守什么，
+     * 其实什么都没守），把它留在治这个病的模块里最说不过去。
      */
     capFor(wantMs) {
-      const l = api.left();
-      if (l <= 0) return 1;
-      return Math.max(1, Math.min(Number(wantMs) || 0, l));
+      return Math.max(1, Math.min(Number(wantMs) || 0, api.left()));
     },
     /** 记一笔「这项没跑」，并返回给用户看的那一行 */
     skip(what, minMs) {
