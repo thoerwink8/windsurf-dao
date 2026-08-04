@@ -63,8 +63,10 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 自检与测试（无 test runner 框架，node 测试有聚合入口，PowerShell 测试仍各自跑）：
 
 ```powershell
-node scripts/run-tests.mjs                    # ★ node 测试聚合入口：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
-node scripts/run-tests.mjs --list             # 只列清单不跑
+node scripts/run-tests.mjs                    # ★ node 测试聚合入口（默认层）：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
+                                              #   ⚠ **默认层恒退 2，那是正常的**，不是失败：环境敏感断言被 defer 掉了（见下）
+node scripts/run-tests.mjs --env              # ★ 含环境敏感层 —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
+node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -File .\tests\<名>.tests.ps1   # PowerShell 测试：自带 Assert-* 断言、独立可跑，★ 入口**不代跑**
                                               #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
@@ -98,6 +100,29 @@ node 与 PowerShell 两个守卫各查一遍。**双轨期**：旧元字段仍�
 枚举都会过期**，正路是让它指向一个自己会更新的东西。
 **为什么这一处特别贵**：本文件是**派单令让官去查验证入口的那个落点**（见 `ccswitch/rules/dao-dispatch.md`
 的开工第二步）——**指针指对了，被指的那份内容却是旧的**，官照做反而拿到一个更权威的错答案。
+
+### 测试分层：默认层 / 环境敏感层（2026-08-04 · issue #116）
+
+有一小撮断言**对别人拥有的机器级可变状态做不变量断言**（真实 `~/.claude/settings.json`、
+cc-switch GUI 的库）—— **它不制造污染，它被别人的正常活动污染**，于是多官并行期偶发红。
+「红了先重跑」会训练所有人无视这道闸，故改为分层：
+
+| 跑法 | 跑什么 | 退出码 |
+|---|---|---|
+| `node scripts/run-tests.mjs` | 全部文件，但环境敏感断言被 defer | **恒 2**（「本次没跑完」） |
+| `node scripts/run-tests.mjs --env` | 全部，含环境敏感断言 | 全过 **0** |
+
+**退出码五态**：`0` 全跑全过 · `1` 有测试红 · `2` 无红但有 defer · `3` 用法错（一套都没跑）·
+`4` 分层自检失败（静态声明与运行期 defer 计数对不上）。**判「通过」写 `-eq 0`，别写 `-le 2`。**
+契约正文在 `scripts/run-tests.mjs` 头注（唯一真相源），回归网 `tests/run-tests-tier.tests.js`。
+
+🔴 **别把 2 当成绿**。写 `@(0,2)` 这种放行谓词，分层就退化成「接受偶发红」的另一种形态。
+**当前哪些文件有环境敏感层** ⇒ `node scripts/run-tests.mjs --list` 会逐条标注，以那份为准
+（此处刻意不点名、不写条数——同一段里手维护的枚举已被咬过三次）。
+
+**`--env` 什么时候跑**：合并前（`dao-pr-merge.ps1` 的 `-VerifyCommand` 必须传 `--env`，
+否则合并链在验证那一步当场停）· 窗口收官 · 任何以「run-tests 全绿」为验收的场合。
+**要求串行环境**：没有别的官在跑测试 · cc-switch GUI 没在写库 · 没人在改 `~/.claude/settings.json`。
 
 ## issue 派单中枢（2026-08-02 接入）
 
