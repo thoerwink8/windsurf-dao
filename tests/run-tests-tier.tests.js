@@ -324,6 +324,15 @@ console.log("\n──── ⑥ 用法错误 → exit 3，且**一套都不许�
   check("--tests-dir 后面没给路径 → exit 3", r.status === 3, String(r.status) + " " + String(r.stderr || "").slice(0, 300));
   check("不存在的夹具没被跑（sentinel 不存在）", !fs.existsSync(c.sentinel), c.sentinel);
 }
+{
+  // 「测试目录不存在」原先退 2 —— 而 2 现在是「有 defer」。**两件事不许共用一个码**，
+  // 否则「本次没跑完」与「压根没有测试目录」在唯一的机器通道上又合流了。现改退 5。
+  const ghost = path.join(TMP, "no-such-dir", "tests");
+  const r = spawnSync(process.execPath, [RUNNER, "--tests-dir", ghost], { encoding: "utf8", timeout: 60000, cwd: REPO });
+  check("测试目录不存在 → exit 5（**不是 2** —— 别和「有 defer」共用一个码）",
+    r.status === 5, String(r.status) + " " + String(r.stderr || "").slice(0, 300));
+  check("报文给出那个找不到的路径", /no-such-dir/.test(String(r.stderr || "")), String(r.stderr || "").slice(0, 300));
+}
 
 // ══════════════════════════════════════════════════════════════
 console.log("\n──── ⑦ --list：只列不跑，且标注分层 ────");
