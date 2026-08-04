@@ -1,7 +1,41 @@
 // dead-gates 回归网 — ccswitch/scripts/check-dead-gates.mjs 的双向断言
 //
-// 跑法：node tests/dead-gates.tests.js        （全绿 exit 0，任一红 exit 1）
-//       node scripts/run-tests.mjs            （自动发现本文件，无需登记）
+// @dao-test-tier: env
+//
+// 跑法：node tests/dead-gates.tests.js        （默认层：环境敏感那几节 defer 掉）
+//       node tests/dead-gates.tests.js --env  （含环境敏感层；要求串行环境，见下）
+//       node scripts/run-tests.mjs            （自动发现本文件，无需登记；默认层 → exit 2）
+//       node scripts/run-tests.mjs --env      （透传 --env，全绿 exit 0）
+//
+// ── 上面那行 `@dao-test-tier: env` 是给 run-tests.mjs 读的（issue #116）──────
+// 本文件里有一小撮断言**对别人拥有的机器级可变状态做不变量断言**：真实
+// `~/.claude/settings.json`、cc-switch GUI 的库（GUI 一存就写它）、指向共享主仓的命令。
+// ⇒ **它不制造污染，它被别人的正常活动污染**。前两种互染机制的修法（夹具名加唯一后缀 /
+// 假家目录，PR #115）对它结构上不适用 —— 它要断言的就是「真实那一份现在长什么样」。
+// 实证：2026-08-03 三路官并行跑测试时首跑 PASS=115 FAIL=1，串行连跑三次均 116/0，
+// 那条红复现不出（⚠ 红的条目名已丢失，故这只是「并行期偶发红」，不是对某一条的确证）。
+//
+// 被 defer 的是 ⑪ / ⑪.5 / ⑫① 里那句「真仓当下是绿态」，共 3 组。**其余 100+ 条全部照跑** ——
+// 它们是纯合成夹具，与机器状态无关，是这个回归网真正的判别力所在。
+//
+// 🔴 **摘出去之后谁保证它还会被跑**（issue #116 关闭条件要的就是这一段，照直写）：
+//   ①**真实语料那一半，另有一条每次会话都响的机器通道**：SessionStart hook
+//     `ccswitch/hooks/dao-scaffold-check.js` 每次开会话都拿真实 live settings + config-sync
+//     快照 + cc-switch providers 三层跑一遍 `check-dead-gates.mjs`（本机实测 0.18s），
+//     绿/红/「没查成」直接注进上下文。⑪ 的核心断言（dead=0 / selfcheck=ok / hooks>0 /
+//     providers 层活着）**逐条**都是它每次会话在真实语料上求值的东西 ——
+//     ⇒ 「指向已删脚本的钩子无人发现」不会因为本文件分层而发生：发现它的从来不是这个
+//     测试文件，是那个 hook。本文件保障的是「**检测器本身没坏**」，那一半留在默认层。
+//   ②**默认跑法拿不到退出码 0**：`run-tests.mjs` 默认层恒返回 2（「本次没跑完」）。
+//     任何以「run-tests 全绿」为验收的消费方必须显式跑 `--env` 才拿得到 0。
+//     这把「记得跑」变成「想拿 0 就得跑」。⚠ 弱处：谁要是把谓词写成 `@(0,2)` 就绕过去了，
+//     没有任何程序在核这一点。
+//   ③ hook 覆盖不到的两格照直标：⑪.5（真库只读性）与「⑪ 的分支结构两种结局都有断言」
+//     **只有跑 `--env` 才验得到**，②是它们唯一的保障。
+//
+// ⚠ **跑 --env 要什么环境**：串行 —— 没有别的官在跑测试 · cc-switch GUI 没在写库 ·
+//   没人在改 `~/.claude/settings.json`。合并前的终审、窗口收官、以及任何要拿 exit 0 的
+//   场合都该跑一次。
 //
 // ── 这个回归网要钉住什么 ─────────────────────────────────────────────────────
 // 被测对象自己治的病是「死闸与全过的闸在机器可读通道上不可区分」。**一个检测这种病的
@@ -35,11 +69,22 @@ const SCRIPT = path.join(REPO, "ccswitch", "scripts", "check-dead-gates.mjs");
 const TMP = path.join(REPO, "_tmp", "dead-gates-tests");
 const LIVE_REAL = path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "settings.json");
 
-let pass = 0, fail = 0;
+// 环境敏感层开关：命令行 `--env`，或环境变量 DAO_TEST_ENV_TIER=1（跨 shell 时后者更省事）。
+// run-tests.mjs 在 `--env` 下把这个 flag 透传给每个测试文件。
+const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
+
+let pass = 0, fail = 0, defer = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log("  PASS  " + name); }
   else { fail++; console.log("  FAIL  " + name + (detail ? "  ->  " + detail : "")); }
 }
+// defer 不是 skip：它进汇总行的 `DEFER=n` 字段，run-tests.mjs 据此把整场退出码顶成 2。
+// **「没跑」与「跑了全过」必须在机器通道上分得开** —— 这正是被测对象自己治的病。
+function deferSection(name, why) {
+  defer++;
+  console.log("  DEFER " + name + "  ->  " + why);
+}
+const DEFER_WHY = "环境敏感层：断言的是别人拥有的机器级可变状态。跑它：node tests/dead-gates.tests.js --env（要求串行环境）";
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
 function rm(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
@@ -356,7 +401,13 @@ console.log("\n──── ⑩ 非 JS 脚本：只查存在性，且说清没�
 
 // ══════════════════════════════════════════════════════════════
 console.log("\n──── ⑪ 真实语料自跑（合成夹具证明不了它在真数据上跑得动）────");
-{
+// 环境敏感：断言的对象是真实 `~/.claude/settings.json` 与真 cc-switch DB 的当下内容，
+// 而那两样归别人所有、随时在变（别的官在改 hook 注册、cc-switch GUI 在写库）。
+// 它的**监控价值**由 SessionStart hook 每次会话在同一份真语料上兑现（见文件头 ①），
+// 这里保留的是「检测器在真数据上跑得动 + 两种结局都有断言」那一格，只在 --env 下跑。
+if (!ENV_TIER) {
+  deferSection("⑪ 真实语料自跑（真 ~/.claude/settings.json + 真 cc-switch DB）", DEFER_WHY);
+} else {
   const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 120000, cwd: REPO });
   const out = String(r.stdout || "");
   const sum = parseSummary(out);
@@ -396,8 +447,15 @@ console.log("\n──── ⑪.5 真库只读性：跑完 mtime/size 不许变�
 // 「我们的 SQL 里没有 UPDATE」是纪律性只读，证不了什么。这一条测的是结果：
 // 真库在一次完整运行前后**逐字节没动**。它抓不到「写了又改回来」，故只是必要条件——
 // 充分条件由 `runSql(..., readonly:true)` 让 sqlite3 自己拒绝写入来提供（判据不是这条断言）。
-{
-  const DB_REAL = path.join(process.env.USERPROFILE || process.env.HOME || "", ".cc-switch", "cc-switch.db");
+//
+// 🔴 **这一节是本文件里最经不起并发的一格，也是唯一没有第二条通道兜底的一格**：
+// cc-switch GUI 在这两次 stat 之间存一次配置，mtime/size 就变了 —— 而那不是被测对象干的。
+// 它只有 `--env` 一条路（文件头 ③）。
+const DB_REAL_PATH = path.join(process.env.USERPROFILE || process.env.HOME || "", ".cc-switch", "cc-switch.db");
+if (!ENV_TIER) {
+  deferSection("⑪.5 真库只读性（真 cc-switch DB 的 mtime/size 前后比对）", DEFER_WHY);
+} else {
+  const DB_REAL = DB_REAL_PATH;
   if (fs.existsSync(DB_REAL)) {
     const before = fs.statSync(DB_REAL);
     const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 120000, cwd: REPO });
@@ -451,11 +509,19 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
   }
 
   // ① 真仓可达性：这是唯一能证明「调用点真的跑到了」的断言
+  //    **可达性这一条不是环境敏感的，留在默认层**：`deadGateLines` 的每一条返回路径
+  //    （脚本不在 / 跑不起来 / 契约被改坏 / FAIL / 没查成 / 绿）都带「死闸检测」这四个字，
+  //    所以它对真实语料是绿是红一概不敏感 —— 敏感的只有下面那句「当下是绿态」。
+  //    ⇒ 「hook 还在调它吗」这个问题，默认层每次都答得出。
   {
     const r = runHook(REPO);
     check("真仓 SessionStart 注入里出现死闸检测那一行（调用点可达）", /死闸检测/.test(r.ctx),
       "ctx=" + r.ctx.slice(0, 400) + " [stderr]" + r.err.slice(0, 200));
-    check("真仓当下是绿态，且报出闸数（不是零输出）", /死闸检测绿/.test(r.ctx) && /条闸/.test(r.ctx), r.ctx.slice(0, 400));
+    if (!ENV_TIER) {
+      deferSection("⑫① 真仓当下是绿态（读的是真实 live settings + 真 cc-switch DB 的当下内容）", DEFER_WHY);
+    } else {
+      check("真仓当下是绿态，且报出闸数（不是零输出）", /死闸检测绿/.test(r.ctx) && /条闸/.test(r.ctx), r.ctx.slice(0, 400));
+    }
   }
 
   // ② 自指：查死闸的东西自己不在了 —— 必须响，不许静默跳过
@@ -746,12 +812,20 @@ async function providersSection() {
 }
 
 providersSection().then(() => {
-  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
+  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " DEFER=" + defer + " ===");
+  if (defer) {
+    console.log("⚠ 本次未跑 " + defer + " 组环境敏感断言（默认层）—— 「没跑」不等于「跑了全过」。");
+    console.log("  跑完整层：node tests/dead-gates.tests.js --env   （要求串行环境，见文件头）");
+  }
   process.exit(fail ? 1 : 0);
 }).catch((e) => {
   // 异常不许被读成「这一节没有断言」：显式记一条 FAIL 再退出
   fail++;
   console.log("  FAIL  ⑬ providers 段抛异常  ->  " + (e && e.stack ? e.stack : e));
-  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
+  console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " DEFER=" + defer + " ===");
+  if (defer) {
+    console.log("⚠ 本次未跑 " + defer + " 组环境敏感断言（默认层）—— 「没跑」不等于「跑了全过」。");
+    console.log("  跑完整层：node tests/dead-gates.tests.js --env   （要求串行环境，见文件头）");
+  }
   process.exit(1);
 });
