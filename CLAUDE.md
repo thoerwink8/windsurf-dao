@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、Grep-first、commit 前缀、八句根基等不在此重复。本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
+> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、commit 前缀、八句根基等不在此重复。（**Grep-first 自 2026-08-04 起不再是常驻文字**：改由 `dao-hard-gates.js` G7 硬闸 + `permissions.deny` 两层承载，覆盖面与自验路见 `ccswitch/rules/dao-shell-search.md`。）本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
 
 ## 项目类型（必答题 · 用户 2026-08-02 答）
 
