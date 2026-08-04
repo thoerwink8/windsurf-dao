@@ -55,6 +55,44 @@ try { input = JSON.parse(raw); } catch (_) {}
 const cwd = String(input.cwd || process.cwd());
 const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 
+// ── 墙钟预算（2026-08-04 · issue #127）──────────────────────────────────────
+// 本文件下面那五道检查各自带一个内层超时常量（20s/30s/20s/30s/20s），而本 hook 在
+// `~/.claude/settings.json` 里的注册是 `"timeout": 10`（秒）⇒ **每一个内层常量都比外层大**，
+// 它们背后的「优雅降级」路径**结构上不可达**：宿主的刀先落下。
+//
+// 宿主超时会怎样、痕迹在哪不在哪，全是 2026-08-04 实测的，正文在
+// `ccswitch/lib/hook-budget.js` 头注（唯一真相源，此处不重述）。只留最要命的一句：
+// **被杀时整个进程树一起没、已经写出的 stdout 也作废，而在 agent 的上下文里
+// 「超时全灭」与「全绿静默」逐字节相同** —— 而 agent 的上下文正是本 hook 唯一的消费方。
+//
+// 所以降级不能靠「等某个子进程超时」（够不着），只能靠**自己看表**：预算见底就不起
+// 下一个子进程，并把「这一项没跑」明说出来 —— 那条路径在常路上，必然到得了。
+const budgetLib = require("../lib/hook-budget");
+const HOST_BUDGET = budgetLib.resolveRegisteredTimeoutMs({
+  hookFile: __filename,
+  home: homeDir,
+  hookEventName: input && input.hook_event_name ? String(input.hook_event_name) : "SessionStart",
+});
+// 测试用的收窄阀：只允许**调小**（取 min）。刻意不做成「想设多大设多大」——
+// 那样它就成了一个能让 hook 谎报余量的后门，而谎报余量正是本批要治的病。
+const BUDGET_OVERRIDE_MS = Number(process.env.DAO_HOOK_BUDGET_MS) > 0
+  ? Number(process.env.DAO_HOOK_BUDGET_MS) : null;
+const BUDGET = budgetLib.createBudget({
+  totalMs: BUDGET_OVERRIDE_MS ? Math.min(BUDGET_OVERRIDE_MS, HOST_BUDGET.ms) : HOST_BUDGET.ms,
+});
+
+// 起一个子进程「至少」要留多少余量。低于它就别起 —— 起了也是白起，还会把余量吃光，
+// 最后连报文一起被宿主杀掉（那是最坏结果：既没跑成，也没人知道没跑成）。
+// 调参三问（本机 2026-08-04 实测值）：
+//   ① 改小会怎样 —— 起一个必然跑不完的子进程，白吃余量，退化回「被宿主杀」那一档；
+//   ② 当前值够不够 —— PowerShell 冷起单次实测 444–772 ms，1200 覆盖实测最大值 1.55×；
+//      node 类子进程实测 48–139 ms，600 覆盖 4.3×（其中 provider 那道还要再 spawn 一次
+//      sqlite3，故不取更小）；
+//   ③ 再大一点代价是什么 —— 余量其实还够时提前放弃，制造**假的「没跑」**，
+//      而假的「没跑」与真的「没跑」在报文上分不开 ⇒ 不取更大。
+const PS_MIN_SLICE_MS = 1200;
+const NODE_MIN_SLICE_MS = 600;
+
 // ── dao 配置自检聚合（新增）──────────────────────────────────────────────────
 // live ~/.claude/settings.json ↔ config-sync/common/settings.json 双向漂移 + dao-rule-echo 接线心跳。
 // 实测 ~90ms（含一次 node spawn）。挂在本 hook 而非新建 hook：新 hook 要写 live+快照+DB 三处注册，
@@ -183,7 +221,9 @@ function clauseStructureLines(daoRoot) {
     if (rel !== path.join("ccswitch", "dao.md")) args.push("-TargetFile", rel);
     try {
       out = execFileSync("powershell", args, {
-        encoding: "utf8", timeout: CLAUSE_CHECK_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+        // capFor：把内层常量夹进**剩余**墙钟预算。这一步就是「内层永远先于外层响」的
+        // 机器保证 —— 没有它，20000 这个常量在 10 秒的注册下永远等不到（issue #127）。
+        encoding: "utf8", timeout: BUDGET.capFor(CLAUSE_CHECK_TIMEOUT_MS), cwd: daoRoot, windowsHide: true,
       });
     } catch (e) {
       // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上。
@@ -211,11 +251,20 @@ function clauseStructureLines(daoRoot) {
   const { targets, total, withClauses } = clauseTargets(daoRoot);
   const lines = [];
   let clauses = 0, retire = 0, promote = 0;
+  // 这道闸是整个 hook 里最贵的一项，而它的成本**随被检文件数线性长**（每个文件一次
+  // PowerShell 冷起）。预算见底时逐个记名跳过，**绝不并进下面那句绿** —— 一份只扫了
+  // 一半的扫描面报「零违例」，正是 dao-guard-writing.md「零检出 ≠ 零存在」那条病。
+  const notRun = [];
   for (const rel of targets) {
+    if (!BUDGET.canAfford(PS_MIN_SLICE_MS)) { notRun.push(rel); continue; }
     const r = runOne(rel);
     if (r.err) { lines.push(r.err); continue; }
     if (r.fail) { lines.push(r.fail); continue; }
     clauses += r.clauses; retire += r.retire; promote += r.promote;
+  }
+  if (notRun.length) {
+    lines.push(BUDGET.skip("条款库结构闸的 " + notRun.length + "/" + targets.length +
+      " 个被检文件（" + notRun.join("、") + "）", PS_MIN_SLICE_MS));
   }
   if (lines.length) {
     lines.push("  → 详情：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 [-TargetFile <上面那个文件>]");
@@ -291,7 +340,7 @@ function deadGateLines(daoRoot) {
   let out = "", code = 0;
   try {
     out = execFileSync(process.execPath, [script], {
-      encoding: "utf8", timeout: DEAD_GATES_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+      encoding: "utf8", timeout: BUDGET.capFor(DEAD_GATES_TIMEOUT_MS), cwd: daoRoot, windowsHide: true,
     });
   } catch (e) {
     // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上
@@ -381,7 +430,7 @@ function budgetLines(daoRoot) {
   let out = "", code = 0;
   try {
     out = execFileSync(process.execPath, [script], {
-      encoding: "utf8", timeout: BUDGET_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+      encoding: "utf8", timeout: BUDGET.capFor(BUDGET_TIMEOUT_MS), cwd: daoRoot, windowsHide: true,
     });
   } catch (e) {
     // 非零退出走这里（execFileSync 把它当异常抛），stdout 仍挂在 e.stdout 上
@@ -471,7 +520,7 @@ function memoryRefLines(daoRoot) {
   let out = "", code = 0;
   try {
     out = execFileSync(process.execPath, [script, "--scope=all"], {
-      encoding: "utf8", timeout: MEMORY_REFS_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+      encoding: "utf8", timeout: BUDGET.capFor(MEMORY_REFS_TIMEOUT_MS), cwd: daoRoot, windowsHide: true,
     });
   } catch (e) {
     out = (e && typeof e.stdout === "string") ? e.stdout : "";
@@ -514,6 +563,42 @@ function memoryRefLines(daoRoot) {
     return [head + "，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。" + tail];
   }
   return [head + "；" + parts.join(" · ") + tail];
+}
+
+// ── 预算守门与余量播报（2026-08-04 · issue #127）────────────────────────────
+// 判据正文在 ccswitch/lib/hook-budget.js 头注（唯一真相源），这里只放接线。
+
+// 余量够就跑，不够就记一笔「没跑」并如实说出来。
+// **刻意不做成「不够也试一试」**：起一个必然被杀的子进程比不起更糟 —— 它会把剩下的
+// 余量也吃光，最后连**已经跑完那几项的报文**一起陪葬（宿主超时是整进程树杀，
+// 已写出的 stdout 也作废，实测见 hook-budget.js 头注②）。
+function runWithinBudget(what, minMs, fn) {
+  if (!BUDGET.canAfford(minMs)) return [BUDGET.skip(what, minMs)];
+  return fn();
+}
+
+function budgetSummaryLines() {
+  // 内层常量自检：把「两个文件里互不知情的两个数」变成每次运行都核一遍的关系。
+  const overBudget = BUDGET.unreachableConstants([
+    ["CLAUSE_CHECK_TIMEOUT_MS", CLAUSE_CHECK_TIMEOUT_MS],
+    ["DEAD_GATES_TIMEOUT_MS", DEAD_GATES_TIMEOUT_MS],
+    ["BUDGET_TIMEOUT_MS", BUDGET_TIMEOUT_MS],
+    ["PROVIDER_HOOKS_TIMEOUT_MS", PROVIDER_HOOKS_TIMEOUT_MS],
+    ["MEMORY_REFS_TIMEOUT_MS", MEMORY_REFS_TIMEOUT_MS],
+  ]);
+  const line = "ⓘ hook 墙钟预算：本次已花 " + BUDGET.elapsed() + " ms / 宿主给 " + BUDGET.totalMs +
+    " ms（" + HOST_BUDGET.note + "），扣 " + BUDGET.reserveMs + " ms 收尾余量后**余量 " +
+    BUDGET.left() + " ms**；本次跳过 " + BUDGET.skipped.length + " 项";
+  const tail = [];
+  if (HOST_BUDGET.source === "fallback") {
+    tail.push("⚠ **这个总预算是猜的**（没在 settings.json 里找到本 hook 的注册）—— 真实 timeout 可能更大也可能更小，" +
+      "猜小只会提前降级并明说，猜大会直接撞刀，故按小的猜");
+  }
+  if (overBudget.length) {
+    tail.push("内层超时常量 " + overBudget.join("、") + " 都大于总预算 ⇒ 它们是**上限不是承诺**，" +
+      "真正生效的是 capFor() 夹出来的剩余预算（issue #127 治的就是这个错觉）");
+  }
+  return tail.length ? [line + "\n  " + tail.join("\n  ")] : [line];
 }
 
 function inject(context) {
@@ -575,7 +660,7 @@ function providerHookLines(daoRoot) {
   let out = "", code = 0;
   try {
     out = execFileSync(process.execPath, [script, "--providers"], {
-      encoding: "utf8", timeout: PROVIDER_HOOKS_TIMEOUT_MS, cwd: daoRoot, windowsHide: true,
+      encoding: "utf8", timeout: BUDGET.capFor(PROVIDER_HOOKS_TIMEOUT_MS), cwd: daoRoot, windowsHide: true,
     });
   } catch (e) {
     out = (e && typeof e.stdout === "string") ? e.stdout : "";
@@ -703,22 +788,29 @@ function daoSyncLines() {
 
   // 8. 死闸检测（2026-08-01 挂载 · 架构优化 P3，判据见 deadGateLines 头注）。
   //    上一项守「条款写得对不对」，这一项守「守条款的那些闸本身还活着吗」。
-  for (const line of deadGateLines(daoRoot)) drifts.push(line);
+  for (const line of runWithinBudget("死闸检测", NODE_MIN_SLICE_MS, () => deadGateLines(daoRoot))) drifts.push(line);
 
   // 9. always-on 字节预算（2026-08-01 挂载 · 架构优化 P4，判据见 budgetLines 头注）。
   //    前两项守「写得对不对」与「闸活没活」，这一项守**总量**——它是三者里唯一
   //    每次都打印一个数字的，因为减法没有天然触发器。
-  for (const line of budgetLines(daoRoot)) drifts.push(line);
+  for (const line of runWithinBudget("always-on 字节预算闸", NODE_MIN_SLICE_MS, () => budgetLines(daoRoot))) drifts.push(line);
 
   // 10. per-provider 漂移（2026-08-02 挂载 · hooks=#50 / permissions.deny=#56，
   //     判据见 providerHookLines 头注）。第 6 项比的是 live ↔ git 快照，而 #49 实测证明
   //     **真正的下发源是 `providers.settings_config`**，那一层此前无人看着。
-  for (const line of providerHookLines(daoRoot)) drifts.push(line);
+  for (const line of runWithinBudget("per-provider 漂移检查", NODE_MIN_SLICE_MS, () => providerHookLines(daoRoot))) drifts.push(line);
 
   // 11. memory 指针一致性（2026-08-02 挂载 · 自上而下审计第 12 件，判据见 memoryRefLines 头注）。
   //     前十项守的都是**仓里的东西**；这一项是唯一一个守仓外的 —— memory 每次会话注入、
   //     却不受任何 git 管，此前只有某个项目的 verify-all 才会碰它。
-  for (const line of memoryRefLines(daoRoot)) drifts.push(line);
+  for (const line of runWithinBudget("memory 指针扫描", NODE_MIN_SLICE_MS, () => memoryRefLines(daoRoot))) drifts.push(line);
+
+  // 12. 预算余量本身（2026-08-04 · issue #127）。**每次都打印一行数字**，理由与第 9 项
+  //     的 always-on 字节预算逐条相同：这里的成本也是**只增不减**（rules/ 每长出一份
+  //     带条款的 .md 就多一次 PowerShell 冷起），而增长是无声的 —— 没人看得见「又慢了
+  //     600 ms」，直到某天整个 hook 连同全部检查一起被宿主静默杀掉。
+  //     **刻意不设「余量低于 X 才提醒」的阈值**：那个 X 会变成又一个没人记得依据的魔数。
+  for (const line of budgetSummaryLines()) drifts.push(line);
 
   return drifts;
 }

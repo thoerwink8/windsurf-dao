@@ -596,6 +596,71 @@ console.log("\n=== per-provider 漂移那一行的措辞（末行 → 提醒行�
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是被宿主静默杀掉（issue #127）===");
+// **这一组验的是端到端那一半**：hook-budget 模块自己的算术由 tests/hook-budget.tests.js
+// 夹住，这里只夹「接线真的接上了」——预算收窄之后，报文里必须出现具名的「没跑」行，
+// 且进程必须**自己走完并退出 0**（而不是拖到宿主开刀）。
+//
+// 为什么非有这一组不可：模块单测全绿完全兼容「hook 压根没 require 它」。
+// 2026-08-02 本仓刚有过同型实证（hook 侧那个末行正则是独立第二实现，把 deny 分支
+// 整个删掉、provider-hooks-drift 那 54 条断言一条都没红）。
+{
+  const cwd = mkMetaRepo("budget-tight", [`${REGISTERED}.js`]);
+  // 条款闸那一路会**先查脚本在不在**，不在就走「脚本不在」那条早退路径、根本到不了预算判断。
+  // 所以这里放一个存在但永不被执行的空脚本 —— 要验的是预算把它拦在起跑前，
+  // 不是「文件缺失」这个另一件事。（若不放，本组会以「passed for the wrong reason」全绿。）
+  fs.mkdirSync(path.join(cwd, "ccswitch", "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"),
+    "# 夹具：预算够的话才会跑到这里\n", "utf8");
+
+  // ① 收窄到 1600 ms（扣掉 1500 ms 收尾余量后余量已 ≈0）⇒ 五道 spawn 类检查全部该被跳过
+  const tight = run(cwd, { DAO_HOOK_BUDGET_MS: "1600" });
+  const ct = ctx(tight);
+  check("预算收窄 → 报出具名的「没跑」行（不是静默少几行）",
+    /\*\*没跑\*\*/.test(ct), "ctx=" + ct.slice(0, 500));
+  check("「没跑」行明说这不是通过（本批全部意义所在）",
+    /不是「通过」/.test(ct) && /没测/.test(ct), "ctx=" + ct.slice(0, 500));
+  check("五道 spawn 类检查逐项点名（条款闸/死闸/字节预算/per-provider/memory）",
+    /条款库结构闸的 \d+\/\d+ 个被检文件[^\n]*\*\*没跑\*\*/.test(ct) && /死闸检测 \*\*没跑\*\*/.test(ct) &&
+    /always-on 字节预算闸 \*\*没跑\*\*/.test(ct) && /per-provider 漂移检查 \*\*没跑\*\*/.test(ct) &&
+    /memory 指针扫描 \*\*没跑\*\*/.test(ct), "ctx=" + ct.slice(0, 900));
+  check("预算收窄下仍自己退出 0（降级不是崩溃）", tight.code === 0, "code=" + tight.code);
+  check("汇总行报出跳过项数", /本次跳过 5 项/.test(ct), "ctx=" + ct.slice(0, 600));
+
+  // ② 反向语料：不收窄（走 fallback 的 10 s）⇒ 一条「没跑」都不许有。
+  //    只验①挡不住一个**恒报没跑**的实现，而那种实现会把每次会话的检查全废掉。
+  const loose = run(cwd);
+  const cl = ctx(loose);
+  check("反向：预算充足 → 零「没跑」行（钉住它真的在比余量，不是恒跳过）",
+    !/\*\*没跑\*\*/.test(cl), "ctx=" + cl.slice(0, 600));
+  check("反向：预算充足 → 汇总行报「跳过 0 项」", /本次跳过 0 项/.test(cl), "ctx=" + cl.slice(0, 600));
+  check("汇总行每次都打印余量数字（成本只增不减，增长必须看得见）",
+    /hook 墙钟预算/.test(cl) && /余量 -?\d+ ms/.test(cl), "ctx=" + cl.slice(0, 600));
+
+  // ③ 找不到自己的注册时必须**说出来**：假家目录里注册的是别的 hook 名。
+  //    「猜了一个总预算」与「读到了真的总预算」在报文上必须分得开。
+  check("注册读不到 → 报文明说「这个总预算是猜的」",
+    /总预算是猜的/.test(cl), "ctx=" + cl.slice(0, 700));
+
+  // ④ 收窄阀只准调小：给一个比真实注册大得多的值，不许把预算撑大。
+  //    否则这个环境变量就成了「让 hook 谎报余量」的后门，而谎报余量正是本批要治的病。
+  const huge = run(cwd, { DAO_HOOK_BUDGET_MS: "999000" });
+  const chu = ctx(huge);
+  check("DAO_HOOK_BUDGET_MS 只准调小：给 999000 仍按 10000 算（不是后门）",
+    /宿主给 10000 ms/.test(chu) && !/宿主给 999000 ms/.test(chu), "ctx=" + chu.slice(0, 600));
+}
+{
+  // ⑤ 作用域负控：普通项目（模式 B）不跑那五道 spawn 检查，也就不该出现预算汇总行。
+  //    把它印到每个项目里只是噪音，而噪音会训练人忽略整个 hook 的输出。
+  const cwd = mkproj("budget-scope", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+  });
+  check("负控：普通项目不打印墙钟预算行（只在模式 A 播报）",
+    !/hook 墙钟预算/.test(ctx(run(cwd))));
+}
+
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");
 {
   const r = spawnSync(process.execPath, [HOOK], {
