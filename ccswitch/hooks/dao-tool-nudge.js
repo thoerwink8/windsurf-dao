@@ -445,9 +445,12 @@ if (flows.has("pr-merge")) {
     "【dao PR 合并链】本次裸手跑了 gh pr merge。canonical 实现是 " +
     "`ccswitch/scripts/dao-pr-merge.ps1`(参数化 repo/验证命令/PR 号,先 -DryRun),它按序做完并逐步核验:" +
     "git fetch → 核 rev-parse origin/<主干> 真的动了 → merge 主干进本分支 → 在**合并后的树**上重跑验证 → " +
-    "gh pr merge --delete-branch → git fetch --prune → 实查 git ls-remote --heads origin <branch> 真的空了。" +
+    "gh pr merge --merge(**不带** --delete-branch) → 实查 gh pr view --json state 判合并成败(不看 gh 退出码) → " +
+    "git fetch --prune → git push origin --delete <branch> → 实查 git ls-remote --heads origin <branch> 真的空了。" +
     "本提醒是**事后**的(PostToolUse),PR 多半已经合了 ⇒ 现在至少补最后两步复核:" +
-    "①`--delete-branch` 在本地分支被 worktree 占用时**整体失败且错误只提本地**,远程可能还在,补 `git push origin --delete <branch>`;" +
+    "①你刚才那条若带了 `--delete-branch`:它在本地分支被 worktree 占用时**整体失败且错误只提本地**,远程可能还在," +
+    "补 `git push origin --delete <branch>`;更麻烦的是那个非零退出码**盖着两个动作**,别据它判「合并失败」——" +
+    "问 `gh pr view <n> --json state`(issue #114 实证:据退出码判失败会让整个清理一步都跑不到);" +
     "②预算型护栏(单文件 LOC/包体积/覆盖率下限)是按**和**判的而 PR 按**增量**审,`MERGEABLE` 只是语法层面的绿——" +
     "合并后的主干上重跑一次全套才算数。"
   );

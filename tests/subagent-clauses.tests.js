@@ -112,7 +112,13 @@ function fireRaw(stdin, opts = {}) {
   if (opts.max) env.DAO_SUBAGENT_CLAUSES_MAX = String(opts.max);
   if (opts.forceError) env.DAO_SUBAGENT_CLAUSES_FORCE_ERROR = opts.forceError;
   if (opts.clauseFile) env.DAO_CLAUSE_FILE = opts.clauseFile;
-  const r = spawnSync(process.execPath, [opts.script || HOOK], { input: stdin, encoding: "utf8", env });
+  // cwd **必须显式给**，不许继承调用者的（2026-08-04 实测事故，见 ④ 组开头那段注释）：
+  // stdin 解析不出来时 hook 拿不到输入里的 cwd，退到 process.cwd() 去探项目侧条款库，
+  // 于是「在哪个目录敲的命令」会改变断言的结果。默认钉在仓根；要验按 cwd 探到的那一态，
+  // 用 opts.spawnCwd 显式指一个。
+  const r = spawnSync(process.execPath, [opts.script || HOOK], {
+    input: stdin, encoding: "utf8", env, cwd: opts.spawnCwd || REPO,
+  });
   let out = {};
   try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
   const hs = out.hookSpecificOutput || {};
@@ -223,9 +229,31 @@ console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成�
 
 console.log("\n──── ④ fail-open：喂什么都不砖会话，且仍然留得下痕 ────");
 {
+  // ⚠ 本组的期望值依赖**进程 cwd**，这一格 2026-08-04 实测咬过一次：stdin 解析不出来时
+  //   hook 拿不到输入里的 cwd，退到 process.cwd() 去探项目侧条款库
+  //   （`docs/rules/dispatch-clauses.md` 等）。于是同一份代码 **在 dao 仓目录下全绿、
+  //   在某个自带那份文件的项目仓目录下红一条** —— 红绿取决于你在哪个目录敲的命令，
+  //   而失败信息里没有任何东西指向「cwd」。三处一起收口：①fireRaw 现在显式给 spawn 一个 cwd
+  //   ②scripts/run-tests.mjs 把 cwd 钉在仓根 ③这里把前提本身钉成断言。
+  const PROJECT_SIDE_CANDIDATES = ["docs/rules/dispatch-clauses.md", ".claude/rules/dispatch-clauses.md"];
+  check("前提：dao 仓自己没有项目侧条款库（哪天有了，下面那条该期望的就不是官侧档）",
+    PROJECT_SIDE_CANDIDATES.every((rel) => !fs.existsSync(path.join(REPO, rel))),
+    JSON.stringify(PROJECT_SIDE_CANDIDATES));
+
   const bad = fireRaw("这不是 JSON");
   check("stdin 不是 JSON → exit 0（SubagentStart 拦不了创建，砖掉的只会是这次注入）", bad.code === 0);
   check("stdin 不是 JSON → 仍注入签名 + 条款库指针", bad.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(bad.ctx));
+
+  // 正控（另一态）：cwd 里**有**项目侧条款库时，指针必须指那一份 —— 「先按 cwd 探项目侧、
+  // 探不到才退官侧档」是设计行为不是缺陷。只验退档那一态的话，这条探测被改成写死也照样全绿。
+  const fakeProj = path.join(TMP, "fake-project");
+  fs.mkdirSync(path.join(fakeProj, "docs", "rules"), { recursive: true });
+  fs.writeFileSync(path.join(fakeProj, "docs", "rules", "dispatch-clauses.md"), "# 假的项目侧条款库\n", "utf8");
+  const inProj = fireRaw("这不是 JSON", { spawnCwd: fakeProj });
+  check("fail-open 时按 cwd 探到项目侧条款库 ⇒ 指针指它，不再指官侧档（探测真的在跑）",
+    inProj.code === 0 && inProj.ctx.startsWith(SIG) &&
+      /docs[\\/]rules[\\/]dispatch-clauses\.md/.test(inProj.ctx) && !/dao-officer-clauses\.md/.test(inProj.ctx),
+    JSON.stringify(inProj.ctx.slice(0, 300)));
   check("stdin 不是 JSON → systemMessage 留痕（stderr+日志+systemMessage 三重）", /解析 stdin 失败/.test(bad.sys), JSON.stringify(bad.sys));
 
   const empty = fireRaw("");
