@@ -758,6 +758,140 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
 }
 
+console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合并前置）────");
+// ── 这一节是谁写的、为什么又单开一节 ────────────────────────────────────────
+// 上面三节依次是 #87 实现官 / #87 对抗官 / #112 实现官。本节是 **#117 的对抗验证官**写的。
+// 不合并进上一节，理由同前：语料**从哪来**是近似判据唯一站得住的地方，合并之后
+// 「谁挑的这条语料、他有没有动机挑好挑的」就分不开了。
+//
+// 本节的语料全部来自**对着 #112 那三格的边界现攻**，不是从真语料采的 —— 照直标。
+// 分四组：㈠#112 修好了但没断言的形态 ㈡⑩ 的归因判别 ㈢本轮新发现的漏报/误伤（登记，自失效）
+// ㈣🔴 本轮查出的**退化**（合并阻断项）。
+{
+  const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
+  const LIVEDIR = `${HOME}\\.claude`;
+  const LIVE = `${LIVEDIR}\\settings.json`;
+
+  // 本机 HOME 的 8.3 短名。**算出来而不是写死 `ADMINI~1`** —— 写死会让这一整组
+  // 在别的机器上悄悄退化成「测了个不含短名的普通路径」，而它照样全绿。
+  const SHORT_HOME = (() => {
+    const parts = HOME.split(/[\\/]/), leaf = parts.pop(), parent = parts.join("\\");
+    if (leaf.length <= 8) return null;
+    const cand = parent + "\\" + leaf.slice(0, 6).toUpperCase() + "~1";
+    try { return fs.realpathSync.native(cand).toLowerCase() === HOME.toLowerCase() ? cand : null; }
+    catch (_) { return null; }
+  })();
+  check("前置：本卷启用了 8.3 短名（关掉的话下面几组只是没测到，不是通过）",
+    SHORT_HOME !== null, `SHORT_HOME=${SHORT_HOME}`);
+
+  // ㈠ #112 真的修好了、但那一批没有断言的形态 ────────────────────────────────
+  // 头注 g2LongPath ㈢ 写着「文件名本身是短名（`SETTIN~1.JSON`）以外的形态都接得住」，
+  // 语气是**没接住文件名短名**。实测反过来：本卷上 settings.json 的真实短名是
+  // `SETTIN~1.JSO`（**扩展名截到 3 位**，头注写的 `.JSON` 是四位、根本不存在），
+  // 而因为那个文件**存在**，realpath 一步就把整条解开了 ⇒ 文件名短名同样被拦。
+  // ⇒ ⑨ 比它自己的文档更强，这一组把「更强」的那部分钉住，免得后人照头注去收窄它。
+  const EXTRA_BLOCK = SHORT_HOME ? [
+    ["⑨ 补·长目录 + **文件名** 8.3（`SETTIN~1.JSO`，本卷实测的真短名）", edit(`${LIVEDIR}\\SETTIN~1.JSO`)],
+    ["⑨ 补·目录与文件名**都是**短名", edit(`${SHORT_HOME}\\.claude\\SETTIN~1.JSO`)],
+    ["⑨ 补·settings.local.json 的短名 `SETTIN~2.JSO`", edit(`${LIVEDIR}\\SETTIN~2.JSO`)],
+    ["⑨ 补·8.3 短名 + NTFS 备用数据流（realpath 顺带剥掉 `::$DATA`）",
+      edit(`${SHORT_HOME}\\.claude\\settings.json::$DATA`)],
+  ] : [];
+  for (const [name, p] of EXTRA_BLOCK) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  for (const [name, p] of [
+    ["⑨ 补·`//./C:/…` 设备命名空间（与 `//?/` 同一格，`[?.]` 两个字符都收）",
+      edit("//./C:/Users/Administrator/.claude/settings.json")],
+    ["⑨ 补·Git Bash `/c//Users/…`（盘符转换后残留的重复斜杠，win32.resolve 折掉）",
+      edit("/c//Users/Administrator/.claude/settings.json")],
+    // ⑥ 把 `-lp` 收进源位参数，理由写的是「PowerShell 的 -LiteralPath 缩写」。
+    // **那个理由是错的**（见下面 ㈢ 的登记条），但这一格本身**歪打正着有真实召回**：
+    // GNU coreutils 的 `cp -l -p` 可以捆绑成 `cp -lp`，而 `-lp` 早就在 G2_VALUE_PARAM 里、
+    // 会吃掉后面那个 token ⇒ 改前只剩 1 个正参、撞早退**整条漏过**；⑥ 之后拦得下。
+    ["⑥ 补·GNU `cp -lp <源> <live>`（`-l -p` 捆绑，真实存在的 Unix 形态）",
+      bash(`cp -lp src.json "${LIVE}"`)],
+  ]) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  check("负控：GNU `cp -lp <live> /backup/`（源位是 live，备份是正路）→ exit 0",
+    gate(bash(`cp -lp "${LIVE}" /d/backup/`)).code === 0);
+
+  // ㈡ ⑩ 的归因判别 —— 光证「它漏」不够，要证「漏在 tokenizer 层」 ──────────────
+  // #112 判定 ⑩ 属 tokenizer 层，依据是「位置目标与具名目标同时中招」。那只排除了
+  // 「某一个分支的锅」，**没有排除「basename 展开那段的锅」**。下面这条单引号对照
+  // 才是决定性的：单引号里反斜杠**不转义** ⇒ 同一条命令、同一个分支、同一段展开，
+  // 仅仅把引号换掉就拦得住 ⇒ 差别只可能在**双引号的转义处理**上，即 g2Tokens。
+  const TRAILING_BS = [
+    ["⑩ 位置目标 + 尾**反**斜杠（双引号）", ps(`Copy-Item settings.json "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 具名目标 + 尾**反**斜杠（双引号）", ps(`Copy-Item settings.json -Destination "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 具名源 + 具名目标 + 尾**反**斜杠（⑥⑦ 都到齐了仍漏 ⇒ 不在分支层）",
+      ps(`Copy-Item -Path settings.json -Destination "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 判别对照·**单引号** + 尾反斜杠 ⇒ 拦得住（∴ 病在双引号转义 = g2Tokens）",
+      ps(`Copy-Item settings.json -Destination '$env:USERPROFILE\\.claude\\'`), 2],
+    ["⑩ 判别对照·尾**正**斜杠（tokenizer 不受影响）⇒ 拦得住",
+      ps(`Copy-Item settings.json -Destination "$env:USERPROFILE/.claude/"`), 2],
+  ];
+  for (const [name, p, want] of TRAILING_BS) {
+    check(`⑩ 归因：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
+  }
+
+  // ㈢ 本轮新发现的漏报 / 误伤（登记表，自失效）────────────────────────────────
+  // 与上面三节的登记表同一机制：**写的是当前实测值**，哪天有人修好了这条会红并点名，
+  // 逼他同批更新 hook 头注的格号清单。**登记 ≠ 认可**，只是让它别再隐形。
+  const LEDGER_117 = [
+    ["漏报·NTFS 备用数据流 `<live>::$DATA`（本轮实测：写它**确实改写原文件**，" +
+     "且 `existsSync`/`realpath` 都认；只有落 realpath 的短名路径顺带挡住了它）",
+      edit(`${LIVE}::$DATA`), 0],
+    ["漏报·ADS 经 shell 重定向", ps(`"x" > "$env:USERPROFILE\\.claude\\settings.json::$DATA"`), 0],
+    ["漏报·盘根绝对路径（无盘符）`/Users/…` —— Node 在 Windows 上把它解析成**当前盘**，" +
+     "cwd 落 C: 时本轮实测 `existsSync` 为真；g2Canon 的 posix 分支**刻意不补盘符**" +
+     "（怕在 POSIX 机器上凭空造盘符），代价就是这一格",
+      edit("/Users/Administrator/.claude/settings.json"), 0],
+    ["漏报·三斜杠 `///Users/…`（posix 分支要求 `(?!/)` ⇒ 落在两个分支之外；本轮实测同样开得开）",
+      edit("///Users/Administrator/.claude/settings.json"), 0],
+    ["误伤·`Rename-Item -Path <别处> settings.json` 且 cwd 恰在 `~/.claude` —— PowerShell 的 " +
+     "`-NewName` 相对**源目录**解析（本轮真机实跑确认），本闸按 cwd 解析 ⇒ 真实落点在别处却被拦。" +
+     "⚠ 全正参形态**改前就误伤**，⑥ 把它扩到了具名源形态",
+      ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 2],
+    ["形态不存在·PowerShell `Copy-Item -lp`：本轮 `Get-Command Copy-Item` 实测 `-LiteralPath` " +
+     "的唯一别名是 `PSPath`，`lp` 既非别名也非合法前缀缩写，实跑报 " +
+     "`A parameter cannot be found that matches parameter name 'lp'` ⇒ #112 那条同名正控" +
+     "**测的是一条跑不起来的命令**（拦它无害，但别把它算进 PowerShell 侧的覆盖面）",
+      ps(`Copy-Item -lp src.json "${LIVE}" -Force`), 2],
+  ];
+  for (const [name, p, want] of LEDGER_117) {
+    check(`登记表(#117)：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
+  }
+
+  // ㈣ 🔴 合并阻断项：`G2_LIVE_DIR` 没跟着候选一起归一 ────────────────────────
+  // 判据：`G2_LIVE_DIR = norm(path.join(HOME, ".claude")).toLowerCase()` —— **常量侧不过
+  // `g2Canon`**，而 #112 之后**候选侧一律过**。两侧归一到的深度不同了。
+  // `path.join` 能折 `.` / `..` / 重复分隔符 / 尾分隔符，**折不了 8.3 短名，也剥不掉 `//?/`**
+  // —— 而那两样恰恰是 `g2Canon` 新加的能力 ⇒ HOME 本身是这两种形态时，候选被归成长名、
+  // 常量还是短名，**两边永远对不上，整道闸对所有形态一起失明**（含 #87 那条绕过原文）。
+  // 🔴 **这是退化不是已知缺口**：同一 payload 在 #112 之前拦得住。
+  // 下面写的是**当前实测值**，修好之后这几条会红并点名 —— 那时把 0 改成 2 即可。
+  if (SHORT_HOME) {
+    const asShort = { USERPROFILE: SHORT_HOME };
+    const REG = [
+      ["Edit·短名 HOME 下写 live（候选归成长名，常量仍是短名）", edit(`${SHORT_HOME}\\.claude\\settings.json`)],
+      ["shell·#87 那条绕过原文", ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)],
+      ["bash·`~` 形态", bash("cp src.json ~/.claude/settings.json")],
+    ];
+    for (const [name, p] of REG) {
+      check(`🔴阻断项(#117)·USERPROFILE 是 8.3 短名时整闸失明：${name} → 当前 exit 0（应为 2）`,
+        gate(p, { env: asShort }).code === 0, `code=${gate(p, { env: asShort }).code}`);
+    }
+    check("对照：同一条 payload 在**真实 HOME** 下拦得住 ⇒ 上面三条是环境条件性的，不是恒失效",
+      gate(ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)).code === 2);
+  }
+
+  check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
+}
+
 console.log("\n──── G3 · 对外发布（⑤自主边界：不可逆 + 需用户在场）────");
 {
   const positives = [
@@ -1157,10 +1291,17 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
 
   // fail-open 路径：注入一个必抛的判定，断言"放行 + 大声喊"
   const boom = path.join(TMP, "mutant-throw.js");
-  fs.writeFileSync(boom, src.replace(
-    'if (!/^mcp__windows[-_]?mcp?[-_]*__/i.test(input.tool_name || "")) return null;',
-    'throw new Error("injected");'
-  ), "utf8");
+  // ⚠ 这一处此前是本文件 **12 个变异体构造点里唯一没有「靶点仍在」前置断言**的
+  //   （#117 对抗验证官的锚点审计捞出，源出 #103 那一路的普查）。
+  //   **它不会静默空转**——本轮实测：把 hook 里那一行做行为等价的改动（多一个空格）让字面串
+  //   失配 ⇒ 变异体 = 原文 ⇒ `CANARY["G3-publish"]` 被真 G3 拦下 ⇒ 下面两条当场红。
+  //   **但两条红的报文说的都是「fail-open 没生效」**，读的人会去查 fail-open 那条路，
+  //   而真正坏掉的是这个靶点 —— 归因指错方向，排查成本全落在下一个人身上。
+  //   故补这一条：它红的时候直说「靶点失配」。判据同上面各处（`split(from).length === 2`）。
+  const BOOM_ANCHOR = 'if (!/^mcp__windows[-_]?mcp?[-_]*__/i.test(input.tool_name || "")) return null;';
+  check("mutation 靶点在源码里唯一存在（fail-open 注入点）", src.split(BOOM_ANCHOR).length === 2,
+    `出现 ${src.split(BOOM_ANCHOR).length - 1} 次 —— 失配的话下面两条 fail-open 断言会红，但报文不会指向这里`);
+  fs.writeFileSync(boom, src.replace(BOOM_ANCHOR, 'throw new Error("injected");'), "utf8");
   const r = gate(CANARY["G3-publish"], { script: boom });
   check("fail-open：守卫自身抛异常 → exit 0（放行，不砖掉会话）", r.code === 0, `code=${r.code}`);
   check("fail-open 不静默：stderr 明说「本次放行」+ 指向 --selfcheck",
