@@ -67,7 +67,65 @@ const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 //
 // 所以降级不能靠「等某个子进程超时」（够不着），只能靠**自己看表**：预算见底就不起
 // 下一个子进程，并把「这一项没跑」明说出来 —— 那条路径在常路上，必然到得了。
-const budgetLib = require("../lib/hook-budget");
+//
+// 🔴 **这个 require 必须包起来，理由与下面 settings-drift / scaffold-manifest 那两处逐字相同**
+// （「加载失败必须响，不许静默吞」），但**代价比那两处高一个数量级**，2026-08-05 的对抗验证
+// 拿同目录、同故障、一带保护一不带的两臂量过：
+//   · `lib/settings-drift.js` 缺失（**有** try/catch）⇒ hook **exit 0**、送出 2208 字、
+//     另外六项照跑，并明说「✗ dao 配置漂移自检器加载失败：…」；
+//   · `lib/hook-budget.js` 缺失或语法错（**没有** try/catch）⇒ hook **exit 1**、
+//     **stdout 0 字节**、**七项检查一起消失** —— 逐字就是 issue #127 的原话，
+//     而它还是全文件**第一个** require，炸得最彻底。
+// ⇒ 这个 PR 为了防「整批静默消失」，差一点新开一条通向「整批静默消失」的路。
+//
+// **退化实现为什么不能像那两处一样「只回一行错误」就算完**：那两处的产物是**报文行**，
+// 缺了只是少几行；这一处的产物是**每个子进程的 timeout**，缺了就等于回到 issue #127 的原状
+// —— 内层常量全部够不着，一次慢盘就能把七项检查连同报文一起送进宿主的刀口。
+// 故这里给一个**保守到底**的最小预算：按本仓当前注册的 10 s 算、起点取进程启动时刻。
+// **它是真模块的一份笨副本，这个重复是刻意的**：它只需要「安全」，不需要「准确」——
+// 真模块将来更聪明了而这份没跟上，后果只是这条**只在真模块已经坏掉时才走**的路更保守一点，
+// 方向仍在安全侧。回归网见 tests/dao-scaffold-check.tests.js「lib 坏掉」那三臂。
+function degradedBudgetLib() {
+  const FALLBACK_MS = 10000, RESERVE_MS = 1500;
+  return {
+    resolveRegisteredTimeoutMs() {
+      return { ms: FALLBACK_MS, source: "fallback", matched: 0,
+        note: "墙钟预算模块加载失败 ⇒ 退化按保守缺省 " + FALLBACK_MS + " ms 算" };
+    },
+    createBudget(o) {
+      const totalMs = Number(o && o.totalMs) > 0 ? Number(o.totalMs) : FALLBACK_MS;
+      const startedAt = Date.now() - Math.round(process.uptime() * 1000);
+      const deadlineAt = startedAt + totalMs - RESERVE_MS;
+      const skipped = [];
+      const api = {
+        totalMs, reserveMs: RESERVE_MS, startedAt, deadlineAt,
+        effectiveMs: deadlineAt - startedAt, skipped,
+        left() { return deadlineAt - Date.now(); },
+        elapsed() { return Date.now() - startedAt; },
+        canAfford(minMs) { return api.left() >= Number(minMs || 0); },
+        capFor(wantMs) { return Math.max(1, Math.min(Number(wantMs) || 0, api.left())); },
+        skip(what, minMs) {
+          skipped.push(what);
+          return "⏱ " + what + " **没跑**：宿主预算只剩 " + api.left() + " ms，起它至少要 " +
+            minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）";
+        },
+        unreachableConstants(pairs) {
+          const bad = [];
+          for (const [name, ms] of pairs || []) if (Number(ms) > api.effectiveMs) bad.push(name + "=" + ms + "ms");
+          return bad;
+        },
+      };
+      return api;
+    },
+  };
+}
+let budgetLib, BUDGET_LIB_ERROR = "";
+try {
+  budgetLib = require("../lib/hook-budget");
+} catch (e) {
+  BUDGET_LIB_ERROR = e && e.message ? e.message : String(e);
+  budgetLib = degradedBudgetLib();
+}
 const HOST_BUDGET = budgetLib.resolveRegisteredTimeoutMs({
   hookFile: __filename,
   home: homeDir,
@@ -97,9 +155,50 @@ const NODE_MIN_SLICE_MS = 600;
 // git 调用，各 5 秒 ⇒ 一个卡住的 git（锁文件 / 网络盘 / 慢仓）就能单独吃掉 25 秒，
 // 是宿主 10 秒预算的两倍半。它们同样走 capFor —— **不因为「平时很快」就放过**，
 // 那正是本 issue 一开始被记成「反正现在很快」的那个错。
-// **顺带它是 unreachableConstants 的一个活的负控**：5000 < 10000，每次运行都在证明
+// **顺带它是 unreachableConstants 的一个活的负控**：5000 < 8500，每次运行都在证明
 // 那个自检不是「凡常量都报」。
 const GIT_TIMEOUT_MS = 5000;
+
+// 起一个 git 子进程「至少」要留多少余量。调参三问：①改小 → 起一个必然被 SIGTERM 的 git，
+// 白吃余量；②当前值够不够 —— 本机 git 类调用实测几十毫秒，200 是它的数倍；
+// ③再大一点代价是什么 —— 余量其实还够时提前放弃，制造假的「没跑」。
+const GIT_MIN_SLICE_MS = 200;
+
+// ── git 子进程的统一入口（2026-08-05 · 对抗验证 A3）────────────────────────────
+// **它存在的唯一理由是不让「没跑」变成静默。** 本文件有 5 处 git 调用，原先各自
+// `catch (_) {}`：预算见底时 capFor 会给出 1 ms、子进程立刻被 SIGTERM，而那个异常被吞掉
+// ⇒ 报文里那一行（例如「⬆ windsurf-dao 领先 origin 3 个提交」）**整行消失，全文没有任何
+// 一处说 git 没跑**。五道 spawn 类检查会喊，这五处不会 —— **那是本批自己新开的一个静默面，
+// 与 issue #127 要治的病同型**（「零次」与「这条路不存在」必须分得开）。
+//
+// **只有「被预算夹死」这一类要出声**，判据取 `code === "ETIMEDOUT"`（本机实测：超时致死是
+// `signal="SIGTERM" code="ETIMEDOUT"`；而命令不存在是 `code="ENOENT" signal=null`、
+// 非仓库目录是 `status=128 signal=null` —— 两者都不该报）。git 本身失败在常路上是正常结果
+// （沙箱里的垃圾 .git、没有 origin、裸目录），报出来只会变噪音，那正是原先 `catch (_) {}` 的本意。
+const gitSkips = [];
+function gitOut(args, what) {
+  if (!BUDGET.canAfford(GIT_MIN_SLICE_MS)) { gitSkips.push(what); return null; }
+  try {
+    return execFileSync("git", args, {
+      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS), windowsHide: true,
+    }).trim();
+  } catch (e) {
+    if (e && (e.code === "ETIMEDOUT" || e.signal === "SIGTERM")) gitSkips.push(what);
+    return null;
+  }
+}
+function gitSkipLines() {
+  if (!gitSkips.length) return [];
+  return [BUDGET.skip("git 状态查询（" + gitSkips.join("、") + "）", GIT_MIN_SLICE_MS)];
+}
+
+// 墙钟预算模块加载失败时的那一行。**报文里必须有它**，否则「退化跑了」与「正常跑了」
+// 在唯一的消费方（agent 的上下文）里又一次不可区分 —— 那就是本批在治的病本身。
+function budgetLibErrorLines() {
+  if (!BUDGET_LIB_ERROR) return [];
+  return ["✗ 墙钟预算模块加载失败：" + BUDGET_LIB_ERROR + "（ccswitch/lib/hook-budget.js）" +
+    " —— 已退化为保守内置预算（" + BUDGET.totalMs + " ms），其余检查照跑"];
+}
 
 // ── dao 配置自检聚合（新增）──────────────────────────────────────────────────
 // live ~/.claude/settings.json ↔ config-sync/common/settings.json 双向漂移 + dao-rule-echo 接线心跳。
@@ -603,8 +702,15 @@ function budgetSummaryLines() {
     tail.push("⚠ **这个总预算是猜的**（没在 settings.json 里找到本 hook 的注册）—— 真实 timeout 可能更大也可能更小，" +
       "猜小只会提前降级并明说，猜大会直接撞刀，故按小的猜");
   }
+  if (HOST_BUDGET.source === "registered-invalid") {
+    tail.push("⚠ **注册里的 timeout 写坏了**，已按保守缺省算（详见上面的来源说明）—— " +
+      "不按宿主缺省算是刻意的：一个已知写坏的值不该落到整组假设里最乐观的那一个上");
+  }
   if (overBudget.length) {
-    tail.push("内层超时常量 " + overBudget.join("、") + " 都大于总预算 ⇒ 它们是**上限不是承诺**，" +
+    // 门限是**有效截止线**（总预算 - 收尾余量），不是总预算本身：capFor 能给出的上限就是前者。
+    // 把这个数原样打进报文，读者才复核得了「为什么 30000 在 30 秒预算下仍算够不着」。
+    tail.push("内层超时常量 " + overBudget.join("、") + " 都大于**有效截止线 " + BUDGET.effectiveMs +
+      " ms**（总预算 " + BUDGET.totalMs + " - 收尾余量 " + BUDGET.reserveMs + "）⇒ 它们是**上限不是承诺**，" +
       "真正生效的是 capFor() 夹出来的剩余预算（issue #127 治的就是这个错觉）");
   }
   return tail.length ? [line + "\n  " + tail.join("\n  ")] : [line];
@@ -761,32 +867,26 @@ function daoSyncLines() {
   // + ${HOME}/${PROJECT_ROOT} 占位符），与 ~/.claude/settings.json 结构完全不同，
   // simpleHash 比较永远不同 → 假阳性。git 状态检查已覆盖漂移检测。
 
-  // 3. windsurf-dao 未提交改动
-  try {
-    const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
-      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
-    }).trim();
+  // 3. windsurf-dao 未提交改动（走 gitOut：预算夹死时会出声，不再静默少一行）
+  {
+    const status = gitOut(["-C", daoRoot, "status", "--porcelain"], "未提交改动");
     if (status) {
       const changedCount = status.split(/\r?\n/).length;
       drifts.push("⬆ windsurf-dao 有 " + changedCount + " 个未提交改动 → 考虑提交并上行同步");
     }
-  } catch (_) {}
+  }
 
   // 5. windsurf-dao 落后 origin（用 last fetch 数据，不联网）
-  try {
-    const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
-      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
-    }).trim();
-    if (parseInt(behind, 10) > 0) {
+  {
+    const behind = gitOut(["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], "落后 origin");
+    if (behind !== null && parseInt(behind, 10) > 0) {
       drifts.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交 → 运行 dao.bat 下行同步");
     }
-    const ahead = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "origin/master..HEAD"], {
-      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
-    }).trim();
-    if (parseInt(ahead, 10) > 0) {
+    const ahead = gitOut(["-C", daoRoot, "rev-list", "--count", "origin/master..HEAD"], "领先 origin");
+    if (ahead !== null && parseInt(ahead, 10) > 0) {
       drifts.push("⬆ windsurf-dao 领先 origin " + ahead + " 个提交 → 考虑 git push 或 dao.bat --direction=up");
     }
-  } catch (_) {}
+  }
 
   // 6. live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）
   for (const line of selfCheckLines()) drifts.push(line);
@@ -819,6 +919,11 @@ function daoSyncLines() {
   //     带条款的 .md 就多一次 PowerShell 冷起），而增长是无声的 —— 没人看得见「又慢了
   //     600 ms」，直到某天整个 hook 连同全部检查一起被宿主静默杀掉。
   //     **刻意不设「余量低于 X 才提醒」的阈值**：那个 X 会变成又一个没人记得依据的魔数。
+  //     ⚠ 三行的次序是有意的：**先报「谁没跑」，再报余量数字**（gitSkipLines 必须排在
+  //     budgetSummaryLines 之前 —— 后者要打印 `BUDGET.skipped.length`，而 git 那一笔
+  //     是在前面记进去的，顺序颠倒会让汇总行少数一项）。
+  for (const line of budgetLibErrorLines()) drifts.push(line);
+  for (const line of gitSkipLines()) drifts.push(line);
   for (const line of budgetSummaryLines()) drifts.push(line);
 
   return drifts;
@@ -956,25 +1061,17 @@ function checkDaoDrift() {
 
     // settings.json 快照 vs 部署比较已移除（快照是 cc-switch DB 格式，结构不同导致假阳性）
 
-    // windsurf-dao 未提交
-    try {
-      const status = execFileSync("git", ["-C", daoRoot, "status", "--porcelain"], {
-        encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
-      }).trim();
-      if (status) {
-        driftItems.push("⬆ windsurf-dao 有未提交改动");
-      }
-    } catch (_) {}
+    // windsurf-dao 未提交（走 gitOut，理由同模式 A 那三处）
+    const status = gitOut(["-C", daoRoot, "status", "--porcelain"], "未提交改动");
+    if (status) {
+      driftItems.push("⬆ windsurf-dao 有未提交改动");
+    }
 
     // windsurf-dao 落后 origin
-    try {
-      const behind = execFileSync("git", ["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], {
-        encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS)
-      }).trim();
-      if (parseInt(behind, 10) > 0) {
-        driftItems.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交");
-      }
-    } catch (_) {}
+    const behind = gitOut(["-C", daoRoot, "rev-list", "--count", "HEAD..origin/master"], "落后 origin");
+    if (behind !== null && parseInt(behind, 10) > 0) {
+      driftItems.push("⬇ windsurf-dao 落后 origin " + behind + " 个提交");
+    }
 
     if (driftItems.length > 0) {
       // 不单独 inject（会终止），而是追加到 issues 里一起报
@@ -985,4 +1082,10 @@ function checkDaoDrift() {
   // live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）。
   // 放在上面的 try/catch 之外：那个 catch 会吞掉一切，自检结果不能被它吞。
   for (const line of selfCheckLines()) issues.push("dao 配置自检：" + line);
+
+  // 墙钟预算模块加载失败 / git 被预算夹死 —— 这两件在模式 B 同样会发生（上面那两处
+  // git 调用就走预算），而模式 B **刻意不打印常态余量行**（那只是噪音）。
+  // ⇒ 常态那一行不印，**出事那两行必须印**：否则模式 B 会重演本批要治的病。
+  for (const line of budgetLibErrorLines()) issues.push(line);
+  for (const line of gitSkipLines()) issues.push(line);
 }
