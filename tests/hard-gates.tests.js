@@ -1301,14 +1301,43 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
       return mp;
     }
 
+    // 🔴 **本节的 mutation 靶 2026-08-05 整组换过一次，作废的原文与换靶理由照录**：
+    //   上一版打的是 `Atomics.wait` / `G2_REALPATH_WORKER_SRC` 的两层 catch —— 那套机制
+    //   被 PR #145 对抗验证官否掉了（worker 卡在**内核态**时 `process.exit` 要等那条线程
+    //   从 syscall 回来 ⇒ **进程寿命 21100 ms，与改造前没差别**，而宿主杀的是进程）。
+    //   换成子进程之后那四个锚点全部消失，**这张自失效登记表当场四条一起红并点名**
+    //   （`命中 0 次`）—— 这是它在本仓的第六次真实触发，也是唯一一次「机制被整体换掉」。
+    //   ⇒ 靶跟着机制走，不跟着上一版的形状走。
+
     // ── 三形态打「那个界」本身 ──────────────────────────────────────────────
-    // 打掉界 ⇒ 主线程不再等 worker ⇒ 消息没到 ⇒ 一律降级 ⇒ 8.3 那一格全线失明。
-    mut133("①移除·主线程不再等 worker（Atomics.wait 整句删掉）",
-      /^    Atomics\.wait\(flag, 0, 0, callMs\); {3}\/\/ ← 界在这里，由主线程自己计时$/m, "",
+    // ⚠ **这个界的可观测面与 worker 版不同，靶要跟着换**：worker 版里 `Atomics.wait` 一删，
+    //   消息就没到 ⇒ 正常路径立刻退化，单删就看得见。子进程版里 `timeout` 一删，
+    //   **正常路径照样正常**（子进程本来就会按时返回）—— 删掉界在好天气里是**无症状的**。
+    //   ⇒ 故 ①② 必须与「把界收紧到 1 ms」**联动**才看得见：界收紧后本该一律降级（0），
+    //   若此时删掉/停用 `timeout` 那一句，判决就**翻回 2** —— 说明真正在执行那个界的就是它。
+    //   这正是「一条断言要断言你真正用的那个表达式」：单独删 `timeout` 什么都测不出来。
+    const RE_CALL1 = /^const G2_REALPATH_CALL_MS = 800;$/m;
+    const TO_CALL1 = "const G2_REALPATH_CALL_MS = 1;";
+    mut133("①移除·把 timeout 那一句整个删掉（联动：界已收紧到 1ms）",
+      /^      timeout: callMs,$/m, "",
+      [["候选短名·文件不存在", P_MISSING, 2, 2], ["候选短名·文件存在", P_EXISTS, 2, 2]],
+      { also: [[RE_CALL1, TO_CALL1]] });
+    mut133("②留字面不执行·timeout 还在，只是喂它一个永不触发的值（联动：界已收紧到 1ms）",
+      /^      timeout: callMs,$/m, "      timeout: undefined,",
+      [["候选短名·文件不存在", P_MISSING, 2, 2], ["候选短名·文件存在", P_EXISTS, 2, 2]],
+      { also: [[RE_CALL1, TO_CALL1]] });
+    // ③「结果不被消费」打在**子进程结果的消费点**上：算了、也回来了，但不拿它当结果。
+    //    与下面记忆化那条 ③ 的差别：这条**预期翻得动**（它是判据链上的一环），
+    //    记忆化那条预期翻不动（纯优化）。两条都留着，因为它们钉的是两句不同的话。
+    mut133("③结果不被消费·子进程结果解析出来了但不返回（改成恒 null ⇒ 一律 fail-open）",
+      /^    return parsed;$/m, "    return null;",
       [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
-    mut133("②留字面不执行·Atomics.wait 还在，只是永不执行",
-      /^    Atomics\.wait\(flag, 0, 0, callMs\); {3}\/\/ ← 界在这里，由主线程自己计时$/m,
-      "    if (false) Atomics.wait(flag, 0, 0, callMs);",
+    // argv 语义那一格：`node -e SRC t1 t2` 的 argv 里**没有脚本路径**，所以是 slice(1)。
+    // 这条钉的是一个**我实测过才敢写**的事实（照 CJS 习惯猜会写成 slice(2)）——
+    // 写错了不会报错，只会静默丢掉第一个目标 ⇒ 整条路径解不开、退到目录级或全丢。
+    mut133("边界·把子进程的 argv.slice(1) 写成 slice(2)（照 CJS 习惯猜就会这么写）",
+      /^  for \(const t of process\.argv\.slice\(1\)\) \{$/m,
+      "  for (const t of process.argv.slice(2)) {",
       [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
     // ③「结果不被消费」打在**记忆化的写入**上：算了、也存了，但下次不读它。
     //    这一条是**纯优化**，故预期**翻不动** —— 阴性结果照直钉住（官抗节：差额为零也是结论）。
@@ -1335,44 +1364,48 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
       }
     }
 
-    // ── worker 内两层 catch：**它们是「主线程收不到 worker 死讯」这件事的唯一防线** ──
-    // 主线程此刻阻塞在 Atomics.wait 上、没有事件循环 ⇒ 收不到 worker 的 error/exit 事件
-    // ⇒ **worker 悄悄崩掉与 worker 真卡住，在主线程看来完全一样：都是白等满一个超时。**
+    // ── 子进程内的 per-target catch，与父进程侧的「崩了 vs 超时」分诊 ──────────
+    // ⚠ **与 worker 版相比，这里的可观测面变好了，值得单记**：worker 版里主线程阻塞在
+    //   `Atomics.wait` 上、没有事件循环 ⇒ 收不到 worker 的死讯 ⇒ **崩掉与卡住不可区分**，
+    //   两者都表现为白等满一个超时，所以那一版只能用**耗时**去测外层 catch。
+    //   子进程版里父进程拿得到子进程的 stdout 与退出码 ⇒ 崩掉是「stdout 不是合法 JSON」、
+    //   卡住是 `spawnSync` 报 ETIMEDOUT，**两者可区分** ⇒ 可以直接用**判决 + 自陈文本**测，
+    //   不必再靠耗时哨兵。**换机制顺带换掉了一条脆弱的断言**，这一格是净收益。
     {
-      const RE_INNER = /^  try \{ out\.push\(fs\.realpathSync\.native\(t\)\); \} catch \(_\) \{ out\.push\(null\); \}$/m;
+      const RE_INNER = /^    try \{ out\.push\(fs\.realpathSync\.native\(t\)\); \} catch \(_\) \{ out\.push\(null\); \}$/m;
       // per-target catch 承重面**只有一格**：文件还不存在 ⇒ 必须退到目录级才归得了一
       // （Write 新建 settings.json 正是这一形态）。文件存在那一格翻不动 —— 照直钉住。
-      mut133("worker·去掉 per-target catch ⇒ 目录级回退连带消失",
-        RE_INNER, "  out.push(fs.realpathSync.native(t));",
+      mut133("子进程·去掉 per-target catch ⇒ 目录级回退连带消失",
+        RE_INNER, "    out.push(fs.realpathSync.native(t));",
         [["文件不存在（承重，靠目录级回退）", P_MISSING, 2, 0],
          ["文件存在（整条一步解开，用不上回退 ⇒ 阴性，差额为零也是结论）", P_EXISTS, 2, 2]]);
 
-      // 外层兜底 catch：承重面是**耗时**不是判决 —— 两层 catch 都没了，worker 顶层抛异常、
-      // 永不 postMessage ⇒ 主线程白等满 G2_REALPATH_CALL_MS。**拿退出码测它会得到
-      // 一条永远为真的断言**（判决那一半由语法层顶着），故这条只能用耗时测。
-      const RE_OUTER = /^\} catch \(_\) \{ \/\* 整体崩了也要把已有结果送回去，不能让主线程白等满一个超时 \*\/ \}$/m;
-      const nOuter = (src5.match(new RegExp(RE_OUTER.source, "gm")) || []).length;
-      check("mutation 锚点在源码里恰好命中 1 次（worker 外层兜底 catch）", nOuter === 1, `命中 ${nOuter} 次`);
-      if (nOuter === 1) {
-        const mp = path.join(TMP, "mut133-worker-nocatch-both.js");
-        fs.writeFileSync(mp, src5.replace(RE_INNER, () => "  out.push(fs.realpathSync.native(t));")
-                                 .replace(RE_OUTER, () => "}"), "utf8");
-        const t0 = Date.now(); const a = gate(P_MISSING, { env: asLong }); const aMs = Date.now() - t0;
-        const t1 = Date.now(); const b = gate(P_MISSING, { script: mp, env: asLong }); const bMs = Date.now() - t1;
-        check("worker·两层 catch 都去掉 ⇒ 主线程白等满一个超时（耗时差 > 300ms）",
-          bMs - aMs > 300, `real=${aMs}ms mut=${bMs}ms`);
-        // 阈值 300 ms 的两侧余量：真文件侧本机实测约 60 ms、改坏侧约 844 ms（= 800 界 + 启动），
-        // 两边都留了两倍以上，不贴着任一侧取（官通节「哨兵阈值两侧都留余量」）。
-        check("worker·并且它走的是**降级**那条路（不是 fail-open 崩溃）",
-          /有界 realpath \*\*没跑\*\*/.test(b.err) && !/守卫自身出错/.test(b.err), b.err.slice(0, 200));
-        // 🔴 **这一条我第一版写反了，留档**：原文断言 `a===2 && b===2`（「语法层仍在顶着」），
-        //   实测 `b===0`。**错在我把上一个夹具的观察搬了过来** —— 那个夹具 HOME 与候选
-        //   写的是同一个短名串，语法层直接命中，所以判决确实不动；而本节的夹具刻意让两侧
-        //   写法不同（HOME 长名 · 候选短名），语法层结构上不可能命中，判决全靠 realpath 层。
-        //   ⇒ **同一句「语法层顶得住」在两个夹具上一真一假**，而我是照着记忆写的期望值。
-        //   这正是本批开工时给自己立的第三条：每条断言之前先问「这个期望值是量出来的还是想出来的」。
-        check("worker·两层 catch 都没了 ⇒ 不只是慢，判决本身也退化成放行（realpath 层是唯一防线）",
-          a.code === 2 && b.code === 0, `real=${a.code} mut=${b.code}`);
+      // 父进程侧的分诊：`if (r.error)` 那一支。去掉它 ⇒ 超时之后不再走「超时」自陈，
+      // 而是掉进下面的 JSON 解析失败 ⇒ **判决仍是降级（0），但自陈的话变了**。
+      // ⇒ 这条**不能只用退出码测**（两边都是 0，会得到一条永远为真的断言）——
+      //    判别力全在那句自陈上，故断言文本。这与上面 ①② 是同一个教训的另一面：
+      //    先问「这条断言真正在看的是哪个可观测量」。
+      {
+        const RE_ERRBRANCH = /^    if \(r\.error\) \{$/m;
+        const n = (src5.match(new RegExp(RE_ERRBRANCH.source, "gm")) || []).length;
+        check("mutation 锚点在源码里恰好命中 1 次（父进程侧「超时 vs 崩了」分诊）", n === 1, `命中 ${n} 次`);
+        if (n === 1) {
+          const mp = path.join(TMP, "mut133-no-error-triage.js");
+          fs.writeFileSync(mp, src5.replace(RE_ERRBRANCH, () => "    if (false) {")
+                                   .replace(RE_CALL1, () => TO_CALL1), "utf8");
+          const real = gate(P_MISSING, { script: (() => {           // 对照组：只收紧界，不动分诊
+            const p2 = path.join(TMP, "mut133-tighten-only.js");
+            fs.writeFileSync(p2, src5.replace(RE_CALL1, () => TO_CALL1), "utf8");
+            return p2;
+          })(), env: asLong });
+          const mut = gate(P_MISSING, { script: mp, env: asLong });
+          check("子进程·两边都降级（判决这一层看不出差别 —— 所以不能只用退出码测它）",
+            real.code === 0 && mut.code === 0, `real=${real.code} mut=${mut.code}`);
+          check("子进程·分诊在 ⇒ 自陈说的是「超时/断连的网络盘」",
+            /超过 \d+ ms 未返回/.test(real.err) && /断连的网络盘/.test(real.err), real.err.slice(0, 200));
+          check("子进程·分诊被停用 ⇒ 自陈退化成「没给出可解析的结果」（同一个病，说错了原因）",
+            /没给出可解析的结果/.test(mut.err) && !/超过 \d+ ms 未返回/.test(mut.err), mut.err.slice(0, 200));
+        }
       }
     }
 
@@ -1707,6 +1740,48 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
     check("判别力·合成串在源码里是拼出来的，本身不自匹配（否则上一条又会把自己数进去）",
       (SYNTH_TWIN.match(RE_EXIT) || []).length === 1 && n === 1,
       `合成串自身命中 ${(SYNTH_TWIN.match(RE_EXIT) || []).length}、源码命中 ${n}`);
+
+    // 🔴 **头牌那条断言在一种改坏形态下会自己顶上来，照记**（PR #145 对抗验证官实测）：
+    //   他把 `RE_EXIT` 换成 `/ZZZ_NEVER_MATCHES_ZZZ/g` 之后，**头牌 PASS 了** ——
+    //   因为那个新正则**匹配到了它自己那一行正则字面量**，`n` 照样是 1。
+    //   ⇒ 真正在守这件事的是上面那两条判别力断言，**不是头牌**。
+    //   **哪天有人嫌它们啰嗦而删掉，头牌会在多种改坏形态下静静地绿着。** 这三条是一组，别拆。
+  }
+
+  // ── #129·那半个修复本身要有断言守着（PR #145 对抗验证官带账项）─────────────
+  // 🔴 **对抗官把三条 mutation 打下来，511 条断言全绿零 FAIL**：摘掉 `spawnSync` 的 cwd /
+  //   摘掉 payload 里的 cwd / 摘掉 `DAO_TOOL_NUDGE_STATE`，**回归网一声不响** ——
+  //   把 #129 修的东西整个撤掉都没人知道。
+  // **为什么那三条 canary 断言（canary 没动 / 沙箱顶层没多文件）挡不住**：cwd 被摘掉之后，
+  //   脏东西落在**真仓**而不是沙箱里，而**没有任何断言在看真仓** —— 沙箱当然还是干净的。
+  //   这是「零检出 ≠ 零存在」的又一形态：**断言看的地方，恰恰是脏东西离开的地方。**
+  // ⇒ 补一组**文本**断言，直接钉住那三样东西还在（与「出口恰好 1 处」同型）。
+  //   眼下 `dao-tool-nudge.js` 的 `_tmp/` 扫描面在 master 上还不存在，所以这不是在止血；
+  //   **它是给 #108 落地那一天准备的** —— 那一刻这三条 mutation 就是三个真缺陷。
+  {
+    const selfSrc = fs.readFileSync(__filename, "utf8");
+    // 只取 nudgeRaw 那个函数体，避免把别处同名的东西数进来（检查器别扫自己扫不该扫的面）。
+    const body = (selfSrc.match(/function nudgeRaw\([\s\S]*?\n\}/) || [""])[0];
+    check("#129·守护：nudgeRaw 函数体真的被切出来了（切不出来下面三条就是恒真的废话）",
+      body.length > 100 && /spawnSync/.test(body), `切出 ${body.length} 字节`);
+    const guards = [
+      ["payload 里带 cwd（hook 判据读的是这个）", /JSON\.stringify\(\{[^}]*\bcwd: NUDGE_SANDBOX/],
+      ["spawnSync 带 cwd（hook 里任何 process.cwd\\(\\) 兜底读这个）", /^\s*cwd: NUDGE_SANDBOX,/m],
+      ["去重表被 DAO_TOOL_NUDGE_STATE 引开（它锚在 hook 自己的仓根，cwd 管不着）", /DAO_TOOL_NUDGE_STATE: NUDGE_STATE/],
+    ];
+    for (const [name, re] of guards) {
+      check(`#129·守护：${name}`, re.test(body), `在 nudgeRaw 函数体里没找到 ${re}`);
+    }
+    // 判别力：逐条把它从副本里摘掉，对应断言必须变红。**没有这一步，上面三条与
+    // 「正则写错了永远匹配不到」在全绿输出里长得一模一样** —— 而那正是本轮被逮住的病。
+    let killed = 0;
+    for (const [name, re] of guards) {
+      const stripped = body.replace(re, "");
+      if (stripped !== body && !re.test(stripped)) killed++;
+      else console.log(`  （判别力探针：摘掉「${name}」之后断言仍为真 ⇒ 该条无判别力）`);
+    }
+    check("判别力·三条守护逐条摘掉后都真的会红（不是三条恒真的断言）",
+      killed === guards.length, `${killed}/${guards.length} 条可被证伪`);
   }
 }
 

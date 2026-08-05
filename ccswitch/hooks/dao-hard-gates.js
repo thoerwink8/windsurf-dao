@@ -174,10 +174,14 @@
 //       `timeout: 10` ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
 //       **第二轮做的（收窄，仍在）**：零 I/O 快筛（`g2IsLive` 按文件名尾巴、`g2IsLiveDir`
 //       按 `/.claude` 尾巴）⇒ 只有尾巴已经长得像 live 的路径才可能走到那层 I/O。
-//       **#133 做的（根治）**：那次 I/O 移进一个 worker，界由**主线程自己**的 `Atomics.wait`
-//       计时 ⇒ 被测方卡不卡住都不影响主线程按时回来。判据、为什么不用子进程、调参三问、
-//       以及**没测到的那一半**（本机无断连映射盘 ⇒「内核态 SMB 阻塞」仍是读码结论而非实测）
-//       全在 `g2RealpathBounded` 头注，**本格不复述**。
+//       **#133 做的（根治）**：那次 I/O 移进一个**子进程**（`spawnSync{timeout}`）⇒
+//       它卡不卡住都不影响**本进程按时退出**，而宿主杀的是进程。判据、调参三问、
+//       本方案自己的代价（孤儿进程），以及**仍未实测的那一格**（UNC 已实测阻塞，
+//       盘符形态的断连映射盘本机造不出）全在 `g2RealpathBounded` 头注，**本格不复述**。
+//       🔴 **本格 2026-08-05 二次订正**：上一版这里写的是「移进一个 worker，界由主线程自己的
+//       `Atomics.wait` 计时」——**那个方案被 PR #145 对抗验证官否掉了**：worker 卡在内核态时
+//       `process.exit()` 要等那条线程从 syscall 回来，**进程寿命与改造前没差别**。
+//       「主线程按时回来」与「进程按时退出」是两个量，而只有后者是宿主在看的那个。
 //       ⚠️ **别把「已根治」读成「不会再降级」**：拿不到结果时按原样比（fail-open），
 //       那一次调用里 8.3 短名 / junction 那层归一没生效 ⇒ 对那类路径退回 #112 之前的射程。
 //       降级**每次都在 stderr 自陈**，且 `--selfcheck` 会真跑一次把「这套外壳还转得动」摆出来。
@@ -550,20 +554,30 @@ const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
 //   ⚠️ **这一段原先写的「没解决的那一半」已由 issue #133 解掉（2026-08-05），作废原文照录**：
 //     ~~第二层真被触发时仍然可能卡住，且 `try/catch` 依旧接不住。要彻底解只有把 I/O 移出
 //     同步路径（子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动，不在本批。~~
-//     现在走的是第一条路的变体：**worker + `Atomics.wait`，界由主线程自己计时**（不是子进程 ——
-//     子进程那条路的保证依赖「卡住的那一方能被杀掉」，而那正是本病的病因）。
-//     正文在 `g2RealpathBounded` 头注，**此处不复述**；仍未实测的那一格（内核态 SMB 阻塞）
-//     也记在那里，别把「已解」读成「已在真网络盘上验过」。
+//     现在走的是**子进程**那条路（`spawnSync{timeout}`）。判据、被否掉的 worker 方案错在哪、
+//     以及本方案自己的代价（孤儿进程）全在 `g2RealpathBounded` 头注，**此处不复述**。
 //   🔴 **本行 2026-08-05 订正，作废的原文照录**：~~已登记（回归网 `_tmp` 无关，条目在
 //     hard-gates 登记表）~~ —— **那是一句假话**。第三轮对抗验证官把两张登记表逐条读完 +
 //     全仓 open issue 列了一遍：**没有这个条目，也没有对应 issue**。
 //     ⇒ 它是 dao.md 那条「**义务转移必须同时落台账，否则等于销账**」的教科书形态：
 //     说得出「这条现在挂在哪个编号下」才算转移，说不出就还在转移方手上。**现在挂在 #133。**
-//     顺带把可达性量出来（第三轮实测，preload shim 数真实 syscall）：长名 HOME 下**一次
-//     I/O 都不落**；短名 HOME 下本机 16551 条 Edit 历史里只有 **27 条**（0.16%）通过快筛。
+//   🔴 **下面这三句 2026-08-05 第二次订正（PR #145 对抗验证官点名），作废原文照录**：
+//     ~~顺带把可达性量出来（第三轮实测，preload shim 数真实 syscall）：长名 HOME 下**一次
+//     I/O 都不落**；短名 HOME 下本机 16551 条 Edit 历史里只有 27 条（0.16%）通过快筛。
 //     且卡死那一格还要再叠一个条件——`g2Canon` 只在含 `~<数字>` 时才落 realpath ⇒
 //     **HOME 必须同时是 8.3 短名**，一块长名的映射网络盘根本不会触发它。
-//     **方向对，量级比第二轮说的小。** 但「realpath 会不会真的挂住」**至今仍是读码得出的**。
+//     **方向对，量级比第二轮说的小。** 但「realpath 会不会真的挂住」**至今仍是读码得出的**。~~
+//     **三处都错了**：㈠「长名 HOME 一次 I/O 都不落」只对「候选自己不含 `~<数字>`」的样本成立
+//     ㈡「长名映射网络盘根本不会触发它」被头注 ⑮ 与 `g2RealpathBounded` 头注亲手推翻
+//     （候选侧吃任意用户路径，真语料里含 `~N` 的候选 1196 条）㈢「至今仍是读码得出的」
+//     已被实测证伪：裸 realpath 打不可路由 UNC **三次独立复现，21026 / 21036 / 21049 ms**。
+//     现况以头注 ⑮ 为准，**此处不再复述任何数字** —— 同一组数字写两处，必然又是这个下场。
+//   ⚠️ **它是怎么漏掉第一轮订正的（值得记，因为它是「同批 Grep 引用面」那条的一个盲区）**：
+//     第一轮我 Grep 的是 `已登记|⑮|#133` —— 命中了本段的**段首**（那句「现在挂在 #133」），
+//     而过期的结论住在段首**往下五行**，那几行**一个关键词都不带**。
+//     ⇒ **Grep 找得到「这个话题在哪里被提起」，找不到「这个话题在哪里被下结论」** ——
+//     结论句不重复关键词，那正是它读起来通顺的原因。判据补一格：改一段陈述时，
+//     命中的不是那一行，是**那一段**；读到段落边界为止，别只读匹配行的窗口。
 const _g2LiveDirCache = { syn: null, real: null };
 // ① 语法层：零 I/O
 function g2LiveDirSyntactic() {
@@ -672,24 +686,47 @@ function g2Expand(raw, vars) {
 //    ⚠️ 这一格是本文件头注 🔬 ㈢ 那条透镜的第三次复发：**一组样本的共同约束，看不见的时候
 //    就会被当成背景写进结论**。三轮里每一轮的样本集都少了「候选自己含 `~<数字>`」这根轴。
 //
-// **机制：worker + `Atomics.wait`，不是子进程。** 两条路都量过（`_tmp/g2io/probe-worker.mjs`
-// 与 `probe-spawn.mjs`，本机 node v24.13.1 / win32）：
-//   | 方案                          | 冷启   | 热态     | 被测方卡死时父侧回来的时刻 | 这个界靠谁成立            |
-//   |-------------------------------|--------|----------|----------------------------|---------------------------|
-//   | 子进程 `spawnSync{timeout}`   | 44.1ms | 44.1ms   | 410ms（设 400）            | **靠子进程真的被杀掉**    |
-//   | worker + `Atomics.wait`       | 49ms   | 18.6ms   | 409ms（设 400）            | **靠主线程自己的计时器**  |
-//   两者耗时同一个量级，**差别只在最后一列，而那一列就是本 issue 的全部内容**：
-//   子进程那条路的保证依赖「被卡住的那一方能被 TerminateProcess 杀掉」，而 Windows 上
-//   卡在已断连 SMB 上的进程恰恰是出了名的难杀 ⇒ **拿一个同样依赖对方配合的机制，去修
-//   「对方不配合」这个病，是把同一个错误往上搬了一层。** worker 这条路里
-//   `Atomics.wait(flag, 0, 0, ms)` 由**主线程自己**计时，worker 在干什么它一概不问。
-//   ⚠️ **两个前提都实测过，任一不成立 worker 方案就不成立**：㈠主线程能在 worker 仍卡着时
-//   正常 `process.exit(0)`（本 hook 每条出口都是显式 `process.exit`，见文件末尾）；
-//   ㈡`unref()` 后的 worker 不吊住事件循环。
-//   ⚠️ **照直写没测的那一半**：两个方案我都只用**用户态阻塞**（`Atomics.wait`）模拟过卡死 ——
-//   本机没有可用的断连映射盘，**「内核态 SMB 阻塞」这一格仍未实测**，与 #133、与前三轮
-//   对抗官挂的是同一笔账。worker 方案对它在**结构上**免疫（主线程不问对方），
-//   **但「结构上免疫」这句话本身是读码得出的，不是测出来的。**
+// **机制：子进程 `spawnSync{timeout}`。**
+//
+// 🔴 **本段 2026-08-05 整段重写，作废的原文与它错在哪，照录**（PR #145 对抗验证官裁决）：
+//   ~~机制：worker + `Atomics.wait`，不是子进程。……子进程那条路的保证依赖「被卡住的那一方
+//   能被 TerminateProcess 杀掉」，而 Windows 上卡在已断连 SMB 上的进程恰恰是出了名的难杀
+//   ⇒ 拿一个同样依赖对方配合的机制去修「对方不配合」这个病，是把同一个错误往上搬了一层。~~
+//   **那个否决理由是错的，而错法本身比结论值钱**：它成立与否，取决于「被卡住的东西是不是
+//   **我这个进程**的一部分」。子进程杀没杀掉**根本不重要** —— 它是另一个进程，卡住的是它不是我。
+//   **卡死的线程拖住进程，卡死的子进程不会。**
+//
+// **为什么原来那张比较表看不出这件事**：表里最后一列量的是「**主线程**什么时候回来」，
+//   而本 issue 要的是「**进程**什么时候退出」—— 宿主杀的是进程。两个量在用户态阻塞下
+//   相差 8 ms，在内核态阻塞下相差 20 秒。而那张表的两行**都是用 `Atomics.wait` 模拟的卡死**，
+//   **用户态阻塞恰恰是这两条路唯一表现相同的那一层** ⇒ 表里那一列对方案选择**零信息量**，
+//   却被当成了决定性证据。这是本文件反复引的那条透镜（「一组样本的共同约束，看不见的时候
+//   就被当成背景写进结论」）的**第四次**复发，这一次落在了「我并不认为自己在选的那个字段」——
+//   **模拟手段**本身就是一个字段。
+//
+// **实测（本机 node v24.13.1 / win32；界一律 800 ms；真·内核阻塞 = realpath 一个不可路由
+//   UNC，RFC 5737 地址，每次换一个避开 Windows 的负缓存）**。裸 realpath 阻塞
+//   **21026 / 21049 / 21036 ms**（三次独立复现）—— #133 挂了三轮的那笔「会不会真挂住」
+//   的账，**到此清掉：会挂，21 s > 宿主注册的 10 s**。危害描述从此不是推断。
+//   量「进程寿命」这一列（因为宿主杀的是进程）：
+//   | 方案                              | 主线程回来 | **进程寿命** | 宿主 10 s 预算 |
+//   |-----------------------------------|-----------|-------------|---------------|
+//   | 改造前：主线程同步 realpath        | 21056 ms  | **21061 ms**| 🔴 超          |
+//   | 一度采用的 worker + `Atomics.wait` | 843 ms    | **21093 ms**| 🔴 **照样超**  |
+//   | **本方案：子进程 `spawnSync`**     | 846 ms    | **852 ms**  | ✅ 撑住        |
+//   worker 那行与改造前在进程寿命上**没有差别** —— `process.exit()` 要等所有线程从各自的
+//   调用里回来，而卡在内核态 SMB 里的那条线程必须先从 syscall 出来。
+//   补救也试过：`w.terminate()` **对卡在内核里的线程无效**（21096 ms）；`SIGKILL` / `abort()`
+//   有效但污染退出码，而本 hook 拿**退出码**当判决通道（`exit 2` = 拦）⇒ 强杀给不出 2，
+//   拦截路无解。**子进程是唯一不用在「按时退出」与「说得出判决」之间二选一的那条路。**
+//
+// ⚠️ **本方案自己的代价，照直写**：子进程杀不掉时会留下一个**孤儿 node 进程**，它卡在同一个
+//   SMB 超时里、约 21 s 后自行退出（不是永久泄漏，但那段时间它确实在）。worker 方案没有这一格。
+//   ⇒ 这是刻意付的：一个短命孤儿进程，换 hook 进程本身不被宿主杀掉。
+// ⚠️ **仍未实测的那一格**：我量的是 **UNC 形态**（`\\host\share\x`），而 `g2Canon` 真正路由
+//   进 `g2LongPath` 的是**盘符形态**（断连映射盘 `Z:\SOMEDI~1\x`）。两者走同一个 SMB
+//   重定向器，**推断**阻塞行为一致，**但没测** —— 本机造不出断连的映射盘。
+//   机制结论（子进程能按时退出）不依赖这一格，**「生产上多久撞一次」仍是推断**。
 //
 // **fail-open 与代价**：拿不到结果时按原样比（同头注设计取舍②）—— 那一次调用里 8.3 短名 /
 // junction 这一层归一没生效，G2 对那类路径退回 issue #112 之前的射程（**漏报方向**）。
@@ -698,43 +735,49 @@ function g2Expand(raw, vars) {
 const G2_REALPATH_CALL_MS = 800;
 // 调参三问（官通节要求的是三问不是双问）：
 //   ①改小会怎样 —— 慢盘上一次**正常**的 realpath 被判成超时 ⇒ fail-open ⇒ 那条路径不归一
-//     ⇒ 漏报。本机实测：worker 往返冷启 49 ms / 热态 18.6 ms，realpath 自身 0.035 ms。
-//   ②当前值够不够 —— 800 是冷启的 16 倍、realpath 自身的两万倍，够。
-//   ③已知需求上限（≈50 ms）到 800 之间那段有没有真实需求 —— 有：首次 worker 冷启抖动、
-//     杀毒软件扫 node.exe、机械盘首次寻道。再往上到注册的 10 s 那一段**没有**真实需求，
-//     而那一段正是本 issue 拒绝付的那笔钱 ⇒ 上界刻意远离宿主预算，不贴着它取。
+//     ⇒ 漏报。**成本的量级见下方 `G2_REALPATH_MIN_MS`，此处刻意不重复写数字**（一个数字
+//     写两处必漂移，本文件自己的历史就是在治这个）。
+//   ②当前值够不够 —— 是子进程往返的一个数量级以上，够。
+//   ③已知需求上限到 800 之间那段有没有真实需求 —— 有：子进程冷启抖动、杀毒软件扫 node.exe、
+//     机械盘首次寻道。再往上到注册的 10 s 那一段**没有**真实需求，而那一段正是本 issue
+//     拒绝付的那笔钱 ⇒ 上界刻意远离宿主预算，不贴着它取。
 const G2_REALPATH_TOTAL_MS = 2400;   // 本进程累计上限 = 3 次满额；实测每次 hook 调用去重后
                                      // 最多 1 个不同的 `~<数字>` 路径（见 probe-reach），3 倍余量
-const G2_REALPATH_MIN_MS = 120;      // 低于这个余量就别起了：起一次冷启就要 49 ms，
-                                     // 余量不够时起它 = 白付 49 ms 再超时，比直接降级更糟
+const G2_REALPATH_MIN_MS = 120;      // 低于这个余量就别起了：起一次子进程本身就要几十毫秒，
+                                     // 余量不够时起它 = 白付一次冷启再超时，比直接降级更糟
+// ⚠️ **绝对耗时数字刻意不写进本文件的注释**（官通节「条款/注释禁记绝对耗时数字，只记
+//   『悬崖存在、位置、留余量』这类可移植结论」）—— 同一曲线换台机器绝对值可差数倍，
+//   而写死的数字没有任何机制会在它过期时提醒谁。生产开销的实测数字与量法写在 PR #145，
+//   要复量跑 `_tmp/g2io/probe-prod-cost.mjs`。**上一版把「热态 18.6 ms」写进了这里，
+//   那个数字在生产上取不到** —— hook 进程每次都是新的，那条路永远是冷启，
+//   热态只有「同一次调用里第二个不同的 `~N` 路径」吃得到，而记忆化已经把重复问吸收掉了。
 let _g2RealpathSpentMs = 0;
 let _g2RealpathNotes = 0;            // stderr 自陈的次数上限，免得一次调用刷屏
 let _g2RealpathDead = false;         // 本进程内「这条路已判死」——见 g2RealpathBounded 首行
 const _g2RealpathMemo = new Map();   // 按输入路径记忆化：实测同一路径一次 hook 调用里被要 4 次
 
-// worker 正文。**刻意只做 realpath，不做归一** —— 归一逻辑留在主线程，worker 越薄越好：
-// 它是这条链上唯一一段「可能永远回不来」的代码，回不来的那段里放的东西越少越容易讲清楚。
+// 子进程正文，经 `node -e` 送进去（**刻意不落临时文件**：临时文件要挑目录、要清理，
+// 而这条路必须在任何 cwd、任何权限下都能跑）。**只做 realpath，不做归一** ——
+// 归一逻辑留在父进程，子进程越薄越好：它是这条链上唯一一段「可能永远回不来」的代码。
 //
-// 🔴 **每条路径都必须走到最后那两行**（`Atomics.store` + `notify`）。主线程此刻正阻塞在
-// `Atomics.wait` 上、**没有事件循环**，收不到 worker 的 `error`/`exit` 事件 ⇒
-// **worker 悄悄崩掉与 worker 卡住，在主线程看来完全一样：都是白等满一个超时。**
-// 故 realpath 那一句的 `catch` 是承重的（「文件不存在」是常态：Write 新建 / 路径写错 /
-// 短名指向不存在的用户），外面再套一层兜底 catch，`postMessage` 也单独 try 住。
-// 回归网有一条反向 mutation 钉着这一句：拿掉它 ⇒ 一条不存在的 8.3 路径就从「立刻返回」
-// 变成「白等满 800 ms 再降级」。
-const G2_REALPATH_WORKER_SRC = `
-const { workerData } = require("worker_threads");
+// 目标经 **argv** 传（不经 stdin、不经 env）：`node -e SRC t1 t2` 里 `process.argv` 是
+// `[execPath, t1, t2]` —— **注意没有脚本路径那一格**，所以是 `slice(1)` 不是 `slice(2)`
+// （本机实测确认过，不是照 CJS 的习惯猜的）。
+//
+// 两层 catch 都是承重的，但**承重的方式与 worker 版不同，值得记**：worker 版里主线程阻塞在
+// `Atomics.wait` 上、没有事件循环，收不到 worker 的死讯 ⇒ 崩掉与卡住不可区分；子进程版里
+// **父进程拿得到子进程的退出码与 stdout**，崩掉是「stdout 不是合法 JSON」、卡住是
+// `spawnSync` 报超时，**两者可区分**。内层 per-target catch 仍然承重（「文件不存在」是常态：
+// Write 新建 / 路径写错 / 短名指向不存在的用户），少了它那一格会退化成「整批没结果」。
+const G2_REALPATH_CHILD_SRC = `
 const out = [];
 try {
   const fs = require("fs");
-  for (const t of workerData.targets) {
-  try { out.push(fs.realpathSync.native(t)); } catch (_) { out.push(null); }
+  for (const t of process.argv.slice(1)) {
+    try { out.push(fs.realpathSync.native(t)); } catch (_) { out.push(null); }
   }
-} catch (_) { /* 整体崩了也要把已有结果送回去，不能让主线程白等满一个超时 */ }
-try { workerData.port.postMessage(out); } catch (_) {}
-const flag = new Int32Array(workerData.sab);
-Atomics.store(flag, 0, 1);
-Atomics.notify(flag, 0);
+} catch (_) { /* 整体崩了也要把已有结果送回去 */ }
+try { process.stdout.write(JSON.stringify(out)); } catch (_) {}
 `;
 
 // 宿主给的墙钟预算。**复用 `ccswitch/lib/hook-budget.js`，不另起一套** —— 它治的
@@ -777,7 +820,7 @@ function g2RealpathDegrade(why) {
 // 有界地把一批路径解成真实路径。返回与 targets 等长的数组（解不开的位置是 null），
 // 或整体 null（= 这一次根本没跑成，调用方按 fail-open 处理）。
 function g2RealpathBounded(targets) {
-  // 一次没跑成就别再试了。**它防的不是那一次，是后面每一次**：worker 若因为环境原因
+  // 一次没跑成就别再试了。**它防的不是那一次，是后面每一次**：子进程若因为环境原因
   // 根本起不来（或 FS 真卡住），后续每个**不同**的路径都会再白等一次 —— 累计上限
   // `G2_REALPATH_TOTAL_MS` 兜得住总量，但那 2.4 s 全是白付的。一次失败就把这条路
   // 判死、直接走 fail-open，是本进程内成本最低的处置（进程短命，不存在"过一会儿好了"）。
@@ -797,23 +840,37 @@ function g2RealpathBounded(targets) {
   }
   const t0 = Date.now();
   try {
-    const { Worker, MessageChannel, receiveMessageOnPort } = require("worker_threads");
-    const sab = new SharedArrayBuffer(4);
-    const flag = new Int32Array(sab);
-    const { port1, port2 } = new MessageChannel();
-    const w = new Worker(G2_REALPATH_WORKER_SRC, {
-      eval: true,
-      execArgv: [],                     // 不继承父进程的 `-r` 预加载：行为可预期，也免得被测量工具改变被测对象
-      stdout: true, stderr: true,       // worker 的输出**不**自动串进本 hook 的 stdout/stderr（宿主在读那两条）
-      workerData: { sab, port: port2, targets },
-      transferList: [port2],
+    const { spawnSync } = require("child_process");
+    // ← 界在这里。**`spawnSync` 的 `timeout` 由父进程自己计时**，子进程在干什么它不问；
+    //   而与 worker 版的决定性差别是：超时之后**父进程照常往下走并按时退出**，
+    //   因为卡住的东西在**另一个进程**里，不是本进程的一条线程（见上方头注那张进程寿命表）。
+    const r = spawnSync(process.execPath, ["-e", G2_REALPATH_CHILD_SRC, ...targets], {
+      timeout: callMs,
+      killSignal: "SIGKILL",            // 杀不掉也无所谓（卡在 SMB 上的进程确实杀不掉），
+                                        // 它是另一个进程 —— 我们不等它，见头注「孤儿进程」那格代价
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],  // 子进程的 stderr 不许串进本 hook 的 stderr（宿主在读那条）
+      env: { ...process.env, NODE_OPTIONS: "" },  // 不继承 `-r` 预加载：行为可预期，
+                                                  // 也免得被测量工具改变被测对象（同 worker 版 execArgv: []）
     });
-    w.unref();                          // 卡住的 worker 不许吊住事件循环
-    Atomics.wait(flag, 0, 0, callMs);   // ← 界在这里，由主线程自己计时
     _g2RealpathSpentMs += Date.now() - t0;
-    const msg = receiveMessageOnPort(port1);
-    if (!msg) return g2RealpathDegrade(`realpath 超过 ${callMs} ms 未返回（路径可能在断连的网络盘/映射盘上）`);
-    return msg.message;
+    // 超时与「子进程崩了」在这里**是可区分的**（worker 版做不到这一点）：
+    //   · 超时 ⇒ r.error.code === "ETIMEDOUT"（或被信号杀掉）
+    //   · 崩了 ⇒ 进程正常结束但 stdout 不是合法 JSON
+    // 两者都走 fail-open，但自陈的话不一样 —— 而那句话是排障时唯一的线索。
+    if (r.error) {
+      const to = r.error.code === "ETIMEDOUT" || r.signal;
+      return g2RealpathDegrade(to
+        ? `realpath 超过 ${callMs} ms 未返回（路径可能在断连的网络盘/映射盘上）；子进程已被放弃，它会在自己的 SMB 超时后自行退出`
+        : `起子进程失败：${r.error.message}`);
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(String(r.stdout || "")); } catch (_) { /* 下一行统一处置 */ }
+    if (!Array.isArray(parsed)) {
+      return g2RealpathDegrade(`子进程没给出可解析的结果（exit=${r.status}，stdout ${String(r.stdout || "").length} 字节）`);
+    }
+    return parsed;
   } catch (e) {
     _g2RealpathSpentMs += Date.now() - t0;
     return g2RealpathDegrade("有界 realpath 起不来：" + (e && e.message ? e.message : String(e)));
@@ -823,8 +880,9 @@ function g2RealpathBounded(targets) {
 function g2LongPath(p) {
   if (_g2RealpathMemo.has(p)) return _g2RealpathMemo.get(p);
   // 整条 + 目录级两个目标一次问完（原先是"整条失败再问目录"两次同步调用）。
-  // **合成一批不是为了省 syscall，是为了省 worker**：一次 hook 调用里同一路径实测被要 4 次，
-  // 而 worker 冷启 49 ms、realpath 自身 0.035 ms —— 贵的是外壳，不是里面那一下。
+  // **合成一批不是为了省 syscall，是为了省进程**：一次 hook 调用里同一路径实测被要 4 次，
+  // 而贵的是那层外壳（起一个 node），不是里面那一下 realpath —— 两者差三个数量级。
+  // 记忆化同理：它吸收的是「同一路径被重复问」，所以生产上一次 hook 调用最多起一个子进程。
   const i = p.lastIndexOf("/");
   const targets = i > 0 ? [p, p.slice(0, i)] : [p];
   const got = g2RealpathBounded(targets);
@@ -1554,8 +1612,9 @@ function selfcheck() {
   // ── 有界 realpath 是不是活的（issue #133）─────────────────────────────────
   // **「机制坏了、于是每次都静默 fail-open」与「机制好着、只是从没被触发」在任何日志里
   // 长得一模一样** —— 这正是本文件反复记的那个形态。故这里**真跑一次**，把它摆出来。
-  // ⚠ 它验的是「这套外壳还转得动」（worker 起得来 + 消息回得来 + 界在计时），
-  // **不是**「它在卡死的网络盘上一定救得回来」—— 后者本机无从验（见 g2RealpathBounded 头注）。
+  // ⚠ 它验的是「这套外壳还转得动」（子进程起得来 + stdout 回得来 + 解析得出结果），
+  // **不是**「它在卡死的网络盘上一定救得回来」—— 后者由 `_tmp/g2io/probe-lifetime.mjs`
+  // 用真·不可路由 UNC 量（本进程寿命 842 ms vs 改造前 21082 ms），不是这一格能答的。
   {
     const t0 = Date.now();
     const got = g2RealpathBounded([norm(HOME)]);
