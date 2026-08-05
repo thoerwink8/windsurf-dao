@@ -90,25 +90,43 @@ function gate(payload, { script = HOOK, env = {} } = {}) {
 // 这个 helper 原先**既不给 payload 的 `cwd`、也不给 spawnSync 的 `cwd`** ⇒ hook 侧一路退到
 // `process.cwd()` = 敲命令的那个目录 = 开发者真仓。那是「测试 payload 不带 cwd」这个形态的
 // 第三个实例（前两个：`dao-tool-nudge.tests.js` 的探针被就地改写 · `subagent-clauses`
-// 的红绿取决于在哪个目录敲命令）。危害已被 PR #108 从 hook 那一侧堵住，本条是**清尾**。
+// 的红绿取决于在哪个目录敲命令）。本条是**清尾**。
+//
+// 🔴 **#129 单子上「危害已被 PR #108 从下一层堵住」这句，接手时复核为「还没堵」**
+//    （2026-08-05 实测，两条独立证据）：㈠`gh pr view 108` = **OPEN**，未合并（它被判不可合，
+//    账在 #113）；㈡本仓 Grep `tmp-redact-sweep|tmp-sweep-scope` **零命中** ⇒ master 上
+//    `dao-tool-nudge.js` 根本没有那个 `_tmp/` 扫描面。**那句话描述的是一个尚未落地的兜底。**
+//    ⇒ 结论方向不变（本条仍是清尾，因为**眼下**那条写盘路不存在），但**理由换了**：
+//    不是「有人在下面接着」，而是「那一层现在是空的」——空的那一层随时会被填上，
+//    而填上的那一刻，此刻所有不带 cwd 的站点会**同时**变成真会吃文件的站点。
 //
 // 🔑 **顺带堵一格 #129 单子上没有的**：`dao-tool-nudge.js` 的去重表 `SEEN_FILE` 锚在
-// **hook 自己的仓根**（`ROOT/_tmp/tool-nudge/…`），**与 cwd 无关** ⇒ 光给 cwd 堵不住它。
-// 本 helper 收 `toolName` 参数，只要有人拿它喂一个浏览器 MCP 工具名，就会往**真仓**
-// 写去重表。当前没有调用点这么做 ⇒ **这不是在止血，是纵深防御**（照直标，别读成修了个 bug）。
+// **hook 自己的仓根**（`ROOT/_tmp/tool-nudge/…`，见该文件 :104-105），**与 cwd 无关**
+// ⇒ 光给 cwd 堵不住它。本 helper 收 `toolName` 参数，只要有人拿它喂一个浏览器 MCP 工具名
+// （`BROWSER_MCP_RE` 那一支，:242），就会往**真仓**写去重表。当前没有调用点这么做
+// ⇒ **这不是在止血，是纵深防御**（照直标，别读成修了个 bug）。
 // 故这里连 `DAO_TOOL_NUDGE_STATE` 一起指进沙箱。
 const NUDGE_SANDBOX = path.join(TMP, "nudge-cwd-sandbox");
 fs.mkdirSync(NUDGE_SANDBOX, { recursive: true });
 const NUDGE_STATE = path.join(NUDGE_SANDBOX, "tool-nudge-seen.json");
 
-function nudge(command, toolName = "Bash") {
-  const r = spawnSync(process.execPath, [NUDGE], {
+// **本文件里喂 nudge hook 的唯一出口。** 下面 `nudge()` 只是它的一层解包。
+// 这个形状是被 issue #129 的那个 twin 逼出来的：原先「拿注入内容」与「拿退出码」是**两处
+// 各自 spawnSync**，于是收口了前者、后者原样留着不带 cwd —— 同一个文件里同一个形态两份，
+// 而单子上只记了一份。**同型的东西只留一个出口**，下一次收口才不会再漏掉另一半。
+// （本节末尾有一条断言钉着「只有一个出口」这件事，见「#129·防复发」。）
+function nudgeRaw(command, toolName = "Bash") {
+  return spawnSync(process.execPath, [NUDGE], {
     input: JSON.stringify({ tool_name: toolName, cwd: NUDGE_SANDBOX, tool_input: { command } }),
     encoding: "utf8",
     cwd: NUDGE_SANDBOX,                       // 两处都给：payload 那个供 hook 判据用，
                                               // 这个供 hook 里任何 process.cwd() 兜底用
     env: { ...process.env, DAO_TOOL_NUDGE_STATE: NUDGE_STATE },
   });
+}
+
+function nudge(command, toolName = "Bash") {
+  const r = nudgeRaw(command, toolName);
   let out = {};
   try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
   return String((out.hookSpecificOutput || {}).additionalContext || "");
@@ -1616,7 +1634,7 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
     check(`负控：${name}`, !/dao PR-first/.test(nudge(c)), JSON.stringify(nudge(c).slice(0, 80)));
   }
   // ⚠ **这一条原先是 `nudge()` 的「行内孪生兄弟」：自己 spawnSync、同样不带 cwd。**
-  //   issue #129 的清单里**只有 `nudge()` 那一处**，这一处是本批扫全仓时捞出来的
+  //   issue #129 的清单里**只有 `nudge()` 那一处**，这一处是扫全仓时捞出来的
   //   —— 同一个形态在**同一个文件里**有两份，而单子上只记了一份。
   //   ⇒ 改用 `nudgeRaw()` 走同一条沙箱路径：**同型的东西只留一个出口**，
   //   否则下次再有人收口 `nudge()`，这一处照旧从射程外溜过去（本仓反复记的那个形态）。
@@ -1642,6 +1660,53 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
     check("判别力·沙箱本身是可写的（否则上面两条是恒真的废话）",
       fs.readdirSync(NUDGE_SANDBOX).sort().join(",") !== before);
     fs.rmSync(path.join(NUDGE_SANDBOX, "probe-writable.txt"), { force: true });
+  }
+
+  // ── #129·防复发：本文件喂 nudge hook 的出口必须**只有一个** ─────────────────
+  // 🔴 **这一条治的不是 #129 那个 bug，是「#129 为什么没列到 twin」那个病。**
+  //   那张单子上的三个实例，PR #108 的正文自己写明了各是怎么被发现的：①官自己的探针被
+  //   就地改写 ②红绿随目录翻 ③种在 `_tmp/dump/` 的 canary 没了 + 台账里留了一行。
+  //   **三个都是「有东西坏了」才进的名单** —— 那是一份**受害者名单**，不是一次普查。
+  //   受害者名单结构上只列得出「已经造成危害的」，而 twin 恰恰是**当下造不成危害的那一种**：
+  //   它只喂 `tool_name: "Bash"`，而 `dao-tool-nudge.js` 里唯一与 cwd 有关的那条路
+  //   （`curDir`，:301）是只读的，写盘那条（`SEEN_FILE`，:104）只在浏览器 MCP 工具名下走
+  //   且锚在 hook 自己的仓根 ⇒ **不写盘、不翻红绿**。
+  //   前一位官那两轮**行为普查**（`_tmp/g2io/cwd-sweep*.log`，正负控都自证过）因此对本文件
+  //   报「零可疑」—— **今天再跑一遍行为普查，还是会漏掉它。**
+  // ⇒ 所以这里放的不是又一条行为断言，是一条**文本**断言：出口数必须恰好是 1。
+  //   它盯的是「同一形态在同一文件里长出第二份」这个动作本身，与那一份有没有造成危害无关。
+  // ⚠ **射程照直写**：只管**这一个文件**喂**这一个 hook**。做成跨文件的闸需要先答
+  //   「怎么机械识别一次 hook spawn」，#129 自己说了「没实测过误报率，不建议直接立闸」——
+  //   本批照此**不立全局闸**，全仓普查结果另行挂账，不塞进这条断言里冒充覆盖面。
+  {
+    // 🔴 **这条断言连着红了两次，两次都红在我自己身上，留档**（2026-08-05）：
+    //   **第一次** —— 判别力那一半原先把合成 twin 写成一个**整串字面量**，而那个字面量
+    //   就住在本文件里 ⇒ 计数 2、合成后 3。**检查器的测试数据落进了它自己的扫描面。**
+    //   **第二次** —— 改成运行时拼接之后仍然报 2。这一次的第二处命中是**上面这段注释本身**：
+    //   我在解释这个坑的时候，把那个字面量**原样抄进了注释里**。同一条病的第三层形态 ——
+    //   ①代码 ②测试数据 ③**描述它的那段散文**。前两层 `dao-guard-writing` 第三条写到了，
+    //   第三层是这次现长出来的：注释不参与执行，所以人不会把它算进"扫描面"，
+    //   **而正则不区分代码与注释。**
+    //   ⇒ 两处都改为不含整串：合成串走运行时拼接（`[` 与 `NUDGE]` 之间隔着 `" + "`），
+    //   注释里一律不写那个整串，只描述它的形状。
+    //   ⚠ 值得单记一句：它**是红出来的，不是我想出来的**。若当初把判别力那一半省掉，
+    //   剩下的「恰好 1 处」会安安静静地报 2，然后被我当成"还有一处没收口"去找一个并不存在的
+    //   twin —— **一个把自己数进去的检查器，给出的错误方向是可信的那一种。**
+    const RE_EXIT = /spawnSync\(process\.execPath, \[NUDGE\]/g;
+    const selfSrc = fs.readFileSync(__filename, "utf8");
+    const n = (selfSrc.match(RE_EXIT) || []).length;
+    check("#129·防复发：本文件喂 nudge hook 的 spawnSync 出口恰好 1 处（唯一那处在 nudgeRaw 里）",
+      n === 1, `命中 ${n} 处（>1 = 又长出一个孪生兄弟；0 = 出口改了名，这条断言已失效，去改它）`);
+    // 判别力：把一个 twin 合成回去，计数必须变成 2。没有这一条，上面那条与
+    // 「正则根本匹配不到任何东西」在全绿输出里长得一模一样（零检出 ≠ 零存在）。
+    const SYNTH_TWIN = "\nconst _synthTwin = spawnSync(process.execPath, [" + "NUDGE], { encoding: \"utf8\" });\n";
+    check("判别力·合成一个孪生兄弟塞回去 ⇒ 计数变 2（证明这条断言真的看得见第二份）",
+      ((selfSrc + SYNTH_TWIN).match(RE_EXIT) || []).length === 2,
+      `合成后命中 ${((selfSrc + SYNTH_TWIN).match(RE_EXIT) || []).length} 处`);
+    // 并且证明拼接那一步真的绕开了自匹配：源码里那个**未拼接**的字面量不该被数进去。
+    check("判别力·合成串在源码里是拼出来的，本身不自匹配（否则上一条又会把自己数进去）",
+      (SYNTH_TWIN.match(RE_EXIT) || []).length === 1 && n === 1,
+      `合成串自身命中 ${(SYNTH_TWIN.match(RE_EXIT) || []).length}、源码命中 ${n}`);
   }
 }
 
