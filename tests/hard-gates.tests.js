@@ -41,6 +41,31 @@ fs.mkdirSync(TMP, { recursive: true });
 
 const HOME = process.env.USERPROFILE || process.env.HOME;
 
+// ── 假家目录夹具（8.3 短名 × 文件存不存在）· issue #133 现造 ──────────────────
+// **为什么非得造一个假的**：本机真 HOME 下 `~/.claude/settings.json` 与
+// `settings.local.json` **两个都存在** ⇒「文件还不存在、只能靠**目录级回退**归一」这条路
+// 在真 HOME 上**结构上走不到**。而那恰恰是最常见的形态之一：**Write 新建 settings.json**。
+// 🔑 **这个夹具是被一条翻不动的 mutation 逼出来的**：我第一版拿真 HOME 测「worker 里那个
+// per-target catch 承不承重」，得到 2/2 —— 翻不动。**翻不动的原因不是「没 bug」，
+// 是「这个夹具到不了那条路」**，而两者在全绿输出里长得一模一样。
+// 第二版又栽了一次（同一个病、换个长相）：HOME 与候选写的是**同一个短名串** ⇒
+// `g2LiveDirSyntactic()` 直接命中，realpath 层根本不承重，于是又是 2/2。
+// ⇒ **要让 realpath 层承重，两侧写法必须不同**：HOME 长名、候选短名。两次都是
+// 「一组样本的共同约束，看不见的时候就被当成背景写进结论」（hook 头注 🔬 ㈢）。
+const FAKE83 = (() => {
+  try {
+    const base = path.join(TMP, "fakehome-83");
+    const longHome = path.join(base, "longdirname-for-83-test", "fakehome");
+    fs.mkdirSync(path.join(longHome, ".claude"), { recursive: true });
+    const shortHome = path.join(base, "LONGDI~1", "fakehome");
+    if (fs.realpathSync.native(shortHome).toLowerCase() !== longHome.toLowerCase()) return null;
+    // 存在的那一个：整条 realpath 一步解开，用不上目录级回退（做对照组用）
+    fs.writeFileSync(path.join(longHome, ".claude", "settings.local.json"), "{}\n");
+    // 刻意**不**创建 settings.json —— 它就是「只能靠目录级回退」那条路的钥匙
+    return { longHome, shortHome };
+  } catch (_) { return null; }   // 本卷关了 8.3 短名 ⇒ 相关组只是没测到，不是通过
+})();
+
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
@@ -61,10 +86,28 @@ function gate(payload, { script = HOOK, env = {} } = {}) {
   return { code: r.status, err: String(r.stderr || ""), out: String(r.stdout || "") };
 }
 
+// ── nudge 的沙箱（issue #129）────────────────────────────────────────────────
+// 这个 helper 原先**既不给 payload 的 `cwd`、也不给 spawnSync 的 `cwd`** ⇒ hook 侧一路退到
+// `process.cwd()` = 敲命令的那个目录 = 开发者真仓。那是「测试 payload 不带 cwd」这个形态的
+// 第三个实例（前两个：`dao-tool-nudge.tests.js` 的探针被就地改写 · `subagent-clauses`
+// 的红绿取决于在哪个目录敲命令）。危害已被 PR #108 从 hook 那一侧堵住，本条是**清尾**。
+//
+// 🔑 **顺带堵一格 #129 单子上没有的**：`dao-tool-nudge.js` 的去重表 `SEEN_FILE` 锚在
+// **hook 自己的仓根**（`ROOT/_tmp/tool-nudge/…`），**与 cwd 无关** ⇒ 光给 cwd 堵不住它。
+// 本 helper 收 `toolName` 参数，只要有人拿它喂一个浏览器 MCP 工具名，就会往**真仓**
+// 写去重表。当前没有调用点这么做 ⇒ **这不是在止血，是纵深防御**（照直标，别读成修了个 bug）。
+// 故这里连 `DAO_TOOL_NUDGE_STATE` 一起指进沙箱。
+const NUDGE_SANDBOX = path.join(TMP, "nudge-cwd-sandbox");
+fs.mkdirSync(NUDGE_SANDBOX, { recursive: true });
+const NUDGE_STATE = path.join(NUDGE_SANDBOX, "tool-nudge-seen.json");
+
 function nudge(command, toolName = "Bash") {
   const r = spawnSync(process.execPath, [NUDGE], {
-    input: JSON.stringify({ tool_name: toolName, tool_input: { command } }),
+    input: JSON.stringify({ tool_name: toolName, cwd: NUDGE_SANDBOX, tool_input: { command } }),
     encoding: "utf8",
+    cwd: NUDGE_SANDBOX,                       // 两处都给：payload 那个供 hook 判据用，
+                                              // 这个供 hook 里任何 process.cwd() 兜底用
+    env: { ...process.env, DAO_TOOL_NUDGE_STATE: NUDGE_STATE },
   });
   let out = {};
   try { out = JSON.parse(r.stdout || "{}"); } catch (_) {}
@@ -736,25 +779,26 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     "const G2_SRC_PARAM = /^-{1,2}[\\w-]+$/i;",
     ps(`Copy-Item -Filter *.json ${LIVE_V}`), 0, 2);
 
-  // 反向⑨·g2LongPath 的 fail-open catch 是承重的 —— 8.3 那一格是本批唯一会落 I/O 的判据，
-  // 而 I/O 会抛（文件不存在是常态：Write 新建、路径写错、短名指向不存在的用户）。
+  // 反向⑨·realpath 那一句的 fail-open catch 是承重的 —— 8.3 那一格是本批唯一会落 I/O 的
+  // 判据，而 I/O 会抛（文件不存在是常态：Write 新建、路径写错、短名指向不存在的用户）。
   // ⚠ 这一条**不能用退出码断言**：真文件与改坏后都是 exit 0（fail-open 的设计就是放行），
   //   两者的差别只在 stderr 有没有那句告警 —— 拿退出码测它会得到一条永远为真的断言。
-  {
-    const re = /  try \{ return norm\(fs\.realpathSync\.native\(p\)\); \} catch \(_\) \{ \/\* 文件不存在是常态 \*\/ \}/;
-    const n = (src3.match(new RegExp(re.source, "g")) || []).length;
-    check("mutation 锚点在源码里恰好命中 1 次（反向⑨·g2LongPath 去掉 catch）", n === 1, `命中 ${n} 次`);
-    if (n === 1) {
-      const mp = path.join(TMP, "mutant-112-9-nocatch.js");
-      fs.writeFileSync(mp, src3.replace(re, () => "  return norm(fs.realpathSync.native(p));"), "utf8");
-      const nonexistent = edit("C:\\Users\\NOSUCH~9\\.claude\\settings.json");
-      const real = gate(nonexistent), mut = gate(nonexistent, { script: mp });
-      check("反向⑨·去掉 g2LongPath 的 catch ⇒ 不存在的 8.3 路径把守卫打进 fail-open（真文件不会）",
-        real.code === 0 && !/守卫自身出错/.test(real.err) &&
-        mut.code === 0 && /守卫自身出错/.test(mut.err) && /ENOENT/.test(mut.err),
-        `real=${real.code}/${/守卫自身出错/.test(real.err)} mut=${mut.code}/${/守卫自身出错/.test(mut.err)}`);
-    }
-  }
+  //
+  // 🔴 **本条 2026-08-05（issue #133）改过锚点与判据，作废的原文照录**：
+  //   ~~锚点 `  try { return norm(fs.realpathSync.native(p)); } catch (_) { /* 文件不存在是常态 */ }`~~
+  //   ~~判据：去掉 catch ⇒ 守卫被打进 fail-open，stderr 出现「守卫自身出错」+ ENOENT~~
+  //   #133 把这次 I/O 移进了一个有界 worker，那一句连同它的 catch 一起搬进了
+  //   `G2_REALPATH_WORKER_SRC`。**这条断言当场变红并点名**（`命中 0 次`），
+  //   逼我回来把它改对 —— 这是这张自失效登记表在本仓的第五次真实触发，
+  //   也是我这一批唯一一条**先红后改**的断言。
+  // **换锚点之后判据也必须跟着换，而且换的方向值得记**：catch 搬进 worker 之后，
+  //   「抛异常」不再打到主线程的 fail-open catch 上 —— **主线程此刻阻塞在 `Atomics.wait`，
+  //   没有事件循环，收不到 worker 的 error 事件** ⇒ 症状从「当场崩」变成「白等满一个超时
+  //   再降级」。**同一个 bug，可观测面从 stderr 的一行崩溃栈，变成 stderr 的一行降级自陈 +
+  //   一段真实耗时。** 故新判据两半都验：①降级自陈出现 ②耗时真的涨上去了。
+  // ⇒ 新判据与它的夹具都归 issue #133 那一节（本文件下方「G2 · 有界 realpath」），
+  //   连同「文件还不存在只能靠目录级回退」这条路一起。**这里刻意留这段字不留断言** ——
+  //   把断言搬到夹具旁边，比在这里再造一份夹具更不容易漂移。
 
   // 🔴 **一条阴性结果，照直记（官抗节：差额为零也是结论）**：
   //   `if (!g2IsLiveDir(destDir)) continue;` 这道 guard **试过反向 mutation，翻不动**。
@@ -1181,6 +1225,210 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
 }
 
+console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中断的 I/O 不许炸掉全部七道闸）────");
+// ── 这一节装什么 ────────────────────────────────────────────────────────────
+// #112/#117 把 8.3 短名归一做了出来，代价是在一个 PreToolUse 钩子里落同步 realpath。
+// `fs.realpathSync.native` **同步不可中断** ⇒ 原来那两个 `try/catch` 接得住「抛错」、
+// **接不住「卡住」**；而注册写着 `timeout: 10` ⇒ 真卡住时死的是**整个 hook 进程**，
+// **七道闸一起没**。#133 把那次 I/O 挪进一个 worker，界由**主线程自己**的
+// `Atomics.wait` 计时（判据与「为什么不用子进程」见 hook 里 `g2RealpathBounded` 头注）。
+//
+// **本节语料从哪来，照直标**：全部是**对着新机制现造的**，不是从真语料采的。
+// 但夹具的**形态**取自实测 —— `_tmp/g2io/probe-reach.mjs` 数出来「长名 HOME 下候选自己
+// 含 `~<数字>` 时照样落 I/O」（真语料里这类路径 1196 条），而 #133 单子与 hook 头注 ⑮
+// 当时都写着「长名 HOME 一次 I/O 都不落」。**那句话是在一组恰好不含这根轴的样本上写下的。**
+{
+  if (!FAKE83) {
+    check("前置：本卷启用了 8.3 短名（关掉的话本节只是没测到，不是通过）", false, "FAKE83=null");
+  } else {
+    const { longHome, shortHome } = FAKE83;
+    const asLong = { USERPROFILE: longHome, HOME: longHome };
+    // 🔑 两侧写法必须不同，realpath 层才承重：**HOME 长名 · 候选短名**。
+    //    写成同一个短名串的话语法层直接命中，下面每一条都会退化成「测了个语法层」。
+    const P_MISSING = edit(path.join(shortHome, ".claude", "settings.json"));       // 文件不存在 ⇒ 只能靠目录级回退
+    const P_EXISTS  = edit(path.join(shortHome, ".claude", "settings.local.json")); // 文件存在 ⇒ 整条一步解开
+
+    check("正控·候选短名 + 文件**不存在**（只能靠目录级回退）→ exit 2",
+      gate(P_MISSING, { env: asLong }).code === 2, `code=${gate(P_MISSING, { env: asLong }).code}`);
+    check("正控·候选短名 + 文件**存在**（整条 realpath 一步解开）→ exit 2",
+      gate(P_EXISTS, { env: asLong }).code === 2, `code=${gate(P_EXISTS, { env: asLong }).code}`);
+    check("负控·长名 HOME + 长名候选（结构上不落 realpath）仍拦得住 ⇒ 老路没被弄坏",
+      gate(edit(path.join(longHome, ".claude", "settings.local.json")), { env: asLong }).code === 2);
+    check("负控·同一棵假家目录下的**非** live 文件不许拦",
+      gate(edit(path.join(shortHome, ".claude", "other.json")), { env: asLong }).code === 0);
+    check("负控·降级自陈在正常路径上**不出现**（免得它变成每次都刷的噪音）",
+      !/有界 realpath/.test(gate(P_MISSING, { env: asLong }).err));
+
+    const src5 = fs.readFileSync(HOOK, "utf8");
+    // 本节自己的 mutate 器。与上面几节的 mutate3 相比多两件事：①带 env ②同时看 stderr 与耗时。
+    // **锚点断言与 replace 共用同一个 RegExp 对象**（守卫写法 ③：断言一个近似物等于没断言）。
+    function mut133(label, re, to, cases, opts) {
+      const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+      const n = (src5.match(g) || []).length;
+      check(`mutation 锚点在源码里恰好命中 1 次（${label}）`, n === 1, `命中 ${n} 次`);
+      if (n !== 1) return null;
+      const mp = path.join(TMP, `mut133-${label.replace(/[^\w]+/g, "-").slice(0, 40)}.js`);
+      let body = src5.replace(re, () => to);
+      if (opts && opts.also) for (const [r2, t2] of opts.also) body = body.replace(r2, () => t2);
+      fs.writeFileSync(mp, body, "utf8");
+      // 变异体存活 canary：一个把靶弄死的 mutation 会让每条都翻，而那正是「判别力满分」的表象
+      const alive = gate(bash("echo hi"), { script: mp, env: asLong });
+      check(`变异体存活（${label}）：无关输入仍 exit 0 且无 fail-open 告警`,
+        alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code} err=${alive.err.slice(0, 120)}`);
+      for (const [cn, pay, before, after] of cases) {
+        const a = gate(pay, { env: asLong }).code, b = gate(pay, { script: mp, env: asLong }).code;
+        check(`${label} · ${cn}：真文件 ${before} / 改坏后 ${after}`,
+          a === before && b === after, `before=${a} after=${b}`);
+      }
+      return mp;
+    }
+
+    // ── 三形态打「那个界」本身 ──────────────────────────────────────────────
+    // 打掉界 ⇒ 主线程不再等 worker ⇒ 消息没到 ⇒ 一律降级 ⇒ 8.3 那一格全线失明。
+    mut133("①移除·主线程不再等 worker（Atomics.wait 整句删掉）",
+      /^    Atomics\.wait\(flag, 0, 0, callMs\); {3}\/\/ ← 界在这里，由主线程自己计时$/m, "",
+      [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
+    mut133("②留字面不执行·Atomics.wait 还在，只是永不执行",
+      /^    Atomics\.wait\(flag, 0, 0, callMs\); {3}\/\/ ← 界在这里，由主线程自己计时$/m,
+      "    if (false) Atomics.wait(flag, 0, 0, callMs);",
+      [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
+    // ③「结果不被消费」打在**记忆化的写入**上：算了、也存了，但下次不读它。
+    //    这一条是**纯优化**，故预期**翻不动** —— 阴性结果照直钉住（官抗节：差额为零也是结论）。
+    //    别把它读成「这条 mutation 没意义」：它钉的正是「记忆化不承重」这句话本身，
+    //    哪天有人把判据搬进记忆化那一层，这条会红并点名。
+    mut133("③结果不被消费·记忆化写进去了但从不读（纯优化，预期翻不动）",
+      /^  if \(_g2RealpathMemo\.has\(p\)\) return _g2RealpathMemo\.get\(p\);$/m, "",
+      [["候选短名·文件不存在", P_MISSING, 2, 2], ["候选短名·文件存在", P_EXISTS, 2, 2]]);
+
+    // ── 反向 mutation：把界**收紧**（上面三条全在「让界失效」这一侧）──────────
+    // 官抗节点名的第四件事：检查你的 mutation 是不是全在一个方向上。
+    // 收紧到 1 ms ⇒ 每次都超时 ⇒ 一律降级，且 stderr 必须出现那句超时自陈。
+    {
+      const mp = mut133("反向·把单次上限收紧到 1ms ⇒ 一律超时降级",
+        /^const G2_REALPATH_CALL_MS = 800;$/m, "const G2_REALPATH_CALL_MS = 1;",
+        [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
+      if (mp) {
+        const r = gate(P_EXISTS, { script: mp, env: asLong });
+        check("反向·降级**不静默**：stderr 明说「没跑」+ 「这不是通过，是没测」+ 指向 issue #133",
+          /有界 realpath \*\*没跑\*\*/.test(r.err) && /这不是「通过」，是「没测」/.test(r.err) && /#133/.test(r.err),
+          r.err.slice(0, 240));
+        check("反向·长名 HOME + 长名候选**不受影响**（结构上不落 realpath ⇒ 界收得再紧也不该动它）",
+          gate(edit(path.join(longHome, ".claude", "settings.local.json")), { script: mp, env: asLong }).code === 2);
+      }
+    }
+
+    // ── worker 内两层 catch：**它们是「主线程收不到 worker 死讯」这件事的唯一防线** ──
+    // 主线程此刻阻塞在 Atomics.wait 上、没有事件循环 ⇒ 收不到 worker 的 error/exit 事件
+    // ⇒ **worker 悄悄崩掉与 worker 真卡住，在主线程看来完全一样：都是白等满一个超时。**
+    {
+      const RE_INNER = /^  try \{ out\.push\(fs\.realpathSync\.native\(t\)\); \} catch \(_\) \{ out\.push\(null\); \}$/m;
+      // per-target catch 承重面**只有一格**：文件还不存在 ⇒ 必须退到目录级才归得了一
+      // （Write 新建 settings.json 正是这一形态）。文件存在那一格翻不动 —— 照直钉住。
+      mut133("worker·去掉 per-target catch ⇒ 目录级回退连带消失",
+        RE_INNER, "  out.push(fs.realpathSync.native(t));",
+        [["文件不存在（承重，靠目录级回退）", P_MISSING, 2, 0],
+         ["文件存在（整条一步解开，用不上回退 ⇒ 阴性，差额为零也是结论）", P_EXISTS, 2, 2]]);
+
+      // 外层兜底 catch：承重面是**耗时**不是判决 —— 两层 catch 都没了，worker 顶层抛异常、
+      // 永不 postMessage ⇒ 主线程白等满 G2_REALPATH_CALL_MS。**拿退出码测它会得到
+      // 一条永远为真的断言**（判决那一半由语法层顶着），故这条只能用耗时测。
+      const RE_OUTER = /^\} catch \(_\) \{ \/\* 整体崩了也要把已有结果送回去，不能让主线程白等满一个超时 \*\/ \}$/m;
+      const nOuter = (src5.match(new RegExp(RE_OUTER.source, "gm")) || []).length;
+      check("mutation 锚点在源码里恰好命中 1 次（worker 外层兜底 catch）", nOuter === 1, `命中 ${nOuter} 次`);
+      if (nOuter === 1) {
+        const mp = path.join(TMP, "mut133-worker-nocatch-both.js");
+        fs.writeFileSync(mp, src5.replace(RE_INNER, () => "  out.push(fs.realpathSync.native(t));")
+                                 .replace(RE_OUTER, () => "}"), "utf8");
+        const t0 = Date.now(); const a = gate(P_MISSING, { env: asLong }); const aMs = Date.now() - t0;
+        const t1 = Date.now(); const b = gate(P_MISSING, { script: mp, env: asLong }); const bMs = Date.now() - t1;
+        check("worker·两层 catch 都去掉 ⇒ 主线程白等满一个超时（耗时差 > 300ms）",
+          bMs - aMs > 300, `real=${aMs}ms mut=${bMs}ms`);
+        // 阈值 300 ms 的两侧余量：真文件侧本机实测约 60 ms、改坏侧约 844 ms（= 800 界 + 启动），
+        // 两边都留了两倍以上，不贴着任一侧取（官通节「哨兵阈值两侧都留余量」）。
+        check("worker·并且它走的是**降级**那条路（不是 fail-open 崩溃）",
+          /有界 realpath \*\*没跑\*\*/.test(b.err) && !/守卫自身出错/.test(b.err), b.err.slice(0, 200));
+        // 🔴 **这一条我第一版写反了，留档**：原文断言 `a===2 && b===2`（「语法层仍在顶着」），
+        //   实测 `b===0`。**错在我把上一个夹具的观察搬了过来** —— 那个夹具 HOME 与候选
+        //   写的是同一个短名串，语法层直接命中，所以判决确实不动；而本节的夹具刻意让两侧
+        //   写法不同（HOME 长名 · 候选短名），语法层结构上不可能命中，判决全靠 realpath 层。
+        //   ⇒ **同一句「语法层顶得住」在两个夹具上一真一假**，而我是照着记忆写的期望值。
+        //   这正是本批开工时给自己立的第三条：每条断言之前先问「这个期望值是量出来的还是想出来的」。
+        check("worker·两层 catch 都没了 ⇒ 不只是慢，判决本身也退化成放行（realpath 层是唯一防线）",
+          a.code === 2 && b.code === 0, `real=${a.code} mut=${b.code}`);
+      }
+    }
+
+    // ── hook-budget.js 是**可选依赖**，两条路都得跑 ────────────────────────────
+    // 它随 issue #127 那一路走，本批落地时可能还没进主干 ⇒ 主干上跑到的永远是「取不到」
+    // 那一条，而「取到了」那一条**结构上无人验**。故这里用一个**兄弟目录桩模块**把两条都跑掉：
+    // 把 hook 抄到 `<TMP>/budget-probe/hooks/`，桩放 `<TMP>/budget-probe/lib/` ——
+    // hook 里那句 `require("../lib/hook-budget.js")` 就落在桩上，不需要任何环境变量开关
+    // （**给一道硬闸加一个「从哪加载模块」的 env 开关本身就是新的攻击面**，刻意不加）。
+    {
+      const bp = path.join(TMP, "budget-probe");
+      fs.mkdirSync(path.join(bp, "hooks"), { recursive: true });
+      fs.mkdirSync(path.join(bp, "lib"), { recursive: true });
+      const hookCopy = path.join(bp, "hooks", "dao-hard-gates.js");
+      fs.writeFileSync(hookCopy, src5, "utf8");
+      const stub = path.join(bp, "lib", "hook-budget.js");
+      const writeStub = (capForMs) => fs.writeFileSync(stub,
+        `module.exports = {\n` +
+        `  resolveRegisteredTimeoutMs: () => ({ ms: 10000, source: "registered", note: "桩模块", matched: 1 }),\n` +
+        `  createBudget: () => ({ totalMs: 10000, left: () => 9000, canAfford: () => true, capFor: () => ${capForMs} }),\n` +
+        `};\n`, "utf8");
+
+      // ㈠ 桩说「随便你用多久」⇒ 行为应与没有桩时一致
+      writeStub(800);
+      check("hook-budget 在场·capFor 给足 ⇒ 判决与没有它时一致（接上它不该改变结论）",
+        gate(P_MISSING, { script: hookCopy, env: asLong }).code === 2);
+      check("hook-budget 在场·selfcheck 报「读自注册」而不是「没找到」", (() => {
+        const r = spawnSync(process.execPath, [hookCopy, "--selfcheck"], { encoding: "utf8" });
+        return /有界 realpath.*墙钟预算读自注册/.test(String(r.stdout || ""));
+      })());
+
+      // ㈡ 桩把预算夹到 1ms ⇒ 真代码必须**照它夹**（这才叫「内层永远先于外层响」）
+      writeStub(1);
+      check("hook-budget 在场·capFor 夹到 1ms ⇒ 真的按它夹（8.3 那格降级）—— 证明这行不是摆设",
+        gate(P_MISSING, { script: hookCopy, env: asLong }).code === 0,
+        `code=${gate(P_MISSING, { script: hookCopy, env: asLong }).code}`);
+
+      // ③「结果不被消费」的真正靶子：capFor 照调（副作用都发生了），返回值被丢掉。
+      // **这一条只有在桩在场时才可观测** —— 没有桩时 capFor 压根不被调用。
+      {
+        const RE_CAP = /^    callMs = budget\.capFor\(callMs\);$/m;
+        const n = (src5.match(new RegExp(RE_CAP.source, "gm")) || []).length;
+        check("mutation 锚点在源码里恰好命中 1 次（③·budget.capFor 的返回值）", n === 1, `命中 ${n} 次`);
+        if (n === 1) {
+          const mp = path.join(bp, "hooks", "mut-capfor-unused.js");
+          fs.writeFileSync(mp, src5.replace(RE_CAP, () => "    budget.capFor(callMs);"), "utf8");
+          check("③结果不被消费·capFor 照调但返回值丢掉 ⇒ 1ms 的夹取失效（0 翻回 2）",
+            gate(P_MISSING, { script: mp, env: asLong }).code === 2,
+            `code=${gate(P_MISSING, { script: mp, env: asLong }).code}`);
+        }
+      }
+      fs.rmSync(stub, { force: true });
+      check("桩撤掉之后 selfcheck 报「没找到 hook-budget」⇒ 两条路都被走到过，不是只跑了一条", (() => {
+        const r = spawnSync(process.execPath, [hookCopy, "--selfcheck"], { encoding: "utf8" });
+        return /有界 realpath.*没找到 ccswitch\/lib\/hook-budget\.js/.test(String(r.stdout || ""));
+      })());
+    }
+
+    // ── selfcheck 把「这套外壳还转得动」摆出来 ────────────────────────────────
+    // 「机制坏了、于是每次都静默 fail-open」与「机制好着、只是从没被触发」在任何日志里
+    // 长得一样 —— 这一条钉的就是那句话有没有被真的问出来。
+    {
+      const r = spawnSync(process.execPath, [HOOK, "--selfcheck"], { encoding: "utf8" });
+      const out = String(r.stdout || "");
+      check("selfcheck 里有「有界 realpath」这一行（这套外壳被独立问过一次）",
+        /有界 realpath（G2 · issue #133）/.test(out), out.slice(0, 900));
+      check("selfcheck 那一行报的是「活的」+ 真跑出的毫秒数（不是一句写死的话）",
+        /✓ 有界 realpath（G2 · issue #133）：活的 —— \d+ ms 解出 /.test(out), out.slice(-500));
+    }
+
+    check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
+  }
+}
+
 console.log("\n──── G3 · 对外发布（⑤自主边界：不可逆 + 需用户在场）────");
 {
   const positives = [
@@ -1367,8 +1615,34 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
   for (const [name, c] of negatives) {
     check(`负控：${name}`, !/dao PR-first/.test(nudge(c)), JSON.stringify(nudge(c).slice(0, 80)));
   }
-  check("乙类只提醒不阻断：nudge hook 恒 exit 0",
-    spawnSync(process.execPath, [NUDGE], { input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main" } }), encoding: "utf8" }).status === 0);
+  // ⚠ **这一条原先是 `nudge()` 的「行内孪生兄弟」：自己 spawnSync、同样不带 cwd。**
+  //   issue #129 的清单里**只有 `nudge()` 那一处**，这一处是本批扫全仓时捞出来的
+  //   —— 同一个形态在**同一个文件里**有两份，而单子上只记了一份。
+  //   ⇒ 改用 `nudgeRaw()` 走同一条沙箱路径：**同型的东西只留一个出口**，
+  //   否则下次再有人收口 `nudge()`，这一处照旧从射程外溜过去（本仓反复记的那个形态）。
+  check("乙类只提醒不阻断：nudge hook 恒 exit 0", nudgeRaw("git push origin main").status === 0);
+
+  // ── issue #129 的关闭条件，做成自失效断言 ────────────────────────────────
+  // 「跑完这套之后真仓 `_tmp/` 无改动」不能靠人事后去看一眼 —— 那正是无标记时刻的自由裁量。
+  // 这里把它变成一条会红的断言：往沙箱里放 canary，跑一轮 nudge，再看它动没动。
+  {
+    const canary = path.join(NUDGE_SANDBOX, "_tmp", "dump", "canary.js");
+    fs.mkdirSync(path.dirname(canary), { recursive: true });
+    fs.writeFileSync(canary, "// CANARY_ORIGINAL\n", "utf8");
+    const before = fs.readdirSync(NUDGE_SANDBOX).sort().join(",");
+    for (const c of ["git push origin main", "pnpm dev", "npm run dev", "git push origin feat/x"]) nudge(c);
+    check("#129·nudge 走沙箱 cwd 之后，沙箱里的 canary 逐字节没动",
+      fs.readFileSync(canary, "utf8") === "// CANARY_ORIGINAL\n");
+    check("#129·并且沙箱顶层没有凭空多出文件（去重表被 DAO_TOOL_NUDGE_STATE 引开了）",
+      fs.readdirSync(NUDGE_SANDBOX).sort().join(",") === before,
+      `before=${before} after=${fs.readdirSync(NUDGE_SANDBOX).sort().join(",")}`);
+    // 判别力：这两条断言不是恒真的 —— 拿一个**真会写盘**的形态证明沙箱确实是可被写脏的。
+    // 没有这一条，上面两条与「hook 压根没跑」在全绿输出里长得一模一样。
+    fs.writeFileSync(path.join(NUDGE_SANDBOX, "probe-writable.txt"), "x", "utf8");
+    check("判别力·沙箱本身是可写的（否则上面两条是恒真的废话）",
+      fs.readdirSync(NUDGE_SANDBOX).sort().join(",") !== before);
+    fs.rmSync(path.join(NUDGE_SANDBOX, "probe-writable.txt"), { force: true });
+  }
 }
 
 console.log("\n──── G7 · shell 里跑搜索/读文件（正负控全部取自真语料）────");

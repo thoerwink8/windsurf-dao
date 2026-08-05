@@ -637,13 +637,193 @@ function g2Expand(raw, vars) {
 //      **它现在被接住了**（文件名短名同样落 realpath 全路径那一步），回归网有正控钉着。
 // ⚠ 它顺带会解开 symlink/junction，这是 realpath 的语义、不是本函数想要的；因为它只在
 //   `~<数字>` 路径上跑，而那类路径此前**一律不匹配**，任何改变都只会往"更准"的方向走。
-function g2LongPath(p) {
-  try { return norm(fs.realpathSync.native(p)); } catch (_) { /* 文件不存在是常态 */ }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── 有界 realpath（issue #133，2026-08-05）────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// **治的是什么**：`fs.realpathSync.native` **同步不可中断** —— 下面 `g2LongPath` 原先
+// 那两个 `try/catch` 接得住「抛错」、**接不住「卡住」**（网络盘 / 断连的映射盘）。
+// 而 live 注册写着 `timeout: 10`（秒）⇒ 真卡住时宿主杀掉的是**整个 hook 进程**，
+// **炸的是全部七道闸，不只 G2**。
+//
+// 🔴 **动手之前先把「谁会走到它」重新量了一遍，量出来的与 #133 单子上写的不是一回事**
+//    （`_tmp/g2io/probe-reach.mjs`：preload shim 包住 `fs.realpathSync.native` 数真实 syscall）。
+//    #133 与本文件头注 ⑮ 都写着「长名 HOME（本机 / 常见部署）**一次 I/O 都不落**」。
+//    **那句话只对「候选路径自己不含 `~<数字>`」的样本成立** —— 而第三轮那组探针恰好
+//    全是这一种。本机长名 HOME 实测：
+//      · `Edit D:/frank/x/src/a.ts`                        realpath = 0
+//      · `Edit C:\Users\ADMINI~1\AppData\…\note.md`        realpath = **2**
+//      · `Bash cp a.txt "C:\Users\ADMINI~1\…\note.md"`     realpath = **4**
+//    而 `~<数字>` 路径在真语料里是 **1196 条**（见下方 `g2LongPath` 头注：scratchpad 一律
+//    走 `C:\Users\ADMINI~1\AppData\…`）⇒ **主要发生面在候选侧，不在常量侧**，而候选侧吃的是
+//    **任意用户路径** —— 一块断连的映射盘（`Z:\SOMEDI~1\…`）比「HOME 恰好是 8.3 短名」
+//    现实得多。⇒ **界加在 `g2LongPath` 上（两侧共用它），不只加在常量侧。**
+//    ⚠️ 这一格是本文件头注 🔬 ㈢ 那条透镜的第三次复发：**一组样本的共同约束，看不见的时候
+//    就会被当成背景写进结论**。三轮里每一轮的样本集都少了「候选自己含 `~<数字>`」这根轴。
+//
+// **机制：worker + `Atomics.wait`，不是子进程。** 两条路都量过（`_tmp/g2io/probe-worker.mjs`
+// 与 `probe-spawn.mjs`，本机 node v24.13.1 / win32）：
+//   | 方案                          | 冷启   | 热态     | 被测方卡死时父侧回来的时刻 | 这个界靠谁成立            |
+//   |-------------------------------|--------|----------|----------------------------|---------------------------|
+//   | 子进程 `spawnSync{timeout}`   | 44.1ms | 44.1ms   | 410ms（设 400）            | **靠子进程真的被杀掉**    |
+//   | worker + `Atomics.wait`       | 49ms   | 18.6ms   | 409ms（设 400）            | **靠主线程自己的计时器**  |
+//   两者耗时同一个量级，**差别只在最后一列，而那一列就是本 issue 的全部内容**：
+//   子进程那条路的保证依赖「被卡住的那一方能被 TerminateProcess 杀掉」，而 Windows 上
+//   卡在已断连 SMB 上的进程恰恰是出了名的难杀 ⇒ **拿一个同样依赖对方配合的机制，去修
+//   「对方不配合」这个病，是把同一个错误往上搬了一层。** worker 这条路里
+//   `Atomics.wait(flag, 0, 0, ms)` 由**主线程自己**计时，worker 在干什么它一概不问。
+//   ⚠️ **两个前提都实测过，任一不成立 worker 方案就不成立**：㈠主线程能在 worker 仍卡着时
+//   正常 `process.exit(0)`（本 hook 每条出口都是显式 `process.exit`，见文件末尾）；
+//   ㈡`unref()` 后的 worker 不吊住事件循环。
+//   ⚠️ **照直写没测的那一半**：两个方案我都只用**用户态阻塞**（`Atomics.wait`）模拟过卡死 ——
+//   本机没有可用的断连映射盘，**「内核态 SMB 阻塞」这一格仍未实测**，与 #133、与前三轮
+//   对抗官挂的是同一笔账。worker 方案对它在**结构上**免疫（主线程不问对方），
+//   **但「结构上免疫」这句话本身是读码得出的，不是测出来的。**
+//
+// **fail-open 与代价**：拿不到结果时按原样比（同头注设计取舍②）—— 那一次调用里 8.3 短名 /
+// junction 这一层归一没生效，G2 对那类路径退回 issue #112 之前的射程（**漏报方向**）。
+// 这正是 #133 列的第 3 条路（「干脆不认这一格」），**本批把它从「主方案」降级成「兜底」**：
+// 只在有界机制自己跑不起来 / 预算见底时才走到，且**每次都在 stderr 上自陈**，不静默。
+const G2_REALPATH_CALL_MS = 800;
+// 调参三问（官通节要求的是三问不是双问）：
+//   ①改小会怎样 —— 慢盘上一次**正常**的 realpath 被判成超时 ⇒ fail-open ⇒ 那条路径不归一
+//     ⇒ 漏报。本机实测：worker 往返冷启 49 ms / 热态 18.6 ms，realpath 自身 0.035 ms。
+//   ②当前值够不够 —— 800 是冷启的 16 倍、realpath 自身的两万倍，够。
+//   ③已知需求上限（≈50 ms）到 800 之间那段有没有真实需求 —— 有：首次 worker 冷启抖动、
+//     杀毒软件扫 node.exe、机械盘首次寻道。再往上到注册的 10 s 那一段**没有**真实需求，
+//     而那一段正是本 issue 拒绝付的那笔钱 ⇒ 上界刻意远离宿主预算，不贴着它取。
+const G2_REALPATH_TOTAL_MS = 2400;   // 本进程累计上限 = 3 次满额；实测每次 hook 调用去重后
+                                     // 最多 1 个不同的 `~<数字>` 路径（见 probe-reach），3 倍余量
+const G2_REALPATH_MIN_MS = 120;      // 低于这个余量就别起了：起一次冷启就要 49 ms，
+                                     // 余量不够时起它 = 白付 49 ms 再超时，比直接降级更糟
+let _g2RealpathSpentMs = 0;
+let _g2RealpathNotes = 0;            // stderr 自陈的次数上限，免得一次调用刷屏
+let _g2RealpathDead = false;         // 本进程内「这条路已判死」——见 g2RealpathBounded 首行
+const _g2RealpathMemo = new Map();   // 按输入路径记忆化：实测同一路径一次 hook 调用里被要 4 次
+
+// worker 正文。**刻意只做 realpath，不做归一** —— 归一逻辑留在主线程，worker 越薄越好：
+// 它是这条链上唯一一段「可能永远回不来」的代码，回不来的那段里放的东西越少越容易讲清楚。
+//
+// 🔴 **每条路径都必须走到最后那两行**（`Atomics.store` + `notify`）。主线程此刻正阻塞在
+// `Atomics.wait` 上、**没有事件循环**，收不到 worker 的 `error`/`exit` 事件 ⇒
+// **worker 悄悄崩掉与 worker 卡住，在主线程看来完全一样：都是白等满一个超时。**
+// 故 realpath 那一句的 `catch` 是承重的（「文件不存在」是常态：Write 新建 / 路径写错 /
+// 短名指向不存在的用户），外面再套一层兜底 catch，`postMessage` 也单独 try 住。
+// 回归网有一条反向 mutation 钉着这一句：拿掉它 ⇒ 一条不存在的 8.3 路径就从「立刻返回」
+// 变成「白等满 800 ms 再降级」。
+const G2_REALPATH_WORKER_SRC = `
+const { workerData } = require("worker_threads");
+const out = [];
+try {
+  const fs = require("fs");
+  for (const t of workerData.targets) {
+  try { out.push(fs.realpathSync.native(t)); } catch (_) { out.push(null); }
+  }
+} catch (_) { /* 整体崩了也要把已有结果送回去，不能让主线程白等满一个超时 */ }
+try { workerData.port.postMessage(out); } catch (_) {}
+const flag = new Int32Array(workerData.sab);
+Atomics.store(flag, 0, 1);
+Atomics.notify(flag, 0);
+`;
+
+// 宿主给的墙钟预算。**复用 `ccswitch/lib/hook-budget.js`，不另起一套** —— 它治的
+// 「内层超时常量 vs 外层注册值，两个文件里互不知情的两个数」与本条是同一件事（issue #127）。
+// ⚠ **它是可选依赖**：那个模块随 issue #127 那一路走，本批落地时可能还没进主干。
+// 取不到就退到上面几个自带常量（与该模块自己的 `FALLBACK_TIMEOUT_MS = 10000` 同向：
+// **估小只会提前降级并明说没跑，估大会让 hook 以为还有余量、一头撞进宿主的刀口**）。
+// 两条路都有断言钉着（回归网用 `_tmp/` 下的兄弟目录喂一个桩模块，见 hard-gates.tests.js）。
+let _g2Budget;                       // undefined=还没算；null=没有那个模块 / 算不出
+function g2HookBudget() {
+  if (_g2Budget !== undefined) return _g2Budget;
+  _g2Budget = null;
   try {
-    const i = p.lastIndexOf("/");
-    if (i > 0) return norm(fs.realpathSync.native(p.slice(0, i))) + p.slice(i);
-  } catch (_) { /* 目录也不存在 ⇒ 按原样比 */ }
-  return p;
+    const hb = require("../lib/hook-budget.js");
+    const t = hb.resolveRegisteredTimeoutMs({ hookFile: __filename, hookEventName: "PreToolUse" });
+    const b = hb.createBudget({ totalMs: t.ms });
+    b.daoNote = t.source + " · " + t.note;
+    _g2Budget = b;
+  } catch (_) { /* 模块不在 / 读不到注册 ⇒ 走本文件自带的保守常量 */ }
+  return _g2Budget;
+}
+
+// 降级自陈。**放行与「跑了且没事」在退出码上长得一样，这几行 stderr 是唯一的区分** ——
+// 同本文件末尾那个 fail-open catch 的理由，一字不改地适用于这里。
+function g2RealpathDegrade(why) {
+  _g2RealpathDead = true;
+  if (_g2RealpathNotes < 3) {
+    _g2RealpathNotes++;
+    try {
+      process.stderr.write(
+        `[dao-hard-gates G2] ⏱ 有界 realpath **没跑**：${why}\n` +
+        `⇒ 这条路径按原样比对（fail-open，同头注设计取舍②）：8.3 短名 / junction 那一层归一` +
+        `在这一次调用里没生效，G2 对那一类路径退回 issue #112 之前的射程。**这不是「通过」，是「没测」。**（issue #133）\n`
+      );
+    } catch (_) { /* stderr 写不动也不能因此拦人 */ }
+  }
+  return null;
+}
+
+// 有界地把一批路径解成真实路径。返回与 targets 等长的数组（解不开的位置是 null），
+// 或整体 null（= 这一次根本没跑成，调用方按 fail-open 处理）。
+function g2RealpathBounded(targets) {
+  // 一次没跑成就别再试了。**它防的不是那一次，是后面每一次**：worker 若因为环境原因
+  // 根本起不来（或 FS 真卡住），后续每个**不同**的路径都会再白等一次 —— 累计上限
+  // `G2_REALPATH_TOTAL_MS` 兜得住总量，但那 2.4 s 全是白付的。一次失败就把这条路
+  // 判死、直接走 fail-open，是本进程内成本最低的处置（进程短命，不存在"过一会儿好了"）。
+  if (_g2RealpathDead) return null;
+  const leftTotal = G2_REALPATH_TOTAL_MS - _g2RealpathSpentMs;
+  if (leftTotal < G2_REALPATH_MIN_MS) {
+    return g2RealpathDegrade(`本进程 realpath 累计预算用尽（已花 ${_g2RealpathSpentMs} ms / 上限 ${G2_REALPATH_TOTAL_MS} ms）`);
+  }
+  let callMs = Math.min(G2_REALPATH_CALL_MS, leftTotal);
+  const budget = g2HookBudget();
+  if (budget) {
+    // 内层永远先于外层响：夹到宿主剩余预算之内，夹不下就干脆不起（见 G2_REALPATH_MIN_MS）
+    if (!budget.canAfford(G2_REALPATH_MIN_MS)) {
+      return g2RealpathDegrade(`宿主墙钟预算只剩 ${budget.left()} ms，不够起一次有界 realpath（至少要 ${G2_REALPATH_MIN_MS} ms）`);
+    }
+    callMs = budget.capFor(callMs);
+  }
+  const t0 = Date.now();
+  try {
+    const { Worker, MessageChannel, receiveMessageOnPort } = require("worker_threads");
+    const sab = new SharedArrayBuffer(4);
+    const flag = new Int32Array(sab);
+    const { port1, port2 } = new MessageChannel();
+    const w = new Worker(G2_REALPATH_WORKER_SRC, {
+      eval: true,
+      execArgv: [],                     // 不继承父进程的 `-r` 预加载：行为可预期，也免得被测量工具改变被测对象
+      stdout: true, stderr: true,       // worker 的输出**不**自动串进本 hook 的 stdout/stderr（宿主在读那两条）
+      workerData: { sab, port: port2, targets },
+      transferList: [port2],
+    });
+    w.unref();                          // 卡住的 worker 不许吊住事件循环
+    Atomics.wait(flag, 0, 0, callMs);   // ← 界在这里，由主线程自己计时
+    _g2RealpathSpentMs += Date.now() - t0;
+    const msg = receiveMessageOnPort(port1);
+    if (!msg) return g2RealpathDegrade(`realpath 超过 ${callMs} ms 未返回（路径可能在断连的网络盘/映射盘上）`);
+    return msg.message;
+  } catch (e) {
+    _g2RealpathSpentMs += Date.now() - t0;
+    return g2RealpathDegrade("有界 realpath 起不来：" + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function g2LongPath(p) {
+  if (_g2RealpathMemo.has(p)) return _g2RealpathMemo.get(p);
+  // 整条 + 目录级两个目标一次问完（原先是"整条失败再问目录"两次同步调用）。
+  // **合成一批不是为了省 syscall，是为了省 worker**：一次 hook 调用里同一路径实测被要 4 次，
+  // 而 worker 冷启 49 ms、realpath 自身 0.035 ms —— 贵的是外壳，不是里面那一下。
+  const i = p.lastIndexOf("/");
+  const targets = i > 0 ? [p, p.slice(0, i)] : [p];
+  const got = g2RealpathBounded(targets);
+  let out = p;                                             // 兜底：按原样比（同改造前）
+  if (got) {
+    if (got[0]) out = norm(got[0]);                        // 整条解开了
+    else if (targets.length > 1 && got[1]) out = norm(got[1]) + p.slice(i);  // 退到目录级
+  }
+  _g2RealpathMemo.set(p, out);
+  return out;
 }
 
 // 绝对路径归一（issue #112 甲⑨）。**改前这一步整个不存在** —— 只有相对路径过 `path.resolve`，
@@ -1357,6 +1537,29 @@ function selfcheck() {
       lines.push(`  ✗ ${id}：matcher 覆盖不到 ${uncovered.join(" , ")} ⇒ **这道闸静默零覆盖**`);
     } else {
       lines.push(`  ✓ ${id}：matcher 覆盖 ${tools.length} 个工具名样本`);
+    }
+  }
+
+  // ── 有界 realpath 是不是活的（issue #133）─────────────────────────────────
+  // **「机制坏了、于是每次都静默 fail-open」与「机制好着、只是从没被触发」在任何日志里
+  // 长得一模一样** —— 这正是本文件反复记的那个形态。故这里**真跑一次**，把它摆出来。
+  // ⚠ 它验的是「这套外壳还转得动」（worker 起得来 + 消息回得来 + 界在计时），
+  // **不是**「它在卡死的网络盘上一定救得回来」—— 后者本机无从验（见 g2RealpathBounded 头注）。
+  {
+    const t0 = Date.now();
+    const got = g2RealpathBounded([norm(HOME)]);
+    const ms = Date.now() - t0;
+    const b = g2HookBudget();
+    const budgetNote = b
+      ? `墙钟预算读自注册（${b.daoNote}），总额 ${b.totalMs} ms`
+      : `**没找到 ccswitch/lib/hook-budget.js**（可选依赖，随 issue #127 那一路走）⇒ ` +
+        `用本文件自带的保守常量：单次 ${G2_REALPATH_CALL_MS} ms / 本进程累计 ${G2_REALPATH_TOTAL_MS} ms`;
+    if (got && got[0]) {
+      lines.push(`  ✓ 有界 realpath（G2 · issue #133）：活的 —— ${ms} ms 解出 ${JSON.stringify(norm(got[0]))}；${budgetNote}`);
+    } else {
+      bad++;
+      lines.push(`  ✗ 有界 realpath（G2 · issue #133）：**跑不起来**（${ms} ms，返回 ${JSON.stringify(got)}）` +
+        `⇒ 8.3 短名 / junction 那一层归一此刻**静默失效**，G2 对那一类路径退回 issue #112 之前的射程；${budgetNote}`);
     }
   }
 
