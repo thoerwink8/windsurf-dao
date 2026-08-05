@@ -133,3 +133,126 @@ bootstrap 实跑结果（2026-08-02）：13 个标签、常设单 #69-#72、看�
 派生副本 `docs/ops/DISPATCH-HUB.md` 的 §六.5 末尾也指着本文件第 1 条。
 
 </details>
+
+## 三、把 4 处明文密钥搬出项目目录（2026-08-05 你拍板，约 10 分钟）
+
+**背景**：issue #135 摸底查出，你这台机器上**项目工作树里的活密钥只有 4 处**
+（主目录那约 13 处是 ssh / gh / Claude Code 各自的标准落点，**不该搬也搬不动**）。
+这一节就是把那 4 处搬进一个统一的、加密的**凭据根**，并把项目里的原件删掉。
+
+🔴 **四处里有一处特别急**：`D:\frank\devin-credit-claimer\.env.local` 装的是
+**一个真人 GitHub 账号的登录口令** —— 不是 token，不能限权、不能按仓库收窄，泄露就是整个账号。
+而**那个目录压根不是 git 仓库**，里面那行 `.gitignore` 其实什么都没挡住：
+**复制一次那个目录，就是复制一次明文口令。**
+
+用 **SOPS + age** 加密（你 2026-08-05 拍的「能带走优先」）：完全本地、免费、不需账号不需联网。
+之所以不用 Windows 凭据管理器 / DPAPI，是因为**那几条没有一条支持跨机迁移** ——
+而「换机器不用逐个找密钥」正是你要的四件事之一。
+
+**为什么必须你来**：**凭据的事交你经手，AI 不碰**（你的既定约束）。
+AI 已经把方案、脚本、代码改动都做完了，**按下去那一下是你的**。
+
+### - [ ] 1. 装两个工具（约 3 分钟）
+
+```
+winget install SecretsOPerationS.SOPS
+winget install FiloSottile.age
+```
+
+🔴 **sops 那个包 ID 别选错**：winget 里有两个，`Mozilla.SOPS` 是 3.7.3 的陈货
+（项目早已从 Mozilla 迁到 getsops），要装的是 `SecretsOPerationS.SOPS`（3.13.2）。
+
+装完**开一个新终端**（PATH 要重新加载）。
+
+### - [ ] 2. 建凭据根（约 2 分钟）
+
+```
+powershell -File D:\frank\windsurf-dao\ccswitch\scripts\dao-secrets-init.ps1 -DryRun
+```
+
+看一眼它要做什么，然后去掉 `-DryRun` 真跑。它会：检查两个工具 → 建
+`%USERPROFILE%\.dao-secrets\` 并**用 icacls 收成只有你能读** → 生成 age 私钥
+（**已存在则绝不覆盖** —— 覆盖等于所有加密文件永久打不开）→ 写 `.sops.yaml` →
+**拿一个一次性探针值真跑一遍「加密→解密→比对」**，链路不通就当场停。
+
+跑完它会告诉你要设一个环境变量；想让它自动设就加 `-SetUserEnvVar`。
+
+### - [ ] 3. 搬那 4 处（约 3 分钟）
+
+```
+powershell -File D:\frank\windsurf-dao\ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun
+```
+
+同样先看再真跑。每一处它都：**先明文备份** → 加密进凭据根 → **独立解密回来逐键比对**
+（比不上就**不删原件**并当场停）→ 通过了才删项目里的原件 → **打印这一处的恢复命令**。
+
+想只搬最急的那一处：加 `-Item P3`。
+
+### 怎么确认真的生效了
+
+跑完之后这四条应该都成立：
+
+1. `dir %USERPROFILE%\.dao-secrets\*.env` 能看到 4 个文件
+2. 随便打开一个，**键名看得见、值是 `ENC[AES256_GCM,...]`**（看得见键名是有意的：
+   不解密也能知道里面存了什么）
+3. 这四个路径**都不存在了**：
+   `D:\frank\devin-credit-claimer\.env.local` · `D:\frank\mousse-cli\.env.local` ·
+   `D:\frank\resume-project\server\.env` ·
+   `D:\frank\devin-byok\_tmp\windsurf-proxy-反代项目 自行扩展\.env`
+4. 领额度脚本照旧能用：
+   `sops exec-env "%USERPROFILE%\.dao-secrets\devin-credit-claimer.env" "npm run claim"`
+   （在 `D:\frank\devin-credit-claimer` 目录里跑。**代码已经改好了**：它默认从凭据根读，
+   读到加密文件会提示你走上面这条命令，读到老的明文文件会打印告警但仍然能跑 ——
+   所以**你还没跑迁移之前，它照样是好的**。）
+
+### - [ ] 4. 确认一切正常后，删掉明文备份
+
+```
+Remove-Item -Recurse -Force "$env:USERPROFILE\.dao-secrets\_backup"
+```
+
+那里面是**明文**（回滚材料）。它在已收紧权限的凭据根内，但确认无恙后就该删掉。
+
+<details>
+<summary>🔴 这套方案防住了什么、没防住什么（照直写，别当成万能）</summary>
+
+**防住的**：密钥不再随项目目录被复制 / 提交 / 分享出去 —— 这是 #135 四个目标里的第 2 个，
+也是 devin-credit-claimer 那个明文口令的实际风险面。
+
+**没防住的（重要）**：默认模式（`Portable`）把**私钥和密文放在同一个文件夹里**
+⇒ **谁整包拷走这个文件夹，谁就同时拿到了密文和解密它的钥匙** —— 对「整包拷走」这个动作，
+加密等于不设防。这是你拍「能带走优先」的直接后果，不是脚本的疏漏。
+想换成「整包拷走也没用」就传 `-KeyLocation Separate`（私钥放 `%AppData%`），
+代价是换机要搬两个地方、且容易只搬一个。
+
+**这个必须单独说**：`%USERPROFILE%\.dao-secrets\age\keys.txt` **丢了就没了** ——
+没有找回、没有客服、没有备用钥匙，所有加密文件永久打不开。
+**建议单独复制一份到密码管理器或离线介质。**
+
+**还有两件本节没解决、已单独挂账的**：
+
+- **#136** —— resume-project 的 JWT 密钥和管理员口令有**静默的弱默认值**，
+  而叫人配置的那个 `.env` **从来没被程序读过**。搬不搬凭据，那个默认值都在。
+- **#137** —— devin-credit-claimer 目录里**还有成批账号口令**（`data/trial-accounts.json`）
+  **和浏览器登录态**（`.auth/`）没搬。它们不是 `key=value`，dotenv 的搬法套不上去。
+  ⇒ **别把「4 处清完」读成「那个目录安全了」。**
+
+</details>
+
+<details>
+<summary>技术出处（给复核与 AI 看）</summary>
+
+设计档 `ccswitch/rules/dao-secrets.md`（凭据根形态 / 注入器两条路 / Windows 三条硬事实 /
+各消费方的取值入口逐一到行）。四处的处置理由写在两个脚本各自的 `.DESCRIPTION` 里
+（那是逐处的唯一真相源，含「谁读它、删了会怎样」）。
+
+**已实测的**：两个脚本的完整控制流（用 sops/age 桩件跑通 init 全流程 + migrate 全流程）、
+**两组负控**（桩件静默丢一个键 / 静默改一个值 ⇒ 两次都被复核抓住、退出码 1、原件未删）、
+claimer.ts 四种取值情形（环境已有值 / 凭据根加密 / 凭据根明文 / 回落老路径）、
+claimer.ts 改动前后 `tsc --noEmit` 错误数一致（2 个，均为改动前就有的 `appendClaimed` 未定义）。
+
+**未实测的**：**真 sops 与真 age 一次都没跑过**（本机两者都没装，而安装属用户动作）⇒
+「桩件下全绿」不等于「真 sops 下全绿」。第 2 步那个自证探针就是为这个准备的 ——
+它跑通了才说明真链路通。
+
+</details>
