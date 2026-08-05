@@ -720,13 +720,26 @@ function g2Expand(raw, vars) {
 //   有效但污染退出码，而本 hook 拿**退出码**当判决通道（`exit 2` = 拦）⇒ 强杀给不出 2，
 //   拦截路无解。**子进程是唯一不用在「按时退出」与「说得出判决」之间二选一的那条路。**
 //
-// ⚠️ **本方案自己的代价，照直写**：子进程杀不掉时会留下一个**孤儿 node 进程**，它卡在同一个
-//   SMB 超时里、约 21 s 后自行退出（不是永久泄漏，但那段时间它确实在）。worker 方案没有这一格。
-//   ⇒ 这是刻意付的：一个短命孤儿进程，换 hook 进程本身不被宿主杀掉。
+// 🔴 **本段 2026-08-06 整段订正，作废原文照录**（PR #145 第二轮对抗验证官实测推翻两句）：
+//   ~~本方案自己的代价：子进程杀不掉时会留下一个**孤儿 node 进程**，它卡在同一个 SMB 超时里、
+//   约 21 s 后自行退出。worker 方案没有这一格。~~ —— **实测没有孤儿**：11 次（含 8 路并发）
+//   在 `spawnSync` 返回后立刻数 node 进程，前后一致；子进程在父侧返回那一刻**已经死了**。
+//   那段「代价」是我读码推的，**推错了**。
+// ⚠️ **真实的代价是另一件事，而它比孤儿要紧**：`spawnSync` **会等子进程收尸**。
+//   实测（让子进程先吃掉 N GB 内存再阻塞，量超出界的量）：0 GB → 7-10 ms，1 GB → 62 ms，
+//   3 GB → 179 ms，5 GB → 141-190 ms，**单调跟着收尸成本走** ⇒ **这个界不是硬界**，
+//   它 = `timeout` + 子进程死透所需的时间。
+//   （另一半也测了：它**不**等 stdout 管道 EOF —— 孙进程攥着管道 4-6 s，父侧照常按时返回
+//    ⇒ 它等的是**进程句柄**那一件事，不是所有 I/O。）
+// 🔴 **这一条把下面那格未尽处的性质改了，照直标**：既然要等子进程死，那个界就
+//   **以子进程杀得掉为前提**。
 // ⚠️ **仍未实测的那一格**：我量的是 **UNC 形态**（`\\host\share\x`），而 `g2Canon` 真正路由
-//   进 `g2LongPath` 的是**盘符形态**（断连映射盘 `Z:\SOMEDI~1\x`）。两者走同一个 SMB
-//   重定向器，**推断**阻塞行为一致，**但没测** —— 本机造不出断连的映射盘。
-//   机制结论（子进程能按时退出）不依赖这一格，**「生产上多久撞一次」仍是推断**。
+//   进 `g2LongPath` 的是**盘符形态**（断连映射盘 `Z:\SOMEDI~1\x`）。**两者的可杀性不是一回事**：
+//   不可路由 UNC 卡在 **connect 阶段**（实测可杀）；断连映射盘卡的是**已建立又断掉的 SMB 会话**，
+//   那才是 Windows 上经典的「杀不掉」—— 而它们恰好分别落在「测了的」和「没测的」两边。
+//   ⇒ **作废原来那句「机制结论不依赖这一格」——它依赖。** 正确的说法是：
+//   **「界在盘符形态下成不成立，未知」**。（本段同样是读码 + Windows 语义推的，没测出来；
+//   不主张界一定不成立，只主张不许再宣称它不依赖。）
 //
 // **fail-open 与代价**：拿不到结果时按原样比（同头注设计取舍②）—— 那一次调用里 8.3 短名 /
 // junction 这一层归一没生效，G2 对那类路径退回 issue #112 之前的射程（**漏报方向**）。
@@ -741,8 +754,16 @@ const G2_REALPATH_CALL_MS = 800;
 //   ③已知需求上限到 800 之间那段有没有真实需求 —— 有：子进程冷启抖动、杀毒软件扫 node.exe、
 //     机械盘首次寻道。再往上到注册的 10 s 那一段**没有**真实需求，而那一段正是本 issue
 //     拒绝付的那笔钱 ⇒ 上界刻意远离宿主预算，不贴着它取。
-const G2_REALPATH_TOTAL_MS = 2400;   // 本进程累计上限 = 3 次满额；实测每次 hook 调用去重后
-                                     // 最多 1 个不同的 `~<数字>` 路径（见 probe-reach），3 倍余量
+const G2_REALPATH_TOTAL_MS = 2400;   // 本进程累计上限 = 3 次满额。
+// 🔴 **本行的辩护词 2026-08-06 作废，原文照录**（PR #145 第二轮实测推翻）：
+//   ~~实测每次 hook 调用去重后**最多 1 个不同的 `~<数字>` 路径**（见 probe-reach），3 倍余量~~
+//   **「最多 1 个」是假的**：一条命令里塞多少个不同的 `~N` 写目标由**写命令的人**决定，
+//   实测最多 51 个（受这个常量本身约束）。**那不是余量，它就是绑定约束。**
+//   病根还是取样：`probe-reach` 那组样本里每条命令**恰好只有一个** `~N` 目标 ——
+//   「一个」不是测出来的性质，是那组样本共同的、没人看见的约束，然后它被写进了辩护词。
+//   **这一次它没有停在注释里：它变成了一条可用的绕过**（预算耗尽 ⇒ 当时还是 fail-open ⇒ 放行）。
+//   ⇒ 现在这个常量**不再是安全边界**（那一格由 ㈠ 快筛 + ㈡ fail-closed 顶着，见 g2LongPath 上方），
+//   它只管「一次 hook 调用最多花多少时间在 realpath 上」——**性能/活性控制，不是闸**。
 const G2_REALPATH_MIN_MS = 120;      // 低于这个余量就别起了：起一次子进程本身就要几十毫秒，
                                      // 余量不够时起它 = 白付一次冷启再超时，比直接降级更糟
 // ⚠️ **绝对耗时数字刻意不写进本文件的注释**（官通节「条款/注释禁记绝对耗时数字，只记
@@ -846,8 +867,11 @@ function g2RealpathBounded(targets) {
     //   因为卡住的东西在**另一个进程**里，不是本进程的一条线程（见上方头注那张进程寿命表）。
     const r = spawnSync(process.execPath, ["-e", G2_REALPATH_CHILD_SRC, ...targets], {
       timeout: callMs,
-      killSignal: "SIGKILL",            // 杀不掉也无所谓（卡在 SMB 上的进程确实杀不掉），
-                                        // 它是另一个进程 —— 我们不等它，见头注「孤儿进程」那格代价
+      // 🔴 原注写「杀不掉也无所谓…**我们不等它**」——**那句是错的，2026-08-06 实测订正**：
+      //    `spawnSync` **会等子进程收尸**（子进程占内存越多，超出界越多，单调）。
+      //    ⇒ 这个界 = `timeout` + 收尸时间，**不是硬界**；且它**以子进程杀得掉为前提**。
+      //    完整数字与「这一格为什么把未尽处的性质改了」在头注，此处不复述。
+      killSignal: "SIGKILL",
       encoding: "utf8",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],  // 子进程的 stderr 不许串进本 hook 的 stderr（宿主在读那条）
@@ -877,6 +901,84 @@ function g2RealpathBounded(targets) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ── 候选侧零 I/O 快筛 + 「查不成就当它是」（PR #145 第二轮对抗验证官报的绕过）──
+// ══════════════════════════════════════════════════════════════════════════════
+// 🔴 **本 PR 一度引入过一条真绕过，这一段就是修它的**（master 没有这个面）：
+//   在一条 Bash 命令里塞 ≥51 个带 `~N` 的写目标当诱饵 ⇒ 每个都起一个子进程 ⇒
+//   `G2_REALPATH_TOTAL_MS` 耗尽 ⇒ `_g2RealpathDead` 置真 ⇒ **后面所有路径 fail-open**
+//   ⇒ 短名 `settings.json` 的写入被放行（exit 0），而 master 同一条命令拦（exit 2）。
+//
+// **两道一起上，缺一不可 —— 这一格是实测出来的，不是照建议改的**：
+//   ㈠ **零 I/O 快筛**（常量侧早就有，候选侧此前没有）：尾巴不可能变成 live 的路径压根不必 realpath。
+//      它治的是「诱饵叫 `f.md`」那一种，顺带把 +50 ms 从「每个带 `~N` 的路径」缩到「真可疑的」。
+//   ㈡ **查不成就当它是**（fail-closed）：需要验证却没验成的路径，**当作命中处理**。
+//      🔴 **㈡ 是必需的，因为㈠单独不成立** —— 实测：把诱饵**改名叫 `settings.json`**，
+//      它们照样过快筛、照样耗尽预算、绕过照旧（60 个诱饵 ⇒ exit 0）。
+//      **诱饵的文件名是一个「我并不认为自己在选」的字段**，而它决定了㈠成不成立。
+//
+// **合起来是一条可以一句话说清的不变式**：
+//   **凡是「需要验证」的路径，要么被验证，要么被拦 —— 没有第三条路。**
+//   ㈠ 定义什么叫「需要验证」，㈡ 保证需要而没验成的不会静默放行。
+//
+// ⚠️ **㈠ 相对 master 少掉的那一格，照直写**：末段是**软链/junction 且名字不像 live**、
+//   而路径里又恰好含 `~N` 时（如 `C:/Users/ADMINI~1/.claude/foo` → `foo` 链到 settings.json），
+//   master 会因为「含 `~N` 就 realpath」而顺带解开它，本版不会。
+//   **但那份覆盖是 8.3 分支的副产品、不是设计出来的防御**：同一个软链只要路径里**没有** `~N`
+//   （长名 HOME 的常态），master 一样解不开、一样漏 —— 它从来就只覆盖少数路径。
+//   ⇒ 判为可接受，且**这一格现在有断言钉着**（回归网「㈠ 少掉的那一格」）。
+// ⚠️ **㈡ 的代价**：预算耗尽后，尾巴可疑却验不成的路径会被**拦**（不是放）。
+//   正常命令一条最多一两个可疑路径，够不着预算 ⇒ 实践中不触发；真触发时 stderr 说明原因，
+//   逃生阀 `DAO_SETTINGS_EDIT_APPROVED` 仍在（本闸本来就有）。**失败方向朝拦，不朝放。**
+
+// 末段可能在 realpath 之后变成 live 名或 `.claude` 吗？零 I/O，纯字符串。
+// 三类要放行去验证：①末段已经就是 live 名 ②末段是 `.claude`（`g2IsLiveDir` 那条路）
+// ③末段含 `~<数字>`（8.3 短名，realpath 之后可能变成上面任意一种，
+//    如 `SETTIN~1.JSO` → `settings.json` —— 真短名是 3 位扩展名，见上方注释）。
+// 其余：realpath 改不了末段的名字 ⇒ 结果不可能匹配 live ⇒ 不必花那次 I/O。
+function g2TailNeedsRealpath(p) {
+  const low = norm(p || "").toLowerCase();
+  const last = low.slice(low.lastIndexOf("/") + 1);
+  if (!last) return true;                                    // 尾巴是空的（`.../`）⇒ 保守，去验
+  if (last === ".claude") return true;
+  if (G2_LIVE_NAMES.includes(last)) return true;
+  return /~\d/.test(last);
+}
+
+// ㈡ 的可疑判据，**比 ㈠ 窄一格：还要求父目录也像 live 目录**。零 I/O。
+// 🔴 **这一格是打自己打出来的，不是想出来的**：只用 ㈠ 那个判据做 fail-closed 时，
+//   实测两处**误伤**（master 放行、本版拦）—— 根因同一个：诱饵自己叫 `settings.json`
+//   但住在 `…\Temp\zz5\` 里，预算耗尽后它们被判「可疑」⇒ 整条命令被拦。
+//   而真目标的父目录**必然**是 `.claude`（否则它就不是 live 配置）⇒ 加上父目录这一问，
+//   误伤没了、绕过照旧关着（诱饵改放 `…\zz<i>\.claude\` 也只会让**诱饵**被拦，
+//   真目标那一条仍然 fail-closed —— **攻击者拿不到「真目标被放行」这个结果**）。
+// ⇒ 判据一句话：**fail-closed 只对「长得就像那个 live 文件」的路径生效**，不对「名字撞车」的生效。
+function g2TailLooksLive(p) {
+  const low = norm(p || "").toLowerCase();
+  const segs = low.split("/");
+  const last = segs.pop() || "";
+  const parent = segs.pop() || "";
+  const nameOk = last === ".claude" || G2_LIVE_NAMES.includes(last) || /~\d/.test(last);
+  if (!nameOk) return false;
+  // 末段就是 `.claude` 时它自己就是那个目录（`cp x ~/.claude/` 那条路），父目录不必再问
+  if (last === ".claude") return true;
+  return parent === ".claude" || /~\d/.test(parent);
+}
+
+// ㈡ 的台账：这条路径**该验没验成，而且它长得就像那个 live 文件**。
+// 按归一前的原样路径记（调用点比的就是它）。
+const _g2Unverified = new Set();
+
+// 判决点用这个，不直接用 g2IsLive —— 「验过且是」与「没验成但可疑」都算命中。
+function g2IsLiveOrUnverified(p) {
+  if (g2IsLive(p)) return true;
+  return !!p && _g2Unverified.has(norm(p));
+}
+function g2IsLiveDirOrUnverified(p) {
+  if (g2IsLiveDir(p)) return true;
+  return !!p && _g2Unverified.has(norm(p));
+}
+
 function g2LongPath(p) {
   if (_g2RealpathMemo.has(p)) return _g2RealpathMemo.get(p);
   // 整条 + 目录级两个目标一次问完（原先是"整条失败再问目录"两次同步调用）。
@@ -890,6 +992,10 @@ function g2LongPath(p) {
   if (got) {
     if (got[0]) out = norm(got[0]);                        // 整条解开了
     else if (targets.length > 1 && got[1]) out = norm(got[1]) + p.slice(i);  // 退到目录级
+  } else if (g2TailLooksLive(p)) {
+    // ㈡ 该验没验成、且长得就像那个 live 文件 ⇒ 记进台账，判决点当它命中。
+    // **这一支就是那条绕过的补丁**：此前这里只是「按原样比」，而按原样比 = 比不上 live = 放行。
+    _g2Unverified.add(norm(p));
   }
   _g2RealpathMemo.set(p, out);
   return out;
@@ -924,7 +1030,9 @@ function g2Canon(s) {
   s = s.replace(/::\$DATA$/i, "");
   if (/^[A-Za-z]:\//.test(s)) {
     try { s = norm(path.win32.resolve(s)); } catch (_) { /* 解析不了就按原样比 */ }
-    if (/~\d/.test(s)) s = g2LongPath(s);
+    // ㈠ 零 I/O 快筛：含 `~N` **且** 末段可能变成 live 名，才值得花那次子进程。
+    // 少了后半个条件就是 PR #145 第二轮报的那条绕过（诱饵路径不必长得像 live 也能耗尽预算）。
+    if (/~\d/.test(s) && g2TailNeedsRealpath(s)) s = g2LongPath(s);
   } else if (/^\/(?!\/)/.test(s)) {
     try { s = path.posix.normalize(s); } catch (_) { /* 同上 */ }
   }
@@ -1177,7 +1285,7 @@ function g2WriteTargets(seg, cwd, vars) {
       const srcs = namedSrcs.concat(hasDestPos ? positional.slice(0, -1) : positional);
       for (const dRaw of destRaws) {
         const destDir = g2Resolve(dRaw, cwd, vars);
-        if (!g2IsLiveDir(destDir)) continue;
+        if (!g2IsLiveDirOrUnverified(destDir)) continue;
         for (const src of srcs) {
           const base = norm(g2Expand(src, vars)).split("/").pop();
           if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
@@ -1317,7 +1425,7 @@ const GATES = [
         const ti = input.tool_input || {};
         const raw = ti.file_path || ti.notebook_path;
         if (!raw) return null;
-        if (!g2IsLive(g2Resolve(raw, cwd, null))) return null;
+        if (!g2IsLiveOrUnverified(g2Resolve(raw, cwd, null))) return null;
         return g2Blocked(`要写用户级 live 配置 \`${norm(raw)}\``);
       }
 
@@ -1329,7 +1437,7 @@ const GATES = [
         const vars = g2VarMap(segs);
         for (const seg of segs) {
           for (const hit of g2WriteTargets(seg, cwd, vars)) {
-            if (!g2IsLive(hit.path)) continue;
+            if (!g2IsLiveOrUnverified(hit.path)) continue;
             return g2Blocked(
               `要用 shell 写用户级 live 配置 —— ${hit.why}解析出 \`${hit.path}\`` +
               `（这一段：\`${seg.slice(0, 90)}\`）`

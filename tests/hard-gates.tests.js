@@ -45,7 +45,7 @@ const HOME = process.env.USERPROFILE || process.env.HOME;
 // **为什么非得造一个假的**：本机真 HOME 下 `~/.claude/settings.json` 与
 // `settings.local.json` **两个都存在** ⇒「文件还不存在、只能靠**目录级回退**归一」这条路
 // 在真 HOME 上**结构上走不到**。而那恰恰是最常见的形态之一：**Write 新建 settings.json**。
-// 🔑 **这个夹具是被一条翻不动的 mutation 逼出来的**：我第一版拿真 HOME 测「worker 里那个
+// 🔑 **这个夹具是被一条翻不动的 mutation 逼出来的**：我第一版拿真 HOME 测「那个
 // per-target catch 承不承重」，得到 2/2 —— 翻不动。**翻不动的原因不是「没 bug」，
 // 是「这个夹具到不了那条路」**，而两者在全绿输出里长得一模一样。
 // 第二版又栽了一次（同一个病、换个长相）：HOME 与候选写的是**同一个短名串** ⇒
@@ -62,7 +62,7 @@ const FAKE83 = (() => {
     // 存在的那一个：整条 realpath 一步解开，用不上目录级回退（做对照组用）
     fs.writeFileSync(path.join(longHome, ".claude", "settings.local.json"), "{}\n");
     // 刻意**不**创建 settings.json —— 它就是「只能靠目录级回退」那条路的钥匙
-    return { longHome, shortHome };
+    return { longHome, shortHome, base };   // base 供 NOTLIVE 夹具在同一棵短名树下另开一支
   } catch (_) { return null; }   // 本卷关了 8.3 短名 ⇒ 相关组只是没测到，不是通过
 })();
 
@@ -357,8 +357,10 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
   mutate("②留字面不执行·目标位提取块永不进",
     /if \(destLast \|\| allTarget\) \{/, "if (false && (destLast || allTarget)) {",
     ps(BYPASS), 2, 0);
+  // ⚠ 锚点 2026-08-06 随 PR #145 第二轮改名（`g2IsLive` → `g2IsLiveOrUnverified`，
+  //   fail-closed 那一格接在这里）。自失效登记表当场报「命中 0 次」，逼我回来改对。
   mutate("③结果不被消费·照样算目标但裁决被丢掉",
-    /if \(!g2IsLive\(hit\.path\)\) continue;/, "if (true) continue;",
+    /if \(!g2IsLiveOrUnverified\(hit\.path\)\) continue;/, "if (true) continue;",
     ps(BYPASS), 2, 0);
   // 变量展开这一层单独换靶：证明拦下绕过的是「$env: 被展开了」，不是别的分支顺手拦的
   mutate("$env: 展开被改坏 ⇒ 变量形态漏过（而字面绝对路径仍拦）",
@@ -776,7 +778,7 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     /  return g2Canon\(s\);\r?\n\}/, "  g2Canon(s);\n  return s;\n}", P9, 2, 0);
   // 8.3 那一层单独换靶：证明拦下短名的是 realpath 那一步，不是别的分支顺手拦的
   mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
-    /if \(\/~\\d\/\.test\(s\)\) s = g2LongPath\(s\);/, "if (false) s = g2LongPath(s);", P9_83, 2, 0);
+    /if \(\/~\\d\/\.test\(s\) && g2TailNeedsRealpath\(s\)\) s = g2LongPath\(s\);/, "if (false) s = g2LongPath(s);", P9_83, 2, 0);
   check("上一条改坏后，`..` 回绕仍然被拦（证明只打掉了 8.3 那一层，两层是独立的）", (() => {
     const mp = path.join(TMP, "mutant-112-9-83only.js");
     fs.writeFileSync(mp, src3.replace(/if \(\/~\\d\/\.test\(s\)\) s = g2LongPath\(s\);/, () => "if (false) s = g2LongPath(s);"), "utf8");
@@ -805,15 +807,18 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   // 🔴 **本条 2026-08-05（issue #133）改过锚点与判据，作废的原文照录**：
   //   ~~锚点 `  try { return norm(fs.realpathSync.native(p)); } catch (_) { /* 文件不存在是常态 */ }`~~
   //   ~~判据：去掉 catch ⇒ 守卫被打进 fail-open，stderr 出现「守卫自身出错」+ ENOENT~~
-  //   #133 把这次 I/O 移进了一个有界 worker，那一句连同它的 catch 一起搬进了
-  //   `G2_REALPATH_WORKER_SRC`。**这条断言当场变红并点名**（`命中 0 次`），
-  //   逼我回来把它改对 —— 这是这张自失效登记表在本仓的第五次真实触发，
-  //   也是我这一批唯一一条**先红后改**的断言。
-  // **换锚点之后判据也必须跟着换，而且换的方向值得记**：catch 搬进 worker 之后，
-  //   「抛异常」不再打到主线程的 fail-open catch 上 —— **主线程此刻阻塞在 `Atomics.wait`，
-  //   没有事件循环，收不到 worker 的 error 事件** ⇒ 症状从「当场崩」变成「白等满一个超时
-  //   再降级」。**同一个 bug，可观测面从 stderr 的一行崩溃栈，变成 stderr 的一行降级自陈 +
-  //   一段真实耗时。** 故新判据两半都验：①降级自陈出现 ②耗时真的涨上去了。
+  //   #133 把这次 I/O 移出了主线程，那一句连同它的 catch 一起搬走了。
+  //   **这条断言当场变红并点名**（`命中 0 次`），逼我回来把它改对 ——
+  //   这是这张自失效登记表在本仓的第五次真实触发。
+  //   ⚠️ **本段 2026-08-06 二次订正**：上一版这里写的是「移进了一个有界 **worker**……
+  //   主线程此刻阻塞在 `Atomics.wait`，收不到 worker 的 error 事件」——
+  //   **那套机制已被 PR #145 第二轮对抗验证官否掉**（worker 卡在内核态时进程照样超预算），
+  //   现在走的是**子进程**。⇒ 那两句在本文件里活到了第二轮才被扫出来，
+  //   而它们**就住在描述被测对象的那段散文里**。
+  // **换锚点之后判据也必须跟着换**：I/O 搬走之后，「抛异常」不再打到主线程的 fail-open catch 上
+  //   ⇒ 症状从「当场崩」变成「降级自陈」。**同一个 bug，可观测面从 stderr 的一行崩溃栈，
+  //   变成 stderr 的一行降级自陈。**（子进程版比 worker 版还多一格好处：崩掉与卡住**可区分**，
+  //   见 hook 里 `G2_REALPATH_CHILD_SRC` 上方那段。）
   // ⇒ 新判据与它的夹具都归 issue #133 那一节（本文件下方「G2 · 有界 realpath」），
   //   连同「文件还不存在只能靠目录级回退」这条路一起。**这里刻意留这段字不留断言** ——
   //   把断言搬到夹具旁边，比在这里再造一份夹具更不容易漂移。
@@ -1248,8 +1253,16 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
 // #112/#117 把 8.3 短名归一做了出来，代价是在一个 PreToolUse 钩子里落同步 realpath。
 // `fs.realpathSync.native` **同步不可中断** ⇒ 原来那两个 `try/catch` 接得住「抛错」、
 // **接不住「卡住」**；而注册写着 `timeout: 10` ⇒ 真卡住时死的是**整个 hook 进程**，
-// **七道闸一起没**。#133 把那次 I/O 挪进一个 worker，界由**主线程自己**的
-// `Atomics.wait` 计时（判据与「为什么不用子进程」见 hook 里 `g2RealpathBounded` 头注）。
+// **七道闸一起没**。#133 把那次 I/O 挪进一个**子进程**（`spawnSync{timeout}`）——
+// 卡住的东西在另一个进程里，本进程按时退出（判据、被否掉的 worker 方案错在哪、
+// 以及这个界自己的前提，全在 hook 里 `g2RealpathBounded` 头注）。
+// 🔴 **本段 2026-08-06 订正**：上一版写的是「挪进一个 **worker**，界由主线程自己的
+// `Atomics.wait` 计时（判据与「**为什么不用子进程**」见……）」——**机制说反了**，
+// 而且它指过去的那个理由，hook 头注里现在写的正是**它错在哪**。
+// ⚠️ 这是「worker 残留」被扫出来的**第四轮**：前三轮扫的都是 hook，而**这一处住在测试文件里**。
+// **『关于某个对象的断言』住在测试文件里，测试文件也在描述那个对象** ——
+// 上一轮我自己刚写下「Grep 找得到话题在哪被提起，找不到话题在哪被下结论」，
+// 然后在**同一个仓的另一个文件**里又漏了一遍。⇒ 改一个机制时，Grep 面必须含它的**回归网**。
 //
 // **本节语料从哪来，照直标**：全部是**对着新机制现造的**，不是从真语料采的。
 // 但夹具的**形态**取自实测 —— `_tmp/g2io/probe-reach.mjs` 数出来「长名 HOME 下候选自己
@@ -1276,6 +1289,24 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
       gate(edit(path.join(shortHome, ".claude", "other.json")), { env: asLong }).code === 0);
     check("负控·降级自陈在正常路径上**不出现**（免得它变成每次都刷的噪音）",
       !/有界 realpath/.test(gate(P_MISSING, { env: asLong }).err));
+
+    // ── 🔴 fail-closed 之后，「降级」与「验过且是 live」在退出码上重合了（都是 2）──────
+    // PR #145 第二轮补 ㈡（查不成就当它是）之后，上面 P_MISSING / P_EXISTS 这类**本来就是
+    // live** 的夹具，健康时 2、降级时也 2 ⇒ **打坏有界 realpath 的 mutation 在它们身上不可观测**。
+    // （本轮实测：4 条断言因此由「改坏后 0」变成「改坏后 2」，登记表点名逼我回来重挑夹具。）
+    // ⇒ 需要一个「**语法上像 live、实际不是**」的夹具：
+    //     · 健康：realpath 解得开 ⇒ 比出来不是 live ⇒ 放行（0）
+    //     · 降级：验不成 + 尾巴像 live ⇒ fail-closed ⇒ 拦（2）
+    //   0↔2 两态可分，这才是打「界」的那些 mutation 的正确靶场。
+    //   它同时是 ㈡ 那笔代价的**唯一直接证据**：这一格就是「预算耗尽时被误拦的那种路径」。
+    const NOTLIVE = (() => {
+      const long = path.join(FAKE83.base, "longdirname-for-83-test", "notthehome", ".claude");
+      fs.mkdirSync(long, { recursive: true });
+      fs.writeFileSync(path.join(long, "settings.json"), "{}\n");
+      return edit(path.join(FAKE83.base, "LONGDI~1", "notthehome", ".claude", "settings.json"));
+    })();
+    check("夹具自证·语法像 live 但实际不是 ⇒ 健康时放行（0）；它是下面那些 mutation 的靶场",
+      gate(NOTLIVE, { env: asLong }).code === 0, `code=${gate(NOTLIVE, { env: asLong }).code}`);
 
     const src5 = fs.readFileSync(HOOK, "utf8");
     // 本节自己的 mutate 器。与上面几节的 mutate3 相比多两件事：①带 env ②同时看 stderr 与耗时。
@@ -1329,9 +1360,11 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
     // ③「结果不被消费」打在**子进程结果的消费点**上：算了、也回来了，但不拿它当结果。
     //    与下面记忆化那条 ③ 的差别：这条**预期翻得动**（它是判据链上的一环），
     //    记忆化那条预期翻不动（纯优化）。两条都留着，因为它们钉的是两句不同的话。
-    mut133("③结果不被消费·子进程结果解析出来了但不返回（改成恒 null ⇒ 一律 fail-open）",
+    // ⚠ 靶场换成 NOTLIVE：本来就是 live 的夹具在 fail-closed 之后两态都是 2，验不出东西。
+    mut133("③结果不被消费·子进程结果解析出来了但不返回（改成恒 null ⇒ 一律降级）",
       /^    return parsed;$/m, "    return null;",
-      [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
+      [["语法像 live 实际不是（健康放行 / 降级拦）", NOTLIVE, 0, 2],
+       ["本来就是 live 的路径：两态都拦 ⇒ 阴性，差额为零也是结论", P_MISSING, 2, 2]]);
     // argv 语义那一格：`node -e SRC t1 t2` 的 argv 里**没有脚本路径**，所以是 slice(1)。
     // 这条钉的是一个**我实测过才敢写**的事实（照 CJS 习惯猜会写成 slice(2)）——
     // 写错了不会报错，只会静默丢掉第一个目标 ⇒ 整条路径解不开、退到目录级或全丢。
@@ -1353,7 +1386,8 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
     {
       const mp = mut133("反向·把单次上限收紧到 1ms ⇒ 一律超时降级",
         /^const G2_REALPATH_CALL_MS = 800;$/m, "const G2_REALPATH_CALL_MS = 1;",
-        [["候选短名·文件不存在", P_MISSING, 2, 0], ["候选短名·文件存在", P_EXISTS, 2, 0]]);
+        [["语法像 live 实际不是（0 → fail-closed 拦）", NOTLIVE, 0, 2],
+         ["本来就是 live：两态都拦 ⇒ 阴性", P_MISSING, 2, 2]]);
       if (mp) {
         const r = gate(P_EXISTS, { script: mp, env: asLong });
         check("反向·降级**不静默**：stderr 明说「没跑」+ 「这不是通过，是没测」+ 指向 issue #133",
@@ -1381,10 +1415,12 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
          ["文件存在（整条一步解开，用不上回退 ⇒ 阴性，差额为零也是结论）", P_EXISTS, 2, 2]]);
 
       // 父进程侧的分诊：`if (r.error)` 那一支。去掉它 ⇒ 超时之后不再走「超时」自陈，
-      // 而是掉进下面的 JSON 解析失败 ⇒ **判决仍是降级（0），但自陈的话变了**。
-      // ⇒ 这条**不能只用退出码测**（两边都是 0，会得到一条永远为真的断言）——
+      // 而是掉进下面的 JSON 解析失败 ⇒ **判决两边一样，只有自陈的话变了**。
+      // ⇒ 这条**不能只用退出码测**（会得到一条永远为真的断言）——
       //    判别力全在那句自陈上，故断言文本。这与上面 ①② 是同一个教训的另一面：
       //    先问「这条断言真正在看的是哪个可观测量」。
+      // ⚠ 2026-08-06 补 fail-closed 之后，这里两边的判决从 0/0 变成 2/2（降级即拦）。
+      //    **断言的性质没变**（判决层看不出差别、判别力全在自陈上），只是那个「一样」的值不同了。
       {
         const RE_ERRBRANCH = /^    if \(r\.error\) \{$/m;
         const n = (src5.match(new RegExp(RE_ERRBRANCH.source, "gm")) || []).length;
@@ -1400,7 +1436,7 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
           })(), env: asLong });
           const mut = gate(P_MISSING, { script: mp, env: asLong });
           check("子进程·两边都降级（判决这一层看不出差别 —— 所以不能只用退出码测它）",
-            real.code === 0 && mut.code === 0, `real=${real.code} mut=${mut.code}`);
+            real.code === 2 && mut.code === 2, `real=${real.code} mut=${mut.code}`);
           check("子进程·分诊在 ⇒ 自陈说的是「超时/断连的网络盘」",
             /超过 \d+ ms 未返回/.test(real.err) && /断连的网络盘/.test(real.err), real.err.slice(0, 200));
           check("子进程·分诊被停用 ⇒ 自陈退化成「没给出可解析的结果」（同一个病，说错了原因）",
@@ -1439,9 +1475,11 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
 
       // ㈡ 桩把预算夹到 1ms ⇒ 真代码必须**照它夹**（这才叫「内层永远先于外层响」）
       writeStub(1);
-      check("hook-budget 在场·capFor 夹到 1ms ⇒ 真的按它夹（8.3 那格降级）—— 证明这行不是摆设",
-        gate(P_MISSING, { script: hookCopy, env: asLong }).code === 0,
-        `code=${gate(P_MISSING, { script: hookCopy, env: asLong }).code}`);
+      // ⚠ 2026-08-06：fail-closed 之后「被夹到 1ms ⇒ 降级」的可观测值由 0 变 2（降级即拦）。
+      //   靶换成 NOTLIVE 才看得出「夹取真的生效了」——P_MISSING 本来就是 live，两态都是 2。
+      check("hook-budget 在场·capFor 夹到 1ms ⇒ 真的按它夹（那格降级 ⇒ fail-closed 拦）—— 证明这行不是摆设",
+        gate(NOTLIVE, { script: hookCopy, env: asLong }).code === 2,
+        `code=${gate(NOTLIVE, { script: hookCopy, env: asLong }).code}`);
 
       // ③「结果不被消费」的真正靶子：capFor 照调（副作用都发生了），返回值被丢掉。
       // **这一条只有在桩在场时才可观测** —— 没有桩时 capFor 压根不被调用。
@@ -1462,6 +1500,84 @@ console.log("\n──── G2 · 有界 realpath（issue #133：同步不可中
         const r = spawnSync(process.execPath, [hookCopy, "--selfcheck"], { encoding: "utf8" });
         return /有界 realpath.*没找到 ccswitch\/lib\/hook-budget\.js/.test(String(r.stdout || ""));
       })());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ── 🔴 预算耗尽绕过：端到端（PR #145 第二轮对抗验证官报的阻断项）───────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // **它是本 PR 一度引入的真回归**（master 没有这个面）：往一条 Bash 命令里塞够多带 `~N`
+    // 的写目标当诱饵 ⇒ 预算耗尽 ⇒ sticky fail-open ⇒ 真目标被放行（exit 0），master 拦（exit 2）。
+    //
+    // 🔴 **对抗官量出来的最要命的一格不是绕过本身，是「零断言」**：他把制造绕过的每一处
+    //   逐个改坏，跑完整 524 条 —— **全部 524 PASS / 0 FAIL**，其中两处**直接让绕过消失**。
+    //   ⇒ **能改变闸的判决而一条断言不响。** 下面这一组就是补这个洞。
+    //
+    // ⚠ **改完之后预算子系统的性质变了，照直写**：补了 fail-closed（㈡）之后，
+    //   预算相关的改动**不再能制造绕过** —— 它们只能造成误伤或多花时间。
+    //   ⇒ 预算这一层从「安全攸关」降级成「性能/活性控制」。这是设计改进，不是覆盖面变窄；
+    //   但**别因此不写断言**：误伤方向同样要有人盯着（下面负控那条就是盯它的）。
+    {
+      const decoy = (n, name) => {
+        const segs = [];
+        for (let i = 0; i < n; i++) segs.push(`echo x > "${path.join(shortHome, "AppData", "Local", "Temp", "zz" + i, name)}"`);
+        return segs;
+      };
+      const TARGET = path.join(shortHome, ".claude", "settings.json");
+      const N = 80;   // 需要 > 预算 ÷ 单次子进程成本（本机约 51，随负载移动）⇒ 取 80 留余量
+
+      // 正控：这就是那条绕过。**它必须拦。**
+      check("🔴绕过闸·80 个 settings.json 诱饵耗尽预算之后，live 目标**仍然拦得住**（fail-closed）",
+        gate(bash([...decoy(N, "settings.json"), `echo x > "${TARGET}"`].join(" ; ")), { env: asLong }).code === 2);
+      check("🔴绕过闸·诱饵换成不像 live 的名字，同样拦得住",
+        gate(bash([...decoy(N, "f.md"), `echo x > "${TARGET}"`].join(" ; ")), { env: asLong }).code === 2);
+      check("🔴绕过闸·PowerShell 工具同一条路也拦得住（#87 那条绕过走的就是它）",
+        gate({ tool_name: "PowerShell", tool_input: { command: [...decoy(N, "settings.json"), `Set-Content "${TARGET}" x`].join(" ; ") }, cwd: REPO },
+          { env: asLong }).code === 2);
+
+      // 负控（㈡ 的误伤面 —— 这一条盯的是「fail-closed 别拦过头」）：
+      // 诱饵自己叫 settings.json 但住在 `zz<i>` 里，**没有真目标** ⇒ 必须放行。
+      // 🔴 这一条是打自己打出来的：㈡ 的判据第一版只看文件名不看父目录，这里当场变红。
+      check("负控·80 个同名诱饵但**没有**真目标 ⇒ 放行（fail-closed 只对父目录也像 live 的生效）",
+        gate(bash(decoy(N, "settings.json").join(" ; ")), { env: asLong }).code === 0);
+      check("负控·长名 HOME 下的普通文件不受影响",
+        gate(bash(`echo x > "${path.join(longHome, "AppData", "plain.md")}"`), { env: asLong }).code === 0);
+
+      // ㈠ 那道零 I/O 快筛：不像 live 的路径**压根不该花预算** ⇒ 不该出现降级自陈。
+      // 拿掉 ㈠ 这条会变红（80 个 f.md 会把预算吃光并开始降级）。
+      check("㈠·不像 live 的诱饵不消耗预算（80 个 f.md 跑完，stderr 无降级自陈）",
+        !/有界 realpath \*\*没跑\*\*/.test(gate(bash(decoy(N, "f.md").join(" ; ")), { env: asLong }).err));
+      // 反向：像 live 的诱饵**应该**吃预算并真的把它吃光 —— 这一条盯的是「记账真的在推进」。
+      // 拿掉成功路径的记账（`_g2RealpathSpentMs +=`）会让预算永不耗尽 ⇒ 这条变红。
+      const eaten = gate(bash(decoy(N, "settings.json").join(" ; ")), { env: asLong }).err;
+      check("反向·像 live 的诱饵确实吃预算、且真把它吃光（stderr 出现降级自陈 ⇒ 记账在推进）",
+        /有界 realpath \*\*没跑\*\*/.test(eaten));
+      // 🔴 **还要问「是哪道闸让它降级的」，不能只问「降级了没有」**：
+      //   把累计预算检查停用、或把成功路径的记账拿掉，**降级照样发生**（改从单次 timeout 那道
+      //   门出去），于是上面那条断言**照样绿** —— 实测确认过，两条 mutation 都溜过去了。
+      //   两者的差别只在**自陈说的是哪个理由**。⇒ 断言理由文本。
+      //   （刻意**不**用耗时哨兵：实测基线 vs 不记账是 2.3s vs 3.9s，可分但阈值贴得紧，
+      //    换台慢机器就会假红；而理由文本是结构性的，不随机器动。）
+      check("预算·降级的理由必须是「累计预算用尽」（证明把它拦下的确实是那道累计闸）",
+        /累计预算用尽/.test(eaten), eaten.slice(0, 200));
+
+      // 两个「好天气里无症状」的删法（对抗官点名要找的那一类）——只能用文本断言。
+      // 它们不影响判决，所以任何行为断言都盯不住；而它们各自有真实代价：
+      //   · `windowsHide` 没了 ⇒ 每次触发闪一个控制台窗（用户可见的骚扰）
+      //   · `NODE_OPTIONS` 没清 ⇒ 子进程继承父进程的 `-r` 预加载（行为不可预期，
+      //     且**测量工具会改变被测对象** —— 对抗官那一轮的 spawn 计数器正是靠 preload 工作的）
+      {
+        const src = fs.readFileSync(HOOK, "utf8");
+        const body = (src.match(/function g2RealpathBounded\([\s\S]*?\n\}/) || [""])[0];
+        check("预算·g2RealpathBounded 函数体切得出来（切不出来下面两条是恒真的废话）",
+          body.length > 300 && /spawnSync/.test(body), `切出 ${body.length} 字节`);
+        for (const [name, re] of [
+          ["windowsHide 还在（没了会每次闪控制台窗）", /windowsHide: true/],
+          ["NODE_OPTIONS 被清空（没清会继承父进程的 -r 预加载）", /NODE_OPTIONS: ""/],
+        ]) {
+          check(`预算·${name}`, re.test(body), `在 g2RealpathBounded 里没找到 ${re}`);
+          check(`判别力·摘掉它断言真会红（${name}）`, !re.test(body.replace(re, "")));
+        }
+      }
     }
 
     // ── selfcheck 把「这套外壳还转得动」摆出来 ────────────────────────────────
