@@ -75,6 +75,17 @@ const bash = (command, cwd) => ({ tool_name: "Bash", tool_input: { command }, cw
 const edit = (file_path) => ({ tool_name: "Edit", tool_input: { file_path } });
 const wake = (tool_input) => ({ tool_name: "ScheduleWakeup", tool_input });
 
+// ── #87 绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）─────────────
+// 🔴 **2026-08-04 提到模块级，只此一份**。原先它是 G2 shell 节里的块内局部常量，
+// 于是 #117 第二轮里我想引用「#87 原文」时**另手打了一个近似串**（字面长名路径），
+// 拿它的测量结果去推翻对抗官对**原文**的判断 —— 而原文是**变量形态**，两者行为不同类，
+// 结论因此整个错掉（全过程见下方 G2 第二轮那节的长注释）。
+// ⇒ 承重语料只留**一份**，谁要引用就引用这个名字；**再有人想"照着写一条一样的"，
+//   那一刻就是本轮那个错误正在重演**。
+const V_UP = "$env:USERPROFILE";        // 拼出来，免得本文件正文自己长得像一条待拦命令
+const LIVE_V_TOP = `"${V_UP}\\.claude\\settings.json"`;
+const BYPASS_87 = `Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\hook-register-202608\\03-merged.live-settings.json" ${LIVE_V_TOP} -Force; "COPY_EXIT=$LASTEXITCODE $?"`;
+
 // 每闸的一条"承重正控"，mutation 与 canary 都拿它当靶
 const CANARY = {
   "G1-windows-mcp": { tool_name: "mcp__windows-mcp__Screenshot", tool_input: {} },
@@ -175,10 +186,12 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
 // 这 6 条真实命令全部误伤，而逃生阀只有用户设得了 ⇒ 会话当场卡住。
 {
   const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
-  const V = "$env:USERPROFILE";           // 拼出来，免得本文件正文自己长得像一条待拦命令
-  const LIVE_V = `"${V}\\.claude\\settings.json"`;
-  // 本次绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）
-  const BYPASS = `Copy-Item "D:\\frank\\windsurf-dao\\_tmp\\hook-register-202608\\03-merged.live-settings.json" ${LIVE_V} -Force; "COPY_EXIT=$LASTEXITCODE $?"`;
+  const V = V_UP;                          // 拼出来，免得本文件正文自己长得像一条待拦命令
+  const LIVE_V = LIVE_V_TOP;
+  // 绕过命令原文引用**模块级唯一那一份**（2026-08-04 提上去的，理由见那里）——
+  // 刻意不在这里再写一遍：本节与第二轮那节必须引用**同一个字符串**，
+  // 否则「#87 原文」就有两份，而两份必漂移（本 PR 第二轮就是栽在这上面）。
+  const BYPASS = BYPASS_87;
 
   const BLOCK = [
     ["#87 绕过命令原文（真语料·承重正控）", ps(BYPASS)],
@@ -316,8 +329,12 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
     /"new-item", "ni"\]\)/, '"new-item", "ni", "sc"])',
     ps(`sc query ${LIVE_V}`), 0, 2);
   mutate("反向·live 精确比对改成后缀匹配 ⇒ 项目级 .claude/settings.json 被误伤",
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{G2_LIVE_DIR\}\/\$\{n\}`\);/,
-    'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
+    // 锚点 2026-08-04 两次随 G2 常量侧改动更新：先是 `G2_LIVE_DIR` 常量 → 惰性 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明），
+    // 后又拆成「语法层 / realpath 层」两层比（第二轮对抗官指出常量侧 I/O 站点无超时守卫）。
+    // 现在把**目录相等判定**整个换成后缀匹配，等价于当年那个「精确比对被放宽」的变异。
+    /    return g2MatchesLiveDir\(low\.slice\(0, low\.length - n\.length - 1\)\);/,
+    "    return true;",
     bash("cp _tmp/x.json D:/frank/mousse-cli/.claude/settings.json"), 0, 2);
 
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
@@ -394,17 +411,18 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
   //    这张表防「**清单**答错问题」：一份写在 PR body 里的漏报面清单没有任何东西在核它。
   //    每条末尾的 PowerShell 语义都**在本机实跑验证过**（临时文件，从未触碰真 live）。
   const KNOWN_GAPS = [
-    // ⚠ 下面 4 条是本轮**新发现**（不在 PR body 那份五条清单里），且都落在本 PR 新写的
-    //   `g2WriteTargets()` 参数解析里 —— 不是"另一天的活"，是这个交付单元自身的不完整。
-    ["漏报·具名源 + 正参目标（`-Path <源> <目标>`）—— 本机实跑确认真的会覆盖目标",
-      ps(`Copy-Item -Path _tmp/x.json ${LIVE_V} -Force`), 0],
-    ["漏报·`-LiteralPath <源> <目标>` 同上", ps(`Copy-Item -LiteralPath _tmp/x.json ${LIVE_V} -Force`), 0],
-    ["漏报·具名 `-Destination <目录>`（正参给目录时有 basename 展开，具名没有）",
-      ps(`Copy-Item .\\settings.json -Destination ${LIVEDIR_V} -Force`), 0],
-    ["漏报·绝对路径不过 path.resolve ⇒ `..` / `.` / `//` 全绕开精确比对",
-      ps(`Copy-Item x "${V}\\.claude\\..\\.claude\\settings.json" -Force`), 0],
-    ["漏报·同上，连**改前就有**的 Edit/Write 分支也一样（不是本 PR 引入，但同一个病）",
-      edit(`${HOME}\\.claude\\..\\.claude\\settings.json`), 0],
+    // ── ✅ 已修（issue #112 甲⑥⑦⑨，PR 见下）：原先住在本表的 6 条已迁去
+    //    「issue #112 三格修复」那一节当**正控**。本表刻意留这条注释而不是静默删行 ——
+    //    表本身是退役触发器（dao-guard-writing ④），删得无声无息就等于把触发器也删了。
+    //    迁走的 6 条：⑥ `-Path <源> <目标>` · ⑥ `-LiteralPath <源> <目标>` ·
+    //    ⑦ 具名 `-Destination <目录>` · ⑨ shell 分支 `..` 回绕 · ⑨ Edit/Write 分支 `..` 回绕 ·
+    //    ⑨ 8.3 短名。**⑧ 与两处误伤刻意未动**（判断档，留给用户拍板，见 issue #112 甲⑧/乙）。
+    //
+    // ⚠ 下面这条是 **#112 这一批新发现**的（攻 ⑦ 的尾斜杠边界时撞出来的），不在 #106 那份清单里。
+    ["漏报·双引号里的**尾反斜杠**吞掉闭引号 ⇒ 整条命令剩余部分并进一个 token（具名目标）",
+      ps(`Copy-Item .\\settings.json -Destination "${V}\\.claude\\" -Force`), 0],
+    ["漏报·同上，位置目标也一样（证明它是 tokenizer 层的，不是某个分支的）",
+      ps(`Copy-Item .\\settings.json "${V}\\.claude\\" -Force`), 0],
     ["漏报·单个正参 + cwd 恰在 ~/.claude ⇒ 隐式目标就是 live（本机实跑确认）",
       ps("Copy-Item ..\\backup\\settings.json -Force", `${HOME}\\.claude`), 0],
     ["漏报·Rename-Item 的 NewName 相对**源目录**解析，本闸按 cwd 解析（本机实跑确认）",
@@ -428,8 +446,12 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
     ["漏报·命令表闭世界：dd of=", bash(`dd if=x.json of="$HOME/.claude/settings.json"`), 0],
     ["漏报·命令替换内部的写（`$(...)` 段不再切分，整段段首是 echo）",
       bash(`echo $(cp /d/x.json "$HOME/.claude/settings.json")`), 0],
-    ["漏报·Windows 8.3 短名形态的 home", ps(`Copy-Item x "C:\\Users\\ADMINI~1\\.claude\\settings.json" -Force`), 0],
-    ["漏报·UNC 本机形态", ps(`Copy-Item x "\\\\localhost\\C$\\Users\\Administrator\\.claude\\settings.json" -Force`), 0],
+    // ⚠ 8.3 短名那条已修（#112 甲⑨），迁去下节当正控。**UNC 共享形态仍在**——
+    //    `//localhost/C$/…` 的解法只有 `realpath`，而它对网络路径会把 SMB 超时（可达数十秒）
+    //    拖进 PreToolUse 钩子 ⇒ 拿会话卡死换覆盖面，刻意不换。判据见 hook 里 g2LongPath 的收窄㈠。
+    //    （`\\?\C:\…` 那个**扩展长度前缀**形态是纯字符串、无 I/O，已在 #112 里修掉。）
+    ["漏报·UNC 本机形态（realpath 是唯一解法，但它对网络路径会把 SMB 超时拖进钩子 ⇒ 刻意不修）",
+      ps(`Copy-Item x "\\\\localhost\\C$\\Users\\Administrator\\.claude\\settings.json" -Force`), 0],
     // ↓ 误伤侧的两条（当前**过度拦截**）
     ["误伤·heredoc 正文里写着那条命令 ⇒ 正文行被当成真命令（守卫输出落回自己扫描面）",
       bash(`cat > _tmp/note.md <<'EOF'\nCopy-Item x "${V}\\.claude\\settings.json" -Force\nEOF`), 2],
@@ -471,8 +493,12 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
 
   // ①移除：整个 live 精确比对换成后缀匹配 ⇒ 「写别的工具的同名文件」负控被误伤
   mutate2("①移除·live 精确比对 ⇒ ~/.codex/settings.json 被误伤",
-    /return G2_LIVE_NAMES\.some\(\(n\) => low === `\$\{G2_LIVE_DIR\}\/\$\{n\}`\);/,
-    'return G2_LIVE_NAMES.some((n) => low.endsWith("/" + n));',
+    // 锚点 2026-08-04 两次随 G2 常量侧改动更新：先是 `G2_LIVE_DIR` 常量 → 惰性 `g2LiveDir()`
+    // （常量侧原先不过 `g2Canon`，与候选侧归一深度不一致 ⇒ 短名 HOME 下整闸失明），
+    // 后又拆成「语法层 / realpath 层」两层比（第二轮对抗官指出常量侧 I/O 站点无超时守卫）。
+    // 现在把**目录相等判定**整个换成后缀匹配，等价于当年那个「精确比对被放宽」的变异。
+    /    return g2MatchesLiveDir\(low\.slice\(0, low\.length - n\.length - 1\)\);/,
+    "    return true;",
     ps(`Set-Content -Path "${V}\\.codex\\settings.json" -Value "{}"`), 0, 2);
   // ②留字面但不执行：`in`（输入重定向）分支跳过被关掉 ⇒ `<` 后的路径被当成写目标。
   // 靶必须是**写入类命令**（`tee` 在 G2_ALL_TARGET 里），否则整段根本走不到参数解析
@@ -500,8 +526,16 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
     const callSites = (name) => (src2.match(new RegExp(`\\b${name}\\s*\\(`, "g")) || []).length - 1; // 减去定义处
     const map = { g2WriteTargets: callSites("g2WriteTargets"), g2Resolve: callSites("g2Resolve"), g2IsLive: callSites("g2IsLive"), g2IsLiveDir: callSites("g2IsLiveDir") };
     const line = Object.entries(map).map(([k, v]) => `${k}=${v}`).join(" ");
+    // ⚠️ **这句话 2026-08-03（#112）订正过一个数字，订正史留着**：原文写「g2Resolve 2/2
+    //   （shell 分支 + Edit/Write 分支）」，而 `g2Resolve` 的生产调用点**当时就是 3 个**
+    //   （第三个是 basename 展开里解 destDir 那次，就在 g2WriteTargets 自己体内）。
+    //   分母是**手写死的**，分子也是手写死的，于是它印出来的 "2/2" 看起来像满覆盖、
+    //   实则连分母都不对 —— 而上面那行 `${line}` 明明已经把真值算出来印在同一句里了。
+    //   现改成引用算出来的真值。**它是本节唯一一个没有断言在守的数字**（console.log 不参与红绿），
+    //   正是「检查器自己描述自己那半最少被人回头看」的实例（官通节「同批查引用」第四格）。
     console.log(`  （调用点覆盖率）G2 新判据函数的生产调用点：${line}；` +
-      `本节端到端覆盖：g2WriteTargets 1/1（shell 分支）· g2Resolve 2/2（shell 分支 + Edit/Write 分支）· ` +
+      `本节端到端覆盖：g2WriteTargets 1/1（shell 分支）· g2Resolve ${map.g2Resolve}/${map.g2Resolve}` +
+      `（Edit/Write 分支 + g2WriteTargets 的候选解析 + basename 展开的 destDir）· ` +
       `g2IsLive 2/2 · g2IsLiveDir 1/1。**未覆盖 0 个** —— 但覆盖的是"这个函数被走到了"，` +
       `不是"它的每个分支都被走到了"，后者由上面那张登记表反面记录。`);
     check("调用点计数拿得到（拿不到说明函数被改名，覆盖率那句话即失效）",
@@ -509,6 +543,642 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
   }
 
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
+}
+
+console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / 甲⑦ 具名 -Destination / 甲⑨ 绝对路径归一）────");
+// ── 这一节装什么、为什么又是单开一节 ────────────────────────────────────────
+// 上面两节分别是 #87 的实现官与对抗验证官写的。本节是 **#112 的实现官**写的，
+// 装的是那张登记表里**被修掉的那 6 条**（现在它们是正控，不再是漏报）。
+// 三节不合并，理由同上一节：语料**从哪来**是近似判据唯一站得住的地方，
+// 合并之后「谁挑的这条语料」就分不开了。
+//
+// 🔴 **语料来源照直标（官抗节「语料非自证」）**：
+//   · **⑨ 的两类形态在真语料里是主流，不是构造的** —— 全量普查（2026-08-03，
+//     `~/.claude/projects/**/*.jsonl`，1330 个 jsonl / 373865 行 / **27365 条去重命令**）：
+//     `~<数字>` 8.3 短名路径 **1196 条**（本机 scratchpad 一律走 `C:\Users\ADMINI~1\AppData\…`，
+//     而 `ADMINI~1` 正是 HOME 的短名）· `\\?\` / `\\localhost\C$` 等 UNC 形态 **27 条**
+//     （其中一条真实命令逐字枚举了 `'C:\Users\ADMINI~1'`、`'\\?\C:\Users\Administrator'`、
+//     `'\\localhost\C$\Users\Administrator'` 三种写法去探 home 的等价形态）。
+//     ⇒ ⑨ **不是理论洞**：这台机器每天都在产生它需要的那种路径。
+//   · **⑦ 的形态在真语料里有**（`-Destination` 具名 **107 处 / 42 文件**，其中
+//     `Copy-Item -LiteralPath $src -Destination $dst -Force` 是反复出现的固定搭配），
+//     但**目标位从来不是 live** ⇒ 下面正控是「真形态 + 目标位换成 live」，**不是纯真语料**。
+//   · **⑥ 的混合形态（具名源 + 位置目标）在真语料里 0 条** —— 逐条人读确认那 2 条正则命中
+//     全是 `Set-Content -Path` 的误匹配。**⑥ 的正控全部凭空构造**，照直标。
+//     它站得住的地方不在语料，在 **PowerShell 的参数绑定语义**：`-Path` 具名之后，
+//     剩下的第一个正参绑到 position 1 = `-Destination`（本机实跑确认真的会覆盖目标，
+//     出处见 issue #87 对抗验证官的原始记录）。
+{
+  const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
+  const V = "$env:USERPROFILE";
+  const LIVE_V = `"${V}\\.claude\\settings.json"`;
+  const LIVEDIR_V = `"${V}\\.claude"`;
+  const HOME_FS = HOME.replace(/\\/g, "/");
+
+  // ── 正控：这 6 条 + 扩展形态，改前**全部漏过**（原始双态输出见 PR body）────────
+  const BLOCK_112 = [
+    // 甲⑥ —— 具名源吃掉正参，只剩 1 个 ⇒ 撞上「单正参不算目标位」早退
+    ["⑥ 构造·`Copy-Item -Path <源> <目标>`", ps(`Copy-Item -Path _tmp/x.json ${LIVE_V} -Force`)],
+    ["⑥ 构造·`-LiteralPath <源> <目标>`", ps(`Copy-Item -LiteralPath _tmp/x.json ${LIVE_V} -Force`)],
+    ["⑥ 构造·`-lp` 缩写", ps(`Copy-Item -lp _tmp/x.json ${LIVE_V} -Force`)],
+    ["⑥ 构造·`Move-Item -Path <源> <目标>`", ps(`Move-Item -Path _tmp/x.json ${LIVE_V} -Force`)],
+    ["⑥ 构造·内联冒号 `-Path:<源>`", ps(`Copy-Item -Path:_tmp/x.json ${LIVE_V} -Force`)],
+    ["⑥ 构造·具名源 + 位置目标给的是**目录**（basename 展开也要跟着走）",
+      ps(`Copy-Item -Path .\\settings.json ${LIVEDIR_V} -Force`)],
+    // 甲⑦ —— basename 展开原先只写在位置分支里，具名 -Destination 拿不到
+    ["⑦ 真形态+换靶·正参源 + `-Destination <目录>`", ps(`Copy-Item .\\settings.json -Destination ${LIVEDIR_V} -Force`)],
+    ["⑦ 真形态+换靶·`-LiteralPath <源> -Destination <目录>`（真语料固定搭配）",
+      ps(`Copy-Item -LiteralPath D:\\src\\settings.json -Destination ${LIVEDIR_V} -Force`)],
+    ["⑦ 构造·`-Destination:<目录>` 内联冒号", ps(`Copy-Item .\\settings.local.json -Destination:${LIVEDIR_V} -Force`)],
+    // 甲⑨ —— 绝对路径此前一步归一都没有。**两个分支都要验**：shell 是新的，Edit/Write 是自诞生起就漏的那个
+    ["⑨ 构造·shell 分支 `..` 回绕", ps(`Copy-Item x "${V}\\.claude\\..\\.claude\\settings.json" -Force`)],
+    ["⑨ 构造·**Edit 分支** `..` 回绕（自诞生起就漏的那一格）", edit(`${HOME}\\.claude\\..\\.claude\\settings.json`)],
+    ["⑨ 构造·**Write 分支** `.` 当前目录段",
+      { tool_name: "Write", tool_input: { file_path: `${HOME}\\.claude\\.\\settings.json` } }],
+    ["⑨ 构造·**MultiEdit 分支** `..` 回绕 + settings.local.json",
+      { tool_name: "MultiEdit", tool_input: { file_path: `${HOME}\\.claude\\..\\.claude\\settings.local.json` } }],
+    ["⑨ 构造·**NotebookEdit 分支**（notebook_path 走的是同一条解析）",
+      { tool_name: "NotebookEdit", tool_input: { notebook_path: `${HOME}\\.claude\\..\\.claude\\settings.json` } }],
+    ["⑨ 构造·Edit 分支 `//` 重复斜杠", edit(`${HOME_FS}/.claude//settings.json`)],
+    ["⑨ 真语料形态·Edit 分支 8.3 短名（本机 1196 条同型路径）", edit("C:\\Users\\ADMINI~1\\.claude\\settings.json")],
+    ["⑨ 真语料形态·shell 分支 8.3 短名", ps(`Copy-Item x "C:\\Users\\ADMINI~1\\.claude\\settings.json" -Force`)],
+    ["⑨ 真语料形态·Win32 扩展长度前缀 `\\\\?\\C:\\…`（纯字符串前缀，剥它零 I/O）",
+      edit("\\\\?\\C:\\Users\\Administrator\\.claude\\settings.json")],
+    ["⑨ 构造·盘根回绕 `C:/../`（win32 在盘根处夹住 `..`）",
+      bash("cp x.json C:/../Users/Administrator/.claude/settings.json")],
+    ["⑨ 构造·三格叠加：具名源 + `-Destination` 目录 + `..` 回绕",
+      ps(`Copy-Item -LiteralPath .\\settings.json -Destination "${V}\\.claude\\..\\.claude" -Force`)],
+  ];
+  for (const [name, p] of BLOCK_112) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+
+  // ── 负控：修完之后**不许**多拦这些（护栏两侧代价不对称，误报 = 会话当场卡死）────
+  // ⚠ 这一组比正控更要紧：⑥ 把「目标位存在」的门槛从 2 个正参降到 1 个，
+  //   ⑨ 让每一条绝对路径都多走一层归一（8.3 那格还会落一次 I/O）—— 两处都在**放宽**，
+  //   而放宽正是误伤的来源。下面逐条钉住「放宽到哪儿为止」。
+  const ALLOW_112 = [
+    // ⑥ 的边界：具名源存在时，正参才是目标；源位仍然一律放行
+    ["构造·具名源把 live 读走做备份（源位放行 —— 本闸最要紧的那个取舍）",
+      ps(`Copy-Item -Path ${LIVE_V} -Destination "${V}\\.claude\\settings.json.bak" -Force`)],
+    ["构造·具名源 live → _tmp 备份（正参目标）", ps(`Copy-Item -Path ${LIVE_V} _tmp\\live.json -Force`)],
+    ["真语料形态·`-LiteralPath <源> -Destination <目标>` 两头都不是 live",
+      ps("Copy-Item -LiteralPath D:/a/x.md -Destination D:/b/x.md -Force")],
+    ["构造·**单个正参** Copy-Item（甲⑧ 判断档，不在本批 ⇒ 行为必须一个字节不变）", ps(`Copy-Item ${LIVE_V}`)],
+    ["构造·具名源 + 无正参（没有目标位）", ps(`Copy-Item -Path ${LIVE_V} -Force`)],
+    // ↓ 这两条钉住 G2_SRC_PARAM **只收源位那三个名字**这个决定。PowerShell 语义：`-Filter`/
+    //   `-Encoding` 是过滤/编码，不吃源位 ⇒ 单个正参仍绑到 position 0 = `-Path`（源），
+    //   拦它就是把甲⑧ 那一整类误伤进来。上面「反向⑥-b」那条 mutation 专门验这两条真会红。
+    ["构造·`-Filter <值>` 不是源位 ⇒ 单正参仍是源，不许拦", ps(`Copy-Item -Filter *.json ${LIVE_V}`)],
+    ["构造·`-Encoding <值>` 同上", ps(`Copy-Item -Encoding utf8 ${LIVE_V}`)],
+    ["构造·`-Destination <目录>` 是 live 但源 basename 不是 settings",
+      ps(`Copy-Item -Path .\\CLAUDE.md -Destination ${LIVEDIR_V} -Force`)],
+    // ⑨ 的边界：归一不许把不是 live 的路径归成 live，也不许改写非盘符路径
+    ["构造·`..` 回绕但终点是 ~/.codex（归一不许归到 live 上）", edit(`${HOME}\\.claude\\..\\.codex\\settings.json`)],
+    ["构造·8.3 短名但终点不是 live", edit("C:\\Users\\ADMINI~1\\.claude\\CLAUDE.md")],
+    ["构造·8.3 短名 + **项目级** settings.json（realpath 解开后仍不是 live）",
+      edit("C:\\Users\\ADMINI~1\\AppData\\Local\\x\\.claude\\settings.json")],
+    ["构造·8.3 短名指向**不存在**的路径（realpath 抛错 ⇒ 必须按原样比，不许崩也不许乱拦）",
+      edit("C:\\Users\\NOSUCH~9\\.claude\\settings.json")],
+    ["构造·POSIX 根回绕不许被补上当前盘符（`path.win32.resolve` 会干这事，故按根形态分派）",
+      edit("/../home/x/.claude/settings.json")],
+    ["构造·UNC 共享形态（覆盖面外，行为必须不变）",
+      ps(`Copy-Item x "\\\\localhost\\C$\\Users\\Administrator\\.claude\\settings.json" -Force`)],
+    ["构造·正文里提到 `..` 路径（引号感知仍在）", bash('echo "别写 cp x ~/.claude/../.claude/settings.json"')],
+    ["构造·相对路径仍按 cwd 解析（归一不许吃掉这条老路）", bash("cp new.json _tmp/settings.json", HOME)],
+  ];
+  for (const [name, p] of ALLOW_112) {
+    const r = gate(p);
+    check(`负控：${name} → exit 0`, r.code === 0, `code=${r.code} err=${r.err.slice(0, 160)}`);
+  }
+
+  // ── mutation：三形态 + 反向。锚点一律正则（盘上 CRLF，写死 `\n` 恒不命中，见 #103）──
+  const src3 = fs.readFileSync(HOOK, "utf8");
+  function mutate3(label, re, to, payload, expectBefore, expectAfter) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    const n = (src3.match(g) || []).length;
+    check(`mutation 锚点在源码里恰好命中 1 次（${label}）`, n === 1, `命中 ${n} 次`);
+    if (n !== 1) return null;
+    const mp = path.join(TMP, `mutant-112-${label.replace(/[^\w]+/g, "-")}.js`);
+    fs.writeFileSync(mp, src3.replace(re, () => to), "utf8");
+    // 变异体存活（官抗节）：一个把靶弄死的 mutation 会让每条断言都翻，而那正是「判别力满分」的表象
+    const alive = gate({ tool_name: "Bash", tool_input: { command: "echo hi" } }, { script: mp });
+    check(`变异体存活（${label}）：无关输入仍 exit 0 且无 fail-open 告警`,
+      alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code} err=${alive.err.slice(0, 120)}`);
+    const before = gate(payload).code;
+    const after = gate(payload, { script: mp }).code;
+    check(`${label}：真文件 ${expectBefore} / 改坏后 ${expectAfter}`,
+      before === expectBefore && after === expectAfter, `before=${before} after=${after}`);
+    return mp;
+  }
+
+  const P6 = ps(`Copy-Item -Path _tmp/x.json ${LIVE_V} -Force`);
+  const P7 = ps(`Copy-Item .\\settings.json -Destination ${LIVEDIR_V} -Force`);
+  const P9 = edit(`${HOME}\\.claude\\..\\.claude\\settings.json`);
+  const P9_83 = edit("C:\\Users\\ADMINI~1\\.claude\\settings.json");
+
+  // 甲⑥ 三形态 —— 三条路各自独立地能让这一格重新漏掉
+  mutate3("⑥①移除·门槛写死回 2（等于把本格的修复整个删掉）",
+    /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, "const needed = 2;", P6, 2, 0);
+  mutate3("⑥②留字面不执行·具名源照旧被识别但从不入 namedSrcs ⇒ 门槛恒为 2",
+    /else if \(destLast && G2_SRC_PARAM\.test\(name\)\) namedSrcs\.push\(val\);/,
+    "else if (false && destLast && G2_SRC_PARAM.test(name)) namedSrcs.push(val);", P6, 2, 0);
+  mutate3("⑥③结果不被消费·needed 照算，但取门槛时绕过它直接用字面 2",
+    /const hasDestPos = positional\.length >= needed;/,
+    "const hasDestPos = positional.length >= 2;", P6, 2, 0);
+  check("⑥ 的三个 mutation 都不该动到「正参源」那条老路（`Copy-Item <源> <目标>` 仍拦）", (() => {
+    const mp = path.join(TMP, "mutant-112-6-sidecheck.js");
+    fs.writeFileSync(mp, src3.replace(/const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, () => "const needed = 2;"), "utf8");
+    return gate(ps(`Copy-Item _tmp/x.json ${LIVE_V} -Force`), { script: mp }).code === 2;
+  })());
+
+  // 甲⑦ —— 具名目标必须进 destRaws，否则 basename 展开永远看不到它
+  mutate3("⑦①移除·具名目标不再入 destRaws ⇒ 具名 -Destination 目录形态重新漏掉",
+    /if \(isTarget\) \{ out\.push\(\{ why: `参数 \$\{name\}`, raw: val \}\); if \(destLast\) destRaws\.push\(val\); \}/,
+    'if (isTarget) { out.push({ why: `参数 ${name}`, raw: val }); }', P7, 2, 0);
+  mutate3("⑦③结果不被消费·具名目标的取值照读，但不入 destRaws",
+    /if \(destLast\) destRaws\.push\(val\);/,
+    "if (destLast) { const _unused = val; }", P7, 2, 0);
+  check("⑦ 改坏后，**位置**目标位给目录的老路仍然拦（证明只打掉了具名那一格）", (() => {
+    const mp = path.join(TMP, "mutant-112-7-sidecheck.js");
+    fs.writeFileSync(mp, src3.replace(/if \(destLast\) destRaws\.push\(val\);/, () => "if (destLast) { const _unused = val; }"), "utf8");
+    return gate(bash("cp _tmp/settings.json ~/.claude/"), { script: mp }).code === 2;
+  })());
+
+  // 甲⑨ 三形态 —— 归一这一层被打掉的三种方式
+  mutate3("⑨①移除·g2Resolve 不再调 g2Canon（绝对路径退回一步归一都没有）",
+    /  return g2Canon\(s\);/, "  return s;", P9, 2, 0);
+  mutate3("⑨②留字面不执行·盘符分支整个不进（代码还在，只是永不执行）",
+    /if \(\/\^\[A-Za-z\]:\\\/\/\.test\(s\)\) \{/, "if (false) {", P9, 2, 0);
+  mutate3("⑨③结果不被消费·g2Canon 照调（副作用都发生了），但返回值被丢掉",
+    /  return g2Canon\(s\);\r?\n\}/, "  g2Canon(s);\n  return s;\n}", P9, 2, 0);
+  // 8.3 那一层单独换靶：证明拦下短名的是 realpath 那一步，不是别的分支顺手拦的
+  mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
+    /if \(\/~\\d\/\.test\(s\)\) s = g2LongPath\(s\);/, "if (false) s = g2LongPath(s);", P9_83, 2, 0);
+  check("上一条改坏后，`..` 回绕仍然被拦（证明只打掉了 8.3 那一层，两层是独立的）", (() => {
+    const mp = path.join(TMP, "mutant-112-9-83only.js");
+    fs.writeFileSync(mp, src3.replace(/if \(\/~\\d\/\.test\(s\)\) s = g2LongPath\(s\);/, () => "if (false) s = g2LongPath(s);"), "utf8");
+    return gate(P9, { script: mp }).code === 2;
+  })());
+
+  // ── 反向 mutation：把修复**改得过宽**，对应负控必须由 exit 0 翻成 exit 2 ──────────
+  // 没有这一组，「一条永远为真的负控」与「一条真管用的负控」在全绿输出里长得一模一样。
+  // ⚠ 官抗节点名的第四件事：检查你的 mutation 是不是全在一个方向上 —— 上面 8 条全在
+  //   「让闸变松」这一侧，故这里补 3 条「让闸变紧」的，把负控也真的红一遍。
+  mutate3("反向⑥·门槛恒为 1 ⇒ 甲⑧（单正参 + 隐式目标）被顺带拦下，而那一格是**判断档**",
+    /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/, "const needed = 1;",
+    ps(`Copy-Item ${LIVE_V}`), 0, 2);
+  mutate3("反向⑥-b·G2_SRC_PARAM 放宽成「任意具名取值参数都算源」⇒ `-Filter` 也把门槛降到 1，单正参被误伤",
+    // 锚点 2026-08-04 更新：`lp` 已从表里删掉（PowerShell 无 `-lp` 这个参数，实跑报错；
+    // bash 的 `cp -lp` 是捆绑短选项、不吃取值）——出处见 hook 里该常量上方的注释。
+    /const G2_SRC_PARAM = \/\^-\{1,2\}\(path\|literalpath\)\$\/i;/,
+    "const G2_SRC_PARAM = /^-{1,2}[\\w-]+$/i;",
+    ps(`Copy-Item -Filter *.json ${LIVE_V}`), 0, 2);
+
+  // 反向⑨·g2LongPath 的 fail-open catch 是承重的 —— 8.3 那一格是本批唯一会落 I/O 的判据，
+  // 而 I/O 会抛（文件不存在是常态：Write 新建、路径写错、短名指向不存在的用户）。
+  // ⚠ 这一条**不能用退出码断言**：真文件与改坏后都是 exit 0（fail-open 的设计就是放行），
+  //   两者的差别只在 stderr 有没有那句告警 —— 拿退出码测它会得到一条永远为真的断言。
+  {
+    const re = /  try \{ return norm\(fs\.realpathSync\.native\(p\)\); \} catch \(_\) \{ \/\* 文件不存在是常态 \*\/ \}/;
+    const n = (src3.match(new RegExp(re.source, "g")) || []).length;
+    check("mutation 锚点在源码里恰好命中 1 次（反向⑨·g2LongPath 去掉 catch）", n === 1, `命中 ${n} 次`);
+    if (n === 1) {
+      const mp = path.join(TMP, "mutant-112-9-nocatch.js");
+      fs.writeFileSync(mp, src3.replace(re, () => "  return norm(fs.realpathSync.native(p));"), "utf8");
+      const nonexistent = edit("C:\\Users\\NOSUCH~9\\.claude\\settings.json");
+      const real = gate(nonexistent), mut = gate(nonexistent, { script: mp });
+      check("反向⑨·去掉 g2LongPath 的 catch ⇒ 不存在的 8.3 路径把守卫打进 fail-open（真文件不会）",
+        real.code === 0 && !/守卫自身出错/.test(real.err) &&
+        mut.code === 0 && /守卫自身出错/.test(mut.err) && /ENOENT/.test(mut.err),
+        `real=${real.code}/${/守卫自身出错/.test(real.err)} mut=${mut.code}/${/守卫自身出错/.test(mut.err)}`);
+    }
+  }
+
+  // 🔴 **一条阴性结果，照直记（官抗节：差额为零也是结论）**：
+  //   `if (!g2IsLiveDir(destDir)) continue;` 这道 guard **试过反向 mutation，翻不动**。
+  //   实测（`_tmp/probe-reverse.mjs` B 组，3 条负控全部 0→0）：把它改成 `if (false) continue;`
+  //   之后，`-Destination` 指向 `.bak` / `_tmp` / 别的仓，产出的候选是 `<那个目标>/<源basename>`，
+  //   **结构上不可能等于 live** —— 因为要等于 live，destDir 就必须**恰好是** live 目录，
+  //   而那种情况本来就会被拦。⇒ 它是**精度与开销**的优化（少产一堆永不命中的候选），
+  //   **不是承重判据**。别因为它"看起来像个 guard"就以为有断言在守着它。
+
+  // ── 调用点覆盖率（官抗节「mutation 报告需附加调用点覆盖率」）─────────────
+  {
+    const callSites = (name) => (src3.match(new RegExp(`\\b${name}\\s*\\(`, "g")) || []).length - 1; // 减去定义处
+    const map = { g2Canon: callSites("g2Canon"), g2LongPath: callSites("g2LongPath"), g2Resolve: callSites("g2Resolve") };
+    console.log(`  （调用点覆盖率）#112 新增/改写判据的生产调用点：` +
+      Object.entries(map).map(([k, v]) => `${k}=${v}`).join(" ") +
+      `；本节端到端覆盖：g2Canon ${map.g2Canon}/${map.g2Canon}（唯一调用点在 g2Resolve，` +
+      `而 g2Resolve 的 3 个调用点 —— Edit/Write 分支、g2WriteTargets 的候选解析、` +
+      `basename 展开的 destDir —— 上面正控逐个走到了）· g2LongPath 1/1（8.3 正控）。**未覆盖 0 个**；` +
+      `但这句话说的是"函数被走到了"，不是"它每个分支都被走到了" —— 后者由登记表反面记录。`);
+    check("调用点计数拿得到（拿不到说明函数被改名，上面那句覆盖率即失效）",
+      Object.values(map).every((v) => v >= 1), JSON.stringify(map));
+  }
+
+  check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
+}
+
+console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合并前置）────");
+// ── 这一节是谁写的、为什么又单开一节 ────────────────────────────────────────
+// 上面三节依次是 #87 实现官 / #87 对抗官 / #112 实现官。本节是 **#117 的对抗验证官**写的。
+// 不合并进上一节，理由同前：语料**从哪来**是近似判据唯一站得住的地方，合并之后
+// 「谁挑的这条语料、他有没有动机挑好挑的」就分不开了。
+//
+// 本节的语料全部来自**对着 #112 那三格的边界现攻**，不是从真语料采的 —— 照直标。
+// 分四组：㈠#112 修好了但没断言的形态 ㈡⑩ 的归因判别 ㈢本轮新发现的漏报/误伤（登记，自失效）
+// ㈣🔴 本轮查出的**退化**（合并阻断项）。
+{
+  const ps = (command, cwd) => ({ tool_name: "PowerShell", tool_input: { command }, cwd });
+  const LIVEDIR = `${HOME}\\.claude`;
+  const LIVE = `${LIVEDIR}\\settings.json`;
+
+  // 本机 HOME 的 8.3 短名。**算出来而不是写死 `ADMINI~1`** —— 写死会让这一整组
+  // 在别的机器上悄悄退化成「测了个不含短名的普通路径」，而它照样全绿。
+  const SHORT_HOME = (() => {
+    const parts = HOME.split(/[\\/]/), leaf = parts.pop(), parent = parts.join("\\");
+    if (leaf.length <= 8) return null;
+    const cand = parent + "\\" + leaf.slice(0, 6).toUpperCase() + "~1";
+    try { return fs.realpathSync.native(cand).toLowerCase() === HOME.toLowerCase() ? cand : null; }
+    catch (_) { return null; }
+  })();
+  check("前置：本卷启用了 8.3 短名（关掉的话下面几组只是没测到，不是通过）",
+    SHORT_HOME !== null, `SHORT_HOME=${SHORT_HOME}`);
+
+  // ㈠ #112 真的修好了、但那一批没有断言的形态 ────────────────────────────────
+  // 头注 g2LongPath ㈢ 写着「文件名本身是短名（`SETTIN~1.JSON`）以外的形态都接得住」，
+  // 语气是**没接住文件名短名**。实测反过来：本卷上 settings.json 的真实短名是
+  // `SETTIN~1.JSO`（**扩展名截到 3 位**，头注写的 `.JSON` 是四位、根本不存在），
+  // 而因为那个文件**存在**，realpath 一步就把整条解开了 ⇒ 文件名短名同样被拦。
+  // ⇒ ⑨ 比它自己的文档更强，这一组把「更强」的那部分钉住，免得后人照头注去收窄它。
+  const EXTRA_BLOCK = SHORT_HOME ? [
+    ["⑨ 补·长目录 + **文件名** 8.3（`SETTIN~1.JSO`，本卷实测的真短名）", edit(`${LIVEDIR}\\SETTIN~1.JSO`)],
+    ["⑨ 补·目录与文件名**都是**短名", edit(`${SHORT_HOME}\\.claude\\SETTIN~1.JSO`)],
+    ["⑨ 补·settings.local.json 的短名 `SETTIN~2.JSO`", edit(`${LIVEDIR}\\SETTIN~2.JSO`)],
+    ["⑨ 补·8.3 短名 + NTFS 备用数据流（realpath 顺带剥掉 `::$DATA`）",
+      edit(`${SHORT_HOME}\\.claude\\settings.json::$DATA`)],
+  ] : [];
+  for (const [name, p] of EXTRA_BLOCK) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  for (const [name, p] of [
+    ["⑨ 补·`//./C:/…` 设备命名空间（与 `//?/` 同一格，`[?.]` 两个字符都收）",
+      edit("//./C:/Users/Administrator/.claude/settings.json")],
+    ["⑨ 补·Git Bash `/c//Users/…`（盘符转换后残留的重复斜杠，win32.resolve 折掉）",
+      edit("/c//Users/Administrator/.claude/settings.json")],
+    // ⑥ 把 `-lp` 收进源位参数，理由写的是「PowerShell 的 -LiteralPath 缩写」。
+    // **那个理由是错的**（见下面 ㈢ 的登记条），但这一格本身**歪打正着有真实召回**：
+    // GNU coreutils 的 `cp -l -p` 可以捆绑成 `cp -lp`，而 `-lp` 早就在 G2_VALUE_PARAM 里、
+    // 会吃掉后面那个 token ⇒ 改前只剩 1 个正参、撞早退**整条漏过**；⑥ 之后拦得下。
+    ["⑥ 补·GNU `cp -lp <源> <live>`（`-l -p` 捆绑，真实存在的 Unix 形态）",
+      bash(`cp -lp src.json "${LIVE}"`)],
+  ]) {
+    const r = gate(p);
+    check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  check("负控：GNU `cp -lp <live> /backup/`（源位是 live，备份是正路）→ exit 0",
+    gate(bash(`cp -lp "${LIVE}" /d/backup/`)).code === 0);
+
+  // ㈡ ⑩ 的归因判别 —— 光证「它漏」不够，要证「漏在 tokenizer 层」 ──────────────
+  // #112 判定 ⑩ 属 tokenizer 层，依据是「位置目标与具名目标同时中招」。那只排除了
+  // 「某一个分支的锅」，**没有排除「basename 展开那段的锅」**。下面这条单引号对照
+  // 才是决定性的：单引号里反斜杠**不转义** ⇒ 同一条命令、同一个分支、同一段展开，
+  // 仅仅把引号换掉就拦得住 ⇒ 差别只可能在**双引号的转义处理**上，即 g2Tokens。
+  const TRAILING_BS = [
+    ["⑩ 位置目标 + 尾**反**斜杠（双引号）", ps(`Copy-Item settings.json "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 具名目标 + 尾**反**斜杠（双引号）", ps(`Copy-Item settings.json -Destination "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 具名源 + 具名目标 + 尾**反**斜杠（⑥⑦ 都到齐了仍漏 ⇒ 不在分支层）",
+      ps(`Copy-Item -Path settings.json -Destination "$env:USERPROFILE\\.claude\\"`), 0],
+    ["⑩ 判别对照·**单引号** + 尾反斜杠 ⇒ 拦得住（∴ 病在双引号转义 = g2Tokens）",
+      ps(`Copy-Item settings.json -Destination '$env:USERPROFILE\\.claude\\'`), 2],
+    ["⑩ 判别对照·尾**正**斜杠（tokenizer 不受影响）⇒ 拦得住",
+      ps(`Copy-Item settings.json -Destination "$env:USERPROFILE/.claude/"`), 2],
+  ];
+  for (const [name, p, want] of TRAILING_BS) {
+    check(`⑩ 归因：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
+  }
+
+  // ㈢ 本轮新发现的漏报 / 误伤（登记表，自失效）────────────────────────────────
+  // 与上面三节的登记表同一机制：**写的是当前实测值**，哪天有人修好了这条会红并点名，
+  // 逼他同批更新 hook 头注的格号清单。**登记 ≠ 认可**，只是让它别再隐形。
+  // ⚠ **2026-08-04 实现官回改**：本表里两格已修、两格维持、一格换了值 —— 逐条说明写在各行。
+  //   「修好后这条会红并点名」在本 PR 上**真的发生了两次**（阻断项一次、本表一次）。
+  const LEDGER_117 = [
+    // ✅ 已修：ADS 只剥 `::$DATA` 这一种（本机实测只有它改写原文件，见 g2Canon 上方注释）
+    ["✅已修·NTFS 备用数据流 `<live>::$DATA`（实测写它**确实改写原文件** ⇒ 真绕过，" +
+     "现于 g2Canon 里按纯字符串剥掉末尾 `::$DATA`）",
+      edit(`${LIVE}::$DATA`), 2],
+    ["✅已修·ADS 经 shell 重定向", ps(`"x" > "$env:USERPROFILE\\.claude\\settings.json::$DATA"`), 2],
+    // 🔴 **大小写两条是第二轮对抗官查出的「`i` 标志无守护」补的**（14 条 mutation 里唯一漏网的一条）：
+    //   去掉 `/::\$DATA$/i` 的 `i`，回归网**零红** —— 因为当时只有大写那一条语料。
+    //   而本机实测（`_tmp/probe-round2.ps1` A 组）：`::$DATA` / `::$data` / `::$Data`
+    //   **三种写法都改写原文件** ⇒ `i` 是必需的，不是顺手加的。现在它有守护了。
+    ["✅已补守护·**小写** `::$data`（实测同样改写原文件；这条一加，去掉 `i` 的变异当场红）",
+      edit(`${LIVE}::$data`), 2],
+    ["✅已补守护·**混写** `::$Data`", edit(`${LIVE}::$Data`), 2],
+    // ↓ 负控：另外两种流形态**不碰原文件**（本机实测），剥它们才是误伤 —— 钉住「只剥一种」这个决定
+    ["负控·单冒号 `:$DATA` 是**另一条**流，实测不改原文件 ⇒ 不许剥、不许拦",
+      edit(`${LIVE}:$DATA`), 0],
+    ["负控·具名旁路流 `:mystream` 实测不改原文件 ⇒ 不许剥、不许拦",
+      edit(`${LIVE}:mystream`), 0],
+    // ❌ 新登记（第二轮对抗官查出，本批**不修**，理由见下方长注释）
+    ["❌新登记·**尾点** `settings.json.` —— 本机实测**确实改写原文件**（`probe-round2.ps1` C 组）；" +
+     "不修是因为尾点在 POSIX 上是**合法且不同**的文件名，剥它必须按平台分叉",
+      edit(`${LIVE}.`), 0],
+    ["ⓘ对照·**尾空格** `settings.json ` 当前被拦，但那是 `win32.resolve` **顺带** trim 掉的 —— " +
+     "**运气不是设计**，没有任何断言在保证它；这条只是把当前行为记下来",
+      edit(`${LIVE} `), 2],
+    // ❌ 维持：盘根绝对路径两格，本批**刻意不修**，理由见下方长注释
+    ["❌维持·盘根绝对路径（无盘符）`/Users/…` —— Node 在 Windows 上按**当前盘**解析；" +
+     "g2Canon 的 posix 分支刻意不补盘符（怕在 POSIX 机器上凭空造盘符）",
+      edit("/Users/Administrator/.claude/settings.json"), 0],
+    ["❌维持·三斜杠 `///Users/…`（posix 分支要求 `(?!/)` ⇒ 落在两个分支之外）",
+      edit("///Users/Administrator/.claude/settings.json"), 0],
+    // ⬇ 由 2 变 0：本批把甲⑥ 的门槛下降从 rename 族收回去了，**我扩出来的那一格已还原**
+    ["⬇已收窄·`Rename-Item -Path <别处> settings.json` 且 cwd 恰在 `~/.claude`：" +
+     "`-NewName` 相对**源目录**解析（实跑确认），本闸按 cwd 解 ⇒ 基准就是错的。" +
+     "甲⑥ 曾把这个错基准扩到具名源形态，**本批已收回**（`G2_NO_SRC_THRESHOLD`）⇒ 由 2 变 0",
+      ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 0],
+    ["❌维持·同上的**全正参**形态：这一格**改前就误伤**、与甲⑥ 无关，基准修好前照旧",
+      ps(`Rename-Item D:\\x\\foo.json settings.json`, LIVEDIR), 2],
+    // ══ 🔴🔴 【已作废】下面这段是我写的，2026-08-05 第三轮对抗验证官证伪。整段保留，别删 ══
+    //   ~~🔴 第二轮对抗官对这个收窄提过反对，本机实测「不复现」，维持不改 —— 详见 hook 里~~
+    //   ~~`G2_NO_SRC_THRESHOLD` 上方注释。反对意见是「绝对 `-NewName` 被 PS 接受且真落在那里，~~
+    //   ~~一刀切收窄等于连真拦截也退掉了」。**穷举 9 种写法全部被 PS 拒绝**~~
+    //   ~~（`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，PSVersion 5.1.26100.8875）。~~
+    //   ~~下面两条把「这个形态跑不起来」钉住……~~
+    // ══ ✅ 真实规则（第三轮对抗官实跑，PSVersion 5.1.26100.8875，`-Force` 有无都一样）══════
+    //   **`-NewName` 可以带路径，当且仅当它的目录部分与「源文件所在目录」字面相同。**
+    //   我那 9 种写法**全部把目标设在源目录之外** —— 在那个约束内每条都对，**错的只有推广**。
+    //   被拒的只有三格：目标目录 ≠ 源目录 · `..` 回绕 · `\\?\` 前缀。
+    //   ⇒ 这个排除退掉了 **4 格** PS 真接受、真写 live 的形态（下面新登记那条是其代表）。
+    //   ⚠️ **严重性上限（三轮下来没人量过）**：`Rename-Item` 覆盖不了已存在的目标、`-Force`
+    //   也不行 ⇒ 只能在 `settings.json` **尚不存在**时把它创建出来。收支与窄修法见 issue #132。
+    //
+    //   下面这条**期望值 0 是对的、payload 也是对的，错的只有原来那个标签**：
+    //   它把一个**条件性**结论（源在别处 ⇒ PS 拒绝）写成了**普遍**结论（绝对 -NewName 跑不起来）。
+    //   ⇒ 标签已改写。**这一格钉的是「PS 真会拒绝的那种写法，本闸也不产候选」**。
+    ["ⓘ源在别处的绝对 `-NewName`（**PS 5.1 实测确实报 `represents a path or device name`** —— " +
+     "因为目标目录 ≠ 源目录，**不是因为「绝对路径」**）：本闸当前不产候选。" +
+     "⚠️ 别把这一条读成「绝对 `-NewName` 都跑不起来」——那是本 PR 三轮里作废掉的那句话",
+      ps(`Rename-Item -Path D:\\x\\foo.json "${LIVE}"`, LIVEDIR), 0],
+    // 🔴 **新登记（第三轮对抗验证官点名：这一格此前一条断言都没有）**：
+    //   `Rename-Item -Path <liveDir>\x.json <liveDir>\settings.json` —— **PS 真接受、文件真落在
+    //   live 上**（源与目标同目录 ⇒ 满足真实规则），而本闸因为 rename 族被整族排除在门槛下降
+    //   之外而**放行**。它是本批唯一「PS 接受 + 真写 live + 本闸放行」且在回归网里**完全隐形**
+    //   的形态 —— 而这张登记表连着触发四次的价值，恰恰就是不让这种东西隐形。
+    //   **登记值写 0，钉的是「当前放行」这个事实本身**（漏报方向、`HEAD == PRE` ⇒ **非退化**）：
+    //   哪天有人做了窄修法（#132），这条会红并点名，逼他回来改这段字和 hook 头注 ⑬。
+    //   判别力：下面有一条 mutation 钉着 —— 把 rename 排除去掉，这条由 0 翻 2。
+    ["🆕新登记·**同目录**绝对 `-NewName`（PS 真接受、真落 live；本闸当前**放行** ⇒ 真漏报，非退化）",
+      ps(`Rename-Item -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
+    ["🆕新登记·同上 `-LiteralPath` 变体（同族四格之一）",
+      ps(`Rename-Item -LiteralPath ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
+    ["🆕新登记·同上别名 `rni` 变体（同族四格之一）",
+      ps(`rni -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
+    // ⚠ **这一行的期望值我又写错了一次，留档**（同一个毛病：先写期望、后看实测）。
+    //   我以为「不复现 ⇒ 本闸不产候选 ⇒ 0」。实测是 **2**：全正参 + 两个正参
+    //   ⇒ `needed=2` 本来就满足，走的是**普通末位正参**那条老路，**和 rename 排除毫无关系**
+    //   （那个排除只在「有具名源」时才起作用）。⇒ 判决 2 是「老路顺手拦下一条跑不起来的命令」，
+    //   不是「本闸认这个形态」。**记下来是因为：同一个错我这一轮犯了两次，都是没先跑就先写。**
+    ["ⓘ不复现·同上位置绑定写法（PS 实测被拒）：本闸走普通末位正参老路仍报 2，" +
+     "**与 rename 排除无关** —— 那个排除只在有具名源时生效",
+      ps(`Rename-Item D:\\x\\foo.json "${LIVE}"`, "D:\\frank"), 2],
+    // ⬇ 由 2 变 0：`lp` 已从参数表删掉（PowerShell 无此参数，bash 侧是捆绑短选项）
+    // ⚠ **这一行的期望值我第一次写错了，留档**：我以为删掉 `lp` 之后这条会变 0，实测仍是 2。
+    //   原因是删掉之后 `-lp` 成了**开关**（不吃取值）⇒ 正参变成两个（`src.json` 与 live）
+    //   ⇒ 走**普通的「末位正参即目标位」老路**照样拦下。**判决没变，变的是走哪条路**：
+    //   改前靠「`lp` 是具名源」这条**错**规则拦，改后靠正参计数这条**对**规则拦。
+    //   ⇒ 教训：`lp` 这一格此前是「**对的结果 + 错的理由**」，而单看红绿分辨不出这两者。
+    ["✅理由已订正（判决不变）·PowerShell `Copy-Item -lp`：`-lp` **不是合法参数**（实测 " +
+     "`-LiteralPath` 唯一别名是 `PSPath`，实跑报 `A parameter cannot be found`）。" +
+     "`lp` 已从参数表删掉 ⇒ 现在它当开关、靠两个正参识别目标位，**不再靠一条编错的具名源规则**",
+      ps(`Copy-Item -lp src.json "${LIVE}" -Force`), 2],
+    ["✅真实召回·GNU `cp -lp <源> <目标>`（捆绑短选项 `-l`+`-p`，**这个是真跑得起来的**）" +
+     "—— `-lp` 现在当开关，两个正参照常识别出目标位",
+      bash(`cp -lp src.json "$HOME/.claude/settings.json"`), 2],
+    ["负控·`cp -lp <live>` 单正参：那是**源**不是目标（删掉 `lp` 的取值语义后不再被误当目标位）",
+      bash(`cp -lp "$HOME/.claude/settings.json"`), 0],
+  ];
+  for (const [name, p, want] of LEDGER_117) {
+    check(`登记表(#117)：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
+  }
+
+  // ── 判别力：上面那三条「🆕新登记」的 0 不是一个恒真的 0 ─────────────────────────
+  // **一条登记值为 0 的断言天生可疑**：闸对**任何**输入都判 0 时它照样绿，而那正是它该报警的时候。
+  // 故这里把 `G2_NO_SRC_THRESHOLD` 那个排除 mutate 掉（改成"谁都不排除"），断言那三条**由 0 翻 2**
+  // —— 翻得动，才说明它们量的是「rename 排除」这件事，不是「本闸对什么都没反应」。
+  // ⚠ 盘上是 CRLF，锚点走正则并先断言恰好命中 1 次（同本文件其余各处，见 #103）。
+  // ⚠ 这一条同时是 issue #132 的自失效钩子：哪天窄修法落地，上面那三条会红并点名。
+  {
+    const srcR = fs.readFileSync(HOOK, "utf8");
+    const RE_EXCL = /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/;
+    const nR = (srcR.match(new RegExp(RE_EXCL.source, "g")) || []).length;
+    check("mutation 锚点在源码里恰好命中 1 次（rename 排除）", nR === 1, `命中 ${nR} 次`);
+    if (nR === 1) {
+      const mp = path.join(TMP, "mutant-117r3-noexcl.js");
+      fs.writeFileSync(mp, srcR.replace(RE_EXCL, () => "const needed = namedSrcs.length ? 1 : 2;"), "utf8");
+      // 变异体存活：无关命令仍 exit 0 且不走 fail-open（没有它，「全翻」与「靶死了」长得一样）
+      const aliveR = gate(ps(`Get-ChildItem D:\\frank`), { script: mp });
+      check("变异体存活 canary（rename 排除被去掉后，无关命令仍 exit 0 且无 fail-open 告警）",
+        aliveR.code === 0 && !/守卫自身出错/.test(aliveR.err), `code=${aliveR.code}`);
+      const FLIP = [
+        ["-Path 同目录绝对目标", ps(`Rename-Item -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+        ["-LiteralPath 变体", ps(`Rename-Item -LiteralPath ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+        ["别名 rni 变体", ps(`rni -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+      ];
+      for (const [nm, pay] of FLIP) {
+        check(`判别力·去掉 rename 排除 ⇒「${nm}」由 0 翻 2（证明那条登记量的是这件事）`,
+          gate(pay).code === 0 && gate(pay, { script: mp }).code === 2,
+          `real=${gate(pay).code} mut=${gate(pay, { script: mp }).code}`);
+      }
+      // 负控：项目级 `.claude` 在变异体下**仍然不许拦** —— 去排除只该松 live 那一格，不该松成"见 rename 就拦"
+      check("负控·同一变异体下，项目级 `.claude` 的同型 rename 仍 exit 0（没有连带误伤）",
+        gate(ps(`Rename-Item -Path D:\\p\\.claude\\evil.json "D:\\p\\.claude\\settings.json"`, "D:\\p\\.claude"),
+          { script: mp }).code === 0);
+    }
+  }
+
+  // 🔴 **盘根绝对路径两格为什么本批不修（实现官判断，说明理由）**：
+  //   修它 = 让 `/Users/…` 在 Windows 上按「某个盘」解析。而**按哪个盘**有两个候选：
+  //   hook 进程的 `process.cwd()`，还是被拦那条工具调用的 `input.cwd`？两者不同，
+  //   且正解是后者 —— 这意味着 `g2Canon` 要多收一个 `cwd` 参数，**它的每一个调用点都要跟着改，
+  //   包括我这一批刚刚修好的常量侧 `g2LiveDir()`**。
+  //   而本 PR 的阻断项**恰恰就是**「候选侧改了、常量侧没跟上」那个病。
+  //   ⇒ 在同一批里对同一条共享归一链再做一次两侧改动，是制造下一次同型退化最省事的办法。
+  //   **它是漏报方向（保守侧），已登记、可见、可被下一个人接手**；换成误伤方向我不会这么处置。
+  //   `///Users/…` 同族，一并留。
+  //
+  // 🔴 **尾点 `settings.json.` 为什么也不修（同上，但理由不同）**：本机实测它**确实改写原文件**，
+  //   所以它是真绕过。但**尾点在 POSIX 上是合法且不同的文件名**（`a.json.` ≠ `a.json`），
+  //   剥它必须按 `process.platform` 分叉 —— 而本闸至今**一条平台分支都没有**，
+  //   引入第一条平台分支属设计决定，且它会立刻带出「那 8.3 那层要不要也分叉」等一串问题。
+  //   ⚠ 与 ADS 的关键差别：`::$DATA` 在两个平台上**都不是合法文件名**，所以剥它零误伤面；
+  //   尾点不是。**同为「后缀别名」，一个能顺手修、一个不能 —— 差别就在误伤面上，不在难度上。**
+  //
+  // 🔴 **常量侧那个 I/O 站点的残余风险，照直挂账（第二轮对抗官指出）**：
+  //   `fs.realpathSync.native` **同步不可中断**，`g2LongPath` 末尾那个 `try/catch`
+  //   接得住「抛错」、**接不住「卡住」**（网络盘 / 断连映射盘）；而 live 注册写着 `timeout: 10`
+  //   ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+  //   **本批做了什么**：把常量侧拆成「语法层（零 I/O）/ realpath 层（有 I/O）」两层先比语法层，
+  //   外加一道**零 I/O 快筛** —— 而**真正把 I/O 挡在门外的是快筛，不是分层**（见下方 ③）。
+  //   🔴 **本段 2026-08-05 订正，作废的原文照录**：
+  //     ~~本机与常见部署（长名 HOME）**一次 I/O 都不落**，短名 HOME 下变量形态也不落 ——~~
+  //     ~~风险面从「HOME 是短名就每次落」收窄到「HOME 是短名 **且** 候选写字面长名才落」。~~
+  //     **后半句两处都是假的**（第三轮对抗验证官用 preload shim 包 `fs.realpathSync.native`
+  //     数真实 syscall 量出来的）：①**短名 HOME 下变量形态落 4 次**，是所有形态里最多的；
+  //     ②不是「候选写字面长名才落」——`.vscode/settings.json` 既不字面也不 live，照样落 1 次。
+  //     ⚠️ **最省事的核法（也是这段字最该留下的部分）**：这句话被**同一个文件里往下约 100 行
+  //     一条正在通过的断言**证伪 ——「对照·短名 HOME 下它**确实**会走到 realpath 层」。
+  //     **同一份文件里两句话互相打架，而两句都在绿灯下** ⇒ 断言在跑不代表旁边那行字是真的。
+  //   ✅ **实测站得住的说法只有一句**：长名 HOME（本机与常见部署）下**一次 I/O 都不落**；
+  //     短名 HOME 下只有**尾巴已经长得像 live** 的路径才落（本机 16551 条 Edit 历史里 27 条，
+  //     0.16%）。⇒ 风险面「方向对，量级比第二轮说的小」。
+  //   **本批没做什么**：那一格真被触发时仍可能卡死，且仍接不住。彻底解只有把 I/O 移出同步路径
+  //   （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动 —— **账挂在 issue #133**
+  //   （hook 头注此前写「已登记」而查无此条目，同批已订正）。**上面两条 mutation 钉住的是
+  //   两层各自承重，不是"它不会卡"** —— 别把绿读成那个意思。
+
+  // ㈣ ✅ 合并阻断项**已修**（2026-08-04，实现官）：常量侧改惰性 `g2LiveDir()`，走同一归一器 ──
+  // **这三条曾是登记表条目（登记值 exit 0），修好后当场变红并逐条点名，逼我回来改它们** ——
+  // 那正是自失效登记表被设计出来要干的事，这是它在本 PR 上的第二次真实触发。
+  // 现在它们是**正控**：登记值 0 → 断言值 2。
+  //
+  // 病根（留档，别删）：`G2_LIVE_DIR` 是个**常量**，`norm(path.join(HOME,".claude")).toLowerCase()`；
+  // 而 #112 让**候选**侧一律多过一层 `g2Canon`。`path.join` 折得了 `.` / `..` / 重复分隔符 /
+  // 尾分隔符，**折不了 8.3 短名、也剥不掉 `//?/`** —— 那两样恰恰是 `g2Canon` 新加的能力
+  // ⇒ HOME 本身是这两种形态时两边永远对不上，**整道闸对所有输入一起静默放行**。
+  //
+  // 🔬 **透镜（比这个 bug 本身值钱）**：**「归一后再比」是两侧对称的动作，只改一侧即半成品**
+  //    —— 每一半单独看都对，错的是**不在同一深度**。同窗另一个 bug 同形态（合并脚本 merge 了却不 push）。
+  //
+  // 🔴🔴 **我上一轮写在这里的「订正」是错的，第二轮对抗验证官是对的。留全过程，别删。**
+  //    我当时写：「报文说含 #87 那条绕过原文，而 #87 用的是**字面长名路径**、短名 HOME 下改前就是 0，
+  //    所以退化格数是 2 不是 3」。**错在输入**：`#87` 那条绕过原文**根本不是字面长名**，
+  //    它是**变量形态** —— 常量就在本文件上方 `BYPASS`（那一行明写「真语料·承重正控」），
+  //    展开后是 `$env:USERPROFILE\.claude\settings.json`。我自己换了个 payload 去测，
+  //    却拿结果去推翻别人对**原文**的判断。
+  //    **用真原文重跑**（`_tmp/repro-round2.mjs`，3 HOME × 6 payload）：
+  //      短名 HOME 下真 #87 原文 **PRE112=2 → ROUND1=0** ⇒ **上一轮对抗官那句话完全成立。**
+  //      拦下格数 PRE112=11/18 · ROUND1=6/18 · HEAD=18/18，ROUND1 退化 **6** 格。
+  //    （对抗官自建 6 payload 报的是 12/6/18、退化 7 格 —— 与我差 1 格，因为 payload 集不同；
+  //      **判据不是「几格」而是哪一类**，这一点两边完全一致：
+  //      **凡 HOME 走变量 / `~` 展开的形态，改前拦得住、ROUND1 一律放行**；字面路径那一类 0 格退化。）
+  //    🔑 **教训（比数字值钱）**：我上一轮用「一个自己挑的 payload」去推翻「别人对某个具名原文的判断」，
+  //      而那个原文**就在我正在改的这个文件里、还标着「承重正控」**。
+  //      ⇒ **要推翻一条关于「某个具名样本」的结论，必须先把那个样本原样取出来**，不能另造一个近似的。
+  //    ⇒ 下面这组把**真 #87 原文**钉成跨 HOME 形态的承重正控 —— 这次归零，正是因为
+  //      「换 HOME 形态」这根轴上一个断言都没有。
+  if (SHORT_HOME) {
+    for (const [hname, hval] of [["8.3 短名", SHORT_HOME], ["`//?/` 扩展前缀", `\\\\?\\${HOME}`]]) {
+      const asHome = { USERPROFILE: hval };
+      const REG = [
+        // ↓ 这一条是**真 #87 原文**（复用上方同一个 BYPASS 常量，不另造近似串）
+        ["🔑shell·**真 #87 绕过原文**（变量形态，与上方承重正控同一个 BYPASS 常量）", ps(BYPASS_87)],
+        ["shell·变量形态精简版（ROUND1 退化的就是这一类）",
+          ps(`Copy-Item src.json "$env:USERPROFILE\\.claude\\settings.json" -Force`)],
+        ["bash·`~` 展开形态（同属变量/展开类）", bash("cp src.json ~/.claude/settings.json")],
+        ["bash·`$HOME` 形态（同属变量/展开类）", bash('cp src.json "$HOME/.claude/settings.json"')],
+        ["Edit·字面长名路径（**改前就漏**，本批顺带修掉，走 realpath 层）", edit(`${HOME}\\.claude\\settings.json`)],
+        ["shell·字面长名路径（同上，走 realpath 层）", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
+      ];
+      for (const [name, p] of REG) {
+        check(`阻断项已修·USERPROFILE=${hname} 时仍拦得住：${name} → exit 2`,
+          gate(p, { env: asHome }).code === 2, `code=${gate(p, { env: asHome }).code}`);
+      }
+    }
+    check("对照：真实 HOME（长名）下**真 #87 原文**照旧拦得住 ⇒ 修复没把老路弄坏",
+      gate(ps(BYPASS_87)).code === 2);
+
+    // mutation：常量侧现在是**两层**（语法层零 I/O / realpath 层有 I/O），
+    // **每层各来一条** —— 只测一层会漏掉另一层塌陷。两条都必须带 env，否则在本机长名 HOME 下
+    // 恒不翻转，而「恒不翻转」与「判据没塌陷」在全绿输出里长得一模一样（本 bug 就是这么藏住的）。
+    //
+    // 🔑 **两层各自是什么角色 —— 我第一版把它写反了，实测纠过来的，留档**：
+    //   我原写「变量形态走语法层、字面长名走 realpath 层」。**错**。真实分工是：
+    //     · **realpath 层承重**：短名 HOME 下，候选（任何形态）都被 `g2Canon` 归成**长名**，
+    //       而语法层常量是**短名** ⇒ 语法层一律不中，**全靠 realpath 层**。
+    //     · **语法层不承重、是纯优化**：把它关掉，**没有任何判决改变**（下面有断言钉住）。
+    //       它的价值只有一个 —— 长名 HOME 下先命中就不必算第二层。
+    //     · **真正把 I/O 挡在门外的是「零 I/O 快筛」**（`/.claude` 尾巴 / 文件名尾巴），
+    //       不是分层。**因为语法层只在「命中」时短路，而绝大多数输入是不命中的。**
+    //   出处：`_tmp/probe-layers.mjs`（把 realpath 层函数体换成 throw，看谁还拦得住）。
+    {
+      const src4 = fs.readFileSync(HOOK, "utf8");
+      const asShort = { USERPROFILE: SHORT_HOME };
+      const payVar = ps(BYPASS_87);
+      const payLit = edit(`${HOME}\\.claude\\settings.json`);
+
+      // ① realpath 层：**承重**。打掉它 ⇒ 短名 HOME 下全线失明；长名 HOME 不受影响。
+      const L2 = /  return low === g2LiveDirReal\(\);/;
+      const n2 = (src4.match(new RegExp(L2.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（常量侧·realpath 层）", n2 === 1, `命中 ${n2} 次`);
+      if (n2 === 1) {
+        const mp = path.join(TMP, "mutant-117-real.js");
+        fs.writeFileSync(mp, src4.replace(L2, () => "  return false;"), "utf8");
+        for (const [nm, pay] of [["真 #87 原文（变量形态）", payVar], ["字面长名", payLit]]) {
+          check(`常量侧·realpath 层被打掉 ⇒ 短名 HOME 下「${nm}」由 2 翻 0（这一层承重）`,
+            gate(pay, { env: asShort }).code === 2 && gate(pay, { script: mp, env: asShort }).code === 0,
+            `real=${gate(pay, { env: asShort }).code} mut=${gate(pay, { script: mp, env: asShort }).code}`);
+        }
+        check("同一变异体在**长名 HOME** 下全部照拦 ⇒ 这个 bug 是环境条件性的，不是恒失效",
+          gate(payVar, { script: mp }).code === 2 && gate(payLit, { script: mp }).code === 2);
+      }
+
+      // ② realpath 层换成 throw：**用来证明「零 I/O」这个性质**，不是证明判决。
+      //    长名 HOME 下若仍拦得住 ⇒ 说明压根没走到那一层 ⇒ 那次 hook 调用一次 I/O 都没落。
+      const RE_REAL_BODY = /    _g2LiveDirCache\.real = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\)\)\.toLowerCase\(\);/;
+      const n3 = (src4.match(new RegExp(RE_REAL_BODY.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（realpath 层函数体）", n3 === 1, `命中 ${n3} 次`);
+      if (n3 === 1) {
+        const mp = path.join(TMP, "mutant-117-l2throw.js");
+        fs.writeFileSync(mp, src4.replace(RE_REAL_BODY, () => '    throw new Error("L2_WAS_CALLED");'), "utf8");
+        for (const [nm, pay] of [["真 #87 原文", payVar], ["字面长名", payLit],
+                                 ["`~` 展开", bash("cp src.json ~/.claude/settings.json")]]) {
+          const r = gate(pay, { script: mp });   // 长名 HOME（本机默认）
+          check(`零 I/O 性质·长名 HOME 下「${nm}」拦得住且 realpath 层从未被调用`,
+            r.code === 2 && !/L2_WAS_CALLED/.test(r.err), `code=${r.code} 被调用=${/L2_WAS_CALLED/.test(r.err)}`);
+        }
+        const rs = gate(payVar, { script: mp, env: asShort });
+        check("对照·短名 HOME 下它**确实**会走到 realpath 层（fail-open + 那句告警）⇒ 上面那组不是恒真",
+          rs.code === 0 && /L2_WAS_CALLED/.test(rs.err), `code=${rs.code}`);
+      }
+
+      // ③ 零 I/O 快筛：**它才是把 I/O 挡在门外的那一道**。拿掉它 ⇒ 长名 HOME 下也会走到第二层。
+      const RE_PREFILTER = /  if \(!low\.endsWith\("\/\.claude"\)\) return false;/;
+      const n4 = (src4.match(new RegExp(RE_PREFILTER.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（g2IsLiveDir 的零 I/O 快筛）", n4 === 1, `命中 ${n4} 次`);
+      if (n4 === 1) {
+        const both = src4
+          .replace(RE_PREFILTER, () => "  if (false) return false;")
+          .replace(RE_REAL_BODY, () => '    throw new Error("L2_WAS_CALLED");');
+        const mp = path.join(TMP, "mutant-117-nofilter.js");
+        fs.writeFileSync(mp, both, "utf8");
+        const r = gate(bash("cp src.json ~/.claude/settings.json"), { script: mp });
+        check("快筛被拿掉后，长名 HOME 下也会走到 realpath 层 ⇒ 证明省下那次 I/O 的是快筛不是分层",
+          /L2_WAS_CALLED/.test(r.err), `被调用=${/L2_WAS_CALLED/.test(r.err)} code=${r.code}`);
+      }
+
+      // ④ 语法层：**刻意断言它「不承重」** —— 关掉它一个判决都不变。
+      //    这是阴性结果，写下来是为了防止后来人以为它是一道防线（官抗节：差额为零也是结论）。
+      const L1 = /  if \(low === g2LiveDirSyntactic\(\)\) return true;/;
+      const n1 = (src4.match(new RegExp(L1.source, "g")) || []).length;
+      check("mutation 锚点恰好命中 1 次（常量侧·语法层）", n1 === 1, `命中 ${n1} 次`);
+      if (n1 === 1) {
+        const mp = path.join(TMP, "mutant-117-syn.js");
+        fs.writeFileSync(mp, src4.replace(L1, () => "  if (false) return true;"), "utf8");
+        const same = [payVar, payLit].every((p) =>
+          gate(p, { script: mp }).code === gate(p).code &&
+          gate(p, { script: mp, env: asShort }).code === gate(p, { env: asShort }).code);
+        check("语法层被关掉 ⇒ **判决一个都不变**（它是纯优化不是防线，阴性结果照直钉住）", same);
+      }
+    }
+  }
+
+  check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
 }
 
 console.log("\n──── G3 · 对外发布（⑤自主边界：不可逆 + 需用户在场）────");
@@ -910,10 +1580,17 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
 
   // fail-open 路径：注入一个必抛的判定，断言"放行 + 大声喊"
   const boom = path.join(TMP, "mutant-throw.js");
-  fs.writeFileSync(boom, src.replace(
-    'if (!/^mcp__windows[-_]?mcp?[-_]*__/i.test(input.tool_name || "")) return null;',
-    'throw new Error("injected");'
-  ), "utf8");
+  // ⚠ 这一处此前是本文件 **12 个变异体构造点里唯一没有「靶点仍在」前置断言**的
+  //   （#117 对抗验证官的锚点审计捞出，源出 #103 那一路的普查）。
+  //   **它不会静默空转**——本轮实测：把 hook 里那一行做行为等价的改动（多一个空格）让字面串
+  //   失配 ⇒ 变异体 = 原文 ⇒ `CANARY["G3-publish"]` 被真 G3 拦下 ⇒ 下面两条当场红。
+  //   **但两条红的报文说的都是「fail-open 没生效」**，读的人会去查 fail-open 那条路，
+  //   而真正坏掉的是这个靶点 —— 归因指错方向，排查成本全落在下一个人身上。
+  //   故补这一条：它红的时候直说「靶点失配」。判据同上面各处（`split(from).length === 2`）。
+  const BOOM_ANCHOR = 'if (!/^mcp__windows[-_]?mcp?[-_]*__/i.test(input.tool_name || "")) return null;';
+  check("mutation 靶点在源码里唯一存在（fail-open 注入点）", src.split(BOOM_ANCHOR).length === 2,
+    `出现 ${src.split(BOOM_ANCHOR).length - 1} 次 —— 失配的话下面两条 fail-open 断言会红，但报文不会指向这里`);
+  fs.writeFileSync(boom, src.replace(BOOM_ANCHOR, 'throw new Error("injected");'), "utf8");
   const r = gate(CANARY["G3-publish"], { script: boom });
   check("fail-open：守卫自身抛异常 → exit 0（放行，不砖掉会话）", r.code === 0, `code=${r.code}`);
   check("fail-open 不静默：stderr 明说「本次放行」+ 指向 --selfcheck",
