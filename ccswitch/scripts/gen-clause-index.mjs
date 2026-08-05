@@ -45,8 +45,24 @@
 // 判据：**这份源有 slug，或台账里有指着它的条目 ⇒ 台账检查对它生效**；两样都没有 ⇒ 打印一行
 // 「不适用」（**不静默跳过**：静默跳过与「查了没事」在输出上不可区分，那正是本仓反复在治的病）。
 //
+// ── v4（issue #121 · 派生物在合并态过期）加了什么 ────────────────────────────
+// 这份索引**在没有任何人做错事的时候也会过期**：两侧各自都跑了生成、各自都绿，
+// 而合并把两份各自正确的派生物并成了一份不正确的（实测 3 例，第 3 例的官从头到尾
+// 没碰过任何含条款的文件）。旧报文对此说的是「**是索引本身被手改了**」——
+// **那句话在这个场景里是假的**，它会把读者支去查一件从未发生过的事。本批只改报文，
+// 不动判定，三件事：
+//   ① **归因分档**：`cause=` 进末行，四档（source / merged / hand-or-generator / unreadable）。
+//      分「合并制造」与「手改」的判据是**派生物的自洽性**（clause-parser 的
+//      `auditIndexSelfConsistency`）：文本合并会留下「totals 说 96、数组里 97 条」这种
+//      自相矛盾，而手改留下的是自洽的。判别力方向照直写：**有则必真，无则不知**。
+//   ② **处方分侧**：索引漂移跑生成器一定解得掉；**台账对不上跑生成器一个字都不会改**。
+//      两侧各说各的，且**只在真的红了才打**（干净时一个字不打——不然它就是每次都出现的废话）。
+//   ③ **仓态一行**：源变了那一档多问一句「是你改的，还是合并带进来的」（git 探针，fail-soft）。
+// 🕳 **本批治的是第 2 点（报文不指向处方），不治第 1 点（发现得太晚）**，
+//    也不治第 3 点（合并态验证被跳过时主干上没人再检它）——见 issue #121 的三点清单。
+//
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
-//   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1>
+//   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1> cause=<none|source|merged|hand-or-generator|unreadable|missing>
 //   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n> compared=<n> ledgeronly=<n>
 //   对账：    CLAUSE_RECONCILE_SUMMARY exit=<n> host=<powershell|pwsh|none> files=<n> matched=<n> mismatched=<n> mine=<n> theirs=<n> myslugs=<n> theirslugs=<n>
 //   **每条路径都打印**（含失败路径）：只在成功时打摘要，等于让「没查成」在机器通道上
@@ -68,6 +84,8 @@ import {
   normalizeText,
   loadLedger,
   reconcileLedger,
+  auditIndexSelfConsistency,
+  REGEN_CMD,
 } from "../lib/clause-parser.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -121,8 +139,12 @@ function loadSources(o) {
   return list;
 }
 
-function summaryLine({ exit, sources, clauses, observation, drift, wrote }) {
-  return `CLAUSE_INDEX_SUMMARY exit=${exit} sources=${sources} clauses=${clauses} observation=${observation} drift=${drift} wrote=${wrote}`;
+// `cause=` 是 v4 追加在末尾的第七栏（issue #121）：drift 说的是**过期了没有**，
+// cause 说的是**为什么** —— 前者早就有了，而「为什么」此前只以一句写死的中文存在，
+// 且那句话在合并场景里是假的。缺省 `none`，只有真过期时才有别的取值。
+function summaryLine({ exit, sources, clauses, observation, drift, wrote, cause }) {
+  return `CLAUSE_INDEX_SUMMARY exit=${exit} sources=${sources} clauses=${clauses} observation=${observation} drift=${drift} wrote=${wrote}` +
+    ` cause=${cause || "none"}`;
 }
 
 function outPath(o) {
@@ -236,11 +258,71 @@ function runLedgerCheck(o, sources, parsedBySource) {
   return f.exit;
 }
 
+// ── 仓态探针（issue #121 第 3 例）────────────────────────────────────────────
+// 「源变了」这一档有两种完全不同的处境：**你改了它**，与**合并把别人的改动带了进来**。
+// 报文若只说「有人改了源没重新生成」，第二种处境下的读者会去查自己改了什么，
+// 而答案是「你什么都没改」—— 那句报文本身在制造一次无谓的排查。
+//
+// **fail-soft 是硬要求**：git 不在 / 不在仓里 / 命令报错，一律**说出来**并按「判不了」处理，
+// 绝不静默当成「不是合并」——把未知说成已知正是这套东西反复在治的病。
+// **近似照直写**：`HEAD^2` 只认得出「HEAD 自己就是合并提交」；合并之后又提交过几次，
+// 这个探针就看不出来了。它是提示不是判定。
+function gitProbe(args) {
+  try {
+    const r = spawnSync("git", ["-C", REPO_ROOT, ...args], { encoding: "utf8", timeout: 30000 });
+    if (r.error) return { ok: false, why: String(r.error.message || r.error) };
+    if (r.status === null) return { ok: false, why: "git 没跑到底（超时或被杀）" };
+    return { ok: true, status: r.status, out: String(r.stdout || "") };
+  } catch (e) {
+    return { ok: false, why: String((e && e.message) || e) };
+  }
+}
+
+function printRepoState(write, files) {
+  // 先问「这儿到底是不是个 git 仓」：不问的话，非仓目录里 `rev-parse HEAD^2` 的失败
+  // 会被读成「HEAD 不是合并提交」—— 把「查不了」悄悄变成一个确定的答案，正是本批在治的病。
+  const inRepo = gitProbe(["rev-parse", "--is-inside-work-tree"]);
+  if (!inRepo.ok || inRepo.status !== 0) {
+    write(`   ⓘ 仓态：判不了（${inRepo.ok ? "这里不是 git 工作树" : inRepo.why}）—— 照直说，**不当成「不是合并」**。`);
+    return;
+  }
+  const head2 = gitProbe(["rev-parse", "-q", "--verify", "HEAD^2"]);
+  if (!head2.ok) {
+    write(`   ⓘ 仓态：判不了（${head2.why}）—— 照直说，**不当成「不是合并」**。`);
+    return;
+  }
+  const isMerge = head2.status === 0;
+  const rel = files.filter((f) => !path.isAbsolute(f));
+  const st = rel.length ? gitProbe(["status", "--porcelain", "--", ...rel]) : { ok: true, out: "" };
+  const dirty = st.ok ? st.out.split(/\r?\n/).filter((l) => l.trim()) : null;
+  if (dirty === null) {
+    write(`   ⓘ 仓态：HEAD ${isMerge ? "是" : "不是"}合并提交；工作树状态查不了（${st.why}）。`);
+    return;
+  }
+  if (dirty.length) {
+    write("   ⓘ 仓态：这些源此刻在工作树里**改过未提交** ⇒ 成因 ①（就是你，重生成即可）：");
+    for (const l of dirty.slice(0, 8)) write(`        ${l}`);
+    return;
+  }
+  if (isMerge) {
+    write("   ⓘ 仓态：HEAD 是一个**合并提交**，且这些源在工作树里是干净的 ⇒ 多半是成因 ②/③：");
+    write("        **合并制造的过期，很可能你什么都没改。别去查「我动了哪个条款文件」。**");
+    return;
+  }
+  write("   ⓘ 仓态：HEAD 不是合并提交，这些源在工作树里也干净 ⇒ 成因 ① 的可能更大。");
+  write("        ⚠ 近似：合并之后又提交过几次的话，这个探针就看不出来了 —— 别当判定用。");
+}
+
 // ── 生成 / 校验 ──────────────────────────────────────────────────────────────
 // 索引漂移与台账对账是**两个独立信号**，各打各的末行、退出码取严的那个：
 // 「索引没跟上」与「台账对不上」是两种病、两种处方，并成一个数就分不开了。
+//
+// v4（issue #121）在两个信号都出完之后再打一段**处方**：它必须同时知道两侧的结果才写得对
+// ——「跑一次生成器」对索引漂移一定管用，对台账对不上**一个字都不管用**，
+// 而单看任何一侧都给不出这句话。
 function runIndex(o) {
-  const indexCode = runIndexCore(o);
+  const indexResult = runIndexCore(o);
+  const indexCode = indexResult.code;
   let ledgerCode = 0;
   try {
     const sources = loadSources(o);
@@ -259,7 +341,35 @@ function runIndex(o) {
     }) + "\n");
     ledgerCode = 1;
   }
+  printPrescription(indexResult, ledgerCode);
   return Math.max(indexCode, ledgerCode);
+}
+
+// ── 处方（issue #121 方向 2 的落点）─────────────────────────────────────────
+// 🔴 **第一条铁律：干净的时候一个字都不打。** 一段每次都出现的「修法」提示等于噪音，
+//    而噪音会被读者训练成盲区 —— 那正是本仓「生下来就吵的检查一定会被静音」那条。
+// 🔴 **第二条：两侧各说各的，且要说清哪一侧那条命令管用。**
+//    索引是纯派生物 ⇒ 重跑生成器一定对齐；台账**不是**派生物 ⇒ 生成器一个字都不会改它，
+//    对着台账红说「跑一次生成器」是**给错处方**，比不给更糟（照做一次、照旧红、开始不信这段话）。
+function printPrescription(indexResult, ledgerCode) {
+  const indexRed = indexResult.code !== 0;
+  const ledgerRed = ledgerCode !== 0;
+  if (!indexRed && !ledgerRed) return; // ← 负控就钉在这一行上
+  const write = (s) => process.stdout.write(s + "\n");
+  write("── ⇒ 修法（本段只在有东西红的时候出现）──");
+  if (indexRed) {
+    write(`  · 索引这一侧：${REGEN_CMD}`);
+    write("    ✓ 这条命令**一定解得掉**：索引是纯派生物，重跑即与真相源逐字节对齐，且幂等。");
+    write("      三种成因（你改了源 / 合并带进来的 / 手改了派生物）**修法是同一条**，不必先查清是谁。");
+  } else if (ledgerRed) {
+    write("  · 索引这一侧无事（与真相源一致）——**下面那个跑生成器解决不了**，别顺手跑一遍就以为完了。");
+  }
+  if (ledgerRed) {
+    write("  · 台账这一侧：要**人手**改 ccswitch/clause-ledger.json，或把条款正文改回去（逐条明细在上面）。");
+    write("    ✗ 跑生成器对它**没用** —— 台账不是派生物，生成器一个字都不会碰它。");
+  } else if (indexRed) {
+    write("  · 台账这一侧无事：本次的红只有索引漂移这一种，跑上面那条命令就完了。");
+  }
 }
 
 function runIndexCore(o) {
@@ -273,23 +383,23 @@ function runIndexCore(o) {
   } catch (e) {
     process.stdout.write(`✗ 构建索引失败：${e && e.message ? e.message : String(e)}\n`);
     process.stdout.write(
-      summaryLine({ exit: 1, sources: sources.length, clauses: 0, observation: 0, drift: "missing", wrote: 0 }) + "\n"
+      summaryLine({ exit: 1, sources: sources.length, clauses: 0, observation: 0, drift: "missing", wrote: 0, cause: "unreadable" }) + "\n"
     );
-    return 1;
+    return { code: 1, drift: "missing", cause: "unreadable" };
   }
   const text = serializeIndex(index);
   const g = index._generated;
 
   if (o.mode === "check") {
     if (!fs.existsSync(target)) {
-      process.stdout.write(`✗ 索引不存在：${target}\n   ⇒ 跑一次 ${g.再生成}\n`);
+      process.stdout.write(`✗ 索引不存在：${target}\n`);
       process.stdout.write(
         summaryLine({
           exit: 1, sources: sources.length, clauses: g.totals.clauses,
-          observation: g.totals.observation, drift: "missing", wrote: 0,
+          observation: g.totals.observation, drift: "missing", wrote: 0, cause: "missing",
         }) + "\n"
       );
-      return 1;
+      return { code: 1, drift: "missing", cause: "missing" };
     }
     // 比对**归一化后**的文本：索引由本脚本以 LF 写出，而 `core.autocrlf=true` 的机器
     // 一 checkout 就把它变成 CRLF ⇒ 逐字节比会让「刚 clone 完」表现为「索引过期」。
@@ -304,41 +414,79 @@ function runIndexCore(o) {
       process.stdout.write(
         summaryLine({
           exit: 0, sources: sources.length, clauses: g.totals.clauses,
-          observation: g.totals.observation, drift: "none", wrote: 0,
+          observation: g.totals.observation, drift: "none", wrote: 0, cause: "none",
         }) + "\n"
       );
-      return 0;
+      return { code: 0, drift: "none", cause: "none" };
     }
-    // 漂移了：先指名**哪个源**变了（拿盘上索引记的 sha256 对现在的文件），
-    // 都没变则说明有人手改了索引本身 —— 两种病、两种处方，别混成一句「过期了」。
+    // 漂移了：先指名**哪个源**变了（拿盘上索引记的 sha256 对现在的文件）。
     let drift = "content";
+    let cause = "hand-or-generator";
     const named = [];
+    const changedFiles = [];
+    let onDiskDoc = null;
     try {
-      const old = JSON.parse(onDisk);
-      const oldSrc = new Map((old._generated?.sources || []).map((s) => [s.file, s.sha256]));
+      onDiskDoc = JSON.parse(onDisk);
+      const oldSrc = new Map((onDiskDoc._generated?.sources || []).map((s) => [s.file, s.sha256]));
       for (const s of g.sources) {
         const before = oldSrc.get(s.file);
-        if (before === undefined) named.push(`${s.file}（索引里原本没有这个源）`);
-        else if (before !== s.sha256) named.push(`${s.file}（内容已变）`);
+        if (before === undefined) { named.push(`${s.file}（索引里原本没有这个源）`); changedFiles.push(s.file); }
+        else if (before !== s.sha256) { named.push(`${s.file}（内容已变）`); changedFiles.push(s.file); }
       }
       for (const f of oldSrc.keys()) {
         if (!g.sources.some((s) => s.file === f)) named.push(`${f}（已从源清单移除）`);
       }
-      if (named.length) drift = "source";
+      if (named.length) { drift = "source"; cause = "source"; }
     } catch (_) {
       named.push("（盘上索引不是合法 JSON，无法逐源比对）");
+      cause = "unreadable";
     }
-    process.stdout.write("✗ 索引过期：与真相源不一致\n");
-    if (named.length) for (const n of named) process.stdout.write(`   · 源变动：${n}\n`);
-    else process.stdout.write("   · 所有源的 sha256 都没变 ⇒ 是**索引本身**被手改了（它是派生物，手改无效且会被下次生成覆盖）\n");
-    process.stdout.write(`   ⇒ 跑一次 ${g.再生成}\n`);
+    const write = (s) => process.stdout.write(s + "\n");
+    write("✗ 索引过期：与真相源不一致");
+    if (named.length) for (const n of named) write(`   · 源变动：${n}`);
+
+    // ── 归因（issue #121）──────────────────────────────────────────────────
+    // 🔴 这一段替掉的是一句**在合并场景里为假**的断言（原文：「所有源的 sha256 都没变
+    //    ⇒ 是索引本身被手改了」）。实测 3 例里有 2 例没有任何人手改过它。
+    //    报文说错归因的代价不是「不够详细」，是**把读者支去查一件从未发生的事**。
+    if (cause === "unreadable") {
+      write("   ── 归因：盘上那份索引本身读不出来 ──");
+      write("     它不是合法 JSON ⇒ 逐源比对做不了，也就说不出是谁动的。");
+      write("     常见成因：一次**带冲突标记的合并**被直接提交了（`<<<<<<<` 还留在文件里）。");
+    } else if (cause === "source") {
+      write("   ── 归因：**源变了而索引没跟上**。三种成因长得一模一样，别只往第一种上猜 ──");
+      write("     ① 你改了上面那些源，却没重新生成索引");
+      write("     ② **合并**把别人改的源带了进来 —— 两侧各自都跑过生成、各自都绿，**是合并本身制造的过期**");
+      write("     ③ 你从头到尾没碰过任何含条款的文件 —— ②的常见形态：分支只改了别的东西，merge 主干时把新条款带了进来");
+      printRepoState(write, changedFiles);
+    } else {
+      // 所有源的 sha 都对得上 ⇒ 动的是**派生物这一侧**。再分两支，判据是这份索引**自己跟自己**对不对得上。
+      const audit = auditIndexSelfConsistency(onDiskDoc);
+      if (audit.readable && audit.problems.length) {
+        cause = "merged";
+        write("   ── 归因：**合并**制造的 —— 不是手改，没有人做错任何事 ──");
+        write("     所有源的 sha256 都对得上，而盘上那份索引**自己跟自己对不上**：");
+        for (const p of audit.problems.slice(0, 6)) write(`       · ${p}`);
+        write("     这是文本合并的签名：两侧各加一条条款、`clauses` 数组两条都收了，");
+        write("     而计数那一行两侧改的是**同一行、且改成同一个值** ⇒ git 认为双方做了相同的修改，无冲突地留下了旧值。");
+        write("     ⇒ **别按「谁手改了这个文件」去查**，答案是没有人。");
+      } else {
+        write("   ── 归因：动的是**派生物这一侧或生成它的代码** ──");
+        write("     所有源的 sha256 都对得上，且这份索引自洽" +
+          (audit.readable ? "" : `（自洽性判不了：${audit.why}）`) + " ⇒ 两种成因，本报文分不开：");
+        write("     ① 有人**手改**了这个派生物（它是派生物，手改无效且会被下次生成覆盖）");
+        write("     ② 或者**生成器 / 解析器改了**（clause-parser.mjs / gen-clause-index.mjs 的输出变了），而索引没跟着重生成");
+        write("     ⚠ 自洽性只能**认出**一类合并（计数对不上那种），认不出「两侧各改一条已有条款正文、条数不变」那种；");
+        write("       所以本档也可能是合并 —— 有则必真、无则不知，别把它读成「排除了合并」。");
+      }
+    }
     process.stdout.write(
       summaryLine({
         exit: 1, sources: sources.length, clauses: g.totals.clauses,
-        observation: g.totals.observation, drift, wrote: 0,
+        observation: g.totals.observation, drift, wrote: 0, cause,
       }) + "\n"
     );
-    return 1;
+    return { code: 1, drift, cause };
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -356,10 +504,10 @@ function runIndexCore(o) {
   process.stdout.write(
     summaryLine({
       exit: 0, sources: sources.length, clauses: g.totals.clauses,
-      observation: g.totals.observation, drift: "none", wrote: 1,
+      observation: g.totals.observation, drift: "none", wrote: 1, cause: "none",
     }) + "\n"
   );
-  return 0;
+  return { code: 0, drift: "none", cause: "none" };
 }
 
 // ── 交叉对账 ─────────────────────────────────────────────────────────────────
@@ -405,6 +553,40 @@ function runPs(host, script, file, selector) {
   };
 }
 
+// ── 对方硬闸退出码的**归类**（issue #121 顺带一格）────────────────────────────
+// 改这一格的理由是**它恒响**：默认源清单 12 份里有 6 份是零条款细则档，每一次干净的对账
+// 都会在 ✓ 行里打 6 个 `对方硬闸 exit=1`。而「生下来就吵的检查一定会被静音」——
+// 一旦读者学会无视 ✓ 行里的 `exit=1`，**真正的结构违例也一起被无视了**（对方的 exit=1
+// 至少有两种含义，而对账既不判它、也没在别处拦它）。
+// ⇒ 本批**不静音、不加闸**（加闸属判断档：谁来定哪份源该有条款），只做一件事：
+//   把这个数字**分类命名**，让「预期内的零样本」与「真的结构违例」在同一行里分得开。
+// ⚠ **判据次序是实测定的，别按直觉调换**：对方把 `zero-sample` **自己也记成一处违例**
+//   （check-clauses-structure.ps1 的 `Type = 'zero-sample'` 就在 `$violations` 里）⇒
+//   零条款文件的 marker 是 `clauses=0 violations=1`。先判 violations 会把 6 份预期内的
+//   细则档全部归成「结构违例」—— 本函数第一版就是这么写的，实跑当场看见 6 份假警报。
+//   所以：**先看 clauses 是不是 0**，再把多出来的那些违例单独说出来。
+function classifyPsExit(marker) {
+  if (marker.exit === 0) return { kind: "ok", note: "对方硬闸 exit=0" };
+  if (marker.clauses === 0) {
+    const extra = Math.max(0, (marker.violations || 0) - 1); // 减掉 zero-sample 自己那一处
+    return {
+      kind: extra > 0 ? "zero-sample-plus" : "zero-sample",
+      note: `对方硬闸 exit=${marker.exit}（zero-sample：这份源本就零条款，是它对「被检对象是条款库」的防御，不是失败` +
+        (extra > 0 ? `；**另有 ${extra} 处别的违例，那些要看**` : "") + "）",
+    };
+  }
+  if (marker.violations > 0) {
+    return {
+      kind: "violations",
+      note: `对方硬闸 exit=${marker.exit}（**结构违例 ${marker.violations} 处** —— 对账不判它，也没有别人在这儿拦它，去读那份文件）`,
+    };
+  }
+  return {
+    kind: "unexplained",
+    note: `对方硬闸 exit=${marker.exit}（既非零样本、也没报结构违例 —— 这一格没人解释得了，去读它的完整输出）`,
+  };
+}
+
 function reconcileSummary({ exit, host, files, matched, mismatched, mine, theirs, myslugs, theirslugs }) {
   return `CLAUSE_RECONCILE_SUMMARY exit=${exit} host=${host} files=${files} matched=${matched}` +
     ` mismatched=${mismatched} mine=${mine} theirs=${theirs} myslugs=${myslugs || 0} theirslugs=${theirslugs || 0}`;
@@ -437,6 +619,9 @@ function runReconcile(o) {
   process.stdout.write(`   我方：ccswitch/lib/clause-parser.mjs      对方：${path.basename(o.psScript)}（${host}）\n`);
 
   const rows = [];
+  // 对方硬闸退出码按 classifyPsExit 分堆（issue #121）：让「预期内的零样本」与「真结构违例」
+  // 在末尾归得了类 —— 只在每行里打一个 exit=1，等于把两件事写成同一个字。
+  const psByKind = {};
   let matched = 0, mismatched = 0, mine = 0, theirs = 0, missingSrc = 0, mySlugs = 0, theirSlugs = 0;
   for (const s of sources) {
     const abs = path.isAbsolute(s.file) ? s.file : path.join(REPO_ROOT, s.file);
@@ -484,12 +669,14 @@ function runReconcile(o) {
     // `null` ⇒ 对方末行没有这一栏 ⇒ 它是老版本、**这一层根本没人在看** ⇒ 同样判红
     //（同 slugs 那栏的既定处置，也同本文件「跑不了 ≠ 一致」的政策）。
     const okMask = ps.marker.maskdiv === 0;
+    const psExit = classifyPsExit(ps.marker);
+    (psByKind[psExit.kind] || (psByKind[psExit.kind] = [])).push(s.file);
     if (okClauses && okNoTrig && okSlug && okMask) {
       matched++;
       rows.push({
         file: s.file, state: "一致",
         detail: `条款 ${parsed.stats.clauses} · 触发:无 ${parsed.stats.no_trigger} · slug ${parsed.stats.slug}` +
-          ` · 对方遮罩双实现比过 ${ps.marker.maskcmp === null ? "?" : ps.marker.maskcmp} 行零分歧 · 对方硬闸 exit=${ps.marker.exit}`,
+          ` · 对方遮罩双实现比过 ${ps.marker.maskcmp === null ? "?" : ps.marker.maskcmp} 行零分歧 · ${psExit.note}`,
       });
     } else {
       mismatched++;
@@ -500,7 +687,7 @@ function runReconcile(o) {
           `触发:无 我方 ${parsed.stats.no_trigger} vs 对方 ${ps.marker.notrigger}；` +
           `slug 我方 ${parsed.stats.slug} vs 对方 ${ps.marker.slugs === null ? "（对方末行没有 slugs 栏 ⇒ 它还是 v1）" : ps.marker.slugs}；` +
           `对方遮罩双实现分歧 ${ps.marker.maskdiv === null ? "（对方末行没有 maskdiv 栏 ⇒ 它没有第三套遮罩实现，这一层无人在看）" : ps.marker.maskdiv + " 行"}` +
-          `（对方硬闸 exit=${ps.marker.exit}）`,
+          `（${psExit.note}）`,
       });
     }
   }
@@ -508,6 +695,35 @@ function runReconcile(o) {
   for (const r of rows) {
     const flag = r.state === "一致" ? "✓" : "✗";
     process.stdout.write(`  ${flag} [${r.state}] ${r.file}\n      ${r.detail}\n`);
+  }
+
+  // ── 对方硬闸退出码的归类小结（issue #121）──────────────────────────────────
+  // 只在真有非零的时候打。零样本那一堆逐个列名，是为了让「第 7 份突然也变成零条款」
+  // 与「一直就是这 6 份」分得开 —— 一个只报数字的小结分不开这两件事。
+  {
+    const zero = psByKind["zero-sample"] || [];
+    const zeroPlus = psByKind["zero-sample-plus"] || [];
+    const vio = psByKind.violations || [];
+    const unk = psByKind.unexplained || [];
+    const total = zero.length + zeroPlus.length + vio.length + unk.length;
+    if (total) {
+      process.stdout.write(`  ── 对方硬闸非零 ${total} 份，归类如下 ──\n`);
+      if (zero.length) {
+        process.stdout.write(`     ⓘ zero-sample ${zero.length} 份（本就零条款的细则档，**预期内**，不是对账失败）：${zero.join(" · ")}\n`);
+      }
+      if (zeroPlus.length) {
+        process.stdout.write(`     ⚠ zero-sample **且另有别的违例** ${zeroPlus.length} 份 —— 那部分要看：${zeroPlus.join(" · ")}\n`);
+      }
+      if (vio.length) {
+        process.stdout.write(`     ⚠ 结构违例 ${vio.length} 份 —— **这个要看**：${vio.join(" · ")}\n`);
+      }
+      if (unk.length) {
+        process.stdout.write(`     ⚠ 说不清的 ${unk.length} 份（非零样本、也没报违例）：${unk.join(" · ")}\n`);
+      }
+      if (vio.length || zeroPlus.length || unk.length) {
+        process.stdout.write("        对账只比数字、不判结构，这里既不拦也不改退出码；结构那道闸要另外跑。\n");
+      }
+    }
   }
 
   // ② 整批全零要红：每个文件都「0 == 0」的一致是空的一致。
@@ -520,7 +736,6 @@ function runReconcile(o) {
     process.stdout.write(`OK：${matched} 份语料两套解析逐一对上（合计条款 ${mine}）。\n`);
     process.stdout.write("     它证明的只是「两套读法数出同一个数」，**不证明这个数是对的** —— 两边同时漏掉一整个\n");
     process.stdout.write("     没人写过的形态时，差仍然是 0。这一面靠人读 diff。\n");
-    process.stdout.write("     另：对方对零条款文件会报 zero-sample 硬闸红（上面的 exit=1），那是它的防御不是对账失败。\n");
   } else {
     process.stdout.write(`✗ 对账失败：${mismatched} 份语料对不上（缺席 ${missingSrc} 份）。\n`);
     process.stdout.write("   **不判谁对**：两套实现之一瞎了，判哪一套是人的活。先读上面的差异，再去看那份语料的 diff。\n");
