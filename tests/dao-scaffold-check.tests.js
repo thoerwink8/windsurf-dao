@@ -40,6 +40,16 @@
 //    写**非 synthetic** 记录 —— 那等于测试自己给「接线已生效」发假证明，正是该检测器
 //    点名要防的病（它自己的头注就写着「自测心跳不予采信，防自我染绿」）。
 //
+// ── 行尾：本文件里的 mutation 锚点为什么写 `\r?\n`（2026-08-06 订正一处实证）──────
+// **结论不变，但 PR #130 给的那条实证是假的**，别再照它推。那份 PR body 写着
+// 「本仓两个文件行尾不同：hook 是 CRLF、lib 是 LF」——本机复测（数字节，不看工具报告）：
+//   工作树  dao-scaffold-check.js CRLF=1095 bareLF=0 ；hook-budget.js CRLF=325 bareLF=0
+//   对象库  两份都是 bareLF（`core.autocrlf=true`，签出时统一转 CRLF）
+// ⇒ **两份工作树都是 CRLF，不存在「两个文件不同」这回事。**
+// 写 `\r?\n` 的真理由是**跨检出可移植**：同一个 commit 在 autocrlf 关掉的机器上签出即是 LF，
+// 锚点写死任一种都会在另一种检出上恒不命中 —— 而「锚点没命中所以变异体==原文所以守卫绿」
+// 与「守卫真的没塌陷」逐字节相同（dao-guard-writing #守-锚点行尾）。
+//
 // ── 断言为何多为「含/不含某子串」而非「输出完全等于」───────────────────────
 // 普通项目模式里 `checkDaoDrift()` 会把**真实 windsurf-dao 仓库**的 git 状态与配置
 // 自检结果并入 issues（这是它的正当职责，从任意项目都要能查到 dao 仓库漂移）。
@@ -120,19 +130,24 @@ function mkMetaWorktree(tag, withSignature) {
 // 沙箱那份 hook-budget.js 下手（删掉 / 写成语法错）。**不碰真仓库任何文件。**
 // 拷 lib 整目录是因为那几个 lib 只 require node 内置模块（实测：fs/os/path/child_process），
 // 拷过去即可独立跑；hook 里的 `require("../lib/…")` 按**文件所在目录**解析，故这份副本生效。
-function mkBrokenLibTree(tag, mutate) {
+// `mutateHook`（2026-08-06 · issue #147 账 3）：同一手法也用来动**沙箱那份 hook 副本**
+// —— 验「未预期崩溃」那张网时要往 hook 里注入一个 throw，而它必须落在副本上，
+// 真仓库那份一个字节都不许动。
+function mkBrokenLibTree(tag, mutate, mutateHook) {
   const root = path.join(SANDBOX, "brokenlib", tag);
   const hooksDir = path.join(root, "ccswitch", "hooks");
   const libDir = path.join(root, "ccswitch", "lib");
   fs.mkdirSync(hooksDir, { recursive: true });
   fs.mkdirSync(libDir, { recursive: true });
-  fs.copyFileSync(HOOK, path.join(hooksDir, path.basename(HOOK)));
+  const hookCopy = path.join(hooksDir, path.basename(HOOK));
+  fs.copyFileSync(HOOK, hookCopy);
   const realLib = path.join(REPO, "ccswitch", "lib");
   for (const f of fs.readdirSync(realLib).filter((n) => n.endsWith(".js"))) {
     fs.copyFileSync(path.join(realLib, f), path.join(libDir, f));
   }
   if (mutate) mutate(path.join(libDir, "hook-budget.js"));
-  return path.join(hooksDir, path.basename(HOOK));
+  if (mutateHook) mutateHook(hookCopy);
+  return hookCopy;
 }
 
 function run(cwd, extraEnv, hookPath) {
@@ -827,6 +842,202 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
     /canAfford\(minMs\) \{ return api\.left\(\) >= /.test(degradedBlock));
   check("🔴 退化副本的内层常量自检也用 effectiveMs（与真模块同一次订正，别只改一边）",
     /Number\(ms\) > api\.effectiveMs/.test(degradedBlock));
+
+  // ── 行为级对照：退化副本 ≡ 真模块（2026-08-06 · issue #147 账 2）─────────────
+  // 上面四条是**源码级文本匹配**，它们对「注释掉」天然失明 —— 这一点上面已经照直写了。
+  // 这一组走**另一条路**：把 `degradedBudgetLib` 从源码里取出来**真的执行**，再与真模块
+  // 逐项比。执行的东西被注释掉就不存在了，故这一半对「注释掉」不失明。
+  // 两种一起放着是有意的：文本匹配夹得住「值被改了但形态还在」，行为对照夹得住「形态没了」。
+  //
+  // 治的是什么：PR #130 二轮对抗有两个变异体存活 —— `FALLBACK_MS 10000→60000`（A4，
+  // 往乐观侧错 6 倍）与「起点改成函数被调用时刻」（A6，系统性高估余量）。**真模块的同一个
+  // 不变式是夹住的**（D6 被杀），副本上却是零覆盖。同族的 A5（RESERVE 1500→0）当时被杀，
+  // 但对抗官照直写了「杀它的是巧合」（夹具预算恰好 1600，reserve 一归零就跨过 1200 门限），
+  // **没有任何断言在看 reserve 这个取值本身** ⇒ 这里一并补成真断言。
+  const degradedLib = (() => {
+    try { return new Function(degradedBlock + "\nreturn degradedBudgetLib();")(); }
+    catch (e) { return null; }
+  })();
+  check("自检：退化块能被取出来执行（取不出来时下面几条一律先红，而不是空扫全绿）",
+    !!degradedLib && typeof degradedLib.createBudget === "function",
+    degradedLib ? Object.keys(degradedLib).join(",") : "eval 失败");
+
+  if (degradedLib) {
+    const realLib = require("../ccswitch/lib/hook-budget");
+
+    // 🔴 A4：副本的 FALLBACK 必须**等于**真模块的 FALLBACK，不是「大致差不多」。
+    // 拿真模块的导出当期望值（而不是写死 10000）是刻意的：两边任一侧改了而另一侧没跟上，
+    // 这条都红 —— 而「两个文件里互不知情的两个数」正是 issue #127 本身。
+    check("🔴 退化副本 FALLBACK ≡ 真模块 FALLBACK_TIMEOUT_MS（A4：改成 60000 即红）",
+      degradedLib.resolveRegisteredTimeoutMs().ms === realLib.FALLBACK_TIMEOUT_MS,
+      "degraded=" + degradedLib.resolveRegisteredTimeoutMs().ms + " real=" + realLib.FALLBACK_TIMEOUT_MS);
+    check("🔴 副本 createBudget 收到非法 totalMs 时也落同一个 FALLBACK（同一旋钮的第二条路）",
+      degradedLib.createBudget({ totalMs: 0 }).totalMs === realLib.FALLBACK_TIMEOUT_MS,
+      String(degradedLib.createBudget({ totalMs: 0 }).totalMs));
+
+    // 🔴 A5：reserve 的取值本身要有人看着（此前只有那个巧合在挡）
+    check("🔴 退化副本 RESERVE ≡ 真模块 DEFAULT_RESERVE_MS（A5：归零即红，不再靠巧合）",
+      degradedLib.createBudget({ totalMs: 10000 }).reserveMs === realLib.DEFAULT_RESERVE_MS,
+      "degraded=" + degradedLib.createBudget({ totalMs: 10000 }).reserveMs + " real=" + realLib.DEFAULT_RESERVE_MS);
+
+    // 🔴 A6：起点必须是**进程启动时刻**，不是本函数被调用时刻。
+    // 判别力靠 `process.uptime()` 这个**独立的第二个量**（同真模块那组的手法）：
+    // 按调用时刻算的实现会让 elapsed 掉到接近 0，与 uptime 差出量级。
+    const uptimeMs = Math.round(process.uptime() * 1000);
+    check("自检：本测试进程已经跑了足够久（uptime > 300 ms），下面那条才有判别力",
+      uptimeMs > 300, "uptime=" + uptimeMs);
+    const dB = degradedLib.createBudget({ totalMs: 10000 });
+    check("🔴 退化副本起点 = 进程启动时刻（A6：改成调用时刻即红）",
+      Math.abs(dB.elapsed() - uptimeMs) < 50, "elapsed=" + dB.elapsed() + " uptime=" + uptimeMs);
+    check("同伴（负控）：真模块在同一问题上给同一个答案（否则上一条可能是在夹别的东西）",
+      Math.abs(realLib.createBudget({ totalMs: 10000 }).elapsed() - uptimeMs) < 50);
+
+    // 派生量的一致性：这一条会在真模块长出**第四条**不变式而副本没跟上时红 ——
+    // PR #130 未尽处 2 点名的正是这个缺口（「副本与真模块的漂移只被那三条覆盖」）。
+    for (const total of [3000, 10000, 30000]) {
+      const d = degradedLib.createBudget({ totalMs: total });
+      const r = realLib.createBudget({ totalMs: total });
+      check("effectiveMs 一致（totalMs=" + total + "）", d.effectiveMs === r.effectiveMs,
+        "degraded=" + d.effectiveMs + " real=" + r.effectiveMs);
+      const pairs = [["X", 30000], ["Y", 1000]];
+      check("unreachableConstants 结论一致（totalMs=" + total + "）",
+        JSON.stringify(d.unreachableConstants(pairs)) === JSON.stringify(r.unreachableConstants(pairs)),
+        JSON.stringify(d.unreachableConstants(pairs)) + " vs " + JSON.stringify(r.unreachableConstants(pairs)));
+    }
+
+    // ── 方法面齐不齐（2026-08-06 · issue #147 账 3 的同族）────────────────────
+    // **独立的第二遍普查**：不复用上面那个 degradedBlock 切片，而是从 hook 源码里数出
+    // 所有 `budgetLib.<name>(` 与 `BUDGET.<name>` 的用法，逐个要求副本也有。
+    // 少一个 = lib 坏掉时直接 `TypeError`，而那一抛正好落在「lib 已经坏了」的路上。
+    // 判据独立于被守对象的解析：那边切的是一段源码区间，这边数的是调用点。
+    // ⚠ 两种调用形态都要数：hook 里既有 `budgetLib.isBudgetKill(...)`（模块级那个绑定），
+    //   也有 `initBudget(lib)` 里的 `lib.resolveRegisteredTimeoutMs(...)` / `lib.createBudget(...)`
+    //   （那个函数拿 lib 当参数，正因为它要被真模块与退化副本各调一次）。
+    //   只数前一种会让分母塌到 1 —— 而分母塌了与「副本什么都不缺」输出一模一样。
+    const hookSrc = fs.readFileSync(HOOK, "utf8");
+    const calledOnLib = [...new Set([...hookSrc.matchAll(/\b(?:budgetLib|lib)\.(\w+)\(/g)].map((m) => m[1]))];
+    check("自检：普查真的数出了 budgetLib 的调用（少于 3 个说明普查瞎了）",
+      calledOnLib.length >= 3, calledOnLib.join(","));
+    for (const name of calledOnLib) {
+      check("退化副本提供 budgetLib." + name + "（缺一个 = lib 坏掉时 TypeError）",
+        typeof degradedLib[name] === "function", "有的是：" + Object.keys(degradedLib).join(","));
+    }
+    const usedOnBudget = [...new Set([...hookSrc.matchAll(/\bBUDGET\.(\w+)/g)].map((m) => m[1]))];
+    check("自检：普查真的数出了 BUDGET 的成员（数到 0 说明普查瞎了）",
+      usedOnBudget.length >= 5, usedOnBudget.join(","));
+    const dApi = degradedLib.createBudget({ totalMs: 10000 });
+    const rApi = realLib.createBudget({ totalMs: 10000 });
+    for (const name of usedOnBudget) {
+      check("退化副本的预算对象有 BUDGET." + name + "（真模块有它，副本就得有）",
+        dApi[name] !== undefined && typeof dApi[name] === typeof rApi[name],
+        "degraded=" + typeof dApi[name] + " real=" + typeof rApi[name]);
+    }
+  }
+
+  // ── 账 3：require 之后那两句顶层调用也得受保护 ─────────────────────────────
+  // PR #130 的阻断 1 只包住了 `require`；紧跟着的 `resolveRegisteredTimeoutMs()` /
+  // `createBudget()` 落在 catch 之外 ⇒ 注入 throw 即 **exit 1 + stdout 0 字节**，
+  // 与那次阻断的现象逐格相同。下面两臂是它的回归网。
+  const stubLib = (which) => (p) => fs.writeFileSync(p,
+    "module.exports = {\n" +
+    "  resolveRegisteredTimeoutMs() {\n" +
+    (which === "resolve"
+      ? "    throw new Error('注入：resolveRegisteredTimeoutMs 抛错');\n"
+      : "    return { ms: 10000, source: 'fallback', matched: 0, note: '桩：不走真解析' };\n") +
+    "  },\n" +
+    "  createBudget() {\n" +
+    (which === "create"
+      ? "    throw new Error('注入：createBudget 抛错');\n"
+      : "    throw new Error('桩：本臂不该走到这里');\n") +
+    "  },\n" +
+    "  isBudgetKill() { return false; },\n" +
+    "};\n", "utf8");
+  const INITFAIL = /✗ 墙钟预算初始化抛错：/;
+  for (const [which, tag] of [["resolve", "resolveRegisteredTimeoutMs"], ["create", "createBudget"]]) {
+    const r = run(cwd, env, mkBrokenLibTree("initthrow-" + which, stubLib(which)));
+    const c = ctx(r);
+    check("🔴 " + tag + " 抛错 → 仍 exit 0（不是 exit 1 + 零输出）",
+      r.code === 0, "code=" + r.code + " stderr=" + r.err.slice(0, 200));
+    check("🔴 " + tag + " 抛错 → 报文非空（agent 拿得到东西）", c.length > 0, "len=" + c.length);
+    check("🔴 " + tag + " 抛错 → **明说**初始化抛错了（与「加载失败」是两行、两种处置）",
+      INITFAIL.test(c), "ctx=" + c.slice(0, 400));
+    check("🔴 " + tag + " 抛错 → 其余检查照跑", /dao-brokenlib-probe/.test(c), "ctx=" + c.slice(0, 400));
+  }
+  check("对照组：lib 完好时**零**「初始化抛错」行（钉住不是恒报）",
+    !INITFAIL.test(ctx(run(cwd, env, mkBrokenLibTree("initthrow-control", null)))));
+
+  // ── 账 3 的另一半：未预期崩溃的兜底网 ──────────────────────────────────────
+  // 往沙箱那份 hook 副本里注入一个 throw（真仓库那份一个字节都不动）。
+  // 锚点单行、换行位写 `\r?\n`；**前置断言与 replace 共用同一个 RegExp 对象**
+  // （dao-guard-writing ③：守着近似物的锚点断言提供的是虚假的安心）。
+  const THROW_ANCHOR = /(const gitSkips = \[\];)(\r?\n)/;
+  let anchorHit = false;
+  const crashed = run(cwd, env, mkBrokenLibTree("uncaught", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorHit = THROW_ANCHOR.test(src);
+    fs.writeFileSync(p, src.replace(THROW_ANCHOR, '$1$2throw new Error("注入：模拟未预期崩溃");$2'), "utf8");
+  }));
+  check("mutation 锚点仍在（锚失效则下面三条空转）", anchorHit, String(THROW_ANCHOR));
+  const cc = ctx(crashed);
+  check("🔴 未预期崩溃 → 仍 exit 0（不是 exit 1 + 零字节）",
+    crashed.code === 0, "code=" + crashed.code + " stderr=" + crashed.err.slice(0, 200));
+  check("🔴 未预期崩溃 → stdout 是**合法 JSON**（双写守卫：拼出两段就等于什么都没有）",
+    crashed.json !== null, "out=" + crashed.out.slice(0, 200));
+  check("🔴 未预期崩溃 → 报文明说崩了、且明说「这不是全部通过」",
+    /未预期崩溃/.test(cc) && /不是「全部通过」/.test(cc), "ctx=" + cc.slice(0, 400));
+  check("对照组：同一棵树不注入 throw → **零**「未预期崩溃」行（钉住不是恒报）",
+    !/未预期崩溃/.test(ctx(run(cwd, env, mkBrokenLibTree("uncaught-control", null)))));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 🔴 git 被预算夹死时必须出声（issue #147 账 1 · A3 的 catch 那一半）===");
+// 这一组是 PR #130 二轮对抗**账 1** 的回归网：把 `gitOut` 的 catch 分支整个改成 `if (false)`
+// （= 回到本 PR 之前那个 `catch (_) {}` 的静默态）**mutation 存活**，两半判据各自删掉也存活，
+// 模式 B 的镜像行删掉也存活 —— 三处都没有任何断言。
+//
+// **端到端造不出来这件事，二轮对抗已经量死了**：真条件是 `left() >= 200` 且 git 自己比
+// `min(GIT_TIMEOUT_MS, left())` 还慢（本机 git ≈28 ms），**靠调预算旋钮永远造不出来**
+// （6 档实测：1750 走前置守门，1800–2600 全部正常跑完）。故这里用 hook 自带的测试缝
+// `DAO_HOOK_GIT_TIMEOUT_MS`（**只准调小**）把上限压到 1 ms —— 喂给 catch 的 error 对象
+// 与「真有一个慢 git」时是同一个（都是 node 按 timeout 杀子进程），被测路径逐字相同。
+{
+  const env = { DAO_SCAFFOLD_MANIFEST: path.join(REPO, "ccswitch", "scaffold-manifest.json") };
+  const KILLED = /git 状态查询（[^）]*） \*\*没跑\*\*：子进程起来了/;
+
+  // 模式 A（元仓库那三处 gitOut）
+  const metaCwd = mkMetaRepo("git-killed", [`${REGISTERED}.js`]);
+  const aTight = run(metaCwd, Object.assign({ DAO_HOOK_GIT_TIMEOUT_MS: "1" }, env));
+  const ca = ctx(aTight);
+  check("🔴 模式 A · git 被夹死 → 报文里有那一行（catch 分支改 if(false) 即红）",
+    KILLED.test(ca), "ctx=" + ca.slice(0, 900));
+  check("🔴 模式 A · 那一行说得清是「起来了又被杀」，不是「余量不够没起」",
+    /比我们夹给它的上限还慢/.test(ca) && /这不是「通过」，是「没测」/.test(ca), "ctx=" + ca.slice(0, 900));
+  check("🔴 模式 A · 汇总行的「跳过 N 项」把这一路算进去了（不是只印一行就完）",
+    /本次跳过 [1-9]\d* 项/.test(ca), (ca.match(/[^\n]*本次跳过[^\n]*/) || [""])[0]);
+  check("活的负控 · 模式 A · 不设那个环境变量 → **零**这一行（钉住不是恒报）",
+    !KILLED.test(ctx(run(metaCwd, env))));
+
+  // 模式 B（普通项目里的镜像行 —— 二轮对抗第 27 个变异体删掉它也存活）
+  const plainCwd = mkproj("git-killed-b", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+  });
+  const bTight = run(plainCwd, Object.assign({ DAO_HOOK_GIT_TIMEOUT_MS: "1" }, env));
+  const cb2 = ctx(bTight);
+  check("🔴 模式 B · 同样出声（镜像行 `for (const line of gitSkipLines())` 删掉即红）",
+    KILLED.test(cb2), "ctx=" + cb2.slice(0, 900));
+  check("活的负控 · 模式 B · 不设那个环境变量 → **零**这一行",
+    !KILLED.test(ctx(run(plainCwd, env))));
+
+  // 测试缝本身的方向性：它**只准调小**（与 DAO_HOOK_BUDGET_MS 同一条理由 —— 能调大就是
+  // 一个让 hook 谎报余量的后门）。
+  // ⚠ **这一条自己证不了「不是后门」，照直写**：`Math.min` 换成 `Math.max` 时它照样 PASS ——
+  //   因为 `capFor()` 已经把上限夹在剩余预算之内，把 GIT_TIMEOUT 抬到 999999 在行为上
+  //   观察不到。真正夹住 min↔max 那个方向的是上面几条 TIGHT 正控（换成 max 后 1 ms 变成
+  //   5000 ms，git 正常跑完 ⇒ 那几条全红；本批 mutation 实测 A1-seam-min-to-max 就是这样被杀的）。
+  //   本条只证一件小事：**给一个大值不会反而把 git 夹死**（不是「反向也生效」）。
+  check("给测试缝一个大值（999999）不会反而把 git 夹死",
+    !KILLED.test(ctx(run(plainCwd, Object.assign({ DAO_HOOK_GIT_TIMEOUT_MS: "999999" }, env)))));
 }
 
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");
