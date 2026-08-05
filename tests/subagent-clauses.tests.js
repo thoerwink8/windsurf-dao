@@ -285,14 +285,27 @@ console.log("\n──── ⑤ 注入上限：宁可截断也不越 10,000，�
   // 本 hook 每次都只能退成纯指针，于是这两条会红。**那是连带红，病因不在注入侧。**
   // 不加这个探针的话，读者看到的报文指向的是「注入没给全条款」，
   // **离真正的病因隔了两层**（注入不全 ← 渲染拒绝 ← 索引过期），而第三层才是修法。
-  // 实测 2026-08-06：一个从头到尾没碰过条款文件的分支 merge 主干后，这套连带红了 1 条。
+  // 实测 2026-08-06：一个分支 merge 主干后（`drift=source`），这套连带红了 1 条。
   // 探针只在**真的过期时**出声（干净时一个字不打：恒响的提示会被训练成盲区）。
+  //
+  // 🔴 **判据读 `drift=`，不读退出码**（2026-08-06 对抗验证阻断 2）：
+  //    `runIndex` 返回的是 `Math.max(indexCode, ledgerCode)` ⇒ 读退出码等于在问
+  //    「索引**或**台账有没有事」，而这里要问的是「索引新鲜吗」。首版读了退出码，于是
+  //    **台账红 + 索引新鲜**时它谎报「索引已过期（cause=none）」——`cause=none` 就印在
+  //    「已过期」旁边，按末行契约那正是「没过期」的意思 —— 并给出**本 PR 自己判定为错的
+  //    那条处方**（跑生成器解决不了台账红）。线上 hook 没有这个病（`dao-subagent-clauses.js`
+  //    读的是渲染端的漂移专属信号），只有这个探针混过两件事。
   {
     const probe = spawnSync(process.execPath, [GEN, "--check", "--quiet"], { encoding: "utf8", cwd: REPO });
-    if (probe.status !== 0) {
-      const out = String(probe.stdout || "");
+    const out = String(probe.stdout || "");
+    const drift = (/CLAUSE_INDEX_SUMMARY [^\n]*?\bdrift=(\S+)/.exec(out) || [])[1] || null;
+    if (drift === null) {
+      // 取不到 drift 本身要出声：那说明末行契约坏了或它根本没跑起来，**不等于「没漂」**。
+      console.log("  ⚠ 前置：读不到 `CLAUSE_INDEX_SUMMARY … drift=` ⇒ 索引新不新鲜**无从判断**（不当成新鲜）。");
+      console.log("     exit=" + probe.status + "；先手跑一次 node ccswitch/scripts/gen-clause-index.mjs --check 看它到底怎么了。");
+    } else if (drift !== "none") {
       const cause = (/\bcause=(\S+)/.exec(out) || [])[1] || "?";
-      console.log("  ⚠ 前置：**仓里那份真索引已过期**（cause=" + cause + "）——");
+      console.log("  ⚠ 前置：**仓里那份真索引已过期**（drift=" + drift + " cause=" + cause + "）——");
       console.log("     本节下面若红，多半是**连带**：索引过期 → 渲染端 fail-closed → 注入退成纯指针。");
       console.log("     修法：node ccswitch/scripts/gen-clause-index.mjs（成因与处方见它自己的报文，别在注入侧找）");
     }
