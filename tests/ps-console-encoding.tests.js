@@ -85,9 +85,16 @@ console.log("\n① 前提锚点 —— 本闸测的那个前提还成立吗");
     "锚点没命中 ⇒ 前提变了，本闸下面测的不再是原来那件事");
   check("哨兵串仍是真生产者打印的那个标题", src.includes(SENTINEL),
     "SENTINEL=" + SENTINEL + " 已不在生产者源码里");
-  check("bootstrap 存在且确实在设 OutputEncoding", fs.existsSync(BOOTSTRAP) &&
-    /\[Console\]::OutputEncoding\s*=/.test(fs.readFileSync(BOOTSTRAP, "utf8")),
-    BOOTSTRAP);
+  // ⚠ 必须先剥掉注释行再判：bootstrap 的头注里**逐字引用**了这条赋值语句（讲的就是它），
+  //   直接全文匹配的话，把那一行代码整个换成空操作、这条断言照样绿 ——
+  //   本条初版就是这么写的，是 mutation A（把注入改成 $null = ...）当场照出来的。
+  //   「判据能被散文满足」是本仓明训「检查器数到 0 与它根本没看到样本，输出一模一样」的近亲。
+  const bootstrapCode = fs.existsSync(BOOTSTRAP)
+    ? fs.readFileSync(BOOTSTRAP, "utf8").split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n")
+    : "";
+  check("bootstrap 存在，且**代码行**（非注释）里确实在设 OutputEncoding",
+    /\[Console\]::OutputEncoding\s*=/.test(bootstrapCode),
+    "剥掉注释后没找到赋值 ⇒ 钉子被改成了空操作，或文件没了：" + BOOTSTRAP);
 }
 
 // ── § ② 静态不变量：每套 .ps1 测试都 dot-source 了 bootstrap ────────────────
