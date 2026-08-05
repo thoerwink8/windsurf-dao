@@ -94,22 +94,131 @@
 //       也不在已知参数名下」的形态。
 //     ⑤混淆写法（base64 / `Invoke-Expression` / 反引号命令替换）—— 本闸刻意不追。
 //   ── 以下四格由**对抗验证官**在合并前夹击查出（2026-08-03，issue #87），实现官未列 ──
-//     ⑥**具名源吃掉正参**（最要紧的一格）——`Copy-Item -Path <源> <目标>` / `-LiteralPath <源> <目标>`：
-//       具名参数吃掉一个正参后只剩 1 个，撞上「单正参不算目标位」的早退 ⇒ **一个候选都产不出**。
-//       ⚠ **别读成「具名形态已覆盖」**：PR #106 的 body 正控清单写着「`-Destination` 具名参数」，
-//       而**具名的是源、位置的是目标**这一种混合形态正好落在两边之外。
-//     ⑦**具名 `-Destination <目录>` 没有 basename 展开** —— 该展开只写在正参分支里。
-//     ⑧**单正参 + cwd 恰在 `~/.claude`** ⇒ 隐式目标就是 live。`~/.claude` 是本机常用工作目录，
-//       这一格不是理论洞。**该不该修是判断档**：把 cwd 当隐式目标位会引入一整类新误伤面。
-//     ⑨**绝对路径不过 `path.resolve`** ⇒ `..` / `.` / `//` / 8.3 短名 / UNC 全部绕开精确比对。
-//       ⚠ 这一格**同样穿透改动前就有的 Edit/Write 分支**，不是 shell 分支独有 —— 即本闸自诞生起就漏。
+//     ⑥ ✅ **已修，见 issue #112**（2026-08-03）——**具名源吃掉正参**：
+//       `Copy-Item -Path <源> <目标>` / `-LiteralPath <源> <目标>` / `-lp`，具名参数吃掉一个正参后
+//       只剩 1 个，撞上「单正参不算目标位」的早退 ⇒ 一个候选都产不出。
+//       **修法**：目标位存在的门槛由「恒 ≥2 个正参」改成「具名源在场时 ≥1 个」（`needed`）——
+//       依据是 PowerShell 的参数绑定语义（`-Path` 具名后，剩下的第一个正参绑到 position 1
+//       = `-Destination`），不是正则猜的。
+//       ⚠ **别读成「具名形态已覆盖」这句话当初错在哪**：PR #106 的 body 正控清单写着
+//       「`-Destination` 具名参数」，而**具名的是源、位置的是目标**这一种混合形态落在两边之外。
+//       ⚠ **收窄面照直写**：只有 `-Path`/`-LiteralPath`/`-lp` 算源位（`G2_SRC_PARAM`）。
+//       收宽成「任意具名取值参数」会让 `Copy-Item -Filter *.json <live>` 这类**单正参=源**的
+//       合法命令被误伤 —— 回归网有两条负控 + 一条反向 mutation 钉着这个决定。
+//     ⑦ ✅ **已修，见 issue #112** —— **具名 `-Destination <目录>` 没有 basename 展开**：
+//       该展开原先只写在正参分支里。**修法**：具名目标与位置目标一起进 `destRaws`，
+//       basename 展开对两者跑同一段（源也含具名源）。
+//     ⑧ ❌ **未修，判断档，留给用户拍板（issue #112 甲⑧ 原样挂着）** —— **单正参 + cwd 恰在
+//       `~/.claude`** ⇒ 隐式目标就是 live。`~/.claude` 是本机常用工作目录，这一格不是理论洞。
+//       **不修的理由不是"不要紧"**：把 cwd 当隐式目标位会引入**一整类新误伤面**（所有在
+//       `~/.claude` 下的单正参写入命令都会进入判定），给 AI 自己定这条及格线属结构性利益冲突。
+//     ⑨ ✅ **已修，见 issue #112**（本格优先级最高，因为它**不是 #106 引入的**）——
+//       **绝对路径一步归一都不过**：`..` / `.` / `//` / 8.3 短名 / `\\?\` 全部绕开精确比对。
+//       ⚠ 这一格**穿透改动前就有的 Edit/Write/MultiEdit/NotebookEdit 分支**，不是 shell 分支
+//       独有 —— 即**本闸自诞生起就漏**，两个分支现在都过 `g2Canon()`。
+//       **修法与它自己的两个坑**见 `g2Canon` 的头注（为什么按根的形态分派 win32/posix 两个
+//       归一器，而不是图省事统一用一个 —— 两种统一写法各自会制造一个新漏报，本机实测过）。
+//       ⚠ **仍不覆盖：UNC 共享形态**（`\\localhost\C$\…`）。它的唯一解法是 `realpath`，
+//       而对网络路径 realpath 会把 SMB 超时（可达数十秒）拖进一个 PreToolUse 钩子 ⇒
+//       **拿会话卡死换覆盖面，刻意不换**。登记表里有一条钉着它。
+//   ── 以下一格由 **issue #112 的实现官**在攻 ⑦ 的边界时撞出（2026-08-03），#106 那份清单里没有 ──
+//     ⑩**双引号里的尾反斜杠吞掉闭引号** —— `-Destination "$env:USERPROFILE\.claude\"`：
+//       `g2Tokens` 按 **bash** 语义把 `\"` 当转义，而 PowerShell 里反斜杠不是转义符、
+//       `"C:\x\"` 是一个合法的、以 `\` 结尾的字符串 ⇒ 闭引号被吃掉，整条命令剩余部分并进一个
+//       token，目标位解不出来。**位置目标与具名目标同时中招**（证明它在 tokenizer 层，不在某个分支）。
+//       **不在 #112 范围内**：修它等于让 tokenizer 按工具名分叉 bash/PowerShell 两套转义语义，
+//       是设计改动、且两侧都有误伤代价，属判断档。登记表里有两条钉着它。
+//   ── 以下三格由 **PR #117 的对抗验证官**在合并前夹击查出（2026-08-04）──────────────
+//     ⑪ ✅ **已修（#117 同批）** —— **NTFS 备用数据流 `<live>::$DATA`**：这是 NTFS 里
+//       **默认数据流的显式写法**，写它就是写原文件。本机实测确认三种流形态**判然不同**：
+//       `::$DATA` **改写原文件**（真绕过）· `:$DATA` 与 `:mystream` **不碰原文件**（真旁路流）。
+//       ⇒ `g2Canon` 只剥末尾的 `::$DATA` 这一种，多剥一种就是误伤。回归网正控 4 条 + 负控 2 条。
+//       ⚠ **那个 `i` 标志曾经无守护**（第二轮对抗官查出，14 条 mutation 里唯一漏网的一条）：
+//       去掉 `i` 后回归网**零红** —— 因为当时只有大写一条语料。而实测 `::$data` / `::$Data`
+//       **同样改写原文件** ⇒ `i` 是必需的。现补大小写两条正控，**实测去掉 `i` 当场红 2 条**。
+//     ⑭ ❌ **未修（第二轮新登记）** —— **尾点 `<live>.`**：本机实测**确实改写原文件**，是真绕过。
+//       **不修的理由与 ⑪ 恰成对照，值得记**：`::$DATA` 在任何平台都不是合法文件名 ⇒ 剥它零误伤面；
+//       而**尾点在 POSIX 上是合法且不同的文件名**（`a.json.` ≠ `a.json`）⇒ 剥它必须按平台分叉，
+//       而本闸至今**一条平台分支都没有**，引入第一条属设计决定。
+//       **同为「后缀别名」，一个能顺手修一个不能 —— 差别在误伤面，不在难度。**
+//       ⓘ 顺带记一格：**尾空格**当前被拦，但那是 `win32.resolve` **顺带** trim 掉的 ——
+//       **运气不是设计**，没有任何断言在保证它；登记表里有一条只做记录、不做承诺。
+//     ⑫ ❌ **未修（本批刻意留，理由见下）** —— **盘根绝对路径 `/Users/…` 与 `///Users/…`**：
+//       Windows 上 Node 按**当前盘**解析这类路径，cwd 落 C: 时它就是 live。
+//       `g2Canon` 的 posix 分支**刻意不补盘符**（怕在 POSIX 机器上凭空造盘符），代价就是这一格。
+//       **为什么不在本批修**：补盘符要回答「按哪个盘」—— hook 进程的 cwd 还是被拦那条调用的
+//       `input.cwd`？正解是后者 ⇒ `g2Canon` 得多收一个参数，**它每个调用点都要跟着改，
+//       包括本批刚修好的常量侧 `g2LiveDir()`**。而本批的阻断项恰恰就是「候选侧改了、常量侧没跟上」
+//       那个病 ⇒ 同一批里对同一条共享归一链再做一次两侧改动，是制造下一次同型退化最省事的办法。
+//       它是**漏报方向（保守侧）**，已登记可见；若是误伤方向不会这么处置。
+//     ⑬ ⚠️ **基准本身就是错的，本批只收回自己扩出去的那一格** —— **`Rename-Item` 的 `-NewName`
+//       相对「源目录」解析，不是相对 cwd**（本机实跑确认：cwd 在 A、源在 B，落点是 B）。
+//       本闸整条链按 cwd 解 ⇒ 对 rename 族**两个方向都错**：按 cwd 解会误伤（真实落点在别处却拦）、
+//       不解会漏报（真往 live 改名的拦不住）。甲⑥ 的门槛下降把这个错基准**扩到了具名源形态**，
+//       那是 #112 引入的新误伤面 ⇒ **本批用 `G2_NO_SRC_THRESHOLD` 把 rename 族排除在门槛下降之外**，
+//       退回改前射程。**基准没修**（要给 rename 单独一套「目标相对源目录」的解析，属语义改动）。
+//       🔴 **本行 2026-08-05 订正，作废的原文照录**：~~⚠ 第二轮对抗官反对过这个排除（「绝对
+//       `-NewName` 没有基准可错，一刀切等于连真拦截也退掉」），**9 种写法实测全被 PS 拒绝、
+//       不复现**，故维持~~ —— **那句「不复现」是假的**。第三轮对抗官给出能跑通的复现：
+//       **`-NewName` 可以带路径，当且仅当它的目录部分与「源文件所在目录」字面相同**
+//       （`Rename-Item -Path <liveDir>\evil.json <liveDir>\settings.json`，`-Force` 有无都一样）。
+//       我那 9 种写法**全部把目标设在源目录之外** —— 在那个约束内每条都对，错的只有推广。
+//       ⇒ 这个排除**退掉了 4 格 PS 真接受、真写 live 的形态**（漏报方向，`HEAD == PRE` 非退化）；
+//       买回来的是 1 格真误伤 + 1 格无实害噪音。**严重性上限**：`Rename-Item` 覆盖不了已存在的
+//       目标、`-Force` 也不行 ⇒ 只能在 `settings.json` **尚不存在**时创建它。
+//       窄修法收支与三方对错见 `G2_NO_SRC_THRESHOLD` 注释；**做不做单开 issue #132**。
+//     ⑮ ⚠️ **只收窄未根治（第二轮新登记）** —— **常量侧那个 realpath I/O 站点没有超时守卫**：
+//       `fs.realpathSync.native` **同步不可中断**，`g2LongPath` 的 `try/catch` 接得住「抛错」、
+//       **接不住「卡住」**（网络盘 / 断连映射盘）；而 live 注册写着 `timeout: 10`
+//       ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+//       **本批做的**：加一道**零 I/O 快筛**（`g2IsLive` 按文件名尾巴、`g2IsLiveDir` 按 `/.claude` 尾巴）
+//       ⇒ 只有尾巴已经长得像 live 的路径才可能走到那层 I/O，日常流量根本碰不到。
+//       实测钉住（回归网）：长名 HOME 下把 realpath 层换成 `throw`，三种形态**照样拦得住且从未调用它**。
+//       **本批没做的**：那一格真被触发时仍可能卡死。彻底解只有把 I/O 移出同步路径
+//       （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动。**别把绿读成「它不会卡」。**
+//       **账挂在 issue #133**（2026-08-05 补：此前本格写着「已登记」而查无此条目 —— 详见
+//       `g2LiveDirReal` 上方那段订正）。可达性已量：长名 HOME 零 I/O，短名 HOME 下本机
+//       16551 条 Edit 历史里仅 27 条（0.16%）通过快筛 ⇒ **方向对，量级比第二轮说的小**。
+//   ── 以下一格由 **PR #117 第三轮对抗验证官**查出（2026-08-05）──────────────────
+//     ⑯ ❌ **未修（新登记）** —— **零 I/O 快筛对 `g2IsLiveDir` 不是「必要条件」**：
+//       快筛作用在**已经归一过**的候选上，而归一会改写最后一段 ⇒ `~/.claude` 是 **junction**
+//       且 HOME 是 **8.3 短名**时，归一后末段不再是 `.claude`，`endsWith("/.claude")` 为假、
+//       **连比都不比**，丢掉一格真拦截。2×2 对照实测（junction×长/短名 HOME）**只有那一格变**。
+//       **漏报方向、可达性低、改前一样漏 ⇒ 非退化**，故第三轮没把它列为阻断项。
+//       ⚠️ **它在回归网里没有断言**（要同时造 junction + 可算 8.3 短名的假 HOME 两个 fixture，
+//       而**一条在别人机器上会悄悄退化成"测了个普通目录"的断言比没有断言更糟**）
+//       ⇒ **本格只有文字登记，没有自失效机制**，这一点照直写。账挂在 **issue #134**。
 //   **别把「G2 现在管 shell 了」读成「shell 写 live 已经被兜住了」**：兜住的是**直白写法**，
 //   而直白写法正是真实违例的形态（本次那条就是）。
 //   ⚠ **两处已知误伤**（真语料上当前零发生，但逃生阀只有用户设得了 ⇒ 撞上即会话卡死）：
 //     heredoc 正文里写着那条命令会被当成真命令（G5 早为同一个病做过行首锚点收窄，G2 shell 分支
 //     没照一遍）· 写入类命令的 `-Value (表达式)` 吞掉取值后 live 路径掉进正参。
-//   **上面九格 + 两处误伤在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上某一格，
-//   那条会红并点名，逼他同批更新这份清单 —— **这份头注不是承诺，是一张有守卫的账**。
+//     **两处均未修（issue #112 乙节，判断档，与 ⑧ 一同呈用户拍板）。**
+//   **上面各格与两处误伤，绝大多数在 `tests/hard-gates.tests.js` 有登记表断言**：哪天有人补上
+//   某一格，那条会红并点名，逼他同批更新这份清单 —— **这份头注不是承诺，是一张有守卫的账**。
+//   ⚠️ **「绝大多数」不是「全部」，也刻意不写格数**（2026-08-05 订正：原文写死「上面十五格」，
+//   加进 ⑯ 的当天就过期了 —— 同 mousse `CLAUDE.md` 那条「道数以汇总表打印为准，不写死数字」）。
+//   **哪几格没有断言，各自那一格自己写着**（当前已知：⑯ 需要 junction fixture）——
+//   **在这里再列一份清单，只会制造第二个会漂移的真相源。**
+//   （它在 #112/#117 上**连着触发了四次**：#112 修完三格时点名 6 行 · #117 第一轮修掉阻断项时
+//    点名 3 行 · 修 ⑪⑬ 时又点名 3 行 · 第二轮改常量侧分层时点名 3 行。
+//    **四次都是它逼着人回来改这段字，没有一次是人自觉想起来的。**）
+//
+//   🔬 **本 PR 三轮下来最该留给后来人的三条**（都是我自己栽进去才捞出来的）：
+//     ㈠ **「归一后再比」是两侧对称的动作，只改一侧即半成品** —— 每一半单独看都对，
+//        错的是**不在同一深度**。（#112 只改候选侧 ⇒ 短名 HOME 下整闸失明。）
+//     ㈡ **要推翻一条关于「某个具名样本」的结论，必须把那个样本原样取出来**，不能另造近似的。
+//        （我拿自己打的字面长名路径去测，据此宣告对抗官对「#87 原文」的判断有误 ——
+//        而原文是变量形态、就在我正在改的那个文件里、还标着「承重正控」。**是我错了。**
+//        现在那份原文提到模块级、只留一份，谁要引用就引用同一个名字。）
+//     ㈢ **一组样本的「共同约束」，看不见的时候就会被当成背景写进结论**（第三轮，2026-08-05）。
+//        我穷举 9 种 `Rename-Item` 写法、全部被 PS 拒绝，于是写下「这个形态跑都跑不起来」。
+//        实测无误、版本号也对，**错的只有那一步推广** —— 那 9 种写法**恰好全部把目标设在
+//        源目录之外**，而「目标目录 == 源目录」正是决定成败的那根轴。我把它当成了背景。
+//        ⚠️ **对面那位也栽在同一件事上，方向相反**：他量到 ACCEPTED，多半是因为探针里源与
+//        目标图省事放在同一个临时目录 —— **使他的结论成立的条件，他同样没看见。**
+//        ⇒ **判据：穷举完之后，先问「我这一组样本有什么是全都一样的」，那一格就是我没变过的
+//        自变量。** 与 ㈡ 是一对：㈡ 管「样本要取原样」，㈢ 管「样本变化面要覆盖全」。
 //
 // G4 · 浏览器 MCP 截图路径 —— ⚠ **射程只到浏览器 MCP 这一种工具调用**：
 //   PowerShell / .NET 的截图脚本（System.Drawing CopyFromScreen 那条路）走的**不是工具调用**，
@@ -387,16 +496,104 @@ const HEARTBEAT_SIG = /^\[dao-heartbeat\]/;
 // live 那一份的目录与文件名。**`--selfcheck` 与 mutation 都拿它当靶**（回归网里
 // 有一条把这个数组改成不存在的文件名、断言承重正控从 exit 2 掉到 exit 0）。
 const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
-const G2_LIVE_DIR = norm(path.join(HOME, ".claude")).toLowerCase();
+
+// 🔴 **常量侧必须与候选侧归一到同一深度**（#117 对抗验证官查出的**退化**，修于 issue #112 同批）。
+// 原文是 `const G2_LIVE_DIR = norm(path.join(HOME, ".claude")).toLowerCase();` —— 一个**常量**，
+// 而 #112 让**候选**侧一律多过一层 `g2Canon`。`path.join` 折得了 `.` / `..` / 重复分隔符 /
+// 尾分隔符，**折不了 8.3 短名、也剥不掉 `//?/`** —— 而那两样恰恰是 `g2Canon` 新加的能力。
+// ⇒ `USERPROFILE` 本身是这两种形态时，候选被归成长名、常量还是原样，**两边永远对不上，
+// 整道闸对所有输入一起静默放行**。本机 `USERPROFILE` 是长名，故零影响；换台机器就不是。
+//
+// 🔬 **透镜（比这个 bug 本身值钱，同窗另一个 bug 同形态：合并脚本 merge 了却不 push）**：
+//    **「归一后再比」是两侧对称的动作，只改一侧即半成品** —— 每一半单独看都对，
+//    错的是**不在同一深度**。⇒ 改了比较的一边，就去看另一边。
+//
+// **为什么惰性 + 记忆化，不在模块加载期算**：`g2Canon` 在含 `~<数字>` 时会落一次 realpath I/O，
+// 而 G2 只在一部分工具调用里才用得到它；加载期就算 = 每次 hook 启动都付这笔钱（含 G1/G3-G7
+// 那些根本不碰 G2 的调用）。缓存只在单次 hook 进程内有效，进程短命、不存在陈旧问题。
+//
+// 🔴 **分两层比，第一层零 I/O（2026-08-04 第二轮对抗验证官指出 I/O 站点无超时守卫后改）**：
+//   风险原文：`HOME` 含 `~<数字>` 时**每次 hook 启动**都会落一次 realpath，而
+//   `fs.realpathSync.native` 是**同步不可中断**的 —— 下面那个 `try/catch` 接得住「抛错」，
+//   **接不住「卡住」**（网络盘 / 断连的映射盘）。而 live 注册写着 `timeout: 10`
+//   ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
+//   **改法两件事，缺一不可**（第二件是实测逼出来的，见下）：
+//     ㈠ **零 I/O 快筛**：`g2IsLive` 先按文件名尾巴筛（`/settings.json` 等），
+//        `g2IsLiveDir` 先按 `/.claude` 尾巴筛 —— 纯字符串，筛不过直接 false，
+//        **根本走不到下面任何一层**。
+//        🔴 **2026-08-05 订正**：原文写「~~两者都是「能匹配」的必要条件~~」，**对
+//        `g2IsLiveDir` 不成立**（第三轮对抗验证官 2×2 对照实测）。快筛作用在**已经归一过**
+//        的候选上，而归一（realpath）**会改写最后一段**：`~/.claude` 若是 junction，
+//        归一后成了 `.../actualcfg`，`endsWith("/.claude")` 当场为假 ⇒ **连比都不比**。
+//        ⇒ 准确说法是「**对 `g2IsLive` 是必要条件；对 `g2IsLiveDir` 不是**」。
+//        代价是 junction + 短名 HOME 那一格丢掉一格真拦截（漏报方向、可达性低、
+//        改前一样漏 ⇒ 非退化），**已登记为下方漏报面 ⑯ 并单开 issue #134**。
+//        ⚠️ 它值得单记：这是「**用归一后的值去做归一前的字符串假设**」——
+//        与本文件那条透镜（「归一后再比是两侧对称的动作」）是**同一个病的第三种长相**。
+//     ㈡ 两层比：① **语法层**（`path.join`+`norm`，零 I/O）② **realpath 层**（有 I/O），
+//        先比 ①，不中才算 ②。
+//   🔴 **㈠ 是本改法的主力，㈡ 不是 —— 这一点我一开始写反了，实测才纠过来，留档**：
+//      我原以为「语法层能覆盖常见情形 ⇒ 常量侧零 I/O」。**错在 ① 只在「命中」时短路**，
+//      而绝大多数输入是**不命中**的 —— 不命中就一路落到 ②，I/O 照样发生。
+//      实测（`_tmp/probe-layers.mjs`，把 ② 的函数体换成 throw 看谁还拦得住）：加 ㈠ 之前，
+//      长名 HOME 下连「变量形态」「`~` 展开」都把 ② 调起来了。**是 ㈠ 把它挡在门外的。**
+//   ⇒ 实际效果：只有**尾巴已经长得像 live** 的路径才会走到 ②，日常流量根本碰不到那个 I/O。
+//   ⚠️ 另照直写：HOME 是**长名**时 ② 即便被调用也**不落 I/O**（`g2Canon` 里 realpath 只在
+//      路径含 `~<数字>` 时才跑）。所以真正有 I/O 的只有「HOME 是短名 **且** 尾巴像 live」这一格。
+//   ⚠️ **照直写它没解决的那一半**：第二层真被触发时**仍然可能卡住**，且 `try/catch` 依旧接不住。
+//     要彻底解只有把 I/O 移出同步路径（子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动，
+//     不在本批。**账挂在 issue #133。**
+//   🔴 **本行 2026-08-05 订正，作废的原文照录**：~~已登记（回归网 `_tmp` 无关，条目在
+//     hard-gates 登记表）~~ —— **那是一句假话**。第三轮对抗验证官把两张登记表逐条读完 +
+//     全仓 open issue 列了一遍：**没有这个条目，也没有对应 issue**。
+//     ⇒ 它是 dao.md 那条「**义务转移必须同时落台账，否则等于销账**」的教科书形态：
+//     说得出「这条现在挂在哪个编号下」才算转移，说不出就还在转移方手上。**现在挂在 #133。**
+//     顺带把可达性量出来（第三轮实测，preload shim 数真实 syscall）：长名 HOME 下**一次
+//     I/O 都不落**；短名 HOME 下本机 16551 条 Edit 历史里只有 **27 条**（0.16%）通过快筛。
+//     且卡死那一格还要再叠一个条件——`g2Canon` 只在含 `~<数字>` 时才落 realpath ⇒
+//     **HOME 必须同时是 8.3 短名**，一块长名的映射网络盘根本不会触发它。
+//     **方向对，量级比第二轮说的小。** 但「realpath 会不会真的挂住」**至今仍是读码得出的**。
+const _g2LiveDirCache = { syn: null, real: null };
+// ① 语法层：零 I/O
+function g2LiveDirSyntactic() {
+  if (_g2LiveDirCache.syn === null) {
+    _g2LiveDirCache.syn = norm(path.join(HOME, ".claude")).toLowerCase();
+  }
+  return _g2LiveDirCache.syn;
+}
+// ② realpath 层：有 I/O，**只在语法层没命中时才求值**
+function g2LiveDirReal() {
+  if (_g2LiveDirCache.real === null) {
+    _g2LiveDirCache.real = g2Canon(norm(path.join(HOME, ".claude"))).toLowerCase();
+  }
+  return _g2LiveDirCache.real;
+}
+// 两层依次比。**次序是判据的一部分，别调换**：调换之后第一层的「零 I/O」就白设了。
+function g2MatchesLiveDir(low) {
+  if (low === g2LiveDirSyntactic()) return true;
+  return low === g2LiveDirReal();
+}
 
 function g2IsLive(p) {
   if (!p) return false;
   const low = norm(p).toLowerCase();
-  return G2_LIVE_NAMES.some((n) => low === `${G2_LIVE_DIR}/${n}`);
+  return G2_LIVE_NAMES.some((n) => {
+    if (!low.endsWith(`/${n}`)) return false;              // 先按文件名快筛，零 I/O
+    return g2MatchesLiveDir(low.slice(0, low.length - n.length - 1));
+  });
 }
 // 目标位给的是 `~/.claude` **目录**时（`cp x ~/.claude/`），文件名由源的 basename 决定。
 function g2IsLiveDir(p) {
-  return !!p && norm(p).toLowerCase() === G2_LIVE_DIR;
+  if (!p) return false;
+  const low = norm(p).toLowerCase();
+  // 零 I/O 快筛（见上方 ㈠）：先按 `/.claude` 尾巴筛，筛不过直接 false，
+  // 绝不往下走那两层（下面才是可能落 I/O 的地方）。
+  // 🔴 **2026-08-05 订正**：原文写它是「~~必要条件~~」—— **不是**。它作用在**归一后**的
+  // 候选上，而归一（realpath）会改写末段：`~/.claude` 是 junction 且 HOME 是 8.3 短名时，
+  // 归一后末段不再是 `.claude` ⇒ 这一行**吞掉一格真拦截**（头注漏报面 ⑯ / issue #134）。
+  // 留着不改是因为它是那道 I/O 的主力挡板；**代价照直写在这里，别再当它是必要条件。**
+  if (!low.endsWith("/.claude")) return false;
+  return g2MatchesLiveDir(low);
 }
 
 // 把 home 的各种变量形态展开成真实路径。
@@ -425,6 +622,66 @@ function g2Expand(raw, vars) {
     .replace(/^~(?=[\\/]|$)/, H);                           // ~/...
 }
 
+// 8.3 短名（`C:/Users/ADMINI~1/...`）在 path 层面解不开——它是文件系统的别名，只能问文件系统。
+// **本机不是理论形态**：全量语料普查 27365 条去重命令里 `~<数字>` 路径 **1196 条**
+// （scratchpad 一律走 `C:\Users\ADMINI~1\AppData\...`），而 `ADMINI~1` 正是 HOME 的短名。
+// 三条刻意的收窄，别读成"顺手加个 realpath"：
+//   ㈠ **只在盘符绝对路径 + 真含 `~<数字>` 时才落 I/O** —— 不这么收窄的话，`//server/share/...`
+//      会把网络 SMB 超时（可达数十秒）拖进一个 PreToolUse 钩子里，等于用会话卡死换覆盖面。
+//   ㈡ **失败一律按原样比**（fail-open，同头注设计取舍②）：文件还不存在是正常的（Write 新建）。
+//   ㈢ 整条解不开时退到**目录级** —— 本机实测 `C:\Users\ADMINI~1\.claude` 解得出，
+//      故文件名本身是短名以外的形态都接得住。**⚠ 2026-08-04 订正**：这里原写
+//      「（`SETTIN~1.JSON`）」，那个短名**根本不存在** —— 8.3 是 8 位主名 + **3 位**扩展名，
+//      `settings.json` 的真短名是 **`SETTIN~1.JSO`**（本机 `dir /x` 实测）。写错的那个是四位扩展名，
+//      于是这句话举的例子是个永不出现的字符串 —— 由 #117 对抗验证官查出。
+//      **它现在被接住了**（文件名短名同样落 realpath 全路径那一步），回归网有正控钉着。
+// ⚠ 它顺带会解开 symlink/junction，这是 realpath 的语义、不是本函数想要的；因为它只在
+//   `~<数字>` 路径上跑，而那类路径此前**一律不匹配**，任何改变都只会往"更准"的方向走。
+function g2LongPath(p) {
+  try { return norm(fs.realpathSync.native(p)); } catch (_) { /* 文件不存在是常态 */ }
+  try {
+    const i = p.lastIndexOf("/");
+    if (i > 0) return norm(fs.realpathSync.native(p.slice(0, i))) + p.slice(i);
+  } catch (_) { /* 目录也不存在 ⇒ 按原样比 */ }
+  return p;
+}
+
+// 绝对路径归一（issue #112 甲⑨）。**改前这一步整个不存在** —— 只有相对路径过 `path.resolve`，
+// 绝对路径原样拿去跟 live 精确比对 ⇒ `..` / `.` / `//` / 8.3 短名 / `\\?\` 全部绕开。
+// 🔴 **这一格穿透的是改动前就有的 Edit/Write 分支，不是 shell 分支独有** —— 即 G2 自诞生起就漏。
+//
+// **为什么按根的形态分派两个归一器，而不是统一用一个**（本机实测逐一验过，别改成"更简洁"的写法）：
+//   · `path.posix.normalize("C:/../Users/x")` → `Users/x` —— **把盘符当成普通段吃掉了**，
+//     于是 `C:/../Users/Administrator/.claude/settings.json` 归一成一个相对路径、彻底比不上 live。
+//     用它处理盘符路径 = 把一个漏报换成另一个漏报。
+//   · `path.win32.resolve("/../home/x")` → `D:/home/x` —— **凭空补上当前进程的盘符**，
+//     在 HOME 是 POSIX 形态的机器上会把路径改写成别的东西。
+//   ⇒ 盘符绝对走 win32.resolve（在盘根处夹住 `..`），POSIX 绝对走 posix.normalize（在 `/` 处夹住）。
+// **`//` 开头（UNC）刻意不归一**：posix.normalize 会把前导 `//` 折成 `/`，而那个路径要原样回显
+// 给被拦的人看，折了会让人以为闸拦错了对象。UNC 共享形态本来就在覆盖面外（见头注 G2 ⑨）。
+//
+// **NTFS 备用数据流（2026-08-04 由 #117 对抗验证官查出，本批修）**：`<path>::$DATA` 是 NTFS
+// 里**默认数据流的显式写法**，写它就是写原文件本身。本机实测（`_tmp/probe-newgaps.ps1`）：
+//   · `settings.json::$DATA`  写入后原文件内容 = HIJACKED  ⇒ **确实改写原文件，是真绕过**
+//   · `settings.json:$DATA`   写入后原文件内容 = ORIGINAL  ⇒ 单冒号是**另一条**流，不碰原文件
+//   · `settings.json:mystream` 写入后原文件内容 = ORIGINAL ⇒ 具名旁路流，同样不碰原文件
+// ⇒ **只剥 `::$DATA` 这一种，且必须锚在末尾**。剥多了就是误伤（把真旁路流当成写原文件）。
+// 零误伤面：Windows 文件名里 `:` 本就非法（只作盘符与流分隔符），没有合法文件名以 `::$DATA` 结尾。
+function g2Canon(s) {
+  if (!s) return s;
+  // Win32 扩展长度前缀是**纯字符串**前缀，剥它不需要任何 I/O：`//?/C:/…` → `C:/…`
+  if (/^\/\/[?.]\/[A-Za-z]:\//.test(s)) s = s.slice(4);
+  // NTFS 默认数据流的显式写法 ⇒ 等价于原文件（三种流形态的实测差别见上方注释）
+  s = s.replace(/::\$DATA$/i, "");
+  if (/^[A-Za-z]:\//.test(s)) {
+    try { s = norm(path.win32.resolve(s)); } catch (_) { /* 解析不了就按原样比 */ }
+    if (/~\d/.test(s)) s = g2LongPath(s);
+  } else if (/^\/(?!\/)/.test(s)) {
+    try { s = path.posix.normalize(s); } catch (_) { /* 同上 */ }
+  }
+  return norm(s);
+}
+
 // 展开 + 归一 + 相对路径按 cwd 解析。Git Bash 的 `/c/Users/...` 与 cygwin 的
 // `/cygdrive/c/...` 都要还原成盘符形态——真语料里备份命令就是用 `/c/...` 写的。
 function g2Resolve(raw, cwd, vars) {
@@ -437,7 +694,8 @@ function g2Resolve(raw, cwd, vars) {
   if (!abs) {
     try { s = norm(path.resolve(cwd || process.cwd(), s)); } catch (_) { /* 解析不了就按原样比 */ }
   }
-  return s;
+  // ⑨：绝对路径此前直接 return，一步归一都没有 —— 两个分支现在都过这里。
+  return g2Canon(s);
 }
 
 // 段内 token 化。与 shellSegmentsRaw 是两层不同的事：那层切**命令段**，这层切**参数**。
@@ -515,10 +773,88 @@ function g2VarMap(segs) {
 const G2_DEST_LAST = new Set(["copy-item", "copy", "cpi", "cp", "move-item", "move", "mi", "mv", "rename-item", "ren", "rni"]);
 const G2_ALL_TARGET = new Set(["out-file", "set-content", "add-content", "ac", "tee-object", "tee", "new-item", "ni"]);
 // 取值型参数（会吃掉下一个 token）；不在表里的 `-Xxx` 一律当开关，不吃下一个。
-const G2_VALUE_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|newname|target|value|inputobject|encoding|itemtype|name|filter|include|exclude|delimiter|width|erroraction)$/i;
+// ⚠ **`lp` 2026-08-04 从三张表里删掉了（#117 对抗验证官查出，本机实跑复核）**：
+//   PowerShell 侧 `Copy-Item -lp` **根本不是合法参数** —— `(Get-Command Copy-Item).Parameters`
+//   实测 `-LiteralPath` 的**唯一**别名是 `PSPath`，`lp` 既非别名也非合法前缀缩写，
+//   实跑报 `A parameter cannot be found that matches parameter name 'lp'`。
+//   而 bash 侧 `cp -lp a b` 是**捆绑短选项**（`-l` 硬链 + `-p` 保属性）、**不吃取值**。
+//   ⇒ 把 `lp` 留在 `G2_VALUE_PARAM` 里是**真错误**：它会让 `cp -lp <源> <目标>` 的
+//   `-lp` 吃掉 `<源>`。当前恰好还能得到正确答案（`namedSrcs` 补回了门槛），但那是**巧合不是判据**；
+//   删掉之后 `-lp` 当开关，两个正参照常识别，`cp -lp <live>` 这种单正参形态也不再被误当目标位。
+const G2_VALUE_PARAM = /^-{1,2}(path|literalpath|filepath|destination|dest|newname|target|value|inputobject|encoding|itemtype|name|filter|include|exclude|delimiter|width|erroraction)$/i;
 // 目标位参数：复制类只认这几个；写入类另加 -Path/-LiteralPath/-FilePath。
 const G2_DEST_PARAM = /^-{1,2}(destination|dest|newname|target)$/i;
-const G2_TARGET_PARAM = /^-{1,2}(path|literalpath|lp|filepath|destination|dest|target)$/i;
+const G2_TARGET_PARAM = /^-{1,2}(path|literalpath|filepath|destination|dest|target)$/i;
+// **源**位参数（只对 dest-last 类有意义）。issue #112 甲⑥：`-Path` 具名之后，PowerShell 的
+// 参数绑定把**剩下的第一个正参绑到 position 1 = `-Destination`** —— 即"只剩 1 个正参"这件事
+// 本身就是目标位存在的证据，而旧判据恰恰在这里早退。
+const G2_SRC_PARAM = /^-{1,2}(path|literalpath)$/i;
+// 🔴 **`rename-item`/`ren`/`rni` 不吃甲⑥ 的门槛下降（2026-08-04，#117 对抗验证官查出后收窄）**：
+//   `Rename-Item` 的 `-NewName` **相对源目录解析，不是相对 cwd**（本机实跑确认：
+//   cwd 在 A、源在 B，`Rename-Item B\foo.json bar.json` 的落点是 **B\bar.json**）。
+//   本闸整条解析链按 cwd 解 ⇒ 对 rename 这一族**基准就是错的**，两个方向都错：
+//   按 cwd 解会误伤（真实落点在别处却拦）、不解会漏报（真往 live 改名的拦不住）。
+//   甲⑥ 把门槛从 2 降到 1，等于**把这个错基准扩到了具名源形态**——那是本批引入的新误伤面。
+//   ⇒ **先把我扩出去的那一格收回来**（rename 族维持改前的 ≥2 门槛），
+//   **不在本批改基准**：改基准要给 rename 单独一套「目标相对源目录」的解析，属语义改动、
+//   需要自己的语料与 mutation，而本 PR 已经因为「两侧归一不同深度」出过一次退化 ——
+//   同一批里再动一次共享解析链，是制造下一次退化最省事的办法。**残余误伤已登记在回归网。**
+//
+// ══ 🔴🔴 下面这段【已作废】，2026-08-05 第三轮对抗验证官证伪。整段保留，别删 ═══════════
+//   **它是本 PR 最值钱的一条教训的第二个实例**：我又一次拿「我自己挑的那组样本」去推广，
+//   而决定成败的那根轴恰好被我当成了背景。作废的是**推广出来的那句结论**，不是那 9 次实测本身。
+//   ~~⚠️ 第二轮对抗验证官对这个排除提过一条反对，本机实测「不复现」，故维持原样（2026-08-04）：~~
+//   ~~反对意见是「`-NewName` 给绝对路径时没有基准可错，一刀切排除等于连真拦截也退掉了 ——~~
+//   ~~PS 5.1 接受绝对 `-NewName` 且文件真落在那里」。~~
+//   ~~**实测穷举 9 种写法，全部被 PS 拒绝**（`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，~~
+//   ~~PSVersion 5.1.26100.8875）：绝对反斜杠 / 绝对正斜杠 / 相对带子目录 / 相对正斜杠子目录 /~~
+//   ~~UNC / 位置绑定 / `rni` / `ren`（PS 别名）—— 报的都是同一句~~
+//   ~~`Cannot rename the specified target, because it represents a path or device name.`；~~
+//   ~~cmd.exe 的真 `ren` 报 `The syntax of the command is incorrect.`。~~
+//   ~~**唯一被接受的是「纯文件名」，落点是源目录** —— 那恰恰是上面那段理由覆盖的那一格。~~
+//   ~~⇒ 「绝对 `-NewName`」这个形态**跑都跑不起来**，不存在被退掉的真拦截。~~
+//   ~~**为它加一格判定反而是净损失**：它只会在一条 PowerShell 本来就会报错的命令上多拦一次，~~
+//   ~~而本闸的误伤代价是**会话当场卡死、逃生阀只有用户设得了** —— 拿真误伤换零收益。~~
+//   🔴 我当时写下的最后一句是：**「如果对抗官手上有能跑通的复现，以它为准、我这段作废」**。
+//      他有。见下。**这句话是这段文字里唯一还成立的部分，它也确实把自己执行了。**
+// ══ ✅ 真实规则（第三轮对抗验证官本机实跑，PSVersion 5.1.26100.8875 · Desktop · 未装 pwsh）═══
+//   **`-NewName` 可以带路径，当且仅当它的目录部分与「源文件所在目录」字面相同。**
+//   `-Force` 有无都一样（无 `-Force` 即通过）；目标不存在即可。能跑通的复现，逐字给出
+//   （`<liveDir>` = `~/.claude` 的绝对路径；他全程在 `_tmp` 替身目录上做，从不碰真 live）：
+//       Rename-Item -Path <liveDir>\evil.json <liveDir>\settings.json
+//   `-LiteralPath` / `rni` / `ren` / 全正参 / `.\settings.json` **同样通过**。
+//   **被拒的只有三格**：目标目录 ≠ 源目录 · `..` 回绕 · `\\?\` 前缀 —— 报的都是那句
+//   `Cannot rename the specified target, because it represents a path or device name.`
+//   ⇒ **两位官各对一半，而我错在推广**：我那 9 种写法**全部把目标设在源目录之外**，
+//     在那个约束内每一条都对、版本号也对；错的只有由此推出的「这个形态跑都跑不起来」——
+//     **我把「目标目录」当成了背景，而它才是决定成败的那根轴。**
+//     第二轮对抗官**结论对**（这个排除确实退掉了真拦截，而且是 **4 格不是 1 格**），
+//     但他写下的那条 payload（`-Path <别处>`）恰好落在被拒那一格、**字面不成立** ——
+//     他量到 ACCEPTED，多半是因为探针里源与目标图省事放在了同一个临时目录，
+//     **那正是使它成立的条件，而他没看见它**。
+// ── 这个排除的净收支，摆全（第三轮实测，喂事件 JSON 给三版本 hook）──────────────────
+//   · **退掉的**：`-Path <liveDir>\x.json <liveDir>\settings.json` 及其 `-LiteralPath` /
+//     `rni` / `.\settings.json` 变体 —— **四个 PS 真正接受、真正写到 live 的形态**
+//     （本闸判 0；把这一行的排除去掉即判 2）。
+//   · **买回来的**：一格**真误伤**（`-Path <别处> settings.json` 且 cwd 恰在 live 目录：
+//     PS 落在源目录，本闸按 cwd 解 ⇒ 拦错对象），外加一格「拦下一条 PS 本来就会报错的
+//     命令」（无实害，只是噪音）。
+//   · **方向**：漏报，且 `HEAD == PRE` ⇒ **不是退化，是把一格意外修好的东西又还回去了。**
+// ── ⚠️ 一个双方三轮都没量的严重性上限（它把这一格压低一个量级）───────────────────────
+//   `Rename-Item` **覆盖不了已存在的目标，`-Force` 也不行**（第三轮实跑：无 `-Force` 报
+//   `RenameItemIOError` / `System.IO.IOException`，带 `-Force` **同样拒绝**，原文件内容未变；
+//   纯文件名形态对照组同样拒绝）。
+//   ⇒ 这条绕过**只能在 `settings.json` 尚不存在时把它创建出来**，改不了已有的。
+//   **别读成「所以可以不管」**：`settings.local.json` 在很多机器上本来就不存在，
+//   而 G2 的职责正是不让 AI 写这两个文件。
+// ── 本批仍不改代码，但**理由换了**（原理由「跑不起来」已作废）───────────────────────
+//   窄修法存在且第三轮对抗官给了收支：「rename 族在**末位正参是绝对路径**时照常吃门槛下降」
+//   （绝对目标时本闸的解析与 PS 的真实落点重合，「基准错」这个排除理由对它不成立；
+//   而那格真误伤用的是**相对**文件名，不受影响）。**但它动的是同一条共享解析链**，
+//   而本 PR 已经因为「两侧归一深度不一致」出过一次退化 ⇒ **单开一单，不塞进这个已经三轮的 PR**
+//   —— **issue #132**（帅 2026-08-05 拍板：本批只改文本 + 补登记）。
+//   回归网 `LEDGER_117` 已补一条登记钉住那四格（登记值 exit 0），并有 mutation 钉住它的判别力。
+const G2_NO_SRC_THRESHOLD = new Set(["rename-item", "ren", "rni"]);
 
 const g2CmdName = (t) =>
   String(t == null ? "" : t).replace(/^["']|["']$/g, "").replace(/^.*[\/\\]/, "").replace(/\.exe$/i, "").toLowerCase();
@@ -548,6 +884,8 @@ function g2WriteTargets(seg, cwd, vars) {
     let start = args.findIndex((a) => g2CmdName(a) === head);
     start = start >= 0 ? start + 1 : 1;
     const positional = [];
+    const namedSrcs = [];      // 具名源（`-Path <源>`）的取值 —— basename 展开要用（甲⑦）
+    const destRaws = [];       // dest-last 类的**所有**目标位候选（具名 + 位置），供 basename 展开统一走一遍
     for (let i = start; i < args.length; i++) {
       const a = args[i];
       const inline = /^(-{1,2}[A-Za-z][\w-]*)[:=]([\s\S]+)$/.exec(a);
@@ -560,19 +898,40 @@ function g2WriteTargets(seg, cwd, vars) {
       } else { positional.push(a); continue; }
       if (val == null) continue;
       const isTarget = destLast ? G2_DEST_PARAM.test(name) : G2_TARGET_PARAM.test(name);
-      if (isTarget) out.push({ why: `参数 ${name}`, raw: val });
+      if (isTarget) { out.push({ why: `参数 ${name}`, raw: val }); if (destLast) destRaws.push(val); }
+      else if (destLast && G2_SRC_PARAM.test(name)) namedSrcs.push(val);
     }
     if (destLast) {
-      // 只有 ≥2 个正参才存在「目标位」；单个正参是源（`Copy-Item x` 复制到当前目录）。
-      if (positional.length >= 2) {
+      // 「目标位」存在的门槛（issue #112 甲⑥）：
+      //   · 源在正参上（`Copy-Item <源> <目标>`）⇒ 要 ≥2 个正参，单个正参是源
+      //     （`Copy-Item x` 是复制到当前目录，没有目标位）。
+      //   · 源已被**具名**吃掉（`Copy-Item -Path <源> <目标>`）⇒ **1 个正参就是目标位**。
+      //     旧判据一律要 ≥2，于是这种混合形态**一个候选都产不出**。
+      //     ⚠ 别读成「具名形态本来就已覆盖」：已覆盖的是**具名目标**（`-Destination`），
+      //     这里是**具名源 + 位置目标**，正好落在两边之外。
+      //   ⚠ rename 族除外（`G2_NO_SRC_THRESHOLD`，理由见该常量注释：它的目标位基准是**源目录**
+      //     不是 cwd，本闸解错了基准，甲⑥ 会把这个错基准扩到具名源形态上）。
+      //     ⚠ 对抗官提过「绝对 `-NewName` 该放行这个排除」。~~9 种写法实测全被 PS 拒绝、不复现~~
+      //       **【2026-08-05 作废】那句是假的**：PS **接受**同目录的绝对 `-NewName`
+      //       ⇒ 这个排除退掉了 4 格真拦截（漏报方向、非退化）。窄修法留 issue #132，
+      //       本批只订正文本 —— 收支与三方对错写在该常量注释里。
+      const needed = (namedSrcs.length && !G2_NO_SRC_THRESHOLD.has(head)) ? 1 : 2;
+      const hasDestPos = positional.length >= needed;
+      if (hasDestPos) {
         out.push({ why: "末位参数（目标位）", raw: positional[positional.length - 1] });
-        // 目标位给的是 `~/.claude` 目录时，落地文件名由源的 basename 决定
-        const destDir = g2Resolve(positional[positional.length - 1], cwd, vars);
-        if (g2IsLiveDir(destDir)) {
-          for (const src of positional.slice(0, -1)) {
-            const base = norm(g2Expand(src, vars)).split("/").pop();
-            if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
-          }
+        destRaws.push(positional[positional.length - 1]);
+      }
+      // 目标位给的是 `~/.claude` **目录**时，落地文件名由源的 basename 决定。
+      // issue #112 甲⑦：这一段原先只写在**位置**目标位的分支里，具名 `-Destination <目录>`
+      // 拿不到它 ⇒ `Copy-Item .\settings.json -Destination ~/.claude` 整条漏过。
+      // 现在具名与位置两种目标位共用同一段展开，源也含具名源。
+      const srcs = namedSrcs.concat(hasDestPos ? positional.slice(0, -1) : positional);
+      for (const dRaw of destRaws) {
+        const destDir = g2Resolve(dRaw, cwd, vars);
+        if (!g2IsLiveDir(destDir)) continue;
+        for (const src of srcs) {
+          const base = norm(g2Expand(src, vars)).split("/").pop();
+          if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
         }
       }
     } else {
