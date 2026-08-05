@@ -54,6 +54,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\ccswitch\lib\console-utf8.ps1')  # pin child-stdout decode to UTF-8 -- see that file (issue #131)
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $targetPs1 = Join-Path $repoRoot 'ccswitch/scripts/dao-pr-merge.ps1'
 $psExe     = (Get-Command powershell.exe).Source
