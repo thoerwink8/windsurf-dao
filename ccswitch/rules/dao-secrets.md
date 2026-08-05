@@ -61,8 +61,10 @@ Docker → `~/.docker/config.json` · gcloud → `~/.config/gcloud/`。**没有�
 
 ### 路 A · 环境变量注入（`sops exec-env`）
 
-```
-sops exec-env "%USERPROFILE%\.dao-secrets\<slug>.env" "<你的启动命令>"
+```powershell
+# 这是 PowerShell 写法。cmd 里把 $env:USERPROFILE 换成 %USERPROFILE%——
+# **第一个参数（文件路径）是由你敲命令的那个 shell 展开的**，不是由 sops 展开的，写错就找不到文件。
+sops exec-env "$env:USERPROFILE\.dao-secrets\<slug>.env" "<你的启动命令>"
 ```
 
 解密后的值**只进子进程的环境，不落盘**。
@@ -72,45 +74,110 @@ sops exec-env "%USERPROFILE%\.dao-secrets\<slug>.env" "<你的启动命令>"
 **代价 / 边界**：
 - 值在子进程的环境块里，同机上有权限的进程可以读到（`Get-Process` 级别的窥探）。这是环境变量的固有属性，不是 SOPS 的缺陷。
 - 命令是**一整个字符串**传进去的，引号规则要当心（见下面「Windows 硬事实」）。
+- 🔴 **值不要用引号包起来，也别留首尾空格**（2026-08-05 实测）：`sops exec-env` 把值**原样**注入环境 —— 源文件里写 `K="abc"`，子进程拿到的就是**带引号的** `"abc"`；尾随空格同理保留。而**搬走之前**，消费方读的是它自己那个 trim + 去引号的解析器（`claimer.ts` 的 `parseEnvInto`、迁移脚本的 `Read-DotEnvMap`、mousse 的 `extract_env_value` 都是这么写的）。⇒ **恰恰是这条被推荐的路把消费方自己的解析器整个绕过去了**，两边不等价。sops 本身一个字节都不改（加解密后逐字节相同，LF/CRLF 两个 fixture 都验过），差别全在消费方那一侧。**失败长得像「密码错了」**，极难归因。迁移脚本现在会在第 1 节当场报个数（只报个数，不报是哪个键、更不报值）。
 - **它救不了「程序坚持要读一个文件」那一类** —— 那是路 B。
 
 ### 路 B · 按需吐值（临时文件，用完即删）
 
-```
-sops exec-file --no-fifo "%USERPROFILE%\.dao-secrets\<slug>.env" "<命令，用 {} 代表临时文件路径>"
+```powershell
+# 同上，PowerShell 写法；cmd 里换成 %USERPROFILE%
+sops exec-file --no-fifo "$env:USERPROFILE\.dao-secrets\<slug>.env" "<命令，用 {} 代表临时文件路径>"
 ```
 
 解密到一个临时文件，把路径替换进 `{}`，**子进程退出后文件即消失**。
 
-**适用**：**结构上只认文件、没有环境变量入口的消费方。** 这不是假想 ——
-**mousse-cli 就是**：它取 key 的唯一真相源 `resolve_llm_key_optional()`
-（`crates/mousse-core/src/prompt_store/decompose.rs:234`）只有两条路，
-**vault（OS keyring）→ `.env.local` 文件**，`base_url` 有 `MOUSSE_LLM_BASE_URL` 环境变量入口
-而 **key 没有** ⇒ **路 A 对它结构上无效**。
+**适用**：**结构上只认文件、又能接受「文件路径由外部告诉我」的消费方。**
+⚠ **这两个条件是「与」不是「或」，而第二个才是它真正的接口**：`exec-file` 给你的是
+**一个随机临时目录里的随机文件名**（实测形如 `%TEMP%\.sops<随机>\tmp-file<随机>`），
+它靠把这个**路径**替换进 `{}` 交给你。**消费方若不接受路径，路 B 就接不上。**
+
+🔴 **本批四处里没有一个走路 B。** 这里原先举的例子（mousse-cli）**是错的，已订正** ——
+详见下面「各消费方的形态」表底下那段。留着路 B 是因为它是一类真实存在的通用能力，
+不是因为这一批用得上它。
 
 **代价 / 边界**：
 - 明文在进程活着的这段时间**确实落在磁盘上**（临时目录）。比路 A 弱。
 - 进程被强杀时临时文件可能残留。
-- 🔴 **Windows 上 `--no-fifo` 不是可选项，是必须**（见下节）。
+- 🔴 **临时目录路径里有空格时，`{}` 会给出一个不存在的路径，而 sops 退出码仍然是 0**
+  （2026-08-05 实测，**加引号也没用**）：`exec.go` 对 `{}` 做的是**纯文本替换、零转义**，
+  随后整串交给 `cmd.exe /C`，而 Go 的参数转义把内层引号写成 `\"`、cmd 不认这个写法。
+  本机 `%TEMP%` 是 8.3 短名（`C:\Users\ADMINI~1\...`）不含空格所以不发作，
+  **用户名带空格的机器上路 B 会静默给错路径**。⇒ 用路 B 前先确认 `TMP`/`TEMP` 不含空格；
+  `dao-secrets-init.ps1` 第 7 节会在检测到空格时当场提醒。
+- **`--no-fifo` 在 Windows 上不是必须，但建议显式加**（见下节第 2 条 —— 原先这里写「不加会当场死」，**已证伪**）。
 
 ### 怎么选（判据一句话）
 
-**问「这个程序拿密钥的入口是环境变量还是文件」** —— 答环境变量走 A，答文件走 B。
-答不上来就去读它的取值链，别猜：本批四处里，
-**侦察报告对其中一处的消费方判断就是错的**（P4 报「未查到消费方」，实际消费方
-`start-proxy.bat:7` 用 Node 原生 `--env-file` 就在同一个目录里）。
+**要问两句，不是一句**（2026-08-05 订正 —— 原先只写了第一句，于是 mousse-cli 那一行判错了）：
+
+1. **「入口是环境变量还是文件」** —— 答环境变量走 A。
+2. 答文件的，**还要再问「它接受别人告诉它路径吗」** —— 接受才走 B。
+   **不接受的（路径写死、或按固定文件名从 cwd 往上找）两条都不适用**，
+   得另找出路（OS keyring / 改那个程序 / 挂账）。
+
+答不上来就去读它的取值链，别猜 —— 本批四处里踩到过两次：
+**侦察报告对 P4 的消费方判断是错的**（报「未查到消费方」，实际消费方 `start-proxy.bat:7`
+用 Node 原生 `--env-file` 就在同一个目录里）；**本档自己对 mousse-cli 的判断也是错的**
+（漏了第 2 问，见下面表格底下那节）。
+
+## 🔴 头号坑：sops 找 `.sops.yaml` 是从「你当前所在的目录」往上找
+
+**不是从被加密文件所在的目录往上找。** 这条跟平台无关，但它是本方案第一次真跑时唯一的阻断项，
+所以摆在最前面。四组对照实测（2026-08-05 甲路对抗查出，2026-08-06 复现并修）：
+
+| 当前目录 | 被加密文件在 | 结果 |
+|---|---|---|
+| 凭据根里 | 凭据根**外** | ✅ exit 0 |
+| 仓库根 | 凭据根**内** | ❌ exit 1 |
+| 仓库根 / 用户主目录 | 任意 | ❌ exit 1 |
+| 任意 + `--config <路径>`（或 `SOPS_CONFIG`） | 任意 | ✅ exit 0 |
+
+**第二行是关键**：文件放在凭据根里也救不了 —— 所以这不是「路径没写对」，是发现机制本身。
+报错长这样，看不出跟当前目录有关系：
+`config file not found, or has no creation rules, and no keys provided through command line options`
+
+⇒ **凡是脚本里调 sops，一律显式钉 `--config <凭据根>\.sops.yaml`。**
+⚠ 它是**全局位标志，必须放在 `encrypt` / `decrypt` 前面**；放后面 sops 直接
+`flag provided but not defined: -config` 退出 1（本机实测两种位置都跑过）。
+`decrypt` 其实不需要它（实测不钉也 exit 0 —— 解密用的是文件自带的元数据），
+两个脚本照样钉，是为了让「当前目录上方有没有**别人的** `.sops.yaml`」这个变量彻底离开等式。
+
+**连带的一格比失败本身更该记**：迁移脚本原先的次序是「先明文备份 → 再加密」，
+于是**每一次失败的迁移都会在磁盘上多留一份明文口令**，而用户只看到一行红字。
+现在的次序是「加密 → 复核 → 备份 → 删原件」：**搬不成功就一个字节都不多写**
+（负控实测：改坏 recipient 让加密必失败 ⇒ 退出码 1、原件还在、备份目录里 **0 个文件**；
+同一个负控在改之前量到的是 **1 个明文文件**）。
 
 ## Windows 硬事实（一手出处，别按 Linux 经验推）
 
-三条都是从 sops 源码与官方文档核过的，不是回忆：
+三条原先都是**读 sops 源码与官方文档**得来的。2026-08-05 用真 sops 逐条实跑之后：
+**第 1、3 条成立，第 2 条被证伪并已改写。**
+⇒ 本节这句引子刻意保留这段订正史，因为它本身就是判据：
+**「读源码」比「凭回忆」硬，但仍然不是「跑过」** —— 而错的那一条，源码读的还是对的那个文件，
+漏的是**调用方**。
 
 1. **age 私钥的默认位置在 Windows 上是 `%AppData%\sops\age\keys.txt`**，
    不是 Linux 的 `~/.config/sops/age/keys.txt`。覆写用 `SOPS_AGE_KEY_FILE`
    （出处：getsops.io/docs/usage/identities/age）。
-2. 🔴 **`exec-file` 的 FIFO 在 Windows 上直接 `log.Fatal`。**
-   `cmd/sops/subcommand/exec/exec_windows.go` 里 `GetPipe` / `WritePipe` 两个函数体
-   就是 `fifos are not available on windows` ⇒ **不加 `--no-fifo` 会当场死**。
-   同一个文件里 `ExecSyscall`（`--same-process`）与 `SwitchUser`（`--user`）**同样不可用**。
+2. **`--no-fifo` 在 Windows 上是「显式但无害」，不是「必须」**（2026-08-05 实测**订正**了本条
+   原先的说法）。原文写的是「`exec-file` 的 FIFO 在 Windows 上直接 `log.Fatal` ⇒ 不加
+   `--no-fifo` 会当场死」，出处是 `exec_windows.go` 里 `GetPipe` / `WritePipe` 的函数体确实
+   就是 `log.Fatal`。**但调用方在调到它们之前就把开关关了** —— `cmd/sops/subcommand/exec/exec.go`
+   （v3.13.3）：
+
+   ```go
+   if runtime.GOOS == "windows" && opts.Fifo {
+       log.Warn("no fifos on windows, use --no-fifo next time")
+       opts.Fifo = false          // 这一句让下面那两个 log.Fatal 在 Windows 上永远够不着
+   }
+   ```
+
+   实测（3.13.3 与 3.13.2 两个版本）：**warning + 自动降级，exit 0，功能正常**。
+   ⇒ 建议照旧显式写 `--no-fifo`（少一行 warning、语义明确），但**别把它当成「不写就崩」**。
+   🔴 **这一格的教训比这一格本身值钱**：原结论是**读源码读出来的**，读的还是对的那个文件 ——
+   **漏掉的是调用方**。`读源码 ≠ 跑过`，而漏的位置几乎总是「谁调它」。
+   同一个文件里 `ExecSyscall`（`--same-process`）与 `SwitchUser`（`--user`）**确实不可用**，
+   两条都实测复核成立（分别报 `not supported on Windows` 与 `user switching not available on windows`，均 exit 1）。
 3. **`exec-env` 在 Windows 上走的是 `cmd.exe /C`**（同一文件的 `BuildCommand`）——
    **不是 PowerShell**。你传进去的那个命令串按 **cmd 的引号规则**解析，
    照 PowerShell 的写法写会得到难归因的失败。
@@ -122,7 +189,36 @@ sops exec-file --no-fifo "%USERPROFILE%\.dao-secrets\<slug>.env" "<命令，用 
 | devin-credit-claimer | `process.env`（自写加载器回填） | **A** | `src/claimer.ts` `loadEnvLocal()` / 消费点 GitHub 登录与 TOTP 两处 |
 | devin-byok 的 windsurf-proxy 副本 | `process.env`（Node 原生 `--env-file`） | **A** | `start-proxy.bat:7-8` + `src/handlers/*.js` |
 | resume-project/server | `os.LookupEnv` | **A** | `internal/config/config.go:57` |
-| mousse-cli | **只认文件**（key 无环境变量入口） | **B** | `prompt_store/decompose.rs:234` `resolve_llm_key_optional()` |
+| mousse-cli | 只认文件，**且不接受路径** | **两条都不适用 ⇒ 走 OS keyring** | `prompt_store/decompose.rs` `resolve_llm_key_optional()` / `find_env_local()` |
+
+### 🔴 mousse-cli 那一行为什么是「两条都不适用」（2026-08-05 订正）
+
+本表原先写它走 **B**，理由是「它只认文件」。**那个理由只答对了一半，而漏掉的那一半是决定性的**：
+
+- **路 A 不成立**：`resolve_llm_key_optional()` 取 key 只有 **vault（OS keyring）→ `.env.local` 文件**
+  两条，`base_url` 有 `MOUSSE_LLM_BASE_URL` 环境变量入口而 **key 没有**。
+- **路 B 也不成立**：`exec-file` 的接口是「把临时文件的**路径**通过 `{}` 交给你的命令」，
+  而 `find_env_local()` 是**从当前目录逐级向上最多 8 层、找一个名字固定叫 `.env.local` 的文件**，
+  **没有任何参数能把路径喂给它**。`--filename` 能改文件名，改不了「它在一个随机临时目录里」这件事。
+
+⇒ **正路是 OS keyring**：app 的「设置 → 模型服务」里重填 key。迁移脚本的 `After` 文案一直是对的，
+错的是本表。
+
+<details>
+<summary>还有第三条弯路，机制实测可行，但不推荐（写出来是为了让下一个人不用重走一遍）</summary>
+
+`sops exec-file --no-fifo --filename .env.local <加密文件> "<包装脚本> {}"`，包装脚本先
+`cd` 到 `{}` 的所在目录再启动应用 —— 这样 cwd 就是那个临时目录，**`find_env_local()` 从 cwd
+往上找就能找到**。2026-08-06 用一个模仿 `find_env_local()` 的探针实测通过：
+临时文件名确实是 `.env.local`，cwd 切过去之后 `FOUND=<临时目录>\.env.local`、内容是解密后的明文。
+
+**但不推荐，三条代价都是实的**：①**没在 mousse 本体上跑过**，只证到机制层；
+②应用整个生命周期的 cwd 落在一个临时目录里，任何按相对路径解析的行为都跟着变；
+③需要一个包装脚本（`{}` 给的是文件路径，切目录要自己从中取 dirname，而直接在命令串里嵌
+`Split-Path` 那种写法实测会让 sops 解析失败）。⇒ 除非将来 mousse 长出一个「key 文件路径」
+入口，否则 OS keyring 仍是正路。
+
+</details>
 
 ## 已知不覆盖的面（照直写，别读成全包）
 

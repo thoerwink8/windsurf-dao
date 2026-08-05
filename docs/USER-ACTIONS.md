@@ -183,16 +183,23 @@ powershell -File D:\frank\windsurf-dao\ccswitch\scripts\dao-secrets-init.ps1 -Dr
 powershell -File D:\frank\windsurf-dao\ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun
 ```
 
-同样先看再真跑。每一处它都：**先明文备份** → 加密进凭据根 → **独立解密回来逐键比对**
-（比不上就**不删原件**并当场停）→ 通过了才删项目里的原件 → **打印这一处的恢复命令**。
+同样先看再真跑。每一处它都：加密进凭据根 → **独立解密回来逐键比对**
+（比不上就**不删原件**并当场停）→ 通过了才做明文备份 → 删项目里的原件 →
+**打印这一处的恢复命令**。
+
+次序是刻意的：**备份排在复核之后，所以搬不成功就一个字节都不多写** ——
+反过来（先备份再加密）的话，任何一次失败的迁移都会在磁盘上悄悄多留一份明文口令。
 
 想只搬最急的那一处：加 `-Item P3`。
 
 ### 怎么确认真的生效了
 
+**下面的命令都是 PowerShell 写法**（`$env:USERPROFILE` 那种）。粘到 cmd 里不认，
+换成 `%USERPROFILE%` 才行 —— 这里统一按 PowerShell 写，因为上面装工具和跑脚本也都是 PowerShell。
+
 跑完之后这四条应该都成立：
 
-1. `dir %USERPROFILE%\.dao-secrets\*.env` 能看到 4 个文件
+1. `dir "$env:USERPROFILE\.dao-secrets\*.env"` 能看到 4 个文件
 2. 随便打开一个，**键名看得见、值是 `ENC[AES256_GCM,...]`**（看得见键名是有意的：
    不解密也能知道里面存了什么）
 3. 这四个路径**都不存在了**：
@@ -200,10 +207,16 @@ powershell -File D:\frank\windsurf-dao\ccswitch\scripts\dao-secrets-migrate.ps1 
    `D:\frank\resume-project\server\.env` ·
    `D:\frank\devin-byok\_tmp\windsurf-proxy-反代项目 自行扩展\.env`
 4. 领额度脚本照旧能用：
-   `sops exec-env "%USERPROFILE%\.dao-secrets\devin-credit-claimer.env" "npm run claim"`
+   `sops exec-env "$env:USERPROFILE\.dao-secrets\devin-credit-claimer.env" "npm run claim"`
    （在 `D:\frank\devin-credit-claimer` 目录里跑。**代码已经改好了**：它默认从凭据根读，
    读到加密文件会提示你走上面这条命令，读到老的明文文件会打印告警但仍然能跑 ——
    所以**你还没跑迁移之前，它照样是好的**。）
+
+⚠ **一条值得先看一眼的**：如果你哪个 `.env` 里的值是**用引号包起来的**（`K="abc"`），
+迁移脚本第 1 节会当场报个数（只报个数，不报键名、更不报值）。
+原因是 `sops exec-env` 把值**原样**注入环境 —— 引号会跟着进去，而搬走之前那些程序
+自己会把引号去掉。⇒ 看到这个提示，先把源文件里的引号去掉再跑迁移。
+本机这四处**实测都没有引号**，所以大概率你不会看到它。
 
 ### - [ ] 4. 确认一切正常后，删掉明文备份
 
@@ -242,17 +255,33 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.dao-secrets\_backup"
 <details>
 <summary>技术出处（给复核与 AI 看）</summary>
 
-设计档 `ccswitch/rules/dao-secrets.md`（凭据根形态 / 注入器两条路 / Windows 三条硬事实 /
-各消费方的取值入口逐一到行）。四处的处置理由写在两个脚本各自的 `.DESCRIPTION` 里
-（那是逐处的唯一真相源，含「谁读它、删了会怎样」）。
+设计档 `ccswitch/rules/dao-secrets.md`（凭据根形态 / 注入器两条路 / `.sops.yaml` 按当前目录
+发现这个头号坑 / Windows 硬事实 / 各消费方的取值入口逐一到行）。四处的处置理由写在两个脚本
+各自的 `.DESCRIPTION` 里（那是逐处的唯一真相源，含「谁读它、删了会怎样」）。
 
-**已实测的**：两个脚本的完整控制流（用 sops/age 桩件跑通 init 全流程 + migrate 全流程）、
-**两组负控**（桩件静默丢一个键 / 静默改一个值 ⇒ 两次都被复核抓住、退出码 1、原件未删）、
-claimer.ts 四种取值情形（环境已有值 / 凭据根加密 / 凭据根明文 / 回落老路径）、
-claimer.ts 改动前后 `tsc --noEmit` 错误数一致（2 个，均为改动前就有的 `appendClaimed` 未定义）。
+**已用真 sops + 真 age 实跑过的**（2026-08-06，便携版二进制，未装进系统 PATH、未改任何机器配置）：
 
-**未实测的**：**真 sops 与真 age 一次都没跑过**（本机两者都没装，而安装属用户动作）⇒
-「桩件下全绿」不等于「真 sops 下全绿」。第 2 步那个自证探针就是为这个准备的 ——
-它跑通了才说明真链路通。
+- `init` 全流程从**仓库根目录**跑，Portable 与 Separate 两种模式各一次，都 exit 0、第 6 步自证通过
+  （**这正是改之前会失败的那个场景** —— 改之前同一条命令 exit 1）
+- Separate 模式下私钥目录（`%AppData%\sops\age`）的权限实查：断了继承、只剩当前用户一条 ACE
+- `migrate` 全流程（DryRun + 真跑 + `-KeepSource`），用现造的假串（`sk-FAKE-*`）：
+  加密→复核→备份→删原件全通，密文里搜不到明文，`sops_*` 元数据一个都没注入环境
+- **负控**：把加密规则改坏让 `sops encrypt` 必失败 ⇒ 退出码 1、原件还在、**备份目录 0 个文件**
+  （同一个负控在改之前量到的是 **1 个明文文件**）
+- **复核那道守卫的判别力**：注入「解密回来少了一个键 / 值变了 / 值只差大小写」三种故障，
+  三次都被挡住（退出码 1、原件不删）；再把守卫按三种方式破坏（整段删 / 注释掉 / 结果不被消费），
+  三次保护都消失 ⇒ **挡住这件事的确实就是那一道判断**
+- `sops exec-env "<凭据根>\...env" "npm run claim"` 这条**印给你照做的命令**本身跑通了
+- claimer.ts 六种取值情形，改动前后逐一对照；`tsc --noEmit` 错误数不变（2 个，均为改动前就有的
+  `appendClaimed` 未定义 —— 那是那个仓自己的老缺陷，不在本批范围）
+
+**仍未实测的（照直写）**：
+
+- **没跑过真迁移** —— 上面所有 migrate 实跑用的都是现造的假 fixture，真表只跑了 `-DryRun`（只读）。
+  ⇒ **「四处真凭据搬完之后各项目还能不能用」没人验过**，尤其 mousse-cli 那一处
+  （验它等于真删你的开发凭据）。
+- 断网环境下的表现没测（脚本已带 `--disable-version-check`）。
+- 安全模型本身（Portable 把私钥和密文放一起、私钥丢了没救、`_backup` 是明文）**不是靠实跑能验的**，
+  它是取舍，见上面那个折叠块。
 
 </details>
