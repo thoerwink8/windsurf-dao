@@ -1,4 +1,5 @@
 ﻿$ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot '..\ccswitch\lib\console-utf8.ps1')  # pin child-stdout decode to UTF-8 -- see that file (issue #131)
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $DaoScript = Join-Path $RepoRoot "dao.ps1"
