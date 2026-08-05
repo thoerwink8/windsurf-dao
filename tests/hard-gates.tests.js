@@ -904,16 +904,41 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
       ps(`Rename-Item -Path D:\\x\\foo.json settings.json`, LIVEDIR), 0],
     ["❌维持·同上的**全正参**形态：这一格**改前就误伤**、与甲⑥ 无关，基准修好前照旧",
       ps(`Rename-Item D:\\x\\foo.json settings.json`, LIVEDIR), 2],
-    // 🔴 **第二轮对抗官对这个收窄提过反对，本机实测「不复现」，维持不改** —— 详见 hook 里
-    //   `G2_NO_SRC_THRESHOLD` 上方注释。反对意见是「绝对 `-NewName` 被 PS 接受且真落在那里，
-    //   一刀切收窄等于连真拦截也退掉了」。**穷举 9 种写法全部被 PS 拒绝**
-    //   （`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，PSVersion 5.1.26100.8875）。
-    //   下面两条把「这个形态跑不起来」钉住：若哪天 PS 改了行为、或对抗官拿出能跑通的复现，
-    //   这两条的实测值不会变（本闸不认它），但**那时该改的是 hook 而不是这两条**。
-    ["ⓘ不复现·绝对 `-NewName`（PS 5.1 实测报 `represents a path or device name` ⇒ 命令跑不起来）：" +
-     "本闸当前不产候选。**刻意不为它加判定** —— 只会在一条本来就会报错的命令上多拦一次，" +
-     "而误伤代价是会话当场卡死",
+    // ══ 🔴🔴 【已作废】下面这段是我写的，2026-08-05 第三轮对抗验证官证伪。整段保留，别删 ══
+    //   ~~🔴 第二轮对抗官对这个收窄提过反对，本机实测「不复现」，维持不改 —— 详见 hook 里~~
+    //   ~~`G2_NO_SRC_THRESHOLD` 上方注释。反对意见是「绝对 `-NewName` 被 PS 接受且真落在那里，~~
+    //   ~~一刀切收窄等于连真拦截也退掉了」。**穷举 9 种写法全部被 PS 拒绝**~~
+    //   ~~（`_tmp/probe-rename-abs.ps1` + `probe-rename-pos.ps1`，PSVersion 5.1.26100.8875）。~~
+    //   ~~下面两条把「这个形态跑不起来」钉住……~~
+    // ══ ✅ 真实规则（第三轮对抗官实跑，PSVersion 5.1.26100.8875，`-Force` 有无都一样）══════
+    //   **`-NewName` 可以带路径，当且仅当它的目录部分与「源文件所在目录」字面相同。**
+    //   我那 9 种写法**全部把目标设在源目录之外** —— 在那个约束内每条都对，**错的只有推广**。
+    //   被拒的只有三格：目标目录 ≠ 源目录 · `..` 回绕 · `\\?\` 前缀。
+    //   ⇒ 这个排除退掉了 **4 格** PS 真接受、真写 live 的形态（下面新登记那条是其代表）。
+    //   ⚠️ **严重性上限（三轮下来没人量过）**：`Rename-Item` 覆盖不了已存在的目标、`-Force`
+    //   也不行 ⇒ 只能在 `settings.json` **尚不存在**时把它创建出来。收支与窄修法见 issue #132。
+    //
+    //   下面这条**期望值 0 是对的、payload 也是对的，错的只有原来那个标签**：
+    //   它把一个**条件性**结论（源在别处 ⇒ PS 拒绝）写成了**普遍**结论（绝对 -NewName 跑不起来）。
+    //   ⇒ 标签已改写。**这一格钉的是「PS 真会拒绝的那种写法，本闸也不产候选」**。
+    ["ⓘ源在别处的绝对 `-NewName`（**PS 5.1 实测确实报 `represents a path or device name`** —— " +
+     "因为目标目录 ≠ 源目录，**不是因为「绝对路径」**）：本闸当前不产候选。" +
+     "⚠️ 别把这一条读成「绝对 `-NewName` 都跑不起来」——那是本 PR 三轮里作废掉的那句话",
       ps(`Rename-Item -Path D:\\x\\foo.json "${LIVE}"`, LIVEDIR), 0],
+    // 🔴 **新登记（第三轮对抗验证官点名：这一格此前一条断言都没有）**：
+    //   `Rename-Item -Path <liveDir>\x.json <liveDir>\settings.json` —— **PS 真接受、文件真落在
+    //   live 上**（源与目标同目录 ⇒ 满足真实规则），而本闸因为 rename 族被整族排除在门槛下降
+    //   之外而**放行**。它是本批唯一「PS 接受 + 真写 live + 本闸放行」且在回归网里**完全隐形**
+    //   的形态 —— 而这张登记表连着触发四次的价值，恰恰就是不让这种东西隐形。
+    //   **登记值写 0，钉的是「当前放行」这个事实本身**（漏报方向、`HEAD == PRE` ⇒ **非退化**）：
+    //   哪天有人做了窄修法（#132），这条会红并点名，逼他回来改这段字和 hook 头注 ⑬。
+    //   判别力：下面有一条 mutation 钉着 —— 把 rename 排除去掉，这条由 0 翻 2。
+    ["🆕新登记·**同目录**绝对 `-NewName`（PS 真接受、真落 live；本闸当前**放行** ⇒ 真漏报，非退化）",
+      ps(`Rename-Item -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
+    ["🆕新登记·同上 `-LiteralPath` 变体（同族四格之一）",
+      ps(`Rename-Item -LiteralPath ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
+    ["🆕新登记·同上别名 `rni` 变体（同族四格之一）",
+      ps(`rni -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR), 0],
     // ⚠ **这一行的期望值我又写错了一次，留档**（同一个毛病：先写期望、后看实测）。
     //   我以为「不复现 ⇒ 本闸不产候选 ⇒ 0」。实测是 **2**：全正参 + 两个正参
     //   ⇒ `needed=2` 本来就满足，走的是**普通末位正参**那条老路，**和 rename 排除毫无关系**
@@ -942,6 +967,41 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
     check(`登记表(#117)：${name} → exit ${want}`, gate(p).code === want, `code=${gate(p).code}`);
   }
 
+  // ── 判别力：上面那三条「🆕新登记」的 0 不是一个恒真的 0 ─────────────────────────
+  // **一条登记值为 0 的断言天生可疑**：闸对**任何**输入都判 0 时它照样绿，而那正是它该报警的时候。
+  // 故这里把 `G2_NO_SRC_THRESHOLD` 那个排除 mutate 掉（改成"谁都不排除"），断言那三条**由 0 翻 2**
+  // —— 翻得动，才说明它们量的是「rename 排除」这件事，不是「本闸对什么都没反应」。
+  // ⚠ 盘上是 CRLF，锚点走正则并先断言恰好命中 1 次（同本文件其余各处，见 #103）。
+  // ⚠ 这一条同时是 issue #132 的自失效钩子：哪天窄修法落地，上面那三条会红并点名。
+  {
+    const srcR = fs.readFileSync(HOOK, "utf8");
+    const RE_EXCL = /const needed = \(namedSrcs\.length && !G2_NO_SRC_THRESHOLD\.has\(head\)\) \? 1 : 2;/;
+    const nR = (srcR.match(new RegExp(RE_EXCL.source, "g")) || []).length;
+    check("mutation 锚点在源码里恰好命中 1 次（rename 排除）", nR === 1, `命中 ${nR} 次`);
+    if (nR === 1) {
+      const mp = path.join(TMP, "mutant-117r3-noexcl.js");
+      fs.writeFileSync(mp, srcR.replace(RE_EXCL, () => "const needed = namedSrcs.length ? 1 : 2;"), "utf8");
+      // 变异体存活：无关命令仍 exit 0 且不走 fail-open（没有它，「全翻」与「靶死了」长得一样）
+      const aliveR = gate(ps(`Get-ChildItem D:\\frank`), { script: mp });
+      check("变异体存活 canary（rename 排除被去掉后，无关命令仍 exit 0 且无 fail-open 告警）",
+        aliveR.code === 0 && !/守卫自身出错/.test(aliveR.err), `code=${aliveR.code}`);
+      const FLIP = [
+        ["-Path 同目录绝对目标", ps(`Rename-Item -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+        ["-LiteralPath 变体", ps(`Rename-Item -LiteralPath ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+        ["别名 rni 变体", ps(`rni -Path ${LIVEDIR}\\evil.json "${LIVE}"`, LIVEDIR)],
+      ];
+      for (const [nm, pay] of FLIP) {
+        check(`判别力·去掉 rename 排除 ⇒「${nm}」由 0 翻 2（证明那条登记量的是这件事）`,
+          gate(pay).code === 0 && gate(pay, { script: mp }).code === 2,
+          `real=${gate(pay).code} mut=${gate(pay, { script: mp }).code}`);
+      }
+      // 负控：项目级 `.claude` 在变异体下**仍然不许拦** —— 去排除只该松 live 那一格，不该松成"见 rename 就拦"
+      check("负控·同一变异体下，项目级 `.claude` 的同型 rename 仍 exit 0（没有连带误伤）",
+        gate(ps(`Rename-Item -Path D:\\p\\.claude\\evil.json "D:\\p\\.claude\\settings.json"`, "D:\\p\\.claude"),
+          { script: mp }).code === 0);
+    }
+  }
+
   // 🔴 **盘根绝对路径两格为什么本批不修（实现官判断，说明理由）**：
   //   修它 = 让 `/Users/…` 在 Windows 上按「某个盘」解析。而**按哪个盘**有两个候选：
   //   hook 进程的 `process.cwd()`，还是被拦那条工具调用的 `input.cwd`？两者不同，
@@ -963,11 +1023,23 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   //   `fs.realpathSync.native` **同步不可中断**，`g2LongPath` 末尾那个 `try/catch`
   //   接得住「抛错」、**接不住「卡住」**（网络盘 / 断连映射盘）；而 live 注册写着 `timeout: 10`
   //   ⇒ 真卡住时**炸的是全部七道闸，不只 G2**。
-  //   **本批做了什么**：把常量侧拆成「语法层（零 I/O）/ realpath 层（有 I/O）」两层，先比语法层
-  //   ⇒ 本机与常见部署（长名 HOME）**一次 I/O 都不落**，短名 HOME 下变量形态也不落 ——
-  //   风险面从「HOME 是短名就每次落」收窄到「HOME 是短名 **且** 候选写字面长名才落」。
+  //   **本批做了什么**：把常量侧拆成「语法层（零 I/O）/ realpath 层（有 I/O）」两层先比语法层，
+  //   外加一道**零 I/O 快筛** —— 而**真正把 I/O 挡在门外的是快筛，不是分层**（见下方 ③）。
+  //   🔴 **本段 2026-08-05 订正，作废的原文照录**：
+  //     ~~本机与常见部署（长名 HOME）**一次 I/O 都不落**，短名 HOME 下变量形态也不落 ——~~
+  //     ~~风险面从「HOME 是短名就每次落」收窄到「HOME 是短名 **且** 候选写字面长名才落」。~~
+  //     **后半句两处都是假的**（第三轮对抗验证官用 preload shim 包 `fs.realpathSync.native`
+  //     数真实 syscall 量出来的）：①**短名 HOME 下变量形态落 4 次**，是所有形态里最多的；
+  //     ②不是「候选写字面长名才落」——`.vscode/settings.json` 既不字面也不 live，照样落 1 次。
+  //     ⚠️ **最省事的核法（也是这段字最该留下的部分）**：这句话被**同一个文件里往下约 100 行
+  //     一条正在通过的断言**证伪 ——「对照·短名 HOME 下它**确实**会走到 realpath 层」。
+  //     **同一份文件里两句话互相打架，而两句都在绿灯下** ⇒ 断言在跑不代表旁边那行字是真的。
+  //   ✅ **实测站得住的说法只有一句**：长名 HOME（本机与常见部署）下**一次 I/O 都不落**；
+  //     短名 HOME 下只有**尾巴已经长得像 live** 的路径才落（本机 16551 条 Edit 历史里 27 条，
+  //     0.16%）。⇒ 风险面「方向对，量级比第二轮说的小」。
   //   **本批没做什么**：那一格真被触发时仍可能卡死，且仍接不住。彻底解只有把 I/O 移出同步路径
-  //   （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动。**上面两条 mutation 钉住的是
+  //   （子进程 / 预热缓存 / 干脆不认这一格），三者都是设计改动 —— **账挂在 issue #133**
+  //   （hook 头注此前写「已登记」而查无此条目，同批已订正）。**上面两条 mutation 钉住的是
   //   两层各自承重，不是"它不会卡"** —— 别把绿读成那个意思。
 
   // ㈣ ✅ 合并阻断项**已修**（2026-08-04，实现官）：常量侧改惰性 `g2LiveDir()`，走同一归一器 ──
