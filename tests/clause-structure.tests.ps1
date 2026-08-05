@@ -17,6 +17,7 @@
 # 没有它们，「Marked 模式检不出整条丢字段」就只是文档里的一句自陈，没人验过。
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\ccswitch\lib\console-utf8.ps1')  # pin child-stdout decode to UTF-8 -- see that file (issue #131)
 
 $RepoRoot  = Resolve-Path (Join-Path $PSScriptRoot '..')
 $Checker   = Join-Path $RepoRoot 'ccswitch/scripts/check-clauses-structure.ps1'
