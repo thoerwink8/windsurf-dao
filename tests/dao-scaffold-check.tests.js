@@ -116,7 +116,26 @@ function mkMetaWorktree(tag, withSignature) {
   return root;
 }
 
-function run(cwd, extraEnv) {
+// 造一棵「lib 坏掉」的 hook 树：把 hook 与 ccswitch/lib/*.js 原样拷进沙箱，再对
+// 沙箱那份 hook-budget.js 下手（删掉 / 写成语法错）。**不碰真仓库任何文件。**
+// 拷 lib 整目录是因为那几个 lib 只 require node 内置模块（实测：fs/os/path/child_process），
+// 拷过去即可独立跑；hook 里的 `require("../lib/…")` 按**文件所在目录**解析，故这份副本生效。
+function mkBrokenLibTree(tag, mutate) {
+  const root = path.join(SANDBOX, "brokenlib", tag);
+  const hooksDir = path.join(root, "ccswitch", "hooks");
+  const libDir = path.join(root, "ccswitch", "lib");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.mkdirSync(libDir, { recursive: true });
+  fs.copyFileSync(HOOK, path.join(hooksDir, path.basename(HOOK)));
+  const realLib = path.join(REPO, "ccswitch", "lib");
+  for (const f of fs.readdirSync(realLib).filter((n) => n.endsWith(".js"))) {
+    fs.copyFileSync(path.join(realLib, f), path.join(libDir, f));
+  }
+  if (mutate) mutate(path.join(libDir, "hook-budget.js"));
+  return path.join(hooksDir, path.basename(HOOK));
+}
+
+function run(cwd, extraEnv, hookPath) {
   const payload = JSON.stringify({
     session_id: "knifeF-scaffold",
     transcript_path: "C:/fake/transcript.jsonl",
@@ -124,7 +143,7 @@ function run(cwd, extraEnv) {
     hook_event_name: "SessionStart",
     source: "startup",
   });
-  const r = spawnSync(process.execPath, [HOOK], {
+  const r = spawnSync(process.execPath, [hookPath || HOOK], {
     input: payload,
     encoding: "utf8",
     env: Object.assign({}, process.env, {
@@ -626,7 +645,16 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
     /always-on 字节预算闸 \*\*没跑\*\*/.test(ct) && /per-provider 漂移检查 \*\*没跑\*\*/.test(ct) &&
     /memory 指针扫描 \*\*没跑\*\*/.test(ct), "ctx=" + ct.slice(0, 900));
   check("预算收窄下仍自己退出 0（降级不是崩溃）", tight.code === 0, "code=" + tight.code);
-  check("汇总行报出跳过项数", /本次跳过 5 项/.test(ct), "ctx=" + ct.slice(0, 600));
+  // 🔴 2026-08-05：5 → 6，多出来的那一项是 git（对抗验证 A3）。
+  // 原先 5 处 git 调用各自 `catch (_) {}`：预算见底时它们被 capFor 夹成 1 ms、当场 SIGTERM，
+  // 而异常被吞 ⇒ 报文里那几行（「⬆ 领先 origin N 个提交」之类）**整行消失，全文没有一处
+  // 说 git 没跑**。五道 spawn 检查会喊，那五处不会 —— 本批自己新开的静默面，与本 issue 同型。
+  check("汇总行报出跳过项数（6 = 五道 spawn 检查 + git 那一笔）",
+    /本次跳过 6 项/.test(ct), "ctx=" + ct.slice(0, 600));
+  check("🔴 A3：git 也被点名「没跑」，不再静默少几行",
+    /git 状态查询/.test(ct) && /\*\*没跑\*\*/.test(ct), "ctx=" + ct.slice(0, 900));
+  check("🔴 A3：点名点到具体是哪几次 git 查询（不是一句笼统的「git 没跑」）",
+    /未提交改动/.test(ct) && /落后 origin/.test(ct) && /领先 origin/.test(ct), "ctx=" + ct.slice(0, 900));
 
   // ② 反向语料：不收窄（走 fallback 的 10 s）⇒ 一条「没跑」都不许有。
   //    只验①挡不住一个**恒报没跑**的实现，而那种实现会把每次会话的检查全废掉。
@@ -635,6 +663,13 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
   check("反向：预算充足 → 零「没跑」行（钉住它真的在比余量，不是恒跳过）",
     !/\*\*没跑\*\*/.test(cl), "ctx=" + cl.slice(0, 600));
   check("反向：预算充足 → 汇总行报「跳过 0 项」", /本次跳过 0 项/.test(cl), "ctx=" + cl.slice(0, 600));
+  // 🔴 A3 的负控，也是那个「只报被预算夹死的」判据的判别力所在：
+  // 这个沙箱的 `.git` 是一个垃圾文件，所以**这三次 git 是真的失败了**（fatal，status=128，
+  // 本机实测 signal=null、code=undefined），只是**不是被预算夹死的**。
+  // 它一行都不许报 —— 否则每个没有 origin / 不是仓库的项目都会被这道播报刷屏，
+  // 而噪音会训练人忽略整个 hook 的输出。
+  check("🔴 A3 负控：git 真失败但不是预算致死（垃圾 .git）→ 零「git 状态查询…没跑」行",
+    !/git 状态查询/.test(cl), "ctx=" + cl.slice(0, 700));
   check("汇总行每次都打印余量数字（成本只增不减，增长必须看得见）",
     /hook 墙钟预算/.test(cl) && /余量 -?\d+ ms/.test(cl), "ctx=" + cl.slice(0, 600));
 
@@ -642,6 +677,18 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
   //    「猜了一个总预算」与「读到了真的总预算」在报文上必须分得开。
   check("注册读不到 → 报文明说「这个总预算是猜的」",
     /总预算是猜的/.test(cl), "ctx=" + cl.slice(0, 700));
+
+  // 🔴 ⑥/A4：内层常量自检的门限是**有效截止线**，报文必须把那个数原样打出来 ——
+  // 否则读者复核不了「为什么 30000 在 30 秒预算下仍算够不着」。
+  // 这一路的总预算是 fallback 10000，扣 1500 收尾余量 ⇒ 有效截止线 8500。
+  check("🔴 内层常量自检报「有效截止线」而不是「总预算」，且把 8500 这个数打出来",
+    /有效截止线 8500 ms/.test(cl) && /总预算 10000 - 收尾余量 1500/.test(cl), "ctx=" + cl.slice(0, 900));
+  check("🔴 五个够不着的内层常量逐个点名（20000/30000 那五个）",
+    /CLAUSE_CHECK_TIMEOUT_MS=20000ms/.test(cl) && /DEAD_GATES_TIMEOUT_MS=30000ms/.test(cl) &&
+    /BUDGET_TIMEOUT_MS=20000ms/.test(cl) && /PROVIDER_HOOKS_TIMEOUT_MS=30000ms/.test(cl) &&
+    /MEMORY_REFS_TIMEOUT_MS=20000ms/.test(cl), "ctx=" + cl.slice(0, 900));
+  check("🔴 活的负控：GIT_TIMEOUT_MS=5000 够得着（5000 < 8500）⇒ 永远不该出现在那一行里",
+    !/GIT_TIMEOUT_MS=5000ms/.test(cl), "ctx=" + cl.slice(0, 900));
 
   // ④ 收窄阀只准调小：给一个比真实注册大得多的值，不许把预算撑大。
   //    否则这个环境变量就成了「让 hook 谎报余量」的后门，而谎报余量正是本批要治的病。
@@ -664,11 +711,26 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
   //
   // 照直写它的弱处：文本匹配型守护对「注释掉」这类改法天然失明（dao-guard-writing.md
   // 那条讲的就是这个），且它只认 `timeout:` 这个写法——有人换成 `opts.timeout = x` 就绕过去了。
+  //
+  // 🔴 **2026-08-05 订正自检那一半（对抗验证阻断 2 / dao-guard-writing.md ②）**：
+  // 这里原先写的是 `timeoutSites.length > 0`，括号里承诺「扫描面塌陷时这一条先红」——
+  // **实测不成立**。对抗验证两臂：A（真违例、扫描正则不动）红 ✓；
+  // **B（同样的真违例 + 把扫描正则收窄成只认已夹站点）全绿**，连那条 `> 0` 也 PASS ——
+  // 因为剩下的已夹站点仍然满足 `> 0`。**自检那一半复用了被守对象的同一次解析，于是两半一起瞎。**
+  //
+  // 改法：**分母换成一个独立的第二次普查** —— 用另一个 token、另一条正则去数
+  // 「这个文件到底起了几个子进程」（`execFileSync(`），再要求 timeout 站点数不少于它。
+  // 这两个数天然应该相等（每个 spawn 恰好带一个 timeout），而**它们错不到一块去**：
+  // 收窄 `timeout:` 那条正则不会同时收窄 `execFileSync(` 那条，差额立刻现形。
   const hookSrc = fs.readFileSync(HOOK, "utf8");
   const timeoutSites = hookSrc.match(/timeout:\s*[^,\n\r]+/g) || [];
+  const spawnSites = hookSrc.match(/execFileSync\(/g) || [];      // ← 独立分母
   const uncapped = timeoutSites.filter((s) => !/BUDGET\.capFor\(/.test(s));
-  check("源码级：扫到的 timeout: 站点数 > 0（扫描面塌陷时这一条先红，而不是假绿）",
-    timeoutSites.length > 0, "sites=" + timeoutSites.length);
+  check("源码级·自检：独立分母本身没塌（execFileSync( 站点 ≥ 2，本文件不可能只剩一个子进程）",
+    spawnSites.length >= 2, "spawn=" + spawnSites.length);
+  check("源码级·自检：timeout: 站点数 ≥ 独立数出来的子进程数（扫描面塌陷时这一条先红）",
+    timeoutSites.length >= spawnSites.length,
+    "timeout=" + timeoutSites.length + " spawn=" + spawnSites.length);
   check("源码级：每一处子进程 timeout 都走 BUDGET.capFor（加新检查忘了夹即变红）",
     uncapped.length === 0, "未夹的：" + JSON.stringify(uncapped));
 }
@@ -681,6 +743,56 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
   });
   check("负控：普通项目不打印墙钟预算行（只在模式 A 播报）",
     !/hook 墙钟预算/.test(ctx(run(cwd))));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的病，差点被本批自己复现）===");
+// 这一组是 2026-08-05 对抗验证**阻断 1** 的回归网。当时 `require("../lib/hook-budget")`
+// 是全文件第一个、且是唯一一个**裸** require（另外两个本地 require 都包着 try/catch，
+// 旁边写着「加载失败必须响，不许静默吞」）。同目录、同故障、一带保护一不带的两臂实测：
+//   · settings-drift.js 缺失（**有** try/catch）→ exit 0，送出 2208 字，另外六项照跑；
+//   · hook-budget.js 缺失或语法错（**没有**）  → exit 1，**stdout 0 字节，七项一起消失**。
+// 后者逐字就是这个 issue 的原话。下面三臂 = 两个故障 + 一个活的对照组。
+{
+  const cwd = mkMetaRepo("brokenlib-meta", [`${REGISTERED}.js`, "dao-brokenlib-probe.js"]);
+  const env = { DAO_SCAFFOLD_MANIFEST: path.join(REPO, "ccswitch", "scaffold-manifest.json") };
+
+  // 臂①：模块文件不存在
+  const missing = run(cwd, env, mkBrokenLibTree("missing", (p) => fs.rmSync(p)));
+  const cm = ctx(missing);
+  check("🔴 lib 缺失 → 仍 exit 0（不是 exit 1 + 零输出）", missing.code === 0,
+    "code=" + missing.code + " stderr=" + missing.err.slice(0, 200));
+  check("🔴 lib 缺失 → 报文非空（agent 拿得到东西，这正是当时炸掉的那一格）",
+    cm.length > 0, "len=" + cm.length);
+  check("🔴 lib 缺失 → **明说**加载失败了（退化跑与正常跑必须分得开）",
+    /墙钟预算模块加载失败/.test(cm), "ctx=" + cm.slice(0, 400));
+  check("🔴 lib 缺失 → 其余检查照跑（拿「Hook 未注册」当证据：它与预算模块无关）",
+    /dao-brokenlib-probe/.test(cm), "ctx=" + cm.slice(0, 500));
+
+  // 臂②：模块文件在，但是语法错（同步中途、编辑写坏一个括号）
+  const broken = run(cwd, env, mkBrokenLibTree("syntax", (p) =>
+    fs.writeFileSync(p, "module.exports = {  // 故意不闭合\n", "utf8")));
+  const cb = ctx(broken);
+  check("🔴 lib 语法错 → 仍 exit 0", broken.code === 0, "code=" + broken.code);
+  check("🔴 lib 语法错 → 明说加载失败 + 其余检查照跑",
+    /墙钟预算模块加载失败/.test(cb) && /dao-brokenlib-probe/.test(cb), "ctx=" + cb.slice(0, 500));
+
+  // 臂③（活的对照组 · 结构上不可能命中上面那条）：同一棵沙箱树，**不动** hook-budget.js。
+  // 不带这一臂，上面三条会被一个「恒报加载失败」的实现全绿糊过去。
+  const ok = run(cwd, env, mkBrokenLibTree("intact", null));
+  const co = ctx(ok);
+  check("对照组：沙箱树未动 lib → exit 0 且**零**「加载失败」行（钉住不是恒报）",
+    ok.code === 0 && !/墙钟预算模块加载失败/.test(co), "code=" + ok.code + " ctx=" + co.slice(0, 300));
+  check("对照组：同一棵树上其余检查同样跑得出来（证明这棵沙箱树本身是活的）",
+    /dao-brokenlib-probe/.test(co), "ctx=" + co.slice(0, 400));
+
+  // 退化预算必须仍是**保守**的，不是「没有预算」——否则这条退化路就等于把 issue #127
+  // 原样放回来。判据：退化态下把预算收窄，五道 spawn 检查照样被明说跳过。
+  const degradedTight = run(cwd, Object.assign({ DAO_HOOK_BUDGET_MS: "1600" }, env),
+    mkBrokenLibTree("missing-tight", (p) => fs.rmSync(p)));
+  const cdt = ctx(degradedTight);
+  check("🔴 退化预算仍在真的守门（收窄后照样逐项明说「没跑」，不是放任裸跑）",
+    /\*\*没跑\*\*/.test(cdt) && /不是「通过」/.test(cdt), "ctx=" + cdt.slice(0, 600));
 }
 
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");

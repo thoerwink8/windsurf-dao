@@ -76,6 +76,49 @@ const HOST_DEFAULT_TIMEOUT_MS = 60000;
 // 取 10000 是因为本仓当前实际注册就是 10 秒 —— 找不到注册时，最可能的真相是它没变。
 const FALLBACK_TIMEOUT_MS = 10000;
 
+// 注册里 `timeout` 的**上限 sanity 线**（毫秒）。超过它一律判为「写坏了」，走 FALLBACK。
+//
+// 🔴 **它不是性能调优参数，是防一个会让整个模块静默自杀的算术洞**（2026-08-05 对抗验证 A1）：
+// `timeout: 1e308` 本身是有限数、能过 `isFinite`，而 `Math.round(1e308 * 1000)` **溢出成
+// `Infinity`**（本机实测：1e308 与 1e306 都溢出，1e300 不溢出但得到 1e303）。
+// 一旦 totalMs 成了 Infinity 或 1e303：`left()` 恒为天文数字 ⇒ `capFor()` **永不夹**、
+// `canAfford()` **恒真**、`unreachableConstants()` **零点名** —— 这个修复会**安安静静地
+// 把自己整个关掉**，而报文上看起来一切正常。校验必须在**乘完之后**做，不能只在乘之前做。
+//
+// 调参三问（取 3600000 = 1 小时）：
+//   ① 改小会怎样 —— 合法的大注册会被误判为非法、落到 10 s，于是提前降级并出声。
+//      方向是安全侧，但会制造「本可以跑却没跑」的假降级，所以不该取得太紧；
+//   ② 当前值够不够 —— 本体系里最大的一条真实注册是 `dao-codegraph-ensure` 的 **120 s**
+//      （本机 `~/.claude/settings.json` 实读），宿主对不写 timeout 的 hook 实测放行到 **>70 s**。
+//      1 小时是前者的 30 倍；
+//   ③ 1 小时到「够用下界」之间那段有没有真实需求 —— 没有。一个把会话开场挂住超过一小时的
+//      SessionStart hook，问题已经不是 timeout 该设多大。这段区间只承担「非法值被当成合法」
+//      的风险，不承担任何真实需求。
+const MAX_PLAUSIBLE_TIMEOUT_MS = 3600000;
+
+/**
+ * 把注册里那个 `timeout`（秒）翻译成毫秒；**翻译不出来就返回 null**（= 这个字段写坏了）。
+ *
+ * 三处校验缺一不可，且**顺序有意义**：
+ *   ① 乘之前：必须是有限正数（挡 `"10"` 字符串 / `null` / `0` / 负数 / `NaN` / `Infinity`）；
+ *   ② 乘之后：结果仍须有限（挡上面那个 1e308 溢出——这一格**只有乘完才看得见**）；
+ *   ③ 上限：不超过 sanity 线（挡 1e300 这种「没溢出但荒谬」的值）。
+ */
+function toBudgetMs(sec) {
+  if (typeof sec !== "number" || !Number.isFinite(sec) || sec <= 0) return null;
+  const ms = Math.round(sec * 1000);
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_PLAUSIBLE_TIMEOUT_MS) return null;
+  return ms;
+}
+
+/** 把任意值印成一行给人看的字面（对象/循环引用都不许抛） */
+function describe(v) {
+  if (typeof v === "string") return JSON.stringify(v);
+  if (v === null) return "null";
+  if (typeof v === "object") return Object.prototype.toString.call(v);
+  return String(v);
+}
+
 // 收尾余量：留给「拼报文 + 写 stdout + 宿主读走」这一段。
 // 调参三问：①改小 → 报文可能写到一半被杀，而那等于整批检查白跑（见头注②）；
 // ②当前值够不够 —— 本 hook 的报文是一次 `process.stdout.write`，本机实测 <5 ms，
@@ -94,7 +137,14 @@ const DEFAULT_RESERVE_MS = 1500;
  * @param {string} [opts.settingsPath] settings.json 路径；缺省按 HOME/USERPROFILE 推
  * @param {string} [opts.hookEventName] 当前事件名（如 "SessionStart"）；命中时优先取该事件下的
  * @returns {{ms:number, source:string, note:string, matched:number}}
- *   source: "registered" | "registered-default" | "fallback"
+ *   source: "registered" | "registered-default" | "registered-invalid" | "fallback"
+ *
+ * ⚠️ **「没写」与「写坏了」是两回事，落到两个不同的假设上**（2026-08-05 对抗验证 A2）：
+ *   · **没写** `timeout` ⇒ 走宿主缺省（60000）—— 那是宿主真实行为的保守估计，有实测背书；
+ *   · **写了但非法**（`0` / `-5` / `"10"` 这种手写成字符串 / `NaN` / 溢出值）⇒ 走
+ *     **FALLBACK（10000）**，不是宿主缺省。原先两者合流到 60000，等于**把一个已知写坏的
+ *     配置送到整组假设里最乐观的那一个上**，与本模块「猜错要往提前降级那侧错」的原则**方向相反**
+ *     （60000 是 10000 的 6 倍高估）。`"10"` 尤其现实：JSON 里给数字加引号是最常见的手误之一。
  */
 function resolveRegisteredTimeoutMs(opts) {
   const o = opts || {};
@@ -138,11 +188,16 @@ function resolveRegisteredTimeoutMs(opts) {
       for (const entry of entries) {
         if (!entry || typeof entry.command !== "string") continue;
         if (!entry.command.includes(baseNoExt)) continue;
-        const hasField = typeof entry.timeout === "number" && isFinite(entry.timeout) && entry.timeout > 0;
+        // 三态：没写 / 写了且合法 / 写了但坏了（判据与理由见本函数 JSDoc）
+        const present = Object.prototype.hasOwnProperty.call(entry, "timeout") &&
+          entry.timeout !== undefined && entry.timeout !== null;
+        const parsed = present ? toBudgetMs(entry.timeout) : null;
+        const kind = !present ? "absent" : (parsed === null ? "invalid" : "explicit");
         hits.push({
           eventName,
-          ms: hasField ? Math.round(entry.timeout * 1000) : HOST_DEFAULT_TIMEOUT_MS,
-          explicit: hasField,
+          ms: kind === "explicit" ? parsed : (kind === "absent" ? HOST_DEFAULT_TIMEOUT_MS : FALLBACK_TIMEOUT_MS),
+          kind,
+          raw: present ? entry.timeout : undefined,
         });
       }
     }
@@ -155,14 +210,20 @@ function resolveRegisteredTimeoutMs(opts) {
   let best = pool[0];
   for (const h of pool) if (h.ms < best.ms) best = h;
 
+  const SOURCE_BY_KIND = { explicit: "registered", absent: "registered-default", invalid: "registered-invalid" };
+  const NOTE_BY_KIND = {
+    explicit: () => "读自 " + settingsPath + " 的 " + best.eventName + " 注册（timeout=" + (best.ms / 1000) + "s" +
+      (pool.length > 1 ? "，" + pool.length + " 条命中取最小" : "") + "）",
+    absent: () => "注册里没写 timeout ⇒ 按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS + " ms 算（" + best.eventName + "）",
+    invalid: () => "注册里的 timeout 写坏了（" + describe(best.raw) + "）⇒ 按**保守缺省** " +
+      FALLBACK_TIMEOUT_MS + " ms 算，**不按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS +
+      " ms 算**（一个已知写坏的值不该落到最乐观的假设上）（" + best.eventName + "）",
+  };
   return {
     ms: best.ms,
-    source: best.explicit ? "registered" : "registered-default",
+    source: SOURCE_BY_KIND[best.kind],
     matched: pool.length,
-    note: best.explicit
-      ? "读自 " + settingsPath + " 的 " + best.eventName + " 注册（timeout=" + (best.ms / 1000) + "s" +
-        (pool.length > 1 ? "，" + pool.length + " 条命中取最小" : "") + "）"
-      : "注册里没写 timeout ⇒ 按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS + " ms 算（" + best.eventName + "）",
+    note: NOTE_BY_KIND[best.kind](),
   };
 }
 
@@ -193,6 +254,12 @@ function createBudget(opts) {
     reserveMs,
     startedAt,
     deadlineAt,
+    /**
+     * `capFor()` **在任何时刻都不可能超过的那个数** = totalMs - reserveMs。
+     * （`capFor` 返回 `min(want, left())`，而 `left()` 在 t=startedAt 时取最大值，恰为本数。）
+     * 「够不够得着」要拿它比，不能拿 totalMs 比 —— 见 unreachableConstants。
+     */
+    effectiveMs: deadlineAt - startedAt,
     skipped,
     /** 距离「该收尾了」还剩多少毫秒（可为负） */
     left() { return deadlineAt - now(); },
@@ -224,14 +291,23 @@ function createBudget(opts) {
         minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）";
     },
     /**
-     * 内层常量自检：列出「比宿主总预算还大」的常量。
-     * 这些常量背后的降级路径**结构上不可达** —— 宿主的刀先落下。
+     * 内层常量自检：列出**够不着的**常量 —— 它们背后的降级路径结构上不可达。
      * 本函数就是 issue #127 那条判据的机器化：让「两个文件里互不知情的两个数」
      * 变成每次运行都被核一遍的关系。
+     *
+     * 🔴 **门限是 `effectiveMs` 不是 `totalMs`**（2026-08-05 对抗验证 ⑥ / A4 订正）。
+     * 原先比的是 totalMs，而 `capFor()` 能给出的上限是 `totalMs - reserveMs`，两者差一个
+     * 收尾余量 —— 于是**落在这条缝里的常量「报为够得着，实际够不着」**。
+     *
+     * **这不是一格理论边界，它正要被这个 issue 自己的处方踩上**：本 PR 建议用户把注册的
+     * timeout 从 10 抬到 30，抬完之后 `DEAD_GATES_TIMEOUT_MS` 与 `PROVIDER_HOOKS_TIMEOUT_MS`
+     * 这两个 30000 就**不再 `> totalMs(30000)`、于是从报文里消失**，而 capFor 实际封在
+     * 28500 —— 它们仍然够不着。⇒ **旧判据下，这个 PR 推荐的动作会关掉它自己这道自检
+     * 当时三分之二的发现。** 改成 effectiveMs 后，抬到 30 那两条照旧现形。
      */
     unreachableConstants(pairs) {
       const bad = [];
-      for (const [name, ms] of pairs || []) if (Number(ms) > totalMs) bad.push(name + "=" + ms + "ms");
+      for (const [name, ms] of pairs || []) if (Number(ms) > api.effectiveMs) bad.push(name + "=" + ms + "ms");
       return bad;
     },
   };
@@ -241,7 +317,9 @@ function createBudget(opts) {
 module.exports = {
   resolveRegisteredTimeoutMs,
   createBudget,
+  toBudgetMs,
   HOST_DEFAULT_TIMEOUT_MS,
   FALLBACK_TIMEOUT_MS,
   DEFAULT_RESERVE_MS,
+  MAX_PLAUSIBLE_TIMEOUT_MS,
 };
