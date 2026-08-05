@@ -756,6 +756,16 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
 {
   const cwd = mkMetaRepo("brokenlib-meta", [`${REGISTERED}.js`, "dao-brokenlib-probe.js"]);
   const env = { DAO_SCAFFOLD_MANIFEST: path.join(REPO, "ccswitch", "scaffold-manifest.json") };
+  // 放一个存在但永不被执行的条款闸脚本：**不放的话，那道检查会走「脚本不在」的早退路径、
+  // 根本到不了预算判断** —— 于是「退化预算还在守门吗」这一问会以 passed for the wrong reason
+  // 全绿（2026-08-05 mutation 实测：把退化 canAfford 改恒真，断言照样 PASS）。
+  fs.mkdirSync(path.join(cwd, "ccswitch", "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"),
+    "# 夹具：预算够的话才会跑到这里\n", "utf8");
+
+  // 断言一律钉 `✗ 墙钟预算模块加载失败：` **带 ✗ 前缀的那一行**，不是光秃秃的关键词 ——
+  // 关键词在退化预算的 note 里也出现过一次，夹关键词等于什么都没夹（同上，mutation 实测）。
+  const LOADFAIL = /✗ 墙钟预算模块加载失败：/;
 
   // 臂①：模块文件不存在
   const missing = run(cwd, env, mkBrokenLibTree("missing", (p) => fs.rmSync(p)));
@@ -765,7 +775,9 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
   check("🔴 lib 缺失 → 报文非空（agent 拿得到东西，这正是当时炸掉的那一格）",
     cm.length > 0, "len=" + cm.length);
   check("🔴 lib 缺失 → **明说**加载失败了（退化跑与正常跑必须分得开）",
-    /墙钟预算模块加载失败/.test(cm), "ctx=" + cm.slice(0, 400));
+    LOADFAIL.test(cm), "ctx=" + cm.slice(0, 400));
+  check("🔴 lib 缺失 → 那一行说得出是哪个模块、退化成了什么（读者能自己复核）",
+    /ccswitch\/lib\/hook-budget\.js/.test(cm) && /已退化为保守内置预算/.test(cm), "ctx=" + cm.slice(0, 600));
   check("🔴 lib 缺失 → 其余检查照跑（拿「Hook 未注册」当证据：它与预算模块无关）",
     /dao-brokenlib-probe/.test(cm), "ctx=" + cm.slice(0, 500));
 
@@ -775,24 +787,46 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
   const cb = ctx(broken);
   check("🔴 lib 语法错 → 仍 exit 0", broken.code === 0, "code=" + broken.code);
   check("🔴 lib 语法错 → 明说加载失败 + 其余检查照跑",
-    /墙钟预算模块加载失败/.test(cb) && /dao-brokenlib-probe/.test(cb), "ctx=" + cb.slice(0, 500));
+    LOADFAIL.test(cb) && /dao-brokenlib-probe/.test(cb), "ctx=" + cb.slice(0, 500));
 
   // 臂③（活的对照组 · 结构上不可能命中上面那条）：同一棵沙箱树，**不动** hook-budget.js。
   // 不带这一臂，上面三条会被一个「恒报加载失败」的实现全绿糊过去。
   const ok = run(cwd, env, mkBrokenLibTree("intact", null));
   const co = ctx(ok);
   check("对照组：沙箱树未动 lib → exit 0 且**零**「加载失败」行（钉住不是恒报）",
-    ok.code === 0 && !/墙钟预算模块加载失败/.test(co), "code=" + ok.code + " ctx=" + co.slice(0, 300));
+    ok.code === 0 && !LOADFAIL.test(co), "code=" + ok.code + " ctx=" + co.slice(0, 300));
   check("对照组：同一棵树上其余检查同样跑得出来（证明这棵沙箱树本身是活的）",
     /dao-brokenlib-probe/.test(co), "ctx=" + co.slice(0, 400));
 
   // 退化预算必须仍是**保守**的，不是「没有预算」——否则这条退化路就等于把 issue #127
-  // 原样放回来。判据：退化态下把预算收窄，五道 spawn 检查照样被明说跳过。
+  // 原样放回来。判据：退化态下把预算收窄，**条款闸那一路**（唯一被夹具喂了脚本、
+  // 因而真的走到预算判断的那一路）必须被明说跳过。
+  // ⚠ 刻意不拿泛泛的 `**没跑**` 当判据：git 那条路会经由**另一个分支**（子进程被
+  // SIGTERM 后的 catch）产生同样的字样 ⇒ 一个把 canAfford 改恒真的实现照样能让它出现。
   const degradedTight = run(cwd, Object.assign({ DAO_HOOK_BUDGET_MS: "1600" }, env),
     mkBrokenLibTree("missing-tight", (p) => fs.rmSync(p)));
   const cdt = ctx(degradedTight);
-  check("🔴 退化预算仍在真的守门（收窄后照样逐项明说「没跑」，不是放任裸跑）",
-    /\*\*没跑\*\*/.test(cdt) && /不是「通过」/.test(cdt), "ctx=" + cdt.slice(0, 600));
+  check("🔴 退化预算仍在真的守门（条款闸被逐文件拦在起跑前，不是放任裸跑）",
+    /条款库结构闸的 \d+\/\d+ 个被检文件[^\n]*\*\*没跑\*\*/.test(cdt) && /不是「通过」/.test(cdt),
+    "ctx=" + cdt.slice(0, 800));
+
+  // 退化副本的三条承重不变式 —— **源码级**，理由与上面⑤那道守卫逐条相同：
+  // 这份副本只在真模块已经坏掉时才走，而「它是不是仍然保守」在报文上观察不到
+  // （capFor 的返回值不出现在任何输出里）。弱处照直写：文本匹配对「注释掉」失明。
+  const degradedBlock = (() => {
+    const src = fs.readFileSync(HOOK, "utf8");
+    const a = src.indexOf("function degradedBudgetLib()");
+    const b = src.indexOf("let budgetLib, BUDGET_LIB_ERROR");
+    return a >= 0 && b > a ? src.slice(a, b) : "";
+  })();
+  check("源码级·自检：退化块被切出来了（切不出来时下面三条一律先红，而不是空扫全绿）",
+    degradedBlock.length > 200 && degradedBlock.includes("capFor"), "len=" + degradedBlock.length);
+  check("🔴 退化副本 capFor 下界仍是 1（0 会被 child_process 读成「不限时」，方向与目的相反）",
+    /capFor\(wantMs\) \{ return Math\.max\(1,/.test(degradedBlock));
+  check("🔴 退化副本 canAfford 仍在真的比余量（恒真 = 把 issue #127 原样放回来）",
+    /canAfford\(minMs\) \{ return api\.left\(\) >= /.test(degradedBlock));
+  check("🔴 退化副本的内层常量自检也用 effectiveMs（与真模块同一次订正，别只改一边）",
+    /Number\(ms\) > api\.effectiveMs/.test(degradedBlock));
 }
 
 console.log("\n=== 健壮性：坏 stdin 不许崩 ===");
