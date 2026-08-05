@@ -381,6 +381,50 @@ console.log("\n=== createBudget · 缺省起点取进程启动时刻，不取调
   check("totalMs 非法（0）→ 落 fallback 而不是变成负预算", b.totalMs === FALLBACK_TIMEOUT_MS, String(b.totalMs));
 }
 
+console.log("\n=== isBudgetKill · 「这次是不是被我们自己的 timeout 夹死的」（两半各自可证）===");
+// ── 为什么这组必须在单元级（issue #147 账 1）────────────────────────────────
+// 这一判原先内联在 dao-scaffold-check.js 的 `gitOut` catch 里，PR #130 二轮对抗把
+// **两半各自删掉**，两个变异体**双双存活**。根因不是漏写断言 —— 是**端到端结构上
+// 分不开这两半**：node 因 timeout 杀子进程时 `code` 与 `signal` 是同时被设上的，
+// 任一半单独留着都能让端到端照常通过。合成 error 对象是唯一能把它们拆开的地方。
+// （端到端那一半另有正控：那个 hook 的 `DAO_HOOK_GIT_TIMEOUT_MS` 测试缝。两处都要有 ——
+//  这里证「判据本身对」，那里证「这条路真的到得了」。）
+const { isBudgetKill } = LIB;
+{
+  check("自检：isBudgetKill 真的被导出了（不是 undefined —— 否则下面全组空转）",
+    typeof isBudgetKill === "function", typeof isBudgetKill);
+
+  // 常态：node 的 timeout kill，两半同时出现
+  check("常态（node timeout kill）：code=ETIMEDOUT + signal=SIGTERM → true",
+    isBudgetKill({ code: "ETIMEDOUT", signal: "SIGTERM" }) === true);
+
+  // 🔴 拆半：这两条各自钉住一半。删掉判据里的任一半，必有一条红。
+  check("只剩 code 那一半：{code:ETIMEDOUT, signal:null} → true（钉住 code 半，删它即红）",
+    isBudgetKill({ code: "ETIMEDOUT", signal: null }) === true);
+  check("只剩 signal 那一半：{code:undefined, signal:SIGTERM} → true（钉住 signal 半，删它即红）",
+    isBudgetKill({ signal: "SIGTERM" }) === true);
+
+  // 负控组：这三种是 git 自己的正常失败态，报出来只会把「没跑」稀释成噪音。
+  // 前两种的字段取值是 PR #130 两轮对抗在本机实测出来的，不是猜的。
+  check("负控 · 命令不存在：{code:ENOENT, signal:null} → false",
+    isBudgetKill({ code: "ENOENT", signal: null }) === false);
+  check("负控 · 非仓库目录：{status:128, signal:null} → false",
+    isBudgetKill({ status: 128, signal: null }) === false);
+  check("负控 · git 业务失败：{status:1, stderr:...} → false",
+    isBudgetKill({ status: 1, stderr: "fatal: not a git repository" }) === false);
+
+  // 健壮性：catch 里拿到的东西未必是 Error（也可能是 undefined / 字符串）
+  check("负控 · null → false（不许抛）", isBudgetKill(null) === false);
+  check("负控 · undefined → false（不许抛）", isBudgetKill(undefined) === false);
+  check("负控 · 空对象 → false", isBudgetKill({}) === false);
+  check("负控 · 字符串 → false（不许抛）", isBudgetKill("boom") === false);
+
+  // 反向语料（判据被**放宽**的方向）：只写上面那些正例，挡不住一个 `return true` 的实现。
+  // 上面 4 条负控合起来就是那道反向闸 —— 这里再点一个「近似但不是」的形态。
+  check("反向：signal=SIGKILL 而无 ETIMEDOUT → false（那是别人杀的，不是我们的 timeout）",
+    isBudgetKill({ signal: "SIGKILL" }) === false);
+}
+
 // ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch (_) {}
 

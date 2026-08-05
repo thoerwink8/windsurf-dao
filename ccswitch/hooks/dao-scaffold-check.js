@@ -46,6 +46,35 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
+// ── 未预期崩溃的最后一张网（2026-08-06 · issue #147 账 3 的另一半）─────────────
+// 对本 hook 唯一的消费方（agent 的上下文）而言，**`exit 1` + stdout 0 字节与「全绿静默」
+// 逐字节相同** —— 那是 issue #127 的原话，也是这一整批在治的病。而「哪一句会抛」穷举不完：
+// PR #130 两轮对抗各自实测「今天找不到能让它抛的入参」，那句话的射程只到当天那组入参。
+// ⇒ 兜底：任何没被局部 catch 接住的异常，**转成一行报文 + exit 0**，而不是无声消失。
+//
+// **这不是「吞掉错误」，方向恰好相反**：吞掉是让人看不见；这里是把一个连 stderr 都没人读
+// 的崩溃**变成 agent 上下文里的一行字**。判据一句话：**崩溃可以发生，但不许静默。**
+// 射程照直写：它接不住 `process.exit()` 之后的事，也接不住写 stdout 那一刻的失败本身。
+//
+// ⚠ 双写守卫（`emitted`）是必须的：正常路径由 `inject()` 一次性写出 stdout；崩溃若发生在
+//   那次写之后，再写一次会拼出**非法 JSON** —— 消费方连解析都失败，等于又回到「什么都没有」，
+//   比崩溃本身更糟。故所有 stdout 写入都必须经过 `emitOnce`。
+let emitted = false;
+function emitOnce(context) {
+  if (emitted) return;
+  emitted = true;
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
+  }));
+}
+process.on("uncaughtException", (e) => {
+  const why = e && e.stack ? String(e.stack).split(/\r?\n/).slice(0, 3).join(" ⏎ ") : String(e);
+  emitOnce("✗ dao 脚手架检查未预期崩溃：" + why +
+    "（ccswitch/hooks/dao-scaffold-check.js）—— 本次检查**结果不完整**，" +
+    "**这不是「全部通过」**（issue #147：exit 1 + 零字节与全绿静默不可区分）");
+  process.exit(0);
+});
+
 let raw = "";
 try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}
 
@@ -81,10 +110,37 @@ const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 // **退化实现为什么不能像那两处一样「只回一行错误」就算完**：那两处的产物是**报文行**，
 // 缺了只是少几行；这一处的产物是**每个子进程的 timeout**，缺了就等于回到 issue #127 的原状
 // —— 内层常量全部够不着，一次慢盘就能把七项检查连同报文一起送进宿主的刀口。
-// 故这里给一个**保守到底**的最小预算：按本仓当前注册的 10 s 算、起点取进程启动时刻。
-// **它是真模块的一份笨副本，这个重复是刻意的**：它只需要「安全」，不需要「准确」——
-// 真模块将来更聪明了而这份没跟上，后果只是这条**只在真模块已经坏掉时才走**的路更保守一点，
-// 方向仍在安全侧。回归网见 tests/dao-scaffold-check.tests.js「lib 坏掉」那三臂。
+// 故这里给一个最小预算：按本仓当前注册的 10 s 算、起点取进程启动时刻。
+// **它是真模块的一份笨副本，这个重复是刻意的**：它只需要够安全，不需要准确。
+//
+// 🔴 **「落后 = 更保守」这句话是假的，别再照它推**（2026-08-06 · issue #147 账 2 订正）。
+// 这里原先写着「真模块将来更聪明了而这份没跟上，后果只是这条路更保守一点，方向仍在安全侧」
+// —— 那是一句**方向性安全断言**，而 PR #130 二轮对抗当场构造出反例，**且不用等将来**：
+//
+//     宿主注册里 `timeout` = 3（秒） ⇒ 真模块从 settings.json 读出 3000 ms（对）
+//                                    ⇒ 这份副本硬编码   10000 ms（**高估 3.3 倍**）
+// （这两行刻意不写成 `timeout` 紧跟冒号那个形态：本文件的源码级守卫按那个 token 数
+//  「子进程 timeout 站点」，注释里出现一次就会被当成一个没夹 capFor 的站点而误报 ——
+//  检查器的扫描面覆盖注释，这是它已知的射程边界，不是本条要修的东西。）
+//
+// 副本把「注册是 10 秒」这个**外部事实**焊死在了代码里 —— 那正是 issue #127 本身的形态
+// （两个文件里互不知情的两个数），只不过这次它长在**为了治那个病而加的这条路**上。
+//
+// **它什么时候保守、什么时候激进，照直写**（判据是注册值与下面 FALLBACK_MS 的大小关系）：
+//   · 注册 ≥ 10 s（本仓现状 10 s，且 docs/USER-ACTIONS.md 还在建议往 30 抬）⇒ 副本**估小**，
+//     保守，方向在安全侧 —— 这是今天的实况，也是本条不阻断的唯一理由；
+//   · 注册 < 10 s ⇒ 副本**估大**，激进：它会以为还有余量、把五道 spawn 检查全跑一遍，
+//     然后被宿主按真实注册值杀掉 ⇒ **整批静默消失**，正是这条路本来要防的那件事。
+//
+// **仍然不改成「自己去读注册」是刻意的**：读注册要文件 I/O + JSON 解析，而走到这条路的
+// 前提就是「真模块（那份 I/O 与解析的正主）已经坏了」—— 在退化路上重造同一套 I/O，
+// 等于把它的失效面原样搬进兜底路。**代价换一种方式付**：加载失败那一行会把这份副本
+// 假设的总预算（`BUDGET.totalMs`）原样印进报文，读者看得见、复核得了。
+// 剩余风险与解冻条件记在 issue #147。
+//
+// 回归网见 tests/dao-scaffold-check.tests.js「lib 坏掉」那几臂。其中「退化副本 ≡ 真模块」
+// 那一组是**行为级**对照（把这个函数从源码里取出来真的执行，再与真模块逐项比），
+// 故对「注释掉」不失明 —— 它旁边那几条源码级断言仍然是失明的，两种一起放着是有意的。
 function degradedBudgetLib() {
   const FALLBACK_MS = 10000, RESERVE_MS = 1500;
   return {
@@ -121,27 +177,62 @@ function degradedBudgetLib() {
       };
       return api;
     },
+    // 与真模块 `isBudgetKill` 逐字同一判据。**这份镜像不是可选项**：`gitOut` 的 catch
+    // 会调 `budgetLib.isBudgetKill(e)`，副本少了它就是 `TypeError`，而那一抛正好落在
+    // 「lib 已经坏掉」的路上 ⇒ exit 1 + 零字节，账 3 的形态原地复发。
+    // 回归网：tests 里有一条**独立第二遍普查**，从 hook 源码数出所有 `budgetLib.<name>(`
+    // 调用，逐个要求这份副本也有 —— 将来往 lib 加方法而忘了镜像，那条会红。
+    isBudgetKill(e) {
+      if (!e) return false;
+      return e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+    },
   };
 }
-let budgetLib, BUDGET_LIB_ERROR = "";
+let budgetLib, BUDGET_LIB_ERROR = "", BUDGET_INIT_ERROR = "";
 try {
   budgetLib = require("../lib/hook-budget");
 } catch (e) {
   BUDGET_LIB_ERROR = e && e.message ? e.message : String(e);
   budgetLib = degradedBudgetLib();
 }
-const HOST_BUDGET = budgetLib.resolveRegisteredTimeoutMs({
-  hookFile: __filename,
-  home: homeDir,
-  hookEventName: input && input.hook_event_name ? String(input.hook_event_name) : "SessionStart",
-});
 // 测试用的收窄阀：只允许**调小**（取 min）。刻意不做成「想设多大设多大」——
 // 那样它就成了一个能让 hook 谎报余量的后门，而谎报余量正是本批要治的病。
 const BUDGET_OVERRIDE_MS = Number(process.env.DAO_HOOK_BUDGET_MS) > 0
   ? Number(process.env.DAO_HOOK_BUDGET_MS) : null;
-const BUDGET = budgetLib.createBudget({
-  totalMs: BUDGET_OVERRIDE_MS ? Math.min(BUDGET_OVERRIDE_MS, HOST_BUDGET.ms) : HOST_BUDGET.ms,
-});
+
+// 🔴 **这两句顶层调用必须与上面的 require 同受保护**（2026-08-06 · issue #147 账 3）。
+// 上面那道 try/catch 是 PR #130 的阻断 1 修的，但它**只包住了 `require`**：紧跟着的
+// `resolveRegisteredTimeoutMs()` 与 `createBudget()` 落在 catch 之外，而全文件没有任何
+// 兜底。二轮对抗往这两个函数里注入 throw 实测：**exit 1 + stdout 0 字节 + 七项检查一起
+// 消失** —— 与那次阻断的现象逐格相同，等于阻断只修好了一半。
+// **「今天没有入参能让它抛」不构成保护**：两轮攻击各自都没找到那样的入参，而那句话的
+// 射程只到今天的入参集合；保护的是**形态**，不是当下这一组输入。
+// 失败即整体退到那份笨副本，并**另起一行**报文说明（不与「加载失败」那行合流：两件事的
+// 处置不同 —— 一个是模块没进来，一个是模块进来了但算不出数）。
+function initBudget(lib) {
+  const host = lib.resolveRegisteredTimeoutMs({
+    hookFile: __filename,
+    home: homeDir,
+    hookEventName: input && input.hook_event_name ? String(input.hook_event_name) : "SessionStart",
+  });
+  const budget = lib.createBudget({
+    totalMs: BUDGET_OVERRIDE_MS ? Math.min(BUDGET_OVERRIDE_MS, host.ms) : host.ms,
+  });
+  return { host, budget };
+}
+let budgetInit;
+try {
+  budgetInit = initBudget(budgetLib);
+} catch (e) {
+  BUDGET_INIT_ERROR = e && e.message ? e.message : String(e);
+  // 退到笨副本重来一次。它**不做任何 I/O、不解析任何外部数据**（只有 Number / Date.now /
+  // process.uptime），故这一次的抛出面已经小到可以不再套一层；真抛了也不会静默 ——
+  // 下面那张 uncaughtException 网会把它变成报文里的一行。照直写：**这一格没有专门的断言**。
+  budgetLib = degradedBudgetLib();
+  budgetInit = initBudget(budgetLib);
+}
+const HOST_BUDGET = budgetInit.host;
+const BUDGET = budgetInit.budget;
 
 // 起一个子进程「至少」要留多少余量。低于它就别起 —— 起了也是白起，还会把余量吃光，
 // 最后连报文一起被宿主杀掉（那是最坏结果：既没跑成，也没人知道没跑成）。
@@ -168,6 +259,26 @@ const GIT_TIMEOUT_MS = 5000;
 // ③再大一点代价是什么 —— 余量其实还够时提前放弃，制造假的「没跑」。
 const GIT_MIN_SLICE_MS = 200;
 
+// ── 测试缝：把 git 的超时压小（2026-08-06 · issue #147 账 1）──────────────────
+// **只允许调小（取 min）**，理由与上面 `DAO_HOOK_BUDGET_MS` 逐字相同：能调大就是一个
+// 让 hook 谎报余量的后门。方向上它只会让 hook **更早说「没跑」**，不会让它多跑。
+//
+// **它存在的唯一理由是那条 catch 分支端到端造不出来**。PR #130 未尽处 1 写着「余量要恰好
+// 落在 `[1,200)`」，二轮对抗实测那个判断是**反的**：`[1,200)` 恰恰是 `canAfford(200)` 分流、
+// `execFileSync` 根本不发出的区间。真条件是 `left() >= 200` **且** git 自己比
+// `min(GIT_TIMEOUT_MS, left())` 还慢 —— 本机 `git status --porcelain` ≈28 ms，而守门保证
+// 它至少拿到 ~200 ms ⇒ **靠调预算这个旋钮永远造不出来**（6 档端到端实测：1750 走前置守门，
+// 1800–2600 全部正常跑完）。它只在 git 自己卡住（锁文件 / 网络盘 / 慢仓）时才活。
+//
+// **为什么开这个缝、而不是注入一个假的慢 git**：后者要从环境变量取一个**可执行文件路径**，
+// 给一个每次会话开场都跑的 hook 开这种口子，代价远大于收益。而两种造法喂给 catch 的
+// error 对象是**同一个**（都是 node 按 `timeout` 选项杀子进程），被测那条路径逐字相同 ——
+// 缝开在数字上，不开在「跑哪个二进制」上。
+const GIT_TIMEOUT_OVERRIDE_MS = Number(process.env.DAO_HOOK_GIT_TIMEOUT_MS) > 0
+  ? Number(process.env.DAO_HOOK_GIT_TIMEOUT_MS) : null;
+const GIT_TIMEOUT_EFFECTIVE_MS = GIT_TIMEOUT_OVERRIDE_MS
+  ? Math.min(GIT_TIMEOUT_OVERRIDE_MS, GIT_TIMEOUT_MS) : GIT_TIMEOUT_MS;
+
 // ── git 子进程的统一入口（2026-08-05 · 对抗验证 A3）────────────────────────────
 // **它存在的唯一理由是不让「没跑」变成静默。** 本文件有 5 处 git 调用，原先各自
 // `catch (_) {}`：预算见底时 capFor 会给出 1 ms、子进程立刻被 SIGTERM，而那个异常被吞掉
@@ -179,29 +290,66 @@ const GIT_MIN_SLICE_MS = 200;
 // `signal="SIGTERM" code="ETIMEDOUT"`；而命令不存在是 `code="ENOENT" signal=null`、
 // 非仓库目录是 `status=128 signal=null` —— 两者都不该报）。git 本身失败在常路上是正常结果
 // （沙箱里的垃圾 .git、没有 origin、裸目录），报出来只会变噪音，那正是原先 `catch (_) {}` 的本意。
+// 🔴 **两条路分开记，不合成一个数组**（2026-08-06 · issue #147 账 1 顺带修）：
+//   · `gitSkips`  —— **压根没起**：前置守门 `canAfford` 说余量不够；
+//   · `gitKilled` —— **起了又被杀**：余量够，但 git 自己比 capFor 夹出来的上限还慢。
+// 原先两者共用一个数组、共用 `BUDGET.skip()` 那一句话，于是第二条路会打印出
+// **自相矛盾的报文**：「宿主预算只剩 8406 ms，起它至少要 200 ms」—— 8406 远大于 200，
+// 读者只会问「那为什么没跑」。这个矛盾此前观察不到，正因为那条路端到端造不出来；
+// 本批开了测试缝之后它第一次现形（本机实测原文即上面那句）。
+// **一个读者看不懂的「没跑」，与没有那一行的差距，比它与「跑过了」的差距小。**
 const gitSkips = [];
+const gitKilled = [];
 function gitOut(args, what) {
   if (!BUDGET.canAfford(GIT_MIN_SLICE_MS)) { gitSkips.push(what); return null; }
   try {
     return execFileSync("git", args, {
-      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_MS), windowsHide: true,
+      encoding: "utf8", timeout: BUDGET.capFor(GIT_TIMEOUT_EFFECTIVE_MS), windowsHide: true,
     }).trim();
   } catch (e) {
-    if (e && (e.code === "ETIMEDOUT" || e.signal === "SIGTERM")) gitSkips.push(what);
+    // 判据搬进 hook-budget（`isBudgetKill`），**语义逐字未改**。搬家的理由写在那个函数的
+    // JSDoc 里：内联时它的两半各自被删都没有断言会红（B1/B2 双双存活），而端到端结构上
+    // 分不开那两半 —— 只有拿合成 error 逐半喂一个纯函数才分得开。
+    if (budgetLib.isBudgetKill(e)) gitKilled.push(what);
     return null;
   }
 }
 function gitSkipLines() {
-  if (!gitSkips.length) return [];
-  return [BUDGET.skip("git 状态查询（" + gitSkips.join("、") + "）", GIT_MIN_SLICE_MS)];
+  const out = [];
+  if (gitSkips.length) {
+    out.push(BUDGET.skip("git 状态查询（" + gitSkips.join("、") + "）", GIT_MIN_SLICE_MS));
+  }
+  if (gitKilled.length) {
+    // 记进 `BUDGET.skipped` 是为了让汇总行的「本次跳过 N 项」把这一路也算上 ——
+    // 它是 api 上公开的那个数组（`budgetSummaryLines` 一直在读它的 length）。
+    // 不走 `BUDGET.skip()` 是因为那句话的模板（「只剩 X ms，起它至少要 Y ms」）对这条路
+    // 不成立：这里 X 远大于 Y，照它印出来就是上面注释里那句自相矛盾的报文。
+    for (const w of gitKilled) BUDGET.skipped.push(w);
+    out.push("⏱ git 状态查询（" + gitKilled.join("、") + "） **没跑**：子进程起来了，" +
+      "但比我们夹给它的上限还慢，被 SIGTERM 掉了（上限 = min(GIT_TIMEOUT " +
+      GIT_TIMEOUT_EFFECTIVE_MS + " ms, 剩余预算)）—— 常见成因是 git 自己卡住（锁文件 / 网络盘 / 慢仓）。" +
+      "**这不是「通过」，是「没测」**（issue #127）");
+  }
+  return out;
 }
 
 // 墙钟预算模块加载失败时的那一行。**报文里必须有它**，否则「退化跑了」与「正常跑了」
 // 在唯一的消费方（agent 的上下文）里又一次不可区分 —— 那就是本批在治的病本身。
+// ⚠ **两件事各占一行，刻意不合流**（2026-08-06 · issue #147 账 3）：「模块没进来」与
+// 「模块进来了但算不出数」是两种故障、两种处置（前者查文件与语法，后者查入参与 settings），
+// 合成一行会让读者拿着错误的方向去查。两行的措辞也刻意不同 —— 同一句话出现在两个地方，
+// 就等于给夹住其中一个的断言发了免死金牌（PR #130 第一轮 M5/M6/M7 三个变异体因此存活）。
 function budgetLibErrorLines() {
-  if (!BUDGET_LIB_ERROR) return [];
-  return ["✗ 墙钟预算模块加载失败：" + BUDGET_LIB_ERROR + "（ccswitch/lib/hook-budget.js）" +
-    " —— 已退化为保守内置预算（" + BUDGET.totalMs + " ms），其余检查照跑"];
+  const out = [];
+  if (BUDGET_LIB_ERROR) {
+    out.push("✗ 墙钟预算模块加载失败：" + BUDGET_LIB_ERROR + "（ccswitch/lib/hook-budget.js）" +
+      " —— 已退化为保守内置预算（" + BUDGET.totalMs + " ms），其余检查照跑");
+  }
+  if (BUDGET_INIT_ERROR) {
+    out.push("✗ 墙钟预算初始化抛错：" + BUDGET_INIT_ERROR + "（ccswitch/lib/hook-budget.js 已加载但算不出预算）" +
+      " —— 已退化为保守内置预算（" + BUDGET.totalMs + " ms），其余检查照跑");
+  }
+  return out;
 }
 
 // ── dao 配置自检聚合（新增）──────────────────────────────────────────────────
@@ -720,10 +868,10 @@ function budgetSummaryLines() {
   return tail.length ? [line + "\n  " + tail.join("\n  ")] : [line];
 }
 
+// 走 emitOnce 而非直接 write：与文件顶部那张 uncaughtException 网共用同一个「只写一次」
+// 闸门。两处各写各的会拼出非法 JSON（理由见那里的双写守卫注释）。
 function inject(context) {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
-  }));
+  emitOnce(context);
   process.exit(0);
 }
 function done() { process.exit(0); }
