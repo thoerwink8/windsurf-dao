@@ -66,6 +66,49 @@ gh project item-list 1 --owner thoerwink8 --format json
 
 不合意就在对应 issue 页面 unpin / repin 调整。
 
+## 二、把开会话体检的超时从 10 秒抬到 30 秒（2026-08-04 你拍板，约 1 分钟）
+
+**背景**：`dao-scaffold-check.js` 是每次开会话时跑的那套体检（七项检查）。它注册的超时是 **10 秒**。
+issue #127 实测：这套检查整跑 **4.4–5.4 秒**，其中**一项就占 94%**（条款库结构闸，7 次 PowerShell 冷起）；
+而它检查的文件数**会自己长** —— 当前 7 个、目录里共 13 份，**全长满约 8.8 秒，贴着 10 秒线**。
+
+⇒ 10 秒不是「留了余量」，是「刚好还没撞上」。
+
+🔴 **撞上会怎样（实测，不是推测）**：宿主超时会**把整个进程树杀掉** ⇒ **七项检查一起消失**，
+连**已经打印出去的输出也作废**。而痕迹的方向恰好最坏：transcript 里有 `hook_cancelled`，
+**但 agent 上下文里逐字节相同** —— 而那是这套检查唯一的消费方。**它死了，读它的人看不出来。**
+
+**为什么必须你来**：要改的是 cc-switch 数据库里各 provider 的配置。AI 侧被权限分类器全路径拦截，
+那是「AI 不得改自己的 hook 注册」的意图级保护。（改 `~/.claude/settings.json` 也没用 ——
+那是**投影**，下次切 provider 就被覆盖，且无告警。）
+
+### - [ ] 1. 跑这一行
+
+```
+powershell -File D:\frank\windsurf-dao\_tmp\raise-scaffold-timeout.ps1
+```
+
+脚本会：**先备份数据库** → 只改锚点含 `dao-scaffold-check.js` 那一处（**不碰同一份配置里
+`dao-codegraph-ensure` 的 120**）→ **独立复查一次**（不信 UPDATE 的沉默）→ 打出恢复命令。
+想先看它要做什么，加 `-DryRun`（已跑过，命中 `claude-official` 与 `dulays-1784385029046` 两个 provider）。
+
+### - [ ] 2. 在 cc-switch GUI 里切一次 provider（切走再切回也行）
+
+**为什么还要这一下**：数据库是真源，但它**不会自己下发**到 `~/.claude/settings.json`。
+下发只挂在 GUI 的「切换 provider」动作上。
+
+**怎么确认真的生效了**：切完之后看 `~/.claude/settings.json` 里 `dao-scaffold-check` 那一行的
+`timeout` 是不是 `30`。⚠️ **没切之前它仍是 10 —— 那不是脚本没生效，是还没下发。**
+
+<details>
+<summary>不做会怎样（照直写）</summary>
+
+**能活**。代码侧兜底已随 PR #130 落地：预算不够时它**自己看表**、提前退出，
+并逐项打印 `⏱ X 没跑 …这不是「通过」，是「没测」`。
+不抬只是极端情况下少跑几项，**并且明说少跑了哪几项** —— 而不是像以前那样整批静默蒸发。
+
+</details>
+
 <details>
 <summary>技术出处（给复核与 AI 看）</summary>
 
