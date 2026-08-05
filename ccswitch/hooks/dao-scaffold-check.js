@@ -89,8 +89,12 @@ function degradedBudgetLib() {
   const FALLBACK_MS = 10000, RESERVE_MS = 1500;
   return {
     resolveRegisteredTimeoutMs() {
+      // ⚠️ 措辞刻意**不与** budgetLibErrorLines() 那一行重复（2026-08-05 mutation 实测教训）：
+      // 两处原本都写着「墙钟预算模块加载失败」，于是断言 `/墙钟预算模块加载失败/` 会被这一句
+      // 满足 —— **三个把那条错误行整个摘掉的变异体因此全部存活**。同一句话出现在两个地方，
+      // 等于给夹住其中一个的断言发了一张免死金牌。
       return { ms: FALLBACK_MS, source: "fallback", matched: 0,
-        note: "墙钟预算模块加载失败 ⇒ 退化按保守缺省 " + FALLBACK_MS + " ms 算" };
+        note: "退化内置预算（hook-budget 模块未加载）⇒ 按保守缺省 " + FALLBACK_MS + " ms 算" };
     },
     createBudget(o) {
       const totalMs = Number(o && o.totalMs) > 0 ? Number(o.totalMs) : FALLBACK_MS;
