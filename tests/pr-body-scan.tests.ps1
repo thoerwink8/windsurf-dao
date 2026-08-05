@@ -42,6 +42,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\ccswitch\lib\console-utf8.ps1')  # pin child-stdout decode to UTF-8 -- see that file (issue #131)
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $targetPs1 = Join-Path $repoRoot 'ccswitch/scripts/check-pr-body-mojibake.ps1'
 $libPs1    = Join-Path $repoRoot 'ccswitch/lib/pr-body-scan.ps1'
