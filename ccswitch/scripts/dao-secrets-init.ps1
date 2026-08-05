@@ -51,6 +51,16 @@
       判成败一律看 $LASTEXITCODE。
     - **本脚本从不把任何密钥值读进 PowerShell 变量、更不打印。** 自证用的是一次性探针值，
       与你的真实凭据无关。
+    - 🔴 **每一条 sops 调用都显式钉 `--config <凭据根>\.sops.yaml`。**
+      理由不是风格：**sops 找 `.sops.yaml` 是从「你当前所在的目录」逐级向上找，
+      跟被加密的那个文件在哪没有关系。** 不钉的话，从仓库根或用户主目录跑本脚本，
+      第 6 步自证必然 `config file not found, or has no creation rules` 退出 1
+      （2026-08-05 甲路对抗实跑逮到，2026-08-06 本机复现：四组对照里「文件在凭据根内、
+      当前目录在凭据根外」照样失败 ⇒ 这不是路径没写对，是发现机制本身）。
+      ⚠ `--config` 是**全局位**，必须放在 `encrypt` / `decrypt` **前面**，放后面 sops 直接
+      `flag provided but not defined: -config` 退出 1（本机实测）。
+      decrypt 其实**不需要**它（实测不钉也 exit 0 —— 解密用的是文件自带的元数据），
+      照样钉是为了让「当前目录上方有没有别人的 .sops.yaml」这个变量彻底离开等式。
 
     先跑 -DryRun。
 #>
@@ -142,10 +152,24 @@ foreach ($d in @($SecretsDir, $keyDir)) {
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     if (-not (Test-Path $d)) { Fail "目录没建成：$d" }
 }
-# 断继承 + 只留当前用户。icacls 失败不致命（NTFS 之外的盘可能不支持），但要说出来。
-& icacls $SecretsDir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
-if ($LASTEXITCODE -ne 0) { Note "icacls 退出码 $LASTEXITCODE —— 权限没收紧，文件夹仍可能被其他账户读到" }
-else { Ok "权限已收成「只有 $env:USERNAME」：$SecretsDir" }
+# 收哪几个目录：Portable 时私钥目录在凭据根**里面**，靠继承即可（对子目录再断一次继承，
+# 反而会把刚从父目录传下来的那条 ACE 断掉）；Separate 时私钥在 %AppData%\sops\age，
+# **在凭据根之外** —— 不单独收就完全没人管它，而它恰恰是全套里唯一不可再生的东西。
+$aclTargets = @($SecretsDir)
+if ($KeyLocation -eq 'Separate') { $aclTargets += $keyDir }
+
+# 断继承 + 只留当前用户。icacls 失败不致命（NTFS 之外的盘可能不支持），但要说出来 ——
+# 而且要在**最后一屏**再说一遍（见第 7 节）：中间这行黄字会被后面一整屏绿色盖过去。
+$aclFailed = @()
+foreach ($t in $aclTargets) {
+    & icacls $t /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        $aclFailed += $t
+        Note "icacls 退出码 $LASTEXITCODE —— 这个目录权限没收紧，仍可能被其他账户读到：$t"
+    } else {
+        Ok "权限已收成「只有 $env:USERNAME」：$t"
+    }
+}
 
 Write-Host ''
 Write-Host '=== 3. age 私钥 ===' -ForegroundColor Cyan
@@ -225,7 +249,9 @@ $probeVal = "dao135-selftest-$([guid]::NewGuid().ToString('N'))"
 try {
     [IO.File]::WriteAllText($probePlain, "DAO_SELFTEST_PROBE=$probeVal`n", $utf8NoBom)
 
-    & sops encrypt --input-type dotenv --output-type dotenv --output $probeEnc $probePlain
+    # --config 必须钉、且必须在 encrypt 前面（全局位）。理由见 .NOTES：
+    # sops 从**当前目录**向上找 .sops.yaml，不从被加密文件所在目录找。
+    & sops --config $sopsYaml encrypt --input-type dotenv --output-type dotenv --output $probeEnc $probePlain
     if ($LASTEXITCODE -ne 0) { Fail "sops encrypt 退出码 $LASTEXITCODE" }
     if (-not (Test-Path $probeEnc)) { Fail '加密文件没落盘' }
 
@@ -235,7 +261,7 @@ try {
     if ($encText.Contains($probeVal)) { Fail '密文里能看到明文探针值 —— 加密没真的发生，停' }
     Ok '加密：密文里搜不到明文探针值'
 
-    & sops decrypt --input-type dotenv --output-type dotenv --output $probeOut $probeEnc
+    & sops --config $sopsYaml decrypt --input-type dotenv --output-type dotenv --output $probeOut $probeEnc
     if ($LASTEXITCODE -ne 0) { Fail "sops decrypt 退出码 $LASTEXITCODE（私钥找不到？检查 SOPS_AGE_KEY_FILE）" }
     $outText = [IO.File]::ReadAllText($probeOut, [Text.Encoding]::UTF8)
     if (-not $outText.Contains($probeVal)) { Fail '解密回来的内容对不上 —— 链路不通，停' }
@@ -250,6 +276,33 @@ try {
 
 Write-Host ''
 Write-Host '=== 7. 接下来 ===' -ForegroundColor Cyan
+
+# 🔴 权限那条**再说一遍**。第 2 节说过一次，但那一行黄字后面跟着一整屏绿色 ——
+# 用户读的是最后几行。「一屏绿 + 一行黄 + 退出码 0」与「一切正常」在肉眼上不可区分。
+if ($aclFailed.Count) {
+    Write-Host ''
+    Write-Host '  🔴 有目录的权限没收紧（第 2 节报过，这里再说一遍，因为你读的是最后几行）：' -ForegroundColor Red
+    foreach ($t in $aclFailed) { Write-Host "        $t" -ForegroundColor Red }
+    Write-Host '     ⇒ 这台机器上的其他账户可能读得到它。Portable 模式下**私钥也在凭据根里**，' -ForegroundColor Red
+    Write-Host '        读得到就等于解得开 —— 加密在这种情况下几乎不起作用。' -ForegroundColor Red
+    Write-Host '        换一个 NTFS 盘上的路径重跑（-SecretsDir <新路径>），或者自己把权限收好。' -ForegroundColor Red
+    Write-Host '     （本脚本刻意不为这个退出 1：非 NTFS 卷本来就不支持 ACL，硬失败会挡住' -ForegroundColor Red
+    Write-Host '       愿意接受这个风险的人。风险是真的，判断权在你。）' -ForegroundColor Red
+    Write-Host ''
+}
+
+# 注入器「路 B」的一个静默坑，只在你的 TEMP 含空格时才提。
+$spacyTemp = @(@($env:TMP, $env:TEMP) | Where-Object { $_ -and $_.Contains(' ') } | Select-Object -Unique)
+if ($spacyTemp.Count) {
+    Write-Host ''
+    Note "你的临时目录路径里有空格：$($spacyTemp -join ' / ')"
+    Write-Host '         注入器「路 B」(sops exec-file) 把临时文件路径**纯文本替换**进 {}、不做任何转义，'
+    Write-Host '         随后整串交给 cmd。路径含空格时子进程会拿到一个**不存在的路径**，'
+    Write-Host '         而 sops 退出码仍然是 0（加引号也救不了，实测）。'
+    Write-Host '         要用路 B 就先把 TMP/TEMP 指到一个没有空格的目录。路 A（exec-env）不受影响。'
+    Write-Host ''
+}
+
 Write-Host '  凭据根建好了，但**里面还没有你的任何凭据**。搬凭据是下一个脚本：'
 Write-Host ''
 Write-Host '      powershell -File ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun'
