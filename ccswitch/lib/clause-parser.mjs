@@ -789,7 +789,7 @@ export function buildIndex(sources, { repoRoot }) {
       这是什么: "条款的机器面索引。**派生物，不是真相源** —— 改这个文件不会改变任何行为。",
       真相源: srcMeta.map((s) => s.file),
       改条款要改哪里: "改上面那些 Markdown 原文，然后重新生成本文件。",
-      再生成: "node ccswitch/scripts/gen-clause-index.mjs",
+      再生成: REGEN_CMD,
       漂移检查: "node ccswitch/scripts/gen-clause-index.mjs --check（源变了而索引没跟上 ⇒ exit 1）",
       交叉对账: "node ccswitch/scripts/gen-clause-index.mjs --reconcile（与 check-clauses-structure.ps1 两套解析对数）",
       按官种渲染: "node ccswitch/scripts/render-clauses.mjs --role <官种>",
@@ -816,6 +816,84 @@ export function buildIndex(sources, { repoRoot }) {
 // 序列化：2 空格缩进 + 末尾换行。键序由构建顺序决定、全程无 Date/Map 迭代 ⇒ 逐字节幂等。
 export function serializeIndex(index) {
   return JSON.stringify(index, null, 2) + "\n";
+}
+
+// ── 派生物的**自洽性**审计（issue #121）──────────────────────────────────────
+/**
+ * 只看盘上这份索引**自己跟自己对不对得上**，**完全不读真相源**。
+ *
+ * ── 为什么非要有这么一个只看自己的检查 ───────────────────────────────────────
+ * 索引是派生物，而 git 会把两份**各自正确**的派生物**文本合并**成一份不正确的：
+ * 两侧各加一条条款 ⇒ `clauses` 数组把两条都收了（对），而 `_generated.totals.clauses`
+ * 那一行**两侧改的是同一行、且改成同一个值**（95→96）⇒ git 认为「双方做了相同的修改」，
+ * 无冲突地留下 96，而实际已经是 97。**于是合并产物的签名就是「它自己跟自己对不上」。**
+ *
+ * 这一格把「谁干的」从猜测变成判据（此前报文一律断言「是索引本身被手改了」——
+ * 在合并场景那句话是**假的**，而它会把读者支去查一件从未发生的事）：
+ *   · 自相矛盾            ⇒ **合并**制造的（没有人做错任何事）
+ *   · 自洽但与真相源不符  ⇒ 手改，或生成器/解析器改了而索引没跟着重生成
+ *
+ * ── 判别力的方向照直写：有则必真，无则不知 ─────────────────────────────────
+ * 反过来**不成立** —— 一次「两侧各改一条已有条款的正文、条数不变」的合并是**自洽的**，
+ * 那时本函数报干净，归因会落到「手改」那一档。它能把一类合并**认出来**，
+ * 不能证明「没报问题 ⇒ 不是合并」。别把 `problems.length === 0` 读成「排除了合并」。
+ *
+ * @returns {{readable:boolean, why:string|null, problems:string[], counted:object}}
+ */
+export function auditIndexSelfConsistency(doc) {
+  const problems = [];
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    return { readable: false, why: "不是一个 JSON 对象", problems, counted: {} };
+  }
+  if (!Array.isArray(doc.clauses)) {
+    return { readable: false, why: "没有 clauses 数组", problems, counted: {} };
+  }
+  const g = doc._generated;
+  if (!g || typeof g !== "object") {
+    return { readable: false, why: "没有 _generated 段", problems, counted: {} };
+  }
+  const arrClause = doc.clauses.filter((c) => c && c.zone === ZONE.CLAUSE).length;
+  const arrObs = doc.clauses.filter((c) => c && c.zone === ZONE.OBSERVATION).length;
+  const counted = { array_clause: arrClause, array_observation: arrObs, array_total: doc.clauses.length };
+
+  const t = g.totals && typeof g.totals === "object" ? g.totals : null;
+  if (!t) problems.push("_generated.totals 段不在（这份索引缺了它自己的总账）");
+  else {
+    if (t.clauses !== arrClause) {
+      problems.push(`_generated.totals.clauses 写着 ${t.clauses}，而 clauses 数组里 zone=clause 的有 ${arrClause} 条`);
+    }
+    if (t.observation !== arrObs) {
+      problems.push(`_generated.totals.observation 写着 ${t.observation}，而数组里 zone=observation 的有 ${arrObs} 条`);
+    }
+  }
+
+  if (Array.isArray(g.sources)) {
+    const sumC = g.sources.reduce((a, s) => a + (Number(s && s.clauses) || 0), 0);
+    const sumO = g.sources.reduce((a, s) => a + (Number(s && s.observation) || 0), 0);
+    counted.sources_clause = sumC;
+    if (sumC !== arrClause) problems.push(`各源自报的条款数加起来是 ${sumC}，而 clauses 数组里只有 ${arrClause} 条 zone=clause`);
+    if (sumO !== arrObs) problems.push(`各源自报的观察区条目加起来是 ${sumO}，而数组里只有 ${arrObs} 条`);
+  } else {
+    problems.push("_generated.sources 不是数组（逐源账目缺席）");
+  }
+
+  if (g.roles && typeof g.roles === "object") {
+    const sumR = Object.values(g.roles).reduce((a, v) => a + (Number(v) || 0), 0);
+    counted.roles_sum = sumR;
+    if (sumR !== doc.clauses.length) {
+      problems.push(`_generated.roles 各官种加起来是 ${sumR}，而 clauses 数组一共 ${doc.clauses.length} 条`);
+    }
+  } else {
+    problems.push("_generated.roles 不是对象（官种分布缺席）");
+  }
+
+  // id 重名：文本合并把同一条条款的两个版本都收进来时会长这样。
+  const ids = doc.clauses.map((c) => c && c.id).filter((x) => x != null);
+  const dup = ids.length - new Set(ids).size;
+  counted.dup_id = dup;
+  if (dup > 0) problems.push(`clauses 里有 ${dup} 个重复的 id（同一条被收了两遍，文本合并的典型形态）`);
+
+  return { readable: true, why: null, problems, counted };
 }
 
 // 默认源清单：**只含仓内文件**（理由见 buildIndex 头注）。
@@ -847,3 +925,7 @@ export function defaultSources() {
 }
 
 export const DEFAULT_INDEX_REL = "ccswitch/clause-index.json";
+
+// 再生成命令的**唯一真相源**：索引头注里的「再生成」栏与失败报文里的处方是同一条命令，
+// 两处各写一份必漂移（而漂移出来的那条错命令，读者会照着敲）。
+export const REGEN_CMD = "node ccswitch/scripts/gen-clause-index.mjs";
