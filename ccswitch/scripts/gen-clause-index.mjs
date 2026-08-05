@@ -51,10 +51,11 @@
 // 没碰过任何含条款的文件）。旧报文对此说的是「**是索引本身被手改了**」——
 // **那句话在这个场景里是假的**，它会把读者支去查一件从未发生过的事。本批只改报文，
 // 不动判定，三件事：
-//   ① **归因分档**：`cause=` 进末行，四档（source / merged / hand-or-generator / unreadable）。
-//      分「合并制造」与「手改」的判据是**派生物的自洽性**（clause-parser 的
-//      `auditIndexSelfConsistency`）：文本合并会留下「totals 说 96、数组里 97 条」这种
-//      自相矛盾，而手改留下的是自洽的。判别力方向照直写：**有则必真，无则不知**。
+//   ① **归因分档**：`cause=` 进末行，四档（source / self-inconsistent / hand-or-generator / unreadable）。
+//      🔴 **`self-inconsistent` 这一栏说的是「这份派生物的内部账目对不上」这个事实，不是凶手**
+//      （2026-08-06 对抗验证订正：首版叫 `merged` 并写「没有人做错任何事」，而**手改一个计数、
+//      手删数组一条、生成器 bug 算错计数**三种情形全都落进它 —— 那个判据分辨的是
+//      「这次改动碰没碰到某个计数」，不是「是不是合并」。现在只陈述事实、并列三种成因）。
 //   ② **处方分侧**：索引漂移跑生成器一定解得掉；**台账对不上跑生成器一个字都不会改**。
 //      两侧各说各的，且**只在真的红了才打**（干净时一个字不打——不然它就是每次都出现的废话）。
 //   ③ **仓态一行**：源变了那一档多问一句「是你改的，还是合并带进来的」（git 探针，fail-soft）。
@@ -62,7 +63,7 @@
 //    也不治第 3 点（合并态验证被跳过时主干上没人再检它）——见 issue #121 的三点清单。
 //
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
-//   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1> cause=<none|source|merged|hand-or-generator|unreadable|missing>
+//   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1> cause=<none|source|self-inconsistent|hand-or-generator|unreadable|missing>
 //   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n> compared=<n> ledgeronly=<n>
 //   对账：    CLAUSE_RECONCILE_SUMMARY exit=<n> host=<powershell|pwsh|none> files=<n> matched=<n> mismatched=<n> mine=<n> theirs=<n> myslugs=<n> theirslugs=<n>
 //   **每条路径都打印**（含失败路径）：只在成功时打摘要，等于让「没查成」在机器通道上
@@ -278,39 +279,47 @@ function gitProbe(args) {
   }
 }
 
+// 🔴 **2026-08-06 重写：打事实，不打判定**（对抗验证 C1 + C3 + `#官通-禁笃定措辞`）。
+// 首版是一串 `if … return` 的**判定树**，第一个命中的分支直接下结论。两个后果：
+//   ㈠ **合并进行中那一支结构上不可达** —— `dirty` 排在 `isMerge` 之前且直接 return，
+//      而一次合并在飞时工作树**必然**是脏的 ⇒ 它会笃定地答「就是你」，
+//      **而那正是 issue #121 场景本身**。这不是「缺夹具」，是判据缺口。
+//   ㈡ 三条互斥分支只能被「三者必居其一」这种断言夹住 —— 任何一支都满足它，判别力为 0。
+// 现在改成**逐条报三个独立事实**（合并在飞 / HEAD 是合并提交 / 这些源脏没脏），
+// 三行各自可断言；只有在**证据真的指向一边**时才多说一句，其余时候闭嘴。
 function printRepoState(write, files) {
-  // 先问「这儿到底是不是个 git 仓」：不问的话，非仓目录里 `rev-parse HEAD^2` 的失败
+  // 先问「这儿到底是不是个 git 仓」：不问的话，非仓目录里 `rev-parse` 的失败
   // 会被读成「HEAD 不是合并提交」—— 把「查不了」悄悄变成一个确定的答案，正是本批在治的病。
   const inRepo = gitProbe(["rev-parse", "--is-inside-work-tree"]);
   if (!inRepo.ok || inRepo.status !== 0) {
     write(`   ⓘ 仓态：判不了（${inRepo.ok ? "这里不是 git 工作树" : inRepo.why}）—— 照直说，**不当成「不是合并」**。`);
     return;
   }
-  const head2 = gitProbe(["rev-parse", "-q", "--verify", "HEAD^2"]);
-  if (!head2.ok) {
-    write(`   ⓘ 仓态：判不了（${head2.why}）—— 照直说，**不当成「不是合并」**。`);
-    return;
-  }
-  const isMerge = head2.status === 0;
+  const say = (label, probe, yes) => {
+    if (!probe.ok) return { known: false, text: `${label}：查不了（${probe.why}）` };
+    return { known: true, value: yes(probe), text: `${label}：${yes(probe) ? "是" : "否"}` };
+  };
+  const inFlight = say("合并进行中（MERGE_HEAD 在）", gitProbe(["rev-parse", "-q", "--verify", "MERGE_HEAD"]), (p) => p.status === 0);
+  const isMerge = say("HEAD 自己是合并提交", gitProbe(["rev-parse", "-q", "--verify", "HEAD^2"]), (p) => p.status === 0);
   const rel = files.filter((f) => !path.isAbsolute(f));
-  const st = rel.length ? gitProbe(["status", "--porcelain", "--", ...rel]) : { ok: true, out: "" };
-  const dirty = st.ok ? st.out.split(/\r?\n/).filter((l) => l.trim()) : null;
-  if (dirty === null) {
-    write(`   ⓘ 仓态：HEAD ${isMerge ? "是" : "不是"}合并提交；工作树状态查不了（${st.why}）。`);
-    return;
+  const stProbe = rel.length ? gitProbe(["status", "--porcelain", "--", ...rel]) : { ok: true, status: 0, out: "" };
+  const dirtyLines = stProbe.ok ? stProbe.out.split(/\r?\n/).filter((l) => l.trim()) : [];
+  const dirty = say("上面那些源改过未提交", stProbe, () => dirtyLines.length > 0);
+
+  write("   ⓘ 仓态（git 事实三条，**不是判定**）：");
+  for (const f of [inFlight, isMerge, dirty]) write(`        · ${f.text}`);
+  for (const l of dirtyLines.slice(0, 6)) write(`            ${l}`);
+
+  // 只在证据真的指向一边时才多说一句。**合并在飞优先于「脏」**：那时脏是合并自己造成的，
+  // 拿它推「是你改的」是把合并的产物记到人头上（首版就是这么错的）。
+  if (inFlight.known && inFlight.value) {
+    write("      ⇒ 一次合并正在进行中 ⇒ 工作树是脏的属正常，**别把它读成「是你改的」**。");
+  } else if (isMerge.known && isMerge.value && dirty.known && !dirty.value) {
+    write("      ⇒ HEAD 是合并提交且这些源没有本地改动 ⇒ **合并带进来的可能更大**（提示，非判定）。");
+  } else if (dirty.known && dirty.value) {
+    write("      ⇒ 这些源此刻有本地未提交改动 ⇒ **你自己改的可能更大**（提示，非判定）。");
   }
-  if (dirty.length) {
-    write("   ⓘ 仓态：这些源此刻在工作树里**改过未提交** ⇒ 成因 ①（就是你，重生成即可）：");
-    for (const l of dirty.slice(0, 8)) write(`        ${l}`);
-    return;
-  }
-  if (isMerge) {
-    write("   ⓘ 仓态：HEAD 是一个**合并提交**，且这些源在工作树里是干净的 ⇒ 多半是成因 ②/③：");
-    write("        **合并制造的过期，很可能你什么都没改。别去查「我动了哪个条款文件」。**");
-    return;
-  }
-  write("   ⓘ 仓态：HEAD 不是合并提交，这些源在工作树里也干净 ⇒ 成因 ① 的可能更大。");
-  write("        ⚠ 近似：合并之后又提交过几次的话，这个探针就看不出来了 —— 别当判定用。");
+  write("      ⚠ 三条都是近似：合并之后又提交过几次，前两条就看不出来了；rebase/cherry-pick 一概不认。");
 }
 
 // ── 生成 / 校验 ──────────────────────────────────────────────────────────────
@@ -461,23 +470,36 @@ function runIndexCore(o) {
       printRepoState(write, changedFiles);
     } else {
       // 所有源的 sha 都对得上 ⇒ 动的是**派生物这一侧**。再分两支，判据是这份索引**自己跟自己**对不对得上。
+      //
+      // 🔴 **2026-08-06 订正：这一支报的是「事实」，不是「凶手」**（对抗验证阻断 1）。
+      //    本函数首版把「自相矛盾」直接判成 `cause=merged` 并写「没有人做错任何事」。
+      //    对抗验证官构造了 4 个**没有任何合并参与**的场景，全部拿到那句话：
+      //      · 手改 `totals.clauses` 96→95（一个字符）· 手删 `clauses` 数组里一条
+      //      · **生成器 bug 把 totals 算少 1**（最该被查的那一格，反而被劝退了）
+      //    ⇒ 这个判据分辨的**根本不是「合并 vs 手改」**，是「这次改动碰没碰到某个计数」。
+      //    首版还比它替掉的旧句更糟：旧句「是索引本身被手改了」在前两个场景里**逐字为真**，
+      //    而首版把它换成假的、还加了「别按谁手改去查」——**从指错方向升级成叫人停止调查**。
+      //    现在只陈述那个**真的**事实（内部账目对不上），把三种成因并列，一个都不排除。
       const audit = auditIndexSelfConsistency(onDiskDoc);
       if (audit.readable && audit.problems.length) {
-        cause = "merged";
-        write("   ── 归因：**合并**制造的 —— 不是手改，没有人做错任何事 ──");
-        write("     所有源的 sha256 都对得上，而盘上那份索引**自己跟自己对不上**：");
+        cause = "self-inconsistent";
+        write("   ── 归因：所有源的 sha256 都对得上，而盘上那份索引**自己跟自己对不上** ──");
         for (const p of audit.problems.slice(0, 6)) write(`       · ${p}`);
-        write("     这是文本合并的签名：两侧各加一条条款、`clauses` 数组两条都收了，");
-        write("     而计数那一行两侧改的是**同一行、且改成同一个值** ⇒ git 认为双方做了相同的修改，无冲突地留下了旧值。");
-        write("     ⇒ **别按「谁手改了这个文件」去查**，答案是没有人。");
+        write("     这只说明**这份派生物的内部账目坏了**，**说不出是谁弄坏的**。三种成因都长这样：");
+        write("     ① **合并**：两侧各加一条，`clauses` 数组两条都收了，而计数那一行两侧改成同一个值 ⇒ git 无冲突地留下旧值");
+        write("     ② **手改**：有人直接动了计数，或从数组里删掉一条（改一个字符就够）");
+        write("     ③ **生成器 bug**：算错了计数，然后把这份错的索引写进了盘 —— **这一格最该查，别因为像合并就放过**");
+        write("     ⚠ 本报文**不替你选**。下面那行 git 事实只是线索，不是判定。");
+        printRepoState(write, g.sources.map((s) => s.file));
       } else {
         write("   ── 归因：动的是**派生物这一侧或生成它的代码** ──");
-        write("     所有源的 sha256 都对得上，且这份索引自洽" +
-          (audit.readable ? "" : `（自洽性判不了：${audit.why}）`) + " ⇒ 两种成因，本报文分不开：");
+        write("     所有源的 sha256 都对得上，而" +
+          (audit.readable ? "这份索引内部账目自洽" : `这份索引的自洽性判不了（${audit.why}）`) +
+          " ⇒ 两种成因，本报文分不开：");
         write("     ① 有人**手改**了这个派生物（它是派生物，手改无效且会被下次生成覆盖）");
         write("     ② 或者**生成器 / 解析器改了**（clause-parser.mjs / gen-clause-index.mjs 的输出变了），而索引没跟着重生成");
-        write("     ⚠ 自洽性只能**认出**一类合并（计数对不上那种），认不出「两侧各改一条已有条款正文、条数不变」那种；");
-        write("       所以本档也可能是合并 —— 有则必真、无则不知，别把它读成「排除了合并」。");
+        write("     ⚠ 内部账目自洽**不排除合并**：「两侧各改一条已有条款正文、条数不变」的合并就是自洽的。");
+        printRepoState(write, g.sources.map((s) => s.file));
       }
     }
     process.stdout.write(
@@ -560,19 +582,36 @@ function runPs(host, script, file, selector) {
 // 至少有两种含义，而对账既不判它、也没在别处拦它）。
 // ⇒ 本批**不静音、不加闸**（加闸属判断档：谁来定哪份源该有条款），只做一件事：
 //   把这个数字**分类命名**，让「预期内的零样本」与「真的结构违例」在同一行里分得开。
-// ⚠ **判据次序是实测定的，别按直觉调换**：对方把 `zero-sample` **自己也记成一处违例**
-//   （check-clauses-structure.ps1 的 `Type = 'zero-sample'` 就在 `$violations` 里）⇒
-//   零条款文件的 marker 是 `clauses=0 violations=1`。先判 violations 会把 6 份预期内的
-//   细则档全部归成「结构违例」—— 本函数第一版就是这么写的，实跑当场看见 6 份假警报。
-//   所以：**先看 clauses 是不是 0**，再把多出来的那些违例单独说出来。
-function classifyPsExit(marker) {
+// 🔴 **2026-08-06 重写：判据改成「读对方报的违例类型」，不再从 `clauses===0` 推断**
+//   （对抗验证 C2）。首版只看 `clauses===0` 并硬编码「减掉 1」，两个后果：
+//     ㈠ 喂 `exit=4 clauses=0 violations=0` 也会得到「zero-sample，**不是失败**」——
+//        把一个说不清的退出码抄进一句「这不是失败」里；
+//     ㈡ 对方哪天把 `zero-sample` 移出 `$violations`（那个「减 1」的前提），
+//        一处**真违例**会被这个函数静默吞掉 —— 正是这一格当初要防的病在同一个函数里复发。
+//   现在从对方**完整输出**里找它自己打的 `[zero-sample]` 类型行（`  - [zero-sample] 行 0：…`），
+//   与末行那几个计数是**两个独立信号**：类型行说「它认定的是什么」，计数说「有几处」。
+//   ⚠ 仍是近似，照直标：类型行的格式是对方的输出约定，对方改了格式这里会退回「说不清」档
+//     （退回的方向是**更保守**——不会把未知说成预期内）。
+const PS_ZERO_SAMPLE_RE = /^\s*-\s*\[zero-sample\]/m;
+function classifyPsExit(marker, psOut) {
   if (marker.exit === 0) return { kind: "ok", note: "对方硬闸 exit=0" };
-  if (marker.clauses === 0) {
+  const declaredZero = PS_ZERO_SAMPLE_RE.test(String(psOut || ""));
+  // 「预期内的零样本」要三件事同时成立：对方自己报了 zero-sample 类型、条款数确实是 0、
+  // 且退出码正是它报违例时用的那个 1。少任何一件都不给「不是失败」这句话。
+  if (declaredZero && marker.clauses === 0 && marker.exit === 1) {
     const extra = Math.max(0, (marker.violations || 0) - 1); // 减掉 zero-sample 自己那一处
     return {
       kind: extra > 0 ? "zero-sample-plus" : "zero-sample",
-      note: `对方硬闸 exit=${marker.exit}（zero-sample：这份源本就零条款，是它对「被检对象是条款库」的防御，不是失败` +
+      note: `对方硬闸 exit=1（zero-sample：这份源本就零条款，是它对「被检对象是条款库」的防御，不是失败` +
         (extra > 0 ? `；**另有 ${extra} 处别的违例，那些要看**` : "") + "）",
+    };
+  }
+  if (declaredZero) {
+    // 报了 zero-sample，但另外两件对不上 ⇒ **不许说「不是失败」**，如实说哪儿对不上。
+    return {
+      kind: "unexplained",
+      note: `对方硬闸 exit=${marker.exit}（它报了 zero-sample，但 clauses=${marker.clauses} / exit=${marker.exit} ` +
+        "与「零样本 + exit 1」对不上 —— **不当成预期内**，去读它的完整输出）",
     };
   }
   if (marker.violations > 0) {
@@ -583,7 +622,7 @@ function classifyPsExit(marker) {
   }
   return {
     kind: "unexplained",
-    note: `对方硬闸 exit=${marker.exit}（既非零样本、也没报结构违例 —— 这一格没人解释得了，去读它的完整输出）`,
+    note: `对方硬闸 exit=${marker.exit}（既没报 zero-sample、也没报结构违例 —— 这一格没人解释得了，去读它的完整输出）`,
   };
 }
 
@@ -669,7 +708,7 @@ function runReconcile(o) {
     // `null` ⇒ 对方末行没有这一栏 ⇒ 它是老版本、**这一层根本没人在看** ⇒ 同样判红
     //（同 slugs 那栏的既定处置，也同本文件「跑不了 ≠ 一致」的政策）。
     const okMask = ps.marker.maskdiv === 0;
-    const psExit = classifyPsExit(ps.marker);
+    const psExit = classifyPsExit(ps.marker, ps.out);
     (psByKind[psExit.kind] || (psByKind[psExit.kind] = [])).push(s.file);
     if (okClauses && okNoTrig && okSlug && okMask) {
       matched++;
