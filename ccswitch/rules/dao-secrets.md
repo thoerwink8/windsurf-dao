@@ -51,6 +51,53 @@ Docker → `~/.docker/config.json` · gcloud → `~/.config/gcloud/`。**没有�
 
 `common-secrets.json` 用 `::` 是因为它只有一个文件、且**它是恢复端不是读取端**（见下节）。
 
+### 🔴 那「同一把 key 给好几个项目用」怎么办（2026-08-06 补 · 本方案原先的真空白）
+
+上面那个取舍解的是「两个项目各有一个叫 `API_KEY` 的键」，**解不了「两个项目共用同一把 key」**：
+一项目一文件的形态下，共享的那把只能**抄进 N 个文件** ⇒ 双份必漂移 ⇒ 轮换要改 N 处
+⇒ **issue #135 的第 4 个目标（「说不清一共有几处」）在这一格原样复活。**
+
+**这不是假想**：`config-sync/common-secrets.json` 里已经有 provider 的 API key，
+而本批 P4 那份里有 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`、P1 那份里有 `MOUSSE_TEST_API_KEY`
+——**键名不同，底下是不是同一把，本档不去比也不该去比**。但「同一把 key 服务多个项目」
+这个形态在这台机器上**结构上已经存在**。
+
+**形态：一份 `_shared.env` + 各项目自己那份，两层注入。**
+
+```powershell
+# 凭据根里：
+#   _shared.env        跨项目共享的那几把
+#   <slug>.env         项目专有的
+```
+
+🔴 **但直接嵌套写不通 —— 这一条是实测的，别照直觉写**（2026-08-06，真 sops 3.13.3 + 真 age，
+PowerShell 与 cmd **两个 shell 各跑一遍，结论相同**，故不是某一个 shell 的转义问题）：
+
+| 写法 | 结果 |
+|---|---|
+| `sops exec-env A.env "sops exec-env ""B.env"" ""node x.js"""`（内层带引号） | ❌ `error: missing file to decrypt`，exit 1 |
+| `sops exec-env A.env "sops exec-env B.env node x.js"`（内层不带引号） | ❌ 外层跑起来了，**内层** `missing file to decrypt`，exit 1 |
+| **命令串里只要含一个双引号**（哪怕跟嵌套无关，如 `node x.js a "b c"`） | ❌ 同样 `missing file to decrypt`，exit 1 |
+| ✅ **内层那条命令住进一个 `.cmd` 包装脚本** | ✅ exit 0，两份的键都进了子进程环境 |
+
+**病根是「命令串必须是一个参数，而把它变成一个参数要靠引号」这对矛盾**：
+外层 `exec-env` 只收 2 个参数（文件 + 命令串），内层要成为**一个**参数就得加引号，
+而**含引号的命令串本身就过不了外层那一关**。⇒ 两头堵死，除非把引号挪出命令串。
+
+```powershell
+# 可行形态：inner.cmd 里写内层那条，外层只喂一个不含引号的路径
+#   inner.cmd:  sops exec-env "<凭据根>\<slug>.env" "<你的启动命令>"
+sops exec-env "$env:USERPROFILE\.dao-secrets\_shared.env" "<绝对路径>\inner.cmd"
+```
+
+**实测到的语义**：键名撞车时 **内层（项目那份）覆盖外层（共享那份）** ——
+这个方向是对的（项目专有值应当压过共享默认值），但它是**跑出来的，不是设计出来的**，
+sops 没有文档承诺这个次序。
+
+**边界照直写**：①只在 Windows + 真 sops 3.13.3 上跑过，其他平台没验；
+②包装脚本这条路把「命令怎么起的」从命令行挪进了一个文件，**调试时要多看一个地方**；
+③本批四处**没有一处真的需要共享**，所以这一节是**为下一次准备的，不是已经在用的**。
+
 ## 🔴 注入器：让运行中的进程读到值
 
 **这是真正的设计点，不能靠抄现成。** dao 那份 `common-secrets.json` 卡住的地方正在这里 ——
@@ -188,8 +235,26 @@ sops exec-file --no-fifo "$env:USERPROFILE\.dao-secrets\<slug>.env" "<命令，�
 |---|---|---|---|
 | devin-credit-claimer | `process.env`（自写加载器回填） | **A** | `src/claimer.ts` `loadEnvLocal()` / 消费点 GitHub 登录与 TOTP 两处 |
 | devin-byok 的 windsurf-proxy 副本 | `process.env`（Node 原生 `--env-file`） | **A** | `start-proxy.bat:7-8` + `src/handlers/*.js` |
-| resume-project/server | `os.LookupEnv` | **A** | `internal/config/config.go:57` |
+| resume-project/server | `os.LookupEnv` | **A —— 🔴 但现在先别用，见下** | `internal/config/config.go:57` |
 | mousse-cli | 只认文件，**且不接受路径** | **两条都不适用 ⇒ 走 OS keyring** | `prompt_store/decompose.rs` `resolve_llm_key_optional()` / `find_env_local()` |
+
+### 🔴 resume-project/server 那一行为什么标「先别用」（2026-08-06 补，本表的第二处内部矛盾）
+
+这一格**技术判断是对的**（它确实读 `os.LookupEnv`，路 A 确实喂得进去），但把它当成推荐路径与
+本批的另一个决定**直接打架**：
+
+- 本批对 P2 的处置是「**只搬走，不修加载链**」，理由写在 `dao-secrets-migrate.ps1` 的 P2 段：
+  `config.go:39-40` 的 `JWT_SECRET` / `ADMIN_PASSWORD` 有**静默的弱默认值**，
+  **先把加载链修好会让「配了就生效」成立，从而让那个缺陷更难被发现**（已挂账 **#136**）。
+- 而**路 A 恰恰就是一条能让加载链生效的路** —— `sops exec-env` 注入的环境变量，
+  `os.LookupEnv` 读得到。⇒ **一边说不修，一边在表里发了一条会修好它的推荐路径。**
+
+⇒ 在 #136 定案之前，这一行**只作形态判定用（它属于 A 类），不作操作建议用**。
+真要跑之前先读 #136。
+
+**顺带一格实测**（只报键名）：`server/.env` 里的键是
+`PORT, DATABASE_URL, JWT_SECRET, RESEND_API_KEY, EMAIL_FROM` —— **没有 `ADMIN_PASSWORD`**。
+所以就算真走了路 A，`config.go:40` 那个 `"admin"` 默认值照样在，一个字都没变。
 
 ### 🔴 mousse-cli 那一行为什么是「两条都不适用」（2026-08-05 订正）
 
@@ -203,6 +268,38 @@ sops exec-file --no-fifo "$env:USERPROFILE\.dao-secrets\<slug>.env" "<命令，�
 
 ⇒ **正路是 OS keyring**：app 的「设置 → 模型服务」里重填 key。迁移脚本的 `After` 文案一直是对的，
 错的是本表。
+
+#### 🔴 「删了 P1 会怎样」有非破坏性验法 —— 别再写成「验不了」（2026-08-06 补）
+
+第一轮与甲路都判过「验它等于真删用户的开发凭据，不该由 AI 做」。**那个判断是错的**，
+而它错在漏看了一件本表自己刚写下的事：**`find_env_local()` 是 cwd 相对的** ——
+换一棵工作树，取值面就跟着换了。
+
+- `.env.local` **未被 git 跟踪**（`git ls-files --error-unmatch` 报 not known to git）、
+  被 mousse-cli `.gitignore:23` 的 `*.local` 忽略；
+- 上溯链实测（`find_env_local()` 从 cwd 向上最多 8 层）**唯一命中在 `D:\frank\mousse-cli`**，
+  `D:\frank` 那一层没有；
+- ⇒ **任何新建的 mousse-cli worktree 里天然就没有它** ⇒ 在那棵树里跑 dev，
+  **逐字节就是「删除后」的状态，而真文件毫发无损。**
+
+三条验法，从便宜到贵：
+
+1. **判定捷径（决定性，但这一条要用户自己跑）**：整件事取决于 **OS keyring 里有没有那个条目**
+   —— 取值顺序是 vault → vault 旧槽 → 文件，**vault 里有值的话，删掉 `.env.local` 什么都不会发生**。
+   条目名 `mousse-cli/llm_key_anthropic`（service `mousse-cli`，出处 `vault/mod.rs:38/92`、
+   `decompose.rs:51-55`）。⚠ **AI 查不了这一条**：凭据枚举被 Claude Code 权限分类器拦下，
+   而**那一拦是对的**（凭据的事交用户经手）。⚠ `cmdkey /list` 的零命中**不能当证据** ——
+   它列不全应用私有条目，那个 0 分不清「真没有」和「它压根看不见」。
+2. **worktree 就是「已删状态」**（AI 就能跑，真文件一个字节不碰）：新建一棵 mousse-cli worktree，
+   在里面跑 dev，观察点是 `decompose.rs:278-284` 那句
+   「未配置 {provider} API key：请在「模型服务」设置中配置」。
+3. **连 vault 那半也一起验（悲观上界）**：在 2 的基础上套 `scripts/start-isolated-dev.ps1` ——
+   它设 `MOUSSE_DATA_DIR`，keyring service 随之变成 `mousse-cli-isolated-<slug>`
+   （`vault/mod.rs:107 service_name()`），是个空命名空间。
+   ⚠ **它验的是「vault 空 + 文件无」这个最坏情形，不是用户的真实删除后状态**，两者别混。
+
+**照直写它此刻的状态：验法写下来了，没有人执行过。**
+「做不到」和「没去做」是两回事 —— 写成前者会让后面的人不再去想办法。
 
 <details>
 <summary>还有第三条弯路，机制实测可行，但不推荐（写出来是为了让下一个人不用重走一遍）</summary>
