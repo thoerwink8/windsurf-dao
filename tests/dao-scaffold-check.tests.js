@@ -1029,9 +1029,14 @@ console.log("\n=== 🔴 git 被预算夹死时必须出声（issue #147 账 1 ·
   check("活的负控 · 模式 B · 不设那个环境变量 → **零**这一行",
     !KILLED.test(ctx(run(plainCwd, env))));
 
-  // 测试缝本身的方向性：它**只准调小**。给一个巨大值不该把 GIT_TIMEOUT_MS 抬上去 ——
-  // 能调大就是一个让 hook 谎报余量的后门，与 DAO_HOOK_BUDGET_MS 同一条理由。
-  check("🔴 测试缝只准调小：给 999999 时行为与不给一样（不是后门）",
+  // 测试缝本身的方向性：它**只准调小**（与 DAO_HOOK_BUDGET_MS 同一条理由 —— 能调大就是
+  // 一个让 hook 谎报余量的后门）。
+  // ⚠ **这一条自己证不了「不是后门」，照直写**：`Math.min` 换成 `Math.max` 时它照样 PASS ——
+  //   因为 `capFor()` 已经把上限夹在剩余预算之内，把 GIT_TIMEOUT 抬到 999999 在行为上
+  //   观察不到。真正夹住 min↔max 那个方向的是上面几条 TIGHT 正控（换成 max 后 1 ms 变成
+  //   5000 ms，git 正常跑完 ⇒ 那几条全红；本批 mutation 实测 A1-seam-min-to-max 就是这样被杀的）。
+  //   本条只证一件小事：**给一个大值不会反而把 git 夹死**（不是「反向也生效」）。
+  check("给测试缝一个大值（999999）不会反而把 git 夹死",
     !KILLED.test(ctx(run(plainCwd, Object.assign({ DAO_HOOK_GIT_TIMEOUT_MS: "999999" }, env)))));
 }
 
