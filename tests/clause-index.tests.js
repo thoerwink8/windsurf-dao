@@ -63,6 +63,9 @@ function w(file, text) {
 function runNode(script, args, opts) {
   const r = spawnSync(process.execPath, [script].concat(args || []), {
     encoding: "utf8", timeout: 600000, cwd: (opts && opts.cwd) || REPO,
+    // `env` 供 ⑧.5 D 用 `GIT_CEILING_DIRECTORIES` 造「不在任何 git 仓里」那一态 ——
+    // `_tmp/` 结构上永远在本仓工作树里，不给 git 设天花板就造不出那个态（造不出 ⇒ 只能不测）。
+    env: (opts && opts.env) ? Object.assign({}, process.env, opts.env) : process.env,
   });
   const out = String(r.stdout || "");
   return {
@@ -566,8 +569,16 @@ async function main() {
     // 真实语料自跑：committed 索引与现在的 Markdown 一致吗。**这是本回归网唯一的真数据断言**
     // —— 合成夹具证明不了它在真语料上跑得动（本仓有过「47 条合成断言全绿、真语料一份都没扫成」的实证）。
     const r = runNode(GEN, ["--check", "--quiet"]);
-    check("真仓 committed 索引与真相源一致（红了就是有人改了 dao.md/rules 没重新生成）",
+    // ⚠ **断言名 2026-08-06 改过，因为它自己就是那句误导性归因**（issue #121）：
+    //   原文写「红了就是有人改了 dao.md/rules 没重新生成」。实测 3 例里**两例没有任何人改**——
+    //   第 2 例是两个官各自都跑了生成、合并本身制造的；第 3 例那个官从头到尾没碰过条款文件。
+    //   一句写死在断言名里的归因，会让读者去查一件从未发生的事。**修法一律是同一条命令**，
+    //   所以断言名给命令、不给归因；归因由被测程序当场自己判（cause= 栏）。
+    check("真仓 committed 索引与真相源一致（红了先跑 node ccswitch/scripts/gen-clause-index.mjs；成因由报文里的 cause= 栏自己说，别猜）",
       r.code === 0 && idx(r.index) && idx(r.index).drift === "none", JSON.stringify(idx(r.index)) + r.out.slice(0, 400));
+    // 真数据负控：干净态**一个字的处方都不许打**（噪音会被训练成盲区）。
+    check("真仓干净态：不打「⇒ 修法」段、不打「归因」段（处方只在红的时候出现）",
+      !/⇒ 修法/.test(r.out) && !/── 归因/.test(r.out), r.out.slice(0, 400));
     check("真仓索引条款数 > 0（零条 = 扫描面塌了，那时上面那个绿是空的）",
       idx(r.index) && idx(r.index).clauses > 0, JSON.stringify(idx(r.index)));
   }
@@ -1149,6 +1160,618 @@ async function main() {
       check("真仓：台账条数 == 正文 slug 数，且 > 0（零条 = 这一节的绿是空的）",
         !!m && +m[3] === +m[4] && +m[4] > 0, m ? m[0] : r.out.slice(0, 400));
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑧ 归因与处方（issue #121：派生物在合并态过期，两侧各自都对、合并后的不对）
+  //
+  // ── 本组要钉住的两件事 ──────────────────────────────────────────────────────
+  // ① **报文说的归因必须是真的**。旧报文对「sha 全对但内容不符」一律断言「是索引本身被
+  //    手改了」——实测 3 例里**两例没有任何人手改过它**。一句错的归因不是「不够详细」，
+  //    它会把读者支去查一件从未发生的事（第 3 例那个官从头到尾没碰过任何含条款的文件）。
+  // ② **处方只在真的红了才出现，且要说清哪一侧那条命令管用**。索引是纯派生物 ⇒ 重跑必对齐；
+  //    台账**不是**派生物 ⇒ 生成器一个字都不会碰它。对着台账红说「跑一次生成器」是给错处方，
+  //    照做一次、照旧红，从此这段话再没人信。
+  //
+  // ── 负控在哪 ────────────────────────────────────────────────────────────────
+  // 「处方只在该出现时出现」这句话本身要有靶：干净态零处方（⑧.3a + ④ 组那条真数据断言），
+  // 外加一个**反向 mutation**（把那个 return 摘掉 ⇒ 每次都打）必须让它变红。
+  console.log("\n──── ⑧ 归因与处方：红的时候自己说清「是谁干的」「跑什么能修」────");
+  const causeOf = (out) => {
+    const m = /CLAUSE_INDEX_SUMMARY [^\n]*?\bcause=(\S+)/.exec(out);
+    return m ? m[1] : null;
+  };
+  {
+    // ── ⑧.1 自洽性审计：单元层（纯函数，不碰 fs、不碰 git）──────────────────
+    const good = JSON.parse(fs.readFileSync(path.join(REPO, "ccswitch", "clause-index.json"), "utf8"));
+    const a0 = lib.auditIndexSelfConsistency(good);
+    check("⑧.1 正控：真仓那份索引自洽（零 problems）",
+      a0.readable && a0.problems.length === 0, JSON.stringify(a0.problems).slice(0, 400));
+    check("⑧.1 正控：审计报得出它数了什么（分母可见，不是只给一个 ok）",
+      a0.counted && a0.counted.array_clause > 0, JSON.stringify(a0.counted));
+
+    // 负控三连：三种加总关系各破一次，都要被认出来（只验一处等于只验了一个字段）
+    const bendTotals = JSON.parse(JSON.stringify(good));
+    bendTotals._generated.totals.clauses -= 1;
+    check("⑧.1 负控：totals 少一条 ⇒ 认得出（一个字符的手改与一次真合并在这里逐字节相同——它答的是「账目坏没坏」，不是「谁弄坏的」）",
+      lib.auditIndexSelfConsistency(bendTotals).problems.length === 1,
+      JSON.stringify(lib.auditIndexSelfConsistency(bendTotals).problems));
+
+    const bendSources = JSON.parse(JSON.stringify(good));
+    bendSources._generated.sources[0].clauses += 3;
+    check("⑧.1 负控：逐源自报的条款数加不上 ⇒ 认得出",
+      lib.auditIndexSelfConsistency(bendSources).problems.some((p) => /各源自报/.test(p)),
+      JSON.stringify(lib.auditIndexSelfConsistency(bendSources).problems));
+
+    const bendRoles = JSON.parse(JSON.stringify(good));
+    bendRoles._generated.roles.general = (bendRoles._generated.roles.general || 0) + 5;
+    check("⑧.1 负控：官种分布加不上 ⇒ 认得出",
+      lib.auditIndexSelfConsistency(bendRoles).problems.some((p) => /roles/.test(p)),
+      JSON.stringify(lib.auditIndexSelfConsistency(bendRoles).problems));
+
+    const dupId = JSON.parse(JSON.stringify(good));
+    dupId.clauses.push(JSON.parse(JSON.stringify(dupId.clauses[0])));
+    check("⑧.1 负控：id 重复 ⇒ 认得出（同一条被收了两遍，文本合并的另一种形态）",
+      lib.auditIndexSelfConsistency(dupId).problems.some((p) => /重复的 id/.test(p)),
+      JSON.stringify(lib.auditIndexSelfConsistency(dupId).problems));
+
+    check("⑧.1 读不出来时说读不出来，不报「自洽」（null / 缺 clauses / 缺 _generated 三态）",
+      lib.auditIndexSelfConsistency(null).readable === false &&
+      lib.auditIndexSelfConsistency({}).readable === false &&
+      lib.auditIndexSelfConsistency({ clauses: [] }).readable === false,
+      JSON.stringify([lib.auditIndexSelfConsistency(null), lib.auditIndexSelfConsistency({})]));
+  }
+
+  // ── ⑧.2 三档归因：source / self-inconsistent / hand-or-generator ─────────
+  const A8 = path.join(TMP, "attr");
+  const A8_SRC = path.join(A8, "corpus.md");
+  const A8_SJ = path.join(A8, "src.json");
+  const A8_IX = path.join(A8, "index.json");
+  const A8_CLEAN = path.join(A8, "index-clean.json");
+  {
+    w(A8_SRC, FIX_A_TEXT);
+    sourcesJson(A8_SJ, [{ file: A8_SRC, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    runNode(GEN, ["--quiet", "--sources-json", A8_SJ, "--out", A8_IX]);
+    fs.copyFileSync(A8_IX, A8_CLEAN);
+
+    // (a) 干净态：cause=none 且零处方 —— 后面每个红都以这一条为参照
+    const clean = runNode(GEN, ["--check", "--quiet", "--sources-json", A8_SJ, "--out", A8_IX]);
+    check("⑧.2 干净态：exit 0 + cause=none", clean.code === 0 && causeOf(clean.out) === "none",
+      causeOf(clean.out) + " | " + clean.out.slice(0, 300));
+
+    // (b) 源变了 ⇒ cause=source，且**三种成因都要说**（旧报文只说第一种）
+    w(A8_SRC, FIX_A_TEXT + "\n- **戊条**：新加的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+    const src = runNode(GEN, ["--check", "--quiet", "--sources-json", A8_SJ, "--out", A8_IX]);
+    check("⑧.2 源变了 ⇒ cause=source", src.code === 1 && causeOf(src.out) === "source",
+      causeOf(src.out) + " | " + src.out.slice(0, 500));
+    check("⑧.2 源变了：三种成因逐条列出，不只说「有人改了源」",
+      /①.*没重新生成/s.test(src.out) && /②.*合并/s.test(src.out) && /③.*没碰过/s.test(src.out),
+      src.out.slice(0, 900));
+    check("⑧.2 源变了：仍然指名是哪个源（原有行为不许被新报文挤掉）",
+      /corpus\.md（内容已变）/.test(src.out), src.out.slice(0, 500));
+    check("⑧.2 源变了：仓态三条事实逐条打出来（不是一句判定）",
+      /ⓘ 仓态（git 事实三条/.test(src.out) && /· 合并进行中（MERGE_HEAD 在）：/.test(src.out) &&
+      /· HEAD 自己是合并提交：/.test(src.out) && /· 上面那些源改过未提交：/.test(src.out),
+      src.out.slice(0, 1200));
+
+    // (c) 内部账目自相矛盾 ⇒ cause=self-inconsistent
+    //
+    // 🔴 **这一档 2026-08-06 由对抗验证改过名，改名本身就是那条教训**：
+    //    首版叫 `merged`，报文写「合并制造的 —— 没有人做错任何事 · 答案是没有人」。
+    //    对抗验证官构造了 4 个**没有任何合并参与**的场景，命中 3 个（下面 c1/c2/c3 逐个跑）。
+    //    ⇒ 这个判据分辨的是「**这次改动碰没碰到某个计数**」，不是「是不是合并」。
+    //    错的方向更要紧：旧报文那句「是索引本身被手改了」在 c1/c2 里**逐字为真**，
+    //    首版把真话换成了假话，还加了「别按谁手改去查」——**从指错方向升级成叫人停止调查**。
+    //    现在这一档只陈述**它真的知道的那件事**，并列三种成因、一个都不排除。
+    //
+    //    每个构造断言两半：①落进这一档 ②**报文里说的每一句对这个构造都为真**。
+    //    第二半才是订正的重点 —— 首版的第一半也是全绿的。
+    const bendIndex = (mutate) => {
+      fs.copyFileSync(A8_CLEAN, A8_IX);
+      const d = JSON.parse(fs.readFileSync(A8_IX, "utf8"));
+      mutate(d);
+      w(A8_IX, JSON.stringify(d, null, 2) + "\n");
+      return runNode(GEN, ["--check", "--quiet", "--sources-json", A8_SJ, "--out", A8_IX]);
+    };
+    w(A8_SRC, FIX_A_TEXT);
+    // c1 手改 totals 一个字符（对抗 E1a）。它同时**就是**「文本合并留下的终态」的最小复刻 ——
+    //    两者产出逐字节相同的索引，这正是判据分不开它们的原因，别再假装分得开。
+    const selfInc = bendIndex((d) => { d._generated.totals.clauses -= 1; });
+    // c2 手删 clauses 数组里一条（对抗 E1b）——「顺手清理一条过时条目」。
+    //    它一次列出多条互相印证的矛盾，读起来比真合并还像合并。
+    const handDelete = bendIndex((d) => { d.clauses.pop(); });
+    // c3 生成器 bug 少算计数（对抗 E2）—— 盘上索引是**生成器自己写出来的**，没有人碰过它。
+    //    这一格最该被查，而首版恰恰把它劝退了。
+    const genBug = bendIndex((d) => { d._generated.totals.clauses -= 1; d._generated.roles.general -= 1; });
+
+    for (const [name, r] of [["c1 手改计数", selfInc], ["c2 手删数组一条", handDelete], ["c3 生成器算错计数", genBug]]) {
+      check(`⑧.2 ${name} ⇒ cause=self-inconsistent 且 drift 仍是 content（两栏各答各的问题）`,
+        r.code === 1 && causeOf(r.out) === "self-inconsistent" && idx(r.index).drift === "content",
+        causeOf(r.out) + " | " + JSON.stringify(idx(r.index)));
+      // 🔴 承重负控：首版那几句笃定话在这三个构造里全是假的，**一个字都不许再出现**
+      check(`⑧.2 ${name}：不再出现「没有人做错任何事 / 答案是没有人 / 别按谁手改去查」`,
+        !/没有人做错任何事/.test(r.out) && !/答案是没有人/.test(r.out) &&
+        !/别按「谁手改了这个文件」去查/.test(r.out), r.out.slice(0, 1400));
+      check(`⑧.2 ${name}：明说「说不出是谁弄坏的」并把三种成因并列（含生成器 bug 那一格）`,
+        /说不出是谁弄坏的/.test(r.out) && /①\s*\*\*合并\*\*/.test(r.out) &&
+        /②\s*\*\*手改\*\*/.test(r.out) && /③\s*\*\*生成器 bug\*\*/.test(r.out), r.out.slice(0, 1400));
+      // 🔴 第二轮对抗验证补的负控：「不替你选」与任何**替读者排序**的编辑按语不能同时为真。
+      //    被删掉的那半句是「③…这一格最该查，别因为像合并就放过」——它①与下一行直接打架
+      //    ②预设了一个「像合并」，而报文自己打的 git 事实在这三个构造里是 否/否/否
+      //    ③抬举的恰恰是这个检查器结构上看不见的那一格（bug 活着时 drift=none，压根不查）。
+      //    对抗官实测：删掉它时 235 条断言全绿 ⇒ **当时没有任何东西守着这两句**。补上。
+      check(`⑧.2 ${name}：说了「不替你选」就不许再替读者排序（三种成因不带优先级按语）`,
+        /本报文\*\*不替你选\*\*/.test(r.out) && !/最该查/.test(r.out) && !/别因为像合并就放过/.test(r.out),
+        r.out.slice(0, 1400));
+    }
+    check("⑧.2 自相矛盾档：把矛盾之处逐条摆出来（只给结论不给证据等于换一句猜测）",
+      /totals\.clauses 写着 \d+，而 clauses 数组里/.test(selfInc.out), selfInc.out.slice(0, 900));
+    check("⑧.2 c2 手删数组一条：多条矛盾同时列出（不是报第一条就收工）",
+      (handDelete.out.match(/^ {7}· /gm) || []).length >= 2, handDelete.out.slice(0, 1400));
+    check("⑧.2 自相矛盾档也打仓态三条事实（最笃定的那句不许在零 git 证据下说出来）",
+      /ⓘ 仓态（git 事实三条/.test(selfInc.out), selfInc.out.slice(0, 1400));
+
+    // (d) 自洽但与真相源不符 ⇒ cause=hand-or-generator
+    const hand = bendIndex((d) => { d.clauses[0].title = "我手改了这个派生物"; });
+    check("⑧.2 改 title（不碰计数）⇒ cause=hand-or-generator（对抗 E1c 对照组，两档确实分得开）",
+      hand.code === 1 && causeOf(hand.out) === "hand-or-generator",
+      causeOf(hand.out) + " | " + hand.out.slice(0, 500));
+    check("⑧.2 自洽档：**两种**成因都说（只说手改的话，改了解析器输出那一格没人认领）",
+      /有人\*\*手改\*\*了这个派生物/.test(hand.out) && /生成器 \/ 解析器改了/.test(hand.out),
+      hand.out.slice(0, 900));
+    check("⑧.2 自洽档：明说「自洽**不排除**合并」（反向也不成立，两向都要写）",
+      /内部账目自洽\*\*不排除合并\*\*/.test(hand.out), hand.out.slice(0, 900));
+    check("⑧.2 自洽档不冒充自相矛盾档（负控另一向）",
+      !/说不出是谁弄坏的/.test(hand.out), hand.out.slice(0, 900));
+
+    // C4：合法 JSON、sha 全对、但 clauses 数组没了 ⇒ 不许一句话里既说自洽又说判不了
+    const noArr = bendIndex((d) => { delete d.clauses; });
+    check("⑧.2 自洽性判不了时不许自相矛盾（对抗 C4：原文一句里既断言自洽、又说判不了）",
+      /自洽性判不了/.test(noArr.out) && !/而这份索引内部账目自洽（/.test(noArr.out),
+      noArr.out.slice(0, 900));
+
+    fs.copyFileSync(A8_CLEAN, A8_IX);
+  }
+
+  // ── ⑧.3 处方 2×2：索引侧 × 台账侧，四格各验一次 ──────────────────────────
+  // 只验「红了有处方」是半个断言：那样一段每次都打的废话也能全绿。四格一起才夹得住。
+  const L8 = path.join(TMP, "presc");
+  {
+    const corpus = path.join(L8, "corpus.md");
+    const sj = sourcesJson(path.join(L8, "src.json"),
+      [{ file: corpus, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const ix = path.join(L8, "index.json");
+    const ledgerOk = path.join(L8, "ledger-ok.json");
+    const ledgerBad = path.join(L8, "ledger-empty.json");
+    const TEXT = [
+      "# 夹具 · 处方 2×2", "", "## 通用节", "",
+      "- **甲条**：判据。 [n=1 @07-01 触发:PR流程] [#处-甲]", "",
+    ].join("\n");
+    w(corpus, TEXT);
+    w(ledgerOk, JSON.stringify({
+      schema_version: 1,
+      clauses: { "处-甲": { file: corpus, n: "1", first_seen: "07-01", trigger: "PR流程", judge_only: false, self_authored: [], baseline: null, source_refs: [], status: "active" } },
+    }, null, 2) + "\n");
+    // 台账里一条都没有，而正文有 slug ⇒ orphan_slug ⇒ 台账侧红（索引侧不受影响）
+    w(ledgerBad, JSON.stringify({ schema_version: 1, clauses: {} }, null, 2) + "\n");
+
+    const HAS_INDEX_FIX = /✓ 这条命令\*\*一定解得掉\*\*/;
+    const HAS_LEDGER_FIX = /✗ 跑生成器对它\*\*没用\*\*/;
+
+    // 格 1：两侧都绿 ⇒ 一个字都不打
+    runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", ledgerOk, "--out", ix]);
+    const g1 = runNode(GEN, ["--check", "--quiet", "--sources-json", sj, "--ledger", ledgerOk, "--out", ix]);
+    check("⑧.3 [绿,绿] ⇒ 零处方（负控：不是每次都打一句废话）",
+      g1.code === 0 && !/⇒ 修法/.test(g1.out), g1.out.slice(0, 400));
+
+    // 格 2：索引红 · 台账绿 ⇒ 只给索引那条，且明说台账无事
+    // 源改法刻意选「改正文不动 slug 集合」：加一条新条款会连带把台账也弄红（新 slug 成孤儿），
+    // 那样这一格就同时红了两侧，测不出「只红一侧」这件事。
+    w(corpus, TEXT.replace("判据。", "判据（改过）。"));
+    const g2 = runNode(GEN, ["--check", "--quiet", "--sources-json", sj, "--ledger", ledgerOk, "--out", ix]);
+    check("⑧.3 [索引红,台账绿] ⇒ 有索引处方、无台账处方，且明说台账无事",
+      g2.code === 1 && HAS_INDEX_FIX.test(g2.out) && !HAS_LEDGER_FIX.test(g2.out) && /台账这一侧无事/.test(g2.out),
+      g2.out.slice(-800));
+
+    // 格 3：索引绿 · 台账红 ⇒ **不许**给「跑生成器」当处方
+    w(corpus, TEXT);
+    runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", ledgerOk, "--out", ix]); // 先把索引对齐
+    const g3 = runNode(GEN, ["--check", "--quiet", "--sources-json", sj, "--ledger", ledgerBad, "--out", ix]);
+    check("⑧.3 [索引绿,台账红] ⇒ 只给台账处方，且**明说跑生成器解决不了**（给错处方比不给更糟）",
+      g3.code === 1 && HAS_LEDGER_FIX.test(g3.out) && !HAS_INDEX_FIX.test(g3.out) &&
+      /索引这一侧无事/.test(g3.out), g3.out.slice(-900));
+
+    // 格 4：两侧都红 ⇒ 两条都要有（缺哪条都会让人以为跑一条命令就完了）
+    w(corpus, TEXT.replace("判据。", "判据（又改过）。"));
+    const g4 = runNode(GEN, ["--check", "--quiet", "--sources-json", sj, "--ledger", ledgerBad, "--out", ix]);
+    check("⑧.3 [索引红,台账红] ⇒ 两条处方都在",
+      g4.code === 1 && HAS_INDEX_FIX.test(g4.out) && HAS_LEDGER_FIX.test(g4.out), g4.out.slice(-900));
+
+    // 生成模式下台账红：索引已写盘（不该报索引处方），台账仍要有处方
+    const g5 = runNode(GEN, ["--quiet", "--sources-json", sj, "--ledger", ledgerBad, "--out", ix]);
+    check("⑧.3 生成模式 + 台账红 ⇒ 索引已写盘不报它、台账处方照给",
+      g5.code === 1 && HAS_LEDGER_FIX.test(g5.out) && !HAS_INDEX_FIX.test(g5.out), g5.out.slice(-700));
+  }
+
+  // ── ⑧.4 mutation：三形态 + 两向反向，每个都配 canary ─────────────────────
+  // 锚点全是**单行正则**（行尾差异咬不到它，见 dao-guard-writing 那条），
+  // 且**断言与 replace 共用同一个 RegExp 对象** —— 断言一个前缀串而 replace 用另一个表达式，
+  // 会让「锚落空」与「判据真坏了」不可区分，那是本仓 2026-08-02 实测过的错法。
+  {
+    const M8 = path.join(TMP, "mut8");
+    const genSrc = fs.readFileSync(GEN, "utf8");
+    // 变异体的 REPO_ROOT 是它自己那棵假树 ⇒ 默认台账/默认索引都不在那儿，
+    // 所以下面每次调用都显式给 --sources-json / --ledger / --out（全用绝对路径）。
+    function genMutant(name, re, to) {
+      const dir = path.join(M8, name, "ccswitch");
+      fs.mkdirSync(path.join(dir, "lib"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+      fs.copyFileSync(LIB, path.join(dir, "lib", "clause-parser.mjs"));
+      const applied = re === null ? 1 : (re.test(genSrc) ? 1 : 0);
+      w(path.join(dir, "scripts", "gen-clause-index.mjs"), re === null ? genSrc : genSrc.replace(re, to));
+      return { script: path.join(dir, "scripts", "gen-clause-index.mjs"), applied };
+    }
+    // 三份夹具：干净（canary）· 账目自相矛盾 · 只改 title
+    const MSRC = path.join(M8, "corpus.md");
+    const MSJ = sourcesJson(path.join(M8, "src.json"),
+      [{ file: MSRC, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const MLED = path.join(M8, "ledger.json");
+    w(MSRC, FIX_A_TEXT);
+    w(MLED, JSON.stringify({ schema_version: 1, clauses: {} }, null, 2) + "\n");
+    // 锚点定义一次，断言与 replace 共用同一个对象（见本组开头那段）
+    const ANCHOR_CALL = /^ +const audit = auditIndexSelfConsistency\(onDiskDoc\);$/m;
+    const ANCHOR_IF = /^ +if \(audit\.readable && audit\.problems\.length\) \{$/m;
+    const ANCHOR_PRESC_CALL = /^ +printPrescription\(indexResult, ledgerCode\);$/m;
+    const ANCHOR_PRESC_GUARD = /^ +if \(!indexRed && !ledgerRed\) return; .*$/m;
+
+    // 🔴 **索引一律用 baseline 变异体生成，不用真 GEN** —— 这不是讲究：
+    //    `buildIndex` 按 **REPO_ROOT** 决定源的 `file` 标签（仓内记相对路径、仓外记绝对路径），
+    //    而变异体的 REPO_ROOT 是它自己那棵假树 ⇒ 同一份语料在真 GEN 与变异体下拿到**不同的标签**
+    //    ⇒ 拿真 GEN 生成的索引去喂变异体 `--check`，会稳定地报一个与本组无关的 drift，
+    //    而那个 drift 长得和「mutation 生效了」一模一样。所有变异体同深度 ⇒ 标签彼此一致。
+    const base = genMutant("baseline", null, null);
+    const CLEAN_IX = path.join(M8, "clean.json");
+    runNode(base.script, ["--quiet", "--sources-json", MSJ, "--ledger", MLED, "--out", CLEAN_IX]);
+    const mkVariant = (file, mutate) => {
+      const d = JSON.parse(fs.readFileSync(CLEAN_IX, "utf8"));
+      mutate(d);
+      w(file, JSON.stringify(d, null, 2) + "\n");
+      return file;
+    };
+    const IX_SELFINC = mkVariant(path.join(M8, "ix-selfinc.json"), (d) => { d._generated.totals.clauses -= 1; });
+    const IX_HAND = mkVariant(path.join(M8, "ix-hand.json"), (d) => { d.clauses[0].title = "手改的"; });
+    const runOn = (m, ixFile) =>
+      runNode(m.script, ["--check", "--quiet", "--sources-json", MSJ, "--ledger", MLED, "--out", ixFile]);
+
+    // 基线：未变异副本上三档都判对，否则下面的红全都不算数
+    const bClean = runOn(base, CLEAN_IX);
+    const bSelfInc = runOn(base, IX_SELFINC);
+    const bHand = runOn(base, IX_HAND);
+    check("⑧.4 负控：未变异副本三档全判对（none / self-inconsistent / hand-or-generator）",
+      causeOf(bClean.out) === "none" && causeOf(bSelfInc.out) === "self-inconsistent" &&
+      causeOf(bHand.out) === "hand-or-generator" && bClean.code === 0,
+      [causeOf(bClean.out), causeOf(bSelfInc.out), causeOf(bHand.out)].join("/") + " | " + bClean.out.slice(0, 300));
+
+    // ── 形态①（移除）：把自洽性审计整个摘掉，换成一个恒「干净」的桩 ──
+    const m1 = genMutant("remove-audit", ANCHOR_CALL,
+      "      const audit = { readable: true, why: null, problems: [], counted: {} };");
+    check("⑧.4 MUT①锚命中（锚不命中 = 这个实验根本没做，而那与「守卫没塌」逐字节相同）", m1.applied === 1);
+    const r1c = runOn(m1, CLEAN_IX);
+    check("⑧.4 canary①：变异体还活着（干净态仍 exit 0 + cause=none）",
+      r1c.code === 0 && causeOf(r1c.out) === "none", causeOf(r1c.out) + " | " + r1c.out.slice(0, 200));
+    const r1 = runOn(m1, IX_SELFINC);
+check("⑧.4 MUT①⇒ 自相矛盾档塌成自洽档（归因断言真的在承重）",
+      causeOf(r1.out) === "hand-or-generator", causeOf(r1.out) + " | " + r1.out.slice(0, 400));
+
+    // ── 形态②（保留字面但使其不执行）：文本匹配型守护对这一向天然失明 ──
+    const m2 = genMutant("dead-branch", ANCHOR_IF, "      if (false && audit.readable && audit.problems.length) {");
+    check("⑧.4 MUT②锚命中", m2.applied === 1);
+    const r2c = runOn(m2, CLEAN_IX);
+    check("⑧.4 canary②：变异体还活着", r2c.code === 0 && causeOf(r2c.out) === "none", causeOf(r2c.out));
+    const r2 = runOn(m2, IX_SELFINC);
+    check("⑧.4 MUT②⇒ 自相矛盾档塌成自洽档", causeOf(r2.out) === "hand-or-generator", causeOf(r2.out));
+
+    // ── 形态③（保留调用与副作用，但结果不被消费）──
+    // 台账那一侧照跑、照打自己的明细（副作用全在），只是它的结论**没被处方消费**。
+    // 这一向是「门还在、也还在算，只是没人听它的答案」，前两向结构上盖不到。
+    const m3 = genMutant("unconsumed-ledger", ANCHOR_PRESC_CALL, "  printPrescription(indexResult, 0);");
+    check("⑧.4 MUT③锚命中", m3.applied === 1);
+    const r3c = runOn(m3, CLEAN_IX);
+    check("⑧.4 canary③：变异体还活着", r3c.code === 0, "exit=" + r3c.code);
+    // 靶：台账红（空台账 + 有 slug 的语料）而索引绿
+    const M3SRC = path.join(M8, "slug-corpus.md");
+    w(M3SRC, ["# 夹具", "", "## 通用节", "", "- **甲条**：判据。 [n=1 @07-01 触发:PR流程] [#变-甲]", ""].join("\n"));
+    const M3SJ = sourcesJson(path.join(M8, "src-slug.json"),
+      [{ file: M3SRC, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    const M3IX = path.join(M8, "ix-slug.json");
+    runNode(base.script, ["--quiet", "--sources-json", M3SJ, "--ledger", MLED, "--out", M3IX]); // 标签一致，理由同上
+    const baseLed = runNode(base.script, ["--check", "--quiet", "--sources-json", M3SJ, "--ledger", MLED, "--out", M3IX]);
+    check("⑧.4 负控③：未变异副本在这个靶上给得出台账处方（否则下面的红不算数）",
+      baseLed.code === 1 && /✗ 跑生成器对它\*\*没用\*\*/.test(baseLed.out), baseLed.out.slice(-600));
+    const r3 = runNode(m3.script, ["--check", "--quiet", "--sources-json", M3SJ, "--ledger", MLED, "--out", M3IX]);
+    check("⑧.4 MUT③⇒ 台账那半的结论没人听：退出码照旧 1、明细照打，而**处方里那句没了**",
+      r3.code === 1 && /orphan_slug=1/.test(r3.out) && !/✗ 跑生成器对它\*\*没用\*\*/.test(r3.out),
+      r3.out.slice(-700));
+
+    // ── 反向①：让自相矛盾档恒真 ⇒ 自洽档那条负控必须变红 ──
+    // 前三向全在「让门变松」这一侧。只做那一侧的话，「自洽档不冒充自相矛盾档」那条负控
+    // 从头到尾没被验过 —— 这正是本仓「12 次 mutation 全在一个方向上」那条明训。
+    const m4 = genMutant("always-selfinc", ANCHOR_IF, "      if (audit.readable || true) {");
+    check("⑧.4 MUT④（反向）锚命中", m4.applied === 1);
+    const r4c = runOn(m4, CLEAN_IX);
+    check("⑧.4 canary④：变异体还活着（干净态不受影响，因为压根走不到归因）",
+      r4c.code === 0 && causeOf(r4c.out) === "none", causeOf(r4c.out));
+    const r4 = runOn(m4, IX_HAND);
+    check("⑧.4 MUT④⇒ 自洽档被冒充成自相矛盾档（负控那一侧确实有判别力）",
+      causeOf(r4.out) === "self-inconsistent", causeOf(r4.out) + " | " + r4.out.slice(0, 400));
+
+    // ── 反向②：把处方的「干净就闭嘴」摘掉 ⇒ 干净态开始打废话 ──
+    // 这一向验的正是本批被点名的那句要求：**证明处方只在真的该出现时出现**。
+    const m5 = genMutant("always-prescribe", ANCHOR_PRESC_GUARD, "  if (false) return;");
+    check("⑧.4 MUT⑤（反向）锚命中", m5.applied === 1);
+    const r5 = runOn(m5, CLEAN_IX);
+    check("⑧.4 MUT⑤⇒ 干净态也打起了「⇒ 修法」（⑧.3 格 1 与 ④ 组那条真数据负控由此坐实有靶）",
+      r5.code === 0 && /⇒ 修法/.test(r5.out), r5.out.slice(-500));
+
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑧.5 仓态探针：**在真 git 仓里逐态验**（2026-08-06 对抗验证 C1 + C3）
+  //
+  // 对抗验证官指出两件事，都成立：
+  //   C1 首版把 `dirty` 排在 `isMerge` 之前**且直接 return**，而一次合并在飞时工作树
+  //      **必然**是脏的 ⇒ **合并那一支在冲突 / --no-commit 合并期间结构上不可达**，
+  //      它会笃定地答「就是你」——**而那正是 issue #121 场景本身**。
+  //      上一版把它写进未尽处、称作「缺定向夹具」：**那个说法是错的**，
+  //      它不是没答，是笃定地答错了 —— 判据缺口，不是覆盖缺口。
+  //   C3 唯一那条断言是「三种口径必居其一」，**任何一支都满足它** ⇒ 判别力为 0。
+  //
+  // 两样都得给：判据改成「打三条独立事实」（源码侧），断言逐条钉（这里）。
+  // 靶必须是**真 git 仓**：把 gen/lib 副本放进一个现造的仓里，它的 REPO_ROOT 就是那个仓。
+  // MERGE_HEAD 不合成 —— 真造一次冲突合并把它逼出来。
+  console.log("\n──── ⑧.5 仓态探针：真 git 仓里逐态验（C1 合并在飞 / C3 判别力）────");
+  {
+    const G = path.join(TMP, "gitstate");
+    const git = (cwd, ...args) => spawnSync("git", args, { cwd, encoding: "utf8", timeout: 60000 });
+    function mkRepo(name) {
+      const root = path.join(G, name);
+      rm(root);
+      fs.mkdirSync(path.join(root, "ccswitch", "lib"), { recursive: true });
+      fs.mkdirSync(path.join(root, "ccswitch", "scripts"), { recursive: true });
+      fs.copyFileSync(LIB, path.join(root, "ccswitch", "lib", "clause-parser.mjs"));
+      fs.copyFileSync(GEN, path.join(root, "ccswitch", "scripts", "gen-clause-index.mjs"));
+      w(path.join(root, "corpus.md"), FIX_A_TEXT);
+      // 源清单写**相对路径** —— 仓态探针只问相对路径那些（绝对路径的源不归这个仓管）。
+      w(path.join(root, "src.json"), JSON.stringify({
+        sources: [{ file: "corpus.md", selector: "all-top-level", role_scheme: "dispatch-sections" }],
+      }, null, 2) + "\n");
+      w(path.join(root, "ledger.json"), JSON.stringify({ schema_version: 1, clauses: {} }, null, 2) + "\n");
+      git(root, "init", "-q", "-b", "main");
+      git(root, "config", "user.email", "t@example.invalid");
+      git(root, "config", "user.name", "clause-index-tests");
+      git(root, "add", "-A");
+      git(root, "commit", "-q", "-m", "base");
+      return root;
+    }
+    const argsFor = (root) => ["--sources-json", path.join(root, "src.json"),
+      "--ledger", path.join(root, "ledger.json"), "--out", path.join(root, "index.json")];
+    const scriptOf = (root) => path.join(root, "ccswitch", "scripts", "gen-clause-index.mjs");
+    const runIn = (root) => runNode(scriptOf(root), ["--check", "--quiet", ...argsFor(root)], { cwd: root });
+    const gen = (root) => runNode(scriptOf(root), ["--quiet", ...argsFor(root)], { cwd: root });
+    const fact = (out, label) => {
+      const m = new RegExp("· " + label + "：(\\S+)").exec(out);
+      return m ? m[1] : null;
+    };
+    const LBL_FLIGHT = "合并进行中（MERGE_HEAD 在）";
+    const LBL_MERGE = "HEAD 自己是合并提交";
+    const LBL_DIRTY = "上面那些源改过未提交";
+
+    // ── 态 A：源被本地改过（未提交）⇒ 否/否/是 ──
+    {
+      const root = mkRepo("dirty");
+      gen(root);
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **戊条**：本地改的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+      const r = runIn(root);
+      check("⑧.5 A 本地改过未提交：三条事实 = 否/否/是",
+        fact(r.out, LBL_FLIGHT) === "否" && fact(r.out, LBL_MERGE) === "否" && fact(r.out, LBL_DIRTY) === "是",
+        r.out.slice(0, 1400));
+      check("⑧.5 A 提示指向「你自己改的可能更大」，且不同时说另一句",
+        /你自己改的可能更大/.test(r.out) && !/合并带进来的可能更大/.test(r.out), r.out.slice(0, 1400));
+    }
+
+    // ── 态 B：HEAD 是合并提交、源干净 ⇒ 否/是/否 ──
+    {
+      const root = mkRepo("mergecommit");
+      gen(root); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "regen");
+      git(root, "checkout", "-q", "-b", "side");
+      w(path.join(root, "other.txt"), "side\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "side");
+      git(root, "checkout", "-q", "main");
+      // 主干改源但**不**重生成 ⇒ drift；提交掉 ⇒ 工作树干净
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **戊条**：主干加的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "main edit");
+      const mg = git(root, "merge", "--no-edit", "-q", "side");
+      check("⑧.5 B 前提：合并真的成了（否则测的不是合并提交）", mg.status === 0, JSON.stringify(mg.stderr));
+      const r = runIn(root);
+      check("⑧.5 B HEAD 是合并提交、源干净：三条事实 = 否/是/否",
+        fact(r.out, LBL_FLIGHT) === "否" && fact(r.out, LBL_MERGE) === "是" && fact(r.out, LBL_DIRTY) === "否",
+        r.out.slice(0, 1400));
+      check("⑧.5 B 提示指向「合并带进来的可能更大」，且不同时说另一句",
+        /合并带进来的可能更大/.test(r.out) && !/你自己改的可能更大/.test(r.out), r.out.slice(0, 1400));
+    }
+
+    // ── 态 C：**合并进行中**（C1 那一格）──
+    // 真造一次冲突合并把 MERGE_HEAD 逼出来。合并在飞时工作树必然是脏的 ——
+    // 首版正是在这里笃定地答「就是你」。
+    {
+      const root = mkRepo("inflight");
+      gen(root); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "regen");
+      git(root, "checkout", "-q", "-b", "side");
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **侧条**：side 改的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "side edit");
+      git(root, "checkout", "-q", "main");
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **主条**：main 改的。 [n=9 @07-09 触发:无] [仅判据·无触发]\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "main edit");
+      const mg = git(root, "merge", "--no-edit", "side");
+      check("⑧.5 C 前提：这次合并真的冲突了（不冲突就没有 MERGE_HEAD，本组测的东西就没了）",
+        mg.status !== 0, `status=${mg.status}`);
+      check("⑧.5 C 前提：MERGE_HEAD 确实在",
+        git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD").status === 0, "MERGE_HEAD 不在");
+      const r = runIn(root);
+      check("⑧.5 C 合并进行中：第一条事实 = 是", fact(r.out, LBL_FLIGHT) === "是", r.out.slice(0, 1400));
+      // 🔴 这一条就是 C1：首版在这里打的是「⇒ 成因①（就是你，重生成即可）」
+      check("⑧.5 C 合并在飞时**不许**说「你自己改的」，且要点明脏是合并造成的",
+        !/你自己改的可能更大/.test(r.out) && /别把它读成「是你改的」/.test(r.out), r.out.slice(0, 1400));
+
+      // ── mutation：把判据次序翻回首版那个错法（`dirty` 先赢）⇒ 本态必须答错 ──
+      // 对抗验证官实测这个错法在旧回归网下「2462 条断言一条都不看」。这里就地补上那个洞：
+      // 同一个仓、同一个态，只把 gen 换成变异体。锚点是单行正则，断言与 replace 共用同一个对象。
+      const ANCHOR_FLIGHT_FIRST = /^ +if \(inFlight\.known && inFlight\.value\) \{$/m;
+      const genSrc = fs.readFileSync(GEN, "utf8");
+      check("⑧.5 C mutation 锚命中（锚落空 = 这个实验根本没做）", ANCHOR_FLIGHT_FIRST.test(genSrc));
+      const mutRoot = path.join(root, "mut");
+      fs.mkdirSync(path.join(mutRoot, "ccswitch", "lib"), { recursive: true });
+      fs.mkdirSync(path.join(mutRoot, "ccswitch", "scripts"), { recursive: true });
+      fs.copyFileSync(LIB, path.join(mutRoot, "ccswitch", "lib", "clause-parser.mjs"));
+      w(path.join(mutRoot, "ccswitch", "scripts", "gen-clause-index.mjs"),
+        genSrc.replace(ANCHOR_FLIGHT_FIRST, "  if (false) {"));
+      // ⚠ 变异体的 REPO_ROOT 变成了 `<root>/mut`（不是那个仓）⇒ 它问的 git 树就不对了。
+      //   故**把变异体直接覆盖进那个仓的 ccswitch/scripts/**，REPO_ROOT 才仍是那个仓。
+      const target = scriptOf(root);
+      const backup = fs.readFileSync(target, "utf8");
+      w(target, genSrc.replace(ANCHOR_FLIGHT_FIRST, "  if (false) {"));
+      const rm2 = runIn(root);
+      w(target, backup); // 字节级复原：下一组还要用这个仓
+      check("⑧.5 C mutation：摘掉「合并在飞优先」⇒ 当场退回首版那个错答（「你自己改的」）",
+        /你自己改的可能更大/.test(rm2.out), rm2.out.slice(0, 1400));
+      check("⑧.5 C mutation canary：变异体没崩，三条事实照打（红的是判据不是进程）",
+        rm2.code === 1 && fact(rm2.out, LBL_FLIGHT) === "是", rm2.out.slice(0, 1400));
+      check("⑧.5 C 复原：把脚本写回去后，正确答案回来了（不是恒红也不是恒绿）",
+        /别把它读成「是你改的」/.test(runIn(root).out), "复原后仍答错");
+    }
+
+    // ── 态 D：**不在任何 git 仓里** ⇒ 必须说「判不了」，不许打三条确定的「否」──
+    //
+    // 🔴 这一格是实测出来的**真缺口**，不是补覆盖率（2026-08-06）：
+    //    `gitProbe` 的 fail-soft 只兜得住「git 没跑起来」；**「跑起来了但报 not a repository」
+    //    是 `ok:true` + `status:128`**，而 `status === 0 ? 是 : 否` 会把它读成一个确定的「否」。
+    //    真正拦住它的是开头那道 `--is-inside-work-tree` 守卫 —— 它是承重的，不是装饰。
+    //    上一版给这一格的断言把两支都接受了，等于没测；下面的 mutation 实测：摘掉守卫 ⇒
+    //    一个根本不是 git 仓的目录里照样打出三条确定事实。
+    //
+    // 靶怎么造：`_tmp/` 结构上永远在本仓工作树里 ⇒ 给 git 设 `GIT_CEILING_DIRECTORIES`
+    // 天花板（指向父目录），它就不再向上找 `.git`，从而**真的**变成「不在仓里」。
+    {
+      const root = path.join(G, "nogit");
+      rm(root);
+      fs.mkdirSync(path.join(root, "ccswitch", "lib"), { recursive: true });
+      fs.mkdirSync(path.join(root, "ccswitch", "scripts"), { recursive: true });
+      fs.copyFileSync(LIB, path.join(root, "ccswitch", "lib", "clause-parser.mjs"));
+      fs.copyFileSync(GEN, path.join(root, "ccswitch", "scripts", "gen-clause-index.mjs"));
+      w(path.join(root, "corpus.md"), FIX_A_TEXT);
+      w(path.join(root, "src.json"), JSON.stringify({
+        sources: [{ file: "corpus.md", selector: "all-top-level", role_scheme: "dispatch-sections" }],
+      }, null, 2) + "\n");
+      w(path.join(root, "ledger.json"), JSON.stringify({ schema_version: 1, clauses: {} }, null, 2) + "\n");
+      const CEIL = { GIT_CEILING_DIRECTORIES: G.split(path.sep).join("/") };
+      const runNoGit = () => runNode(scriptOf(root), ["--check", "--quiet", ...argsFor(root)], { cwd: root, env: CEIL });
+      runNode(scriptOf(root), ["--quiet", ...argsFor(root)], { cwd: root, env: CEIL });
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **戊条**：改了。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+
+      // 前提自证：天花板真生效了。前提没了，本格测的就是「在仓里」那一态（而它恒绿）。
+      const probe = spawnSync("git", ["-C", root, "rev-parse", "--is-inside-work-tree"],
+        { encoding: "utf8", env: Object.assign({}, process.env, CEIL) });
+      check("⑧.5 D 前提：天花板真把它变成「不在 git 仓里」",
+        probe.status !== 0, "status=" + probe.status + " out=" + String(probe.stdout || "").trim());
+
+      const r = runNoGit();
+      check("⑧.5 D 不在 git 仓里 ⇒ 说「判不了」，且**不打**三条确定事实",
+        /ⓘ 仓态：判不了/.test(r.out) && !/ⓘ 仓态（git 事实三条/.test(r.out), r.out.slice(0, 1400));
+      check("⑧.5 D 并明说「不当成「不是合并」」（把未知说成已知正是本批在治的病）",
+        /不当成「不是合并」/.test(r.out), r.out.slice(0, 1400));
+
+      // ── mutation：摘掉那道守卫 ⇒ 本态必须开始撒谎 ──
+      const ANCHOR_INREPO = /^ {2}if \(!inRepo\.ok \|\| inRepo\.status !== 0\) \{$/m;
+      const genSrcD = fs.readFileSync(GEN, "utf8");
+      check("⑧.5 D mutation 锚命中（锚落空 = 这个实验根本没做）", ANCHOR_INREPO.test(genSrcD));
+      const targetD = scriptOf(root);
+      w(targetD, genSrcD.replace(ANCHOR_INREPO, "  if (false) {"));
+      const rmD = runNoGit();
+      fs.copyFileSync(GEN, targetD); // 字节级复原
+      check("⑧.5 D mutation：摘掉守卫 ⇒ 非 git 仓里打出三条确定的「否」",
+        /ⓘ 仓态（git 事实三条/.test(rmD.out) && /· HEAD 自己是合并提交：否/.test(rmD.out),
+        rmD.out.slice(0, 1400));
+      check("⑧.5 D mutation canary：变异体没崩（红的是判据不是进程）", rmD.code === 1, "exit=" + rmD.code);
+      check("⑧.5 D 复原：守卫写回去后又说「判不了」（不是恒红也不是恒绿）",
+        /ⓘ 仓态：判不了/.test(runNoGit().out), "复原后仍在撒谎");
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑧.6 classifyPsExit：端到端（2026-08-06 对抗验证 C2）
+  //
+  // 首版这个函数**零测试覆盖**，且判据只从 `clauses === 0` 推断 + 硬编码「减 1」：
+  //   · 喂 `exit=4 clauses=0 violations=0` ⇒ 它照说「zero-sample，**不是失败**」
+  //   · 对方哪天把 zero-sample 移出 `$violations`（那个「减 1」的前提），
+  //     一处**真违例**会被静默吞掉 —— 正是这一格当初要防的病在同一个函数里换个前提复发
+  // 靶用一个**打得出末行的 PowerShell 桩**（纯 ASCII ⇒ 无 BOM 也不会被 CP936 毁），
+  // 经 `--ps-script` 喂进去 ⇒ 走的是真的 `runPs` 解析 + 真的分类，不是抄一份判据来测。
+  console.log("\n──── ⑧.6 classifyPsExit：拿桩喂末行，端到端逐档验 ────");
+  {
+    const S = path.join(TMP, "psstub");
+    fs.mkdirSync(S, { recursive: true });
+    const corpus = path.join(S, "corpus.md");
+    w(corpus, FIX_A_TEXT);
+    const sj = sourcesJson(path.join(S, "src.json"),
+      [{ file: corpus, selector: "all-top-level", role_scheme: "dispatch-sections" }]);
+    function stub(name, body) {
+      const p = path.join(S, `stub-${name}.ps1`);
+      w(p, "param([string]$TargetFile, [string]$ClauseSelector)\n" + body + "\n");
+      return p;
+    }
+    const marker = (o) =>
+      `Write-Host "CLAUSE_STRUCTURE_SUMMARY exit=${o.exit} clauses=${o.clauses} violations=${o.violations} ` +
+      `notrigger=${o.notrigger} retire=0 promote=0 slugs=${o.slugs} ledger=ok ledgerviol=0 maskdiv=0 maskcmp=1 ledgercmp=0 ledgeronly=0"`;
+    const runStub = (p) => runNode(GEN, ["--reconcile", "--sources-json", sj, "--ps-script", p]);
+    const mineSide = lib.parseClauses({
+      text: FIX_A_TEXT, file: "x", selector: lib.SELECTOR.ALL_TOP_LEVEL, roleScheme: lib.ROLE_SCHEME.DISPATCH_SECTIONS,
+    }).stats;
+
+    // (a) 真 zero-sample：类型行 + clauses=0 + exit=1 三件齐 ⇒ 才说「不是失败」
+    const a = runStub(stub("zero", 'Write-Host "  - [zero-sample] Line 0: empty scan surface"\n' +
+      marker({ exit: 1, clauses: 0, violations: 1, notrigger: 0, slugs: 0 })));
+    check("⑧.6 a 真 zero-sample（类型行 + clauses=0 + exit=1）⇒ 说「不是失败」",
+      /zero-sample：这份源本就零条款/.test(a.out) && /不是失败/.test(a.out), a.out.slice(0, 1200));
+
+    // (b) 🔴 C2 第一格：exit=4、没有类型行 ⇒ **不许**说「不是失败」
+    const b = runStub(stub("exit4", marker({ exit: 4, clauses: 0, violations: 0, notrigger: 0, slugs: 0 })));
+    check("⑧.6 b exit=4 且没报 zero-sample ⇒ 归「说不清」，**不说「不是失败」**",
+      /没人解释得了/.test(b.out) && !/不是失败/.test(b.out), b.out.slice(0, 1200));
+
+    // (c) 🔴 C2 第二格：对方把 zero-sample 移出 violations ⇒ violations=1 是**真违例**
+    const c = runStub(stub("moved", marker({ exit: 1, clauses: 0, violations: 1, notrigger: 0, slugs: 0 })));
+    check("⑧.6 c 没有 zero-sample 类型行时，clauses=0 不再被推断成零样本（真违例不许被吞）",
+      !/zero-sample：这份源本就零条款/.test(c.out) && /结构违例 1 处/.test(c.out), c.out.slice(0, 1200));
+
+    // (d) 报了 zero-sample 但退出码对不上 ⇒ 三件缺一件就不给「预期内」
+    const d = runStub(stub("zero-exit9", 'Write-Host "  - [zero-sample] Line 0: empty scan surface"\n' +
+      marker({ exit: 9, clauses: 0, violations: 1, notrigger: 0, slugs: 0 })));
+    check("⑧.6 d 报了 zero-sample 但 exit=9 ⇒ 归「说不清」并点明哪儿对不上",
+      /它报了 zero-sample，但/.test(d.out) && !/不是失败/.test(d.out), d.out.slice(0, 1200));
+
+    // (e) 真结构违例（有条款、有违例）⇒ 归「要看」那一档
+    const e = runStub(stub("viol", marker({
+      exit: 1, clauses: mineSide.clauses, violations: 3, notrigger: mineSide.no_trigger, slugs: mineSide.slug,
+    })));
+    check("⑧.6 e 有条款 + violations=3 ⇒ 归结构违例并说「这个要看」",
+      /结构违例 3 处/.test(e.out) && /这个要看/.test(e.out), e.out.slice(0, 1400));
+
+    // (f) 负控：对方 exit=0 ⇒ 归类小结整段不出现
+    const f = runStub(stub("ok", marker({
+      exit: 0, clauses: mineSide.clauses, violations: 0, notrigger: mineSide.no_trigger, slugs: mineSide.slug,
+    })));
+    check("⑧.6 f 负控：对方 exit=0 ⇒ 不打归类小结（干净时闭嘴）",
+      !/对方硬闸非零/.test(f.out) && /对方硬闸 exit=0/.test(f.out), f.out.slice(0, 1400));
   }
 
   console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
