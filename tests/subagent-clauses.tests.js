@@ -280,11 +280,43 @@ console.log("\n──── ⑤ 注入上限：宁可截断也不越 10,000，�
   check("超限时签名仍在首行（截断从尾部切，审计锚不丢）", r.ctx.startsWith(SIG));
   check("超限时明说被截断了（静默截断＝无从核验型误裁）", /截断|未列进本次注入/.test(r.ctx), JSON.stringify(r.ctx.slice(-160)));
 
+  // ── 前置探针：真索引新鲜吗（issue #121）─────────────────────────────────────
+  // 下面两条读的是**仓里那份真索引**，而它是派生物 —— 它一过期，渲染端 fail-closed，
+  // 本 hook 每次都只能退成纯指针，于是这两条会红。**那是连带红，病因不在注入侧。**
+  // 不加这个探针的话，读者看到的报文指向的是「注入没给全条款」，
+  // **离真正的病因隔了两层**（注入不全 ← 渲染拒绝 ← 索引过期），而第三层才是修法。
+  // 实测 2026-08-06：一个分支 merge 主干后（`drift=source`），这套连带红了 1 条。
+  // 探针只在**真的过期时**出声（干净时一个字不打：恒响的提示会被训练成盲区）。
+  //
+  // 🔴 **判据读 `drift=`，不读退出码**（2026-08-06 对抗验证阻断 2）：
+  //    `runIndex` 返回的是 `Math.max(indexCode, ledgerCode)` ⇒ 读退出码等于在问
+  //    「索引**或**台账有没有事」，而这里要问的是「索引新鲜吗」。首版读了退出码，于是
+  //    **台账红 + 索引新鲜**时它谎报「索引已过期（cause=none）」——`cause=none` 就印在
+  //    「已过期」旁边，按末行契约那正是「没过期」的意思 —— 并给出**本 PR 自己判定为错的
+  //    那条处方**（跑生成器解决不了台账红）。线上 hook 没有这个病（`dao-subagent-clauses.js`
+  //    读的是渲染端的漂移专属信号），只有这个探针混过两件事。
+  {
+    const probe = spawnSync(process.execPath, [GEN, "--check", "--quiet"], { encoding: "utf8", cwd: REPO });
+    const out = String(probe.stdout || "");
+    const drift = (/CLAUSE_INDEX_SUMMARY [^\n]*?\bdrift=(\S+)/.exec(out) || [])[1] || null;
+    if (drift === null) {
+      // 取不到 drift 本身要出声：那说明末行契约坏了或它根本没跑起来，**不等于「没漂」**。
+      console.log("  ⚠ 前置：读不到 `CLAUSE_INDEX_SUMMARY … drift=` ⇒ 索引新不新鲜**无从判断**（不当成新鲜）。");
+      console.log("     exit=" + probe.status + "；先手跑一次 node ccswitch/scripts/gen-clause-index.mjs --check 看它到底怎么了。");
+    } else if (drift !== "none") {
+      const cause = (/\bcause=(\S+)/.exec(out) || [])[1] || "?";
+      console.log("  ⚠ 前置：**仓里那份真索引已过期**（drift=" + drift + " cause=" + cause + "）——");
+      console.log("     本节下面若红，多半是**连带**：索引过期 → 渲染端 fail-closed → 注入退成纯指针。");
+      console.log("     修法：node ccswitch/scripts/gen-clause-index.mjs（成因与处方见它自己的报文，别在注入侧找）");
+    }
+  }
+
   const big = fire("mousse-implementer", { index: null }); // 真索引：通用节 20+ 条，正文上万字
   check("真索引下默认注入不超过 9000（宿主超 10,000 会改成落文件+预览）",
     big.ctx.length <= 9000, `实际 ${big.ctx.length}`);
   check("真索引下退成判据句形态并说明理由（不是悄悄少给）",
-    /判据句/.test(big.ctx) || /## 通用节/.test(big.ctx), JSON.stringify(big.ctx.slice(0, 300)));
+    /判据句/.test(big.ctx) || /## 通用节/.test(big.ctx),
+    JSON.stringify(big.ctx.slice(0, 300)) + "  ← 若上面打了「真索引已过期」，这条是连带红，先跑生成器");
 }
 
 console.log("\n──── ⑥ 心跳：真被调用过才写得出来，且自测心跳不许冒充真实 ────");
