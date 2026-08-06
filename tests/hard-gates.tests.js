@@ -29,12 +29,39 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { spawnSync } = require("child_process");
+const childProcess = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-hard-gates.js");
 const NUDGE = path.join(REPO, "ccswitch", "hooks", "dao-tool-nudge.js");
 const TMP = path.join(REPO, "_tmp", "hard-gates-tests");
+
+// ── 运行时出口计数器（issue #159）──────────────────────────────────────────
+// 数的是**「真 hook 这个文件被 spawn 了几次」这个动作**，不是「源码里长得像的文本有几处」。
+// 判据：spawnSync 的参数数组里，有没有哪一项 `path.resolve` 之后就是 NUDGE 那个文件。
+// 选型理由、误报/漏报面、以及它替掉的那条正则为什么必须退役 —— 全写在下面
+// 「#129·防复发」那一节的头注里（那里是这套判据的唯一真相源，此处不重述）。
+function keyOf(p) {
+  try {
+    const r = path.resolve(String(p));
+    return process.platform === "win32" ? r.toLowerCase() : r;   // win32 路径大小写不敏感
+  } catch (_) { return null; }
+}
+const NUDGE_KEY = keyOf(NUDGE);
+let NUDGE_SPAWNS = 0;          // 真 hook 被 spawn 的总次数（由下面这层包装数）
+let NUDGE_RAW_CALLS = 0;       // 其中经由 nudgeRaw() 的次数
+let NUDGE_DECLARED_BYPASS = 0; // 判别力探针**显式登记**的刻意绕开次数
+const _realSpawnSync = childProcess.spawnSync;
+childProcess.spawnSync = function (file, args, options) {
+  if (Array.isArray(args)) {
+    for (const a of args) if (typeof a === "string" && keyOf(a) === NUDGE_KEY) { NUDGE_SPAWNS++; break; }
+  }
+  return _realSpawnSync.apply(this, arguments);
+};
+// 🔴 **解构必须在 patch 之后**：先解构就等于把原函数拷了个局部引用，后面再 patch 模块导出
+//    也管不着它 —— 那样计数器会恒 0，而恒 0 与「一个多余出口都没有」输出一模一样。
+//    收尾那一节有一条断言钉着「本轮真的数到过」，专治这一格（见文件末尾）。
+const { spawnSync } = childProcess;
 
 fs.rmSync(TMP, { recursive: true, force: true });
 fs.mkdirSync(TMP, { recursive: true });
@@ -93,13 +120,29 @@ const NUDGE_STATE = path.join(NUDGE_SANDBOX, "tool-nudge-seen.json");
 // 各自 spawnSync**，于是收口了前者、后者原样留着不带 cwd —— 同一个文件里同一个形态两份，
 // 而单子上只记了一份。**同型的东西只留一个出口**，下一次收口才不会再漏掉另一半。
 // （本节末尾有一条断言钉着「只有一个出口」这件事，见「#129·防复发」。）
-function nudgeRaw(command, toolName = "Bash") {
-  return spawnSync(process.execPath, [NUDGE], {
-    input: JSON.stringify({ tool_name: toolName, cwd: NUDGE_SANDBOX, tool_input: { command } }),
+// `opts` 四个可选口子，各有明确用途，**都不是给日常调用点用的**（默认值即生产形态）：
+//   · sandbox   —— 换一个一次性沙箱（issue #157：基线必须取在**那个沙箱的第 0 次调用**）
+//   · state     —— 单独指定去重表落点（沙箱与状态需要解耦时）
+//   · script    —— 换成探测替身（issue #158：行为级守护要问「hook 实际收到了什么」）
+//   · extraEnv  —— 只给替身看的环境变量；真 hook 不认识它们
+//   · sessionId —— 浏览器 MCP 那一支按 session 去重，探针需要每次一个新的才走得到写盘
+function nudgeRaw(command, toolName = "Bash", opts = {}) {
+  const sandbox = opts.sandbox || NUDGE_SANDBOX;
+  const state = opts.state || (opts.sandbox ? path.join(sandbox, "tool-nudge-seen.json") : NUDGE_STATE);
+  const script = opts.script || NUDGE;
+  // 只数「喂真 hook」那些次 —— 与 NUDGE_SPAWNS 同一射程，否则恒等式两边数的不是一回事。
+  if (keyOf(script) === NUDGE_KEY) NUDGE_RAW_CALLS++;
+  return spawnSync(process.execPath, [script], {
+    input: JSON.stringify({
+      tool_name: toolName,
+      cwd: sandbox,
+      session_id: opts.sessionId || "hard-gates-tests",
+      tool_input: { command },
+    }),
     encoding: "utf8",
-    cwd: NUDGE_SANDBOX,                       // 两处都给：payload 那个供 hook 判据用，
+    cwd: sandbox,                             // 两处都给：payload 那个供 hook 判据用，
                                               // 这个供 hook 里任何 process.cwd() 兜底用
-    env: { ...process.env, DAO_TOOL_NUDGE_STATE: NUDGE_STATE },
+    env: { ...process.env, DAO_TOOL_NUDGE_STATE: state, ...(opts.extraEnv || {}) },
   });
 }
 
@@ -1415,23 +1458,76 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
   // ── issue #129 的关闭条件，做成自失效断言 ────────────────────────────────
   // 「跑完这套之后真仓 `_tmp/` 无改动」不能靠人事后去看一眼 —— 那正是无标记时刻的自由裁量。
   // 这里把它变成一条会红的断言：往沙箱里放 canary，跑一轮 nudge，再看它动没动。
+  //
+  // 🔴 **基线为什么必须另起一个一次性沙箱（issue #157，PR #156 对抗验证带账）**：
+  //   原先 `before` 取自 `NUDGE_SANDBOX`，而**本文件到这一行为止已经跑过 22 次 nudge**
+  //   ⇒ hook **首次调用**就会创建的东西（去重表 `SEEN_FILE` 是最典型的那个）在基线快照
+  //   那一刻**已经躺在里面了**，于是它同时出现在 `before` 与 `after` 两侧 ⇒ 断言恒绿。
+  //   对抗官实测：把 nudge 换成会写盘的替身，替身写下的 marker 两侧都有，**478 条全绿**。
+  //   **这条断言在自己标题里点名要守的那样东西（去重表），正是它结构上守不到的。**
+  //   而下面「判别力·沙箱本身可写」那条探针**抓不到这个病**：它的写入发生在 `before`
+  //   **之后**，证的是「基线之后的新增看得见」，证不了「基线取得够早」——
+  //   **它验的是仪器，不是基线**（官侧条款 `#官抗-基线是活的`：假基线比没有基线更危险，
+  //   因为它看起来有数据支撑）。
+  // ⇒ 本组改用**一次性新沙箱**，基线取在**这个沙箱的第 0 次调用**。
+  //   为什么不是「把基线提到文件顶上取一次就完了」：那样基线的正确性就取决于**语句顺序**，
+  //   而顺序是下一个人随手就会改的东西 —— **顺序型正确性是这个病的来源，不是它的解药**。
   {
-    const canary = path.join(NUDGE_SANDBOX, "_tmp", "dump", "canary.js");
+    const SB = path.join(TMP, "nudge-closure-sandbox");
+    fs.rmSync(SB, { recursive: true, force: true });
+    const canary = path.join(SB, "_tmp", "dump", "canary.js");
     fs.mkdirSync(path.dirname(canary), { recursive: true });
     fs.writeFileSync(canary, "// CANARY_ORIGINAL\n", "utf8");
-    const before = fs.readdirSync(NUDGE_SANDBOX).sort().join(",");
-    for (const c of ["git push origin main", "pnpm dev", "npm run dev", "git push origin feat/x"]) nudge(c);
+    // ⬇ 这一行之前，SB 上一次 nudge 都没跑过。**这才是 #157 要的那个基线时刻。**
+    const before = fs.readdirSync(SB).sort().join(",");
+    for (const c of ["git push origin main", "pnpm dev", "npm run dev", "git push origin feat/x"]) {
+      nudgeRaw(c, "Bash", { sandbox: SB });
+    }
     check("#129·nudge 走沙箱 cwd 之后，沙箱里的 canary 逐字节没动",
       fs.readFileSync(canary, "utf8") === "// CANARY_ORIGINAL\n");
-    check("#129·并且沙箱顶层没有凭空多出文件（去重表被 DAO_TOOL_NUDGE_STATE 引开了）",
-      fs.readdirSync(NUDGE_SANDBOX).sort().join(",") === before,
-      `before=${before} after=${fs.readdirSync(NUDGE_SANDBOX).sort().join(",")}`);
-    // 判别力：这两条断言不是恒真的 —— 拿一个**真会写盘**的形态证明沙箱确实是可被写脏的。
-    // 没有这一条，上面两条与「hook 压根没跑」在全绿输出里长得一模一样。
-    fs.writeFileSync(path.join(NUDGE_SANDBOX, "probe-writable.txt"), "x", "utf8");
+    check("#129·并且沙箱顶层没有凭空多出文件（基线取在本沙箱第 0 次调用，见 #157）",
+      fs.readdirSync(SB).sort().join(",") === before,
+      `before=${before} after=${fs.readdirSync(SB).sort().join(",")}`);
+    // 判别力①（既有，保留）：这两条断言不是恒真的 —— 拿一个**真会写盘**的形态证明沙箱
+    // 确实是可被写脏的。没有这一条，上面两条与「hook 压根没跑」在全绿输出里长得一模一样。
+    fs.writeFileSync(path.join(SB, "probe-writable.txt"), "x", "utf8");
     check("判别力·沙箱本身是可写的（否则上面两条是恒真的废话）",
-      fs.readdirSync(NUDGE_SANDBOX).sort().join(",") !== before);
-    fs.rmSync(path.join(NUDGE_SANDBOX, "probe-writable.txt"), { force: true });
+      fs.readdirSync(SB).sort().join(",") !== before);
+    fs.rmSync(path.join(SB, "probe-writable.txt"), { force: true });
+  }
+
+  // ── 判别力②·#157 专项：**首次调用即写盘**的东西，早基线抓得到、晚基线抓不到 ──────
+  // 上一条「沙箱可写」证的是**仪器**；这一条证的是**基线时刻**本身 —— 两件事，缺一不可。
+  // 🔑 用的不是替身，是**真 hook 的真写盘路**：喂一个浏览器 MCP 工具名，hook 会在
+  //   **本会话首次调用**时把去重表写进 `DAO_TOOL_NUDGE_STATE` 指的那个文件
+  //   （`ccswitch/hooks/dao-tool-nudge.js` 的 ④ 那一支）。拿真路而不是拿替身，
+  //   省掉「替身与真 hook 会不会漂移」这一整类问题。
+  // 两条断言是一对：
+  //   ㈠ 早基线（第 0 次调用时取）**看得见**那次写盘 ⇒ 这个仪器确实有判别力
+  //   ㈡ 晚基线（第 1 次调用之后取）里**已经含着**那次写盘的产物 ⇒ 拿它当基线的比对
+  //      对同一次写盘结构上失明 —— **这就是 #157 那个病，在这里当场复现一次**
+  // 🔴 **㈡ 不是"顺便"**：没有它，「我把基线提早了」与「我什么也没改」在全绿输出里一样。
+  {
+    const SB = path.join(TMP, "nudge-firstcall-probe");
+    fs.rmSync(SB, { recursive: true, force: true });
+    fs.mkdirSync(SB, { recursive: true });
+    const state = path.join(SB, "tool-nudge-seen.json");
+    const early = fs.readdirSync(SB).sort().join(",");        // 第 0 次调用时的基线
+    nudgeRaw("", "mcp__playwright__browser_navigate",
+      { sandbox: SB, state, sessionId: "adv157-probe-" + process.pid + "-" + Date.now() });
+    const late = fs.readdirSync(SB).sort().join(",");         // 「已经跑过一轮」之后的基线
+    check("判别力·#157 ㈠ 早基线看得见 hook 首次调用写下的去重表",
+      late !== early && fs.existsSync(state), `early=[${early}] late=[${late}]`);
+    check("判别力·#157 ㈡ 晚基线里已经含着那次写盘的产物 ⇒ 拿它比对必然恒绿（本单要修的病）",
+      late.split(",").includes("tool-nudge-seen.json") &&
+      !early.split(",").includes("tool-nudge-seen.json"),
+      `early=[${early}] late=[${late}]`);
+    // 补一刀：从**晚基线**看过去，后续调用"什么也没发生" —— 那次写盘已被算进基线里了。
+    for (const c of ["git push origin main", "pnpm dev"]) nudgeRaw(c, "Bash", { sandbox: SB, state });
+    check("判别力·#157 ㈢ 晚基线之后再跑几轮，比对仍报「无变化」（失明是结构性的，不是偶然）",
+      fs.readdirSync(SB).sort().join(",") === late,
+      `late=[${late}] now=[${fs.readdirSync(SB).sort().join(",")}]`);
+    fs.rmSync(SB, { recursive: true, force: true });
   }
 
   // ── #129·防复发：本文件喂 nudge hook 的出口必须**只有一个** ─────────────────
@@ -1444,45 +1540,141 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
   //   写盘那条只在浏览器 MCP 工具名下走且锚在 hook 自己的仓根 ⇒ **不写盘、不翻红绿**。
   //   前一位官那两轮**行为普查**（正负控都自证过）因此对本文件报「零可疑」——
   //   **今天再跑一遍行为普查，还是会漏掉它。**
-  // ⇒ 所以这里放的不是又一条行为断言，是一条**文本**断言：出口数必须恰好是 1。
+  // ⇒ 所以这里放的不是又一条行为断言，是一条**计数**断言：喂真 hook 的出口只能有一个。
   //   它盯的是「同一形态在同一文件里长出第二份」这个动作本身，与那一份有没有造成危害无关。
   // ⚠ **射程照直写**：只管**这一个文件**喂**这一个 hook**。做成跨文件的闸需要先答
   //   「怎么机械识别一次 hook spawn」，#129 自己说了「没实测过误报率，不建议直接立闸」——
   //   本批照此**不立全局闸**。
+  //
+  // 🔴 **2026-08-06（issue #159）：判据从「数源码文本」换成「数真实 spawn」。**
+  //   旧判据是一条正则（形如「`spawnSync(` + execPath + 方括号里那个常量名」）。
+  //   PR #156 对抗官拿**本仓真实写法**跑了 7 条（逐条标了文件行号，不是合成的），**漏 6 条**：
+  //     ① `[opts.script || NUDGE]`（tests/dao-tool-nudge.tests.js:54，本仓喂 hook 第二常见写法）
+  //     ② `const args = [NUDGE]; …, args`（tests/dead-gates.tests.js:150-156）
+  //     ③ 方括号里跟了第二个实参（`--selfcheck` 那种）
+  //     ④ 脚本路径来自一个变量（喂副本的 mutation 写法）
+  //     ⑤ 第二实参另起一行（**本文件 gate() 自己就是这个排版**）
+  //     ⑥ `gate(payload, { script: NUDGE })` —— **`gate()` 就住在本文件里、就收 script 参数**，
+  //        指向 NUDGE 即第二出口，而正则一个字都看不见（当前无此调用点，已核实）
+  //   **「单文件内的写法就有 ≥7 种」这件事，正是 #129 那句「怎么机械识别一次 hook spawn，
+  //   没实测过误报率」的实测答卷 —— 答案是：文本这条路走不通。**
+  // ⇒ 换成**运行时恒等式**：模块顶部把 `child_process.spawnSync` 包一层，数「真 hook 这个
+  //   文件被 spawn 了几次」，与 `nudgeRaw` 自己的调用次数对齐：
+  //       真 hook 被 spawn 次数 === nudgeRaw 调用次数 + 探针显式登记的绕开次数
+  //
+  // **为什么是运行时而不是「把正则放宽」**（选型理由，本单要求写明）：
+  //   ㈠ 正则数的是**文本**，而写法空间是开放的 —— 补一种写法只是把漏报面挪一格。
+  //      本仓已经用 7 条真语料量到「单文件内 ≥7 种」，**补漏—再漏是结构性的**，
+  //      而每补一次都要重做一次误报评估（官侧条款 `#官抗-语料非自证`：
+  //      语料若由本轮发现的形态构造，只证得了「上一轮那些洞已补」）。
+  //   ㈡ 运行时数的是**动作**：换行、变量、`||` 兜底、经由 `gate()` 转手 —— 写法与它无关，
+  //      只要真的 spawn 了那个文件就会被数到。覆盖面不随代码风格变化。
+  //   ㈢ **误报评估**（本单关闭条件点名要的那一格）：正则的误报面是「长得像但不是」——
+  //      注释、测试数据、以及**描述它的那段散文**，这三层本文件**都真的被咬过**（记录见下）。
+  //      运行时判据是「`path.resolve` 之后是不是同一个文件」⇒ 长得像但不是那个文件的东西
+  //      一律不计，误报面塌缩到「那个文件真的被跑了」——**而那正是要数的东西本身**。
+  //      下面有一条负控钉着这一格：喂 hook 的**同名副本**不计数。
+  // ⚠ **它换来的漏报面，照直写**：运行时只看得见**真的被执行到**的 spawn。写在永不进入的
+  //   分支里的第二出口，它数不到（旧正则倒是数得到 —— 如果写法恰好对得上那一种）。
+  //   取这一边的理由：没被执行的出口在这一轮里弄不脏任何东西，而**执行了却看不见**
+  //   （旧正则 6/7 的那一面）恰恰是会造成危害的那一半。**两边都不是零漏报，别读成升级即免疫。**
+  // ⚠ 另一格射程：经由**探测替身**（下一节 #158 那个）跑起来的真 hook 是在**子进程的子进程**
+  //   里 spawn 的，本进程的包装层看不见 —— 那一路两边都不计，恒等式因此仍然平衡。
   {
-    // 🔴 **这条断言连着红了两次，两次都红在作者自己身上，留档**（2026-08-05）：
+    // 🔴 **旧判据留下的三层自伤记录，随代码带走**（2026-08-05，PR #145 三轮对抗最值钱的产物）：
     //   **第一次** —— 判别力那一半原先把合成 twin 写成一个**整串字面量**，而那个字面量
     //   就住在本文件里 ⇒ 计数 2、合成后 3。**检查器的测试数据落进了它自己的扫描面。**
-    //   **第二次** —— 改成运行时拼接之后仍然报 2。这一次的第二处命中是**那段注释本身**：
+    //   **第二次** —— 改成运行时拼接之后仍然报 2。第二处命中是**那段注释本身**：
     //   解释这个坑的时候，把那个字面量**原样抄进了注释里**。同一条病的第三层形态 ——
     //   ①代码 ②测试数据 ③**描述它的那段散文**。前两层 `dao-guard-writing` 第三条写到了，
     //   第三层是那次现长出来的：注释不参与执行，所以人不会把它算进"扫描面"，
     //   **而正则不区分代码与注释。**
-    //   ⇒ 两处都改为不含整串：合成串走运行时拼接，注释里一律不写那个整串，只描述它的形状。
-    //   ⚠ 值得单记一句：它**是红出来的，不是想出来的**。若当初把判别力那一半省掉，
-    //   剩下的「恰好 1 处」会安安静静地报 2，然后被当成"还有一处没收口"去找一个并不存在的
-    //   twin —— **一个把自己数进去的检查器，给出的错误方向是可信的那一种。**
-    const RE_EXIT = /spawnSync\(process\.execPath, \[NUDGE\]/g;
-    const selfSrc = fs.readFileSync(__filename, "utf8");
-    const n = (selfSrc.match(RE_EXIT) || []).length;
-    check("#129·防复发：本文件喂 nudge hook 的 spawnSync 出口恰好 1 处（唯一那处在 nudgeRaw 里）",
-      n === 1, `命中 ${n} 处（>1 = 又长出一个孪生兄弟；0 = 出口改了名，这条断言已失效，去改它）`);
-    // 判别力：把一个 twin 合成回去，计数必须变成 2。没有这一条，上面那条与
-    // 「正则根本匹配不到任何东西」在全绿输出里长得一模一样（零检出 ≠ 零存在）。
-    const SYNTH_TWIN = "\nconst _synthTwin = spawnSync(process.execPath, [" + "NUDGE], { encoding: \"utf8\" });\n";
-    check("判别力·合成一个孪生兄弟塞回去 ⇒ 计数变 2（证明这条断言真的看得见第二份）",
-      ((selfSrc + SYNTH_TWIN).match(RE_EXIT) || []).length === 2,
-      `合成后命中 ${((selfSrc + SYNTH_TWIN).match(RE_EXIT) || []).length} 处`);
-    // 并且证明拼接那一步真的绕开了自匹配：源码里那个**未拼接**的字面量不该被数进去。
-    check("判别力·合成串在源码里是拼出来的，本身不自匹配（否则上一条又会把自己数进去）",
-      (SYNTH_TWIN.match(RE_EXIT) || []).length === 1 && n === 1,
-      `合成串自身命中 ${(SYNTH_TWIN.match(RE_EXIT) || []).length}、源码命中 ${n}`);
+    //   ⚠ 它**是红出来的，不是想出来的**。若当初把判别力那一半省掉，剩下的「恰好 1 处」
+    //   会安安静静地报 2，然后被当成"还有一处没收口"去找一个并不存在的 twin ——
+    //   **一个把自己数进去的检查器，给出的错误方向是可信的那一种。**
+    //   同批还留下一格：对抗官把那条正则换成一个**永不命中**的正则，**头牌反而 PASS 了** ——
+    //   因为新正则匹配到了它自己那一行字面量，计数照样是 1。
+    //   **真正在守的从来不是头牌，是判别力那几条。**
+    //   ⇒ 换成运行时判据之后这三层**同时消失**（注释不参与执行，自然进不了扫描面）。
+    //   但那个形态本身别忘：**任何"读自己源码"的守护都自带这三层。**
 
-    // 🔴 **头牌那条断言在一种改坏形态下会自己顶上来，照记**（PR #145 对抗验证官实测）：
-    //   他把 `RE_EXIT` 换成一个永不命中的正则之后，**头牌 PASS 了** ——
-    //   因为那个新正则**匹配到了它自己那一行正则字面量**，`n` 照样是 1。
-    //   ⇒ 真正在守这件事的是上面那两条判别力断言，**不是头牌**。
-    //   **哪天有人嫌它们啰嗦而删掉，头牌会在多种改坏形态下静静地绿着。** 这三条是一组，别拆。
+    // 主断言：到这一行为止，真 hook 的每一次 spawn 都经由 nudgeRaw。
+    check("#129·防复发：真 hook 的每一次 spawn 都经由 nudgeRaw（运行时恒等式）",
+      NUDGE_SPAWNS === NUDGE_RAW_CALLS + NUDGE_DECLARED_BYPASS,
+      `spawns=${NUDGE_SPAWNS} nudgeRaw=${NUDGE_RAW_CALLS} 已登记绕开=${NUDGE_DECLARED_BYPASS}`);
+
+    // 判别力①：一次**未登记**的绕开必须当场把恒等式打破。
+    // 这里刻意用旧正则**看不见**的那个写法（方括号里跟第二个实参），一石二鸟。
+    const s0 = NUDGE_SPAWNS, r0 = NUDGE_RAW_CALLS;
+    spawnSync(process.execPath, [NUDGE, "--selfcheck"], { encoding: "utf8" });
+    check("判别力·绕开 nudgeRaw 直接 spawn 真 hook ⇒ 恒等式当场失衡（旧正则对这个写法失明）",
+      NUDGE_SPAWNS === s0 + 1 && NUDGE_RAW_CALLS === r0 &&
+      NUDGE_SPAWNS !== NUDGE_RAW_CALLS + NUDGE_DECLARED_BYPASS,
+      `spawns ${s0}→${NUDGE_SPAWNS}，nudgeRaw ${r0}→${NUDGE_RAW_CALLS}`);
+    NUDGE_DECLARED_BYPASS += 1;   // 本次是探针刻意为之，登记后恒等式复衡
+
+    // 判别力②·**7 条真语料逐条过计数器**。
+    // 🔑 **语料非自证**：这 7 条逐字取自本仓真实 spawn 站点（出处行号写在每条标签里），
+    //   不是照着本判据的实现造出来的 —— 官侧条款 `#官抗-语料非自证` 点名的就是这一格。
+    //   旧正则对它们 1/7；下面这条断言要求 7/7。
+    const corpus = [];
+    const tally = (label, fn) => {
+      const s = NUDGE_SPAWNS;
+      fn();
+      const d = NUDGE_SPAWNS - s;
+      NUDGE_DECLARED_BYPASS += d;   // 语料探针都是刻意绕开，逐条登记，收尾恒等式才平得回来
+      corpus.push([label, d]);
+    };
+    tally("① [opts.script || NUDGE]（出处 tests/dao-tool-nudge.tests.js:54）", () => {
+      const opts = {};
+      spawnSync(process.execPath, [opts.script || NUDGE], { input: "{}", encoding: "utf8" });
+    });
+    tally("② const args = [NUDGE]; …, args（出处 tests/dead-gates.tests.js:150-156）", () => {
+      const args = [NUDGE];
+      spawnSync(process.execPath, args, { input: "{}", encoding: "utf8" });
+    });
+    tally("③ 方括号里跟第二个实参（出处 本文件 --selfcheck 那一节的同形写法）", () => {
+      spawnSync(process.execPath, [NUDGE, "--selfcheck"], { encoding: "utf8" });
+    });
+    // ⚠ ④ 的原出处那个变量装的是**副本**；这里把它绑成真 hook，验的是「路径来自一个变量」
+    //   这个**写法**（那才是旧正则失明的原因）。副本本身刻意**不**计数，见下面那条负控。
+    tally("④ 脚本路径来自一个变量（出处 喂 hook 副本的 mutation 写法）", () => {
+      const script = NUDGE;
+      spawnSync(process.execPath, [script], { input: "{}", encoding: "utf8" });
+    });
+    tally("⑤ 第二实参另起一行（出处 本文件 gate() 的排版）", () => {
+      spawnSync(
+        process.execPath,
+        [NUDGE],
+        { input: "{}", encoding: "utf8" });
+    });
+    tally("⑥ gate(payload, { script: NUDGE })（gate() 就住在本文件里、就收 script 参数）", () => {
+      gate({ tool_name: "Bash", tool_input: { command: "echo hi" } }, { script: NUDGE });
+    });
+    tally("⑦ [NUDGE].concat(args || [])（7 条里旧正则唯一数得到的那一条，回归）", () => {
+      const extra = null;
+      spawnSync(process.execPath, [NUDGE].concat(extra || []), { input: "{}", encoding: "utf8" });
+    });
+    const counted = corpus.filter(([, d]) => d === 1).length;
+    for (const [label, d] of corpus) if (d !== 1) console.log(`  （语料没被数到：${label} → Δ=${d}）`);
+    check("#159·7 条真语料逐条过运行时计数器，7/7 被数到（旧正则 1/7）",
+      counted === 7 && corpus.length === 7,
+      corpus.map(([l, d]) => `${l.slice(0, 1)}Δ${d}`).join(" "));
+
+    // 负控 · 射程边界与误报评估：喂 hook 的**同名副本**不该被数进来。
+    // 这一条是上一条的**误伤反例**：判据是「resolve 之后是不是同一个文件」，不是「名字像不像」。
+    // 副本刻意放进一棵**同构的假树**（`…/ccswitch/hooks/`）：hook 自己的 `ROOT` 是
+    // `path.resolve(__dirname, "..", "..")` 算出来的，只有摆成同样深度，副本的 `ROOT` 才真的
+    // 落在别处、去重表也就跟着落在别处 —— 那正是「它是另一码事（而且更安全）」这句话的依据。
+    // ⚠ 摆在 `TMP` 顶层不行：那样 `ROOT` 恰好还是本仓根，上面这句话就成了一句没验过的断言。
+    const twinDir = path.join(TMP, "copytree", "ccswitch", "hooks");
+    fs.mkdirSync(twinDir, { recursive: true });
+    const twinCopy = path.join(twinDir, "dao-tool-nudge.js");   // 同名、同内容、不同路径
+    fs.copyFileSync(NUDGE, twinCopy);
+    const s1 = NUDGE_SPAWNS;
+    spawnSync(process.execPath, [twinCopy], { input: "{}", encoding: "utf8" });
+    check("负控·同名不同路径的副本不计数（判据是同一个文件，不是名字像不像）",
+      NUDGE_SPAWNS === s1, `Δ=${NUDGE_SPAWNS - s1}`);
   }
 
   // ── #129·那半个修复本身要有断言守着（PR #145 对抗验证官带账项）─────────────
@@ -1492,33 +1684,157 @@ console.log("\n──── 乙类 · dao-tool-nudge 直推主干分支（提醒
   // **为什么那三条 canary 断言（canary 没动 / 沙箱顶层没多文件）挡不住**：cwd 被摘掉之后，
   //   脏东西落在**真仓**而不是沙箱里，而**没有任何断言在看真仓** —— 沙箱当然还是干净的。
   //   这是「零检出 ≠ 零存在」的又一形态：**断言看的地方，恰恰是脏东西离开的地方。**
-  // ⇒ 补一组**文本**断言，直接钉住那三样东西还在（与「出口恰好 1 处」同型）。
+  // ⇒ 补一组断言，直接钉住那三样东西还在。
   //   眼下 `dao-tool-nudge.js` 的 `_tmp/` 扫描面在 master 上还不存在，所以这不是在止血；
-  //   **它是给 #108 落地那一天准备的** —— 那一刻这三条 mutation 就是三个真缺陷。
+  //   它是纵深防御（PR #156 已订正：受益人**不是** #108 —— #108 对缺 cwd 是 fail-closed，
+  //   且那条路读 payload、不用 `process.cwd()` 兜底，落地只会让缺 cwd 的站点不跑扫描）。
+  //
+  // 🔴 **2026-08-06（issue #158）：这组从「扫源码文本」换成「问 hook 实际收到了什么」。**
+  //   上一版是三条**文本**断言（正则扫 `nudgeRaw` 函数体）。PR #156 对抗官拿 19 个变异体
+  //   一跑，**6 发全绿**，而他的探测替身证明这 6 发**都真的改变了行为**：
+  //     · st-comment（STATE 那行整个注释掉）        ⇒ env 变量 ABSENT
+  //     · st-notconsumed（键被覆写成 undefined）    ⇒ env 变量 ABSENT
+  //     · p-cwd-blockcomment（块注释包住，字面仍在）⇒ payload.cwd ABSENT
+  //     · p-cwd-suffix（cwd 指向 …_ELSEWHERE，正则无尾边界）⇒ cwd 指向别处
+  //     · s-cwd-dupkey（保留字面、其后补一个 `cwd: undefined`，后写者赢）
+  //         ⇒ **process.cwd() 回到开发者真仓根 —— 正是 #129 要修的那个原病**，478 条一条没红
+  //     · sandbox-redirect（只把沙箱这个名字指向别处）⇒ 三样全部离开沙箱
+  //   **文本断言只对「移除字面」这一种改坏有效** —— 官侧条款 `#官抗-改坏多形态` 讲的正是
+  //   这件事：改坏至少有 ①移除 ②保留字面但使其不执行 ③保留调用但结果不被消费 三向，
+  //   **文本匹配型守护对 ② 天然失明**，而 `s-cwd-dupkey` 是 ③ 的教科书样本。
+  // ⇒ 换成**行为级**：喂一个**探测替身**（它把实际收到的三元组记下来，再原样转调真 hook），
+  //   断言 hook **实际收到**的 payload.cwd / process.cwd() / DAO_TOOL_NUDGE_STATE
+  //   三样都指向沙箱。**正靶只换 `script` 一个参数、其余全走 `nudgeRaw` 的生产路径** ——
+  //   这一点是承重的：换多了就变成"在验一条我另外搭的路"。
   {
-    const selfSrc = fs.readFileSync(__filename, "utf8");
-    // 只取 nudgeRaw 那个函数体，避免把别处同名的东西数进来（检查器别扫自己不该扫的面）。
-    const body = (selfSrc.match(/function nudgeRaw\([\s\S]*?\n\}/) || [""])[0];
-    check("#129·守护：nudgeRaw 函数体真的被切出来了（切不出来下面三条就是恒真的废话）",
-      body.length > 100 && /spawnSync/.test(body), `切出 ${body.length} 字节`);
-    const guards = [
-      ["payload 里带 cwd（hook 判据读的是这个）", /JSON\.stringify\(\{[^}]*\bcwd: NUDGE_SANDBOX/],
-      ["spawnSync 带 cwd（hook 里任何 process.cwd\\(\\) 兜底读这个）", /^\s*cwd: NUDGE_SANDBOX,/m],
-      ["去重表被 DAO_TOOL_NUDGE_STATE 引开（它锚在 hook 自己的仓根，cwd 管不着）", /DAO_TOOL_NUDGE_STATE: NUDGE_STATE/],
+    // 探测替身：只做两件事 —— 记下实际收到的三元组、原样转调真 hook（不扰动其余断言）。
+    // 由本文件在运行期写出来、跑完随 TMP 一起删：不落进 tests/（那里的非 .tests.js 文件会被
+    // run-tests 报成 stray），也不需要有人记得让「盘上的替身」与「本文件的期望」保持同步。
+    const DETECT = path.join(TMP, "detect-nudge.js");
+    const OBS = path.join(TMP, "detect-obs.json");
+    fs.writeFileSync(DETECT, [
+      '// 由 tests/hard-gates.tests.js 运行期生成（issue #158 行为级守护的探测替身）。',
+      'const fs = require("fs"), { spawnSync } = require("child_process");',
+      'let raw = ""; try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}',
+      'let input = {}; try { input = JSON.parse(raw || "{}"); } catch (_) {}',
+      'fs.writeFileSync(process.env.DAO_NUDGE_OBS, JSON.stringify({',
+      '  payloadCwd: input && input.cwd === undefined ? null : input.cwd,',
+      '  processCwd: process.cwd(),',
+      '  envState: process.env.DAO_TOOL_NUDGE_STATE === undefined ? null : process.env.DAO_TOOL_NUDGE_STATE,',
+      '}), "utf8");',
+      'const r = spawnSync(process.execPath, [process.env.DAO_NUDGE_REAL], { input: raw, encoding: "utf8" });',
+      'if (r.stdout) process.stdout.write(r.stdout);',
+      'if (r.stderr) process.stderr.write(r.stderr);',
+      'process.exit(r.status == null ? 0 : r.status);',
+    ].join("\n") + "\n", "utf8");
+    const DETECT_ENV = { DAO_NUDGE_OBS: OBS, DAO_NUDGE_REAL: NUDGE };
+    const readObs = () => { try { return JSON.parse(fs.readFileSync(OBS, "utf8")); } catch (_) { return null; } };
+
+    // 判据只有一份，正靶与 6 个变异体共用。比的是**解析后的同一性**，不是字符串相等
+    // （避免尾斜杠/大小写这类无关差异冒充"守护失效"）。
+    const same = (a, b) => typeof a === "string" && typeof b === "string" && keyOf(a) === keyOf(b);
+    const intoSandbox = (o) => !!o && same(o.payloadCwd, NUDGE_SANDBOX) &&
+      same(o.processCwd, NUDGE_SANDBOX) && same(o.envState, NUDGE_STATE);
+
+    // ── 正靶：**完全走生产路径**，只把 script 换成替身 ──────────────────────────
+    fs.rmSync(OBS, { force: true });
+    nudgeRaw("git push origin main", "Bash", { script: DETECT, extraEnv: DETECT_ENV });
+    const real = readObs();
+    check("#129·守护①（行为级）：hook 实际收到的 payload.cwd 指向沙箱",
+      !!real && same(real.payloadCwd, NUDGE_SANDBOX), JSON.stringify(real));
+    check("#129·守护②（行为级）：hook 进程的 process.cwd() 指向沙箱（spawnSync 的 cwd 真送到了）",
+      !!real && same(real.processCwd, NUDGE_SANDBOX), JSON.stringify(real));
+    check("#129·守护③（行为级）：hook 实际读到的 DAO_TOOL_NUDGE_STATE 指向沙箱里的去重表",
+      !!real && same(real.envState, NUDGE_STATE), JSON.stringify(real));
+    // 🔴 **守护⓪：一个不随名字走的锚** —— 上面三条拿 `NUDGE_SANDBOX` 当期望值，
+    //   而对抗官的 `sandbox-redirect` 那一发改的**正是这个名字指向哪** ⇒ 期望值与实际值
+    //   一起挪走，等式照样成立。**名 vs 值：拿被改的那个东西当尺子，量不出它被改了。**
+    //   这一条改用一把**不会跟着挪**的尺子：`TMP` 由 `__dirname` 独立算出来，
+    //   而 #129 要防的那件事本身就是「hook 别落在真仓的工作面上」。
+    //   ⚠ 射程照直写：把沙箱重指到 `_tmp/hard-gates-tests/` **里面另一个目录**，这条不会红 ——
+    //   那是**等价变异体**（仍然完全隔离，造不成 #129 那个危害），不是漏网。
+    const underTmp = (p) => typeof p === "string" &&
+      keyOf(p) !== null && keyOf(p).startsWith(keyOf(TMP) + path.sep);
+    check("#129·守护⓪（锚不随名字走）：三样实际落点都在本测试的 _tmp 沙箱树下，且都不是真仓根",
+      !!real && underTmp(real.payloadCwd) && underTmp(real.processCwd) && underTmp(real.envState) &&
+      keyOf(real.processCwd) !== keyOf(REPO), JSON.stringify(real) + ` TMP=${TMP}`);
+
+    // ── 判别力：PR #156 那 6 发全绿的变异体，逐个必须被抓到 ─────────────────────
+    // 这里不去改源码文本，而是**直接把那 6 发各自的行为后果造出来再真跑一遍** ——
+    // 每一发都是真 spawn、真观测（对抗官那份实测表的「实际行为变化」那一列就是靶）。
+    // 好处是：常驻回归网里跑得起，不需要谁事后手工做一轮源码 mutation 才知道这组有没有判别力。
+    const ELSEWHERE = path.join(TMP, "nudge-elsewhere");
+    fs.mkdirSync(ELSEWHERE, { recursive: true });
+    // 「有害重指」那一发的落点：在真仓 `_tmp/` 下、但**不在** TMP 里 —— 既落得进 `.gitignore`
+    // 覆盖面（万一哪天 hook 真写了也不脏工作树），又能被 `underTmp` 判成「离开了沙箱树」。
+    const REDIRECT_PROBE_STATE = path.join(REPO, "_tmp", "adv158-redirect-probe.json");
+    // `runDetect` 是变异体专用的低层跑法：把 payload.cwd / spawnSync 的 cwd / env 三者
+    // **解耦**（`nudgeRaw` 里它们由同一个 sandbox 派生，改不出 dupkey 那种「只坏一样」的形态）。
+    // 它与生产路径是否等价，由下面那条「基线与生产路径逐字段相同」的断言钉着 —— 不靠人眼比对。
+    function runDetect(m = {}) {
+      const payload = {
+        tool_name: "Bash",
+        session_id: "hard-gates-tests",
+        tool_input: { command: "git push origin main" },
+      };
+      if (!m.dropPayloadCwd) payload.cwd = m.payloadCwd || NUDGE_SANDBOX;
+      const env = { ...process.env, ...DETECT_ENV };
+      if (m.dropState) delete env.DAO_TOOL_NUDGE_STATE;
+      else env.DAO_TOOL_NUDGE_STATE = m.state || NUDGE_STATE;
+      fs.rmSync(OBS, { force: true });
+      spawnSync(process.execPath, [DETECT], {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        cwd: m.spawnCwd || NUDGE_SANDBOX,
+        env,
+      });
+      return readObs();
+    }
+    // ⚠ 这一条是上面那句「换多了就变成在验另一条路」的机器化：变异体跑法的**未改坏基线**
+    //   必须与生产路径观测到的三元组逐字段相同，否则下面 6 发抓到的是别人的病。
+    const baseObs = runDetect({});
+    check("判别力·变异体跑法的未改坏基线与生产路径（nudgeRaw）观测到的三元组逐字段相同",
+      !!baseObs && !!real && JSON.stringify(baseObs) === JSON.stringify(real),
+      `base=${JSON.stringify(baseObs)} real=${JSON.stringify(real)}`);
+    const MUTANTS = [
+      ["st-comment（STATE 那行整个注释掉）⇒ env ABSENT", { dropState: true }],
+      ["st-notconsumed（键被覆写成 undefined）⇒ env ABSENT（与上一发同一个可观测后果）", { dropState: true }],
+      ["p-cwd-blockcomment（块注释包住，字面仍在）⇒ payload.cwd ABSENT", { dropPayloadCwd: true }],
+      ["p-cwd-suffix（cwd 指向别处，旧正则无尾边界）⇒ payload.cwd 离开沙箱", { payloadCwd: ELSEWHERE }],
+      // ⚠ 这一发把 hook 的 cwd 摆回真仓根 —— 那正是 #129 的原病。**安全性照直说**：喂的是
+      //   `tool_name: "Bash"`，而 hook 在这条路上只读不写（写盘只在浏览器 MCP 那一支，
+      //   且此处 env 仍指向沙箱），故复现原病不会真的弄脏仓库。
+      ["s-cwd-dupkey（后写者赢）⇒ process.cwd() 回到真仓根（#129 原病，478 条曾一条没红）", { spawnCwd: REPO }],
+      ["sandbox-redirect（沙箱这个名字整个指向别处）⇒ 三样全部离开沙箱",
+        { payloadCwd: ELSEWHERE, spawnCwd: ELSEWHERE, state: path.join(ELSEWHERE, "tool-nudge-seen.json") }],
+      // 第 7 发是本批加的，不在对抗官那 6 发里：**它是「守护⓪ 存在的理由」的靶**。
+      // 上面那发 sandbox-redirect 是在**运行期**注入的，期望值（NUDGE_SANDBOX）没跟着挪，
+      // 所以 ①②③ 抓得到；但在**源码级**做同一发改动时期望值会一起挪走 ⇒ ①②③ 全部失明。
+      // 这一发把落点摆到真仓根上，专门验那把不随名字走的尺子。
+      ["sandbox-redirect·有害变体（落点摆回真仓根）⇒ 只有守护⓪ 那把不随名字走的尺子抓得到",
+        { payloadCwd: REPO, spawnCwd: REPO, state: REDIRECT_PROBE_STATE }],
     ];
-    for (const [name, re] of guards) {
-      check(`#129·守护：${name}`, re.test(body), `在 nudgeRaw 函数体里没找到 ${re}`);
-    }
-    // 判别力：逐条把它从副本里摘掉，对应断言必须变红。**没有这一步，上面三条与
-    // 「正则写错了永远匹配不到」在全绿输出里长得一模一样** —— 而那正是那一轮被逮住的病。
+    // 判「这一发被抓到了没有」用的是**四条守护的合取** —— 与上面那四条 check 同一套判据。
+    const fullyGuarded = (o) => intoSandbox(o) && !!o &&
+      underTmp(o.payloadCwd) && underTmp(o.processCwd) && underTmp(o.envState) &&
+      keyOf(o.processCwd) !== keyOf(REPO);
     let killed = 0;
-    for (const [name, re] of guards) {
-      const stripped = body.replace(re, "");
-      if (stripped !== body && !re.test(stripped)) killed++;
-      else console.log(`  （判别力探针：摘掉「${name}」之后断言仍为真 ⇒ 该条无判别力）`);
+    for (const [name, m] of MUTANTS) {
+      const o = runDetect(m);
+      if (!fullyGuarded(o)) killed++;
+      else console.log(`  （判别力探针：变异体「${name}」没被抓到 ⇒ 这组守护对它失明 → ${JSON.stringify(o)}）`);
     }
-    check("判别力·三条守护逐条摘掉后都真的会红（不是三条恒真的断言）",
-      killed === guards.length, `${killed}/${guards.length} 条可被证伪`);
+    // 顺手证一格：上面那发把落点摆回真仓根时，hook **没有**在真仓里写下任何东西 ——
+    // 喂的是 Bash，而写盘那条路只在浏览器 MCP 工具名下走。复现原病没有真的弄脏仓库。
+    check("负控·复现「落点回真仓根」那一发时，真仓侧那个落点文件并未被创建（Bash 路只读）",
+      !fs.existsSync(REDIRECT_PROBE_STATE), REDIRECT_PROBE_STATE);
+    fs.rmSync(REDIRECT_PROBE_STATE, { force: true });
+    check("判别力·PR #156 那 6 发「文本断言全绿」的变异体 + 1 发有害重指，行为级守护逐个抓到",
+      killed === MUTANTS.length, `${killed}/${MUTANTS.length} 发被抓到`);
+    // 负控：**没被改坏**的那一发必须仍判「三样都在沙箱里」—— 否则上面那条是恒真的（什么都抓）。
+    // 这就是「改坏必须变红」的另一半：不改坏必须**不**红。
+    check("负控·未改坏的那一发仍判为「三样都在沙箱里」（否则上一条抓的是空气）",
+      intoSandbox(baseObs), JSON.stringify(baseObs));
   }
 }
 
@@ -1799,6 +2115,27 @@ console.log("\n──── 兜底：无关输入一律不拦 ────");
   for (const [name, p] of harmless) check(`负控：${name} → exit 0`, gate(p).code === 0, `code=${gate(p).code}`);
   const r = spawnSync(process.execPath, [HOOK], { input: "这不是 JSON{{{", encoding: "utf8" });
   check("负控：喂垃圾输入 → exit 0（放行，不因解析失败拦人）", r.status === 0, `code=${r.status}`);
+}
+
+console.log("\n──── #159 · 收尾复核：运行时出口恒等式 ────");
+{
+  // 🔑 **为什么这一组在文件最末尾，而不是留在 G6 那一节里**：判据放在中间，它守的就只是
+  //   它上面那一半 —— **后来人往文件下半截加的调用点会安安静静地落在射程之外**，
+  //   而"射程就是写下的那个边界"是本仓反复记的形态。放这里，整份文件都在里面。
+  check("#159·收尾：整份文件跑完，真 hook 的 spawn 次数 === nudgeRaw 调用次数 + 已登记绕开",
+    NUDGE_SPAWNS === NUDGE_RAW_CALLS + NUDGE_DECLARED_BYPASS,
+    `spawns=${NUDGE_SPAWNS} nudgeRaw=${NUDGE_RAW_CALLS} 已登记绕开=${NUDGE_DECLARED_BYPASS}`
+    + "（差额 > 0 = 有出口没走 nudgeRaw；差额 < 0 = 登记数虚高，探针的账记错了）");
+  // 🔴 **计数器自己的存活证明（`#官抗-变异体存活` 的同一格）**：恒等式在「计数器恒 0」时
+  //   同样成立 —— 而 0 === 0 与「密不透风」在全绿输出里逐字节相同。最容易造成恒 0 的写法
+  //   就是把 `const { spawnSync } = childProcess` 挪到 patch 之前（模块顶部有告警）。
+  //   **读恒等式之前，先回答「这一轮它真的数到过东西吗」。**
+  check("#159·收尾：本轮真的数到过 spawn（计数器不是恒 0 —— 零检出 ≠ 零存在）",
+    NUDGE_SPAWNS > 0 && NUDGE_RAW_CALLS > 0 && NUDGE_DECLARED_BYPASS > 0,
+    `spawns=${NUDGE_SPAWNS} nudgeRaw=${NUDGE_RAW_CALLS} 已登记绕开=${NUDGE_DECLARED_BYPASS}`);
+  // 并且证明那层包装确实还挂着（有人把它摘了、或被别的模块覆盖回去，这里会红）。
+  check("#159·收尾：spawnSync 上那层计数包装仍然挂着（没被谁摘掉或覆盖回原函数）",
+    childProcess.spawnSync !== _realSpawnSync && spawnSync !== _realSpawnSync);
 }
 
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
