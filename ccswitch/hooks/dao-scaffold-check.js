@@ -455,7 +455,14 @@ function clauseTargets(daoRoot) {
     // 台账搬进 clause-ledger.json 之后，一条条款可以只有 `[#…]` 而没有 `[n=` ——
     // 仍按 `[n=` 筛的话，那种文件会**整份从被检清单里消失**，而消失是静默的
     // （正是本函数上面那段注释说的那个代价，只是换了触发方式）。
-    try { hit = /\[n=|\[基线:|\[自定@|\[#[^\]\s]+\]/.test(fs.readFileSync(path.join(dir, n), "utf8")); }
+    // v3（2026-08-07）：`\[自定@` 收紧为 `\[自定@\d` —— 真标记形态是 `[自定@<月日>]`，
+    // `@` 后必跟数字；不带数字的 `[自定@]` 只出现在**谈论**这个语法的散文里。
+    // 实证：dao-change-batch.md（纯流程文件）仅因一句「与 `[自定@]` 回溯面同构」的引用
+    // 被拉进扫描面，Marked 下零选中 ⇒ zero-sample 恒红——「提及」被当成了「使用」。
+    // 收紧前全域摸底（rules/ 全量 14 份）：清单变化仅 dao-change-batch.md 一份移出，
+    // 其余 5 份真条款文件均另命中 n=/基线/slug 支，零误伤。其余三支刻意不动：
+    // `[n=`/`[基线:` 的引用与合法样例难以形态区分，slug 支同理——收不紧的不硬收。
+    try { hit = /\[n=|\[基线:|\[自定@\d|\[#[^\]\s]+\]/.test(fs.readFileSync(path.join(dir, n), "utf8")); }
     catch { hit = false; }
     if (hit) { targets.push(path.join("ccswitch", "rules", n)); withClauses++; }
   }
