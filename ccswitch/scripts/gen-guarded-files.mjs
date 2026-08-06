@@ -125,7 +125,13 @@ function fromJoinPath(text) {
 }
 
 // require("../ccswitch/lib/hook-budget") 不带扩展名 ⇒ 按 node 的解析顺序补一次。
-// 只认文件，不认目录：`path.join(root, "ccswitch", "hooks")` 这类夹具目录在这里被挡掉。
+// 两道门，**别把它们的功劳记混**（2026-08-07 订正：此处原举 `path.join(root, "ccswitch", "hooks")`
+// 为 `.isFile()` 的例子，那是错的 —— 那个串挡在**上一行**的 OWNED_DIRS 上，因为
+// `"ccswitch/hooks"` 不以 `"ccswitch/hooks/"`（带尾斜杠）开头，`.isFile()` 根本没轮到）：
+//   · OWNED_DIRS 挡的是**四类目录本身与它们之外的一切**；
+//   · `.isFile()` 挡的是**四类目录之下的子目录** —— 前缀过得了、盘上也 stat 得到，
+//     只有「是文件吗」这一问拦得住它。真仓里这一格由 `ccswitch/templates/ISSUE_TEMPLATE`
+//     兜着，回归网 §②/§⑦-E 另造了同形的合成样本（真仓那一侧是偶然，不该当判别力来源）。
 function resolveOwnedFile(repoRoot, rel) {
   if (!OWNED_DIRS.some((d) => rel.startsWith(d))) return null;
   for (const cand of [rel, rel + ".js", rel + ".mjs", rel + ".cjs"]) {

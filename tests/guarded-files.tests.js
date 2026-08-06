@@ -10,6 +10,12 @@
 // 口径的每一格（仓根变量 vs 夹具变量 / owned 目录 / 文件 vs 目录 / 有没有 mutation）
 // 在真仓里都**只有一侧有样本**，两侧齐全的语料只能自己造。真仓那一侧另有一组冒烟断言
 // （§⑤），它答的是另一个问题：「盘上那份清单此刻是不是最新的」。
+// ⚠ **「每一格两侧都有样本」这句话在首版里是不成立的**（2026-08-07 对抗验证官实测，本轮返修）：
+// 「文件 vs 目录」那一格的**目录侧**当时合成语料里根本没有 —— 去掉生成器的 `.isFile()`，
+// 只有 §⑤ 那条真仓 `--check` 会红，而它是靠真仓恰好有 `ccswitch/templates/ISSUE_TEMPLATE`
+// 这个目录**偶然**兜住的。现已补上同形的合成样本（见 makeRepo 与 §⑦ 判据 E），
+// 那句话才对得上。**教训不是「再声明一次每格都有」**：这类自陈句应当由一组能红的
+// mutation 来兑现，而不是由写它的人来担保。
 //
 // ── mutation 覆盖（照 dao-officer-clauses 对抗验证官节「改坏多形态」）────────
 // 每个承重判据都跑**三形态 + 反向**：①移除 ②保留字面但不执行 ③保留调用但结果不被消费；
@@ -64,23 +70,36 @@ const PRISTINE_HOOK = sha(HOOK);
 // 造完之后**期望清单是确定的 3 个文件**，下面每条断言都是对这个期望的一个切面。
 function makeRepo(tag) {
   const root = path.join(TMP, tag);
-  // 被测源：三个该进清单的 + 三个不该进的
+  // 被测源：三个该进清单的 + 五个不该进的。
+  // 🔴 **三个"不该进"的理由各给一个自己的文件，刻意不共用**（2026-08-07 返修）：
+  // 它们此前全指向 `dao-nomut.js` 一个文件，于是三条负控断言共用同一个谓词 ——
+  // **同生同死**，一起绿一起红，任何一条真的失守时另外两条也跟着红，分不出坏在哪一格。
   w(path.join(root, "ccswitch", "hooks", "dao-alpha.js"), "// alpha\n");
   w(path.join(root, "ccswitch", "lib", "beta.js"), "// beta\n");
   w(path.join(root, "ccswitch", "templates", "check-gamma.mjs"), "// gamma\n");
-  w(path.join(root, "ccswitch", "hooks", "dao-nomut.js"), "// 没有 mutation 测试守它\n");
+  w(path.join(root, "ccswitch", "hooks", "dao-nomut.js"), "// 只被一份「无 mutation」的测试声明\n");
+  w(path.join(root, "ccswitch", "hooks", "dao-fixture.js"), "// 只被夹具形态 path.join(root, …) 声明\n");
+  w(path.join(root, "ccswitch", "hooks", "dao-helperonly.js"), "// 只被非 *.tests.* 的 helper.js 声明\n");
   w(path.join(root, "ccswitch", "skills", "dao-thing", "SKILL.md"), "# 不在四类 owned 目录里\n");
   w(path.join(root, "ccswitch", "dao.md"), "# 不在四类 owned 目录里\n");
+  // owned 目录**之下的子目录**（盘上真实存在）。这一格是 `.isFile()` 的**唯一**语料：
+  // 它的前缀过得了 OWNED_DIRS（`ccswitch/templates/` 带尾斜杠），路径也真的 stat 得到，
+  // 挡住它的只剩「是文件不是目录」这一问。真仓靠 `ccswitch/templates/ISSUE_TEMPLATE`
+  // **偶然**兜住了同一格 —— 偶然的样本不该是判别力的来源，故合成语料自己造一个同形的。
+  w(path.join(root, "ccswitch", "templates", "ISSUE_TEMPLATE", "bug.yml"), "# 子目录里的文件\n");
 
   const tests = path.join(root, "tests");
   // ① 含 mutation + 以仓根变量声明 ⇒ 进清单
   w(path.join(tests, "alpha.tests.js"), [
     'const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-alpha.js");',
     'const mutant = src.replace("x", "y");',
-    // 夹具写入：第一个参数是 root（不是仓根变量）⇒ 这一条不该把 dao-nomut.js 拖进清单
-    'w(path.join(root, "ccswitch", "hooks", "dao-nomut.js"), "stub");',
-    // 目录不该进（它不是文件）
+    // 夹具写入：第一个参数是 root（不是仓根变量）⇒ 这一条不该把 dao-fixture.js 拖进清单
+    'w(path.join(root, "ccswitch", "hooks", "dao-fixture.js"), "stub");',
+    // owned 目录**本身**不该进 —— 挡住它的是 OWNED_DIRS 的尾斜杠（"ccswitch/hooks" 不以
+    // "ccswitch/hooks/" 开头），**不是** `.isFile()`；`.isFile()` 那一格由下一行负责
     'fs.mkdirSync(path.join(REPO, "ccswitch", "hooks"), { recursive: true });',
+    // owned 目录**之下的子目录**：前缀过得了 OWNED_DIRS、盘上也真实存在 ⇒ 只有 `.isFile()` 挡得住
+    'const T = path.join(REPO, "ccswitch", "templates", "ISSUE_TEMPLATE");',
     // 非 owned 目录不该进
     'const S = path.join(REPO, "ccswitch", "skills", "dao-thing", "SKILL.md");',
     'const D = path.join(REPO, "ccswitch", "dao.md");',
@@ -103,7 +122,7 @@ function makeRepo(tag) {
   ].join("\n"));
   // ⑤ 非测试文件：同样的内容，但文件名不是 *.tests.* ⇒ 整份不该被扫
   w(path.join(tests, "helper.js"), [
-    'const N = path.join(REPO, "ccswitch", "hooks", "dao-nomut.js");',
+    'const N = path.join(REPO, "ccswitch", "hooks", "dao-helperonly.js");',
     'const mutant = src.replace("a", "b");',
   ].join("\n"));
   return root;
@@ -137,16 +156,20 @@ console.log("\n──── ② 生成器口径 · 负控 / 已知边界（每�
 {
   const doc = JSON.parse(fs.readFileSync(path.join(repoA, "ccswitch", "guarded-files.json"), "utf8"));
   const got = doc.files.map((x) => x.file);
+  // 🔴 **每条负控用一个只属于它的谓词**（2026-08-07 返修）：三条此前都写
+  // `!got.includes("ccswitch/hooks/dao-nomut.js")` —— 同生同死，验不出是哪一格失守。
   check("负控：夹具路径不进清单（path.join(root, …) 的首参不是仓根变量）",
-    !got.includes("ccswitch/hooks/dao-nomut.js"), JSON.stringify(got));
-  check("负控：目录不进清单（ccswitch/hooks 本身被声明过）",
+    !got.includes("ccswitch/hooks/dao-fixture.js"), JSON.stringify(got));
+  check("负控：owned 目录**本身**不进清单 —— 挡它的是 OWNED_DIRS 的尾斜杠，不是 .isFile()",
     !got.includes("ccswitch/hooks"), JSON.stringify(got));
+  check("🔴 负控：owned 目录**之下的子目录**不进清单 —— 这一格挡它的才是 .isFile()（前缀与 stat 都过得了）",
+    !got.includes("ccswitch/templates/ISSUE_TEMPLATE"), JSON.stringify(got));
   check("负控：四类 owned 目录之外不进（skills/ 与 dao.md 都被声明过）",
     !got.some((f) => f.startsWith("ccswitch/skills")) && !got.includes("ccswitch/dao.md"), JSON.stringify(got));
   check("负控：非 *.tests.* 文件整份不扫（helper.js 里同时有声明与 mutation）",
-    !got.includes("ccswitch/hooks/dao-nomut.js"));
+    !got.includes("ccswitch/hooks/dao-helperonly.js"), JSON.stringify(got));
   check("已知边界：有守卫但那份守卫不做 mutation ⇒ 不进清单（这是口径的推论，不是 bug）",
-    !got.includes("ccswitch/hooks/dao-nomut.js"));
+    !got.includes("ccswitch/hooks/dao-nomut.js"), JSON.stringify(got));
 }
 
 console.log("\n──── ③ --check 三态 + 幂等 + 行尾容忍 ────");
@@ -346,10 +369,12 @@ console.log("\n──── ⑦ mutation 判别力 · 生成器（三形态 + �
   const ROOTVAR_LINE = 'if (!ROOT_VAR.test(m[1])) continue;';
   const OWNED_LINE = 'if (!OWNED_DIRS.some((d) => rel.startsWith(d))) return null;';
   const MUT_CALL = 'if (!hasMutation(text, m[1])) continue;';
+  const ISFILE_LINE = 'if (fs.statSync(path.join(repoRoot, cand)).isFile()) return cand;';
   check("靶点①：ROOT_VAR 门在源码里出现 2 次（JS 一处 + PS 一处，两处都要被验到）",
     src.split(ROOTVAR_LINE).length - 1 === 2, String(src.split(ROOTVAR_LINE).length - 1));
   check("靶点②：OWNED_DIRS 门唯一存在", src.split(OWNED_LINE).length === 2);
   check("靶点③：hasMutation 调用点唯一存在", src.split(MUT_CALL).length === 2);
+  check("靶点④：.isFile() 门唯一存在", src.split(ISFILE_LINE).length === 2, String(src.split(ISFILE_LINE).length - 1));
 
   const mutGen = (tag, body) => w(path.join(TMP, "mut", tag + ".mjs"), body);
   const repoM = makeRepo("repoM");
@@ -433,6 +458,48 @@ console.log("\n──── ⑦ mutation 判别力 · 生成器（三形态 + �
       r.code === 5, JSON.stringify(r.marker) + r.out.slice(0, 200));
     check("C2b：塌陷时不写盘（这一条与 §④ 同判据，换个入口再验一次）",
       !fs.existsSync(path.join(TMP, "mut", "C2b.json")));
+  }
+
+  // ── 判据 D：.isFile() 门（owned 目录下的子目录不该进清单）───────────────────
+  // 🔴 **这一组 2026-08-07 返修时才补上**，此前合成语料里根本没有「owned 目录下的子目录」
+  // 这个形态 ⇒ 去掉 `.isFile()` 只有 §⑤ 那条**真仓** `--check` 会红，而真仓那一侧是靠
+  // `ccswitch/templates/ISSUE_TEMPLATE` **偶然**存在才兜住的。判别力不该建立在偶然上。
+  {
+    // ①移除：statSync 返回的对象恒真 ⇒ 目录也算数
+    const m = mutGen("E1-remove", src.split(ISFILE_LINE).join('if (fs.statSync(path.join(repoRoot, cand))) return cand;'));
+    const r = runGen(["--repo", repoM, "--quiet", "--out", path.join(TMP, "mut", "E1.json")], m);
+    check("E1 canary：变异体仍算得出文件（不是把靶弄死了）", filesOf(r) > 0, JSON.stringify(r.marker));
+    check("🔴 E1（①移除 .isFile()）⇒ ISSUE_TEMPLATE 这个子目录混进清单，负控断言变红",
+      filesOf(r) === 4, JSON.stringify(r.marker));
+  }
+  {
+    // ②保留字面但不执行：整行注释掉、另写一行只判存在
+    const m = mutGen("E2-comment", src.split(ISFILE_LINE).join(
+      "// " + ISFILE_LINE + "\n      if (fs.existsSync(path.join(repoRoot, cand))) return cand;"));
+    const r = runGen(["--repo", repoM, "--quiet", "--out", path.join(TMP, "mut", "E2.json")], m);
+    check("E2 canary：变异体仍算得出文件", filesOf(r) > 0, JSON.stringify(r.marker));
+    check("E2（②注释掉，字面仍在）⇒ 同样变红（文本匹配型守护对这一形态天然失明）",
+      filesOf(r) === 4, JSON.stringify(r.marker));
+  }
+  {
+    // ③保留调用与副作用（statSync 抛异常那一支仍在），但 .isFile() 的答案没人听
+    const m = mutGen("E3-void", src.split(ISFILE_LINE).join(
+      'fs.statSync(path.join(repoRoot, cand)).isFile(); return cand;'));
+    const r = runGen(["--repo", repoM, "--quiet", "--out", path.join(TMP, "mut", "E3.json")], m);
+    check("E3 canary：变异体仍算得出文件", filesOf(r) > 0, JSON.stringify(r.marker));
+    check("E3（③调用还在、结果没人听）⇒ 同样变红（「门的答案有没有人听」这一向）",
+      filesOf(r) === 4, JSON.stringify(r.marker));
+  }
+  {
+    // 反向：把门**翻过来**（只认目录）⇒ 三个正控文件全掉出、只剩那个子目录 ⇒ 正控断言变红。
+    // 刻意不选「恒真」做反向：恒真与 ①移除 是同一个红集，量不出新东西。
+    const m = mutGen("E4-flip", src.split(ISFILE_LINE).join(
+      'if (fs.statSync(path.join(repoRoot, cand)).isDirectory()) return cand;'));
+    const r = runGen(["--repo", repoM, "--quiet", "--out", path.join(TMP, "mut", "E4.json")], m);
+    check("E4 canary：变异体仍跑得起来且**没有塌陷**（翻门不是弄死，自检不该 exit 5）",
+      r.code === 0 && filesOf(r) === 1, JSON.stringify(r.marker));
+    check("E4（反向·门翻成只认目录）⇒ 三条正控断言全红（期望的 3 个文件一个不剩）",
+      filesOf(r) === 1, JSON.stringify(r.marker));
   }
 
   check("canary 恒等：整个 mutation 过程 gen-guarded-files.mjs 逐字节没动过", sha(GEN) === PRISTINE_GEN);
