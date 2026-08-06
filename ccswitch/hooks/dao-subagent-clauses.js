@@ -24,10 +24,14 @@
 //      「对话最开头、第一个 prompt 之前」；**单个值超过 10,000 字符时宿主改为落文件 + 给一段预览**。
 //      本机 cli.js 里没找到那个 10,000 的实现点，所以这一条**只有文档依据、无本机实证**；
 //      本 hook 一律把注入控制在 MAX_CONTEXT_CHARS（默认 9000）以内 —— 两种行为下都安全的那一侧。
-//   ❌ **未实测：真实 session 里跑一次**。要跑得先把本 hook 注册进 live settings.json，
-//      而那是硬闸 G2 拦下的用户动作（本批刻意不写 live / 不写 cc-switch DB，注册项 JSON 交 PR body）。
-//      ⇒ 「注册之后它真的响了」这句话，**现在没有人有资格说**。判据在 --selfcheck 的第②段：
-//      它只采信非 synthetic 的心跳记录，自测心跳不算数。
+//   ✅ **真实 session 里响过了（2026-08-07 实证，issue #162 回测批）**：注册已由用户完成，
+//      本机真实派单的 subagent 在开场收到本 hook 的注入，回报的末行是
+//      `CLAUSE_RENDER_SUMMARY exit=0 role=general general=70 role_clauses=0 stale=0`。
+//      **本行此前写作「未实测 / 现在没有人有资格说」，那句话自注册之日起即为假** —— 照直改，
+//      不删（留着这句话的来历，才看得出「未实测」是怎么一路滞后的）。判据仍在 --selfcheck 的
+//      第②段：它只采信非 synthetic 的心跳记录，自测心跳不算数。
+//      ⚠ 已证的只有「它响了」这一格。**注入率**（派 N 个官、几个真收到）仍未审计，
+//      而退役 dispatch-clauses 首行那条通道的契约要的正是那个数字（≥20 次 100%）。
 //
 // ── 摸了全域分布再定映射表（建护栏前先摸分布，dao-guard-writing 第 1 条）──────
 // 本机 713 份 transcript（1242 MiB）里 Task 调用的 subagent_type 实测分布：
@@ -44,7 +48,8 @@
 //   渲染端（render-clauses.mjs）是 fail-closed 的：索引过期、官种名不认识、该官种零条款，
 //   它一律 exit 1 而不吐一份看起来正常的东西。本 hook **不推翻它的判断**，只做一件事：
 //   **把它的失败翻译成一条指针注入**（「正文在哪、按哪一节读」），而不是静默不注入。
-//   ⇒ 三条降级路径：官种节渲染不出 → 退到通用节并写明；通用节也渲染不出 → 只给指针；
+//   ⇒ 四条降级路径：**索引不可信（末行 stale=1）→ 指针，且不退官种**（见下一段）；
+//     官种节渲染不出 → 退到通用节并写明；通用节也渲染不出 → 只给指针；
 //     本 hook 自己崩了 → 仍然只给指针 + systemMessage 留痕（**exit 恒 0**，绝不砖掉 subagent）。
 //   「永不静默空过」是这个 hook 的第一原则：**零注入与注入成功在 transcript 上长得一样**，
 //   而那正是本体系反复踩的那个病。故每一条路径的产出都带首行签名 `[dao-subagent-clauses v1]`，
@@ -69,10 +74,32 @@
 // （仓内、六个官种节齐全）；②合并态这一批把它登记进 clause-parser.mjs 的 defaultSources()
 // （all-top-level + dispatch-sections）⇒ **默认索引里六个官种现在都有条款，官种节渲染得出来。**
 //
-// 🔴 **仍然没证到的那一半，别读成已解决**：渲染得出东西 ≠ 这个 hook 被调用过。
-// 注册进 live settings.json 是**用户动作**（硬闸 G2 拦的那一格），本批照旧不代做 ⇒
-// 「注册之后它在真实 session 里真的响了」现在仍然没有人有资格说。判据在 --selfcheck 第②段：
-// 它只采信非 synthetic 的心跳记录。**「没注册」与「注册了没触发」在日志上长得一样。**
+// 🟢 **2026-08-07 订正：「注册之后它在真实 session 里真的响了」已经证到了**（issue #162 回测批，
+// 本机真实派单的官在开场收到注入并回报了渲染末行）。此处此前写着「现在仍然没有人有资格说」——
+// 那句话在注册完成的那一刻就过期了，**而它自己没有任何过期触发器**，靠一次回测才被看见。
+// 判据仍在 --selfcheck 第②段（只采信非 synthetic 的心跳），因为**「没注册」与「注册了没触发」
+// 在日志上仍然长得一样** —— 已证的是「响过一次」，不是「每次都响」。
+// **注入率审计（≥20 次 100%）仍未做**，那是退役双通道的前置门，别把这一格读成已解决。
+//
+// ── 索引不可信（stale=1）那一支：为什么它单独成一条路径（2026-08-07，issue #162 用户拍板）──
+// **拍板的原话是「塞指针 + 加提醒」**：索引过期时不再让官只拿到一句含混的失败回声，
+// 改投一条**说得出「读哪份文件的哪两节」**的降级指针；根因侧另配一道推送提醒
+// （`ccswitch/hooks/dao-tool-nudge.js` 第 ⑥ 类：推送触及条款源 ⇒ 提醒跑 `--check`）。
+//
+// **改之前的实况照直写，别把本次读成「从零注入变成有注入」**：stale 原本就落在「通用节也渲染
+// 不出 → 只给指针」那一支上，注入**不是空的**。真正缺的是三格，本次补的也就是这三格：
+//   ① **官种被无谓地丢掉了** —— stale 时先按官种渲一次（失败）、再退 general 渲一次（必然以
+//      同样的理由失败），于是指针只说得出「按你所属官种那一节读」，说不出**哪一节**。
+//      索引过期对**每个**官种都一样不可用 ⇒ 这一支不退官种，也少花一次进程。
+//   ② **心跳里的 stale 恒为 false** —— 那个字段取自渲染结果 `doc._generated.stale`，而这条路径
+//      压根没有 doc。于是「条款断供了多少次」在日志上数不出来，正是本仓那句「数到 0 和没看到
+//      样本，输出一模一样」。现在这一支写 `stale:true` 且 `mode:"stale-pointer"`，数得出来了。
+//   ③ **降级句是个括号里的补充** —— 「（本次没有渲染出任何条款正文，上面那条路径是唯一入口。）」
+//      读起来像脚注。改成 🔴 开头的祈使句，并把渲染端自己那条修法命令原样带过来。
+// ⚠ **`stale=1` 是渲染端「这份索引可不可信」的判断，不等于「文件确实过期了」**：索引不存在、
+//   索引不是合法 JSON 时它同样报 1（那时新鲜度无从判断，报 1 是保守侧）。本 hook **不替它细分
+//   成因**，只把它的原话一并带进注入 —— 细分就等于在这里复刻一份渲染端的判据，而那份判据改了
+//   这边不会知道。
 //
 // 项目特有那半仍在各项目仓，仍然不进本仓索引（要么带本机绝对路径、要么把别人的语料复制进来）。
 // 要临时把某个项目那份也算进来：
@@ -177,6 +204,23 @@ function splitMarker(stdout) {
   return { body: String(stdout || ""), marker: "" };
 }
 
+// 末行契约里的 `stale=<0|1>`。**读它而不读退出码**：退出码答的是「这次渲染成没成」，
+// 而这里要问的是「渲染端认为这份索引可不可信」—— 官种 0 条也是 exit 1，但那不是索引的问题。
+// 返回 null = 末行根本没给（渲染器没跑起来 / 输出被截断）⇒ **不猜**，走既有降级路径。
+function staleOf(marker) {
+  const m = /\bstale=(\d+)\b/.exec(String(marker || ""));
+  return m ? m[1] === "1" : null;
+}
+
+// 渲染端失败报文里那条修法命令，**原样摘出来带进注入**，不在本文件里另存一份字面量：
+// 存一份就是双写，而双写必漂移（生成器改名时，漂移出来的那条错命令读者会照着敲）。
+function regenHintOf(body) {
+  for (const ln of String(body || "").split(/\r?\n/)) {
+    if (/gen-clause-index/.test(ln)) return ln.replace(/^[\s·⇒>]+/, "").trim();
+  }
+  return null;
+}
+
 function render(role) {
   const args = [RENDERER, "--role", role, "--format", "json"];
   if (process.env.DAO_CLAUSE_INDEX) args.push("--index", process.env.DAO_CLAUSE_INDEX);
@@ -187,16 +231,18 @@ function render(role) {
     input: "",
   });
   const { body, marker } = splitMarker(r.stdout);
-  if (r.error) return { ok: false, why: `渲染器起不来：${r.error.message}`, marker, code: null };
+  const stale = staleOf(marker);
+  if (r.error) return { ok: false, why: `渲染器起不来：${r.error.message}`, marker, stale, hint: null, code: null };
   if (r.status !== 0) {
-    const first = String(body || r.stderr || "").split(/\r?\n/).filter(Boolean)[0] || "（无输出）";
-    return { ok: false, why: `渲染器 exit=${r.status}：${first.trim()}`, marker, code: r.status };
+    const text = String(body || r.stderr || "");
+    const first = text.split(/\r?\n/).filter(Boolean)[0] || "（无输出）";
+    return { ok: false, why: `渲染器 exit=${r.status}：${first.trim()}`, marker, stale, hint: regenHintOf(text), code: r.status };
   }
   try {
     const doc = JSON.parse(body);
-    return { ok: true, doc, marker, code: 0 };
+    return { ok: true, doc, marker, stale, hint: null, code: 0 };
   } catch (e) {
-    return { ok: false, why: `渲染结果不是合法 JSON：${e.message}`, marker, code: r.status };
+    return { ok: false, why: `渲染结果不是合法 JSON：${e.message}`, marker, stale, hint: null, code: r.status };
   }
 }
 
@@ -221,7 +267,7 @@ function clamp(text) {
   return text.slice(0, Math.max(0, MAX_CONTEXT_CHARS - notice.length)) + notice;
 }
 
-function buildContext({ mapped, role, doc, degraded, clause, marker }) {
+function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, regenHint }) {
   const head = [
     `${SIGNATURE} agent_type=${mapped.agentType || "(空)"} → 官种=${role}（${mapped.how}）`,
     "这段文字由 SubagentStart hook 渲染，内容是本体系派单条款库里与这个官种相关的那些条款。" +
@@ -240,11 +286,33 @@ function buildContext({ mapped, role, doc, degraded, clause, marker }) {
   }
 
   if (!doc) {
+    // ── 降级指针：**这几行就是本次注入的全部内容**，所以它必须自己说完「去哪读、读哪两节」──
+    // 原文只有一句括号里的「上面那条路径是唯一入口」：它指得出**文件**，指不出**节**，
+    // 而这份条款库是分节的、协议是「通用节 + 你那一节」。祈使句 + 具体节名，才是一条指得动人的指针。
+    const where = clause ? `\`${clause.file}\`` : "本体系的派单条款库正文";
+    const ptr = [
+      "🔴 " +
+        (staleFail
+          ? "**条款索引不可信（渲染端末行 stale=1：已过期，或读不到）**，故本次**没有渲染出任何条款正文**——" +
+            "这是渲染端刻意的 fail-closed，不是故障：正文是按行号从 Markdown 现切的，源动了而行号没动时，" +
+            "切出来的会是隔壁那条条款的半截话，而它看起来完全正常。**拒投旧版好过投错版。**"
+          : "**本次没有渲染出任何条款正文**（成因见上一行）。"),
+      `⇒ **开工前自己去 Read ${where}：通读「通用节」＋ 你所属官种那一节` +
+        `（本次按 agent 定义名推断为「${role}」，误判概率真实存在——与实际不符时读你自己那一节，本段不构成范围限制）**，逐条遵守。`,
+    ];
+    if (staleFail) {
+      ptr.push(
+        "（修法归帅、不是你这一路的活" +
+          (regenHint ? `：${regenHint}` : "，见渲染端自己的报文") +
+          "；你照上面那条指针读原文即可，原文本来就是真相源。）"
+      );
+    }
     return {
-      text: clamp(head.concat(tail, ["（本次没有渲染出任何条款正文，上面那条路径是唯一入口。）"]).join("\n")),
-      mode: "pointer-only",
+      text: clamp(head.concat(tail, ptr).join("\n")),
+      mode: staleFail ? "stale-pointer" : "pointer-only",
       general: 0,
       roleClauses: 0,
+      stale: !!staleFail,
     };
   }
 
@@ -426,12 +494,21 @@ try {
     throw new Error("人为注入故障（DAO_SUBAGENT_CLAUSES_FORCE_ERROR=render）@render");
   }
   let r = render(role);
-  if (!r.ok && role !== "general") {
-    degraded.push(`「${role}」节渲染不出（${r.why}），退到通用节`);
-    role = "general";
-    r = render(role);
+  // ── 索引不可信（末行 stale=1）：单独一支，**不退官种**（issue #162 用户拍板「塞指针」）──
+  // 过期/读不到的索引对**每一个**官种都一样不可用，退到通用节再渲一次必然以同一个理由失败，
+  // 只是多花一次进程；而退了官种，指针就再也说不出「你那一节是哪一节」——
+  // 一条降级指针的全部价值恰恰是那句话。判据读 stale 而不读退出码，理由见 staleOf 头注。
+  const staleFail = !r.ok && r.stale === true;
+  if (staleFail) {
+    degraded.push(`条款索引不可信（${r.why}），渲染端拒投旧版正文 ⇒ 本次降级为指针，官种保持「${role}」不退`);
+  } else {
+    if (!r.ok && role !== "general") {
+      degraded.push(`「${role}」节渲染不出（${r.why}），退到通用节`);
+      role = "general";
+      r = render(role);
+    }
+    if (!r.ok) degraded.push(`通用节也渲染不出（${r.why}）`);
   }
-  if (!r.ok) degraded.push(`通用节也渲染不出（${r.why}）`);
 
   const built = buildContext({
     mapped,
@@ -440,6 +517,8 @@ try {
     degraded,
     clause,
     marker: r.marker,
+    staleFail,
+    regenHint: r.hint,
   });
 
   S.heartbeat({
