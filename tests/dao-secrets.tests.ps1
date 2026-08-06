@@ -33,6 +33,13 @@
       ⇒ **删原件**」。靶在场景 6：源文件是一份 **JSON 形态**的凭据文件（真实场景：有人把
       migrate 指向一个不是 dotenv 的凭据文件），`Read-DotEnvMap` 解析出 0 个键。
 
+    ## 第三块靶：`-KeyLocation`（2026-08-06 补 · 用户拍板「先补网再切默认值」）
+
+    上面两道是**守卫**，这一块是**分支**：私钥落在哪、谁的权限被收紧、不传参数时走哪条。
+    它此前完全在网外（本文件首版自陈的原话见附一 ③，那句话里的理由已被证伪）。
+    三个场景对应三格 —— 13 = Separate、14 = Portable（反向）、15 = **默认值**。
+    **15 是唯一会因为「有人换了默认值」而变红的东西**，13/14 都显式传参、改默认值它们照绿。
+
     ## 为什么断言全打在行为上，一条文本匹配都没有
 
     本文件**刻意不含**「源码里还有没有那一行 `if`」这类断言。判据是 `#官抗-改坏多形态`：
@@ -84,9 +91,18 @@ $ErrorActionPreference = 'Stop'
 #  ② 它**不验加密的密码学性质**。桩的「加密」是 base64 —— 对 G1 来说这恰好够用
 #     （G1 问的是「密文里还看得见明文吗」，不是「这个密文安全吗」），
 #     但别读成「加密被验过了」。
-#  ③ **不覆盖 -KeyLocation Separate**：那条路径写 %AppData%\sops\age\，要测它得重定向
-#     真实的 APPDATA，风险与收益不成比例。Separate 那半的 ACL 行为由 PR #138 第二轮
-#     真 age 实查覆盖，本文件不碰。
+#  ③ **-KeyLocation Separate 现在覆盖了**（2026-08-06 · issue #72 拍板「先补网再切默认值」）。
+#     此前这里写的是「不覆盖，测它得重定向真实的 APPDATA，风险与收益不成比例」——
+#     **那个理由里的前提是错的**：不需要重定向真实的 APPDATA。`$env:APPDATA` 是**进程级**
+#     环境块里的一格，改它只影响本进程与它派生的子进程，**不写注册表、不碰用户级变量**
+#     （本机实测：父进程改 → `powershell -NoProfile -Command '$env:AppData'` 子进程读到覆写值 →
+#     父进程 finally 复原 → 真值原样）。而被测脚本读的正是 `$env:AppData`（init 第 113-120 行），
+#     测试又本来就用 `& $psExe` 起子进程，所以覆写天然就传得过去。
+#     ⇒ 场景 13/14/15 覆盖 Separate / Portable / 默认值三条，断言打在**私钥落在哪个盘上位置**
+#     与**ACL 继承状态**（`AreAccessRulesProtected`）上，不打在屏幕文案上。
+#     **它仍然不覆盖的**：真实 `%APPDATA%` 下的行为（刻意 —— 那等于往用户真机写私钥）、
+#     `SOPS_AGE_KEY_FILE` 用户级环境变量那条分支（同理，写它就是写注册表）。
+#     场景 18 有一条负控专门核「真 `%APPDATA%\sops\age\keys.txt` 的存在状态没被本次跑动改变」。
 #
 # 附二 · 桩为什么要经 .cmd 转一道，以及 argv 为什么落文件
 #
@@ -99,7 +115,10 @@ $ErrorActionPreference = 'Stop'
 # 本仓路径与本文件的夹具路径全是 ASCII；真表里那条含中文的 P4 路径**不走这套桩**
 # （那条只在真跑时出现，PR #138 已用真 sops 的 -DryRun 覆盖过）。
 #
-# 附三 · 判别力：9 个变体的实测记分板（2026-08-06 · 未变异基线 PASS=60 FAIL=0 exit=0）
+# 附三 · 判别力：G1/G2 那一批 9 个变体的实测记分板
+# （2026-08-06 首版 · 当时的未变异基线 PASS=60 FAIL=0 exit=0；**这个 60 是当时的数**，
+#  同日补进 Separate/默认值三个场景后基线变成 85，下面那些红集**没有重新跑过** ——
+#  照直标出来，别把旧记录读成刚验过的。新增那一批的记分板在附三之二。）
 #
 #   变体        改法                                suite exit   红的是
 #   M0 canary   G1 原样写回（no-op）                     0        无 —— **靶还活着**，不是被写坏了
@@ -120,11 +139,49 @@ $ErrorActionPreference = 'Stop'
 # 九个变体的红集**互不相同**，这本身也是判别力的证据：全部变体给出同一个最大红集时，
 # 那多半是靶被弄死了而不是网密（#官抗-变异体存活）。
 #
+# 附三之二 · Separate / 默认值那一批的记分板（2026-08-06 · 基线 PASS=85 FAIL=0 exit=0）
+#
+#   变体          改法                                       exit  红的是
+#   M0 canary     ACL 那行原样写回（no-op）                     0   无 —— **靶还活着**
+#   K1 删         Separate 落点赋值整行删掉                     1   13a/b/d/e/f/g/h/i/j（9 条）
+#   K2 注释       同一行注释掉                                 1   同上 9 条
+#   K3 不消费     同一行改成 `$null = Join-Path …`（结果不被消费） 1   同上 9 条
+#   K4 **反向**   Portable 那条也指向 %AppData%                1   1d/1i/4c/4d/14b/14c/14d/15b/15c/15e（10 条，**正控侧**）
+#   A1 删         ACL 目标那行整段删掉                          1   13e/13g（2 条）
+#   A2 注释       同一行注释掉                                 1   同上 2 条
+#   A3 不消费     `$aclTargets + $keyDir | Out-Null`           1   同上 2 条
+#   D1 默认值     `$KeyLocation = 'Separate'`                  1   15b/15c/15d/15e（4 条，**只有守默认值那一条**）
+#
+# 9 个变体给出 **5 个互不相同的红集**（不是一个最大红集）⇒ 靶没被弄死（#官抗-变异体存活）。
+# 每个变体跑前都验过 BOM=True / ParseErrors=0，收尾 SHA256 与基线逐字节相同。
+#
+# **K4 反向变体逮到一件本来会静默发生的事，值得单记**：它第一次跑的时候，
+# **一把桩造的假私钥真的落进了操作者的 `%APPDATA%\sops\age\keys.txt`** ——
+# 因为当时场景 1-4 既没覆写 APPDATA、也没显式钉 `-KeyLocation`。抓住它的是场景 18c
+# 那条**本批新加的负控**；在它之前，这件事没有任何东西会报。已当场清理（内容核验为桩串后删除，
+# 连带两个空目录），并落成 `New-FakeAppData` 那条规矩（见它的头注）。
+# ⇒ **「只改一个默认值」这种改动的爆炸半径，可以一路穿到操作者的真实用户目录。**
+#
 # 附四 · 怎么复现
 #
-# 锚点（两处都是**单行**，行尾差异结构上咬不到 —— #守-锚点行尾 ①）：
-#   G1  (?m)^([ \t]*)if \(\$encText\.Contains\(\$probeVal\)\) \{ Fail [^\r\n]*\}[ \t]*$
-#   G2  (?m)^([ \t]*)if \(\$srcKeys\.Count -eq 0\) \{ Fail [^\r\n]*\}[ \t]*$
+# 锚点（全是**单行**）：
+#   G1  (?m)^([ \t]*)if \(\$encText\.Contains\(\$probeVal\)\) \{ Fail [^\r\n]*\}[ \t]*\r?$
+#   G2  (?m)^([ \t]*)if \(\$srcKeys\.Count -eq 0\) \{ Fail [^\r\n]*\}[ \t]*\r?$
+#   K   (?m)^([ \t]*)\$keyDir = Join-Path \$env:AppData 'sops\\age'[ \t]*\r?$
+#   K反 (?m)^([ \t]*)\$keyDir = Join-Path \$SecretsDir 'age'[ \t]*\r?$
+#   A   (?m)^([ \t]*)if \(\$KeyLocation -eq 'Separate'\) \{ \$aclTargets \+= \$keyDir \}[ \t]*\r?$
+#   D   (?m)^([ \t]*)\[string\]\$KeyLocation = '(Portable|Separate)',[ \t]*\r?$
+#
+# 🔴 **那个 `\r?` 不是装饰，G1/G2 原先没有它、于是在本工作树上一次都匹配不上**
+# （2026-08-06 实测：本仓是 CRLF，而 .NET 的多行 `$` 停在 `\n` **之前**，`\r` 没人吃 ⇒
+# `[ \t]*$` 恒 0 命中）。本批首轮 7 个变体因此**全部报「锚点命中 0 次」** ——
+# 幸好锚点自检写的是「命中数必须恰好为 1」而不是「替换一下试试」，
+# 否则得到的会是 7 个 no-op 全绿，与「这套网密不透风」逐字节不可区分。
+# ⇒ **写锚点时行尾要连 `\r` 一起考虑，别只考虑缩进**（#守-锚点行尾 的下一格）。
+#
+# 🔴 **只钉「锚点还在」不够，还要钉「它命中几次」**：`Portable` 那个条件行在本脚本里
+# 出现 **2 次**（落点判定一次、第 7 节换机提示一次），拿它当锚点会一次改两处。
+# 上表的 K / K反 因此改的是**赋值行**而不是条件行 —— 赋值行才唯一。
 #
 # 改完必须复核脚本仍带 BOM、[Parser]::ParseFile 零错误 —— **变异体丢了 BOM 会被 CP936
 # 重读、整个脚本报废，那时全部断言都红，看起来正好像「这套网密不透风」**。
@@ -152,6 +209,12 @@ foreach ($p in @($initPs1, $migratePs1)) {
 # 真凭据根的存在状态：开跑前记一次，收尾核一次。本文件**不许**动它。
 $realSecretsDir    = Join-Path $env:USERPROFILE '.dao-secrets'
 $realSecretsBefore = Test-Path $realSecretsDir
+
+# 真 %APPDATA% 那一侧同理（场景 13/15 会把 APPDATA 覆写到 _tmp/ 下的假目录）。
+# 记两样：变量本身的值、以及 sops 私钥默认落点的存在状态。收尾各核一次。
+$realAppDataBefore = [Environment]::GetEnvironmentVariable('APPDATA', 'Process')
+$realAgeKeyPath    = Join-Path $realAppDataBefore 'sops\age\keys.txt'
+$realAgeKeyBefore  = Test-Path $realAgeKeyPath
 
 if (Test-Path $workRoot) { Remove-Item -Path $workRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
@@ -370,7 +433,12 @@ function New-SopsCfg {
 }
 
 function Invoke-Target {
-    param([string]$ScriptPath, [string[]]$ScriptArgs, [string]$CaseDir, [hashtable]$SopsCfg)
+    # -EnvOverrides：只改**本进程**环境块里的那几格，子进程继承之。
+    # 用它而不是 [Environment]::SetEnvironmentVariable(..., 'User')：后者写注册表、跨进程持久，
+    # 那才是「动用户真实环境」。收尾按「原来有没有值」分别复原 —— 原来没有的要**删掉**，
+    # 复原成空串会留下一格假存在。
+    param([string]$ScriptPath, [string[]]$ScriptArgs, [string]$CaseDir, [hashtable]$SopsCfg,
+          [hashtable]$EnvOverrides)
     $cfgPath = Join-Path $CaseDir 'sops-stub.json'
     [IO.File]::WriteAllText($cfgPath, (ConvertTo-Json $SopsCfg -Depth 5), $utf8NoBom)
     $logPath = Join-Path $CaseDir 'sops-calls.log'
@@ -382,6 +450,13 @@ function Invoke-Target {
     $env:DAO_SOPS_LOG    = $logPath
     $env:DAO_SOPS_ARGV   = Join-Path $CaseDir 'sops-argv.txt'
     $env:DAO_AGE_ARGV    = Join-Path $CaseDir 'age-argv.txt'
+    $envSaved = @{}
+    if ($EnvOverrides) {
+        foreach ($k in @($EnvOverrides.Keys)) {
+            $envSaved[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
+            [Environment]::SetEnvironmentVariable($k, $EnvOverrides[$k], 'Process')
+        }
+    }
     $out = $null
     $code = $null
     try {
@@ -390,6 +465,9 @@ function Invoke-Target {
         $code = $LASTEXITCODE
     } finally {
         $env:PATH = $oldPath
+        foreach ($k in @($envSaved.Keys)) {
+            [Environment]::SetEnvironmentVariable($k, $envSaved[$k], 'Process')
+        }
         foreach ($v in @('DAO_SOPS_CONFIG', 'DAO_SOPS_LOG', 'DAO_SOPS_ARGV', 'DAO_AGE_ARGV')) {
             if (Test-Path ('Env:' + $v)) { Remove-Item ('Env:' + $v) }
         }
@@ -443,6 +521,38 @@ function New-DotEnvFixture {
     return $p
 }
 
+# ACL 断言探针。**刻意读文件系统而不是读屏幕文案**：那行「权限已收成…」是脚本自己说的，
+# `AreAccessRulesProtected` 是 NTFS 说的 —— 前者证明「代码走到了这一行」，只有后者证明
+# 「继承真的断了」。本机实测：icacls /inheritance:r 之后为 True，纯继承的子目录为 False。
+# 路径不存在时返回 $null（与 True/False 都不相等 ⇒ 断言不会因为"目录没建"而假绿）。
+function Get-AclProtected {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    return (Get-Acl -LiteralPath $Path).AreAccessRulesProtected
+}
+
+function Measure-Occurrence {
+    param([string]$Text, [string]$Pattern)
+    return @([regex]::Matches($Text, $Pattern)).Count
+}
+
+# 🔴 **凡是调 init 的场景都必须配一个假 APPDATA + 一个显式的 -KeyLocation**，
+# 哪怕这个场景测的根本不是私钥落点。这不是防御性编程，是本批实测撞出来的：
+# mutation 的 K4 变体（把 Portable 那条也指向 %AppData%）跑完之后，
+# **一把（桩造的假）私钥真的出现在了操作者的 `%APPDATA%\sops\age\keys.txt`** ——
+# 因为场景 1-4 当时既没覆写 APPDATA、也没显式钉模式，init 就照着真环境变量写了。
+# 抓住它的是场景 18c 那条负控（它是本批新加的，加之前这件事会静默发生）。
+# ⇒ 两条规矩，绑在一起：
+#   ① 调 init ⇒ 传 -EnvOverrides @{ APPDATA = (New-FakeAppData …) }
+#   ② 断言与私钥落点无关的场景 ⇒ **显式钉 -KeyLocation**，别吃默认值 ——
+#      否则改一次默认值，这些场景的语义会跟着悄悄换掉（场景 15 才是专门守默认值的那一条）。
+function New-FakeAppData {
+    param([string]$CaseDir)
+    $d = Join-Path $CaseDir 'fake-appdata'
+    New-Item -ItemType Directory -Force -Path $d | Out-Null
+    return $d
+}
+
 Write-Host ''
 Write-Host '== dao-secrets 回归测试（init G1 / migrate G2 两道承重守卫 + 复核段全分支）=='
 Write-Host ''
@@ -455,8 +565,10 @@ Write-Host '场景 1：init 正控（桩真做变换 ⇒ exit 0、自证通过�
 
 $c1 = New-Case 'init-ok'
 $s1 = Join-Path $c1 'secrets'
+$a1 = New-FakeAppData -CaseDir $c1
 $r1 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c1 -SopsCfg (New-SopsCfg) `
-        -ScriptArgs @('-SecretsDir', $s1)
+        -ScriptArgs @('-SecretsDir', $s1, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $a1 }
 
 Assert-True '1a init 全链 exit 0' ($r1.ExitCode -eq 0) ("exit={0}" -f $r1.ExitCode)
 Assert-True '1b 第 6 步自证走完了（屏幕上说「加密链路整条通了」）' `
@@ -474,6 +586,8 @@ Assert-True '1g B1 契约：decrypt 调用同样钉了 --config（不必要但�
     (Test-ConfigBeforeSubcommand -Log $r1.SopsLog -Subcommand 'decrypt') ''
 Assert-True '1h 没碰用户级环境变量（本文件绝不传 -SetUserEnvVar）' `
     ($r1.Text -match '没自动设') ''
+Assert-True '1i 假 APPDATA 下零写入（Portable 一个字节都不该往那边写）' `
+    (-not (Test-Path (Join-Path $a1 'sops'))) ''
 
 # ============================================================================
 # 场景 2：**G1 靶** —— 「加密」其实只是复制 ⇒ 必须当场停
@@ -484,8 +598,10 @@ Write-Host '场景 2：**G1 靶** —— 桩的 encrypt 原样复制 ⇒ 密文�
 
 $c2 = New-Case 'init-passthrough'
 $s2 = Join-Path $c2 'secrets'
+$a2 = New-FakeAppData -CaseDir $c2
 $r2 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c2 -SopsCfg (New-SopsCfg -Mode 'passthrough') `
-        -ScriptArgs @('-SecretsDir', $s2)
+        -ScriptArgs @('-SecretsDir', $s2, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $a2 }
 
 Assert-True '2a exit 1（「加密没真的发生」不许长得像一切正常）' `
     ($r2.ExitCode -eq 1) ("exit={0}" -f $r2.ExitCode)
@@ -504,8 +620,10 @@ Write-Host '场景 3：init 负控 —— encrypt 退 1 ⇒ exit 1、不宣告�
 
 $c3 = New-Case 'init-encrypt-fail'
 $s3 = Join-Path $c3 'secrets'
+$a3 = New-FakeAppData -CaseDir $c3
 $r3 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c3 -SopsCfg (New-SopsCfg -EncryptExit 1) `
-        -ScriptArgs @('-SecretsDir', $s3)
+        -ScriptArgs @('-SecretsDir', $s3, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $a3 }
 
 Assert-True '3a exit 1' ($r3.ExitCode -eq 1) ("exit={0}" -f $r3.ExitCode)
 Assert-True '3b 报的是 encrypt 的退出码，不是别的' ($r3.Text -match 'sops encrypt 退出码 1') ''
@@ -526,8 +644,10 @@ $preExisting = "# created: 2020-01-01T00:00:00Z`n# public key: age1preexistingfa
 [IO.File]::WriteAllText($keyFile4, $preExisting, $utf8NoBom)
 $hashBefore = (Get-FileHash -LiteralPath $keyFile4 -Algorithm SHA256).Hash
 
+$a4 = New-FakeAppData -CaseDir $c4
 $r4 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c4 -SopsCfg (New-SopsCfg) `
-        -ScriptArgs @('-SecretsDir', $s4)
+        -ScriptArgs @('-SecretsDir', $s4, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $a4 }
 $hashAfter = (Get-FileHash -LiteralPath $keyFile4 -Algorithm SHA256).Hash
 
 Assert-True '4a exit 0（已有私钥不是错误）' ($r4.ExitCode -eq 0) ("exit={0}" -f $r4.ExitCode)
@@ -715,46 +835,164 @@ Assert-True '12d **一次 sops 都没调**（DryRun 若真调了 sops，「不�
 Assert-True '12e 键名照常列出（DryRun 的用处就是让人先看一眼）' ($r12.Text -match 'A_KEY') ''
 
 # ============================================================================
-# 场景 13：全程**一个凭据值都没印到屏幕上**
+# 场景 13：**Separate 靶** —— 私钥落 %AppData%，凭据根里一个 age\ 都没有
+# ============================================================================
+# 这条分支此前**完全在网外**（本文件首版头注自陈「测它要重定向真实的 APPDATA」）。
+# 治法：把 APPDATA 覆写到 _tmp/ 下一个假目录，**只改本进程的环境块**，子进程继承 ——
+# 真实 %APPDATA% 一个字节都不碰（场景 18 有负控核这一点）。
+#
+# 判别力从哪来：init 里控制这件事的是**两处**，且它们各管一半 ——
+#   ㈠ `if ($KeyLocation -eq 'Portable') { $keyDir = …\age } else { $keyDir = $env:AppData\sops\age }`
+#      决定私钥**落在哪**；
+#   ㈡ `if ($KeyLocation -eq 'Separate') { $aclTargets += $keyDir }`
+#      决定私钥目录的**权限收不收** —— Portable 时私钥在凭据根里、靠继承即可，
+#      Separate 时私钥在凭据根**之外**，不单独收就完全没人管它，
+#      而它恰恰是全套东西里唯一不可再生的那一个。
+# ㈡ 坏掉时 ㈠ 的断言全绿（私钥照样落对地方），所以 13e 那条 ACL 断言不是锦上添花，
+# 它是唯一咬得到 ㈡ 的东西。
+Write-Host '场景 13：**Separate 靶** —— 私钥落 %AppData%\sops\age、凭据根里没有 age\、私钥目录 ACL 单独收紧'
+
+$c13 = New-Case 'init-separate'
+$s13 = Join-Path $c13 'secrets'
+$appData13 = New-FakeAppData -CaseDir $c13
+$r13 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c13 -SopsCfg (New-SopsCfg) `
+        -ScriptArgs @('-SecretsDir', $s13, '-KeyLocation', 'Separate') `
+        -EnvOverrides @{ APPDATA = $appData13 }
+
+$sepKeyDir13  = Join-Path $appData13 'sops\age'
+$sepKeyFile13 = Join-Path $sepKeyDir13 'keys.txt'
+
+Assert-True '13a exit 0' ($r13.ExitCode -eq 0) ("exit={0}" -f $r13.ExitCode)
+Assert-True '13b 私钥落在 %AppData%\sops\age\keys.txt（sops 在 Windows 上的默认位置）' `
+    (Test-Path $sepKeyFile13) ("期望={0}" -f $sepKeyFile13)
+Assert-True '13c 凭据根里**没有** age\ 目录 —— 这是 Separate 买到的那一格' `
+    (-not (Test-Path (Join-Path $s13 'age'))) ''
+Assert-True '13d .sops.yaml 仍在凭据根，且里面写明私钥去了 %AppData% 那一侧' `
+    ((Test-Path (Join-Path $s13 '.sops.yaml')) -and `
+     ([IO.File]::ReadAllText((Join-Path $s13 '.sops.yaml'), [Text.Encoding]::UTF8).Contains($sepKeyFile13))) ''
+Assert-True '13e **私钥目录的 ACL 真的被收紧了**（断了继承，判据取自 NTFS 不取自屏幕文案）' `
+    ((Get-AclProtected $sepKeyDir13) -eq $true) ("AreAccessRulesProtected={0}" -f (Get-AclProtected $sepKeyDir13))
+Assert-True '13f 凭据根本身照旧也收紧了（两个目标都收，不是拿私钥目录换掉了凭据根）' `
+    ((Get-AclProtected $s13) -eq $true) ''
+Assert-True '13g 屏幕上「权限已收成」出现 2 次，且其中一次点名私钥目录' `
+    (((Measure-Occurrence -Text $r13.Text -Pattern '权限已收成') -eq 2) -and `
+     ($r13.Text.Contains($sepKeyDir13))) `
+    ("次数={0}" -f (Measure-Occurrence -Text $r13.Text -Pattern '权限已收成'))
+Assert-True '13h 明说「不需要环境变量」，且**没有**走 Portable 那条「没自动设」的提示' `
+    (($r13.Text -match '不需要环境变量') -and (-not ($r13.Text -match '没自动设'))) ''
+Assert-True '13i 换机提示说的是「要搬**两处**」（Separate 的代价，必须当面讲）' `
+    ($r13.Text -match '要搬\*\*两处\*\*') ''
+Assert-True '13j 第 6 步自证照常走完（exit 0 不等于自证跑过）' `
+    ($r13.Text -match '加密链路整条通了') ''
+
+# ============================================================================
+# 场景 14：**Portable 反向** —— 私钥落凭据根，假 APPDATA 下一个字节都没写
+# ============================================================================
+# 与场景 13 成对。没有这一条，13 的全部断言可以在「两种模式都走 Separate」下照样绿。
+Write-Host '场景 14：Portable 反向 —— 私钥落凭据根\age、假 APPDATA 下没有 sops\age、ACL 只收凭据根'
+
+$c14 = New-Case 'init-portable'
+$s14 = Join-Path $c14 'secrets'
+$appData14 = New-FakeAppData -CaseDir $c14
+$r14 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c14 -SopsCfg (New-SopsCfg) `
+        -ScriptArgs @('-SecretsDir', $s14, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $appData14 }
+
+Assert-True '14a exit 0' ($r14.ExitCode -eq 0) ("exit={0}" -f $r14.ExitCode)
+Assert-True '14b 私钥落凭据根 age\keys.txt' `
+    (Test-Path (Join-Path $s14 'age\keys.txt')) ''
+Assert-True '14c 假 APPDATA 下**没有** sops\age —— Portable 不该往那边写一个字节' `
+    (-not (Test-Path (Join-Path $appData14 'sops'))) ''
+Assert-True '14d 私钥目录**靠继承**拿权限（不单独断继承：对子目录再断一次会把父目录刚传下来的 ACE 断掉）' `
+    ((Get-AclProtected (Join-Path $s14 'age')) -eq $false) `
+    ("AreAccessRulesProtected={0}" -f (Get-AclProtected (Join-Path $s14 'age')))
+Assert-True '14e 屏幕上「权限已收成」只出现 1 次（ACL 目标不含私钥目录）' `
+    ((Measure-Occurrence -Text $r14.Text -Pattern '权限已收成') -eq 1) `
+    ("次数={0}" -f (Measure-Occurrence -Text $r14.Text -Pattern '权限已收成'))
+Assert-True '14f 需要 SOPS_AGE_KEY_FILE：走的是「没自动设」那条提示，不是「不需要环境变量」' `
+    (($r14.Text -match '没自动设') -and (-not ($r14.Text -match '不需要环境变量'))) ''
+Assert-True '14g 换机提示说的是「整个 <凭据根> 文件夹拷过去」' `
+    ($r14.Text -match '文件夹拷过去') ''
+
+# ============================================================================
+# 场景 15：**默认值** —— 不传 -KeyLocation 时走哪一条
+# ============================================================================
+# 这一条守的是**一个字面量**：`[string]$KeyLocation = 'Separate'`。
+# 它是本文件里唯一会因为「有人改了默认值」而变红的东西 —— 场景 13/14 都显式传了参数，
+# 默认值怎么改它们都绿。
+#
+# 🔴 **改默认值的人必须同时改这一条断言**，那正是它存在的理由：把「换个默认值」
+# 从一次静默的单词替换，变成一次需要当面写进测试的决定。
+# 现值 Portable 的出处：用户 2026-08-05 拍板「能带走优先」。
+Write-Host '场景 15：默认值（不传 -KeyLocation）⇒ 与 Portable 逐格一致'
+
+$c15 = New-Case 'init-default'
+$s15 = Join-Path $c15 'secrets'
+$appData15 = New-FakeAppData -CaseDir $c15
+$r15 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c15 -SopsCfg (New-SopsCfg) `
+        -ScriptArgs @('-SecretsDir', $s15) `
+        -EnvOverrides @{ APPDATA = $appData15 }
+
+Assert-True '15a exit 0' ($r15.ExitCode -eq 0) ("exit={0}" -f $r15.ExitCode)
+Assert-True '15b **默认 = Portable**：私钥落凭据根 age\keys.txt' `
+    (Test-Path (Join-Path $s15 'age\keys.txt')) ''
+Assert-True '15c **默认 = Portable**：假 APPDATA 下没有 sops\' `
+    (-not (Test-Path (Join-Path $appData15 'sops'))) ''
+Assert-True '15d 屏幕上把模式印出来了，印的是 Portable（用户看得见自己走的是哪条）' `
+    ($r15.Text -match '私钥落点模式：Portable') ''
+Assert-True '15e 默认路径下私钥目录**靠继承**拿权限（Portable 不单独收私钥目录）' `
+    ((Get-AclProtected (Join-Path $s15 'age')) -eq $false) ''
+
+# ============================================================================
+# 场景 16：全程**一个凭据值都没印到屏幕上**
 # ============================================================================
 # 两个脚本的 .NOTES 都写着「从不打印任何凭据的值、片段、长度或哈希」。
 # 这条断言把那句话变成可执行的：把上面所有场景的输出连起来搜假串。
-Write-Host '场景 13：所有场景的输出里，一个凭据值都没出现过'
+Write-Host '场景 16：所有场景的输出里，一个凭据值都没出现过'
 
 $allText = @($r1.Text, $r2.Text, $r3.Text, $r4.Text, $r5.Text, $r6.Text, $r7.Text,
-             $r8.Text, $r9.Text, $r10.Text, $r11.Text, $r12.Text) -join "`n"
-Assert-True '13a 屏幕输出里搜不到任何一个假凭据值（键名可以有、值一个都不许有）' `
+             $r8.Text, $r9.Text, $r10.Text, $r11.Text, $r12.Text,
+             $r13.Text, $r14.Text, $r15.Text) -join "`n"
+Assert-True '16a 屏幕输出里搜不到任何一个假凭据值（键名可以有、值一个都不许有）' `
     ((-not $allText.Contains($FAKE_A)) -and (-not $allText.Contains($FAKE_B)) -and `
      (-not $allText.Contains('sk-FAKE-jsonshape-001'))) ''
 
 # ============================================================================
-# 场景 14：两个被测脚本自身可解析、且带 BOM
+# 场景 17：两个被测脚本自身可解析、且带 BOM
 # ============================================================================
 # BOM 不是形式：PS 5.1 读无 BOM 的中文脚本会按 CP936 重读，整个脚本报废 ——
 # 而那时**本文件的全部断言都会红**，看起来正好像「这套网密不透风」。先把它钉住。
-Write-Host '场景 14：被测脚本零语法错误 + 带 BOM'
+Write-Host '场景 17：被测脚本零语法错误 + 带 BOM'
 
 foreach ($pair in @(@('dao-secrets-init.ps1', $initPs1), @('dao-secrets-migrate.ps1', $migratePs1))) {
     $tokens = $null
     $errors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseFile($pair[1], [ref]$tokens, [ref]$errors)
-    Assert-True ("14 {0} 零语法错误" -f $pair[0]) (@($errors).Count -eq 0) ("ParseErrors={0}" -f @($errors).Count)
+    Assert-True ("17 {0} 零语法错误" -f $pair[0]) (@($errors).Count -eq 0) ("ParseErrors={0}" -f @($errors).Count)
     $head = [byte[]]::new(3)
     $fs = [IO.File]::OpenRead($pair[1])
     try { $null = $fs.Read($head, 0, 3) } finally { $fs.Dispose() }
-    Assert-True ("14 {0} 带 UTF-8 BOM" -f $pair[0]) `
+    Assert-True ("17 {0} 带 UTF-8 BOM" -f $pair[0]) `
         (($head[0] -eq 0xEF) -and ($head[1] -eq 0xBB) -and ($head[2] -eq 0xBF)) `
         ("首三字节={0:X2} {1:X2} {2:X2}" -f $head[0], $head[1], $head[2])
 }
 
 # ============================================================================
-# 场景 15：本次跑动没有碰真凭据根
+# 场景 18：本次跑动没有碰用户的真实环境（凭据根 + %APPDATA% 两侧）
 # ============================================================================
-Write-Host '场景 15：真凭据根的存在状态没被本次跑动改变'
+# 18b/18c 是场景 13/15 那个 APPDATA 覆写的负控：**覆写只该活在本进程、且用完就还**。
+# 这两条没有的话，「覆写」与「把用户的 APPDATA 改了」在退出码上不可区分。
+Write-Host '场景 18：真凭据根与真 %APPDATA% 的状态没被本次跑动改变'
 
-Assert-True '15a %USERPROFILE%\.dao-secrets 的存在状态与开跑前一致（本文件不许碰它）' `
+Assert-True '18a %USERPROFILE%\.dao-secrets 的存在状态与开跑前一致（本文件不许碰它）' `
     ((Test-Path $realSecretsDir) -eq $realSecretsBefore) `
     ("before={0} after={1}" -f $realSecretsBefore, (Test-Path $realSecretsDir))
+Assert-True '18b APPDATA 变量已复原成开跑前那个值（覆写只活在本进程，且用完就还）' `
+    ([Environment]::GetEnvironmentVariable('APPDATA', 'Process') -eq $realAppDataBefore) `
+    ("after={0}" -f [Environment]::GetEnvironmentVariable('APPDATA', 'Process'))
+Assert-True '18c 真 %APPDATA%\sops\age\keys.txt 的存在状态没变（一把真私钥都没写出去）' `
+    ((Test-Path $realAgeKeyPath) -eq $realAgeKeyBefore) `
+    ("before={0} after={1}" -f $realAgeKeyBefore, (Test-Path $realAgeKeyPath))
 
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''
