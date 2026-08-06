@@ -65,15 +65,15 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "f8f47e1974da26afae07f5d33c0c133cb3c4297b933fff83fac79e88f8ccaff7",
-        "lines": 41,
-        "clauses": 5,
+        "sha256": "02d1f33e473e9278114bd058c8755956abfa95010cb131b9358b7c2f259ba20c",
+        "lines": 45,
+        "clauses": 6,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 5,
+        "slug": 6,
         "no_slug": 0,
         "no_meta_field": 0
       },
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 69,
+      "general": 70,
       "reviewer": 1,
       "implementer": 8,
       "adversary": 12,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 97,
+      "clauses": 98,
       "observation": 0
     }
   },
@@ -969,12 +969,35 @@
       "body_excerpt": "- **规则集只增不减是结构必然，须专门给退役造触发器**：立法有天然触发器（刚踩坑、正在写复盘），**退役没有**——「这条还有用吗」要在无标记时刻主动问，正是实测携带率约 9% 的那一类动作。故任何规则集（条款库/检查清单/lint 规则）必须自带**①复发计数字段**（新事故命中已有条款时 n+1 而非新写一条…"
     },
     {
+      "id": "2b5258318fd4",
+      "slug": "守-宿主失效态",
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "line": 35,
+      "line_end": 38,
+      "meta_line": 38,
+      "role": "general",
+      "zone": "clause",
+      "section": null,
+      "title": "宿主对 `command` 型 hook 的失效态是 fail-open —— 你的闸崩了或超时了，动作照常放行",
+      "n": "1",
+      "first_seen": "08-06",
+      "trigger": "守卫头注",
+      "baseline": "本窗三条结论压在这一格上悬了五轮无人验（#133/#145 七道闸会不会全灭 · #152 exit 1 换 exit 0 损失了什么 · #127/#130 降级路径的价值）",
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": true,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "- 🔴 **宿主对 `command` 型 hook 的失效态是 fail-open —— 你的闸崩了或超时了，动作照常放行**（2026-08-06 查证）：官方 hooks 文档三处交叉印证——**①任何非 0 非 2 的退出码**是 non-blocking error，原文「**The action pro…"
+    },
+    {
       "id": "706223fdf336",
       "slug": "守-锚点行尾",
       "file": "ccswitch/rules/dao-guard-writing.md",
-      "line": 35,
-      "line_end": 40,
-      "meta_line": 40,
+      "line": 39,
+      "line_end": 44,
+      "meta_line": 44,
       "role": "general",
       "zone": "clause",
       "section": null,

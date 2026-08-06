@@ -457,6 +457,20 @@
       ],
       "status": "active"
     },
+    "守-宿主失效态": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "08-06",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本窗三条结论压在这一格上悬了五轮无人验（#133/#145 七道闸会不会全灭 · #152 exit 1 换 exit 0 损失了什么 · #127/#130 降级路径的价值）",
+      "source_refs": [
+        "官方 hooks.md:754 / :415 / :1233 / :750 / :1235 / :1479",
+        "issue #72"
+      ],
+      "status": "active"
+    },
     "续-拍板落单": {
       "file": "ccswitch/dao.md",
       "n": "1",
