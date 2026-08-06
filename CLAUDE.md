@@ -78,6 +78,10 @@ node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对�
 node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数（条款数 / 触发:无 / slug 数）
 powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立实现）
 node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（原型，**尚未**接进派单流程）
+
+node ccswitch/scripts/gen-guarded-files.mjs           # 「被 mutation 守护的源文件」清单：改完 tests/ 后重新生成
+node ccswitch/scripts/gen-guarded-files.mjs --check   # 测试实况变了而清单没跟上 ⇒ exit 1（tests/guarded-files.tests.js 每次跑它）
+node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不读得到清单（fail-open 的失败态只在这里出声）
 ```
 
 `ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。

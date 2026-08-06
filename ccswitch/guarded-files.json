@@ -1,0 +1,223 @@
+{
+  "_generated": {
+    "这是什么": "被 mutation 测试守护的 dao 源文件清单。**派生物，不是真相源** —— 改这个文件不会改变任何行为。",
+    "真相源": "tests/ 下含 mutation 的那些测试所声明的被测对象路径（口径见生成器头注）。",
+    "谁在消费它": "ccswitch/hooks/dao-glob-gate.js —— Edit/Write 命中清单即注入一行「先读写守卫判据」的指针。",
+    "再生成": "node ccswitch/scripts/gen-guarded-files.mjs",
+    "漂移检查": "node ccswitch/scripts/gen-guarded-files.mjs --check（测试实况变了而清单没跟上 ⇒ exit 1）",
+    "生成器": "ccswitch/scripts/gen-guarded-files.mjs",
+    "回归网": "tests/guarded-files.tests.js",
+    "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
+    "totals": {
+      "tests": 39,
+      "mutation_tests": 29,
+      "files": 31
+    }
+  },
+  "files": [
+    {
+      "file": "ccswitch/hooks/dao-design-sync-gate.js",
+      "guards": [
+        "design-sync-gate.tests.js",
+        "design-sync-precommit.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-glob-gate.js",
+      "guards": [
+        "glob-gate.tests.js",
+        "guarded-files.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-hard-gates.js",
+      "guards": [
+        "dao-rhythm.tests.js",
+        "hard-gates.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-rhythm.js",
+      "guards": [
+        "dao-rhythm.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-rule-echo.js",
+      "guards": [
+        "dao-rule-echo.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-scaffold-check.js",
+      "guards": [
+        "alwayson-budget.tests.js",
+        "dao-scaffold-check.tests.js",
+        "dead-gates.tests.js",
+        "settings-drift.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-subagent-clauses.js",
+      "guards": [
+        "subagent-clauses.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-tool-nudge.js",
+      "guards": [
+        "dao-tool-nudge.tests.js",
+        "hard-gates.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/clause-parser.mjs",
+      "guards": [
+        "clause-index.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/console-utf8.ps1",
+      "guards": [
+        "clause-structure.tests.ps1",
+        "dao-pr-merge.tests.ps1",
+        "dao-secrets.tests.ps1",
+        "pr-body-scan.tests.ps1",
+        "ps-console-encoding.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/hook-budget.js",
+      "guards": [
+        "dao-scaffold-check.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/hook-selfcheck.js",
+      "guards": [
+        "design-sync-gate.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/pr-body-scan.ps1",
+      "guards": [
+        "pr-body-scan.tests.ps1"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/scaffold-manifest.js",
+      "guards": [
+        "agents-md.tests.js",
+        "scaffold-init.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/lib/settings-drift.js",
+      "guards": [
+        "provider-hooks-drift.tests.js",
+        "settings-drift.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/check-alwayson-budget.mjs",
+      "guards": [
+        "alwayson-budget.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/check-clauses-structure.ps1",
+      "guards": [
+        "clause-index.tests.js",
+        "clause-structure.tests.ps1",
+        "ps-console-encoding.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/check-dead-gates.mjs",
+      "guards": [
+        "dead-gates.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/check-mutation-anchor.mjs",
+      "guards": [
+        "mutation-anchor.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/check-pr-body-mojibake.ps1",
+      "guards": [
+        "pr-body-scan.tests.ps1"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/dao-pr-merge.ps1",
+      "guards": [
+        "dao-pr-merge.tests.ps1"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/dao-scaffold-report.mjs",
+      "guards": [
+        "agents-md.tests.js",
+        "scaffold-init.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/dao-secrets-init.ps1",
+      "guards": [
+        "dao-secrets.tests.ps1"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/dao-secrets-migrate.ps1",
+      "guards": [
+        "dao-secrets.tests.ps1"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/gen-agents-md.mjs",
+      "guards": [
+        "agents-md.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/gen-clause-index.mjs",
+      "guards": [
+        "clause-index.tests.js",
+        "subagent-clauses.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/gen-guarded-files.mjs",
+      "guards": [
+        "guarded-files.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/scripts/render-clauses.mjs",
+      "guards": [
+        "clause-index.tests.js",
+        "subagent-clauses.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/templates/CLAUDE.md.template",
+      "guards": [
+        "scaffold-init.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/templates/check-token-drift.mjs",
+      "guards": [
+        "token-drift-guard.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/templates/githooks/pre-commit",
+      "guards": [
+        "design-sync-precommit.tests.js"
+      ]
+    }
+  ]
+}

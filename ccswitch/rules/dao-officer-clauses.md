@@ -62,9 +62,17 @@
 > ④ **已补（2026-08-02 合并态）**：本文件此前不在 `ccswitch/clause-index.json` 的源清单里，
 > 于是 `dao-subagent-clauses.js` 那条自动注入通道渲染不出本文件的条款。现已登记进
 > `ccswitch/lib/clause-parser.mjs` 的 `defaultSources()`（`all-top-level` + `dispatch-sections`），
-> 索引里六个官种因此都有条款、台账也把它纳入了扫描面。**照直写它还没证到的那一半**：
-> 「注册之后那个 hook 在真实 session 里真的响了」**至今无人有资格宣称**——本仓的接线注册是
-> 用户动作（硬闸 G2），登记源清单只解决了「渲染得出东西吗」，解决不了「它有没有被调用」。
+> 索引里六个官种因此都有条款、台账也把它纳入了扫描面。
+> ⑤ **2026-08-07 订正上一格的末句**：那里原写「『注册之后那个 hook 在真实 session 里真的响了』
+> **至今无人有资格宣称**」——**那句话已经过期**。同日两名官第一人称实证：开场即收到带签名
+> `[dao-subagent-clauses v1]` 的注入，末行 `CLAUSE_RENDER_SUMMARY exit=0 role=general
+> general=70 role_clauses=0` ⇒ 注册与调用两件事都已坐实。
+> **但别读成「官种条款送到了」**：那两次的 `role` 都降级成 `general`、官种节 **0 条**——
+> 派单用的是 `general-purpose` 底座，而 `SubagentStart` 的 payload 没有 prompt 字段 ⇒
+> **hook 只能从 `agent_type` 推官种**。修法在派单侧（按官种选 agent type，见
+> `ccswitch/rules/dao-dispatch.md` 的 `[#派-官种底座]`；用户 2026-08-07 拍板 issue #122 件②），
+> 不在本文件里。**没证到的那一半换了一格，仍然存在**：官种型 agent 铺开之后
+> 「`role` 真的不再是 `general`」要下一批才看得到，**本批未测**。
 
 ---
 
