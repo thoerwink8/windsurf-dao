@@ -41,6 +41,11 @@ Docker → `~/.docker/config.json` · gcloud → `~/.config/gcloud/`。**没有�
 建它跑 `ccswitch/scripts/dao-secrets-init.ps1`，搬凭据跑 `dao-secrets-migrate.ps1`。
 **两个脚本都由用户跑，不由 AI 跑**（凭据的事交用户经手，用户既定约束）。
 
+**init 的退出码是分档的**（用户 2026-08-07 拍板，issue #148）：`0` 全成 · `2` **主体成功
+但 ACL 没收紧**（非 NTFS 卷不支持 ACL，不拦人）· `1` 真失败。**唯一真相源是那个脚本的
+`.NOTES`「退出码分档」节**（消费方三条怎么写、为什么不 fail-closed、这一档信的是什么，
+全在那儿，此处不复述）。migrate 那侧仍是两态 `0/1`，别把这一档套过去。
+
 ### 为什么选 SOPS + age（用户 2026-08-05 拍板）
 
 因为**「加密存放」和「能带走」这两件事，Windows 的原生方案一条都满足不了**：
