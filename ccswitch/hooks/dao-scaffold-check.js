@@ -460,8 +460,12 @@ function clauseTargets(daoRoot) {
     // 实证：dao-change-batch.md（纯流程文件）仅因一句「与 `[自定@]` 回溯面同构」的引用
     // 被拉进扫描面，Marked 下零选中 ⇒ zero-sample 恒红——「提及」被当成了「使用」。
     // 收紧前全域摸底（rules/ 全量 14 份）：清单变化仅 dao-change-batch.md 一份移出，
-    // 其余 5 份真条款文件均另命中 n=/基线/slug 支，零误伤。其余三支刻意不动：
-    // `[n=`/`[基线:` 的引用与合法样例难以形态区分，slug 支同理——收不紧的不硬收。
+    // 其余 5 份真条款文件均另命中 n=/基线/slug 支，零误伤。其余三支刻意不动，
+    // 真实原因是**够不着，不是分不开**（对抗验证订正 2026-08-07，账 #169）：「提及 vs 使用」
+    // 的正解是代码 span 遮罩，本仓已有三套实现（clause-parser.mjs::maskCodeSpans、
+    // check-clauses-structure.ps1 的 Get-MaskedLine+Alt），但本 hook 是 CJS 而判据在 ESM 里，
+    // 接不上。v3 只键在占位符形状——散文里举带日期的例（`[自定@08-02]`）或另三支的
+    // 行内代码举例仍会误纳复发恒红。判据归一与此洞统一记 #169。
     try { hit = /\[n=|\[基线:|\[自定@\d|\[#[^\]\s]+\]/.test(fs.readFileSync(path.join(dir, n), "utf8")); }
     catch { hit = false; }
     if (hit) { targets.push(path.join("ccswitch", "rules", n)); withClauses++; }
