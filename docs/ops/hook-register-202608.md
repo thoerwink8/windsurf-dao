@@ -145,6 +145,10 @@ cc-switch DB · settings.common_config_claude               ← 镜像层，不�
 - **「宿主真的会在那个事件上调它」没证到**：沙箱只跑了各脚本的 CLI 自检。
   `SubagentStart` 事件本身是读宿主 cli.js 实证存在的（见 `dao-subagent-clauses.js` 头注），
   但「注册之后它真的响了」这句话现在没有人有资格说——要等真实会话产生第一条非 synthetic 记录。
+  **✅ 2026-08-07 已还（issue #162 回测批）**：真实派单的官在开场收到了注入，回报的渲染末行是
+  `CLAUSE_RENDER_SUMMARY exit=0 role=general general=70 role_clauses=0 stale=0`。
+  上面那句话**保留原文不改**（这份是当日作业记录，它记的是那一刻为真的东西），只在此处补一行结清。
+  仍未还的是**注入率**（派 N 个官、几个真收到）：已证「响过」不等于「每次都响」。
 - **`settings-drift` 的 live↔快照 那一面，第三面写完后的效果是在 worktree 里量的**，
   输出里还剩一批「脚本路径不一致」——那是 worktree 路径与主仓路径的差异造成的**测量假象**
   （`--providers` 那一面做了根路径归一化，所以它干净地到了 `drift=0`）。
