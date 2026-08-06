@@ -129,6 +129,7 @@
       "guards": [
         "clause-index.tests.js",
         "clause-structure.tests.ps1",
+        "dao-scaffold-check.tests.js",
         "ps-console-encoding.tests.js"
       ]
     },

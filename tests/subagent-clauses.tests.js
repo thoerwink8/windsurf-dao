@@ -195,6 +195,8 @@ console.log("\n──── ② 映射不出（实测占历史派单 93.8%，是
 console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成因，逐条不许空过）────");
 {
   // 成因一：官种合法但这份索引里 0 条（真索引的常态：默认源清单全是 general）
+  // **这一条同时是「stale 不退官种」那支的负控**（issue #162）：它证明「退官种」这个行为
+  // 本身还活着 —— 少了它，把 staleOf 改成恒真也不会有任何断言变红（反向 mutation R1 验的就是这个）。
   const a = fire("mousse-implementer", { index: IDX_GENERAL_ONLY });
   check("官种节 0 条 → 退到通用节并写明，不给一份看起来正常的空节",
     a.code === 0 && /官种=general/.test(a.ctx) && /渲染不出/.test(a.ctx) && /## 通用节/.test(a.ctx),
@@ -221,6 +223,30 @@ console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成�
     JSON.stringify(c.ctx.slice(0, 240)));
   check("索引过期 → 注入里点名「过期」这个成因（成因可指认才修得动）",
     /过期/.test(c.ctx), JSON.stringify(c.ctx.slice(0, 300)));
+
+  // ── issue #162 用户拍板「塞指针」：stale 那一支补的三格，逐格钉住 ──────────────
+  // 改之前的实况照直写：stale **本来就有注入**（它落在「通用节也渲染不出 → 只给指针」那一支），
+  // 缺的是下面这三格。所以这几条断言不是「从无到有」，是「从含混到指得动人」。
+  check("stale ①：官种不退（过期对每个官种都一样，退了就再也说不出「你那一节」是哪一节）",
+    /官种=implementer/.test(c.ctx) && !/官种=general/.test(c.ctx), JSON.stringify(c.ctx.split("\n")[0]));
+  check("stale ②：指针把两节都点名（协议是「通用节 + 你那一节」，只给文件名指不动人）",
+    /通用节/.test(c.ctx) && /官种那一节/.test(c.ctx) && /Read/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
+  check("stale ③：渲染端末行原样带进注入，stale=1 仍看得见（帅事后 Grep 得出断供次数）",
+    /CLAUSE_RENDER_SUMMARY[^\n]*\bstale=1\b/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
+  check("stale ④：修法命令来自渲染端报文原话，本文件里不另存一份字面量（双写必漂移）",
+    /gen-clause-index/.test(c.ctx), JSON.stringify(c.ctx.slice(-300)));
+  check("stale ⑤：仍然说清没渲染出正文（别让读者以为条款已全给）",
+    /没有渲染出/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
+  {
+    // 心跳这一格是本次改动的**可数化**收益：改之前 stale 恒 false（那个字段取自渲染结果，
+    // 而这条路径压根没有渲染结果）⇒「条款断供了几次」在日志上数不出来。
+    const firedLog = path.join(REPO, "_tmp", "subagent-clauses", "fired.log");
+    const recs = fs.readFileSync(firedLog, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+    const last = recs[recs.length - 1];
+    check("stale ⑥：心跳记 stale=true 且 mode=stale-pointer（断供数得出来，不再是 0 与没样本同形）",
+      last && last.stale === true && last.mode === "stale-pointer", JSON.stringify(last));
+  }
+
   // 复原夹具，后面的用例继续用它
   fs.writeFileSync(FIXTURE_MD, FIXTURE_BYTES);
   check("夹具已复原（索引重新对得上）——这条一红，后面全部用例都在过期索引上跑，别只修它自己",
@@ -423,7 +449,11 @@ console.log("\n──── ⑧ --selfcheck：自洽 + 逐面报 + 给得出修�
 
 console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测这两处判据吗 ────");
 {
-  const src = fs.readFileSync(HOOK, "utf8");
+  // 行尾**必须归一化**（dao 官侧条款「mutation 的锚点要扛得住行尾差异」，2026-08-07 当场实测坐实）：
+  // 本仓 `core.autocrlf=true`，工作树里这个文件是 CRLF，于是任何跨行锚点用 `\n` 写都**找不到**，
+  // 而失败的样子是「靶点出现 0 次」——看起来像源码结构变了，实际只是行尾。
+  // 归一化后写出的变异体是 LF，node 照跑不误。
+  const src = fs.readFileSync(HOOK, "utf8").replace(/\r\n/g, "\n");
 
   // 变异体必须落在 **ccswitch/hooks/ 自己那一层**：这个 hook 用 __dirname 定位仓根
   // （ROOT = ../../）并 require("../lib/hook-selfcheck.js")。首版把变异体写进 _tmp/ 子目录，
@@ -453,9 +483,10 @@ console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测
     after1.code === 0 && after1.ctx.startsWith(SIG));
 
   // M2 · 「渲染不出也要给指针」那一支：改成返回空文 ⇒ ③ 的降级断言必须变红
-  const t2 = `["（本次没有渲染出任何条款正文，上面那条路径是唯一入口。）"]).join("\\n")),`;
+  // 靶点 2026-08-07 随 issue #162 换过一次：原先钉的是那句括号里的脚注文案，它已被祈使句指针取代。
+  const t2 = `      text: clamp(head.concat(tail, ptr).join("\\n")),`;
   check("M2 靶点在源码里唯一存在", src.split(t2).length === 2, `出现 ${src.split(t2).length - 1} 次`);
-  const m2 = writeMutant("empty-degrade", t2, `[]).join("\\n")).slice(0, 0),`);
+  const m2 = writeMutant("empty-degrade", t2, `      text: clamp(head.concat(tail, ptr).join("\\n")).slice(0, 0),`);
   const noIndex = { index: path.join(TMP, "no-such-index.json") };
   const before2 = fire("mousse-implementer", noIndex);
   const after2 = fire("mousse-implementer", Object.assign({ script: m2 }, noIndex));
@@ -467,9 +498,81 @@ console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测
   check("M2：改坏后 exit 仍是 0（说明变异体真的跑起来了，空注入是判据被改坏所致而非崩溃）",
     after2.code === 0, `exit=${after2.code} stderr=${JSON.stringify(after2.err.slice(0, 160))}`);
 
+  // ── M3 · issue #162 那条新判据（stale ⇒ 指针且不退官种）的三形态 + 反向 ──────────
+  // 三形态照 dao 官侧条款「mutation 的改坏要试不止一种形态」：①移除 ②保留字面但不执行
+  // ③保留计算与副作用、只让结果不被消费。**三个红集刻意各不相同**，谁也不是谁的子集 ——
+  // 若三者红集相同，那说明这批断言其实只在测一件事，多写两个形态是自我安慰。
+  const staleMutFiles = [];
+  {
+    const FIXTURE_BYTES = fs.readFileSync(FIXTURE_MD);
+    fs.appendFileSync(FIXTURE_MD, "\n- 夹具新增：把索引弄过期，好让 stale 那一支跑起来。 [n=1 @07-30 触发:无] [仅判据·无触发]\n", "utf8");
+    const lastBeat = () => {
+      const p = path.join(REPO, "_tmp", "subagent-clauses", "fired.log");
+      const recs = fs.readFileSync(p, "utf8").split(/\r?\n/).filter(Boolean);
+      return JSON.parse(recs[recs.length - 1]);
+    };
+
+    const base = fire("mousse-implementer");
+    const baseBeat = lastBeat();
+    check("M3 基线：真文件在过期索引下保住官种 + 记 stale 心跳（变异体的对照面是活的）",
+      /官种=implementer/.test(base.ctx) && baseBeat.stale === true && baseBeat.mode === "stale-pointer",
+      JSON.stringify(baseBeat));
+
+    // ①移除：判据整段拿掉 ⇒ 退回旧行为（退官种），且 stale 那三格全灭
+    const t3a = `  const staleFail = !r.ok && r.stale === true;`;
+    check("M3a 靶点唯一", src.split(t3a).length === 2, `出现 ${src.split(t3a).length - 1} 次`);
+    const m3a = writeMutant("stale-removed", t3a, `  const staleFail = false;`);
+    staleMutFiles.push(m3a);
+    const a3 = fire("mousse-implementer", { script: m3a });
+    const beat3a = lastBeat();
+    check("M3a（①移除）：官种掉回 general + 心跳 stale 灭 ⇒ 「不退官种」与「心跳可数」两格都被测着",
+      /官种=general/.test(a3.ctx) && beat3a.stale !== true && a3.code === 0,
+      `head=${a3.ctx.split("\n")[0]} beat=${JSON.stringify(beat3a)}`);
+
+    // ②保留字面但使其不执行：`staleFail` 这个标识符还在源码里，分支却永不进
+    //   ⇒ 文本匹配型的检查（「源码里有没有 staleFail」）对这一形态天然失明，只有行为断言抓得到。
+    const t3b = `\n  if (staleFail) {\n    degraded.push(`;
+    check("M3b 靶点唯一", src.split(t3b).length === 2, `出现 ${src.split(t3b).length - 1} 次`);
+    const m3b = writeMutant("stale-dead-branch", t3b, `\n  if (false && staleFail) {\n    degraded.push(`);
+    staleMutFiles.push(m3b);
+    const b3 = fire("mousse-implementer", { script: m3b });
+    check("M3b（②保留字面但不执行）：官种照样掉回 general ⇒ 抓得住「分支还在但没人走」",
+      /官种=general/.test(b3.ctx) && b3.code === 0, `head=${b3.ctx.split("\n")[0]}`);
+
+    // ③保留计算与副作用、结果不被消费：判据照算、degraded 照写、官种照保，
+    //   只是**渲染那一侧收不到这个答案** ⇒ 指针少掉「拒投旧版」的说明与修法命令，心跳 stale 灭。
+    //   这一形态最像没事：注入还在、长度正常、官种也对，人眼扫一遍看不出任何异常。
+    const t3c = `    staleFail,\n    regenHint: r.hint,`;
+    check("M3c 靶点唯一", src.split(t3c).length === 2, `出现 ${src.split(t3c).length - 1} 次`);
+    const m3c = writeMutant("stale-unconsumed", t3c, `    staleFail: false,\n    regenHint: r.hint,`);
+    staleMutFiles.push(m3c);
+    const c3 = fire("mousse-implementer", { script: m3c });
+    const beat3c = lastBeat();
+    check("M3c（③结果不被消费）：官种仍对、注入仍在，但修法命令与 stale 心跳双双消失 ⇒ 红集与 ①② 不同",
+      /官种=implementer/.test(c3.ctx) && !/gen-clause-index/.test(c3.ctx) && beat3c.stale !== true,
+      `head=${c3.ctx.split("\n")[0]} hasHint=${/gen-clause-index/.test(c3.ctx)} beat=${JSON.stringify(beat3c)}`);
+
+    fs.writeFileSync(FIXTURE_MD, FIXTURE_BYTES);
+    check("M3 夹具已复原（索引重新对得上）", fire("mousse-implementer").ctx.includes("## implementer 节"));
+
+    // 反向 mutation：**上面三次全在「让 stale 支失灵」这一侧**，那样「非 stale 的失败仍要退官种」
+    //   那条负控一次都不会红 —— 它可能只是因为 stale 支本来就没被触发才通过的。
+    //   故把 staleOf 改成恒真：③成因一（官种 0 条）会被误当成索引过期 ⇒ 那条负控必须当场红。
+    const t4 = `  return m ? m[1] === "1" : null;`;
+    check("R1 靶点唯一", src.split(t4).length === 2, `出现 ${src.split(t4).length - 1} 次`);
+    const r1 = writeMutant("stale-always-true", t4, `  return true;`);
+    staleMutFiles.push(r1);
+    const zeroClauses = { index: IDX_GENERAL_ONLY };
+    const beforeR = fire("mousse-implementer", zeroClauses);
+    const afterR = fire("mousse-implementer", Object.assign({ script: r1 }, zeroClauses));
+    check("R1（反向）：staleOf 恒真后「官种 0 条 → 退通用节」这条负控真的红了 ⇒ 那条负控有判别力",
+      /官种=general/.test(beforeR.ctx) && /官种=implementer/.test(afterR.ctx),
+      `before=${beforeR.ctx.split("\n")[0]} after=${afterR.ctx.split("\n")[0]}`);
+  }
+
   cleanupMutants();
   check("变异体已清理（ccswitch/hooks/ 下不留残骸，否则死闸检测会把它报成孤儿）",
-    !fs.existsSync(m1) && !fs.existsSync(m2));
+    !fs.existsSync(m1) && !fs.existsSync(m2) && staleMutFiles.every((p) => !fs.existsSync(p)));
 }
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);

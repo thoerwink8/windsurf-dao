@@ -1056,6 +1056,46 @@ console.log("\n=== 健壮性：坏 stdin 不许崩 ===");
   check("坏 stdin → exit 0 不崩", r.status === 0, "code=" + r.status + " err=" + (r.stderr || "").slice(0, 200));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 模式 A · 条款筛选器：提及 ≠ 使用（clauseTargets v3 两态）===");
+// 2026-08-07 修的假阳性：筛选正则 `\[自定@` 会命中**谈论**这个语法的散文引用
+// （dao-change-batch.md 仅因一句「与 `[自定@]` 回溯面同构」被拉进扫描面，
+// Marked 下零选中 ⇒ zero-sample 恒红）。v3 收紧为 `\[自定@\d`（真标记必带月日）。
+// 两态断言的判别锚点是**普查行的两个计数**（绿路不点名文件，实测确认）：
+// `含条款的 M/N 个 .md，合计 C 条` —— 负控进没进看 M（mention-only 进了则 M=2），
+// 正控进没进看 C（real-mark 的那条被数到才是 2；被丢则 M=0、C=1）。
+// 文件名子串只用于负控（红/err 路才带路径，负控文件任何一路都不该留名）。
+// 本组要真跑 check-clauses-structure.ps1（win32 专属），非 Windows 记名跳过不静默。
+if (process.platform !== "win32") {
+  console.log("  SKIP  非 Windows：本组要真跑 PowerShell 条款闸，此平台不适用（记名跳过，非通过）");
+} else {
+  const root = path.join(SANDBOX, "meta", "clausefilter", "windsurf-dao");
+  const rulesDir = path.join(root, "ccswitch", "rules");
+  const scriptsDir = path.join(root, "ccswitch", "scripts");
+  fs.mkdirSync(rulesDir, { recursive: true });
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  putFakeGit(root);
+  // 真 PS 闸副本（不是空壳）：本组测的就是「谁被送进它嘴里」
+  fs.copyFileSync(path.join(REPO, "ccswitch", "scripts", "check-clauses-structure.ps1"),
+    path.join(scriptsDir, "check-clauses-structure.ps1"));
+  // dao.md 造一条元字段合法的条款，让缺省目标自身不搅局（zero-sample 不红）
+  fs.writeFileSync(path.join(root, "ccswitch", "dao.md"),
+    "# fixture dao\n\n- **甲条**：合法条款。 [n=1 @08-07 触发:PR流程] [基线:合成]\n", "utf8");
+  // 负控：纯流程文件，正文只**引用** `[自定@]` 语法（无日期）——v2 会误纳，v3 不纳
+  fs.writeFileSync(path.join(rulesDir, "mention-only.md"),
+    "# 流程细则\n\n- 双向门项走预授权（与「照做档/判断档」+`[自定@]` 回溯面同构）。\n", "utf8");
+  // 正控：真标记 `[自定@08-07]`（@ 后带数字）——v3 必须仍纳入扫描面
+  fs.writeFileSync(path.join(rulesDir, "real-mark.md"),
+    "# 含真标记\n\n- **乙条**：AI 自定的一条。 [n=1 @08-07 触发:PR流程] [基线:合成] [自定@08-07]\n", "utf8");
+  const ct = ctx(run(root));
+  check("负控：仅引用 [自定@]（无日期）的纯流程文件不进扫描面（M=1，且全程零留名）",
+    /1\/2 个 \.md/.test(ct) && !/mention-only\.md/.test(ct), "ctx=" + ct.slice(0, 600));
+  check("正控：带真标记 [自定@08-07] 的文件仍被扫（它那条被数进合计 ⇒ C=2）",
+    /合计 2 条/.test(ct), "ctx=" + ct.slice(0, 600));
+  check("自检：走的是绿普查行（上两条的锚点在这行里，行没了先红这条）",
+    /条款库结构闸绿/.test(ct), "ctx=" + ct.slice(0, 600));
+}
+
 // ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch (_) {}
 

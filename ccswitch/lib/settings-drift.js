@@ -21,6 +21,7 @@
 //   只看 live 一侧，不看快照，也不看方向。
 // · 本文件：live ↔ git 快照 双向比对 + 方向判定，可选 `--db` 三方。
 //   hook 面比三样：**是否都有**（basename 身份）· **挂载点/timeout** · **归一化命令串**。
+//   命令串比对**先过仓库根归一化**（issue #58，判据与考古结论见 compareDeployment 头注）。
 //   最后一项是 fortify2-20260726 刀F F3 补的：原先只比 basename，于是「同名但路径被改回
 //   旧值」静默通过（dao-timecode 实证：live/快照指仓库路径、DB 仍指已被删除的
 //   ~/.claude/hooks 副本，三项旧判据全同 ⇒ 零发现）。判据与其近似性见 normCommand 头注。
@@ -137,7 +138,8 @@ const FIRED_LOG_MAX_LINES = 2000;
 // 这两个口径，改回去当场变红。
 // issue #56 补入 permissions.deny 面 11 条（D1-D9：负例 3 · 正例 5 · 自检 1 ·
 // 零样本 1 · 普查健壮性 1）后由 28 抬到 39。
-const MIN_PROBE_CHECKS = 39;
+// issue #58 补入 live↔快照 仓库根归一化 4 条（R1-R4：负例 2 · 正例 2）后由 39 抬到 43。
+const MIN_PROBE_CHECKS = 43;
 
 // 软预算：超了就降级并把降级本身报出来（不静默截断 —— check-core-loc 的死法）
 const DEADLINE_MS = 1500;
@@ -518,6 +520,57 @@ function runSelfProbe() {
     const f = hardOf(compare(live, fixtureBase())).filter((x) => x.face === "hooks");
     t("负例·仅引号/分隔符写法不同 → 零硬报（归一化生效）",
       f.length === 0, "误报：" + f.map((x) => x.detail).join(" | "));
+  }
+
+  // ── live↔快照 仓库根归一化（issue #58）· 判据与考古结论见 compareDeployment 头注 ──
+  // R1/R2 必须**成对**存在：R1 钉「归一化生效」，R2 钉「归一化吃掉的那一格由多根检查兜住」。
+  // 只留 R1 的话，兜底哪天被删掉不会有任何东西变红。
+  {
+    const OTHER = "d:/frank/wd-impl-other";
+    // 负例 R1：live 整份指着另一个 checkout（＝从 worktree 里跑的形状）⇒ 零硬报。
+    // 这一条就是本批要消灭的那 15 条假阳性；归一化被削弱它当场变红。
+    {
+      const live = clone(fixtureBase());
+      live.hooks.SessionStart[0].hooks[0].command = 'node "' + OTHER + '/ccswitch/hooks/dao-probe-alpha.js"';
+      const f = hardOf(compareDeployment(live, fixtureBase()));
+      t("负例·live 与快照仓库根不同（worktree 里跑）→ 零硬报",
+        f.length === 0, "误报 " + f.length + " 条：" + f.map((x) => x.id + " " + x.detail).join(" | "));
+    }
+    // 正例 R2：**同一侧内部**出现两个仓库根 ⇒ 必须报（归一化代价的兜底）。
+    {
+      const live = clone(fixtureBase());
+      live.hooks.PostToolUse = [{ matcher: "Edit", hooks: [{ type: "command", command: 'node "' + OTHER + '/ccswitch/hooks/dao-probe-beta.js"', timeout: 10 }] }];
+      const snap = clone(fixtureBase());
+      snap.hooks.PostToolUse = [{ matcher: "Edit", hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-beta.js"', timeout: 10 }] }];
+      const f = compareDeployment(live, snap);
+      t("正例·live 内部两个仓库根 → hook-root 硬报且点名两个根（归一化代价的兜底）",
+        f.some((x) => x.tier === "hard" && x.id === "hook-root:live" &&
+          x.detail.includes(OTHER) && x.detail.includes(ROOT.replace(/\\/g, "/"))),
+        "实得：" + JSON.stringify(f.map((x) => x.kind + ":" + x.id)));
+    }
+    // 正例 R3：**快照侧**内部多根 —— 「有人从 worktree 导出过存档」唯一可能的痕迹形态
+    // （考古结论②）。这条把那次手工考古机器化：真发生就当场报，不必再翻一遍 git 全历史。
+    {
+      const snap = clone(fixtureBase());
+      snap.hooks.PostToolUse = [{ matcher: "Edit", hooks: [{ type: "command", command: 'node "' + OTHER + '/ccswitch/hooks/dao-probe-beta.js"', timeout: 10 }] }];
+      const live = clone(fixtureBase());
+      live.hooks.PostToolUse = [{ matcher: "Edit", hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-probe-beta.js"', timeout: 10 }] }];
+      const f = compareDeployment(live, snap);
+      t("正例·快照侧内部多根（从 worktree 导出的存档签名）→ hook-root:快照 硬报",
+        f.some((x) => x.tier === "hard" && x.id === "hook-root:快照"),
+        "实得：" + JSON.stringify(f.map((x) => x.kind + ":" + x.id)));
+    }
+    // 负例 R4：归一化只吃 `/ccswitch/` 这一段 ⇒ `${HOME}/.claude/hooks/` 形态**不受影响**，
+    // 「hook 被改回旧的 ~/.claude 副本」（dao-timecode 实证）仍必须报得出来。
+    // 少了这条，归一化的射程一旦被放宽到吃掉整条路径，F3 那个原盲区会悄悄回来。
+    {
+      const live = clone(fixtureBase());
+      live.hooks.SessionStart[0].hooks[0].command = 'node "' + PH_HOME + '/.claude/hooks/dao-probe-alpha.js"';
+      const f = compareDeployment(live, fixtureBase());
+      t("负例·归一化不吃 ~/.claude/hooks 形态 → 同名不同路径仍硬报（F3 原盲区没被放回来）",
+        f.some((x) => x.tier === "hard" && x.id === "hook-cmd:dao-probe-alpha.js"),
+        "实得：" + JSON.stringify(f.map((x) => x.kind + ":" + x.id)));
+    }
   }
 
   // ── per-provider hooks 面（issue #50）· 纯内存，无 I/O ──────────────────────
@@ -929,12 +982,15 @@ function detect(opts) {
   // ③ live ↔ 快照 比对
   const livePath = o.livePath || LIVE_SETTINGS;
   const snapPath = o.snapshotPath || SNAPSHOT_SETTINGS;
+  // 仓库根：面里被归一化掉了 ⇒ 只剩这里还留着，报文必须打出来（信息不许凭空消失）。
+  let roots = { live: [], snap: [] };
   try {
     maybeForceError("load");
     const live = readJson(livePath);
     const snap = loadSnapshotClaude(snapPath);
     maybeForceError("compare");
-    findings = compare(live, snap, { otherLabel: "快照" });
+    findings = compareDeployment(live, snap, { otherLabel: "快照" });
+    roots = { live: rootsOf(live), snap: rootsOf(snap) };
   } catch (e) {
     noteError(errors, `读取/比对 settings（live=${livePath} / snap=${snapPath}）`, e);
   }
@@ -980,7 +1036,7 @@ function detect(opts) {
     });
   }
 
-  return { findings, hard: hardOf(findings), probe, ruleEcho, errors, degraded, elapsedMs, livePath, snapPath };
+  return { findings, hard: hardOf(findings), probe, ruleEcho, errors, degraded, elapsedMs, livePath, snapPath, roots };
 }
 
 // ── 给 SessionStart hook 的短行输出（只报硬发现 / 探针失败 / 错误 / 降级）──────
@@ -1259,6 +1315,99 @@ function repoRootsOf(obj) {
     }
   }
   return roots;
+}
+
+// ── live ↔ 快照/DB 的比对入口（issue #58）──────────────────────────────────
+// 面①（provider ↔ canonical）早就走仓库根归一化了，**老面刻意没跟**——理由是
+// 「快照里的根差异可能是真问题（有人从 worktree 导出过），照抄归一化会把真错静默吞掉」。
+// 2026-08-07 用户拍板「先核再修」，考古做完了，结论写在这里，因为下一个动这段的人
+// 一定会重新问一遍同样的问题：
+//
+// **考古结论 ①：历史干净，快照里的路径全部来自主仓根。**
+//   `config-sync/common/settings.json` 全历史 32 个版本逐个取出 blob 实扫
+//   （`git log --follow` 开着改名追踪，实测零改名 —— 这个文件一直在这个路径上）：
+//     · 29 个版本 = `${PROJECT_ROOT}` / `${HOME}` 占位符（c168060〔06-07〕起占位符化）
+//     · 2 个版本 = 占位符化之前的 7644d85 / 5c6b55a（都是 2026-06-07），存的是字面
+//       `D:/frank/windsurf-dao` —— **主仓根，不是 worktree**
+//     · 1 个版本 = d65ac75〔06-15〕的 `\${PROJECT_ROOT}`（PowerShell 写坏的 JSON 转义），
+//       下一个动到本文件的提交 30e08ba〔同日〕就修了；不是路径问题
+//   全历史**零个** worktree 目录名、零个非主仓根。
+//   ⚠ **扫描式必须是「任意盘符绝对路径」，不能是 `/ccswitch/` 限定的**（两位官各写一份
+//     脚本独立跑，结论一致；这一格是第二遍才看清的）：`ccswitch/` 这个目录名是 d65ac75
+//     才从 `claude/` 改过来的 ⇒ **唯一真带着字面根的那两个版本走的是 `claude/hooks/`**。
+//     拿本文件的 `repoRootsOf`（只认 `/ccswitch/`）去考古，会对那两个版本报「零根」——
+//     **结论碰巧一样，理由却是假的**，正是「守卫的自检不许复用被守对象的解析」那个形状。
+//
+// **考古结论 ②（比 ① 更硬，因为它不依赖枚举）：占位符化之后，「错的根」在结构上存不进快照。**
+//   `config-sync/lib/paths.mjs` 的 `encodePaths` 把**导出时那个 checkout 的根**换成
+//   `${PROJECT_ROOT}`。于是只有两种可能：
+//     · 导出方与 DB 里的根**一致** ⇒ 落成 `${PROJECT_ROOT}`，而这是个**变量不是值**——
+//       它不记录任何根，还原时展开成还原方的根。**没有「错的根」可言。**
+//     · 导出方与 DB 里的根**不一致**（正是「从 worktree 导出」那一格）⇒ 那个根**换不掉**，
+//       会以**字面绝对路径**留在快照里。**这才是它唯一可能的痕迹形态，而实扫为零。**
+//   ⇒ 「worktree 导出污染了存档」这个担忧，对占位符化之后的快照**不成立**；
+//     它若发生过，会长成字面路径而不是 `${PROJECT_ROOT}`。
+//
+// **那 13~15 条假阳性到底是什么**：不是存档的问题，是**比对方式**的问题。快照侧的
+// `${PROJECT_ROOT}` 被 `decodePaths` 展开成**本进程所在的 checkout 根**，而 live 里存的是
+// 主树部署时写进去的路径。从主仓跑 ⇒ 恒等、全绿；从 worktree 跑 ⇒ 每个 dao hook 报一条。
+// **两边都不携带漂移信息**：它量的是「我从哪儿跑的」，不是「存档和现状差在哪」。
+// 实测（本机，issue #58，三跑对照）：**主仓·改前** exit=0 / 0 条硬发现；
+// **worktree·改前** exit=1 / **15 条**硬发现，15 条的 detail 逐条只差仓库根前缀；
+// **worktree·改后** exit=0 / 0 条硬发现。同一份 live、同一份快照，只换了「从哪儿跑」
+// 与「有没有归一化」⇒ 那 15 条量的确实是运行位置，不是漂移。
+//
+// ── 归一化的代价，以及它由谁兜住 ────────────────────────────────────────────
+// 代价与面①那次一样：「live 指向**另一个 checkout**」这一格，比对看不见了。
+// 面①的兜底是面②（provider 互比，刻意不归一化）；老面没有第二个可比的对象，
+// 所以这里换一种兜法：**查每一侧自己内部是否出现了多于一个仓库根**。
+//   · 它 **live 侧根无关**；快照/DB 侧**不是**——rootsOf 先 decodePaths，`${PROJECT_ROOT}`
+//     展开成**本进程的根** ⇒ 快照侧结论取决于运行根：运行根恰等于污染根时这道兜底失明
+//     （PR #167 对抗实测：同一污染 fixture 换 checkout 跑，报 1 根 vs 2 根；考古里那两个
+//     历史版本的字面根正是主仓根，即从主仓——SessionStart 的常态位置——跑时看不见）；
+//   · 它抓的正是真实事故形态：某个 hook 是从 worktree 注册进去的，那棵树一删就成静默死 hook；
+//   · 它同时是**考古结论②的机器化**——快照侧若哪天真被人从 worktree 导出，
+//     那个字面根会与其余 `${PROJECT_ROOT}` 展开出的根并存 ⇒ 多根 ⇒ 当场报出。
+//     这次的手工考古从此不必再做第二遍。
+// **仍然看不见的那一格，照直写**：两侧**各自**内部都只有一个根、但**两侧的那个根不同**
+// （live 整份指着 worktree A，快照展开成 B）——归一化之后这一格无人再看。
+// 它不是被无视的：`printReport` 每次把两侧的根原样打印出来（信息不许凭空消失），
+// 且 hook 文件到底存不存在归 `check-dead-gates`。
+//
+// ⚠ 两处与 `repoRootsOf` 的差别，刻意留在这一层而不改那个函数（那样会波及面①）：
+//   ① **先 decodePaths**：快照侧存的是 `${PROJECT_ROOT}` 字面量，不还原的话「根」会是
+//      占位符本身，报文标着「按本次运行根展开」却打出一个变量名，自相矛盾。
+//   ② **大小写不敏感去重**：Windows 上 `D:/…` 与 `d:/…` 是同一棵树，
+//      不这么做的话，live 里两条 hook 写法大小写不同就会被误判成「多根」——
+//      那正是本批要消灭的那类假阳性，在兜底逻辑里原样复发就太讽刺了。
+function rootsOf(obj) {
+  const seen = new Map();
+  for (const r of repoRootsOf(obj)) {
+    const d = decodePaths(r).replace(/\\/g, "/").replace(/\/+$/, "");
+    const k = d.toLowerCase();
+    if (!seen.has(k)) seen.set(k, d);
+  }
+  return [...seen.values()].sort();
+}
+
+function compareDeployment(live, other, opts) {
+  const o = opts || {};
+  const otherLabel = o.otherLabel || "快照";
+  const selfLabel = o.selfLabel || "live";
+  const rootFindings = [];
+  for (const [label, obj] of [[selfLabel, live], [otherLabel, other]]) {
+    const roots = rootsOf(obj);
+    if (roots.length <= 1) continue;
+    rootFindings.push({
+      tier: "hard", face: "hooks", kind: "VALUE_DIFF", id: `hook-root:${label}`,
+      detail: `${label} 侧的 dao hook 指向 ${roots.length} 个不同的仓库根：[${roots.join(" · ")}]` +
+        `。同一份配置里只该有一个 checkout —— 多出来的那个多半是从 worktree 注册/导出进去的，` +
+        `那棵树一删，指向它的 hook 就成了静默死 hook（live 侧与运行根无关；` +
+        `快照/DB 侧的占位符按本次运行根展开——运行根恰等于污染根时本条会失明）`,
+    });
+  }
+  // 根发现排在前面：hookLines 只展示前 3 条 detail，这一类比逐个 hook 的差异更该先被看见。
+  return rootFindings.concat(compare(withAgnosticRoots(live), withAgnosticRoots(other), o));
 }
 
 // provider 的 hooks 指纹：script → 归一化后的 {mounts, timeouts, cmds}。
@@ -1748,8 +1897,11 @@ async function compareWithDb(findingsLabel) {
   const live = readJson(LIVE_SETTINGS);
   const snap = loadSnapshotClaude(SNAPSHOT_SETTINGS);
   return {
-    liveVsDb: compare(live, dbObj, { otherLabel: "DB" }),
-    snapVsDb: compare(snap, dbObj, { otherLabel: "DB" }),
+    // 两侧都走 compareDeployment：快照侧的 `${PROJECT_ROOT}` 展开成的是**本进程的根**，
+    // 而 DB 里存的是主树部署时写进去的路径 ⇒ 不归一化的话，从 worktree 跑 `--db`
+    // 会与老面撞上同一批假阳性（issue #58）。
+    liveVsDb: compareDeployment(live, dbObj, { otherLabel: "DB" }),
+    snapVsDb: compareDeployment(snap, dbObj, { otherLabel: "DB", selfLabel: "快照" }),
     label: findingsLabel,
   };
 }
@@ -1761,6 +1913,16 @@ function printReport(r) {
   L.push(`  快照 : ${r.snapPath}`);
   L.push(`  探针 : ${r.probe.ok ? "✓ " + r.probe.total + "/" + r.probe.total : "✗ " + r.probe.failed.map((f) => f.name).join("；")}`);
   L.push(`  耗时 : ${r.elapsedMs}ms`);
+  // hook 面已把仓库根归一化掉了（issue #58）⇒ 这条信息只剩这里还留着，每次原样打印。
+  {
+    const rt = r.roots || { live: [], snap: [] };
+    const fmt = (a) => (a && a.length ? a.join(" · ") : "(未出现 /ccswitch/ 形态的路径)");
+    L.push(`  仓库根 : live=${fmt(rt.live)}  快照(按本次运行根展开)=${fmt(rt.snap)}`);
+    if (rt.live.length === 1 && rt.snap.length === 1 && rt.live[0].toLowerCase() !== rt.snap[0].toLowerCase()) {
+      L.push("           ⓘ 两者不同是正常的（你多半在 worktree 里跑）——快照存的是 ${PROJECT_ROOT} 变量，" +
+        "展开成的就是本次运行的 checkout；hook 面已按 <repo> 归一化，不据此判红");
+    }
+  }
   for (const e of r.errors) L.push(`  ✗ ${e}`);
   for (const d of r.degraded) L.push(`  ⚠ ${d}`);
 
@@ -1834,6 +1996,9 @@ async function main() {
 
 module.exports = {
   detect, hookLines, compare, runSelfProbe, daoScriptOf, hookIndex, selfcheck,
+  // issue #58：live↔快照/DB 那一面的真正入口（compare 之上包了仓库根归一化 + 多根兜底）。
+  // 与 compare 分别导出，测试要能各自换靶：只导出一个的话，「归一化到底在哪一层」不可测。
+  compareDeployment, rootsOf,
   LIVE_SETTINGS, SNAPSHOT_SETTINGS, MIN_PROBE_CHECKS,
   stateDir, firedLogPath, errorLogPath, lastJsonPath,
   // per-provider hooks 面（issue #50）。compareProviderHooks 是纯函数（不碰 DB / 不读文件）
