@@ -33,6 +33,8 @@
 
 > 🔴 豁免的是「问」不是「续」：授权期**每轮**工具段必有 `ScheduleWakeup` 或 `{stop:true}`——**除 `stop:true` 那轮外每轮都要有心跳，不需判断轮次。** [#续-每轮心跳]
 
+🔴 拍板即落单：用户拍板后**当场**评论进对应 issue，不落盘等于没拍——会话一没拍板就没了。新会话接力敲 `/dao-resume`，而它只读得到落了盘的。 [#续-拍板落单]
+
 说人话（最高优先）：禁用只有体系内部才懂的词，自检**这个词用户自己说过吗**。写选项前 = Read `rules/dao-askuser.md`。
 
 ## 知识归位 · 写到哪（各复归其根）
@@ -75,7 +77,7 @@
 ## 器 · 命令表（给用户的 `/` 命令）
 
 判据：**用户有没有理由亲手敲它**。
-`/dao-design` 设计入口 · `/dao-loop` 循环开发 · `/dao-verify` 体检兼清分支 · `/dao-evolution` 教训 · `/dao-distill` 沉淀 · `/dao-project-scaffold`（`--init` 接入）。
+`/dao-resume` 会话接力 · `/dao-design` 设计入口 · `/dao-loop` 循环开发 · `/dao-verify` 体检兼清分支 · `/dao-evolution` 教训 · `/dao-distill` 沉淀 · `/dao-project-scaffold`（`--init` 接入）。
 
 ## 路由铁律（跨 skill 调用）
 
