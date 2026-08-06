@@ -378,6 +378,20 @@
       ],
       "status": "active"
     },
+    "派-官种底座": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本机 713 份 transcript（1242 MiB）实测——803 次 Task 派单中 753 次（93.8%）的 subagent_type 不含官种信息（general-purpose 638 / claude 115），官种条款筛选恒空转；修后携带率未测",
+      "source_refs": [
+        "issue #122（用户 2026-08-07 拍板三件套之②）",
+        "_tmp/delivery-backtest/report.md C 组"
+      ],
+      "status": "active"
+    },
     "派-档位调整": {
       "file": "ccswitch/rules/dao-dispatch.md",
       "n": "1",

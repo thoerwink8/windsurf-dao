@@ -137,7 +137,7 @@ config-sync/
 | 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻 |
 | 技能 | `ccswitch/skills/dao-*/` | 9 | 渐进披露；全部 `disable-model-invocation`，用户 `/name` 手动触发 |
 | 命令 | `ccswitch/commands/` | 10 | slash command，`/dao-dev` `/dao-loop` `/dao-serve` 等 |
-| 子代理 | `ccswitch/agents/dao-*.md` | 8 | subagent，服务 dao-loop 金字塔调度 |
+| 子代理 | `ccswitch/agents/dao-*.md` | 8+4 | subagent 两族：**能力型 8**（按模型档分，服务 dao-loop 金字塔调度）+ **官种型 4**（`implementer`/`adversary`/`scout`/`dogfood`，让 `agent_type` 带上官种，`SubagentStart` 才筛得出官种条款）|
 | 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
 
 部署入口：`dao.ps1 link-claude` 一键 symlink 上述对象到 `~/.claude/`，并幂等追加 `dao.md` 的 `@import`。
