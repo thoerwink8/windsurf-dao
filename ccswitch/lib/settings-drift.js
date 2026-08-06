@@ -1361,7 +1361,10 @@ function repoRootsOf(obj) {
 // 代价与面①那次一样：「live 指向**另一个 checkout**」这一格，比对看不见了。
 // 面①的兜底是面②（provider 互比，刻意不归一化）；老面没有第二个可比的对象，
 // 所以这里换一种兜法：**查每一侧自己内部是否出现了多于一个仓库根**。
-//   · 它是**根无关**的（不管你从哪儿跑，结论一样）⇒ 不会重新引入假阳性；
+//   · 它 **live 侧根无关**；快照/DB 侧**不是**——rootsOf 先 decodePaths，`${PROJECT_ROOT}`
+//     展开成**本进程的根** ⇒ 快照侧结论取决于运行根：运行根恰等于污染根时这道兜底失明
+//     （PR #167 对抗实测：同一污染 fixture 换 checkout 跑，报 1 根 vs 2 根；考古里那两个
+//     历史版本的字面根正是主仓根，即从主仓——SessionStart 的常态位置——跑时看不见）；
 //   · 它抓的正是真实事故形态：某个 hook 是从 worktree 注册进去的，那棵树一删就成静默死 hook；
 //   · 它同时是**考古结论②的机器化**——快照侧若哪天真被人从 worktree 导出，
 //     那个字面根会与其余 `${PROJECT_ROOT}` 展开出的根并存 ⇒ 多根 ⇒ 当场报出。
@@ -1380,7 +1383,7 @@ function repoRootsOf(obj) {
 function rootsOf(obj) {
   const seen = new Map();
   for (const r of repoRootsOf(obj)) {
-    const d = decodePaths(r).replace(/\\/g, "/");
+    const d = decodePaths(r).replace(/\\/g, "/").replace(/\/+$/, "");
     const k = d.toLowerCase();
     if (!seen.has(k)) seen.set(k, d);
   }
@@ -1399,8 +1402,8 @@ function compareDeployment(live, other, opts) {
       tier: "hard", face: "hooks", kind: "VALUE_DIFF", id: `hook-root:${label}`,
       detail: `${label} 侧的 dao hook 指向 ${roots.length} 个不同的仓库根：[${roots.join(" · ")}]` +
         `。同一份配置里只该有一个 checkout —— 多出来的那个多半是从 worktree 注册/导出进去的，` +
-        `那棵树一删，指向它的 hook 就成了静默死 hook（本条**不受仓库根归一化影响**，` +
-        `无论你从哪个 checkout 跑，结论都一样）`,
+        `那棵树一删，指向它的 hook 就成了静默死 hook（live 侧与运行根无关；` +
+        `快照/DB 侧的占位符按本次运行根展开——运行根恰等于污染根时本条会失明）`,
     });
   }
   // 根发现排在前面：hookLines 只展示前 3 条 detail，这一类比逐个 hook 的差异更该先被看见。
