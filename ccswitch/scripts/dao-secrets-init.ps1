@@ -92,6 +92,35 @@
       decrypt 其实**不需要**它（实测不钉也 exit 0 —— 解密用的是文件自带的元数据），
       照样钉是为了让「当前目录上方有没有别人的 .sops.yaml」这个变量彻底离开等式。
 
+    ## 🔴 退出码分档（用户 2026-08-07 拍板，issue #148。形态照 mousse-cli verify-all 的四态）
+
+        0  全成：钥匙在、.sops.yaml 在、第 6 步自证过了，**而且 ACL 也收紧了**
+        2  **主体成功，但 ACL 没收紧**：上面那些都成了，只有 icacls 没成
+           （非 NTFS 卷 —— U 盘 exFAT、网络盘、某些容器挂载 —— 本来就不支持 ACL）
+        1  真失败：工具没装 / 私钥没生成 / 公钥取不到 / 自证没过 …… 该做的事没做成
+
+    改这一档之前是「ACL 失败也 exit 0 + 一行红字」。为什么不够：**红字骗不到人眼，
+    骗得到只读退出码的消费方** —— 而「权限没收紧」与「一切正常」在唯一的机器可读通道上
+    长得一模一样，正是 mousse-cli 那个四态退出码存在要治的病。
+    为什么不干脆 fail-closed（ACL 失败即非零并当失败）：那会在最能体现「能带走」的介质
+    （U 盘 exFAT）上直接拦人，而「能带走优先」是用户 2026-08-05 拍的方向 ⇒ 两者直接冲突。
+    分档两边都不牺牲：**不挡人，也不再谎报。**
+
+    ⚠ 消费方三条（照 ccswitch/rules/dao-powershell.md）：
+      - 判「全成」写 `-eq 0`。**别写 `-le 2`** —— 那个区间把 1（真失败）也放进来了。
+      - 接受「2 也算过」时要显式写出来（`@(0,2) -contains $code`），别让它躲在 `-ne 1` 里。
+      - 要拿退出码一律 `powershell -File <脚本>`，**禁 `-Command "& '<脚本>'"`** ——
+        后者只按「最后一条命令成败」返回 0/1，**不透传脚本里的 exit N**，分档当场被抹平
+        （dao-powershell.md 第六坑，实测 exit 3 经 -Command 拿到 1）。
+    -DryRun 恒 0（它一个写操作都不做，也就没有 ACL 这一格）。
+    ⚠ **`1` 压过 `2`**：ACL 没收紧、同时主体又真失败了 ⇒ 退 `1`。`2` 的定义是「主体成功」，
+      不是「失败得轻一点」—— 这一条塌了，`2` 这个值就不能再信。
+    上面这三句（0/2/1 各是什么 · -DryRun 恒 0 · 1 压过 2）分别由回归网
+    `tests/dao-secrets.tests.ps1` 的场景 19 / 20 / 21 钉住，判别力实测见该文件头注附三之三。
+    ⚠ 这一档信的仍然是 `icacls` 自报的退出码，**没有 ACL 读回校验**（issue #148 明写维持现状：
+    icacls 输出是本地化的，解析它会换来一个新的脆弱点）⇒ **`0` 的含义是「icacls 说它成了」，
+    不是「已独立核实权限确实收紧了」。**
+
     先跑 -DryRun。
 #>
 [CmdletBinding()]
@@ -188,8 +217,11 @@ foreach ($d in @($SecretsDir, $keyDir)) {
 $aclTargets = @($SecretsDir)
 if ($KeyLocation -eq 'Separate') { $aclTargets += $keyDir }
 
-# 断继承 + 只留当前用户。icacls 失败不致命（NTFS 之外的盘可能不支持），但要说出来 ——
+# 断继承 + 只留当前用户。icacls 失败**不中断**（NTFS 之外的盘可能不支持），但要说出来 ——
 # 而且要在**最后一屏**再说一遍（见第 7 节）：中间这行黄字会被后面一整屏绿色盖过去。
+# ⚠ 「不中断」不等于「不留痕」：本次若有目录没收紧，**脚本末尾退出码是 2 而不是 0**
+# （用户 2026-08-07 拍板，issue #148；契约全文在 .NOTES「退出码分档」）。
+# 屏幕归人读，退出码归机器读 —— 那一档补的正是后者此前一直在说「一切正常」。
 $aclFailed = @()
 foreach ($t in $aclTargets) {
     & icacls $t /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
@@ -308,7 +340,9 @@ Write-Host ''
 Write-Host '=== 7. 接下来 ===' -ForegroundColor Cyan
 
 # 🔴 权限那条**再说一遍**。第 2 节说过一次，但那一行黄字后面跟着一整屏绿色 ——
-# 用户读的是最后几行。「一屏绿 + 一行黄 + 退出码 0」与「一切正常」在肉眼上不可区分。
+# 用户读的是最后几行。「一屏绿 + 一行黄」与「一切正常」在肉眼上不可区分。
+# （这里治的是**人眼**那一半；机器那一半 2026-08-07 起由末尾的 exit 2 治，见文件最后。
+#  两半都要：只改退出码，用户看不懂发生了什么；只印红字，脚本的消费方照旧读到「一切正常」。）
 if ($aclFailed.Count) {
     Write-Host ''
     Write-Host '  🔴 有目录的权限没收紧（第 2 节报过，这里再说一遍，因为你读的是最后几行）：' -ForegroundColor Red
@@ -324,8 +358,9 @@ if ($aclFailed.Count) {
         Write-Host '        若只是凭据根没收紧，别人拿到的还只是打不开的密文。' -ForegroundColor Red
     }
     Write-Host '        换一个 NTFS 盘上的路径重跑（-SecretsDir <新路径>），或者自己把权限收好。' -ForegroundColor Red
-    Write-Host '     （本脚本刻意不为这个退出 1：非 NTFS 卷本来就不支持 ACL，硬失败会挡住' -ForegroundColor Red
-    Write-Host '       愿意接受这个风险的人。风险是真的，判断权在你。）' -ForegroundColor Red
+    Write-Host '     （本脚本**不为这个退出 1**：非 NTFS 卷本来就不支持 ACL，硬失败会挡住' -ForegroundColor Red
+    Write-Host '       愿意接受这个风险的人。风险是真的，判断权在你 —— 但退出码会说实话：' -ForegroundColor Red
+    Write-Host '       **本次退出码 2 = 主体成功但权限未收紧**（0 全成 / 2 这一档 / 1 真失败）。）' -ForegroundColor Red
     Write-Host ''
 }
 
@@ -359,3 +394,15 @@ if ($KeyLocation -eq 'Portable') {
 } else {
     Write-Host "      要搬**两处**：$SecretsDir 和 $keyFile。只搬一处等于没搬。"
 }
+
+# ── 退出码分档（用户 2026-08-07 拍板，issue #148）───────────────────────────
+# 为什么落在**最末尾**而不是第 2 节现场：ACL 没收紧不该中断后面那几屏「你接下来该做什么」
+# —— 那些对用户仍然有用。它只需要在**离开这个进程的那一刻**如实说一次。
+# 契约（0 / 2 / 1 各是什么、消费方怎么判）全文在 .NOTES「退出码分档」，此处不重述。
+if ($aclFailed.Count) {
+    Write-Host ''
+    Write-Host '  ⇒ 本次退出码 **2**：密钥主体成功（钥匙已生成、加密链路已自证），' -ForegroundColor Red
+    Write-Host "     但上面 $($aclFailed.Count) 个目录的权限没收紧。这不是失败，也不是一切正常。" -ForegroundColor Red
+    exit 2
+}
+exit 0
