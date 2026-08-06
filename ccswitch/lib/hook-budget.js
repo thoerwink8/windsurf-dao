@@ -314,9 +314,39 @@ function createBudget(opts) {
   return api;
 }
 
+/**
+ * 判定一个 `child_process` 同步调用抛出的 error 是不是「**被我们自己设的 timeout 夹死的**」。
+ *
+ * ── 为什么它值得单独成一个导出（2026-08-06 · issue #147 账 1）─────────────────
+ * 它原先是 `dao-scaffold-check.js` 里 `gitOut` 的 catch 中一句内联表达式，而 PR #130
+ * 二轮对抗把**两半判据各自删掉**，两个变异体**双双存活**（B1 / B2）—— 没有任何断言在守它。
+ * 根因不是漏写断言，是**端到端结构上分不开这两半**：node 因 `timeout` 选项杀子进程时
+ * `code` 与 `signal` 是**同时**被设上的，任一半单独留着都能让端到端照常通过。
+ * ⇒ 只有把这一判抽成纯函数、拿**合成 error 对象**逐半去喂，两半才各自可证。
+ * （同一批还给它补了一条端到端正控：见那个 hook 的 `DAO_HOOK_GIT_TIMEOUT_MS` 测试缝。）
+ *
+ * ── 判据（本次只搬家，语义与内联版逐字相同）─────────────────────────────────
+ *   · `code === "ETIMEDOUT"` —— node 因 `timeout` 杀子进程时设的错误码；
+ *   · `signal === "SIGTERM"` —— 同一次杀留下的信号（`killSignal` 缺省值）。
+ * **两半都留是刻意的，不是冗余**：它们由 error 上两个**互不派生**的字段承载，
+ * 某个平台 / 某个 node 版本上任一字段缺席时，另一半仍认得出这一次「没跑成」。
+ * 照直写它的代价：常态下两半同时为真 ⇒ **端到端观察不到二者之差**，判别力只能由
+ * 下面那张合成真值表提供；真值表若被删掉，这两半就又回到零守护。
+ *
+ * 🔴 **必须返回 false 的那些**（本机实测的三种非超时失败态）：命令不存在
+ * `code="ENOENT" signal=null`、非仓库目录 `status=128 signal=null`、以及 git 自己的
+ * 业务失败。它们在常路上是**正常结果**（沙箱里的垃圾 .git、没有 origin、裸目录），
+ * 报出来只会把「没跑」这个信号稀释成「git 又抱怨了」—— 一个每次都响的信号等于没有信号。
+ */
+function isBudgetKill(e) {
+  if (!e) return false;
+  return e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+}
+
 module.exports = {
   resolveRegisteredTimeoutMs,
   createBudget,
+  isBudgetKill,
   toBudgetMs,
   HOST_DEFAULT_TIMEOUT_MS,
   FALLBACK_TIMEOUT_MS,
