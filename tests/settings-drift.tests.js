@@ -297,6 +297,78 @@ console.log("\n=== F3 负控：同一文件的不同写法不许误报（护栏�
   check("第三方命令串变化 → 不进 F3 硬报（归属判据先挡）",
     !r.hard.some((f) => /^hook-cmd:/.test(f.id)), JSON.stringify(hardIds(r)));
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// issue #58 · 仓库根归一化（考古结论与判据见 settings-drift.js 的 compareDeployment 头注）
+// 端到端跑 detect()，不是只测纯函数——这一面的病恰恰长在「快照侧占位符由谁展开」上，
+// 而展开发生在读盘之后，纯函数测不到那一段。
+const OTHER_ROOT = "d:/frank/wd-impl-archaeology";   // 另一个 checkout（worktree 的形状）
+console.log("\n=== #58 负控：live 与快照仓库根不同（worktree 里跑）不许报 ===");
+{
+  // live 的每个 dao hook 都指向另一个 checkout，其余（挂载点 / timeout / 参数）逐字不变。
+  // 这就是本批之前的 15 条假阳性：从 worktree 跑时快照的 ${PROJECT_ROOT} 展开成 worktree 根。
+  const live = liveEquivalent();
+  const swap = (c) => c.replace(new RegExp(REPO.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), OTHER_ROOT);
+  live.hooks.SessionStart[0].hooks[0].command = swap(live.hooks.SessionStart[0].hooks[0].command);
+  live.hooks.SessionStart[1].hooks[0].command = swap(live.hooks.SessionStart[1].hooks[0].command);
+  live.hooks.PostToolUse[0].hooks[0].command = swap(live.hooks.PostToolUse[0].hooks[0].command);
+  const { r, lines } = runPair(live, snapClaude());
+  check("整份指向另一个 checkout → 零硬报（归一化生效）", r.hard.length === 0, JSON.stringify(hardIds(r)));
+  check("整份指向另一个 checkout → 零提醒噪音", lines.length === 0, JSON.stringify(lines));
+  check("被归一化掉的根仍被 detect 原样带出（信息不许凭空消失）",
+    r.roots.live.some((x) => x.toLowerCase() === OTHER_ROOT) &&
+    r.roots.snap.some((x) => x.toLowerCase() === REPO.replace(/\\/g, "/").toLowerCase()),
+    JSON.stringify(r.roots));
+  check("快照侧的根是**展开后**的真实路径，不是 ${PROJECT_ROOT} 字面量",
+    !r.roots.snap.some((x) => /\$\{/.test(x)), JSON.stringify(r.roots));
+}
+{
+  // 大小写不同的同一棵树不许被兜底逻辑误判成「多根」——那是本批要消灭的病在兜底里复发
+  const live = liveEquivalent();
+  const P = REPO.replace(/\\/g, "/");
+  live.hooks.PostToolUse[0].hooks[0].command =
+    'node "' + (P[0].toUpperCase() + P.slice(1)).toUpperCase() + '/ccswitch/hooks/dao-glob-gate.js"';
+  const { r } = runPair(live, snapClaude());
+  check("同一棵树大小写不同 → 不判多根（Windows 语义）",
+    !r.hard.some((f) => /^hook-root:/.test(f.id)), JSON.stringify(hardIds(r)));
+}
+
+console.log("\n=== #58 正控：同一侧内部多根必须报（归一化代价的兜底，与上一节成对）===");
+{
+  // live 里混进一个从别的 checkout 注册来的 hook：那棵树一删就成静默死 hook。
+  // 归一化把「两侧根不同」抹掉了，这一格只剩这条兜得住。
+  const live = liveEquivalent();
+  live.hooks.PostToolUse[0].hooks[0].command = 'node "' + OTHER_ROOT + '/ccswitch/hooks/dao-glob-gate.js"';
+  const { r, lines } = runPair(live, snapClaude());
+  check("live 内部两个仓库根 → hook-root:live 硬报", hasHard(r, "VALUE_DIFF", "hook-root:live"), JSON.stringify(hardIds(r)));
+  const d = (r.hard.find((f) => f.id === "hook-root:live") || {}).detail || "";
+  check("报文点名两个根（人要据此判该删哪一个）",
+    d.toLowerCase().includes(OTHER_ROOT) && d.toLowerCase().includes(REPO.replace(/\\/g, "/").toLowerCase()), d);
+  check("报文说明后果（那棵树一删就成静默死 hook）", /静默死 hook/.test(d), d);
+  check("多根发现进得了 SessionStart 提醒（不许只在 CLI 里可见）",
+    lines.some((l) => /仓库根/.test(l)), JSON.stringify(lines));
+}
+{
+  // 快照侧内部多根 = 「有人从 worktree 导出过存档」唯一可能的痕迹形态（考古结论②）。
+  // 本条把那次手工翻 git 全历史的考古机器化：真发生就当场报。
+  const snap = snapClaude();
+  snap.hooks.PostToolUse[0].hooks[0].command = 'node "' + OTHER_ROOT + '/ccswitch/hooks/dao-glob-gate.js"';
+  const live = liveEquivalent();
+  live.hooks.PostToolUse[0].hooks[0].command = 'node "' + OTHER_ROOT + '/ccswitch/hooks/dao-glob-gate.js"';
+  const { r } = runPair(live, snap);
+  check("快照内部两个仓库根 → hook-root:快照 硬报（存档被 worktree 污染的签名）",
+    hasHard(r, "VALUE_DIFF", "hook-root:快照"), JSON.stringify(hardIds(r)));
+}
+{
+  // 射程边界：归一化只吃 /ccswitch/ 这一段，~/.claude/hooks 形态必须仍然报得出来。
+  // 上面 F3 那节已从另一个方向守着同一件事，这条是显式声明边界（放宽即红）。
+  const live = liveEquivalent();
+  live.hooks.Stop[0].hooks[0].command = 'node "' + OTHER_ROOT + '/ccswitch/hooks/dao-timecode.js" claude';
+  const { r } = runPair(live, snapClaude());
+  check("快照在 ~/.claude/hooks、live 在某 checkout 的 ccswitch → 仍硬报（归一化没吃过界）",
+    hasHard(r, "VALUE_DIFF", "hook-cmd:dao-timecode.js"), JSON.stringify(hardIds(r)));
+}
+
 {
   const live = liveEquivalent();
   delete live.env.ANTHROPIC_DEFAULT_SONNET_MODEL;
