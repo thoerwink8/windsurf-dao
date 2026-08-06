@@ -22,12 +22,21 @@ Docker → `~/.docker/config.json` · gcloud → `~/.config/gcloud/`。**没有�
 ## 凭据根的形态
 
 ```
-%USERPROFILE%\.dao-secrets\
+%USERPROFILE%\.dao-secrets\        ← 凭据根：**只有密文，没有钥匙**
   ├── .sops.yaml          加密规则（只含 age **公钥** —— 公钥泄露无害，它只能加密）
-  ├── age\keys.txt        🔴 age **私钥**：全套东西里唯一不可再生的
   ├── _backup\<时间戳>\    迁移时的明文备份（回滚材料，确认无恙后自己删）
   └── <项目 slug>.env     各项目的加密凭据：**键名明文可见、值加密**
+
+%AppData%\sops\age\keys.txt        ← age **私钥**，住在凭据根之外
+                                     （sops 在 Windows 上自己的默认位置 ⇒ 不需要 SOPS_AGE_KEY_FILE）
 ```
+
+**私钥落在凭据根之外是默认（`-KeyLocation Separate`，用户 2026-08-06 拍板）**；
+传 `-KeyLocation Portable` 则私钥改放 `<凭据根>\age\keys.txt`，两样住一起、整包拷走即换机。
+**判据与那格收益有多窄，唯一真相源在 `dao-secrets-init.ps1` 的 `.PARAMETER KeyLocation`**
+（一句话版：用户在乎的只有「密钥不在程序代码里」，两种模式都已满足；私钥丢了不要紧
+⇒ Portable 的卖点归零，而 Separate 白得一格。⚠ 实测 `%AppData% ⊂ %USERPROFILE%`
+⇒ 它挡不住「整个用户目录被备份/同步」，只挡「专门拷 `.dao-secrets` 这一个文件夹」）。
 
 建它跑 `ccswitch/scripts/dao-secrets-init.ps1`，搬凭据跑 `dao-secrets-migrate.ps1`。
 **两个脚本都由用户跑，不由 AI 跑**（凭据的事交用户经手，用户既定约束）。
@@ -206,6 +215,9 @@ sops exec-file --no-fifo "$env:USERPROFILE\.dao-secrets\<slug>.env" "<命令，�
 1. **age 私钥的默认位置在 Windows 上是 `%AppData%\sops\age\keys.txt`**，
    不是 Linux 的 `~/.config/sops/age/keys.txt`。覆写用 `SOPS_AGE_KEY_FILE`
    （出处：getsops.io/docs/usage/identities/age）。
+   ⇒ **`dao-secrets-init.ps1` 的默认模式就落在这个位置**（2026-08-06 起），
+   所以走默认路的人**一个环境变量都不用设**；只有 `-KeyLocation Portable` 才需要
+   `SOPS_AGE_KEY_FILE`。
 2. **`--no-fifo` 在 Windows 上是「显式但无害」，不是「必须」**（2026-08-05 实测**订正**了本条
    原先的说法）。原文写的是「`exec-file` 的 FIFO 在 Windows 上直接 `log.Fatal` ⇒ 不加
    `--no-fifo` 会当场死」，出处是 `exec_windows.go` 里 `GetPipe` / `WritePipe` 的函数体确实

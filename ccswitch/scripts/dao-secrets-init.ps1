@@ -13,12 +13,18 @@
     为什么要你跑而不是 AI 跑：**凭据的事交用户经手**（用户既定约束）。
     AI 出方案、写脚本、改代码；按下去那一下是你的。
 
-    做完这个脚本之后，凭据根长这样（-KeyLocation Portable，默认）：
+    做完这个脚本之后，盘上长这样（-KeyLocation Separate，**默认**）：
 
-        %USERPROFILE%\.dao-secrets\
+        %USERPROFILE%\.dao-secrets\        ← 凭据根：**只有密文**，没有钥匙
           ├── .sops.yaml          加密规则（只含 age **公钥**，公钥泄露无害）
-          ├── age\keys.txt        🔴 age **私钥** —— 全套东西里唯一不可再生的
           └── <项目 slug>.env     各项目的加密凭据（键名明文可见、值加密）
+
+        %AppData%\sops\age\keys.txt        ← age **私钥**，住在凭据根之外
+                                             （这是 sops 在 Windows 上自己的默认位置，
+                                              所以不需要 SOPS_AGE_KEY_FILE）
+
+    传 -KeyLocation Portable 则私钥改放 <凭据根>\age\keys.txt，两样东西住一起。
+    两者的取舍见下面 .PARAMETER KeyLocation。
 
     键名命名空间：**用「一个项目一个文件」而不是「一个大文件 + `项目 :: 字段` 前缀」。**
     差别是实的不是风格：一个项目一个文件时，**文件名就是命名空间**，各项目的键名
@@ -28,20 +34,44 @@
     只有一个文件、且它是**恢复端**不是读取端。
 
 .PARAMETER KeyLocation
-    Portable（默认）—— 私钥放 <SecretsDir>\age\keys.txt，**整个文件夹拷走即完成换机**。
-    Separate      —— 私钥放 sops 在 Windows 上的默认位置 %AppData%\sops\age\keys.txt，
-                     加密文件仍在 SecretsDir。
+    Separate（**默认**）—— 私钥放 sops 在 Windows 上的默认位置 %AppData%\sops\age\keys.txt，
+                          加密文件仍在 SecretsDir。因为是 sops 自己的默认位置，
+                          **不需要设 SOPS_AGE_KEY_FILE**。
+    Portable         —— 私钥放 <SecretsDir>\age\keys.txt，整个文件夹拷走即完成换机。
 
-    🔴 **两者的差别必须说清楚，别只看「哪个方便」**：
-    Portable 把私钥和密文放在同一个文件夹里 ⇒ **谁整包拷走这个文件夹，谁就同时拿到了
-    密文和解密它的钥匙，加密对「整包拷走」这个动作等于不设防。**
-    它防住的是**另一件事**：密钥不再随项目目录被复制 / 提交 / 分享出去 —— 而那正是
-    issue #135 的 4 个目标里的第 2 个，也是 P3 那个明文 GitHub 口令的实际风险面
-    （那个目录压根不是 git 仓库，不受任何 .gitignore 保护）。
-    Separate 换来「整包拷走也没用」，代价是换机要搬两个地方、且容易只搬一个。
+    ## 先说清楚这个开关到底在选什么（2026-08-06 重写，原文答错了问题）
 
-    选 Portable 是**用户 2026-08-05 拍板「能带走优先」的直接后果**，不是本脚本的判断。
-    改主意就传 -KeyLocation Separate 重跑。
+    原文拿「怕不怕被整包拷走」对上「怕不怕私钥丢了」，让人以为要在两种恐惧里挑一个。
+    **用户在乎的根本不是那两件**，他要的只有一件：
+
+        🔴 **密钥不要混在程序代码里。**
+
+    而**这一件两种模式都已经满足了** —— 凭据根默认就在 %USERPROFILE%\.dao-secrets，
+    本来就在任何项目工作树之外。⇒ **这个开关不参与主诉求的成败**，它只在主诉求之上
+    再加一层，所以它该按「加的这层值不值」来选，不该按「你更怕哪一种灾难」来选。
+
+    ## 那为什么默认是 Separate
+
+    ① **私钥丢了不要紧 —— 用户明说的**：丢了就重新 age-keygen 一把、把凭据重填一遍，
+       麻烦但不致命（那些值本来也都能重新申请）。
+       ⇒ Portable 唯一的卖点「一个文件夹拷走即换机」**建立在「私钥很宝贵、要小心带走」
+       这个前提上，而前提不成立** ⇒ 卖点归零。
+    ② **Separate 多挡一格**：有人专门拷 %USERPROFILE%\.dao-secrets 这个文件夹时，
+       他拿到的是一堆打不开的密文。Portable 下他连钥匙一起拿走了。
+    ⇒ 一边卖点归零、一边白得一格 ⇒ 默认 Separate。**用户 2026-08-06 拍板**（issue #72
+    「最近拍板」节）。这不是本脚本的判断。
+
+    ## 🔴 Separate 买到的那一格有多大 —— 照直写，别当成「另一个目录就安全了」
+
+    **本机实测：%AppData% 在 %USERPROFILE% 里面**（C:\Users\<你>\AppData\Roaming
+    vs C:\Users\<你>）⇒ **Separate 挡不住「整个用户目录被备份 / 同步 / 做镜像」** ——
+    那种情况下私钥和密文照样一起走。它只挡「有人专门拷 .dao-secrets 这一个文件夹」。
+    这是一格真的、但很窄的收益。**要挡住前者得把私钥挪出 %USERPROFILE%，本脚本没做这件事。**
+
+    ## Portable 什么时候仍然更合适
+
+    你确实要在多台机器之间来回搬、且嫌「搬两处」容易漏 —— 那就传 -KeyLocation Portable。
+    代价是那个文件夹从此**自带钥匙**：谁拷走它谁就解得开。
 
 .NOTES
     工艺（照 ccswitch/rules/dao-powershell.md）：
@@ -68,7 +98,7 @@
 param(
     [string]$SecretsDir = "$env:USERPROFILE\.dao-secrets",
     [ValidateSet('Portable', 'Separate')]
-    [string]$KeyLocation = 'Portable',
+    [string]$KeyLocation = 'Separate',
     [switch]$SetUserEnvVar,
     [switch]$DryRun
 )
@@ -283,8 +313,16 @@ if ($aclFailed.Count) {
     Write-Host ''
     Write-Host '  🔴 有目录的权限没收紧（第 2 节报过，这里再说一遍，因为你读的是最后几行）：' -ForegroundColor Red
     foreach ($t in $aclFailed) { Write-Host "        $t" -ForegroundColor Red }
-    Write-Host '     ⇒ 这台机器上的其他账户可能读得到它。Portable 模式下**私钥也在凭据根里**，' -ForegroundColor Red
-    Write-Host '        读得到就等于解得开 —— 加密在这种情况下几乎不起作用。' -ForegroundColor Red
+    Write-Host '     ⇒ 这台机器上的其他账户可能读得到它。' -ForegroundColor Red
+    # 后果按模式分，别混着说：Portable 下私钥也在凭据根里 ⇒ 读得到就解得开；
+    # Separate 下没收紧的若是私钥目录，那就是钥匙本身裸着，比密文裸着更糟。
+    if ($KeyLocation -eq 'Portable') {
+        Write-Host '        Portable 模式下**私钥也在凭据根里** —— 读得到就等于解得开，' -ForegroundColor Red
+        Write-Host '        加密在这种情况下几乎不起作用。' -ForegroundColor Red
+    } else {
+        Write-Host "        上面若含 $keyDir，那是**私钥目录** —— 钥匙裸着比密文裸着更糟。" -ForegroundColor Red
+        Write-Host '        若只是凭据根没收紧，别人拿到的还只是打不开的密文。' -ForegroundColor Red
+    }
     Write-Host '        换一个 NTFS 盘上的路径重跑（-SecretsDir <新路径>），或者自己把权限收好。' -ForegroundColor Red
     Write-Host '     （本脚本刻意不为这个退出 1：非 NTFS 卷本来就不支持 ACL，硬失败会挡住' -ForegroundColor Red
     Write-Host '       愿意接受这个风险的人。风险是真的，判断权在你。）' -ForegroundColor Red
@@ -307,10 +345,13 @@ Write-Host '  凭据根建好了，但**里面还没有你的任何凭据**。�
 Write-Host ''
 Write-Host '      powershell -File ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun'
 Write-Host ''
-Write-Host '  🔴 现在起，这个东西是不可再生的，丢了没有任何补救：' -ForegroundColor Red
+Write-Host '  这把钥匙在这里，没有第二份、也没有找回通道：' -ForegroundColor Yellow
 Write-Host "      $keyFile"
-Write-Host '     丢了 = 所有加密文件永久打不开（没有找回、没有客服、没有备用钥匙）。'
-Write-Host '     建议：把它单独复制一份到密码管理器或离线介质里。'
+Write-Host '     丢了 = 所有加密文件永久打不开（没有客服、没有备用钥匙）。'
+Write-Host '     ⇒ 但**这不是灾难**：重新跑一次本脚本生成新钥匙、把那几个值重填一遍即可 ——'
+Write-Host '       那些值本来就都能重新申请。要省掉重填的麻烦，就单独复制一份到密码管理器或离线介质。'
+Write-Host '       （这句话 2026-08-06 按用户拍板改过口径：原文写成「没有任何补救」，'
+Write-Host '        把「要重来一遍」说成了「完了」——量级不对，会让人为了保管它做过头的事。）'
 Write-Host ''
 Write-Host '  换机器怎么办：'
 if ($KeyLocation -eq 'Portable') {

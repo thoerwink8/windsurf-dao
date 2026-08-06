@@ -923,8 +923,12 @@ Assert-True '14g 换机提示说的是「整个 <凭据根> 文件夹拷过去�
 #
 # 🔴 **改默认值的人必须同时改这一条断言**，那正是它存在的理由：把「换个默认值」
 # 从一次静默的单词替换，变成一次需要当面写进测试的决定。
-# 现值 Portable 的出处：用户 2026-08-05 拍板「能带走优先」。
-Write-Host '场景 15：默认值（不传 -KeyLocation）⇒ 与 Portable 逐格一致'
+# 现值 **Separate** 的出处：用户 2026-08-06 拍板（issue #72「最近拍板」节）——
+# 他在乎的只有「密钥不要混在程序代码里」，而那一件两种模式都已满足；私钥丢了不要紧
+# （重新生成 + 重填即可）⇒ Portable「一个文件夹拷走即换机」的卖点归零，
+# 而 Separate 白得一格（专门拷 .dao-secrets 的人拿不到钥匙）。
+# 上一版这里钉的是 Portable（2026-08-05「能带走优先」），同批改的。
+Write-Host '场景 15：默认值（不传 -KeyLocation）⇒ 与 Separate 逐格一致'
 
 $c15 = New-Case 'init-default'
 $s15 = Join-Path $c15 'secrets'
@@ -934,14 +938,14 @@ $r15 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c15 -SopsCfg (New-SopsCfg) `
         -EnvOverrides @{ APPDATA = $appData15 }
 
 Assert-True '15a exit 0' ($r15.ExitCode -eq 0) ("exit={0}" -f $r15.ExitCode)
-Assert-True '15b **默认 = Portable**：私钥落凭据根 age\keys.txt' `
-    (Test-Path (Join-Path $s15 'age\keys.txt')) ''
-Assert-True '15c **默认 = Portable**：假 APPDATA 下没有 sops\' `
-    (-not (Test-Path (Join-Path $appData15 'sops'))) ''
-Assert-True '15d 屏幕上把模式印出来了，印的是 Portable（用户看得见自己走的是哪条）' `
-    ($r15.Text -match '私钥落点模式：Portable') ''
-Assert-True '15e 默认路径下私钥目录**靠继承**拿权限（Portable 不单独收私钥目录）' `
-    ((Get-AclProtected (Join-Path $s15 'age')) -eq $false) ''
+Assert-True '15b **默认 = Separate**：私钥落假 APPDATA\sops\age\keys.txt' `
+    (Test-Path (Join-Path $appData15 'sops\age\keys.txt')) ''
+Assert-True '15c **默认 = Separate**：凭据根里没有 age\ 目录' `
+    (-not (Test-Path (Join-Path $s15 'age'))) ''
+Assert-True '15d 屏幕上把模式印出来了，印的是 Separate（用户看得见自己走的是哪条）' `
+    ($r15.Text -match '私钥落点模式：Separate') ''
+Assert-True '15e 默认路径下私钥目录的 ACL 被**单独**收紧（它在凭据根之外，没人管它就真没人管）' `
+    ((Get-AclProtected (Join-Path $appData15 'sops\age')) -eq $true) ''
 
 # ============================================================================
 # 场景 16：全程**一个凭据值都没印到屏幕上**
