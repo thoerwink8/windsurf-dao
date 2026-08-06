@@ -77,7 +77,11 @@ node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 d
 node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对不上 ⇒ exit 1（tests/clause-index.tests.js 每次跑它）
 node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数（条款数 / 触发:无 / slug 数）
 powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立实现）
-node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（原型，**尚未**接进派单流程）
+node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集；**已接进派单流程**（2026-08-07 订正）：
+                                              #   `SubagentStart` hook `ccswitch/hooks/dao-subagent-clauses.js` 每次派官都调它
+                                              #   本行此前写作「原型，尚未接进派单流程」，注册完成那一刻即为假而无人订正
+                                              #   ⚠ 已证的是「响过」不是「每次都响」：注入率（派 N 个官、几个真收到）仍未审计，
+                                              #     而那正是退役「派单令首行 Read」双通道的前置门（契约：≥20 次 100%）
 ```
 
 `ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。
