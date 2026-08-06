@@ -457,6 +457,34 @@
       ],
       "status": "active"
     },
+    "守-宿主失效态": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "08-06",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本窗三条结论压在这一格上悬了五轮无人验（#133/#145 七道闸会不会全灭 · #152 exit 1 换 exit 0 损失了什么 · #127/#130 降级路径的价值）",
+      "source_refs": [
+        "官方 hooks.md:754 / :415 / :1233 / :750 / :1235 / :1479",
+        "issue #72"
+      ],
+      "status": "active"
+    },
+    "续-拍板落单": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-06",
+      "trigger": "AskUserQuestion 返回后",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-06 一例：同一轮内用户拍板 3 条，3/3 只存在于会话；接力时不得不手写 40 行提示词把它们搬出去，而那段提示词本身又是新的快照",
+      "source_refs": [
+        "issue #72",
+        "commands/dao-resume.md"
+      ],
+      "status": "active"
+    },
     "言-只读载体": {
       "file": "ccswitch/dao.md",
       "n": "20",
