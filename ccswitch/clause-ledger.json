@@ -457,6 +457,20 @@
       ],
       "status": "active"
     },
+    "续-拍板落单": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-06",
+      "trigger": "AskUserQuestion 返回后",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-06 一例：同一轮内用户拍板 3 条，3/3 只存在于会话；接力时不得不手写 40 行提示词把它们搬出去，而那段提示词本身又是新的快照",
+      "source_refs": [
+        "issue #72",
+        "commands/dao-resume.md"
+      ],
+      "status": "active"
+    },
     "言-只读载体": {
       "file": "ccswitch/dao.md",
       "n": "20",
