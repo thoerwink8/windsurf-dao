@@ -122,7 +122,16 @@
 // 官种**在当前索引里有几条条款**——长期 0 条的那些行就是该问「这一行还有意义吗」的对象。
 // 这是观察线不是闸（机器判不出「这个映射对不对」，判得出的只有「它今天渲染得出东西吗」）。
 //
-// 回归网：tests/subagent-clauses.tests.js（映射正控 / 泛型降级 / 渲染失败降级 / fail-open / mutation 双向）
+// ── 指针档自声明：条款正文源不一定是探到的那份（2026-08-07，issue #174 用户拍板）────
+// 「按 cwd 探到项目侧条款库就指它」这条规则在**自己就是规则源的仓**里会指错：那种仓的项目侧档
+// 只装判重面与落地坐标、**没有条款正文**，而注入却自称「条款库正文（含各官种分节）」。
+// 修法是**让那份档自己声明**：头部写一行 `<!-- dao-clause-pointer …`，本 hook 有界读头部认它，
+// 认出来就把正文源退回官侧档、另附一行「项目侧（指针档）：<路径>」。判据与射程见
+// POINTER_MARK_RE 那一段（选它而不选「猜有没有正文」/「两个指针都给」/「识别 dao 仓自己」的
+// 理由也在那里）。**别的项目零影响**：没标记 ⇒ 一个字不变。
+// ⚠ **它治的是「指针指错」，不是「注入率」**，也不改变官种筛选那一格 —— 别把这条读成那两件事。
+//
+// 回归网：tests/subagent-clauses.tests.js（映射正控 / 泛型降级 / 渲染失败降级 / fail-open / 指针档两态 / mutation 双向）
 // 真相源：windsurf-dao/ccswitch/hooks/dao-subagent-clauses.js
 // 注册（用户动作，本批不代做）：settings.json → hooks.SubagentStart，matcher "*"
 
@@ -154,6 +163,64 @@ const RENDER_TIMEOUT_MS = Number(process.env.DAO_SUBAGENT_CLAUSES_TIMEOUT_MS || 
 // 没有，注入文本里因此明写这一点，不假装两半都给了。
 const CLAUSE_FILE_CANDIDATES = ["docs/rules/dispatch-clauses.md", ".claude/rules/dispatch-clauses.md"];
 const KNOWN_CLAUSE_FILE = path.join(ROOT, "ccswitch", "rules", "dao-officer-clauses.md").replace(/\\/g, "/");
+
+// ── 指针档自声明（用户 2026-08-07 拍板 · issue #174）────────────────────────
+// **要治的病**：「自己就是规则源」的仓（windsurf-dao 本身就是一例）里，条款正文住在仓内的
+// `ccswitch/` 下，项目侧那份 `docs/rules/dispatch-clauses.md` 只装判重面与落地坐标、**刻意
+// 一个字的条款正文都不放**（同一个仓放副本，副本从落笔那刻起就开始漂移）。而上面那段探测
+// 「探到项目侧档就指它」于是把官指向了一份没有条款正文的文件，注入里还自称「条款库正文
+// （含各官种分节）」—— **那句话变成假的，而没有任何东西会红**。
+//
+// **修法取「自声明」而不是「机器猜」**（三条备选里选定这条的理由，照直记，省得下次重走）：
+//   · 甲「读它有没有 `## 通用节` 之类的正文签名」= **近似判断**，两个方向都构造得出反例；
+//   · 乙「两个指针都给」= 注入长度本来就压在 9000 上限边缘（本仓真索引下已退成判据句形态）；
+//   · 丙「识别 dao 仓自己」= 只治本仓，换个同型仓再撞一次。
+//   ⇒ **自声明是结构决定的，零近似**：作者在头部写一行标记，机器只认那行标记在不在。
+//
+// **判据刻意写窄，两侧都说清**：①只读**头部有界窗口**（默认 4096 字节），不读全文——
+// 正文里提到这个词不会被误判，且大文件不会被整份读进内存；②标记必须**行首**是 `<!--`
+// （HTML 注释开头），句中提及匹配不上。两条合起来让「提到它」与「声明是它」分得开。
+//
+// **射程边界照直写**：只作用在**按 cwd 探到**的那两个候选路径上。`DAO_CLAUSE_FILE` 那条 env
+// 覆写**刻意不走这道判断** —— 它是「换机/换项目」的逃生口，优先级最高，显式指了什么就是什么，
+// 在逃生口上再加一层推断会让它不再是逃生口。
+// 回归网：tests/subagent-clauses.tests.js §④′（两态 + 有界窗口边界）与 §⑨ M4（恒判非指针的反向 mutation）。
+const POINTER_MARK_RE = /^<!--\s*dao-clause-pointer\b/m;
+const POINTER_PROBE_BYTES = Number(process.env.DAO_CLAUSE_POINTER_PROBE_BYTES || 4096);
+const POINTER_HOW =
+  "本项目侧那份是**指针档**（头部自带 dao-clause-pointer 标记、不含条款正文），故正文取 dao 官侧档";
+
+// 有界读头部：openSync + 单次 readSync，不把整份文件读进来。
+// 读不到（不存在/无权限/是目录）一律返回 null ⇒ 判为「非指针档」走原行为，**绝不因此抛异常**：
+// 这条路径上任何一次抛出都会把 hook 打进最外层 catch，代价是整次注入退成纯指针。
+function headOf(p, bytes) {
+  let fd = null;
+  try {
+    fd = fs.openSync(p, "r");
+    const buf = Buffer.alloc(bytes);
+    const n = fs.readSync(fd, buf, 0, bytes, 0);
+    return buf.slice(0, n).toString("utf8");
+  } catch (_) {
+    return null;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} }
+  }
+}
+
+function isPointerDoc(p) {
+  const head = headOf(p, POINTER_PROBE_BYTES);
+  return head !== null && POINTER_MARK_RE.test(head);
+}
+
+// 注入末尾那一行：**只在判为指针档时出现**。没有它的话，官只知道「正文在官侧档」，
+// 不知道这个仓还有一份装着「跑哪个命令」的项目侧档 —— 而协议是两份都读。
+function pointerLine(clause) {
+  if (!clause || !clause.pointer) return null;
+  return (
+    `项目侧（指针档）：${clause.pointer}　〔它自己声明不含条款正文，装的是本仓的判重面与落地坐标` +
+    `（跑哪个命令 / 账本在哪 / 再生成命令序）——**协议是两份都读**：官侧档答「怎么判」，它答「在这个仓里怎么做」。〕`
+  );
+}
 
 // ── agent_type → 官种 ────────────────────────────────────────────────────────
 // 两段式：先精确名，再关键词。**两段都是近似**，两个方向都构造得出反例：
@@ -198,7 +265,14 @@ function resolveClauseFile(cwd) {
   if (process.env.DAO_CLAUSE_FILE) return { file: process.env.DAO_CLAUSE_FILE, how: "env DAO_CLAUSE_FILE" };
   for (const rel of CLAUSE_FILE_CANDIDATES) {
     const p = path.join(cwd || ".", rel);
-    try { if (fs.existsSync(p)) return { file: p.replace(/\\/g, "/"), how: "按本次 cwd 探到" }; } catch (_) {}
+    try {
+      if (fs.existsSync(p)) {
+        const found = p.replace(/\\/g, "/");
+        // 指针档自声明：探到之后有界读头部认标记（见上面 POINTER_MARK_RE 那一段头注）
+        if (isPointerDoc(p)) return { file: KNOWN_CLAUSE_FILE, how: POINTER_HOW, pointer: found };
+        return { file: found, how: "按本次 cwd 探到" };
+      }
+    } catch (_) {}
   }
   return { file: KNOWN_CLAUSE_FILE, how: "本项目下没探到项目特有条款库，退到 dao 官侧通用档（通用判据仍适用；本仓具体跑什么命令这一半缺）" };
 }
@@ -291,6 +365,8 @@ function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, 
         `若本次实际官种不是「${role}」——本事件拿不到派单 prompt，官种是按 agent 定义名推断的，` +
         `误判概率真实存在——按你所属官种那一节读那份文件即可，本段不构成范围限制。`
     );
+    const pl = pointerLine(clause);
+    if (pl) tail.push(pl);
   }
   if (degraded.length) {
     tail.push("⚠ 本次渲染有降级，照直写：" + degraded.join("；") + (marker ? `　〔渲染器末行：${marker}〕` : ""));
@@ -485,7 +561,7 @@ try {
         `${SIGNATURE} agent_type=(输入解析失败) → 官种=未知`,
         `本次没能渲染条款（${inputErr && inputErr.message}）。派单条款库正文在 ${clause.file}〔${clause.how}〕，` +
           "按 dao 既定协议，官在开工前通读通用节与自己所属官种那一节。",
-      ].join("\n"),
+      ].concat(pointerLine(clause) || []).join("\n"),
       msg + "（本次只注入了指针，没有条款正文）"
     );
     process.exit(0);
@@ -562,7 +638,7 @@ try {
       `${SIGNATURE} agent_type=${(input && input.agent_type) || "(未知)"} → 官种=未知（hook 内部异常）`,
       `本次没能渲染条款（${e && e.message}）。派单条款库正文在 ${clause.file}〔${clause.how}〕，` +
         "按 dao 既定协议，官在开工前通读通用节与自己所属官种那一节。",
-    ].join("\n"),
+    ].concat(pointerLine(clause) || []).join("\n"),
     msg + "（本次只注入了指针，没有条款正文）"
   );
   process.exit(0);
