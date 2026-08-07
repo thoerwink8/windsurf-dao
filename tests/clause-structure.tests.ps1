@@ -1,4 +1,5 @@
 ﻿# 条款库结构闸 · 合成夹具回归网（ccswitch/scripts/check-clauses-structure.ps1）
+# @dao-test-tier: env   # 整套只在 --env 跑：实测 67-81s，默认层（人人在敲的快速回归）的耗时预算不容
 #
 # 跑法：powershell -NoProfile -ExecutionPolicy Bypass -File tests/clause-structure.tests.ps1
 #       全绿 exit 0，任一红 exit 1。

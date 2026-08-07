@@ -9,8 +9,10 @@
 // 故这里**不维护清单，而是扫目录**：`tests/*.tests.js` 一律纳入。手维护的清单会过期
 // （本仓已被过期清单咬过两次：marshal-guard 14 天、compact-log 6 周），扫出来的不会。
 //
-// .ps1 测试需要 PowerShell 宿主，本入口不代跑，只如实列出并提示 —— 「跑不了」要说出来，
-// 不能因为跑不了就当它不存在（那正是静默失效的定义）。
+// **`.ps1` 测试从 2026-08-08（issue #179）起由本入口代跑**，不再只是列出来提醒。
+// 此前那句「本入口不代跑，只如实列出并提示」把「跑不了」说了出来，但说出来之后仍然没人跑：
+// 合并链的 `-VerifyCommand` 拿到 exit 0 就放行，而那 6 套 PowerShell 测试**一套都没进那个 0**。
+// ⇒ 「跑不了要说出来」是下限，不是终点；能代跑就代跑，跑不了的那部分上退出码通道（见下）。
 //
 // ══════════════════════════════════════════════════════════════════════════
 // ── 分层：默认层 / 环境敏感层（2026-08-04 · issue #116）─────────────────────
@@ -36,15 +38,20 @@
 //
 // ── 退出码契约（本文件是唯一真相源）────────────────────────────────────────
 //
+//   **六态**（2026-08-08 订正：此前这张表与 CLAUDE.md 都写「五态」，漏了 5 —— 而代码里
+//   `EXIT_NO_TESTS_DIR` 与回归网 ⑥ 的断言从一开始就有它。头注是唯一真相源却漏记了一态，
+//   于是「六态」这件事只有读代码的人知道。issue #179 对抗官坐实，本批补记。）
+//
 //   | 码 | 含义                                             | 消费方该怎么读        |
 //   |----|--------------------------------------------------|-----------------------|
-//   | 0  | 全跑、全过：**且零 defer**（只有 --env 拿得到）    | 可以放行              |
-//   | 1  | 有测试文件红                                      | 拦住，去读失败详情    |
-//   | 2  | 无红，但有断言被 defer —— **本次没跑完**           | 默认跑法的正常码      |
+//   | 0  | 全跑、全过：**且零 defer、零未跑 PS 套**（只有 --env 拿得到） | 可以放行     |
+//   | 1  | 有测试文件红（node 侧或 PowerShell 侧）            | 拦住，去读失败详情    |
+//   | 2  | 无红，但有断言被 defer / 有 PS 套没跑 —— **本次没跑完** | 默认跑法的正常码 |
 //   | 3  | 用法错误（不认识的参数）——**一套都没跑**           | 拦住，改命令行        |
-//   | 4  | 分层自检失败：静态声明与运行期 defer 计数对不上     | 拦住，先修分层机制    |
+//   | 4  | 分层自检失败：静态声明与运行期 defer 计数对不上，或某 PS 套 exit 0 却零输出 | 拦住，先修分层机制 |
+//   | 5  | 找不到 tests/ 目录（**一套都没跑**，与「有 defer」刻意不共用 2） | 拦住，核 --tests-dir |
 //
-//   优先级：3（开跑前判） > 1 > 4 > 2。
+//   优先级：3 / 5（开跑前判） > 1 > 4 > 2。
 //   ⚠ **谓词写 `=== 0`，别写 `<= 2`** —— 那个区间把 1（真失败）也放了进来。
 //   ⚠ **别把 2 当成绿**。`@(0,2)` 这种放行谓词一写，分层就退化成「接受偶发红」的另一种
 //     形态（issue #116 里那条最危险的路），只是危害从"无视红"变成"无视没跑"。
@@ -69,10 +76,49 @@
 // ⇒ **测试文件的契约**：报 `DEFER=n` 就必须同时打印 n 行 `DEFER <名字>  ->  <理由>` 明细。
 //    这不只是给自检用的 ——「只报个数字等于没报」，人得知道**哪几组**没跑。
 //
+// ══════════════════════════════════════════════════════════════════════════
+// ── PowerShell 层的契约（2026-08-08 · issue #179）──────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// ① **自声明标记，不是入口硬编码清单**：`.tests.ps1` 头部 60 行内出现
+//    `# @dao-test-tier: env` ⇒ 该套**整套只在 `--env` 跑**；无标记者默认层也跑。
+//    刻意不在本文件里写「哪几套算慢」的清单 —— 本仓的手维护枚举被咬过三次。
+//
+//    🔴 **PS 标记与 JS 标记的语义不同，别当同一个东西读**（故正则也**另写一条**，不共用）：
+//      · JS 侧 `// @dao-test-tier: env` = 「这个文件**内部有几节断言**在默认层自己 defer 掉」
+//        —— 文件照跑，跑完报 `DEFER=n`，粒度是**断言组**。
+//      · PS 侧 `# @dao-test-tier: env` = 「**整套**在默认层压根不起进程」
+//        —— 粒度是**整个文件**，它不产生也不可能产生 `DEFER=n`。
+//    为什么 PS 侧只能做到整套粒度：那 6 套是独立可直跑的 PowerShell 脚本，没有共同的
+//    「defer 某几节」协议，也不该为了这个去改它们的正文（改 6 份脚本 vs 加 4 行标记）。
+//    ⇒ 两侧的计数**各走各的字段**：JS 的进 `defer=/deferfiles=/declared=`，
+//      PS 的进 `psfiles=/psred=/psskip=`。混在一起会让「哪一半没跑」重新变得看不出来。
+//
+// ② **没跑的 PS 套上退出码通道**（F1）：`psskip > 0` ⇒ 最终退出码**至少 2**。
+//    此前默认层那个恒 2 是**挂在 dead-gates 一个文件的 DEFER 上**的偶然 —— 那个文件哪天
+//    摘了标记，默认层就悄悄变回 0，而 PS 套照旧没跑。现在两条路各自都能把 2 顶起来。
+//
+// ③ **spawn 形态**：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <绝对路径>`，
+//    cwd 钉仓根。每套超时 `PS_TIMEOUT_MS`（默认 300s，可用环境变量 `DAO_PS_TIMEOUT_MS`
+//    覆盖 —— 那个口子是**给回归网注入短超时用的**，不是给人调松的）。
+//
+// ④ **红判据**（F2）：`status !== 0 || error || signal` ⇒ 红。超时走 `error`/`signal` 那一格，
+//    **判红不判跳过**，并额外打一句警告：`spawnSync` 不杀进程树 ⇒ 可能残留孤儿 powershell
+//    进程与半写的 `_tmp` 沙盒，**下一次跑同一套可能因此失败**（那个红的成因在上一次跑里）。
+//
+// ⑤ **PS 层总预算 900s**：串行累计墙钟超过它 ⇒ 剩余套判「未跑」（逐套打明细）、退出码至少 2。
+//    预算是给「某套卡住把整个入口拖死」兜底的，不是性能指标。
+//
+// ⑥ **零输出自检**（F4）：某套 `status === 0` 而 stdout 去空白后为空 ⇒ 计入 `tierProblems`
+//    （exit 4 通道）。「exit 0 + 零输出」与「绿」必须分得开 —— 一个没跑到任何断言就返回 0 的
+//    脚本（被 `-ExecutionPolicy` 挡掉、头部就 return、文件被清空）在退出码上与全过一模一样。
+//
+// ⑦ **计数解析**：沿用既有的 `PASS=(\d+)\s+FAIL=(\d+)`；取不到只标「未报计数」，
+//    判定以真退出码为准（现状机制，本批不新造）。6 套里有 4 套不打这个汇总行。
+//
 // ── 跑法 ────────────────────────────────────────────────────────────────────
-//   node scripts/run-tests.mjs                默认层（预期 exit 2）
-//   node scripts/run-tests.mjs --env          含环境敏感层（全绿 exit 0）；要求串行环境
-//   node scripts/run-tests.mjs --list         只列清单不跑，带分层标注
+//   node scripts/run-tests.mjs                默认层（预期 exit 2）：JS 全跑 + 无标记 PS 套跑
+//   node scripts/run-tests.mjs --env          含环境敏感层 + 全部 PS 套（全绿 exit 0）；要求串行环境
+//   node scripts/run-tests.mjs --list         只列清单不跑，带分层标注（js/ps 两侧都标）
 //   node scripts/run-tests.mjs --tests-dir P  换一个测试目录（**给本入口的自测用**，
 //                                             见 tests/run-tests-tier.tests.js）
 
@@ -91,6 +137,19 @@ const EXIT_DEFERRED = 2;
 const EXIT_BAD_USAGE = 3;
 const EXIT_SELFCHECK = 4;
 const EXIT_NO_TESTS_DIR = 5;
+
+// ── PowerShell 层的两个时间闸（见文件头 PS 契约 ③⑤）────────────────────────
+// 单套超时：默认 300s ≈ 本仓最慢那套（clause-structure 实测 67-81s）的 3.7 倍余量。
+// `DAO_PS_TIMEOUT_MS` 这个口子是**给回归网注入短超时用的**（造一个必然超时的夹具，
+// 否则「超时判红」这条只能靠读代码相信）——不是给人把闸调松的旋钮。
+const PS_TIMEOUT_MS = (() => {
+  const raw = process.env.DAO_PS_TIMEOUT_MS;
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 300_000;
+})();
+// PS 层总预算：串行累计墙钟超过它，剩余套判「未跑」。兜的是「某套卡住把整个入口拖死」，
+// 不是性能指标 —— 6 套实测合计 ≈149s，900s 有 6 倍余量。
+const PS_BUDGET_MS = 900_000;
 
 // ── 参数解析（不认识的参数一律 fail-fast，一套都不跑）──────────────────────
 // 判据同 verify-exit.ps1 边界②：`-Skip` 是显式意图，不兑现显式意图没有「大致对」的余地。
@@ -122,7 +181,9 @@ if (unknownFlags.length || testsDirGivenEmpty) {
   process.stderr.write("[run-tests] 用法错误 —— " + why + "\n");
   process.stderr.write("  合法参数：--list / --env（别名 --all）/ --tests-dir <路径>\n");
   process.stderr.write("  **一套测试都没跑**（打错的参数不静默忽略，否则你以为跑了 --env，实际跑的是默认层）\n");
-  process.stdout.write(`RUN_TESTS_SUMMARY exit=${EXIT_BAD_USAGE} tier=none files=0 red=0 pass=0 fail=0 defer=0 deferfiles=0 declared=0 selfcheck=n/a\n`);
+  // 末行的字段集与正常收尾那条**必须一致**（两处独立字面量，改一处忘一处就会让只读末行的
+  // 消费方在用法错误时解析不到新字段）。issue #179 追加 psfiles/psred/psskip 时同批加在这里。
+  process.stdout.write(`RUN_TESTS_SUMMARY exit=${EXIT_BAD_USAGE} tier=none files=0 red=0 pass=0 fail=0 defer=0 deferfiles=0 declared=0 selfcheck=n/a psfiles=0 psred=0 psskip=0\n`);
   process.exit(EXIT_BAD_USAGE);
 }
 const ENV_TIER = flags.includes("--env") || flags.includes("--all");
@@ -157,16 +218,38 @@ function declaresEnvTier(file) {
 }
 const declaredEnv = new Set(jsTests.filter(declaresEnvTier));
 
+// ── PowerShell 侧的标记扫描：**另一条正则，刻意不与上面那条共用** ──────────────
+// 形态不同（`#` 而非 `//`）是表面理由，真理由是**语义不同**（见文件头 PS 契约 ①）：
+//   JS 标记 = 「文件内部分断言 defer」，文件照跑；
+//   PS 标记 = 「整套只在 --env 起进程」，默认层根本不跑它。
+// 共用一个函数会诱使后来者把两侧的计数也并进一个字段，而那正好把「哪一半没跑」重新弄没。
+// ⚠ BOM：本仓 6 套 .ps1 里 5 套带 UTF-8 BOM，`readFileSync(...,"utf8")` 会把它留成首字符
+//   U+FEFF ⇒ 标记若写在第 1 行，`^[ \t]*#` 会**当场落空而毫无症状**（标记形同没写）。
+//   故这里显式剥 BOM。**字面量写转义不写那个字符本身** —— 一个零宽字符落在源码里，
+//   谁也看不出它在不在（同 dao 官侧条款「测试里构造控制字符必须用转义写法」的判据）。
+const PS_BOM_RE = /^\uFEFF/;
+const PS_TIER_MARKER_RE = /^[ \t]*#[ \t]*@dao-test-tier:[ \t]*env\b/m;
+function declaresEnvTierPs(file) {
+  try {
+    const raw = fs.readFileSync(path.join(TESTS_DIR, file), "utf8").replace(PS_BOM_RE, "");
+    const head = raw.split(/\r?\n/).slice(0, TIER_MARKER_HEAD_LINES).join("\n");
+    return PS_TIER_MARKER_RE.test(head);
+  } catch (_) {
+    return false;   // 读不到就是读不到；它随后会以「跑不起来」的形态变红
+  }
+}
+const declaredEnvPs = new Set(psTests.filter(declaresEnvTierPs));
+
 process.stdout.write(`[run-tests] tests/ 下发现 ${jsTests.length} 套 node 测试、${psTests.length} 套 PowerShell 测试\n`);
-process.stdout.write(`[run-tests] 本次层级：${ENV_TIER ? "--env（含环境敏感断言，要求串行环境）" : "默认层（环境敏感断言不跑 → 预期 exit 2）"}`
-  + `；声明了环境敏感层的文件 ${declaredEnv.size} 个\n`);
+process.stdout.write(`[run-tests] 本次层级：${ENV_TIER ? "--env（含环境敏感断言 + 全部 PS 套，要求串行环境）" : "默认层（环境敏感断言不跑、标了 env 的 PS 套不跑 → 预期 exit 2）"}`
+  + `；声明了环境敏感层的文件 ${declaredEnv.size} 个（node）/ ${declaredEnvPs.size} 个（pwsh）\n`);
 if (strays.length) {
   process.stdout.write(`  ⚠ 另有 ${strays.length} 个不符 *.tests.{js,ps1} 命名的文件，未纳入：${strays.join(", ")}\n`);
 }
 
 if (LIST_ONLY) {
   for (const f of jsTests) process.stdout.write(`  node  tests/${f}${declaredEnv.has(f) ? "   [有环境敏感层 · 默认不跑那几节]" : ""}\n`);
-  for (const f of psTests) process.stdout.write(`  pwsh  tests/${f}\n`);
+  for (const f of psTests) process.stdout.write(`  pwsh  tests/${f}${declaredEnvPs.has(f) ? "   [标了 env · 整套默认层不跑]" : ""}\n`);
   process.exit(EXIT_OK);
 }
 
@@ -201,12 +284,68 @@ for (const f of jsTests) {
   });
 }
 
+// ── PowerShell 层：串行代跑（见文件头 PS 契约）──────────────────────────────
+// 串行是硬要求，不是保守：本仓有两套用**固定** `_tmp/` 路径当沙盒（dao-pr-merge /
+// pr-body-scan），并行跑必互踩 —— 那正是它们被标 env 的理由之一。
+const psResults = [];
+{
+  const psT0 = Date.now();
+  for (const f of psTests) {
+    // ㈠ 标记跳过：整套不起进程（默认层 + 有标记）
+    if (!ENV_TIER && declaredEnvPs.has(f)) {
+      psResults.push({ file: f, ranAt: false, why: "头部标了 @dao-test-tier: env ⇒ 只在 --env 跑" });
+      continue;
+    }
+    // ㈡ 预算跳过：串行累计墙钟已超总预算，剩下的一律判「未跑」而不是排队等
+    const spent = Date.now() - psT0;
+    if (spent >= PS_BUDGET_MS) {
+      psResults.push({ file: f, ranAt: false, why: `PS 层总预算 ${PS_BUDGET_MS}ms 已用尽（已花 ${spent}ms）⇒ 本次未跑` });
+      continue;
+    }
+    const t0 = Date.now();
+    const r = spawnSync("powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(TESTS_DIR, f)],
+      { encoding: "utf8", cwd: ROOT, timeout: PS_TIMEOUT_MS });
+    const ms = Date.now() - t0;
+    const out = String(r.stdout || "");
+    // 红判据（F2）：三条通道任一命中即红。`status` 单看不够 —— 超时与被信号打断时
+    // `status` 是 null，而 `null !== 0` 虽然也为真，但把 error/signal 显式写出来是为了
+    // **报文能说清是哪一种**（超时要额外警告孤儿进程，普通红不需要）。
+    const timedOut = !!(r.error && String(r.error.code || r.error.message).includes("ETIMEDOUT")) || r.signal === "SIGTERM";
+    const red = r.status !== 0 || !!r.error || !!r.signal;
+    // 计数解析沿用现状：6 套里只有 2 套打这个汇总行，取不到标「未报计数」、判定看退出码。
+    const m = out.match(/PASS=(\d+)\s+FAIL=(\d+)/);
+    psResults.push({
+      file: f, ranAt: true, code: r.status, red, timedOut,
+      signal: r.signal || null,
+      errMsg: r.error ? String(r.error.message || r.error.code) : null,
+      pass: m ? Number(m[1]) : null,
+      fail: m ? Number(m[2]) : null,
+      emptyOut: !red && out.trim() === "",
+      ms, out, err: String(r.stderr || ""),
+    });
+  }
+}
+
 // 失败者的完整输出要打出来，否则「哪一条红了」得重跑一遍才知道
 for (const r of results) {
   if (r.code !== 0) {
     process.stdout.write(`\n──── 失败详情 tests/${r.file}（exit ${r.code}）────\n`);
     process.stdout.write(r.out);
     if (r.err.trim()) process.stdout.write(`[stderr]\n${r.err}\n`);
+  }
+}
+for (const r of psResults) {
+  if (!r.ranAt || !r.red) continue;
+  process.stdout.write(`\n──── 失败详情 tests/${r.file}（pwsh · exit ${r.code}${r.signal ? ` signal=${r.signal}` : ""}）────\n`);
+  process.stdout.write(r.out);
+  if (r.err.trim()) process.stdout.write(`[stderr]\n${r.err}\n`);
+  if (r.errMsg) process.stdout.write(`[spawn error] ${r.errMsg}\n`);
+  if (r.timedOut) {
+    process.stdout.write(`  ⚠ 这一套是**超时**被打断的（上限 ${PS_TIMEOUT_MS}ms），判红不判跳过。\n`);
+    process.stdout.write(`    ⚠ **spawnSync 不杀进程树**：被 kill 的只是 powershell.exe 本身，它起的子进程可能还活着，\n`);
+    process.stdout.write(`      而这套测试的 _tmp 沙盒此刻多半是半写状态 ⇒ **下一次跑同一套可能因此失败，成因在这一次**。\n`);
+    process.stdout.write(`      收拾干净再重跑：核一遍残留的 powershell 进程，并清掉该套用的 _tmp 目录。\n`);
   }
 }
 
@@ -223,6 +362,29 @@ for (const r of results) {
   process.stdout.write(`  ${r.code === 0 ? "✓" : "✗"} exit=${String(r.code).padStart(2)}  ${counts}${deferTag}  ${String(r.ms).padStart(5)}ms  tests/${r.file}${tierTag}\n`);
 }
 process.stdout.write(`  ── ${results.length} 套 node 测试：${results.length - bad} 过 / ${bad} 红；断言合计 PASS=${totalPass} FAIL=${totalFail}${totalDefer ? ` DEFER=${totalDefer}` : ""}\n`);
+
+// ── PowerShell 层进同一张汇总表（前缀 pwsh）──────────────────────────────────
+// 刻意与 node 那几行同表：分两张表的话，「PS 那半这次跑没跑」又变成得往下翻才看得到的事。
+let psRed = 0, psRan = 0, psNotRun = 0, psPass = 0, psFail = 0;
+const psSkipped = [];
+for (const r of psResults) {
+  const tierTag = declaredEnvPs.has(r.file) ? " ⚑env" : "";
+  if (!r.ranAt) {
+    psNotRun++; psSkipped.push(r);
+    process.stdout.write(`  ⊘ 未跑            （${r.why}）        tests/${r.file}${tierTag}\n`);
+    continue;
+  }
+  psRan++;
+  if (r.red) psRed++;
+  if (r.pass != null) { psPass += r.pass; psFail += r.fail; }
+  const counts = r.pass != null ? `PASS=${String(r.pass).padStart(3)} FAIL=${r.fail}` : "（未报计数）";
+  const timeoutTag = r.timedOut ? " ⏱超时" : "";
+  process.stdout.write(`  ${r.red ? "✗" : "✓"} exit=${String(r.code == null ? "?" : r.code).padStart(2)}  ${counts}${timeoutTag}  ${String(r.ms).padStart(5)}ms  pwsh tests/${r.file}${tierTag}\n`);
+}
+if (psTests.length) {
+  process.stdout.write(`  ── ${psTests.length} 套 PowerShell 测试：${psRan - psRed} 过 / ${psRed} 红 / ${psNotRun} 未跑`
+    + `${psPass || psFail ? `；断言合计 PASS=${psPass} FAIL=${psFail}（只统计打了汇总行的那几套）` : ""}\n`);
+}
 
 // ── 自检半边 ②：静态声明 vs 运行期计数，差值即警报 ────────────────────────
 const tierProblems = [];
@@ -263,6 +425,19 @@ for (const r of results) {
   }
 }
 
+// ── 自检半边 ②′：PowerShell 侧的「exit 0 + 零输出」（F4）────────────────────
+// 一个**跑到了断言**的 PS 套必然吐东西（各套都打进度/汇总行）。exit 0 而 stdout 全空，
+// 说明它多半根本没跑到断言：被执行策略挡掉、头部就 return、文件被清空、dot-source 的
+// 依赖抛在最前面又被吞。**这与「全过」在退出码上一模一样** —— 正是本文件通篇在治的那个病
+// （「一个检查器数到 0 个违例，和它根本没看到样本，输出长得一样」）。故它走 exit 4 通道，
+// 不走红：红的语义是「有断言失败」，而这里的问题是「没有断言」。
+for (const r of psResults) {
+  if (r.ranAt && r.emptyOut) {
+    tierProblems.push(`tests/${r.file}（pwsh）exit 0 但 stdout 是空的 `
+      + `⇒ 它多半没跑到任何断言（「exit 0 + 零输出」与「全过」在退出码上分不开），先查它到底起没起来`);
+  }
+}
+
 if (tierProblems.length) {
   process.stdout.write(`\n✗ 分层自检失败 ${tierProblems.length} 条 —— 「本次跑了什么」这个账本本身不可信了：\n`);
   for (const p of tierProblems) process.stdout.write(`    · ${p}\n`);
@@ -278,19 +453,29 @@ if (totalDefer && !ENV_TIER) {
   process.stdout.write(`  退出码 ${EXIT_DEFERRED} 就是这个意思：本次没跑完。**要 0 必须带 --env。**\n`);
 }
 
-if (psTests.length) {
-  process.stdout.write(`  ⓘ 另有 ${psTests.length} 套 PowerShell 测试需在 pwsh 里跑（本入口不代跑，不计入上面的过/红）：\n`);
-  for (const f of psTests) process.stdout.write(`      .\\tests\\${f}\n`);
+if (psNotRun) {
+  // F1：**不再只靠这段散文**。它下面的退出码那一格会把 psNotRun 顶到至少 2 ——
+  // 「有 PS 套没跑」从此走机器通道，而不是指望人读到这几行。
+  process.stdout.write(`\n⚠ 本次未跑：PowerShell 测试 ${psNotRun} 套（共 ${psTests.length} 套）—— **「没跑」不等于「跑了全过」**\n`);
+  for (const r of psSkipped) process.stdout.write(`    · tests/${r.file}  —— ${r.why}\n`);
+  process.stdout.write(`  跑全部 PS 套：node scripts/run-tests.mjs --env\n`);
+  process.stdout.write(`    ⚠ 要求串行环境：那几套里有用固定 _tmp 路径当沙盒的，并行跑必互踩\n`);
+  process.stdout.write(`  退出码至少 ${EXIT_DEFERRED} 就是这个意思：本次没跑完。**要 0 必须带 --env。**\n`);
 }
 
 // ── 退出码 + 机器可读末行（照 DEAD_GATES_SUMMARY 的路数：只读末行的消费方也拿得到全貌）──
+// 优先级 1 > 4 > 2 不变；本批只是把 PS 侧的红并进 1、把 PS 侧的未跑并进 2。
 let exitCode = EXIT_OK;
-if (bad) exitCode = EXIT_RED;
+if (bad || psRed) exitCode = EXIT_RED;
 else if (tierProblems.length) exitCode = EXIT_SELFCHECK;
-else if (totalDefer) exitCode = EXIT_DEFERRED;
+else if (totalDefer || psNotRun) exitCode = EXIT_DEFERRED;
 
+// 末行三个新字段（psfiles/psred/psskip）**追加在尾部**，既有字段顺序一字未动 ——
+// 现有消费方的正则没有行尾锚，追加不破坏它们（回归网里有一条负控专门钉这一点）。
+// psfiles = 本次**真的跑了**几套（不是发现了几套）；psskip = 没跑几套（标记跳过 + 预算跳过）。
 process.stdout.write(`RUN_TESTS_SUMMARY exit=${exitCode} tier=${ENV_TIER ? "env" : "default"}`
   + ` files=${results.length} red=${bad} pass=${totalPass} fail=${totalFail}`
   + ` defer=${totalDefer} deferfiles=${deferringFiles.length} declared=${declaredEnv.size}`
-  + ` selfcheck=${tierProblems.length ? "fail" : "ok"}\n`);
+  + ` selfcheck=${tierProblems.length ? "fail" : "ok"}`
+  + ` psfiles=${psRan} psred=${psRed} psskip=${psNotRun}\n`);
 process.exit(exitCode);

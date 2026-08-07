@@ -1,4 +1,5 @@
-﻿<#
+﻿# @dao-test-tier: env   # 整套只在 --env 跑：沙盒用固定路径 _tmp/pr-body-scan-test（未随机化 ⇒ 并行必互踩）
+<#
 .SYNOPSIS
     `ccswitch/lib/pr-body-scan.ps1` + `ccswitch/scripts/check-pr-body-mojibake.ps1` 的纯断言
     自测（无 Pester 依赖）。**canonical（2026-08-02 随判据库一并由 mousse-cli

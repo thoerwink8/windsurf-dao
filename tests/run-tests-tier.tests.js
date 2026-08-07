@@ -49,6 +49,20 @@ function parseSummary(out) {
   } : null;
 }
 
+// 末行的**全形**解析器（含 issue #179 追加的 psfiles/psred/psskip）。
+// 刻意与上面那条 SUMMARY_RE **分开写**：那条是「旧消费方」的原样副本，本节 ㈥ 拿它当负控 ——
+// 一个正则同时充当「被测形状」与「兼容性证据」，就没有兼容性证据可言了。
+const PS_SUMMARY_RE = new RegExp(
+  SUMMARY_RE.source + " psfiles=(\\d+) psred=(\\d+) psskip=(\\d+)");
+function parsePsSummary(out) {
+  const m = PS_SUMMARY_RE.exec(String(out));
+  if (!m) return null;
+  const base = parseSummary(out);
+  return Object.assign({}, base, {
+    psfiles: Number(m[11]), psred: Number(m[12]), psskip: Number(m[13]),
+  });
+}
+
 function rm(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
 function w(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -102,6 +116,33 @@ function mkTestFile(caseDir, name, opts) {
   return sentinel;
 }
 
+// 造一个合成的 **PowerShell** 夹具（issue #179：PS 层由 run-tests.mjs 代跑之后才需要它）。
+//   marker   —— 头部写不写 PS 形态的层级标记（`#` 而非 `//`）
+//   bom      —— 落盘时带不带 UTF-8 BOM（真仓 6 套里 5 套带；标记在第 1 行 + BOM 是已知的
+//               「标记形同没写」陷阱，这里造出来钉住扫描器确实剥了 BOM）
+//   silent   —— 一个字都不打（验「exit 0 + 零输出」那一格）
+//   sleepSec —— 睡多久（验超时判红；配 DAO_PS_TIMEOUT_MS 注入短超时用）
+//   exitCode —— 退出码
+// 正文一律 ASCII：夹具的编码不该成为被测面的一部分（真仓那 6 套自带 console-utf8 钉子）。
+function mkPsTestFile(caseDir, name, opts) {
+  const o = opts || {};
+  const sentinel = path.join(caseDir, "ps-sentinel.log");
+  const lines = [];
+  if (o.marker) lines.push("# @" + "dao-test-tier: env   # synthetic fixture");
+  lines.push("# synthetic pwsh fixture (run-tests-tier), not a real test");
+  // sentinel：唯一能证明「这一套真的起了进程」的证据 —— 只看退出码分不出「跑了都过」与「压根没起跑」
+  lines.push("Add-Content -LiteralPath " + JSON.stringify(sentinel) + " -Value " + JSON.stringify(name));
+  if (o.sleepSec) lines.push("Start-Sleep -Seconds " + o.sleepSec);
+  if (!o.silent) lines.push("Write-Output '=== SUMMARY: PASS=" + (o.pass == null ? 4 : o.pass) +
+    " FAIL=" + (o.failN == null ? 0 : o.failN) + " ==='");
+  lines.push("exit " + (o.exitCode == null ? 0 : o.exitCode));
+  const text = lines.join("\r\n") + "\r\n";
+  const file = path.join(caseDir, "tests", name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, (o.bom ? "\uFEFF" : "") + text, "utf8");
+  return sentinel;
+}
+
 function mkCase(name, files) {
   const dir = path.join(TMP, name);
   rm(dir);
@@ -111,11 +152,30 @@ function mkCase(name, files) {
   return { dir, sentinel };
 }
 
-function runRunner(caseDir, extraArgs) {
+// PS 夹具的场子：`js` 那格给的是 .tests.js 夹具（PS 场景仍需要至少一个 JS 套，否则
+// 「JS 侧一套没有」会成为另一个变量），`ps` 那格给的是 .tests.ps1 夹具。
+function mkPsCase(name, spec) {
+  const dir = path.join(TMP, name);
+  rm(dir);
+  fs.mkdirSync(path.join(dir, "tests"), { recursive: true });
+  for (const [fname, opts] of Object.entries(spec.js || { "alpha.tests.js": { pass: 2 } })) mkTestFile(dir, fname, opts);
+  let psSentinel = path.join(dir, "ps-sentinel.log");
+  for (const [fname, opts] of Object.entries(spec.ps || {})) psSentinel = mkPsTestFile(dir, fname, opts);
+  return { dir, psSentinel };
+}
+function psRan(sentinel, name) {
+  try { return new RegExp(name.replace(/\./g, "\\.")).test(fs.readFileSync(sentinel, "utf8")); }
+  catch (_) { return false; }
+}
+
+function runRunner(caseDir, extraArgs, extraEnv) {
   const args = [RUNNER, "--tests-dir", path.join(caseDir, "tests")].concat(extraArgs || []);
-  const r = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 120000, cwd: REPO });
+  const r = spawnSync(process.execPath, args, {
+    encoding: "utf8", timeout: 120000, cwd: REPO,
+    env: extraEnv ? Object.assign({}, process.env, extraEnv) : process.env,
+  });
   const out = String(r.stdout || "");
-  return { code: r.status, out, err: String(r.stderr || ""), sum: parseSummary(out) };
+  return { code: r.status, out, err: String(r.stderr || ""), sum: parseSummary(out), psSum: parsePsSummary(out) };
 }
 
 rm(TMP);
@@ -378,6 +438,123 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下确实有且只有 de
     dgm && dgLines === Number(dgm[3]), "明细=" + dgLines + " 字段=" + (dgm ? dgm[3] : "无"));
   check("dead-gates 的每组 defer 都指名（只报个数字等于没报）",
     /DEFER\s+⑪/.test(dgOut) && /DEFER\s+⑫/.test(dgOut), dgOut.slice(0, 1200));
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑨ PowerShell 层：代跑 / 自声明标记 / 红 / 零输出 / 超时（issue #179）────");
+// 这一节钉的是「.ps1 从此由本入口代跑」之后新增的那半判据。**每一条都用 sentinel 佐证
+// 「起没起进程」** —— 退出码分不出「跑了都过」与「压根没起跑」，那是本文件通篇的判据。
+{
+  // ㈠ 无标记的 PS 套：默认层就跑，计入 psfiles，不把全场顶成 2
+  const c = mkPsCase("ps-plain", { ps: { "green.tests.ps1": { bom: true, pass: 6 } } });
+  const r = runRunner(c.dir);
+  check("㈠ 无标记 PS 套默认层被跑 → exit 0", r.code === 0 && r.psSum && r.psSum.psfiles === 1,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-800));
+  check("㈠ sentinel 佐证它真的起了进程（不是只在账面上算跑了）",
+    psRan(c.psSentinel, "green.tests.ps1"), "sentinel=" + c.psSentinel);
+  check("㈠ 末行 psfiles=1 psred=0 psskip=0",
+    r.psSum && r.psSum.psfiles === 1 && r.psSum.psred === 0 && r.psSum.psskip === 0, JSON.stringify(r.psSum));
+  check("㈠ 汇总表里有它那一行（前缀 pwsh）", /pwsh tests\/green\.tests\.ps1/.test(r.out), r.out.slice(-900));
+  check("㈠ 计数解析沿用 PASS=/FAIL=（打了汇总行的套要报出来）", /PASS=\s*6 FAIL=0/.test(r.out), r.out.slice(-900));
+  check("㈠ 不再打「本入口不代跑」那句旧话", !/本入口不代跑/.test(r.out), r.out.slice(-900));
+}
+{
+  // ㈡ 红的 PS 套 ⇒ 全场 exit 1（PS 的红与 node 的红同权）
+  const c = mkPsCase("ps-red", { ps: { "boom.tests.ps1": { exitCode: 1, failN: 2, pass: 1 } } });
+  const r = runRunner(c.dir);
+  check("㈡ PS 套 exit 1 → 全场 exit 1", r.code === 1 && r.psSum && r.psSum.exit === 1 && r.psSum.psred === 1,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-900));
+  check("㈡ 打了失败详情（哪一套红了不该要重跑才知道）",
+    /失败详情 tests\/boom\.tests\.ps1（pwsh/.test(r.out), r.out.slice(0, 1500));
+  check("㈡ node 侧 red 字段不被 PS 的红污染（两侧账各归各）",
+    r.psSum && r.psSum.red === 0 && r.psSum.psred === 1, JSON.stringify(r.psSum));
+}
+{
+  // ㈢ 标了 env 的 PS 套：默认层整套不起进程（psskip、exit≥2），--env 才跑。
+  //    夹具刻意带 BOM 且标记在第 1 行 —— 那正是「标记形同没写」的已知陷阱。
+  const c = mkPsCase("ps-marked", {
+    ps: {
+      "fast.tests.ps1": { bom: true, pass: 3 },
+      "slow.tests.ps1": { bom: true, marker: true, pass: 9 },
+    },
+  });
+  const r = runRunner(c.dir);
+  check("㈢ 默认层：标了 env 的那套不跑 → exit 2", r.code === 2 && r.psSum && r.psSum.exit === 2,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+  check("㈢ 默认层末行 psfiles=1 psskip=1（跑了一套、跳了一套）",
+    r.psSum && r.psSum.psfiles === 1 && r.psSum.psskip === 1, JSON.stringify(r.psSum));
+  check("㈢ 🔴 BOM + 第 1 行标记确实被认出来了（扫描器剥了 BOM，否则这一格恒 0）",
+    r.psSum && r.psSum.psskip === 1, JSON.stringify(r.psSum));
+  check("㈢ sentinel：slow 没起过进程，fast 起了",
+    !psRan(c.psSentinel, "slow.tests.ps1") && psRan(c.psSentinel, "fast.tests.ps1"),
+    (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
+  check("㈢ 逐套打明细：哪套没跑、为什么（不再只有一句散文 ⓘ）",
+    /slow\.tests\.ps1.*@dao-test-tier/s.test(r.out) || /slow\.tests\.ps1/.test(r.out), r.out.slice(-1200));
+  check("㈢ 正文明说「没跑」不等于「跑了全过」", /本次未跑：PowerShell/.test(r.out), r.out.slice(-1200));
+
+  const e = runRunner(c.dir, ["--env"]);
+  check("㈢ --env：两套都跑 → exit 0，psfiles=2 psskip=0",
+    e.code === 0 && e.psSum && e.psSum.psfiles === 2 && e.psSum.psskip === 0,
+    JSON.stringify(e.psSum) + "\n" + e.out.slice(-1000));
+  check("㈢ --env sentinel：slow 这回真起了进程", psRan(c.psSentinel, "slow.tests.ps1"),
+    (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
+  // 🔴 与 JS 侧同型的核心负控：同一组夹具，「那套被跳过」与「那套跑了全过」的退出码必须不等
+  check("㈢ 🔴 负控：跳过那一套的退出码 ≠ 跑了那一套的退出码",
+    r.code !== e.code, "默认层=" + r.code + " / --env=" + e.code);
+  check("㈢ 🔴 负控：且「跑完」那一侧才是 0", e.code === 0 && r.code !== 0,
+    "默认层=" + r.code + " / --env=" + e.code);
+}
+{
+  // ㈣ exit 0 + 零输出 ⇒ exit 4（F4）。「没有断言」与「断言全过」必须分得开。
+  const c = mkPsCase("ps-silent", { ps: { "mute.tests.ps1": { silent: true } } });
+  const r = runRunner(c.dir);
+  check("㈣ PS 套 exit 0 却零输出 → exit 4（不是 0）", r.code === 4 && r.psSum && r.psSum.exit === 4,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+  check("㈣ 报文点出「exit 0 + 零输出」与「全过」分不开",
+    /零输出/.test(r.out) && /mute\.tests\.ps1/.test(r.out), r.out.slice(-1000));
+  check("㈣ 它走自检通道而不是红通道（psred 仍为 0）", r.psSum && r.psSum.psred === 0, JSON.stringify(r.psSum));
+}
+{
+  // ㈤ 超时判红（F2）。DAO_PS_TIMEOUT_MS 注入 2s，夹具睡 30s。
+  //    这一格是「超时=红」这条契约的唯一实测证据 —— 不注入短超时就只能读代码相信它。
+  const c = mkPsCase("ps-timeout", { ps: { "sleeper.tests.ps1": { sleepSec: 30 } } });
+  const t0 = Date.now();
+  const r = runRunner(c.dir, [], { DAO_PS_TIMEOUT_MS: "2000" });
+  const elapsed = Date.now() - t0;
+  check("㈤ 超时 → 判红（exit 1），不判「跳过」也不判过",
+    r.code === 1 && r.psSum && r.psSum.psred === 1 && r.psSum.psskip === 0,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-1200));
+  check("㈤ DAO_PS_TIMEOUT_MS 真的生效了（整跑远快于夹具的 30s）", elapsed < 25000, "elapsed=" + elapsed + "ms");
+  check("㈤ 打出孤儿进程/半写沙盒的警告（下一次跑的红可能出在这一次）",
+    /不杀进程树/.test(r.out) && /_tmp/.test(r.out), r.out.slice(-1200));
+  check("㈤ 汇总表给它打 ⏱超时 标", /⏱超时/.test(r.out), r.out.slice(-1200));
+}
+{
+  // ㈥ 末行三个新字段：可解析、且**旧正则仍匹配**（追加式改动的负控）。
+  //    旧 SUMMARY_RE 没有行尾锚，尾部追加字段不该让任何既有消费方瞎掉。
+  const c = mkPsCase("ps-summary-shape", { ps: { "green.tests.ps1": { pass: 2 } } });
+  const r = runRunner(c.dir);
+  check("㈥ 负控：旧 SUMMARY_RE（不含 ps* 字段）仍然匹配得上", r.sum !== null, r.out.slice(-400));
+  check("㈥ 旧字段的值一个没变形（files/red/defer/declared/selfcheck 照旧）",
+    r.sum && r.sum.files === 1 && r.sum.red === 0 && r.sum.defer === 0 && r.sum.declared === 0 && r.sum.self === "ok",
+    JSON.stringify(r.sum));
+  check("㈥ 三个新字段可解析且顺序在尾部", /selfcheck=(?:ok|fail|n\/a) psfiles=\d+ psred=\d+ psskip=\d+/.test(r.out),
+    r.out.slice(-400));
+  // 用法错误那条独立字面量：两处末行形状必须一致，否则只读末行的消费方会在 exit 3 时解析不到新字段
+  const bad = runRunner(c.dir, ["--enviroment"]);
+  check("㈥ 用法错误（exit 3）那条末行也带三个新字段（两处字面量同形）",
+    /exit=3 .*psfiles=0 psred=0 psskip=0/.test(bad.out), bad.out.slice(-400));
+}
+{
+  // ㈦ --list：PS 套也要标出「整套默认不跑」，且一套都不许起进程
+  const c = mkPsCase("ps-list", {
+    ps: { "fast.tests.ps1": {}, "slow.tests.ps1": { marker: true } },
+  });
+  const r = runRunner(c.dir, ["--list"]);
+  check("㈦ --list exit 0", r.code === 0, String(r.code) + " " + r.out.slice(-400));
+  check("㈦ --list 给标了 env 的 PS 套加注", /slow\.tests\.ps1\s+\[标了 env/.test(r.out), r.out.slice(-600));
+  check("㈦ --list 不给无标记的 PS 套乱加注", !/fast\.tests\.ps1\s+\[标了 env/.test(r.out), r.out.slice(-600));
+  check("㈦ --list 一套 PS 都没起进程（sentinel 不存在）", !fs.existsSync(c.psSentinel), c.psSentinel);
 }
 
 console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
