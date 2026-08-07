@@ -526,29 +526,44 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
   // 与被守物共用一个解析器，会让「找违例」和「确认我真看到了样本」一起瞎掉（`[#守-自检独立]`）。
   const scoutToolsOf = (text) => {
     const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text));
-    if (!fm) return { hasLine: false, value: null, why: "没解析出 frontmatter" };
+    if (!fm) return { ok: false, value: null, why: "没解析出 frontmatter" };
     const m = /^tools:[ \t]*(\S[^\r\n]*?)[ \t]*$/m.exec(fm[1]);
     // 值为空的 `tools:` 按「没有这一行」判：YAML 里它是 null，宿主同样退回继承全部工具，
     // 而两者在这条红线上的后果一模一样 —— 判宽了就等于给最危险的形态开一个后门。
-    if (!m) return { hasLine: false, value: null, why: "frontmatter 里没有非空的 tools: 行" };
-    return { hasLine: true, value: m[1], why: "" };
+    if (!m) return { ok: false, value: null, why: "frontmatter 里没有非空的 tools: 行" };
+    // **认不出的形态一律 fail-closed**（PR #178 对抗官 🟡，与上面「空值按没这行判」同理）：
+    // 值必须是一张**逐项认得出**的工具表（工具名 / `mcp__服务__工具` 长名）。像 `tools: *`
+    // 这种通配写法 —— **宿主认不认它本批未证**，所以这里不是按「它是后门」判的，
+    // 是按「**认不出的形态不许判绿**」判的：判绿要有依据，而这一格没有。
+    const items = m[1].split(",").map((s) => s.trim()).filter(Boolean);
+    const bad = items.filter((s) => !/^[A-Za-z][A-Za-z0-9_-]*$/.test(s));
+    if (!items.length || bad.length) {
+      return { ok: false, value: m[1], why: `tools: 的值里有认不出的条目 ${JSON.stringify(bad)}（认不出即 fail-closed）` };
+    }
+    return { ok: true, value: m[1], why: "" };
   };
-  const WRITE_TOOL_RE = /\b(Edit|Write|MultiEdit|Bash)\b/;
+  // **`NotebookEdit` 必须单列**（PR #178 对抗官实测）：`\bEdit\b` 匹配**不到** `NotebookEdit` ——
+  // `Edit` 前面那个 `k` 是词字符，两个词字符之间没有词边界，于是 `tools: Read, NotebookEdit`
+  // 曾经两条全绿。而 NotebookEdit 是宿主真实存在的**写入**工具（会改 notebook 单元格），
+  // 侦察官的红线是**全程零写入**，它当然在表里。长的排前面，匹配次序不留给引擎去猜。
+  const WRITE_TOOL_RE = /\b(NotebookEdit|MultiEdit|Edit|Write|Bash)\b/;
   {
     const SCOUT = path.join(AGENTS_DIR, "dao-scout.md");
     // existsSync 兜一道：直接 readFileSync 会在 profile 被删时**抛异常整份测试当场终止**，
     // 于是它后面的 ⑧⑨ 两节一条都跑不到 —— 红是红了，却红得没有归因、还顺手灭掉六十多条。
     const v = fs.existsSync(SCOUT)
       ? scoutToolsOf(fs.readFileSync(SCOUT, "utf8"))
-      : { hasLine: false, value: null, why: "dao-scout.md 不在盘上" };
-    check("dao-scout：frontmatter 里有非空的 tools: 行（**没有这一行 = 继承全部工具**，删掉它比往里塞 Bash 更危险）",
-      v.hasLine, v.why);
-    // 本条**刻意不带 `v.hasLine &&`**：带上就与上一条同生同死 —— 两次破坏红出同一个集合，
+      : { ok: false, value: null, why: "dao-scout.md 不在盘上" };
+    check("dao-scout：tools: 这一行在，且值是一张逐项认得出的工具表（**没有这一行 = 继承全部工具**；认不出的形态一律 fail-closed）",
+      v.ok, v.why);
+    // 本条**刻意不带 `v.ok &&`**：带上就与上一条同生同死 —— 两次破坏红出同一个集合，
     // 红的时候归因不出到底是哪一格坏了（`[#官抗-负控独立归因]` ①款）。
-    // **代价照直写**：`tools:` 行不在时本条零样本、恒绿；那一格由上一条独占，且是实测的
-    // （issue #177 交付：删行 ⇒ 只红上一条；塞 Bash ⇒ 只红本条；两个红集互不相交），
-    // 不是「写它的人担保的」。
-    check("dao-scout：tools: 的内容里没有 Edit/Write/MultiEdit/Bash（只读红线的另一半）",
+    // **代价照直写**：上一条已判红的那些形态（无行 / 空值 / 认不出）本条零样本、恒绿；
+    // 那一格由上一条独占，且是实测的（issue #177 / PR #178 交付：四发破坏**各只红一条**，
+    // 分落两个互不相交的归因面 —— 删行 / `tools: *` ⇒ 只红上一条；塞 Bash / 塞 NotebookEdit
+    // ⇒ 只红本条）。**别把这句读成「四个红集两两互不相交」**：A 与 E 红的是同一条、
+    // B 与 D 红的是同一条，那是**设计如此**（同一格的两种形态），互不相交的是**两个面**。
+    check("dao-scout：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write/Bash（只读红线的另一半）",
       !WRITE_TOOL_RE.test(v.value || ""), JSON.stringify(v.value));
   }
   {
@@ -559,15 +574,23 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
       ["有 tools: 且干净", "---\nname: x\ntools: Read, Grep, Glob\n---\n正文", true, false],
       ["tools: 整行删掉（本 issue 的病灶）", "---\nname: x\ndescription: y\n---\n正文", false, false],
       ["tools: 里塞了 Bash", "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, true],
+      ["tools: 里塞了 NotebookEdit（\\bEdit\\b 匹配不到它：前面那个 k 挡掉了词边界）",
+        "---\nname: x\ntools: Read, NotebookEdit\n---\n正文", true, true],
+      ["tools: * 通配（宿主认不认未证 ⇒ 认不出即 fail-closed，不判绿）",
+        "---\nname: x\ntools: *\n---\n正文", false, false],
       ["tools: 有行但值为空（YAML null，宿主同样继承全部工具）", "---\nname: x\ntools:\n---\n正文", false, false],
       ["压根没有 frontmatter", "tools: Read, Grep\n正文", false, false],
+      // **误伤反例**（`[#官实-误伤反例]`：每补一类命中形态就配一条「形似但不该拦」）：
+      // fail-closed 那一格收紧了判据，得证明合法的 MCP 长名（带 `__` 与连字符）不被它误判。
+      ["误伤反例：合法 MCP 长名不该被 fail-closed 拦下",
+        "---\nname: x\ntools: Read, mcp__chrome-devtools__take_screenshot\n---\n正文", true, false],
       ["CRLF 行尾也认得（本仓 core.autocrlf=true，工作树里就是 CRLF）",
         "---\r\nname: x\r\ntools: Read, Write\r\n---\r\n正文", true, true],
     ];
-    for (const [tag, sample, wantLine, wantDirty] of SAMPLES) {
+    for (const [tag, sample, wantOk, wantDirty] of SAMPLES) {
       const g = scoutToolsOf(sample);
-      check(`合成样本「${tag}」：存在性判得出 ${wantLine}`,
-        g.hasLine === wantLine, `实得 hasLine=${g.hasLine} value=${JSON.stringify(g.value)}`);
+      check(`合成样本「${tag}」：这张表认不认得出，判得出 ${wantOk}`,
+        g.ok === wantOk, `实得 ok=${g.ok} value=${JSON.stringify(g.value)} why=${g.why}`);
       check(`合成样本「${tag}」：内容含写入工具判得出 ${wantDirty}`,
         WRITE_TOOL_RE.test(g.value || "") === wantDirty, `实得 ${WRITE_TOOL_RE.test(g.value || "")}`);
     }
