@@ -22,7 +22,7 @@
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
 | `hooks/dao-*`                  | Git hooks 模板（安装到项目 `.git/hooks/`）             |
 | `docs/evolution/evolution-*.csv`         | 演化条目 + 教训库（`dao-evolution` skill 维护）        |
-| `ccswitch/agents/dao-*.md`     | 8 个 subagent profile（指挥官体系 orchestrator-workers，详见 §四）|
+| `ccswitch/agents/dao-*.md`     | subagent profile（指挥官体系 orchestrator-workers，详见 §四）——**两族**：能力型 8 个（strategist/reviewer(-critical)/brainstormer/plan-writer/spec-writer/debugger/worker-batch）+ **官种型 4 个**（implementer/adversary/scout/dogfood，2026-08-07 issue #122 补，见 §4.1 末）。**此处刻意不写总数**：手维护的枚举必过期（本仓已被咬三次），当前有几个 ⇒ `ls ccswitch/agents/`|
 
 **部署原理**：`dao.ps1 link-claude` 把 skills/commands/agents symlink 到 `~/.claude/`，并在 `~/.claude/CLAUDE.md` 经 `@import` 常驻 `ccswitch/dao.md`——每条消息自动注入场域根基，skill 由用户 `/name` 手动触发。（旧 Sidecar workspace / link-global 部署随 Windsurf 退役作废。）
 
@@ -99,6 +99,18 @@
 | 兵 | haiku | worker-batch | 严格按含完整模板的 spec 执行，零自主判断（spec 无模板则升尉） |
 
 档位写死在 `ccswitch/agents/*.md` frontmatter `model:`；帅位不写档——天然继承主会话模型，Fable 换 Opus 或换下一代，体系零改动。用较轻模型坐主会话时即官方 Advisor 变体：帅位遇高难决策临时召 opus strategist 咨询即可。
+
+**官种型 agent（2026-08-07 · issue #122 ②）**：`dao-implementer` / `dao-adversary` / `dao-scout` / `dao-dogfood`。
+它们**不是又一批能力档**，是给 `agent_type` 带上官种信息的载体——`dao-subagent-clauses.js` 按
+`agent_type` 筛官种条款，而实测 **93.8%（753/803）的派单用 `general-purpose` 底座** ⇒ 筛选恒空转，
+官种条款渲染得出来却送不到人手上。修法在派单侧：**派实现/对抗/侦察/dogfood 时选对应的 agent type**，
+映射表一个字不动。（复审官那一格已有 `dao-reviewer` 承载，不重复建。）
+⚠ **这四个刻意不写 `model:`**：`dao-dispatch.md` §档位实证调整要的是「不传 = 继承主会话最贵档，
+默认值站在违例那边」；frontmatter 写死一个档会把兜底方向反过来（帅忘了传 model 时**静默降档**
+而不是继承最贵档）。⇒ 与上一段那句「档位写死在 frontmatter」并存但不矛盾：
+**能力型写档（它们本就是按档分的），官种型不写档（官种与档位是两个正交维度）。**
+⚠ 上表 `尉=sonnet` 与 `dao-dispatch.md` 现行「尉=Opus 5」对不上，**那是本批之前就有的漂移，
+本批未动**（改它要判「以哪份为准」，属判断档）。
 
 ### 4.2 指挥官三职（每次派活的前中后）
 

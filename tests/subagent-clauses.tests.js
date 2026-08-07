@@ -375,6 +375,62 @@ console.log("\n──── ⑦ 契约：映射表里的官种必须是渲染端
     roles.length >= 5 && roles.every((r) => legal.includes(r)), `映射表=${roles.join(",")} 词表=${legal.join(",")}`);
 }
 
+console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的名字真的映射得出官种（issue #122 ②）────");
+{
+  // **这一节测的不是 hook，是「写了有没有挂上」**：件② 的全部机制是「派单时选一个
+  // agent type，宿主把它的 name 当 agent_type 下发」⇒ profile 的 name 与映射表之间
+  // 有一条**没有任何东西在核**的缝。改个文件名、把 name 写成别的、映射表关键词被改窄，
+  // 三种改法都不会让上面任何一条断言变红，而后果是**官种那一节恒 0 条**——
+  // 与「本来就没有这一节」在注入文本里长得一样（零检出 ≠ 零存在的又一个实例）。
+  //
+  // ⚠ 它证不了的：**帅有没有真的去选这个 type**（那是槽位档，没有程序在核，
+  //    判据见 `ccswitch/rules/dao-dispatch.md` 的 `[#派-官种底座]`）。
+  const AGENTS_DIR = path.join(REPO, "ccswitch", "agents");
+  const EXPECT = [
+    ["dao-implementer", "implementer"],
+    ["dao-adversary", "adversary"],
+    ["dao-scout", "scout"],
+    ["dao-dogfood", "dogfood"],
+    ["dao-reviewer", "reviewer"], // 复审官那一格由既有能力型 profile 承载，不另建
+  ];
+  for (const [stem, role] of EXPECT) {
+    const p = path.join(AGENTS_DIR, stem + ".md");
+    const exists = fs.existsSync(p);
+    check(`${stem}.md 在盘上（没有 profile 就没有 agent type 可选）`, exists, p);
+    if (!exists) continue;
+    const text = fs.readFileSync(p, "utf8");
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+    const nameLine = fm ? /^name:\s*(\S+)\s*$/m.exec(fm[1]) : null;
+    check(`${stem}：frontmatter 的 name 与文件名一致（宿主下发的 agent_type 取的是 name）`,
+      !!nameLine && nameLine[1] === stem, nameLine ? nameLine[1] : "没解析出 name");
+    const r = fire(nameLine ? nameLine[1] : stem);
+    check(`${stem} → 官种 ${role}（映射表命中，官种节真的渲染出来）`,
+      r.code === 0 && new RegExp(`官种=${role}`).test(r.ctx) && new RegExp(`## ${role} 节`).test(r.ctx),
+      `exit=${r.code} head=${JSON.stringify(r.ctx.split("\n")[0])}`);
+  }
+  // 负控：同目录下的能力型 profile 不该被误判成官种（它们按能力档分，不按官种分）
+  for (const stem of ["dao-strategist", "dao-spec-writer", "dao-plan-writer"]) {
+    if (!fs.existsSync(path.join(AGENTS_DIR, stem + ".md"))) continue;
+    check(`负控：${stem} 仍走泛型降级（能力型与官种型是两个正交维度，别硬映）`,
+      /官种=general/.test(fire(stem).ctx));
+  }
+  // 四个官种型 profile 的两条设计决定，各钉一条——它们都是「改了不会有任何东西变红」的那类。
+  const OFFICER_STEMS = ["dao-implementer", "dao-adversary", "dao-scout", "dao-dogfood"];
+  for (const stem of OFFICER_STEMS) {
+    const p = path.join(AGENTS_DIR, stem + ".md");
+    if (!fs.existsSync(p)) continue;
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(p, "utf8"));
+    check(`${stem}：刻意不写 model:（不传 = 继承主会话最贵档；写死一档会把兜底方向反过来）`,
+      !!fm && !/^model:/m.test(fm[1]), fm ? fm[1] : "没有 frontmatter");
+  }
+  {
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(path.join(AGENTS_DIR, "dao-scout.md"), "utf8"));
+    const tools = fm ? (/^tools:\s*(.+)$/m.exec(fm[1]) || [])[1] || "" : "";
+    check("dao-scout：tools 里没有 Edit/Write/Bash（把只读红线从纯文字往机器上挪的那一半）",
+      !/\b(Edit|Write|MultiEdit|Bash)\b/.test(tools), JSON.stringify(tools));
+  }
+}
+
 console.log("\n──── ⑧ --selfcheck：自洽 + 逐面报 + 给得出修法 ────");
 {
   // 不断言本机是绿是红（取决于用户注册没注册），断言的是**自检自身自洽**

@@ -74,6 +74,12 @@
 > 那时投给你的是**一行指针**而不是条款正文——**看到「条款索引不可信」那段就自己 Read 本文件**，
 > 通用节 + 你那一节。根因侧另有一道提醒挂在 `git push` 上（推送触及条款源 ⇒ 提醒跑
 > `gen-clause-index.mjs --check`），见 `ccswitch/hooks/dao-tool-nudge.js` 第 ⑥ 类。
+> ⚠️ **上面那行 `role=general general=70 role_clauses=0` 还有第二重含义，别读成「官种条款送到了」**：
+> `role` 降级成 `general`、官种节 **0 条**——派单用的是 `general-purpose` 底座，而
+> `SubagentStart` 的 payload 没有 prompt 字段 ⇒ **hook 只能从 `agent_type` 推官种**。
+> 修法在派单侧（按官种选 agent type，见 `ccswitch/rules/dao-dispatch.md` 的
+> `[#派-官种底座]`；用户 2026-08-07 拍板 issue #122 件②），不在本文件里。
+> **同样没证到**：官种型 agent 铺开之后「`role` 真的不再是 `general`」要下一批才看得到，**本批未测**。
 
 ---
 
