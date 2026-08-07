@@ -379,7 +379,7 @@ console.log("\n──── ④′ 指针档自声明：正文源退官侧档 + 
   //   ⇒ 换成**真实存在、且带标记**的合成样本：只有这样，「env 走不走推断」这个差别才有
   //   可观测后果（走推断 ⇒ 退官侧档 + 附指针行；不走 ⇒ 原样指它）。
   //   **实测（在真实 hook 上先破再验，非变异体副本）**：把 env 分支改成走 `isPointerDoc`
-  //   ⇒ 全套 exit=1、**仅本条红**（PASS=112 FAIL=1）；复原 ⇒ exit=0 PASS=113 FAIL=0。
+  //   ⇒ 全套 exit=1、**仅本条红**（PASS=113 FAIL=1）；复原 ⇒ exit=0 PASS=114 FAIL=0。
   const envMarked = path.join(TMP, "env-escape-hatch-marked.md");
   fs.writeFileSync(envMarked, MARK_LINE + "\n\n# 合成样本：带标记，但由 env 显式指定\n", "utf8");
   check("前提：边界三的样本真实存在（首版那个不存在的路径让这一格零样本、恒绿）",
