@@ -116,7 +116,7 @@
         "external": false,
         "selector": "all-top-level",
         "role_scheme": "dispatch-sections",
-        "sha256": "80e084c6dd6781694a2fa5b359990c0d7cea0fad68ac71616fb579e83d24f5f1",
+        "sha256": "4cca504c28cbf583efcc4a311242ab60c7f2ae2ce3da99499f78869c00673359",
         "lines": 182,
         "clauses": 72,
         "observation": 0,
@@ -1529,7 +1529,7 @@
       "body_excerpt": "- **合并前先拆 worktree，否则 `--delete-branch` 会半途而废且不报错**：`gh pr merge --delete-branch` 删本地分支时若该分支正被 worktree 占用，git 报 `cannot delete branch ... used by worktree`，**…"
     },
     {
-      "id": "ae183cdc36f5",
+      "id": "cab4ce963825",
       "slug": "官通-禁笃定措辞",
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "line": 107,
@@ -1542,7 +1542,7 @@
       "n": "5",
       "first_seen": "07-26",
       "trigger": "无",
-      "baseline": null,
+      "baseline": "正文自带可数实例 3 例——①2026-07-26 通宵窗，帅写进契约的一句笃定表述被验证官 4 组 mutation 证伪（**是 1 例被 4 组变体打，不是 4 例**）②2026-07-27，本条自身的触发点被挂成「完成流水线③」、同日由对抗验证官判为挂错并退回「无」③2026-08-07 commit d9e127e，「19d 已订正」宣称被 S19D/S19X 证伪后当场撤回。⚠ **行内 n 与这 3 例对不齐，照直写**：入库时 n 即为 4 而正文只数得出前 2 例，那个 4 的来源本批未能复原（最可能是把①的 4 组 mutation 误计成 4 例），本批按帅裁 +1 得 5。**以本列为准，n 只当下界读**（元字段真相源自己也写着「没有任何东西校验 n」）",
       "self_declared": "07-27",
       "self_declared_all": [
         "07-27"
