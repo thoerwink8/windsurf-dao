@@ -515,11 +515,62 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
     check(`${stem}：刻意不写 model:（不传 = 继承主会话最贵档；写死一档会把兜底方向反过来）`,
       !!fm && !/^model:/m.test(fm[1]), fm ? fm[1] : "没有 frontmatter");
   }
+  // ── dao-scout 的「只读红线」在机器上的那一半：**一格一样本一谓词**（issue #177）──────
+  // 原先是**一条**断言「tools 里没有 Edit/Write/Bash」，而 `tools:` 解析不到时得**空串**，
+  // 空串里当然没有那三个词 ⇒ **把整行 `tools:` 删掉照样全绿**。可 Claude Code 里
+  // **没有 `tools:` 这一行 ＝ 继承全部工具** —— 最危险的那种改法恰好落在零样本那一格
+  // （PR #175 对抗官三轮同族扫描扫出；`[#官抗-负控独立归因]` ②款的形态）。
+  // 故拆两条，各自独立归因：①这一行在不在 ②它的内容干不干净。
+  //
+  // 判据在这里**独立写死**，不 require 被守对象那侧（hook / 渲染器）的任何解析器 ——
+  // 与被守物共用一个解析器，会让「找违例」和「确认我真看到了样本」一起瞎掉（`[#守-自检独立]`）。
+  const scoutToolsOf = (text) => {
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text));
+    if (!fm) return { hasLine: false, value: null, why: "没解析出 frontmatter" };
+    const m = /^tools:[ \t]*(\S[^\r\n]*?)[ \t]*$/m.exec(fm[1]);
+    // 值为空的 `tools:` 按「没有这一行」判：YAML 里它是 null，宿主同样退回继承全部工具，
+    // 而两者在这条红线上的后果一模一样 —— 判宽了就等于给最危险的形态开一个后门。
+    if (!m) return { hasLine: false, value: null, why: "frontmatter 里没有非空的 tools: 行" };
+    return { hasLine: true, value: m[1], why: "" };
+  };
+  const WRITE_TOOL_RE = /\b(Edit|Write|MultiEdit|Bash)\b/;
   {
-    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(path.join(AGENTS_DIR, "dao-scout.md"), "utf8"));
-    const tools = fm ? (/^tools:\s*(.+)$/m.exec(fm[1]) || [])[1] || "" : "";
-    check("dao-scout：tools 里没有 Edit/Write/Bash（把只读红线从纯文字往机器上挪的那一半）",
-      !/\b(Edit|Write|MultiEdit|Bash)\b/.test(tools), JSON.stringify(tools));
+    const SCOUT = path.join(AGENTS_DIR, "dao-scout.md");
+    // existsSync 兜一道：直接 readFileSync 会在 profile 被删时**抛异常整份测试当场终止**，
+    // 于是它后面的 ⑧⑨ 两节一条都跑不到 —— 红是红了，却红得没有归因、还顺手灭掉六十多条。
+    const v = fs.existsSync(SCOUT)
+      ? scoutToolsOf(fs.readFileSync(SCOUT, "utf8"))
+      : { hasLine: false, value: null, why: "dao-scout.md 不在盘上" };
+    check("dao-scout：frontmatter 里有非空的 tools: 行（**没有这一行 = 继承全部工具**，删掉它比往里塞 Bash 更危险）",
+      v.hasLine, v.why);
+    // 本条**刻意不带 `v.hasLine &&`**：带上就与上一条同生同死 —— 两次破坏红出同一个集合，
+    // 红的时候归因不出到底是哪一格坏了（`[#官抗-负控独立归因]` ①款）。
+    // **代价照直写**：`tools:` 行不在时本条零样本、恒绿；那一格由上一条独占，且是实测的
+    // （issue #177 交付：删行 ⇒ 只红上一条；塞 Bash ⇒ 只红本条；两个红集互不相交），
+    // 不是「写它的人担保的」。
+    check("dao-scout：tools: 的内容里没有 Edit/Write/MultiEdit/Bash（只读红线的另一半）",
+      !WRITE_TOOL_RE.test(v.value || ""), JSON.stringify(v.value));
+  }
+  {
+    // 合成语料：上面两条的判别力**不靠「真档此刻恰好长得对」兜着**。真档哪天被改成哪种形态，
+    // 这几格都还在原地钉着，且期望值是逐条手写的 —— 判据自己瞎掉时它们会红，而不是跟着一起哑。
+    // 样本自造、只在内存里，**不碰盘上任何真档**。
+    const SAMPLES = [
+      ["有 tools: 且干净", "---\nname: x\ntools: Read, Grep, Glob\n---\n正文", true, false],
+      ["tools: 整行删掉（本 issue 的病灶）", "---\nname: x\ndescription: y\n---\n正文", false, false],
+      ["tools: 里塞了 Bash", "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, true],
+      ["tools: 有行但值为空（YAML null，宿主同样继承全部工具）", "---\nname: x\ntools:\n---\n正文", false, false],
+      ["压根没有 frontmatter", "tools: Read, Grep\n正文", false, false],
+      ["CRLF 行尾也认得（本仓 core.autocrlf=true，工作树里就是 CRLF）",
+        "---\r\nname: x\r\ntools: Read, Write\r\n---\r\n正文", true, true],
+    ];
+    for (const [tag, sample, wantLine, wantDirty] of SAMPLES) {
+      const g = scoutToolsOf(sample);
+      check(`合成样本「${tag}」：存在性判得出 ${wantLine}`,
+        g.hasLine === wantLine, `实得 hasLine=${g.hasLine} value=${JSON.stringify(g.value)}`);
+      check(`合成样本「${tag}」：内容含写入工具判得出 ${wantDirty}`,
+        WRITE_TOOL_RE.test(g.value || "") === wantDirty, `实得 ${WRITE_TOOL_RE.test(g.value || "")}`);
+    }
   }
 }
 
