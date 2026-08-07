@@ -429,48 +429,142 @@ function manifestIssueLines(projectRoot) {
 // 那正是本闸自己在治的病的又一实例：**条款还在，守它的东西不在了，且台账上看不出来**。
 // 故被检对象改为「dao.md + ccswitch/rules/ 下**含 `[n=` 的** .md」。
 //
-// 「含 `[n=` 才扫」这个前置筛选的两面，照直写：
+// 「有条款签名才扫」这个前置筛选的两面，照直写：
 //   · 好处：dao-longwindow.md 那类**纯流程文件本来就零条款**，直接扫它会恒报 zero-sample 红
 //     （闸说的是实话，但对那个文件不是缺陷）⇒ 生下来就吵的检查一定会被静音。
-//   · 代价：筛选器是**独立于闸的第二套实现**（这里只做一次朴素 `[n=` 存在性判断），
-//     若某个文件的条款被整体删光，它会从被检清单里消失而不是变红。故**必须**把
+//   · 代价：若某个文件的条款被整体删光，它会从被检清单里消失而不是变红。故**必须**把
 //     「几个文件 / 其中几个含条款」当成一行普查数打印出来 —— 静默跳过才是那个病，
 //     打印出来的跳过不是（同 verify-all 的 SKIPPED 教训：文案骗不到读数的人）。
+//   · **2026-08-08 起筛选判据不再是本文件自己的正则**，改为直连 clause-parser 的遮罩判据
+//     （issue #169①，见下方 loadClauseParser 那段）。于是「独立于闸的第二套实现」这句
+//     **不再成立**：判据现在是同一套。换来的是「提及 vs 使用」判得准；让出的是那一点
+//     冗余判别力 —— 而那点冗余此前的实际表现是**两套口径分歧**（#169③），不是纵深。
+// ── 扫描面在本 hook 与 PS 缺省全量模式之间是**两条路**，别读成重复 ──────────────
+//   · 本 hook：**扫目录**（ccswitch/rules/*.md 全量）再按签名筛 ⇒ 抓得到「带条款但没登记进
+//     defaultSources() 的新文件」，那一格 node 侧与 PS 全量模式都看不见（会打一行 ⓘ）。
+//   · PS 缺省全量模式：按 defaultSources() 那份**声明清单**逐份检。
+//   两条各有盲区（前者不查登记、后者不查未登记），合起来仍不是全覆盖 —— 照直写，别当兜底。
 // 成本：每个被检文件一次 `-NoProfile` 冷起 PowerShell（本机实测单次 ~350ms）。
 const CLAUSE_CHECK_TIMEOUT_MS = 20000;
 
+// ── 判据归一：裸正则 → 真遮罩（2026-08-08 · issue #169① 清偿）────────────────
+// 本函数此前是全仓三个「条款元字段」消费方里**唯一用裸文本正则**的那个，于是
+// 「散文里**提到** `[自定@…]` 这个语法」与「真的打了一个标记」分不开。
+// 上一版修法（`\[自定@` → `\[自定@\d`）**键在占位符的形状、不在容器**，对抗验证实测只关了
+// 五分之一：行内代码里举一个带日期的例（`` `[自定@08-02]` ``），或 `[n=` / `[基线:` / slug
+// 任一支的行内代码举例，照样把纯流程文件拉进扫描面 ⇒ Marked 下零选中 ⇒ zero-sample 恒红。
+// 当时接不上的**真实障碍是 hook 是 CJS 而判据在 ESM**（对抗官验证过是真约束，不是懒）。
+// Node ≥22.12 的 `require(esm)` 把那道缝填上了 ⇒ 现在直连
+// `ccswitch/lib/clause-parser.mjs::hasClauseSignature`（逐行 + 围栏 + 代码 span 遮罩，
+// 与 PS 侧 `Get-MaskedLine`/`Get-MaskedLineAlt` 同一套判据）。
+// **逐行**这一格是关键：整份文件一次性遮罩会让反引号跨行配对，把中间几十行连同真标记
+// 一起吃掉 —— 那不是修好，是换成更隐蔽的一种错。判据住在 parser 里，本文件不复述。
+//
+// 🔴 **降级路径必须出声**：宿主 Node 太老 / 文件坏了 ⇒ 回落到旧正则，并**打一行**说明
+// 「本轮用的是近似判据、它有已知误纳形态」。静默回落等于把 #169 那个洞原样装回来，
+// 而且这一次连「洞还在不在」都看不出来 —— 那比洞本身更贵。
+let CLAUSE_PARSER = null;      // 缓存：成功加载的 ESM 模块
+let CLAUSE_PARSER_WHY = null;  // 缓存：加载失败的原因（**留着，要打出来**）
+function loadClauseParser() {
+  if (CLAUSE_PARSER || CLAUSE_PARSER_WHY) return CLAUSE_PARSER;
+  try {
+    // 相对**本文件**解析，不相对被检项目 —— 被检的可以是任何一个 fixture 仓，
+    // 而判据必须永远来自 dao 自己那一份。
+    CLAUSE_PARSER = require("../lib/clause-parser.mjs");
+    if (typeof CLAUSE_PARSER.hasClauseSignature !== "function") {
+      CLAUSE_PARSER_WHY = "clause-parser.mjs 没有导出 hasClauseSignature（版本对不上）";
+      CLAUSE_PARSER = null;
+    }
+  } catch (e) {
+    CLAUSE_PARSER_WHY = (e && e.message ? e.message : String(e)).split("\n")[0];
+  }
+  return CLAUSE_PARSER;
+}
+
+// 降级用的近似判据（**只在 require(esm) 走不通时才用**）。它就是上一版那个正则，
+// 已知误纳形态见上面那段 —— 保留是为了「判不了」时仍有一个偏宽的筛子（宁可多送一份去检），
+// 不是因为它够用。
+const CLAUSE_SIGNATURE_FALLBACK_RE = /\[n=|\[基线:|\[自定@\d|\[#[^\]\s]+\]/;
+
 function clauseTargets(daoRoot) {
-  const targets = [path.join("ccswitch", "dao.md")];
+  const parser = loadClauseParser();
+  const notes = [];
+  // 「这份文件该用哪个 `-ClauseSelector`」的真相源同样在 parser 里（`defaultSources()` 的投影）。
+  // 此前 hook 一律不传 ⇒ 全按缺省 Marked 检，而 node 侧对 dao-officer-clauses.md 用的是
+  // all-top-level ⇒ **同一份文件被两套东西按两种口径检**，那正是 #169③ 记的口径分歧。
+  //
+  // 🔴 **拿不到这份清单也必须出声**（2026-08-08 · PR #183 对抗🟡①）。这里原先是
+  // 「是函数才调，抛了就回落空对象」一句话，于是 `parser` **加载成功**、而
+  // `defaultPsSelectorMap` 取不到（导出没了 / 版本对不上 / 它抛了 / 返回空清单）时：
+  // `selectorMap` 为空 ⇒ 下面 `mk()` 里那句 `&& Object.keys(selectorMap).length` 让
+  // **ⓘ 一行都不打**，而 `loadClauseParser()` 只在 `hasClauseSignature` 缺失时才设
+  // `CLAUSE_PARSER_WHY` ⇒ **⚠ 降级行也不打**，全部悄悄回落 Marked。
+  // 对抗实测（把那句 `typeof` 的名字换成一个不存在的导出）：真仓 `additionalContext` 与基线
+  // **逐字相同**、回归网全绿 —— **本文件通篇在治的那个病，长在了为治它而铺的这条路上。**
+  // ⚠ 措辞刻意**不与**下面那条「条款筛选器降级」重复：同一句话出现在两处，等于给夹住其中
+  // 一个的断言发免死金牌（本文件 `budgetLibErrorLines` 那里踩过，三个变异体因此存活）。
+  let selectorMap = {};
+  let selectorMapWhy = null;
+  if (parser) {
+    if (typeof parser.defaultPsSelectorMap !== "function") {
+      selectorMapWhy = "clause-parser.mjs 没有导出 defaultPsSelectorMap（版本对不上）";
+    } else {
+      try {
+        const m = parser.defaultPsSelectorMap();
+        // 空清单与「取不到」在后果上**逐格相同**（ⓘ 那道守卫同样被关掉），故同报一行。
+        if (m && typeof m === "object" && Object.keys(m).length) selectorMap = m;
+        else selectorMapWhy = "defaultPsSelectorMap() 返回空清单（源清单里一份文件都没有）";
+      } catch (e) {
+        selectorMapWhy = "defaultPsSelectorMap() 抛错：" +
+          (e && e.message ? String(e.message) : String(e)).split("\n")[0];
+      }
+    }
+  }
+  if (selectorMapWhy) {
+    notes.push("⚠ 选择器清单降级：clause-parser.mjs 进来了，但要不到 defaultPsSelectorMap（" +
+      selectorMapWhy + "）⇒ 本轮**全部按缺省 Marked 检**（dao-officer-clauses.md 那份的 " +
+      "AllTopLevel 口径丢了，退回 #169③ 那个两套口径分歧），且「带条款却没登记进 " +
+      "defaultSources()」那条 ⓘ 本轮**结构上出不来**（它的守卫要这份清单非空）—— " +
+      "**这不是「都登记好了」，是「没查」**（PR #183 对抗🟡①）");
+  }
+  const toPosix = (p) => p.split(path.sep).join("/");
+  const mk = (rel) => {
+    const key = toPosix(rel);
+    const sel = selectorMap[key] || null;
+    if (!sel && Object.keys(selectorMap).length) {
+      // **带条款却不在 defaultSources() 里**：clause-index、`--reconcile`、PS 全量模式
+      // **三样都看不见它**。这里只报不拦 —— 登记与否是判断（观察线），而「没人看着」
+      // 这件事本身必须每次都在人眼前过一遍。
+      notes.push("ⓘ 条款文件未登记进 defaultSources()：" + key +
+        "（带条款签名，却不在 clause-parser.mjs 的源清单里 ⇒ clause-index / --reconcile / " +
+        "PS 缺省全量模式都看不见它；本 hook 仍按缺省 Marked 检了它）");
+    }
+    return { rel, selector: sel || "Marked" };
+  };
+
+  const targets = [mk(path.join("ccswitch", "dao.md"))];
+  if (!parser) {
+    notes.push("⚠ 条款筛选器降级：读不到 clause-parser.mjs 的遮罩判据（" + CLAUSE_PARSER_WHY +
+      "）⇒ 本轮用的是近似正则，已知会把**行内代码里举的例子**误当成真标记（issue #169②）。" +
+      "宿主 Node 需 ≥22.12（require(esm)）；本机 " + process.version);
+  }
   const dir = path.join(daoRoot, "ccswitch", "rules");
   let names = [];
   try {
     names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith(".md"));
   } catch {
-    return { targets, total: 0, withClauses: 0 };   // rules/ 不存在 ⇒ 老形态，只检 dao.md
+    return { targets, total: 0, withClauses: 0, notes };   // rules/ 不存在 ⇒ 老形态，只检 dao.md
   }
   let withClauses = 0;
   for (const n of names.sort()) {
     let hit = false;
-    // v2（批 2 · 台账搬家）：判据从 `[n=` 扩到「台账字段**或**行内 slug」。
-    // 台账搬进 clause-ledger.json 之后，一条条款可以只有 `[#…]` 而没有 `[n=` ——
-    // 仍按 `[n=` 筛的话，那种文件会**整份从被检清单里消失**，而消失是静默的
-    // （正是本函数上面那段注释说的那个代价，只是换了触发方式）。
-    // v3（2026-08-07）：`\[自定@` 收紧为 `\[自定@\d` —— 真标记形态是 `[自定@<月日>]`，
-    // `@` 后必跟数字；不带数字的 `[自定@]` 只出现在**谈论**这个语法的散文里。
-    // 实证：dao-change-batch.md（纯流程文件）仅因一句「与 `[自定@]` 回溯面同构」的引用
-    // 被拉进扫描面，Marked 下零选中 ⇒ zero-sample 恒红——「提及」被当成了「使用」。
-    // 收紧前全域摸底（rules/ 全量 14 份）：清单变化仅 dao-change-batch.md 一份移出，
-    // 其余 5 份真条款文件均另命中 n=/基线/slug 支，零误伤。其余三支刻意不动，
-    // 真实原因是**够不着，不是分不开**（对抗验证订正 2026-08-07，账 #169）：「提及 vs 使用」
-    // 的正解是代码 span 遮罩，本仓已有三套实现（clause-parser.mjs::maskCodeSpans、
-    // check-clauses-structure.ps1 的 Get-MaskedLine+Alt），但本 hook 是 CJS 而判据在 ESM 里，
-    // 接不上。v3 只键在占位符形状——散文里举带日期的例（`[自定@08-02]`）或另三支的
-    // 行内代码举例仍会误纳复发恒红。判据归一与此洞统一记 #169。
-    try { hit = /\[n=|\[基线:|\[自定@\d|\[#[^\]\s]+\]/.test(fs.readFileSync(path.join(dir, n), "utf8")); }
-    catch { hit = false; }
-    if (hit) { targets.push(path.join("ccswitch", "rules", n)); withClauses++; }
+    try {
+      const text = fs.readFileSync(path.join(dir, n), "utf8");
+      hit = parser ? parser.hasClauseSignature(text) : CLAUSE_SIGNATURE_FALLBACK_RE.test(text);
+    } catch { hit = false; }
+    if (hit) { targets.push(mk(path.join("ccswitch", "rules", n))); withClauses++; }
   }
-  return { targets, total: names.length, withClauses };
+  return { targets, total: names.length, withClauses, notes };
 }
 
 function clauseStructureLines(daoRoot) {
@@ -488,10 +582,18 @@ function clauseStructureLines(daoRoot) {
   }
   // 单个被检文件跑一次闸，只解析末行契约（纯 ASCII 键值）。
   // 不去正则匹配中文正文——两个文件之间拿文案当契约，正是「被引用方一改、引用方静默失效」的温床。
-  const runOne = (rel) => {
+  const runOne = ({ rel, selector }) => {
     let out = "", code = 0;
-    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script];
-    if (rel !== path.join("ccswitch", "dao.md")) args.push("-TargetFile", rel);
+    // **一律显式传 `-TargetFile`，dao.md 也不例外**（2026-08-08 · issue #176）：
+    // 那个闸的**缺省语义已经变了** —— 不传 = 全量模式（去 node 要源清单、逐份自调子进程）。
+    // 本 hook 是逐份跑的，靠「不传 = dao.md」那条旧默认会让 dao.md 那一份走成整批全量，
+    // 既重复劳动又让「哪一份红了」对不上号。**依赖别人的缺省值是一种隐式契约**，
+    // 而这次它被改了正好证明了那句话。
+    // `-ClauseSelector` 同批补上：取值来自 clause-parser 的 `defaultPsSelectorMap()`
+    // （dao-officer-clauses.md 是 AllTopLevel，其余 Marked）—— 此前一律不传 ⇒ 全按 Marked，
+    // 与 node 侧口径分歧（issue #169③）。
+    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
+      "-TargetFile", rel, "-ClauseSelector", selector];
     try {
       out = execFileSync("powershell", args, {
         // capFor：把内层常量夹进**剩余**墙钟预算。这一步就是「内层永远先于外层响」的
@@ -521,16 +623,16 @@ function clauseStructureLines(daoRoot) {
     return { clauses: Number(sClauses), retire: Number(sRetire), promote: Number(sPromote) };
   };
 
-  const { targets, total, withClauses } = clauseTargets(daoRoot);
+  const { targets, total, withClauses, notes } = clauseTargets(daoRoot);
   const lines = [];
   let clauses = 0, retire = 0, promote = 0;
   // 这道闸是整个 hook 里最贵的一项，而它的成本**随被检文件数线性长**（每个文件一次
   // PowerShell 冷起）。预算见底时逐个记名跳过，**绝不并进下面那句绿** —— 一份只扫了
   // 一半的扫描面报「零违例」，正是 dao-guard-writing.md「零检出 ≠ 零存在」那条病。
   const notRun = [];
-  for (const rel of targets) {
-    if (!BUDGET.canAfford(PS_MIN_SLICE_MS)) { notRun.push(rel); continue; }
-    const r = runOne(rel);
+  for (const t of targets) {
+    if (!BUDGET.canAfford(PS_MIN_SLICE_MS)) { notRun.push(t.rel); continue; }
+    const r = runOne(t);
     if (r.err) { lines.push(r.err); continue; }
     if (r.fail) { lines.push(r.fail); continue; }
     clauses += r.clauses; retire += r.retire; promote += r.promote;
@@ -539,20 +641,23 @@ function clauseStructureLines(daoRoot) {
     lines.push(BUDGET.skip("条款库结构闸的 " + notRun.length + "/" + targets.length +
       " 个被检文件（" + notRun.join("、") + "）", PS_MIN_SLICE_MS));
   }
+  // `notes` 是**观察线**（判据降级 / 有条款文件没登记进源清单）：三条返回路径都要带上它 ——
+  // 只挂在其中一条，另外两条走到时它就静默消失了，而那正是这道闸自己在治的病。
+  const withNotes = (arr) => (notes && notes.length ? arr.concat(notes) : arr);
   if (lines.length) {
     lines.push("  → 详情：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 [-TargetFile <上面那个文件>]");
-    return lines;
+    return withNotes(lines);
   }
   if (retire > 0 || promote > 0) {
-    return ["ⓘ 条款库观察线（dao.md + rules/ 合计 " + clauses + " 条）：有 " + retire +
+    return withNotes(["ⓘ 条款库观察线（dao.md + rules/ 合计 " + clauses + " 条）：有 " + retire +
             " 条够老了、该问一句「还有用吗」，" + promote +
             " 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
-            "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"];
+            "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"]);
   }
   // 绿且无待办 ⇒ 常路只留一行普查数。**刻意不做成零输出**：被检文件从 1 个变成多个之后，
   // 「哪些被检了、哪些因零条款没检」必须是可见的，否则下一次有人把条款迁走时又是静默缩面。
-  return ["ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 " + withClauses + "/" + total +
-          " 个 .md，合计 " + clauses + " 条，零违例（零条款的纯流程文件不检，故意不报红）"];
+  return withNotes(["ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 " + withClauses + "/" + total +
+          " 个 .md，合计 " + clauses + " 条，零违例（零条款的纯流程文件不检，故意不报红）"]);
 }
 
 // ── 死闸检测的挂载点（2026-08-01 · 架构优化 P3）────────────────────────────

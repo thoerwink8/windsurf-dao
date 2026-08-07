@@ -81,6 +81,7 @@ import {
   DEFAULT_INDEX_REL,
   DEFAULT_LEDGER_REL,
   SELECTOR,
+  PS_SELECTOR,
   parseFile,
   normalizeText,
   loadLedger,
@@ -108,6 +109,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--check") o.mode = "check";
     else if (a === "--reconcile") o.mode = "reconcile";
+    else if (a === "--list-sources") o.mode = "list-sources";
     else if (a === "--out") o.out = argv[++i];
     else if (a === "--sources-json") o.sourcesJson = argv[++i];
     else if (a === "--ps-script") o.psScript = argv[++i];
@@ -550,11 +552,39 @@ function runIndexCore(o) {
   return { code: 0, drift: "none", cause: "none" };
 }
 
-// ── 交叉对账 ─────────────────────────────────────────────────────────────────
-const PS_SELECTOR = {
-  [SELECTOR.MARKED]: "Marked",
-  [SELECTOR.ALL_TOP_LEVEL]: "AllTopLevel",
-};
+// ── 源清单的机器可读出口（2026-08-07 · issue #176 / #169③）────────────────────
+// **谁在消费它**：`ccswitch/scripts/check-clauses-structure.ps1` 的缺省全量模式（它据此
+// 知道「要检哪几份、每份用哪个 -ClauseSelector」）。此前那两个问题在 PowerShell 侧没有答案
+// ⇒ 那道闸缺省只检 dao.md，而 CLAUDE.md 与 docs/rules/dispatch-clauses.md §三宣称的
+// 「两套独立解析各查一遍」对住在 rules/ 里的 90+ 条条款**不成立**（issue #176）。
+//
+// **共享的是清单，不是 parser**：PS 侧照旧用它自己那套解析去读每一份文件 —— `--reconcile`
+// 的判别力全部建立在「两套读法各数一遍」上，那一层一个字没动。这里递过去的只有
+// 「哪几份 + 各用哪个选择器」，而那本来就该有唯一真相源（`defaultSources()`），
+// 在此之前它被 PS 侧与 hook 侧各自猜了一遍。
+//
+// **输出契约**：stdout **只有一行 JSON**（不打任何中文说明 —— 消费方要 `ConvertFrom-Json`，
+// 混一行人话进去就是让它当场解析失败）。失败时**不打 JSON、退非 0**：消费方据此 fail-closed，
+// 「拿不到清单」绝不许长得像「清单是空的」。
+function runListSources(o) {
+  const sources = loadSources(o); // 抛错由 main 的 catch 兜，退非 0
+  const doc = {
+    schema: 1,
+    repo_root: REPO_ROOT,
+    // `file` 原样给（相对 repo_root，或自带源清单里写的绝对路径）；`abs` 是替消费方算好的
+    // 绝对路径 —— 让 PowerShell 再去拼一次相对路径解析，等于把「相对谁」这个坑复制一份过去。
+    sources: sources.map((s) => ({
+      file: s.file,
+      abs: path.isAbsolute(s.file) ? s.file : path.join(REPO_ROOT, s.file),
+      exists: fs.existsSync(path.isAbsolute(s.file) ? s.file : path.join(REPO_ROOT, s.file)),
+      selector: s.selector,
+      ps_selector: PS_SELECTOR[s.selector] || null,
+      role_scheme: s.role_scheme,
+    })),
+  };
+  process.stdout.write(JSON.stringify(doc) + "\n");
+  return 0;
+}
 
 function findPsHost() {
   for (const host of ["powershell", "pwsh"]) {
@@ -813,6 +843,7 @@ if (opts.mode === "help") {
       "  node ccswitch/scripts/gen-clause-index.mjs              生成/覆写 ccswitch/clause-index.json",
       "  node ccswitch/scripts/gen-clause-index.mjs --check      漂移检查（源变了而索引没跟上 ⇒ exit 1）",
       "  node ccswitch/scripts/gen-clause-index.mjs --reconcile   与 check-clauses-structure.ps1 交叉对账",
+      "  node ccswitch/scripts/gen-clause-index.mjs --list-sources 源清单的机器出口（一行 JSON，供 PS 守卫全量模式消费）",
       "",
       "  --sources-json <path>  用自带的源清单（JSON 数组或 {sources:[…]}），可指仓外语料",
       "  --out <path>           输出到别处（默认 ccswitch/clause-index.json）",
@@ -827,8 +858,19 @@ if (opts.mode === "help") {
 }
 
 try {
-  process.exit(opts.mode === "reconcile" ? runReconcile(opts) : runIndex(opts));
+  process.exit(
+    opts.mode === "reconcile" ? runReconcile(opts)
+      : opts.mode === "list-sources" ? runListSources(opts)
+        : runIndex(opts)
+  );
 } catch (e) {
+  // `--list-sources` 的 stdout 是**给机器解析的 JSON**，任何一行人话都会让消费方当场解析失败
+  // ⇒ 这一档的报错走 stderr、stdout 一个字都不写。消费方拿到「非 0 且 stdout 不是合法 JSON」
+  // ⇒ fail-closed（「拿不到清单」绝不许长得像「清单是空的」）。
+  if (opts.mode === "list-sources") {
+    process.stderr.write(`✗ --list-sources 失败：${e && e.stack ? e.stack : String(e)}\n`);
+    process.exit(1);
+  }
   process.stdout.write(`✗ 未预期的失败：${e && e.stack ? e.stack : String(e)}\n`);
   process.stdout.write(
     opts.mode === "reconcile"

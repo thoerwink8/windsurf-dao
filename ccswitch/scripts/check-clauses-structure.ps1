@@ -1,7 +1,9 @@
 ﻿<#
 .SYNOPSIS
     条款库结构完整性硬闸（canonical）。检查一份「带元字段的规则集」自身有没有静默腐坏。
-    缺省被检对象是 `ccswitch/dao.md`；项目可用 -TargetFile 指向自己的条款库全文。
+    **缺省是全量模式**（2026-08-07 · issue #176）：不传 -TargetFile ⇒ 现场扫出本仓
+    全部**含条款**的文件逐份检；传了 -TargetFile ⇒ 只检那一份（那条路径与本参数存在
+    以来完全一致，一个字节没动）。项目可用 -TargetFile 指向自己的条款库全文。
 
 .DESCRIPTION
     ── 这份 canonical 从哪来、为什么现在才有 ──────────────────────────────────
@@ -91,8 +93,24 @@
     ⚠ 两份现在是**双写**：mousse 那份未改动、仍是它 verify-all 的那一道。收敛成
     「项目侧调 canonical」是另一件事（跨仓改动进不了同一个 PR），**本批不做，照直记**。
 
+    ── 缺省全量模式（2026-08-07 · issue #176）────────────────────────────────
+    **本闸此前缺省只检 `ccswitch/dao.md`**，而条款早已散在 `ccswitch/rules/*.md`
+    （`dao-officer-clauses.md` 一份就 72 条）。于是项目 CLAUDE.md 与
+    `docs/rules/dispatch-clauses.md` §三那句「node 与 PowerShell **两套独立解析各查一遍**」
+    对那 90+ 条**不成立** —— 它们的台账字段级对账实际是 node 单实现。
+    PR #175 对抗实测（M3）：把 `官抗-语料非自证` 的台账 n 从 12 改回 11 制造正文↔台账不等，
+    `gen-clause-index.mjs --check` exit 1，**本闸缺省跑 exit 0**（它压根没看那个文件）。
+    处置是**把宣称改真、不是把宣称降级**：缺省扩到源清单里的每一份。判据与代价全写在
+    文件末尾「缺省全量模式」那一大段代码注释里（那里是唯一真相源，此处不重复）。
+    一句话版：清单**不在本文件里**，向 node 要 —— `gen-clause-index.mjs --list-sources`
+    输出 `clause-parser.mjs::defaultSources()` 的机器面（文件 + 各自的 `-ClauseSelector`）；
+    **拿不到就 exit 3，绝不回落到只查 dao.md**；逐份**自调子进程**（单文件路径因此零改动），
+    末行只剩一行聚合 marker。共享的是**清单**，解析仍是本文件自己那套（`--reconcile` 那一层没动）。
+
 .PARAMETER TargetFile
-    被检文件路径。缺省 = 本仓 `ccswitch/dao.md`。相对路径按**当前 PowerShell 位置**解析
+    被检文件路径。**不传 = 全量模式**（见上一段）；传了就只检那一份。
+    2026-08-07 之前不传等于 `ccswitch/dao.md`，而那正是 issue #176 那个覆盖缺口。
+    相对路径按**当前 PowerShell 位置**解析
     （不这么做的话 .NET 的 CurrentDirectory 与 Set-Location 不同步，会静默读到别的仓的同名
     文件并报 OK —— mousse 侧 2026-07-27 实测撞到过）。
 
@@ -162,6 +180,16 @@
 
 .NOTES
     退出码 0 = 结构完整；非 0 = 命中至少一种已知失效形态（硬闸）。
+    **全量模式另有一个退出码 3 = 「这次压根没查成」**（拿不到源清单：node 不在 / 出口不在 /
+    退出码非 0 / 输出不是合法 JSON / 清单为空）。3 与 1 刻意分开：1 是结构真的违例，
+    3 是本次什么都没查 —— 判「通过」一律写 `-eq 0`。
+    退出码是「任一份红即红」，另加四条只有聚合层看得见的硬闸：`source-missing`（清单里有、
+    盘上没有）· `no-file-checked`（一份都没跑成）· `zero-sample`（跑成了但合计条款为 0）·
+    `ledger-out-of-scope`（台账里有未退役条目指着**源清单之外**的文件 ⇒ 那些条款此刻没有
+    任何 PowerShell 守卫在看 —— 那正是 issue #176 那个病的一般形态，做成闸是为了下一次
+    静默缩面能当场现形，而不是等一年后被对抗验证捞出来）。
+    **「预期内的零条款细则档」不判红**（判据三件套见 Test-ChildZeroSampleExpected），
+    但逐份点名打印且进 marker 的 `zerosample=`。
     统计段（触发点分布 / n 分布 / 基线标注率 / 候选退役区 / 观察区 / AI 自定回溯面）
     **只打印，恒不参与退出码**。唯一例外是「扫描面自检」那一行 —— 它长在统计段里却是硬闸，
     因为它报的不是「你该判断一件事」，而是「这一段统计本身是不是在数一个被吃掉的样本集」。
@@ -228,6 +256,9 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 # 本文件在 ccswitch/scripts/ ⇒ 仓根是上两层。
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+# **全量模式的判据必须在下面那个缺省赋值之前记下来**（issue #176）：`$targetFile` 一被填上，
+# 「没传 -TargetFile」与「显式传了 dao.md」就再也分不开了 —— 而这两者现在要走两条路。
+$script:NoTargetGiven = [string]::IsNullOrWhiteSpace($TargetFile)
 if ([string]::IsNullOrWhiteSpace($TargetFile)) {
     $targetFile = Join-Path $repoRoot 'ccswitch/dao.md'
 } else {
@@ -869,7 +900,10 @@ function Format-Summary {
     # 而 `maskcmp=0` 说明这一层本轮零样本，那与「比过且没分歧」是两回事。
     # `ledgercmp` / `ledgeronly`（2026-08-02，批 3）同理追加在最末：前者是检查 6 的**分母**
     # （真正比过的字段数），后者是「正文没这一栏、以台账为准」的字段数。
-    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10} ledgercmp={11} ledgeronly={12}' `
+    # `mode`（2026-08-07，issue #176）同理追加在最末：`single` = 只检了一份（有 -TargetFile），
+    # `multi` = 全量模式的**聚合**总账。两种模式的数字口径不同（前者是一份文件的，后者是合计），
+    # 消费方必须分得开 —— 靠「有没有 files= 这一栏」去反推是**缺席当信号**，那正是本仓在治的病。
+    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10} ledgercmp={11} ledgeronly={12} mode=single' `
         -f $ExitCode, $Clauses, $Violations, $script:SumNoTrig, $script:SumRetire, $script:SumPromote,
            $script:SumSlugs, $script:SumLedgerState, $script:SumLedgerViol,
            $script:SumMaskDiv, $script:SumMaskCmp, $script:SumLedgerCmp, $script:SumLedgerOnly)
@@ -1160,6 +1194,409 @@ function Test-ClausesStructure {
     }
 
     return $violations
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 缺省全量模式（2026-08-07 · issue #176）—— 不传 -TargetFile 就检**全部含条款的文件**
+# ══════════════════════════════════════════════════════════════════════════════
+# 治的病：本闸缺省只检 dao.md，而条款早已散在 ccswitch/rules/*.md（officer-clauses 一份就
+# 72 条）⇒ 项目 CLAUDE.md 与 docs/rules/dispatch-clauses.md §三那句「node 与 PowerShell
+# 两套独立解析各查一遍」对那 90+ 条**不成立**。处置是**把宣称改真**，不是把宣称降级。
+#
+# ── ① 清单的真相源是 `defaultSources()`，本侧**不再自己定义一份** ────────────
+# 「哪几份文件带条款、每份该用哪个选择器」这条真相已经住在
+# `ccswitch/lib/clause-parser.mjs::defaultSources()` 里。本侧经
+# `node ccswitch/scripts/gen-clause-index.mjs --list-sources`（一行 JSON）拿它。
+# **为什么不在 PowerShell 里再扫一遍目录**（那是本批第一版的做法，帅裁改掉了）：
+# 那等于给同一个问题造第二份口径 —— 而「两套『哪些 rules 文件带条款』口径分歧」正是
+# issue #169③ 已经在追的账（parser 侧 12 份、hook 侧筛出 5 份），再加一份是把病做大。
+# **共享的是清单，不是 parser**：每份文件照旧由本文件自己那套解析去读，
+# `--reconcile` 的「两套读法各数一遍」那一层一个字没动 —— 独立性在**解析**上，不在清单上。
+#
+# ── ② 拿不到清单 ⇒ **fail-closed**（这一格是设计的核心，别改成回落）────────────
+# node 不在 / 出口不在 / 退出码非 0 / 输出不是合法 JSON / 清单是空的 ⇒ 一律 **exit 3** 并说清
+# 是哪一种。**绝不静默回落到「只查 dao.md」** —— 那正是 issue #176 那个缺口的形状：
+# 一次「其实什么都没查全」的运行，长得和「查了且干净」一模一样。
+# 退出码用 3 而不是 1 是刻意的：1 = 结构真的违例，3 = 这次压根没查成，两件事。
+#
+# ── ③ 选择器逐份取自清单，不猜 ────────────────────────────────────────────
+# `dao-officer-clauses.md` 在 node 侧用的是 `all-top-level`（它「整份就是条款列表」，
+# 那个选择器才检得出「某条整个丢掉台账」），其余用 `marked`。这个映射此前只存在于
+# node 私有常量里，于是 PS 侧与 hook 侧各自默认了 Marked ⇒ 同一份文件被两套东西按两种
+# 口径检。现在 `ps_selector` 跟着清单一起发过来，三个消费方读同一个答案。
+# ⚠ 显式传 `-ClauseSelector` 时**以你传的为准**（全量模式下它成为「清单没给出选择器」那些
+#   源的回落值），因为那是操作者的明示选择；清单给了值的一律以清单为准。
+#
+# ── ④ 零条款的源：**预期内，不判红**（判据抄 node 侧 classifyPsExit，独立实现）────
+# 清单里有 6 份纯细则档当前零条款，且那是**刻意留在清单里**的（clause-parser 头注写着：
+# 移出去等于「这几份从此没人看着」，而「零条款」与「没扫过」分不开才是问题）。
+# 单文件模式对它们报 `zero-sample` 硬闸红 —— 那是它对「被检对象是条款库」这个前提的合理防御，
+# 不是失败。故聚合层按**三件事同时成立**才判「预期内」：子进程自己打了 `[zero-sample]` 那一行、
+# `clauses=0`、`exit=1`；三缺一就**不给这句话**，如实报「说不清」并判红
+# （少一件就放行，等于把一个说不清的退出码抄进一句「这不是失败」里）。
+# 兜底在聚合层：**入选源合计条款为 0 ⇒ 判红**（同 `--reconcile` 的「整批全零要红」）。
+#
+# ── ⑤ 为什么**逐份自调子进程**而不是进程内循环 ──────────────────────────────
+# ㈠ 单文件那条路径因此**一个字节都没动** —— 向后兼容是硬要求（`--reconcile`、
+#    SessionStart hook `dao-scaffold-check.js`、回归网全都显式传 -TargetFile）。
+# ㈡ 每份语料拿一个全新进程 ⇒ `$script:Sum*` 那批脚本级计数不可能跨文件串味；
+#    进程内循环里少 reset 一个，表现就是**账目静默错**而退出码干净。
+# 代价：每份一次冷起（本机实测单次 ~350ms，当前 6 份约 2 秒）。本闸是命令序里人手跑的
+# 那一道，不在热路径上；SessionStart hook 走的是逐份 -TargetFile，不受影响。
+# 子进程 stdout 的**解码**走本文件上方那行 `[Console]::OutputEncoding = UTF8` 钉子
+# —— PS 5.1 正是用它解子进程输出（判据见 ccswitch/rules/dao-powershell.md 第三条：
+# 生产侧钉了 UTF-8 而消费侧跟控制台走时，中文全成乱码而报文只会指向被测对象）。
+# **同一个钉子管两头**，故这里不再钉第二次（也不 dot-source console-utf8.ps1：
+# 那会在同一进程里把同一件事做两遍，且 ps-console-encoding.tests.js 盯着上面那一行）。
+#
+# ── ⑥ 输出：子进程正文**原样转发**，只把它的末行改名 ────────────────────────
+# 观察线（候选退役区 / 待升格 / AI 自定回溯面）是「退役没有触发器」那条的唯一载体，
+# 折叠掉它等于把触发器关掉 ⇒ 全量模式**不折叠**，逐份原样转发（输出因此长，是刻意的）。
+# 唯一改动：子进程那行 `CLAUSE_STRUCTURE_SUMMARY` 转发时改名成 `CLAUSE_FILE_SUMMARY`。
+# **理由是消费方一律取第一个匹配**（node 侧就是 `.exec()`）—— 留着 N 行同名 marker 会让它
+# 读到第一份文件的数字还以为是总账。全量模式全程**只有一行** `CLAUSE_STRUCTURE_SUMMARY`，在最末。
+
+function Get-ClauseSourceList {
+    <#
+      向 node 侧要**源清单**（issue #176 / #169③）：
+      `node <Root>/ccswitch/scripts/gen-clause-index.mjs --list-sources` ⇒ 一行 JSON。
+      返回 @{ Ok; Why; Sources }，`Sources` 的每项带 `file` / `abs` / `exists` / `ps_selector`。
+
+      **每一种拿不到都必须能被说出名字**（下面每个 return 都带一句 Why）——
+      「拿不到清单」与「清单是空的」在调用方眼里必须分得开，而这份分辨力只有这里造得出。
+      调用方据此 fail-closed，**不许回落到只查 dao.md**。
+
+      ⚠ 不用 `2>&1` 捕获（会把 node 的 stderr 包成 NativeCommandError，在
+        `$ErrorActionPreference='Stop'` 下把一条正常的警告行变成脚本终止）——
+        判成败一律看 `$LASTEXITCODE`，判据见 ccswitch/rules/dao-powershell.md 第一条。
+      ⚠ node 的 stdout 解码走本文件上方那行 `[Console]::OutputEncoding` 钉子；这份 JSON 是
+        纯 ASCII 字段名 + 路径，即便控制台代码页异常也解析得出（路径若含中文才会中招，
+        本仓没有 —— 照直标，不声称无条件安全）。
+    #>
+    param([string]$Root)
+
+    $gen = Join-Path $Root 'ccswitch/scripts/gen-clause-index.mjs'
+    if (-not (Test-Path -LiteralPath $gen)) {
+        return @{ Ok = $false; Why = ('源清单出口不在：' + $gen); Sources = @() }
+    }
+    $raw = $null
+    $code = $null
+    try {
+        $raw = & node $gen --list-sources
+        $code = $LASTEXITCODE
+    } catch {
+        return @{ Ok = $false; Why = ('起不动 node：' + $_.Exception.Message); Sources = @() }
+    }
+    if ($code -ne 0) {
+        return @{ Ok = $false; Why = ('node --list-sources 退出码 ' + $code + '（非 0 ⇒ 清单不可信）'); Sources = @() }
+    }
+    $text = ((@($raw) -join "`n")).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return @{ Ok = $false; Why = 'node --list-sources 退 0 却没有任何输出'; Sources = @() }
+    }
+    $doc = $null
+    try { $doc = $text | ConvertFrom-Json } catch {
+        return @{ Ok = $false; Why = ('输出不是合法 JSON：' + $_.Exception.Message); Sources = @() }
+    }
+    if ($null -eq $doc -or $null -eq $doc.sources) {
+        return @{ Ok = $false; Why = 'JSON 里没有 sources 字段'; Sources = @() }
+    }
+    $list = @($doc.sources)
+    if ($list.Count -eq 0) {
+        return @{ Ok = $false; Why = '源清单是空的 —— 零份源等于什么都检不了，不给绿灯'; Sources = @() }
+    }
+    return @{ Ok = $true; Why = ''; Sources = $list }
+}
+
+function Test-ChildZeroSampleExpected {
+    <#
+      子进程那次 `exit 1` 是不是「预期内的零样本」。判据**三件事同时成立**：
+        ① 它自己打了 `  - [zero-sample] …` 那一行（读它的**类型行**，不从计数反推）
+        ② `clauses=0`
+        ③ `exit=1`（它报违例时用的就是这个码）
+      少任何一件都返回 $false ——「说不清」必须落在红那一侧，不能被塞进一句「这不是失败」。
+      另：`violations` 大于 1 时说明**除了 zero-sample 还有别的违例**，那些要看 ⇒ 同样 $false。
+
+      判据与 node 侧 `gen-clause-index.mjs::classifyPsExit` 同源、**各自实现**：
+      那边是给 `--reconcile` 的输出分类用的，这边是给聚合退出码用的。近似照直标：
+      类型行的格式是本文件自己的输出约定，格式变了这里会退回「说不清」——
+      退回的方向是**更保守**（不会把未知说成预期内）。
+    #>
+    param([string]$Text, [int]$Clauses, [int]$Exit, [int]$Violations)
+    if ($Clauses -ne 0 -or $Exit -ne 1 -or $Violations -ne 1) { return $false }
+    return [regex]::IsMatch($Text, '(?m)^\s*-\s*\[zero-sample\]')
+}
+
+function Get-RepoRelPath {
+    <# 仓内相对路径（正斜杠）。只为打印好看；对不上前缀就原样打绝对路径，不猜。 #>
+    param([string]$Root, [string]$Path)
+    $r = $Root.Replace('\', '/').TrimEnd('/') + '/'
+    $p = $Path.Replace('\', '/')
+    if ($p.StartsWith($r)) { return $p.Substring($r.Length) }
+    return $p
+}
+
+function Get-MarkerField {
+    <#
+      按**字段名**从末行取值，不按位置 —— 追加字段不会让它错位（本文件自己的既定约定就是
+      「新字段一律追加在末尾」）。**缺字段返回 $null，不返回 0**：「没有这一栏」与
+      「这一栏是 0」是两件事，混成一个数就是本仓反复在治的那个病。
+    #>
+    param([string]$Line, [string]$Name)
+    $m = [regex]::Match($Line, ('\b' + [regex]::Escape($Name) + '=(\S+)'))
+    if (-not $m.Success) { return $null }
+    return $m.Groups[1].Value
+}
+
+function Get-MarkerInt {
+    param([string]$Line, [string]$Name)
+    $v = Get-MarkerField -Line $Line -Name $Name
+    if ($null -eq $v) { return $null }
+    return ($v -as [int])
+}
+
+function Format-AllSummary {
+    <#
+      全量模式的末行：字段序**与单文件模式前 13 栏逐字对齐**（消费方的老正则照旧匹配得上），
+      其后追加 `mode=multi` 与三个只有本模式才有的量：
+        files      真的跑成了的份数
+        sources    源清单份数（**分母**：没有它，「跑了 6 份」说不出「一共该跑几份」）
+        zerosample 其中「预期内零条款」的份数（它们不判红，但必须数得出来）
+      三个都进 marker 是刻意的：`files=1 sources=1` 与 `files=12 sources=12` 都能给出
+      `violations=0`，而它们是完全不同的两件事。
+      ⚠ 拿不到源清单那一档也打这一行（`exit=3 files=0 sources=0`）——
+      **一次什么都没说的失败，正是这套东西在治的病**。
+    #>
+    param([int]$ExitCode, [int]$Clauses, [int]$Violations, [int]$NoTrig, [int]$Retire, [int]$Promote,
+          [int]$Slugs, [string]$LedgerState, [int]$LedgerViol, [int]$MaskDiv, [int]$MaskCmp,
+          [int]$LedgerCmp, [int]$LedgerOnly, [int]$Files, [int]$Sources, [int]$ZeroSample)
+    return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10} ledgercmp={11} ledgeronly={12} mode=multi files={13} sources={14} zerosample={15}' `
+        -f $ExitCode, $Clauses, $Violations, $NoTrig, $Retire, $Promote, $Slugs, $LedgerState,
+           $LedgerViol, $MaskDiv, $MaskCmp, $LedgerCmp, $LedgerOnly, $Files, $Sources, $ZeroSample)
+}
+
+function Invoke-AllClauseFiles {
+    param([string]$Root, [string]$Ledger)
+
+    # 自调用哪个宿主：**取当前进程自己的可执行文件**，不写死 'powershell' ——
+    # 在 pwsh 下跑却去起 windows powershell，等于换了一套语言运行时来复核同一件事。
+    $psExe = $null
+    try { $psExe = (Get-Process -Id $PID).Path } catch { $psExe = $null }
+    if ([string]::IsNullOrWhiteSpace($psExe)) { $psExe = 'powershell' }
+
+    Write-Host '== 条款库结构完整性硬闸（canonical · 缺省全量模式）=='
+    Write-Host ("   仓根：{0}" -f $Root)
+    Write-Host '   源清单：node ccswitch/scripts/gen-clause-index.mjs --list-sources（唯一真相源 = clause-parser.mjs::defaultSources()）'
+    Write-Host ("   宿主：{0}" -f $psExe)
+
+    $srcDoc = Get-ClauseSourceList -Root $Root
+    if (-not $srcDoc.Ok) {
+        # **fail-closed**：这里绝不回落到「只查 dao.md」。一次「其实没查全」的运行
+        # 长得和「查了且干净」一样，正是 issue #176 那个缺口的形状。
+        Write-Host ''
+        Write-Host ("FAIL：拿不到源清单 —— {0}" -f $srcDoc.Why)
+        Write-Host '     「拿不到清单」不等于「清单是空的」，更不等于「没问题」⇒ 本次不检、不给绿灯。'
+        Write-Host '     自查：node ccswitch/scripts/gen-clause-index.mjs --list-sources（应输出一行 JSON、退 0）'
+        Write-Host '     只想检一份文件、不经清单：加 -TargetFile <路径>（那条路径不依赖 node）。'
+        Write-Host (Format-AllSummary -ExitCode 3 -Clauses 0 -Violations 0 -NoTrig 0 -Retire 0 -Promote 0 `
+            -Slugs 0 -LedgerState 'na' -LedgerViol 0 -MaskDiv 0 -MaskCmp 0 -LedgerCmp 0 -LedgerOnly 0 `
+            -Files 0 -Sources 0 -ZeroSample 0)
+        return 3
+    }
+
+    $ledgerDoc = Get-ClauseLedger -Path $Ledger
+    $agg = @()   # 聚合层自己的违例（单份跑一律看不见的那些）
+    $selected = @()
+    foreach ($s in @($srcDoc.Sources)) {
+        $abs = "$($s.abs)"
+        $sel = "$($s.ps_selector)"
+        $note = '清单'
+        if ([string]::IsNullOrWhiteSpace($sel)) {
+            # 清单没给选择器 ⇒ **说出来再回落**，不静默按缺省检（那样两套东西会按两种口径
+            # 检同一份文件，而输出上看不出来 —— issue #169③ 记的正是这种分歧）。
+            $sel = $ClauseSelector
+            $note = '清单没给选择器，回落到 -ClauseSelector ' + $ClauseSelector
+        }
+        $selected += [PSCustomObject]@{ Path = $abs; Selector = $sel; Note = $note; Exists = [bool]$s.exists }
+    }
+
+    Write-Host ("   清单 {0} 份源：" -f $selected.Count)
+    foreach ($s in $selected) {
+        Write-Host ("     · {0}　[{1}]　（{2}{3}）" -f (Get-RepoRelPath -Root $Root -Path $s.Path), $s.Selector, $s.Note,
+            $(if ($s.Exists) { '' } else { '；**文件不在盘上**' }))
+    }
+    foreach ($s in @($selected | Where-Object { -not $_.Exists })) {
+        $agg += [PSCustomObject]@{
+            Type = 'source-missing'
+            Content = ((Get-RepoRelPath -Root $Root -Path $s.Path) + '：源清单里有它，盘上没有 —— 清单与仓实况脱节，' +
+                       '而「少检一份」在别处一个字都看不出来。')
+        }
+    }
+
+    # 台账的**反向覆盖闸**：有未退役条目指着源清单之外的文件 ⇒ 那几条此刻没有任何
+    # PowerShell 守卫在看。这正是 issue #176 那个病的一般形态，做成硬闸是为了下一次
+    # 静默缩面当场现形，而不是等一年后由对抗验证捞出来。
+    # （node 侧 `--check` 的 `out_of_scope` 是同一判据的另一套实现，两边各查一遍。）
+    if ($ledgerDoc.Ok) {
+        $oos = @()
+        foreach ($k in ($ledgerDoc.Entries.Keys | Sort-Object)) {
+            $e = $ledgerDoc.Entries[$k]
+            if ($e.status -eq 'retired') { continue }
+            $covered = $false
+            foreach ($s in $selected) {
+                if (Test-LedgerFileMatch -LedgerPath $e.file -ActualPath $s.Path) { $covered = $true; break }
+            }
+            if (-not $covered) { $oos += ('[#' + $k + '] → ' + $e.file) }
+        }
+        if ($oos.Count -gt 0) {
+            $oosMsg = '台账里有 {0} 条未退役条目指着**源清单之外**的文件 ⇒ 那些条款此刻没有任何 PowerShell 守卫在看' +
+                      '（issue #176 那个病的一般形态）：{1}'
+            $agg += [PSCustomObject]@{
+                Type = 'ledger-out-of-scope'
+                Content = ($oosMsg -f $oos.Count, ((@($oos) | Select-Object -First 8) -join ' · '))
+            }
+        }
+    } else {
+        Write-Host ("   ⚠ 台账读不了（{0}）：ledger-out-of-scope 那道反向覆盖闸本轮不生效（子进程各自会因此判红）。" -f $ledgerDoc.Why)
+    }
+
+    $sumClauses = 0; $sumViol = 0; $sumNoTrig = 0; $sumRetire = 0; $sumPromote = 0; $sumSlugs = 0
+    $sumLedgerViol = 0; $sumMaskDiv = 0; $sumMaskCmp = 0; $sumLedgerCmp = 0; $sumLedgerOnly = 0
+    $ledgerState = 'na'
+    $redFiles = @()
+    $ranFiles = 0
+    $zeroSampleFiles = @()
+    $tolerated = 0   # 被判为「预期内 zero-sample」而不进退出码的违例处数
+
+    foreach ($s in $selected) {
+        $rel = Get-RepoRelPath -Root $Root -Path $s.Path
+        if (-not $s.Exists) { continue }   # 已由 source-missing 判红，不再对着空气起一个进程
+        Write-Host ''
+        Write-Host ('──── ' + $rel + ' [' + $s.Selector + '] ' + ('─' * [Math]::Max(3, 56 - $rel.Length)))
+        $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
+                       '-TargetFile', $s.Path, '-ClauseSelector', $s.Selector,
+                       '-RetireAgeDays', $RetireAgeDays, '-FutureGraceDays', $FutureGraceDays,
+                       '-RetireListMax', $RetireListMax, '-LedgerFile', $Ledger)
+        if (-not [string]::IsNullOrWhiteSpace($SectionPattern)) { $childArgs += @('-SectionPattern', $SectionPattern) }
+        $out = & $psExe @childArgs
+        $childCode = $LASTEXITCODE
+        $ranFiles++
+        $marker = $null
+        $childText = ((@($out) | ForEach-Object { "$_" }) -join "`n")
+        foreach ($l in @($out)) {
+            if ("$l" -like 'CLAUSE_STRUCTURE_SUMMARY *') { $marker = "$l"; continue }
+            Write-Host $l
+        }
+        if ($null -eq $marker) {
+            $agg += [PSCustomObject]@{
+                Type = 'no-marker'
+                Content = ($rel + '：子进程跑完却没给末行 marker（真退出码 ' + $childCode +
+                           '）——「跑不了」不等于「一致」，不给绿灯。')
+            }
+            $redFiles += $rel
+            continue
+        }
+        Write-Host ('   ↳ CLAUSE_FILE_SUMMARY ' + $rel + ' ' + ($marker -replace '^CLAUSE_STRUCTURE_SUMMARY ', ''))
+
+        $need = @('exit', 'clauses', 'violations', 'notrigger', 'retire', 'promote', 'slugs',
+                  'ledgerviol', 'maskdiv', 'maskcmp', 'ledgercmp', 'ledgeronly')
+        $vals = @{}
+        $missing = @()
+        foreach ($n in $need) {
+            $v = Get-MarkerInt -Line $marker -Name $n
+            if ($null -eq $v) { $missing += $n; $vals[$n] = 0 } else { $vals[$n] = $v }
+        }
+        if ($missing.Count -gt 0) {
+            $agg += [PSCustomObject]@{
+                Type = 'marker-field-missing'
+                Content = ($rel + '：末行缺字段 ' + ($missing -join ',') + ' ⇒ 末行契约被改坏了。' +
+                           '缺的那几栏按 0 计入合计，故本次的合计数是**下界**，不是真值。')
+            }
+        }
+        $sumClauses += $vals['clauses']; $sumViol += $vals['violations']; $sumNoTrig += $vals['notrigger']
+        $sumRetire += $vals['retire'];   $sumPromote += $vals['promote']; $sumSlugs += $vals['slugs']
+        $sumLedgerViol += $vals['ledgerviol']; $sumMaskDiv += $vals['maskdiv']; $sumMaskCmp += $vals['maskcmp']
+        $sumLedgerCmp += $vals['ledgercmp'];   $sumLedgerOnly += $vals['ledgeronly']
+        # 台账态取**最坏的那一个**：一份 bad 就是 bad，不该被另外五份的 ok 冲淡。
+        $st = Get-MarkerField -Line $marker -Name 'ledger'
+        if ($st -eq 'bad' -or $st -eq 'missing') { $ledgerState = $st }
+        elseif ($st -eq 'ok' -and $ledgerState -eq 'na') { $ledgerState = 'ok' }
+
+        if ($vals['exit'] -eq 0 -and $childCode -eq 0) { continue }
+        # 非零：先问是不是「预期内的零样本」（判据三件套，见 Test-ChildZeroSampleExpected）。
+        if ($childCode -eq 1 -and (Test-ChildZeroSampleExpected -Text $childText `
+                -Clauses $vals['clauses'] -Exit $vals['exit'] -Violations $vals['violations'])) {
+            $zeroSampleFiles += $rel
+            $tolerated += 1     # 判据保证它恰好是 1 处（violations -eq 1），故这里加 1 不是估算
+            Write-Host ('   ↳ 上面这份是**预期内的零条款细则档**（它自己报的 zero-sample，clauses=0 / exit=1 / 仅此一处违例）：' +
+                        '不判红。**它刻意留在源清单里** —— 移出去等于「这份从此没人看着」，而「零条款」与「没扫过」' +
+                        '分不开才是真问题；它哪天长出条款，这一行会自己消失。')
+            continue
+        }
+        $redFiles += $rel
+    }
+
+    if ($ranFiles -eq 0) {
+        $agg += [PSCustomObject]@{
+            Type = 'no-file-checked'
+            Content = ('源清单 ' + $selected.Count + ' 份，实际一份都没跑成 ⇒ 本次一条条款都没检。' +
+                       '这与「条款库很干净」在输出上不可区分，判红（同单文件模式的 zero-sample）。')
+        }
+    }
+    if ($ranFiles -gt 0 -and $sumClauses -eq 0) {
+        $agg += [PSCustomObject]@{
+            Type = 'zero-sample'
+            Content = ('跑了 ' + $ranFiles + ' 份源，合计条款 0 条 ——「每份 0 == 0」的一致是空的一致' +
+                       '（同 gen-clause-index.mjs --reconcile 的「整批全零要红」）。')
+        }
+    }
+
+    # marker 的 `violations=` 报的是**进退出码的那些**，于是 `exit=0 ⟺ violations=0` 这条
+    # 不变式成立 —— 消费方（dao-scaffold-check.js 那类）读到 `exit=0 violations=6` 会去查一件
+    # 没发生的事。被容忍的那 6 处不是消失了：它们逐份点名打印，且在 marker 里有专栏 `zerosample=`。
+    $totalViol = ($sumViol - $tolerated) + $agg.Count
+    if ($totalViol -lt 0) { $totalViol = 0 }
+    $exitCode = 0
+    if ($redFiles.Count -gt 0 -or $agg.Count -gt 0) { $exitCode = 1 }
+
+    Write-Host ''
+    Write-Host '════════════════ 全量模式合计 ════════════════'
+    Write-Host ("  源清单 {0} 份 → 真跑了 {1} 份 · 其中预期内零条款 {2} 份 · 合计条款 {3} 条 · slug {4} 个" `
+        -f $selected.Count, $ranFiles, $zeroSampleFiles.Count, $sumClauses, $sumSlugs)
+    if ($zeroSampleFiles.Count -gt 0) {
+        Write-Host ("  预期内零条款（不判红，但**逐份点名**：第 N+1 份突然也变成零条款时，这一行看得出来）：{0}" `
+            -f ($zeroSampleFiles -join ' · '))
+    }
+    Write-Host ("  违例：子进程合计 {0} 处，其中 {1} 处是预期内 zero-sample（不进退出码）；聚合层另 {2} 处 ⇒ 计入退出码 {3} 处" `
+        -f $sumViol, $tolerated, $agg.Count, $totalViol)
+    Write-Host ("  观察线合计（不进退出码）：候选退役区 {0} 条 · 待升格 {1} 条 —— 清单在上面各段里，本行只是总账" `
+        -f $sumRetire, $sumPromote)
+
+    if ($agg.Count -gt 0) {
+        Write-Host ("FAIL（聚合层）：命中 {0} 处 —— 这几处只有全量模式看得见，单份跑一律看不到：" -f $agg.Count)
+        foreach ($v in $agg) { Write-Host ("  - [{0}] 行 0：{1}" -f $v.Type, $v.Content) }
+    }
+    if ($redFiles.Count -gt 0) {
+        Write-Host ("FAIL：{0} 份语料判红 —— {1}" -f $redFiles.Count, ($redFiles -join ' · '))
+        Write-Host '     明细在上面各自那一段里；单独复跑：powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 -TargetFile <那一份>'
+    }
+    if ($exitCode -eq 0) {
+        Write-Host ("OK：源清单 {0} 份逐份跑完全绿（合计 {1} 条条款、{2} 个 slug 与台账双向零孤儿）" -f $ranFiles, $sumClauses, $sumSlugs)
+        Write-Host '     未覆盖面（别把这行 OK 读成「条款库没问题」）：单份那几条未覆盖面**逐份仍然成立**（见各段末尾），另加本模式特有的两条 ——'
+        Write-Host '     ① 扫描面等于 defaultSources()：一份带条款却**没登记进那份清单**的文件，本闸与 node 侧会一起看不见'
+        Write-Host '        （兜它的是 SessionStart hook 那侧的目录扫描 + ledger-out-of-scope 这道反向闸，两者都只是纵深，不是全覆盖）；'
+        Write-Host '     ② 预期内零条款那几份只证明「它此刻零条款」，不证明「它本来就该零条款」——那是判断，不设闸。'
+    }
+    Write-Host (Format-AllSummary -ExitCode $exitCode -Clauses $sumClauses -Violations $totalViol `
+        -NoTrig $sumNoTrig -Retire $sumRetire -Promote $sumPromote -Slugs $sumSlugs `
+        -LedgerState $ledgerState -LedgerViol $sumLedgerViol -MaskDiv $sumMaskDiv -MaskCmp $sumMaskCmp `
+        -LedgerCmp $sumLedgerCmp -LedgerOnly $sumLedgerOnly `
+        -Files $ranFiles -Sources $selected.Count -ZeroSample $zeroSampleFiles.Count)
+    return $exitCode
+}
+
+if ($script:NoTargetGiven) {
+    exit (Invoke-AllClauseFiles -Root $repoRoot -Ledger $ledgerFile)
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
