@@ -245,6 +245,16 @@ export const SELECTOR = {
   ALL_TOP_LEVEL: "all-top-level",
 };
 
+// PS 守卫 `-ClauseSelector` 的取值映射。**2026-08-07 从 gen-clause-index.mjs 搬到这里**
+// （issue #176 / #169③）：「一份源该用哪个选择器」是 `defaultSources()` 那条真相的**另一半**，
+// 两半分居两个文件时，第三、第四个消费方（PowerShell 守卫 / SessionStart hook）只能各自再抄
+// 一份 —— 而那正是 #169③ 记的「两套口径分歧」。放在一起，`--list-sources` 才能把「文件 +
+// 选择器」当成一个整体发出去。
+export const PS_SELECTOR = {
+  [SELECTOR.MARKED]: "Marked",
+  [SELECTOR.ALL_TOP_LEVEL]: "AllTopLevel",
+};
+
 export const ROLE_SCHEME = {
   // 整份文件归 general（dao.md 与 ccswitch/rules/* 没有官种分节）
   GENERAL: "general",
@@ -294,6 +304,41 @@ function fenceMask(lines) {
     mask[i] = inFence;
   }
   return mask;
+}
+
+/**
+ * 「这份文本里有没有**真的在用**条款签名」—— `clauseTargets` 型消费方的判据出口
+ * （2026-08-07，issue #169①）。
+ *
+ * ── 它替掉的是什么 ─────────────────────────────────────────────────────────
+ * `ccswitch/hooks/dao-scaffold-check.js::clauseTargets` 此前是全仓三个「条款元字段」
+ * 消费方里**唯一用裸文本正则**的那个，于是「散文里**提到** `[自定@…]` 这个语法」与
+ * 「真的打了一个标记」分不开 —— 纯流程文件被拉进扫描面、Marked 下零选中 ⇒ zero-sample
+ * 恒红。那次的修法（`\[自定@` 收紧成 `\[自定@\d`）**键在占位符的形状、不在容器**，
+ * 对抗验证实测只关了五分之一：行内代码里举一个带日期的例（`` `[自定@08-02]` ``）、
+ * 或 `[n=` / `[基线:` / slug 任一支的行内代码举例，照样复发。
+ * 正解本仓早有三套实现（本文件的 `maskCodeSpans`、PS 侧 `Get-MaskedLine` 与 `Get-MaskedLineAlt`），
+ * 当时接不上的真实障碍是 **hook 是 CJS 而判据在 ESM**（对抗官验证过是真约束）。
+ * Node ≥22.12 的 `require(esm)` 把那道缝填上了 ⇒ 本函数就是给它的出口。
+ *
+ * ── 判据必须**逐行**，这一格是它最容易被写坏的地方 ───────────────────────────
+ * 整份文件一次性遮罩会让反引号**跨行配对**（第 3 行的一个反引号与第 40 行的另一个配成一对，
+ * 中间四十行连同真标记一起被吃掉）⇒ 那不是修好，是把一种错换成更隐蔽的一种。
+ * 故这里与 `parseClauses` 走同一条路：先 `fenceMask` 吃掉围栏，再**逐行** `maskCodeSpans`。
+ *
+ * ⚠ 射程照直写：它只回答「有没有签名」，**不回答「这些签名合不合法」**（那是 PS 守卫的活），
+ * 也不看 `## 📌` 节（`parseClauses` 会整节跳过，本函数不跳 —— 这是刻意的：本函数是
+ * 「要不要把这份文件送去检」的筛子，宁可多送一份，也不要因为签名恰好落在 📌 节里就整份不送）。
+ */
+export function hasClauseSignature(text) {
+  const lines = splitLines(text);
+  const mask = fenceMask(lines);
+  for (let i = 0; i < lines.length; i++) {
+    if (mask[i]) continue;
+    const masked = maskCodeSpans(lines[i]);
+    if (LEDGER_SIGNATURE_RE.test(masked) || SLUG_RE.test(masked)) return true;
+  }
+  return false;
 }
 
 // ── 第二趟：节区间表 ─────────────────────────────────────────────────────────
@@ -937,6 +982,22 @@ export function defaultSources() {
     { file: "ccswitch/rules/dao-product.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
     { file: "ccswitch/rules/dao-askuser.md", selector: SELECTOR.MARKED, role_scheme: ROLE_SCHEME.GENERAL },
   ];
+}
+
+/**
+ * 「仓内相对路径 → PS 守卫的 `-ClauseSelector` 取值」（2026-08-07，issue #169③）。
+ *
+ * 这是 `defaultSources()` 的**投影**，不是第二份清单 —— 它现算，加一份源不需要回来改这里。
+ * 存在的理由：PowerShell 守卫与 SessionStart hook 都要回答「这份文件该用哪个选择器」，
+ * 而在此之前那个答案只以「gen-clause-index.mjs 里一个私有映射 + 各消费方自己猜」的形态存在，
+ * 于是 hook 一直拿缺省的 Marked 去检 `dao-officer-clauses.md`（node 侧用的是 all-top-level）。
+ * **不在清单里的文件返回 `null`**：调用方要自己决定回落到什么，且那一步该是**看得见**的
+ * ——「悄悄按 Marked 检了」与「这份文件根本没在源清单里」是两件事。
+ */
+export function defaultPsSelectorMap() {
+  const m = {};
+  for (const s of defaultSources()) m[s.file] = PS_SELECTOR[s.selector] || null;
+  return m;
 }
 
 export const DEFAULT_INDEX_REL = "ccswitch/clause-index.json";
