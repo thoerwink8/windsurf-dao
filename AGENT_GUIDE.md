@@ -94,9 +94,11 @@
 |---|---|---|---|
 | 帅 | 主会话当前最强（Fable 5 / Opus，随代滚动） | 主会话 | 分解 / 委派 / 合成 / 验证 / 兜底，不亲执批量实现 |
 | 将 | fable | strategist | 架构定调、卡死攻坚（决策代价≥100h 才召，2026-07-12 战略报告调档） |
-| 校 | opus | reviewer-critical + 复杂混合实现件 | 核心模块对抗性 review / 扛硬仗 |
-| 尉 | sonnet | brainstormer / plan-writer / spec-writer / reviewer / debugger + 常规实现侦察 | 主力 ~80% 流量 |
-| 兵 | haiku | worker-batch | 严格按含完整模板的 spec 执行，零自主判断（spec 无模板则升尉） |
+| 校 | opus（Opus 5） | reviewer-critical + 复杂混合实现件 | 核心模块对抗性 review / 扛硬仗 |
+| 尉 | opus（Opus 5，与校同模型靠协议深度分档） | brainstormer / plan-writer / spec-writer / reviewer / debugger + 常规实现侦察 | 主力 ~80% 流量 |
+| 兵 | haiku（4.5） | worker-batch | 严格按含完整模板的 spec 执行，零自主判断（spec 无模板则升尉） |
+
+> 档位数值的**唯一真相源是 `ccswitch/rules/dao-dispatch.md` §军衔四级制**（随模型代际滚动），本表是投影、冲突以那边为准。校尉同模型不塌缩档位——协议深度分档，下一代模型分化时两档自然复位。
 
 档位写死在 `ccswitch/agents/*.md` frontmatter `model:`；帅位不写档——天然继承主会话模型，Fable 换 Opus 或换下一代，体系零改动。用较轻模型坐主会话时即官方 Advisor 变体：帅位遇高难决策临时召 opus strategist 咨询即可。
 
@@ -109,8 +111,9 @@
 默认值站在违例那边」；frontmatter 写死一个档会把兜底方向反过来（帅忘了传 model 时**静默降档**
 而不是继承最贵档）。⇒ 与上一段那句「档位写死在 frontmatter」并存但不矛盾：
 **能力型写档（它们本就是按档分的），官种型不写档（官种与档位是两个正交维度）。**
-⚠ 上表 `尉=sonnet` 与 `dao-dispatch.md` 现行「尉=Opus 5」对不上，**那是本批之前就有的漂移，
-本批未动**（改它要判「以哪份为准」，属判断档）。
+⚠ 上表曾写 `尉=sonnet` 与 `dao-dispatch.md` 现行「尉=Opus 5」对不上——#122 批实现官照直标注未动
+（官不自裁「以哪份为准」是对的）；2026-08-07 帅按拍板出处订正：档位真相源是 `dao-dispatch.md`
+（用户 2026-07-26 拍板升档改语义），本表为投影，`尉=sonnet` 是 Opus 4.8 时代的滞后值。
 
 ### 4.2 指挥官三职（每次派活的前中后）
 
