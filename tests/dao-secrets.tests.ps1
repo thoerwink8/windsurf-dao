@@ -42,9 +42,11 @@
 
     ## 第四块靶：**分档退出码 0 / 2 / 1**（2026-08-07 补 · 用户拍板 · issue #148）
 
-    场景 19 = `2`（ACL 收不紧但主体成功）、20 = `-DryRun` 恒 `0`、21 = **负控**（ACL 也没收紧
-    但主体真失败 ⇒ 必须 `1`，不是 `2`）。**21 是三档里唯一有安全后果的那条**：`2` 的定义是
-    「主体成功」，若分档抢在主体之前，一次加密链路没验通的跑动会被报成「只是权限没收紧」。
+    场景 19 = `2`（ACL 收不紧但主体成功）、20 = `-DryRun` **过了工具检查之后**恒 `0`、
+    21 = **负控**（ACL 也没收紧但主体真失败 ⇒ 必须 `1`）。**21 是三档里唯一有安全后果的那条**：
+    `2` 的定义是「主体成功」，分档若抢在主体之前，一次链路没验通的跑动会被报成「只是权限没收紧」。
+    **2026-08-07 补 22 = 一成一败、23 = Portable 下的 2（issue #173 F5）** —— 那两格的理由、
+    判别力与「全败那一格为什么覆盖不了它们」，都在下面 dot-source 之后那段行注释里。
 
     ## 为什么断言全打在行为上，一条文本匹配都没有
 
@@ -205,9 +207,17 @@ $ErrorActionPreference = 'Stop'
 # **DR1/P1/P2 是接手官补的三向，它们各自钉的是「契约里写着、却没人验」的那几句**
 # （叫 DR1 不叫 D1：上面附三之二里 **`D1` 已经被「默认值」那个变体占了**，
 #  两个不同的变体共用一个名字，正是记分板烂掉的第一步）：
-#   · DR1 钉 `.NOTES` 里那句 **「-DryRun 恒 0」** —— 它此前为真只是因为 DryRun 的 `exit 0`
-#     恰好排在收权限之前，是个**位置上的巧合**。DR1 红集只有 20a **一条**，说明这一格
-#     此前是真空的：把 DryRun 染成 2，全套 101 条断言里没有第二条会不高兴。
+#   · DR1 钉 `.NOTES` 里那句 **「-DryRun 恒 0」** —— ~~它此前为真只是因为 DryRun 的
+#     `exit 0` 恰好排在收权限之前，是个**位置上的巧合**。~~
+#     **订正（2026-08-07 · issue #173 F2）**：那句话**本来就不是无条件为真的** ——
+#     第 0 步工具前置检查排在 -DryRun 块**前面**，缺 sops/age 时 -DryRun 直接 exit 1。
+#     准确的说法分两截：**①「过了工具检查之后恒 0」才是真命题**（`.NOTES` 已同批收窄）；
+#     ②「过了之后」这一截之所以为真，靠的确实是 DryRun 的 `exit 0` 排在收权限之前
+#     这个**位置**，而没有任何东西钉住那个位置 —— DR1 钉的正是 ② 这一截，不是整句。
+#     ⚠ ① 那一截（缺工具 ⇒ -DryRun 也退 1）**至今没有断言**：要给调用外壳开一个
+#     「不上桩 PATH」的口子才测得了，本批未做，记在 issue #173 的未尽处里。
+#     DR1 红集只有 20a **一条**，说明 ② 这一格此前是真空的：把 DryRun 染成 2，
+#     全套 101 条断言里没有第二条会不高兴。
 #   · P1 钉 **「2 的前提是主体成功」** —— 它把分档抢到主体前面，正是这个分档最危险的错法：
 #     一次加密链路根本没验通的跑动会被报成「密钥主体成功、只是权限没收紧」，用户据此往下
 #     搬凭据。红的 7 条里 21a/21b/21c 是本轮新加的负控，19b/19f/19g 是既有的对照组。
@@ -225,6 +235,62 @@ $ErrorActionPreference = 'Stop'
 # P1 证据看不见它：P1 杀整条尾巴，分不出「红字块点名」与「收尾屏点名」——原缺陷同型复发。
 # 19d 当前的真实判别力 = 「keyDir ACL 确实没收紧」∧「红字标记打印了」，「点名」那一半是死的。
 #
+# 附三之四 · **19d 窗口上界 + `2` 档两个新场景**的记分板
+# （2026-08-07 · issue #173 · 基线 PASS=113 FAIL=0 exit=0）
+#
+# **22 / 23 补的是什么**（头注第四块靶那里放不下，因为头 80 行的配额归解码钉子）：
+# `2` 这一档此前只在**一种**形态下被验过 —— 「Separate + 两个 ACL 目标**全败**」。
+#  · **22 = 一成一败**：凭据根收紧了、私钥目录没收紧。这是 Separate 下最可能真实发生的
+#    那一种（两个目标本来就可能落在不同的卷上），而**全败那一格结构上覆盖不了它** ——
+#    恒失败的桩让 `$aclFailed` 恒等于 `$aclTargets`，于是「点名列表」与「ACL 目标列表」
+#    在观察上完全不可区分，一条断言也分不开这两件事。
+#  · **23 = Portable 下的 2**：ACL 目标只有一个，且第 7 节的后果说明**按模式分岔**，
+#    Portable 那一支说的是「私钥也在凭据根里 ⇒ 读得到就等于解得开」，比 Separate 那一支重。
+#
+# 🔴 **本批自己踩了一次头 80 行那个闸，照记**（`tests/ps-console-encoding.tests.js`）：
+# 往头注第四块靶写了 12 行说明 ⇒ 解码钉子被挤到第 86 行 ⇒ 那条不变量当场红，
+# 报文是「缺的：dao-secrets.tests.ps1」。**这是本文件头注自己写着的坑的第二例**
+# （首版是第一例）—— 而它这次是被别人的闸抓住的，不是被自觉抓住的。
+# ⇒ 处置：头注只留 5 行指针，说明全搬到这里（dot-source 之后没有行数配额）。
+#
+# ⚠ 本表比前三张多一列 **「拿订正前那版测试跑」** —— 因为本批修的是**一条已被证伪的
+# 「已订正」宣称**（PR #170 对抗账）。只报「修完之后变体会红」证不了修法有效：
+# 那个红也可能本来就红。**两版对跑才分得开**：同一个变异体，订正前那版测试 exit 0、
+# 订正后这版 exit 1 ⇒ 红的唯一原因就是本次修法（#官抗-订正面变体）。
+# 订正前那版取自 `git show HEAD:tests/dao-secrets.tests.ps1`（基线 PASS=101）。
+#
+#   变体          改法                                              本版 exit / 红的是      订正前那版
+#   M0 canary     点名那行原样写回（no-op）                           0  无 —— **靶还活着**    —
+#   S19D          点名列表换占位符（`<MUT-REDACTED>`）                 1  19d/22e/23f          **0 全绿**
+#   S19X          同上 + 在窗口**上界之外**另加一行红字原样点名        1  19d/22e/23f          **0 全绿**
+#   W1            上界那行的文案换掉（锚点消失）                       1  19d/22e/23f          （未跑）
+#   N1            点名改成遍历 `$aclTargets`（连没失败的也点名）        1  **22e（唯一）**       —
+#   PB1           第 7 节 `if ($KeyLocation -eq 'Portable')` 恒假      1  **23d（唯一）**       —
+#   E1            末尾 `exit 2` → `exit 0`                            1  19a/19h/**22a/23a**   —
+#
+# 每个变体跑前都验过 **锚点命中恰好 1 次 / 替换后的字面真的落进去了 / BOM=True /
+# ParseErrors=0**，收尾 SHA256 与基线逐字节相同（7 次全 `RESTORED_OK=True`）。
+#
+# **读法四条，逐条照直写**：
+# ① **S19D / S19X / W1 三向红集完全相同，差额为零** —— 与附三之三 E1/E2/E3 同型，
+#    不是失败是结论：三者摧毁的是**同一个可观察量**（「窗口里还有没有那两个名字」），
+#    而本文件的断言打在行为上，对「怎么弄没的」结构上一视同仁。
+#    S19X 本来是冲着「红字 + 在窗口外也不算数」去的，它没带来增量 —— 照记。
+# ② **W1 那一格证的是 fail-closed**：窗口两端任一端的锚点被改掉 ⇒ `Get-RedBlockWindow`
+#    返回空串 ⇒ 断言**红**。它不该悄悄退化成「搜全篇」，那正是 #173 那个病的成因。
+# ③ **N1 是本批唯一红集为 `{22e}` 的变体**，它量出 22e 的独立价值：19d 问「该出现的
+#    出现了吗」，22e 问「**不该出现的没出现吧**」。N1 下屏幕照样点名真目录、窗口照样非空，
+#    只有「多点了一个没失败的」这件事变了 —— **19d/23f 全绿，只有 22e 红**。
+#    ⇒ 恒真型缺陷对前一种问法失明，对后一种不失明。
+# ④ **E1 证明 22a/23a 不是摆设**：把分档摘掉，两个新场景的退出码断言与 19a/19h 一起红。
+#
+# 七个变体给出 **4 个互不相同的非空红集** ⇒ 靶没被弄死（#官抗-变异体存活）。
+#
+# ⚠ **本批的跑手用的是「整行字面锚点 + [string]::Replace」，不是上面附四那套正则**：
+# 字面锚点绕开了附四自己记着的两个坑（`$名字` 被 .NET 静默当字面量、行尾 `\r?`），
+# 代价是锚点要逐字抄对 —— 故每步先断言「整篇里恰好出现 1 次」。跑手落 `_tmp/`、不入库
+# （本文件不自带 mutation 跑法是刻意的，理由见附四末尾那段）。
+#
 # 附四 · 怎么复现
 #
 # 锚点（全是**单行**）：
@@ -239,6 +305,16 @@ $ErrorActionPreference = 'Stop'
 #   DR  (?m)^([ \t]+)exit 0[ \t]*\r?$            ← **带缩进**的那句才是 -DryRun 块里的出口
 #   P1  (?m)^([ \t]*)(\$aclFailed \+= \$t)[ \t]*\r?$        （替换成 `${1}${2}; exit 2`）
 #   P2  (?m)^(function Fail\(\$m\) \{ [^\r\n]*); exit 1 \}[ \t]*\r?$   （替换成 `${1}; exit 2 }`）
+#
+# issue #173 那批（附三之四）用的是**整行字面锚点**，不是上面这些正则 —— 三条，含缩进：
+#   点名行  `    foreach ($t in $aclFailed) { Write-Host "        $t" -ForegroundColor Red }`
+#           （S19D/S19X 换占位符 · N1 换成遍历 $aclTargets · M0 原样写回）
+#   上界行  `    Write-Host '     ⇒ 这台机器上的其他账户可能读得到它。' -ForegroundColor Red`
+#           （S19X 在它**之后**插一行红字点名 · W1 把它整行文案换掉）
+#   模式行  `    if ($KeyLocation -eq 'Portable') {`   ← **带缩进的那句才是第 7 节的**
+#           PB1 用它。⚠ 这个条件在本脚本里出现 **3 次**（落点判定 / 第 7 节后果说明 /
+#           换机提示），另两处**顶格**无缩进 ⇒ 靠那 4 个空格才唯一，与上面 K/K反、
+#           E反/DR 那两格是同一个教训的第四、第五例。
 #
 # 🔴 **E反 / DR 是同一行正则的两半，别只写一个**：`exit 0` 在本脚本里出现 2 次 ——
 # 一次在 -DryRun 块内（缩进 4 空格）、一次在文件最末尾（顶格）。带 `([ \t]*)` 的锚点会
@@ -504,6 +580,36 @@ exit /b 5
 '@
 [IO.File]::WriteAllText((Join-Path $aclFailBin 'icacls.cmd'), ($icaclsFailCmd -replace "`r?`n", "`r`n"), (New-Object System.Text.ASCIIEncoding))
 
+# ── 第三个桩目录：**按目标路径分支**的 icacls（一成一败）───────────────────────
+# 🔴 为什么不能拿上面那个恒 5 的桩凑：`2` 这一档的现实形态里，**「两个目标全败」与
+# 「一成一败」是两件事** —— 后者才是 Separate 模式下最可能真实发生的那一种
+# （凭据根在 NTFS 上收得紧，私钥目录在别的卷上收不紧），而它同时是唯一能验出
+# 「点名列表里只该有失败的那个」的场景。恒 5 的桩结构上造不出这一格：
+# 它让 $aclFailed 恒等于 $aclTargets，「点名列表」与「ACL 目标列表」永远不可区分。
+#
+# 形态：`DAO_ICACLS_FAIL_MATCH` 命中目标路径 ⇒ 退 5；**否则原样转交系统真 icacls**。
+# 「否则转交真的」这一半不是省事，是判据来源：22d 要断言成功那一侧的目录
+# `AreAccessRulesProtected` 真的变成了 True（判据取自 NTFS 不取自屏幕文案），
+# 而那只有真 icacls 做得到 —— 顺带它也自证了「这个桩没有把两侧都吃掉」。
+#
+# ⚠ 三条实现约束，都是 cmd 的：
+#  ① 用 `%*` 原样转发，**不重新拼参数** —— `(OI)(CI)F` 里的括号与用户名里的空格
+#     一旦经过重新拼装就可能被 cmd 的分词吃掉（本仓 gh 桩的头注记的就是这个坑）。
+#  ② 子串判断用 `!T:xxx=!` 需要 `enabledelayedexpansion`，**代价是路径里不能有 `!`**；
+#     本文件的夹具路径全在 `_tmp/dao-secrets-test/` 下、纯 ASCII 无 `!`，故可用。
+#  ③ 转交必须写**绝对路径** `%SystemRoot%\System32\icacls.exe`，否则解析回本桩自己 ⇒ 无限递归。
+$aclPartialBin = Join-Path $workRoot 'bin-aclpartial'
+New-Item -ItemType Directory -Force -Path $aclPartialBin | Out-Null
+$icaclsPartialCmd = @'
+@echo off
+setlocal enabledelayedexpansion
+set "T=%~1"
+if defined DAO_ICACLS_FAIL_MATCH if not "!T:%DAO_ICACLS_FAIL_MATCH%=!"=="!T!" exit /b 5
+"%SystemRoot%\System32\icacls.exe" %*
+exit /b !ERRORLEVEL!
+'@
+[IO.File]::WriteAllText((Join-Path $aclPartialBin 'icacls.cmd'), ($icaclsPartialCmd -replace "`r?`n", "`r`n"), (New-Object System.Text.ASCIIEncoding))
+
 # ── 夹具与调用外壳 ───────────────────────────────────────────────────────────
 function New-Case {
     param([string]$Name)
@@ -633,6 +739,34 @@ function Get-AclProtected {
 function Measure-Occurrence {
     param([string]$Text, [string]$Pattern)
     return @([regex]::Matches($Text, $Pattern)).Count
+}
+
+# ── 「最后一屏点名块」的窗口 ────────────────────────────────────────────────
+# init 第 7 节在 $aclFailed 非空时打一屏红字，其中**只有一行**是点名：
+#   `foreach ($t in $aclFailed) { Write-Host "        $t" }`
+# 「哪几个目录被点名了」这件事只能在那一行的产物里问。所以窗口**两端都要钉**：
+#   下界 = 那句红字标记（'有目录的权限没收紧'）
+#   上界 = 点名块闭合的那一行（'这台机器上的其他账户可能读得到它'）
+#
+# 🔴 **上界为什么是这一行，而不是 issue #173 原文建议的「本脚本不为这个退出 1」**：
+# 那句话之前还隔着一段**按模式分岔的后果说明**，而 Separate 那一支里有一句
+# `"上面若含 $keyDir，那是**私钥目录** …"` —— 它在该分支里**无条件打印**且含 $keyDir，
+# 场景 19 走的正是 Separate ⇒ 上界截到那里的话，19d 的 keyDir 半边**仍然恒真**，
+# 只是恒真的来源从收尾屏换成了后果说明。上界取「其他账户可能读得到它」那一行，
+# 才是 `foreach` 点名块的真实闭合处（照 issue 原文照抄会修出半失明，本批实测确认）。
+#
+# 🔴 **两端任一端找不到就返回空串（fail-closed）**：锚点被改掉/被删掉时断言该**红**，
+# 不该悄悄退化成「搜全篇」—— 那正是 #173 要治的那个病的成因。
+$RED_BLOCK_BEGIN = '有目录的权限没收紧'
+$RED_BLOCK_END   = '这台机器上的其他账户可能读得到它'
+function Get-RedBlockWindow {
+    param([string]$Text)
+    if (-not $Text) { return '' }
+    $i = $Text.IndexOf($RED_BLOCK_BEGIN)
+    if ($i -lt 0) { return '' }
+    $j = $Text.IndexOf($RED_BLOCK_END, $i)
+    if ($j -lt 0) { return '' }
+    return $Text.Substring($i, $j - $i)
 }
 
 # 🔴 **凡是调 init 的场景都必须配一个假 APPDATA + 一个显式的 -KeyLocation**，
@@ -1094,17 +1228,19 @@ Assert-True '19c 对照组自验②：凭据根的 ACL **确实没被收紧**（
 # P1-early 变体（icacls 一失败就当场退 2、后面几屏全不执行）把它当场量了出来：
 # 19b/19f/19g 全红，**唯独 19d 绿** —— 它的名字说的事，它没在验。
 # 治法：只在「有目录的权限没收紧」那句红字**之后**的文本里搜。
-# 🔴 而这个治法**不成立**（2026-08-07 · PR #170 对抗验证，账 #173）：红字之后的窗口
+# 🔴 ~~而这个治法**不成立**（2026-08-07 · PR #170 对抗验证，账 #173）：红字之后的窗口
 # 仍含无条件打印的收尾屏（init 脚本第 384 行 $keyFile / 第 395 行 $SecretsDir），
 # 两个 Contains 恒真——S19D/S19X 实测全绿。修法（截窗口上界或按区间计数）归 #173，
-# 本行先把「已修好」的宣称撤回：下面断言名里「两个目录都被点名」当前没在被验。
-$mark19 = '有目录的权限没收紧'
-$idx19 = $r19.Text.IndexOf($mark19)
-$lastScreen19 = ''
-if ($idx19 -ge 0) { $lastScreen19 = $r19.Text.Substring($idx19) }
+# 本行先把「已修好」的宣称撤回：下面断言名里「两个目录都被点名」当前没在被验。~~
+# **上界补齐后成立（2026-08-07 · issue #173 本批）**：窗口改为**两端都钉**，
+# 取法与「为什么上界不是 issue 原文那一行」写在 `Get-RedBlockWindow` 的头注里。
+# 判别力照直写（本批实测，记分板见头注附三之四）：S19D / S19X 两个变体下 19d **红**；
+# **同样两个变体拿订正前那版测试跑，19d 绿、整套 exit 0** ⇒ 这两条红的唯一原因就是本次修法。
+# 窗口任一端锚点被改掉 ⇒ 窗口取空 ⇒ 本条红（W1 变体实测，fail-closed）。
+$lastScreen19 = Get-RedBlockWindow -Text $r19.Text
 Assert-True '19d 私钥目录同样没收紧，且**两个目录都被点名**在最后一屏（只搜那一屏，不搜全篇）' `
     (((Get-AclProtected $keyDir19) -eq $false) -and $lastScreen19.Contains($s19) -and $lastScreen19.Contains($keyDir19)) `
-    ("最后一屏长度={0}" -f $lastScreen19.Length)
+    ("窗口长度={0} 含凭据根={1} 含私钥目录={2}" -f $lastScreen19.Length, $lastScreen19.Contains($s19), $lastScreen19.Contains($keyDir19))
 Assert-True '19e 「权限已收成」一次都没出现（两个目标全败）' `
     ((Measure-Occurrence -Text $r19.Text -Pattern '权限已收成') -eq 0) `
     ("次数={0}" -f (Measure-Occurrence -Text $r19.Text -Pattern '权限已收成'))
@@ -1124,11 +1260,19 @@ Assert-True '19h **三态互不相同**：13 → 0、19 → 2、3 → 1' `
     ("13={0} 19={1} 3={2}" -f $r13.ExitCode, $r19.ExitCode, $r3.ExitCode)
 
 # ============================================================================
-# 场景 20：**-DryRun 恒 0**，哪怕 icacls 注定会失败（分档契约里那句话的守卫）
+# 场景 20：**-DryRun 过了工具前置检查之后恒 0**，哪怕 icacls 注定会失败（分档契约里那句话的守卫）
 # ============================================================================
-# 被测脚本的 .NOTES「退出码分档」里写着一句 `-DryRun 恒 0`，而在本场景之前
-# **那句话一条断言都没有** —— 它当时之所以为真，只是因为 DryRun 的 `exit 0` 排在
-# 第 2 节（收权限）**之前**，是个**位置上的巧合**，没有任何东西钉住这个位置。
+# 被测脚本的 .NOTES「退出码分档」里原本写着一句 `-DryRun 恒 0`，而在本场景之前
+# **那句话一条断言都没有**。
+# ~~它当时之所以为真，只是因为 DryRun 的 `exit 0` 排在第 2 节（收权限）**之前**，
+# 是个**位置上的巧合**，没有任何东西钉住这个位置。~~
+# **订正（2026-08-07 · issue #173 F2）**：那句话**当时也不是无条件为真的** ——
+# 第 0 步「sops / age 装了没」排在 -DryRun 块**前面**，缺任何一个都直接 exit 1。
+# 所以要分两截说：**①「过了工具检查之后恒 0」才是真命题**（`.NOTES` 已同批收窄为这一句）；
+# ②「过了之后」那一截为真，靠的是 DryRun 的 `exit 0` 排在收权限之前这个**位置**，
+# 而没有任何东西钉住那个位置 —— **本场景钉的是 ②，不是整句**。
+# ⚠ **① 那一截本场景不覆盖**（缺工具 ⇒ -DryRun 也退 1）：本文件的调用外壳无条件把桩目录
+# 前置进 PATH，两个工具因此总在；要测它得给外壳开一个「不上桩」的口子。照直记为缺口。
 #
 # 这一格为什么值得单独占一条：`-DryRun` 是 `docs/USER-ACTIONS.md` 教用户敲的**第一条命令**。
 # 哪天有人把分档那一段往前挪、或给 DryRun 也加上 ACL 预演，用户的第一步就会返回 2 ——
@@ -1137,7 +1281,7 @@ Assert-True '19h **三态互不相同**：13 → 0、19 → 2、3 → 1' `
 # 判别力从哪来：本场景**故意带上那个恒失败的 icacls 桩**。它绿，证明的是
 # 「DryRun 压根没走到收权限那一步」，不只是「这次 icacls 碰巧成了」。
 # 换靶见头注附三之三的 D1 变体（把 DryRun 块里那句 `exit 0` 改成 `exit 2`）⇒ 20a 变红。
-Write-Host '场景 20：-DryRun 恒 0（带着恒失败的 icacls 桩也一样）+ 零写操作'
+Write-Host '场景 20：-DryRun 过了工具检查后恒 0（带着恒失败的 icacls 桩也一样）+ 零写操作'
 
 $c20 = New-Case 'init-dryrun'
 $s20 = Join-Path $c20 'secrets'
@@ -1189,6 +1333,101 @@ Assert-True '21d 没宣告链路通，也没打出那句「本次退出码 **2**
     ((-not ($r21.Text -match '加密链路整条通了')) -and (-not ($r21.Text -match '本次退出码 \*\*2\*\*'))) ''
 
 # ============================================================================
+# 场景 22：**一成一败也是 2**（issue #173 F5 —— `2` 档的第一个覆盖缺口）
+# ============================================================================
+# 场景 19 造的是「两个 ACL 目标**全败**」。而 Separate 模式下更可能真实发生的是
+# **一成一败**：凭据根在 NTFS 上收得紧，私钥目录落在别的卷（U 盘 / 网络盘）上收不紧。
+# 全败那一格覆盖不了它 —— 恒 5 的桩让 `$aclFailed` 恒等于 `$aclTargets`，于是
+# 「点名列表」与「ACL 目标列表」在观察上**完全不可区分**，一条断言也分不开这两件事。
+#
+# 造法：按目标路径分支的 icacls 桩（`$aclPartialBin`，见它的建法那一段）——
+# 命中 `sops\age` 的那个目标退 5，另一个**原样转交系统真 icacls**。
+#
+# 判别力从哪来：
+#  · 22d 断言成功那一侧的目录 `AreAccessRulesProtected` 真的是 True、失败那一侧是 False
+#    —— 判据取自 NTFS 不取自屏幕文案，同时它自证了「这个桩没把两侧一起吃掉」。
+#  · 22e 是本场景最值钱的一条，也是 **19d 之外第二条独立咬住窗口上界的断言**：
+#    点名列表里**只该有失败的那个**。收尾屏第 395 行无条件打印 `$SecretsDir`
+#    （「要搬**两处**：… 和 …」）⇒ 拿订正前那个「红字标记之后全篇」的窗口跑，
+#    22e **必红**。它与 19d 不同型：19d 问「该出现的出现了吗」，22e 问
+#    「**不该出现的没出现吧**」—— 恒真型缺陷只对前者失明，对后者不失明。
+Write-Host '场景 22：**一成一败** —— 凭据根收紧了、私钥目录没收紧 ⇒ 仍是 exit 2，且只点名失败的那个'
+
+$c22 = New-Case 'init-acl-partial'
+$s22 = Join-Path $c22 'secrets'
+$appData22 = New-FakeAppData -CaseDir $c22
+$r22 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c22 -SopsCfg (New-SopsCfg) `
+        -ScriptArgs @('-SecretsDir', $s22, '-KeyLocation', 'Separate') `
+        -EnvOverrides @{ APPDATA = $appData22; DAO_ICACLS_FAIL_MATCH = 'sops\age' } `
+        -ExtraPathDir $aclPartialBin
+
+$keyDir22 = Join-Path $appData22 'sops\age'
+$lastScreen22 = Get-RedBlockWindow -Text $r22.Text
+
+Assert-True '22a **exit 2**（一成一败同样是「主体成功但权限没收紧」，不是 0 也不是 1）' `
+    ($r22.ExitCode -eq 2) ("exit={0}" -f $r22.ExitCode)
+Assert-True '22b 对照组自验①：**恰好一个**目标失败了（icacls 退出码 5 只出现 1 次）' `
+    ((Measure-Occurrence -Text $r22.Text -Pattern 'icacls 退出码 5') -eq 1) `
+    ("次数={0}" -f (Measure-Occurrence -Text $r22.Text -Pattern 'icacls 退出码 5'))
+Assert-True '22c 对照组自验②：**恰好一个**目标成功了，且成功的那次点名的是凭据根' `
+    (((Measure-Occurrence -Text $r22.Text -Pattern '权限已收成') -eq 1) -and `
+     ($r22.Text.Contains('权限已收成「只有') -and $r22.Text.Contains($s22))) `
+    ("次数={0}" -f (Measure-Occurrence -Text $r22.Text -Pattern '权限已收成'))
+Assert-True '22d NTFS 实况一成一败：凭据根 Protected=True、私钥目录 Protected=False（桩的转交路径真的调到了真 icacls）' `
+    (((Get-AclProtected $s22) -eq $true) -and ((Get-AclProtected $keyDir22) -eq $false)) `
+    ("凭据根={0} 私钥目录={1}" -f (Get-AclProtected $s22), (Get-AclProtected $keyDir22))
+Assert-True '22e 最后一屏的点名列表里**只有失败的那个**（含私钥目录、不含凭据根）' `
+    ($lastScreen22.Contains($keyDir22) -and (-not $lastScreen22.Contains($s22))) `
+    ("窗口长度={0} 含私钥目录={1} 含凭据根={2}" -f $lastScreen22.Length, $lastScreen22.Contains($keyDir22), $lastScreen22.Contains($s22))
+Assert-True '22f 主体真的成功了（2 的前提）：私钥落盘 + .sops.yaml 落盘 + 第 6 步自证走完' `
+    ((Test-Path (Join-Path $keyDir22 'keys.txt')) -and `
+     (Test-Path (Join-Path $s22 '.sops.yaml')) -and `
+     ($r22.Text -match '加密链路整条通了')) ''
+
+# ============================================================================
+# 场景 23：**Portable 下的 2**（issue #173 F5 —— `2` 档的第二个覆盖缺口）
+# ============================================================================
+# 19/21/22 三条全是 Separate。而 `2` 这一档在 Portable 下走的**不是同一段代码**：
+#  ① ACL 目标只有**一个**（私钥目录在凭据根里、靠继承，不单独收）；
+#  ② 第 7 节的后果说明**按模式分岔** —— Portable 那一支说的是
+#     「私钥也在凭据根里 ⇒ 读得到就等于解得开」，那是**比 Separate 更重**的后果，
+#     而它此前一条断言都没有：把那个 `if ($KeyLocation -eq 'Portable')` 翻面，
+#     Portable 的用户会读到 Separate 的说法（「若只是凭据根没收紧，别人拿到的
+#     还只是打不开的密文」）—— **一句在 Portable 下是假话的安慰**。
+# ⇒ 23d 是唯一咬得到那个分岔的断言；23f 咬的是 ①。
+Write-Host '场景 23：**Portable 下的 2** —— 只有一个 ACL 目标、后果说明走 Portable 那一支'
+
+$c23 = New-Case 'init-acl-fail-portable'
+$s23 = Join-Path $c23 'secrets'
+$appData23 = New-FakeAppData -CaseDir $c23
+$r23 = Invoke-Target -ScriptPath $initPs1 -CaseDir $c23 -SopsCfg (New-SopsCfg) `
+        -ScriptArgs @('-SecretsDir', $s23, '-KeyLocation', 'Portable') `
+        -EnvOverrides @{ APPDATA = $appData23 } `
+        -ExtraPathDir $aclFailBin
+
+$lastScreen23 = Get-RedBlockWindow -Text $r23.Text
+
+Assert-True '23a **exit 2**（Portable 同样分档，不是只有 Separate 才退 2）' `
+    ($r23.ExitCode -eq 2) ("exit={0}" -f $r23.ExitCode)
+Assert-True '23b 对照组自验：icacls 桩真失败了，且「权限已收成」一次都没有' `
+    (($r23.Text -match 'icacls 退出码 5') -and `
+     ((Measure-Occurrence -Text $r23.Text -Pattern '权限已收成') -eq 0)) ''
+Assert-True '23c 凭据根的 ACL **确实没被收紧**（判据取自 NTFS）' `
+    ((Get-AclProtected $s23) -eq $false) ("AreAccessRulesProtected={0}" -f (Get-AclProtected $s23))
+Assert-True '23d 后果说明走的是 **Portable 那一支**（「私钥也在凭据根里」），没走 Separate 那一支' `
+    ($r23.Text.Contains('私钥也在凭据根里') -and (-not $r23.Text.Contains('钥匙裸着比密文裸着更糟'))) ''
+Assert-True '23e 主体真的成功了：私钥落凭据根 age\keys.txt + .sops.yaml + 自证走完' `
+    ((Test-Path (Join-Path $s23 'age\keys.txt')) -and `
+     (Test-Path (Join-Path $s23 '.sops.yaml')) -and `
+     ($r23.Text -match '加密链路整条通了')) ''
+# Portable 的 ACL 目标只有凭据根一个 ⇒ 点名列表里它恰好出现 1 次。
+# 若哪天 Portable 也把 `<凭据根>\age` 加进 $aclTargets，那个子路径同样含凭据根这个前缀，
+# 计数会变成 2 ⇒ 本条红。这就是它比「含不含」强的地方。
+Assert-True '23f 点名列表里凭据根**恰好出现 1 次**（Portable 只有一个 ACL 目标）' `
+    ((Measure-Occurrence -Text $lastScreen23 -Pattern ([regex]::Escape($s23))) -eq 1) `
+    ("窗口长度={0} 次数={1}" -f $lastScreen23.Length, (Measure-Occurrence -Text $lastScreen23 -Pattern ([regex]::Escape($s23))))
+
+# ============================================================================
 # 场景 16：全程**一个凭据值都没印到屏幕上**
 # ============================================================================
 # 两个脚本的 .NOTES 都写着「从不打印任何凭据的值、片段、长度或哈希」。
@@ -1197,7 +1436,8 @@ Write-Host '场景 16：所有场景的输出里，一个凭据值都没出现�
 
 $allText = @($r1.Text, $r2.Text, $r3.Text, $r4.Text, $r5.Text, $r6.Text, $r7.Text,
              $r8.Text, $r9.Text, $r10.Text, $r11.Text, $r12.Text,
-             $r13.Text, $r14.Text, $r15.Text, $r19.Text, $r20.Text, $r21.Text) -join "`n"
+             $r13.Text, $r14.Text, $r15.Text, $r19.Text, $r20.Text, $r21.Text,
+             $r22.Text, $r23.Text) -join "`n"
 Assert-True '16a 屏幕输出里搜不到任何一个假凭据值（键名可以有、值一个都不许有）' `
     ((-not $allText.Contains($FAKE_A)) -and (-not $allText.Contains($FAKE_B)) -and `
      (-not $allText.Contains('sk-FAKE-jsonshape-001'))) ''
