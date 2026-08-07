@@ -53,6 +53,12 @@
 **只扫 `dao.md` 会漏掉整段判据**——这是本仓已实测的形态，不是假想。
 一次把全部条款正文摊平来读（含官种分节）：
 
+**`<官种>` 只认这六个取值**（写错一个字它就渲染不出东西，而「零条」与「本来就没这一节」在输出上长得一样）：
+`general` / `reviewer` / `implementer` / `adversary` / `scout` / `dogfood`。
+⚠️ **对抗验证官那一格叫 `adversary`，不叫 `verifier`** —— 本仓 2026-08-07 收割批的四路收割官通篇用
+`clause-verifier` 称呼它，读者最自然猜的 `verifier` **恰好是非法值**。当前词表随时可查：
+`node ccswitch/scripts/render-clauses.mjs --list-roles`（它同时打印每个官种今天有几条）。
+
 ```
 node ccswitch/scripts/render-clauses.mjs --role <官种>
 ```
