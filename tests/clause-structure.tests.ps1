@@ -89,6 +89,87 @@ function New-MutantChecker {
     return @{ Path = $p; Applied = $applied }
 }
 
+function Invoke-CheckerAll {
+    <#
+      跑**缺省全量模式**（issue #176）：与 Invoke-Checker 的唯一差别是**不传 -TargetFile**
+      —— 那一个差别就是本组要测的全部东西。判成败只看 $LASTEXITCODE。
+      退出码三态：0 全绿 · 1 有结构违例 · 3 拿不到源清单（fail-closed，本次压根没查成）。
+    #>
+    param([string]$Script = '', [string]$Ledger = '', [string]$Selector = '')
+    $target = if ([string]::IsNullOrWhiteSpace($Script)) { $Checker } else { $Script }
+    $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target)
+    if (-not [string]::IsNullOrWhiteSpace($Ledger))   { $a += @('-LedgerFile', $Ledger) }
+    if (-not [string]::IsNullOrWhiteSpace($Selector)) { $a += @('-ClauseSelector', $Selector) }
+    $out = & powershell @a
+    return @{ Exit = $LASTEXITCODE; Text = ($out -join "`n") }
+}
+
+function New-AggRepo {
+    <#
+      合成一个「dao 仓」给缺省全量模式用：`ccswitch/{scripts,rules}/` + 各源文件 + 台账 +
+      **源清单出口的桩**。返回 @{ Root; Checker }。
+
+      ── 为什么源清单出口是**桩**而不是真 gen-clause-index.mjs ────────────────
+      本组要控制的正是「清单说了什么」（出口不在 / 退非 0 / 不是 JSON / 空清单 / 正常）——
+      拿真生成器一样都控制不了。桩的输出契约与真出口**逐字同形**（一行 JSON，含
+      `abs` / `ps_selector` / `exists`）；真出口那一侧由「真实语料」那一组盯着，
+      两组合起来这条链才算被验过 —— **单靠桩只证明「消费方按契约行事」，证不了契约两端对得上**。
+
+      ⚠ 守卫副本**必须带 BOM**（同 New-MutantChecker 那段）：无 BOM 时 PS 5.1 按系统 ANSI
+        解码整份中文脚本 ⇒ 被测对象当场报废，而表现是「每个场景都红」——与「判别力满分」
+        不可区分。故本组给 fail-closed 那四条配了一个**负控**（桩正常时同一形态的树 exit 0）。
+      ⚠ 桩用 base64 递 JSON：payload 里是 Windows 路径 + 引号，直接内嵌进 JS 字面量必被
+        转义规则咬 —— 而咬掉之后它仍是一个「合法但不对」的桩，红得指向别处。
+    #>
+    param([hashtable[]]$Sources, [hashtable]$Ledger = $null, [object]$GenStub = $null)
+
+    $script:FixtureSeq++
+    $root       = Join-Path $TmpRoot ("agg-{0}" -f $script:FixtureSeq)
+    $scriptsDir = Join-Path $root 'ccswitch/scripts'
+    New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $root 'ccswitch/rules') -Force | Out-Null
+
+    $src     = [System.IO.File]::ReadAllText($Checker, [System.Text.Encoding]::UTF8)
+    $checker = Join-Path $scriptsDir 'check-clauses-structure.ps1'
+    [System.IO.File]::WriteAllText($checker, $src, (New-Object System.Text.UTF8Encoding($true)))
+
+    $list = @()
+    foreach ($s in $Sources) {
+        $abs = Join-Path $root $s.Rel
+        $dir = Split-Path -Parent $abs
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        if ($null -ne $s.Body) {
+            [System.IO.File]::WriteAllText($abs, $s.Body, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        $list += [ordered]@{
+            file        = ($s.Rel -replace '\\', '/')
+            abs         = ($abs -replace '\\', '/')
+            exists      = [bool](Test-Path $abs)
+            selector    = 'marked'
+            ps_selector = $(if ($s.Selector) { $s.Selector } else { 'Marked' })
+            role_scheme = 'general'
+        }
+    }
+    if ($null -ne $Ledger) {
+        $doc = [ordered]@{ schema_version = 1; clauses = [ordered]@{} }
+        foreach ($k in $Ledger.Keys) { $doc.clauses[$k] = $Ledger[$k] }
+        [System.IO.File]::WriteAllText((Join-Path $root 'ccswitch/clause-ledger.json'),
+            ($doc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $stub = $GenStub
+    if ($null -eq $stub) {
+        $payload = ([ordered]@{ schema = 1; repo_root = ($root -replace '\\', '/'); sources = $list } |
+                    ConvertTo-Json -Depth 6 -Compress)
+        $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload))
+        $stub = "process.stdout.write(Buffer.from('$b64','base64').toString('utf8')+'\n');"
+    }
+    if ("$stub" -ne '') {
+        [System.IO.File]::WriteAllText((Join-Path $scriptsDir 'gen-clause-index.mjs'), "$stub",
+            (New-Object System.Text.UTF8Encoding($false)))
+    }
+    return @{ Root = $root; Checker = $checker }
+}
+
 function New-LedgerFile {
     <# 写一份合成台账（UTF-8 无 BOM，同 New-Fixture 的理由：被读方显式按 UTF8 解码）。
        $Entries 是 slug → hashtable；file 字段由调用方给（守卫按**后缀**匹配，给文件名即可）。 #>
@@ -915,13 +996,127 @@ $oddLine
             ($ok.Text -match '本次检出 2 条') $ok.Text
     }.Invoke()
 
-    Write-Host "`n=== 真实对象冒烟：缺省目标 ccswitch/dao.md 必须绿 ==="
+    Write-Host "`n=== 缺省全量模式 · 拿不到源清单必须 fail-closed（合成仓）==="
+    # issue #176 的核心设计：**绝不静默回落到「只查 dao.md」**。一次「其实没查全」的运行
+    # 长得和「查了且干净」一模一样，那正是这张单要治的缺口的形状。
+    # 四种拿不到各测一次 + 一个负控（桩正常时同一形态的树必须 exit 0）——
+    # 没有那个负控，上面四条可以靠「这棵合成树压根跑不起来」全部蒙混过关。
     {
-        $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Checker
-        $code = $LASTEXITCODE
-        $text = ($out -join "`n")
-        Check '缺省跑 dao.md → exit 0' ($code -eq 0) "exit=$code"
-        Check 'dao.md 检出非零条（防「绿得是空的」）' ($text -notmatch '本次检出 0 条') $text
+        $md = Get-MonthDay 3
+        $daoBody = "# 合成 dao`n`n## 通用节`n`n- **甲条**：判据正文。 [n=1 @$md 触发:PR流程] [基线:合成] [#合成-甲]`n"
+        $ledger = @{ '合成-甲' = (New-LedgerEntry -File 'ccswitch/dao.md' -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成') }
+        $srcs = @(@{ Rel = 'ccswitch/dao.md'; Body = $daoBody })
+
+        $r0 = New-AggRepo -Sources $srcs -Ledger $ledger
+        $a0 = Invoke-CheckerAll -Script $r0.Checker
+        Check '负控（活基线）：桩给出正常清单 ⇒ 同一形态的合成仓 exit 0' ($a0.Exit -eq 0) "exit=$($a0.Exit) / $($a0.Text)"
+        Check '负控：末行是 mode=multi files=1 sources=1（真跑了那一份）' `
+            ($a0.Text -match 'mode=multi files=1 sources=1') $a0.Text
+
+        $r1 = New-AggRepo -Sources $srcs -Ledger $ledger -GenStub ''
+        $a1 = Invoke-CheckerAll -Script $r1.Checker
+        Check '㈠ 源清单出口不在 → exit 3（不是 0、也不是 1）' ($a1.Exit -eq 3) "exit=$($a1.Exit) / $($a1.Text)"
+        Check '㈠ **不回落**：全程没有单文件扫描报告（回落的话会出现 mode=single）' `
+            ($a1.Text -notmatch 'mode=single') $a1.Text
+        Check '㈠ 末行照打（一次什么都没说的失败，正是本仓在治的病）' `
+            ($a1.Text -match 'CLAUSE_STRUCTURE_SUMMARY exit=3 .*mode=multi files=0 sources=0') $a1.Text
+
+        $r2 = New-AggRepo -Sources $srcs -Ledger $ledger -GenStub 'process.exit(1);'
+        $a2 = Invoke-CheckerAll -Script $r2.Checker
+        Check '㈡ 出口退非 0 → exit 3' ($a2.Exit -eq 3) "exit=$($a2.Exit) / $($a2.Text)"
+
+        $r3 = New-AggRepo -Sources $srcs -Ledger $ledger -GenStub 'process.stdout.write("not json\n");'
+        $a3 = Invoke-CheckerAll -Script $r3.Checker
+        Check '㈢ 输出不是合法 JSON → exit 3' ($a3.Exit -eq 3) "exit=$($a3.Exit) / $($a3.Text)"
+
+        $r4 = New-AggRepo -Sources $srcs -Ledger $ledger -GenStub 'process.stdout.write(JSON.stringify({schema:1,sources:[]})+"\n");'
+        $a4 = Invoke-CheckerAll -Script $r4.Checker
+        Check '㈣ 清单是空的 → exit 3（「零份源」不是「没问题」）' ($a4.Exit -eq 3) "exit=$($a4.Exit) / $($a4.Text)"
+    }.Invoke()
+
+    Write-Host "`n=== 缺省全量模式 · 零条款细则档：预期内不判红，三件套少一件就判红（合成仓）==="
+    # 源清单里**刻意**留着 6 份当前零条款的纯细则档（移出去等于「这几份从此没人看着」）。
+    # 它们在单文件模式下报 zero-sample 硬闸红 —— 聚合层要容忍那一种，但**只容忍那一种**。
+    {
+        $md = Get-MonthDay 3
+        $daoBody  = "# 合成 dao`n`n## 通用节`n`n- **甲条**：判据正文。 [n=1 @$md 触发:PR流程] [基线:合成] [#合成-甲]`n"
+        $pureBody = "# 纯流程`n`n- 这份文件一条条款都没有，只讲流程。`n"
+        # 丙：零条款**且**另有一处焊接签名（`。：`）⇒ violations=2 ⇒ 不满足三件套 ⇒ 必须判红
+        $weldBody = "# 纯流程但坏了`n`n- 一句话说完了。：接着又焊了一句。`n"
+        $ledger = @{ '合成-甲' = (New-LedgerEntry -File 'ccswitch/dao.md' -N '1' -FirstSeen $md -Trigger 'PR流程' -Baseline '合成') }
+
+        $rOk = New-AggRepo -Ledger $ledger -Sources @(
+            @{ Rel = 'ccswitch/dao.md';            Body = $daoBody },
+            @{ Rel = 'ccswitch/rules/pure.md';     Body = $pureBody })
+        $aOk = Invoke-CheckerAll -Script $rOk.Checker
+        Check '零条款细则档：子进程 zero-sample 红，聚合层**不判红** → exit 0' ($aOk.Exit -eq 0) "exit=$($aOk.Exit) / $($aOk.Text)"
+        Check '但它被**逐份点名**数出来了（zerosample=1，不是悄悄吞掉）' `
+            ($aOk.Text -match 'zerosample=1') $aOk.Text
+        Check '容忍不是静默：正文里明说了那一份是预期内零条款' `
+            ($aOk.Text -match '预期内的零条款细则档') $aOk.Text
+        Check '违例计数与退出码一致（exit=0 ⇒ violations=0，被容忍那处不混进来）' `
+            ($aOk.Text -match 'CLAUSE_STRUCTURE_SUMMARY exit=0 clauses=1 violations=0 ') $aOk.Text
+
+        $rBad = New-AggRepo -Ledger $ledger -Sources @(
+            @{ Rel = 'ccswitch/dao.md';            Body = $daoBody },
+            @{ Rel = 'ccswitch/rules/welded.md';   Body = $weldBody })
+        $aBad = Invoke-CheckerAll -Script $rBad.Checker
+        Check '三件套少一件（零条款 + 另有一处焊接签名 ⇒ violations=2）⇒ **判红**' `
+            ($aBad.Exit -eq 1) "exit=$($aBad.Exit) / $($aBad.Text)"
+        Check '判红那一份被点名（不是笼统说"有东西红了"）' `
+            ($aBad.Text -match 'welded\.md') $aBad.Text
+
+        # 聚合层的下限断言：全批合计条款为 0 ⇒ 红。**这一条钉的是「每份 0 == 0 的一致是空的一致」**
+        $rZero = New-AggRepo -Sources @(@{ Rel = 'ccswitch/rules/pure.md'; Body = $pureBody })
+        $aZero = Invoke-CheckerAll -Script $rZero.Checker
+        Check '整批合计条款为 0 ⇒ 红（同 --reconcile 的「整批全零要红」）' ($aZero.Exit -eq 1) "exit=$($aZero.Exit) / $($aZero.Text)"
+        Check '且报的是 zero-sample 那一类' ($aZero.Text -match '\[zero-sample\]') $aZero.Text
+    }.Invoke()
+
+    Write-Host "`n=== 缺省全量模式 · 真实语料（issue #176 的 M3：officer-clauses 台账不等必须红）==="
+    # 这一组是本张单的**关闭条件本身**：PR #175 对抗官实测过，M3 型破坏下
+    # `gen-clause-index.mjs --check` exit 1 而本闸缺省跑 exit 0（它压根没看那份文件）。
+    # 合成仓证不了这一格 —— 它要证的正是「真清单 + 真语料 + 真台账」这条链接上了。
+    {
+        $realLedger = Join-Path $RepoRoot 'ccswitch/clause-ledger.json'
+        # ① **canary 先行**：台账原样往返一份，先证明「往返本身是良性的」。
+        #    不做这一步，②那个红说不清是 mutation 造成的，还是往返把台账写坏了
+        #    （对抗验证官节「先验变异体还活着」讲的正是这一格）。
+        $doc = [System.IO.File]::ReadAllText($realLedger, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        $rtPath = Join-Path $TmpRoot 'ledger-roundtrip.json'
+        [System.IO.File]::WriteAllText($rtPath, ($doc | ConvertTo-Json -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+        $base = Invoke-CheckerAll -Ledger $rtPath
+        Check 'canary：缺省全量 + 台账原样往返 ⇒ exit 0（②的红才归因得到 mutation）' ($base.Exit -eq 0) "exit=$($base.Exit)"
+        Check '缺省不再是单文件：末行 mode=multi' ($base.Text -match 'mode=multi ') $base.Text
+        Check '真检了不止一份（files 与 sources 相等且 ≥ 2 —— 刻意不写死份数，那种枚举本仓被咬过三次）' `
+            ($base.Text -match 'mode=multi files=(\d+) sources=\1 ' -and
+             [int]([regex]::Match($base.Text, 'mode=multi files=(\d+)').Groups[1].Value) -ge 2) $base.Text
+        Check 'officer-clauses 在扫描面里，且用的是**清单给的** AllTopLevel（不是缺省 Marked）' `
+            ($base.Text -match 'dao-officer-clauses\.md \[AllTopLevel\]') $base.Text
+
+        # ② M3：把 officer-clauses 某条的台账 n 改错 —— PR #175 对抗官实测的那个形态。
+        #    **动态挑一条**而不是写死 slug：写死的那种枚举一改名就成了假绿（前提断言会说话）。
+        $victim = $null
+        foreach ($p in $doc.clauses.PSObject.Properties) {
+            if (("$($p.Value.file)" -like '*dao-officer-clauses.md') -and ("$($p.Value.n)" -match '^\d+$')) { $victim = $p; break }
+        }
+        Check 'M3 前提：台账里找得到一条 officer-clauses 的数字 n（找不到 ⇒ 语料变了，下面两条无效）' `
+            ($null -ne $victim) '零命中'
+        if ($null -ne $victim) {
+            $orig = "$($victim.Value.n)"
+            $victim.Value.n = ([int]$orig + 1).ToString()
+            $m3Path = Join-Path $TmpRoot 'ledger-m3.json'
+            [System.IO.File]::WriteAllText($m3Path, ($doc | ConvertTo-Json -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+            $m3 = Invoke-CheckerAll -Ledger $m3Path
+            Check "M3：officer-clauses 正文↔台账 n 不等（[#$($victim.Name)] $orig→$($victim.Value.n)）⇒ 缺省跑 exit 1（修好之前这里是 exit 0）" `
+                ($m3.Exit -eq 1) "exit=$($m3.Exit)"
+            Check 'M3：报的是 ledger-mismatch 且点名 officer-clauses（不是别处偶然红了）' `
+                (($m3.Text -match 'ledger-mismatch') -and ($m3.Text -match 'dao-officer-clauses\.md')) $m3.Text
+            # 复原走「换回未改动的副本」，**不是** git checkout ——
+            # 那会把本批尚未提交的实现一起冲掉（通用节「复原前确认基线是哪一态」那条）。
+            $again = Invoke-CheckerAll -Ledger $rtPath
+            Check 'M3 复原：换回未改动的台账副本 ⇒ 回到 exit 0（红绿两态都看到了）' ($again.Exit -eq 0) "exit=$($again.Exit)"
+        }
     }.Invoke()
 
 } finally {

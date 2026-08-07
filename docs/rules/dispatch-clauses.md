@@ -93,12 +93,25 @@ PowerShell 脚本判成败**看 `$LASTEXITCODE`**，不看输出里有没有 "er
 node ccswitch/scripts/gen-clause-index.mjs                 # ① 重新生成机器面索引
 node ccswitch/scripts/gen-clause-index.mjs --check          # ② 索引与真相源对不上 ⇒ exit 1
 node ccswitch/scripts/gen-clause-index.mjs --reconcile      # ③ 与 PS 侧两套独立解析对数
-powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1   # ④ 结构 + 正文↔台账双向对账
+powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1   # ④ 结构 + 正文↔台账双向对账（**缺省即全量**）
 ```
+
+🔴 **④ 那一行在 2026-08-08 之前是一道半开的闸，读这一节的人必须知道**（issue #176）：
+它当时**缺省只检 `ccswitch/dao.md`**，而条款早已散在 `ccswitch/rules/*.md`
+（`dao-officer-clauses.md` 一份就 72 条）⇒ 那 90+ 条的**台账字段级对账实际只有 node 一家在查**，
+③ 也对不出来（`--reconcile` 只对条款数 / 触发:无 / slug 数 / maskdiv，**不对台账字段值**）。
+现在 ④ 不传 `-TargetFile` 就是**全量模式**：向 `--list-sources` 要源清单，逐份检、每份用清单
+给的选择器。**退出码三态**：`0` 全绿 · `1` 有结构违例 · **`3` 拿不到源清单（本次压根没查成，
+fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，别把 3 当"跑了没事"。
 
 - `ccswitch/clause-index.json` 是**派生物**，手改无效、下次生成即被覆盖。
 - `ccswitch/clause-ledger.json` **不是**派生物，它是台账字段的真相源。
   **改了正文就要同步改台账，反之亦然**——双向孤儿检测两侧各查一遍，缺一边即红。
+- **新建一份带条款的 `ccswitch/rules/*.md` 时，记得把它加进
+  `ccswitch/lib/clause-parser.mjs::defaultSources()`**：那份清单现在是 ①②③④ **四道的共同扫描面**，
+  不在里面 = 四道全看不见它。会替你出声的只有两处纵深：SessionStart hook（`dao-scaffold-check.js`
+  扫目录，发现未登记会打一行 ⓘ）与 ④ 的 `ledger-out-of-scope`（台账指着清单外的文件即红）——
+  **两处都只是纵深，不是全覆盖**（一份新文件若既没登记、台账里也还没有它的条目，只有 hook 那行 ⓘ 会响）。
 - **改 `ccswitch/dao.md` 后另跑一次** `node ccswitch/scripts/check-alwayson-budget.mjs`
   （常驻注入的字节预算闸）。
 - **改 `tests/` 后另跑** `node ccswitch/scripts/gen-guarded-files.mjs`（`--check` 防漂移）。
