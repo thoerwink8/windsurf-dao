@@ -76,7 +76,15 @@ py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层�
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
 node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对不上 ⇒ exit 1（tests/clause-index.tests.js 每次跑它）
 node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数（条款数 / 触发:无 / slug 数）
-powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立实现）
+node ccswitch/scripts/gen-clause-index.mjs --list-sources # 源清单的机器出口（一行 JSON）；PS 缺省全量模式就是消费它
+powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立解析）
+                                              #   ⚠ **缺省已是全量模式**（2026-08-08 · issue #176）：不传 -TargetFile ⇒ 向上面那个
+                                              #   出口要源清单，**逐份**检（每份用清单给的选择器；officer-clauses 是 AllTopLevel）。
+                                              #   此前缺省**只检 dao.md** ⇒ 住在 ccswitch/rules/*.md 的 90+ 条条款，其台账字段级
+                                              #   对账实际是 node 单实现，而下面那段却写着「两个守卫各查一遍」。
+                                              #   退出码**三态**：0 全绿 · 1 有结构违例 · **3 = 拿不到源清单（本次压根没查成）**。
+                                              #   判「通过」写 `-eq 0`；3 刻意不与 1 合流——「没查成」不是「查出问题」。
+                                              #   只检一份：加 `-TargetFile <路径>`（那条路径不依赖 node，行为与以前逐字一致）。
 node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集；**已接进派单流程**（2026-08-07 订正）：
                                               #   `SubagentStart` hook `ccswitch/hooks/dao-subagent-clauses.js` 每次派官都调它
                                               #   本行此前写作「原型，尚未接进派单流程」，注册完成那一刻即为假而无人订正
@@ -93,7 +101,13 @@ node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不
 `ccswitch/clause-ledger.json` **不是**派生物，它是**台账字段的真相源**（复发次数 / 首次入库 /
 触发点 / 基线 / 自定标记 / 出处 / 状态）；正文只在条款行尾持一个 slug `[#<域>-<短名>]` 与它关联。
 两边由**双向孤儿检测**夹住（正文有 slug 而台账无此条、台账有条目而正文找不到 ⇒ 都判红），
-node 与 PowerShell 两个守卫各查一遍。**双轨期**：旧元字段仍原位保留、逐字段与台账对账，
+node 与 PowerShell 两个守卫各查一遍。
+（🔴 **这句话 2026-08-08 之前对 `ccswitch/rules/*.md` 里那 90+ 条是假的**：PS 那侧缺省只检
+`ccswitch/dao.md`，于是「两个守卫」实际只有 node 一个在查它们 —— PR #175 对抗实测 M3 坐实。
+issue #176 把 PS 缺省扩成全量模式后这句话才成立；**它成立的前提是那份源清单
+（`clause-parser.mjs::defaultSources()`）是全的**，一份带条款却没登记进去的文件两侧仍会一起漏，
+兜它的只有 SessionStart hook 那侧的目录扫描与 PS 侧的 `ledger-out-of-scope` 反向闸 —— 那是纵深，不是全覆盖。）
+**双轨期**：旧元字段仍原位保留、逐字段与台账对账，
 不等即红 —— 那份对账全绿是后续删旧字段的前置门。**改了正文就要同步改台账，反之亦然。**
 
 新增测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，两侧都不维护清单

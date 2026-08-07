@@ -1087,13 +1087,102 @@ if (process.platform !== "win32") {
   // 正控：真标记 `[自定@08-07]`（@ 后带数字）——v3 必须仍纳入扫描面
   fs.writeFileSync(path.join(rulesDir, "real-mark.md"),
     "# 含真标记\n\n- **乙条**：AI 自定的一条。 [n=1 @08-07 触发:PR流程] [基线:合成] [自定@08-07]\n", "utf8");
+  // ⚠ FAIL 明细**只取条款闸那几行**（2026-08-08 · issue #169④ 清偿）：原先写的是
+  // `ct.slice(0, 600)`，而 additionalContext 的头 600 字符**恒被 settings-drift 段占满**
+  // ⇒ 三种坏法（负控误纳 / 正控被丢 / 走了红路）的 FAIL 详情**逐字相同**，红了读不出是哪种。
+  // 断言本身当时是对的，只是诊断信息为零 —— 「红了但看不出为什么」离没有测试不远。
+  const clauseCtx = (t) => (t.split(/\r?\n/).filter((l) => /条款库|条款筛选器|条款文件/.test(l)).join("\n") ||
+    "（ctx 里一行条款闸相关输出都没有 —— 那本身就是坏法之一）");
   const ct = ctx(run(root));
   check("负控：仅引用 [自定@]（无日期）的纯流程文件不进扫描面（M=1，且全程零留名）",
-    /1\/2 个 \.md/.test(ct) && !/mention-only\.md/.test(ct), "ctx=" + ct.slice(0, 600));
+    /1\/2 个 \.md/.test(ct) && !/mention-only\.md/.test(ct), "条款闸相关行=\n" + clauseCtx(ct));
   check("正控：带真标记 [自定@08-07] 的文件仍被扫（它那条被数进合计 ⇒ C=2）",
-    /合计 2 条/.test(ct), "ctx=" + ct.slice(0, 600));
+    /合计 2 条/.test(ct), "条款闸相关行=\n" + clauseCtx(ct));
   check("自检：走的是绿普查行（上两条的锚点在这行里，行没了先红这条）",
-    /条款库结构闸绿/.test(ct), "ctx=" + ct.slice(0, 600));
+    /条款库结构闸绿/.test(ct), "条款闸相关行=\n" + clauseCtx(ct));
+
+  // ── v4 两态（2026-08-08 · issue #169① 判据归一后新增）──────────────────────
+  // 判据从裸正则换成 clause-parser 的**遮罩**判据之后，#169② 记的那个「v3 关不掉的形态」
+  // 必须也被关掉：**行内代码里举一个带日期的例子**（`` `[自定@08-02]` ``）——
+  // v3 正则在它上面必然误纳（`[自定@08-02]` 逐字命中 `\[自定@\d`），遮罩判据不会。
+  // 这一条是**新旧判据的判别点**：把 hook 改回旧正则，它当场红。
+  fs.writeFileSync(path.join(rulesDir, "mention-dated.md"),
+    "# 流程细则\n\n- 举个例子：真标记长这样 `[自定@08-02]`，本文件自己没打任何标记。\n", "utf8");
+  const ct2 = ctx(run(root));
+  check("负控②（#169② 那个洞）：行内代码里举带日期的例子不进扫描面（M 仍是 1，分母涨到 3）",
+    /1\/3 个 \.md/.test(ct2) && !/mention-dated\.md/.test(ct2), "条款闸相关行=\n" + clauseCtx(ct2));
+  check("自检②：本轮判据没降级（降级行一出现，上一条就只代表近似正则的结论）",
+    !/条款筛选器降级/.test(ct2), "条款闸相关行=\n" + clauseCtx(ct2));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 🔴 选择器清单取不到时必须出声（PR #183 对抗🟡① · 最后一条静默降级路）===");
+// 病：`parser` **加载成功**、但 `defaultPsSelectorMap` 取不到时 `selectorMap` 为空 ⇒
+// `mk()` 里那句 `&& Object.keys(selectorMap).length` 让 **ⓘ 一行都不打**，而
+// `CLAUSE_PARSER_WHY` 只在 `hasClauseSignature` 缺失时才被设 ⇒ **⚠ 降级行也不打**，
+// 全部悄悄回落 Marked。对抗实测（把那句 `typeof` 的名字改成一个不存在的导出）：真仓
+// additionalContext 与基线**逐字相同**、本套 152/0 全绿 —— 「没查」与「查了且干净」
+// 又一次不可区分，而那正是这道闸自己在治的病。
+//
+// 造法：拷一份 hook 到沙箱，旁边放一个**自造的** clause-parser.mjs 替身（hook 里
+// `require("../lib/clause-parser.mjs")` 按**文件所在目录**解析，故这份替身生效，
+// 真仓库一个字节都不动）。两臂只差一个导出，**判据独立写死在本文件里**、不从 hook
+// 源码反推。本组要真跑 check-clauses-structure.ps1（win32 专属），非 Windows 记名跳过。
+if (process.platform !== "win32") {
+  console.log("  SKIP  非 Windows：本组要真跑 PowerShell 条款闸，此平台不适用（记名跳过，非通过）");
+} else {
+  // 替身的 `hasClauseSignature` 两臂**逐字相同** —— 保证「⚠ 条款筛选器降级」那条**老路**
+  // 在两臂都不响，于是新那条路一响就只可能是它自己（独立归因）。
+  const SIG = 'export function hasClauseSignature(text) { return /\\[n=/.test(String(text)); }\n';
+  const MAP = 'export function defaultPsSelectorMap() { return { "ccswitch/dao.md": "Marked" }; }\n';
+  const mkStubParserTree = (tag, parserSrc) => {
+    const hooksDir = path.join(SANDBOX, "selmap", tag, "ccswitch", "hooks");
+    const libDir = path.join(SANDBOX, "selmap", tag, "ccswitch", "lib");
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(libDir, { recursive: true });
+    const hookCopy = path.join(hooksDir, path.basename(HOOK));
+    fs.copyFileSync(HOOK, hookCopy);
+    const realLib = path.join(REPO, "ccswitch", "lib");
+    for (const f of fs.readdirSync(realLib).filter((n) => n.endsWith(".js"))) {
+      fs.copyFileSync(path.join(realLib, f), path.join(libDir, f));
+    }
+    fs.writeFileSync(path.join(libDir, "clause-parser.mjs"), parserSrc, "utf8");
+    return hookCopy;
+  };
+  // 被检夹具：一份元字段合法的 dao.md（zero-sample 不红）+ 真 PS 闸副本（不是空壳）。
+  // 刻意**不建** ccswitch/rules/ —— 本组测的是「清单取不到」那一格，扫描面越小跑得越快。
+  const selRoot = path.join(SANDBOX, "meta", "selmap", "windsurf-dao");
+  fs.mkdirSync(path.join(selRoot, "ccswitch", "scripts"), { recursive: true });
+  putFakeGit(selRoot);
+  fs.copyFileSync(path.join(REPO, "ccswitch", "scripts", "check-clauses-structure.ps1"),
+    path.join(selRoot, "ccswitch", "scripts", "check-clauses-structure.ps1"));
+  fs.writeFileSync(path.join(selRoot, "ccswitch", "dao.md"),
+    "# fixture dao\n\n- **甲条**：合法条款。 [n=1 @08-08 触发:PR流程] [基线:合成]\n", "utf8");
+
+  // FAIL 明细只取条款闸那几行（理由同上一组：头 N 字符恒被 settings-drift 段占满）
+  const selCtx = (t) => (t.split(/\r?\n/).filter((l) => /条款库|条款筛选器|条款文件|选择器清单/.test(l)).join("\n") ||
+    "（ctx 里一行条款闸相关输出都没有 —— 那本身就是坏法之一）");
+  const SELMAP_DEGRADED = /⚠ 选择器清单降级/;
+  const PARSER_DEGRADED = /条款筛选器降级/;
+
+  // 正控：parser 加载成功（hasClauseSignature 在），但 defaultPsSelectorMap 不在
+  const cNoMap = ctx(run(selRoot, null, mkStubParserTree("no-map", SIG)));
+  check("🔴 parser 在、defaultPsSelectorMap 不在 → **出声**（这条路此前全程静默）",
+    SELMAP_DEGRADED.test(cNoMap), "条款闸相关行=\n" + selCtx(cNoMap));
+  check("🔴 响的是**新**那条路，不是 require 失败那条老路（措辞不重叠 ⇒ 归因分得开）",
+    SELMAP_DEGRADED.test(cNoMap) && !PARSER_DEGRADED.test(cNoMap), "条款闸相关行=\n" + selCtx(cNoMap));
+  check("🔴 那一行说得出后果（本轮按缺省 Marked 检、ⓘ 结构上出不来 ⇒ 读者不会读成「都登记好了」）",
+    /Marked/.test(cNoMap) && /没查/.test(cNoMap), "条款闸相关行=\n" + selCtx(cNoMap));
+  check("自检：这棵沙箱树上条款闸真的跑到了（跑不到则上三条是空扫，不是通过）",
+    /条款库结构闸绿/.test(cNoMap), "条款闸相关行=\n" + selCtx(cNoMap));
+
+  // 对照组（结构上不可能命中上面那条）：同一棵夹具、同一份 hook，替身只多一个导出。
+  // 不带这一臂，上面几条会被一个「恒报降级」的实现全绿糊过去。
+  const cWithMap = ctx(run(selRoot, null, mkStubParserTree("with-map", SIG + MAP)));
+  check("对照组：替身把 defaultPsSelectorMap 补上 → **零**降级行（钉住不是恒报）",
+    !SELMAP_DEGRADED.test(cWithMap) && !PARSER_DEGRADED.test(cWithMap), "条款闸相关行=\n" + selCtx(cWithMap));
+  check("对照组：同一棵树上条款闸同样跑得出来（证明这棵夹具本身是活的）",
+    /条款库结构闸绿/.test(cWithMap), "条款闸相关行=\n" + selCtx(cWithMap));
 }
 
 // ── 清理 ────────────────────────────────────────────────────────────────────
