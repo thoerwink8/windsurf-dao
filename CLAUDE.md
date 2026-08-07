@@ -82,6 +82,10 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条�
                                               #   本行此前写作「原型，尚未接进派单流程」，注册完成那一刻即为假而无人订正
                                               #   ⚠ 已证的是「响过」不是「每次都响」：注入率（派 N 个官、几个真收到）仍未审计，
                                               #     而那正是退役「派单令首行 Read」双通道的前置门（契约：≥20 次 100%）
+
+node ccswitch/scripts/gen-guarded-files.mjs           # 「被 mutation 守护的源文件」清单：改完 tests/ 后重新生成
+node ccswitch/scripts/gen-guarded-files.mjs --check   # 测试实况变了而清单没跟上 ⇒ exit 1（tests/guarded-files.tests.js 每次跑它）
+node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不读得到清单（fail-open 的失败态只在这里出声）
 ```
 
 `ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。

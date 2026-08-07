@@ -4,16 +4,107 @@
 // 本 hook 在 Edit/Write/MultiEdit 后,按目标文件类型注入 dao 提醒:
 //   - 代码文件(.ts/.py/...) → 提醒过 dao-quality 质量门
 //   - dao 元层文件(ccswitch/dao.md / dao-* skill·command·agent) → 提醒过 dao-meta 三关
+//   - **被 mutation 守护的源文件 → 提醒先读写守卫判据**(2026-08-07,issue #122,见下)
 //
 // 配在 PostToolUse(改完即提醒,语义比 PreToolUse 更贴"收尾前验证")。
 // 始终 exit 0,只注入不阻断。
 //
+// ── 守卫指针分支(issue #122 · 用户 2026-08-07 拍板的 hybrid 投递)─────────────
+// 「改守卫前先读写守卫判据」此前只有**读触发**一条通道(ccswitch/rules/scoped/ 的
+// paths: glob,宿主在 Read 到匹配文件时注入)。回测实测:那份 glob 恰好漏掉 issue #103
+// 例 2 的当事文件 ccswitch/templates/check-token-drift.mjs,而那个文件近 11 天
+// **Read 0 次 / Edit·Write 7 次** —— 读触发对它结构性失明。
+// ⇒ 本分支挂 Edit/Write,判据清单 ccswitch/guarded-files.json 由
+//   ccswitch/scripts/gen-guarded-files.mjs 从 mutation 测试实况**自动算**(手维护必滞后)。
+//
+// 三条设计约束,都是刻意的:
+//   ① **只加一行指针,不复制判据正文** —— 副本会漂移,而这条规则还在演进
+//      (同 ccswitch/rules/scoped/dao-scope-guard-writing.md 的取舍)。
+//   ② **advisory,不拦截** —— 本 hook 在 PostToolUse 上,改动已经发生;它是提醒不是闸。
+//   ③ **fail-open** —— 清单读不到/解析坏了 ⇒ 静默跳过本分支,其余分支照常。
+//      「清单坏了」因此**不会**在正常运行时出声,故它必须在别处看得见:
+//      `node ccswitch/hooks/dao-glob-gate.js --selfcheck` 会把清单状态打出来并给出退出码。
+//      (为什么不做成运行时报错:一个每次编辑都可能打噪音的 hook 会被静音,
+//       而被静音的 hook 与不存在的 hook 等价。)
+//      🔴 **已知格:`--selfcheck` 的 exit 0 单独看不够,必须核 `GLOB_GATE_SELFCHECK` 那一行在不在**
+//      (2026-08-07 对抗验证官实测,本 PR 返修补记)。**本分支落地之前**的这个文件不认识
+//      `--selfcheck`:未知参数被忽略、`readFileSync(0)` 在无管道输入时读到空串、JSON 解析失败
+//      吞掉、toolName 为空 ⇒ **静默 exit 0、零输出**。于是「自检通过」与「你跑的是一份还没有
+//      自检的旧副本」在退出码这个唯一的机器通道上**逐字节相同** —— 那正是本仓那句
+//      「数到 0 和没看到样本,输出一模一样」。射程:凡是**部署副本可能滞后于仓内版本**的时刻都成立
+//      (~/.claude/ 的链接指向别处、别的 worktree、别的机器还没拉),不限于本 PR 的过渡期。
+//      ⇒ 消费方(人或脚本)判「自检过了」的判据是 **`GLOB_GATE_SELFCHECK exit=0 manifest=ok`
+//      这一行出现过**,不是 `$?` 等于 0。回归网 tests/guarded-files.tests.js §⑥ 的
+//      selfcheck 断言正是这么写的(正态断言那一行的正则,不只断言退出码)。
+//
+// 🔴 **本分支是叠加的,不是替换的**:它接在既有四条分支算出的 context **后面**,
+//    所以既有分支的行为一个字节都没变(那批断言原样全绿即是证明)。
+//
 // 真相源:windsurf-dao/ccswitch/hooks/dao-glob-gate.js
 // 由 settings.json 的 PostToolUse hook 调用。
-// 回归网:tests/glob-gate.tests.js(各分支正控 + 误伤负控 + settings.json 分支文案逐条钉死
-//         + 三向 mutation 判别力 + 真文件字节恒等 canary)。
+// 回归网**两份,改这个文件时都要跑**:
+//   · tests/glob-gate.tests.js       前四条分支(正控 + 误伤负控 + settings.json 文案逐条钉死
+//                                    + 三向 mutation 判别力 + 真文件字节恒等 canary)
+//   · tests/guarded-files.tests.js   守卫指针分支(正控/负控/fail-open/--selfcheck
+//                                    + 三形态&反向 mutation) 与清单生成器的口径
 
 const fs = require("fs");
+const path = require("path");
+
+// ── 守卫清单:加载与匹配 ─────────────────────────────────────────────────────
+// 清单路径按**本文件位置**算(hooks/ 的上一级),不按 cwd —— hook 的 cwd 是被编辑项目的
+// 根目录,按 cwd 找会在任何非 dao 仓的项目里静默落空。
+const GUARDED_MANIFEST = path.join(__dirname, "..", "guarded-files.json");
+
+function loadGuarded() {
+  let text;
+  try { text = fs.readFileSync(GUARDED_MANIFEST, "utf8"); }
+  catch (e) { return { ok: false, why: "读不到(" + (e && e.code ? e.code : "unknown") + ")", files: [] }; }
+  let doc;
+  try { doc = JSON.parse(text); }
+  catch (e) { return { ok: false, why: "不是合法 JSON(" + (e && e.message ? e.message.slice(0, 60) : "") + ")", files: [] }; }
+  const files = Array.isArray(doc && doc.files)
+    ? doc.files.map((x) => (x && typeof x.file === "string" ? x.file : null)).filter(Boolean)
+    : [];
+  if (!files.length) return { ok: false, why: "清单里一个文件都没有(files 缺席或为空)", files: [] };
+  return { ok: true, why: "", files };
+}
+
+// 匹配用**后缀**:清单记的是仓相对路径,而 tool_input.file_path 可能是绝对路径、
+// worktree 里的路径、或相对路径。
+// ⚠ 近似,照直写:另一个仓里同名同相对路径的文件也会命中(如别人 fork 了 ccswitch/)。
+//   往误报一侧偏是刻意的 —— 这是一行 advisory 指针,多提醒一次的代价远小于漏提醒。
+//   反过来,**经 ~/.claude/ 的 symlink 路径编辑同一个文件不会命中**(那条路径里没有
+//   `ccswitch/`),那是已知漏报面。
+function matchGuarded(normPath, files) {
+  for (const rel of files) {
+    if (normPath === rel || normPath.endsWith("/" + rel)) return rel;
+  }
+  return null;
+}
+
+// ── --selfcheck:让 fail-open 的失败态在别处看得见 ────────────────────────────
+// 必须在读 stdin 之前处理:本 hook 的正常入口是 `readFileSync(0)`,在没有管道输入的
+// 终端里那会一直等下去。
+if (process.argv.includes("--selfcheck")) {
+  const g = loadGuarded();
+  const w = (s) => process.stdout.write(s + "\n");
+  w("== dao-glob-gate --selfcheck ==");
+  w("  守卫清单：" + GUARDED_MANIFEST);
+  if (g.ok) {
+    w("  状态：可用 · " + g.files.length + " 个被守护源文件");
+    w("  抽样：" + g.files.slice(0, 3).join(" / ") + (g.files.length > 3 ? " …" : ""));
+    w("  ⓘ 它证不了的：清单**内容对不对**归 `node ccswitch/scripts/gen-guarded-files.mjs --check`；");
+    w("     本自检只答「这个 hook 此刻读得到一份非空清单吗」。");
+    w("GLOB_GATE_SELFCHECK exit=0 manifest=ok files=" + g.files.length);
+    process.exit(0);
+  }
+  w("  状态：**不可用** —— " + g.why);
+  w("  后果：守卫指针分支静默不触发（fail-open），其余分支不受影响。");
+  w("  修法：node ccswitch/scripts/gen-guarded-files.mjs");
+  w("GLOB_GATE_SELFCHECK exit=1 manifest=bad files=0");
+  process.exit(1);
+}
 
 let raw = "";
 try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}
@@ -83,6 +174,21 @@ if (isDaoMeta) {
     parts.push("【dao-design】UI/前端改动:有 design/ 目录时以 Open Design 原型为视觉真相源 · 三维对齐(结构/视觉/交互) · a11y · 表单/控件走项目 ui/* 体系勿用原生 element。改完截图对比 design/*.html 再声明完成。");
   }
   context = parts.join(" ");
+}
+
+// ── 守卫指针(叠加在上面任何一条分支之后,不替换它们)──────────────────────────
+// 措辞刻意只有一句 + 一个路径:它的职责是**把人送到判据正文**,不是复述判据。
+// 长度量级 ~0.3 KB —— 回测里 hybrid 那一档按「一行指针」估的日均代价就是这个量级,
+// 写成一段说明会把这条通道最便宜的那个属性弄丢。
+{
+  const g = loadGuarded();
+  const hit = g.ok ? matchGuarded(norm, g.files) : null;
+  if (hit) {
+    const note = "【dao 守卫判据】你正在改一个**被 mutation 守护**的文件(" + hit + ")。" +
+      "改判据/护栏前先 Read `ccswitch/rules/dao-guard-writing.md`(全域分布 / 自检不复用被守对象的解析 / " +
+      "输出不落在自己扫描面内 / 给退役造触发器)。改完记得让守它的那些 mutation 仍然红得起来。";
+    context = context ? context + " " + note : note;
+  }
 }
 
 if (context) {
