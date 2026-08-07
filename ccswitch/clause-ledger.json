@@ -127,14 +127,15 @@
     },
     "反-预算护栏": {
       "file": "ccswitch/dao.md",
-      "n": "1",
+      "n": "2",
       "first_seen": "07-28",
       "trigger": "PR流程",
       "judge_only": false,
       "self_authored": [],
       "baseline": "某仓单文件 production 上限 300 行，一个 PR +52 行、同期 main +23 行，任一侧单独都没越线，合并后 308 行硬闸红；`gh` 全程报 MERGEABLE/UNKNOWN",
       "source_refs": [
-        "rationales §反-2"
+        "rationales §反-2",
+        "windsurf-dao PR #168（派生物实例：合并态重跑生成器，drift 由 --check 抓出）"
       ],
       "status": "active"
     },
@@ -153,12 +154,12 @@
     },
     "守-自检独立": {
       "file": "ccswitch/rules/dao-guard-writing.md",
-      "n": "1",
+      "n": "2",
       "first_seen": "07-28",
       "trigger": "守卫头注",
       "judge_only": false,
       "self_authored": [],
-      "baseline": "未测——该守卫上线当轮真实数据零触发，判别力只由合成夹具验证",
+      "baseline": "入库时「未测」——该守卫上线当轮真实数据零触发，判别力只由合成夹具验证；2026-08-07 补首个真实数据实例 1 例（settings-drift 历史考古，命中「结论碰巧对、理由是假的」形态，由官自行识别并避开）",
       "source_refs": [],
       "status": "active"
     },
@@ -200,6 +201,19 @@
       "baseline": "2 例同日（#63 ANCHOR MISS ×2、#99 分支绿→主干红）；本仓 25 处 mutation 站点实测——跨行锚点 1 处、锚点断言写法 5 种、断言与 mutation 锚点不同一的 1 处；提议的「查缺锚点断言」形态实测误报率 84.6%→100%，故只机检窄形态",
       "source_refs": [
         "issue #103"
+      ],
+      "status": "active"
+    },
+    "守-清单派生化": {
+      "file": "ccswitch/rules/dao-guard-writing.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "守卫头注",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本仓首例——issue #122，作用域档手写清单覆盖率 18%（2/11）；改派生物化后生成器实测 tests=39 / mutation_tests=29 / files=31 / drift=none（**口径不同不可直接与 18% 比**，方向明确而已）",
+      "source_refs": [
+        "windsurf-dao issue #122 / commit 5766736 / PR #168"
       ],
       "status": "active"
     },
@@ -268,7 +282,7 @@
     },
     "帅-越权先查": {
       "file": "ccswitch/dao.md",
-      "n": null,
+      "n": "1",
       "first_seen": null,
       "trigger": null,
       "judge_only": false,
@@ -277,7 +291,22 @@
       ],
       "baseline": null,
       "source_refs": [
-        "L31"
+        "L31",
+        "rationales §帅-7",
+        "windsurf-dao PR #164（commit d7c3b05 的 Claude-Session trailer 定源 → 8c3f2da 订正注释）"
+      ],
+      "status": "active"
+    },
+    "帅-撤宣称不抢修": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "未测",
+      "source_refs": [
+        "windsurf-dao PR #170 / commit d9e127e（撤宣称）/ issue #173（必修单）"
       ],
       "status": "active"
     },
@@ -417,6 +446,32 @@
       "baseline": "某护栏正则被 11 个 PR 触碰、其中 8 个集中在 19.8 小时内，每层修复面 100% 落在上一层刚写的行上（共享比例 0.92–1.00）",
       "source_refs": [
         "叙事 N9-④"
+      ],
+      "status": "active"
+    },
+    "派-接手点": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "本窗 5/5 道接手令带此块，其中 1 例（#148）靠④与盘上对核抓出派单令自身误判",
+      "source_refs": [
+        "windsurf-dao issue #58/#122/#136/#148/#162（2026-08-06 五道接手令）"
+      ],
+      "status": "active"
+    },
+    "派-先核再修": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "未测",
+      "source_refs": [
+        "windsurf-dao issue #58（用户拍板「先核再修」）/ PR #167"
       ],
       "status": "active"
     },
@@ -639,7 +694,7 @@
     },
     "官通-禁笃定措辞": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
-      "n": "4",
+      "n": "5",
       "first_seen": "07-26",
       "trigger": "无",
       "judge_only": true,
@@ -812,12 +867,12 @@
     },
     "官通-用户命令实跑": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
-      "n": "1",
+      "n": "2",
       "first_seen": "07-27",
       "trigger": "无",
       "judge_only": true,
       "self_authored": [],
-      "baseline": null,
+      "baseline": "2 例——2026-07-27 验收命令 MODULE_NOT_FOUND 1 例；2026-08-07 resume-project PR #1 配置侧 1 例（1 个假指针配置文件 + 5 个零消费点变量）",
       "source_refs": [],
       "status": "active"
     },
@@ -863,6 +918,71 @@
       "self_authored": [],
       "baseline": "未测",
       "source_refs": [],
+      "status": "active"
+    },
+    "官通-坐标错位": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "未测",
+      "source_refs": [
+        "windsurf-dao PR #138 / commit 4c75ecc"
+      ],
+      "status": "active"
+    },
+    "官通-覆盖声明": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "1 个完整对——fb1a7af（「官被账号绑定错误中断，帅保全未提交工作」，标「未完成，不可合」）→ 51b70ae（「撤销上一条 wip 的『未完成，不可合』标记」，正文明写「该 commit 已推送，故不改写历史，用本条覆盖那个标记」）；同族先例 166ea9a / f5db85d 只有 WIP 标记、未见对应覆盖提交，故未计入 n",
+      "source_refs": [
+        "windsurf-dao commit fb1a7af → 51b70ae"
+      ],
+      "status": "active"
+    },
+    "官通-竞态直读": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "1 例——windsurf-dao PR #164 拍板评论明写「接力方开工先 git status 核树干净，以 node 直读盘上文件为准（Read 工具在 checkout 竞态下读过陈旧内容）」；命中频率未测",
+      "source_refs": [
+        "windsurf-dao PR #164 拍板评论"
+      ],
+      "status": "active"
+    },
+    "官通-划线保留": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "1 例——commit 379348a 正文「三处文本订正，错误结论一律 ~~划线保留~~ 不删（头注⑬ / G2_NO_SRC_THRESHOLD 注释 / g2WriteTargets 内联注释 / tests 登记表标签）」，且核验官在 `dao-hard-gates.js` 内实测到多处真实 strikethrough（非仅 commit message 声称）",
+      "source_refs": [
+        "windsurf-dao commit 379348a"
+      ],
+      "status": "active"
+    },
+    "官通-跨仓双落点": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "1 例双向闭合实测——resume-project PR #1 body 首行「契约：windsurf-dao issue #136」+ 其 commit 5e87d19 正文同样写着该 issue 号（两处独立出现），windsurf-dao issue #136 末条评论回贴 `team-donk/resume-project#1`（含两个 commit 号）",
+      "source_refs": [
+        "team-donk/resume-project PR #1（commit 5e87d19）↔ windsurf-dao issue #136"
+      ],
       "status": "active"
     },
     "官复-range实算": {
@@ -930,12 +1050,12 @@
     },
     "官实-幂等接续": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
-      "n": "?",
+      "n": "5",
       "first_seen": "07-26",
       "trigger": "无",
       "judge_only": true,
       "self_authored": [],
-      "baseline": null,
+      "baseline": "本窗 5/5 例接手官均先核验盘上产物、零推倒重写（issue #58/#122/#136/#148/#162，2026-08-06 五路实现官同批死于 API 限流后重派）；其中 1 例（#148）靠「死前最后一句」与盘上对核抓出派单令自身误判。入库前为 `n=?`（未标次数≠零次），本次五例是**下界**不是穷尽",
       "source_refs": [],
       "status": "active"
     },
@@ -972,6 +1092,19 @@
       "source_refs": [],
       "status": "active"
     },
+    "官实-纯增量解冲突": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "未测",
+      "source_refs": [
+        "windsurf-dao PR #168 / commit 97ecbeb"
+      ],
+      "status": "active"
+    },
     "官抗-独立复跑": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "n": "?",
@@ -981,7 +1114,7 @@
       "self_authored": [
         "07-27"
       ],
-      "baseline": "未测",
+      "baseline": "未测（本次扩射程的两个出处：PR #168 返修评论「本轮独立靶验（不采信前任报告，重新跑了一遍）」附红集表与字节级复原；issue #138 收尾接手令「把前任的结论当靶单逐项」）",
       "source_refs": [],
       "status": "active"
     },
@@ -1000,14 +1133,14 @@
     },
     "官抗-调用点覆盖率": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
-      "n": "5",
+      "n": "6",
       "first_seen": "07-30",
       "trigger": "模板首行",
       "judge_only": false,
       "self_authored": [
         "07-30"
       ],
-      "baseline": "本窗约 30 小时内 5 个独立实例，覆盖率分别为 60%（#310）、0%（#323）、75%首批/100%补齐后（#338）、93.75%单点/6.25%端到端（#343）",
+      "baseline": "本窗约 30 小时内 5 个独立实例，覆盖率分别为 60%（#310）、0%（#323）、75%首批/100%补齐后（#338）、93.75%单点/6.25%端到端（#343）；第 6 例 = 2026-08-07 PR #170 的 N=0 边界",
       "source_refs": [],
       "status": "active"
     },
@@ -1105,13 +1238,91 @@
     },
     "官抗-语料非自证": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
-      "n": "11",
+      "n": "12",
       "first_seen": "07-27",
       "trigger": "派单契约门",
       "judge_only": false,
       "self_authored": [],
-      "baseline": "本仓某护栏正则被 11 个 PR 触碰、其中 8 个集中在 19.8 小时内，每层修复面 100% 落在上一层刚写的行上（共享比例 0.92–1.00）",
+      "baseline": "本仓某护栏正则被 11 个 PR 触碰、其中 8 个集中在 19.8 小时内，每层修复面 100% 落在上一层刚写的行上（共享比例 0.92–1.00）；第 12 例 = 2026-08-07 PR #167 负控侧，自造诱饵全过而两类真实合法路径中招",
       "source_refs": [],
+      "status": "active"
+    },
+    "官抗-订正面变体": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "12 变体矩阵中唯二落在订正面的新变体各自独立揭出恒真，原有变体 0 检出",
+      "source_refs": [
+        "windsurf-dao PR #170 / commit d9e127e / issue #173"
+      ],
+      "status": "active"
+    },
+    "官抗-样本原文核对": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "1 例——commit fe7bcfb（PR/issue #117 第二轮对抗），官用手打的近似长名路径代替文件里已标注「真语料·承重正控」的那个变量形态常量，据此「订正」了对抗官；用真原文重跑后证明对抗官原本是对的，遂当场撤回订正，教训原样写进 `ccswitch/hooks/dao-hard-gates.js:213` 头注",
+      "source_refs": [
+        "windsurf-dao commit fe7bcfb / ccswitch/hooks/dao-hard-gates.js:213 头注"
+      ],
+      "status": "active"
+    },
+    "官抗-负控独立归因": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "PR #168 一批内 2 个独立实例（共用谓词 1、归因错写 1，后者同错三处）",
+      "source_refs": [
+        "windsurf-dao PR #168 / commit e032153"
+      ],
+      "status": "active"
+    },
+    "官抗-优先序变体": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "1 例——PR #170 的 PRI1（真优先序反转）：21a 是「1 压过 2」这条轴上的唯一守护，无冗余，删了它这类反转**零检出**",
+      "source_refs": [
+        "windsurf-dao PR #170（PRI1）"
+      ],
+      "status": "active"
+    },
+    "官抗-dryrun变异": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "1 例双向——PR #170 DR1：把 `-DryRun` 染成 2，全套 101 条断言里没有第二条会不高兴（这一格此前是真空的，它为真只是因为 DryRun 的 exit 0 恰好排在收权限之前，是个位置上的巧合）；DR2（DryRun 部分执行副作用）被「零写操作」三条当场逮住（20b/c/d 红）",
+      "source_refs": [
+        "windsurf-dao PR #170（DR1/DR2）"
+      ],
+      "status": "active"
+    },
+    "官抗-断言名实核对": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-07",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "1 例——PR #170「顺手逮到一条既有断言在说谎（P1 的副产物）」：19d 的名字写着「两个目录都被点名在最后一屏」而它搜的是整篇输出，P1 变体下 19b/19f/19g 全红、唯独 19d 绿；该缺陷经对抗官复核确认为原缺陷同型复发（窗口从整篇缩到半篇），已另立 issue #173 追账",
+      "source_refs": [
+        "windsurf-dao PR #170 / issue #173"
+      ],
       "status": "active"
     },
     "官侦-只读红线": {
