@@ -1,0 +1,4 @@
+LAST_HARVEST_DATE=2026-08-07
+LAST_HARVEST_COMMIT=c9e0b71d3263faf3df38f991fe0e8afb9bff3424
+LAST_HARVEST_PR=168
+LAST_HARVEST_NOTE=收官窗收割（四路 31 候选 / 17 过审）+ 落地入库 24 条。marker 首次落盘：此前本仓没有这个文件，观察线一直报「无从计算」——那不等于「从未收割」，只等于没有记录。
