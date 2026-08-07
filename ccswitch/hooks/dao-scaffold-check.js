@@ -488,15 +488,46 @@ const CLAUSE_SIGNATURE_FALLBACK_RE = /\[n=|\[基线:|\[自定@\d|\[#[^\]\s]+\]/;
 
 function clauseTargets(daoRoot) {
   const parser = loadClauseParser();
+  const notes = [];
   // 「这份文件该用哪个 `-ClauseSelector`」的真相源同样在 parser 里（`defaultSources()` 的投影）。
   // 此前 hook 一律不传 ⇒ 全按缺省 Marked 检，而 node 侧对 dao-officer-clauses.md 用的是
   // all-top-level ⇒ **同一份文件被两套东西按两种口径检**，那正是 #169③ 记的口径分歧。
+  //
+  // 🔴 **拿不到这份清单也必须出声**（2026-08-08 · PR #183 对抗🟡①）。这里原先是
+  // 「是函数才调，抛了就回落空对象」一句话，于是 `parser` **加载成功**、而
+  // `defaultPsSelectorMap` 取不到（导出没了 / 版本对不上 / 它抛了 / 返回空清单）时：
+  // `selectorMap` 为空 ⇒ 下面 `mk()` 里那句 `&& Object.keys(selectorMap).length` 让
+  // **ⓘ 一行都不打**，而 `loadClauseParser()` 只在 `hasClauseSignature` 缺失时才设
+  // `CLAUSE_PARSER_WHY` ⇒ **⚠ 降级行也不打**，全部悄悄回落 Marked。
+  // 对抗实测（把那句 `typeof` 的名字换成一个不存在的导出）：真仓 `additionalContext` 与基线
+  // **逐字相同**、回归网全绿 —— **本文件通篇在治的那个病，长在了为治它而铺的这条路上。**
+  // ⚠ 措辞刻意**不与**下面那条「条款筛选器降级」重复：同一句话出现在两处，等于给夹住其中
+  // 一个的断言发免死金牌（本文件 `budgetLibErrorLines` 那里踩过，三个变异体因此存活）。
   let selectorMap = {};
-  if (parser && typeof parser.defaultPsSelectorMap === "function") {
-    try { selectorMap = parser.defaultPsSelectorMap(); } catch { selectorMap = {}; }
+  let selectorMapWhy = null;
+  if (parser) {
+    if (typeof parser.defaultPsSelectorMap !== "function") {
+      selectorMapWhy = "clause-parser.mjs 没有导出 defaultPsSelectorMap（版本对不上）";
+    } else {
+      try {
+        const m = parser.defaultPsSelectorMap();
+        // 空清单与「取不到」在后果上**逐格相同**（ⓘ 那道守卫同样被关掉），故同报一行。
+        if (m && typeof m === "object" && Object.keys(m).length) selectorMap = m;
+        else selectorMapWhy = "defaultPsSelectorMap() 返回空清单（源清单里一份文件都没有）";
+      } catch (e) {
+        selectorMapWhy = "defaultPsSelectorMap() 抛错：" +
+          (e && e.message ? String(e.message) : String(e)).split("\n")[0];
+      }
+    }
+  }
+  if (selectorMapWhy) {
+    notes.push("⚠ 选择器清单降级：clause-parser.mjs 进来了，但要不到 defaultPsSelectorMap（" +
+      selectorMapWhy + "）⇒ 本轮**全部按缺省 Marked 检**（dao-officer-clauses.md 那份的 " +
+      "AllTopLevel 口径丢了，退回 #169③ 那个两套口径分歧），且「带条款却没登记进 " +
+      "defaultSources()」那条 ⓘ 本轮**结构上出不来**（它的守卫要这份清单非空）—— " +
+      "**这不是「都登记好了」，是「没查」**（PR #183 对抗🟡①）");
   }
   const toPosix = (p) => p.split(path.sep).join("/");
-  const notes = [];
   const mk = (rel) => {
     const key = toPosix(rel);
     const sel = selectorMap[key] || null;
