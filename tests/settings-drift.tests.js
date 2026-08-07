@@ -466,7 +466,11 @@ console.log("\n=== #171 · A5：归一化的射程上界（只吃 /ccswitch/，�
   // 原因是既有的两条守卫（上面「射程边界」那条、F3 那节）比的都是**跨段**形态
   //（一侧 ccswitch、一侧 .claude/hooks），放宽之后两侧仍不相等 ⇒ 照绿。
   // 唯一会被吃掉的是**同段不同前缀**：两侧都在 `.claude/hooks/`，只是 HOME 不同
-  // —— 换机 / 换用户名之后导出的快照，正是这个形状，而它本该硬报。
+  // —— ~~换机 / 换用户名之后导出的快照，正是这个形状~~（**订正 2026-08-08 · PR #181 对抗🟡-2**：
+  // 该因果被 `config-sync/lib/paths.mjs::encodePaths` 证伪——导出时 homeDir 被占位符化，
+  // 换机快照两侧一致、不会出现本形状；真实可达路径只剩「hook 命令里硬编码了**别人的** home」
+  // 一类，真实语料零样本。本断言保留为**前瞻负控**：判别力实测成立（非等价变异会红），
+  // 但「它防的形态在真实世界发生过」无实证——别把它引用成已发生过的病。）而它本该硬报。
   const live = liveEquivalent();
   live.hooks.Stop[0].hooks[0].command = 'node "C:/Users/OldUser/.claude/hooks/dao-timecode.js" claude';
   const { r, lines } = runPair(live, snapClaude());
@@ -500,7 +504,7 @@ console.log("\n=== #171 · E2：根发现的次序意图（hookLines 只展示�
     diff.length > 3, JSON.stringify(diff.map((f) => f.id)));
   check("E2 · 根发现排在 VALUE_DIFF 队首（钉 :1410 的 rootFindings 前置）",
     diff.length > 0 && diff[0].id === "hook-root:live", JSON.stringify(diff.map((f) => f.id)));
-  check("E2 · 根发现落在被展示的前 3 条之内（钉 :1076 的 diff.slice(0, 3)）",
+  check("E2 · 根发现落在前 3 条之内（数组次序弱形态——**不**钉 :1076：本断言自算 slice 不读 hookLines，:1076 截断放宽/收紧皆不红；那一格的真实守护是下面那条 ⚙ 端到端断言）",
     diff.slice(0, 3).some((f) => f.id === "hook-root:live"), JSON.stringify(diff.slice(0, 3).map((f) => f.id)));
   const gearLine = lines.find((l) => l.startsWith("⚙")) || "";
   check("E2 · ⚙ 提醒行里真的看得见「仓库根」（端到端，不只是数组次序对）",
