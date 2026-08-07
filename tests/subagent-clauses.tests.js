@@ -369,9 +369,26 @@ console.log("\n──── ④′ 指针档自声明：正文源退官侧档 + 
       /prose-mention-project\/docs\/rules\/dispatch-clauses\.md/.test(slash(prose.ctx)),
     JSON.stringify(prose.ctx.slice(-300)));
 
-  // ── 边界三：env 逃生口刻意不走这道判断（射程边界，改窄改宽都该有东西红）──────────
+  // ── 边界三：env 逃生口刻意不走这道判断（射程边界）──────────────────────────────
+  // 🔴 **这一格 2026-08-07 被对抗验证官判为假锚并重做，成因照直写**：首版的样本是
+  //   `/tmp/somewhere/clauses.md` —— **那个文件不存在**，而 `resolveClauseFile` 的 env 分支
+  //   在任何存在性检查之前就返回了 ⇒ 这一格实际**零样本**：把 env 逃生口改成走指针推断，
+  //   一个不存在的文件 `headOf` 恒返回 null、判非指针，输出**逐字节不变**，本条照绿。
+  //   而它旁边的注释当时写着「改窄改宽都该有东西红」—— **那是一句假宣称**，
+  //   正撞上本批入库的 `[#官抗-负控独立归因]` 第②款（宣称「挡在门 X」必须实测）。
+  //   ⇒ 换成**真实存在、且带标记**的合成样本：只有这样，「env 走不走推断」这个差别才有
+  //   可观测后果（走推断 ⇒ 退官侧档 + 附指针行；不走 ⇒ 原样指它）。
+  //   **实测（在真实 hook 上先破再验，非变异体副本）**：把 env 分支改成走 `isPointerDoc`
+  //   ⇒ 全套 exit=1、**仅本条红**（PASS=112 FAIL=1）；复原 ⇒ exit=0 PASS=113 FAIL=0。
+  const envMarked = path.join(TMP, "env-escape-hatch-marked.md");
+  fs.writeFileSync(envMarked, MARK_LINE + "\n\n# 合成样本：带标记，但由 env 显式指定\n", "utf8");
+  check("前提：边界三的样本真实存在（首版那个不存在的路径让这一格零样本、恒绿）",
+    fs.existsSync(envMarked), envMarked);
+  const envHit = fire("claude", { clauseFile: envMarked });
   check("边界三：DAO_CLAUSE_FILE 显式指定时不做指针档推断（逃生口就该是「指了什么就是什么」）",
-    /\/tmp\/somewhere\/clauses\.md/.test(slash(fire("claude", { clauseFile: "/tmp/somewhere/clauses.md" }).ctx)));
+    slash(envHit.ctx).includes(slash(envMarked)) && !/项目侧（指针档）/.test(envHit.ctx) &&
+      !/dao-officer-clauses\.md/.test(envHit.ctx),
+    JSON.stringify(envHit.ctx.slice(-300)));
 }
 
 console.log("\n──── ⑤ 注入上限：宁可截断也不越 10,000，且截断这件事必须写在文里 ────");

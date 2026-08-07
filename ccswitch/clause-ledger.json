@@ -283,8 +283,8 @@
     "帅-越权先查": {
       "file": "ccswitch/dao.md",
       "n": "2",
-      "first_seen": null,
-      "trigger": null,
+      "first_seen": "07-30",
+      "trigger": "无",
       "judge_only": true,
       "self_authored": [
         "07-30"
