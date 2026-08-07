@@ -261,10 +261,23 @@ console.log("\n──── ④ fail-open：喂什么都不砖会话，且仍然
   //   在某个自带那份文件的项目仓目录下红一条** —— 红绿取决于你在哪个目录敲的命令，
   //   而失败信息里没有任何东西指向「cwd」。三处一起收口：①fireRaw 现在显式给 spawn 一个 cwd
   //   ②scripts/run-tests.mjs 把 cwd 钉在仓根 ③这里把前提本身钉成断言。
+  // ⚠ **2026-08-07（issue #174）：这个前提翻面了，而下面那条断言的期望值没变** —— 照直写。
+  //   本仓从此**有**项目侧档（补的脚手架缺件），但它是**指针档**（头部自带 dao-clause-pointer
+  //   标记、不含条款正文）⇒ hook 把正文源退回官侧档。所以下面仍该期望官侧档，**但理由换了**：
+  //   从「探不到项目侧档」变成「探到了、它自己声明是指针」。**两种理由在断言上长得一模一样**，
+  //   故把新前提本身钉成两条断言 —— 标记哪天被删，是这里先红，不是下面那条莫名其妙地红。
   const PROJECT_SIDE_CANDIDATES = ["docs/rules/dispatch-clauses.md", ".claude/rules/dispatch-clauses.md"];
-  check("前提：dao 仓自己没有项目侧条款库（哪天有了，下面那条该期望的就不是官侧档）",
-    PROJECT_SIDE_CANDIDATES.every((rel) => !fs.existsSync(path.join(REPO, rel))),
-    JSON.stringify(PROJECT_SIDE_CANDIDATES));
+  const presentSide = PROJECT_SIDE_CANDIDATES.filter((rel) => fs.existsSync(path.join(REPO, rel)));
+  check("前提：本仓项目侧档在盘上（2026-08-07 补的脚手架缺件，此前它确实不存在）",
+    presentSide.length > 0, JSON.stringify(PROJECT_SIDE_CANDIDATES));
+  // **标记用本文件自己写的字面量查，不去 require hook 的判断**（守卫铁律：自检那一半不许复用
+  // 被守对象的解析 —— 复用了就是两边一起错、差恒为 0，自检退化成一句废话）。
+  const POINTER_MARK_LITERAL = /^<!--\s*dao-clause-pointer\b/m;
+  const PROBE_WINDOW = 4096; // 与 hook 的默认窗口同值，但**是独立写的一份**，不从它那里读
+  check("前提：项目侧档头部（有界窗口内）带指针标记 ⇒ 下面仍期望官侧档，理由是「它是指针档」",
+    presentSide.length > 0 && presentSide.every((rel) =>
+      POINTER_MARK_LITERAL.test(fs.readFileSync(path.join(REPO, rel), "utf8").slice(0, PROBE_WINDOW))),
+    JSON.stringify(presentSide));
 
   const bad = fireRaw("这不是 JSON");
   check("stdin 不是 JSON → exit 0（SubagentStart 拦不了创建，砖掉的只会是这次注入）", bad.code === 0);
@@ -297,6 +310,85 @@ console.log("\n──── ④ fail-open：喂什么都不砖会话，且仍然
   const stray = { agent_type: "mousse-implementer" }; // 缺 cwd / agent_id / transcript_path
   const s = fireRaw(JSON.stringify(stray));
   check("输入缺字段（只有 agent_type）→ 照常渲染，不因缺字段崩", s.code === 0 && /官种=implementer/.test(s.ctx));
+}
+
+console.log("\n──── ④′ 指针档自声明：正文源退官侧档 + 附项目侧那一行（issue #174 用户拍板）────");
+{
+  // 判据是「作者自己声明」而不是「机器猜这份文件里有没有正文」——后者是近似、两向都有反例。
+  // 所以这一节验的是**标记在不在改变了什么**，两态都要看到：
+  //   态一 标记在 ⇒ 正文源退官侧档 + 末尾附「项目侧（指针档）」那一行；
+  //   态二 标记不在 ⇒ 旧行为一个字不变（别的项目那份装的就是条款正文，零影响）。
+  // **合成样本一律自己造，绝不去改盘上那份真档** —— 改真档等于把被测对象与夹具混成一个，
+  // 且改坏了会污染同时在跑的别人（本窗有并行官）。
+  const MARK_LINE = "<!-- dao-clause-pointer: 合成样本，非真档 -->";
+  function makeProj(name, content) {
+    const dir = path.join(TMP, name, "docs", "rules");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "dispatch-clauses.md"), content, "utf8");
+    return path.join(TMP, name);
+  }
+  const slash = (s) => String(s).replace(/\\/g, "/");
+
+  // ── 态一：标记在（用盘上那份真档 —— 「真档带标记」正是 ④ 刚钉住的前提）────────────
+  const real = fire("general-purpose", { cwd: REPO });
+  check("态一：真档带标记 ⇒ 条款正文源退回官侧档（不再把官指向一份没有条款正文的文件）",
+    /dao-officer-clauses\.md/.test(real.ctx) && /指针档/.test(real.ctx),
+    JSON.stringify(real.ctx.slice(-420)));
+  check("态一：末尾附「项目侧（指针档）：<路径>」那一行（协议是两份都读，少这行官不知道有第二份）",
+    /项目侧（指针档）：[^\n]*docs\/rules\/dispatch-clauses\.md/.test(slash(real.ctx)),
+    JSON.stringify(real.ctx.slice(-420)));
+
+  // ── 态二：标记不在（合成样本）⇒ 旧行为。**这一态是本次改动对别的项目的零影响证明** ──
+  const plainProj = makeProj("plain-project",
+    "# 合成·真·项目侧条款库（无标记）\n\n## 通用节\n\n- 合成判据一句。 [n=1 @08-07 触发:无]\n");
+  const plain = fire("general-purpose", { cwd: plainProj });
+  check("态二：没标记 ⇒ 指针仍指项目侧那份，且不附指针行（别的项目行为一个字不变）",
+    /plain-project\/docs\/rules\/dispatch-clauses\.md/.test(slash(plain.ctx)) &&
+      !/项目侧（指针档）/.test(plain.ctx) && !/dao-officer-clauses\.md/.test(plain.ctx),
+    JSON.stringify(plain.ctx.slice(-300)));
+
+  // ── 边界一：标记必须落在**有界窗口内**。这一条同时是「有界读真的有界」的证据 ──────
+  //   少了它，把 headOf 改成读全文也不会有任何断言变红，而那正是本判据刻意写窄的那一半。
+  const farProj = makeProj("far-mark-project",
+    "# 标记埋在头部窗口之外\n\n" + "x".repeat(9000) + "\n" + MARK_LINE + "\n");
+  const far = fire("general-purpose", { cwd: farProj });
+  check("边界一：标记在有界窗口之外 ⇒ 判为非指针档（证明它只读头部，没把整份文件读进来）",
+    !/项目侧（指针档）/.test(far.ctx) &&
+      /far-mark-project\/docs\/rules\/dispatch-clauses\.md/.test(slash(far.ctx)),
+    JSON.stringify(far.ctx.slice(-300)));
+
+  // ── 边界二：**「提到这个词」与「声明是它」必须分得开** ────────────────────────────
+  //   判据要求行首是 `<!--`。少了这条负控，把正则放宽成 /dao-clause-pointer/ 也照样全绿，
+  //   而那一版会把任何**讲解这个约定**的项目文档误判成指针档（正是本仓那份自己在讲解它）。
+  const proseProj = makeProj("prose-mention-project",
+    "# 只是提到这个约定，不是声明\n\n## 通用节\n\n- 本仓约定：指针档要在头部写 `" +
+      "<!-- dao-clause-pointer" + "` 标记。 [n=1 @08-07 触发:无]\n");
+  const prose = fire("general-purpose", { cwd: proseProj });
+  check("边界二：正文里提到这个词但不在行首 ⇒ 不算声明（判据是结构，不是「出现过这个词」）",
+    !/项目侧（指针档）/.test(prose.ctx) &&
+      /prose-mention-project\/docs\/rules\/dispatch-clauses\.md/.test(slash(prose.ctx)),
+    JSON.stringify(prose.ctx.slice(-300)));
+
+  // ── 边界三：env 逃生口刻意不走这道判断（射程边界）──────────────────────────────
+  // 🔴 **这一格 2026-08-07 被对抗验证官判为假锚并重做，成因照直写**：首版的样本是
+  //   `/tmp/somewhere/clauses.md` —— **那个文件不存在**，而 `resolveClauseFile` 的 env 分支
+  //   在任何存在性检查之前就返回了 ⇒ 这一格实际**零样本**：把 env 逃生口改成走指针推断，
+  //   一个不存在的文件 `headOf` 恒返回 null、判非指针，输出**逐字节不变**，本条照绿。
+  //   而它旁边的注释当时写着「改窄改宽都该有东西红」—— **那是一句假宣称**，
+  //   正撞上本批入库的 `[#官抗-负控独立归因]` 第②款（宣称「挡在门 X」必须实测）。
+  //   ⇒ 换成**真实存在、且带标记**的合成样本：只有这样，「env 走不走推断」这个差别才有
+  //   可观测后果（走推断 ⇒ 退官侧档 + 附指针行；不走 ⇒ 原样指它）。
+  //   **实测（在真实 hook 上先破再验，非变异体副本）**：把 env 分支改成走 `isPointerDoc`
+  //   ⇒ 全套 exit=1、**仅本条红**（PASS=113 FAIL=1）；复原 ⇒ exit=0 PASS=114 FAIL=0。
+  const envMarked = path.join(TMP, "env-escape-hatch-marked.md");
+  fs.writeFileSync(envMarked, MARK_LINE + "\n\n# 合成样本：带标记，但由 env 显式指定\n", "utf8");
+  check("前提：边界三的样本真实存在（首版那个不存在的路径让这一格零样本、恒绿）",
+    fs.existsSync(envMarked), envMarked);
+  const envHit = fire("claude", { clauseFile: envMarked });
+  check("边界三：DAO_CLAUSE_FILE 显式指定时不做指针档推断（逃生口就该是「指了什么就是什么」）",
+    slash(envHit.ctx).includes(slash(envMarked)) && !/项目侧（指针档）/.test(envHit.ctx) &&
+      !/dao-officer-clauses\.md/.test(envHit.ctx),
+    JSON.stringify(envHit.ctx.slice(-300)));
 }
 
 console.log("\n──── ⑤ 注入上限：宁可截断也不越 10,000，且截断这件事必须写在文里 ────");
@@ -570,9 +662,29 @@ console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测
       `before=${beforeR.ctx.split("\n")[0]} after=${afterR.ctx.split("\n")[0]}`);
   }
 
+  // ── M4 · 指针档自声明那条判据（issue #174）：把它改成**恒判非指针**，④′ 两条必须当场红 ──
+  // 帅裁定要求「先破再验」：**一条断言若在被测物被故意破坏时不变红，它就不是锚**。
+  // 破的是判据本身（`isPointerDoc` 的返回值），不是它的调用点 —— 改调用点验不到「标记认得出来」
+  // 这件事，只验得到「有没有人调它」。
+  const t5 = `  return head !== null && POINTER_MARK_RE.test(head);`;
+  check("M4 靶点唯一", src.split(t5).length === 2, `出现 ${src.split(t5).length - 1} 次`);
+  const m4 = writeMutant("pointer-never", t5, `  return false;`);
+  const before4 = fire("general-purpose", { cwd: REPO });
+  const after4 = fire("general-purpose", { cwd: REPO, script: m4 });
+  check("M4：真文件认出指针档（退官侧档 + 附指针行）、恒判非指针后两样同时消失 ⇒ ④′ 两条有判别力",
+    /dao-officer-clauses\.md/.test(before4.ctx) && /项目侧（指针档）/.test(before4.ctx) &&
+      !/项目侧（指针档）/.test(after4.ctx) && /docs\/rules\/dispatch-clauses\.md/.test(after4.ctx.replace(/\\/g, "/")),
+    `beforeHasPtr=${/项目侧（指针档）/.test(before4.ctx)} afterHasPtr=${/项目侧（指针档）/.test(after4.ctx)}`);
+  // 环境负控（同 M2 那一条的理由）：变异体得是「跑起来了但判据变了」，不是「根本没跑起来」。
+  check("M4：改坏后 exit 仍是 0 且注入非空（变异体真的跑起来了，不是崩在别处）",
+    after4.code === 0 && after4.ctx.startsWith(SIG), `exit=${after4.code} stderr=${JSON.stringify(after4.err.slice(0, 160))}`);
+  // 复原侧：mutation 结束后真文件必须还认得出指针档（两态都要看到，不能只看到红那一态）
+  check("M4：复原后真文件仍认得出指针档（两态都看到了，不是只验了「能红」）",
+    /项目侧（指针档）/.test(fire("general-purpose", { cwd: REPO }).ctx));
+
   cleanupMutants();
   check("变异体已清理（ccswitch/hooks/ 下不留残骸，否则死闸检测会把它报成孤儿）",
-    !fs.existsSync(m1) && !fs.existsSync(m2) && staleMutFiles.every((p) => !fs.existsSync(p)));
+    !fs.existsSync(m1) && !fs.existsSync(m2) && !fs.existsSync(m4) && staleMutFiles.every((p) => !fs.existsSync(p)));
 }
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
