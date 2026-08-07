@@ -1,4 +1,5 @@
-﻿<#
+﻿# @dao-test-tier: env   # 整套只在 --env 跑：≈30s，且沙盒用固定路径 _tmp/dao-pr-merge-test（未随机化 ⇒ 并行必互踩）
+<#
 .SYNOPSIS
     `ccswitch/scripts/dao-pr-merge.ps1` 的行为级回归网（无 Pester 依赖）。退出码 0 = 全部通过。
 

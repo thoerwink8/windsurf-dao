@@ -1,4 +1,5 @@
-﻿<#
+﻿# @dao-test-tier: env   # 整套只在 --env 跑：对真 %USERPROFILE%/%APPDATA% 做机器级不变量断言，逐字命中 --env 的定义
+<#
 .SYNOPSIS
     `ccswitch/scripts/dao-secrets-init.ps1` 与 `dao-secrets-migrate.ps1` 的行为级回归网
     （无 Pester 依赖）。退出码 0 = 全部通过。
