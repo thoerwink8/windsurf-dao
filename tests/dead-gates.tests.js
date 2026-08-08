@@ -17,6 +17,9 @@
 //
 // 被 defer 的是 ⑪ / ⑪.5 / ⑫① 里那句「真仓当下是绿态」，共 3 组。**其余 100+ 条全部照跑** ——
 // 它们是纯合成夹具，与机器状态无关，是这个回归网真正的判别力所在。
+// ⚠ **2026-08-08（issue #160）多出第 4 组，但它是条件性的**：默认层里 hook 若因墙钟预算跳过
+//   了死闸检测那一项，⑫① 的**可达性**那一条也走 defer（详见 ⑫① 内注）。⇒ 默认层的 DEFER
+//   **是 3 或 4，不是恒 3**；别把它当常量写进任何断言（run-tests 那侧只要求 `DEFER>0`）。
 //
 // 🔴 **摘出去之后谁保证它还会被跑**（issue #116 关闭条件要的就是这一段，照直写）：
 //   ①**真实语料那一半，另有一条每次会话都响的机器通道**：SessionStart hook
@@ -513,10 +516,33 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
   //    （脚本不在 / 跑不起来 / 契约被改坏 / FAIL / 没查成 / 绿）都带「死闸检测」这四个字，
   //    所以它对真实语料是绿是红一概不敏感 —— 敏感的只有下面那句「当下是绿态」。
   //    ⇒ 「hook 还在调它吗」这个问题，默认层每次都答得出。
+  //
+  //    🔴 **2026-08-08（issue #160）：上面那句枚举漏了一条返回路径，而漏掉的恰是致命的那条。**
+  //    `deadGateLines` 是经 `runWithinBudget()` 调的，预算见底时它**压根不被调用**，
+  //    hook 改打 `⏱ 死闸检测 **没跑**：宿主预算只剩 X ms…` —— **那句话里也有「死闸检测」
+  //    这四个字** ⇒ 旧断言 `/死闸检测/` 在「调用点这次根本没被跑到」时**照常 PASS**，
+  //    而它的名字说的正是相反的事。「不敏感」是真的，但它不敏感的方式是**恒真**。
+  //    ⇒ 判据换成**行首标记**（ⓘ / ⚠ / ✗ 三者之一，那六条返回路径全都以它们之一开头，
+  //      而 `⏱` 不在其中），并另立一条把「被预算跳过」这一态单独说出来。
+  //    **预算跳过在默认层走 defer 不走红**：它与被测对象无关，判红只会训练人无视这道闸；
+  //    但 `--env` 里必须是红 —— 那一层的契约是「零 defer 才拿得到 exit 0」，条件性 defer
+  //    会让 run-tests 的分层自检报 exit 4（`declared && ENV_TIER && observed > 0`）。
   {
     const r = runHook(REPO);
-    check("真仓 SessionStart 注入里出现死闸检测那一行（调用点可达）", /死闸检测/.test(r.ctx),
-      "ctx=" + r.ctx.slice(0, 400) + " [stderr]" + r.err.slice(0, 200));
+    const budgetSkipped = /⏱ 死闸检测 \*\*没跑\*\*/.test(r.ctx);
+    const SELFCHECK_HINT = "hook 的墙钟预算被吃光了，成因与被测对象无关（issue #160）。"
+      + "自查：① 看注入里那行 `ⓘ hook 墙钟预算：本次已花 … / 宿主给 …`"
+      + " ② 收干净 git 状态（未提交 / 领先落后 origin 会让同步漂移多起几次 git 子进程）"
+      + " ③ 别和别的官同时跑测试 ④ 手跑一次：node ccswitch/scripts/check-dead-gates.mjs";
+    if (budgetSkipped && !ENV_TIER) {
+      deferSection("⑫① 可达性（本次 hook 因墙钟预算跳过了死闸检测这一项，可达性无从判定）",
+        SELFCHECK_HINT);
+    } else {
+      check("真仓 SessionStart 注入里出现死闸检测那一行（调用点可达；「⏱ 没跑」不算跑到）",
+        /(?:ⓘ|⚠|✗) 死闸检测/.test(r.ctx) && !budgetSkipped,
+        (budgetSkipped ? "**被预算跳过** —— " + SELFCHECK_HINT + "\n" : "")
+        + "ctx=" + r.ctx.slice(0, 400) + " [stderr]" + r.err.slice(0, 200));
+    }
     if (!ENV_TIER) {
       deferSection("⑫① 真仓当下是绿态（读的是真实 live settings + 真 cc-switch DB 的当下内容）", DEFER_WHY);
     } else {
