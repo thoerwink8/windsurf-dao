@@ -232,6 +232,39 @@ console.log("\n=== fail-open · 三条失败路径全部倒向「放行」===");
     "out=" + r.out.slice(0, 160) + " fired=" + JSON.stringify(firedLines(tag)));
 }
 {
+  // ── 🔴 已知边界（**不是负控**，是本批未修的一格；issue #190 第 2 条的机制根因）──────
+  // 标记的**父路径**被占成普通文件（正是对抗官弄坏仓根 `_tmp` 的那个形态）时：
+  //   本机实测（win32 / node v24.13.1）`readFileSync("<普通文件>/child")` 抛的是 **ENOENT**
+  //   —— 不是 ENOTDIR。于是 `readMarker()` 走 `"none"` 那一支 ⇒ **闸门照常 block**。
+  //   这就是对抗官那句「四条通道全哑、闸门照常拦探针」里**后半句**的机制来源：
+  //   不是判据写错，是「父目录坏了」在 errno 上与「标记还没写过」不可区分。
+  // **本批刻意不修**，两条理由照直写：
+  //   ① 修法要改「什么时候拦下用户消息」这条**用户可见判定**（block 之前先探一次父目录健康度，
+  //      不健康即按 bad 放行）—— 那是判断档，该由用户/帅拍，不该由实现批顺手改；
+  //   ② 它不在 #190 第 2 条给的两个修法方向内（出 `_tmp` 域的通道 / selfcheck 可写性探测），
+  //      本批把那两条做完了，这一格另立跟进单。
+  // 钉住当前行为是为了让「哪天有人改了它」这件事被看见 —— 也给那张跟进单一个触发器
+  // （同 `[#官通-检测器非兜底]`：别把「有了镜像与探测」读成「这一格也修好了」）。
+  const tag = "marker-parent-is-file";
+  const blocker = path.join(BASE, tag, "occupied");
+  fs.mkdirSync(path.dirname(blocker), { recursive: true });
+  fs.writeFileSync(blocker, "我是普通文件，不是目录", "utf8");
+  const env = Object.assign({}, envFor(tag), {
+    DAO_RATE_LIMIT_MARKER: path.join(blocker, "rate-limit-interrupt.json"),
+  });
+  const rp = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify({ prompt: "[dao-probe] 查中断", session_id: "sid-" + TAG, transcript_path: "C:/fake/t.jsonl", cwd: REPO }),
+    encoding: "utf8", env,
+  });
+  let j = null; try { j = JSON.parse(rp.stdout || "{}"); } catch (_) {}
+  check("已知边界：标记父路径被占成普通文件 ⇒ errno 是 ENOENT ⇒ 判 none ⇒ **仍然 block**（本批未修，见上注释）",
+    rp.status === 0 && j && j.decision === "block",
+    "code=" + rp.status + " out=" + String(rp.stdout || "").slice(0, 200));
+  check("已知边界·前提：这条路径的 errno 确实是 ENOENT 而不是 ENOTDIR（换平台/换 node 版本这一格可能翻面）",
+    (() => { try { fs.readFileSync(path.join(blocker, "x"), "utf8"); return false; } catch (e) { return e.code === "ENOENT"; } })(),
+    "实测 errno 与本节前提不符 ⇒ 上面那条断言的解释已过期，重读它");
+}
+{
   const tag = "badstdin";
   const r = run(REAL_HOOK, null, tag, "这不是 JSON{{{");
   check("坏 stdin → exit 0 且零输出（读不出 prompt 就判不了，放行）",
