@@ -156,6 +156,7 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Codex node_r
 | 用户名 | `Administrator` | 可能不同 | `${HOME}` 占位，恢复时还原 |
 | 供应商配置 | cc-switch DB | 需重配 | 新机器在 cc-switch 中重新配置供应商 |
 | Codex 登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
+| hook 本机状态目录 | `~/.claude/dao-state/`（当前只有 `rate-limit-sentinel/fired.log`） | **不随换机走** | 无需处理：目录由 hook 首次触发时自建、不进 git、不由 config-sync 恢复。**代价照直写**：它攒的是「这台机器被限流过几次」的实战样本（issue #190 的观测面），换机即从零重新攒 —— 那是有意的（样本本就是按机器算的），不是漏配 |
 
 ## 4. 路径占位机制（为什么换机不怕路径变）
 
