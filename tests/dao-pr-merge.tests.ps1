@@ -65,6 +65,9 @@ $utf8Bom   = New-Object System.Text.UTF8Encoding($true)
 
 if (-not (Test-Path $targetPs1)) { Write-Host "被测脚本不存在：$targetPs1"; exit 1 }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Host '找不到 git —— 本回归网用真 git 跑，不桩它'; exit 1 }
+# issue #121 场景 12/13 需要真 node（被测脚本第 3.5 步调它）；找不到就跳过那两个场景而不是
+# 让整套失败 —— 缺 node 是环境问题，不是被测脚本的缺陷。
+$nodeAvailable = [bool](Get-Command node -ErrorAction SilentlyContinue)
 
 if (Test-Path $workRoot) { Remove-Item -Path $workRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
@@ -238,6 +241,42 @@ function New-Fixture {
     return [PSCustomObject]@{ Dir = $dir; Origin = $origin; Work = $work; Branch = 'feature/x' }
 }
 
+# issue #121 · 场景 12/13 专用夹具：main 分支自带一份假 `ccswitch/scripts/gen-clause-index.mjs`，
+# 让被测脚本的第 3.5 步探测到「本仓有 canonical 生成器」并真的调用它（走真 node 子进程，
+# 不桩 node —— 桩掉它就把「PS 调 node 子进程、读它的退出码」这件事本身也一并桩掉了，
+# 而那正是要验的）。放在 main 分支（早于 feature/x 分支出）保证合并后的树上一定有它。
+function New-ClauseGenFixture {
+    param([string]$Case, [string]$GenBody)
+    $dir    = Join-Path $workRoot $Case
+    $origin = Join-Path $dir 'origin.git'
+    $work   = Join-Path $dir 'work'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+    Git0 @('init', '--quiet', '--bare', $origin) | Out-Null
+    Git0 @('init', '--quiet', $work) | Out-Null
+    Git0 @('-C', $work, 'config', 'user.email', 'dao@example.invalid') | Out-Null
+    Git0 @('-C', $work, 'config', 'user.name', 'dao-test') | Out-Null
+    Git0 @('-C', $work, 'config', 'commit.gpgsign', 'false') | Out-Null
+
+    [IO.File]::WriteAllText((Join-Path $work 'README.md'), "seed`n", $utf8NoBom)
+    $genDir = Join-Path $work 'ccswitch/scripts'
+    New-Item -ItemType Directory -Force -Path $genDir | Out-Null
+    [IO.File]::WriteAllText((Join-Path $genDir 'gen-clause-index.mjs'), $GenBody, $utf8NoBom)
+    Git0 @('-C', $work, 'add', '-A') | Out-Null
+    Git0 @('-C', $work, 'commit', '--quiet', '-m', 'seed with generator') | Out-Null
+    Git0 @('-C', $work, 'branch', '-M', 'main') | Out-Null
+    Git0 @('-C', $work, 'remote', 'add', 'origin', $origin) | Out-Null
+    Git0 @('-C', $work, 'push', '--quiet', '-u', 'origin', 'main') | Out-Null
+
+    Git0 @('-C', $work, 'checkout', '--quiet', '-b', 'feature/x') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $work 'feature.txt'), "feature`n", $utf8NoBom)
+    Git0 @('-C', $work, 'add', 'feature.txt') | Out-Null
+    Git0 @('-C', $work, 'commit', '--quiet', '-m', 'feature work') | Out-Null
+    Git0 @('-C', $work, 'push', '--quiet', '-u', 'origin', 'feature/x') | Out-Null
+
+    return [PSCustomObject]@{ Dir = $dir; Origin = $origin; Work = $work; Branch = 'feature/x' }
+}
+
 function New-StubConfig {
     param(
         [PSCustomObject]$Fixture,
@@ -325,6 +364,8 @@ Assert-True '1e 远程分支真的没了（直接问裸仓，不信脚本的自�
 # 之后它才第一次真的执行。与场景 8c 是一对：那边是链接工作树，必须**不**执行。
 Assert-True '1f 主工作树里跑 ⇒ 本地分支真的删掉了（原实现这一段是死码，从来没跑过）' `
     (($r1.Text -match '已删本地分支 feature/x') -and (-not ($r1.Text -match '本地那半跳过'))) ''
+Assert-True '1i（issue #121）本仓没有 gen-clause-index.mjs ⇒ 第 3.5 步自动跳过、不影响全链 exit 0' `
+    ($r1.Text -match '没有这份派生物，跳过') ''
 
 # 根治那一半的断言：两个动作不再共用一个退出码 ⇒ 第 5 步不许再传 --delete-branch。
 # 这一条打在**真实发出的命令行**上（gh 桩的调用日志），不是打在源码文本上。
@@ -535,6 +576,42 @@ $errors11 = $null
 $null = [System.Management.Automation.Language.Parser]::ParseFile($targetPs1, [ref]$tokens11, [ref]$errors11)
 Assert-True '11a dao-pr-merge.ps1 能被 PowerShell 解析器解析（零语法错误）' `
     (@($errors11).Count -eq 0) ("ParseErrors={0}" -f @($errors11).Count)
+
+# ============================================================================
+# 场景 12/13（issue #121）：本仓有 canonical 生成器时，第 3.5 步真的调用它
+# ============================================================================
+if (-not $nodeAvailable) {
+    Write-Host '场景 12/13：跳过（找不到 node —— 环境问题，不是被测脚本的缺陷）'
+} else {
+    Write-Host '场景 12：generator --check 干净 ⇒ 第 3.5 步通过、全链照常 exit 0'
+
+    $genOk = 'process.stdout.write("CLAUSE_INDEX_SUMMARY exit=0 sources=1 clauses=1 observation=0 drift=none wrote=0 cause=none\n"); process.exit(0);'
+    $f12 = New-ClauseGenFixture -Case 'clause-gen-ok' -GenBody $genOk
+    $r12 = Invoke-Target -Fixture $f12 -Cfg (New-StubConfig -Fixture $f12)
+
+    Assert-True '12a 全链仍然 exit 0（generator --check 干净不影响其余步骤）' `
+        ($r12.ExitCode -eq 0) ("exit={0}" -f $r12.ExitCode)
+    Assert-True '12b 第 3.5 步打出「仍与源一致」' `
+        ($r12.Text -match 'clause-index 仍与源一致') ''
+    Assert-True '12c 走到了第 6 步（第 3.5 步没有挡住后续流程）' (Test-ReachedStep6 $r12.Text) ''
+
+    Write-Host '场景 13：generator --check 报过期 ⇒ 第 3.5 步 Fail，exit 2，不合 PR（issue #121 方向 1）'
+
+    $genDrift = 'process.stdout.write("CLAUSE_INDEX_SUMMARY exit=1 sources=1 clauses=1 observation=0 drift=content wrote=0 cause=self-inconsistent\n"); process.exit(1);'
+    $f13 = New-ClauseGenFixture -Case 'clause-gen-drift' -GenBody $genDrift
+    $r13 = Invoke-Target -Fixture $f13 -Cfg (New-StubConfig -Fixture $f13)
+
+    Assert-True '13a exit 2（跑到一半失败这一档，与 fetch 失败/merge 冲突同码）' `
+        ($r13.ExitCode -eq 2) ("exit={0}" -f $r13.ExitCode)
+    Assert-True '13b 报文点名 issue #121 与「合并后不对」这个已实证的形态' `
+        ($r13.Text -match 'clause-index 在合并后的树上过期') ''
+    Assert-True '13c 报文直接给出修法命令（不是让读者自己猜）' `
+        ($r13.Text -match 'gen-clause-index\.mjs` 重新生成') ''
+    Assert-True '13d 停在第 4 步之前：**不**发出任何 gh pr merge（分支态的过期不许被合进去）' `
+        (($r13.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r13.Text))) ''
+    Assert-True '13e 远程分支原封不动（没合的东西不许动分支）' `
+        (Test-RemoteBranch -OriginDir $f13.Origin -Branch $f13.Branch) ''
+}
 
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''

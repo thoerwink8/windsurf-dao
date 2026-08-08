@@ -21,6 +21,19 @@
                                           ⇒ 两边各自都没越线、合起来越线。`gh pr view --json
                                           mergeable` 回答的是「两份文本能不能自动合到一起」，
                                           不是「合到一起之后还成不成立」。
+      3.5) 派生物核对（若本仓有 canonical 生成器，issue #121）—— 上一步治的是**阈值型**护栏，
+                                          这一步治的是**派生物型**：`ccswitch/clause-index.json`
+                                          两侧各自生成都对、合并后仍可能不对（已实证 2 次，其中
+                                          第 2 次没有任何一侧做错事，纯粹是合并把两份各自正确的
+                                          派生物拼成了一份不正确的）。只对 windsurf-dao 自身生效
+                                          （探测 `ccswitch/scripts/gen-clause-index.mjs` 在
+                                          -RepoPath 下存在与否；别的仓没有这份派生物，自动跳过，
+                                          不报错）。**不受 -SkipVerify 影响**——它是幂等只读检查、
+                                          比第 4 步的全套验证快得多，issue #121 的第 3 点要治的
+                                          正是「验证被跳过时这个过期会直接进主干，主干上没有任何
+                                          东西再检它」。**刻意不做**：自动重生成后提交/推送——
+                                          issue #121 原文点名这是「行为扩张，要想清楚」，本步只
+                                          fail-closed 报出处方，交给人核对后自己提交。
       4) 重跑验证                       —— 必须在**合并后的树**上跑。跨项目不可知，故命令由
                                           -VerifyCommand 传入；不传就必须显式 -SkipVerify，
                                           且那时退出码是 2 不是 0（见 .NOTES 退出码契约）。
@@ -149,7 +162,7 @@
       0  全链完成（DryRun 正常走完也是 0）
       1  前置条件不成立（不是 git 仓 / git 或 gh 缺失 / PR 读不到）——一步都没做
       2  跑到一半失败，或**有必经步骤被显式跳过**（fetch 失败 / merge 冲突 / 验证红 /
-         PR 实查为未合并 / PR 状态实查不到 / -SkipVerify）。
+         PR 实查为未合并 / PR 状态实查不到 / -SkipVerify / clause-index 派生物过期）。
          **判「通过」一律写 `-eq 0`，别写 `-le 2`**——那个区间把 1 也放进来了。
       3  参数非法——一步都没做
       4  PR 合了，但**清理没干净**（远程分支仍在，删了也没删掉）。刻意与 0 分开：
@@ -158,6 +171,11 @@
     ⚠ **2026-08-04（issue #114）只改了「哪些情形落进 2」，五态的语义一个字没动**：
     「gh pr merge 退出非 0」此前直接落 2，现在它**不再是判据** —— 落不落 2 由实查到的
     PR 状态决定。新增落进 2 的只有一档：状态实查不到（见 .DESCRIPTION 边界 ③）。
+
+    ⚠ **2026-08-08（issue #121）第 3.5 步同样落进 2**：clause-index 在合并后的树上过期
+    （仅当 -RepoPath 下存在 `ccswitch/scripts/gen-clause-index.mjs` 时才会触发这一档，
+    别的仓恒不触发）。刻意不给它单独的退出码——它与 fetch 失败/merge 冲突/验证红同属
+    「跑到一半失败」这一档，机器可读通道不该为「为什么失败」再切分出新态。
 
     PowerShell 5.1 兼容：不用 && / || / 三元 / ?? / ?.；成败一律看 $LASTEXITCODE 不看输出文案；
     不用 2>&1（会把 git/gh 的正常 stderr 包成 NativeCommandError）。
@@ -350,6 +368,35 @@ if ($DryRun) {
         Fail "merge 冲突或失败（exit $($m.Code)）——人来解，解完重跑本脚本" 2
     }
     Write-Ok "已合入 origin/$MainBranch"
+}
+
+# ── 3.5 派生物核对（若本仓有 canonical 生成器，issue #121）───────────────────
+# 只对 windsurf-dao 自身生效；别的仓没有 ccswitch/scripts/gen-clause-index.mjs，自动跳过。
+# **不受 -SkipVerify 影响**——这是幂等只读检查，比第 4 步的全套验证快得多，治的正是
+# issue #121 第 3 点：「验证被跳过时这个过期会直接进主干，主干上没人再检」。
+Write-Step '3.5 派生物核对（若本仓有 canonical 生成器；不受 -SkipVerify 影响，issue #121）'
+
+$clauseIndexGen = Join-Path $RepoPath 'ccswitch/scripts/gen-clause-index.mjs'
+if (-not (Test-Path -LiteralPath $clauseIndexGen)) {
+    Write-Skip 'ccswitch/scripts/gen-clause-index.mjs 不存在于本仓 —— 没有这份派生物，跳过（本步只对 windsurf-dao 自身生效）'
+} elseif ($DryRun) {
+    Write-Plan "node ccswitch/scripts/gen-clause-index.mjs --check   （两侧各自都对、合并后不对是已实证的形态——issue #121；本步不受 -SkipVerify 影响）"
+} elseif (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Note '找不到 node —— 本步无法判定，不当成"已核对过"（不是通过，是没查）'
+} else {
+    Push-Location $RepoPath
+    try {
+        $global:LASTEXITCODE = 0
+        $ciOut = & node 'ccswitch/scripts/gen-clause-index.mjs' '--check'
+        $ciCode = $LASTEXITCODE
+    } finally { Pop-Location }
+    if ($ciCode -ne 0) {
+        Write-Info ($ciOut -join "`n")
+        Fail ("clause-index 在合并后的树上过期（exit $ciCode）—— 两侧各自生成都对、合并后仍可能不对，是已实证的形态（issue #121，2 次实例，其中一次没有任何一侧做错事）。" + [Environment]::NewLine +
+              "         修法：``node ccswitch/scripts/gen-clause-index.mjs`` 重新生成、``git add ccswitch/clause-index.json`` 后提交，再重跑本脚本。" + [Environment]::NewLine +
+              "         本步刻意不自动提交（issue #121 原文：『合并脚本产生提交』是行为扩张，要想清楚）——交给人核对后自己提交。") 2
+    }
+    Write-Ok "在合并后的树上重跑 ``--check``：clause-index 仍与源一致"
 }
 
 # ── 4. 在合并后的树上重跑验证 ────────────────────────────────────────────────
