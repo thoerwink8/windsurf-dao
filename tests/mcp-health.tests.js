@@ -230,6 +230,18 @@ async function main() {
       JSON.stringify(universe));
   }
   {
+    // F1 的镜像形态（2026-08-09 二轮对抗复核 F1-b 抓到的边界缺口，PR #207 评论
+    // #issuecomment-5227085300）：DB 登记了、但这次 claude mcp list 没报出来（该
+    // server 可能临时消失/输出被截断/宿主这次没打印它）——探测本身是 state==='ok'，
+    // 只是这一个名字不在 probe.servers 里。它必须仍然留在并集里，不然会从体检整条
+    // 消失，连 evaluateMcpHealth 那句"没找到这一行（判不出，不等于健康）"都不会出现。
+    // F1 治的是"实报有、DB 无 ⇒ 漏"，这一格是"DB 有、实报无 ⇒ 漏"，同一条判据的另一半。
+    const probe = { state: "ok", servers: [{ name: "a", category: "ok" }] };  // 'b' 没被探测到
+    const universe = computeMcpUniverse(["a", "b"], probe);
+    check("DB 登记但这次探测没报出来的 server（'b'）仍留在并集里，不因为探测 state==='ok' 就被丢弃",
+      universe.includes("b"), JSON.stringify(universe));
+  }
+  {
     // 探测失败时不能凭空"看见"更多名字——宇宙退化为纯 DB 期望集，不多不少
     const probe = { state: "timeout", timeoutMs: 60000, why: "" };
     const universe = computeMcpUniverse(["a", "b"], probe);
@@ -373,13 +385,19 @@ async function main() {
     check("doctor.mjs 里有对应的 section() 标题", /MCP 健康态/.test(doctorSrc), "");
     // 🔴 2026-08-08 对抗复核 M8：旧断言 `/checkMcpHealth\(\)/.test(doctorSrc)` 连
     // `// checkMcpHealth();`（整行注释掉）都算匹配——把调用注释掉，这条断言照样 PASS。
-    // 这里先做一个便宜的加固（排除整行是注释的形态），**但它不是本轮真正的修法**——
-    // 真正堵住 M8 的是 ⑦ 里那条真跑 doctor.mjs 断言输出的行为级检查：静态文本判断不了
-    // "调用是否真的执行了"，只有跑一遍才知道。这一条留着当默认层的快速信号，行为级
-    // 验证不必每次都等 6-15s 的真机探测。
-    const callLines = doctorSrc.split(/\r?\n/).filter((l) => /checkMcpHealth\(\)/.test(l));
+    // ~~这里先做一个便宜的加固（排除整行是注释的形态）~~ **订正（2026-08-09，二轮对抗
+    // 复核证伪：那个"加固"结构上永远红不了）**——`function checkMcpHealth() {` 这一行
+    // 定义本身也匹配 `/checkMcpHealth\(\)/` 且不是注释，把调用那一行注释掉之后
+    // `callLines` 里仍留着定义行、`liveCall` 恒为 `true`，这条断言判别力恒为 0，而
+    // 断言名却写着"存在非注释形态的调用"——盘上文字撒了谎。现在把 `function` 定义行也
+    // 从匹配里排除，让它对"调用行"单独判别：这仍然只是默认层的快速信号，真正堵住 M8
+    // 的是 ⑦ 里那条真跑 doctor.mjs 断言输出的行为级检查——静态文本判断不了"调用是否真的
+    // 执行了"，只有跑一遍才知道；但现在这条至少对它自己声称的那件事有判别力。
+    const callLines = doctorSrc.split(/\r?\n/)
+      .filter((l) => /checkMcpHealth\(\)/.test(l) && !/^\s*function\s/.test(l));
     const liveCall = callLines.some((l) => !/^\s*\/\//.test(l));
-    check("doctor.mjs 里存在非注释形态的 checkMcpHealth() 调用（快速信号，非最终判据——见⑦）",
+    check("doctor.mjs 里存在非注释、非 function 定义行形态的 checkMcpHealth() 调用" +
+      "（快速信号，非最终判据——见⑦）",
       liveCall, JSON.stringify(callLines));
   }
   {
@@ -435,6 +453,56 @@ async function main() {
       const hasKnownDeadName = /opendesign|fetch/.test(body);
       console.log("        真机 body 里出现 opendesign/fetch 字样：" + hasKnownDeadName +
         "（如实记录，不同机器/不同时刻这两个 server 的健康态可能变化，不强断言）");
+
+      // ── F1 生产接线行为级验证（2026-08-09 二轮对抗复核，PR #207 评论
+      // #issuecomment-5227085300：M-F1-wire-bypass / M-F1-wire-suffix 两组 mutation 各 0 红）──
+      // 上面那条只问"body 里有没有判据行"，`universe` 被静默换回纯 `dbExpected`（绕过
+      // computeMcpUniverse）时那条依然为真——DB 外、探测实见的 server（本机现成有
+      // opendesign/penpot）会从 body 里整条消失，那条断言看不出区别。这里用同一次真机
+      // 探测独立求出的 `real.servers`（探测层，不经过 doctor.mjs 内部任何计算）与
+      // doctor.mjs 子进程真跑出的 `body`（应用层）交叉核对两件事：
+      //   ① 名字集合：real 探测到的每一个名字都必须出现在 body 里——挡 bypass（DB 外的
+      //      名字被换回纯 dbExpected 时会整条消失，这条立刻抓到，本机对应
+      //      M-F1-wire-bypass：0 红 → 现在应变红）；
+      //   ② 标注文案：real 里有、cc-switch DB 里没有的那些名字（本机现成有
+      //      opendesign/penpot），它们在 body 里那一行必须带着"不在 cc-switch DB 的
+      //      enabled_claude 名单里"这句标注——挡 suffix-strip（universe 算对了但报文
+      //      拼接时把标注文字删掉，名字还在、①测不出来，本机对应 M-F1-wire-suffix：
+      //      0 红 → 现在应变红）。
+      if (real.state === "ok" && real.servers.length > 0) {
+        const realNames = real.servers.map((s) => s.name);
+        const missingNames = realNames.filter((n) => !body.includes(n));
+        check("doctor.mjs 真跑：body 覆盖了独立探测到的全部 server 名字（堵 F1 生产接线 bypass——" +
+          "universe 若被换回纯 DB 期望集，DB 外的名字会整条从 body 里消失）",
+          missingNames.length === 0, JSON.stringify({ missingNames, realNames }));
+
+        let dbExpected = [];
+        try {
+          const dbMod = await import("../config-sync/lib/sqlite.mjs");
+          dbExpected = dbMod.selectRows("mcp_servers", "WHERE enabled_claude = 1 ORDER BY name").map((r) => r.name);
+        } catch (e) {
+          console.log("        DB 查询失败（" + (e && e.message) + "），跳过标注文案那一半断言，如实记录。");
+        }
+        const dbSet = new Set(dbExpected);
+        const extraNames = realNames.filter((n) => !dbSet.has(n));
+        if (extraNames.length > 0) {
+          const ANNOTATION = "不在 cc-switch DB 的 enabled_claude 名单里";
+          const missingAnnotation = extraNames.filter((n) => {
+            const lineStart = body.indexOf(n + "：");
+            if (lineStart < 0) return true; // 名字都不在，上一条断言已经抓到，这里同样算漏
+            const lineEnd = body.indexOf("\n", lineStart);
+            const line = lineEnd >= 0 ? body.slice(lineStart, lineEnd) : body.slice(lineStart);
+            return !line.includes(ANNOTATION);
+          });
+          check("doctor.mjs 真跑：DB 外、探测实见的 server（本机：" + extraNames.join(",") +
+            "）那一行带着「不在 DB 名单里」标注——堵 F1 生产接线 suffix-strip（标注文字被删掉时" +
+            "名字还在、①单独测不出来，这条单独抓到）",
+            missingAnnotation.length === 0, JSON.stringify({ missingAnnotation, extraNames }));
+        } else {
+          console.log("        本机此刻 DB 与探测实见完全重合，没有『DB 外』样本，② 这一半断言本次零覆盖" +
+            "（如实记录，不强断言——同 dao-officer-clauses.md「没样本」与「跑了全过」需分开的读法）。");
+        }
+      }
     }
   }
 }
