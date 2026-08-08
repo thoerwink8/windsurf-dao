@@ -32,12 +32,19 @@
 //        · 消费处：`let q = D.suppressOriginalPrompt ? U : \`${U}\n\nOriginal prompt: ${I}\`;`
 //      而 `decision` / `reason` 确在顶层（同一份 schema 的基对象里：
 //      `decision:Nr(["approve","block"]).optional(), reason:N().optional()`）。
+//      （⚠ 上面「输出 schema」那行引文是 exe 内两处 schema 片段的拼合、非单处原文——
+//      对抗官逐字核过两处判据一致，结论成立；引用时别当成单一偏移的原文去找。）
 //      ⇒ 本 hook 按 exe 写：两个字段分处两层。**盘上文件与文档冲突时以实测为准**，
 //      这一处的差异已写进交付，别按文档那张表回改。
-//   ✅ **多 hook 同事件并存时 block 照样生效**（2026-08-08 前提批真链路实测，证据
-//      `_tmp/premise-184/upsubmit.log`）：本仓 UserPromptSubmit 上已有 dao-cn-title 与
-//      dao-rhythm 两条，实测 block 真拦（探针轮会话侧零出现）、**block 之后 cron 照常调度**
-//      （文档零记载的那一格）、非探针 prompt 零误伤。
+//   ✅ **多 hook 同事件并存时 block 照样生效**（2026-08-08 前提批真链路实测；本仓
+//      UserPromptSubmit 上已有 dao-cn-title 与 dao-rhythm 两条）。三条结论的证据强度
+//      不同，拆开标注（对抗官核过；log 已归档 issue #184 评论——`_tmp` 会被清）：
+//      · **block 之后 cron 照常调度** —— `_tmp/premise-184/upsubmit.log` 直接支撑
+//        （两轮探针相隔 60s 都留痕）；
+//      · block 真拦（探针轮会话侧零出现）—— 主会话当事观察（UI 现场 blocked 提示 ×2 +
+//        AI 侧零收到），transcript 扫描输出未落盘，强度低于 log 一档；
+//      · 非探针 prompt 零误伤 —— 同 log 第 3 行（用户消息走完 hook 链且正常进会话）。
+//      实验体 premise-hook.js 已按 spec 用毕即删，该实测无法原样重跑（宿主协议不变则结论不失效）。
 //   ✅ 本事件的宿主超时上限被降到 **30 秒**（`hooks.md:415`），远高于本 hook 的开销
 //      （非探针轮只读一次 stdin + 跑一条锚定正则，**零磁盘 I/O**）。
 //
@@ -60,7 +67,10 @@
 //   · 标记文件读不动 / 不是合法 JSON ⇒ **放行**（宁可多跑一轮探针，不可能因为一个坏文件
 //     把探针链永久拦死 —— 那会让限流恢复彻底失效且无人知晓）
 //   · 本 hook 自己崩了 ⇒ 最外层 catch 里 exit 0、零输出 ⇒ 宿主按「hook 没意见」放行
-// ⇒ **本 hook 的所有失效态都退化成「探针照跑」，也就是退化成没有本 hook 之前的样子。**
+// ⇒ **本 hook 自身的失效态都退化成「探针照跑」，也就是退化成没有本 hook 之前的样子。**
+//    ⚠ 这句只在单 hook 层成立（对抗官 2026-08-08 证伪了原「所有失效态」措辞）：联合机制层
+//    是 fail-closed —— 哨兵不响（其余 8 种 error / 哨兵自身失效）⇒ 无标记 ⇒ 本 hook 把每轮
+//    探针拦死，症状与「一直没限流」逐字节相同。deadman 缺口挂 issue #190 第 1 条。
 //
 // ── 全域分布（建护栏前先摸分布）──────────────────────────────────────────────
 // 本 hook 上线前，本仓 UserPromptSubmit 上有 2 条（`dao-cn-title.js` timeout 12 /
