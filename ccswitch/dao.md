@@ -88,7 +88,7 @@ skill 不能自动加载（上表是人类索引不是加载清单）：① 内�
 
 - 改或新建 `*.ps1` 前 = Read `rules/dao-powershell.md`（`Get-Content` 读无 BOM 中文即毁内容 / `$LASTEXITCODE` 判成败 / 禁 heredoc / 三条通用实操）。〔域〕 [#Shell-PS四坑]
 - 查库 / API / CLI 文档前 = Read `rules/dao-docs-lookup.md`：库文档走 context7、网页走 WebFetch——**失败面是那一个域名不是网络受限**。 [#Shell-查文档]
-- 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖；**看着像源的那层可能不在下发路径上** ⇒ 认源是追下发链。 [#Shell-源与投影]
+- 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖；**看着像源的那层可能不在下发路径上** ⇒ 认源是追下发链。**动过任一层（live / DB providers / git 快照）⇒ 同一动作内跑漂移检测收尾并贴真退出码**（dao 侧＝`settings-drift.js` 裸跑 + `--providers` 两面）——SessionStart 提醒是下窗才响的兜底，不算收尾。 [#Shell-源与投影]
 - PR 合并期的机械链走 `scripts/dao-pr-merge.ps1`（先 `-DryRun`）；裸手跑 `gh pr merge` 只有 nudge，**那是提醒不是守卫**。 [#Shell-合并链]
   - 判改动进没进主干只有 `git patch-id --stable` 答得对：`--head` 空只说明这**分支名**没开过 PR，`--is-ancestor` 对等价提交失明。 [#Shell-patch-id]
 - PR-first（默认非禁令）：代码类走分支 → PR → `gh pr merge --delete-branch`，文档微改可直推；给的是审查锚点与回滚点。
