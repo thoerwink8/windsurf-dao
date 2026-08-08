@@ -49,7 +49,7 @@ dao.bat
 node config-sync\lib\doctor.mjs
 ```
 
-**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl 等）属正常机器差异，非问题。
+**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl 等）属正常机器差异，非问题。**「MCP 健康态」一节例外**（issue #92 新增，2026-08-08）：它报的是 `claude mcp list` 实测能不能连上，与「本机是否复刻成功」无关——新机器缺某个 MCP 依赖（如 `uvx`/`npx` 拉不到包、外部服务本身挂了）会在这里显式报 ✗，这是它的职责（不让"注册了但连不上"再次悄悄溜走），不代表换机步骤有问题；照这条 ✗ 的原因去修对应 server 或换机器网络，不要去重跑 `dao.bat`。
 
 **自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao.bat` 选 3（部署）或 `dao.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号。
 
