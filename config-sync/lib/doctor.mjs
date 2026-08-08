@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
-import { probeMcpHealth, evaluateMcpHealth } from './mcp-health.mjs';
+import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 
 const REQUIRED_CLAUDE_ENV = {
   CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
@@ -349,18 +349,37 @@ function reportMcpDiff(label, target, expected, actual) {
 // 不复述判据——那份文件头注是唯一真相源。
 // 成本照直写：`claude mcp list` 本机实测 6-15 秒（issue 原文记录过一次 30s+），
 // 这是它只挂在这里（显式体检）、不放进 SessionStart 同步路径的唯一理由。
+//
+// 🔴 **2026-08-08 对抗复核实证：期望名单的宇宙曾经取错了**——旧版只查 cc-switch DB
+// 的 `enabled_claude=1`，而 `claude mcp list` 实际会报出**所有**它认识的 server，
+// 两者不是一回事：本机当天 DB 只登记 5 个，`claude mcp list` 实报 7 个，多出的
+// `opendesign`/`penpot` 只注册在 Claude Code 自己那边（不在 cc-switch DB 里）。
+// `opendesign` 当天恰好是死连接，且正是 issue #92 表格点名的那三个死连接之一——
+// 旧版因为它不在 DB 期望集里而**静默跳过**，issue 的关闭条件在它自己点名的样本上
+// 反而不成立。上面两行之外那一节（`checkClientMcpSync`）其实已经算出了这个差集
+// （`extra=[opendesign,penpot]`），只是没被这一节用上。
+// 修法：期望集改成「DB 期望集 ∪ 探测实见」的并集——探测实见但不在 DB 里的 server
+// 照样按 dead/degraded/ok 判，只是报文里注明"不在 DB 名单里、来自实报"，让读者
+// 明白它为什么会出现在这份体检里。
 function checkMcpHealth() {
-  const expected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
-  if (!expected.length) {
-    warn('cc-switch db 里没有 enabled_claude=1 的 MCP server，跳过健康探测。');
+  const dbExpected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
+  const probe = probeMcpHealth({});
+  const universe = computeMcpUniverse(dbExpected, probe);
+  if (!universe.length) {
+    warn(probe.state === 'ok'
+      ? 'cc-switch db 里没有 enabled_claude=1 的 MCP server，claude mcp list 输出也没有任何 server，跳过健康探测。'
+      : `cc-switch db 里没有 enabled_claude=1 的 MCP server，且探测本身没有跑成（${probe.why || probe.state}），跳过健康探测。`);
     return;
   }
-  const probe = probeMcpHealth({});
-  const { lines } = evaluateMcpHealth(expected, probe);
+  const dbExpectedSet = new Set(dbExpected);
+  const { lines } = evaluateMcpHealth(universe, probe);
   for (const line of lines) {
-    if (line.level === 'pass') pass(line.message);
-    else if (line.level === 'fail') fail(line.message);
-    else warn(line.message);
+    const extraSuffix = dbExpectedSet.has(line.name) ? '' :
+      '（不在 cc-switch DB 的 enabled_claude 名单里，来自 claude mcp list 实报）';
+    const message = line.message + extraSuffix;
+    if (line.level === 'pass') pass(message);
+    else if (line.level === 'fail') fail(message);
+    else warn(message);
   }
 }
 
