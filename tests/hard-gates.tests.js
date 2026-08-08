@@ -1499,7 +1499,11 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       check("#133 计数·**长名 HOME 零子进程**（常见部署一次 I/O 都不落）",
         rLong.code === 2 && rLong.n === 0, `code=${rLong.code} spawns=${rLong.n}`);
       const rCand = spawns(ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`), {});
-      check("#133 计数·**候选侧**含 `~N` 的路径仍走进程内同步（零子进程）⇒ 改动面确实只有常量侧",
+      // 🔴 断言名 2026-08-08 收窄射程（PR #197 对抗官 F1 同病）：它量的是**子进程数**，
+      //   推得到「**子进程**只接在常量侧」，推**不到**「改动面只有常量侧」——
+      //   #134 改的恰恰就是候选侧（`g2ResolvePre` 拆分 / `g2IsLiveDir` 加参 / `g2WriteTargets` 调用点）。
+      check("#133 计数·**候选侧**含 `~N` 的路径仍走进程内同步（零子进程）⇒ **子进程只接在常量侧**" +
+            "（注意：这推不到「改动面只有常量侧」—— 候选侧由 #134 改，只是没引入子进程）",
         rCand.code === 2 && rCand.n === 0, `code=${rCand.code} spawns=${rCand.n}`);
       // 🔴 ㈠ 防复发：第二、三轮那两条绕过的前件
       const rDecoy = spawns(ps(DECOY), asShort);
@@ -1649,6 +1653,12 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       }
 
       // 负控（`#官实-误伤反例`）：快筛放宽只该让更多路径**走到精确比对**，不该让更多路径被拦。
+      // ⚠️ **负控的语料来源，照直标（`#官抗-语料非自证` 2026-08-07 补的那半）**：下面三条里
+      //   **只有第一条有真实形态背书**——项目级 `<proj>/.claude/settings.json` 是工具链日常在写的
+      //   （`update-config` 那条路），而且它正是 PR #145 第三轮 fail-closed **真误伤过的**那一格。
+      //   另两条（`.claude-backup` / `actualcfg`）**是本轮自造的诱饵** ⇒ 它们只证明「**我的诱饵**
+      //   不会被误伤」，证不了「真实的合法形态不中招」。原 PR body 只给**正控**标了来源，
+      //   负控这一半是被字面漏掉的（由 PR #197 对抗官 M-d 捞出）。
       const PROJ = path.join(SBX, "someproject", ".claude");
       fs.mkdirSync(PROJ, { recursive: true });
       for (const [nm, home, cmd] of [
@@ -1684,7 +1694,7 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         { env: { USERPROFILE: J.home } }).code;
       check("登记·junction 写成**长名**时路径里没有 `~N` ⇒ 候选侧压根不 realpath ⇒ 仍漏（当前 exit 0）。" +
             "第三轮 6a/6b 实测 master 与 PR #145 版都是 0 ⇒ 非退化。修它要让候选侧无条件 realpath，" +
-            "撞上头注 ⑮㈡ 那格无界 I/O ⇒ 同一个续单",
+            "撞上头注 ⑮㈡ 那格无界 I/O ⇒ **同一张单：issue #199**",
         longJunc === 0, `code=${longJunc}`);
     }
   }
