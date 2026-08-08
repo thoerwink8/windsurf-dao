@@ -411,7 +411,7 @@ console.log("\n──── ⑦ --list：只列不跑，且标注分层 ──�
 }
 
 // ══════════════════════════════════════════════════════════════
-console.log("\n──── ⑧ 真仓自跑：本仓当下确实有且只有 dead-gates 声明了环境敏感层 ────");
+console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环境敏感层 ────");
 // 合成夹具证不了「它在真实 tests/ 目录上跑得动」（本仓有过实证：47 条合成断言全绿、
 // 真实语料一份都没扫成）。这一条只做**静态**核对，不重跑整套 —— 重跑要两分半，
 // 而分层这件事的判据是静态可查的。
@@ -422,8 +422,21 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下确实有且只有 de
     const head = fs.readFileSync(path.join(REPO, "tests", f), "utf8").split(/\r?\n/).slice(0, 60).join("\n");
     return MARK_RE.test(head);
   });
-  check("真实 tests/ 里声明了环境敏感层的文件恰是 dead-gates（多了要问为什么，少了说明标记掉了）",
-    declared.length === 1 && declared[0] === "dead-gates.tests.js", JSON.stringify(declared));
+  // 🔴 **这是一条刻意手维护的枚举，与本仓「手维护的清单会过期」那条教训不矛盾**：
+  //   它的职责就是**过期时变红**（多一个要问为什么、少一个说明标记掉了），
+  //   即「给标记的增删造一个触发器」（dao-guard-writing `[#守-退役触发]` 同一路数）。
+  //   2026-08-08 · issue #160 它按设计响了一次：alwayson-budget 与 memory-truth-source
+  //   各摘出一节 hook 注入断言进 env 层，本行随之从「恰是 dead-gates 一套」扩到三套。
+  //   ⚠ **改这一行之前先答一句**：新加的那套，它 defer 掉的是不是真的「对别人拥有的机器级
+  //   可变状态做不变量断言」？不是的话，正路是修那几条断言，不是往这个集合里加名字。
+  const EXPECT_DECLARED = [
+    "alwayson-budget.tests.js",     // §⑩①b：hook 墙钟预算读自用户真实 settings.json 的注册值
+    "dead-gates.tests.js",          // ⑪ / ⑪.5 / ⑫①：真 live settings + 真 cc-switch DB
+    "memory-truth-source.tests.js", // 末节：同 alwayson-budget，且 memory 扫描排在全表最后一项
+  ];
+  check("真实 tests/ 里声明了环境敏感层的文件恰是那三套（多了要问为什么，少了说明标记掉了）",
+    JSON.stringify(declared) === JSON.stringify(EXPECT_DECLARED),
+    "实况=" + JSON.stringify(declared) + " 期望=" + JSON.stringify(EXPECT_DECLARED));
   check("本文件自己不在声明面里（否则说明标记字面量泄进了头部窗口）",
     !declared.includes("run-tests-tier.tests.js"), JSON.stringify(declared));
   // dead-gates 默认层真跑一次：它是本机制唯一的真实消费方
