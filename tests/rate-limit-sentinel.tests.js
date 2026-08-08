@@ -408,6 +408,125 @@ console.log("\n=== 外层 catch 不再是真空锚（#190 第 3 条）===");
   }
 }
 
+console.log("\n=== #201 笔1：mirrorRecord 的 catch(_){} 不再是真空锚（吞 vs 不吞外层兜可区分）===");
+{
+  // 对抗实测（issue #201）：把 `catch (_) { ... }` 改成 `catch (_) { throw _; }` 后，
+  // 既有 134 条断言零红——因为两条路径当时唯一被盯着的可观测量（exit 0、marker 照写、
+  // fired.log 照记）在两态下逐字节相同，没有一条断言盯着「异常有没有被吞」这件事本身。
+  // 这一节专门造这个判别力：让**只有镜像域**坏掉（主域健康），比对「吞」（现状）与
+  // 「不吞、走最外层 catch」（mutation）在 stderr / errors.log / stdout 三处的差异。
+  const tag = "mirroronly";
+  const mirrorBlocker = path.join(BASE, "mirroronly-blocker");
+  fs.writeFileSync(mirrorBlocker, "占住镜像域的父路径，只坏这一个域", "utf8");
+  const env = Object.assign({}, process.env, {
+    DAO_RATE_LIMIT_MARKER: path.join(BASE, tag, "rate-limit-interrupt.json"),
+    DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag, "state"),
+    DAO_RATE_LIMIT_MIRROR: path.join(mirrorBlocker, "sub", "fired.log"),
+  });
+  const payload = payloadOf({ last_assistant_message: "API Error: Rate limit reached · 约 1 小时后重置" });
+
+  // ── 现状（吞）：主域全须完好，errors.log 不该提「未捕获异常」，systemMessage 照打 ──
+  const r = spawnSync(process.execPath, [REAL_HOOK], { input: JSON.stringify(payload), encoding: "utf8", env });
+  check("前提：只有镜像域坏了（主域没受影响）—— mirror 目录确实写不进去",
+    !fs.existsSync(path.join(mirrorBlocker, "sub")), "sub 目录竟然被建出来了");
+  check("现状·吞：exit 0", r.status === 0, "code=" + r.status);
+  check("现状·吞：主域正常（marker 照写、fired.log 照记）",
+    fs.existsSync(markerPath(tag)) && firedLines(tag).length === 1,
+    "marker存在=" + fs.existsSync(markerPath(tag)) + " fired=" + JSON.stringify(firedLines(tag)));
+  check("现状·吞：stderr 不含「未捕获异常」（异常在 mirrorRecord 内部就被吞掉，没走到最外层 catch）",
+    !/未捕获异常/.test(r.stderr || ""), "err=" + r.stderr);
+  check("现状·吞：errors.log 不存在（镜像失败没有留痕——它压根没被 appendErrorLog 记过）",
+    !fs.existsSync(errorsPath(tag)), "errors.log 竟然存在");
+  check("现状·吞：stdout 仍打出本次判定的 systemMessage（main() 走完了全程，不是半路跳出）",
+    /dao-rate-limit-sentinel v1/.test(r.stdout || ""), "out=" + r.stdout);
+
+  // ── mutation：catch(_) { ... } 改成 catch(_) { throw _; } —— 让它不吞、走最外层 catch ──
+  const ANCHOR = "  } catch (_) { /* 镜像写不成不该拖垮主路径 —— `_tmp` 那侧照写 */ }";
+  const h = mutantHook("mirror-not-swallowed", ANCHOR, "  } catch (_) { throw _; }");
+  const tagM = "mirroronly-mut";
+  const envM = Object.assign({}, env, {
+    DAO_RATE_LIMIT_MARKER: path.join(BASE, tagM, "rate-limit-interrupt.json"),
+    DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tagM, "state"),
+  });
+  const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payload), encoding: "utf8", env: envM });
+  check("🔴 mutation·不吞：exit 仍是 0（最外层 catch 也 exit 0 —— 单看退出码分不出两态，这正是 134 条零红的成因）",
+    rm.status === 0, "code=" + rm.status);
+  check("🔴 mutation·不吞：stderr 这次真含「未捕获异常」（异常穿过 mirrorRecord、被最外层 catch 接住）",
+    /未捕获异常/.test(rm.stderr || ""), "err=" + rm.stderr);
+  check("🔴 mutation·不吞：errors.log 这次真有一条记录（最外层 catch 调了 appendErrorLog）",
+    fs.existsSync(errorsPath(tagM, h)) && /未捕获异常/.test(fs.readFileSync(errorsPath(tagM, h), "utf8")),
+    "errors.log 内容=" + (fs.existsSync(errorsPath(tagM, h)) ? fs.readFileSync(errorsPath(tagM, h), "utf8") : "(不存在)"));
+  check("🔴 mutation·不吞：stdout 这次没有 systemMessage（main() 在打印前就已经跳到最外层 catch）",
+    (rm.stdout || "") === "", "out=" + JSON.stringify(rm.stdout));
+  check("canary：变异体还活着（marker 与 fired.log 都在 mirrorRecord 之前写完，照样落盘）",
+    fs.existsSync(markerPath(tagM)) && firedLines(tagM, h).length === 1,
+    "marker存在=" + fs.existsSync(markerPath(tagM)) + " fired=" + JSON.stringify(firedLines(tagM, h)));
+}
+
+console.log("\n=== #201 笔2：镜像域结构性沙箱兜底（忘传 DAO_RATE_LIMIT_MIRROR 不再落生产路径）===");
+{
+  // 前情：镜像域此前只有一种隔离手段——每个测试消费方各自记得传 `DAO_RATE_LIMIT_MIRROR`。
+  // 第二个消费方忘传就会把合成样本静默写进 `~/.claude/dao-state/...` 那口「真实限流实战样本」
+  // 井里，且看不出是假的（对抗官在 PR #196 复核期间自己就当场踩过一次）。
+  // 修法：只要 `DAO_RATE_LIMIT_MARKER` 或 `DAO_RATE_LIMIT_STATE_SUBDIR` 被显式覆写
+  // （即调用方已经在把别的落盘面往沙箱里赶），哪怕漏传 MIRROR，镜像也该跟着落沙箱旁边，
+  // 而不是滑回生产默认值。
+  // **安全网**：即便这条判据本身有 bug 真的滑回了旧默认值，也不能让这次测试真的碰到
+  // 使用者本机的 `~/.claude/dao-state`——把 USERPROFILE/HOME 一并指进沙箱假 home，
+  // 让「旧默认值」在这次测试里指向一个无害的假路径，而不是真实用户目录。
+  const fakeHome = path.join(BASE, "fallback-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const legacyDefaultPath = path.join(fakeHome, ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+
+  function runWithoutMirrorEnv(hookPath, tag, extraEnv) {
+    const env = Object.assign({}, process.env, {
+      USERPROFILE: fakeHome, HOME: fakeHome,
+      DAO_RATE_LIMIT_MARKER: path.join(BASE, tag, "rate-limit-interrupt.json"),
+      DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag, "state"),
+    }, extraEnv || {});
+    delete env.DAO_RATE_LIMIT_MIRROR; // 刻意不传——这正是要兜的那个「忘传」场景
+    return spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(payloadOf({ last_assistant_message: "API Error: Rate limit reached · 约 1 小时后重置" })),
+      encoding: "utf8", env,
+    });
+  }
+
+  const tag = "fallback-real";
+  const r = runWithoutMirrorEnv(REAL_HOOK, tag);
+  check("现状·兜底生效：exit 0", r.status === 0, "code=" + r.status);
+  check("现状·兜底生效：主域正常（marker 照写、fired.log 照记，证明这次真的没漏传 MARKER/STATE_SUBDIR）",
+    fs.existsSync(markerPath(tag)) && firedLines(tag).length === 1,
+    "marker存在=" + fs.existsSync(markerPath(tag)) + " fired=" + JSON.stringify(firedLines(tag)));
+  check("🔴 现状·兜底生效：旧生产默认路径（哪怕是假 home 下那份）没有被写入",
+    !fs.existsSync(legacyDefaultPath), "legacyDefaultPath 竟然被写出：" + legacyDefaultPath);
+  const fallbackPath = path.join(BASE, tag, "mirror-fallback", "fired.log");
+  check("🔴 现状·兜底生效：镜像改落在 MARKER 旁边的 mirror-fallback/ 子目录里",
+    fs.existsSync(fallbackPath), "期望路径不存在：" + fallbackPath);
+  const fallbackLines = (() => {
+    try { return fs.readFileSync(fallbackPath, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)); }
+    catch (_) { return []; }
+  })();
+  check("兜底落点里的记录内容正常（不是空文件、marked=true）",
+    fallbackLines.length === 1 && fallbackLines[0].marked === true && fallbackLines[0].mirror === true,
+    "fallback=" + JSON.stringify(fallbackLines));
+
+  // ── 先破再验：把 deriveMirrorFallback 架空，直接退回旧的唯一默认值 ──────────────
+  // 形态是「保留字面但使其不执行」：在函数体最前面插入一个提前 return，
+  // 后面两个覆写检查与它们的 return 全部变成永远跑不到的死代码（语法仍合法，只是不再
+  // 生效）——这正是本条修复前的行为，也是本节要证明「加固前会怎样」的对照组。
+  const ANCHOR = "function deriveMirrorFallback() {";
+  const REPLACEMENT = "function deriveMirrorFallback() {\n" +
+    "  return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(), \".claude\", \"dao-state\", \"rate-limit-sentinel\", \"fired.log\"); // #201 笔2 mutation：提前 return，架空下面两个覆写检查";
+  const h = mutantHook("mirror-fallback-disabled", ANCHOR, REPLACEMENT);
+  const tagM = "fallback-mut";
+  const rm = runWithoutMirrorEnv(h, tagM);
+  check("canary：变异体还活着（marker / fired.log 照写，主域没被这次改动波及）",
+    rm.status === 0 && fs.existsSync(markerPath(tagM)) && firedLines(tagM, h).length === 1,
+    "code=" + rm.status);
+  check("🔴 mutation·兜底被架空：这次真的写进了（假 home 下的）生产默认路径 —— 证明这条断言真的在盯着这件事",
+    fs.existsSync(legacyDefaultPath), "legacyDefaultPath 仍然不存在：" + legacyDefaultPath);
+}
+
 console.log("\n=== 负控 · 宿主失效态两格（#190 第 4 条：模块加载期崩 / stdout 写不动）===");
 {
   // ㈠ **模块加载期崩**：`require` 就失败 ⇒ 连 `main()` 都没进，最外层 catch 也兜不到
