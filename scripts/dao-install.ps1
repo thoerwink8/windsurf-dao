@@ -238,54 +238,25 @@ Write-Step 6 $totalSteps '注册 hooks...'
 $settingsPath = Join-Path $ClaudeDir 'settings.json'
 $hooksPath = $ClaudeDir.Replace('\', '/')
 
-$hooksJson = @"
-{
-  "PostToolUse": [
-    {
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "node \"$hooksPath/hooks/dao-tool-nudge.js\"", "timeout": 10 }]
-    },
-    {
-      "matcher": "Edit|Write|MultiEdit",
-      "hooks": [{ "type": "command", "command": "node \"$hooksPath/hooks/dao-glob-gate.js\"", "timeout": 10 }]
-    }
-  ],
-  "SessionStart": [
-    {
-      "matcher": "startup|clear|resume",
-      "hooks": [{ "type": "command", "command": "node \"$hooksPath/hooks/dao-remove-session.js\"", "timeout": 5 }]
-    },
-    {
-      "matcher": "startup",
-      "hooks": [
-        { "type": "command", "command": "node \"$hooksPath/hooks/dao-playwright-cleanup.js\"", "timeout": 15 },
-        { "type": "command", "command": "node \"$hooksPath/hooks/dao-scaffold-check.js\"", "timeout": 10 }
-      ]
-    }
-  ],
-  "UserPromptSubmit": [
-    {
-      "hooks": [
-        { "type": "command", "command": "node \"$hooksPath/hooks/dao-cn-title.js\"", "timeout": 12 },
-        { "type": "command", "command": "node \"$hooksPath/hooks/dao-rhythm.js\"", "timeout": 10 }
-      ]
-    },
-    {
-      "hooks": [{ "type": "command", "command": "node \"$hooksPath/hooks/dao-timecode.js\" user", "timeout": 5 }]
-    }
-  ],
-  "Stop": [
-    {
-      "hooks": [{ "type": "command", "command": "node \"$hooksPath/hooks/dao-timecode.js\" claude", "timeout": 5 }]
-    }
-  ]
-}
-"@
+# issue #65：这里此前手工维护一份 hooks 注册 JSON 字面量，与 ccswitch/hooks/ 目录各自
+# 独立、没有任何对账 —— 数到落后 5 个才被发现（2026-08-08 考古复测：已落后到 9 个）。
+# 修法不是把清单补全（补全只会让"它是全的"错觉更像真的，下次照样悄悄落后），而是
+# 让本文件不再持有第二份清单：注册内容改由 dao-pack.ps1 从本仓 config-sync 快照
+# （随 `dao.bat --direction=up` 与真实 ~/.claude/settings.json 保持同步的那一份）
+# 派生并打包进 dao/hooks-template.json，本步只做「读模板 → 替换安装目标路径」。
+$hooksTemplatePath = Join-Path $DaoSrc 'hooks-template.json'
 
-$tempHooksFile = Join-Path $env:TEMP 'dao-hooks-config.json'
-[System.IO.File]::WriteAllText($tempHooksFile, $hooksJson)
+if (-not (Test-Path $hooksTemplatePath)) {
+    Write-Warn 'hooks-template.json 不存在——本次未注册任何 hook（不是"注册了但落后"，是压根没做这一步）。'
+    Write-Warn '多半是用旧版 install.bat/dao-pack.ps1 打的包；请用最新版 dao-pack.ps1 重新打包，或手动跑一遍 ~/.claude/settings.json 的 hooks 段。'
+} else {
+    $hooksTemplateRaw = [System.IO.File]::ReadAllText($hooksTemplatePath, [System.Text.Encoding]::UTF8)
+    $hooksJson = $hooksTemplateRaw.Replace('__HOOKS_DIR__', ($hooksPath + '/hooks'))
 
-$mergeScript = @'
+    $tempHooksFile = Join-Path $env:TEMP 'dao-hooks-config.json'
+    [System.IO.File]::WriteAllText($tempHooksFile, $hooksJson)
+
+    $mergeScript = @'
 const fs = require('fs');
 const settingsPath = process.argv[2];
 const hooksFile = process.argv[3];
@@ -302,18 +273,19 @@ fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 console.log('OK');
 '@
 
-$tempMerge = Join-Path $env:TEMP 'dao-merge-hooks.js'
-[System.IO.File]::WriteAllText($tempMerge, $mergeScript)
+    $tempMerge = Join-Path $env:TEMP 'dao-merge-hooks.js'
+    [System.IO.File]::WriteAllText($tempMerge, $mergeScript)
 
-$result = & node $tempMerge $settingsPath $tempHooksFile 2>$null
-Remove-Item $tempMerge, $tempHooksFile -Force -ErrorAction SilentlyContinue
+    $result = & node $tempMerge $settingsPath $tempHooksFile 2>$null
+    Remove-Item $tempMerge, $tempHooksFile -Force -ErrorAction SilentlyContinue
 
-if ($result -eq 'SKIP') {
-    Write-Skip 'settings.json 已有 hooks 配置，保留原有设置'
-} elseif ($result -eq 'OK') {
-    Write-Ok 'hooks 已注册到 settings.json'
-} else {
-    Write-Warn "hooks 注册异常: $result"
+    if ($result -eq 'SKIP') {
+        Write-Skip 'settings.json 已有 hooks 配置，保留原有设置'
+    } elseif ($result -eq 'OK') {
+        Write-Ok 'hooks 已注册到 settings.json'
+    } else {
+        Write-Warn "hooks 注册异常: $result"
+    }
 }
 
 # ── 完成 ──
