@@ -987,6 +987,92 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
     /未预期崩溃/.test(cc) && /不是「全部通过」/.test(cc), "ctx=" + cc.slice(0, 400));
   check("对照组：同一棵树不注入 throw → **零**「未预期崩溃」行（钉住不是恒报）",
     !/未预期崩溃/.test(ctx(run(cwd, env, mkBrokenLibTree("uncaught-control", null)))));
+
+  // ── issue #152 账 1（PR #150 对抗带账）：那张网新长出的**更静默**的一条路 ─────────
+  //
+  // `emitOnce` 先置 `emitted = true` 再写 stdout。**写自己抛出**时异常冒到 uncaughtException，
+  // 网调 `emitOnce` ⇒ 撞上 `if (emitted) return;` ⇒ 原先 `exit(0)`。
+  // 2026-08-08 实测（考古复核，issue 快照今天仍成立）：
+  //     stdout.write 抛出 ⇒ exit=0 · stdout **0 字节** · segs=0
+  //     合法的「无事可报」 ⇒ exit=0 · stdout **0 字节** · segs=0     ← **逐字节不可区分**
+  // 而 master（没有这张网）那一态是 exit 1 + 一段栈。⇒ 这条路上网让消费方看到的**更少**。
+  // 修法：写失败 ⇒ stderr 出一行 + 退出码非 0（**不是 2**：2 是 block 语义）。
+  const STDOUT_THROW_ANCHOR = /(let emitted = false;)(\r?\n)/;
+  const NOTHING_ANCHOR = /(function inject\(context\) \{\r?\n)  emitOnce\(context\);\r?\n/;
+  let anchorThrow = false, anchorNothing = false;
+
+  const wThrow = run(cwd, env, mkBrokenLibTree("stdout-throw", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorThrow = STDOUT_THROW_ANCHOR.test(src);
+    fs.writeFileSync(p, src.replace(STDOUT_THROW_ANCHOR,
+      '$1$2process.stdout.write = function () { throw new Error("注入：stdout 写入失败(EPIPE 模拟)"); };$2'), "utf8");
+  }));
+  // 「合法的无事可报」对照：把 inject 的那次 emitOnce 拿掉 ⇒ 什么都不写、正常退出。
+  const nothing = run(cwd, env, mkBrokenLibTree("nothing-to-say", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorNothing = NOTHING_ANCHOR.test(src);
+    fs.writeFileSync(p, src.replace(NOTHING_ANCHOR, "$1  void context;\n"), "utf8");
+  }));
+  check("mutation 锚点仍在（stdout 抛出 / 无事可报，锚失效则下面几条空转）",
+    anchorThrow && anchorNothing, `throw=${anchorThrow} nothing=${anchorNothing}`);
+  check("前提：对照臂真的什么都没写（否则「不可区分」这件事就无从谈起）",
+    nothing.code === 0 && nothing.out.length === 0, `code=${nothing.code} bytes=${nothing.out.length}`);
+  check("🔴 #152 账 1：stdout.write 抛出 → 退出码**非 0**（否则与「无事可报」逐字节不可区分）",
+    wThrow.code !== 0, `code=${wThrow.code}`);
+  check("🔴 #152 账 1：那个非 0 **不是 2**（2 是 block 语义，自检没资格拦会话）",
+    wThrow.code !== 2, `code=${wThrow.code}`);
+  check("🔴 #152 账 1：stdout 这条路断了 ⇒ stderr 上必须留下**说得清是怎么回事**的一行",
+    /stdout 写不出去/.test(wThrow.err) && /不是「全部通过」/.test(wThrow.err),
+    "stderr=" + wThrow.err.slice(0, 400));
+  // issue #152 账 1 描述的那个组合态：**先有一个真崩溃，再撞上写不出去**。
+  // 这一臂才是网自己那条路（uncaughtException → emitOnce → 写抛出），上一臂走的是常路。
+  const both = run(cwd, env, mkBrokenLibTree("stdout-throw-and-crash", null, (p) => {
+    let src = fs.readFileSync(p, "utf8");
+    src = src.replace(STDOUT_THROW_ANCHOR,
+      '$1$2process.stdout.write = function () { throw new Error("注入：stdout 写入失败(EPIPE 模拟)"); };$2');
+    src = src.replace(THROW_ANCHOR, '$1$2throw new Error("注入：模拟未预期崩溃");$2');
+    fs.writeFileSync(p, src, "utf8");
+  }));
+  check("🔴 #152 账 1（组合态）：真崩溃 + 写不出去 ⇒ 退出码非 0、stdout 仍 0 字节",
+    both.code !== 0 && both.code !== 2 && both.out.length === 0,
+    `code=${both.code} bytes=${both.out.length}`);
+  check("🔴 #152 账 1（组合态）：崩溃原文补进 stderr（报文没送出去 ⇒ 原因不许跟着一起没）",
+    /未预期崩溃（报文送不出去/.test(both.err) && /stdout 写不出去/.test(both.err),
+    "stderr=" + both.err.slice(-400));
+  check("🔴 #152 账 1：与「无事可报」现在**分得开**（退出码这一位不同；stdout 两边都是 0 字节）",
+    wThrow.out.length === 0 && nothing.out.length === 0 && wThrow.code !== nothing.code,
+    `throw=(code=${wThrow.code},bytes=${wThrow.out.length}) nothing=(code=${nothing.code},bytes=${nothing.out.length})`);
+  check("活的负控：同一棵树不注入 ⇒ 退出码回到 0（钉住不是恒非 0）",
+    run(cwd, env, mkBrokenLibTree("stdout-throw-control", null)).code === 0);
+
+  // ── #152 账 1 的第二半：`if (emitted) return;` 这条**承重行**此前零断言 ──────────
+  // PR #150 对抗 M1 实测它零覆盖，而恰恰是它把上面那条路从「响」变成「静默」。
+  // 两态（守卫在 / 摘掉守卫）在**写完之后才崩**这个态上可观测地不同：
+  //   守卫在 ⇒ 一段合法 JSON（实测 2184 B）；摘掉 ⇒ **两段拼在一起、非法 JSON**（2844 B）。
+  const LATE_THROW_ANCHOR = /(function inject\(context\) \{\r?\n  emitOnce\(context\);\r?\n)/;
+  const GUARD_ANCHOR = /  if \(emitted\) return;\r?\n/;
+  let anchorLate = false, anchorGuard = false;
+  const lateThrow = (tag, dropGuard) => run(cwd, env, mkBrokenLibTree(tag, null, (p) => {
+    let src = fs.readFileSync(p, "utf8");
+    anchorLate = LATE_THROW_ANCHOR.test(src);
+    anchorGuard = GUARD_ANCHOR.test(src);
+    src = src.replace(LATE_THROW_ANCHOR, '$1  throw new Error("注入：写完之后才崩");\n');
+    if (dropGuard) src = src.replace(GUARD_ANCHOR, "");
+    fs.writeFileSync(p, src, "utf8");
+  }));
+  const guarded = lateThrow("late-throw-guarded", false);
+  const unguarded = lateThrow("late-throw-unguarded", true);
+  const segs = (r) => (r.out.match(/\{"hookSpecificOutput"/g) || []).length;
+  check("mutation 锚点仍在（写后崩 / 双写守卫）", anchorLate && anchorGuard,
+    `late=${anchorLate} guard=${anchorGuard}`);
+  check("🔴 双写守卫在 → 写完之后才崩，stdout 仍是**一段合法 JSON**",
+    guarded.json !== null && segs(guarded) === 1, `segs=${segs(guarded)} out=${guarded.out.slice(0, 120)}`);
+  check("🔴 mutation：摘掉 `if (emitted) return;` → 同一个态拼出**两段、非法 JSON**（承重行坐实）",
+    unguarded.json === null && segs(unguarded) === 2,
+    `segs=${segs(unguarded)} parsed=${unguarded.json !== null} bytes=${unguarded.out.length}`);
+  check("mutation canary：摘守卫那一版没崩死（照样写得出东西，红的是形状不是进程）",
+    unguarded.code === 0 && unguarded.out.length > guarded.out.length,
+    `code=${unguarded.code} 摘=${unguarded.out.length}B 守=${guarded.out.length}B`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

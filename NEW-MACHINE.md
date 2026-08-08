@@ -64,6 +64,7 @@ node config-sync\lib\doctor.mjs
 | **sqlite3** | 读写 cc-switch DB | `sqlite3 -version`，或运行 `config-sync/setup-sqlite.ps1`（项目已内置安装包） |
 | **cc-switch** 桌面端 | 配置中心与下发引擎 | 已安装并能启动 |
 | **Windows Developer Mode** | symlink 权限（dao.ps1 链接） | 设置 → 系统 → 开发者选项 → 开 |
+| **NTFS 8.3 短名 + junction 建得起来** | **只影响跑回归网，不影响部署**：`tests/hard-gates.tests.js` 的 G2 那几组要造「8.3 短名家目录」与「`.claude` 是 junction」两种 fixture（issue #133/#134） | `node tests/hard-gates.tests.js` —— 造不出来时它的**前置断言会自己红**并写明「只是**没测到**，不是通过」；别把那几条红读成代码坏了。`mklink /J` 在 NTFS 上一般不需要管理员（本机实测不需要），8.3 短名的查询命令 `fsutil 8dot3name query C:` **要管理员**（非管理员 exit 1），所以别拿它当检查手段，以那几条前置断言为准 |
 
 可选（按需用哪栈装哪个）：
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）

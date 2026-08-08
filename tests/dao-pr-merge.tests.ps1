@@ -1,5 +1,4 @@
-﻿# @dao-test-tier: env   # 整套只在 --env 跑：≈30s，且沙盒用固定路径 _tmp/dao-pr-merge-test（未随机化 ⇒ 并行必互踩）
-<#
+﻿<#
 .SYNOPSIS
     `ccswitch/scripts/dao-pr-merge.ps1` 的行为级回归网（无 Pester 依赖）。退出码 0 = 全部通过。
 
@@ -23,7 +22,7 @@
     连 exit 4 那一档都是真的：给裸仓设 `receive.denyDeletes=true`，`push --delete` 真的被拒。
 
     **gh 用桩**：`gh` 那一侧要模拟的是「退出码与真实状态不一致」，真去合一个 PR 既不可能
-    也不该。桩的形态选了**PATH 前置一个假 `gh`**（`_tmp/dao-pr-merge-test/bin/gh.cmd`），
+    也不该。桩的形态选了**PATH 前置一个假 `gh`**（沙盒里的 `bin/gh.cmd`），
     在三种可选形态里选它的理由：
 
       · **PATH 前置（选它）**：被测脚本**一个字都不用改** —— 不给生产脚本加任何测试专用开关。
@@ -49,7 +48,14 @@
 .NOTES
     独立可运行：powershell -NoProfile -ExecutionPolicy Bypass -File tests/dao-pr-merge.tests.ps1
     退出码：0 = 全部通过；1 = 存在失败。
-    夹具落 `_tmp/dao-pr-merge-test/`（运行期生成、不入库，`_tmp/` 已在 .gitignore）。
+
+    ## 沙盒路径与并发形态：见下方 $workRoot 那一段的注释块，**刻意不写在这个 help 块里**
+
+    理由（2026-08-08 · PR #200 对抗官 F1）：那一段绕不开要说「本套此前为什么被标环境敏感层」，
+    而说清楚就免不了引用那个标记的字面形态 —— 这个 help 块**落在 run-tests.mjs 标记扫描器的
+    头 60 行窗口内**，散文里一个凑齐了行首井号的标记会被它当成真标记，把整套静默判出默认层
+    且全仓零红（姊妹套 tests/pr-body-scan.tests.ps1 上已实测过这条路）。
+
     PS 5.1 兼容：无三元运算符、无 && 链、禁 2>&1。本文件须以 BOM UTF-8 存盘。
     需要 PATH 上有真的 `git`（本文件只桩 gh，不桩 git）。
 #>
@@ -59,7 +65,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $targetPs1 = Join-Path $repoRoot 'ccswitch/scripts/dao-pr-merge.ps1'
 $psExe     = (Get-Command powershell.exe).Source
-$workRoot  = Join-Path $repoRoot '_tmp/dao-pr-merge-test'
+$workRoot  = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-dao-pr-merge-test-$(Get-Random)"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $utf8Bom   = New-Object System.Text.UTF8Encoding($true)
 
@@ -69,8 +75,38 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Host '找不�
 # 让整套失败 —— 缺 node 是环境问题，不是被测脚本的缺陷。
 $nodeAvailable = [bool](Get-Command node -ErrorAction SilentlyContinue)
 
-if (Test-Path $workRoot) { Remove-Item -Path $workRoot -Recurse -Force }
+# 沙盒随机化之后**开跑不再先删**（2026-08-08 · issue #187）：原先那句
+# `if (Test-Path $workRoot) { Remove-Item -Recurse -Force }` 本意是「清上次的残渣」，
+# 而它同时就是并行互踩的凶器 —— 后开跑的实例把先开跑那个的整棵沙盒删掉，
+# 症状是前者的夹具凭空消失、报文指向被测脚本。随机路径每次唯一 ⇒ 没有残渣可清。
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
+
+# ── 沙盒路径：**随机化**，不落仓内 _tmp/（2026-08-08 · issue #187）──────────────────
+# 夹具落 `%TEMP%/windsurf-dao-dao-pr-merge-test-<Get-Random>/`，收尾在 `finally` 里删掉，
+# 形态照 `tests/link-codex.tests.ps1` 的正解样板。**为什么改**：原先写死
+# `_tmp/dao-pr-merge-test` 且启动即 `Remove-Item -Recurse -Force` ⇒ 两个实例并行时
+# **后者开跑就把前者的沙盒删了**，那不是「结果不准」而是破坏性竞态；这一条也正是本套此前被标
+# 环境敏感层（那个 dao-test-tier 标记，整套只在 --env 跑）的理由之一。随机化之后标记已摘、
+# 本套回到默认层。
+# ⚠ **随机化只解决「与自己/与别人并行」**，不解决「同一实例内部」的任何事；也别把它读成
+#   「现在可以随便并行跑测试了」—— 真 `git` 与 `powershell` 子进程照旧吃 CPU。
+#
+# 🔴 **这一段为什么住在这儿、而且不把那个标记连井号一起写全**（2026-08-08 · PR #200 F1）：
+#   `run-tests.mjs` 的 PS 标记扫描器锚的是「行首井号 + 那个标记名 + 冒号」，且只看**头 60 行**。
+#   本段原先住在文件顶部的 help 块里、写的是带反引号的完整字面量 —— 姊妹套
+#   `tests/pr-body-scan.tests.ps1` 上对抗官实测：**只要去掉那对反引号**（一次最普通的散文编辑），
+#   整套就被静默判成 env 层，默认层不再跑它，而全仓**零红、退出码与正常跑一模一样**。
+#   两道都上了：①本段搬出头 60 行窗口（结构上不可命中）②行文里不再出现「行首井号 + 完整标记」
+#   那个形态。**别把它写回去，也别把它搬回 help 块。**
+
+# ⚠ **下面这个 try 块刻意不给整份正文重排缩进**：本文件是护栏类文件，为了加两行收尾清理
+# 而把 480 行整体缩进一格，会让 diff 淹掉真正的改动（审查看不见等于没审）。
+# PowerShell 不靠缩进断句，`exit` 在 try 里照样会跑 finally 且**退出码原样保留**
+# （PS 5.1 本机实测：`try { exit 7 } finally { … }` ⇒ finally 跑了、$LASTEXITCODE=7）。
+# 照直写它兜不住的那一格：`$ErrorActionPreference='Stop'` 下的意外抛出会走 finally，
+# 但**进程被外部杀掉**（宿主超时、Ctrl-C、run-tests 的 spawnSync 超时）不会 ⇒ 那时
+# `%TEMP%` 下会留一个随机名目录。那是已知代价，不是疏漏（旧形态是**每次**都留一个）。
+try {
 
 $results = New-Object System.Collections.Generic.List[object]
 
@@ -628,3 +664,10 @@ if ($failing.Count -gt 0) {
 }
 Write-Host ("dao-pr-merge 全部通过（{0} 项）。" -f $results.Count)
 exit 0
+
+} finally {
+    # 随机沙盒的收尾（issue #187）。`-ErrorAction SilentlyContinue`：清理失败不该把一次
+    # 通过的回归网翻成红 —— 清不掉最坏结果是 %TEMP% 里多一个目录，而把绿改成红会训练人
+    # 无视这道闸。git 在 .git 里留只读对象文件，`-Force` 是为它准备的。
+    Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
+}

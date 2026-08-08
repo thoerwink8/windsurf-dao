@@ -121,7 +121,8 @@ function mkTestFile(caseDir, name, opts) {
 //   bom      —— 落盘时带不带 UTF-8 BOM（真仓 6 套里 5 套带；标记在第 1 行 + BOM 是已知的
 //               「标记形同没写」陷阱，这里造出来钉住扫描器确实剥了 BOM）
 //   silent   —— 一个字都不打（验「exit 0 + 零输出」那一格）
-//   sleepSec —— 睡多久（验超时判红；配 DAO_PS_TIMEOUT_MS 注入短超时用）
+//   sleepSec —— 睡多久（验超时判红；配 DAO_PS_TIMEOUT_MS 注入短超时用。
+//               ⑩ 的总预算场景也用它 —— 那边要的是「有一套真的花掉了墙钟」）
 //   exitCode —— 退出码
 // 正文一律 ASCII：夹具的编码不该成为被测面的一部分（真仓那 6 套自带 console-utf8 钉子）。
 function mkPsTestFile(caseDir, name, opts) {
@@ -410,7 +411,7 @@ console.log("\n──── ⑦ --list：只列不跑，且标注分层 ──�
 }
 
 // ══════════════════════════════════════════════════════════════
-console.log("\n──── ⑧ 真仓自跑：本仓当下确实有且只有 dead-gates 声明了环境敏感层 ────");
+console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环境敏感层 ────");
 // 合成夹具证不了「它在真实 tests/ 目录上跑得动」（本仓有过实证：47 条合成断言全绿、
 // 真实语料一份都没扫成）。这一条只做**静态**核对，不重跑整套 —— 重跑要两分半，
 // 而分层这件事的判据是静态可查的。
@@ -421,8 +422,21 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下确实有且只有 de
     const head = fs.readFileSync(path.join(REPO, "tests", f), "utf8").split(/\r?\n/).slice(0, 60).join("\n");
     return MARK_RE.test(head);
   });
-  check("真实 tests/ 里声明了环境敏感层的文件恰是 dead-gates（多了要问为什么，少了说明标记掉了）",
-    declared.length === 1 && declared[0] === "dead-gates.tests.js", JSON.stringify(declared));
+  // 🔴 **这是一条刻意手维护的枚举，与本仓「手维护的清单会过期」那条教训不矛盾**：
+  //   它的职责就是**过期时变红**（多一个要问为什么、少一个说明标记掉了），
+  //   即「给标记的增删造一个触发器」（dao-guard-writing `[#守-退役触发]` 同一路数）。
+  //   2026-08-08 · issue #160 它按设计响了一次：alwayson-budget 与 memory-truth-source
+  //   各摘出一节 hook 注入断言进 env 层，本行随之从「恰是 dead-gates 一套」扩到三套。
+  //   ⚠ **改这一行之前先答一句**：新加的那套，它 defer 掉的是不是真的「对别人拥有的机器级
+  //   可变状态做不变量断言」？不是的话，正路是修那几条断言，不是往这个集合里加名字。
+  const EXPECT_DECLARED = [
+    "alwayson-budget.tests.js",     // §⑩①b：hook 墙钟预算读自用户真实 settings.json 的注册值
+    "dead-gates.tests.js",          // ⑪ / ⑪.5 / ⑫①：真 live settings + 真 cc-switch DB
+    "memory-truth-source.tests.js", // 末节：同 alwayson-budget，且 memory 扫描排在全表最后一项
+  ];
+  check("真实 tests/ 里声明了环境敏感层的文件恰是那三套（多了要问为什么，少了说明标记掉了）",
+    JSON.stringify(declared) === JSON.stringify(EXPECT_DECLARED),
+    "实况=" + JSON.stringify(declared) + " 期望=" + JSON.stringify(EXPECT_DECLARED));
   check("本文件自己不在声明面里（否则说明标记字面量泄进了头部窗口）",
     !declared.includes("run-tests-tier.tests.js"), JSON.stringify(declared));
   // dead-gates 默认层真跑一次：它是本机制唯一的真实消费方
@@ -555,6 +569,102 @@ console.log("\n──── ⑨ PowerShell 层：代跑 / 自声明标记 / 红 
   check("㈦ --list 给标了 env 的 PS 套加注", /slow\.tests\.ps1\s+\[标了 env/.test(r.out), r.out.slice(-600));
   check("㈦ --list 不给无标记的 PS 套乱加注", !/fast\.tests\.ps1\s+\[标了 env/.test(r.out), r.out.slice(-600));
   check("㈦ --list 一套 PS 都没起进程（sentinel 不存在）", !fs.existsSync(c.psSentinel), c.psSentinel);
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑩ PS 层总预算闸（issue #186：这一格此前零断言）────");
+// 契约在 run-tests.mjs 头注 ⑤：串行累计墙钟超过 `PS_BUDGET_MS` ⇒ **剩余套判「未跑」**
+// （不是排队等、不是判红），退出码至少 2。它兜的是「某套卡住把整个入口拖死」。
+//
+// 🔴 **为什么这一格此前是真空的，照直记**：`PS_BUDGET_MS` 原是硬编码 900s，而真 6 套合计
+//   才 ≈100-150s ⇒ 回归网**结构上**造不出「预算耗尽」。PR #185 对抗官把闸整个关掉
+//   （`if (false && spent >= PS_BUDGET_MS)`），全场 `PASS=95 FAIL=0` **一条都没红** ——
+//   而「闸在且没触发」与「闸压根不在」在那份输出里逐字节相同。本节靠新增的注入口
+//   `DAO_PS_BUDGET_MS` 把 900s 压到毫秒级，把那个场景造出来。
+//
+// ⚠ **注入口本身的射程照直写**：`DAO_PS_BUDGET_MS` 是「直接取环境值」，**没有** min 夹紧
+//   （理由写在 run-tests.mjs 那个常量的头注：min 那个分支只在注入值 > 900s 时才起作用，
+//   而要观察到差别就得造一个真花掉 900s 的夹具 —— 那正是造不出来的东西）。
+//   ⇒ 「调大这个值等于把兜底关掉」这句话**只有头注在守，没有断言在守**，别读成有闸。
+{
+  // 三套：第一套真花掉墙钟，后两套必须都判「未跑」。
+  // **两套而不是一套**：契约要求「逐套打明细」，一套证不了「逐」。
+  const c = mkPsCase("ps-budget", {
+    ps: {
+      "a-slow.tests.ps1": { sleepSec: 2, pass: 1 },
+      "b-rest.tests.ps1": { pass: 2 },
+      "c-rest.tests.ps1": { pass: 3 },
+    },
+  });
+  const r = runRunner(c.dir, [], { DAO_PS_BUDGET_MS: "500" });
+  check("⑩ 预算用尽 → exit 2（未跑走 defer 通道，不是红）",
+    r.code === 2 && r.psSum && r.psSum.exit === 2, JSON.stringify(r.psSum) + "\n" + r.out.slice(-1400));
+  check("⑩ 末行 psfiles=1 psred=0 psskip=2（跑了一套、剩下两套判未跑，且一套都没红）",
+    r.psSum && r.psSum.psfiles === 1 && r.psSum.psred === 0 && r.psSum.psskip === 2,
+    JSON.stringify(r.psSum));
+  // sentinel 是唯一能分开「跑了都过」与「压根没起跑」的证据 —— 全文件同一判据
+  check("⑩ sentinel：a-slow 起了进程，b/c 一个都没起（不是只在账面上算跳过）",
+    psRan(c.psSentinel, "a-slow.tests.ps1") &&
+    !psRan(c.psSentinel, "b-rest.tests.ps1") && !psRan(c.psSentinel, "c-rest.tests.ps1"),
+    (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
+  // 🔴 **这一条 2026-08-08 由接手官按四向 mutation 的实测红集收紧**（issue #186 的
+  //   「mutation 复验」那一格）。原判据是 `/b-rest\.tests\.ps1/` —— 只问「这个名字在正文里
+  //   出现过吗」，而**闸被关掉时那两套照常跑、名字照常出现在汇总表里** ⇒ 它恒绿，
+  //   可它的名字说的是「它们各有一行未跑明细」。这正是 `[#官抗-断言名实核对]` 的形态：
+  //   名实不符只在交叉核对红集时现形（本节别的断言全红、独它绿），代码读不出来。
+  //   收紧后判据 = 未跑明细那一行 **与预算那个理由同时在场**（`—— PS 层总预算 <注入值>ms`），
+  //   而那句理由只有预算这条路打得出来（标记跳过那条路打的是另一句）。
+  //
+  // ── 四向 mutation 的红集（2026-08-08 实测，`scripts/run-tests.mjs` 那道闸）───────────
+  //   ①删整段         ⇒ 本节 7 红（收紧后 8）· 别处 0 红 · canary：其余 100 条照绿
+  //   ②`if (false &&…)`⇒ 与 ① **逐条相同**（那正是 PR #185 对抗官用过的形态）
+  //   ③摘掉 `continue`（判定照做、结果不被消费）⇒ **只有 2 红**：`psfiles` 那条 + sentinel
+  //     那条。⇒ **承担这一向的就是 sentinel**；「exit 2」那条在 ③ 下照绿（psskip 仍算得出 2），
+  //     故它证不了「闸的答案有没有人听」。别把它读成冗余覆盖。
+  //   ④`if (spent >= 0)`（恒真 · 反向）⇒ 26 红，其中本节 **5 条 🔴 负控里红了 4 条** ——
+  //     ①②③ 全在「让闸变松」这一侧，不跑反向就不知道那几条负控会不会红。
+  //     ⚠ **原文写的是「4 条负控全部变红」，那是笃定措辞且不实**（订正 2026-08-08 ·
+  //     PR #200 对抗官 F4）：本节的 🔴 负控是 **5** 条，第 5 条「预算跳过不打失败详情」
+  //     在 ④ 下**照绿** —— 恒真闸让每一套都判未跑，两侧都没有失败详情可打，那条断言
+  //     结构上就不会被这一向碰到。⇒ **④ 验到的是 4/5，不是 5/5**；剩下那一条要另找方向。
+  const detailLine = (name) =>
+    new RegExp("· tests/" + name.replace(/\./g, "\\.") + "\\s+—— PS 层总预算 500ms 已用尽");
+  check("⑩ 逐套打明细：剩下的**每一套**都有自己那一行「未跑 + 预算归因」（只报个数字等于没报）",
+    detailLine("b-rest.tests.ps1").test(r.out) && detailLine("c-rest.tests.ps1").test(r.out),
+    r.out.slice(-1400));
+  check("⑩ 报文点名是「总预算」用尽，并把两个数都摆出来（预算值 + 已花）",
+    /PS 层总预算 500ms 已用尽（已花 \d+ms）/.test(r.out), r.out.slice(-1400));
+  // 🔴 归因：汇总表上「标记跳过」与「预算跳过」都只是一行 `⊘ 未跑`，而处置完全不同
+  //   （前者去跑 --env，后者去查谁把预算吃光了）。混成一句话等于让人每次重新排查一遍。
+  check("⑩ 🔴 归因：预算跳过的报文显式否认「标记跳过」，两种未跑分得开",
+    /不是标记跳过/.test(r.out) && !/@dao-test-tier: env ⇒ 只在 --env 跑/.test(r.out),
+    r.out.slice(-1400));
+  check("⑩ 未跑那一段仍走「本次未跑：PowerShell」这条人眼通道", /本次未跑：PowerShell/.test(r.out),
+    r.out.slice(-1400));
+
+  // 🔴 **本节的核心负控**：同一组夹具、同一个入口，不注入短预算就必须三套全跑。
+  //   没有它，上面每一条都可能只是「这三套在这个夹具上本来就跑不起来」也照样绿
+  //   —— 那正是「比较基线必须先验证它自己是活的」在这一格的形态。
+  // 显式把注入口清空，不只是「不传」：外层 shell 里若恰好设着这个变量，`process.env`
+  // 会被原样继承下去，于是负控自己被污染成实验组（`Number("")` 是 0 ⇒ 走默认 900s）。
+  const n = runRunner(c.dir, [], { DAO_PS_BUDGET_MS: "" });
+  check("⑩ 🔴 负控：不注入 ⇒ 三套全跑、exit 0、psskip=0（红只能来自预算这个变量）",
+    n.code === 0 && n.psSum && n.psSum.psfiles === 3 && n.psSum.psskip === 0,
+    JSON.stringify(n.psSum) + "\n" + n.out.slice(-1200));
+  check("⑩ 🔴 负控：不注入时 sentinel 里三套都在（「全跑」不是账面数字）",
+    psRan(c.psSentinel, "b-rest.tests.ps1") && psRan(c.psSentinel, "c-rest.tests.ps1"),
+    (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
+  check("⑩ 🔴 负控：不注入时正文不出现总预算那句话（闸没触发就不该说话）",
+    !/PS 层总预算/.test(n.out), n.out.slice(-800));
+  // 两侧退出码必须不等 —— 与 ②/㈢ 同型：只有摆在一起比，才排除「两种情形恰好落到同一个码」
+  check("⑩ 🔴 负控：预算用尽的退出码 ≠ 全跑的退出码", r.code !== n.code,
+    "预算用尽=" + r.code + " / 全跑=" + n.code);
+
+  // 负控：预算跳过**不是**红 —— 它与「某套真的失败」必须分得开（psred 那一格已断言 0，
+  // 这里再钉一条报文层：不许打印失败详情，否则人会去查一个没跑过的套。
+  check("⑩ 🔴 负控：预算跳过不打「失败详情」（没跑过的套不许长得像红了）",
+    !/失败详情 tests\/b-rest\.tests\.ps1/.test(r.out) && !/失败详情 tests\/c-rest\.tests\.ps1/.test(r.out),
+    r.out.slice(-1400));
 }
 
 console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
