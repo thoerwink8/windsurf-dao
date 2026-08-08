@@ -9,9 +9,9 @@
     "回归网": "tests/guarded-files.tests.js",
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
-      "tests": 39,
-      "mutation_tests": 30,
-      "files": 31
+      "tests": 41,
+      "mutation_tests": 32,
+      "files": 33
     }
   },
   "files": [
@@ -34,6 +34,20 @@
       "guards": [
         "dao-rhythm.tests.js",
         "hard-gates.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-probe-gate.js",
+      "guards": [
+        "probe-gate.tests.js",
+        "rate-limit-sentinel.tests.js"
+      ]
+    },
+    {
+      "file": "ccswitch/hooks/dao-rate-limit-sentinel.js",
+      "guards": [
+        "probe-gate.tests.js",
+        "rate-limit-sentinel.tests.js"
       ]
     },
     {
