@@ -27,11 +27,19 @@
 # 两类消费方要么都跟控制台走、要么都钉 UTF-8 —— node 侧已经钉了，PowerShell 侧跟上。
 #
 # ── 为什么不做成「入口统一注入」（issue #131 的方向 2）───────────────────────
-# 那个方向假定有一个统一入口在起 PowerShell。**`scripts/run-tests.mjs` 并不起**
-# —— 它的头注明写「.ps1 测试需要 PowerShell 宿主，本入口不代跑，只如实列出并提示」。
-# 更要紧的是：每套 `.ps1` 的头注都写着 `powershell -NoProfile -File tests/xxx.tests.ps1`
-# 这个**直跑**跑法，入口再怎么注入也管不到直跑的人。**编码是那份脚本自己的属性，
-# 不是调用方的属性** ⇒ 钉在脚本自己身上，直跑与经入口跑才会得到同一个结果。
+# ~~那个方向假定有一个统一入口在起 PowerShell。**`scripts/run-tests.mjs` 并不起**~~
+# **2026-08-08（issue #179）起这个前提为假**：`scripts/run-tests.mjs` 现在**代跑** `.ps1`
+# （`powershell.exe -NoProfile -ExecutionPolicy Bypass -File <绝对路径>`，串行，`--env` 跑全部）。
+# ~~更要紧的是：每套 `.ps1` 的头注都写着 `powershell -NoProfile -File tests/xxx.tests.ps1` 这个直跑跑法~~
+# **那句话当时就是假的**（2026-08-08 实测坐实）：6 套里 **2 套压根没有跑法头注**
+# （`link-codex.tests.ps1` / `link-codex-prompts.tests.ps1`，开头直接是代码），
+# 另有 1 套（`pr-body-scan.tests.ps1`）记的是不带 `-ExecutionPolicy Bypass` 的那一版。
+#
+# **但结论不变，只是理由换了一个**：入口代跑之后仍然管不到**直跑的人**，而直跑正是这些
+# 测试被设计成「独立可跑」的那一面（每套头注写着的第一件事就是它）。
+# **编码是那份脚本自己的属性，不是调用方的属性** ⇒ 钉在脚本自己身上，直跑与经入口跑
+# 才会得到同一个结果。**保留划线原句**：它是「为什么当初没走入口注入」的证据链一环，
+# 删掉只会让下一个人重新发明一遍那个方向。
 #
 # ── 已知副作用，照直写（别读成「无副作用」）─────────────────────────────────
 # `[Console]::OutputEncoding` 的 setter 会调 `SetConsoleOutputCP`，那是**整个控制台**的

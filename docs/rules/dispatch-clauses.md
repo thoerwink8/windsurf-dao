@@ -74,15 +74,21 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>
 
 **唯一真相源是仓根 `CLAUDE.md` 的「常用命令」段**，本节只说三件最容易被写错的：
 
-1. **`node scripts/run-tests.mjs` 默认层恒退 `2`，那是正常的**，不是失败——环境敏感断言被 defer 掉了。
+1. **`node scripts/run-tests.mjs` 默认层恒退 `2`，那是正常的**，不是失败——环境敏感断言被 defer 掉了，
+   且标了 env 的那几套 `.ps1` **整套没跑**（两条路各自都能把 2 顶起来）。
    **判「通过」写 `-eq 0`，别写 `-le 2`**；拿得到 `exit 0` 的只有 `--env` 那一条。
-   退出码五态与契约正文在 `scripts/run-tests.mjs` 头注。
+   退出码**六态**与契约正文在 `scripts/run-tests.mjs` 头注（此处此前写「五态」而漏了
+   `5 = 找不到 tests/ 目录`，2026-08-08 · issue #179 同批订正）。
 2. **`--env` 要求串行环境**（没有别的官在跑测试、cc-switch GUI 没在写库、没人在改
    `~/.claude/settings.json`）。合并链 `ccswitch/scripts/dao-pr-merge.ps1` 的 `-VerifyCommand`
    必须传 `--env`。
+   🔴 **PowerShell 那 6 套测试归 `--env`**（2026-08-08 · issue #179）：`.tests.ps1` 头部写
+   `# @dao-test-tier: env` ⇒ 整套只在 `--env` 起进程；无标记者默认层也跑。
+   合并链因此**从这一批起才真的查得到 PS 侧**——此前那 6 套一套都没进它拿到的那个 `exit 0`。
+   串行要求也因此多一个来源：那几套里有用**固定** `_tmp/` 路径当沙盒的，并行跑必互踩。
 3. **测试清单不手维护**——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，
-   「当前有几套、各叫什么」以它末尾的打印为准。**本仓的手维护枚举已被咬过三次**，
-   凡是需要人记得同步的清单都会过期。
+   「当前有几套、各叫什么、哪几套标了 env」以 `--list` 的逐条标注为准。
+   **本仓的手维护枚举已被咬过三次**，凡是需要人记得同步的清单都会过期。
 
 PowerShell 脚本判成败**看 `$LASTEXITCODE`**，不看输出里有没有 "error"；中文「所在位置 行:X」
 是 ErrorRecord 不是真错；**禁 `2>&1`**（混流致假错）。
