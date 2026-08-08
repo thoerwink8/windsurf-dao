@@ -347,8 +347,20 @@ console.log("\n──── ④ fail-open：喂坏输入 / 注入故障都不许
   //    hook 退到 `process.cwd()`，而子进程 cwd 此前是继承来的。现在钉在 NEUTRAL_CWD 上。
   //    下面这条是它的**活的负控**：把子进程 cwd 换成一个两条件都满足的仓，同一份 bare payload
   //    **必须 block** —— 它同时证明两件事：㈠上面那条不是恒真 ㈡「退到 process.cwd()」是真的发生的，
-  //    所以钉住 cwd 是承重的，不是装饰。（把 `cwd: opts.spawnCwd || NEUTRAL_CWD` 摘掉 ⇒ 这一条照旧绿、
-  //    而上面那条的绿从此只是运气 —— 这一格照直写：**没有断言能替你守住「别把 pin 删了」**。）
+  //    所以钉住 cwd 是承重的，不是装饰。
+  //
+  //    ~~（把 `cwd: opts.spawnCwd || NEUTRAL_CWD` 摘掉 ⇒ 这一条照旧绿、而上面那条的绿从此只是运气
+  //    —— 这一格照直写：**没有断言能替你守住「别把 pin 删了」**。）~~
+  //    🔴 **上面这句划掉的话指错了位置**（2026-08-08 PR #204 对抗验证实测订正）。写它的人跑过
+  //    「摘 pin + 热仓」，却把「在仓根会怎样」**写成了断言而没跑**。对抗官把「摘掉」的三种读法都跑了：
+  //      ①**整行删掉**（字面读法）        ⇒ 仓根 `exit=1 PASS=91 FAIL=1` · 热仓同 ⇒ **原句为假**
+  //         为什么会红：这一行**同时是 `opts.spawnCwd` 的管道**，整行没了，下面那条活的负控
+  //         自己就够不到热仓了 —— 红的是负控自己。
+  //      ②**只摘兜底**（`cwd: opts.spawnCwd,`）⇒ 仓根 `exit=0 PASS=92 FAIL=0` · 热仓 `FAIL=1`
+  //      ③**只打订正面**（`cwd: opts.spawnCwd || process.cwd()`）⇒ 仓根 **全绿 92/0，一条都不响**
+  //    ⇒ **精确的说法**：没人守得住的不是「**这一行在不在**」，而是「**它钉的是不是一个结构上
+  //    恒不满足触发条件的目录**」。把 `NEUTRAL_CWD` 换成 `process.cwd()`，全套 92 条一条都不响。
+  //    ⇒ 要动这一行的人记住：**能动的是那半个兜底，不能动的是兜底指向哪。**
   const hotCwd = mkRepo("bare-cwd-fallback-hot", {
     base: { "design/pages/home.html": HTML, "README.md": "x" },
     branch: "feat/ui", commitThen: true,
