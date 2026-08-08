@@ -85,9 +85,15 @@ function sha(p) {
 //    实证：用户按体系自己设计的「开阀 → 装 hook → 跑测试验收」流程做事，全套红 **125 条**
 //    而代码一行没坏；关掉阀的干净环境重跑 PASS=491 FAIL=0（2026-08-08，issue #188）。
 //    **是体系自己跟自己打架**：装 hook 那条流程必然打破「跑测试的人没开阀」这个隐含假设。
-// 🔑 **用例显式传 `env` 的路径不受影响** —— 下面那几条「测逃生阀」的用例正靠它，
-//    显式值在展开顺序上排在剥离之后，永远盖得住。回归锚在「逃生阀隔离」那一节，
-//    它把父进程的阀真开起来再跑默认路径（先破再验过：把剥离换回 `...process.env` ⇒ 那节全红）。
+// 🔑 **用例显式传 `env` 的路径不受影响** —— 下面那几条「测逃生阀」的用例正靠它。
+//    ~~显式值在展开顺序上排在剥离之后，永远盖得住。~~
+//    **归因订正（#190 F3，对抗官实测 + 本批复核）**：结论（显式值盖得住）为真，但**对逃生阀而言
+//    展开顺序无关** —— `envWithoutEscapes()` 已经把那些 key 整个删掉了，后面的 `...env` 是
+//    **新增一格**而不是覆盖一格，两个顺序结果相同。顺序真正保护的是 `USERPROFILE` / `HOME` /
+//    `DAO_TOOL_NUDGE_STATE` 这类**非阀覆写**：那些 key 剥离不动它、两侧都在，谁排后面谁赢。
+//    ⇒ 别把这一句读成「顺序在守逃生阀那一格」，它守的是另一批 key。
+//    回归锚在「逃生阀隔离」那一节，它把父进程的阀真开起来再跑默认路径
+//    （先破再验过：把剥离换回 `...process.env` ⇒ 那节全红）。
 // 📌 同型的现成写法：`ccswitch/scripts/probe-shell-search.mjs:78` 早就在喂 hook 前
 //    把 `DAO_SHELL_SEARCH_OK` 置空 —— 那条路走对了，只是当时没人把它推广到测试侧。
 // ⚠️ **射程照直写**：本清单只剥「逃生阀」这一类（hook 里 `escapeEnv:` 声明的那些）。
@@ -103,9 +109,12 @@ const ESCAPE_ENVS = [
 // Windows 的环境变量名大小写不敏感，故按大写比对再删 —— 只按字面 key `delete` 的话，
 // 用户用 `dao_settings_edit_approved=1` 设的那一份会原样漏进子进程。
 const ESCAPE_ENV_KEYS = new Set(ESCAPE_ENVS.map((k) => k.toUpperCase()));
-function envWithoutEscapes() {
+// `src` 缺省 = `process.env`（生产形态）。**参数只为单元级断言存在**（#190 F1）：
+// 「小写 key 也被剥掉」这一格在常规大写环境下**摘掉 `.toUpperCase()` 也零红**，
+// 而端到端只在「敲命令的人恰好用小写设了阀」时才走到那一格 —— 喂一份假 env 才夹得住它。
+function envWithoutEscapes(src) {
   const out = {};
-  for (const [k, v] of Object.entries(process.env)) {
+  for (const [k, v] of Object.entries(src || process.env)) {
     if (!ESCAPE_ENV_KEYS.has(k.toUpperCase())) out[k] = v;
   }
   return out;
@@ -276,6 +285,36 @@ console.log("\n──── 逃生阀隔离（issue #188）：开着阀跑，测
   check("剥离清单 === hook 里声明的全部逃生阀（新增一道带阀的闸而这里没跟上 ⇒ 本条红）",
     declared.length > 0 && declared.join(",") === stripping.join(","),
     `hook 声明=[${declared.join(",")}] 本文件剥离=[${stripping.join(",")}]`);
+
+  // ── F1（issue #190）：大小写归一化的单元级断言 ────────────────────────────────
+  // 病在哪：`envWithoutEscapes()` 靠 `k.toUpperCase()` 比对再删，那一步**承重**
+  // （端到端实测：小写设阀时朴素的按字面 `delete` 真漏），但**摘掉它在常规大写环境下 0 红**
+  // —— 判别力完全依赖「敲命令的人此刻恰好用了小写」这个偶然。
+  // 修法：喂一份**假 env**做单元级断言 —— 确定性、不起子进程、且**不依赖平台的 env 大小写语义**
+  // （Linux/macOS 的 env 是大小写敏感的，这几条断言在那些平台上照样成立，因为它们只测这个函数）。
+  {
+    const FAKE = {
+      PATH: "keep-me",
+      DAO_PUBLISH_APPROVED: "1",                 // 规范大写
+      dao_settings_edit_approved: "1",           // 全小写（Windows 上与大写等价 ⇒ 漏剥就等于阀开着）
+      Dao_Shell_Search_Ok: "1",                  // 混合大小写
+      MY_DAO_PUBLISH_APPROVED: "1",              // 误伤反例：名字里**含**阀名
+      DAO_PUBLISH_APPROVED_EXTRA: "1",           // 误伤反例：阀名是它的前缀
+    };
+    const s = envWithoutEscapes(FAKE);
+    check("F1 正控：规范大写的阀被剥掉", !("DAO_PUBLISH_APPROVED" in s), JSON.stringify(Object.keys(s)));
+    check("🔴 F1 正控：**全小写**的阀也被剥掉（此前这一格零守护 —— 摘掉 .toUpperCase() 常规环境 0 红）",
+      !("dao_settings_edit_approved" in s), JSON.stringify(Object.keys(s)));
+    check("🔴 F1 正控：**混合大小写**的阀也被剥掉",
+      !("Dao_Shell_Search_Ok" in s), JSON.stringify(Object.keys(s)));
+    check("F1 误伤反例：名字里含阀名 / 以阀名为前缀的变量**不剥**（判据是整名相等，不是子串）",
+      s.MY_DAO_PUBLISH_APPROVED === "1" && s.DAO_PUBLISH_APPROVED_EXTRA === "1",
+      JSON.stringify(Object.keys(s)));
+    check("F1 负控：非阀变量原样保留（把整份 env 剥空 ⇒ 子进程连 node 都跑不起来，那是另一种全红）",
+      s.PATH === "keep-me");
+    check("F1 前提：不传参时仍读 process.env（改成必须传参会让 gate() 的默认路径静默失效）",
+      Object.keys(envWithoutEscapes()).length > 0);
+  }
 }
 
 console.log("\n──── G1 · windows-mcp 全面禁令（一票否决，无逃生阀）────");
