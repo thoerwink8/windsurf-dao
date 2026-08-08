@@ -653,6 +653,44 @@ if (-not $nodeAvailable) {
         (($r13.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r13.Text))) ''
     Assert-True '13e 远程分支原封不动（没合的东西不许动分支）' `
         (Test-RemoteBranch -OriginDir $f13.Origin -Branch $f13.Branch) ''
+
+    # ========================================================================
+    # 场景 14（issue #209 缺口 1）：3.5 步「不受 -SkipVerify 影响」这句契约，此前零断言
+    # ========================================================================
+    # 头注写着「代码上不在 if ($SkipVerify) 分支里」——12/13 只传了 -VerifyCommand，从没
+    # 试过 -SkipVerify 这条路。对抗官实测：把 3.5 步整段裹进 `if (-not $SkipVerify) { … }`
+    # （即把这条契约打坏，让它跟第 4 步一起被跳过）后，57 项回归网 PASS=57 FAIL=0 —— 一条
+    # 都没红。危害不是空的：generator 过期 + `-SkipVerify` 时，打坏后的脚本会直接跳到第 5 步
+    # 把 PR 合了，一个已知过期的 clause-index 就此进了主干且没有任何东西拦过它。
+    Write-Host '场景 14：3.5 步与 -SkipVerify 的独立性（generator OK / drift 两态都测，issue #209）'
+
+    Write-Host '  14a：generator --check 干净 + -SkipVerify ⇒ 3.5 仍真的跑了（不是被 -SkipVerify 一起跳过）'
+    $f14a = New-ClauseGenFixture -Case 'clause-gen-ok-skipverify' -GenBody $genOk
+    $r14a = Invoke-Target -Fixture $f14a -Cfg (New-StubConfig -Fixture $f14a) -ExtraArgs @('-SkipVerify')
+
+    Assert-True '14a-1 exit 2（这一档的 2 来自 -SkipVerify，不是 3.5——generator 是干净的）' `
+        ($r14a.ExitCode -eq 2) ("exit={0}" -f $r14a.ExitCode)
+    Assert-True '14a-2 3.5 步真的执行并报「仍与源一致」（若被打坏成跟 -SkipVerify 一起跳过，这句话不会出现）' `
+        ($r14a.Text -match 'clause-index 仍与源一致') $r14a.Text
+    Assert-True '14a-3 之后仍会走到第 4 步的 -SkipVerify 跳过提示（证明 3.5 在前、第 4 步在后，次序未变）' `
+        ($r14a.Text -match '验证被显式 -SkipVerify 跳过') ''
+    Assert-True '14a-4 generator 干净时 -SkipVerify 仍照常走完全链、合了 PR（第 3.5 步没有额外挡它）' `
+        (Test-ReachedStep6 $r14a.Text) $r14a.Text
+
+    Write-Host '  14b（核心）：generator --check 过期 + -SkipVerify ⇒ 3.5 仍然 Fail，退出码不许靠巧合绿'
+    $f14b = New-ClauseGenFixture -Case 'clause-gen-drift-skipverify' -GenBody $genDrift
+    $r14b = Invoke-Target -Fixture $f14b -Cfg (New-StubConfig -Fixture $f14b) -ExtraArgs @('-SkipVerify')
+
+    Assert-True '14b-1 exit 2（这一档的 2 必须来自 3.5——若 3.5 被跳过，generator 过期这件事本该被跳过、\ 但 -SkipVerify 本身也会把 exit 顶到 2，故只看退出码分不开两种病，下面几条才是真正的判据）' `
+        ($r14b.ExitCode -eq 2) ("exit={0}" -f $r14b.ExitCode)
+    Assert-True '14b-2 🔴 核心：报文点名是 3.5 步报的（clause-index 在合并后的树上过期），不是 -SkipVerify 那句独自撑起 exit 2' `
+        ($r14b.Text -match 'clause-index 在合并后的树上过期') $r14b.Text
+    Assert-True '14b-3 🔴 核心：报文里**不出现**「验证被显式 -SkipVerify 跳过」——3.5 在第 4 步之前就已经 Fail 退出，根本没跑到第 4 步那句话（若被打坏成两者一起跳过，这句话会出现，且下面 14b-4/5 会转绿，那才是真正拆穿"靠巧合绿"的地方）' `
+        (-not ($r14b.Text -match '验证被显式 -SkipVerify 跳过')) $r14b.Text
+    Assert-True '14b-4 停在第 4 步之前：**不**发出任何 gh pr merge（3.5 若被误跳过，这里会变成"发了"）' `
+        (($r14b.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r14b.Text))) ''
+    Assert-True '14b-5 远程分支原封不动（没合的东西不许动分支——若 3.5 被误跳过，过期索引连同这条分支会被真的合掉）' `
+        (Test-RemoteBranch -OriginDir $f14b.Origin -Branch $f14b.Branch) ''
 }
 
 # ---- 汇总 -------------------------------------------------------------------
