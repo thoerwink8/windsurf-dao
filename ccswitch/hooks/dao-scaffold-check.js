@@ -59,20 +59,57 @@ const { execFileSync } = require("child_process");
 // ⚠ 双写守卫（`emitted`）是必须的：正常路径由 `inject()` 一次性写出 stdout；崩溃若发生在
 //   那次写之后，再写一次会拼出**非法 JSON** —— 消费方连解析都失败，等于又回到「什么都没有」，
 //   比崩溃本身更糟。故所有 stdout 写入都必须经过 `emitOnce`。
+//   **2026-08-08 补上它的断言**（issue #152 账 1 的第二半）：这一行此前**零断言覆盖**
+//   （PR #150 对抗 M1 实测），而它恰恰是承重的 —— 实测「写完之后才崩」两态：守卫在 ⇒
+//   stdout 一段合法 JSON（2184 B）；摘掉守卫 ⇒ **两段拼在一起、非法 JSON**（2844 B）。
+//   回归网见 tests/dao-scaffold-check.tests.js「双写守卫」那一组。
+//
+// 🔴 **`stdout.write` 自己抛出时，这张网新长出过一条更静默的路**（issue #152 账 1，2026-08-08 修）：
+//   `emitOnce` 先置 `emitted = true` 再写，写抛出 ⇒ 异常冒到 uncaughtException ⇒ 网调 `emitOnce`
+//   ⇒ 撞上 `if (emitted) return;` ⇒ 原先 `process.exit(0)`。**实测结果：exit 0 + stdout 0 字节**，
+//   与合法的「无事可报」（同样 exit 0 + 0 字节）**逐字节不可区分**；而 master 那一态是
+//   exit 1 + 一段栈。⇒ 这条路上，网让消费方看到的东西**比没有网时更少**。
+//   **修法**：写失败时记下来，另外两个通道（stderr + 退出码）各出一份声音。
+//   为什么退非 0 是安全的、也是唯一还剩的可区分信号：`command` 型 hook 的失效态是 fail-open，
+//   **只有 `exit 2` 才 block**，其余非 0 一律 non-blocking、动作照常进行，宿主只多显示一行
+//   `Failed with non-blocking status code:` + stderr 首行（判据与出处见
+//   `ccswitch/rules/dao-guard-writing.md` 的 `[#守-宿主失效态]`）。⇒ 退 1 换来的是「用户看得见一行」，
+//   代价为零；退 0 换来的是「与全绿静默一模一样」。
+//   ⚠ **照直写没验到的那一格**：上面那条判据是**官方文档证据，不是本机实测**（真跑一次
+//   `claude -p` 观察宿主拿这个退出码做什么，issue #152 自己点名的最大空白，本批仍未做）。
+//   本条不依赖它成立的那一半是：**这条路上 master 本来就是非 0**，本批只是把它退回去。
 let emitted = false;
+let emitFailure = null;   // stdout 写失败时留下的那个异常（null = 没失败过）
 function emitOnce(context) {
   if (emitted) return;
   emitted = true;
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
-  }));
+  try {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
+    }));
+  } catch (e) {
+    // stdout 这条路自己断了 ⇒ 报文**永远送不出去**，重试也没用（重试还会把半截字节留在管道里）。
+    emitFailure = e;
+    try {
+      process.stderr.write("✗ dao 脚手架检查：stdout 写不出去（" +
+        ((e && e.message) || String(e)) + "）⇒ 本次报文**整个丢失**，" +
+        "**这不是「全部通过」**（issue #152 账 1；退出码非 0 是这条路上唯一还剩的可区分信号）\n");
+    } catch (_) { /* stderr 也断了就真没有通道了，此时只剩退出码 */ }
+  }
 }
+// 退出码的**唯一出口**：报文送出去了退 0，送不出去退 1。刻意不用 2 —— 2 是 block 语义，
+// 一个 SessionStart 自检没有资格拦住会话。
+function emitExitCode() { return emitFailure ? 1 : 0; }
 process.on("uncaughtException", (e) => {
   const why = e && e.stack ? String(e.stack).split(/\r?\n/).slice(0, 3).join(" ⏎ ") : String(e);
   emitOnce("✗ dao 脚手架检查未预期崩溃：" + why +
     "（ccswitch/hooks/dao-scaffold-check.js）—— 本次检查**结果不完整**，" +
     "**这不是「全部通过」**（issue #147：exit 1 + 零字节与全绿静默不可区分）");
-  process.exit(0);
+  if (emitFailure) {
+    // 报文没送出去 ⇒ 崩溃原因也跟着没了。补进 stderr：这是它此刻唯一到得了的地方。
+    try { process.stderr.write("✗ dao 脚手架检查未预期崩溃（报文送不出去，原文只能落这里）：" + why + "\n"); } catch (_) {}
+  }
+  process.exit(emitExitCode());
 });
 
 let raw = "";
@@ -128,15 +165,31 @@ const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 //
 // **它什么时候保守、什么时候激进，照直写**（判据是注册值与下面 FALLBACK_MS 的大小关系）：
 //   · 注册 ≥ 10 s（本仓现状 10 s，且 docs/USER-ACTIONS.md 还在建议往 30 抬）⇒ 副本**估小**，
-//     保守，方向在安全侧 —— 这是今天的实况，也是本条不阻断的唯一理由；
+//     保守，方向在安全侧 —— 这是本 hook 今天的实况，也是本条不阻断的唯一理由；
 //   · 注册 < 10 s ⇒ 副本**估大**，激进：它会以为还有余量、把五道 spawn 检查全跑一遍，
 //     然后被宿主按真实注册值杀掉 ⇒ **整批静默消失**，正是这条路本来要防的那件事。
+// 🔴 **「注册 < 10 s」不是一个假想的将来态，本机此刻就有实例**（issue #152 账 3，
+//   2026-08-08 复测）：同一份 `~/.claude/settings.json` 里 17 个 hook 注册中，
+//   **5 个的 timeout 那一栏写的是 5 秒**（本条入库时 PR #150 对抗官数到的是 3 个，
+//   两天里又多了两个；此处刻意不写成 `timeout` 紧跟冒号那个形态 —— 本文件的源码级守卫
+//   按那个 token 数「子进程 timeout 站点」，注释里出现一次就会被当成一个没夹 capFor 的站点），
+//   落在那一侧时这份副本**高估 2.00 倍**。它们目前都不是本 hook，所以今天误差仍为零 ——
+//   **但这个反例的可达性是「同一份配置里已经有五个现役实例」，不是「等哪天有人改小」**。
+//   ⇒ 谁把本 hook 的注册调到 10 s 以下，这条退化路当场从保守翻成激进，而它不会出声。
 //
-// **仍然不改成「自己去读注册」是刻意的**：读注册要文件 I/O + JSON 解析，而走到这条路的
-// 前提就是「真模块（那份 I/O 与解析的正主）已经坏了」—— 在退化路上重造同一套 I/O，
-// 等于把它的失效面原样搬进兜底路。**代价换一种方式付**：加载失败那一行会把这份副本
-// 假设的总预算（`BUDGET.totalMs`）原样印进报文，读者看得见、复核得了。
-// 剩余风险与解冻条件记在 issue #147。
+// **仍然不改成「自己去读注册」是刻意的**，但**理由不是原先写的那一条**
+// （issue #152 账 2，2026-08-08 订正）：原文写的是「走到这条路的前提就是那份 I/O 与解析的
+// 正主已经坏了」—— **对抗官 3/3 实测把它证伪了：`require` 坏 ≠ `settings.json` 读不动**，
+// 三次实测同一时刻 settings 都读得动。**决定是对的，理由是错的**，而错的理由会让下一个人
+// 照着它做同类决定。真正的两条理由是：
+//   ㈠ 在退化副本里复制那 60 行注册匹配逻辑，本身就是**一个新的漂移面**（真模块改了、副本
+//      没跟上，而这两份的差别只在故障时才显形 —— 最不可能有人去看的时刻）；
+//   ㈡ 退化副本被调用的第二个位置（下面 catch 里那次 `initBudget(budgetLib)` 重来）
+//      **不在任何 try 里**：它只要抛一次，就直接落到文件顶部那张 uncaughtException 网上。
+//      副本现在只用 Number / Date.now / process.uptime，抛出面小到可以不再套一层；
+//      给它加 I/O 与 JSON 解析，等于把一个真实的抛出面搬进那个没有保护的位置。
+// **代价换一种方式付**：加载失败那一行会把这份副本假设的总预算（`BUDGET.totalMs`）
+// 原样印进报文，读者看得见、复核得了。剩余风险与解冻条件记在 issue #147 / #152。
 //
 // 回归网见 tests/dao-scaffold-check.tests.js「lib 坏掉」那几臂。其中「退化副本 ≡ 真模块」
 // 那一组是**行为级**对照（把这个函数从源码里取出来真的执行，再与真模块逐项比），
@@ -991,7 +1044,9 @@ function budgetSummaryLines() {
 // 闸门。两处各写各的会拼出非法 JSON（理由见那里的双写守卫注释）。
 function inject(context) {
   emitOnce(context);
-  process.exit(0);
+  // 退出码走同一个出口（issue #152 账 1）：**这里原先写死 `exit(0)`**，于是即使
+  // `emitOnce` 里的写失败已经被记下来，这一行也会把它抹平成「一切正常」。
+  process.exit(emitExitCode());
 }
 function done() { process.exit(0); }
 
