@@ -446,11 +446,14 @@
       "trigger": "派单",
       "judge_only": false,
       "self_authored": [
-        "08-01"
+        "08-01",
+        "08-08"
       ],
       "baseline": "dao 审计舰队 6+6 官因 Explore 未显式传 model 全跑 opus-4.8，用户点名「怎么派发的是 opus4.8」",
       "source_refs": [
-        "rationales §帅-1"
+        "rationales §帅-1",
+        "issue #72 2026-08-08T12:49:31Z 评论（17:10 额度烧干 / 20:17 断连双死，均在 5-6 路 Opus 并行时）",
+        "issue #70（08-08 自定项待用户确认：删「试点」二字 + 拍板豁免泛化 + 兵档步数定长门槛）"
       ],
       "status": "active"
     },
