@@ -342,6 +342,22 @@
       ],
       "status": "active"
     },
+    "归-认领协议": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "0",
+      "first_seen": "08-08",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-08"
+      ],
+      "baseline": "n=0，**预防型立法**：入库时本仓「两机撞同一张单」的实测事故数为 0——用户 2026-08-08 提出的是预期场景（原话「两台电脑都在解决同一个问题」）而非复盘，故本条不得被引用为「已防住 N 次」。两个阈值（自报缺省 4h / 协议上限 8h）为 AI 自定初值、未经实测，属判断档待用户拍板。已实跑的只有机制本身：issue #193 上 claim→回读→release 全程真实执行，认领后该单从 `--search \"label:任务 -label:在途\"` 队列消失（12→11 之外的直接观察：#193 由队首消失）",
+      "source_refs": [
+        "issue #193",
+        "ccswitch/rules/dao-workitem.md 认领协议节"
+      ],
+      "status": "active"
+    },
     "法-偏保守": {
       "file": "ccswitch/rules/dao-legislation.md",
       "n": "2",
