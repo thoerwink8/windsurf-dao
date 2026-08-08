@@ -92,3 +92,20 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 
 **在此之前的兜底**：dao.md 帅节存根行的四句留守判据（每句自足，不依赖该文件被读到）。
 **若实测为「载荷被清」**：按契约 `docs/specs/dao-slim-batch-202608.md` 回退判据处理该项，不是打补丁。
+
+### LW-2 · cron 常驻心跳兜底的 compaction 连续性实测 *(2026-08-09 挂账 · owner=帅（下一个长窗的开窗者）· 出处：PR #208 对抗复核)*
+
+**背景**：issue #194 落地的 `[dao-heartbeat]` cron 常驻心跳兜底（`ccswitch/rules/dao-longwindow.md`
+一·开窗节①）与 ScheduleWakeup 一样是 **session-only**——它防的是"殿后心跳因限流/API 错/工具报错/
+用户打断没调成"，但它自己扛不扛得住 compaction，与 LW-1 问的是同一个问题，此前一直没有独立编号。
+
+**为什么是欠账而不是缺陷**：cron 兜底本身是 2026-08-08 才试点、当天两次观测都在同一个未经 compaction
+的窗口内，"compaction 之后 cron 是否仍在跑"这一段**零实测**。
+
+**解冻条件（做完这一件即销账）**：下一个长窗里，**compaction 发生之后**核实该 session 的
+`[dao-heartbeat]` cron 是否仍能触发（可用下一发唤醒的时间戳与预期间隔比对），把结果写回
+`ccswitch/rules/dao-longwindow.md` §📮 投递通道 LW-2 这一格。**与 LW-1 各自独立销账**，不因其中一条
+测完就假设另一条同态。
+
+**在此之前的兜底**：ScheduleWakeup 心跳（甲①）仍是主驱动，cron 只是补充信道；两路都断才是真正的
+零 armed 唤醒。
