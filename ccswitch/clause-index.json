@@ -31,7 +31,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "4804e3bda0b3b81c931b1f5710d0e5205a262efd86640c9660f064b568c8e524",
+        "sha256": "3514dae24af40dd29744a943f4e2c5a9d1ddc77b6bd506b2ac91868c2be2a795",
         "lines": 113,
         "clauses": 22,
         "observation": 0,
@@ -591,7 +591,7 @@
       "body_excerpt": "- 查库 / API / CLI 文档前 = Read `rules/dao-docs-lookup.md`：库文档走 context7、网页走 WebFetch——**失败面是那一个域名不是网络受限**。 [#Shell-查文档]"
     },
     {
-      "id": "66076b5164e0",
+      "id": "7129e60e4e3f",
       "slug": "Shell-源与投影",
       "file": "ccswitch/dao.md",
       "line": 91,
@@ -611,7 +611,7 @@
       "judge_only": false,
       "observing": false,
       "shape": "top",
-      "body_excerpt": "- 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖；**看着像源的那层可能不在下发路径上** ⇒ 认源是追下发链。 [#Shell-源与投影]"
+      "body_excerpt": "- 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖；**看着像源的那层可能不在下发路径上** ⇒ 认源是追下发链。**动过任一层（live / DB providers / git 快照）⇒ 同一动作内跑漂移检测收尾并贴真退出码**（dao 侧＝`settings-drift.js` 裸跑 + `--prov…"
     },
     {
       "id": "8c9ddc7c2e70",
