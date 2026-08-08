@@ -127,6 +127,57 @@ function describe(v) {
 const DEFAULT_RESERVE_MS = 1500;
 
 /**
+ * 读一份 settings.json，收集「command 串里提到我」的注册命中。
+ * 抽成独立函数是 issue #142 的需要：要同时扫用户级与项目级两个文件，
+ * 这段「读 + 解析 + 找命中」的逻辑必须能被喂两次不同的路径。
+ *
+ * @returns {{hits:Array}|{error:string}} 三种读取失败（读不到/解析失败/没有 hooks 段）
+ *   统一走 `error`；成功时 `hits` 可以是空数组（文件正常但没提到这个 hook）。
+ */
+function scanSettingsFile(settingsPath, baseNoExt) {
+  let raw;
+  try {
+    raw = fs.readFileSync(settingsPath, "utf8");
+  } catch (e) {
+    return { error: "读不到 " + settingsPath + "：" + (e && e.message ? e.message : String(e)) };
+  }
+  let cfg;
+  try {
+    cfg = JSON.parse(raw);
+  } catch (e) {
+    return { error: settingsPath + " 解析失败：" + (e && e.message ? e.message : String(e)) };
+  }
+  const hooks = cfg && cfg.hooks;
+  if (!hooks || typeof hooks !== "object") return { error: settingsPath + " 里没有 hooks 段" };
+
+  const hits = [];
+  for (const eventName of Object.keys(hooks)) {
+    const groups = hooks[eventName];
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const entries = group && Array.isArray(group.hooks) ? group.hooks : [];
+      for (const entry of entries) {
+        if (!entry || typeof entry.command !== "string") continue;
+        if (!entry.command.includes(baseNoExt)) continue;
+        // 三态：没写 / 写了且合法 / 写了但坏了（判据与理由见 resolveRegisteredTimeoutMs 的 JSDoc）
+        const present = Object.prototype.hasOwnProperty.call(entry, "timeout") &&
+          entry.timeout !== undefined && entry.timeout !== null;
+        const parsed = present ? toBudgetMs(entry.timeout) : null;
+        const kind = !present ? "absent" : (parsed === null ? "invalid" : "explicit");
+        hits.push({
+          eventName,
+          ms: kind === "explicit" ? parsed : (kind === "absent" ? HOST_DEFAULT_TIMEOUT_MS : FALLBACK_TIMEOUT_MS),
+          kind,
+          raw: present ? entry.timeout : undefined,
+          settingsPath,
+        });
+      }
+    }
+  }
+  return { hits };
+}
+
+/**
  * 从 settings.json 里找出「这个 hook 文件」自己的注册 timeout。
  *
  * 多条注册命中时取**最小值**（fail-closed）：同一个脚本可能挂在多个事件上，
@@ -134,7 +185,10 @@ const DEFAULT_RESERVE_MS = 1500;
  *
  * @param {object} opts
  * @param {string} opts.hookFile      本 hook 的文件路径（用 basename 匹配 command 串）
- * @param {string} [opts.settingsPath] settings.json 路径；缺省按 HOME/USERPROFILE 推
+ * @param {string} [opts.settingsPath] **显式指定单个** settings.json 路径——只扫这一个，
+ *   不再自动叠加项目级（既有调用方/测试的约定，逐字保留）。
+ * @param {string} [opts.cwd]         项目根，缺省 `process.cwd()`；**只在不传 settingsPath 时用**，
+ *   决定去哪找项目级 `.claude/settings.json`（issue #142）。
  * @param {string} [opts.hookEventName] 当前事件名（如 "SessionStart"）；命中时优先取该事件下的
  * @returns {{ms:number, source:string, note:string, matched:number}}
  *   source: "registered" | "registered-default" | "registered-invalid" | "fallback"
@@ -145,13 +199,36 @@ const DEFAULT_RESERVE_MS = 1500;
  *     **FALLBACK（10000）**，不是宿主缺省。原先两者合流到 60000，等于**把一个已知写坏的
  *     配置送到整组假设里最乐观的那一个上**，与本模块「猜错要往提前降级那侧错」的原则**方向相反**
  *     （60000 是 10000 的 6 倍高估）。`"10"` 尤其现实：JSON 里给数字加引号是最常见的手误之一。
+ *
+ * ── 项目级注册（issue #142，2026-08-08 补）───────────────────────────────────
+ * 原版**只读用户级** `~/.claude/settings.json`，而宿主同样认**项目级**
+ * `<cwd>/.claude/settings.json`。issue #142 点的关闭条件第一步是「先实测宿主怎么合并这两处
+ * 注册」——本次没有另起沙箱重复实验，而是查了官方文档（`code.claude.com/docs/en/hooks` 与
+ * `.../settings` 两页，2026-08-08 核实）：**两处的 `hooks` 是合并语义，不是覆盖语义**——
+ * 「Hook entries merge across settings levels rather than replacing each other: user, project,
+ * and local settings add their own hooks without removing managed ones」「All matching hooks run
+ * in parallel」。**唯一的去重例外**：同一个 handler（command / timeout / matcher 逐字相同）
+ * 在多处出现时只跑一次；只要有一个字段不同（最典型就是 timeout 不同），两条各自独立跑，
+ * **各自的进程各自算各自的墙钟**。
+ * ⇒ 对本模块的含义：如果同一个 hook 文件同时在用户级（如 10s）与项目级（如 3s）挂了注册，
+ * 宿主会起**两个独立进程**，一个被 10s 那条杀、一个被 3s 那条杀。**每个进程读到的
+ * settings.json 是同一份内容**（它分不出自己是被哪条注册触发的那一次）——正因如此，
+ * 既有的「多条命中取最小」（fail-closed）策略**天然就是正确答案**：3s 那个进程算出
+ * min(10,3)=3s，答对了；10s 那个进程也算出 3s，比它实际能用的 10s 更保守——**方向仍在
+ * 安全侧**（提前降级好过撞刀），只是稍浪费一点本可以用上的余量。本次只是把「取最小」的
+ * 池子从「同一份文件里的多条命中」扩到「用户级 + 项目级两份文件里的多条命中」，判据一字未改。
+ * ⚠️ **已知缺口，照直写**：只加了项目级 `.claude/settings.json` 这一层，**没有**加
+ * `.claude/settings.local.json`（宿主文档里 local 优先级比 project 更高，同样走合并语义）——
+ * issue #142 的关闭条件只点名项目级，local 层留作后续，别把这次的覆盖读成「所有 scope 都查了」。
+ * **两态断言**（关闭条件③）：只有用户级 ⇒ note 不带 scope 后缀（与旧版逐字节相同）；
+ * 用户级 + 项目级都被扫到 ⇒ note 带一段「已核对 N 处 scope」，逐处报「有没有找到我」，
+ * 不管有没有命中都报——「查过但零命中」与「压根没查」必须分得开。
  */
 function resolveRegisteredTimeoutMs(opts) {
   const o = opts || {};
   const base = path.basename(String(o.hookFile || ""));
   const baseNoExt = base.replace(/\.(js|mjs|cjs)$/, "");
   const home = o.home || process.env.HOME || process.env.USERPROFILE || "";
-  const settingsPath = o.settingsPath || path.join(home, ".claude", "settings.json");
 
   const bail = (why) => ({
     ms: FALLBACK_TIMEOUT_MS,
@@ -162,47 +239,40 @@ function resolveRegisteredTimeoutMs(opts) {
 
   if (!baseNoExt) return bail("没给 hookFile");
 
-  let raw;
-  try {
-    raw = fs.readFileSync(settingsPath, "utf8");
-  } catch (e) {
-    return bail("读不到 " + settingsPath + "：" + (e && e.message ? e.message : String(e)));
-  }
-  let cfg;
-  try {
-    cfg = JSON.parse(raw);
-  } catch (e) {
-    return bail(settingsPath + " 解析失败：" + (e && e.message ? e.message : String(e)));
-  }
+  let hits;
+  let scopeReport = []; // 只在「自动多 scope」路径下填；单路径(显式 settingsPath)留空数组
 
-  const hooks = cfg && cfg.hooks;
-  if (!hooks || typeof hooks !== "object") return bail(settingsPath + " 里没有 hooks 段");
+  if (o.settingsPath) {
+    // 既有调用方/测试的约定：显式传了就只扫这一个，行为与消息逐字保留（不叠加项目级）。
+    const r = scanSettingsFile(o.settingsPath, baseNoExt);
+    if (r.error) return bail(r.error);
+    if (!r.hits.length) return bail("settings.json 里没有提到 " + baseNoExt + " 的注册");
+    hits = r.hits;
+  } else {
+    // issue #142：没传 settingsPath 时，用户级 + 项目级都扫（判据见本函数 JSDoc 那一段）。
+    const userPath = path.join(home, ".claude", "settings.json");
+    const cwd = o.cwd || process.cwd();
+    const projectPath = path.join(String(cwd), ".claude", "settings.json");
+    const scopes = [{ name: "user", path: userPath }];
+    if (path.resolve(projectPath) !== path.resolve(userPath)) {
+      scopes.push({ name: "project", path: projectPath });
+    }
 
-  // 收集所有「command 串里提到我」的注册条目，记下它挂在哪个事件上。
-  const hits = [];
-  for (const eventName of Object.keys(hooks)) {
-    const groups = hooks[eventName];
-    if (!Array.isArray(groups)) continue;
-    for (const group of groups) {
-      const entries = group && Array.isArray(group.hooks) ? group.hooks : [];
-      for (const entry of entries) {
-        if (!entry || typeof entry.command !== "string") continue;
-        if (!entry.command.includes(baseNoExt)) continue;
-        // 三态：没写 / 写了且合法 / 写了但坏了（判据与理由见本函数 JSDoc）
-        const present = Object.prototype.hasOwnProperty.call(entry, "timeout") &&
-          entry.timeout !== undefined && entry.timeout !== null;
-        const parsed = present ? toBudgetMs(entry.timeout) : null;
-        const kind = !present ? "absent" : (parsed === null ? "invalid" : "explicit");
-        hits.push({
-          eventName,
-          ms: kind === "explicit" ? parsed : (kind === "absent" ? HOST_DEFAULT_TIMEOUT_MS : FALLBACK_TIMEOUT_MS),
-          kind,
-          raw: present ? entry.timeout : undefined,
-        });
-      }
+    hits = [];
+    const okScopes = [];
+    for (const s of scopes) {
+      const r = scanSettingsFile(s.path, baseNoExt);
+      if (r.error) { scopeReport.push(s.name + "(读取失败)"); continue; }
+      scopeReport.push(s.name + "(" + r.hits.length + ")");
+      okScopes.push(s.name);
+      for (const h of r.hits) hits.push(Object.assign({ scope: s.name }, h));
+    }
+
+    if (!hits.length) {
+      return bail((okScopes.length ? "已扫 " : "已尝试 ") + scopes.length + " 处 settings.json（" +
+        scopeReport.join("、") + "），都没有提到 " + baseNoExt + " 的注册");
     }
   }
-  if (!hits.length) return bail("settings.json 里没有提到 " + baseNoExt + " 的注册");
 
   // 当前事件下有命中就只看那一批；没有就看全部（跨事件复用时的兜底）。
   const scoped = o.hookEventName ? hits.filter((h) => h.eventName === o.hookEventName) : [];
@@ -210,14 +280,23 @@ function resolveRegisteredTimeoutMs(opts) {
   let best = pool[0];
   for (const h of pool) if (h.ms < best.ms) best = h;
 
+  // scope 后缀：**分界线是「调用方给没给 settingsPath」，不是「命中了几处」**。
+  // 显式给了 settingsPath（既有调用方/单测）⇒ scopeReport 恒为空数组 ⇒ 恒不带后缀，
+  // note 与旧版逐字节相同；自动双 scope 路径（生产调用，见头注）⇒ user/project 两处
+  // **只要都被尝试过就都报**，命中 0 条也报「project(读取失败)」——
+  // 这正是关闭条件③要的东西：读者要看到的是「查过但零命中」而不是「没查」。
+  const scopeNote = scopeReport.length > 1
+    ? "（已核对 " + scopeReport.length + " 处 scope：" + scopeReport.join(" + ") + "）"
+    : "";
+
   const SOURCE_BY_KIND = { explicit: "registered", absent: "registered-default", invalid: "registered-invalid" };
   const NOTE_BY_KIND = {
-    explicit: () => "读自 " + settingsPath + " 的 " + best.eventName + " 注册（timeout=" + (best.ms / 1000) + "s" +
-      (pool.length > 1 ? "，" + pool.length + " 条命中取最小" : "") + "）",
-    absent: () => "注册里没写 timeout ⇒ 按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS + " ms 算（" + best.eventName + "）",
+    explicit: () => "读自 " + (best.settingsPath || "settings.json") + " 的 " + best.eventName + " 注册（timeout=" + (best.ms / 1000) + "s" +
+      (pool.length > 1 ? "，" + pool.length + " 条命中取最小" : "") + "）" + scopeNote,
+    absent: () => "注册里没写 timeout ⇒ 按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS + " ms 算（" + best.eventName + "）" + scopeNote,
     invalid: () => "注册里的 timeout 写坏了（" + describe(best.raw) + "）⇒ 按**保守缺省** " +
       FALLBACK_TIMEOUT_MS + " ms 算，**不按宿主缺省 " + HOST_DEFAULT_TIMEOUT_MS +
-      " ms 算**（一个已知写坏的值不该落到最乐观的假设上）（" + best.eventName + "）",
+      " ms 算**（一个已知写坏的值不该落到最乐观的假设上）（" + best.eventName + "）" + scopeNote,
   };
   return {
     ms: best.ms,
@@ -284,11 +363,20 @@ function createBudget(opts) {
     capFor(wantMs) {
       return Math.max(1, Math.min(Number(wantMs) || 0, api.left()));
     },
-    /** 记一笔「这项没跑」，并返回给用户看的那一行 */
-    skip(what, minMs) {
+    /**
+     * 记一笔「这项没跑」，并返回给用户看的那一行。
+     *
+     * @param {string} [extra] **可选**，issue #140 加：调用方若量到了本次真实的单样本耗时，
+     *   把判断结果（假降级 / 无法排除真降级 / 零样本）以一句话传进来，原样拼进 `⟨…⟩`。
+     *   不传（缺省 undefined）时这一行与旧版逐字节相同——调用方不是每个都有样本可给
+     *   （原子项要么整道跑完要么整道跳过，压根没有「本次单次耗时」这个概念；只有像条款闸
+     *   那种逐文件循环、且预算是在循环途中才见底的场景，才有意义）。
+     */
+    skip(what, minMs, extra) {
       skipped.push(what);
       return "⏱ " + what + " **没跑**：宿主预算只剩 " + api.left() + " ms，起它至少要 " +
-        minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）";
+        minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）" +
+        (extra ? " ⟨" + extra + "⟩" : "");
     },
     /**
      * 内层常量自检：列出**够不着的**常量 —— 它们背后的降级路径结构上不可达。
