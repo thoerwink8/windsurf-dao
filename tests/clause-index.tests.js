@@ -1251,8 +1251,12 @@ async function main() {
       /corpus\.md（内容已变）/.test(src.out), src.out.slice(0, 500));
     check("⑧.2 源变了：仓态三条事实逐条打出来（不是一句判定）",
       /ⓘ 仓态（git 事实三条/.test(src.out) && /· 合并进行中（MERGE_HEAD 在）：/.test(src.out) &&
-      /· HEAD 自己是合并提交：/.test(src.out) && /· 上面那些源改过未提交：/.test(src.out),
+      /· HEAD 自己是合并提交：/.test(src.out) && /· 这几个源改过未提交：/.test(src.out),
       src.out.slice(0, 1200));
+    // issue #149 带账 5：标签原文是「**上面**那些源」，而三个调用点里有两个上面一个源都没列
+    // ⇒ 悬空指代。改成由 printRepoState 自己打出指代物；这条钉住它真的打了。
+    check("⑧.2 源变了：仓态自己说清「问的是这几个源」（带账 5：指代物不许悬空）",
+      /· 问的是这几个源：.*corpus\.md/.test(src.out), src.out.slice(0, 1200));
 
     // (c) 内部账目自相矛盾 ⇒ cause=self-inconsistent
     //
@@ -1310,6 +1314,15 @@ async function main() {
       (handDelete.out.match(/^ {7}· /gm) || []).length >= 2, handDelete.out.slice(0, 1400));
     check("⑧.2 自相矛盾档也打仓态三条事实（最笃定的那句不许在零 git 证据下说出来）",
       /ⓘ 仓态（git 事实三条/.test(selfInc.out), selfInc.out.slice(0, 1400));
+    // 🔴 issue #149 带账 4（最承重）：成因③「生成器 bug」在 bug **活着的时候结构上看不见**
+    //    （bug 在 ⇒ 两边逐字节相同 ⇒ drift=none ⇒ 压根走不到自洽性审计）。此前这句话只住在
+    //    clause-parser.mjs 的函数头注里 —— **对的话在注释里、压缩过的话在报文里**，
+    //    而注释没人读。取的是「低成本诚实解」：报文自己说清这一格看不见，不是补上能力。
+    for (const [name, r] of [["c1 手改计数", selfInc], ["c3 生成器算错计数", genBug]]) {
+      check(`⑧.2 ${name}：报文自己说清「活着的生成器 bug 这里看不见」（带账 4 的诚实解）`,
+        /此刻仍然活着的生成器 bug.*结构上看不见/.test(r.out) &&
+        /唯一可达的形态是「已经被修掉\/改掉的旧 bug/.test(r.out), r.out.slice(0, 2000));
+    }
 
     // (d) 自洽但与真相源不符 ⇒ cause=hand-or-generator
     const hand = bendIndex((d) => { d.clauses[0].title = "我手改了这个派生物"; });
@@ -1321,6 +1334,15 @@ async function main() {
       hand.out.slice(0, 900));
     check("⑧.2 自洽档：明说「自洽**不排除**合并」（反向也不成立，两向都要写）",
       /内部账目自洽\*\*不排除合并\*\*/.test(hand.out), hand.out.slice(0, 900));
+    // 🔴 issue #149 带账 7：`printRepoState` 的**第三个**调用点（自洽 / 判不了那一档）
+    //    此前零断言 —— 2026-08-08 实测把它整个删掉，本文件 PASS=238 FAIL=0，判别力为 0。
+    //    这两条就是它的回归网：删掉那一行，两条一起红。
+    check("⑧.2 自洽档也打仓态三条事实（带账 7：这一格此前零断言，整个删掉全绿）",
+      /ⓘ 仓态（git 事实三条/.test(hand.out) && /· 合并进行中（MERGE_HEAD 在）：/.test(hand.out) &&
+      /· HEAD 自己是合并提交：/.test(hand.out) && /· 这几个源改过未提交：/.test(hand.out),
+      hand.out.slice(0, 1400));
+    check("⑧.2 自洽档的仓态也自己说清问的是哪几个源（带账 5 的第三个调用点）",
+      /· 问的是这几个源：.*corpus\.md/.test(hand.out), hand.out.slice(0, 1400));
     check("⑧.2 自洽档不冒充自相矛盾档（负控另一向）",
       !/说不出是谁弄坏的/.test(hand.out), hand.out.slice(0, 900));
 
@@ -1372,6 +1394,13 @@ async function main() {
     check("⑧.3 [索引红,台账绿] ⇒ 有索引处方、无台账处方，且明说台账无事",
       g2.code === 1 && HAS_INDEX_FIX.test(g2.out) && !HAS_LEDGER_FIX.test(g2.out) && /台账这一侧无事/.test(g2.out),
       g2.out.slice(-800));
+    // 🔴 issue #149 带账 3：处方段原先**自己又列了一遍成因**（你改了源 / 合并 / 手改了派生物），
+    //    而归因段按档列的是另外两组（source 档：你改了源 / 合并 / 你没碰过；self-inconsistent 档：
+    //    合并 / 手改 / 生成器 bug）⇒ **同一份输出里三组并列，读者对不上号**。
+    //    两半一起断：①指回归因段 ②不再自列。缺任一半，MUT-H3（改回旧写法）就不会红。
+    check("⑧.3 处方段不自列成因、只指回归因段（带账 3：同屏三组成因对不上号）",
+      /\*\*不管上面归因段列的是哪一种成因，修法都是这一条\*\*/.test(g2.out) &&
+      !/三种成因（你改了源/.test(g2.out), g2.out.slice(-800));
 
     // 格 3：索引绿 · 台账红 ⇒ **不许**给「跑生成器」当处方
     w(corpus, TEXT);
@@ -1564,7 +1593,7 @@ check("⑧.4 MUT①⇒ 自相矛盾档塌成自洽档（归因断言真的在承
     };
     const LBL_FLIGHT = "合并进行中（MERGE_HEAD 在）";
     const LBL_MERGE = "HEAD 自己是合并提交";
-    const LBL_DIRTY = "上面那些源改过未提交";
+    const LBL_DIRTY = "这几个源改过未提交";   // 2026-08-08 由「上面那些源」改名，issue #149 带账 5
 
     // ── 态 A：源被本地改过（未提交）⇒ 否/否/是 ──
     {
@@ -1704,6 +1733,78 @@ check("⑧.4 MUT①⇒ 自相矛盾档塌成自洽档（归因断言真的在承
       check("⑧.5 D mutation canary：变异体没崩（红的是判据不是进程）", rmD.code === 1, "exit=" + rmD.code);
       check("⑧.5 D 复原：守卫写回去后又说「判不了」（不是恒红也不是恒绿）",
         /ⓘ 仓态：判不了/.test(runNoGit().out), "复原后仍在撒谎");
+    }
+
+    // ── 态 E：**源全在仓外** ⇒ 第三条必须说「查不了（零样本）」，不许答确定的「否」──
+    //
+    // 🔴 issue #149 带账 2b：`rel` 为空时原先给的探针是 `{ok:true,status:0,out:""}`
+    //    ⇒ `git status` **一次都没跑**，却打出「否」，随后那句提示还据此说「这些源没有本地改动」。
+    //    **没查 ≠ 查了没事** —— 与 D 那一格是同一个病换了个入口（D 是 `status:128` 被读成「否」）。
+    //    今天生产路径碰不到（`defaultSources()` 全相对路径），属**潜伏**，故这一格是回归网不是止血。
+    {
+      const root = mkRepo("extsrc");
+      // 语料放在**仓外**（mkRepo 造的仓在 G/extsrc 下，这份放 G/ 顶层 ⇒ 对那个仓而言是绝对路径源）
+      const ext = path.join(G, "external-corpus.md");
+      w(ext, FIX_A_TEXT);
+      w(path.join(root, "src.json"), JSON.stringify({
+        sources: [{ file: ext, selector: "all-top-level", role_scheme: "dispatch-sections" }],
+      }, null, 2) + "\n");
+      gen(root); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "regen ext");
+      w(ext, FIX_A_TEXT + "\n- **戊条**：仓外改的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+      const r = runIn(root);
+      check("⑧.5 E 前提：源真的被记成仓外路径（否则测的是「在仓里」那一态，而它恒绿）",
+        r.code === 1 && /源变动：/.test(r.out) && /external-corpus\.md（内容已变）/.test(r.out),
+        r.out.slice(0, 1200));
+      check("⑧.5 E 源全在仓外 ⇒ 第三条答「查不了」，**不是**确定的「否」（带账 2b）",
+        /· 这几个源改过未提交：查不了（这次一个源都不在本仓里/.test(r.out),
+        r.out.slice(0, 1400));
+      check("⑧.5 E 并把「一个都不在本仓里」写进指代物那一行（读者看得见分母是 0）",
+        /· 问的是这几个源：（一个都不在本仓里/.test(r.out), r.out.slice(0, 1400));
+      check("⑧.5 E 零样本时**不许**说「你自己改的可能更大」（那句话的依据正是那个假的「否」）",
+        !/你自己改的可能更大/.test(r.out), r.out.slice(0, 1400));
+
+      // ── mutation：把探针改回「零样本也算查过了」⇒ 本态必须退回那个假的「否」──
+      const ANCHOR_ZERO = /: \{ ok: false, why: "这次一个源都不在本仓里（零样本，git status 没跑）" \};/;
+      const genSrcE = fs.readFileSync(GEN, "utf8");
+      check("⑧.5 E mutation 锚命中（锚落空 = 这个实验根本没做）", ANCHOR_ZERO.test(genSrcE));
+      const targetE = scriptOf(root);
+      w(targetE, genSrcE.replace(ANCHOR_ZERO, ': { ok: true, status: 0, out: "" };'));
+      const rmE = runIn(root);
+      fs.copyFileSync(GEN, targetE); // 字节级复原
+      check("⑧.5 E mutation：改回旧写法 ⇒ 零样本又答出一个确定的「否」",
+        fact(rmE.out, LBL_DIRTY) === "否", rmE.out.slice(0, 1400));
+      check("⑧.5 E mutation canary：变异体没崩（红的是判据不是进程）", rmE.code === 1, "exit=" + rmE.code);
+      check("⑧.5 E 复原：写回去后又说「查不了」（不是恒红也不是恒绿）",
+        /· 这几个源改过未提交：查不了/.test(runIn(root).out), "复原后仍在撒谎");
+    }
+
+    // ── 态 F：**合并之后又提交过几次** ⇒ 前两条看不出来了，此时必须闭嘴而不是乱指 ──
+    //
+    // 🔴 issue #149 实现官未尽处 #3：报文末尾那句 ⚠ 自陈「合并之后又提交过几次，前两条就
+    //    看不出来了」—— 对抗官造过这个态、实测失效方向安全（**闭嘴而非乱指**），但**没有
+    //    回归网钉着这个方向**：哪天它变成「乱指」（比如把 dirty=否 读成「就是合并」）不会有东西响。
+    {
+      const root = mkRepo("aftermerge");
+      gen(root); git(root, "add", "-A"); git(root, "commit", "-q", "-m", "regen");
+      git(root, "checkout", "-q", "-b", "side");
+      w(path.join(root, "other.txt"), "side\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "side");
+      git(root, "checkout", "-q", "main");
+      const mg = git(root, "merge", "--no-edit", "-q", "side");
+      check("⑧.5 F 前提：合并真的成了", mg.status === 0, JSON.stringify(mg.stderr));
+      // 合并**之后**再改源并提交两次 ⇒ HEAD 不再是合并提交、工作树也干净
+      w(path.join(root, "corpus.md"), FIX_A_TEXT + "\n- **戊条**：合并之后加的。 [n=1 @07-06 触发:无] [仅判据·无触发]\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "after merge 1");
+      w(path.join(root, "other.txt"), "again\n");
+      git(root, "add", "-A"); git(root, "commit", "-q", "-m", "after merge 2");
+      const r = runIn(root);
+      check("⑧.5 F 前提：三条事实此时是 否/否/否（合并已被后续提交盖住）",
+        fact(r.out, LBL_FLIGHT) === "否" && fact(r.out, LBL_MERGE) === "否" && fact(r.out, LBL_DIRTY) === "否",
+        r.out.slice(0, 1400));
+      check("🔴 ⑧.5 F 近似失效的方向是**闭嘴**：一句「⇒ …可能更大」都不许打",
+        !/可能更大/.test(r.out) && !/别把它读成「是你改的」/.test(r.out), r.out.slice(0, 1400));
+      check("⑧.5 F 但那句「三条都是近似」的自陈仍在（闭嘴不等于什么都不说）",
+        /⚠ 三条都是近似：合并之后又提交过几次/.test(r.out), r.out.slice(0, 1400));
     }
   }
 

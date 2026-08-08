@@ -897,6 +897,10 @@ export function serializeIndex(index) {
  * ⇒ **成因③唯一可达的形态是「已经被修掉/改掉的旧 bug」。** 一个此刻仍在的计数 bug 会静默通过。
  * （这不是本函数引入的 —— 审计挂在 drift 分支下是既有结构；写在这里是因为读者会从成因表
  *   推出一个它并不具备的能力。）
+ * 🟢 **2026-08-08（issue #149 带账 4）：这段话现在也进了报文本身**（gen-clause-index.mjs 的
+ *   `self-inconsistent` 档，成因③下面那四行）。此前它只住在这里 —— 而「对的话在注释里、
+ *   压缩过的话在报文里」正是同一批订正过的那个病。**缺口没堵，只是不再骗人**：
+ *   要真看见一个正在发生的生成器 bug，仍然需要一个**不共用本生成器**的独立旁证。
  *
  * @returns {{readable:boolean, why:string|null, problems:string[], counted:object}}
  */

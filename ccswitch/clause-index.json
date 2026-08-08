@@ -31,7 +31,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "3514dae24af40dd29744a943f4e2c5a9d1ddc77b6bd506b2ac91868c2be2a795",
+        "sha256": "fcb1e315479e9c3d10514af715a00d812ffa98318eea63e9e8e8e8d9dbda9af8",
         "lines": 113,
         "clauses": 22,
         "observation": 0,
@@ -48,8 +48,8 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "5e31980407007d5fdb23d3f4cf1f215d4479369b232000ee9e9aa7076f7b8ab5",
-        "lines": 197,
+        "sha256": "0a02a2801edc0fdcf4ac7f8f0e07a628e2924ee7ecf0167bd7cd550f56ec1541",
+        "lines": 262,
         "clauses": 9,
         "observation": 0,
         "fieldless": 0,
@@ -65,7 +65,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "ebed0051a4eef3da400fc25906f1245df87401e1eb25413301e352acb071c0df",
+        "sha256": "dfe1cba7a83a64ce20795ae28a49fe8e6cf2eb8f1361d934f2f877f4e5ed4f34",
         "lines": 46,
         "clauses": 7,
         "observation": 0,
@@ -942,7 +942,7 @@
       "body_excerpt": "- **派实现类官时，派单令带一句「覆写既有文件前先 Read 它」**（宿主硬规则，2026-08-02 立）：Write 一个**已存在**的文件而没先 Read 过它，宿主**直接判失败**（新建文件不受此限，Read 一个不存在的文件反而报错）。它不会导致错误结果，**只白费一次工具往返**——但它是全库第二…"
     },
     {
-      "id": "4b429522022d",
+      "id": "2f51808ae97a",
       "slug": "派-档位调整",
       "file": "ccswitch/rules/dao-dispatch.md",
       "line": 97,
@@ -958,7 +958,8 @@
       "baseline": "dao 审计舰队 6+6 官因 Explore 未显式传 model 全跑 opus-4.8，用户点名「怎么派发的是 opus4.8」",
       "self_declared": "08-01",
       "self_declared_all": [
-        "08-01"
+        "08-01",
+        "08-08"
       ],
       "has_meta_field": true,
       "judge_only": false,
@@ -1084,7 +1085,7 @@
       "body_excerpt": "- **被守护对象清单必须是测试实况的派生物，不手写**：一份守卫覆盖到哪些文件的清单，若靠人工维护会**结构性滞后**（本仓实证：作用域档手写清单只覆盖 2/11＝18% 的被 mutation 守卫，且恰好漏掉它自己记录的那次事故的当事文件）。改法：从既有 mutation 测试台账**反算**出「被守护对象清单…"
     },
     {
-      "id": "2b5258318fd4",
+      "id": "6a2b3f56d2a4",
       "slug": "守-宿主失效态",
       "file": "ccswitch/rules/dao-guard-writing.md",
       "line": 36,
@@ -1097,7 +1098,7 @@
       "n": "1",
       "first_seen": "08-06",
       "trigger": "守卫头注",
-      "baseline": "本窗三条结论压在这一格上悬了五轮无人验（#133/#145 七道闸会不会全灭 · #152 exit 1 换 exit 0 损失了什么 · #127/#130 降级路径的价值）",
+      "baseline": "本窗三条结论压在这一格上悬了~~五轮~~六轮无人验（#133/#145 七道闸会不会全灭 · #152 exit 1 换 exit 0 损失了什么 · #127/#130 降级路径的价值）。第六轮 = 2026-08-08 PR #197：把 #133 常量侧那一格有界化了，宿主侧这三格照旧没验，实现官一度写「本批查过、这条基线仍然准确」而只对了一半，由对抗官捞回。⚠ 这个轮数是**手填的下界**，没有任何东西会在下一轮到来时替它 +1 —— 那正是本节「给退役造触发器」要防的同一种漂移，它这次落在自己的基线字段上",
       "self_declared": null,
       "self_declared_all": [],
       "has_meta_field": true,

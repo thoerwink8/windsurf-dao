@@ -1,5 +1,4 @@
-﻿# @dao-test-tier: env   # 整套只在 --env 跑：沙盒用固定路径 _tmp/pr-body-scan-test（未随机化 ⇒ 并行必互踩）
-<#
+﻿<#
 .SYNOPSIS
     `ccswitch/lib/pr-body-scan.ps1` + `ccswitch/scripts/check-pr-body-mojibake.ps1` 的纯断言
     自测（无 Pester 依赖）。**canonical（2026-08-02 随判据库一并由 mousse-cli
@@ -36,9 +35,14 @@
 .NOTES
     独立可运行：powershell -NoProfile -File tests/pr-body-scan.tests.ps1
     退出码：0 = 全部通过；1 = 存在失败。
-    夹具落 `_tmp/pr-body-scan-test/`（运行期生成、不入库，`_tmp/` 已在 .gitignore）。
-    **夹具是 `_tmp/` 的子目录，而被测扫描面不递归** ⇒ 夹具永远不会污染
-    `check-pr-body-mojibake.ps1` 的默认扫描面。这不是巧合，是选非递归的收益之一。
+
+    ## 沙盒路径与并发形态：见下方 $workDir 那一段的注释块，**刻意不写在这个 help 块里**
+
+    理由（2026-08-08 · PR #200 对抗官 F1）：那一段绕不开要说「本套此前为什么被标环境敏感层」，
+    而说清楚就免不了引用那个标记的字面形态 —— 这个 help 块**落在 run-tests.mjs 标记扫描器的
+    头 60 行窗口内**，散文里一个凑齐了行首井号的标记会被它当成真标记，把整套静默判出默认层
+    且全仓零红。搬到窗口外去写，是这一格唯一结构性的解法。
+
     PS 5.1 兼容：无三元运算符、无 && 链、禁 2>&1。本文件须以 BOM UTF-8 存盘。
 #>
 
@@ -48,15 +52,48 @@ $repoRoot  = Split-Path -Parent $PSScriptRoot
 $targetPs1 = Join-Path $repoRoot 'ccswitch/scripts/check-pr-body-mojibake.ps1'
 $libPs1    = Join-Path $repoRoot 'ccswitch/lib/pr-body-scan.ps1'
 $psExe     = (Get-Command powershell.exe).Source
-$workDir   = Join-Path $repoRoot '_tmp/pr-body-scan-test'
+$workDir   = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-pr-body-scan-test-$(Get-Random)"
 
 foreach ($p in @($targetPs1, $libPs1)) {
     if (-not (Test-Path $p)) { Write-Host "被测脚本不存在：$p"; exit 1 }
 }
 . $libPs1
 
-if (Test-Path $workDir) { Remove-Item -Path $workDir -Recurse -Force }
+# 沙盒随机化之后**开跑不再先删**（2026-08-08 · issue #187）：原先那句
+# `if (Test-Path $workDir) { Remove-Item -Recurse -Force }` 本意是「清上次残渣」，
+# 而它同时就是并行互踩的凶器 —— 后开跑的实例把先开跑那个的整棵沙盒删掉。
+# 随机路径每次唯一 ⇒ 没有残渣可清；收尾由末尾的 finally 负责。
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+
+# ── 沙盒路径：**随机化**，不落仓内 _tmp/（2026-08-08 · issue #187）──────────────────
+# 夹具落 `%TEMP%/windsurf-dao-pr-body-scan-test-<Get-Random>/`，收尾在 `finally` 里删掉，
+# 形态照 `tests/link-codex.tests.ps1` 的正解样板。**为什么改**：原先写死
+# `_tmp/pr-body-scan-test` 且启动即 `Remove-Item -Recurse -Force` ⇒ 两个实例并行时
+# **后者开跑就把前者的沙盒删了**，那不是「结果不准」而是破坏性竞态；那也正是本套此前被标
+# 环境敏感层（那个 dao-test-tier 标记，整套只在 --env 跑）的唯一理由。随机化之后标记已摘、
+# 本套回默认层。
+#
+# 🔴 **这一段为什么住在这儿、而且不把那个标记连井号一起写全**（2026-08-08 · PR #200 F1）：
+#   `run-tests.mjs` 的 PS 标记扫描器锚的是「行首井号 + 那个标记名 + 冒号」，且只看**头 60 行**。
+#   本段原先住在文件顶部的 help 块里、写的是带反引号的完整字面量 —— 对抗官实测**只要去掉
+#   那对反引号**（一次最普通的散文编辑），整套就被静默判成 env 层：默认层不再跑它，而全仓
+#   **零红、退出码与正常跑一模一样**。两道都上了：①本段搬出头 60 行窗口（结构上不可命中）
+#   ②行文里不再出现「行首井号 + 完整标记」那个形态。**别把它写回去，也别把它搬回 help 块。**
+#
+# ⚠ 原先「夹具是 `_tmp/` 的子目录、而被测扫描面不递归 ⇒ 夹具不污染默认扫描面」那条论证，
+#   现在换了个更强的理由但结论不变：夹具压根不在仓里了，连「同一棵树」都不是。
+#   非递归那个取舍的收益因此少了这一格 —— 照直写，别让下一个人以为非递归还在挣这份钱。
+# **反过来这一格值得记**：本套所有断言都显式传 `-ScanRoot`，而 `check-pr-body-mojibake.ps1`
+#   的目录守卫**只在走默认扫描面时才守**（见它 `$usingDefault` 那一段）⇒ 夹具搬出仓外不触发
+#   守卫；那道守卫的覆盖面因此**不由本套验证**，它由「不传 -ScanRoot」那条路负责，而那条路
+#   本套没有用例。
+
+# ⚠ **下面这个 try 块刻意不给整份正文重排缩进**（同 tests/dao-pr-merge.tests.ps1 那一处）：
+# 本文件是护栏类文件，为了加两行收尾清理把 420 行整体缩进一格会让 diff 淹掉真正的改动。
+# PowerShell 不靠缩进断句；`exit` 在 try 里照样跑 finally 且退出码原样保留（PS 5.1 实测）。
+# 兜不住的那一格照直写：**进程被外部杀掉**（宿主超时 / Ctrl-C / spawnSync 超时）时
+# finally 不跑 ⇒ %TEMP% 下留一个随机名目录。已知代价，不是疏漏。
+try {
 
 $results = New-Object System.Collections.Generic.List[object]
 
@@ -491,3 +528,10 @@ if ($failing.Count -gt 0) {
 }
 Write-Host ("test-pr-body-scan 全部通过（{0} 项）。" -f $results.Count)
 exit 0
+
+} finally {
+    # 随机沙盒的收尾（issue #187）。`-ErrorAction SilentlyContinue`：清理失败不该把一次通过的
+    # 回归网翻成红 —— 清不掉最坏结果是 %TEMP% 里多一个目录，把绿改成红会训练人无视这道闸。
+    # 场景 1x 那个 FileShare::None 独占句柄已在它自己的 finally 里 Dispose 过，此处无需特殊处理。
+    Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+}
