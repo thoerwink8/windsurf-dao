@@ -554,10 +554,16 @@ Assert-True '9b **没有**发出 gh pr merge（日志里只该有第 0 步那次
 Assert-True '9c 远程分支没被动、主干没被推进（真·零写操作）' `
     ((Test-RemoteBranch -OriginDir $f9.Origin -Branch $f9.Branch) -and `
      ((Get-RemoteTip -OriginDir $f9.Origin -Branch 'main') -eq $tip9before)) ''
-Assert-True '9d 前置检查与各步打印都还在（0/1-2/3/4/5/6 六个步骤标题）' `
+# issue #121（PR #206 对抗官 F-A）：原正则 `'===\s*3\.'` 没有锚住"3."后面那个字符，
+# 于是它连 `=== 3.5 派生物核对…` 也一起命中——钉不住第 3 步，也钉不住第 3.5 步，两个都测不到。
+# 改法：`3\.\s` 要求"3."后紧跟空白（真实文案是 `=== 3. merge origin/…`），把 3.5 排除掉；
+# 3.5 另开一条独立断言。步骤标题也从「六个」订正为「七个」（0/1-2/3/3.5/4/5/6）。
+Assert-True '9d 前置检查与各步打印都还在（0/1-2/3/4/5/6 七个步骤标题——3.5 是 issue #121 新增的那一步）' `
     (($r9.Text -match '===\s*0\.') -and ($r9.Text -match '===\s*1-2\.') -and `
-     ($r9.Text -match '===\s*3\.') -and ($r9.Text -match '===\s*4\.') -and `
+     ($r9.Text -match '===\s*3\.\s') -and ($r9.Text -match '===\s*4\.') -and `
      ($r9.Text -match '===\s*5\.') -and (Test-ReachedStep6 $r9.Text)) ''
+Assert-True '9f（issue #121）DryRun 下第 3.5 步的标题也真的打出来了（不是被 9d 的宽正则误顶替）' `
+    ($r9.Text -match '===\s*3\.5\s') ''
 Assert-True '9e DryRun 自陈它照不出第 5 步的判据（#114 就是 DryRun 全过之后撞上的）' `
     ($r9.Text -match 'DryRun 照不出第 5 步的判据') ''
 
