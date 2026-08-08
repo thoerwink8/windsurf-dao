@@ -230,8 +230,6 @@ function createHookScaffold(cfg) {
    * **③ 是 opt-in 的第三段**（`sc.probeDirs`，issue #190 第 2 条）：给了才查留痕域写得进去没有。
    * 不给 ⇒ 输出与本参数引入之前**逐字节相同**（前两个消费方因此一个字都没变）。
    *
-   * @param {Array<{label:string, dir:string, failNote?:string}>} [sc.probeDirs]
-   *
    * @param {object} sc
    * @param {string} sc.event         宿主事件名（如 "PostToolUse"）
    * @param {string} sc.scriptName    注册串里该出现的脚本文件名
