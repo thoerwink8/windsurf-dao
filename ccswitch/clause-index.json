@@ -184,17 +184,17 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "52a34df04a7361d14443630a872d0915a854c804bdc8af0878d1c3937d0db652",
-        "lines": 22,
-        "clauses": 0,
+        "sha256": "e15149bbe6b49d9cbbe9535d881e39e9fb32099db8c77fdceb33b7a7c4ebe77b",
+        "lines": 203,
+        "clauses": 1,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 0,
+        "slug": 1,
         "no_slug": 0,
-        "no_meta_field": 0
+        "no_meta_field": 1
       },
       {
         "file": "ccswitch/rules/dao-product.md",
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 80,
+      "general": 81,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 18,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 115,
+      "clauses": 116,
       "observation": 0
     }
   },
@@ -2931,6 +2931,29 @@
       "observing": false,
       "shape": "top",
       "body_excerpt": "- 第一人称抽验价值：不满足于\"有数据/有响应\"，要问\"数据对不对\"——如按日粒度视图曾被验证官只验\"有数据\"未验\"数据是否符合预期分布\"，第一人称抽验多次捞出隐藏缺陷。 [n=1 @07-24 触发:无] [仅判据·无触发] [#官食-第一人称抽验]"
+    },
+    {
+      "id": "bc764258b168",
+      "slug": "归-认领协议",
+      "file": "ccswitch/rules/dao-workitem.md",
+      "line": 34,
+      "line_end": 34,
+      "meta_line": 34,
+      "role": "general",
+      "zone": "clause",
+      "section": "认领协议 · 两台机器 / 两个 AI 并行时「谁在干哪张单」（2026-08-08 立 · 用户点名立项 issue #193）",
+      "title": "一句话判据：领单之前先看这单被认领没有；认领要同时标「有人在干」（标签）和「谁 / 哪台机 / 何时」（评论），而且认领必须自己会过期。",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": null,
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "**一句话判据：领单之前先看这单被认领没有；认领要同时标「有人在干」（标签）和「谁 / 哪台机 / 何时」（评论），而且认领必须自己会过期。** [#归-认领协议]"
     }
   ]
 }
