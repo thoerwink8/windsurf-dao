@@ -117,7 +117,13 @@ function mkTestFile(caseDir, name, opts) {
 }
 
 // 造一个合成的 **PowerShell** 夹具（issue #179：PS 层由 run-tests.mjs 代跑之后才需要它）。
-//   marker   —— 头部写不写 PS 形态的层级标记（`#` 而非 `//`）
+//   marker        —— 头部写不写 PS 形态的层级标记（`#` 而非 `//`），真声明位置（块注释外）
+//   markerAfterBlockComment —— marker=true 时，标记之后再补一段 `<# ... #>` 块注释再继续
+//               （镜像本仓真实三例的结构：先声明、后跟 help 块——验证块注释状态机不会
+//               倒着把「离开块注释之后」的正文误判掉，issue #203①）
+//   markerInProse —— 头部窗口内插一段 `<# ... #>` 块注释，散文里塞一个行首就是 `#` 的
+//               标记字面量（模拟 PR #200 撞过的 `.NOTES` 坑：那句话被判为真声明的唯一
+//               原因是旧扫描器不问「这一行是不是身处块注释内」）。正确的扫描器必须无视它
 //   bom      —— 落盘时带不带 UTF-8 BOM（真仓 6 套里 5 套带；标记在第 1 行 + BOM 是已知的
 //               「标记形同没写」陷阱，这里造出来钉住扫描器确实剥了 BOM）
 //   silent   —— 一个字都不打（验「exit 0 + 零输出」那一格）
@@ -129,7 +135,29 @@ function mkPsTestFile(caseDir, name, opts) {
   const o = opts || {};
   const sentinel = path.join(caseDir, "ps-sentinel.log");
   const lines = [];
+  if (o.inlineBlockThenMarker) {
+    // 单行自封闭块注释（同一行内 <# ... #>）：练一遍「离开这一行后回到块注释外」这条状态
+    // 转移，紧接着才是本行案例的真声明——确认这类单行块注释不会把后面的真标记也带偏。
+    lines.push("<# a one-line block comment mentioning # @" + "dao-test-tier: env for illustration #>");
+  }
   if (o.marker) lines.push("# @" + "dao-test-tier: env   # synthetic fixture");
+  if (o.marker && o.markerAfterBlockComment) {
+    lines.push("<#");
+    lines.push(".NOTES");
+    lines.push("    a help block that follows a genuine declaration line, not inside it");
+    lines.push("#>");
+  }
+  if (o.markerInProse) {
+    // 散文位：字面上「行首 # + 标记名」，但整段落在 <# ... #> 内部 —— 不是真声明。
+    // 故意把它写在多行块注释里，且这段之前先有别的填充行，逼真复现 issue #203 的坑：
+    // 真实事故里那句话住在 `.NOTES` 的正文段落，不是块注释起始那一行。
+    lines.push("<#");
+    lines.push(".NOTES");
+    lines.push("    prior prose line before the trap");
+    lines.push("    # @" + "dao-test-tier: env   # this is prose describing the syntax, not a real declaration");
+    lines.push("    trailing prose line after the trap");
+    lines.push("#>");
+  }
   lines.push("# synthetic pwsh fixture (run-tests-tier), not a real test");
   // sentinel：唯一能证明「这一套真的起了进程」的证据 —— 只看退出码分不出「跑了都过」与「压根没起跑」
   lines.push("Add-Content -LiteralPath " + JSON.stringify(sentinel) + " -Value " + JSON.stringify(name));
@@ -670,6 +698,109 @@ console.log("\n──── ⑩ PS 层总预算闸（issue #186：这一格此�
   check("⑩ 🔴 负控：预算跳过不打「失败详情」（没跑过的套不许长得像红了）",
     !/失败详情 tests\/b-rest\.tests\.ps1/.test(r.out) && !/失败详情 tests\/c-rest\.tests\.ps1/.test(r.out),
     r.out.slice(-1400));
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑪ PS 标记扫描：块注释外才算真声明（issue #203①）────");
+// PR #200 在 `.NOTES` 散文里踩过这个坑：旧版正则只锚「行首 # + 标记名」，不问那一行是不是
+// 身处 `<# ... #>` 块注释内部——散文里一句带了行首井号的完整字面量，被当成了真声明。
+// 现在的扫描器边扫边跟踪块注释开合状态。本节两向都要红得出来：
+//   散文位（块注释内）写完整标记 ⇒ 层归属不变（不该被判成声明）
+//   真实位置（块注释外）写标记   ⇒ 照常生效（该被判成声明）
+{
+  // 正向①：散文位（.NOTES 段里，行首恰好是 #）—— 不该被判为声明
+  const c = mkPsCase("ps-marker-prose", {
+    ps: { "prose.tests.ps1": { markerInProse: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check("⑪ 散文位（块注释内）写完整标记字面量 ⇒ 层归属不变（不是 env 层，默认层照跑）",
+    r.code === 0 && r.psSum && r.psSum.psskip === 0 && r.psSum.psfiles === 1,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+  check("⑪ sentinel：它按普通套的路径真的起了进程（不是被静默判成 env 层后跳过）",
+    psRan(c.psSentinel, "prose.tests.ps1"), "sentinel=" + c.psSentinel);
+  const listOutP = runRunner(c.dir, ["--list"]);
+  check("⑪ --list 不给它加 env 注（散文不算声明）",
+    !/prose\.tests\.ps1\s+\[标了 env/.test(listOutP.out), listOutP.out.slice(-500));
+}
+{
+  // 正向②：真实位置（块注释外的独立 # 行注释），标记之后紧跟一段 <# ... #> help 块——
+  // 镜像本仓三个真实声明的结构。确保块注释状态机既不会连累「离开块注释之后」的判定，
+  // 也不会因为标记本身之后还有块注释就反而漏判「标记之前」那一行。
+  const c = mkPsCase("ps-marker-real", {
+    ps: { "real.tests.ps1": { marker: true, markerAfterBlockComment: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check("⑪ 真实位置（块注释外）写标记 ⇒ 照常生效（默认层整套不跑，exit 2）",
+    r.code === 2 && r.psSum && r.psSum.psskip === 1 && r.psSum.psfiles === 0,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+  check("⑪ sentinel：默认层它没起过进程", !psRan(c.psSentinel, "real.tests.ps1"), "sentinel=" + c.psSentinel);
+  const e = runRunner(c.dir, ["--env"]);
+  check("⑪ --env 下它正常起进程（标记后面跟着的 help 块没有把标记本身也带偏）",
+    e.code === 0 && psRan(c.psSentinel, "real.tests.ps1"), "sentinel=" + c.psSentinel + "\n" + e.out.slice(-800));
+}
+{
+  // 边界：单行自封闭块注释（同一行内 <# ... #>）提到标记语法之后，紧跟真实声明——
+  // 练一遍「离开这一行后状态归位」（char 级 while 循环），确保它不会把后面的真声明也带偏。
+  const c = mkPsCase("ps-marker-inline-block", {
+    ps: { "inline.tests.ps1": { inlineBlockThenMarker: true, marker: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check("⑪ 单行自封闭块注释之后紧跟真声明 ⇒ 真声明仍被认出（状态机正确复位）",
+    r.code === 2 && r.psSum && r.psSum.psskip === 1, JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑫ 真仓自跑：PS 侧的声明集合退役触发器（issue #203②，EXPECT_DECLARED 的 PS 版）────");
+// ⑧ 那份手维护枚举只扫 `.tests.js`（filter 只认 `.tests.js` 后缀）——PS 套加/摘 env 标记时，
+// ⑧ 那条断言压根扫不到它，静默漂移无人知（PR #200 对抗官 F2，issue #203②）。本节补 PS 版
+// 等价物：职责与 ⑧ 相同（给标记的增删造触发器，过期时变红），不是「正则本身对不对」的黑盒
+// 验证——那半交给上面 ⑪ 的合成夹具（真的 spawn run-tests.mjs 观察行为）。
+{
+  const realPsTests = fs.readdirSync(path.join(REPO, "tests")).filter((f) => f.endsWith(".tests.ps1")).sort();
+  // 独立实现（不 import run-tests.mjs 的 scanPsMarkerLines）：同精神、另起一份代码，
+  // 与 ⑧ 对 JS 侧的处理方式一致——本节要抓的是「声明面变了没人审」，不是「扫描器本身瞎没瞎」。
+  const PS_MARK_RE = new RegExp("^[ \\t]*#[ \\t]*@" + "dao-test-tier:[ \\t]*env\\b");
+  function psDeclared(text) {
+    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).slice(0, 60);
+    let inBlock = false;
+    for (const line of lines) {
+      if (!inBlock && PS_MARK_RE.test(line)) return true;
+      let i = 0;
+      while (i < line.length) {
+        if (!inBlock) {
+          const openIdx = line.indexOf("<#", i);
+          if (openIdx === -1) break;
+          inBlock = true; i = openIdx + 2;
+        } else {
+          const closeIdx = line.indexOf("#>", i);
+          if (closeIdx === -1) break;
+          inBlock = false; i = closeIdx + 2;
+        }
+      }
+    }
+    return false;
+  }
+  const declaredPs = realPsTests.filter((f) => psDeclared(fs.readFileSync(path.join(REPO, "tests", f), "utf8")));
+  // 🔴 手维护枚举，职责就是过期时变红（同 ⑧ 那条注释的判据，此处不重复整段说理）：
+  //   改这一行之前先答一句——新加/摘掉的那套，它是不是真的该在默认层不跑？不是的话，
+  //   正路是修那一套的沙盒/断言，不是往这个集合里加减名字。
+  const EXPECT_DECLARED_PS = [
+    "clause-structure.tests.ps1",   // 实测 67-81s，默认层（人人在敲的快速回归）的耗时预算不容
+    "dao-install.tests.ps1",        // node/claude 缺失时会真的 winget install/npm install -g，动这台机器
+    "dao-secrets.tests.ps1",        // 对真 %USERPROFILE%/%APPDATA% 做机器级不变量断言，随机化治不了
+  ];
+  check("真实 tests/ 里声明了环境敏感层的 .ps1 恰是那三套（多了要问为什么，少了说明标记掉了）",
+    JSON.stringify(declaredPs) === JSON.stringify(EXPECT_DECLARED_PS),
+    "实况=" + JSON.stringify(declaredPs) + " 期望=" + JSON.stringify(EXPECT_DECLARED_PS));
+  // 与真实 run-tests.mjs --list 的输出交叉核对：独立实现与生产代码在真实仓上结论必须一致——
+  // 不是为了替代 ⑪ 的黑盒验证（两份实现若共享同一个盲点，交叉核对本身也会一起瞎），
+  // 而是给「这份手写枚举没有悄悄跟生产代码分叉」提供第二重证据。
+  const listOut = spawnSync(process.execPath, [RUNNER, "--list"], { encoding: "utf8", timeout: 60000, cwd: REPO });
+  const listedEnvPs = realPsTests.filter((f) =>
+    new RegExp("pwsh  tests/" + f.replace(/\./g, "\\.") + "\\s+\\[标了 env").test(String(listOut.stdout || "")));
+  check("独立实现与真实 run-tests.mjs --list 的输出在真仓上结论一致（交叉核对，不是同一份代码）",
+    JSON.stringify(declaredPs) === JSON.stringify(listedEnvPs),
+    "独立实现=" + JSON.stringify(declaredPs) + " --list=" + JSON.stringify(listedEnvPs));
 }
 
 console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
