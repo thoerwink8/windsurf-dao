@@ -82,10 +82,15 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>
 2. **`--env` 要求串行环境**（没有别的官在跑测试、cc-switch GUI 没在写库、没人在改
    `~/.claude/settings.json`）。合并链 `ccswitch/scripts/dao-pr-merge.ps1` 的 `-VerifyCommand`
    必须传 `--env`。
-   🔴 **PowerShell 那 6 套测试归 `--env`**（2026-08-08 · issue #179）：`.tests.ps1` 头部写
+   🔴 **PowerShell 套的分层同走那个标记**（2026-08-08 · issue #179）：`.tests.ps1` 头部写
    `# @dao-test-tier: env` ⇒ 整套只在 `--env` 起进程；无标记者默认层也跑。
-   合并链因此**从这一批起才真的查得到 PS 侧**——此前那 6 套一套都没进它拿到的那个 `exit 0`。
-   串行要求也因此多一个来源：那几套里有用**固定** `_tmp/` 路径当沙盒的，并行跑必互踩。
+   合并链因此**从那一批起才真的查得到 PS 侧**——此前 6 套一套都没进它拿到的那个 `exit 0`。
+   ⚠️ **别记「那 6 套都归 --env」这个数**（本行原文如此，issue #187 当天即过期）：
+   `dao-pr-merge` / `pr-body-scan` 两套的沙盒随机化后**已摘标记、回到默认层**。
+   **当前谁标了 env ⇒ 以 `node scripts/run-tests.mjs --list` 的逐条标注为准**，本行不再记数字
+   —— 紧接下面第 3 条自己就写着「手维护的枚举会过期」，而它上一行就是一个。
+   串行要求仍成立，但**理由换了**：剩下的 env 套里有对真 `%USERPROFILE%`/`%APPDATA%` 做机器级
+   不变量断言的（随机化治不了那一格），且各套都起真 `powershell.exe` 与真 `git` 子进程。
 3. **测试清单不手维护**——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，
    「当前有几套、各叫什么、哪几套标了 env」以 `--list` 的逐条标注为准。
    **本仓的手维护枚举已被咬过三次**，凡是需要人记得同步的清单都会过期。
