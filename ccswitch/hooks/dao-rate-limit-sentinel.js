@@ -63,11 +63,22 @@
 // —— 这正是三重留痕（stderr + errors.log + 心跳）存在的理由。
 // ⚠ 对抗实测（2026-08-08）：「三重」并不构成三个独立域——errors.log 与心跳同住
 // `<仓根>/_tmp`（与标记文件同域），stderr 在本事件下被宿主直接丢弃 ⇒ 仓根 `_tmp` 坏掉
-// 即全部通道同时哑掉且 exit 0。单点加固挂 issue #190 第 2 条。
+// 即全部通道同时哑掉且 exit 0。~~单点加固挂 issue #190 第 2 条。~~
+// **加固已落地（#190 第 2 条，两件）**：
+//   ① **镜像域**：每条记录另追加一份到 `MIRROR_LOG`（`~/.claude/dao-state/…`，**出 `_tmp` 域**）
+//      —— 仓根 `_tmp` 整个坏掉时它照写。它是「限流真的发生过」这条事实的**第二个物理落点**，
+//      而 #190 第 1 条的重开条件（哨兵有没有漏记）就要靠这类耐久样本回答。
+//   ② **`--selfcheck` 第③段**：对两个域各**真写一次再删**（不是「目录存在吗」——`_tmp` 被占成
+//      普通文件时后者答「不存在」，与「还没建过」不可区分），写不进去当场 ✗ 并说明它会污染第②段。
+// **照直写它还不了的那一半**：两个域的**历史对账**（镜像比 `_tmp` 多几条 ⇒ 那侧丢过记录）
+// 本批**没做** —— 那个数字只有攒出真实限流样本之后才有消费者，而此刻是 0 条；理由与 #190
+// 第 1 条被判「刻意不做」同一条（先问产出在真实时刻表上有没有人消费得动）。欠账记在 PR 未尽处。
 //
 // ── 输出面不在扫描面内（守卫铁律③）──────────────────────────────────────────
-// 本 hook 的输入是 stdin 的 payload，产出全部落在 `<仓根>/_tmp/`（已 gitignore）。
-// 两者没有交集 ⇒ 报告不可能被自己重新读进来。
+// 本 hook 的输入是 stdin 的 payload，产出落在 `<仓根>/_tmp/`（已 gitignore）与
+// `~/.claude/dao-state/`（在仓外，git 看不见）。两者与扫描面都没有交集
+// ⇒ 报告不可能被自己重新读进来。**镜像域也不进 git**：它是本机运行期状态，
+// 不是部署资产（换机自动重建，故 NEW-MACHINE.md 无需登记）。
 //
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
@@ -76,6 +87,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { createHookScaffold } = require("../lib/hook-selfcheck.js");
 
@@ -90,6 +102,18 @@ const ROOT = path.resolve(__dirname, "..", ".."); // 本文件在 <root>/ccswitc
 // 因为它们是同一次部署里的同两个文件。
 // env 覆写是测试缝（两个 hook 读**同一个**变量名，测试指一次就够）。
 const MARKER_PATH = process.env.DAO_RATE_LIMIT_MARKER || path.join(ROOT, "_tmp", "rate-limit-interrupt.json");
+
+// ── 镜像留痕域：**刻意不在 `<仓根>/_tmp` 里**（issue #190 第 2 条）──────────────
+// 三条既有通道（errors.log / fired.log / last.json）同住 `<仓根>/_tmp/<subdir>/`，
+// 第四条 stderr 在本事件下被宿主直接丢弃 ⇒ **那一个目录坏掉，四条一起哑且退出码干净**。
+// 本行给出第二个物理落点：`~/.claude/dao-state/rate-limit-sentinel/fired.log`。
+// 为什么落 `~/.claude` 而不是别处：①它与仓根 `_tmp` 通常在不同的盘/不同的权限域
+// ②它是本机 dao 状态的既有落点（hook 自己就住在这台机器上，不依赖任何仓在不在）
+// ③它在仓外 ⇒ 不进 git、不被 `_tmp` 清理动作扫到、也不落进任何守卫的扫描面。
+// **它是镜像不是主产物**：写不成一律吞掉（`_tmp` 那侧照写），永不影响退出码。
+const MIRROR_LOG = process.env.DAO_RATE_LIMIT_MIRROR ||
+  path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(),
+    ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
 
 // 写标记的 error 类型。其余 8 种只进 fired.log —— 理由见头注。
 const MARKED_ERRORS = new Set(["rate_limit", "overloaded"]);
@@ -160,6 +184,16 @@ function writeMarker(rec) {
   fs.writeFileSync(MARKER_PATH, JSON.stringify(rec, null, 2), "utf8");
 }
 
+// 镜像一条记录到 `_tmp` 域**之外**。全程吞异常：它是冗余通道，不许拖垮主路径。
+// 记录内容与 `_tmp` 那份逐字段相同 + 一个 `mirror:true` 标记（读的人要分得出自己在看哪一份；
+// 也让 `--selfcheck` 的第②段若哪天被指到这份日志上时，不会把镜像误当成另一次触发）。
+function mirrorRecord(rec) {
+  try {
+    fs.mkdirSync(path.dirname(MIRROR_LOG), { recursive: true });
+    fs.appendFileSync(MIRROR_LOG, JSON.stringify(Object.assign({ mirror: true }, rec)) + "\n", "utf8");
+  } catch (_) { /* 镜像写不成不该拖垮主路径 —— `_tmp` 那侧照写 */ }
+}
+
 function selfcheck() {
   S.runSelfcheckCli({
     event: EVENT,
@@ -178,6 +212,15 @@ function selfcheck() {
       `ⓘ 末次真实触发在 ${d} 天前 —— 这**未必**是接线断了：没被限流过就该是这个样子。` +
       "两者在日志上长得一样，判不出来时以 ① 的注册核验为准。",
     logReadFailLabel: "读取心跳日志失败",
+    // ③ 留痕域可写性（#190 第 2 条）。**两个域各查一次，刻意分开报**：
+    // 只查一个的话，「主域坏了但镜像好着」与「两个都坏了」在输出里长得一样，
+    // 而前者只丢观测精度、后者是这个 hook 彻底静默 —— 处置完全不同。
+    probeDirs: [
+      { label: "主域（<仓根>/_tmp）", dir: S.stateDir,
+        failNote: "（fired.log / errors.log / last.json 三样都在这里 ⇒ 它坏了这三样一起哑）" },
+      { label: "镜像域（出 _tmp，本机 dao 状态）", dir: path.dirname(MIRROR_LOG),
+        failNote: "（这是主域坏掉时唯一还在记账的通道 ⇒ 它也坏了就真的一条都不剩了）" },
+    ],
   });
 }
 
@@ -202,12 +245,20 @@ function main() {
     const msg = `[dao-rate-limit-sentinel] 解析 stdin 失败：${inputErr && inputErr.message}`;
     try { process.stderr.write(msg + "\n"); } catch (_) {}
     S.appendErrorLog(msg, inputErr);
-    S.heartbeat({
+    const badRec = {
       at: new Date().toISOString(), synthetic: true, error: null, marked: false,
       reset_estimate_s: null, reset_parse: null, error_message: String(inputErr && inputErr.message),
-    });
+    };
+    S.heartbeat(badRec);
+    mirrorRecord(badRec);
     process.exit(0);
   }
+
+  // ── 外层注入相位（issue #190 第 3 条）──────────────────────────────────────
+  // 这一行**刻意不在任何 `try` 里**：它抛出的异常只能被文件末尾那个最外层 catch 兜住。
+  // 在它之前，本文件全部注入点都在上面那个内层 try 里 ⇒ 外层 catch 是**真空锚**
+  // （把它改成 fail-closed 也没有一条断言会红）。回归网见 tests 的「外层 catch」那一节。
+  S.maybeForceError("outer");
 
   const error = String(input.error || "unknown");
   const details = input.error_details == null ? "" : String(input.error_details);
@@ -238,7 +289,7 @@ function main() {
     }
   }
 
-  S.heartbeat({
+  const rec = {
     at,
     synthetic: S.isSynthetic(input),
     session_id: input.session_id || null,
@@ -249,7 +300,10 @@ function main() {
     marker: marked ? MARKER_PATH : null,
     marker_error: markerErr ? String(markerErr.message) : null,
     raw,
-  });
+  };
+  S.heartbeat(rec);
+  // 第二个物理落点，出 `_tmp` 域（#190 第 2 条）。顺序在 heartbeat 之后：`_tmp` 那份仍是主账。
+  mirrorRecord(rec);
 
   // StopFailure 的输出被宿主忽略，这一行只为让手工空跑（和测试）看得见本次判定。
   S.emit({ systemMessage: `${SIGNATURE} error=${error} 写标记=${marked && !markerErr} 重置估时=${seconds == null ? "未解析出" : seconds + "s"}` });
@@ -272,5 +326,10 @@ if (require.main === module) {
   }
 }
 
-// 供测试直接单验解析式（端到端跑进程验不到「哪一式命中」这一格的边界值）
-module.exports = { parseResetSeconds, MARKED_ERRORS, MARKER_PATH, MAX_RESET_S, SIGNATURE };
+// ── 导出面：**逐项写明谁在消费**（issue #190 第 4 条同型要求）──────────────────
+// 「全库零消费的导出」与「为将来单验保留的缝」在代码里长得一样，故此处照直点名：
+//   · `parseResetSeconds` —— tests/rate-limit-sentinel.tests.js 解析式单元节（边界值端到端验不到）
+//   · `MARKER_PATH`       —— tests 的跨文件运行期契约断言（**各自 spawn 取运行期值再比对**，
+//                            文本比对对改名/后续赋值形态失明 ⇒ 那一格靠这个导出才验得到）
+//   · `MARKED_ERRORS` / `MAX_RESET_S` / `SIGNATURE` —— tests 与 mutation 锚点引用
+module.exports = { parseResetSeconds, MARKED_ERRORS, MARKER_PATH, MIRROR_LOG, MAX_RESET_S, SIGNATURE };

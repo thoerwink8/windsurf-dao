@@ -19,9 +19,10 @@
 // **一条错文案在这个位置是会批量污染交付物的**，所以它值得一份回归网，而不只是一次改对。
 //
 // ── 钉的是文案关键词，不是措辞（这是刻意取舍，两侧代价都写出来）────────────
-// ① 断言钉 `providers` / `settings_config` / `每个 provider 都要改` / `镜像层`+`不会生效` 这几个
-//    **事实锚**，不钉整句。改写措辞而语义不变时它不会红；语义被回退成旧路径时它会红（下面三向
-//    mutation 实测过）。代价：换同义词（如把「镜像层」写成「common_config_* 那一层」）会误红。
+// ① 断言钉 `providers` / `settings_config` / `每个 provider 都要改` / `镜像层`+`不会生效` /
+//    **`漂移检测收尾`（2026-08-08 新增，issue #190）** 这几个**事实锚**，不钉整句。改写措辞而语义
+//    不变时它不会红；语义被回退成旧路径时它会红（下面四向 mutation 实测过）。
+//    代价：换同义词（如把「镜像层」写成「common_config_* 那一层」）会误红。
 // ② **刻意不写成 `!/direction/` 这种反向断言**：新文案仍然点名 `dao.bat --direction=down/up`，
 //    只是把它从「正路」改成「别拿它来让配置生效」——旧说法散在历史文档与 PR body 里，
 //    光删不说等于让下一个人再试一次。这与 PR #68 给 G2 stderr 的取舍逐条一致。
@@ -75,6 +76,13 @@ const anchors = {
   每个provider都要改: (c) => /每个 provider 都要改/.test(c),
   旧路径明说不生效: (c) => /镜像层/.test(c) && /不会生效/.test(c),
   条件式措辞: (c) => /若这是 live/.test(c),
+  // 2026-08-08（issue #190 的连带件）：dao.md `[#Shell-源与投影]` 被用户点名扩了「动过任一层 ⇒
+  // 同一动作内跑漂移检测收尾」半句，本 hook 认领它的**机器投递半件**。三个锚各自独立：
+  //   · `同一动作内` —— 时刻要求（这一格没了，就退化成「记得哪天跑一下」）
+  //   · `settings-drift.js` + `--providers` —— 跑什么，两面都要（少一面等于只查了一半）
+  //   · `不算收尾` —— 明说 SessionStart 那条提醒不能替代（少了这句，人会以为兜底就够了）
+  漂移检测收尾: (c) => /同一动作内/.test(c) && /漂移检测/.test(c) &&
+    /settings-drift\.js/.test(c) && /--providers/.test(c) && /不算收尾/.test(c),
 };
 
 console.log("\n──── ① settings.json / mcp_servers.json 分支 · 新文案钉死（issue #67 的本体）────");
@@ -94,6 +102,8 @@ console.log("\n──── ① settings.json / mcp_servers.json 分支 · 新�
       anchors.每个provider都要改(ctx), JSON.stringify(ctx.slice(0, 260)));
     check(`正控：${name} 明说快照层/镜像层不会生效（旧「正路」已被 #49 证伪）`,
       anchors.旧路径明说不生效(ctx), JSON.stringify(ctx.slice(-300)));
+    check(`正控：${name} 要求同一动作内跑漂移检测收尾（issue #190 的机器投递半件）`,
+      anchors.漂移检测收尾(ctx), JSON.stringify(ctx.slice(-400)));
   }
 
   // 条件式措辞是硬要求，不是客套：正则对项目级 .claude/settings.json 同样命中，
@@ -206,6 +216,8 @@ console.log("\n──── ④ mutation 判别力（三向）· 每向先 canar
     check("MUT1：回退旧文案 ⇒「真实下发源」断言变红", !anchors.真实下发源(ctx));
     check("MUT1：回退旧文案 ⇒「每个 provider 都要改」断言变红", !anchors.每个provider都要改(ctx));
     check("MUT1：回退旧文案 ⇒「旧路径明说不生效」断言变红", !anchors.旧路径明说不生效(ctx));
+    check("MUT1：回退旧文案 ⇒「漂移检测收尾」断言也变红（#190 那半句同在这一行里）",
+      !anchors.漂移检测收尾(ctx));
   }
 
   // MUT2 · 只删掉「且每个 provider 都要改」一句（证明三条断言不是同义反复）
@@ -231,6 +243,26 @@ console.log("\n──── ④ mutation 判别力（三向）· 每向先 canar
       dead.raw.trim() === "", JSON.stringify(dead.raw.slice(0, 80)));
     check("MUT3 canary：别的分支仍然响 ⇒ 不是整个 hook 崩了",
       /【dao-meta 守卫】/.test(fire("D:/frank/windsurf-dao/ccswitch/dao.md", { script: mutant }).ctx));
+  }
+
+  // MUT4 · 只删掉 #190 那半句「动过任一层 ⇒ 同一动作内跑漂移检测收尾」
+  //   为什么单立一向：那半句是**用户点名固化**进 dao.md 的条款的机器投递半件，而它住在一条
+  //   1.5 KB 的长字符串中间 —— 那种位置最容易在下一次「顺手精简一下文案」时被整段吞掉，
+  //   而 MUT1/MUT2 都证不了这一格（MUT1 是整行回退、MUT2 打的是另一句）。
+  //   这一向同时给出**归因**：只有「漂移检测收尾」红、另三条全绿 ⇒ 四条锚覆盖面互不重叠。
+  {
+    const DRIFT_CLAUSE = "⚠ **动过任一层(live / DB providers / git 快照)就在同一动作内跑漂移检测收尾并贴真退出码**";
+    check("mutation 靶点④：#190 那半句在源码里唯一存在（与 MUT4 同一个字符串）",
+      src.split(DRIFT_CLAUSE).length === 2, `出现 ${src.split(DRIFT_CLAUSE).length - 1} 次`);
+    const mutant = path.join(TMP, "mut4-drop-drift-clause.js");
+    fs.writeFileSync(mutant, src.replace(DRIFT_CLAUSE, ""), "utf8");
+    const { ctx } = fire(SETTINGS_PATH, { script: mutant });
+    check("MUT4 canary：变异体仍走同步提醒分支（不是把靶弄死了）",
+      /【dao 同步提醒】/.test(ctx), JSON.stringify(ctx.slice(0, 80)));
+    check("MUT4：删掉那半句 ⇒「漂移检测收尾」断言变红", !anchors.漂移检测收尾(ctx));
+    check("MUT4：另三条事实锚仍绿 ⇒ 四条覆盖面互不重叠，新锚不是同义反复",
+      anchors.真实下发源(ctx) && anchors.每个provider都要改(ctx) && anchors.旧路径明说不生效(ctx),
+      JSON.stringify(ctx.slice(0, 300)));
   }
 
   check("canary 恒等：整个 mutation 过程真文件逐字节没动过", sha(HOOK) === PRISTINE_SHA);
