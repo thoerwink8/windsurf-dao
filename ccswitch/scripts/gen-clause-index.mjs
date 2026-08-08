@@ -62,6 +62,20 @@
 // 🕳 **本批治的是第 2 点（报文不指向处方），不治第 1 点（发现得太晚）**，
 //    也不治第 3 点（合并态验证被跳过时主干上没人再检它）——见 issue #121 的三点清单。
 //
+// ── v5（issue #149 · PR #146 二轮对抗的六项带账）清了什么 ────────────────────
+// 六项**全是精度问题不是错误**（PR #146 已被判「没有一项让它比 master 更糟」），逐项落点：
+//   · 带账 4（最承重）：`self-inconsistent` 档的成因③「生成器 bug」**在 bug 活着时结构上
+//     看不见** —— 取**低成本诚实解**：把这一格的失明写进**报文**（此前只在 clause-parser.mjs
+//     的头注里）。独立旁证（不共用本生成器的第二实现）**本批不做**，缺口仍在。
+//   · 带账 3：处方段原先又列了一遍成因，与归因段两档各自的三种成因**是三组不同的**
+//     ⇒ 改成指回归因段，不再自列。
+//   · 带账 5：`printRepoState` 的「上面那些源」在派生物那两个调用点上悬空 ⇒ 由它自己打出问的是哪几个源。
+//   · 带账 2b：源全在仓外时它答一个确定的「否」（`git status` 一次没跑）⇒ 改判「查不了（零样本）」。
+//   · 带账 7 / 未尽处 #3：第三个 `printRepoState` 调用点判别力为 0（整个删掉全绿，2026-08-08
+//     实测 PASS=238 FAIL=0），「合并后又提交几次 ⇒ 近似失效」也无断言 ⇒ 两条回归网补在 ⑧.5 E/F。
+//   · 带账 6：「索引文件自己的 git 状态」那条更直接的事实**仍然不实现**，理由写在
+//     `printRepoState` 头注里（帅 2026-08-05 认，issue #149）。
+//
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
 //   生成/校验：CLAUSE_INDEX_SUMMARY exit=<n> sources=<n> clauses=<n> observation=<n> drift=<none|missing|content|source> wrote=<0|1> cause=<none|source|self-inconsistent|hand-or-generator|unreadable|missing>
 //   台账：    CLAUSE_LEDGER_SUMMARY exit=<n> state=<ok|missing|bad|na> entries=<n> slugs=<n> missing_slug=<n> orphan_slug=<n> orphan_ledger=<n> dup_slug=<n> mismatch=<n> file_mismatch=<n> out_of_scope=<n> compared=<n> ledgeronly=<n>
@@ -289,6 +303,18 @@ function gitProbe(args) {
 //   ㈡ 三条互斥分支只能被「三者必居其一」这种断言夹住 —— 任何一支都满足它，判别力为 0。
 // 现在改成**逐条报三个独立事实**（合并在飞 / HEAD 是合并提交 / 这些源脏没脏），
 // 三行各自可断言；只有在**证据真的指向一边**时才多说一句，其余时候闭嘴。
+//
+// ── 🔴 为什么不问「索引文件自己的 git 状态」（issue #149 带账 6，2026-08-08 补记）──
+// 那条事实更直接：**手改 ⇒ 索引在工作树里是 `M`；合并带进来 ⇒ 工作树干净且 HEAD 是合并提交。**
+// 实现官被点名后照直答了「没考虑过，是盲点，不是权衡过的取舍」，并留下一句判据值得抄走：
+//   **问「谁弄坏了 X」的时候，git 问句要指向 X 本身，不是指向 X 的输入。**
+// 本函数现在问的全是**输入**（那几个源），而 `self-inconsistent` 这一档的定义恰恰是
+// 「源全对、坏的是索引」⇒ 它把 git 问句指向了这一档里唯一保证干净的那一侧。
+// **本批仍然不实现它，理由两条（帅 2026-08-05 认，落账 issue #149）**：
+//   ㈠ 那条建议**没实现也没测**，同型近似仍在 —— 「worktree 干净但改动已 commit 到分支上」
+//      时它一样看不出来；照搬一个未验证的处方，正是这一整批在治的病；
+//   ㈡ 真要补，得先答「它比现在这三条强在哪、弱在哪」，那是另一个批次的判断。
+// ⇒ 写在这里是为了**下一个人不必重新发现它**：这一格是已知盲点，不是没人想过。
 function printRepoState(write, files) {
   // 先问「这儿到底是不是个 git 仓」：不问的话，非仓目录里 `rev-parse` 的失败
   // 会被读成「HEAD 不是合并提交」—— 把「查不了」悄悄变成一个确定的答案，正是本批在治的病。
@@ -304,11 +330,24 @@ function printRepoState(write, files) {
   const inFlight = say("合并进行中（MERGE_HEAD 在）", gitProbe(["rev-parse", "-q", "--verify", "MERGE_HEAD"]), (p) => p.status === 0);
   const isMerge = say("HEAD 自己是合并提交", gitProbe(["rev-parse", "-q", "--verify", "HEAD^2"]), (p) => p.status === 0);
   const rel = files.filter((f) => !path.isAbsolute(f));
-  const stProbe = rel.length ? gitProbe(["status", "--porcelain", "--", ...rel]) : { ok: true, status: 0, out: "" };
+  // 🔴 **零样本不许答一个确定的「否」**（issue #149 带账 2b，2026-08-08）：源全在仓外时
+  // `rel` 为空，原先给的是 `{ok:true,status:0,out:""}` ⇒ `git status` **一次都没跑**，
+  // 却打出「否」并被下面的提示句当成「这些源没有本地改动」用。**没查 ≠ 查了没事** ——
+  // 那正是本函数开头那道 `--is-inside-work-tree` 守卫要防的同一件事，只是换了个入口。
+  // 今天生产路径碰不到（`defaultSources()` 全相对路径），属潜伏；回归网钉在 ⑧.5 E。
+  const stProbe = rel.length
+    ? gitProbe(["status", "--porcelain", "--", ...rel])
+    : { ok: false, why: "这次一个源都不在本仓里（零样本，git status 没跑）" };
   const dirtyLines = stProbe.ok ? stProbe.out.split(/\r?\n/).filter((l) => l.trim()) : [];
-  const dirty = say("上面那些源改过未提交", stProbe, () => dirtyLines.length > 0);
+  const dirty = say("这几个源改过未提交", stProbe, () => dirtyLines.length > 0);
 
   write("   ⓘ 仓态（git 事实三条，**不是判定**）：");
+  // 🔴 **先说清「这几个源」是哪几个**（issue #149 带账 5）：本函数有三个调用点，其中两个
+  // （派生物这一侧那两档）**上面一个源都没列**，而标签原文写的是「上面那些源」⇒ 悬空指代。
+  // 指代物由本函数自己打出来，三个调用点就都对得上号了。
+  write(`        · 问的是这几个源：${rel.length
+    ? rel.slice(0, 6).join("、") + (rel.length > 6 ? ` 等 ${rel.length} 个` : "")
+    : "（一个都不在本仓里 —— 下面那条因此是「查不了」，不是「否」）"}`);
   for (const f of [inFlight, isMerge, dirty]) write(`        · ${f.text}`);
   for (const l of dirtyLines.slice(0, 6)) write(`            ${l}`);
 
@@ -371,7 +410,11 @@ function printPrescription(indexResult, ledgerCode) {
   if (indexRed) {
     write(`  · 索引这一侧：${REGEN_CMD}`);
     write("    ✓ 这条命令**一定解得掉**：索引是纯派生物，重跑即与真相源逐字节对齐，且幂等。");
-    write("      三种成因（你改了源 / 合并带进来的 / 手改了派生物）**修法是同一条**，不必先查清是谁。");
+    // ⚠ 这一行原先自己又列了一遍成因（「你改了源 / 合并带进来的 / 手改了派生物」），而上面
+    //   归因段按档列的是**另外两组**（source 档：你改了源 / 合并 / 你没碰过；self-inconsistent
+    //   档：合并 / 手改 / 生成器 bug）⇒ 同一份输出里三组并列，读者对不上号（issue #149 带账 3）。
+    //   处方段本来就**不需要**知道是哪一种，故这里不再列举，只指回上面那一段。
+    write("      **不管上面归因段列的是哪一种成因，修法都是这一条**，不必先查清是谁。");
   } else if (ledgerRed) {
     write("  · 索引这一侧无事（与真相源一致）——**下面那个跑生成器解决不了**，别顺手跑一遍就以为完了。");
   }
@@ -509,6 +552,13 @@ function runIndexCore(o) {
         //      （实测：bug 在时 exit=0 一声不吭，把生成器修好之后才 exit=1）⇒ ③ 唯一可达的形态是
         //      「已经被修掉的旧 bug」。给一个结构上看不见的成因加「最该查」，是拿排序换准确。
         write("     ③ **生成器 bug**：算错了计数，然后把这份错的索引写进了盘");
+        // 🔴 issue #149 带账 4 的**低成本诚实解**：这句话此前只活在 clause-parser.mjs 的函数
+        //    头注里 —— 「对的话在注释里、压缩过的错话在报文里」，而注释没人读、报文人人读。
+        //    独立旁证（一个不共用本生成器的第二实现）本批不做，故照直把这一格的失明写进报文。
+        write("        🕳 **但一个此刻仍然活着的生成器 bug，这个检查器结构上看不见**：`--check` 比的是");
+        write("           「现在这个生成器新造的索引」vs 盘上那份，而盘上那份正是**同一个有 bug 的生成器**写的");
+        write("           ⇒ 两边逐字节相同 ⇒ `drift=none` ⇒ 压根走不到这一步（实测：bug 在时一声不吭，修好后才红）。");
+        write("           ⇒ 成因③在这里**唯一可达的形态是「已经被修掉/改掉的旧 bug 留下的那份索引」**。");
         write("     ⚠ 本报文**不替你选**。下面那几行 git 事实只是线索，不是判定。");
         printRepoState(write, g.sources.map((s) => s.file));
       } else {

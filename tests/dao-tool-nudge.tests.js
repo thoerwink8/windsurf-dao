@@ -487,18 +487,117 @@ console.log("\n──── ⑥ 推送触及条款索引源（issue #162 新增�
   }
 }
 
-console.log("\n──── ⑦ --selfcheck：matcher 覆盖面必须能被独立问一次 ────");
+console.log("\n──── ⑦ PowerShell 面：2>&1 混流 / Bash heredoc 误用（issue #44 新增）────");
+{
+  const ps = (command) => nudge(command, "PowerShell");
+
+  const positives = [
+    ["2>&1 基本形态", "cargo build 2>&1 | Out-File log.txt", /禁 2>&1/],
+    ["2>&1 出现在命令串尾部", "git status 2>&1", /禁 2>&1/],
+    ["Bash heredoc（单引号标记）", "$body = $(cat <<'EOF'\ntext\nEOF\n)", /禁 Bash heredoc/],
+    ["Bash heredoc（裸标记）", "cat <<EOF\ntext\nEOF", /禁 Bash heredoc/],
+    ["Bash heredoc（减号变体 <<-）", "cat <<-EOF\ntext\nEOF", /禁 Bash heredoc/],
+  ];
+  for (const [name, cmd, re] of positives) {
+    const ctx = ps(cmd).ctx;
+    check(`正控：${name}`, re.test(ctx), JSON.stringify(ctx.slice(0, 100)));
+  }
+
+  // 两类同一条命令都命中时应该拼两段，不是只留一段
+  {
+    const both = ps("cargo build 2>&1 | Out-File $(cat <<'EOF'\nx\nEOF\n)");
+    check("正控：同一条命令两类都命中 → 两段都注入",
+      /禁 2>&1/.test(both.ctx) && /禁 Bash heredoc/.test(both.ctx), JSON.stringify(both.ctx.slice(0, 160)));
+  }
+
+  const negatives = [
+    ["普通命令不该提示", "git status"],
+    ["PowerShell here-string 不是 Bash heredoc（`@'...'@`）", "$body = @'\ntext\n'@"],
+    ["普通重定向 >> 不该被当成 << 误判", "git log >> out.txt"],
+  ];
+  for (const [name, cmd] of negatives) {
+    const ctx = ps(cmd).ctx;
+    check(`负控：${name}`, ctx === "", JSON.stringify(ctx.slice(0, 100)));
+  }
+
+  // 跨工具面负控：同一份含 2>&1 的命令喂给 Bash 工具，不该触发 PowerShell 专属判据
+  // （Bash 面自己的判据与本类无关，这里只验证 ⑦ 分支不会对非 PowerShell 工具生效）
+  check("负控：Bash 工具里的 2>&1 不该触发 PowerShell 专属提醒",
+    !/禁 2>&1/.test(nudge("cargo build 2>&1", "Bash").ctx));
+  check("负控：空命令 → 零输出", ps("").raw.trim() === "");
+
+  // mutation：把 2>&1 判据改成永不命中 → 正控哑掉，heredoc 判据不受影响（互不牵连）
+  {
+    const src = fs.readFileSync(HOOK, "utf8");
+    const from1 = 'if (/2>&1/.test(cmd)) {';
+    check("2>&1 判据锚点在源码里唯一存在", src.split(from1).length === 2, `出现 ${src.split(from1).length - 1} 次`);
+    const mutant1 = path.join(TMP, "mutant-ps-2to1.js");
+    fs.writeFileSync(mutant1, src.replace(from1, 'if (/__NEVER_MATCHES__/.test(cmd)) {'), "utf8");
+    const before1 = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git status 2>&1" } }), encoding: "utf8",
+    });
+    const after1 = spawnSync(process.execPath, [mutant1], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git status 2>&1" } }), encoding: "utf8",
+    });
+    check("mutation：真文件提醒、改坏后不提醒 ⇒ 上面那批正控真的在测这段判据",
+      /禁 2>&1/.test(String(before1.stdout || "")) && !/禁 2>&1/.test(String(after1.stdout || "")));
+    const stillHeredoc = spawnSync(process.execPath, [mutant1], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "cat <<EOF\nx\nEOF" } }), encoding: "utf8",
+    });
+    check("mutation：改坏 2>&1 判据之后 heredoc 判据仍然响（两段互不牵连）",
+      /禁 Bash heredoc/.test(String(stillHeredoc.stdout || "")));
+
+    // 反向 mutation：把 2>&1 判据改成恒真 ⇒「普通命令不该提示」那条负控必须当场红，
+    // 否则上面那批负控可能只是碰巧没命中，而不是判据真的有选择性。
+    const rev1 = path.join(TMP, "mutant-ps-2to1-rev.js");
+    fs.writeFileSync(rev1, src.replace(from1, 'if (/(?:)/.test(cmd)) {'), "utf8");
+    const revOut = spawnSync(process.execPath, [rev1], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git status" } }), encoding: "utf8",
+    });
+    check("反向 mutation：判据改恒真后，「普通命令不该提示」负控真的红了 ⇒ 该负控有判别力",
+      /禁 2>&1/.test(String(revOut.stdout || "")));
+  }
+
+  // mutation：把 heredoc 判据改成永不命中 → 正控哑掉，2>&1 判据不受影响
+  {
+    const src = fs.readFileSync(HOOK, "utf8");
+    const from2 = "if (/<<-?['\"]?[A-Za-z_]\\w*/.test(cmd)) {";
+    check("heredoc 判据锚点在源码里唯一存在", src.split(from2).length === 2, `出现 ${src.split(from2).length - 1} 次`);
+    const mutant2 = path.join(TMP, "mutant-ps-heredoc.js");
+    fs.writeFileSync(mutant2, src.replace(from2, 'if (/__NEVER_MATCHES__/.test(cmd)) {'), "utf8");
+    const before2 = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "cat <<EOF\nx\nEOF" } }), encoding: "utf8",
+    });
+    const after2 = spawnSync(process.execPath, [mutant2], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "cat <<EOF\nx\nEOF" } }), encoding: "utf8",
+    });
+    check("mutation：真文件提醒、改坏后不提醒 ⇒ 上面那批正控真的在测这段判据",
+      /禁 Bash heredoc/.test(String(before2.stdout || "")) && !/禁 Bash heredoc/.test(String(after2.stdout || "")));
+    const still2to1 = spawnSync(process.execPath, [mutant2], {
+      input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git status 2>&1" } }), encoding: "utf8",
+    });
+    check("mutation：改坏 heredoc 判据之后 2>&1 判据仍然响（两段互不牵连）",
+      /禁 2>&1/.test(String(still2to1.stdout || "")));
+  }
+
+  // 覆盖矩阵回归：selfcheck 的 REQUIRED_COVERAGE 必须点名 PowerShell 工具
+  check("selfcheck 覆盖矩阵含 PowerShell 面",
+    spawnSync(process.execPath, [HOOK, "--selfcheck"], { encoding: "utf8" }).stdout.includes("PowerShell"));
+}
+
+console.log("\n──── ⑧ --selfcheck：matcher 覆盖面必须能被独立问一次 ────");
 {
   // 这里**不断言本机是绿还是红** —— 那取决于用户有没有扩 matcher，而这份测试要在两种状态下
   // 都成立。断言的是**自检自身自洽**：它逐面报了、报的结论与退出码一致、并给得出修法。
   const r = spawnSync(process.execPath, [HOOK, "--selfcheck"], { encoding: "utf8" });
   const out = String(r.stdout || "");
-  check("自检逐面打印（Bash 面 + 浏览器 MCP 面）",
-    /Bash 面/.test(out) && /浏览器 MCP 面/.test(out), JSON.stringify(out.slice(0, 160)));
+  check("自检逐面打印（Bash 面 + PowerShell 面 + 浏览器 MCP 面）",
+    /Bash 面/.test(out) && /PowerShell 面/.test(out) && /浏览器 MCP 面/.test(out), JSON.stringify(out.slice(0, 200)));
   check("自检结论与退出码一致（有 ✗ 即 exit 1，全 ✓ 即 exit 0）",
     (/✗/.test(out) ? r.status === 1 : r.status === 0), `exit=${r.status} out=${JSON.stringify(out.slice(0, 200))}`);
-  check("自检给得出修法（扩 matcher 的确切串 + 写入面归谁）",
-    /mcp__chrome-devtools__\.\*/.test(out) && /providers\.settings_config/.test(out), JSON.stringify(out.slice(-200)));
+  check("自检给得出修法（扩 matcher 的确切串，含 PowerShell + 写入面归谁）",
+    /Bash\|PowerShell\|mcp__chrome-devtools__\.\*/.test(out) && /providers\.settings_config/.test(out),
+    JSON.stringify(out.slice(-260)));
   check("自检不读 stdin，也不会因为没有 stdin 而挂住", typeof r.status === "number");
 }
 

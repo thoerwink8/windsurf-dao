@@ -59,20 +59,57 @@ const { execFileSync } = require("child_process");
 // ⚠ 双写守卫（`emitted`）是必须的：正常路径由 `inject()` 一次性写出 stdout；崩溃若发生在
 //   那次写之后，再写一次会拼出**非法 JSON** —— 消费方连解析都失败，等于又回到「什么都没有」，
 //   比崩溃本身更糟。故所有 stdout 写入都必须经过 `emitOnce`。
+//   **2026-08-08 补上它的断言**（issue #152 账 1 的第二半）：这一行此前**零断言覆盖**
+//   （PR #150 对抗 M1 实测），而它恰恰是承重的 —— 实测「写完之后才崩」两态：守卫在 ⇒
+//   stdout 一段合法 JSON（2184 B）；摘掉守卫 ⇒ **两段拼在一起、非法 JSON**（2844 B）。
+//   回归网见 tests/dao-scaffold-check.tests.js「双写守卫」那一组。
+//
+// 🔴 **`stdout.write` 自己抛出时，这张网新长出过一条更静默的路**（issue #152 账 1，2026-08-08 修）：
+//   `emitOnce` 先置 `emitted = true` 再写，写抛出 ⇒ 异常冒到 uncaughtException ⇒ 网调 `emitOnce`
+//   ⇒ 撞上 `if (emitted) return;` ⇒ 原先 `process.exit(0)`。**实测结果：exit 0 + stdout 0 字节**，
+//   与合法的「无事可报」（同样 exit 0 + 0 字节）**逐字节不可区分**；而 master 那一态是
+//   exit 1 + 一段栈。⇒ 这条路上，网让消费方看到的东西**比没有网时更少**。
+//   **修法**：写失败时记下来，另外两个通道（stderr + 退出码）各出一份声音。
+//   为什么退非 0 是安全的、也是唯一还剩的可区分信号：`command` 型 hook 的失效态是 fail-open，
+//   **只有 `exit 2` 才 block**，其余非 0 一律 non-blocking、动作照常进行，宿主只多显示一行
+//   `Failed with non-blocking status code:` + stderr 首行（判据与出处见
+//   `ccswitch/rules/dao-guard-writing.md` 的 `[#守-宿主失效态]`）。⇒ 退 1 换来的是「用户看得见一行」，
+//   代价为零；退 0 换来的是「与全绿静默一模一样」。
+//   ⚠ **照直写没验到的那一格**：上面那条判据是**官方文档证据，不是本机实测**（真跑一次
+//   `claude -p` 观察宿主拿这个退出码做什么，issue #152 自己点名的最大空白，本批仍未做）。
+//   本条不依赖它成立的那一半是：**这条路上 master 本来就是非 0**，本批只是把它退回去。
 let emitted = false;
+let emitFailure = null;   // stdout 写失败时留下的那个异常（null = 没失败过）
 function emitOnce(context) {
   if (emitted) return;
   emitted = true;
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
-  }));
+  try {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
+    }));
+  } catch (e) {
+    // stdout 这条路自己断了 ⇒ 报文**永远送不出去**，重试也没用（重试还会把半截字节留在管道里）。
+    emitFailure = e;
+    try {
+      process.stderr.write("✗ dao 脚手架检查：stdout 写不出去（" +
+        ((e && e.message) || String(e)) + "）⇒ 本次报文**整个丢失**，" +
+        "**这不是「全部通过」**（issue #152 账 1；退出码非 0 是这条路上唯一还剩的可区分信号）\n");
+    } catch (_) { /* stderr 也断了就真没有通道了，此时只剩退出码 */ }
+  }
 }
+// 退出码的**唯一出口**：报文送出去了退 0，送不出去退 1。刻意不用 2 —— 2 是 block 语义，
+// 一个 SessionStart 自检没有资格拦住会话。
+function emitExitCode() { return emitFailure ? 1 : 0; }
 process.on("uncaughtException", (e) => {
   const why = e && e.stack ? String(e.stack).split(/\r?\n/).slice(0, 3).join(" ⏎ ") : String(e);
   emitOnce("✗ dao 脚手架检查未预期崩溃：" + why +
     "（ccswitch/hooks/dao-scaffold-check.js）—— 本次检查**结果不完整**，" +
     "**这不是「全部通过」**（issue #147：exit 1 + 零字节与全绿静默不可区分）");
-  process.exit(0);
+  if (emitFailure) {
+    // 报文没送出去 ⇒ 崩溃原因也跟着没了。补进 stderr：这是它此刻唯一到得了的地方。
+    try { process.stderr.write("✗ dao 脚手架检查未预期崩溃（报文送不出去，原文只能落这里）：" + why + "\n"); } catch (_) {}
+  }
+  process.exit(emitExitCode());
 });
 
 let raw = "";
@@ -128,15 +165,31 @@ const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 //
 // **它什么时候保守、什么时候激进，照直写**（判据是注册值与下面 FALLBACK_MS 的大小关系）：
 //   · 注册 ≥ 10 s（本仓现状 10 s，且 docs/USER-ACTIONS.md 还在建议往 30 抬）⇒ 副本**估小**，
-//     保守，方向在安全侧 —— 这是今天的实况，也是本条不阻断的唯一理由；
+//     保守，方向在安全侧 —— 这是本 hook 今天的实况，也是本条不阻断的唯一理由；
 //   · 注册 < 10 s ⇒ 副本**估大**，激进：它会以为还有余量、把五道 spawn 检查全跑一遍，
 //     然后被宿主按真实注册值杀掉 ⇒ **整批静默消失**，正是这条路本来要防的那件事。
+// 🔴 **「注册 < 10 s」不是一个假想的将来态，本机此刻就有实例**（issue #152 账 3，
+//   2026-08-08 复测）：同一份 `~/.claude/settings.json` 里 17 个 hook 注册中，
+//   **5 个的 timeout 那一栏写的是 5 秒**（本条入库时 PR #150 对抗官数到的是 3 个，
+//   两天里又多了两个；此处刻意不写成 `timeout` 紧跟冒号那个形态 —— 本文件的源码级守卫
+//   按那个 token 数「子进程 timeout 站点」，注释里出现一次就会被当成一个没夹 capFor 的站点），
+//   落在那一侧时这份副本**高估 2.00 倍**。它们目前都不是本 hook，所以今天误差仍为零 ——
+//   **但这个反例的可达性是「同一份配置里已经有五个现役实例」，不是「等哪天有人改小」**。
+//   ⇒ 谁把本 hook 的注册调到 10 s 以下，这条退化路当场从保守翻成激进，而它不会出声。
 //
-// **仍然不改成「自己去读注册」是刻意的**：读注册要文件 I/O + JSON 解析，而走到这条路的
-// 前提就是「真模块（那份 I/O 与解析的正主）已经坏了」—— 在退化路上重造同一套 I/O，
-// 等于把它的失效面原样搬进兜底路。**代价换一种方式付**：加载失败那一行会把这份副本
-// 假设的总预算（`BUDGET.totalMs`）原样印进报文，读者看得见、复核得了。
-// 剩余风险与解冻条件记在 issue #147。
+// **仍然不改成「自己去读注册」是刻意的**，但**理由不是原先写的那一条**
+// （issue #152 账 2，2026-08-08 订正）：原文写的是「走到这条路的前提就是那份 I/O 与解析的
+// 正主已经坏了」—— **对抗官 3/3 实测把它证伪了：`require` 坏 ≠ `settings.json` 读不动**，
+// 三次实测同一时刻 settings 都读得动。**决定是对的，理由是错的**，而错的理由会让下一个人
+// 照着它做同类决定。真正的两条理由是：
+//   ㈠ 在退化副本里复制那 60 行注册匹配逻辑，本身就是**一个新的漂移面**（真模块改了、副本
+//      没跟上，而这两份的差别只在故障时才显形 —— 最不可能有人去看的时刻）；
+//   ㈡ 退化副本被调用的第二个位置（下面 catch 里那次 `initBudget(budgetLib)` 重来）
+//      **不在任何 try 里**：它只要抛一次，就直接落到文件顶部那张 uncaughtException 网上。
+//      副本现在只用 Number / Date.now / process.uptime，抛出面小到可以不再套一层；
+//      给它加 I/O 与 JSON 解析，等于把一个真实的抛出面搬进那个没有保护的位置。
+// **代价换一种方式付**：加载失败那一行会把这份副本假设的总预算（`BUDGET.totalMs`）
+// 原样印进报文，读者看得见、复核得了。剩余风险与解冻条件记在 issue #147 / #152。
 //
 // 回归网见 tests/dao-scaffold-check.tests.js「lib 坏掉」那几臂。其中「退化副本 ≡ 真模块」
 // 那一组是**行为级**对照（把这个函数从源码里取出来真的执行，再与真模块逐项比），
@@ -164,10 +217,14 @@ function degradedBudgetLib() {
         elapsed() { return Date.now() - startedAt; },
         canAfford(minMs) { return api.left() >= Number(minMs || 0); },
         capFor(wantMs) { return Math.max(1, Math.min(Number(wantMs) || 0, api.left())); },
-        skip(what, minMs) {
+        skip(what, minMs, extra) {
+          // 第三参 `extra` 是 issue #140 加的（真模块同名参数逐字同一签名，见 hook-budget.js）；
+          // 这份笨副本没有逐文件循环、也不采样耗时，故永远不会被真的传非空值——
+          // 保留这个形参只是不让「调用方传了但这份镜像吃掉」的调用方式在退化路上报 TypeError。
           skipped.push(what);
           return "⏱ " + what + " **没跑**：宿主预算只剩 " + api.left() + " ms，起它至少要 " +
-            minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）";
+            minMs + " ms —— **这不是「通过」，是「没测」**（issue #127）" +
+            (extra ? " ⟨" + extra + "⟩" : "");
         },
         unreachableConstants(pairs) {
           const bad = [];
@@ -213,6 +270,11 @@ function initBudget(lib) {
   const host = lib.resolveRegisteredTimeoutMs({
     hookFile: __filename,
     home: homeDir,
+    // issue #142：不传 settingsPath ⇒ hook-budget 现在会**同时**查用户级与项目级
+    // `.claude/settings.json`（判据见 ccswitch/lib/hook-budget.js 头注）；这里把本 hook
+    // 自己已经算好的 cwd 传进去，别让它退回 process.cwd()（两者在本 hook 里通常相同，
+    // 但 `input.cwd` 才是宿主告诉我们的那个「这次调用的项目根」，更值得信）。
+    cwd,
     hookEventName: input && input.hook_event_name ? String(input.hook_event_name) : "SessionStart",
   });
   const budget = lib.createBudget({
@@ -630,16 +692,45 @@ function clauseStructureLines(daoRoot) {
   // PowerShell 冷起）。预算见底时逐个记名跳过，**绝不并进下面那句绿** —— 一份只扫了
   // 一半的扫描面报「零违例」，正是 dao-guard-writing.md「零检出 ≠ 零存在」那条病。
   const notRun = [];
+  // ── 本次实测单次耗时(2026-08-08 · issue #140)────────────────────────────────
+  // 对抗验证官量过：4 次降级里 3 次是**假降级**——`PS_MIN_SLICE_MS`(1200ms) 是按本机
+  // 实测最坏值(603ms)的 2 倍保守取的，而降级报文原先只说得出「只剩多少 ms、门槛多少 ms」，
+  // 说不出「本次这一份实际花了多少 ms」⇒ 读者判断不了「这次不够，是阈值太保守，还是真的
+  // 快见底了」。这里记下**本轮同一次运行里、真的跑成过的那些文件**各花了多少 ms——
+  // 它们与被跳过的那些文件在同一台机器、同一次调用里产生，是这次降级最贴身的参照系
+  // （比头注里写死的历史实测数字更新鲜，且不需要另起一次采样）。
+  const durationsMs = [];
   for (const t of targets) {
     if (!BUDGET.canAfford(PS_MIN_SLICE_MS)) { notRun.push(t.rel); continue; }
+    const startedAt = Date.now();
     const r = runOne(t);
+    durationsMs.push(Date.now() - startedAt);
     if (r.err) { lines.push(r.err); continue; }
     if (r.fail) { lines.push(r.fail); continue; }
     clauses += r.clauses; retire += r.retire; promote += r.promote;
   }
   if (notRun.length) {
+    // 零样本 vs 有样本必须分得开：零样本时「假/真降级」这个问题**答不出**，
+    // 明说「零样本」比含糊带过更诚实(对抗验证官原话："第一次降级发生在任何样本之前时，
+    // 仍然分不开——但那时至少能明说「零样本」，而不是把两种情况混成同一句话")。
+    let sampleNote;
+    if (!durationsMs.length) {
+      sampleNote = "本次零样本：一次都没跑成，无从判断真假";
+    } else {
+      const minD = Math.min(...durationsMs), maxD = Math.max(...durationsMs);
+      const range = minD === maxD ? String(minD) : minD + "–" + maxD;
+      const leftMs = BUDGET.left();
+      // 判据：余量若**大于**本轮已实测的最坏单次耗时，说明理论上还够跑一份——
+      // 这次没跑纯粹是阈值(PS_MIN_SLICE_MS)比实测保守，是**假降级**；
+      // 余量若不大于实测最坏值，降级至少与实测吻合，**不能排除是真降级**
+      // （仍不是"证明为真"——机器负载会抖动，这里只回答"有没有证据反对它"）。
+      sampleNote = "本次实测单次 " + range + " ms ×" + durationsMs.length + "；余量 " + leftMs + " ms " +
+        (leftMs > maxD
+          ? "**大于**实测最坏值 ⇒ 这是阈值保守导致的**假降级**"
+          : "不大于实测最坏值，无法排除真降级");
+    }
     lines.push(BUDGET.skip("条款库结构闸的 " + notRun.length + "/" + targets.length +
-      " 个被检文件（" + notRun.join("、") + "）", PS_MIN_SLICE_MS));
+      " 个被检文件（" + notRun.join("、") + "）", PS_MIN_SLICE_MS, sampleNote));
   }
   // `notes` 是**观察线**（判据降级 / 有条款文件没登记进源清单）：三条返回路径都要带上它 ——
   // 只挂在其中一条，另外两条走到时它就静默消失了，而那正是这道闸自己在治的病。
@@ -991,7 +1082,9 @@ function budgetSummaryLines() {
 // 闸门。两处各写各的会拼出非法 JSON（理由见那里的双写守卫注释）。
 function inject(context) {
   emitOnce(context);
-  process.exit(0);
+  // 退出码走同一个出口（issue #152 账 1）：**这里原先写死 `exit(0)`**，于是即使
+  // `emitOnce` 里的写失败已经被记下来，这一行也会把它抹平成「一切正常」。
+  process.exit(emitExitCode());
 }
 function done() { process.exit(0); }
 
@@ -1162,30 +1255,56 @@ function daoSyncLines() {
   // 6. live settings ↔ git 快照 双向漂移 + dao-rule-echo 接线（新增）
   for (const line of selfCheckLines()) drifts.push(line);
 
-  // 7. 条款库结构闸（2026-08-01 挂载，判据与三态输出策略见 clauseStructureLines 头注）。
-  //    只在元仓库跑；它守的是 ccswitch/dao.md 自己，而 dao.md 此前从未被任何闸守过。
-  for (const line of clauseStructureLines(daoRoot)) drifts.push(line);
+  // ── 7~11 的降级顺序：按性价比排，不按历史挂载序（2026-08-08 · issue #141）───────
+  // 2026-08-01 起这五道是按「挂载先后」摆的，条款结构闸（当时最先挂）排在最前。对抗验证官
+  // 11 档预算扫描量出的真实代价：条款闸**一份文件** ~600ms（且随 ccswitch/rules/ 的条款文件
+  // 数只增不减），而后四道**合计** ~368ms（139+48+116+65，均为原子项、要么整道跑完要么整道
+  // 跳过）。旧顺序下预算见底时，条款闸排第一、先吃掉大头，逼得后四道一起被 `runWithinBudget`
+  // 的 `NODE_MIN_SLICE_MS`(600ms) 拦下 ⇒ **用 368ms 换 600ms，代价是「四项检查全部消失」**——
+  // 这不是四舍五入的误差，是拿相同预算换回明显更少的检查覆盖面。
+  //
+  // 改法：把四道便宜的**原子项**整项挪到条款闸之前，条款闸本身排到最后。三个开放问题各自答案：
+  //   ① 条款闸排第一是不是有语义理由（它守的是 dao.md 本身）？——**没有顺序依赖**：五道各自
+  //      独立求值、互不依赖彼此的结果，「谁先跑」不影响任何一道的判据正确性，只影响预算耗尽时
+  //      「谁被牺牲」。「最重要的先看」不成立于此处——预算见底时最该保住的是「检查数量」，
+  //      不是「哪一道排在报文最前面」。
+  //   ② 报文里「本次跳过 N 项」的含义要不要跟着改？——不用。`BUDGET.skipped` 是运行期累加的
+  //      数组，语义是「这次真跳过了几项/几个文件」，与摆放顺序无关；变的只是**分布**（旧序偏向
+  //      「四项全跳、条款闸部分完成」，新序偏向「条款闸多跳几个文件、四项全跑完」），汇总行的
+  //      文字本身不用改。
+  //   ③ 混排要按「项」还是按「文件」排？——按**项**：四道各自是不可再分的原子项，整项排在
+  //      条款闸这个「可再分」的多文件项之前。条款闸本身仍保留它原有的逐文件降级（每份文件各自
+  //      判一次 `canAfford(PS_MIN_SLICE_MS)`），排最后反而让它成为**吸收预算波动的那一道**——
+  //      预算宽裕时五道全跑完，预算收紧时先牺牲的是「条款闸少扫几份文件」而不是「后四道消失」。
+  //
+  // 两态断言（回归网 tests/dao-scaffold-check.tests.js）：同一预算下，重排前后「被跳过的项数」
+  // 与「被跳过的总成本」都可比较——旧序在预算收紧到 ~6s 附近时跳 4 项/省 368ms，
+  // 新序在同一预算下跳 0~1 个条款闸文件/省 ~600ms 一份，检查覆盖面更高。
 
-  // 8. 死闸检测（2026-08-01 挂载 · 架构优化 P3，判据见 deadGateLines 头注）。
-  //    上一项守「条款写得对不对」，这一项守「守条款的那些闸本身还活着吗」。
+  // 7. 死闸检测（2026-08-01 挂载 · 架构优化 P3，判据见 deadGateLines 头注；本仓最便宜的原子项之一）。
   for (const line of runWithinBudget("死闸检测", NODE_MIN_SLICE_MS, () => deadGateLines(daoRoot))) drifts.push(line);
 
-  // 9. always-on 字节预算（2026-08-01 挂载 · 架构优化 P4，判据见 budgetLines 头注）。
-  //    前两项守「写得对不对」与「闸活没活」，这一项守**总量**——它是三者里唯一
-  //    每次都打印一个数字的，因为减法没有天然触发器。
+  // 8. always-on 字节预算（2026-08-01 挂载 · 架构优化 P4，判据见 budgetLines 头注）。
+  //    这一项守**总量**——它是这几道里唯一每次都打印一个数字的，因为减法没有天然触发器。
   for (const line of runWithinBudget("always-on 字节预算闸", NODE_MIN_SLICE_MS, () => budgetLines(daoRoot))) drifts.push(line);
 
-  // 10. per-provider 漂移（2026-08-02 挂载 · hooks=#50 / permissions.deny=#56，
-  //     判据见 providerHookLines 头注）。第 6 项比的是 live ↔ git 快照，而 #49 实测证明
-  //     **真正的下发源是 `providers.settings_config`**，那一层此前无人看着。
+  // 9. per-provider 漂移（2026-08-02 挂载 · hooks=#50 / permissions.deny=#56，
+  //    判据见 providerHookLines 头注）。第 6 项比的是 live ↔ git 快照，而 #49 实测证明
+  //    **真正的下发源是 `providers.settings_config`**，那一层此前无人看着。
   for (const line of runWithinBudget("per-provider 漂移检查", NODE_MIN_SLICE_MS, () => providerHookLines(daoRoot))) drifts.push(line);
 
-  // 11. memory 指针一致性（2026-08-02 挂载 · 自上而下审计第 12 件，判据见 memoryRefLines 头注）。
-  //     前十项守的都是**仓里的东西**；这一项是唯一一个守仓外的 —— memory 每次会话注入、
+  // 10. memory 指针一致性（2026-08-02 挂载 · 自上而下审计第 12 件，判据见 memoryRefLines 头注）。
+  //     前九项守的都是**仓里的东西**；这一项是唯一一个守仓外的 —— memory 每次会话注入、
   //     却不受任何 git 管，此前只有某个项目的 verify-all 才会碰它。
   for (const line of runWithinBudget("memory 指针扫描", NODE_MIN_SLICE_MS, () => memoryRefLines(daoRoot))) drifts.push(line);
 
-  // 12. 预算余量本身（2026-08-04 · issue #127）。**每次都打印一行数字**，理由与第 9 项
+  // 11. 条款库结构闸（2026-08-01 挂载，判据与三态输出策略见 clauseStructureLines 头注）。
+  //     只在元仓库跑；它守的是 ccswitch/dao.md 自己，而 dao.md 此前从未被任何闸守过。
+  //     **排在这里而不是最前**是本次(issue #141)的改动本身：它是本文件成本最高、且
+  //     唯一自带逐文件降级的一项，放最后能让它成为吸收预算波动的那一道（理由见上方大注）。
+  for (const line of clauseStructureLines(daoRoot)) drifts.push(line);
+
+  // 12. 预算余量本身（2026-08-04 · issue #127）。**每次都打印一行数字**，理由与第 8 项
   //     的 always-on 字节预算逐条相同：这里的成本也是**只增不减**（rules/ 每长出一份
   //     带条款的 .md 就多一次 PowerShell 冷起），而增长是无声的 —— 没人看得见「又慢了
   //     600 ms」，直到某天整个 hook 连同全部检查一起被宿主静默杀掉。

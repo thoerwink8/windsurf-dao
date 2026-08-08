@@ -97,6 +97,19 @@ function mkRepo(name, spec) {
 const EMPTY_OD_BASE = path.join(TMP, "od-base-empty");
 fs.mkdirSync(EMPTY_OD_BASE, { recursive: true });
 
+// ── 子进程 cwd 必须钉死（issue #144 普查命中的那一处，2026-08-08 修）───────────────
+// 本文件绝大多数用例靠 payload 里的 `cwd` 决定被测目录，**但 `opts.rawInput` 那几路绕开了
+// payload**（尤其「缺字段 fail-open」那条：payload 只有 `hook_event_name`）。此时 hook 走
+// `input.cwd || process.cwd()` 退到**跑测试的那个目录** ⇒ 断言的红绿由「在哪个目录敲命令」决定。
+// 2026-08-08 实测坐实（探针 `_tmp/probe-144.mjs`，两条件都满足的沙箱仓 vs 空目录）：
+//     bare payload + 子进程 cwd = 空目录  ⇒ decision 不 block（今天绿）
+//     bare payload + 子进程 cwd = 热仓    ⇒ **decision:block**（同一条断言当场红）
+// ⇒ 钉一个**结构上恒不满足触发条件**的中立目录：非 git 仓、无 design/**、无 .tsx。
+// **刻意不钉仓根**：仓根今天恰好也不满足，但那是「碰巧」不是「结构」——而 #144 讲的正是
+// 「危害通道随时可能被打开，打开的那一刻不需要碰这些站点一个字」。
+const NEUTRAL_CWD = path.join(TMP, "neutral-cwd");
+fs.mkdirSync(NEUTRAL_CWD, { recursive: true });
+
 let stateSeq = 0;
 function run(dir, opts = {}) {
   const payload = Object.assign({
@@ -120,6 +133,7 @@ function run(dir, opts = {}) {
   const r = spawnSync(process.execPath, [opts.script || HOOK], {
     input: opts.rawInput !== undefined ? opts.rawInput : JSON.stringify(payload),
     encoding: "utf8", env, windowsHide: true,
+    cwd: opts.spawnCwd || NEUTRAL_CWD,   // ← issue #144：见上面 NEUTRAL_CWD 那段
   });
   const raw = String(r.stdout || "");
   let out = null;
@@ -324,9 +338,37 @@ console.log("\n──── ④ fail-open：喂坏输入 / 注入故障都不许
   }
 
   // 缺字段（宿主协议若变）不该崩：只给最小 payload
-  const bare = run(dir, { rawInput: JSON.stringify({ hook_event_name: "Stop" }) });
+  const BARE = JSON.stringify({ hook_event_name: "Stop" });
+  const bare = run(dir, { rawInput: BARE });
   check("fail-open：payload 只有 hook_event_name（无 cwd/session_id）→ 不崩、不 block",
     bare.code === 0 && !blocked(bare), `exit=${bare.code} raw=${JSON.stringify(bare.raw.slice(0, 120))}`);
+
+  // 🔴 issue #144：上面那条断言**曾经**由「在哪个目录敲命令」决定红绿 —— payload 里没有 cwd，
+  //    hook 退到 `process.cwd()`，而子进程 cwd 此前是继承来的。现在钉在 NEUTRAL_CWD 上。
+  //    下面这条是它的**活的负控**：把子进程 cwd 换成一个两条件都满足的仓，同一份 bare payload
+  //    **必须 block** —— 它同时证明两件事：㈠上面那条不是恒真 ㈡「退到 process.cwd()」是真的发生的，
+  //    所以钉住 cwd 是承重的，不是装饰。
+  //
+  //    ~~（把 `cwd: opts.spawnCwd || NEUTRAL_CWD` 摘掉 ⇒ 这一条照旧绿、而上面那条的绿从此只是运气
+  //    —— 这一格照直写：**没有断言能替你守住「别把 pin 删了」**。）~~
+  //    🔴 **上面这句划掉的话指错了位置**（2026-08-08 PR #204 对抗验证实测订正）。写它的人跑过
+  //    「摘 pin + 热仓」，却把「在仓根会怎样」**写成了断言而没跑**。对抗官把「摘掉」的三种读法都跑了：
+  //      ①**整行删掉**（字面读法）        ⇒ 仓根 `exit=1 PASS=91 FAIL=1` · 热仓同 ⇒ **原句为假**
+  //         为什么会红：这一行**同时是 `opts.spawnCwd` 的管道**，整行没了，下面那条活的负控
+  //         自己就够不到热仓了 —— 红的是负控自己。
+  //      ②**只摘兜底**（`cwd: opts.spawnCwd,`）⇒ 仓根 `exit=0 PASS=92 FAIL=0` · 热仓 `FAIL=1`
+  //      ③**只打订正面**（`cwd: opts.spawnCwd || process.cwd()`）⇒ 仓根 **全绿 92/0，一条都不响**
+  //    ⇒ **精确的说法**：没人守得住的不是「**这一行在不在**」，而是「**它钉的是不是一个结构上
+  //    恒不满足触发条件的目录**」。把 `NEUTRAL_CWD` 换成 `process.cwd()`，全套 92 条一条都不响。
+  //    ⇒ 要动这一行的人记住：**能动的是那半个兜底，不能动的是兜底指向哪。**
+  const hotCwd = mkRepo("bare-cwd-fallback-hot", {
+    base: { "design/pages/home.html": HTML, "README.md": "x" },
+    branch: "feat/ui", commitThen: true,
+    then: { "src/ui/Card.tsx": TSX_JSX },
+  });
+  const bareHot = run(dir, { rawInput: BARE, spawnCwd: hotCwd, state: path.join(TMP, "latch-bare-hot.json") });
+  check("🔴 #144 活的负控：同一份无 cwd 的 payload，子进程 cwd 换成热仓 ⇒ 当场 block（退 process.cwd() 是真的）",
+    blocked(bareHot), `exit=${bareHot.code} raw=${JSON.stringify(bareHot.raw.slice(0, 200))}`);
 }
 
 console.log("\n──── ⑤ OD 面板快照同步（附属分支，与 ①②③ 独立判）────");

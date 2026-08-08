@@ -107,8 +107,8 @@ console.log("\n=== 正态 · WAKEUP：心跳唤醒轮 → 留守四句 + Read §
     /dao-longwindow\.md/.test(c) && /心跳对账节/.test(c));
   check("留守四句四句都在（㈠防停摆 ㈡简报铁序 ㈢在途水位 ㈣自主边界）",
     /㈠/.test(c) && /㈡/.test(c) && /㈢/.test(c) && /㈣/.test(c), "ctx=" + c.slice(0, 200));
-  check("㈡ 写明 ScheduleWakeup 不得作本轮最后一个工具调用（铁序里最易漏的那半）",
-    /永不作本轮最后一个工具调用/.test(c));
+  check("㈡ 写明 ScheduleWakeup 是本轮刻意的最后动作（issue #194 订正后的铁序自提醒句，2026-08-08）",
+    /ScheduleWakeup 是本轮刻意的最后动作/.test(c));
   check("㈢ 写明补水位排在本轮第一个工具段（次序上唯一的硬规）",
     /第一个工具段/.test(c));
   check("声明本文件是压缩投影、冲突以 dao-longwindow.md 为准（防两份正文各自漂移）",
