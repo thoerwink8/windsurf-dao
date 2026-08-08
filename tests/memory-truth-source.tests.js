@@ -1,8 +1,27 @@
 // memory-truth-source 两态自证 · 单元级
 //
-// 跑法：node tests/memory-truth-source.tests.js   （全绿 exit 0，任一红 exit 1）
+// @dao-test-tier: env
+//
+// 跑法：node tests/memory-truth-source.tests.js        （默认层：末节 defer 掉）
+//       node tests/memory-truth-source.tests.js --env  （含环境敏感层；要求串行环境）
 // 由 `scripts/run-tests.mjs` 扫 `tests/*.tests.js` 自动纳入，不进任何手维护清单
 // （手维护的清单会过期——run-tests 头注记着本仓被咬过两次）。
+//
+// ── 上面那行 `@dao-test-tier: env` 是给 run-tests.mjs 读的（2026-08-08 · issue #160）──
+// 被 defer 的只有**末节「并轨 · 投递可达性」**（真喂一次 SessionStart payload），其余 80+ 条
+// 全部照跑 —— 它们喂的是临时 fixture，与机器状态无关。
+//
+// **为什么末节是环境敏感的 —— 根因是 hook 的墙钟预算，不是「git 状态」本身**：
+//   `dao-scaffold-check.js` 自己看表，总预算读自**用户真实** `~/.claude/settings.json` 里本
+//   hook 的注册 `timeout`；预算见底就不起下一个子进程，只打一行 `⏱ … **没跑**`。
+//   memory 指针扫描排在**第 11 位**（全表最后一项检查）⇒ 它是最先被挤掉的那一个。
+//   把预算压到 3000 ms 实测：这一节红 3 条，与 issue #160 报的「merge 后 memory-truth-source
+//   红 3 条」逐条吻合。挤它的三个来源：①用户改注册 timeout ②机器负载 ③git 状态
+//   （未提交 / 领先落后 origin ⇒ 同步漂移多算几项、多起几次 git 子进程）。
+//
+// ⚠ 照直写 `--env` 也兜不住的那一格：这一节在 `--env` 下**仍可能因预算而红**，只是那时
+//   多一条前置断言明说「红来自预算，不来自被测对象」并给自查命令。要让它结构上不可能红，
+//   得给 hook 开一个「测试模式放宽预算」的口子，而那个口子会让被测的降级路径不再是真的。
 //
 // ── 本文件验的是哪一层，以及**明确不验**哪一层 ────────────────────────────────
 // 验：**检查器自身的输入→输出契约**。全部用例喂临时 fixture 目录，不读真实
@@ -31,11 +50,23 @@ const { spawnSync } = require("child_process");
 const MOD = path.resolve(__dirname, "..", "ccswitch", "lib", "memory-truth-source.js");
 const M = require(MOD);
 
-let pass = 0, fail = 0;
+// 环境敏感层开关：命令行 `--env`，或环境变量 DAO_TEST_ENV_TIER=1。形态同 dead-gates。
+const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
+
+let pass = 0, fail = 0, defer = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
 }
+// defer 不是 skip：它进汇总行的 `DEFER=n`，run-tests.mjs 据此把整场退出码顶成 2。
+// **报 DEFER=n 就必须打 n 行 `DEFER ` 明细**（run-tests 的笨计数器与它对拍）。
+function deferSection(name, why) {
+  defer++;
+  console.log(`  DEFER ${name}  ->  ${why}`);
+}
+const DEFER_WHY = "环境敏感层：hook 墙钟总预算读自用户真实 ~/.claude/settings.json 的注册 timeout，"
+  + "而 memory 指针扫描排在全表最后一项 ⇒ 最先被挤掉；机器负载与 git 状态都会挤它（issue #160）。"
+  + "跑它：node tests/memory-truth-source.tests.js --env（要求串行环境）";
 
 // ── fixture 搭建 ──────────────────────────────────────────────────────────────
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "mts-"));
@@ -443,18 +474,44 @@ console.log("\n=== 并轨 · 投递可达性（「源码里有调用点」是弱
     const ctx = (json && json.hookSpecificOutput && json.hookSpecificOutput.additionalContext) || "";
     return { code: r.status, ctx, err: String(r.stderr || "") };
   }
-  const r = runHook(DAO_ROOT);
-  check("真仓 SessionStart 注入里出现 memory 那一行（调用点可达 —— 这就是「并轨不是搬个家」的证据）",
-    /memory 指针一致性/.test(r.ctx), "ctx=" + r.ctx.slice(0, 500) + " [stderr]" + r.err.slice(0, 200));
-  check("注入的是 scope=all（否则 mousse 侧原有的覆盖面在并轨时被悄悄缩小了）",
-    /memory 指针一致性（scope=all/.test(r.ctx) || /scope=all/.test(r.ctx), r.ctx.slice(0, 500));
-  check("注入行报出普查数而不是零输出（扫描面缩小必须看得见）",
-    /份 memory/.test(r.ctx) && /个路径 token/.test(r.ctx), r.ctx.slice(0, 500));
-  check("hook 自身仍 exit 0（SessionStart 只增不阻）", r.code === 0, "code=" + r.code);
+  if (!ENV_TIER) {
+    deferSection("并轨 · 投递可达性（真喂 SessionStart payload；受 hook 墙钟预算摆布）", DEFER_WHY);
+  } else {
+    const r = runHook(DAO_ROOT);
+
+    // 🔴 **前置：这一项这次到底跑没跑。** 预算见底时 hook 打的是
+    //   `⏱ memory 指针扫描 **没跑**：宿主预算只剩 X ms…`。这一条红的时候直说成因是预算，
+    //   而不是让下面三条各自红一次、报文全指向被测对象（issue #160 报的正是那三条）。
+    const budgetSkipped = /⏱ memory 指针扫描 \*\*没跑\*\*/.test(r.ctx);
+    check("前置：hook 没有因墙钟预算跳过 memory 指针扫描这一项（红了先看这一条）",
+      !budgetSkipped,
+      "**这条红说明下面三条不可信，且成因与被测对象无关**：hook 的墙钟预算被吃光了，"
+      + "而 memory 指针扫描排在全表最后一项、最先被挤掉。"
+      + "自查：① 看注入里那行 `ⓘ hook 墙钟预算：本次已花 … / 宿主给 …`"
+      + " ② 收干净 git 状态 ③ 别和别的官同时跑测试"
+      + " ④ 手跑一次：node ccswitch/lib/memory-truth-source.js --scope=all"
+      + "\nctx=" + r.ctx.slice(0, 700));
+
+    // 可达性判据用**行首标记**（ⓘ / ⚠ / ✗ 三者之一）：memoryRefLines 的每条返回路径
+    // （模块不在 / 探测失败 / 跑不起来 / 契约被改坏 / 自身出错 / 零可扫 / 取词失效 / 绿）
+    // 都以它们之一开头，故这条对真实语料是绿是红不敏感；而 `⏱ …没跑` 不在其中
+    // ⇒ 「压根没跑到」再也不能冒充「调用点可达」。
+    check("真仓 SessionStart 注入里出现 memory 那一行（调用点可达 —— 这就是「并轨不是搬个家」的证据；「⏱ 没跑」不算）",
+      /(?:ⓘ|⚠|✗) memory 指针/.test(r.ctx), "ctx=" + r.ctx.slice(0, 500) + " [stderr]" + r.err.slice(0, 200));
+    check("注入的是 scope=all（否则 mousse 侧原有的覆盖面在并轨时被悄悄缩小了）",
+      /memory 指针一致性（scope=all/.test(r.ctx) || /scope=all/.test(r.ctx), r.ctx.slice(0, 500));
+    check("注入行报出普查数而不是零输出（扫描面缩小必须看得见）",
+      /份 memory/.test(r.ctx) && /个路径 token/.test(r.ctx), r.ctx.slice(0, 500));
+    check("hook 自身仍 exit 0（SessionStart 只增不阻）", r.code === 0, "code=" + r.code);
+  }
 }
 
 // 清理
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 
-console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);
+if (defer) {
+  console.log("  ⚠ 本次未跑上面 DEFER 那一节 —— **「没跑」不等于「跑了全过」**");
+  console.log("  跑完整层：node tests/memory-truth-source.tests.js --env   （要求串行环境，见文件头）");
+}
 process.exit(fail ? 1 : 0);

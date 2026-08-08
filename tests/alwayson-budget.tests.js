@@ -1,7 +1,38 @@
 // alwayson-budget 回归网 — ccswitch/scripts/check-alwayson-budget.mjs 的双向断言
 //
-// 跑法：node tests/alwayson-budget.tests.js     （全绿 exit 0，任一红 exit 1）
-//       node scripts/run-tests.mjs              （自动发现本文件，无需登记）
+// @dao-test-tier: env
+//
+// 跑法：node tests/alwayson-budget.tests.js        （默认层：§⑩①b 那一节 defer 掉）
+//       node tests/alwayson-budget.tests.js --env  （含环境敏感层；要求串行环境，见下）
+//       node scripts/run-tests.mjs                 （自动发现本文件，无需登记；默认层 → exit 2）
+//       node scripts/run-tests.mjs --env           （透传 --env，全绿 exit 0）
+//
+// ── 上面那行 `@dao-test-tier: env` 是给 run-tests.mjs 读的（2026-08-08 · issue #160）──
+// 被 defer 的只有 **§⑩①b「真喂一次 SessionStart payload，看注入正文里有没有那一行」**这一节，
+// 其余 90+ 条（合成夹具 + mutation + 直跑脚本）**全部照跑**，那才是本回归网的判别力所在。
+//
+// **为什么它是环境敏感的 —— 根因不是「git 状态」，是 hook 的墙钟预算**（本批实测归因）：
+//   `dao-scaffold-check.js` 自己看表：总预算读自**用户真实** `~/.claude/settings.json` 里
+//   本 hook 的注册 `timeout`（本机 10s），扣掉收尾余量后有效截止线 8500 ms。
+//   预算见底时它就**不起下一个子进程**，并打一行 `⏱ … **没跑**`。
+//   always-on 字节预算那一项排在第 9 位，前面有条款库结构闸（PowerShell 冷起）、死闸检测等。
+//   ⇒ 三件事一起把它挤出去：①用户改注册 timeout（那是别人拥有的机器级可变状态）
+//   ②机器负载（多官并行时子进程变慢）③**git 状态**——未提交改动 / 领先落后 origin
+//   会让同步漂移多算几项、多起几次 git 子进程。
+//   本批实测：干净树 + 1 个未提交改动，`已花 4572 ms / 有效截止线 8500 ms`（54%）⇒ 这一格
+//   **没有余量可言，只是这次没撞上**。把预算压到 3000 ms（`DAO_HOOK_BUDGET_MS=3000`）
+//   ⇒ 本文件当场红 **3 条**，与 issue #160 报的条数逐条吻合。
+//
+// 🔴 **同批修掉一个假通过，它比分层这件事更值钱**：原「调用点可达」那一条断言写的是
+//   `/字节预算/.test(r.ctx)`，而**预算跳过时打的那句 `⏱ always-on 字节预算闸 **没跑**`
+//   自己就含「字节预算」四个字** ⇒ 那条断言在「调用点这次压根没被跑到」时**照常 PASS**，
+//   而它的名字说的正是相反的事。现在判据换成「六条返回路径的行首标记（ⓘ/✗）之一」，
+//   并另立一条前置断言专门报「这次是被预算跳过的」（归因不指向被测对象）。
+//
+// ⚠ **跑 --env 要什么环境**：串行 —— 没有别的官在跑测试 · 没人在改 `~/.claude/settings.json`。
+//   照直写它兜不住的那一格：`--env` 里这一节**仍可能因预算而红**（只是那时报文会明说是预算，
+//   并给出自查命令）。要把它变成结构上不可能红，得给 hook 加一个「测试模式下放宽预算」的
+//   口子，而那个口子会让被测的降级路径不再是真的 —— 本批**不做**，理由写在这里备查。
 //
 // ── 这个回归网要钉住什么 ─────────────────────────────────────────────────────
 // 被测对象是一道**预算闸**，它最危险的失效形态不是「误报超限」而是**静默变绿**：
@@ -55,11 +86,24 @@ const EXPECT_TARGET = 16384;
 // 过渡上限 = 2026-08-01 那版闸值，本批一个字节没改（见源码 TRANSITION_CEILING_BYTES 头注）。
 const EXPECT_CEILING = 71680;
 
-let pass = 0, fail = 0;
+// 环境敏感层开关：命令行 `--env`，或环境变量 DAO_TEST_ENV_TIER=1（跨 shell 时后者更省事）。
+// run-tests.mjs 在 `--env` 下把这个 flag 透传给每个测试文件。形态与 dead-gates 逐字一致。
+const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
+
+let pass = 0, fail = 0, defer = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log("  PASS  " + name); }
   else { fail++; console.log("  FAIL  " + name + (detail ? "  ->  " + detail : "")); }
 }
+// defer 不是 skip：它进汇总行的 `DEFER=n` 字段，run-tests.mjs 据此把整场退出码顶成 2。
+// **报 DEFER=n 就必须打 n 行 `DEFER ` 明细**（run-tests 的笨计数器与它对拍）。
+function deferSection(name, why) {
+  defer++;
+  console.log("  DEFER " + name + "  ->  " + why);
+}
+const DEFER_WHY = "环境敏感层：hook 墙钟总预算读自用户真实 ~/.claude/settings.json 的注册 timeout，"
+  + "再被机器负载与 git 状态（未提交/领先落后 origin ⇒ 同步漂移项变多）一起挤 ⇒ 与被测对象无关的红（issue #160）。"
+  + "跑它：node tests/alwayson-budget.tests.js --env（要求串行环境）";
 
 // ── 夹具 ────────────────────────────────────────────────────────────────────
 function rm(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
@@ -555,10 +599,39 @@ console.log("\n──── ⑩ 挂载可达性（「源码里有调用点」是
     return root;
   }
 
-  // ① 真仓可达性：唯一能证明「调用点真的跑到了」的断言
-  {
+  // ①a **直跑脚本那一半：不经 hook，故与 hook 墙钟预算无关 ⇒ 留在默认层。**
+  //     它钉的是「两档闸值那套新契约在真实语料上真的打得出末行」。
+  const direct = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 60000, cwd: REPO });
+  const dline = /ALWAYSON_BUDGET_SUMMARY[^\r\n]*/.exec(String(direct.stdout || ""));
+  const mOver = dline ? /\bovertarget=(\d+)/.exec(dline[0]) : null;
+  check("末行带 target/overtarget/mode 三格（新契约在真实语料上真的打出来了）",
+    dline !== null && /\btarget=\d+/.test(dline[0]) && mOver !== null && /\bmode=(transition|strict)/.test(dline[0]),
+    dline ? dline[0] : "（没拿到末行）");
+
+  // ①b **hook 注入那一半：环境敏感层**（为什么 —— 见文件头那段归因，根因是 hook 墙钟预算）
+  if (!ENV_TIER) {
+    deferSection("⑩①b 真仓 SessionStart 注入（hook 墙钟预算 = 用户 settings.json 里本 hook 的注册 timeout）", DEFER_WHY);
+  } else {
     const r = runHook(REPO);
-    check("真仓 SessionStart 注入里出现字节预算那一行（调用点可达）", /字节预算/.test(r.ctx),
+
+    // 🔴 **前置：这一项这次到底跑没跑。** 预算见底时 hook 打的是
+    //   `⏱ always-on 字节预算闸 **没跑**：宿主预算只剩 X ms…`，而**那句话本身含「字节预算」**
+    //   ⇒ 原来那条 `/字节预算/` 断言在「压根没跑到」时照常 PASS（本批实测坐实）。
+    //   故这一条单独立出来：它红的时候直说「红来自预算，不来自被测对象」。
+    const budgetSkipped = /⏱ always-on 字节预算闸 \*\*没跑\*\*/.test(r.ctx);
+    check("⑩①b 前置：hook 没有因墙钟预算跳过 always-on 字节预算这一项（红了先看这一条）",
+      !budgetSkipped,
+      "**这条红说明本节下面几条不可信，且成因与被测对象无关**：hook 的墙钟预算被吃光了。"
+      + "自查：① 看注入里那行 `ⓘ hook 墙钟预算：本次已花 … / 宿主给 …`"
+      + " ② 收干净 git 状态（未提交 / 领先落后 origin 会让同步漂移多起几次子进程）"
+      + " ③ 别和别的官同时跑测试 ④ 手跑一次：node ccswitch/scripts/check-alwayson-budget.mjs"
+      + "\nctx=" + r.ctx.slice(0, 700));
+
+    // 可达性：**六条返回路径的行首标记（ⓘ / ✗）之一**——脚本不在 / 探测失败 / 跑不起来 /
+    // 契约被改坏 / FAIL / 绿，全部以那两个字符之一开头，故这条对真实语料是绿是红不敏感；
+    // 而 `⏱ …没跑` 那一行**不在这两个标记里**，于是「没跑」再也不能冒充「跑到了」。
+    check("真仓 SessionStart 注入里出现字节预算那一行（调用点可达；「⏱ 没跑」不算跑到）",
+      /(?:ⓘ|✗) always-on 字节预算/.test(r.ctx),
       "ctx=" + r.ctx.slice(0, 500) + " [stderr]" + r.err.slice(0, 200));
     check("常路带出数字（总字节 / 闸值 / 余量），不是零输出",
       /合计 \d+ B \/ 闸值 \d+ B/.test(r.ctx) && /余量/.test(r.ctx), r.ctx.slice(0, 600));
@@ -582,12 +655,9 @@ console.log("\n──── ⑩ 挂载可达性（「源码里有调用点」是
 
     // 两个独立消费方（脚本末行 / hook 注入文本）必须对同一实况给出一致的读数。
     // 单看任一方都可能自洽而错；交叉核对才抓得到「hook 把过渡期渲染成达标」这类分岔。
-    const direct = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8", timeout: 60000, cwd: REPO });
-    const dline = /ALWAYSON_BUDGET_SUMMARY[^\r\n]*/.exec(String(direct.stdout || ""));
-    const mOver = dline ? /\bovertarget=(\d+)/.exec(dline[0]) : null;
-    check("末行带 target/overtarget/mode 三格（新契约在真实语料上真的打出来了）",
-      dline !== null && /\btarget=\d+/.test(dline[0]) && mOver !== null && /\bmode=(transition|strict)/.test(dline[0]),
-      dline ? dline[0] : "（没拿到末行）");
+    // ⚠ `direct` / `dline` / `mOver` 现在由 ①a 求值（那半不经 hook、留在默认层），
+    //   这里只消费它们 —— **刻意不再跑第二遍**：跑两遍等于让两条断言看两份不同时刻的实况，
+    //   而「两个消费方不许分岔」这条正需要它们看的是同一个瞬间。
     if (mOver) {
       const owed = mOver[1];
       console.log("        实况 overtarget=" + owed);
@@ -646,5 +716,9 @@ console.log("\n──── ⑩ 挂载可达性（「源码里有调用点」是
   }
 }
 
-console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " ===");
+console.log("\n=== 汇总: PASS=" + pass + " FAIL=" + fail + " DEFER=" + defer + " ===");
+if (defer) {
+  console.log("  ⚠ 本次未跑上面 DEFER 那几节 —— **「没跑」不等于「跑了全过」**");
+  console.log("  跑完整层：node tests/alwayson-budget.tests.js --env   （要求串行环境，见文件头）");
+}
 process.exit(fail ? 1 : 0);
