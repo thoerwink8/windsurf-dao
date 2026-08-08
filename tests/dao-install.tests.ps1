@@ -1,5 +1,8 @@
-﻿# @dao-test-tier: env   # 真跑 dao-pack.ps1 + install.ps1（含真实 zip 打包/解压/文件复制），
-                        # 沙盒用固定路径 _tmp/dao-install-test（未随机化 ⇒ 并行必互踩）
+﻿# @dao-test-tier: env   # 沙盒本身已随机化（2026-08-08 · 对抗官 FAIL-3，照 issue #187 模板），
+                        # 不再因「并行必互踩」而标 env；仍标 env 的理由换了：`install.ps1` 第 1/2 步
+                        # 在 node/claude 缺失时会真的 `winget install`/`npm install -g` ——
+                        # 这是「跑了会真的改这台机器」而不是「沙盒会互踩」，随机化治不了这一格
+                        # （对抗官复核 ④，本仓两者已开的机器上是 no-op，换台机器/CI 会动真格）。
 <#
 .SYNOPSIS
     `scripts/dao-install.ps1` 第 6 步（hooks 注册）+ `scripts/dao-pack.ps1` 新增的
@@ -26,10 +29,14 @@
 .NOTES
     独立可运行：powershell -NoProfile -ExecutionPolicy Bypass -File tests/dao-install.tests.ps1
     退出码：0 = 全部通过；1 = 存在失败。
-    夹具落 `_tmp/dao-install-test/`（运行期生成、不入库，`_tmp/` 已在 .gitignore）。
+    夹具落 `%TEMP%/windsurf-dao-dao-install-test-<Get-Random>/`（随机化，2026-08-08 · 对抗官
+    FAIL-3 照 `tests/dao-pr-merge.tests.ps1`/issue #187 模板改），收尾在 `finally` 里删掉，
+    不再落仓内固定 `_tmp/` 路径——原写法「开跑即 `Remove-Item -Recurse -Force`」与
+    `dao-pr-merge.tests.ps1` 改之前是同一个反模式：两个实例并行时后者会把前者的夹具整棵删掉。
     PS 5.1 兼容：无三元运算符、无 && 链、禁 2>&1。本文件须以 BOM UTF-8 存盘。
     真跑 `dao-pack.ps1`（产出真实 zip，~500KB）+ 真跑 `install.ps1`（真复制 skills/
-    commands/agents/hooks 文件到隔离目录）——比纯单元测试重，故标 env 层。
+    commands/agents/hooks 文件到隔离目录）——仍标 env 层，但理由已从「沙盒会互踩」换成
+    「`install.ps1` 第 1/2 步在 node/claude 缺失时会真的改这台机器」（见文件头注）。
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -39,14 +46,20 @@ $repoRoot   = Split-Path -Parent $PSScriptRoot
 $packPs1    = Join-Path $repoRoot 'scripts\dao-pack.ps1'
 $installPs1 = Join-Path $repoRoot 'scripts\dao-install.ps1'
 $psExe      = (Get-Command powershell.exe).Source
-$workRoot   = Join-Path $repoRoot '_tmp\dao-install-test'
+$workRoot   = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-dao-install-test-$(Get-Random)"
 $utf8NoBom  = New-Object System.Text.UTF8Encoding($false)
 
 if (-not (Test-Path $packPs1))    { Write-Host "被测脚本不存在：$packPs1"; exit 1 }
 if (-not (Test-Path $installPs1)) { Write-Host "被测脚本不存在：$installPs1"; exit 1 }
 
-if (Test-Path $workRoot) { Remove-Item -Path $workRoot -Recurse -Force }
+# 沙盒随机化之后**开跑不再先删**（2026-08-08 · 对抗官 FAIL-3，照 issue #187 模板）：原先那句
+# `if (Test-Path $workRoot) { Remove-Item -Recurse -Force }` 本意是「清上次的残渣」，
+# 而它同时就是并行互踩的凶器——后开跑的实例把先开跑那个的整棵沙盒删掉。随机路径每次
+# 唯一 ⇒ 没有残渣可清；收尾清理挪到本文件末尾的 `finally`（`exit` 在 `try` 里照样会跑
+# `finally` 且退出码原样保留，PS 5.1 本机实测过）。
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
+
+try {
 
 $results = New-Object System.Collections.Generic.List[object]
 function Assert-True {
@@ -226,3 +239,11 @@ if ($failing.Count -gt 0) {
 }
 Write-Host ("dao-install 全部通过（{0} 项）。" -f $results.Count)
 exit 0
+
+} finally {
+    # 随机沙盒的收尾（2026-08-08 · 对抗官 FAIL-3，照 issue #187 模板）。
+    # `-ErrorAction SilentlyContinue`：清理失败不该把一次通过的回归网翻成红——
+    # 清不掉最坏结果是 %TEMP% 里多一个目录（含一份解压出来的安装包），而把绿改成红
+    # 会训练人无视这道闸。
+    Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
