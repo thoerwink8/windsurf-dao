@@ -128,9 +128,30 @@ const MARKER_PATH = process.env.DAO_RATE_LIMIT_MARKER || path.join(ROOT, "_tmp",
 // ②它是本机 dao 状态的既有落点（hook 自己就住在这台机器上，不依赖任何仓在不在）
 // ③它在仓外 ⇒ 不进 git、不被 `_tmp` 清理动作扫到、也不落进任何守卫的扫描面。
 // **它是镜像不是主产物**：写不成一律吞掉（`_tmp` 那侧照写），永不影响退出码。
-const MIRROR_LOG = process.env.DAO_RATE_LIMIT_MIRROR ||
-  path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(),
+//
+// ── 结构性沙箱兜底（issue #201 笔 2）──────────────────────────────────────────
+// 前情：这份生产落点是「真实限流实战样本」的耐久数据（#190 重开条件直接指着它），
+// 此前**唯一的隔离手段是每个测试消费方各自记得传 `DAO_RATE_LIMIT_MIRROR`**——那是
+// 纪律不是结构，第二个消费方忘传就静默把合成样本写进真实样本井，且看不出是假的
+// （对抗官在 PR #196 复核期间自己当场踩过一次，证据在其 worktree
+// `_tmp/evidence-selfinflicted-mirror.log`，已清理）。
+// 改法：判据从「你有没有记得传 MIRROR」挪到「你像不像是在沙箱里跑」——
+// `DAO_RATE_LIMIT_MARKER` / `DAO_RATE_LIMIT_STATE_SUBDIR` 任一个被显式覆写，就说明
+// 调用方已经在把**别的**落盘面往沙箱里赶（生产调用两者都不传），这时哪怕漏传
+// `DAO_RATE_LIMIT_MIRROR`，也该跟着落进沙箱旁边，而不是静默滑回生产路径。
+// **这不是把纪律做没**——显式传 `DAO_RATE_LIMIT_MIRROR` 仍然优先（下面 `||` 左手边），
+// 这一格只兜「忘传」那一种，两者都不传时行为与本行原有的唯一默认值逐字不变。
+function deriveMirrorFallback() {
+  if (process.env.DAO_RATE_LIMIT_MARKER) {
+    return path.join(path.dirname(process.env.DAO_RATE_LIMIT_MARKER), "mirror-fallback", "fired.log");
+  }
+  if (process.env.DAO_RATE_LIMIT_STATE_SUBDIR) {
+    return path.join(ROOT, "_tmp", process.env.DAO_RATE_LIMIT_STATE_SUBDIR, "mirror-fallback", "fired.log");
+  }
+  return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(),
     ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+}
+const MIRROR_LOG = process.env.DAO_RATE_LIMIT_MIRROR || deriveMirrorFallback();
 
 // 写标记的 error 类型。其余 8 种只进 fired.log —— 理由见头注。
 const MARKED_ERRORS = new Set(["rate_limit", "overloaded"]);
