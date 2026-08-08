@@ -327,9 +327,16 @@ if (require.main === module) {
 }
 
 // ── 导出面：**逐项写明谁在消费**（issue #190 第 4 条同型要求）──────────────────
-// 「全库零消费的导出」与「为将来单验保留的缝」在代码里长得一样，故此处照直点名：
-//   · `parseResetSeconds` —— tests/rate-limit-sentinel.tests.js 解析式单元节（边界值端到端验不到）
-//   · `MARKER_PATH`       —— tests 的跨文件运行期契约断言（**各自 spawn 取运行期值再比对**，
-//                            文本比对对改名/后续赋值形态失明 ⇒ 那一格靠这个导出才验得到）
-//   · `MARKED_ERRORS` / `MAX_RESET_S` / `SIGNATURE` —— tests 与 mutation 锚点引用
+// 「全库零消费的导出」与「为将来单验保留的缝」在代码里长得一样，故此处照直点名，
+// **有消费方的与没有的分开写**（别把「注明」写成另一个笃定断言）：
+//   **有程序化消费方**
+//   · `parseResetSeconds` —— tests 解析式单元节（上下界与「哪一式命中」端到端验不到）
+//   · `MAX_RESET_S`       —— 同上（让边界断言不必把那个数字抄一遍）
+//   · `MARKER_PATH`       —— tests 的跨文件**运行期**契约断言（两个 hook 各自 spawn 取运行期真值
+//                            比对；文本比对对「改了 ROOT 算法」这一形态失明 —— 实测过）
+//   **无程序化消费方（N=0，照直写、不报百分比）**
+//   · `MARKED_ERRORS` / `SIGNATURE` —— 测试里出现的是**同名字面串**（mutation 锚点 / 值断言），
+//                            没有走这个导出；保留是因为它们是那两条判据的唯一符号出口
+//   · `MIRROR_LOG`        —— 测试一律走 env 覆写口 `DAO_RATE_LIMIT_MIRROR`，不读这个默认值
+//   ⚠ 这份清单**没有任何机器在核**，靠读的人负责（与本仓其他手维护枚举同一个弱点）。
 module.exports = { parseResetSeconds, MARKED_ERRORS, MARKER_PATH, MIRROR_LOG, MAX_RESET_S, SIGNATURE };
