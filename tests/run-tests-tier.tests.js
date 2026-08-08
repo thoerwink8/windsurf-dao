@@ -429,12 +429,17 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环
   //   各摘出一节 hook 注入断言进 env 层，本行随之从「恰是 dead-gates 一套」扩到三套。
   //   ⚠ **改这一行之前先答一句**：新加的那套，它 defer 掉的是不是真的「对别人拥有的机器级
   //   可变状态做不变量断言」？不是的话，正路是修那几条断言，不是往这个集合里加名字。
+  //   2026-08-08 · issue #92 它又响了一次：mcp-health.tests.js 新增一节「真机自跑」，
+  //   实打一次真实 `claude mcp list`——本机是否装了 claude CLI、当下哪些 MCP server 连得上，
+  //   同样是「别人（或此刻的外部世界）拥有的机器级可变状态」（本机实测同一台机器换一次
+  //   跑就从 `! Connected · tools fetch failed` 变回 `✔ Connected`），故本行随之扩到四套。
   const EXPECT_DECLARED = [
     "alwayson-budget.tests.js",     // §⑩①b：hook 墙钟预算读自用户真实 settings.json 的注册值
     "dead-gates.tests.js",          // ⑪ / ⑪.5 / ⑫①：真 live settings + 真 cc-switch DB
+    "mcp-health.tests.js",          // ⑥：真跑一次 claude mcp list，依赖本机 CLI + 当下 server 健康态
     "memory-truth-source.tests.js", // 末节：同 alwayson-budget，且 memory 扫描排在全表最后一项
   ];
-  check("真实 tests/ 里声明了环境敏感层的文件恰是那三套（多了要问为什么，少了说明标记掉了）",
+  check("真实 tests/ 里声明了环境敏感层的文件恰是那四套（多了要问为什么，少了说明标记掉了）",
     JSON.stringify(declared) === JSON.stringify(EXPECT_DECLARED),
     "实况=" + JSON.stringify(declared) + " 期望=" + JSON.stringify(EXPECT_DECLARED));
   check("本文件自己不在声明面里（否则说明标记字面量泄进了头部窗口）",
