@@ -104,9 +104,9 @@ const MARKER_PATH = process.env.DAO_RATE_LIMIT_MARKER || path.join(ROOT, "_tmp",
 // 探针签名：**锚定在开头**（`^`），大小写敏感，方括号必须闭合。判据的宽窄见头注。
 const PROBE_SIG = /^\[dao-probe\]/;
 
-const BLOCK_REASON =
-  `${SIGNATURE} 无限流中断标记，本轮探针拦下（零成本）。` +
-  "机制见 issue #184：哨兵没写标记 ⇒ 这段时间没有被限流打断的活 ⇒ 这一轮不必发生。";
+// 短文案是用户 2026-08-08 拍板：block 提示宿主必然渲染在终端（reason 无法静默），
+// 15 分钟档下每天最多 96 条 —— 每条只准占半行。签名保留（误伤时要认得出是谁拦的）。
+const BLOCK_REASON = `${SIGNATURE} 无中断·已拦（#184）`;
 
 const S = createHookScaffold({
   name: "dao-probe-gate",
