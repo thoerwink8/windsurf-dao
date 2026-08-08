@@ -148,7 +148,12 @@ if (isDaoMeta) {
   // config-sync/common/settings.json + 跑 dao.bat --direction=down」—— #49 的下发链实测证明,快照层与 DB 的
   // common_config_* 镜像层**都不在下发路径上**,照它做改动永不生效(PR #43 就是照旧文案做的:注册写满这两层
   // 而 live 始终未注册)。**一道提醒给出走不通的合法路径,比不给更糟**:照做的人会以为自己已经做完了。
-  // 同型修复见 PR #68(硬闸 G2 的 stderr),两处口径刻意保持一致。本分支的投递面比 G2 更宽 —— G2 只在有人
+  // 同型修复见 PR #68(硬闸 G2 的 stderr),~~两处口径刻意保持一致~~ **两处口径在「源与投影」那一格
+  // 仍然一致,但 2026-08-08 起本分支多了一句 G2 那侧没有的**:「动过任一层 ⇒ 同一动作内跑漂移检测
+  // 收尾」(用户点名固化进 dao.md `[#Shell-源与投影]`,commit 49f4a4d;issue #190 认领它的机器投递
+  // 半件)。G2 的 stderr **本批未同批加** —— 那侧的文案被 hard-gates 测试以逐字锚点钉着,加一句要
+  // 连锚一起改,属另一个批次;差异照直记在这里,免得下一个人读到「刻意保持一致」而据此推断 G2 也有。
+  // 本分支的投递面比 G2 更宽 —— G2 只在有人
   // 写 live 那一份时才打,本分支是任何 settings.json/mcp_servers.json 改动后**自动注入 additionalContext**,
   // 不必等谁去读;而下面 isWindsurfDaoFile 分支的注释记着「错误提醒连续误导三名 subagent」,那正是这个
   // 投递面的实测后果。
@@ -157,7 +162,7 @@ if (isDaoMeta) {
   // ⚠ 文案里的「若这是 live 那一份」不是客套 —— isSettingsJson 正则对**项目级** .claude/settings.json 同样
   // 命中(它分不出 live 与项目级),所以这段话必须是条件式的,不能写成无条件断言。
   // **判定逻辑(isSettingsJson 正则、分支次序)一个字符未动,改的只有这段打给人看的话。**
-  context = "【dao 同步提醒】你刚修改了 " + norm.split("/").pop() + "。⚠ 若这是 live `~/.claude/` 下的那份,它是 cc-switch 下发的**投影**——改它立即生效但不持久,下次切 provider 即被目标 provider 的配置整体覆盖。**真实下发源是 cc-switch DB `providers` 表各 provider 自带的 `settings_config`**:请用户在 cc-switch GUI 里编辑 provider 配置(或由用户执行 SQL)写进那一列,**且每个 provider 都要改**——切 provider 时 live 会被目标 provider 的配置整体覆盖,只改一个等于没改(per-provider 漂移,长期对齐机制挂 issue #50)。写 DB 属**用户动作**:AI 侧被权限分类器全路径拦截。⚠ **改 git 快照层 `config-sync/common/settings.json` 或 DB 的 `common_config_*` 镜像层都不会生效**——两层都不在下发路径上(#49 实测;PR #43 曾把 hooks 注册写满这两层而 live 始终未注册),所以也**不要建议跑 `dao.bat --direction=down/up` 来让它生效**。判据见 dao.md「改配置先认源与投影」。";
+  context = "【dao 同步提醒】你刚修改了 " + norm.split("/").pop() + "。⚠ 若这是 live `~/.claude/` 下的那份,它是 cc-switch 下发的**投影**——改它立即生效但不持久,下次切 provider 即被目标 provider 的配置整体覆盖。**真实下发源是 cc-switch DB `providers` 表各 provider 自带的 `settings_config`**:请用户在 cc-switch GUI 里编辑 provider 配置(或由用户执行 SQL)写进那一列,**且每个 provider 都要改**——切 provider 时 live 会被目标 provider 的配置整体覆盖,只改一个等于没改(per-provider 漂移,长期对齐机制挂 issue #50)。写 DB 属**用户动作**:AI 侧被权限分类器全路径拦截。⚠ **改 git 快照层 `config-sync/common/settings.json` 或 DB 的 `common_config_*` 镜像层都不会生效**——两层都不在下发路径上(#49 实测;PR #43 曾把 hooks 注册写满这两层而 live 始终未注册),所以也**不要建议跑 `dao.bat --direction=down/up` 来让它生效**。⚠ **动过任一层(live / DB providers / git 快照)就在同一动作内跑漂移检测收尾并贴真退出码**:dao 侧 = `node ccswitch/lib/settings-drift.js` 裸跑 + 加 `--providers` 两面都跑 —— SessionStart 那条提醒是**下一个窗口才响的兜底,不算收尾**。判据见 dao.md「改配置先认源与投影」。";
 } else if (isWindsurfDaoFile) {
   // 2026-07-27 修:本分支原文无条件建议跑 `--direction=up`,而 up 走 config-sync/lib/export.mjs 的
   // `selectRows('settings', "WHERE key LIKE 'common_config_%'")` —— 只从 SQLite DB 读,**看不见 ccswitch/ 下的

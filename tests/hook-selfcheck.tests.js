@@ -226,6 +226,97 @@ console.log("\n=== isSynthetic 判据（近似，两向都有反例——见库�
   delete process.env.KNIFEF_P3_SELFTEST;
 }
 
+console.log("\n=== ③ 留痕域可写性（opt-in；issue #190 第 2 条）===");
+{
+  // 这一段治的病：脚手架把 errors.log / fired.log / last.json **三样全放在同一个
+  // `<root>/_tmp/<subdir>/` 域**里，而写它们的两个函数都吞异常 ⇒ 那个域坏掉时三样一起哑、
+  // 退出码干净，而「一条都没记下来」与「本次什么都没发生」在盘上逐字节相同（#190 第 2 条实测）。
+  const LOG = path.join(TMP, "empty-real.jsonl");
+  const base = H.selfcheckLines(ruleEchoSc(LOG));
+  check("不传 probeDirs ⇒ 一行都不多（既有两个消费方的输出因此一个字节没变）",
+    base.lines.every((l) => !/留痕域/.test(l)), JSON.stringify(base.lines));
+
+  const good = path.join(TMP, "probe-good");
+  const scOk = ruleEchoSc(LOG);
+  scOk.probeDirs = [{ label: "测试域", dir: good, failNote: "（好域的尾注不该出现）" }];
+  const rOk = H.selfcheckLines(scOk);
+  const okLine = rOk.lines.find((l) => /留痕域/.test(l));
+  check("可写 ⇒ ✓ 一行，点名 label 与路径", /^✓ 留痕域可写：测试域 → /.test(okLine || ""), JSON.stringify(okLine));
+  check("可写 ⇒ 不增加 bad 计数", rOk.bad === base.bad, "bad=" + rOk.bad + " base=" + base.bad);
+  check("可写 ⇒ 不带 failNote（尾注只属于失败那一支）", !/好域的尾注/.test(okLine || ""));
+  check("🔑 探针文件写完就删（不在留痕域里留垃圾，也不落进任何人的扫描面 —— `[#守-输出面外]`）",
+    fs.readdirSync(good).length === 0, JSON.stringify(fs.readdirSync(good)));
+
+  // 负态：父路径被占成普通文件 ⇒ mkdirSync 必抛（这正是 #190 对抗官弄坏仓根 `_tmp` 的那个形态）
+  const blocker = path.join(TMP, "probe-blocker");
+  fs.writeFileSync(blocker, "我是一个普通文件", "utf8");
+  const scBad = ruleEchoSc(LOG);
+  scBad.probeDirs = [{ label: "坏域", dir: path.join(blocker, "state"), failNote: "（坏域尾注ZZZ）" }];
+  const rBad = H.selfcheckLines(scBad);
+  const badLine = rBad.lines.find((l) => /留痕域/.test(l));
+  check("写不进去 ⇒ ✗ 一行", /^✗ 留痕域写不进去：坏域 → /.test(badLine || ""), JSON.stringify(badLine));
+  check("写不进去 ⇒ bad 计数 +1（不许当通过）", rBad.bad === base.bad + 1, "bad=" + rBad.bad);
+  check("✗ 那行带 errno（读者要分得出是被占成文件、盘满、还是没权限）",
+    /ENOTDIR|EEXIST|ENOENT|EPERM|EACCES/.test(badLine || ""), JSON.stringify(badLine));
+  check("✗ 那行带调用方给的 failNote（各 hook 自述后果，库不代写）",
+    /（坏域尾注ZZZ）/.test(badLine || ""), JSON.stringify(badLine));
+  check("🔴 ✗ 那行必须明说它污染第②段的结论（「无记录」与「写不进去」处方相反）",
+    /可能只是写不进去，不是没触发过/.test(badLine || ""), JSON.stringify(badLine));
+
+  // 多个域 ⇒ 各报一条（归因）：只查一个域时「A 坏了」与「A、B 都坏了」在输出里长得一样
+  const scTwo = ruleEchoSc(LOG);
+  scTwo.probeDirs = [
+    { label: "好域", dir: path.join(TMP, "probe-two-ok") },
+    { label: "坏域", dir: path.join(blocker, "state2") },
+  ];
+  const rTwo = H.selfcheckLines(scTwo);
+  const twoLines = rTwo.lines.filter((l) => /留痕域/.test(l));
+  check("多个域 ⇒ 逐个报（一 ✓ 一 ✗，归因到具体哪一个）",
+    twoLines.length === 2 && /^✓ 留痕域可写：好域/.test(twoLines[0]) && /^✗ 留痕域写不进去：坏域/.test(twoLines[1]),
+    JSON.stringify(twoLines));
+  check("多个域 ⇒ bad 只按坏的那些计（+1 不是 +2）", rTwo.bad === base.bad + 1, "bad=" + rTwo.bad);
+
+  // probeDirWritable 单验：**判据是「真写一次」不是「目录存在吗」**
+  check("probeDirWritable 正控：可建可写 ⇒ ok=true",
+    lib.probeDirWritable(path.join(TMP, "pw-ok")).ok === true);
+  const pw = lib.probeDirWritable(path.join(blocker, "x"));
+  check("probeDirWritable 负控：父路径是文件 ⇒ ok=false 且给出 why", pw.ok === false && typeof pw.why === "string",
+    JSON.stringify(pw));
+  check("🔴 对照：`existsSync` 式判据对这两个完全不同的样本给出同一个答案（false）—— " +
+    "这就是为什么探测必须真写一次，而不是问一句「目录在吗」",
+    fs.existsSync(path.join(blocker, "x")) === false &&
+    fs.existsSync(path.join(TMP, "never-ever-created")) === false);
+}
+
+console.log("\n=== maybeForceError 的相位（issue #190 第 3 条：让最外层 catch 不再是真空锚）===");
+{
+  const H4 = lib.createHookScaffold({
+    name: "knifeF-probe4", stateSubdir: "knifeF-hook-selfcheck-tests/state4",
+    failTail: "x", forceErrorEnv: "KNIFEF_P4_FORCE_ERROR", selfTestEnv: "KNIFEF_P4_SELFTEST",
+  });
+  const threw = (stage) => { try { H4.maybeForceError(stage); return false; } catch (_) { return true; } };
+  const had = Object.prototype.hasOwnProperty.call(process.env, "KNIFEF_P4_FORCE_ERROR");
+  try {
+    delete process.env.KNIFEF_P4_FORCE_ERROR;
+    check("未设 ⇒ 任何相位都不抛", !threw("parse") && !threw("outer"));
+    process.env.KNIFEF_P4_FORCE_ERROR = "1";
+    check("`=1` ⇒ 任何相位都抛（历史行为一字不改；实际总撞在第一个注入点上）",
+      threw("parse") && threw("outer"));
+    process.env.KNIFEF_P4_FORCE_ERROR = "outer";
+    check("🔴 `=outer` ⇒ **只有** outer 相位抛（相位机制的全部意义：把异常精确投到内层 try 之外）",
+      !threw("parse") && threw("outer"));
+    check("误伤反例：相位名不是整名相等就不命中（`oute` / `outer2` 都不抛）",
+      !threw("oute") && !threw("outer2"));
+    process.env.KNIFEF_P4_FORCE_ERROR = "no-such-phase";
+    check("负控：设了个不存在的相位名 ⇒ 一律不抛（不许退化成「设了就抛」）",
+      !threw("parse") && !threw("outer"));
+  } finally {
+    delete process.env.KNIFEF_P4_FORCE_ERROR;
+  }
+  check("收尾：环境变量已复原（本节自己不许留污染）",
+    Object.prototype.hasOwnProperty.call(process.env, "KNIFEF_P4_FORCE_ERROR") === had);
+}
+
 // ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 

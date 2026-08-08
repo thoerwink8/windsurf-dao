@@ -46,9 +46,20 @@ function envFor(tag) {
   return Object.assign({}, process.env, {
     DAO_RATE_LIMIT_MARKER: path.join(BASE, tag, "rate-limit-interrupt.json"),
     DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag, "state"),
+    // 🔴 **镜像域也必须指进沙箱**（issue #190 第 2 条新增的那条通道）：它的生产落点在
+    // `~/.claude/dao-state/…`，而那份是「真实限流实战样本」的耐久数据（#190 第 1 条的重开条件
+    // 直接指着这类样本）。不覆写 ⇒ 每跑一次测试就往它掺一批合成记录，把将来那次复盘的结论污染掉。
+    DAO_RATE_LIMIT_MIRROR: mirrorPath(tag),
   });
 }
 function markerPath(tag) { return path.join(BASE, tag, "rate-limit-interrupt.json"); }
+function mirrorPath(tag) { return path.join(BASE, tag, "mirror", "fired.log"); }
+function mirrorLines(tag) {
+  try {
+    return fs.readFileSync(mirrorPath(tag), "utf8").split(/\r?\n/).filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+  } catch (_) { return []; }
+}
 // ⚠ 日志落点是 `<被跑的那个 hook 的 ROOT>/_tmp/<subdir>/`，而 mutant 的 ROOT 在沙箱里、
 // 不是 REPO —— 按 REPO 写死会让 mutant 的 canary 永远读到空文件（首版就是这么假红的）。
 // 故按**被跑的那个文件**反推 ROOT，两种情形共用一套算法。
@@ -80,6 +91,38 @@ function payloadOf(over) {
   }, over || {});
 }
 
+// ── mutation 沙箱（**提到模块级**，issue #190）────────────────────────────────
+// 原先它住在文件末尾那个 mutation 块里，于是新增的几节（外层 catch / covers 判定 / 镜像通道）
+// 各自要么再抄一份、要么就没有先破再验那一半。**同型的东西只留一个出口**——这与
+// `hard-gates.tests.js` 把喂 nudge 的出口收成一个是同一条教训（同一文件里两份同型写法，
+// 下一次收口必然只改到其中一份）。
+const SRC = fs.readFileSync(REAL_HOOK, "utf8");
+const SHA_BEFORE = crypto.createHash("sha256").update(SRC).digest("hex");
+// 依赖清单从源码扫出来，不手写——手写的清单会在有人加一个 require 的那天悄悄过期，
+// 而症状是「测试仍在跑，测的是个残废」。
+function relRequiresOf(src) {
+  return [...src.matchAll(/require\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)].map((m) => m[1]);
+}
+function mutantHook(tag, anchor, replacement) {
+  check(`mutation 靶点在源码里唯一存在（${tag}）`, SRC.split(anchor).length === 2,
+    `出现 ${SRC.split(anchor).length - 1} 次`);
+  const root = path.join(BASE, "mut-" + tag);
+  const hooksDir = path.join(root, "ccswitch", "hooks");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const deps = relRequiresOf(SRC);
+  check(`沙箱前提：${tag} 的相对依赖能逐个定位（加了新依赖会在这里当场变红）`,
+    deps.length > 0 && deps.every((d) => fs.existsSync(path.resolve(path.dirname(REAL_HOOK), d))),
+    "deps=" + JSON.stringify(deps));
+  for (const d of deps) {
+    const from = path.resolve(path.dirname(REAL_HOOK), d);
+    const to = path.resolve(hooksDir, d);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+  }
+  fs.writeFileSync(path.join(hooksDir, "dao-rate-limit-sentinel.js"), SRC.replace(anchor, replacement), "utf8");
+  return path.join(hooksDir, "dao-rate-limit-sentinel.js");
+}
+
 console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
 {
   const tag = "rate";
@@ -87,11 +130,27 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
   check("exit 0（本事件退出码被宿主忽略，但仍不许非 0）", r.code === 0, "code=" + r.code);
   const m = readJson(markerPath(tag));
   check("标记文件已写出且是合法 JSON", m !== null);
-  check("标记字段齐全（at / error / reset_estimate_s / raw / session_id —— spec a 段列的那五格）",
-    m && typeof m.at === "string" && m.error === "rate_limit" &&
-    Object.prototype.hasOwnProperty.call(m, "reset_estimate_s") &&
-    typeof m.raw === "string" && m.session_id === "sid-" + TAG,
+  // 🔴 **断言名实不符已订正（issue #190 第 4 条）**：~~原名写「字段齐全…那五格」而实写 8 格~~
+  //    —— 标记实际有 8 个字段，这条只查 5 个，`reset_parse` / `reset_estimate_at` / `signature`
+  //    **三格无人查**；其中 `reset_estimate_at` 是**算出来的值**，最需要有人盯着（另两格
+  //    `reset_parse` 由下面单独一条查、`signature` 此前彻底真空）。现在逐格点名、逐格给值。
+  //    **别把它读成「字段名对不对」**：名字对而值算错（比如 `reset_estimate_at` 恒 null）
+  //    是这一格真正的失效形态，故三条里有两条是值断言。
+  const FIELDS = ["at", "error", "reset_estimate_s", "reset_parse", "reset_estimate_at",
+    "raw", "session_id", "signature"];
+  check("标记 8 个字段一格不少（逐格点名：" + FIELDS.join(" / ") + "）",
+    m && FIELDS.every((k) => Object.prototype.hasOwnProperty.call(m, k)),
+    "缺=" + JSON.stringify(m ? FIELDS.filter((k) => !Object.prototype.hasOwnProperty.call(m, k)) : FIELDS));
+  check("承重字段的值都对（error / raw / session_id / signature，不只是「键在」）",
+    m && m.error === "rate_limit" && typeof m.raw === "string" &&
+    m.session_id === "sid-" + TAG && m.signature === "[dao-rate-limit-sentinel v1]",
     "marker=" + JSON.stringify(m));
+  // `reset_estimate_at` 的值断言：它 = at + reset_estimate_s（两次 Date.now() 之间有毫秒级漂移，
+  // 故给 5 秒容差）。**这一格此前零守护** —— 恒 null / 算成过去时刻都不会有任何断言变红。
+  check("reset_estimate_at = at + reset_estimate_s（±5s 容差；此前这一格是真空的）",
+    m && typeof m.reset_estimate_at === "string" &&
+    Math.abs((Date.parse(m.reset_estimate_at) - Date.parse(m.at)) - m.reset_estimate_s * 1000) <= 5000,
+    "at=" + (m && m.at) + " at+=" + (m && m.reset_estimate_at) + " s=" + (m && m.reset_estimate_s));
   check("中文拼车式解析出 3 小时 12 分钟 = 11520 秒", m && m.reset_estimate_s === 11520, "得 " + (m && m.reset_estimate_s));
   check("reset_parse 记下是哪一式命中（真实语料攒够后才判得出英文式有没有用）",
     m && m.reset_parse === "cn-carpool", "得 " + (m && m.reset_parse));
@@ -99,6 +158,14 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
     m && /429/.test(m.raw) && /Rate limit reached/.test(m.raw), "raw=" + (m && m.raw));
   const f = firedLines(tag);
   check("fired.log 记一行且 marked=true", f.length === 1 && f[0].marked === true, "fired=" + JSON.stringify(f));
+  const mir = mirrorLines(tag);
+  check("镜像域也记一行（#190 第 2 条：第二个物理落点，出 `_tmp` 域）",
+    mir.length === 1 && mir[0].marked === true, "mirror=" + JSON.stringify(mir));
+  check("镜像那份带 mirror:true（读的人要分得出自己在看哪一份）", mir[0] && mir[0].mirror === true);
+  check("镜像与主账逐字段同源（除 mirror 标记外）",
+    mir[0] && f[0] && mir[0].at === f[0].at && mir[0].error === f[0].error &&
+    mir[0].reset_estimate_s === f[0].reset_estimate_s,
+    "mirror=" + JSON.stringify(mir[0]) + " fired=" + JSON.stringify(f[0]));
 }
 
 console.log("\n=== 正态 · overloaded：同样写标记（matcher 覆盖的两种之一）===");
@@ -220,36 +287,260 @@ console.log("\n=== --selfcheck 不许崩（它读真实 settings.json，故只�
   check("--selfcheck 打印带 hook 名的报头", /dao-rate-limit-sentinel --selfcheck/.test(r.stdout || ""), "out=" + (r.stdout || "").slice(0, 160));
 }
 
-console.log("\n=== mutation · 三个方向（锚点单行、断言与 replace 同一个字符串）===");
+console.log("\n=== 留痕单点加固（#190 第 2 条）：主域坏掉时镜像照记 ===");
 {
-  const SRC = fs.readFileSync(REAL_HOOK, "utf8");
-  const SHA_BEFORE = crypto.createHash("sha256").update(SRC).digest("hex");
+  // 这一节复刻对抗官 2026-08-08 的实测：把留痕主域**弄坏**（父路径占成普通文件 ⇒ `mkdirSync`
+  // 抛 ENOTDIR/EEXIST ⇒ heartbeat 与 appendErrorLog 双双吞掉），看这次限流还剩几条通道。
+  // 加固前的答案是**零条**（四条通道全哑、exit 0，与「本次没限流」逐字节相同）。
+  const blocker = path.join(BASE, "brokenstate");
+  fs.writeFileSync(blocker, "我是一个普通文件，不是目录", "utf8");   // 把主域的父路径占掉
+  const tag = "brokenstate/state";
+  const env = Object.assign({}, process.env, {
+    DAO_RATE_LIMIT_MARKER: path.join(BASE, "brokenmarker", "rate-limit-interrupt.json"),
+    DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag),
+    DAO_RATE_LIMIT_MIRROR: path.join(BASE, "brokenstate-mirror", "fired.log"),
+  });
+  const r = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify(payloadOf({ last_assistant_message: "API Error: Rate limit reached · 约 1 小时后重置" })),
+    encoding: "utf8", env,
+  });
+  const brokenFired = path.join(REPO, "_tmp", TAG, tag, "fired.log");
+  const brokenErrors = path.join(REPO, "_tmp", TAG, tag, "errors.log");
+  const mir = (() => {
+    try {
+      return fs.readFileSync(path.join(BASE, "brokenstate-mirror", "fired.log"), "utf8")
+        .split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
+    } catch (_) { return []; }
+  })();
+  check("主域坏掉 → 仍 exit 0（fail-open 不变）", r.status === 0, "code=" + r.status);
+  check("前提：主域真的坏了（fired.log / errors.log 两样都写不出来）—— 这一条是本节的靶还活着的证明",
+    !fs.existsSync(brokenFired) && !fs.existsSync(brokenErrors),
+    "fired存在=" + fs.existsSync(brokenFired) + " errors存在=" + fs.existsSync(brokenErrors));
+  check("🔴 镜像域照记一行 ⇒ 这次限流没有静默消失（加固前这里是 0 条）",
+    mir.length === 1 && mir[0].error === "rate_limit" && mir[0].mirror === true,
+    "mirror=" + JSON.stringify(mir));
+  check("镜像那条带得出重置估时（承重字段没被降级成只剩个时间戳）",
+    mir[0] && mir[0].reset_estimate_s === 3600, "mirror=" + JSON.stringify(mir[0]));
+  // 负控：镜像**也**坏掉时不许炸 —— 它是冗余通道，写不成只能吞
+  const env2 = Object.assign({}, env, { DAO_RATE_LIMIT_MIRROR: path.join(blocker, "sub", "fired.log") });
+  const r2 = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify(payloadOf()), encoding: "utf8", env: env2,
+  });
+  check("负控：两个域一起坏 → 仍 exit 0（镜像写不成一律吞掉，绝不拖垮主路径）",
+    r2.status === 0, "code=" + r2.status);
 
-  // 沙箱：把 hook 与它**自己声明的**相对依赖一起拷进去（依赖清单从源码扫出来，不手写——
-  // 手写的清单会在有人加一个 require 的那天悄悄过期，而症状是「测试仍在跑，测的是个残废」）。
-  function relRequiresOf(src) {
-    return [...src.matchAll(/require\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)].map((m) => m[1]);
+  // ── 先破再验（就近放）：把镜像调用架空 ⇒ 上面那条「镜像域照记一行」必须变红 ────────
+  // 形态选的是「**保留字面但使其不执行**」而不是整段删除：删掉 code review 一眼看得见，
+  // 「留着但永远不执行」才骗得过人眼，而那正是 `[#官抗-改坏多形态]` 的第②向。
+  {
+    const ANCHOR = "  mirrorRecord(rec);";
+    const h = mutantHook("nomirror", ANCHOR, "  if (false) mirrorRecord(rec);");
+    const envM = Object.assign({}, env, {
+      DAO_RATE_LIMIT_MIRROR: path.join(BASE, "nomirror-mirror", "fired.log"),
+      DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, "nomirror", "state"),
+      DAO_RATE_LIMIT_MARKER: path.join(BASE, "nomirror", "rate-limit-interrupt.json"),
+    });
+    const rm = spawnSync(process.execPath, [h], {
+      input: JSON.stringify(payloadOf()), encoding: "utf8", env: envM,
+    });
+    const gone = fs.existsSync(path.join(BASE, "nomirror-mirror", "fired.log"));
+    check("先破再验：镜像调用被架空 ⇒ 镜像域零记录（上面那组镜像断言不是摆设）",
+      !gone, "镜像文件竟然还在");
+    check("canary：变异体还活着（标记照写、fired.log 照记 —— 只有镜像这一格没了）",
+      rm.status === 0 && fs.existsSync(path.join(BASE, "nomirror", "rate-limit-interrupt.json")) &&
+      firedLines("nomirror", h).length === 1,
+      "code=" + rm.status + " fired=" + JSON.stringify(firedLines("nomirror", h)));
   }
-  function mutantHook(tag, anchor, replacement) {
-    check(`mutation 靶点在源码里唯一存在（${tag}）`, SRC.split(anchor).length === 2,
-      `出现 ${SRC.split(anchor).length - 1} 次`);
-    const root = path.join(BASE, "mut-" + tag);
-    const hooksDir = path.join(root, "ccswitch", "hooks");
-    fs.mkdirSync(hooksDir, { recursive: true });
-    const deps = relRequiresOf(SRC);
-    check(`沙箱前提：${tag} 的相对依赖能逐个定位（加了新依赖会在这里当场变红）`,
-      deps.length > 0 && deps.every((d) => fs.existsSync(path.resolve(path.dirname(REAL_HOOK), d))),
-      "deps=" + JSON.stringify(deps));
-    for (const d of deps) {
-      const from = path.resolve(path.dirname(REAL_HOOK), d);
-      const to = path.resolve(hooksDir, d);
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.copyFileSync(from, to);
+}
+
+console.log("\n=== 外层 catch 不再是真空锚（#190 第 3 条）===");
+{
+  // 加固前：本文件全部故障注入点都在 `main()` 内层 try 里 ⇒ 异常**走不到**最外层 catch
+  //   ⇒ 把那条路改成 fail-closed 也没有一条断言会红（真空锚）。
+  // 现在 `S.maybeForceError("outer")` 住在内层 try **之外**，这一节把那条路第一次真的跑到。
+  const tag = "outerthrow";
+  const env = envFor(tag); env.DAO_RATE_LIMIT_FORCE_ERROR = "outer";
+  const r = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify(payloadOf()), encoding: "utf8", env,
+  });
+  check("外层相位注入 → 仍 exit 0（本事件退出码被宿主忽略，但不许非 0 假装出事）",
+    r.status === 0, "code=" + r.status);
+  check("外层相位注入 → stderr 明说是未捕获异常（走的确实是最外层那条路，不是内层）",
+    /未捕获异常/.test(r.stderr || ""), "err=" + String(r.stderr || "").slice(0, 160));
+  check("外层相位注入 → 写 errors.log 留痕（静默是这个 hook 最坏的死法）",
+    fs.existsSync(errorsPath(tag)));
+  check("外层相位注入 → 不写标记（异常发生在写标记之前）", !fs.existsSync(markerPath(tag)));
+
+  // 误伤反例：相位名对不上就不该注入 —— 否则「相位」这个机制等于没有，
+  // 而 `=1` 那条历史路径（撞第一个注入点）必须一字不变。
+  const tag2 = "phase-mismatch";
+  const env2 = envFor(tag2); env2.DAO_RATE_LIMIT_FORCE_ERROR = "no-such-phase";
+  const r2 = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify(payloadOf()), encoding: "utf8", env: env2,
+  });
+  check("误伤反例：相位名不匹配 → 一切照常（标记照写）⇒ 相位机制不是「设了就抛」",
+    r2.status === 0 && fs.existsSync(markerPath(tag2)), "code=" + r2.status);
+  const tag3 = "phase-one";
+  const env3 = envFor(tag3); env3.DAO_RATE_LIMIT_FORCE_ERROR = "1";
+  const r3 = spawnSync(process.execPath, [REAL_HOOK], {
+    input: JSON.stringify(payloadOf()), encoding: "utf8", env: env3,
+  });
+  check("历史路径不变：`=1` 仍撞在 parse 相位（stderr 说的是解析失败，不是未捕获异常）",
+    r3.status === 0 && /解析 stdin 失败/.test(r3.stderr || "") && !/未捕获异常/.test(r3.stderr || ""),
+    "err=" + String(r3.stderr || "").slice(0, 160));
+
+  // ── 先破再验（就近放）：把最外层 catch 改成 fail-closed ⇒ 上面那条 exit 0 断言必须变红 ──
+  // 这就是「真空锚」的定义性检验：**加固之前跑这一段，红集是 0**（异常走不到外层，
+  // 无论外层写什么都不影响任何断言）。现在它红得起来，才说明外层那条路真的被跑到了。
+  {
+    const ANCHOR = '      const msg = `[dao-rate-limit-sentinel] 未捕获异常：${e && e.message}`;';
+    const h = mutantHook("outer-failclosed", ANCHOR, ANCHOR + " process.exit(1);");
+    const envM = envFor("outer-mut"); envM.DAO_RATE_LIMIT_FORCE_ERROR = "outer";
+    const rm = spawnSync(process.execPath, [h], {
+      input: JSON.stringify(payloadOf()), encoding: "utf8", env: envM,
+    });
+    check("先破再验：外层 catch 改成 exit 1 ⇒ 「仍 exit 0」那条断言翻面（外层锚不再真空）",
+      rm.status === 1, "code=" + rm.status + " err=" + String(rm.stderr || "").slice(0, 160));
+    check("canary：变异体还活着（正常输入下照常写标记、exit 0 —— 坏的只有异常那条路）",
+      (spawnSync(process.execPath, [h], {
+        input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor("outer-canary"),
+      }).status === 0) && fs.existsSync(markerPath("outer-canary")));
+  }
+}
+
+console.log("\n=== 负控 · 宿主失效态两格（#190 第 4 条：模块加载期崩 / stdout 写不动）===");
+{
+  // ㈠ **模块加载期崩**：`require` 就失败 ⇒ 连 `main()` 都没进，最外层 catch 也兜不到
+  //    （它在 `require.main === module` 那个块里，而那个块根本没执行到）。
+  //    这一格问的是**宿主怎么处置**：非 0 非 2 的退出码 = non-blocking error ⇒ 动作照常放行
+  //    （`[#守-宿主失效态]`）。所以判据是「**不是 2**」，而不是「是 1」—— 押死具体数字会在
+  //    node 改退出码的那天误红，而真正承重的不变量只有「别伪装成 block」这一条。
+  const crashDir = path.join(BASE, "loadcrash", "ccswitch", "hooks");
+  fs.mkdirSync(crashDir, { recursive: true });
+  const crashHook = path.join(crashDir, "dao-rate-limit-sentinel.js");
+  fs.copyFileSync(REAL_HOOK, crashHook);      // 刻意**不**拷 ../lib/hook-selfcheck.js
+  const rc = spawnSync(process.execPath, [crashHook], {
+    input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor("loadcrash"),
+  });
+  check("模块加载期崩 → 退出码非 0（宿主 transcript 会打一行 non-blocking error，不静默）",
+    rc.status !== 0, "code=" + rc.status);
+  check("🔴 模块加载期崩 → 退出码**不是 2**（2 才是 block；伪装成拦截才是真事故）",
+    rc.status !== 2, "code=" + rc.status);
+  check("模块加载期崩 → stdout 零输出（没有半帧 JSON 去毒害宿主解析）",
+    (rc.stdout || "") === "", "out=" + JSON.stringify(String(rc.stdout || "").slice(0, 120)));
+  check("前提：它崩的原因确实是加载期（stderr 里是 MODULE_NOT_FOUND，不是别的）",
+    /Cannot find module|MODULE_NOT_FOUND/.test(rc.stderr || ""), "err=" + String(rc.stderr || "").slice(0, 200));
+
+  // ㈡ **stdout 写不动（EPIPE 形态）**：用 `node -r <桩>` 在真 hook 之前把 `process.stdout.write`
+  //    换成一个必抛 EPIPE 的实现 —— **被测文件一个字节没改**，只是它的 stdout 变成了敌对环境。
+  //    ⚠ 照直写这是**替身不是真 EPIPE**：真 EPIPE 要读端提前关闭的管道，Windows 上不可靠复现；
+  //    它验的是「写 stdout 抛异常时本 hook 仍走完落盘并 exit 0」这条不变量，而那正是承重的一格。
+  const stub = path.join(BASE, "epipe-stub.js");
+  fs.writeFileSync(stub,
+    'process.stdout.write = function () { const e = new Error("write EPIPE"); e.code = "EPIPE"; throw e; };\n',
+    "utf8");
+  const tag = "epipe";
+  const re = spawnSync(process.execPath, ["-r", stub, REAL_HOOK], {
+    input: JSON.stringify(payloadOf({ last_assistant_message: "API Error: Rate limit reached · 约 2 小时后重置" })),
+    encoding: "utf8", env: envFor(tag),
+  });
+  check("stdout 写不动 → 仍 exit 0（emit 的 write 被 try 包着，不许把它变成崩溃）",
+    re.status === 0, "code=" + re.status + " err=" + String(re.stderr || "").slice(0, 160));
+  const em = readJson(markerPath(tag));
+  check("🔴 stdout 写不动 → 标记照写（主产物是落盘，不是那行 stdout）",
+    em !== null && em.reset_estimate_s === 7200, "marker=" + JSON.stringify(em));
+  check("stdout 写不动 → fired.log 照记", firedLines(tag).length === 1, "fired=" + JSON.stringify(firedLines(tag)));
+  check("stdout 写不动 → 镜像域照记", mirrorLines(tag).length === 1);
+}
+
+console.log("\n=== --selfcheck 第③段：留痕域可写性（两态 + 归因）===");
+{
+  // 加固前 `--selfcheck` 只有两段（注册 / 心跳），**没有任何东西问过「写得进去吗」**：
+  // 主域坏掉时它照报「无真实触发记录」—— 而那句话与「没被限流过」长得一模一样。
+  const okR = spawnSync(process.execPath, [REAL_HOOK, "--selfcheck"], {
+    input: "", encoding: "utf8", env: envFor("sc-writable"),
+  });
+  const okOut = String(okR.stdout || "");
+  check("正态：两个域都可写 ⇒ 各打一条 ✓（主域 / 镜像域分开报）",
+    /✓ 留痕域可写：主域/.test(okOut) && /✓ 留痕域可写：镜像域/.test(okOut), okOut.slice(-400));
+
+  // 负态：只弄坏主域，镜像照旧 ⇒ **一条 ✗ 一条 ✓**。
+  // 「只查一个域」的写法在这里就分不开「主域坏了」与「两个都坏了」，而处置完全不同。
+  const blocker = path.join(BASE, "sc-broken");
+  fs.writeFileSync(blocker, "普通文件", "utf8");
+  const env = Object.assign({}, envFor("sc-broken-tag"), {
+    DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, "sc-broken", "state"),
+  });
+  const badR = spawnSync(process.execPath, [REAL_HOOK, "--selfcheck"], { input: "", encoding: "utf8", env });
+  const badOut = String(badR.stdout || "");
+  check("负态：主域写不进去 ⇒ 打 ✗ 并点名是主域",
+    /✗ 留痕域写不进去：主域/.test(badOut), badOut.slice(-500));
+  check("🔴 负态：✗ 那行必须明说它会污染第②段的结论（否则读者会把「无记录」读成「没触发过」）",
+    /可能只是写不进去，不是没触发过/.test(badOut), badOut.slice(-500));
+  check("负态：镜像域仍报 ✓ ⇒ 两个域分得开、归因到具体哪一个",
+    /✓ 留痕域可写：镜像域/.test(badOut), badOut.slice(-500));
+  check("负态：selfcheck 退出码 1（有 bad 就不许当过）", badR.status === 1, "code=" + badR.status);
+}
+
+console.log("\n=== --selfcheck 的 covers 判定（喂合成 settings，四态 + 判别力）===");
+{
+  // 加固前这一格**零守护**：`covers` 写成恒真也没有任何断言会红，而它答的是
+  // 「限流真发生时这个 hook 到底会不会被调用」—— 判错就是整个机制静默失效。
+  // 做法：给子进程一个**沙箱 HOME**（`USERPROFILE`/`HOME`），于是库里的 LIVE_SETTINGS
+  // 指向我们现造的那份 settings.json —— **不给被测文件加任何测试专用的缝**。
+  function scWith(tag, settingsObj, script) {
+    const home = path.join(BASE, "home-" + tag);
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    if (settingsObj !== null) {
+      fs.writeFileSync(path.join(home, ".claude", "settings.json"),
+        JSON.stringify(settingsObj, null, 2), "utf8");
     }
-    fs.writeFileSync(path.join(hooksDir, "dao-rate-limit-sentinel.js"), SRC.replace(anchor, replacement), "utf8");
-    return path.join(hooksDir, "dao-rate-limit-sentinel.js");
+    const env = Object.assign({}, envFor("sc-" + tag), { USERPROFILE: home, HOME: home });
+    const r = spawnSync(process.execPath, [script || REAL_HOOK, "--selfcheck"],
+      { input: "", encoding: "utf8", env });
+    return String(r.stdout || "");
   }
+  const reg = (matcher, name) => ({
+    hooks: {
+      StopFailure: [{
+        matcher,
+        hooks: [{ type: "command", command: 'node "D:/x/ccswitch/hooks/' + (name || "dao-rate-limit-sentinel.js") + '"' }],
+      }],
+    },
+  });
 
+  check("正控：matcher \"rate_limit|overloaded\" ⇒ ✓ 已注册（这个 matcher 认得出 error=rate_limit）",
+    /✓ 已注册于 StopFailure/.test(scWith("covered", reg("rate_limit|overloaded"))));
+  check("正控：matcher 为空 ⇒ ✓（空 = 全部 error 类型）",
+    /✓ 已注册于 StopFailure/.test(scWith("empty", reg(""))));
+  const un = scWith("uncovered", reg("authentication_failed"));
+  check("🔴 负控：matcher 覆盖不到 rate_limit ⇒ ✗ 已注册（注册在、但这个 hook 永远不会被叫醒）",
+    /✗ 已注册于 StopFailure/.test(un), un.slice(0, 400));
+  check("负控：✗ 那行说得出后果（「与『没限流』长得一样」这句是它唯一的价值）",
+    /限流发生时本 hook 根本不会被调用/.test(un), un.slice(0, 400));
+  check("负控：settings 里只有别的 hook ⇒ ✗ 未注册（不许因为「有 hooks 段」就当成读到了自己）",
+    /✗ 未注册/.test(scWith("otherhook", reg("rate_limit", "dao-rule-echo.js"))));
+  check("负控：连 settings.json 都没有 ⇒ ✗ 读取/解析失败（不许静默当成已注册）",
+    /✗ (读取\/解析 settings\.json 失败|未注册)/.test(scWith("nosettings", null)));
+
+  // ── 先破再验（就近放）：covers 改恒真 ⇒ 上面那条「✗ 已注册」必须翻面 ──────────────
+  // 加固之前这一格是**零守护**：把 covers 写成 `() => true`，全套断言一条都不会红。
+  {
+    const ANCHOR = '    covers: (m) => m === "" || m === "*" || safeRe(m, "rate_limit"),';
+    const h = mutantHook("covers-always-true", ANCHOR, "    covers: () => true,");
+    const out = scWith("covers-mut", reg("authentication_failed"), h);
+    check("先破再验：covers 恒真 ⇒ 覆盖不到的 matcher 也报 ✓（负控组真的在测这条判据）",
+      /✓ 已注册于 StopFailure/.test(out) && !/✗ 已注册于 StopFailure/.test(out), out.slice(0, 400));
+    check("canary：变异体还活着（自检照跑、报头照打，不是崩了才没有 ✗）",
+      /dao-rate-limit-sentinel --selfcheck/.test(out), out.slice(0, 200));
+  }
+}
+
+// ⚠ 本节只放**判据类**那三向；#190 新增的三向（外层 catch / covers 判定 / 镜像通道）
+//   **就近放在它们各自那一节里** —— 一个 mutation 与它该打红的那条断言隔着 200 行，
+//   下一次有人改那条断言时不会想起还有个 mutation 在守它。
+console.log("\n=== mutation · 判据三向（锚点单行、断言与 replace 同一个字符串）===");
+{
   // 方向①「放松」：把写标记的 error 集合扩面 ⇒ 本不该写标记的 server_error 开始写
   //   ⇒ 证明上面那一整组负控**真的在测判据**，不是永真。
   {
@@ -293,18 +584,95 @@ console.log("\n=== mutation · 三个方向（锚点单行、断言与 replace �
       after !== null && after.error === "rate_limit" && typeof after.raw === "string");
   }
 
+  // 方向④「算出来的值被掐成 null」：标记照写、8 个字段照齐、`reset_estimate_s` 照对，
+  //   只有 `reset_estimate_at` 恒 null —— 这一格在 #190 之前**无人查**（断言名写着「五格」）。
+  //   它与方向③ 不同类：③ 打的是解析式（连 `reset_estimate_s` 一起变 null），
+  //   ④ 只打**派生字段**，`reset_estimate_s` 仍然是 11520 ⇒ 只有那条新增的值断言逮得住。
+  {
+    const ANCHOR = "        reset_estimate_at: seconds == null ? null : new Date(Date.now() + seconds * 1000).toISOString(),";
+    const h = mutantHook("null-reset-at", ANCHOR, "        reset_estimate_at: null,");
+    const p = payloadOf({ last_assistant_message: "API Error: Rate limit reached · 约 3 小时 12 分钟后重置" });
+    run(h, p, "mutA-after");
+    const after = readJson(markerPath("mutA-after"));
+    check("派生字段方向：reset_estimate_at 被掐成 null ⇒ 那条值断言变红（此前这一格是真空的）",
+      after !== null && after.reset_estimate_at === null, "marker=" + JSON.stringify(after));
+    check("canary：变异体还活着**且骗得过存在性断言**（8 个键照在、reset_estimate_s 照对 11520）—— " +
+      "正是这一向只有值断言逮得住的证明",
+      after && Object.prototype.hasOwnProperty.call(after, "reset_estimate_at") &&
+      after.reset_estimate_s === 11520 && after.reset_parse === "cn-carpool",
+      "marker=" + JSON.stringify(after));
+  }
+
   check("canary 恒等：真 hook 文件全程未被改动",
     crypto.createHash("sha256").update(fs.readFileSync(REAL_HOOK)).digest("hex") === SHA_BEFORE);
 }
 
-console.log("\n=== 跨文件一致性：两个 hook 必须认同一个标记路径 ===");
+console.log("\n=== 跨文件一致性：两个 hook 必须认同一个标记路径（文本 + 运行期两层）===");
 {
   // 哨兵写 A、闸门读 B 这种错，**两边各自的日志都正常**，只有真限流那一次才会现形，
-  // 而那一次没人在看。故在这里钉死：两份源码里那行默认路径逐字相同。
-  const gate = fs.readFileSync(path.join(REPO, "ccswitch", "hooks", "dao-probe-gate.js"), "utf8");
+  // 而那一次没人在看。
+  const GATE_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-probe-gate.js");
+  const gate = fs.readFileSync(GATE_HOOK, "utf8");
   const LINE = 'const MARKER_PATH = process.env.DAO_RATE_LIMIT_MARKER || path.join(ROOT, "_tmp", "rate-limit-interrupt.json");';
-  check("哨兵与闸门的 MARKER_PATH 定义逐字相同（env 名 + 默认路径都同）",
+  check("① 文本层：哨兵与闸门的 MARKER_PATH 定义逐字相同（env 名 + 默认路径都同）",
     fs.readFileSync(REAL_HOOK, "utf8").includes(LINE) && gate.includes(LINE));
+
+  // ── ② 运行期层（issue #190 第 4 条）───────────────────────────────────────
+  // 文本层**只证明那一行长得一样**，它对两类形态天然失明：
+  //   ㈠ 那一行依赖的东西被改了（`ROOT` 算法一侧改了、另一侧没改）—— 行文本一个字符没动
+  //   ㈡ 后续又赋了一次值 / 另一处覆写
+  // 故这里各自 **spawn 一个进程**、把覆写口 `DAO_RATE_LIMIT_MARKER` **摘掉**，
+  // 让两个 hook 各自算一遍**运行期真值**再比对。
+  // 🔑 摘掉那个 env 是承重的一步：不摘，两边都等于同一个注入值 ⇒ 这条断言**恒真**。
+  function runtimeMarkerOf(hookPath) {
+    const env = Object.assign({}, process.env);
+    delete env.DAO_RATE_LIMIT_MARKER;
+    const r = spawnSync(process.execPath,
+      ["-e", "process.stdout.write(String(require(process.argv[1]).MARKER_PATH))", hookPath],
+      { encoding: "utf8", env });
+    return { out: String(r.stdout || "").trim(), code: r.status, err: String(r.stderr || "") };
+  }
+  const a = runtimeMarkerOf(REAL_HOOK);
+  const b = runtimeMarkerOf(GATE_HOOK);
+  check("② 前提：两侧都真的算出了一个绝对路径（空串 === 空串 是最容易的假绿）",
+    a.code === 0 && b.code === 0 && path.isAbsolute(a.out) && /rate-limit-interrupt\.json$/.test(a.out),
+    "a=" + JSON.stringify(a) + " b=" + JSON.stringify(b));
+  check("② 运行期层：两个 hook 各自 spawn 算出的 MARKER_PATH 逐字相等",
+    a.out === b.out, "哨兵=" + a.out + " 闸门=" + b.out);
+
+  // ── 先破再验：造一对**文本层查不出来**的分岔 ──────────────────────────────
+  // 只改哨兵那一侧的 `ROOT` 算法（多退一层目录）。`MARKER_PATH` 那一行**逐字不动** ⇒
+  // 文本断言照常绿，只有运行期断言红。**这一格本身就是「为什么需要运行期层」的实证。**
+  const ROOT_LINE = 'const ROOT = path.resolve(__dirname, "..", "..");';
+  check("靶点唯一（与下面 replace 用的是同一个字符串）",
+    SRC.split(ROOT_LINE).length === 2, `出现 ${SRC.split(ROOT_LINE).length - 1} 次`);
+  {
+    const twinDir = path.join(BASE, "twin-rootshift", "ccswitch", "hooks");
+    const twinLib = path.join(BASE, "twin-rootshift", "ccswitch", "lib");
+    fs.mkdirSync(twinDir, { recursive: true });
+    fs.mkdirSync(twinLib, { recursive: true });
+    for (const d of new Set([...relRequiresOf(SRC), ...relRequiresOf(gate)])) {
+      const from = path.resolve(path.dirname(REAL_HOOK), d);
+      const to = path.resolve(twinDir, d);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+    }
+    const mutSentinel = path.join(twinDir, "dao-rate-limit-sentinel.js");
+    const mutGate = path.join(twinDir, "dao-probe-gate.js");
+    fs.writeFileSync(mutSentinel,
+      SRC.replace(ROOT_LINE, 'const ROOT = path.resolve(__dirname, "..", "..", "..");'), "utf8");
+    fs.writeFileSync(mutGate, gate, "utf8");
+    const ma = runtimeMarkerOf(mutSentinel);
+    const mb = runtimeMarkerOf(mutGate);
+    check("canary：变异体还活着（两侧都照常算出一个绝对路径，不是崩了才不相等）",
+      ma.code === 0 && mb.code === 0 && path.isAbsolute(ma.out) && path.isAbsolute(mb.out),
+      "ma=" + JSON.stringify(ma) + " mb=" + JSON.stringify(mb));
+    check("🔴 先破再验：只改哨兵的 ROOT 算法 ⇒ 运行期值分岔（运行期那条断言不是摆设）",
+      ma.out !== mb.out, "哨兵=" + ma.out + " 闸门=" + mb.out);
+    check("🔴 同一变异下**文本层照常绿** ⇒ 这就是文本比对失明的实证（不是推测）",
+      fs.readFileSync(mutSentinel, "utf8").includes(LINE) &&
+      fs.readFileSync(mutGate, "utf8").includes(LINE));
+  }
 }
 
 try { fs.rmSync(BASE, { recursive: true, force: true }); } catch (_) {}
