@@ -60,17 +60,20 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 
 底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `set-terminal`；Codex 侧只剩 `link-codex`（只读报告）/ `unlink-codex`（清 dao 旧链与悬空坟）/ `link-codex-prompts`（这个仍写 `~/.codex/prompts`，与 skills 无关）
 
-自检与测试（无 test runner 框架，node 测试有聚合入口，PowerShell 测试仍各自跑）：
+自检与测试（无 test runner 框架，**node 与 PowerShell 两侧都由同一个聚合入口代跑**，2026-08-08 · issue #179）：
 
 ```powershell
-node scripts/run-tests.mjs                    # ★ node 测试聚合入口（默认层）：扫 tests/*.tests.js 全跑 + 逐套真退出码汇总表
-                                              #   ⚠ **默认层恒退 2，那是正常的**，不是失败：环境敏感断言被 defer 掉了（见下）
-node scripts/run-tests.mjs --env              # ★ 含环境敏感层 —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
-node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注）
+node scripts/run-tests.mjs                    # ★ 聚合入口（默认层）：扫 tests/*.tests.{js,ps1} 全跑 + 逐套真退出码汇总表
+                                              #   ⚠ **默认层恒退 2，那是正常的**，不是失败：环境敏感断言被 defer 掉了，
+                                              #     且标了 env 的那几套 .ps1 整套没跑（两条路各自都能把 2 顶起来，见下）
+                                              #   PS 侧默认层只跑「快且并行安全」的那几套（当前是 link-codex 两套，≈2.6s）
+node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全部 .ps1 套** —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
+                                              #   PS 层 6 套串行 ≈100-150s（同机不同次波动），故它比默认层慢；要求串行环境（见下）
+node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
-powershell -NoProfile -File .\tests\<名>.tests.ps1   # PowerShell 测试：自带 Assert-* 断言、独立可跑，★ 入口**不代跑**
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\<名>.tests.ps1   # 单跑一套 PS 测试（自带 Assert-*，独立可跑）
                                               #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
-                                              #   当前有几套、各叫什么 ⇒ `node scripts/run-tests.mjs` 末尾会**扫全并逐条列出**，以那份为准
+                                              #   当前有几套、哪几套标了 env ⇒ `node scripts/run-tests.mjs --list` 会**扫全并逐条标注**，以那份为准
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
 node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
@@ -111,7 +114,8 @@ issue #176 把 PS 缺省扩成全量模式后这句话才成立；**它成立的
 不等即红 —— 那份对账全绿是后续删旧字段的前置门。**改了正文就要同步改台账，反之亦然。**
 
 新增测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，两侧都不维护清单
-（`.ps1` 那侧它只列不跑，清单仍是全的）。
+（**2026-08-08 · issue #179 起 `.ps1` 那侧也由它代跑**；此前括号里写的是「它只列不跑，清单仍是全的」——
+「清单是全的」当时为真，但**被列出来 ≠ 被跑到**，那 6 套一套都没进合并链拿到的那个 exit 0 里）。
 （此前本段只列了两个 .ps1 测试，三套 JS 测试从未被枚举 ⇒ 写了没人跑，与 D5 修的「写了没挂」同病；
 故改为扫目录而非手维护清单——手维护的清单本仓已被咬过两次。）
 
@@ -129,14 +133,21 @@ issue #176 把 PS 缺省扩成全量模式后这句话才成立；**它成立的
 cc-switch GUI 的库）—— **它不制造污染，它被别人的正常活动污染**，于是多官并行期偶发红。
 「红了先重跑」会训练所有人无视这道闸，故改为分层：
 
+**2026-08-08（issue #179）起这套分层同时管着 PowerShell 那一侧**，机制同构但粒度不同：
+`.tests.ps1` 头部写 `# @dao-test-tier: env` ⇒ **整套**只在 `--env` 起进程（JS 侧那个标记是
+「文件内部分断言 defer」，文件照跑——**两者语义不同，别当同一个东西读**）。
+
 | 跑法 | 跑什么 | 退出码 |
 |---|---|---|
-| `node scripts/run-tests.mjs` | 全部文件，但环境敏感断言被 defer | **恒 2**（「本次没跑完」） |
-| `node scripts/run-tests.mjs --env` | 全部，含环境敏感断言 | 全过 **0** |
+| `node scripts/run-tests.mjs` | 全部 `.tests.js`（环境敏感断言被 defer）+ **无标记的 `.tests.ps1`** | **恒 2**（「本次没跑完」） |
+| `node scripts/run-tests.mjs --env` | 全部，含环境敏感断言 + **全部 `.tests.ps1`** | 全过 **0** |
 
-**退出码五态**：`0` 全跑全过 · `1` 有测试红 · `2` 无红但有 defer · `3` 用法错（一套都没跑）·
-`4` 分层自检失败（静态声明与运行期 defer 计数对不上）。**判「通过」写 `-eq 0`，别写 `-le 2`。**
+**退出码六态**：`0` 全跑全过 · `1` 有测试红（node 侧或 PS 侧）· `2` 无红但有 defer / 有 PS 套没跑 ·
+`3` 用法错（一套都没跑）· `4` 分层自检失败（静态声明与运行期计数对不上，或某 PS 套 exit 0 却零输出）·
+`5` 找不到 tests/ 目录（一套都没跑，刻意不与 2 合流）。**判「通过」写 `-eq 0`，别写 `-le 2`。**
+（此处此前写「五态」而漏了 `5` —— 代码与回归网从一开始就有它，是头注与本文件两处同时漏记；2026-08-08 订正。）
 契约正文在 `scripts/run-tests.mjs` 头注（唯一真相源），回归网 `tests/run-tests-tier.tests.js`。
+末行 `RUN_TESTS_SUMMARY` 尾部另有 `psfiles=` / `psred=` / `psskip=` 三个字段（跑了几套 / 红几套 / 没跑几套）。
 
 🔴 **别把 2 当成绿**。写 `@(0,2)` 这种放行谓词，分层就退化成「接受偶发红」的另一种形态。
 **当前哪些文件有环境敏感层** ⇒ `node scripts/run-tests.mjs --list` 会逐条标注，以那份为准
@@ -145,6 +156,8 @@ cc-switch GUI 的库）—— **它不制造污染，它被别人的正常活动
 **`--env` 什么时候跑**：合并前（`dao-pr-merge.ps1` 的 `-VerifyCommand` 必须传 `--env`，
 否则合并链在验证那一步当场停）· 窗口收官 · 任何以「run-tests 全绿」为验收的场合。
 **要求串行环境**：没有别的官在跑测试 · cc-switch GUI 没在写库 · 没人在改 `~/.claude/settings.json`。
+（issue #179 之后这条串行要求又多了一个来源：标了 env 的 PS 套里有用**固定** `_tmp/` 路径当沙盒的，
+并行跑必互踩 —— 那也正是它们被标 env 而不是留在默认层的理由之一。）
 
 ## issue 派单中枢（2026-08-02 接入）
 

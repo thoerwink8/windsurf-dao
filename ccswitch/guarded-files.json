@@ -10,7 +10,7 @@
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
       "tests": 39,
-      "mutation_tests": 29,
+      "mutation_tests": 30,
       "files": 31
     }
   },
