@@ -65,6 +65,9 @@ const path = require("path");
 const REPO = path.resolve(__dirname, "..");
 const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-scaffold-check.js");
 const SANDBOX = path.join(REPO, "_tmp", "knifeF-scaffold-sandbox");
+// issue #140 的自适应预算校准要用到收尾余量常量——从真模块读，不在本文件另写一份
+// （另写一份就是「两个文件里互不知情的两个数」，issue #127 那个病本身）。
+const { DEFAULT_RESERVE_MS } = require("../ccswitch/lib/hook-budget");
 
 // 假家目录里的受控 settings.json：只需让 `settingsRaw.includes(name)` 有确定答案
 const REGISTERED = "dao-registered-probe";
@@ -146,6 +149,37 @@ function mkBrokenLibTree(tag, mutate, mutateHook) {
     fs.copyFileSync(path.join(realLib, f), path.join(libDir, f));
   }
   if (mutate) mutate(path.join(libDir, "hook-budget.js"));
+  if (mutateHook) mutateHook(hookCopy);
+  return hookCopy;
+}
+
+// 造一棵「hook 副本，lib 完整可用，且不制造额外 I/O 噪音」的树（issue #140 用）。
+// 与 `mkBrokenLibTree` 的差别：那个helper 只拷 `ccswitch/lib/*.js`，够用于「lib 坏了」
+// 那组测试，但 `settings-drift.js` 会用 `__dirname` 反推出「仓根」再去读
+// `config-sync/{common/settings.json,lib/{paths,secrets}.mjs}`——那棵树上这三个文件
+// 不存在时它会走**真实的** ENOENT 分支（多次 fs 调用 + 失败），吃掉一截真实时间，
+// 对本组「预算是否精确卡在阈值附近」的断言是噪音。这里额外把那三个小文件也搬过去，
+// 让 settings-drift 在这棵沙箱树上和在真实仓库里一样快地"查到"（内容是真仓库当下的快照，
+// 谁的快照不重要——这组测试不断言 settings-drift 那几行的内容）。
+function mkTimingCleanHookCopy(tag, mutateHook) {
+  const root = path.join(SANDBOX, "timingclean", tag);
+  const hooksDir = path.join(root, "ccswitch", "hooks");
+  const libDir = path.join(root, "ccswitch", "lib");
+  const csCommonDir = path.join(root, "config-sync", "common");
+  const csLibDir = path.join(root, "config-sync", "lib");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.mkdirSync(libDir, { recursive: true });
+  fs.mkdirSync(csCommonDir, { recursive: true });
+  fs.mkdirSync(csLibDir, { recursive: true });
+  const hookCopy = path.join(hooksDir, path.basename(HOOK));
+  fs.copyFileSync(HOOK, hookCopy);
+  const realLib = path.join(REPO, "ccswitch", "lib");
+  for (const f of fs.readdirSync(realLib).filter((n) => n.endsWith(".js"))) {
+    fs.copyFileSync(path.join(realLib, f), path.join(libDir, f));
+  }
+  fs.copyFileSync(path.join(REPO, "config-sync", "common", "settings.json"), path.join(csCommonDir, "settings.json"));
+  fs.copyFileSync(path.join(REPO, "config-sync", "lib", "paths.mjs"), path.join(csLibDir, "paths.mjs"));
+  fs.copyFileSync(path.join(REPO, "config-sync", "lib", "secrets.mjs"), path.join(csLibDir, "secrets.mjs"));
   if (mutateHook) mutateHook(hookCopy);
   return hookCopy;
 }
@@ -660,6 +694,10 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
     /always-on 字节预算闸 \*\*没跑\*\*/.test(ct) && /per-provider 漂移检查 \*\*没跑\*\*/.test(ct) &&
     /memory 指针扫描 \*\*没跑\*\*/.test(ct), "ctx=" + ct.slice(0, 900));
   check("预算收窄下仍自己退出 0（降级不是崩溃）", tight.code === 0, "code=" + tight.code);
+  // issue #140：本轮一份都没跑成时，跳过行必须**明说零样本**，不能含糊带过
+  // （零样本时「假降级/真降级」这个问题本来就答不出，明说比模糊更诚实）。
+  check("🔴 issue #140：条款闸零样本时明说「本次零样本」，不假装能判断真假降级",
+    /条款库结构闸的[^\n]*本次零样本：一次都没跑成，无从判断真假/.test(ct), "ctx=" + ct.slice(0, 700));
   // 🔴 2026-08-05：5 → 6，多出来的那一项是 git（对抗验证 A3）。
   // 原先 5 处 git 调用各自 `catch (_) {}`：预算见底时它们被 capFor 夹成 1 ms、当场 SIGTERM，
   // 而异常被吞 ⇒ 报文里那几行（「⬆ 领先 origin N 个提交」之类）**整行消失，全文没有一处
@@ -711,6 +749,165 @@ console.log("\n=== 墙钟预算：预算见底时明说「没跑」，而不是�
   const chu = ctx(huge);
   check("DAO_HOOK_BUDGET_MS 只准调小：给 999000 仍按 10000 算（不是后门）",
     /宿主给 10000 ms/.test(chu) && !/宿主给 999000 ms/.test(chu), "ctx=" + chu.slice(0, 600));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 降级排序：便宜的原子项排在贵的条款闸之前（issue #141）===");
+{
+  // 对抗验证官量过：条款闸一份文件 ~600ms，后四道原子项合计 ~368ms（139+48+116+65）。
+  // 旧顺序把条款闸排第一，预算见底时它先吃掉大头，逼得后四道一起被拦下 ⇒ 用 368ms
+  // 换 600ms，换掉的是「四项检查全部消失」。这里只钉住**结构性事实**（谁的调用点在源码里
+  // 排在谁前面），不去踩「预算收窄到某个中间值时具体谁被跳过」那个中间态——
+  // 那个中间态强依赖真实 PowerShell 冷启动耗时，本文件其它地方的注释也点过这个坑，
+  // 换成源码位置断言就不随机器速度飘。
+  const src = fs.readFileSync(HOOK, "utf8");
+  const posClause = src.indexOf("for (const line of clauseStructureLines(daoRoot)) drifts.push(line);");
+  const posDead = src.indexOf('runWithinBudget("死闸检测"');
+  const posBudget = src.indexOf('runWithinBudget("always-on 字节预算闸"');
+  const posProvider = src.indexOf('runWithinBudget("per-provider 漂移检查"');
+  const posMemory = src.indexOf('runWithinBudget("memory 指针扫描"');
+  check("五个锚点都找到了（找不到就是本条自己失效，不是「通过」）",
+    posClause > -1 && posDead > -1 && posBudget > -1 && posProvider > -1 && posMemory > -1,
+    JSON.stringify({ posClause, posDead, posBudget, posProvider, posMemory }));
+  check("🔴 issue #141：死闸检测排在条款闸之前", posDead < posClause, `dead=${posDead} clause=${posClause}`);
+  check("🔴 issue #141：always-on 字节预算闸排在条款闸之前", posBudget < posClause, `budget=${posBudget} clause=${posClause}`);
+  check("🔴 issue #141：per-provider 漂移检查排在条款闸之前", posProvider < posClause, `provider=${posProvider} clause=${posClause}`);
+  check("🔴 issue #141：memory 指针扫描排在条款闸之前", posMemory < posClause, `memory=${posMemory} clause=${posClause}`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 条款闸降级报文带「本次实测单次耗时」（issue #140 · 有样本一侧）===");
+{
+  // 这一组是端到端的，真的会起 powershell.exe——耗时数字本身不可预测（冷启动随机器浮动，
+  // 且**同一台机器在同一个会话里也会漂**：本条早期版本写死过一个"历史实测 350–770ms"
+  // 推出来的预算值，连续 4 次通过后、系统负载一变就连续落空——这正是本条自己想避免的
+  // 那类"写死窗口迟早被撞穿"）。改法：**先自适应校准**，用这台机器、这一刻的真实耗时
+  // 推算预算，不用任何写死的历史数字。下面只断言**格式**与**内部逻辑一致性**
+  // （判断结论与它自己报出的两个数字是否吻合），不断言具体毫秒数。
+  const N_RULES = 6;
+  const TOTAL_TARGETS = N_RULES + 1; // + dao.md 本身
+  const cwd = mkMetaRepo("clause-sample", [`${REGISTERED}.js`]);
+  fs.mkdirSync(path.join(cwd, "ccswitch", "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), [
+    "param([string]$TargetFile, [string]$ClauseSelector)",
+    'Write-Output "CLAUSE_STRUCTURE_SUMMARY exit=0 clauses=1 violations=0 notrigger=0 retire=0 promote=0"',
+    "",
+  ].join("\n"), "utf8");
+  fs.writeFileSync(path.join(cwd, "ccswitch", "dao.md"), "# fixture dao.md（桩脚本不读它，内容无所谓）\n", "utf8");
+  fs.mkdirSync(path.join(cwd, "ccswitch", "rules"), { recursive: true });
+  for (let i = 0; i < N_RULES; i++) {
+    fs.writeFileSync(path.join(cwd, "ccswitch", "rules", `dao-fixture-${i}.md`),
+      `- 夹具占位条款 ${i}，供 clauseTargets 判定命中。 [n=1 @08-08 触发:无] [#测试-占位${i}]\n`, "utf8");
+  }
+
+  // 全程走 mkTimingCleanHookCopy 的「原样副本」（不是裸用 HOOK）：下面探测出来的
+  // `probeBudget` 之后要原样喂给同一手法拷出来的**变异**副本（见本节末尾的 mutation），
+  // 两次调用的目录深度、require 解析路径、config-sync 文件是否命中都必须逐字相同，
+  // 否则「同一个预算」在两棵不同形状的树上就是两个不同的东西——探测出来的窗口对不上。
+  const intactPath = mkTimingCleanHookCopy("clause-sample-intact", null);
+
+  // 校准跑：给一个足够宽松的预算（60s，远超本机任何合理耗时），量出**这次调用**的
+  // 真实总耗时。用测试进程自己的 Date.now() 量墙钟时间，不用被测代码自报的
+  // `BUDGET.elapsed()`——用被测对象自己算出来的数去校准同一个被测对象的判据，
+  // 等于拿同一把尺子量自己（与「守卫自检不能复用被守对象的解析」同一道理）。
+  const t0 = Date.now();
+  const baseline = run(cwd, { DAO_HOOK_BUDGET_MS: "60000" }, intactPath);
+  const baselineWallMs = Date.now() - t0;
+  const baselineCtx = ctx(baseline);
+  check("校准跑：本机条件下条款闸这次全部跑完（否则下面的预算换算失去基准，且本次机器状态不适合这组测试）",
+    baseline.code === 0 && !/条款库结构闸的[^\n]*没跑/.test(baselineCtx),
+    "code=" + baseline.code + " ctx=" + baselineCtx.slice(0, 500));
+
+  // 每份文件均摊到的真实成本；下限 50ms 只是防御除出 0 或负数这类荒谬值，不是业务判据。
+  const perFileMs = Math.max(50, Math.round(baselineWallMs / TOTAL_TARGETS));
+
+  // 「跑成 1 份、剩下跳过」的那个预算窗口**很窄**（宽度约等于一份文件的真实耗时），
+  // 而单次测量分不清「固定开销」与「单份边际成本」各占多少——公式换算实测撞过两次窗口
+  // （连续几次通过后，系统负载一变就连续落空）。改法：从「理论上连第一份都起不了步」
+  // 的起点开始，以半份文件耗时为步长向上探测，每步都真的跑一次，直到真的落进
+  // 「有跑成、也有跳过」的中间态——用真实结果找窗口，不用公式猜窗口。
+  const STEP = Math.max(80, Math.round(perFileMs / 2));
+  const MAX_PROBES = 14;
+  let sample = null, cs = "", m = null, probeBudget = DEFAULT_RESERVE_MS + 1200 - STEP;
+  for (let i = 0; i < MAX_PROBES; i++) {
+    probeBudget += STEP;
+    sample = run(cwd, { DAO_HOOK_BUDGET_MS: String(probeBudget) }, intactPath);
+    cs = ctx(sample);
+    const probeM = /条款库结构闸的 (\d+)\/(\d+) 个被检文件[^⟨\n]*⟨([^⟩]*)⟩/.exec(cs);
+    if (probeM && Number(probeM[1]) > 0 && Number(probeM[1]) < Number(probeM[2])) { m = probeM; break; }
+  }
+  if (process.env.DAO_DEBUG_DUMP) {
+    console.error("DEBUG baselineWallMs=" + baselineWallMs + " perFileMs=" + perFileMs +
+      " STEP=" + STEP + " 命中预算=" + probeBudget + (m ? "" : "（未命中）"));
+    fs.writeFileSync(path.join(REPO, "_tmp", "debug-cs.txt"), cs, "utf8");
+  }
+  check("端到端仍能自己退出 0", sample.code === 0, "code=" + sample.code);
+
+  if (!m) {
+    // 探测 MAX_PROBES 步仍未落进「部分完成」区间——理论上不该发生（探测步长与探测轮数
+    // 是按 perFileMs 换算的，覆盖的预算跨度远超一份文件的耗时波动）。**不静默通过**：
+    // 显式报出来，而不是让 check() 悄悄跳过这一组。
+    check("🔴 issue #140：探测后仍落在预期的『部分完成』区间内（有样本、也有跳过）",
+      false, `探测 ${MAX_PROBES} 步未命中（perFileMs=${perFileMs} STEP=${STEP} 最终预算=${probeBudget}）——` +
+      "可能本机条件跳变超出探测范围，可重跑一次——ctx=" + cs.slice(0, 900));
+  } else {
+    const [, skippedN, totalN, detail] = m;
+    check("确有跳过、也确有跑成（否则不会走到「有样本」这条分支）",
+      Number(skippedN) > 0 && Number(skippedN) < Number(totalN), `skipped=${skippedN} total=${totalN}`);
+    check("🔴 issue #140：详情带「本次实测单次」与样本数（不再只有余量/门槛两个旧数字）",
+      /本次实测单次 \d+(?:–\d+)? ms ×\d+/.test(detail), detail);
+    const sampleMatch = /本次实测单次 (\d+)(?:–(\d+))? ms ×(\d+)/.exec(detail);
+    const leftMatch = /余量 (-?\d+) ms/.exec(cs);
+    check("样本区间与余量两个数字都拿到了（判断结论要靠它们对齐）",
+      !!sampleMatch && !!leftMatch, JSON.stringify({ sampleMatch, leftMatch }));
+    if (sampleMatch && leftMatch) {
+      const maxD = Number(sampleMatch[2] || sampleMatch[1]);
+      const leftMs = Number(leftMatch[1]);
+      const claimsFalse = /假降级/.test(detail);
+      const claimsReal = /无法排除真降级/.test(detail);
+      check("判断结论恰好二选一（假降级 xor 无法排除真降级），不含糊两可",
+        claimsFalse !== claimsReal, detail);
+      check("🔴 issue #140：判断结论与它自己报的两个数字逻辑自洽（余量>实测最坏值 ⇔ 断言假降级）",
+        claimsFalse === (leftMs > maxD), `left=${leftMs} maxD=${maxD} claimsFalse=${claimsFalse}`);
+
+      // mutation：把「余量 > 实测最坏值 ⇒ 假降级」的判据反过来，确认上面那条「逻辑自洽」
+      // 断言真的在验这段判据，不是凑巧算对——沿用同一份夹具与同一个校准出来的预算，
+      // 不重新计算（同一时刻的两次调用，机器条件最接近）。
+      // 走 mkTimingCleanHookCopy（不是 mkBrokenLibTree）：hook 里 `require("../lib/…")`
+      // 按**文件所在目录**解析，裸拷到 SANDBOX 根下会让那些 require 全指向空气；
+      // 而 mkBrokenLibTree 虽然拷了 lib，却不带 config-sync/ 三个小文件——settings-drift.js
+      // 用 __dirname 反推仓根后找不到它们，会走真实 ENOENT 分支吃掉一截时间，
+      // 在这组「预算精确卡阈值」的断言里是噪音（曾实测坑过一版：2/2 全退化成零样本）。
+      let anchorHit = false;
+      const ANCHOR = "leftMs > maxD";
+      const mutantPath = mkTimingCleanHookCopy("clause-sample-invert", (p) => {
+        const s = fs.readFileSync(p, "utf8");
+        anchorHit = s.split(ANCHOR).length === 2;
+        fs.writeFileSync(p, s.replace(ANCHOR, "!(" + ANCHOR + ")"), "utf8");
+      });
+      check("mutation 锚点在源码里唯一存在", anchorHit, ANCHOR);
+      // 变异体是一棵**新**目录树，哪怕手法与 intact 那棵逐字相同，文件系统冷热、
+      // 目录项缓存这类噪音仍可能让同一个 probeBudget 在这棵树上刚好落到窗口外一格——
+      // 故这里也做小范围重试，而不是只信任 intact 那棵探出来的单一数值。
+      let mutSample = null, mutCtx = "", mutDetailMatch = null, mutBudget = probeBudget - STEP;
+      for (let i = 0; i < 4; i++) {
+        mutBudget += STEP;
+        mutSample = run(cwd, { DAO_HOOK_BUDGET_MS: String(mutBudget) }, mutantPath);
+        mutCtx = ctx(mutSample);
+        const cand = /条款库结构闸的 (\d+)\/(\d+) 个被检文件[^⟨\n]*⟨([^⟩]*)⟩/.exec(mutCtx);
+        if (cand && Number(cand[1]) > 0 && Number(cand[1]) < Number(cand[2])) { mutDetailMatch = cand; break; }
+      }
+      // 捕获组：[0]=全匹配 [1]=跳过数 [2]=总数 [3]=⟨…⟩ 里的详情文本——上一版这里错取了
+      // 组[1]（跳过数的字符串）当详情文本用，导致断言永远读不到"无法排除真降级"这几个字，
+      // 恒红，且恒红的理由与判据本身对不对无关（是数组下标错位）。
+      const mutDetail = mutDetailMatch ? mutDetailMatch[3] : "";
+      check("mutation：判据反过来后，同一场景下结论真的翻面了（假降级 ↔ 无法排除真降级）",
+        !!mutDetailMatch && /无法排除真降级/.test(mutDetail) && !/假降级/.test(mutDetail),
+        "mutBudget=" + mutBudget + " mutCtx=" + mutCtx.slice(0, 900));
+      check("mutation：改坏这一处之后仍自己退出 0（不是整个 hook 崩了）",
+        mutSample.code === 0, "code=" + mutSample.code);
+    }
+  }
 }
 {
   // ⑤ 源码级：**每一处**给子进程设 timeout 的地方都必须走 capFor。
@@ -987,6 +1184,92 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
     /未预期崩溃/.test(cc) && /不是「全部通过」/.test(cc), "ctx=" + cc.slice(0, 400));
   check("对照组：同一棵树不注入 throw → **零**「未预期崩溃」行（钉住不是恒报）",
     !/未预期崩溃/.test(ctx(run(cwd, env, mkBrokenLibTree("uncaught-control", null)))));
+
+  // ── issue #152 账 1（PR #150 对抗带账）：那张网新长出的**更静默**的一条路 ─────────
+  //
+  // `emitOnce` 先置 `emitted = true` 再写 stdout。**写自己抛出**时异常冒到 uncaughtException，
+  // 网调 `emitOnce` ⇒ 撞上 `if (emitted) return;` ⇒ 原先 `exit(0)`。
+  // 2026-08-08 实测（考古复核，issue 快照今天仍成立）：
+  //     stdout.write 抛出 ⇒ exit=0 · stdout **0 字节** · segs=0
+  //     合法的「无事可报」 ⇒ exit=0 · stdout **0 字节** · segs=0     ← **逐字节不可区分**
+  // 而 master（没有这张网）那一态是 exit 1 + 一段栈。⇒ 这条路上网让消费方看到的**更少**。
+  // 修法：写失败 ⇒ stderr 出一行 + 退出码非 0（**不是 2**：2 是 block 语义）。
+  const STDOUT_THROW_ANCHOR = /(let emitted = false;)(\r?\n)/;
+  const NOTHING_ANCHOR = /(function inject\(context\) \{\r?\n)  emitOnce\(context\);\r?\n/;
+  let anchorThrow = false, anchorNothing = false;
+
+  const wThrow = run(cwd, env, mkBrokenLibTree("stdout-throw", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorThrow = STDOUT_THROW_ANCHOR.test(src);
+    fs.writeFileSync(p, src.replace(STDOUT_THROW_ANCHOR,
+      '$1$2process.stdout.write = function () { throw new Error("注入：stdout 写入失败(EPIPE 模拟)"); };$2'), "utf8");
+  }));
+  // 「合法的无事可报」对照：把 inject 的那次 emitOnce 拿掉 ⇒ 什么都不写、正常退出。
+  const nothing = run(cwd, env, mkBrokenLibTree("nothing-to-say", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorNothing = NOTHING_ANCHOR.test(src);
+    fs.writeFileSync(p, src.replace(NOTHING_ANCHOR, "$1  void context;\n"), "utf8");
+  }));
+  check("mutation 锚点仍在（stdout 抛出 / 无事可报，锚失效则下面几条空转）",
+    anchorThrow && anchorNothing, `throw=${anchorThrow} nothing=${anchorNothing}`);
+  check("前提：对照臂真的什么都没写（否则「不可区分」这件事就无从谈起）",
+    nothing.code === 0 && nothing.out.length === 0, `code=${nothing.code} bytes=${nothing.out.length}`);
+  check("🔴 #152 账 1：stdout.write 抛出 → 退出码**非 0**（否则与「无事可报」逐字节不可区分）",
+    wThrow.code !== 0, `code=${wThrow.code}`);
+  check("🔴 #152 账 1：那个非 0 **不是 2**（2 是 block 语义，自检没资格拦会话）",
+    wThrow.code !== 2, `code=${wThrow.code}`);
+  check("🔴 #152 账 1：stdout 这条路断了 ⇒ stderr 上必须留下**说得清是怎么回事**的一行",
+    /stdout 写不出去/.test(wThrow.err) && /不是「全部通过」/.test(wThrow.err),
+    "stderr=" + wThrow.err.slice(0, 400));
+  // issue #152 账 1 描述的那个组合态：**先有一个真崩溃，再撞上写不出去**。
+  // 这一臂才是网自己那条路（uncaughtException → emitOnce → 写抛出），上一臂走的是常路。
+  const both = run(cwd, env, mkBrokenLibTree("stdout-throw-and-crash", null, (p) => {
+    let src = fs.readFileSync(p, "utf8");
+    src = src.replace(STDOUT_THROW_ANCHOR,
+      '$1$2process.stdout.write = function () { throw new Error("注入：stdout 写入失败(EPIPE 模拟)"); };$2');
+    src = src.replace(THROW_ANCHOR, '$1$2throw new Error("注入：模拟未预期崩溃");$2');
+    fs.writeFileSync(p, src, "utf8");
+  }));
+  check("🔴 #152 账 1（组合态）：真崩溃 + 写不出去 ⇒ 退出码非 0、stdout 仍 0 字节",
+    both.code !== 0 && both.code !== 2 && both.out.length === 0,
+    `code=${both.code} bytes=${both.out.length}`);
+  check("🔴 #152 账 1（组合态）：崩溃原文补进 stderr（报文没送出去 ⇒ 原因不许跟着一起没）",
+    /未预期崩溃（报文送不出去/.test(both.err) && /stdout 写不出去/.test(both.err),
+    "stderr=" + both.err.slice(-400));
+  check("🔴 #152 账 1：与「无事可报」现在**分得开**（退出码这一位不同；stdout 两边都是 0 字节）",
+    wThrow.out.length === 0 && nothing.out.length === 0 && wThrow.code !== nothing.code,
+    `throw=(code=${wThrow.code},bytes=${wThrow.out.length}) nothing=(code=${nothing.code},bytes=${nothing.out.length})`);
+  check("活的负控：同一棵树不注入 ⇒ 退出码回到 0（钉住不是恒非 0）",
+    run(cwd, env, mkBrokenLibTree("stdout-throw-control", null)).code === 0);
+
+  // ── #152 账 1 的第二半：`if (emitted) return;` 这条**承重行**此前零断言 ──────────
+  // PR #150 对抗 M1 实测它零覆盖，而恰恰是它把上面那条路从「响」变成「静默」。
+  // 两态（守卫在 / 摘掉守卫）在**写完之后才崩**这个态上可观测地不同：
+  //   守卫在 ⇒ 一段合法 JSON（实测 2184 B）；摘掉 ⇒ **两段拼在一起、非法 JSON**（2844 B）。
+  const LATE_THROW_ANCHOR = /(function inject\(context\) \{\r?\n  emitOnce\(context\);\r?\n)/;
+  const GUARD_ANCHOR = /  if \(emitted\) return;\r?\n/;
+  let anchorLate = false, anchorGuard = false;
+  const lateThrow = (tag, dropGuard) => run(cwd, env, mkBrokenLibTree(tag, null, (p) => {
+    let src = fs.readFileSync(p, "utf8");
+    anchorLate = LATE_THROW_ANCHOR.test(src);
+    anchorGuard = GUARD_ANCHOR.test(src);
+    src = src.replace(LATE_THROW_ANCHOR, '$1  throw new Error("注入：写完之后才崩");\n');
+    if (dropGuard) src = src.replace(GUARD_ANCHOR, "");
+    fs.writeFileSync(p, src, "utf8");
+  }));
+  const guarded = lateThrow("late-throw-guarded", false);
+  const unguarded = lateThrow("late-throw-unguarded", true);
+  const segs = (r) => (r.out.match(/\{"hookSpecificOutput"/g) || []).length;
+  check("mutation 锚点仍在（写后崩 / 双写守卫）", anchorLate && anchorGuard,
+    `late=${anchorLate} guard=${anchorGuard}`);
+  check("🔴 双写守卫在 → 写完之后才崩，stdout 仍是**一段合法 JSON**",
+    guarded.json !== null && segs(guarded) === 1, `segs=${segs(guarded)} out=${guarded.out.slice(0, 120)}`);
+  check("🔴 mutation：摘掉 `if (emitted) return;` → 同一个态拼出**两段、非法 JSON**（承重行坐实）",
+    unguarded.json === null && segs(unguarded) === 2,
+    `segs=${segs(unguarded)} parsed=${unguarded.json !== null} bytes=${unguarded.out.length}`);
+  check("mutation canary：摘守卫那一版没崩死（照样写得出东西，红的是形状不是进程）",
+    unguarded.code === 0 && unguarded.out.length > guarded.out.length,
+    `code=${unguarded.code} 摘=${unguarded.out.length}B 守=${guarded.out.length}B`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

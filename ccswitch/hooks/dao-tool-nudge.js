@@ -53,13 +53,21 @@
 // 状态**写不动时仍然提醒**(可能因此重复):一个状态目录坏掉就静默零投递,正是本 hook
 // 头注反复在说的那种死法;重复的代价是噪音,静默的代价是这条规则不存在。重复时提醒里会自陈。
 //
-// 🔴 **它此刻大概率投递不到,照直写**:本 hook 在 live settings.json 里注册的 PostToolUse
-// **matcher 是 `Bash`**,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
-// ⇒ **第 ④ 类的代码在这里、投递为零**,而「没跑的闸」与「跑了且没意见的闸」在任何日志里
-// 长得一样。要它真响,需要用户把那个 matcher 扩到覆盖两个 MCP 前缀(写入面是 cc-switch DB
-// 的 providers.settings_config,AI 侧被权限分类器全路径拦截 ⇒ 属用户动作)。
+// ~~🔴 它此刻大概率投递不到,照直写:本 hook 在 live settings.json 里注册的 PostToolUse
+// matcher 是 `Bash`,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
+// ⇒ 第 ④ 类的代码在这里、投递为零~~ **2026-08-08 订正**:matcher 早已扩过(`e9e9fdc`
+// 「快照层同步 hook 注册四项——G6/MCP扩面/…」)——**本 PR 改动之前**,live 与快照两层
+// 都是 `Bash|mcp__chrome-devtools__.*|mcp__playwright__.*`,第 ④ 类**这一格已在响**,
+// 上面那段「大概率投递不到」是写下之后没跟着改的旧结论,不是那时的实况。
+// ⚠ **本 PR 又把这句话写过期了一次,照直记这个教训**:上面订正时只核过 live/快照两层的
+// 历史状态,没意识到**同一个 commit 下面几段** ⑦ 又把快照层改成了
+// `Bash|PowerShell|mcp__chrome-devtools__.*|mcp__playwright__.*`——于是这段订正落盘的
+// 那一刻就已经不真:live 与快照从此不再相同(live 待帅走「四处同落」才跟上)。
+// **教训**:订正一句"两处此刻相同"的陈述前,先问同一批改动有没有正在动其中一处。
 // **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
-// 那个自检逐面核对 matcher 覆盖不覆盖 ①②③⑤ 的 Bash 面与 ④ 的两个 MCP 面,缺一即 exit 1。
+// 那个自检逐面核对 matcher 覆盖不覆盖 Bash 面与 MCP 面,缺一即 exit 1
+// (2026-08-08 起 Bash 面已并入 `Bash|PowerShell`,见下方 ⑦ 段——这也正是让上面那句
+// "两层此刻相同"过期的改动)。
 //
 // ── ⑤ 热重载 dev server 起在主仓树(2026-08-02 加,dao 整体重写批 1-D)───────────
 // dao.md 帅节:「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起,不从主仓树
@@ -113,6 +121,34 @@
 // 被拒)同属这一格**(PR #165 对抗验证实测):push 没送出任何东西而区间仍是上一次成功推送的 ⇒
 // 报的是上一笔的文件——同一机制、同一代价类别(噪音),不另设分支去判。
 //
+// ── ⑦ PowerShell 面:2>&1 混流 / Bash heredoc 误用(2026-08-08 加,issue #44)─────
+// ①②③⑤⑥ 都挂在 Bash matcher 下,而本仓官方工具面**同时有一个 PowerShell 工具**——
+// `dao-officer-clauses.md` 官通节明写两条乙类判据(「禁 2>&1 捕获 native 命令输出」
+// 「PS 里禁 Bash heredoc,真会 ParserError」),但它们此前**没有任何机器投递**:
+// Bash matcher 天然收不到 PowerShell 工具调用,而这两条恰恰只在 PowerShell 命令串里才成立。
+// PR #43 判定表当时就点出这个结构缺口(「有意留的缺口但未转移」),issue #44 把它转移成本单。
+//
+// 判据(整串扫,不按 Bash 那套分号/&&/管道切段——PowerShell 语法不是那样拆的,
+// 且这两个记号出现在命令串任何位置都值得提一句):
+//   · `2>&1`:PowerShell 5.1 把 native 命令(cargo/git 等)的 stderr 经它收进来时,
+//     每一行都会被包成 NativeCommandError,`$ErrorActionPreference='Stop'` 下会把正常的
+//     进度提示误判成终止性错误、中断脚本(同判据见 dao-officer-clauses.md「禁重定向捕获」)。
+//   · Bash 风格 heredoc(`<<EOF` 一类):PowerShell 没有这个语法,字面写出来是 ParserError
+//     (真实事故记在 `dao-officer-clauses.md`「编码铁律」段落——PR #117 那次「官先试了
+//     `--body "$(cat <<'EOF' …)"`」的实证)。
+//     ⚠ **顺手核实一处坐标,照直记**:`rules/scoped/dao-scope-powershell.md`(触发器文件)
+//     自称它指向的 `dao-powershell.md` 里有「禁 PowerShell 里的 Bash heredoc」这条判据,
+//     但实读 `dao-powershell.md` 当前 5 条判据(假错/编码/消费侧编码/`-File`退出码/inline长命令)
+//     里**没有 heredoc 相关内容**——那个触发器文件的坐标此刻是空指针。这不在本批四单范围内,
+//     不在此顺手改那两份文件,只在本条別再引用 `dao-powershell.md`。
+//     判据取 `<<` 紧跟一个标识符——PowerShell 合法语法里 `<<` 不出现在任何形态
+//     (位移是 `-shl`/`-shr`,不是 `<<`/`>>`),故这是一个高精度信号,不需要更多上下文。
+//
+// 与 ①②③⑤⑥ 同一原则:软提醒不阻断,判据是近似的,宁可漏报也不滥报。
+// **注册面**:matcher 已从 `Bash` 扩到 `Bash|PowerShell`(git 快照层
+// `config-sync/common/settings.json`,live 与 cc-switch DB 两处由帅走「四处同落」流程跟上,
+// 本次不碰 `~/.claude/settings.json` 本体)。
+//
 // 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
 // ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
 // 提醒的实际作用是「补做合并后那两步复核」与「下次走脚本」,不是拦截。这一点别读成守卫。
@@ -120,7 +156,8 @@
 //
 // 回归网:tests/dao-tool-nudge.tests.js(正控+误伤负控双向)。
 // 真相源:windsurf-dao/ccswitch/hooks/dao-tool-nudge.js
-// 由 settings.json 的 PostToolUse hook 调用(当前注册 matcher: Bash,见上方 ④ 的射程说明)。
+// 由 settings.json 的 PostToolUse hook 调用(2026-08-08 起注册 matcher 含 `Bash|PowerShell`,
+// 见 `--selfcheck` 的逐面覆盖核对,不在这里写死具体串——写死就是又一个会漂移的副本)。
 
 const fs = require("fs");
 const os = require("os");
@@ -237,6 +274,7 @@ function pushedFiles(dir) {
 // 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
 const REQUIRED_COVERAGE = [
   { face: "①②③⑤⑥ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离 / 条款源推送)", tools: ["Bash"] },
+  { face: "⑦ PowerShell 面(2>&1 混流 / Bash heredoc 误用)", tools: ["PowerShell"] },
   {
     face: "④ 浏览器 MCP 面(GUI 验证细则首调提醒)",
     tools: ["mcp__chrome-devtools__take_screenshot", "mcp__playwright__browser_click"],
@@ -293,8 +331,8 @@ function selfcheck() {
 
   lines.push(
     "覆盖不足的修法：把 PostToolUse 里 dao-tool-nudge.js 那组的 matcher 扩成 " +
-    '"Bash|mcp__chrome-devtools__.*|mcp__playwright__.*"。' +
-    "写入面是 cc-switch DB 的 providers.settings_config（**每个 provider 都要改**，" +
+    '"Bash|PowerShell|mcp__chrome-devtools__.*|mcp__playwright__.*"（2026-08-08 起含 PowerShell，' +
+    "issue #44）。写入面是 cc-switch DB 的 providers.settings_config（**每个 provider 都要改**，" +
     "切 provider 会被目标 provider 的配置整体覆盖）——**属用户动作**，AI 侧被权限分类器拦截。"
   );
   process.stdout.write(lines.join("\n") + "\n");
@@ -361,6 +399,41 @@ if (BROWSER_MCP_RE.test(toolName)) {
           "重复是噪音，而静默是这条规则直接消失，故取前者；顺手看一眼那个目录的权限。）"),
     },
   }));
+  process.exit(0);
+}
+
+// ── ⑦ PowerShell 面(2>&1 混流 / Bash heredoc 误用)──────────────────────────
+// 走在 Bash 分支之前、单独早退:判据与 Bash 那套「段首正则」不同源(整串扫,理由见头注⑦),
+// 混进下面的 segments 循环只会让两套判据互相牵连。
+if (toolName === "PowerShell") {
+  if (!cmd) process.exit(0);
+  const psBlocks = [];
+
+  if (/2>&1/.test(cmd)) {
+    psBlocks.push(
+      "【dao PowerShell 禁 2>&1】本次命令里出现了 `2>&1`。PowerShell 5.1 对 native 命令" +
+      "(如 cargo/git)的 stderr 经 `2>&1` 收进来时,每一行都会被包成 NativeCommandError," +
+      "在 `$ErrorActionPreference='Stop'` 下会把正常的进度提示(如 cargo 的 Locking/Updating)" +
+      "误判成终止性错误、中断脚本。需要捕获输出时改用 " +
+      "`Start-Process -RedirectStandardOutput/-RedirectStandardError` 到真实文件。"
+    );
+  }
+  // PowerShell 语法里 `<<` 不出现在任何合法用法里(位移用 `-shl`/`-shr`,不是 `<<`/`>>`)——
+  // 出现即高精度信号:Bash 风格 heredoc 被误搬进了 PS 命令串。
+  if (/<<-?['"]?[A-Za-z_]\w*/.test(cmd)) {
+    psBlocks.push(
+      "【dao PowerShell 禁 Bash heredoc】本次命令里像是出现了 Bash 风格的 heredoc(`<<EOF` 一类)。" +
+      "PowerShell 没有这个语法,字面写出来大概率是 ParserError,即使侥幸不报错也取不到预期的值。" +
+      "多行字符串改用 PowerShell here-string(`@'...'@` 单引号版免插值,`@\"...\"@` 双引号版可插值," +
+      "闭合 `'@`/`\"@` 必须顶格、前面不能有空白)。"
+    );
+  }
+
+  if (psBlocks.length) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: psBlocks.join("\n\n") },
+    }));
+  }
   process.exit(0);
 }
 

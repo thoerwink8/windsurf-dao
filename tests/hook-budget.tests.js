@@ -120,6 +120,127 @@ console.log("\n=== resolveRegisteredTimeoutMs · 读得到注册（两态）==="
   check(".mjs 也认得出（扩展名盲区是本仓踩过的老坑）", r.ms === 7000 && r.source === "registered", JSON.stringify(r));
 }
 
+console.log("\n=== resolveRegisteredTimeoutMs · 项目级注册也要认（issue #142）===");
+// 不再显式传 settingsPath：走「用户级 home + 项目级 cwd」自动双 scope 路径。
+// helper 各自造一对独立目录（互不干扰），home/cwd 分开传。
+function mkHome(tag, cfg) {
+  const dir = path.join(SANDBOX, tag, "home");
+  fs.mkdirSync(dir, { recursive: true });
+  writeSettingsAt(path.join(dir, ".claude", "settings.json"), cfg);
+  return dir;
+}
+function mkCwd(tag, cfg) {
+  const dir = path.join(SANDBOX, tag, "proj");
+  fs.mkdirSync(dir, { recursive: true });
+  if (cfg !== undefined) writeSettingsAt(path.join(dir, ".claude", "settings.json"), cfg);
+  return dir;
+}
+function writeSettingsAt(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, typeof obj === "string" ? obj : JSON.stringify(obj, null, 2), "utf8");
+}
+{
+  // ① 只有用户级有注册，项目级压根没有 settings.json（今天的现实状况）。
+  //    结果必须与「只读用户级」逐数值相同，但 note 现在会**如实报告**已经查过项目级。
+  const home = mkHome("only-user", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+  ]));
+  const cwd = mkCwd("only-user", undefined); // 目录存在但没有 .claude/settings.json
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("只有用户级注册 → 10000ms（数值与旧行为一致）", r.ms === 10000 && r.source === "registered", JSON.stringify(r));
+  check("note 如实报告项目级也被查过、且零命中（不是「没查」）",
+    /已核对 2 处 scope/.test(r.note) && /project\(读取失败\)/.test(r.note), r.note);
+}
+{
+  // ② issue #142 的核心场景：用户级 10s，项目级 3s（更紧）。
+  //    2026-08-08 官方文档核实：两条不同（timeout 不同）⇒ 宿主两条都跑，各自独立计时。
+  //    本模块的策略是「取最小」——这里断言的正是「取到项目级那个更紧的数」。
+  const home = mkHome("tighter-project", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+  ]));
+  const cwd = mkCwd("tighter-project", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 3 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("🔴 项目级注册更紧(3s) → 取 3000ms，不是用户级的 10000ms（issue #142 的原始事故场景）",
+    r.ms === 3000 && r.source === "registered", JSON.stringify(r));
+  check("matched 报出两处合计命中数（2）", r.matched === 2, JSON.stringify(r));
+  check("note 点名核对了两处 scope 且都报了各自命中数",
+    /已核对 2 处 scope/.test(r.note) && /user\(1\)/.test(r.note) && /project\(1\)/.test(r.note), r.note);
+}
+{
+  // ③ 反过来：用户级更紧(3s)，项目级更松(30s) —— 钉住不是「后者覆盖前者」也不是「取项目级」，
+  //    而是真的在**取最小**（否则这条会把 R2 的方向读反）。
+  const home = mkHome("tighter-user", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 3 },
+  ]));
+  const cwd = mkCwd("tighter-user", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 30 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("反向：用户级更紧时取用户级的 3000ms（钉住判据是「取最小」不是「取项目级」）",
+    r.ms === 3000, JSON.stringify(r));
+}
+{
+  // ④ 项目级注册的是**别的 hook**，不该被当成我的注册（同伴用例，钉住 baseNoExt 过滤仍生效）。
+  const home = mkHome("project-other-hook", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+  ]));
+  const cwd = mkCwd("project-other-hook", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-rule-echo.js"', timeout: 2 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("项目级注册的是别的 hook → 不吃它的 2s，仍是用户级的 10000ms",
+    r.ms === 10000, JSON.stringify(r));
+  check("note 里项目级报的命中数是 0（查过、没找到我，不是没查）", /project\(0\)/.test(r.note), r.note);
+}
+{
+  // ⑤ 两处都没有任何注册（都存在但都不提我）⇒ 必须 bail 到 fallback，且措辞体现「查了两处」，
+  //    不能落回旧版单路径那句「settings.json 里没有提到」（那句话对双 scope 场景是误导性的）。
+  const home = mkHome("neither-scope", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-rule-echo.js"', timeout: 5 },
+  ]));
+  const cwd = mkCwd("neither-scope", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-rule-echo.js"', timeout: 5 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("两处都不提我 → fallback", r.source === "fallback" && r.ms === FALLBACK_TIMEOUT_MS, JSON.stringify(r));
+  check("bail 措辞体现「已扫两处」（不是单路径那句「没有提到」的原文，两种场景的可核实信息不同）",
+    /已扫 2 处/.test(r.note), r.note);
+}
+{
+  // ⑥ 两处都读不到（用户级目录压根不存在 / 项目级目录也不存在）⇒ bail 措辞体现「已尝试」而非「已扫」。
+  const home = path.join(SANDBOX, "both-missing", "nope-home");
+  const cwd = path.join(SANDBOX, "both-missing", "nope-proj");
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home, cwd });
+  check("两处都读不到 → fallback", r.source === "fallback" && r.ms === FALLBACK_TIMEOUT_MS, JSON.stringify(r));
+  check("bail 措辞用「已尝试」（两处全部读取失败，与⑤「已扫」区分开——一个是读到了没命中，一个是压根没读到）",
+    /已尝试 2 处/.test(r.note), r.note);
+}
+{
+  // ⑦ 显式传 settingsPath 时，行为必须与旧版逐字节相同（不叠加项目级）——
+  //    即使把 cwd 也传进去，只要给了 settingsPath 就只认它一个。
+  const p = writeSettings("explicit-with-cwd", reg("SessionStart", [
+    { type: "command", command: 'node "D:/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+  ]));
+  const decoyCwd = mkCwd("explicit-with-cwd", reg("SessionStart", [
+    { type: "command", command: 'node "D:/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 2 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", settingsPath: p, cwd: decoyCwd });
+  check("给了 settingsPath 时 cwd 被忽略（不吃 decoy 项目级的 2s，仍是显式路径的 10000ms）",
+    r.ms === 10000, JSON.stringify(r));
+  check("显式路径场景 note 不带 scope 后缀（与旧版逐字节相同）", !/已核对.*scope/.test(r.note), r.note);
+}
+{
+  // ⑧ home === cwd（罕见但结构上可能）：只应该扫一份文件，不重复计入两次。
+  const shared = mkHome("same-home-and-cwd", reg("SessionStart", [
+    { type: "command", command: 'node "/x/ccswitch/hooks/dao-scaffold-check.js"', timeout: 6 },
+  ]));
+  const r = resolveRegisteredTimeoutMs({ hookFile: "dao-scaffold-check.js", home: shared, cwd: shared });
+  check("home 与 cwd 是同一份文件时不重复扫（matched=1，不是 2）", r.matched === 1, JSON.stringify(r));
+  check("note 不带 scope 后缀（只有一处，不构成「已核对多处」）", !/已核对.*scope/.test(r.note), r.note);
+}
+
 console.log("\n=== resolveRegisteredTimeoutMs · 读不到时必须落保守侧（三种坏输入）===");
 {
   const missing = path.join(SANDBOX, "nope", ".claude", "settings.json");
