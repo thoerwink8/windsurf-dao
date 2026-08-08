@@ -31,7 +31,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "3514dae24af40dd29744a943f4e2c5a9d1ddc77b6bd506b2ac91868c2be2a795",
+        "sha256": "fcb1e315479e9c3d10514af715a00d812ffa98318eea63e9e8e8e8d9dbda9af8",
         "lines": 113,
         "clauses": 22,
         "observation": 0,
@@ -48,8 +48,8 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "5e31980407007d5fdb23d3f4cf1f215d4479369b232000ee9e9aa7076f7b8ab5",
-        "lines": 197,
+        "sha256": "e9d582caefb37125926e7c38fa5da59d07f5f9c05e01f53714dbc197e6717367",
+        "lines": 252,
         "clauses": 9,
         "observation": 0,
         "fieldless": 0,
@@ -942,7 +942,7 @@
       "body_excerpt": "- **派实现类官时，派单令带一句「覆写既有文件前先 Read 它」**（宿主硬规则，2026-08-02 立）：Write 一个**已存在**的文件而没先 Read 过它，宿主**直接判失败**（新建文件不受此限，Read 一个不存在的文件反而报错）。它不会导致错误结果，**只白费一次工具往返**——但它是全库第二…"
     },
     {
-      "id": "4b429522022d",
+      "id": "7cebae2c45dc",
       "slug": "派-档位调整",
       "file": "ccswitch/rules/dao-dispatch.md",
       "line": 97,
