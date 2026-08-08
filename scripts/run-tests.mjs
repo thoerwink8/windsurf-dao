@@ -93,6 +93,21 @@
 //    ⇒ 两侧的计数**各走各的字段**：JS 的进 `defer=/deferfiles=/declared=`，
 //      PS 的进 `psfiles=/psred=/psskip=`。混在一起会让「哪一半没跑」重新变得看不出来。
 //
+//    ①′ **PS 扫描锚点收窄到「块注释外」（2026-08-09 · issue #203）**：旧版只锚「行首 # +
+//    标记名」，不问那一行是不是身处 `<# ... #>` 块注释内部 —— 而块注释里允许写任何散文，
+//    `.NOTES` 段一句"本套之前被标 `# @dao-test-tier: env`"这样的描述句，只要落在行首就会
+//    被当成真声明。PR #200 撞过这个坑：`.NOTES` 里一句带反引号的完整字面量，去掉那对反引号
+//    （一次最普通的散文编辑）就让整套被静默判成 env 层、全仓零红。PR #200 当时的应对是把
+//    散文**搬出**头 60 行窗口——那是文本约定，约定会被下一次编辑无意打破，不是结构性修法。
+//    本仓三个真实声明（clause-structure / dao-secrets / dao-install）无一例外是块注释
+//    **之外**的独立 `#` 行注释、且都在 `<#` 开块之前 —— 于是「是不是身处 `<# #>` 内」才是
+//    区分「真声明」与「散文提到语法」的结构性界线，不是「离文件顶部多少行」。扫描器现在
+//    边扫边跟踪块注释开合状态，只在**块注释外**的行上判定标记，见 `scanPsMarkerLines()`。
+//    ⚠ **JS 侧未同步收窄，这是刻意留白不是漏做**：本仓 `tests/*.tests.js` 头部普查未发现
+//    散文提及会落在 `//` 紧跟 `@dao-test-tier:` 这个精确形态的活口（既有写法都在 `@` 前多插了
+//    文字，如"上面那行 `@dao-test-tier: env`"）；若未来出现 JS 侧同型事故，处方是同一个
+//    （块注释感知），不是重新发明。
+//
 // ② **没跑的 PS 套上退出码通道**（F1）：`psskip > 0` ⇒ 最终退出码**至少 2**。
 //    此前默认层那个恒 2 是**挂在 dead-gates 一个文件的 DEFER 上**的偶然 —— 那个文件哪天
 //    摘了标记，默认层就悄悄变回 0，而 PS 套照旧没跑。现在两条路各自都能把 2 顶起来。
@@ -260,12 +275,40 @@ const declaredEnv = new Set(jsTests.filter(declaresEnvTier));
 //   故这里显式剥 BOM。**字面量写转义不写那个字符本身** —— 一个零宽字符落在源码里，
 //   谁也看不出它在不在（同 dao 官侧条款「测试里构造控制字符必须用转义写法」的判据）。
 const PS_BOM_RE = /^\uFEFF/;
-const PS_TIER_MARKER_RE = /^[ \t]*#[ \t]*@dao-test-tier:[ \t]*env\b/m;
+// 单行匹配（不带 `m`）：调用方逐行喂，`^`/`$` 天然对齐单行边界，不需要多行模式。
+const PS_TIER_MARKER_RE = /^[ \t]*#[ \t]*@dao-test-tier:[ \t]*env\b/;
+
+// 块注释状态机（issue #203①）：`<# ... #>` 内的文本即使字面以 `#` 开头也不算声明——
+// 真实声明必须是块注释**外**的独立 `#` 行注释（本仓三例见文件头 ①′）。逐行扫描，
+// 判定用「进入这一行之前」的状态，再用这一行本身的内容推出「离开这一行之后」的状态；
+// 同一行允许出现多次开合（`indexOf` 循环），足够覆盖本仓已知形态，不做嵌套块注释假设
+// （PowerShell 本身也不支持嵌套 `<# #>`）。
+function scanPsMarkerLines(lines) {
+  let inBlockComment = false;
+  for (const line of lines) {
+    if (!inBlockComment && PS_TIER_MARKER_RE.test(line)) return true;
+    let i = 0;
+    while (i < line.length) {
+      if (!inBlockComment) {
+        const openIdx = line.indexOf("<#", i);
+        if (openIdx === -1) break;
+        inBlockComment = true;
+        i = openIdx + 2;
+      } else {
+        const closeIdx = line.indexOf("#>", i);
+        if (closeIdx === -1) break;
+        inBlockComment = false;
+        i = closeIdx + 2;
+      }
+    }
+  }
+  return false;
+}
 function declaresEnvTierPs(file) {
   try {
     const raw = fs.readFileSync(path.join(TESTS_DIR, file), "utf8").replace(PS_BOM_RE, "");
-    const head = raw.split(/\r?\n/).slice(0, TIER_MARKER_HEAD_LINES).join("\n");
-    return PS_TIER_MARKER_RE.test(head);
+    const lines = raw.split(/\r?\n/).slice(0, TIER_MARKER_HEAD_LINES);
+    return scanPsMarkerLines(lines);
   } catch (_) {
     return false;   // 读不到就是读不到；它随后会以「跑不起来」的形态变红
   }
