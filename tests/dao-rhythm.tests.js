@@ -402,18 +402,55 @@ console.log("\n=== 跨文件一致性：G6 放行 ⇔ rhythm 注入 WAKEUP（判
     .matchAll(/escapeEnv:\s*"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
   check(`逃生阀隔离：从 dao-hard-gates.js 读得出逃生阀清单（${GATE_ESCAPE_ENVS.length} 个；空集 = 本次一个都没剥掉）`,
     GATE_ESCAPE_ENVS.length > 0, GATE_ESCAPE_ENVS.join(","));
-  const GATE_ENV = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (!GATE_ESCAPE_ENVS.some((e) => e.toUpperCase() === k.toUpperCase())) GATE_ENV[k] = v;
+  // 剥离做成函数：**自给自足锚要在把阀真开起来之后重算一次**，一次性算好的常量做不到这件事。
+  function gateEnvOf(src) {
+    const out = {};
+    for (const [k, v] of Object.entries(src)) {
+      if (!GATE_ESCAPE_ENVS.some((e) => e.toUpperCase() === k.toUpperCase())) out[k] = v;
+    }
+    return out;
+  }
+  const GATE_ENV = gateEnvOf(process.env);
+  function spawnGate(prompt, env) {
+    return spawnSync(process.execPath, [REAL_GATES], {
+      input: JSON.stringify({ tool_name: "ScheduleWakeup", tool_input: { delaySeconds: 900, prompt } }),
+      encoding: "utf8", env,
+    });
+  }
+
+  // ── F2（issue #190）：自给自足锚 ────────────────────────────────────────────
+  // 病在哪：上面那段剥离**没有任何断言在守它**。对抗官实测 —— 把 `env: GATE_ENV` 摘掉、
+  // 回到整份继承父进程环境，**干净环境下 0 红**；只有当敲命令的人**恰好**开着
+  // `DAO_WAKEUP_UNSIGNED_OK=1` 时才 9 红。也就是说：这段剥离的判别力完全依赖运行环境的偶然，
+  // 而它保护的正是「本组测的是两份判据同不同判，不是这台机器开没开阀」。
+  // 修法照搬 `tests/hard-gates.tests.js` 逃生阀隔离那一节的 ㈠㈡ 形态：**自置阀 → 断言 → finally 复原**。
+  // 每格两条一正一反 —— 只验前者，「剥离生效」与「阀整个失灵」在输出里长得一样。
+  {
+    const KEY = "DAO_WAKEUP_UNSIGNED_OK";
+    const UNSIGNED = "帮我看看这个函数的实现";   // 没有 [dao-heartbeat] 签名 ⇒ G6 该拦
+    check(`F2 前提：${KEY} 真的在剥离清单里（不在就说明这个锚在守一个不存在的东西）`,
+      GATE_ESCAPE_ENVS.some((e) => e.toUpperCase() === KEY), GATE_ESCAPE_ENVS.join(","));
+    const had = Object.prototype.hasOwnProperty.call(process.env, KEY);
+    const old = process.env[KEY];
+    let stripped, explicit;
+    process.env[KEY] = "1";
+    try {
+      stripped = spawnGate(UNSIGNED, gateEnvOf(process.env)).status;                      // 剥离必须发生
+      explicit = spawnGate(UNSIGNED, Object.assign(gateEnvOf(process.env), { [KEY]: "1" })).status;  // 阀必须还活着
+    } finally {
+      if (had) process.env[KEY] = old; else delete process.env[KEY];
+    }
+    check(`🔴 F2 ㈠：父进程 ${KEY}=1 时，剥离后的环境里闸仍拦未签名 wakeup（exit 2）`,
+      stripped === 2, "code=" + stripped);
+    check(`F2 ㈡：同一状态下显式把阀传回去 ⇒ 闸放行（exit 0）—— 证明 ㈠ 的绿不是「这台机器上阀压根不管用」`,
+      explicit === 0, "code=" + explicit);
+    check(`F2 收尾：${KEY} 已复原到进入本节之前的状态（锚自己不许留污染）`,
+      Object.prototype.hasOwnProperty.call(process.env, KEY) === had && process.env[KEY] === old);
   }
 
   let agree = 0;
   for (const prompt of CORPUS) {
-    const g = spawnSync(process.execPath, [REAL_GATES], {
-      input: JSON.stringify({ tool_name: "ScheduleWakeup", tool_input: { delaySeconds: 900, prompt } }),
-      encoding: "utf8",
-      env: GATE_ENV,
-    });
+    const g = spawnGate(prompt, GATE_ENV);   // **喂真闸的唯一出口**（同型的东西只留一个）
     const blocked = g.status === 2;
     const r = run(HOOK, prompt, SID_BASE + "-xcheck-" + Buffer.from(prompt).toString("hex").slice(0, 12));
     const injected = /dao 节律·WAKEUP/.test(ctx(r));
