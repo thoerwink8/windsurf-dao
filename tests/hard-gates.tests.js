@@ -78,12 +78,45 @@ function sha(p) {
   return crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 }
 
-// 喂一次 PreToolUse 输入。script 缺省=真 hook；env 用于测逃生阀。
+// ── 逃生阀隔离（issue #188）──────────────────────────────────────────────────
+// 🔴 **子进程默认剥掉全部逃生阀变量。** 本文件绝大多数断言问的是「这段判据写没写对」，
+//    而逃生阀一开，hook 在判据之前就 `continue` 掉了 ⇒ 同一份代码、同一条正控，
+//    结果只取决于**敲命令的人此刻有没有开阀**。那不是在测被测对象，是在测这台机器。
+//    实证：用户按体系自己设计的「开阀 → 装 hook → 跑测试验收」流程做事，全套红 **125 条**
+//    而代码一行没坏；关掉阀的干净环境重跑 PASS=491 FAIL=0（2026-08-08，issue #188）。
+//    **是体系自己跟自己打架**：装 hook 那条流程必然打破「跑测试的人没开阀」这个隐含假设。
+// 🔑 **用例显式传 `env` 的路径不受影响** —— 下面那几条「测逃生阀」的用例正靠它，
+//    显式值在展开顺序上排在剥离之后，永远盖得住。回归锚在「逃生阀隔离」那一节，
+//    它把父进程的阀真开起来再跑默认路径（先破再验过：把剥离换回 `...process.env` ⇒ 那节全红）。
+// 📌 同型的现成写法：`ccswitch/scripts/probe-shell-search.mjs:78` 早就在喂 hook 前
+//    把 `DAO_SHELL_SEARCH_OK` 置空 —— 那条路走对了，只是当时没人把它推广到测试侧。
+// ⚠️ **射程照直写**：本清单只剥「逃生阀」这一类（hook 里 `escapeEnv:` 声明的那些）。
+//    别的会改变 hook 行为的环境变量（`USERPROFILE` / `HOME` / `DAO_TOOL_NUDGE_STATE` …）
+//    照旧继承 —— 它们要么本来就是被测量的对象、要么由用例显式指定。
+const ESCAPE_ENVS = [
+  "DAO_SETTINGS_EDIT_APPROVED",   // G2-live-settings
+  "DAO_PUBLISH_APPROVED",         // G3-publish
+  "DAO_ALLOW_READONLY_TODO",      // G5-readonly-todo
+  "DAO_WAKEUP_UNSIGNED_OK",       // G6-heartbeat-signature
+  "DAO_SHELL_SEARCH_OK",          // G7-shell-search
+];
+// Windows 的环境变量名大小写不敏感，故按大写比对再删 —— 只按字面 key `delete` 的话，
+// 用户用 `dao_settings_edit_approved=1` 设的那一份会原样漏进子进程。
+const ESCAPE_ENV_KEYS = new Set(ESCAPE_ENVS.map((k) => k.toUpperCase()));
+function envWithoutEscapes() {
+  const out = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!ESCAPE_ENV_KEYS.has(k.toUpperCase())) out[k] = v;
+  }
+  return out;
+}
+
+// 喂一次 PreToolUse 输入。script 缺省=真 hook；env 用于测逃生阀（显式传的盖过剥离）。
 function gate(payload, { script = HOOK, env = {} } = {}) {
   const r = spawnSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...envWithoutEscapes(), ...env },
   });
   return { code: r.status, err: String(r.stderr || ""), out: String(r.stdout || "") };
 }
@@ -194,6 +227,56 @@ const CANARY = {
 const PRISTINE_SHA = sha(HOOK);
 const canaryBefore = {};
 for (const [id, p] of Object.entries(CANARY)) canaryBefore[id] = gate(p).code;
+
+console.log("\n──── 逃生阀隔离（issue #188）：开着阀跑，测的也得是代码不是机器 ────");
+{
+  // ── 这一节是回归锚，不是新覆盖面 ────────────────────────────────────────────
+  // 它把**父进程**的阀真的打开，再跑 `gate()` 的**默认路径**（不传 env），断言闸照拦。
+  // 剥离逻辑被谁注掉/改回 `...process.env`，这里当场红 —— 而在它存在之前，同样的事故
+  // 表现为「全套红 125 条、每条都指向被测判据」，没有任何一条报文指向真正的成因。
+  // **它刻意放在最前面**：后面所有正控都建立在「阀是关的」这个前提上，前提该第一个被验。
+  //
+  // 每格两条，一正一反 —— 只验前者，「剥离生效」与「阀整个失灵」在输出里长得一样：
+  //   ㈠ 父进程带阀 + 默认路径 ⇒ 仍 exit 2（剥离真的发生了）
+  //   ㈡ 同一状态 + 显式传同一个阀 ⇒ 仍 exit 0（剥离没有误伤「测阀」那条路，
+  //      也顺带证明阀本身没坏 —— 否则 ㈠ 的绿可以是「这台机器上阀压根不管用」）
+  const ANCHORS = [
+    ["DAO_SETTINGS_EDIT_APPROVED", "G2-live-settings"],
+    ["DAO_PUBLISH_APPROVED", "G3-publish"],
+    ["DAO_ALLOW_READONLY_TODO", "G5-readonly-todo"],
+    ["DAO_WAKEUP_UNSIGNED_OK", "G6-heartbeat-signature"],
+    ["DAO_SHELL_SEARCH_OK", "G7-shell-search"],
+  ];
+  for (const [key, id] of ANCHORS) {
+    const had = Object.prototype.hasOwnProperty.call(process.env, key);
+    const old = process.env[key];
+    let stripped, explicit;
+    process.env[key] = "1";
+    try {
+      stripped = gate(CANARY[id]).code;                            // 默认路径：阀必须被剥掉
+      explicit = gate(CANARY[id], { env: { [key]: "1" } }).code;   // 显式传：阀必须照常生效
+    } finally {
+      if (had) process.env[key] = old; else delete process.env[key];
+    }
+    check(`㈠ 父进程 ${key}=1 时 gate() 默认路径仍拦 ${id}`, stripped === 2, `code=${stripped}`);
+    check(`㈡ 同一状态下显式传 ${key} 仍放行 ${id}（剥离没误伤「测阀」用例，且阀本身是活的）`,
+      explicit === 0, `code=${explicit}`);
+  }
+
+  // ── 清单漂移闸：剥离清单必须与 hook 里 `escapeEnv:` 声明的那一份逐个相等 ──────
+  // 没有它，「新加一道带逃生阀的闸」就会静默地在这里留一个洞，而洞的发现方式仍然是
+  // 下一个开着那个阀的人撞一次满屏红（本条治的正是这个复发路径，不只是这一次的三个变量）。
+  // 📌 **判据独立于被守对象**（`[#守-自检独立]`）：这里是对 hook 源码的一次**独立**正则读取，
+  //    不调用 hook、也不复用它的任何解析 —— hook 那侧读的是 `GATES[].escapeEnv` 的运行期值。
+  // 📌 `declared.length > 0` 那一半是给正则自己留的：正则哪天失配 ⇒ 空集 ⇒ 本条红，
+  //    而不是「空集与空集相等」式地静默通过（零检出 ≠ 零存在）。
+  const declared = [...fs.readFileSync(HOOK, "utf8").matchAll(/escapeEnv:\s*"([A-Za-z0-9_]+)"/g)]
+    .map((m) => m[1]).sort();
+  const stripping = [...ESCAPE_ENVS].sort();
+  check("剥离清单 === hook 里声明的全部逃生阀（新增一道带阀的闸而这里没跟上 ⇒ 本条红）",
+    declared.length > 0 && declared.join(",") === stripping.join(","),
+    `hook 声明=[${declared.join(",")}] 本文件剥离=[${stripping.join(",")}]`);
+}
 
 console.log("\n──── G1 · windows-mcp 全面禁令（一票否决，无逃生阀）────");
 {

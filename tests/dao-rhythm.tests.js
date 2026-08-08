@@ -392,11 +392,27 @@ console.log("\n=== 跨文件一致性：G6 放行 ⇔ rhythm 注入 WAKEUP（判
     "",
     "/dao-verify",
   ];
+  // ── 逃生阀隔离（issue #188 同批扫出的同型）────────────────────────────────
+  // 这一处与 `tests/hard-gates.tests.js` 的 `gate()` 同病：spawn 真闸却整份继承父进程环境。
+  // 敲命令的人开着 G6 那把阀（`DAO_WAKEUP_UNSIGNED_OK=1`）时，闸这一侧**恒放行** ⇒ 本组
+  // 就从「两份判据此刻同不同判」退化成「rhythm 注不注入」，而红报文照旧指向判据。
+  // 清单由**独立正则读 hook 源码**得来（不调 hook、不复用它的解析）；空集即红 ——
+  // 「读不出清单」与「一个逃生阀都没有」在剥离行为上逐字节相同。
+  const GATE_ESCAPE_ENVS = [...fs.readFileSync(REAL_GATES, "utf8")
+    .matchAll(/escapeEnv:\s*"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  check(`逃生阀隔离：从 dao-hard-gates.js 读得出逃生阀清单（${GATE_ESCAPE_ENVS.length} 个；空集 = 本次一个都没剥掉）`,
+    GATE_ESCAPE_ENVS.length > 0, GATE_ESCAPE_ENVS.join(","));
+  const GATE_ENV = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!GATE_ESCAPE_ENVS.some((e) => e.toUpperCase() === k.toUpperCase())) GATE_ENV[k] = v;
+  }
+
   let agree = 0;
   for (const prompt of CORPUS) {
     const g = spawnSync(process.execPath, [REAL_GATES], {
       input: JSON.stringify({ tool_name: "ScheduleWakeup", tool_input: { delaySeconds: 900, prompt } }),
       encoding: "utf8",
+      env: GATE_ENV,
     });
     const blocked = g.status === 2;
     const r = run(HOOK, prompt, SID_BASE + "-xcheck-" + Buffer.from(prompt).toString("hex").slice(0, 12));
