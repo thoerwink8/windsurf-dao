@@ -281,8 +281,11 @@ function New-Fixture {
 # 让被测脚本的第 3.5 步探测到「本仓有 canonical 生成器」并真的调用它（走真 node 子进程，
 # 不桩 node —— 桩掉它就把「PS 调 node 子进程、读它的退出码」这件事本身也一并桩掉了，
 # 而那正是要验的）。放在 main 分支（早于 feature/x 分支出）保证合并后的树上一定有它。
+# -GuardedFilesGenBody（issue #209 缺口 2 · 场景 15）：可选第二个生成器体，落到
+# `ccswitch/scripts/gen-guarded-files.mjs`。不传就不建这个文件——保持场景 12/13/14
+# 那种「只有 clause-index 这一件派生物」的夹具不变，两件派生物的正负控互不干扰。
 function New-ClauseGenFixture {
-    param([string]$Case, [string]$GenBody)
+    param([string]$Case, [string]$GenBody, [string]$GuardedFilesGenBody)
     $dir    = Join-Path $workRoot $Case
     $origin = Join-Path $dir 'origin.git'
     $work   = Join-Path $dir 'work'
@@ -298,6 +301,9 @@ function New-ClauseGenFixture {
     $genDir = Join-Path $work 'ccswitch/scripts'
     New-Item -ItemType Directory -Force -Path $genDir | Out-Null
     [IO.File]::WriteAllText((Join-Path $genDir 'gen-clause-index.mjs'), $GenBody, $utf8NoBom)
+    if ($PSBoundParameters.ContainsKey('GuardedFilesGenBody')) {
+        [IO.File]::WriteAllText((Join-Path $genDir 'gen-guarded-files.mjs'), $GuardedFilesGenBody, $utf8NoBom)
+    }
     Git0 @('-C', $work, 'add', '-A') | Out-Null
     Git0 @('-C', $work, 'commit', '--quiet', '-m', 'seed with generator') | Out-Null
     Git0 @('-C', $work, 'branch', '-M', 'main') | Out-Null
@@ -691,6 +697,44 @@ if (-not $nodeAvailable) {
         (($r14b.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r14b.Text))) ''
     Assert-True '14b-5 远程分支原封不动（没合的东西不许动分支——若 3.5 被误跳过，过期索引连同这条分支会被真的合掉）' `
         (Test-RemoteBranch -OriginDir $f14b.Origin -Branch $f14b.Branch) ''
+
+    # ========================================================================
+    # 场景 15（issue #209 缺口 2）：3.5 步扩接 guarded-files.json，不再只护 clause-index
+    # ========================================================================
+    # 3.5 步现在遍历一份派生物清单（$derivativeChecks），逐件调用各自的 --check。
+    # 场景 12/13/14 只验证过清单里第一件（clause-index）；本场景验证第二件
+    # （guarded-files）真的被核对到了——不是清单摆在那里没人跑。
+    Write-Host '场景 15：3.5 步扩接 guarded-files.json（issue #209 缺口 2，两件派生物独立核对）'
+
+    $gfOk    = 'process.stdout.write("GUARDED_FILES_SUMMARY exit=0 tests=1 mutation_tests=1 files=1 drift=none wrote=0\n"); process.exit(0);'
+    $gfDrift = 'process.stdout.write("GUARDED_FILES_SUMMARY exit=1 tests=1 mutation_tests=1 files=1 drift=content wrote=0\n"); process.exit(1);'
+
+    Write-Host '  15a：两件生成器都干净 ⇒ 3.5 步两件都真的核对到，全链照常 exit 0'
+    $f15a = New-ClauseGenFixture -Case 'both-gen-ok' -GenBody $genOk -GuardedFilesGenBody $gfOk
+    $r15a = Invoke-Target -Fixture $f15a -Cfg (New-StubConfig -Fixture $f15a)
+
+    Assert-True '15a-1 全链仍然 exit 0（两件派生物都干净，互不拖累）' `
+        ($r15a.ExitCode -eq 0) ("exit={0}" -f $r15a.ExitCode)
+    Assert-True '15a-2 clause-index 与 guarded-files 两句「仍与源一致」都真的打出来了（不是只跑了清单第一件）' `
+        (($r15a.Text -match 'clause-index 仍与源一致') -and ($r15a.Text -match 'guarded-files 仍与源一致')) $r15a.Text
+    Assert-True '15a-3 走到了第 6 步（两件核对都没有挡住后续流程）' (Test-ReachedStep6 $r15a.Text) ''
+
+    Write-Host '  15b（核心）：clause-index 干净但 guarded-files 过期 ⇒ 3.5 步在第二件上 Fail，不靠第一件绿混过去'
+    $f15b = New-ClauseGenFixture -Case 'gf-drift' -GenBody $genOk -GuardedFilesGenBody $gfDrift
+    $r15b = Invoke-Target -Fixture $f15b -Cfg (New-StubConfig -Fixture $f15b)
+
+    Assert-True '15b-1 exit 2（跑到一半失败）' `
+        ($r15b.ExitCode -eq 2) ("exit={0}" -f $r15b.ExitCode)
+    Assert-True '15b-2 🔴 核心：报文点名是 guarded-files 过期，不是 clause-index（清单第一件干净，真正拦下合并的是第二件）' `
+        ($r15b.Text -match 'guarded-files 在合并后的树上过期') $r15b.Text
+    Assert-True '15b-3 clause-index 那件确实先被核对过并且干净——不是压根没跑到就被 guarded-files 抢先拦下' `
+        ($r15b.Text -match 'clause-index 仍与源一致') $r15b.Text
+    Assert-True '15b-4 修法建议点名的是 guarded-files 自己的脚本与产物文件，不是错指到 clause-index 那份' `
+        (($r15b.Text -match 'gen-guarded-files\.mjs` 重新生成') -and ($r15b.Text -match 'guarded-files\.json')) $r15b.Text
+    Assert-True '15b-5 停在第 4 步之前：**不**发出任何 gh pr merge（分支态的过期不许被合进去）' `
+        (($r15b.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r15b.Text))) ''
+    Assert-True '15b-6 远程分支原封不动（没合的东西不许动分支）' `
+        (Test-RemoteBranch -OriginDir $f15b.Origin -Branch $f15b.Branch) ''
 }
 
 # ---- 汇总 -------------------------------------------------------------------
