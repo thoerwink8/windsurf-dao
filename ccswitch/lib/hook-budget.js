@@ -207,9 +207,15 @@ function scanSettingsFile(settingsPath, baseNoExt) {
  * `.../settings` 两页，2026-08-08 核实）：**两处的 `hooks` 是合并语义，不是覆盖语义**——
  * 「Hook entries merge across settings levels rather than replacing each other: user, project,
  * and local settings add their own hooks without removing managed ones」「All matching hooks run
- * in parallel」。**唯一的去重例外**：同一个 handler（command / timeout / matcher 逐字相同）
- * 在多处出现时只跑一次；只要有一个字段不同（最典型就是 timeout 不同），两条各自独立跑，
- * **各自的进程各自算各自的墙钟**。
+ * in parallel」「If you define the same handler in more than one settings file, it runs once.
+ * A plugin's or skill's copy of the same handler stays separate.」——**以上四句是官方文档原文**，
+ * 最后一句说明去重确实存在（合并语义下不是每条命中都各起一个进程），但**文档没有定义
+ * 「同一个 handler」的判据**——这一点原版 JSDoc 曾写成「command/timeout/matcher 逐字相同」，
+ * 读起来像文档结论，**实为本模块自己的推论，已按对抗验证意见订正标注**：
+ * **下面这句是推论、不是文档引用**——保守地把「同一个 handler」理解为 command/timeout/matcher
+ * 逐字相同才算同一条（任一字段不同，最典型是 timeout 不同，就当两条独立跑）。这是**安全侧**
+ * 的推论：宁可把两条实际相同的注册误判成两个独立进程（多算，不影响正确性），也不要反过来把
+ * 两条其实不同的注册误判成「同一个 handler 只跑一次」而漏掉一条真实存在的注册。
  * ⇒ 对本模块的含义：如果同一个 hook 文件同时在用户级（如 10s）与项目级（如 3s）挂了注册，
  * 宿主会起**两个独立进程**，一个被 10s 那条杀、一个被 3s 那条杀。**每个进程读到的
  * settings.json 是同一份内容**（它分不出自己是被哪条注册触发的那一次）——正因如此，
@@ -220,9 +226,16 @@ function scanSettingsFile(settingsPath, baseNoExt) {
  * ⚠️ **已知缺口，照直写**：只加了项目级 `.claude/settings.json` 这一层，**没有**加
  * `.claude/settings.local.json`（宿主文档里 local 优先级比 project 更高，同样走合并语义）——
  * issue #142 的关闭条件只点名项目级，local 层留作后续，别把这次的覆盖读成「所有 scope 都查了」。
- * **两态断言**（关闭条件③）：只有用户级 ⇒ note 不带 scope 后缀（与旧版逐字节相同）；
- * 用户级 + 项目级都被扫到 ⇒ note 带一段「已核对 N 处 scope」，逐处报「有没有找到我」，
- * 不管有没有命中都报——「查过但零命中」与「压根没查」必须分得开。
+ * ~~**两态断言**（关闭条件③）：只有用户级 ⇒ note 不带 scope 后缀（与旧版逐字节相同）~~
+ * **订正（对抗验证坐实，见 tests/hook-budget.tests.js 测试①）**：分界线不是「命中了几处」，
+ * 是「调用方给没给 `settingsPath`」——显式给了（既有调用方/单测）⇒ scopeReport 恒空 ⇒
+ * 恒不带后缀，note 与旧版逐字节相同；**自动路径下只要尝试了一个以上的 scope 就带后缀，
+ * 不管命中与否**（项目级文件缺失也算「尝试过」，报 `project(读取失败)`）——真实场景里
+ * user 与 project 路径不同就必然是两处，"只有用户级有注册"这种**命中面**上的单数状态，
+ * note 依然带着 scope 后缀，因为**两个路径都被查过**。
+ * **两态断言**（关闭条件③）实际打在「settingsPath 有没有传」这条线上，不是「查到几处」：
+ * 显式单路径 ⇒ 无后缀；自动多路径 ⇒ 逐处报「有没有找到我」，不管有没有命中都报——
+ * 「查过但零命中」与「压根没查」必须分得开。
  */
 function resolveRegisteredTimeoutMs(opts) {
   const o = opts || {};

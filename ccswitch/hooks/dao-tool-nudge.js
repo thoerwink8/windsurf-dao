@@ -56,12 +56,18 @@
 // ~~🔴 它此刻大概率投递不到,照直写:本 hook 在 live settings.json 里注册的 PostToolUse
 // matcher 是 `Bash`,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
 // ⇒ 第 ④ 类的代码在这里、投递为零~~ **2026-08-08 订正**:matcher 早已扩过(`e9e9fdc`
-// 「快照层同步 hook 注册四项——G6/MCP扩面/…」),live 与快照两层此刻都是
-// `Bash|mcp__chrome-devtools__.*|mcp__playwright__.*` —— 第 ④ 类**这一格已在响**,
-// 上面那段「大概率投递不到」是写下之后没跟着改的旧结论,不是当前实况。
+// 「快照层同步 hook 注册四项——G6/MCP扩面/…」)——**本 PR 改动之前**,live 与快照两层
+// 都是 `Bash|mcp__chrome-devtools__.*|mcp__playwright__.*`,第 ④ 类**这一格已在响**,
+// 上面那段「大概率投递不到」是写下之后没跟着改的旧结论,不是那时的实况。
+// ⚠ **本 PR 又把这句话写过期了一次,照直记这个教训**:上面订正时只核过 live/快照两层的
+// 历史状态,没意识到**同一个 commit 下面几段** ⑦ 又把快照层改成了
+// `Bash|PowerShell|mcp__chrome-devtools__.*|mcp__playwright__.*`——于是这段订正落盘的
+// 那一刻就已经不真:live 与快照从此不再相同(live 待帅走「四处同落」才跟上)。
+// **教训**:订正一句"两处此刻相同"的陈述前,先问同一批改动有没有正在动其中一处。
 // **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
 // 那个自检逐面核对 matcher 覆盖不覆盖 Bash 面与 MCP 面,缺一即 exit 1
-// (2026-08-08 起 Bash 面已并入 `Bash|PowerShell`,见下方 ⑦ 段)。
+// (2026-08-08 起 Bash 面已并入 `Bash|PowerShell`,见下方 ⑦ 段——这也正是让上面那句
+// "两层此刻相同"过期的改动)。
 //
 // ── ⑤ 热重载 dev server 起在主仓树(2026-08-02 加,dao 整体重写批 1-D)───────────
 // dao.md 帅节:「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起,不从主仓树
@@ -128,7 +134,13 @@
 //     每一行都会被包成 NativeCommandError,`$ErrorActionPreference='Stop'` 下会把正常的
 //     进度提示误判成终止性错误、中断脚本(同判据见 dao-officer-clauses.md「禁重定向捕获」)。
 //   · Bash 风格 heredoc(`<<EOF` 一类):PowerShell 没有这个语法,字面写出来是 ParserError
-//     (`dao-powershell.md` 与 dao-officer-clauses.md「编码铁律」段落都记过这个真实事故)。
+//     (真实事故记在 `dao-officer-clauses.md`「编码铁律」段落——PR #117 那次「官先试了
+//     `--body "$(cat <<'EOF' …)"`」的实证)。
+//     ⚠ **顺手核实一处坐标,照直记**:`rules/scoped/dao-scope-powershell.md`(触发器文件)
+//     自称它指向的 `dao-powershell.md` 里有「禁 PowerShell 里的 Bash heredoc」这条判据,
+//     但实读 `dao-powershell.md` 当前 5 条判据(假错/编码/消费侧编码/`-File`退出码/inline长命令)
+//     里**没有 heredoc 相关内容**——那个触发器文件的坐标此刻是空指针。这不在本批四单范围内,
+//     不在此顺手改那两份文件,只在本条別再引用 `dao-powershell.md`。
 //     判据取 `<<` 紧跟一个标识符——PowerShell 合法语法里 `<<` 不出现在任何形态
 //     (位移是 `-shl`/`-shr`,不是 `<<`/`>>`),故这是一个高精度信号,不需要更多上下文。
 //
