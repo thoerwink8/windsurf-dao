@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
+import { probeMcpHealth, evaluateMcpHealth } from './mcp-health.mjs';
 
 const REQUIRED_CLAUDE_ENV = {
   CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
@@ -49,6 +50,9 @@ function main() {
 
   section('客户端 MCP 同步');
   checkClientMcpSync();
+
+  section('MCP 健康态（claude mcp list，issue #92）');
+  checkMcpHealth();
 
   section('Windows Terminal 配色');
   checkTerminalSync();
@@ -335,6 +339,29 @@ function reportMcpDiff(label, target, expected, actual) {
   const extra = actual.filter((name) => !expectedSorted.includes(name));
   if (!missing.length && !extra.length) pass(`${label} MCP 与 cc-switch 一致：${target}（${actual.length} 个）`);
   else warn(`${label} MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
+}
+
+// ── MCP 健康态（issue #92）──────────────────────────────────────────────────
+// 上面 checkClientMcpSync 那组只答"配置里写没写这个 server"（注册态），本节答
+// "它现在连不连得上"（生效态）——issue #92 记录的病正是这两者被分开却无人例行看差异。
+// 判据全部在 config-sync/lib/mcp-health.mjs（parseMcpListOutput / probeMcpHealth /
+// evaluateMcpHealth 三个纯函数 + 一层薄薄的 I/O 边界），本函数只做取数与打印，
+// 不复述判据——那份文件头注是唯一真相源。
+// 成本照直写：`claude mcp list` 本机实测 6-15 秒（issue 原文记录过一次 30s+），
+// 这是它只挂在这里（显式体检）、不放进 SessionStart 同步路径的唯一理由。
+function checkMcpHealth() {
+  const expected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
+  if (!expected.length) {
+    warn('cc-switch db 里没有 enabled_claude=1 的 MCP server，跳过健康探测。');
+    return;
+  }
+  const probe = probeMcpHealth({});
+  const { lines } = evaluateMcpHealth(expected, probe);
+  for (const line of lines) {
+    if (line.level === 'pass') pass(line.message);
+    else if (line.level === 'fail') fail(line.message);
+    else warn(line.message);
+  }
 }
 
 function checkTerminalSync() {
