@@ -68,7 +68,7 @@ node scripts/run-tests.mjs                    # ★ 聚合入口（默认层）�
                                               #     且标了 env 的那几套 .ps1 整套没跑（两条路各自都能把 2 顶起来，见下）
                                               #   PS 侧默认层只跑「快且并行安全」的那几套（当前是 link-codex 两套，≈2.6s）
 node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全部 .ps1 套** —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
-                                              #   PS 层 6 套串行 ≈150s，故它比默认层慢；要求串行环境（见下）
+                                              #   PS 层 6 套串行 ≈100-150s（同机不同次波动），故它比默认层慢；要求串行环境（见下）
 node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\<名>.tests.ps1   # 单跑一套 PS 测试（自带 Assert-*，独立可跑）
