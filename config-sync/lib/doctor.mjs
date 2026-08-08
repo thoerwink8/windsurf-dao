@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
+import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 
 const REQUIRED_CLAUDE_ENV = {
   CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
@@ -49,6 +50,9 @@ function main() {
 
   section('客户端 MCP 同步');
   checkClientMcpSync();
+
+  section('MCP 健康态（claude mcp list，issue #92）');
+  checkMcpHealth();
 
   section('Windows Terminal 配色');
   checkTerminalSync();
@@ -335,6 +339,48 @@ function reportMcpDiff(label, target, expected, actual) {
   const extra = actual.filter((name) => !expectedSorted.includes(name));
   if (!missing.length && !extra.length) pass(`${label} MCP 与 cc-switch 一致：${target}（${actual.length} 个）`);
   else warn(`${label} MCP 与 cc-switch 不一致：${target} missing=[${missing.join(',')}] extra=[${extra.join(',')}]`);
+}
+
+// ── MCP 健康态（issue #92）──────────────────────────────────────────────────
+// 上面 checkClientMcpSync 那组只答"配置里写没写这个 server"（注册态），本节答
+// "它现在连不连得上"（生效态）——issue #92 记录的病正是这两者被分开却无人例行看差异。
+// 判据全部在 config-sync/lib/mcp-health.mjs（parseMcpListOutput / probeMcpHealth /
+// evaluateMcpHealth 三个纯函数 + 一层薄薄的 I/O 边界），本函数只做取数与打印，
+// 不复述判据——那份文件头注是唯一真相源。
+// 成本照直写：`claude mcp list` 本机实测 6-15 秒（issue 原文记录过一次 30s+），
+// 这是它只挂在这里（显式体检）、不放进 SessionStart 同步路径的唯一理由。
+//
+// 🔴 **2026-08-08 对抗复核实证：期望名单的宇宙曾经取错了**——旧版只查 cc-switch DB
+// 的 `enabled_claude=1`，而 `claude mcp list` 实际会报出**所有**它认识的 server，
+// 两者不是一回事：本机当天 DB 只登记 5 个，`claude mcp list` 实报 7 个，多出的
+// `opendesign`/`penpot` 只注册在 Claude Code 自己那边（不在 cc-switch DB 里）。
+// `opendesign` 当天恰好是死连接，且正是 issue #92 表格点名的那三个死连接之一——
+// 旧版因为它不在 DB 期望集里而**静默跳过**，issue 的关闭条件在它自己点名的样本上
+// 反而不成立。上面两行之外那一节（`checkClientMcpSync`）其实已经算出了这个差集
+// （`extra=[opendesign,penpot]`），只是没被这一节用上。
+// 修法：期望集改成「DB 期望集 ∪ 探测实见」的并集——探测实见但不在 DB 里的 server
+// 照样按 dead/degraded/ok 判，只是报文里注明"不在 DB 名单里、来自实报"，让读者
+// 明白它为什么会出现在这份体检里。
+function checkMcpHealth() {
+  const dbExpected = selectRows('mcp_servers', 'WHERE enabled_claude = 1 ORDER BY name').map((row) => row.name);
+  const probe = probeMcpHealth({});
+  const universe = computeMcpUniverse(dbExpected, probe);
+  if (!universe.length) {
+    warn(probe.state === 'ok'
+      ? 'cc-switch db 里没有 enabled_claude=1 的 MCP server，claude mcp list 输出也没有任何 server，跳过健康探测。'
+      : `cc-switch db 里没有 enabled_claude=1 的 MCP server，且探测本身没有跑成（${probe.why || probe.state}），跳过健康探测。`);
+    return;
+  }
+  const dbExpectedSet = new Set(dbExpected);
+  const { lines } = evaluateMcpHealth(universe, probe);
+  for (const line of lines) {
+    const extraSuffix = dbExpectedSet.has(line.name) ? '' :
+      '（不在 cc-switch DB 的 enabled_claude 名单里，来自 claude mcp list 实报）';
+    const message = line.message + extraSuffix;
+    if (line.level === 'pass') pass(message);
+    else if (line.level === 'fail') fail(message);
+    else warn(message);
+  }
 }
 
 function checkTerminalSync() {
