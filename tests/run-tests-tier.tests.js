@@ -607,8 +607,27 @@ console.log("\n──── ⑩ PS 层总预算闸（issue #186：这一格此�
     psRan(c.psSentinel, "a-slow.tests.ps1") &&
     !psRan(c.psSentinel, "b-rest.tests.ps1") && !psRan(c.psSentinel, "c-rest.tests.ps1"),
     (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
-  check("⑩ 逐套打明细：剩下的**每一套**都有自己那一行（只报个数字等于没报）",
-    /b-rest\.tests\.ps1/.test(r.out) && /c-rest\.tests\.ps1/.test(r.out), r.out.slice(-1400));
+  // 🔴 **这一条 2026-08-08 由接手官按四向 mutation 的实测红集收紧**（issue #186 的
+  //   「mutation 复验」那一格）。原判据是 `/b-rest\.tests\.ps1/` —— 只问「这个名字在正文里
+  //   出现过吗」，而**闸被关掉时那两套照常跑、名字照常出现在汇总表里** ⇒ 它恒绿，
+  //   可它的名字说的是「它们各有一行未跑明细」。这正是 `[#官抗-断言名实核对]` 的形态：
+  //   名实不符只在交叉核对红集时现形（本节别的断言全红、独它绿），代码读不出来。
+  //   收紧后判据 = 未跑明细那一行 **与预算那个理由同时在场**（`—— PS 层总预算 <注入值>ms`），
+  //   而那句理由只有预算这条路打得出来（标记跳过那条路打的是另一句）。
+  //
+  // ── 四向 mutation 的红集（2026-08-08 实测，`scripts/run-tests.mjs` 那道闸）───────────
+  //   ①删整段         ⇒ 本节 7 红（收紧后 8）· 别处 0 红 · canary：其余 100 条照绿
+  //   ②`if (false &&…)`⇒ 与 ① **逐条相同**（那正是 PR #185 对抗官用过的形态）
+  //   ③摘掉 `continue`（判定照做、结果不被消费）⇒ **只有 2 红**：`psfiles` 那条 + sentinel
+  //     那条。⇒ **承担这一向的就是 sentinel**；「exit 2」那条在 ③ 下照绿（psskip 仍算得出 2），
+  //     故它证不了「闸的答案有没有人听」。别把它读成冗余覆盖。
+  //   ④`if (spent >= 0)`（恒真 · 反向）⇒ 26 红，其中本节 **4 条负控全部变红** ——
+  //     ①②③ 全在「让闸变松」这一侧，不跑反向就不知道那几条负控会不会红。
+  const detailLine = (name) =>
+    new RegExp("· tests/" + name.replace(/\./g, "\\.") + "\\s+—— PS 层总预算 500ms 已用尽");
+  check("⑩ 逐套打明细：剩下的**每一套**都有自己那一行「未跑 + 预算归因」（只报个数字等于没报）",
+    detailLine("b-rest.tests.ps1").test(r.out) && detailLine("c-rest.tests.ps1").test(r.out),
+    r.out.slice(-1400));
   check("⑩ 报文点名是「总预算」用尽，并把两个数都摆出来（预算值 + 已花）",
     /PS 层总预算 500ms 已用尽（已花 \d+ms）/.test(r.out), r.out.slice(-1400));
   // 🔴 归因：汇总表上「标记跳过」与「预算跳过」都只是一行 `⊘ 未跑`，而处置完全不同
