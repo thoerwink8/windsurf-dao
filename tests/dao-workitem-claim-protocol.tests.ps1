@@ -183,7 +183,9 @@ dao-claim: REALBOX/cc/4h
 认领格式是首行那个 `dao-claim:`，别写错了。
 </details>
 '@
-$mixed = @(Get-DaoMarks -Body $mixedBody)
+# 行尾归一化后再喂：本文件被 CRLF 检出时 here-string 行尾是 `r`n，dao-claim 行尾随 `r 会被
+# 字段校验挡掉（真实输入 gh api 是 LF；参考实现对 CRLF 输入的健壮性缺口另记 issue #215）。
+$mixed = @(Get-DaoMarks -Body ($mixedBody -replace "`r`n", "`n"))
 Assert-True '3a 混合评论体只命中 1 条（真认领），裸引用被字段校验挡住' `
     (@($mixed).Count -eq 1) ("命中 {0} 条：{1}" -f @($mixed).Count, (($mixed | ForEach-Object { $_.host }) -join ','))
 Assert-True '3b 命中的那一条确实是真认领（host=REALBOX）' `
