@@ -522,6 +522,13 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
   // （PR #175 对抗官三轮同族扫描扫出；`[#官抗-负控独立归因]` ②款的形态）。
   // 故拆两条，各自独立归因：①这一行在不在 ②它的内容干不干净。
   //
+  // **2026-08-09 追加范围（issue #172 笔 A，用户拍板选项①）**：上面这段历史是「零写入」
+  // 曾经结构性覆盖 `Bash` 的由来；现在 `Bash` 已合法加回 scout 的工具表（详见
+  // `ccswitch/agents/dao-scout.md` 正文），「只读」这半从结构性保证退回纪律约束
+  // （scout 的 `Bash` 只准跑只读命令，写命令违例，判据不在机器面）。本节因此变成三条断言：
+  // ①这一行在不在且认得出 ②**真正的写入工具**（Edit 家族 + Write）仍不在表里 ③`Bash`
+  // 现在**必须在**表里——判据见下。
+  //
   // 判据在这里**独立写死**，不 require 被守对象那侧（hook / 渲染器）的任何解析器 ——
   // 与被守物共用一个解析器，会让「找违例」和「确认我真看到了样本」一起瞎掉（`[#守-自检独立]`）。
   const scoutToolsOf = (text) => {
@@ -546,7 +553,12 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
   // `Edit` 前面那个 `k` 是词字符，两个词字符之间没有词边界，于是 `tools: Read, NotebookEdit`
   // 曾经两条全绿。而 NotebookEdit 是宿主真实存在的**写入**工具（会改 notebook 单元格），
   // 侦察官的红线是**全程零写入**，它当然在表里。长的排前面，匹配次序不留给引擎去猜。
-  const WRITE_TOOL_RE = /\b(NotebookEdit|MultiEdit|Edit|Write|Bash)\b/;
+  // **2026-08-09 摘掉 `Bash`（issue #172 笔 A，用户拍板选项①）**：侦察官条款自身要求收工写
+  // 「本轮零写入（`git status` 空）」——没有 `Bash` 跑不出 `git status`，`Explore` 载体也一直
+  // 有 `Bash`，同官种两个载体能力不该不一致。摘掉之后这条 regex 只再守**结构性写入工具**
+  // （Edit 家族 + Write）；`Bash` 合法与否改由下面的独立断言判（判据从「不许出现」变成
+  // 「必须出现」，两件事不能用同一条 regex 答，故分开）。
+  const WRITE_TOOL_RE = /\b(NotebookEdit|MultiEdit|Edit|Write)\b/;
   {
     const SCOUT = path.join(AGENTS_DIR, "dao-scout.md");
     // existsSync 兜一道：直接 readFileSync 会在 profile 被删时**抛异常整份测试当场终止**，
@@ -560,11 +572,20 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
     // 红的时候归因不出到底是哪一格坏了（`[#官抗-负控独立归因]` ①款）。
     // **代价照直写**：上一条已判红的那些形态（无行 / 空值 / 认不出）本条零样本、恒绿；
     // 那一格由上一条独占，且是实测的（issue #177 / PR #178 交付：四发破坏**各只红一条**，
-    // 分落两个互不相交的归因面 —— 删行 / `tools: *` ⇒ 只红上一条；塞 Bash / 塞 NotebookEdit
-    // ⇒ 只红本条）。**别把这句读成「四个红集两两互不相交」**：A 与 E 红的是同一条、
-    // B 与 D 红的是同一条，那是**设计如此**（同一格的两种形态），互不相交的是**两个面**。
-    check("dao-scout：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write/Bash（只读红线的另一半）",
+    // 分落两个互不相交的归因面 —— 删行 / `tools: *` ⇒ 只红上一条；塞 NotebookEdit ⇒ 只红本条。
+    // **塞 Bash 当时（PR #178 时点）也只红本条，但 2026-08-09 起 Bash 已合法化**——这句历史
+    // 归因只作既往实证保留，今天再复现同一发破坏不会得到同样的红集，别拿它当现状核对。
+    // **别把这句读成「四个红集两两互不相交」**：A 与 E 红的是同一条、B 与 D 红的是同一条，
+    // 那是**设计如此**（同一格的两种形态），互不相交的是**两个面**。
+    check("dao-scout：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write（结构性写入红线；Bash 见下一条，判据方向相反）",
       !WRITE_TOOL_RE.test(v.value || ""), JSON.stringify(v.value));
+    // **新增（2026-08-09，issue #172 笔 A 落地，用户拍板选项①）**：`Bash` 现在是**必须在**的
+    // 一格，不是必须不在——用户拍板「给 scout 加 Bash」，日后若有人手滑删掉，这条要能抓住。
+    // 判据是逐项精确匹配 `Bash`（按 `,` 切分后逐项 trim），不是子串匹配，避免误判
+    // `mcp__xxx-bash-runner` 这类形似长名（当前工具表里还没有这种名字，但判据先按误伤面写）。
+    const scoutItems = (v.value || "").split(",").map((s) => s.trim());
+    check("dao-scout：tools: 里含 Bash（2026-08-09 拍板：能力齐，只读改由正文用途限定 + 收工自陈兜底）",
+      scoutItems.includes("Bash"), JSON.stringify(v.value));
   }
   {
     // 合成语料：上面两条的判别力**不靠「真档此刻恰好长得对」兜着**。真档哪天被改成哪种形态，
@@ -573,7 +594,11 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
     const SAMPLES = [
       ["有 tools: 且干净", "---\nname: x\ntools: Read, Grep, Glob\n---\n正文", true, false],
       ["tools: 整行删掉（本 issue 的病灶）", "---\nname: x\ndescription: y\n---\n正文", false, false],
-      ["tools: 里塞了 Bash", "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, true],
+      // **2026-08-09 起 Bash 不再算「脏」（issue #172 笔 A 用户拍板）**：wantDirty 从 true
+      // 改 false——WRITE_TOOL_RE 现在只守结构性写入工具，Bash 合法与否由另一条独立断言判
+      // （方向相反：必须出现，不是必须不出现），这张合成样本只测 WRITE_TOOL_RE 这一侧。
+      ["tools: 里塞了 Bash（2026-08-09 起对 WRITE_TOOL_RE 而言不算脏）",
+        "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, false],
       ["tools: 里塞了 NotebookEdit（\\bEdit\\b 匹配不到它：前面那个 k 挡掉了词边界）",
         "---\nname: x\ntools: Read, NotebookEdit\n---\n正文", true, true],
       ["tools: * 通配（宿主认不认未证 ⇒ 认不出即 fail-closed，不判绿）",
