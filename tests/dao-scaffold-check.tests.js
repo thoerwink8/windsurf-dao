@@ -199,6 +199,12 @@ function run(cwd, extraEnv, hookPath) {
       HOME: FAKE_HOME,                                              // ③ 受控 settings
       DAO_SETTINGS_DRIFT_STATE_DIR: path.join(SANDBOX, "drift-state"), // ④ 心跳重定向
       DAO_SETTINGS_DRIFT_SELFTEST: "1",                             // ④ 强制 synthetic
+      // ⑤ scaffold-check 自身心跳（2026-08-09 · 机制体检①）同理改道 + 强制 synthetic：
+      // 不改道会让本文件几十个用例把心跳全部写进真实 <repo>/_tmp/scaffold-check/fired.log——
+      // 那份日志是 dao-compact-log.js 死闸检测挂载点的死活判据，不该被合成测试数据污染
+      // （与 ④ 同一个理由）。落在 SANDBOX 内部即可随 resetSandbox() 一并清理。
+      DAO_SCAFFOLD_CHECK_STATE_SUBDIR: path.posix.join(path.basename(SANDBOX), "hb-default-state"),
+      DAO_SCAFFOLD_CHECK_SELFTEST: "1",
     }, extraEnv || {}),
   });
   let json = null;
@@ -1195,7 +1201,15 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
   // 而 master（没有这张网）那一态是 exit 1 + 一段栈。⇒ 这条路上网让消费方看到的**更少**。
   // 修法：写失败 ⇒ stderr 出一行 + 退出码非 0（**不是 2**：2 是 block 语义）。
   const STDOUT_THROW_ANCHOR = /(let emitted = false;)(\r?\n)/;
-  const NOTHING_ANCHOR = /(function inject\(context\) \{\r?\n)  emitOnce\(context\);\r?\n/;
+  // 2026-08-09 · 心跳自证接入后订正：原锚点要求 `emitOnce(context);` 紧跟在
+  // `function inject(context) {` 后一行，而 `inject()` 现在先写一行 `writeHeartbeat(...)`
+  // 再调 `emitOnce`——旧锚点因此恒不命中（`SRC.split(anchor).length===2` 那条自检会先红，
+  // 但这条更隐蔽：正则的 `.test()` 静默返回 false，`anchorNothing` 变假，下面几条断言
+  // 全部空转，对照臂却仍然「正常」跑完 emitOnce 而写出真实报文）。改为只锚定
+  // `emitOnce(context);` 那一行本身（在本文件内唯一——`function emitOnce(context) {`
+  // 后面跟的是 `{` 不是 `;`，不会被这个模式命中），不再要求它是函数体第一行，
+  // 换来对「这一行前面还会插入别的什么」免疫。
+  const NOTHING_ANCHOR = /  emitOnce\(context\);\r?\n/;
   let anchorThrow = false, anchorNothing = false;
 
   const wThrow = run(cwd, env, mkBrokenLibTree("stdout-throw", null, (p) => {
@@ -1208,7 +1222,7 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
   const nothing = run(cwd, env, mkBrokenLibTree("nothing-to-say", null, (p) => {
     const src = fs.readFileSync(p, "utf8");
     anchorNothing = NOTHING_ANCHOR.test(src);
-    fs.writeFileSync(p, src.replace(NOTHING_ANCHOR, "$1  void context;\n"), "utf8");
+    fs.writeFileSync(p, src.replace(NOTHING_ANCHOR, "  void context;\n"), "utf8");
   }));
   check("mutation 锚点仍在（stdout 抛出 / 无事可报，锚失效则下面几条空转）",
     anchorThrow && anchorNothing, `throw=${anchorThrow} nothing=${anchorNothing}`);
@@ -1246,7 +1260,11 @@ console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的�
   // PR #150 对抗 M1 实测它零覆盖，而恰恰是它把上面那条路从「响」变成「静默」。
   // 两态（守卫在 / 摘掉守卫）在**写完之后才崩**这个态上可观测地不同：
   //   守卫在 ⇒ 一段合法 JSON（实测 2184 B）；摘掉 ⇒ **两段拼在一起、非法 JSON**（2844 B）。
-  const LATE_THROW_ANCHOR = /(function inject\(context\) \{\r?\n  emitOnce\(context\);\r?\n)/;
+  // 2026-08-09 · 同上一处订正，理由相同：`inject()` 现在先写一行 `writeHeartbeat(...)`
+  // 再调 `emitOnce`，旧锚点要求 `emitOnce(context);` 紧跟函数签名，因此恒不命中。
+  // 改锚只咬 `emitOnce(context);` 那一行本身（本文件内唯一），在它之后插入 throw——
+  // 语义不变（「写完之后才崩」），只是不再要求它是函数体第一行。
+  const LATE_THROW_ANCHOR = /(  emitOnce\(context\);\r?\n)/;
   const GUARD_ANCHOR = /  if \(emitted\) return;\r?\n/;
   let anchorLate = false, anchorGuard = false;
   const lateThrow = (tag, dropGuard) => run(cwd, env, mkBrokenLibTree(tag, null, (p) => {
@@ -1466,6 +1484,114 @@ if (process.platform !== "win32") {
     !SELMAP_DEGRADED.test(cWithMap) && !PARSER_DEGRADED.test(cWithMap), "条款闸相关行=\n" + selCtx(cWithMap));
   check("对照组：同一棵树上条款闸同样跑得出来（证明这棵夹具本身是活的）",
     /条款库结构闸绿/.test(cWithMap), "条款闸相关行=\n" + selCtx(cWithMap));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 心跳自证：每次真实触发写一行到 _tmp/scaffold-check/fired.log（机制体检①）===");
+// 治的是什么病：scaffold-check 是审计一切的挂载总线（死闸检测/预算闸/条款闸都跑在它
+// 里面），却自己从不写触发日志——「它死了」与「本轮无事可报」在盘上逐字节相同。
+// 本节验三件事：①`inject()`（有发现）与 `done("skip-not-git")`（最早退出口）两条正常
+// 路径各自都落一行心跳；②`synthetic` 字段随 payload/env 正确翻转；③先破再验：把
+// `writeHeartbeat()` 摘成 no-op，fired.log 就不再新增——证明①的断言真的在测「心跳被
+// 调用了」，不是在测一个恒真的旁路。
+{
+  const cwd = mkproj("hb-inject-proj", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true }); // 缺 CLAUDE.md ⇒ issues>0 ⇒ 走 inject()
+  });
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "hb-inject-state");
+  const r = run(cwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir });
+  check("前提：走的确实是 inject()/reported 分支（有「缺少 CLAUDE.md」发现）",
+    /缺少 CLAUDE\.md/.test(ctx(r)), "ctx=" + ctx(r).slice(0, 200));
+  const firedPath = path.join(SANDBOX, "hb-inject-state", "fired.log");
+  check("inject() 路径 → fired.log 写了正好一行",
+    fs.existsSync(firedPath) && fs.readFileSync(firedPath, "utf8").trim().split(/\r?\n/).length === 1,
+    firedPath);
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(firedPath, "utf8").trim()); } catch (_) {}
+  check("心跳字段：result=reported / mode=B / issues>0 / synthetic=true（默认 env 强制自测）",
+    !!rec && rec.result === "reported" && rec.mode === "B" && rec.issues > 0 && rec.synthetic === true,
+    "rec=" + JSON.stringify(rec));
+  check("心跳字段：at 是可解析的时间戳", !!rec && Number.isFinite(Date.parse(rec.at)), "rec=" + JSON.stringify(rec));
+}
+{
+  // done("skip-not-git") 路径：本文件全部退出口里最早的一个，早退出口不豁免写心跳。
+  const root = path.join(SANDBOX, "hb-skip-proj");
+  fs.mkdirSync(root, { recursive: true }); // 故意不放 .git
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "hb-skip-state");
+  const r = run(root, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir });
+  check("前提：走的确实是非 git 早退出口（stdout 全空）", r.out === "", "out=" + JSON.stringify(r.out.slice(0, 100)));
+  const firedPath = path.join(SANDBOX, "hb-skip-state", "fired.log");
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(firedPath, "utf8").trim()); } catch (_) {}
+  check('done("skip-not-git") 路径也写心跳（不因「无事可报」就不写）',
+    !!rec && rec.result === "skip-not-git", "rec=" + JSON.stringify(rec));
+}
+{
+  // synthetic 字段：默认 env 强制 synthetic=true；清空该 env 且 payload 带 transcript_path
+  // 时应变成 false（判据与 hook-selfcheck.js::isSynthetic 一致，此处只钉字段真的透传）。
+  const cwd = mkproj("hb-synthetic-proj", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+  });
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "hb-synthetic-state");
+  run(cwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir, DAO_SCAFFOLD_CHECK_SELFTEST: "" });
+  const firedPath = path.join(SANDBOX, "hb-synthetic-state", "fired.log");
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(firedPath, "utf8").trim()); } catch (_) {}
+  check("synthetic 字段：清空自测 env 且 payload 带 transcript_path → synthetic=false",
+    !!rec && rec.synthetic === false, "rec=" + JSON.stringify(rec));
+}
+{
+  // ── 先破再验：writeHeartbeat() 摘成 no-op ⇒ fired.log 不再新增 ──────────────
+  // 单行锚点（行尾差异咬不到它），mutation 直接改函数体首行让它立即 return——
+  // 保留调用与其余行为、只摘掉这一件事，同 dao-guard-writing.md「改坏多形态」②
+  // （保留字面但使其不执行）那一向。
+  const ANCHOR = "function writeHeartbeat(result, counts) {";
+  const SRC = fs.readFileSync(HOOK, "utf8");
+  check("mutation 靶点在源码里唯一存在（writeHeartbeat）", SRC.split(ANCHOR).length === 2,
+    "出现 " + (SRC.split(ANCHOR).length - 1) + " 次");
+  const hookCopy = mkBrokenLibTree("hb-mut", null, (hp) => {
+    const s = fs.readFileSync(hp, "utf8");
+    fs.writeFileSync(hp, s.replace(ANCHOR, ANCHOR + " return;"), "utf8");
+  });
+  // `mkBrokenLibTree` 只拷 ccswitch/{hooks,lib} 下的 .js，不含 ccswitch/templates/——
+  // manifestIssueLines 在这棵沙箱树里因此拿不到「缺少 CLAUDE.md」那条 canonical 模板校验，
+  // 会报一条不相干的「template.src 不存在」。改用本文件既有的 canary 信号：`mkMetaRepo` +
+  // 一个未注册的探针 hook 文件——那条判据只扫 `ccswitch/hooks/` 目录，与 templates/
+  // manifest 无关，同本文件「lib 坏掉时不许整批静默消失」那组测试用的是同一手法
+  // （`dao-brokenlib-probe.js`），此处换个探针名避免与那组撞名。
+  const cwd = mkMetaRepo("hb-mut", [`${REGISTERED}.js`, "dao-hb-mut-probe.js"]);
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "hb-mut-state");
+  const r = run(cwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir }, hookCopy);
+  const firedPath = path.join(path.resolve(path.dirname(hookCopy), "..", ".."), "_tmp", stateSubdir, "fired.log");
+  check("🔴 先破再验：writeHeartbeat() 摘成 no-op ⇒ fired.log 压根没被创建",
+    !fs.existsSync(firedPath), firedPath);
+  check("canary：变异体还活着（报告内容不受影响——只有心跳这一件事被摘掉，不是整个 hook 崩了）",
+    /dao-hb-mut-probe/.test(ctx(r)), "ctx=" + ctx(r).slice(0, 300));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 心跳基建（hook-selfcheck.js）自身加载失败必须出声，不静默吞 ===");
+// 与本文件其余 4 处 lib 加载失败（settings-drift / scaffold-manifest / hook-budget /
+// clause-parser）同一套惯例：这恰是「心跳自证」要治的循环依赖的又一实例——一个「证明我
+// 还活着」的机制若自己悄悄坏掉，比没有它更危险（会让人误以为已经有人在盯）。
+{
+  const hookCopy = mkBrokenLibTree("hb-libfail", null, (hp) => {
+    const libDir = path.join(path.dirname(path.dirname(hp)), "lib");
+    fs.writeFileSync(path.join(libDir, "hook-selfcheck.js"), "module.exports = {{{ 语法错误", "utf8");
+  });
+  // 同上一组的理由（模板目录在这棵沙箱树里不存在，manifestIssueLines 报的是另一条不相干
+  // 的发现）：改用 `mkMetaRepo` + 未注册探针 hook 文件当「其余检查照跑」的可靠信号。
+  const cwd = mkMetaRepo("hb-libfail", [`${REGISTERED}.js`, "dao-hb-libfail-probe.js"]);
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "hb-libfail-state");
+  const r = run(cwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir }, hookCopy);
+  const c = ctx(r);
+  check("心跳基建（hook-selfcheck.js）加载失败 → 报出一行 ✗（不静默吞）",
+    /✗ 心跳基建加载失败/.test(c), "ctx=" + c.slice(0, 500));
+  check("心跳基建加载失败 → 其余检查照跑（原有「未注册 hook」发现仍在）",
+    /dao-hb-libfail-probe/.test(c), "ctx=" + c.slice(0, 500));
+  const firedPath = path.join(path.resolve(path.dirname(hookCopy), "..", ".."), "_tmp", stateSubdir, "fired.log");
+  check("心跳基建坏掉 → fired.log 压根没被创建（hbScaffold 全程为 null，heartbeat 是彻底的 no-op）",
+    !fs.existsSync(firedPath), firedPath);
 }
 
 // ── 清理 ────────────────────────────────────────────────────────────────────

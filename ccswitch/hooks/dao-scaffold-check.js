@@ -461,6 +461,76 @@ function manifestIssueLines(projectRoot) {
   return lines;
 }
 
+// ── 心跳自证（2026-08-09 · 机制体检报告 `_tmp/mechanism-audit-20260809.md` §二 🟡①）───
+// 治的是什么病：本 hook 是审计一切的挂载总线（30 天 34 次维护，全仓维护热点断层第一），
+// 却自己从不写触发日志——更要命的是**循环依赖**：唯一能发现「它死了」的死闸检测 /
+// always-on 预算闸 / 条款库结构闸 / per-provider 漂移检测，全部**跑在它自己里面**，
+// 它一停，这些检查跟着一起停，而它的输出与「本轮无事可报」（`done()`）在盘上逐字节相同。
+//
+// 复用既有形态，不新造：与 dao-rule-echo / dao-compact-log / dao-rate-limit-sentinel /
+// dao-probe-gate 同一套脚手架（`ccswitch/lib/hook-selfcheck.js`），fired.log/last.json
+// 落 `<dao 根>/_tmp/scaffold-check/`。`stateSubdir` 可用 `DAO_SCAFFOLD_CHECK_STATE_SUBDIR`
+// 改道（测试专用，别覆盖生产那份 fired.log——理由同 dao-probe-gate.js 头注那一条）。
+//
+// **谁在读它，读心跳的人必须在另一个事件上**：见 `dao-compact-log.js`（PostCompact）的
+// 「scaffold-check 死闸检测的挂载点」——本 hook 自己若真的停摆，靠本 hook 自己去发现
+// 自己停摆就是原地保留循环依赖，只是换了个身位（机制体检报告原话）。
+//
+// **写入时机只有 `done()` / `inject()` 两个正常退出口**（本文件全部非崩溃路径都经这两个
+// 函数，见文件末尾）。**刻意不覆盖 `uncaughtException` 那条路**：一个持续崩溃的
+// scaffold-check 不该被心跳判成「活着」——陈旧判定要回答的是「它还在正常完成工作吗」，
+// 不是「宿主还在调用它吗」；把崩溃也算进心跳，会让「它一直在崩」与「它很健康」在陈旧检测
+// 眼里长得一样。崩溃本身已经由文件顶部那张 uncaughtException 网，通过 stdout 报文在
+// 当次会话内可见——心跳服务的是跨会话/跨天的「它是不是已经沉默了很久」这个不同的问题。
+let hbScaffold = null, HB_LIB_ERROR = "";
+try {
+  hbScaffold = require("../lib/hook-selfcheck.js").createHookScaffold({
+    name: "dao-scaffold-check",
+    stateSubdir: process.env.DAO_SCAFFOLD_CHECK_STATE_SUBDIR || "scaffold-check",
+    failTail: "本次心跳未记录；hook 不阻断（心跳是旁证，不是主产物）",
+    forceErrorEnv: "DAO_SCAFFOLD_CHECK_HEARTBEAT_FORCE_ERROR",
+    selfTestEnv: "DAO_SCAFFOLD_CHECK_SELFTEST",
+  });
+} catch (e) {
+  HB_LIB_ERROR = e && e.message ? e.message : String(e);
+}
+// 结果摘要字段刻意精简（字段量级呼应 dao-probe-gate 的心跳）：`result` 是本轮走的是哪条
+// 退出路径（`skip-not-git` / `clean` / `reported`），三个计数只在 `result==="reported"`
+// 时非零。陈旧判定只需要「最后一次真实心跳是什么时候」，字段堆多了只会多一处要维护的口径。
+function writeHeartbeat(result, counts) {
+  if (!hbScaffold) return;
+  // `mode` 求值挪到 try **外**（2026-08-09，PR #223 对抗验证评论 5230508080 挂账㈢）：
+  // `isMetaRepo` 是文件下方「模式 B」大注里才声明的 TDZ `const`，若留在 try 内部引用，
+  // 一旦真的撞上 TDZ（今天不可达，见 inject()/done() 那段大注新增的说明），会被这个函数
+  // 自己「心跳失败不该拖垮主产物」的 catch 悄悄吞掉——退出码依旧 0、stdout/stderr 都不
+  // 出声，心跳静默丢失，正是本节要治的病本身。挪出来后 TDZ 会直接抛出，与 daoSync/issues/
+  // activeWork 那三个统一成同一种失败形态：真撞上会被文件顶部 uncaughtException 网接住、
+  // 当次会话内可见，不再是无声消失。
+  const mode = isMetaRepo ? "A" : "B";
+  try {
+    hbScaffold.heartbeat({
+      at: new Date().toISOString(),
+      synthetic: hbScaffold.isSynthetic(input),
+      session_id: (input && input.session_id) || null,
+      mode,
+      result,
+      dao_sync: (counts && counts.daoSync) || 0,
+      issues: (counts && counts.issues) || 0,
+      active_work: (counts && counts.activeWork) || 0,
+    });
+  } catch (_) { /* 心跳失败不该拖垮主产物（与 heartbeat() 自身的吞异常语义一致） */ }
+}
+// 心跳基建自己加载失败必须出声——这恰是本节要治的循环依赖的又一实例：一个「证明我还
+// 活着」的机制若自己悄悄坏掉，比没有它更危险（会让人误以为已经有人在盯）。写法与本文件
+// 其余 4 处 lib 加载失败（settings-drift / scaffold-manifest / hook-budget / clause-parser）
+// 同一套：加载失败就报一行，不静默吞。
+function heartbeatLibErrorLines() {
+  return HB_LIB_ERROR
+    ? ["✗ 心跳基建加载失败：" + HB_LIB_ERROR + "（ccswitch/lib/hook-selfcheck.js）—— " +
+       "本轮心跳未写出，scaffold-check 的陈旧判定这次会失真（其余检查照跑）"]
+    : [];
+}
+
 // ── 条款库结构闸的挂载点（2026-08-01）────────────────────────────────────────
 // 「规则集只增不减」那条自带 `触发:verify-all/check-clauses-structure`（2026-08-01 起正文迁
 // ccswitch/rules/dao-guard-writing.md，dao.md 反·归留存根+条款名），
@@ -1080,13 +1150,32 @@ function budgetSummaryLines() {
 
 // 走 emitOnce 而非直接 write：与文件顶部那张 uncaughtException 网共用同一个「只写一次」
 // 闸门。两处各写各的会拼出非法 JSON（理由见那里的双写守卫注释）。
+//
+// `done()` / `inject()` 是本文件**全部正常退出口**（uncaughtException 那条崩溃路不经过
+// 这里，理由见「心跳自证」大注）——把心跳写在这两个函数里，而不是分散在每个调用点，
+// 保证只要走的是正常路径，心跳就一定被写过一次（`daoSync`/`issues`/`activeWork` 这三个
+// `const` 在文件靠后才声明，`inject()` 只在它们都已赋值后才会被调用，故此处引用它们不撞
+// 暂时性死区；`done()` 早于它们声明就可能被调用，故不在函数体内直接引用这三个数组，
+// 只接受调用方显式传入的 `result` 字符串）。
+//
+// ⚠️ **`isMetaRepo`（下方「模式 B」大注、本文件更靠后才声明）是同一类缝的另一个变量**
+// （2026-08-09，PR #223 对抗验证评论 5230508080 挂账㈢ 实测坐实）：`writeHeartbeat()`
+// 也引用它（求值 `mode`），且**今天不可达**——本文件没有任何 `done()` 调用早于
+// `isMetaRepo` 的声明行。已把 `mode` 的求值挪到 `writeHeartbeat()` 的 try **外**（见该
+// 函数），让它撞 TDZ 时的失败形态与这三个变量统一（直接抛出、当次会话内可见），而不是
+// 被那层「心跳失败不该拖垮主产物」的 catch 悄悄吞掉——后者会让「一个持续崩溃/早退的
+// scaffold-check」在陈旧检测眼里长得像「很健康」，正是本节开篇要治的病本身。
 function inject(context) {
+  writeHeartbeat("reported", { daoSync: daoSync.length, issues: issues.length, activeWork: activeWork.length });
   emitOnce(context);
   // 退出码走同一个出口（issue #152 账 1）：**这里原先写死 `exit(0)`**，于是即使
   // `emitOnce` 里的写失败已经被记下来，这一行也会把它抹平成「一切正常」。
   process.exit(emitExitCode());
 }
-function done() { process.exit(0); }
+function done(result) {
+  writeHeartbeat(result || "clean");
+  process.exit(0);
+}
 
 // ══════════════════════════════════════════════════════════════
 // 模式 A: windsurf-dao 元仓库 — 全面同步漂移检测
@@ -1313,6 +1402,7 @@ function daoSyncLines() {
   //     budgetSummaryLines 之前 —— 后者要打印 `BUDGET.skipped.length`，而 git 那一笔
   //     是在前面记进去的，顺序颠倒会让汇总行少数一项）。
   for (const line of budgetLibErrorLines()) drifts.push(line);
+  for (const line of heartbeatLibErrorLines()) drifts.push(line);
   for (const line of gitSkipLines()) drifts.push(line);
   for (const line of budgetSummaryLines()) drifts.push(line);
 
@@ -1346,8 +1436,8 @@ const isMetaRepo = (() => {
 // 这种异常态会连同步漂移一起静默掉，而那正是最该报的时候。
 if (!isMetaRepo) {
   try {
-    if (!fs.existsSync(path.join(cwd, ".git"))) done();
-  } catch (_) { done(); }
+    if (!fs.existsSync(path.join(cwd, ".git"))) done("skip-not-git");
+  } catch (_) { done("skip-not-git"); }
 }
 
 const issues = [];
@@ -1409,7 +1499,7 @@ try {
 
 // ── 汇总输出 ──
 
-if (issues.length === 0 && activeWork.length === 0 && daoSync.length === 0) done();
+if (issues.length === 0 && activeWork.length === 0 && daoSync.length === 0) done("clean");
 
 const parts = [];
 if (daoSync.length > 0) {
@@ -1477,5 +1567,6 @@ function checkDaoDrift() {
   // git 调用就走预算），而模式 B **刻意不打印常态余量行**（那只是噪音）。
   // ⇒ 常态那一行不印，**出事那两行必须印**：否则模式 B 会重演本批要治的病。
   for (const line of budgetLibErrorLines()) issues.push(line);
+  for (const line of heartbeatLibErrorLines()) issues.push(line);
   for (const line of gitSkipLines()) issues.push(line);
 }
