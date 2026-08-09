@@ -80,7 +80,9 @@ function Get-BraceBlockSource {
       配对闭合时截断——与 PR #211 作者验收脚本、对抗复核官独立复核脚本同一手法。
       不解析字符串上下文，纯字符级计数；本文件两个被测函数体内所有花括号都在正则
       量词字面量（如 `{0,62}`）里成对出现，纯计数法足够、已实测比对字节数吻合
-      （Get-DaoMarks=1386 字节 / Get-EffectiveClaim=430 字节，与 PR #211 body 记录一致）。
+      （行尾归一化 LF 后 Get-DaoMarks=1365 字节 / Get-EffectiveClaim=420 字节；PR #211 body
+      记录的 1386/430 是 CRLF 工作区值——入库 blob 是纯 LF，本机靠 core.autocrlf=true 才成
+      CRLF，比较前归一化以免换机 autocrlf 差异假红，出处 PR #211 复核评论 B1）。
     #>
     param([string]$Text, [string]$AnchorRegex, [string]$Label)
     $m = [regex]::Match($Text, $AnchorRegex)
@@ -112,10 +114,12 @@ $docText = [System.IO.File]::ReadAllText($docPath, [System.Text.Encoding]::UTF8)
 $daoMarksSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Get-DaoMarks \{' -Label 'Get-DaoMarks'
 $effClaimSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Get-EffectiveClaim \{' -Label 'Get-EffectiveClaim'
 
-Assert-True '0a Get-DaoMarks 提取长度与 PR #211 body 记录一致（1386 字节）' `
-    ($daoMarksSrc.Length -eq 1386) ("实测 {0} 字节" -f $daoMarksSrc.Length)
-Assert-True '0b Get-EffectiveClaim 提取长度与 PR #211 body 记录一致（430 字节）' `
-    ($effClaimSrc.Length -eq 430) ("实测 {0} 字节" -f $effClaimSrc.Length)
+$daoMarksLfLen = ($daoMarksSrc -replace "`r`n", "`n").Length
+$effClaimLfLen = ($effClaimSrc -replace "`r`n", "`n").Length
+Assert-True '0a Get-DaoMarks 提取长度（行尾归一化 LF 后 1365 字节；CRLF/LF 工作区皆成立）' `
+    ($daoMarksLfLen -eq 1365) ("实测归一化后 {0} 字节（原始 {1}）" -f $daoMarksLfLen, $daoMarksSrc.Length)
+Assert-True '0b Get-EffectiveClaim 提取长度（行尾归一化 LF 后 420 字节；CRLF/LF 工作区皆成立）' `
+    ($effClaimLfLen -eq 420) ("实测归一化后 {0} 字节（原始 {1}）" -f $effClaimLfLen, $effClaimSrc.Length)
 
 . ([scriptblock]::Create($daoMarksSrc))
 . ([scriptblock]::Create($effClaimSrc))
