@@ -5,8 +5,12 @@
 .DESCRIPTION
     全部用**真 git**（真裸仓 `origin.git` + 真 `git worktree`），不桩任何东西——被测脚本
     通篇是 git 命令的编排，桩掉 git 就把要验的东西一并桩掉了。
+    **一格例外，照直写**：场景 11/12 要验的是「git 查询**失败**时脚本怎么办」，而真 git 在
+    正常夹具上不会失败 ⇒ 不注入就没有样本。注入面窄到一条 —— PATH 前置一个 `git.cmd`，
+    只让指定的那**一个**子命令 exit 128（stdout 为空，fatal 的真实形态），其余原样转发给
+    真 git（见 `New-FailingGitShim`）。判定路径本身一个字都没被桩掉。
 
-    八个场景，覆盖差集核验的两条安全路径、一条拒绝路径，以及幂等 / 前置校验 / DryRun：
+    十二个场景，覆盖差集核验的两条安全路径、两类拒绝路径，以及幂等 / 前置校验 / DryRun：
       1. 祖先关系已并入（模拟 `git merge --no-ff`）⇒ rev-list 为空 ⇒ 用 `-d`
       2. 内容等价但非祖先（模拟 GitHub squash-merge：把同一份 diff 当新提交打进 main）
          ⇒ rev-list 非空、`git cherry` 全部 `-` ⇒ 用 `-D`
@@ -17,6 +21,13 @@
       6. 前置校验 A：`-WorktreePath` 与 `-RepoPath` 相同 ⇒ 退出码 1，零动作
       7. 前置校验 B：`-RepoPath` 当前就检出着 `-Branch` ⇒ 退出码 1，零动作
       8. `-DryRun`：只打印不执行，worktree 与分支原样不动，退出码 0
+      9. 参照系 ref 不存在（`-MainBranch` 拼错一个字母）⇒ 第 0 步 fail-closed，退出码 1，
+         那个**没合并**的分支与它的 worktree 一个都没动
+     10. `-WorktreePath` 那棵树检出的不是 `-Branch`（别人的在途工作树）⇒ 退出码 1，零动作
+     11. `git rev-list` 命令本身失败 ⇒ 退出码 4（「没查成」≠「零差异」），零动作
+     12. `git cherry` 命令本身失败 ⇒ 退出码 4，零动作
+    9–12 是 2026-08-10 返修补的（PR #252 对抗验证判词阻断 1 / 阻断 2）：补之前 9 与 10 各自
+    会**静默删掉一个没合并的分支 / 别人正在用的工作树**，而退出码是 0。
 
 .NOTES
     独立可运行：powershell -NoProfile -ExecutionPolicy Bypass -File tests/dao-merge-cleanup.tests.ps1
@@ -105,16 +116,49 @@ function New-Fixture {
 }
 
 function Invoke-Target {
-    param([string[]]$ExtraArgs, [PSCustomObject]$Fixture, [string]$RepoPathOverride, [string]$BranchOverride)
+    param([string[]]$ExtraArgs, [PSCustomObject]$Fixture, [string]$RepoPathOverride, [string]$BranchOverride,
+          [string]$WorktreePathOverride, [string]$PathPrefix, [string]$FailingGitSubcommand)
     $repoPath = $Fixture.Main
     if ($RepoPathOverride) { $repoPath = $RepoPathOverride }
     $branch = $Fixture.Branch
     if ($BranchOverride) { $branch = $BranchOverride }
+    $wtPath = $Fixture.Wt
+    if ($WorktreePathOverride) { $wtPath = $WorktreePathOverride }
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $targetPs1,
-        '-WorktreePath', $Fixture.Wt, '-Branch', $branch, '-RepoPath', $repoPath) + $ExtraArgs
-    $out = & $psExe @psArgs
-    $code = $LASTEXITCODE
+        '-WorktreePath', $wtPath, '-Branch', $branch, '-RepoPath', $repoPath) + $ExtraArgs
+    # PathPrefix / FailingGitSubcommand 只给「git 命令失败」那两个场景用，见 New-FailingGitShim
+    $savedPath = $env:PATH
+    $savedFail = $env:DAO_TEST_GIT_FAIL
+    if ($PathPrefix) { $env:PATH = $PathPrefix + ';' + $savedPath }
+    if ($FailingGitSubcommand) { $env:DAO_TEST_GIT_FAIL = $FailingGitSubcommand }
+    try {
+        $out = & $psExe @psArgs
+        $code = $LASTEXITCODE
+    } finally {
+        $env:PATH = $savedPath
+        if ($null -eq $savedFail) { Remove-Item Env:\DAO_TEST_GIT_FAIL -ErrorAction SilentlyContinue }
+        else { $env:DAO_TEST_GIT_FAIL = $savedFail }
+    }
     return [PSCustomObject]@{ ExitCode = $code; Text = (@($out) -join "`n") }
+}
+
+# ── 「某条 git 查询失败」的注入口（只在场景 11/12 用）─────────────────────────────
+# 本文件的原则是**不桩 git**（被测脚本通篇是 git 编排，桩掉 git 就把要验的东西一并桩掉）。
+# 这里有一格例外，理由照直写：要验的是「git 命令**失败**时脚本怎么办」，而真 git 在正常
+# 夹具上不会失败——**不注入就没有样本，而零样本的校验与没有校验，输出一模一样**。
+# 注入面窄到一条：PATH 前置一个 git.cmd，只让 %DAO_TEST_GIT_FAIL% 那一个子命令 exit 128
+# （stdout 为空，正是 fatal 的真实形态），其余全部原样转发给真 git。
+function New-FailingGitShim {
+    param([string]$Dir)
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $realGit = (Get-Command git).Source
+    $cmd = @"
+@echo off
+if /I "%~3"=="%DAO_TEST_GIT_FAIL%" exit 128
+"$realGit" %*
+"@
+    [IO.File]::WriteAllText((Join-Path $Dir 'git.cmd'), $cmd, (New-Object System.Text.ASCIIEncoding))
+    return $Dir
 }
 
 function Test-WorktreeRegistered {
@@ -214,6 +258,78 @@ $r8 = Invoke-Target -Fixture $f8 -ExtraArgs @('-DryRun')
 Assert-True '场景8 DryRun：退出码 0' ($r8.ExitCode -eq 0) ("实际 $($r8.ExitCode)`n" + $r8.Text)
 Assert-True '场景8：worktree 没有被真的删除' (Test-WorktreeRegistered -RepoPath $f8.Main -WtPath $f8.Wt)
 Assert-True '场景8：本地分支没有被真的删除' (Test-BranchExists -RepoPath $f8.Main -Branch $f8.Branch)
+
+# ── 场景 9：参照系 ref 不存在（-MainBranch 拼错一个字母）⇒ fail-closed，一步都不做 ──────
+# 对抗验证判词阻断 1（PR #252，沙盒 E6）的逐条复现：feature/x 事前**确实没合并**且已 push，
+# 补校验之前 `git rev-list origin/mian..feature/x` fatal、stdout 为空 ⇒ 零行被读成「零差异」
+# ⇒ 打印「已完全并入主干，安全用 -d」并**真的删掉 worktree + 删掉这个没合并的分支**，exit 0。
+$f9 = New-Fixture -Case 'case9-bad-mainbranch'
+$cherryBefore = & git -C $f9.Main cherry origin/main feature/x
+Assert-True '场景9 前提：feature/x 事前确实没并入 origin/main（git cherry 报 +）' (
+    (@($cherryBefore | Where-Object { $_ -ne '' }) | Where-Object { $_.StartsWith('+') }).Count -ge 1
+) ((@($cherryBefore) -join '; '))
+$r9 = Invoke-Target -Fixture $f9 -ExtraArgs @('-MainBranch', 'mian')
+Assert-True '场景9 origin/mian 不存在：退出码 1（fail-closed；fail-open 那一版这里是 0）' ($r9.ExitCode -eq 1) ("实际 $($r9.ExitCode)`n" + $r9.Text)
+Assert-True '场景9：报文点名探不到 origin/mian（不是含糊地报别的错）' ($r9.Text -match '探不到 origin/mian')
+Assert-True '场景9：没有打印过「安全用 -d」（压根没走到差集核验）' (-not ($r9.Text -match '安全用'))
+Assert-True '场景9：worktree 仍在登记里' (Test-WorktreeRegistered -RepoPath $f9.Main -WtPath $f9.Wt)
+Assert-True '场景9：worktree 目录还在' (Test-Path -LiteralPath $f9.Wt)
+Assert-True '场景9：那个没合并的分支还在（这正是 fail-open 会丢掉的东西）' (Test-BranchExists -RepoPath $f9.Main -Branch $f9.Branch)
+
+# ── 场景 10：worktree 与 -Branch 配对不符 ⇒ 拒绝，别人的在途工作树原样不动 ────────────
+# 对抗验证判词阻断 2（沙盒 E3）的复现：-Branch 传一个**已并入主干**的分支（差集核验会一路
+# 绿灯判「安全用 -d」），而 -WorktreePath 指着另一位官检出 other/unmerged 的那棵在途的树。
+$f10 = New-Fixture -Case 'case10-pair-mismatch'
+Git0 @('-C', $f10.Main, 'merge', '--no-ff', '--quiet', '-m', 'merge feature/x', 'feature/x') | Out-Null
+Git0 @('-C', $f10.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+$otherWt = Join-Path $f10.Dir 'wt-other'
+Git0 @('-C', $f10.Main, 'worktree', 'add', '--quiet', '-b', 'other/unmerged', $otherWt, 'main') | Out-Null
+Git0 @('-C', $otherWt, 'config', 'user.email', 'dao@example.invalid') | Out-Null
+Git0 @('-C', $otherWt, 'config', 'user.name', 'dao-test') | Out-Null
+Git0 @('-C', $otherWt, 'config', 'commit.gpgsign', 'false') | Out-Null
+[IO.File]::WriteAllText((Join-Path $otherWt 'in-flight.txt'), "别人正在做的活`n", $utf8NoBom)
+Git0 @('-C', $otherWt, 'add', 'in-flight.txt') | Out-Null
+Git0 @('-C', $otherWt, 'commit', '--quiet', '-m', 'in-flight work') | Out-Null
+$r10 = Invoke-Target -Fixture $f10 -WorktreePathOverride $otherWt
+Assert-True '场景10 配对不符：退出码 1（fail-closed；配对零校验那一版这里是 0）' ($r10.ExitCode -eq 1) ("实际 $($r10.ExitCode)`n" + $r10.Text)
+Assert-True '场景10：报文点名配对不符并报出两个分支名' (
+    ($r10.Text -match '配对不符') -and ($r10.Text -match 'other/unmerged')
+) $r10.Text
+Assert-True '场景10：别人的在途工作树目录还在' (Test-Path -LiteralPath $otherWt)
+Assert-True '场景10：别人的在途工作树仍在登记里' (Test-WorktreeRegistered -RepoPath $f10.Main -WtPath $otherWt)
+Assert-True '场景10：别人的分支 other/unmerged 还在' (Test-BranchExists -RepoPath $f10.Main -Branch 'other/unmerged')
+Assert-True '场景10：-Branch 给的 feature/x 也没被删（一步都没做）' (Test-BranchExists -RepoPath $f10.Main -Branch $f10.Branch)
+
+# ── 场景 11：rev-list 命令失败（不是零差异）⇒ 停，不据此判「已合并」───────────────────
+# 夹具本身是「祖先关系已并入」——即 rev-list 正常跑时会判「安全用 -d」并真的删。注入让
+# rev-list exit 128（stdout 为空），若不查 .Ok 就与「零差异」不可区分。
+$f11 = New-Fixture -Case 'case11-revlist-fails'
+Git0 @('-C', $f11.Main, 'merge', '--no-ff', '--quiet', '-m', 'merge feature/x', 'feature/x') | Out-Null
+Git0 @('-C', $f11.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+$shim11 = New-FailingGitShim -Dir (Join-Path $f11.Dir 'gitshim')
+$r11 = Invoke-Target -Fixture $f11 -PathPrefix $shim11 -FailingGitSubcommand 'rev-list'
+Assert-True '场景11 rev-list 失败：退出码 4（没查成 ≠ 零差异）' ($r11.ExitCode -eq 4) ("实际 $($r11.ExitCode)`n" + $r11.Text)
+Assert-True '场景11：报文说的是「没查成」而不是判定结果' ($r11.Text -match '差集核验没查成') $r11.Text
+Assert-True '场景11：没有打印过「安全用 -d」' (-not ($r11.Text -match '安全用')) $r11.Text
+Assert-True '场景11：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f11.Main -WtPath $f11.Wt)
+Assert-True '场景11：本地分支原样未动' (Test-BranchExists -RepoPath $f11.Main -Branch $f11.Branch)
+
+# ── 场景 12：cherry 命令失败（不是零差异）⇒ 停 ─────────────────────────────────────
+# 夹具同场景 2（squash 等价）：rev-list 非空 ⇒ 走到 git cherry 这一半，注入让它 exit 128。
+# 不查 .Ok 时空输出会被判成「全部等价，只剩 merge 壳 —— 安全用 -D」，那是强删。
+$f12 = New-Fixture -Case 'case12-cherry-fails'
+[IO.File]::WriteAllText((Join-Path $f12.Main 'main-progress.txt'), "unrelated main progress`n", $utf8NoBom)
+Git0 @('-C', $f12.Main, 'add', 'main-progress.txt') | Out-Null
+Git0 @('-C', $f12.Main, 'commit', '--quiet', '-m', 'unrelated main progress') | Out-Null
+Git0 @('-C', $f12.Main, 'cherry-pick', 'feature/x') | Out-Null
+Git0 @('-C', $f12.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+$shim12 = New-FailingGitShim -Dir (Join-Path $f12.Dir 'gitshim')
+$r12 = Invoke-Target -Fixture $f12 -PathPrefix $shim12 -FailingGitSubcommand 'cherry'
+Assert-True '场景12 cherry 失败：退出码 4（没查成 ≠ 零差异）' ($r12.ExitCode -eq 4) ("实际 $($r12.ExitCode)`n" + $r12.Text)
+Assert-True '场景12：报文说的是「没查成」' ($r12.Text -match '差集核验没查成') $r12.Text
+Assert-True '场景12：没有打印过「安全用 -D」' (-not ($r12.Text -match '安全用')) $r12.Text
+Assert-True '场景12：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f12.Main -WtPath $f12.Wt)
+Assert-True '场景12：本地分支原样未动' (Test-BranchExists -RepoPath $f12.Main -Branch $f12.Branch)
 
 # ── 语法自检：被测脚本本身能被 PowerShell parser 干净解析（BOM/中文字面量坑同款）───────
 $tokens = $null
