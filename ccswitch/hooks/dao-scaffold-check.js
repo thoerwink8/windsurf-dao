@@ -499,12 +499,20 @@ try {
 // 时非零。陈旧判定只需要「最后一次真实心跳是什么时候」，字段堆多了只会多一处要维护的口径。
 function writeHeartbeat(result, counts) {
   if (!hbScaffold) return;
+  // `mode` 求值挪到 try **外**（2026-08-09，PR #223 对抗验证评论 5230508080 挂账㈢）：
+  // `isMetaRepo` 是文件下方「模式 B」大注里才声明的 TDZ `const`，若留在 try 内部引用，
+  // 一旦真的撞上 TDZ（今天不可达，见 inject()/done() 那段大注新增的说明），会被这个函数
+  // 自己「心跳失败不该拖垮主产物」的 catch 悄悄吞掉——退出码依旧 0、stdout/stderr 都不
+  // 出声，心跳静默丢失，正是本节要治的病本身。挪出来后 TDZ 会直接抛出，与 daoSync/issues/
+  // activeWork 那三个统一成同一种失败形态：真撞上会被文件顶部 uncaughtException 网接住、
+  // 当次会话内可见，不再是无声消失。
+  const mode = isMetaRepo ? "A" : "B";
   try {
     hbScaffold.heartbeat({
       at: new Date().toISOString(),
       synthetic: hbScaffold.isSynthetic(input),
       session_id: (input && input.session_id) || null,
-      mode: isMetaRepo ? "A" : "B",
+      mode,
       result,
       dao_sync: (counts && counts.daoSync) || 0,
       issues: (counts && counts.issues) || 0,
@@ -1149,6 +1157,14 @@ function budgetSummaryLines() {
 // `const` 在文件靠后才声明，`inject()` 只在它们都已赋值后才会被调用，故此处引用它们不撞
 // 暂时性死区；`done()` 早于它们声明就可能被调用，故不在函数体内直接引用这三个数组，
 // 只接受调用方显式传入的 `result` 字符串）。
+//
+// ⚠️ **`isMetaRepo`（下方「模式 B」大注、本文件更靠后才声明）是同一类缝的另一个变量**
+// （2026-08-09，PR #223 对抗验证评论 5230508080 挂账㈢ 实测坐实）：`writeHeartbeat()`
+// 也引用它（求值 `mode`），且**今天不可达**——本文件没有任何 `done()` 调用早于
+// `isMetaRepo` 的声明行。已把 `mode` 的求值挪到 `writeHeartbeat()` 的 try **外**（见该
+// 函数），让它撞 TDZ 时的失败形态与这三个变量统一（直接抛出、当次会话内可见），而不是
+// 被那层「心跳失败不该拖垮主产物」的 catch 悄悄吞掉——后者会让「一个持续崩溃/早退的
+// scaffold-check」在陈旧检测眼里长得像「很健康」，正是本节开篇要治的病本身。
 function inject(context) {
   writeHeartbeat("reported", { daoSync: daoSync.length, issues: issues.length, activeWork: activeWork.length });
   emitOnce(context);
