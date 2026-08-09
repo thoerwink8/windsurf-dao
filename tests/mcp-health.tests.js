@@ -431,18 +431,21 @@ async function main() {
   {
     const scaffoldSrc = fs.readFileSync(SCAFFOLD_HOOK, "utf8");
     const configGuardSrc = fs.readFileSync(CONFIG_GUARD_HOOK, "utf8");
-    // 🔴 **已知弱处，issue #210 item③：本轮把覆盖面从 1/15 扩到 2/15，不做到 15/15**——
+    // 🔴 **已知弱处，issue #210 item③：本轮把覆盖面从 1 个文件扩到 2 个，不做到全量**——
     // ①这两条断言只护住 `dao-scaffold-check.js`（10s 预算）与 `dao-config-guard.js`
-    // （SessionStart 预算最紧的那个，5s）——对抗复核 PR #207 评论明确点名后者「完全不在
-    // 覆盖范围内」，本批补上；但本机 hook 注册面实测仍有 15 个（8 类事件），其余 13 个
+    // （SessionStart 5s 预算档）——对抗复核 PR #207 评论明确点名后者「完全不在
+    // 覆盖范围内」，本批补上；但本机 hook 注册面实测有 **17 个（8 类事件）**（2026-08-09
+    // 对抗复核 PR #212 点数，live settings 与 git 快照两侧独立同数；本段初稿写 15，
+    // 漏数的两个是 `dao-probe-gate@UserPromptSubmit` 与 `dao-rate-limit-sentinel@StopFailure`
+    // ——后者正是本 PR 自己在守的 hook，手维护枚举第四次被咬），其余 15 个
     // （`dao-remove-session` / `dao-codegraph-ensure` / `dao-playwright-cleanup` 等
     // SessionStart 同僚 + `PreToolUse`/`PostToolUse`/`UserPromptSubmit`/`Stop`/
     // `StopFailure`/`PostCompact`/`SubagentStart` 各挂载点）仍不在覆盖范围。
     // **为什么不做成扫描 `~/.claude/settings.json` 全部注册 hook**（issue #210 建议的
     // 完全解）：那需要复用/重构 `check-dead-gates.mjs` 的结构化遍历（它是独立的完整
     // 检查器，不是一个可直接 import 的工具函数库），属另一个批次的判断，不在本次
-    // 「顺手扩到预算最紧那个」的成本范围内——两个文件各自手点比一次结构化重写便宜得多，
-    // 但代价就是仍有 13/15 零覆盖，这是刻意的取舍不是遗漏。
+    // 「顺手扩到预算最紧档那个」的成本范围内——两个文件各自手点比一次结构化重写便宜得多，
+    // 但代价就是仍有 15/17 零覆盖，这是刻意的取舍不是遗漏。
     // ②即使在这两个文件内部，子串匹配也能被字符串拼接绕过（如
     // `require(['../../config-sync/lib/mcp-', 'health.mjs'].join(''))` 源码里不出现
     // `mcp-health` 字面，M10 实测 0 红）——这一条本批同样不修，按 `[#帅-撤宣称不抢修]`
@@ -451,8 +454,9 @@ async function main() {
       "这条防的是未来有人图省事把 6-15s 的探测塞进同步热路径（issue #92 明写的成本约束）；" +
       "覆盖面与绕过面的已知缺口见本行上方注释与 issue #210，本轮不修",
       !/mcp-health/i.test(scaffoldSrc), "");
-    check("dao-config-guard.js（SessionStart 热路径，5s 预算——本机全部 hook 里预算最紧的一个）" +
-      "同样没有引用本模块（issue #210 item③ 本批新增，此前 1/15 全域零覆盖此处已补）",
+    check("dao-config-guard.js（SessionStart 热路径，5s 预算——与 dao-remove-session.js 并列最紧档，" +
+      "非唯一；最热挂载点另属 PreToolUse 的 dao-hard-gates.js）" +
+      "同样没有引用本模块（issue #210 item③ 本批新增，此前全域仅 1 个文件有此覆盖，此处已补）",
       !/mcp-health/i.test(configGuardSrc), "");
   }
 
