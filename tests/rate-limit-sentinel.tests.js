@@ -212,6 +212,24 @@ console.log("\n=== fail-open · 坏输入不许炸，且不许静默 ===");
   check("坏 stdin → 写 errors.log（出错必须出声，静默是这个 hook 最坏的死法）",
     fs.existsSync(errorsPath(tag)), "errors.log 不存在");
   check("坏 stdin → stderr 有留痕", /解析 stdin 失败/.test(r.err), "err=" + r.err.slice(0, 120));
+  // ── M7（issue #217，出处 PR #212 对抗评论）─────────────────────────────────
+  // `mirrorRecord()` 的生产调用点有 2 个：主路径（下面「正态」那几节都在测）与
+  // 坏 stdin 这条路（`main()` 里 `mirrorRecord(badRec)`）。此前只有第 1 个被端到端覆盖——
+  // 删掉第 2 个调用点，156 条断言一条不红。这里补上。
+  const mir = mirrorLines(tag);
+  check("🔴 坏 stdin → 镜像域也记一行（M7：mirrorRecord 第 2 个调用点，此前零覆盖）",
+    mir.length === 1 && mir[0].synthetic === true && mir[0].marked === false && mir[0].error === null,
+    "mirror=" + JSON.stringify(mir));
+
+  // ── 先破再验：把这个调用点架空 ⇒ 上面那条镜像断言必须翻面 ──────────────────────
+  const ANCHOR = "    mirrorRecord(badRec);";
+  const h = mutantHook("badpath-no-mirror", ANCHOR, "    if (false) mirrorRecord(badRec);");
+  const tagM = "badjson-mut";
+  const rm = run(h, null, tagM, "这不是 JSON{{{");
+  check("canary：变异体还活着（errors.log 照写、exit 0 照旧——坏的只有镜像这一格）",
+    rm.code === 0 && fs.existsSync(errorsPath(tagM, h)), "code=" + rm.code);
+  check("🔴 先破再验：坏 stdin 路径的镜像调用被架空 ⇒ 镜像域零记录（M7 断言不是摆设）",
+    mirrorLines(tagM).length === 0, "mirror=" + JSON.stringify(mirrorLines(tagM)));
 }
 {
   const tag = "forceerr";
@@ -525,6 +543,107 @@ console.log("\n=== #201 笔2：镜像域结构性沙箱兜底（忘传 DAO_RATE_
     "code=" + rm.status);
   check("🔴 mutation·兜底被架空：这次真的写进了（假 home 下的）生产默认路径 —— 证明这条断言真的在盯着这件事",
     fs.existsSync(legacyDefaultPath), "legacyDefaultPath 仍然不存在：" + legacyDefaultPath);
+}
+
+console.log("\n=== M5（issue #217）：deriveMirrorFallback 的 STATE_SUBDIR 分支，此前零覆盖 ===");
+{
+  // 前情（出处 PR #212 对抗评论）：`deriveMirrorFallback` 有三条分支（MARKER / STATE_SUBDIR /
+  // 生产默认值）。此前全套测试要么两个 env 都指（落分支①）、要么两个都不指（落分支③），
+  // **分支②（只指 STATE_SUBDIR、不指 MARKER）从未被单独触达**——整段架空，156 条零红。
+  // 安全：payload 用非限流类 error（不触发 writeMarker，MARKER_PATH 就算解到真实默认值
+  // 也不会被写一个字节）；STATE_SUBDIR 沙箱化后连带把主域（fired.log/errors.log）也带
+  // 进沙箱；fakeHome 是保险丝——万一分支②本身有 bug 真滑到分支③，也只碰得到假路径。
+  const fakeHome = path.join(BASE, "m5-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const legacyDefaultPath = path.join(fakeHome, ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+
+  function runStateSubdirOnly(hookPath, tag) {
+    const env = Object.assign({}, process.env, {
+      USERPROFILE: fakeHome, HOME: fakeHome,
+      DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag, "state"),
+    });
+    delete env.DAO_RATE_LIMIT_MARKER;
+    delete env.DAO_RATE_LIMIT_MIRROR;
+    return spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(payloadOf({
+        error: "server_error", error_details: "server_error", last_assistant_message: "API Error: server_error",
+      })),
+      encoding: "utf8", env,
+    });
+  }
+  function stateSubdirMirrorPath(tag, hookPath) {
+    return path.join(rootOf(hookPath || REAL_HOOK), "_tmp", TAG, tag, "state", "mirror-fallback", "fired.log");
+  }
+
+  const tag = "m5-real";
+  const r = runStateSubdirOnly(REAL_HOOK, tag);
+  check("现状：只指 STATE_SUBDIR（不指 MARKER/MIRROR）→ exit 0", r.status === 0, "code=" + r.status);
+  const mp = stateSubdirMirrorPath(tag);
+  const lines = (() => {
+    try { return fs.readFileSync(mp, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)); }
+    catch (_) { return []; }
+  })();
+  check("现状：镜像落在 ROOT/_tmp/<STATE_SUBDIR>/mirror-fallback/fired.log（分支②的产物）",
+    lines.length === 1 && lines[0].mirror === true, "期望路径=" + mp + " 内容=" + JSON.stringify(lines));
+  check("现状：假 home 默认落点没被写入（证明这次真的走的是分支②，不是滑到了分支③）",
+    !fs.existsSync(legacyDefaultPath));
+
+  // ── 先破再验：把分支②架空 ⇒ 上面那条「镜像落在 STATE_SUBDIR 下」必须翻面 ────────────
+  const ANCHOR = "  if (process.env.DAO_RATE_LIMIT_STATE_SUBDIR) {";
+  const h = mutantHook("state-subdir-disabled", ANCHOR, "  if (false && process.env.DAO_RATE_LIMIT_STATE_SUBDIR) {");
+  const tagM = "m5-mut";
+  const rm = runStateSubdirOnly(h, tagM);
+  check("canary：变异体还活着（fired.log 主账照记——分支②的改动只影响镜像去哪，不影响主账）",
+    rm.status === 0 && firedLines(tagM, h).length === 1, "code=" + rm.status);
+  check("🔴 先破再验：分支②被架空 ⇒ 不再落 STATE_SUBDIR 那条镜像路径，改滑到假 home 默认值（M5 断言不是摆设）",
+    !fs.existsSync(stateSubdirMirrorPath(tagM, h)) && fs.existsSync(legacyDefaultPath),
+    "STATE_SUBDIR 路径仍存在=" + fs.existsSync(stateSubdirMirrorPath(tagM, h)));
+}
+
+console.log("\n=== M6 + E1（issue #217）：三个 env 全不指 → 落生产默认路径，字面「dao-state」被钉住 ===");
+{
+  // 前情（出处 PR #212 对抗评论）：
+  //   M6 —— 生产默认落点的字面段从 "dao-state" 改成 "dao-state-MUTANT"，156 条零红：
+  //     头注写着「两者都不传时逐字不变」，这句话此前没有任何断言在守。
+  //   E1 —— 三个环境变量一个都不指的调用方，仍然会落进真实 `~/.claude/dao-state/`；
+  //     这一格此前**没有测试覆盖**（沙箱兜底只覆盖了「指了任一变量」的三种组合）。
+  // 补法与 PR #212 对抗官自己用的手法同源（**不真跑 main()**，只 require 读
+  // `MIRROR_LOG` 这个模块加载期就算好的导出值）：真写一次就等于把 #201 笔2 要治的那个
+  // 「合成样本污染真实样本井」的病再犯一遍；读导出值零落盘、零风险，且同时验两件事——
+  // 这条路径确实会被走到（E1）与它的字面值对不对（M6）。
+  // 安全网：即便这条判据本身有 bug，也不能让子进程碰到使用者本机真实的
+  // `~/.claude/dao-state`——把 USERPROFILE/HOME 一并指进假 home。
+  const fakeHome = path.join(BASE, "m6-e1-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const expectDefault = path.join(fakeHome, ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+
+  function mirrorLogOf(hookPath) {
+    const env = Object.assign({}, process.env, { USERPROFILE: fakeHome, HOME: fakeHome });
+    delete env.DAO_RATE_LIMIT_MARKER;
+    delete env.DAO_RATE_LIMIT_STATE_SUBDIR;
+    delete env.DAO_RATE_LIMIT_MIRROR;
+    const rr = spawnSync(process.execPath,
+      ["-e", "process.stdout.write(String(require(process.argv[1]).MIRROR_LOG))", hookPath],
+      { encoding: "utf8", env });
+    return { out: String(rr.stdout || "").trim(), code: rr.status, err: String(rr.stderr || "") };
+  }
+
+  const real = mirrorLogOf(REAL_HOOK);
+  check("E1 前提：三个变量都不指时，算出的 MIRROR_LOG 是绝对路径（空串 === 空串是最容易的假绿）",
+    real.code === 0 && path.isAbsolute(real.out), "real=" + JSON.stringify(real));
+  check("🔴 E1：这一格真的会被走到——落点正是 <假 HOME>/.claude/dao-state/rate-limit-sentinel/fired.log" +
+    "（此前无测试覆盖；真实调用方会落进使用者本机同构的真实路径）",
+    real.out === expectDefault, "得 " + real.out + " 期望 " + expectDefault);
+
+  // ── 先破再验（M6）：把默认分支里的字面段 "dao-state" 改成 "dao-state-MUTANT" ──────
+  const ANCHOR = '    ".claude", "dao-state", "rate-limit-sentinel", "fired.log");';
+  const h = mutantHook("default-landing-literal", ANCHOR,
+    '    ".claude", "dao-state-MUTANT", "rate-limit-sentinel", "fired.log");');
+  const mut = mirrorLogOf(h);
+  check("canary：变异体还活着（照常算出一个绝对路径，不是崩了才不等）",
+    mut.code === 0 && path.isAbsolute(mut.out), "mut=" + JSON.stringify(mut));
+  check("🔴 先破再验：生产默认落点的字面段被改动 ⇒ MIRROR_LOG 的值翻面（头注「逐字不变」终于有断言在守，M6 断言不是摆设）",
+    mut.out !== real.out && /dao-state-MUTANT/.test(mut.out), "mut.out=" + mut.out);
 }
 
 console.log("\n=== 负控 · 宿主失效态两格（#190 第 4 条：模块加载期崩 / stdout 写不动）===");
