@@ -145,6 +145,118 @@ console.log("\n=== 错误可见性：出错必须留痕，且不取阻断语义 
   check("内部故障闸 → 未静默（stdout+stderr 至少一处有内容）", r.out !== "" || r.err !== "");
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== scaffold-check 死闸检测挂载点：陈旧判据四态 + 一个负态（机制体检②）===");
+// 治的是什么病：dao-scaffold-check.js 的心跳落在 `_tmp/scaffold-check/fired.log`，
+// 本 hook 每次 PostCompact 顺带查一眼它有没有停摆——读心跳判陈旧的人必须在**另一个事件**
+// 上，否则循环依赖原样保留、只是换了个身位。本节验四个读态 + 一个「摘掉调用」的负态。
+// 用 `DAO_SCAFFOLD_CHECK_STATE_SUBDIR` 把被读的 fired.log 改道到本测试自己的 UNIQ
+// 子目录（与 FAKE_HOME 同一个隔离理由：不想读到/写到真实 `_tmp/scaffold-check/`）。
+function writeScaffoldFired(subdir, records) {
+  const dir = path.join(REPO, "_tmp", subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "fired.log"),
+    records.map((r) => JSON.stringify(r)).join("\n") + (records.length ? "\n" : ""), "utf8");
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-fresh");
+  writeScaffoldFired(subdir, [{ at: new Date().toISOString(), synthetic: false, session_id: "real-fresh", mode: "A", result: "clean" }]);
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("① 新鲜的真实心跳 → 不报陈旧（常路零噪音）", !/scaffold-check/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-stale");
+  const old = new Date(Date.now() - 10 * 86400000).toISOString();
+  writeScaffoldFired(subdir, [{ at: old, synthetic: false, session_id: "real-stale", mode: "A", result: "clean" }]);
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("② 10 天前的真实心跳 → 报陈旧且带天数与阈值", /scaffold-check 已 10\.0 天没有真实触发（阈值 5 天）/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-onlysynthetic");
+  writeScaffoldFired(subdir, [{ at: new Date().toISOString(), synthetic: true, session_id: "self-test", mode: "A", result: "clean" }]);
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("③ 只有 synthetic 记录（无真实心跳）→ 报「从未留下真实心跳记录」", /从未留下真实心跳记录/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-missing");
+  // 连目录都不建：fired.log 压根不存在，readJsonlRecords 对不存在的文件返回 []，
+  // 与「过滤掉全部 synthetic 后为空」在这里得到同一处置——两者对消费方而言是同一句话。
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("④ fired.log 压根不存在 → 同样报「从未留下真实心跳记录」（不是「读取失败」）",
+    /从未留下真实心跳记录/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-dirblocked");
+  const dir = path.join(REPO, "_tmp", subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(dir, "fired.log"), { recursive: true }); // 占成目录 → readFileSync 抛 EISDIR
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("⑤ fired.log 读不动（被占成目录）→ 报读取失败，不误判成「没事」也不误判成「陈旧」",
+    /心跳日志读取失败/.test(sysMsg(r)) && !/从未留下真实心跳记录/.test(sysMsg(r)) && !/已 .+ 天没有真实触发/.test(sysMsg(r)),
+    "msg=" + sysMsg(r));
+}
+{
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-badat");
+  writeScaffoldFired(subdir, [{ at: "不是时间", synthetic: false, session_id: "real-badat", mode: "A", result: "clean" }]);
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("⑥ 末次心跳的 at 解析不出来 → 只报异常，不替未知下陈旧结论",
+    /at 解析不出来/.test(sysMsg(r)) && !/已 .+ 天没有真实触发/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+{
+  // 负控：末尾是新的 synthetic 记录时，判据仍要取「最后一条真实记录」，不能被新的合成
+  // 记录掩盖成「有新鲜心跳」（那会让一个真的停摆的 scaffold-check 被自测流量假装还活着）。
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-mixed");
+  writeScaffoldFired(subdir, [
+    { at: new Date(Date.now() - 10 * 86400000).toISOString(), synthetic: false, session_id: "old-real", mode: "A", result: "clean" },
+    { at: new Date().toISOString(), synthetic: true, session_id: "fresh-synthetic", mode: "A", result: "clean" },
+  ]);
+  const r = run(pc("manual"), { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir });
+  check("负控：末尾新鲜的 synthetic 记录不掩盖旧的真实记录 → 仍报陈旧",
+    /scaffold-check 已 10\.0 天没有真实触发/.test(sysMsg(r)), "msg=" + sysMsg(r));
+}
+
+// ── 先破再验：scaffoldCheckStalenessNote() 的调用点被摘掉 ⇒ 陈旧永远不出声 ──────
+// 单行锚点（行尾差异咬不到它），只摘掉「读取结果」这一步、保留 try/catch 结构本身——
+// 同 dao-guard-writing.md「改坏多形态」②（保留字面但使其不执行）那一向。
+console.log("\n=== 先破再验：scaffoldCheckStalenessNote() 调用被摘掉 ⇒ 陈旧数据摆在那也不会被报出 ===");
+{
+  const SRC = fs.readFileSync(HOOK, "utf8");
+  const ANCHOR = "    staleNote = scaffoldCheckStalenessNote();";
+  check("mutation 靶点在源码里唯一存在（scaffoldCheckStalenessNote 调用点）",
+    SRC.split(ANCHOR).length === 2, "出现 " + (SRC.split(ANCHOR).length - 1) + " 次");
+
+  const mutRoot = path.join(FAKE_HOME, "mut-tree");
+  const hooksDir = path.join(mutRoot, "ccswitch", "hooks");
+  const libDir = path.join(mutRoot, "ccswitch", "lib");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.mkdirSync(libDir, { recursive: true });
+  // 本 hook 唯一的本地依赖是 hook-selfcheck.js（copy 过去即可独立跑，
+  // 与 probe-gate.tests.js 的 mutantHook 同一手法）。
+  fs.copyFileSync(path.join(REPO, "ccswitch", "lib", "hook-selfcheck.js"), path.join(libDir, "hook-selfcheck.js"));
+  const hookCopy = path.join(hooksDir, "dao-compact-log.js");
+  fs.writeFileSync(hookCopy, SRC.replace(ANCHOR, "    staleNote = null;"), "utf8");
+
+  const subdir = path.posix.join("compact-log-tests", UNIQ, "sc-mut-stale");
+  const old = new Date(Date.now() - 10 * 86400000).toISOString();
+  writeScaffoldFired(subdir, [{ at: old, synthetic: false, session_id: "real-stale-mut", mode: "A", result: "clean" }]);
+
+  const rMut = spawnSync(process.execPath, [hookCopy], {
+    input: JSON.stringify(pc("manual")),
+    encoding: "utf8",
+    env: Object.assign({}, process.env, {
+      DAO_COMPACT_LOG_SELFTEST: "1", USERPROFILE: FAKE_HOME, HOME: FAKE_HOME,
+      DAO_SCAFFOLD_CHECK_STATE_SUBDIR: subdir,
+    }),
+  });
+  let mutJson = null;
+  if (rMut.stdout && rMut.stdout.trim()) { try { mutJson = JSON.parse(rMut.stdout); } catch (_) {} }
+  const mutMsg = (mutJson && mutJson.systemMessage) || "";
+  check("🔴 先破再验：调用被摘掉 ⇒ 陈旧记录（数据摆在那）再也不会被报出",
+    !/scaffold-check 已/.test(mutMsg), "msg=" + mutMsg);
+  check("canary：变异体还活着（主产物不受影响——落盘日志/systemMessage 依旧正常产出，只是少了这一句）",
+    !!mutJson && /快照已刷新/.test(mutMsg), "msg=" + mutMsg.slice(0, 200));
+}
+
 // ── 隔离自证：改道真的生效了，且用户真实日志一行都没多 ────────────────────────
 // 「对照组必须验证它自己真的被关掉了」——env 改道一旦失效（换平台、hook 改了取值优先级、
 // 某次 spawn 漏传 env），症状是**测试照常全绿**、只是又开始写用户的真日志。
