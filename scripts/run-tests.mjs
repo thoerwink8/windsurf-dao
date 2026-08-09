@@ -283,7 +283,7 @@ const declaredEnv = new Set(jsTests.filter(declaresEnvTier));
 //      诱使后来者把两侧的计数也并进一个字段，那正好把「哪一半没跑」重新弄没。
 //   ② **BOM 不再由这边操心**：`Parser::ParseFile` 自己按 BOM 定编码。此前这里手剥 U+FEFF，
 //      是因为 `readFileSync(...,"utf8")` 会把它留成首字符、让行首锚**当场落空而毫无症状**
-//      （本仓 7 套 .ps1 里 6 套带 UTF-8 BOM，`link-codex` 那套没有）。
+//      （本仓 .ps1 里除 `link-codex` 外均带 UTF-8 BOM——刻意不写套数：写死的数字已过期两次，以 `--list` 实扫为准）。
 //   ③ **判定跑不起来 ⇒ fail-closed 且出声**（见下面 `scanPsTier()` 里的 `bad()`）：
 //      「这套没标记」与「我没看成」在退出码上分不开，那正是本文件通篇在治的病。
 const PS_TIER_SCANNER = process.env.DAO_PS_TIER_SCANNER
@@ -296,7 +296,7 @@ const PS_SCAN_TIMEOUT_MS = 60_000;
 // （它原先建在下面运行期那一段，而那时判定早已发生过了）。
 const tierProblems = [];
 
-// 一次 spawn 判定全部 PS 套（真仓 7 套实测 ≈0.3s，含 powershell 启动），
+// 一次 spawn 判定全部 PS 套（真仓实测 ≈0.3s，含 powershell 启动；套数以 `--list` 实扫为准），
 // 返回 { declared:Set<file>, prose:string[] }。判定不可信时改判 fail-closed 并往
 // tierProblems 里写一条 ⇒ 退出码走 4 那一档，而不是悄悄把 env 套拉回默认层跑。
 function scanPsTier(files) {
