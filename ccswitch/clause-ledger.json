@@ -342,6 +342,19 @@
       ],
       "status": "active"
     },
+    "归-报告落盘": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-09 机制体检报告首例：workflow 返回值在任务通知里被截断 4515 字符，报告全文若非帅主动从 journal.jsonl 提取落盘，就只活在会话工件与 artifact 投影里——恰是「知识归会话不归文件」的实弹形态。条款文字为用户当日拍板（原话「每次必须落到_tmp，这个做法固化到dao体系」），非 AI 自定",
+      "source_refs": [
+        "issue #70 评论 5230179067（体检报告落点记录）"
+      ],
+      "status": "active"
+    },
     "归-认领协议": {
       "file": "ccswitch/rules/dao-workitem.md",
       "n": "0",
