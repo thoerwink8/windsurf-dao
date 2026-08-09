@@ -647,9 +647,9 @@ function Get-ClauseRecords {
             Slug      = $null
             SlugCount = 0
             # v4（退役判官盲区修复，机制体检 2026-08-09 报告 §⑧）：`-not HasField` 但台账
-            # n/first_seen 齐全时，Set-LedgerBackedFields 会回填 N/NBucket/MonthDay/Trigger
-            # 并把这个标成 $true。与 HasField 互斥（后者只在**行内**有完整元字段时为真），
-            # 调用方按两者的并集取用（见 $withField 的定义处）。
+            # n/first_seen 齐全时，Set-LedgerBackedFields 会回填 N/NBucket/MonthDay（刻意不回填
+            # Trigger/Baseline，理由见该函数头注）并把这个标成 $true。与 HasField 互斥（后者只在
+            # **行内**有完整元字段时为真），调用方按两者的并集取用（见 $withField 的定义处）。
             LedgerBacked = $false
         }
         $m = [regex]::Match($masked, $script:MetaFieldPattern)
@@ -813,12 +813,17 @@ function Set-LedgerBackedFields {
       这项回填：调用方的「触发:无」占比/触发点分布/基线标注统计继续只读 `$hasField`
       （行内字段那批），与 node 侧同口径；只有 n 分布与候选退役区读扩大后的并集。
 
-      **两条边界，照直写**：
-        · **必须在 Test-ClausesStructure（尤其检查 6 的台账对账）跑完之后再调用**——
-          检查 6 拿 `$c.N`/`$c.MonthDay` 去跟台账逐字段比对是不是「两轨一致」，若先回填
-          再比，比较对象就变成「台账 vs 我刚从台账抄来的东西」，对账**恒真**，那正是
+      **两条边界，照直写**（第一条 2026-08-09 · PR #224 对抗验证官实测订正——原文断言
+      「先回填会让对账恒真」，实测证伪：把调用挪到检查 6 之前，真实 `dao.md` 输出逐字节相同，
+      全套 192 条断言一条不红。原因是检查 6 靠 `$c.HasField` 这个开关决定「要不要比」，
+      而回填函数从头到尾不碰 `HasField`——回填出来的记录在对账里走的都是「跳过、不比」那条路，
+      先回填、后回填对当前实现没有差别）：
+        · **调用点排在 Test-ClausesStructure（尤其检查 6 的台账对账）跑完之后——目前无人
+          依赖此次序，是防御性次序，不是恒真的必要条件**。保留它是为了防将来对账逻辑改成
+          按值判断（不再只看 `HasField`）时，次序才会真正开始承重——那时若先回填再比，
+          比较对象就会变成「台账 vs 我刚从台账抄来的东西」，落进
           dao-guard-writing「守卫里『我是不是瞎了』那一半不能复用被守对象的解析逻辑」
-          在这里的镜像形态。调用点因此特意排在 `$violations` 算完之后。
+          描述的那种镜像失明。调用点因此仍排在 `$violations` 算完之后，当作习惯性防御。
         · **`n` 与 `first_seen` 必须都非空才回填，缺一不回填**（同批实测：`dao.md` 里
           `帅-水位线`/`续-每轮心跳` 两条台账 n/first_seen 皆为 `null`，是搬录时正文本来就
           没有这三个字段、诚实记录的"未知"，不是"零次"）——半份数据不强行编一个年龄，
