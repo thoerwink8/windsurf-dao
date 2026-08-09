@@ -470,13 +470,12 @@ if (require.main === module) {
 //   · `markerStaleness`  —— `tests/probe-gate.tests.js` 陈旧判据单元节（界上 / 界外 / 未来时钟 /
 //                           `at` 坏，这些点端到端造不出来）
 //   · `STALE_GRACE_S`    —— 同上（断言它是正数，且让测试不必把那个数字抄一遍）
-//   · `MIRROR_LOG`       —— issue #232：`tests/probe-gate.tests.js` 用它算「生产默认落点是
-//                           不是绝对路径、字面段有没有被改动」，与哨兵 `MIRROR_LOG` 同一验法
-//                           （M6，见 `tests/rate-limit-sentinel.tests.js`）
 //   **无程序化消费方（N=0，照直写、不报百分比）**
 //   · `PROBE_SIG`        —— 端到端那 13 条负控是 spawn 进程测的，**没有 require 这个正则**
 //   · `SIGNATURE`        —— 测试里断言的是字面串，没走这个导出
 //   · `readMarker`       —— 三态判据的唯一函数出口
+//   · `MIRROR_LOG`       —— issue #232 新增；对抗复核（PR #241 判词 F1）实测
+//                           `tests/probe-gate.tests.js` 对它零引用（覆盖挂账见 #241 判词 H1）
 //   四个都**刻意保留**：删了以后想单验就得改被测文件本身。
 //   ⚠ 这份清单**没有任何机器在核**（试过按「导出名是否出现在某处 require 解构里」做闸，
 //     那是文本启发式、两个方向都有反例）⇒ 它靠读的人负责，与本仓其他手维护枚举同一个弱点。
