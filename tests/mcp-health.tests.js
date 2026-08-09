@@ -39,9 +39,21 @@
 //     （纯文本匹配 `/checkMcpHealth\(\)/`，连 `// checkMcpHealth();` 这种注释掉的形态
 //     都能匹配上，M8 实测：注释掉调用、整套测试照样全绿）。现在改成**行为级**——真跑
 //     一次 doctor.mjs，断言输出里 MCP 健康态那一节真的印出了逐条判据行，不是空节；
-//   · dao-scaffold-check.js（SessionStart 热路径）没有引用本模块——**已知弱处，本轮
-//     只标注不修**（覆盖面只有 15 个 hook 注册里的 1 个；且可被字符串拼接绕过，
-//     对抗复核 M10 实测坐实），跟进单见 issue #210，理由见该断言旁边的注释。
+//   · dao-scaffold-check.js / dao-config-guard.js（两个 SessionStart 热路径）没有引用
+//     本模块——**已知弱处，本轮只标注不修**（覆盖面仍只有 15 个 hook 注册里的 2 个；
+//     且可被字符串拼接绕过，对抗复核 M10 实测坐实），跟进单见 issue #210，理由见⑥那两条
+//     断言旁边的注释。
+//
+// 🔴 **射程边界（issue #210 二轮对抗复核缺口清单⑥，2026-08-09 补）**：上面那条「改成
+// 行为级」的真验证住在 **⑦（真机自跑），而 ⑦ 整节只在 `--env` 下才执行**。默认层
+// （`node tests/mcp-health.tests.js` 或 `node scripts/run-tests.mjs` 不带 `--env`）只跑
+// ⑥ 那条静态文本信号——它本身也只是「快速信号，非最终判据」（见⑥断言原文），对「调用被
+// 注释掉」这类改坏形态的判别力有限（M8 的真正克星是⑦真跑 doctor.mjs 断言 body 非空，
+// 不是⑥的正则）。**结论**：`git push` 后若只跑默认层，M8 同型的「wiring 被悄悄拆掉」
+// 不保证会被默认层拦下来；要拿到这份判别力必须显式跑 `--env`（合并前 / 收官前的
+// 强制项，见 CLAUDE.md 测试分层一节）。同理，F1 生产接线（`computeMcpUniverse` 是否真被
+// `doctor.mjs` 消费、而不是被换回纯 DB 期望集）与 F4 假绿修复的真实端到端验证也都挂在
+// ⑦ 底下，同样只在 `--env` 生效。
 
 const fs = require("fs");
 const path = require("path");
@@ -50,6 +62,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const DOCTOR = path.join(REPO, "config-sync", "lib", "doctor.mjs");
 const SCAFFOLD_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-scaffold-check.js");
+const CONFIG_GUARD_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-config-guard.js");
 
 const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
 
@@ -131,6 +144,21 @@ async function main() {
     check("对抗样本③（假阳性/可构造假绿）：死连接的状态文本里嵌 ' - ✔ Connected' 不再被误判成 ok",
       r3.length === 1 && r3[0].category === "dead" && r3[0].statusText === "Failed - ✔ Connected",
       JSON.stringify(r3));
+  }
+  console.log("\n  —— 已知弱处（issue #210 item①）：假符号前置仍可构造假绿，本批钉回归用例、不改判据 ——");
+  {
+    // 与上面③相反的镜像方向：③ 挡的是"假符号嵌在状态文本里、位于真符号**之后**"（右侧嵌入）；
+    // 这里是"假符号嵌在连接细节字段里、位于真符号**之前**"（左侧嵌入，issue #210 给出的
+    // 具体形态）。惰性匹配取"从左往右第一个"符合形态的分隔点是本文件已知的、有意为之的
+    // 取舍（见 LINE_RE 上方头注「仍然不是万能解」段）——两个方向不可能同时用一遍正则完全
+    // 防住，选择保护③那个方向是因为"状态文本是自由文本"比"连接细节里出现装饰性符号
+    // 字面"更容易在真实场景发生。这里不改判据，只把这个已知弱处从"一句头注文字"钉成
+    // 显式回归断言：改 LINE_RE 时若这条判定意外变化，会先在这里变红，而不是被悄悄放过。
+    const r = parseMcpListOutput("badserver: cmd --flag - ✔ fake - ✘ Failed to connect — Connection closed");
+    check("已知弱处·钉住不是修复：细节字段里前置的假 ✔ 仍会盖过更靠右的真 ✘（category='ok'）—— " +
+      "这是接受的结构性限制，此断言的价值在于「改 LINE_RE 让这里变了行为时会被看见」",
+      r.length === 1 && r[0].category === "ok" && r[0].detail === "cmd --flag",
+      JSON.stringify(r));
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -402,17 +430,34 @@ async function main() {
   }
   {
     const scaffoldSrc = fs.readFileSync(SCAFFOLD_HOOK, "utf8");
-    // 🔴 **已知弱处，本轮只标注不修**（PR #207 对抗复核 M9/M10，跟进单 issue #210）：
-    // ①这条断言只护住 dao-scaffold-check.js 一个文件，本机 hook 注册面实测有 15 个
-    // （8 类事件），其中 dao-config-guard.js（SessionStart，预算 5s，比 scaffold-check
-    // 还紧）完全不在覆盖范围内；②即使在 scaffold-check.js 内部，子串匹配也能被字符串
-    // 拼接绕过（如 `require(['../../config-sync/lib/mcp-', 'health.mjs'].join(''))`
-    // 源码里不出现 `mcp-health` 字面，M10 实测 0 红）。两条都是防御性护栏的覆盖面缺口，
-    // 不是已发生的事故——按 `[#帅-撤宣称不抢修]` 不在合并压力下抢修，跟进单见 issue #210。
+    const configGuardSrc = fs.readFileSync(CONFIG_GUARD_HOOK, "utf8");
+    // 🔴 **已知弱处，issue #210 item③：本轮把覆盖面从 1 个文件扩到 2 个，不做到全量**——
+    // ①这两条断言只护住 `dao-scaffold-check.js`（10s 预算）与 `dao-config-guard.js`
+    // （SessionStart 5s 预算档）——对抗复核 PR #207 评论明确点名后者「完全不在
+    // 覆盖范围内」，本批补上；但本机 hook 注册面实测有 **17 个（8 类事件）**（2026-08-09
+    // 对抗复核 PR #212 点数，live settings 与 git 快照两侧独立同数；本段初稿写 15，
+    // 漏数的两个是 `dao-probe-gate@UserPromptSubmit` 与 `dao-rate-limit-sentinel@StopFailure`
+    // ——后者正是本 PR 自己在守的 hook，手维护枚举第四次被咬），其余 15 个
+    // （`dao-remove-session` / `dao-codegraph-ensure` / `dao-playwright-cleanup` 等
+    // SessionStart 同僚 + `PreToolUse`/`PostToolUse`/`UserPromptSubmit`/`Stop`/
+    // `StopFailure`/`PostCompact`/`SubagentStart` 各挂载点）仍不在覆盖范围。
+    // **为什么不做成扫描 `~/.claude/settings.json` 全部注册 hook**（issue #210 建议的
+    // 完全解）：那需要复用/重构 `check-dead-gates.mjs` 的结构化遍历（它是独立的完整
+    // 检查器，不是一个可直接 import 的工具函数库），属另一个批次的判断，不在本次
+    // 「顺手扩到预算最紧档那个」的成本范围内——两个文件各自手点比一次结构化重写便宜得多，
+    // 但代价就是仍有 15/17 零覆盖，这是刻意的取舍不是遗漏。
+    // ②即使在这两个文件内部，子串匹配也能被字符串拼接绕过（如
+    // `require(['../../config-sync/lib/mcp-', 'health.mjs'].join(''))` 源码里不出现
+    // `mcp-health` 字面，M10 实测 0 红）——这一条本批同样不修，按 `[#帅-撤宣称不抢修]`
+    // 不在合并压力下抢修，跟进单见 issue #210。
     check("dao-scaffold-check.js（SessionStart 热路径，10s 预算）没有引用本模块——" +
       "这条防的是未来有人图省事把 6-15s 的探测塞进同步热路径（issue #92 明写的成本约束）；" +
       "覆盖面与绕过面的已知缺口见本行上方注释与 issue #210，本轮不修",
       !/mcp-health/i.test(scaffoldSrc), "");
+    check("dao-config-guard.js（SessionStart 热路径，5s 预算——与 dao-remove-session.js 并列最紧档，" +
+      "非唯一；最热挂载点另属 PreToolUse 的 dao-hard-gates.js）" +
+      "同样没有引用本模块（issue #210 item③ 本批新增，此前全域仅 1 个文件有此覆盖，此处已补）",
+      !/mcp-health/i.test(configGuardSrc), "");
   }
 
   // ══════════════════════════════════════════════════════════════
