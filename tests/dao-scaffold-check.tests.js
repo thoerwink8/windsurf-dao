@@ -1594,6 +1594,300 @@ console.log("\n=== 心跳基建（hook-selfcheck.js）自身加载失败必须�
     !fs.existsSync(firedPath), firedPath);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评论 5230277293 第一组）===");
+// 拍板原句：「scaffold-check 全绿行聚合成一行（任一非绿整段展开）」。判据实现见 hook 源码
+// `isGreenSyncLine`/`aggregateGreenSync`（daoSyncLines() 之后、模式 B 之前）。
+// 本节两层：①源码级抽取 + eval，直接夹住判据本身（含两组"改坏"mutation）；
+// ②端到端：真造一棵「六道子检查全绿」的元仓库沙箱，证明调用点真的接上了聚合函数，
+// 外加一条负控（翻红任一道 → 整段照旧展开、零信息丢失）。
+{
+  // ── 源码级：抽取判据函数本体 ────────────────────────────────────────────
+  const SRC = fs.readFileSync(HOOK, "utf8");
+  const A = "function isGreenSyncLine(line) {";
+  // 边界 B 刻意用**不跨行**的锚点（本文件是 CRLF，跨行字面量锚点会被 \r\n 咬掉——
+  // 见头注「本文件里的 mutation 锚点为什么写 \r?\n」；单行锚点没有换行符可咬，更省事）。
+  const B = "const isMetaRepo = (() => {";
+  const j2Block = (() => {
+    const a = SRC.indexOf(A);
+    const b = SRC.indexOf(B);
+    return a >= 0 && b > a ? SRC.slice(a, b) : "";
+  })();
+  check("源码级·自检：J2 判据块被切出来了（切不出来时下面全部空转而不是全绿）",
+    j2Block.length > 100 && j2Block.includes("aggregateGreenSync"), "len=" + j2Block.length);
+
+  const loadJ2 = (block) => {
+    try { return new Function(block + "\nreturn { isGreenSyncLine, aggregateGreenSync };")(); }
+    catch (_) { return null; }
+  };
+  const j2 = loadJ2(j2Block);
+  check("自检：判据块能被取出来执行", !!j2 && typeof j2.aggregateGreenSync === "function",
+    j2 ? Object.keys(j2).join(",") : "eval 失败");
+
+  if (j2) {
+    check("isGreenSyncLine：以 ⓘ 开头且无 ⚠ → 绿", j2.isGreenSyncLine("ⓘ 死闸检测绿：..."));
+    check("isGreenSyncLine：✗ 开头 → 非绿", !j2.isGreenSyncLine("✗ 死闸检测 FAIL：..."));
+    check("isGreenSyncLine：⬆ 开头 → 非绿", !j2.isGreenSyncLine("⬆ windsurf-dao 有 1 个未提交改动"));
+    check("isGreenSyncLine：⚠ 开头 → 非绿", !j2.isGreenSyncLine("⚠ 没查成"));
+    check("🔴 isGreenSyncLine：以 ⓘ 开头但嵌了 ⚠（budgetLines 过渡期/providerHookLines deny 缺字段那种形态）→ 非绿",
+      !j2.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
+
+    const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
+    const aggAllGreen = j2.aggregateGreenSync(allGreen);
+    check("aggregateGreenSync：全绿 → 聚合成一行「N 项检查全绿」",
+      aggAllGreen.aggregated === true && aggAllGreen.lines.length === 1 &&
+      aggAllGreen.lines[0] === "ⓘ 3 项检查全绿", JSON.stringify(aggAllGreen));
+
+    const mixed = allGreen.concat(["✗ 死闸检测 FAIL：真发现"]);
+    const aggMixed = j2.aggregateGreenSync(mixed);
+    check("🔴 aggregateGreenSync：任一行非绿 → 整段原样展开（出问题时信息零减少）",
+      aggMixed.aggregated === false && aggMixed.lines.length === 4 &&
+      aggMixed.lines.every((l, i) => l === mixed[i]), JSON.stringify(aggMixed));
+
+    const mixedWarnEmbedded = allGreen.concat(["ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：欠 43000 B"]);
+    const aggWarnEmbedded = j2.aggregateGreenSync(mixedWarnEmbedded);
+    check("🔴 aggregateGreenSync：ⓘ 开头但嵌 ⚠ 的行同样阻断聚合（不是只看首字符）",
+      aggWarnEmbedded.aggregated === false && aggWarnEmbedded.lines.length === 4,
+      JSON.stringify(aggWarnEmbedded));
+
+    check("aggregateGreenSync：空数组 → 不聚合、原样返回空数组（不崩、不误判成「全绿」）",
+      j2.aggregateGreenSync([]).aggregated === false && j2.aggregateGreenSync([]).lines.length === 0);
+
+    // ── mutation ①：摘掉「嵌 ⚠ 判非绿」那半判据 ──────────────────────────
+    const ANCHOR1 = '&& s.indexOf("⚠") === -1';
+    check("mutation①锚点在源码里唯一存在", j2Block.split(ANCHOR1).length === 2,
+      "出现 " + (j2Block.split(ANCHOR1).length - 1) + " 次");
+    const j2Mut1 = loadJ2(j2Block.replace(ANCHOR1, ""));
+    check("canary①：变异体还活着（能被取出来执行，不是被弄死后的假红）",
+      !!j2Mut1 && typeof j2Mut1.isGreenSyncLine === "function");
+    if (j2Mut1) {
+      check("🔴 mutation①：摘掉「无嵌入 ⚠」这半判据后，嵌 ⚠ 的行被误判成绿（证明这半判据是承重的）",
+        j2Mut1.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
+    }
+
+    // ── mutation ②：让 aggregateGreenSync 无条件聚合（摘掉 .every 判断）────
+    const ANCHOR2 = "if (lines.length && lines.every(isGreenSyncLine)) {";
+    check("mutation②锚点在源码里唯一存在", j2Block.split(ANCHOR2).length === 2,
+      "出现 " + (j2Block.split(ANCHOR2).length - 1) + " 次");
+    const j2Mut2 = loadJ2(j2Block.replace(ANCHOR2, "if (lines.length) {"));
+    check("canary②：变异体还活着", !!j2Mut2 && typeof j2Mut2.aggregateGreenSync === "function");
+    if (j2Mut2) {
+      const bad = j2Mut2.aggregateGreenSync(mixed);
+      check("🔴 mutation②：摘掉「全部行都要绿」这个门槛后，含真发现的一批也被聚合（证明该判断是承重的）",
+        bad.aggregated === true && bad.lines.length === 1);
+    }
+  }
+}
+{
+  // ── 端到端：真造一棵「六道子检查全绿」的沙箱元仓库 ─────────────────────
+  // 六道分别对应 daoSyncLines() 里会持续出声的项：settings-drift（self-check + providers，
+  // 用替身脚本接住 require() 与 spawn --providers 两条路）/ 死闸检测 / always-on 字节预算 /
+  // memory 指针扫描 / 条款库结构闸 / 墙钟预算汇总行本身。
+  // 拿真实 lib（含 .mjs——clause-parser.mjs 不拷会让条款闸降级出一行嵌 ⚠ 的行，
+  // 详见 loadClauseParser() 头注）+ 四个桩脚本替掉需要外部数据源的那几道，
+  // settings-drift.js 整个换成替身（真实版依赖 cc-switch DB/config-sync 快照，
+  // 沙箱里没有那些文件会导致自检报错行，不是本组要验的东西）。
+  function mkGreenMetaRepo(tag, deadGatesRed) {
+    const root = path.join(SANDBOX, "green", tag, "windsurf-dao");
+    const hooksDir = path.join(root, "ccswitch", "hooks");
+    const libDir = path.join(root, "ccswitch", "lib");
+    const scriptsDir = path.join(root, "ccswitch", "scripts");
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.mkdirSync(libDir, { recursive: true });
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    putFakeGit(root);
+    fs.writeFileSync(path.join(root, "ccswitch", "dao.md"), "# fixture dao.md\n", "utf8");
+    fs.writeFileSync(path.join(root, "ccswitch", "scaffold-manifest.json"), '{"entries":[]}', "utf8");
+
+    const hookCopy = path.join(hooksDir, path.basename(HOOK));
+    fs.copyFileSync(HOOK, hookCopy);
+    const realLibDir = path.join(REPO, "ccswitch", "lib");
+    for (const f of fs.readdirSync(realLibDir).filter((n) => n.endsWith(".js") || n.endsWith(".mjs"))) {
+      if (f === "settings-drift.js" || f === "memory-truth-source.js") continue; // 替身另写
+      fs.copyFileSync(path.join(realLibDir, f), path.join(libDir, f));
+    }
+    fs.writeFileSync(path.join(libDir, "settings-drift.js"), [
+      "// 测试替身：--providers（子进程）恒报干净 SUMMARY；hookLines()（in-process require）恒清空",
+      "if (process.argv.includes('--providers')) {",
+      "  process.stdout.write('PROVIDER_HOOKS_SUMMARY exit=0 providers=0 scoped=0 drift=0 cross=0 selfcheck=ok uncheckable=0 denyDrift=0 denyCross=0 denySampled=0\\n');",
+      "  process.exit(0);",
+      "}",
+      "module.exports = { hookLines: function () { return []; } };",
+    ].join("\n"), "utf8");
+    fs.writeFileSync(path.join(scriptsDir, "check-clauses-structure.ps1"), [
+      "param([string]$TargetFile, [string]$ClauseSelector)",
+      'Write-Output "CLAUSE_STRUCTURE_SUMMARY exit=0 clauses=1 violations=0 notrigger=0 retire=0 promote=0"',
+    ].join("\n"), "utf8");
+    // 负控刻意用「末行契约与真退出码不一致」触发 ✗（比伪造一个真死闸更简单，
+    // 且同样是 daoSyncLines() 里一条真实存在的非绿路径——deadGateLines() 自己的契约自检）。
+    fs.writeFileSync(path.join(scriptsDir, "check-dead-gates.mjs"),
+      'console.log("DEAD_GATES_SUMMARY exit=' + (deadGatesRed ? "1" : "0") +
+      ' hooks=1 dead=0 orphan=0 selfcheck=ok unverifiable=0 providers=0 providerscan=ok");', "utf8");
+    fs.writeFileSync(path.join(scriptsDir, "check-alwayson-budget.mjs"),
+      'console.log("ALWAYSON_BUDGET_SUMMARY exit=0 total=100 limit=1000 files=1 headroom=900 scoped=0 missing=0 selfcheck=ok target=1000 overtarget=0");',
+      "utf8");
+    fs.writeFileSync(path.join(libDir, "memory-truth-source.js"),
+      'console.log("MEMORY_REFS_SUMMARY exit=0 scope=all root=1 projects=0 files=0 checked=0 dead=0 declared_dead=0 ambiguous=0 skipped=0 errors=0");',
+      "utf8");
+    return hookCopy;
+  }
+  // 元仓库沙箱需要读到自己在 settings.json 里的注册（否则 budgetSummaryLines() 会报
+  // 「⚠ 这个总预算是猜的」，那一行嵌 ⚠、会阻断聚合）——用独立 fakeHome，不复用共享
+  // FAKE_HOME（那份只注册了 REGISTERED 探针名）。
+  const greenHome = path.join(SANDBOX, "green-fakehome");
+  fs.mkdirSync(path.join(greenHome, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(greenHome, ".claude", "settings.json"), JSON.stringify({
+    hooks: { SessionStart: [{ matcher: "startup", hooks: [
+      { type: "command", command: 'node "${PROJECT_ROOT}/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+    ] }] },
+  }), "utf8");
+
+  const greenHookCopy = mkGreenMetaRepo("all-green", false);
+  const greenRoot = path.resolve(path.dirname(greenHookCopy), "..", "..");
+  const greenStateSubdir = path.posix.join(path.basename(SANDBOX), "green-state");
+  const greenRes = run(greenRoot, { HOME: greenHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: greenStateSubdir }, greenHookCopy);
+  const gc = ctx(greenRes);
+  check("端到端·全绿：hook 自己退出 0", greenRes.code === 0, "code=" + greenRes.code);
+  check("端到端·全绿：daoSync 段聚合成「ⓘ N 项检查全绿」（N 未写死，只要求正整数）",
+    /【dao 同步漂移检测】windsurf-dao 本轮同步\/配置自检结果：\nⓘ \d+ 项检查全绿/.test(gc), "ctx=" + gc.slice(0, 600));
+  check("端到端·全绿：聚合态头部不再说「存在以下同步差异」（那句在这一态下是假话）",
+    !/存在以下同步差异/.test(gc), "ctx=" + gc.slice(0, 300));
+  check("端到端·全绿：聚合态不再逐条打印各道子检查的绿行原文（否则等于没聚合）",
+    !/死闸检测绿|条款库结构闸绿|per-provider 漂移检查绿/.test(gc), "ctx=" + gc.slice(0, 600));
+
+  // ── 负控：翻红任一道 → 整段照旧展开、零信息丢失 ────────────────────────
+  const redHookCopy = mkGreenMetaRepo("one-red", true);
+  const redRoot = path.resolve(path.dirname(redHookCopy), "..", "..");
+  const redStateSubdir = path.posix.join(path.basename(SANDBOX), "red-state");
+  const redRes = run(redRoot, { HOME: greenHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: redStateSubdir }, redHookCopy);
+  const rc = ctx(redRes);
+  check("端到端·负控：hook 自己退出 0（降级不是崩溃）", redRes.code === 0, "code=" + redRes.code);
+  check("🔴 端到端·负控：翻红死闸检测那一道 → 不聚合，整段原样展开",
+    !/项检查全绿/.test(rc) && /存在以下同步差异/.test(rc), "ctx=" + rc.slice(0, 300));
+  check("端到端·负控：翻红的那一道现形（死闸检测契约自检 ✗）",
+    /死闸检测/.test(rc) && /✗/.test(rc), "ctx=" + rc.slice(0, 500));
+  check("端到端·负控：出问题时信息零减少——其余几道绿行原文仍在（always-on 字节预算 / memory 指针 / 条款库结构闸）",
+    /always-on 字节预算/.test(rc) && /memory 指针一致性/.test(rc) && /条款库结构闸绿/.test(rc),
+    "ctx=" + rc.slice(0, 900));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== J3：外部项目常驻提醒抑制阈（用户 2026-08-09 拍板 issue #70 评论 5230277293 第一组）===");
+// 拍板原句：「外部项目常驻提醒同条报满 3 次后压缩成一行标题」。判据实现见 hook 源码
+// `reminderLine`/`reminderTitle`（manifestIssueLines 定义之前那一段）。
+// 计数落 <dao根>/_tmp/<状态子目录>/reminder-counts.json，与心跳 fired.log 同域
+// （由 DAO_SCAFFOLD_CHECK_STATE_SUBDIR 指向沙箱，理由同本文件其余心跳测试）。
+{
+  const stateSubdir = path.posix.join(path.basename(SANDBOX), "j3-state");
+  const extraEnv = { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdir };
+  const cwd = mkproj("j3-reminder-proj"); // 空壳项目：CLAUDE.md / .claude/rules 都缺 → 稳定触发多条 finding
+
+  const r1 = ctx(run(cwd, extraEnv));
+  const r2 = ctx(run(cwd, extraEnv));
+  const r3 = ctx(run(cwd, extraEnv));
+  const r4 = ctx(run(cwd, extraEnv));
+  const r5 = ctx(run(cwd, extraEnv));
+  const claudeMdLineOf = (c) => (c.split("\n").find((l) => /缺少 CLAUDE\.md/.test(l)) || "");
+
+  check("第 1~3 次：同条提醒原样全文（含修法箭头与可粘贴命令行）",
+    /→ 从 canonical/.test(claudeMdLineOf(r1)) &&
+    /→ 从 canonical/.test(claudeMdLineOf(r2)) &&
+    /→ 从 canonical/.test(claudeMdLineOf(r3)),
+    JSON.stringify([claudeMdLineOf(r1), claudeMdLineOf(r2), claudeMdLineOf(r3)]));
+  check("🔴 第 4 次起：压缩成一行标题（去掉「→」之后的修法指引）",
+    !/→ 从 canonical/.test(claudeMdLineOf(r4)) && /缺少 CLAUDE\.md（AI 入口文件）/.test(claudeMdLineOf(r4)),
+    claudeMdLineOf(r4));
+  check("压缩行标注「已连续 N 次」而不是悄悄消失（用户仍看得见有这件事、只是变短了）",
+    /已连续 3 次/.test(claudeMdLineOf(r4)) && /已连续 4 次/.test(claudeMdLineOf(r5)),
+    JSON.stringify([claudeMdLineOf(r4), claudeMdLineOf(r5)]));
+  check("压缩行不再含可粘贴命令（↳ 零编辑复制 canonical）",
+    !/↳ 零编辑复制 canonical/.test(claudeMdLineOf(r4)), claudeMdLineOf(r4));
+
+  const countsPath = path.join(REPO, "_tmp", stateSubdir, "reminder-counts.json");
+  let counts = null;
+  try { counts = JSON.parse(fs.readFileSync(countsPath, "utf8")); } catch (_) {}
+  const pk = path.resolve(cwd).split(path.sep).join("/").toLowerCase();
+  check("计数确实落盘在 <dao根>/_tmp/<状态子目录>/reminder-counts.json（同族形态，不新开目录）",
+    !!counts && !!counts[pk] && counts[pk]["claude-md"] && counts[pk]["claude-md"].count === 5,
+    countsPath + " → " + JSON.stringify(counts && counts[pk]));
+
+  // ── 负控：不同项目各算各的（不是全局一个计数器）────────────────────────
+  const cwdB = mkproj("j3-reminder-proj-b");
+  const rb = ctx(run(cwdB, extraEnv));
+  check("负控：另一个项目第一次出现同一条 finding → 仍是全文（计数按项目分桶，不共用）",
+    /→ 从 canonical/.test(claudeMdLineOf(rb)), claudeMdLineOf(rb));
+
+  // ── fail-open：计数文件读不出（不存在 / 损坏）一律按 0 次处理，全文显示 ─────
+  {
+    const cwdC = mkproj("j3-failopen-proj");
+    const stateSubdirC = path.posix.join(path.basename(SANDBOX), "j3-failopen-state");
+    const countsPathC = path.join(REPO, "_tmp", stateSubdirC, "reminder-counts.json");
+    // 先跑够 4 次，坐实压缩确实发生（否则下面"损坏后恢复全文"这条无从对照）。
+    for (let i = 0; i < 4; i++) run(cwdC, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdirC });
+    const before = ctx(run(cwdC, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdirC }));
+    check("fail-open 前提：确实已压缩（不然下面的「损坏后转全文」无对照意义）",
+      !/→ 从 canonical/.test(claudeMdLineOf(before)), claudeMdLineOf(before));
+
+    fs.writeFileSync(countsPathC, "{ 这不是合法 JSON", "utf8");
+    const afterCorrupt = ctx(run(cwdC, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdirC }));
+    check("🔴 fail-open：计数文件损坏 → 当空表处理，本轮仍显示全文（宁可多提醒不悄悄少提醒）",
+      /→ 从 canonical/.test(claudeMdLineOf(afterCorrupt)), claudeMdLineOf(afterCorrupt));
+
+    fs.rmSync(countsPathC, { force: true });
+    const afterMissing = ctx(run(cwdC, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdirC }));
+    check("fail-open：计数文件不存在（如刚清过状态目录）→ 同样按 0 次处理，全文显示",
+      /→ 从 canonical/.test(claudeMdLineOf(afterMissing)), claudeMdLineOf(afterMissing));
+  }
+
+  // ── errors（清单加载/校验失败）永不压缩 ─────────────────────────────────
+  {
+    const cwdD = mkproj("j3-errors-proj");
+    const badManifest = path.join(SANDBOX, "j3-bad-manifest.json");
+    const stateSubdirD = path.posix.join(path.basename(SANDBOX), "j3-errors-state");
+    fs.writeFileSync(badManifest, "{ 这不是 JSON", "utf8");
+    const envD = { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: stateSubdirD, DAO_SCAFFOLD_MANIFEST: badManifest };
+    let lastErr = "";
+    for (let i = 0; i < 5; i++) {
+      const c = ctx(run(cwdD, envD));
+      lastErr = c.split("\n").find((l) => /✗ 共性 rule 备案清单/.test(l)) || "";
+    }
+    check("errors 行（清单加载/校验失败）第 5 次仍是完整错误文本，不被 J3 压缩",
+      /解析失败/.test(lastErr) && !/已连续 \d+ 次/.test(lastErr), lastErr);
+  }
+
+  // ── mutation：摘掉阈值判断（compressed 恒为 false）→ 压缩永不发生 ────────
+  {
+    const SRC = fs.readFileSync(HOOK, "utf8");
+    const ANCHOR = "const compressed = prev >= REMINDER_SHOW_FULL_TIMES;";
+    check("mutation 锚点在源码里唯一存在（reminderLine）", SRC.split(ANCHOR).length === 2,
+      "出现 " + (SRC.split(ANCHOR).length - 1) + " 次");
+    const hookCopy = mkBrokenLibTree("j3-mut-never-compress", null, (hp) => {
+      const s = fs.readFileSync(hp, "utf8");
+      fs.writeFileSync(hp, s.replace(ANCHOR, "const compressed = false;"), "utf8");
+    });
+    // mkBrokenLibTree 只造 ccswitch/{hooks,lib}，沙箱树里没有 ccswitch/scaffold-manifest.json：
+    // 不显式指清单会走「读取失败」错误路径，产不出「缺少 CLAUDE.md」finding。
+    // 显式指向真实清单绕开这一层——但 scaffold-manifest.js 是从沙箱 lib 目录跑的，它的
+    // `TEMPLATES_ROOT` 相对**自己的** __dirname 算，即 `<沙箱>/ccswitch/templates/`；
+    // 那个目录不存在时 `validate()` 会给每个带 template 字段的条目报「src 不存在」错误，
+    // **校验不通过整份清单就判 manifest=null**，findings 恒空——同样看不到「缺少
+    // CLAUDE.md」。故这里把真实 templates/ 目录整棵拷进沙箱补上这一层。
+    const fixtureCcswitch = path.resolve(path.dirname(hookCopy), "..");
+    fs.cpSync(path.join(REPO, "ccswitch", "templates"), path.join(fixtureCcswitch, "templates"), { recursive: true });
+    const cwdMut = mkproj("j3-mut-proj");
+    const envMut = {
+      DAO_SCAFFOLD_CHECK_STATE_SUBDIR: path.posix.join(path.basename(SANDBOX), "j3-mut-state"),
+      DAO_SCAFFOLD_MANIFEST: path.join(REPO, "ccswitch", "scaffold-manifest.json"),
+    };
+    let mutLine = "";
+    for (let i = 0; i < 5; i++) mutLine = claudeMdLineOf(ctx(run(cwdMut, envMut, hookCopy)));
+    check("canary：变异体还活着（报出「缺少 CLAUDE.md」，不是整个 hook 崩了）",
+      /缺少 CLAUDE\.md/.test(mutLine), mutLine);
+    check("🔴 mutation：摘掉阈值判断后，第 5 次仍是全文（证明「报满 3 次后压缩」这个判断是承重的）",
+      /缺少 CLAUDE\.md（AI 入口文件）→/.test(mutLine), mutLine);
+  }
+}
+
 // ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch (_) {}
 

@@ -449,6 +449,87 @@ try {
   const why = e && e.message ? e.message : String(e);
   manifestCheck = function () { return { findings: [], errors: ["共性 rule 备案清单求值器加载失败：" + why + "（ccswitch/lib/scaffold-manifest.js）"] }; };
 }
+// ── J3：外部项目常驻提醒抑制阈（2026-08-09 · 用户拍板 issue #70 评论 5230277293 第一组）──
+// 治的是什么：manifestIssueLines() 每次 SessionStart 都重新求值一遍共性 rule 清单，
+// 同一条未修的缺项逐字不改地反复出现——外部项目常年挂着同一条提醒，越提醒越没人看，
+// 「常驻提醒」这个词本身就是在描述这个病。
+// 判据：同一个 (项目根, finding.id) 视为「同一条」提醒。前 REMINDER_SHOW_FULL_TIMES 次
+// （缺省 3）原样全文显示；报满 3 次后，第 4 次起压缩成一行标题——标题取 msg 首行，
+// 若含 "→"（诊断→修法的既有书写惯例，见 claude-md / tmp-gitignored 等条目）只保留箭头前
+// 半句，去掉修法指引；换行之后的内容（含 template 字段追加的「↳ 零编辑复制 canonical」
+// 可粘贴命令，那条命令在 scaffold-manifest.js::evaluate() 里永远是单独一行拼接）随首行
+// 截断天然被丢弃——不需要单独识别命令行。
+// 计数落盘复用 hbScaffold 已算好的状态目录（<dao 根>/_tmp/scaffold-check/，测试环境下
+// 由 DAO_SCAFFOLD_CHECK_STATE_SUBDIR 重定向到沙箱），新增一个同族文件
+// reminder-counts.json，与 fired.log/last.json/errors.log 同域、不新开目录。
+// fail-open（拍板原句）：计数文件不存在 / 损坏 / 读不动 —— 一律当空表，每条按 0 次算，
+// 本轮仍显示全文。宁可多提醒一次，也不能让状态文件本身的问题变成悄悄少提醒。
+const REMINDER_STATE_FILE = "reminder-counts.json";
+const REMINDER_SHOW_FULL_TIMES = 3;
+
+function reminderStateDir() {
+  // 优先复用 hbScaffold 已经算好的目录。hbScaffold 加载失败时退化自己算一次——理由与
+  // checkDaoDrift() 里那个 daoRoot 逐字相同：本文件 __dirname 是 ccswitch/hooks/，
+  // 上两级即 dao 根。
+  if (hbScaffold && hbScaffold.stateDir) return hbScaffold.stateDir;
+  return path.join(path.resolve(__dirname, "..", ".."), "_tmp",
+    process.env.DAO_SCAFFOLD_CHECK_STATE_SUBDIR || "scaffold-check");
+}
+function reminderCountsPath() {
+  return path.join(reminderStateDir(), REMINDER_STATE_FILE);
+}
+// 读不出（文件不存在 / JSON 损坏 / I/O 异常）一律返回空表——调用方据此把每条都当 0 次，
+// 这就是拍板要求的 fail-open。
+function readReminderCounts() {
+  try {
+    const j = JSON.parse(fs.readFileSync(reminderCountsPath(), "utf8"));
+    return (j && typeof j === "object" && !Array.isArray(j)) ? j : {};
+  } catch (_) { return {}; }
+}
+// 写失败不该拖垮主产物（与本文件其余状态写入同一惯例）：下次仍按旧计数走，只是这一轮
+// 没能推进计数——不算错误，方向仍是 fail-open（宁可多提醒，不悄悄少提醒）。
+function writeReminderCounts(data) {
+  try {
+    const p = reminderCountsPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(data), "utf8");
+  } catch (_) {}
+}
+// 项目键：绝对路径 + 统一分隔符 + 小写，避免 Windows 上大小写/斜杠写法差异把同一个项目
+// 拆成两个桶（近似判据：换路径写法即失配，失配的后果只是「多算一条新提醒」而不是误伤，
+// 失败方向与 scaffold-manifest.js::repoNameOf 的取舍同型）。
+function reminderProjectKey(root) {
+  try { return path.resolve(String(root || "")).split(path.sep).join("/").toLowerCase(); }
+  catch (_) { return String(root || ""); }
+}
+// 标题化：只取第一行——天然去掉 template 字段追加的「↳ 可粘贴命令」（那条命令在
+// scaffold-manifest.js::evaluate() 里是另起一行拼接的 "\n   ↳ 零编辑复制 canonical: ..."）；
+// 首行若含 "→" 只保留箭头前半句（去掉修法指引）。没有 "→" 的 msg 本身已经很短
+// （如「缺少 .claude/rules/ 目录（领域规范存放处）」），原样当标题即可，没有可再削的
+// 「修法段」——两种情况都不需要额外判断，是同一条规则的两种自然结果。
+function reminderTitle(fullText) {
+  const firstLine = String(fullText).split(/\r?\n/)[0];
+  const arrowIdx = firstLine.indexOf("→");
+  return arrowIdx === -1 ? firstLine : firstLine.slice(0, arrowIdx).trim();
+}
+// 每条 finding 各走一次：读计数 → 按阈值决定全文/压缩 → 计数 +1 落盘。
+// **先渲染后计数**：本轮显示形态取决于「写入前」的计数（prev）——前 3 次 prev=0/1/2
+// （全文，即拍板说的「报满 3 次」），第 4 次起 prev>=3（压缩）。
+function reminderLine(projectRoot, findingId, fullText) {
+  const counts = readReminderCounts();
+  const pk = reminderProjectKey(projectRoot);
+  const bucket = (counts[pk] && typeof counts[pk] === "object" && !Array.isArray(counts[pk])) ? counts[pk] : {};
+  const rec = bucket[findingId];
+  const prev = (rec && typeof rec === "object" && Number.isFinite(rec.count)) ? rec.count : 0;
+  const compressed = prev >= REMINDER_SHOW_FULL_TIMES;
+  bucket[findingId] = { count: prev + 1, lastAt: new Date().toISOString() };
+  counts[pk] = bucket;
+  writeReminderCounts(counts);
+  if (!compressed) return fullText;
+  return reminderTitle(fullText) + "（同条提醒已连续 " + prev + " 次，本次起压缩为标题；" +
+    "完整文本见更早的报文，或跑 `node <dao 根>/ccswitch/scripts/dao-scaffold-report.mjs` 复核）";
+}
+
 // 返回本项目缺失的共性 rule 报文行（含加载/校验错误行）。severity=info 的近似判据
 // 加「（建议）」前缀，与确定性缺项区分开——近似判据不该和存在性判据同等语气。
 function manifestIssueLines(projectRoot) {
@@ -456,8 +537,13 @@ function manifestIssueLines(projectRoot) {
   try { res = manifestCheck(projectRoot, process.env.DAO_SCAFFOLD_MANIFEST || null); }
   catch (e) { return ["✗ 共性 rule 备案清单抛错：" + (e && e.message ? e.message : String(e))]; }
   const lines = [];
+  // errors（加载/校验失败）永不压缩——那是基础设施故障，不是「同一条提醒」，必须每次都
+  // 完整现形；只有 findings（真缺项）走 J3 抑制阈。
   for (const err of res.errors || []) lines.push("✗ " + err);
-  for (const f of res.findings || []) lines.push(f.severity === "info" ? "（建议）" + f.message : f.message);
+  for (const f of res.findings || []) {
+    const full = f.severity === "info" ? "（建议）" + f.message : f.message;
+    lines.push(reminderLine(projectRoot, f.id, full));
+  }
   return lines;
 }
 
@@ -1409,6 +1495,29 @@ function daoSyncLines() {
   return drifts;
 }
 
+// ── J2：全绿行聚合（2026-08-09 · 用户拍板 issue #70 评论 5230277293 第一组）──────
+// 治的是什么：daoSyncLines() 无论有没有真发现都会跑满上面 12 步，常路（无漂移）下仍会
+// 输出好几行 "ⓘ ...绿" 状态播报，字节占比不小却零决策价值——机制体检实测基线：
+// 一份 14 行报文里有 6 行属于这一类，占报文总字节数 62.8%。
+// 判据（单行）：一行算「绿」当且仅当它以 "ⓘ" 开头、且**不含任何嵌入的 "⚠"**。
+// 后半条不是装饰——budgetLines() 的「过渡期」分支、providerHookLines() 的 deny 面
+// 缺字段分支都会把一段 "⚠ ..." 拼进同一个以 "ⓘ" 开头的字符串里：那不是「通过」，
+// 是「带着保留意见通过」，必须算非绿，否则聚合会把这些警示一并吞掉，
+// 违反用户拍板里那句「任一非绿则整段照旧展开（出问题时信息零减少）」。
+// ✗/⚠/⬆/⬇/⏱ 开头的行天然过不了「以 ⓘ 开头」这一关，不需要单独判。
+// 聚合判据是**整段**（对 lines 数组作为一个整体求值），不是逐行各自决定要不要露面：
+// 只要有一行不绿，**整段原样展开**——避免「5 行绿 + 1 行真问题」被误读成「大体没事」。
+function isGreenSyncLine(line) {
+  const s = String(line);
+  return /^ⓘ/.test(s) && s.indexOf("⚠") === -1;
+}
+function aggregateGreenSync(lines) {
+  if (lines.length && lines.every(isGreenSyncLine)) {
+    return { lines: ["ⓘ " + lines.length + " 项检查全绿"], aggregated: true };
+  }
+  return { lines, aggregated: false };
+}
+
 // ══════════════════════════════════════════════════════════════
 // 模式 B: 所有 git 项目（含元仓库）— 共性 rule 备案清单
 // ══════════════════════════════════════════════════════════════
@@ -1441,7 +1550,10 @@ if (!isMetaRepo) {
 }
 
 const issues = [];
-const daoSync = isMetaRepo ? daoSyncLines() : [];
+// J2：daoSyncLines() 的原始行先经 aggregateGreenSync 判「整段是否全绿」——全绿则聚合成
+// 一行「N 项检查全绿」，否则原样透传（daoSyncAgg.aggregated 供下面拼报文头时判断措辞）。
+const daoSyncAgg = isMetaRepo ? aggregateGreenSync(daoSyncLines()) : { lines: [], aggregated: false };
+const daoSync = daoSyncAgg.lines;
 
 // 非元仓库时顺带检查 windsurf-dao 的同步状态（从任意项目都能检测）。
 // 元仓库自己不走这一路：daoSyncLines() 已是同一检测的完整版，两路都跑会重复报。
@@ -1503,12 +1615,16 @@ if (issues.length === 0 && activeWork.length === 0 && daoSync.length === 0) done
 
 const parts = [];
 if (daoSync.length > 0) {
-  parts.push(
-    "【dao 同步漂移检测】windsurf-dao 存在以下同步差异：\n" +
-    daoSync.join("\n") +
-    "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。" +
-    "请在回答末尾简洁提醒用户。"
-  );
+  // J2 聚合态下头部换一句不自相矛盾的措辞——聚合后的内容是「全绿播报」，
+  // 原头部「存在以下同步差异」在这一态下是假话（没有差异，只有健康度播报）。
+  // 非聚合路径**字面不改一个字**（旧行为原样保留，回归面只在聚合态这一支）。
+  const openLine = daoSyncAgg.aggregated
+    ? "【dao 同步漂移检测】windsurf-dao 本轮同步/配置自检结果：\n"
+    : "【dao 同步漂移检测】windsurf-dao 存在以下同步差异：\n";
+  const tail = daoSyncAgg.aggregated
+    ? "\n请在回答末尾简洁提醒用户。"
+    : "\n⬇=远程/快照领先本地（需下行） ⬆=本地领先远程/快照（需上行）。请在回答末尾简洁提醒用户。";
+  parts.push(openLine + daoSync.join("\n") + tail);
 }
 if (issues.length > 0) {
   parts.push(
