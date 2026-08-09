@@ -184,17 +184,17 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "76242226a9e22e32454635021bc741f5d0c7ccb77bc665feebcc50a805976599",
-        "lines": 443,
-        "clauses": 1,
+        "sha256": "d972b15e79d711ee86922353d3545d47e78c2167e790862586d5715d4eb404bc",
+        "lines": 455,
+        "clauses": 2,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 1,
+        "slug": 2,
         "no_slug": 0,
-        "no_meta_field": 1
+        "no_meta_field": 2
       },
       {
         "file": "ccswitch/rules/dao-product.md",
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 84,
+      "general": 85,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 18,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 119,
+      "clauses": 120,
       "observation": 0
     }
   },
@@ -3003,12 +3003,35 @@
       "body_excerpt": "- 第一人称抽验价值：不满足于\"有数据/有响应\"，要问\"数据对不对\"——如按日粒度视图曾被验证官只验\"有数据\"未验\"数据是否符合预期分布\"，第一人称抽验多次捞出隐藏缺陷。 [n=1 @07-24 触发:无] [仅判据·无触发] [#官食-第一人称抽验]"
     },
     {
+      "id": "3854f33cb7a2",
+      "slug": "归-建单可读",
+      "file": "ccswitch/rules/dao-workitem.md",
+      "line": 31,
+      "line_end": 31,
+      "meta_line": 31,
+      "role": "general",
+      "zone": "clause",
+      "section": "建单三件套 · 起单时必过的三格（2026-08-09 立 · 用户拍板，issue 可读性改造批）",
+      "title": "一句话判据：建 issue 时类型标签、标题、关联三格都要过，正文散文引用只作补充不作唯一记录。",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": null,
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "**一句话判据：建 issue 时类型标签、标题、关联三格都要过，正文散文引用只作补充不作唯一记录。** [#归-建单可读]"
+    },
+    {
       "id": "bc764258b168",
       "slug": "归-认领协议",
       "file": "ccswitch/rules/dao-workitem.md",
-      "line": 34,
-      "line_end": 34,
-      "meta_line": 34,
+      "line": 46,
+      "line_end": 46,
+      "meta_line": 46,
       "role": "general",
       "zone": "clause",
       "section": "认领协议 · 两台机器 / 两个 AI 并行时「谁在干哪张单」（2026-08-08 立 · 用户点名立项 issue #193）",
