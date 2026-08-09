@@ -371,6 +371,21 @@
       ],
       "status": "active"
     },
+    "归-挂账分流": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-08→09 清账窗执行零例外：本窗立刻要用的信息建单（#199/#201/#203/#209/#210）、要等外部条件成立才能处置的原处评论挂账（issue #205 的 D1~D5）、纯用户判断题无技术后续的进 #70 待拍板池。条款文字为用户 2026-08-09 issue #70 一揽子拍板逐字给出，非 AI 自定。",
+      "source_refs": [
+        "issue #70（用户 2026-08-09 一揽子拍板 · 第二组「立法与盖章」）",
+        "#199", "#201", "#203", "#209", "#210",
+        "issue #205 D1~D5"
+      ],
+      "status": "active"
+    },
     "法-偏保守": {
       "file": "ccswitch/rules/dao-legislation.md",
       "n": "2",
