@@ -425,6 +425,34 @@
       ],
       "status": "active"
     },
+    "派-判官跨族": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "0",
+      "first_seen": "08-09",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "n=0 预防型：同源判官一致率虚高 5-7% 为外部数字（机制体检报告 §业界对标，两处独立信源转述），本仓未复现；当前校=Opus/尉=Sonnet 的档位基线天然满足本条，它防的是「两侧都不显式传档、一起继承最贵档」的同源形态。用户 2026-08-09 于 #70 一揽子拍板（体检 J8）",
+      "source_refs": [
+        "_tmp/mechanism-audit-20260809.md §三 J8",
+        "issue #70 拍板（2026-08-09）"
+      ],
+      "status": "active"
+    },
+    "派-对抗权限": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "2",
+      "first_seen": "08-09",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "与 [#派-工具面门] 互为两面：那条的基线是「两次派对抗官选只读型、3/3 定义性动作落空」（要写的派了只读）；本条防反向——机制体检实测 dao-adversary profile 给了完整读写，而 Claude Code 官方推荐评审型子代理只读+配置强制（「边界靠配置强制，不靠指望模型守规矩」）。折中形态（非变异类只读/变异类可写限独立树）为用户 2026-08-09 于 #70 一揽子拍板（体检 J7）",
+      "source_refs": [
+        "_tmp/mechanism-audit-20260809.md §三 J7",
+        "issue #70 拍板（2026-08-09）"
+      ],
+      "status": "active"
+    },
     "派-工具面门": {
       "file": "ccswitch/rules/dao-dispatch.md",
       "n": "2",
