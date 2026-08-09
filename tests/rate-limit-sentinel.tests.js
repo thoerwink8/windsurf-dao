@@ -79,6 +79,13 @@ function firedLines(tag, hookPath) {
       .map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
   } catch (_) { return []; }
 }
+// 直接往 fired.log 里塞种子记录（不经过 hook 本体）——deaths_24h 的多组边界测试
+// （笔①、issue #236 挂账①②③）都要这个前置，提到模块级只留一份，不逐块各抄一份。
+function seedFiredLog(tag, hookPath, records) {
+  const p = firedPath(tag, hookPath);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+}
 function payloadOf(over) {
   return Object.assign({
     session_id: "sid-" + TAG,
@@ -136,9 +143,11 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
   //    `reset_parse` 由下面单独一条查、`signature` 此前彻底真空）。现在逐格点名、逐格给值。
   //    **别把它读成「字段名对不对」**：名字对而值算错（比如 `reset_estimate_at` 恒 null）
   //    是这一格真正的失效形态，故三条里有两条是值断言。
+  // 🔴 **2026-08-09 issue #70 自适应并发批，笔①追加第 9 格 `deaths_24h`**：字段清单与下面
+  //    「9 个字段」这句同批改，别只改数字不改名字（那正是本节自己讲的「名实不符」）。
   const FIELDS = ["at", "error", "reset_estimate_s", "reset_parse", "reset_estimate_at",
-    "raw", "session_id", "signature"];
-  check("标记 8 个字段一格不少（逐格点名：" + FIELDS.join(" / ") + "）",
+    "raw", "session_id", "signature", "deaths_24h"];
+  check("标记 9 个字段一格不少（逐格点名：" + FIELDS.join(" / ") + "）",
     m && FIELDS.every((k) => Object.prototype.hasOwnProperty.call(m, k)),
     "缺=" + JSON.stringify(m ? FIELDS.filter((k) => !Object.prototype.hasOwnProperty.call(m, k)) : FIELDS));
   check("承重字段的值都对（error / raw / session_id / signature，不只是「键在」）",
@@ -156,6 +165,8 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
     m && m.reset_parse === "cn-carpool", "得 " + (m && m.reset_parse));
   check("raw 摘录同时含 error_details 与 last_assistant_message 两侧内容",
     m && /429/.test(m.raw) && /Rate limit reached/.test(m.raw), "raw=" + (m && m.raw));
+  check("deaths_24h = 1（这个 tag 的 fired.log 此前是空的，含本次死亡）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h));
   const f = firedLines(tag);
   check("fired.log 记一行且 marked=true", f.length === 1 && f[0].marked === true, "fired=" + JSON.stringify(f));
   const mir = mirrorLines(tag);
@@ -166,6 +177,166 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
     mir[0] && f[0] && mir[0].at === f[0].at && mir[0].error === f[0].error &&
     mir[0].reset_estimate_s === f[0].reset_estimate_s,
     "mirror=" + JSON.stringify(mir[0]) + " fired=" + JSON.stringify(f[0]));
+}
+
+console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「窗内 + marked:true」===");
+{
+  // 前置：直接往 fired.log 里塞两条**不该被计入**的记录——
+  //   ① 25h 前的 marked:true（窗外，即便是死亡也不算「最近」）
+  //   ② 1h 前的 marked:false（窗内，但不是死亡，只是「记了账但没写标记」的普通报错）
+  // 跑一次真实死亡后，deaths_24h 应该恰好是 1（只有这次），证明两条负控各自被判据挡住。
+  // （`seedFiredLog` 已提到模块级，本块起复用同一份——见上方定义处的理由）
+  const OLD_MARKED = { at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+  const RECENT_UNMARKED = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: false, error: "server_error" };
+
+  const tag = "deaths-window";
+  seedFiredLog(tag, REAL_HOOK, [OLD_MARKED, RECENT_UNMARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("窗外的死亡 + 窗内的非死亡都不计入 ⇒ deaths_24h = 1（只有这次）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([OLD_MARKED, RECENT_UNMARKED]) + "）");
+  check("fired.log 此刻共 3 行（2 条种子 + 这次真实死亡），deaths_24h 没有把种子行数直接抄过来",
+    firedLines(tag).length === 3, "fired=" + JSON.stringify(firedLines(tag)));
+
+  // ── 先破再验：把窗口判据（`t >= cutoff`）架空 ⇒ 上面「窗外死亡不计入」那条断言必须翻面 ──
+  // 形态是「结果不被消费」：`Number.isFinite(t)` 判据保留（`marked:false` 那条仍被挡），
+  // 只有窗口这一半被掐掉——这样能证明这条断言真的在盯着「窗口」而不是别的什么。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
+    const h = mutantHook("deaths-window-blind", ANCHOR, "        if (Number.isFinite(t)) n++;");
+    const tagM = "deaths-window-mut";
+    seedFiredLog(tagM, h, [OLD_MARKED, RECENT_UNMARKED]);
+    const envM = Object.assign({}, envFor(tagM));
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envM });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：窗口判据被架空 ⇒ 25h 前的死亡也被计进来，deaths_24h 变成 2（本次 + 那条窗外死亡）",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+    check("误伤反例：`marked:false` 那条负控在 mutation 后仍被挡住（架空的只是窗口，不是 marked 过滤）",
+      mm && mm.deaths_24h === 2, "若 marked:false 也被误计，这里会 >2：得 " + (mm && mm.deaths_24h));
+  }
+
+  // ── M5' 零守护断言（2026-08-09，PR #230 对抗返修）───────────────────────────
+  // 头注旗舰宣称「读失败记 null 不记 0」此前**没有任何断言在守**：对抗官把 catch 里的
+  // `return null` 改成 `return 0`，既有 165 条断言零反对。补两条：①正态证明这一格此前
+  // 唯一成立的场景（`readFileSync` 真抛异常，例如 fired.log 路径被占成目录）确实得 null；
+  // ②先破再验，把那个 mutation 真的跑一遍，证明①的断言真的在盯着这件事。
+  console.log("\n=== M5' 零守护断言：fired.log 路径被占成目录 ⇒ readFileSync 真抛 ⇒ deaths_24h = null ===");
+  {
+    const tag = "deaths-dir-occupied";
+    // 直接把 fired.log 那个路径本身建成目录——readJsonlRecords 内部的 `fs.existsSync` 会判真
+    // （目录也是"存在"），随后 `fs.readFileSync` 对目录操作在本机实测抛 EISDIR（先手工验证过，
+    // 见对抗官证据表 P5），走的正是 countDeaths24h 外层 try/catch 那条路，不是 parseJsonl 内部
+    // 逐行吞掉的那条路——两条路径必须分得开，这正是本条要证的事。
+    fs.mkdirSync(firedPath(tag, REAL_HOOK), { recursive: true });
+    run(REAL_HOOK, payloadOf(), tag);
+    const m = readJson(markerPath(tag));
+    check("fired.log 路径被占成目录 ⇒ readFileSync 真抛 ⇒ deaths_24h = null（不是 0，不是留空）",
+      m && Object.prototype.hasOwnProperty.call(m, "deaths_24h") && m.deaths_24h === null,
+      "marker=" + JSON.stringify(m));
+
+    const ANCHOR = "    return null;";
+    const h = mutantHook("null-vs-zero", ANCHOR, "    return 0;");
+    const tagM = "deaths-dir-occupied-mut";
+    fs.mkdirSync(firedPath(tagM, h), { recursive: true });
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：`return null` 改成 `return 0`（M5'，正是宣称禁止的那件事）⇒ 同一份"
+      + "「目录占位」场景下 deaths_24h 从 null 翻成 1（本次死亡的 +1）",
+      mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + JSON.stringify(mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string", "marker=" + JSON.stringify(mm));
+  }
+}
+
+console.log("\n=== issue #236 挂账①：未来时间戳不得永久计入（deaths_24h 上界）===");
+{
+  // 伪造一条「未来」的 marked:true 死亡（at = 现在 + 10 天）。修上界之前它会被永久计入
+  // （issue #236 对抗证据 P7/P8：+10 天与 9999 年都被计进去，且永不过期）；
+  // 修上界之后它应该像窗外记录一样被挡住。
+  const FUTURE_MARKED = { at: new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-future";
+  seedFiredLog(tag, REAL_HOOK, [FUTURE_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("未来 10 天的 marked:true 不计入 ⇒ deaths_24h = 1（只有这次真实死亡）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([FUTURE_MARKED]) + "）");
+
+  // 先破再验：只撤掉新增的上界（`&& t <= nowMs`），下界 `t >= cutoff` 原样保留——
+  // 证明这条正控真的在盯着"上界"，不是靠上面「架空整段窗口」那条 mutation 顺带盖住的。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
+    const h = mutantHook("deaths-future-nocap", ANCHOR, "        if (Number.isFinite(t) && t >= cutoff) n++;");
+    const tagM = "deaths-future-mut";
+    seedFiredLog(tagM, h, [FUTURE_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：撤掉上界 ⇒ 未来 10 天的死亡也被计入，deaths_24h 变成 2（issue #236 P7/P8 原始症状复现）",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #236 挂账②：窗口收紧方向要有测试兜底（23h 正控）===");
+{
+  // 既有语料只覆盖到 1h 以内（正控）与 25h（窗外负控），窗口在 0~25h 之间随便改都测不出来
+  // （issue #236 M9/M14：24h→1分钟、24h→23h 均 0 条红）。补一条 23h 正控：把窗口从 24h
+  // 意外收紧到更短时，这条记录会从「计入」翻成「不计入」，正是本条要抓的方向。
+  const D23H_MARKED = { at: new Date(Date.now() - 23 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-23h";
+  seedFiredLog(tag, REAL_HOOK, [D23H_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("23 小时前的 marked:true 仍应计入 ⇒ deaths_24h = 2（那条 + 这次真实死亡）",
+    m && m.deaths_24h === 2, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([D23H_MARKED]) + "）");
+
+  // 先破再验：把窗口从 24h 收紧到 1h（issue #236 M9 的具体形态之一）⇒ 23h 前那条应该
+  // 从"计入"翻成"不计入"，证明上面那条正控真的在盯着窗口长度，不是碰巧对。
+  {
+    const ANCHOR = "const DEATHS_WINDOW_MS = 24 * 3600 * 1000;";
+    const h = mutantHook("deaths-window-shrink", ANCHOR, "const DEATHS_WINDOW_MS = 1 * 3600 * 1000;");
+    const tagM = "deaths-23h-mut";
+    seedFiredLog(tagM, h, [D23H_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：窗口收紧到 1h ⇒ 23h 前那条掉出窗口，deaths_24h 从 2 变成 1（只剩这次死亡）",
+      mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #236 挂账③：死亡判定不能从 `=== true` 松成 truthy ===");
+{
+  // 写入侧目前永远是布尔值，故这不是当前活跃风险，而是**结构上**没有断言在守
+  // （issue #236 M7：`marked === true` 松成 `marked`，既有 165 条断言零反对）。
+  // 补一条正控：一个 truthy 但非严格 true 的值（字符串 "true"）不应被计入。
+  const TRUTHY_NOT_TRUE = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: "true", error: "rate_limit" };
+
+  const tag = "deaths-marked-truthy";
+  seedFiredLog(tag, REAL_HOOK, [TRUTHY_NOT_TRUE]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check('marked:"true"（truthy 但非严格 true）不计入 ⇒ deaths_24h = 1（只有这次真实死亡）',
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([TRUTHY_NOT_TRUE]) + "）");
+
+  // 先破再验：把 `=== true` 松成 truthy 判据 ⇒ 上面那条记录翻面被计入。
+  {
+    const ANCHOR = "      if (r && r.marked === true) {";
+    const h = mutantHook("deaths-marked-loosen", ANCHOR, "      if (r && r.marked) {");
+    const tagM = "deaths-marked-truthy-mut";
+    seedFiredLog(tagM, h, [TRUTHY_NOT_TRUE]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：`=== true` 松成 truthy ⇒ marked:\"true\" 那条被计入，deaths_24h 从 1 变成 2",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
 }
 
 console.log("\n=== 正态 · overloaded：同样写标记（matcher 覆盖的两种之一）===");
@@ -212,6 +383,24 @@ console.log("\n=== fail-open · 坏输入不许炸，且不许静默 ===");
   check("坏 stdin → 写 errors.log（出错必须出声，静默是这个 hook 最坏的死法）",
     fs.existsSync(errorsPath(tag)), "errors.log 不存在");
   check("坏 stdin → stderr 有留痕", /解析 stdin 失败/.test(r.err), "err=" + r.err.slice(0, 120));
+  // ── M7（issue #217，出处 PR #212 对抗评论）─────────────────────────────────
+  // `mirrorRecord()` 的生产调用点有 2 个：主路径（下面「正态」那几节都在测）与
+  // 坏 stdin 这条路（`main()` 里 `mirrorRecord(badRec)`）。此前只有第 1 个被端到端覆盖——
+  // 删掉第 2 个调用点，156 条断言一条不红。这里补上。
+  const mir = mirrorLines(tag);
+  check("🔴 坏 stdin → 镜像域也记一行（M7：mirrorRecord 第 2 个调用点，此前零覆盖）",
+    mir.length === 1 && mir[0].synthetic === true && mir[0].marked === false && mir[0].error === null,
+    "mirror=" + JSON.stringify(mir));
+
+  // ── 先破再验：把这个调用点架空 ⇒ 上面那条镜像断言必须翻面 ──────────────────────
+  const ANCHOR = "    mirrorRecord(badRec);";
+  const h = mutantHook("badpath-no-mirror", ANCHOR, "    if (false) mirrorRecord(badRec);");
+  const tagM = "badjson-mut";
+  const rm = run(h, null, tagM, "这不是 JSON{{{");
+  check("canary：变异体还活着（errors.log 照写、exit 0 照旧——坏的只有镜像这一格）",
+    rm.code === 0 && fs.existsSync(errorsPath(tagM, h)), "code=" + rm.code);
+  check("🔴 先破再验：坏 stdin 路径的镜像调用被架空 ⇒ 镜像域零记录（M7 断言不是摆设）",
+    mirrorLines(tagM).length === 0, "mirror=" + JSON.stringify(mirrorLines(tagM)));
 }
 {
   const tag = "forceerr";
@@ -233,6 +422,9 @@ console.log("\n=== 幂等：连发两次不炸，后一次覆盖前一次 ===");
     first && first.reset_estimate_s === 3600 && second && second.reset_estimate_s === 9000,
     "first=" + (first && first.reset_estimate_s) + " second=" + (second && second.reset_estimate_s));
   check("fired.log 攒了两行（标记覆盖，但账不覆盖）", firedLines(tag).length === 2);
+  check("deaths_24h 从 1 累计到 2（同一 tag 连续两次死亡，标记覆盖但死亡计数不覆盖）",
+    first && first.deaths_24h === 1 && second && second.deaths_24h === 2,
+    "first=" + (first && first.deaths_24h) + " second=" + (second && second.deaths_24h));
 }
 
 console.log("\n=== 解析式单元：两式各自的正控 + 负控（语料只取 spec a 段那两式）===");
@@ -525,6 +717,107 @@ console.log("\n=== #201 笔2：镜像域结构性沙箱兜底（忘传 DAO_RATE_
     "code=" + rm.status);
   check("🔴 mutation·兜底被架空：这次真的写进了（假 home 下的）生产默认路径 —— 证明这条断言真的在盯着这件事",
     fs.existsSync(legacyDefaultPath), "legacyDefaultPath 仍然不存在：" + legacyDefaultPath);
+}
+
+console.log("\n=== M5（issue #217）：deriveMirrorFallback 的 STATE_SUBDIR 分支，此前零覆盖 ===");
+{
+  // 前情（出处 PR #212 对抗评论）：`deriveMirrorFallback` 有三条分支（MARKER / STATE_SUBDIR /
+  // 生产默认值）。此前全套测试要么两个 env 都指（落分支①）、要么两个都不指（落分支③），
+  // **分支②（只指 STATE_SUBDIR、不指 MARKER）从未被单独触达**——整段架空，156 条零红。
+  // 安全：payload 用非限流类 error（不触发 writeMarker，MARKER_PATH 就算解到真实默认值
+  // 也不会被写一个字节）；STATE_SUBDIR 沙箱化后连带把主域（fired.log/errors.log）也带
+  // 进沙箱；fakeHome 是保险丝——万一分支②本身有 bug 真滑到分支③，也只碰得到假路径。
+  const fakeHome = path.join(BASE, "m5-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const legacyDefaultPath = path.join(fakeHome, ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+
+  function runStateSubdirOnly(hookPath, tag) {
+    const env = Object.assign({}, process.env, {
+      USERPROFILE: fakeHome, HOME: fakeHome,
+      DAO_RATE_LIMIT_STATE_SUBDIR: path.posix.join(TAG, tag, "state"),
+    });
+    delete env.DAO_RATE_LIMIT_MARKER;
+    delete env.DAO_RATE_LIMIT_MIRROR;
+    return spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(payloadOf({
+        error: "server_error", error_details: "server_error", last_assistant_message: "API Error: server_error",
+      })),
+      encoding: "utf8", env,
+    });
+  }
+  function stateSubdirMirrorPath(tag, hookPath) {
+    return path.join(rootOf(hookPath || REAL_HOOK), "_tmp", TAG, tag, "state", "mirror-fallback", "fired.log");
+  }
+
+  const tag = "m5-real";
+  const r = runStateSubdirOnly(REAL_HOOK, tag);
+  check("现状：只指 STATE_SUBDIR（不指 MARKER/MIRROR）→ exit 0", r.status === 0, "code=" + r.status);
+  const mp = stateSubdirMirrorPath(tag);
+  const lines = (() => {
+    try { return fs.readFileSync(mp, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)); }
+    catch (_) { return []; }
+  })();
+  check("现状：镜像落在 ROOT/_tmp/<STATE_SUBDIR>/mirror-fallback/fired.log（分支②的产物）",
+    lines.length === 1 && lines[0].mirror === true, "期望路径=" + mp + " 内容=" + JSON.stringify(lines));
+  check("现状：假 home 默认落点没被写入（证明这次真的走的是分支②，不是滑到了分支③）",
+    !fs.existsSync(legacyDefaultPath));
+
+  // ── 先破再验：把分支②架空 ⇒ 上面那条「镜像落在 STATE_SUBDIR 下」必须翻面 ────────────
+  const ANCHOR = "  if (process.env.DAO_RATE_LIMIT_STATE_SUBDIR) {";
+  const h = mutantHook("state-subdir-disabled", ANCHOR, "  if (false && process.env.DAO_RATE_LIMIT_STATE_SUBDIR) {");
+  const tagM = "m5-mut";
+  const rm = runStateSubdirOnly(h, tagM);
+  check("canary：变异体还活着（fired.log 主账照记——分支②的改动只影响镜像去哪，不影响主账）",
+    rm.status === 0 && firedLines(tagM, h).length === 1, "code=" + rm.status);
+  check("🔴 先破再验：分支②被架空 ⇒ 不再落 STATE_SUBDIR 那条镜像路径，改滑到假 home 默认值（M5 断言不是摆设）",
+    !fs.existsSync(stateSubdirMirrorPath(tagM, h)) && fs.existsSync(legacyDefaultPath),
+    "STATE_SUBDIR 路径仍存在=" + fs.existsSync(stateSubdirMirrorPath(tagM, h)));
+}
+
+console.log("\n=== M6 + E1（issue #217）：三个 env 全不指 → 落生产默认路径，字面「dao-state」被钉住 ===");
+{
+  // 前情（出处 PR #212 对抗评论）：
+  //   M6 —— 生产默认落点的字面段从 "dao-state" 改成 "dao-state-MUTANT"，156 条零红：
+  //     头注写着「两者都不传时逐字不变」，这句话此前没有任何断言在守。
+  //   E1 —— 三个环境变量一个都不指的调用方，仍然会落进真实 `~/.claude/dao-state/`；
+  //     这一格此前**没有测试覆盖**（沙箱兜底只覆盖了「指了任一变量」的三种组合）。
+  // 补法与 PR #212 对抗官自己用的手法同源（**不真跑 main()**，只 require 读
+  // `MIRROR_LOG` 这个模块加载期就算好的导出值）：真写一次就等于把 #201 笔2 要治的那个
+  // 「合成样本污染真实样本井」的病再犯一遍；读导出值零落盘、零风险，且同时验两件事——
+  // 这条路径确实会被走到（E1）与它的字面值对不对（M6）。
+  // 安全网：即便这条判据本身有 bug，也不能让子进程碰到使用者本机真实的
+  // `~/.claude/dao-state`——把 USERPROFILE/HOME 一并指进假 home。
+  const fakeHome = path.join(BASE, "m6-e1-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const expectDefault = path.join(fakeHome, ".claude", "dao-state", "rate-limit-sentinel", "fired.log");
+
+  function mirrorLogOf(hookPath) {
+    const env = Object.assign({}, process.env, { USERPROFILE: fakeHome, HOME: fakeHome });
+    delete env.DAO_RATE_LIMIT_MARKER;
+    delete env.DAO_RATE_LIMIT_STATE_SUBDIR;
+    delete env.DAO_RATE_LIMIT_MIRROR;
+    const rr = spawnSync(process.execPath,
+      ["-e", "process.stdout.write(String(require(process.argv[1]).MIRROR_LOG))", hookPath],
+      { encoding: "utf8", env });
+    return { out: String(rr.stdout || "").trim(), code: rr.status, err: String(rr.stderr || "") };
+  }
+
+  const real = mirrorLogOf(REAL_HOOK);
+  check("E1 前提：三个变量都不指时，算出的 MIRROR_LOG 是绝对路径（空串 === 空串是最容易的假绿）",
+    real.code === 0 && path.isAbsolute(real.out), "real=" + JSON.stringify(real));
+  check("🔴 E1：这一格真的会被走到——落点正是 <假 HOME>/.claude/dao-state/rate-limit-sentinel/fired.log" +
+    "（此前无测试覆盖；真实调用方会落进使用者本机同构的真实路径）",
+    real.out === expectDefault, "得 " + real.out + " 期望 " + expectDefault);
+
+  // ── 先破再验（M6）：把默认分支里的字面段 "dao-state" 改成 "dao-state-MUTANT" ──────
+  const ANCHOR = '    ".claude", "dao-state", "rate-limit-sentinel", "fired.log");';
+  const h = mutantHook("default-landing-literal", ANCHOR,
+    '    ".claude", "dao-state-MUTANT", "rate-limit-sentinel", "fired.log");');
+  const mut = mirrorLogOf(h);
+  check("canary：变异体还活着（照常算出一个绝对路径，不是崩了才不等）",
+    mut.code === 0 && path.isAbsolute(mut.out), "mut=" + JSON.stringify(mut));
+  check("🔴 先破再验：生产默认落点的字面段被改动 ⇒ MIRROR_LOG 的值翻面（头注「逐字不变」终于有断言在守，M6 断言不是摆设）",
+    mut.out !== real.out && /dao-state-MUTANT/.test(mut.out), "mut.out=" + mut.out);
 }
 
 console.log("\n=== 负控 · 宿主失效态两格（#190 第 4 条：模块加载期崩 / stdout 写不动）===");

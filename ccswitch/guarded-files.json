@@ -10,11 +10,17 @@
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
       "tests": 44,
-      "mutation_tests": 34,
-      "files": 33
+      "mutation_tests": 35,
+      "files": 34
     }
   },
   "files": [
+    {
+      "file": "ccswitch/hooks/dao-compact-log.js",
+      "guards": [
+        "dao-compact-log.tests.js"
+      ]
+    },
     {
       "file": "ccswitch/hooks/dao-design-sync-gate.js",
       "guards": [
@@ -111,6 +117,7 @@
     {
       "file": "ccswitch/lib/hook-selfcheck.js",
       "guards": [
+        "dao-compact-log.tests.js",
         "design-sync-gate.tests.js"
       ]
     },
