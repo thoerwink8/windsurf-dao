@@ -125,8 +125,8 @@ $effClaimLfLen = ($effClaimSrc -replace "`r`n", "`n").Length
 $mySessionLfLen = ($mySessionSrc -replace "`r`n", "`n").Length
 Assert-True '0a Get-DaoMarks 提取长度（行尾归一化 LF 后 2938 字节；PR #240 返修 R2 订正 CRLF 归一化注释后的实测值，此前为 2773，CRLF/LF 工作区皆成立）' `
     ($daoMarksLfLen -eq 2938) ("实测归一化后 {0} 字节（原始 {1}）" -f $daoMarksLfLen, $daoMarksSrc.Length)
-Assert-True '0b Get-EffectiveClaim 提取长度（行尾归一化 LF 后 1117 字节；issue #215 重写后的实测值，CRLF/LF 工作区皆成立）' `
-    ($effClaimLfLen -eq 1117) ("实测归一化后 {0} 字节（原始 {1}）" -f $effClaimLfLen, $effClaimSrc.Length)
+Assert-True '0b Get-EffectiveClaim 提取长度（行尾归一化 LF 后 1602 字节；issue #250 分组粒度修法后的实测值，此前为 1117（issue #215 重写），CRLF/LF 工作区皆成立）' `
+    ($effClaimLfLen -eq 1602) ("实测归一化后 {0} 字节（原始 {1}）" -f $effClaimLfLen, $effClaimSrc.Length)
 Assert-True '0d Test-IsMySessionClaim 提取长度（行尾归一化 LF 后 859 字节；issue #215-F3 四轮修法新增函数，首次入库即锁死字节数，与 0a/0b 同一严格度）' `
     ($mySessionLfLen -eq 859) ("实测归一化后 {0} 字节（原始 {1}）" -f $mySessionLfLen, $mySessionSrc.Length)
 
@@ -229,8 +229,8 @@ $marksG1 = @(
     [pscustomobject]@{ kind = 'claim';    host = 'NEW';  runtime = 'cc' }
 )
 $g1 = Get-EffectiveClaim -Marks $marksG1
-Assert-True '4a G1：claim(DEAD)→takeover(NEW,指名 DEAD)→claim(NEW) ⇒ 有效认领集合只剩 NEW 一个 key（DEAD 因被指名整台除名，F2 修法）' `
-    (($g1.Count -eq 1) -and $g1.ContainsKey('NEW') -and ($g1['NEW'].kind -eq 'claim')) ("keys={0}" -f (@($g1.Keys) -join ','))
+Assert-True '4a G1：claim(DEAD)→takeover(NEW,指名 DEAD/cc)→claim(NEW) ⇒ 有效认领集合只剩 NEW/cc 一个 key（DEAD/cc 因被指名除名，F2 修法；issue #250 后 key 是「机器/宿主」不再是裸机器名）' `
+    (($g1.Count -eq 1) -and $g1.ContainsKey('NEW/cc') -and ($g1['NEW/cc'].kind -eq 'claim')) ("keys={0}" -f (@($g1.Keys) -join ','))
 
 $marksG2 = @(
     [pscustomobject]@{ kind = 'claim'; host = 'A'; runtime = 'cc' },
@@ -253,10 +253,10 @@ $marksG3 = @(
     [pscustomobject]@{ kind = 'claim'; host = 'BOXB'; runtime = 'cc'; createdAt = '2026-08-09T01:00:30Z' }
 )
 $g3 = Get-EffectiveClaim -Marks $marksG3
-Assert-True '5a [issue #215-F1 已修，原缺陷锚点翻转] G3：两机同时认领（A 早/B 晚），函数现在逐机器分别返回——两个 host 都在结果集合里，各自都能看到"我自己的有效认领"' `
-    (($g3.Count -eq 2) -and $g3.ContainsKey('BOXA') -and $g3.ContainsKey('BOXB')) ("keys={0}" -f (@($g3.Keys) -join ','))
-Assert-True '5a-2 [issue #215-F1] G3 补证：调用方拿这份逐机结果做跨机比较，能正确判定 BOXA 更早（该让位的是 BOXB，不再是"两边都留着"或"都判不出"）' `
-    ($g3['BOXA'].createdAt -lt $g3['BOXB'].createdAt) ("BOXA={0} BOXB={1}" -f $g3['BOXA'].createdAt, $g3['BOXB'].createdAt)
+Assert-True '5a [issue #215-F1 已修，原缺陷锚点翻转] G3：两机同时认领（A 早/B 晚），函数现在逐桶分别返回——两个「机器/宿主」桶都在结果集合里，各自都能看到"我自己的有效认领"' `
+    (($g3.Count -eq 2) -and $g3.ContainsKey('BOXA/cc') -and $g3.ContainsKey('BOXB/cc')) ("keys={0}" -f (@($g3.Keys) -join ','))
+Assert-True '5a-2 [issue #215-F1] G3 补证：调用方拿这份逐桶结果做跨机比较，能正确判定 BOXA 更早（该让位的是 BOXB，不再是"两边都留着"或"都判不出"）' `
+    ($g3['BOXA/cc'].createdAt -lt $g3['BOXB/cc'].createdAt) ("BOXA/cc={0} BOXB/cc={1}" -f $g3['BOXA/cc'].createdAt, $g3['BOXB/cc'].createdAt)
 
 $marksG4 = @(
     [pscustomobject]@{ kind = 'claim';    host = 'DEAD'; runtime = 'cc' },
@@ -265,13 +265,13 @@ $marksG4 = @(
     [pscustomobject]@{ kind = 'claim';    host = 'DEAD'; runtime = 'cc' }
 )
 $g4 = Get-EffectiveClaim -Marks $marksG4
-Assert-True '5b [issue #215-F2 已修，原缺陷锚点翻转] G4：被接管的死机醒来后又发一条 claim，函数不再把它判成有效——结果集合只剩 NEW 一个 key，DEAD 整台除名' `
-    (($g4.Count -eq 1) -and $g4.ContainsKey('NEW') -and (-not $g4.ContainsKey('DEAD'))) ("keys={0}" -f (@($g4.Keys) -join ','))
+Assert-True '5b [issue #215-F2 已修，原缺陷锚点翻转] G4：被接管的死机醒来后又发一条 claim，函数不再把它判成有效——结果集合只剩 NEW/cc 一个 key，DEAD/cc 除名' `
+    (($g4.Count -eq 1) -and $g4.ContainsKey('NEW/cc') -and (-not $g4.ContainsKey('DEAD/cc'))) ("keys={0}" -f (@($g4.Keys) -join ','))
 
 $marksG9 = @([pscustomobject]@{ kind = 'claim'; host = 'SOLO'; runtime = 'cc' })
 $g9 = Get-EffectiveClaim -Marks $marksG9
 Assert-True '5c [issue #215-B3③] G9 单条-claim 边界：只有一条标记时函数仍要找到它——钉住内层 for 循环下界 `-ge 0`，防止"差一"退化成 `-gt 0`（那样单条数组的循环体会一次都不执行，此前回归网里没有任何断言能抓这个差异，唯独这个单条场景能）' `
-    (($g9.Count -eq 1) -and $g9.ContainsKey('SOLO') -and ($g9['SOLO'].host -eq 'SOLO')) ("keys={0}" -f (@($g9.Keys) -join ','))
+    (($g9.Count -eq 1) -and $g9.ContainsKey('SOLO/cc') -and ($g9['SOLO/cc'].host -eq 'SOLO')) ("keys={0}" -f (@($g9.Keys) -join ','))
 
 $marksG7 = @(
     [pscustomobject]@{ kind = 'claim'; host = 'X'; runtime = 'cc'; createdAt = '2026-08-09T01:00:00Z' },
@@ -280,7 +280,7 @@ $marksG7 = @(
 )
 $g7 = Get-EffectiveClaim -Marks $marksG7
 Assert-True '5d [issue #215 验收标准②「至少补一个三方场景」] 三台机各自的有效认领同时可见，不只两台机时才成立' `
-    (($g7.Count -eq 3) -and $g7.ContainsKey('X') -and $g7.ContainsKey('Y') -and $g7.ContainsKey('Z')) ("keys={0}" -f (@($g7.Keys) -join ','))
+    (($g7.Count -eq 3) -and $g7.ContainsKey('X/cc') -and $g7.ContainsKey('Y/cc') -and $g7.ContainsKey('Z/cc')) ("keys={0}" -f (@($g7.Keys) -join ','))
 
 # ============================================================================
 # 场景 6：F3 源码文本 canary——`$marks +=` 组装行现在带上 session/hours/oldHost/oldRuntime
@@ -306,7 +306,7 @@ if ($assemblyMatch.Success) {
     Assert-True '6d 组装行确实拼了 createdAt/kind/host/runtime 四个原有字段（新增字段没有挤掉旧字段）' `
         (($assemblyLine -match 'createdAt') -and ($assemblyLine -match 'kind') -and `
          ($assemblyLine -match 'host') -and ($assemblyLine -match 'runtime')) ''
-    Assert-True '6e [issue #215-F2，理由已订正 PR #240 对抗复核] 组装行带上了 oldHost/oldRuntime，但两个字段命运不同：`oldHost` 真被 §六除名逻辑（:343 `$excluded[$mk.oldHost]`）读取，`oldRuntime` 全仓 4 个生产点（本行解析/透传/本条断言）却 0 个消费点——除名逻辑只看 oldHost，`oldRuntime` 从未被读过（也是 A5"同机同宿主任一 runtime 被指名连坐除名"的根因，见 issue 跟进单）。这条 canary 只证明"两个字段都拼进了组装行"，不证明"两个字段都被下游用到"' `
+    Assert-True '6e [issue #215-F2；issue #250 已补上消费侧] 组装行带上了 oldHost/oldRuntime。~~两个字段命运不同：`oldRuntime` 全仓 0 个消费点，除名逻辑只看 oldHost~~ **issue #250 修法后两格都被读了**：除名键是 `oldHost/oldRuntime` 拼出来的桶名，缺任一格都不除名（见 8c/8d 两条行为断言）。这条 canary 仍然只证明"两个字段都拼进了组装行"，**不证明"两个字段都被下游用到"**——证那件事的是 8c/8d，别拿这条顶替' `
         (($assemblyLine -match 'oldHost') -and ($assemblyLine -match 'oldRuntime')) ''
 }
 
@@ -341,6 +341,137 @@ Assert-True '7f 两边都没有会话 id（纯单会话协议场景，历史行�
 
 Assert-True '7g 字典序错位负控（PR #240 对抗复核 M3：判等 `-eq` 被悄悄改弱成 `-ge` 时，7a/7b 只用 s1/s2 这一对样本、恰好使 `-ge` 也答对，34/34 全绿、零判别力——存活探针实测 s1-vs-s0 时 `-ge` 答 True 而正确答案是 False，方向 fail-open：会替别的会话续命）。my.session="s1"、MySession="s0"（字典序 s0 < s1）⇒ 不相等，判定不是我的；若判等被换成 `-ge`，"s1" -ge "s0" 为真，会被误判成"是我的"，这条断言专治这个方向' `
     (-not (Test-IsMySessionClaim -my $claimWithSession -MySession 's0')) ''
+
+# ============================================================================
+# 场景 8：issue #250 —— 分组粒度从 host 扩到「机器+宿主」（双栈同机 cc/codex 并桶）
+# ============================================================================
+# 本仓自己声明是双栈仓（CLAUDE.md：cc 与 Codex 共存），同机两个 AI 宿主认领同一张单是真实
+# 形态。§二 早就写明「认领的单位是「机器 + 宿主」」，而 `Get-EffectiveClaim` 此前只按 host
+# 分组 —— **实现与它自己已经写下的判据不一致**，这是本场景的性质：不是新立一条规矩，是把
+# 实现拉回已声明的单位（照做档）。
+# 8a-8c 刻意**从评论正文端到端喂**（Get-DaoMarks → 组装 → Get-EffectiveClaim），不是手搭
+# 对象：手搭对象绕过解析层，而 A5 的 oldHost/oldRuntime 恰恰产在解析层。
+Write-Host '场景 8：issue #250 分组粒度（机器+宿主）'
+
+function Build-MarksFromComments {
+    # §六 命令③ 的组装步骤同构：一条评论可产出多个机器面标记，按 GitHub 盖的时间戳排序
+    param($Comments)
+    $out = @()
+    foreach ($cm in $Comments) {
+        foreach ($mk in (Get-DaoMarks -Body $cm.body)) {
+            $out += [pscustomobject]@{ createdAt = $cm.createdAt; kind = $mk.kind; host = $mk.host; runtime = $mk.runtime; session = $mk.session; hours = $mk.hours; oldHost = $mk.oldHost; oldRuntime = $mk.oldRuntime }
+        }
+    }
+    return @($out | Sort-Object createdAt)
+}
+
+# --- A2：同机另一个宿主的 dao-yield: 不得撤销自己的 claim ---------------------
+$marksA2 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = "开始干这单。`n`ndao-claim: HOST1/cc/4h" },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:01:00Z'; body = "codex 那边的活收了。`n`ndao-yield: HOST1/codex" }
+)
+$a2 = Get-EffectiveClaim -Marks $marksA2
+Assert-True '8a [issue #250-A2] HOST1/cc 认领后 HOST1/codex 撤回 ⇒ cc 的认领仍然有效（修法前：两个宿主并进同一个 host 桶，codex 的 yield 把 cc 的 claim 一起杀掉，有效认领集合变空 —— 方向是"认领凭空消失"，比误报更危险）' `
+    (($a2.Count -eq 1) -and $a2.ContainsKey('HOST1/cc') -and ($a2['HOST1/cc'].runtime -eq 'cc')) ("keys={0}" -f (@($a2.Keys) -join ','))
+
+# --- A3：同机两个宿主各认领一次 ⇒ 两个独立的桶，先发的那个胜 -----------------
+$marksA3 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOST1/cc/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:03:00Z'; body = 'dao-claim: HOST1/codex/4h' }
+)
+$a3 = Get-EffectiveClaim -Marks $marksA3
+Assert-True '8b [issue #250-A3] 同机 cc/codex 各认领一次 ⇒ 两个桶都在，谁都没被对方覆盖（修法前：并进一个 host 桶、后发的 codex 覆盖先发的 cc，cc 的租约凭空消失）' `
+    (($a3.Count -eq 2) -and $a3.ContainsKey('HOST1/cc') -and $a3.ContainsKey('HOST1/codex')) ("keys={0}" -f (@($a3.Keys) -join ','))
+Assert-True '8b-2 [issue #250-A3] 补证：两个桶可比较，cc 更早 ⇒ 该让位的是 codex（§四「谁该让位」在同机跨宿主这一格现在也答得出来，不再是"看不见另一半"）' `
+    ($a3['HOST1/cc'].createdAt -lt $a3['HOST1/codex'].createdAt) ("cc={0} codex={1}" -f $a3['HOST1/cc'].createdAt, $a3['HOST1/codex'].createdAt)
+
+# --- A3 后半：命令④ 的租期锚点也要按「机器+宿主」过滤 -----------------------
+$myHostA3 = 'HOST1'; $myRuntimeA3 = 'cc'
+$holderClaimsA3 = @($marksA3 | Where-Object { $_.kind -eq 'claim' -and $_.host -eq $myHostA3 -and $_.runtime -eq $myRuntimeA3 })
+Assert-True '8b-3 [issue #250-A3 后半] 命令④ 租期锚点按「机器+宿主」过滤后取到的是 cc 自己那条（01:00），不是同机 codex 后发的那条（01:03）——只按 host 过滤时租期会从别人那条算起' `
+    ((($holderClaimsA3 | Select-Object -Last 1).createdAt) -eq '2026-08-09T01:00:00Z') ("锚点={0}" -f ($holderClaimsA3 | Select-Object -Last 1).createdAt)
+
+# --- A5：接管指名 BOXA/codex ⇒ 只除名那一个桶，BOXA/cc 不连坐 ---------------
+$marksA5 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: BOXA/cc/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:01:00Z'; body = 'dao-claim: BOXA/codex/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:05:00Z'; body = ('dao-takeover: NEW/cc ' + [char]0x00B7 + ' 原认领 BOXA/codex 静默 9h') },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:06:00Z'; body = 'dao-claim: NEW/cc/4h' }
+)
+Assert-True '8c-0 [前提] 接管评论的 oldHost/oldRuntime 两格都从解析层拿到了（拿不到则 8c 恒绿而无判别力——除名压根没发生也会让 BOXA/cc 活着）' `
+    ((@($marksA5 | Where-Object { $_.kind -eq 'takeover' })[0].oldHost -eq 'BOXA') -and (@($marksA5 | Where-Object { $_.kind -eq 'takeover' })[0].oldRuntime -eq 'codex')) ''
+$a5 = Get-EffectiveClaim -Marks $marksA5
+Assert-True '8c [issue #250-A5] 接管指名 BOXA/codex ⇒ 只有 BOXA/codex 被除名，BOXA/cc 保住自己的认领、NEW/cc 是新持有人（修法前：除名逻辑只读 oldHost，整台 BOXA 连坐除名，把一个合法持有人一起抹掉）' `
+    (($a5.Count -eq 2) -and $a5.ContainsKey('BOXA/cc') -and $a5.ContainsKey('NEW/cc') -and (-not $a5.ContainsKey('BOXA/codex'))) ("keys={0}" -f (@($a5.Keys) -join ','))
+
+# --- 除名的 fail-safe 方向：缺一格就不除名 -----------------------------------
+$marksA5b = @(
+    [pscustomobject]@{ kind = 'claim';    host = 'BOXA'; runtime = 'codex'; createdAt = '2026-08-09T01:00:00Z' },
+    [pscustomobject]@{ kind = 'takeover'; host = 'NEW';  runtime = 'cc'; oldHost = 'BOXA'; oldRuntime = $null; createdAt = '2026-08-09T01:05:00Z' }
+)
+$a5b = Get-EffectiveClaim -Marks $marksA5b
+Assert-True '8d [issue #250 除名 fail-safe] 接管只解出 oldHost、oldRuntime 缺失时**不除名**（宁可漏排除不误排除，与 §三"拿不准就当它还被持有"同向）。这条同时是 8c 的反向夹击：若把除名判据写成"只要 oldHost 命中就整台除名"，8c 会红；若写成"两格都不看、从不除名"，本条绿而 8c 红 —— 两条一起才夹得住那个 `-and`' `
+    (($a5b.Count -eq 2) -and $a5b.ContainsKey('BOXA/codex') -and $a5b.ContainsKey('NEW/cc')) ("keys={0}" -f (@($a5b.Keys) -join ','))
+
+# --- B3：跨宿主冒领 ------------------------------------------------------------
+$marksB3 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOST1/codex/4h' }
+)
+$b3 = Get-EffectiveClaim -Marks $marksB3
+$myKeyB3 = '{0}/{1}' -f 'HOST1', 'cc'
+$myB3 = $b3[$myKeyB3]
+Assert-True '8e [issue #250-B3] codex 用 3 字段旧格式持有该单，cc 按「机器+宿主」组合键查自己的桶 ⇒ 查不到（$null）⇒ Test-IsMySessionClaim 答"不是我的"。修法前 cc 用裸 $MyHost 查会查到 codex 那条并判 True，替别人的认领续命——F3 号称堵住的"互认"洞在跨宿主这一格原样重现' `
+    ((-not $myB3) -and (-not (Test-IsMySessionClaim -my $myB3 -MySession 's1'))) ("my={0}" -f $myB3)
+Assert-True '8e-2 [issue #250 残留弱处锚点，钉住的是**现状不是理想态**] Test-IsMySessionClaim 自身仍不比对 runtime：直接把 codex 那条有效认领喂给它，它照旧答 True（无 session 可比 ⇒ 按旧行为放行）。本批的修法落在**查表那一步**（组合键），不在这个函数里 —— 哪天它自己也比对 runtime 了，这条会变红，那正是该更新的信号，不是回归' `
+    (Test-IsMySessionClaim -my $b3['HOST1/codex'] -MySession 's1') ''
+
+# --- 分隔符负控：`/` 不是可有可无的装饰 ---------------------------------------
+$marksSep = @(
+    [pscustomobject]@{ kind = 'claim'; host = 'AB'; runtime = 'C';  createdAt = '2026-08-09T01:00:00Z' },
+    [pscustomobject]@{ kind = 'claim'; host = 'A';  runtime = 'BC'; createdAt = '2026-08-09T01:01:00Z' }
+)
+$sep = Get-EffectiveClaim -Marks $marksSep
+Assert-True '8f [issue #250 分隔符负控] 组合键必须带分隔符：`AB`+`C` 与 `A`+`BC` 裸拼都是 "ABC" ⇒ 会被并成一个桶（同 A3 的病换个马甲）。带 `/` 时是 "AB/C" 与 "A/BC" 两个桶。这条专治"把 `{0}/{1}` 悄悄改成 `{0}{1}`"这一类变异——§二 字符集把 `/` 挡在两格之外，所以 `/` 做分隔符反解唯一，这条断言正是那个前提的落地检验' `
+    (($sep.Count -eq 2) -and $sep.ContainsKey('AB/C') -and $sep.ContainsKey('A/BC')) ("keys={0}" -f (@($sep.Keys) -join ','))
+
+# --- 源码文本 canary：§六 命令③④ 的调用侧（不在函数里，抽不出函数体） --------
+# 三条 canary 的行尾锚刻意写成 `[^\r\n]*` 而**不带** `$`：本仓 core.autocrlf=true，工作区是
+# CRLF，而 .NET 的 `(?m)$` 只在 `\n` 之前命中、在 `\r` 之前不命中 ⇒ 带 `$` 的版本在 CRLF 检出
+# 下三条全部落空（本批实测：先写成带 `$`，三条同时 FAIL 且 `原文：` 打印为空）。
+# 这正是 dao `[#守-锚点行尾]` 说的那一格——落空的锚在别的写法里会静默 PASS，这里因为断言
+# 同时要求 `.Success`，落空即红，故是"响了"而不是"瞎了"。
+$myKeyLine = [regex]::Match($docText, '(?m)^\$MyKey = [^\r\n]*')
+Assert-True '8g-1 §六 命令③ 定义了组合键 $MyKey，且它由 $MyHost 与 $MyRuntime 两格拼成（这一行不在任何函数体内，括号计数法抽不到，只能锚单行原文）' `
+    ($myKeyLine.Success -and ($myKeyLine.Value -match '\$MyHost') -and ($myKeyLine.Value -match '\$MyRuntime')) ("原文：{0}" -f $myKeyLine.Value)
+
+$lookupLine = [regex]::Match($docText, '(?m)^\$my = \$eff\[[^\r\n]*')
+Assert-True '8g-2 §六 命令③ 查自己那个桶用的是 $MyKey，不是裸 $MyHost（裸 $MyHost 查表就是 B3 冒领的落点——函数改对了而调用侧没改，缺陷原样还在）' `
+    ($lookupLine.Success -and ($lookupLine.Value -match '\$eff\[\$MyKey\]')) ("原文：{0}" -f $lookupLine.Value)
+
+$holderLine = [regex]::Match($docText, '(?m)^\$holderClaims = @\(\$marks \| Where-Object \{[^\r\n]*')
+Assert-True '8h §六 命令④ 的租期锚点过滤同时带 host 与 runtime 两格（8b-3 用等价表达式验了行为，这条钉住盘上那一行真的这么写——两条分工：行为断言证"这么写是对的"，canary 证"盘上就是这么写的"）' `
+    ($holderLine.Success -and ($holderLine.Value -match '\$_\.host -eq \$MyHost') -and ($holderLine.Value -match '\$_\.runtime -eq \$MyRuntime')) ("原文：{0}" -f $holderLine.Value)
+
+# --- A4 / A8：本批**不修**，钉住当前的错误返回值当退役触发器 -----------------
+# issue #250 处置建议明写这两条要额外的"接管环检测"、设计面更大，与"不支持合法复活"那条
+# 已知弱处一起评审。这里钉住它们**现在的错误行为**：哪天有人做了环检测，这两条会变红，
+# 那正是该更新期望值的信号（同场景 5 G3/G4 的历史：先钉错值，修好后翻转）。
+# 不钉的话，这两个形态在盘上没有任何触发器，只活在 issue 正文里。
+$marksA4 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = ('dao-takeover: AAA/cc ' + [char]0x00B7 + ' 原认领 BBB/cc 静默 9h') },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:01:00Z'; body = ('dao-takeover: BBB/cc ' + [char]0x00B7 + ' 原认领 AAA/cc 静默 9h') }
+)
+$a4 = Get-EffectiveClaim -Marks $marksA4
+Assert-True '8i [issue #250-A4 已知缺陷锚点，本批不修] 互相接管（A 接管 B、B 再接管 A）⇒ 两个桶互相除名，有效认领集合为空：连当下合法持有它的那台机也被抹掉，两边都以为这单没人认领。钉住的是**错误值**，修好后本条会红' `
+    ($a4.Count -eq 0) ("keys={0}" -f (@($a4.Keys) -join ','))
+
+$marksA8 = Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: BOXA/cc/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:05:00Z'; body = ('dao-takeover: BOXA/cc ' + [char]0x00B7 + ' 原认领 BOXA/cc 静默 9h') }
+)
+$a8 = Get-EffectiveClaim -Marks $marksA8
+Assert-True '8j [issue #250-A8 已知缺陷锚点，本批不修] 自我接管（同一台机重启后接管自己的陈旧认领）⇒ 把自己除名，集合为空。这不是"旧机复活不了"（已知弱处覆盖的那种），是"现任合法持有人被抹掉"，严重度不同。钉住的是**错误值**，修好后本条会红' `
+    ($a8.Count -eq 0) ("keys={0}" -f (@($a8.Keys) -join ','))
 
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''
