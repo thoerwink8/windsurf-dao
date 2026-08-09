@@ -1543,7 +1543,11 @@ const NON_PASS_PATTERNS = [
   //   只覆盖了 5 处，这是遗漏的第 6 处；e2e 实测该行仍以 ⓘ 开头、不含 ⚠，被①判成候选绿、
   //   聚合时连同待退役条款一起吞掉。`RetireAgeDays` 缺省 21 天，判词实测当前 21 条台账
   //   记录年龄落在 16–20 天，预计 2026-08-11 起在生产里从 0 变活）。锚在 retire/promote
-  //   两个子项共用的固定短语上，谁非零都命中，同③⑤同一手法（不必分别匹配两个数字）
+  //   两个子项共用的固定短语上，谁非零都命中，~~同③⑤同一手法（不必分别匹配两个数字）~~
+  //   **PR #237 三轮复看 5231769847 改真**：这不是③⑤那种姊妹覆盖——`:899-902` 那条 return
+  //   把两个子项的文字无条件拼接、只有数字变，不存在「锚点收窄会漏掉某个姊妹」的风险
+  //   （③⑤是条件 push，文本随之增减，收窄才真的会漏）；M-R1b 实测坐实：同型收窄下 ⑥ 零红、
+  //   ③ 的孤儿子项 ③b 仍单红。⑥b 保留为同谓词冗余断言，不宣称它守着 ⑥a 之外的东西
   /条款库观察线/,
 ];
 function isGreenSyncLine(line) {
@@ -1597,7 +1601,7 @@ if (!isMetaRepo) {
 const issues = [];
 // J2：daoSyncLines() 的原始行先经 aggregateGreenSync 判「整段是否全绿」——全绿则聚合成
 // ~~一行「N 项检查全绿」~~ 一行「N 行全绿」（F2 已把报文措辞改真，本行是 38 行外的引用，
-// PR #237 对抗验证 5231324695 F 同批订正：改一条陈述时 Grep 面要含该对象自己的源文件与
+// PR #237 对抗验证 5231324695 R3 同批订正：改一条陈述时 Grep 面要含该对象自己的源文件与
 // 头注 [#官通-同批查引用]），否则原样透传（daoSyncAgg.aggregated 供下面拼报文头时判断措辞）。
 const daoSyncAgg = isMetaRepo ? aggregateGreenSync(daoSyncLines()) : { lines: [], aggregated: false };
 const daoSync = daoSyncAgg.lines;

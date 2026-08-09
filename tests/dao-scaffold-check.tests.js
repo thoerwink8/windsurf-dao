@@ -1699,7 +1699,7 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       !j2.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 21 条够老了、该问一句「还有用吗」，" +
         "0 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
         "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"));
-    check("🔴 NON_PASS_PATTERNS⑥b：同一返回语句的姊妹子项——promote>0 但 retire=0 时同样非绿（同③⑤同一手法，不只靠 retire 才拦住）",
+    check("🔴 NON_PASS_PATTERNS⑥b：同一返回语句的姊妹子项——promote>0 但 retire=0 时同样非绿（~~同③⑤同一手法，不只靠 retire 才拦住~~ PR #237 三轮复看 5231769847 改真：⑥a/⑥b 是同一条 return 无条件拼接、同生同死，不是③⑤那种姊妹覆盖，保留为同谓词冗余断言）",
       !j2.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 0 条够老了、该问一句「还有用吗」，" +
         "3 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
         "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"));
