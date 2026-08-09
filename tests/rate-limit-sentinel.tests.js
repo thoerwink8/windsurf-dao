@@ -136,9 +136,11 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
   //    `reset_parse` 由下面单独一条查、`signature` 此前彻底真空）。现在逐格点名、逐格给值。
   //    **别把它读成「字段名对不对」**：名字对而值算错（比如 `reset_estimate_at` 恒 null）
   //    是这一格真正的失效形态，故三条里有两条是值断言。
+  // 🔴 **2026-08-09 issue #70 自适应并发批，笔①追加第 9 格 `deaths_24h`**：字段清单与下面
+  //    「9 个字段」这句同批改，别只改数字不改名字（那正是本节自己讲的「名实不符」）。
   const FIELDS = ["at", "error", "reset_estimate_s", "reset_parse", "reset_estimate_at",
-    "raw", "session_id", "signature"];
-  check("标记 8 个字段一格不少（逐格点名：" + FIELDS.join(" / ") + "）",
+    "raw", "session_id", "signature", "deaths_24h"];
+  check("标记 9 个字段一格不少（逐格点名：" + FIELDS.join(" / ") + "）",
     m && FIELDS.every((k) => Object.prototype.hasOwnProperty.call(m, k)),
     "缺=" + JSON.stringify(m ? FIELDS.filter((k) => !Object.prototype.hasOwnProperty.call(m, k)) : FIELDS));
   check("承重字段的值都对（error / raw / session_id / signature，不只是「键在」）",
@@ -156,6 +158,8 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
     m && m.reset_parse === "cn-carpool", "得 " + (m && m.reset_parse));
   check("raw 摘录同时含 error_details 与 last_assistant_message 两侧内容",
     m && /429/.test(m.raw) && /Rate limit reached/.test(m.raw), "raw=" + (m && m.raw));
+  check("deaths_24h = 1（这个 tag 的 fired.log 此前是空的，含本次死亡）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h));
   const f = firedLines(tag);
   check("fired.log 记一行且 marked=true", f.length === 1 && f[0].marked === true, "fired=" + JSON.stringify(f));
   const mir = mirrorLines(tag);
@@ -166,6 +170,49 @@ console.log("\n=== 正态 · rate_limit：写标记 + 记日志 ===");
     mir[0] && f[0] && mir[0].at === f[0].at && mir[0].error === f[0].error &&
     mir[0].reset_estimate_s === f[0].reset_estimate_s,
     "mirror=" + JSON.stringify(mir[0]) + " fired=" + JSON.stringify(f[0]));
+}
+
+console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「窗内 + marked:true」===");
+{
+  // 前置：直接往 fired.log 里塞两条**不该被计入**的记录——
+  //   ① 25h 前的 marked:true（窗外，即便是死亡也不算「最近」）
+  //   ② 1h 前的 marked:false（窗内，但不是死亡，只是「记了账但没写标记」的普通报错）
+  // 跑一次真实死亡后，deaths_24h 应该恰好是 1（只有这次），证明两条负控各自被判据挡住。
+  function seedFiredLog(tag, hookPath, records) {
+    const p = firedPath(tag, hookPath);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  }
+  const OLD_MARKED = { at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+  const RECENT_UNMARKED = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: false, error: "server_error" };
+
+  const tag = "deaths-window";
+  seedFiredLog(tag, REAL_HOOK, [OLD_MARKED, RECENT_UNMARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("窗外的死亡 + 窗内的非死亡都不计入 ⇒ deaths_24h = 1（只有这次）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([OLD_MARKED, RECENT_UNMARKED]) + "）");
+  check("fired.log 此刻共 3 行（2 条种子 + 这次真实死亡），deaths_24h 没有把种子行数直接抄过来",
+    firedLines(tag).length === 3, "fired=" + JSON.stringify(firedLines(tag)));
+
+  // ── 先破再验：把窗口判据（`t >= cutoff`）架空 ⇒ 上面「窗外死亡不计入」那条断言必须翻面 ──
+  // 形态是「结果不被消费」：`Number.isFinite(t)` 判据保留（`marked:false` 那条仍被挡），
+  // 只有窗口这一半被掐掉——这样能证明这条断言真的在盯着「窗口」而不是别的什么。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff) n++;";
+    const h = mutantHook("deaths-window-blind", ANCHOR, "        if (Number.isFinite(t)) n++;");
+    const tagM = "deaths-window-mut";
+    seedFiredLog(tagM, h, [OLD_MARKED, RECENT_UNMARKED]);
+    const envM = Object.assign({}, envFor(tagM));
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envM });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：窗口判据被架空 ⇒ 25h 前的死亡也被计进来，deaths_24h 变成 2（本次 + 那条窗外死亡）",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+    check("误伤反例：`marked:false` 那条负控在 mutation 后仍被挡住（架空的只是窗口，不是 marked 过滤）",
+      mm && mm.deaths_24h === 2, "若 marked:false 也被误计，这里会 >2：得 " + (mm && mm.deaths_24h));
+  }
 }
 
 console.log("\n=== 正态 · overloaded：同样写标记（matcher 覆盖的两种之一）===");
@@ -233,6 +280,9 @@ console.log("\n=== 幂等：连发两次不炸，后一次覆盖前一次 ===");
     first && first.reset_estimate_s === 3600 && second && second.reset_estimate_s === 9000,
     "first=" + (first && first.reset_estimate_s) + " second=" + (second && second.reset_estimate_s));
   check("fired.log 攒了两行（标记覆盖，但账不覆盖）", firedLines(tag).length === 2);
+  check("deaths_24h 从 1 累计到 2（同一 tag 连续两次死亡，标记覆盖但死亡计数不覆盖）",
+    first && first.deaths_24h === 1 && second && second.deaths_24h === 2,
+    "first=" + (first && first.deaths_24h) + " second=" + (second && second.deaths_24h));
 }
 
 console.log("\n=== 解析式单元：两式各自的正控 + 负控（语料只取 spec a 段那两式）===");

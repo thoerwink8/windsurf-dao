@@ -99,17 +99,17 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "1e98b3a8b425a1003c366d5b5cead3c4d4a60eda3727a70513784e6bb6ece628",
-        "lines": 130,
-        "clauses": 3,
+        "sha256": "8cfabafa935271a92f336677049bca1560e525dd8c9899c4f91bc53a5213a9ad",
+        "lines": 136,
+        "clauses": 4,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 3,
+        "slug": 4,
         "no_slug": 0,
-        "no_meta_field": 2
+        "no_meta_field": 3
       },
       {
         "file": "ccswitch/rules/dao-officer-clauses.md",
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 84,
+      "general": 85,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 18,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 119,
+      "clauses": 120,
       "observation": 0
     }
   },
@@ -1296,11 +1296,11 @@
       "body_excerpt": "⚠️ **阈值取值是判断档，此处初值由 AI 自定、待用户拍板**（按 dao.md 反·归「谁来定这条规矩」，「几个算够」命中否决项①「给 AI 自己定及格线」）。**槽位形态本身是照做档**（写简报时那一行的位置就在眼前，零现场判断），故形态先行、数字待裁——两半分开落，不因数字未定就把整条挂起。 [n=0 @0…"
     },
     {
-      "id": "f51d50b81b30",
+      "id": "756a48eca907",
       "slug": "窗-串行瓶颈",
       "file": "ccswitch/rules/dao-longwindow.md",
       "line": 121,
-      "line_end": 123,
+      "line_end": 124,
       "meta_line": 123,
       "role": "general",
       "zone": "clause",
@@ -1317,6 +1317,29 @@
       "observing": false,
       "shape": "prose",
       "body_excerpt": "㈠**补水位提到每轮最前（次序硬规）**：心跳/回合的**第一个工具段**就是水位检查+补派，**在任何 merge/裁决/抽验之前**。合并期是水位最易漏的时刻（帅忙于串行终审），所以补在前面、让在跑的官在你合并时继续跑。**判据：这一轮我先补水位了吗？没有就是又滑了一次。** ㈡**自适应水位（水位是上限不是配额…"
+    },
+    {
+      "id": "8b93672a6780",
+      "slug": "窗-自适应水位",
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "line": 128,
+      "line_end": 129,
+      "meta_line": 129,
+      "role": "general",
+      "zone": "clause",
+      "section": "二 · 心跳对账节（每次唤醒的第一动作 = Read 本节）",
+      "title": "恢复",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": "2026-08-09 单日 5 次限流全灭接手 + 静态保守水位在健康期压制并发，双向实证",
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "- **恢复**：标记解除后，首批重派的官**存活满 10 分钟**起，此后每 15 分钟档位水位 +1 路，爬回满载——不是标记一解除就立刻拉满。 出处：用户 2026-08-09 拍板（issue #70 追录评论「自适应并发落地」）。[基线:2026-08-09 单日 5 次限流全灭接手 + 静态保守水位在健康…"
     },
     {
       "id": "10e74826dc8f",
