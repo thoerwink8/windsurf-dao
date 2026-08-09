@@ -1525,6 +1525,21 @@
       "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截 1661 次",
       "source_refs": [],
       "status": "active"
+    },
+    "归-建单可读": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-09 调研（_tmp/issue-readability-research-20260809.md）实测 40 张最近 issue：标题 75%（30/40）依赖内部黑话或体系术语才可解析、除『缺陷』准类型标签（11 张）外无类型细分（六格 0%）、关联结构化字段使用率 0%（全部关联靠正文散文引用 #NN）。出处=用户 2026-08-09 拍板「A+B 叠加」+ 上述调研报告，非 AI 自定。落地当批实测新坑：blocked_by 目标只能是 issue、不能是 PR——**2026-08-09 PR #225 复核订正证据链**：`gh issue edit 219 --add-blocked-by 218` 在 gh CLI 客户端层就被 GraphQL 解析挡下（`Could not resolve to an Issue with the number of 218`），请求没到 REST；422（Validation failed: Target issue may only be an issue）只有直调 REST `POST .../issues/<n>/dependencies/blocked_by` 才看得到（对 #218、#225 两个 PR 目标各验一次复现）。结论（blocked_by 拒绝 PR）不变，只是此前记错了哪条命令对应哪层错误。调研报告只验了端点存在，未验目标类型，本条落地时订正。",
+      "source_refs": [
+        "_tmp/issue-readability-research-20260809.md",
+        "issue #70 评论 5230545859（帅 2026-08-09 补录用户拍板原文：A+B 叠加，类型标签按程序员英文命名、可补充更多）https://github.com/thoerwink8/windsurf-dao/issues/70#issuecomment-5230545859",
+        "ccswitch/rules/dao-workitem.md 建单三件套节"
+      ],
+      "status": "active"
     }
   }
 }
