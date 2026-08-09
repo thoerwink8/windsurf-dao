@@ -2413,12 +2413,23 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       //    包括那条本该被饿死 fail-close 拦下的命令。**修法**：用这一次相① 的真实耗时当
       //    「重跑一遍要多贵」的估价，预算不够就不硬跑，退回饿死 fail-close（诚实说"没验完"）。
       {
-        const RE_BUDGET_CHECK = /if \(elapsed \+ v1CostMs > G2_RERUN_DEADLINE_MS\) return g2Starved\(batch\.fed, starved\);/;
+        const RE_BUDGET_CHECK = /if \(elapsed \+ G2_RERUN_COST_FACTOR \* v1CostMs > G2_RERUN_DEADLINE_MS\) return g2Starved\(batch\.fed, starved\);/;
         const RE_MARGIN = /const G2_RERUN_SAFETY_MARGIN_MS = 2000;/;
+        // 🔴 issue #254 新增三个锚点：估价系数常量 + 预算闸自己量的两个真实耗时变量
+        //   （危险窗判别力断言 ⑦ 靠伪造后两个变量的值把机器速度从判据里剔除，见该节）。
+        const RE_FACTOR = /const G2_RERUN_COST_FACTOR = 2\.5;/;
+        const RE_V1COST = /const v1CostMs = Date\.now\(\) - t0;/;
+        const RE_ELAPSED = /const elapsed = Date\.now\(\) - t0;/;
         const n235 = (SRC.match(new RegExp(RE_BUDGET_CHECK.source, "g")) || []).length;
-        check("#235 锚点恰好命中 1 次（㉑ 预算闸）", n235 === 1, `命中 ${n235} 次`);
+        check("#235 锚点恰好命中 1 次（㉑ 预算闸，issue #254 后含系数乘项）", n235 === 1, `命中 ${n235} 次`);
         const nMargin = (SRC.match(new RegExp(RE_MARGIN.source, "g")) || []).length;
         check("#235 锚点恰好命中 1 次（安全边际常量）", nMargin === 1, `命中 ${nMargin} 次`);
+        const nFactor = (SRC.match(new RegExp(RE_FACTOR.source, "g")) || []).length;
+        check("#254 锚点恰好命中 1 次（估价系数常量）", nFactor === 1, `命中 ${nFactor} 次`);
+        const nV1Cost = (SRC.match(new RegExp(RE_V1COST.source, "g")) || []).length;
+        check("#254 锚点恰好命中 1 次（v1CostMs 赋值）", nV1Cost === 1, `命中 ${nV1Cost} 次`);
+        const nElapsed = (SRC.match(new RegExp(RE_ELAPSED.source, "g")) || []).length;
+        check("#254 锚点恰好命中 1 次（elapsed 赋值）", nElapsed === 1, `命中 ${nElapsed} 次`);
 
         if (n235 === 1 && nMargin === 1) {
           const mNoBudget = mkMut("mutant-235-no-budget.js", [RE_BUDGET_CHECK, "null"]);
@@ -2455,14 +2466,56 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           check("#235 正控·拦截文案仍是「没验过」而不是「查出你在写 live 配置」",
             /这次没验过/.test(budgetR.err), budgetR.err.slice(0, 200));
 
+          // ⑦ 🔴 **issue #254 ①·真能量到预算闸**（危险窗 v1∈(2.8s,3.5s)，本机约 N≈40000–52000）：
+          //    上面 ⑤ 那组只证「预算闸这个机制存在且被读」（安全边际调到 10000 让 deadline≈0，
+          //    不管系数是几都恒判"预算不够"，测的是**布线**不是**取值**）；下面 ⑥ 那组大规模
+          //    复测证的是「兜底 fail-close 仍在」（M4 mutation 坐实：抹平 `starved` 才会翻绿，
+          //    抹平预算闸判据不会——那条断言在危险窗内是**空过**，走的是末尾饿死闸，不是预算闸，
+          //    2026-08-09 issue #254 判词首次点破）。**这一组要证的是第三件事、也是本单的关闭
+          //    条件①**：系数（2.5×）这个具体取值，是不是真的把原来漏判的那段 v1 区间关上了。
+          //    **判别力靠退出码，不靠计时**（不必真跑几万条诱饵去凑机器相关的绝对耗时）：payload
+          //    用上面的 `dirFormPay`（3 诱饵 + 1 个 dirForm 触发子，fed=8，远低于
+          //    `G2_CAND_STARVE_N`=64）——**末尾饿死闸这一格在这个规模上永远到不了**（fed 太小），
+          //    故 exit 2 在这个 payload 上只能来自预算闸，exit 0 只能是预算闸没拦、v3 重跑完
+          //    又没找到真违例（`b.md` 不是 live 名，同 `normalR` 那条对照）。
+          //    **v1CostMs / elapsed 直接伪造成危险窗中点**（`v1=3000ms`，`elapsed=1.31·v1≈3930ms`
+          //    ——1.31 那个拟合系数取自 ㉑ 头注同一处出处，不是本节现造）：老系数（=1，issue #254
+          //    修复前的等价值）算得 `3930+3000=6930≤8000` ⇒ 判"还来得及"（漏判）；新系数
+          //    （=2.5，issue #254 拍板值）算得 `3930+2.5×3000=11430>8000` ⇒ 正确判"来不及"。
+          //    **同带 `G2_CAND_REALPATH_MS→1`**（与 ③④⑤ 同一手法，不是无关改动）：这个 tiny
+          //    payload（fed=8）在真界 800 ms 下批量 realpath 会**全部解得开**，`batch.untried`
+          //    留空 ⇒ 根本进不了 `if (dirForm)` 那一格，我伪造的 v1CostMs/elapsed 就白伪造了
+          //    （本条作者写这一组时先漏了这一步，第一轮跑出 code=0 才捞回来——批内两条都要它）。
+          const mDangerWindow = mkMut("mutant-254-danger-window.js",
+            [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+          const mDangerWindowBrokenFactor = mkMut("mutant-254-danger-window-factor1.js",
+            [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"],
+            [RE_FACTOR, "const G2_RERUN_COST_FACTOR = 1;"]);
+          if (nFactor === 1 && nV1Cost === 1 && nElapsed === 1) {
+            const dwR = gate(dirFormPay, { env: asLong, script: mDangerWindow });
+            check("🔴🔴#254 正控·危险窗中点（v1=3000ms,elapsed=3930ms）+ 系数=2.5（当前值）⇒ " +
+                  "**预算闸真的开**（exit 2；这个 payload 上末尾饿死闸够不到 fed=8，故这个 2 只能" +
+                  "来自预算闸——不是像 ⑥ 那条一样的空过）",
+              dwR.code === 2, `code=${dwR.code}`);
+            check("#254 正控·同一格拦截文案仍是「没验过」而不是「查出你在写 live 配置」",
+              /这次没验过/.test(dwR.err), dwR.err.slice(0, 200));
+            const dwBrokenR = gate(dirFormPay, { env: asLong, script: mDangerWindowBrokenFactor });
+            check("🔴#254 判别力·先破再验：同一危险窗中点，系数改回 1（issue #254 修复前的等价值）" +
+                  "⇒ 预算闸判定变回「还来得及」、不拦，v3 重跑完也没找到真违例 ⇒ **由 2 翻 0**" +
+                  "（∴ 上一条的通过不是巧合，是系数=2.5 这个具体取值在起作用，不是随便什么正数都行）",
+              dwBrokenR.code === 0, `code=${dwBrokenR.code}`);
+          }
+
           // ⑥ 🔴 **真实规模复测**：判词给出的 N=48000 + 末置 dirForm 触发子形态。
           //    ~~验证不越 10 s。~~
           //    🔴 **订正（对抗官第三代实测证伪，issue #254）**：这个规模落在预算闸的实测危险窗
-          //    内（本机 N≈40000–52000），**有闸/无闸两侧本机实测都越过 10 s**——下面两条断言
-          //    改名前的说法是空过：`withFix.code === 2` 那个 `exit 2` 走的是末尾饿死 fail-close
-          //    （M4 mutation 坐实：抹平 `starved` 才会翻绿），不是预算闸；预算闸真正的判别力
-          //    断言在上面 ⑤ 那组小规模 + 界 1 ms。软哨兵这条闸不开时两边同值、恒过。真能量到
-          //    预算闸的断言归 issue #254，本批只把断言名与注释改真。
+          //    内（本机 N≈40000–52000），**有闸/无闸两侧本机实测都越过 10 s**——下面那条软哨兵
+          //    闸不开时两边同值、恒过；真能量到预算闸的断言见上面 ⑦（issue #254 ①，本批已补，
+          //    替掉了此前住在这里的那条空过断言——旧断言 `withFix.code === 2` 的 `exit 2` 走的是
+          //    末尾饿死 fail-close，M4 mutation 坐实：抹平 `starved` 才会翻绿，抹平预算闸判据
+          //    不会）。**这一节现在只剩一个职责**：大规模下时长的软证据，不再兼职当正控。
           //    **不锚绝对毫秒**（`#官通-性能哨兵` ①，换机/换负载差数倍）：锚的是「有预算闸时同一条
           //    payload 的 hook 寿命，相对没有预算闸时打了折扣」——与 #214 那条界哨兵同一手法，
           //    两次测量在**同一轮**内做，抵消系统负载的整体漂移。
@@ -2477,25 +2530,24 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           const t1 = Date.now();
           const noFix = gate(bigPay, { env: asLong, script: mNoBudgetBig });
           const msNoFix = Date.now() - t1;
-          // 🔴 这条断言的名字与原意（「预算闸没让它悄悄放行」）已被对抗官第三代 M4 mutation 证伪
-          // ——`exit 2` 来自末尾饿死 fail-close，在预算闸出现之前就是绿的；抹平 `starved` 才会
-          // 翻红，抹平预算闸判据不会。名字改真：它验的是「大规模下仍有兜底 fail-close」，不是
-          // 「预算闸生效」。真断言归 issue #254，见该单①。
-          check(`#235 正控·${BAND_N} 诱饵 + 末置 dirForm 触发子 ⇒ 仍 exit 2` +
-                `（走的是末尾饿死 fail-close，不是预算闸——issue #254 ①）`,
-            withFix.code === 2, `code=${withFix.code}`);
+          // 🔴 此处原有一条 `withFix.code === 2` 的「正控」，已被对抗官第三代 M4 mutation 证伪
+          // 是空过（`exit 2` 来自末尾饿死 fail-close，在预算闸出现之前就是绿的；抹平 `starved`
+          // 才会翻红，抹平预算闸判据不会）——**issue #254 ① 已把它替掉**，见上面 ⑦（本节现在
+          // 只保留大规模下的时长软证据，不再兼职当正控；`withFix`/`noFix` 两个变量仍保留只为
+          // 取 `msFixed`/`msNoFix` 两个计时值，其 `.code` 不再被断言）。
           // ⚠️ **这条哨兵是软证据，不是主证据**（`#官通-性能哨兵` ①：绝对数字不可移植，
           //   本机实测同机同轮内就见过 1.7-3 倍离散——本条作者写这组断言当天，机器同时跑着
           //   30+ 个 node 进程、CPU 常驻 80%+ 以上，两次 48000 规模测量偶尔会整体一起被拖慢到
           //   连 A（无触发子）基线都摸到 10s+，此时"有闸 vs 无闸"的相对差会被噪声吃掉甚至倒挂。
-          //   **真正钉住"预算闸确实生效"的是上面 ⑤ 那组小规模 + 界 1 ms 的判别力断言**（不依赖
-          //   机器速度/负载，恒定可复现）；这里只是在真实量级下留一笔"没有更差"的软证据，
-          //   容忍度因此给得很宽，宁可漏检也不做一条会在这台共享机器上偶发闪红的断言。
+          //   **真正钉住"预算闸确实生效"的是上面 ⑤（机制布线）与 ⑦（系数取值，issue #254 ①）
+          //   两组判别力断言**（都不依赖机器速度/负载，恒定可复现）；这里只是在真实量级下留一笔
+          //   "没有更差"的软证据，容忍度因此给得很宽，宁可漏检也不做一条会在这台共享机器上偶发
+          //   闪红的断言。
           //   🔴 **闸不开时两边同值，本条恒过**（issue #254，对抗官第三代实测坐实：本机实测
           //   有闸=11811ms/无闸=11390ms 两个数都越 10s，闸开不开对这条断言的通过与否无影响）。
           check(`#235 界（软证据，闸不开时两边同值本条恒过）·有预算闸时同一条 payload 的 hook 寿命 < ` +
                 `没有预算闸时的 2 倍 + 5000 ms` +
-                `（实测 有闸=${msFixed}ms 无闸=${msNoFix}ms）——真正的判别力断言在上面 ⑤ 那组`,
+                `（实测 有闸=${msFixed}ms 无闸=${msNoFix}ms）——真正的判别力断言在上面 ⑤⑦ 两组`,
             msFixed < msNoFix * 2 + 5000, `fixed=${msFixed}ms nofix=${msNoFix}ms`);
         }
       }
