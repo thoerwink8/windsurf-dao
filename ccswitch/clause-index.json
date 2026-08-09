@@ -48,17 +48,17 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "0a02a2801edc0fdcf4ac7f8f0e07a628e2924ee7ecf0167bd7cd550f56ec1541",
-        "lines": 262,
-        "clauses": 9,
+        "sha256": "bf98bc03e3b7fe29454f27cf3dbfc0d08928676237aa3c7883e4aaa22c8159f4",
+        "lines": 265,
+        "clauses": 11,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 1,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 9,
+        "slug": 11,
         "no_slug": 0,
-        "no_meta_field": 0
+        "no_meta_field": 2
       },
       {
         "file": "ccswitch/rules/dao-guard-writing.md",
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 82,
+      "general": 84,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 18,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 117,
+      "clauses": 119,
       "observation": 0
     }
   },
@@ -965,7 +965,7 @@
       "body_excerpt": "- **派实现类官时，派单令带一句「覆写既有文件前先 Read 它」**（宿主硬规则，2026-08-02 立）：Write 一个**已存在**的文件而没先 Read 过它，宿主**直接判失败**（新建文件不受此限，Read 一个不存在的文件反而报错）。它不会导致错误结果，**只白费一次工具往返**——但它是全库第二…"
     },
     {
-      "id": "2f51808ae97a",
+      "id": "8b35938db69f",
       "slug": "派-档位调整",
       "file": "ccswitch/rules/dao-dispatch.md",
       "line": 97,
@@ -989,6 +989,52 @@
       "observing": false,
       "shape": "top",
       "body_excerpt": "- **档位实证调整（升降同规，不预设方向）**：派单**显式传模型档**，不传 = 默认继承主会话最贵档（默认值站在违例那边）。🔴 **workflow/agentType 官尤其要显式传（用户点名事故后收窄 2026-08-01）**：「不传=继承主会话」这句**对 workflow 的 `agentType`…"
+    },
+    {
+      "id": "99dc80e23170",
+      "slug": "派-判官跨族",
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "line": 154,
+      "line_end": 154,
+      "meta_line": 154,
+      "role": "general",
+      "zone": "clause",
+      "section": "档位分工：哪一档配哪类活（基线 + 偏离判据）",
+      "title": "跨族",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": null,
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "top",
+      "body_excerpt": "- **跨族**：实现官为尉档 Sonnet 5 时，对抗 / 复审官显式派校档 Opus 5（跨模型家族），**禁两侧都缺省继承同一档**——同源判官一致率实测虚高 5-7%（体检报告 §业界对标，外部数字本仓未复现）。当前校=Opus 尉=Sonnet 的基线天然满足；本条防的是「都不传档一起继承最贵档」的形态。…"
+    },
+    {
+      "id": "69a1b31885a4",
+      "slug": "派-对抗权限",
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "line": 155,
+      "line_end": 155,
+      "meta_line": 155,
+      "role": "general",
+      "zone": "clause",
+      "section": "档位分工：哪一档配哪类活（基线 + 偏离判据）",
+      "title": "权限折中",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": null,
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "top",
+      "body_excerpt": "- **权限折中**：对抗任务**不含 mutation 实测**（文档核验 / 诚实性 / 引用面）⇒ 底座选只读型（`dao-reviewer-critical`）；**含 mutation** 才派可写底座，且限定在独立 worktree 内（官方立场「边界靠配置强制，不靠指望模型守规矩」）。与 `[#派-工具…"
     },
     {
       "id": "30b1696025c0",
