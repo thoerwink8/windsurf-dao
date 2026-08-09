@@ -1,6 +1,11 @@
 // settings-drift 两态自证 · 单元级（造 fixture 对 → 断言 findings 方向 / 零误报 / 出错不静默）
 //
-// 跑法：node tests/settings-drift.tests.js   （全绿 exit 0，任一红 exit 1）
+// @dao-test-tier: env
+//
+// 跑法：node tests/settings-drift.tests.js          （默认层：涉真实 ~/.claude/settings.json 那一节 defer 掉）
+//       node tests/settings-drift.tests.js --env    （含那一节，本机实测 <1s，只读不写）
+//       node scripts/run-tests.mjs                  （自动发现，无需登记；默认层 → exit 2）
+//       node scripts/run-tests.mjs --env            （透传 --env）
 //
 // 验的是哪一层：**比对逻辑与错误可见性**。它证明「造一次漂移必被检出且方向正确 /
 // 一致时零误报 / 出错必留痕不静默」，**不证明**接线真的被宿主调用过
@@ -8,6 +13,22 @@
 //
 // 全部用例把状态目录改写到 _tmp/settings-drift-tests/，且带 DAO_SETTINGS_DRIFT_SELFTEST=1，
 // 心跳标 synthetic —— 自测绝不许污染 --selfcheck 的接线判定（防自我染绿）。
+//
+// ── issue #219（PR #218 对抗官评论 5230198032 · B1-B4/D4/D5）：两笔守护缺口 ─────────────
+// 笔1 `--db` 生产入口零覆盖：`compareWithDb` 内联的 `await import(sqlite.mjs)` 与
+// `livePath`/`snapshotPath` 默认值全库零断言覆盖，改坏它们（B1/B2/B3/B4）targeted 122
+// 与全库 3514 条断言一条都不红。B1/B2（真实导入路径 + 真导出名的契约形状）不碰真 DB、
+// 留默认层；B3/B4（省略 livePath/snapshotPath 时是否真的落到生产默认值）要碰真实
+// ~/.claude/settings.json，归 env 层——只读不写，代价可控。B5-B8（`main()` 里 --db 分支
+// 是否真调用 compareWithDb/printReport/dbReportLines）本批未覆盖：
+// ~~要证明它们只能真跑 CLI 撞生产 DB，成本与射程超出本单，照直挂账不抢修。~~
+// 订正（PR #229 对抗评论 5230750242 证伪）：USERPROFILE 重定向 + fixture sqlite 可零风险
+// 覆盖，仓里已有同型先例——`tests/provider-hooks-drift.tests.js:450`「绝不碰真实
+// cc-switch DB」那一节。挂账的真实理由是**成本/优先级取舍**，不是「不可行」；跟进单落
+// issue #233（B5-B8 端到端接线覆盖 + D4b 第三种槽位对调 + arity 断言两向缺口）。
+// 笔2 两行「仓库根」报文槽位错位零红：旧断言只查 `line.includes(A) && line.includes(B)`，
+// 两个路径对调槽位（D4/D5）照样通过。改用槽位捕获比对（正则切出 `live=`/`快照=`/`DB=`
+// 各自的值再逐槽核对），槽位对调时精确落红。
 
 const fs = require("fs");
 const os = require("os");
@@ -31,11 +52,18 @@ const PH_PROJECT = "$" + "{PROJECT_ROOT}";
 const PH_HOME = "$" + "{HOME}";
 const SECRET = "__CONFIG_SYNC_SECRET__";
 
-let pass = 0, fail = 0;
+const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
+
+let pass = 0, fail = 0, defer = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
 }
+function deferSection(name, why) {
+  defer++;
+  console.log(`  DEFER ${name}  ->  ${why}`);
+}
+const DEFER_WHY_DB_DEFAULTS = "碰真实 ~/.claude/settings.json（机器级可变状态，只读不写）。跑它：node tests/settings-drift.tests.js --env";
 
 // ── fixture ────────────────────────────────────────────────────────────────
 // 快照形态：路径占位符化 + 脱敏；不含第三方（Coffee CLI 之流）写进 live 的东西。
@@ -744,12 +772,85 @@ console.log("\n=== #171 · D2/D3：reportLines(r) 承载「仓库根」行 + ⓘ
   check("D2 · 仓库根行里看得见两侧真实路径（信息不许凭空消失，不是只打个「有差异」的布尔值）",
     rootLine.toLowerCase().includes(OTHER_ROOT) && rootLine.toLowerCase().includes(REPO.replace(/\\/g, "/").toLowerCase()),
     rootLine);
+  // issue #219 笔2（PR #218 对抗官 D5）：上面那条只查「两个串都在这一行里」，槽位对调了
+  // 一样能过——这两行报文存在的全部理由就是让人判「哪一侧是本机」，槽位错了比不印更误导。
+  // 改用槽位捕获比对：正则切出「live=」与「快照(...)=」各自的值，逐槽核对是不是它自己的根。
+  const d2Slots = rootLine.match(/live=(.*?)  快照(?:\([^)]*\))?=(.*)$/);
+  check("D2 · 槽位不对调：「live=」槽必须是 live 自己的根，不是快照的根（D5 变体：两槽对调时钉这里）",
+    !!d2Slots && d2Slots[1].toLowerCase() === OTHER_ROOT, JSON.stringify(d2Slots));
+  check("D2 · 槽位不对调：「快照(...)=」槽必须是快照自己的根，不是 live 的根（D5 变体：两槽对调时钉这里）",
+    !!d2Slots && d2Slots[2].toLowerCase() === REPO.replace(/\\/g, "/").toLowerCase(), JSON.stringify(d2Slots));
   check("D3 · reportLines 打出 ⓘ 导读行（让步格的说明：worktree 里跑属正常态，不据此判红）",
     lines.some((l) => /ⓘ/.test(l) && /worktree/.test(l)), JSON.stringify(lines));
 
   const out = captureStdout(() => lib.printReport(r));
   check("printReport 只负责写出：与 reportLines(r).join(\"\\n\")+\"\\n\" 逐字节等价（两者不许各写一份逻辑）",
     out === lines.join("\n") + "\n", JSON.stringify({ outLen: out.length, expectedLen: (lines.join("\n") + "\n").length }));
+}
+
+console.log("\n=== #219 笔1（PR #218 对抗官 B1/B2）：sqlite.mjs 真实导入契约——不碰真 DB，留默认层 ===");
+{
+  // resolveSqliteSelectRows() 内联执行 `await import("../../config-sync/lib/sqlite.mjs")`。
+  // B1（导入路径改成不存在的文件）会让这个 await 直接 reject；B2（`.selectRows` 打错成
+  // `.selectRowsTYPO`）不会 reject，但拿到的 fn 会是 undefined。两条分别断言，归因更直接。
+  let fn = null, threw = null;
+  try { fn = await lib.resolveSqliteSelectRows(); } catch (e) { threw = e; }
+  check("真实导入路径能解析（防 B1：路径改成不存在的文件 → await import() 直接抛错）",
+    threw === null, threw && threw.message);
+  check("真实 config-sync/lib/sqlite.mjs 导出一个叫 selectRows 的函数（防 B2：取错导出名 selectRowsTYPO → 拿到 undefined）",
+    typeof fn === "function", typeof fn);
+  // 便宜堵法原话写的是「arity 2」——本机实测有出入：selectRows(tableName, where='') 的
+  // 第二个参数带默认值，JS 的 function.length 在遇到默认参数处截断计数，真实 arity 是 1，
+  // 不是 2（node -e 直接验证过，不照抄未经核验的数字，[#官通-查前提]）。这里按实测校正，
+  // 断言的是「function.length 恰好等于 1」这个实现细节，不是「至少接收 1 个必填参数」的
+  // 契约（PR #229 对抗评论 5230750242 订正：原注释与 `=== 1` 的实际语义不符——`=== 1`
+  // 挡不住将来给 selectRows 加第三个带默认值的参数，`>= 1` 才是那句话该断言的东西；断言
+  // 判别力两向的缺口 [ARa 加参数漏 / ARb 去默认值误伤] 已挂账 issue #233，本批不改断言
+  // 语义，只把注释改成与代码相符的实话）。
+  check("selectRows 的 arity 是 1（生产签名 selectRows(tableName, where='')；已用 node 实测校正，不是便宜堵法原文写的 2）",
+    typeof fn === "function" && fn.length === 1, fn && fn.length);
+}
+
+console.log("\n=== #219 笔1（PR #218 对抗官 B3/B4）：livePath/snapshotPath 省略时是否真落到生产默认值 ===");
+if (ENV_TIER) {
+  // 只读：readJson/loadSnapshotClaude 全程不写文件。B3/B4 的病是「默认值被摘掉 →
+  // readJson(undefined) 抛错」，故这里分别只省略其中一个参数，逼生产代码走它自己的默认值，
+  // 断言「不抛错 + 读到的 roots 是数组」——两条分开测，才分得清是哪一个默认值出了问题。
+  const dbFixture = snapClaude();
+  {
+    seq++;
+    const snapPath = path.join(TMP, `db-b3-snap-${seq}.json`);
+    fs.writeFileSync(snapPath, snapDocOf(snapClaude()), "utf8");
+    let threw = null, res = null;
+    try {
+      res = await lib.compareWithDb({
+        selectRows: () => [{ value: JSON.stringify(dbFixture) }],
+        snapshotPath: snapPath, // 只覆盖快照，livePath 留空 ⇒ 走生产默认值 LIVE_SETTINGS
+      });
+    } catch (e) { threw = e; }
+    check("B3 · 省略 livePath 时走生产默认值 LIVE_SETTINGS（真实 ~/.claude/settings.json）读取不抛错",
+      threw === null, threw && threw.message);
+    check("B3 · live 侧确实读到了东西（roots.live 是数组——不是默认值被摘掉后 readJson(undefined) 崩溃的残影）",
+      !!res && Array.isArray(res.roots.live), res && JSON.stringify(res.roots));
+  }
+  {
+    seq++;
+    const livePath = path.join(TMP, `db-b4-live-${seq}.json`);
+    fs.writeFileSync(livePath, JSON.stringify(liveEquivalent(), null, 2), "utf8");
+    let threw = null, res = null;
+    try {
+      res = await lib.compareWithDb({
+        selectRows: () => [{ value: JSON.stringify(dbFixture) }],
+        livePath, // 只覆盖 live，snapshotPath 留空 ⇒ 走生产默认值 SNAPSHOT_SETTINGS
+      });
+    } catch (e) { threw = e; }
+    check("B4 · 省略 snapshotPath 时走生产默认值 SNAPSHOT_SETTINGS（仓库内 config-sync/common/settings.json）读取不抛错",
+      threw === null, threw && threw.message);
+    check("B4 · 快照侧确实读到了东西（roots.snap 是数组——不是默认值被摘掉后 readJson(undefined) 崩溃的残影）",
+      !!res && Array.isArray(res.roots.snap), res && JSON.stringify(res.roots));
+  }
+} else {
+  deferSection("livePath/snapshotPath 省略时的生产默认值（B3/B4）", DEFER_WHY_DB_DEFAULTS);
 }
 
 console.log("\n=== #171 · F1：compareWithDb 的 live vs DB 腿——端到端（selectRows 依赖注入，此前零覆盖）===");
@@ -833,6 +934,16 @@ console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一�
   const rootLine = lines.find((l) => /仓库根/.test(l)) || "";
   check("F3 · 报文里看得见 DB 侧那个被归一化吃掉的根（信息不许凭空消失，同 reportLines 那半的承诺）",
     rootLine.toLowerCase().includes(OTHER_ROOT), rootLine);
+  // issue #219 笔2（PR #218 对抗官 D4）：上面那条只查「DB 的根这个字符串出现在行里」，
+  // 印到别的槽位（比如印进「live=」）一样能过。改用槽位捕获比对，逐槽核对它真的是自己的根。
+  const f3Slots = rootLine.match(/live=(.*?)  快照=(.*?)  DB=(.*)$/);
+  const repoLower = REPO.replace(/\\/g, "/").toLowerCase();
+  check("F3 · 槽位不对调：「live=」槽是 live 自己的根，不是 DB 的根（D4 变体：live=/DB= 两槽对调时钉这里）",
+    !!f3Slots && f3Slots[1].toLowerCase() === repoLower, JSON.stringify(f3Slots));
+  check("F3 · 槽位不对调：「快照=」槽是快照自己的根，不是 DB 的根",
+    !!f3Slots && f3Slots[2].toLowerCase() === repoLower, JSON.stringify(f3Slots));
+  check("F3 · 槽位不对调：「DB=」槽真的是 DB 自己的根，不是 live 的根（D4 变体：live=/DB= 两槽对调时钉这里）",
+    !!f3Slots && f3Slots[3].toLowerCase() === OTHER_ROOT, JSON.stringify(f3Slots));
 }
 
 console.log("\n=== #171 · DB 面错误可见性：selectRows 零行时不静默吞错（注入路径同样受这条铁律约束）===");
@@ -849,11 +960,11 @@ console.log("\n=== #171 · DB 面错误可见性：selectRows 零行时不静默
 }
 
 runAsyncSuite().then(() => {
-  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);
   process.exit(fail ? 1 : 0);
 }).catch((e) => {
   fail++;
   console.error("[settings-drift.tests] 异步测试段异常（未被内部 try/catch 接住）：", e && e.stack ? e.stack : e);
-  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);
   process.exit(1);
 });
