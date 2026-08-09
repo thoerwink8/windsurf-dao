@@ -433,13 +433,18 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环
   //   实打一次真实 `claude mcp list`——本机是否装了 claude CLI、当下哪些 MCP server 连得上，
   //   同样是「别人（或此刻的外部世界）拥有的机器级可变状态」（本机实测同一台机器换一次
   //   跑就从 `! Connected · tools fetch failed` 变回 `✔ Connected`），故本行随之扩到四套。
+  //   2026-08-09 · issue #219 它第三次响：settings-drift.tests.js 新增 B3/B4（省略
+  //   livePath/snapshotPath 时是否真落到生产默认值）——读的是真实 `~/.claude/settings.json`
+  //   （其余官 / cc-switch GUI 随时可能改动它），与 alwayson-budget/dead-gates 同一类判据，
+  //   只读不写，故本行随之扩到五套。
   const EXPECT_DECLARED = [
     "alwayson-budget.tests.js",     // §⑩①b：hook 墙钟预算读自用户真实 settings.json 的注册值
     "dead-gates.tests.js",          // ⑪ / ⑪.5 / ⑫①：真 live settings + 真 cc-switch DB
     "mcp-health.tests.js",          // ⑥：真跑一次 claude mcp list，依赖本机 CLI + 当下 server 健康态
     "memory-truth-source.tests.js", // 末节：同 alwayson-budget，且 memory 扫描排在全表最后一项
+    "settings-drift.tests.js",      // issue #219 B3/B4：省略 livePath/snapshotPath 时读真实 ~/.claude/settings.json
   ];
-  check("真实 tests/ 里声明了环境敏感层的文件恰是那四套（多了要问为什么，少了说明标记掉了）",
+  check("真实 tests/ 里声明了环境敏感层的文件恰是那五套（多了要问为什么，少了说明标记掉了）",
     JSON.stringify(declared) === JSON.stringify(EXPECT_DECLARED),
     "实况=" + JSON.stringify(declared) + " 期望=" + JSON.stringify(EXPECT_DECLARED));
   check("本文件自己不在声明面里（否则说明标记字面量泄进了头部窗口）",
