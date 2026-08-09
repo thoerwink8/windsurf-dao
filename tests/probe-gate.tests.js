@@ -194,8 +194,31 @@ console.log("\n=== 负态 · 非探针 prompt：零输出、零磁盘、零留�
     const r = run(REAL_HOOK, prompt, tag);
     check("负控：" + name + " → stdout 一个字节都没有", r.out === "", "out=" + JSON.stringify(r.out.slice(0, 160)));
     check("负控：" + name + " → exit 0", r.code === 0, "code=" + r.code);
-    check("负控：" + name + " → 零磁盘（不给每条用户消息记账）",
-      firedLines(tag).length === 0 && !fs.existsSync(errorsPath(tag)));
+    // issue #247 H3：零磁盘的扫描面此前只查主域（`errorsPath`），镜像域
+    // （`mirrorErrorsPath`，issue #232 新增的第二条留痕通道）零覆盖——非探针路径
+    // 若偷写镜像域，这 13 条负控里没有一条会红。这里把扫描面扩到镜像域。
+    check("负控：" + name + " → 零磁盘（不给每条用户消息记账，含镜像域，issue #247 H3）",
+      firedLines(tag).length === 0 && !fs.existsSync(errorsPath(tag)) && !fs.existsSync(mirrorErrorsPath(tag)));
+  }
+
+  // ── 先破再验：非探针路径偷写镜像域 ⇒ 上面新增的镜像域负控必须翻面 ──────────────
+  // 归因对照（issue #247 H3 原始实测）：非探针路径偷写**主域** → 13 条旧负控全红；
+  // 偷写**镜像域** → 0 红（因为旧负控只查 `errorsPath`）。这里补一个精确打在
+  // 「只写镜像、不碰主域」这个此前真空缺上的 mutation，证明新加的那半镜像域检查
+  // 真的在盯着它，而不是碰巧跟着主域检查一起绿。
+  {
+    const ANCHOR = "    // 这条路径覆盖**每一条用户消息**，所以它必须什么都不做。往这里加任何一次写盘，";
+    const h = mutantHook("h3-nonprobe-mirror-leak", ANCHOR,
+      ANCHOR + '\n    mirrorErrorLog("issue #247 H3 mutation：非探针路径偷写镜像域");');
+    const tag = "h3-neg-mut";
+    const r = run(h, "帮我看看这个函数的实现", tag);
+    check("canary：变异体还活着（非探针仍 exit 0、stdout 仍零字节 —— 偷写的只是磁盘这一半，不是整条判定）",
+      r.code === 0 && r.out === "", "code=" + r.code + " out=" + JSON.stringify(r.out.slice(0, 80)));
+    check("🔴 先破再验：非探针路径偷写镜像域 ⇒ 新加的「零磁盘（含镜像域）」这一格翻面（此前 0 红）",
+      fs.existsSync(mirrorErrorsPath(tag)), "expect written=" + mirrorErrorsPath(tag));
+    check("对照：主域（旧检查早就覆盖的那一半）仍是零 —— 证明这次 mutation 精准打在「只偷写镜像」这个真空缺上，" +
+      "不是靠误伤主域才被抓住",
+      !fs.existsSync(errorsPath(tag)), "不该存在=" + errorsPath(tag));
   }
 }
 {
@@ -426,6 +449,46 @@ console.log("\n=== issue #232 · 镜像域结构性沙箱兜底（只指 DAO_PRO
   check("🔴 先破再验的副产物：确实退回了分支③（沙箱 HOME 那份镜像反而出现了）——证明「架空」" +
     "改的是判据走向，不是让镜像整体消失",
     fs.existsSync(fellBackToHomeM), "expect=" + fellBackToHomeM);
+}
+
+console.log("\n=== issue #247 H1 · DAO_PROBE_GATE_MIRROR 显式覆写口 —— 真传覆写口的正控（PR #241 对抗遗留）===");
+{
+  // 对照哨兵 tests/rate-limit-sentinel.tests.js:52（envFor() 真传 DAO_RATE_LIMIT_MIRROR，
+  // 随后 mirrorLines(tag) 断言内容真的落在那个覆写路径）——本文件此前所有场景都只测过
+  // deriveMirrorFallback() 的分支②③（结构性沙箱兜底），`process.env.DAO_PROBE_GATE_MIRROR ||`
+  // 这半的**左手边**（显式覆写口本身）零覆盖：mutation 实测摘掉它，189/189 全绿。
+  const tag = "h1-explicit-mirror";
+  const explicitMirror = path.join(BASE, tag, "explicit-mirror-dir", "errors.log");
+  // 分支①（只指 MARKER、不指 MIRROR 时）会落到的路径——用来证明「没有落到这里」，
+  // 即覆写口真的赢过了兜底算法，不是巧合重合。
+  const derivedFallback = mirrorErrorsPath(tag);
+  const env = Object.assign({}, envFor(tag), { DAO_PROBE_GATE_MIRROR: explicitMirror });
+  const r = spawnSync(process.execPath, [REAL_HOOK], {
+    input: "这不是 JSON{{{", // 走 call site #1（stdin 解析失败），最短路径触发 logError
+    encoding: "utf8", env,
+  });
+  check("H1 前提：坏 stdin → exit 0（走的是会调用 logError 的那条路）", r.status === 0, "code=" + r.status);
+  check("H1 正控：真传 DAO_PROBE_GATE_MIRROR ⇒ 镜像 errors.log 落在覆写指定的那个路径",
+    fs.existsSync(explicitMirror), "expect=" + explicitMirror);
+  check("H1 正控：没有落到 deriveMirrorFallback() 算出的分支①路径（覆写口真的赢过了兜底算法）",
+    !fs.existsSync(derivedFallback), "不该存在=" + derivedFallback);
+  const content = fs.existsSync(explicitMirror) ? fs.readFileSync(explicitMirror, "utf8") : "";
+  check("H1 正控：覆写路径里的内容确实是这次的错误留痕，不是空文件",
+    /dao-probe-gate/.test(content) && content.trim().length > 0, "text=" + content.slice(0, 200));
+
+  // ── 先破再验：摘掉 `||` 左手边（显式覆写口）⇒ 上面「落在覆写路径」必须翻面 ─────────
+  const ANCHOR = "const MIRROR_LOG = process.env.DAO_PROBE_GATE_MIRROR || deriveMirrorFallback();";
+  const h = mutantHook("h1-mirror-override-disabled", ANCHOR, "const MIRROR_LOG = deriveMirrorFallback();");
+  const tagM = "h1-explicit-mirror-mut";
+  const explicitMirrorM = path.join(BASE, tagM, "explicit-mirror-dir", "errors.log");
+  const derivedFallbackM = mirrorErrorsPath(tagM);
+  const envM = Object.assign({}, envFor(tagM), { DAO_PROBE_GATE_MIRROR: explicitMirrorM });
+  const rm = spawnSync(process.execPath, [h], { input: "这不是 JSON{{{", encoding: "utf8", env: envM });
+  check("canary：变异体还活着（坏 stdin 仍 exit 0，只是覆写口被摘）", rm.status === 0, "code=" + rm.status);
+  check("🔴 先破再验：`||` 左手边被摘掉 ⇒ 覆写路径落空，写去的是兜底算法算出的那个路径（本组正控不是摆设）",
+    !fs.existsSync(explicitMirrorM) && fs.existsSync(derivedFallbackM),
+    "覆写路径存在=" + fs.existsSync(explicitMirrorM) + "（" + explicitMirrorM + "）" +
+    " 兜底路径存在=" + fs.existsSync(derivedFallbackM) + "（" + derivedFallbackM + "）");
 }
 
 console.log("\n=== 具名负控 · 父目录不存在/是空目录 ⇒ 仍判 none ⇒ block（PR #227 对抗官挂账）===");
@@ -743,6 +806,43 @@ console.log("\n=== --selfcheck 第③段（留痕域可写性）+ covers 判定�
   check("③ 正态：主域可写 ⇒ 打一条 ✓", /✓ 留痕域可写：主域/.test(okOut), okOut.slice(-400));
   check("issue #232：③ 正态：镜像域也各自分开报一条 ✓（两个域各查一次，不是共享一条结论）",
     /✓ 留痕域可写：镜像域/.test(okOut), okOut.slice(-400));
+
+  // ── issue #247 H2：上面两条只匹配标签串，谓词改核真实路径两域各异 ─────────────
+  // 此前的谓词只查「✓ 留痕域可写：镜像域」这串标签文字出没出现——`dao-probe-gate.js:372`
+  // 若把镜像域探测目标改指主域（`dir: path.dirname(MIRROR_LOG)` → `dir: S.stateDir`），
+  // 标签串一字不变、仍会打出两条 ✓，旧谓词照样绿、0 红。这里改成核对 `--selfcheck`
+  // 报出的**真实目录路径**：两个域必须指向不同的目录，且各自等于按同一套算法独立算出的期望值。
+  const mainDirLine = okOut.match(/✓ 留痕域可写：主域[^\n]*→ ([^\n]+)/);
+  const mirrorDirLine = okOut.match(/✓ 留痕域可写：镜像域[^\n]*→ ([^\n]+)/);
+  const wantMainDir = path.dirname(firedPath("sc-writable"));
+  const wantMirrorDir = path.dirname(mirrorErrorsPath("sc-writable"));
+  check("H2：主域探测报出的真实路径 = 按同一套算法独立算出的 stateDir",
+    mainDirLine && path.resolve(mainDirLine[1].trim()) === path.resolve(wantMainDir),
+    "got=" + (mainDirLine && mainDirLine[1]) + " want=" + wantMainDir);
+  check("H2：镜像域探测报出的真实路径 = 按同一套算法独立算出的镜像目录，且与主域不同" +
+    "（不是同一个目录被查两次、只是标签文本不同）",
+    mirrorDirLine && path.resolve(mirrorDirLine[1].trim()) === path.resolve(wantMirrorDir) &&
+    mainDirLine && mainDirLine[1].trim() !== mirrorDirLine[1].trim(),
+    "got=" + (mirrorDirLine && mirrorDirLine[1]) + " want=" + wantMirrorDir);
+
+  // ── 先破再验：dao-probe-gate.js:372 把镜像域探测目标改指主域 ──────────────────
+  {
+    const ANCHOR = '      { label: "镜像域（出 _tmp，本机 dao 状态）", dir: path.dirname(MIRROR_LOG),';
+    const h = mutantHook("h2-mirror-probe-points-primary", ANCHOR,
+      '      { label: "镜像域（出 _tmp，本机 dao 状态）", dir: S.stateDir,');
+    const tagM = "sc-h2-mut";
+    const rM = spawnSync(process.execPath, [h, "--selfcheck"], { input: "", encoding: "utf8", env: envFor(tagM) });
+    const outM = String(rM.stdout || "");
+    check("canary：变异体还活着（自检照跑、报头照打、两条 ✓ 都还在——旧谓词只认标签文字，在这个变异体上仍会全绿）",
+      /dao-probe-gate --selfcheck/.test(outM) && /✓ 留痕域可写：主域/.test(outM) &&
+      /✓ 留痕域可写：镜像域/.test(outM), outM.slice(0, 400));
+    const mainDirLineM = outM.match(/✓ 留痕域可写：主域[^\n]*→ ([^\n]+)/);
+    const mirrorDirLineM = outM.match(/✓ 留痕域可写：镜像域[^\n]*→ ([^\n]+)/);
+    check("🔴 先破再验：镜像域探测目标被改指主域 ⇒ 两条路径变成同一个——新谓词（核真实路径两域各异）" +
+      "在这里翻面，证明它真的在核路径，不是只核标签文字",
+      mainDirLineM && mirrorDirLineM && mainDirLineM[1].trim() === mirrorDirLineM[1].trim(),
+      "主域=" + (mainDirLineM && mainDirLineM[1]) + " 镜像域=" + (mirrorDirLineM && mirrorDirLineM[1]));
+  }
 
   const blocker = path.join(BASE, "sc-broken");
   fs.writeFileSync(blocker, "普通文件", "utf8");
