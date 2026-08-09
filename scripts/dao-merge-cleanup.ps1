@@ -17,11 +17,14 @@
     Windows 上进程 cwd 落在要删的目录里，目录删不掉；即便删得掉，脚本也会在自己被删掉的
     目录里接着跑完。
 
-    ── 五步，逐条对应一个已知失效形态 ──────────────────────────────────────────
+    ── 七步（0–6），逐条对应一个已知失效形态 ─────────────────────────────────────
 
       0) 前置检查              —— RepoPath 是 git 仓、WorktreePath 与 RepoPath 不是同一处、
                                    RepoPath 当前分支不是 -Branch（否则删分支这一步注定失败，
-                                   与其等到第 4 步才报一个 git 原生错误，不如现在说清楚）。
+                                   与其等到第 4 步才报一个 git 原生错误，不如现在说清楚）、
+                                   **`origin/<MainBranch>` 真的存在**（差集核验的参照系，
+                                   fail-closed，见 .PARAMETER MainBranch）、**-WorktreePath
+                                   那棵树此刻检出的分支就是 -Branch**（配对校验，见幂等探测段）。
 
       1) git fetch origin      —— 差集核验要拿 `origin/<MainBranch>` 当参照系，参照系必须新鲜。
 
@@ -40,6 +43,14 @@
               `-D`；只要出现一行 `+`，脚本报错并停在这一步，worktree 与分支原样不动**——
               这时多半是 PR 还没真的合并，或合并方式与预期不符，需要人核实，不许脚本替人
               拿主意去强删。
+         **这条判定带两个前提，写在这里免得被读成无条件**（2026-08-10 返修补，出处：
+         PR #252 对抗验证判词阻断 1）：①参照系 `origin/<MainBranch>` 必须真的存在——
+         不存在时**第 0 步就停**（exit 1），根本走不到这条判定；②`rev-list` / `cherry`
+         两条查询**本身必须成功**——失败时停在这一步（exit 4），**不把「命令失败、stdout
+         为空」读成「零差异」**。补这两道之前：`-MainBranch` 打错一个字母（或缺省探测回落
+         到一个不存在的 ref）⇒ `rev-list` fatal、stdout 为空 ⇒ 读到「零行」⇒ 判成「已完全
+         并入」⇒ **真的删掉一个没合并的分支连同它的 worktree，退出码还是 0**。
+         **数到 0 和没看到样本，输出一模一样**——这两道校验就是把这两种 0 分开。
          本脚本**不实现 `git patch-id --stable` 的手工逐提交比对**——`git cherry` 是 git
          自带的、内部同样基于 patch-id 等价判定的现成工具，语义与判据要求逐字对应，没有
          理由再手写一遍同样的算法（为道日损）。
@@ -76,6 +87,12 @@
 
 .PARAMETER WorktreePath
     要清理的 worktree 目录（PR 分支曾经在里面开工的那棵树）。必填。
+    **它与 -Branch 的配对会被校验**：那棵树此刻检出的分支必须就是 -Branch，否则停（exit 1）。
+    （2026-08-10 返修补，出处：PR #252 对抗验证判词阻断 2 —— 此前差集核验核的是 -Branch、
+    删的是 -WorktreePath，两者之间没有任何绑定 ⇒ 参数错配时会一路绿灯删掉**另一位官正在
+    用的在途工作树**，退出码还是 0。校验用 `git worktree list --porcelain` 里那棵树自己的
+    `branch refs/heads/...` 行，**大小写敏感比对**——git 的 ref 名是大小写敏感的，而
+    PowerShell 的 `-ne` 默认不是。detached HEAD 的树同样拒绝：证不出它检出的是 -Branch。）
 
 .PARAMETER Branch
     要清理的本地分支名（与上面那棵 worktree 对应）。必填。
@@ -86,7 +103,10 @@
 
 .PARAMETER MainBranch
     主干分支名，差集核验用它当参照系。缺省从 `origin/HEAD` 探测，探不到回落 main（再回落
-    master）——与 `dao-pr-merge.ps1` 同一套探测逻辑。
+    master）；**回落链末端一律核 `origin/<MainBranch>` 真的存在，探不到就停（exit 1）**。
+    回落链与那道 fail-closed 校验都与 `ccswitch/scripts/dao-pr-merge.ps1:322-323` 同一套。
+    （2026-08-10 订正：此前这里只写「与 dao-pr-merge.ps1 同一套探测逻辑」，而**承重的
+    fail-closed 那一步并没有抄过来** —— 回落链相同、校验缺席，那句话按当时的代码为假。）
 
 .PARAMETER DryRun
     只做只读查询并打印将要执行什么，不发起任何写操作（不 remove、不删分支、不 pull）。
@@ -100,16 +120,23 @@
     .\dao-merge-cleanup.ps1 -WorktreePath D:\frank\windsurf-dao\.claude\worktrees\agent-xxx -Branch fix/70-gates -RepoPath D:\frank\windsurf-dao
 
 .NOTES
-    退出码契约（五态；只有 0 叫「干净」，含「本来就已经干净，本次幂等空跑」这种情形）：
+    退出码契约（四态；只有 0 叫「干净」，含「本来就已经干净，本次幂等空跑」这种情形）：
       0  全部完成且干净（DryRun 正常走完也是 0）
       1  前置条件不成立（RepoPath 不是 git 仓 / 缺 git / WorktreePath 与 RepoPath 相同 /
-         RepoPath 当前分支就是 -Branch）——一步都没做
+         RepoPath 当前分支就是 -Branch / 探不到 origin/<MainBranch> / -WorktreePath 那棵树
+         检出的分支不是 -Branch / `git worktree list` 本身失败）——一步都没做
       2  差集核验判定「不安全」，拒绝删除——worktree 与分支均保持原样未动，等真正合并后
          重跑本脚本（本脚本可安全重跑，见幂等段）
-      3  参数非法
-      4  某个必要清理动作本该成功却失败（worktree remove 失败但不是因为"已经不在" /
+      4  某个必要清理动作本该成功却失败（fetch 失败 / **差集核验的 git 查询本身失败——
+         「没查成」不是「零差异」** / worktree remove 失败但不是因为"已经不在" /
          分支不干净被拒绝清理 / branch delete 失败但不是因为"已经不存在" / pull 失败）——
          没有干净收尾，需要人介入
+
+    **没有 3，这是 2026-08-10 订正**：此前这里写着「3 参数非法」，而全文没有任何一处产出
+    exit 3（PR #252 对抗验证判词问题 7 点名的死契约）。参数拼错由 PowerShell 的**参数绑定
+    层**直接拒绝、脚本正文一行都没执行，退出码不由本脚本决定——本机实测 `-Bogus 1` 拿到的
+    是 **exit 1** 而不是 3。死契约删掉，不为迁就一句已经写下的话去硬造一个产出点。
+    （4 因此不与 3 连号，刻意不重编号：4 已被回归网与消费方读着，改号是拿真风险换整齐。）
 
     PowerShell 5.1 兼容：不用 && / || / 三元 / ?? / ?.；成败一律看 $LASTEXITCODE 不看输出
     文案；不用 2>&1（会把 git 的正常 stderr 包成 NativeCommandError）。
@@ -192,6 +219,16 @@ Write-Info "VERIFY_CWD=$RepoPath"
 Write-Info "VERIFY_WORKTREE=$WorktreePath"
 Write-Info "VERIFY_BRANCH=$Branch"
 Write-Info "VERIFY_MAIN=$MainBranch"
+
+# fail-closed：参照系 ref 必须真的存在。逐字对位 dao-pr-merge.ps1:322-323 —— 本脚本此前只
+# 抄了上面那条回落链，漏了这一步（那一步才是承重的）：ref 名错一个字母时第 2 步的 rev-list
+# 会 fatal 且 stdout 为空，而「零行」被读成「零差异」⇒ 宣布已并入主干并真的删。
+$verifyMain = Invoke-Git -Cwd $RepoPath -GitArgs @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/$MainBranch")
+if (-not $verifyMain.Ok) {
+    Fail ("探不到 origin/$MainBranch（可用 -MainBranch 显式指定）—— 差集核验没有参照系就判不准，" +
+          "停在这里，worktree 与分支一个都没动") 1
+}
+
 Write-Ok "前置检查通过（主仓 $RepoPath，主干 $MainBranch）"
 
 if ($DryRun) { Write-Note 'DryRun：以下写操作一律只打印不执行' }
@@ -200,16 +237,41 @@ if ($DryRun) { Write-Note 'DryRun：以下写操作一律只打印不执行' }
 Write-Step '幂等探测：worktree 是否还挂着、分支是否还在'
 
 $wtList = Invoke-Git -Cwd $RepoPath -GitArgs @('worktree', 'list', '--porcelain')
+if (-not $wtList.Ok) {
+    Fail "git worktree list --porcelain 失败（exit $($wtList.Code)）—— 探不到现场就不敢动手，什么都没做" 1
+}
+# --porcelain 的每条记录形如：worktree <路径> / HEAD <sha> / branch refs/heads/<名>（或 detached）。
+# 分支行本来就在那份输出里，顺手记下来给下面的配对校验用（不用另跑一条 git）。
 $worktreeStillRegistered = $false
+$worktreeCheckedOutBranch = $null   # 目标那棵树检出的分支；detached 或没打印 branch 行 ⇒ 保持 $null
+$inTargetEntry = $false
 foreach ($line in $wtList.Out) {
     if ($line -like 'worktree *') {
         $wtEntry = $line.Substring(9)
         $wtEntryResolved = $wtEntry
         if (Test-Path -LiteralPath $wtEntry) { $wtEntryResolved = (Resolve-Path -LiteralPath $wtEntry).Path }
-        if ($wtEntryResolved -eq $worktreePathResolved) { $worktreeStillRegistered = $true }
+        $inTargetEntry = ($wtEntryResolved -eq $worktreePathResolved)
+        if ($inTargetEntry) { $worktreeStillRegistered = $true }
+    } elseif ($inTargetEntry -and ($line -like 'branch refs/heads/*')) {
+        $worktreeCheckedOutBranch = $line.Substring(18)   # 'branch refs/heads/'.Length = 18
     }
 }
 $branchStillExists = (Invoke-Git -Cwd $RepoPath -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$Branch")).Ok
+
+# 配对校验（fail-closed）：差集核验核的是 -Branch，第 3 步删的是 -WorktreePath —— 两者之间
+# 此前没有任何绑定，于是参数错配时会核验一个已合并的分支、删掉另一棵在途的工作树。
+# `-cne` 是大小写敏感比对：git 的 ref 名大小写敏感，而 PowerShell 的 `-ne` 默认不敏感。
+if ($worktreeStillRegistered) {
+    if (-not $worktreeCheckedOutBranch) {
+        Fail ("worktree $WorktreePath 没有检出任何分支（detached HEAD 或 git 没报 branch 行）—— " +
+              "证不出它检出的就是 $Branch，拒绝删；要清理它请手动核实后自己跑 git worktree remove") 1
+    }
+    if ($worktreeCheckedOutBranch -cne $Branch) {
+        Fail ("配对不符：worktree $WorktreePath 检出的是 $worktreeCheckedOutBranch，不是 -Branch 给的 $Branch —— " +
+              "核验的分支与要删的树不是同一件事，很可能是参数填错（那棵树多半是别人正在用的）。" +
+              "什么都没动") 1
+    }
+}
 
 if (-not $worktreeStillRegistered) { Write-Skip "worktree 已不在 ``git worktree list`` 里 —— 视为已清理" }
 if (-not $branchStillExists) { Write-Skip "本地分支 $Branch 已不存在 —— 视为已清理" }
@@ -240,14 +302,27 @@ if ($branchStillExists) {
         Write-Plan "不空时改用 git cherry origin/$MainBranch $Branch（patch-id 等价判定）"
         Write-Note 'DryRun 不落判定结果，真跑时这一步会决定用 -d 还是 -D，或直接停在这里'
     } else {
-        $ahead = (Invoke-Git -Cwd $RepoPath -GitArgs @('rev-list', "origin/$MainBranch..$Branch")).Out
+        # 查 .Ok：「命令失败」与「零差异」必须分得开——不查的话 fatal 时 stdout 为空，
+        # 零行会被读成「已完全并入」。数到 0 和没看到样本，输出一模一样。
+        $revList = Invoke-Git -Cwd $RepoPath -GitArgs @('rev-list', "origin/$MainBranch..$Branch")
+        if (-not $revList.Ok) {
+            Fail ("差集核验没查成：git rev-list origin/$MainBranch..$Branch 失败（exit $($revList.Code)）—— " +
+                  "「命令失败」不是「零差异」，不据此判定已合并。worktree 与分支原样未动") 4
+        }
+        $ahead = $revList.Out
         $aheadCount = @($ahead | Where-Object { $_ -ne '' }).Count
         if ($aheadCount -eq 0) {
             $deleteFlag = '-d'
             Write-Ok "祖先关系上 $Branch 已完全并入 origin/$MainBranch（rev-list 为空）—— 空，安全用 -d"
         } else {
             Write-Info "祖先关系上还有 $aheadCount 个提交没被判为主干祖先 —— 改用 git cherry 做内容等价判定（squash/rebase 合并后这是正常的）"
-            $cherry = (Invoke-Git -Cwd $RepoPath -GitArgs @('cherry', "origin/$MainBranch", $Branch)).Out
+            # 同上：cherry 失败时 stdout 也是空，而「零行」在下面被判为「只剩 merge 壳，安全用 -D」
+            $cherryR = Invoke-Git -Cwd $RepoPath -GitArgs @('cherry', "origin/$MainBranch", $Branch)
+            if (-not $cherryR.Ok) {
+                Fail ("差集核验没查成：git cherry origin/$MainBranch $Branch 失败（exit $($cherryR.Code)）—— " +
+                      "「命令失败」不是「零差异」，不据此判定已合并。worktree 与分支原样未动") 4
+            }
+            $cherry = $cherryR.Out
             $cherryLines = @($cherry | Where-Object { $_ -ne '' })
             $unresolved = @($cherryLines | Where-Object { $_.StartsWith('+') })
             if ($cherryLines.Count -eq 0 -or $unresolved.Count -eq 0) {
