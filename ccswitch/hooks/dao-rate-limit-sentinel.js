@@ -80,12 +80,8 @@
 //      🔑 **跑它要跑在「注册指向的那棵树」上**：`--selfcheck` 的第②③段读的都是**本文件所在仓根**
 //      的 `_tmp/`，而生产日志攒在注册串指的那个仓根里。在 worktree / 副本里跑 ⇒ **恒报 0 条**，
 //      而那与「从未被触发过」逐字节相同。（PR #196 的对抗官先踩了这一脚，才回主仓翻出那 2 条真实记录。）
-// **照直写它还不了的那一半**：两个域的**历史对账**（镜像比 `_tmp` 多几条 ⇒ 那侧丢过记录）
-// 本批**没做**。~~那个数字只有攒出真实限流样本之后才有消费者，而此刻是 0 条~~
-// **理由订正（2026-08-08，PR #196 对抗官用生产日志推翻了原理由的前提）**：主域此刻**不是 0 条，
-// 是 2 条真实样本**（见上面那段）。真正还不了的是另一格 —— **镜像通道本 PR 才引入，镜像侧仍是
-// 0 条**，而对账要的是两侧都有数据才比得出差额。⇒ 欠的不是「等第一个样本」，是「等镜像也攒到
-// 样本、且两侧覆盖同一段时间」。欠账记在 PR 未尽处；判据不变，变的是它还差什么。
+// **两个域的历史对账**：主域 96 条 − 镜像 94 条 = 2，恰为镜像通道上线前那两条最早记录，零差额。
+// 出处：PR #239 判词 https://github.com/thoerwink8/windsurf-dao/pull/239#issuecomment-5231181178。
 //
 // ── 输出面不在扫描面内（守卫铁律③）──────────────────────────────────────────
 // 本 hook 的输入是 stdin 的 payload，产出落在 `<仓根>/_tmp/`（已 gitignore）与
@@ -117,6 +113,28 @@
 // `return null` 改成 `return 0`，既有 165 条断言零反对）；现已补上零守护断言，见下方
 // `countDeaths24h` 定义处「M5' 零守护断言」测试块与 tests/rate-limit-sentinel.tests.js。
 // 生产 fired.log 是否真会出现坏行/坏 `at` 未经真实样本核实，属已知挂账，见 issue 追踪。
+//
+// ── 三处待补强（issue #236，PR #230 对抗官 12 探针 + 17 mutation 夹击挂账）───────
+// PR #230 落地当轮判据本身是对的（既有 165 条断言零反对），但对抗官证明「往错误方向
+// 悄悄改一点，现有测试一条都不会红」，三处代码层缺口本批（issue #236）逐条补：
+//   ① **时钟上界（issue #243②，2026-08-09 用户拍板 5 分钟容差，出处 #70 评论 5231799900，
+//      已取代本条原零容差修法）**——`countDeaths24h` 的窗口判据现为
+//      `t <= nowMs + CLOCK_SKEW_TOLERANCE_MS`（见下方定义处）：容差内的墙钟回拨（NTP 校时
+//      抖动）不再误排真实死亡，容差外的伪造未来时间戳仍被排除。验证过零阻力：补上后既有
+//      165 条断言零反对。
+//   ② **窗口长度（24h）在缩短方向没有测试兜底**——语料只覆盖到 1h 正控与 25h 负控，
+//      窗口在 0~25h 之间随便改都测不出来。修法：补一条 23h 正控 + 窗口收紧 mutation，
+//      见 tests/rate-limit-sentinel.tests.js「issue #236 挂账②」。
+//   ③ **死亡判定不能从 `=== true` 松成 truthy**——写入侧目前永远是布尔值，属结构上的缝
+//      而非当前活跃风险，此前没有断言守着这条判据不被放宽。修法：补一条 truthy-非-true
+//      正控 + 放宽 mutation，见 tests/rate-limit-sentinel.tests.js「issue #236 挂账③」，
+//      本条判据本身不改（`=== true` 严格判等原样保留，issue 原文对这一格「不预判优先级」，
+//      故只补测试兜底、不动生产代码）。⚠ 对抗复核（PR #239 判词）实测：该兜底对
+//      `=== true` → `== true`（宽松相等）这一放宽形态仍零守护——正控样本 `"true"` 恰好
+//      `== true` 为 false，从该改法射程外溜走；修法（样本换 `1`，一个样本同钉 truthy 与
+//      宽松相等两形态）归跟进单。
+// issue 里另记了一条「文件轮转与 24h 窗口叠加时计数理论上会骤降」的边界，issue 原文
+// 定性为「理论边界，不代表短期要修，不预判优先级」——本批不动它，照直挂在 issue 上。
 //
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
@@ -243,7 +261,16 @@ const S = createHookScaffold({
 // 自己在 `marked` 分支里 +1（见 main()）。`readJsonlRecords` 之外逃逸出来的异常
 // （如目录被占等 `readFileSync` 级故障）记 `null`，不吞成 0——这一格由下面
 // 「M5' 零守护断言」测试块守着，见 tests/rate-limit-sentinel.tests.js。
+// **上界带 5 分钟时钟回拨容差（issue #243②，2026-08-09 用户拍板，出处 #70 评论 5231799900，
+// 取代原零容差修法 issue #236 挂账①）**：只有下界 `t >= cutoff` 时，一条被伪造成未来时刻
+// （哪怕 9999 年）的 `at` 会永久算作「在窗内」——它永远 >= cutoff，且没有任何东西会让它过期。
+// 上界把「未来」这个不该存在的时刻也挡在窗外，与「太旧」同判；`CLOCK_SKEW_TOLERANCE_MS`
+// 吸收 NTP 校时抖动致墙钟回拨（issue #243②实测：零容差下 2s/30s/5min/1h 四格墙钟回拨
+// 全部被误判为「未来」而排除真实死亡），伪造需超前 5 分钟才生效。
 const DEATHS_WINDOW_MS = 24 * 3600 * 1000;
+// 时钟回拨容差（issue #243②，2026-08-09 用户拍板，出处 #70 评论 5231799900）：吸收 NTP
+// 校时抖动导致的墙钟回拨，容差内的「轻度未来」记录仍计入；调参三问见上方上界注释。
+const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 function countDeaths24h(nowMs) {
   try {
     const cutoff = nowMs - DEATHS_WINDOW_MS;
@@ -252,7 +279,7 @@ function countDeaths24h(nowMs) {
     for (const r of all) {
       if (r && r.marked === true) {
         const t = Date.parse(r.at);
-        if (Number.isFinite(t) && t >= cutoff) n++;
+        if (Number.isFinite(t) && t >= cutoff && t <= nowMs + CLOCK_SKEW_TOLERANCE_MS) n++;
       }
     }
     return n;

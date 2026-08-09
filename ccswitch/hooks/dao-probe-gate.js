@@ -97,6 +97,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { createHookScaffold } = require("../lib/hook-selfcheck.js");
 
@@ -160,6 +161,54 @@ const S = createHookScaffold({
   forceErrorEnv: "DAO_PROBE_GATE_FORCE_ERROR",
   selfTestEnv: "DAO_PROBE_GATE_SELFTEST",
 });
+
+// ── 镜像留痕域：刻意不在 <仓根>/_tmp 里（issue #232，参照 dao-rate-limit-sentinel.js
+// 在 issue #190 第 2 条已验证过的先例）───────────────────────────────────────────
+// PR #227 对抗验证结论 F3 / B5 实测：沙箱仓根，`_tmp` 整体被换成普通文件（零 env 覆写 = 生产
+// 形态）时，放行 ✅、`additionalContext` 异常注入 ✅，但 `errors.log` **不存在**、stderr 空。
+// 原因是 `S.appendErrorLog()` 写的 `<仓根>/_tmp/probe-gate/errors.log` 与坏掉的父目录
+// `<仓根>/_tmp` 是同一棵树——`mkdirSync(stateDir)` 抛出，被脚手架 `appendErrorLog` 内部的
+// `catch(_){}` 静默吞掉（`hook-selfcheck.js` 头注自己写着「4 个消费方全部落在这一个域里」）。
+// 这不是回归（改前同样没有），是新宣称没兑现：`infra-broken` 态在它要治的那个生产场景里
+// 恰好写不出 errors.log。加第二个物理落点，出 `_tmp` 域：
+// `~/.claude/dao-state/probe-gate/errors.log`——与哨兵 `MIRROR_LOG` 同一个理由：通常与
+// 仓根不同盘/不同权限域，且在仓外，不进 git、不被 `_tmp` 清理动作扫到。
+//
+// ── 结构性沙箱兜底（同 dao-rate-limit-sentinel.js #201 笔 2 的判据，原样搬来）─────────
+// 判据不是「你有没有记得传 `DAO_PROBE_GATE_MIRROR`」，是「你像不像是在沙箱里跑」——
+// `DAO_RATE_LIMIT_MARKER` / `DAO_PROBE_GATE_STATE_SUBDIR` 任一个被显式覆写，就说明调用方
+// 已经在把别的落盘面往沙箱里赶（生产调用两者都不传），这时哪怕漏传 `DAO_PROBE_GATE_MIRROR`，
+// 也该跟着落进沙箱旁边，不静默滑回真机 HOME。**这不是假想的坑**：本仓 `tests/probe-gate.tests.js`
+// 现有的 `envFor()` 夹具正传前两个、没传第三个——没有这道兜底，本文件其余全部 fail-open 测试
+// 会在每次跑测试时悄悄往真机 `~/.claude/dao-state/probe-gate/errors.log` 追加一行。
+function deriveMirrorFallback() {
+  if (process.env.DAO_RATE_LIMIT_MARKER) {
+    return path.join(path.dirname(process.env.DAO_RATE_LIMIT_MARKER), "probe-gate-mirror-fallback", "errors.log");
+  }
+  if (process.env.DAO_PROBE_GATE_STATE_SUBDIR) {
+    return path.join(ROOT, "_tmp", process.env.DAO_PROBE_GATE_STATE_SUBDIR, "mirror-fallback", "errors.log");
+  }
+  return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(),
+    ".claude", "dao-state", "probe-gate", "errors.log");
+}
+const MIRROR_LOG = process.env.DAO_PROBE_GATE_MIRROR || deriveMirrorFallback();
+
+// 镜像一条错误留痕到 `_tmp` 域**之外**。全程吞异常：它是冗余通道，不许拖垮主路径——
+// 与本文件头注「fail-open 铁律」同一条规矩，也与哨兵 `mirrorRecord()` 同一个理由。
+function mirrorErrorLog(msg) {
+  try {
+    fs.mkdirSync(path.dirname(MIRROR_LOG), { recursive: true });
+    fs.appendFileSync(MIRROR_LOG, `[${new Date().toISOString()}] ${msg}\n`, "utf8");
+  } catch (_) { /* 镜像写不成不该拖垮主路径 —— 主域那侧的 appendErrorLog 已经在做同一件事的 fail-open 版 */ }
+}
+
+// 统一出口：主域（`S.appendErrorLog`）与镜像域（`mirrorErrorLog`）总是一起写，不让调用方
+// 各自记得两条——本文件有三处错误留痕点（stdin 解析失败 / bad·infra-broken 态 / 最外层
+// catch），漏改一处就是同一个坑复现的形态（同批查引用同型：改一处不改全部等于没改）。
+function logError(msg, err) {
+  S.appendErrorLog(msg, err);
+  mirrorErrorLog(msg);
+}
 
 /**
  * 读中断标记。四态，**刻意分得开**：
@@ -309,15 +358,19 @@ function selfcheck() {
       `✗ 末次真实触发在 ${d} 天前 —— 探针 cron 是低频轮询（当前 20 分钟档），这条日志本该每天都在长。` +
       "长期不动说明探针 cron 没在跑（会话重开会清掉 session 级 cron），或本 hook 的注册掉了。",
     logReadFailLabel: "读取心跳日志失败",
-    // ③ 留痕域可写性（#190 第 2 条）。本 hook 只有一个域 —— 它的承重物是**标记文件**
-    // （由哨兵写、住在 `<仓根>/_tmp`），而那个域坏掉的后果在本 hook 这一侧是
-    // 「fired.log 记不下来」而已；标记读不出来的那一路已经 fail-open 放行了。
+    // ③ 留痕域可写性（#190 第 2 条）。**两个域各查一次，刻意分开报**（issue #232 起本 hook
+    // 不再只有一个域）：主域坏了但镜像好着 vs 两个都坏了，处置完全不同——前者只丢
+    // 「block 真发生过」这条观测（标记读不出来的那一路已经 fail-open 放行了），后者是
+    // errors.log 彻底静默（PR #227 F3 那次事故正是「主域坏了，而当时没有第二个域」）。
     // 🔑 **跑 `--selfcheck` 要跑在「注册指向的那棵树」上**：第②③段读的都是**本文件所在仓根**的
     // `_tmp/`，而生产日志攒在注册串指的那个仓根里。在 worktree / 副本里跑 ⇒ **恒报 0 条**，
     // 与「从未被触发过」逐字节相同（PR #196 对抗官先踩了这一脚，回主仓才翻出真实记录）。
     probeDirs: [
-      { label: "留痕域（<仓根>/_tmp）", dir: S.stateDir,
-        failNote: "（验收判据③「从 hook 日志确认 block 真发生过」因此拿不到证据）" },
+      { label: "主域（<仓根>/_tmp）", dir: S.stateDir,
+        failNote: "（验收判据③「从 hook 日志确认 block 真发生过」因此拿不到证据；" +
+          "errors.log 也在这个域里，坏了就是 issue #232 那个场景）" },
+      { label: "镜像域（出 _tmp，本机 dao 状态）", dir: path.dirname(MIRROR_LOG),
+        failNote: "（这是主域坏掉时唯一还在记 errors.log 的通道 ⇒ 它也坏了就真的一条都不剩了）" },
     ],
   });
 }
@@ -337,7 +390,7 @@ function main() {
   if (!input) {
     // 读不出 prompt 就判不了它是不是探针 ⇒ 放行。**不写 fired.log**（这不是一次探针判定），
     // 但要留 errors.log —— 否则「宿主协议变了」这种事会一路静默。
-    S.appendErrorLog(`[dao-probe-gate] 解析 stdin 失败：${inputErr && inputErr.message}`, inputErr);
+    logError(`[dao-probe-gate] 解析 stdin 失败：${inputErr && inputErr.message}`, inputErr);
     process.exit(0);
   }
 
@@ -380,7 +433,7 @@ function main() {
 
   if (marker.state === "bad" || marker.state === "infra-broken") {
     const label = marker.state === "bad" ? "中断标记读不出来" : "标记父目录不可用";
-    S.appendErrorLog(`[dao-probe-gate] ${label}（${MARKER_PATH}）：${marker.why}`, null);
+    logError(`[dao-probe-gate] ${label}（${MARKER_PATH}）：${marker.why}`, null);
   }
 
   if (decision === "block") emitBlock();
@@ -399,7 +452,7 @@ if (require.main === module) {
       // 这一条是本 hook 最要紧的一行：它保证「闸门坏了」永远不会变成「用户消息被吞」。
       const msg = `[dao-probe-gate] 未捕获异常：${e && e.message}`;
       try { process.stderr.write(msg + "\n"); } catch (_) {}
-      try { S.appendErrorLog(msg, e); } catch (_) {}
+      try { logError(msg, e); } catch (_) {}
       process.exit(0);
     }
   }
@@ -421,7 +474,9 @@ if (require.main === module) {
 //   · `PROBE_SIG`        —— 端到端那 13 条负控是 spawn 进程测的，**没有 require 这个正则**
 //   · `SIGNATURE`        —— 测试里断言的是字面串，没走这个导出
 //   · `readMarker`       —— 三态判据的唯一函数出口
-//   三个都**刻意保留**：删了以后想单验就得改被测文件本身。
+//   · `MIRROR_LOG`       —— issue #232 新增；对抗复核（PR #241 判词 F1）实测
+//                           `tests/probe-gate.tests.js` 对它零引用（覆盖挂账见 #241 判词 H1）
+//   四个都**刻意保留**：删了以后想单验就得改被测文件本身。
 //   ⚠ 这份清单**没有任何机器在核**（试过按「导出名是否出现在某处 require 解构里」做闸，
 //     那是文本启发式、两个方向都有反例）⇒ 它靠读的人负责，与本仓其他手维护枚举同一个弱点。
-module.exports = { PROBE_SIG, MARKER_PATH, SIGNATURE, readMarker, markerStaleness, STALE_GRACE_S };
+module.exports = { PROBE_SIG, MARKER_PATH, SIGNATURE, readMarker, markerStaleness, STALE_GRACE_S, MIRROR_LOG };

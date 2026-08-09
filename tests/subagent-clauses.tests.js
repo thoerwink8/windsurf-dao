@@ -522,9 +522,21 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
   // （PR #175 对抗官三轮同族扫描扫出；`[#官抗-负控独立归因]` ②款的形态）。
   // 故拆两条，各自独立归因：①这一行在不在 ②它的内容干不干净。
   //
+  // **2026-08-09 追加范围（issue #172 笔 A，用户拍板选项①）**：上面这段历史是「零写入」
+  // 曾经结构性覆盖 `Bash` 的由来；现在 `Bash` 已合法加回 scout 的工具表（详见
+  // `ccswitch/agents/dao-scout.md` 正文），「只读」这半从结构性保证退回纪律约束
+  // （scout 的 `Bash` 只准跑只读命令，写命令违例，判据不在机器面）。本节因此变成三条断言：
+  // ①这一行在不在且认得出 ②**真正的写入工具**（Edit 家族 + Write）仍不在表里 ③`Bash`
+  // 现在**必须在**表里——判据见下。
+  //
   // 判据在这里**独立写死**，不 require 被守对象那侧（hook / 渲染器）的任何解析器 ——
   // 与被守物共用一个解析器，会让「找违例」和「确认我真看到了样本」一起瞎掉（`[#守-自检独立]`）。
-  const scoutToolsOf = (text) => {
+  // **2026-08-09 对抗返修追加（PR #234 评论 5230906744 F2）：这个解析器改名复用，不再叫
+  // `scoutToolsOf`**——它的逻辑本来就与 scout 无关（纯粹解析 frontmatter 的 `tools:` 行），
+  // 之前只服务 scout 一个 profile 是「调用点覆盖率 N=4/M=1=25%」的病灶本身：`dao-implementer`
+  // / `dao-adversary` / `dao-dogfood` 三个官种型 profile 此前 0 覆盖，改坏它们的 `tools:`（删行 /
+  // 塞脏值）不会有任何断言变红。改名为 `toolsLineOf` 后下面复用于全部四个 profile。
+  const toolsLineOf = (text) => {
     const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text));
     if (!fm) return { ok: false, value: null, why: "没解析出 frontmatter" };
     const m = /^tools:[ \t]*(\S[^\r\n]*?)[ \t]*$/m.exec(fm[1]);
@@ -546,25 +558,76 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
   // `Edit` 前面那个 `k` 是词字符，两个词字符之间没有词边界，于是 `tools: Read, NotebookEdit`
   // 曾经两条全绿。而 NotebookEdit 是宿主真实存在的**写入**工具（会改 notebook 单元格），
   // 侦察官的红线是**全程零写入**，它当然在表里。长的排前面，匹配次序不留给引擎去猜。
-  const WRITE_TOOL_RE = /\b(NotebookEdit|MultiEdit|Edit|Write|Bash)\b/;
+  // **2026-08-09 摘掉 `Bash`（issue #172 笔 A，用户拍板选项①）**：侦察官条款自身要求收工写
+  // 「本轮零写入（`git status` 空）」——没有 `Bash` 跑不出 `git status`，`Explore` 载体也一直
+  // 有 `Bash`，同官种两个载体能力不该不一致。摘掉之后这条 regex 只再守**结构性写入工具**
+  // （Edit 家族 + Write）；`Bash` 合法与否改由下面的独立断言判（判据从「不许出现」变成
+  // 「必须出现」，两件事不能用同一条 regex 答，故分开）。
+  const WRITE_TOOL_RE = /\b(NotebookEdit|MultiEdit|Edit|Write)\b/;
+
+  // ── 最低限度覆盖：另外三个此前 0 覆盖的官种型 profile（2026-08-09，PR #234 评论 5230906744 F2）──
+  // 不做语义判断（implementer/adversary 是「全权限官」，没有 scout 那种只读/写入的取舍要判），
+  // 只钉「这一行在、且认得出」——这正是 F2 指出的最便宜也最要紧的那一格：`tools:` 整行被删掉
+  // 时 Claude Code 会**继承全部工具**，这三个 profile 此前改坏了这一行不会有任何断言变红。
+  for (const stem of ["dao-implementer", "dao-adversary", "dao-dogfood"]) {
+    const p = path.join(AGENTS_DIR, stem + ".md");
+    const v = fs.existsSync(p)
+      ? toolsLineOf(fs.readFileSync(p, "utf8"))
+      : { ok: false, value: null, why: `${stem}.md 不在盘上` };
+    check(`${stem}：tools: 这一行在，且值是一张逐项认得出的工具表（**没有这一行 = 继承全部工具**；认不出的形态一律 fail-closed）`,
+      v.ok, v.why);
+  }
+
   {
     const SCOUT = path.join(AGENTS_DIR, "dao-scout.md");
     // existsSync 兜一道：直接 readFileSync 会在 profile 被删时**抛异常整份测试当场终止**，
     // 于是它后面的 ⑧⑨ 两节一条都跑不到 —— 红是红了，却红得没有归因、还顺手灭掉六十多条。
     const v = fs.existsSync(SCOUT)
-      ? scoutToolsOf(fs.readFileSync(SCOUT, "utf8"))
+      ? toolsLineOf(fs.readFileSync(SCOUT, "utf8"))
       : { ok: false, value: null, why: "dao-scout.md 不在盘上" };
     check("dao-scout：tools: 这一行在，且值是一张逐项认得出的工具表（**没有这一行 = 继承全部工具**；认不出的形态一律 fail-closed）",
       v.ok, v.why);
     // 本条**刻意不带 `v.ok &&`**：带上就与上一条同生同死 —— 两次破坏红出同一个集合，
     // 红的时候归因不出到底是哪一格坏了（`[#官抗-负控独立归因]` ①款）。
     // **代价照直写**：上一条已判红的那些形态（无行 / 空值 / 认不出）本条零样本、恒绿；
-    // 那一格由上一条独占，且是实测的（issue #177 / PR #178 交付：四发破坏**各只红一条**，
-    // 分落两个互不相交的归因面 —— 删行 / `tools: *` ⇒ 只红上一条；塞 Bash / 塞 NotebookEdit
-    // ⇒ 只红本条）。**别把这句读成「四个红集两两互不相交」**：A 与 E 红的是同一条、
-    // B 与 D 红的是同一条，那是**设计如此**（同一格的两种形态），互不相交的是**两个面**。
-    check("dao-scout：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write/Bash（只读红线的另一半）",
+    // ~~那一格由上一条独占~~，且是实测的（issue #177 / PR #178 交付：四发破坏**各只红一条**，
+    // 分落两个互不相交的归因面 —— 删行 / `tools: *` ⇒ ~~只红上一条~~；塞 NotebookEdit ⇒ 只红本条。
+    // **塞 Bash 当时（PR #178 时点）也只红本条，但 2026-08-09 起 Bash 已合法化**——这句历史
+    // 归因只作既往实证保留，今天再复现同一发破坏不会得到同样的红集，别拿它当现状核对。
+    // **2026-08-09 对抗验证官订正（PR #234 评论 5230906744 F3）：上面画掉的两处已为假**——
+    // 本 PR 新增③条（`Bash` 必须在表）之后，实测**删整行 `tools:` 与 `tools: * `通配这两发
+    // 各红 2 条**（①与③同时红）：③用 `(v.value || "")` 兜底，`tools:` 缺失或认不出时得到的
+    // 值里天然没有 `Bash`，`includes("Bash")` 自然为 false，于是①②③里的①③一起亮。「塞 Write /
+    // 塞 NotebookEdit ⇒ 只红本条（②）」这半仍然成立，没被这次订正牵动。行为本身没错（没有
+    // 工具表时说「Bash 不在表里」是对的），错的只是这段归因文字没跟着新断言重算一遍
+    // （`[#官抗-断言名实核对]`：跑完一批变体后要核对谁本该红、谁的自陈已过期）。
+    // **别把这句读成「四个红集两两互不相交」**：A 与 E 红的是同一条、B 与 D 红的是同一条，
+    // 那是**设计如此**（同一格的两种形态，指的是①②两条规模下的旧四发实验），互不相交的
+    // 是**两个面**——那段历史记录本身没错，错的只是上面单独摘出来复述的那一句没跟着更新。
+    check("dao-scout：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write（结构性写入红线；Bash 见下一条，判据方向相反）",
       !WRITE_TOOL_RE.test(v.value || ""), JSON.stringify(v.value));
+    // **新增（2026-08-09，issue #172 笔 A 落地，用户拍板选项①）**：`Bash` 现在是**必须在**的
+    // 一格，不是必须不在——用户拍板「给 scout 加 Bash」，日后若有人手滑删掉，这条要能抓住。
+    // 判据是逐项精确匹配 `Bash`（按 `,` 切分后逐项 trim），不是子串匹配，避免误判
+    // `mcp__xxx-bash-runner` 这类形似长名（当前工具表里还没有这种名字，但判据先按误伤面写）。
+    const scoutItems = (v.value || "").split(",").map((s) => s.trim());
+    check("dao-scout：tools: 里含 Bash（2026-08-09 拍板：能力齐，只读改由正文用途限定 + 收工自陈兜底）",
+      scoutItems.includes("Bash"), JSON.stringify(v.value));
+
+    // ── 负控：形似长名不该被判成命中（issue #245 N1，PR #234 二核遗留）─────────────────
+    // 上面这条判据是 `scoutItems.includes("Bash")`（split+trim 后的数组精确匹配），但全套
+    // 现有语料里没有一份工具表同时含「形似长名」（`BashOutput` 之于 `Bash`）而不含精确名——
+    // 若悄悄放宽成子串匹配（`(v.value||"").includes(tool)`），153 条断言零红：**先破再验**，
+    // 本条加入前已实测——临时把这条与下面 dogfood 那条判据都改成子串匹配、用真实
+    // `dao-scout.md`/`dao-dogfood.md` 语料重跑，PASS=153 FAIL=0 逐字不变（复原后同为
+    // PASS=153 FAIL=0），证实了这个缺口确实存在、且真实语料测不出它。这里补一条合成负控
+    // 样本，直接钉住「精确匹配 ≠ 子串匹配」这件事本身。
+    const scoutDecoy = toolsLineOf("---\nname: x\ntools: Read, Grep, BashOutput\n---\n正文");
+    const scoutDecoyItems = (scoutDecoy.value || "").split(",").map((s) => s.trim());
+    check("负控：tools 表含 BashOutput（不含 Bash 本身）⇒ 逐项精确匹配判「不含 Bash」（子串匹配会误判成含）",
+      scoutDecoyItems.includes("Bash") === false, JSON.stringify(scoutDecoy.value));
+    check("负控：同一样本的原始串确实含子串 \"Bash\"（佐证上一条测的是精确匹配，不是巧合过关）",
+      (scoutDecoy.value || "").includes("Bash") === true, JSON.stringify(scoutDecoy.value));
   }
   {
     // 合成语料：上面两条的判别力**不靠「真档此刻恰好长得对」兜着**。真档哪天被改成哪种形态，
@@ -573,7 +636,11 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
     const SAMPLES = [
       ["有 tools: 且干净", "---\nname: x\ntools: Read, Grep, Glob\n---\n正文", true, false],
       ["tools: 整行删掉（本 issue 的病灶）", "---\nname: x\ndescription: y\n---\n正文", false, false],
-      ["tools: 里塞了 Bash", "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, true],
+      // **2026-08-09 起 Bash 不再算「脏」（issue #172 笔 A 用户拍板）**：wantDirty 从 true
+      // 改 false——WRITE_TOOL_RE 现在只守结构性写入工具，Bash 合法与否由另一条独立断言判
+      // （方向相反：必须出现，不是必须不出现），这张合成样本只测 WRITE_TOOL_RE 这一侧。
+      ["tools: 里塞了 Bash（2026-08-09 起对 WRITE_TOOL_RE 而言不算脏）",
+        "---\nname: x\ntools: Read, Grep, Bash\n---\n正文", true, false],
       ["tools: 里塞了 NotebookEdit（\\bEdit\\b 匹配不到它：前面那个 k 挡掉了词边界）",
         "---\nname: x\ntools: Read, NotebookEdit\n---\n正文", true, true],
       ["tools: * 通配（宿主认不认未证 ⇒ 认不出即 fail-closed，不判绿）",
@@ -588,11 +655,122 @@ console.log("\n──── ⑦′ 接线：仓里那四个官种型 profile 的
         "---\r\nname: x\r\ntools: Read, Write\r\n---\r\n正文", true, true],
     ];
     for (const [tag, sample, wantOk, wantDirty] of SAMPLES) {
-      const g = scoutToolsOf(sample);
+      const g = toolsLineOf(sample);
       check(`合成样本「${tag}」：这张表认不认得出，判得出 ${wantOk}`,
         g.ok === wantOk, `实得 ok=${g.ok} value=${JSON.stringify(g.value)} why=${g.why}`);
       check(`合成样本「${tag}」：内容含写入工具判得出 ${wantDirty}`,
         WRITE_TOOL_RE.test(g.value || "") === wantDirty, `实得 ${WRITE_TOOL_RE.test(g.value || "")}`);
+    }
+  }
+
+  // ── dao-dogfood 的截图/导航工具在机器面也有断言了（issue #172 笔 B + F4 返修，2026-08-09，
+  //    PR #234 评论 5230906744 F2/F4）：照笔 A 的断言形态写——对抗验证官实测 M8（把两个截图
+  //    工具删回原状）与 M9（把整行 `tools:` 删掉）都是 PASS=134 FAIL=0，零回归网。本节补对等
+  //    覆盖，且同批把 F4 新加的四个 chrome-devtools 工具与一个 playwright 导航工具也一并钉住——
+  //    它们与截图工具同一次拍板落地的完整性（能截图但到不了目标页等于没加），不该比截图工具
+  //    本身覆盖得更松。 ────────────────────────────────────────────────────────────────
+  {
+    const DOGFOOD = path.join(AGENTS_DIR, "dao-dogfood.md");
+    const REQUIRED_DOGFOOD_TOOLS = [
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__select_page",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+    ];
+    const dv = fs.existsSync(DOGFOOD)
+      ? toolsLineOf(fs.readFileSync(DOGFOOD, "utf8"))
+      : { ok: false, value: null, why: "dao-dogfood.md 不在盘上" };
+    // **2026-08-09 去重（issue #245 N2）**：本条此前与 OFFICER_STEMS 循环里 `dao-dogfood`
+    // 那一条断言名逐字相同，是刻意留的"紧邻逐项断言、红时不用跳几十行"的便利重复——但
+    // 它让红集读数虚高 1（同一件事被计成两条 PASS）。去重后若这一行真的没了，OFFICER_STEMS
+    // 循环那条（约 100 行前）会先红，`dv.ok` 为 false 时下面 `dv.why` 已经带得出原因，
+    // 归因并不会因为去掉这条本地副本而变差。
+    const dogfoodItems = (dv.value || "").split(",").map((s) => s.trim());
+    for (const tool of REQUIRED_DOGFOOD_TOOLS) {
+      check(`dao-dogfood：tools: 里含 ${tool}（逐项精确匹配，不是子串匹配，防手滑删掉其中一个）`,
+        dogfoodItems.includes(tool), JSON.stringify(dv.value));
+    }
+
+    // ── 负控：形似长名不该被判成命中（issue #245 N1，同上，dogfood 侧）─────────────────
+    const dogfoodDecoy = toolsLineOf(
+      "---\nname: x\ntools: Read, Grep, mcp__chrome-devtools__take_screenshot_v2\n---\n正文");
+    const dogfoodDecoyItems = (dogfoodDecoy.value || "").split(",").map((s) => s.trim());
+    check("负控：tools 表含 …take_screenshot_v2（不含精确名）⇒ 逐项精确匹配判「不含」（子串匹配会误判成含）",
+      dogfoodDecoyItems.includes("mcp__chrome-devtools__take_screenshot") === false,
+      JSON.stringify(dogfoodDecoy.value));
+    check("负控：同一样本的原始串确实含子串（佐证上一条测的是精确匹配，不是巧合过关）",
+      (dogfoodDecoy.value || "").includes("mcp__chrome-devtools__take_screenshot") === true,
+      JSON.stringify(dogfoodDecoy.value));
+  }
+  {
+    // 合成语料：证明上面的逐项断言判别力不靠「真档此刻恰好长得对」兜着——真档哪天被改成
+    // 哪种形态，这几格都还在原地钉着。样本自造、只在内存里，不碰盘上任何真档。
+    const REQUIRED_DOGFOOD_TOOLS = [
+      "mcp__chrome-devtools__list_pages",
+      "mcp__chrome-devtools__select_page",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+    ];
+    const DOGFOOD_SAMPLES = [
+      ["有 tools: 且含全部 7 个截图/导航工具",
+        `---\nname: x\ntools: Read, Grep, Glob, Bash, Write, ${REQUIRED_DOGFOOD_TOOLS.join(", ")}\n---\n正文`,
+        true, REQUIRED_DOGFOOD_TOOLS],
+      ["tools: 整行删掉（对抗 M9 实测过零红的那个形态）",
+        "---\nname: x\ndescription: y\n---\n正文", false, []],
+      ["7 个截图/导航工具全删回原状、其余保留（对抗 M8 实测过零红的那个形态）",
+        "---\nname: x\ntools: Read, Grep, Glob, Bash, Write\n---\n正文", true, []],
+      ["只留 playwright 支两个工具，chrome-devtools 支四个全删（F4 返修前的原状）",
+        "---\nname: x\ntools: Read, Grep, Glob, Bash, Write, mcp__playwright__browser_navigate, mcp__playwright__browser_take_screenshot\n---\n正文",
+        true, ["mcp__playwright__browser_navigate", "mcp__playwright__browser_take_screenshot"]],
+    ];
+    for (const [tag, sample, wantOk, wantTools] of DOGFOOD_SAMPLES) {
+      const g = toolsLineOf(sample);
+      check(`dogfood 合成样本「${tag}」：tools: 行认不认得出，判得出 ${wantOk}`,
+        g.ok === wantOk, `实得 ok=${g.ok} value=${JSON.stringify(g.value)} why=${g.why}`);
+      const gotItems = (g.value || "").split(",").map((s) => s.trim());
+      const hasAllWant = wantTools.every((t) => gotItems.includes(t));
+      const hasNoExtra = REQUIRED_DOGFOOD_TOOLS.filter((t) => !wantTools.includes(t)).every((t) => !gotItems.includes(t));
+      check(`dogfood 合成样本「${tag}」：含且仅含预期的截图/导航工具子集`,
+        hasAllWant && hasNoExtra, `实得 items=${JSON.stringify(gotItems)} 预期=${JSON.stringify(wantTools)}`);
+    }
+  }
+
+  // ── 其余 8 份 profile 的存在性 + tools 行断言（issue #245 N4，PR #234 二核遗留）─────────
+  // PR #234 只覆盖了官种型 profile（dao-implementer/adversary/dogfood/scout，4/12=33%）。
+  // 「删 tools: 行 = 继承全部工具」是宿主性质，对**任何** profile 都成立，不分官种型/能力型
+  // ——本节把剩下 8 份逐一点名补上「行在 + 认得出」这一格（机械活，照上面 OFFICER_STEMS
+  // 循环的形态原样套）。三份**结构性只读**（dao-reviewer / dao-reviewer-critical /
+  // dao-brainstormer，实测 tools: 均只有 `Read, Grep, Glob`）额外钉「无写入工具」——
+  // 与 dao-scout 的只读红线同一判据：这三份若被误删 tools: 行，会从「只读」静默裸奔成
+  // 「继承全部工具」，与当年 scout 那个病逐字同型。其余 5 份（debugger/plan-writer/
+  // spec-writer/strategist/worker-batch）设计上本就带写入工具，不适用这条负控。
+  const REMAINING_PROFILES = [
+    ["dao-brainstormer", true],
+    ["dao-debugger", false],
+    ["dao-plan-writer", false],
+    ["dao-reviewer-critical", true],
+    ["dao-reviewer", true],
+    ["dao-spec-writer", false],
+    ["dao-strategist", false],
+    ["dao-worker-batch", false],
+  ];
+  for (const [stem, readOnly] of REMAINING_PROFILES) {
+    const p = path.join(AGENTS_DIR, stem + ".md");
+    const exists = fs.existsSync(p);
+    check(`${stem}.md 在盘上（没有 profile 就没有 agent type 可选）`, exists, p);
+    if (!exists) continue;
+    const rv = toolsLineOf(fs.readFileSync(p, "utf8"));
+    check(`${stem}：tools: 这一行在，且值是一张逐项认得出的工具表（**没有这一行 = 继承全部工具**；认不出的形态一律 fail-closed）`,
+      rv.ok, rv.why);
+    if (readOnly) {
+      check(`${stem}：tools: 的内容里没有 NotebookEdit/MultiEdit/Edit/Write（结构性只读官种，删 tools: 行 = 裸奔继承全部工具，同 dao-scout 的只读红线）`,
+        !WRITE_TOOL_RE.test(rv.value || ""), JSON.stringify(rv.value));
     }
   }
 }
