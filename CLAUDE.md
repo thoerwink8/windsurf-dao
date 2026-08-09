@@ -100,6 +100,20 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条�
 node ccswitch/scripts/gen-guarded-files.mjs           # 「被 mutation 守护的源文件」清单：改完 tests/ 后重新生成
 node ccswitch/scripts/gen-guarded-files.mjs --check   # 测试实况变了而清单没跟上 ⇒ exit 1（tests/guarded-files.tests.js 每次跑它）
 node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不读得到清单（fail-open 的失败态只在这里出声）
+
+node scripts/dao-gates.mjs                    # ★ 交付前闸门聚合（issue #70 层2 件①）：上面几行 gen-clause-index --check /
+                                              #   gen-guarded-files --check / dao-smoke / check-mutation-anchor /
+                                              #   check-clauses-structure（全量）5 道闸一条命令全出，真退出码汇总表 +
+                                              #   末行 DAO_GATES_SUMMARY；全绿才 exit 0（check-clauses-structure 的
+                                              #   exit=3「没查成」计入 inconclusive 不计入 red，聚合退出码因此是 2 不是 1）
+node scripts/dao-gates.mjs --list             # 只列 5 道闸的名字与说明，不执行；改闸清单改的是脚本本身，此行不用同步维护
+
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
+                                              # ★ 合并链收尾三连脚本化（issue #70 层2 件②，`dao-pr-merge.ps1` 合并后
+                                              #   若跑在链接 worktree 里只打印这两行手工命令，本脚本把它们脚本化）：
+                                              #   差集核验（只剩 merge 壳或空才准 -D，否则报错停）+ worktree remove +
+                                              #   prune + 删分支 + pull；幂等可重跑。必须从主仓（不能从 -WorktreePath
+                                              #   自己里面）跑；退出码契约见脚本头注 .NOTES
 ```
 
 `ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。
