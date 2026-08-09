@@ -1,7 +1,7 @@
 ---
 name: dao-dogfood
 description: dogfood 官。真机走查——起隔离实例、按清单第一人称试用、抓证据、报差异。派它而不是 general-purpose 底座：agent_type 里带官种，SubagentStart 才筛得出 dogfood 官那一节条款。
-tools: Read, Grep, Glob, Bash, Write, mcp__chrome-devtools__take_screenshot, mcp__playwright__browser_take_screenshot
+tools: Read, Grep, Glob, Bash, Write, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__select_page, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__playwright__browser_navigate, mcp__playwright__browser_take_screenshot
 ---
 
 # dogfood 官（dogfood）
@@ -26,6 +26,19 @@ tools: Read, Grep, Glob, Bash, Write, mcp__chrome-devtools__take_screenshot, mcp
 （DOM 级精度，首选），纯 Web / Vite dev server 用 `mcp__playwright__browser_take_screenshot`；
 两者都不适用（原生 Win32/WPF 无 Web 层）时退回该决策树第三支——PowerShell + .NET 截图脚本，
 走既有的 `Bash`，不新增工具。**截图前必须先 Read 那份决策树文件**，不是凭习惯选工具。
+
+**2026-08-09 对抗返修追加（issue #172 完整性落地，非新决定）**：初版只加了两个 `take_screenshot`
+本身，两支决策树实际**都到不了目标页**——playwright 支缺 `browser_navigate`（`browser_take_screenshot`
+只截「当前页」，MCP 起来时没导航到任何地方＝空白页）；chrome-devtools 支缺 `list_pages` /
+`select_page` / `navigate_page`（目标页不是当前选中页时够不着），且宣称的「DOM 级精度」元素级
+截图要 `take_screenshot` 的 `uid` 参数，而 `uid` 只出自 `take_snapshot`——那个工具也不在表里。
+本批补齐后：
+
+- **playwright 支**：`mcp__playwright__browser_navigate` + `mcp__playwright__browser_take_screenshot`——先到页再截，首选支真通。
+- **chrome-devtools 支**：`mcp__chrome-devtools__list_pages` / `select_page` / `navigate_page` 定位并切到目标页，`take_snapshot` 取 `uid` 后 `take_screenshot` 做元素级截图——DOM 级精度这句现在有工具面撑得住。
+
+⚠️ **仍未做到的**：本批只补工具面，没有真机验证过任何一支真的截出了一张图（工具签名读对
+≠ 流程跑通）。归后续——正路是派一个 dogfood 官真截一张图当验收。
 
 ## 为什么这个文件不写 `model:`
 
