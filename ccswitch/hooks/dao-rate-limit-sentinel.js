@@ -97,6 +97,47 @@
 // （「hook 本机状态目录 / 不随换机走 / 无需处理」）。⇒ 正确说法是：**它不需要「恢复步骤」，
 // 但需要一行「换机后它是空的」的登记**，两者不是一回事。**别照原句去删 NEW-MACHINE 那一行。**
 //
+// ── deaths_24h：最近 24h 限流死亡计数（issue #70 自适应并发批，笔①：哨兵信号增强）───
+// 用户 2026-08-09 拍板「自适应并发」——水位判据（`ccswitch/rules/dao-longwindow.md`
+// §心跳对账节·丙㈣）要读到「最近死过几次」而不是只有「现在有没有标记」这一个二值信号。
+// 判据**不新造存储**：直接数 `S.firedLog` 里既有的 `marked:true` 行（那本来就是「写标记
+// 成功」的判据），24 小时窗与 `dao-probe-gate.js` 的 `STALE_GRACE_S`（同样取 24h）是两件
+// 独立的事——那边问「这条标记多旧」，这里问「这台机器过去一天死了几次」，只是恰好同一个
+// 窗口长度，别读成共享同一个判据。**含本次**：这一刻正在写的这次死亡本身也算一次
+// ——语义是「连这次在内，过去 24h 我死了几次」，不是「这次之前死过几次」。
+// ~~读失败时记 `null` 不记 `0`：0（真的零次）与「读不出来」必须分得开，同 `reset_estimate_s`
+// 的判据同一路数。~~
+// **订正（2026-08-09，PR #230 对抗官 12 探针实测证伪）**：上面那句是过度概括的旗舰宣称。
+// 实测**只有一种「读失败」真的走得到 `null`**——`readFileSync` 本身抛异常（如 fired.log
+// 路径被占成目录）。**坏行（整行非法 JSON）与坏 `at`（缺失/非法时间戳）不算这种「读失败」**：
+// `readJsonlRecords → parseJsonl` 的设计是坏行跳过而非抛（`ccswitch/lib/hook-selfcheck.js:68`
+// 头注「日志是旁证，一行写坏了不该让整份日志不可读」——对心跳判活是对的，对本函数的计数语义
+// 恰好是反的），这类记录会被静默当「不是死亡」处理，与「真的零次」在输出上不可区分，
+// **报成 0，不是 null**。这一格此前**没有任何断言在守**（mutation：把 catch 里的
+// `return null` 改成 `return 0`，既有 165 条断言零反对）；现已补上零守护断言，见下方
+// `countDeaths24h` 定义处「M5' 零守护断言」测试块与 tests/rate-limit-sentinel.tests.js。
+// 生产 fired.log 是否真会出现坏行/坏 `at` 未经真实样本核实，属已知挂账，见 issue 追踪。
+//
+// ── 三处待补强（issue #236，PR #230 对抗官 12 探针 + 17 mutation 夹击挂账）───────
+// PR #230 落地当轮判据本身是对的（既有 165 条断言零反对），但对抗官证明「往错误方向
+// 悄悄改一点，现有测试一条都不会红」，三处代码层缺口本批（issue #236）逐条补：
+//   ① **时钟只有下界，没有上界**——伪造的未来时间戳（如 `at` 写成 10 天后甚至 9999 年）
+//      此前会被永久计入且永不过期。修法：`countDeaths24h` 的窗口判据补 `t <= nowMs`
+//      （见下方定义处）。验证过零阻力：补上后既有 165 条断言零反对。
+//   ② **窗口长度（24h）在缩短方向没有测试兜底**——语料只覆盖到 1h 正控与 25h 负控，
+//      窗口在 0~25h 之间随便改都测不出来。修法：补一条 23h 正控 + 窗口收紧 mutation，
+//      见 tests/rate-limit-sentinel.tests.js「issue #236 挂账②」。
+//   ③ **死亡判定不能从 `=== true` 松成 truthy**——写入侧目前永远是布尔值，属结构上的缝
+//      而非当前活跃风险，此前没有断言守着这条判据不被放宽。修法：补一条 truthy-非-true
+//      正控 + 放宽 mutation，见 tests/rate-limit-sentinel.tests.js「issue #236 挂账③」，
+//      本条判据本身不改（`=== true` 严格判等原样保留，issue 原文对这一格「不预判优先级」，
+//      故只补测试兜底、不动生产代码）。⚠ 对抗复核（PR #239 判词）实测：该兜底对
+//      `=== true` → `== true`（宽松相等）这一放宽形态仍零守护——正控样本 `"true"` 恰好
+//      `== true` 为 false，从该改法射程外溜走；修法（样本换 `1`，一个样本同钉 truthy 与
+//      宽松相等两形态）归跟进单。
+// issue 里另记了一条「文件轮转与 24h 窗口叠加时计数理论上会骤降」的边界，issue 原文
+// 定性为「理论边界，不代表短期要修，不预判优先级」——本批不动它，照直挂在 issue 上。
+//
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
 // 注册（用户/帅动作，本文件不代做）：settings.json → hooks.StopFailure，matcher "rate_limit|overloaded"
@@ -106,7 +147,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createHookScaffold } = require("../lib/hook-selfcheck.js");
+const { createHookScaffold, readJsonlRecords } = require("../lib/hook-selfcheck.js");
 
 const SIGNATURE = "[dao-rate-limit-sentinel v1]";
 const EVENT = "StopFailure";
@@ -215,6 +256,34 @@ const S = createHookScaffold({
   selfTestEnv: "DAO_RATE_LIMIT_SELFTEST",
 });
 
+// 数最近 24h 内 `marked:true` 的行（判据与用途见文件头注「deaths_24h」段，
+// 含上面 2026-08-09 订正——只有 `readFileSync` 真抛异常才落到这个 catch，
+// 坏行/坏 `at` 由 `parseJsonl` 静默跳过，走不到这里，报的是 0 不是 null）。
+// **不含本次**——本次这条记录要等 `S.heartbeat(rec)` 才追加进 fired.log，调用方
+// 自己在 `marked` 分支里 +1（见 main()）。`readJsonlRecords` 之外逃逸出来的异常
+// （如目录被占等 `readFileSync` 级故障）记 `null`，不吞成 0——这一格由下面
+// 「M5' 零守护断言」测试块守着，见 tests/rate-limit-sentinel.tests.js。
+// **`t <= nowMs` 上界（issue #236 挂账①，2026-08-09 补）**：只有下界 `t >= cutoff` 时，
+// 一条被伪造成未来时刻（哪怕 9999 年）的 `at` 会永久算作「在窗内」——它永远 >= cutoff，
+// 且没有任何东西会让它过期。上界把「未来」这个不该存在的时刻也挡在窗外，与「太旧」同判。
+const DEATHS_WINDOW_MS = 24 * 3600 * 1000;
+function countDeaths24h(nowMs) {
+  try {
+    const cutoff = nowMs - DEATHS_WINDOW_MS;
+    const all = readJsonlRecords(S.firedLog);
+    let n = 0;
+    for (const r of all) {
+      if (r && r.marked === true) {
+        const t = Date.parse(r.at);
+        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;
+      }
+    }
+    return n;
+  } catch (_) {
+    return null;
+  }
+}
+
 // 标记文件整份覆写（后一次限流覆盖前一次）。**幂等**：连发两次不炸、内容以最后一次为准。
 // 探针接手后由探针那一轮删除它（见 dao-probe-gate.js 头注的分工），本 hook 只写不删。
 function writeMarker(rec) {
@@ -308,6 +377,10 @@ function main() {
 
   let markerErr = null;
   if (marked) {
+    // `countDeaths24h` 读的是 fired.log **此刻已有**的行（这次死亡还没落盘），
+    // 故 +1 把「正在写的这次」计进去——语义见文件头注「deaths_24h」段。
+    const priorDeaths24h = countDeaths24h(Date.now());
+    const deaths24h = priorDeaths24h == null ? null : priorDeaths24h + 1;
     try {
       writeMarker({
         at,
@@ -318,6 +391,7 @@ function main() {
         raw,
         session_id: input.session_id || null,
         signature: SIGNATURE,
+        deaths_24h: deaths24h,
       });
     } catch (e) {
       markerErr = e;

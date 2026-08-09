@@ -1886,6 +1886,18 @@ function argOfCli(argv, name, dflt) {
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
+// issue #219 笔1（PR #218 对抗官评论 5230198032 · B1/B2）：`compareWithDb` 里「拿 selectRows
+// 函数」这半步单独拆出来并导出。原地内联在 `o.selectRows || (await import(...)).selectRows`
+// 时，测试端只能靠传 `opts.selectRows` 绕开它 ⇒ **这半步本身**——真实导入路径存不存在、
+// 真导出叫不叫 selectRows——从未被走到过：把导入路径改成不存在的文件（B1）/ 把
+// `.selectRows` 打错成 `.selectRowsTYPO`（B2），targeted 122 与全库 3514 条断言全部零红。
+// 拆出来后测试可以直接调 resolveSqliteSelectRows()：只做一次真实 import + 读导出形状，
+// **不碰真 DB**（sqlite.mjs 顶层不执行任何 DB 操作，只在函数被真调用时才碰）——可以留在
+// 默认层，不必进 env 层。
+async function resolveSqliteSelectRows() {
+  return (await import("../../config-sync/lib/sqlite.mjs")).selectRows;
+}
+
 /**
  * issue #171 批 B（F1-F3）：DB 访问改走 `opts.selectRows` 依赖注入 —— 此前硬编码
  * `await import(".../sqlite.mjs")`，两条腿（liveVsDb / snapVsDb）因此只能靠真实 DB
@@ -1900,7 +1912,7 @@ async function compareWithDb(opts) {
   // DB 是真源。只在 --db 时查：单次 selectRows 实测 ~150ms（tableExists + select 两次 sqlite3 spawn），
   // 且 sqlite.mjs 是 ESM、findSqlite3 找不到 sqlite3 会抛、cc-switch 运行时 DB 可能被锁。
   // SessionStart 路径若引入它，dao-scaffold-check.js 就得整体改成 async —— 那不是最小改动。
-  const selectRowsFn = o.selectRows || (await import("../../config-sync/lib/sqlite.mjs")).selectRows;
+  const selectRowsFn = o.selectRows || (await resolveSqliteSelectRows());
   const rows = selectRowsFn("settings", "WHERE key='common_config_claude'");
   if (!rows.length) throw new Error("DB 里没有 common_config_claude 行");
   const dbObj = JSON.parse(rows[0].value);
@@ -2046,6 +2058,9 @@ module.exports = {
   // 注入。四者都导出，供测试端不碰真 DB / 真 ~/.claude/settings.json 也能端到端断言
   // 报文文本与此前零覆盖的两个生产调用点（PR #167 对抗账 D2/D3 + F1-F3）。
   reportLines, printReport, dbReportLines, compareWithDb,
+  // issue #219 笔1：单独导出，供测试直接验证真实导入路径 + 真实导出名的契约形状
+  // （B1/B2 那两个"改到测试永远绕开的那半步"的变异），不必碰真 DB。
+  resolveSqliteSelectRows,
 };
 
 if (require.main === module) {
