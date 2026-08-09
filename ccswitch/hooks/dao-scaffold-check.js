@@ -1499,21 +1499,54 @@ function daoSyncLines() {
 // 治的是什么：daoSyncLines() 无论有没有真发现都会跑满上面 12 步，常路（无漂移）下仍会
 // 输出好几行 "ⓘ ...绿" 状态播报，字节占比不小却零决策价值——机制体检实测基线：
 // 一份 14 行报文里有 6 行属于这一类，占报文总字节数 62.8%。
-// 判据（单行）：一行算「绿」当且仅当它以 "ⓘ" 开头、且**不含任何嵌入的 "⚠"**。
-// 后半条不是装饰——budgetLines() 的「过渡期」分支、providerHookLines() 的 deny 面
-// 缺字段分支都会把一段 "⚠ ..." 拼进同一个以 "ⓘ" 开头的字符串里：那不是「通过」，
-// 是「带着保留意见通过」，必须算非绿，否则聚合会把这些警示一并吞掉，
-// 违反用户拍板里那句「任一非绿则整段照旧展开（出问题时信息零减少）」。
+// 判据两层（第二层是 2026-08-09 · PR #237 对抗验证 5230986835 F1 返修，帅裁定「这一格
+// 按行为修，不只改文字」）：
+//   ① 一行算「候选绿」当且仅当它以 "ⓘ" 开头、且**不含任何嵌入的 "⚠"**。不是装饰——
+//      budgetLines() 的「过渡期」分支、providerHookLines() 的 deny 面缺字段分支都会把
+//      一段 "⚠ ..." 拼进同一个以 "ⓘ" 开头的字符串里：那不是「通过」，是「带着保留
+//      意见通过」，必须算非绿，否则聚合会把这些警示一并吞掉。
+//   ② 候选绿还要不命中 NON_PASS_PATTERNS 才算真绿——①拦不住的是「整句仍以 ⓘ 开头、
+//      正文却明写着这不算通过」的形态：对抗官全域摸底揪出本文件已知五处，其中
+//      memoryRefLines() 的 skipped 分支**生产环境当场坐实**——本机实测 memory 指针
+//      扫描 dead=24 时，整条汇总行仍以 ⓘ 开头、不含 ⚠，①会把它判成候选绿、聚合时
+//      连同 24 条死指针一起吞掉。**这不是通用判据**：只覆盖这五处已知形态各自的
+//      稳定锚点（含各自的姊妹分支——deadGateLines() 的 orphan 与 unverifiable 共享
+//      同一条返回语句、memoryRefLines() 的 dead/ambiguous/skipped 共享同一条返回
+//      语句，任一非零都要命中，不只是对抗官原话点名的那一个子项），不是把「ⓘ 但有
+//      保留」这整类形态结构化——让每个子检查各自返回类型化 status 是更彻底但更贵的
+//      重构，本批不做（未尽处①）。新增的同类形态需要新增一条 pattern，这是选「文本
+//      锚点」而不是「结构化状态」必须承受的已知代价。
 // ✗/⚠/⬆/⬇/⏱ 开头的行天然过不了「以 ⓘ 开头」这一关，不需要单独判。
 // 聚合判据是**整段**（对 lines 数组作为一个整体求值），不是逐行各自决定要不要露面：
 // 只要有一行不绿，**整段原样展开**——避免「5 行绿 + 1 行真问题」被误读成「大体没事」。
+const NON_PASS_PATTERNS = [
+  // ①providerHookLines()：denySampled===false（deny 面零样本，"没比到"不是"已对齐"）
+  /deny 面零样本/,
+  // ②clauseTargets()：带条款签名却不在 clause-parser.mjs 的源清单里
+  /条款文件未登记进 defaultSources\(\)/,
+  // ③deadGateLines()：todo 非空分支——孤儿 hook 与命令串无法核验共用同一条返回语句，
+  //   锚在分支专属前缀上，两个子项谁非零都命中，不必分别匹配
+  /零死闸），另有：/,
+  // ④clauseStructureLines()：非 Windows 平台未跑（本闸是 PowerShell 实现，无法验证）
+  /条款库结构闸未跑（非 Windows/,
+  // ⑤memoryRefLines()：parts 非空分支——dead/ambiguous/skipped 三个子项共用同一条
+  //   拼接语句，任一非零都命中其一（对抗官原话点名的是 skipped 那一项，这里连带把
+  //   dead/ambiguous 两个姊妹子项也钉住，理由同③）
+  /处指向空气|处相对路径没写清相对于谁|处因项目根不可解析未判/,
+];
 function isGreenSyncLine(line) {
   const s = String(line);
-  return /^ⓘ/.test(s) && s.indexOf("⚠") === -1;
+  return /^ⓘ/.test(s) && s.indexOf("⚠") === -1 &&
+    !NON_PASS_PATTERNS.some((re) => re.test(s));
 }
 function aggregateGreenSync(lines) {
   if (lines.length && lines.every(isGreenSyncLine)) {
-    return { lines: ["ⓘ " + lines.length + " 项检查全绿"], aggregated: true };
+    // 措辞用「行」不用「项检查」（2026-08-09 · PR #237 对抗验证 5230986835 F2 返修）：
+    // lines.length 数的是数组元素条数，不是逻辑检查项数——条款闸单个文件观察线一次能
+    // 吐好几行（实测：多放一份带签名却未登记的 rules/*.md，六道检查能吐出 7 个数组
+    // 元素）。「N 项检查」这个措辞会让读者读成「N 个检查项」，与实况不符；「N 行
+    // 全绿」只陈述数组长度，不代入语义。
+    return { lines: ["ⓘ " + lines.length + " 行全绿"], aggregated: true };
   }
   return { lines, aggregated: false };
 }
