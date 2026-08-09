@@ -70,7 +70,8 @@ node scripts/run-tests.mjs                    # ★ 聚合入口（默认层）�
                                               #   实测 ≈2.6s → ≈41s：新下放的 dao-pr-merge ≈33s / pr-body-scan ≈5s。
                                               #   ⚠ 这里刻意只写口径不写清单 —— 谁在默认层以 `--list` 的逐条标注为准）
 node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全部 .ps1 套** —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
-                                              #   PS 层 6 套串行 ≈100-150s（同机不同次波动），故它比默认层慢；要求串行环境（见下）
+                                              #   PS 层串行 ≈100-150s（同机不同次波动；三次采样时盘上是 6 套，现在 7 套），
+                                              #   故它比默认层慢；要求串行环境（见下）。**当前有几套以 `--list` 为准，此处不记数**
 node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\<名>.tests.ps1   # 单跑一套 PS 测试（自带 Assert-*，独立可跑）

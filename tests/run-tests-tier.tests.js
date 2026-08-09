@@ -123,14 +123,23 @@ function mkTestFile(caseDir, name, opts) {
 //               倒着把「离开块注释之后」的正文误判掉，issue #203①）
 //   markerInProse —— 头部窗口内插一段 `<# ... #>` 块注释，散文里塞一个行首就是 `#` 的
 //               标记字面量（模拟 PR #200 撞过的 `.NOTES` 坑：那句话被判为真声明的唯一
-//               原因是旧扫描器不问「这一行是不是身处块注释内」）。正确的扫描器必须无视它
-//   bom      —— 落盘时带不带 UTF-8 BOM（真仓 6 套里 5 套带；标记在第 1 行 + BOM 是已知的
-//               「标记形同没写」陷阱，这里造出来钉住扫描器确实剥了 BOM）
+//               原因是旧扫描器不问「这一行是不是身处块注释内」）。正确的扫描器必须无视它，
+//               **并且要出声**（PR #213 对抗官 F1：静默才是那条缺陷的要害）
+//   deadZone —— 头一行就开一段**在头部窗口内不闭合**的块注释，标记落在它里面。
+//               这是判词 F1a 那张死区表的合成形态（真仓 `dao-pr-merge` / `pr-body-scan`
+//               第 1 行就是 `<#`）：标记确实不生效（PowerShell 认它是块注释正文），
+//               但**必须打提示**，否则下一个想加标记的人得不到任何反馈
+//   noise    —— 在**真标记之前**塞一批「长得像开块记号、其实不是」的行：行注释里提到它、
+//               字符串字面量、here-string、孤立的闭合记号。**这四种是 PR #213 首版
+//               自写记号扫描的假阴性死区**（每一种都会让其后的真标记静默失效），
+//               取值 'lineComment' / 'stringLiteral' / 'hereString' / 'strayCloser'
+//   bom      —— 落盘时带不带 UTF-8 BOM（真仓 7 套里 6 套带；标记在第 1 行 + BOM 是已知的
+//               「标记形同没写」陷阱，这里造出来钉住 BOM 不会把标记吃掉）
 //   silent   —— 一个字都不打（验「exit 0 + 零输出」那一格）
 //   sleepSec —— 睡多久（验超时判红；配 DAO_PS_TIMEOUT_MS 注入短超时用。
 //               ⑩ 的总预算场景也用它 —— 那边要的是「有一套真的花掉了墙钟」）
 //   exitCode —— 退出码
-// 正文一律 ASCII：夹具的编码不该成为被测面的一部分（真仓那 6 套自带 console-utf8 钉子）。
+// 正文一律 ASCII：夹具的编码不该成为被测面的一部分（真仓那几套自带 console-utf8 钉子）。
 function mkPsTestFile(caseDir, name, opts) {
   const o = opts || {};
   const sentinel = path.join(caseDir, "ps-sentinel.log");
@@ -139,6 +148,28 @@ function mkPsTestFile(caseDir, name, opts) {
     // 单行自封闭块注释（同一行内 <# ... #>）：练一遍「离开这一行后回到块注释外」这条状态
     // 转移，紧接着才是本行案例的真声明——确认这类单行块注释不会把后面的真标记也带偏。
     lines.push("<# a one-line block comment mentioning # @" + "dao-test-tier: env for illustration #>");
+  }
+  if (o.deadZone) {
+    // 头一行就开块、且在头部窗口内**不闭合** —— 真仓 dao-pr-merge / pr-body-scan 的形态。
+    // 标记落在块里 ⇒ 它不是声明（PowerShell 说了算），但入口必须为此出声。
+    lines.push("<#");
+    lines.push(".SYNOPSIS");
+    lines.push("    " + "# @" + "dao-test-tier: env");
+    for (let i = 0; i < 80; i++) lines.push("    filler prose line " + i);
+    lines.push("#>");
+  }
+  if (o.noise) {
+    // 🔴 这四行各自都是 PR #213 首版自写记号扫描的一个**死区入口**：它不认行注释、
+    //   不认字符串、不认 here-string，于是把 `<#` 记号当成开块，其后的真标记全部失效。
+    //   PowerShell 官方 parser 对四种一概不认为开了块（对抗官用 token 流核过）。
+    const noise = {
+      lineComment: ["# note: block comments start with <# and end later"],
+      stringLiteral: ["$re = '<#'"],
+      hereString: ["$h = @'", "<# not a comment, just text #", "'@"],
+      strayCloser: ["# a stray closer follows: #>"],
+    }[o.noise];
+    if (!noise) throw new Error("未知的 noise 形态：" + o.noise);
+    for (const l of noise) lines.push(l);
   }
   if (o.marker) lines.push("# @" + "dao-test-tier: env   # synthetic fixture");
   if (o.marker && o.markerAfterBlockComment) {
@@ -609,7 +640,7 @@ console.log("\n──── ⑩ PS 层总预算闸（issue #186：这一格此�
 // 契约在 run-tests.mjs 头注 ⑤：串行累计墙钟超过 `PS_BUDGET_MS` ⇒ **剩余套判「未跑」**
 // （不是排队等、不是判红），退出码至少 2。它兜的是「某套卡住把整个入口拖死」。
 //
-// 🔴 **为什么这一格此前是真空的，照直记**：`PS_BUDGET_MS` 原是硬编码 900s，而真 6 套合计
+// 🔴 **为什么这一格此前是真空的，照直记**：`PS_BUDGET_MS` 原是硬编码 900s，而真套合计
 //   才 ≈100-150s ⇒ 回归网**结构上**造不出「预算耗尽」。PR #185 对抗官把闸整个关掉
 //   （`if (false && spent >= PS_BUDGET_MS)`），全场 `PASS=95 FAIL=0` **一条都没红** ——
 //   而「闸在且没触发」与「闸压根不在」在那份输出里逐字节相同。本节靠新增的注入口
@@ -740,13 +771,120 @@ console.log("\n──── ⑪ PS 标记扫描：块注释外才算真声明（
 }
 {
   // 边界：单行自封闭块注释（同一行内 <# ... #>）提到标记语法之后，紧跟真实声明——
-  // 练一遍「离开这一行后状态归位」（char 级 while 循环），确保它不会把后面的真声明也带偏。
+  // 练一遍「离开这一行后状态归位」，确保它不会把后面的真声明也带偏。
   const c = mkPsCase("ps-marker-inline-block", {
     ps: { "inline.tests.ps1": { inlineBlockThenMarker: true, marker: true, pass: 5 } },
   });
   const r = runRunner(c.dir);
-  check("⑪ 单行自封闭块注释之后紧跟真声明 ⇒ 真声明仍被认出（状态机正确复位）",
+  check("⑪ 单行自封闭块注释之后紧跟真声明 ⇒ 真声明仍被认出",
     r.code === 2 && r.psSum && r.psSum.psskip === 1, JSON.stringify(r.psSum) + "\n" + r.out.slice(-1000));
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑪′ 反方向：像开块记号、其实不是 —— 真标记不许被吃掉（PR #213 对抗官 F1）────");
+// 🔴 **本节是 ⑪ 的镜像，两个方向缺一不可。** ⑪ 只钉「散文不许冒充声明」（放松侧），
+//   而 PR #213 首版恰恰是在**收紧侧**翻的车：自写的 `<#`/`#>` 记号扫描不认行注释、
+//   不认字符串字面量 ⇒ 一行「注释里提到开块记号」就把其后整段变成死区，死区里的真标记
+//   静默失效，116 条断言一条都不红。**只往一个方向 mutation，就会漏掉这一整侧**
+//   （dao 官侧条款 `[#官抗-判别力自检]` 讲的正是这个）。
+//
+// 语料来源照直写（`[#派-语料来源]`）：下面四个形态**不是本轮自造**，逐条取自 PR #213
+//   对抗评论 F1 折叠区那 5 个边界夹具与它的 PowerShell parser token 佐证；
+//   `hereString` 那一个取自同一评论「未尽处①」点名的、「剥行注释」这条替代修法自己的边界。
+for (const [noise, why] of [
+  ["lineComment", "行注释里提到开块记号（判词夹具 a）"],
+  ["stringLiteral", "字符串字面量 $re = '<#'（判词夹具 b）"],
+  ["hereString", "here-string 里出现开块记号（判词未尽处①点名的那格）"],
+  ["strayCloser", "孤立的闭合记号在前（判词夹具 e）"],
+]) {
+  const c = mkPsCase("ps-marker-noise-" + noise, {
+    ps: { "noisy.tests.ps1": { noise, marker: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check(`⑪′ ${why} ⇒ 其后的真标记**照常生效**（默认层整套不跑，exit 2）`,
+    r.code === 2 && r.psSum && r.psSum.psskip === 1 && r.psSum.psfiles === 0,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-900));
+  check(`⑪′ ${why} ⇒ sentinel 证明它默认层真的没起进程（不是账面数字）`,
+    !psRan(c.psSentinel, "noisy.tests.ps1"), "sentinel=" + c.psSentinel);
+}
+{
+  // 🔴 死区形态 + **它必须出声**。这一条钉的是判词里最要紧的那句：
+  //   「漏掉是无声的」。标记确实不生效（PowerShell 认它是块注释正文，这一格不改），
+  //   但入口现在会打一行提示指出它不生效、该挪到哪 —— 静默才是那条缺陷的要害。
+  const c = mkPsCase("ps-marker-deadzone", {
+    ps: { "deadzone.tests.ps1": { deadZone: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check("⑪′ 死区（头一行开块、窗口内不闭合）里的标记不算声明 —— 这一格照旧",
+    r.code === 0 && r.psSum && r.psSum.psskip === 0 && r.psSum.psfiles === 1,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-900));
+  check("⑪′ 🔴 但它**出声了**：点名文件 + 说清不生效 + 给出挪到哪（无声才是 F1 的要害）",
+    /块注释内部\*\*出现了层级标记字面量/.test(r.out)
+      && /· tests\/deadzone\.tests\.ps1/.test(r.out)
+      && /挪到块注释\*\*之外\*\*的独立 # 行/.test(r.out),
+    r.out.slice(-1200));
+  const l = runRunner(c.dir, ["--list"]);
+  check("⑪′ `--list` 也出这一声（人查层归属最常敲的就是它）",
+    /· tests\/deadzone\.tests\.ps1/.test(l.out) && !/deadzone\.tests\.ps1\s+\[标了 env/.test(l.out),
+    l.out.slice(-900));
+}
+{
+  // 🔴 负控：**没有**块注释散文时不许打那一声。没有它，上面那条「出声了」可能只是
+  //   「这行提示恒打」——同 ⑩ 那条负控的判据（比较基线必须先验证它自己是活的）。
+  const c = mkPsCase("ps-marker-quiet", {
+    ps: { "clean.tests.ps1": { marker: true, bom: true, pass: 5 } },
+  });
+  const r = runRunner(c.dir);
+  check("⑪′ 🔴 负控：干净文件（标记在第 1 行 + 带 BOM）⇒ 认出声明、且**不打**块注释提示",
+    r.code === 2 && r.psSum && r.psSum.psskip === 1 && !/块注释内部/.test(r.out),
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-900));
+}
+
+// ══════════════════════════════════════════════════════════════
+console.log("\n──── ⑪″ 判定器自己坏掉时：fail-closed 且出声（PR #213 返工新增）────");
+// 「这套没标记」与「我没看成」在退出码上分不开 —— 那正是本文件通篇在治的病，而换了
+// 外部判定器之后它多了一个新入口：判定器跑不起来。故给注入口 `DAO_PS_TIER_SCANNER`
+// 指一个不存在的脚本，验三件：①退出码走 4（不是悄悄 0/2）②报文说得出发生了什么
+// ③**fail-closed 方向对**：一律当作「已声明」⇒ 默认层一套都不跑（当作「没标记」会把
+// 带 winget install 的那几套真跑起来，那是两个方向里贵得多的那个错）。
+{
+  const c = mkPsCase("ps-scanner-broken", {
+    ps: {
+      "plain-a.tests.ps1": { pass: 3 },          // 两套都**没有**标记
+      "plain-b.tests.ps1": { pass: 3 },
+    },
+  });
+  const ghost = path.join(c.dir, "no-such-scanner.ps1");
+  const r = runRunner(c.dir, [], { DAO_PS_TIER_SCANNER: ghost });
+  check("⑪″ 判定器跑不起来 ⇒ exit 4（分层自检失败那一档，不是 0 也不是 2）",
+    r.code === 4, "exit=" + r.code + "\n" + r.out.slice(-900));
+  check("⑪″ 🔴 fail-closed 方向：两套都被当作已声明 ⇒ 默认层一套都没跑（psskip=2 / psfiles=0）",
+    r.psSum && r.psSum.psskip === 2 && r.psSum.psfiles === 0,
+    JSON.stringify(r.psSum) + "\n" + r.out.slice(-900));
+  check("⑪″ 🔴 fail-closed 的证据不只在账面：sentinel 里两套都没有",
+    !psRan(c.psSentinel, "plain-a.tests.ps1") && !psRan(c.psSentinel, "plain-b.tests.ps1"),
+    (() => { try { return fs.readFileSync(c.psSentinel, "utf8"); } catch (_) { return "(无 sentinel)"; } })());
+  check("⑪″ 报文说得出「判定没跑成」「按 fail-closed 处理」并点名那个判定器",
+    /PS 分层标记判定没跑成/.test(r.out) && /fail-closed/.test(r.out)
+      && r.out.includes("no-such-scanner.ps1"),
+    r.out.slice(-1200));
+  check("⑪″ 报文给的是可照做的重跑命令（不是让人自己猜怎么复现）",
+    /自己重跑看原文：powershell -NoProfile -ExecutionPolicy Bypass -File /.test(r.out),
+    r.out.slice(-1200));
+  const l = runRunner(c.dir, ["--list"], { DAO_PS_TIER_SCANNER: ghost });
+  check("⑪″ `--list` 同样不许拿 0 退出（列出来的分层是猜的，得让人知道）",
+    l.code === 4 && /上面这张分层清单不可信/.test(l.out), "exit=" + l.code + "\n" + l.out.slice(-900));
+  // 🔴 负控：同一组夹具、同一个入口，不注入就必须一切正常。没有它，上面每一条都可能
+  //   只是「这两套本来就跑不起来」也照样绿。显式清空而不是不传（同 ⑩ 那条的判据：
+  //   外层 shell 里若恰好设着这个变量，负控自己会被污染成实验组）。
+  const n = runRunner(c.dir, [], { DAO_PS_TIER_SCANNER: "" });
+  check("⑪″ 🔴 负控：不注入 ⇒ exit 0、两套都跑、零自检问题（红只能来自那个变量）",
+    n.code === 0 && n.psSum && n.psSum.psfiles === 2 && n.psSum.psskip === 0 && n.sum.self === "ok",
+    JSON.stringify(n.psSum) + "\n" + n.out.slice(-900));
+  check("⑪″ 🔴 负控：不注入时正文不出现「判定没跑成」那句话（没坏就不该说话）",
+    !/PS 分层标记判定没跑成/.test(n.out), n.out.slice(-800));
+  check("⑪″ 🔴 负控：两侧退出码不等（只有摆在一起比，才排除两种情形恰好同码）",
+    r.code !== n.code, "坏=" + r.code + " / 好=" + n.code);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -757,30 +895,47 @@ console.log("\n──── ⑫ 真仓自跑：PS 侧的声明集合退役触发
 // 验证——那半交给上面 ⑪ 的合成夹具（真的 spawn run-tests.mjs 观察行为）。
 {
   const realPsTests = fs.readdirSync(path.join(REPO, "tests")).filter((f) => f.endsWith(".tests.ps1")).sort();
-  // 独立实现（不 import run-tests.mjs 的 scanPsMarkerLines）：同精神、另起一份代码，
-  // 与 ⑧ 对 JS 侧的处理方式一致——本节要抓的是「声明面变了没人审」，不是「扫描器本身瞎没瞎」。
-  const PS_MARK_RE = new RegExp("^[ \\t]*#[ \\t]*@" + "dao-test-tier:[ \\t]*env\\b");
-  function psDeclared(text) {
-    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).slice(0, 60);
-    let inBlock = false;
-    for (const line of lines) {
-      if (!inBlock && PS_MARK_RE.test(line)) return true;
-      let i = 0;
-      while (i < line.length) {
-        if (!inBlock) {
-          const openIdx = line.indexOf("<#", i);
-          if (openIdx === -1) break;
-          inBlock = true; i = openIdx + 2;
-        } else {
-          const closeIdx = line.indexOf("#>", i);
-          if (closeIdx === -1) break;
-          inBlock = false; i = closeIdx + 2;
-        }
-      }
-    }
-    return false;
-  }
-  const declaredPs = realPsTests.filter((f) => psDeclared(fs.readFileSync(path.join(REPO, "tests", f), "utf8")));
+  // ── 独立判据（2026-08-09 · PR #213 返工重写这一段，原因写清楚）──────────────────
+  // **原版是把生产那份自写状态机逐字复刻了一遍**，于是 PR #213 对抗官实测：往死区里加
+  // 一条合法标记，两份实现一起看不见 ⇒ 交叉核对照绿。⑫ 自己的注释当时就写着「两份实现
+  // 若共享同一个盲点，交叉核对本身也会一起瞎」—— 那句话被原样兑现了。
+  //
+  // 现在改成**问 PowerShell 自己**：另起一份查询表达式（不 spawn 生产那个
+  // `scripts/scan-ps-tier-marker.ps1`，不复用它的任何代码），直接读 token 流。
+  // ⚠ **照直写它能抓什么、抓不到什么**：它与生产**同底座**（都是官方 parser），
+  //   所以抓不到「问题本身问错了」那一类 —— 那一半归 ⑪/⑪′ 的黑盒夹具。它抓得到的是
+  //   窗口值走样、正则走样、node 侧输出解析出错、整条 node→powershell 管道断掉，
+  //   以及本节真正的职责：**声明面变了没人审**（下面那份手维护枚举）。
+  const psOracleQuery = (files) => {
+    const q = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+    const script = [
+      "$files=@(" + files.map((f) => q(path.join(REPO, "tests", f))).join(",") + ")",
+      "$re='^[ \\t]*#[ \\t]*@' + 'dao-test-tier:[ \\t]*env\\b'",
+      "foreach($f in $files){",
+      "  $tk=$null;$er=$null",
+      "  [void][System.Management.Automation.Language.Parser]::ParseFile($f,[ref]$tk,[ref]$er)",
+      "  foreach($t in $tk){",
+      "    if($t.Kind -ne 'Comment'){continue}",
+      "    if($t.Extent.StartLineNumber -gt 60){continue}",
+      "    if($t.Text.StartsWith('<#')){continue}",
+      "    if($t.Text -cnotmatch $re){continue}",
+      "    $col=$t.Extent.StartColumnNumber",
+      "    if($t.Extent.StartScriptPosition.Line.Substring(0,$col-1).Trim() -ne ''){continue}",
+      "    Write-Output ('DECL ' + [IO.Path]::GetFileName($f))",
+      "    break",
+      "  }",
+      "}",
+    ].join("\n");
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { encoding: "utf8", timeout: 60000, cwd: REPO });
+    const hits = new Set(String(r.stdout || "").split(/\r?\n/)
+      .map((l) => /^DECL (.+)$/.exec(l.trim())).filter(Boolean).map((m) => m[1]));
+    return { list: files.filter((f) => hits.has(f)), code: r.status, out: String(r.stdout || "") };
+  };
+  const oracle = psOracleQuery(realPsTests);
+  check("⑫ 独立判据（直接问 PowerShell 的 token 流）本身跑成了 —— 它没跑成时下面两条一律不可信",
+    oracle.code === 0, "exit=" + oracle.code + " out=" + oracle.out.slice(0, 300));
+  const declaredPs = oracle.list;
   // 🔴 手维护枚举，职责就是过期时变红（同 ⑧ 那条注释的判据，此处不重复整段说理）：
   //   改这一行之前先答一句——新加/摘掉的那套，它是不是真的该在默认层不跑？不是的话，
   //   正路是修那一套的沙盒/断言，不是往这个集合里加减名字。
@@ -792,10 +947,13 @@ console.log("\n──── ⑫ 真仓自跑：PS 侧的声明集合退役触发
   check("真实 tests/ 里声明了环境敏感层的 .ps1 恰是那三套（多了要问为什么，少了说明标记掉了）",
     JSON.stringify(declaredPs) === JSON.stringify(EXPECT_DECLARED_PS),
     "实况=" + JSON.stringify(declaredPs) + " 期望=" + JSON.stringify(EXPECT_DECLARED_PS));
-  // 与真实 run-tests.mjs --list 的输出交叉核对：独立实现与生产代码在真实仓上结论必须一致——
-  // 不是为了替代 ⑪ 的黑盒验证（两份实现若共享同一个盲点，交叉核对本身也会一起瞎），
-  // 而是给「这份手写枚举没有悄悄跟生产代码分叉」提供第二重证据。
+  // 与真实 run-tests.mjs --list 的输出交叉核对：独立判据与生产链路在真实仓上结论必须一致——
+  // 不是为了替代 ⑪/⑪′ 的黑盒验证（**同底座的两份实现仍然共享「问错问题」这一类盲点**，
+  // 而 PR #213 那次翻车正是这一类），而是给「这份手写枚举没有悄悄跟生产链路分叉」提供
+  // 第二重证据，并顺带钉住整条 node→powershell→输出解析的管道。
   const listOut = spawnSync(process.execPath, [RUNNER, "--list"], { encoding: "utf8", timeout: 60000, cwd: REPO });
+  check("⑫ 真仓 `--list` 本身 exit 0（判定 fail-closed 时它退 4，那时下面这条的比较没有意义）",
+    listOut.status === 0, "exit=" + listOut.status + "\n" + String(listOut.stdout || "").slice(-600));
   const listedEnvPs = realPsTests.filter((f) =>
     new RegExp("pwsh  tests/" + f.replace(/\./g, "\\.") + "\\s+\\[标了 env").test(String(listOut.stdout || "")));
   check("独立实现与真实 run-tests.mjs --list 的输出在真仓上结论一致（交叉核对，不是同一份代码）",
