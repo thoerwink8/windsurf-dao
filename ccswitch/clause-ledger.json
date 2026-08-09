@@ -355,6 +355,20 @@
       ],
       "status": "active"
     },
+    "归-注释归位": {
+      "file": "ccswitch/dao.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-09 盘点报告（`_tmp/comment-audit-20260809.md`，本地报告未进 git 追踪面）实测：全仓注释占比 29.5%（15,535/52,723 行），`ccswitch/hooks/dao-hard-gates.js` 单文件 58.9%，其中 G2 一道闸的编年史注释块单块 269 行（第 56-324 行）。条款文字为用户 2026-08-09 于 issue #70 评论 5231096681 拍板「搬家+立法」，非 AI 自定。PR #246 首版遗漏拍板 A 段的防呆 carve-out（原文「反面已核：部分叙事注释有防呆实证，处置按『拆开搬』不整段清空」），对抗核验 F5 指出后补回，出处同一条评论，非新增判断",
+      "source_refs": [
+        "issue #70 评论 5231096681",
+        "_tmp/comment-audit-20260809.md（本地报告，未进 git 追踪面）"
+      ],
+      "status": "active"
+    },
     "归-认领协议": {
       "file": "ccswitch/rules/dao-workitem.md",
       "n": "0",
@@ -437,6 +451,24 @@
       "baseline": "同一批 3/3 位官全中，三份交付报告各写一句订正；入库时实算该路径在 git 全历史中从未存在过。修完之后的复发率无从预测，下一批仍有同类订正即说明方向选错",
       "source_refs": [
         "windsurf-dao issue #109"
+      ],
+      "status": "active"
+    },
+    "派-别停等通知": {
+      "file": "ccswitch/rules/dao-dispatch.md",
+      "n": "3",
+      "first_seen": "08-09",
+      "trigger": "派单契约门",
+      "judge_only": false,
+      "self_authored": [
+        "08-09"
+      ],
+      "baseline": "2026-08-09 晚同窗三例（issue #236/#215/#232）三路实现官全部停在「等 monitor 通知」，宿主显示其名下已无活后台子进程，全靠帅逐一 `SendMessage` 推醒，耗时三轮。PR #246 对抗核验 F1 指出「--env 归合并链、实现官只跑相关套+默认层」这半边是 AI 自划及格线，命中 `dao-legislation.md` 否决项①（应归判断档），2026-08-09 晚用户已就此拍板追录『分工制』（issue #70 评论 5231632317，选项「分工制（推荐）」：实现官交付验收=相关测试套+默认层全套，完整 `--env` 全套由合并链在合并态强制跑）——该半边自此改挂用户拍板出处，不再计入 AI 自定；`self_authored` 保留的是「别停等 monitor 通知」这一半，其本身未受此次拍板影响",
+      "source_refs": [
+        "issue #236",
+        "issue #215",
+        "issue #232",
+        "issue #70 评论 5231632317（用户 2026-08-09 拍板追录「实现官验收及格线=分工制」）"
       ],
       "status": "active"
     },
@@ -1056,9 +1088,11 @@
       "trigger": "无",
       "judge_only": true,
       "self_authored": [],
-      "baseline": "1 例——commit 379348a 正文「三处文本订正，错误结论一律 ~~划线保留~~ 不删（头注⑬ / G2_NO_SRC_THRESHOLD 注释 / g2WriteTargets 内联注释 / tests 登记表标签）」，且核验官在 `dao-hard-gates.js` 内实测到多处真实 strikethrough（非仅 commit message 声称）",
+      "baseline": "两笔证据各归各的判据，同一批 strikethrough 的两面拆开写，别混读成矛盾——①「同批引用载体要一并改真」这条判据的实证：commit 379348a 正文「三处文本订正，错误结论一律 ~~划线保留~~ 不删（头注⑬ / G2_NO_SRC_THRESHOLD 注释 / g2WriteTargets 内联注释 / tests 登记表标签）」，且核验官在 `dao-hard-gates.js` 内实测到多处真实 strikethrough（非仅 commit message 声称）——证明「引用同批处理」这条规则真的被执行过；②「划线形态不该进代码」这条边界判据的实证（边界补充，基线另计）：2026-08-09 盘点报告（`_tmp/comment-audit-20260809.md` §五，本地报告未进 git 追踪面）实测该划线约定被越权套用进代码注释（`dao-hard-gates.js`/`console-utf8.ps1` 等头注多处出现），是全仓注释膨胀（29.5%/15,535 行）的病根之一——这是①同一批 strikethrough 证据的反面：当初被正确执行成「引用同批改」，事后被误读成「载体不分形态照抄划线」，两笔各自成立、互不矛盾（PR #246 对抗核验 F3 指出原表述内部矛盾后拆清并订正）",
       "source_refs": [
-        "windsurf-dao commit 379348a"
+        "windsurf-dao commit 379348a",
+        "issue #70 评论 5231096681",
+        "_tmp/comment-audit-20260809.md §五（本地报告，未进 git 追踪面）"
       ],
       "status": "active"
     },
