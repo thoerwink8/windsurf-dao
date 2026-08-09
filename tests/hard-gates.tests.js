@@ -211,8 +211,12 @@ const _bs = (s) => String(s).replace(/\//g, "\\").toLowerCase();
 function shortNameOf(dir) {
   const parts = String(dir).split(/[\\/]/), leaf = parts.pop(), parent = parts.join("\\");
   if (!leaf || leaf.length <= 8) return null;
+  // 🔴 **2026-08-09（PR #235）补一档**：Windows 生成 8.3 时把 `+ , ; = [ ]` 这几个长名合法、
+  //   短名非法的字符换成 `_`（与 `ccswitch/hooks/dao-hard-gates.js` 的 `g2ShortStemOf` 同一条
+  //   规则），首版只按字面 `slice(0,6)`——含这些字符的目录名算出来的候选永远撞不上真短名。
+  const stem = leaf.replace(/[+,;=[\]]/g, "_").slice(0, 6).toUpperCase();
   for (const i of [1, 2, 3, 4]) {
-    const cand = `${parent}\\${leaf.slice(0, 6).toUpperCase()}~${i}`;
+    const cand = `${parent}\\${stem}~${i}`;
     try { if (_bs(fs.realpathSync.native(cand)) === _bs(dir)) return cand; } catch (_) { /* 没这个短名 */ }
   }
   return null;
@@ -2400,6 +2404,129 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
               [RE_STARVE, "const G2_CAND_STARVE_N = 0;"],
               [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 2);
         }
+      }
+
+      // ⑤ 🔴 **#235 · 相③「重跑 judge」路的预算闸**（issue #214 ㉑，PR #235 对抗官第三代实测坐实）：
+      //    这条路首版没有开销上界——攻击者只需再塞一个「展开后恰是 live 目录本身」的候选
+      //    （末位放，落进 `batch.untried`）就能强制重跑一遍完整判定。对抗官实测：N=48000 诱饵，
+      //    不带这个 token 5.3 s、带上 11.4 s ⇒ 越过宿主 10 s ⇒ 整个 hook 被杀，七道闸一起放行——
+      //    包括那条本该被饿死 fail-close 拦下的命令。**修法**：用这一次相① 的真实耗时当
+      //    「重跑一遍要多贵」的估价，预算不够就不硬跑，退回饿死 fail-close（诚实说"没验完"）。
+      {
+        const RE_BUDGET_CHECK = /if \(elapsed \+ v1CostMs > G2_RERUN_DEADLINE_MS\) return g2Starved\(batch\.fed, starved\);/;
+        const RE_MARGIN = /const G2_RERUN_SAFETY_MARGIN_MS = 2000;/;
+        const n235 = (SRC.match(new RegExp(RE_BUDGET_CHECK.source, "g")) || []).length;
+        check("#235 锚点恰好命中 1 次（㉑ 预算闸）", n235 === 1, `命中 ${n235} 次`);
+        const nMargin = (SRC.match(new RegExp(RE_MARGIN.source, "g")) || []).length;
+        check("#235 锚点恰好命中 1 次（安全边际常量）", nMargin === 1, `命中 ${nMargin} 次`);
+
+        if (n235 === 1 && nMargin === 1) {
+          const mNoBudget = mkMut("mutant-235-no-budget.js", [RE_BUDGET_CHECK, "null"]);
+          check("#235 变异体存活（摘掉预算闸）：无关输入仍 exit 0 且无 fail-open 告警",
+            gate(harmless2, { script: mNoBudget }).code === 0 &&
+            !/守卫自身出错/.test(gate(harmless2, { script: mNoBudget }).err));
+
+          // 🔴 **判别力**：把预算闸的安全边际调到等于宿主超时本身（deadline≈0，恒判"预算不够"），
+          //   配合候选侧界收到 1 ms（逼 dirForm 在小规模 payload 上也能可靠触发，不必真跑几万条
+          //   诱饵——同一个判据，用「界 1 ms」换「不依赖机器速度/负载」，与 ③④ 两节同一手法）。
+          //   **只需 3 个诱饵 + 1 个末置 dirForm 触发子**（fed=8，远低于 `G2_CAND_STARVE_N`）：
+          //   正常预算下 fed 这么小根本到不了「饿死」那格（day-to-day 不该 fail-close 的性质
+          //   在这里被同时验到）；deadline 恒超时，预算闸必须**不看 fed 门槛、直接** fail-close——
+          //   这正是"重跑路自己的开销上界"要做的事：宁可少验一条，也不能因为验它而拖垮整个 hook。
+          const m1msDeadlineZero = mkMut("mutant-235-1ms-deadline-zero.js",
+            [RE_MARGIN, "const G2_RERUN_SAFETY_MARGIN_MS = 10000;"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+          const m1msNormal = mkMut("mutant-235-1ms-normal.js",
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+
+          const smallDecoys = Array.from({ length: 3 },
+            (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}~1\\settings.json"`).join("; ");
+          const dirFormPay = ps(smallDecoys +
+            `; Copy-Item -LiteralPath b.md -Destination "${SHORT_HOME}\\.claude"`);
+
+          const normalR = gate(dirFormPay, { env: asLong, script: m1msNormal });
+          check("#235 正控·正常预算 + 界 1 ms（fed=8，远低于饿死阈值）⇒ **仍 exit 0**" +
+                "（相③ 重跑 judge 正常跑完，b.md 不是 live 名，没找到真违例，day-to-day 不该被拦）",
+            normalR.code === 0, `code=${normalR.code}`);
+          const budgetR = gate(dirFormPay, { env: asLong, script: m1msDeadlineZero });
+          check("🔴#235 判别力·同一条 payload，把预算闸的安全边际调到「恒判预算不够」⇒ **由 0 翻 2**" +
+                "（不看 fed 是否过阈值——重跑路自己的开销上界必须先于饿死阈值生效）",
+            budgetR.code === 2, `code=${budgetR.code}`);
+          check("#235 正控·拦截文案仍是「没验过」而不是「查出你在写 live 配置」",
+            /这次没验过/.test(budgetR.err), budgetR.err.slice(0, 200));
+
+          // ⑥ 🔴 **真实规模复测**：判词给出的 N=48000 + 末置 dirForm 触发子形态，验证不越 10 s。
+          //    **不锚绝对毫秒**（`#官通-性能哨兵` ①，换机/换负载差数倍）：锚的是「有预算闸时同一条
+          //    payload 的 hook 寿命，相对没有预算闸时打了折扣」——与 #214 那条界哨兵同一手法，
+          //    两次测量在**同一轮**内做，抵消系统负载的整体漂移。
+          const trigTail = `Copy-Item -LiteralPath b.md -Destination "${SHORT_HOME}\\.claude"`;
+          const bigPay = ps(Array.from({ length: BAND_N },
+            (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}~1\\settings.json"`).join("; ") +
+            `; ${trigTail}`);
+          const mNoBudgetBig = mkMut("mutant-235-no-budget-big.js", [RE_BUDGET_CHECK, "null"]);
+          const t0 = Date.now();
+          const withFix = gate(bigPay, { env: asLong });
+          const msFixed = Date.now() - t0;
+          const t1 = Date.now();
+          const noFix = gate(bigPay, { env: asLong, script: mNoBudgetBig });
+          const msNoFix = Date.now() - t1;
+          check(`🔴#235 正控·${BAND_N} 诱饵 + 末置 dirForm 触发子 ⇒ 仍 exit 2（预算闸没让它悄悄放行）`,
+            withFix.code === 2, `code=${withFix.code}`);
+          // ⚠️ **这条哨兵是软证据，不是主证据**（`#官通-性能哨兵` ①：绝对数字不可移植，
+          //   本机实测同机同轮内就见过 1.7-3 倍离散——本条作者写这组断言当天，机器同时跑着
+          //   30+ 个 node 进程、CPU 常驻 80%+ 以上，两次 48000 规模测量偶尔会整体一起被拖慢到
+          //   连 A（无触发子）基线都摸到 10s+，此时"有闸 vs 无闸"的相对差会被噪声吃掉甚至倒挂。
+          //   **真正钉住"预算闸确实生效"的是上面 ⑤ 那组小规模 + 界 1 ms 的判别力断言**（不依赖
+          //   机器速度/负载，恒定可复现）；这里只是在真实量级下留一笔"没有更差"的软证据，
+          //   容忍度因此给得很宽，宁可漏检也不做一条会在这台共享机器上偶发闪红的断言。
+          check(`#235 界（软证据）·有预算闸时同一条 payload 的 hook 寿命 < 没有预算闸时的 2 倍 + 5000 ms` +
+                `（实测 有闸=${msFixed}ms 无闸=${msNoFix}ms）——真正的判别力断言在上面 ⑤ 那组`,
+            msFixed < msNoFix * 2 + 5000, `fixed=${msFixed}ms nofix=${msNoFix}ms`);
+        }
+      }
+    }
+
+    // ── #235 · 8.3 非法字符替换（相③ 展开的漏报面之一，PR #235 对抗官第三代实测坐实）───────
+    // Windows 生成 8.3 短名时，长名里 `+ , ; = [ ]` 这几个**长名合法、短名非法**的字符会被换成
+    // `_`（实测 `Ad+min,istra[tor]` → `AD_MIN~1`）；旧版 `g2ShortStemOf` 只处理了空格，
+    // 漏了这一档 ⇒ 界坏时对这类 HOME 展不开（漏报）。方向是漏报、可达性窄（这些字符出现在
+    // Windows 用户名里的概率低，只在 HOME 被重定向到非常规目录时可达），非阻断项。
+    {
+      // 本节在 `if (anchorsOk)` 之外（与上面 `⑤ 误伤面` 那节同级），`mkMut` 不在作用域内 ——
+      // 就地起一个同型的最小版（同一份「写副本、从不碰真文件」纪律，见文件顶部 mutation 注释）。
+      const mkMut235 = (name, ...pairs) => {
+        let body = SRC;
+        for (const [re, to] of pairs) body = body.replace(re, () => to);
+        const p = path.join(TMP, name);
+        fs.writeFileSync(p, body, "utf8");
+        return p;
+      };
+      const ODD_HOME = path.join(TMP, "odd-8.3-home", "Ad+min,istra[tor]");
+      // **真界那条对照要 realpath 真解得开**——不落盘的话 `.claude/settings.json` 是 ENOENT，
+      // ENOENT 算「试过了」不算「压根没轮到」（相③ 刻意不碰这一格，见 `g2ShortExpand` 头注），
+      // 那样"真界"那条量的就不是「realpath 分得开」而是巧合落进了别的分支。
+      fs.mkdirSync(path.join(ODD_HOME, ".claude"), { recursive: true });
+      fs.writeFileSync(path.join(ODD_HOME, ".claude", "settings.json"), "{}", "utf8");
+      const ODD_SHORT = shortNameOf(ODD_HOME);
+      check("#235 前置·含 8.3 非法字符的目录名算得出真短名（不然下面测的不是这一格）",
+        !!ODD_SHORT, `short=${ODD_SHORT}`);
+      if (ODD_SHORT) {
+        const m1ms = mkMut235("mutant-235-oddchar-1ms.js",
+          [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+        const oddPay = ps(`Copy-Item src.json "${ODD_SHORT}\\.claude\\settings.json" -Force`);
+        const oddEnv = { USERPROFILE: ODD_HOME };
+        check("#235 正控·非法字符短名 + 界 1 ms（realpath 验不成，只能靠相③ 反推）⇒ 仍 exit 2",
+          gate(oddPay, { env: oddEnv, script: m1ms }).code === 2,
+          `code=${gate(oddPay, { env: oddEnv, script: m1ms }).code}`);
+        check("#235 负控·同一 fixture 在真界下也 exit 2（realpath 真解得开，不靠相③也该拦）",
+          gate(oddPay, { env: oddEnv }).code === 2,
+          `code=${gate(oddPay, { env: oddEnv }).code}`);
+        check("#235 判别力·旧版逻辑（只去空格、不替换非法字符）对同一 fixture **展不开**" +
+              "（由 2 翻 0，坐实这一档确实是本批修的）",
+          gate(oddPay, { env: oddEnv, script: mkMut235("mutant-235-oddchar-revert.js",
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"],
+            [/const s = String\(l \|\| ""\)\.replace\(\/\\s\+\/g, ""\)\.replace\(\/\[\+,;=\[\\\]\]\/g, "_"\);/,
+              'const s = String(l || "").replace(/\\s+/g, "");']) }).code === 0);
       }
     }
 
