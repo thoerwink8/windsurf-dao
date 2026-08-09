@@ -20,8 +20,12 @@
 // 与全库 3514 条断言一条都不红。B1/B2（真实导入路径 + 真导出名的契约形状）不碰真 DB、
 // 留默认层；B3/B4（省略 livePath/snapshotPath 时是否真的落到生产默认值）要碰真实
 // ~/.claude/settings.json，归 env 层——只读不写，代价可控。B5-B8（`main()` 里 --db 分支
-// 是否真调用 compareWithDb/printReport/dbReportLines）本批未覆盖：要证明它们只能真跑
-// CLI 撞生产 DB，成本与射程超出本单，照直挂账不抢修。
+// 是否真调用 compareWithDb/printReport/dbReportLines）本批未覆盖：
+// ~~要证明它们只能真跑 CLI 撞生产 DB，成本与射程超出本单，照直挂账不抢修。~~
+// 订正（PR #229 对抗评论 5230750242 证伪）：USERPROFILE 重定向 + fixture sqlite 可零风险
+// 覆盖，仓里已有同型先例——`tests/provider-hooks-drift.tests.js:450`「绝不碰真实
+// cc-switch DB」那一节。挂账的真实理由是**成本/优先级取舍**，不是「不可行」；跟进单落
+// issue #233（B5-B8 端到端接线覆盖 + D4b 第三种槽位对调 + arity 断言两向缺口）。
 // 笔2 两行「仓库根」报文槽位错位零红：旧断言只查 `line.includes(A) && line.includes(B)`，
 // 两个路径对调槽位（D4/D5）照样通过。改用槽位捕获比对（正则切出 `live=`/`快照=`/`DB=`
 // 各自的值再逐槽核对），槽位对调时精确落红。
@@ -798,7 +802,11 @@ console.log("\n=== #219 笔1（PR #218 对抗官 B1/B2）：sqlite.mjs 真实导
   // 便宜堵法原话写的是「arity 2」——本机实测有出入：selectRows(tableName, where='') 的
   // 第二个参数带默认值，JS 的 function.length 在遇到默认参数处截断计数，真实 arity 是 1，
   // 不是 2（node -e 直接验证过，不照抄未经核验的数字，[#官通-查前提]）。这里按实测校正，
-  // 断言的是「至少接收 1 个必填参数」这个真契约。
+  // 断言的是「function.length 恰好等于 1」这个实现细节，不是「至少接收 1 个必填参数」的
+  // 契约（PR #229 对抗评论 5230750242 订正：原注释与 `=== 1` 的实际语义不符——`=== 1`
+  // 挡不住将来给 selectRows 加第三个带默认值的参数，`>= 1` 才是那句话该断言的东西；断言
+  // 判别力两向的缺口 [ARa 加参数漏 / ARb 去默认值误伤] 已挂账 issue #233，本批不改断言
+  // 语义，只把注释改成与代码相符的实话）。
   check("selectRows 的 arity 是 1（生产签名 selectRows(tableName, where='')；已用 node 实测校正，不是便宜堵法原文写的 2）",
     typeof fn === "function" && fn.length === 1, fn && fn.length);
 }
