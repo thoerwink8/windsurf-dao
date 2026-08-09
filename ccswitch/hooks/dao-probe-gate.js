@@ -123,7 +123,7 @@ const PROBE_SIG = /^\[dao-probe\]/;
 // （标记读不出来都要放行，凭什么标记旧了反倒拦）。⇒ 陈旧的产出是**一句话与一个日志字段**，
 // 给消费者（探针轮 / 看 fired.log 的人）判断用，判定仍是放行。
 //
-// 调参三问（余量取 24 小时，**AI 自定、待用户拍板** —— 阈值取值属判断档）：
+// 调参三问（余量取 24 小时，**用户 2026-08-09 #70 追认** —— 阈值取值属判断档，此前是 AI 自定初值，现已转正为拍过板的基线，再动需新理由）：
 //   ① 改小（如 1 小时）会怎样 ⇒ 「会话关着过了一夜」这种完全正常的情形会被标陈旧，
 //      而探针 cron 是 session 级、会话没开就不跑 ⇒ 制造的是噪音，且噪音会训练人无视这句话。
 //   ② 当前值够不够 ⇒ 限流窗本身已经计入（`reset_estimate_s`），余量只需覆盖
@@ -162,19 +162,43 @@ const S = createHookScaffold({
 });
 
 /**
- * 读中断标记。三态，**刻意分得开**：
- *   {state:"none"}    标记不存在 ⇒ 该拦
- *   {state:"ok", …}   标记存在且是合法 JSON ⇒ 该放行并注入
- *   {state:"bad", …}  标记存在但读不动/不是合法 JSON ⇒ **放行**（fail-open），并留痕
- * 把 "none" 与 "bad" 合流成一个是最容易犯的错：那会让一个写坏的标记文件把探针链
- * 永久拦死，而症状与「一直没限流」逐字节相同。
+ * 读中断标记。四态，**刻意分得开**：
+ *   {state:"none"}          标记不存在（父目录健康）⇒ 该拦
+ *   {state:"ok", …}         标记存在且是合法 JSON ⇒ 该放行并注入
+ *   {state:"bad", …}        标记存在但读不动/不是合法 JSON ⇒ **放行**（fail-open），并留痕
+ *   {state:"infra-broken"}  标记父目录本身不可用 ⇒ **放行**（fail-open），并留痕（#201-③）
+ * 把 "none" 与 "bad"/"infra-broken" 合流成一个是最容易犯的错：那会让一个写坏的标记文件
+ * 或一个坏掉的父目录把探针链永久拦死，而症状与「一直没限流」逐字节相同。
+ *
+ * ── #201-③（用户 2026-08-09 拍板：放行并报异常）─────────────────────────────
+ * 标记父目录被换成普通文件、或权限/磁盘异常时，`fs.readFileSync(MARKER_PATH)` 抛出的
+ * errno **与「标记真的还没写过」不可区分**：Windows 上 libuv 把两者都映射成 ENOENT
+ * （POSIX 一般给 ENOTDIR，这里两种都收，不靠 errno 本身分流）。此前的行为是把两者都判成
+ * "none" ⇒ **闸门照常拦探针**——那正是「基础设施坏了」被误判成「没有中断」的那一格。
+ * 现在 ENOENT/ENOTDIR 命中时**额外探一次父目录本身**（`isHealthyDir`，与 `readFileSync`
+ * 完全独立的第二次探测，不复用它的 errno）：
+ * ~~父目录是真目录 ⇒ 维持 "none"；父目录不是（不存在/是文件/统计不出来）⇒ 判 "infra-broken"~~
+ * **订正（PR #227 对抗验证官 F1 坐实：这句原文与下面 `isHealthyDir`（:216-224）的代码、
+ * 与代码本身做的事恰好相反）**：`statSync` 抛异常（父目录**不存在**，或权限/磁盘等原因
+ * **统计不出来**）⇒ `isHealthyDir` 判「健康」（`true`）⇒ 维持 "none"——这是正常态，本机制
+ * 第一次真限流之前这条子路径本来就没建过，不是坏；只有 `statSync` 能成功但拿到的**不是目录**
+ * （被换成了普通文件等）⇒ 才判「不健康」（`false`）⇒ 判 "infra-broken"，放行并在
+ * `additionalContext` 里注入一行异常说明，指明修法。三个字面里只有「是文件」对，
+ * 「不存在」「统计不出来」两个原是判反了——照这句改代码就是把当初翻了 16 条测试的那个坑
+ * 原样复现一遍。
  */
 function readMarker() {
   let text;
   try {
     text = fs.readFileSync(MARKER_PATH, "utf8");
   } catch (e) {
-    if (e && e.code === "ENOENT") return { state: "none" };
+    if (e && (e.code === "ENOENT" || e.code === "ENOTDIR")) {
+      const dir = path.dirname(MARKER_PATH);
+      if (!isHealthyDir(dir)) {
+        return { state: "infra-broken", why: `标记父目录不可用（${dir}）：${e.message}` };
+      }
+      return { state: "none" };
+    }
     return { state: "bad", why: `读不动（${e && e.message}）` };
   }
   try {
@@ -184,6 +208,26 @@ function readMarker() {
   } catch (e) {
     return { state: "bad", why: `不是合法 JSON（${e && e.message}）`, text };
   }
+}
+
+// 父目录本身健不健康：**独立于上面的 readFileSync**——不复用它的 errno，因为正是那个
+// errno 分不清「没写过」与「父目录坏了」（守卫不能复用被守对象的解析逻辑）。
+// 🔴 两态要分得开，别把它们合成一个「statSync 抛不抛」：
+//   ㈠ 目录压根不存在（`statSync` 抛 ENOENT）—— 这是**正常态**，本机制第一次真限流
+//      之前，`_tmp` 下这个子路径本来就没被建过（哨兵写标记时才 `mkdirSync(recursive)`）。
+//      判它「不健康」会把每一次「从未限流过」都误判成「基础设施坏了」——这正是本条要防的
+//      那类误判的镜像形态，故这里判 `true`（健康）。
+//   ㈡ 目录存在但不是目录（是文件 / 其他节点类型）—— 这才是真正坏了，判 `false`。
+// 只查**直接父目录**这一层：更深的祖先坏掉（如 `_tmp` 本身之上再套一层坏节点）不在本次
+// 判据射程内，与本批要治的具体场景（`_tmp` 或其直接子目录被换成文件）保持同一粒度。
+function isHealthyDir(dir) {
+  let st;
+  try {
+    st = fs.statSync(dir);
+  } catch (_) {
+    return true; // 还没被建过 —— 正常态，不是坏
+  }
+  return st.isDirectory();
 }
 
 // 单帧协议：stdout 只写一次（写两次 = 两个拼接的 JSON = 宿主解析失败 = 本次输出全丢）。
@@ -222,6 +266,17 @@ function contextOf(marker, stale) {
       "⚠ 接手前先删掉这个标记文件，否则下一轮探针会被再放行一次、重复接手同一件事。" +
       "（`reset_estimate_s` 为 null 只表示报错文本里没解析出重置时间，不表示没限流过。）" +
       staleNote
+    );
+  }
+  if (marker.state === "infra-broken") {
+    // #201-③：这不是「没有中断」，是基础设施本身坏了——放行 + 指明修法，不许静默拦下用户消息。
+    // 🔴 `marker.why` 本身已经带了「标记父目录不可用（${dir}）：」这段前缀（见 readMarker），
+    // 这里不再重复套一层同样的话——PR #227 对抗验证官 F2 实测坐实：套两层会注入
+    // 「标记父目录不可用（标记父目录不可用（<dir>）：ENOENT…）」这种双重嵌套。
+    return (
+      `${SIGNATURE} ⚠ ${marker.why} —— 这不是「没有中断」，是基础设施坏了，` +
+      "本轮先放行（#201-③，用户 2026-08-09 拍板：宁可多跑一轮探针，也不能让一个坏掉的目录把探针链永久拦死）。\n" +
+      "修法：确认该目录没有被误换成普通文件、权限/磁盘是否正常；修好后下一轮会恢复正常判定。"
     );
   }
   // bad：放行但把「为什么这一轮是放行的」说清楚，否则探针轮会以为真有活要接
@@ -323,8 +378,9 @@ function main() {
     prompt_head: prompt.trim().slice(0, 60),
   });
 
-  if (marker.state === "bad") {
-    S.appendErrorLog(`[dao-probe-gate] 中断标记读不出来（${MARKER_PATH}）：${marker.why}`, null);
+  if (marker.state === "bad" || marker.state === "infra-broken") {
+    const label = marker.state === "bad" ? "中断标记读不出来" : "标记父目录不可用";
+    S.appendErrorLog(`[dao-probe-gate] ${label}（${MARKER_PATH}）：${marker.why}`, null);
   }
 
   if (decision === "block") emitBlock();
