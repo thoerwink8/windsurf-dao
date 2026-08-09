@@ -21,21 +21,29 @@
                                           ⇒ 两边各自都没越线、合起来越线。`gh pr view --json
                                           mergeable` 回答的是「两份文本能不能自动合到一起」，
                                           不是「合到一起之后还成不成立」。
-      3.5) 派生物核对（若本仓有 canonical 生成器，issue #121）—— 上一步治的是**阈值型**护栏，
-                                          这一步治的是**派生物型**：`ccswitch/clause-index.json`
-                                          两侧各自生成都对、合并后仍可能不对（已实证 2 次，其中
-                                          第 2 次没有任何一侧做错事，纯粹是合并把两份各自正确的
-                                          派生物拼成了一份不正确的）。只护住这一件派生物——本仓
-                                          至少还有 `guarded-files.json`/`agents-md`/规则部署三个
-                                          同型 `--check`，均未接，是已知的全域分布缺口（挂账见
-                                          issue #209）。只对 windsurf-dao 自身生效（探测
-                                          `ccswitch/scripts/gen-clause-index.mjs` 在 -RepoPath
-                                          下存在与否；别的仓没有这份派生物，自动跳过，不报错）。
+      3.5) 派生物核对（若本仓有 canonical 生成器，issue #121 + #209 缺口 2）—— 上一步治的是
+                                          **阈值型**护栏，这一步治的是**派生物型**：两侧各自生成
+                                          都对、合并后仍可能不对（`clause-index.json` 已实证 2 次，
+                                          其中第 2 次没有任何一侧做错事，纯粹是合并把两份各自正确
+                                          的派生物拼成了一份不正确的）。**2026-08-09 起遍历一份小
+                                          清单**（`$derivativeChecks`），不再只护 `clause-index.json`
+                                          一件：新接 `guarded-files.json`（issue #209 缺口 2 点名
+                                          「本仓自己刚吃过亏的那个」，优先级最高）。`agents-md`/
+                                          规则部署两个同型 `--check` **仍未接**，是已知的剩余全域
+                                          分布缺口（issue #209 建议的「可发现的派生物注册表」本批
+                                          也未做——那是新基础设施，为道日损下先接最高优先级那件，
+                                          清单再长时再权衡要不要抽注册表）。逐件只对**该件生成器
+                                          存在的仓**生效（探测各自 `RelPath` 在 -RepoPath 下存在
+                                          与否；不存在就跳过该件，不报错），**任一件核对失败即
+                                          fail-closed 停在这一步**，不再检查清单里其余的件。
                                           **代码上不在 `if ($SkipVerify)` 分支里**——它是幂等
-                                          只读检查、比第 4 步的全套验证快得多；**但这一格目前
-                                          无断言守护**（回归网里没有一条同时给出「有 generator
-                                          的仓」+「`-SkipVerify`」的场景，补断言挂账见 issue
-                                          #209）。issue #121 第 3 点原文是「验证被跳过（`-SkipVerify`
+                                          只读检查、比第 4 步的全套验证快得多；`clause-index.json`
+                                          这一件**已有断言守护**（场景 14，issue #209 缺口 1：
+                                          「有 generator 的仓」+「`-SkipVerify`」两态均已钉住，
+                                          M3 mutation 复核见对应 commit）——`guarded-files.json`
+                                          这一件**暂无**同等的 -SkipVerify 独立性断言，是本批
+                                          刻意留白（本批只补覆盖面，不重复造 -SkipVerify 的靶）。
+                                          issue #121 第 3 点原文是「验证被跳过（`-SkipVerify`
                                           **或有人手工合**）时过期直接进主干」——本步**只治了
                                           `-SkipVerify` 这一半**：`-SkipVerify` 场景下 3.5 仍在
                                           合并链里、先于 5 执行；但**「有人手工合」（网页端点
@@ -217,13 +225,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── 输出 ─────────────────────────────────────────────────────────────────────
-$script:Skipped = 0
+# （曾有一个 `$script:Skipped` 计数器只被 `Write-Skip` 自增、全脚本无任何读取点，
+#   3.5 步改成遍历清单后它每次还多加 1 —— 2026-08-09 PR #213 对抗官 F5 逮到，本批删除。
+#   要重新引入这类计数器，先给它一个消费方，否则它只是一个会漂移的死变量。）
 function Write-Step([string]$t) { Write-Host ''; Write-Host ("=== $t ===") -ForegroundColor Cyan }
 function Write-Ok([string]$t) { Write-Host ("  [完成] $t") -ForegroundColor Green }
 function Write-Plan([string]$t) { Write-Host ("  [将做] $t") -ForegroundColor Yellow }
 function Write-Note([string]$t) { Write-Host ("  [注意] $t") -ForegroundColor Yellow }
 function Write-Info([string]$t) { Write-Host ("         $t") -ForegroundColor DarkGray }
-function Write-Skip([string]$t) { $script:Skipped++; Write-Host ("  [跳过] $t") -ForegroundColor DarkGray }
+function Write-Skip([string]$t) { Write-Host ("  [跳过] $t") -ForegroundColor DarkGray }
 function Fail([string]$t, [int]$code) {
     Write-Host ("  [失败] $t") -ForegroundColor Red
     Write-Host ''
@@ -381,36 +391,57 @@ if ($DryRun) {
     Write-Ok "已合入 origin/$MainBranch"
 }
 
-# ── 3.5 派生物核对（若本仓有 canonical 生成器，issue #121）───────────────────
-# 只对 windsurf-dao 自身生效；别的仓没有 ccswitch/scripts/gen-clause-index.mjs，自动跳过。
+# ── 3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209 缺口 2）───────
+# 只对 windsurf-dao 自身生效；别的仓没有下面这份清单里的生成器，逐件自动跳过。
 # **代码上不在 if ($SkipVerify) 分支里**——这是幂等只读检查，比第 4 步的全套验证快得多，
 # 治的正是 issue #121 第 3 点的 `-SkipVerify` 那一半（「有人手工合」那一半治不了，
-# 见 .DESCRIPTION 边界 ①）。**这一格目前无断言守护**（回归网还没有「有 generator 的仓 +
-# -SkipVerify」这个组合场景），补断言挂账见 issue #209——不是「已验证不受影响」，
-# 是「代码位置上不受影响，尚未被测试钉住」。
-Write-Step '3.5 派生物核对（若本仓有 canonical 生成器，issue #121；见头注对 -SkipVerify 那一半的准确表述）'
+# 见 .DESCRIPTION 边界 ①）。`clause-index.json` 这一件已有场景 14 的断言守护
+# （issue #209 缺口 1：「有 generator 的仓」+「-SkipVerify」两态均已钉住）；
+# `guarded-files.json` 这一件暂无同等断言，是本批（issue #209 缺口 2）刻意的留白——
+# 本批只补覆盖面，不重复造一份 -SkipVerify 独立性的靶。
+#
+# issue #209 缺口 2（2026-08-09）：此前只护 clause-index.json 一件，本仓至少还有三个
+# 同型 --check（guarded-files.json / agents-md / 规则部署），「两侧各自都对、合并起来
+# 不对」是 clause-index 已实证过的形态，没道理只信一件不出这个病。issue 建议「不要求把
+# 清单硬编码进 3.5 步（那是新的手维护枚举），或至少先接 guarded-files.json（本仓自己刚
+# 吃过亏的那个，优先级最高）」——本批采纳后半句：只接优先级最高的这一件，不新造一份
+# 「可发现的派生物注册表」（那是新基础设施，为道日损下先用最小改动接上）。
+# 下面这份清单仍是手维护——与「清单会过期」那条教训的差别在于：它决定的是**核对哪些
+# 派生物**，过期的代价是「少护一件」而非「静默通过」，且是 fail-closed（少列一件只是
+# 少一层保护，不会把已列的那几件也测没）。
+$derivativeChecks = @(
+    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-clause-index.mjs'; Artifact = 'ccswitch/clause-index.json'; Name = 'clause-index'; IssueRef = 'issue #121' }
+    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-guarded-files.mjs'; Artifact = 'ccswitch/guarded-files.json'; Name = 'guarded-files'; IssueRef = 'issue #209 缺口 2' }
+)
+Write-Step '3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209；见头注对 -SkipVerify 那一半的准确表述）'
 
-$clauseIndexGen = Join-Path $RepoPath 'ccswitch/scripts/gen-clause-index.mjs'
-if (-not (Test-Path -LiteralPath $clauseIndexGen)) {
-    Write-Skip 'ccswitch/scripts/gen-clause-index.mjs 不存在于本仓 —— 没有这份派生物，跳过（本步只对 windsurf-dao 自身生效）'
-} elseif ($DryRun) {
-    Write-Plan "node ccswitch/scripts/gen-clause-index.mjs --check   （两侧各自都对、合并后不对是已实证的形态——issue #121；本步代码上不在 -SkipVerify 分支里，但无断言守护，见 issue #209）"
-} elseif (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Note '找不到 node —— 本步无法判定，不当成"已核对过"（不是通过，是没查）'
-} else {
+foreach ($d in $derivativeChecks) {
+    $genScript = Join-Path $RepoPath $d.RelPath
+    if (-not (Test-Path -LiteralPath $genScript)) {
+        Write-Skip "$($d.RelPath) 不存在于本仓 —— 没有这份派生物，跳过（本步只对 windsurf-dao 自身生效）"
+        continue
+    }
+    if ($DryRun) {
+        Write-Plan "node $($d.RelPath) --check   （两侧各自都对、合并后不对是已实证的形态——$($d.IssueRef)；本步代码上不在 -SkipVerify 分支里）"
+        continue
+    }
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Note '找不到 node —— 本步无法判定，不当成"已核对过"（不是通过，是没查）'
+        continue
+    }
     Push-Location $RepoPath
     try {
         $global:LASTEXITCODE = 0
-        $ciOut = & node 'ccswitch/scripts/gen-clause-index.mjs' '--check'
+        $ciOut = & node $d.RelPath '--check'
         $ciCode = $LASTEXITCODE
     } finally { Pop-Location }
     if ($ciCode -ne 0) {
         Write-Info ($ciOut -join "`n")
-        Fail ("clause-index 在合并后的树上过期（exit $ciCode）—— 两侧各自生成都对、合并后仍可能不对，是已实证的形态（issue #121，2 次实例，其中一次没有任何一侧做错事）。" + [Environment]::NewLine +
-              "         修法：``node ccswitch/scripts/gen-clause-index.mjs`` 重新生成、``git add ccswitch/clause-index.json`` 后提交，再重跑本脚本。" + [Environment]::NewLine +
+        Fail ("$($d.Name) 在合并后的树上过期（exit $ciCode）—— 两侧各自生成都对、合并后仍可能不对，是已实证的形态（$($d.IssueRef)）。" + [Environment]::NewLine +
+              "         修法：``node $($d.RelPath)`` 重新生成、``git add $($d.Artifact)`` 后提交，再重跑本脚本。" + [Environment]::NewLine +
               "         本步刻意不自动提交（issue #121 原文：『合并脚本产生提交』是行为扩张，要想清楚）——交给人核对后自己提交。") 2
     }
-    Write-Ok "在合并后的树上重跑 ``--check``：clause-index 仍与源一致"
+    Write-Ok "在合并后的树上重跑 ``--check``：$($d.Name) 仍与源一致"
 }
 
 # ── 4. 在合并后的树上重跑验证 ────────────────────────────────────────────────

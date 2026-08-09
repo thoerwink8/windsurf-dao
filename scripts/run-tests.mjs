@@ -83,15 +83,38 @@
 //    `# @dao-test-tier: env` ⇒ 该套**整套只在 `--env` 跑**；无标记者默认层也跑。
 //    刻意不在本文件里写「哪几套算慢」的清单 —— 本仓的手维护枚举被咬过三次。
 //
-//    🔴 **PS 标记与 JS 标记的语义不同，别当同一个东西读**（故正则也**另写一条**，不共用）：
+//    🔴 **PS 标记与 JS 标记的语义不同，别当同一个东西读**（故判定也**另起一份**，不共用）：
 //      · JS 侧 `// @dao-test-tier: env` = 「这个文件**内部有几节断言**在默认层自己 defer 掉」
 //        —— 文件照跑，跑完报 `DEFER=n`，粒度是**断言组**。
 //      · PS 侧 `# @dao-test-tier: env` = 「**整套**在默认层压根不起进程」
 //        —— 粒度是**整个文件**，它不产生也不可能产生 `DEFER=n`。
-//    为什么 PS 侧只能做到整套粒度：那 6 套是独立可直跑的 PowerShell 脚本，没有共同的
-//    「defer 某几节」协议，也不该为了这个去改它们的正文（改 6 份脚本 vs 加 4 行标记）。
+//    为什么 PS 侧只能做到整套粒度：那几套是独立可直跑的 PowerShell 脚本，没有共同的
+//    「defer 某几节」协议，也不该为了这个去改它们的正文（改每一份脚本 vs 加几行标记）。
 //    ⇒ 两侧的计数**各走各的字段**：JS 的进 `defer=/deferfiles=/declared=`，
 //      PS 的进 `psfiles=/psred=/psskip=`。混在一起会让「哪一半没跑」重新变得看不出来。
+//
+//    ①′ **「块注释外才算声明」这一判据的底座是 PowerShell 官方 parser**
+//    （2026-08-09 · issue #203 起判据，PR #213 返工换底座）。判定不在本文件里做，
+//    外包给 `scripts/scan-ps-tier-marker.ps1`（`Parser::ParseFile` 的 token 流）。
+//    **两次翻车才走到这一步，两次都是近似判据，方向相反**：
+//      · 假阳性（PR #200）：旧版只锚「行首 # + 标记名」，不问那一行是不是身处块注释内 ——
+//        `.NOTES` 里一句描述句被当成真声明，整套被静默判成 env 层、全仓零红。
+//        当时的应对是把散文**搬出**头 60 行窗口，那是文本约定，下一次编辑就会打破它。
+//      · 假阴性（PR #213 首版）：改成自写的开合记号扫描，**不认行注释、也不认字符串
+//        字面量** ⇒ 一行「注释里提到开块记号」或一句 `$re = '<#'` 就把其后整段变成死区，
+//        死区里的**真**标记一律失效。对抗实测：往 `tests/dao-pr-merge.tests.ps1` 第 2 行
+//        插一条语法完全合法的标记 ⇒ 不生效，而 116 条回归断言一条都不红。
+//    ⇒ **补漏—再漏的解法是换底座，不是把近似补得更细**：「这一行是不是块注释」有唯一
+//      权威答案，那个答案属于 PowerShell 自己。**本文件不许再长出第三版自写扫描。**
+//    ⚠ 换底座**没有**把「标记落在块注释里」变成合法声明（那正是 #200 要治的病）；
+//      它改的是**那件事从此会出声**：判定器另报一个 `prose` 位，入口据此打一行提示，
+//      指出「这条标记不生效、想生效就挪到块注释之外」。此前它是静默的。
+//    ⚠ **JS 侧未同步换底座，这是刻意留白不是漏做**：本仓 `tests/*.tests.js` 头部普查未发现
+//    散文提及会落在 `//` 紧跟 `@dao-test-tier:` 这个精确形态的活口（既有写法都在 `@` 前多插了
+//    文字，如"上面那行 `@dao-test-tier: env`"）。**照直写它现在的不对称**：PS 侧有权威
+//    parser 兜底，JS 侧仍是一条裸正则、块注释里的散文照样能冒充声明（今天零活口是普查
+//    结论，不是护栏）。若未来出现 JS 侧同型事故，处方是同一个（找 JS 那侧的权威解析），
+//    不是重新发明一版记号扫描。
 //
 // ② **没跑的 PS 套上退出码通道**（F1）：`psskip > 0` ⇒ 最终退出码**至少 2**。
 //    此前默认层那个恒 2 是**挂在 dead-gates 一个文件的 DEFER 上**的偶然 —— 那个文件哪天
@@ -102,7 +125,7 @@
 //    覆盖 —— 那个口子是**给回归网注入短超时用的**，不是给人调松的）。
 //    ⚠ **「真套超时会怎样」只有合成夹具的证据，2026-08-08 显式接受**（issue #186 第三格之一，
 //    与 ④ 那格并列）：回归网 ㈤ 用 `Start-Sleep` 夹具 + 注入短超时验到了三条（超时判红 ·
-//    打孤儿进程/半写沙盒警告 · 汇总表打 `⏱超时` 标），但那是**造出来的**超时；真 6 套里
+//    打孤儿进程/半写沙盒警告 · 汇总表打 `⏱超时` 标），但那是**造出来的**超时；真套里
 //    **没有一套会自然超时**（最慢那套实测 55-81s vs 300s 闸）⇒「某套真卡住时这条路径长什么样」
 //    结构上拿不到真语料。要造它就得往一套真测试里塞死循环 —— 那是把生产测试改坏去喂闸。
 //    ⇒ 照直写这是**已知缺口不是已验**：合成夹具证的是「判红这条代码路径通」，
@@ -121,7 +144,7 @@
 //    预算是给「某套卡住把整个入口拖死」兜底的，不是性能指标。
 //    注入口 `DAO_PS_BUDGET_MS`（形态同 ③ 的 `DAO_PS_TIMEOUT_MS`，**给回归网注入短预算用，
 //    不是给人调松的旋钮**）—— 2026-08-08 · issue #186 补。**它补的是一格真空**：这个数
-//    此前是硬编码常量、没有任何注入口，而真 6 套合计才 ≈100-150s ⇒ 回归网**结构上**造不出
+//    此前是硬编码常量、没有任何注入口，而真套合计才 ≈100-150s（issue #186 当时 6 套实测）⇒ 回归网**结构上**造不出
 //    「预算耗尽」场景。PR #185 对抗官把这道闸整个关掉（`if (false && spent >= …)`），
 //    全场 `PASS=95 FAIL=0` **一条都没红**。有了注入口，「预算闸被改坏」才必红。
 //
@@ -130,7 +153,9 @@
 //    脚本（被 `-ExecutionPolicy` 挡掉、头部就 return、文件被清空）在退出码上与全过一模一样。
 //
 // ⑦ **计数解析**：沿用既有的 `PASS=(\d+)\s+FAIL=(\d+)`；取不到只标「未报计数」，
-//    判定以真退出码为准（现状机制，本批不新造）。6 套里有 4 套不打这个汇总行。
+//    判定以真退出码为准（现状机制，本批不新造）。**多数套不打这个汇总行** —— 具体哪几套
+//    以汇总表里那几行「（未报计数）」为准，此处刻意不写数字（这一句被咬过一次：写死「6 套里
+//    有 4 套」，套数变成 7 之后两处数字一起过期）。
 //
 // ── 跑法 ────────────────────────────────────────────────────────────────────
 //   node scripts/run-tests.mjs                默认层（预期 exit 2）：JS 全跑 + 无标记 PS 套跑
@@ -165,7 +190,7 @@ const PS_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 300_000;
 })();
 // PS 层总预算：串行累计墙钟超过它，剩余套判「未跑」。兜的是「某套卡住把整个入口拖死」，
-// 不是性能指标 —— 6 套实测合计 ≈100-150s（同机不同次波动：选型批 149s、落地批 101s、对抗批三采 100.8-104.1s），900s 至少 6 倍余量。
+// 不是性能指标 —— 实测合计 ≈100-150s（同机不同次波动：选型批 149s、落地批 101s、对抗批三采 100.8-104.1s；三次采样时都是 6 套），900s 至少 6 倍余量。
 // `DAO_PS_BUDGET_MS` 与上面那个口子同型、同理由：**给回归网注入一个毫秒级预算用的**，
 // 因为真 6 套合计离 900s 差一个数量级 ⇒ 「预算耗尽」这个场景**结构上**造不出来。
 // 🔴 **它有意做成「直接取环境值」而不是 `Math.min(env, 900_000)`（只减不增），照直写为什么**：
@@ -250,27 +275,82 @@ function declaresEnvTier(file) {
 }
 const declaredEnv = new Set(jsTests.filter(declaresEnvTier));
 
-// ── PowerShell 侧的标记扫描：**另一条正则，刻意不与上面那条共用** ──────────────
-// 形态不同（`#` 而非 `//`）是表面理由，真理由是**语义不同**（见文件头 PS 契约 ①）：
-//   JS 标记 = 「文件内部分断言 defer」，文件照跑；
-//   PS 标记 = 「整套只在 --env 起进程」，默认层根本不跑它。
-// 共用一个函数会诱使后来者把两侧的计数也并进一个字段，而那正好把「哪一半没跑」重新弄没。
-// ⚠ BOM：本仓 6 套 .ps1 里 5 套带 UTF-8 BOM，`readFileSync(...,"utf8")` 会把它留成首字符
-//   U+FEFF ⇒ 标记若写在第 1 行，`^[ \t]*#` 会**当场落空而毫无症状**（标记形同没写）。
-//   故这里显式剥 BOM。**字面量写转义不写那个字符本身** —— 一个零宽字符落在源码里，
-//   谁也看不出它在不在（同 dao 官侧条款「测试里构造控制字符必须用转义写法」的判据）。
-const PS_BOM_RE = /^\uFEFF/;
-const PS_TIER_MARKER_RE = /^[ \t]*#[ \t]*@dao-test-tier:[ \t]*env\b/m;
-function declaresEnvTierPs(file) {
-  try {
-    const raw = fs.readFileSync(path.join(TESTS_DIR, file), "utf8").replace(PS_BOM_RE, "");
-    const head = raw.split(/\r?\n/).slice(0, TIER_MARKER_HEAD_LINES).join("\n");
-    return PS_TIER_MARKER_RE.test(head);
-  } catch (_) {
-    return false;   // 读不到就是读不到；它随后会以「跑不起来」的形态变红
+// ── PowerShell 侧的标记扫描：**外包给 PowerShell 官方 parser，不在这里自写** ──────
+// 判据与两次翻车的完整因果在 `scripts/scan-ps-tier-marker.ps1` 头注（唯一真相源），
+// 这里只留 node 侧要知道的三件：
+//   ① **两侧刻意各写一份**：JS 标记 = 「文件内部分断言 defer」，文件照跑；
+//      PS 标记 = 「整套只在 --env 起进程」。语义不同（见文件头 PS 契约 ①），共用一份会
+//      诱使后来者把两侧的计数也并进一个字段，那正好把「哪一半没跑」重新弄没。
+//   ② **BOM 不再由这边操心**：`Parser::ParseFile` 自己按 BOM 定编码。此前这里手剥 U+FEFF，
+//      是因为 `readFileSync(...,"utf8")` 会把它留成首字符、让行首锚**当场落空而毫无症状**
+//      （本仓 .ps1 里除 `link-codex` 外均带 UTF-8 BOM——刻意不写套数：写死的数字已过期两次，以 `--list` 实扫为准）。
+//   ③ **判定跑不起来 ⇒ fail-closed 且出声**（见下面 `scanPsTier()` 里的 `bad()`）：
+//      「这套没标记」与「我没看成」在退出码上分不开，那正是本文件通篇在治的病。
+const PS_TIER_SCANNER = process.env.DAO_PS_TIER_SCANNER
+  || path.join(HERE, "scan-ps-tier-marker.ps1");
+// 那个注入口同 `DAO_PS_TIMEOUT_MS` 那两个的形态与理由：**给回归网用的**（把它指到一个
+// 不存在或必崩的脚本，才验得到「判定器自己坏掉」那条路），不是给人换实现的旋钮。
+const PS_SCAN_TIMEOUT_MS = 60_000;
+
+// 分层自检的问题清单：**在这里就建好**，因为标记判定失败是第一个可能往里写的东西
+// （它原先建在下面运行期那一段，而那时判定早已发生过了）。
+const tierProblems = [];
+
+// 一次 spawn 判定全部 PS 套（真仓实测 ≈0.3s，含 powershell 启动；套数以 `--list` 实扫为准），
+// 返回 { declared:Set<file>, prose:string[] }。判定不可信时改判 fail-closed 并往
+// tierProblems 里写一条 ⇒ 退出码走 4 那一档，而不是悄悄把 env 套拉回默认层跑。
+function scanPsTier(files) {
+  if (!files.length) return { declared: new Set(), prose: [] };   // 没有 PS 套就不起进程
+  const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", PS_TIER_SCANNER,
+    "-HeadLines", String(TIER_MARKER_HEAD_LINES), ...files.map((f) => path.join(TESTS_DIR, f))];
+  const r = spawnSync("powershell.exe", args,
+    { encoding: "utf8", cwd: ROOT, timeout: PS_SCAN_TIMEOUT_MS });
+  const out = String(r.stdout || "");
+  const lines = out.split(/\r?\n/);
+  const head = /^PSTIER_SCAN v1 head=(\d+) files=(\d+)$/.exec(lines[0] || "");
+  const declared = new Set();
+  const prose = [];
+  const bad = (why) => {
+    tierProblems.push(`PS 分层标记判定没跑成（${why}）⇒ 「哪几套算 env 层」这次是不可信的。`
+      + `按 fail-closed 处理：${files.length} 套 PS 测试一律当作**已声明**（默认层一套都不跑），`
+      + `不是当作没标记 —— 后者会把带 winget install / 动真 %USERPROFILE% 的那几套悄悄跑起来。`
+      + `${r.error ? ` spawn 错误：${r.error.message || r.error.code}；` : ""}`
+      + `${r.status != null && r.status !== 0 ? ` 判定器 exit ${r.status}；` : ""}`
+      // ⚠ **刻意不往这里贴子进程的 stderr 原文**：PS 5.1 写 stderr 按 `[Console]::OutputEncoding`
+      //   （跟控制台代码页走），node 这边按 utf8 解 ⇒ 中文当场成乱码，贴出来只会让人去查
+      //   一个不存在的编码问题（`ccswitch/rules/dao-powershell.md` 第三条记的正是这个坑）。
+      //   改为给一条**自己重跑**的命令，原文去那里看。
+      + `${String(r.stderr || "").trim() ? " 它写了 stderr（内容按控制台代码页编码，这里读不准）；" : ""}`
+      + ` 自己重跑看原文：powershell -NoProfile -ExecutionPolicy Bypass -File ${PS_TIER_SCANNER}`
+      + ` -HeadLines ${TIER_MARKER_HEAD_LINES} ${path.join(TESTS_DIR, files[0])}`);
+    return { declared: new Set(files), prose: [] };
+  };
+  if (r.error || r.status !== 0) return bad("判定器进程没能正常退出");
+  if (!head || Number(head[2]) !== files.length) return bad("输出的表头对不上（文件数或格式不符）");
+  if (Number(head[1]) !== TIER_MARKER_HEAD_LINES) return bad("判定器用的扫描窗口与本入口不一致");
+  if (!lines.includes("PSTIER_SCAN_END")) return bad("输出没有收尾标记 —— 它多半跑到一半断了");
+  let seen = 0;
+  for (const line of lines) {
+    const m = /^(\d+) decl=([01]) prose=([01]) perr=(-?\d+)$/.exec(line);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    if (idx >= files.length) return bad("输出里的下标越界");
+    seen++;
+    if (m[2] === "1") declared.add(files[idx]);
+    if (m[3] === "1") prose.push(files[idx]);
+    if (Number(m[4]) !== 0) {
+      // 语法有错 / 文件没读成：**不吞**。它不改判定（token 流是尽力而为的），但要让人看见——
+      // 一个读不成的文件被判「无声明」，与它真的没标记长得一样。
+      process.stdout.write(`  ⚠ tests/${files[idx]}：PowerShell parser 报`
+        + `${Number(m[4]) < 0 ? "这份文件没读成" : ` ${m[4]} 条语法错误`}（本次按判定结果`
+        + `${m[2] === "1" ? "已声明" : "无声明"}处理，但这份文件本身先得能跑起来）\n`);
+    }
   }
+  if (seen !== files.length) return bad(`只解析出 ${seen} 行结果，少于 ${files.length} 个文件`);
+  return { declared, prose };
 }
-const declaredEnvPs = new Set(psTests.filter(declaresEnvTierPs));
+const psTierScan = scanPsTier(psTests);
+const declaredEnvPs = psTierScan.declared;
 
 process.stdout.write(`[run-tests] tests/ 下发现 ${jsTests.length} 套 node 测试、${psTests.length} 套 PowerShell 测试\n`);
 process.stdout.write(`[run-tests] 本次层级：${ENV_TIER ? "--env（含环境敏感断言 + 全部 PS 套，要求串行环境）" : "默认层（环境敏感断言不跑、标了 env 的 PS 套不跑 → 预期 exit 2）"}`
@@ -279,9 +359,31 @@ if (strays.length) {
   process.stdout.write(`  ⚠ 另有 ${strays.length} 个不符 *.tests.{js,ps1} 命名的文件，未纳入：${strays.join(", ")}\n`);
 }
 
+// ── 「标记写进了块注释里」的可见提示（PR #213 对抗官 F1 那一格的 fail-loud 半边）───
+// PowerShell 认块注释正文是散文，那里的标记**不生效** —— 而「想标 env 却标进了块注释」
+// 与「随口写了一句散文」在盘上长得一模一样。差别只在代价：前者会让一套本该摘出去的测试
+// 被真的跑起来。故这里**只出声、不判红**（`[#官通-闸位判断]`：这是「人该判断一件事」，
+// 不是「代码错了」—— 文档里正当地引用这个语法也会落在这个形态上）。
+// 🔴 它不是散文，回归网 ⑪ 有断言钉着它出声；那条断言就是它的退役触发器。
+if (psTierScan.prose.length) {
+  process.stdout.write(`  ⚠ 有 ${psTierScan.prose.length} 份 .tests.ps1 在头 ${TIER_MARKER_HEAD_LINES} 行的`
+    + `**块注释内部**出现了层级标记字面量 —— PowerShell 认为那是散文，**它不生效**：\n`);
+  for (const f of psTierScan.prose) {
+    process.stdout.write(`    · tests/${f}  ⇒ 若本意是声明，把它挪到块注释**之外**的独立 # 行`
+      + `（通常是文件第一个 <# 之前）；若本意就是散文，忽略本行\n`);
+  }
+}
+
 if (LIST_ONLY) {
   for (const f of jsTests) process.stdout.write(`  node  tests/${f}${declaredEnv.has(f) ? "   [有环境敏感层 · 默认不跑那几节]" : ""}\n`);
   for (const f of psTests) process.stdout.write(`  pwsh  tests/${f}${declaredEnvPs.has(f) ? "   [标了 env · 整套默认层不跑]" : ""}\n`);
+  // 判定跑不成时这张清单是**猜的**（fail-closed 把每一套都标成 env）——不许拿 0 退出去，
+  // 否则「列不出来」与「列出来了」在退出码上又分不开（本文件通篇治的就是这个）。
+  if (tierProblems.length) {
+    process.stdout.write(`\n✗ 分层自检失败 ${tierProblems.length} 条 —— 上面这张分层清单不可信：\n`);
+    for (const p of tierProblems) process.stdout.write(`    · ${p}\n`);
+    process.exit(EXIT_SELFCHECK);
+  }
   process.exit(EXIT_OK);
 }
 
@@ -357,7 +459,7 @@ const psResults = [];
     // **报文能说清是哪一种**（超时要额外警告孤儿进程，普通红不需要）。
     const timedOut = !!(r.error && String(r.error.code || r.error.message).includes("ETIMEDOUT")) || r.signal === "SIGTERM";
     const red = r.status !== 0 || !!r.error || !!r.signal;
-    // 计数解析沿用现状：6 套里只有 2 套打这个汇总行，取不到标「未报计数」、判定看退出码。
+    // 计数解析沿用现状：多数套不打这个汇总行，取不到标「未报计数」、判定看退出码（见头注 ⑦）。
     const m = out.match(/PASS=(\d+)\s+FAIL=(\d+)/);
     psResults.push({
       file: f, ranAt: true, code: r.status, red, timedOut,
@@ -431,7 +533,7 @@ if (psTests.length) {
 }
 
 // ── 自检半边 ②：静态声明 vs 运行期计数，差值即警报 ────────────────────────
-const tierProblems = [];
+// （`tierProblems` 建在文件上方 —— PS 标记判定失败会比这里更早往里写。）
 for (const r of results) {
   // 红的文件另有专门通道（上面已打全量输出），不在这里重复判 —— 它可能压根没跑到汇总行。
   if (r.code !== 0) continue;
