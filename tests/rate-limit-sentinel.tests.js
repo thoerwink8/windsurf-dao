@@ -79,6 +79,13 @@ function firedLines(tag, hookPath) {
       .map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
   } catch (_) { return []; }
 }
+// 直接往 fired.log 里塞种子记录（不经过 hook 本体）——deaths_24h 的多组边界测试
+// （笔①、issue #236 挂账①②③）都要这个前置，提到模块级只留一份，不逐块各抄一份。
+function seedFiredLog(tag, hookPath, records) {
+  const p = firedPath(tag, hookPath);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+}
 function payloadOf(over) {
   return Object.assign({
     session_id: "sid-" + TAG,
@@ -178,11 +185,7 @@ console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「�
   //   ① 25h 前的 marked:true（窗外，即便是死亡也不算「最近」）
   //   ② 1h 前的 marked:false（窗内，但不是死亡，只是「记了账但没写标记」的普通报错）
   // 跑一次真实死亡后，deaths_24h 应该恰好是 1（只有这次），证明两条负控各自被判据挡住。
-  function seedFiredLog(tag, hookPath, records) {
-    const p = firedPath(tag, hookPath);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
-  }
+  // （`seedFiredLog` 已提到模块级，本块起复用同一份——见上方定义处的理由）
   const OLD_MARKED = { at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
   const RECENT_UNMARKED = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: false, error: "server_error" };
 
@@ -199,7 +202,7 @@ console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「�
   // 形态是「结果不被消费」：`Number.isFinite(t)` 判据保留（`marked:false` 那条仍被挡），
   // 只有窗口这一半被掐掉——这样能证明这条断言真的在盯着「窗口」而不是别的什么。
   {
-    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff) n++;";
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
     const h = mutantHook("deaths-window-blind", ANCHOR, "        if (Number.isFinite(t)) n++;");
     const tagM = "deaths-window-mut";
     seedFiredLog(tagM, h, [OLD_MARKED, RECENT_UNMARKED]);
@@ -244,6 +247,95 @@ console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「�
       mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + JSON.stringify(mm && mm.deaths_24h));
     check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
       mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string", "marker=" + JSON.stringify(mm));
+  }
+}
+
+console.log("\n=== issue #236 挂账①：未来时间戳不得永久计入（deaths_24h 上界）===");
+{
+  // 伪造一条「未来」的 marked:true 死亡（at = 现在 + 10 天）。修上界之前它会被永久计入
+  // （issue #236 对抗证据 P7/P8：+10 天与 9999 年都被计进去，且永不过期）；
+  // 修上界之后它应该像窗外记录一样被挡住。
+  const FUTURE_MARKED = { at: new Date(Date.now() + 10 * 24 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-future";
+  seedFiredLog(tag, REAL_HOOK, [FUTURE_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("未来 10 天的 marked:true 不计入 ⇒ deaths_24h = 1（只有这次真实死亡）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([FUTURE_MARKED]) + "）");
+
+  // 先破再验：只撤掉新增的上界（`&& t <= nowMs`），下界 `t >= cutoff` 原样保留——
+  // 证明这条正控真的在盯着"上界"，不是靠上面「架空整段窗口」那条 mutation 顺带盖住的。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
+    const h = mutantHook("deaths-future-nocap", ANCHOR, "        if (Number.isFinite(t) && t >= cutoff) n++;");
+    const tagM = "deaths-future-mut";
+    seedFiredLog(tagM, h, [FUTURE_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：撤掉上界 ⇒ 未来 10 天的死亡也被计入，deaths_24h 变成 2（issue #236 P7/P8 原始症状复现）",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #236 挂账②：窗口收紧方向要有测试兜底（23h 正控）===");
+{
+  // 既有语料只覆盖到 1h 以内（正控）与 25h（窗外负控），窗口在 0~25h 之间随便改都测不出来
+  // （issue #236 M9/M14：24h→1分钟、24h→23h 均 0 条红）。补一条 23h 正控：把窗口从 24h
+  // 意外收紧到更短时，这条记录会从「计入」翻成「不计入」，正是本条要抓的方向。
+  const D23H_MARKED = { at: new Date(Date.now() - 23 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-23h";
+  seedFiredLog(tag, REAL_HOOK, [D23H_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("23 小时前的 marked:true 仍应计入 ⇒ deaths_24h = 2（那条 + 这次真实死亡）",
+    m && m.deaths_24h === 2, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([D23H_MARKED]) + "）");
+
+  // 先破再验：把窗口从 24h 收紧到 1h（issue #236 M9 的具体形态之一）⇒ 23h 前那条应该
+  // 从"计入"翻成"不计入"，证明上面那条正控真的在盯着窗口长度，不是碰巧对。
+  {
+    const ANCHOR = "const DEATHS_WINDOW_MS = 24 * 3600 * 1000;";
+    const h = mutantHook("deaths-window-shrink", ANCHOR, "const DEATHS_WINDOW_MS = 1 * 3600 * 1000;");
+    const tagM = "deaths-23h-mut";
+    seedFiredLog(tagM, h, [D23H_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：窗口收紧到 1h ⇒ 23h 前那条掉出窗口，deaths_24h 从 2 变成 1（只剩这次死亡）",
+      mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #236 挂账③：死亡判定不能从 `=== true` 松成 truthy ===");
+{
+  // 写入侧目前永远是布尔值，故这不是当前活跃风险，而是**结构上**没有断言在守
+  // （issue #236 M7：`marked === true` 松成 `marked`，既有 165 条断言零反对）。
+  // 补一条正控：一个 truthy 但非严格 true 的值（字符串 "true"）不应被计入。
+  const TRUTHY_NOT_TRUE = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: "true", error: "rate_limit" };
+
+  const tag = "deaths-marked-truthy";
+  seedFiredLog(tag, REAL_HOOK, [TRUTHY_NOT_TRUE]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check('marked:"true"（truthy 但非严格 true）不计入 ⇒ deaths_24h = 1（只有这次真实死亡）',
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([TRUTHY_NOT_TRUE]) + "）");
+
+  // 先破再验：把 `=== true` 松成 truthy 判据 ⇒ 上面那条记录翻面被计入。
+  {
+    const ANCHOR = "      if (r && r.marked === true) {";
+    const h = mutantHook("deaths-marked-loosen", ANCHOR, "      if (r && r.marked) {");
+    const tagM = "deaths-marked-truthy-mut";
+    seedFiredLog(tagM, h, [TRUTHY_NOT_TRUE]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：`=== true` 松成 truthy ⇒ marked:\"true\" 那条被计入，deaths_24h 从 1 变成 2",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
   }
 }
 
