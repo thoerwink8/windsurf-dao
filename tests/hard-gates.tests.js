@@ -1526,6 +1526,45 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
   const SBX = path.join(TMP, "io-guard");
   fs.mkdirSync(SBX, { recursive: true });
 
+  // ── 🔴 **相② 专属 fixture（#214 新增）：候选路径里有链，只有真 realpath 解得开** ────
+  // **为什么本批必须新造一个**：#199 那时的「相② 专属样本」是「候选写 8.3 短名 + 长名 HOME」，
+  // 而 #214 的相③（8.3 投机展开）**恰恰就把那一格接住了** ⇒ 拿它去做「候选侧 realpath 坏掉
+  // ⇒ 由 2 翻 0」的反向 mutation，会得到一条**恒真断言**（翻不动，因为相③ 兜住了）。
+  // ⇒ 承重样本换成「链」这一类：候选写 `<短名>\altlink\settings.json`，`altlink` 是指向
+  // `<home>\.claude` 的 junction。**相③ 对它无能为力**（段数比 live 多一段，且 `altlink`
+  // 与 `.claude` 不是 8.3 前缀关系）⇒ 它是「候选侧那次 realpath 到底还挣不挣得到饭吃」
+  // 的唯一活证据，也是 ⑳ 那条新登记的载体。
+  // **自失效**：junction 造不出来 / 链解不到 live / 短名算不出来 ⇒ 前置断言当场红，
+  // 而不是悄悄退化成「测了个普通目录」（那正是 #134 那份 fixture 立下的规矩）。
+  // ⚠️ **语料来源照直标**（`#官抗-语料非自证`）：`mklink /J` 的**机制**是真的（cc-switch 在本机
+  //   分发用的同一种，`~/.claude` 下实测有 12+ 条真链），但「HOME 底下有个 junction 指向
+  //   `.claude`」这个**拓扑是造的** —— 本机不存在。别把这一组读成真语料回归。
+  const CL_HOME = path.join(SBX, "candlink-home");
+  const CL_LIVE = path.join(CL_HOME, ".claude");
+  const CL_LINK = path.join(CL_HOME, "altlink");
+  fs.mkdirSync(CL_LIVE, { recursive: true });
+  const clMk = spawnSync("cmd", ["/c", "mklink", "/J", CL_LINK, CL_LIVE],
+    { encoding: "utf8", windowsHide: true });
+  const CL_SHORT = shortNameOf(CL_HOME);
+  const clReal = (() => { try { return fs.realpathSync.native(CL_LINK); } catch (_) { return ""; } })();
+  check("#214 前置·候选侧链 fixture 造得出来（`mklink /J altlink → <home>\\.claude`）",
+    clMk.status === 0, clMk.status === 0 ? "ok" : `mklink exit=${clMk.status}（⇒ 下面那组只是没测到，不是通过）`);
+  check("#214 前置·它真解得到 live 目录（否则下面测的不是「只有 realpath 解得开」那一格）",
+    /[\\/]\.claude$/i.test(clReal), `realpath=${clReal}`);
+  check("#214 前置·该假 HOME 算得出真 8.3 短名（候选里得有 `~N`，`g2Canon` 才会落 realpath）",
+    !!CL_SHORT, `short=${CL_SHORT}`);
+  const clOk = clMk.status === 0 && /[\\/]\.claude$/i.test(clReal) && !!CL_SHORT;
+  // 候选：短名段（给 `g2Canon` 一个 `~N` 让它落 realpath）+ junction 段（相③ 展不开）
+  const payLink = clOk ? ps(`Copy-Item src.json "${CL_SHORT}\\altlink\\settings.json" -Force`) : null;
+  const clEnv = { USERPROFILE: CL_HOME };
+  if (clOk) {
+    check("🟢#214 正控·**相② 专属**（候选经 junction，只有真 realpath 解得开）→ exit 2",
+      gate(payLink, { env: clEnv }).code === 2, `code=${gate(payLink, { env: clEnv }).code}`);
+    const bogus = ps(`Copy-Item src.json "${CL_SHORT}\\altlink2\\settings.json" -Force`);
+    check("#214 负控·同一 fixture 里写一个**不存在的**兄弟目录 → exit 0（不许误伤）",
+      gate(bogus, { env: clEnv }).code === 0, `code=${gate(bogus, { env: clEnv }).code}`);
+  }
+
   // ── #133 ──────────────────────────────────────────────────────────────────
   // 锚点：三处，各自单行、且**断言的就是喂给 `replace()` 的那个 RegExp 对象**
   // （`#守-锚点行尾` ③：断言前缀串而 mutation 用正则 = 两个不同的锚）。
@@ -1803,26 +1842,42 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         const alive = gate(harmless, { script: mp });
         check("#199 变异体存活（批量卡死版）：无关输入仍 exit 0 且无 fail-open 告警",
           alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code}`);
-        const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+        // 🔴 **承重样本 2026-08-09（#214）换掉了，作废原文照录**：
+        //   ~~`const payCand = ps(\`Copy-Item src.json "${"${SHORT_HOME}"}\\.claude\\settings.json" -Force\`);`~~
+        //   —— 那条（候选写 8.3 短名 + 长名 HOME）在 #214 之后由**相③** 兜住 ⇒ 批量卡死它照拦
+        //   ⇒ 拿它测「批量坏掉会怎样」会得到一条**恒真断言**。承重样本换成候选侧链那一格
+        //   （相③ 展不开），它才是「批量坏掉真的会丢一格覆盖面」的活证据。
         const t0 = Date.now();
-        const r = gate(payCand, { script: mp });     // 长名 HOME：这条只有相② 拦得住
+        const r = clOk ? gate(payLink, { env: clEnv, script: mp }) : { code: -1 };
         const ms = Date.now() - t0;
-        check("🔴#199 防复发·候选侧批量子进程卡住 ⇒ **fail-open（exit 0）**，退回相① 的「按原样比」" +
-              "（禁 fail-closed —— 一次失败换来的误伤在这道闸上代价更大）",
+        check("🔴#199/#214 防复发·候选侧批量子进程卡住 ⇒ 相② 独有那一格**fail-open（exit 0）**" +
+              "（禁 fail-closed —— 单条候选解不开换来的误伤在这道闸上代价更大；" +
+              "**只有「候选数 > 阈值 + 有候选压根没轮到」那一格才 fail-close**，见 #214 那组）",
           r.code === 0, `code=${r.code}`);
         check(`🔴#199 界·批量子进程注入 20 s 阻塞，hook 进程寿命仍 < 6 s（实测 ${ms} ms）`,
           ms < 6000, `${ms} ms`);
         check("#199 对照·同一变异体下**相① 拦得住的那些**判决不变（短名 HOME + 变量形态仍 exit 2）" +
               "⇒ 批量卡死只吃掉相② 独有的那一格，不是整闸失明",
           gate(payVar, { env: asShort, script: mp }).code === 2);
+        check("🟢#214 对照·同一变异体下**相③ 拦得住的那些**判决不变（候选写 8.3 短名 + 长名 HOME 仍 exit 2）" +
+              "⇒ 批量整个坏掉时，短名那一大类由零 I/O 的相③ 接住（这正是 ⑱ 回归带的修法）",
+          gate(ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`), { script: mp }).code === 2,
+          `code=${gate(ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`), { script: mp }).code}`);
       }
     }
 
-    // ③-c 🔴 **诚实边界一（头注 ⑱「诱饵抢先」）实测**：批量是**逐条即时落**的，
-    //     被超时杀掉时排在卡住那一条**之后**的解不开 ⇒ 攻击者把毒路径放最前面，
-    //     可以让同批的真目标退回「按原样比」。**这一格本批不修，但要有实测钉着它存在。**
-    //     构造：把批量子进程正文改成「解第一条之前先睡 20 s」= 第一条就卡 ⇒ 全批解不开
-    //     （最强形态）。真实攻击的效果介于「全批解不开」与「零影响」之间，取决于毒路径的位次。
+    // ③-c 🔴🔴 **⑱「诱饵抢先」那条登记 2026-08-09 兑现了（#214），它是自失效断言第 7 次真实触发。**
+    //     🔴 **作废原文照录**：
+    //     ~~`check("🔴#199 诚实边界·**批内第一条卡住 ⇒ 同批后面的真目标解不开、退回相① 结果
+    //     （exit 0）**…… 方向是漏报且严格优于改动前……**账挂在 issue #214**", r.code === 0)`~~
+    //     —— **「严格优于改动前」那句已被 PR #216 对抗官实测证伪**（约 292 KB ~ 2.4 MB 那一段
+    //     改动前拦得住、#199 那一版漏），随后 #214 把它修了；这条登记于是当场变红并点名，
+    //     逼我回来把它改成正控。**登记条目记得下「哪天有人修会红」，记不下「会怎么修」** ——
+    //     它当时猜的两条修法（排序 / 每条一个子进程）**一条都没被采用**，实际修法是
+    //     **相③：8.3 短名的零 I/O 投机展开 + 饿死 fail-close**（见 hook 里 `g2ShortExpand`
+    //     与 `G2_CAND_STARVE_N` 上方）。
+    //     构造不变：把批量子进程正文改成「解第一条之前先睡 20 s」= 第一条就卡 ⇒ 全批解不开
+    //     （最强形态，比真实攻击更狠）。**现在要断言的是它照样拦得住。**
     {
       const RE_LOOP = /for\(var i=0;i<a\.length;i\+\+\)\{if\(!a\[i\]\)continue;/;
       const n = (SRC.match(new RegExp(RE_LOOP.source, "g")) || []).length;
@@ -1833,10 +1888,26 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           "for(var i=0;i<a.length;i++){if(!a[i])continue;if(i===0){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20000)}"), "utf8");
         const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
         const r = gate(payCand, { script: mp });
-        check("🔴#199 诚实边界·**批内第一条卡住 ⇒ 同批后面的真目标解不开、退回相① 结果（exit 0）**" +
-              "—— 头注 ⑱ 那格漏报是真的，不是理论；方向是漏报且严格优于改动前（改动前主进程卡 21 s ⇒ 七闸齐放）。" +
-              "**账挂在 issue #214**",
-          r.code === 0, `code=${r.code}`);
+        check("🟢#214 正控（原 ⑱ 登记条目）·**批内第一条卡住、整批解不开 ⇒ 真目标仍 exit 2**" +
+              "（相③ 零 I/O 投机展开接住了 8.3 短名那一大类 —— 这就是 ⑱ 回归带的闭合面）",
+          r.code === 2, `code=${r.code}`);
+        check("#214 归因·同一变异体下**那行「候选侧批量没跑完」自陈打得出来**" +
+              "（∴ 上一条不是「批量其实没坏」，是坏了而相③ 顶上了）",
+          /候选侧批量 realpath 没跑完/.test(r.err), r.err.slice(0, 160));
+        // 🔴 **⑳ 新登记（自失效）：相③ 展不开的那一类，「毒路径抢先」仍然漏。**
+        //   相③ 靠的是 8.3 短名的生成规则，**候选路径里若是链（而不是短名）就反推不出来**
+        //   ⇒ 批内第一条卡住时，`altlink` 那一格照旧退回「按原样比」。
+        //   **它不是相对改动前的退化**：改动前那条 payload 会让主进程一卡到底、宿主 10 s 到点
+        //   杀掉整个 hook ⇒ 七道闸一起放行，比丢 G2 一格严重一个量级（本机实测见 PR body 那张表）。
+        //   **也不是数量型**：数量型那一格由「饿死 fail-close」堵着（见下面 #214 那组）；
+        //   这一格要的是**一条真毒路径**（本机造不出，故此处用注入卡死模拟）。
+        //   哪天有人修好这条会红并点名，逼他同批更新 hook 头注 ⑳ 与本条。
+        if (clOk) {
+          const rl = gate(payLink, { env: clEnv, script: mp }).code;
+          check("登记（自失效）·⑳ 相③ 展不开的那一类（候选经**链**而非短名）+ 批内第一条卡住 ⇒ 仍 **exit 0**。" +
+                "**非退化**（改动前同一条 payload 会卡死整个 hook ⇒ 七闸齐放）。**账挂在 issue #214**",
+            rl === 0, `code=${rl}`);
+        }
       }
     }
 
@@ -1888,10 +1959,25 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           const mp2 = path.join(TMP, "mutant-199-1ms.js");
           fs.writeFileSync(mp2, SRC.replace(RE_MS2, () => "const G2_CAND_REALPATH_MS = 1;"), "utf8");
           const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
-          check("🔴#199 反向·候选侧界收到 1 ms ⇒ 长名 HOME 下「候选写 8.3 短名」由 2 翻 0" +
-                "（∴ `G2_CAND_REALPATH_MS` 真的在被用，且失败方向是 fail-open）",
-            gate(payCand).code === 2 && gate(payCand, { script: mp2 }).code === 0,
-            `real=${gate(payCand).code} mut=${gate(payCand, { script: mp2 }).code}`);
+          // 🔴 **承重样本 2026-08-09（#214）换掉了，作废原文照录**：
+          //   ~~`gate(payCand).code === 2 && gate(payCand, { script: mp2 }).code === 0`~~
+          //   —— `payCand`（候选写 8.3 短名 + 长名 HOME）在 #214 之后由相③ 兜住，界收到 1 ms
+          //   它照样 exit 2 ⇒ 那条断言变成恒真，**它就不再证明「这个常量在被用」了**。
+          //   换两条：①判决面用相③ 展不开的那一格（候选经链）②另加一条**行为面**——
+          //   界收紧必然打出那行「候选侧批量没跑完」自陈，那是这个常量真的在被读的直接证据。
+          if (clOk) {
+            check("🔴#214 反向·候选侧界收到 1 ms ⇒ **相② 独有那一格**（候选经链）由 2 翻 0" +
+                  "（∴ `G2_CAND_REALPATH_MS` 真的在被用，且单条解不开时失败方向仍是 fail-open）",
+              gate(payLink, { env: clEnv }).code === 2 && gate(payLink, { env: clEnv, script: mp2 }).code === 0,
+              `real=${gate(payLink, { env: clEnv }).code} mut=${gate(payLink, { env: clEnv, script: mp2 }).code}`);
+          }
+          check("🔴#214 反向·界收到 1 ms ⇒ 那行「候选侧批量 realpath 没跑完」自陈打得出来" +
+                "（降级不许静默；这一条与判决无关，量的就是这个常量被读到了）",
+            /候选侧批量 realpath 没跑完/.test(gate(payCand, { script: mp2 }).err),
+            gate(payCand, { script: mp2 }).err.slice(0, 160));
+          check("🟢#214 反向的另一半·界收到 1 ms 时**短名那一大类判决不变**（`payCand` 仍 exit 2）" +
+                "⇒ 相③ 不吃候选侧那个界，⑱ 回归带的闭合与它无关",
+            gate(payCand, { script: mp2 }).code === 2, `code=${gate(payCand, { script: mp2 }).code}`);
           check("#199 反向·同一变异体下相① 拦得住的那些判决不变（短名 HOME + 变量形态仍 2）",
             gate(payVar, { env: asShort, script: mp2 }).code === 2);
           check("#199 反向·两个界是**两个常量**，收窄候选侧不影响常量侧那一格" +
@@ -2090,15 +2176,38 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           }
 
           // mutation B：**打掉相②**（批量结果恒空 ⇒ 相② 与相① 逐字节同结果）
-          const RE_P2 = /  const map = g2RealpathBatch\(wanted\);/;
+          // ⚠ 锚点 2026-08-09 随 #214 更新（第二次跟着源码走）：`g2RealpathBatch` 的返回值由
+          //   一个 Map 换成 `{map, fed, tried}`（要分得开「试过但没有」与「压根没轮到」），
+          //   **旧锚 `const map = g2RealpathBatch(wanted);` 已不在盘上**，它当场红并点名。
+          const RE_P2 = /  const batch = g2RealpathBatch\(wanted\);/;
           const nB = (SRC.match(new RegExp(RE_P2.source, "g")) || []).length;
           check("#199 锚点恰好命中 1 次（相② 的批量解析点）", nB === 1, `命中 ${nB} 次`);
           if (nB === 1) {
             const mp = path.join(TMP, "mutant-199-no-phase2.js");
-            fs.writeFileSync(mp, SRC.replace(RE_P2, () => "  const map = new Map();"), "utf8");
+            // 🔴 **只清空解析结果，`fed`/`tried` 留真值** —— 这一格是被自己咬出来的：
+            //   首版写成 `{ map: new Map(), fed: 0, tried: 0 }`，`fed=0` 连**相③ 与饿死判定
+            //   一起打掉了**（两者都以 `fed` 为门），于是相③ 专属样本跟着翻 0 ⇒ 那不是
+            //   「相② 的判别力」，是「一刀砍掉三相」。**大杀面变体分不出是哪一相在承重**
+            //   （`#官抗-订正面变体` 同型）⇒ 改成 `Object.assign(…, { map: new Map() })`：
+            //   批量照跑、`fed`/`tried` 照数，只有相② 拿不到东西。
+            fs.writeFileSync(mp, SRC.replace(RE_P2, () =>
+              "  const batch = Object.assign(g2RealpathBatch(wanted), { map: new Map() });"), "utf8");
             check("#199 变异体存活（无相②）：无关输入仍 exit 0", gate(bash("echo hi"), { script: mp }).code === 0);
-            check("🔴#199 判别力·**相② 拿不到任何解析结果** ⇒ 相② 专属样本由 2 **翻 0**",
-              gate(P2, { script: mp }).code === 0, `mut=${gate(P2, { script: mp }).code}`);
+            // 🔴 **承重样本 2026-08-09（#214）换掉了**：原样本（候选写 8.3 短名 + 长名 HOME）
+            //   现在由相③ 兜住 ⇒ 打掉相② 它照样 exit 2，那条断言会变成恒真。
+            if (clOk) {
+              check("🔴#199/#214 判别力·**相② 拿不到任何解析结果** ⇒ 相② 专属样本（候选经链）由 2 **翻 0**",
+                gate(payLink, { env: clEnv, script: mp }).code === 0,
+                `mut=${gate(payLink, { env: clEnv, script: mp }).code}`);
+            }
+            // 🔴 **这一条量的是相③ 的射程边界，别读成「相③ 没用」**（首版在这里写错过一次）：
+            //   相③ 只作用在 `batch.untried`（压根没轮到的），而本变异体是「批量照跑、只是
+            //   结果被清空」⇒ `untried` 是空的 ⇒ 相③ **按设计不该介入** ⇒ 短名那一格照旧翻 0。
+            //   ∴ **健康路径上守住短名那一大类的仍然是相②**，相③ 是饿死时才上场的兜底。
+            //   （首版误写成「相③ 专属样本仍 2」并当场红 —— 那正是把兜底当主力读的形态。）
+            check("🔴#214 射程·相② 结果被清空而**批量跑完了** ⇒ 短名那一格由 2 **翻 0**" +
+                  "（∴ 相③ 只在「压根没轮到」时上场，不抢健康路径的活）",
+              gate(P2, { script: mp }).code === 0, `code=${gate(P2, { script: mp }).code}`);
             check("#199 归因·同一变异体下 ⑰ 那一格仍 2（∴ 打掉的确实只是相② 那一半）",
               gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code === 2,
               `code=${gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code}`);
@@ -2125,29 +2234,242 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
     }
   }
 
+  // ── 🔴🔴 #214：⑱ 回归带闭合（相③ 8.3 投机展开 + 饿死 fail-close）────────────────────
+  // **要修的病，一句话**：批量子进程是**一批候选共享一个时间界**，候选数量够大时排在后面的
+  // 压根轮不到 ⇒ 退回「按原样比」⇒ 真目标漏过。PR #216 对抗官量出这是一段**真回归**——
+  // 同一条命令改动前（逐条独立同步解析、无共享预算）拦得住，#199 那一版漏。
+  // **两半修法**：①**相③** —— realpath 没验成时，按 8.3 短名的生成规则做**零 I/O 投机展开**
+  // （短名不是随机串：主名前 6 + `~N`、扩展名前 3，冲突多了改用「前 2 + 4 位 hex」）；
+  // ②**饿死 fail-close** —— 相③ 展不开、又确实有候选压根没轮到、且候选数已经不是日常形态时，
+  // 不许静默 exit 0。**两半各有专属样本与专属 mutation**，缺哪半都得有断言会红。
+  if (SHORT_HOME) {
+    const asLong = {};                       // 长名 HOME：候选写短名时只有归一/展开得上才拦得住
+    const harmless2 = bash("echo hi");
+    const bandTarget = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+    // 回归带 payload：N 条**过得了零 I/O 前筛**的互异诱饵 + 末尾真目标。
+    // 诱饵必须互不相同（`g2Phases` 的 `seen` 去重会把重复的折成一条）、末段像 live（否则
+    // 前筛就挡了、量不到共享预算这一格）。
+    // ⚠️ **N 是按本机标定的，它有一条会自己出声的失效条件**（`#官通-性能哨兵` ①：绝对数字
+    //    不可移植）：一条诱饵进 `wanted` 两次（整条 + 父目录两级退化）⇒ fed ≈ 2N；本机实测
+    //    800 ms 界内约解到第 4 万条 ⇒ N=48000（fed≈96000）留了约 2.4 倍余量。
+    //    **换台快 2.4 倍以上的机器，整批会跑完 ⇒ 下面那条「自陈打得出来」的前置断言当场红**，
+    //    那时把 N 调大即可 —— **别把它读成缺陷，那正是这条前置断言存在的理由**
+    //    （没有它，批量跑完时上面几条会「通过」，而它们量的其实已经不是回归带了）。
+    const BAND_N = 48000;
+    const bandPay = ps(Array.from({ length: BAND_N },
+      (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}~1\\settings.json"`).join("; ") +
+      `; Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+
+    // ① 相③ 的三个 mutation 方向（`#官抗-改坏多形态`：①移除 ②保留字面但不执行 ③结果不被消费）
+    const RE_P3 = /  if \(batch\.untried\.length\) \{/;                              // ①移除整相
+    const RE_EXPAND = /  if \(!\/~\\d\/\.test\(s\)\) return null;/;                  // ②函数恒 null
+    const RE_DIRECT = /    if \(direct\) \{\r?\n      return blocked\(/;             // ③结果不被消费
+    const RE_STARVE = /const G2_CAND_STARVE_N = 64;/;
+    for (const [nm, re] of [["相③ 整相", RE_P3], ["g2ShortExpand 首行", RE_EXPAND],
+                            ["相③ 直判的采纳点", RE_DIRECT], ["饿死阈值常量", RE_STARVE]]) {
+      const n = (SRC.match(new RegExp(re.source, "g")) || []).length;
+      check(`#214 锚点恰好命中 1 次（${nm}）`, n === 1, `命中 ${n} 次`);
+    }
+    const anchorsOk = [RE_P3, RE_EXPAND, RE_DIRECT, RE_STARVE]
+      .every((re) => (SRC.match(new RegExp(re.source, "g")) || []).length === 1);
+
+    if (anchorsOk) {
+      const mkMut = (name, ...pairs) => {
+        const p = path.join(TMP, name);
+        let body = SRC;
+        for (const [re, to] of pairs) body = body.replace(re, () => to);
+        fs.writeFileSync(p, body, "utf8");
+        return p;
+      };
+      const mNo3 = mkMut("mutant-214-no-phase3.js", [RE_P3, "  if (false) {"]);
+      const mNoExp = mkMut("mutant-214-expand-null.js", [RE_EXPAND, "  if (true) return null;"]);
+      const mNoUse = mkMut("mutant-214-direct-unused.js", [RE_DIRECT, "    if (direct) {\n      blocked("]);
+      for (const [nm, mp] of [["无相③", mNo3], ["展开恒 null", mNoExp], ["直判结果不被消费", mNoUse]]) {
+        check(`#214 变异体存活（${nm}）：无关输入仍 exit 0 且无 fail-open 告警`,
+          gate(harmless2, { script: mp }).code === 0 && !/守卫自身出错/.test(gate(harmless2, { script: mp }).err));
+      }
+
+      // ② 🔴 **回归带本体**：N 个诱饵把共享预算吃光 ⇒ 真目标排在后面解不开。
+      //    **这一组既是正控也是判别力**：同一条 payload，有相③ 拦得住、没相③ 就是那条回归带。
+      {
+        // 🔴 **要看见「那条回归带」，必须把两半一起摘掉**（这一格是被自己咬出来的）：
+        //   只摘相③ ⇒ 饿死 fail-close 顶上，payload 照拦 **exit 2**（那是纵深防御在起作用，
+        //   不是相③ 没用）。⇒ 「相③ 承重」这句话要用「两半都摘」的变异体才量得到，
+        //   而「只摘一半仍拦得住」本身值得单独记一条 —— 它证的是两半确实互为兜底。
+        const mNo3NoStarve = mkMut("mutant-214-no-phase3-no-starve.js",
+          [RE_P3, "  if (false) {"], [RE_STARVE, "const G2_CAND_STARVE_N = 1000000000;"]);
+        const t0 = Date.now();
+        const real = gate(bandPay, { env: asLong });
+        const msReal = Date.now() - t0;
+        const t1 = Date.now();
+        const mut = gate(bandPay, { env: asLong, script: mNo3NoStarve });
+        const msMut = Date.now() - t1;
+        check(`🔴🔴#214 回归带闭合·${BAND_N} 个诱饵吃光共享预算 + 真目标排最后 ⇒ **仍 exit 2**`,
+          real.code === 2, `code=${real.code}`);
+        check("🔴🔴#214 判别力·同一条 payload **两半都摘掉就是那条回归带**（由 2 翻 0）" +
+              "⇒ 这一格确实是本批在承重，不是别的东西顺手挡住的",
+          mut.code === 0, `mut=${mut.code}`);
+        check("🟢#214 纵深·**只摘相③**（饿死 fail-close 还在）⇒ 同一条 payload 仍 exit 2" +
+              "（∴ 两半互为兜底，不是一根独木；也说明上一条必须两半一起摘才量得到）",
+          gate(bandPay, { env: asLong, script: mNo3 }).code === 2,
+          `code=${gate(bandPay, { env: asLong, script: mNo3 }).code}`);
+        check("🟢#214 纵深的另一半·**只摘饿死 fail-close**（相③ 还在）⇒ 同一条 payload 仍 exit 2",
+          gate(bandPay, { env: asLong, script: mkMut("mutant-214-starve-huge-only.js",
+            [RE_STARVE, "const G2_CAND_STARVE_N = 1000000000;"]) }).code === 2);
+        check("🔴#214 前置·那条 payload 确实把批量饿死了（「候选侧批量没跑完」自陈打得出来）" +
+              "⇒ 上面两条量的是「没验成之后怎么办」，不是「批量其实跑完了」。" +
+              "**这条红了 = 本机比标定时快了 2.4 倍以上，把 `BAND_N` 调大，不是缺陷**",
+          /候选侧批量 realpath 没跑完/.test(real.err), real.err.slice(0, 200));
+        // 性能哨兵（`#官通-性能哨兵`）：**不锚绝对毫秒**（换台机器差数倍），锚**相对量**——
+        // 相③ 是零 I/O 的兜底，不许把 hook 墙钟变成另一个放大器（那正是 #133/#199 守的东西）。
+        check(`🔴#214 界·加了相③ 之后同一条 payload 的 hook 寿命 < 摘掉相③ 的 2 倍` +
+              `（实测 ${msReal} ms vs ${msMut} ms）⇒ 相③ 没把 N×something 请回来`,
+          msReal < msMut * 2 + 1500, `real=${msReal}ms mut=${msMut}ms`);
+        check("#214 对照·同一条 payload 在**短名 HOME** 下由相① 零 I/O 命中（∴ 上面那组不是恒真）",
+          gate(bandPay, { env: { USERPROFILE: SHORT_HOME } }).code === 2);
+      }
+
+      // ③ 相③ 的**另外两个方向**打在最小 payload 上（不必再跑一遍两万条）
+      {
+        const mutHang = mkMut("mutant-214-band-hang.js",
+          [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+        check("🔴#214 判别力②·`g2ShortExpand` 恒 null + 候选侧界 1 ms ⇒ 短名那一格由 2 翻 0",
+          gate(bandTarget, { env: asLong }).code === 2 &&
+          gate(bandTarget, { env: asLong, script: mkMut("mutant-214-expand-null-1ms.js",
+            [RE_EXPAND, "  if (true) return null;"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 0);
+        check("🔴#214 判别力③·**直判结果算出来但不被采纳** + 候选侧界 1 ms ⇒ 同一格由 2 翻 0" +
+              "（`#官抗-改坏多形态` 第③向：门还在、门的答案没人听）",
+          gate(bandTarget, { env: asLong, script: mkMut("mutant-214-direct-unused-1ms.js",
+            [RE_DIRECT, "    if (direct) {\n      blocked("],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 0);
+        check("#214 对照·只把界收到 1 ms（相③ 完好）⇒ 同一格仍 exit 2（∴ 上两条翻的是相③ 不是那个界）",
+          gate(bandTarget, { env: asLong, script: mutHang }).code === 2,
+          `code=${gate(bandTarget, { env: asLong, script: mutHang }).code}`);
+
+        // 🔴 相③ 的**第三个调用点**：`cp <源> <目标目录>` 那一支合成的候选是「目标目录 + 源文件名」，
+        //    展开结果是 live **目录**而不是 live 文件 ⇒ 拦不拦要看源文件名，只有重跑 judge 知道。
+        const destForm = ps(`Copy-Item -LiteralPath settings.json -Destination "${SHORT_HOME}\\.claude"`);
+        check("🟢#214 正控·相③ 的**目标目录形态**（`-Destination <短名>\\.claude`）+ 界 1 ms ⇒ 仍 exit 2" +
+              "（展开成 live 目录后重跑 judge，源文件名才定案）",
+          gate(destForm, { env: asLong, script: mutHang }).code === 2,
+          `code=${gate(destForm, { env: asLong, script: mutHang }).code}`);
+        check("🔴#214 判别力·同一条在**无相③** 变异体下由 2 翻 0（∴ 那一格也是相③ 在承重）",
+          gate(destForm, { env: asLong, script: mkMut("mutant-214-no-phase3-1ms.js",
+            [RE_P3, "  if (false) {"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 0);
+        check("#214 负控·同一条**源文件名不是 live**（`-LiteralPath a.md`）⇒ exit 0（不许误伤）" +
+              "∴ 相③ 展开的是目录，定案的仍是源文件名",
+          gate(ps(`Copy-Item -LiteralPath a.md -Destination "${SHORT_HOME}\\.claude"`),
+            { env: asLong, script: mutHang }).code === 0);
+      }
+
+      // ④ 🔴 **饿死 fail-close**：相③ 展不开的那一类，靠「没验完 + 候选数不是日常形态」兜住。
+      //    诱饵**不带真目标** —— 要量的是「这一批我没验完」本身，不是「查出了违例」。
+      {
+        const starvePay = ps(Array.from({ length: 200 },
+          (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}~1\\settings.json"`).join("; "));
+        const m1ms = mkMut("mutant-214-1ms-only.js",
+          [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
+        check("🔴#214 正控·200 个候选 + 界 1 ms（整批没验成）⇒ **fail-close exit 2**" +
+              "（「没验完」不等于「没有违例」，这一格不许静默放行）",
+          gate(starvePay, { env: asLong, script: m1ms }).code === 2,
+          `code=${gate(starvePay, { env: asLong, script: m1ms }).code}`);
+        check("#214 正控·那条拦截文案说的是「这次没验过」而不是「查出你在写 live 配置」" +
+              "（被拦的人不该去找一个并不存在的违例目标）",
+          /这次没验过/.test(gate(starvePay, { env: asLong, script: m1ms }).err),
+          gate(starvePay, { env: asLong, script: m1ms }).err.slice(0, 200));
+        // 🔴 三条负控，都是**误伤方向**（`#官实-误伤反例`：两侧代价都是真代价）
+        check("🔴#214 负控·同一条 200 候选在**真界**下批量跑得完 ⇒ exit 0（∴ 拦的不是「候选多」）",
+          gate(starvePay, { env: asLong }).code === 0, `code=${gate(starvePay, { env: asLong }).code}`);
+        if (clOk) {
+          check("🔴#214 负控·候选数在阈值以下（2 条）+ 界 1 ms ⇒ 仍 **fail-open exit 0**" +
+                "（单条解不开照旧 fail-open —— 设计取舍② 没有被这一格推翻）",
+            gate(payLink, { env: clEnv, script: m1ms }).code === 0,
+            `code=${gate(payLink, { env: clEnv, script: m1ms }).code}`);
+        }
+        // 反向 mutation：阈值改大改小**都要有断言响**（`#官通-调参三问` 的机器面）
+        check("🔴#214 反向·阈值调到天大 ⇒ 上面那条 fail-close 由 2 翻 0（∴ 这个常量真的在被读）",
+          gate(starvePay, { env: asLong, script: mkMut("mutant-214-starve-huge.js",
+            [RE_STARVE, "const G2_CAND_STARVE_N = 1000000000;"],
+            [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 0);
+        if (clOk) {
+          check("🔴#214 反向的另一侧·阈值调到 0 ⇒ **误伤方向**也有响（2 条候选那格由 0 翻 2）" +
+                "⇒ 这条线的两侧都有断言夹着，不是只验了「拦得住」",
+            gate(payLink, { env: clEnv, script: mkMut("mutant-214-starve-zero.js",
+              [RE_STARVE, "const G2_CAND_STARVE_N = 0;"],
+              [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) }).code === 2);
+        }
+      }
+    }
+
+    // ⑤ 🔴 **相③ 的误伤面（它是过近似，代价必须有断言量着）**
+    // ⚠️ **语料来源照直标（`#官抗-语料非自证` 负控那半）**：前两条是**真实形态** ——
+    //   scratchpad 一律走 `C:\Users\ADMINI~1\AppData\Local\Temp\…`（真语料 27365 条里含 `~N`
+    //   的 1196 条几乎全长这样），项目级 `.claude/settings.json` 是工具链日常在写的那条路；
+    //   后两条**是本轮自造的诱饵**，只证明「我的诱饵不会被误伤」。
+    {
+      const deep = path.join(SHORT_HOME, "AppData", "Local", "Temp", "someproj", ".claude", "settings.json");
+      for (const [nm, pay] of [
+        ["真实形态·scratchpad 深处的**项目级** `.claude/settings.json`（段数与 live 对不上）",
+          edit(deep)],
+        ["真实形态·scratchpad 深处项目级，走 shell 分支", ps(`Copy-Item src.json "${deep}" -Force`)],
+        ["自造诱饵·前 6 字符**不同**的另一个用户目录短名（`GUESTX~1`）",
+          ps(`Copy-Item src.json "C:\\Users\\GUESTX~1\\.claude\\settings.json" -Force`)],
+        ["自造诱饵·扩展名前 3 位对不上的短名（`SETTIN~1.TXT`）",
+          ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\SETTIN~1.TXT" -Force`)],
+      ]) {
+        const c = gate(pay, { env: asLong }).code;
+        check(`🔴#214 负控·${nm} → exit 0（不许误伤）`, c === 0, `code=${c}`);
+      }
+      // 🔴 **代价那一半照直写**：前 6 字符**相同**的另一个短名（`ADMINI~2` 之类）在 realpath
+      //    验不成时**会被相③ 当成 live 拦下**。这不是缺陷、是过近似的定义，但它得有断言量着，
+      //    免得哪天有人以为「相③ 零误伤」。判据：真界下它 exit 0（realpath 分得开），
+      //    界坏掉时 exit 2（相③ 分不开）——**两态都断言，才说得清代价究竟落在哪一格**。
+      const twin = ps(`Copy-Item src.json "${SHORT_HOME.replace(/~1$/i, "~9")}\\.claude\\settings.json" -Force`);
+      if (/~1$/i.test(SHORT_HOME)) {
+        check("#214 代价·前 6 字符相同的另一个短名（`…~9`）在**真界**下 exit 0（realpath 分得开）",
+          gate(twin, { env: asLong }).code === 0, `code=${gate(twin, { env: asLong }).code}`);
+        const c2 = gate(twin, { env: asLong, script: path.join(TMP, "mutant-214-1ms-only.js") }).code;
+        check("🔴#214 代价·同一条在界坏掉时 **exit 2** —— 相③ 是过近似，这一格是它的已知误伤面" +
+              "（换来的是 ⑱ 那条回归带闭合；逃生阀仍在用户手里）",
+          c2 === 2, `code=${c2}`);
+      }
+    }
+  }
+
   // ── 调用点覆盖率（`#官抗-调用点覆盖率`）────────────────────────────────────
   // 数的是**剥掉注释后**的代码引用（见上方那条自指注释：含注释数会把「在讨论它」算成「在用它」）。
   {
     console.log(`  （调用点覆盖率）本批新增/改签名的判据，代码引用数（含定义）：` +
       `g2RealpathBounded ${refs("g2RealpathBounded")} · g2RealpathBatch ${refs("g2RealpathBatch")} · ` +
-      `g2TwoPhase ${refs("g2TwoPhase")} · g2TailCouldBeLive ${refs("g2TailCouldBeLive")} · ` +
+      `g2Phases ${refs("g2Phases")} · g2TailCouldBeLive ${refs("g2TailCouldBeLive")} · ` +
       `g2BaseCouldBeLive ${refs("g2BaseCouldBeLive")} · g2ResolvePre ${refs("g2ResolvePre")} · ` +
+      `g2ShortExpand ${refs("g2ShortExpand")} · g2CompCouldBe ${refs("g2CompCouldBe")} · ` +
+      `g2Starved ${refs("g2Starved")} · ` +
       `G2_RP_CHILD ${refs("G2_RP_CHILD")} · G2_RP_BATCH_CHILD ${refs("G2_RP_BATCH_CHILD")}。` +
       `**端到端覆盖**：g2RealpathBounded 生产调用点 1/1（常量侧，上面五组逐个走到）· ` +
-      `g2RealpathBatch 1/1（相②，由「候选写 8.3 短名 + 长名 HOME」那一格走到）· ` +
-      `g2TwoPhase **2/2**（Edit 分支由 ⑰ 负控里那条 \`edit(...)\` 走到、shell 分支由本节几乎每条正控走到` +
+      `g2RealpathBatch 1/1（相②，由「候选经 junction」那一格走到）· ` +
+      `g2Phases **2/2**（Edit 分支由 ⑰ 负控里那条 \`edit(...)\` 走到、shell 分支由本节几乎每条正控走到` +
       ` —— 这两个调用点是 G2 仅有的两个判定入口，缺一个就是半道闸没接上）· ` +
       `g2ResolvePre 2/2（g2Resolve 那条由 Edit/shell 正控走到，destRaws 那个循环由 ` +
       `\`-Destination <目录>\` 正控走到）· g2TailCouldBeLive 1/1（唯一调用点在 g2Canon，` +
       `正反两支都有专属样本：`+"`f.md` 诱饵走「不像」那支、`settings.json` 诱饵走「像」那支）· " +
-      `g2BaseCouldBeLive 2/2（g2TailCouldBeLive 内一处、g2WriteTargets 的 basename 展开一处）。` +
+      `g2BaseCouldBeLive 2/2（g2TailCouldBeLive 内一处、g2WriteTargets 的 basename 展开一处）· ` +
+      `**g2ShortExpand 3/3**（相③ 预判循环 · 直判分支 · 重跑 judge 那条 \`rp\` —— ` +
+      `前两条由 #214 那组走到；**第三条「目标目录形态」只由合成样本走到**，照直标）· ` +
+      `g2CompCouldBe 2/2（g2ShortExpand 里目录段一处、末段一处）· ` +
+      `g2Starved 1/1（饿死 fail-close，由 #214 那组的 N>阈值 正控走到）。` +
       `**未覆盖 0 个** —— 但这句话说的是「被走到了」，不是「守住了」。`);
     // 🔴 **一条结构断言守着上面那句话别变成散文**（`#官抗-调用点覆盖率`：分母不能是手写死的）：
-    //   本批新增的三个函数名，只要有一个在代码里消失（改名 / 删除 / 被 inline 掉），
+    //   这几个函数名，只要有一个在代码里消失（改名 / 删除 / 被 inline 掉），
     //   上面整段覆盖率叙述即刻失效 —— 那时这条会红并点名，逼人回来改它。
-    check("#199 覆盖率叙述的前提·三个新判据函数都还在代码里（改名即失效，逼人同批更新上面那段）",
-      refs("g2RealpathBatch") >= 2 && refs("g2TwoPhase") >= 3 && refs("g2TailCouldBeLive") >= 2,
-      `batch=${refs("g2RealpathBatch")} twoPhase=${refs("g2TwoPhase")} tail=${refs("g2TailCouldBeLive")}`);
+    //   ⚠ 2026-08-09（#214）：`g2TwoPhase` 已改名 `g2Phases`（它跑三相了），本条当场红过一次。
+    check("#199/#214 覆盖率叙述的前提·这几个判据函数都还在代码里（改名即失效，逼人同批更新上面那段）",
+      refs("g2RealpathBatch") >= 2 && refs("g2Phases") >= 3 && refs("g2TailCouldBeLive") >= 2 &&
+      refs("g2ShortExpand") >= 2 && refs("g2Starved") >= 2,
+      `batch=${refs("g2RealpathBatch")} phases=${refs("g2Phases")} tail=${refs("g2TailCouldBeLive")} ` +
+      `expand=${refs("g2ShortExpand")} starved=${refs("g2Starved")}`);
   }
 
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
