@@ -775,21 +775,26 @@ console.log("\n=== #171 · F1：compareWithDb 的 live vs DB 腿——端到端�
     d.snapVsDb.filter((f) => f.tier === "hard").length === 0, JSON.stringify(d.snapVsDb));
 }
 
-console.log("\n=== #171 · F2：compareWithDb 的 快照 vs DB 腿——端到端（另一个此前零覆盖的调用点）===");
+console.log("\n=== #171 · F2：compareWithDb 的 快照 vs DB 腿——端到端（另一个此前零覆盖的调用点，且与 live 那条腿方向不同）===");
 {
+  // 刻意让 live 与快照在这个 hook 上不对称：live 与 DB 一致（都有），快照独缺——
+  // 这样正确实现下 drift 只该出现在 snapVsDb 那条腿，liveVsDb 必须保持干净。
+  // 这不是同一条差异在两条腿上各出现一次（那样调换两条腿的返回值也测不出来）。
+  const live = liveEquivalent();
+  live.hooks.UserPromptSubmit = [{ hooks: [{ type: "command", command: 'node "' + REPO.replace(/\\/g, "/") + '/ccswitch/hooks/dao-rhythm.js"', timeout: 10 }] }];
   const dbObj = snapClaude();
   dbObj.hooks.UserPromptSubmit = [{ hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-rhythm.js"', timeout: 10 }] }];
-  const { livePath, snapPath } = writeDbFixturePair(liveEquivalent(), snapClaude());
+  const { livePath, snapPath } = writeDbFixturePair(live, snapClaude());
   const d = await lib.compareWithDb({
     selectRows: () => [{ value: JSON.stringify(dbObj) }],
     livePath, snapshotPath: snapPath,
   });
   const svd = d.snapVsDb.filter((f) => f.tier === "hard");
-  check("F2 · DB 独有 dao hook（快照没有）→ snapVsDb 出现硬发现",
+  check("F2 · 快照独缺、DB 有的 dao hook → snapVsDb 出现 SNAP_ONLY 硬发现",
     svd.some((f) => f.kind === "SNAP_ONLY" && f.id === "hook:dao-rhythm.js"), JSON.stringify(svd));
   const lvd = d.liveVsDb.filter((f) => f.tier === "hard");
-  check("F2 · 同一处 DB 独有 hook 在 live vs DB 那条腿上也感知得到（两条腿各自独立算，互不遮蔽）",
-    lvd.some((f) => f.kind === "SNAP_ONLY" && f.id === "hook:dao-rhythm.js"), JSON.stringify(lvd));
+  check("F2 · 同一处差异不泄漏进 live vs DB 那条腿（live 本就有这个 hook，两条腿必须独立归因）",
+    !lvd.some((f) => f.id === "hook:dao-rhythm.js"), JSON.stringify(lvd));
 }
 
 console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一化后一个字都不剩）===");
@@ -810,12 +815,16 @@ console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一�
   });
   check("F3 前提 · 归一化确实把这批差异吃掉了（liveVsDb 零硬报——不这样本节其余断言就没有判别力）",
     d.liveVsDb.filter((f) => f.tier === "hard").length === 0, JSON.stringify(d.liveVsDb));
-  check("F3 前提 · compareWithDb 把三侧根都带出（结构前提，缺了它下面几条会读 undefined 而不是判红）",
-    Array.isArray(d.roots && d.roots.live) && Array.isArray(d.roots && d.roots.snap) && Array.isArray(d.roots && d.roots.db),
-    JSON.stringify(d.roots));
+  // 复用 D1 立下的取值器（同一个「结构前提先判、判的方式是红不是崩」的问题，这里是
+  // compareWithDb 的 roots 字段，与 detect() 的 roots 字段同名同形——D1 的教训是
+  // 「此前每处都直读 r.roots.live，一旦不再返回就 TypeError 终止整个进程，后面用例一条
+  // 不跑」，本节若直读 d.roots.db 会原样复发那个坑（本批自验时已实测踩中，故改用它）。
+  const dbRootsLive = rootsSideOf(d, "live"), dbRootsSnap = rootsSideOf(d, "snap"), dbRootsDb = rootsSideOf(d, "db");
+  check("F3 前提 · compareWithDb 把三侧根都带出（结构前提，缺了它下面几条会判红而不是 TypeError 终止整段）",
+    dbRootsLive !== null && dbRootsSnap !== null && dbRootsDb !== null, JSON.stringify(d.roots));
   check("F3 前提 · DB 侧的根确实与 live/快照不同（夹具前提，越过这条线下面的断言才有判别力）",
-    d.roots.db.length === 1 && d.roots.db[0].toLowerCase() === OTHER_ROOT &&
-    d.roots.live.length === 1 && d.roots.live[0].toLowerCase() !== OTHER_ROOT,
+    !!dbRootsDb && dbRootsDb.length === 1 && dbRootsDb[0].toLowerCase() === OTHER_ROOT &&
+    !!dbRootsLive && dbRootsLive.length === 1 && dbRootsLive[0].toLowerCase() !== OTHER_ROOT,
     JSON.stringify(d.roots));
 
   const lines = lib.dbReportLines(d);
