@@ -29,17 +29,36 @@
 // 笔2 两行「仓库根」报文槽位错位零红：旧断言只查 `line.includes(A) && line.includes(B)`，
 // 两个路径对调槽位（D4/D5）照样通过。改用槽位捕获比对（正则切出 `live=`/`快照=`/`DB=`
 // 各自的值再逐槽核对），槽位对调时精确落红。
+//
+// ── issue #233（PR #229 对抗评论 5230750242 · B5-B8/D4b/arity）：三处盲区，接续 #219 ──
+// ① `main()` 的 `--db` 分支端到端接线仍是 0 覆盖：compareWithDb/printReport/dbReportLines
+// 生产调用点各 1、此前端到端覆盖各 0；resolveSqliteSelectRows「谁在用它」同样零覆盖
+// （把兜底整个换掉 W1 / 调了但结果不消费 W2，targeted 套两种改法都是 0 条红）。改法：
+// USERPROFILE 重定向 + fixture sqlite（同型先例 tests/provider-hooks-drift.tests.js:450），
+// 见下方「B5-B8」小节，DB 里塞一个 live/快照都没有的唯一标记，标记若真流过
+// selectRows→compareWithDb→dbReportLines→stdout 才算真接线（弱信号「header 打出来了」
+// 治不了 W1/W2，标记是否出现才是「返回值真被消费」的强信号）。
+// ② `dbReportLines` 三个槽位（live/快照/DB）只有两两对调中的两种被 mutation 夹住（D4：
+// live/DB 对调；D5 属 reportLines 的 live/快照 对调），第三种组合（dbReportLines 内部
+// live↔快照 对调）此前零红——根因是 F3 那份 fixture 里 live 根与快照根取的是同一个值，
+// 两槽互换在行为上不可区分。改法：让快照侧的 dao hook 指向第三个不同于 live/DB 的根。
+// ③ `selectRows` 的 arity 断言（`fn.length === 1`）两个方向都不准：加一个带默认值的第三
+// 参数（ARa）不会被抓到（`function.length` 数的是第一个默认参数之前的形参数，是实现细节
+// 不是契约，这是结构性盲区，改比较运算符治不了）；去掉 where 的默认值（ARb）会误伤一个
+// 生产调用完全不受影响的等价重构。改法：`=== 1` 改 `>= 1`（治 ARb 误伤这半，可治）；
+// ARa 那半的真实契约保护改由下面新增的端到端 CLI 测试兜底（真调用形态比数形参个数准）。
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawnSync, execFileSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const HOME = (process.env.USERPROFILE || process.env.HOME || os.homedir()).replace(/\\/g, "/");
 const TMP = path.join(REPO, "_tmp", "settings-drift-tests");
 const STATE = path.join(TMP, "state");
 const SCAFFOLD_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-scaffold-check.js");
+const LIB = path.join(REPO, "ccswitch", "lib", "settings-drift.js");
 
 process.env.DAO_SETTINGS_DRIFT_STATE_DIR = STATE;
 process.env.DAO_SETTINGS_DRIFT_SELFTEST = "1";
@@ -54,7 +73,7 @@ const SECRET = "__CONFIG_SYNC_SECRET__";
 
 const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
 
-let pass = 0, fail = 0, defer = 0;
+let pass = 0, fail = 0, defer = 0, skip = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
@@ -63,6 +82,11 @@ function deferSection(name, why) {
   defer++;
   console.log(`  DEFER ${name}  ->  ${why}`);
 }
+// sqlite3 不在时怎么办（issue #233 B5-B8 端到端层用）：找不到就跳过并计入 SKIP 且大声打印，
+// 不静默当成通过——「跑不了」和「跑了且过了」必须分得开，同 provider-hooks-drift.tests.js 惯例。
+// 独立于上面 defer/@dao-test-tier 那套契约：这里跳过的理由是工具缺失，不是「机器级可变状态」，
+// 不吃 --env 也治不了，所以走另一个计数器，不借用 DEFER 语义。
+function skipped(name, why) { skip++; console.log(`  SKIP  ${name}  →  ${why}`); }
 const DEFER_WHY_DB_DEFAULTS = "碰真实 ~/.claude/settings.json（机器级可变状态，只读不写）。跑它：node tests/settings-drift.tests.js --env";
 
 // ── fixture ────────────────────────────────────────────────────────────────
@@ -801,14 +825,21 @@ console.log("\n=== #219 笔1（PR #218 对抗官 B1/B2）：sqlite.mjs 真实导
     typeof fn === "function", typeof fn);
   // 便宜堵法原话写的是「arity 2」——本机实测有出入：selectRows(tableName, where='') 的
   // 第二个参数带默认值，JS 的 function.length 在遇到默认参数处截断计数，真实 arity 是 1，
-  // 不是 2（node -e 直接验证过，不照抄未经核验的数字，[#官通-查前提]）。这里按实测校正，
-  // 断言的是「function.length 恰好等于 1」这个实现细节，不是「至少接收 1 个必填参数」的
-  // 契约（PR #229 对抗评论 5230750242 订正：原注释与 `=== 1` 的实际语义不符——`=== 1`
-  // 挡不住将来给 selectRows 加第三个带默认值的参数，`>= 1` 才是那句话该断言的东西；断言
-  // 判别力两向的缺口 [ARa 加参数漏 / ARb 去默认值误伤] 已挂账 issue #233，本批不改断言
-  // 语义，只把注释改成与代码相符的实话）。
-  check("selectRows 的 arity 是 1（生产签名 selectRows(tableName, where='')；已用 node 实测校正，不是便宜堵法原文写的 2）",
-    typeof fn === "function" && fn.length === 1, fn && fn.length);
+  // 不是 2（node -e 直接验证过，不照抄未经核验的数字，[#官通-查前提]）。
+  // issue #233（PR #229 对抗评论 5230750242 ARa/ARb）：`function.length` 数的是「第一个默认
+  // 参数之前有几个形参」，是实现细节不是契约，且有一个**结构性**盲区——给 selectRows 加第三个
+  // 带默认值的参数（ARa）不会改变 .length（仍是 1），这条断言**无论写 === 1 还是 >= 1** 都
+  // 看不见这类静默加参数，改比较运算符治不了那半。但两向不是对称的坏：`=== 1` 还会**误伤**一个
+  // 行为完全不变的等价重构——把 where 的默认值摘掉（ARb）后 .length 变成 2，`=== 1` 当场判红，
+  // 而生产调用方 :1916 本来就传 2 个实参、行为分毫未变。这半是可治的：改成 `>= 1`，「至少 1 个
+  // 必填参数」这句注释从此与断言真实语义一致（PR #229 当时只改了注释、断言语义未动，误伤缺口
+  // 原样留到本批）。ARa 那半的结构性盲区不靠这条断言治——真正兜住「production 调用形态是否
+  // 还立得住」的是下面新增的端到端 CLI 测试（issue #233 B5-B8）：它真的用生产调用形状
+  // `selectRowsFn(table, where)` 打一次真实（fixture）DB，resolveSqliteSelectRows() 的返回值
+  // 若因签名变化而用不起来，那条测试会直接看见错误的报文/取不到数据，比数形参个数更贴近
+  // 「契约有没有破」。
+  check("selectRows 至少接收 1 个必填参数（生产签名 selectRows(tableName, where='')；`>= 1` 才是这句话该断言的真实语义——`=== 1` 会误伤摘掉 where 默认值这类行为不变的重构，issue #233 ARb）",
+    typeof fn === "function" && fn.length >= 1, fn && fn.length);
 }
 
 console.log("\n=== #219 笔1（PR #218 对抗官 B3/B4）：livePath/snapshotPath 省略时是否真落到生产默认值 ===");
@@ -903,6 +934,15 @@ console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一�
   const live = liveEquivalent();
   const snap = snapClaude();
   const swap = (c) => c.replace(new RegExp(REPO.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), OTHER_ROOT);
+  // issue #233 D4b（PR #229 对抗评论 5230750242）：此前 live 根与快照根取的是同一个值（都是
+  // REPO，快照侧的 ${PROJECT_ROOT} 展开后就是 REPO），dbReportLines 内部 live=/快照= 两槽
+  // 互换在行为上不可区分——第三种对调组合零红。让快照侧的 dao hook 改指第三个既不等于 REPO
+  // 也不等于 OTHER_ROOT 的根（不走占位符，直接写字面量，与下面 dbObj 的 OTHER_ROOT 手法同构），
+  // 三侧互不相同后，任意两槽互换都能落红。
+  const SNAP_THIRD_ROOT = "d:/frank/wd-snap-archaeology";
+  snap.hooks.SessionStart[0].hooks[0].command = snap.hooks.SessionStart[0].hooks[0].command.split(PH_PROJECT).join(SNAP_THIRD_ROOT);
+  snap.hooks.SessionStart[1].hooks[0].command = snap.hooks.SessionStart[1].hooks[0].command.split(PH_PROJECT).join(SNAP_THIRD_ROOT);
+  snap.hooks.PostToolUse[0].hooks[0].command = snap.hooks.PostToolUse[0].hooks[0].command.split(PH_PROJECT).join(SNAP_THIRD_ROOT);
   // DB 以 live 同构起手（真实 DB 导出内容含字面绝对路径这一形态合法），
   // 但三个 dao hook 全部指向另一个 checkout ——「DB 曾从 worktree export 过」的事故形状。
   const dbObj = liveEquivalent();
@@ -927,6 +967,12 @@ console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一�
     !!dbRootsDb && dbRootsDb.length === 1 && dbRootsDb[0].toLowerCase() === OTHER_ROOT &&
     !!dbRootsLive && dbRootsLive.length === 1 && dbRootsLive[0].toLowerCase() !== OTHER_ROOT,
     JSON.stringify(d.roots));
+  // issue #233 D4b 前提：live/快照 两根也必须互不相同（此前二者都是 REPO），
+  // 不这样下面「快照= 槽」的断言就没有判别力——两槽互换时两边打印的都会是 REPO，测不出对调。
+  check("F3 前提 · 快照侧的根与 live 侧不同（issue #233 D4b 前提，此前两者取的是同一个值）",
+    !!dbRootsSnap && dbRootsSnap.length === 1 && dbRootsSnap[0].toLowerCase() === "d:/frank/wd-snap-archaeology" &&
+    !!dbRootsLive && dbRootsLive[0].toLowerCase() !== dbRootsSnap[0].toLowerCase(),
+    JSON.stringify(d.roots));
 
   const lines = lib.dbReportLines(d);
   check("F3 · dbReportLines 打出「仓库根」行（此前 --db 这一面完全没有这行，归一化吃掉的根就此无处可查）",
@@ -940,8 +986,12 @@ console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一�
   const repoLower = REPO.replace(/\\/g, "/").toLowerCase();
   check("F3 · 槽位不对调：「live=」槽是 live 自己的根，不是 DB 的根（D4 变体：live=/DB= 两槽对调时钉这里）",
     !!f3Slots && f3Slots[1].toLowerCase() === repoLower, JSON.stringify(f3Slots));
-  check("F3 · 槽位不对调：「快照=」槽是快照自己的根，不是 DB 的根",
-    !!f3Slots && f3Slots[2].toLowerCase() === repoLower, JSON.stringify(f3Slots));
+  // issue #233 D4b：此前这条断言的是 f3Slots[2] === repoLower（快照根此前恰好也是 REPO），
+  // 于是 dbReportLines 内部把「快照=」与「live=」两槽互换打印，这条断言照样为真（两边都是
+  // REPO）——第三种对调组合零红。改为断言快照侧真正独有的第三根，live↔快照 互换时
+  // f3Slots[1] 会变成快照根、f3Slots[2] 会变成 live 根，两条断言各自落红。
+  check("F3 · 槽位不对调：「快照=」槽是快照自己的根，不是 live 或 DB 的根（issue #233 D4b：live/快照 两槽互换时钉这里）",
+    !!f3Slots && f3Slots[2].toLowerCase() === "d:/frank/wd-snap-archaeology", JSON.stringify(f3Slots));
   check("F3 · 槽位不对调：「DB=」槽真的是 DB 自己的根，不是 live 的根（D4 变体：live=/DB= 两槽对调时钉这里）",
     !!f3Slots && f3Slots[3].toLowerCase() === OTHER_ROOT, JSON.stringify(f3Slots));
 }
@@ -957,14 +1007,141 @@ console.log("\n=== #171 · DB 面错误可见性：selectRows 零行时不静默
     threw instanceof Error && /common_config_claude/.test(threw.message), threw && threw.message);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// issue #233 · B5-B8：main() 的 --db 分支端到端接线（USERPROFILE 重定向 + fixture sqlite，
+// 绝不碰真实 cc-switch DB）
+// ── PR #229 对抗评论 5230750242 证伪了「只能真跑命令行撞生产 DB」这句挂账理由：本节改真——
+// USERPROFILE（Windows 上 os.homedir() 与本文件的 HOME 都吃它，本机 Node v24.13.1 实测）
+// 重定向到一个只有测试自己知道的假家目录，那里放一个真的 fixture sqlite 文件，
+// 全程零风险地把 main() 的 --db 分支真跑一遍。同型先例见
+// tests/provider-hooks-drift.tests.js:450「绝不碰真实 cc-switch DB」那一节，sqlite3 不在时
+// 同样降级为 SKIP（大声打印，不静默当通过）。
+// 补的是此前端到端覆盖为 0 的三处（B5 compareWithDb :2028 / B6 printReport :2023 /
+// B7 dbReportLines :2029），以及 resolveSqliteSelectRows「谁在用它」同样零覆盖的那半——
+// 单元测（上面 B1/B2 那节）只证明了「拿到一个叫 selectRows 的真函数」，证不了 main() 真的
+// 拿它的返回值做了事：W1（把兜底整个换掉）、W2（调了但结果不消费）两种改法在 targeted 套
+// 上都是 0 条红。本节的判别信号不是「报头打出来了」（那只证明代码走到了那一行，W1/W2 下报头
+// 照样打得出来），而是「DB 里塞的一个 live/快照都没有的唯一标记，真的流过
+// selectRows→compareWithDb→dbReportLines→stdout」——这是「返回值真被消费」的强信号。
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== issue #233 · B5-B8：main() 的 --db 分支端到端接线 ===");
+{
+  let sqlite3Path = null;
+  try {
+    const mod = await import("file://" + path.join(REPO, "config-sync", "lib", "sqlite.mjs").replace(/\\/g, "/"));
+    sqlite3Path = mod.findSqlite3();
+  } catch (e) {
+    sqlite3Path = null;
+    console.log(`  ⚠ 找不到 sqlite3（${e && e.message ? e.message : e}）—— B5-B8 端到端层整块跳过，**这不等于通过**`);
+  }
+
+  if (!sqlite3Path) {
+    for (const n of [
+      "B5-B8 端到端 · reportLines 报头真的打出来了（B6：printReport 真被 main() 调用）",
+      "B5-B8 端到端 · dbReportLines「三方」报头真的打出来了（B5/B7：compareWithDb 与 dbReportLines 真被 --db 分支调用）",
+      "B5-B8 端到端 · fixture DB 里的唯一标记流过 selectRows→compareWithDb→dbReportLines→stdout（W1/W2 的共同判别点）",
+      "B5-B8 端到端 · CLI 未整体崩溃（stderr 不含未捕获异常标记）",
+      "B5-B8 对照组 · 家目录没有 fixture DB 时 --db 分支 fail-closed（证明上一条不是巧合读到真库）",
+      "B5-B8 对照组 · fail-closed 时正控标记不出现（两态必须真的分得开）",
+    ]) skipped(n, "sqlite3 不可用");
+  } else {
+    const dbTmp = path.join(TMP, "cli-db");
+    fs.rmSync(dbTmp, { recursive: true, force: true });
+    fs.mkdirSync(dbTmp, { recursive: true });
+
+    // "settings" 表最小可用形态：main() 的 --db 分支走 selectRows('settings',
+    // "WHERE key='common_config_claude'")，取的就是 key/value 两列（真实生产表结构见
+    // config-sync/lib/doctor.mjs:64 同款查询）。
+    function makeSettingsDb(file, rows) {
+      const stmts = ['CREATE TABLE "settings" ("key" TEXT PRIMARY KEY, "value" TEXT);'];
+      for (const r of rows) {
+        const lit = (v) => `'${String(v).split("'").join("''")}'`;
+        stmts.push(`INSERT INTO "settings" ("key","value") VALUES (${lit(r.key)}, ${lit(r.value)});`);
+      }
+      execFileSync(sqlite3Path, [file], { input: stmts.join("\n"), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    }
+
+    // 精简版 live 对象：不需要与真实 config-sync/common/settings.json 逐字段对齐
+    // （那是走 detect() 的 live↔快照 那一面，本节只关心 --db 那一面真的用了 DB 里的数据），
+    // 但要包含至少一个能通过 daoScriptOf 归属判据的 dao hook，DB 侧多出的标记才有对照。
+    function fixtureLive() {
+      const P = REPO.replace(/\\/g, "/");
+      return {
+        env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5" },
+        permissions: { deny: ["Bash(grep:*)"], allow: ["Read"], defaultMode: "default" },
+        hooks: {
+          SessionStart: [{ matcher: "startup", hooks: [
+            { type: "command", command: 'node "' + P + '/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
+          ] }],
+        },
+      };
+    }
+
+    function runDbCli(homeDir, stateDirForRun) {
+      const r = spawnSync(process.execPath, [LIB, "--db", "--no-rule-echo"], {
+        encoding: "utf8", cwd: REPO,
+        env: Object.assign({}, process.env, {
+          USERPROFILE: homeDir, HOME: homeDir,
+          DAO_SETTINGS_DRIFT_STATE_DIR: stateDirForRun,
+          DAO_SETTINGS_DRIFT_SELFTEST: "1",
+        }),
+      });
+      return { code: r.status, out: String(r.stdout || ""), err: String(r.stderr || "") };
+    }
+
+    const MARKER = "dao-e2e-wiring-marker.js";
+    const REAL_HOME = (process.env.USERPROFILE || process.env.HOME || os.homedir());
+
+    // ── 正控：家目录里放一个真的 fixture sqlite，common_config_claude 里塞一个 live 没有
+    //   的唯一标记 hook ──────────────────────────────────────────────────────
+    const dbHome = path.join(dbTmp, "home-with-db");
+    fs.mkdirSync(path.join(dbHome, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(dbHome, ".cc-switch"), { recursive: true });
+    fs.writeFileSync(path.join(dbHome, ".claude", "settings.json"), JSON.stringify(fixtureLive(), null, 2), "utf8");
+    const dbObjWithMarker = fixtureLive();
+    dbObjWithMarker.hooks.SessionStart[0].hooks.push({
+      type: "command", command: 'node "' + REPO.replace(/\\/g, "/") + '/ccswitch/hooks/' + MARKER + '"', timeout: 10,
+    });
+    makeSettingsDb(path.join(dbHome, ".cc-switch", "cc-switch.db"),
+      [{ key: "common_config_claude", value: JSON.stringify(dbObjWithMarker) }]);
+
+    const r1 = runDbCli(dbHome, path.join(dbTmp, "state-with-db"));
+    check("B5-B8 端到端 · reportLines 报头真的打出来了（B6：printReport 真被 main() 调用，不是被拆掉/短路）",
+      /\[settings-drift\] live ↔ git 快照/.test(r1.out), r1.out.slice(0, 300));
+    check("B5-B8 端到端 · dbReportLines「三方」报头真的打出来了（B5/B7：compareWithDb 与 dbReportLines 真被 --db 分支调用）",
+      /── 三方（DB 为真源）──/.test(r1.out), r1.out.slice(0, 600));
+    check("B5-B8 端到端 · fixture DB 里的唯一标记流过 selectRows→compareWithDb→dbReportLines→stdout（W1/W2 的共同判别点：兜底被换掉或结果被丢弃，这个标记都不会出现）",
+      r1.out.includes(MARKER), r1.out);
+    check("B5-B8 端到端 · CLI 未整体崩溃（stderr 不含未捕获异常标记，main() 的 catch(e) 兜底没被撞到）",
+      !/CLI 异常/.test(r1.err), r1.err.slice(0, 300));
+
+    // ── 对照组：家目录没有 fixture DB。证明上一条不是巧合读到了真实 cc-switch DB
+    //   （[#官抗-基线是活的]，同型先例：PR #229 对抗评论 5230750242 的「假路径」验证法：
+    //   报错里带得出假家目录、带不出真实 USERPROFILE，才坐实重定向真的生效）───────────
+    const noDbHome = path.join(dbTmp, "home-without-db");
+    fs.mkdirSync(path.join(noDbHome, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(noDbHome, ".claude", "settings.json"), JSON.stringify(fixtureLive(), null, 2), "utf8");
+    const r2 = runDbCli(noDbHome, path.join(dbTmp, "state-without-db"));
+    check("B5-B8 对照组 · 家目录没有 fixture DB 时 --db 分支 fail-closed（exit 2，报错指向假家目录、不指向真实 USERPROFILE）",
+      r2.code === 2 && /找不到 cc-switch 数据库/.test(r2.err) &&
+      r2.err.toLowerCase().includes("home-without-db") &&
+      !r2.err.toLowerCase().includes(REAL_HOME.toLowerCase()),
+      `code=${r2.code} err=${r2.err.slice(0, 400)}`);
+    check("B5-B8 对照组 · fail-closed 时正控标记不出现（两态必须真的分得开，不是两次都巧合读到同一处）",
+      !r2.out.includes(MARKER), r2.out.slice(0, 300));
+  }
+}
+
 }
 
 runAsyncSuite().then(() => {
-  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} SKIP=${skip} ===`);
+  if (skip > 0) console.log("  ⚠ 有跳过项：跳过不是通过，上面每条 SKIP 都写了原因（sqlite3 不可用）");
   process.exit(fail ? 1 : 0);
 }).catch((e) => {
   fail++;
   console.error("[settings-drift.tests] 异步测试段异常（未被内部 try/catch 接住）：", e && e.stack ? e.stack : e);
-  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} SKIP=${skip} ===`);
+  if (skip > 0) console.log("  ⚠ 有跳过项：跳过不是通过，上面每条 SKIP 都写了原因（sqlite3 不可用）");
   process.exit(1);
 });

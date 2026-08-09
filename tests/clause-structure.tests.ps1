@@ -1224,6 +1224,145 @@ $oddLine
         }
     }.Invoke()
 
+    # ══════════════════════════════════════════════════════════════════════
+    # issue #226①：观察区并集判据 $obsWithField 此前零覆盖
+    #
+    # 出处：PR #224 对抗验证官 F2——把 `$obsWithField = @($observing | Where-Object
+    # { $_.HasField -or $_.LedgerBacked })`（ps1:1983）改回只读 `$_.HasField`（相当于撤销
+    # 这一行「也看台账回填记录」这层意思），全套 192 条断言一条不红。这里补的正是那条能红
+    # 的断言：造一条**仅 slug**的观察区候选（台账 n>=2，该升格），未变异时进得了「⬆ 待升格」
+    # 栏、marker 的 `promote=` 非零；退回只读 `HasField` 后它就从待升格栏与 marker 里消失。
+    Write-Host "`n=== v4：观察区并集判据 `$obsWithField` 要能红（mutation——退回只读 HasField，issue #226①/PR #224 F2）==="
+    {
+        $anchor = '$obsWithField = @($observing | Where-Object { $_.HasField -or $_.LedgerBacked })'
+        $mutant = New-MutantChecker -Name 'obs-union-blindspot' -Edits @(
+            @{ From = $anchor; To = '$obsWithField = @($observing | Where-Object { $_.HasField })' }
+        )
+        Check '锚点命中（改法真的落进了变异体里，不是空跑一次原文件）' ($mutant.Applied -eq 1) "Applied=$($mutant.Applied)"
+
+        # 先验变异体还活着：无关合法夹具上仍 exit 0（判据变化不是靶死了）。
+        $canary = Invoke-Checker -File (New-Fixture (Base-Body)) -Script $mutant.Path
+        Check 'canary：变异体在无关夹具上仍 exit 0（判据变化不是靶死了）' ($canary.Exit -eq 0) "exit=$($canary.Exit) / $($canary.Text)"
+
+        # ⚠ 不放一条"无 slug 的正常条款"进来（早期版本这么写过、被本组自己的断言抓到）：
+        # 一旦本文件里出现任意一个 slug，$ledgerActive 就变 true，检查 6 的双向对账
+        # 会**对本文件里的每一条记录**都要求带 slug——无 slug 的行会被判 missing-slug、
+        # 拖累 exit 变 1，而这与本组要测的东西无关，是夹具设计的坑不是被测逻辑的坑。
+        $d3 = Get-MonthDay 3
+        $body = @"
+# 测试条款库
+
+## 观察区（判断类候选 · 复发即升格）
+
+- **仅 slug 的观察区候选，台账已复发两次**：判据正文。 [#测-观察回落] [观察中]
+"@
+        $f = New-Fixture $body
+        $leaf = Split-Path -Leaf $f
+        $ledger = New-LedgerFile -Entries ([ordered]@{
+            '测-观察回落' = New-LedgerEntry -File $leaf -N '2' -FirstSeen $d3 -Trigger '无'
+        })
+
+        $fixed  = Invoke-Checker -File $f -Ledger $ledger -RetireListMax 0
+        $broken = Invoke-Checker -File $f -Ledger $ledger -RetireListMax 0 -Script $mutant.Path
+
+        Check '正靶：未变异的守卫把仅 slug、台账 n=2 的观察项算进待升格（⬆ 待升格（n>=2）：1 条）' `
+            ($fixed.Text -match '⬆ 待升格（n>=2）：1 条' -and $fixed.Text -match 'promote=1') $fixed.Text
+        Check '盲区退回：marker 的 promote= 归零（唯一台账数据的这条观察项，待升格栏看不见了）' `
+            ($broken.Text -match 'promote=0') $broken.Text
+        Check '盲区退回：⬆ 待升格（n>=2）栏归零（走的仍是有输出的分支，只是数字变了——与条款区 $withField 归零时整段消失是两种失明形态，这里钉的是这一种）' `
+            ($broken.Text -match '⬆ 待升格（n>=2）：0 条') $broken.Text
+        Check '负控：退出码不受影响（观察线不进退出码，两态都应 exit 0）' `
+            ($fixed.Exit -eq 0 -and $broken.Exit -eq 0) "fixed=$($fixed.Exit) broken=$($broken.Exit)"
+    }.Invoke()
+
+    # ══════════════════════════════════════════════════════════════════════
+    # issue #226③：Set-LedgerBackedFields 的调用次序边界——「目前无人依赖，是防御性次序」
+    #
+    # 出处：PR #224 对抗验证官实测证伪原文断言「先回填会让对账恒真」——把调用挪到
+    # Test-ClausesStructure 之前跑，真实 dao.md 输出逐字节相同，全套断言不红；头注因此改写成
+    # 「防御性次序，不是恒真的必要条件」，但没有任何断言钉住它到底在防什么。issue #226③ 给
+    # 的是两选一：要么给这条边界配一条「次序真的开始承重」的断言，要么承认不值得维护、删掉
+    # 头注那段话。这里选前者。
+    #
+    # 为什么不能直接拿 n/first_seen 造这条断言：Set-LedgerBackedFields 把 $c.N / $c.MonthDay
+    # **原样**从台账抄过来（ps1:843-845），检查 6 若也读台账的同一个值去比，比的是「一个数
+    # 与它自己的副本」——数学上不可能不等，这正是头注「台账 vs 台账、恒真」描述的那个坑，
+    # 本组绕不过去（也不该假装绕过去，那会是另一种「凑出来的红」）。
+    # Trigger **不在**回填范围内（Set-LedgerBackedFields 头注明写「刻意不回填 Trigger」）：
+    # 拿它做「检查 6 改按值判断」的最小模拟件，两边比的就不是同一份数据——Mine 仍是行内原始
+    # $c.Trigger（仅 slug 条目上恒为 $null），Theirs 是台账真实 trigger，只要台账非空就真会
+    # 不等。这才是一条能验证「次序变了、行为真的跟着变」的断言，不是巧合凑出来的红。
+    Write-Host "`n=== v4：次序边界『目前无人依赖』要能被验证——检查 6 一旦改按值判断，次序就该开始承重（issue #226③）==="
+    {
+        # 锚点动态抽取（不手写空格对齐）：三个字段对齐用的空格数不固定，手抄一份很容易抄错、
+        # 抄错了 .Contains() 恒不命中，变异体等于原文——同 dao-guard-writing「锚点必须扛得住
+        # 差异」那条要防的病，这里从源文件里现读现切，保证锚点字节级来自被测对象本身。
+        $srcNow = [System.IO.File]::ReadAllText($Checker, [System.Text.Encoding]::UTF8)
+        $triggerMatch = [regex]::Match($srcNow, "@\{ Name = 'trigger';[^\r\n]*\},")
+        Check '锚点抽取前提：trigger 字段对在源码里唯一存在（抽不到，下面全组失去意义）' `
+            $triggerMatch.Success 'zero match'
+        $anchorTrigger = $triggerMatch.Value
+        # 用 .Replace（字面替换，不是 -replace 正则）避免替换串里的 $c / $hasMeta 被当成
+        # .NET regex 替换语法里的命名组引用误解析。
+        $mutatedTrigger = $anchorTrigger.Replace('Present = $hasMeta;', 'Present = ($hasMeta -or [bool]$c.LedgerBacked);')
+        Check '锚点替换前提：替换真的改了字符串（不是误命中打了个转身空过）' `
+            ($mutatedTrigger -ne $anchorTrigger) $mutatedTrigger
+
+        $anchorCall    = 'Set-LedgerBackedFields -Records $allRecords -Ledger $ledgerEntries -LedgerUsable $ledgerUsable'
+        $anchorOrder   = '$ledgerUsable = ($ledgerActive -and $ledgerDoc.Ok)'
+        $insertedOrder = $anchorOrder + "`r`n" + $anchorCall
+
+        # 「原地」变异体：只把检查 6 的 trigger 对账改成按值判断，调用次序原封不动。
+        $mutInOrder = New-MutantChecker -Name 'order-boundary-inorder' -Edits @(
+            @{ From = $anchorTrigger; To = $mutatedTrigger }
+        )
+        # 「重排」变异体：同一处按值判断改法 + 把回填调用挪到 Test-ClausesStructure 之前
+        # （逐字复现 PR #224 对抗验证官的 M1）。**移走在前、插入在后**——顺序颠倒会让
+        # "移走" 那条编辑把刚插入的第二份调用一并吃掉（New-MutantChecker 逐条顺序执行）。
+        $mutReordered = New-MutantChecker -Name 'order-boundary-reordered' -Edits @(
+            @{ From = $anchorTrigger; To = $mutatedTrigger },
+            @{ From = $anchorCall;    To = '' },
+            @{ From = $anchorOrder;   To = $insertedOrder }
+        )
+        Check '「原地」变异体：只改比较逻辑，锚点命中 1 处' ($mutInOrder.Applied -eq 1) "Applied=$($mutInOrder.Applied)"
+        Check '「重排」变异体：比较逻辑 + 挪走原调用 + 插入新位置，锚点命中 3 处' ($mutReordered.Applied -eq 3) "Applied=$($mutReordered.Applied)"
+
+        # 先验两个变异体都还活着：无关合法夹具上仍 exit 0（这组本身不含 -Ledger，check 6
+        # 不会激活，验的只是「解释器没被这刀捅死」，与其余 mutation 组的 canary 同一用法）。
+        $canary1 = Invoke-Checker -File (New-Fixture (Base-Body)) -Script $mutInOrder.Path
+        $canary2 = Invoke-Checker -File (New-Fixture (Base-Body)) -Script $mutReordered.Path
+        Check 'canary：「原地」变异体在无关夹具上仍 exit 0' ($canary1.Exit -eq 0) "exit=$($canary1.Exit) / $($canary1.Text)"
+        Check 'canary：「重排」变异体在无关夹具上仍 exit 0' ($canary2.Exit -eq 0) "exit=$($canary2.Exit) / $($canary2.Text)"
+
+        # 被测夹具：一条仅 slug 的普通条款（不在观察区），台账 trigger='PR流程'（非空）、
+        # n/first_seen 齐全（回落的必要条件，见 Set-LedgerBackedFields 的两个非空判断）。
+        $d3 = Get-MonthDay 3
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **仅 slug、台账 trigger 非空**：判据正文。 [#测-次序边界]
+"@
+        $f = New-Fixture $body
+        $leaf = Split-Path -Leaf $f
+        $ledger = New-LedgerFile -Entries ([ordered]@{
+            '测-次序边界' = New-LedgerEntry -File $leaf -N '1' -FirstSeen $d3 -Trigger 'PR流程'
+        })
+
+        $inOrderRun   = Invoke-Checker -File $f -Ledger $ledger -Script $mutInOrder.Path
+        $reorderedRun = Invoke-Checker -File $f -Ledger $ledger -Script $mutReordered.Path
+
+        Check '正序（当前生产次序）：检查 6 跑到时回填还没发生，LedgerBacked 仍是 false ⇒ 按值判断的新分支不激活，exit 0' `
+            ($inOrderRun.Exit -eq 0) "exit=$($inOrderRun.Exit) / $($inOrderRun.Text)"
+        Check '🔴 重排（回填先跑）：检查 6 看见 LedgerBacked=true ⇒ 按值判断激活，Trigger 行内(空) vs 台账(PR流程) 真的不等，判红' `
+            ($reorderedRun.Exit -eq 1 -and $reorderedRun.Text -match 'ledger-mismatch' -and $reorderedRun.Text -match 'trigger 两轨不等') `
+            "exit=$($reorderedRun.Exit) / $($reorderedRun.Text)"
+        Check '次序真的开始承重了：同一份改法（检查 6 改按值判断），只挪调用顺序，结论就从 exit 0 翻到 exit 1' `
+            ($inOrderRun.Exit -ne $reorderedRun.Exit) `
+            "inOrder=$($inOrderRun.Exit) reordered=$($reorderedRun.Exit)"
+    }.Invoke()
+
 } finally {
     Remove-Item -Recurse -Force $TmpRoot -ErrorAction SilentlyContinue
 }
