@@ -964,6 +964,79 @@ console.log("\n=== 条款闸降级报文带「本次实测单次耗时」（issu
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== 条款闸 retire>0/promote>0 分支端到端（issue #226②：唯一消费方从未见过非零）===");
+// 病：clauseStructureLines() 解析 marker 的 retire=/promote= 字段后，只有它们 > 0 才会拼出
+// 「有 N 条够老了、该问一句"还有用吗"」这句用户可见提醒（dao-scaffold-check.js:812-816）。
+// 而本文件 issue #140 那组（见上方约 793 行）把桩脚本的 marker 写死成 retire=0 promote=0，
+// 此前没有任何测试让这条分支真的走一遍——「数字修好了」（PR #224 治的是 PS 那侧怎么算出
+// retire=）与「数字修好后真的能送到人眼前」（本 hook 怎么读、怎么拼这一行）是两件事，
+// 那半的回归网在 tests/clause-structure.tests.ps1，这里补的是这半。
+{
+  const cwd = mkMetaRepo("clause-retire-e2e", [`${REGISTERED}.js`]);
+  fs.mkdirSync(path.join(cwd, "ccswitch", "scripts"), { recursive: true });
+  // 桩脚本：不跑真 PowerShell 逻辑，只回吐一行固定 marker——本组要控的是「hook 怎么读这行」，
+  // 不是「PS 那边怎么算出这行」，手法与 issue #140 那组的桩脚本同构（见上方约 797 行）。
+  const stub = (retire, promote) => [
+    "param([string]$TargetFile, [string]$ClauseSelector)",
+    `Write-Output "CLAUSE_STRUCTURE_SUMMARY exit=0 clauses=5 violations=0 notrigger=0 retire=${retire} promote=${promote}"`,
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), stub(3, 2), "utf8");
+  fs.writeFileSync(path.join(cwd, "ccswitch", "dao.md"), "# fixture dao.md（桩脚本不读它，内容无所谓）\n", "utf8");
+
+  const c = ctx(run(cwd));
+  check("🔴 正控：retire=3 promote=2 真的送到用户可见提醒（此前这句话没人验证过它会出现）",
+    /有 3 条够老了、该问一句「还有用吗」，2 条观察区候选够格升格/.test(c), "ctx=" + c.slice(0, 700));
+  check("提醒里带着复核入口（观察线不是硬闸，读者要知道去哪看清单，不是只报个数字就完）",
+    /→ powershell -NoProfile -File ccswitch\/scripts\/check-clauses-structure\.ps1 看清单/.test(c) &&
+    /观察线不是硬闸/.test(c), "ctx=" + c.slice(0, 700));
+
+  // 负控①：只有 retire 非零、promote 仍为 0——两个字段独立可控（hook 判据是 `||`），
+  // 不是绑在一起的假信号；promote 那半仍照常拼出「0 条」而不是被静默吞掉。
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), stub(5, 0), "utf8");
+  const cRetireOnly = ctx(run(cwd));
+  check("负控①：retire=5 promote=0 仍触发提醒（|| 条件，不要求两者同时非零），且 0 条那半照常打印",
+    /有 5 条够老了、该问一句「还有用吗」，0 条观察区候选够格升格/.test(cRetireOnly),
+    "ctx=" + cRetireOnly.slice(0, 700));
+
+  // 负控②：同一份夹具树，marker 换成 retire=0 promote=0 ⇒ 提醒行不该出现，改回「绿」那条老路。
+  // 两态都要看到，不能只测正例（单向断言夹不住「判据被放宽」那个方向）。
+  fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), stub(0, 0), "utf8");
+  const c0 = ctx(run(cwd));
+  check("负控②：retire=0 promote=0 不触发「够老了」提醒",
+    !/条够老了/.test(c0) && !/该问一句「还有用吗」/.test(c0), "ctx=" + c0.slice(0, 700));
+  check("负控②：走的是「绿」那条老路（没有观察线待办可报）",
+    /条款库结构闸绿/.test(c0), "ctx=" + c0.slice(0, 700));
+
+  // ── mutation 自证：把判据从 `||` 改成 `&&`，证明「负控①」那条断言真的在夹这条判据，
+  // 不是巧合凑出来的绿（与 issue #226①③ 在 tests/clause-structure.tests.ps1 那两组同规格）。
+  {
+    const ANCHOR = "if (retire > 0 || promote > 0) {";
+    let anchorHit = false;
+    const mutantPath = mkTimingCleanHookCopy("clause-retire-mutant", (p) => {
+      const s = fs.readFileSync(p, "utf8");
+      anchorHit = s.split(ANCHOR).length === 2;
+      fs.writeFileSync(p, s.replace(ANCHOR, "if (retire > 0 && promote > 0) {"), "utf8");
+    });
+    check("mutation 锚点在源码里唯一存在", anchorHit, ANCHOR);
+
+    // 先验变异体还活着：正控场景（两者都非零）下 && 与 || 结果一致，先证明这刀没把
+    // hook 整个弄死（dao 对抗验证官节「先验变异体还活着」）。
+    fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), stub(3, 2), "utf8");
+    const canary = run(cwd, null, mutantPath);
+    check("canary：变异体在两者都非零的场景下仍 exit 0 且照常触发提醒（这刀没把它弄死）",
+      canary.code === 0 && /有 3 条够老了/.test(ctx(canary)), "ctx=" + ctx(canary).slice(0, 700));
+
+    // 换靶：retire=5 promote=0（负控①原本走「仍触发提醒」这条路）——&& 判据下应变绿。
+    fs.writeFileSync(path.join(cwd, "ccswitch", "scripts", "check-clauses-structure.ps1"), stub(5, 0), "utf8");
+    const mutated = run(cwd, null, mutantPath);
+    check("🔴 mutation：判据改成 && 后，retire=5 promote=0 不再触发提醒——证明负控①真的在夹 || 这条判据，不是巧合凑出来的绿",
+      mutated.code === 0 && !/条够老了/.test(ctx(mutated)) && /条款库结构闸绿/.test(ctx(mutated)),
+      "ctx=" + ctx(mutated).slice(0, 700));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 console.log("\n=== 🔴 lib 坏掉时不许整批静默消失（issue #127 的病，差点被本批自己复现）===");
 // 这一组是 2026-08-05 对抗验证**阻断 1** 的回归网。当时 `require("../lib/hook-budget")`
 // 是全文件第一个、且是唯一一个**裸** require（另外两个本地 require 都包着 try/catch，
