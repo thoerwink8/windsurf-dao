@@ -225,13 +225,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── 输出 ─────────────────────────────────────────────────────────────────────
-$script:Skipped = 0
+# （曾有一个 `$script:Skipped` 计数器只被 `Write-Skip` 自增、全脚本无任何读取点，
+#   3.5 步改成遍历清单后它每次还多加 1 —— 2026-08-09 PR #213 对抗官 F5 逮到，本批删除。
+#   要重新引入这类计数器，先给它一个消费方，否则它只是一个会漂移的死变量。）
 function Write-Step([string]$t) { Write-Host ''; Write-Host ("=== $t ===") -ForegroundColor Cyan }
 function Write-Ok([string]$t) { Write-Host ("  [完成] $t") -ForegroundColor Green }
 function Write-Plan([string]$t) { Write-Host ("  [将做] $t") -ForegroundColor Yellow }
 function Write-Note([string]$t) { Write-Host ("  [注意] $t") -ForegroundColor Yellow }
 function Write-Info([string]$t) { Write-Host ("         $t") -ForegroundColor DarkGray }
-function Write-Skip([string]$t) { $script:Skipped++; Write-Host ("  [跳过] $t") -ForegroundColor DarkGray }
+function Write-Skip([string]$t) { Write-Host ("  [跳过] $t") -ForegroundColor DarkGray }
 function Fail([string]$t, [int]$code) {
     Write-Host ("  [失败] $t") -ForegroundColor Red
     Write-Host ''

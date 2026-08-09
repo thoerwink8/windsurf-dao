@@ -380,6 +380,25 @@ function Invoke-Target {
 # 「走到第 6 步了吗」是本文件反复要问的那一句，抽成一个判据免得各处各写一版
 function Test-ReachedStep6 { param([string]$Text) return ($Text -match '===\s*6\.') }
 
+# 一棵目录树的逐文件内容签名（相对路径 + 长度 + SHA256），给「零副作用」类断言用。
+# 为什么不只比文件数或时间戳：**同名同长度改内容**是最容易被漏掉的那一种写入。
+# `-ExcludeDirs` 用来摘掉 `.git`（`git status` 会刷 index，那不是被测脚本的副作用）。
+function Get-TreeSignature {
+    param([string]$Root, [string[]]$ExcludeDirs = @())
+    if (-not (Test-Path -LiteralPath $Root)) { return '(missing)' }
+    $full = (Resolve-Path -LiteralPath $Root).Path
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($it in (Get-ChildItem -LiteralPath $full -Recurse -File -Force | Sort-Object FullName)) {
+        $rel = $it.FullName.Substring($full.Length).TrimStart('\', '/')
+        $skip = $false
+        foreach ($ex in $ExcludeDirs) { if ($rel -eq $ex -or $rel.StartsWith($ex + '\')) { $skip = $true; break } }
+        if ($skip) { continue }
+        $h = (Get-FileHash -LiteralPath $it.FullName -Algorithm SHA256).Hash
+        [void]$sb.AppendLine(('{0}|{1}|{2}' -f $rel, $it.Length, $h))
+    }
+    return $sb.ToString()
+}
+
 Write-Host ''
 Write-Host '== dao-pr-merge 回归测试 =='
 Write-Host ''
@@ -735,6 +754,79 @@ if (-not $nodeAvailable) {
         (($r15b.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r15b.Text))) ''
     Assert-True '15b-6 远程分支原封不动（没合的东西不许动分支）' `
         (Test-RemoteBranch -OriginDir $f15b.Origin -Branch $f15b.Branch) ''
+
+    # ========================================================================
+    # 场景 16（PR #213 对抗官 F2）：`-DryRun` × **有 generator** —— 3.5 步只打印、零副作用
+    # ========================================================================
+    # 🔴 这一格此前是**真空**，对抗实测坐实：往 3.5 的 `-DryRun` 分支里注入真实写文件副作用
+    #   （DR1）、或者把那一格改成一个字都不打（DR2），**76 条断言零红**。根因是场景 9 的
+    #   夹具**没有 generator**：循环走 `Test-Path` 假分支就 `continue` 了，压根没走到
+    #   `if ($DryRun)` 那一格；而带 generator 的场景 12/13/14/15 一个都没传 `-DryRun`。
+    #   ⇒ 「有 generator」与「-DryRun」这两个条件**必须同时成立**才踩得到这段代码
+    #   （同 dao 官侧条款 `[#官抗-优先序变体]` 的形态：分别验证各档，证不了两者同时成立那一格）。
+    #
+    # dao.md `[#Shell-合并链]` 要求「先 `-DryRun`」—— 这一屏正是人真正会先看的那一屏。
+    #
+    # ⚠ **射程照直写**：下面的「零副作用」是对**被管理的那个仓**（work 树 + origin 裸仓）
+    #   求值的，另加一条「generator 一次都没被真调起来」。往 `$RepoPath` **之外**写
+    #   （比如往进程 cwd 写）不在这几条的射程内 —— 那不是这个脚本会做的事，但也别把这几条
+    #   读成「任何副作用都拦得住」。
+    Write-Host '场景 16：-DryRun × 有 generator ⇒ 3.5 步只打印、零副作用（PR #213 F2，此前真空）'
+
+    # 生成器一被真调起来就落一个 marker（cwd 是 $RepoPath，见被测脚本 Push-Location 那一段）。
+    # marker 是「它到底跑没跑」的唯一硬证据 —— 只看输出分不出「没跑」与「跑了但没打印」。
+    # ⚠ 夹具生成器落在 `*.mjs` 上 ⇒ **ESM，没有 `require`**（第一版这里写了 `require("fs")`，
+    #   对照组当场红：那正是 16k/16l 这组对照存在的理由 —— 它先把尺子自己验了一遍）。
+    $genOkMarked = 'import fs from "fs"; fs.writeFileSync("gen-ran-clause.marker","1"); ' + $genOk
+    $gfOkMarked  = 'import fs from "fs"; fs.writeFileSync("gen-ran-guarded.marker","1"); ' + $gfOk
+
+    $f16 = New-ClauseGenFixture -Case 'dryrun-with-gen' -GenBody $genOkMarked -GuardedFilesGenBody $gfOkMarked
+    $tip16before  = Get-RemoteTip -OriginDir $f16.Origin -Branch 'main'
+    $sig16Work    = Get-TreeSignature -Root $f16.Work -ExcludeDirs @('.git')
+    $sig16Origin  = Get-TreeSignature -Root $f16.Origin
+    $r16 = Invoke-Target -Fixture $f16 -Cfg (New-StubConfig -Fixture $f16) `
+             -ExtraArgs @('-VerifyCommand', 'cmd /c exit 0', '-DryRun')
+
+    Assert-True '16a exit 0（DryRun 正常走完也是 0）' ($r16.ExitCode -eq 0) ("exit={0}" -f $r16.ExitCode)
+    Assert-True '16b 3.5 步的标题在**有 generator** 这条路上也打得出来（场景 9 走的是「没有 generator」那条）' `
+        ($r16.Text -match '===\s*3\.5\s') $r16.Text
+    Assert-True '16c 🔴 DR2：3.5 为**每一件**派生物各打一行「将做」，两件都点名到自己的脚本与 --check' `
+        (($r16.Text -match 'node ccswitch/scripts/gen-clause-index\.mjs --check') -and `
+         ($r16.Text -match 'node ccswitch/scripts/gen-guarded-files\.mjs --check')) $r16.Text
+    Assert-True '16d 🔴 DR2：那两行走的是「将做」通道（DryRun 屏的语义就是「我打算做什么」，不是随便打点什么）' `
+        ($r16.Text -match '\[将做\]\s*node ccswitch/scripts/gen-') $r16.Text
+    Assert-True '16e 🔴 DR1：两个 generator 一次都没被真调起来（marker 文件都不存在）' `
+        ((-not (Test-Path -LiteralPath (Join-Path $f16.Work 'gen-ran-clause.marker'))) -and `
+         (-not (Test-Path -LiteralPath (Join-Path $f16.Work 'gen-ran-guarded.marker')))) ''
+    Assert-True '16f 🔴 DR1：work 树（.git 之外）逐文件哈希一字节没变' `
+        ((Get-TreeSignature -Root $f16.Work -ExcludeDirs @('.git')) -eq $sig16Work) ''
+    Assert-True '16g 🔴 DR1：origin 裸仓逐文件哈希一字节没变' `
+        ((Get-TreeSignature -Root $f16.Origin) -eq $sig16Origin) ''
+    Assert-True '16h 🔴 DR1：work 树 git status 干净（DryRun 屏之后不许留下任何改动）' `
+        (-not (Git0 @('-C', $f16.Work, 'status', '--porcelain'))) ''
+    Assert-True '16i 报文**不**出现「仍与源一致」——没核对过就不许说核对过（DryRun 屏最容易撒的那个谎）' `
+        (-not ($r16.Text -match '仍与源一致')) $r16.Text
+    Assert-True '16j 远程分支与主干 tip 都没动（真·零写操作，这次是在有 generator 的路径上）' `
+        ((Test-RemoteBranch -OriginDir $f16.Origin -Branch $f16.Branch) -and `
+         ((Get-RemoteTip -OriginDir $f16.Origin -Branch 'main') -eq $tip16before)) ''
+
+    # 🔴 **对照组：先证明上面那把尺子自己是活的**（`[#官抗-基线是活的]`）。
+    #   同一份 generator、同一个夹具形态，**只差不传 -DryRun** ⇒ marker 必须真的出现、
+    #   「仍与源一致」必须真的打出来。没有这一条，16e/16i 可能只是「这个 marker 机制压根
+    #   不工作」也照样绿 —— 那正是它要防的病在防它的东西自己身上重演。
+    Write-Host '  16 对照组：同一夹具不传 -DryRun ⇒ generator 真的跑了（证明 16e/16i 的尺子是活的）'
+    $f16c = New-ClauseGenFixture -Case 'dryrun-control' -GenBody $genOkMarked -GuardedFilesGenBody $gfOkMarked
+    $r16c = Invoke-Target -Fixture $f16c -Cfg (New-StubConfig -Fixture $f16c)
+
+    Assert-True '16k-0 对照组自身健康：exit 0 且走到第 6 步（它红了的话，下面两条证不了任何事）' `
+        (($r16c.ExitCode -eq 0) -and (Test-ReachedStep6 $r16c.Text)) ("exit={0}`n{1}" -f $r16c.ExitCode, $r16c.Text)
+    Assert-True '16k 🔴 对照组：不传 -DryRun ⇒ 两个 marker 都出现了（16e 的「都不存在」因此是有意义的）' `
+        ((Test-Path -LiteralPath (Join-Path $f16c.Work 'gen-ran-clause.marker')) -and `
+         (Test-Path -LiteralPath (Join-Path $f16c.Work 'gen-ran-guarded.marker'))) ''
+    Assert-True '16l 🔴 对照组：不传 -DryRun ⇒ 两句「仍与源一致」都打出来了（16i 的「不出现」因此是有意义的）' `
+        (($r16c.Text -match 'clause-index 仍与源一致') -and ($r16c.Text -match 'guarded-files 仍与源一致')) $r16c.Text
+    Assert-True '16m 🔴 对照组：不传 -DryRun ⇒ **不**打「将做」那一行（两条路的输出必须分得开）' `
+        (-not ($r16c.Text -match '\[将做\]\s*node ccswitch/scripts/gen-')) $r16c.Text
 }
 
 # ---- 汇总 -------------------------------------------------------------------
