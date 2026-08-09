@@ -9,8 +9,8 @@
     "回归网": "tests/guarded-files.tests.js",
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
-      "tests": 43,
-      "mutation_tests": 33,
+      "tests": 44,
+      "mutation_tests": 34,
       "files": 33
     }
   },
@@ -97,6 +97,7 @@
         "dao-install.tests.ps1",
         "dao-pr-merge.tests.ps1",
         "dao-secrets.tests.ps1",
+        "dao-workitem-claim-protocol.tests.ps1",
         "pr-body-scan.tests.ps1",
         "ps-console-encoding.tests.js"
       ]
