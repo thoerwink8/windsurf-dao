@@ -23,6 +23,7 @@
   - **「一眼对齐」hub（pin 有上限时的正解）**：GitHub pin 每仓上限 3 个，用户想 pin 的「重要内容」往往 >3。**别去挤那 3 个槽，做一个总览 hub 单占第 3 个 pin**——它聚合看板链接 + 各 inbox（待拍板/需用户/候选）+ 在途入口，给用户**单一对齐入口**（另两个 pin 留给最高频的两个可回复 inbox）。判据：用户说「X 也要 pin」时，先问「X 是不是已经能进 hub 的某一行」——酝酿层（候选）就是原 TODO 总览，进 hub 一行即可，不占独立 pin。hub 由帅每批收官刷新「现况」数。
 - **仓内文件 = 叙事层**：流水账（PROGRESS 型）/发布物（CHANGELOG）/策略（POSITIONING）/流程 doc——没有 per-item 生命周期，硬塞 issue 反而散掉。**判据自检**：一个「问题树看板」型文件（WORKBOARD 型）在 issue 中枢+看板建成后多半**冗余**，退役归档、活账交 issue，是为道日损。
 - 🔴 **条件化（计算器反例）**：本条件**只管标签/看板/hub 基建的接入**，不管上面「人读的载体」那条（那条无条件，2026-08-02 划清）。本模式**只对 GitHub-backed + 持续多窗/多 agent 派单的项目生效**；本地仓/一次性小脚本不需要看板+标签体系，文件面板兜底即可。**触发信号**：项目 `CLAUDE.md` 有 issue 派单中枢型章节，或用户点名「issue 做中心」。**落地件已全部 canonical 化（2026-08-01 dao-first 清偿）**：标签体系 `ccswitch/templates/labels.json`（四维正交，基础集/项目扩展分层）· 看板六列 `ccswitch/templates/project-board.json` · playbook 骨架 `ccswitch/templates/dispatch-hub.template.md` · 置顶单正文 `ccswitch/templates/{pinned-hub-issue,inbox-issue}.md` · 一键引导 `ccswitch/scripts/dao-issue-bootstrap.ps1`（幂等，先 `-DryRun`）；项目侧 `docs/ops/DISPATCH-HUB.md` 是派生副本（mousse 是首个实例），此处只留判据与指针，不复述细则。
+- **挂账三分流**：一件事挂账时往哪放，看**接下来谁会处置、什么时候处置**——本窗立刻要用的信息 ⇒ 建新 issue；要等外部条件成立才能处置的 ⇒ 评论挂账在原处（issue/PR 原地留言，不新开单）；纯用户判断题、无技术后续的 ⇒ 进 #70 待拍板池。三态互斥，别把同一条信息同时挂两处。 [#归-挂账分流]
 
 ---
 
