@@ -202,7 +202,7 @@ console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「�
   // 形态是「结果不被消费」：`Number.isFinite(t)` 判据保留（`marked:false` 那条仍被挡），
   // 只有窗口这一半被掐掉——这样能证明这条断言真的在盯着「窗口」而不是别的什么。
   {
-    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs + CLOCK_SKEW_TOLERANCE_MS) n++;";
     const h = mutantHook("deaths-window-blind", ANCHOR, "        if (Number.isFinite(t)) n++;");
     const tagM = "deaths-window-mut";
     seedFiredLog(tagM, h, [OLD_MARKED, RECENT_UNMARKED]);
@@ -267,13 +267,72 @@ console.log("\n=== issue #236 挂账①：未来时间戳不得永久计入（de
   // 先破再验：只撤掉新增的上界（`&& t <= nowMs`），下界 `t >= cutoff` 原样保留——
   // 证明这条正控真的在盯着"上界"，不是靠上面「架空整段窗口」那条 mutation 顺带盖住的。
   {
-    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;";
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs + CLOCK_SKEW_TOLERANCE_MS) n++;";
     const h = mutantHook("deaths-future-nocap", ANCHOR, "        if (Number.isFinite(t) && t >= cutoff) n++;");
     const tagM = "deaths-future-mut";
     seedFiredLog(tagM, h, [FUTURE_MARKED]);
     const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
     const mm = readJson(markerPath(tagM));
     check("🔴 先破再验：撤掉上界 ⇒ 未来 10 天的死亡也被计入，deaths_24h 变成 2（issue #236 P7/P8 原始症状复现）",
+      mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #243②：时钟回拨容差 5 分钟 —— 容差内的「轻度未来」记录计入 ===");
+{
+  // 出处：用户 2026-08-09 拍板（issue #70 评论 5231799900）——issue #236①原始零容差修法下，
+  // 墙钟回拨 ≥1ms 起窗口内真实死亡记录即从计数消失（issue #243②实测：2s/30s/5min/1h 四格
+  // 全被排除）。5 分钟容差吸收 NTP 校时抖动，容差内的「未来」记录不再被误判为伪造而排除。
+  const NEAR_FUTURE_MARKED = { at: new Date(Date.now() + 3 * 60 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-clock-skew-within";
+  seedFiredLog(tag, REAL_HOOK, [NEAR_FUTURE_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("容差内（+3 分钟）的未来记录计入 ⇒ deaths_24h = 2（那条 + 这次真实死亡）",
+    m && m.deaths_24h === 2, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([NEAR_FUTURE_MARKED]) + "）");
+
+  // 先破再验：把容差从 5 分钟收紧回 0（issue #236①原状）⇒ 上面那条正控必须翻面——
+  // 证明它真的在盯着容差本身，不是碰巧对。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs + CLOCK_SKEW_TOLERANCE_MS) n++;";
+    const h = mutantHook("clock-skew-zeroed", ANCHOR, "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;");
+    const tagM = "deaths-clock-skew-within-mut";
+    seedFiredLog(tagM, h, [NEAR_FUTURE_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：容差收紧回 0 ⇒ +3 分钟的记录被排除，deaths_24h 从 2 变成 1（issue #243②原始症状复现）",
+      mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
+  }
+}
+
+console.log("\n=== issue #243②：容差之外（+10 分钟）的未来记录仍被排除（防伪造）===");
+{
+  // 与上一节互为镜像：容差不是「取消上界」，超过 5 分钟的未来时间戳依旧判为伪造而排除
+  // （零容差版本已排除，这里额外证明「加了容差」没有连带把上界本身撤掉）。
+  const BEYOND_TOLERANCE_MARKED = { at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), marked: true, error: "rate_limit" };
+
+  const tag = "deaths-clock-skew-beyond";
+  seedFiredLog(tag, REAL_HOOK, [BEYOND_TOLERANCE_MARKED]);
+  run(REAL_HOOK, payloadOf(), tag);
+  const m = readJson(markerPath(tag));
+  check("超出容差（+10 分钟）的未来记录不计入 ⇒ deaths_24h = 1（只有这次真实死亡）",
+    m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([BEYOND_TOLERANCE_MARKED]) + "）");
+
+  // 先破再验：把容差从 5 分钟放宽到「撤掉上界」⇒ 上面那条负控必须翻面——
+  // 证明它真的在盯着容差是有限的，不是碰巧对。
+  {
+    const ANCHOR = "        if (Number.isFinite(t) && t >= cutoff && t <= nowMs + CLOCK_SKEW_TOLERANCE_MS) n++;";
+    const h = mutantHook("clock-skew-unbounded", ANCHOR, "        if (Number.isFinite(t) && t >= cutoff) n++;");
+    const tagM = "deaths-clock-skew-beyond-mut";
+    seedFiredLog(tagM, h, [BEYOND_TOLERANCE_MARKED]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：撤掉上界 ⇒ +10 分钟的记录也被计入，deaths_24h 从 1 变成 2",
       mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
     check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
       mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
