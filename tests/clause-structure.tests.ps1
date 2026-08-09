@@ -718,6 +718,110 @@ console.log('MOJIBAKE=' + /[�]|锛|銆|馃|鈥/.test(out));
     }.Invoke()
 
     # ══════════════════════════════════════════════════════════════════════
+    # v4 · 退役判官盲区修复（Set-LedgerBackedFields）
+    #
+    # 出处：机制体检 2026-08-09 报告 §⑧「判据类条款」合议实测坐实的真缺陷——
+    # 「退役判官读不到 dao.md 那 22 条的元数据 ⇒ 它们无论多老都永远进不了候选退役区」。
+    # 批 3（2026-08-02）把 dao.md 的行内元字段整批删掉、只留 `[#slug]` 之后，检查 3 的
+    # missing-meta-field 回落让这批条款不再被判违规，但退役候选区（n0/n1/nq 三栏）当时
+    # 仍只读 `$_.HasField`——本组夹具复现的正是这批条款的真实形态：正文只留 slug，
+    # n/first_seen/trigger 全部只存在于台账里，且**用 Get-MonthDay 现算偏移**把 21/22 天
+    # 门槛压进一次运行（不必真等三周，理由同本文件头注①）。
+    Write-Host "`n=== v4：仅 slug、台账 n/first_seen 齐全的条款要能进候选退役区 ==="
+    {
+        $d21 = Get-MonthDay 21; $d22 = Get-MonthDay 22
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **仅 slug、n=1 恰 21 天（不该进）**：判据正文。 [#测-回落21]
+- **仅 slug、n=1 满 22 天（该进）**：判据正文。 [#测-回落22]
+- **仅 slug、n=? 且 22 天**：判据正文。 [#测-回落未知]
+- **仅 slug、n=0 且 22 天**：判据正文。 [#测-回落零次]
+- **仅 slug、台账不全（只有 baseline，无 n/first_seen）**：判据正文。 [#测-回落不全]
+"@
+        $f = New-Fixture $body
+        $leaf = Split-Path -Leaf $f
+        $ledger = New-LedgerFile -Entries ([ordered]@{
+            '测-回落21'   = New-LedgerEntry -File $leaf -N '1' -FirstSeen $d21 -Trigger 'PR流程'
+            '测-回落22'   = New-LedgerEntry -File $leaf -N '1' -FirstSeen $d22 -Trigger 'PR流程'
+            '测-回落未知' = New-LedgerEntry -File $leaf -N '?' -FirstSeen $d22 -Trigger '无'
+            '测-回落零次' = New-LedgerEntry -File $leaf -N '0' -FirstSeen $d22 -Trigger 'PR流程'
+            '测-回落不全' = New-LedgerEntry -File $leaf -Baseline '只有基线，没有 n/first_seen'
+        })
+
+        $r = Invoke-Checker -File $f -Ledger $ledger -RetireListMax 0
+        Check '负控：干净态 exit 0（仅 slug 不再被判 missing-meta-field，回落不触发 ledger-mismatch）' `
+            ($r.Exit -eq 0) "exit=$($r.Exit) / $($r.Text)"
+        Check '门槛：21 天不进、22 天进 ⇒ n=1 栏恰 1 条（年龄读的是台账 first_seen，不是行内 @）' `
+            ($r.Text -match 'n=1 且入库 >21 天）：1 条') $r.Text
+        Check 'n=? 栏 1 条（仅 slug、台账 n=?，此前这一栏结构性看不见）' `
+            ($r.Text -match 'n=\? 且入库 >21 天）：1 条') $r.Text
+        Check 'n=0 栏 1 条（仅 slug、台账 n=0）' ($r.Text -match 'n=0 且入库 >21 天）：1 条') $r.Text
+        Check '正式条款 5 条（行内元字段 0 条 · 仅 slug、台账在 ledger 里 5 条）—— 分子分母口径不变' `
+            ($r.Text -match '正式条款 5 条（行内元字段 0 条 · 仅 slug、台账在 ledger 里 5 条）') $r.Text
+        Check '分母行报「已回落 4 条」（21 天/22 天/n=?/n=0 四条 n+first_seen 齐全）' `
+            ($r.Text -match 'n 分布 / 候选退役区的分母是 4 条（行内元字段 0 条 \+ 仅 slug、台账已回落 4 条）') $r.Text
+        Check '台账不全那 1 条不强行进分母（不替未知编一个年龄）' `
+            ($r.Text -match '仍不进分母 1 条') $r.Text
+        # ── reconcile 安全网：这批 ledger 条目里有 2 条 trigger='无'（回落22/回落未知），
+        # 若「触发:无」占比也读了回落后的并集，marker 的 notrigger= 会变成非 0——而 node 侧
+        # （gen-clause-index.mjs）永远不从台账回填，两侧就此永久不等，--reconcile 判红
+        # （v4 开发期间被真实语料 dao.md/dao-workitem.md 实测坐实过一次）。本组直接钉住
+        # 「行内元字段 0 条 ⇒ 触发点分布无可统计 ⇒ notrigger 仍是 0」，防它退回。
+        Check '行内元字段 0 条 ⇒ 触发点分布/触发:无占比打印"无可统计"（不读回落后的并集）' `
+            ($r.Text -match '零条带行内元字段，触发点分布 / 触发:无 占比 / 基线标注无可统计') $r.Text
+        Check 'reconcile 安全网：marker 的 notrigger=0（回落的 2 条 trigger=无 没有被计进去）' `
+            ($r.Text -match 'notrigger=0 ') $r.Text
+    }.Invoke()
+
+    Write-Host "`n=== v4：盲区退回能红（mutation——禁用回落，候选区应变回 0）==="
+    {
+        # 单行锚点（dao-guard-writing「锚点跨行才有风险」）：只把回落函数的 LedgerUsable
+        # 参数强制成 $false，函数头一行 `if (-not $LedgerUsable) { return }` 就会让它整个
+        # 变成 no-op —— 精确复现修复前的行为，其余逻辑一个字不动。
+        $anchor = 'Set-LedgerBackedFields -Records $allRecords -Ledger $ledgerEntries -LedgerUsable $ledgerUsable'
+        $mutant = New-MutantChecker -Name 'retire-blindspot' -Edits @(
+            @{ From = $anchor; To = 'Set-LedgerBackedFields -Records $allRecords -Ledger $ledgerEntries -LedgerUsable $false' }
+        )
+        Check '锚点命中（改法真的落进了变异体里，不是空跑一次原文件）' ($mutant.Applied -eq 1) "Applied=$($mutant.Applied)"
+
+        # 先验证变异体还活着（dao 对抗验证官节「先验变异体还活着」）：拿一份普通合法夹具
+        # 跑一遍，exit 0 说明这一刀没有把解释器本身弄死，红会是判据变化不是靶死了。
+        $canary = Invoke-Checker -File (New-Fixture (Base-Body)) -Script $mutant.Path
+        Check 'canary：变异体在无关夹具上仍 exit 0（判据变化不是靶死了）' ($canary.Exit -eq 0) "exit=$($canary.Exit) / $($canary.Text)"
+
+        $d22 = Get-MonthDay 22
+        $body = @"
+# 测试条款库
+
+## 通用节
+
+- **仅 slug、n=1 满 22 天**：判据正文。 [#测-回落盲区]
+"@
+        $f = New-Fixture $body
+        $leaf = Split-Path -Leaf $f
+        $ledger = New-LedgerFile -Entries ([ordered]@{
+            '测-回落盲区' = New-LedgerEntry -File $leaf -N '1' -FirstSeen $d22 -Trigger 'PR流程'
+        })
+
+        $fixed  = Invoke-Checker -File $f -Ledger $ledger -RetireListMax 0
+        $broken = Invoke-Checker -File $f -Ledger $ledger -RetireListMax 0 -Script $mutant.Path
+        Check '正靶：未变异的守卫把这条 22 天的仅 slug 条款算进 n=1 候选退役区' `
+            ($fixed.Text -match 'n=1 且入库 >21 天）：1 条' -and $fixed.Text -match 'retire=1') $fixed.Text
+        # 变异体下 $withField 归零，脚本连候选退役区那几行都不打了（走的是「零条带元字段的
+        # 正式条款，无可统计」分支）——这本身就是盲区最直白的样子：不是数字变成 0，
+        # 是那句话**从输出里彻底消失**。marker 的 retire= 是唯一仍然打印、可断言的读出端。
+        Check '盲区退回：marker 的 retire= 归零（唯一台账数据的这条 22 天旧条款，候选区看不见了）' `
+            ($broken.Text -match 'retire=0') $broken.Text
+        Check '盲区退回：连「候选退役区」的统计段都整块消失了（$withField 归零 ⇒ 走"无可统计"分支）' `
+            ($broken.Text -match '零条带元字段的正式条款，无可统计' -and $broken.Text -notmatch 'n=1 且入库 >21 天）：1 条') $broken.Text
+        Check '盲区退回不改变退出码（候选区本来就是观察线，这条不该借这次改动变成硬闸）' `
+            ($broken.Exit -eq 0) "exit=$($broken.Exit)"
+    }.Invoke()
+
+    # ══════════════════════════════════════════════════════════════════════
     # 遮罩规则：未闭合反引号游程（2026-08-02 反转处置）
     #
     # 缺陷原貌：旧规则「未闭合反引号 ⇒ 从它到行尾一律当代码」，于是正文里写一处

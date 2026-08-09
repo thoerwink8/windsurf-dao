@@ -161,6 +161,10 @@
         直接对 `n=?` 判退役与直接排除它是同一个错的两面：都在替未知下结论。
     `n>=2` 不进扫描面，这是**范围克制不是「那面已验干净」**：`n` 是人手填的、
     从没被校验过，也没有任何机制在复发时真的去 +1 ⇒ `n>=2` 只证明有人写下了一个 ≥2 的字符。
+    **v4（退役判官盲区修复）**：扫描面不再只认「行内有完整元字段」——「仅 slug、台账
+    n/first_seen 都齐全」的条款由 Set-LedgerBackedFields 回填后同样入栏。此前（批 3
+    台账搬家之后）`ccswitch/dao.md` 那批只留 `[#slug]` 的条款结构性看不见台账里的
+    `first_seen`，无论多老都进不了候选退役区——机制体检 2026-08-09 报告 §⑧ 实测坐实。
 
 .PARAMETER FutureGraceDays
     月日解析的**未来宽限窗**（天），缺省 2。`@` 字段只有月日没有年份，零宽限时
@@ -642,6 +646,11 @@ function Get-ClauseRecords {
             SelfDates = @()
             Slug      = $null
             SlugCount = 0
+            # v4（退役判官盲区修复，机制体检 2026-08-09 报告 §⑧）：`-not HasField` 但台账
+            # n/first_seen 齐全时，Set-LedgerBackedFields 会回填 N/NBucket/MonthDay/Trigger
+            # 并把这个标成 $true。与 HasField 互斥（后者只在**行内**有完整元字段时为真），
+            # 调用方按两者的并集取用（见 $withField 的定义处）。
+            LedgerBacked = $false
         }
         $m = [regex]::Match($masked, $script:MetaFieldPattern)
         if ($m.Success) {
@@ -772,6 +781,65 @@ function Test-LedgerFileMatch {
     $a = $ActualPath.Replace('\', '/')
     $b = $LedgerPath.Replace('\', '/')
     return $a.EndsWith($b)
+}
+
+function Set-LedgerBackedFields {
+    <#
+      **v4 · 退役判官盲区修复**（机制体检 2026-08-09 报告 §⑧「判据类条款」合议实测坐实的
+      真缺陷）：批 3（2026-08-02）把 `ccswitch/dao.md` 的行内元字段整批删掉、只留 `[#slug]`
+      （台账搬家的终点）之后，检查 3 的「missing-meta-field 回落」（本文件 Test-ClausesStructure
+      里 `$c.Slug -and $LedgerActive -and $Ledger.ContainsKey($c.Slug)` 那一段）让这批条款
+      不再被判违规 —— **但下游全部统计（n 分布 / 触发点分布 / 候选退役区）当时仍只读
+      `$_.HasField`**，于是这批条款进得了「正式条款」计数，却进不了 `$withField`、也就
+      进不了任何一个候选退役栏。年龄门槛设计上会在 22 天后把它们端到人眼前，实际上
+      **无论台账里记着多老的 `first_seen`，它们永远不会出现在候选退役区**——检查器自己
+      的头注早就写着「下面各项分布的分母是行内元字段那 N 条（它们读的是行内字段，读不到
+      ledger）」，这不是疏漏，是被记录下来却没人回头填的缺口。
+
+      本函数把「仅 slug、台账 n/first_seen 都齐全」的记录，回填成参与**年龄/次数**统计的
+      记录：只设置 N / NBucket / MonthDay，并把 LedgerBacked 标 `$true`。调用方按
+      `HasField -or LedgerBacked` 取并集喂给 n 分布与候选退役区，两者互斥不会重复计数
+      （本函数只碰 `-not $_.HasField` 的记录）。
+
+      **刻意不回填 Trigger / Baseline —— 这不是漏了，是 v4 开发期间被 `--reconcile` 实测
+      拦下来的**：`gen-clause-index.mjs --reconcile` 逐文件比对 `clauses`/`notrigger`/
+      `slugs`/`maskdiv` 四个量，其中 `notrigger`（「触发:无」计数）在 node 侧
+      （`clause-parser.mjs`）设计上**永远不从台账回填**（该文件头注原话：「回填会让『正文
+      说的』与『台账说的』在派生物里合流，而双轨对账要比的正是这两者」）。头一版把
+      Trigger 也回填进了 `$withField`（供「触发点分布」统计用），结果 `ccswitch/dao.md`
+      与 `ccswitch/rules/dao-workitem.md` 两份的 `notrigger` 我方（PS）比对方（node）多算
+      ——回填让两侧口径永久性错位，`--reconcile` 当场判 `[不一致]`。既然「触发点分布」
+      不是这次要修的东西（候选退役区只认 NBucket + MonthDay，不认 Trigger），干脆不做
+      这项回填：调用方的「触发:无」占比/触发点分布/基线标注统计继续只读 `$hasField`
+      （行内字段那批），与 node 侧同口径；只有 n 分布与候选退役区读扩大后的并集。
+
+      **两条边界，照直写**：
+        · **必须在 Test-ClausesStructure（尤其检查 6 的台账对账）跑完之后再调用**——
+          检查 6 拿 `$c.N`/`$c.MonthDay` 去跟台账逐字段比对是不是「两轨一致」，若先回填
+          再比，比较对象就变成「台账 vs 我刚从台账抄来的东西」，对账**恒真**，那正是
+          dao-guard-writing「守卫里『我是不是瞎了』那一半不能复用被守对象的解析逻辑」
+          在这里的镜像形态。调用点因此特意排在 `$violations` 算完之后。
+        · **`n` 与 `first_seen` 必须都非空才回填，缺一不回填**（同批实测：`dao.md` 里
+          `帅-水位线`/`续-每轮心跳` 两条台账 n/first_seen 皆为 `null`，是搬录时正文本来就
+          没有这三个字段、诚实记录的"未知"，不是"零次"）——半份数据不强行编一个年龄，
+          按既有的「台账不全」观察线走（回填还是承认未知是判断，不设闸）。
+    #>
+    param([object[]]$Records, [hashtable]$Ledger, [bool]$LedgerUsable)
+
+    if (-not $LedgerUsable) { return }
+    foreach ($c in $Records) {
+        if ($c.HasField) { continue }
+        if (-not $c.Slug) { continue }
+        if (-not $Ledger.ContainsKey($c.Slug)) { continue }
+        $e = $Ledger[$c.Slug]
+        $n  = [string]$e.n
+        $fs = [string]$e.first_seen
+        if ([string]::IsNullOrEmpty($n) -or [string]::IsNullOrEmpty($fs)) { continue }
+        $c.N        = $n
+        $c.NBucket  = Get-ClauseNBucket -N $n
+        $c.MonthDay = $fs
+        $c.LedgerBacked = $true
+    }
 }
 
 function Resolve-ClauseDate {
@@ -1673,9 +1741,10 @@ if (-not $ledgerActive) {
     $script:SumLedgerState = $(if ($ledgerDoc.Why -eq '不存在') { 'missing' } else { 'bad' })
 }
 
+$ledgerUsable = ($ledgerActive -and $ledgerDoc.Ok)
 $violations = @(Test-ClausesStructure -Lines $lines -Records $allRecords -Census $census `
     -Selector $ClauseSelector -WhitelistExcluded $whitelistExcluded `
-    -Ledger $ledgerEntries -LedgerActive ($ledgerActive -and $ledgerDoc.Ok) -TargetPath $targetFile `
+    -Ledger $ledgerEntries -LedgerActive $ledgerUsable -TargetPath $targetFile `
     -MaskDivergence $maskDiv)
 
 # 台账在场却读不了：上面那句把 LedgerActive 关成了 $false（否则整批 slug 会被报成 orphan-slug，
@@ -1692,6 +1761,10 @@ $script:SumLedgerViol = @($violations | Where-Object {
     $_.Type -in @('missing-slug', 'orphan-slug', 'orphan-ledger', 'dup-slug', 'ledger-mismatch', 'ledger-file-mismatch', 'ledger-unreadable')
 }).Count
 
+# v4 · 退役判官盲区修复：**必须排在 Test-ClausesStructure 之后**（见 Set-LedgerBackedFields
+# 头注的第一条边界）—— 检查 6 的台账对账要拿"正文原样"去比台账，先回填就会比成"台账 vs 台账"。
+Set-LedgerBackedFields -Records $allRecords -Ledger $ledgerEntries -LedgerUsable $ledgerUsable
+
 # ---- 统计段（只打印，恒不参与退出码；唯一例外是扫描面自检那一行的三个信号走硬闸）----
 $now = Get-Date
 # 观察区条目**不进条款统计**：它们尚未成为条款，混进去会稀释「触发:无 占比」——
@@ -1700,10 +1773,18 @@ $clauses   = @($allRecords | Where-Object { $_.Zone -eq 'clause' })
 $observing = @($allRecords | Where-Object { $_.Zone -eq 'observation' })
 # **v2 起「是不是一条条款」与「有没有行内元字段」是两件事**：台账搬进 ledger 之后，
 # 一条条款可以只有 slug。marker 的 `clauses=` 报的是前者（与 node 侧 stats.clauses 同口径，
-# 否则 --reconcile 恒不一致）；下面那一大段分布统计的基底仍是后者（它们读的是行内字段）。
-# 两个数都打出来，且**先报分母** —— 分母静默变化正是这套检查在治的病。
-$formal    = @($clauses | Where-Object { $_.HasField -or $_.SlugCount -gt 0 })
-$withField = @($clauses | Where-Object { $_.HasField })
+# 否则 --reconcile 恒不一致）；下面那一大段分布统计的基底**v4 起**是「行内元字段」∪「仅 slug
+# 但台账 n/first_seen 齐全、已由 Set-LedgerBackedFields 回落」的并集。**v3 及之前**只认前者，
+# 于是像 `ccswitch/dao.md` 那批「批 3 台账搬家后只留 slug」的条款，无论台账里记着多老的
+# `first_seen`，都进不了任何一段分布统计、也进不了候选退役区——机制体检 2026-08-09 报告
+# §⑧「判据类条款」合议实测坐实的真缺陷：「退役判官读不到 dao.md 那 22 条的元数据 ⇒ 它们
+# 无论多老都永远进不了候选退役区」。两个数都打出来，且**先报分母** —— 分母静默变化正是
+# 这套检查在治的病。
+$formal       = @($clauses | Where-Object { $_.HasField -or $_.SlugCount -gt 0 })
+$hasField     = @($clauses | Where-Object { $_.HasField })
+$ledgerBacked = @($clauses | Where-Object { $_.LedgerBacked })
+# 两者互斥（Set-LedgerBackedFields 只碰 -not HasField 的记录），故并集不会重复计数。
+$withField    = @($hasField + $ledgerBacked)
 
 Write-Host ''
 Write-Host '---- 条款元字段统计（报告型，不影响退出码；观察区条目不计入本段）----'
@@ -1781,32 +1862,54 @@ if ($whitelistExcluded.Count -gt 0) {
 if ($withField.Count -eq 0) {
     Write-Host '  （零条带元字段的正式条款，无可统计）'
 } else {
-    $noTrigger = @($withField | Where-Object { $_.Trigger -eq '无' })
-    $script:SumNoTrig = $noTrigger.Count
-    $pct = [Math]::Round($noTrigger.Count * 100.0 / $withField.Count, 1)
     Write-Host ("  正式条款 {0} 条（行内元字段 {1} 条 · 仅 slug、台账在 ledger 里 {2} 条）" `
-        -f $formal.Count, $withField.Count, ($formal.Count - $withField.Count))
-    Write-Host ("  ↓ 下面各项分布的分母是**行内元字段那 {0} 条**（它们读的是行内字段，读不到 ledger）" -f $withField.Count)
-    Write-Host ("  触发:无 {0} 条（{1}%）—— 这批只提供判据、不提供触发点，不宜计入'条款有效性'" `
-        -f $noTrigger.Count, $pct)
+        -f $formal.Count, $hasField.Count, ($formal.Count - $hasField.Count))
+    # v4：候选退役区的分母不再只认行内字段——仅 slug 但台账 n/first_seen 齐全的那批已由
+    # Set-LedgerBackedFields 回落进 $withField（见该函数头注与 dao.md 22 条的实例）。
+    # ⚠ 触发点分布 / 触发:无 占比 / 基线标注**不**跟着扩大，见下面那一段的单独说明。
+    Write-Host ("  ↓ n 分布 / 候选退役区的分母是 {0} 条（行内元字段 {1} 条 + 仅 slug、台账已回落 {2} 条）" `
+        -f $withField.Count, $hasField.Count, $ledgerBacked.Count)
+    if (($formal.Count - $withField.Count) -gt 0) {
+        Write-Host ("     仍不进分母 {0} 条——仅 slug 且台账 n/first_seen 不全，回填还是承认未知是判断，不强行编一个年龄（见下方「台账不全」段）" `
+            -f ($formal.Count - $withField.Count))
+    }
 
-    $byTrigger = $withField | Group-Object -Property Trigger | Sort-Object Count -Descending
-    Write-Host ('  触发点分布：' + (($byTrigger | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · '))
-    Write-Host '     ⚠ 本闸对 `触发:` 的**取值真伪完全盲**：编一个不存在的载体照样放行，还会在这里自成一桶。'
+    # 触发点分布 / 触发:无 占比 / 基线标注：**刻意只读行内字段 `$hasField`，不读回落后的
+    # `$withField`**——这三项与 node 侧 gen-clause-index.mjs 的 `notrigger` 统计同口径，
+    # 而那一侧设计上永远不从台账回填（`clause-parser.mjs` 头注原话：「回填会让『正文说的』
+    # 与『台账说的』在派生物里合流，而双轨对账要比的正是这两者」）。回落进这里会让
+    # `--reconcile` 的 notrigger 比对与 node 侧永久性不等（v4 开发期间被
+    # `gen-clause-index.mjs --reconcile` 实测坐实：`dao.md`/`dao-workitem.md` 两份因此
+    # 判「不一致」，已收窄为只读 `$hasField`）。候选退役区不受影响——它只认 NBucket +
+    # MonthDay，不认 Trigger/Baseline。
+    if ($hasField.Count -eq 0) {
+        Write-Host '  （零条带行内元字段，触发点分布 / 触发:无 占比 / 基线标注无可统计——这批数据只在台账里）'
+    } else {
+        $noTrigger = @($hasField | Where-Object { $_.Trigger -eq '无' })
+        $script:SumNoTrig = $noTrigger.Count
+        $pct = [Math]::Round($noTrigger.Count * 100.0 / $hasField.Count, 1)
+        Write-Host ("  触发:无 {0} 条（{1}%，分母=行内元字段 {2} 条）—— 这批只提供判据、不提供触发点，不宜计入'条款有效性'" `
+            -f $noTrigger.Count, $pct, $hasField.Count)
 
-    # 归桶一律读 NBucket（Get-ClauseNBucket 是唯一判据源）。
+        $byTrigger = $hasField | Group-Object -Property Trigger | Sort-Object Count -Descending
+        Write-Host ('  触发点分布（分母=行内元字段）：' + (($byTrigger | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' · '))
+        Write-Host '     ⚠ 本闸对 `触发:` 的**取值真伪完全盲**：编一个不存在的载体照样放行，还会在这里自成一桶。'
+
+        $withBase     = @($hasField | Where-Object { $null -ne $_.Baseline -and $_.Baseline -ne '未测' })
+        $baseUntested = @($hasField | Where-Object { $_.Baseline -eq '未测' })
+        $noBase       = @($hasField | Where-Object { $null -eq $_.Baseline })
+        Write-Host ("  基线标注（分母=行内元字段）：带数字 {0} 条 · 显式「未测」{1} 条（诚实声明，允许） · 未标字段 {2} 条（有效性无从判定，不得被引用为'有效'）" `
+            -f $withBase.Count, $baseUntested.Count, $noBase.Count)
+    }
+
+    # 归桶一律读 NBucket（Get-ClauseNBucket 是唯一判据源）—— v4 起分母是 $withField 并集，
+    # 这正是本次要修的那一格：仅 slug、台账 n/first_seen 齐全的记录现在也归得到桶。
     $n0     = @($withField | Where-Object { $_.NBucket -eq 'zero' })
     $n1     = @($withField | Where-Object { $_.NBucket -eq 'one' })
     $nq     = @($withField | Where-Object { $_.NBucket -eq 'unknown' })
     $nMulti = @($withField | Where-Object { $_.NBucket -eq 'multi' })
     Write-Host ("  n 分布：n=0 {0} 条（已知零次，最该被退役审查） · n=1 {1} 条 · n=? {2} 条（未标次数，不等于零次） · n>=2 {3} 条" `
         -f $n0.Count, $n1.Count, $nq.Count, $nMulti.Count)
-
-    $withBase     = @($withField | Where-Object { $null -ne $_.Baseline -and $_.Baseline -ne '未测' })
-    $baseUntested = @($withField | Where-Object { $_.Baseline -eq '未测' })
-    $noBase       = @($withField | Where-Object { $null -eq $_.Baseline })
-    Write-Host ("  基线标注：带数字 {0} 条 · 显式「未测」{1} 条（诚实声明，允许） · 未标字段 {2} 条（有效性无从判定，不得被引用为'有效'）" `
-        -f $withBase.Count, $baseUntested.Count, $noBase.Count)
 
     # 未来日期可见性（观察线）：宽限窗把"比本机时钟早一两天的入库日"按 0 天处理，
     # 代价是**真笔误**（7 月里写下 @08-15）也被一并按 0 天静默吞掉。这一行是那个静默面的补偿。
@@ -1870,7 +1973,9 @@ if (-not $ledgerActive) {
 }
 
 # ---- 观察区统计（观察线）----------------------------------------------------
-$obsWithField = @($observing | Where-Object { $_.HasField })
+# v4：与条款区的 $withField 同一个并集判据（HasField -or LedgerBacked）——条款区/观察区
+# 「对称是硬要求不是整齐癖」（本文件下方 ⏳ 三栏对称那段注释原话），这里不例外。
+$obsWithField = @($observing | Where-Object { $_.HasField -or $_.LedgerBacked })
 Write-Host '---- 观察区（判断类候选 · 复发即升格；报告型，不影响退出码）----'
 if ($observing.Count -eq 0) {
     Write-Host '  （本文件无观察区条目）'
