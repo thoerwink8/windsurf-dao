@@ -4,59 +4,25 @@
 > 换个项目/换个技术栈还能跑 → 归这里；只在某个仓的具体形态下有意义 → 留在那个仓的
 > `.claude/workflows/`。
 
-## 部署方式（当前是手工复制，不是自动的）
+## 部署方式：`scriptPath` 用绝对路径直接跑，不必复制、不必重开会话
 
-**已验证可用的路径**：把脚本复制到目标项目的 `.claude/workflows/<name>.js`，重开会话后即
-出现在可调用列表里（`incremental-review` / `code-quality-audit` / `outward-sweep`
-三个就是这样在 mousse-cli 生效的）。
+**此前这里写「必须复制到目标项目 `.claude/workflows/` 才能跑，重开会话后才出现在可调用
+列表里」——2026-08-09 机制体检的四件攻防合议实测证伪：`Workflow` 工具给绝对路径
+`scriptPath`（如 `D:\frank\windsurf-dao\ccswitch\workflows\dao-harvest.js`）可以直接跑，
+两次成功记录为证，不必先复制进任何项目的 `.claude/workflows/`，也不必为此重开会话。**
 
-⚠️ **上面这句里的三个名字，2026-08-02 之前只有一个含义：它们住在 mousse-cli，不在货架上。**
-本文件此前**已经在按自家成员讲 `incremental-review`**（下方「不该跑」一节把它与
-`code-quality-audit` 并列当分流去处），而货架目录里根本没有它 —— 一个指向空气的指针。
-**现已上架**（`incremental-review.js`，同批把 `repoPath` 由「缺省 mousse-cli」改为必填）。
-**另两个仍然只在 mousse-cli，货架上没有**，读到它们的名字时别去本目录找。
-
-🔴 **「重开会话」是硬要求，不是保守说法 —— 而它的失效形态会骗人**（2026-07-30 实测）：
-`dao-harvest.js` 确实躺在 mousse-cli 的 `.claude/workflows/` 里，`Workflow` 工具照样报
-`"dao-harvest" not found. Available: deep-research, code-review, code-quality-audit,
-incremental-review, outward-sweep` —— **列表是会话启动时快照的**，会话中途复制进去的看不到。
-
-**这个信号答的是另一个问题**（L31 那一族）：`not found` 说的是「**本会话的装载列表里**没有」，
-而人会把它读成「**盘上**没有 / 没部署好」，于是跑去检查文件、检查路径、怀疑文件名 —— 那些
-全都是对的，而它照样 not found。
-
-⇒ **对策挂在开窗仪式上，不是挂在遇到问题时**：长窗开窗那一刻顺手核一眼「本窗预计要用的
-workflow 在不在 `Available` 列表里」。理由是**时机不可逆**——它总在**收官**时刻才被发现
-（收官段强制跑一次收割），而收官恰恰是最不能重开会话的时候：重开就丢掉整窗上下文。
-本次的处置是手工派三路 agent 代跑四源，多付了一次编排税。 [自定@07-30]
-
-```powershell
-Copy-Item "D:\frank\windsurf-dao\ccswitch\workflows\pr-history-postmortem.js" `
-          "<目标项目>\.claude\workflows\" -Force
-```
-
-**编排契约测试**（目前只 `dao-harvest` 有，其余三个仍是「只做过语法核验」）：workflow 靠
-harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证明不了 args 契约与编排
-数据流。`tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍，验到：必填
-校验、未知参数报错、缺省源集、零候选跳过核验、超 `CHUNK` **分批且逐条可追不丢失**、prompt
-真带上了该带的硬要求、路径推导与 args 覆盖。它由 `scripts/run-tests.mjs` 扫目录自动纳入
-——**刻意不放 `_tmp/` 当一次性脚本**：躺在 `_tmp/` 里要靠有人想起来跑，那正是本仓实测
-携带率 9-24% 的那一类形态。
-
-它**验不到**的（别把全绿读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、schema
-是否被模型遵守、`pipeline` 在真 harness 下的并发度（stub 是串行实现），以及最重要的一条
-**收割出来的候选质量**。
-
-**尚未接上的**：`dao.ps1 link-claude` 目前只 symlink `ccswitch/{skills,commands,agents}`
-三类，**没有** workflows 这一类；`~/.claude/workflows/` 是不是用户级发现路径也**未经本机
-验证**（workflow 由 Agent SDK harness 装载，不在 `@anthropic-ai/claude-code` 的 cli.js 里，
-无法靠读那个 bundle 判定）。所以本目录目前是**货架，不是部署源**——复制过去才生效，
-复制出去的副本不会跟随本目录更新（这就是一个已知漂移面，用的时候心里有数）。
-要消除漂移面得先验证用户级发现路径是否存在，那是另一次显式改动。
+**真正的拦路石是行尾，不是部署位置**：本目录 `*.js` 若在 Windows 上被检出成 CRLF，
+`\r` 会被权限层判成「控制字符」拒载——这坑已实测踩过 4 次、跨 3 个会话。`.gitattributes`
+现已给 `ccswitch/workflows/*.js` 钉死 `eol=lf`（新 clone/checkout 后即为 LF，核对用
+`git ls-files --eol -- ccswitch/workflows/*.js`，`w/` 那一格应为 `lf`），这是本目录
+目前唯一需要留意的部署前提。
 
 ---
 
 ## `pr-history-postmortem.js` —— PR 全史复盘
+
+⏳ **退役倒计时：实跑 0 次；2026-10-09 前仍零调用则随下次货架体检退役，方法论压缩成一页笔记
+保留**（用户 2026-08-09 #70 拍板）。
 
 ### 它做什么
 
@@ -313,6 +279,20 @@ harness 注入 `args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证�
   Builder 之所以能 merge/delete，是因为规则是 schema 对象而非散文）。减法那半边由下面的
   `dao-consolidate` 承担 —— **两个都跑才构成「一进一出」**，只跑收割，规则集必然单向膨胀
 
+### 编排契约测试
+
+**目前只 `dao-harvest` 有，其余三个仍是「只做过语法核验」**：workflow 靠 harness 注入
+`args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证明不了 args 契约与编排数据流。
+`tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍，验到：必填校验、
+未知参数报错、缺省源集、零候选跳过核验、超 `CHUNK` **分批且逐条可追不丢失**、prompt 真带
+上了该带的硬要求、路径推导与 args 覆盖。它由 `scripts/run-tests.mjs` 扫目录自动纳入——
+**刻意不放 `_tmp/` 当一次性脚本**：躺在 `_tmp/` 里要靠有人想起来跑，那正是本仓实测携带率
+9-24% 的那一类形态。
+
+它**验不到**的（别把全绿读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、schema
+是否被模型遵守、`pipeline` 在真 harness 下的并发度（stub 是串行实现），以及最重要的一条
+**收割出来的候选质量**。
+
 ---
 
 ## `dao-consolidate.js` —— dreaming 式离线整编（收割的减法对偶）
@@ -411,8 +391,10 @@ harness 里**没有可调用的 embedding / 相似度算子**，模型自报的�
 
 ### 首跑实测（2026-08-01，windsurf-dao 自己当靶）
 
-**跑法是手工代跑**：Workflow 工具的可调用列表是会话启动时快照的，本会话新建的 workflow 进不了
-列表（见本文件开头那条），故由编排侧用 `node` 把 workflow 跑一遍**取出它本体生成的 prompt**，
+**跑法是手工代跑**：当时按「Workflow 工具的可调用列表是会话启动时快照的，本会话新建的
+workflow 进不了列表」这个认知处置（该认知 2026-08-09 已被「绝对路径 `scriptPath` 可直接跑」
+的实测部分推翻，见本文件开头「部署方式」一节；本节原样保留当时的实际做法，不倒填历史），
+由编排侧用 `node` 把 workflow 跑一遍**取出它本体生成的 prompt**，
 再手工派三个 agent 执行——**prompt 是 workflow 生成的原文，未经改写**，但 harness 的 schema
 强制在这条路径上不存在（改由 prompt 里贴 schema 文件路径要求 agent 自行遵守）。
 
@@ -481,6 +463,9 @@ BinaryExpression，会让**整脚本被拒载**——2026-08-01 实测报
 > **2026-08-02 上架**（原住 mousse-cli `.claude/workflows/`）。本文件此前已经把它当自家成员讲，
 > 货架上却没有它；上架同批把 `repoPath` 由「缺省 `D:/frank/mousse-cli`」改为**必填**，
 > 并剥掉了写死在镜头 prompt 里的那个仓的实况（见下方「去项目化改了什么」）。
+
+⏳ **退役倒计时：实跑 0 次；2026-10-09 前仍零调用则随下次货架体检退役，方法论压缩成一页笔记
+保留**（用户 2026-08-09 #70 拍板）。
 
 ### 它做什么
 

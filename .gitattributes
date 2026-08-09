@@ -5,3 +5,9 @@
 # 被 CRLF 化之后 sh 会把行尾的 \r 当成命令的一部分,报 `\r: command not found`,
 # 且**失败发生在派生它的那个项目里、不在本仓**,本仓这边看起来一切正常。
 ccswitch/templates/githooks/* text eol=lf
+
+# workflows 货架的 scriptPath 由 Agent SDK harness 直接读取执行,CRLF 化后被权限层判「控制
+# 字符」拒载 —— 本仓自己已实测坑了 4 次、跨 3 个会话(无 .gitattributes 规则时 Windows 检出
+# 是 CRLF,见 `git ls-files --eol -- ccswitch/workflows/`)。锚点只压 .js(真正被 harness 加载
+# 执行的那三个文件),不含同目录 README.md(纯文档,CRLF/LF 不影响可读性,不必额外约束)。
+ccswitch/workflows/*.js text eol=lf
