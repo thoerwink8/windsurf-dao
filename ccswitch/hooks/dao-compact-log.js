@@ -45,7 +45,7 @@
 // 自证：node tests/dao-compact-log.tests.js
 
 const path = require("path");
-const { createHookScaffold, HOME } = require("../lib/hook-selfcheck.js");
+const { createHookScaffold, HOME, ROOT, readJsonlRecords } = require("../lib/hook-selfcheck.js");
 
 const LOG_PATH = path.join(HOME, ".claude", "compaction-log.jsonl");
 
@@ -56,6 +56,98 @@ const H = createHookScaffold({
   forceErrorEnv: "DAO_COMPACT_LOG_FORCE_ERROR",
   selfTestEnv: "DAO_COMPACT_LOG_SELFTEST",
 });
+
+// ── scaffold-check 死闸检测的挂载点（2026-08-09 · 机制体检报告 §二 🟡①②）──────
+// 治的是什么病：`dao-scaffold-check.js`（SessionStart）是全仓维护热点第一（30 天 34
+// 次维护），承载死闸检测 / always-on 预算闸 / 条款库结构闸 / per-provider 漂移检测的
+// 挂载——它自己若停摆（未注册 / 崩溃 / 被宿主超时杀掉），这些检查跟着一起停，而「停了」
+// 与「本轮无事可报」在盘上逐字节相同。它已经在自己那侧接了心跳
+// （`_tmp/scaffold-check/fired.log`，见该文件「心跳自证」大注），但**读心跳判陈旧的人
+// 不能是它自己**——那样只是把循环依赖原样保留、只是换了个身位。见
+// `_tmp/mechanism-audit-20260809.md` §二 🟡「dao-scaffold-check.js」那一行。
+//
+// 为什么挂在这里（PostCompact / 本文件）而不是新建 hook 或挂在别的事件上：
+//   · 新建 hook 要在 live + 快照 + DB 三处注册，是本仓反复点名的一笔债；
+//   · UserPromptSubmit 上已有三条（cn-title / rhythm / probe-gate），且 probe-gate
+//     把「非探针 prompt 零磁盘 I/O」当头等纪律——那条高频路径上再加一次 fs 读违背它；
+//   · PostCompact「几乎每天」触发（上面 `staleDays: 14` 的同一条理由），且本文件**已经
+//     在做磁盘 I/O、已经产出用户可见的 systemMessage**——追加一次读日志 + 一行文案，
+//     边际成本趋近于零，不是新开一条高频路径。
+//
+// **判据（2026-08-09 改，用户拍板 · issue #70 评论追录第 2 件；论证见 PR #223 对抗验证
+// 评论 5230508080）**：看 `_tmp/scaffold-check/fired.log` 的**全部**记录（不再按
+// `synthetic` 过滤），取最后一条，其 `at` 距今超过 `SCAFFOLD_CHECK_STALE_DAYS` 天即报。
+//
+// **为什么改判据**：对抗验证发现旧判据（只认 `synthetic !== true`）在生产里会自伤——
+// scaffold-check 与 settings-drift 心跳共用同一份 `isSynthetic()` 判据
+// （`!(input && input.transcript_path)`，见 `hook-selfcheck.js`），而 settings-drift
+// 的 14 天真实日志显示：92 条 SessionStart 触发只有 17 条带 `transcript_path`，**81%
+// 被判成 synthetic 而丢弃**——宿主给不给这个字段本身就不稳定，按它筛出来的「真实」子集
+// 系统性低估了真实调用密度。而这里本该回答的问题从来不是「接线通吗」（那是下面
+// `--selfcheck` 段落的职责），是「它还在正常跑吗」——一条 synthetic 记录同样证明进程
+// 真的执行到了 `done()`/`inject()` 退出口，对「这次调用完整跑完了」这件事的证明力与
+// 真实记录相同。
+// **`--selfcheck` 刻意不跟着改**（`hook-selfcheck.js` 的 `selfcheckLines()`，本文件下方
+// 「── selfcheck ──」段落是它的消费方之一）——那条路问的是另一件事：「这套心跳基建真的
+// 接上宿主了吗」，自测/CI 产出的 synthetic 记录不该把这个问题染绿。与 `hook-selfcheck.js`
+// 头注「有意保留的两处差异（不要顺手统一）」同一路数：两个判据答的是不同的问题，看起来
+// 像重复，实际不该合并。
+//
+// **`SCAFFOLD_CHECK_STALE_DAYS` 5→7（同批订正）**。调参三问按新判据重写：
+//   ① 改小（如 1 天）会怎样 —— SessionStart 要「开一个新会话」才触发，用户/团队若连续
+//      一两天没开新会话（长周末、专注在别的工作），会被误判陈旧而制造噪音，训练人无视
+//      这句话（同本仓其余阈值论证反复点名的失败模式）；
+//   ② 当前值够不够 —— **旧论证已被证伪，照直写**：本条此前写「SessionStart 频率大概率
+//      不低于 PostCompact」，对抗验证拿 settings-drift 的历史日志实测，结果是反的——按
+//      **旧判据**（只认真实）算，14 天窗口只有 17 条算数，观测到的最大间隔 4.20 天，
+//      已吃掉旧 5 天阈值的 84%（这是旧判据下的数，照记是因为它是这次要改判据的直接
+//      理由：旧判据本身脆弱到只剩 16% 余量，不是「稍紧」）。新判据看全部心跳，本机制
+//      本次才接上、还没有自己的长历史样本，此处借同一 hook 家族里另一个已有长样本的
+//      挂载点作旁证而非直接测量：PostCompact 侧 `~/.claude/compaction-log.jsonl`
+//      （下方 `--selfcheck` 的 `staleDays: 14` 用的就是它）近 12 天实测 1613 条、日均
+//      ≈134——本仓这一类 hook 挂载点在真实使用下密度充足，用它旁证「7 天留的余量远大于
+//      旧判据下观测到的 4.20 天缺口」，**不是对 scaffold-check 自己新判据密度的直接
+//      测量**（诚实挂账，待真实 fired.log 攒够样本后再校准，同③）；
+//   ③ 再紧一点代价是什么 —— 心跳基建本次才接上，新判据下还没有真实历史样本可供统计
+//      校准，定得更紧可能在一个安静的周末就制造假警报；7 天是留了缓冲的初值，等有真实
+//      fired.log 样本后可收紧或放宽，不取更极端的两侧。
+const SCAFFOLD_CHECK_STATE_SUBDIR = process.env.DAO_SCAFFOLD_CHECK_STATE_SUBDIR || "scaffold-check";
+const SCAFFOLD_CHECK_FIRED_LOG = path.join(ROOT, "_tmp", SCAFFOLD_CHECK_STATE_SUBDIR, "fired.log");
+const SCAFFOLD_CHECK_STALE_DAYS = 7;
+
+// 三态输出（不静默）：① 读不出/读坏 → 说读不出，不当「没事」② 从未有真实记录 → 说从未
+// 触发 ③ 有记录但已过阈值 → 说陈旧并给出天数。**只有第④态（有记录且新鲜）不产出任何
+// 文字**——常路零噪音，同本仓其余观察线的既有取舍。整函数不向外抛——调用方把它当「查一眼」
+// 用，查不动不该拖垮本 hook 自己的主产物（压缩日志已经落盘）。
+function scaffoldCheckStalenessNote() {
+  let records;
+  try {
+    records = readJsonlRecords(SCAFFOLD_CHECK_FIRED_LOG);
+  } catch (e) {
+    return "⚠ scaffold-check 心跳日志读取失败（" + (e && e.message ? e.message : String(e)) +
+      "）—— 这不构成「它还活着」的证据，也不构成「它死了」的证据，只是没查成：" + SCAFFOLD_CHECK_FIRED_LOG;
+  }
+  // 不再按 synthetic 过滤（2026-08-09 改判据，理由见上方头注）：全部记录都算「进程真的
+  // 执行到了退出口」的证据，与 --selfcheck 那条只认真实心跳的路径刻意分道。
+  if (!records.length) {
+    return "⚠ scaffold-check 从未留下任何心跳记录 —— 它可能从未被宿主真实调用过（未注册 / " +
+      "matcher 不覆盖），或者本条自证刚接上、还没等到下一次 SessionStart。心跳：" + SCAFFOLD_CHECK_FIRED_LOG;
+  }
+  const last = records[records.length - 1];
+  const days = (Date.now() - Date.parse(last.at)) / 86400000;
+  if (!Number.isFinite(days)) {
+    // 读不出时间不等于时间已经过去（同 dao-probe-gate.js markerStaleness 的判据），
+    // 本条只报异常、不替未知下陈旧结论。
+    return "⚠ scaffold-check 末次心跳的 at 解析不出来（" + JSON.stringify(last.at) + "）—— " +
+      "读不出时间不代表时间已经过去，本条只报异常不下陈旧结论";
+  }
+  if (days <= SCAFFOLD_CHECK_STALE_DAYS) return null;
+  return "✗ scaffold-check 已 " + days.toFixed(1) + " 天没有任何心跳（阈值 " + SCAFFOLD_CHECK_STALE_DAYS +
+    " 天；此判据看全部心跳含自测，答的是「它还在跑吗」，不是「接线通吗」）—— 它是死闸检测 / " +
+    "always-on 预算闸 / 条款库结构闸 / per-provider 漂移检测的挂载总线，它停了这些检查跟着一起停。" +
+    "核 ~/.claude/settings.json 的 SessionStart 注册是否还在，或手动跑一次它内部调用的检查器" +
+    "（如 node ccswitch/scripts/check-dead-gates.mjs）确认它们本身没坏。";
+}
 
 // ── --selfcheck：查注册 + 查心跳，不看「文件是否存在」 ──────────────────────
 if (process.argv.includes("--selfcheck")) {
@@ -102,7 +194,16 @@ try {
     `always-on 规则快照已按盘上最新版重载；中途写入的条款自此可被读到` +
     `（可见范围止于展示给用户，模型侧可见性未逐字验证，落盘日志见 ${LOG_PATH}）。`;
 
-  H.emit({ systemMessage: humanMsg });
+  // scaffold-check 死闸检测的挂载点（见上方大段头注）：顺带查一眼它有没有停摆。
+  // try/catch 兜底——这一段查不动不该拖垮本 hook 自己的主产物（压缩日志已经落盘）。
+  let staleNote = null;
+  try {
+    staleNote = scaffoldCheckStalenessNote();
+  } catch (e) {
+    staleNote = "⚠ scaffold-check 陈旧检测自身抛错：" + (e && e.message ? e.message : String(e));
+  }
+
+  H.emit({ systemMessage: staleNote ? humanMsg + "\n" + staleNote : humanMsg });
   process.exit(0);
 } catch (e) {
   H.fail("构造压缩日志记录", e);

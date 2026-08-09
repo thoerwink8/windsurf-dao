@@ -27,7 +27,9 @@
     个 PR 就提示该收割了」。**用户拍板改为「每次干完一大段活收尾时」**，即长窗
     收官这一既有必经动作（`ccswitch/rules/dao-longwindow.md` ③ 原文：
     「**收官段必跑一次好实践收割**……收官是长窗里唯一必经的『停下来』时刻，
-    不挂在这里就只能靠谁想起来」），落地形态是**收官简报里的一个两态固定槽位**。
+    不挂在这里就只能靠谁想起来」），落地形态是**收官简报里的两个固定槽位**
+    （🌾 收割 + ♻️ 整编，各自两态；♻️ 整编槽位为用户 2026-08-09 issue #70 一揽子拍板
+    J4 件新增，与 🌾 收割并列，对应 `dao-consolidate` workflow——收割的减法对偶）。
 
     **那个 20 是拍的，无任何实证依据**（旧版脚本头自己已经自曝过：调参三问只答得出
     第①问，②③都答「无从判断」）。它是一个**精确地测量了错误的量**的判据——
@@ -92,7 +94,7 @@
     目录守卫指纹，缺省 `@('.git')`。理由与代价同 `check-pr-body-mojibake.ps1` 同名参数。
 
 .PARAMETER Closing
-    收官模式。额外打印**收官简报的收割槽位模板**（那一行两态恰选其一，见
+    收官模式。额外打印**收官简报的两个槽位模板**（🌾 收割 + ♻️ 整编，各自两态恰选其一，见
     `ccswitch/rules/dao-longwindow.md` ③）与 marker 更新命令。验证入口里不带此开关，跑的是简短状态行；
     长窗收官时手动带上它。
 
@@ -180,12 +182,15 @@ function Write-TriggerNote {
 function Write-ClosingSlot {
     param([string]$HeadShort)
     Write-Host ''
-    Write-Host '  -- 收官简报槽位（两态恰选其一，没有第三态）--'
-    Write-Host '  🌾 收割：已跑（候选 N 条 / 入库 M 条 / 落点 <文件>）  |  未跑（<一句理由>）'
+    Write-Host '  -- 收官简报槽位（两行各自两态恰选其一，都没有第三态）--'
+    Write-Host '  🌾 收割：已跑（候选 N 条 / 入库 M 条 / 落点 <文件>） | 未跑（<一句理由>）'
+    Write-Host '  ♻️ 整编：已跑（建议 N 条 / 采纳 M 条） | 未跑（<一句理由>）'
     Write-Host ''
     Write-Host ("  跑收割：dao-harvest workflow，args 至少给 {{`"repoPath`":`"{0}`"}}；" -f ($repoRoot -replace '\\','/'))
     Write-Host '  收完把通过核验的候选按 layer 粘进对应文件，然后更新 .harvest-marker 三个字段：'
     Write-Host ("    LAST_HARVEST_DATE=<今天>  LAST_HARVEST_COMMIT={0}  LAST_HARVEST_PR=<当时最新 PR 号>" -f $HeadShort)
+    Write-Host ''
+    Write-Host '  跑整编：dao-consolidate workflow（收割的减法对偶），用法见 ccswitch/workflows/README.md。'
 }
 
 Write-Host ''
