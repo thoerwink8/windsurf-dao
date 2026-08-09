@@ -548,6 +548,19 @@
       "source_refs": [],
       "status": "active"
     },
+    "窗-自适应水位": {
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-09 单日 5 次限流全灭接手 + 静态保守水位在健康期压制并发，双向实证",
+      "source_refs": [
+        "windsurf-dao issue #70 追录评论「自适应并发落地」（用户 2026-08-09 拍板）"
+      ],
+      "status": "active"
+    },
     "窗-接力阈值": {
       "file": "ccswitch/rules/dao-longwindow.md",
       "n": "0",

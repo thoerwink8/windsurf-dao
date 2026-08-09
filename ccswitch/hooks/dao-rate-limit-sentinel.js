@@ -97,6 +97,17 @@
 // （「hook 本机状态目录 / 不随换机走 / 无需处理」）。⇒ 正确说法是：**它不需要「恢复步骤」，
 // 但需要一行「换机后它是空的」的登记**，两者不是一回事。**别照原句去删 NEW-MACHINE 那一行。**
 //
+// ── deaths_24h：最近 24h 限流死亡计数（issue #70 自适应并发批，笔①：哨兵信号增强）───
+// 用户 2026-08-09 拍板「自适应并发」——水位判据（`ccswitch/rules/dao-longwindow.md`
+// §心跳对账节·丙㈣）要读到「最近死过几次」而不是只有「现在有没有标记」这一个二值信号。
+// 判据**不新造存储**：直接数 `S.firedLog` 里既有的 `marked:true` 行（那本来就是「写标记
+// 成功」的判据），24 小时窗与 `dao-probe-gate.js` 的 `STALE_GRACE_S`（同样取 24h）是两件
+// 独立的事——那边问「这条标记多旧」，这里问「这台机器过去一天死了几次」，只是恰好同一个
+// 窗口长度，别读成共享同一个判据。**含本次**：这一刻正在写的这次死亡本身也算一次
+// ——语义是「连这次在内，过去 24h 我死了几次」，不是「这次之前死过几次」。
+// 读失败时记 `null` 不记 `0`：0（真的零次）与「读不出来」必须分得开，同 `reset_estimate_s`
+// 的判据同一路数。
+//
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
 // 注册（用户/帅动作，本文件不代做）：settings.json → hooks.StopFailure，matcher "rate_limit|overloaded"
@@ -106,7 +117,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createHookScaffold } = require("../lib/hook-selfcheck.js");
+const { createHookScaffold, readJsonlRecords } = require("../lib/hook-selfcheck.js");
 
 const SIGNATURE = "[dao-rate-limit-sentinel v1]";
 const EVENT = "StopFailure";
@@ -215,6 +226,28 @@ const S = createHookScaffold({
   selfTestEnv: "DAO_RATE_LIMIT_SELFTEST",
 });
 
+// 数最近 24h 内 `marked:true` 的行（判据与用途见文件头注「deaths_24h」段）。
+// **不含本次**——本次这条记录要等 `S.heartbeat(rec)` 才追加进 fired.log，调用方
+// 自己在 `marked` 分支里 +1（见 main()）。读失败（含目录被占等 `readJsonlRecords`
+// 之外的异常）记 `null`，不吞成 0。
+const DEATHS_WINDOW_MS = 24 * 3600 * 1000;
+function countDeaths24h(nowMs) {
+  try {
+    const cutoff = nowMs - DEATHS_WINDOW_MS;
+    const all = readJsonlRecords(S.firedLog);
+    let n = 0;
+    for (const r of all) {
+      if (r && r.marked === true) {
+        const t = Date.parse(r.at);
+        if (Number.isFinite(t) && t >= cutoff) n++;
+      }
+    }
+    return n;
+  } catch (_) {
+    return null;
+  }
+}
+
 // 标记文件整份覆写（后一次限流覆盖前一次）。**幂等**：连发两次不炸、内容以最后一次为准。
 // 探针接手后由探针那一轮删除它（见 dao-probe-gate.js 头注的分工），本 hook 只写不删。
 function writeMarker(rec) {
@@ -308,6 +341,10 @@ function main() {
 
   let markerErr = null;
   if (marked) {
+    // `countDeaths24h` 读的是 fired.log **此刻已有**的行（这次死亡还没落盘），
+    // 故 +1 把「正在写的这次」计进去——语义见文件头注「deaths_24h」段。
+    const priorDeaths24h = countDeaths24h(Date.now());
+    const deaths24h = priorDeaths24h == null ? null : priorDeaths24h + 1;
     try {
       writeMarker({
         at,
@@ -318,6 +355,7 @@ function main() {
         raw,
         session_id: input.session_id || null,
         signature: SIGNATURE,
+        deaths_24h: deaths24h,
       });
     } catch (e) {
       markerErr = e;
