@@ -39,10 +39,21 @@
 //     （纯文本匹配 `/checkMcpHealth\(\)/`，连 `// checkMcpHealth();` 这种注释掉的形态
 //     都能匹配上，M8 实测：注释掉调用、整套测试照样全绿）。现在改成**行为级**——真跑
 //     一次 doctor.mjs，断言输出里 MCP 健康态那一节真的印出了逐条判据行，不是空节；
-//   · dao-scaffold-check.js / dao-config-guard.js（两个 SessionStart 热路径）没有引用
-//     本模块——**已知弱处，本轮只标注不修**（覆盖面仍只有 15 个 hook 注册里的 2 个；
-//     且可被字符串拼接绕过，对抗复核 M10 实测坐实），跟进单见 issue #210，理由见⑥那两条
-//     断言旁边的注释。
+//   · 全部**已注册** hook 都没有引用本模块——**issue #210 弱点①（覆盖面 1/15，PR #212
+//     补到 2/17 仍是手点两个文件名）本轮修完**：改为复用 `check-dead-gates.mjs` 已有的
+//     结构化遍历（`--json` 子进程 + `--live` 指回 git 快照本身，100% 由仓库内容决定、
+//     不碰真实机器 `~/.claude/settings.json`），扫描面变成「当前注册了什么」的派生物，
+//     不再手点文件名——细节见⑥「全量注册面」那一段。
+//     **弱点②（字符串拼接可绕过子串匹配，M10 实测坐实）本轮仍不修**：改成本项判据类
+//     改动这条不是"更懒"，是`ccswitch/rules/dao-guard-writing.md` 的既有判据——
+//     文本匹配型护栏对"保留字面语义但改写掉字面 token"的形态天然失明，堵它需要真
+//     require 一遍每个 hook 文件看依赖图（issue 建议的另一条修法），而这批 hook 文件
+//     本身就是不带 `require.main===module` 守卫、直接在顶层跑副作用的脚本（`dao-hard-
+//     gates.js` 顶层同步读 stdin、`dao-codegraph-ensure.js` 顶层会真的去起/连 codegraph
+//     进程）——不搭配容器级隔离（关 stdin、拦 fs/spawn、超时熔断）就 require 它们，
+//     测试进程本身就会触发它要防的那类热路径副作用，或者卡死等 stdin。这份隔离的成本
+//     与风险都远超「防一个至今没有真实证据发生过的 P2 缺口」——按已有判据接受这个边界，
+//     不再造第三种更复杂的正则/字符串分析去堵它，跟进单见 issue #210。
 //
 // 🔴 **射程边界（issue #210 二轮对抗复核缺口清单⑥，2026-08-09 补）**：上面那条「改成
 // 行为级」的真验证住在 **⑦（真机自跑），而 ⑦ 整节只在 `--env` 下才执行**。默认层
@@ -61,8 +72,9 @@ const { spawnSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const DOCTOR = path.join(REPO, "config-sync", "lib", "doctor.mjs");
-const SCAFFOLD_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-scaffold-check.js");
-const CONFIG_GUARD_HOOK = path.join(REPO, "ccswitch", "hooks", "dao-config-guard.js");
+const DEAD_GATES_SCRIPT = path.join(REPO, "ccswitch", "scripts", "check-dead-gates.mjs");
+const SNAPSHOT_SETTINGS = path.join(REPO, "config-sync", "common", "settings.json");
+const JS_HOOK_EXT = /\.(mjs|cjs|js)$/i;
 
 const ENV_TIER = process.argv.includes("--env") || process.env.DAO_TEST_ENV_TIER === "1";
 
@@ -76,6 +88,44 @@ function deferSection(name, why) {
   console.log("  DEFER " + name + "  ->  " + why);
 }
 const DEFER_WHY = "真机自跑：依赖本机是否装了 claude CLI 且耗时 6-15s。跑它：node tests/mcp-health.tests.js --env";
+
+// ── 全量注册面：复用 check-dead-gates.mjs 的结构化遍历（issue #210 弱点①的修法）──
+// 不手点文件名——被守护对象清单必须是「当前注册了什么 hook」这件事的派生物
+// （`[#守-清单派生化]`），不是写死的两个文件名。**用法刻意收窄**：这里只是把
+// check-dead-gates.mjs 当一个现成的「settings.json → 已注册命令 hook 文件列表」
+// 解析器来复用，不是把它的死闸判据本身接进来（那是它自己的职责，本文件不复述）。
+// `--live` 也指向 git 快照文件本身（与它默认扫的 `--snapshot-dir` 是同一份内容）、
+// 并加 `--no-providers`——这样整次运行 100% 由仓库内文件决定、不读真实机器的
+// `~/.claude/settings.json`，避免把「这台机器上凑巧有别的坏 hook」这类机器级可变
+// 状态带进本测试的红绿判断（沙盒/夹具要求，见 issue #210 派单条款）。
+function runDeadGatesJson() {
+  return spawnSync(process.execPath,
+    [DEAD_GATES_SCRIPT, "--json", "--no-providers", "--live", SNAPSHOT_SETTINGS],
+    { encoding: "utf8", cwd: REPO, timeout: 30000 });
+}
+function resolveRegisteredHookFiles() {
+  const r = runDeadGatesJson();
+  if (r.error) return { ok: false, why: "子进程起不来：" + r.error.message, files: [] };
+  const stdout = String(r.stdout || "");
+  // --json 模式末尾另打一行 DEAD_GATES_SUMMARY（非 JSON 文本），JSON 主体截止到
+  // 最后一个 "}\n"——这是它自己的输出契约（见该脚本 `out(summaryLine())` 那一行）。
+  const cut = stdout.lastIndexOf("}\n");
+  if (cut < 0) {
+    return { ok: false, files: [],
+      why: "输出里找不到 JSON 收尾（脚本可能崩了）。stdout=" + stdout.slice(0, 300) +
+        " / stderr=" + String(r.stderr || "").slice(0, 300) };
+  }
+  let doc;
+  try { doc = JSON.parse(stdout.slice(0, cut + 1)); }
+  catch (e) { return { ok: false, why: "JSON 解析失败：" + e.message, files: [] }; }
+  // 只取「快照/settings.json」这一层（git 里那份、已由 --live 同源覆盖）解析出的
+  // 已注册命令条目，且 token 是 .js/.cjs/.mjs 形态——permissions 面、非脚本形态、
+  // 以及本次未使用的 providers 层都不在此列。
+  const snapAlive = (doc.alive || []).filter((a) =>
+    String(a.origin || "").startsWith("快照/settings.json") && JS_HOOK_EXT.test(String(a.token || "")));
+  const files = [...new Set(snapAlive.map((a) => a.token))];
+  return { ok: true, files, doc };
+}
 
 async function main() {
   const mod = await import("../config-sync/lib/mcp-health.mjs");
@@ -429,35 +479,39 @@ async function main() {
       liveCall, JSON.stringify(callLines));
   }
   {
-    const scaffoldSrc = fs.readFileSync(SCAFFOLD_HOOK, "utf8");
-    const configGuardSrc = fs.readFileSync(CONFIG_GUARD_HOOK, "utf8");
-    // 🔴 **已知弱处，issue #210 item③：本轮把覆盖面从 1 个文件扩到 2 个，不做到全量**——
-    // ①这两条断言只护住 `dao-scaffold-check.js`（10s 预算）与 `dao-config-guard.js`
-    // （SessionStart 5s 预算档）——对抗复核 PR #207 评论明确点名后者「完全不在
-    // 覆盖范围内」，本批补上；但本机 hook 注册面实测有 **17 个（8 类事件）**（2026-08-09
-    // 对抗复核 PR #212 点数，live settings 与 git 快照两侧独立同数；本段初稿写 15，
-    // 漏数的两个是 `dao-probe-gate@UserPromptSubmit` 与 `dao-rate-limit-sentinel@StopFailure`
-    // ——后者正是本 PR 自己在守的 hook，手维护枚举第四次被咬），其余 15 个
-    // （`dao-remove-session` / `dao-codegraph-ensure` / `dao-playwright-cleanup` 等
-    // SessionStart 同僚 + `PreToolUse`/`PostToolUse`/`UserPromptSubmit`/`Stop`/
-    // `StopFailure`/`PostCompact`/`SubagentStart` 各挂载点）仍不在覆盖范围。
-    // **为什么不做成扫描 `~/.claude/settings.json` 全部注册 hook**（issue #210 建议的
-    // 完全解）：那需要复用/重构 `check-dead-gates.mjs` 的结构化遍历（它是独立的完整
-    // 检查器，不是一个可直接 import 的工具函数库），属另一个批次的判断，不在本次
-    // 「顺手扩到预算最紧档那个」的成本范围内——两个文件各自手点比一次结构化重写便宜得多，
-    // 但代价就是仍有 15/17 零覆盖，这是刻意的取舍不是遗漏。
-    // ②即使在这两个文件内部，子串匹配也能被字符串拼接绕过（如
-    // `require(['../../config-sync/lib/mcp-', 'health.mjs'].join(''))` 源码里不出现
-    // `mcp-health` 字面，M10 实测 0 红）——这一条本批同样不修，按 `[#帅-撤宣称不抢修]`
-    // 不在合并压力下抢修，跟进单见 issue #210。
-    check("dao-scaffold-check.js（SessionStart 热路径，10s 预算）没有引用本模块——" +
-      "这条防的是未来有人图省事把 6-15s 的探测塞进同步热路径（issue #92 明写的成本约束）；" +
-      "覆盖面与绕过面的已知缺口见本行上方注释与 issue #210，本轮不修",
-      !/mcp-health/i.test(scaffoldSrc), "");
-    check("dao-config-guard.js（SessionStart 热路径，5s 预算——与 dao-remove-session.js 并列最紧档，" +
-      "非唯一；最热挂载点另属 PreToolUse 的 dao-hard-gates.js）" +
-      "同样没有引用本模块（issue #210 item③ 本批新增，此前全域仅 1 个文件有此覆盖，此处已补）",
-      !/mcp-health/i.test(configGuardSrc), "");
+    // ── 全量注册面（issue #210 弱点①的修法，取代此前手点 2 个文件名的版本）──────────
+    // 被扫的文件清单不是写在这里的字面量，是 `resolveRegisteredHookFiles()` 从
+    // check-dead-gates.mjs 的结构化遍历里派生出来的——明天谁给任何一个事件多挂一个
+    // command 型 hook，这条测试自动跟着扫到它，不需要有人记得回来改这个文件。
+    const resolved = resolveRegisteredHookFiles();
+    check("check-dead-gates.mjs 结构化遍历成功产出注册面（子进程未崩 · JSON 可解析 · exit=0，" +
+      "三者任一失败都说明下面的「零命中」不可信，而不是「全部干净」）",
+      resolved.ok && resolved.doc && resolved.doc.exit === 0,
+      resolved.ok ? "exit=" + (resolved.doc && resolved.doc.exit) : resolved.why);
+    // 下限不是上限：2026-08-09 实况是 18（17 个 hook 挂载点 + 1 个 statusLine）。这里
+    // 留一点余量（15）——真正要防的是「扫描面塌陷成 0 或个位数」，不是钉死一个会随
+    // 正常增减 hook 而过期的精确数字（`[#守-退役触发]` 同一个道理：阈值型断言用会
+    // 过期的魔数不如用「显著低于」）。当前最新数自行核对：
+    // `node ccswitch/scripts/check-dead-gates.mjs --json --no-providers`。
+    check("注册面扫描没有塌陷（floor=15，当前实况 18）",
+      resolved.ok && resolved.files.length >= 15,
+      "实得 " + (resolved.files ? resolved.files.length : 0) + " 个：" + JSON.stringify(resolved.files || []));
+
+    if (resolved.ok) {
+      for (const abs of resolved.files) {
+        let src = null, readErr = null;
+        try { src = fs.readFileSync(abs, "utf8"); } catch (e) { readErr = e; }
+        const rel = path.relative(REPO, abs).replace(/\\/g, "/");
+        check(rel + "（已注册 command hook，静态文本快速信号）没有引用 mcp-health.mjs——" +
+          "防的是未来有人图省事把 6-15s 的探测塞进同步 hook（issue #92 明写的成本约束）。" +
+          "**已知弱处，本轮不修，见文件头注**：子串匹配可被字符串拼接绕过" +
+          "（如 `require(['../../config-sync/lib/mcp-','health.mjs'].join(''))`，M10 实测 0 红）" +
+          "——按 `ccswitch/rules/dao-guard-writing.md` 既有判据（文本匹配型护栏对改写字面的形态天然失明），" +
+          "接受这个边界而非造更复杂的正则去堵，跟进单 issue #210",
+          readErr ? false : !/mcp-health/i.test(src),
+          readErr ? "读不到文件：" + readErr.message : "");
+      }
+    }
   }
 
   // ══════════════════════════════════════════════════════════════
