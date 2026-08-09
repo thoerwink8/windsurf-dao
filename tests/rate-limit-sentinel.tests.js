@@ -314,14 +314,18 @@ console.log("\n=== issue #236 挂账③：死亡判定不能从 `=== true` 松�
 {
   // 写入侧目前永远是布尔值，故这不是当前活跃风险，而是**结构上**没有断言在守
   // （issue #236 M7：`marked === true` 松成 `marked`，既有 165 条断言零反对）。
-  // 补一条正控：一个 truthy 但非严格 true 的值（字符串 "true"）不应被计入。
-  const TRUTHY_NOT_TRUE = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: "true", error: "rate_limit" };
+  // 补一条正控：一个 truthy 但非严格 true 的值不应被计入。
+  // 🔴 **样本订正（issue #243①，出处 PR #239 判词）**：此前样本是字符串 "true"，
+  // 而 `"true" == true` 恰为 false（字符串走 Number() 强转成 NaN，NaN == 1 恒 false）
+  // ⇒ `=== true` 松成 `== true`（宽松相等）这一放宽形态从射程外溜走，对抗官实测零守护。
+  // 换成数字 1：`1` 既 truthy 又 `1 == true`，一个样本同钉 truthy 与宽松相等两种放宽形态。
+  const TRUTHY_NOT_TRUE = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: 1, error: "rate_limit" };
 
   const tag = "deaths-marked-truthy";
   seedFiredLog(tag, REAL_HOOK, [TRUTHY_NOT_TRUE]);
   run(REAL_HOOK, payloadOf(), tag);
   const m = readJson(markerPath(tag));
-  check('marked:"true"（truthy 但非严格 true）不计入 ⇒ deaths_24h = 1（只有这次真实死亡）',
+  check("marked:1（truthy 且 1 == true，但非严格 true）不计入 ⇒ deaths_24h = 1（只有这次真实死亡）",
     m && m.deaths_24h === 1, "得 " + (m && m.deaths_24h) + "（种子=" + JSON.stringify([TRUTHY_NOT_TRUE]) + "）");
 
   // 先破再验：把 `=== true` 松成 truthy 判据 ⇒ 上面那条记录翻面被计入。
@@ -332,7 +336,7 @@ console.log("\n=== issue #236 挂账③：死亡判定不能从 `=== true` 松�
     seedFiredLog(tagM, h, [TRUTHY_NOT_TRUE]);
     const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
     const mm = readJson(markerPath(tagM));
-    check("🔴 先破再验：`=== true` 松成 truthy ⇒ marked:\"true\" 那条被计入，deaths_24h 从 1 变成 2",
+    check("🔴 先破再验：`=== true` 松成 truthy ⇒ marked:1 那条被计入，deaths_24h 从 1 变成 2",
       mm && mm.deaths_24h === 2, "code=" + rm.status + " 得 " + (mm && mm.deaths_24h));
     check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
       mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string");
