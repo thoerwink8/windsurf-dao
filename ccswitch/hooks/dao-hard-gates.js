@@ -189,12 +189,17 @@
 //          进程寿命 852-859 ms）；**断连映射盘**卡的是已建立又断掉的 SMB 会话（Windows 上
 //          经典的「杀不掉」）—— 本机造不出那种盘，**这一格至今没测** ⇒ 正确说法是
 //          「**界在盘符形态下成不成立，未知**」。
-//       ㈡ **候选侧那一格仍然无界**（`g2Resolve` → `g2Canon` 走默认的进程内同步实现）。
-//          候选侧的触发次数**由 payload 控**，给它上子进程就必须回答「N 个诱饵 × timeout
-//          怎么办」—— 而那正是第二、三轮两条绕过的入口 ⇒ **本批刻意不动，账挂在 issue #199**。
-//          （🔴 2026-08-08 回填编号：此处此前写的是「~~见 PR body 未尽处①~~」而**没有编号** ——
-//          PR #197 对抗官按 `#动-义务转移` 判为「说不出编号即未转移」：登记面保证的是「哪天有人
-//          修会红」，**不保证有人去修**。帅当日建号 #199，本行回填。）
+//       ㈡ ✅ **已修（2026-08-09 · issue #199）**。🔴 **作废原文照录**：~~候选侧那一格仍然无界
+//          （`g2Resolve` → `g2Canon` 走默认的进程内同步实现）。候选侧的触发次数**由 payload 控**，
+//          给它上子进程就必须回答「N 个诱饵 × timeout 怎么办」—— 而那正是第二、三轮两条绕过的
+//          入口 ⇒ 本批刻意不动，账挂在 issue #199。~~（🔴 2026-08-08 回填编号：此处此前写的是
+//          「~~见 PR body 未尽处①~~」而**没有编号** —— PR #197 对抗官按 `#动-义务转移` 判为
+//          「说不出编号即未转移」：登记面保证的是「哪天有人修会红」，**不保证有人去修**。）
+//          **#199 给「N × timeout」的答案是让 N 与子进程数脱钩，不是给 N 设上限**：
+//          零 I/O 前筛（`g2TailCouldBeLive`）+ **每进程至多一个**批量子进程（`g2RealpathBatch`）
+//          ⇒ **N × 0 + 1 × timeout**。缺省实现同批由 `G2_RP_SYNC` 换成恒抛的 `G2_RP_NONE`
+//          ⇒ **hook 进程自己一次同步 realpath 都不调**（回归网有结构断言数着）。
+//          逐条论证在 `g2TwoPhase` / `g2RealpathBatch` 上方，**它没买到的两格照旧写在 ㈠ 与下面 ⑱**。
 //   ── 以下一格由 **PR #117 第三轮对抗验证官**查出（2026-08-05）──────────────────
 //     ⑯ ✅ **已修（2026-08-08 · issue #134）** —— **零 I/O 快筛不再依赖归一后的末段**。
 //       🔴 **作废原文照录**：~~未修（新登记）—— 零 I/O 快筛对 `g2IsLiveDir` 不是「必要条件」……
@@ -209,22 +214,68 @@
 //       回归网现在有 fixture 了（`mklink /J` 真 junction —— 与 cc-switch 分发用的同一机制 ——
 //       加上 realpath 往返算出来的真 8.3 短名假 HOME），且**自失效**：fixture 造不出来时
 //       前置断言当场红，**不会悄悄退化成「测了个普通目录」**（那正是原登记不敢写断言的理由）。
-//       ⚠️ **相邻那一格仍然漏，而且两侧一起漏**：同一个 junction 写成**长名**时路径里没有
-//       `~<数字>` ⇒ 候选侧压根不落 realpath ⇒ 归一后仍是 `…/.claude`，与 live 的**真实**
-//       路径比不上（第三轮 6a/6b 实测 master 与 PR 版都是 exit 0，**攻击者写长名反而不会被抓**）。
-//       修它要让候选侧无条件 realpath，那就撞上 ⑮㈡ 那格无界 I/O ⇒ **同一张单：issue #199**
-//       （2026-08-08 回填编号，理由同 ⑮㈡ 那条括注）。
-//     ⑰ ❌ **未修（新登记，2026-08-08 由 PR #197 对抗验证官查出）** —— **同一个病的第四种长相：
-//       `g2IsLive` 那道文件名快筛也不是「必要条件」**。它问的同样是**末段**
-//       （`endsWith("/settings.json")`），而 `settings.json` **自己是符号链接**时 realpath 照样改写它
-//       ⇒ 短名 HOME 触发归一 ⇒ 末段变成链目标名 ⇒ 快筛失明、连比都不比。
-//       实测 2×2（fixture 自失效：`mklink` 成功 + `lstat().isSymbolicLink()` 为真 + realpath 末段
-//       确实变成了 `actual.json`）：**PR 版与 master 逐格相同**，只有「符号链接 + 短名 HOME」
-//       那一格是 exit 0，长名 HOME 两边都拦 ⇒ **漏报方向、非本批引入、非退化**，故不列为阻断项。
-//       ⚠ 它使**下方 `g2IsLiveDir` 上方那句「对 `g2IsLive` 是必要条件」为假**（那句已就地划线订正）。
-//       ⚠ **它在回归网里没有断言**（本批只登记不修，同 ⑯ 修好之前那个状态）⇒ **只有文字登记，
-//       没有自失效机制**；对抗官那份 fixture（文件级符号链接 + 短名 HOME）可直接搬。
-//       **账挂在 issue #199**（帅在该单补登）。
+//       ✅ **相邻那一格 2026-08-09 也修了（#199）**。🔴 **作废原文照录**：~~相邻那一格仍然漏，
+//       而且两侧一起漏：同一个 junction 写成**长名**时路径里没有 `~<数字>` ⇒ 候选侧压根不落
+//       realpath ⇒ 归一后仍是 `…/.claude`，与 live 的**真实**路径比不上（第三轮 6a/6b 实测
+//       master 与 PR 版都是 exit 0，攻击者写长名反而不会被抓）。修它要让候选侧无条件 realpath，
+//       那就撞上 ⑮㈡ 那格无界 I/O ⇒ 同一张单：issue #199。~~
+//       —— **修法与那句预判不同，照直写**：动的不是候选侧，是**常量侧改成无条件过一次有界
+//       realpath**（`g2LiveDirReal`）。攻击者写的是链**目标**的长名（`<home>\actualcfg\settings.json`），
+//       候选侧对它无事可做（那条路径本来就是长名、realpath 也不改写它）；缺的一直是
+//       **live 目录那一侧没解开链**。⇒ 判据一句话：**两侧不在同一深度时，先问「缺的是哪一侧」**。
+//       代价照直写：常量侧从「长名 HOME 零 I/O」变成「**候选文件名像 live 且目录不字面相等**
+//       时落 1-2 次有界子进程」，记忆化后每进程封顶。回归网 `#199` 那一节有正控 + mutation。
+//     ⑰ ✅ **已修（2026-08-09 · #199）** —— 🔴 **作废原文照录**：~~未修（新登记，2026-08-08 由
+//       PR #197 对抗验证官查出）—— 同一个病的第四种长相：`g2IsLive` 那道文件名快筛也不是
+//       「必要条件」。它问的同样是**末段**（`endsWith("/settings.json")`），而 `settings.json`
+//       **自己是符号链接**时 realpath 照样改写它 ⇒ 短名 HOME 触发归一 ⇒ 末段变成链目标名 ⇒
+//       快筛失明、连比都不比。…… 它在回归网里没有断言（本批只登记不修）⇒ 只有文字登记，
+//       没有自失效机制。~~
+//       **修法是 `g2TwoPhase` 的相①（归一前那一相）**：相① 压根不 realpath ⇒ 末段就是用户写的
+//       那个末段，「归一改写末段」这件事在那一相里不存在。**补的是深度，不是某一道快筛的特例**
+//       —— 这个病此前每被发现一次就换一个长相再活一次（#112 只改候选侧 / ⑯ 目录侧短名 /
+//       ⑯ 相邻格目录侧长名 / ⑰ 文件侧），**每次的修法都是给被发现的那一道加特例**。
+//       ⚠ **别把「换成两相」读成「这个病死透了」**：下面 ⑲ 就是它的第 5 种长相，两相**一起**失明。
+//       ⚠ 它使原文那句「`g2IsLiveDir` 对 `g2IsLive` 是必要条件」为假 —— **`g2IsLiveDir` 本身
+//       已于本批删除**（理由见 `g2BaseCouldBeLive` 上方），那句话连同载体一起没了。
+//       回归网现在有断言：文件级符号链接 fixture（自失效：`mklink` 成功 + `lstat` 为真 +
+//       realpath 末段确实变成 `actual.json`）+ 一条「删掉相① ⇒ 这一格由 2 翻 0」的 mutation。
+//   ── 以下一格是 **#199 本批新引入的**，登记在这里 ────────────────────────────
+//     ⑱ ❌ **未修（2026-08-09 随 #199 新登记，本批自己造出来的面）** —— **批量子进程的
+//       「诱饵抢先」**：`g2RealpathBatch` 把一批候选交给**一个**子进程逐条解、逐条即时落，
+//       超时被杀时**排在卡住那一条之后的全部解不开** ⇒ 攻击者把毒路径（不可路由 UNC /
+//       断连映射盘）放在同一条命令的**最前面**，可以让排在它后面的真目标退回「按原样比」。
+//       **方向是漏报，且严格优于改动前**：改动前同一条 payload 会让 `fs.realpathSync.native`
+//       在**主进程**里一卡 21 s，宿主 10 s 到点杀掉整个 hook ⇒ **七道闸一起放行**，
+//       比这个严重一个量级。⇒ **非阻断项，但它是真的**。
+//       ⚠ **可想到的两条修法各自有代价，本批都不做**：①按批内顺序做「毒的排后面」——
+//       排序判据本身就是攻击者可控的；②每条一个子进程 —— 那就把「N × timeout」原样请回来了。
+//       **它在回归网里有断言**（不是只有文字）：一条正控量「一批 N 条 ⇒ 子进程恰好 1 个」，
+//       一条实测量「把一条注成必卡的 ⇒ 同批后面那条解不开、判决退回相① 的结果」。
+//       **账挂在 issue #214**（`#动-义务转移`：说不出编号即未转移 —— ⑮㈡ 那条括注记的正是
+//       上一任因为「只有登记面、没有编号」被对抗官判回的同一件事，本批不重蹈）。owner：AI。
+//       ⚠ **另有一格至今没测，与 ㈠ 同源**：`G2_CAND_REALPATH_MS` 那个界同样**以子进程杀得掉
+//       为前提**。断连映射盘（已建立又断掉的 SMB 会话）本机造不出 —— PR #197 对抗官第 3 笔
+//       点名过这一格，**#197 两任加 #199 本任，三任都没测到**。⇒ 正确说法仍是「**界在盘符形态下
+//       成立与否，未知**」，禁写「已根治」。不可达论证只到这一步：本机没有那种盘，
+//       构造它要一台真 SMB 服务端先握手再断链，属需用户在场件。
+//     ⑲ ❌ **未修（2026-08-09 随 #199 新登记）** —— **⑰ 的第 5 种长相：形态交叉的那一格。**
+//       `settings.json` 是符号链接 **且** 候选写 8.3 短名 **而 HOME 是长名** ⇒ **两相一起失明**：
+//       相①（不归一）候选短、常量长 ⇒ 字符串比不上；相②（归一）realpath 顺着链把末段改写成
+//       `actual.json` ⇒ `g2IsLive` 的文件名快筛失明。
+//       **非退化**：`_tmp/probe-sym.mjs` 四格实测 master `0/2/0/2`、本版 `0/2/2/2` ——
+//       只有 ⑰ 那格由 0 变 2，本格**两版都是 0**。
+//       🔑 **它是怎么被看见的，比它本身值钱**：本任写 ⑰ 正控时想当然写下「同一形态在长名 HOME
+//       下同样 exit 2」，**被自己的断言实测证伪**（code=0）。⑰ 原来那份 2×2 的**候选形态与 HOME
+//       形态始终一致**，交叉的两格从来没被量过 —— 又一次「一组样本的共同约束被当成背景写进结论」
+//       （本文件三条透镜的第 ㈢ 条，第三次同型复发）。
+//       **已知修法（零额外 I/O）**：加一相「**归一后的目录 + 归一前的末段**」。父目录那条路径
+//       **已经在 `wanted` 里**（相① 的两级退化会把它一起记下）⇒ 不多花任何 syscall。
+//       **本批刻意不做**：本单契约是「候选侧有界化 + ⑯ 相邻格 + 登记同步」，临合并加第三相属
+//       扩范围，而判据类改动禁先合后审。**回归网有自失效登记断言钉着**（不是只有文字）。
+//       **账挂在 issue #214**（与 ⑱ 同一张集账单，两格的关闭条件在那里分开写）。owner：AI。
+//       **可达性照直写**：本机 `~/.claude/settings.json` 与 `~/.claude` 实测都**不是**链
+//       ⇒ 这个拓扑在本机零发生，fixture 是造的。
 //   **别把「G2 现在管 shell 了」读成「shell 写 live 已经被兜住了」**：兜住的是**直白写法**，
 //   而直白写法正是真实违例的形态（本次那条就是）。
 //   ⚠ **两处已知误伤**（真语料上当前零发生，但逃生阀只有用户设得了 ⇒ 撞上即会话卡死）：
@@ -611,6 +662,14 @@ const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
 //     I/O 都不落**；短名 HOME 下本机 16551 条 Edit 历史里只有 **27 条**（0.16%）通过快筛。
 //     且卡死那一格还要再叠一个条件——`g2Canon` 只在含 `~<数字>` 时才落 realpath ⇒
 //     **HOME 必须同时是 8.3 短名**，一块长名的映射网络盘根本不会触发它。
+//     🔴 **上面这四行 2026-08-09（#199）起对常量侧不再成立，作废但照录**（它是原地实测的
+//     记录，删了就查不到「当时量的是什么」）：#199 把常量侧改成**无条件**过一次有界 realpath
+//     ⇒ 触发条件不再是「HOME 是 8.3 短名」，而是「**候选文件名像 live 那两个之一，且它的
+//     目录与 `HOME/.claude` 不字面相等**」（`g2MatchesLiveDir` 的语法层没命中那一支）。
+//     长名 HOME 下写 `<proj>/.claude/settings.json` / `.vscode/settings.json` 这类路径
+//     现在会落 **1-2 次**有界子进程（记忆化，每进程封顶）。**换来的是 ⑯ 相邻格与 ⑰ 那两格
+//     真拦截**。候选侧那一半的可达性数字见 `g2TwoPhase` 上方 ㈠（真语料 27365 条里含 `~N`
+//     的 1196 条，末段几乎都不像 live ⇒ 前筛之后结构性零 I/O）。
 //     **方向对，量级比第二轮说的小。** 🔴 **末句 2026-08-08 订正，作废原文照录**：
 //     ~~但「realpath 会不会真的挂住」**至今仍是读码得出的**。~~ —— **测出来了**：
 //     PR #145 第一轮对抗验证官拿 RFC 5737 不可路由地址实测，`fs.realpathSync.native`
@@ -633,8 +692,12 @@ const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
 //      共享资源」为前件。**这一版没有那个资源。**
 //   ㈡ **射程只到常量侧，而常量侧的输入与 payload 无关**（`path.join(HOME, ".claude")`，
 //      纯环境决定），且记忆化后**每进程最多求值一次** ⇒ 攻击者**没有任何输入**能让它多跑一次，
-//      更不能把它推进降级态。**候选侧压根没引入子进程** ⇒ 「N 个诱饵 × 单次成本」这个
-//      放大器不存在（那正是第二轮绕过的放大器）。
+//      更不能把它推进降级态。🔴 **末句 2026-08-09（#199）作废，原文照录**：
+//      ~~**候选侧压根没引入子进程** ⇒ 「N 个诱饵 × 单次成本」这个放大器不存在（那正是第二轮
+//      绕过的放大器）。~~ —— 候选侧**现在也有子进程了**，但那个放大器仍然不存在，
+//      **理由换了**：不是「没有子进程」，而是「**子进程数与 N 脱钩**」（零 I/O 前筛 + 每进程
+//      至多一个批量子进程）。逐条论证在 `g2TwoPhase` 上方。**别把这两个理由当成同一个读** ——
+//      前者是「这一侧没有那个东西」，后者是「有，但它不随输入增长」。
 //   ㈢ **失败方向仍是 fail-open**，与改动前同语义（realpath 抛错 ⇒ 按原样比）。第三轮实测过
 //      反方向的代价：**一次** `ENAMETOOLONG` 就足以把合法的**项目级** `.claude/settings.json`
 //      从 exit 0 翻到 2，而 G2 的逃生阀只有用户设得了 ⇒ 撞上即会话卡死。**fail-closed 不是
@@ -645,17 +708,29 @@ const G2_LIVE_NAMES = ["settings.json", "settings.local.json"];
 //    未知」。`spawnSync` **会等子进程收尸**（第二轮实测：子进程占 0/1/3/5 GB 时超出界
 //    7-10/62/179/141-190 ms，单调），所以界 = timeout + 收尸时间，不是硬界。
 
-// 候选侧（默认）用的实现：进程内同步 realpath。**与改动前逐字节同语义**，
+// 🔴 **缺省实现 2026-08-09（#199）换掉了，作废原文照录**：
+// ~~候选侧（默认）用的实现：进程内同步 realpath。**与改动前逐字节同语义**，
 // `norm` 也留在这里 —— 有界版必须给出同形态的结果，否则两侧归一深度又会错开。
-const G2_RP_SYNC = (p) => norm(fs.realpathSync.native(p));
+// `const G2_RP_SYNC = (p) => norm(fs.realpathSync.native(p));`~~
+// —— 那个缺省值就是**候选侧无界 I/O 的载体**（头注 ⑮㈡）：`g2LongPath(p)` 少传一个参数
+// 就掉进同步不可中断的 realpath，而候选侧的调用次数**由 payload 控**。
+// 现在缺省是恒抛 ⇒ 落回 `g2LongPath` 既有的 `try/catch`「按原样比」（fail-open，同设计取舍②）：
+// **忘了传解析器的代价是漏一格，不再是整个会话卡死。**
+// 结构断言（回归网）：`realpathSync` 在**剥掉注释后的代码**里只出现在下面两个子进程正文
+// 字面量里 —— 即 **hook 进程自己一次同步 realpath 都不调**，全部 realpath 都在有界子进程里。
+const G2_RP_NONE = () => { throw new Error("G2 未提供 realpath 实现（缺省不落 I/O）"); };
 
 // 单次上界。**调参三问（`#官通-调参三问`，三问都要答，不是双问）**：
 //   ① **改小会怎样** —— 健康路径的成本是「node 冷启 + 一次本地 realpath」，本机量级
 //      31-52 ms（PR #145 三轮各自独立量过）。压到 ~200 ms 以下时，杀毒软件扫 `node.exe`
 //      就足以让**健康**调用超时 ⇒ 短名 HOME 的机器上 G2 静默失明，
 //      而「失明」与「没有违例」在退出码上长得一模一样。
-//   ② **当前值够不够** —— 800 ms ≈ 健康成本的 16-25 倍；且每进程最多触发一次
-//      （记忆化 + 输入与 payload 无关）⇒ 最坏吃掉宿主 10 s 预算的 8%（两级退化叠满 16%）。
+//   ② **当前值够不够** —— 800 ms ≈ 健康成本的 16-25 倍；且每进程最多触发 **2** 次
+//      （记忆化 + 输入与 payload 无关；2 = `g2LongPath` 的两级退化，整条解不开时再问一次
+//      父目录 —— 见下方 `G2_RP_CHILD` 上方那段）⇒ 最坏吃掉宿主 10 s 预算的 16%。
+//      🔴 **2026-08-09（#199）订正**：此处此前写「每进程最多触发**一次** ⇒ 最坏 8%（两级退化
+//      叠满 16%）」—— 同一句话里「最多一次」与「两级叠满」自相矛盾，**16% 才是真上界**。
+//      候选侧那次批量另计（`G2_CAND_REALPATH_MS`，每进程 ≤1 次 ⇒ +8%），合计 ≤24%。
 //   ③ **上限到二者之间有无真实需求** —— 上限是「宿主预算减掉其余六道闸」。健康调用从不到
 //      百毫秒级；超过就说明文件系统不答话，**再等下去换不到更好的答案，只会吃掉另外六道闸
 //      的预算**。⇒ 800 ms 到 9 s 那一段**没有真实需求**，按「相同收益取更保守一侧」取小。
@@ -690,6 +765,120 @@ function g2RealpathBounded(p) {
   return norm(got);
 }
 
+// ── #199：候选侧的有界化 —— 零 I/O 前筛 + **每进程一次**的批量子进程 ────────────────
+// **这一格与常量侧不是同一个问题**，别把 #133 的论证照搬过来：常量侧的输入是
+// `path.join(HOME, ".claude")`，与 payload 无关、记忆化后每进程最多求值一次 ⇒ 攻击者
+// 没有任何输入能让它多跑一次；**候选侧的触发次数由 payload 控**，一条命令想塞几个诱饵
+// 路径就塞几个。所以「上子进程」在这一侧必须先回答 **「N 个诱饵 × timeout 每个」**
+// —— 那正是 PR #145 第二、三轮两条绕过的入口（都长在「预算耗尽后怎么办」这个岔口上）。
+//
+// 🔑 **本批给的答案是：让那个乘法里的 N 与子进程数脱钩，而不是给 N 设上限。**
+//   ㈠ **第一刀 · 零 I/O 前筛**（`g2TailCouldBeLive`）：末段**不可能**是 live 的候选
+//      连 realpath 都不试。本机真语料 27365 条去重命令里含 `~N` 的有 1196 条
+//      （scratchpad 一律走 `C:\Users\ADMINI~1\AppData\…`），它们的末段几乎都不像 live
+//      ⇒ **日常流量结构性零 I/O**。这一刀管的是**误伤成本**，不是攻击。
+//   ㈡ **第二刀 · 批量**：过了前筛的那些**一次性**交给一个子进程解，
+//      上界是 `G2_CAND_REALPATH_MS` **一次**，与 N 无关。⇒ 「N × timeout」的答案是
+//      **N × 0 + 1 × timeout**。
+//   ㈢ **没有预算、没有 sticky 死标记、没有跨调用状态** —— 那个岔口在结构上仍然不存在
+//      （与 #133 同一条论证，只是这一侧靠「批量」而不是靠「输入与 payload 无关」）。
+//      解不开的候选落回 `g2LongPath` 既有的「按原样比」，**与改动前同一条降级路径**。
+//   ㈣ **失败方向仍是 fail-open**：`fail-closed 不是「更保守的默认」，它是把漏报换成误伤`
+//      （第三轮实测：一次 `ENAMETOOLONG` 就把合法的项目级 `.claude/settings.json` 从 0 翻 2，
+//      而 G2 的逃生阀只有用户设得了 ⇒ 撞上即会话卡死）。
+//
+// ⚠️ **诚实边界一（诱饵抢先）**：批量输出是**逐条即时落**的，被超时杀掉时**已解出来的那些
+//    仍在 `r.stdout` 里**；但排在卡住那一条之后的解不开 ⇒ 攻击者把毒路径放最前面，可以让
+//    同批的真目标退回「按原样比」。**这不是本批引入的新面**：改动前同一条 payload 会让
+//    `fs.realpathSync.native` 在**主进程**里一卡 21 s，宿主 10 s 到点直接杀掉整个 hook ⇒
+//    **七道闸一起放行**，比这个严重一个量级。⇒ 方向是漏报、且严格优于改动前。
+// ⚠️ **诚实边界二（界以子进程杀得掉为前提）**：见下方 `G2_CAND_REALPATH_MS` 与头注 ⑮㈠。
+// ⚠️ **孙进程**（PR #197 对抗官第 1 笔：`timeout` 杀进程不杀进程树）：下面两个子进程正文
+//    都是**写死的字面量**、只 `require('fs')`、**不 require child_process / 不 spawn**
+//    ⇒ **结构上没有进程树可杀**；路径一律走 **stdin 当数据**、不进代码字符串，payload
+//    也造不出可执行内容。回归网有一条结构断言数「两个子进程正文里出现过 spawn/exec/
+//    child_process 没有」，多出一处当场红。
+
+// 候选侧那一次**批量**解析的上界。**刻意与 `G2_CONST_REALPATH_MS` 分成两个常量**：
+// 两侧的成本模型不同（常量侧每进程最多 2 次单路径调用、候选侧每进程最多 1 次批量调用），
+// 合成一个常量会让「该调小哪一个」没法分开答。**调参三问（`#官通-调参三问`，三问都要答）**：
+//   ① **改小会怎样** —— 健康批（1-3 条本地路径）的成本是「node 冷启 + N 次本地 realpath」，
+//      与常量侧同量级（本机 31-52 ms 那一档）。压到 ~200 ms 以下时杀毒软件扫一次
+//      `node.exe` 就足以让**健康**批超时 ⇒ 8.3 短名候选静默失明，
+//      而「失明」与「没有违例」在退出码上长得一模一样。
+//   ② **当前值够不够** —— 800 ms ≈ 健康成本的 16-25 倍；每进程最多触发 **1 次**
+//      ⇒ 最坏吃掉宿主 10 s 预算的 8%（与常量侧最坏 16% 叠加为 24%，仍留 7.6 s 给其余六道闸）。
+//   ③ **上限到二者之间有无真实需求** —— 上限是「宿主预算减掉常量侧与其余六道闸」。
+//      健康批从不到百毫秒级；超过就说明文件系统不答话，**再等换不到更好的答案**。
+//      ⇒ 800 ms 到 7 s 那一段没有真实需求，按「相同收益取更保守一侧」取小。
+// ⚠️ **这个数是 AI 自定的、属判断档（定及格线）** ⇒ 已在 PR body 列为可退回项。
+//    绝对毫秒是本机单机数字（`#官通-性能哨兵` ①）——**可移植的结论是上面那三答，不是 800。**
+const G2_CAND_REALPATH_MS = 800;
+
+// 批量子进程正文。四条刻意的写法，别「顺手简化」：
+//   ① 路径走 **stdin**，不拼进代码串 —— 也不走 argv（诱饵多时会撞 Windows 命令行长度上限，
+//      而那个失败是**静默的**：spawn 失败 ⇒ 整批解不开 ⇒ 悄悄退回按原样比）。
+//   ② 只 `require('fs')`，不起任何孙进程（见上方「孙进程」那段）。
+//   ③ **逐条 `fs.writeSync(1, …)` 立刻落**，不攒 buffer —— 超时被杀时部分结果仍拿得到。
+//   ④ 输出与输入**逐行对位**；解不开的那条写空行（空行与真路径分得开）。
+//      父侧只送不含换行的路径，故行对位不会错位。
+//   ⑤ **刻意写成一行**（`#守-锚点行尾`）：mutation 要拿它当锚点，跨行锚点碰上 CRLF 就恒不命中，
+//      而「锚点没命中」与「被测守卫真的没塌陷」逐字节相同。
+const G2_RP_BATCH_CHILD = "const fs=require('fs');let d='';process.stdin.on('data',function(c){d+=c}).on('end',function(){var a=d.split('\\n');for(var i=0;i<a.length;i++){if(!a[i])continue;var r='';try{r=fs.realpathSync.native(a[i])}catch(e){r=''}fs.writeSync(1,r+'\\n')}})";
+
+// 候选侧**每个 hook 进程最多一次**的批量解析。失败 / 超时 ⇒ 拿到多少算多少，
+// 没解开的那些由调用方落回 `g2LongPath` 的「按原样比」。**本函数自己从不抛。**
+function g2RealpathBatch(paths) {
+  const map = new Map();
+  const list = paths.filter((p) => p && p.indexOf("\n") < 0);
+  if (!list.length) return map;
+  const r = childProcess.spawnSync(process.execPath, ["-e", G2_RP_BATCH_CHILD], {
+    input: list.join("\n") + "\n",
+    timeout: G2_CAND_REALPATH_MS,
+    windowsHide: true,          // 同常量侧：少了它每次触发都闪一个控制台窗
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "ignore"],
+    // 清 `NODE_OPTIONS`：免得父进程的 preload（含量它的探针自己）改变被测对象
+    env: Object.assign({}, process.env, { NODE_OPTIONS: "" }),
+  });
+  const lines = String(r.stdout || "").split("\n");
+  for (let i = 0; i < list.length && i < lines.length; i++) {
+    const got = lines[i].trim();
+    if (got) map.set(list[i], norm(got));
+  }
+  return map;
+}
+
+// 两相判定（#199）。**判决 = 相①（归一前）∨ 相②（归一后），任一命中即拦。**
+//
+// 🔑 **它顺带把「同一个病的第 3、4 种长相」结构性消掉了**（头注 ⑯⑰）：那个病是
+//    「**用归一后的值去做归一前的字符串假设**」—— 快筛问末段，而归一（realpath）会改写末段。
+//    此前两次修法都是给**被发现的那一道**快筛加「也看归一前」的特例，于是它换了个长相
+//    （目录 → 文件名）又活了一次。**相① 压根不归一**，末段就是用户写的那个末段
+//    ⇒ 不存在「归一改写末段」这件事。**补的是深度，不是某一道筛。**
+// 🔑 **相① 拦下就不起子进程**：真违例的常见形态（`~/.claude/settings.json`、
+//    `$env:USERPROFILE\.claude\settings.json`）在相① 就命中 ⇒ **一次 I/O 都不落**。
+// ⚠️ **两相都要跑，别「优化」成只跑相②**：相① 独有的覆盖面是「末段被链改写」那一类
+//    （头注 ⑰：`settings.json` 自己是符号链接）；相② 独有的是「候选与 HOME 的长短名形态
+//    不一致」那一类。回归网两侧各有专属样本 + 一条 mutation 钉着（缺哪一相都会红）。
+function g2TwoPhase(judge) {
+  const wanted = [];
+  const seen = new Set();
+  const v1 = judge((p) => {
+    if (!seen.has(p)) { seen.add(p); wanted.push(p); }
+    throw new Error("G2 相①：本相不落 I/O");
+  });
+  if (v1) return v1;
+  if (!wanted.length) return null;          // 没有任何候选想 realpath ⇒ 零 I/O 收工
+  const map = g2RealpathBatch(wanted);
+  if (!map.size) return null;               // 一条都没解开 ⇒ 相② 与相① 逐字节同结果，不必再跑
+  return judge((p) => {
+    const v = map.get(p);
+    if (!v) throw new Error("G2 相②：这一条没解开");
+    return v;
+  });
+}
+
 const _g2LiveDirCache = { syn: null, real: null };
 // ① 语法层：零 I/O
 function g2LiveDirSyntactic() {
@@ -704,18 +893,38 @@ function g2LiveDirSyntactic() {
 // 而预算已经不存在了 ⇒ 惰性求值这次没法被反过来用。
 function g2LiveDirReal() {
   if (_g2LiveDirCache.real === null) {
-    // 🔴 第二个参数就是 #133 的全部改动面：**全仓只有这一个调用点**传非默认的 realpath 实现。
-    _g2LiveDirCache.real = g2Canon(norm(path.join(HOME, ".claude")), g2RealpathBounded).toLowerCase();
-    // **fail-open 不许静默**（设计取舍②）：`~<数字>` 进去、`~<数字>` 出来 ⇒ 那一次有界 realpath
-    // 没验成（超时 / 抛错），本次是拿**未归一**的 HOME 在比 ⇒ 8.3 短名家目录上这道闸此刻是瞎的，
-    // 而「瞎」与「没有违例」在退出码上长得一模一样。**长名 HOME 走不到这一格 ⇒ 常见部署零噪音。**
+    // 零 I/O 归一（`//?/` 前缀 / `..` / `.` / 重复分隔符）—— 这一步刻意不落 I/O，
+    // 故传恒抛的 `G2_RP_NONE`，realpath 那一步下面单独做。
+    const syn = g2Canon(norm(path.join(HOME, ".claude")), G2_RP_NONE);
+    // 🔴 **无条件过一次有界 realpath（2026-08-09 · #199，头注 ⑯ 相邻格）**。作废原文照录：
+    //   ~~`_g2LiveDirCache.real = g2Canon(norm(path.join(HOME, ".claude")), g2RealpathBounded).toLowerCase();`~~
+    //   —— 那一版借的是 `g2Canon` 里「**含 `~N` 才解**」这个条件，而那个条件是
+    //   **候选侧为了省 I/O** 才有的。常量侧每进程最多算一次，省不出什么，
+    //   却让「`~/.claude` **自己是链**」这一格在**长名 HOME** 上两侧一起漏：
+    //   攻击者直接写链目标路径（`<home>\actualcfg\settings.json`）即可，
+    //   **写长名反而不会被抓**（第三轮 6a/6b 实测 master 与 PR #197 版都是 exit 0）。
+    //   现在常量侧拿得到真实目录 ⇒ 那条路径与它精确比得上。
+    // 🔑 **它没有把「N × timeout」搬到这一侧**：输入仍然是 `path.join(HOME, ".claude")`，
+    //   与 payload 无关、记忆化后每进程最多求值一次。变的只是「什么时候解」，不是「解几次」。
+    let solved = 0;
+    _g2LiveDirCache.real = norm(g2LongPath(syn, (p) => {
+      const v = g2RealpathBounded(p);
+      solved++;
+      return v;
+    })).toLowerCase();
+    // **fail-open 不许静默**（设计取舍②）：一次都没解成 ⇒ 本次是拿**未归一**的 HOME 在比，
+    // 8.3 短名家目录 / `.claude` 是链时这道闸此刻是瞎的，
+    // 而「瞎」与「没有违例」在退出码上长得一模一样。
+    // 🔴 **判据 2026-08-09 换过（#199）**，作废原文照录：~~`if (/~\d/.test(HOME) && /~\d/.test(real))`~~
+    //   —— 无条件解析之后，长名 HOME 上的失败**看不出来**（进出都不含 `~N`）⇒ 那个判据会
+    //   在新加的那一格上恒假、静默。改成数**成功次数**：`solved === 0` 才是「一次都没验成」。
     // ⚠ 照直写它的射程：宿主对 exit 0 的 stderr 不回喂给 agent（只有 exit 2 才回喂）⇒
     //   它是给**读日志的人**看的，不是一条会被谁读到的告警。判决通道仍然只有退出码。
-    if (/~\d/.test(HOME) && /~\d/.test(_g2LiveDirCache.real)) {
+    if (solved === 0) {
       process.stderr.write(
         `[dao-hard-gates G2] ⚠ 常量侧 realpath 没验成（有界子进程超时或失败，界 ` +
-        `${G2_CONST_REALPATH_MS}ms/次）⇒ 本次按未归一的 HOME 比对，短名家目录下这道闸**可能拦不住** ` +
-        `live 配置写入。**这不是「通过」，是「没验」。**\n`);
+        `${G2_CONST_REALPATH_MS}ms/次）⇒ 本次按未归一的 HOME 比对，8.3 短名家目录或 ` +
+        `\`.claude\` 是链时这道闸**可能拦不住** live 配置写入。**这不是「通过」，是「没验」。**\n`);
     }
   }
   return _g2LiveDirCache.real;
@@ -734,29 +943,49 @@ function g2IsLive(p) {
     return g2MatchesLiveDir(low.slice(0, low.length - n.length - 1));
   });
 }
-// 「这个目录的末段长得像 live 目录吗」——纯字符串，零 I/O。`norm` 已经削掉尾斜杠，
-// 所以 `~/.claude/` 与 `~/.claude` 在这里是同一个串。
-const g2DirTailLooksLive = (s) => s.endsWith("/.claude");
+// 「这个文件名**有没有可能**落地成 live 那两个文件之一」——纯字符串，零 I/O。
+// 两种放行：①名字本身就是（零 I/O 判得出）②它是个 8.3 短名（`~<数字>`，零 I/O **判不出**，
+// 放行到 realpath 层定案 —— 本卷上 `settings.json` 的真短名是 `SETTIN~1.JSO`，回归网有正控）。
+const g2BaseCouldBeLive = (b) => {
+  const low = String(b || "").toLowerCase();
+  return /~\d/.test(low) || G2_LIVE_NAMES.indexOf(low) >= 0;
+};
 
-// 目标位给的是 `~/.claude` **目录**时（`cp x ~/.claude/`），文件名由源的 basename 决定。
-// 第二个参数 `pre` = **归一前**的那个串（`g2ResolvePre` 的产物），见下方 #134。
-function g2IsLiveDir(p, pre) {
-  if (!p) return false;
-  const low = norm(p).toLowerCase();
-  // 零 I/O 快筛（见上方 ㈠）：末段不像 live 目录的路径直接 false，绝不往下走那两层
-  // （下面才是可能落 I/O 的地方）。
-  // 🔴 **2026-08-05 订正**：原文写它是「~~必要条件~~」—— **不是**。
-  // ✅ **2026-08-08 修（issue #134）**：病在「**用归一后的值去做归一前的字符串假设**」——
-  //   归一（realpath）会改写末段，`~/.claude` 是 junction 且 HOME 是 8.3 短名时归一后末段
-  //   不再是 `.claude`，这一行**连比都不比**就吞掉一格真拦截。
-  //   修法**不是给快筛开特例**，是让它同时看得见**两个深度**：归一前或归一后有一侧像 live
-  //   就放行到下一层，由精确比对定案。**零 I/O 新增**（`pre` 是现成的串，不需要任何 syscall）。
-  //   ⚠ 放宽的射程照直写：多放进来的只有「末段是个链、且链名不叫 `.claude`」这一种形态，
-  //   而它此前**必然**在这里被吞掉。误伤面不变——快筛只决定「要不要往下比」，
-  //   拦不拦仍由 `g2MatchesLiveDir` 的精确比对说话（回归网有项目级 `.claude` 的负控钉着）。
-  if (!g2DirTailLooksLive(low) && !g2DirTailLooksLive(norm(pre).toLowerCase())) return false;
-  return g2MatchesLiveDir(low);
-}
+// 「这条路径**有没有可能**是 live（或 live 目录）」——纯字符串，零 I/O。
+// 🔴 **它是 #199 削掉候选侧放大器的第一刀**：答否 ⇒ 这条候选**一次 realpath 都不试**。
+//   放行面刻意宽（含 `.claude` 目录形态与任何 8.3 短名末段），因为它只决定
+//   「要不要花那次 I/O」，**拦不拦仍由 `g2MatchesLiveDir` 的精确比对说话** ⇒
+//   放宽这里只会多花 I/O，不会多拦一条（回归网有一条反向 mutation 钉住这句话）。
+// 🔴 **它必须在 realpath 之前问、在字符串归一之后问**（唯一调用点在 `g2Canon` 里面）：
+//   realpath 之后问 = 头注 ⑯⑰ 那个病（归一会改写末段）· 字符串归一之前问 = 2026-08-09
+//   实测那条自伤（`::$DATA` / `//?/` 还没剥，末段是个假末段）。两个错法各有实证，见下方。
+const g2TailCouldBeLive = (s) => {
+  const low = norm(s).toLowerCase();
+  const i = low.lastIndexOf("/");
+  const tail = i < 0 ? low : low.slice(i + 1);
+  return tail === ".claude" || g2BaseCouldBeLive(tail);
+};
+
+// 🔴 **前筛必须落在 `g2Canon` 的「零 I/O 串处理之后」，不能落在它之前**（2026-08-09 实测纠正）：
+//   首版把它写在 `g2Resolve` 里、拿 `g2ResolvePre` 的产物去筛，**当场打掉一条既有正控** ——
+//   `…/.claude/settings.json::$DATA` 的末段是 `settings.json::$data`，既不是 live 名也没有
+//   `~N` ⇒ 被筛掉、realpath 不跑、8.3 短名那一格重新漏（`::$DATA` 是 `g2Canon` 里剥的，
+//   剥之前问末段等于问了个还没归一完的串）。**同族的还有 `//?/` 前缀与尾空格。**
+//   ⇒ 判据一句话：**前筛问的是「归一前」，但那指的是 realpath 前，不是字符串处理前。**
+//   （这就是本文件那条透镜的又一次变形：**在错误的深度上问末段**。这次它咬的是我自己，
+//   而抓住它的是既有回归网里那条 ADS + 短名的正控 —— 不是我自觉想起来的。）
+
+// 🔴 **`g2IsLiveDir` / `g2DirTailLooksLive` 2026-08-09 删除（#199）**，作废原文的判据照录：
+//   ~~目标位给的是 `~/.claude` **目录**时，先问「目标目录的末段像不像 `.claude`」（零 I/O 快筛），
+//   像才往下比。#134 给它补了「归一前也算一侧」的第二个深度。~~
+//   删它的理由有两条，第二条才是要紧的：
+//   ㈠ **它不是承重判据**（原回归网已有一条阴性结果钉着）：它只是少产一批永不命中的候选，
+//      把它改成 `if (false) continue;` 一条负控都翻不动 —— 真正定案的是 `g2IsLive`。
+//   ㈡ 🔴 **它问的问题本身就是错的**：live 目录的末段**不一定**叫 `.claude`（`~/.claude`
+//      是链时真实目录可以叫任何名字）⇒ 它**既拦不住该拦的**（头注 ⑯ 相邻格：写链目标即绕过），
+//      **又是「用归一后的值做归一前假设」那个病连着四种长相的载体**。
+//   ⇒ 换成 `g2BaseCouldBeLive(源的 basename)`：同样零 I/O、同样只做前筛，
+//      但它问的是**源文件名**（与目录是不是链无关），目录侧一律交给精确比对。
 
 // 把 home 的各种变量形态展开成真实路径。
 // **替换一律用函数形式**——HOME 是从环境读来的字符串，直接当替换串会让其中的 `$&`/`$1`
@@ -799,13 +1028,16 @@ function g2Expand(raw, vars) {
 //      **它现在被接住了**（文件名短名同样落 realpath 全路径那一步），回归网有正控钉着。
 // ⚠ 它顺带会解开 symlink/junction，这是 realpath 的语义、不是本函数想要的；因为它只在
 //   `~<数字>` 路径上跑，而那类路径此前**一律不匹配**，任何改变都只会往"更准"的方向走。
-// **realpath 的实现由调用方给**（#133）：缺省 = `G2_RP_SYNC`（进程内同步，与改动前逐字节
-// 同语义）；常量侧那**唯一**一个调用点传 `g2RealpathBounded`（有界子进程）。
+// **realpath 的实现由调用方给**（#133）：🔴 **缺省 2026-08-09 由 `G2_RP_SYNC` 换成
+// `G2_RP_NONE`（#199）** —— 即**缺省不落 I/O**，而不是「缺省掉进无界同步 realpath」。
+// 现在两个真实现都是有界子进程：常量侧传 `g2RealpathBounded`（单路径、每进程 ≤2 次），
+// 候选侧由 `g2TwoPhase` 传相①/相② 那两个闭包（批量、每进程 ≤1 个子进程）。
 // 🔴 **刻意做成参数而不是模块级开关**：开关是**有状态**的，而 PR #145 第二、三轮那两条绕过
 //    都长在「一个会被改写并缓存一整个进程的降级状态」上。参数没有状态，攻击者也构造不出
-//    「让常量侧改用不同实现」的输入。
+//    「让常量侧改用不同实现」的输入。**#199 加了候选侧之后这条更要紧**：两侧各自拿自己的
+//    闭包，候选侧那次批量解析**耗不到**常量侧任何东西（第三轮那条绕过正是靠共享资源）。
 function g2LongPath(p, rp) {
-  const realpath = rp || G2_RP_SYNC;
+  const realpath = rp || G2_RP_NONE;
   try { return realpath(p); } catch (_) { /* 文件不存在是常态；有界版超时也走这里 */ }
   try {
     const i = p.lastIndexOf("/");
@@ -845,7 +1077,11 @@ function g2Canon(s, rp) {
   s = s.replace(/::\$DATA$/i, "");
   if (/^[A-Za-z]:\//.test(s)) {
     try { s = norm(path.win32.resolve(s)); } catch (_) { /* 解析不了就按原样比 */ }
-    if (/~\d/.test(s)) s = g2LongPath(s, rp);
+    // 🔴 **`g2TailCouldBeLive(s)` 是 #199 的零 I/O 前筛，也是本闸唯一的 I/O 闸门**：
+    //   末段不可能是 live 的候选**一次 realpath 都不试**（`Z:\dead~1\f.md` 这类诱饵到此为止）。
+    //   它必须问**这里的** `s` —— win32.resolve、`//?/` 剥离、`::$DATA` 剥离都已经做完，
+    //   realpath 还没做（理由见上方那段「前筛必须落在零 I/O 串处理之后」）。
+    if (/~\d/.test(s) && g2TailCouldBeLive(s)) s = g2LongPath(s, rp);
   } else if (/^\/(?!\/)/.test(s)) {
     try { s = path.posix.normalize(s); } catch (_) { /* 同上 */ }
   }
@@ -856,9 +1092,11 @@ function g2Canon(s, rp) {
 // Git Bash 的 `/c/Users/...` 与 cygwin 的 `/cygdrive/c/...` 都要还原成盘符形态
 // ——真语料里备份命令就是用 `/c/...` 写的。
 //
-// **为什么把这一层单独拆出来（#134）**：`g2IsLiveDir` 的零 I/O 快筛必须看得见**归一前**的
-// 末段。归一会解开 junction、改写最后一段，于是「末段像不像 `.claude`」这个问题在归一后
+// **为什么把这一层单独拆出来（#134）**：零 I/O 快筛必须看得见**归一前**的末段。
+// 归一会解开 junction、改写最后一段，于是「末段像不像 `.claude`」这个问题在归一后
 // 问出来的答案是错的。拆开之后两个深度都拿得到，快筛不必再假装归一不改末段。
+// **#199 之后它还多担一件事**：它是 `g2TwoPhase` 相①（归一前那一相）的输入，
+// 也是 `g2TailCouldBeLive` 前筛的唯一喂料 —— 前筛**只吃归一前的串**。
 function g2ResolvePre(raw, cwd, vars) {
   let s = g2Expand(raw, vars);
   if (!s) return "";
@@ -871,9 +1109,11 @@ function g2ResolvePre(raw, cwd, vars) {
   }
   return s;
 }
-function g2Resolve(raw, cwd, vars) {
+// 第四个参数 `rp` 由 `g2TwoPhase` 给（相①=收集并抛 / 相②=查表）。**不传就是零 I/O**
+// （`g2Canon` → `g2LongPath` → `G2_RP_NONE` → 按原样比），这个缺省方向是刻意的（#199）。
+function g2Resolve(raw, cwd, vars, rp) {
   // ⑨：绝对路径此前直接 return，一步归一都没有 —— 两个分支现在都过这里。
-  return g2Canon(g2ResolvePre(raw, cwd, vars));
+  return g2Canon(g2ResolvePre(raw, cwd, vars), rp);
 }
 
 // 段内 token 化。与 shellSegmentsRaw 是两层不同的事：那层切**命令段**，这层切**参数**。
@@ -1038,7 +1278,9 @@ const g2CmdName = (t) =>
   String(t == null ? "" : t).replace(/^["']|["']$/g, "").replace(/^.*[\/\\]/, "").replace(/\.exe$/i, "").toLowerCase();
 
 // 一个命令段里所有**写目标**的候选路径（已解析）。返回 [{ why, path }]。
-function g2WriteTargets(seg, cwd, vars) {
+// 第四个参数 `rp` 是 `g2TwoPhase` 那一相的 realpath 实现（#199），一路透传到
+// `g2Canon`；不传 = 零 I/O（缺省方向刻意如此，见 `g2LongPath` 上方）。
+function g2WriteTargets(seg, cwd, vars, rp) {
   const folded = g2FoldJoinPath(seg);
   const toks = g2Tokens(folded);
   const out = [];
@@ -1104,22 +1346,33 @@ function g2WriteTargets(seg, cwd, vars) {
       // 拿不到它 ⇒ `Copy-Item .\settings.json -Destination ~/.claude` 整条漏过。
       // 现在具名与位置两种目标位共用同一段展开，源也含具名源。
       const srcs = namedSrcs.concat(hasDestPos ? positional.slice(0, -1) : positional);
+      // 🔴 **前筛换了一侧（2026-08-09 · #199）**，作废原文照录：
+      //   ~~`const destDir = g2Canon(destPre); if (!g2IsLiveDir(destDir, destPre)) continue;`~~
+      //   —— 原先问的是「**目标目录**的末段像不像 `.claude`」，而 `~/.claude` 是链时真实目录
+      //   可以叫任何名字（头注 ⑯ 相邻格）⇒ 那道筛既拦不住该拦的，又是「用归一后的值做归一前
+      //   假设」那个病的载体（它连着换了四种长相）。**删它的完整理由在 `g2BaseCouldBeLive` 上方。**
+      //   现在问的是「**源文件名**有没有可能是 live 那两个之一」（`g2BaseCouldBeLive`）：
+      //   同样零 I/O、同样只做前筛，但**与目标目录是不是链无关**；目录侧一律交给
+      //   `g2IsLive` → `g2MatchesLiveDir` 的精确比对定案。
+      //   ⚠ 语义等价性照直写：合成候选 `<destDir>/<base>` 最终仍要过 `g2IsLive`，
+      //   而它要求「文件名是 live 名 **且** 目录是 live 目录」—— 原来那道 destDir 筛
+      //   是这个合取式的一半，删掉它只是把判定推迟到同一个合取式里，**没有放宽拦截面**；
+      //   代价是 `cp settings.json <任意目录>` 这类命令现在会走到精确比对，
+      //   而精确比对可能落**常量侧**那 1-2 次（`g2LongPath` 两级退化，记忆化后每进程封顶）
+      //   有界 realpath。回归网有负控钉着「走到了精确比对 ≠ 被拦」。
       for (const dRaw of destRaws) {
-        // #134：把**归一前**的串一起交给快筛 —— 归一（realpath）会改写末段，
-        // 只看归一后的末段会在「`.claude` 是 junction」时连比都不比就放过去。
         const destPre = g2ResolvePre(dRaw, cwd, vars);
-        const destDir = g2Canon(destPre);
-        if (!g2IsLiveDir(destDir, destPre)) continue;
+        const destDir = g2Canon(destPre, rp);
         for (const src of srcs) {
           const base = norm(g2Expand(src, vars)).split("/").pop();
-          if (base) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
+          if (base && g2BaseCouldBeLive(base)) out.push({ why: "目标目录 + 源文件名", raw: `${destDir}/${base}` });
         }
       }
     } else {
       for (const p of positional) out.push({ why: "位置参数", raw: p });
     }
   }
-  return out.map((h) => ({ why: h.why, path: g2Resolve(h.raw, cwd, vars) }));
+  return out.map((h) => ({ why: h.why, path: g2Resolve(h.raw, cwd, vars, rp) }));
 }
 
 // ── G7 的判据材料（段首命令名 → 该改用哪个内置工具）─────────────────────────
@@ -1244,13 +1497,20 @@ const GATES = [
       const tool = input.tool_name || "";
       const cwd = input.cwd || process.cwd();
 
+      // 🔴 **两个分支都走 `g2TwoPhase`（#199）**：它把整条判定跑两遍 —— 相①**归一前**
+      //    （零 I/O，同时收集哪些候选想 realpath）· 相②**归一后**（查那一次批量子进程的结果），
+      //    **任一相命中即拦**。为什么是「两相」而不是「给某道快筛再补一个深度」，
+      //    见 `g2TwoPhase` 上方（那个病连着换了四种长相，补深度才治得住）。
+
       // ① 编辑器类：目标文件就是 file_path 本身
       if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) {
         const ti = input.tool_input || {};
         const raw = ti.file_path || ti.notebook_path;
         if (!raw) return null;
-        if (!g2IsLive(g2Resolve(raw, cwd, null))) return null;
-        return g2Blocked(`要写用户级 live 配置 \`${norm(raw)}\``);
+        return g2TwoPhase((rp) => {
+          if (!g2IsLive(g2Resolve(raw, cwd, null, rp))) return null;
+          return g2Blocked(`要写用户级 live 配置 \`${norm(raw)}\``);
+        });
       }
 
       // ② shell 类（2026-08-02 #87 新增）：重定向目标 + 写入类命令的**目标位**。
@@ -1259,16 +1519,18 @@ const GATES = [
         const cmd = (input.tool_input || {}).command || "";
         const segs = shellSegments(cmd);
         const vars = g2VarMap(segs);
-        for (const seg of segs) {
-          for (const hit of g2WriteTargets(seg, cwd, vars)) {
-            if (!g2IsLive(hit.path)) continue;
-            return g2Blocked(
-              `要用 shell 写用户级 live 配置 —— ${hit.why}解析出 \`${hit.path}\`` +
-              `（这一段：\`${seg.slice(0, 90)}\`）`
-            );
+        return g2TwoPhase((rp) => {
+          for (const seg of segs) {
+            for (const hit of g2WriteTargets(seg, cwd, vars, rp)) {
+              if (!g2IsLive(hit.path)) continue;
+              return g2Blocked(
+                `要用 shell 写用户级 live 配置 —— ${hit.why}解析出 \`${hit.path}\`` +
+                `（这一段：\`${seg.slice(0, 90)}\`）`
+              );
+            }
           }
-        }
-        return null;
+          return null;
+        });
       }
       return null;
 
