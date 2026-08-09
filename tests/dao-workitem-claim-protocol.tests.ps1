@@ -419,6 +419,19 @@ $a5b = Get-EffectiveClaim -Marks $marksA5b
 Assert-True '8d [issue #250 除名 fail-safe] 接管只解出 oldHost、oldRuntime 缺失时**不除名**（宁可漏排除不误排除，与 §三"拿不准就当它还被持有"同向）。这条同时是 8c 的反向夹击：若把除名判据写成"只要 oldHost 命中就整台除名"，8c 会红；若写成"两格都不看、从不除名"，本条绿而 8c 红 —— 两条一起才夹得住那个 `-and`' `
     (($a5b.Count -eq 2) -and $a5b.ContainsKey('BOXA/codex') -and $a5b.ContainsKey('NEW/cc')) ("keys={0}" -f (@($a5b.Keys) -join ','))
 
+# 8d 单独夹不住除名条件里的 `-and $mk.oldRuntime` 那一格：oldRuntime 为 $null 时拼出来的
+# 键是 "BOXA/"，而**解析层产出的桶键第二格恒非空**（§二 字符集要求 runtime 至少一个字符），
+# 所以有没有那道守卫，8d 的结果一模一样 —— 变异体存活。要真夹住它，得让一个桶的键恰好
+# 就是 "BOXA/"，也就是 runtime 为空的那种（手搭对象才造得出，Get-DaoMarks 产不出来）。
+# 这条因此是**防御性守卫的判别力测试**，不是真实输入形态；照直标注，别读成"这是会发生的"。
+$marksA5c = @(
+    [pscustomobject]@{ kind = 'claim';    host = 'BOXA'; runtime = ''; createdAt = '2026-08-09T01:00:00Z' },
+    [pscustomobject]@{ kind = 'takeover'; host = 'NEW';  runtime = 'cc'; oldHost = 'BOXA'; oldRuntime = $null; createdAt = '2026-08-09T01:05:00Z' }
+)
+$a5c = Get-EffectiveClaim -Marks $marksA5c
+Assert-True '8d-2 [issue #250 除名守卫的判别力] runtime 为空的桶（键恰好是 "BOXA/"）遇上只有 oldHost 的接管：有 `-and $mk.oldRuntime` 这道守卫时不除名，去掉它就会被 "BOXA/" 这个拼串误伤除名。8d 覆盖的是**结果**，本条覆盖的是**那个 `-and` 本身**——两条缺一，去掉守卫的变异体就活着' `
+    (($a5c.Count -eq 2) -and $a5c.ContainsKey('BOXA/') -and $a5c.ContainsKey('NEW/cc')) ("keys={0}" -f (@($a5c.Keys) -join ','))
+
 # --- B3：跨宿主冒领 ------------------------------------------------------------
 $marksB3 = Build-MarksFromComments @(
     [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOST1/codex/4h' }
