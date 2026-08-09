@@ -121,6 +121,15 @@ const RUN_ID = `${process.pid}-${crypto.randomBytes(3).toString("hex")}`;
 // dao-rule-echo.tests.js 自己在 P2 段注释里写过的坑，本脚本首版原样重演了一遍，
 // 由对照组 A′ 当场量出「真位置 PASS=65 vs 沙箱 PASS=55」才发现）。
 // 故落 `tests/` 下（与该测试自己的 `.fixtures-scope` 同一层级，已 gitignore）。
+//
+// ⚠️ 2026-08-10（issue #253）分工订正 —— **别把这一行读成「排除面问题由这里挡着」**：
+// 它只管**相对**落点。`REPO` 本身是从 `import.meta.url` 长出来的，**整棵树坐落在哪，沙箱
+// 就坐落在哪** ⇒ 把树 checkout 到 `<x>/_tmp/wt/` 之下，沙箱照样落进排除面，这一行拦不住。
+// 那一格现在由**被测文件自己**兜（`dao-rule-echo.tests.js` 的 `pickFixtureRoot()`：夹具落点
+// 命中排除面就退到系统临时目录）。本脚本这一侧**刻意不再复制那份判据**——两份会漂移，而
+// 兜底本来就在下面的对照组 A/A′：树摆错地方时它给的是 exit 2「无从归因」，不是假绿。
+// 实测（2026-08-10，树 = `<repo>/_tmp/verify253-excluded`）：修被测文件之前 exit 2
+//（真位置与沙箱同为 PASS=55 FAIL=10）；修好之后 exit 0，A′ 两侧同为 PASS=70 FAIL=0。
 const SANDBOX_BASE = path.join(REPO, "tests", ".repro-sandboxes", RUN_ID);
 
 const SHIM_DIRS = [["ccswitch", "hooks"], ["ccswitch", "lib"]];
@@ -209,6 +218,12 @@ try {
     process.stdout.write(`\n${(real.code !== 0 ? real : box).out}\n${(real.code !== 0 ? real : box).err}\n`);
     process.stdout.write("[repro] ✗ 串行基线就红了 ⇒ 无从归因：并行红也可能只是这个测试本身坏了。\n");
     process.stdout.write("[repro]   （出处：官抗节「比较基线必须先验证其本身是活的」——假基线比没有基线更危险）\n");
+    // 已知会走到这一支的一类原因，写出来省下一次从零诊断（前两任各在这里丢过一次会话）：
+    process.stdout.write(`[repro]   本次这棵树：${REPO}\n`);
+    process.stdout.write("[repro]   已知诱因之一（issue #253）：这棵树若坐落在一个名叫 _tmp / build / dist /\n" +
+                         "[repro]   coverage / target / node_modules / _scratch / __pycache__ 的目录**下面**，被测\n" +
+                         "[repro]   hook 会把夹具判成「非规则文件」而静默 ⇒ 真位置与沙箱一起红同样的条数。\n" +
+                         "[repro]   分辨法：把同一份代码 checkout 到一个不含这些目录名的路径再跑一次，绿了就是它。\n");
     process.exit(2);
   }
   if (real.pass !== box.pass || real.fail !== box.fail) {
