@@ -105,8 +105,18 @@
 // 独立的事——那边问「这条标记多旧」，这里问「这台机器过去一天死了几次」，只是恰好同一个
 // 窗口长度，别读成共享同一个判据。**含本次**：这一刻正在写的这次死亡本身也算一次
 // ——语义是「连这次在内，过去 24h 我死了几次」，不是「这次之前死过几次」。
-// 读失败时记 `null` 不记 `0`：0（真的零次）与「读不出来」必须分得开，同 `reset_estimate_s`
-// 的判据同一路数。
+// ~~读失败时记 `null` 不记 `0`：0（真的零次）与「读不出来」必须分得开，同 `reset_estimate_s`
+// 的判据同一路数。~~
+// **订正（2026-08-09，PR #230 对抗官 12 探针实测证伪）**：上面那句是过度概括的旗舰宣称。
+// 实测**只有一种「读失败」真的走得到 `null`**——`readFileSync` 本身抛异常（如 fired.log
+// 路径被占成目录）。**坏行（整行非法 JSON）与坏 `at`（缺失/非法时间戳）不算这种「读失败」**：
+// `readJsonlRecords → parseJsonl` 的设计是坏行跳过而非抛（`ccswitch/lib/hook-selfcheck.js:68`
+// 头注「日志是旁证，一行写坏了不该让整份日志不可读」——对心跳判活是对的，对本函数的计数语义
+// 恰好是反的），这类记录会被静默当「不是死亡」处理，与「真的零次」在输出上不可区分，
+// **报成 0，不是 null**。这一格此前**没有任何断言在守**（mutation：把 catch 里的
+// `return null` 改成 `return 0`，既有 165 条断言零反对）；现已补上零守护断言，见下方
+// `countDeaths24h` 定义处「M5' 零守护断言」测试块与 tests/rate-limit-sentinel.tests.js。
+// 生产 fired.log 是否真会出现坏行/坏 `at` 未经真实样本核实，属已知挂账，见 issue 追踪。
 //
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
@@ -226,10 +236,13 @@ const S = createHookScaffold({
   selfTestEnv: "DAO_RATE_LIMIT_SELFTEST",
 });
 
-// 数最近 24h 内 `marked:true` 的行（判据与用途见文件头注「deaths_24h」段）。
+// 数最近 24h 内 `marked:true` 的行（判据与用途见文件头注「deaths_24h」段，
+// 含上面 2026-08-09 订正——只有 `readFileSync` 真抛异常才落到这个 catch，
+// 坏行/坏 `at` 由 `parseJsonl` 静默跳过，走不到这里，报的是 0 不是 null）。
 // **不含本次**——本次这条记录要等 `S.heartbeat(rec)` 才追加进 fired.log，调用方
-// 自己在 `marked` 分支里 +1（见 main()）。读失败（含目录被占等 `readJsonlRecords`
-// 之外的异常）记 `null`，不吞成 0。
+// 自己在 `marked` 分支里 +1（见 main()）。`readJsonlRecords` 之外逃逸出来的异常
+// （如目录被占等 `readFileSync` 级故障）记 `null`，不吞成 0——这一格由下面
+// 「M5' 零守护断言」测试块守着，见 tests/rate-limit-sentinel.tests.js。
 const DEATHS_WINDOW_MS = 24 * 3600 * 1000;
 function countDeaths24h(nowMs) {
   try {

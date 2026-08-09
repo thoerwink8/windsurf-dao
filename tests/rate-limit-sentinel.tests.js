@@ -213,6 +213,38 @@ console.log("\n=== 笔①（issue #70 自适应并发）：deaths_24h 只数「�
     check("误伤反例：`marked:false` 那条负控在 mutation 后仍被挡住（架空的只是窗口，不是 marked 过滤）",
       mm && mm.deaths_24h === 2, "若 marked:false 也被误计，这里会 >2：得 " + (mm && mm.deaths_24h));
   }
+
+  // ── M5' 零守护断言（2026-08-09，PR #230 对抗返修）───────────────────────────
+  // 头注旗舰宣称「读失败记 null 不记 0」此前**没有任何断言在守**：对抗官把 catch 里的
+  // `return null` 改成 `return 0`，既有 165 条断言零反对。补两条：①正态证明这一格此前
+  // 唯一成立的场景（`readFileSync` 真抛异常，例如 fired.log 路径被占成目录）确实得 null；
+  // ②先破再验，把那个 mutation 真的跑一遍，证明①的断言真的在盯着这件事。
+  console.log("\n=== M5' 零守护断言：fired.log 路径被占成目录 ⇒ readFileSync 真抛 ⇒ deaths_24h = null ===");
+  {
+    const tag = "deaths-dir-occupied";
+    // 直接把 fired.log 那个路径本身建成目录——readJsonlRecords 内部的 `fs.existsSync` 会判真
+    // （目录也是"存在"），随后 `fs.readFileSync` 对目录操作在本机实测抛 EISDIR（先手工验证过，
+    // 见对抗官证据表 P5），走的正是 countDeaths24h 外层 try/catch 那条路，不是 parseJsonl 内部
+    // 逐行吞掉的那条路——两条路径必须分得开，这正是本条要证的事。
+    fs.mkdirSync(firedPath(tag, REAL_HOOK), { recursive: true });
+    run(REAL_HOOK, payloadOf(), tag);
+    const m = readJson(markerPath(tag));
+    check("fired.log 路径被占成目录 ⇒ readFileSync 真抛 ⇒ deaths_24h = null（不是 0，不是留空）",
+      m && Object.prototype.hasOwnProperty.call(m, "deaths_24h") && m.deaths_24h === null,
+      "marker=" + JSON.stringify(m));
+
+    const ANCHOR = "    return null;";
+    const h = mutantHook("null-vs-zero", ANCHOR, "    return 0;");
+    const tagM = "deaths-dir-occupied-mut";
+    fs.mkdirSync(firedPath(tagM, h), { recursive: true });
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    const mm = readJson(markerPath(tagM));
+    check("🔴 先破再验：`return null` 改成 `return 0`（M5'，正是宣称禁止的那件事）⇒ 同一份"
+      + "「目录占位」场景下 deaths_24h 从 null 翻成 1（本次死亡的 +1）",
+      mm && mm.deaths_24h === 1, "code=" + rm.status + " 得 " + JSON.stringify(mm && mm.deaths_24h));
+    check("canary：变异体还活着（marker 照写、其余字段照对，只有 deaths_24h 这一格失守）",
+      mm !== null && mm.error === "rate_limit" && typeof mm.raw === "string", "marker=" + JSON.stringify(mm));
+  }
 }
 
 console.log("\n=== 正态 · overloaded：同样写标记（matcher 覆盖的两种之一）===");
