@@ -10,7 +10,7 @@
     只让指定的那**一个**子命令 exit 128（stdout 为空，fatal 的真实形态），其余原样转发给
     真 git（见 `New-FailingGitShim`）。判定路径本身一个字都没被桩掉。
 
-    十二个场景，覆盖差集核验的两条安全路径、两类拒绝路径，以及幂等 / 前置校验 / DryRun：
+    十五个场景，覆盖差集核验的两条安全路径、两类拒绝路径，以及幂等 / 前置校验 / DryRun：
       1. 祖先关系已并入（模拟 `git merge --no-ff`）⇒ rev-list 为空 ⇒ 用 `-d`
       2. 内容等价但非祖先（模拟 GitHub squash-merge：把同一份 diff 当新提交打进 main）
          ⇒ rev-list 非空、`git cherry` 全部 `-` ⇒ 用 `-D`
@@ -26,8 +26,12 @@
      10. `-WorktreePath` 那棵树检出的不是 `-Branch`（别人的在途工作树）⇒ 退出码 1，零动作
      11. `git rev-list` 命令本身失败 ⇒ 退出码 4（「没查成」≠「零差异」），零动作
      12. `git cherry` 命令本身失败 ⇒ 退出码 4，零动作
-    9–12 是 2026-08-10 返修补的（PR #252 对抗验证判词阻断 1 / 阻断 2）：补之前 9 与 10 各自
+     13. `-Branch` 与那棵树检出的分支只差大小写 ⇒ 退出码 1（钉住配对比对用的是 `-cne`）
+     14. detached HEAD 的树 ⇒ 退出码 1，且断言那句**专属报文**（见该场景头上的归因说明）
+     15. `git worktree list` 本身失败 ⇒ 退出码 1（探不到现场就不动手），零动作
+    9–15 是 2026-08-10 返修补的（PR #252 对抗验证判词阻断 1 / 阻断 2）：补之前 9 与 10 各自
     会**静默删掉一个没合并的分支 / 别人正在用的工作树**，而退出码是 0。
+    十二/十三这两条的措辞刻意写「零动作」而不是「安全」——它们证的是这一批样本下没动手。
 
 .NOTES
     独立可运行：powershell -NoProfile -ExecutionPolicy Bypass -File tests/dao-merge-cleanup.tests.ps1
@@ -330,6 +334,47 @@ Assert-True '场景12：报文说的是「没查成」' ($r12.Text -match '差�
 Assert-True '场景12：没有打印过「安全用 -D」' (-not ($r12.Text -match '安全用')) $r12.Text
 Assert-True '场景12：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f12.Main -WtPath $f12.Wt)
 Assert-True '场景12：本地分支原样未动' (Test-BranchExists -RepoPath $f12.Main -Branch $f12.Branch)
+
+# ── 场景 13：配对比对必须大小写敏感（钉住 -cne，不是 -ne）────────────────────────────
+# 为什么这一格需要专属样本：PowerShell 的 `-ne` / `-match` 默认**大小写不敏感**，而 git 的
+# ref 名是大小写敏感的。本机实测（Windows，大小写不敏感的文件系统）：
+# `git rev-parse --verify refs/heads/Feature/X` 与 `refs/heads/feature/x` 返回**同一个 sha**
+# ⇒ `$branchStillExists` 那道探测拦不住大小写变体，配对校验若用 `-ne` 就整条形同虚设。
+# 夹具是「祖先关系已并入」，所以放过去的话会真的删——这条断言分得开 `-cne` 与 `-ne`。
+$f13 = New-Fixture -Case 'case13-branch-case-variant'
+Git0 @('-C', $f13.Main, 'merge', '--no-ff', '--quiet', '-m', 'merge feature/x', 'feature/x') | Out-Null
+Git0 @('-C', $f13.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+$r13 = Invoke-Target -Fixture $f13 -BranchOverride 'Feature/X'
+Assert-True '场景13 -Branch 只有大小写不同：退出码 1（-ne 那一版这里是 0 并真的删）' ($r13.ExitCode -eq 1) ("实际 $($r13.ExitCode)`n" + $r13.Text)
+Assert-True '场景13：报文点名配对不符' ($r13.Text -match '配对不符') $r13.Text
+Assert-True '场景13：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f13.Main -WtPath $f13.Wt)
+Assert-True '场景13：本地分支原样未动' (Test-BranchExists -RepoPath $f13.Main -Branch $f13.Branch)
+
+# ── 场景 14：detached HEAD 的树 ⇒ 拒绝，且报文要**指得准** ───────────────────────────
+# ⚠ 这条断言钉的是**归因报文**，不是安全性——照直写，免得被读成两道安全网：把被测脚本里
+# 那道 `-not $worktreeCheckedOutBranch` 去掉，下面 `-cne` 那道照样拦得住（`$null -cne
+# 'feature/x'` 为真），退出码一个字不变。所以这里额外断言那句 detached 专属报文：报文变
+# 笼统就是判别信号。（判词问题 5 记的正是「两道门只有一道有专属样本」那个形态。）
+$f14 = New-Fixture -Case 'case14-detached-worktree'
+$detachedWt = Join-Path $f14.Dir 'wt-detached'
+Git0 @('-C', $f14.Main, 'worktree', 'add', '--quiet', '--detach', $detachedWt, 'main') | Out-Null
+$r14 = Invoke-Target -Fixture $f14 -WorktreePathOverride $detachedWt
+Assert-True '场景14 detached HEAD 的树：退出码 1' ($r14.ExitCode -eq 1) ("实际 $($r14.ExitCode)`n" + $r14.Text)
+Assert-True '场景14：报文说的是「没有检出任何分支」（归因指得准，不是笼统的配对不符）' ($r14.Text -match '没有检出任何分支') $r14.Text
+Assert-True '场景14：那棵 detached 的树原样未动' (Test-Path -LiteralPath $detachedWt)
+
+# ── 场景 15：连 `git worktree list` 都失败 ⇒ 探不到现场就不动手 ──────────────────────
+# 夹具是「祖先关系已并入」：不查 .Ok 的话，空输出 ⇒ 判「worktree 已不在登记里」⇒ 一路走到
+# 底（后面 prune 也会踩同一个失败，落到 exit 4）。这条断言分得开 exit 1 与 exit 4。
+$f15 = New-Fixture -Case 'case15-worktree-list-fails'
+Git0 @('-C', $f15.Main, 'merge', '--no-ff', '--quiet', '-m', 'merge feature/x', 'feature/x') | Out-Null
+Git0 @('-C', $f15.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+$shim15 = New-FailingGitShim -Dir (Join-Path $f15.Dir 'gitshim')
+$r15 = Invoke-Target -Fixture $f15 -PathPrefix $shim15 -FailingGitSubcommand 'worktree'
+Assert-True '场景15 git worktree list 失败：退出码 1（探不到现场，一步都不做）' ($r15.ExitCode -eq 1) ("实际 $($r15.ExitCode)`n" + $r15.Text)
+Assert-True '场景15：报文点名是 worktree list 失败' ($r15.Text -match 'worktree list --porcelain 失败') $r15.Text
+Assert-True '场景15：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f15.Main -WtPath $f15.Wt)
+Assert-True '场景15：本地分支原样未动' (Test-BranchExists -RepoPath $f15.Main -Branch $f15.Branch)
 
 # ── 语法自检：被测脚本本身能被 PowerShell parser 干净解析（BOM/中文字面量坑同款）───────
 $tokens = $null

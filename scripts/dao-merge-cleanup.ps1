@@ -262,6 +262,9 @@ $branchStillExists = (Invoke-Git -Cwd $RepoPath -GitArgs @('rev-parse', '--verif
 # 此前没有任何绑定，于是参数错配时会核验一个已合并的分支、删掉另一棵在途的工作树。
 # `-cne` 是大小写敏感比对：git 的 ref 名大小写敏感，而 PowerShell 的 `-ne` 默认不敏感。
 if ($worktreeStillRegistered) {
+    # ⚠ 这一支是**报文归因**不是第二道安全网，照直写：把它去掉，下面 `-cne` 那道照样拦得住
+    # （`$null -cne 'feature/x'` 为真），退出码一个字不变，变的只是报文会笼统成「检出的是 」。
+    # 回归网场景 14 断言的因此是那句归因报文本身，不是「它拦住了」——两者不是一回事。
     if (-not $worktreeCheckedOutBranch) {
         Fail ("worktree $WorktreePath 没有检出任何分支（detached HEAD 或 git 没报 branch 行）—— " +
               "证不出它检出的就是 $Branch，拒绝删；要清理它请手动核实后自己跑 git worktree remove") 1
