@@ -354,27 +354,33 @@ $marks = @($marks | Sort-Object createdAt)
 
 function Get-EffectiveClaim {
     <#
-      "当前有效认领"算法见 §四——F1/F2 修法（issue #215）：按 host 分组逐机判定，被
-      dao-takeover: 指名接管过的旧机整台除名（含它此后再发的任何 claim，简化处理：不支持
-      "旧机重新走一遍认领流程合法复活"，那条边界本批未做设计评审，照直写不是已经想清楚）。
-      返回 Hashtable：key=host，value=该机当前有效认领（$Marks 里的原始元素）。"谁该让位"
-      是调用方拿这份逐机结果自己做的比较（用法见下），本函数只答"每台机各自有没有、是哪一条"，
-      这正是 F1 之前缺的那个"逐机器视角"——旧版只返回全局最近一条，两台机各自比较时都判不出
-      该让位。
+      "当前有效认领"算法见 §四——F1/F2 修法（issue #215）+ 分组粒度修法（issue #250）：
+      按「机器 + 宿主」分组逐桶判定（§二 写明认领单位就是这两格），被 dao-takeover: 指名
+      接管过的那个旧桶除名（含它此后再发的任何 claim，简化处理：不支持"旧桶重新走一遍认领
+      流程合法复活"，那条边界未做设计评审，照直写不是已经想清楚）。返回 Hashtable：
+      key=`<机器名>/<宿主>`，value=该桶当前有效认领（$Marks 里的原始元素）。"谁该让位"是
+      调用方拿这份逐桶结果自己做的比较（用法见下），本函数只答"每个桶各自有没有、是哪一条"。
+      🔴 **分组键含 runtime 是 issue #250 的修法**，只按 host 分的旧版实测四种危险答案：同机
+      另一个宿主的 dao-yield: 会把自己的 claim 一起杀掉、两个宿主各认领一次会挤进同一个桶由
+      后发的覆盖先发的、接管指名 BOXA/codex 时 BOXA/cc 连坐除名、以及 §六 命令③ 用 $MyHost
+      单键查出同机另一个宿主的认领并当成自己的（跨宿主冒领续命）。`/` 直接做分隔符是安全的：
+      §二 的字符集把 `/` 挡在机器名与宿主两格之外，拼出来的 key 反解唯一。
+      除名要 oldHost 与 oldRuntime **两格都在**才生效——缺一格不除名，宁可漏排除不误排除，
+      与 §三"拿不准就当它还被持有"同一个 fail-safe 方向。
     #>
     param($Marks)
     $excluded = @{}
     foreach ($mk in $Marks) {
-        if ($mk.kind -eq 'takeover' -and $mk.oldHost) { $excluded[$mk.oldHost] = $true }
+        if ($mk.kind -eq 'takeover' -and $mk.oldHost -and $mk.oldRuntime) { $excluded[('{0}/{1}' -f $mk.oldHost, $mk.oldRuntime)] = $true }
     }
     $eff = @{}
-    foreach ($h in @($Marks | ForEach-Object { $_.host } | Select-Object -Unique)) {
-        if ($excluded.ContainsKey($h)) { continue }
-        $own = @($Marks | Where-Object { $_.host -eq $h })
+    foreach ($k in @($Marks | ForEach-Object { '{0}/{1}' -f $_.host, $_.runtime } | Select-Object -Unique)) {
+        if ($excluded.ContainsKey($k)) { continue }
+        $own = @($Marks | Where-Object { ('{0}/{1}' -f $_.host, $_.runtime) -eq $k })
         for ($i = $own.Count - 1; $i -ge 0; $i--) {
             if ($own[$i].kind -notin @('claim', 'takeover')) { continue }
             $laterRevoke = @($own | Select-Object -Skip ($i + 1) | Where-Object { $_.kind -in @('yield', 'release') })
-            if ($laterRevoke.Count -eq 0) { $eff[$h] = $own[$i]; break }
+            if ($laterRevoke.Count -eq 0) { $eff[$k] = $own[$i]; break }
         }
     }
     return $eff
@@ -400,13 +406,18 @@ function Test-IsMySessionClaim {
     return ($my.session -eq $MySession)
 }
 
-$eff = Get-EffectiveClaim -Marks $marks    # Hashtable：key=host，value=该机当前有效认领
+$eff = Get-EffectiveClaim -Marks $marks    # Hashtable：key=<机器名>/<宿主>，value=该桶当前有效认领
 $MyHost = '<机器名>'                        # 本机 hostname（同 §二 判据），跑之前自己填
+$MyRuntime = '<宿主>'                       # 本会话的 AI 宿主（cc / codex，同 §二 认领单位第二格）
 $MySession = '<会话短id>'                   # 本会话自报的短 id（同 §二 格式），单会话场景留空
-$my = $eff[$MyHost]
-$others = @($eff.Keys | Where-Object { $_ -ne $MyHost } | ForEach-Object { $eff[$_] } | Sort-Object createdAt)
+$MyKey = '{0}/{1}' -f $MyHost, $MyRuntime   # issue #250：查自己那个桶要连宿主一起查。只用
+                                            # $MyHost 单键查，查到的可能是同机另一个宿主的认领，
+                                            # 而下游会把它当成自己的（B3 跨宿主冒领）
+$my = $eff[$MyKey]
+$others = @($eff.Keys | Where-Object { $_ -ne $MyKey } | ForEach-Object { $eff[$_] } | Sort-Object createdAt)
 if ($my -and $others.Count -gt 0 -and $others[0].createdAt -lt $my.createdAt) {
-    # 别的机器有一条比自己更早的有效认领 ⇒ 自己让位（§四 判据），发 dao-yield: 撤回
+    # 别的「机器+宿主」有一条比自己更早的有效认领 ⇒ 自己让位（§四 判据），发 dao-yield: 撤回
+    # 「别的」含**同机另一个宿主**：同机 cc 与 codex 各干一遍同一张单，正是本协议要防的原病
 }
 
 # ⑦ /dao-resume 用：这条 host 的有效认领是不是"我这个会话"发的，而不是同机同宿主的另一个
@@ -418,8 +429,10 @@ if ($my -and -not (Test-IsMySessionClaim -my $my -MySession $MySession)) {
 }
 
 # ④ 租约还剩多久：只认"当前持有人自己"最后一条 dao-claim:，不是最后一条评论（FAIL-4 修法）
-#    F1 修好后"当前持有人"天然就是"自己"（$MyHost）——不再依赖一个全局 $effective.host
-$holderClaims = @($marks | Where-Object { $_.kind -eq 'claim' -and $_.host -eq $MyHost })
+#    F1 修好后"当前持有人"天然就是"自己"（$MyHost/$MyRuntime）——不再依赖一个全局 $effective.host
+#    issue #250：这里的过滤同样要带 runtime。只按 host 过滤时，同机另一个宿主刚发的 claim 会被
+#    当成自己的续租锚点，租期从别人那条算起——实测形态 A3 的后半（自己的租约凭空延长/错位）
+$holderClaims = @($marks | Where-Object { $_.kind -eq 'claim' -and $_.host -eq $MyHost -and $_.runtime -eq $MyRuntime })
 $last = ($holderClaims | Select-Object -Last 1).createdAt
 [math]::Round(([datetimeoffset]::UtcNow - [datetimeoffset]::Parse($last)).TotalHours, 2)
 
