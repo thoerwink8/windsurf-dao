@@ -32,6 +32,9 @@
     检查）区分开 · **F3"参与比较"那半**（场景 7，四轮修法新增 `Test-IsMySessionClaim`）：
     会话一致判"是我的" / 不一致判"不是我的"（同机同宿主两个并发会话不再互认对方的认领）
     / 任一没填会话 id 时按旧行为放行（自报字段忘填的兜底）/ `$my` 为 `$null` 时判"不是我的"。
+    **7g 字典序错位负控**（PR #240 返修：对抗复核 M3 实测 `-eq`→`-ge` 判等改弱时场景 7 原六条
+    全绿、零判别力——7a/7b 恰好只用了 s1/s2 这对样本，"s1" -ge "s2" 也答 False，语料只夹住了
+    它恰好含有的那两个取值；本条改用字典序错位的 s1/s0 补上这个方向）。
 
     **不覆盖**（issue #215 弱处 F5-F13，F4 CRLF 已覆盖）：`·` 分隔符脆弱性（F5，含本批
     新增 `oldHost` 解析同样依赖它）· 撤回不比宿主（F6）· F7 另两处未复核 · 代码块/注释
@@ -42,8 +45,10 @@
     解决"这条已确认的有效认领是不是我自己会话发的"，不改变跨机器碰撞判定的分组粒度本身。
     **本批顺带发现但未修的一格**：`Get-EffectiveClaim` 目前也不按 `runtime` 分组（只按
     `host`），同机 cc/codex 并行认领同一单会被合并进同一个桶——issue #215 原文 F1 写的是
-    "按 host 分组"，这一格是否该扩到 host+runtime 是新的设计问题，未经评审不擅自改，
-    照直写在 `ccswitch/rules/dao-workitem.md` 开篇的四轮修法说明里，本文件不重复覆盖。
+    "按 host 分组"。**PR #240 对抗复核订正**：这不是一个悬而未决的设计问题，是已实测四种
+    危险方向的错误答案（互相撤销清空对方 / 同桶后发覆盖先发 / 接管连坐除名 / 冒领续命）+
+    三个同族新形态，详情见跟进单 issue #250；本文件不重复覆盖，完整描述见
+    `ccswitch/rules/dao-workitem.md` 开篇的四轮修法说明。
     **F2 的"指名排除"是简化处理**——一旦被指名永久除名，不支持"合法复活"这个 issue 点名
     "值得设计评审"的边界，本批未做评审。别把「有这文件」读成「协议全测了」。
 
@@ -118,8 +123,8 @@ $mySessionSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Test-
 $daoMarksLfLen = ($daoMarksSrc -replace "`r`n", "`n").Length
 $effClaimLfLen = ($effClaimSrc -replace "`r`n", "`n").Length
 $mySessionLfLen = ($mySessionSrc -replace "`r`n", "`n").Length
-Assert-True '0a Get-DaoMarks 提取长度（行尾归一化 LF 后 2773 字节；issue #215 重写后的实测值，CRLF/LF 工作区皆成立）' `
-    ($daoMarksLfLen -eq 2773) ("实测归一化后 {0} 字节（原始 {1}）" -f $daoMarksLfLen, $daoMarksSrc.Length)
+Assert-True '0a Get-DaoMarks 提取长度（行尾归一化 LF 后 2938 字节；PR #240 返修 R2 订正 CRLF 归一化注释后的实测值，此前为 2773，CRLF/LF 工作区皆成立）' `
+    ($daoMarksLfLen -eq 2938) ("实测归一化后 {0} 字节（原始 {1}）" -f $daoMarksLfLen, $daoMarksSrc.Length)
 Assert-True '0b Get-EffectiveClaim 提取长度（行尾归一化 LF 后 1117 字节；issue #215 重写后的实测值，CRLF/LF 工作区皆成立）' `
     ($effClaimLfLen -eq 1117) ("实测归一化后 {0} 字节（原始 {1}）" -f $effClaimLfLen, $effClaimSrc.Length)
 Assert-True '0d Test-IsMySessionClaim 提取长度（行尾归一化 LF 后 859 字节；issue #215-F3 四轮修法新增函数，首次入库即锁死字节数，与 0a/0b 同一严格度）' `
@@ -301,7 +306,7 @@ if ($assemblyMatch.Success) {
     Assert-True '6d 组装行确实拼了 createdAt/kind/host/runtime 四个原有字段（新增字段没有挤掉旧字段）' `
         (($assemblyLine -match 'createdAt') -and ($assemblyLine -match 'kind') -and `
          ($assemblyLine -match 'host') -and ($assemblyLine -match 'runtime')) ''
-    Assert-True '6e [issue #215-F2] 组装行带上了 oldHost/oldRuntime（F2 的"指名排除"要靠这两个字段在真实端到端链路里流通，不能只在合成 fixture 里手写）' `
+    Assert-True '6e [issue #215-F2，理由已订正 PR #240 对抗复核] 组装行带上了 oldHost/oldRuntime，但两个字段命运不同：`oldHost` 真被 §六除名逻辑（:343 `$excluded[$mk.oldHost]`）读取，`oldRuntime` 全仓 4 个生产点（本行解析/透传/本条断言）却 0 个消费点——除名逻辑只看 oldHost，`oldRuntime` 从未被读过（也是 A5"同机同宿主任一 runtime 被指名连坐除名"的根因，见 issue 跟进单）。这条 canary 只证明"两个字段都拼进了组装行"，不证明"两个字段都被下游用到"' `
         (($assemblyLine -match 'oldHost') -and ($assemblyLine -match 'oldRuntime')) ''
 }
 
@@ -333,6 +338,9 @@ Assert-True '7e $my 为 $null（这台 host 没有有效认领，如 §六 $eff[
 
 Assert-True '7f 两边都没有会话 id（纯单会话协议场景，历史行为）⇒ 放行，不因为新函数的存在就要求所有场景都填会话 id' `
     (Test-IsMySessionClaim -my $claimNoSession -MySession '') ''
+
+Assert-True '7g 字典序错位负控（PR #240 对抗复核 M3：判等 `-eq` 被悄悄改弱成 `-ge` 时，7a/7b 只用 s1/s2 这一对样本、恰好使 `-ge` 也答对，34/34 全绿、零判别力——存活探针实测 s1-vs-s0 时 `-ge` 答 True 而正确答案是 False，方向 fail-open：会替别的会话续命）。my.session="s1"、MySession="s0"（字典序 s0 < s1）⇒ 不相等，判定不是我的；若判等被换成 `-ge`，"s1" -ge "s0" 为真，会被误判成"是我的"，这条断言专治这个方向' `
+    (-not (Test-IsMySessionClaim -my $claimWithSession -MySession 's0')) ''
 
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''
