@@ -293,6 +293,64 @@ console.log("\n=== fail-open · 三条失败路径全部倒向「放行」===");
   check("canary：变异体还活着（正常场景——无标记且父目录健康——仍照常 block，不是整个 hook 崩了）",
     blocked(run(h, "[dao-probe] 查中断", "infra-mut-canary")));
 }
+
+console.log("\n=== 具名负控 · 父目录不存在/是空目录 ⇒ 仍判 none ⇒ block（PR #227 对抗官挂账）===");
+{
+  // PR #227 对抗验证官 mutation P4（catch{return true} → return false）打出 16 条隐式红，
+  // 但**全套里没有任何一条具名断言**写着「父目录不存在 ⇒ 仍判 none ⇒ block」——16 条红全靠
+  // 各 tag 的父目录在 readMarker() 跑的那一刻恰好还没被建出来这个巧合撑住（脚手架建 state
+  // 目录在 heartbeat()，晚于 readMarker）。哪天有人预建了每个 tag 的目录，这层保护会静默
+  // 消失，而没有任何东西会红。这里补两条具名断言，对应对抗官边界直测 B1/B3 的形状。
+  const tag = "negctrl-parent-absent";
+  // 刻意不 mkdir 任何一层：BASE/<tag>/ 本身都不存在（对应 B1：从未限流过的正常态）。
+  const r = run(REAL_HOOK, "[dao-probe] 查中断", tag);
+  check("具名负控 B1：父目录压根不存在 ⇒ state=none ⇒ block（不是 infra-broken）",
+    blocked(r) && firedLines(tag)[0] && firedLines(tag)[0].marker_state === "none",
+    "out=" + r.out.slice(0, 160) + " fired=" + JSON.stringify(firedLines(tag)));
+}
+{
+  const tag = "negctrl-parent-empty-dir";
+  // 只建父目录本身、不写标记文件（对应 B3：父目录是真目录、无标记的正常态）。
+  fs.mkdirSync(path.dirname(markerPath(tag)), { recursive: true });
+  const r = run(REAL_HOOK, "[dao-probe] 查中断", tag);
+  check("具名负控 B3：父目录存在但没有标记文件 ⇒ state=none ⇒ block",
+    blocked(r) && firedLines(tag)[0] && firedLines(tag)[0].marker_state === "none",
+    "out=" + r.out.slice(0, 160) + " fired=" + JSON.stringify(firedLines(tag)));
+}
+
+console.log("\n=== 单元层 · readMarker 的 ENOTDIR 半边（F4，PR #227 对抗官挂账）===");
+{
+  // win32 端到端造不出 ENOTDIR（上面 #201-③ 那节的前提断言已实测坐实：本机这条路径的
+  // errno 恒为 ENOENT）。`|| e.code === "ENOTDIR"` 这半支因此是**真空锚**：对抗官 mutation P7
+  // 把它摘掉 ⇒ 160/0 全绿、零检出，POSIX 那半没有任何东西在守。readMarker 是导出的（见文件
+  // 末尾 module.exports），单元层直接 require 它、假造一个 `{code:"ENOTDIR"}` 的 error 就能
+  // 覆盖——不需要真的在 win32 上造出这个 errno。
+  const hookModule = require(REAL_HOOK);
+  const realReadFileSync = fs.readFileSync;
+  const realStatSync = fs.statSync;
+  const fakeErr = (code) => { const e = new Error("fake " + code); e.code = code; return e; };
+  try {
+    fs.readFileSync = function (p, enc) {
+      if (p === hookModule.MARKER_PATH) throw fakeErr("ENOTDIR");
+      return realReadFileSync.apply(fs, arguments);
+    };
+
+    fs.statSync = () => ({ isDirectory: () => true }); // 父目录健康
+    const r1 = hookModule.readMarker();
+    check("单元·ENOTDIR + 父目录健康 ⇒ state=none（与 ENOENT 分支同一处置，只换了 errno）",
+      r1.state === "none", "got=" + JSON.stringify(r1));
+
+    fs.statSync = () => ({ isDirectory: () => false }); // 父目录不健康（存在但不是目录）
+    const r2 = hookModule.readMarker();
+    check("单元·ENOTDIR + 父目录不健康 ⇒ state=infra-broken（P7 把这半摘掉后会退化成 none）",
+      r2.state === "infra-broken", "got=" + JSON.stringify(r2));
+  } finally {
+    fs.readFileSync = realReadFileSync;
+    fs.statSync = realStatSync;
+  }
+  check("桩已复原：readFileSync/statSync 回到真实实现（不许把测试专用的缝留在共享的 fs 模块上）",
+    fs.readFileSync === realReadFileSync && fs.statSync === realStatSync);
+}
 {
   const tag = "badstdin";
   const r = run(REAL_HOOK, null, tag, "这不是 JSON{{{");
