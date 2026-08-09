@@ -364,10 +364,25 @@
       "self_authored": [
         "08-08"
       ],
-      "baseline": "n=0，**预防型立法**：入库时本仓「两机撞同一张单」的实测事故数为 0——用户 2026-08-08 提出的是预期场景（原话「两台电脑都在解决同一个问题」）而非复盘，故本条不得被引用为「已防住 N 次」。两个阈值（自报缺省 4h / 协议上限 8h）为 AI 自定初值、未经实测，属判断档待用户拍板。试点实况（2026-08-08 撤宣称后的版本）：~~原写「issue #193 上 claim→回读→release 全程真实执行」~~ **该句为假，由 PR #195 对抗复核证伪、当场撤回**——`dao-release:` 在 #193 上零命中、`在途` 标签仍挂着（PR 正文自己写的是「算续租不算释放」，两处本就互相矛盾）。逐步实况：claim **真跑过**（评论 5225915070）· 回读**真跑过但其结果已不可复现**（官随后那条交付评论把讲解格式的示例行引入成幽灵认领，回读行数 1→2，对抗 FAIL-2）· release **从未执行**。唯一仍然成立的观察是：认领后 #193 从 `--search \"label:任务 -label:在途\"` 队列里消失。修法账 issue #198。⚠️ 本字段所在的这一格**没有任何机器闸在核**（对抗实测 M4b：台账字段值的机器消费方 N=0，该条 `ledgercmp=0`）⇒ 四道条款闸全绿不构成本字段内容为真的证据",
+      "baseline": "n=0，**预防型立法**：入库时本仓「两机撞同一张单」的实测事故数为 0——用户 2026-08-08 提出的是预期场景（原话「两台电脑都在解决同一个问题」）而非复盘，故本条不得被引用为「已防住 N 次」。两个阈值（自报缺省 4h / 协议上限 8h）原为 AI 自定初值、未经实测，用户 2026-08-09 issue #70 已追认为基线（追认的是数值该不该用，未经实测这一事实本身没有变）。试点实况（2026-08-08 撤宣称后的版本）：~~原写「issue #193 上 claim→回读→release 全程真实执行」~~ **该句为假，由 PR #195 对抗复核证伪、当场撤回**——`dao-release:` 在 #193 上零命中、`在途` 标签仍挂着（PR 正文自己写的是「算续租不算释放」，两处本就互相矛盾）。逐步实况：claim **真跑过**（评论 5225915070）· 回读**真跑过但其结果已不可复现**（官随后那条交付评论把讲解格式的示例行引入成幽灵认领，回读行数 1→2，对抗 FAIL-2）· release **从未执行**。唯一仍然成立的观察是：认领后 #193 从 `--search \"label:任务 -label:在途\"` 队列里消失。修法账 issue #198。⚠️ 本字段所在的这一格**没有任何机器闸在核**（对抗实测 M4b：台账字段值的机器消费方 N=0，该条 `ledgercmp=0`）⇒ 四道条款闸全绿不构成本字段内容为真的证据",
       "source_refs": [
         "issue #193",
         "ccswitch/rules/dao-workitem.md 认领协议节"
+      ],
+      "status": "active"
+    },
+    "归-挂账分流": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-08→09 清账窗执行零例外：本窗立刻要用的信息建单（#199/#201/#203/#209/#210）、要等外部条件成立才能处置的原处评论挂账（issue #205 的 D1~D5）、纯用户判断题无技术后续的进 #70 待拍板池。判据（立刻要用⇒建单 / 等外部条件⇒原处挂账 / 纯判断题⇒进 #70 三分流本身）由用户 2026-08-09 issue #70 一揽子拍板给出，条款措辞（含三态互斥的收紧表述）为 AI 撰写。",
+      "source_refs": [
+        "issue #70（用户 2026-08-09 一揽子拍板 · 第二组「立法与盖章」）",
+        "#199", "#201", "#203", "#209", "#210",
+        "issue #205 D1~D5"
       ],
       "status": "active"
     },
@@ -546,6 +561,19 @@
       "self_authored": [],
       "baseline": "2026-08-01 同窗——清掉 40+ 并行代码单后，剩余 22 行动层里 21 是真机（一实例串行），此时 1-2 路是物理天花板非纪律问题；真钥匙是 #446 双实例",
       "source_refs": [],
+      "status": "active"
+    },
+    "窗-自适应水位": {
+      "file": "ccswitch/rules/dao-longwindow.md",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-09 单日 5 次限流全灭接手 + 静态保守水位在健康期压制并发，双向实证",
+      "source_refs": [
+        "windsurf-dao issue #70 追录评论「自适应并发落地」（用户 2026-08-09 拍板）"
+      ],
       "status": "active"
     },
     "窗-接力阈值": {
@@ -1174,10 +1202,24 @@
       "trigger": "模板首行",
       "judge_only": false,
       "self_authored": [
-        "07-27"
+        "07-27",
+        "08-09"
       ],
-      "baseline": "未测（本次扩射程的两个出处：PR #168 返修评论「本轮独立靶验（不采信前任报告，重新跑了一遍）」附红集表与字节级复原；issue #138 收尾接手令「把前任的结论当靶单逐项」）",
+      "baseline": "未测（本次扩射程的两个出处：PR #168 返修评论「本轮独立靶验（不采信前任报告，重新跑了一遍）」附红集表与字节级复原；issue #138 收尾接手令「把前任的结论当靶单逐项」）。2026-08-09 追加：构建/测试这一层的独立复跑单独测过——10 张 PR 全部独立复跑构建+全套测试，10/10 全绿、零一次是靠这次复跑本身发现问题，见 `_tmp/mechanism-audit-20260809.md` 问题一「返工不贵」段；mutation/换靶/负控组等对抗本体动作未纳入此次测量，不受影响",
       "source_refs": [],
+      "status": "active"
+    },
+    "官抗-撞主干不重跑": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [
+        "08-09"
+      ],
+      "baseline": "抽样 4 张 PR 的复核期重复重验，新发现 0/4；同批评估「返工不贵」实证——多数被证伪结论只需一次文字订正、不需要重走验证；对照组来自另一批 11 张 PR 的独立对抗审查，真发现率 75%（15/20），证明对抗本体与复核期重复重验是两件事，前者不能拿后者的数据陪葬",
+      "source_refs": ["issue #70 comment 5230277293 第四组", "_tmp/mechanism-audit-20260809.md 问题一/J1"],
       "status": "active"
     },
     "官抗-换靶两态": {
@@ -1509,6 +1551,21 @@
       ],
       "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截 1661 次",
       "source_refs": [],
+      "status": "active"
+    },
+    "归-建单可读": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-09 调研（_tmp/issue-readability-research-20260809.md）实测 40 张最近 issue：标题 75%（30/40）依赖内部黑话或体系术语才可解析、除『缺陷』准类型标签（11 张）外无类型细分（六格 0%）、关联结构化字段使用率 0%（全部关联靠正文散文引用 #NN）。出处=用户 2026-08-09 拍板「A+B 叠加」+ 上述调研报告，非 AI 自定。落地当批实测新坑：blocked_by 目标只能是 issue、不能是 PR——**2026-08-09 PR #225 复核订正证据链**：`gh issue edit 219 --add-blocked-by 218` 在 gh CLI 客户端层就被 GraphQL 解析挡下（`Could not resolve to an Issue with the number of 218`），请求没到 REST；422（Validation failed: Target issue may only be an issue）只有直调 REST `POST .../issues/<n>/dependencies/blocked_by` 才看得到（对 #218、#225 两个 PR 目标各验一次复现）。结论（blocked_by 拒绝 PR）不变，只是此前记错了哪条命令对应哪层错误。调研报告只验了端点存在，未验目标类型，本条落地时订正。",
+      "source_refs": [
+        "_tmp/issue-readability-research-20260809.md",
+        "issue #70 评论 5230545859（帅 2026-08-09 补录用户拍板原文：A+B 叠加，类型标签按程序员英文命名、可补充更多）https://github.com/thoerwink8/windsurf-dao/issues/70#issuecomment-5230545859",
+        "ccswitch/rules/dao-workitem.md 建单三件套节"
+      ],
       "status": "active"
     }
   }
