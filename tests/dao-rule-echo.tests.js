@@ -18,6 +18,24 @@
 // 用的夹具，把 B 的 PR 染成看似「你弄坏了 rule-echo」。
 // 实测（`node scripts/repro-fixture-isolation.mjs -c 6 -r 3`）：固定名时 33%–56% 的子进程
 // 被染红，唯一后缀后零红。**改这两个路径之前先跑那个复现脚本** —— 它是这条约束唯一的机器侧守护。
+//
+// ── 🔴 夹具落点：① 那一格还继承「这棵树被 checkout 到哪」（issue #253）───────────
+// 上面那段治的是**名字**撞车。还有一格治的是**位置**：`<本目录>` 从 `__dirname` 长出来，
+// 于是整棵树在哪，夹具就在哪；而 hook 的 EXCLUDE 是对**整条绝对路径**求值的
+// （`dao-rule-echo.js` 的 `classifyRuleFile()` 第一行）。把树 checkout 到一个名叫
+// `_tmp` / `build` / `dist` / `coverage` / … 的目录**下面**，夹具就被判成「不是生效中的
+// 规则文件」、hook 静默零输出 ⇒ P2 段确定性红 10 条。
+// 实测（2026-08-10，同一份代码只换树的位置）：
+//   主仓 · `%TEMP%/…` · `.claude/worktrees/…` · `.claude/worktrees/coverage-x/…`  ⇒ PASS=65
+//   `.claude/worktrees/build/…` · `_tmp/…`                                        ⇒ PASS=55 FAIL=10
+// **它不是环境敏感**（没有任何别人的活动参与，跑一百次都一样），故不标 `@dao-test-tier: env`
+// —— 标了只是把一个位置决定的确定性红藏进合并前才跑的那一层。治法是下面的 `pickFixtureRoot()`。
+// ⚠️ 照直写这次没治的那一格：缺陷态下 P2 段那 5 条**否定式**断言（「不误报为作用域」
+// 「不判为作用域」「exit 0」…）全部恒真 —— hook 一个字不输出时它们照绿。**修好之后它们
+// 仍然是弱断言**，给它们配「hook 确实开口了」的前置守卫属另一个批次的判断（issue #253 未尽处）。
+//
+// 本文件头注同批订正一处：原「①`<本目录>/.fixtures-scope-<uniq>/`」现已**不保证**落在仓内，
+// 见 `pickFixtureRoot()`——树坐落在排除面里时它会退到系统临时目录，并在 stdout 打印实际落点。
 const { spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
@@ -53,6 +71,35 @@ function sweepStaleFixtures() {
     } catch (_) { /* 并发下被别人抢先删掉/占用都不是错误，跳过 */ }
   }
   if (swept.length) console.log(`  ⓘ 清掉 ${swept.length} 个超 1 小时的陈旧夹具残留：${swept.join(", ")}`);
+}
+
+// ── 夹具落点的挑选（issue #253）─────────────────────────────────────────────
+// 这里的判据是**本测试自己维护的一份独立副本**，刻意不 require 那个 hook、也不复用它的
+// 正则对象：守卫里「我是不是瞎了」那一半不许复用被守对象的解析（dao `[#守-自检不复用被守对象的解析]`），
+// 而且那个 hook 在 require 的那一刻就去读 stdin，本来也 require 不动。
+// 代价照直写：**它会与 hook 的 EXCLUDE 漂移**。兜底是下面 P2 段开头那两条判别力自检
+// （一正一负）——判据被改成「什么都不拦」或「什么都拦」时，那两条会红。
+const EXCLUDED_DIR_NAMES = /(^|\/)(_tmp|_scratch|node_modules|\.git|dist|build|target|coverage|__pycache__)\//i;
+
+// 按顺序挑第一个「**将来那个夹具文件的完整落点**都不命中排除面」的根。
+//   ① 仓内（已 gitignore、与被测对象同树、跑完就地清）—— 正常位置下与改动前逐字相同；
+//   ② 这棵树本身坐落在排除面里时，退到系统临时目录（它的路径与仓库位置无关）。
+// ⚠️ ② 是**近似不是保证**：谁的 TMPDIR 落在 `…/build/tmp` 之类的位置，它照样命中。
+//    那时本函数返回 null，由调用方红**一条**说清楚，而不是让 10 条业务断言各自红成一片
+//    ——「工具坏了」与「被测对象坏了」必须分得开。
+// baseDir 参数只为可测（默认就是本文件所在目录），别在生产路径上传值。
+function pickFixtureRoot(baseDir) {
+  const base = baseDir || __dirname;
+  const candidates = [
+    ["repo", "仓内 tests/", path.resolve(base, `.fixtures-scope-${UNIQ}`)],
+    ["tmpdir", "系统临时目录", path.join(os.tmpdir(), `dao-rule-echo-fixtures-${UNIQ}`)],
+  ];
+  for (const [kind, label, dir] of candidates) {
+    // 判的是**夹具文件**的完整路径，不是根目录本身 —— hook 看到的是前者。
+    const sample = path.join(dir, ".claude", "rules", "scoped.md").replace(/\\/g, "/");
+    if (!EXCLUDED_DIR_NAMES.test(sample)) return { kind, label, dir };
+  }
+  return null;
 }
 
 function run(payload, env) {
@@ -217,12 +264,33 @@ console.log("\n=== 错误可见性：出错必须留痕，且不取阻断语义 
 // ── P2 作用域档：`paths:` 规则不得被说成「常驻注入」──────────────────────────
 // 为什么必须落盘造夹具：readScopeGlobs 刻意**读盘**而不是看本次写入载荷——Edit 只带改动段，
 // frontmatter 多半不在里面。拿载荷断言等于验了另一条路径，会对真实缺陷失明。
-// 夹具放 tests/ 下自建目录（**不能放 `_tmp/`**：那个前缀在 hook 的 EXCLUDE 里，
-// 放进去会让被测文件直接被判为「非规则文件」，测试变成永远为真的废话）。
+// 夹具落点由 `pickFixtureRoot()` 挑（**不能落在 hook 的 EXCLUDE 面里**：`_tmp` / `build` /
+// `coverage` / … 这些目录名下的文件会被直接判为「非规则文件」，测试变成永远为真的废话）。
+// 🔴 那个约束**不只管相对位置，也管整棵树坐落在哪** —— 本行原先只写了「不能放 `_tmp/`」，
+// 于是把树 checkout 到 `<repo>/_tmp/xxx` 就原样重演了同一个坑（issue #253）。
 // 目录名与下面两个用户级夹具名都带 UNIQ 后缀，理由见文件头「夹具隔离」段。
 console.log("\n=== P2 作用域档：有 paths ⇒ 作用域注入，无 paths ⇒ 常驻 ===");
-{
-  const FIX_ROOT = path.resolve(__dirname, `.fixtures-scope-${UNIQ}`);
+// 前置自检（issue #253）：先证明「我挑落点的那把尺子」两个方向都有判别力，再证明「我真挑到了
+// 一个 hook 看得见的落点」。分三条报，是为了让「树摆错地方」与「hook 被改坏了」长得不一样。
+check("落点判据·正控：排除面下的夹具路径被拒",
+  EXCLUDED_DIR_NAMES.test("D:/frank/windsurf-dao/_tmp/wt/tests/.fixtures-scope-1/.claude/rules/scoped.md"));
+check("落点判据·负控：形似而不该拒的放行（`coverage-x` 不是 `coverage`）",
+  !EXCLUDED_DIR_NAMES.test("D:/frank/windsurf-dao/.claude/worktrees/coverage-x/wt/tests/.fixtures-scope-1/.claude/rules/scoped.md"));
+check("落点挑选·树坐落在排除面里 ⇒ 不再选仓内根",
+  (pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests") || {}).kind === "tmpdir",
+  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests")));
+check("落点挑选·树在正常位置 ⇒ 仍优先仓内根（不为了保险一律外挂）",
+  (pickFixtureRoot("D:/frank/windsurf-dao/tests") || {}).kind === "repo",
+  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/tests")));
+
+const PICKED = pickFixtureRoot();
+check("挑得到一个不落在 hook 排除面里的夹具根", PICKED !== null,
+  `__dirname=${__dirname} · os.tmpdir()=${os.tmpdir()} —— 两个候选根都命中排除面，P2 段本次整段未跑`);
+if (PICKED) {
+  if (PICKED.kind !== "repo") {
+    console.log(`  ⓘ 本棵树坐落在 hook 的排除面内，夹具根改用${PICKED.label}：${PICKED.dir}`);
+  }
+  const FIX_ROOT = PICKED.dir;
   const FIX = path.join(FIX_ROOT, ".claude", "rules");
   const userFix = path.join(USER_RULES_DIR, `${FIXTURE_PREFIX}userlevel-${UNIQ}.md`);
   sweepStaleFixtures();
