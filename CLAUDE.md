@@ -103,10 +103,14 @@ node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不
 
 node scripts/dao-gates.mjs                    # ★ 交付前闸门聚合（issue #70 层2 件①）：上面几行 gen-clause-index --check /
                                               #   gen-guarded-files --check / dao-smoke / check-mutation-anchor /
-                                              #   check-clauses-structure（全量）5 道闸一条命令全出，真退出码汇总表 +
+                                              #   check-clauses-structure（全量）收成一条命令，真退出码汇总表 +
                                               #   末行 DAO_GATES_SUMMARY；全绿才 exit 0（check-clauses-structure 的
                                               #   exit=3「没查成」计入 inconclusive 不计入 red，聚合退出码因此是 2 不是 1）
-node scripts/dao-gates.mjs --list             # 只列 5 道闸的名字与说明，不执行；改闸清单改的是脚本本身，此行不用同步维护
+                                              #   ⚠ **此处刻意不写「共几道闸」**：当前有几道、各叫什么以 `--list` 的打印为准
+                                              #   （2026-08-10 订正 · PR #252 对抗验证判词问题 8：这两行此前既写死「5 道闸」
+                                              #   又声明「此行不用同步维护」——同一处自相矛盾，且加第 6 道闸时这里没有任何
+                                              #   东西会红。本文件上一段自己就写着这个病在本仓被咬过三次）
+node scripts/dao-gates.mjs --list             # 只列各道闸的名字与说明，不执行；改闸清单改的是脚本本身，此行不用同步维护
 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
                                               # ★ 合并链收尾三连脚本化（issue #70 层2 件②，`dao-pr-merge.ps1` 合并后
