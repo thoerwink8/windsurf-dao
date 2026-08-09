@@ -1604,7 +1604,12 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
 {
   // ── 源码级：抽取判据函数本体 ────────────────────────────────────────────
   const SRC = fs.readFileSync(HOOK, "utf8");
-  const A = "function isGreenSyncLine(line) {";
+  // 边界 A 改锚在 NON_PASS_PATTERNS 声明处（2026-08-09 · PR #237 对抗验证 5230986835 F1
+  // 返修）：判据现在分两层，isGreenSyncLine() 引用了它上方声明的 NON_PASS_PATTERNS
+  // 常量——锚点若仍从 `function isGreenSyncLine` 起切，eval 出来的沙箱函数会因为
+  // NON_PASS_PATTERNS 不在作用域内而抛 ReferenceError，j2 恒为 null，下面全部空转
+  // 而不是全绿（同源码级自检①要防的病）。
+  const A = "const NON_PASS_PATTERNS = [";
   // 边界 B 刻意用**不跨行**的锚点（本文件是 CRLF，跨行字面量锚点会被 \r\n 咬掉——
   // 见头注「本文件里的 mutation 锚点为什么写 \r?\n」；单行锚点没有换行符可咬，更省事）。
   const B = "const isMetaRepo = (() => {";
@@ -1614,10 +1619,11 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     return a >= 0 && b > a ? SRC.slice(a, b) : "";
   })();
   check("源码级·自检：J2 判据块被切出来了（切不出来时下面全部空转而不是全绿）",
-    j2Block.length > 100 && j2Block.includes("aggregateGreenSync"), "len=" + j2Block.length);
+    j2Block.length > 100 && j2Block.includes("aggregateGreenSync") &&
+    j2Block.includes("NON_PASS_PATTERNS"), "len=" + j2Block.length);
 
   const loadJ2 = (block) => {
-    try { return new Function(block + "\nreturn { isGreenSyncLine, aggregateGreenSync };")(); }
+    try { return new Function(block + "\nreturn { isGreenSyncLine, aggregateGreenSync, NON_PASS_PATTERNS };")(); }
     catch (_) { return null; }
   };
   const j2 = loadJ2(j2Block);
@@ -1632,11 +1638,60 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     check("🔴 isGreenSyncLine：以 ⓘ 开头但嵌了 ⚠（budgetLines 过渡期/providerHookLines deny 缺字段那种形态）→ 非绿",
       !j2.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
 
+    // ── J2 判据②：NON_PASS_PATTERNS 五处已知「ⓘ 但明写不是通过」形态 ─────────
+    // PR #237 对抗验证 5230986835 F1：这五处此前会被判①「候选绿」直接判成真绿，
+    // 出问题时信息会被聚合行吞掉。每条配一个「命中态」（对应函数真实会吐出的文本）
+    // 与一个同源「不命中态」（同一函数的真正全过分支），双向夹住——只测命中会漏掉
+    // 「判据被放宽后连真绿也误伤」这个方向。
+    check("🔴 NON_PASS_PATTERNS①：providerHookLines() deny 面零样本 → 非绿（今天生产环境的真实形态）",
+      !j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
+        "且与应注册清单一致；ⓘ deny 面零样本：provider 与 canonical 里一条 permissions.deny 都没有 " +
+        "⇒ 那一面什么都没比到（不是「已对齐」）"));
+    check("负控①：同一函数真绿分支（deny 规则逐条一致，非零样本）→ 仍判绿",
+      j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：1 个 claude 型 provider 的 dao hook 段互相一致、" +
+        "且与应注册清单一致；deny 规则逐条一致（1 个 provider 与应注册清单）"));
+
+    check("🔴 NON_PASS_PATTERNS②：clauseTargets() 条款文件未登记进 defaultSources() → 非绿",
+      !j2.isGreenSyncLine("ⓘ 条款文件未登记进 defaultSources()：ccswitch/rules/probe.md" +
+        "（带条款签名，却不在 clause-parser.mjs 的源清单里 ⇒ clause-index / --reconcile / " +
+        "PS 缺省全量模式都看不见它；本 hook 仍按缺省 Marked 检了它）"));
+
+    check("🔴 NON_PASS_PATTERNS③a：deadGateLines() todo 分支——命令串无法核验 → 非绿",
+      !j2.isGreenSyncLine("ⓘ 死闸检测绿（12 条闸 / providers 3 行，零死闸），另有：2 条命令串无法核验" +
+        "（相对路径 / 靠 PATH 解析 ⇒ **不等于核验通过**） → node ccswitch/scripts/check-dead-gates.mjs 看清单"));
+    check("🔴 NON_PASS_PATTERNS③b：deadGateLines() todo 分支的姊妹子项——孤儿 hook → 非绿（同一条返回语句）",
+      !j2.isGreenSyncLine("ⓘ 死闸检测绿（12 条闸 / providers 3 行，零死闸），另有：1 个 hook 文件存在但" +
+        "没被任何一层注册（可能是刻意存货，也可能是挂漏了，机器判不出） → node ccswitch/scripts/check-dead-gates.mjs 看清单"));
+    check("负控③：同一函数真绿分支（孤儿 0、无法核验 0）→ 仍判绿",
+      j2.isGreenSyncLine("ⓘ 死闸检测绿：live + config-sync 快照 + cc-switch providers（3 行）三层合计 " +
+        "12 条闸全部指向存在且可载的脚本，孤儿 0、无法核验 0"));
+
+    check("🔴 NON_PASS_PATTERNS④：clauseStructureLines() 非 Windows 未跑 → 非绿",
+      !j2.isGreenSyncLine("ⓘ 条款库结构闸未跑（非 Windows，本闸是 PowerShell 实现）→ 手动：" +
+        "pwsh ccswitch/scripts/check-clauses-structure.ps1"));
+
+    // ── ⑤ 用对抗验证官实测的真实生产数字（memory-truth-source.js --scope=all，
+    //    dead=24 declared_dead=2 ambiguous=11 skipped=6）复现「今天就是活的」那一格。
+    check("🔴 NON_PASS_PATTERNS⑤a：memoryRefLines() 对抗官实测形态（dead=24, skipped=6）→ 非绿",
+      !j2.isGreenSyncLine("ⓘ memory 指针一致性（scope=all，含 dao 自己的 memory）：7 个项目 / 98 份 memory / " +
+        "实判 103 个路径 token；24 处指向空气（其中真相源声明段内 2 处 ⇒ 那几处该修）· " +
+        "11 处相对路径没写清相对于谁 · 6 处因项目根不可解析未判（不计入发现，也不算通过） → " +
+        "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+    check("🔴 NON_PASS_PATTERNS⑤b：memoryRefLines() 姊妹子项——dead>0 但 skipped=0 时同样非绿（不是只靠 skipped 才拦住）",
+      !j2.isGreenSyncLine("ⓘ memory 指针一致性（scope=all，含 dao 自己的 memory）：7 个项目 / 98 份 memory / " +
+        "实判 103 个路径 token；24 处指向空气（其中真相源声明段内 2 处 ⇒ 那几处该修） → " +
+        "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+    check("负控⑤：同一函数真绿分支（零发现）→ 仍判绿",
+      j2.isGreenSyncLine("ⓘ memory 指针一致性（scope=all，含 dao 自己的 memory）：7 个项目 / 98 份 memory / " +
+        "实判 103 个路径 token，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。 → " +
+        "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+
     const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
     const aggAllGreen = j2.aggregateGreenSync(allGreen);
-    check("aggregateGreenSync：全绿 → 聚合成一行「N 项检查全绿」",
+    check("aggregateGreenSync：全绿 → 聚合成一行「N 行全绿」（PR #237 F2 返修：不写「项检查」，" +
+      "数组元素条数≠逻辑检查项数）",
       aggAllGreen.aggregated === true && aggAllGreen.lines.length === 1 &&
-      aggAllGreen.lines[0] === "ⓘ 3 项检查全绿", JSON.stringify(aggAllGreen));
+      aggAllGreen.lines[0] === "ⓘ 3 行全绿", JSON.stringify(aggAllGreen));
 
     const mixed = allGreen.concat(["✗ 死闸检测 FAIL：真发现"]);
     const aggMixed = j2.aggregateGreenSync(mixed);
@@ -1676,6 +1731,28 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       check("🔴 mutation②：摘掉「全部行都要绿」这个门槛后，含真发现的一批也被聚合（证明该判断是承重的）",
         bad.aggregated === true && bad.lines.length === 1);
     }
+
+    // ── mutation ③（PR #237 对抗验证 5230986835 F1 返修）：摘掉 NON_PASS_PATTERNS
+    // 这半判据——证明它是承重的，不是「写了没接线」。锚点取单行的调用表达式本体
+    // （不含前面的 `&&` 续行符），把它换成 `true`：`X && true` 恒等于 `X`，等价于
+    // 直接删掉这半判据，同时不破坏跨行 `&&` 表达式的语法。
+    const ANCHOR3 = "!NON_PASS_PATTERNS.some((re) => re.test(s));";
+    check("mutation③锚点在源码里唯一存在", j2Block.split(ANCHOR3).length === 2,
+      "出现 " + (j2Block.split(ANCHOR3).length - 1) + " 次");
+    const j2Mut3 = loadJ2(j2Block.replace(ANCHOR3, "true;"));
+    check("canary③：变异体还活着", !!j2Mut3 && typeof j2Mut3.isGreenSyncLine === "function");
+    if (j2Mut3) {
+      check("🔴 mutation③：摘掉 NON_PASS_PATTERNS 判据后，「deny 面零样本」这类形态被误判成绿" +
+        "（证明这半判据是承重的，即 PR #237 F1 判词点名的真实吞报行为原样复现）",
+        j2Mut3.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
+          "且与应注册清单一致；ⓘ deny 面零样本：provider 与 canonical 里一条 permissions.deny 都没有 " +
+          "⇒ 那一面什么都没比到（不是「已对齐」）"));
+      check("🔴 mutation③：同一变异体下，对抗官实测的 memory dead=24 形态也被误判成绿",
+        j2Mut3.isGreenSyncLine("ⓘ memory 指针一致性（scope=all，含 dao 自己的 memory）：7 个项目 / 98 份 memory / " +
+          "实判 103 个路径 token；24 处指向空气（其中真相源声明段内 2 处 ⇒ 那几处该修）· " +
+          "11 处相对路径没写清相对于谁 · 6 处因项目根不可解析未判（不计入发现，也不算通过） → " +
+          "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+    }
   }
 }
 {
@@ -1687,7 +1764,15 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   // 详见 loadClauseParser() 头注）+ 四个桩脚本替掉需要外部数据源的那几道，
   // settings-drift.js 整个换成替身（真实版依赖 cc-switch DB/config-sync 快照，
   // 沙箱里没有那些文件会导致自检报错行，不是本组要验的东西）。
-  function mkGreenMetaRepo(tag, deadGatesRed) {
+  // 🔴 **denySampled 2026-08-09 由 0 改成 1**（PR #237 对抗验证 5230986835 F1 挂账修复）：
+  // 此前这个替身报 `denySampled=0`（deny 面零样本），对抗官实测证明那一行会被判据①
+  // （单看 ⓘ/⚠）误判成候选绿——本节的断言名叫「六道全绿」，但实际是「五道绿 + 一道
+  // 『什么都没比到』」，与判据①一起构成了 F1 那个真实吞报事故。判据②接线后
+  // denySampled=0 会被 NON_PASS_PATTERNS① 拦下，「六道全绿」这个夹具因此不再成立
+  // （聚合不会发生）——把它改真：providers/scoped 也从 0 改成 1，让这个夹具名副其实地
+  // 走「真的采样比对过、且一致」这条路径。`denySampled=0` 那条真实分支另开负控②验证
+  // （不删，改验证方向：从『误判进全绿』翻成『正确挡下聚合』）。
+  function mkGreenMetaRepo(tag, deadGatesRed, denySampledZero) {
     const root = path.join(SANDBOX, "green", tag, "windsurf-dao");
     const hooksDir = path.join(root, "ccswitch", "hooks");
     const libDir = path.join(root, "ccswitch", "lib");
@@ -1709,7 +1794,8 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     fs.writeFileSync(path.join(libDir, "settings-drift.js"), [
       "// 测试替身：--providers（子进程）恒报干净 SUMMARY；hookLines()（in-process require）恒清空",
       "if (process.argv.includes('--providers')) {",
-      "  process.stdout.write('PROVIDER_HOOKS_SUMMARY exit=0 providers=0 scoped=0 drift=0 cross=0 selfcheck=ok uncheckable=0 denyDrift=0 denyCross=0 denySampled=0\\n');",
+      "  process.stdout.write('PROVIDER_HOOKS_SUMMARY exit=0 providers=1 scoped=1 drift=0 cross=0 selfcheck=ok uncheckable=0 denyDrift=0 denyCross=0 denySampled=" +
+        (denySampledZero ? 0 : 1) + "\\n');",
       "  process.exit(0);",
       "}",
       "module.exports = { hookLines: function () { return []; } };",
@@ -1748,27 +1834,46 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   const greenRes = run(greenRoot, { HOME: greenHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: greenStateSubdir }, greenHookCopy);
   const gc = ctx(greenRes);
   check("端到端·全绿：hook 自己退出 0", greenRes.code === 0, "code=" + greenRes.code);
-  check("端到端·全绿：daoSync 段聚合成「ⓘ N 项检查全绿」（N 未写死，只要求正整数）",
-    /【dao 同步漂移检测】windsurf-dao 本轮同步\/配置自检结果：\nⓘ \d+ 项检查全绿/.test(gc), "ctx=" + gc.slice(0, 600));
+  check("端到端·全绿：daoSync 段聚合成「ⓘ N 行全绿」（N 未写死，只要求正整数；PR #237 F2 返修措辞）",
+    /【dao 同步漂移检测】windsurf-dao 本轮同步\/配置自检结果：\nⓘ \d+ 行全绿/.test(gc), "ctx=" + gc.slice(0, 600));
   check("端到端·全绿：聚合态头部不再说「存在以下同步差异」（那句在这一态下是假话）",
     !/存在以下同步差异/.test(gc), "ctx=" + gc.slice(0, 300));
   check("端到端·全绿：聚合态不再逐条打印各道子检查的绿行原文（否则等于没聚合）",
     !/死闸检测绿|条款库结构闸绿|per-provider 漂移检查绿/.test(gc), "ctx=" + gc.slice(0, 600));
 
-  // ── 负控：翻红任一道 → 整段照旧展开、零信息丢失 ────────────────────────
+  // ── 负控①：翻红任一道 → 整段照旧展开、零信息丢失 ───────────────────────
   const redHookCopy = mkGreenMetaRepo("one-red", true);
   const redRoot = path.resolve(path.dirname(redHookCopy), "..", "..");
   const redStateSubdir = path.posix.join(path.basename(SANDBOX), "red-state");
   const redRes = run(redRoot, { HOME: greenHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: redStateSubdir }, redHookCopy);
   const rc = ctx(redRes);
-  check("端到端·负控：hook 自己退出 0（降级不是崩溃）", redRes.code === 0, "code=" + redRes.code);
-  check("🔴 端到端·负控：翻红死闸检测那一道 → 不聚合，整段原样展开",
-    !/项检查全绿/.test(rc) && /存在以下同步差异/.test(rc), "ctx=" + rc.slice(0, 300));
-  check("端到端·负控：翻红的那一道现形（死闸检测契约自检 ✗）",
+  check("端到端·负控①：hook 自己退出 0（降级不是崩溃）", redRes.code === 0, "code=" + redRes.code);
+  check("🔴 端到端·负控①：翻红死闸检测那一道 → 不聚合，整段原样展开",
+    !/行全绿/.test(rc) && /存在以下同步差异/.test(rc), "ctx=" + rc.slice(0, 300));
+  check("端到端·负控①：翻红的那一道现形（死闸检测契约自检 ✗）",
     /死闸检测/.test(rc) && /✗/.test(rc), "ctx=" + rc.slice(0, 500));
-  check("端到端·负控：出问题时信息零减少——其余几道绿行原文仍在（always-on 字节预算 / memory 指针 / 条款库结构闸）",
+  check("端到端·负控①：出问题时信息零减少——其余几道绿行原文仍在（always-on 字节预算 / memory 指针 / 条款库结构闸）",
     /always-on 字节预算/.test(rc) && /memory 指针一致性/.test(rc) && /条款库结构闸绿/.test(rc),
     "ctx=" + rc.slice(0, 900));
+
+  // ── 负控②（PR #237 对抗验证 5230986835 F1 返修）：deny 面零样本 → 不聚合 ──────
+  // denySampled=0 这一行仍以 ⓘ 开头、不含 ⚠——单靠判据①会判「候选绿」，靠判据②
+  // （NON_PASS_PATTERNS）拦下。这是端到端层面复现「今天生产环境的真实吞报形态」，
+  // 与源码级单元测试（NON_PASS_PATTERNS①）互为印证：单元测试证判据函数本身对，
+  // 这里证调用点真的接上了、没有被 aggregateGreenSync 之外的路径绕过。
+  const denyZeroHookCopy = mkGreenMetaRepo("deny-zero", false, true);
+  const denyZeroRoot = path.resolve(path.dirname(denyZeroHookCopy), "..", "..");
+  const denyZeroStateSubdir = path.posix.join(path.basename(SANDBOX), "deny-zero-state");
+  const dzRes = run(denyZeroRoot, { HOME: greenHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: denyZeroStateSubdir }, denyZeroHookCopy);
+  const dzc = ctx(dzRes);
+  check("端到端·负控②：hook 自己退出 0", dzRes.code === 0, "code=" + dzRes.code);
+  check("🔴 端到端·负控②：deny 面零样本（『ⓘ 但明写不是通过』）→ 不聚合，整段原样展开",
+    !/行全绿/.test(dzc) && /存在以下同步差异/.test(dzc), "ctx=" + dzc.slice(0, 300));
+  check("端到端·负控②：deny 面零样本原文仍在、未被聚合吞掉（不是「已对齐」，是「没比到」）",
+    /deny 面零样本/.test(dzc) && /不是「已对齐」/.test(dzc), "ctx=" + dzc.slice(0, 600));
+  check("端到端·负控②：出问题时信息零减少——其余几道绿行原文仍在",
+    /死闸检测绿|条款库结构闸绿/.test(dzc) && /always-on 字节预算/.test(dzc) && /memory 指针一致性/.test(dzc),
+    "ctx=" + dzc.slice(0, 900));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1886,6 +1991,87 @@ console.log("\n=== J3：外部项目常驻提醒抑制阈（用户 2026-08-09 �
     check("🔴 mutation：摘掉阈值判断后，第 5 次仍是全文（证明「报满 3 次后压缩」这个判断是承重的）",
       /缺少 CLAUDE\.md（AI 入口文件）→/.test(mutLine), mutLine);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log("\n=== M14 补断言：reminderTitle() 首行截断半边（PR #237 对抗验证 5230986835 F4）===");
+// 对抗官指出：reminderTitle() 有两个半边——①取首行（split(/\r?\n/)[0]）②按 "→" 截断。
+// 今天清单 24 条里带 template 的条目恰好全都在 msg 自己那一行里有 "→"，于是②总是先于①
+// 生效，① mutation 全套 238 条一条都不红（"等价变体"，不是"真空覆盖"，见对抗官原话
+// 的判别实验）。用一条清单里今天不存在的合法形态（有 template、msg 本身无 "→"）把①
+// 单独钉住：真实行为下，① split(/\r?\n/)[0] 本就会把 template 追加的
+// "\n   ↳ 零编辑复制 canonical：..." 那一整行砍掉（那一行的 "↳" 不是 "→"，是另一个
+// 字符，②在这种形态下找不到箭头）；摘掉①之后，②的 arrowIdx===-1 ⇒ 整段（含换行与
+// 追加的可粘贴命令）原样当标题——命令泄漏进本该压缩掉的那一行。
+{
+  const m14ManifestPath = path.join(SANDBOX, "m14-manifest.json");
+  fs.writeFileSync(m14ManifestPath, JSON.stringify({
+    entries: [{
+      id: "m14-probe-no-arrow",
+      class: "universal",
+      require: { file: "CLAUDE.md" },
+      template: { src: "CLAUDE.md.template", dest: "CLAUDE.md" },
+      msg: "缺少 CLAUDE.md（M14 探针：诊断句本身不含箭头）",
+      why: "PR #237 对抗验证 5230986835 F4：钉住 reminderTitle() 首行截断半边在" +
+        "「有 template 无 →」这个今天清单里不存在、但合法的形态下是唯一承重的那一半",
+      severity: "warn",
+    }],
+  }), "utf8");
+  // 取「M14 探针」出现处到报文末尾的**片段**，不是单行——manifestIssueLines() 把
+  // template 追加的 "\n   ↳ 零编辑复制 canonical：..." 拼在同一个 finding 字符串里，
+  // 那条命令因此落在 msg 的**下一物理行**：只按行取会把它切没，两态（泄漏/未泄漏）
+  // 读出来一模一样，是本组测试第一版踩过的坑（单行版把 mutation 判成了假红）。
+  // 本清单只有这一条 finding，同一个字符串里不会混进别的 template 命令，切到结尾安全。
+  const probeSpanOf = (c) => {
+    const idx = c.indexOf("M14 探针");
+    return idx === -1 ? "" : c.slice(idx);
+  };
+
+  // ── 基线：真实 hook、真实判据 ────────────────────────────────────────────
+  const cwdM14 = mkproj("m14-probe-proj");
+  const envM14 = {
+    DAO_SCAFFOLD_CHECK_STATE_SUBDIR: path.posix.join(path.basename(SANDBOX), "m14-state"),
+    DAO_SCAFFOLD_MANIFEST: m14ManifestPath,
+  };
+  let baseSpan = "";
+  for (let i = 0; i < 4; i++) baseSpan = probeSpanOf(ctx(run(cwdM14, envM14)));
+  check("canary：真实 hook 下 M14 探针 finding 确实报出来了（不是清单加载失败）",
+    baseSpan.length > 0, baseSpan.slice(0, 80));
+  check("🔴 基线：无箭头 + 带 template 的 finding，第 4 次压缩后不泄漏可粘贴命令" +
+    "（① 首行截断在真实代码里生效，不靠②兜底）",
+    !/↳ 零编辑复制 canonical/.test(baseSpan) && /已连续 3 次/.test(baseSpan), baseSpan.slice(0, 300));
+
+  // ── mutation：摘掉 reminderTitle() 的首行截断半边 ───────────────────────
+  const SRC_M14 = fs.readFileSync(HOOK, "utf8");
+  const ANCHOR_M14 = "const firstLine = String(fullText).split(/\\r?\\n/)[0];";
+  check("mutation 锚点在源码里唯一存在（reminderTitle）", SRC_M14.split(ANCHOR_M14).length === 2,
+    "出现 " + (SRC_M14.split(ANCHOR_M14).length - 1) + " 次");
+
+  const m14HookCopy = mkBrokenLibTree("m14-mut-no-split", null, (hp) => {
+    const s = fs.readFileSync(hp, "utf8");
+    const mutated = s.replace(ANCHOR_M14, "const firstLine = String(fullText);");
+    if (mutated === s) throw new Error("M14 mutation 锚点替换未命中");
+    fs.writeFileSync(hp, mutated, "utf8");
+  });
+  // mkBrokenLibTree 只拷 ccswitch/{hooks,lib}，scaffold-manifest.js 的 TEMPLATES_ROOT
+  // 相对**自己的** __dirname 算——这棵沙箱树里得把 templates/ 也搬过去，否则
+  // template.src 校验不通过、manifest=null，M14 探针 finding 出不来（同 J3 mutation
+  // 那组测试踩过的同一个坑，见上方那段头注）。
+  const fixtureCcswitchM14 = path.resolve(path.dirname(m14HookCopy), "..");
+  fs.cpSync(path.join(REPO, "ccswitch", "templates"), path.join(fixtureCcswitchM14, "templates"), { recursive: true });
+
+  const cwdM14Mut = mkproj("m14-probe-proj-mut");
+  const envM14Mut = {
+    DAO_SCAFFOLD_CHECK_STATE_SUBDIR: path.posix.join(path.basename(SANDBOX), "m14-mut-state"),
+    DAO_SCAFFOLD_MANIFEST: m14ManifestPath,
+  };
+  let mutSpan = "";
+  for (let i = 0; i < 4; i++) mutSpan = probeSpanOf(ctx(run(cwdM14Mut, envM14Mut, m14HookCopy)));
+  check("canary：变异体还活着（M14 探针 finding 仍报出来，不是 hook 整体崩了）",
+    mutSpan.length > 0, mutSpan.slice(0, 80));
+  check("🔴 mutation：摘掉首行截断半边后，第 4 次压缩泄漏了完整可粘贴命令" +
+    "（证明①在「有 template 无 →」这个形态下是唯一承重的那一半，堵上 F4 那个真空覆盖）",
+    /↳ 零编辑复制 canonical/.test(mutSpan), mutSpan.slice(0, 400));
 }
 
 // ── 清理 ────────────────────────────────────────────────────────────────────
