@@ -68,6 +68,34 @@ issue 队列——**没有「谁在干哪张单」的标注，两边会各自开
 > 盘上文字改真、把已知错误行为钉成回归**——真正的算法修法（`Get-EffectiveClaim` 需要按 host
 > 分组、真的记住被接管过的 host、把 session 传下去参与比较）另开 issue #215，不在合并压力下
 > 抢修（dao「撤宣称不抢修」）。
+>
+> ✅ **2026-08-09 三轮修法（issue #215 本批落地）**：上面点名的算法修法已实现——F1（`Get-EffectiveClaim`
+> 改按 host 分组，返回 Hashtable）、F2（`Get-DaoMarks` 解析 takeover 的「原认领」字段，
+> `Get-EffectiveClaim` 对被指名的旧机整台除名）、F3（`$marks` 组装行补上 `session`/`hours`，
+> 但尚未参与比较逻辑）皆已落地，另加合并链实拦发现的 CRLF 输入健壮性修法（`Get-DaoMarks`
+> 入口归一化 `\r`）。逐处细节、简化边界与未覆盖面见 §四结尾订正、㈧、㈩；回归网场景 5 的
+> G3/G4 已从"钉住错误值"翻转为"钉住正确值"，新增场景验证三方场景与单条-claim 边界。
+> **这仍是未经独立对抗复核的新实现**——同上一段的性质，「已提交修法方案」不是「已验证修好」。
+>
+> ✅ **2026-08-09 四轮修法（本批接续，issue #215 落地）**：F3 补上了"参与比较"那半——新增
+> `Test-IsMySessionClaim`，`dao-resume.md`「先比对会话 id」现在有具体实现路径可跑（见 §六
+> 步骤 ⑦ 与 ㈩ 结尾订正）。**它不改 `Get-EffectiveClaim` 的分组粒度**（仍按 host，不按
+> host+session）——§二 line 128 明写认领单位是「机器+宿主」，跨机器碰撞判定的分组按这个
+> 单位是对的；新函数答的是"这条有效认领是不是我自己会话发的"，是下游一个独立问题。
+> **本批接手时顺带核过一处未在验收标准内的疑点，照直写不吞**：`Get-EffectiveClaim` 的分组
+> 目前只按 `host`、不含 `runtime`——同一台机上 cc 与 codex 并行认领同一张单时会被合并进
+> 同一个 host 桶。~~这一格是否也该拆到 host+runtime 粒度本批判断不属于"续完已开的半格"、
+> 而是一个新的设计问题，未经评审不擅自改~~ **2026-08-09 PR #240 对抗复核订正：这句本身低估
+> 了这一格**——不是学术分歧式的"新的设计问题"，是**已实测四种具体的错误答案**，方向全部
+> 危险（认领凭空消失 / 认领被冒领）：`HOST1/cc` 被
+> `HOST1/codex` 撤回会把 cc 的认领一起杀掉（A2）；两个 runtime 各认领一次会合并进同一桶、
+> 后发的覆盖先发的（A3）；接管指名 `BOXA/codex` 时 `BOXA/cc` 也被连坐除名，因为除名逻辑
+> （§六命令③）只读 `oldHost`、`oldRuntime` 从未被消费（A5）；codex 用旧格式持有该桶时 cc 会
+> 判定"这是我的"并替它续命，F3 号称堵的洞在双栈跨 runtime 场景下原样重现（B3）。issue #215
+> 原文 F1 的修法方向逐字写的是"按 host 分组"（未提 runtime），这一格与本批同源，**本批判断
+> 不属于"续完已开的半格"、修法归下一批**（同 F2"合法复活"边界的处置方式，不在合并压力下
+> 抢修）——**变的只是描述的诚实度，不是处置结论**。七种实测形态（含另外三个同族新形态）与
+> 处置建议见跟进单 issue #250。
 
 ### 一、为什么一层装不下（先说清哪条路走不通，省下重新发明一遍）
 
@@ -227,6 +255,15 @@ dao-claim: <机器名> / <宿主> / <自报租期>h
   没有对应代码。真正的算法修法（`Get-EffectiveClaim` 需要按 host 分组、为每台持有未撤销认领
   的机器各自算出一条有效认领、并真正记住哪些 host 被 takeover 指名接管过）归 issue #215，
   合并前只做这一处文字改真，不在合并压力下抢修。
+  ✅ **2026-08-09 三轮修法（本批，issue #215 落地）**：`Get-EffectiveClaim` 改为按 host 分组，
+  为每台持有未撤销认领的机器各自算出一条有效认领（返回 Hashtable，不再是单值）；`Get-DaoMarks`
+  新增从 `dao-takeover:` 人读详情里抓「原认领 <旧机器名>/<旧宿主>」，被指名的旧机在
+  `Get-EffectiveClaim` 里整台除名（含它此后再发的任何 claim——简化处理，不支持"旧机重新走一遍
+  认领流程合法复活"这个未定义的边界）。解析实现见 §六；回归网场景 5（原 G3/G4 缺陷锚点）已
+  翻转为正例断言，新增三方场景与单条-claim 边界（G9）。**这是新实现，尚未经过独立对抗复核**
+  ——判据类改动铁律是先过对抗验证官再合并，复核结论落地前请把这段读成「已提交修法方案」而不是
+  「已验证修好」（dao「撤宣称不抢修」的另一半：这次不是撤宣称，是真的在做，但"做了"与"验过"
+  仍是两件事）。
   找到「别台机的当前有效认领」且它早于自己时，发一条 `dao-yield:` 撤回自己的认领
   （独立成行：`dao-yield: <机器名>/<宿主>`），**不摘 `在途`**（那是先到者的），换下一张单。
 - **同一秒的平局**要有一个不依赖时钟的确定性规则，否则两边同时让位（活锁）或同时不让（撞车）：
@@ -255,58 +292,134 @@ gh issue list --state open --search "label:任务 -label:在途" --json number,t
 gh issue comment <n> --body-file _tmp/claim-<n>.md      # 独立一行 `dao-claim: <机器>/<宿主>/<N>h`
 gh issue edit <n> --add-label 在途
 
-# ②.5 合法机器标记行解析（③④ 共用，2026-08-09 issue #198 新增，堵 FAIL-2/4/5 三处洞）
+# ②.5 合法机器标记行解析（③④ 共用，2026-08-09 issue #198 新增，堵 FAIL-2/4/5 三处洞；
+#     2026-08-09 issue #215 批追加 CRLF 归一化 + takeover 旧机字段解析 + session/hours 透传）
 #     只认"独立成行、字段合法"的 dao-claim:/dao-yield:/dao-takeover:/dao-release:，
 #     裸标记（无字段）、混进散文/表格、占位符 <> 一律不命中——机器判据，不靠"写的人小心"。
 function Get-DaoMarks {
     param([string]$Body)
+    $Body = $Body -replace "`r", ''   # CRLF 归一化（issue #215）：收尾锚点 `[ \t]*$` 认的是
+                                       # LF 语义，`\r` 留在行尾会让整行连"独立成行"这一关都过不去；
+                                       # 真实输入 gh api 是 LF 故未爆，Windows 侧任何带 \r\n 的输入源
+                                       # 会静默漏识别——split/正则匹配前先把 \r 扫平，不留到下游。
+                                       # ⚠️ 这一步是**删除**不是**转换**：纯 CR（无 `\n` 伴随，老 Mac
+                                       # 风格分行）的输入不在射程内，见下方 435 行订正（PR #240 对抗复核实测）
     $out = @()
     foreach ($m in [regex]::Matches($Body, '(?m)^`?dao-(?<kind>claim|yield|takeover|release):(?<rest>[^\r\n`]*)`?[ \t]*$')) {
         $rest = $m.Groups['rest'].Value.Trim()
-        if (-not $rest) { continue }                        # 裸标记（如 `dao-claim:` 不带字段）⇒ 不算
-        $head = $rest; $dot = $rest.IndexOf([char]0x00B7)    # · 之后是人读详情，只切 head 做字段校验
-        if ($dot -ge 0) { $head = $rest.Substring(0, $dot).Trim() }
+        if (-not $rest) { continue }                        # 裸标记（如 `dao-claim:` 不带字段）⇒ 不算；
+                                                              # 下面的字段数校验对空 rest 同样会拒（split
+                                                              # 空串恒得 1 段），这行是提早退出、不是唯一
+                                                              # 防线——归因订正见 F7（issue #215）
+        $head = $rest; $tail = ''; $dot = $rest.IndexOf([char]0x00B7)    # · 之后是人读详情
+        if ($dot -ge 0) { $head = $rest.Substring(0, $dot).Trim(); $tail = $rest.Substring($dot + 1) }
         $f = @($head -split '/' | ForEach-Object { $_.Trim() })
         if ($f.Count -lt 2 -or $f[0] -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$' -or $f[1] -notmatch '^[A-Za-z0-9_-]{1,20}$') { continue }
-        $kind = $m.Groups['kind'].Value; $ok = $false; $session = $null; $hours = $null
+        $kind = $m.Groups['kind'].Value; $ok = $false; $session = $null; $hours = $null; $oldHost = $null; $oldRuntime = $null
         switch ($kind) {
             'claim' {
                 if ($f.Count -eq 3 -and $f[2] -match '^[1-9][0-9]?h$') { $ok = $true; $hours = $f[2] }
                 elseif ($f.Count -eq 4 -and $f[2] -match '^[A-Za-z0-9_-]{1,16}$' -and $f[3] -match '^[1-9][0-9]?h$') { $ok = $true; $session = $f[2]; $hours = $f[3] }
             }
-            default { if ($f.Count -eq 2) { $ok = $true } }  # yield/takeover/release 只要求 机器/宿主
+            'takeover' {
+                if ($f.Count -eq 2) {
+                    $ok = $true
+                    # F2 修法（issue #215）：从人读详情里抓"原认领 <旧机器名>/<旧宿主>"——§三 step2
+                    # 的固定模板，是唯一能拿到"谁被排除"的地方（机器面本身只有新持有人两格）。抓不到
+                    # 就留 $null，Get-EffectiveClaim 对 $null 不做排除——宁可漏排除也不误排除，与 §三
+                    # "拿不准就当它还被持有"同一个 fail-safe 方向。这段依赖的是人读自由文本的具体措辞，
+                    # 与 F5（`·` 分隔符本身非 ASCII）同一族脆弱性，未在本批范围内加固。
+                    $om = [regex]::Match($tail, '原认领[ \t]+(?<h>[A-Za-z0-9][A-Za-z0-9_-]{0,62})/(?<r>[A-Za-z0-9_-]{1,20})')
+                    if ($om.Success) { $oldHost = $om.Groups['h'].Value; $oldRuntime = $om.Groups['r'].Value }
+                }
+            }
+            default { if ($f.Count -eq 2) { $ok = $true } }  # yield/release 只要求 机器/宿主
         }
-        if ($ok) { $out += [pscustomobject]@{ kind = $kind; host = $f[0]; runtime = $f[1]; session = $session; hours = $hours } }
+        if ($ok) { $out += [pscustomobject]@{ kind = $kind; host = $f[0]; runtime = $f[1]; session = $session; hours = $hours; oldHost = $oldHost; oldRuntime = $oldRuntime } }
     }
     return $out
 }
 
-# ③ 回读核撞车：拿到"当前有效认领"，不是正文里任意一条 dao-claim:（FAIL-2/5 修法，定义见 §四）
+# ③ 回读核撞车：逐机器各自算出"当前有效认领"，不是正文里任意一条 dao-claim:
+#    （FAIL-2/5 修法定义见 §四；F1/F2 算法修法与局限见 §四 结尾订正，issue #215）
 $c = (gh issue view <n> --json comments | ConvertFrom-Json).comments
 $marks = @()
 foreach ($cm in $c) {
     foreach ($mk in (Get-DaoMarks -Body $cm.body)) {
-        $marks += [pscustomobject]@{ createdAt = $cm.createdAt; kind = $mk.kind; host = $mk.host; runtime = $mk.runtime }
+        $marks += [pscustomobject]@{ createdAt = $cm.createdAt; kind = $mk.kind; host = $mk.host; runtime = $mk.runtime; session = $mk.session; hours = $mk.hours; oldHost = $mk.oldHost; oldRuntime = $mk.oldRuntime }
     }
 }
 $marks = @($marks | Sort-Object createdAt)
 @($marks | ForEach-Object { "{0}  dao-{1}: {2}/{3}" -f $_.createdAt, $_.kind, $_.host, $_.runtime })   # 人眼复核用，全量列出
 
-function Get-EffectiveClaim {   # "当前有效认领"算法见 §四
+function Get-EffectiveClaim {
+    <#
+      "当前有效认领"算法见 §四——F1/F2 修法（issue #215）：按 host 分组逐机判定，被
+      dao-takeover: 指名接管过的旧机整台除名（含它此后再发的任何 claim，简化处理：不支持
+      "旧机重新走一遍认领流程合法复活"，那条边界本批未做设计评审，照直写不是已经想清楚）。
+      返回 Hashtable：key=host，value=该机当前有效认领（$Marks 里的原始元素）。"谁该让位"
+      是调用方拿这份逐机结果自己做的比较（用法见下），本函数只答"每台机各自有没有、是哪一条"，
+      这正是 F1 之前缺的那个"逐机器视角"——旧版只返回全局最近一条，两台机各自比较时都判不出
+      该让位。
+    #>
     param($Marks)
-    for ($i = $Marks.Count - 1; $i -ge 0; $i--) {
-        $mk = $Marks[$i]
-        if ($mk.kind -in @('claim', 'takeover')) {
-            $laterRevoke = $Marks[($i + 1)..($Marks.Count - 1)] | Where-Object { $_.host -eq $mk.host -and $_.kind -in @('yield', 'release') }
-            if (-not $laterRevoke) { return $mk }
+    $excluded = @{}
+    foreach ($mk in $Marks) {
+        if ($mk.kind -eq 'takeover' -and $mk.oldHost) { $excluded[$mk.oldHost] = $true }
+    }
+    $eff = @{}
+    foreach ($h in @($Marks | ForEach-Object { $_.host } | Select-Object -Unique)) {
+        if ($excluded.ContainsKey($h)) { continue }
+        $own = @($Marks | Where-Object { $_.host -eq $h })
+        for ($i = $own.Count - 1; $i -ge 0; $i--) {
+            if ($own[$i].kind -notin @('claim', 'takeover')) { continue }
+            $laterRevoke = @($own | Select-Object -Skip ($i + 1) | Where-Object { $_.kind -in @('yield', 'release') })
+            if ($laterRevoke.Count -eq 0) { $eff[$h] = $own[$i]; break }
         }
     }
-    return $null
+    return $eff
 }
-$effective = Get-EffectiveClaim -Marks $marks    # 只拿这一条去跟"自己刚发的认领"比 createdAt
+
+function Test-IsMySessionClaim {
+    <#
+      issue #215-F3 完整版：$my 是 Get-EffectiveClaim 返回值里某个 host 的当前有效认领，本函数
+      判断它是不是"我这个会话"发的，还是同机同宿主另一个并发会话发的——这是 dao-resume.md
+      「先比对会话 id 是否一致再判是不是自己的单」缺的那个实现路径。
+      §二 line 128：认领单位是「机器+宿主」不是单个会话，所以本函数**不改变** Get-EffectiveClaim
+      的分组/碰撞判定本身（那是跨机器比较，看谁的 createdAt 更早）——分组键仍然只按 host，这是
+      刻意的，不是遗漏。本函数答的是另一件事："这条已经确认属于我这台机+宿主的有效认领，到底是
+      不是我自己这个会话留下的"，只有 /dao-resume 这类"是不是我自己前任"的场景需要问这件事。
+      返回 $true = 判定为"是我自己的"（含 $my/$MySession 任一没有会话 id 的旧行为：没有数据
+      可比时不拦，向后兼容单会话场景——这正是本节末㈩弱处照直写的那半"忘记填仍退回旧行为"）。
+      返回 $false = 两边都填了会话 id 且不一致 ⇒ 判定为"同机同宿主的另一个并发会话"，或 $my
+      本身是 $null（没有有效认领，谈不上是不是我的）。
+    #>
+    param($my, $MySession)
+    if (-not $my) { return $false }
+    if (-not $my.session -or -not $MySession) { return $true }   # 任一没填 ⇒ 无数据可比，按旧行为放行
+    return ($my.session -eq $MySession)
+}
+
+$eff = Get-EffectiveClaim -Marks $marks    # Hashtable：key=host，value=该机当前有效认领
+$MyHost = '<机器名>'                        # 本机 hostname（同 §二 判据），跑之前自己填
+$MySession = '<会话短id>'                   # 本会话自报的短 id（同 §二 格式），单会话场景留空
+$my = $eff[$MyHost]
+$others = @($eff.Keys | Where-Object { $_ -ne $MyHost } | ForEach-Object { $eff[$_] } | Sort-Object createdAt)
+if ($my -and $others.Count -gt 0 -and $others[0].createdAt -lt $my.createdAt) {
+    # 别的机器有一条比自己更早的有效认领 ⇒ 自己让位（§四 判据），发 dao-yield: 撤回
+}
+
+# ⑦ /dao-resume 用：这条 host 的有效认领是不是"我这个会话"发的，而不是同机同宿主的另一个
+#    并发会话（issue #215-F3 完整版，dao-resume.md「先比对会话 id」的实现路径——见 Test-IsMySessionClaim 头注）
+if ($my -and -not (Test-IsMySessionClaim -my $my -MySession $MySession)) {
+    # 会话 id 都有值且不一致 ⇒ 这是同机同宿主另一个并发会话的认领，不是我自己前任留下的——
+    # 按 dao-resume.md 判据"只报不接"；不要走上面 ③ 的"该我让位"逻辑（那是跨机器碰撞判定，
+    # 这里问的是"这条已确认属于我的有效认领，是不是我自己发的"，是两件不同的事）
+}
 
 # ④ 租约还剩多久：只认"当前持有人自己"最后一条 dao-claim:，不是最后一条评论（FAIL-4 修法）
-$holderClaims = @($marks | Where-Object { $_.kind -eq 'claim' -and $_.host -eq $effective.host })
+#    F1 修好后"当前持有人"天然就是"自己"（$MyHost）——不再依赖一个全局 $effective.host
+$holderClaims = @($marks | Where-Object { $_.kind -eq 'claim' -and $_.host -eq $MyHost })
 $last = ($holderClaims | Select-Object -Last 1).createdAt
 [math]::Round(([datetimeoffset]::UtcNow - [datetimeoffset]::Parse($last)).TotalHours, 2)
 
@@ -339,6 +452,19 @@ gh issue edit <n> --remove-label 在途
   裸标记也进不了结果集。占位符幽灵（`<机器名>`/`<宿主>`/`<N>h`）与止血复发的第三条幽灵
   （机器名是一个单引号 `'`）同样因为 `host` 字段的字符集校验被挡在外面——这三类是 PR #195
   对抗复核实测过的全部已知幽灵形态，逐条验证脚本见本 PR。
+- 🔴 **`Get-DaoMarks` 对 CRLF 输入不健壮，已修（issue #215）**：收尾锚点 `[ \t]*$` 按 LF 语义写，
+  行尾带 `\r` 时整行连"独立成行"都过不去，字段校验把真认领挡掉（合并链实拦发现：CRLF 检出的
+  测试 fixture 命中 0 条）。真实输入 gh api 是 LF 所以线上未爆，但 Windows 侧任何带 `\r` 的
+  输入源（本地编辑器粘贴、某些 git 配置下的 checkout）都会静默漏识别，且是**危险方向**——
+  认领消失比认领误报更糟（fail-open，与 §三 fail-safe 原则相反）。修法是 split/正则匹配前
+  在函数入口 `-replace "`r", ''` 扫平所有 `\r`。~~不只 `\r\n`，裸 `\r` 也一并处理~~
+  **订正（PR #240 对抗复核实测证伪）**：`-replace "`r", ''` 是**删除**不是**转换**——碰到
+  `\r\n` 时删掉 `\r` 剩下 `\n`，行分隔关系不变，这一种确实处理对了；但碰到**纯 `\r`
+  分行**（老 Mac 风格，行与行之间没有 `\n`）时，删除 `\r` 会把原本几行的内容**接成一整行**，
+  认领反而更找不到（实测：`"…\rdao-claim: LONECR/cc/4h\r…"` 命中 0 条）。**实况是**：这一步
+  只真正处理 `\r\n`，纯 CR 分行的输入不在射程内。要真兑现"裸 `\r` 也处理"，需要写成
+  `-replace "`r`n", "`n" -replace "`r", "`n"`（先收敛 CRLF，再把剩下的裸 `\r` 转成 `\n`
+  而不是删掉）——本次只订正文字，未改代码，纯 CR 分行场景不在当前实现的覆盖范围内。
 
 ### 已知弱处（照直写，别把这一节读成「已经管住了」）
 
@@ -425,6 +551,16 @@ issue #70 已追认为基线**（追认的是「该不该用这两个数」，�
 > "死机醒来再发一条 claim"，就会解出 `host=死机`（回归网场景 5 G4），这正是"指名排除"没有
 > 真实现的地方。真正的算法修法归 issue #215。
 
+> ✅ **2026-08-09 三轮修法（本批，issue #215 落地）**：§六 `Get-EffectiveClaim` 重写为按 host
+> 分组，`Get-DaoMarks` 新增解析 `dao-takeover:` 人读详情里的「原认领 <旧机器名>/<旧宿主>」并
+> 记进 `oldHost` 字段，`Get-EffectiveClaim` 对 `oldHost` 命中的 host 整台除名——回归网场景 5
+> 的 G3/G4 已从"钉住错误返回值"翻转为"钉住正确返回值"（G3：BOXA/BOXB 各自都拿到自己的有效
+> 认领，可各自跟对方比较；G4：死机醒来后的 claim 不再被判成有效认领）。**尚未经过独立对抗
+> 复核**，且这次的排除是"一旦被指名、整台永久除名"的简化处理，不支持"合法复活"这个 issue
+> 原文点名"值得设计评审、不要想当然"的边界——本批没做那个评审，采用了最简单的一种解释，
+> 照直写不是已经想清楚。`oldHost` 解析依赖 §三 step2 的具体中文模板措辞，与 F5（`·` 分隔符
+> 本身非 ASCII）同一族脆弱性，同样未加固。
+
 **㈨ 「首行必须纯 ASCII」与 dao 无条件生效的「人读载体人话领先」结构互斥**（对抗 FAIL-1）：
 第二节与 `dao-resume.md` 都写「**首行** `dao-claim:`」，而 issue/PR/评论「说人话领先」是无条件条款
 （本文件上面那一条）。**试点评论是靠违反本节来同时满足两者的**：它第 1 行是人话，`dao-claim:`
@@ -457,3 +593,25 @@ issue #70 已追认为基线**（追认的是「该不该用这两个数」，�
 > **这堵不住的部分照直写**：即使修好数据传递，会话 id 仍是自报字段，忘填就退回旧行为（两个
 > 会话共享认领、彼此都判成"自己的"）——这不是新洞，是把旧洞的边界从"完全没有判据"改成
 > "有判据但要求自报配合"，没有任何程序强制"同机开第二个会话时必须记得填"。
+
+> ✅ **2026-08-09 三轮修法（本批，issue #215 落地）——只做了半格，照直写**：§六 命令③的
+> `$marks +=` 组装行已补上 `session`/`hours`（回归网场景 6 的文本 canary 已从"钉住缺失"翻转
+> 为"钉住存在"），数据不再半路被扔。**`Get-EffectiveClaim` 的分组键仍然是纯 `host`，不含
+> `session`**——同机同宿主多会话共享同一个认领这个原病（本条开篇描述的那个）本批**没有解决**，
+> 只是数据链路通了、下一棒接手时不用再从头补。`dao-resume.md` 那句"先比对会话 id"依旧没有
+> 实现路径；派单令把这半格划成"F3 组装行带上 session/hours"，没有要求"真正参与比较"，那半
+> 留给下一批。
+>
+> ✅ **2026-08-09 四轮修法（本批接续，issue #215 落地）——那半格接上了**：§六新增
+> `Test-IsMySessionClaim`（紧接 `Get-EffectiveClaim` 之后定义），这是"真正参与比较"的实现
+> 路径——`dao-resume.md`「先比对会话 id」现在有具体代码可跑，不再是一句没有对应实现的判据
+> 描述。**它刻意不改 `Get-EffectiveClaim` 的分组键**：§二 line 128 明写认领单位是「机器+宿主」
+> 不是单个会话，所以"两台机谁该让位"这个跨机器碰撞判定按 host 分组是对的、不该按 session 再
+> 拆细；`Test-IsMySessionClaim` 答的是另一件事——"这条已确认属于我这台机+宿主的有效认领，
+> 是不是我自己这个会话留下的"，只有 /dao-resume 这类"是不是我自己前任"场景需要问。**开篇
+> 描述的原病（同机同宿主两个并发会话共享同一个认领）在"谁该让位"这个跨机器视角下依旧是共享
+> 的**——这是设计使然（帅与它派出的官本来就该共享同一个认领，见 §二 line 128）；本函数只堵
+> "会话 A 把会话 B 的认领误判成自己的、接着替它续命"这一半，不改变碰撞协议本身的粒度。
+> **仍然堵不住的部分（继承自上面那段，原样成立）**：会话 id 是自报字段，忘填时 `$my.session`
+> 或 `$MySession` 有一边是空，函数按旧行为放行——没有任何程序强制"必须记得填"。回归网场景 7
+> 覆盖：会话一致 / 会话不一致 / 任一未填（含 3 字段旧格式无 session）/ 无有效认领 四态。
