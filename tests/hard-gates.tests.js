@@ -732,9 +732,12 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
     'if (false && toks[i].k === "in") { i++; continue; }',
     bash(`tee _tmp/o.txt < "$HOME/.claude/settings.json"`), 0, 2);
   // ③结果不被消费：目标目录 basename 展开照样算，但结果不 push ⇒ 承重正控从红变绿
+  // ⚠ 锚点 2026-08-09 随 #199 更新：`g2IsLiveDir(destDir, destPre)` 那道 `continue` 已删，
+  //   前筛改成问**源文件名**（`g2BaseCouldBeLive(base)`）并挪进了这一行的条件里。
+  //   **旧锚 `if (base) out.push(...)` 已不在盘上** ⇒ 上一版这条会退化成「改坏了也不红」。
   mutate2("③结果不被消费·目标目录 basename 展开算了但不入候选 ⇒ 承重正控漏过",
-    /if \(base\) out\.push\(\{ why: "目标目录 \+ 源文件名", raw: `\$\{destDir\}\/\$\{base\}` \}\);/,
-    'if (base) { const _ = `${destDir}/${base}`; }',
+    /if \(base && g2BaseCouldBeLive\(base\)\) out\.push\(\{ why: "目标目录 \+ 源文件名", raw: `\$\{destDir\}\/\$\{base\}` \}\);/,
+    'if (base && g2BaseCouldBeLive(base)) { const _ = `${destDir}/${base}`; }',
     bash("cp _tmp/settings.json ~/.claude/"), 2, 0);
   // 反向：把「源位放行」改坏 ⇒ 上面「Copy-Item live → _tmp 备份」这条负控必须翻红。
   // 没有这一组，「一条永远为真的负控」与「一条真管用的负控」在全绿输出里长得一样。
@@ -747,7 +750,10 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
   // 判据：本 PR 新增判据的**生产调用点**有几个、本节端到端覆盖了几个。
   {
     const callSites = (name) => (src2.match(new RegExp(`\\b${name}\\s*\\(`, "g")) || []).length - 1; // 减去定义处
-    const map = { g2WriteTargets: callSites("g2WriteTargets"), g2Resolve: callSites("g2Resolve"), g2IsLive: callSites("g2IsLive"), g2IsLiveDir: callSites("g2IsLiveDir") };
+    // ⚠ 2026-08-09（#199）换名：`g2IsLiveDir` 已删（它问的是「目标目录末段像不像 `.claude`」，
+    //   而 `~/.claude` 是链时真实目录可以叫任何名字 ⇒ 那个问题本身就是错的）。
+    //   顶替它那一格前筛职责的是 `g2BaseCouldBeLive`（问源文件名），故计数换成它。
+    const map = { g2WriteTargets: callSites("g2WriteTargets"), g2Resolve: callSites("g2Resolve"), g2IsLive: callSites("g2IsLive"), g2BaseCouldBeLive: callSites("g2BaseCouldBeLive") };
     const line = Object.entries(map).map(([k, v]) => `${k}=${v}`).join(" ");
     // ⚠️ **这句话 2026-08-03（#112）订正过一个数字，订正史留着**：原文写「g2Resolve 2/2
     //   （shell 分支 + Edit/Write 分支）」，而 `g2Resolve` 的生产调用点**当时就是 3 个**
@@ -759,8 +765,14 @@ console.log("\n──── G2 · 对抗验证官夹击（PR #106 / issue #87）
     console.log(`  （调用点覆盖率）G2 新判据函数的生产调用点：${line}；` +
       `本节端到端覆盖：g2WriteTargets 1/1（shell 分支）· g2Resolve ${map.g2Resolve}/${map.g2Resolve}` +
       `（Edit/Write 分支 + g2WriteTargets 的候选解析 + basename 展开的 destDir）· ` +
-      `g2IsLive 2/2 · g2IsLiveDir 1/1。**未覆盖 0 个** —— 但覆盖的是"这个函数被走到了"，` +
-      `不是"它的每个分支都被走到了"，后者由上面那张登记表反面记录。`);
+      `g2IsLive 2/2 · g2BaseCouldBeLive ${map.g2BaseCouldBeLive}/${map.g2BaseCouldBeLive}` +
+      `（`+"`-Destination <目录>` 那条正控走到「像」的一支，负控 `cp a.md <目录>` 走到「不像」的一支）。" +
+      `**未覆盖 0 个** —— 但覆盖的是"这个函数被走到了"，` +
+      `不是"它的每个分支都被走到了"，后者由上面那张登记表反面记录。` +
+      `⚠ 分母的**已知不精确**照直写（2026-08-09）：\`callSites\` 是纯文本计数、` +
+      `**数得进注释里在讨论它的那些**，且箭头函数常量的定义式（\`const f = (x) =>\`）它数不到 ⇒ ` +
+      `对 \`g2BaseCouldBeLive\` 这类它「多算注释、少减定义」，两个方向的误差不保证抵消。` +
+      `守它的断言只要求每项 ≥1（改名即失效），**不要求这些数字精确**。`);
     check("调用点计数拿得到（拿不到说明函数被改名，覆盖率那句话即失效）",
       Object.values(map).every((v) => v >= 1), JSON.stringify(map));
   }
@@ -936,18 +948,28 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   //   ⇒ 上一版这四条 mutation 会一起变成「改坏了也不红」，而那与「判据没塌陷」逐字节相同。
   //   **它们没有静默**：`命中 0 次` 那条前置断言当场红了 4 条并逐个点名（`#守-锚点行尾` ③
   //   要的就是这个 —— 断言的对象必须是真正喂给 `replace()` 的那个表达式）。
-  const RE_RESOLVE_TAIL = /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\)\);/;
-  const RE_LONGPATH_CALL = /if \(\/~\\d\/\.test\(s\)\) s = g2LongPath\(s, rp\);/;
+  // ⚠ 锚点 2026-08-09 再随 #199 更新（这是它们第三次跟着源码走）：
+  //   · `g2Resolve` 多收第四个参数 `rp` 并透传 ⇒ 尾行变成 `g2Canon(…, rp)`
+  //   · realpath 那一步前面多了零 I/O 前筛 `&& g2TailCouldBeLive(s)`
+  //   **旧锚 `return g2Canon(g2ResolvePre(raw, cwd, vars));` 与 `if (/~\d/.test(s)) s = …`
+  //   都已不在盘上** ⇒ 上一版这四条会一起退化成「改坏了也不红」。前置断言当场红了 4 条。
+  const RE_RESOLVE_TAIL = /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\), rp\);/;
+  const RE_LONGPATH_CALL = /if \(\/~\\d\/\.test\(s\) && g2TailCouldBeLive\(s\)\) s = g2LongPath\(s, rp\);/;
   mutate3("⑨①移除·g2Resolve 不再调 g2Canon（绝对路径退回一步归一都没有）",
     RE_RESOLVE_TAIL, "  return g2ResolvePre(raw, cwd, vars);", P9, 2, 0);
   mutate3("⑨②留字面不执行·盘符分支整个不进（代码还在，只是永不执行）",
     /if \(\/\^\[A-Za-z\]:\\\/\/\.test\(s\)\) \{/, "if (false) {", P9, 2, 0);
   mutate3("⑨③结果不被消费·g2Canon 照调（副作用都发生了），但返回值被丢掉",
-    /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\)\);\r?\n\}/,
-    "  g2Canon(g2ResolvePre(raw, cwd, vars));\n  return g2ResolvePre(raw, cwd, vars);\n}", P9, 2, 0);
+    /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\), rp\);\r?\n\}/,
+    "  g2Canon(g2ResolvePre(raw, cwd, vars), rp);\n  return g2ResolvePre(raw, cwd, vars);\n}", P9, 2, 0);
   // 8.3 那一层单独换靶：证明拦下短名的是 realpath 那一步，不是别的分支顺手拦的
   mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
     RE_LONGPATH_CALL, "if (false) s = g2LongPath(s, rp);", P9_83, 2, 0);
+  // #199 新增：把**前筛**单独换靶（同一行的另一半）。它与上一条不是同一件事 ——
+  // 上一条打掉的是「解不解」，这一条打掉的是「要不要试着解」。两半各自都能让 8.3 形态失明，
+  // 而前筛这一半是本批**新加**的，没有它这一格就是零样本（`#官抗-负控独立归因`）。
+  mutate3("⑨·#199 前筛单独换靶·`g2TailCouldBeLive` 恒假 ⇒ 一次 realpath 都不试 ⇒ 短名形态重新漏掉",
+    RE_LONGPATH_CALL, "if (/~\\d/.test(s) && false) s = g2LongPath(s, rp);", P9_83, 2, 0);
   check("上一条改坏后，`..` 回绕仍然被拦（证明只打掉了 8.3 那一层，两层是独立的）", (() => {
     const mp = path.join(TMP, "mutant-112-9-83only.js");
     // 与上一条共用同一个 RegExp 对象 —— 锚一改两处同时改（`#守-锚点行尾` ③）
@@ -989,25 +1011,40 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
       fs.writeFileSync(mp, src3.replace(re, () => "  return realpath(p);"), "utf8");
       const nonexistent = edit("C:\\Users\\NOSUCH~9\\.claude\\settings.json");
       const real = gate(nonexistent), mut = gate(nonexistent, { script: mp });
-      check("反向⑨·去掉 g2LongPath 的 catch ⇒ 不存在的 8.3 路径把守卫打进 fail-open（真文件不会）",
+      // 🔴 **判据 2026-08-09（#199）换过，作废原文照录**：
+      //   ~~断言 `mut.err` 里有 `ENOENT`（不存在的 8.3 路径 ⇒ realpath 抛 ENOENT ⇒ 没有 catch
+      //   就把守卫打进 fail-open）。~~ —— #199 之后 **hook 进程自己一次同步 realpath 都不调**
+      //   （缺省实现由 `G2_RP_SYNC` 换成恒抛的 `G2_RP_NONE`，两个真实现都在子进程里）
+      //   ⇒ **`ENOENT` 这个字再也不会出现在 hook 自己的错误里**，那半个判据在新盘上恒假。
+      //   顺带说明这个 catch 的**性质变了**：它此前接的是「文件不存在」这种偶发事件，
+      //   现在**每一次相① 都要经过它**（相① 的 rp 恒抛，那正是「本相不落 I/O」的实现手段）
+      //   ⇒ 它从「兜底」变成了**主路径**，删掉它是每次都炸，不再是偶尔炸。
+      const sentinel = /相①|未提供 realpath 实现/;
+      check("反向⑨·去掉 g2LongPath 的 catch ⇒ 8.3 路径把守卫打进 fail-open（真文件不会）" +
+            "；且报错正文是相① 的哨兵而**不再是 ENOENT**（#199 之后 hook 进程零同步 realpath）",
         real.code === 0 && !/守卫自身出错/.test(real.err) &&
-        mut.code === 0 && /守卫自身出错/.test(mut.err) && /ENOENT/.test(mut.err),
-        `real=${real.code}/${/守卫自身出错/.test(real.err)} mut=${mut.code}/${/守卫自身出错/.test(mut.err)}`);
+        mut.code === 0 && /守卫自身出错/.test(mut.err) && sentinel.test(mut.err) && !/ENOENT/.test(mut.err),
+        `real=${real.code}/${/守卫自身出错/.test(real.err)} mut=${mut.code}/${/守卫自身出错/.test(mut.err)}` +
+        ` sentinel=${sentinel.test(mut.err)} enoent=${/ENOENT/.test(mut.err)}`);
     }
   }
 
-  // 🔴 **一条阴性结果，照直记（官抗节：差额为零也是结论）**：
-  //   `if (!g2IsLiveDir(destDir, destPre)) continue;` 这道 guard **试过反向 mutation，翻不动**
-  //   （⚠ 2026-08-08 订正调用形态：#134 之后它多收一个「归一前」参数，见 hook 里 g2IsLiveDir；
-  //    **旧写法 `g2IsLiveDir(destDir)` 已不在盘上**，照原样引下去会让读者去找一个不存在的调用）。
+  // 🔴 **一条阴性结果，照直记（官抗节：差额为零也是结论）**。
+  //   **它的被测对象 2026-08-09（#199）已经删除了，整段保留是因为它记的是「为什么删得掉」**：
+  //   ~~`if (!g2IsLiveDir(destDir, destPre)) continue;` 这道 guard **试过反向 mutation，翻不动**
+  //   （⚠ 2026-08-08 订正调用形态：#134 之后它多收一个「归一前」参数）。
   //   实测（`_tmp/probe-reverse.mjs` B 组，3 条负控全部 0→0）：把它改成 `if (false) continue;`
   //   之后，`-Destination` 指向 `.bak` / `_tmp` / 别的仓，产出的候选是 `<那个目标>/<源basename>`，
   //   **结构上不可能等于 live** —— 因为要等于 live，destDir 就必须**恰好是** live 目录，
   //   而那种情况本来就会被拦。⇒ 它是**精度与开销**的优化（少产一堆永不命中的候选），
-  //   **不是承重判据**。别因为它"看起来像个 guard"就以为有断言在守着它。
-  //   🔴 **但那第二个参数是承重的，别一起读成「不承重」**（2026-08-08 实测，本批 M2/M3）：
+  //   **不是承重判据**。~~ —— **这条阴性结果正是 #199 敢删它的依据**：一条改成恒放行都翻不动
+  //   任何断言的 guard，删掉它不会丢拦截面。⇒ **阴性结果不是「白测一场」，它是退役凭证**。
+  //   🔴 **但那第二个参数曾是承重的，别一起读成「不承重」**（2026-08-08 实测，M2/M3）：
   //   把 `destPre` 不传（或喂空串）⇒ junction + 短名 HOME 那一格由 2 翻 0，各红 1 条。
   //   ⇒ **「这个 guard 本身不承重」与「它的入参不承重」是两句话**，第一句为真不蕴含第二句。
+  //   #199 之后这一格由 `g2TwoPhase` 的**相①**承担（它整相都不归一，比「多传一个归一前的串」
+  //   更彻底），断言在文件末尾 `#199` 那一节。**顶替 destDir 那道前筛的是 `g2BaseCouldBeLive`
+  //   （问源文件名），它是承重的**：上面 ③ 那条 mutation 把它连同 push 一起关掉即由 2 翻 0。
 
   // ── 调用点覆盖率（官抗节「mutation 报告需附加调用点覆盖率」）─────────────
   {
@@ -1360,27 +1397,39 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
       const payVar = ps(BYPASS_87);
       const payLit = edit(`${HOME}\\.claude\\settings.json`);
 
-      // ① realpath 层：**承重**。打掉它 ⇒ 短名 HOME 下全线失明；长名 HOME 不受影响。
+      // 🔴 **2026-08-09（#199）：上面那段「两层各自是什么角色」有一半过期了，作废原文照录**：
+      //   ~~realpath 层承重：短名 HOME 下，候选（**任何形态**）都被 `g2Canon` 归成长名，
+      //   而语法层常量是短名 ⇒ 语法层一律不中，全靠 realpath 层。~~
+      //   —— #199 之后判定跑**两相**，而**相①（归一前）压根不 realpath** ⇒ 短名 HOME 下
+      //   「候选也写成短名」的那一类（变量 / `~` 展开 / `$HOME`，即真语料的主流形态）
+      //   **在相① 就与短名常量字面相等、当场命中语法层**，一次 I/O 都不落。
+      //   ⇒ **realpath 层仍然承重，但承重的样本换了**：只剩「候选写**字面长名** + HOME 是短名」
+      //   这一类（两侧长短名形态不一致，只有归一得上）。下面 ① 因此把两个样本分开断言 ——
+      //   **一个仍翻、一个不再翻，而「不再翻」本身是本批的产出，不是回归**。
       const L2 = /  return low === g2LiveDirReal\(\);/;
       const n2 = (src4.match(new RegExp(L2.source, "g")) || []).length;
       check("mutation 锚点恰好命中 1 次（常量侧·realpath 层）", n2 === 1, `命中 ${n2} 次`);
       if (n2 === 1) {
         const mp = path.join(TMP, "mutant-117-real.js");
         fs.writeFileSync(mp, src4.replace(L2, () => "  return false;"), "utf8");
-        for (const [nm, pay] of [["真 #87 原文（变量形态）", payVar], ["字面长名", payLit]]) {
-          check(`常量侧·realpath 层被打掉 ⇒ 短名 HOME 下「${nm}」由 2 翻 0（这一层承重）`,
-            gate(pay, { env: asShort }).code === 2 && gate(pay, { script: mp, env: asShort }).code === 0,
-            `real=${gate(pay, { env: asShort }).code} mut=${gate(pay, { script: mp, env: asShort }).code}`);
-        }
+        check("常量侧·realpath 层被打掉 ⇒ 短名 HOME 下「字面长名」由 2 翻 0（这一层仍承重）",
+          gate(payLit, { env: asShort }).code === 2 && gate(payLit, { script: mp, env: asShort }).code === 0,
+          `real=${gate(payLit, { env: asShort }).code} mut=${gate(payLit, { script: mp, env: asShort }).code}`);
+        check("🟢#199 产出·同一变异体下「真 #87 原文（变量形态）」**不再翻**（2→2）" +
+              "⇒ 那一格已由相① 的零 I/O 字面相等接住，不再依赖 realpath 层",
+          gate(payVar, { env: asShort }).code === 2 && gate(payVar, { script: mp, env: asShort }).code === 2,
+          `real=${gate(payVar, { env: asShort }).code} mut=${gate(payVar, { script: mp, env: asShort }).code}`);
         check("同一变异体在**长名 HOME** 下全部照拦 ⇒ 这个 bug 是环境条件性的，不是恒失效",
           gate(payVar, { script: mp }).code === 2 && gate(payLit, { script: mp }).code === 2);
       }
 
       // ② realpath 层换成 throw：**用来证明「零 I/O」这个性质**，不是证明判决。
       //    长名 HOME 下若仍拦得住 ⇒ 说明压根没走到那一层 ⇒ 那次 hook 调用一次 I/O 都没落。
-      // 锚点 2026-08-08 随 #133 更新：常量侧现在把有界实现 `g2RealpathBounded` 作为第二个
-      // 参数传给 `g2Canon` —— 那就是 #133 的全部改动面（全仓唯一传非默认实现的调用点）。
-      const RE_REAL_BODY = /    _g2LiveDirCache\.real = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\), g2RealpathBounded\)\.toLowerCase\(\);/;
+      // ⚠ 锚点 2026-08-09 随 #199 更新（第二次跟着源码走）：常量侧不再把 `g2RealpathBounded`
+      //   直接当 `g2Canon` 的第二参 —— 它现在**先做零 I/O 归一（传恒抛的 `G2_RP_NONE`）、
+      //   再无条件过一次有界 realpath**。锚点改钉那条零 I/O 归一行（单行，行尾差异咬不到它）。
+      //   **旧锚 `_g2LiveDirCache.real = g2Canon(…, g2RealpathBounded).toLowerCase();` 已不在盘上。**
+      const RE_REAL_BODY = /    const syn = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\), G2_RP_NONE\);/;
       const n3 = (src4.match(new RegExp(RE_REAL_BODY.source, "g")) || []).length;
       check("mutation 锚点恰好命中 1 次（realpath 层函数体）", n3 === 1, `命中 ${n3} 次`);
       if (n3 === 1) {
@@ -1392,26 +1441,26 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
           check(`零 I/O 性质·长名 HOME 下「${nm}」拦得住且 realpath 层从未被调用`,
             r.code === 2 && !/L2_WAS_CALLED/.test(r.err), `code=${r.code} 被调用=${/L2_WAS_CALLED/.test(r.err)}`);
         }
-        const rs = gate(payVar, { script: mp, env: asShort });
-        check("对照·短名 HOME 下它**确实**会走到 realpath 层（fail-open + 那句告警）⇒ 上面那组不是恒真",
+        const rs = gate(payLit, { script: mp, env: asShort });
+        check("对照·短名 HOME + **字面长名候选**时它**确实**会走到 realpath 层 ⇒ 上面那组不是恒真",
           rs.code === 0 && /L2_WAS_CALLED/.test(rs.err), `code=${rs.code}`);
-      }
 
-      // ③ 零 I/O 快筛：**它才是把 I/O 挡在门外的那一道**。拿掉它 ⇒ 长名 HOME 下也会走到第二层。
-      // 锚点 2026-08-08 随 #134 更新：快筛现在同时问「归一前」与「归一后」两个深度
-      // （旧锚 `!low.endsWith("/.claude")` 恒不命中 ⇒ 这一条会退化成「改坏了也不红」）。
-      const RE_PREFILTER = /  if \(!g2DirTailLooksLive\(low\) && !g2DirTailLooksLive\(norm\(pre\)\.toLowerCase\(\)\)\) return false;/;
-      const n4 = (src4.match(new RegExp(RE_PREFILTER.source, "g")) || []).length;
-      check("mutation 锚点恰好命中 1 次（g2IsLiveDir 的零 I/O 快筛）", n4 === 1, `命中 ${n4} 次`);
-      if (n4 === 1) {
-        const both = src4
-          .replace(RE_PREFILTER, () => "  if (false) return false;")
-          .replace(RE_REAL_BODY, () => '    throw new Error("L2_WAS_CALLED");');
-        const mp = path.join(TMP, "mutant-117-nofilter.js");
-        fs.writeFileSync(mp, both, "utf8");
-        const r = gate(bash("cp src.json ~/.claude/settings.json"), { script: mp });
-        check("快筛被拿掉后，长名 HOME 下也会走到 realpath 层 ⇒ 证明省下那次 I/O 的是快筛不是分层",
-          /L2_WAS_CALLED/.test(r.err), `被调用=${/L2_WAS_CALLED/.test(r.err)} code=${r.code}`);
+        // ③ 🔴 **#199 的代价，实测钉住（`#官通-禁笃定措辞`：别只写买到的那半）**：
+        //    常量侧改成**无条件**过一次有界 realpath 之后，「长名 HOME 一次 I/O 都不落」
+        //    **只对语法层命中的那些输入成立**。语法层没命中、而文件名又像 live 的路径
+        //    （项目级 `.claude/settings.json`、`.vscode/settings.json` …）现在会落 1-2 次
+        //    有界子进程。**这一格此前是零 I/O，是本批花掉的成本**，换来 ⑯ 相邻格与 ⑰ 两格真拦截。
+        const projCfg = path.join(TMP, "io-cost-proj", ".claude", "settings.json");
+        const rProj = gate(edit(projCfg), { script: mp });
+        check("🔴#199 代价·长名 HOME 下写**项目级** `.claude/settings.json` 现在**会**走到 realpath 层" +
+              "（此前零 I/O）—— 买到的是 ⑯ 相邻格 / ⑰ 两格真拦截",
+          /L2_WAS_CALLED/.test(rProj.err), `被调用=${/L2_WAS_CALLED/.test(rProj.err)} code=${rProj.code}`);
+        check("#199 代价·同一路径在真文件下仍 exit 0（走到 realpath 层 ≠ 被拦；误伤面没变）",
+          gate(edit(projCfg)).code === 0, `code=${gate(edit(projCfg)).code}`);
+        const rHome = gate(bash("cp src.json ~/.claude/settings.json"), { script: mp });
+        check("#199 代价的边界·同一变异体下 `~/.claude/settings.json` 仍在语法层命中、从不走 realpath 层" +
+              "⇒ 那笔成本只落在「语法层没命中」的那些输入上，不是全面退化",
+          rHome.code === 2 && !/L2_WAS_CALLED/.test(rHome.err), `code=${rHome.code}`);
       }
 
       // ④ 语法层：**刻意断言它「不承重」** —— 关掉它一个判决都不变。
@@ -1433,7 +1482,7 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   check("真 hook 文件在本节之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
 }
 
-console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 快筛（2026-08-08）────");
+console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 快筛 + #199 候选侧有界化 · 两相判定 ────");
 // ── 这一节测什么，以及为什么承重的不是「它现在拦得住」那几条 ────────────────────
 // 两张单子落在同一段代码上：
 //   **#133** 常量侧那次 `fs.realpathSync.native` 同步不可中断（实测打不可路由 UNC 阻塞
@@ -1444,6 +1493,14 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
 //   **#134** 零 I/O 快筛作用在**归一后**的候选上，而归一（realpath）会改写末段 ⇒
 //        `.claude` 是 junction 且 HOME 是 8.3 短名时 `endsWith("/.claude")` 为假、
 //        **连比都不比**，丢一格真拦截。改法 = 快筛同时看「归一前 / 归一后」两个深度。
+//   **#199（2026-08-09 加进本节）** 候选侧那格 realpath 仍无界，而它的触发次数**由 payload 控**
+//        ⇒ 必须正面回答「N 个诱饵 × timeout 每个」。改法两刀：**零 I/O 前筛**
+//        （`g2TailCouldBeLive`，末段不可能是 live 的连试都不试）+ **每进程至多一个批量子进程**
+//        （`g2RealpathBatch`）⇒ 答案是 **N × 0 + 1 × timeout**。同批把判定改成**两相**
+//        （相①=归一前 · 相②=归一后，任一命中即拦），从深度上消掉「用归一后的值做归一前假设」
+//        那个连着换了四种长相的病；`g2IsLiveDir` / `g2DirTailLooksLive` 与缺省的 `G2_RP_SYNC`
+//        一并删除。**本节因此多了三组断言**：放大攻击（N=20/200 实测）· 两相各自的专属样本 +
+//        mutation · ⑱⑲ 两条新登记（诱饵抢先 / 形态交叉，都带自失效断言）。
 //
 // 🔴 **本节承重的是三条防复发断言**（PR #145 三轮不可合，**每一轮的修复都引入了下一轮的
 //    阻断项**，而阻断项的形态全部是「预算耗尽后怎么办」）：
@@ -1474,22 +1531,59 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
   // （`#守-锚点行尾` ③：断言前缀串而 mutation 用正则 = 两个不同的锚）。
   const RE_RP_CHILD = /const G2_RP_CHILD = "process\.stdout\.write\(require\('fs'\)\.realpathSync\.native\(process\.argv\[1\]\)\)";/;
   const RE_SPAWN = /  const r = childProcess\.spawnSync\(process\.execPath, \["-e", G2_RP_CHILD, p\], \{/;
-  const RE_BOUNDED_ARG = /    _g2LiveDirCache\.real = g2Canon\(norm\(path\.join\(HOME, "\.claude"\)\), g2RealpathBounded\)\.toLowerCase\(\);/;
+  // ⚠ 锚点 2026-08-09 随 #199 更新：常量侧不再把 `g2RealpathBounded` 当 `g2Canon` 的第二参，
+  //   改成先零 I/O 归一、再**无条件**过一次有界 realpath（那次调用包在一个数成功次数的闭包里）。
+  //   **旧锚 `_g2LiveDirCache.real = g2Canon(…, g2RealpathBounded).toLowerCase();` 已不在盘上。**
+  const RE_BOUNDED_ARG = /      const v = g2RealpathBounded\(p\);/;
   for (const [nm, re] of [["G2_RP_CHILD 子进程正文", RE_RP_CHILD], ["spawnSync 调用", RE_SPAWN],
-                          ["常量侧传有界实现", RE_BOUNDED_ARG]]) {
+                          ["常量侧调有界实现", RE_BOUNDED_ARG]]) {
     const n = (SRC.match(new RegExp(re.source, "g")) || []).length;
     check(`#133 锚点恰好命中 1 次（${nm}）`, n === 1, `命中 ${n} 次`);
   }
-  // 结构断言：**全仓只有常量侧那一个地方传非默认的 realpath 实现**。多出第二处就说明
-  // 有人把子进程接到了候选侧上 —— 而候选侧的触发次数由 payload 控，那正是三轮绕过的入口。
+  // 结构断言：**全仓只有常量侧那一个地方调有界单路径实现**。
   // 🔴 **必须先剥注释再数，这一格是被自己咬出来的**：首版直接在全文上数，得到 **9 次** ——
   //   多出来的 7 处全是头注里**在讨论它**的散文。那正是 PR #145 第二轮对抗官踩过的同一个
   //   自指坑（他把正则换成 `ZZZ_NEVER_MATCHES` 之后「它匹配到了自己那行正则字面量」），
   //   也正是 `#守-输出面外` 说的「答得出我的报告写在哪、那个位置在不在我扫的范围里」。
   const CODE = SRC.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join("\n");
   const refs = (name) => (CODE.match(new RegExp(`\\b${name}\\b`, "g")) || []).length;
-  check("#133 结构·`g2RealpathBounded` 在**代码**里只出现 2 次（1 定义 + 1 常量侧引用），候选侧零引用",
+  // 🔴 **这条断言的语义 2026-08-09（#199）换了，作废原文照录**：
+  //   ~~`g2RealpathBounded` 在代码里只出现 2 次（1 定义 + 1 常量侧引用），**候选侧零引用** ——
+  //   多出第二处就说明有人把子进程接到了候选侧上，而候选侧的触发次数由 payload 控。~~
+  //   —— #199 **就是**把子进程接到候选侧的那一批，所以「候选侧零引用」不再是要守的性质。
+  //   守的换成：**候选侧不许复用单路径实现**（那会把「N × timeout」原样请回来），
+  //   它只准走**批量**那一个（`g2RealpathBatch`，每进程 ≤1 次）。计数不变仍是 2，
+  //   但**为什么是 2** 换了：1 定义 + 1 常量侧调用点，候选侧一次都不许引用它。
+  check("#133/#199 结构·`g2RealpathBounded`（**单路径**有界实现）在代码里只出现 2 次" +
+        "（1 定义 + 1 常量侧调用），**候选侧零引用** ⇒ 候选侧只能走批量那条",
     refs("g2RealpathBounded") === 2, `代码里 ${refs("g2RealpathBounded")} 次 / 含注释 ${(SRC.match(/\bg2RealpathBounded\b/g) || []).length} 次`);
+  // 🔴 **#199 新增结构断言①：hook 进程自己一次同步 realpath 都不调。**
+  //   缺省实现由 `G2_RP_SYNC`（进程内同步）换成恒抛的 `G2_RP_NONE` 之后，`realpathSync`
+  //   在**剥掉注释的代码**里只该出现在两个子进程正文的**字符串字面量**里。
+  //   多出第三处 = 有人把无界同步 realpath 放回了 hook 进程 —— 那正是 ⑮ 那格病的原样复发。
+  const rpLines = CODE.split(/\r?\n/).filter((l) => /realpathSync/.test(l));
+  check("🔴#199 结构·`realpathSync` 在代码里只出现在**两个子进程正文字面量**那两行" +
+        "（∴ hook 进程自己零同步 realpath；缺省实现是恒抛的 `G2_RP_NONE`）",
+    rpLines.length === 2 && rpLines.every((l) => /^const G2_RP_(BATCH_)?CHILD = "/.test(l.trim())),
+    `${rpLines.length} 行：${rpLines.map((l) => l.trim().slice(0, 46)).join(" | ")}`);
+  check("🔴#199 结构·缺省 realpath 实现是恒抛的 `G2_RP_NONE`，且 `G2_RP_SYNC` 已不在代码里",
+    /const realpath = rp \|\| G2_RP_NONE;/.test(CODE) && !/\bG2_RP_SYNC\b/.test(CODE),
+    `none=${/G2_RP_NONE;/.test(CODE)} sync残留=${/\bG2_RP_SYNC\b/.test(CODE)}`);
+  // 🔴 **#199 新增结构断言②：孙进程结构上不存在**（PR #197 对抗官第 1 笔：`timeout` 杀进程
+  //   不杀进程树 —— 实测 D 组孙进程 PID 存活）。两个子进程正文都是**写死的字面量**，
+  //   只 `require('fs')`；只要它们不 spawn，就没有进程树可杀。**这是结构论证不是实测**，
+  //   照直写：它证的是「造不出孙进程」，不是「有孙进程时杀得掉」。
+  {
+    const bodies = CODE.split(/\r?\n/).filter((l) => /^const G2_RP_(BATCH_)?CHILD = "/.test(l.trim()));
+    const bad = bodies.filter((l) => /child_process|\bspawn|\bexec[A-Z(]|\bexec\(/.test(l));
+    check("🔴#199 结构·两个子进程正文里零 `spawn` / `exec` / `child_process` ⇒ **结构上没有孙进程可杀**" +
+          "（对抗官第 1 笔；这是结构论证，不是「有孙进程也杀得掉」的实测）",
+      bodies.length === 2 && bad.length === 0, `正文 ${bodies.length} 行，命中危险 token ${bad.length} 行`);
+    check("🔴#199 结构·候选侧路径走 **stdin** 而不进代码串（`input:` 存在且正文不做字符串拼接）" +
+          "⇒ payload 造不出可执行内容，也不会撞 Windows 命令行长度上限那条**静默**失败",
+      /input: list\.join\("\\n"\) \+ "\\n",/.test(CODE) &&
+      /\["-e", G2_RP_BATCH_CHILD\]/.test(CODE), "见 g2RealpathBatch");
+  }
   // 这两条是**文本断言**，射程照直写：挡得住「有人把它删掉」，挡不住「值给错了」。
   // 它们各自都是 PR #145 第二轮点名过的「好天气里无症状的删法」（删了没有任何东西会响）。
   check("#133 子进程带 `windowsHide`（少了它每次触发闪一个控制台窗；文本断言，删得掉给错值测不出）",
@@ -1506,6 +1600,13 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
     // 父目录也不是 `.claude`** —— 那才是第三轮用来「先把预算打死再打常量侧」的形态。
     const DECOY = Array.from({ length: 200 }, (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}\\f.md"`)
       .join("; ") + `; Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`;
+    // 🔴 **#199 的诱饵要比上面那条更狠**：上面那 200 条末段是 `f.md`，**过不了零 I/O 前筛**
+    //   ⇒ 它量的是「前筛管用」，量不到「批量管用」。真正打候选侧那个乘法的诱饵必须
+    //   **末段就叫 `settings.json`**（前筛必须放行它，因为目录是不是 live 只有比过才知道）。
+    //   ⇒ 下面这条 N 条诱饵**每一条都会进 `wanted`**，而子进程仍该只起 1 个。
+    const liveTailDecoy = (n, home) => Array.from({ length: n },
+      (_, i) => `Copy-Item a.md "${home}\\zz${i}~1\\settings.json"`).join("; ") +
+      `; Copy-Item src.json "${home}\\.claude\\settings.json" -Force`;
 
     // ① 正控：短名 HOME 下照旧拦得住（常量侧此刻走的是有界子进程那条路）
     for (const [nm, pay] of [["真 #87 原文（变量形态）", payVar], ["字面长名", payLit]]) {
@@ -1519,36 +1620,134 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
     {
       const MARK = path.join(SBX, "spawns.log").replace(/\\/g, "/");
       const mp = path.join(TMP, "mutant-133-count.js");
-      fs.writeFileSync(mp, SRC.replace(RE_RP_CHILD, () =>
-        `const G2_RP_CHILD = "require('fs').appendFileSync('${MARK}','x');` +
-        `process.stdout.write(require('fs').realpathSync.native(process.argv[1]))";`), "utf8");
+      // 🔴 **#199 起两个子进程都要数**：常量侧那个记 `c`、候选侧批量那个记 `b`。
+      //   只数一个会得到一条**看起来还在通过**的旧断言 —— 那正是本批最该防的那种假绿。
+      //   批量那条锚点只钉**前缀**（`replace` 只换匹配到的那一段，行尾与正文一字不动），
+      //   故它天然是单行锚点、行尾差异咬不到它（`#守-锚点行尾` ①）。
+      const RE_BATCH_CHILD_HEAD = /const G2_RP_BATCH_CHILD = "const fs=require\('fs'\);/;
+      const nb = (SRC.match(new RegExp(RE_BATCH_CHILD_HEAD.source, "g")) || []).length;
+      check("#199 锚点恰好命中 1 次（批量子进程正文前缀）", nb === 1, `命中 ${nb} 次`);
+      fs.writeFileSync(mp, SRC
+        .replace(RE_RP_CHILD, () =>
+          `const G2_RP_CHILD = "require('fs').appendFileSync('${MARK}','c');` +
+          `process.stdout.write(require('fs').realpathSync.native(process.argv[1]))";`)
+        .replace(RE_BATCH_CHILD_HEAD, () =>
+          `const G2_RP_BATCH_CHILD = "const fs=require('fs');fs.appendFileSync('${MARK}','b');`), "utf8");
       const alive = gate(harmless, { script: mp });
       check("#133 变异体存活（计数版）：无关输入仍 exit 0 且无 fail-open 告警",
         alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code}`);
       const spawns = (pay, env) => {
         fs.rmSync(MARK, { force: true });
+        const t0 = Date.now();
         const r = gate(pay, { script: mp, env });
-        let n = 0; try { n = fs.readFileSync(MARK, "utf8").length; } catch (_) { n = 0; }
-        return { code: r.code, n };
+        let s = ""; try { s = fs.readFileSync(MARK, "utf8"); } catch (_) { s = ""; }
+        return { code: r.code, c: (s.match(/c/g) || []).length, b: (s.match(/b/g) || []).length,
+                 n: s.length, ms: Date.now() - t0 };
       };
-      const rShort = spawns(payVar, asShort);
-      check("#133 计数·短名 HOME + 尾巴像 live ⇒ 恰好 1 个子进程，且照拦",
-        rShort.code === 2 && rShort.n === 1, `code=${rShort.code} spawns=${rShort.n}`);
+      // 🔴 **这一条是 #199 的产出，不是回归**：短名 HOME + 变量形态（真语料主流）
+      //   现在由**相①（归一前）**的字面相等当场命中 ⇒ **两个子进程一个都不起**。
+      //   作废原文照录：~~`#133 计数·短名 HOME + 尾巴像 live ⇒ 恰好 1 个子进程，且照拦`~~
+      //   （那时只有一相、候选侧一律先归一，于是必然落一次常量侧 realpath）。
+      const rShortVar = spawns(payVar, asShort);
+      check("🟢#199 计数·短名 HOME + **变量形态**（真语料主流）⇒ **零子进程**且照拦" +
+            "（相① 不归一 ⇒ 候选与常量都是短名、字面相等）",
+        rShortVar.code === 2 && rShortVar.n === 0, `code=${rShortVar.code} c=${rShortVar.c} b=${rShortVar.b}`);
+      const rShortLit = spawns(payLit, asShort);
+      check("#133 计数·短名 HOME + **字面长名**候选 ⇒ 常量侧恰好 1 个子进程、候选侧 0，且照拦" +
+            "（两侧长短名形态不一致，只有常量侧归一得上）",
+        rShortLit.code === 2 && rShortLit.c === 1 && rShortLit.b === 0,
+        `code=${rShortLit.code} c=${rShortLit.c} b=${rShortLit.b}`);
       const rLong = spawns(payVar, {});
-      check("#133 计数·**长名 HOME 零子进程**（常见部署一次 I/O 都不落）",
-        rLong.code === 2 && rLong.n === 0, `code=${rLong.code} spawns=${rLong.n}`);
+      check("#133 计数·**长名 HOME 零子进程**（常见部署下这条主流形态一次 I/O 都不落）",
+        rLong.code === 2 && rLong.n === 0, `code=${rLong.code} c=${rLong.c} b=${rLong.b}`);
+      // 🔴 **这一条整个换掉了，作废原文照录**：
+      //   ~~`#133 计数·**候选侧**含 `~N` 的路径仍走进程内同步（零子进程）⇒ 子进程只接在常量侧`~~
+      //   —— #199 **就是**给候选侧接子进程的那一批，那句话在本批为假。现在量的是
+      //   **候选侧那个子进程恰好 1 个**（批量），常量侧另算。
       const rCand = spawns(ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`), {});
-      // 🔴 断言名 2026-08-08 收窄射程（PR #197 对抗官 F1 同病）：它量的是**子进程数**，
-      //   推得到「**子进程**只接在常量侧」，推**不到**「改动面只有常量侧」——
-      //   #134 改的恰恰就是候选侧（`g2ResolvePre` 拆分 / `g2IsLiveDir` 加参 / `g2WriteTargets` 调用点）。
-      check("#133 计数·**候选侧**含 `~N` 的路径仍走进程内同步（零子进程）⇒ **子进程只接在常量侧**" +
-            "（注意：这推不到「改动面只有常量侧」—— 候选侧由 #134 改，只是没引入子进程）",
-        rCand.code === 2 && rCand.n === 0, `code=${rCand.code} spawns=${rCand.n}`);
+      check("🔴#199 计数·长名 HOME + 候选写 8.3 短名 ⇒ 常量侧 1 个 + **候选侧批量 1 个**，且照拦" +
+            "（相① 比不上 ⇒ 相② 才起那一个批量子进程）",
+        rCand.code === 2 && rCand.c === 1 && rCand.b === 1,
+        `code=${rCand.code} c=${rCand.c} b=${rCand.b}`);
       // 🔴 ㈠ 防复发：第二、三轮那两条绕过的前件
       const rDecoy = spawns(ps(DECOY), asShort);
-      check("🔴#133 防复发㈠·200 个 `~N` 诱饵 + 真目标 ⇒ **仍 exit 2 且子进程仍只 1 次**" +
-            "（没有预算可耗 ⇒ PR #145 二/三轮那两条绕过的前件不存在）",
-        rDecoy.code === 2 && rDecoy.n === 1, `code=${rDecoy.code} spawns=${rDecoy.n}`);
+      check("🔴#133 防复发㈠·200 个 `~N` 诱饵（末段 `f.md`）+ 真目标 ⇒ **仍 exit 2 且总子进程 0 个**" +
+            "（末段不像 live ⇒ 零 I/O 前筛全部挡掉，真目标由相① 命中）",
+        rDecoy.code === 2 && rDecoy.n === 0, `code=${rDecoy.code} c=${rDecoy.c} b=${rDecoy.b}`);
+
+      // ── 🔴🔴 **放大攻击实测（issue #199 的正题：N 个诱饵 × timeout 每个）** ────────────
+      // 上面那条诱饵**过不了前筛**，所以它量的是第一刀。这一组的诱饵**每一条都过前筛**
+      // （末段就叫 `settings.json`，前筛没有理由挡它 —— 目录是不是 live 只有比过才知道），
+      // 于是它们**全部进 `wanted`**，正面打第二刀：**N 变大，子进程数变不变。**
+      // 判据：`b` 恒为 1（与 N 无关）⇒ 「N × timeout」的答案是 **N × 0 + 1 × timeout**。
+      for (const N of [20, 200]) {
+        const r = spawns(ps(liveTailDecoy(N, SHORT_HOME)), {});
+        check(`🔴#199 放大攻击·${N} 个**过得了前筛**的诱饵 + 真目标 ⇒ 候选侧批量子进程仍 **恰好 1 个**` +
+              `（常量侧 ${r.c} 个另算），且真目标照拦 exit 2`,
+          r.code === 2 && r.b === 1 && r.c <= 2, `code=${r.code} c=${r.c} b=${r.b} ${r.ms}ms`);
+      }
+      {
+        // 同一组的**时间**面：N=200 时 hook 进程寿命仍在健康量级（远低于宿主 10 s）。
+        // ⚠ 阈值给 6000 与本节别处同口径（`#官通-性能哨兵` ③：两侧都留余量、不贴实测值卡）。
+        const r = spawns(ps(liveTailDecoy(200, SHORT_HOME)), {});
+        check(`🔴#199 放大攻击·200 诱饵下 hook 进程寿命 < 6 s（实测 ${r.ms} ms）` +
+              "⇒ 那个乘法被批量拆成了加法，宿主 10 s 预算烧不掉",
+          r.ms < 6000, `${r.ms} ms`);
+      }
+      // 🔴 **前筛是不是真的在挡 I/O —— 反向 mutation（`#官抗-判别力自检`：两个方向都要验）**。
+      //   ⚠️ **第一版这条断言写错了，留档（`#官抗-变异体存活` 的近亲：这次是「靶选错了」）**：
+      //     我原先量的是「批量子进程**个数** 0→1」，实测 **0→0，翻不动**。原因不是前筛没用，
+      //     而是那条 payload 的**真目标被相① 提前拦下、`return v1` 走人 ⇒ 批量压根没起过**
+      //     —— 两侧都是 0，量的是「有没有走到相②」，不是「前筛挡没挡住 I/O」。
+      //   ⇒ 改成量**进了 `wanted` 的路径条数**（让批量子进程每处理一条就记一个 `p`），
+      //     并把 payload 换成「真目标只有相② 拦得住」的那一种（长名 HOME + 候选写 8.3 短名）。
+      //     判据：**同一批诱饵，前筛开着时进 I/O 的路径数是个位数，关掉是三位数。**
+      {
+        const RE_PREFILT = /if \(\/~\\d\/\.test\(s\) && g2TailCouldBeLive\(s\)\) s = g2LongPath\(s, rp\);/;
+        const RE_BATCH_LOOP = /for\(var i=0;i<a\.length;i\+\+\)\{if\(!a\[i\]\)continue;/;
+        const np = (SRC.match(new RegExp(RE_PREFILT.source, "g")) || []).length;
+        const nl = (SRC.match(new RegExp(RE_BATCH_LOOP.source, "g")) || []).length;
+        check("#199 锚点恰好命中 1 次（零 I/O 前筛那一行）", np === 1, `命中 ${np} 次`);
+        check("#199 锚点恰好命中 1 次（批量逐条循环·计路径版）", nl === 1, `命中 ${nl} 次`);
+        if (np === 1 && nb === 1 && nl === 1) {
+          // 计路径版：批量子进程每处理一条输入就往标记文件记一个 `p`；起进程本身记一个 `b`。
+          const instrument = (src) => src
+            .replace(RE_BATCH_CHILD_HEAD, () =>
+              `const G2_RP_BATCH_CHILD = "const fs=require('fs');fs.appendFileSync('${MARK}','b');`)
+            .replace(RE_BATCH_LOOP, () =>
+              `for(var i=0;i<a.length;i++){if(!a[i])continue;fs.appendFileSync('${MARK}','p');`);
+          const mpKeep = path.join(TMP, "mutant-199-filter-on.js");
+          const mpOpen = path.join(TMP, "mutant-199-filter-off.js");
+          fs.writeFileSync(mpKeep, instrument(SRC), "utf8");
+          fs.writeFileSync(mpOpen, instrument(
+            SRC.replace(RE_PREFILT, () => "if (/~\\d/.test(s) && true) s = g2LongPath(s, rp);")), "utf8");
+          const paths = (script, pay, env) => {
+            fs.rmSync(MARK, { force: true });
+            const r = gate(pay, { script, env });
+            let s = ""; try { s = fs.readFileSync(MARK, "utf8"); } catch (_) { s = ""; }
+            return { code: r.code, b: (s.match(/b/g) || []).length, p: (s.match(/p/g) || []).length };
+          };
+          check("#199 变异体存活（计路径·前筛开）：无关输入仍 exit 0",
+            paths(mpKeep, harmless, {}).code === 0);
+          check("#199 变异体存活（计路径·前筛关）：无关输入仍 exit 0",
+            paths(mpOpen, harmless, {}).code === 0);
+          // payload：200 条 `f.md` 诱饵（末段不像 live）+ 一个**只有相② 拦得住**的真目标。
+          const DECOY_LONG = Array.from({ length: 200 },
+            (_, i) => `Copy-Item a.md "${SHORT_HOME}\\zz${i}\\f.md"`).join("; ") +
+            `; Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`;
+          const on = paths(mpKeep, ps(DECOY_LONG), {});
+          const off = paths(mpOpen, ps(DECOY_LONG), {});
+          check("🔴#199 判别力·前筛恒真 ⇒ 同一批诱饵进 I/O 的**路径条数**由个位数暴涨到三位数" +
+                `（实测 ${on.p} → ${off.p}）∴ \`g2TailCouldBeLive\` 确实是本闸唯一的 I/O 闸门`,
+            on.p > 0 && on.p < 10 && off.p > 100, `on p=${on.p} b=${on.b} / off p=${off.p} b=${off.b}`);
+          check("🔴#199 判别力的另一半·**路径条数暴涨而子进程数不变（两侧都恰好 1 个）**" +
+                "⇒ 这正是「N 与子进程数脱钩」那句话的机器面证据",
+            on.b === 1 && off.b === 1, `on b=${on.b} off b=${off.b}`);
+          check("#199 阴性结果·前筛恒真下**判决不变**（真目标两侧都 exit 2）" +
+                "⇒ 前筛是 I/O 挡板不是正确性边界（`#官抗-判别力自检`：差额为零也是结论）",
+            on.code === 2 && off.code === 2, `on=${on.code} off=${off.code}`);
+        }
+      }
     }
 
     // ③ 卡住：把子进程正文换成睡 20 秒（远超界，也远超宿主注册的 10 s）
@@ -1560,8 +1759,11 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       const alive = gate(harmless, { script: mp });
       check("#133 变异体存活（卡死版）：无关输入仍 exit 0 且无 fail-open 告警",
         alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code}`);
+      // ⚠ 样本 2026-08-09 换了：`payVar`（变量形态）在 #199 之后由相① 零 I/O 命中，
+      //   **压根不走常量侧 realpath** ⇒ 拿它测「常量侧卡住会怎样」会得到一条恒真断言。
+      //   承重样本换成 `payLit`（字面长名 + 短名 HOME，只有常量侧归一得上那一格）。
       const t0 = Date.now();
-      const r = gate(payVar, { env: asShort, script: mp });
+      const r = gate(payLit, { env: asShort, script: mp });
       const ms = Date.now() - t0;
       // 🔴 ㈡ 失败方向
       check("🔴#133 防复发㈡·常量侧 realpath 卡住 ⇒ **fail-open（exit 0）而不是 fail-closed**" +
@@ -1569,6 +1771,9 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         r.code === 0, `code=${r.code}`);
       check("#133 卡住时那行自陈打得出来（fail-open 不许静默 —— 放行与「跑了且没事」退出码一样）",
         /常量侧 realpath 没验成/.test(r.err), r.err.slice(0, 160));
+      check("🟢#199 同一变异体下**变量形态**仍 exit 2（相① 不依赖常量侧那次 realpath）" +
+            "⇒ 常量侧卡死的射程比 #133 那时更小了",
+        gate(payVar, { env: asShort, script: mp }).code === 2);
       // 性能哨兵（`#官通-性能哨兵`）：**两侧都留余量**，且不锚死绝对耗时。
       //   通过侧余量：界 2×800 ms + node 冷启 ≈ 1.7 s，阈值给到 6000（≈3.5×）。
       //   失败侧余量：注入的阻塞是 20 s，改造前实测真卡是 21 s ⇒ 无界时必然 >6000（≈3.3×）。
@@ -1580,6 +1785,61 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         gate(payVar, { script: mp }).code === 2);
     }
 
+    // ③-b 🔴 **候选侧那个批量子进程卡住会怎样（#199 新增，与 ③ 同构）**：
+    //     把批量子进程正文整个换成睡 20 s ⇒ 整批解不开 ⇒ 落回相① 的结果（按原样比）。
+    //     **失败方向必须仍是 fail-open**（`#官抗-dryrun变异` 那一路的同族：声明了「失败即降级」
+    //     就要有一条断言真的把它逼到那条降级路径上）。
+    {
+      const RE_BATCH_HEAD2 = /const G2_RP_BATCH_CHILD = "const fs=require\('fs'\);/;
+      const n = (SRC.match(new RegExp(RE_BATCH_HEAD2.source, "g")) || []).length;
+      check("#199 锚点恰好命中 1 次（批量子进程正文前缀·卡死版）", n === 1, `命中 ${n} 次`);
+      if (n === 1) {
+        const mp = path.join(TMP, "mutant-199-batch-hang.js");
+        // 前缀换成一段**永不返回**的正文；`"` 收尾后原行剩下的部分成了不可达代码的一部分，
+        // 但那不要紧 —— 子进程在第一句就停住了。**刻意不动整行**：整行锚点跨不了行、
+        // 但它长达数百字符，写进测试里会与源码逐字耦合（改一个分号就恒不命中）。
+        fs.writeFileSync(mp, SRC.replace(RE_BATCH_HEAD2, () =>
+          'const G2_RP_BATCH_CHILD = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20000);const fs=require(\'fs\');'), "utf8");
+        const alive = gate(harmless, { script: mp });
+        check("#199 变异体存活（批量卡死版）：无关输入仍 exit 0 且无 fail-open 告警",
+          alive.code === 0 && !/守卫自身出错/.test(alive.err), `code=${alive.code}`);
+        const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+        const t0 = Date.now();
+        const r = gate(payCand, { script: mp });     // 长名 HOME：这条只有相② 拦得住
+        const ms = Date.now() - t0;
+        check("🔴#199 防复发·候选侧批量子进程卡住 ⇒ **fail-open（exit 0）**，退回相① 的「按原样比」" +
+              "（禁 fail-closed —— 一次失败换来的误伤在这道闸上代价更大）",
+          r.code === 0, `code=${r.code}`);
+        check(`🔴#199 界·批量子进程注入 20 s 阻塞，hook 进程寿命仍 < 6 s（实测 ${ms} ms）`,
+          ms < 6000, `${ms} ms`);
+        check("#199 对照·同一变异体下**相① 拦得住的那些**判决不变（短名 HOME + 变量形态仍 exit 2）" +
+              "⇒ 批量卡死只吃掉相② 独有的那一格，不是整闸失明",
+          gate(payVar, { env: asShort, script: mp }).code === 2);
+      }
+    }
+
+    // ③-c 🔴 **诚实边界一（头注 ⑱「诱饵抢先」）实测**：批量是**逐条即时落**的，
+    //     被超时杀掉时排在卡住那一条**之后**的解不开 ⇒ 攻击者把毒路径放最前面，
+    //     可以让同批的真目标退回「按原样比」。**这一格本批不修，但要有实测钉着它存在。**
+    //     构造：把批量子进程正文改成「解第一条之前先睡 20 s」= 第一条就卡 ⇒ 全批解不开
+    //     （最强形态）。真实攻击的效果介于「全批解不开」与「零影响」之间，取决于毒路径的位次。
+    {
+      const RE_LOOP = /for\(var i=0;i<a\.length;i\+\+\)\{if\(!a\[i\]\)continue;/;
+      const n = (SRC.match(new RegExp(RE_LOOP.source, "g")) || []).length;
+      check("#199 锚点恰好命中 1 次（批量子进程的逐条循环）", n === 1, `命中 ${n} 次`);
+      if (n === 1) {
+        const mp = path.join(TMP, "mutant-199-headline.js");
+        fs.writeFileSync(mp, SRC.replace(RE_LOOP, () =>
+          "for(var i=0;i<a.length;i++){if(!a[i])continue;if(i===0){Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20000)}"), "utf8");
+        const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+        const r = gate(payCand, { script: mp });
+        check("🔴#199 诚实边界·**批内第一条卡住 ⇒ 同批后面的真目标解不开、退回相① 结果（exit 0）**" +
+              "—— 头注 ⑱ 那格漏报是真的，不是理论；方向是漏报且严格优于改动前（改动前主进程卡 21 s ⇒ 七闸齐放）。" +
+              "**账挂在 issue #214**",
+          r.code === 0, `code=${r.code}`);
+      }
+    }
+
     // ④ 🔴 ㈢ 对照组自验：把同样长的阻塞注在**进程内**（界够不着的地方）⇒ 寿命炸掉。
     //    没有这一条，「寿命 < 6 s」这句话可能只是因为阻塞压根没生效（第一轮那个 worker
     //    方案的红集就是这么被误读成「界成立」的：主线程的界成立，进程寿命一点没变）。
@@ -1588,8 +1848,11 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       fs.writeFileSync(mp, SRC.replace(RE_SPAWN, () =>
         "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 6000);\n" +
         '  const r = childProcess.spawnSync(process.execPath, ["-e", G2_RP_CHILD, p], {'), "utf8");
+      // ⚠ 样本同 ③ 换成 `payLit`：`payVar` 在 #199 之后走不到 `g2RealpathBounded`，
+      //   拿它测「注在那里的阻塞」会量到 30-40 ms —— 那不是「界成立」，是**阻塞压根没被执行**，
+      //   而这一条的全部意义正是防这种误读（第一轮 worker 方案就栽在同型误读上）。
       const t0 = Date.now();
-      const r = gate(payVar, { env: asShort, script: mp });
+      const r = gate(payLit, { env: asShort, script: mp });
       const ms = Date.now() - t0;
       check(`🔴#133 防复发㈢·把 6 s 阻塞注在**进程内** ⇒ 寿命 ≥ 6 s（实测 ${ms} ms）` +
             "⇒ 上一条那个界确实是子进程给的，不是别的东西顺手给的",
@@ -1606,12 +1869,36 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       if (n === 1) {
         const mp = path.join(TMP, "mutant-133-1ms.js");
         fs.writeFileSync(mp, SRC.replace(RE_MS, () => "const G2_CONST_REALPATH_MS = 1;"), "utf8");
-        const r = gate(payVar, { env: asShort, script: mp });
-        check("#133 反向·界收到 1 ms ⇒ 短名 HOME 下由 2 翻 0 并打出那行自陈（∴ 这个常量真的在被用）",
-          gate(payVar, { env: asShort }).code === 2 && r.code === 0 && /常量侧 realpath 没验成/.test(r.err),
+        // ⚠ 样本同 ③④ 换成 `payLit`（理由见 ③ 那段）。
+        const r = gate(payLit, { env: asShort, script: mp });
+        check("#133 反向·界收到 1 ms ⇒ 短名 HOME + 字面长名候选由 2 翻 0 并打出那行自陈（∴ 这个常量真的在被用）",
+          gate(payLit, { env: asShort }).code === 2 && r.code === 0 && /常量侧 realpath 没验成/.test(r.err),
           `mut=${r.code}`);
         check("#133 反向·同一变异体在长名 HOME 下判决不变（界只影响会落 I/O 的那一格）",
           gate(payVar, { script: mp }).code === 2);
+      }
+      // ⑤-b 🔴 **候选侧那个界也要有反向 mutation**（`#官通-调参三问` 的机器面：改大改小都得有响）：
+      //      `G2_CAND_REALPATH_MS` 收到 1 ms ⇒ 批量必超时 ⇒ 相② 独有的那一格由 2 翻 0。
+      //      没有它，那个常量就是一个「改了也没人吭声」的数字。
+      {
+        const RE_MS2 = /const G2_CAND_REALPATH_MS = 800;/;
+        const n2 = (SRC.match(new RegExp(RE_MS2.source, "g")) || []).length;
+        check("#199 锚点恰好命中 1 次（候选侧界常量）", n2 === 1, `命中 ${n2} 次`);
+        if (n2 === 1) {
+          const mp2 = path.join(TMP, "mutant-199-1ms.js");
+          fs.writeFileSync(mp2, SRC.replace(RE_MS2, () => "const G2_CAND_REALPATH_MS = 1;"), "utf8");
+          const payCand = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`);
+          check("🔴#199 反向·候选侧界收到 1 ms ⇒ 长名 HOME 下「候选写 8.3 短名」由 2 翻 0" +
+                "（∴ `G2_CAND_REALPATH_MS` 真的在被用，且失败方向是 fail-open）",
+            gate(payCand).code === 2 && gate(payCand, { script: mp2 }).code === 0,
+            `real=${gate(payCand).code} mut=${gate(payCand, { script: mp2 }).code}`);
+          check("#199 反向·同一变异体下相① 拦得住的那些判决不变（短名 HOME + 变量形态仍 2）",
+            gate(payVar, { env: asShort, script: mp2 }).code === 2);
+          check("#199 反向·两个界是**两个常量**，收窄候选侧不影响常量侧那一格" +
+                "（短名 HOME + 字面长名仍 exit 2 ⇒ 合成一个常量就分不开该调哪一个）",
+            gate(payLit, { env: asShort, script: mp2 }).code === 2,
+            `code=${gate(payLit, { env: asShort, script: mp2 }).code}`);
+        }
       }
     }
   } else {
@@ -1672,24 +1959,17 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         check(`#134 正控·${nm} → exit ${want}`, c === want, `code=${c}`);
       }
 
-      // mutation：把快筛退回「只看归一后的末段」（= 改前那一版）⇒ **只有那一格由 2 翻 0**。
-      // 这是本单的判别力断言：它同时证明「修的是这一格」与「没顺手改动别的三格」。
-      const RE_QF = /  if \(!g2DirTailLooksLive\(low\) && !g2DirTailLooksLive\(norm\(pre\)\.toLowerCase\(\)\)\) return false;/;
-      const n = (SRC.match(new RegExp(RE_QF.source, "g")) || []).length;
-      check("#134 锚点恰好命中 1 次（零 I/O 快筛那一行）", n === 1, `命中 ${n} 次`);
-      if (n === 1) {
-        const mp = path.join(TMP, "mutant-134-prefilter.js");
-        fs.writeFileSync(mp, SRC.replace(RE_QF, () => "  if (!g2DirTailLooksLive(low)) return false;"), "utf8");
-        check("#134 变异体存活：无关输入仍 exit 0 且无 fail-open 告警",
-          gate(bash("echo hi"), { script: mp }).code === 0);
-        const flip = gate(ps(dest(J.short)), { env: { USERPROFILE: J.short }, script: mp }).code;
-        check("🔴#134 判别力·快筛退回「只看归一后」⇒ junction + 短名 HOME 那一格由 2 **翻 0**",
-          flip === 0, `mut=${flip}`);
-        for (const [nm, home, cmd] of CELLS.slice(1)) {
-          const c = gate(ps(cmd), { env: { USERPROFILE: home }, script: mp }).code;
-          check(`#134 归因·同一变异体下「${nm}」仍 2（∴ 本修法只动了那一格）`, c === 2, `code=${c}`);
-        }
-      }
+      // 🔴 **#134 那条 mutation 2026-08-09 随 #199 退役，作废原文照录**：
+      //   ~~把快筛退回「只看归一后的末段」（= 改前那一版）⇒ 只有那一格由 2 翻 0。
+      //   `const RE_QF = /  if \(!g2DirTailLooksLive\(low\) && !g2DirTailLooksLive\(norm\(pre\)\.toLowerCase\(\)\)\) return false;/;`~~
+      //   —— **被它 mutate 的那个函数（`g2IsLiveDir` / `g2DirTailLooksLive`）本批已删除**
+      //   （删除理由与阴性结果凭证见 hook 里 `g2BaseCouldBeLive` 上方 + 上一节那段划线注释）。
+      //   **它没有静默**：`锚点恰好命中 1 次` 那条前置断言当场红并点名 —— 这正是自失效锚点
+      //   要干的事。⇒ 顶替它的是下面 `#199 两相` 那一组：#134 这四格现在由**相①（零 I/O
+      //   字面相等）与常量侧那次无条件 realpath** 一起守着，判别力断言在那一组里。
+      // ⚠️ **别再往这里补一条「新快筛」的 mutation**：`g2TailCouldBeLive` 是 **I/O 挡板**
+      //   不是正确性边界（它的判别力断言在 #133 那一节的「前筛恒真 ⇒ 子进程 0 翻 1」），
+      //   在这里再钉一条只会得到一条恒真断言。
 
       // 负控（`#官实-误伤反例`）：快筛放宽只该让更多路径**走到精确比对**，不该让更多路径被拦。
       // ⚠️ **负控的语料来源，照直标（`#官抗-语料非自证` 2026-08-07 补的那半）**：下面三条里
@@ -1711,30 +1991,137 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         const c = gate(ps(cmd), { env: { USERPROFILE: home } }).code;
         check(`#134 负控·${nm} → exit 0（不许误伤）`, c === 0, `code=${c}`);
       }
-      // ⚠️ **一条阴性结果，照直记（`#官抗-判别力自检` 差额为零也是结论）**：反向 mutation
-      //   （快筛恒放行 `if (false) return false;`）**翻不动任何一条负控** —— 因为快筛只决定
-      //   「要不要往下比」，拦不拦仍由 `g2MatchesLiveDir` 的精确比对说话。
-      //   ⇒ **快筛不是正确性边界，它是 I/O 挡板**。守它的断言在上一节 ③（「拿掉它 ⇒ 长名 HOME
-      //   下也会走到 realpath 层」），不在这里。别以为负控在守着它。
-      {
-        const mp = path.join(TMP, "mutant-134-qf-open.js");
-        fs.writeFileSync(mp, SRC.replace(RE_QF, () => "  if (false) return false;"), "utf8");
-        const same = [
-          [`Copy-Item -LiteralPath settings.json -Destination "${PROJ}"`, J.short],
-          [`Copy-Item -LiteralPath a.md -Destination "${path.join(J.home, "actualcfg")}"`, J.home],
-        ].every(([cmd, home]) =>
-          gate(ps(cmd), { env: { USERPROFILE: home }, script: mp }).code ===
-          gate(ps(cmd), { env: { USERPROFILE: home } }).code);
-        check("#134 阴性结果·快筛恒放行 ⇒ 负控判决**一个都不变**（∴ 它是 I/O 挡板不是正确性边界）", same);
-      }
+      // ⚠️ **上面第三条负控的拦截深度 2026-08-09 变了，照直写**：`-Destination …/actualcfg`
+      //   这一条此前是被 `g2IsLiveDir` 那道目标目录快筛挡下的；#199 删掉那道筛之后，
+      //   挡它的换成了 `g2BaseCouldBeLive(源的 basename)` —— 源叫 `a.md`，**连候选都不合成**。
+      //   ⇒ 它仍是一条有效负控，但**它现在守的是另一段判据**，别照旧读成「目标目录筛还在」。
 
-      // 登记（自失效）：相邻那一格**两侧一起漏**，哪天有人修好这条会红并点名。
+      // 🔴 **登记退役（自失效断言在本批兑现，这是它第 6 次真实触发）**：作废原文照录 ——
+      //   ~~`check("登记·junction 写成**长名**时路径里没有 `~N` ⇒ 候选侧压根不 realpath ⇒ 仍漏
+      //   （当前 exit 0）… 同一张单：issue #199", longJunc === 0)`~~
+      //   —— **#199 落地当天它当场变红并点名**（实测 `code=2`），逼我回来把它改成正控。
+      //   **修法与它自己那句预判不同**：它写的是「修它要让候选侧无条件 realpath」，
+      //   而实际修法是**常量侧**无条件 realpath（攻击者写的是链目标的长名，候选侧对它无事可做，
+      //   缺的一直是 live 目录那一侧没解开链）。⇒ **登记条目会记下「哪天有人修会红」，
+      //   记不下「会怎么修」；它对修法的猜测不构成契约。**
       const longJunc = gate(ps(dest(J.home).replace(/\.claude"$/, 'actualcfg"')),
         { env: { USERPROFILE: J.home } }).code;
-      check("登记·junction 写成**长名**时路径里没有 `~N` ⇒ 候选侧压根不 realpath ⇒ 仍漏（当前 exit 0）。" +
-            "第三轮 6a/6b 实测 master 与 PR #145 版都是 0 ⇒ 非退化。修它要让候选侧无条件 realpath，" +
-            "撞上头注 ⑮㈡ 那格无界 I/O ⇒ **同一张单：issue #199**",
-        longJunc === 0, `code=${longJunc}`);
+      check("🟢#199 正控（原登记条目）·junction 写成**长名**（`<home>\\actualcfg`，路径里没有 `~N`）" +
+            "现在 **exit 2** —— 常量侧无条件解开链之后，写链目标不再是绕过路径",
+        longJunc === 2, `code=${longJunc}`);
+
+      // ── 🔴 #199 · 两相判定：各自的**专属样本** + 各自的 mutation ────────────────────
+      // 判决 = 相①（归一前）∨ 相②（归一后）。两相各有一格是**只有它拦得住**的：
+      //   · 相① 专属 = **`settings.json` 自己是符号链接**（头注 ⑰）—— 归一会把末段改写成
+      //     链目标名，任何「归一后再问末段」的判据在这一格上必然失明。
+      //   · 相② 专属 = **候选写 8.3 短名而 HOME 是长名** —— 两侧形态不一致，只有归一得上。
+      // `#官抗-负控独立归因` 要的正是这个：**一格一样本一谓词**，缺哪一相都得有断言会红。
+      {
+        // ⑰ 的 fixture：真实目录 `.claude` + 文件级**符号链接** `settings.json → actual.json`。
+        // **自失效**（同 #134 那份）：`mklink` 失败 / 退化成普通文件 / 链目标末段碰巧也叫
+        // `settings.json` ⇒ 前置断言当场红，而不是悄悄测了个别的东西。
+        const symHome = path.join(SBX, "homedir-symlink-z");
+        const symDir = path.join(symHome, ".claude");
+        fs.mkdirSync(symDir, { recursive: true });
+        const symTarget = path.join(symDir, "actual.json");
+        fs.writeFileSync(symTarget, "{}", "utf8");
+        const symLink = path.join(symDir, "settings.json");
+        const mk = spawnSync("cmd", ["/c", "mklink", symLink, symTarget], { encoding: "utf8", windowsHide: true });
+        const symShort = shortNameOf(symHome);
+        const lst = (() => { try { return fs.lstatSync(symLink); } catch (_) { return null; } })();
+        const symReal = (() => { try { return fs.realpathSync.native(symLink); } catch (_) { return ""; } })();
+        check("#199 前置·文件级符号链接造得出来（`mklink`，无 /J /D ⇒ 文件链）",
+          mk.status === 0, mk.status === 0 ? "ok" : `mklink exit=${mk.status}（⇒ 下面那组只是没测到，不是通过）`);
+        check("#199 前置·它真是个链，不是普通文件（退化成普通文件 ⇒ 测的就不是 ⑰ 那个形态）",
+          !!lst && lst.isSymbolicLink(), `isSymbolicLink=${lst && lst.isSymbolicLink()}`);
+        check("#199 前置·链目标末段**不叫** `settings.json`（`…/actual.json`）—— 这一格正是「归一改写末段」",
+          /[\\/]actual\.json$/i.test(symReal), `realpath=${symReal}`);
+        check("#199 前置·该假 HOME 算得出真 8.3 短名（realpath 往返，不是猜 8.3 算法）",
+          !!symShort, `short=${symShort}`);
+
+        if (mk.status === 0 && lst && lst.isSymbolicLink() && /[\\/]actual\.json$/i.test(symReal) && symShort) {
+          const P1 = ps(`Copy-Item src.json "${symShort}\\.claude\\settings.json" -Force`);   // 相① 专属
+          const P1long = ps(`Copy-Item src.json "${symHome}\\.claude\\settings.json" -Force`);
+          const P2 = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`); // 相② 专属（真 HOME）
+          check("🟢#199 正控·⑰ **`settings.json` 自己是符号链接 + 短名 HOME（候选也写短名）** → exit 2（此前 exit 0）",
+            gate(P1, { env: { USERPROFILE: symShort } }).code === 2,
+            `code=${gate(P1, { env: { USERPROFILE: symShort } }).code}`);
+          check("#199 正控·同一 fixture，候选与 HOME **都写长名** → exit 2（改前长名侧本来就拦得住，别读成新增）",
+            gate(P1long, { env: { USERPROFILE: symHome } }).code === 2,
+            `code=${gate(P1long, { env: { USERPROFILE: symHome } }).code}`);
+          check("#199 正控·相② 专属样本（候选写 8.3 短名 + 真实长名 HOME）→ exit 2",
+            gate(P2).code === 2, `code=${gate(P2).code}`);
+
+          // 🔴🔴 **⑲ 新登记（自失效）：⑰ 的第 5 种长相 —— 形态交叉的那一格仍然漏。**
+          //   `settings.json` 是符号链接 **且** 候选写 8.3 短名 **而 HOME 是长名** ⇒ 两相一起失明：
+          //     · 相①（不归一）：候选是短名、常量是长名 ⇒ 字符串比不上；
+          //     · 相②（归一）：realpath 顺着链把末段改写成 `actual.json` ⇒ `g2IsLive` 的文件名快筛失明。
+          //   ⚠️ **它是本任跑 2×2 时被自己的一条错断言逼出来的**（我原以为「长名 HOME 两边都拦」，
+          //     实测 code=0）—— 又一次「一组样本的共同约束被当成背景写进结论」：⑰ 那份 2×2
+          //     **候选形态与 HOME 形态始终一致**，交叉的两格从来没被量过。
+          //   **非退化，实测 master 与本 PR 逐格相同**（`_tmp/probe-sym.mjs` 四格：
+          //     master `0 / 2 / 0 / 2`、PR `0 / 2 / 2 / 2` —— 只有 ⑰ 那格由 0 变 2，本格两版都是 0）。
+          //   **可达性照直写**：本机 `~/.claude/settings.json` 实测**不是**链（`lstat` isSymbolicLink=false）、
+          //     `~/.claude` 也不是 ⇒ 这个拓扑在本机零发生，fixture 是造的。
+          //   **已知修法（零额外 I/O，本批刻意不做）**：加一相「**归一后的目录 + 归一前的末段**」——
+          //     父目录那条路径**已经在 `wanted` 里**（相① 的两级退化会把它一起记下），
+          //     所以那一相不多花任何 syscall。不做的理由：本单契约是「候选侧有界化 + ⑯相邻格」，
+          //     临合并加第三相属扩范围，而**判据类改动禁先合后审**（`#帅-撤宣称不抢修`：
+          //     盘上文字改真、修法归跟进单，不在合并压力下抢修）。账见 PR body「未尽处」。
+          const crossed = gate(P1, { env: { USERPROFILE: symHome } }).code;
+          check("登记（自失效）·⑲ 符号链接 + **候选短名 / HOME 长名**（形态交叉）⇒ 两相一起失明，" +
+                "当前 **exit 0**。master 同格也是 0 ⇒ 漏报方向、非退化。**账挂在 issue #214**。" +
+                "哪天有人修好这条会红并点名，逼他同批更新 hook 头注 ⑲ 与本条",
+            crossed === 0, `code=${crossed}`);
+
+          // mutation A：**打掉相①**（结果算出来但不采纳 —— `#官抗-改坏多形态` 的第③向）
+          const RE_P1 = /  if \(v1\) return v1;/;
+          const nA = (SRC.match(new RegExp(RE_P1.source, "g")) || []).length;
+          check("#199 锚点恰好命中 1 次（相① 的采纳点）", nA === 1, `命中 ${nA} 次`);
+          if (nA === 1) {
+            const mp = path.join(TMP, "mutant-199-no-phase1.js");
+            fs.writeFileSync(mp, SRC.replace(RE_P1, () => "  if (false) return v1;"), "utf8");
+            check("#199 变异体存活（无相①）：无关输入仍 exit 0", gate(bash("echo hi"), { script: mp }).code === 0);
+            check("🔴#199 判别力·**相① 的结果不被采纳** ⇒ ⑰ 那一格由 2 **翻 0**（∴ 那一格只有相① 拦得住）",
+              gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code === 0,
+              `mut=${gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code}`);
+            check("#199 归因·同一变异体下**相② 专属样本仍 2**（∴ 打掉的确实只是相① 那一半）",
+              gate(P2, { script: mp }).code === 2, `code=${gate(P2, { script: mp }).code}`);
+          }
+
+          // mutation B：**打掉相②**（批量结果恒空 ⇒ 相② 与相① 逐字节同结果）
+          const RE_P2 = /  const map = g2RealpathBatch\(wanted\);/;
+          const nB = (SRC.match(new RegExp(RE_P2.source, "g")) || []).length;
+          check("#199 锚点恰好命中 1 次（相② 的批量解析点）", nB === 1, `命中 ${nB} 次`);
+          if (nB === 1) {
+            const mp = path.join(TMP, "mutant-199-no-phase2.js");
+            fs.writeFileSync(mp, SRC.replace(RE_P2, () => "  const map = new Map();"), "utf8");
+            check("#199 变异体存活（无相②）：无关输入仍 exit 0", gate(bash("echo hi"), { script: mp }).code === 0);
+            check("🔴#199 判别力·**相② 拿不到任何解析结果** ⇒ 相② 专属样本由 2 **翻 0**",
+              gate(P2, { script: mp }).code === 0, `mut=${gate(P2, { script: mp }).code}`);
+            check("#199 归因·同一变异体下 ⑰ 那一格仍 2（∴ 打掉的确实只是相② 那一半）",
+              gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code === 2,
+              `code=${gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code}`);
+          }
+
+          // 负控（`#官实-误伤反例`）：两相判定是**深度加倍**，不是判据放宽 —— 合法形态不许中招。
+          // ⚠️ **语料来源照直标（`#官抗-语料非自证` 负控那半）**：第一条是真实形态
+          //   （项目级 `.claude/settings.json`，`update-config` 那条路日常在写，也正是 PR #145
+          //   第三轮 fail-closed 真误伤过的那一格）；后两条**是本轮自造的诱饵**，只证明
+          //   「我的诱饵不会被误伤」。
+          for (const [nm, home, pay] of [
+            ["项目级 `.claude/settings.json`（真实形态：`update-config` 那条路）", symShort,
+              edit(path.join(SBX, "someproject", ".claude", "settings.json"))],
+            ["自造诱饵·链所在目录里的**别的**文件（`…/.claude/actual.json`，末段不是 live 名）", symShort,
+              ps(`Copy-Item src.json "${symShort}\\.claude\\actual.json" -Force`)],
+            ["自造诱饵·`settings.json` 但目录不是 live（`<sbx>/.claude-backup/`）", symShort,
+              ps(`Copy-Item src.json "${path.join(SBX, ".claude-backup")}\\settings.json" -Force`)],
+          ]) {
+            const c = gate(pay, { env: { USERPROFILE: home } }).code;
+            check(`#199 负控·${nm} → exit 0（不许误伤）`, c === 0, `code=${c}`);
+          }
+        }
+      }
     }
   }
 
@@ -1742,14 +2129,25 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
   // 数的是**剥掉注释后**的代码引用（见上方那条自指注释：含注释数会把「在讨论它」算成「在用它」）。
   {
     console.log(`  （调用点覆盖率）本批新增/改签名的判据，代码引用数（含定义）：` +
-      `g2RealpathBounded ${refs("g2RealpathBounded")} · g2ResolvePre ${refs("g2ResolvePre")} · ` +
-      `g2DirTailLooksLive ${refs("g2DirTailLooksLive")} · G2_RP_CHILD ${refs("G2_RP_CHILD")}。` +
+      `g2RealpathBounded ${refs("g2RealpathBounded")} · g2RealpathBatch ${refs("g2RealpathBatch")} · ` +
+      `g2TwoPhase ${refs("g2TwoPhase")} · g2TailCouldBeLive ${refs("g2TailCouldBeLive")} · ` +
+      `g2BaseCouldBeLive ${refs("g2BaseCouldBeLive")} · g2ResolvePre ${refs("g2ResolvePre")} · ` +
+      `G2_RP_CHILD ${refs("G2_RP_CHILD")} · G2_RP_BATCH_CHILD ${refs("G2_RP_BATCH_CHILD")}。` +
       `**端到端覆盖**：g2RealpathBounded 生产调用点 1/1（常量侧，上面五组逐个走到）· ` +
+      `g2RealpathBatch 1/1（相②，由「候选写 8.3 短名 + 长名 HOME」那一格走到）· ` +
+      `g2TwoPhase **2/2**（Edit 分支由 ⑰ 负控里那条 \`edit(...)\` 走到、shell 分支由本节几乎每条正控走到` +
+      ` —— 这两个调用点是 G2 仅有的两个判定入口，缺一个就是半道闸没接上）· ` +
       `g2ResolvePre 2/2（g2Resolve 那条由 Edit/shell 正控走到，destRaws 那个循环由 ` +
-      `\`-Destination <目录>\` 正控走到）· g2DirTailLooksLive 2/2（归一后侧由「真实目录 .claude」` +
-      `四格走到，归一前侧由 junction + 短名 HOME 那一格走到 —— **那一格是它唯一的专属样本**，` +
-      `没有它这一支就是零样本，#官抗-负控独立归因 要的就是这个）。` +
+      `\`-Destination <目录>\` 正控走到）· g2TailCouldBeLive 1/1（唯一调用点在 g2Canon，` +
+      `正反两支都有专属样本：`+"`f.md` 诱饵走「不像」那支、`settings.json` 诱饵走「像」那支）· " +
+      `g2BaseCouldBeLive 2/2（g2TailCouldBeLive 内一处、g2WriteTargets 的 basename 展开一处）。` +
       `**未覆盖 0 个** —— 但这句话说的是「被走到了」，不是「守住了」。`);
+    // 🔴 **一条结构断言守着上面那句话别变成散文**（`#官抗-调用点覆盖率`：分母不能是手写死的）：
+    //   本批新增的三个函数名，只要有一个在代码里消失（改名 / 删除 / 被 inline 掉），
+    //   上面整段覆盖率叙述即刻失效 —— 那时这条会红并点名，逼人回来改它。
+    check("#199 覆盖率叙述的前提·三个新判据函数都还在代码里（改名即失效，逼人同批更新上面那段）",
+      refs("g2RealpathBatch") >= 2 && refs("g2TwoPhase") >= 3 && refs("g2TailCouldBeLive") >= 2,
+      `batch=${refs("g2RealpathBatch")} twoPhase=${refs("g2TwoPhase")} tail=${refs("g2TailCouldBeLive")}`);
   }
 
   check("真 hook 文件在本节全部 mutation 之后仍逐字节未改", sha(HOOK) === PRISTINE_SHA);
