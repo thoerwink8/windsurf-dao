@@ -1638,11 +1638,13 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     check("🔴 isGreenSyncLine：以 ⓘ 开头但嵌了 ⚠（budgetLines 过渡期/providerHookLines deny 缺字段那种形态）→ 非绿",
       !j2.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
 
-    // ── J2 判据②：NON_PASS_PATTERNS 五处已知「ⓘ 但明写不是通过」形态 ─────────
-    // PR #237 对抗验证 5230986835 F1：这五处此前会被判①「候选绿」直接判成真绿，
+    // ── J2 判据②：NON_PASS_PATTERNS 六处已知「ⓘ 但明写不是通过」形态 ─────────
+    // PR #237 对抗验证 5230986835 F1：①～⑤这五处此前会被判①「候选绿」直接判成真绿，
     // 出问题时信息会被聚合行吞掉。每条配一个「命中态」（对应函数真实会吐出的文本）
     // 与一个同源「不命中态」（同一函数的真正全过分支），双向夹住——只测命中会漏掉
     // 「判据被放宽后连真绿也误伤」这个方向。
+    // ⑥（clauseStructureLines() 条款库观察线）是二轮对抗验证 5231324695 F5 指出的
+    // 漏判——判词自己数的是 6 种，①～⑤这批返修只堵了 5 种，本轮补齐第 6 种，见下方。
     check("🔴 NON_PASS_PATTERNS①：providerHookLines() deny 面零样本 → 非绿（今天生产环境的真实形态）",
       !j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
         "且与应注册清单一致；ⓘ deny 面零样本：provider 与 canonical 里一条 permissions.deny 都没有 " +
@@ -1685,6 +1687,25 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       j2.isGreenSyncLine("ⓘ memory 指针一致性（scope=all，含 dao 自己的 memory）：7 个项目 / 98 份 memory / " +
         "实判 103 个路径 token，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。 → " +
         "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+
+    // ── ⑥ PR #237 对抗验证 5231324695 F5 返修：判词自己数的是 6 种「ⓘ 但不是语义上的绿」，
+    //    上一轮（F1，5230986835）只覆盖了①～⑤共 5 处，遗漏第 6 处——clauseStructureLines()
+    //    的条款库退役观察线（hook :899-902）。e2e 复现路径见判词：`-RetireAgeDays 15` ⇒
+    //    真仓 `retire=21`（缺省 21 天下 2026-08-11 起变活），这里用同一份真实报文文案。
+    //    文本取自 hook 源码 :899-902 逐字拼接（clauses=121 / retire=21 / promote=0，
+    //    对应判词 §一 F5 给出的原始输出）。
+    check("🔴 NON_PASS_PATTERNS⑥a：clauseStructureLines() 条款库观察线（retire>0）→ 非绿" +
+      "（判词数的是 6 种，上一轮只堵 5 种，这是漏下的第 6 种，e2e 实测已被聚合吞掉）",
+      !j2.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 21 条够老了、该问一句「还有用吗」，" +
+        "0 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
+        "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"));
+    check("🔴 NON_PASS_PATTERNS⑥b：同一返回语句的姊妹子项——promote>0 但 retire=0 时同样非绿（同③⑤同一手法，不只靠 retire 才拦住）",
+      !j2.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 0 条够老了、该问一句「还有用吗」，" +
+        "3 条观察区候选够格升格 → powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1 看清单" +
+        "（**观察线不是硬闸**：它只把判断端到你眼前，不替你决定退役/升格）"));
+    check("负控⑥：同一函数真绿分支（retire=0 promote=0，零待办，hook :906-907）→ 仍判绿",
+      j2.isGreenSyncLine("ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 12/12 个 .md，" +
+        "合计 121 条，零违例（零条款的纯流程文件不检，故意不报红）"));
 
     const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
     const aggAllGreen = j2.aggregateGreenSync(allGreen);
