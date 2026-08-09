@@ -109,6 +109,20 @@ function liveEquivalent() {
   };
 }
 
+// 快照文档的落盘形态（cc-switch.settings 导出壳 + rows 数组）。抽成函数是 issue #171
+// 批 B 顺手做的去重——writeDbFixturePair（给 DB 面测试用）需要同一份包装，此前只有
+// runPair 内联了一份，两处各写一份就是「同一形态第二次被复制」。
+function snapDocOf(snapObj) {
+  return typeof snapObj === "string" ? snapObj : JSON.stringify({
+    source: "cc-switch.settings",
+    note: "test fixture",
+    rows: [
+      { key: "common_config_claude", value: JSON.stringify(snapObj) },
+      { key: "common_config_codex", value: "[non-json toml]" },
+    ],
+  }, null, 2);
+}
+
 let seq = 0;
 // 落盘一对 fixture 并跑 detect；返回 detect 结果 + 同参数的 hookLines
 function runPair(live, snapObj, opts) {
@@ -116,19 +130,35 @@ function runPair(live, snapObj, opts) {
   const livePath = path.join(TMP, `live-${seq}.json`);
   const snapPath = path.join(TMP, `snap-${seq}.json`);
   if (live !== null) fs.writeFileSync(livePath, JSON.stringify(live, null, 2), "utf8");
-  if (snapObj !== null) {
-    const doc = typeof snapObj === "string" ? snapObj : JSON.stringify({
-      source: "cc-switch.settings",
-      note: "test fixture",
-      rows: [
-        { key: "common_config_claude", value: JSON.stringify(snapObj) },
-        { key: "common_config_codex", value: "[non-json toml]" },
-      ],
-    }, null, 2);
-    fs.writeFileSync(snapPath, doc, "utf8");
-  }
+  if (snapObj !== null) fs.writeFileSync(snapPath, snapDocOf(snapObj), "utf8");
   const o = Object.assign({ real: false, skipRuleEcho: true, livePath, snapshotPath: snapPath }, opts || {});
   return { r: lib.detect(o), lines: lib.hookLines(o) };
+}
+
+// issue #171 批 B（F1-F3）：compareWithDb(opts) 走 livePath/snapshotPath，与 detect(opts) 同一
+// 约定，但它自己不落 DB 文件——DB 那一侧由 opts.selectRows 注入。这里只落 live/snap 两份。
+function writeDbFixturePair(live, snapObj) {
+  seq++;
+  const livePath = path.join(TMP, `db-live-${seq}.json`);
+  const snapPath = path.join(TMP, `db-snap-${seq}.json`);
+  fs.writeFileSync(livePath, JSON.stringify(live, null, 2), "utf8");
+  fs.writeFileSync(snapPath, snapDocOf(snapObj), "utf8");
+  return { livePath, snapPath };
+}
+
+// issue #171 批 B（D2/D3）：印证「printReport 只负责写出」——临时接管 process.stdout.write，
+// 收集真实写出的字节，用完立即还原（finally），不许因为断言抛错就把 stdout 卡在接管态。
+function captureStdout(fn) {
+  const orig = process.stdout.write.bind(process.stdout);
+  let buf = "";
+  process.stdout.write = (chunk, enc, cb) => {
+    buf += chunk;
+    if (typeof enc === "function") enc();
+    else if (typeof cb === "function") cb();
+    return true;
+  };
+  try { fn(); } finally { process.stdout.write = orig; }
+  return buf;
 }
 
 const hardIds = (r) => r.hard.map((f) => f.kind + ":" + f.id);
@@ -686,5 +716,135 @@ console.log("\n=== 接线层：真跑 dao-scaffold-check.js（非阻断 + 故障
   check("手拼 payload（缺 transcript_path）→ 心跳标 synthetic", recs.length > 0 && recs.every((x) => x.synthetic === true), JSON.stringify(recs));
 }
 
-console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
-process.exit(fail ? 1 : 0);
+// ══════════════════════════════════════════════════════════════════════════
+// issue #171 批 B · printReport 可测性（D2/D3）+ DB 面依赖注入（F1-F3）
+// PR #181（批 A）遗留账：那批把 4 笔纯断言 + 2 条已知边界钉上了，本批收尾剩下的两笔——
+// printReport 承载零守护、compareWithDb 两条腿零端到端（调用点覆盖 1/3）。
+// compareWithDb 是 async（这是本文件唯一的 async 面，历史上只有 DB 访问需要它），
+// 故这一段包进一个 async 函数、排在同步测试段之后，汇总打印与 exit 等它跑完再做。
+// ══════════════════════════════════════════════════════════════════════════
+async function runAsyncSuite() {
+
+console.log("\n=== #171 · D2/D3：reportLines(r) 承载「仓库根」行 + ⓘ 导读行（此前摘掉整段任何断言都不会红）===");
+{
+  // 与 #58 负控节同一让步格：两侧各自单根、但根不同（典型 worktree 场景）——
+  // 归一化会把逐 hook 的 VALUE_DIFF 全部吃掉，唯一还留着这条信息的就是这两行。
+  const live = liveEquivalent();
+  const swap = (c) => c.replace(new RegExp(REPO.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), OTHER_ROOT);
+  live.hooks.SessionStart[0].hooks[0].command = swap(live.hooks.SessionStart[0].hooks[0].command);
+  live.hooks.SessionStart[1].hooks[0].command = swap(live.hooks.SessionStart[1].hooks[0].command);
+  live.hooks.PostToolUse[0].hooks[0].command = swap(live.hooks.PostToolUse[0].hooks[0].command);
+  const { r } = runPair(live, snapClaude());
+  check("D2/D3 前提 · 归一化确实吃掉了逐 hook 差异（不这样本节断言就没有判别力）",
+    r.hard.length === 0, JSON.stringify(hardIds(r)));
+
+  const lines = lib.reportLines(r);
+  check("D2 · reportLines 打出「仓库根」行", lines.some((l) => /仓库根 :/.test(l)), JSON.stringify(lines));
+  const rootLine = lines.find((l) => /仓库根 :/.test(l)) || "";
+  check("D2 · 仓库根行里看得见两侧真实路径（信息不许凭空消失，不是只打个「有差异」的布尔值）",
+    rootLine.toLowerCase().includes(OTHER_ROOT) && rootLine.toLowerCase().includes(REPO.replace(/\\/g, "/").toLowerCase()),
+    rootLine);
+  check("D3 · reportLines 打出 ⓘ 导读行（让步格的说明：worktree 里跑属正常态，不据此判红）",
+    lines.some((l) => /ⓘ/.test(l) && /worktree/.test(l)), JSON.stringify(lines));
+
+  const out = captureStdout(() => lib.printReport(r));
+  check("printReport 只负责写出：与 reportLines(r).join(\"\\n\")+\"\\n\" 逐字节等价（两者不许各写一份逻辑）",
+    out === lines.join("\n") + "\n", JSON.stringify({ outLen: out.length, expectedLen: (lines.join("\n") + "\n").length }));
+}
+
+console.log("\n=== #171 · F1：compareWithDb 的 live vs DB 腿——端到端（selectRows 依赖注入，此前零覆盖）===");
+{
+  const live = liveEquivalent();
+  live.hooks.PostToolUse[0].hooks.push({
+    type: "command", command: 'node "' + REPO.replace(/\\/g, "/") + '/ccswitch/hooks/dao-rule-echo.js"', timeout: 10,
+  });
+  const dbObj = snapClaude(); // DB 与快照一致（正常态：export 已跑过，live 侧手改了个新 hook 还没导出）
+  const { livePath, snapPath } = writeDbFixturePair(live, snapClaude());
+  let calledWith = null;
+  const d = await lib.compareWithDb({
+    selectRows: (table, where) => { calledWith = { table, where }; return [{ value: JSON.stringify(dbObj) }]; },
+    livePath, snapshotPath: snapPath,
+  });
+  check("F1 · selectRows 依赖注入真被调用、表名/WHERE 与生产一致（不是喂了个从不生效的桩）",
+    !!calledWith && calledWith.table === "settings" && /common_config_claude/.test(calledWith.where || ""),
+    JSON.stringify(calledWith));
+  const lvd = d.liveVsDb.filter((f) => f.tier === "hard");
+  check("F1 · live 独有 dao hook 未导出到 DB → liveVsDb 出现 LIVE_ONLY 硬发现",
+    lvd.some((f) => f.kind === "LIVE_ONLY" && f.id === "hook:dao-rule-echo.js"), JSON.stringify(lvd));
+  check("F1 · 一致的那一侧（快照 vs DB）不被误伤，保持零硬报",
+    d.snapVsDb.filter((f) => f.tier === "hard").length === 0, JSON.stringify(d.snapVsDb));
+}
+
+console.log("\n=== #171 · F2：compareWithDb 的 快照 vs DB 腿——端到端（另一个此前零覆盖的调用点）===");
+{
+  const dbObj = snapClaude();
+  dbObj.hooks.UserPromptSubmit = [{ hooks: [{ type: "command", command: 'node "' + PH_PROJECT + '/ccswitch/hooks/dao-rhythm.js"', timeout: 10 }] }];
+  const { livePath, snapPath } = writeDbFixturePair(liveEquivalent(), snapClaude());
+  const d = await lib.compareWithDb({
+    selectRows: () => [{ value: JSON.stringify(dbObj) }],
+    livePath, snapshotPath: snapPath,
+  });
+  const svd = d.snapVsDb.filter((f) => f.tier === "hard");
+  check("F2 · DB 独有 dao hook（快照没有）→ snapVsDb 出现硬发现",
+    svd.some((f) => f.kind === "SNAP_ONLY" && f.id === "hook:dao-rhythm.js"), JSON.stringify(svd));
+  const lvd = d.liveVsDb.filter((f) => f.tier === "hard");
+  check("F2 · 同一处 DB 独有 hook 在 live vs DB 那条腿上也感知得到（两条腿各自独立算，互不遮蔽）",
+    lvd.some((f) => f.kind === "SNAP_ONLY" && f.id === "hook:dao-rhythm.js"), JSON.stringify(lvd));
+}
+
+console.log("\n=== #171 · F3：--db 报文补齐仓库根残留（此前归一化后一个字都不剩）===");
+{
+  const live = liveEquivalent();
+  const snap = snapClaude();
+  const swap = (c) => c.replace(new RegExp(REPO.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), OTHER_ROOT);
+  // DB 以 live 同构起手（真实 DB 导出内容含字面绝对路径这一形态合法），
+  // 但三个 dao hook 全部指向另一个 checkout ——「DB 曾从 worktree export 过」的事故形状。
+  const dbObj = liveEquivalent();
+  dbObj.hooks.SessionStart[0].hooks[0].command = swap(dbObj.hooks.SessionStart[0].hooks[0].command);
+  dbObj.hooks.SessionStart[1].hooks[0].command = swap(dbObj.hooks.SessionStart[1].hooks[0].command);
+  dbObj.hooks.PostToolUse[0].hooks[0].command = swap(dbObj.hooks.PostToolUse[0].hooks[0].command);
+  const { livePath, snapPath } = writeDbFixturePair(live, snap);
+  const d = await lib.compareWithDb({
+    selectRows: () => [{ value: JSON.stringify(dbObj) }],
+    livePath, snapshotPath: snapPath,
+  });
+  check("F3 前提 · 归一化确实把这批差异吃掉了（liveVsDb 零硬报——不这样本节其余断言就没有判别力）",
+    d.liveVsDb.filter((f) => f.tier === "hard").length === 0, JSON.stringify(d.liveVsDb));
+  check("F3 前提 · compareWithDb 把三侧根都带出（结构前提，缺了它下面几条会读 undefined 而不是判红）",
+    Array.isArray(d.roots && d.roots.live) && Array.isArray(d.roots && d.roots.snap) && Array.isArray(d.roots && d.roots.db),
+    JSON.stringify(d.roots));
+  check("F3 前提 · DB 侧的根确实与 live/快照不同（夹具前提，越过这条线下面的断言才有判别力）",
+    d.roots.db.length === 1 && d.roots.db[0].toLowerCase() === OTHER_ROOT &&
+    d.roots.live.length === 1 && d.roots.live[0].toLowerCase() !== OTHER_ROOT,
+    JSON.stringify(d.roots));
+
+  const lines = lib.dbReportLines(d);
+  check("F3 · dbReportLines 打出「仓库根」行（此前 --db 这一面完全没有这行，归一化吃掉的根就此无处可查）",
+    lines.some((l) => /仓库根/.test(l)), JSON.stringify(lines));
+  const rootLine = lines.find((l) => /仓库根/.test(l)) || "";
+  check("F3 · 报文里看得见 DB 侧那个被归一化吃掉的根（信息不许凭空消失，同 reportLines 那半的承诺）",
+    rootLine.toLowerCase().includes(OTHER_ROOT), rootLine);
+}
+
+console.log("\n=== #171 · DB 面错误可见性：selectRows 零行时不静默吞错（注入路径同样受这条铁律约束）===");
+{
+  const { livePath, snapPath } = writeDbFixturePair(liveEquivalent(), snapClaude());
+  let threw = null;
+  try {
+    await lib.compareWithDb({ selectRows: () => [], livePath, snapshotPath: snapPath });
+  } catch (e) { threw = e; }
+  check("selectRows 零行 → compareWithDb 抛出可读错误（不是静默返回半截结果）",
+    threw instanceof Error && /common_config_claude/.test(threw.message), threw && threw.message);
+}
+
+}
+
+runAsyncSuite().then(() => {
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+  process.exit(fail ? 1 : 0);
+}).catch((e) => {
+  fail++;
+  console.error("[settings-drift.tests] 异步测试段异常（未被内部 try/catch 接住）：", e && e.stack ? e.stack : e);
+  console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
+  process.exit(1);
+});

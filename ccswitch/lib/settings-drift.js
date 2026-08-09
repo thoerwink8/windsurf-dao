@@ -1886,27 +1886,46 @@ function argOfCli(argv, name, dflt) {
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
-async function compareWithDb(findingsLabel) {
+/**
+ * issue #171 批 B（F1-F3）：DB 访问改走 `opts.selectRows` 依赖注入 —— 此前硬编码
+ * `await import(".../sqlite.mjs")`，两条腿（liveVsDb / snapVsDb）因此只能靠真实 DB
+ * 才跑得起来，PR #167 对抗账点名「调用点覆盖 1/3」（`compareDeployment` 全库 3 个生产
+ * 调用点，只有 `detect()` 那一个被端到端测过）。注入之后测试端可以喂内存 fixture，
+ * 不碰真 `~/.cc-switch/cc-switch.db`，两条腿都能走完整路径（含 JSON.parse(dbObj) 那一步）。
+ * `opts.livePath` / `opts.snapshotPath` 同理，与 `detect(opts)` 的既有约定对齐。
+ * @param {{selectRows?:Function, livePath?:string, snapshotPath?:string}} opts
+ */
+async function compareWithDb(opts) {
+  const o = opts || {};
   // DB 是真源。只在 --db 时查：单次 selectRows 实测 ~150ms（tableExists + select 两次 sqlite3 spawn），
   // 且 sqlite.mjs 是 ESM、findSqlite3 找不到 sqlite3 会抛、cc-switch 运行时 DB 可能被锁。
   // SessionStart 路径若引入它，dao-scaffold-check.js 就得整体改成 async —— 那不是最小改动。
-  const { selectRows } = await import("../../config-sync/lib/sqlite.mjs");
-  const rows = selectRows("settings", "WHERE key='common_config_claude'");
+  const selectRowsFn = o.selectRows || (await import("../../config-sync/lib/sqlite.mjs")).selectRows;
+  const rows = selectRowsFn("settings", "WHERE key='common_config_claude'");
   if (!rows.length) throw new Error("DB 里没有 common_config_claude 行");
   const dbObj = JSON.parse(rows[0].value);
-  const live = readJson(LIVE_SETTINGS);
-  const snap = loadSnapshotClaude(SNAPSHOT_SETTINGS);
+  const live = readJson(o.livePath || LIVE_SETTINGS);
+  const snap = loadSnapshotClaude(o.snapshotPath || SNAPSHOT_SETTINGS);
   return {
     // 两侧都走 compareDeployment：快照侧的 `${PROJECT_ROOT}` 展开成的是**本进程的根**，
     // 而 DB 里存的是主树部署时写进去的路径 ⇒ 不归一化的话，从 worktree 跑 `--db`
     // 会与老面撞上同一批假阳性（issue #58）。
     liveVsDb: compareDeployment(live, dbObj, { otherLabel: "DB" }),
     snapVsDb: compareDeployment(snap, dbObj, { otherLabel: "DB", selfLabel: "快照" }),
-    label: findingsLabel,
+    // F3（issue #171）：DB 侧的根必须跟着一起带出。理由与 detect() 里 `roots` 字段同源
+    // ——归一化会把「同段不同前缀」这类差异从 hard 列表里吃掉（issue #58 设计如此），
+    // 但此前 --db 这一面连「DB 侧的根是什么」都没地方看：一次「worktree 路径被 export
+    // 进 DB」的真事故会被归一化吃掉且**报文里一个字都不剩**。
+    roots: { live: rootsOf(live), snap: rootsOf(snap), db: rootsOf(dbObj) },
   };
 }
 
-function printReport(r) {
+// issue #171 批 B（D2/D3）：从 printReport 里抽出来的纯构建函数——只造行数组，不碰 stdout。
+// printReport 因此退化成「reportLines 的结果 + 一次 write」，两者不许各写一份逻辑。
+// 这样拆的理由是可测性：D2/D3 点名「仓库根行 + ⓘ 导读行」摘掉任一都不会让既有断言变红
+// （它们只读 r.roots 结构，不读打印出来的文本）——现在测试端可以直接调 reportLines(r)
+// 断言这两行的字面存在，不必再解析真实 stdout。
+function reportLines(r) {
   const L = [];
   L.push("[settings-drift] live ↔ git 快照");
   L.push(`  live : ${r.livePath}`);
@@ -1952,7 +1971,28 @@ function printReport(r) {
     for (const l of r.ruleEcho.lines) L.push(`  ${l}`);
     if (r.ruleEcho.stderr) L.push(`  stderr: ${r.ruleEcho.stderr}`);
   }
-  process.stdout.write(L.join("\n") + "\n");
+  return L;
+}
+
+function printReport(r) {
+  process.stdout.write(reportLines(r).join("\n") + "\n");
+}
+
+// issue #171 批 B（F3）：--db 那一面的报文构建，同一拆法（构建/写出分离）。
+// 与 reportLines(r) 并列导出，供测试端直接断言「仓库根」行在不在，不必解析真实 stdout。
+function dbReportLines(d) {
+  const lines = ["", "── 三方（DB 为真源）──"];
+  const rt = d.roots || { live: [], snap: [], db: [] };
+  const fmt = (a) => (a && a.length ? a.join(" · ") : "(未出现 /ccswitch/ 形态的路径)");
+  lines.push(`  仓库根 : live=${fmt(rt.live)}  快照=${fmt(rt.snap)}  DB=${fmt(rt.db)}`);
+  const lvd = hardOf(d.liveVsDb), svd = hardOf(d.snapVsDb);
+  lines.push(`  live vs DB : ${lvd.length} 条硬差异`);
+  for (const f of lvd) lines.push(`    · ${f.kind} ${f.detail}`);
+  lines.push(`  快照 vs DB : ${svd.length} 条硬差异`);
+  for (const f of svd) lines.push(`    · ${f.kind} ${f.detail}`);
+  lines.push("  判读：live 独有且 DB 也没有 ⇒ 手改投影未进源（真债，下次下发即抹）；");
+  lines.push("        live 独有但 DB 已有   ⇒ 只是 export 未跑（轻债，跑一次 export 即平）。");
+  return lines;
 }
 
 async function main() {
@@ -1974,15 +2014,7 @@ async function main() {
   if (argv.includes("--db")) {
     try {
       const d = await compareWithDb();
-      const lines = ["", "── 三方（DB 为真源）──"];
-      const lvd = hardOf(d.liveVsDb), svd = hardOf(d.snapVsDb);
-      lines.push(`  live vs DB : ${lvd.length} 条硬差异`);
-      for (const f of lvd) lines.push(`    · ${f.kind} ${f.detail}`);
-      lines.push(`  快照 vs DB : ${svd.length} 条硬差异`);
-      for (const f of svd) lines.push(`    · ${f.kind} ${f.detail}`);
-      lines.push("  判读：live 独有且 DB 也没有 ⇒ 手改投影未进源（真债，下次下发即抹）；");
-      lines.push("        live 独有但 DB 已有   ⇒ 只是 export 未跑（轻债，跑一次 export 即平）。");
-      process.stdout.write(lines.join("\n") + "\n");
+      process.stdout.write(dbReportLines(d).join("\n") + "\n");
     } catch (e) {
       process.stderr.write(`[settings-drift] --db 查询失败：${e.message}\n`);
       appendErrorLog(`--db 查询失败：${e.message}`, e);
@@ -2009,6 +2041,11 @@ module.exports = {
   // permissions.deny 面（issue #56）。两半分别导出，测试要能各自换靶做 mutation：
   // 只导出比对结果的话，「census 与 structural 是不是真的两套实现」就不可测。
   censusDenyEntries, countDenyEntries, denySetOf, DENY_FACE_IDS,
+  // issue #171 批 B：printReport 拆成「构建（reportLines）+ 写出（printReport）」两半，
+  // --db 那一面同一拆法拆成 dbReportLines；compareWithDb 的 DB 访问改走 selectRows 依赖
+  // 注入。四者都导出，供测试端不碰真 DB / 真 ~/.claude/settings.json 也能端到端断言
+  // 报文文本与此前零覆盖的两个生产调用点（PR #167 对抗账 D2/D3 + F1-F3）。
+  reportLines, printReport, dbReportLines, compareWithDb,
 };
 
 if (require.main === module) {
