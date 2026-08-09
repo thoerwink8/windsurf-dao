@@ -184,17 +184,17 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "09e97d39163f039c1b02488e2ab5aec3f8a9c62b0ab1e34a12e57bd0a4de8e03",
-        "lines": 447,
-        "clauses": 2,
+        "sha256": "439ef445c524cd4088bff4a344583c33cc7e7c2b7ce267336150f642df8e1574",
+        "lines": 460,
+        "clauses": 3,
         "observation": 0,
         "fieldless": 0,
         "no_trigger": 0,
         "unclassified": 0,
         "skipped_in_special_sections": 0,
-        "slug": 2,
+        "slug": 3,
         "no_slug": 0,
-        "no_meta_field": 2
+        "no_meta_field": 3
       },
       {
         "file": "ccswitch/rules/dao-product.md",
@@ -232,7 +232,7 @@
       }
     ],
     "roles": {
-      "general": 85,
+      "general": 86,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 18,
@@ -240,7 +240,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 120,
+      "clauses": 121,
       "observation": 0
     }
   },
@@ -3026,12 +3026,35 @@
       "body_excerpt": "- **挂账三分流**：一件事挂账时往哪放，看**接下来谁会处置、什么时候处置**——本窗立刻要用的信息 ⇒ 建新 issue；要等外部条件成立才能处置的 ⇒ 评论挂账在原处（issue/PR 原地留言，不新开单）；纯用户判断题、无技术后续的 ⇒ 进 #70 待拍板池。三态互斥，别把同一条信息同时挂两处。 [#归-挂…"
     },
     {
+      "id": "3854f33cb7a2",
+      "slug": "归-建单可读",
+      "file": "ccswitch/rules/dao-workitem.md",
+      "line": 32,
+      "line_end": 32,
+      "meta_line": 32,
+      "role": "general",
+      "zone": "clause",
+      "section": "建单三件套 · 起单时必过的三格（2026-08-09 立 · 用户拍板，issue 可读性改造批）",
+      "title": "一句话判据：建 issue 时类型标签、标题、关联三格都要过，正文散文引用只作补充不作唯一记录。",
+      "n": null,
+      "first_seen": null,
+      "trigger": null,
+      "baseline": null,
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": false,
+      "judge_only": false,
+      "observing": false,
+      "shape": "prose",
+      "body_excerpt": "**一句话判据：建 issue 时类型标签、标题、关联三格都要过，正文散文引用只作补充不作唯一记录。** [#归-建单可读]"
+    },
+    {
       "id": "bc764258b168",
       "slug": "归-认领协议",
       "file": "ccswitch/rules/dao-workitem.md",
-      "line": 35,
-      "line_end": 35,
-      "meta_line": 35,
+      "line": 48,
+      "line_end": 48,
+      "meta_line": 48,
       "role": "general",
       "zone": "clause",
       "section": "认领协议 · 两台机器 / 两个 AI 并行时「谁在干哪张单」（2026-08-08 立 · 用户点名立项 issue #193）",
