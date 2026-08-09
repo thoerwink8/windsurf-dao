@@ -118,6 +118,26 @@
 // `countDeaths24h` 定义处「M5' 零守护断言」测试块与 tests/rate-limit-sentinel.tests.js。
 // 生产 fired.log 是否真会出现坏行/坏 `at` 未经真实样本核实，属已知挂账，见 issue 追踪。
 //
+// ── 三处待补强（issue #236，PR #230 对抗官 12 探针 + 17 mutation 夹击挂账）───────
+// PR #230 落地当轮判据本身是对的（既有 165 条断言零反对），但对抗官证明「往错误方向
+// 悄悄改一点，现有测试一条都不会红」，三处代码层缺口本批（issue #236）逐条补：
+//   ① **时钟只有下界，没有上界**——伪造的未来时间戳（如 `at` 写成 10 天后甚至 9999 年）
+//      此前会被永久计入且永不过期。修法：`countDeaths24h` 的窗口判据补 `t <= nowMs`
+//      （见下方定义处）。验证过零阻力：补上后既有 165 条断言零反对。
+//   ② **窗口长度（24h）在缩短方向没有测试兜底**——语料只覆盖到 1h 正控与 25h 负控，
+//      窗口在 0~25h 之间随便改都测不出来。修法：补一条 23h 正控 + 窗口收紧 mutation，
+//      见 tests/rate-limit-sentinel.tests.js「issue #236 挂账②」。
+//   ③ **死亡判定不能从 `=== true` 松成 truthy**——写入侧目前永远是布尔值，属结构上的缝
+//      而非当前活跃风险，此前没有断言守着这条判据不被放宽。修法：补一条 truthy-非-true
+//      正控 + 放宽 mutation，见 tests/rate-limit-sentinel.tests.js「issue #236 挂账③」，
+//      本条判据本身不改（`=== true` 严格判等原样保留，issue 原文对这一格「不预判优先级」，
+//      故只补测试兜底、不动生产代码）。⚠ 对抗复核（PR #239 判词）实测：该兜底对
+//      `=== true` → `== true`（宽松相等）这一放宽形态仍零守护——正控样本 `"true"` 恰好
+//      `== true` 为 false，从该改法射程外溜走；修法（样本换 `1`，一个样本同钉 truthy 与
+//      宽松相等两形态）归跟进单。
+// issue 里另记了一条「文件轮转与 24h 窗口叠加时计数理论上会骤降」的边界，issue 原文
+// 定性为「理论边界，不代表短期要修，不预判优先级」——本批不动它，照直挂在 issue 上。
+//
 // 回归网：tests/rate-limit-sentinel.tests.js
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rate-limit-sentinel.js
 // 注册（用户/帅动作，本文件不代做）：settings.json → hooks.StopFailure，matcher "rate_limit|overloaded"
@@ -243,6 +263,9 @@ const S = createHookScaffold({
 // 自己在 `marked` 分支里 +1（见 main()）。`readJsonlRecords` 之外逃逸出来的异常
 // （如目录被占等 `readFileSync` 级故障）记 `null`，不吞成 0——这一格由下面
 // 「M5' 零守护断言」测试块守着，见 tests/rate-limit-sentinel.tests.js。
+// **`t <= nowMs` 上界（issue #236 挂账①，2026-08-09 补）**：只有下界 `t >= cutoff` 时，
+// 一条被伪造成未来时刻（哪怕 9999 年）的 `at` 会永久算作「在窗内」——它永远 >= cutoff，
+// 且没有任何东西会让它过期。上界把「未来」这个不该存在的时刻也挡在窗外，与「太旧」同判。
 const DEATHS_WINDOW_MS = 24 * 3600 * 1000;
 function countDeaths24h(nowMs) {
   try {
@@ -252,7 +275,7 @@ function countDeaths24h(nowMs) {
     for (const r of all) {
       if (r && r.marked === true) {
         const t = Date.parse(r.at);
-        if (Number.isFinite(t) && t >= cutoff) n++;
+        if (Number.isFinite(t) && t >= cutoff && t <= nowMs) n++;
       }
     }
     return n;
