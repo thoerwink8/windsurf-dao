@@ -1510,6 +1510,21 @@
       "baseline": "本会话 62 份 subagent 转录实测 31 次；全库 `~/.claude/projects/**/*.jsonl` 实测 481 次，仅次于权限拦截 1661 次",
       "source_refs": [],
       "status": "active"
+    },
+    "归-建单可读": {
+      "file": "ccswitch/rules/dao-workitem.md",
+      "n": "1",
+      "first_seen": "08-09",
+      "trigger": "无",
+      "judge_only": true,
+      "self_authored": [],
+      "baseline": "2026-08-09 调研（_tmp/issue-readability-research-20260809.md）实测 40 张最近 issue：标题 75%（30/40）依赖内部黑话或体系术语才可解析、类型维度标签使用率 0%（24 个既有标签零个是类型细分）、关联结构化字段使用率 0%（全部关联靠正文散文引用 #NN）。出处=用户 2026-08-09 拍板「A+B 叠加」+ 上述调研报告，非 AI 自定。落地当批实测新坑：blocked_by 目标只能是 issue、不能是 PR（gh issue edit 219 --add-blocked-by 218 实测 422 Validation failed: Target issue may only be an issue）——调研报告只验了端点存在，未验目标类型，本条落地时订正。",
+      "source_refs": [
+        "_tmp/issue-readability-research-20260809.md",
+        "issue #70（用户 2026-08-09 拍板 A+B 叠加）",
+        "ccswitch/rules/dao-workitem.md 建单三件套节"
+      ],
+      "status": "active"
     }
   }
 }
