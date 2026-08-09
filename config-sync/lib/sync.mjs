@@ -563,11 +563,15 @@ function preflight() {
     fixed.push('gh CLI 未安装（winget install GitHub.cli）——GitHub 操作不可用');
   }
 
-  // 2c. uvx（fetch MCP server 依赖）
+  // 2c. uvx（Python 类 MCP server 依赖，如 `uvx <package>` 这种起法）
+  // 2026-08-09 订正：此前这里写"fetch MCP server 依赖"——fetch 是当时唯一用 uvx 的
+  // 已注册 server；issue #92 拍板退役后，cc-switch DB 里已没有任何 server 用 uvx 起
+  // （已核对当前 mcp_servers 表），这条提示不再有具体指向，改成通用措辞，避免新机器
+  // 缺 uvx 时被指去修一个已经不存在的 server。
   try {
     execFileSync(process.platform === 'win32' ? 'where' : 'which', ['uvx'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
   } catch {
-    fixed.push('uvx 未安装（powershell -c "irm https://astral.sh/uv/install.ps1 | iex"）——fetch MCP 不可用');
+    fixed.push('uvx 未安装（powershell -c "irm https://astral.sh/uv/install.ps1 | iex"）——若未来注册 Python 类 MCP server（如 uvx 起法）会用到');
   }
 
   // 3. cc-switch DB（自动从 snapshot 创建空表结构）
