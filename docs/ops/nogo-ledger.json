@@ -1,0 +1,63 @@
+{
+  "_doc": {
+    "这是什么": "「用户拍板：这件事刻意不做」的台账。每条一个编号、一个 owner、一个解冻条件（什么情况下可以重新讨论）。此前这些决定只写在一行代码注释里，**靠「没人删它」生效** —— 删了那行，下一个 AI 读到自陈的缺口就会去补，直接推翻用户拍过的板，而没有任何东西会报警。",
+    "怎么和代码对上": "代码注释里只留一行标记 `[NOGO:<编号>]`。双向孤儿检测：台账有条目而落点文件里找不到标记 ⇒ 红；代码里有标记而台账无条目 ⇒ 红。检它的是 `tests/nogo-ledger.tests.js`（由 `node scripts/run-tests.mjs` 扫目录带跑）。",
+    "为什么不存注释正文": "存正文＝手工双写，而双写必漂移。注释里留判据与禁令（「别再往这里加兜底轮」这类防呆句照留原地），台账里存决定、理由、解冻条件与出处。",
+    "判据出处": "ccswitch/rules/dao-comment.md 的 [#注-拍板不做入账]（用户 2026-08-10 拍板，issue #70 评论 5239449909 第 3 件）。",
+    "字段语义": {
+      "decision": "被否掉的那件事，一句话。",
+      "decided_by": "谁拍的板。只有「用户」才进本台账 —— AI 自己的工程取舍不算，那类留在注释里当「为什么不那样做」。",
+      "decided_on": "拍板日期 YYYY-MM-DD。",
+      "owner": "谁有资格解冻。用户拍的板只有用户能翻。",
+      "unfreeze": "什么情况下可以重新讨论。**不是「什么时候必须做」**。",
+      "unfreeze_source": "两个取值：`用户原话`（解冻条件出自拍板记录本身）· `AI 拟定待确认`（AI 补的草稿，须送用户拍板 —— 「什么算够」属判断档，AI 自己定等于给自己划及格线）。",
+      "sites": "落点：哪几份文件的注释里留着 `[NOGO:<编号>]`。闸逐份核标记还在不在。",
+      "existing_guard": "这条决定此刻另有什么在守着（可能为 null）。**注意分清守的是「行为值」还是「这个决定本身」** —— 前者变了会红，后者被推翻不会。",
+      "notes": "补充；含「本条哪些字是转录、没回原始出处逐字核对」这类照直写的弱处。",
+      "status": "`frozen` = 决定生效中；`thawed` = 已解冻（解冻后应连同注释一起处理，不是留一具空壳）。"
+    },
+    "别在这里记什么": "待用户拍板的**悬而未决**项不进本台账（本台账只装已拍板的否决）。那类挂 issue，别混进来 —— 混进来会让「用户说过不做」与「还没人问过用户」长得一样。"
+  },
+  "schema_version": 1,
+  "entries": {
+    "probe-deadman": {
+      "decision": "限流探针不加 deadman 兜底轮（哨兵不响时无人值守时段的那道保险）",
+      "decided_by": "用户",
+      "decided_on": "2026-08-08",
+      "owner": "thoerwink8",
+      "unfreeze": "哨兵日志（`_tmp/rate-limit-sentinel/fired.log`）攒出真实限流样本后，若发现哨兵漏记 ≥1 例 ⇒ 那时讨论的是「哨兵为什么漏」，不是「要不要保险」",
+      "unfreeze_source": "用户原话",
+      "sites": ["ccswitch/hooks/dao-probe-gate.js"],
+      "existing_guard": null,
+      "notes": "拍板理由是场景归因：这个机制服务的是无人值守时段，而检测结果只有人在场才消费得动；人在场那一刻不用体检也发现得了限流。失效下界 = 未装本机制的原始态，不是新灾难。⚠️ 解冻条件逐字转录自 `ccswitch/hooks/dao-probe-gate.js` 头注里的拍板记录，**未回 2026-08-08 会话原始出处逐字核对**。",
+      "source_refs": ["issue #190 第 1 条（原缺口单）", "issue #274"],
+      "status": "frozen"
+    },
+    "g2-rename-4gaps": {
+      "decision": "G2 硬闸对 `Rename-Item` 族那 4 格漏报不收，长期保留（不走窄修法，也不改「目标相对源目录解析」那条基准）",
+      "decided_by": "用户",
+      "decided_on": "2026-08-07",
+      "owner": "thoerwink8",
+      "unfreeze": "这 4 格中任一格产生真实事故（真被用来写 live settings），或 rename 族的解析基准被单独修好之后重估",
+      "unfreeze_source": "AI 拟定待确认",
+      "sites": ["ccswitch/hooks/dao-hard-gates.js"],
+      "existing_guard": "`tests/hard-gates.tests.js` 的 LEDGER_117 登记了这 4 格**当前的行为值**（登记值 exit 0）并有 mutation 钉住它的判别力。**它守的是行为值，不是这个决定** —— 有人把 4 格补上时它会红，而有人把「不收」这条注释删掉时它一条都不红。",
+      "notes": "拍板理由：严重性有上限（`Rename-Item` 覆盖不了已存在的目标，`-Force` 也不行 ⇒ 只能在目标尚不存在时创建它）+ 账已登记且有 mutation 钉住 + 不为低危漏报再动这条出过一次退化的共享解析链。⚠️ 解冻条件是 AI 补的草稿，用户拍板时只说了「刻意不收、长期保留」。",
+      "source_refs": ["issue #132（关单裁决）", "issue #274"],
+      "status": "frozen"
+    },
+    "codex-junctions": {
+      "decision": "`~/.codex/skills` 下那批手放的 junction 不当漂移、不许「修」掉（它们不是 dao.ps1 建的，与「单一写入方」契约冲突，用户被明确告知后仍选择保留）",
+      "decided_by": "用户",
+      "decided_on": "2026-07-27",
+      "owner": "thoerwink8",
+      "unfreeze": "用户自己改主意，或那批 junction 的目标失效（届时做的是清死链，不是改契约）",
+      "unfreeze_source": "AI 拟定待确认",
+      "sites": ["tests/link-codex.tests.ps1"],
+      "existing_guard": "`tests/link-codex.tests.ps1` 断言的是 `dao.ps1 link-codex` **一个都不改**（前后快照必须逐项相同）。**它守的是 dao.ps1 的行为，不是这批 junction 的存亡** —— 有人手动删掉它们，那套测试一条都不红。",
+      "notes": "记录值：2026-07-27 时是 9 个，目标全部指向 `ccswitch/skills/dao-*`。**当下实况别读这个数**，跑 `.\\dao.ps1 link-codex`（只读报告）看现在有几个。谁 / 何时 / 被告知了什么 / 为什么这么选 / 回滚命令的全记录在 `docs/ops/dao-ecosystem-audit.md` 第 8 节。⚠️ `dao.ps1 unlink-codex` 会按目标分类并删掉其中一部分 —— 那是用户手敲的命令、不是静默风险，机制见该文第 8.3 节。",
+      "source_refs": ["docs/ops/dao-ecosystem-audit.md 第 8 节", "issue #274"],
+      "status": "frozen"
+    }
+  }
+}
