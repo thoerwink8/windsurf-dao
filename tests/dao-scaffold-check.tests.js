@@ -1711,7 +1711,7 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     check("🔴 isGreenSyncLine：以 ⓘ 开头但嵌了 ⚠（budgetLines 过渡期/providerHookLines deny 缺字段那种形态）→ 非绿",
       !j2.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
 
-    // ── J2 判据②：NON_PASS_PATTERNS 六处已知「ⓘ 但明写不是通过」形态 ─────────
+    // ── J2 判据②：NON_PASS_PATTERNS ~~六~~七处已知「ⓘ 但不是语义上的绿」形态 ────
     // PR #237 对抗验证 5230986835 F1：①～⑤这五处此前会被判①「候选绿」直接判成真绿，
     // 出问题时信息会被聚合行吞掉。每条配一个「命中态」（对应函数真实会吐出的文本）
     // 与一个同源「不命中态」（同一函数的真正全过分支），双向夹住——只测命中会漏掉
@@ -1780,6 +1780,51 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       j2.isGreenSyncLine("ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 12/12 个 .md，" +
         "合计 121 条，零违例（零条款的纯流程文件不检，故意不报红）"));
 
+    // ── ⑦ issue #256 账 3（出处 PR #237 对抗验证 5231324695 §八 观察项 1）：
+    //    budgetSummaryLines() 的「本次跳过 N 项」是判词穷举读码时点名的**同族第七个候选**，
+    //    此前零直接守护 —— 靠「有跳过就必然另有一行 ⏱」这条**隐式耦合**兜底。本批把它
+    //    转成显式判据（hook NON_PASS_PATTERNS⑦）。两条断言的分工：正控证 N>0 那一格
+    //    真的被判非绿；负控⑦ 是这条新覆盖面的**误伤反例**（`[#官实-误伤反例]`）——
+    //    N=0 是每次会话都会出现的真绿行，锚点若写成 `\d+` 就会让元仓库**永不聚合**，
+    //    把 J2 整个废掉，而那种坏法不会有任何一条既有断言变红。
+    const BUDGET_LINE = (n) => "ⓘ hook 墙钟预算：本次已花 1200 ms / 宿主给 10000 ms" +
+      "（注册值：settings.json 里本 hook 的 timeout），扣 1500 ms 收尾余量后**余量 7300 ms**；" +
+      "本次跳过 " + n + " 项";
+    check("🔴 NON_PASS_PATTERNS⑦：budgetSummaryLines() 跳过项非零 → 非绿" +
+      "（此前无任何断言，靠「必然另有一行 ⏱」的隐式耦合兜底；重构成只计数不打印 ⏱ 就静默失守）",
+      !j2.isGreenSyncLine(BUDGET_LINE(1)));
+    check("🔴 NON_PASS_PATTERNS⑦：两位数同样命中（锚点是 `[1-9]\\d*` 不是单个数字）",
+      !j2.isGreenSyncLine(BUDGET_LINE(12)));
+    check("负控⑦（新覆盖面的误伤反例）：跳过 0 项是真绿，仍判绿 —— 锚点写成 `\\d+` 即在此翻红",
+      j2.isGreenSyncLine(BUDGET_LINE(0)));
+
+    // ── 账 3 的第二半：把那条**隐式耦合本身**钉住，而不只是绕开它 ──────────────
+    // 耦合原话：「记了一笔跳过 ⇒ 报文里必然另有一行 `⏱` 开头的非绿行 ⇒ 聚合天然不发生」。
+    // 它今天仍然成立，但 issue #256 实测证明**它的承重点一个断言都没有**：把 gitKilled
+    // 那一行的前缀从 `⏱` 换成 `ⓘ`（变体 M3b），**全套 279 条零红**——既有断言的正则
+    // （`/git 状态查询（[^）]*） \*\*没跑\*\*/`、`/\*\*没跑\*\*/`）里压根没有那个字符。
+    // 下面两条各守耦合的一条产出路径，**刻意用两套不同的取证方式**（`[#守-自检独立]`：
+    // 自检那一半不复用被守对象的解析）：
+    //   · BUDGET.skip() 那条 —— 直接 require 真 lib、真调一次，拿真返回值去问真判据；
+    //   · gitKilled 那条 —— 它不走 BUDGET.skip()（模板对它不成立，见 hook :390），
+    //     报文行是在 hook 里自己拼的，故只能源码级断言它仍以 ⏱ 起头。
+    const realBudget = require(path.join(REPO, "ccswitch", "lib", "hook-budget.js"))
+      .createBudget({ totalMs: 10000, reserveMs: 1500, startedAt: Date.now() });
+    const realSkipLine = realBudget.skip("某道检查", 200);
+    check("🔴 耦合半①（issue #256 账 3）：真 BUDGET.skip() 记一笔跳过的同时，吐出的那一行必被真判据判非绿",
+      realBudget.skipped.length === 1 && !j2.isGreenSyncLine(realSkipLine),
+      "skipped=" + realBudget.skipped.length + " line=" + realSkipLine);
+
+    const gitKilledBlock = (() => {
+      const i = SRC.indexOf("if (gitKilled.length) {");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检：切到了 gitKilled 分支（切不到时下一条是空转，不是全绿）",
+      gitKilledBlock.includes("out.push("), "len=" + gitKilledBlock.length);
+    check("🔴 耦合半②（issue #256 账 3）：gitKilled 不走 BUDGET.skip()，它自拼的那一行必须仍以 ⏱ 起头" +
+      "（换成 ⓘ 即候选绿——实测那一改此前全套零红）",
+      /out\.push\("⏱ /.test(gitKilledBlock), gitKilledBlock.slice(0, 160));
+
     const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
     const aggAllGreen = j2.aggregateGreenSync(allGreen);
     check("aggregateGreenSync：全绿 → 聚合成一行「N 行全绿」（PR #237 F2 返修：不写「项检查」，" +
@@ -1846,6 +1891,25 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
           "实判 103 个路径 token；24 处指向空气（其中真相源声明段内 2 处 ⇒ 那几处该修）· " +
           "11 处相对路径没写清相对于谁 · 6 处因项目根不可解析未判（不计入发现，也不算通过） → " +
           "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+    }
+
+    // ── mutation ⑦（issue #256 账 3）：只废掉 NON_PASS_PATTERNS⑦ 这一条，证明它
+    // **单独**承重 —— mutation③ 摘的是整个 NON_PASS_PATTERNS 判据（那一条红了只说明
+    // 「这半判据接上了」，说不出第七条有没有用）。锚点连尾逗号一起取，且**断言与
+    // replace 共用同一个常量**（`[#守-锚点行尾]` ③：断言前缀串而 replace 用别的表达式
+    // 时，锚落空也会照常 PASS）。单行锚点，无跨行 `\n` 可被 CRLF 咬（同 ①②③）。
+    const ANCHOR7 = "/本次跳过 [1-9]\\d* 项/,";
+    check("mutation⑦锚点在源码里唯一存在", j2Block.split(ANCHOR7).length === 2,
+      "出现 " + (j2Block.split(ANCHOR7).length - 1) + " 次");
+    const j2Mut7 = loadJ2(j2Block.replace(ANCHOR7, "/(?!x)x/,"));
+    check("canary⑦：变异体还活着", !!j2Mut7 && typeof j2Mut7.isGreenSyncLine === "function");
+    if (j2Mut7) {
+      check("🔴 mutation⑦：只把第⑦条换成永不命中 ⇒ 「本次跳过 1 项」当场被误判成绿" +
+        "（证明这一条自己承重，不是躲在①～⑥背后凑数）",
+        j2Mut7.isGreenSyncLine(BUDGET_LINE(1)));
+      check("canary⑦·旁证：同一变异体下①～⑥照旧拦得住（证明这次只废了⑦，不是把整个数组弄坏）",
+        !j2Mut7.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 21 条够老了、" +
+          "该问一句「还有用吗」，0 条观察区候选够格升格 → 看清单"));
     }
   }
 }
