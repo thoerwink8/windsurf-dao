@@ -151,7 +151,11 @@ console.log("\n──── ③ 零样本 与 扫描面塌陷 必须分得开 �
   check("🔴 塌陷 ⇒ exit 5（与 0 / 1 都分得开），报文明说「是它瞎了」",
     b.code === 5 && b.marker.litfiles > 0 && b.marker.refs === 0 && /瞎了/.test(b.out) && /别把这次的 0 当通过/.test(b.out),
     JSON.stringify(b.marker) + b.out.slice(0, 300));
-  check("负控：全是历史引用时**不算塌陷**（主解析没瞎，只是这棵树上没有活指针）",
+  // 🔴 这条钉住的是**现状**，别把它读成"这样是对的"：判据里那个 `&& hist === 0` 让塌陷检测
+  // 在 `hist > 0` 时整个失效（主解析可以只瞎一半——丢光活指针、还认得出一条历史引用），
+  // 对抗实测 refs=0 litfiles=19 hist=1 ⇒ exit 0 而非 5。下面 D2 那条的标签里其实早就写着
+  // 同一个形态（"refs=0 而 exit 仍 0"）。修法归 issue #284，闸头注「退出码」段 5 那条有全文。
+  check("负控：这棵合成树上全是历史引用 ⇒ 不判塌陷（**当前行为**，理由的射程见上面那段）",
     (() => {
       const h = path.join(TMP, "histonly");
       w(path.join(h, "src", "q.js"), `// git show deadbee:${EVO}retired.md\n`);
