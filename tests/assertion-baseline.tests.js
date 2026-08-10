@@ -223,8 +223,15 @@ console.log("\n──── ④ 自检：基线读不到 / 一套都对不上 �
 }
 
 console.log("\n──── ⑤ 关闸也要出声：合成目录 + 没注入基线 → basegate=off 且打一行 ────");
+// 🔴 **这一段有一个前提断言，别删**：它要证的是「不归它管的那一跑，闸不装载」，
+//   而首版代码把判据写在了**读失败**那一支上 —— 症状随「真基线档存不存在」变：
+//   档还没生成时这一段全绿，档一生成就当场 exit 4（`tests/run-tests-tier.tests.js`
+//   实测一次红 33 条，同一份代码前后两跑结论相反）。故先钉住「档此刻确实在」，
+//   否则下面几条证到的只是「档不存在所以没开闸」，是一句废话。
 {
   const d = mkFixture("gateoff", { pass: 5 });
+  check("前提：真基线档此刻确实存在（不然下面三条退化成废话）",
+    fs.existsSync(REAL_BASELINE), REAL_BASELINE);
   const r = runRunner(d, null);
   check("没注入基线 + 合成 tests 目录 → 不判红（否则 run-tests 自测全线瘫痪）",
     r.code === 0 && r.sum && r.sum.exit === 0, JSON.stringify(r.sum));
