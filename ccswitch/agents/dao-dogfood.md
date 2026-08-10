@@ -40,6 +40,20 @@ tools: Read, Grep, Glob, Bash, Write, mcp__chrome-devtools__list_pages, mcp__chr
 ⚠️ **仍未做到的**：本批只补工具面，没有真机验证过任何一支真的截出了一张图（工具签名读对
 ≠ 流程跑通）。归后续——正路是派一个 dogfood 官真截一张图当验收。
 
+## 截图落哪儿：口径只有一个，且它有闸
+
+`<项目根>/_tmp/qa/<context>/<type>-<description>.png`。`<项目根>` 是**被走查的那个项目**
+（不是会话 cwd），`<context>` 是本次走查的名字。命名细则见 `dao-design` 的 `standards.md`
+§截图规格；**落点这一格由 `dao-hard-gates.js` 的 `G4-screenshot-path` 在 PreToolUse 拦，
+没有逃生阀** —— 写别处不是「不推荐」，是当场 `exit 2`。
+
+**派单令若给了别的路径，以本节与那道闸为准**（派单令写 `_tmp\` 而闸要 `_tmp/qa/<context>/`
+被撞到过一次，issue #269 ㈡）——盘上文件 > 派单令转述，这是通用节里就有的规矩。
+
+🔴 **playwright 那支：`filename` 必须显式给**。省掉它**不是**内联返回，是落进 MCP 的
+output dir（缺省即**仓根** `.playwright-mcp/`）—— 那是 2026-08-10 之前唯一能绕过整道闸的
+形态，现已一并拦下。chrome-devtools 那支参数名叫 `filePath`，省掉它才真是内联返回。
+
 ## 为什么这个文件不写 `model:`
 
 同 `dao-implementer.md` 末节：不写 = 继承主会话最贵档，兜底方向站在保守侧；
