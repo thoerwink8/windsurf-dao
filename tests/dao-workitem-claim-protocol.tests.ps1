@@ -39,10 +39,13 @@
     **不覆盖**（issue #215 弱处 F5-F13，F4 CRLF 已覆盖）：`·` 分隔符脆弱性（F5，含本批
     新增 `oldHost` 解析同样依赖它）· 撤回不比宿主（F6）· F7 另两处未复核 · 代码块/注释
     幽灵未灭（F8）· `/dao-resume` 缺"是否自己前任"判据（F9）· 字典序平局零实现（F10）·
-    命令④空集抛异常（F11）· mousse-cli 第三份副本未同步（F12）。**F3 现已补上"参与比较"
-    那半**（`Test-IsMySessionClaim`，场景 7）——但 `Get-EffectiveClaim` 的分组键仍然刻意
-    只按 `host`，不按 `host+session`：§二 line 128 写明认领单位是「机器+宿主」，新函数只
-    解决"这条已确认的有效认领是不是我自己会话发的"，不改变跨机器碰撞判定的分组粒度本身。
+    命令④空集抛异常（F11）· **F12 已销**（PR #264 对抗复核实测 `D:/frank/mousse-cli`
+    HEAD `6c3aef5`，`dao-claim` 与 `Get-EffectiveClaim` 双关键词零命中 ⇒ 那个仓根本没有
+    第三份副本，不欠一次跨仓同步）。**F3 现已补上"参与比较"
+    那半**（`Test-IsMySessionClaim`，场景 7）——`Get-EffectiveClaim` 的分组键**已由 issue
+    #250 扩成 `<机器名>/<宿主>`**（场景 8 就是它的覆盖面），但仍**不按 `session` 再拆细**：
+    §二「认领的单位是「机器 + 宿主」」那一条写明认领单位不是单个会话，新函数只
+    解决"这条已确认的有效认领是不是我自己会话发的"，不改变碰撞判定的分组粒度本身。
     ~~**本批顺带发现但未修的一格**：`Get-EffectiveClaim` 目前也不按 `runtime` 分组（只按
     `host`）……本文件不重复覆盖~~ **issue #250 已修，场景 8 就是它的覆盖面**（15 条）：
     分组键从 `host` 扩到 `<机器名>/<宿主>`，A2/A3/A5/B3 四种危险答案（同机另一宿主的 yield
@@ -133,8 +136,8 @@ Assert-True '0a Get-DaoMarks 提取长度（行尾归一化 LF 后 2938 字节�
     ($daoMarksLfLen -eq 2938) ("实测归一化后 {0} 字节（原始 {1}）" -f $daoMarksLfLen, $daoMarksSrc.Length)
 Assert-True '0b Get-EffectiveClaim 提取长度（行尾归一化 LF 后 1602 字节；issue #250 分组粒度修法后的实测值，此前为 1117（issue #215 重写），CRLF/LF 工作区皆成立）' `
     ($effClaimLfLen -eq 1602) ("实测归一化后 {0} 字节（原始 {1}）" -f $effClaimLfLen, $effClaimSrc.Length)
-Assert-True '0d Test-IsMySessionClaim 提取长度（行尾归一化 LF 后 859 字节；issue #215-F3 四轮修法新增函数，首次入库即锁死字节数，与 0a/0b 同一严格度）' `
-    ($mySessionLfLen -eq 859) ("实测归一化后 {0} 字节（原始 {1}）" -f $mySessionLfLen, $mySessionSrc.Length)
+Assert-True '0d Test-IsMySessionClaim 提取长度（行尾归一化 LF 后 905 字节；issue #250 返修把函数头注里"分组键仍然只按 host、这是刻意的"那句假话改真，注释在函数体内 ⇒ 字节数随之从 859 变 905。**这一格是长度 canary 的反向激励实例，照直记**：把盘上文字改真要付一次改测试期望值的代价，PR #264 对抗复核 A-1 已点名）' `
+    ($mySessionLfLen -eq 905) ("实测归一化后 {0} 字节（原始 {1}）" -f $mySessionLfLen, $mySessionSrc.Length)
 
 . ([scriptblock]::Create($daoMarksSrc))
 . ([scriptblock]::Create($effClaimSrc))
@@ -476,6 +479,9 @@ Assert-True '8h §六 命令④ 的租期锚点过滤同时带 host 与 runtime 
 # 已知弱处一起评审。这里钉住它们**现在的错误行为**：哪天有人做了环检测，这两条会变红，
 # 那正是该更新期望值的信号（同场景 5 G3/G4 的历史：先钉错值，修好后翻转）。
 # 不钉的话，这两个形态在盘上没有任何触发器，只活在 issue 正文里。
+# 🔴 **这两条指向的 issue #250 刻意保持 open**：修 A2/A3/A5/B3 的那个 PR 不带 `Closes #250`
+# （PR #264 对抗复核 B 项：写了 Closes 就等于在合并那一刻关掉 A4/A8 唯一的家，而"接管环检测
+# 那一批"当时并不存在——全量筛查零命中）。owner=帅，解冻条件=环检测与合法复活一起过设计评审。
 $marksA4 = Build-MarksFromComments @(
     [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = ('dao-takeover: AAA/cc ' + [char]0x00B7 + ' 原认领 BBB/cc 静默 9h') },
     [pscustomobject]@{ createdAt = '2026-08-09T01:01:00Z'; body = ('dao-takeover: BBB/cc ' + [char]0x00B7 + ' 原认领 AAA/cc 静默 9h') }
