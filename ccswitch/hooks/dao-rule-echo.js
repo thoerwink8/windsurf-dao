@@ -38,7 +38,10 @@
 //
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rule-echo.js
 // 由 settings.json 的 PostToolUse hook 调用（注册 JSON 片段见本文件末尾「注册片段」注释块）。
-// 自证：node tests/dao-rule-echo.tests.js（46 断言，两态 + 错误可见性）。
+// 自证：node tests/dao-rule-echo.tests.js（两态 + 错误可见性 + 逐条判据样本；
+//   **条数以那次运行末尾的 `=== 汇总: PASS=… ===` 为准，此处刻意不写数字**——
+//   原文写着「46 断言」，而盘上一路涨到 86 一次没跟上：手维护的枚举必过期，
+//   本仓已被咬过三次。改真出处 issue #272 件③，用户 2026-08-10 拍板 issue #70）。
 
 const fs = require("node:fs");
 const os = require("node:os");
