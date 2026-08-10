@@ -131,7 +131,6 @@ function Remove-ProfileBlock {
         }
     }
 
-    # trim trailing blank lines
     while ($newLines.Count -gt 0 -and $newLines[-1].Trim() -eq "") {
         $newLines = $newLines[0..($newLines.Count - 2)]
     }
@@ -172,15 +171,12 @@ switch ($Action) {
     "install" {
         Write-Host "`n=== dao-persona-manager install ===" -ForegroundColor Magenta
 
-        # 1. Create persona home
         Ensure-PersonaHome
         Write-Host "  Persona home: $PersonaHome" -ForegroundColor Gray
 
-        # 2. Default to dao mode
         $defaultMode = if ($Mode) { $Mode } else { "dao" }
         Do-Switch $defaultMode
 
-        # 3. Install profile block
         Install-ProfileBlock
 
         Write-Host "`n  DONE. Restart terminal, then 'claude' will auto-inject persona." -ForegroundColor Green
@@ -191,11 +187,9 @@ switch ($Action) {
     "uninstall" {
         Write-Host "`n=== dao-persona-manager uninstall ===" -ForegroundColor Magenta
 
-        # 1. Remove profile block
         Remove-ProfileBlock
         Write-Host "  Profile block removed" -ForegroundColor Green
 
-        # 2. Remove active prompt
         if (Test-Path $ActiveLink) { Remove-Item $ActiveLink -Force }
         if (Test-Path $StateFile) { Remove-Item $StateFile -Force }
         Write-Host "  Active prompt removed" -ForegroundColor Green

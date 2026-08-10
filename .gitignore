@@ -5,6 +5,11 @@ _scratch/
 tests/.fixtures-scope*/
 tests/.repro-sandboxes/
 _dao_backup/
+# playwright MCP 的 output dir：页面跳转就会在**仓根**长出它（页面快照 yml + 控制台日志），
+# 不必等到截图。清理钩子 dao-playwright-cleanup.js 只管 %LOCALAPPDATA% 那份，管不到这里。
+# 用户 2026-08-10 拍板（issue #269 ㈢）：这类自动产物永久不进版本库。
+# 会红的闸：tests/hard-gates.tests.js 的 G4 节断言 `git check-ignore` 对它 exit 0。
+.playwright-mcp/
 .dao-targets
 .DS_Store
 Thumbs.db

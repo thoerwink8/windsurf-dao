@@ -23,7 +23,6 @@ for (const entry of entries) {
 
   const udDir = path.join(MCP_DIR, entry)
   try {
-    // PowerShell Get-CimInstance 查找绑定此 user-data-dir 的 Chrome 进程
     const psCmd = `powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='chrome.exe'\\" | Where-Object { $_.CommandLine -like '*${entry}*' } | Select-Object -ExpandProperty ProcessId"`
     const output = execSync(psCmd, { encoding: 'utf8', timeout: 8000 }).trim()
 
