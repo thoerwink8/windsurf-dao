@@ -1282,6 +1282,20 @@
       "source_refs": [],
       "status": "active"
     },
+    "官抗-红集归因": {
+      "file": "ccswitch/rules/dao-officer-clauses.md",
+      "n": "2",
+      "first_seen": "08-10",
+      "trigger": "模板首行",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "PR #263 同一批 8 个变体内 2 例（H6 自己抓住 / D1 漏掉），复抗官用自己的锚点复刻 D1 独立坐实 `exit=1 PASS=59 FAIL=15`、逐条归因后新守护 1 条 / 位置副作用 14 条；同批 16 变体中除刻意做宽的那一发外红集全部 ≤2 —— 阈值 2 的全部出处就是这一批。2026-08-10 同日另一批 7 发（issue #70 第 12/13 件的先破再验）红集为 1/1/1/2/2/2/2 且逐条归因全部落在目标上，与该区间一致但**同样不是普查**",
+      "source_refs": [
+        "windsurf-dao issue #270 / PR #263",
+        "windsurf-dao issue #70 comment 5239449909（用户 2026-08-10 拍板第 10+11 件）"
+      ],
+      "status": "active"
+    },
     "官抗-改坏多形态": {
       "file": "ccswitch/rules/dao-officer-clauses.md",
       "n": "1",
