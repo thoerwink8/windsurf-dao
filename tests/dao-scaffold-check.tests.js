@@ -1711,11 +1711,16 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     check("🔴 isGreenSyncLine：以 ⓘ 开头但嵌了 ⚠（budgetLines 过渡期/providerHookLines deny 缺字段那种形态）→ 非绿",
       !j2.isGreenSyncLine("ⓘ hook 墙钟预算：...\n  ⚠ **过渡期**：..."));
 
-    // ── J2 判据②：NON_PASS_PATTERNS 六处已知「ⓘ 但明写不是通过」形态 ─────────
+    // ── J2 判据②：NON_PASS_PATTERNS ~~六~~七处已知「ⓘ 但不是语义上的绿」形态 ────
     // PR #237 对抗验证 5230986835 F1：①～⑤这五处此前会被判①「候选绿」直接判成真绿，
-    // 出问题时信息会被聚合行吞掉。每条配一个「命中态」（对应函数真实会吐出的文本）
-    // 与一个同源「不命中态」（同一函数的真正全过分支），双向夹住——只测命中会漏掉
-    // 「判据被放宽后连真绿也误伤」这个方向。
+    // 出问题时信息会被聚合行吞掉。**7 条里 5 条**（①③⑤⑥⑦）配了「命中态」（对应函数
+    // 真实会吐出的文本）+ 一个同源「不命中态」（同一函数的真正全过分支），双向夹住——
+    // 只测命中会漏掉「判据被放宽后连真绿也误伤」这个方向。
+    // 🔴 **②④ 没有自己的负控**（PR #271 对抗验证 5237938692 发⑧ `C5` 实测：塞一条恒命中的
+    //    过宽 pattern ⇒ 全体负控里只红 5 条，正是这个数）。②④ 的放宽方向今天靠负控⑥
+    //    顺带兜着（同一个函数的绿分支），不是它们自己的。本段此前写作「**每条**配一个
+    //    命中态与一个不命中态、双向夹住」——那是过强措辞，本批把「六」改成「七」时路过
+    //    这句话没顺手改真，2026-08-10 按对抗判词 T3 改真；补 ②④ 自己的负控归 issue #273（G6）。
     // ⑥（clauseStructureLines() 条款库观察线）是二轮对抗验证 5231324695 F5 指出的
     // 漏判——判词自己数的是 6 种，①～⑤这批返修只堵了 5 种，本轮补齐第 6 种，见下方。
     check("🔴 NON_PASS_PATTERNS①：providerHookLines() deny 面零样本 → 非绿（今天生产环境的真实形态）",
@@ -1761,6 +1766,73 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
         "实判 103 个路径 token，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。 → " +
         "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
 
+    // ── 账 1（issue #256，出处 PR #237 对抗验证 §八）：⑤ 的安全边界只有一个汉字宽 ─────
+    //    `处指向空气`（命中态）与 memoryRefLines() 真绿分支的 `没指向空气` 只差**前面
+    //    那一个字**。判据今天是对的，但没有任何东西钉着「它离误伤只有一个字」——下次
+    //    有人顺手把真绿那句话改顺一点，锚点就可能连带命中真绿分支而不自知。
+    //    对抗验证 mutation MC 已实测过这一格（锚点放宽成 `指向空气` ⇒ 负控⑤ 当场误判
+    //    并带累三条端到端断言），本批把那次一次性的 mutation **固化成常驻断言**。
+    //    取证路径刻意与上面三条不同（`[#守-自检独立]`）：上面喂的是手写夹具，
+    //    这里的真绿原文**直接从 hook 源码里抠**——手写夹具会随人心漂移，抠出来的跟着生产走。
+    const PAT5 = (j2.NON_PASS_PATTERNS || []).find((re) => re.source.indexOf("处指向空气") >= 0);
+    const GREEN5 = ((SRC.match(/"，零发现。[^"]*"/) || [])[0] || "").replace(/^"|"$/g, "");
+    check("自检（账1）：⑤ 锚点与 memoryRefLines() 真绿分支原文都抠出来了（抠不到时下面三条是空转，不是全绿）",
+      !!PAT5 && GREEN5.indexOf("指向空气") >= 0,
+      "pat=" + (PAT5 ? PAT5.source : "(未找到)") + " green=" + GREEN5.slice(0, 60));
+    if (PAT5 && GREEN5.indexOf("指向空气") >= 0) {
+      check("🔴 账1·⑤ 今天没有误伤：锚点对 memoryRefLines() 真绿分支的**生产原文**不命中",
+        !PAT5.test(GREEN5), GREEN5);
+      check("🔴 账1·⑤ 安全边界 = 1 个汉字：真绿原文含「指向空气」却不含「处指向空气」" +
+        "—— ⑤ 的全部判别力就压在「处」这一个字上（改真绿那句话前先看这条）",
+        GREEN5.indexOf("指向空气") >= 0 && GREEN5.indexOf("处指向空气") < 0, GREEN5);
+      const widened5 = new RegExp(PAT5.source.replace("处指向空气", "指向空气"));
+      check("🔴 账1·⑤ 余量证明（把对抗验证 MC 那次一次性 mutation 变成常驻）：" +
+        "锚点少掉「处」这一个字，真绿分支当场被误判成非绿",
+        widened5.test(GREEN5), "widened=" + widened5.source);
+    }
+
+    // ── 账 2（issue #256，出处 PR #237 对抗验证 §八）：③b / ⑤ 三个姊妹各只有 1 条断言在守 ──
+    //    实测出处：MA（摘掉 ③ 整条 pattern）红 2 条、MD（收窄 ⑤ 只留 skipped 姊妹）只红 1 条
+    //    ⇒ 每个姊妹身上就压着一条断言，那条断言被误删就静默失守，没有第二条兜底。
+    //    补的这一半**换了取证路径**，不是把同一件事再断言一遍（那是 ⑥b 那种同谓词冗余，
+    //    见账 5）：既有断言喂的是「一整行手写文本」给判据，本批断言的是**生产源码自己**——
+    //    姊妹子项还在不在那条被锚点覆盖的 return 上、它自己的原文还命不命中锚点。
+    //    两条路各自抓得到对方抓不到的坏法，所以是真冗余不是凑数：
+    //      · 有人把某个姊妹挪去另一条 return（锚点从此盖不到它）⇒ 只有本批会红，
+    //        手写夹具照旧含「另有：」、照旧 PASS；
+    //      · 有人同时改了生产措辞与锚点 ⇒ 只有手写夹具会红（它记的是历史真文本）。
+    const deadTodoBlock = (() => {
+      const i = SRC.indexOf("  const todo = [];");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检（账2·③）：切到了 deadGateLines() 的 todo 段（切不到时下面两条是空转，不是全绿）",
+      deadTodoBlock.indexOf("todo.join(") >= 0, "len=" + deadTodoBlock.length);
+    check("🔴 账2·③b 冗余半：孤儿子项仍 push 进那条带 ③ 锚点的 return 所用的同一个 todo 数组" +
+      "（哪天它被挪到别的 return，③ 就静默盖不住它，而上面那条手写夹具不会红）",
+      deadTodoBlock.indexOf('if (sOrphan !== "0") todo.push(') >= 0 &&
+      deadTodoBlock.indexOf('零死闸），另有：" + todo.join(') >= 0, deadTodoBlock.slice(0, 240));
+    check("🔴 账2·③a 冗余半：无法核验子项同理，仍挂在同一个 todo 数组上",
+      deadTodoBlock.indexOf('if (sUnver !== "0") todo.push(') >= 0, deadTodoBlock.slice(0, 240));
+
+    const memPartsBlock = (() => {
+      const i = SRC.indexOf("  const parts = [];");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检（账2·⑤）：切到了 memoryRefLines() 的 parts 段（切不到时下面三条是空转，不是全绿）",
+      memPartsBlock.indexOf("parts.join(") >= 0, "len=" + memPartsBlock.length);
+    // 三个姊妹各拿**自己的生产原文**去问真锚点，一条一格 —— 删掉任一条，另两格照旧在守。
+    for (const [sisName, sisHead] of [
+      ["⑤a dead（指向空气）", 'if (sDead !== "0") parts.push(sDead + "'],
+      ["⑤ ambiguous（相对路径）", 'if (sAmb !== "0") parts.push(sAmb + "'],
+      ["⑤b skipped（项目根不可解析）", 'if (sSkip !== "0") parts.push(sSkip + "'],
+    ]) {
+      const si = memPartsBlock.indexOf(sisHead);
+      const sisLit = si >= 0 ? memPartsBlock.slice(si + sisHead.length).split('"')[0] : "";
+      check("🔴 账2·" + sisName + " 冗余半：它自己的生产原文（从源码抠，非手写夹具）仍命中 ⑤ 锚点" +
+        "——与上面那条整行夹具断言互不替代：生产措辞被改动时本条红、夹具那条不红",
+        sisLit.length > 0 && !!PAT5 && PAT5.test(sisLit), sisName + " lit=" + JSON.stringify(sisLit));
+    }
+
     // ── ⑥ PR #237 对抗验证 5231324695 F5 返修：判词自己数的是 6 种「ⓘ 但不是语义上的绿」，
     //    上一轮（F1，5230986835）只覆盖了①～⑤共 5 处，遗漏第 6 处——clauseStructureLines()
     //    的条款库退役观察线（hook :899-902）。e2e 复现路径见判词：`-RetireAgeDays 15` ⇒
@@ -1779,6 +1851,120 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     check("负控⑥：同一函数真绿分支（retire=0 promote=0，零待办，hook :906-907）→ 仍判绿",
       j2.isGreenSyncLine("ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 12/12 个 .md，" +
         "合计 121 条，零违例（零条款的纯流程文件不检，故意不报红）"));
+
+    // ── 账 4（issue #256，出处 PR #237 对抗验证 5231324695 §十）：夹具顺带改动，
+    //    `scoped=0` 退化绿态从此无人覆盖 ─────────────────────────────────────────
+    //    PR #237 返修 denySampled 时把 mkGreenMetaRepo 的 `providers=0 scoped=0` 顺带改成
+    //    `1 1`（方向无害、更贴近生产），但 `scoped=0` 那一态从此没有夹具在覆盖。
+    //    **核对结论：不补「exit=0 + scoped=0」那条夹具，因为生产产不出它**——
+    //    settings-drift.js 对「没有 claude 型 provider」判 uncheckable ⇒ `providerExitCode` 返回 2
+    //    （它自己的自测「零样本·没有 claude 型 provider → uncheckable 且 exit=2（不是「无漂移」）」钉着），
+    //    而 hook 在 sExit==="2" 时走 ⚠「没查成」分支，**根本到不了那条 ⓘ 绿行**。
+    //    ⇒ 真正没人守的不是那条夹具，是**这条跨文件耦合本身**（与账 3 同族：hook 那行绿
+    //    安不安全，取决于另一个文件的退出码契约，而两边谁都没把它写下来）。本批钉它。
+    const driftSrc = (() => {
+      try { return fs.readFileSync(path.join(REPO, "ccswitch", "lib", "settings-drift.js"), "utf8"); }
+      catch (_) { return ""; }
+    })();
+    check("自检（账4）：读到了 settings-drift.js（读不到时下面两条是空转，不是全绿）",
+      driftSrc.length > 1000, "len=" + driftSrc.length);
+    check("🔴 账4·跨文件耦合钉子：settings-drift.js 仍对「零 claude 型 provider」判 uncheckable ⇒ exit=2 —— " +
+      "hook 那条 ⓘ 绿行不给 scoped=0 设防，全靠这个契约兜着：哪天它改成 exit=0，" +
+      "「一个 provider 都没比到」就会被报成绿并被聚合吞掉。本条在**消费方这一侧留一个可读的跨文件契约留痕**" +
+      "（读 hook 的人不必跑到 settings-drift.js 才知道那条绿行凭什么安全）。" +
+      "🔴 **射程照直写：它是文本存在性判据，只答形态①**——直接把那个 2 改成 0 它会红，但 " +
+      "settings-drift / provider-hooks-drift 两套的功能探针同样会红，谁先谁后取决于跑的顺序" +
+      "（本条此前写作「而本条会先翻红」，那个「先」在盘上不成立）；在它前面插一条抢先 return、" +
+      "字面原样保留 ⇒ **它根本不红**（PR #271 对抗验证 5237938692 发④ C3 实测 SURVIVED，纵深在那两套）。" +
+      "2026-08-10 按对抗判词 T1 改真；换成行为级（真调 providerExitCode({零 provider 态}) 断言 ===2）归 issue #273（G2）",
+      driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0 &&
+      driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0,
+      "exit2契约=" + (driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0) +
+      " 零样本自测=" + (driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0));
+    // 账 4 要的「显式记一句已知未覆盖」——做成机器核的形态而不是一句注释，这样它自己会过期：
+    // 今天 scoped=0 那条 ⓘ 绿行**确实判绿**（缺口在，只是不可达）。哪天有人给它补了
+    // NON_PASS pattern，本条翻红 ⇒ 那时把本条连同上面那段说明一起删掉，缺口就真的没了。
+    check("⚠️ 账4·已知缺口登记（不是在为它背书）：scoped=0 的 ⓘ 绿行今天仍被判绿 —— " +
+      "判据层没设防，安全性全部来自上面那条 exit=2 契约。补了 pattern 之后本条会红，届时删掉它",
+      j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
+        "且与应注册清单一致；deny 规则逐条一致（0 个 provider 与应注册清单）"));
+
+    // ── 账 5（issue #256，出处 PR #237 三轮复看 5231769847 §六）：⑥b 是同谓词冗余 ────────
+    //    M-R1b 实测坐实：把 ⑥ 锚点收窄成只认 retire 子项文案 ⇒ ⑥a/⑥b 同生同死、零红；
+    //    同一手法用在 ③ 上，孤儿子项 ③b 仍单红。⇒ ⑥b 不提供 ⑥a 之外的任何覆盖。
+    //    **但这个结论压着一个没人钉着的前提**：clauseStructureLines() 那条 return 把
+    //    retire/promote 两个子项**无条件拼接**（只有数字变），不像 ③⑤ 是条件 push。
+    //    前提一变，「⑥b 是冗余」立刻从真话变成假话，而盘上三处这么写的措辞不会有任何
+    //    东西提醒去改真 —— 那正是 [#反-写守卫] 说的「规则集只增不减，得专门给退役造触发器」。
+    //    本条就是那个触发器。⚠️ 它**不新增覆盖面**，守的是「一句已写下的结论何时过期」，
+    //    与上面①～⑦那些「判据够不够严」的断言不同类，别混读。
+    const retireBlock = (() => {
+      const i = SRC.indexOf("if (retire > 0 || promote > 0) {");
+      if (i < 0) return "";
+      const rest = SRC.slice(i);
+      const m = rest.match(/\r?\n  \}/);   // CRLF 安全：别写死 "\n  }"（[#守-锚点行尾]）
+      return m ? rest.slice(0, m.index) : "";
+    })();
+    check("自检（账5）：切到了 clauseStructureLines() 的 retire/promote 分支（切不到时下一条是空转，不是全绿）",
+      retireBlock.indexOf("条款库观察线") >= 0 && retireBlock.indexOf("return") >= 0,
+      "len=" + retireBlock.length);
+    check("🔴 账5·「⑥b 是同谓词冗余」这个结论的过期触发器：retire/promote 至今仍在同一条 return 里" +
+      "**无条件**拼接（分支体内零 if，两个子项文案都在）⇒ ⑥a/⑥b 同生同死，⑥b 确实守不住 ⑥a 之外的东西。" +
+      "改成 **`if (` 形态**的条件拼接即翻红 —— 那时 ⑥b 恢复独立判别力，去把盘上三处措辞改真" +
+      "（hook 注释 / ⑥b 断言名 / issue #256）。" +
+      "🔴 **射程照直写：第三个合取项只认 `if (`**——改成三元条件拼接（两个字面都在、分支体内零 if）时" +
+      "**本条自己是绿的**（PR #271 对抗验证 5237938692 发⑥ C4 实测；那一发红的是 tests:998 那条 PR #237 " +
+      "就已存在的 e2e 负控，纵深接住了，但它给的提示词不会把人引到「去把盘上三处措辞改真」这个动作上）。" +
+      "本条此前写作「改成条件拼接即翻红」，那句概括过强，2026-08-10 按对抗判词 T2 改真；" +
+      "换成直接断言输出形态（那条 return 里 promote 与文案之间无任何条件运算符）归 issue #273（G2）",
+      retireBlock.indexOf("条够老了") >= 0 && retireBlock.indexOf("条观察区候选够格升格") >= 0 &&
+      !/\bif\s*\(/.test(retireBlock.slice(retireBlock.indexOf("{") + 1)),
+      retireBlock.slice(0, 200));
+
+    // ── ⑦ issue #256 账 3（出处 PR #237 对抗验证 5231324695 §八 观察项 1）：
+    //    budgetSummaryLines() 的「本次跳过 N 项」是判词穷举读码时点名的**同族第七个候选**，
+    //    此前零直接守护 —— 靠「有跳过就必然另有一行 ⏱」这条**隐式耦合**兜底。本批把它
+    //    转成显式判据（hook NON_PASS_PATTERNS⑦）。两条断言的分工：正控证 N>0 那一格
+    //    真的被判非绿；负控⑦ 是这条新覆盖面的**误伤反例**（`[#官实-误伤反例]`）——
+    //    N=0 是每次会话都会出现的真绿行，锚点若写成 `\d+` 就会让元仓库**永不聚合**，
+    //    把 J2 整个废掉，而那种坏法不会有任何一条既有断言变红。
+    const BUDGET_LINE = (n) => "ⓘ hook 墙钟预算：本次已花 1200 ms / 宿主给 10000 ms" +
+      "（注册值：settings.json 里本 hook 的 timeout），扣 1500 ms 收尾余量后**余量 7300 ms**；" +
+      "本次跳过 " + n + " 项";
+    check("🔴 NON_PASS_PATTERNS⑦：budgetSummaryLines() 跳过项非零 → 非绿" +
+      "（此前无任何断言，靠「必然另有一行 ⏱」的隐式耦合兜底；重构成只计数不打印 ⏱ 就静默失守）",
+      !j2.isGreenSyncLine(BUDGET_LINE(1)));
+    check("🔴 NON_PASS_PATTERNS⑦：两位数同样命中（锚点是 `[1-9]\\d*` 不是单个数字）",
+      !j2.isGreenSyncLine(BUDGET_LINE(12)));
+    check("负控⑦（新覆盖面的误伤反例）：跳过 0 项是真绿，仍判绿 —— 锚点写成 `\\d+` 即在此翻红",
+      j2.isGreenSyncLine(BUDGET_LINE(0)));
+
+    // ── 账 3 的第二半：把那条**隐式耦合本身**钉住，而不只是绕开它 ──────────────
+    // 耦合原话：「记了一笔跳过 ⇒ 报文里必然另有一行 `⏱` 开头的非绿行 ⇒ 聚合天然不发生」。
+    // 它今天仍然成立，但 issue #256 实测证明**它的承重点一个断言都没有**：把 gitKilled
+    // 那一行的前缀从 `⏱` 换成 `ⓘ`（变体 M3b），**全套 279 条零红**——既有断言的正则
+    // （`/git 状态查询（[^）]*） \*\*没跑\*\*/`、`/\*\*没跑\*\*/`）里压根没有那个字符。
+    // 下面两条各守耦合的一条产出路径，**刻意用两套不同的取证方式**（`[#守-自检独立]`：
+    // 自检那一半不复用被守对象的解析）：
+    //   · BUDGET.skip() 那条 —— 直接 require 真 lib、真调一次，拿真返回值去问真判据；
+    //   · gitKilled 那条 —— 它不走 BUDGET.skip()（模板对它不成立，见 hook :390），
+    //     报文行是在 hook 里自己拼的，故只能源码级断言它仍以 ⏱ 起头。
+    const realBudget = require(path.join(REPO, "ccswitch", "lib", "hook-budget.js"))
+      .createBudget({ totalMs: 10000, reserveMs: 1500, startedAt: Date.now() });
+    const realSkipLine = realBudget.skip("某道检查", 200);
+    check("🔴 耦合半①（issue #256 账 3）：真 BUDGET.skip() 记一笔跳过的同时，吐出的那一行必被真判据判非绿",
+      realBudget.skipped.length === 1 && !j2.isGreenSyncLine(realSkipLine),
+      "skipped=" + realBudget.skipped.length + " line=" + realSkipLine);
+
+    const gitKilledBlock = (() => {
+      const i = SRC.indexOf("if (gitKilled.length) {");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检：切到了 gitKilled 分支（切不到时下一条是空转，不是全绿）",
+      gitKilledBlock.includes("out.push("), "len=" + gitKilledBlock.length);
+    check("🔴 耦合半②（issue #256 账 3）：gitKilled 不走 BUDGET.skip()，它自拼的那一行必须仍以 ⏱ 起头" +
+      "（换成 ⓘ 即候选绿——实测那一改此前全套零红）",
+      /out\.push\("⏱ /.test(gitKilledBlock), gitKilledBlock.slice(0, 160));
 
     const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
     const aggAllGreen = j2.aggregateGreenSync(allGreen);
@@ -1846,6 +2032,25 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
           "实判 103 个路径 token；24 处指向空气（其中真相源声明段内 2 处 ⇒ 那几处该修）· " +
           "11 处相对路径没写清相对于谁 · 6 处因项目根不可解析未判（不计入发现，也不算通过） → " +
           "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
+    }
+
+    // ── mutation ⑦（issue #256 账 3）：只废掉 NON_PASS_PATTERNS⑦ 这一条，证明它
+    // **单独**承重 —— mutation③ 摘的是整个 NON_PASS_PATTERNS 判据（那一条红了只说明
+    // 「这半判据接上了」，说不出第七条有没有用）。锚点连尾逗号一起取，且**断言与
+    // replace 共用同一个常量**（`[#守-锚点行尾]` ③：断言前缀串而 replace 用别的表达式
+    // 时，锚落空也会照常 PASS）。单行锚点，无跨行 `\n` 可被 CRLF 咬（同 ①②③）。
+    const ANCHOR7 = "/本次跳过 [1-9]\\d* 项/,";
+    check("mutation⑦锚点在源码里唯一存在", j2Block.split(ANCHOR7).length === 2,
+      "出现 " + (j2Block.split(ANCHOR7).length - 1) + " 次");
+    const j2Mut7 = loadJ2(j2Block.replace(ANCHOR7, "/(?!x)x/,"));
+    check("canary⑦：变异体还活着", !!j2Mut7 && typeof j2Mut7.isGreenSyncLine === "function");
+    if (j2Mut7) {
+      check("🔴 mutation⑦：只把第⑦条换成永不命中 ⇒ 「本次跳过 1 项」当场被误判成绿" +
+        "（证明这一条自己承重，不是躲在①～⑥背后凑数）",
+        j2Mut7.isGreenSyncLine(BUDGET_LINE(1)));
+      check("canary⑦·旁证：同一变异体下①～⑥照旧拦得住（证明这次只废了⑦，不是把整个数组弄坏）",
+        !j2Mut7.isGreenSyncLine("ⓘ 条款库观察线（dao.md + rules/ 合计 121 条）：有 21 条够老了、" +
+          "该问一句「还有用吗」，0 条观察区候选够格升格 → 看清单"));
     }
   }
 }

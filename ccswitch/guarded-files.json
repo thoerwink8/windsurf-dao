@@ -137,6 +137,7 @@
     {
       "file": "ccswitch/lib/settings-drift.js",
       "guards": [
+        "dao-scaffold-check.tests.js",
         "provider-hooks-drift.tests.js",
         "settings-drift.tests.js"
       ]
