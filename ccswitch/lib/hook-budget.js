@@ -9,7 +9,7 @@
 // 🔴 **这不是「反正现在很快」就没事**：实测过该 hook 的真实耗时，大头是条款库结构闸的多次
 //   PowerShell 冷起，而被检文件数 = `ccswitch/rules/` 下含条款的 .md 数量，**只会涨不会跌**——
 //   涨到当前 rules 目录全部长出条款时，耗时会贴着 10 s 这条线。具体测量数字（一次性快照，
-//   会随代码/语料演进过期）见 docs/evolution/comment-archive-20260809.md §hook-budget.js。
+//   会随代码/语料演进过期）见 docs/evolution/comment-archive-202608.md §C6。
 //
 // ── 宿主超时到底会发生什么（2026-08-04 实测，不是推断）───────────────────────
 // 造法：一个沙箱项目 `.claude/settings.json` 注册若干 SessionStart hook，`timeout: 3`，
@@ -229,8 +229,7 @@ function scanSettingsFile(settingsPath, baseNoExt) {
  * 显式单路径（既有调用方/单测）⇒ scopeReport 恒空 ⇒ 恒不带后缀，note 与旧版逐字节相同；
  * 自动多路径 ⇒ 逐处报「有没有找到我」，不管命中与否都报（项目级文件缺失也算「尝试过」，
  * 报 `project(读取失败)`）——「查过但零命中」与「压根没查」必须分得开。
- * （此前一版把分界线错判成「命中了几处」，订正过程见 docs/evolution/comment-archive-20260809.md
- * §hook-budget.js）
+ * （此前一版把分界线错判成「命中了几处」，订正过程见 docs/evolution/comment-archive-202608.md §C7）
  */
 function resolveRegisteredTimeoutMs(opts) {
   const o = opts || {};
