@@ -12,7 +12,6 @@ if (os.platform() !== 'win32') process.exit(0);
 const INSTALL_DIR = path.join(os.homedir(), 'AppData', 'Local', 'codegraph', 'current');
 const BIN = path.join(INSTALL_DIR, 'bin', 'codegraph.exe');
 
-// 1. CLI 不存在 → 装
 if (!fs.existsSync(BIN)) {
   try {
     execSync(
