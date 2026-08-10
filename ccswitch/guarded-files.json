@@ -9,8 +9,8 @@
     "回归网": "tests/guarded-files.tests.js",
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
-      "tests": 44,
-      "mutation_tests": 35,
+      "tests": 46,
+      "mutation_tests": 36,
       "files": 34
     }
   },
@@ -159,7 +159,8 @@
     {
       "file": "ccswitch/scripts/check-dead-gates.mjs",
       "guards": [
-        "dead-gates.tests.js"
+        "dead-gates.tests.js",
+        "mcp-health.tests.js"
       ]
     },
     {
