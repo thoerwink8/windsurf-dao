@@ -37,7 +37,6 @@ if (-not (Test-Path $DB)) {
     exit 1
 }
 
-# Read DB common_config_claude
 $dbRaw = & sqlite3 $DB "SELECT value FROM settings WHERE key='common_config_claude'" 2>$null
 if (-not $dbRaw) {
     Write-Host '[ERROR] common_config_claude not found in DB' -ForegroundColor Red
@@ -47,7 +46,6 @@ $dbJson = $dbRaw | ConvertFrom-Json
 $fileJson = Get-Content $SETTINGS -Raw -Encoding utf8 | ConvertFrom-Json
 
 if ($Direction -eq 'up') {
-    # settings.json → DB
     $source = 'settings.json'
     $target = 'CC Switch DB'
     $value = Get-Content $SETTINGS -Raw -Encoding utf8
@@ -58,12 +56,10 @@ if ($Direction -eq 'up') {
         exit 0
     }
 
-    # Backup DB
     $backup = "$DB.before-dao-sync-$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
     Copy-Item $DB $backup
     Write-Host "DB backup: $backup" -ForegroundColor DarkGray
 
-    # Write to DB
     $escapedValue = $value.Trim().Replace("'", "''")
     & sqlite3 $DB "UPDATE settings SET value='$escapedValue' WHERE key='common_config_claude'"
 
@@ -75,7 +71,6 @@ if ($Direction -eq 'up') {
     }
 
 } else {
-    # DB → settings.json
     $source = 'CC Switch DB'
     $target = 'settings.json'
 
@@ -92,12 +87,10 @@ if ($Direction -eq 'up') {
         exit 0
     }
 
-    # Backup settings.json
     $backup = "$SETTINGS.before-dao-sync-$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
     Copy-Item $SETTINGS $backup
     Write-Host "Settings backup: $backup" -ForegroundColor DarkGray
 
-    # Write DB content to settings.json
     $dbRaw | Out-File -FilePath $SETTINGS -Encoding utf8 -Force
 
     Write-Host "[OK] $source -> $target synced" -ForegroundColor Green

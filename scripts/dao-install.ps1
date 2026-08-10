@@ -127,7 +127,6 @@ if (Test-Command 'claude') {
         exit 1
     }
 
-    # 刷新 PATH
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $env:Path = "$machinePath;$userPath"
@@ -154,11 +153,9 @@ Write-Ok "~/.claude/ 目录就绪"
 
 Write-Step 4 $totalSteps '部署 dao 文件...'
 
-# dao.md（核心规则）
 Copy-Item (Join-Path $DaoSrc 'dao.md') (Join-Path $ClaudeDir 'dao.md') -Force
 Write-Ok 'dao.md（核心规则场域）'
 
-# Skills（目录结构，递归复制）
 $skillsSrc = Join-Path $DaoSrc 'skills'
 $skillsDst = Join-Path $ClaudeDir 'skills'
 if (Test-Path $skillsSrc) {
@@ -167,7 +164,6 @@ if (Test-Path $skillsSrc) {
         $dst = Join-Path $skillsDst $sd.Name
         if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
         Copy-Item $sd.FullName $dst -Recurse -Force
-        # 清理 __pycache__
         Get-ChildItem $dst -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "    skills/$($sd.Name)" -ForegroundColor DarkGray
@@ -175,13 +171,10 @@ if (Test-Path $skillsSrc) {
     Write-Ok "$($skillDirs.Count) 个技能"
 }
 
-# Commands
 Copy-DaoFiles (Join-Path $DaoSrc 'commands') (Join-Path $ClaudeDir 'commands') '*.md' 'commands'
 
-# Agents
 Copy-DaoFiles (Join-Path $DaoSrc 'agents') (Join-Path $ClaudeDir 'agents') 'dao-*.md' 'agents'
 
-# Hooks
 $hooksSrc = Join-Path $DaoSrc 'hooks'
 $hooksDst = Join-Path $ClaudeDir 'hooks'
 if (Test-Path $hooksSrc) {
@@ -194,16 +187,12 @@ if (Test-Path $hooksSrc) {
     if ($hooks.Count -gt 0) { Write-Ok "$($hooks.Count) 个 hooks 文件" }
 }
 
-# References（经文）
 Copy-DaoFiles (Join-Path $DaoSrc 'references') (Join-Path $ClaudeDir 'references') '*.md' 'references'
 
-# Styles
 Copy-DaoFiles (Join-Path $DaoSrc 'styles') (Join-Path $ClaudeDir 'styles') '*.md' 'styles'
 
-# Themes
 Copy-DaoFiles (Join-Path $DaoSrc 'themes') (Join-Path $ClaudeDir 'themes') '*.json' 'themes'
 
-# Persona
 Copy-DaoFiles (Join-Path $DaoSrc 'persona') (Join-Path $ClaudeDir 'persona') '*' 'persona'
 
 # ── Step 5: 配置 CLAUDE.md ──

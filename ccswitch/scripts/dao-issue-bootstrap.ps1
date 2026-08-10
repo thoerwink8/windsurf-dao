@@ -239,7 +239,6 @@ $TPL_INBOX = Remove-LeadingComment (Read-Utf8 $pathInbox)
 $TPL_HUB = Remove-LeadingComment (Read-Utf8 $pathHub)
 Write-Ok "canonical 模板 4 份已载入（标签基础集 $($LABELS.labels.base.Count) 个 / 扩展 $($LABELS.labels.extensions.Count) 个 / 看板 $($BOARD.columns.Count) 列）"
 
-# 选定要建的扩展标签
 $extTargets = @()
 if ($BaseLabelsOnly) {
     Write-Info '（-BaseLabelsOnly：不建任何扩展标签）'
