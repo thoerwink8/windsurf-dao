@@ -72,6 +72,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const RULES_DIR = path.join(os.homedir(), ".claude", "rules");
 
+// 下面那条诊断提示要报「哪些目录名会让被测 hook 静默」。**刻意不在这里抄一份清单**：
+// 这个列表在本仓已经有两份（hook 的 `EXCLUDE` + 测试自己那份独立副本，两份由测试里的
+// 字面对账夹住），再抄第三份就是纯漂移源——PR #263 对抗实测点名了这一处散文副本。
+// 改为运行时从 hook 源码里把那条字面**读出来**：读不到就指路，绝不猜也绝不留旧值。
+// 这里只读文本、只打印，不把它 new RegExp 回去当判据使（那才是复用被守对象的解析）。
+function excludeLiteralOfHook() {
+  try {
+    const src = fs.readFileSync(path.join(REPO, "ccswitch", "hooks", "dao-rule-echo.js"), "utf8");
+    const m = /^const EXCLUDE = (\/.*\/[a-z]*);\s*$/m.exec(src);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+
 // ── 参数 ────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const o = { concurrency: 6, rounds: 3, test: "tests/dao-rule-echo.tests.js", keep: false, selfcheck: false };
@@ -121,6 +134,15 @@ const RUN_ID = `${process.pid}-${crypto.randomBytes(3).toString("hex")}`;
 // dao-rule-echo.tests.js 自己在 P2 段注释里写过的坑，本脚本首版原样重演了一遍，
 // 由对照组 A′ 当场量出「真位置 PASS=65 vs 沙箱 PASS=55」才发现）。
 // 故落 `tests/` 下（与该测试自己的 `.fixtures-scope` 同一层级，已 gitignore）。
+//
+// ⚠️ 2026-08-10（issue #253）分工订正 —— **别把这一行读成「排除面问题由这里挡着」**：
+// 它只管**相对**落点。`REPO` 本身是从 `import.meta.url` 长出来的，**整棵树坐落在哪，沙箱
+// 就坐落在哪** ⇒ 把树 checkout 到 `<x>/_tmp/wt/` 之下，沙箱照样落进排除面，这一行拦不住。
+// 那一格现在由**被测文件自己**兜（`dao-rule-echo.tests.js` 的 `pickFixtureRoot()`：夹具落点
+// 命中排除面就退到系统临时目录）。本脚本这一侧**刻意不再复制那份判据**——两份会漂移，而
+// 兜底本来就在下面的对照组 A/A′：树摆错地方时它给的是 exit 2「无从归因」，不是假绿。
+// 实测（2026-08-10，树 = `<repo>/_tmp/verify253-excluded`）：修被测文件之前 exit 2
+//（真位置与沙箱同为 PASS=55 FAIL=10）；修好之后 exit 0，A′ 两侧同为 PASS=70 FAIL=0。
 const SANDBOX_BASE = path.join(REPO, "tests", ".repro-sandboxes", RUN_ID);
 
 const SHIM_DIRS = [["ccswitch", "hooks"], ["ccswitch", "lib"]];
@@ -209,6 +231,13 @@ try {
     process.stdout.write(`\n${(real.code !== 0 ? real : box).out}\n${(real.code !== 0 ? real : box).err}\n`);
     process.stdout.write("[repro] ✗ 串行基线就红了 ⇒ 无从归因：并行红也可能只是这个测试本身坏了。\n");
     process.stdout.write("[repro]   （出处：官抗节「比较基线必须先验证其本身是活的」——假基线比没有基线更危险）\n");
+    // 已知会走到这一支的一类原因，写出来省下一次从零诊断（前两任各在这里丢过一次会话）：
+    process.stdout.write(`[repro]   本次这棵树：${REPO}\n`);
+    process.stdout.write("[repro]   已知诱因之一（issue #253）：这棵树若坐落在被 dao-rule-echo hook 判为排除面的\n" +
+                         "[repro]   目录名**下面**，被测 hook 会把夹具判成「非规则文件」而静默 ⇒ 真位置与沙箱一起\n" +
+                         "[repro]   红同样的条数。\n" +
+                         `[repro]   那份目录名清单（本次现读自源码，不在这里抄第二遍）：${excludeLiteralOfHook() || "读不出来 ⇒ 见 ccswitch/hooks/dao-rule-echo.js 的 EXCLUDE"}\n` +
+                         "[repro]   分辨法：把同一份代码 checkout 到一个不含这些目录名的路径再跑一次，绿了就是它。\n");
     process.exit(2);
   }
   if (real.pass !== box.pass || real.fail !== box.fail) {
