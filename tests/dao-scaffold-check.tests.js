@@ -1966,6 +1966,100 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       "（换成 ⓘ 即候选绿——实测那一改此前全套零红）",
       /out\.push\("⏱ /.test(gitKilledBlock), gitKilledBlock.slice(0, 160));
 
+    // ── G4（issue #273，用户 2026-08-10 拍板「算发现，按同规修」）：budgetSummaryLines()
+    //    三条尾注的 ⚠ 齐平 ────────────────────────────────────────────────────────
+    // 病：同一次返回里塞三种尾注，`HOST_BUDGET.source` 那两条带 ⚠（阻断聚合），
+    // 「内层超时常量够不着」那条**不带** ⇒ 整行以 ⓘ 开头、不含 ⚠、不命中任何
+    // NON_PASS_PATTERN ⇒ 被判真绿、连同「N 行全绿」一起吞掉；而它**每次会话都出现**
+    // （注册 timeout=10 s ⇒ 有效截止线 8500 ms，五个内层常量全部大于它），测试侧当时零覆盖。
+    // 🔴 **取证方式刻意是行为级**（issue #273 G2 点名的那个样板：真切出函数体 → 真调一次 →
+    // 拿真返回值去问真判据）。源码文本匹配型断言对「文字还在但那段代码已被一条抢先的 return
+    // 绕过去」全失明——mutationB 就是那个形态，它在这里必须红。
+    const budgetFnBlock = (() => {
+      const a = SRC.indexOf("function budgetSummaryLines() {");
+      if (a < 0) return "";
+      const rest = SRC.slice(a);
+      const m = rest.match(/\r?\n\}/);   // CRLF 安全：别写死 "\n}"（[#守-锚点行尾]）
+      return m ? rest.slice(0, m.index + m[0].length) : "";
+    })();
+    // 六个内层常量当参数喂进去（真值多少由 tests:745 那组端到端断言守，这里只验判据形态）；
+    // BUDGET 用**真** hook-budget，不写替身——`unreachableConstants()` 的门限算错时这里要跟着错。
+    const loadBudgetFn = (block) => {
+      try {
+        return new Function("BUDGET", "HOST_BUDGET",
+          "CLAUSE_CHECK_TIMEOUT_MS", "DEAD_GATES_TIMEOUT_MS", "BUDGET_TIMEOUT_MS",
+          "PROVIDER_HOOKS_TIMEOUT_MS", "MEMORY_REFS_TIMEOUT_MS", "GIT_TIMEOUT_MS",
+          block + "\nreturn budgetSummaryLines;");
+      } catch (_) { return null; }
+    };
+    const HOST_OK = { source: "registered", note: "注册值：settings.json 里本 hook 的 timeout" };
+    const budgetLinesOf = (factory, totalMs, host) => {
+      if (!factory) return [];
+      const b = require(path.join(REPO, "ccswitch", "lib", "hook-budget.js"))
+        .createBudget({ totalMs, reserveMs: DEFAULT_RESERVE_MS, startedAt: Date.now() });
+      try {
+        return factory(b, host || HOST_OK, 20000, 30000, 20000, 30000, 20000, 5000)();
+      } catch (_) { return []; }
+    };
+    const budgetFn = loadBudgetFn(budgetFnBlock);
+    // 10000 ⇒ 有效截止线 8500，五个 20000/30000 常量够不着（生产实况）；60000 ⇒ 全都够得着。
+    const overLines = budgetLinesOf(budgetFn, 10000);
+    const roomyLines = budgetLinesOf(budgetFn, 60000);
+    check("自检（G4）：切到了 budgetSummaryLines() 且真调得动（切不到时下面几条是空转，不是全绿）",
+      !!budgetFn && overLines.length === 1 && /内层超时常量/.test(overLines[0]) &&
+      roomyLines.length === 1, "len=" + budgetFnBlock.length + " over=" + JSON.stringify(overLines).slice(0, 160));
+
+    check("🔴 G4 正控：内层超时常量够不着这条尾注带 ⚠（与同一次返回里另两条同规——" +
+      "此前唯独它不带，issue #273 G4）",
+      /⚠ 内层超时常量/.test(overLines[0] || ""), (overLines[0] || "").slice(0, 200));
+    check("🔴 G4 正控·行为级：拿真判据问那条真产出 → 判**非绿** ⇒ 不会被「N 行全绿」吞掉" +
+      "（对抗官实测的旧行为是 isGreenSyncLine=true）",
+      overLines.length === 1 && !j2.isGreenSyncLine(overLines[0]), (overLines[0] || "").slice(0, 200));
+    check("🔴 G4 齐平：三条尾注（fallback / registered-invalid / 内层常量够不着）逐条都带 ⚠、" +
+      "逐条都被真判据判非绿",
+      [budgetLinesOf(budgetFn, 60000, { source: "fallback", note: "n" }),
+        budgetLinesOf(budgetFn, 60000, { source: "registered-invalid", note: "n" }),
+        overLines].every((ls) => ls.length === 1 && /⚠/.test(ls[0]) && !j2.isGreenSyncLine(ls[0])),
+      JSON.stringify([budgetLinesOf(budgetFn, 60000, { source: "fallback", note: "n" })[0],
+        budgetLinesOf(budgetFn, 60000, { source: "registered-invalid", note: "n" })[0]]).slice(0, 300));
+    check("负控（G4 的误伤反例，`[#官实-误伤反例]`）：常量全都够得着时这条尾注压根不出现、整行仍判绿 —— " +
+      "⚠ 不是无条件加的，把注册 timeout 抬上去（或把常量降下来）之后 J2 照旧聚合",
+      roomyLines.length === 1 && !/内层超时常量/.test(roomyLines[0]) && j2.isGreenSyncLine(roomyLines[0]),
+      (roomyLines[0] || "").slice(0, 200));
+    // 基数闸（issue #273 G1 关闭条件㈡ 的同一手法）：逐条枚举式的守护，被守对象长出第 4 个
+    // 兄弟时天然静默 —— G4 这条尾注当初就是这么从「同族穷举」里溜过去的。
+    const tailPushCount = budgetFnBlock.split("tail.push(").length - 1;
+    check("🔴 G4 基数闸：budgetSummaryLines() 至今恰好 3 条尾注 —— 长出第 4 条即翻红，" +
+      "那时要么给它带上 ⚠，要么在这里写下它为什么不该带（三缺一那次就是没人被叫醒）",
+      tailPushCount === 3, "tail.push( 出现 " + tailPushCount + " 次");
+
+    // ── mutationA：把 ⚠ 摘掉（= 2026-08-10 之前的原样）⇒ 那一行当场变回「候选绿」──────
+    const MUT_A = 'tail.push("⚠ 内层超时常量 "';
+    check("mutationA 锚点在源码里唯一存在", budgetFnBlock.split(MUT_A).length === 2,
+      "出现 " + (budgetFnBlock.split(MUT_A).length - 1) + " 次");
+    const budgetMutA = loadBudgetFn(budgetFnBlock.replace(MUT_A, 'tail.push("内层超时常量 "'));
+    const mutALines = budgetLinesOf(budgetMutA, 10000);
+    check("canaryA：变异体还活着（照旧吐出那条尾注，不是被弄死后的假红）",
+      mutALines.length === 1 && /内层超时常量/.test(mutALines[0]), JSON.stringify(mutALines).slice(0, 160));
+    check("🔴 mutationA：⚠ 一摘，真判据当场把那一行判成绿（⇒ 会被聚合吞掉）—— 证明 ⚠ 是承重的，" +
+      "不是装饰",
+      mutALines.length === 1 && j2.isGreenSyncLine(mutALines[0]), (mutALines[0] || "").slice(0, 200));
+
+    // ── mutationB：第三种尾注整条消失（字面一个字没动，只在它前面把条件关掉）───────────
+    // 这一发专打「源码文本匹配型断言」的失明面：`tail.push("⚠ 内层超时常量 "` 这段文字仍在
+    // 源码里，任何 indexOf 型断言照绿，而生产侧那一行已经没了。
+    const MUT_B = "if (overBudget.length) {";
+    check("mutationB 锚点在源码里唯一存在", budgetFnBlock.split(MUT_B).length === 2,
+      "出现 " + (budgetFnBlock.split(MUT_B).length - 1) + " 次");
+    const budgetMutB = loadBudgetFn(budgetFnBlock.replace(MUT_B, "if (false && overBudget.length) {"));
+    const mutBLines = budgetLinesOf(budgetMutB, 10000);
+    check("canaryB：变异体还活着（照旧返回一行墙钟预算汇总，只是尾注没了）",
+      mutBLines.length === 1 && /hook 墙钟预算/.test(mutBLines[0]), JSON.stringify(mutBLines).slice(0, 160));
+    check("🔴 mutationB：尾注整条消失（字面原样保留）⇒ 上面正控的两条当场落空 —— " +
+      "证明它们守的是**产出**不是源码文字",
+      mutBLines.length === 1 && !/内层超时常量/.test(mutBLines[0]) && j2.isGreenSyncLine(mutBLines[0]),
+      (mutBLines[0] || "").slice(0, 200));
+
     const allGreen = ["ⓘ 死闸检测绿：a", "ⓘ always-on 字节预算：b", "ⓘ per-provider 漂移检查绿：c"];
     const aggAllGreen = j2.aggregateGreenSync(allGreen);
     check("aggregateGreenSync：全绿 → 聚合成一行「N 行全绿」（PR #237 F2 返修：不写「项检查」，" +
@@ -2119,13 +2213,31 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   // 元仓库沙箱需要读到自己在 settings.json 里的注册（否则 budgetSummaryLines() 会报
   // 「⚠ 这个总预算是猜的」，那一行嵌 ⚠、会阻断聚合）——用独立 fakeHome，不复用共享
   // FAKE_HOME（那份只注册了 REGISTERED 探针名）。
-  const greenHome = path.join(SANDBOX, "green-fakehome");
-  fs.mkdirSync(path.join(greenHome, ".claude"), { recursive: true });
-  fs.writeFileSync(path.join(greenHome, ".claude", "settings.json"), JSON.stringify({
-    hooks: { SessionStart: [{ matcher: "startup", hooks: [
-      { type: "command", command: 'node "${PROJECT_ROOT}/ccswitch/hooks/dao-scaffold-check.js"', timeout: 10 },
-    ] }] },
-  }), "utf8");
+  function mkFakeHome(tag, timeoutSec) {
+    const home = path.join(SANDBOX, "green-fakehome-" + tag);
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({
+      hooks: { SessionStart: [{ matcher: "startup", hooks: [
+        { type: "command", command: 'node "${PROJECT_ROOT}/ccswitch/hooks/dao-scaffold-check.js"', timeout: timeoutSec },
+      ] }] },
+    }), "utf8");
+    return home;
+  }
+  // 🔴 **注册的 timeout 从真常量算出来，不写死**（2026-08-10 · issue #273 G4）：
+  // 「内层超时常量够不着」那条尾注从本批起带 ⚠（与同族另两条同规），它一出现就阻断聚合。
+  // 于是「六道全绿」这个夹具的前提多了一格：**一个内层常量都不许够不着**。此前注册写 10 s
+  // （有效截止线 8500）而五个常量是 20000/30000 ⇒ 那条尾注每次都在，只是当时不带 ⚠、被判
+  // 成绿、悄悄混进了「全绿」——夹具名叫全绿而实际是「五道绿 + 一条没人看见的告警」，与
+  // PR #237 F1 修的 denySampled=0 那格同病。写死一个大数会在常量长大时把这一段变成一条
+  // 指向错误方向的红（读起来像「聚合坏了」），故按真常量算，并留一条自检钉住解析没落空。
+  const innerTimeouts = [...fs.readFileSync(HOOK, "utf8")
+    .matchAll(/const\s+\w*TIMEOUT_MS\s*=\s*(\d+);/g)].map((m) => Number(m[1]));
+  check("自检（G4 夹具）：从 hook 源码解析到内层超时常量（解析落空时下面的「全绿」会变成一条假绿）",
+    innerTimeouts.length >= 6 && Math.max(...innerTimeouts) > 0, JSON.stringify(innerTimeouts));
+  const greenTimeoutSec = Math.ceil((Math.max(...innerTimeouts) + DEFAULT_RESERVE_MS) / 1000) + 1;
+  const greenHome = mkFakeHome("roomy", greenTimeoutSec);
+  // 对照组的家目录：注册值是**生产实况的 10 s**，其余一字不差 —— 唯一变量就是这个数。
+  const tightHome = mkFakeHome("tight", 10);
 
   const greenHookCopy = mkGreenMetaRepo("all-green", false);
   const greenRoot = path.resolve(path.dirname(greenHookCopy), "..", "..");
@@ -2173,6 +2285,24 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   check("端到端·负控②：出问题时信息零减少——其余几道绿行原文仍在",
     /死闸检测绿|条款库结构闸绿/.test(dzc) && /always-on 字节预算/.test(dzc) && /memory 指针一致性/.test(dzc),
     "ctx=" + dzc.slice(0, 900));
+
+  // ── 负控③（2026-08-10 · issue #273 G4）：内层超时常量够不着 → 不聚合 ──────────────
+  // **单变量对照**：与上面「全绿」跑的是同一棵夹具树、同一份 hook，唯一的差别是家目录里
+  // 注册的 timeout（生产实况 10 s vs 算出来的宽预算）。10 s ⇒ 有效截止线 8500 ⇒ 五个内层
+  // 常量全部够不着 ⇒ 那条尾注出现。这一格是**生产环境每次会话都在走的那条路**，而在
+  // 2026-08-10 之前它以 ⓘ 开头、不含 ⚠、不命中任何 NON_PASS_PATTERN，被聚合整条吞掉。
+  // 与源码级那几条的分工同负控②：那边证判据/产出本身对，这里证调用点真的接上了。
+  const tightStateSubdir = path.posix.join(path.basename(SANDBOX), "tight-state");
+  const tightRes = run(greenRoot, { HOME: tightHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: tightStateSubdir }, greenHookCopy);
+  const tc = ctx(tightRes);
+  check("端到端·负控③：hook 自己退出 0", tightRes.code === 0, "code=" + tightRes.code);
+  check("🔴 端到端·负控③：注册 10 s（生产实况）⇒ 内层超时常量够不着那条尾注出现、带 ⚠ ⇒ 不聚合",
+    /⚠ 内层超时常量/.test(tc) && !/行全绿/.test(tc), "ctx=" + tc.slice(0, 900));
+  check("端到端·负控③：那条尾注原文仍在、没被吞掉（五个常量逐个点名 + 有效截止线那个数）",
+    /CLAUSE_CHECK_TIMEOUT_MS=20000ms/.test(tc) && /有效截止线 8500 ms/.test(tc), "ctx=" + tc.slice(0, 900));
+  check("端到端·负控③·对照：同一棵树、同一份 hook，只把注册 timeout 抬到够用 ⇒ 聚合恢复" +
+    "（证明这条尾注是唯一变量，不是夹具坏了）",
+    /ⓘ \d+ 行全绿/.test(gc) && !/内层超时常量/.test(gc), "green ctx=" + gc.slice(0, 400));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
