@@ -79,6 +79,10 @@ node ccswitch/scripts/render-clauses.mjs --role <官种>
    **判「通过」写 `-eq 0`，别写 `-le 2`**；拿得到 `exit 0` 的只有 `--env` 那一条。
    退出码**六态**与契约正文在 `scripts/run-tests.mjs` 头注（此处此前写「五态」而漏了
    `5 = 找不到 tests/ 目录`，2026-08-08 · issue #179 同批订正）。
+   🔴 **2026-08-10 · issue #268：`1` 多了一个来源，态数没变** —— 「**一条断言都没红，但这一套
+   比基线少跑了 N 条**」也走 1（末行另有 `baselow=` / `basegate=` 两个字段）。**改了 `tests/`
+   就要重生成基线**（下面第三节末尾那条命令），否则 `tests/assertion-baseline.tests.js`
+   的名册对账当场红 —— 那是这个新派生物的同步触发器，刻意不靠人记得。
 2. **`--env` 要求串行环境**（没有别的官在跑测试、cc-switch GUI 没在写库、没人在改
    `~/.claude/settings.json`）。合并链 `ccswitch/scripts/dao-pr-merge.ps1` 的 `-VerifyCommand`
    必须传 `--env`。
@@ -125,7 +129,10 @@ fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，�
   **两处都只是纵深，不是全覆盖**（一份新文件若既没登记、台账里也还没有它的条目，只有 hook 那行 ⓘ 会响）。
 - **改 `ccswitch/dao.md` 后另跑一次** `node ccswitch/scripts/check-alwayson-budget.mjs`
   （常驻注入的字节预算闸）。
-- **改 `tests/` 后另跑** `node ccswitch/scripts/gen-guarded-files.mjs`（`--check` 防漂移）。
+- **改 `tests/` 后另跑两件**（少跑哪一件都会在下次 run-tests 里红）：
+  ① `node ccswitch/scripts/gen-guarded-files.mjs`（被 mutation 守护的文件清单，`--check` 防漂移）
+  ② `node scripts/run-tests.mjs --write-baseline` **与** `node scripts/run-tests.mjs --env --write-baseline`
+     （断言条数下界基线，**两层各写各的**；2026-08-10 · issue #268）
 - 改任何 ccswitch skill 后跑 `node scripts/dao-smoke.mjs`。
 
 **一个已实测的坑，写在这里省下一次返工**：条款行**一行只能有一个 slug**——正文里引用别的条款时

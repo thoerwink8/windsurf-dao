@@ -73,6 +73,13 @@ node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全�
                                               #   PS 层串行 ≈100-150s（同机不同次波动；套数随 tests/ 实况增长，以 `--list` 为准），
                                               #   故它比默认层慢；要求串行环境（见下）。**当前有几套以 `--list` 为准，此处不记数**
 node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
+node scripts/run-tests.mjs [--env] --write-baseline
+                                              # 用**本次这一跑**的条数重写 `scripts/assertion-baseline.json`
+                                              #   （断言条数下界基线，2026-08-10 · issue #268）。**两层各写各的**：
+                                              #   不带 --env 写 `default` 那一格，带 --env 写 `env` 那一格。
+                                              #   ⚠ **改了 tests/ 就要重生成**，否则 `tests/assertion-baseline.tests.js`
+                                              #     的名册对账当场红（那是它的同步触发器，不靠人记得）
+                                              #   ⚠ 有测试红时**拒写**（从红的一跑取基线 = 把缺陷焊进去）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\<名>.tests.ps1   # 单跑一套 PS 测试（自带 Assert-*，独立可跑）
                                               #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
@@ -163,12 +170,19 @@ cc-switch GUI 的库）—— **它不制造污染，它被别人的正常活动
 | `node scripts/run-tests.mjs` | 全部 `.tests.js`（环境敏感断言被 defer）+ **无标记的 `.tests.ps1`** | **恒 2**（「本次没跑完」） |
 | `node scripts/run-tests.mjs --env` | 全部，含环境敏感断言 + **全部 `.tests.ps1`** | 全过 **0** |
 
-**退出码六态**：`0` 全跑全过 · `1` 有测试红（node 侧或 PS 侧）· `2` 无红但有 defer / 有 PS 套没跑 ·
-`3` 用法错（一套都没跑）· `4` 分层自检失败（静态声明与运行期计数对不上，或某 PS 套 exit 0 却零输出）·
+**退出码六态**：`0` 全跑全过 · `1` 有测试红（node 侧或 PS 侧）**或某套断言条数跌破基线** ·
+`2` 无红但有 defer / 有 PS 套没跑 ·
+`3` 用法错（一套都没跑）· `4` 分层自检失败（静态声明与运行期计数对不上，或某 PS 套 exit 0 却零输出，
+**或断言条数基线没读成 / 一套都没对上**）·
 `5` 找不到 tests/ 目录（一套都没跑，刻意不与 2 合流）。**判「通过」写 `-eq 0`，别写 `-le 2`。**
-（此处此前写「五态」而漏了 `5` —— 代码与回归网从一开始就有它，是头注与本文件两处同时漏记；2026-08-08 订正。）
-契约正文在 `scripts/run-tests.mjs` 头注（唯一真相源），回归网 `tests/run-tests-tier.tests.js`。
-末行 `RUN_TESTS_SUMMARY` 尾部另有 `psfiles=` / `psred=` / `psskip=` 三个字段（跑了几套 / 红几套 / 没跑几套）。
+（此处此前写「五态」而漏了 `5` —— 代码与回归网从一开始就有它，是头注与本文件两处同时漏记；2026-08-08 订正。
+**2026-08-10 · issue #268 给 1 与 4 各加了一个来源，态数没变**：加的是「一条断言都没红，但这一套
+比基线少跑了 N 条」——那种情形下没有任何断言失败，不并进 1 就会掉进 0 或 2，与「全跑全过」不可区分。）
+契约正文在 `scripts/run-tests.mjs` 头注（唯一真相源），回归网 `tests/run-tests-tier.tests.js`
+与 `tests/assertion-baseline.tests.js`。
+末行 `RUN_TESTS_SUMMARY` 尾部另有 `psfiles=` / `psred=` / `psskip=` 三个字段（跑了几套 / 红几套 / 没跑几套），
+再往后是 `baselow=`（几套跌破基线）/ `basegate=`（`on` 查了 · `off` 没启用 · `fail` 想查却没查成 ·
+`write` 这一跑是去重写基线的）—— **三种「没查」刻意不合流成一个 0**。
 
 🔴 **别把 2 当成绿**。写 `@(0,2)` 这种放行谓词，分层就退化成「接受偶发红」的另一种形态。
 **当前哪些文件有环境敏感层** ⇒ `node scripts/run-tests.mjs --list` 会逐条标注，以那份为准
