@@ -1786,6 +1786,48 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
         widened5.test(GREEN5), "widened=" + widened5.source);
     }
 
+    // ── 账 2（issue #256，出处 PR #237 对抗验证 §八）：③b / ⑤ 三个姊妹各只有 1 条断言在守 ──
+    //    实测出处：MA（摘掉 ③ 整条 pattern）红 2 条、MD（收窄 ⑤ 只留 skipped 姊妹）只红 1 条
+    //    ⇒ 每个姊妹身上就压着一条断言，那条断言被误删就静默失守，没有第二条兜底。
+    //    补的这一半**换了取证路径**，不是把同一件事再断言一遍（那是 ⑥b 那种同谓词冗余，
+    //    见账 5）：既有断言喂的是「一整行手写文本」给判据，本批断言的是**生产源码自己**——
+    //    姊妹子项还在不在那条被锚点覆盖的 return 上、它自己的原文还命不命中锚点。
+    //    两条路各自抓得到对方抓不到的坏法，所以是真冗余不是凑数：
+    //      · 有人把某个姊妹挪去另一条 return（锚点从此盖不到它）⇒ 只有本批会红，
+    //        手写夹具照旧含「另有：」、照旧 PASS；
+    //      · 有人同时改了生产措辞与锚点 ⇒ 只有手写夹具会红（它记的是历史真文本）。
+    const deadTodoBlock = (() => {
+      const i = SRC.indexOf("  const todo = [];");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检（账2·③）：切到了 deadGateLines() 的 todo 段（切不到时下面两条是空转，不是全绿）",
+      deadTodoBlock.indexOf("todo.join(") >= 0, "len=" + deadTodoBlock.length);
+    check("🔴 账2·③b 冗余半：孤儿子项仍 push 进那条带 ③ 锚点的 return 所用的同一个 todo 数组" +
+      "（哪天它被挪到别的 return，③ 就静默盖不住它，而上面那条手写夹具不会红）",
+      deadTodoBlock.indexOf('if (sOrphan !== "0") todo.push(') >= 0 &&
+      deadTodoBlock.indexOf('零死闸），另有：" + todo.join(') >= 0, deadTodoBlock.slice(0, 240));
+    check("🔴 账2·③a 冗余半：无法核验子项同理，仍挂在同一个 todo 数组上",
+      deadTodoBlock.indexOf('if (sUnver !== "0") todo.push(') >= 0, deadTodoBlock.slice(0, 240));
+
+    const memPartsBlock = (() => {
+      const i = SRC.indexOf("  const parts = [];");
+      return i >= 0 ? SRC.slice(i, i + 1200) : "";
+    })();
+    check("自检（账2·⑤）：切到了 memoryRefLines() 的 parts 段（切不到时下面三条是空转，不是全绿）",
+      memPartsBlock.indexOf("parts.join(") >= 0, "len=" + memPartsBlock.length);
+    // 三个姊妹各拿**自己的生产原文**去问真锚点，一条一格 —— 删掉任一条，另两格照旧在守。
+    for (const [sisName, sisHead] of [
+      ["⑤a dead（指向空气）", 'if (sDead !== "0") parts.push(sDead + "'],
+      ["⑤ ambiguous（相对路径）", 'if (sAmb !== "0") parts.push(sAmb + "'],
+      ["⑤b skipped（项目根不可解析）", 'if (sSkip !== "0") parts.push(sSkip + "'],
+    ]) {
+      const si = memPartsBlock.indexOf(sisHead);
+      const sisLit = si >= 0 ? memPartsBlock.slice(si + sisHead.length).split('"')[0] : "";
+      check("🔴 账2·" + sisName + " 冗余半：它自己的生产原文（从源码抠，非手写夹具）仍命中 ⑤ 锚点" +
+        "——与上面那条整行夹具断言互不替代：生产措辞被改动时本条红、夹具那条不红",
+        sisLit.length > 0 && !!PAT5 && PAT5.test(sisLit), sisName + " lit=" + JSON.stringify(sisLit));
+    }
+
     // ── ⑥ PR #237 对抗验证 5231324695 F5 返修：判词自己数的是 6 种「ⓘ 但不是语义上的绿」，
     //    上一轮（F1，5230986835）只覆盖了①～⑤共 5 处，遗漏第 6 处——clauseStructureLines()
     //    的条款库退役观察线（hook :899-902）。e2e 复现路径见判词：`-RetireAgeDays 15` ⇒
