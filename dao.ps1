@@ -349,7 +349,6 @@ function Invoke-LinkClaude {
                         $skipped++
                         continue
                     }
-                    # 指向错误目标 → 自愈：删旧建新
                     $oldTarget = $existing.Target
                     if ($IsDryRun) {
                         Write-Host "    [DRYRUN] fix $($it.Name)  ($oldTarget -> $($it.FullName))" -ForegroundColor Yellow
@@ -435,7 +434,6 @@ function Invoke-LinkClaude {
         foreach ($ref in $refFiles) {
             $dstFile = Join-Path $refDst $ref.Name
             if (Test-Path $dstFile) {
-                # 对比文件内容，如果不同则更新
                 $srcHash = Get-FileMD5 $ref.FullName
                 $dstHash = Get-FileMD5 $dstFile
                 if ($srcHash -eq $dstHash) {
@@ -1188,13 +1186,11 @@ function Invoke-Codegraph {
                 Start-Sleep -Milliseconds 500
             }
 
-            # 清理旧目录
             if (Test-Path $installDir) {
                 Remove-Item -Recurse -Force $installDir -Confirm:$false -ErrorAction SilentlyContinue
             }
             Ensure-Dir $installDir
 
-            # 获取最新版本号
             Write-Host "    获取最新版本..." -ForegroundColor Cyan
             $version = $null
             try {
@@ -1207,7 +1203,6 @@ function Invoke-Codegraph {
                 Write-Host "    [error] 无法获取版本号（GitHub 可能限流）" -ForegroundColor Red
                 $err++
             } else {
-                # 判断架构
                 $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
                 $zipName = "codegraph-win32-$arch.zip"
                 $url = "https://github.com/$repo/releases/download/$version/$zipName"
@@ -1341,7 +1336,6 @@ function Invoke-SetTerminal {
         $settingsFile = Join-Path $c.Dir "settings.json"
         Write-Host "  [$($c.Name)] $settingsFile" -ForegroundColor Cyan
 
-        # 已经是 Git Bash？
         if ((Test-Path $settingsFile) -and
             (Get-Content $settingsFile -Raw -Encoding UTF8) -match '"terminal\.integrated\.defaultProfile\.windows"\s*:\s*"Git Bash"') {
             Write-Host "    [skip ] already Git Bash" -ForegroundColor DarkGray

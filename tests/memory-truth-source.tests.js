@@ -510,7 +510,6 @@ console.log("\n=== 并轨 · 投递可达性（「源码里有调用点」是弱
   }
 }
 
-// 清理
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} DEFER=${defer} ===`);

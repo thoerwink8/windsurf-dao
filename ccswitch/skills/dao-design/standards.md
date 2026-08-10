@@ -472,7 +472,12 @@ Mode C · Construct（构建态）：设计工具 = 草图 → 分层构建设�
 
 ## 截图规格（自 dao.md 下沉，2026-07-07）
 
-> dao.md 只留一行铁律：浏览器 MCP 截图必须落 `<项目根>/_tmp/qa/<context>/`。本节是规格细则。
+> ~~dao.md 只留一行铁律：浏览器 MCP 截图必须落 `<项目根>/_tmp/qa/<context>/`。~~
+> **2026-08-10 改真（issue #269 ㈡）：那行铁律已不在 dao.md 里**——dao.md 动·目·观现在只剩
+> 「截图前 Read `rules/dao-gui-verify.md`」，路径这一格出文本层了。**此刻的真相源是
+> `ccswitch/hooks/dao-hard-gates.js` 的 `G4-screenshot-path`**（PreToolUse `exit 2` 拦，
+> 无逃生阀），回归网 `tests/hard-gates.tests.js` §G4。本节是规格细则（`<context>` 怎么取名、
+> 文件怎么命名），**闸只管落在不在 `_tmp/qa/` 下，管不到命名——那一半仍然只有本节的文字**。
 
 - **`<context>` 命名**：默认 `<branch>--<topic>` 双段标识（branch = `git branch --show-current` 的 kebab-case，`/` → `-`；topic = loop 话题 / sync / 任务描述 slug）。特例：全量 fidelity 审计固定 `fidelity`、纯调试固定 `debug`。示例：`feat-workspace-rewrite--sync`、`main--async-state`
 - **文件命名**：`<type>-<description>.png`，type 从 `audit|compare|verify|debug|export` 五选一
