@@ -1847,6 +1847,32 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       j2.isGreenSyncLine("ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 12/12 个 .md，" +
         "合计 121 条，零违例（零条款的纯流程文件不检，故意不报红）"));
 
+    // ── 账 5（issue #256，出处 PR #237 三轮复看 5231769847 §六）：⑥b 是同谓词冗余 ────────
+    //    M-R1b 实测坐实：把 ⑥ 锚点收窄成只认 retire 子项文案 ⇒ ⑥a/⑥b 同生同死、零红；
+    //    同一手法用在 ③ 上，孤儿子项 ③b 仍单红。⇒ ⑥b 不提供 ⑥a 之外的任何覆盖。
+    //    **但这个结论压着一个没人钉着的前提**：clauseStructureLines() 那条 return 把
+    //    retire/promote 两个子项**无条件拼接**（只有数字变），不像 ③⑤ 是条件 push。
+    //    前提一变，「⑥b 是冗余」立刻从真话变成假话，而盘上三处这么写的措辞不会有任何
+    //    东西提醒去改真 —— 那正是 [#反-写守卫] 说的「规则集只增不减，得专门给退役造触发器」。
+    //    本条就是那个触发器。⚠️ 它**不新增覆盖面**，守的是「一句已写下的结论何时过期」，
+    //    与上面①～⑦那些「判据够不够严」的断言不同类，别混读。
+    const retireBlock = (() => {
+      const i = SRC.indexOf("if (retire > 0 || promote > 0) {");
+      if (i < 0) return "";
+      const rest = SRC.slice(i);
+      const m = rest.match(/\r?\n  \}/);   // CRLF 安全：别写死 "\n  }"（[#守-锚点行尾]）
+      return m ? rest.slice(0, m.index) : "";
+    })();
+    check("自检（账5）：切到了 clauseStructureLines() 的 retire/promote 分支（切不到时下一条是空转，不是全绿）",
+      retireBlock.indexOf("条款库观察线") >= 0 && retireBlock.indexOf("return") >= 0,
+      "len=" + retireBlock.length);
+    check("🔴 账5·「⑥b 是同谓词冗余」这个结论的过期触发器：retire/promote 至今仍在同一条 return 里" +
+      "**无条件**拼接（分支体内零 if，两个子项文案都在）⇒ ⑥a/⑥b 同生同死，⑥b 确实守不住 ⑥a 之外的东西。" +
+      "改成条件拼接即翻红 —— 那时 ⑥b 恢复独立判别力，去把盘上三处措辞改真（hook 注释 / ⑥b 断言名 / issue #256）",
+      retireBlock.indexOf("条够老了") >= 0 && retireBlock.indexOf("条观察区候选够格升格") >= 0 &&
+      !/\bif\s*\(/.test(retireBlock.slice(retireBlock.indexOf("{") + 1)),
+      retireBlock.slice(0, 200));
+
     // ── ⑦ issue #256 账 3（出处 PR #237 对抗验证 5231324695 §八 观察项 1）：
     //    budgetSummaryLines() 的「本次跳过 N 项」是判词穷举读码时点名的**同族第七个候选**，
     //    此前零直接守护 —— 靠「有跳过就必然另有一行 ⏱」这条**隐式耦合**兜底。本批把它
