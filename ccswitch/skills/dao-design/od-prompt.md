@@ -207,7 +207,8 @@ HANDOFF.md 已写入 `design/workspaces/{name}/HANDOFF.md`，可直接交工程�
 
 执行后在回复中告知：`workspace.html 已同步到 OD 设计文件面板（workspaces/{name}/）`
 
-**为什么截图可见但 HTML 不可见**：Playwright 截图 `filename` 使用相对路径，落到 `qa/`（相对 `$PWD`），故面板可见。HTML 若用绝对路径写到外部代码仓，面板则不可见。规律：**凡需在面板中可见的文件，必须有一份写到 `$PWD` 相对路径下。**
+**为什么截图可见但 HTML 不可见**：Playwright 截图 `filename` 使用相对路径（相对 `$PWD`），故面板可见。HTML 若用绝对路径写到外部代码仓，面板则不可见。规律：**凡需在面板中可见的文件，必须有一份写到 `$PWD` 相对路径下。**
+（**落点写 `_tmp/qa/<context>/`，不是裸 `qa/`** —— 2026-08-10 口径统一，issue #269 ㈡：`dao-hard-gates.js` 的 `G4-screenshot-path` 只放行 `_tmp/qa/` 下的截图，裸 `qa/` 会被 `exit 2` 当场拦下。两者都是 `$PWD` 相对路径，面板可见性一样。）
 
 **禁止行为**：
 - ❌ 只写外部代码仓副本，不同步到 `$PWD`
