@@ -93,6 +93,9 @@
     用的在途工作树**，退出码还是 0。校验用 `git worktree list --porcelain` 里那棵树自己的
     `branch refs/heads/...` 行，**大小写敏感比对**——git 的 ref 名是大小写敏感的，而
     PowerShell 的 `-ne` 默认不是。detached HEAD 的树同样拒绝：证不出它检出的是 -Branch。）
+    **这条校验挂在「那棵树还登记着」之下，所以「认不认得出这棵树」与它同等承重**——
+    认树不靠手工规范化路径，而是问 `git -C <WorktreePath> rev-parse --show-toplevel`
+    （与 `worktree list` 同源的写法），见幂等探测段那条注释。
 
 .PARAMETER Branch
     要清理的本地分支名（与上面那棵 worktree 对应）。必填。
@@ -240,6 +243,20 @@ $wtList = Invoke-Git -Cwd $RepoPath -GitArgs @('worktree', 'list', '--porcelain'
 if (-not $wtList.Ok) {
     Fail "git worktree list --porcelain 失败（exit $($wtList.Code)）—— 探不到现场就不敢动手，什么都没做" 1
 }
+# 认这棵树**不靠手工规范化路径**：先问 git 它自己怎么写这棵树的根，而 `worktree list
+# --porcelain` 打印的正是同一个写法，两边同源，比对因此不受调用方的路径拼法影响。
+# 病根（2026-08-10 复抗实测，PR #252 返修后自查出来的漏网，判词里没有这一条）：
+# `Resolve-Path` **不展开 8.3 短名、也不吃掉结尾那个反斜杠**——传 `C:\Users\ADMINI~1\…\wt`
+# （`%TEMP%` 展开出来的常见形态）或 `…\wt\`（shell 补全习惯加的尾杠），与 git 打印的
+# `C:/Users/Administrator/…/wt` 两边 Resolve-Path 之后仍不相等 ⇒ 判「这棵树没登记」⇒
+# **下面那道配对校验整段被跳过**（它挂在 `if ($worktreeStillRegistered)` 里），第 3 步还会
+# 打印「视为已清理」这句假话，第 5 步照删分支、exit 0。
+# **「它没登记」与「我没认出它的登记」输出一模一样**——与第 2 步要治的那个病同族，
+# 所以修法也同族：别自己数，去问那个知道答案的。
+$worktreeGitTop = $null
+if (Test-Path -LiteralPath $WorktreePath) {
+    $worktreeGitTop = GitLine -Cwd $WorktreePath -GitArgs @('rev-parse', '--show-toplevel')
+}
 # --porcelain 的每条记录形如：worktree <路径> / HEAD <sha> / branch refs/heads/<名>（或 detached）。
 # 分支行本来就在那份输出里，顺手记下来给下面的配对校验用（不用另跑一条 git）。
 $worktreeStillRegistered = $false
@@ -251,6 +268,8 @@ foreach ($line in $wtList.Out) {
         $wtEntryResolved = $wtEntry
         if (Test-Path -LiteralPath $wtEntry) { $wtEntryResolved = (Resolve-Path -LiteralPath $wtEntry).Path }
         $inTargetEntry = ($wtEntryResolved -eq $worktreePathResolved)
+        # 字符串比对没认出来时，改用 git 自己的写法再比一次（上面那段注释说的就是这一步）。
+        if ((-not $inTargetEntry) -and $worktreeGitTop -and ($wtEntry -eq $worktreeGitTop)) { $inTargetEntry = $true }
         if ($inTargetEntry) { $worktreeStillRegistered = $true }
     } elseif ($inTargetEntry -and ($line -like 'branch refs/heads/*')) {
         $worktreeCheckedOutBranch = $line.Substring(18)   # 'branch refs/heads/'.Length = 18

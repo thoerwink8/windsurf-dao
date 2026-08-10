@@ -10,7 +10,7 @@
     只让指定的那**一个**子命令 exit 128（stdout 为空，fatal 的真实形态），其余原样转发给
     真 git（见 `New-FailingGitShim`）。判定路径本身一个字都没被桩掉。
 
-    十五个场景，覆盖差集核验的两条安全路径、两类拒绝路径，以及幂等 / 前置校验 / DryRun：
+    十六个场景，覆盖差集核验的两条安全路径、两类拒绝路径，以及幂等 / 前置校验 / DryRun：
       1. 祖先关系已并入（模拟 `git merge --no-ff`）⇒ rev-list 为空 ⇒ 用 `-d`
       2. 内容等价但非祖先（模拟 GitHub squash-merge：把同一份 diff 当新提交打进 main）
          ⇒ rev-list 非空、`git cherry` 全部 `-` ⇒ 用 `-D`
@@ -29,8 +29,13 @@
      13. `-Branch` 与那棵树检出的分支只差大小写 ⇒ 退出码 1（钉住配对比对用的是 `-cne`）
      14. detached HEAD 的树 ⇒ 退出码 1，且断言那句**专属报文**（见该场景头上的归因说明）
      15. `git worktree list` 本身失败 ⇒ 退出码 1（探不到现场就不动手），零动作
+     16. `-WorktreePath` 换成同一棵树的**另一种路径拼法**（尾杠 / 8.3 短名）⇒ 仍须认得出
+         这棵树、仍须退出码 1 —— 认树只比字符串那一版这里是 0 且**真的把 -Branch 删了**
     9–15 是 2026-08-10 返修补的（PR #252 对抗验证判词阻断 1 / 阻断 2）：补之前 9 与 10 各自
     会**静默删掉一个没合并的分支 / 别人正在用的工作树**，而退出码是 0。
+    16 是同日**复抗**补的，判词里没有这一条：它守的不是配对校验本身，而是配对校验的**前提**
+    ——那道校验挂在「这棵树还登记着」之下，认不出树就等于整段没跑。9–15 全部只喂过一种
+    路径拼法，所以这个洞对它们结构性不可见。
     十二/十三这两条的措辞刻意写「零动作」而不是「安全」——它们证的是这一批样本下没动手。
 
 .NOTES
@@ -375,6 +380,52 @@ Assert-True '场景15 git worktree list 失败：退出码 1（探不到现场�
 Assert-True '场景15：报文点名是 worktree list 失败' ($r15.Text -match 'worktree list --porcelain 失败') $r15.Text
 Assert-True '场景15：worktree 原样未动' (Test-WorktreeRegistered -RepoPath $f15.Main -WtPath $f15.Wt)
 Assert-True '场景15：本地分支原样未动' (Test-BranchExists -RepoPath $f15.Main -Branch $f15.Branch)
+
+# ── 场景 16：配对校验不许被「同一棵树的另一种路径拼法」绕过 ────────────────────────
+# 2026-08-10 复抗实测出来的漏网（**判词里没有这一条**，是返修批自己的洞）：认这棵树此前
+# 靠 `Resolve-Path` 两边规范化后比字符串，而 `Resolve-Path` **不展开 8.3 短名、也不吃掉
+# 结尾那个反斜杠** ⇒ 传 `<wt>\` 或 `C:\Users\ADMINI~1\…\wt` 时与 git 打印的长名正斜杠形态
+# 比不上 ⇒ `$worktreeStillRegistered` 判假 ⇒ **场景 10/13/14 守的那道配对校验整段被跳过**，
+# 脚本打印「视为已清理」（假话，它还登记着）并把 -Branch 给的分支删掉，exit 0。
+# 夹具与场景 10 同形，只把 -WorktreePath 换成带尾杠的写法。
+# **为什么用尾杠而不是 8.3 短名做触发器**：8dot3name 可以被逐卷关掉（关了之后短名==长名，
+# 这条场景会静默退化成场景 10 的重复 ⇒ 零样本却照常绿），尾杠在任何机器上都构造得出。
+#
+# ⚠ **-Branch 刻意用 `merged/orphan` 这个「没被任何树检出的已合并分支」，不用 feature/x**，
+# 理由是实测出来的、值得记（M8 变异第一版就栽在这里）：feature/x 被夹具自己那棵 wt 检出着，
+# 于是修前那一版走到第 5 步会被 **git 自己**的「分支正被别的工作树检出」保护挡下 ⇒ exit 4、
+# 分支还在。那个 4 让人误以为「有东西拦住了」，其实拦住它的不是本脚本的任何一道校验。
+# 换成没被检出的分支，修前那一版就是**真的删掉它并 exit 0**——这才是这条场景要钉的那个后果。
+$f16 = New-Fixture -Case 'case16-path-spelling-bypass'
+Git0 @('-C', $f16.Main, 'merge', '--no-ff', '--quiet', '-m', 'merge feature/x', 'feature/x') | Out-Null
+Git0 @('-C', $f16.Main, 'push', '--quiet', 'origin', 'main') | Out-Null
+# 已并入主干、且没有任何 worktree 检出它 ⇒ `git branch -d` 会痛快删掉
+Git0 @('-C', $f16.Main, 'branch', 'merged/orphan', 'main') | Out-Null
+$otherWt16 = Join-Path $f16.Dir 'wt-other'
+Git0 @('-C', $f16.Main, 'worktree', 'add', '--quiet', '-b', 'other/unmerged', $otherWt16, 'main') | Out-Null
+Git0 @('-C', $otherWt16, 'config', 'user.email', 'dao@example.invalid') | Out-Null
+Git0 @('-C', $otherWt16, 'config', 'user.name', 'dao-test') | Out-Null
+Git0 @('-C', $otherWt16, 'config', 'commit.gpgsign', 'false') | Out-Null
+[IO.File]::WriteAllText((Join-Path $otherWt16 'in-flight.txt'), "别人正在做的活`n", $utf8NoBom)
+Git0 @('-C', $otherWt16, 'add', 'in-flight.txt') | Out-Null
+Git0 @('-C', $otherWt16, 'commit', '--quiet', '-m', 'in-flight work') | Out-Null
+$otherWt16Slash = $otherWt16 + '\'
+# 前提断言：这个「另一种拼法」经 Resolve-Path 之后**确实**还是另一个字符串。它若哪天被
+# 归一化掉，本场景就退化成场景 10 的重复 —— 那时这条会红，红得对（提醒换触发器），
+# 而不是让一条零判别力的场景继续挂在网上装数。
+Assert-True '场景16 前提：尾杠写法经 Resolve-Path 后与原写法确实不同（否则本场景退化成场景10）' (
+    ((Resolve-Path -LiteralPath $otherWt16Slash).Path) -ne ((Resolve-Path -LiteralPath $otherWt16).Path)
+) ("[$((Resolve-Path -LiteralPath $otherWt16Slash).Path)] vs [$((Resolve-Path -LiteralPath $otherWt16).Path)]")
+Assert-True '场景16 前提：merged/orphan 事前存在（它就是修前那一版会被删掉的那个东西）' (Test-BranchExists -RepoPath $f16.Main -Branch 'merged/orphan')
+$r16 = Invoke-Target -Fixture $f16 -WorktreePathOverride $otherWt16Slash -BranchOverride 'merged/orphan'
+Assert-True '场景16 换个路径拼法：退出码 1（认树只比字符串那一版这里是 0）' ($r16.ExitCode -eq 1) ("实际 $($r16.ExitCode)`n" + $r16.Text)
+Assert-True '场景16：报文点名配对不符并报出别人那个分支名（＝配对校验真的跑到了）' (
+    ($r16.Text -match '配对不符') -and ($r16.Text -match 'other/unmerged')
+) $r16.Text
+Assert-True '场景16：没有打印过「视为已清理」（那句在认不出这棵树时是假话）' (-not ($r16.Text -match '视为已清理')) $r16.Text
+Assert-True '场景16：merged/orphan 没被删（认不出树那一版它会被真的删掉，exit 还是 0）' (Test-BranchExists -RepoPath $f16.Main -Branch 'merged/orphan')
+Assert-True '场景16：别人的在途工作树目录还在' (Test-Path -LiteralPath $otherWt16)
+Assert-True '场景16：别人的分支 other/unmerged 还在' (Test-BranchExists -RepoPath $f16.Main -Branch 'other/unmerged')
 
 # ── 语法自检：被测脚本本身能被 PowerShell parser 干净解析（BOM/中文字面量坑同款）───────
 $tokens = $null
