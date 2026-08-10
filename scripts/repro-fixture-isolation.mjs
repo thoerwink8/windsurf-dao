@@ -72,6 +72,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const RULES_DIR = path.join(os.homedir(), ".claude", "rules");
 
+// 下面那条诊断提示要报「哪些目录名会让被测 hook 静默」。**刻意不在这里抄一份清单**：
+// 这个列表在本仓已经有两份（hook 的 `EXCLUDE` + 测试自己那份独立副本，两份由测试里的
+// 字面对账夹住），再抄第三份就是纯漂移源——PR #263 对抗实测点名了这一处散文副本。
+// 改为运行时从 hook 源码里把那条字面**读出来**：读不到就指路，绝不猜也绝不留旧值。
+// 这里只读文本、只打印，不把它 new RegExp 回去当判据使（那才是复用被守对象的解析）。
+function excludeLiteralOfHook() {
+  try {
+    const src = fs.readFileSync(path.join(REPO, "ccswitch", "hooks", "dao-rule-echo.js"), "utf8");
+    const m = /^const EXCLUDE = (\/.*\/[a-z]*);\s*$/m.exec(src);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+
 // ── 参数 ────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const o = { concurrency: 6, rounds: 3, test: "tests/dao-rule-echo.tests.js", keep: false, selfcheck: false };
@@ -220,9 +233,10 @@ try {
     process.stdout.write("[repro]   （出处：官抗节「比较基线必须先验证其本身是活的」——假基线比没有基线更危险）\n");
     // 已知会走到这一支的一类原因，写出来省下一次从零诊断（前两任各在这里丢过一次会话）：
     process.stdout.write(`[repro]   本次这棵树：${REPO}\n`);
-    process.stdout.write("[repro]   已知诱因之一（issue #253）：这棵树若坐落在一个名叫 _tmp / build / dist /\n" +
-                         "[repro]   coverage / target / node_modules / _scratch / __pycache__ 的目录**下面**，被测\n" +
-                         "[repro]   hook 会把夹具判成「非规则文件」而静默 ⇒ 真位置与沙箱一起红同样的条数。\n" +
+    process.stdout.write("[repro]   已知诱因之一（issue #253）：这棵树若坐落在被 dao-rule-echo hook 判为排除面的\n" +
+                         "[repro]   目录名**下面**，被测 hook 会把夹具判成「非规则文件」而静默 ⇒ 真位置与沙箱一起\n" +
+                         "[repro]   红同样的条数。\n" +
+                         `[repro]   那份目录名清单（本次现读自源码，不在这里抄第二遍）：${excludeLiteralOfHook() || "读不出来 ⇒ 见 ccswitch/hooks/dao-rule-echo.js 的 EXCLUDE"}\n` +
                          "[repro]   分辨法：把同一份代码 checkout 到一个不含这些目录名的路径再跑一次，绿了就是它。\n");
     process.exit(2);
   }

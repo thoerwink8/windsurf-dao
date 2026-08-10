@@ -30,9 +30,12 @@
 //   `.claude/worktrees/build/…` · `_tmp/…`                                        ⇒ PASS=55 FAIL=10
 // **它不是环境敏感**（没有任何别人的活动参与，跑一百次都一样），故不标 `@dao-test-tier: env`
 // —— 标了只是把一个位置决定的确定性红藏进合并前才跑的那一层。治法是下面的 `pickFixtureRoot()`。
-// ⚠️ 照直写这次没治的那一格：缺陷态下 P2 段那 5 条**否定式**断言（「不误报为作用域」
-// 「不判为作用域」「exit 0」…）全部恒真 —— hook 一个字不输出时它们照绿。**修好之后它们
-// 仍然是弱断言**，给它们配「hook 确实开口了」的前置守卫属另一个批次的判断（issue #253 未尽处）。
+// ⚠️ P2 段那几条**否定式**断言（「不误报为作用域」「不判为作用域」「exit 0」…）在 hook 全静默
+// 时照绿。对抗实测（PR #263，H1/H2/H3/H5）把这一格量准了：全静默那一次**另有 35 条兄弟断言
+// 全红**，而这几条各自对它名字上写的那个缺陷都**真的会红** ⇒ 它们是**弱断言，不是死断言**。
+// 真正的洞在**输入类的正向覆盖**上：case ④（有 frontmatter 无 `paths` 键）此前只有一条否定式
+// 守着，定向让 hook 只对这一形态静默 ⇒ **全套一条不红**（H7 零检出）。本批照那个实测补两条
+// 正控（见下面 ④），不给否定式各配前置守卫 —— 后者动 5 处，却打不中这个洞。
 //
 // 本文件头注同批订正一处：原「①`<本目录>/.fixtures-scope-<uniq>/`」现已**不保证**落在仓内，
 // 见 `pickFixtureRoot()`——树坐落在排除面里时它会退到系统临时目录，并在 stdout 打印实际落点。
@@ -77,9 +80,42 @@ function sweepStaleFixtures() {
 // 这里的判据是**本测试自己维护的一份独立副本**，刻意不 require 那个 hook、也不复用它的
 // 正则对象：守卫里「我是不是瞎了」那一半不许复用被守对象的解析（dao `[#守-自检不复用被守对象的解析]`），
 // 而且那个 hook 在 require 的那一刻就去读 stdin，本来也 require 不动。
-// 代价照直写：**它会与 hook 的 EXCLUDE 漂移**。兜底是下面 P2 段开头那两条判别力自检
-// （一正一负）——判据被改成「什么都不拦」或「什么都拦」时，那两条会红。
+//
+// 代价：**它会与 hook 的 EXCLUDE 漂移，而漂移会把本 issue 的修复整个撤销**。hook 那边新增一个
+// 恰好出现在本树路径上的目录名 ⇒ 撞上的人看到的是与修复前**逐字相同**的 10 条业务红，而下面
+// 那几条落点断言全绿、正指向反方向说「落点挑得没问题」（PR #263 对抗实测 D1，实录 FAIL=12）。
+// 兜底是下面 `driftOfExcludeLiteral()` 那道**字面对账**（P2 段开头报两条）。
+// 🔴 别把 P2 段开头那两条判别力自检（一正一负）当成这一格的兜底：它们喂的是硬编码字面串、
+// 查的是**本测试自己这份副本**的两个极端态（什么都不拦 / 什么都拦），**从不读 hook 那一份**
+// ⇒ 对「hook 改了、我这边没跟上」结构上失明。实测：hook 新增一个不在任何路径上的名字、
+// 或摘掉一个名字（D2/D3），那两条**零检出**。本行原写「兜底是那两条」，与实测不符，已改真。
 const EXCLUDED_DIR_NAMES = /(^|\/)(_tmp|_scratch|node_modules|\.git|dist|build|target|coverage|__pycache__)\//i;
+
+// 与 hook 那份 EXCLUDE 的**字面对账**（issue #253 未尽处④，PR #263 对抗实测 D1/D2/D3 坐实）。
+// 为什么这不违反 `[#守-自检不复用被守对象的解析]`：那条禁的是复用被守对象的**解析**——
+// 这里把两份源码当**纯文本**读，各抽出 `const X = /…/flags;` 那一行的字面**逐字比**，
+// 既不 require 那个 hook，也不把抽出来的串 `new RegExp` 回去当判据使，两边零共享分类逻辑。
+// 抽不到字面（谁把声明的形状改了）**也判红、不静默** —— 否则这道对账会在退役日无声消失，
+// 而「它没报」与「它瞎了」长得一模一样。两种失效各报一条，名字分得开。
+function driftOfExcludeLiteral() {
+  const litOf = (src, name) => {
+    const m = new RegExp(`^const ${name} = (/.*/)([a-z]*);\\s*$`, "m").exec(src);
+    return m ? m[1] + m[2] : null;
+  };
+  let hookSrc, selfSrc;
+  try {
+    hookSrc = fs.readFileSync(HOOK, "utf8");
+    selfSrc = fs.readFileSync(__filename, "utf8");
+  } catch (e) {
+    return { extracted: false, same: false, why: `读不到源码：${e && e.message}` };
+  }
+  const a = litOf(hookSrc, "EXCLUDE");
+  const b = litOf(selfSrc, "EXCLUDED_DIR_NAMES");
+  if (!a || !b) {
+    return { extracted: false, same: false, why: `抽不到字面（hook 侧=${!!a} · 本测试侧=${!!b}）——声明的形状被改了，对账已失效` };
+  }
+  return { extracted: true, same: a === b, why: a === b ? "两份字面逐字相同" : `hook=${a} · test=${b}` };
+}
 
 // 按顺序挑第一个「**将来那个夹具文件的完整落点**都不命中排除面」的根。
 //   ① 仓内（已 gitignore、与被测对象同树、跑完就地清）—— 正常位置下与改动前逐字相同；
@@ -276,12 +312,24 @@ check("落点判据·正控：排除面下的夹具路径被拒",
   EXCLUDED_DIR_NAMES.test("D:/frank/windsurf-dao/_tmp/wt/tests/.fixtures-scope-1/.claude/rules/scoped.md"));
 check("落点判据·负控：形似而不该拒的放行（`coverage-x` 不是 `coverage`）",
   !EXCLUDED_DIR_NAMES.test("D:/frank/windsurf-dao/.claude/worktrees/coverage-x/wt/tests/.fixtures-scope-1/.claude/rules/scoped.md"));
+// 上面两条只查**本测试自己这份副本**，读不到 hook 那一份 ⇒ 漂移由下面两条对账管（见 `driftOfExcludeLiteral()` 头注）。
+{
+  const d = driftOfExcludeLiteral();
+  check("落点判据·两份 EXCLUDE 副本的字面都还抽得出来（声明形状没被改）", d.extracted, d.why);
+  check("落点判据·hook 的 EXCLUDE 与本测试的副本逐字相同（没漂移）", d.same, d.why);
+}
+// ⚠️ 下面两条喂的是**硬编码合成输入**，谓词因此必须只问「挑没挑仓内根」这一件事。
+// 写成 `.kind === "tmpdir"` 就把**这台机器的 `%TEMP%` 落在哪**焊了进来：谁的 TMPDIR 坐落在
+// `…/build/tmp` 之类的位置，候选②也被排除 ⇒ 返回 `null` ⇒ 这条在**摆得完全正确**的树上照红
+// （PR #263 对抗实测：正常位置的树 PASS=69 FAIL=1）——那正是本 issue 要消灭的那一类假红。
+// `null` 那一态本来就有下面「挑得到一个…」专管，两条断言各管一件事。
+const tmpdirNote = ` · os.tmpdir()=${os.tmpdir()}（它若落在排除名下，两个候选会一起没）`;
 check("落点挑选·树坐落在排除面里 ⇒ 不再选仓内根",
-  (pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests") || {}).kind === "tmpdir",
-  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests")));
+  (pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests") || {}).kind !== "repo",
+  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/_tmp/wt253/tests")) + tmpdirNote);
 check("落点挑选·树在正常位置 ⇒ 仍优先仓内根（不为了保险一律外挂）",
   (pickFixtureRoot("D:/frank/windsurf-dao/tests") || {}).kind === "repo",
-  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/tests")));
+  JSON.stringify(pickFixtureRoot("D:/frank/windsurf-dao/tests")) + tmpdirNote);
 
 const PICKED = pickFixtureRoot();
 check("挑得到一个不落在 hook 排除面里的夹具根", PICKED !== null,
@@ -330,6 +378,11 @@ if (PICKED) {
     const other = write("otherfm.md", "---\ndescription: 某说明\n---\n\n正文\n");
     r = run(ptu("Edit", { file_path: other, old_string: "a", new_string: "条款 D" }));
     check("frontmatter 无 paths 键 → 不判为作用域", !/作用域注入/.test(ctx(r)));
+    // 上面那条是**否定式**，hook 对这一形态静默时它照绿。这一整类输入此前只有它一条守着
+    // ⇒ 让 hook **只**对 case ④ 静默，全套一条不红（PR #263 对抗实测 H7，零检出）。
+    // 补两条正控把那个洞关掉——比给全部否定式各配前置守卫便宜，且打的是真洞。
+    check("frontmatter 无 paths 键 → 仍说「常驻注入」（正控：hook 确实开口了）", /常驻注入/.test(ctx(r)), ctx(r).slice(0, 200));
+    check("frontmatter 无 paths 键 → 仍回灌原文（正控）", ctx(r).includes("条款 D"), ctx(r).slice(0, 200));
 
     // ⑤ 文件读不到（已删）⇒ 降级为原文案，且**不得吞掉回灌本身**
     const ghost = path.join(FIX, "ghost.md").replace(/\\/g, "/");
