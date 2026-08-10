@@ -2757,6 +2757,11 @@ console.log("\n──── G4 · 浏览器 MCP 截图落盘路径（无逃生�
     ["playwright 落 _tmp 但不在 qa 下", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { filename: "_tmp/shot.png" } }],
     ["落系统 temp", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { filename: "C:/Users/x/AppData/Local/Temp/a.png" } }],
     ["反斜杠路径", { tool_name: "mcp__chrome-devtools__take_screenshot", tool_input: { filePath: "D:\\frank\\mousse-cli\\qa\\a.png" } }],
+    // 2026-08-10 · issue #269 ㈡（用户拍板第 15 件）：这一格此前是**放行**的，理由写在 hook 里
+    // 那句「不给路径 = 内联返回不落盘」——那句话对 playwright 那支是假的（它缺省落
+    // MCP output dir，也就是仓根 `.playwright-mcp/`）。于是最省事的那个形态恰好绕过了整道闸。
+    ["playwright 不给 filename（缺省落仓根 .playwright-mcp/，不是内联）", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { fullPage: true } }],
+    ["playwright 给了空 filename（同上，空串不算给了路径）", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { filename: "" } }],
   ];
   for (const [name, p] of positives) {
     const r = gate(p);
@@ -2766,14 +2771,41 @@ console.log("\n──── G4 · 浏览器 MCP 截图落盘路径（无逃生�
   check("无逃生阀：设满 env 仍拦",
     gate(positives[0][1], { env: { DAO_SETTINGS_EDIT_APPROVED: "1", DAO_PUBLISH_APPROVED: "1", DAO_ALLOW_READONLY_TODO: "1" } }).code === 2);
 
+  check("正控：playwright 缺 filename 时 stderr 点得出它真正会落到哪（不是泛泛一句『路径不对』）",
+    /\.playwright-mcp/.test(gate(positives[4][1]).err), gate(positives[4][1]).err.slice(0, 160));
+
   const negatives = [
-    ["不给路径=内联返回不落盘，放行", { tool_name: "mcp__chrome-devtools__take_screenshot", tool_input: { fullPage: true } }],
+    // ⚠ 这一条是**误伤反例**，与上面新增的 playwright 正控成对：同样是「不给路径」，
+    //   chrome-devtools 那支才真的内联返回不落盘（判据出处见 hook 内注释指的那两处）。
+    //   两支被当成同一件事处理过一次，代价就是上面那个正控在 2026-08-10 之前一直是绿的放行。
+    ["chrome-devtools 不给路径=内联返回不落盘，放行", { tool_name: "mcp__chrome-devtools__take_screenshot", tool_input: { fullPage: true } }],
     ["绝对路径落 _tmp/qa 下，放行", { tool_name: "mcp__chrome-devtools__take_screenshot", tool_input: { filePath: "D:/frank/mousse-cli/_tmp/qa/pr-1/a.png" } }],
     ["相对路径落 _tmp/qa 下，放行", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { filename: "_tmp/qa/run/a.png" } }],
     ["反斜杠的 _tmp\\qa 也认，放行", { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { filename: "D:\\repo\\_tmp\\qa\\c\\a.png" } }],
     ["非截图工具带路径，放行", { tool_name: "mcp__playwright__browser_navigate", tool_input: { filename: "x.png" } }],
+    // playwright 那边还有一批同样收 `filename` 的工具（snapshot / console_messages / network_requests…），
+    // 它们省掉 filename 是**真的**返回文本、不落盘 ⇒ 本闸只认名字以 take_screenshot 结尾的两个，
+    // 别因为「playwright + 没给 filename」就一律拦（那就是新增覆盖面顺手造出来的误伤面）。
+    ["playwright 非截图工具不给 filename，放行", { tool_name: "mcp__playwright__browser_snapshot", tool_input: {} }],
+    ["playwright 控制台导出不给 filename，放行", { tool_name: "mcp__playwright__browser_console_messages", tool_input: { level: "error" } }],
   ];
   for (const [name, p] of negatives) check(`负控：${name}`, gate(p).code === 0, `code=${gate(p).code}`);
+
+  // ── `.playwright-mcp/` 在不在 .gitignore 里（issue #269 ㈢，用户拍板第 16 件）─────
+  // 为什么这条断言住在 G4 这一节：上面那条正控的报文里写着「它会落到仓根 `.playwright-mcp/`」，
+  // 而“落了也不会进版本库”这半句的兑现方是 `.gitignore` —— **写了指针就得配一道会红的闸**，
+  // 否则哪天那一行被删掉，这里报的就是一句没人兑现的承诺（同 dao.md `[#官通-同批查引用]`：
+  // 留一个指向空气的指针比没有指针更糟）。判据用 git 自己的答案，不自己解析 .gitignore 语法。
+  {
+    const ci = spawnSync("git", ["check-ignore", "-q", "--", ".playwright-mcp/page-1.yml"],
+      { cwd: REPO, encoding: "utf8" });
+    check("`.playwright-mcp/` 已被 git 忽略（`git check-ignore` exit 0）",
+      ci.status === 0, `status=${ci.status} err=${String(ci.stderr || "").slice(0, 120)}`);
+    const tracked = spawnSync("git", ["ls-files", "--", ".playwright-mcp"], { cwd: REPO, encoding: "utf8" });
+    check("`.playwright-mcp/` 一个文件都没被 git 跟踪（历史上从没提交过，是隐患不是事故）",
+      tracked.status === 0 && String(tracked.stdout || "").trim() === "",
+      `status=${tracked.status} out=${String(tracked.stdout || "").slice(0, 120)}`);
+  }
 }
 
 console.log("\n──── G5 · 只读载体未勾待办（PR body / commit message）────");
@@ -3488,6 +3520,32 @@ console.log("\n──── mutation · 判别力（改坏一处，对应正控�
     const otherId = id === "G1-windows-mcp" ? "G3-publish" : "G1-windows-mcp";
     check(`${id}：改坏它之后其他闸仍然拦（证明不是整个 hook 崩了）`,
       gate(CANARY[otherId], { script: mutantPath }).code === 2);
+  }
+
+  // ── G4 的第二个靶点：playwright「不给路径」那一支（2026-08-10 · issue #269 ㈡）──────
+  //    上面 MUTANTS 表里 G4 只有一个靶（`_tmp/qa/` 白名单），它的 canary 是**带路径**的那条
+  //    ⇒ 新加的「不给 filename 也拦」那一支被它整条跳过：把新分支删掉，MUTANTS 那格照样全绿。
+  //    **一条新覆盖面若没有自己的靶，它与「压根没加」在输出上长得一样。**
+  {
+    const from = "if (!/^mcp__playwright__/.test(tool)) return null;";
+    const to = "if (true) return null;";
+    check("mutation 靶点在源码里唯一存在（G4 playwright 缺路径分支）", src.split(from).length === 2,
+      `出现 ${src.split(from).length - 1} 次`);
+    const mutantPath = path.join(TMP, "mutant-G4-playwright-nopath.js");
+    fs.writeFileSync(mutantPath, src.replace(from, to), "utf8");
+    const noPath = { tool_name: "mcp__playwright__browser_take_screenshot", tool_input: { fullPage: true } };
+    const before = gate(noPath).code;
+    const after = gate(noPath, { script: mutantPath }).code;
+    check("G4：真文件拦 playwright 缺 filename（exit 2）而改坏后放行（exit 0）⇒ 那条正控真的在测这一支",
+      before === 2 && after === 0, `before=${before} after=${after}`);
+    // 波及面：这一刀只该打死「不给路径」那一格，带路径那格与别的闸都不许被顺手弄哑
+    check("G4：改坏缺路径分支后，带路径的违例仍然拦（没有波及到另一格）",
+      gate(CANARY["G4-screenshot-path"], { script: mutantPath }).code === 2);
+    check("G4：改坏缺路径分支后，chrome-devtools 缺路径仍然放行（负控没被连坐）",
+      gate({ tool_name: "mcp__chrome-devtools__take_screenshot", tool_input: { fullPage: true } },
+        { script: mutantPath }).code === 0);
+    check("G4：改坏缺路径分支后其他闸仍然拦（证明不是整个 hook 崩了）",
+      gate(CANARY["G1-windows-mcp"], { script: mutantPath }).code === 2);
   }
 
   // ── 反向 mutation（2026-08-02 随 G6 加）：上面那批**全在「把门改松」这一侧**，
