@@ -8,8 +8,8 @@
     "为什么有字符串值": "那一层拿不到数（未报计数 / 本层不跑）。刻意不写 0：0 会变成一个恒真的闸，留空会让「这套没人守」看不出来。"
   },
   "_generated": {
-    "env": "2026-08-10T12:49:37.695Z",
-    "default": "2026-08-10T12:37:41.780Z"
+    "env": "2026-08-10T13:13:23.710Z",
+    "default": "2026-08-10T13:20:34.427Z"
   },
   "suites": {
     "agents-md.tests.js": {
@@ -134,8 +134,8 @@
     },
     "hard-gates.tests.js": {
       "kind": "node",
-      "env": 659,
-      "default": 659
+      "env": 671,
+      "default": 671
     },
     "hook-budget.tests.js": {
       "kind": "node",
