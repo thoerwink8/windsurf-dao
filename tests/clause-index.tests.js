@@ -1262,7 +1262,9 @@ async function main() {
     //
     // 🔴 **这一档判据分辨的是「这次改动碰没碰到某个计数」，不是「是不是合并」**——
     //    旧版报文曾把「账目自相矛盾」直接归因成「合并造成、没有人做错」，被证伪并改名
-    //    （史见 docs/evolution/comment-archive-20260809.md §clause-index.tests.js）。
+    //    （史见 ccswitch/lib/clause-parser.mjs 的 auditIndexSelfConsistency 头注 —— 那里四个构造
+    //     全列着；ccswitch/scripts/gen-clause-index.mjs 的 self-inconsistent 分支注释是另一份。
+    //     **这里此前指着一份归档副本，2026-08-10 查重判定它是副本、两处原本都更完整 ⇒ 副本已删**）。
     //    每个构造断言两半：①落进这一档 ②**报文里说的每一句对这个构造都为真**。
     //    第二半才是订正的重点 —— 首版的第一半也是全绿的。
     const bendIndex = (mutate) => {
