@@ -281,8 +281,11 @@ console.log("\n──── ⑥ 真仓冒烟：此刻盘上这些指针指得准
     r.marker.anchors > 0, JSON.stringify(r.marker));
   // 本批的当事人：归档档与它的 C 编号
   const arc = path.join(REPO, "docs", "evolution", "comment-archive-202608.md");
-  check("本批归档档在盘上", fs.existsSync(arc));
-  const text = fs.readFileSync(arc, "utf8");
+  const arcThere = fs.existsSync(arc);
+  check("本批归档档在盘上", arcThere);
+  // 🔴 档不在时**照样往下判**（读不到就当空串）：这一节存在的理由就是「档被挪走」那一态，
+  //    要是这里直接抛异常，报出来的是一个堆栈而不是一句「哪条断言红了」。
+  const text = arcThere ? fs.readFileSync(arc, "utf8") : "";
   const ids = new Set((text.match(/^#{1,6}\s+(\S+)/gm) || []).map((h) => h.replace(/^#+\s+/, "")));
   check("C1–C7 七个锚点齐全（少一个 ⇒ 指着它的那几处会在上面那条真仓断言里红）",
     ["C1", "C2", "C3", "C4", "C5", "C6", "C7"].every((k) => ids.has(k)), JSON.stringify([...ids]));
