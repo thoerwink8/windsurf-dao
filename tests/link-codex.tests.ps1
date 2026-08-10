@@ -20,18 +20,19 @@ $TmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) "windsurf-dao-link-codex-
 # container-ness) must be identical, which fails on creation, deletion, repointing and repair alike.
 #
 # !! DISK REALITY DIVERGES FROM THE CONTRACT ABOVE -- READ BEFORE "FIXING" ANYTHING (2026-07-27) !!
-#   ~/.codex/skills now contains 9 junctions -> D:\frank\windsurf-dao\ccswitch\skills\dao-*.
-#   dao.ps1 did NOT create them and its write capability was NOT restored; the contract above and
-#   every assertion in this file are untouched. They were placed by hand, ONCE, after the user was
-#   explicitly told this conflicts with the single-writer decision recorded above and chose to
-#   proceed anyway. Full record -- who, when, told what, chose what, why, plus rollback commands:
-#     docs/ops/dao-ecosystem-audit.md  section 8   (this repo; moved here 2026-08-02 from
-#     mousse-cli docs/ops/ -- the record was living in a project repo while the thing it
-#     describes lives here, which is exactly what section 8.7 booked as an open debt)
-#   Do NOT treat those 9 junctions as drift and do NOT "repair" them away. Note that
-#   `dao.ps1 unlink-codex` classifies by target and WOULD delete the subset whose targets match
-#   ~/.claude/skills entries -- that is a documented, user-typed command, not a silent risk,
-#   but it does undo part of this. See section 8.3 for the mechanism.
+#   ~/.codex/skills holds junctions that dao.ps1 did NOT create. They were placed by hand, ONCE,
+#   after the user was explicitly told this conflicts with the single-writer decision recorded
+#   above and chose to proceed anyway. dao.ps1's write capability was NOT restored; the contract
+#   above and every assertion in this file are untouched.
+#   Do NOT treat them as drift and do NOT "repair" them away.
+#   Who/when/told-what/chose-what, the count as recorded, rollback commands, owner and the
+#   unfreeze condition all live in one place:
+#     docs/ops/nogo-ledger.json  ->  entry [NOGO:codex-junctions]
+#   Both directions are pinned by tests/nogo-ledger.tests.js: drop the marker here, or drop the
+#   ledger entry, and that suite reds (before 2026-08-10 this ruling survived only because
+#   nobody happened to delete this comment).
+#   Note: `dao.ps1 unlink-codex` would delete part of them -- a documented, user-typed command,
+#   not a silent risk; the mechanism is in that ledger entry's notes.
 #
 # NOTE: keep this file ASCII-only. It has no UTF-8 BOM (unlike dao.ps1 and
 # link-codex-prompts.tests.ps1), so PS 5.1 would decode non-ASCII comments as ANSI and

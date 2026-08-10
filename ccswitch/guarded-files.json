@@ -9,8 +9,8 @@
     "回归网": "tests/guarded-files.tests.js",
     "口径是近似的": "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
     "totals": {
-      "tests": 46,
-      "mutation_tests": 36,
+      "tests": 47,
+      "mutation_tests": 37,
       "files": 34
     }
   },

@@ -142,6 +142,7 @@ fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，�
 | 任务清单（**唯一**载体，别新建平行追踪文件） | `TODO.md` |
 | 项目活体知识（架构/模式/决策） | `AGENT_GUIDE.md` |
 | 收割记录与待批候选索引 | `docs/ops/harvest-log.md` + `docs/ops/harvest/*.json` |
+| 用户拍板「这件事刻意不做」（编号 / owner / 解冻条件） | `docs/ops/nogo-ledger.json`；代码注释里**只留** `[NOGO:<编号>]` 一行指针，两边由 `tests/nogo-ledger.tests.js` 双向对账（判据 `ccswitch/rules/dao-comment.md`） |
 | 换机部署变更 | `NEW-MACHINE.md` |
 
 - **临时文件**一律放**被操作的目标项目**根下 `_tmp/`（本仓 `.gitignore` 已含 `**/_tmp/`）。
