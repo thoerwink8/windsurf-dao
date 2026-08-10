@@ -118,7 +118,6 @@ const req = mod.request(
         const j = JSON.parse(data);
         title = ((j.content && j.content[0] && j.content[0].text) || "").trim();
       } catch (_) {}
-      // 清洗:去引号/书名号/首尾标点/换行,限长
       title = title.replace(/[\r\n]+/g, " ").replace(/^["'「『《]+|["'」』》。.\s]+$/g, "").trim();
       if (title.length > 20) title = title.slice(0, 20);
       // 必须含中文才采纳,否则降级(不输出 = 用默认标题)

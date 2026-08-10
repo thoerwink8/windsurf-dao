@@ -250,7 +250,6 @@ function readJsonSafe(filePath) {
 function printDashboard() {
   console.log('──────────── 系统全貌 ────────────');
 
-  // 1. MCP servers
   const cj = readJsonSafe(claudeJsonPath);
   const mcpNames = cj ? Object.keys(cj.mcpServers || {}) : [];
   if (mcpNames.length) {
@@ -259,7 +258,6 @@ function printDashboard() {
     console.log('  MCP:           无');
   }
 
-  // 2. Skills
   let skillCount = 0;
   const skillNames = [];
   if (fs.existsSync(claudeSkillsDir)) {
@@ -278,7 +276,6 @@ function printDashboard() {
     console.log('  Skills:        无');
   }
 
-  // 3. Hooks
   const settings = readJsonSafe(claudeSettingsPath);
   if (settings?.hooks) {
     const hookEvents = Object.keys(settings.hooks);
@@ -294,12 +291,10 @@ function printDashboard() {
     console.log('  Hooks:         无');
   }
 
-  // 4. Model
   if (settings?.model) {
     console.log(`  Model:         ${settings.model}`);
   }
 
-  // 5. Persona
   let personaMode = 'off';
   if (fs.existsSync(personaStateFile)) {
     personaMode = fs.readFileSync(personaStateFile, 'utf8').trim() || 'off';
@@ -311,7 +306,6 @@ function printDashboard() {
   }
   console.log(`  Persona:       ${personaMode}${personaSize}`);
 
-  // 6. Plugins
   if (settings?.enabledPlugins) {
     const enabled = Object.entries(settings.enabledPlugins).filter(([, v]) => v).map(([k]) => k.split('@')[0]);
     if (enabled.length) {
@@ -537,7 +531,6 @@ function preflight() {
   const issues = [];
   const fixed = [];
 
-  // 1. git
   try {
     execFileSync('git', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' });
   } catch {
