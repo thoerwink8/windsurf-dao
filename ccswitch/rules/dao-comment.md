@@ -39,8 +39,15 @@
 | 判据 | 谁在检 | 检不到什么 |
 |---|---|---|
 | `[NOGO:*]` 指针 ↔ 台账双向孤儿 | `tests/nogo-ledger.tests.js`（由 `node scripts/run-tests.mjs` 扫目录带跑） | 台账里那段文字**说得对不对**——它只判「标记在不在、条目在不在」 |
-| dao.md / `ccswitch/rules/**` 里指向 `ccswitch/rules/*.md` 的存根路径 | `tests/stub-targets.tests.js` | 那份文件里**有没有**存根宣称的内容 |
+| 存根指针 → `ccswitch/rules/*.md` 落点，**只认写成全路径的那一种**（见表下注） | `tests/stub-targets.tests.js` | 那份文件里**有没有**存根宣称的内容 |
 | 条款正文 slug ↔ `clause-ledger.json` | `gen-clause-index.mjs` + `check-clauses-structure.ps1`（两套独立解析） | 触发点取值的真伪（结构守卫对它完全盲） |
+
+🔴 **第 2 行那个「只认全路径」是一道真缺口，别把它读成全覆盖**：`stub-targets` 的抽取要
+`ccswitch/rules/…` 这个前缀才算数，而 `ccswitch/dao.md` 里的存根**全写成裸 `rules/xxx.md`**
+⇒ **dao.md 那一面零覆盖**（PR #280 对抗实测：把一份只被 dao.md 指着的 rules 文件整个挪走，
+全仓的闸一个没红）。当下射程内抓到几条指针、哪几份 rules 文件被判「无人指向」——
+跑 `node tests/stub-targets.tests.js` 看它自己打印的那两行 ⓘ，**别从这里读数**。
+这道缺口不是本条款引入的，另立单跟进。
 
 **照直写还没配上闸的那一大片**：注释里指向 `docs/**`、`_tmp/**`、skills、脚本、章节标题
 （「见头注附三之三」）的指针，**当前一道闸都没有**。2026-08-10 实测：盘上活着 4 处指向已搬走
@@ -53,9 +60,10 @@
    （用户 2026-08-10 拍板第 2 件，判据是那把「删掉它，下一个不知道历史的人会不会做出一个
    已被验证是错的动作」的尺子），本文件不重复它的判据。
 2. 🔴 **作用域档要先部署到宿主的 `~/.claude/rules/` 才会被送达**——源在 git 里、投影靠
-   `node ccswitch/scripts/dao-rules-deploy.mjs` 落地。**本条入库那一刻它还没部署**
-   （本批止步 `gh pr create`，机器级投影不由实现官改）⇒ 在有人跑那条命令之前，
-   `触发:paths作用域` 这一栏**是个空头支票**。当下投影实况随时可查：
+   `node ccswitch/scripts/dao-rules-deploy.mjs` 落地。**没部署就等于没有这个触发器**：
+   在有人跑那条命令之前，`触发:paths作用域` 这一栏**是个空头支票**。
+   **「此刻部署了没有」这个值刻意不写在这里**——它一跑命令就变，正是本文件第一条要治的那种话；
+   当下投影实况随时可查：
    `node ccswitch/scripts/dao-rules-deploy.mjs --check`（缺一份即 exit 1，会点名是哪份）。
 3. **作用域档挂在 `**/*.js` / `**/*.mjs` / `**/*.ps1` 上，精度是粗的**：写注释必然要先 Read
    那份代码文件（宿主对「覆写既有文件」有硬规则），触发时刻天然存在且机器可判；但
