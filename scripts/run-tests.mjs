@@ -45,13 +45,16 @@
 //   | 码 | 含义                                             | 消费方该怎么读        |
 //   |----|--------------------------------------------------|-----------------------|
 //   | 0  | 全跑、全过：**且零 defer、零未跑 PS 套**（只有 --env 拿得到） | 可以放行     |
-//   | 1  | 有测试文件红（node 侧或 PowerShell 侧）            | 拦住，去读失败详情    |
+//   | 1  | 有测试文件红（node 侧或 PowerShell 侧），**或某套断言条数跌破基线** | 拦住，去读失败详情 |
 //   | 2  | 无红，但有断言被 defer / 有 PS 套没跑 —— **本次没跑完** | 默认跑法的正常码 |
 //   | 3  | 用法错误（不认识的参数）——**一套都没跑**           | 拦住，改命令行        |
 //   | 4  | 分层自检失败：静态声明与运行期 defer 计数对不上，或某 PS 套 exit 0 却零输出 | 拦住，先修分层机制 |
 //   | 5  | 找不到 tests/ 目录（**一套都没跑**，与「有 defer」刻意不共用 2） | 拦住，核 --tests-dir |
 //
 //   优先级：3 / 5（开跑前判） > 1 > 4 > 2。
+//   ⚠ **1 从 2026-08-10 起多了一个来源**（issue #268 · 用户拍板 issue #70 第 9 件）：
+//     「一条断言都没红，但这一套比基线少跑了 N 条」也走 1。理由见下面那一节 ——
+//     那种情形下**没有任何断言失败**，若不并进 1，它会掉进 0 或 2 里，与「全跑全过」不可区分。
 //   ⚠ **谓词写 `=== 0`，别写 `<= 2`** —— 那个区间把 1（真失败）也放了进来。
 //   ⚠ **别把 2 当成绿**。`@(0,2)` 这种放行谓词一写，分层就退化成「接受偶发红」的另一种
 //     形态（issue #116 里那条最危险的路），只是危害从"无视红"变成"无视没跑"。
@@ -157,12 +160,58 @@
 //    以汇总表里那几行「（未报计数）」为准，此处刻意不写数字（这一句被咬过一次：写死「6 套里
 //    有 4 套」，套数变成 7 之后两处数字一起过期）。
 //
+// ══════════════════════════════════════════════════════════════════════════
+// ── 断言条数基线（2026-08-10 · issue #268，用户拍板 issue #70 第 9 件）──────
+// ══════════════════════════════════════════════════════════════════════════
+// 治的病：**绿灯可能只是「有几条根本没跑」**。本仓有一类写法是
+//   `check("锚点恰好命中 1 次", n === 1); if (n === 1) { …一批真有判别力的断言… }`
+// 锚点漂了之后，**前置断言红 1 条，壳里那一批整块不执行**（不是变红）⇒ 日志上
+// `FAIL=1` 而 `PASS` 从 659 掉到 653。**只盯 FAIL 数发现不了少跑 6 条**，
+// 而读日志的人会把它读成「就一个小毛病」。
+// 上面第 ⑦ 条早就在逐套解析 `PASS=(\d+)\s+FAIL=(\d+)` —— **缺的从来不是数字，是基线**：
+// 没有任何东西回答「这一套今天本该有多少条」。
+//
+// 机制三句话：
+//   ① **基线是派生物**：`scripts/assertion-baseline.json`，由
+//      `node scripts/run-tests.mjs [--env] --write-baseline` 从**真实一跑**的计数写出来。
+//      手改无效（下次 `--write-baseline` 覆盖），但它**不会自己更新** —— 见下面「代价」。
+//   ② **分层各记一个数**：默认层与 `--env` 的条数本来就不同（defer 掉的不计入 PASS、
+//      标了 env 的 PS 套整套不跑）⇒ 一个数会让两层互相污染。故每套两格：`default` / `env`。
+//      **拿不到数的那一格写字符串说明**（`未报计数` / `本层不跑`），不写 0 也不留空 ——
+//      `0` 会变成一个恒真的闸，留空会让「这套没人守」看不出来（同 `[#官抗-调用点覆盖率]`
+//      的分母为 0 那一格：照直写比编一个数好）。
+//   ③ **比的是 `PASS + FAIL`（本次跑了几条），不是 `PASS`**。用 PASS 会把「正常的红」
+//      也判成「少跑了」，而那是另一件事、已经有 1 号退出码在管。
+//
+// 🔴 **它自己的「我是不是瞎了」那一半**（`ccswitch/rules/dao-guard-writing.md` 第 2 条）：
+//   一个基线档里若一套都对不上（改名、路径 key 写法变了、JSON 被清空成 `{"suites":{}}`），
+//   本闸会**一条都不查而全绿** —— 与「全都守住了」逐字节相同。故：真跑了 ≥1 套、
+//   基线档也读到了，却**零匹配** ⇒ 走 `tierProblems`（exit 4），不是静默放行。
+//   （这一格与同批 issue #272 的「存在性闸不是基数闸」是同一个病的两处，刻意用同一个判据。）
+//
+// ⚠️ **代价照直写，用户拍板时明知**：这是**多一个必须有人同步的派生物**，而它自己也会漂。
+//   配的三个触发器（都不是「靠人记得」）：
+//     ㈠ **正当缩减 ⇒ 当场判红**：删测试 / 合并断言之后不重生成基线，下一跑就红，
+//        报文直接给重生成命令。红的成本 ≈ 一条命令，比静默失守便宜。
+//     ㈡ **基线老得没用了 ⇒ 观察线出声**：实际条数高出基线 `BASELINE_STALE_SLACK` 以上时
+//        打一行「这一套的闸已经形同虚设（掉 N 条以内它都看不见）」。
+//     ㈢ **名册双向对账在回归网里**（`tests/assertion-baseline.tests.js`）：新套没进基线、
+//        基线里留着已删的套，**都判红**。那道对账不跑测试、只比对目录与 JSON，秒级。
+//   ⚠ **阈值 `BASELINE_STALE_SLACK` 是 AI 自定的初值、待用户拍板**（`dao-legislation.md`：
+//     定及格线属判断档）。它只影响㈡那条观察线，不进退出码。
+//
 // ── 跑法 ────────────────────────────────────────────────────────────────────
 //   node scripts/run-tests.mjs                默认层（预期 exit 2）：JS 全跑 + 无标记 PS 套跑
 //   node scripts/run-tests.mjs --env          含环境敏感层 + 全部 PS 套（全绿 exit 0）；要求串行环境
 //   node scripts/run-tests.mjs --list         只列清单不跑，带分层标注（js/ps 两侧都标）
+//   node scripts/run-tests.mjs [--env] --write-baseline
+//                                             用**本次这一跑**的条数重写基线档的那一层
+//                                             （**红的那几套逐套跳过**、其余照写：从红的一跑
+//                                              取条数等于把缺陷焊进基线。首次生成要跑两轮才收敛）
 //   node scripts/run-tests.mjs --tests-dir P  换一个测试目录（**给本入口的自测用**，
 //                                             见 tests/run-tests-tier.tests.js）
+//   环境变量 DAO_ASSERTION_BASELINE           把基线档指到别处（**给回归网注入合成基线用的**，
+//                                             形态与理由同 DAO_PS_TIMEOUT_MS 那几个）
 
 import fs from "fs";
 import path from "path";
@@ -211,7 +260,7 @@ const PS_BUDGET_MS = (() => {
 // ── 参数解析（不认识的参数一律 fail-fast，一套都不跑）──────────────────────
 // 判据同 verify-exit.ps1 边界②：`-Skip` 是显式意图，不兑现显式意图没有「大致对」的余地。
 // 这里同理 —— 打错的参数若被静默忽略，你以为跑了 --env，实际跑的是默认层。
-const KNOWN_FLAGS = new Set(["--list", "--env", "--all"]);
+const KNOWN_FLAGS = new Set(["--list", "--env", "--all", "--write-baseline"]);
 const rawArgs = process.argv.slice(2);
 let testsDirArg = null;
 let testsDirGivenEmpty = false;
@@ -231,22 +280,42 @@ for (let i = 0; i < rawArgs.length; i++) {
   flags.push(a);
 }
 const unknownFlags = flags.filter((f) => !KNOWN_FLAGS.has(f));
-if (unknownFlags.length || testsDirGivenEmpty) {
+// `--list --write-baseline` 是**互斥意图**：--list 不跑任何测试，也就没有条数可写。
+// 静默忽略其中一个，就会出现「我以为重生成了基线，其实只列了个清单」——同上一段的判据。
+const listAndWrite = flags.includes("--list") && flags.includes("--write-baseline");
+if (unknownFlags.length || testsDirGivenEmpty || listAndWrite) {
   const why = unknownFlags.length
     ? "不认识的参数：" + unknownFlags.join(", ")
-    : "--tests-dir 后面没给路径";
+    : (listAndWrite
+      ? "--list 与 --write-baseline 不能同时给（--list 一套都不跑，写不出条数）"
+      : "--tests-dir 后面没给路径");
   process.stderr.write("[run-tests] 用法错误 —— " + why + "\n");
-  process.stderr.write("  合法参数：--list / --env（别名 --all）/ --tests-dir <路径>\n");
+  process.stderr.write("  合法参数：--list / --env（别名 --all）/ --write-baseline / --tests-dir <路径>\n");
   process.stderr.write("  **一套测试都没跑**（打错的参数不静默忽略，否则你以为跑了 --env，实际跑的是默认层）\n");
   // 末行的字段集与正常收尾那条**必须一致**（两处独立字面量，改一处忘一处就会让只读末行的
-  // 消费方在用法错误时解析不到新字段）。issue #179 追加 psfiles/psred/psskip 时同批加在这里。
-  process.stdout.write(`RUN_TESTS_SUMMARY exit=${EXIT_BAD_USAGE} tier=none files=0 red=0 pass=0 fail=0 defer=0 deferfiles=0 declared=0 selfcheck=n/a psfiles=0 psred=0 psskip=0\n`);
+  // 消费方在用法错误时解析不到新字段）。issue #179 追加 psfiles/psred/psskip 时同批加在这里，
+  // issue #268 追加 baselow/basegate 时同理。
+  process.stdout.write(`RUN_TESTS_SUMMARY exit=${EXIT_BAD_USAGE} tier=none files=0 red=0 pass=0 fail=0 defer=0 deferfiles=0 declared=0 selfcheck=n/a psfiles=0 psred=0 psskip=0 baselow=0 basegate=off\n`);
   process.exit(EXIT_BAD_USAGE);
 }
 const ENV_TIER = flags.includes("--env") || flags.includes("--all");
 const LIST_ONLY = flags.includes("--list");
+const WRITE_BASELINE = flags.includes("--write-baseline");
 
-const TESTS_DIR = testsDirArg ? path.resolve(testsDirArg) : path.join(ROOT, "tests");
+const DEFAULT_TESTS_DIR = path.join(ROOT, "tests");
+const TESTS_DIR = testsDirArg ? path.resolve(testsDirArg) : DEFAULT_TESTS_DIR;
+
+// ── 断言条数基线的三个常量（契约正文见文件头「断言条数基线」那一节）─────────
+const BASELINE_PATH = process.env.DAO_ASSERTION_BASELINE
+  || path.join(ROOT, "scripts", "assertion-baseline.json");
+// **闸什么时候是必须的**：跑真 tests/ 目录时（日常与合并链走的都是这条），
+// 或回归网显式注入了基线档路径时。**只有「拿合成 tests 目录自测、又没注入基线」这一种**
+// 才允许关闸 —— 而且关了要出声（见下面 `basegate=off` 那一行），不许静默。
+const BASELINE_REQUIRED = !!process.env.DAO_ASSERTION_BASELINE || TESTS_DIR === DEFAULT_TESTS_DIR;
+// 实际条数高出基线这么多 ⇒ 打一行「这道闸已形同虚设」。**AI 自定初值，待用户拍板**
+// （`dao-legislation.md`：定及格线属判断档）。只进观察线，恒不进退出码。
+const BASELINE_STALE_SLACK = 20;
+const BASELINE_TIER_KEY = ENV_TIER ? "env" : "default";
 
 if (!fs.existsSync(TESTS_DIR)) {
   process.stderr.write(`[run-tests] 找不到 tests/ 目录：${TESTS_DIR}\n`);
@@ -584,6 +653,186 @@ for (const r of psResults) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ── 断言条数基线：本次每套跑了几条 vs 基线下界（issue #268）──────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// 位置刻意排在两段自检**之后**、退出码之前：它吃的是上面算好的全部计数，
+// 而它自己发现的「基线档瞎了」要能进同一个 `tierProblems` 通道（exit 4）。
+const baselineObserved = new Map();   // 文件名 → { kind, total, why }；total=null 表示这一跑拿不到数
+for (const r of results) {
+  baselineObserved.set(r.file, {
+    kind: "node",
+    total: r.pass == null ? null : r.pass + r.fail,   // 比的是「跑了几条」＝ PASS+FAIL，不是 PASS
+    why: r.pass == null ? "未报计数" : null,
+  });
+}
+for (const r of psResults) {
+  baselineObserved.set(r.file, {
+    kind: "pwsh",
+    total: (r.ranAt && r.pass != null) ? r.pass + r.fail : null,
+    why: !r.ranAt ? "本层不跑" : (r.pass == null ? "未报计数" : null),
+  });
+}
+
+function loadBaseline() {
+  let raw;
+  try { raw = fs.readFileSync(BASELINE_PATH, "utf8"); }
+  catch (e) { return { ok: false, why: `读不到基线档（${(e && (e.code || e.message)) || "未知原因"}）：${BASELINE_PATH}` }; }
+  let j;
+  try { j = JSON.parse(raw); }
+  catch (e) { return { ok: false, why: `基线档不是合法 JSON（${e && e.message}）：${BASELINE_PATH}` }; }
+  if (!j || typeof j !== "object" || !j.suites || typeof j.suites !== "object") {
+    return { ok: false, why: `基线档缺 suites 段 —— 拿它当基线等于一条都不查：${BASELINE_PATH}` };
+  }
+  return { ok: true, json: j, suites: j.suites };
+}
+
+const baseBelow = [];      // 跌破基线（判红）
+const baseStale = [];      // 基线老得没用了（观察线）
+const baseUnlisted = [];   // 这一跑有、基线里没有（观察线；机器闸在 tests/assertion-baseline.tests.js）
+const baseGone = [];       // 基线里有、盘上没有（观察线，同上）
+const baseBlind = [];      // 这一层拿不到数的套（未报计数 / 本层不跑）—— 必须可见，不许当成"守住了"
+let baseGate = "off";      // on | off | fail | write
+let baseMatched = 0;
+let baselineJson = null;
+
+if (!LIST_ONLY) {
+  const b = loadBaseline();
+  if (!b.ok && WRITE_BASELINE) {
+    // 首次生成：档还不存在是正常的，从空档起步
+    baselineJson = { suites: {} };
+    baseGate = "write";
+    process.stdout.write(`\n  ⓘ 基线档尚不存在，本次 --write-baseline 从空档起步：${BASELINE_PATH}\n`);
+  } else if (!b.ok) {
+    if (BASELINE_REQUIRED) {
+      // 🔴 fail-closed：读不到基线 ⇒ 「有没有几条根本没跑」这件事本次**一条都没查**，
+      //    而那与「查了都没事」在退出码上必须分得开（本文件通篇治的就是这个病）。
+      baseGate = "fail";
+      tierProblems.push(`断言条数基线没读成 ⇒ **本次「有没有几条根本没跑」一条都没查**。${b.why} `
+        + `⇒ 重生成：node scripts/run-tests.mjs ${ENV_TIER ? "--env " : ""}--write-baseline`);
+    } else {
+      // 唯一允许关闸的一种：拿合成 tests 目录自测、又没注入基线档。**关了也要出声。**
+      process.stdout.write(`\n  ⓘ 断言条数基线未启用（--tests-dir 指到了合成目录且没注入 DAO_ASSERTION_BASELINE）——本次不查条数\n`);
+    }
+  } else {
+    baselineJson = b.json;
+    baseGate = WRITE_BASELINE ? "write" : "on";
+  }
+}
+
+if (baselineJson) {
+  const suites = baselineJson.suites || (baselineJson.suites = {});
+  for (const [file, obs] of baselineObserved) {
+    const entry = suites[file];
+    if (!entry) { baseUnlisted.push({ file, obs }); continue; }
+    const base = entry[BASELINE_TIER_KEY];
+    if (obs.total == null) { baseBlind.push({ file, why: obs.why || "拿不到数" }); continue; }
+    if (typeof base !== "number") { baseBlind.push({ file, why: `基线档这一层记的是「${String(base)}」，不是数` }); continue; }
+    baseMatched++;
+    if (obs.total < base) baseBelow.push({ file, total: obs.total, base });
+    else if (obs.total - base >= BASELINE_STALE_SLACK) baseStale.push({ file, total: obs.total, base });
+  }
+  for (const file of Object.keys(suites)) {
+    if (!baselineObserved.has(file)) baseGone.push(file);
+  }
+  // 🔴 「我是不是瞎了」那一半：真跑了套、基线也读到了，却**一套都没对上**
+  //    （key 写法变了 / 档被清成 `{"suites":{}}` / tests 目录换了）⇒ 本闸一条都没查，
+  //    而那与「全都在基线之上」输出一模一样。故走 exit 4，不静默放行。
+  //    同批 issue #272 的「存在性闸不是基数闸」是同一个病的另一处，判据刻意取同一个。
+  const numericObserved = [...baselineObserved.values()].filter((o) => o.total != null).length;
+  if (!WRITE_BASELINE && baseMatched === 0 && numericObserved > 0) {
+    baseGate = "fail";
+    tierProblems.push(`断言条数基线**一套都没对上**（本次有 ${numericObserved} 套报了计数，基线档里 `
+      + `${Object.keys(suites).length} 个条目，匹配 0）⇒ 这道闸本次一条都没查，而那与"全都守住了"长得一模一样。`
+      + `核 ${BASELINE_PATH} 里的键是不是还叫这些名字。`);
+  }
+}
+
+// ── --write-baseline：用**本次这一跑**的条数重写基线档的那一层 ────────────────
+if (WRITE_BASELINE && baselineJson) {
+  // 🔴 **拒写是逐套的，不是整跑的**（2026-08-10 实测改的）：
+  //   原写法是「本跑有任何一套红 ⇒ 整个档不写」，理由没错（红的一跑可能半途崩，条数偏低），
+  //   但它在**首次生成**那一刻自锁死：`tests/assertion-baseline.tests.js` 因为基线档还不存在
+  //   而红 ⇒ 整档不写 ⇒ 它永远红。**判据本身是对的，颗粒度错了**，故改为逐套：
+  //     · 红的那一套 —— 不采信它这次的条数；有旧值就留旧值（绝不因为一次红而下调基线），
+  //       没有旧值就照直写一句说明（**不编数字**，同 `[#官抗-调用点覆盖率]` 分母为 0 那一格）；
+  //     · 其余套照写。
+  //   代价照直写：首次生成要跑**两轮**才收敛（第一轮把档写出来 ⇒ 那一套转绿 ⇒ 第二轮才拿到它的真条数）。
+  const redFiles = new Set([
+    ...results.filter((r) => r.code !== 0).map((r) => r.file),
+    ...psResults.filter((r) => r.ranAt && r.red).map((r) => r.file),
+  ]);
+  {
+    const suites = baselineJson.suites;
+    const deltas = [];
+    const heldBack = [];
+    for (const [file, obs] of baselineObserved) {
+      const prev = suites[file] || {};
+      const old = prev[BASELINE_TIER_KEY];
+      let now;
+      if (redFiles.has(file)) {
+        now = typeof old === "number" ? old : "上次生成时这一套是红的，条数未采信";
+        heldBack.push(`${file}（本次红，${typeof old === "number" ? `保留旧基线 ${old}` : "此层暂无闸"}）`);
+      } else {
+        now = obs.total == null ? (obs.why || "拿不到数") : obs.total;
+      }
+      if (old !== now) deltas.push(`${file}: ${JSON.stringify(old === undefined ? null : old)} → ${JSON.stringify(now)}`);
+      suites[file] = Object.assign({}, prev, { kind: obs.kind, [BASELINE_TIER_KEY]: now });
+    }
+    for (const file of baseGone) delete suites[file];
+    baselineJson._doc = baselineJson._doc || {
+      "这是什么": "每套测试「本次跑了几条断言」（PASS+FAIL）的下界基线。**派生物** —— 手改无效，下次 --write-baseline 覆盖。",
+      "治的病": "绿灯可能只是有几条根本没跑：mutation 锚点一漂，壳里那一批断言是消失不是变红，日志上只多 1 条 FAIL。",
+      "谁在消费它": "scripts/run-tests.mjs 每跑一次逐套比一次；跌破即判红（exit 1）。",
+      "再生成": "node scripts/run-tests.mjs --write-baseline（默认层那一格） / 加 --env（env 那一格）—— 两层各写各的",
+      "名册对账": "tests/assertion-baseline.tests.js —— 新套没进基线、基线里留着已删的套，都判红",
+      "为什么有字符串值": "那一层拿不到数（未报计数 / 本层不跑）。刻意不写 0：0 会变成一个恒真的闸，留空会让「这套没人守」看不出来。",
+    };
+    baselineJson._generated = Object.assign({}, baselineJson._generated, {
+      [BASELINE_TIER_KEY]: new Date().toISOString(),
+    });
+    const ordered = { _doc: baselineJson._doc, _generated: baselineJson._generated, suites: {} };
+    for (const k of Object.keys(baselineJson.suites).sort()) ordered.suites[k] = baselineJson.suites[k];
+    fs.writeFileSync(BASELINE_PATH, JSON.stringify(ordered, null, 2) + "\n", "utf8");
+    process.stdout.write(`\n✓ 已写基线档（${BASELINE_TIER_KEY} 那一层）：${BASELINE_PATH}\n`);
+    process.stdout.write(`  本层收录 ${baselineObserved.size} 套；与上一版有出入 ${deltas.length} 处${baseGone.length ? `；删掉盘上已不存在的 ${baseGone.length} 套` : ""}\n`);
+    for (const d of deltas) process.stdout.write(`    · ${d}\n`);
+    if (heldBack.length) {
+      process.stdout.write(`  ⚠ 有 ${heldBack.length} 套本次是红的，**它们这次的条数没被采信**`
+        + `（红的一跑可能半途崩，条数天然偏低 —— 拿它当基线等于把缺陷焊进去）：\n`);
+      for (const h of heldBack) process.stdout.write(`    · ${h}\n`);
+      process.stdout.write(`    ⇒ 先把红修掉再跑一次 --write-baseline，这几格才拿得到真数。\n`);
+    }
+  }
+}
+
+if (baseBelow.length && !WRITE_BASELINE) {
+  process.stdout.write(`\n✗ 断言条数跌破基线 ${baseBelow.length} 套 —— **「没红」不等于「都跑了」**：\n`);
+  for (const b of baseBelow) {
+    process.stdout.write(`    · tests/${b.file}  本次 ${b.total} 条 / 基线 ${b.base} 条  ⇒ **这一套比基线少跑了 ${b.base - b.total} 条**\n`);
+  }
+  process.stdout.write(`  最常见的成因：mutation 锚点漂了 ⇒ 那条「锚点还在吗」的前置断言红 1 条，\n`);
+  process.stdout.write(`  而它壳里的一整批断言**不执行**（不是变红）—— 日志上看起来「就一个小毛病」。\n`);
+  process.stdout.write(`  确认是正当缩减（删了测试 / 合并了断言）⇒ 重生成基线：\n`);
+  process.stdout.write(`    node scripts/run-tests.mjs ${ENV_TIER ? "--env " : ""}--write-baseline\n`);
+}
+if (baseStale.length && !WRITE_BASELINE) {
+  process.stdout.write(`\n⚠ 基线老了 ${baseStale.length} 套（实际条数高出基线 ${BASELINE_STALE_SLACK} 条以上）—— 这几套的闸已形同虚设：\n`);
+  for (const b of baseStale) {
+    process.stdout.write(`    · tests/${b.file}  本次 ${b.total} 条 / 基线 ${b.base} 条  ⇒ 掉 ${b.total - b.base} 条以内它都看不见\n`);
+  }
+  process.stdout.write(`  重生成：node scripts/run-tests.mjs ${ENV_TIER ? "--env " : ""}--write-baseline（这行是观察线，不进退出码）\n`);
+}
+if ((baseUnlisted.length || baseGone.length) && !WRITE_BASELINE) {
+  process.stdout.write(`\n⚠ 基线名册与盘上实况对不上（观察线；判红的那道在 tests/assertion-baseline.tests.js）：\n`);
+  for (const u of baseUnlisted) process.stdout.write(`    · tests/${u.file}  盘上有、基线里没有 ⇒ **这一套目前没有条数闸**\n`);
+  for (const g of baseGone) process.stdout.write(`    · tests/${g}  基线里有、盘上没有 ⇒ 是刻意删的还是被顺手删掉的？\n`);
+}
+if (baseBlind.length && !WRITE_BASELINE) {
+  process.stdout.write(`\nⓘ 本层条数闸看不见的 ${baseBlind.length} 套（照直列出来，别把"没报"读成"守住了"）：\n`);
+  for (const b of baseBlind) process.stdout.write(`    · tests/${b.file}  —— ${b.why}\n`);
+}
+
 if (tierProblems.length) {
   process.stdout.write(`\n✗ 分层自检失败 ${tierProblems.length} 条 —— 「本次跑了什么」这个账本本身不可信了：\n`);
   for (const p of tierProblems) process.stdout.write(`    · ${p}\n`);
@@ -612,7 +861,9 @@ if (psNotRun) {
 // ── 退出码 + 机器可读末行（照 DEAD_GATES_SUMMARY 的路数：只读末行的消费方也拿得到全貌）──
 // 优先级 1 > 4 > 2 不变；本批只是把 PS 侧的红并进 1、把 PS 侧的未跑并进 2。
 let exitCode = EXIT_OK;
-if (bad || psRed) exitCode = EXIT_RED;
+// issue #268：跌破基线并进 1。**它必须在 2 之前**——默认层恒 2，若把它放进 2 那一档，
+// 「这一套少跑了 6 条」在日常跑法里就与「正常的默认层」逐字节相同了。
+if (bad || psRed || (baseBelow.length && !WRITE_BASELINE)) exitCode = EXIT_RED;
 else if (tierProblems.length) exitCode = EXIT_SELFCHECK;
 else if (totalDefer || psNotRun) exitCode = EXIT_DEFERRED;
 
@@ -623,5 +874,9 @@ process.stdout.write(`RUN_TESTS_SUMMARY exit=${exitCode} tier=${ENV_TIER ? "env"
   + ` files=${results.length} red=${bad} pass=${totalPass} fail=${totalFail}`
   + ` defer=${totalDefer} deferfiles=${deferringFiles.length} declared=${declaredEnv.size}`
   + ` selfcheck=${tierProblems.length ? "fail" : "ok"}`
-  + ` psfiles=${psRan} psred=${psRed} psskip=${psNotRun}\n`);
+  + ` psfiles=${psRan} psred=${psRed} psskip=${psNotRun}`
+  // issue #268 追加两个字段，仍然**只追加在尾部**（同上，不动既有字段的顺序）。
+  // baselow = 跌破基线的套数；basegate = 这道闸本次的状态（on 查了 / off 没启用 /
+  // fail 想查却没查成 / write 这一跑是去重写基线的）。**三种"没查"刻意不合流成一个 0**。
+  + ` baselow=${baseBelow.length} basegate=${baseGate}\n`);
 process.exit(exitCode);
