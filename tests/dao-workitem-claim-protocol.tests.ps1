@@ -54,9 +54,28 @@
     `-and`）、分隔符负控（8f，专治 `{0}/{1}` 被改成 `{0}{1}`）、三条调用侧源码 canary
     （8g-1/8g-2/8h——命令③④ 是内联脚本不在函数体内，括号计数法抽不到）。
     **场景 4/5 的期望 key 因此从裸机器名改成「机器/宿主」**，那是分组键变更的直接后果。
+    🔴 **场景 9（PR #264 对抗复核 C 项返修）—— 上面那句"三条调用侧源码 canary"别读成
+    "内联区有人管了"**：对抗官两轮换靶对内联区投放 7 发**语义**变异（分隔符漂移 / 两格
+    顺序对调 / 排除键退回裸 host / 布尔算子弱化 / 比较方向反转 / 摘 `-not` / 上一行取值
+    来源被换），**7 发全部存活、51 条断言一条没红**——8g-*/8h 守的是"token 在不在"，
+    不是语义。场景 9 改用**把内联区原文从文档抠出来真跑一遍**（不是再写一份等价表达式），
+    11 条断言全部双向：让位判据正反两侧（9d/9e，夹 `-lt`）· "只报不接"正反两侧
+    （9j/9k，夹 `-not`）· 组合键值与占位符取值来源（9a/9b）· `$others` 不含自己（9f）·
+    命令④ 只取自己那格（9h）· 跨宿主查不到即不冒领的误伤反例（9i）。
+    返修复抗实测：**同样 10 发（7 发语义 + 负控 + 正控 + 一发已知存活），7 发全部由
+    SURVIVED 翻为 KILLED**，负控存活、正控被杀、sha256 字节级复原核对通过。
+    **8b-3 / 8g-1 / 8g-2 / 8h 一条都没删**——对抗官实测坐实它们是"同一件事的两个半拉子"，
+    场景 9 是补的第三块，不是替换品。
+    ⚠ **场景 9 仍不覆盖的那一格（P1，本批不修）**：把撤回扫描的 `release` 换成同长度死
+    字符串（`dao-release:` 从此撤不掉任何认领，Δbytes=0）⇒ **返修后仍然完全存活**。
+    `dao-release:` 这个协议动作在本文件里占 **0 条行为断言**，替它站岗的是 0b 那条函数
+    字节长度 canary。它不是本批引入的、本批也没碰它，归 issue #250 的跟进面。
     **A4/A8 本批不修**（互相接管 / 自我接管 ⇒ 有效认领集合被清空，连当下合法持有人一起
     抹掉），按 issue #250 处置建议要额外的"接管环检测"、与"不支持合法复活"那条弱处一起
     评审——8i/8j **钉住它们当前的错误返回值当退役触发器**，修好后那两条会红。
+    🔴 **8i/8j 指向的 issue #250 刻意保持 open**：修 A2/A3/A5/B3 的那个 PR 不带自动关闭
+    关键字（对抗复核 B 项：写了它就等于在合并那一刻关掉 A4/A8 唯一的家，而"接管环检测
+    那一批"经全量筛查零命中、根本不存在）。owner=帅，解冻条件=环检测与合法复活一起评审。
     完整描述见 `ccswitch/rules/dao-workitem.md` 开篇的五轮修法说明。
     **F2 的"指名排除"是简化处理**——一旦被指名永久除名，不支持"合法复活"这个 issue 点名
     "值得设计评审"的边界，本批未做评审。别把「有这文件」读成「协议全测了」。
@@ -497,6 +516,164 @@ $marksA8 = Build-MarksFromComments @(
 $a8 = Get-EffectiveClaim -Marks $marksA8
 Assert-True '8j [issue #250-A8 已知缺陷锚点，本批不修] 自我接管（同一台机重启后接管自己的陈旧认领）⇒ 把自己除名，集合为空。这不是"旧机复活不了"（已知弱处覆盖的那种），是"现任合法持有人被抹掉"，严重度不同。钉住的是**错误值**，修好后本条会红' `
     ($a8.Count -eq 0) ("keys={0}" -f (@($a8.Keys) -join ','))
+
+# ============================================================================
+# 场景 9：§六 内联区（命令③④⑦）的**语义**守护 —— PR #264 对抗复核 C 项返修
+# ============================================================================
+# 对抗官两轮换靶，对内联区投放 7 发语义变异（N2/N3/N4/N5/P2/P3/P4），**7 发全部存活**，
+# 51 条断言一条没红。根因不是"少写了几条断言"，是**那一整片只有 token 级 canary**：
+# 8g-1/8g-2/8h 守的是"这个变量名还在不在"，守不住分隔符漂移 / 操作数顺序对调 / 布尔算子
+# 弱化 / 上一行取值来源被换。最重的两发：
+#   · P2：让位比较 `-lt` -> `-gt`（Δbytes=0）⇒ **该让位的不让、不该让的让**。这一行是本
+#     协议**用户可见行为的本体**（"两台机撞上了，谁退"，issue #193 立项要的就是它），
+#     而回归网此前只覆盖它的**输入**（分组、桶键、除名）、不覆盖它的**输出**。
+#   · P4：`$MyKey` 那行一个字不动，只改**上一行** `$MyRuntime` 的取值来源 ⇒ 键第二格漂掉
+#     ⇒ `$my` 恒 $null ⇒ 让位判据整条不触发（fail-open）。
+#     **canary 守的是那一行在不在，不是那个值从哪来。**
+#
+# 修法不是再补几条 token canary，是**把内联区原文从文档里抠出来真跑一遍**。
+# 与 8b-3 那种"测试文件里自己写一份等价表达式"的**逻辑副本**是两回事：这里执行的字节逐个
+# 来自 dao-workitem.md，盘上那一行漂了，跑出来的答案就跟着变。
+# 🔴 **8b-3 / 8g-1 / 8g-2 / 8h 一条都不删**：对抗官实测坐实它们"不是同一件事的两份拷贝，
+# 是同一件事的两个半拉子"（N5 那一发两条都没拦住）。本场景补的是第三块，不是替换品。
+#
+# 判别力自证（防"抠出来是空串 ⇒ 断言全部真空通过"）——这三条是这个场景能不能信的前提：
+#   ① 锚点不命中 ⇒ Get-InlineSource 当场 throw，整套红，**绝不静默返回空串**；
+#   ② 占位符替换次数逐个断言（9a）——文档要求"跑之前自己填"的正是那三格，
+#      而 P4 那一类变异改的就是这三格里某一格的取值来源，替换数当场从 1 掉到 0；
+#   ③ 每条行为断言都**双向**：正例证"该发生的发生了"，反例证"不该发生的没发生"。
+#      单向断言对 `-lt` -> `-gt` 这种**反转**是零判别力（正例反例同时翻，只查一侧仍然绿）。
+Write-Host '场景 9：§六 内联区（命令③④⑦）语义守护'
+
+function Get-InlineSource {
+    <#
+      §六 命令③④⑦ 是**内联脚本**、不在任何函数体内，Get-BraceBlockSource 的括号计数法抽不到
+      ——那正是它们此前只有 token canary 的结构性原因。本函数按锚点截取原文。
+      锚点里的换行一律写 `\r?\n`：本仓 core.autocrlf=true、工作区是 CRLF，写死 `\n` 的锚点在
+      CRLF 检出下恒不命中，而"锚点落空"与"守卫扛住"在报文上逐字节相同（dao `[#守-锚点行尾]`）。
+      **命中失败即 throw，不返回空串**：静默返回空会让下面每一条断言都在空输入上"通过"。
+    #>
+    param([string]$Text, [string]$Pattern, [string]$Label)
+    $m = [regex]::Match($Text, $Pattern)
+    if (-not $m.Success) { throw "内联区提取失败：锚点未命中（$Label）：$Pattern" }
+    if (-not $m.Groups['src'].Success) { throw "内联区提取失败：命中但捕获组 src 不存在（$Label）" }
+    if ($m.Groups['src'].Value.Trim().Length -eq 0) { throw "内联区提取失败：捕获到空串（$Label）" }
+    return $m.Groups['src'].Value
+}
+
+function Get-SubstringCount {
+    param([string]$Text, [string]$Sub)
+    $n = 0; $i = 0
+    while (($i = $Text.IndexOf($Sub, $i)) -ge 0) { $n++; $i += $Sub.Length }
+    return $n
+}
+
+# 命令③ 前置段：$eff 那行起，到"让位判据"那一行之前（含 $MyHost/$MyRuntime/$MySession/$MyKey/$my/$others）
+$cmd3Prelude = Get-InlineSource -Text $docText -Label '命令③ 前置段' `
+    -Pattern '(?s)(?<src>\$eff = Get-EffectiveClaim -Marks \$marks.*?)\r?\nif \(\$my -and \$others'
+
+# 让位判据行（命令③ 的**输出**侧）。锚点刻意只锚到 `if ($my -and $others`，**不含比较算子**
+# ——含了的话 `-lt` -> `-gt` 就变成"提取失败"，红的理由会指向锚点而不指向语义。
+$yieldIfLine = Get-InlineSource -Text $docText -Label '命令③ 让位判据行' `
+    -Pattern '(?m)^(?<src>if \(\$my -and \$others[^\r\n]*)'
+$yieldCondM = [regex]::Match($yieldIfLine, '^if\s*\((?<c>.+)\)\s*\{\s*$')
+if (-not $yieldCondM.Success) { throw "内联区提取失败：让位判据行剥不出条件表达式：$yieldIfLine" }
+$yieldCond = $yieldCondM.Groups['c'].Value
+
+# 命令⑦ 判据行（/dao-resume「只报不接」）。锚点同理**刻意不含 `-not`**：P3 那一发摘的就是
+# `-not`，锚点含了它 ⇒ 提取失败；不含 ⇒ 条件照样抠得出来、跑出来的布尔值翻转，9j/9k 当场红。
+$resumeIfLine = Get-InlineSource -Text $docText -Label '命令⑦ 判据行' `
+    -Pattern '(?m)^(?<src>if \(\$my -and [^\r\n]*Test-IsMySessionClaim[^\r\n]*)'
+$resumeCondM = [regex]::Match($resumeIfLine, '^if\s*\((?<c>.+)\)\s*\{\s*$')
+if (-not $resumeCondM.Success) { throw "内联区提取失败：命令⑦ 判据行剥不出条件表达式：$resumeIfLine" }
+$resumeCond = $resumeCondM.Groups['c'].Value
+
+# 命令④ 租期锚点行
+$cmd4HolderLine = Get-InlineSource -Text $docText -Label '命令④ 租期锚点行' `
+    -Pattern '(?m)^(?<src>\$holderClaims = @\(\$marks \|[^\r\n]*)'
+
+# 三个占位符：文档逐字写着"跑之前自己填"，本测试就是那个"填"的动作。
+# 替换按**字面串**（String.Replace 不是正则），且只替换带引号的那一份 —— 注释里那些不带引号的
+# `<机器名>` 原样留着，改了它们不该让本场景红。
+$phHostLit = "'<机器名>'"; $phRuntimeLit = "'<宿主>'"; $phSessionLit = "'<会话短id>'"
+$phHostN = Get-SubstringCount -Text $cmd3Prelude -Sub $phHostLit
+$phRuntimeN = Get-SubstringCount -Text $cmd3Prelude -Sub $phRuntimeLit
+$phSessionN = Get-SubstringCount -Text $cmd3Prelude -Sub $phSessionLit
+
+Assert-True '9a [PR #264 对抗 P4 类：值来源被换] 命令③ 三个"跑之前自己填"的占位符各恰好一处：$MyHost 取自 `<机器名>`、$MyRuntime 取自 `<宿主>`、$MySession 取自 `<会话短id>`。P4 那一发不碰 $MyKey 那行、只把上一行 $MyRuntime 的取值来源换掉（Δbytes=0），token canary 8g-1 照绿；本条直接盯**值从哪来**，替换数当场从 1 掉到 0' `
+    (($phHostN -eq 1) -and ($phRuntimeN -eq 1) -and ($phSessionN -eq 1)) ("host={0} runtime={1} session={2}" -f $phHostN, $phRuntimeN, $phSessionN)
+
+$cmd3Runnable = $cmd3Prelude.Replace($phHostLit, "'HOSTX'").Replace($phRuntimeLit, "'cc'").Replace($phSessionLit, "'sessA'")
+
+function Invoke-InlineSection {
+    <#
+      把从文档抠出来的四段原文拼起来真跑一遍，返回观测对象。
+      **抠出来的字节一个不改**（除上面那三个占位符换成测试值——那正是文档要求填的三格，
+      9a 已断言它们真被填掉）；观测行只**追加在尾部**，不插进去、不改写。
+      内联区原文引用的变量名是 $marks；PowerShell 变量名大小写不敏感，参数 $Marks 就是它。
+    #>
+    param($Marks)
+    $src = $cmd3Runnable + "`n" +
+        '$__yield = ' + $yieldCond + "`n" +
+        '$__resume = ' + $resumeCond + "`n" +
+        $cmd4HolderLine + "`n" +
+        '[pscustomobject]@{ key = $MyKey; my = $my; others = @($others); yield = [bool]$__yield; resume = [bool]$__resume; holders = @($holderClaims) }'
+    return (& ([scriptblock]::Create($src)))
+}
+
+# --- F1：别的「机器+宿主」比我早 ⇒ 我该让位；且我自己的会话 id 对得上 ⇒ 不走"只报不接" ---
+$inlineF1 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOSTY/cc/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:05:00Z'; body = 'dao-claim: HOSTX/cc/sessA/4h' }
+))
+
+Assert-True '9b [PR #264 对抗 N2/N3 类：分隔符漂移与两格顺序对调] 命令③ 拼出来的组合键就是 "HOSTX/cc"。N2（`/` 改成 `-`）与 N3（两格对调）都是 Δbytes=0、token 一个不少 ⇒ 8g-1 照绿，而键与桶键永不相等 ⇒ $my 恒 $null ⇒ 让位判据整条不触发（fail-open，A3 原病换个入口复活）。**本条同时是整个场景 9 的真空自检**：抠出来若是空串或跑不动，这条第一个红' `
+    ($inlineF1.key -eq 'HOSTX/cc') ("key={0}" -f $inlineF1.key)
+
+Assert-True '9c 命令③ 查到的是**我自己那个桶**（host=HOSTX 且 runtime=cc），不是同机另一个宿主的' `
+    (($null -ne $inlineF1.my) -and ($inlineF1.my.host -eq 'HOSTX') -and ($inlineF1.my.runtime -eq 'cc')) ("my={0}/{1}" -f $inlineF1.my.host, $inlineF1.my.runtime)
+
+Assert-True '9d [PR #264 对抗 P2 类：比较方向反转 · 正例] 别的桶（HOSTY/cc @01:00）比我（@01:05）早 ⇒ 让位判据为**真**，该发 dao-yield: 让位。这一行是本协议用户可见行为的本体，此前 51 条断言里一条都不覆盖它的输出' `
+    ($inlineF1.yield -eq $true) ("yield={0}" -f $inlineF1.yield)
+
+Assert-True '9f [PR #264 对抗 N4 类：排除自己那格退回裸 $MyHost] $others 里不含我自己那条——桶键是 "HOSTX/cc"、与裸 "HOSTX" 永不相等，写成 `$_ -ne $MyHost` 时自己的认领也会落进 $others，变成自己跟自己比早晚' `
+    (($inlineF1.others.Count -eq 1) -and (@($inlineF1.others | Where-Object { $_.host -eq 'HOSTX' -and $_.runtime -eq 'cc' }).Count -eq 0)) ("others={0}" -f (@($inlineF1.others | ForEach-Object { "{0}/{1}" -f $_.host, $_.runtime }) -join ','))
+
+Assert-True '9k [PR #264 对抗 P3 类：命令⑦ 摘 `-not` · 反例] 我自己那条认领的会话 id 与 $MySession 一致（都是 sessA）⇒ "只报不接"判据为**假**，这是我自己前任留下的单，照常接' `
+    ($inlineF1.resume -eq $false) ("resume={0}" -f $inlineF1.resume)
+
+# --- F2：我比别人早 ⇒ 不让位（P2 的另一侧，单向断言对"反转"是零判别力）-------------
+$inlineF2 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOSTX/cc/sessA/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:05:00Z'; body = 'dao-claim: HOSTY/cc/4h' }
+))
+Assert-True '9e [PR #264 对抗 P2 类：比较方向反转 · 反例] 我（@01:00）比别的桶（HOSTY/cc @01:05）早 ⇒ 让位判据为**假**，先到者留着接着干。9d 与本条合起来才夹得住 `-lt`：只写正例时 `-lt` 换成 `-gt` 会让两条同时翻，而只查一侧的网仍然全绿' `
+    ($inlineF2.yield -eq $false) ("yield={0}" -f $inlineF2.yield)
+
+# --- F3：同机另一个宿主（A3 后半 + 命令④ 租期锚点）---------------------------------
+$inlineF3 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOSTX/cc/sessA/4h' },
+    [pscustomobject]@{ createdAt = '2026-08-09T01:03:00Z'; body = 'dao-claim: HOSTX/codex/4h' }
+))
+Assert-True '9g 同机 codex 后到 ⇒ 我查到的仍是自己那条（cc @01:00），且让位判据为假（后到者才该让）——B3 冒领在调用侧的正面形态' `
+    (($null -ne $inlineF3.my) -and ($inlineF3.my.runtime -eq 'cc') -and ($inlineF3.my.createdAt -eq '2026-08-09T01:00:00Z') -and ($inlineF3.yield -eq $false)) ("my={0}/{1}@{2} yield={3}" -f $inlineF3.my.host, $inlineF3.my.runtime, $inlineF3.my.createdAt, $inlineF3.yield)
+
+Assert-True '9h [PR #264 对抗 N5 类：命令④ 的 `-and` 弱化成 `-or`] 租期锚点只取我自己「机器+宿主」那条（cc @01:00），同机 codex 后发的 @01:03 不得混进来。`-and` 变 `-or` 时 codex 那条重新落回候选集、租期从别人那条算起（A3 后半原样复发），而 8b-3（测试文件里的等价表达式副本）与 8h（token canary）**两条都拦不住**——对抗官 N5 实测坐实' `
+    (($inlineF3.holders.Count -eq 1) -and ($inlineF3.holders[0].runtime -eq 'cc') -and ($inlineF3.holders[0].createdAt -eq '2026-08-09T01:00:00Z')) ("holders={0}" -f (@($inlineF3.holders | ForEach-Object { "{0}/{1}@{2}" -f $_.host, $_.runtime, $_.createdAt }) -join ','))
+
+# --- F4：B3 负控 —— 只有同机 codex 持有 ⇒ 我压根查不到自己的桶，不冒领 ---------------
+$inlineF4 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOSTX/codex/4h' }
+))
+Assert-True '9i [误伤反例 · B3 负控] 同机只有 codex 持有该单时，cc 用组合键查 ⇒ $my 为 $null，让位与"只报不接"两条判据都不触发，租期锚点也取不到任何东西。修法前用裸 $MyHost 查会查到 codex 那条并当成自己的、替别人的认领续命' `
+    (($null -eq $inlineF4.my) -and ($inlineF4.yield -eq $false) -and ($inlineF4.resume -eq $false) -and ($inlineF4.holders.Count -eq 0)) ("my={0} yield={1} resume={2} holders={3}" -f $inlineF4.my, $inlineF4.yield, $inlineF4.resume, $inlineF4.holders.Count)
+
+# --- F5：命令⑦ 正例 —— 同机同宿主另一个并发会话持有 ⇒ 只报不接 ---------------------
+$inlineF5 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
+    [pscustomobject]@{ createdAt = '2026-08-09T01:00:00Z'; body = 'dao-claim: HOSTX/cc/sessB/4h' }
+))
+Assert-True '9j [PR #264 对抗 P3 类：命令⑦ 摘 `-not` · 正例] 桶里那条认领的会话 id 是 sessB、而我是 sessA ⇒ "只报不接"判据为**真**：这是同机同宿主另一个并发会话的单，不是我自己前任的。摘掉 `-not` 时 9j/9k 同时翻向危险的一侧（把别人的单当成自己的接着干）' `
+    ($inlineF5.resume -eq $true) ("resume={0} session={1}" -f $inlineF5.resume, $inlineF5.my.session)
 
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''
