@@ -144,7 +144,6 @@ function run(dir, opts = {}) {
 const blocked = (res) => !!(res.out && res.out.decision === "block");
 const silent = (res) => res.raw.trim() === "";
 
-// 复用的夹具内容
 const HTML = "<!doctype html><html><body><main>proto</main></body></html>";
 const TSX_JSX = "export const Card = () => <div className=\"c\">hi</div>;\n";
 const TSX_NOJSX = "export const n: number = 1;\nexport function f(a: number) { return a + 1; }\n";

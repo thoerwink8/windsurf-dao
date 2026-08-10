@@ -74,10 +74,8 @@ function Pack-Glob($srcDir, $dstDir, $filter, $label) {
 
 Write-Host '  收集 dao 文件...' -ForegroundColor Cyan
 
-# 核心规则
 Pack-File (Join-Path $DaoRoot 'ccswitch\dao.md') (Join-Path $daoDir 'dao.md') 'dao.md'
 
-# Skills（目录）
 $skillsSrc = Join-Path $DaoRoot 'ccswitch\skills'
 $skillsDst = Join-Path $daoDir 'skills'
 if (Test-Path $skillsSrc) {
@@ -86,13 +84,10 @@ if (Test-Path $skillsSrc) {
     }
 }
 
-# Commands
 Pack-Glob (Join-Path $DaoRoot 'ccswitch\commands') (Join-Path $daoDir 'commands') '*.md' 'commands'
 
-# Agents
 Pack-Glob (Join-Path $DaoRoot 'ccswitch\agents') (Join-Path $daoDir 'agents') 'dao-*.md' 'agents'
 
-# Hooks
 $hooksSrc = Join-Path $DaoRoot 'ccswitch\hooks'
 $hooksDst = Join-Path $daoDir 'hooks'
 if (Test-Path $hooksSrc) {
@@ -157,16 +152,12 @@ if (Test-Path $hooksSnapshotPath) {
     Write-Host '  [提醒] 找不到 config-sync/common/settings.json，本次未生成 hooks-template.json（dao-install.ps1 第 6 步会跳过 hooks 注册并说明原因）' -ForegroundColor Yellow
 }
 
-# References（经文）
 Pack-Glob (Join-Path $DaoRoot 'docs\classics') (Join-Path $daoDir 'references') '*.md' 'references'
 
-# Styles
 Pack-Glob (Join-Path $DaoRoot 'ccswitch\styles') (Join-Path $daoDir 'styles') '*.md' 'styles'
 
-# Themes
 Pack-Glob (Join-Path $DaoRoot 'ccswitch\themes') (Join-Path $daoDir 'themes') '*.json' 'themes'
 
-# Persona
 $personaSrc = Join-Path $DaoRoot 'ccswitch\persona'
 $personaDst = Join-Path $daoDir 'persona'
 if (Test-Path $personaSrc) {
@@ -192,7 +183,6 @@ if ($DryRun) {
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
     Compress-Archive -Path "$packDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
 
-    # 清理临时目录
     Remove-Item $packDir -Recurse -Force
 
     $size = [math]::Round((Get-Item $zipPath).Length / 1024, 1)
