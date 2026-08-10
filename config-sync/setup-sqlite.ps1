@@ -114,16 +114,13 @@ function Resolve-VendorZip {
 }
 
 function Find-Sqlite3 {
-    # 1. 显式环境变量
     if ($env:SQLITE3_PATH -and (Test-Path $env:SQLITE3_PATH)) {
         return (Resolve-Path $env:SQLITE3_PATH).Path
     }
-    # 2. PATH
     try {
         $fromPath = (Get-Command sqlite3 -ErrorAction Stop).Source
         if ($fromPath) { return $fromPath }
     } catch {}
-    # 3. 本仓库 vendor 已解压
     $vendorExe = Join-Path $extractDir 'sqlite3.exe'
     if (Test-Path $vendorExe) { return (Resolve-Path $vendorExe).Path }
     return $null
