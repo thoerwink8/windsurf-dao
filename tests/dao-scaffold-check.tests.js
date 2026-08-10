@@ -1847,6 +1847,37 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       j2.isGreenSyncLine("ⓘ 条款库结构闸绿：dao.md + ccswitch/rules/ 含条款的 12/12 个 .md，" +
         "合计 121 条，零违例（零条款的纯流程文件不检，故意不报红）"));
 
+    // ── 账 4（issue #256，出处 PR #237 对抗验证 5231324695 §十）：夹具顺带改动，
+    //    `scoped=0` 退化绿态从此无人覆盖 ─────────────────────────────────────────
+    //    PR #237 返修 denySampled 时把 mkGreenMetaRepo 的 `providers=0 scoped=0` 顺带改成
+    //    `1 1`（方向无害、更贴近生产），但 `scoped=0` 那一态从此没有夹具在覆盖。
+    //    **核对结论：不补「exit=0 + scoped=0」那条夹具，因为生产产不出它**——
+    //    settings-drift.js 对「没有 claude 型 provider」判 uncheckable ⇒ `providerExitCode` 返回 2
+    //    （它自己的自测「零样本·没有 claude 型 provider → uncheckable 且 exit=2（不是「无漂移」）」钉着），
+    //    而 hook 在 sExit==="2" 时走 ⚠「没查成」分支，**根本到不了那条 ⓘ 绿行**。
+    //    ⇒ 真正没人守的不是那条夹具，是**这条跨文件耦合本身**（与账 3 同族：hook 那行绿
+    //    安不安全，取决于另一个文件的退出码契约，而两边谁都没把它写下来）。本批钉它。
+    const driftSrc = (() => {
+      try { return fs.readFileSync(path.join(REPO, "ccswitch", "lib", "settings-drift.js"), "utf8"); }
+      catch (_) { return ""; }
+    })();
+    check("自检（账4）：读到了 settings-drift.js（读不到时下面两条是空转，不是全绿）",
+      driftSrc.length > 1000, "len=" + driftSrc.length);
+    check("🔴 账4·跨文件耦合钉子：settings-drift.js 仍对「零 claude 型 provider」判 uncheckable ⇒ exit=2 —— " +
+      "hook 那条 ⓘ 绿行不给 scoped=0 设防，全靠这个契约兜着。哪天它改成 exit=0，" +
+      "「一个 provider 都没比到」就会被报成绿并被聚合吞掉，而本条会先翻红",
+      driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0 &&
+      driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0,
+      "exit2契约=" + (driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0) +
+      " 零样本自测=" + (driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0));
+    // 账 4 要的「显式记一句已知未覆盖」——做成机器核的形态而不是一句注释，这样它自己会过期：
+    // 今天 scoped=0 那条 ⓘ 绿行**确实判绿**（缺口在，只是不可达）。哪天有人给它补了
+    // NON_PASS pattern，本条翻红 ⇒ 那时把本条连同上面那段说明一起删掉，缺口就真的没了。
+    check("⚠️ 账4·已知缺口登记（不是在为它背书）：scoped=0 的 ⓘ 绿行今天仍被判绿 —— " +
+      "判据层没设防，安全性全部来自上面那条 exit=2 契约。补了 pattern 之后本条会红，届时删掉它",
+      j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
+        "且与应注册清单一致；deny 规则逐条一致（0 个 provider 与应注册清单）"));
+
     // ── 账 5（issue #256，出处 PR #237 三轮复看 5231769847 §六）：⑥b 是同谓词冗余 ────────
     //    M-R1b 实测坐实：把 ⑥ 锚点收窄成只认 retire 子项文案 ⇒ ⑥a/⑥b 同生同死、零红；
     //    同一手法用在 ③ 上，孤儿子项 ③b 仍单红。⇒ ⑥b 不提供 ⑥a 之外的任何覆盖。
