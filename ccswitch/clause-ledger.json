@@ -365,7 +365,38 @@
       "baseline": "2026-08-09 盘点报告（`_tmp/comment-audit-20260809.md`，本地报告未进 git 追踪面）实测：全仓注释占比 29.5%（15,535/52,723 行），`ccswitch/hooks/dao-hard-gates.js` 单文件 58.9%，其中 G2 一道闸的编年史注释块单块 269 行（第 56-324 行）。条款文字为用户 2026-08-09 于 issue #70 评论 5231096681 拍板「搬家+立法」，非 AI 自定。PR #246 首版遗漏拍板 A 段的防呆 carve-out（原文「反面已核：部分叙事注释有防呆实证，处置按『拆开搬』不整段清空」），对抗核验 F5 指出后补回，出处同一条评论，非新增判断",
       "source_refs": [
         "issue #70 评论 5231096681",
-        "_tmp/comment-audit-20260809.md（本地报告，未进 git 追踪面）"
+        "_tmp/comment-audit-20260809.md（本地报告，未进 git 追踪面）",
+        "issue #70 评论 5239449909（用户 2026-08-10 第 1 件：判据收窄为「关于别处的事实只写去哪查」，正文迁 ccswitch/rules/dao-comment.md）"
+      ],
+      "status": "active"
+    },
+    "注-别处事实": {
+      "file": "ccswitch/rules/dao-comment.md",
+      "n": "27",
+      "first_seen": "08-10",
+      "trigger": "paths作用域",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-10 全量分类扫描（87 份文件 / 14,727 注释行，非抽样）实测——全仓自陈假话 52 条（代码注释 27 + Markdown 25），「把盘上的话改真」的提交 57 个（占 994 个 commit 的 5.7%）；已实现的伤害 3 起：㈠一个错 7 倍的耗时数字（真值 8-9s 被写成 55-81s）被当作「端到端整跑负担不起」的论据用掉，**据此砍掉了端到端测试**（PR #252）㈡一条 A 类判断句撒谎，让 G2 硬闸少拦 4 格真拦截 ㈢一条错误提醒连续误导三名 subagent 照抄进交付报告（`ccswitch/hooks/dao-glob-gate.js`）。**救命侧代码注释可核实实证 = 0 条，这个数有观测偏斜**（救命是一次没发生的事故，天然不留痕），照直标，别读成「注释从不救命」",
+      "source_refs": [
+        "issue #70 评论 5239449909（用户 2026-08-10 一次性拍板 17 件 · 第 1 件「注释总方针」）",
+        "issue #274",
+        "_tmp/2026-08-10-注释存废裁决.md（本地报告，未进 git 追踪面）"
+      ],
+      "status": "active"
+    },
+    "注-拍板不做入账": {
+      "file": "ccswitch/rules/dao-comment.md",
+      "n": "3",
+      "first_seen": "08-10",
+      "trigger": "run-tests/nogo-ledger",
+      "judge_only": false,
+      "self_authored": [],
+      "baseline": "2026-08-10 全仓扫描，符合「用户拍板 + 否决 + 零机检」三条的注释 3 处：`ccswitch/hooks/dao-probe-gate.js`（deadman 兜底轮不做，08-08）· `ccswitch/hooks/dao-hard-gates.js`（rename 族 4 格漏报长期保留，08-07 · issue #132 关单裁决）· `tests/link-codex.tests.ps1`（9 个手放 junction 不当漂移，07-27）。三块注释**整块删掉后默认层测试红集一条不变**（本批实测，即无人在看着它们）。同批另见 2 处「留给用户拍板」的**待决**项指向 issue #112，不在本条射程内（它们是待拍板不是已拍板），挂在 issue #274 的未尽处里",
+      "source_refs": [
+        "issue #70 评论 5239449909（用户 2026-08-10 一次性拍板 17 件 · 第 3 件「拍板类注释升格」）",
+        "issue #274",
+        "docs/ops/nogo-ledger.json（台账本体）"
       ],
       "status": "active"
     },
