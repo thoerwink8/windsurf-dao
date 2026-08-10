@@ -696,7 +696,13 @@ let baseGate = "off";      // on | off | fail | write
 let baseMatched = 0;
 let baselineJson = null;
 
-if (!LIST_ONLY) {
+// 🔴 **闸只在"该它管"的时候才装载**（2026-08-10 首轮真跑当场撞到，记在这里）：
+//   `BASELINE_REQUIRED` 判的是"这一跑归不归它管"，此前却把它只用在**读失败**那一支上，
+//   于是「拿合成 tests 目录自测 + 真基线档恰好存在」这一格里，闸照样开、当然零匹配、
+//   于是走 exit 4 —— `tests/run-tests-tier.tests.js` 一次红 33 条。
+//   **它的症状随"基线档存不存在"变**：档还没生成时全绿，生成完当场红，
+//   而这两次跑的是同一份代码。判据必须写在**装载**这一步，不是失败处置那一步。
+if (!LIST_ONLY && BASELINE_REQUIRED) {
   const b = loadBaseline();
   if (!b.ok && WRITE_BASELINE) {
     // 首次生成：档还不存在是正常的，从空档起步
@@ -704,20 +710,18 @@ if (!LIST_ONLY) {
     baseGate = "write";
     process.stdout.write(`\n  ⓘ 基线档尚不存在，本次 --write-baseline 从空档起步：${BASELINE_PATH}\n`);
   } else if (!b.ok) {
-    if (BASELINE_REQUIRED) {
-      // 🔴 fail-closed：读不到基线 ⇒ 「有没有几条根本没跑」这件事本次**一条都没查**，
-      //    而那与「查了都没事」在退出码上必须分得开（本文件通篇治的就是这个病）。
-      baseGate = "fail";
-      tierProblems.push(`断言条数基线没读成 ⇒ **本次「有没有几条根本没跑」一条都没查**。${b.why} `
-        + `⇒ 重生成：node scripts/run-tests.mjs ${ENV_TIER ? "--env " : ""}--write-baseline`);
-    } else {
-      // 唯一允许关闸的一种：拿合成 tests 目录自测、又没注入基线档。**关了也要出声。**
-      process.stdout.write(`\n  ⓘ 断言条数基线未启用（--tests-dir 指到了合成目录且没注入 DAO_ASSERTION_BASELINE）——本次不查条数\n`);
-    }
+    // 🔴 fail-closed：该它管却读不到 ⇒ 「有没有几条根本没跑」这件事本次**一条都没查**，
+    //    而那与「查了都没事」在退出码上必须分得开（本文件通篇治的就是这个病）。
+    baseGate = "fail";
+    tierProblems.push(`断言条数基线没读成 ⇒ **本次「有没有几条根本没跑」一条都没查**。${b.why} `
+      + `⇒ 重生成：node scripts/run-tests.mjs ${ENV_TIER ? "--env " : ""}--write-baseline`);
   } else {
     baselineJson = b.json;
     baseGate = WRITE_BASELINE ? "write" : "on";
   }
+} else if (!LIST_ONLY) {
+  // 唯一允许关闸的一种：拿合成 tests 目录自测、又没注入基线档。**关了也要出声。**
+  process.stdout.write(`\n  ⓘ 断言条数基线未启用（--tests-dir 指到了合成目录且没注入 DAO_ASSERTION_BASELINE）——本次不查条数\n`);
 }
 
 if (baselineJson) {
