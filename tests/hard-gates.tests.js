@@ -2499,13 +2499,46 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
                   "**预算闸真的开**（exit 2；这个 payload 上末尾饿死闸够不到 fed=8，故这个 2 只能" +
                   "来自预算闸——不是像 ⑥ 那条一样的空过）",
               dwR.code === 2, `code=${dwR.code}`);
-            check("#254 正控·同一格拦截文案仍是「没验过」而不是「查出你在写 live 配置」",
-              /这次没验过/.test(dwR.err), dwR.err.slice(0, 200));
+            // 🔴 **谓词补强（PR #261 返修 · issue #254 对抗判词件①；存量同型两条的账在 issue #266）**
+            //    这一条原本写的是 `/这次没验过/.test(dwR.err)`，**恒真**——那四个字同时住在
+            //    `g2Starved` 的真拦截文案里**和** `starved > 0` 时那条 fail-open 批量告警里
+            //    （本 hook `if (starved > 0)` 那段），而本组构造（候选侧界收到 1 ms）**保证**
+            //    `starved > 0` ⇒ 把预算闸整个移除，它照样 true（对抗官三形态 mutation 实测：
+            //    移除 / 注释掉 / 结果不被消费，旧谓词三次全绿）。
+            //    **改真的形态是换锚点、不是改名**：锚到 `g2Starved` 的 `what` 独有的那句
+            //    （批量告警里没有它），再加一条反向——拦截文案不许变成另一格的「查出你在写
+            //    live 配置」。**下面两条负控是它的自证**：闸不开火（系数=1）与闸被整个移除，
+            //    两侧新谓词都必须翻 false，而 `/这次没验过/` 在那两侧仍为 true —— 那正是旧谓词
+            //    被换掉的理由，也一并钉在断言里，省得后人重推一遍。
+            const RE_STARVED_VERDICT = /一条命令里产生了 \d+ 条待归一的候选/;  // g2Starved 独有
+            const RE_LIVE_VERDICT = /要用 shell 写用户级 live 配置/;            // 另一格的拦截文案
+            check("🔴#254 正控·拦下这一条的确实是**饿死 fail-close 那一格**（锚 `g2Starved` 独有句，" +
+                  "不是那句 fail-open 批量告警也会打的「没验过」），文案说的是「这次没验过」" +
+                  "而不是「查出你在写 live 配置」",
+              RE_STARVED_VERDICT.test(dwR.err) && /这次没验过/.test(dwR.err)
+                && !RE_LIVE_VERDICT.test(dwR.err), dwR.err.slice(0, 300));
             const dwBrokenR = gate(dirFormPay, { env: asLong, script: mDangerWindowBrokenFactor });
             check("🔴#254 判别力·先破再验：同一危险窗中点，系数改回 1（issue #254 修复前的等价值）" +
                   "⇒ 预算闸判定变回「还来得及」、不拦，v3 重跑完也没找到真违例 ⇒ **由 2 翻 0**" +
                   "（∴ 上一条的通过不是巧合，是系数=2.5 这个具体取值在起作用，不是随便什么正数都行）",
               dwBrokenR.code === 0, `code=${dwBrokenR.code}`);
+            check("🔴#254 负控①·系数改回 1（预算闸不开火）⇒ 上面那条文案谓词翻 **false**" +
+                  "（∴ 它不是恒真）；同一份 stderr 上 `/这次没验过/` **仍为 true**——旧谓词的空过在这里现形",
+              !RE_STARVED_VERDICT.test(dwBrokenR.err) && /这次没验过/.test(dwBrokenR.err),
+              dwBrokenR.err.slice(0, 300));
+            // 负控②：把预算闸那一行整个移除（与上面 `mNoBudget` 同一手法，叠在危险窗构造上）——
+            //   这正是对抗官用来证伪旧谓词的那个变体，钉在这里就不必再靠一次性实测背书。
+            const dwNoBudgetR = gate(dirFormPay, { env: asLong,
+              script: mkMut("mutant-254-danger-window-no-budget.js",
+                [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+                [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"],
+                [RE_BUDGET_CHECK, "null"]) });
+            check("🔴#254 负控②·预算闸整行移除 ⇒ **由 2 翻 0**，且文案谓词同样翻 **false**" +
+                  "（旧谓词 `/这次没验过/` 在这里仍为 true —— 那条 fail-open 批量告警在喂它）",
+              dwNoBudgetR.code === 0 && !RE_STARVED_VERDICT.test(dwNoBudgetR.err)
+                && /这次没验过/.test(dwNoBudgetR.err),
+              `code=${dwNoBudgetR.code} starvedVerdict=${RE_STARVED_VERDICT.test(dwNoBudgetR.err)} ` +
+              `旧谓词=${/这次没验过/.test(dwNoBudgetR.err)}`);
           }
 
           // ⑥ 🔴 **真实规模复测**：判词给出的 N=48000 + 末置 dirForm 触发子形态。
