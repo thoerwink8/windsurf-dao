@@ -13,7 +13,8 @@
       "ccswitch/rules/dao-gui-verify.md",
       "ccswitch/rules/dao-workitem.md",
       "ccswitch/rules/dao-product.md",
-      "ccswitch/rules/dao-askuser.md"
+      "ccswitch/rules/dao-askuser.md",
+      "ccswitch/rules/dao-comment.md"
     ],
     "改条款要改哪里": "改上面那些 Markdown 原文，然后重新生成本文件。",
     "再生成": "node ccswitch/scripts/gen-clause-index.mjs",
@@ -31,7 +32,7 @@
         "external": false,
         "selector": "marked",
         "role_scheme": "general",
-        "sha256": "0ec119ea668a6a58c3d83cf20e9698f5e8ed494d7bf0945fa8bd6634250501fb",
+        "sha256": "7d6b09dfe477c13ab695bba48d0f0d49559214a4a6d41c925d70f7f8d6da1ced",
         "lines": 115,
         "clauses": 24,
         "observation": 0,
@@ -229,10 +230,27 @@
         "slug": 0,
         "no_slug": 0,
         "no_meta_field": 0
+      },
+      {
+        "file": "ccswitch/rules/dao-comment.md",
+        "external": false,
+        "selector": "marked",
+        "role_scheme": "general",
+        "sha256": "c293b036fa30bbc59cbcd855fb3317e8b4f0c3820fdbc3e1f6c8fca65d5bdf48",
+        "lines": 78,
+        "clauses": 2,
+        "observation": 0,
+        "fieldless": 0,
+        "no_trigger": 0,
+        "unclassified": 0,
+        "skipped_in_special_sections": 0,
+        "slug": 2,
+        "no_slug": 0,
+        "no_meta_field": 0
       }
     ],
     "roles": {
-      "general": 89,
+      "general": 91,
       "reviewer": 1,
       "implementer": 9,
       "adversary": 20,
@@ -240,7 +258,7 @@
       "dogfood": 2
     },
     "totals": {
-      "clauses": 126,
+      "clauses": 128,
       "observation": 0
     }
   },
@@ -338,7 +356,7 @@
       "body_excerpt": "🔴 拍板即落单：用户拍板后**当场**评论进对应 issue，不落盘等于没拍——会话一没拍板就没了。新会话接力敲 `/dao-resume`，而它只读得到落了盘的。 [#续-拍板落单]"
     },
     {
-      "id": "61eb92a8e266-1",
+      "id": "be340bf6f88d-1",
       "slug": "归-根路径消歧",
       "file": "ccswitch/dao.md",
       "line": 42,
@@ -361,7 +379,7 @@
       "body_excerpt": "📍 根路径消歧：裸写的 `docs/` `stacks/` 指 dao 仓自己的，**指项目侧的必带「项目侧」前缀**，否则指针被静默错解。 [#归-根路径消歧] 规范层级判据（唯一真相源）：先问**换个项目还能用吗**——能 ⇒ 归 dao、项目侧留指针；不能 ⇒ 归项目。**犹豫倾向全局。** 🔴 改动次序 …"
     },
     {
-      "id": "61eb92a8e266-2",
+      "id": "be340bf6f88d-2",
       "slug": "归-dao先行",
       "file": "ccswitch/dao.md",
       "line": 42,
@@ -384,7 +402,7 @@
       "body_excerpt": "📍 根路径消歧：裸写的 `docs/` `stacks/` 指 dao 仓自己的，**指项目侧的必带「项目侧」前缀**，否则指针被静默错解。 [#归-根路径消歧] 规范层级判据（唯一真相源）：先问**换个项目还能用吗**——能 ⇒ 归 dao、项目侧留指针；不能 ⇒ 归项目。**犹豫倾向全局。** 🔴 改动次序 …"
     },
     {
-      "id": "61eb92a8e266-3",
+      "id": "be340bf6f88d-3",
       "slug": "归-报告落盘",
       "file": "ccswitch/dao.md",
       "line": 42,
@@ -407,7 +425,7 @@
       "body_excerpt": "📍 根路径消歧：裸写的 `docs/` `stacks/` 指 dao 仓自己的，**指项目侧的必带「项目侧」前缀**，否则指针被静默错解。 [#归-根路径消歧] 规范层级判据（唯一真相源）：先问**换个项目还能用吗**——能 ⇒ 归 dao、项目侧留指针；不能 ⇒ 归项目。**犹豫倾向全局。** 🔴 改动次序 …"
     },
     {
-      "id": "61eb92a8e266-4",
+      "id": "be340bf6f88d-4",
       "slug": "归-注释归位",
       "file": "ccswitch/dao.md",
       "line": 42,
@@ -796,6 +814,52 @@
       "observing": false,
       "shape": "indent",
       "body_excerpt": "- ⚠️ 同病一例：`origin/main` 是上次 fetch 的缓存，而 `git fetch` 会**静默失败**（之后 merge 照报 `Already up to date`）⇒ merge 前先核 fetch 真跑成。 [#反-fetch静默]"
+    },
+    {
+      "id": "2fca08adffb0",
+      "slug": "注-别处事实",
+      "file": "ccswitch/rules/dao-comment.md",
+      "line": 21,
+      "line_end": 21,
+      "meta_line": 21,
+      "role": "general",
+      "zone": "clause",
+      "section": null,
+      "title": "注释里不许写「关于别处的事实」，只准写「去哪查」",
+      "n": "27",
+      "first_seen": "08-10",
+      "trigger": "paths作用域",
+      "baseline": "2026-08-10 全量分类扫描（87 份文件 / 14,727 注释行，非抽样）实测——全仓自陈假话 52 条（代码注释 27 + Markdown 25），「把盘上的话改真」的提交 57 个（占 994 个 commit 的 5.7%）；已实现的伤害 3 起：㈠一个错 7 倍的耗时数字（真值 8-9s 被写成 55-81s）被当作「端到端整跑负担不起」的论据用掉，**据此砍掉了端到端测试**（PR #252）㈡一条 A 类判断句撒谎，让 G2 硬闸少拦 4 格真拦截 ㈢一条错误提醒连续误导三名 subagent 照抄进交付报告（`ccswitch/hooks/dao-glob-gate.js`）。**救命侧代码注释可核实实证 = 0 条，这个数有观测偏斜**（救命是一次没发生的事故，天然不留痕），照直标，别读成「注释从不救命」",
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": true,
+      "judge_only": false,
+      "observing": false,
+      "shape": "top",
+      "body_excerpt": "- **注释里不许写「关于别处的事实」，只准写「去哪查」**（用户 2026-08-10 拍板，第 1 件）：另一份文件里写着什么、某次实测是几秒、某个清单有几项、某个函数有几个调用点——这类**值**一律不进注释，注释里只留它的**坐标**（哪份文件 / 哪个函数 / 跑哪条命令），让读的人自己去取当下那一版。**…"
+    },
+    {
+      "id": "274f69ca86a9",
+      "slug": "注-拍板不做入账",
+      "file": "ccswitch/rules/dao-comment.md",
+      "line": 22,
+      "line_end": 22,
+      "meta_line": 22,
+      "role": "general",
+      "zone": "clause",
+      "section": null,
+      "title": "用户拍板的「刻意不做」不许只活在一行注释里",
+      "n": "3",
+      "first_seen": "08-10",
+      "trigger": "run-tests/nogo-ledger",
+      "baseline": "2026-08-10 全仓扫描，符合「用户拍板 + 否决 + 零机检」三条的注释 3 处：`ccswitch/hooks/dao-probe-gate.js`（deadman 兜底轮不做，08-08）· `ccswitch/hooks/dao-hard-gates.js`（rename 族 4 格漏报长期保留，08-07 · issue #132 关单裁决）· `tests/link-codex.tests.ps1`（9 个手放 junction 不当漂移，07-27）。三块注释**整块删掉后默认层测试红集一条不变**（本批实测，即无人在看着它们）。同批另见 2 处「留给用户拍板」的**待决**项指向 issue #112，不在本条射程内（它们是待拍板不是已拍板），挂在 issue #274 的未尽处里",
+      "self_declared": null,
+      "self_declared_all": [],
+      "has_meta_field": true,
+      "judge_only": false,
+      "observing": false,
+      "shape": "top",
+      "body_excerpt": "- **用户拍板的「刻意不做」不许只活在一行注释里**（用户 2026-08-10 拍板，第 3 件）：凡注释里写着「用户某日拍板：不做 / 不收 / 不升格 / 保留现状」这一类**否决**的，同一动作内落进项目侧台账（本仓是 `docs/ops/nogo-ledger.json`），一条一个 **编号 + own…"
     },
     {
       "id": "dc5c427b6bda",
