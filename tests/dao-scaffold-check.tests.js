@@ -1761,6 +1761,31 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
         "实判 103 个路径 token，零发现。**只说明路径类引用没指向空气**——计数类/行为类陈旧不在射程内。 → " +
         "明细：node ccswitch/lib/memory-truth-source.js --scope=all（观察线，发现数恒不判红）"));
 
+    // ── 账 1（issue #256，出处 PR #237 对抗验证 §八）：⑤ 的安全边界只有一个汉字宽 ─────
+    //    `处指向空气`（命中态）与 memoryRefLines() 真绿分支的 `没指向空气` 只差**前面
+    //    那一个字**。判据今天是对的，但没有任何东西钉着「它离误伤只有一个字」——下次
+    //    有人顺手把真绿那句话改顺一点，锚点就可能连带命中真绿分支而不自知。
+    //    对抗验证 mutation MC 已实测过这一格（锚点放宽成 `指向空气` ⇒ 负控⑤ 当场误判
+    //    并带累三条端到端断言），本批把那次一次性的 mutation **固化成常驻断言**。
+    //    取证路径刻意与上面三条不同（`[#守-自检独立]`）：上面喂的是手写夹具，
+    //    这里的真绿原文**直接从 hook 源码里抠**——手写夹具会随人心漂移，抠出来的跟着生产走。
+    const PAT5 = (j2.NON_PASS_PATTERNS || []).find((re) => re.source.indexOf("处指向空气") >= 0);
+    const GREEN5 = ((SRC.match(/"，零发现。[^"]*"/) || [])[0] || "").replace(/^"|"$/g, "");
+    check("自检（账1）：⑤ 锚点与 memoryRefLines() 真绿分支原文都抠出来了（抠不到时下面三条是空转，不是全绿）",
+      !!PAT5 && GREEN5.indexOf("指向空气") >= 0,
+      "pat=" + (PAT5 ? PAT5.source : "(未找到)") + " green=" + GREEN5.slice(0, 60));
+    if (PAT5 && GREEN5.indexOf("指向空气") >= 0) {
+      check("🔴 账1·⑤ 今天没有误伤：锚点对 memoryRefLines() 真绿分支的**生产原文**不命中",
+        !PAT5.test(GREEN5), GREEN5);
+      check("🔴 账1·⑤ 安全边界 = 1 个汉字：真绿原文含「指向空气」却不含「处指向空气」" +
+        "—— ⑤ 的全部判别力就压在「处」这一个字上（改真绿那句话前先看这条）",
+        GREEN5.indexOf("指向空气") >= 0 && GREEN5.indexOf("处指向空气") < 0, GREEN5);
+      const widened5 = new RegExp(PAT5.source.replace("处指向空气", "指向空气"));
+      check("🔴 账1·⑤ 余量证明（把对抗验证 MC 那次一次性 mutation 变成常驻）：" +
+        "锚点少掉「处」这一个字，真绿分支当场被误判成非绿",
+        widened5.test(GREEN5), "widened=" + widened5.source);
+    }
+
     // ── ⑥ PR #237 对抗验证 5231324695 F5 返修：判词自己数的是 6 种「ⓘ 但不是语义上的绿」，
     //    上一轮（F1，5230986835）只覆盖了①～⑤共 5 处，遗漏第 6 处——clauseStructureLines()
     //    的条款库退役观察线（hook :899-902）。e2e 复现路径见判词：`-RetireAgeDays 15` ⇒
