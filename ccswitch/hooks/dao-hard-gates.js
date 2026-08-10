@@ -2010,20 +2010,37 @@ const GATES = [
       "mcp__playwright__browser_take_screenshot",
     ],
     test(input) {
-      if (!/take_screenshot$/.test(input.tool_name || "")) return null;
+      const tool = input.tool_name || "";
+      if (!/take_screenshot$/.test(tool)) return null;
       const ti = input.tool_input || {};
-      // 不给路径 = 内联返回图片、不落盘 ⇒ 与本条无关，放行
+      const advice =
+        "改成 `<项目根>/_tmp/qa/<context>/<type>-<description>.png`（playwright 那支写进 " +
+        "`filename`，chrome-devtools 那支写进 `filePath`）。" +
+        "`<项目根>` 指**被操作的目标项目**（不是会话 cwd），`<context>` 是本次走查的名字；" +
+        "命名规格见 dao-design standards.md §截图规格。项目 `.gitignore` 里 `**/_tmp/` 已兜住，" +
+        "落别处的截图会进版本库或散在系统 temp 里找不回来。";
       const raw = ti.filePath || ti.filename || ti.path || "";
-      if (!raw) return null;
+      // 缺路径参数时**两支语义不同**，别当同一件事（2026-08-10 · issue #269 ㈡，用户拍板第 15 件）：
+      //   · chrome-devtools 省 `filePath` ⇒ 图片内联进 response，不落盘 ⇒ 与本条无关，放行。
+      //   · playwright 省 `filename`   ⇒ **照样落盘**，落 MCP 的 output dir（缺省即仓根
+      //     `.playwright-mcp/`）——那正是本条要挡的位置，issue #269 ㈢ 实测仓根真长出过它。
+      // 这两句的出处**去这两处查、别信本注释的转述**：`@playwright/mcp` README 的
+      // `browser_take_screenshot` → `filename` 参数说明；`chrome-devtools-mcp` 的
+      // `build/src/tools/screenshot.js`（只有 `if (request.params.filePath)` 分支才写文件）。
+      // 2026-08-10 各读过一次；MCP 换版本要重核——**旧注释「不给路径 = 不落盘」就是这么过期的**，
+      // 它让本闸对最省事的那个形态（懒得写 filename）直接放行。
+      if (!raw) {
+        if (!/^mcp__playwright__/.test(tool)) return null;
+        return {
+          what: "playwright 截图没给 `filename` —— 它不是内联返回，是落到 MCP 的 output dir（缺省仓根 `.playwright-mcp/page-<时间戳>.png`）",
+          how: advice,
+        };
+      }
       const p = norm(raw);
       if (/(^|\/)_tmp\/qa\//i.test(p)) return null;
       return {
         what: `截图要落到 \`${p}\`，不在 \`_tmp/qa/\` 下`,
-        how:
-          "改成 `<项目根>/_tmp/qa/<context>/<type>-<description>.png`。" +
-          "`<项目根>` 指**被操作的目标项目**（不是会话 cwd），`<context>` 是本次走查的名字；" +
-          "命名规格见 dao-design standards.md §截图规格。项目 `.gitignore` 里 `**/_tmp/` 已兜住，" +
-          "落别处的截图会进版本库或散在系统 temp 里找不回来。",
+        how: advice,
       };
     },
   },
