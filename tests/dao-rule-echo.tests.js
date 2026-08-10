@@ -275,6 +275,56 @@ console.log("\n=== 正态：规则文件写入必须回灌 ===");
   check("worktree 内 CLAUDE.md → 命中", ctx(r).includes("条款 V"));
 }
 
+// ── 正态·逐条判据：RULE_PATTERNS 每一条都要有自己的端到端样本 ────────────────
+// （issue #272 件②，用户 2026-08-10 拍板 issue #70 第 13 件：补齐到 8/8）
+// 第四任对抗官把 `RULE_PATTERNS` **逐条**改成永不命中，量出端到端覆盖 **4/8**：
+//   ①ccswitch/dao.md `FAIL=4` ✓ · ②CLAUDE.md `FAIL=4` ✓ · ③.claude/rules `FAIL=29` ✓ ·
+//   ⑤.claude/projects/*/memory `FAIL=1` ✓ ——
+//   🔴 ④`AGENTS?.md` · ⑥`memory/MEMORY.md` · ⑦`.windsurf/rules/**` · ⑧`docs/rules/**.md`
+//   四条**改坏了零检出**（`FAIL=0`），同型的「只给某一条网开一面」也零检出。
+// 下面四组把那四格补上。**三件事是这一段的形态要点**：
+// ㈠ **夹具路径只命中目标那一条** —— 对抗官打 ⑥ 时确实红了 1 条，但红的是 ⑤ 的样本
+//    （`.claude/projects/…/memory/MEMORY.md` **同时**命中 ⑤⑥ 而 ⑤ 排在前面）⇒
+//    **一条红替另一条判据背了书**，⑥ 本身仍是零样本。故这里的路径逐个核过：
+//    只落在目标那一条的射程内，不与任何兄弟判据相交。
+// ㈡ **断言那个判据自己的标签**（`文件性质：…`），不只断言"有回灌"：八个标签两两不同，
+//    断言标签 ⇒ 红的时候归得到是**哪一条**判据坏了（`[#官抗-断言名实核对]` 的正向用法）。
+// ㈢ **夹具路径一律取盘上不存在的位置**：hook 的 `readScopeGlobs()` 会去读盘，读不到就退回
+//    「常驻」文案 ⇒ 断言与这台机器上有没有那个文件无关。用真实存在的路径会把别的仓的
+//    frontmatter 变成本测试的隐藏输入。
+// 误伤反例（`[#官实-误伤反例]`）逐条配在下面那张负态表里（四条 `⑧形似`/`⑦形似`… 那几行）。
+console.log("\n=== 正态·逐条判据：RULE_PATTERNS 八条各有独立样本 ===");
+{
+  // ④ AGENTS.md（宿主常驻注入）—— 与 ②CLAUDE.md 同为仓根单文件，但标签不同
+  const r = run(ptu("Edit", { file_path: "D:/frank/mousse-cli/zz-p13/AGENTS.md", old_string: "a", new_string: "AGENTS 条款 P4" }));
+  check("判据④ AGENTS.md → 回灌", ctx(r).includes("AGENTS 条款 P4"), ctx(r).slice(0, 200));
+  check("判据④ AGENTS.md → 标注为「AGENTS.md（宿主常驻注入）」（归因到这一条，不是隔壁）",
+    /文件性质：AGENTS\.md（宿主常驻注入）/.test(ctx(r)), ctx(r).slice(0, 200));
+}
+{
+  // ⑥ memory/MEMORY.md（memory 索引）—— 刻意**不走** `.claude/projects/…/memory/`，
+  //    那条路会先被判据⑤ 吃掉（对抗官那次「一条红替另一条背书」正是从这儿来的）
+  const r = run(ptu("Edit", { file_path: "D:/frank/mousse-cli/zz-p13/memory/MEMORY.md", old_string: "a", new_string: "记忆索引条款 P6" }));
+  check("判据⑥ memory/MEMORY.md → 回灌", ctx(r).includes("记忆索引条款 P6"), ctx(r).slice(0, 200));
+  check("判据⑥ memory/MEMORY.md → 标注为「memory 索引」而非「auto-memory」（两条判据分得开）",
+    /文件性质：memory 索引（常驻注入）/.test(ctx(r)) && !/auto-memory/.test(ctx(r)), ctx(r).slice(0, 200));
+}
+{
+  // ⑦ .windsurf/rules/**（双栈对位）—— 注意这条判据**不锚 `.md`**，样本仍用 .md（真实形态）
+  const r = run(ptu("Write", { file_path: "D:/frank/mousse-cli/zz-p13/.windsurf/rules/dispatch.md", content: "# Windsurf 规则\n- 双栈条款 P7\n" }));
+  check("判据⑦ .windsurf/rules → 回灌", ctx(r).includes("双栈条款 P7"), ctx(r).slice(0, 200));
+  check("判据⑦ .windsurf/rules → 标注为「Windsurf 规则（双栈对位）」",
+    /文件性质：Windsurf 规则（双栈对位）/.test(ctx(r)), ctx(r).slice(0, 200));
+}
+{
+  // ⑧ docs/rules/**.md（条款库正文，现场 Read 型）—— 它是唯一一条自称「非快照型」的判据，
+  //    文案说反了就等于告诉读者「这条已经全局生效了」，正是这个 hook 要防的那种假话
+  const r = run(ptu("Edit", { file_path: "D:/frank/mousse-cli/zz-p13/docs/rules/clauses.md", old_string: "a", new_string: "条款库条款 P8" }));
+  check("判据⑧ docs/rules → 回灌", ctx(r).includes("条款库条款 P8"), ctx(r).slice(0, 200));
+  check("判据⑧ docs/rules → 标注为「条款库正文（…现场 Read 型，非快照型）」",
+    /文件性质：条款库正文（docs\/rules，现场 Read 型，非快照型）/.test(ctx(r)), ctx(r).slice(0, 200));
+}
+
 console.log("\n=== 负态：非规则文件一个字都不许输出 ===");
 const NEG = [
   ["前端代码 .tsx", ptu("Edit", { file_path: "D:/frank/mousse-cli/src-ui/src/App.tsx", old_string: "a", new_string: "b" })],
@@ -283,6 +333,12 @@ const NEG = [
   ["_tmp 下的同名 CLAUDE.md（排除面）", ptu("Write", { file_path: "D:/frank/mousse-cli/_tmp/fixture/CLAUDE.md", content: "假规则" })],
   ["node_modules 下的 CLAUDE.md", ptu("Edit", { file_path: "D:/x/node_modules/pkg/CLAUDE.md", old_string: "a", new_string: "b" })],
   ["AGENT_GUIDE.md（非 AGENTS.md，不该误命中）", ptu("Edit", { file_path: "D:/frank/windsurf-dao/AGENT_GUIDE.md", old_string: "a", new_string: "b" })],
+  // 判据④⑥⑦⑧ 各自的误伤反例（`[#官实-误伤反例]`）：与上面四个正样本一一对位，
+  // 形状只差一处。缺了这一半，那四条正样本只证明"能命中"，证不了"没有把邻居也吃掉"。
+  ["④形似：MY-AGENTS.md（`AGENTS` 前不是路径分隔符）", ptu("Edit", { file_path: "D:/frank/mousse-cli/zz-p13/MY-AGENTS.md", old_string: "a", new_string: "b" })],
+  ["⑥形似：memory/ 下的非索引文件（只有 MEMORY.md 是索引）", ptu("Edit", { file_path: "D:/frank/mousse-cli/zz-p13/memory/note.md", old_string: "a", new_string: "b" })],
+  ["⑦形似：.windsurf/workflows（同仓不同目录，不是 rules）", ptu("Write", { file_path: "D:/frank/mousse-cli/zz-p13/.windsurf/workflows/flow.md", content: "工作流" })],
+  ["⑧形似：docs/ruleset（多一个字母就不是 docs/rules）", ptu("Write", { file_path: "D:/frank/mousse-cli/zz-p13/docs/ruleset/x.md", content: "别的文档" })],
   ["skills（调用时读盘，不受快照病影响）", ptu("Edit", { file_path: "D:/frank/windsurf-dao/ccswitch/skills/dao-loop/SKILL.md", old_string: "a", new_string: "b" })],
   ["docs/specs 普通文档", ptu("Write", { file_path: "D:/frank/mousse-cli/docs/specs/foo-plan.md", content: "计划" })],
   ["PROGRESS.md 账本", ptu("Edit", { file_path: "D:/frank/mousse-cli/PROGRESS.md", old_string: "a", new_string: "b" })],
@@ -313,8 +369,37 @@ const EXCLUDED_NAMES = (() => {
   return m ? m[1].split("|").map((s) => s.replace(/\\/g, "")).filter(Boolean) : [];
 })();
 // 拆不出来 ⇒ 判红。否则这一整段会退化成「零个样本全过」，而那与「全都守住了」长得一模一样。
+// （这一条被下面的基数闸**完全覆盖**，留着只为报文：它说得出后果「一个样本都没跑」，
+//  而基数闸的报文说的是「拆到 0 个 / 源清单 9 支」。同 `_tmp` / `node_modules` 那两行同理——
+//  留一层零解析的地板。）
 check("逐名负态·排除名单拆得出来（拆不出 ⇒ 这一段本次一个样本都没跑，不许静默）",
   EXCLUDED_NAMES.length > 0, `拆到 ${EXCLUDED_NAMES.length} 个 · source=${EXCLUDED_DIR_NAMES.source}`);
+// 🔴 存在性闸不够，补基数闸 + 去重闸（issue #272 件①，用户 2026-08-10 拍板 issue #70 第 12 件）
+// **复核官那句订正逐字留下，它是这两条闸存在的全部理由**：
+//   「**样本不过期，可是「怎么算出这些样本」会过期。**」
+// 上面那条只问「拆出来的是不是空的」，于是第四任对抗官实测三向**全部静默**：
+//   · 只拆出前 3 个名字        ⇒ exit 0 · FAIL=0（PASS 86→80）——没有任何断言在看条数
+//   · 9 个名字塌成同一个       ⇒ exit 0 · FAIL=0 · PASS 仍 86（与正确态**逐字节**不可区分）
+//   · 🔴 两份字面**同步**在正则尾部追加第二个分组 `|(^|\/)\.venv\/`
+//                              ⇒ 字面对账绿、fail-closed 绿、条数不变，而 `.venv` 永远拿不到样本
+//     这一发不是编出来的坏法，是**下一个往 EXCLUDE 加名字的人很可能写出来的形状**
+//     （在尾巴上再挂一组，而不是塞进现有那一组里）。
+// 判据：**拆出条数 == 源清单条数**，且**去重后条数不变**。两条各持一个谓词、分开报，
+// 是为了红的时候归得到因（`[#官抗-负控独立归因]`：同生同死的 N 条只有一条的判别力）。
+//
+// 「源清单条数」由**另一条路**算出来，全程不碰上面那个「认组形状」的提取正则：
+// 数整条 source 里的竖线 —— `(^|\/)` 自带 1 个，N 个名字之间有 N-1 个 ⇒ **竖线总数恰为 N**。
+// 提取那一步瞎掉时这条仍看得见（`[#守-自检独立]`：自检那一半不许复用被守对象的解析）。
+// ⚠️ 它的假设照直写：这个等式成立的前提是「前缀组只含 1 个竖线、名字里不含裸竖线」。
+// 谁把前缀改成两支以上（如 `(^|\/|\\)`），这条会**假红**——那时该改的是这一行的算法，
+// 不是把闸摘掉；假红至少会把人叫过来，而静默不会。
+const SOURCE_ALT_COUNT = (EXCLUDED_DIR_NAMES.source.match(/\|/g) || []).length;
+check("逐名负态·基数闸：拆出条数 == 源清单支数（夹住「拆少了」与「尾巴上又挂了一组」）",
+  EXCLUDED_NAMES.length === SOURCE_ALT_COUNT,
+  `拆到 ${EXCLUDED_NAMES.length} 个 · 源清单 ${SOURCE_ALT_COUNT} 支 · names=${JSON.stringify(EXCLUDED_NAMES)} · source=${EXCLUDED_DIR_NAMES.source}`);
+check("逐名负态·去重闸：拆出的名字互不重复（夹住「塌陷成同一个」）",
+  new Set(EXCLUDED_NAMES).size === EXCLUDED_NAMES.length,
+  `拆到 ${EXCLUDED_NAMES.length} 个、去重后 ${new Set(EXCLUDED_NAMES).size} 个 · names=${JSON.stringify(EXCLUDED_NAMES)}`);
 // 误伤反例（`[#官实-误伤反例]`）：同一形状、只把目录名换成不在名单里的 ⇒ hook 必须开口。
 // 它同时证明下面那些「全空」不是因为这个形状本身就不像规则文件（否则整段是废话）。
 {
