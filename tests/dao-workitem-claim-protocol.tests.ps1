@@ -161,8 +161,15 @@ function Get-BraceBlockSource {
       core.autocrlf=true 检出下的原始 CRLF 值是 2813/1143——比较前归一化以免换机
       autocrlf 差异假红，出处 PR #211 复核评论 B1。issue #215 批重写了两个函数体，
       这两个数字随之从旧版的 1365/420 更新为当前实测值，方法不变，只是数字变了）。
+
+      🔴 **锚点必须在射程内唯一命中**（PR #264 复抗必修 6）：`[regex]::Match` 返回的是
+      **leftmost** 命中，命中不唯一时"抠的是哪一份"没有唯一答案——上游放一份同型的诱饵，
+      抠取整体挪过去，而真代码可以随便改坏、断言全绿。所以这里数命中次数、≠1 即 throw，
+      并且调用方喂进来的 $Text 是**截过段的 $sixText 而不是整份文档**（见场景 0 的 0e/0f）。
     #>
     param([string]$Text, [string]$AnchorRegex, [string]$Label)
+    $ms = [regex]::Matches($Text, $AnchorRegex)
+    if ($ms.Count -gt 1) { throw "提取失败：锚点在射程内命中 $($ms.Count) 处、不唯一（$Label）：$AnchorRegex" }
     $m = [regex]::Match($Text, $AnchorRegex)
     if (-not $m.Success) { throw "提取失败：锚点未命中（$Label）：$AnchorRegex" }
     $braceStart = $Text.IndexOf('{', $m.Index)
@@ -189,9 +196,37 @@ Write-Host ''
 Write-Host '场景 0：从文档逐字节提取两个函数'
 
 $docText = [System.IO.File]::ReadAllText($docPath, [System.Text.Encoding]::UTF8)
-$daoMarksSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Get-DaoMarks \{' -Label 'Get-DaoMarks'
-$effClaimSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Get-EffectiveClaim \{' -Label 'Get-EffectiveClaim'
-$mySessionSrc = Get-BraceBlockSource -Text $docText -AnchorRegex 'function Test-IsMySessionClaim \{' -Label 'Test-IsMySessionClaim'
+
+# ── 抠取射程：先把 §六 那一段截出来。本文件**所有**从文档抠原文的锚点都只在这一段里求值 ──
+# 🔴 为什么必须截段（PR #264 复抗 X12 / X12b / X21 三发实测，三发**全部存活** = 潜伏 fail-open）：
+#    每一处抠取用的都是 `[regex]::Match` 的 **leftmost 命中**。锚点若在整份 70 KB 文档上求值，
+#    只要 §六 **之前**冒出一行同型的行首文本（这份文档到处是 ```powershell 围栏与代码引用，
+#    插一段"举例说明用"的旧写法完全在射程内），抠取就整体挪到诱饵上——**而 §六 那份真代码
+#    可以随便改坏，62 条断言一条不红**。三发实测的形态都是「§六 真行改坏 + 上游插同型围栏」。
+#    截段之后这一态在**结构上**不可能发生：诱饵插在 §六 之外时压根不在 $sixText 里；插在
+#    §六 之内时锚点命中数变 2，两个抠取函数都会 throw（Get-BraceBlockSource / Get-InlineSource
+#    各自数了命中次数），单行 canary 则由各自断言里那个「段内唯一」的合取项判红。
+# ⚠️ **这治的是「抠到了别处的同型行」，不治「抠出来是空串」**——后者由 Get-InlineSource 的
+#    throw 与 9b 管。两件事分开记，别当成一件。
+# ⚠️ **射程边界照直写**：截段的判据是 `^### 六、` 到下一个 `^### `。**改了那个小节标题**、
+#    或**把 §六 的代码搬到别的小节**，抠取会当场 throw（0e/0f 先红），不会静默错抠——
+#    这是刻意的 fail-closed，但它意味着**本文件与文档的小节编号绑在一起**，重排小节要同批改这里。
+$sixHits = [regex]::Matches($docText, '(?m)^### 六、')
+Assert-True '0e §六 小节标题在全文恰好一处（截段的前提：多于一处时"抠的是哪一份"没有唯一答案；零处说明标题改了、下面全部抠取的射程无从定义）' `
+    ($sixHits.Count -eq 1) ("命中 {0} 处" -f $sixHits.Count)
+if ($sixHits.Count -ne 1) { throw "§六 截段失败：小节标题命中 $($sixHits.Count) 处，抠取射程无从定义" }
+$sixStart = $sixHits[0].Index
+$sixTail = [regex]::Match($docText.Substring($sixStart + 1), '(?m)^### ')
+$sixEnd = $docText.Length
+if ($sixTail.Success) { $sixEnd = $sixStart + 1 + $sixTail.Index }
+$sixText = $docText.Substring($sixStart, $sixEnd - $sixStart)
+Assert-True '0f §六 截出来的是全文的一个**真子段**，且下界停在下一个 `### ` 标题之前（这条是 0e 的另一半：0e 只证标题唯一，本条证截出来的东西既不是空、也没把整份文档囫囵吞下——两条都绿才谈得上"射程被限定了"）' `
+    (($sixText.Length -gt 0) -and ($sixText.Length -lt $docText.Length) -and ($sixText.StartsWith('### 六、')) -and (([regex]::Matches($sixText, '(?m)^### ')).Count -eq 1)) `
+    ("六段 {0} 字节 / 全文 {1} 字节" -f $sixText.Length, $docText.Length)
+
+$daoMarksSrc = Get-BraceBlockSource -Text $sixText -AnchorRegex 'function Get-DaoMarks \{' -Label 'Get-DaoMarks'
+$effClaimSrc = Get-BraceBlockSource -Text $sixText -AnchorRegex 'function Get-EffectiveClaim \{' -Label 'Get-EffectiveClaim'
+$mySessionSrc = Get-BraceBlockSource -Text $sixText -AnchorRegex 'function Test-IsMySessionClaim \{' -Label 'Test-IsMySessionClaim'
 
 $daoMarksLfLen = ($daoMarksSrc -replace "`r`n", "`n").Length
 $effClaimLfLen = ($effClaimSrc -replace "`r`n", "`n").Length
@@ -366,9 +401,10 @@ Assert-True '5d [issue #215 验收标准②「至少补一个三方场景」] �
 # 改用锚定单行的正则直接抓这一行原文，逐字核对它到底拼了哪些字段。
 Write-Host '场景 6：F3 源码文本 canary（$marks 组装行现在带上 session/hours/oldHost/oldRuntime）'
 
-$assemblyMatch = [regex]::Match($docText, '(?m)^\s*\$marks \+= \[pscustomobject\]@\{[^\r\n]*\}')
-Assert-True '6a `$marks +=` 组装行在文档里找得到（找不到说明命令③的实现形态已经变了，本断言需要跟着重写）' `
-    $assemblyMatch.Success ''
+$assemblyPat = '(?m)^\s*\$marks \+= \[pscustomobject\]@\{[^\r\n]*\}'
+$assemblyMatch = [regex]::Match($sixText, $assemblyPat)
+Assert-True '6a `$marks +=` 组装行在 §六 里找得到、且**段内恰好一处**（找不到说明命令③的实现形态已经变了，本断言需要跟着重写；不止一处则"抠的是哪一份"没有唯一答案——射程与唯一性两件事见 0e/0f，PR #264 复抗必修 6）' `
+    ($assemblyMatch.Success -and (([regex]::Matches($sixText, $assemblyPat)).Count -eq 1)) ("段内命中 {0} 处" -f ([regex]::Matches($sixText, $assemblyPat)).Count)
 
 if ($assemblyMatch.Success) {
     $assemblyLine = $assemblyMatch.Value
@@ -526,17 +562,23 @@ Assert-True '8f [issue #250 分隔符负控] 组合键必须带分隔符：`AB`+
 # 下三条全部落空（本批实测：先写成带 `$`，三条同时 FAIL 且 `原文：` 打印为空）。
 # 这正是 dao `[#守-锚点行尾]` 说的那一格——落空的锚在别的写法里会静默 PASS，这里因为断言
 # 同时要求 `.Success`，落空即红，故是"响了"而不是"瞎了"。
-$myKeyLine = [regex]::Match($docText, '(?m)^\$MyKey = [^\r\n]*')
-Assert-True '8g-1 §六 命令③ 定义了组合键 $MyKey，且它由 $MyHost 与 $MyRuntime 两格拼成（这一行不在任何函数体内，括号计数法抽不到，只能锚单行原文）' `
-    ($myKeyLine.Success -and ($myKeyLine.Value -match '\$MyHost') -and ($myKeyLine.Value -match '\$MyRuntime')) ("原文：{0}" -f $myKeyLine.Value)
+# 🔴 三条同时改为**在 $sixText（§六 截段）里求值 + 段内唯一**（PR #264 复抗必修 6）：此前三条
+# 都在整份文档上做 leftmost 命中 —— X12b 那一发（命令④ 真行摘掉 runtime 一格 + 上游插一段
+# 带正确写法的围栏）**8h 与场景 9 一起全绿**，坐实这三条与场景 9 犯的是同一个错。
+$myKeyPat = '(?m)^\$MyKey = [^\r\n]*'
+$myKeyLine = [regex]::Match($sixText, $myKeyPat)
+Assert-True '8g-1 §六 命令③ 定义了组合键 $MyKey，且它由 $MyHost 与 $MyRuntime 两格拼成（这一行不在任何函数体内，括号计数法抽不到，只能锚单行原文）；**锚点在 §六 段内唯一**' `
+    ($myKeyLine.Success -and (([regex]::Matches($sixText, $myKeyPat)).Count -eq 1) -and ($myKeyLine.Value -match '\$MyHost') -and ($myKeyLine.Value -match '\$MyRuntime')) ("原文：{0}（段内命中 {1} 处）" -f $myKeyLine.Value, ([regex]::Matches($sixText, $myKeyPat)).Count)
 
-$lookupLine = [regex]::Match($docText, '(?m)^\$my = \$eff\[[^\r\n]*')
-Assert-True '8g-2 §六 命令③ 查自己那个桶用的是 $MyKey，不是裸 $MyHost（裸 $MyHost 查表就是 B3 冒领的落点——函数改对了而调用侧没改，缺陷原样还在）' `
-    ($lookupLine.Success -and ($lookupLine.Value -match '\$eff\[\$MyKey\]')) ("原文：{0}" -f $lookupLine.Value)
+$lookupPat = '(?m)^\$my = \$eff\[[^\r\n]*'
+$lookupLine = [regex]::Match($sixText, $lookupPat)
+Assert-True '8g-2 §六 命令③ 查自己那个桶用的是 $MyKey，不是裸 $MyHost（裸 $MyHost 查表就是 B3 冒领的落点——函数改对了而调用侧没改，缺陷原样还在）；**锚点在 §六 段内唯一**' `
+    ($lookupLine.Success -and (([regex]::Matches($sixText, $lookupPat)).Count -eq 1) -and ($lookupLine.Value -match '\$eff\[\$MyKey\]')) ("原文：{0}（段内命中 {1} 处）" -f $lookupLine.Value, ([regex]::Matches($sixText, $lookupPat)).Count)
 
-$holderLine = [regex]::Match($docText, '(?m)^\$holderClaims = @\(\$marks \| Where-Object \{[^\r\n]*')
-Assert-True '8h §六 命令④ 的租期锚点过滤同时带 host 与 runtime 两格（8b-3 用等价表达式验了行为，这条钉住盘上那一行真的这么写——两条分工：行为断言证"这么写是对的"，canary 证"盘上就是这么写的"）' `
-    ($holderLine.Success -and ($holderLine.Value -match '\$_\.host -eq \$MyHost') -and ($holderLine.Value -match '\$_\.runtime -eq \$MyRuntime')) ("原文：{0}" -f $holderLine.Value)
+$holderPat = '(?m)^\$holderClaims = @\(\$marks \| Where-Object \{[^\r\n]*'
+$holderLine = [regex]::Match($sixText, $holderPat)
+Assert-True '8h §六 命令④ 的租期锚点过滤同时带 host 与 runtime 两格（8b-3 用等价表达式验了行为，这条钉住盘上那一行真的这么写——两条分工：行为断言证"这么写是对的"，canary 证"盘上就是这么写的"）；**锚点在 §六 段内唯一**——X12b 那一发正是靠上游诱饵让本条与场景 9 一起失明的' `
+    ($holderLine.Success -and (([regex]::Matches($sixText, $holderPat)).Count -eq 1) -and ($holderLine.Value -match '\$_\.host -eq \$MyHost') -and ($holderLine.Value -match '\$_\.runtime -eq \$MyRuntime')) ("原文：{0}（段内命中 {1} 处）" -f $holderLine.Value, ([regex]::Matches($sixText, $holderPat)).Count)
 
 # --- A4 / A8：本批**不修**，钉住当前的错误返回值当退役触发器 -----------------
 # issue #250 处置建议明写这两条要额外的"接管环检测"、设计面更大，与"不支持合法复活"那条
@@ -578,7 +620,12 @@ Assert-True '8j [issue #250-A8 已知缺陷锚点，本批不修] 自我接管�
 #
 # 修法不是再补几条 token canary，是**把内联区原文从文档里抠出来真跑一遍**。
 # 与 8b-3 那种"测试文件里自己写一份等价表达式"的**逻辑副本**是两回事：这里执行的字节逐个
-# 来自 dao-workitem.md，盘上那一行漂了，跑出来的答案就跟着变。
+# 来自 dao-workitem.md **§六 那一段**（`$sixText`），盘上 §六 那一行漂了，跑出来的答案就跟着变。
+# 🔴 **"§六 那一段"这个限定词是 PR #264 复抗必修 4 补上的，它此前是一个没写出来的前提**：
+#   原文只写「字节逐个来自 dao-workitem.md」，而当时抠取用的是**整份文档的 leftmost 命中**
+#   ⇒ 在 §六 上游插一段同型的 ```powershell 围栏，抠取整体挪到诱饵上，§六 真行随便改坏
+#   而 62 条断言全绿（X12/X12b/X21 三发实测全部存活）。现在射程由场景 0 的 0e/0f 截段限定、
+#   锚点在段内不唯一即 throw，那句话才真的成立。**别把这段限定词删掉去恢复原来那句更漂亮的话。**
 # 🔴 **8b-3 / 8g-1 / 8g-2 / 8h 一条都不删**：对抗官实测坐实它们"不是同一件事的两份拷贝，
 # 是同一件事的两个半拉子"（N5 那一发两条都没拦住）。本场景补的是第三块，不是替换品。
 #
@@ -597,8 +644,14 @@ function Get-InlineSource {
       锚点里的换行一律写 `\r?\n`：本仓 core.autocrlf=true、工作区是 CRLF，写死 `\n` 的锚点在
       CRLF 检出下恒不命中，而"锚点落空"与"守卫扛住"在报文上逐字节相同（dao `[#守-锚点行尾]`）。
       **命中失败即 throw，不返回空串**：静默返回空会让下面每一条断言都在空输入上"通过"。
+      🔴 **命中不唯一同样 throw**（PR #264 复抗必修 6）：`[regex]::Match` 给的是 leftmost，
+      有第二处同型文本时它默默抠前面那一份 —— 而"抠到了别处的同型行"与"抠对了"在报文上
+      逐字节相同。调用方喂进来的 $Text 是**截过段的 $sixText**（见场景 0 的 0e/0f），
+      两道合起来才把 X12/X12b/X21 那一类窗口劫持关掉。
     #>
     param([string]$Text, [string]$Pattern, [string]$Label)
+    $ms = [regex]::Matches($Text, $Pattern)
+    if ($ms.Count -gt 1) { throw "内联区提取失败：锚点在射程内命中 $($ms.Count) 处、不唯一（$Label）：$Pattern" }
     $m = [regex]::Match($Text, $Pattern)
     if (-not $m.Success) { throw "内联区提取失败：锚点未命中（$Label）：$Pattern" }
     if (-not $m.Groups['src'].Success) { throw "内联区提取失败：命中但捕获组 src 不存在（$Label）" }
@@ -614,12 +667,13 @@ function Get-SubstringCount {
 }
 
 # 命令③ 前置段：$eff 那行起，到"让位判据"那一行之前（含 $MyHost/$MyRuntime/$MySession/$MyKey/$my/$others）
-$cmd3Prelude = Get-InlineSource -Text $docText -Label '命令③ 前置段' `
+# 🔴 四处 -Text 一律喂 $sixText（§六 截段）而不是 $docText：射程与唯一性的理由见场景 0 的 0e/0f。
+$cmd3Prelude = Get-InlineSource -Text $sixText -Label '命令③ 前置段' `
     -Pattern '(?s)(?<src>\$eff = Get-EffectiveClaim -Marks \$marks.*?)\r?\nif \(\$my -and \$others'
 
 # 让位判据行（命令③ 的**输出**侧）。锚点刻意只锚到 `if ($my -and $others`，**不含比较算子**
 # ——含了的话 `-lt` -> `-gt` 就变成"提取失败"，红的理由会指向锚点而不指向语义。
-$yieldIfLine = Get-InlineSource -Text $docText -Label '命令③ 让位判据行' `
+$yieldIfLine = Get-InlineSource -Text $sixText -Label '命令③ 让位判据行' `
     -Pattern '(?m)^(?<src>if \(\$my -and \$others[^\r\n]*)'
 $yieldCondM = [regex]::Match($yieldIfLine, '^if\s*\((?<c>.+)\)\s*\{\s*$')
 if (-not $yieldCondM.Success) { throw "内联区提取失败：让位判据行剥不出条件表达式：$yieldIfLine" }
@@ -627,14 +681,14 @@ $yieldCond = $yieldCondM.Groups['c'].Value
 
 # 命令⑦ 判据行（/dao-resume「只报不接」）。锚点同理**刻意不含 `-not`**：P3 那一发摘的就是
 # `-not`，锚点含了它 ⇒ 提取失败；不含 ⇒ 条件照样抠得出来、跑出来的布尔值翻转，9j/9k 当场红。
-$resumeIfLine = Get-InlineSource -Text $docText -Label '命令⑦ 判据行' `
+$resumeIfLine = Get-InlineSource -Text $sixText -Label '命令⑦ 判据行' `
     -Pattern '(?m)^(?<src>if \(\$my -and [^\r\n]*Test-IsMySessionClaim[^\r\n]*)'
 $resumeCondM = [regex]::Match($resumeIfLine, '^if\s*\((?<c>.+)\)\s*\{\s*$')
 if (-not $resumeCondM.Success) { throw "内联区提取失败：命令⑦ 判据行剥不出条件表达式：$resumeIfLine" }
 $resumeCond = $resumeCondM.Groups['c'].Value
 
 # 命令④ 租期锚点行
-$cmd4HolderLine = Get-InlineSource -Text $docText -Label '命令④ 租期锚点行' `
+$cmd4HolderLine = Get-InlineSource -Text $sixText -Label '命令④ 租期锚点行' `
     -Pattern '(?m)^(?<src>\$holderClaims = @\(\$marks \|[^\r\n]*)'
 
 # 三个占位符：文档逐字写着"跑之前自己填"，本测试就是那个"填"的动作。
@@ -672,7 +726,7 @@ $inlineF1 = Invoke-InlineSection -Marks (Build-MarksFromComments @(
     [pscustomobject]@{ createdAt = '2026-08-09T01:05:00Z'; body = 'dao-claim: HOSTX/cc/sessA/4h' }
 ))
 
-Assert-True '9b [PR #264 对抗 N2/N3 类：分隔符漂移与两格顺序对调] 命令③ 拼出来的组合键就是 "HOSTX/cc"。N2（`/` 改成 `-`）与 N3（两格对调）都是 Δbytes=0、token 一个不少 ⇒ 8g-1 照绿，而键与桶键永不相等 ⇒ $my 恒 $null ⇒ 让位判据整条不触发（fail-open，A3 原病换个入口复活）。**本条同时是整个场景 9 的真空自检**：抠出来若是空串或跑不动，这条第一个红' `
+Assert-True '9b [PR #264 对抗 N2/N3 类：分隔符漂移与两格顺序对调] 命令③ 拼出来的组合键就是 "HOSTX/cc"。N2（`/` 改成 `-`）与 N3（两格对调）都是 Δbytes=0、token 一个不少 ⇒ 8g-1 照绿，而键与桶键永不相等 ⇒ $my 恒 $null ⇒ 让位判据整条不触发（fail-open，A3 原病换个入口复活）。**本条同时是场景 9 的真空自检，但只管两态**：抠出来是空串 / 跑不动，这条第一个红。**第三态「抠到了 §六 之外的同型行」本条管不着**（诱饵里的键照样是 HOSTX/cc，它满意得很）——那一态由 0e/0f 的截段与锚点段内唯一性在结构上排除，PR #264 复抗判词点名过这句自陈说大了' `
     ($inlineF1.key -eq 'HOSTX/cc') ("key={0}" -f $inlineF1.key)
 
 Assert-True '9c 命令③ 查到的是**我自己那个桶**（host=HOSTX 且 runtime=cc），不是同机另一个宿主的' `
