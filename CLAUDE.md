@@ -74,49 +74,35 @@ node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全�
                                               #   比默认层更慢（PS 层串行追加百秒级）；要求串行环境（见下）。
                                               #   **当前有几套以 `--list` 为准，此处不记数**
 node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
-node scripts/run-tests.mjs --write-baseline tests/<名>.tests.js
-                                              # ★ 单套粒度（2026-08-11 · issue #300）：**改/加一套测试后对齐基线只跑这一条**——
-                                              #   只跑那一套、只更新那一格，**一次调用把 default 与 env 两格都填好**
-                                              #   （JS 套自动跑两遍；与 --env 互斥）。秒级到十几秒，替代此前的全量两遍。
-node scripts/run-tests.mjs [--env] --write-baseline
-                                              # 全量重写（**只有多套装动/正当缩减批处理才需要它**）：
-                                              #   用**本次这一跑**的条数重写 `scripts/assertion-baseline.json`
-                                              #   （断言条数下界基线，2026-08-10 · issue #268）。**两层各写各的**：
-                                              #   不带 --env 写 `default` 那一格，带 --env 写 `env` 那一格。
-                                              #   ⚠ **改了 tests/ 就要重生成**，否则 `tests/assertion-baseline.tests.js`
-                                              #     的名册对账当场红（那是它的同步触发器，不靠人记得）
-                                              #   ⚠ 有测试红时**拒写**（从红的一跑取基线 = 把缺陷焊进去）
+                                              #   ⚠ 2026-08-11 重设计：断言条数基线（--write-baseline / assertion-baseline.json）
+                                              #     已随「文字一致性检查全灭」删除（拷问局定案③）
 node scripts/dao-smoke.mjs                    # dao 生态完整性自检（ccswitch skills frontmatter / 交叉引用）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\<名>.tests.ps1   # 单跑一套 PS 测试（自带 Assert-*，独立可跑）
                                               #   ⚠ 这里**不手维护清单** —— 手维护的必过期（本行历史上只列过 5 套里的 2 套）；
                                               #   当前有几套、哪几套标了 env ⇒ `node scripts/run-tests.mjs --list` 会**扫全并逐条标注**，以那份为准
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
-node ccswitch/scripts/gen-clause-index.mjs    # 条款机器面索引：改完 dao.md / ccswitch/rules/*.md 后重新生成
-node ccswitch/scripts/gen-clause-index.mjs --check      # 索引与真相源对不上 ⇒ exit 1（tests/clause-index.tests.js 每次跑它）
-node ccswitch/scripts/gen-clause-index.mjs --reconcile  # 与 check-clauses-structure.ps1 两套独立解析对数（条款数 / 触发:无 / slug 数）
-node ccswitch/scripts/gen-clause-index.mjs --list-sources # 源清单的机器出口（一行 JSON）；PS 缺省全量模式就是消费它
-powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构 + 正文 slug↔台账双向对账（另一套独立解析）
-                                              #   ⚠ **缺省已是全量模式**（2026-08-08 · issue #176）：不传 -TargetFile ⇒ 向上面那个
+node ccswitch/scripts/clause-sources.mjs      # 条款源清单的机器出口（一行 JSON）；PS 缺省全量模式向它要清单
+                                              #   ⚠ 2026-08-11 重设计：clause-index.json 派生物与其生成器已消灭，
+                                              #     渲染端（render-clauses.mjs）改运行时现算；clause-ledger.json 台账
+                                              #     与双向对账同步删除（拷问局定案③）——这两把旧命令已不存在
+powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构检查（焊接签名 / 孤儿条款 / 扫描面自检）
+                                              #   ⚠ **缺省已是全量模式**：不传 -TargetFile ⇒ 向上面那个
                                               #   出口要源清单，**逐份**检（每份用清单给的选择器；officer-clauses 是 AllTopLevel）。
-                                              #   此前缺省**只检 dao.md** ⇒ 住在 ccswitch/rules/*.md 的 90+ 条条款，其台账字段级
-                                              #   对账实际是 node 单实现，而下面那段却写着「两个守卫各查一遍」。
                                               #   退出码**三态**：0 全绿 · 1 有结构违例 · **3 = 拿不到源清单（本次压根没查成）**。
                                               #   判「通过」写 `-eq 0`；3 刻意不与 1 合流——「没查成」不是「查出问题」。
                                               #   只检一份：加 `-TargetFile <路径>`（那条路径不依赖 node，行为与以前逐字一致）。
-node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集；**已接进派单流程**（2026-08-07 订正）：
+node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（2026-08-11 起运行时现算，无索引派生物）；**已接进派单流程**：
                                               #   `SubagentStart` hook `ccswitch/hooks/dao-subagent-clauses.js` 每次派官都调它
                                               #   本行此前写作「原型，尚未接进派单流程」，注册完成那一刻即为假而无人订正
                                               #   ⚠ 已证的是「响过」不是「每次都响」：注入率（派 N 个官、几个真收到）仍未审计，
                                               #     而那正是退役「派单令首行 Read」双通道的前置门（契约：≥20 次 100%）
 
-node ccswitch/scripts/gen-guarded-files.mjs           # 「被 mutation 守护的源文件」清单：改完 tests/ 后重新生成
-node ccswitch/scripts/gen-guarded-files.mjs --check   # 测试实况变了而清单没跟上 ⇒ exit 1（tests/guarded-files.tests.js 每次跑它）
-node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻读不读得到清单（fail-open 的失败态只在这里出声）
+node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻能不能算出被守护清单（2026-08-11 起运行时现算 + 指纹缓存，
+                                              #   旧的 gen-guarded-files.mjs 派生物已消灭）
 
-node scripts/dao-gates.mjs                    # ★ 交付前闸门聚合（issue #70 层2 件①）：上面几行 gen-clause-index --check /
-                                              #   gen-guarded-files --check / dao-smoke / check-mutation-anchor /
-                                              #   check-clauses-structure（全量）收成一条命令，真退出码汇总表 +
+node scripts/dao-gates.mjs                    # ★ 交付前闸门聚合（issue #70 层2 件①）：dao-smoke / check-mutation-anchor /
+                                              #   check-clauses-structure（全量）等收成一条命令，真退出码汇总表 +
                                               #   末行 DAO_GATES_SUMMARY；全绿才 exit 0（check-clauses-structure 的
                                               #   exit=3「没查成」计入 inconclusive 不计入 red，聚合退出码因此是 2 不是 1）
                                               #   ⚠ **此处刻意不写「共几道闸」**：当前有几道、各叫什么以 `--list` 的打印为准
@@ -133,19 +119,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps
                                               #   自己里面）跑；退出码契约见脚本头注 .NOTES
 ```
 
-`ccswitch/clause-index.json` 是**派生物**（真相源是那些 Markdown），手改无效、会被下次生成覆盖。
-
-`ccswitch/clause-ledger.json` **不是**派生物，它是**台账字段的真相源**（复发次数 / 首次入库 /
-触发点 / 基线 / 自定标记 / 出处 / 状态）；正文只在条款行尾持一个 slug `[#<域>-<短名>]` 与它关联。
-两边由**双向孤儿检测**夹住（正文有 slug 而台账无此条、台账有条目而正文找不到 ⇒ 都判红），
-node 与 PowerShell 两个守卫各查一遍。
-（🔴 **这句话 2026-08-08 之前对 `ccswitch/rules/*.md` 里那 90+ 条是假的**：PS 那侧缺省只检
-`ccswitch/dao.md`，于是「两个守卫」实际只有 node 一个在查它们 —— PR #175 对抗实测 M3 坐实。
-issue #176 把 PS 缺省扩成全量模式后这句话才成立；**它成立的前提是那份源清单
-（`clause-parser.mjs::defaultSources()`）是全的**，一份带条款却没登记进去的文件两侧仍会一起漏，
-兜它的只有 SessionStart hook 那侧的目录扫描与 PS 侧的 `ledger-out-of-scope` 反向闸 —— 那是纵深，不是全覆盖。）
-**双轨期**：旧元字段仍原位保留、逐字段与台账对账，
-不等即红 —— 那份对账全绿是后续删旧字段的前置门。**改了正文就要同步改台账，反之亦然。**
+`ccswitch/clause-index.json` 与 `ccswitch/clause-ledger.json` **已于 2026-08-11 重设计时双双删除**
+（派生物消灭 + 拷问局定案③「文字一致性检查全灭」）。条款行尾的 slug `[#<域>-<短名>]` 保留为稳定 ID，
+其字段史（复发次数/首次入库等）的归宿是 git 历史。立法档案见 `docs/decisions/2026-08-11-*.md`。
 
 新增测试**不必**登记到本文件——`run-tests.mjs` 按 `tests/*.tests.{js,ps1}` 扫目录，两侧都不维护清单
 （**2026-08-08 · issue #179 起 `.ps1` 那侧也由它代跑**；此前括号里写的是「它只列不跑，清单仍是全的」——
