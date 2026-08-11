@@ -28,6 +28,8 @@
 
 **Rules 架构**：废除早期"道德法术四层"概念。当前规则通过 `ccswitch/dao.md`（全局场域，`@import` 每轮注入）+ 项目 `.claude/rules/`（项目级按需加载）两层投递。
 
+**Orca 共存裁决**（2026-08-10 · issue #299）：本仓是 Orca 托管仓，装进来的 `orchestration` / `orca-cli` 两个 skill 与 dao 在派活/交接/建树等 6 处重叠、2 处硬冲突。用户拍板现场不隔离；**撞上时听谁的裁决**（一句话：dao 为默认，Orca 走显式）见 `docs/ops/orca-dao-conflict-ruling.md`——在本仓派单/交接/建 worktree 前必读那一纸。
+
 ---
 
 ## 三、变更前自审门
