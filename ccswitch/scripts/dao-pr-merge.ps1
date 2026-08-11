@@ -400,18 +400,11 @@ if ($DryRun) {
 # `guarded-files.json` 这一件暂无同等断言，是本批（issue #209 缺口 2）刻意的留白——
 # 本批只补覆盖面，不重复造一份 -SkipVerify 独立性的靶。
 #
-# issue #209 缺口 2（2026-08-09）：此前只护 clause-index.json 一件，本仓至少还有三个
-# 同型 --check（guarded-files.json / agents-md / 规则部署），「两侧各自都对、合并起来
-# 不对」是 clause-index 已实证过的形态，没道理只信一件不出这个病。issue 建议「不要求把
-# 清单硬编码进 3.5 步（那是新的手维护枚举），或至少先接 guarded-files.json（本仓自己刚
-# 吃过亏的那个，优先级最高）」——本批采纳后半句：只接优先级最高的这一件，不新造一份
-# 「可发现的派生物注册表」（那是新基础设施，为道日损下先用最小改动接上）。
-# 下面这份清单仍是手维护——与「清单会过期」那条教训的差别在于：它决定的是**核对哪些
-# 派生物**，过期的代价是「少护一件」而非「静默通过」，且是 fail-closed（少列一件只是
-# 少一层保护，不会把已列的那几件也测没）。
+# 重设计（2026-08-11）：guarded-files.json 已随派生物消灭退役（dao-glob-gate 改运行时现算），
+# 3.5 步只剩 clause-index 一件。issue #209 缺口 2 的原始顾虑（「两件各自都对合并后不对」）
+# 对运行时现算的清单不成立——没有产物就没有「合并后过期」。
 $derivativeChecks = @(
     [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-clause-index.mjs'; Artifact = 'ccswitch/clause-index.json'; Name = 'clause-index'; IssueRef = 'issue #121' }
-    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-guarded-files.mjs'; Artifact = 'ccswitch/guarded-files.json'; Name = 'guarded-files'; IssueRef = 'issue #209 缺口 2' }
 )
 Write-Step '3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209；见头注对 -SkipVerify 那一半的准确表述）'
 

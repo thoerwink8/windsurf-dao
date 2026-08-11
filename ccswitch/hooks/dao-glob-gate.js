@@ -14,8 +14,8 @@
 // paths: glob,宿主在 Read 到匹配文件时注入)。回测实测:那份 glob 恰好漏掉 issue #103
 // 例 2 的当事文件 ccswitch/templates/check-token-drift.mjs,而那个文件近 11 天
 // **Read 0 次 / Edit·Write 7 次** —— 读触发对它结构性失明。
-// ⇒ 本分支挂 Edit/Write,判据清单 ccswitch/guarded-files.json 由
-//   ccswitch/scripts/gen-guarded-files.mjs 从 mutation 测试实况**自动算**(手维护必滞后)。
+// ⇒ 本分支挂 Edit/Write,判据清单由本 hook 调 ccswitch/lib/guarded-scan.js 从 mutation
+//   测试实况**运行时现算**(带指纹缓存;重设计后无派生物、无同步闸——手维护必滞后,派生物必漂移)。
 //
 // 三条设计约束,都是刻意的:
 //   ① **只加一行指针,不复制判据正文** —— 副本会漂移,而这条规则还在演进
@@ -46,28 +46,44 @@
 //   · tests/glob-gate.tests.js       前四条分支(正控 + 误伤负控 + settings.json 文案逐条钉死
 //                                    + 三向 mutation 判别力 + 真文件字节恒等 canary)
 //   · tests/guarded-files.tests.js   守卫指针分支(正控/负控/fail-open/--selfcheck
-//                                    + 三形态&反向 mutation) 与清单生成器的口径
+//                                    + 三形态&反向 mutation) 与 guarded-scan 的口径
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
-// ── 守卫清单:加载与匹配 ─────────────────────────────────────────────────────
-// 清单路径按**本文件位置**算(hooks/ 的上一级),不按 cwd —— hook 的 cwd 是被编辑项目的
+// ── 守卫清单:运行时现算（重设计后无派生物）─────────────────────────────────────
+// 前身是读派生清单 ccswitch/guarded-files.json（+ --check 同步闸）。现由本 hook 每次从
+// tests/ 现算（lib/guarded-scan.js），带指纹缓存：tests/ 里各测试文件的 名+大小+mtime
+// 拼串没变就直接用上次结果。缓存是易失的（丢了重算），不需要任何闸守它。
+// 路径按**本文件位置**算(hooks/ 的上一级),不按 cwd —— hook 的 cwd 是被编辑项目的
 // 根目录,按 cwd 找会在任何非 dao 仓的项目里静默落空。
-const GUARDED_MANIFEST = path.join(__dirname, "..", "guarded-files.json");
+const DAO_ROOT = path.join(__dirname, "..", "..");
+const TESTS_DIR = path.join(DAO_ROOT, "tests");
+const SCAN_CACHE = path.join(os.homedir(), ".claude", "dao-state", "glob-gate-guarded.json");
 
 function loadGuarded() {
-  let text;
-  try { text = fs.readFileSync(GUARDED_MANIFEST, "utf8"); }
-  catch (e) { return { ok: false, why: "读不到(" + (e && e.code ? e.code : "unknown") + ")", files: [] }; }
-  let doc;
-  try { doc = JSON.parse(text); }
-  catch (e) { return { ok: false, why: "不是合法 JSON(" + (e && e.message ? e.message.slice(0, 60) : "") + ")", files: [] }; }
-  const files = Array.isArray(doc && doc.files)
-    ? doc.files.map((x) => (x && typeof x.file === "string" ? x.file : null)).filter(Boolean)
-    : [];
-  if (!files.length) return { ok: false, why: "清单里一个文件都没有(files 缺席或为空)", files: [] };
-  return { ok: true, why: "", files };
+  let scan;
+  try { scan = require("../lib/guarded-scan.js"); }
+  catch (e) { return { ok: false, why: "guarded-scan lib 读不到(" + (e && e.message ? e.message.slice(0, 60) : "unknown") + ")", files: [] }; }
+  if (!fs.existsSync(TESTS_DIR)) return { ok: false, why: "tests/ 不存在（本 hook 部署形态异常）", files: [] };
+  let fp;
+  try { fp = scan.testsFingerprint(TESTS_DIR); }
+  catch (e) { return { ok: false, why: "tests/ 指纹算不出来(" + (e && e.message ? e.message.slice(0, 60) : "unknown") + ")", files: [] }; }
+  try {
+    const c = JSON.parse(fs.readFileSync(SCAN_CACHE, "utf8"));
+    if (c && c.fp === fp && Array.isArray(c.files) && c.files.length) return { ok: true, why: "", files: c.files, cached: true };
+  } catch (_) { /* 缓存读不到/坏了 = 重算，不是故障 */ }
+  let res;
+  try { res = scan.scanGuarded({ repoRoot: DAO_ROOT, testsDir: TESTS_DIR }); }
+  catch (e) { return { ok: false, why: "扫描崩了(" + (e && e.message ? e.message.slice(0, 60) : "unknown") + ")", files: [] }; }
+  const files = res.files.map((x) => x.file);
+  if (!files.length) return { ok: false, why: "扫描零结果（tests/ 在却没算出一个被守护文件——口径塌了，不是本仓没有）", files: [] };
+  try {
+    fs.mkdirSync(path.dirname(SCAN_CACHE), { recursive: true });
+    fs.writeFileSync(SCAN_CACHE, JSON.stringify({ fp, files, at: new Date().toISOString() }), "utf8");
+  } catch (_) { /* 缓存写不进就下次再算，不挡路 */ }
+  return { ok: true, why: "", files, cached: false };
 }
 
 // 匹配用**后缀**:清单记的是仓相对路径,而 tool_input.file_path 可能是绝对路径、
@@ -90,18 +106,17 @@ if (process.argv.includes("--selfcheck")) {
   const g = loadGuarded();
   const w = (s) => process.stdout.write(s + "\n");
   w("== dao-glob-gate --selfcheck ==");
-  w("  守卫清单：" + GUARDED_MANIFEST);
+  w("  守卫清单：运行时现算（tests/ 指纹缓存：" + SCAN_CACHE + "）");
   if (g.ok) {
-    w("  状态：可用 · " + g.files.length + " 个被守护源文件");
+    w("  状态：可用 · " + g.files.length + " 个被守护源文件 · 本次" + (g.cached ? "命中缓存" : "真扫了一次"));
     w("  抽样：" + g.files.slice(0, 3).join(" / ") + (g.files.length > 3 ? " …" : ""));
-    w("  ⓘ 它证不了的：清单**内容对不对**归 `node ccswitch/scripts/gen-guarded-files.mjs --check`；");
-    w("     本自检只答「这个 hook 此刻读得到一份非空清单吗」。");
+    w("  ⓘ 口径与已知漏报面见 ccswitch/lib/guarded-scan.js 头注；清单不再有「过期」这一物种（每次现算）。");
     w("GLOB_GATE_SELFCHECK exit=0 manifest=ok files=" + g.files.length);
     process.exit(0);
   }
   w("  状态：**不可用** —— " + g.why);
   w("  后果：守卫指针分支静默不触发（fail-open），其余分支不受影响。");
-  w("  修法：node ccswitch/scripts/gen-guarded-files.mjs");
+  w("  修法：核 ccswitch/lib/guarded-scan.js 是否就位、tests/ 是否可读。");
   w("GLOB_GATE_SELFCHECK exit=1 manifest=bad files=0");
   process.exit(1);
 }
