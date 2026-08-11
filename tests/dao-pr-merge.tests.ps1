@@ -604,6 +604,31 @@ Assert-True '11a dao-pr-merge.ps1 能被 PowerShell 解析器解析（零语法�
 # 3.5 步整段已删，这些场景失去被测对象。
 # ============================================================================
 
+# ============================================================================
+# 场景 17（tests 终局追加）：夹具仓有 scripts/dao-affected-tests.mjs 时，
+# 不传 -VerifyCommand 也不传 -SkipVerify ⇒ 走「改谁才检谁」路径而不是报用法错
+# ============================================================================
+Write-Host '场景 17：改谁才检谁（免传 -VerifyCommand 的本仓路径）'
+
+$f17 = New-Fixture -Case 'affected-mode'
+# 植入桩脚本：固定输出零套 JSON（本场景钉的是路径选择，不是映射表——映射表的测试在 affected-tests.tests.js）
+$stubDir = Join-Path $f17.Work 'scripts'
+New-Item -ItemType Directory -Force -Path $stubDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $stubDir 'dao-affected-tests.mjs'), 'process.stdout.write(JSON.stringify({files:0,tests:[]})+"\n");', $utf8NoBom)
+Git0 @('-C', $f17.Work, 'add', 'scripts/dao-affected-tests.mjs') | Out-Null
+Git0 @('-C', $f17.Work, 'commit', '--quiet', '-m', 'add affected-tests stub') | Out-Null
+Git0 @('-C', $f17.Work, 'push', '--quiet', '-u', 'origin', 'feature/x') | Out-Null
+
+# ExtraArgs 显式置空——Invoke-Target 缺省会补 '-VerifyCommand cmd /c exit 0'，而本场景验的恰是免传路径
+$r17 = Invoke-Target -Fixture $f17 -Cfg (New-StubConfig -Fixture $f17) -ExtraArgs @()
+Assert-True '17a 免传 -VerifyCommand 且免传 -SkipVerify ⇒ 不报「必须传」的用法错' `
+    ($r17.Text -notmatch '必须传 -VerifyCommand') $r17.Text
+Assert-True '17b 走的是「改谁才检谁」路径（打出受影响套那一行）' `
+    ($r17.Text -match '改谁才检谁') $r17.Text
+Assert-True '17c 零套 ⇒ 秒过出口（「没碰任何有行为测试的面」明说，不是静默绿）' `
+    ($r17.Text -match '零套') $r17.Text
+Assert-True '17d 全链照常 exit 0' ($r17.ExitCode -eq 0) ("exit={0}" -f $r17.ExitCode)
+
 # ---- 汇总 -------------------------------------------------------------------
 Write-Host ''
 Write-Host '=============================================='
