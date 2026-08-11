@@ -8,8 +8,8 @@
     "为什么有字符串值": "那一层拿不到数（未报计数 / 本层不跑）。刻意不写 0：0 会变成一个恒真的闸，留空会让「这套没人守」看不出来。"
   },
   "_generated": {
-    "env": "2026-08-11T07:28:24.898Z",
-    "default": "2026-08-11T07:28:24.898Z"
+    "env": "2026-08-11T07:32:27.516Z",
+    "default": "2026-08-11T07:32:27.516Z"
   },
   "suites": {
     "agents-md.tests.js": {
@@ -76,6 +76,11 @@
       "kind": "pwsh",
       "env": 69,
       "default": 69
+    },
+    "dao-orch.tests.js": {
+      "default": 17,
+      "env": 17,
+      "kind": "node"
     },
     "dao-pr-merge.tests.ps1": {
       "kind": "pwsh",
