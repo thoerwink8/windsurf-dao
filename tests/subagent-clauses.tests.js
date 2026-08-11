@@ -31,7 +31,6 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const HOOK = path.join(REPO, "ccswitch", "hooks", "dao-subagent-clauses.js");
 const RENDERER = path.join(REPO, "ccswitch", "scripts", "render-clauses.mjs");
-const GEN = path.join(REPO, "ccswitch", "scripts", "gen-clause-index.mjs");
 const TMP = path.join(REPO, "_tmp", "subagent-clauses-tests");
 
 fs.rmSync(TMP, { recursive: true, force: true });
@@ -75,20 +74,18 @@ fs.writeFileSync(FIXTURE_MD, [
   "",
 ].join("\n"), "utf8");
 
-function buildIndex(outName, roleScheme) {
+// 重设计后（2026-08-11）渲染端现算、无索引派生物：夹具只需一份 sources-json 指向夹具 md。
+function buildSources(outName, roleScheme) {
   const srcJson = path.join(TMP, `sources-${outName}.json`);
   fs.writeFileSync(srcJson, JSON.stringify([
     { file: FIXTURE_MD, selector: "all-top-level", role_scheme: roleScheme },
   ], null, 2), "utf8");
-  const out = path.join(TMP, outName);
-  const r = spawnSync(process.execPath, [GEN, "--sources-json", srcJson, "--out", out, "--quiet"], { encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`夹具索引没建成：exit=${r.status}\n${r.stdout}\n${r.stderr}`);
-  return out;
+  return srcJson;
 }
 
-// ① 分官种索引（正控用）；② 全 general 索引（「官种节 0 条 ⇒ 退到通用节」那一支的确定性语料）
-const IDX_ROLES = buildIndex("index-roles.json", "dispatch-sections");
-const IDX_GENERAL_ONLY = buildIndex("index-general.json", "general");
+// ① 分官种语料（正控用）；② 全 general 语料（「官种节 0 条 ⇒ 退到通用节」那一支的确定性语料）
+const IDX_ROLES = buildSources("roles", "dispatch-sections");
+const IDX_GENERAL_ONLY = buildSources("general", "general");
 
 // ── 喂一次 SubagentStart 输入 ───────────────────────────────────────────────
 function fire(agentType, opts = {}) {
@@ -106,9 +103,9 @@ function fire(agentType, opts = {}) {
 function fireRaw(stdin, opts = {}) {
   const env = Object.assign({}, process.env, {
     DAO_SUBAGENT_CLAUSES_SELFTEST: "1",
-    DAO_CLAUSE_INDEX: opts.index === null ? "" : (opts.index || IDX_ROLES),
+    DAO_CLAUSE_SOURCES: opts.index === null ? "" : (opts.index || IDX_ROLES),
   });
-  if (opts.index === null) delete env.DAO_CLAUSE_INDEX;
+  if (opts.index === null) delete env.DAO_CLAUSE_SOURCES;
   if (opts.max) env.DAO_SUBAGENT_CLAUSES_MAX = String(opts.max);
   if (opts.forceError) env.DAO_SUBAGENT_CLAUSES_FORCE_ERROR = opts.forceError;
   if (opts.clauseFile) env.DAO_CLAUSE_FILE = opts.clauseFile;
@@ -194,9 +191,12 @@ console.log("\n──── ② 映射不出（实测占历史派单 93.8%，是
 
 console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成因，逐条不许空过）────");
 {
-  // 成因一：官种合法但这份索引里 0 条（真索引的常态：默认源清单全是 general）
-  // **这一条同时是「stale 不退官种」那支的负控**（issue #162）：它证明「退官种」这个行为
-  // 本身还活着 —— 少了它，把 staleOf 改成恒真也不会有任何断言变红（反向 mutation R1 验的就是这个）。
+  // 重设计后（2026-08-11）渲染端现算、无索引派生物：「索引过期」这一成因不复存在；
+  // 剩下的三种成因：官种节 0 条 / 语料清单读不到 / 清单里的源文件读不到。
+
+  // 成因一：官种合法但这份语料里 0 条（真仓默认清单的常态：全是 general）
+  // **这一条同时是「读不到不退官种」那支的负控**（issue #162）：它证明「退官种」这个行为
+  // 本身还活着 —— 少了它，把 sourceDead 判据改成恒真也不会有任何断言变红（反向 mutation 验的就是这个）。
   const a = fire("mousse-implementer", { index: IDX_GENERAL_ONLY });
   check("官种节 0 条 → 退到通用节并写明，不给一份看起来正常的空节",
     a.code === 0 && /官种=general/.test(a.ctx) && /渲染不出/.test(a.ctx) && /## 通用节/.test(a.ctx),
@@ -204,52 +204,47 @@ console.log("\n──── ③ 渲染端 fail-closed 时的降级（三种成�
   check("降级说明里带渲染器原话（可核验，不是「出错了」三个字）",
     /0 条/.test(a.ctx) || /CLAUSE_RENDER_SUMMARY/.test(a.ctx), JSON.stringify(a.ctx.slice(-300)));
 
-  // 成因二：索引根本不在
-  const b = fire("mousse-implementer", { index: path.join(TMP, "no-such-index.json") });
-  check("索引不存在 → 仍然注入指针（永不静默空过）",
+  // 成因二：语料清单文件本身读不到
+  const b = fire("mousse-implementer", { index: path.join(TMP, "no-such-sources.json") });
+  check("语料清单读不到 → 仍然注入指针（永不静默空过）",
     b.code === 0 && b.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(b.ctx) && b.ctx.length > 100,
     `exit=${b.code} ctx=${JSON.stringify(b.ctx.slice(0, 200))}`);
-  check("索引不存在 → 注入里说清没渲染出正文（不让读者以为条款已全给）",
+  check("语料清单读不到 → 注入里说清没渲染出正文（不让读者以为条款已全给）",
     /渲染不出|没能渲染|没有渲染出/.test(b.ctx), JSON.stringify(b.ctx.slice(0, 300)));
 
-  // 成因三：索引过期（源动了、索引没跟上）—— 渲染端 fail-closed，本 hook 不推翻它
-  // 复原用**原字节**而不是正则回删：首版用 `replace(/…\n$/,"\n")` 复原，多留了一个换行 ⇒
-  // sha256 仍对不上 ⇒ 此后每个用例都在过期索引上跑，连挂 5 条。整份文件存下来再写回是唯一稳的做法。
-  const FIXTURE_BYTES = fs.readFileSync(FIXTURE_MD);
-  fs.appendFileSync(FIXTURE_MD, "\n- 夹具新增：源动了但索引没跟上。 [n=1 @07-30 触发:无] [仅判据·无触发]\n", "utf8");
-  const c = fire("mousse-implementer");
-  check("索引过期 → 渲染端拒绝渲染，本 hook 降级为指针而不是切错行的正文",
+  // 成因三：清单里的**源文件**读不到 —— 渲染端 fail-closed，本 hook 不推翻它；
+  // 且这一支**不退官种**（源读不到对每个官种都一样，退了也白退，反而说不出「你那一节」）
+  const deadSources = path.join(TMP, "sources-dead.json");
+  fs.writeFileSync(deadSources, JSON.stringify([
+    { file: path.join(TMP, "no-such-clauses.md"), selector: "all-top-level", role_scheme: "dispatch-sections" },
+  ]), "utf8");
+  const c = fire("mousse-implementer", { index: deadSources });
+  check("语料源读不到 → 渲染端拒绝渲染，本 hook 降级为指针而不是缺斤少两的正文",
     c.code === 0 && c.ctx.startsWith(SIG) && /dao-officer-clauses\.md/.test(c.ctx),
     JSON.stringify(c.ctx.slice(0, 240)));
-  check("索引过期 → 注入里点名「过期」这个成因（成因可指认才修得动）",
-    /过期/.test(c.ctx), JSON.stringify(c.ctx.slice(0, 300)));
-
-  // ── issue #162 用户拍板「塞指针」：stale 那一支补的三格，逐格钉住 ──────────────
-  // 改之前的实况照直写：stale **本来就有注入**（它落在「通用节也渲染不出 → 只给指针」那一支），
-  // 缺的是下面这三格。所以这几条断言不是「从无到有」，是「从含混到指得动人」。
-  check("stale ①：官种不退（过期对每个官种都一样，退了就再也说不出「你那一节」是哪一节）",
+  check("语料源读不到 → 注入里点名「读不到」这个成因（成因可指认才修得动）",
+    /读不到/.test(c.ctx), JSON.stringify(c.ctx.slice(0, 300)));
+  check("读不到 ①：官种不退（对每个官种都一样，退了就再也说不出「你那一节」是哪一节）",
     /官种=implementer/.test(c.ctx) && !/官种=general/.test(c.ctx), JSON.stringify(c.ctx.split("\n")[0]));
-  check("stale ②：指针把两节都点名（协议是「通用节 + 你那一节」，只给文件名指不动人）",
+  check("读不到 ②：指针把两节都点名（协议是「通用节 + 你那一节」，只给文件名指不动人）",
     /通用节/.test(c.ctx) && /官种那一节/.test(c.ctx) && /Read/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
-  check("stale ③：渲染端末行原样带进注入，stale=1 仍看得见（帅事后 Grep 得出断供次数）",
-    /CLAUSE_RENDER_SUMMARY[^\n]*\bstale=1\b/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
-  check("stale ④：修法命令来自渲染端报文原话，本文件里不另存一份字面量（双写必漂移）",
-    /gen-clause-index/.test(c.ctx), JSON.stringify(c.ctx.slice(-300)));
-  check("stale ⑤：仍然说清没渲染出正文（别让读者以为条款已全给）",
+  check("读不到 ③：渲染端末行原样带进注入（事后 Grep 得出断供次数）",
+    /CLAUSE_RENDER_SUMMARY/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
+  check("读不到 ④：修法提示来自渲染端报文原话，本文件里不另存一份字面量（双写必漂移）",
+    /clause-sources\.mjs|sources-json/.test(c.ctx), JSON.stringify(c.ctx.slice(-300)));
+  check("读不到 ⑤：仍然说清没渲染出正文（别让读者以为条款已全给）",
     /没有渲染出/.test(c.ctx), JSON.stringify(c.ctx.slice(-420)));
   {
-    // 心跳这一格是本次改动的**可数化**收益：改之前 stale 恒 false（那个字段取自渲染结果，
-    // 而这条路径压根没有渲染结果）⇒「条款断供了几次」在日志上数不出来。
+    // 心跳这一格：断供要在 fired.log 里数得出来（mode=source-dead-pointer）
     const firedLog = path.join(REPO, "_tmp", "subagent-clauses", "fired.log");
     const recs = fs.readFileSync(firedLog, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l));
     const last = recs[recs.length - 1];
-    check("stale ⑥：心跳记 stale=true 且 mode=stale-pointer（断供数得出来，不再是 0 与没样本同形）",
-      last && last.stale === true && last.mode === "stale-pointer", JSON.stringify(last));
+    check("读不到 ⑥：心跳记 mode=source-dead-pointer（断供数得出来，不再是 0 与没样本同形）",
+      last && last.mode === "source-dead-pointer", JSON.stringify(last));
   }
 
-  // 复原夹具，后面的用例继续用它
-  fs.writeFileSync(FIXTURE_MD, FIXTURE_BYTES);
-  check("夹具已复原（索引重新对得上）——这条一红，后面全部用例都在过期索引上跑，别只修它自己",
+  // 正控复核：正常语料下 implementer 节渲得出
+  check("正控复核：正常语料下官种节渲得出（这条一红，后面用例的语料有问题，别只修它自己）",
     fire("mousse-implementer").ctx.includes("## implementer 节"));
 }
 
@@ -398,43 +393,25 @@ console.log("\n──── ⑤ 注入上限：宁可截断也不越 10,000，�
   check("超限时签名仍在首行（截断从尾部切，审计锚不丢）", r.ctx.startsWith(SIG));
   check("超限时明说被截断了（静默截断＝无从核验型误裁）", /截断|未列进本次注入/.test(r.ctx), JSON.stringify(r.ctx.slice(-160)));
 
-  // ── 前置探针：真索引新鲜吗（issue #121）─────────────────────────────────────
-  // 下面两条读的是**仓里那份真索引**，而它是派生物 —— 它一过期，渲染端 fail-closed，
-  // 本 hook 每次都只能退成纯指针，于是这两条会红。**那是连带红，病因不在注入侧。**
-  // 不加这个探针的话，读者看到的报文指向的是「注入没给全条款」，
-  // **离真正的病因隔了两层**（注入不全 ← 渲染拒绝 ← 索引过期），而第三层才是修法。
-  // 实测 2026-08-06：一个分支 merge 主干后（`drift=source`），这套连带红了 1 条。
-  // 探针只在**真的过期时**出声（干净时一个字不打：恒响的提示会被训练成盲区）。
-  //
-  // 🔴 **判据读 `drift=`，不读退出码**（2026-08-06 对抗验证阻断 2）：
-  //    `runIndex` 返回的是 `Math.max(indexCode, ledgerCode)` ⇒ 读退出码等于在问
-  //    「索引**或**台账有没有事」，而这里要问的是「索引新鲜吗」。首版读了退出码，于是
-  //    **台账红 + 索引新鲜**时它谎报「索引已过期（cause=none）」——`cause=none` 就印在
-  //    「已过期」旁边，按末行契约那正是「没过期」的意思 —— 并给出**本 PR 自己判定为错的
-  //    那条处方**（跑生成器解决不了台账红）。线上 hook 没有这个病（`dao-subagent-clauses.js`
-  //    读的是渲染端的漂移专属信号），只有这个探针混过两件事。
+  // ── 前置探针：真仓默认语料渲得出吗 ─────────────────────────────────────────
+  // 下面两条用真仓默认语料（index:null ⇒ 不传 DAO_CLAUSE_SOURCES）。渲染端现算化后
+  // 「索引过期」不复存在，但「真仓某份源读不到」仍可能（文件被挪/被删）——那会让渲染端
+  // fail-closed、本 hook 退成纯指针，下面两条连带红。探针只在出事时出声。
   {
-    const probe = spawnSync(process.execPath, [GEN, "--check", "--quiet"], { encoding: "utf8", cwd: REPO });
+    const probe = spawnSync(process.execPath, [RENDERER, "--list-roles"], { encoding: "utf8", cwd: REPO });
     const out = String(probe.stdout || "");
-    const drift = (/CLAUSE_INDEX_SUMMARY [^\n]*?\bdrift=(\S+)/.exec(out) || [])[1] || null;
-    if (drift === null) {
-      // 取不到 drift 本身要出声：那说明末行契约坏了或它根本没跑起来，**不等于「没漂」**。
-      console.log("  ⚠ 前置：读不到 `CLAUSE_INDEX_SUMMARY … drift=` ⇒ 索引新不新鲜**无从判断**（不当成新鲜）。");
-      console.log("     exit=" + probe.status + "；先手跑一次 node ccswitch/scripts/gen-clause-index.mjs --check 看它到底怎么了。");
-    } else if (drift !== "none") {
-      const cause = (/\bcause=(\S+)/.exec(out) || [])[1] || "?";
-      console.log("  ⚠ 前置：**仓里那份真索引已过期**（drift=" + drift + " cause=" + cause + "）——");
-      console.log("     本节下面若红，多半是**连带**：索引过期 → 渲染端 fail-closed → 注入退成纯指针。");
-      console.log("     修法：node ccswitch/scripts/gen-clause-index.mjs（成因与处方见它自己的报文，别在注入侧找）");
+    if (probe.status !== 0 || !/CLAUSE_RENDER_SUMMARY exit=0/.test(out)) {
+      console.log("  ⚠ 前置：真仓默认语料渲不出（exit=" + probe.status + "）——下面两条若红，多半是连带：源读不到 → 渲染端 fail-closed → 注入退成纯指针。");
+      console.log("     先跑 node ccswitch/scripts/render-clauses.mjs --list-roles 看它报哪份源读不到。");
     }
   }
 
-  const big = fire("mousse-implementer", { index: null }); // 真索引：通用节 20+ 条，正文上万字
-  check("真索引下默认注入不超过 9000（宿主超 10,000 会改成落文件+预览）",
+  const big = fire("mousse-implementer", { index: null }); // 真仓默认语料：通用节 90+ 条，正文上万字
+  check("真仓语料下默认注入不超过 9000（宿主超 10,000 会改成落文件+预览）",
     big.ctx.length <= 9000, `实际 ${big.ctx.length}`);
-  check("真索引下退成判据句形态并说明理由（不是悄悄少给）",
+  check("真仓语料下退成判据句形态并说明理由（不是悄悄少给）",
     /判据句/.test(big.ctx) || /## 通用节/.test(big.ctx),
-    JSON.stringify(big.ctx.slice(0, 300)) + "  ← 若上面打了「真索引已过期」，这条是连带红，先跑生成器");
+    JSON.stringify(big.ctx.slice(0, 300)) + "  ← 若上面打了「渲不出」，这条是连带红，先核语料");
 }
 
 console.log("\n──── ⑥ 心跳：真被调用过才写得出来，且自测心跳不许冒充真实 ────");
@@ -453,7 +430,7 @@ console.log("\n──── ⑦ 契约：映射表里的官种必须是渲染端
 {
   // 合法取值从 `--list-roles` 这条**独立通道**取，不从 hook 源码里再解析一遍 ——
   // 两边读同一份词表才有判别力；抄一遍就是两边一起错、差恒为 0。
-  const probe = spawnSync(process.execPath, [RENDERER, "--list-roles", "--index", IDX_ROLES], { encoding: "utf8" });
+  const probe = spawnSync(process.execPath, [RENDERER, "--list-roles", "--sources-json", IDX_ROLES], { encoding: "utf8" });
   const m = String(probe.stdout || "").match(/合法官种：(.+)/);
   const legal = m ? m[1].split("/").map((s) => s.trim()) : [];
   check("渲染端报得出合法官种词表", legal.length >= 5, JSON.stringify(String(probe.stdout || "").slice(0, 120)));
@@ -780,7 +757,7 @@ console.log("\n──── ⑧ --selfcheck：自洽 + 逐面报 + 给得出修�
   // 不断言本机是绿是红（取决于用户注册没注册），断言的是**自检自身自洽**
   const r = spawnSync(process.execPath, [HOOK, "--selfcheck"], {
     encoding: "utf8",
-    env: Object.assign({}, process.env, { DAO_CLAUSE_INDEX: IDX_ROLES }),
+    env: Object.assign({}, process.env, { DAO_CLAUSE_SOURCES: IDX_ROLES }),
   });
   const out = String(r.stdout || "");
   check("自检打印注册面与心跳面", /注册/.test(out) && /触发记录/.test(out), JSON.stringify(out.slice(0, 200)));
@@ -842,74 +819,75 @@ console.log("\n──── ⑨ mutation 双向：上面那些断言真的在测
   check("M2：改坏后 exit 仍是 0（说明变异体真的跑起来了，空注入是判据被改坏所致而非崩溃）",
     after2.code === 0, `exit=${after2.code} stderr=${JSON.stringify(after2.err.slice(0, 160))}`);
 
-  // ── M3 · issue #162 那条新判据（stale ⇒ 指针且不退官种）的三形态 + 反向 ──────────
-  // 三形态照 dao 官侧条款「mutation 的改坏要试不止一种形态」：①移除 ②保留字面但不执行
-  // ③保留计算与副作用、只让结果不被消费。**三个红集刻意各不相同**，谁也不是谁的子集 ——
-  // 若三者红集相同，那说明这批断言其实只在测一件事，多写两个形态是自我安慰。
+  // ── M3 · 「语料源读不到 ⇒ 指针且不退官种」那一支的三形态 + 反向 ──────────
+  // 三形态照对抗验证条款「改坏要试不止一种形态」：①移除 ②保留字面但不执行
+  // ③保留计算与副作用、只让结果不被消费。**三个红集刻意各不相同**。
+  // （本段前身是 stale 支 mutation；现算化后 stale 不复存在，等价的失败形态是「源读不到」。）
   const staleMutFiles = [];
   {
-    const FIXTURE_BYTES = fs.readFileSync(FIXTURE_MD);
-    fs.appendFileSync(FIXTURE_MD, "\n- 夹具新增：把索引弄过期，好让 stale 那一支跑起来。 [n=1 @07-30 触发:无] [仅判据·无触发]\n", "utf8");
+    const deadSources = path.join(TMP, "sources-dead-m3.json");
+    fs.writeFileSync(deadSources, JSON.stringify([
+      { file: path.join(TMP, "no-such-clauses.md"), selector: "all-top-level", role_scheme: "dispatch-sections" },
+    ]), "utf8");
+    const dead = { index: deadSources };
     const lastBeat = () => {
       const p = path.join(REPO, "_tmp", "subagent-clauses", "fired.log");
       const recs = fs.readFileSync(p, "utf8").split(/\r?\n/).filter(Boolean);
       return JSON.parse(recs[recs.length - 1]);
     };
 
-    const base = fire("mousse-implementer");
+    const base = fire("mousse-implementer", dead);
     const baseBeat = lastBeat();
-    check("M3 基线：真文件在过期索引下保住官种 + 记 stale 心跳（变异体的对照面是活的）",
-      /官种=implementer/.test(base.ctx) && baseBeat.stale === true && baseBeat.mode === "stale-pointer",
+    check("M3 基线：源读不到时保住官种 + 记 source-dead-pointer 心跳（变异体的对照面是活的）",
+      /官种=implementer/.test(base.ctx) && baseBeat.mode === "source-dead-pointer",
       JSON.stringify(baseBeat));
 
-    // ①移除：判据整段拿掉 ⇒ 退回旧行为（退官种），且 stale 那三格全灭
-    const t3a = `  const staleFail = !r.ok && r.stale === true;`;
+    // ①移除：判据整段拿掉 ⇒ 退回旧行为（退官种），且心跳形态灭
+    const t3a = `  const sourceDead = !r.ok && /读不到/.test(r.why || "");`;
     check("M3a 靶点唯一", src.split(t3a).length === 2, `出现 ${src.split(t3a).length - 1} 次`);
-    const m3a = writeMutant("stale-removed", t3a, `  const staleFail = false;`);
+    const m3a = writeMutant("sourcedead-removed", t3a, `  const sourceDead = false;`);
     staleMutFiles.push(m3a);
-    const a3 = fire("mousse-implementer", { script: m3a });
+    const a3 = fire("mousse-implementer", Object.assign({ script: m3a }, dead));
     const beat3a = lastBeat();
-    check("M3a（①移除）：官种掉回 general + 心跳 stale 灭 ⇒ 「不退官种」与「心跳可数」两格都被测着",
-      /官种=general/.test(a3.ctx) && beat3a.stale !== true && a3.code === 0,
+    check("M3a（①移除）：官种掉回 general + 心跳形态灭 ⇒ 「不退官种」与「心跳可数」两格都被测着",
+      /官种=general/.test(a3.ctx) && beat3a.mode !== "source-dead-pointer" && a3.code === 0,
       `head=${a3.ctx.split("\n")[0]} beat=${JSON.stringify(beat3a)}`);
 
-    // ②保留字面但使其不执行：`staleFail` 这个标识符还在源码里，分支却永不进
-    //   ⇒ 文本匹配型的检查（「源码里有没有 staleFail」）对这一形态天然失明，只有行为断言抓得到。
-    const t3b = `\n  if (staleFail) {\n    degraded.push(`;
+    // ②保留字面但使其不执行：`sourceDead` 标识符还在，分支却永不进
+    //   ⇒ 文本匹配型检查对这一形态天然失明，只有行为断言抓得到。
+    const t3b = `\n  if (sourceDead) {\n    degraded.push(`;
     check("M3b 靶点唯一", src.split(t3b).length === 2, `出现 ${src.split(t3b).length - 1} 次`);
-    const m3b = writeMutant("stale-dead-branch", t3b, `\n  if (false && staleFail) {\n    degraded.push(`);
+    const m3b = writeMutant("sourcedead-dead-branch", t3b, `\n  if (false && sourceDead) {\n    degraded.push(`);
     staleMutFiles.push(m3b);
-    const b3 = fire("mousse-implementer", { script: m3b });
+    const b3 = fire("mousse-implementer", Object.assign({ script: m3b }, dead));
     check("M3b（②保留字面但不执行）：官种照样掉回 general ⇒ 抓得住「分支还在但没人走」",
       /官种=general/.test(b3.ctx) && b3.code === 0, `head=${b3.ctx.split("\n")[0]}`);
 
     // ③保留计算与副作用、结果不被消费：判据照算、degraded 照写、官种照保，
-    //   只是**渲染那一侧收不到这个答案** ⇒ 指针少掉「拒投旧版」的说明与修法命令，心跳 stale 灭。
-    //   这一形态最像没事：注入还在、长度正常、官种也对，人眼扫一遍看不出任何异常。
-    const t3c = `    staleFail,\n    regenHint: r.hint,`;
+    //   只是 buildContext 收不到这个答案 ⇒ 指针走普通分支（没有「修法归帅」句），心跳形态灭。
+    //   这一形态最像没事：注入还在、长度正常、官种也对，人眼扫一遍看不出异常。
+    const t3c = `    sourceDead,\n    regenHint: r.hint,`;
     check("M3c 靶点唯一", src.split(t3c).length === 2, `出现 ${src.split(t3c).length - 1} 次`);
-    const m3c = writeMutant("stale-unconsumed", t3c, `    staleFail: false,\n    regenHint: r.hint,`);
+    const m3c = writeMutant("sourcedead-unconsumed", t3c, `    sourceDead: false,\n    regenHint: r.hint,`);
     staleMutFiles.push(m3c);
-    const c3 = fire("mousse-implementer", { script: m3c });
+    const c3 = fire("mousse-implementer", Object.assign({ script: m3c }, dead));
     const beat3c = lastBeat();
-    check("M3c（③结果不被消费）：官种仍对、注入仍在，但修法命令与 stale 心跳双双消失 ⇒ 红集与 ①② 不同",
-      /官种=implementer/.test(c3.ctx) && !/gen-clause-index/.test(c3.ctx) && beat3c.stale !== true,
-      `head=${c3.ctx.split("\n")[0]} hasHint=${/gen-clause-index/.test(c3.ctx)} beat=${JSON.stringify(beat3c)}`);
+    check("M3c（③结果不被消费）：官种仍对、注入仍在，但「修法归帅」句与心跳形态双双消失 ⇒ 红集与 ①② 不同",
+      /官种=implementer/.test(c3.ctx) && !/修法归帅/.test(c3.ctx) && beat3c.mode !== "source-dead-pointer",
+      `head=${c3.ctx.split("\n")[0]} beat=${JSON.stringify(beat3c)}`);
 
-    fs.writeFileSync(FIXTURE_MD, FIXTURE_BYTES);
-    check("M3 夹具已复原（索引重新对得上）", fire("mousse-implementer").ctx.includes("## implementer 节"));
+    check("M3 语料复核：正常语料下官种节渲得出", fire("mousse-implementer").ctx.includes("## implementer 节"));
 
-    // 反向 mutation：**上面三次全在「让 stale 支失灵」这一侧**，那样「非 stale 的失败仍要退官种」
-    //   那条负控一次都不会红 —— 它可能只是因为 stale 支本来就没被触发才通过的。
-    //   故把 staleOf 改成恒真：③成因一（官种 0 条）会被误当成索引过期 ⇒ 那条负控必须当场红。
-    const t4 = `  return m ? m[1] === "1" : null;`;
-    check("R1 靶点唯一", src.split(t4).length === 2, `出现 ${src.split(t4).length - 1} 次`);
-    const r1 = writeMutant("stale-always-true", t4, `  return true;`);
+    // 反向 mutation：**上面三次全在「让 sourceDead 支失灵」这一侧**，那样「非源死的失败仍要退官种」
+    //   那条负控一次都不会红 —— 它可能只是因为 sourceDead 支本来就没被触发才通过的。
+    //   故把判据改成恒真：成因一（官种 0 条）会被误当成源读不到 ⇒ 那条负控必须当场红。
+    const t4 = `  const sourceDead = !r.ok && /读不到/.test(r.why || "");`;
+    const r1 = writeMutant("sourcedead-always-true", t4, `  const sourceDead = !r.ok;`);
     staleMutFiles.push(r1);
     const zeroClauses = { index: IDX_GENERAL_ONLY };
     const beforeR = fire("mousse-implementer", zeroClauses);
     const afterR = fire("mousse-implementer", Object.assign({ script: r1 }, zeroClauses));
-    check("R1（反向）：staleOf 恒真后「官种 0 条 → 退通用节」这条负控真的红了 ⇒ 那条负控有判别力",
+    check("R1（反向）：sourceDead 恒真后「官种 0 条 → 退通用节」这条负控真的红了 ⇒ 那条负控有判别力",
       /官种=general/.test(beforeR.ctx) && /官种=implementer/.test(afterR.ctx),
       `before=${beforeR.ctx.split("\n")[0]} after=${afterR.ctx.split("\n")[0]}`);
   }
