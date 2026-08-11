@@ -46,6 +46,8 @@ C. 照此派，且本窗口同类活照此办 ← 问一次管一窗
 
 **防打扰**（用户原话的落点）：选项 C 让一次拍板管一窗；小活（改错字、跑个脚本这类）
 直接走已确认的默认，不逐个问。换机器只是探测结果变，策略逻辑不变。
+**触发粒度（2026-08-12 用户拍板）＝只在派单类任务弹**（批量/并行/要交付 PR 的）；协调者亲手一次
+Edit 级小活与纯问答不弹。
 
 ### 3. 回退红线（拷问局定案①，无条件生效）
 
@@ -88,6 +90,16 @@ spec 四段式骨架（按此写，条款段由 dao-orch 自动渲入）：
 4. 开工契约占 spec 开头：分支名、唯一停手点、worker_done 契约（3 句、taskId+dispatchId、--outcome、--files-modified、--report-path）。
 5. orca CLI 只信 `--json` 出口；`report read` 拿不到正文要落 `task_claim_error`。
 6. worker 体内没有 AskUserQuestion（会挂死）；要问走 `orca orchestration ask`。
+7. **底座缺省 = Orca 编排**（#299 裁决，2026-08-11 用户拍板「编排底座整体迁 Orca：Fable 主会话做协调，
+   派活/收活/观测走 Orca」，裁决正文 `docs/ops/orca-dao-conflict-ruling.md` 修订版处置表）：
+   **供审查/追踪的供给线走 `orchestration`**（task-create + worker-start 的 supervised dispatch，要验要等，
+   是结构事实不是措辞解释）；**完全移交走 `orca-cli`**（仅剩「用户显式说派完不用管」一个合法场景）；
+   **Claude subagent 降为非 Orca 环境备选**，只保留给轻量读码与 dao worker 类型条款强绑定的场景。
+8. **陌生执行者名先查环境再问，禁静默替换成最像的已知档**（#312 方向，2026-08-12 用户确认）：
+   「执行者」是内容决定的字段，只有环境知道本机有哪些执行者——用户点名一个执行者而协调者不认识时，
+   次序固定：①先查环境（orca 可用 agent 面 / 已装 skill 清单 / `scripts/dao-roster.mjs`）②仍不识再
+   AskUserQuestion ③**无论如何轮不到静默替换**（替换执行者=判断档，改用户可见面的取舍，须问）；
+   「worker / 派 worker」语义 ⇒ 优先本编排通道。
 
 ## 二½、观测与打回（issue #304，2026-08-11 首日实战沉淀）
 
