@@ -613,14 +613,18 @@ if ($DryRun) {
         }
     } else {
         # 本脚本不拆自己所在的 worktree（.DESCRIPTION 边界 ④）——但把可复制的两行打出来，
-        # 别再只说一句「请在主仓跑」（那句话每次都要人自己去查路径）
+        # 别再只说一句「请在主仓跑」（那句话每次都要人自己去查路径）。
+        # 顺带把收尾脚本 scripts/dao-merge-cleanup.ps1 指给人（#265 件 7）：它把这两行手跑
+        # 动作加上差集核验（-d/-D/拒绝）后脚本化，幂等可重跑。
         Write-Note "本地那半跳过：本脚本正跑在 $branch 的链接 worktree 里，切不到主干、也删不掉自己脚下的目录。到主仓跑这两行收尾（可直接复制）："
         if ($mainWt) {
             Write-Info "  git -C `"$mainWt`" worktree remove `"$selfWt`""
             Write-Info "  git -C `"$mainWt`" branch -d $branch"
+            Write-Info "  或跑收尾脚本（差集核验 + 全流程收尾，可复制）：powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $mainWt 'scripts\dao-merge-cleanup.ps1')`" -WorktreePath `"$selfWt`" -Branch $branch -RepoPath `"$mainWt`""
         } else {
             Write-Info "  git worktree remove `"$selfWt`""
             Write-Info "  git branch -d $branch"
+            Write-Info "  或跑收尾脚本（差集核验 + 全流程收尾，可复制）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dao-merge-cleanup.ps1 -WorktreePath `"$selfWt`" -Branch $branch"
         }
     }
 }
