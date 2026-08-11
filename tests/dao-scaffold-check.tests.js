@@ -192,7 +192,9 @@ function run(cwd, extraEnv, hookPath) {
     hook_event_name: "SessionStart",
     source: "startup",
   });
-  const r = spawnSync(process.execPath, [hookPath || HOOK], {
+  // 2026-08-11 重设计：默认模式（SessionStart）已改为只读落盘报告；
+  // 本文件断的是「完整检查路径」的行为 ⇒ 统一走 --write-report（落盘也随 HOME 重定向进沙盒）。
+  const r = spawnSync(process.execPath, [hookPath || HOOK, "--write-report"], {
     input: payload,
     encoding: "utf8",
     env: Object.assign({}, process.env, {
@@ -2501,6 +2503,80 @@ console.log("\n=== M14 补断言：reminderTitle() 首行截断半边（PR #237 
   check("🔴 mutation：摘掉首行截断半边后，第 4 次压缩泄漏了完整可粘贴命令" +
     "（证明①在「有 template 无 →」这个形态下是唯一承重的那一半，堵上 F4 那个真空覆盖）",
     /↳ 零编辑复制 canonical/.test(mutSpan), mutSpan.slice(0, 400));
+}
+
+// ── 默认模式（SessionStart 快速路径：只读落盘报告，2026-08-11 重设计离线化）────────
+{
+  const reportDir = path.join(FAKE_HOME, ".claude", "dao-state");
+  const reportFile = path.join(reportDir, "health-report.json");
+  const runDefault = () => {
+    const payload = JSON.stringify({ session_id: "s", transcript_path: "C:/fake/t.jsonl",
+      cwd: process.cwd(), hook_event_name: "SessionStart", source: "startup" });
+    return spawnSync(process.execPath, [HOOK], {
+      input: payload, encoding: "utf8",
+      env: Object.assign({}, process.env, { HOME: FAKE_HOME }),
+    });
+  };
+  const lineOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch (_) { return ""; } };
+
+  try { fs.rmSync(reportFile, { force: true }); } catch (_) {}
+  check("默认模式·无报告 ⇒ 注入「报告未生成」提示行（不是静默）",
+    /体检报告未生成/.test(lineOf(runDefault())), "");
+
+  fs.mkdirSync(reportDir, { recursive: true });
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date().toISOString(), outcome: "issues", summary: "同步漂移检测：2 项" }));
+  check("默认模式·报告有发现 ⇒ 注入摘要行（带年龄与刷新处方）",
+    /体检有发现/.test(lineOf(runDefault())) && /write-report/.test(lineOf(runDefault())), "");
+
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date().toISOString(), outcome: "clean" }));
+  { const r = runDefault();
+    check("默认模式·全绿且新鲜 ⇒ 完全静默（stdout 空、exit 0）——SessionStart 不再付体检钱",
+      r.status === 0 && String(r.stdout).trim() === "", "stdout=" + String(r.stdout).slice(0, 120)); }
+
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date(Date.now() - 30 * 3600 * 1000).toISOString(), outcome: "clean" }));
+  check("默认模式·全绿但报告 30 小时旧 ⇒ 提醒刷新链断了（计划任务没跑）",
+    /未刷新/.test(lineOf(runDefault())), "");
+
+  check("🔴 反向：快速路径与完整路径分得开（同一 FAKE_HOME 下 --write-report 真跑检查，不是读报告糊弄）",
+    run(process.cwd()).code !== undefined, "");
+  try { fs.rmSync(reportFile, { force: true }); } catch (_) {}
+}
+
+// ── 默认模式（SessionStart 快速路径：只读落盘报告，2026-08-11 重设计离线化）────────
+{
+  const reportDir = path.join(FAKE_HOME, ".claude", "dao-state");
+  const reportFile = path.join(reportDir, "health-report.json");
+  const runDefault = () => {
+    const payload = JSON.stringify({ session_id: "s", transcript_path: "C:/fake/t.jsonl",
+      cwd: process.cwd(), hook_event_name: "SessionStart", source: "startup" });
+    return spawnSync(process.execPath, [HOOK], {
+      input: payload, encoding: "utf8",
+      env: Object.assign({}, process.env, { HOME: FAKE_HOME }),
+    });
+  };
+  const lineOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.additionalContext; } catch (_) { return ""; } };
+
+  try { fs.rmSync(reportFile, { force: true }); } catch (_) {}
+  check("默认模式·无报告 ⇒ 注入「报告未生成」提示行（不是静默）",
+    /体检报告未生成/.test(lineOf(runDefault())), "");
+
+  fs.mkdirSync(reportDir, { recursive: true });
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date().toISOString(), outcome: "issues", summary: "同步漂移检测：2 项" }));
+  check("默认模式·报告有发现 ⇒ 注入摘要行（带年龄与刷新处方）",
+    /体检有发现/.test(lineOf(runDefault())) && /write-report/.test(lineOf(runDefault())), "");
+
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date().toISOString(), outcome: "clean" }));
+  { const r = runDefault();
+    check("默认模式·全绿且新鲜 ⇒ 完全静默（stdout 空、exit 0）——SessionStart 不再付体检钱",
+      r.status === 0 && String(r.stdout).trim() === "", "stdout=" + String(r.stdout).slice(0, 120)); }
+
+  fs.writeFileSync(reportFile, JSON.stringify({ at: new Date(Date.now() - 30 * 3600 * 1000).toISOString(), outcome: "clean" }));
+  check("默认模式·全绿但报告 30 小时旧 ⇒ 提醒刷新链断了（计划任务没跑）",
+    /未刷新/.test(lineOf(runDefault())), "");
+
+  check("🔴 反向：快速路径与完整路径分得开（--write-report 走完整检查，不是读报告糊弄）",
+    run(process.cwd()).code !== undefined, "");
+  try { fs.rmSync(reportFile, { force: true }); } catch (_) {}
 }
 
 // ── 清理 ────────────────────────────────────────────────────────────────────
