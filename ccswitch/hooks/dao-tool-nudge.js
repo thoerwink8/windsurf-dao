@@ -1,137 +1,77 @@
 // dao tool-nudge hook — 六类软提醒:①绕道 Bash 跑 grep/cat/find ②PR 合并期机械链裸手跑 ③直推主干
 //                                  ④浏览器 MCP 首调 → 去读 GUI 验证细则
 //                                  ⑤热重载 dev server 起在主仓树而非专用 worktree
-//                                  ⑥推送触及条款索引的源文件 → 去跑 gen-clause-index.mjs --check
+//                                  ⑥推送触及条款源 → 提醒 regen（已退役，见下）
+//                                  ⑦PowerShell 2>&1 混流 / Bash heredoc 误用
+//
+// 共同原则：软提醒不阻断，判据是近似的，**宁可漏报也不滥报**——漏报的代价是「这次没被提醒」，
+// 滥报的代价是「每次都插一段废话然后被无视」，后者会把这个 hook 废掉。
 //
 // ── ① 工具选择(本 hook 的原始职责)────────────────────────────────────────────
-// 背景:Claude Code 同时允许内置 Grep(ripgrep)/Glob/Read 与 Bash(*),
-// 两条路都零摩擦,模型常习惯性写 shell 一行(grep -nE "..." file | head)绕过内置工具。
-// 内置工具更快(自动跳过 .git/node_modules/二进制)、结果可点击跳转、不撑爆主上下文。
+// 内置 Grep(ripgrep)/Glob/Read 比 Bash 跑 grep/find/cat 快（自动跳过 .git/node_modules/二进制）、
+// 结果可点击、不撑爆主上下文；本 hook 在 Bash 执行后检测命令是否「直接搜/读文件」，是则注入软提醒。
+//   命中：grep/egrep/fgrep 直接搜文件(带 -r/-l/--include 或文件路径参数)；find ... -name/-path/-type/-exec；
+//        cat/head/tail/less/more 直接读文件。
+//   豁免：管道下游的过滤(`ps | grep x`、`cmd | head`)内置工具替代不了 → 不提示；
+//        只有「段首 + 带文件特征」才算绕道。git grep / --grep / ripgrep / zgrep 一律豁免。
 //
-// 本 hook 在 Bash 执行后,检测命令是否"直接搜文件/读文件",是则注入软提醒,纠正后续行为。
-//   - grep/egrep/fgrep 直接搜文件(带 -r/-l/--include 或 文件路径参数)→ 建议 Grep
-//   - find ... -name/-path/-type/-exec  → 建议 Glob / Explore
-//   - cat/head/tail/less/more 直接读文件 → 建议 Read
+// ── ② PR 合并期机械链 ─────────────────────────────────────────────────────
+// canonical 实现是 ccswitch/scripts/dao-pr-merge.ps1；本 hook 是它的**触发点**——
+// 载体挂这里而不是 scaffold-manifest，因为后者是存在性检查(只保证脚本在，不保证被调用)。
+// 命中形态：段首 `gh pr merge`。**刻意只认这一个**——它是整条链上唯一不可省的写操作，
+// 而 `git fetch` / `git merge` 单独出现时提示只会是噪音。已带 `-File ...dao-pr-merge` 的调用不提示。
 //
-// 关键豁免(降噪):管道下游的过滤(`ps | grep x`、`cmd | head`)内置工具替代不了 → 不提示。
-//   只有"段首 + 带文件特征"才算绕道。git grep / --grep / ripgrep / zgrep 一律豁免。
+// ── ③ 直推主干 ─────────────────────────────────────────────────────────────
+// dao.md Shell 节「PR-first 节律」**明写「非禁令」**：代码类改动默认走 PR，文档/配置微改可直推，
+// 机器判不出这次是哪一种 ⇒ 归**乙类软提醒**，不进 dao-hard-gates.js 那道 exit 2 的闸。
+// 命中形态：段首 `git push` 且**参数里显式点名 main/master**(含 `HEAD:main`)。
+// **裸 `git push` 刻意不认**——目标分支写在 upstream 配置里、命令串看不见，认它只能靠猜。
 //
-// ── ② PR 合并期机械链(2026-08-01 加,dao 重塑批 C · C5)──────────────────────
-// dao.md Shell 节那条链(fetch → 核 rev-parse 真的动了 → merge 主干 → 重跑验证 → 合 PR
-// → prune → 实查远程分支真的没了)每一步都是零判断祈使句,却长期只以**文字**形态存在。
-// canonical 实现是 ccswitch/scripts/dao-pr-merge.ps1;本 hook 是它的**触发点**——
-// 载体挂这里而不是 scaffold-manifest,因为后者是存在性检查(只保证脚本在,不保证被调用)。
+// ── ④ 浏览器 MCP 首调 ─────────────────────────────────────────────────────
+// dao.md 动·目·观 的 GUI 细则迁去 ccswitch/rules/dao-gui-verify.md 后只剩一行存根，
+// 而「必经动作」本身没有任何机器投递 ⇒ 本会话**第一次**调到 mcp__chrome-devtools__* /
+// mcp__playwright__* 时，把「去 Read 那份文件」送到眼前。**只提醒一次**：GUI 走查动辄几十次
+// 截图，每次插一段等于亲手废掉本 hook 的第一原则。去重状态落
+// <repo>/_tmp/tool-nudge/browser-mcp-seen.json，按 session_id 记；测试用 DAO_TOOL_NUDGE_STATE 覆写。
+// 状态**写不动时仍然提醒**(可能因此重复)：重复是噪音，静默是这条规则直接消失。
+// 它此刻能不能投递到，由 `--selfcheck` 逐面核 matcher 覆盖（缺一面即 exit 1），别凭记忆判断。
 //
-// 命中形态:段首 `gh pr merge`。**刻意只认这一个**——它是整条链上唯一不可省的写操作,
-// 而 `git fetch` / `git merge` 单独出现时提示只会是噪音(它们有大量与 PR 无关的正当用法)。
-// 已带 `-File ...dao-pr-merge` 的调用不提示(那就是正路)。
+// ── ⑤ 热重载 dev server 起在主仓树 ────────────────────────────────────────
+// dao.md 帅节：「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起，不从主仓树
+// ——『冻结 main』靠纪律守不住，隔离构建才是彻底解」。触发时刻极其确定：正要敲起 dev server 的命令。
+// 命中形态：段首是热重载型启动命令(pnpm/npm/yarn/bun/npx 的 dev 脚本 · tauri dev · vite 不带子命令
+// · webpack serve/--watch)，**且**那一刻所在目录经 `git rev-parse --git-dir --git-common-dir`
+// 判定为**主仓工作树**(两者相等)；链接 worktree 里两者不等 ⇒ 静默，那正是正路。
+// 目录取 hook 输入的 `cwd`，并按命令里出现过的 `cd <路径>` 段逐段推进(`cd ../repo-wt-x && pnpm dev`
+// 是常见正路形态，不推进 cwd 就会对它误报)。判不出来(不是 git 仓 / 没有 git / 目录不存在 / 超时)
+// 一律不提醒。已知盲区：`pnpm --dir <path> dev` / `npm --prefix` 不靠 cd 换树 → 不认；`cd -` 无从推进；
+// 经 .ps1/.sh 包装脚本间接起的不认。⚠ 实例隔离(WebView2 user-data-dir / app 数据库那类，如
+// mousse-cli 的 start-isolated-dev.ps1)**不是工作树隔离**，两件事别混，本类提醒对它依然成立。
 //
-// 两侧代价都是真的:漏报=这次合并没被提醒;滥报=每次合 PR 都插一段废话然后被无视。
-// 故取高精度低召回,与本 hook 既有的降噪原则一致。
+// 与 ②③ 同为**事后**提醒：PostToolUse 触发时 dev server 已经起来了，提醒买的是「现在换树重起」
+// 或「在交付里写明这次观察建立在共享树上」，不是拦截。
 //
-// ── ③ 直推主干(2026-08-01 加,P1 门控出文本层 · 乙类)────────────────────────
-// dao.md Shell 节「PR-first 节律」**明写「非禁令」**:代码类改动默认走 PR,
-// **文档/配置微改可直推**。⇒ 它有真实的合法例外,机器判不出这次是哪一种
-// (hook 看得见 `git push origin main`,看不见这次改的是 CHANGELOG 还是 auth 模块),
-// 故它归**乙类:软提醒**,不进 ccswitch/hooks/dao-hard-gates.js 那道 exit 2 的闸。
-// 判定表与三档分档理由见 P1 批 PR body。
+// ── ⑥ 推送触及条款源 ⇒ 提醒 regen：已退役 ────────────────────────────────
+// 派生物 clause-index.json 已消灭（渲染端改运行时现算），「推了源没 regen」在结构上不存在了。
 //
-// 命中形态:段首 `git push` 且**参数里显式点名 main/master**(含 `HEAD:main` 形式)。
-// **裸 `git push` 刻意不认**——那时目标分支写在 upstream 配置里、命令串看不见,
-// 认它只能靠猜当前分支,而猜错的代价是每次推特性分支都插一段废话然后被无视。
-// 这是同一条高精度低召回原则的第三次应用,漏报面已知且写在这里。
+// ── ⑦ PowerShell 面:2>&1 混流 / Bash heredoc 误用 ──────────────────────────
+// 官通节明写两条乙类判据(「禁 2>&1 捕获 native 命令输出」「PS 里禁 Bash heredoc，真会 ParserError」)，
+// 但 Bash matcher 天然收不到 PowerShell 工具调用，而这两条恰恰只在 PowerShell 命令串里才成立
+// ⇒ 本类挂在 `Bash|PowerShell` matcher 下。判据**整串扫**，不按 Bash 那套分号/&&/管道切段：
+//   · `2>&1`：PowerShell 5.1 把 native 命令(cargo/git 等)的 stderr 经它收进来时每行被包成
+//     NativeCommandError，`$ErrorActionPreference='Stop'` 下会把正常进度误判成终止性错误、中断脚本。
+//   · `<<` 紧跟一个标识符：PowerShell 合法语法里 `<<` 不出现在任何形态(位移是 `-shl`/`-shr`)，
+//     出现即高精度信号 ⇒ Bash 风格 heredoc 被误搬进 PS 命令串（字面写出来是 ParserError）。
+//     判据正文见 dao-officer-clauses.md「编码铁律」段；**别引用 dao-powershell.md**（它没有 heredoc 内容）。
 //
-// ── ④ 浏览器 MCP 首调(2026-08-02 加,dao.md 瘦身批 · #5)──────────────────────
-// dao.md 动·目·观 的「GUI 工具决策树 + 防断路规则」正文迁去 ccswitch/rules/dao-gui-verify.md
-// 后,dao.md 只剩一行存根「每次截图/GUI 交互前 Read 那份文件」。**「必经动作」这四个字
-// 本身没有任何机器投递**(本仓实测无标记时刻的自由裁量携带率 9-24%),故这里给它一个投递:
-// 本会话**第一次**调到 mcp__chrome-devtools__* / mcp__playwright__* 时,把那句话送到眼前。
+// 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0，只提醒不阻断。
+// 它是**事后**提醒：PostToolUse 在命令跑完之后才触发，所以第 ② 类命中时 PR 多半已经合了——
+// 提醒的实际作用是「补做合并后那两步复核」与「下次走脚本」，不是拦截。这一点别读成守卫。
+// 第 ④ 类同理：提醒到达时那次截图已经拍完了，它买的是**这一次走查剩下的部分**和下一次的选型。
+// 注册 matcher 是否覆盖各面 ⇒ `node ccswitch/hooks/dao-tool-nudge.js --selfcheck`（不在这里写死具体串）。
 //
-// **只提醒一次**:同一 session 内后续调用一律静默。GUI 走查动辄几十次截图,每次插一段
-// 等于把这个 hook 的第一原则(宁可漏报不可滥报)亲手废掉。去重状态落
-// <repo>/_tmp/tool-nudge/browser-mcp-seen.json,按 session_id 记;测试用 DAO_TOOL_NUDGE_STATE 覆写。
-// 状态**写不动时仍然提醒**(可能因此重复):一个状态目录坏掉就静默零投递,正是本 hook
-// 头注反复在说的那种死法;重复的代价是噪音,静默的代价是这条规则不存在。重复时提醒里会自陈。
-//
-// ~~🔴 它此刻大概率投递不到,照直写:本 hook 在 live settings.json 里注册的 PostToolUse
-// matcher 是 `Bash`,而 `mcp__chrome-devtools__take_screenshot` 不匹配 `Bash`
-// ⇒ 第 ④ 类的代码在这里、投递为零~~ **2026-08-08 订正**:matcher 早已扩过(`e9e9fdc`
-// 「快照层同步 hook 注册四项——G6/MCP扩面/…」)——**本 PR 改动之前**,live 与快照两层
-// 都是 `Bash|mcp__chrome-devtools__.*|mcp__playwright__.*`,第 ④ 类**这一格已在响**,
-// 上面那段「大概率投递不到」是写下之后没跟着改的旧结论,不是那时的实况。
-// ⚠ **本 PR 又把这句话写过期了一次,照直记这个教训**:上面订正时只核过 live/快照两层的
-// 历史状态,没意识到**同一个 commit 下面几段** ⑦ 又把快照层改成了
-// `Bash|PowerShell|mcp__chrome-devtools__.*|mcp__playwright__.*`——于是这段订正落盘的
-// 那一刻就已经不真:live 与快照从此不再相同(live 待帅走「四处同落」才跟上)。
-// **教训**:订正一句"两处此刻相同"的陈述前,先问同一批改动有没有正在动其中一处。
-// **别凭记忆判断它通没通**,跑:  node ccswitch/hooks/dao-tool-nudge.js --selfcheck
-// 那个自检逐面核对 matcher 覆盖不覆盖 Bash 面与 MCP 面,缺一即 exit 1
-// (2026-08-08 起 Bash 面已并入 `Bash|PowerShell`,见下方 ⑦ 段——这也正是让上面那句
-// "两层此刻相同"过期的改动)。
-//
-// ── ⑤ 热重载 dev server 起在主仓树(2026-08-02 加,dao 整体重写批 1-D)───────────
-// dao.md 帅节:「热重载型验证(真机 / dev server / watch 编译)从专用 worktree 起,不从主仓树
-// ——『冻结 main』靠纪律守不住,隔离构建才是彻底解」(用户点名事故后固化 2026-08-01,
-// 基线:同窗真机 wave4 被并发的主仓瞬时编辑触发 dev 重启 3 次,观测建立在污染构建上需重跑)。
-// 那条判据此前只有文字形态,而它的触发时刻**极其确定**:你正要敲那条起 dev server 的命令。
-//
-// 命中形态:段首是热重载型启动命令(pnpm/npm/yarn/bun/npx 的 dev 脚本 · tauri dev · vite
-// 不带子命令 · webpack serve/--watch),**且**那一刻所在目录经 `git rev-parse --git-dir
-// --git-common-dir` 判定为**主仓工作树**(两者相等)。链接 worktree 里两者不等 ⇒ 静默,
-// 那正是正路。目录取 hook 输入的 `cwd`,并按命令里出现过的 `cd <路径>` 段逐段推进
-// (`cd ../repo-wt-x && pnpm dev` 是常见正路形态,不推进 cwd 就会对它误报)。
-//
-// 判不出来时一律不提醒(不是 git 仓 / 没有 git / 目录不存在 / 超时):**漏报一次的代价是
-// 这次没被提醒,误报一次的代价是每次起 dev 都插一段废话然后被无视**——同本 hook 既有的
-// 高精度低召回原则。已知盲区照直写:`pnpm --dir <path> dev` / `npm --prefix` 这类**不靠 cd
-// 换树**的形态不认;`cd -` 无从推进;经 .ps1/.sh 包装脚本间接起的 dev server 不认
-// (如 mousse-cli 的 start-isolated-dev.ps1 —— 顺带一提,那个脚本隔离的是 WebView2 用户数据
-// 目录与 app 数据库,**不隔离工作树**,两件事别混,本类提醒对它依然成立)。
-//
-// 与 ②③ 同为**事后**提醒:PostToolUse 触发时 dev server 已经起来了,提醒买的是「现在换树重起」
-// 或「在交付里写明这次观察建立在共享树上」,不是拦截。
-//
-// ── ⑥ 推送触及条款源 ⇒ 提醒 regen：已于 2026-08-11 重设计时退役 ────────────
-// 派生物 clause-index.json 已消灭（渲染端改运行时现算），「推了源没 regen」这一病
-// 在结构上不存在了——没有产物需要跟上。本类删除，判据史见 git 历史与 issue #162。
-//
-// ── ⑦ PowerShell 面:2>&1 混流 / Bash heredoc 误用(2026-08-08 加,issue #44)─────
-// ①②③⑤⑥ 都挂在 Bash matcher 下,而本仓官方工具面**同时有一个 PowerShell 工具**——
-// `dao-officer-clauses.md` 官通节明写两条乙类判据(「禁 2>&1 捕获 native 命令输出」
-// 「PS 里禁 Bash heredoc,真会 ParserError」),但它们此前**没有任何机器投递**:
-// Bash matcher 天然收不到 PowerShell 工具调用,而这两条恰恰只在 PowerShell 命令串里才成立。
-// PR #43 判定表当时就点出这个结构缺口(「有意留的缺口但未转移」),issue #44 把它转移成本单。
-//
-// 判据(整串扫,不按 Bash 那套分号/&&/管道切段——PowerShell 语法不是那样拆的,
-// 且这两个记号出现在命令串任何位置都值得提一句):
-//   · `2>&1`:PowerShell 5.1 把 native 命令(cargo/git 等)的 stderr 经它收进来时,
-//     每一行都会被包成 NativeCommandError,`$ErrorActionPreference='Stop'` 下会把正常的
-//     进度提示误判成终止性错误、中断脚本(同判据见 dao-officer-clauses.md「禁重定向捕获」)。
-//   · Bash 风格 heredoc(`<<EOF` 一类):PowerShell 没有这个语法,字面写出来是 ParserError
-//     (真实事故记在 `dao-officer-clauses.md`「编码铁律」段落——PR #117 那次「官先试了
-//     `--body "$(cat <<'EOF' …)"`」的实证)。
-//     ⚠ **顺手核实一处坐标,照直记**:`rules/scoped/dao-scope-powershell.md`(触发器文件)
-//     自称它指向的 `dao-powershell.md` 里有「禁 PowerShell 里的 Bash heredoc」这条判据,
-//     但实读 `dao-powershell.md` 当前 5 条判据(假错/编码/消费侧编码/`-File`退出码/inline长命令)
-//     里**没有 heredoc 相关内容**——那个触发器文件的坐标此刻是空指针。这不在本批四单范围内,
-//     不在此顺手改那两份文件,只在本条別再引用 `dao-powershell.md`。
-//     判据取 `<<` 紧跟一个标识符——PowerShell 合法语法里 `<<` 不出现在任何形态
-//     (位移是 `-shl`/`-shr`,不是 `<<`/`>>`),故这是一个高精度信号,不需要更多上下文。
-//
-// 与 ①②③⑤⑥ 同一原则:软提醒不阻断,判据是近似的,宁可漏报也不滥报。
-// **注册面**:matcher 已从 `Bash` 扩到 `Bash|PowerShell`(git 快照层
-// `config-sync/common/settings.json`,live 与 cc-switch DB 两处由帅走「四处同落」流程跟上,
-// 本次不碰 `~/.claude/settings.json` 本体)。
-//
-// 配在 PostToolUse(复刻 dao-glob-gate 已验证的 additionalContext 注入路径)。始终 exit 0,只提醒不阻断。
-// ⚠ 它是**事后**提醒:PostToolUse 在命令跑完之后才触发,所以第 ② 类命中时 PR 多半已经合了——
-// 提醒的实际作用是「补做合并后那两步复核」与「下次走脚本」,不是拦截。这一点别读成守卫。
-// 第 ④ 类同理:提醒到达时那次截图已经拍完了,它买的是**这一次走查剩下的部分**和下一次的选型。
-//
-// 回归网:tests/dao-tool-nudge.tests.js(正控+误伤负控双向)。
-// 真相源:windsurf-dao/ccswitch/hooks/dao-tool-nudge.js
-// 由 settings.json 的 PostToolUse hook 调用(2026-08-08 起注册 matcher 含 `Bash|PowerShell`,
-// 见 `--selfcheck` 的逐面覆盖核对,不在这里写死具体串——写死就是又一个会漂移的副本)。
+// 回归网：tests/dao-tool-nudge.tests.js(正控+误伤负控双向)。
+// 真相源：windsurf-dao/ccswitch/hooks/dao-tool-nudge.js
 
 const fs = require("fs");
 const os = require("os");
@@ -199,12 +139,8 @@ function isLinkedWorktree(dir) {
 
 
 // ── --selfcheck:把「④ 到底投递得到吗」摆出来 ───────────────────────────────
-// 形态照抄 dao-hard-gates.js 的 selfcheck(逐面核 matcher 覆盖),**判据各自独立**:
-// 那边核的是各道硬闸要拦的工具名(闸数以那边的 GATES 为准,此处刻意不写死——原写「五道闸」,
-// 2026-08-02 加 G6 时才发现这个数字散在三处),这边核的是本 hook 各类提醒要看见的工具名
-// (类数同理不写死,以下面的 REQUIRED_COVERAGE 为准——本行原写「四类」,同日加第 ⑤ 类即过期,
-//  与那边的「五道闸」是同一个病的两侧,一并治掉)。
-// 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
+// 形态照抄 dao-hard-gates.js 的 selfcheck，判据各自独立；闸数/类数**刻意不写死**
+// (写死就是会漂移的副本)，以本文件 REQUIRED_COVERAGE 逐面打印为准。只抽形态不抽判据。
 const REQUIRED_COVERAGE = [
   { face: "①②③⑤ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离)", tools: ["Bash"] },
   { face: "⑦ PowerShell 面(2>&1 混流 / Bash heredoc 误用)", tools: ["PowerShell"] },
@@ -242,8 +178,7 @@ function selfcheck() {
       lines.push(`✓ 已注册于 PostToolUse，matcher=${matchers.map((m) => JSON.stringify(m)).join(" , ")}`);
     } else {
       bad++;
-      // 此处刻意**不写类数**：本行原写「四类」，加第 ⑤ 类时即过期，加第 ⑥ 类时又要改一次——
-      // 与本文件头注点名的那个病同型（散在三处的硬编码计数）。类数以下面 REQUIRED_COVERAGE 逐面打印为准。
+      // 刻意不写类数：写死就会漂移，以 REQUIRED_COVERAGE 逐面打印为准。
       lines.push(`✗ 未注册：${LIVE_SETTINGS} 的 hooks.PostToolUse 里没有引用 dao-tool-nudge.js 的 command ⇒ 本 hook 的提醒此刻一条都不生效。`);
     }
   } catch (e) {
