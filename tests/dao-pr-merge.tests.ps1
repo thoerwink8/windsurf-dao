@@ -281,11 +281,10 @@ function New-Fixture {
 # 让被测脚本的第 3.5 步探测到「本仓有 canonical 生成器」并真的调用它（走真 node 子进程，
 # 不桩 node —— 桩掉它就把「PS 调 node 子进程、读它的退出码」这件事本身也一并桩掉了，
 # 而那正是要验的）。放在 main 分支（早于 feature/x 分支出）保证合并后的树上一定有它。
-# -GuardedFilesGenBody（issue #209 缺口 2 · 场景 15）：可选第二个生成器体，落到
-# `ccswitch/scripts/gen-guarded-files.mjs`。不传就不建这个文件——保持场景 12/13/14
-# 那种「只有 clause-index 这一件派生物」的夹具不变，两件派生物的正负控互不干扰。
+# 重设计（2026-08-11）：guarded-files 派生物已消灭（hook 改运行时现算），3.5 步只剩
+# clause-index 一件；场景 15（两件独立核对）随之退役，夹具回到单生成器形态。
 function New-ClauseGenFixture {
-    param([string]$Case, [string]$GenBody, [string]$GuardedFilesGenBody)
+    param([string]$Case, [string]$GenBody)
     $dir    = Join-Path $workRoot $Case
     $origin = Join-Path $dir 'origin.git'
     $work   = Join-Path $dir 'work'
@@ -301,9 +300,6 @@ function New-ClauseGenFixture {
     $genDir = Join-Path $work 'ccswitch/scripts'
     New-Item -ItemType Directory -Force -Path $genDir | Out-Null
     [IO.File]::WriteAllText((Join-Path $genDir 'gen-clause-index.mjs'), $GenBody, $utf8NoBom)
-    if ($PSBoundParameters.ContainsKey('GuardedFilesGenBody')) {
-        [IO.File]::WriteAllText((Join-Path $genDir 'gen-guarded-files.mjs'), $GuardedFilesGenBody, $utf8NoBom)
-    }
     Git0 @('-C', $work, 'add', '-A') | Out-Null
     Git0 @('-C', $work, 'commit', '--quiet', '-m', 'seed with generator') | Out-Null
     Git0 @('-C', $work, 'branch', '-M', 'main') | Out-Null
@@ -717,43 +713,8 @@ if (-not $nodeAvailable) {
     Assert-True '14b-5 远程分支原封不动（没合的东西不许动分支——若 3.5 被误跳过，过期索引连同这条分支会被真的合掉）' `
         (Test-RemoteBranch -OriginDir $f14b.Origin -Branch $f14b.Branch) ''
 
-    # ========================================================================
-    # 场景 15（issue #209 缺口 2）：3.5 步扩接 guarded-files.json，不再只护 clause-index
-    # ========================================================================
-    # 3.5 步现在遍历一份派生物清单（$derivativeChecks），逐件调用各自的 --check。
-    # 场景 12/13/14 只验证过清单里第一件（clause-index）；本场景验证第二件
-    # （guarded-files）真的被核对到了——不是清单摆在那里没人跑。
-    Write-Host '场景 15：3.5 步扩接 guarded-files.json（issue #209 缺口 2，两件派生物独立核对）'
-
-    $gfOk    = 'process.stdout.write("GUARDED_FILES_SUMMARY exit=0 tests=1 mutation_tests=1 files=1 drift=none wrote=0\n"); process.exit(0);'
-    $gfDrift = 'process.stdout.write("GUARDED_FILES_SUMMARY exit=1 tests=1 mutation_tests=1 files=1 drift=content wrote=0\n"); process.exit(1);'
-
-    Write-Host '  15a：两件生成器都干净 ⇒ 3.5 步两件都真的核对到，全链照常 exit 0'
-    $f15a = New-ClauseGenFixture -Case 'both-gen-ok' -GenBody $genOk -GuardedFilesGenBody $gfOk
-    $r15a = Invoke-Target -Fixture $f15a -Cfg (New-StubConfig -Fixture $f15a)
-
-    Assert-True '15a-1 全链仍然 exit 0（两件派生物都干净，互不拖累）' `
-        ($r15a.ExitCode -eq 0) ("exit={0}" -f $r15a.ExitCode)
-    Assert-True '15a-2 clause-index 与 guarded-files 两句「仍与源一致」都真的打出来了（不是只跑了清单第一件）' `
-        (($r15a.Text -match 'clause-index 仍与源一致') -and ($r15a.Text -match 'guarded-files 仍与源一致')) $r15a.Text
-    Assert-True '15a-3 走到了第 6 步（两件核对都没有挡住后续流程）' (Test-ReachedStep6 $r15a.Text) ''
-
-    Write-Host '  15b（核心）：clause-index 干净但 guarded-files 过期 ⇒ 3.5 步在第二件上 Fail，不靠第一件绿混过去'
-    $f15b = New-ClauseGenFixture -Case 'gf-drift' -GenBody $genOk -GuardedFilesGenBody $gfDrift
-    $r15b = Invoke-Target -Fixture $f15b -Cfg (New-StubConfig -Fixture $f15b)
-
-    Assert-True '15b-1 exit 2（跑到一半失败）' `
-        ($r15b.ExitCode -eq 2) ("exit={0}" -f $r15b.ExitCode)
-    Assert-True '15b-2 🔴 核心：报文点名是 guarded-files 过期，不是 clause-index（清单第一件干净，真正拦下合并的是第二件）' `
-        ($r15b.Text -match 'guarded-files 在合并后的树上过期') $r15b.Text
-    Assert-True '15b-3 clause-index 那件确实先被核对过并且干净——不是压根没跑到就被 guarded-files 抢先拦下' `
-        ($r15b.Text -match 'clause-index 仍与源一致') $r15b.Text
-    Assert-True '15b-4 修法建议点名的是 guarded-files 自己的脚本与产物文件，不是错指到 clause-index 那份' `
-        (($r15b.Text -match 'gen-guarded-files\.mjs` 重新生成') -and ($r15b.Text -match 'guarded-files\.json')) $r15b.Text
-    Assert-True '15b-5 停在第 4 步之前：**不**发出任何 gh pr merge（分支态的过期不许被合进去）' `
-        (($r15b.GhLog -notmatch 'pr merge') -and (-not (Test-ReachedStep6 $r15b.Text))) ''
-    Assert-True '15b-6 远程分支原封不动（没合的东西不许动分支）' `
-        (Test-RemoteBranch -OriginDir $f15b.Origin -Branch $f15b.Branch) ''
+    # （场景 15 已退役：它验的是 3.5 步清单第二件 guarded-files —— 该派生物 2026-08-11
+    #  随重设计消灭，清单回到只剩 clause-index 一件，单件的正/负控由场景 12/13/14 守住。）
 
     # ========================================================================
     # 场景 16（PR #213 对抗官 F2）：`-DryRun` × **有 generator** —— 3.5 步只打印、零副作用
@@ -778,9 +739,8 @@ if (-not $nodeAvailable) {
     # ⚠ 夹具生成器落在 `*.mjs` 上 ⇒ **ESM，没有 `require`**（第一版这里写了 `require("fs")`，
     #   对照组当场红：那正是 16k/16l 这组对照存在的理由 —— 它先把尺子自己验了一遍）。
     $genOkMarked = 'import fs from "fs"; fs.writeFileSync("gen-ran-clause.marker","1"); ' + $genOk
-    $gfOkMarked  = 'import fs from "fs"; fs.writeFileSync("gen-ran-guarded.marker","1"); ' + $gfOk
 
-    $f16 = New-ClauseGenFixture -Case 'dryrun-with-gen' -GenBody $genOkMarked -GuardedFilesGenBody $gfOkMarked
+    $f16 = New-ClauseGenFixture -Case 'dryrun-with-gen' -GenBody $genOkMarked
     $tip16before  = Get-RemoteTip -OriginDir $f16.Origin -Branch 'main'
     $sig16Work    = Get-TreeSignature -Root $f16.Work -ExcludeDirs @('.git')
     $sig16Origin  = Get-TreeSignature -Root $f16.Origin
@@ -790,14 +750,12 @@ if (-not $nodeAvailable) {
     Assert-True '16a exit 0（DryRun 正常走完也是 0）' ($r16.ExitCode -eq 0) ("exit={0}" -f $r16.ExitCode)
     Assert-True '16b 3.5 步的标题在**有 generator** 这条路上也打得出来（场景 9 走的是「没有 generator」那条）' `
         ($r16.Text -match '===\s*3\.5\s') $r16.Text
-    Assert-True '16c 🔴 DR2：3.5 为**每一件**派生物各打一行「将做」，两件都点名到自己的脚本与 --check' `
-        (($r16.Text -match 'node ccswitch/scripts/gen-clause-index\.mjs --check') -and `
-         ($r16.Text -match 'node ccswitch/scripts/gen-guarded-files\.mjs --check')) $r16.Text
-    Assert-True '16d 🔴 DR2：那两行走的是「将做」通道（DryRun 屏的语义就是「我打算做什么」，不是随便打点什么）' `
+    Assert-True '16c 🔴 DR2：3.5 为那件派生物打出「将做」且点名自己的脚本与 --check' `
+        ($r16.Text -match 'node ccswitch/scripts/gen-clause-index\.mjs --check') $r16.Text
+    Assert-True '16d 🔴 DR2：那行走的是「将做」通道（DryRun 屏的语义就是「我打算做什么」，不是随便打点什么）' `
         ($r16.Text -match '\[将做\]\s*node ccswitch/scripts/gen-') $r16.Text
-    Assert-True '16e 🔴 DR1：两个 generator 一次都没被真调起来（marker 文件都不存在）' `
-        ((-not (Test-Path -LiteralPath (Join-Path $f16.Work 'gen-ran-clause.marker'))) -and `
-         (-not (Test-Path -LiteralPath (Join-Path $f16.Work 'gen-ran-guarded.marker')))) ''
+    Assert-True '16e 🔴 DR1：generator 一次都没被真调起来（marker 文件不存在）' `
+        (-not (Test-Path -LiteralPath (Join-Path $f16.Work 'gen-ran-clause.marker'))) ''
     Assert-True '16f 🔴 DR1：work 树（.git 之外）逐文件哈希一字节没变' `
         ((Get-TreeSignature -Root $f16.Work -ExcludeDirs @('.git')) -eq $sig16Work) ''
     Assert-True '16g 🔴 DR1：origin 裸仓逐文件哈希一字节没变' `
@@ -815,16 +773,15 @@ if (-not $nodeAvailable) {
     #   「仍与源一致」必须真的打出来。没有这一条，16e/16i 可能只是「这个 marker 机制压根
     #   不工作」也照样绿 —— 那正是它要防的病在防它的东西自己身上重演。
     Write-Host '  16 对照组：同一夹具不传 -DryRun ⇒ generator 真的跑了（证明 16e/16i 的尺子是活的）'
-    $f16c = New-ClauseGenFixture -Case 'dryrun-control' -GenBody $genOkMarked -GuardedFilesGenBody $gfOkMarked
+    $f16c = New-ClauseGenFixture -Case 'dryrun-control' -GenBody $genOkMarked
     $r16c = Invoke-Target -Fixture $f16c -Cfg (New-StubConfig -Fixture $f16c)
 
     Assert-True '16k-0 对照组自身健康：exit 0 且走到第 6 步（它红了的话，下面两条证不了任何事）' `
         (($r16c.ExitCode -eq 0) -and (Test-ReachedStep6 $r16c.Text)) ("exit={0}`n{1}" -f $r16c.ExitCode, $r16c.Text)
-    Assert-True '16k 🔴 对照组：不传 -DryRun ⇒ 两个 marker 都出现了（16e 的「都不存在」因此是有意义的）' `
-        ((Test-Path -LiteralPath (Join-Path $f16c.Work 'gen-ran-clause.marker')) -and `
-         (Test-Path -LiteralPath (Join-Path $f16c.Work 'gen-ran-guarded.marker'))) ''
-    Assert-True '16l 🔴 对照组：不传 -DryRun ⇒ 两句「仍与源一致」都打出来了（16i 的「不出现」因此是有意义的）' `
-        (($r16c.Text -match 'clause-index 仍与源一致') -and ($r16c.Text -match 'guarded-files 仍与源一致')) $r16c.Text
+    Assert-True '16k 🔴 对照组：不传 -DryRun ⇒ marker 出现了（16e 的「不存在」因此是有意义的）' `
+        (Test-Path -LiteralPath (Join-Path $f16c.Work 'gen-ran-clause.marker')) ''
+    Assert-True '16l 🔴 对照组：不传 -DryRun ⇒ 「仍与源一致」打出来了（16i 的「不出现」因此是有意义的）' `
+        ($r16c.Text -match 'clause-index 仍与源一致') $r16c.Text
     Assert-True '16m 🔴 对照组：不传 -DryRun ⇒ **不**打「将做」那一行（两条路的输出必须分得开）' `
         (-not ($r16c.Text -match '\[将做\]\s*node ccswitch/scripts/gen-')) $r16c.Text
 }
