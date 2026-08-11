@@ -89,6 +89,16 @@ spec 四段式骨架（按此写，条款段由 dao-orch 自动渲入）：
 5. orca CLI 只信 `--json` 出口；`report read` 拿不到正文要落 `task_claim_error`。
 6. worker 体内没有 AskUserQuestion（会挂死）；要问走 `orca orchestration ask`。
 
+## 二½、观测与打回（issue #304，2026-08-11 首日实战沉淀）
+
+- 观测走织物内置通道：日常 = `worker-show`（状态+终端预览）+ 心跳 + 提交流三样，不翻别的。
+- `worker-read` 只对 claude/codex 族是深通道；对 pi 降级（provider_unsupported，只吐有界终端尾巴）。
+- 直翻 worker 的会话文件只作事故取证的最后手段，不作日常观测面。
+- 给已有终端挂任务必须显式 `--worktree` 选择器（默认瞄协调者所在树，会报 mismatch）。
+- 打回用 `terminal send`，且排在 `worker-release` 之前（空闲 worker 不查收件箱；release 会关终端标签页）。
+- `check --wait --types` 只认 `worker_done,escalation`（没有 `ask` 这个类型名）。
+- 探测即预案：每次派单先跑 roster 探测，AskUserQuestion 只呈现真实可选项（定案②）。
+
 ## 三、收活（出口门阀）
 
 worker_done 不是验收，只是铃响。验收 = `scripts/dao-exit-gate.mjs` 五道秒级门
