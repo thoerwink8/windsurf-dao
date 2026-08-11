@@ -317,6 +317,129 @@ console.log("\n──── ⑦ --write-baseline：真写盘 / 有红时拒写 /
     /baselow=0 basegate=off/.test(r.out), r.out.slice(-300));
 }
 
+console.log("\n──── ⑦′ 单套写基线（issue #300 方向 1）：一次调用填好两格、只动那一套 ────");
+// 判据来源：issue #300 评论的实测订正 —— 全量写要两遍（default/env 各一）12 分钟起步，
+// 单套粒度若不解「两层各写各的」只是把 3 遍全量变成 2 遍单套。故判据是**一次调用两格齐**。
+function mkSuitePair(name, alphaOpts) {
+  const o = alphaOpts || {};
+  const dir = path.join(TMP, name);
+  const aSent = path.join(dir, "alpha-sentinel.log");
+  const bSent = path.join(dir, "beta-sentinel.log");
+  const mk = (file, pass, sent, extra) => w(path.join(dir, "tests", file),
+    (extra || "") + "const fs=require('fs');\n"
+    + "fs.appendFileSync(" + JSON.stringify(sent) + ", 'argv=' + process.argv.slice(2).join(',') + '\\n');\n"
+    + (o.noSummary ? "" : "console.log('=== 汇总: PASS=" + pass + " FAIL=" + (o.failN || 0) + " ===');\n")
+    + "process.exit(" + (o.exitCode || 0) + ");\n");
+  mk("alpha.tests.js", 5, aSent);
+  mk("beta.tests.js", 4, bSent);
+  return { dir, aSent, bSent };
+}
+{
+  const c = mkSuitePair("single");
+  const bp = path.join(c.dir, "out.json");
+  const r = runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  check("单套写 → exit 0", r.code === 0 && r.sum && r.sum.exit === 0, JSON.stringify(r.sum) + "\n" + r.out.slice(-600));
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("🔴 核心判据：一次调用把 default 与 env 两格都填成数（不再是「两层各写各的」）",
+    j && j.suites["alpha.tests.js"] && j.suites["alpha.tests.js"].default === 5 && j.suites["alpha.tests.js"].env === 5,
+    JSON.stringify(j && j.suites));
+  check("只动那一套：beta.tests.js 不在档里", j && !j.suites["beta.tests.js"], JSON.stringify(j && Object.keys(j.suites || {})));
+  check("🔴 只跑那一套：beta 的 sentinel 不存在（「没跑」看副作用，不看汇总行）",
+    !fs.existsSync(c.bSent), "beta sentinel=" + c.bSent);
+  const aRuns = fs.existsSync(c.aSent) ? fs.readFileSync(c.aSent, "utf8").trim().split(/\r?\n/) : [];
+  check("alpha 跑了两遍（default 一遍 + env 一遍）",
+    aRuns.length === 2 && aRuns[0] === "argv=" && aRuns[1] === "argv=--env", JSON.stringify(aRuns));
+  check("末行 tier=single 且带 suite= 字段（追加在尾部）",
+    r.sum && r.sum.tier === "single" && /basegate=write suite=alpha\.tests\.js/.test(r.out), r.out.slice(-300));
+}
+{
+  // 幂等：第二跑同一套 ⇒ 档里两格不变，报文说「未变」
+  const c = mkSuitePair("single-idem");
+  const bp = path.join(c.dir, "out.json");
+  runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  const r = runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  check("幂等：同套重跑仍 exit 0 且报文说两格未变", r.code === 0 && /两格均与上一版一致/.test(r.out), r.out.slice(-500));
+}
+{
+  // 不删别的套：基线里预置一个盘上已没有的条目，单套写**不许**顺手清掉它（那是全量写的名册清理活）
+  const c = mkSuitePair("single-keep");
+  const bp = mkBaseline(c.dir, { suites: { "zombie.tests.js": { kind: "node", default: 3, env: 3 } } });
+  const r = runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("单套写保留其他条目（zombie 不被顺手删掉 —— 部分更新语义）",
+    r.code === 0 && j && j.suites["zombie.tests.js"] && j.suites["zombie.tests.js"].default === 3,
+    JSON.stringify(j && Object.keys(j.suites || {})));
+}
+{
+  // 红的那一套：有旧值保旧值，没旧值写说明，**绝不编一个数**（与全量写同一判据，粒度细到「格」）
+  const c = mkSuitePair("single-red", { exitCode: 1, failN: 2 });
+  const bp = mkBaseline(c.dir, { suites: { "alpha.tests.js": { kind: "node", default: 9, env: 9 } } });
+  const r = runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("前提：这一跑那一套是红的（exit 1）", r.code === 1, JSON.stringify(r.sum));
+  check("🔴 红的一跑不许把已有基线下调（9 不会被顶掉）",
+    j && j.suites["alpha.tests.js"].default === 9 && j.suites["alpha.tests.js"].env === 9, JSON.stringify(j && j.suites));
+}
+{
+  // 方向 4 在单套模式同样生效：JS 套不打汇总行 ⇒ exit 4，档里只能落「未报计数」
+  const c = mkSuitePair("single-nosummary", { noSummary: true });
+  const bp = path.join(c.dir, "out.json");
+  const r = runRunner(c.dir, bp, ["--write-baseline", "tests/alpha.tests.js"]);
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("单套 + JS 套不报计数 → exit 4（不是 0）",
+    r.code === 4 && r.sum && r.sum.exit === 4 && /selfcheck=fail/.test(r.out), JSON.stringify(r.sum));
+  check("报文点出「永久没有条数下界」", /条数下界/.test(r.out), r.out.slice(-600));
+  check("档里那两格是字符串说明，不是编的数",
+    j && typeof j.suites["alpha.tests.js"].default === "string" && typeof j.suites["alpha.tests.js"].env === "string",
+    JSON.stringify(j && j.suites));
+}
+{
+  // PS 夹具：无标记 ⇒ 两层跑法字面相同（spawn 不传 --env），跑一遍两格填同一个数
+  const dir = path.join(TMP, "single-ps");
+  w(path.join(dir, "tests", "bravo.tests.ps1"), "Write-Output '=== SUMMARY: PASS=4 FAIL=0 ==='\nexit 0\n");
+  const bp = path.join(dir, "out.json");
+  const r = runRunner(dir, bp, ["--write-baseline", "tests/bravo.tests.ps1"]);
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("PS 套单套写 → exit 0 且两格同数（进程拿不到 --env，两层跑法字面相同）",
+    r.code === 0 && j && j.suites["bravo.tests.ps1"].default === 4 && j.suites["bravo.tests.ps1"].env === 4,
+    JSON.stringify(r.sum) + " " + JSON.stringify(j && j.suites));
+  check("PS 套 kind=pwsh", j && j.suites["bravo.tests.ps1"].kind === "pwsh", JSON.stringify(j && j.suites));
+}
+{
+  // PS 夹具·标了 env：default 格写「本层不跑」，env 格填数 —— 与全量写同一形态
+  const dir = path.join(TMP, "single-ps-env");
+  w(path.join(dir, "tests", "charlie.tests.ps1"), "# @dao-test-tier: env\nWrite-Output '=== SUMMARY: PASS=6 FAIL=0 ==='\nexit 0\n");
+  const bp = path.join(dir, "out.json");
+  const r = runRunner(dir, bp, ["--write-baseline", "tests/charlie.tests.ps1"]);
+  let j = null;
+  try { j = JSON.parse(fs.readFileSync(bp, "utf8")); } catch (_) {}
+  check("标 env 的 PS 套：default 格写「本层不跑」、env 格填真数",
+    r.code === 0 && j && j.suites["charlie.tests.ps1"].default === "本层不跑" && j.suites["charlie.tests.ps1"].env === 6,
+    JSON.stringify(r.sum) + " " + JSON.stringify(j && j.suites));
+}
+{
+  // 互斥与边界：全部 exit 3，且一套都不许跑
+  const c = mkSuitePair("single-usage");
+  const bp = path.join(c.dir, "out.json");
+  const cases = [
+    [["--write-baseline", "tests/alpha.tests.js", "--env"], "--env 与单套互斥"],
+    [["--write-baseline", "tests/alpha.tests.js", "--list"], "--list 与单套互斥"],
+    [["tests/alpha.tests.js"], "位置参数缺 --write-baseline"],
+    [["--write-baseline", "tests/alpha.tests.js", "tests/beta.tests.js"], "两个位置参数"],
+    [["--write-baseline", "tests/nonexistent.tests.js"], "盘上不存在的套"],
+  ];
+  for (const [args, label] of cases) {
+    const r = runRunner(c.dir, bp, args);
+    check(`用法错（${label}）→ exit 3`, r.code === 3, label + " => " + String(r.code) + " " + r.err.slice(0, 200));
+  }
+  check("五种用法错一套都没跑（alpha sentinel 不存在）", !fs.existsSync(c.aSent), c.aSent);
+}
+
 console.log("\n──── ⑧ 兼容负控：新字段只追加在尾部，旧消费方的正则仍然解析得到 ────");
 {
   const d = mkFixture("compat", { pass: 5 });
