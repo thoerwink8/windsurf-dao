@@ -1,7 +1,5 @@
 // dao-gates 回归网 — scripts/dao-gates.mjs 聚合器层（不重复各闸自己的判据）
 //
-// 跑法：node tests/dao-gates.tests.js
-//
 // 聚合器本身不做判断，只转述各检查器的真退出码，故这里只验聚合器这一层：
 // ① 已知退出码按各自声明表分类（ok/red/inconclusive），未声明 → unknown
 // ② 聚合优先级 unknown(4) > red(1) > inconclusive(2) > ok(0)

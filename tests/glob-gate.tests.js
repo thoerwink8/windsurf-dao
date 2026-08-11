@@ -1,7 +1,5 @@
 // dao-glob-gate hook 回归网 — 每个行为分支留正控 1 + 负控 1 + mutation 1（判别力）
 //
-// 跑法：node tests/glob-gate.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 钉的是**文案关键词**不是措辞（刻意取舍）：断言钉 `providers` / `settings_config` /
 // `每个 provider 都要改` / `镜像层`+`不会生效` / `同一动作内`+`漂移检测`+`不算收尾` 这几个
 // 事实锚；换同义词会误红，语义回退成旧路径时会红（下面 mutation 实测过）。

@@ -1,7 +1,5 @@
 // dao-rate-limit-sentinel 两态自证 · 端到端 + 解析式单元
 //
-// 跑法：node tests/rate-limit-sentinel.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 验的层：「哪些 error 写标记」判据 + 两式重置时间解析 + fail-open 三条路径 + deaths_24h
 // 窗口边界（每格正控 + 先破再验 mutation）。
 // 端到端跑真文件（落盘面全部 env 覆写进本次沙箱：DAO_RATE_LIMIT_MARKER / _STATE_SUBDIR /

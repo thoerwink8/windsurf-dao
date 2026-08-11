@@ -1,61 +1,35 @@
 // dao-scaffold-check 两态自证 · 单元级（喂 SessionStart 形态 JSON → 断言 stdout）
 //
-// 跑法：node tests/dao-scaffold-check.tests.js   （全绿 exit 0，任一红 exit 1）
+// 验的层：**双模式分派 + 各条结构判据的两态 + hook 注册检测器的扩展名盲区 + 共性 rule 备案
+// 清单真的在驱动 hook（换清单即换行为）**。证明「有缺陷即报出对应条目 / 缺陷补齐即不再报 /
+// 非 git 目录完全静默」，**不证明**注入的提醒真被宿主投递给模型。
+// ⚠ 模式 B 的结构判据断言（CLAUDE.md/rules 目录/冗余入口/桌面端基建…）验的是**真实
+// ccswitch/scaffold-manifest.json 的内容**——清单删条目会让对应断言变红，这是有意的：
+// 清单是承重件，不是配置糖。清单本身的 schema 校验与谓词求值两态见 tests/scaffold-manifest.tests.js。
 //
-// 验的是哪一层：**双模式分派 + 各条结构判据的两态 + hook 注册检测器的扩展名盲区
-// + 共性 rule 备案清单真的在驱动 hook（换清单即换行为）**。
-// 它证明「有缺陷即报出对应条目 / 缺陷补齐即不再报 / 非 git 目录完全静默」，
-// **不证明** 注入的提醒真被宿主投递给模型。
+// 隔离手法（不许污染真实仓库状态）：
+// ① cwd 全部指向 _tmp/ 下沙箱项目（元仓库模式的沙箱就叫 windsurf-dao——模式判定看
+//    `path.basename(cwd) === "windsurf-dao"`）。
+// ② 沙箱 `.git` 是内容为垃圾的**普通文件**不是目录：既满足模式 A 的 existsSync，又让 git
+//    立即 fatal 失败——若没有 .git，git 会一路向上命中真实 windsurf-dao 仓库，把真仓库的
+//    未提交改动报成沙箱漂移（实测确认过）。**测试断言不该依赖真仓库此刻脏不脏。**
+// ③ HOME 指向假家目录（内含受控 .claude/settings.json）：hook 用 HOME||USERPROFILE 定位
+//    settings，改 HOME 即可让「hook 文件 vs 注册」读受控数据；settings-drift 内部优先级
+//    相反仍读真 live settings，那是只读的，且 ④ 已挡掉它的写入面，有意不动。
+// ④ settings-drift 心跳重定向沙箱 + 强制 synthetic（DAO_SETTINGS_DRIFT_STATE_DIR /
+//    DAO_SETTINGS_DRIFT_SELFTEST=1）：不做，测试会往真实 fired.log 写**非 synthetic**
+//    记录，等于给「接线已生效」发假证明——正是该检测器点名要防的病（自测心跳不予采信）。
 //
-// ⚠ 模式 B 的结构判据断言（CLAUDE.md/rules 目录/冗余入口/桌面端基建…）现在验的是
-// **真实 ccswitch/scaffold-manifest.json 的内容**——那些检查项 2026-07-27 已从本 hook
-// 的代码里搬进清单。清单删条目会让对应断言变红，这是有意的：清单是承重件，不是配置糖。
-// 清单本身的 schema 校验与谓词求值两态另见 tests/scaffold-manifest.tests.js。
+// ── 本文件里的 mutation 锚点为什么写 `\r?\n` ────────────────────────────────
+// **跨检出可移植**：同一个 commit 在 autocrlf 关掉的机器上签出即是 LF，锚点写死任一种都会
+// 在另一种检出上恒不命中——而「锚点没命中所以变异体==原文所以守卫绿」与「守卫真的没塌陷」
+// 逐字节相同（dao-guard-writing #守-锚点行尾）。订正史见 docs/evolution/comment-archive-202608.md §C10。
 //
-// ── 隔离手法（不许污染真实仓库状态）─────────────────────────────────────────
-// 这个 hook 会跑 git 子进程、读 live settings.json、并 require 真实的 settings-drift。
-// 三处都做了隔离，逐条说明为什么这样做：
-//
-// ① **cwd 全部指向 <repo>/_tmp/ 下的沙箱项目**（cwd 是 payload 字段，天然可注入）。
-//    模式判定看 `path.basename(cwd) === "windsurf-dao"`，故元仓库模式的沙箱就叫
-//    windsurf-dao，普通项目模式的另起名字。
-//
-// ② **沙箱里的 `.git` 是一个内容为垃圾的普通文件，不是目录**。这一手同时解两个问题：
-//    · 模式 A（普通项目）要求 `fs.existsSync(<cwd>/.git)` 为真才不跳过 —— 文件也满足；
-//    · 元仓库模式会跑 `git -C <cwd> status`。**若沙箱里没有 .git，git 会向上层目录
-//      一路找，最终命中真实的 D:/frank/windsurf-dao 仓库**，于是把真仓库的未提交改动
-//      报成沙箱的漂移（实测确认：无 .git 时输出真仓库的 `?? tests/...`）。垃圾 .git 文件
-//      让 git 以 `fatal: invalid gitfile format` 立即失败 → 被 hook 的 try/catch 兜住
-//      → git 类漂移行为确定性地为空。**测试断言不该依赖真仓库此刻脏不脏。**
-//
-// ③ **HOME 指向沙箱假家目录**，内含一份受控的 `.claude/settings.json`。hook 用
-//    `process.env.HOME || process.env.USERPROFILE` 定位 settings，故只改 HOME 即可让
-//    「hook 文件 vs 注册」这一检查读受控数据 —— 断言因此不随用户真实配置变化而红。
-//    （settings-drift 内部用的是 `USERPROFILE || HOME`，优先级相反 ⇒ 它仍读真实 live
-//     settings。那是只读的，且下面 ④ 已挡掉它的写入面，故有意不动。）
-//
-// ④ **settings-drift 的心跳重定向到沙箱 + 强制 synthetic**：
-//    `DAO_SETTINGS_DRIFT_STATE_DIR` 改写留痕目录，`DAO_SETTINGS_DRIFT_SELFTEST=1` 强制
-//    把心跳标 synthetic。不做这两件事，测试就会往真实 `_tmp/settings-drift/fired.log`
-//    写**非 synthetic** 记录 —— 那等于测试自己给「接线已生效」发假证明，正是该检测器
-//    点名要防的病（它自己的头注就写着「自测心跳不予采信，防自我染绿」）。
-//
-// ── 行尾：本文件里的 mutation 锚点为什么写 `\r?\n`（2026-08-06 订正一处实证）──────
-// **结论不变，但 PR #130 给的那条实证是假的**，别再照它推。那份 PR body 写着
-// 「本仓两个文件行尾不同：hook 是 CRLF、lib 是 LF」——本机复测（数字节，不看工具报告）：
-//   工作树  dao-scaffold-check.js CRLF=1095 bareLF=0 ；hook-budget.js CRLF=325 bareLF=0
-//   对象库  两份都是 bareLF（`core.autocrlf=true`，签出时统一转 CRLF）
-// ⇒ **两份工作树都是 CRLF，不存在「两个文件不同」这回事。**
-// 写 `\r?\n` 的真理由是**跨检出可移植**：同一个 commit 在 autocrlf 关掉的机器上签出即是 LF，
-// 锚点写死任一种都会在另一种检出上恒不命中 —— 而「锚点没命中所以变异体==原文所以守卫绿」
-// 与「守卫真的没塌陷」逐字节相同（dao-guard-writing #守-锚点行尾）。
-//
-// ── 断言为何多为「含/不含某子串」而非「输出完全等于」───────────────────────
-// 普通项目模式里 `checkDaoDrift()` 会把**真实 windsurf-dao 仓库**的 git 状态与配置
-// 自检结果并入 issues（这是它的正当职责，从任意项目都要能查到 dao 仓库漂移）。
-// 那部分输出随真仓库当下状态浮动，不可能也不应该被冻成期望值。故除「非 git 目录 →
-// 完全静默」这一条真能断言全空之外，其余用定向子串断言，并对每条判据同时给出
-// 命中态与不命中态 —— 单向断言夹不住「判据被放宽」那个方向。
+// 断言为何多为「含/不含某子串」而非「输出完全等于」：普通项目模式里 checkDaoDrift() 会把
+// **真实 windsurf-dao 仓库**的 git 状态与配置自检结果并入 issues（正当职责，从任意项目都要
+// 能查到 dao 仓库漂移），那部分输出随真仓库状态浮动，不可能也不应该被冻成期望值。故除
+// 「非 git 目录→完全静默」这一条真能断言全空之外，其余用定向子串断言，并对每条判据同时
+// 给出命中态与不命中态——单向断言夹不住「判据被放宽」那个方向。
 
 const { spawnSync } = require("child_process");
 const fs = require("fs");
