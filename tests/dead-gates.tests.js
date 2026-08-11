@@ -15,11 +15,12 @@
 // 实证：2026-08-03 三路官并行跑测试时首跑 PASS=115 FAIL=1，串行连跑三次均 116/0，
 // 那条红复现不出（⚠ 红的条目名已丢失，故这只是「并行期偶发红」，不是对某一条的确证）。
 //
-// 被 defer 的是 ⑪ / ⑪.5 / ⑫① 里那句「真仓当下是绿态」，共 3 组。**其余 100+ 条全部照跑** ——
+// 被 defer 的是 ⑪ / ⑪.5，共 2 组（原⑫①「真仓当下是绿态」2026-08-11 已删：它断言本机健康度
+// 而非改动正确性，信号已由离线体检接管）。**其余 100+ 条全部照跑** ——
 // 它们是纯合成夹具，与机器状态无关，是这个回归网真正的判别力所在。
 // ⚠ **2026-08-08（issue #160）多出第 4 组，但它是条件性的**：默认层里 hook 若因墙钟预算跳过
 //   了死闸检测那一项，⑫① 的**可达性**那一条也走 defer（详见 ⑫① 内注）。⇒ 默认层的 DEFER
-//   **是 3 或 4，不是恒 3**；别把它当常量写进任何断言（run-tests 那侧只要求 `DEFER>0`）。
+//   **是 2 或 3，不是恒 2**；别把它当常量写进任何断言（run-tests 那侧只要求 `DEFER>0`）。
 //
 // 🔴 **摘出去之后谁保证它还会被跑**（issue #116 关闭条件要的就是这一段，照直写）：
 //   ①**真实语料那一半，另有一条每次会话都响的机器通道**：SessionStart hook
@@ -484,7 +485,9 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
     const payload = JSON.stringify({
       session_id: "dead-gates-tests", cwd, hook_event_name: "SessionStart", source: "startup",
     });
-    const r = spawnSync(process.execPath, [HOOK], {
+    // 2026-08-11 体检离线化（step 7）后：完整检查路径在 --write-report，默认模式只读落盘报告。
+    // 本节断的是「死闸检测那一行真的被拼进注入正文」⇒ 走完整路径。
+    const r = spawnSync(process.execPath, [HOOK, "--write-report"], {
       input: payload, encoding: "utf8", timeout: 120000,
       env: Object.assign({}, process.env, {
         DAO_SETTINGS_DRIFT_STATE_DIR: DRIFT_STATE,
@@ -543,11 +546,11 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
         (budgetSkipped ? "**被预算跳过** —— " + SELFCHECK_HINT + "\n" : "")
         + "ctx=" + r.ctx.slice(0, 400) + " [stderr]" + r.err.slice(0, 200));
     }
-    if (!ENV_TIER) {
-      deferSection("⑫① 真仓当下是绿态（读的是真实 live settings + 真 cc-switch DB 的当下内容）", DEFER_WHY);
-    } else {
-      check("真仓当下是绿态，且报出闸数（不是零输出）", /死闸检测绿/.test(r.ctx) && /条闸/.test(r.ctx), r.ctx.slice(0, 400));
-    }
+    // 2026-08-11 外科手术（用户拍板）：原⑫①「真仓当下是绿态」断言**删除**——它断言的是
+    // 本机健康度（真 live settings + 真 cc-switch DB 的当下内容）而非改动正确性：本机存量漂移
+    //（9 hook 未注册，issue #50）使它结构性无法过，而该信号已由离线体检接管
+    //（dao-scaffold-check --write-report 落盘健康报告，SessionStart 默认模式读它）。
+    // 可达性那一半由上面「注入里出现死闸检测行」的 PASS 承担，够。
   }
 
   // ② 自指：查死闸的东西自己不在了 —— 必须响，不许静默跳过

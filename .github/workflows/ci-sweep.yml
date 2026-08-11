@@ -1,0 +1,87 @@
+# ci-sweep：云审水位线制的云端执行体（issue #306 · 2026-08-11 施工图定稿）
+#
+# 定位：「云上管代码」——无菌 runner 上周期性对账主干（dao-gates + 全量默认层测试），
+# 与本机「改谁才检谁」快检互补：本地链是权威门，云审只是无菌对账（环境敏感断言的
+# 污染病在无菌 runner 上结构性消失）。
+#
+# 触发模型：**水位线制，零 cron 零常驻件**——仅 workflow_dispatch，由
+# `ccswitch/scripts/dao-pr-merge.ps1` 合并成功后的水位线检查触发（ci-sweep..master
+# ≥50 提交 或 tag ≥14 天）；大批次日也可手动 `gh workflow run ci-sweep.yml` 加密一针。
+#
+# 状态 = 一个 git tag：`ci-sweep` 指向上次审过的 master 顶点。**绿推、红也推**
+# （红时审计已发生、产出是 issue，下次审新增量）。
+#
+# 退出码语义（与 scripts/run-tests.mjs 头注契约一致）：
+#   dao-gates / run-tests 的 exit ∈ {0,2} 都算绿（2 = 「有 defer / 有 PS 套没跑」的正常态，
+#   云上无真机 settings/cc-switch DB，环境敏感断言 defer 是预期）；exit ∈ {1,3,4,5} 判红。
+name: ci-sweep
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 前移 ci-sweep tag 推回
+  issues: write     # 红时自动开 issue
+
+jobs:
+  sweep:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0    # 水位线 tag 操作需要全历史
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: dao-gates
+        id: gates
+        shell: pwsh
+        run: |
+          node scripts/dao-gates.mjs | Tee-Object -Variable gatesOut
+          $code = $LASTEXITCODE
+          $summary = ($gatesOut | Select-String 'DAO_GATES_SUMMARY' | Select-Object -Last 1).Line
+          "summary=$summary" >> $env:GITHUB_OUTPUT
+          if ($code -notin 0,2) { exit $code }
+          exit 0
+
+      - name: 全量默认层测试
+        id: tests
+        shell: pwsh
+        run: |
+          node scripts/run-tests.mjs | Tee-Object -Variable testsOut
+          $code = $LASTEXITCODE
+          $summary = ($testsOut | Select-String 'RUN_TESTS_SUMMARY' | Select-Object -Last 1).Line
+          "summary=$summary" >> $env:GITHUB_OUTPUT
+          if ($code -notin 0,2) { exit $code }
+          exit 0
+
+      # 红也前移水位线：审计已发生、产出是下面的 issue，下次只审新增量。
+      - name: 前移水位线 tag ci-sweep
+        if: always() && steps.tests.outcome != 'skipped'
+        shell: pwsh
+        run: |
+          git config user.name "ci-sweep[bot]"
+          git config user.email "ci-sweep[bot]@users.noreply.github.com"
+          git tag -f ci-sweep master
+          git push -f origin ci-sweep
+
+      - name: 红 ⇒ 自动开 issue 落驾驶舱
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $body = @"
+          ## 云审红（ci-sweep 水位线制 · issue #306）
+
+          - dao-gates：``$("${{ steps.gates.outputs.summary }}")``
+          - run-tests：``$("${{ steps.tests.outputs.summary }}")``
+          - 运行详情：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          处置：本地链（``dao-pr-merge.ps1`` + 改谁才检谁）仍是权威门，本单是云上无菌对账发现的分叉。
+          水位线 tag ``ci-sweep`` 已前移（红也前移：本次审计已发生，下次只审新增量）。
+          "@
+          gh issue create --title "云审红：ci-sweep $(Get-Date -Format yyyy-MM-dd)" --label "缺陷" --body $body

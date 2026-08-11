@@ -2,8 +2,8 @@
 // dao-gates.mjs — 交付前「派生物 / 完整性闸」聚合入口（issue #70 · 三层降耗方案 · 层2 件①）
 //
 // ── 治的是什么病 ─────────────────────────────────────────────────────────────
-// 交付前每个官各自手跑那几道闸（gen-clause-index --check / gen-guarded-files --check /
-// dao-smoke / check-mutation-anchor / check-clauses-structure 全量），各自复制粘贴每段输出、
+// 交付前每个官各自手跑那几道闸（dao-smoke / check-mutation-anchor /
+// check-clauses-structure 全量），各自复制粘贴每段输出、
 // 各自心算「这算不算过」。机械、零判断、且极易漏跑一道——本文件把它收成一条命令。
 // **本文件通篇刻意不写「几道闸」这个数**（2026-08-10 起）：当前有几道以下面 GATES 数组为准、
 // 对外以 `--list` 的打印为准。写死的数字在加第 6 道闸那天会集体过期，而本仓的手维护枚举
@@ -94,27 +94,12 @@ const EXIT_UNKNOWN = 4;
 
 // ── 真实闸清单（唯一真相源；改闸清单改这里，不改 CLAUDE.md）──────────────────────
 // `codes` 是「该闸自己声明的退出码 → 分类」映射，来源逐条见各脚本头注/正文：
-//   gen-clause-index.mjs   头注 ③「PS 宿主不在 ⇒ exit 2，不是 exit 0」
-//   gen-guarded-files.mjs  头注「退出码：0 干净 · 1 清单过期 · 2 tests 目录不存在 · 5 自检失败」
+// （2026-08-11 重设计：gen-clause-index / gen-guarded-files 两道随派生物消灭退役）
 //   dao-smoke.mjs          `process.exit(failed > 0 ? 1 : 0)`
 //   check-mutation-anchor.mjs 头注「退出码：0 干净 · 1 发现违例 · 2 目录不存在 · 5 扫描面塌陷」
 //   check-clauses-structure.ps1 .NOTES「退出码 0=结构完整；非 0=命中已知失效形态；
 //                                       全量模式另有退出码 3=这次压根没查成」
 const GATES = [
-  {
-    name: "gen-clause-index --check",
-    cmd: process.execPath,
-    args: [path.join(ROOT, "ccswitch", "scripts", "gen-clause-index.mjs"), "--check"],
-    codes: { 0: "ok", 1: "red", 2: "inconclusive" },
-    note: "条款机器面索引漂移检查；2=PS 宿主不在，没法核对（不是「查过没事」）",
-  },
-  {
-    name: "gen-guarded-files --check",
-    cmd: process.execPath,
-    args: [path.join(ROOT, "ccswitch", "scripts", "gen-guarded-files.mjs"), "--check"],
-    codes: { 0: "ok", 1: "red", 2: "inconclusive", 5: "inconclusive" },
-    note: "mutation 守护清单漂移检查；2=tests 目录不在，5=自检塌陷",
-  },
   {
     name: "dao-smoke",
     cmd: process.execPath,

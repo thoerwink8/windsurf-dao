@@ -5,8 +5,8 @@
 // ⚠ **本文件不是这个 hook 的全部回归网**（2026-08-07，issue #122）：该 hook 后来长出第五条
 //   分支「被 mutation 守护的文件 → 注入守卫判据指针」，它的正控 / 负控 / fail-open /
 //   --selfcheck / 三形态+反向 mutation 全在 `tests/guarded-files.tests.js`。
-//   分开放的理由：那条分支的判据来自一份**派生清单**（`ccswitch/guarded-files.json`），
-//   与清单生成器绑在一起测才说得清「清单错了」与「分支错了」的区别。
+//   （2026-08-11 重设计：派生清单 guarded-files.json 已消灭，hook 改运行时现算
+//    ccswitch/lib/guarded-scan.js；两份网的分工照旧。）
 //   ⇒ **改这个 hook 时两份都要跑。**
 //
 // ── 为什么现在才有这个文件（issue #67）──────────────────────────────────────

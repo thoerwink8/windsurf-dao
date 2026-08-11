@@ -136,6 +136,10 @@
 .PARAMETER MainBranch
     主干分支名。缺省从 `origin/HEAD` 探测，探不到时回落 main（再回落 master）。
 
+    2026-08-11 tests 终局追加：本仓（有 scripts/dao-affected-tests.mjs）第 4 步免传
+    -VerifyCommand —— 改「改谁才检谁」：按 diff 映射受影响留守套逐套跑（映射表住那个脚本里）；
+    判不出 diff 时 fail-closed 回落全量 --env。跨项目仓行为不变（仍必须显式传）。
+
 .PARAMETER VerifyCommand
     合并后要重跑的验证命令（整串，交给 shell 之外的 `Invoke-Expression` 之前会原样打印）。
     **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，dao 侧是
@@ -296,7 +300,12 @@ Write-Step '0. 前置检查'
 
 if ($PullRequest -le 0) { Fail "PR 号非法：$PullRequest" 3 }
 if ($SkipVerify -and $VerifyCommand) { Fail '-SkipVerify 与 -VerifyCommand 互斥，二选一' 3 }
-if (-not $SkipVerify -and -not $VerifyCommand) {
+# 2026-08-11 tests 终局：本仓（有 scripts/dao-affected-tests.mjs）免传 -VerifyCommand ——
+# 验证步改「改谁才检谁」：按 diff 映射受影响的留守套逐套跑（碰了某 hook 才跑它那套，秒级；
+# 没碰闸一套不跑）。跨项目仓仍必须显式传。
+$affectedScript = Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'
+$useAffected = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $affectedScript)
+if (-not $SkipVerify -and -not $VerifyCommand -and -not $useAffected) {
     Fail '必须传 -VerifyCommand（合并后要重跑什么，跨项目不可知），或显式 -SkipVerify（那时退出码为 2）' 3
 }
 
@@ -391,58 +400,10 @@ if ($DryRun) {
     Write-Ok "已合入 origin/$MainBranch"
 }
 
-# ── 3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209 缺口 2）───────
-# 只对 windsurf-dao 自身生效；别的仓没有下面这份清单里的生成器，逐件自动跳过。
-# **代码上不在 if ($SkipVerify) 分支里**——这是幂等只读检查，比第 4 步的全套验证快得多，
-# 治的正是 issue #121 第 3 点的 `-SkipVerify` 那一半（「有人手工合」那一半治不了，
-# 见 .DESCRIPTION 边界 ①）。`clause-index.json` 这一件已有场景 14 的断言守护
-# （issue #209 缺口 1：「有 generator 的仓」+「-SkipVerify」两态均已钉住）；
-# `guarded-files.json` 这一件暂无同等断言，是本批（issue #209 缺口 2）刻意的留白——
-# 本批只补覆盖面，不重复造一份 -SkipVerify 独立性的靶。
-#
-# issue #209 缺口 2（2026-08-09）：此前只护 clause-index.json 一件，本仓至少还有三个
-# 同型 --check（guarded-files.json / agents-md / 规则部署），「两侧各自都对、合并起来
-# 不对」是 clause-index 已实证过的形态，没道理只信一件不出这个病。issue 建议「不要求把
-# 清单硬编码进 3.5 步（那是新的手维护枚举），或至少先接 guarded-files.json（本仓自己刚
-# 吃过亏的那个，优先级最高）」——本批采纳后半句：只接优先级最高的这一件，不新造一份
-# 「可发现的派生物注册表」（那是新基础设施，为道日损下先用最小改动接上）。
-# 下面这份清单仍是手维护——与「清单会过期」那条教训的差别在于：它决定的是**核对哪些
-# 派生物**，过期的代价是「少护一件」而非「静默通过」，且是 fail-closed（少列一件只是
-# 少一层保护，不会把已列的那几件也测没）。
-$derivativeChecks = @(
-    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-clause-index.mjs'; Artifact = 'ccswitch/clause-index.json'; Name = 'clause-index'; IssueRef = 'issue #121' }
-    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-guarded-files.mjs'; Artifact = 'ccswitch/guarded-files.json'; Name = 'guarded-files'; IssueRef = 'issue #209 缺口 2' }
-)
-Write-Step '3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209；见头注对 -SkipVerify 那一半的准确表述）'
-
-foreach ($d in $derivativeChecks) {
-    $genScript = Join-Path $RepoPath $d.RelPath
-    if (-not (Test-Path -LiteralPath $genScript)) {
-        Write-Skip "$($d.RelPath) 不存在于本仓 —— 没有这份派生物，跳过（本步只对 windsurf-dao 自身生效）"
-        continue
-    }
-    if ($DryRun) {
-        Write-Plan "node $($d.RelPath) --check   （两侧各自都对、合并后不对是已实证的形态——$($d.IssueRef)；本步代码上不在 -SkipVerify 分支里）"
-        continue
-    }
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Note '找不到 node —— 本步无法判定，不当成"已核对过"（不是通过，是没查）'
-        continue
-    }
-    Push-Location $RepoPath
-    try {
-        $global:LASTEXITCODE = 0
-        $ciOut = & node $d.RelPath '--check'
-        $ciCode = $LASTEXITCODE
-    } finally { Pop-Location }
-    if ($ciCode -ne 0) {
-        Write-Info ($ciOut -join "`n")
-        Fail ("$($d.Name) 在合并后的树上过期（exit $ciCode）—— 两侧各自生成都对、合并后仍可能不对，是已实证的形态（$($d.IssueRef)）。" + [Environment]::NewLine +
-              "         修法：``node $($d.RelPath)`` 重新生成、``git add $($d.Artifact)`` 后提交，再重跑本脚本。" + [Environment]::NewLine +
-              "         本步刻意不自动提交（issue #121 原文：『合并脚本产生提交』是行为扩张，要想清楚）——交给人核对后自己提交。") 2
-    }
-    Write-Ok "在合并后的树上重跑 ``--check``：$($d.Name) 仍与源一致"
-}
+# ── 3.5 派生物核对：已于 2026-08-11 重设计时整段退役 ───────────────────────
+# 它核对的两个派生物（clause-index.json / guarded-files.json）都已消灭——渲染端与
+# glob-gate 都改运行时现算，「合并后派生物过期」这一病在结构上不存在了。
+# 判据史见 git 历史与 issue #121 / #209。
 
 # ── 4. 在合并后的树上重跑验证 ────────────────────────────────────────────────
 Write-Step '4. 在合并后的树上重跑验证'
@@ -452,7 +413,43 @@ if ($SkipVerify) {
     $verifySkipped = $true
     Write-Skip '验证被显式 -SkipVerify 跳过 —— 最终退出码将是 2，不是 0'
 } elseif ($DryRun) {
-    Write-Plan "在 $RepoPath 下执行：$VerifyCommand"
+    if ($useAffected) { Write-Plan "改谁才检谁：node scripts/dao-affected-tests.mjs 算出受影响留守套逐套跑（零套⇒秒过）" }
+    else { Write-Plan "在 $RepoPath 下执行：$VerifyCommand" }
+} elseif ($useAffected) {
+    Push-Location $RepoPath
+    try {
+        $global:LASTEXITCODE = 0
+        $affectedJson = & node scripts/dao-affected-tests.mjs --json
+        $aCode = $LASTEXITCODE
+        $suiteList = @()
+        if ($aCode -eq 0) {
+            try { $suiteList = @(($affectedJson | ConvertFrom-Json).tests) } catch { $suiteList = @() }
+        }
+        if ($aCode -ne 0) {
+            # diff 判不出 ⇒ fail-closed 跑全部（「判不出」不许被读成「不用检」）
+            Write-Info 'affected-tests 判不出 diff ⇒ 回落跑全量：node scripts/run-tests.mjs --env'
+            $global:LASTEXITCODE = 0
+            & node scripts/run-tests.mjs --env
+            $vcode = $LASTEXITCODE
+            if ($vcode -ne 0) { Fail "全量验证退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+            Write-Ok '全量验证通过（退出码 0）'
+        } elseif ($suiteList.Count -eq 0) {
+            Write-Ok '改谁才检谁：本次 diff 没碰任何有行为测试的面（纯文字/文档类）⇒ 零套，秒过'
+        } else {
+            Write-Info ("改谁才检谁：受影响留守套 " + $suiteList.Count + " 套逐套跑：" + ($suiteList -join '、'))
+            foreach ($suite in $suiteList) {
+                $global:LASTEXITCODE = 0
+                if ($suite -like '*.ps1') {
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File $suite
+                } else {
+                    & node $suite
+                }
+                $scode = $LASTEXITCODE
+                if ($scode -ne 0) { Fail "受影响套 $suite 退出码 $scode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+            }
+            Write-Ok ("受影响套全绿（" + $suiteList.Count + " 套）")
+        }
+    } finally { Pop-Location }
 } else {
     Write-Info "执行：$VerifyCommand"
     Push-Location $RepoPath
@@ -543,6 +540,28 @@ if ($DryRun) {
             Write-Info "（这正是 issue #114：gh 的一个退出码盖着两个动作，据它判「合并失败」会让清理一步都跑不到）"
         }
         Write-Ok "PR #$PullRequest 已合并（实查 state=MERGED，mergedAt=$($st.MergedAt)，第 $($st.Attempts) 次读到）"
+
+        # ── 5.5 云审水位线（issue #306）：ci-sweep..master ≥50 提交 或 tag ≥14 天 ⇒
+        #     发一针 ci-sweep（发完即走；云上无菌对账，本地链仍是权威门）。
+        #     触发失败仅警告不阻塞；仅本仓（workflow 只存在于 dao 仓）。
+        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'))) {
+            try {
+                git fetch --tags --quiet 2>$null
+                $tagTs = git log -1 --format=%ct refs/tags/ci-sweep 2>$null
+                $n = 0; $ageDays = 999
+                if ($LASTEXITCODE -eq 0 -and $tagTs) {
+                    $n = [int](git rev-list --count ci-sweep..master 2>$null)
+                    $ageDays = [int](([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$tagTs) / 86400)
+                } else {
+                    $n = [int](git rev-list --count master 2>$null)   # 无 tag ⇒ 从没审过
+                }
+                if ($n -ge 50 -or ($n -ge 1 -and $ageDays -ge 14)) {
+                    gh workflow run ci-sweep.yml 2>$null
+                    if ($LASTEXITCODE -eq 0) { Write-Info "☁ 云审水位线到（ci-sweep..master=${n} 提交 / tag ${ageDays} 天）→ ci-sweep 已触发（发完即走）" }
+                    else { Write-Host "  ⚠ 云审触发失败（不阻塞合并链；本地链是权威门）" }
+                }
+            } catch { Write-Host "  ⚠ 云审水位线检查异常（不阻塞）：$($_.Exception.Message)" }
+        }
     } else {
         Fail "PR #$PullRequest 未合并：实查 state=$($st.State)（gh pr merge exit $($mg.Code)）—— 不动分支" 2
     }
