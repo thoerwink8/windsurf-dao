@@ -66,15 +66,21 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 node scripts/run-tests.mjs                    # ★ 聚合入口（默认层）：扫 tests/*.tests.{js,ps1} 全跑 + 逐套真退出码汇总表
                                               #   ⚠ **默认层恒退 2，那是正常的**，不是失败：环境敏感断言被 defer 掉了，
                                               #     且标了 env 的那几套 .ps1 整套没跑（两条路各自都能把 2 顶起来，见下）
-                                              #   PS 侧默认层只跑「并行安全」的那几套（2026-08-08 · issue #187 起从 2 套扩到 4 套，
-                                              #   实测 ≈2.6s → ≈41s：新下放的 dao-pr-merge ≈33s / pr-body-scan ≈5s。
-                                              #   ⚠ 这里刻意只写口径不写清单 —— 谁在默认层以 `--list` 的逐条标注为准）
+                                              #   ⚠ **墙钟大头是 node 侧全量，量级是分钟级不是秒级**（issue #300 实测：
+                                              #     2026-08-11 默认层单跑，最慢一套 hard-gates ≈95s，全量合计约 6 分钟；
+                                              #     PS 侧那几套只占其中几十秒）。**别拿任何单一数字当超时预算**——
+                                              #     套数与耗时都随 tests/ 实况长，以 `--list` 与当次实测为准
 node scripts/run-tests.mjs --env              # ★ 含环境敏感层 + **全部 .ps1 套** —— **只有这一条拿得到 exit 0**；合并前 / 收官前跑它
-                                              #   PS 层串行 ≈100-150s（同机不同次波动；套数随 tests/ 实况增长，以 `--list` 为准），
-                                              #   故它比默认层慢；要求串行环境（见下）。**当前有几套以 `--list` 为准，此处不记数**
+                                              #   比默认层更慢（PS 层串行追加百秒级）；要求串行环境（见下）。
+                                              #   **当前有几套以 `--list` 为准，此处不记数**
 node scripts/run-tests.mjs --list             # 只列清单不跑（带分层标注，js/ps 两侧都标）
+node scripts/run-tests.mjs --write-baseline tests/<名>.tests.js
+                                              # ★ 单套粒度（2026-08-11 · issue #300）：**改/加一套测试后对齐基线只跑这一条**——
+                                              #   只跑那一套、只更新那一格，**一次调用把 default 与 env 两格都填好**
+                                              #   （JS 套自动跑两遍；与 --env 互斥）。秒级到十几秒，替代此前的全量两遍。
 node scripts/run-tests.mjs [--env] --write-baseline
-                                              # 用**本次这一跑**的条数重写 `scripts/assertion-baseline.json`
+                                              # 全量重写（**只有多套装动/正当缩减批处理才需要它**）：
+                                              #   用**本次这一跑**的条数重写 `scripts/assertion-baseline.json`
                                               #   （断言条数下界基线，2026-08-10 · issue #268）。**两层各写各的**：
                                               #   不带 --env 写 `default` 那一格，带 --env 写 `env` 那一格。
                                               #   ⚠ **改了 tests/ 就要重生成**，否则 `tests/assertion-baseline.tests.js`

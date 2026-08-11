@@ -382,6 +382,29 @@ console.log("\n──── ③ 自检半边：静态声明与运行期计数对
 }
 
 // ══════════════════════════════════════════════════════════════
+console.log("\n──── ③′ JS 套不报计数 ⇒ 自检失败（issue #300 方向 4）────");
+// 此前：exit 0 不打汇总行的套只被记成「未报计数」= 永久失去条数下界，
+// 而汇总表那行照旧带对勾 —— 「没跑的闸」与「过了的闸」长得一样。
+// 2026-08-11 起升格为 tierProblems（exit 4 通道）。PS 侧刻意不升格（现存未报计数全在 PS 侧，判红会误伤）。
+{
+  const c = mkCase("no-summary-gated", { "zeta.tests.js": { noSummary: true } });
+  const r = runRunner(c.dir);
+  check("JS 套 exit 0 但不打汇总行 → exit 4（不再带对勾放行）", r.code === 4 && r.sum && r.sum.exit === 4,
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
+  check("报文点出「条数下界」这个后果（只说「没报」等于没说）", /条数下界/.test(r.out), r.out.slice(-800));
+  check("报文给出修法（补上汇总行）", /补上汇总行/.test(r.out), r.out.slice(-800));
+  check("🔴 负控：red=0 且 fail=0，退出码仍是 4（这条拦阻不靠任何断言失败顶起来）",
+    r.sum && r.sum.red === 0 && r.sum.fail === 0 && r.sum.exit === 4, JSON.stringify(r.sum));
+}
+{
+  // 负控：正常报计数的套不许被误伤
+  const c = mkCase("summary-counted", { "zeta.tests.js": { pass: 4 } });
+  const r = runRunner(c.dir);
+  check("负控：打了汇总行的套不误伤（exit 0、selfcheck=ok）",
+    r.code === 0 && r.sum && r.sum.self === "ok", JSON.stringify(r.sum));
+}
+
+// ══════════════════════════════════════════════════════════════
 console.log("\n──── ④ 标记扫描只看头部（负控：正文里提到它不算声明）────");
 {
   const c = mkCase("marker-late", {
