@@ -76,8 +76,8 @@
 //    探针拦死，症状与「一直没限流」逐字节相同。
 //    ~~deadman 缺口挂 issue #190 第 1 条。~~ **用户 2026-08-08 拍板：deadman 兜底轮刻意不做。**
 //    ⇒ **别再往这里加兜底轮。** 理由 / 解冻条件（什么情况下可以重议）/ owner 见台账
-//    `docs/ops/nogo-ledger.json` 的 [NOGO:probe-deadman] —— 标记与台账双向对账，任一边没了
-//    `tests/nogo-ledger.tests.js` 当场红（此前这条裁决只靠「没人删这行注释」生效）。
+//    `docs/ops/nogo-ledger.json` 的 [NOGO:probe-deadman]（本行是台账落点指针；标记与台账的
+//    机检已随 PR #307 退役，现状见台账 `_doc`）。
 //
 // ── 全域分布（建护栏前先摸分布）──────────────────────────────────────────────
 // 本 hook 上线前，本仓 UserPromptSubmit 上有 2 条（`dao-cn-title.js` timeout 12 /
