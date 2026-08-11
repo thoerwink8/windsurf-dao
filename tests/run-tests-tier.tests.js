@@ -538,8 +538,11 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环
   const dgLines = (dgOut.match(/^[ \t]*DEFER[ \t]/gm) || []).length;
   check("dead-gates 真语料：DEFER 明细行数 == 汇总行 DEFER 字段（笨计数器对拍）",
     dgm && dgLines === Number(dgm[3]), "明细=" + dgLines + " 字段=" + (dgm ? dgm[3] : "无"));
+  // 2026-08-11：⑫①「真仓当下是绿态」那条 defer 随断言本体一起删了（外科手术：它断言
+  // 本机健康度而非改动正确性，信号已由离线体检接管）——⑫ 组剩下的只有「墙钟预算跳过」
+  // 那一条**条件性** defer（预算没跳过时不出现），故此处只钉 ⑪ 组的指名。
   check("dead-gates 的每组 defer 都指名（只报个数字等于没报）",
-    /DEFER\s+⑪/.test(dgOut) && /DEFER\s+⑫/.test(dgOut), dgOut.slice(0, 1200));
+    /DEFER\s+⑪/.test(dgOut), dgOut.slice(0, 1200));
 }
 
 // ══════════════════════════════════════════════════════════════
