@@ -498,6 +498,8 @@ Assert-True '8c 认出「我在**链接**工作树里」并跳过本地清理（
 Assert-True '8d 打出**带真实路径、可直接复制**的两行收尾命令（边界 ④：脚本不拆自己脚下的树）' `
     (($r8.Text -match 'git -C "[^"]+" worktree remove "[^"]+"') -and `
      ($r8.Text -match 'git -C "[^"]+" branch -d feature/x')) ''
+Assert-True '8e 收尾脚本被指给人（#265 件 7：dao-merge-cleanup.ps1 程序化调用点此前 N=0，唯一该交接的一处一个字不提它）' `
+    ($r8.Text -match 'dao-merge-cleanup') ''
 
 # ============================================================================
 # 场景 9：-DryRun 一个写操作都不做
