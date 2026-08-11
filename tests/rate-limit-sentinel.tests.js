@@ -177,6 +177,54 @@ console.log("\n=== deaths_24h 窗口边界（每格正控 + 先破再验）===")
   }
 }
 {
+  // issue #259：容差数字本身没被钉死 —— 上面那组 +3min/+10min 样本离 5 分钟边界留余量
+  // （正控侧 2 分钟、负控侧 5 分钟），容差被悄悄改成 4~8 分钟之间任何值，那两条正控/负控
+  // 都测不出来（PR #258 对抗判词实测表：2min 变红、4/7/8min 全绿、12min 变红）。这里把
+  // 余量收到 10 秒，直接夹住 5 分钟这个具体数字。
+  // 10 秒余量是否会 flaky：前置实测 —— 本批重测 60 次真实 spawnSync（另 60 次含 4 路
+  // CPU 满载背景干扰模拟繁忙环境），量的是「种子时间戳」到「hook 内部 Date.now()」的漂移
+  // （marker.at 作代理，与 countDeaths24h 的 Date.now() 同进程毫秒级相隔）：
+  //   无负载 n=60 min=28ms max=35ms avg=30.6ms；4 路满载 n=60 min=29ms max=70ms avg=36.1ms
+  // ——10s 余量有 >140 倍安全边际，不会 flaky（测量脚本与红集证据见 PR body，未入库——
+  // 一次性前置验证，非回归断言）。
+  const NEAR_INCLUDE = { at: new Date(Date.now() + 4 * 60 * 1000 + 50 * 1000).toISOString(), marked: true, error: "rate_limit" }; // +4:50
+  const NEAR_EXCLUDE = { at: new Date(Date.now() + 5 * 60 * 1000 + 10 * 1000).toISOString(), marked: true, error: "rate_limit" }; // +5:10
+  const tagIn = "clock-skew-tight-include";
+  const tagEx = "clock-skew-tight-exclude";
+  seedFiredLog(tagIn, REAL_HOOK, [NEAR_INCLUDE]);
+  seedFiredLog(tagEx, REAL_HOOK, [NEAR_EXCLUDE]);
+  run(REAL_HOOK, payloadOf(), tagIn);
+  run(REAL_HOOK, payloadOf(), tagEx);
+  check("+4:50（容差边界内侧 10s）计入 ⇒ deaths_24h = 2",
+    readJson(markerPath(tagIn)) && readJson(markerPath(tagIn)).deaths_24h === 2);
+  check("+5:10（容差边界外侧 10s）排除 ⇒ deaths_24h = 1",
+    readJson(markerPath(tagEx)) && readJson(markerPath(tagEx)).deaths_24h === 1);
+  {
+    // 先破再验①：容差改成 4 分钟（issue #259 表里那个盲点）⇒ +4:50 不再落在容差内，
+    // 上面「计入」那条正控必须翻面。
+    const ANCHOR = "const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;";
+    const h = mutantHook("clock-skew-4min", ANCHOR, "const CLOCK_SKEW_TOLERANCE_MS = 4 * 60 * 1000;");
+    const tagM = "clock-skew-tight-include-mut4";
+    seedFiredLog(tagM, h, [NEAR_INCLUDE]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    check("先破再验：容差改成 4 分钟（issue #259 表格盲点之一）⇒ +4:50 被排除，deaths_24h 从 2 变 1；canary：marker 照写",
+      readJson(markerPath(tagM)) && readJson(markerPath(tagM)).deaths_24h === 1 && rm.status === 0 &&
+      readJson(markerPath(tagM)).error === "rate_limit");
+  }
+  {
+    // 先破再验②：容差改成 8 分钟（issue #259 表里另一个盲点）⇒ +5:10 落进容差内，
+    // 上面「排除」那条负控必须翻面。
+    const ANCHOR = "const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;";
+    const h = mutantHook("clock-skew-8min", ANCHOR, "const CLOCK_SKEW_TOLERANCE_MS = 8 * 60 * 1000;");
+    const tagM = "clock-skew-tight-exclude-mut8";
+    seedFiredLog(tagM, h, [NEAR_EXCLUDE]);
+    const rm = spawnSync(process.execPath, [h], { input: JSON.stringify(payloadOf()), encoding: "utf8", env: envFor(tagM) });
+    check("先破再验：容差改成 8 分钟（issue #259 表格另一个盲点）⇒ +5:10 被计入，deaths_24h 从 1 变 2；canary：marker 照写",
+      readJson(markerPath(tagM)) && readJson(markerPath(tagM)).deaths_24h === 2 && rm.status === 0 &&
+      readJson(markerPath(tagM)).error === "rate_limit");
+  }
+}
+{
   // 窗口收紧方向（23h 正控）与 truthy 判定（marked === true 不许松）
   const D23 = { at: new Date(Date.now() - 23 * 3600 * 1000).toISOString(), marked: true, error: "rate_limit" };
   const TRUTHY = { at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(), marked: 1, error: "rate_limit" };
