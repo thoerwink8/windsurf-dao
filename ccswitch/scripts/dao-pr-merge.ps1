@@ -391,51 +391,10 @@ if ($DryRun) {
     Write-Ok "已合入 origin/$MainBranch"
 }
 
-# ── 3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209 缺口 2）───────
-# 只对 windsurf-dao 自身生效；别的仓没有下面这份清单里的生成器，逐件自动跳过。
-# **代码上不在 if ($SkipVerify) 分支里**——这是幂等只读检查，比第 4 步的全套验证快得多，
-# 治的正是 issue #121 第 3 点的 `-SkipVerify` 那一半（「有人手工合」那一半治不了，
-# 见 .DESCRIPTION 边界 ①）。`clause-index.json` 这一件已有场景 14 的断言守护
-# （issue #209 缺口 1：「有 generator 的仓」+「-SkipVerify」两态均已钉住）；
-# `guarded-files.json` 这一件暂无同等断言，是本批（issue #209 缺口 2）刻意的留白——
-# 本批只补覆盖面，不重复造一份 -SkipVerify 独立性的靶。
-#
-# 重设计（2026-08-11）：guarded-files.json 已随派生物消灭退役（dao-glob-gate 改运行时现算），
-# 3.5 步只剩 clause-index 一件。issue #209 缺口 2 的原始顾虑（「两件各自都对合并后不对」）
-# 对运行时现算的清单不成立——没有产物就没有「合并后过期」。
-$derivativeChecks = @(
-    [pscustomobject]@{ RelPath = 'ccswitch/scripts/gen-clause-index.mjs'; Artifact = 'ccswitch/clause-index.json'; Name = 'clause-index'; IssueRef = 'issue #121' }
-)
-Write-Step '3.5 派生物核对（若本仓有 canonical 生成器，issue #121 + #209；见头注对 -SkipVerify 那一半的准确表述）'
-
-foreach ($d in $derivativeChecks) {
-    $genScript = Join-Path $RepoPath $d.RelPath
-    if (-not (Test-Path -LiteralPath $genScript)) {
-        Write-Skip "$($d.RelPath) 不存在于本仓 —— 没有这份派生物，跳过（本步只对 windsurf-dao 自身生效）"
-        continue
-    }
-    if ($DryRun) {
-        Write-Plan "node $($d.RelPath) --check   （两侧各自都对、合并后不对是已实证的形态——$($d.IssueRef)；本步代码上不在 -SkipVerify 分支里）"
-        continue
-    }
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Note '找不到 node —— 本步无法判定，不当成"已核对过"（不是通过，是没查）'
-        continue
-    }
-    Push-Location $RepoPath
-    try {
-        $global:LASTEXITCODE = 0
-        $ciOut = & node $d.RelPath '--check'
-        $ciCode = $LASTEXITCODE
-    } finally { Pop-Location }
-    if ($ciCode -ne 0) {
-        Write-Info ($ciOut -join "`n")
-        Fail ("$($d.Name) 在合并后的树上过期（exit $ciCode）—— 两侧各自生成都对、合并后仍可能不对，是已实证的形态（$($d.IssueRef)）。" + [Environment]::NewLine +
-              "         修法：``node $($d.RelPath)`` 重新生成、``git add $($d.Artifact)`` 后提交，再重跑本脚本。" + [Environment]::NewLine +
-              "         本步刻意不自动提交（issue #121 原文：『合并脚本产生提交』是行为扩张，要想清楚）——交给人核对后自己提交。") 2
-    }
-    Write-Ok "在合并后的树上重跑 ``--check``：$($d.Name) 仍与源一致"
-}
+# ── 3.5 派生物核对：已于 2026-08-11 重设计时整段退役 ───────────────────────
+# 它核对的两个派生物（clause-index.json / guarded-files.json）都已消灭——渲染端与
+# glob-gate 都改运行时现算，「合并后派生物过期」这一病在结构上不存在了。
+# 判据史见 git 历史与 issue #121 / #209。
 
 # ── 4. 在合并后的树上重跑验证 ────────────────────────────────────────────────
 Write-Step '4. 在合并后的树上重跑验证'

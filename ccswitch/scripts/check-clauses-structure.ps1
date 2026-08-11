@@ -99,10 +99,11 @@
     `docs/rules/dispatch-clauses.md` §三那句「node 与 PowerShell **两套独立解析各查一遍**」
     对那 90+ 条**不成立** —— 它们的台账字段级对账实际是 node 单实现。
     PR #175 对抗实测（M3）：把 `官抗-语料非自证` 的台账 n 从 12 改回 11 制造正文↔台账不等，
-    `gen-clause-index.mjs --check` exit 1，**本闸缺省跑 exit 0**（它压根没看那个文件）。
+    （2026-08-11 重设计：clause-index 派生物已消灭，`--check` / `--reconcile` 那两层随之退役；
+     本闸缺省跑只依赖 clause-sources.mjs 给的源清单 + 本文件自己的解析。）
     处置是**把宣称改真、不是把宣称降级**：缺省扩到源清单里的每一份。判据与代价全写在
     文件末尾「缺省全量模式」那一大段代码注释里（那里是唯一真相源，此处不重复）。
-    一句话版：清单**不在本文件里**，向 node 要 —— `gen-clause-index.mjs --list-sources`
+    一句话版：清单**不在本文件里**，向 node 要 —— `clause-sources.mjs`（一行 JSON）
     输出 `clause-parser.mjs::defaultSources()` 的机器面（文件 + 各自的 `-ClauseSelector`）；
     **拿不到就 exit 3，绝不回落到只查 dao.md**；逐份**自调子进程**（单文件路径因此零改动），
     末行只剩一行聚合 marker。共享的是**清单**，解析仍是本文件自己那套（`--reconcile` 那一层没动）。
@@ -1285,7 +1286,7 @@ function Test-ClausesStructure {
 # ── ① 清单的真相源是 `defaultSources()`，本侧**不再自己定义一份** ────────────
 # 「哪几份文件带条款、每份该用哪个选择器」这条真相已经住在
 # `ccswitch/lib/clause-parser.mjs::defaultSources()` 里。本侧经
-# `node ccswitch/scripts/gen-clause-index.mjs --list-sources`（一行 JSON）拿它。
+# `node ccswitch/scripts/clause-sources.mjs`（一行 JSON）拿它。
 # **为什么不在 PowerShell 里再扫一遍目录**（那是本批第一版的做法，帅裁改掉了）：
 # 那等于给同一个问题造第二份口径 —— 而「两套『哪些 rules 文件带条款』口径分歧」正是
 # issue #169③ 已经在追的账（parser 侧 12 份、hook 侧筛出 5 份），再加一份是把病做大。
@@ -1338,7 +1339,7 @@ function Test-ClausesStructure {
 function Get-ClauseSourceList {
     <#
       向 node 侧要**源清单**（issue #176 / #169③）：
-      `node <Root>/ccswitch/scripts/gen-clause-index.mjs --list-sources` ⇒ 一行 JSON。
+      `node <Root>/ccswitch/scripts/clause-sources.mjs` ⇒ 一行 JSON。
       返回 @{ Ok; Why; Sources }，`Sources` 的每项带 `file` / `abs` / `exists` / `ps_selector`。
 
       **每一种拿不到都必须能被说出名字**（下面每个 return 都带一句 Why）——
@@ -1354,20 +1355,20 @@ function Get-ClauseSourceList {
     #>
     param([string]$Root)
 
-    $gen = Join-Path $Root 'ccswitch/scripts/gen-clause-index.mjs'
+    $gen = Join-Path $Root 'ccswitch/scripts/clause-sources.mjs'
     if (-not (Test-Path -LiteralPath $gen)) {
         return @{ Ok = $false; Why = ('源清单出口不在：' + $gen); Sources = @() }
     }
     $raw = $null
     $code = $null
     try {
-        $raw = & node $gen --list-sources
+        $raw = & node $gen
         $code = $LASTEXITCODE
     } catch {
         return @{ Ok = $false; Why = ('起不动 node：' + $_.Exception.Message); Sources = @() }
     }
     if ($code -ne 0) {
-        return @{ Ok = $false; Why = ('node --list-sources 退出码 ' + $code + '（非 0 ⇒ 清单不可信）'); Sources = @() }
+        return @{ Ok = $false; Why = ('clause-sources 出口退出码 ' + $code + '（非 0 ⇒ 清单不可信）'); Sources = @() }
     }
     $text = ((@($raw) -join "`n")).Trim()
     if ([string]::IsNullOrWhiteSpace($text)) {
@@ -1465,7 +1466,7 @@ function Invoke-AllClauseFiles {
 
     Write-Host '== 条款库结构完整性硬闸（canonical · 缺省全量模式）=='
     Write-Host ("   仓根：{0}" -f $Root)
-    Write-Host '   源清单：node ccswitch/scripts/gen-clause-index.mjs --list-sources（唯一真相源 = clause-parser.mjs::defaultSources()）'
+    Write-Host '   源清单：node ccswitch/scripts/clause-sources.mjs（唯一真相源 = clause-parser.mjs::defaultSources()）'
     Write-Host ("   宿主：{0}" -f $psExe)
 
     $srcDoc = Get-ClauseSourceList -Root $Root
@@ -1475,7 +1476,7 @@ function Invoke-AllClauseFiles {
         Write-Host ''
         Write-Host ("FAIL：拿不到源清单 —— {0}" -f $srcDoc.Why)
         Write-Host '     「拿不到清单」不等于「清单是空的」，更不等于「没问题」⇒ 本次不检、不给绿灯。'
-        Write-Host '     自查：node ccswitch/scripts/gen-clause-index.mjs --list-sources（应输出一行 JSON、退 0）'
+        Write-Host '     自查：node ccswitch/scripts/clause-sources.mjs（应输出一行 JSON、退 0）'
         Write-Host '     只想检一份文件、不经清单：加 -TargetFile <路径>（那条路径不依赖 node）。'
         Write-Host (Format-AllSummary -ExitCode 3 -Clauses 0 -Violations 0 -NoTrig 0 -Retire 0 -Promote 0 `
             -Slugs 0 -LedgerState 'na' -LedgerViol 0 -MaskDiv 0 -MaskCmp 0 -LedgerCmp 0 -LedgerOnly 0 `

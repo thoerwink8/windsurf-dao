@@ -92,30 +92,20 @@
 // `ccswitch/agents/` 四份官种型 profile + 帅侧条款 `[#派-官种底座]`）。
 // **它有没有生效本批未测**：判据是下一批派单的注入里 `role=` 还是不是 `general`。
 //
-// ── 索引不可信（stale=1）那一支：为什么它单独成一条路径（2026-08-07，issue #162 用户拍板）──
-// **拍板的原话是「塞指针 + 加提醒」**：索引过期时不再让官只拿到一句含混的失败回声，
-// 改投一条**说得出「读哪份文件的哪两节」**的降级指针；根因侧另配一道推送提醒
-// （`ccswitch/hooks/dao-tool-nudge.js` 第 ⑥ 类：推送触及条款源 ⇒ 提醒跑 `--check`）。
+// ── 「语料源读不到」那一支：为什么它单独成一条路径 ─────────────────────────
+// 渲染端现算化后（2026-08-11），「索引过期」这个中间态不存在了。剩下的失败分两格：
+//   ① **官种节 0 条**（语料里没有这个官种）⇒ 退到通用节再渲一次是对的；
+//   ② **语料源读不到** —— 这对**每个**官种都一样，退通用节再渲一次必然以同样的理由失败，
+//      只是多花一次进程；而退了官种，指针就再也说不出「你那一节是哪一节」。
+//      ⇒ 这一支**不退官种**（判据沿用 issue #162「塞指针」拍板的同一逻辑：一条降级指针的
+//      全部价值恰恰是「读哪份文件的哪两节」这句话）。
+// ⚠ 本 hook 只认渲染端报文里「读不到」这个信号，不替它细分成因（细分 = 在这里复刻一份
+//   渲染端判据，它改了这边不会知道）。
 //
-// **改之前的实况照直写，别把本次读成「从零注入变成有注入」**：stale 原本就落在「通用节也渲染
-// 不出 → 只给指针」那一支上，注入**不是空的**。真正缺的是三格，本次补的也就是这三格：
-//   ① **官种被无谓地丢掉了** —— stale 时先按官种渲一次（失败）、再退 general 渲一次（必然以
-//      同样的理由失败），于是指针只说得出「按你所属官种那一节读」，说不出**哪一节**。
-//      索引过期对**每个**官种都一样不可用 ⇒ 这一支不退官种，也少花一次进程。
-//   ② **心跳里的 stale 恒为 false** —— 那个字段取自渲染结果 `doc._generated.stale`，而这条路径
-//      压根没有 doc。于是「条款断供了多少次」在日志上数不出来，正是本仓那句「数到 0 和没看到
-//      样本，输出一模一样」。现在这一支写 `stale:true` 且 `mode:"stale-pointer"`，数得出来了。
-//   ③ **降级句是个括号里的补充** —— 「（本次没有渲染出任何条款正文，上面那条路径是唯一入口。）」
-//      读起来像脚注。改成 🔴 开头的祈使句，并把渲染端自己那条修法命令原样带过来。
-// ⚠ **`stale=1` 是渲染端「这份索引可不可信」的判断，不等于「文件确实过期了」**：索引不存在、
-//   索引不是合法 JSON 时它同样报 1（那时新鲜度无从判断，报 1 是保守侧）。本 hook **不替它细分
-//   成因**，只把它的原话一并带进注入 —— 细分就等于在这里复刻一份渲染端的判据，而那份判据改了
-//   这边不会知道。
-//
-// 项目特有那半仍在各项目仓，仍然不进本仓索引（要么带本机绝对路径、要么把别人的语料复制进来）。
-// 要临时把某个项目那份也算进来：
-//   node ccswitch/scripts/gen-clause-index.mjs --sources-json <清单> --out <某处>/clause-index.json
-//   然后 DAO_CLAUSE_INDEX=<某处>/clause-index.json
+// 项目特有那半仍在各项目仓，不进本仓默认语料清单（要么带本机绝对路径、要么把别人的语料
+// 复制进来）。要临时把某个项目那份也算进来：写一份 sources-json（[{file,selector,role_scheme}]）
+// 然后 DAO_CLAUSE_SOURCES=<清单路径>（重设计后渲染端现算，不再有索引文件这个中间物）。
+// ⚠ 末行契约的 `stale=` 字段恒为 0（现算无新鲜度问题），字段保留只是不让旧消费方解析失锚。
 //
 // ── 这张映射表将来怎么退役 ───────────────────────────────────────────────────
 // 映射表和条款库一样只增不减。给它留的触发器是 `--selfcheck` 第③段：它逐条打印表里每个
@@ -289,26 +279,18 @@ function splitMarker(stdout) {
   return { body: String(stdout || ""), marker: "" };
 }
 
-// 末行契约里的 `stale=<0|1>`。**读它而不读退出码**：退出码答的是「这次渲染成没成」，
-// 而这里要问的是「渲染端认为这份索引可不可信」—— 官种 0 条也是 exit 1，但那不是索引的问题。
-// 返回 null = 末行根本没给（渲染器没跑起来 / 输出被截断）⇒ **不猜**，走既有降级路径。
-function staleOf(marker) {
-  const m = /\bstale=(\d+)\b/.exec(String(marker || ""));
-  return m ? m[1] === "1" : null;
-}
-
 // 渲染端失败报文里那条修法命令，**原样摘出来带进注入**，不在本文件里另存一份字面量：
-// 存一份就是双写，而双写必漂移（生成器改名时，漂移出来的那条错命令读者会照着敲）。
+// 存一份就是双写，而双写必漂移（脚本改名时，漂移出来的那条错命令读者会照着敲）。
 function regenHintOf(body) {
   for (const ln of String(body || "").split(/\r?\n/)) {
-    if (/gen-clause-index/.test(ln)) return ln.replace(/^[\s·⇒>]+/, "").trim();
+    if (/clause-sources\.mjs|--sources-json/.test(ln)) return ln.replace(/^[\s·⇒>]+/, "").trim();
   }
   return null;
 }
 
 function render(role) {
   const args = [RENDERER, "--role", role, "--format", "json"];
-  if (process.env.DAO_CLAUSE_INDEX) args.push("--index", process.env.DAO_CLAUSE_INDEX);
+  if (process.env.DAO_CLAUSE_SOURCES) args.push("--sources-json", process.env.DAO_CLAUSE_SOURCES);
   const r = spawnSync(process.execPath, args, {
     encoding: "utf8",
     timeout: RENDER_TIMEOUT_MS,
@@ -316,18 +298,17 @@ function render(role) {
     input: "",
   });
   const { body, marker } = splitMarker(r.stdout);
-  const stale = staleOf(marker);
-  if (r.error) return { ok: false, why: `渲染器起不来：${r.error.message}`, marker, stale, hint: null, code: null };
+  if (r.error) return { ok: false, why: `渲染器起不来：${r.error.message}`, marker, hint: null, code: null };
   if (r.status !== 0) {
     const text = String(body || r.stderr || "");
     const first = text.split(/\r?\n/).filter(Boolean)[0] || "（无输出）";
-    return { ok: false, why: `渲染器 exit=${r.status}：${first.trim()}`, marker, stale, hint: regenHintOf(text), code: r.status };
+    return { ok: false, why: `渲染器 exit=${r.status}：${first.trim()}`, marker, hint: regenHintOf(text), code: r.status };
   }
   try {
     const doc = JSON.parse(body);
-    return { ok: true, doc, marker, stale, hint: null, code: 0 };
+    return { ok: true, doc, marker, hint: null, code: 0 };
   } catch (e) {
-    return { ok: false, why: `渲染结果不是合法 JSON：${e.message}`, marker, stale, hint: null, code: r.status };
+    return { ok: false, why: `渲染结果不是合法 JSON：${e.message}`, marker, hint: null, code: r.status };
   }
 }
 
@@ -352,7 +333,7 @@ function clamp(text) {
   return text.slice(0, Math.max(0, MAX_CONTEXT_CHARS - notice.length)) + notice;
 }
 
-function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, regenHint }) {
+function buildContext({ mapped, role, doc, degraded, clause, marker, sourceDead, regenHint }) {
   const head = [
     `${SIGNATURE} agent_type=${mapped.agentType || "(空)"} → 官种=${role}（${mapped.how}）`,
     "这段文字由 SubagentStart hook 渲染，内容是本体系派单条款库里与这个官种相关的那些条款。" +
@@ -374,20 +355,18 @@ function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, 
 
   if (!doc) {
     // ── 降级指针：**这几行就是本次注入的全部内容**，所以它必须自己说完「去哪读、读哪两节」──
-    // 原文只有一句括号里的「上面那条路径是唯一入口」：它指得出**文件**，指不出**节**，
-    // 而这份条款库是分节的、协议是「通用节 + 你那一节」。祈使句 + 具体节名，才是一条指得动人的指针。
+    // 祈使句 + 具体节名，才是一条指得动人的指针。
     const where = clause ? `\`${clause.file}\`` : "本体系的派单条款库正文";
     const ptr = [
       "🔴 " +
-        (staleFail
-          ? "**条款索引不可信（渲染端末行 stale=1：已过期，或读不到）**，故本次**没有渲染出任何条款正文**——" +
-            "这是渲染端刻意的 fail-closed，不是故障：正文是按行号从 Markdown 现切的，源动了而行号没动时，" +
-            "切出来的会是隔壁那条条款的半截话，而它看起来完全正常。**拒投旧版好过投错版。**"
+        (sourceDead
+          ? "**条款语料源读不到**（渲染端报文见上），故本次**没有渲染出任何条款正文**——" +
+            "这是渲染端刻意的 fail-closed：源缺了还照渲染，给的就是一份缺斤少两却看起来正常的东西。"
           : "**本次没有渲染出任何条款正文**（成因见上一行）。"),
       `⇒ **开工前自己去 Read ${where}：通读「通用节」＋ 你所属官种那一节` +
         `（本次按 agent 定义名推断为「${role}」，误判概率真实存在——与实际不符时读你自己那一节，本段不构成范围限制）**，逐条遵守。`,
     ];
-    if (staleFail) {
+    if (sourceDead) {
       ptr.push(
         "（修法归帅、不是你这一路的活" +
           (regenHint ? `：${regenHint}` : "，见渲染端自己的报文") +
@@ -396,17 +375,14 @@ function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, 
     }
     return {
       text: clamp(head.concat(tail, ptr).join("\n")),
-      mode: staleFail ? "stale-pointer" : "pointer-only",
+      mode: sourceDead ? "source-dead-pointer" : "pointer-only",
       general: 0,
       roleClauses: 0,
-      stale: !!staleFail,
     };
   }
 
   const general = doc.general || [];
   const roleClauses = doc.role_clauses || [];
-  const stale = !!(doc._generated && doc._generated.stale);
-  if (stale) tail.push("⚠ 渲染所用索引已过期（正文按行号现切，可能切错行）—— 以原文为准。");
 
   const sections = [];
   const bodyTotal = general.concat(roleClauses).reduce((a, c) => a + String(c.body || "").length, 0);
@@ -447,7 +423,6 @@ function buildContext({ mapped, role, doc, degraded, clause, marker, staleFail, 
     general: general.length,
     roleClauses: roleClauses.length,
     dropped,
-    stale,
   };
 }
 
@@ -486,17 +461,17 @@ function selfcheck() {
 
   // ③ 渲染端可用性 + 映射表退役观察线
   const probe = spawnSync(process.execPath, [RENDERER, "--list-roles"].concat(
-    process.env.DAO_CLAUSE_INDEX ? ["--index", process.env.DAO_CLAUSE_INDEX] : []
+    process.env.DAO_CLAUSE_SOURCES ? ["--sources-json", process.env.DAO_CLAUSE_SOURCES] : []
   ), { encoding: "utf8", input: "", timeout: RENDER_TIMEOUT_MS });
   const out = String(probe.stdout || "");
   if (probe.status !== 0) {
     bad++;
     lines.push(`✗ 渲染端跑不起来（exit=${probe.status}）⇒ 每一次注入都会退成纯指针：${String(probe.stderr || out).slice(0, 200)}`);
   } else {
-    const stale = /索引已过期/.test(out);
-    if (stale) {
+    const unreadable = /有源读不到/.test(out);
+    if (unreadable) {
       bad++;
-      lines.push("✗ 条款索引已过期 ⇒ 渲染端 fail-closed，本 hook 每次都只能给指针。修法：node ccswitch/scripts/gen-clause-index.mjs");
+      lines.push("✗ 条款语料有源读不到 ⇒ 渲染端 fail-closed，本 hook 每次都只能给指针。修法：核语料清单（默认清单见 node ccswitch/scripts/clause-sources.mjs）");
     }
     const counts = {};
     for (const m of out.matchAll(/^\s{2}(\S+)\s+(\d+)\s*$/gm)) counts[m[1]] = Number(m[2]);
@@ -581,13 +556,10 @@ try {
     throw new Error("人为注入故障（DAO_SUBAGENT_CLAUSES_FORCE_ERROR=render）@render");
   }
   let r = render(role);
-  // ── 索引不可信（末行 stale=1）：单独一支，**不退官种**（issue #162 用户拍板「塞指针」）──
-  // 过期/读不到的索引对**每一个**官种都一样不可用，退到通用节再渲一次必然以同一个理由失败，
-  // 只是多花一次进程；而退了官种，指针就再也说不出「你那一节是哪一节」——
-  // 一条降级指针的全部价值恰恰是那句话。判据读 stale 而不读退出码，理由见 staleOf 头注。
-  const staleFail = !r.ok && r.stale === true;
-  if (staleFail) {
-    degraded.push(`条款索引不可信（${r.why}），渲染端拒投旧版正文 ⇒ 本次降级为指针，官种保持「${role}」不退`);
+  // ── 语料源读不到：单独一支，**不退官种**（头注那支的判据）──
+  const sourceDead = !r.ok && /读不到/.test(r.why || "");
+  if (sourceDead) {
+    degraded.push(`条款语料读不到（${r.why}）⇒ 本次降级为指针，官种保持「${role}」不退`);
   } else {
     if (!r.ok && role !== "general") {
       degraded.push(`「${role}」节渲染不出（${r.why}），退到通用节`);
@@ -604,7 +576,7 @@ try {
     degraded,
     clause,
     marker: r.marker,
-    staleFail,
+    sourceDead,
     regenHint: r.hint,
   });
 
@@ -620,7 +592,6 @@ try {
     general: built.general,
     role_clauses: built.roleClauses,
     dropped: built.dropped || 0,
-    stale: !!built.stale,
     degraded,
     chars: built.text.length,
   });
