@@ -112,6 +112,48 @@ process.on("uncaughtException", (e) => {
   process.exit(emitExitCode());
 });
 
+// ── 模式分岔（2026-08-11 重设计：SessionStart 体检离线化，用户拍板修正②）────────
+// 体检从「每次会话开始现跑」改为「定时跑一次落盘，会话开始只读摘要」：
+//   默认（SessionStart 调用）：只读落盘报告 —— 毫秒级；全绿且新鲜 ⇒ 静默。
+//   --write-report：跑下面那套完整检查（现状行为），结果落盘。
+//     由计划任务定期执行（注册脚本 scripts/install-health-check.ps1），无人工也刷新。
+// 报告路径：~/.claude/dao-state/health-report.json（机器状态，不进 git）。
+const WRITE_REPORT = process.argv.includes("--write-report");
+const REPORT_PATH = path.join(
+  process.env.HOME || process.env.USERPROFILE || "", ".claude", "dao-state", "health-report.json");
+const REPORT_MAX_AGE_MS = 26 * 3600 * 1000; // 计划任务每天跑 ⇒ 超过 26h 就是「刷新链断了」
+
+function writeReport(obj) {
+  try {
+    fs.mkdirSync(path.dirname(REPORT_PATH), { recursive: true });
+    fs.writeFileSync(REPORT_PATH, JSON.stringify(Object.assign({ at: new Date().toISOString() }, obj), null, 1));
+  } catch (_) { /* 落盘失败不拖垮主产物 —— 下次会话会报「报告缺失」那一格 */ }
+}
+
+if (!WRITE_REPORT) {
+  // ── 会话开始快速路径：只读落盘报告 ──────────────────────────────────────
+  let report = null;
+  try { report = JSON.parse(fs.readFileSync(REPORT_PATH, "utf8")); } catch (_) {}
+  const ageMs = report && report.at ? (Date.now() - Date.parse(report.at)) : null;
+  const emitLine = (line) => {
+    try {
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: line }
+      }));
+    } catch (_) {}
+  };
+  const hint = "跑 `node ccswitch/hooks/dao-scaffold-check.js --write-report` 现刷一次（定时刷新由 scripts/install-health-check.ps1 注册的计划任务负责）";
+  if (!report || !report.at) {
+    emitLine("ⓘ dao 体检报告未生成 —— " + hint);
+  } else if (report.outcome && report.outcome !== "clean") {
+    emitLine("⚠ dao 体检有发现（报告 " + Math.round(ageMs / 3600000) + " 小时前生成）：" +
+      (report.summary || "见报告全文") + " —— " + hint);
+  } else if (ageMs > REPORT_MAX_AGE_MS) {
+    emitLine("ⓘ dao 体检全绿，但报告已 " + Math.round(ageMs / 3600000) + " 小时未刷新（计划任务在跑吗？）—— " + hint);
+  }
+  process.exit(0);
+}
+
 let raw = "";
 try { raw = fs.readFileSync(0, "utf8"); } catch (_) {}
 
@@ -1267,6 +1309,7 @@ function budgetSummaryLines() {
 // scaffold-check」在陈旧检测眼里长得像「很健康」，正是本节开篇要治的病本身。
 function inject(context) {
   writeHeartbeat("reported", { daoSync: daoSync.length, issues: issues.length, activeWork: activeWork.length });
+  writeReport({ outcome: "issues", summary: String(context).split(/\r?\n/)[0].slice(0, 200), context: String(context) });
   emitOnce(context);
   // 退出码走同一个出口（issue #152 账 1）：**这里原先写死 `exit(0)`**，于是即使
   // `emitOnce` 里的写失败已经被记下来，这一行也会把它抹平成「一切正常」。
@@ -1274,6 +1317,7 @@ function inject(context) {
 }
 function done(result) {
   writeHeartbeat(result || "clean");
+  writeReport({ outcome: (!result || result === "clean" || String(result).startsWith("skip")) ? "clean" : String(result) });
   process.exit(0);
 }
 

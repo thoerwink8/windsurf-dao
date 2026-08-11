@@ -91,35 +91,9 @@
 // 与 ②③ 同为**事后**提醒:PostToolUse 触发时 dev server 已经起来了,提醒买的是「现在换树重起」
 // 或「在交付里写明这次观察建立在共享树上」,不是拦截。
 //
-// ── ⑥ 推送触及条款索引的源文件(2026-08-07 加,issue #162 用户拍板「塞指针 + 加提醒」的后半)──
-// `ccswitch/clause-index.json` 是**派生物**:改了条款源而不 regen,索引就过期;而
-// `render-clauses.mjs` 对过期索引是 fail-closed ⇒ SubagentStart 那条投递通道从「投条款」
-// 降成「投指针」,**每个新派的官都少收一份条款,且没有任何面向帅的报警**。
-// 这个病 2026-08-05~07 三天内发生两次,两次都是**直推 docs 微改**——而唯一的既有防线
-// `tests/clause-index.tests.js` 只在有人跑测试时红,直推那条路恰恰不跑测试。⑥ 就是那一格。
-//
-// 命中形态:段首 `git push`(排除 `--delete`/`-d`,那是删远程分支、不动 `@{u}`),**且**这次推送
-// 真的动了条款索引的源文件之一,**且**同一次推送里没带上 `ccswitch/clause-index.json`
-// (带了 ⇒ regen 多半跑过了,`--check` 本来就绿,再提醒纯属噪音)。
-//
-// 🔴 **源清单现场从 `ccswitch/lib/clause-parser.mjs` 的 `defaultSources()` 读,本文件不留副本**
-// (索引路径与 regen 命令同样取自它的 `DEFAULT_INDEX_REL` / `REGEN_CMD`,一次 import 三个值全拿)。
-// 硬编码一份的话,下次往清单里加源,这道提醒会**静默地**对那个源失明 ——
-// 而它要治的病本身就是「派生物没跟上真相源」,自己再犯一次太难看。
-// 那份是 ESM 而本文件是 CJS,故走一次 `node --input-type=module -e "import …"` 子进程取值;
-// 只在**真的看见 push 段且它确实动了文件**时才付这次进程开销。
-//
-// 「这次推送送出去了什么」用**上游远程跟踪分支的 reflog 区间** `<up>@{1}..<up>` 判。
-// ⚠ 这里有个坑,首版差点踩:本 hook 是 PostToolUse,跑到这里时 push **已经成功**、
-// `@{u}` 已经等于 HEAD ⇒ 拿 `@{u}..HEAD` 判**恒为空**,这道提醒会一次都不响而看起来完全正常。
-//
-// 已知盲区照直写,一律**宁漏勿滥**(判不出就不提醒):没有上游(首次推新分支)· reflog 里没有
-// 上一条 · `git push origin HEAD:main` 这类推的不是 `@{u}` 的形态 · 非 git 仓 · git 超时。
-// 反过来的一格也照直写:**空推(Everything up-to-date)或推别的分支时,`<up>@{1}..<up>` 仍是上一次
-// 推送的区间** ⇒ 可能就同一笔改动**再提醒一次**。那不是误报(条件字面上仍成立、索引可能真的还没跟上),
-// 是重复;重复的代价是噪音,而静默的代价是这道提醒不存在,取前者。**失败的 push(non-fast-forward
-// 被拒)同属这一格**(PR #165 对抗验证实测):push 没送出任何东西而区间仍是上一次成功推送的 ⇒
-// 报的是上一笔的文件——同一机制、同一代价类别(噪音),不另设分支去判。
+// ── ⑥ 推送触及条款源 ⇒ 提醒 regen：已于 2026-08-11 重设计时退役 ────────────
+// 派生物 clause-index.json 已消灭（渲染端改运行时现算），「推了源没 regen」这一病
+// 在结构上不存在了——没有产物需要跟上。本类删除，判据史见 git 历史与 issue #162。
 //
 // ── ⑦ PowerShell 面:2>&1 混流 / Bash heredoc 误用(2026-08-08 加,issue #44)─────
 // ①②③⑤⑥ 都挂在 Bash matcher 下,而本仓官方工具面**同时有一个 PowerShell 工具**——
@@ -223,47 +197,6 @@ function isLinkedWorktree(dir) {
   }
 }
 
-// ── ⑥ 的判据 ───────────────────────────────────────────────────────────────
-// 条款解析器所在处。**它是唯一真相源**:12 个源、索引路径、regen 命令三样都从它现场读。
-const CLAUSE_PARSER = process.env.DAO_TOOL_NUDGE_CLAUSE_PARSER ||
-  path.join(ROOT, "ccswitch", "lib", "clause-parser.mjs");
-
-// 现场取三个值。任何一步不顺(文件不在 / import 失败 / 输出不是预期形状)一律返回 null ⇒ 本类静默。
-// **刻意不给默认值兜底**:兜底就是在这里偷偷存了一份副本,而副本会漂移到没人发现。
-function clauseIndexFacts() {
-  try { if (!fs.existsSync(CLAUSE_PARSER)) return null; } catch (_) { return null; }
-  const url = pathToFileURL(CLAUSE_PARSER).href;
-  const code =
-    `import { defaultSources, DEFAULT_INDEX_REL, REGEN_CMD } from ${JSON.stringify(url)};` +
-    "process.stdout.write(JSON.stringify({" +
-    "sources: defaultSources().map((s) => s.file), index: DEFAULT_INDEX_REL, regen: REGEN_CMD }));";
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-    encoding: "utf8", timeout: 8000, windowsHide: true,
-  });
-  if (r.status !== 0) return null;
-  try {
-    const o = JSON.parse(String(r.stdout || ""));
-    if (!o || !Array.isArray(o.sources) || o.sources.length === 0) return null;
-    if (typeof o.index !== "string" || !o.index) return null;
-    return o;
-  } catch (_) { return null; }
-}
-
-// 「这次 push 究竟送出去了哪些文件」。判不出一律返回 null(见头注⑥ 的盲区清单)。
-// 走的是**上游远程跟踪分支的 reflog 上一位**,不是 `@{u}..HEAD`——理由见头注那个坑。
-function pushedFiles(dir) {
-  const up = spawnSync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "@{u}"], {
-    encoding: "utf8", timeout: 4000, windowsHide: true,
-  });
-  if (up.status !== 0) return null; // 没有上游 / 不是 git 仓 / git 不在 ⇒ 判不出
-  const upstream = String(up.stdout || "").trim().split(/\r?\n/)[0].trim();
-  if (!upstream) return null;
-  const d = spawnSync("git", ["-C", dir, "diff", "--name-only", `${upstream}@{1}..${upstream}`], {
-    encoding: "utf8", timeout: 6000, windowsHide: true,
-  });
-  if (d.status !== 0) return null; // reflog 里没有上一条(首次推该分支)⇒ 判不出
-  return String(d.stdout || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-}
 
 // ── --selfcheck:把「④ 到底投递得到吗」摆出来 ───────────────────────────────
 // 形态照抄 dao-hard-gates.js 的 selfcheck(逐面核 matcher 覆盖),**判据各自独立**:
@@ -273,7 +206,7 @@ function pushedFiles(dir) {
 //  与那边的「五道闸」是同一个病的两侧,一并治掉)。
 // 只抽形态不抽判据 —— 与 ccswitch/lib/hook-selfcheck.js 的抽取原则一致。
 const REQUIRED_COVERAGE = [
-  { face: "①②③⑤⑥ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离 / 条款源推送)", tools: ["Bash"] },
+  { face: "①②③⑤ Bash 面(工具选择 / PR 合并链 / 直推主干 / 热重载树隔离)", tools: ["Bash"] },
   { face: "⑦ PowerShell 面(2>&1 混流 / Bash heredoc 误用)", tools: ["PowerShell"] },
   {
     face: "④ 浏览器 MCP 面(GUI 验证细则首调提醒)",
@@ -449,8 +382,6 @@ const flows = new Set();
 // ⑤ 用:逐段推进「此刻在哪个目录」。起点是宿主给的 cwd,`cd <路径>` 段推进它。
 let curDir = String((input && input.cwd) || process.cwd() || ".");
 let devServerDir = null;
-// ⑥ 用:命中过 push 段的那一刻在哪个目录(git 判定同样放循环外做一次)。
-let pushDir = null;
 
 for (let seg of segments) {
   seg = seg.trim();
@@ -507,8 +438,6 @@ for (let seg of segments) {
       /^\+?(main|master)$/.test(a) || /^\+?HEAD:(main|master)$/.test(a) || /^\+?(main|master):(main|master)$/.test(a)
     );
     if (hitsTrunk) flows.add("push-trunk");
-    // ⑥:**任何**推送都记下(不只主干)——条款源住在 dao 仓,而 dao 仓的改动走不走 PR 都可能漏 regen。
-    if (curDir !== null) pushDir = curDir;
   }
 }
 
@@ -516,21 +445,6 @@ for (let seg of segments) {
 if (devServerDir !== null && isLinkedWorktree(devServerDir) === false) {
   flows.add("dev-server-main-tree");
 }
-
-// ⑥ 同理:两次 git + 一次 node,只在真看见 push 段、且那次推送确实动了文件时才付。
-let clauseHit = null;
-if (pushDir !== null) {
-  const files = pushedFiles(pushDir);
-  if (files && files.length) {
-    const facts = clauseIndexFacts();
-    if (facts) {
-      const hit = files.filter((f) => facts.sources.includes(f));
-      // 索引同批推上去了 ⇒ regen 多半跑过,`--check` 本来就绿 ⇒ 静默(见头注⑥)。
-      if (hit.length && !files.includes(facts.index)) clauseHit = { hit, facts };
-    }
-  }
-}
-if (clauseHit) flows.add("clause-source-push");
 
 if (hints.size === 0 && flows.size === 0) process.exit(0);
 
@@ -589,23 +503,6 @@ if (flows.has("dev-server-main-tree")) {
     "要么在交付里写明「本次观察建立在共享工作树上,可能被并发写入污染」,别让它默认读成干净观测。" +
     "⚠ 隔离**实例**的脚本(WebView2 user-data-dir / app 数据库那类,如 mousse-cli 的 " +
     "`start-isolated-dev.ps1`)解的不是这个问题——那是实例隔离,这是**工作树**隔离,两件事。"
-  );
-}
-
-if (flows.has("clause-source-push")) {
-  const { hit, facts } = clauseHit;
-  blocks.push(
-    "【dao 条款索引】本次推送动了条款索引的**源文件**(" + hit.join(" , ") + ")," +
-    "而同一次推送里**没有** `" + facts.index + "`。那个索引是**派生物**:源变了它不会自己跟上。" +
-    "索引一过期,`render-clauses.mjs` 就 fail-closed ⇒ SubagentStart 那条通道从「投条款」降成「投指针」," +
-    "**此后每个新派的 subagent 都少收一份条款,而帅这边没有任何报警**——" +
-    "「数到 0 和没看到样本,输出一模一样」。这个病 2026-08-05~07 三天内发生过两次,两次都是直推改源没 regen。" +
-    "⇒ **现在跑一次**:`" + facts.regen + " --check`(exit 1 就跑掉 `--check` 的那条重新生成," +
-    "把 `" + facts.index + "` 一起提交)。" +
-    "本提醒是**事后**的(PostToolUse),推已经发出去了 ⇒ 买的是「补一个提交」,不是拦截。" +
-    "⚠ 判据是近似的,两侧都构造得出反例:靠上游远程跟踪分支的 reflog 区间反推「这次推了什么」," +
-    "首次推新分支、`HEAD:main` 这类形态一律判不出而**静默**;反过来空推或推别的分支时," +
-    "可能就同一笔改动重复提醒一次。**别把「它没响」读成「索引是新鲜的」**——那个问题只有 `--check` 答得准。"
   );
 }
 

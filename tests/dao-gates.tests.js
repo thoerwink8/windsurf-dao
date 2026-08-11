@@ -207,17 +207,18 @@ ensureTmp();
 
 // ── 静态接线检查（零运行时开销）───────────────────────────────────────────────────
 // 抓真实 GATES 数组里逐条 path.join(ROOT, ...) 构造出的脚本路径，断言文件在盘上——
-// catch「路径打错字」这类最常见的接线错误。**数量断言是 5 不是 >=5**：GATES 是手维护的
+// catch「路径打错字」这类最常见的接线错误。**数量断言是 3 不是 >=3**：GATES 是手维护的
 // 清单（见 dao-gates.mjs 头注「已知的射程缺口」㈠），改闸清单时这个数字要跟着手改——
 // 这是刻意的强断言，不是遗漏加固。
+// （2026-08-11 重设计：gen-guarded-files / gen-clause-index 两道随派生物消灭退役，5→3。）
 {
   const joins = [...SRC.matchAll(/path\.join\(ROOT,\s*((?:"[^"]*",?\s*)+)\)/g)];
   const realPaths = joins.map((m) => {
     const parts = m[1].match(/"([^"]*)"/g).map((s) => s.slice(1, -1));
     return path.join(REPO, ...parts);
   });
-  check("从源码里静态抓出的 GATES 路径数 === 5（GATES 清单当前长度；改闸数要同步改这里）",
-    realPaths.length === 5, "抓到 " + realPaths.length + " 条：" + JSON.stringify(realPaths));
+  check("从源码里静态抓出的 GATES 路径数 === 3（GATES 清单当前长度；改闸数要同步改这里）",
+    realPaths.length === 3, "抓到 " + realPaths.length + " 条：" + JSON.stringify(realPaths));
   for (const p of realPaths) {
     check("GATES 里引用的脚本文件在盘上：" + path.relative(REPO, p), fs.existsSync(p));
   }

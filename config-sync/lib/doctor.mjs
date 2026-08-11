@@ -57,7 +57,23 @@ function main() {
   section('Windows Terminal 配色');
   checkTerminalSync();
 
+  section('dao 体检定时刷新（重设计修正②）');
+  checkHealthReportTask();
+
   finish();
+}
+
+// SessionStart 体检离线化后，报告刷新靠计划任务 dao-health-report；它不在 ⇒ 报告越来越旧、
+// 每次会话开始都会吃到「报告未刷新」提醒。注册：scripts/install-health-check.ps1。
+function checkHealthReportTask() {
+  try {
+    const out = execFileSync('schtasks', ['/Query', '/TN', 'dao-health-report'], {
+      encoding: 'utf8', timeout: 8000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    pass(out.includes('dao-health-report') ? '计划任务 dao-health-report 已注册（体检报告定时刷新链在）。' : '计划任务查询返回但未见任务名。');
+  } catch {
+    warn('计划任务 dao-health-report 未注册 —— 体检报告无人定时刷新。跑一次：powershell -File scripts/install-health-check.ps1');
+  }
 }
 
 function checkCommonClaudeEnv() {

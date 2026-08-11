@@ -36,7 +36,7 @@
 - **②标题人话式**：内部术语进正文不进标题，写完自检一句——**没参与项目的人读标题能知道这是干什么的吗**（参照 `#193`「多机/多 AI 并行处理 GitHub 的认领机制——标工作状态防两台机器撞同一张单」这类写法：用后果/风险描述代替内部机制代号，而不是删掉精度——精度留在正文，标题只担一件事：让人一眼知道这是干什么的）。
 - **③关联用结构化字段**：跟进单挂 Sub-issues 父子（`gh issue edit <子单> --parent <父单>`，需 gh CLI 2.94+）；前置条件用 blocked_by（`gh issue edit <n> --add-blocked-by <N>`）。**⚠️ 2026-08-09 实测坑，调研报告未覆盖的一格**：blocked_by 的目标只能是 issue，不能是 PR。**证据分两层，2026-08-09 PR #225 复核订正**：`gh issue edit <n> --add-blocked-by <PR号>` 这条命令本身在 **gh CLI 客户端层**就被挡下，报的是 GraphQL 解析错误（`Could not resolve to an Issue with the number of <N>`），请求根本没送到 REST；**422**（`Validation failed: Target issue may only be an issue`）只有**直调 REST** `POST /repos/.../issues/<n>/dependencies/blocked_by` 才看得到（对 #218、#225 两个 PR 目标各验一次，两次都是它）。**结论不变**：blocked_by 拒绝 PR 这件事成立，只是「跑哪条命令看见哪层错误」此前记错了。「前置：PR #NNN 先合并」这类跟 PR 挂钩的前置条件，目前仍只能留在正文散文里，等那个 PR 合并/关闭后说明自然作废——结构化字段管不到这一格，别把「Dependencies 端点可用」读成「对 PR 也能用」，调研报告只验了端点存在、没验目标类型。正文散文引用只作补充，不作唯一记录。
 
-出处与基线数字见台账 `ccswitch/clause-ledger.json`（2026-08-09 调研 `_tmp/issue-readability-research-20260809.md` 实测 40 张最近 issue：标题 75% 依赖内部黑话、除『缺陷』准类型标签（11 张）外无类型细分、六格 0%、关联结构化字段使用率 0%；用户 2026-08-09 拍板「A+B 叠加」）。
+出处与基线数字：2026-08-09 调研实测 40 张最近 issue（标题 75% 依赖内部黑话、除『缺陷』准类型标签外无类型细分、六格 0%；用户 2026-08-09 拍板「A+B 叠加」）——字段史归 git 历史（原 clause-ledger.json 台账已于 2026-08-11 删除）。
 
 ---
 

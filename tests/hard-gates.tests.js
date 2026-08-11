@@ -67,6 +67,13 @@ fs.rmSync(TMP, { recursive: true, force: true });
 fs.mkdirSync(TMP, { recursive: true });
 
 const HOME = process.env.USERPROFILE || process.env.HOME;
+// 2026-08-11 验收红单修：本文件一批正控语料此前写死 `Administrator` / `ADMINI~1`
+//（另一台机器的用户目录）——在本机用户目录不同的机器上全部「该拦未拦」
+//（路径不在本机 home 下 ⇒ hook **正确地**不拦，是语料病不是 hook 病）。
+// 非 8.3 的形态从 HOME 现拼（用户名 / 反斜杠形态 / gitbash 形态三段），全文件通用。
+const HOME_USER = HOME.replace(/\\/g, "/").split("/").pop();
+const HOME_BS = HOME.replace(/\//g, "\\");
+const HOME_FS_GITBASH = HOME.replace(/\\/g, "/").replace(/^([A-Za-z]):\//, (_, d) => "/" + d.toLowerCase() + "/");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -427,7 +434,7 @@ console.log("\n──── G2 · shell 写入面（issue #87 扩面）· 双向
     ["%USERPROFILE% cmd 形态", ps(`Copy-Item src.json "%USERPROFILE%\\.claude\\settings.json"`)],
     ["$HOME + 正斜杠", bash(`cp _tmp/new.json "$HOME/.claude/settings.json"`)],
     ["~ 形态", bash("cp _tmp/new.json ~/.claude/settings.json")],
-    ["Git Bash /c/ 盘符形态", bash("cp _tmp/new.json /c/Users/Administrator/.claude/settings.json")],
+    ["Git Bash /c/ 盘符形态", bash("cp _tmp/new.json " + HOME_FS_GITBASH + "/.claude/settings.json")],
     ["已展开的字面绝对路径", ps(`Copy-Item src.json "${HOME}\\.claude\\settings.json" -Force`)],
     ["Move-Item 目标位", ps(`Move-Item _tmp/x.json ${LIVE_V} -Force`)],
     ["mv 目标位", bash("mv _tmp/x.json ~/.claude/settings.json")],
@@ -839,18 +846,34 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     ["⑨ 构造·**NotebookEdit 分支**（notebook_path 走的是同一条解析）",
       { tool_name: "NotebookEdit", tool_input: { notebook_path: `${HOME}\\.claude\\..\\.claude\\settings.json` } }],
     ["⑨ 构造·Edit 分支 `//` 重复斜杠", edit(`${HOME_FS}/.claude//settings.json`)],
-    ["⑨ 真语料形态·Edit 分支 8.3 短名（本机 1196 条同型路径）", edit("C:\\Users\\ADMINI~1\\.claude\\settings.json")],
-    ["⑨ 真语料形态·shell 分支 8.3 短名", ps(`Copy-Item x "C:\\Users\\ADMINI~1\\.claude\\settings.json" -Force`)],
+
     ["⑨ 真语料形态·Win32 扩展长度前缀 `\\\\?\\C:\\…`（纯字符串前缀，剥它零 I/O）",
-      edit("\\\\?\\C:\\Users\\Administrator\\.claude\\settings.json")],
+      edit("\\\\?\\" + HOME_BS + "\\.claude\\settings.json")],
     ["⑨ 构造·盘根回绕 `C:/../`（win32 在盘根处夹住 `..`）",
-      bash("cp x.json C:/../Users/Administrator/.claude/settings.json")],
+      bash("cp x.json C:/../Users/" + HOME_USER + "/.claude/settings.json")],
     ["⑨ 构造·三格叠加：具名源 + `-Destination` 目录 + `..` 回绕",
       ps(`Copy-Item -LiteralPath .\\settings.json -Destination "${V}\\.claude\\..\\.claude" -Force`)],
   ];
   for (const [name, p] of BLOCK_112) {
     const r = gate(p);
     check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+  }
+  // 2026-08-11 验收红单修：8.3 短名两条真语料从 BLOCK_112 抽出——它们此前写死 `ADMINI~1`
+  //（另一台机器的短名）。本机用户目录长名 ≤8 字符时**根本没有短名**（shortNameOf 返回 null），
+  // 此时这两条不适用 ⇒ 打 SKIP 信息行不计数（「没测到≠通过」的例外只此一种：机器能力不适用）。
+  {
+    const SHORT83 = shortNameOf(HOME);   // 此处不可引用下方 1093 行的那个 const（TDZ）
+    if (SHORT83) {
+      for (const [name, p] of [
+        ["⑨ 真语料形态·Edit 分支 8.3 短名", edit(`${SHORT83}\\.claude\\settings.json`)],
+        ["⑨ 真语料形态·shell 分支 8.3 短名", ps(`Copy-Item x "${SHORT83}\\.claude\\settings.json" -Force`)],
+      ]) {
+        const r = gate(p);
+        check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
+      }
+    } else {
+      console.log("  SKIP  ⑨ 真语料形态·Edit/shell 分支 8.3 短名两条  ->  本机用户目录无 8.3 短名（长名 ≤8 字符），不适用");
+    }
   }
 
   // ── 负控：修完之后**不许**多拦这些（护栏两侧代价不对称，误报 = 会话当场卡死）────
@@ -915,7 +938,7 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   const P6 = ps(`Copy-Item -Path _tmp/x.json ${LIVE_V} -Force`);
   const P7 = ps(`Copy-Item .\\settings.json -Destination ${LIVEDIR_V} -Force`);
   const P9 = edit(`${HOME}\\.claude\\..\\.claude\\settings.json`);
-  const P9_83 = edit("C:\\Users\\ADMINI~1\\.claude\\settings.json");
+  const P9_83 = edit("C:\\Users\\ADMINI~1\\.claude\\settings.json");   // 写死语料仅当本机有短名时才喂（见下）
 
   // 甲⑥ 三形态 —— 三条路各自独立地能让这一格重新漏掉
   mutate3("⑥①移除·门槛写死回 2（等于把本格的修复整个删掉）",
@@ -967,13 +990,18 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\), rp\);\r?\n\}/,
     "  g2Canon(g2ResolvePre(raw, cwd, vars), rp);\n  return g2ResolvePre(raw, cwd, vars);\n}", P9, 2, 0);
   // 8.3 那一层单独换靶：证明拦下短名的是 realpath 那一步，不是别的分支顺手拦的
-  mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
-    RE_LONGPATH_CALL, "if (false) s = g2LongPath(s, rp);", P9_83, 2, 0);
-  // #199 新增：把**前筛**单独换靶（同一行的另一半）。它与上一条不是同一件事 ——
-  // 上一条打掉的是「解不解」，这一条打掉的是「要不要试着解」。两半各自都能让 8.3 形态失明，
-  // 而前筛这一半是本批**新加**的，没有它这一格就是零样本（`#官抗-负控独立归因`）。
-  mutate3("⑨·#199 前筛单独换靶·`g2TailCouldBeLive` 恒假 ⇒ 一次 realpath 都不试 ⇒ 短名形态重新漏掉",
-    RE_LONGPATH_CALL, "if (/~\\d/.test(s) && false) s = g2LongPath(s, rp);", P9_83, 2, 0);
+  // 2026-08-11：P9_83 是本机 home 的短名形态语料——本机用户目录无短名时这两条不适用 ⇒ SKIP。
+  if (shortNameOf(HOME)) {
+    mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
+      RE_LONGPATH_CALL, "if (false) s = g2LongPath(s, rp);", P9_83, 2, 0);
+    // #199 新增：把**前筛**单独换靶（同一行的另一半）。它与上一条不是同一件事 ——
+    // 上一条打掉的是「解不解」，这一条打掉的是「要不要试着解」。两半各自都能让 8.3 形态失明，
+    // 而前筛这一半是本批**新加**的，没有它这一格就是零样本（`#官抗-负控独立归因`）。
+    mutate3("⑨·#199 前筛单独换靶·`g2TailCouldBeLive` 恒假 ⇒ 一次 realpath 都不试 ⇒ 短名形态重新漏掉",
+      RE_LONGPATH_CALL, "if (/~\\d/.test(s) && false) s = g2LongPath(s, rp);", P9_83, 2, 0);
+  } else {
+    console.log("  SKIP  ⑨·8.3/前筛单独换靶两条 mutation  ->  本机用户目录无 8.3 短名，不适用");
+  }
   check("上一条改坏后，`..` 回绕仍然被拦（证明只打掉了 8.3 那一层，两层是独立的）", (() => {
     const mp = path.join(TMP, "mutant-112-9-83only.js");
     // 与上一条共用同一个 RegExp 对象 —— 锚一改两处同时改（`#守-锚点行尾` ③）
@@ -1084,8 +1112,13 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   // 本机 HOME 的 8.3 短名。判据与「为什么算而不写死」见模块级 `shortNameOf`
   // （2026-08-08 由本处提到模块级，#134 的 fixture 要复用同一个 realpath 往返判据）。
   const SHORT_HOME = shortNameOf(HOME);
-  check("前置：本卷启用了 8.3 短名（关掉的话下面几组只是没测到，不是通过）",
-    SHORT_HOME !== null, `SHORT_HOME=${SHORT_HOME}`);
+  if (SHORT_HOME) {
+    check("前置：本卷启用了 8.3 短名（关掉的话下面几组只是没测到，不是通过）",
+      true, `SHORT_HOME=${SHORT_HOME}`);
+  } else {
+    // 2026-08-11：本机用户目录长名 ≤8 字符时结构性没有短名——不是「没测到」是「不适用」。
+    console.log("  SKIP  前置：本机用户目录无 8.3 短名（长名 ≤8 字符），下面几组不适用  ->  SHORT_HOME=null");
+  }
 
   // ㈠ #112 真的修好了、但那一批没有断言的形态 ────────────────────────────────
   // 头注 g2LongPath ㈢ 写着「文件名本身是短名（`SETTIN~1.JSON`）以外的形态都接得住」，
@@ -1106,9 +1139,9 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   }
   for (const [name, p] of [
     ["⑨ 补·`//./C:/…` 设备命名空间（与 `//?/` 同一格，`[?.]` 两个字符都收）",
-      edit("//./C:/Users/Administrator/.claude/settings.json")],
+      edit("//./C:/Users/" + HOME_USER + "/.claude/settings.json")],
     ["⑨ 补·Git Bash `/c//Users/…`（盘符转换后残留的重复斜杠，win32.resolve 折掉）",
-      edit("/c//Users/Administrator/.claude/settings.json")],
+      edit("/c//Users/" + HOME_USER + "/.claude/settings.json")],
     // ⑥ 把 `-lp` 收进源位参数，理由写的是「PowerShell 的 -LiteralPath 缩写」。
     // **那个理由是错的**（见下面 ㈢ 的登记条），但这一格本身**歪打正着有真实召回**：
     // GNU coreutils 的 `cp -l -p` 可以捆绑成 `cp -lp`，而 `-lp` 早就在 G2_VALUE_PARAM 里、
@@ -1992,7 +2025,8 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       }
     }
   } else {
-    check("前置：本卷启用了 8.3 短名（关掉的话 #133 这一组只是**没测到**，不是通过）", false, "SHORT_HOME=null");
+    // 2026-08-11：同上，机器能力不适用 ⇒ SKIP 不计红。
+    console.log("  SKIP  前置：本机用户目录无 8.3 短名，#133 这一组不适用  ->  SHORT_HOME=null");
   }
 
   // ── #134：junction fixture ────────────────────────────────────────────────
@@ -2132,15 +2166,20 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         if (mk.status === 0 && lst && lst.isSymbolicLink() && /[\\/]actual\.json$/i.test(symReal) && symShort) {
           const P1 = ps(`Copy-Item src.json "${symShort}\\.claude\\settings.json" -Force`);   // 相① 专属
           const P1long = ps(`Copy-Item src.json "${symHome}\\.claude\\settings.json" -Force`);
-          const P2 = ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`); // 相② 专属（真 HOME）
+          // 2026-08-11：真 HOME 无短名时 P2 语料不存在 ⇒ 相② 那两条断言不适用（SKIP 见下）。
+          const P2 = SHORT_HOME ? ps(`Copy-Item src.json "${SHORT_HOME}\\.claude\\settings.json" -Force`) : null; // 相② 专属（真 HOME）
           check("🟢#199 正控·⑰ **`settings.json` 自己是符号链接 + 短名 HOME（候选也写短名）** → exit 2（此前 exit 0）",
             gate(P1, { env: { USERPROFILE: symShort } }).code === 2,
             `code=${gate(P1, { env: { USERPROFILE: symShort } }).code}`);
           check("#199 正控·同一 fixture，候选与 HOME **都写长名** → exit 2（改前长名侧本来就拦得住，别读成新增）",
             gate(P1long, { env: { USERPROFILE: symHome } }).code === 2,
             `code=${gate(P1long, { env: { USERPROFILE: symHome } }).code}`);
-          check("#199 正控·相② 专属样本（候选写 8.3 短名 + 真实长名 HOME）→ exit 2",
-            gate(P2).code === 2, `code=${gate(P2).code}`);
+          if (P2) {
+            check("#199 正控·相② 专属样本（候选写 8.3 短名 + 真实长名 HOME）→ exit 2",
+              gate(P2).code === 2, `code=${gate(P2).code}`);
+          } else {
+            console.log("  SKIP  #199 正控·相② 专属样本  ->  本机用户目录无 8.3 短名，不适用");
+          }
 
           // 🔴🔴 **⑲ 新登记（自失效）：⑰ 的第 5 种长相 —— 形态交叉的那一格仍然漏。**
           //   `settings.json` 是符号链接 **且** 候选写 8.3 短名 **而 HOME 是长名** ⇒ 两相一起失明：
@@ -2175,8 +2214,12 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
             check("🔴#199 判别力·**相① 的结果不被采纳** ⇒ ⑰ 那一格由 2 **翻 0**（∴ 那一格只有相① 拦得住）",
               gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code === 0,
               `mut=${gate(P1, { env: { USERPROFILE: symShort }, script: mp }).code}`);
-            check("#199 归因·同一变异体下**相② 专属样本仍 2**（∴ 打掉的确实只是相① 那一半）",
-              gate(P2, { script: mp }).code === 2, `code=${gate(P2, { script: mp }).code}`);
+            if (P2) {
+              check("#199 归因·同一变异体下**相② 专属样本仍 2**（∴ 打掉的确实只是相① 那一半）",
+                gate(P2, { script: mp }).code === 2, `code=${gate(P2, { script: mp }).code}`);
+            } else {
+              console.log("  SKIP  #199 归因·相② 专属样本仍 2  ->  本机用户目录无 8.3 短名，不适用");
+            }
           }
 
           // mutation B：**打掉相②**（批量结果恒空 ⇒ 相② 与相① 逐字节同结果）

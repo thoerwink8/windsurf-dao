@@ -519,16 +519,12 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环
   //   livePath/snapshotPath 时是否真落到生产默认值）——读的是真实 `~/.claude/settings.json`
   //   （其余官 / cc-switch GUI 随时可能改动它），与 alwayson-budget/dead-gates 同一类判据，
   //   只读不写，故本行随之扩到五套。
-  const EXPECT_DECLARED = [
-    "alwayson-budget.tests.js",     // §⑩①b：hook 墙钟预算读自用户真实 settings.json 的注册值
-    "dead-gates.tests.js",          // ⑪ / ⑪.5 / ⑫①：真 live settings + 真 cc-switch DB
-    "mcp-health.tests.js",          // ⑥：真跑一次 claude mcp list，依赖本机 CLI + 当下 server 健康态
-    "memory-truth-source.tests.js", // 末节：同 alwayson-budget，且 memory 扫描排在全表最后一项
-    "settings-drift.tests.js",      // issue #219 B3/B4：省略 livePath/snapshotPath 时读真实 ~/.claude/settings.json
-  ];
-  check("真实 tests/ 里声明了环境敏感层的文件恰是那五套（多了要问为什么，少了说明标记掉了）",
-    JSON.stringify(declared) === JSON.stringify(EXPECT_DECLARED),
-    "实况=" + JSON.stringify(declared) + " 期望=" + JSON.stringify(EXPECT_DECLARED));
+  // 2026-08-11 tests 终局：五套里四套已随归宿表删除（alwayson-budget/mcp-health/
+  // memory-truth-source/settings-drift），仅剩 dead-gates。手维护名册对账随之退役——
+  // 「名册恰恰等于这几套」不再是判据；交叉核对（独立实现 vs 生产 --list）仍在后面守着。
+  check("环境敏感层只剩 dead-gates 一套（归宿表终局后的事实；多了要问为什么）",
+    JSON.stringify(declared) === JSON.stringify(["dead-gates.tests.js"]),
+    "实况=" + JSON.stringify(declared));
   check("本文件自己不在声明面里（否则说明标记字面量泄进了头部窗口）",
     !declared.includes("run-tests-tier.tests.js"), JSON.stringify(declared));
   // dead-gates 默认层真跑一次：它是本机制唯一的真实消费方
@@ -542,8 +538,11 @@ console.log("\n──── ⑧ 真仓自跑：本仓当下哪几套声明了环
   const dgLines = (dgOut.match(/^[ \t]*DEFER[ \t]/gm) || []).length;
   check("dead-gates 真语料：DEFER 明细行数 == 汇总行 DEFER 字段（笨计数器对拍）",
     dgm && dgLines === Number(dgm[3]), "明细=" + dgLines + " 字段=" + (dgm ? dgm[3] : "无"));
+  // 2026-08-11：⑫①「真仓当下是绿态」那条 defer 随断言本体一起删了（外科手术：它断言
+  // 本机健康度而非改动正确性，信号已由离线体检接管）——⑫ 组剩下的只有「墙钟预算跳过」
+  // 那一条**条件性** defer（预算没跳过时不出现），故此处只钉 ⑪ 组的指名。
   check("dead-gates 的每组 defer 都指名（只报个数字等于没报）",
-    /DEFER\s+⑪/.test(dgOut) && /DEFER\s+⑫/.test(dgOut), dgOut.slice(0, 1200));
+    /DEFER\s+⑪/.test(dgOut), dgOut.slice(0, 1200));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -964,17 +963,9 @@ console.log("\n──── ⑫ 真仓自跑：PS 侧的声明集合退役触发
   check("⑫ 独立判据（直接问 PowerShell 的 token 流）本身跑成了 —— 它没跑成时下面两条一律不可信",
     oracle.code === 0, "exit=" + oracle.code + " out=" + oracle.out.slice(0, 300));
   const declaredPs = oracle.list;
-  // 🔴 手维护枚举，职责就是过期时变红（同 ⑧ 那条注释的判据，此处不重复整段说理）：
-  //   改这一行之前先答一句——新加/摘掉的那套，它是不是真的该在默认层不跑？不是的话，
-  //   正路是修那一套的沙盒/断言，不是往这个集合里加减名字。
-  const EXPECT_DECLARED_PS = [
-    "clause-structure.tests.ps1",   // 实测 67-81s，默认层（人人在敲的快速回归）的耗时预算不容
-    "dao-install.tests.ps1",        // node/claude 缺失时会真的 winget install/npm install -g，动这台机器
-    "dao-secrets.tests.ps1",        // 对真 %USERPROFILE%/%APPDATA% 做机器级不变量断言，随机化治不了
-  ];
-  check("真实 tests/ 里声明了环境敏感层的 .ps1 恰是那三套（多了要问为什么，少了说明标记掉了）",
-    JSON.stringify(declaredPs) === JSON.stringify(EXPECT_DECLARED_PS),
-    "实况=" + JSON.stringify(declaredPs) + " 期望=" + JSON.stringify(EXPECT_DECLARED_PS));
+  // 2026-08-11 tests 终局：三套标 env 的 PS 套已随归宿表全删（clause-structure/dao-install/dao-secrets）——
+  // 「手维护名册对账」这条断言随之退役（空名册对空名册是恒真闸，正是本仓在治的病）。
+  // 交叉核对保留：独立实现与生产 --list 在真仓上结论必须一致（不论名单是几套）。
   // 与真实 run-tests.mjs --list 的输出交叉核对：独立判据与生产链路在真实仓上结论必须一致——
   // 不是为了替代 ⑪/⑪′ 的黑盒验证（**同底座的两份实现仍然共享「问错问题」这一类盲点**，
   // 而 PR #213 那次翻车正是这一类），而是给「这份手写枚举没有悄悄跟生产链路分叉」提供
