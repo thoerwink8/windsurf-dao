@@ -59,6 +59,12 @@
 // 本脚本改不动自己的输入。（本脚本**自己**会出现在产物里，那是对的：
 // `tests/guarded-files.tests.js` 对它做 mutation，它确实是被守护文件之一。）
 //
+// ── 产物不记「扫了几份测试」的计数（2026-08-11 · issue #300 方向 3）────────────
+// `_generated.totals` 曾把 tests/mutation_tests/files 三个数写进产物 ⇒ 加一套**不含** mutation
+// 的测试也让产物漂移（`--check` 红），而清单的实质内容（哪些源文件被守）根本没变 —— 收费点与
+// 改动量无关，正是 issue #300 通篇在治的形态。现三个计数只在**末行**（每次跑都打，信息不丢），
+// 产物只随实质内容变。判据：漂移 ⇔ 该有人看一眼；「多了套无关测试」不该有人看一眼。
+//
 // ── 末行契约（机器读这一行，别去正则匹配上面的中文）──────────────────────────
 //   GUARDED_FILES_SUMMARY exit=<n> tests=<n> mutation_tests=<n> files=<n> drift=<none|missing|content> wrote=<0|1>
 //   **每条路径都打印**（含失败路径）：只在成功时打摘要，等于让「没查成」在机器通道上
@@ -202,7 +208,7 @@ export function serializeGuarded(scan) {
       生成器: "ccswitch/scripts/gen-guarded-files.mjs",
       回归网: "tests/guarded-files.tests.js",
       口径是近似的: "两个方向都构造得出反例（`.replace(` 粗判偏松、非字符串替换型 mutation 判不出偏紧、helper 传参的路径追不到）——细则见生成器头注。",
-      totals: { tests: scan.tests, mutation_tests: scan.mutationTests, files: scan.files.length },
+      为什么不记条数: "tests/mutation_tests/files 三个计数刻意不进产物（2026-08-11 · issue #300 方向 3）——它们是「扫了几份测试」的元信息，与清单的实质内容（哪些源文件被守）无关；记进来会让「加一套不含 mutation 的测试」也造成清单漂移（guarded-files --check 变红），而实质什么都没变。要看计数 ⇒ 每次运行的末行 GUARDED_FILES_SUMMARY 都带。",
     },
     files: scan.files,
   };
