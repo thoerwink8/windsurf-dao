@@ -1902,15 +1902,24 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         //   —— 那条（候选写 8.3 短名 + 长名 HOME）在 #214 之后由**相③** 兜住 ⇒ 批量卡死它照拦
         //   ⇒ 拿它测「批量坏掉会怎样」会得到一条**恒真断言**。承重样本换成候选侧链那一格
         //   （相③ 展不开），它才是「批量坏掉真的会丢一格覆盖面」的活证据。
-        const t0 = Date.now();
-        const r = clOk ? gate(payLink, { env: clEnv, script: mp }) : { code: -1 };
-        const ms = Date.now() - t0;
-        check("🔴#199/#214 防复发·候选侧批量子进程卡住 ⇒ 相② 独有那一格**fail-open（exit 0）**" +
-              "（禁 fail-closed —— 单条候选解不开换来的误伤在这道闸上代价更大；" +
-              "**只有「候选数 > 阈值 + 有候选压根没轮到」那一格才 fail-close**，见 #214 那组）",
-          r.code === 0, `code=${r.code}`);
-        check(`🔴#199 界·批量子进程注入 20 s 阻塞，hook 进程寿命仍 < 6 s（实测 ${ms} ms）`,
-          ms < 6000, `${ms} ms`);
+        // 🔴 **#310（2026-08-11）：clOk=false 时这一格原先折成 `{code:-1}` 的硬红** —— 而
+        //   clOk=false 的成因是本卷不生成 8.3 短名（托管 runner 的工作卷即如此），那是
+        //   机器能力不适用，不是 hook 行为错（#308 同一判据）⇒ 与 #214 语料组同一处置：
+        //   该条与其界哨兵整块 SKIP 并带原因，不许硬断言夹具可造。
+        if (clOk) {
+          const t0 = Date.now();
+          const r = gate(payLink, { env: clEnv, script: mp });
+          const ms = Date.now() - t0;
+          check("🔴#199/#214 防复发·候选侧批量子进程卡住 ⇒ 相② 独有那一格**fail-open（exit 0）**" +
+                "（禁 fail-closed —— 单条候选解不开换来的误伤在这道闸上代价更大；" +
+                "**只有「候选数 > 阈值 + 有候选压根没轮到」那一格才 fail-close**，见 #214 那组）",
+            r.code === 0, `code=${r.code}`);
+          check(`🔴#199 界·批量子进程注入 20 s 阻塞，hook 进程寿命仍 < 6 s（实测 ${ms} ms）`,
+            ms < 6000, `${ms} ms`);
+        } else {
+          console.log("  SKIP  #199/#214 防复发·候选侧批量子进程卡住 fail-open 与其界哨兵  ->  " +
+            "相② 专属 fixture 造不出（本卷不生成 8.3 短名，NtfsDisable8dot3NameCreation），不适用");
+        }
         check("#199 对照·同一变异体下**相① 拦得住的那些**判决不变（短名 HOME + 变量形态仍 exit 2）" +
               "⇒ 批量卡死只吃掉相② 独有的那一格，不是整闸失明",
           gate(payVar, { env: asShort, script: mp }).code === 2);
@@ -2050,6 +2059,8 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
   // ── #134：junction fixture ────────────────────────────────────────────────
   // fixture 必须**自失效**：造不出来时前置断言当场红。#134 单子上点名要防的正是
   // 「一条在别人机器上悄悄退化成『测了个普通目录』的断言，比没有断言更糟」。
+  // （**例外**：8.3 短名可用性是本卷事实不是 fixture 能造的 —— 算不出时整组 SKIP 不红，
+  //   见下方 #310 注与 #214 组的同款处置；junction 造不出/mklink 失败仍是硬红。）
   {
     const mkFakeHome = (leaf, cfgKind) => {
       const home = path.join(SBX, leaf);
@@ -2081,10 +2092,14 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         lst.isSymbolicLink(), `isSymbolicLink=${lst.isSymbolicLink()}`);
       check("#134 前置·链目标的末段**不叫** `.claude`（`…/actualcfg`）—— 这一格正是快筛的盲点",
         /[\\/]actualcfg$/i.test(rp), `realpath=${rp}`);
-      check("#134 前置·假 HOME 算得出真 8.3 短名（realpath 往返，不是猜 8.3 算法）",
-        !!J.short, `short=${J.short}`);
+      // 🔴 **#310（2026-08-11）：8.3 短名算得出不再是前置硬断言** —— 那是本卷事实，
+      //   不是 fixture 能造的（#308 同一判据，与 #214 语料组同一处置）：托管 runner 的
+      //   工作卷不生成 8.3 ⇒ `short=null` 时该前置与其依赖块整块 SKIP（带原因），不红。
+      if (!J.short) console.log("  SKIP  #134 整组（junction 2×2、负控与 #199 两相那一片）  ->  " +
+        "本卷不生成 8.3 短名（NtfsDisable8dot3NameCreation），假 HOME short=null，不适用");
     }
-    check("#134 前置·对照用的「真实目录 .claude」假 HOME 也就位", !!(P && P.short), P ? `short=${P.short}` : "缺");
+    if (P && !P.short) console.log("  SKIP  #134 整组（junction 2×2、负控与 #199 两相那一片）  ->  " +
+      "本卷不生成 8.3 短名（NtfsDisable8dot3NameCreation），对照假 HOME short=null，不适用");
 
     if (jOk && P && P.short) {
       // payload 与 #134 单子里那条实测 payload 同形（`Copy-Item -LiteralPath … -Destination <home>\.claude`）
@@ -2681,8 +2696,10 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
       fs.mkdirSync(path.join(ODD_HOME, ".claude"), { recursive: true });
       fs.writeFileSync(path.join(ODD_HOME, ".claude", "settings.json"), "{}", "utf8");
       const ODD_SHORT = shortNameOf(ODD_HOME);
-      check("#235 前置·含 8.3 非法字符的目录名算得出真短名（不然下面测的不是这一格）",
-        !!ODD_SHORT, `short=${ODD_SHORT}`);
+      // 🔴 **#310（2026-08-11）：与 #214 语料组同一处置** —— 8.3 短名是本卷事实不是
+      //   fixture 能造的（#308）：算不出 ⇒ 该前置与其依赖块整块 SKIP（带原因），不红。
+      if (!ODD_SHORT) console.log("  SKIP  #235 整组（8.3 非法字符替换三条）  ->  " +
+        "本卷不生成 8.3 短名（NtfsDisable8dot3NameCreation），short=null，不适用");
       if (ODD_SHORT) {
         const m1ms = mkMut235("mutant-235-oddchar-1ms.js",
           [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
