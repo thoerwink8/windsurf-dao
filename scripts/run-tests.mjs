@@ -206,6 +206,18 @@
 //   ⚠ **阈值 `BASELINE_STALE_SLACK` 是 AI 自定的初值、待用户拍板**（`dao-legislation.md`：
 //     定及格线属判断档）。它只影响㈡那条观察线，不进退出码。
 //
+// 🔴 **JS 套不报计数 = 自检失败（exit 4），不再是「带对勾的未报计数」（2026-08-11 · issue #300 方向 4）**：
+//   此前一套 JS 测试不打 `=== 汇总: PASS=n FAIL=m ===` 汇总行时，后果是基线里记成字符串
+//   「未报计数」——**这一套永久失去条数下界**，而汇总表那行照旧带对勾，看起来是通过。
+//   「没跑的闸」与「跑了没意见的闸」长得一样，正是本文件通篇在治的病。JS 侧的契约本来就
+//   写着「格式统一为 `=== 汇总: PASS=n FAIL=m ===`」，全量现存 JS 套清一色遵守（实测
+//   2026-08-11 基线档：JS 格零个「未报计数」）⇒ 升格为 tierProblems 判据不会误伤任何一套。
+//   **PS 侧刻意不同步升格**：`PASS= FAIL=` 协议在 PS 侧从未是硬契约（头注 PS 契约 ⑦ 明说
+//   「多数套不打这个汇总行」，现存几套「未报计数」全在 PS 侧），一刀判红会误伤；它们留在
+//   `baseBlind` 观察清单里照直列出。给那几套 PS 补汇总行是另一笔账，不在本件。
+//   判据位置：自检半边 ② 的循环里，`r.code !== 0` 照样豁免（红的套可能根本没跑到汇总行，
+//   那是红的范畴，不是「静默」）。
+//
 // ── 跑法 ────────────────────────────────────────────────────────────────────
 //   node scripts/run-tests.mjs                默认层（预期 exit 2）：JS 全跑 + 无标记 PS 套跑
 //   node scripts/run-tests.mjs --env          含环境敏感层 + 全部 PS 套（全绿 exit 0）；要求串行环境
@@ -214,6 +226,15 @@
 //                                             用**本次这一跑**的条数重写基线档的那一层
 //                                             （**红的那几套逐套跳过**、其余照写：从红的一跑
 //                                              取条数等于把缺陷焊进基线。首次生成要跑两轮才收敛）
+//   node scripts/run-tests.mjs --write-baseline tests/<名>.tests.js
+//                                             ★ **单套粒度**（2026-08-11 · issue #300 方向 1）：只跑那一套、
+//                                             只更新那一格，**一次调用把 default 与 env 两层都填好**
+//                                             （JS 套跑两遍：默认层一遍 + --env 一遍；PS 套进程拿不到 --env、
+//                                              两层跑法字面相同 ⇒ 跑一遍，无标记套两层填同一个数，
+//                                              标了 env 的套 default 格写「本层不跑」）。
+//                                             与 --env 互斥（单套模式自己跑两层，同给会让「写了哪层」
+//                                             重新变得看不出来）；与 --list 互斥（同上）。
+//                                             全量两遍 12 分钟 ⇒ 单套秒级，名册对账当场转绿。
 //   node scripts/run-tests.mjs --tests-dir P  换一个测试目录（**给本入口的自测用**，
 //                                             见 tests/run-tests-tier.tests.js）
 //   环境变量 DAO_ASSERTION_BASELINE           把基线档指到别处（**给回归网注入合成基线用的**，
@@ -271,6 +292,7 @@ const rawArgs = process.argv.slice(2);
 let testsDirArg = null;
 let testsDirGivenEmpty = false;
 const flags = [];
+const positional = [];   // 位置参数：单套写基线的那一套（issue #300 方向 1）
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
   if (a === "--tests-dir") {
@@ -283,20 +305,39 @@ for (let i = 0; i < rawArgs.length; i++) {
     if (!v) { testsDirGivenEmpty = true; } else { testsDirArg = v; }
     continue;
   }
-  flags.push(a);
+  if (a.startsWith("--")) { flags.push(a); continue; }
+  positional.push(a);
 }
 const unknownFlags = flags.filter((f) => !KNOWN_FLAGS.has(f));
 // `--list --write-baseline` 是**互斥意图**：--list 不跑任何测试，也就没有条数可写。
 // 静默忽略其中一个，就会出现「我以为重生成了基线，其实只列了个清单」——同上一段的判据。
 const listAndWrite = flags.includes("--list") && flags.includes("--write-baseline");
-if (unknownFlags.length || testsDirGivenEmpty || listAndWrite) {
+// 位置参数的合法形态只有一种：`--write-baseline tests/<名>.tests.{js,ps1}`（单套粒度）。
+// 其余一律 exit 3 —— 理由同上：打错的意图不兑现，没有「大致对」的余地。
+// `--env` 与单套同给也是互斥意图：单套模式**自己跑两层**（default 一遍 + env 一遍），
+// 再同给一个 --env，「这次到底写了哪几层」就重新变得看不出来。
+const suiteArg = positional.length ? positional[0] : null;
+const suiteBadForm = positional.length > 1
+  || (suiteArg && !/(^|\/)tests\/[^/]+\.tests\.(js|ps1)$/.test(suiteArg.split("\\").join("/")));
+const suiteWithoutWrite = suiteArg && !flags.includes("--write-baseline");
+const suiteWithEnv = suiteArg && (flags.includes("--env") || flags.includes("--all"));
+const suiteWithList = suiteArg && flags.includes("--list");
+if (unknownFlags.length || testsDirGivenEmpty || listAndWrite || suiteBadForm || suiteWithoutWrite || suiteWithEnv || suiteWithList) {
   const why = unknownFlags.length
     ? "不认识的参数：" + unknownFlags.join(", ")
     : (listAndWrite
       ? "--list 与 --write-baseline 不能同时给（--list 一套都不跑，写不出条数）"
-      : "--tests-dir 后面没给路径");
+      : (testsDirGivenEmpty
+        ? "--tests-dir 后面没给路径"
+        : (suiteBadForm
+          ? "位置参数只接受一个，且必须是 tests/<名>.tests.js 或 tests/<名>.tests.ps1：" + positional.join(", ")
+          : (suiteWithoutWrite
+            ? "位置参数（" + suiteArg + "）只与 --write-baseline 同给才有意义（单套写基线）；光给路径不跑任何测试"
+            : (suiteWithEnv
+              ? "--env 与单套写基线互斥 —— 单套模式自己跑两层（default 一遍 + env 一遍），同给会让「写了哪层」看不出来"
+              : "--list 与单套写基线互斥（--list 一套都不跑）")))));
   process.stderr.write("[run-tests] 用法错误 —— " + why + "\n");
-  process.stderr.write("  合法参数：--list / --env（别名 --all）/ --write-baseline / --tests-dir <路径>\n");
+  process.stderr.write("  合法参数：--list / --env（别名 --all）/ --write-baseline [tests/<名>.tests.{js,ps1}] / --tests-dir <路径>\n");
   process.stderr.write("  **一套测试都没跑**（打错的参数不静默忽略，否则你以为跑了 --env，实际跑的是默认层）\n");
   // 末行的字段集与正常收尾那条**必须一致**（两处独立字面量，改一处忘一处就会让只读末行的
   // 消费方在用法错误时解析不到新字段）。issue #179 追加 psfiles/psred/psskip 时同批加在这里，
@@ -462,6 +503,144 @@ if (LIST_ONLY) {
   process.exit(EXIT_OK);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ── 单套写基线（2026-08-11 · issue #300 方向 1）────────────────────────────
+// `--write-baseline tests/<名>.tests.{js,ps1}`：只跑那一套、只更新那一格，
+// **一次调用把 default 与 env 两层都填好**（关闭条件的判据就是这一句）。
+// 与全量写的差别：其他套的条目一律原样保留（部分更新），不删盘上已不存在的套
+// （那是全量写才做的名册清理）；红的一**格**不采信（粒度比全量的逐套再细一档：
+// default 遍红了只拒 default 那一格，env 遍照样写真数）。
+// ══════════════════════════════════════════════════════════════════════════
+if (suiteArg) {
+  const suiteFile = path.basename(suiteArg);
+  const suitePath = path.join(TESTS_DIR, suiteFile);
+  if (!fs.existsSync(suitePath)) {
+    process.stderr.write(`[run-tests] 用法错误 —— 盘上不存在这套测试：${suitePath}\n`);
+    process.stdout.write(`RUN_TESTS_SUMMARY exit=${EXIT_BAD_USAGE} tier=none files=0 red=0 pass=0 fail=0 defer=0 deferfiles=0 declared=0 selfcheck=n/a psfiles=0 psred=0 psskip=0 baselow=0 basegate=off suite=${suiteFile}\n`);
+    process.exit(EXIT_BAD_USAGE);
+  }
+  const isPs = suiteFile.endsWith(".tests.ps1");
+  // 逐「格」的结果：default / env 各一笔（null = 这一格拿不到数或本次红）
+  const tiersResult = { default: { total: null, why: null, red: false }, env: { total: null, why: null, red: false } };
+  let suiteRed = false;
+  let suitePass = null, suiteFail = null, suiteDefer = 0;
+  const suiteOuts = [];
+  if (!isPs) {
+    // JS 套：跑两遍。--env 那一遍会真触环境敏感断言 ⇒ 串行环境要求与全量 --env 相同。
+    for (const t of ["default", "env"]) {
+      const t0 = Date.now();
+      const r = spawnSync(process.execPath, [suitePath, ...(t === "env" ? ["--env"] : [])], { encoding: "utf8", cwd: ROOT });
+      const ms = Date.now() - t0;
+      const out = String(r.stdout || "");
+      suiteOuts.push({ tier: t, code: r.status, ms, out, err: String(r.stderr || "") });
+      const m = out.match(/PASS=(\d+)\s+FAIL=(\d+)(?:\s+DEFER=(\d+))?/);
+      const red = r.status !== 0;
+      if (red) { suiteRed = true; tiersResult[t].red = true; tiersResult[t].why = "本次红，条数未采信"; }
+      else if (m) tiersResult[t].total = Number(m[1]) + Number(m[2]);
+      else tiersResult[t].why = "未报计数";
+      if (t === "default") {
+        suitePass = m ? Number(m[1]) : null;
+        suiteFail = m ? Number(m[2]) : null;
+        suiteDefer = m && m[3] != null ? Number(m[3]) : 0;
+      }
+    }
+  } else {
+    // PS 套：进程拿不到 --env（spawn 不传 ⇒ 两层跑法**字面相同**，这是既有事实不是新假设），
+    // 故跑一遍。标了 env 的套：default 格照直写「本层不跑」（与全量写同一形态）。
+    const t0 = Date.now();
+    const r = spawnSync("powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", suitePath],
+      { encoding: "utf8", cwd: ROOT, timeout: PS_TIMEOUT_MS });
+    const ms = Date.now() - t0;
+    const out = String(r.stdout || "");
+    suiteOuts.push({ tier: "pwsh", code: r.status, ms, out, err: String(r.stderr || "") });
+    const m = out.match(/PASS=(\d+)\s+FAIL=(\d+)/);
+    const red = r.status !== 0 || !!r.error || !!r.signal;
+    const declaredPs = declaredEnvPs.has(suiteFile);
+    if (red) { suiteRed = true; tiersResult.env.red = true; tiersResult.env.why = "本次红，条数未采信"; }
+    else if (m) tiersResult.env.total = Number(m[1]) + Number(m[2]);
+    else tiersResult.env.why = "未报计数";
+    if (declaredPs) tiersResult.default.why = "本层不跑";
+    else if (red) { tiersResult.default.red = true; tiersResult.default.why = "本次红，条数未采信"; }
+    else if (m) tiersResult.default.total = tiersResult.env.total;
+    else tiersResult.default.why = "未报计数";
+    suitePass = m ? Number(m[1]) : null;
+    suiteFail = m ? Number(m[2]) : null;
+  }
+  for (const o of suiteOuts) {
+    const tag = o.code === 0 ? "✓" : "✗";
+    process.stdout.write(`  ${tag} exit=${String(o.code).padStart(2)}  [${o.tier}] ${String(o.ms).padStart(5)}ms  tests/${suiteFile}\n`);
+    if (o.code !== 0) {
+      process.stdout.write(`\n──── 失败详情 tests/${suiteFile}（${o.tier} 遍 · exit ${o.code}）────\n`);
+      process.stdout.write(o.out);
+      if (o.err.trim()) process.stdout.write(`[stderr]\n${o.err}\n`);
+    }
+  }
+  // 方向 4 同判据：JS 套不报计数 ⇒ 自检失败（exit 4 通道）。PS 侧不升格（理由见头注）。
+  if (!isPs && suitePass == null && !suiteRed) {
+    tierProblems.push(`tests/${suiteFile} exit 0 但没打出可解析的汇总行（=== 汇总: PASS=n FAIL=m ===）`
+      + ` ⇒ 它在基线里永远只能记「未报计数」= 永久没有条数下界。给它补上汇总行（issue #300 方向 4）。`);
+  }
+  // 写基线：只动这一套的条目，其余原样保留。档不存在 ⇒ 从空档起步（同全量首次生成）。
+  const b = loadBaseline();
+  const baselineJson = b.ok ? b.json : { suites: {} };
+  if (!b.ok) process.stdout.write(`\n  ⓘ 基线档尚不存在或读不出，本次从空档起步（${b.why}）\n`);
+  const suites = baselineJson.suites;
+  const prev = suites[suiteFile] || {};
+  const deltas = [];
+  const heldBack = [];
+  for (const t of ["default", "env"]) {
+    const tr = tiersResult[t];
+    const old = prev[t];
+    let now;
+    if (tr.red) {
+      now = typeof old === "number" ? old : `上次生成时这一套（${t} 层）是红的，条数未采信`;
+      heldBack.push(`${t} 层（${typeof old === "number" ? `保留旧基线 ${old}` : "此层暂无闸"}）`);
+    } else if (tr.total != null) now = tr.total;
+    else now = tr.why || "拿不到数";
+    if (old !== now) deltas.push(`${t}: ${JSON.stringify(old === undefined ? null : old)} → ${JSON.stringify(now)}`);
+    prev[t] = now;
+  }
+  prev.kind = isPs ? "pwsh" : "node";
+  suites[suiteFile] = prev;
+  baselineJson._doc = baselineJson._doc || {
+    "这是什么": "每套测试「本次跑了几条断言」（PASS+FAIL）的下界基线。**派生物** —— 手改无效，下次 --write-baseline 覆盖。",
+    "治的病": "绿灯可能只是有几条根本没跑：mutation 锚点一漂，壳里那一批断言是消失不是变红，日志上只多 1 条 FAIL。",
+    "谁在消费它": "scripts/run-tests.mjs 每跑一次逐套比一次；跌破即判红（exit 1）。",
+    "再生成": "node scripts/run-tests.mjs --write-baseline（默认层那一格） / 加 --env（env 那一格）/ --write-baseline tests/<名>（单套两格一次填好）",
+    "名册对账": "tests/assertion-baseline.tests.js —— 新套没进基线、基线里留着已删的套，都判红",
+    "为什么有字符串值": "那一层拿不到数（未报计数 / 本层不跑）。刻意不写 0：0 会变成一个恒真的闸，留空会让「这套没人守」看不出来。",
+  };
+  const nowIso = new Date().toISOString();
+  baselineJson._generated = Object.assign({}, baselineJson._generated, { default: nowIso, env: nowIso });
+  const ordered = { _doc: baselineJson._doc, _generated: baselineJson._generated, suites: {} };
+  for (const k of Object.keys(suites).sort()) ordered.suites[k] = suites[k];
+  fs.writeFileSync(BASELINE_PATH, JSON.stringify(ordered, null, 2) + "\n", "utf8");
+  process.stdout.write(`\n✓ 已写基线档（单套两格）：${BASELINE_PATH}\n`);
+  process.stdout.write(`  本套：tests/${suiteFile}；与上一版有出入 ${deltas.length} 处\n`);
+  for (const d of deltas) process.stdout.write(`    · ${d}\n`);
+  if (!deltas.length) process.stdout.write(`    · （两格均与上一版一致，档内容未变）\n`);
+  if (heldBack.length) {
+    process.stdout.write(`  ⚠ 有 ${heldBack.length} 格本次是红的，**那一格的条数没被采信**（红的一跑可能半途崩，条数天然偏低）：\n`);
+    for (const h of heldBack) process.stdout.write(`    · ${h}\n`);
+    process.stdout.write(`    ⇒ 先把红修掉再跑一次本命令，这几格才拿得到真数。\n`);
+  }
+  if (!isPs) {
+    process.stdout.write(`  ⓘ 本次跑了 --env 那一遍（单套模式两层都填）—— 若它标了环境敏感层，串行环境要求与全量 --env 相同。\n`);
+  }
+  if (tierProblems.length) {
+    process.stdout.write(`\n✗ 分层自检失败 ${tierProblems.length} 条：\n`);
+    for (const p of tierProblems) process.stdout.write(`    · ${p}\n`);
+  }
+  const exitCode = suiteRed ? EXIT_RED : (tierProblems.length ? EXIT_SELFCHECK : EXIT_OK);
+  process.stdout.write(`RUN_TESTS_SUMMARY exit=${exitCode} tier=single files=1 red=${suiteRed ? 1 : 0}`
+    + ` pass=${suitePass == null ? 0 : suitePass} fail=${suiteFail == null ? 0 : suiteFail}`
+    + ` defer=${suiteDefer} deferfiles=${suiteDefer ? 1 : 0} declared=${!isPs && declaredEnv.has(suiteFile) ? 1 : 0}`
+    + ` selfcheck=${tierProblems.length ? "fail" : "ok"} psfiles=${isPs ? 1 : 0} psred=${isPs && suiteRed ? 1 : 0} psskip=0`
+    + ` baselow=0 basegate=write suite=${suiteFile}\n`);
+  process.exit(exitCode);
+}
+
 const results = [];
 for (const f of jsTests) {
   const t0 = Date.now();
@@ -612,6 +791,15 @@ if (psTests.length) {
 for (const r of results) {
   // 红的文件另有专门通道（上面已打全量输出），不在这里重复判 —— 它可能压根没跑到汇总行。
   if (r.code !== 0) continue;
+  // 🔴 issue #300 方向 4：JS 套 exit 0 却没报计数 ⇒ 自检失败（不再只是「带对勾的未报计数」）。
+  //    独立判断、不进下面那条 if-continue 链：它与「有 DEFER 明细却没 DEFER= 字段」可以同时成立
+  //    （一套什么都没打的套，两种病都有），互斥会吃掉其中一条的归因。
+  //    PS 侧刻意不同步升格（现存「未报计数」全在 PS 侧，判红会误伤）——理由见头注。
+  if (r.pass == null) {
+    tierProblems.push(`tests/${r.file} exit 0 但没打出可解析的汇总行（=== 汇总: PASS=n FAIL=m ===）`
+      + ` ⇒ 它在断言条数基线里永远只能记「未报计数」= **永久没有条数下界**，而汇总表那行照旧带对勾`
+      + `（「没跑的闸」与「过了的闸」长得一样）。给它补上汇总行；契约见 run-tests.mjs 头注。`);
+  }
   const declared = declaredEnv.has(r.file);
   const observed = r.defer == null ? null : r.defer;
   const dumb = r.deferLines;

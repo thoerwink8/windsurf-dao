@@ -20,6 +20,7 @@
 | 2 | cc-switch 通用配置（env/hooks/model/permissions） | 本仓库 `config-sync/common/` | ✅ 是 |
 | 3 | settings 脱敏真实值 | `config-sync/common-secrets.json` | ❌ **手动复制** |
 | 4 | MCP servers / skills / prompts / proxy | cc-switch DB（经 config-sync 快照） | ✅ 是（脱敏） |
+| 5 | pi 编码代理（处方 + 4 模型配置模板） | 本仓库 `ccswitch/stacks/pi.md` | ✅ 处方进 git；**真实 API key 不进 git**，新机从 new-api 面板生成后只填本地 `~/.pi/agent/models.json` 一格 |
 
 **核心原则**：能进 git 的都进 git，换机靠 `git clone` + 一条恢复命令带回；只有 `common-secrets.json`（含 settings 脱敏真实值）需手动拷贝；供应商配置在新机器直接配置。
 
@@ -69,6 +70,7 @@ node config-sync\lib\doctor.mjs
 可选（按需用哪栈装哪个）：
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
 - **Codex / Codex++**——用 dao + Codex（镜像）
+- **pi 编码代理**——`npm install -g @mariozechner/pi-coding-agent`，配置处方见 `ccswitch/stacks/pi.md`（安装/4 模型模板/压缩参数/实测坑/验证命令全在里面）
 - ~~**Windsurf**~~（已退役，无需安装）
 
 > sqlite3 找不到时，运行 `config-sync/setup-sqlite.ps1` 即可从项目内置安装包自动解压并设置 `SQLITE3_PATH`；也可手动安装后设环境变量 `SQLITE3_PATH` 指定。
@@ -130,6 +132,10 @@ node config-sync\lib\sync.mjs --direction=down --yes
 
 # IDE 终端（cmd → Git Bash）
 .\dao.ps1 set-terminal
+
+# pi 编码代理（按需）：不由 dao 部署，照处方手动配——
+# npm 全局装包 + 写 ~/.pi/agent/{models.json,settings.json}（模板与坑见 ccswitch/stacks/pi.md），
+# 真实 API key 从 new-api 面板生成后只填本地 models.json 一格，然后跑处方 §6 的两条验证命令
 
 # 任意命令加 -DryRun 先预览不写入
 ```

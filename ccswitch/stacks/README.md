@@ -16,6 +16,13 @@
 | `backend-go.md` | go mod + net/http(chi) + sqlc | 高并发/CPU 密集/系统级/单二进制分发（任一信号即切） |
 | `ci-github-actions.md` | GitHub Actions CI 矩阵/计费策略 | 项目含 `.github/workflows/*.yml`，尤其涉及 macOS/多平台矩阵 |
 
+工具/环境部署处方（非技术栈，换机与新机部署时按需取）：
+
+| 处方 | 对象 | 触发场景 |
+|------|------|----------|
+| `remote-ops.md` | SSH 等远程执行工艺 | 本地 shell 套远程 shell 的嵌套执行 |
+| `pi.md` | pi 编码代理（new-api 网关 4 模型） | 新机器装 pi / 接入内部网关 / pi 行为异常排查 |
+
 > 未来扩展：`mobile-expo.md` 等，按实际项目需要新增。kit STACK.md 的 `stack:` 声明按处方名挂载。
 
 ## 这些文件如何被强制执行
