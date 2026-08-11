@@ -540,6 +540,28 @@ if ($DryRun) {
             Write-Info "（这正是 issue #114：gh 的一个退出码盖着两个动作，据它判「合并失败」会让清理一步都跑不到）"
         }
         Write-Ok "PR #$PullRequest 已合并（实查 state=MERGED，mergedAt=$($st.MergedAt)，第 $($st.Attempts) 次读到）"
+
+        # ── 5.5 云审水位线（issue #306）：ci-sweep..master ≥50 提交 或 tag ≥14 天 ⇒
+        #     发一针 ci-sweep（发完即走；云上无菌对账，本地链仍是权威门）。
+        #     触发失败仅警告不阻塞；仅本仓（workflow 只存在于 dao 仓）。
+        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'))) {
+            try {
+                git fetch --tags --quiet 2>$null
+                $tagTs = git log -1 --format=%ct refs/tags/ci-sweep 2>$null
+                $n = 0; $ageDays = 999
+                if ($LASTEXITCODE -eq 0 -and $tagTs) {
+                    $n = [int](git rev-list --count ci-sweep..master 2>$null)
+                    $ageDays = [int](([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$tagTs) / 86400)
+                } else {
+                    $n = [int](git rev-list --count master 2>$null)   # 无 tag ⇒ 从没审过
+                }
+                if ($n -ge 50 -or ($n -ge 1 -and $ageDays -ge 14)) {
+                    gh workflow run ci-sweep.yml 2>$null
+                    if ($LASTEXITCODE -eq 0) { Write-Info "☁ 云审水位线到（ci-sweep..master=${n} 提交 / tag ${ageDays} 天）→ ci-sweep 已触发（发完即走）" }
+                    else { Write-Host "  ⚠ 云审触发失败（不阻塞合并链；本地链是权威门）" }
+                }
+            } catch { Write-Host "  ⚠ 云审水位线检查异常（不阻塞）：$($_.Exception.Message)" }
+        }
     } else {
         Fail "PR #$PullRequest 未合并：实查 state=$($st.State)（gh pr merge exit $($mg.Code)）—— 不动分支" 2
     }
