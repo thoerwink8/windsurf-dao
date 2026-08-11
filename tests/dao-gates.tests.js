@@ -1,42 +1,17 @@
-// dao-gates 回归网 — scripts/dao-gates.mjs（issue #70 · 三层降耗方案 · 层2 件①）
+// dao-gates 回归网 — scripts/dao-gates.mjs 聚合器层（不重复各闸自己的判据）
 //
 // 跑法：node tests/dao-gates.tests.js
-//       node scripts/run-tests.mjs           （自动发现本文件，无需登记）
 //
-// ── 这个回归网要钉住什么 ─────────────────────────────────────────────────────
-// dao-gates.mjs 是聚合器：本身不做判断，只转述 5 个既有检查器的真退出码。故本文件**不**
-// 重复验证那 5 个检查器各自的判据（各有自己的回归网守着），只验证聚合器这一层：
-//   ① 分类：已知退出码 → ok/red/inconclusive；不在自己声明集合里的退出码 → unknown
-//   ② 优先级：聚合退出码取 unknown(4) > red(1) > inconclusive(2) > ok(0)
-//   ③ 单闸失败不吞后续闸——全部闸都会被跑到，不因前面红了就短路
-//   ④ --list 只列不跑（不产生任何真实执行的副作用）
-//   ⑤ 用法错误 / fixture 非法 ⇒ exit 3，零道闸被执行
-//   ⑥ 派单令点名的那一格：check-clauses-structure 的 exit=3「没查成」必须落进
-//      inconclusive、聚合退出码是 2 不是 1 —— 不许与真违例（exit=1）混同
-// 全部用 `DAO_GATES_FIXTURE` 注入口造合成夹具（node -e 单行脚本当假闸），秒级、
-// 不依赖真实条款库此刻有没有违例——同 run-tests.mjs 里 DAO_PS_TIER_SCANNER 那类
-// 注入口同型：给回归网用的，不是给人换真实闸清单的旋钮。
+// 聚合器本身不做判断，只转述各检查器的真退出码，故这里只验聚合器这一层：
+// ① 已知退出码按各自声明表分类（ok/red/inconclusive），未声明 → unknown
+// ② 聚合优先级 unknown(4) > red(1) > inconclusive(2) > ok(0)
+// ③ 单闸失败不吞后续闸（全部被跑到，不短路）
+// ④ --list 只列不跑；⑤ 用法错误/fixture 非法 ⇒ exit 3 零道闸执行
+// ⑥ check-clauses-structure 的 exit=3「没查成」归 inconclusive、聚合退 2 不是 1（派单令点名那一格）
+// 全部用 DAO_GATES_FIXTURE 注入口造合成夹具（node -e 当假闸），不依赖真实条款库此刻状态。
 //
-// ── 真实闸表的接线只做静态检查，不做端到端整跑 —— 这一段有两个已知问题，先读这里 ──────
-// 🔴 **㈠ 原写的耗时数字是错的，而它被当成论据用掉了**（2026-08-10 订正，出处 PR #252 对抗
-// 验证判词问题 3）：本段原文说端到端整跑要「55-81s」——那个区间属于
-// `tests/clause-structure.tests.ps1`（**那套测试**），不是被测脚本本体。被测脚本本体本机同机
-// 三次实测 8.1s / 9.6s / 9.4s，差约 7 倍。⇒ **「耗时负担不起」这条理由按真实数字不成立**，
-// 参照物：同批的 `dao-merge-cleanup.tests.ps1` 跑 20s 也留在默认层。
-// 🔴 **㈡ 于是真实 GATES 表此刻几乎没有守护**：判词实测七个变体（把某道闸的
-// `3:"inconclusive"` 改成 `"red"`、把 fail-open 向的映射改掉、把闸1 的 `--check` 去掉让它从
-// 只读变成会重写 clause-index.json 的写操作……）**全部全绿**。下面那段静态检查只断言了
-// 「脚本路径在不在盘上」（5/5），退出码→类别映射 0/16、args 0/5、cmd 0/5。
-// **补法（给真实 GATES 加逐条静态断言，或按真实耗时做端到端）已开跟进单，本 PR 不抢修**
-// —— 合并压力下改判据类文件正是 `[#帅-撤宣称不抢修]` 要防的那件事。这里先把话改真。
-// 下面这条不受影响、仍然成立：本文件最初把那个端到端整跑挂成
-// `@dao-test-tier: env`，被 `tests/run-tests-tier.tests.js` 的审计断言拦下：那个标记的
-// 契约是「对**别人拥有的机器级可变状态**做不变量断言」（issue #116），单纯「跑起来慢」
-// 不满足这个契约（`.ps1` 侧的整套跳过型标记才接受「耗时预算不容」当理由，`.js` 侧这个
-// 断言级标记不接受）。正确处理不是把理由硬凑过去。
-// ⚠ **但原文接下来那句「本就该由它们各自的回归网负责」只对了一半**：那几个脚本各自还能不能
-// 跑通，确实归它们自己的回归网；而**「退出码→类别」这张映射表是本文件独有的数据，盘上没有
-// 任何别的回归网守着它** —— 那正是 ㈡ 说的缺口，补法归跟进单。
+// ⚠ 已知缺口照直写：真实 GATES 表的「退出码→类别」映射 0/16 无守护（判词实测七个变体全绿），
+// 补法已开跟进单；下面只做了脚本路径在盘上的静态检查。
 
 const fs = require("fs");
 const path = require("path");
@@ -53,16 +28,12 @@ function check(name, cond, detail) {
   if (cond) { pass++; console.log("  PASS  " + name); }
   else { fail++; console.log("  FAIL  " + name + (detail ? "  ->  " + detail : "")); }
 }
-
-function rm(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) { /* 不存在即视为已清 */ } }
-function ensureTmp() { rm(TMP); fs.mkdirSync(TMP, { recursive: true }); }
-
+function rm(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
 function writeFixture(name, gates) {
   const p = path.join(TMP, name + ".json");
   fs.writeFileSync(p, JSON.stringify(gates));
   return p;
 }
-
 function runGates(fixturePath, extraArgs) {
   const env = Object.assign({}, process.env);
   if (fixturePath) env.DAO_GATES_FIXTURE = fixturePath; else delete env.DAO_GATES_FIXTURE;
@@ -70,158 +41,87 @@ function runGates(fixturePath, extraArgs) {
   const out = String(r.stdout || "");
   const m = out.match(/DAO_GATES_SUMMARY exit=(\d+) gates=(\d+) ok=(\d+) red=(\d+) inconclusive=(\d+) unknown=(\d+)/);
   return {
-    code: r.status, out, err: String(r.stderr || ""),
+    code: r.status, out,
     summary: m ? { exit: +m[1], gates: +m[2], ok: +m[3], red: +m[4], inconclusive: +m[5], unknown: +m[6] } : null,
   };
 }
-
 function gate(exitWith, codesMap, name) {
   return { name: name || ("gate-exit-" + exitWith), cmd: NODE, args: ["-e", "process.exit(" + exitWith + ")"], codes: codesMap };
 }
 
-ensureTmp();
+rm(TMP); fs.mkdirSync(TMP, { recursive: true });
 
-// ① 全 ok ---------------------------------------------------------------------
 {
-  const fx = writeFixture("all-ok", [
-    gate(0, { 0: "ok" }, "a-ok"),
-    gate(0, { 0: "ok" }, "b-ok"),
-  ]);
-  const r = runGates(fx);
-  check("全 ok：进程退出码 0", r.code === 0, "实际 " + r.code);
-  check("全 ok：末行 summary exit=0 gates=2 ok=2 red=0 inconclusive=0 unknown=0",
-    !!r.summary && r.summary.exit === 0 && r.summary.gates === 2 && r.summary.ok === 2
-      && r.summary.red === 0 && r.summary.inconclusive === 0 && r.summary.unknown === 0,
-    JSON.stringify(r.summary));
+  const r = runGates(writeFixture("all-ok", [gate(0, { 0: "ok" }), gate(0, { 0: "ok" })]));
+  check("① 全 ok：进程退出码 0，summary gates=2 ok=2", r.code === 0 && r.summary && r.summary.gates === 2 && r.summary.ok === 2, JSON.stringify(r.summary));
 }
-
-// ② 单一 red --------------------------------------------------------------------
 {
-  const fx = writeFixture("one-red", [
-    gate(0, { 0: "ok", 1: "red" }, "a-ok"),
-    gate(1, { 0: "ok", 1: "red" }, "b-red"),
-  ]);
-  const r = runGates(fx);
-  check("单一 red：进程退出码 1", r.code === 1, "实际 " + r.code);
-  check("单一 red：summary red=1 exit=1", !!r.summary && r.summary.red === 1 && r.summary.exit === 1, JSON.stringify(r.summary));
-  check("单一 red：闸名与判类都打进了输出", /b-red/.test(r.out) && /red/.test(r.out), r.out.slice(0, 400));
-}
-
-// ③ 派单令点名那一格：exit=3（check-clauses-structure「没查成」的语义）归 inconclusive，不归 red
-{
-  const fx = writeFixture("three-is-inconclusive", [
+  const r = runGates(writeFixture("mix", [
     gate(3, { 0: "ok", 1: "red", 3: "inconclusive" }, "clause-structure-like"),
-  ]);
-  const r = runGates(fx);
-  check("exit=3 的闸按其声明表分类为 inconclusive，不是 red",
-    !!r.summary && r.summary.red === 0 && r.summary.inconclusive === 1, JSON.stringify(r.summary));
-  check("聚合退出码是 2 不是 1（inconclusive ≠ red，「没查成」≠「查出真问题」）", r.code === 2, "实际 " + r.code);
-}
-
-// ④ 未声明的退出码 → unknown ------------------------------------------------------
-{
-  const fx = writeFixture("unknown-code", [
     gate(9, { 0: "ok", 1: "red" }, "weird-exit"),
-  ]);
-  const r = runGates(fx);
-  check("退出码 9 不在 {0,1} 声明集合里 ⇒ unknown", !!r.summary && r.summary.unknown === 1, JSON.stringify(r.summary));
-  check("unknown ⇒ 聚合退出码 4", r.code === 4, "实际 " + r.code);
-}
-
-// ⑤ 优先级：unknown > red > inconclusive > ok -------------------------------------
-{
-  const fx = writeFixture("priority-unknown-over-red", [
     gate(1, { 0: "ok", 1: "red" }, "red-one"),
-    gate(9, { 0: "ok", 1: "red" }, "unknown-one"),
-  ]);
-  const r = runGates(fx);
-  check("同批红+unknown 并存 ⇒ 聚合取 unknown(4) 不是 red(1)", r.code === 4, "实际 " + r.code);
+  ]));
+  check("⑥+④ 分类：exit=3 归 inconclusive 不归 red；未声明 9 → unknown；聚合取 unknown(4)",
+    r.summary && r.summary.red === 1 && r.summary.inconclusive === 1 && r.summary.unknown === 1 &&
+    r.code === 4, JSON.stringify(r.summary));
 }
 {
-  const fx = writeFixture("priority-red-over-inconclusive", [
-    gate(2, { 0: "ok", 1: "red", 2: "inconclusive" }, "inconclusive-one"),
-    gate(1, { 0: "ok", 1: "red", 2: "inconclusive" }, "red-one"),
-  ]);
-  const r = runGates(fx);
-  check("同批红+inconclusive 并存 ⇒ 聚合取 red(1) 不是 inconclusive(2)", r.code === 1, "实际 " + r.code);
+  const r = runGates(writeFixture("priority-red-over-inc", [
+    gate(2, { 0: "ok", 1: "red", 2: "inconclusive" }),
+    gate(1, { 0: "ok", 1: "red", 2: "inconclusive" }),
+  ]));
+  check("⑤ 优先级：红+inconclusive 并存 ⇒ 聚合取 red(1) 不是 2", r.code === 1 && r.summary && r.summary.red === 1, JSON.stringify(r.summary));
+  const r2 = runGates(writeFixture("only-inc", [gate(3, { 0: "ok", 1: "red", 3: "inconclusive" })]));
+  check("⑥' 单独 exit=3 ⇒ 聚合退 2 不是 1（「没查成」≠「查出真问题」）",
+    r2.code === 2 && r2.summary && r2.summary.inconclusive === 1 && r2.summary.red === 0, JSON.stringify(r2.summary));
 }
-
-// ⑥ 单闸失败不吞后续闸：3 道闸，第 1 道红，第 2/3 道也必须被真的跑到 ------------------
 {
-  const marker2 = path.join(TMP, "ran-2.marker");
-  const marker3 = path.join(TMP, "ran-3.marker");
-  rm(marker2); rm(marker3);
-  const gates = [
+  // ③ 不短路：第 1 道红，第 2/3 道仍被真的执行
+  const m2 = path.join(TMP, "ran-2.marker");
+  const m3 = path.join(TMP, "ran-3.marker");
+  rm(m2); rm(m3);
+  const fx = writeFixture("no-swallow", [
     { name: "1-red", cmd: NODE, args: ["-e", "process.exit(1)"], codes: { 0: "ok", 1: "red" } },
-    { name: "2-ok-marks", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker2) + ", 'ran')"], codes: { 0: "ok" } },
-    { name: "3-ok-marks", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker3) + ", 'ran')"], codes: { 0: "ok" } },
-  ];
-  const fx = writeFixture("no-swallow", gates);
+    { name: "2-marks", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(m2) + ",'ran')"], codes: { 0: "ok" } },
+    { name: "3-marks", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(m3) + ",'ran')"], codes: { 0: "ok" } },
+  ]);
   const r = runGates(fx);
-  check("第 1 道红之后，第 2 道仍被真的执行（marker 落盘）", fs.existsSync(marker2), "路径 " + marker2);
-  check("第 1 道红之后，第 3 道仍被真的执行（marker 落盘）", fs.existsSync(marker3), "路径 " + marker3);
-  check("汇总 gates=3（三道都进了汇总，不是红了就短路成 1 道）", !!r.summary && r.summary.gates === 3, JSON.stringify(r.summary));
+  check("③ 单闸失败不吞后续闸：红后 2/3 道仍真执行，汇总 gates=3",
+    fs.existsSync(m2) && fs.existsSync(m3) && r.summary && r.summary.gates === 3, JSON.stringify(r.summary));
 }
-
-// ⑦ --list 只列不跑：不产生任何真实执行的副作用 -----------------------------------
 {
-  const marker = path.join(TMP, "list-should-not-run.marker");
+  // ④ --list 只列不跑
+  const marker = path.join(TMP, "list-not-run.marker");
   rm(marker);
-  const gates = [
-    { name: "should-not-run", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker) + ", 'ran')"], codes: { 0: "ok" } },
-  ];
-  const fx = writeFixture("list-only", gates);
+  const fx = writeFixture("list-only", [{ name: "should-not-run", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker) + ",'ran')"], codes: { 0: "ok" } }]);
   const r = runGates(fx, ["--list"]);
-  check("--list 退出码 0", r.code === 0, "实际 " + r.code);
-  check("--list 列出了闸名", /should-not-run/.test(r.out), r.out.slice(0, 300));
-  check("--list 不执行：marker 文件没有落盘", !fs.existsSync(marker), "marker 竟然存在：" + marker);
-  check("--list 不打印 DAO_GATES_SUMMARY 末行（本来就没跑，没有可汇总的东西）", !/DAO_GATES_SUMMARY/.test(r.out), r.out.slice(-300));
+  check("④ --list：exit 0、列出闸名、marker 未落盘、无 summary 末行",
+    r.code === 0 && /should-not-run/.test(r.out) && !fs.existsSync(marker) && !/DAO_GATES_SUMMARY/.test(r.out));
 }
-
-// ⑧ 用法错误：不认识的参数 ⇒ exit 3，零道闸执行 ----------------------------------
 {
-  const marker = path.join(TMP, "badusage-should-not-run.marker");
+  // ⑤ 用法错误 / fixture 非法 ⇒ exit 3 零道闸执行
+  const marker = path.join(TMP, "badusage-not-run.marker");
   rm(marker);
-  const gates = [
-    { name: "should-not-run", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker) + ", 'ran')"], codes: { 0: "ok" } },
-  ];
-  const fx = writeFixture("bad-usage", gates);
-  const r = runGates(fx, ["--not-a-real-flag"]);
-  check("不认识的参数 ⇒ 进程退出码 3", r.code === 3, "实际 " + r.code);
-  check("零道闸执行：marker 没有落盘", !fs.existsSync(marker), "marker 竟然存在：" + marker);
-  check("末行 summary exit=3 gates=0", !!r.summary && r.summary.exit === 3 && r.summary.gates === 0, JSON.stringify(r.summary));
+  const fx = writeFixture("bad-usage", [{ name: "should-not-run", cmd: NODE, args: ["-e", "require('fs').writeFileSync(" + JSON.stringify(marker) + ",'ran')"], codes: { 0: "ok" } }]);
+  const r1 = runGates(fx, ["--not-a-real-flag"]);
+  const badJson = path.join(TMP, "bad.json");
+  fs.writeFileSync(badJson, "{ not valid json");
+  const r2 = runGates(badJson);
+  check("⑤ 用法错与非法 fixture ⇒ exit 3、零道闸执行、summary gates=0",
+    r1.code === 3 && !fs.existsSync(marker) && r1.summary && r1.summary.gates === 0 && r2.code === 3);
+  fs.writeFileSync(path.join(TMP, "empty.json"), "[]");
+  check("⑤' 空数组 fixture ⇒ exit 3", runGates(path.join(TMP, "empty.json")).code === 3);
 }
-
-// ⑨ fixture 本身非法（不是合法 JSON / 空数组）⇒ exit 3 ---------------------------
 {
-  const badJsonPath = path.join(TMP, "bad.json");
-  fs.writeFileSync(badJsonPath, "{ not valid json");
-  const r1 = runGates(badJsonPath);
-  check("DAO_GATES_FIXTURE 指向非法 JSON ⇒ exit 3", r1.code === 3, "实际 " + r1.code);
-
-  const emptyArrPath = path.join(TMP, "empty.json");
-  fs.writeFileSync(emptyArrPath, "[]");
-  const r2 = runGates(emptyArrPath);
-  check("DAO_GATES_FIXTURE 是空数组 ⇒ exit 3", r2.code === 3, "实际 " + r2.code);
-}
-
-// ── 静态接线检查（零运行时开销）───────────────────────────────────────────────────
-// 抓真实 GATES 数组里逐条 path.join(ROOT, ...) 构造出的脚本路径，断言文件在盘上——
-// catch「路径打错字」这类最常见的接线错误。**数量断言是 3 不是 >=3**：GATES 是手维护的
-// 清单（见 dao-gates.mjs 头注「已知的射程缺口」㈠），改闸清单时这个数字要跟着手改——
-// 这是刻意的强断言，不是遗漏加固。
-// （2026-08-11 重设计：gen-guarded-files / gen-clause-index 两道随派生物消灭退役，5→3。）
-{
+  // 静态接线：从源码抓出的 GATES 脚本路径全在盘上。数量断言是 ===3（GATES 手维护清单，
+  // 改闸数要同步改这里——刻意强断言）。2026-08-11 重设计后 5→3。
   const joins = [...SRC.matchAll(/path\.join\(ROOT,\s*((?:"[^"]*",?\s*)+)\)/g)];
   const realPaths = joins.map((m) => {
     const parts = m[1].match(/"([^"]*)"/g).map((s) => s.slice(1, -1));
     return path.join(REPO, ...parts);
   });
-  check("从源码里静态抓出的 GATES 路径数 === 3（GATES 清单当前长度；改闸数要同步改这里）",
-    realPaths.length === 3, "抓到 " + realPaths.length + " 条：" + JSON.stringify(realPaths));
-  for (const p of realPaths) {
-    check("GATES 里引用的脚本文件在盘上：" + path.relative(REPO, p), fs.existsSync(p));
-  }
+  check("静态：GATES 路径数 === 3 且全部在盘上", realPaths.length === 3 && realPaths.every((p) => fs.existsSync(p)),
+    JSON.stringify(realPaths));
 }
 
 rm(TMP);

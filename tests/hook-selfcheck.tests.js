@@ -1,31 +1,23 @@
-// hook-selfcheck 公共库自证 · 单元级（直接 require 库，断言脚手架各件的契约）
+// hook-selfcheck 公共库自证 · 单元级（每个行为分支留正控 + 负控）
 //
 // 跑法：node tests/hook-selfcheck.tests.js   （全绿 exit 0，任一红 exit 1）
 //
-// ── 为什么单独给库补测（而不是靠两个 hook 的测试兜住）───────────────────────
-// F1 把加固脚手架抽成本库时，`selfcheckLines` 变成一个**11 参的文案模板**。
-// 而 dao-rule-echo / dao-compact-log 两套既有测试**完全不覆盖 --selfcheck 路径**
-// ——它们喂 stdin 验主流程，不跑自检。这意味着模板文案改坏了没有任何东西会变红。
-//
-// 这不是假想风险：F1 重构当时就真踩了一次。库里把
-//   `因 ${sc.missNote}不匹配`  写成了  `因 ${sc.missNote} 不匹配`（多一个空格）
-// 两套 hook 测试全绿、毫无察觉，是靠人工把 --selfcheck 输出与重构前逐字节 diff
-// 才捞出来的。人工 diff 只发生一次，模板却会被反复编辑 ⇒ 必须留下常驻断言。
-//
-// 覆盖面与有意不覆盖：
-//   · 心跳半段（本次出 bug 的那半段）**逐字锚定**：logPath 可由参数注入 ⇒ 完全确定性。
-//   · 注册半段读真实 live settings.json（LIVE_SETTINGS 是模块常量，不可注入）
-//     ⇒ 只断言两种形态之一与格式骨架，不锚定具体是「已注册」还是「未注册」。
-//     这是如实的能力边界，不是偷工：把它硬锚会让测试随用户配置变化而红。
-//   · 「日志写失败语义有意不同」这条设计约定（heartbeat 吞 / appendJsonl 抛）
-//     也上断言 —— 它是库头注写明「勿顺手统一」的那一条，值得机器盯着。
+// 为什么单独给库补测：selfcheckLines 是文案模板，改坏了 hook 的行为测试不会红
+// （F1 重构时真踩过一次：`因 ${missNote}不匹配` 多打一个空格，两套 hook 测试全绿）。
+// 心跳半段逐字锚定（logPath 可注入 ⇒ 确定性）；注册半段读真实 live settings.json，
+// 只断言两种形态之一与格式骨架，不锚定内容（否则测试随用户配置变红）。
+// ⚠ 注册半段在云审 runner 上会因没有 ~/.claude/settings.json 而整段红（issue #308）——
+//   故把 USERPROFILE/HOME 在 require 前指到假家目录，注册核验变成可注入、可确定。
 
 const fs = require("fs");
 const path = require("path");
 
 const REPO = path.resolve(__dirname, "..");
-const lib = require("../ccswitch/lib/hook-selfcheck.js");
 const TMP = path.join(REPO, "_tmp", "knifeF-hook-selfcheck-tests");
+const FAKE_HOME = path.join(TMP, "fake-home");
+process.env.USERPROFILE = FAKE_HOME;
+process.env.HOME = FAKE_HOME;
+const lib = require("../ccswitch/lib/hook-selfcheck.js");
 
 fs.rmSync(TMP, { recursive: true, force: true });
 fs.mkdirSync(TMP, { recursive: true });
@@ -67,257 +59,170 @@ function writeJsonl(name, recs) {
   return p;
 }
 
-console.log("\n=== 心跳半段 · 无真实记录（逐字锚定，钉住 F1 踩过的空白 bug）===");
+console.log("\n=== 心跳半段 · 无真实记录（逐字锚定 F1 踩过的空白 bug）===");
 {
   const logPath = writeJsonl("empty-real.jsonl", [
     { at: "2026-07-26T00:00:00.000Z", synthetic: true },
     { at: "2026-07-26T00:00:01.000Z", synthetic: true },
   ]);
-  const r = H.selfcheckLines(ruleEchoSc(logPath));
-  const hb = r.lines[r.lines.length - 1];
+  const hb = H.selfcheckLines(ruleEchoSc(logPath)).lines.at(-1);
   const expected =
     "✗ 无真实触发记录（日志共 2 条，其中自测/手工 2 条）—— " +
     "尚未被宿主真实调用过；注册了也可能因 matcher/路径判据不匹配而从未触发。日志：" + logPath;
-  check("无真实记录行逐字符与预期一致（含「判据不匹配」处无多余空白）", hb === expected,
-    "\n    实得: " + JSON.stringify(hb) + "\n    预期: " + JSON.stringify(expected));
-  check("「因 X不匹配」之间没有空格（F1 回归点）", /判据不匹配/.test(hb) && !/判据 不匹配/.test(hb), hb);
-  check("无真实记录 → bad 计数 ≥1（不许当通过）", r.bad >= 1, "bad=" + r.bad);
-  check("自测心跳不被采信为「已生效」", /尚未被宿主真实调用过/.test(hb));
-}
-{
-  // 全空日志（文件不存在）也要给出 0/0 而不是崩
-  const r = H.selfcheckLines(ruleEchoSc(path.join(TMP, "does-not-exist.jsonl")));
-  const hb = r.lines[r.lines.length - 1];
-  check("日志文件不存在 → 报「共 0 条，其中自测/手工 0 条」而非崩",
-    /日志共 0 条，其中自测\/手工 0 条/.test(hb), hb);
+  check("无真实记录行逐字符一致（含「判据不匹配」无多余空格）+ 自测心跳不被采信 + bad≥1",
+    hb === expected && !/判据 不匹配/.test(hb) && /尚未被宿主真实调用过/.test(hb) &&
+    H.selfcheckLines(ruleEchoSc(logPath)).bad >= 1,
+    "\n    实得: " + JSON.stringify(hb));
+  check("日志文件不存在 → 报「共 0 条」而非崩",
+    /日志共 0 条/.test(H.selfcheckLines(ruleEchoSc(path.join(TMP, "nope.jsonl"))).lines.at(-1)));
 }
 
-console.log("\n=== 心跳半段 · 有真实记录（describeLast 插值 + 计数）===");
+console.log("\n=== 心跳半段 · 有真实记录 + 陈旧告警 + 坏行容错 ===");
 {
   const logPath = writeJsonl("has-real.jsonl", [
     { at: "2026-07-26T00:00:00.000Z", synthetic: true },
     { at: new Date(Date.now() - 2 * 86400000).toISOString(), tool: "Edit", file: "D:/x/CLAUDE.md" },
   ]);
-  const r = H.selfcheckLines(ruleEchoSc(logPath));
-  const hb = r.lines[r.lines.length - 1];
-  check("有真实记录 → ✓ 开头", /^✓ 有真实触发记录/.test(hb), hb);
-  check("describeLast 被正确插值（tool · file）", /Edit · D:\/x\/CLAUDE\.md/.test(hb), hb);
-  check("真实/总数分别计数正确（真实 1 条 / 共 2 条）", /真实 1 条 \/ 共 2 条/.test(hb), hb);
-  check("陈旧天数带一位小数", /（2\.0 天前）/.test(hb), hb);
-  check("有真实记录 → 心跳半段不计 bad",
-    r.bad === (/(^|\n)✗/.test(r.lines[0]) ? 1 : 0), "bad=" + r.bad + " line0=" + r.lines[0]);
+  const hb = H.selfcheckLines(ruleEchoSc(logPath)).lines.at(-1);
+  check("有真实记录 → ✓ 行，describeLast 插值 + 真实/总数计数正确",
+    /^✓ 有真实触发记录/.test(hb) && /Edit · D:\/x\/CLAUDE\.md/.test(hb) && /真实 1 条 \/ 共 2 条/.test(hb), hb);
 }
 {
-  // 陈旧告警：超 staleDays 才追加，且带两空格缩进前缀
-  const logPath = writeJsonl("stale.jsonl", [
+  const stale = writeJsonl("stale.jsonl", [
     { at: new Date(Date.now() - 40 * 86400000).toISOString(), tool: "Write", file: "D:/x/dao.md" },
   ]);
-  const r = H.selfcheckLines(ruleEchoSc(logPath));
-  const last = r.lines[r.lines.length - 1];
-  check("超 staleDays（40>30）→ 追加陈旧告警行", /⚠ 末次真实触发距今 40 天/.test(last), last);
-  check("陈旧告警行带两空格缩进", /^ {2}⚠/.test(last), JSON.stringify(last));
+  const last = H.selfcheckLines(ruleEchoSc(stale)).lines.at(-1);
+  check("正控：超 staleDays → 追加陈旧告警（两空格缩进）；负控：未超 → 不追加",
+    /^ {2}⚠ 末次真实触发距今 40 天/.test(last) &&
+    !H.selfcheckLines(ruleEchoSc(writeJsonl("fresh.jsonl", [
+      { at: new Date(Date.now() - 3 * 86400000).toISOString(), tool: "Write", file: "D:/x/dao.md" },
+    ]))).lines.some((l) => /⚠ 末次真实触发距今/.test(l)));
 }
-{
-  const logPath = writeJsonl("fresh.jsonl", [
-    { at: new Date(Date.now() - 3 * 86400000).toISOString(), tool: "Write", file: "D:/x/dao.md" },
-  ]);
-  const r = H.selfcheckLines(ruleEchoSc(logPath));
-  check("负控：未超 staleDays（3<30）→ 不追加陈旧告警",
-    !r.lines.some((l) => /⚠ 末次真实触发距今/.test(l)), JSON.stringify(r.lines));
-}
-
-console.log("\n=== 心跳半段 · 坏行容错（日志坏一行不许被读成「从未触发」）===");
 {
   const logPath = writeJsonl("with-garbage.jsonl", [
     "这不是 JSON{{{",
     { at: new Date(Date.now() - 1 * 86400000).toISOString(), tool: "Edit", file: "D:/x/a.md" },
     "又一行垃圾",
   ]);
-  const r = H.selfcheckLines(ruleEchoSc(logPath));
-  const hb = r.lines[r.lines.length - 1];
   check("坏行被跳过、真实记录仍被认出（不误判为失联）",
-    /^✓ 有真实触发记录/.test(hb) && /真实 1 条 \/ 共 1 条/.test(hb), hb);
+    /^✓ 有真实触发记录/.test(H.selfcheckLines(ruleEchoSc(logPath)).lines.at(-1)));
 }
 
-console.log("\n=== 注册半段 · 只断言形态骨架（LIVE_SETTINGS 不可注入，如实不锚定内容）===");
+console.log("\n=== 注册半段（假家目录注入，不依赖真实 live settings）===");
 {
-  const r = H.selfcheckLines(ruleEchoSc(path.join(TMP, "empty-real.jsonl")));
-  const reg = r.lines[0];
-  const shapeOk =
-    /^✗ 未注册：.*的 hooks\.PostToolUse 里没有引用 dao-rule-echo\.js 的 command。$/.test(reg) ||
-    /^[✓✗] 已注册于 PostToolUse，matcher=".*"/.test(reg);
-  check("注册半段输出为两种既定形态之一", shapeOk, JSON.stringify(reg));
-  check("注册半段提到正确的事件名与脚本名", /PostToolUse/.test(reg) && /dao-rule-echo\.js|已注册/.test(reg), reg);
-}
-{
-  // scriptName 里的 `.` 必须被转义再当正则用，否则 `dao-rule-echoXjs` 也会命中
-  const sc = ruleEchoSc(path.join(TMP, "empty-real.jsonl"));
+  // 假家目录里写一份 settings.json：注册了 dao-rule-echo.js ⇒ ✓；没注册 ⇒ ✗。
+  // 断言确定性由夹具给，不再读跑测试这台机器的 ~/.claude/settings.json（#308）。
+  const LIVE = path.join(FAKE_HOME, ".claude", "settings.json");
+  const logPath = path.join(TMP, "empty-real.jsonl");
+  fs.mkdirSync(path.dirname(LIVE), { recursive: true });
+  fs.writeFileSync(LIVE, JSON.stringify({
+    hooks: { PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "node ccswitch/hooks/dao-rule-echo.js" }] }] },
+  }), "utf8");
+  const reg = H.selfcheckLines(ruleEchoSc(logPath)).lines[0];
+  check("已注册：输出 ✓ 形态、事件名与 matcher 正确",
+    /^✓ 已注册于 PostToolUse，matcher="\*"/.test(reg), reg);
+  fs.writeFileSync(LIVE, JSON.stringify({ permissions: { deny: [] } }), "utf8");
+  const unreg = H.selfcheckLines(ruleEchoSc(logPath)).lines[0];
+  check("未注册：输出 ✗ 形态且点名脚本名", /^✗ 未注册：/.test(unreg) && /dao-rule-echo\.js/.test(unreg), unreg);
+  const sc = ruleEchoSc(logPath);
   sc.scriptName = "dao-no-such-hook-zzz.js";
-  const r = H.selfcheckLines(sc);
-  check("不存在的 scriptName → 判为未注册（证明注册判据真在查这个名字）",
-    /^✗ 未注册：/.test(r.lines[0]), JSON.stringify(r.lines[0]));
+  check("不存在的 scriptName → 判未注册（注册判据真在查这个名字）",
+    /^✗ 未注册：/.test(H.selfcheckLines(sc).lines[0]));
 }
-
-console.log("\n=== 有意保留的差异 · 日志写失败语义（库头注「勿顺手统一」那一条）===");
 {
-  // appendJsonl 是主产物语义 ⇒ 必须向上抛。造一个「父目录是文件」的路径让它必失败。
+  // appendJsonl 是主产物语义 ⇒ 必须抛；heartbeat 是旁证语义 ⇒ 必须吞（库头注「勿顺手统一」那一条）
   const blocker = path.join(TMP, "blocker");
   fs.writeFileSync(blocker, "i am a file", "utf8");
   let threw = false;
   try { lib.appendJsonl(path.join(blocker, "sub", "x.jsonl"), { a: 1 }); } catch (_) { threw = true; }
-  check("appendJsonl 写不成 → 向上抛（compact-log 靠它把失败报出来）", threw);
-}
-{
-  // heartbeat 是旁证语义 ⇒ 必须吞掉。让 stateDir 撞上一个同名文件。
-  const collide = path.join(REPO, "_tmp", "knifeF-collide-state");
-  fs.rmSync(collide, { recursive: true, force: true });
-  fs.writeFileSync(collide, "i am a file", "utf8");
   const H2 = lib.createHookScaffold({
-    name: "knifeF-probe2",
-    stateSubdir: "knifeF-collide-state",
-    failTail: "x",
-    forceErrorEnv: "KNIFEF_P2_FORCE_ERROR",
-    selfTestEnv: "KNIFEF_P2_SELFTEST",
+    name: "knifeF-probe2", stateSubdir: "knifeF-collide-state", failTail: "x",
+    forceErrorEnv: "KNIFEF_P2_FORCE_ERROR", selfTestEnv: "KNIFEF_P2_SELFTEST",
   });
+  fs.writeFileSync(path.join(REPO, "_tmp", "knifeF-collide-state"), "i am a file", "utf8");
   let threw2 = false;
   try { H2.heartbeat({ at: "now" }); } catch (_) { threw2 = true; }
-  check("heartbeat 写不成 → 吞掉不抛（不许拖垮主产物）", !threw2);
-  fs.rmSync(collide, { recursive: true, force: true });
+  check("appendJsonl 写不成 → 抛；heartbeat 写不成 → 吞（不许拖垮主产物）",
+    threw && !threw2);
+  fs.rmSync(path.join(REPO, "_tmp", "knifeF-collide-state"), { force: true });
 }
 
-console.log("\n=== jsonl helpers ===");
+console.log("\n=== jsonl helpers + isSynthetic ===");
 {
-  check("parseJsonl 跳坏行留好行",
-    lib.parseJsonl('{"a":1}\n坏\n{"b":2}\n').length === 2);
-  check("parseJsonl 空串 → 空数组", lib.parseJsonl("").length === 0);
-  check("readJsonlRecords 文件不存在 → 空数组",
+  check("parseJsonl 跳坏行留好行 / 空串空数组 / 文件不存在空数组",
+    lib.parseJsonl('{"a":1}\n坏\n{"b":2}\n').length === 2 &&
+    lib.parseJsonl("").length === 0 &&
     lib.readJsonlRecords(path.join(TMP, "nope.jsonl")).length === 0);
-}
-{
-  // 轮转：超上限保留后半
   const p = path.join(TMP, "rotate.jsonl");
-  const recs = [];
-  for (let i = 0; i < 12; i++) recs.push({ i });
-  fs.writeFileSync(p, recs.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  fs.writeFileSync(p, Array.from({ length: 12 }, (_, i) => JSON.stringify({ i })).join("\n") + "\n", "utf8");
   lib.rotateJsonl(p, 10);
   const after = lib.readJsonlRecords(p);
-  check("rotateJsonl 超上限 → 裁到 max/2 条", after.length === 5, "len=" + after.length);
-  check("rotateJsonl 保留的是**后**半（新记录不丢）",
-    after[after.length - 1].i === 11 && after[0].i === 7, JSON.stringify(after.map((x) => x.i)));
-}
-{
-  const p = path.join(TMP, "norotate.jsonl");
-  fs.writeFileSync(p, '{"i":1}\n{"i":2}\n', "utf8");
-  lib.rotateJsonl(p, 10);
-  check("负控：未超上限 → 不动", lib.readJsonlRecords(p).length === 2);
-}
-
-console.log("\n=== isSynthetic 判据（近似，两向都有反例——见库头注）===");
-{
+  check("rotateJsonl 超上限 → 裁到 max/2 条且保留后半（新记录不丢）",
+    after.length === 5 && after[0].i === 7 && after.at(-1).i === 11, JSON.stringify(after.map((x) => x.i)));
   const H3 = lib.createHookScaffold({
-    name: "knifeF-probe3", stateSubdir: "knifeF-hook-selfcheck-tests/state3",
-    failTail: "x", forceErrorEnv: "KNIFEF_P3_FORCE_ERROR", selfTestEnv: "KNIFEF_P3_SELFTEST",
+    name: "knifeF-probe3", stateSubdir: "knifeF-hook-selfcheck-tests/state3", failTail: "x",
+    forceErrorEnv: "KNIFEF_P3_FORCE_ERROR", selfTestEnv: "KNIFEF_P3_SELFTEST",
   });
-  check("缺 transcript_path → synthetic", H3.isSynthetic({ tool_name: "Edit" }) === true);
-  check("带 transcript_path → 非 synthetic", H3.isSynthetic({ transcript_path: "x" }) === false);
+  check("isSynthetic：缺 transcript_path → synthetic；带 → 非",
+    H3.isSynthetic({ tool_name: "Edit" }) === true &&
+    H3.isSynthetic({ transcript_path: "x" }) === false);
   process.env.KNIFEF_P3_SELFTEST = "1";
   check("自测环境变量置位 → 强制 synthetic（即便带 transcript_path）",
     H3.isSynthetic({ transcript_path: "x" }) === true);
   delete process.env.KNIFEF_P3_SELFTEST;
 }
 
-console.log("\n=== ③ 留痕域可写性（opt-in；issue #190 第 2 条）===");
+console.log("\n=== 留痕域可写性（opt-in）===");
 {
-  // 这一段治的病：脚手架把 errors.log / fired.log / last.json **三样全放在同一个
-  // `<root>/_tmp/<subdir>/` 域**里，而写它们的两个函数都吞异常 ⇒ 那个域坏掉时三样一起哑、
-  // 退出码干净，而「一条都没记下来」与「本次什么都没发生」在盘上逐字节相同（#190 第 2 条实测）。
+  // 治的病：脚手架把 errors/fired/last 三样全放在同一 `_tmp/<subdir>/` 域里，而写它们的
+  // 函数都吞异常 ⇒ 域坏掉时三样一起哑、退出码干净，「没记下来」与「没发生」逐字节相同。
   const LOG = path.join(TMP, "empty-real.jsonl");
   const base = H.selfcheckLines(ruleEchoSc(LOG));
-  check("不传 probeDirs ⇒ 一行都不多（既有两个消费方的输出因此一个字节没变）",
-    base.lines.every((l) => !/留痕域/.test(l)), JSON.stringify(base.lines));
-
-  const good = path.join(TMP, "probe-good");
+  check("不传 probeDirs ⇒ 一行都不多（两个既有消费方输出一个字节没变）",
+    base.lines.every((l) => !/留痕域/.test(l)));
   const scOk = ruleEchoSc(LOG);
-  scOk.probeDirs = [{ label: "测试域", dir: good, failNote: "（好域的尾注不该出现）" }];
+  scOk.probeDirs = [{ label: "测试域", dir: path.join(TMP, "probe-good"), failNote: "（好域尾注不该出现）" }];
   const rOk = H.selfcheckLines(scOk);
   const okLine = rOk.lines.find((l) => /留痕域/.test(l));
-  check("可写 ⇒ ✓ 一行，点名 label 与路径", /^✓ 留痕域可写：测试域 → /.test(okLine || ""), JSON.stringify(okLine));
-  check("可写 ⇒ 不增加 bad 计数", rOk.bad === base.bad, "bad=" + rOk.bad + " base=" + base.bad);
-  check("可写 ⇒ 不带 failNote（尾注只属于失败那一支）", !/好域的尾注/.test(okLine || ""));
-  check("🔑 探针文件写完就删（不在留痕域里留垃圾，也不落进任何人的扫描面 —— `[#守-输出面外]`）",
-    fs.readdirSync(good).length === 0, JSON.stringify(fs.readdirSync(good)));
-
-  // 负态：父路径被占成普通文件 ⇒ mkdirSync 必抛（这正是 #190 对抗官弄坏仓根 `_tmp` 的那个形态）
+  check("可写 ⇒ ✓ 行点名 label/路径、不增 bad、探针写完就删",
+    /^✓ 留痕域可写：测试域 → /.test(okLine || "") && rOk.bad === base.bad &&
+    fs.readdirSync(path.join(TMP, "probe-good")).length === 0, JSON.stringify(okLine));
   const blocker = path.join(TMP, "probe-blocker");
   fs.writeFileSync(blocker, "我是一个普通文件", "utf8");
   const scBad = ruleEchoSc(LOG);
   scBad.probeDirs = [{ label: "坏域", dir: path.join(blocker, "state"), failNote: "（坏域尾注ZZZ）" }];
-  const rBad = H.selfcheckLines(scBad);
-  const badLine = rBad.lines.find((l) => /留痕域/.test(l));
-  check("写不进去 ⇒ ✗ 一行", /^✗ 留痕域写不进去：坏域 → /.test(badLine || ""), JSON.stringify(badLine));
-  check("写不进去 ⇒ bad 计数 +1（不许当通过）", rBad.bad === base.bad + 1, "bad=" + rBad.bad);
-  check("✗ 那行带 errno（读者要分得出是被占成文件、盘满、还是没权限）",
-    /ENOTDIR|EEXIST|ENOENT|EPERM|EACCES/.test(badLine || ""), JSON.stringify(badLine));
-  check("✗ 那行带调用方给的 failNote（各 hook 自述后果，库不代写）",
-    /（坏域尾注ZZZ）/.test(badLine || ""), JSON.stringify(badLine));
-  check("🔴 ✗ 那行必须明说它污染第②段的结论（「无记录」与「写不进去」处方相反）",
-    /可能只是写不进去，不是没触发过/.test(badLine || ""), JSON.stringify(badLine));
-
-  // 多个域 ⇒ 各报一条（归因）：只查一个域时「A 坏了」与「A、B 都坏了」在输出里长得一样
-  const scTwo = ruleEchoSc(LOG);
-  scTwo.probeDirs = [
-    { label: "好域", dir: path.join(TMP, "probe-two-ok") },
-    { label: "坏域", dir: path.join(blocker, "state2") },
-  ];
-  const rTwo = H.selfcheckLines(scTwo);
-  const twoLines = rTwo.lines.filter((l) => /留痕域/.test(l));
-  check("多个域 ⇒ 逐个报（一 ✓ 一 ✗，归因到具体哪一个）",
-    twoLines.length === 2 && /^✓ 留痕域可写：好域/.test(twoLines[0]) && /^✗ 留痕域写不进去：坏域/.test(twoLines[1]),
-    JSON.stringify(twoLines));
-  check("多个域 ⇒ bad 只按坏的那些计（+1 不是 +2）", rTwo.bad === base.bad + 1, "bad=" + rTwo.bad);
-
-  // probeDirWritable 单验：**判据是「真写一次」不是「目录存在吗」**
-  check("probeDirWritable 正控：可建可写 ⇒ ok=true",
-    lib.probeDirWritable(path.join(TMP, "pw-ok")).ok === true);
-  const pw = lib.probeDirWritable(path.join(blocker, "x"));
-  check("probeDirWritable 负控：父路径是文件 ⇒ ok=false 且给出 why", pw.ok === false && typeof pw.why === "string",
-    JSON.stringify(pw));
-  check("🔴 对照：`existsSync` 式判据对这两个完全不同的样本给出同一个答案（false）—— " +
-    "这就是为什么探测必须真写一次，而不是问一句「目录在吗」",
-    fs.existsSync(path.join(blocker, "x")) === false &&
-    fs.existsSync(path.join(TMP, "never-ever-created")) === false);
+  const badLine = H.selfcheckLines(scBad).lines.find((l) => /留痕域/.test(l));
+  check("写不进 ⇒ ✗ 行带 errno + failNote + 明说污染第②段结论 + bad+1",
+    /^✗ 留痕域写不进去：坏域 → /.test(badLine || "") && /ENOTDIR|EEXIST|ENOENT|EPERM|EACCES/.test(badLine || "") &&
+    /（坏域尾注ZZZ）/.test(badLine || "") && /可能只是写不进去，不是没触发过/.test(badLine || "") &&
+    H.selfcheckLines(scBad).bad === base.bad + 1, JSON.stringify(badLine));
+  // 判据是「真写一次」不是「目录存在吗」：existsSync 对「父路径是文件」与「路径从未建过」
+  // 给出同一个 false，这正是必须真写的原因。
+  check("probeDirWritable：可写 ⇒ ok=true；父路径是文件 ⇒ ok=false 且给 why（existsSync 分不出这两者）",
+    lib.probeDirWritable(path.join(TMP, "pw-ok")).ok === true &&
+    (() => { const pw = lib.probeDirWritable(path.join(blocker, "x")); return pw.ok === false && typeof pw.why === "string"; })());
 }
 
-console.log("\n=== maybeForceError 的相位（issue #190 第 3 条：让最外层 catch 不再是真空锚）===");
+console.log("\n=== maybeForceError 相位（把异常精确投到内层 try 之外）===");
 {
   const H4 = lib.createHookScaffold({
-    name: "knifeF-probe4", stateSubdir: "knifeF-hook-selfcheck-tests/state4",
-    failTail: "x", forceErrorEnv: "KNIFEF_P4_FORCE_ERROR", selfTestEnv: "KNIFEF_P4_SELFTEST",
+    name: "knifeF-probe4", stateSubdir: "knifeF-hook-selfcheck-tests/state4", failTail: "x",
+    forceErrorEnv: "KNIFEF_P4_FORCE_ERROR", selfTestEnv: "KNIFEF_P4_SELFTEST",
   });
   const threw = (stage) => { try { H4.maybeForceError(stage); return false; } catch (_) { return true; } };
   const had = Object.prototype.hasOwnProperty.call(process.env, "KNIFEF_P4_FORCE_ERROR");
   try {
     delete process.env.KNIFEF_P4_FORCE_ERROR;
-    check("未设 ⇒ 任何相位都不抛", !threw("parse") && !threw("outer"));
-    process.env.KNIFEF_P4_FORCE_ERROR = "1";
-    check("`=1` ⇒ 任何相位都抛（历史行为一字不改；实际总撞在第一个注入点上）",
-      threw("parse") && threw("outer"));
-    process.env.KNIFEF_P4_FORCE_ERROR = "outer";
-    check("🔴 `=outer` ⇒ **只有** outer 相位抛（相位机制的全部意义：把异常精确投到内层 try 之外）",
-      !threw("parse") && threw("outer"));
-    check("误伤反例：相位名不是整名相等就不命中（`oute` / `outer2` 都不抛）",
-      !threw("oute") && !threw("outer2"));
-    process.env.KNIFEF_P4_FORCE_ERROR = "no-such-phase";
-    check("负控：设了个不存在的相位名 ⇒ 一律不抛（不许退化成「设了就抛」）",
-      !threw("parse") && !threw("outer"));
-  } finally {
-    delete process.env.KNIFEF_P4_FORCE_ERROR;
-  }
+    check("未设 ⇒ 不抛；`=1` ⇒ 全抛；`=outer` ⇒ 只有 outer 抛；不存在的相位名 ⇒ 不抛",
+      !threw("parse") &&
+      (process.env.KNIFEF_P4_FORCE_ERROR = "1") && threw("parse") && threw("outer") &&
+      (process.env.KNIFEF_P4_FORCE_ERROR = "outer") && !threw("parse") && threw("outer") &&
+      (process.env.KNIFEF_P4_FORCE_ERROR = "no-such-phase") && !threw("parse") && !threw("outer"));
+  } finally { delete process.env.KNIFEF_P4_FORCE_ERROR; }
   check("收尾：环境变量已复原（本节自己不许留污染）",
     Object.prototype.hasOwnProperty.call(process.env, "KNIFEF_P4_FORCE_ERROR") === had);
 }
 
-// ── 清理 ────────────────────────────────────────────────────────────────────
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);

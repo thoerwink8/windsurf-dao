@@ -306,9 +306,9 @@ console.log("\n──── ③ 自检半边：静态声明与运行期计数对
     "zeta.tests.js": { marker: true, pass: 9 },   // 有标记、无 DEFER 字段…
   });
   const r = runRunner(c.dir);
-  check("㈠ 声明了却没打 DEFER 字段 → exit 4 / selfcheck=fail",
-    r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail", JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈠ 报文说清是「无从判断那几节跑没跑」", /无从判断/.test(r.out), r.out.slice(-900));
+  check("㈠ 声明了却没打 DEFER 字段 → exit 4，报文说清「无从判断那几节跑没跑」",
+    r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail" && /无从判断/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
   // ㈠′ 标记在、DEFER 字段也在，但值恒 0 —— 标记过期的另一种形态
@@ -316,9 +316,9 @@ console.log("\n──── ③ 自检半边：静态声明与运行期计数对
     "zeta.tests.js": { marker: true, pass: 9, deferAlways: 0 },
   });
   const r = runRunner(c.dir);
-  check("㈠′ 声明了却 DEFER=0 → exit 4", r.code === 4 && r.sum && r.sum.self === "fail", JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈠′ 报文给出两种可能（标记过期 / 机制坏了），不替人下结论",
-    /标记过期/.test(r.out) && /机制坏了/.test(r.out), r.out.slice(-900));
+  check("㈠′ 声明了却 DEFER=0 → exit 4，报文给出两种可能（标记过期/机制坏了）",
+    r.code === 4 && r.sum && r.sum.self === "fail" && /标记过期/.test(r.out) && /机制坏了/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
   // ㈡ defer 了却没标记 —— 静态那半从此看不见它
@@ -326,42 +326,40 @@ console.log("\n──── ③ 自检半边：静态声明与运行期计数对
     "zeta.tests.js": { pass: 9, deferDefault: 2 },
   });
   const r = runRunner(c.dir);
-  check("㈡ 没标记却 DEFER=2 → exit 4", r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail", JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈡ 报文点出「标记漏加」", /标记漏加/.test(r.out), r.out.slice(-900));
+  check("㈡ 没标记却 DEFER=2 → exit 4，报文点出「标记漏加」",
+    r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail" && /标记漏加/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
-  // ㈢ --env 下仍在 defer —— 说明 --env 没透传到（你以为跑了，其实没跑）
+  // ㈢ --env 下仍在 defer —— 说明 --env 没透传到
   const c = mkCase("env-not-passed", {
     "zeta.tests.js": { marker: true, pass: 9, deferAlways: 4 },
   });
   const r = runRunner(c.dir, ["--env"]);
-  check("㈢ --env 下仍 DEFER=4 → exit 4", r.code === 4 && r.sum && r.sum.exit === 4, JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈢ 报文点出「--env 没透传到」", /没透传到/.test(r.out), r.out.slice(-900));
+  check("㈢ --env 下仍 DEFER=4 → exit 4，报文点出「--env 没透传到」",
+    r.code === 4 && r.sum && r.sum.exit === 4 && /没透传到/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
-  // ㈣ **笨计数器对拍**：汇总行说 DEFER=3，正文里一行明细都没有 ⇒ 两个数对不上。
-  //    这一档防的是「聚合字段算错了而明细是对的」（或反过来）—— 只有一套计数时，
-  //    错了也没人知道，输出照样体面。形态照抄 check-mutation-anchor.mjs 的独立笨计数器。
+  // ㈣ **笨计数器对拍**：汇总说 DEFER=3、明细 0 行 ⇒ 两个数对不上（只有一套计数时错了没人知道）
   const c = mkCase("defer-count-mismatch", {
     "zeta.tests.js": { marker: true, pass: 9, deferDefault: 3, noDeferLines: true },
   });
   const r = runRunner(c.dir);
-  check("㈣ 汇总说 DEFER=3 而明细 0 行 → exit 4", r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail",
-    JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈣ 报文把两个数都摆出来（人得知道是哪一半错了）",
-    /DEFER=3/.test(r.out) && /明细有 0 行/.test(r.out), r.out.slice(-900));
-  check("㈣ 报文点出这是「两套独立计数对不上」", /两套独立计数对不上/.test(r.out), r.out.slice(-900));
+  check("㈣ 汇总 DEFER=3 而明细 0 行 → exit 4，报文摆出两个数 + 点出「两套独立计数对不上」",
+    r.code === 4 && r.sum && r.sum.exit === 4 && r.sum.self === "fail" &&
+    /DEFER=3/.test(r.out) && /明细有 0 行/.test(r.out) && /两套独立计数对不上/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
-  // ㈤ 只有明细行、没有汇总字段 —— 人眼看得见「有东西没跑」，机器通道上却是零。
-  //    这正是本机制要防的那个病的**镜像**：不是「没报」，是「只报给人看」。
+  // ㈤ 只有明细行、没有汇总字段 —— 只报给人看、机器通道上却是零
   const c = mkCase("defer-lines-no-field", {
     "zeta.tests.js": { noSummary: true, deferLinesOnly: 2 },
   });
   const r = runRunner(c.dir);
-  check("㈤ 有 2 行 DEFER 明细却无 DEFER= 字段 → exit 4", r.code === 4 && r.sum && r.sum.exit === 4,
-    JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("㈤ 报文点出「人看得见，机器看不见」", /机器看不见/.test(r.out), r.out.slice(-900));
+  check("㈤ 有 2 行 DEFER 明细却无 DEFER= 字段 → exit 4，报文点出「人看得见，机器看不见」",
+    r.code === 4 && r.sum && r.sum.exit === 4 && /机器看不见/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
 }
 {
   // 负控：明细与字段对得上时不许报（对拍不能恒红）
@@ -389,10 +387,9 @@ console.log("\n──── ③′ JS 套不报计数 ⇒ 自检失败（issue #
 {
   const c = mkCase("no-summary-gated", { "zeta.tests.js": { noSummary: true } });
   const r = runRunner(c.dir);
-  check("JS 套 exit 0 但不打汇总行 → exit 4（不再带对勾放行）", r.code === 4 && r.sum && r.sum.exit === 4,
-    JSON.stringify(r.sum) + "\n" + r.out.slice(-800));
-  check("报文点出「条数下界」这个后果（只说「没报」等于没说）", /条数下界/.test(r.out), r.out.slice(-800));
-  check("报文给出修法（补上汇总行）", /补上汇总行/.test(r.out), r.out.slice(-800));
+  check("JS 套 exit 0 但不打汇总行 → exit 4，报文点出「条数下界」后果 + 给修法（补上汇总行）",
+    r.code === 4 && r.sum && r.sum.exit === 4 && /条数下界/.test(r.out) && /补上汇总行/.test(r.out),
+    JSON.stringify(r.sum) + "\n" + r.out.slice(-900));
   check("🔴 负控：red=0 且 fail=0，退出码仍是 4（这条拦阻不靠任何断言失败顶起来）",
     r.sum && r.sum.red === 0 && r.sum.fail === 0 && r.sum.exit === 4, JSON.stringify(r.sum));
 }
