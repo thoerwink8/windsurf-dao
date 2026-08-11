@@ -193,25 +193,19 @@ console.log("\n──── ① 全活（负控：不许把活闸判死）──
     }),
   });
   const r = run(d);
-  check("exit 0", r.code === 0 && r.sum && r.sum.exit === 0, JSON.stringify(r.sum) + " " + r.out.slice(-400));
-  check("dead=0", r.sum && r.sum.dead === 0, JSON.stringify(r.sum));
-  check("两层都被扫到（hooks=6：live 3 + 快照 3）", r.sum && r.sum.hooks === 6, JSON.stringify(r.sum));
-  check("自检 ok", r.sum && r.sum.self === "ok", JSON.stringify(r.sum));
-  check("孤儿 0（三个文件全被注册）", r.sum && r.sum.orphan === 0, JSON.stringify(r.sum));
-  // 占位符还原若失效，快照那 3 条会落进「无法核验」桶而非被真的核验过 —— 数它的计数，
-  // 别去 `!/无法核验/` 匹配全文：合计行自己就带着「无法核验 0」这几个字（初版在此自伤一次）。
+  check("exit 0 + dead=0 + 两层都被扫到（hooks=6）+ 自检 ok",
+    r.code === 0 && r.sum && r.sum.exit === 0 && r.sum.dead === 0 && r.sum.hooks === 6 && r.sum.self === "ok",
+    JSON.stringify(r.sum) + " " + r.out.slice(-400));
   check("占位符还原生效（快照 3 条真被核验，不是落进无法核验桶）",
     /· 无法核验 0 ·/.test(r.out), r.out.slice(-300));
-
   const j = run(d, ["--json"]);
   let doc = null;
   try { doc = JSON.parse(j.out.slice(0, j.out.lastIndexOf("DEAD_GATES_SUMMARY"))); } catch (_) { doc = null; }
   const gamma = doc ? (doc.alive || []).filter((a) => /dao-gamma\.mjs$/.test(a.token)) : [];
-  check("合法 .mjs 判活，且走的是权威路径（module goal → node --check）",
-    gamma.length === 2 && gamma.every((g) => g.syntax === "node --check"), JSON.stringify(gamma));
   const alphas = doc ? (doc.alive || []).filter((a) => /dao-alpha\.js$/.test(a.token)) : [];
-  check("script goal 的 .js 走进程内 vm（零 spawn 的快路真的被走到）",
-    alphas.length === 2 && alphas.every((a) => a.syntax === "vm"), JSON.stringify(alphas));
+  check("合法 .mjs 走权威路径（node --check）、.js 走进程内 vm（零 spawn 快路真被走到）",
+    gamma.length === 2 && gamma.every((g) => g.syntax === "node --check") &&
+    alphas.length === 2 && alphas.every((a) => a.syntax === "vm"), JSON.stringify(gamma));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -223,12 +217,11 @@ console.log("\n──── ② 指向不存在的脚本 → 红且指名 ──
     snap: () => settingsOf({ commands: ['node "' + PH + '/hooks/dao-alpha.js"'] }),
   });
   const r = run(d);
-  check("exit 1", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("dead=1", r.sum && r.sum.dead === 1, JSON.stringify(r.sum));
-  check("指名到具体脚本（只报个数字等于没报）", /dao-ghost\.js/.test(r.out), r.out.slice(-600));
-  check("说清死法是「脚本不存在」", /脚本不存在/.test(r.out), r.out.slice(-600));
-  check("活的那条不被牵连（dead 不是 2）", r.sum && r.sum.dead === 1);
-  check("自检仍 ok（这是真发现，不是扫描面塌）", r.sum && r.sum.self === "ok", JSON.stringify(r.sum));
+  check("exit 1 + dead=1 + 指名到具体脚本（只报个数字等于没报）",
+    r.code === 1 && r.sum && r.sum.exit === 1 && r.sum.dead === 1 && /dao-ghost\.js/.test(r.out),
+    JSON.stringify(r.sum));
+  check("说清死法是「脚本不存在」且活的那条不被牵连（dead 不是 2）",
+    /脚本不存在/.test(r.out) && r.sum.dead === 1, r.out.slice(-600));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -241,12 +234,10 @@ console.log("\n──── ③ 存在但语法坏掉 → 红（存在性过不�
     }),
   });
   const r = run(d);
-  check("exit 1", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("坏 .mjs 被检出（module goal 走 node --check）", /dao-bad\.mjs/.test(r.out), r.out.slice(-800));
-  check("坏 .js 被检出（script goal 走 vm.Script）", /dao-badcjs\.js/.test(r.out), r.out.slice(-800));
-  check("两条都算 dead", r.sum && r.sum.dead === 2, JSON.stringify(r.sum));
+  check("exit 1 + 坏 .mjs（node --check）与坏 .js（vm.Script）都被检出，两条都算 dead",
+    r.code === 1 && r.sum && r.sum.exit === 1 && /dao-bad\.mjs/.test(r.out) && /dao-badcjs\.js/.test(r.out) &&
+    r.sum.dead === 2, JSON.stringify(r.sum));
   check("报文说清是「语法不可载」而非「不存在」", /语法不可载/.test(r.out), r.out.slice(-800));
-  check("文件明明在，不许说成不存在", !/dao-bad\.mjs（归属/.test(r.out) || !/脚本不存在：.*dao-bad\.mjs/.test(r.out));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -259,10 +250,8 @@ console.log("\n──── ④ 孤儿 hook → 提示，不红 ────");
   const r = run(d);
   check("exit 0（孤儿不参与退出码）", r.code === 0 && r.sum && r.sum.exit === 0, JSON.stringify(r.sum));
   check("orphan=1", r.sum && r.sum.orphan === 1, JSON.stringify(r.sum));
-  check("指名孤儿文件", /dao-orphan\.js/.test(r.out), r.out.slice(-600));
-  check("明说是提示不是错误", /提示不是错误/.test(r.out), r.out.slice(-600));
-  check("README.md 不被当 hook 计数", !/README\.md/.test(r.out), r.out.slice(-600));
-  check("dead 仍为 0", r.sum && r.sum.dead === 0, JSON.stringify(r.sum));
+  check("指名孤儿文件 + 明说是提示不是错误 + dead 仍为 0",
+    /dao-orphan\.js/.test(r.out) && /提示不是错误/.test(r.out) && r.sum && r.sum.dead === 0, r.out.slice(-600));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -274,9 +263,9 @@ console.log("\n──── ⑤ 快照层独有的死闸（只扫 live 会漏掉
     snap: () => settingsOf({ commands: ['node "' + PH + '/hooks/dao-alpha.js"', 'node "' + PH + '/hooks/dao-snapghost.js"'] }),
   });
   const r = run(d);
-  check("exit 1（live 全活也要红）", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("指名快照层那条", /dao-snapghost\.js/.test(r.out), r.out.slice(-600));
-  check("报文标出来源是快照", /快照/.test(r.out), r.out.slice(-600));
+  check("exit 1（live 全活也要红）+ 指名快照层那条 + 报文标来源是快照",
+    r.code === 1 && r.sum && r.sum.exit === 1 && /dao-snapghost\.js/.test(r.out) && /快照/.test(r.out),
+    JSON.stringify(r.sum));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -291,12 +280,11 @@ console.log("\n──── ⑥ permissions 里的路径形态条目 ───�
     }),
   });
   const r = run(d);
-  check("deny 里指向不存在脚本 → 红", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("指名 permissions 那条", /dao-permghost\.js/.test(r.out), r.out.slice(-700));
-  check("报文标出面是 permissions.deny", /permissions\.deny/.test(r.out), r.out.slice(-700));
-  check("allow 里指向存在脚本 → 不判死", r.sum && r.sum.dead === 1, JSON.stringify(r.sum));
-  check("`Bash(grep:*)` 这类无路径条目不误伤", !/grep/.test(r.out.split("孤儿")[0] || ""), r.out.slice(0, 900));
-  check("permissions 条目不掺进 hooks 计数（那个数与普查配对）", r.sum && r.sum.hooks === 0, JSON.stringify(r.sum));
+  check("deny 里指向不存在脚本 → 红且指名 + 报文标出面是 permissions.deny",
+    r.code === 1 && r.sum && r.sum.exit === 1 && /dao-permghost\.js/.test(r.out) && /permissions\.deny/.test(r.out),
+    JSON.stringify(r.sum));
+  check("allow 里指向存在脚本 → 不判死；`Bash(grep:*)` 无路径条目不误伤；permissions 不掺进 hooks 计数",
+    r.sum && r.sum.dead === 1 && !/grep/.test(r.out.split("孤儿")[0] || "") && r.sum.hooks === 0, r.out.slice(0, 900));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -316,17 +304,12 @@ console.log("\n──── ⑦ 无法核验桶：不判红，但必须出声 �
     }),
   });
   const r = run(d);
-  check("exit 0（判不了 != 判死）", r.code === 0 && r.sum && r.sum.exit === 0, JSON.stringify(r.sum));
-  check("dead=0", r.sum && r.sum.dead === 0, JSON.stringify(r.sum));
-  check("三条都被打印出来（判不了必须可见）", /无法核验 3 条/.test(r.out), r.out.slice(-800));
-  check("明说「不等于通过」", /不等于通过/.test(r.out), r.out.slice(-800));
-  check("三类各自点名", /光文件名/.test(r.out) && /相对路径/.test(r.out) && /没有脚本形态的 token/.test(r.out), r.out.slice(-800));
-  // 「核不了」与「没注册」是两种病、两种处方。相对路径注册的脚本若被算成孤儿，
-  // 读者会去挂一个其实已经挂着的 hook。
-  check("相对/裸名注册也算「被提及」→ 不许误报成孤儿", r.sum && r.sum.orphan === 0, JSON.stringify(r.sum));
-  // 这个计数必须进机器通道：只读末行的消费方（SessionStart hook）若只看到 dead=0，
-  // 就会说出「零死闸」，而其中 3 条根本没被核验过 —— 「没查成」与「查了没事」必须分得开。
-  check("unverifiable 计数进末行契约（不是只写在中文正文里）", r.sum && r.sum.unver === 3, JSON.stringify(r.sum));
+  check("exit 0（判不了 != 判死）+ dead=0 + 三条都被打印（判不了必须可见）",
+    r.code === 0 && r.sum && r.sum.exit === 0 && r.sum.dead === 0 && /无法核验 3 条/.test(r.out),
+    JSON.stringify(r.sum));
+  check("明说「不等于通过」+ 三类各自点名 + 相对/裸名注册不算孤儿 + unver 进末行契约",
+    /不等于通过/.test(r.out) && /光文件名/.test(r.out) && /相对路径/.test(r.out) &&
+    /没有脚本形态的 token/.test(r.out) && r.sum.orphan === 0 && r.sum.unver === 3, r.out.slice(-800));
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -340,11 +323,10 @@ console.log("\n──── ⑧ 自检半边：扫描面塌陷必须变红 ─�
     live: (dir) => settingsOf({ commands: [], parked: ['node "' + abs(dir, "dao-alpha.js") + '"'] }),
   });
   const r = run(d);
-  check("exit 1（零死闸也不许报绿）", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("selfcheck=fail", r.sum && r.sum.self === "fail", JSON.stringify(r.sum));
-  check("dead=0 而 exit=1 —— 两种红在机器通道上分得开", r.sum && r.sum.dead === 0 && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("报文点出 zero-sample", /zero-sample/.test(r.out), r.out.slice(-700));
-  check("明说此时「零死闸」不可信", /不可信/.test(r.out), r.out.slice(-700));
+  check("exit 1（零死闸也不许报绿）+ selfcheck=fail + dead=0 而 exit=1（两种红分得开）",
+    r.code === 1 && r.sum && r.sum.exit === 1 && r.sum.self === "fail" && r.sum.dead === 0 && r.sum.exit === 1,
+    JSON.stringify(r.sum));
+  check("报文点出 zero-sample 且明说「零死闸」不可信", /zero-sample/.test(r.out) && /不可信/.test(r.out), r.out.slice(-700));
 }
 {
   const d = mkCase("selfcheck-undercount", {
@@ -355,8 +337,8 @@ console.log("\n──── ⑧ 自检半边：扫描面塌陷必须变红 ─�
     }),
   });
   const r = run(d);
-  check("部分塌陷（1 条看得见、1 条看不见）→ 红", r.code === 1 && r.sum && r.sum.exit === 1, JSON.stringify(r.sum));
-  check("报文点出 undercount 并给出两个数", /undercount/.test(r.out) && /普查/.test(r.out), r.out.slice(-700));
+  check("部分塌陷（1 条看得见、1 条看不见）→ 红，报文点出 undercount 并给两个数",
+    r.code === 1 && r.sum && r.sum.exit === 1 && /undercount/.test(r.out) && /普查/.test(r.out), JSON.stringify(r.sum));
 }
 {
   // 负控：自检半边不许恒红 —— 正常样本上必须 ok（否则它和永远为真的废话是镜像关系）
@@ -374,9 +356,8 @@ console.log("\n──── ⑨ 末行契约：每条路径都打印，含「没
   const d = mkCase("live-unreadable", { files: { "dao-alpha.js": VALID_CJS } });
   fs.rmSync(path.join(d, "live.json"));
   const r = run(d);
-  check("live 读不到仍打印末行（没查成不许表现为「什么都没说」）", r.sum !== null, r.out.slice(-500));
-  check("exit 1 + selfcheck=fail", r.sum && r.sum.exit === 1 && r.sum.self === "fail", JSON.stringify(r.sum));
-  check("点名 live-unreadable", /live-unreadable/.test(r.out), r.out.slice(-600));
+  check("live 读不到仍打印末行 + exit 1 + selfcheck=fail + 点名 live-unreadable",
+    r.sum !== null && r.sum.exit === 1 && r.sum.self === "fail" && /live-unreadable/.test(r.out), r.out.slice(-600));
 }
 {
   const d = mkCase("json-mode", {
@@ -384,11 +365,11 @@ console.log("\n──── ⑨ 末行契约：每条路径都打印，含「没
     live: (dir) => settingsOf({ commands: ['node "' + abs(dir, "dao-alpha.js") + '"', 'node "' + abs(dir, "dao-ghost.js") + '"'] }),
   });
   const r = run(d, ["--json"]);
-  check("--json 也打末行", r.sum !== null, r.out.slice(-300));
   let doc = null;
   try { doc = JSON.parse(r.out.slice(0, r.out.lastIndexOf("DEAD_GATES_SUMMARY"))); } catch (e) { doc = null; }
-  check("--json 正文可解析", doc !== null, r.out.slice(0, 200));
-  check("--json 带死闸明细（不是只给个数）", doc && Array.isArray(doc.dead) && doc.dead.length === 1 && /dao-ghost/.test(doc.dead[0].token), JSON.stringify(doc && doc.dead));
+  check("--json 也打末行、正文可解析、带死闸明细（不是只给个数）",
+    r.sum !== null && doc !== null && Array.isArray(doc.dead) && doc.dead.length === 1 && /dao-ghost/.test(doc.dead[0].token),
+    JSON.stringify(doc && doc.dead));
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -228,6 +228,19 @@ function shortNameOf(dir) {
   }
   return null;
 }
+// 文件的 8.3 短名（同一套 realpath 往返判据）。与 shortNameOf 分开：扩展名截到 3 位
+// （`settings.json` → `SETTIN~1.JSO`），且文件不存在时没有短名可解 ⇒ 调用方须 gate 在
+// 返回值非 null 上，别硬断言（#308：8.3 可用性是本卷事实不是测试能造的）。
+function fileShortNameOf(file) {
+  const parts = String(file).split(/[\\/]/), leaf = parts.pop(), parent = parts.join("\\");
+  if (!leaf || leaf.length <= 8) return null;
+  const stem = leaf.replace(/[+,;=[\]]/g, "_").slice(0, 6).toUpperCase();
+  for (const i of [1, 2, 3, 4]) {
+    const cand = `${parent}\\${stem}~${i}`;
+    try { if (_bs(fs.realpathSync.native(cand)) === _bs(file)) return cand; } catch (_) { /* 没这个短名 */ }
+  }
+  return null;
+}
 
 // ── #87 绕过命令原文（真语料，session 9364d260 / 751b40c0 转录逐字）─────────────
 // 🔴 **2026-08-04 提到模块级，只此一份**。原先它是 G2 shell 节里的块内局部常量，
@@ -938,7 +951,9 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
   const P6 = ps(`Copy-Item -Path _tmp/x.json ${LIVE_V} -Force`);
   const P7 = ps(`Copy-Item .\\settings.json -Destination ${LIVEDIR_V} -Force`);
   const P9 = edit(`${HOME}\\.claude\\..\\.claude\\settings.json`);
-  const P9_83 = edit("C:\\Users\\ADMINI~1\\.claude\\settings.json");   // 写死语料仅当本机有短名时才喂（见下）
+  // 8.3 短名语料：算出来而不是写死 `ADMINI~1`（#308：写死的是另一台机器的短名，换机器/换卷全错）
+  const P9_83_SHORT = shortNameOf(HOME);
+  const P9_83 = P9_83_SHORT ? edit(`${P9_83_SHORT}\\.claude\\settings.json`) : edit("C:\\__NO83__\\.claude\\settings.json");
 
   // 甲⑥ 三形态 —— 三条路各自独立地能让这一格重新漏掉
   mutate3("⑥①移除·门槛写死回 2（等于把本格的修复整个删掉）",
@@ -990,8 +1005,8 @@ console.log("\n──── G2 · issue #112 三格修复（甲⑥ 具名源 / �
     /  return g2Canon\(g2ResolvePre\(raw, cwd, vars\), rp\);\r?\n\}/,
     "  g2Canon(g2ResolvePre(raw, cwd, vars), rp);\n  return g2ResolvePre(raw, cwd, vars);\n}", P9, 2, 0);
   // 8.3 那一层单独换靶：证明拦下短名的是 realpath 那一步，不是别的分支顺手拦的
-  // 2026-08-11：P9_83 是本机 home 的短名形态语料——本机用户目录无短名时这两条不适用 ⇒ SKIP。
-  if (shortNameOf(HOME)) {
+  // 本机/本卷无 8.3 短名（长名 ≤8 字符或 NtfsDisable8dot3NameCreation）时这两条不适用 ⇒ SKIP。
+  if (P9_83_SHORT) {
     mutate3("⑨·8.3 单独换靶·realpath 那一步被关掉 ⇒ 短名形态重新漏掉",
       RE_LONGPATH_CALL, "if (false) s = g2LongPath(s, rp);", P9_83, 2, 0);
     // #199 新增：把**前筛**单独换靶（同一行的另一半）。它与上一条不是同一件事 ——
@@ -1121,18 +1136,21 @@ console.log("\n──── G2 · 对抗验证官夹击（#117 第二轮 · 合�
   }
 
   // ㈠ #112 真的修好了、但那一批没有断言的形态 ────────────────────────────────
-  // 头注 g2LongPath ㈢ 写着「文件名本身是短名（`SETTIN~1.JSON`）以外的形态都接得住」，
-  // 语气是**没接住文件名短名**。实测反过来：本卷上 settings.json 的真实短名是
-  // `SETTIN~1.JSO`（**扩展名截到 3 位**，头注写的 `.JSON` 是四位、根本不存在），
-  // 而因为那个文件**存在**，realpath 一步就把整条解开了 ⇒ 文件名短名同样被拦。
-  // ⇒ ⑨ 比它自己的文档更强，这一组把「更强」的那部分钉住，免得后人照头注去收窄它。
-  const EXTRA_BLOCK = SHORT_HOME ? [
-    ["⑨ 补·长目录 + **文件名** 8.3（`SETTIN~1.JSO`，本卷实测的真短名）", edit(`${LIVEDIR}\\SETTIN~1.JSO`)],
-    ["⑨ 补·目录与文件名**都是**短名", edit(`${SHORT_HOME}\\.claude\\SETTIN~1.JSO`)],
-    ["⑨ 补·settings.local.json 的短名 `SETTIN~2.JSO`", edit(`${LIVEDIR}\\SETTIN~2.JSO`)],
+  // 文件名本身的 8.3 短名（`SETTIN~1.JSO` 之类）——短名随卷/目录现存 8.3 名而变，
+  // 写死会变成另一台机器的短名（#308）⇒ 用 fileShortNameOf 现算，算不出（本卷不生成
+  // 文件级 8.3，或 settings.json 不存在）就 SKIP 那几条。
+  const LIVE_SETTINGS83 = fileShortNameOf(path.join(LIVEDIR, "settings.json"));
+  const LOCAL_SETTINGS83 = fileShortNameOf(path.join(LIVEDIR, "settings.local.json"));
+  const EXTRA_BLOCK = SHORT_HOME && LIVE_SETTINGS83 ? [
+    ["⑨ 补·长目录 + **文件名** 8.3（现算短名）", edit(`${LIVEDIR}\\${LIVE_SETTINGS83}`)],
+    ["⑨ 补·目录与文件名**都是**短名", edit(`${SHORT_HOME}\\.claude\\${LIVE_SETTINGS83}`)],
     ["⑨ 补·8.3 短名 + NTFS 备用数据流（realpath 顺带剥掉 `::$DATA`）",
       edit(`${SHORT_HOME}\\.claude\\settings.json::$DATA`)],
+    ...(LOCAL_SETTINGS83 ? [["⑨ 补·settings.local.json 的短名", edit(`${LIVEDIR}\\${LOCAL_SETTINGS83}`)]] : []),
   ] : [];
+  if (EXTRA_BLOCK.length === 0) {
+    console.log("  SKIP  ⑨ 补·文件名 8.3 短名正控四条  ->  本卷无 8.3 短名或 live settings 不存在，不适用");
+  }
   for (const [name, p] of EXTRA_BLOCK) {
     const r = gate(p);
     check(`正控：${name} → exit 2`, r.code === 2 && /G2-live-settings/.test(r.err), `code=${r.code}`);
@@ -1584,13 +1602,13 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
     { encoding: "utf8", windowsHide: true });
   const CL_SHORT = shortNameOf(CL_HOME);
   const clReal = (() => { try { return fs.realpathSync.native(CL_LINK); } catch (_) { return ""; } })();
-  check("#214 前置·候选侧链 fixture 造得出来（`mklink /J altlink → <home>\\.claude`）",
+  check("#214 前置·候选侧链 fixture 造得出来（`mklink /J altlink → <home>\.claude`）",
     clMk.status === 0, clMk.status === 0 ? "ok" : `mklink exit=${clMk.status}（⇒ 下面那组只是没测到，不是通过）`);
   check("#214 前置·它真解得到 live 目录（否则下面测的不是「只有 realpath 解得开」那一格）",
     /[\\/]\.claude$/i.test(clReal), `realpath=${clReal}`);
-  check("#214 前置·该假 HOME 算得出真 8.3 短名（候选里得有 `~N`，`g2Canon` 才会落 realpath）",
-    !!CL_SHORT, `short=${CL_SHORT}`);
+  // 8.3 短名可用性是本卷事实不是 fixture 能造的（#308）：算不出 ⇒ 该组 SKIP，不是 FAIL。
   const clOk = clMk.status === 0 && /[\\/]\.claude$/i.test(clReal) && !!CL_SHORT;
+  if (!CL_SHORT) console.log("  SKIP  #214 相② 正控组  ->  本卷不生成 8.3 短名（NtfsDisable8dot3NameCreation），不适用");
   // 候选：短名段（给 `g2Canon` 一个 `~N` 让它落 realpath）+ junction 段（相③ 展不开）
   const payLink = clOk ? ps(`Copy-Item src.json "${CL_SHORT}\\altlink\\settings.json" -Force`) : null;
   const clEnv = { USERPROFILE: CL_HOME };
