@@ -1,7 +1,5 @@
 // hook-budget 两态自证 · 单元级（每个行为分支留正控 + 负控/反向）
 //
-// 跑法：node tests/hook-budget.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 验的是「宿主给我多少时间」这个数能不能被 hook 自己算对，以及算错时往哪一侧错。
 // 判据正文在 ccswitch/lib/hook-budget.js 头注（唯一真相源）。
 // 所有输出都是数字，数字类判据的单向断言几乎夹不住任何东西 ⇒ 每条配反向语料：

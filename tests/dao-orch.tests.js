@@ -1,5 +1,4 @@
 // tests/dao-orch.tests.js — scripts/dao-orch.mjs 的行为测试（全程 dry-run / 假 orca，不建真 task）
-// 跑法：node tests/dao-orch.tests.js（全绿 exit 0）
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");

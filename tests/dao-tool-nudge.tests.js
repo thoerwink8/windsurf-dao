@@ -1,7 +1,5 @@
 // dao-tool-nudge hook 回归网 — 每类提醒各留正控 + 误伤负控 + mutation 判别力
 //
-// 跑法：node tests/dao-tool-nudge.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 判据是近似的（段首正则），别把全绿读成「分得清一切」：嵌套形态（`for r in …; do gh pr merge`）、
 // 环境变量前缀、字符串字面量里的命令等盲区**刻意不补**——本 hook 是软提醒不是守卫，
 // 误伤一次（污染一次 context）高于漏报一次。
