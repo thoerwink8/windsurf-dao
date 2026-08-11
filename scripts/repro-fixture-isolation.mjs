@@ -54,10 +54,17 @@
 //     另一个官的写入）触发，跟本网并发几路毫无关系 —— 调高并发数一辈子也复现不出来。
 //
 // 跑法：
-//   node scripts/repro-fixture-isolation.mjs                     # 默认 6 并发 × 3 轮
-//   node scripts/repro-fixture-isolation.mjs -c 2 -r 20          # issue #82 的关闭条件
-//   node scripts/repro-fixture-isolation.mjs --selfcheck         # 对照组 B
-//   node scripts/repro-fixture-isolation.mjs -t tests/xxx.tests.js
+//   node scripts/repro-fixture-isolation.mjs -t tests/xxx.tests.js   # `-t` 必填：原默认目标
+//                                                                   # tests/dao-rule-echo.tests.js
+//                                                                   # 已随 PR #307（归宿表类 C）退役
+//   node scripts/repro-fixture-isolation.mjs -c 2 -r 20 -t tests/xxx.tests.js  # issue #82 的关闭条件
+//   node scripts/repro-fixture-isolation.mjs --selfcheck            # 对照组 B（不需 -t）
+//
+// 🔴 2026-08-11（PR #307 之后）：「灭提示型/辅助类测试」把本脚本的唯一原生目标
+//   tests/dao-rule-echo.tests.js 整套删掉（归宿表类 C）。实测留守 16+2 套里没有一个能被
+//   本沙箱（hooks+lib 两层）装载——A′ 等价对照组全部 exit 2「无从归因」。本脚本因此从
+//   「常驻回归网」退化为 **opt-in 谐架**：默认目标已不存在，`-t` 改为必填；将来若有新的
+//   夹具互染型测试，用它重挂。
 //
 // 退出码：0 零互染 · 1 检测到互染（或有残留） · 2 基线不活/无从归因 · 3 用法或环境错误
 
@@ -87,7 +94,9 @@ function excludeLiteralOfHook() {
 
 // ── 参数 ────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const o = { concurrency: 6, rounds: 3, test: "tests/dao-rule-echo.tests.js", keep: false, selfcheck: false };
+  // `-t` 必填（原默认目标 tests/dao-rule-echo.tests.js 已随 PR #307 归宿表类 C 退役，
+  // 默认指向一个不存在的文件比没有默认更糟）。--selfcheck 例外，见下面校验顺序。
+  const o = { concurrency: 6, rounds: 3, test: null, keep: false, selfcheck: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-c" || a === "--concurrency") o.concurrency = Number(argv[++i]);
@@ -106,8 +115,12 @@ if (opts.bad) { process.stderr.write(`[repro] 不认识的参数：${opts.bad}\n
 if (!Number.isInteger(opts.concurrency) || opts.concurrency < 1) { process.stderr.write("[repro] --concurrency 需 >=1 的整数\n"); process.exit(3); }
 if (!Number.isInteger(opts.rounds) || opts.rounds < 1) { process.stderr.write("[repro] --rounds 需 >=1 的整数\n"); process.exit(3); }
 
-const TEST_ABS = path.resolve(REPO, opts.test);
-if (!fs.existsSync(TEST_ABS)) { process.stderr.write(`[repro] 找不到被测文件：${TEST_ABS}\n`); process.exit(3); }
+if (!opts.test && !opts.selfcheck) {
+  process.stderr.write("[repro] 需要 -t <tests/xxx.tests.js>：原默认目标 tests/dao-rule-echo.tests.js 已随 PR #307（归宿表类 C）退役，不再有默认。\n");
+  process.exit(3);
+}
+const TEST_ABS = opts.test ? path.resolve(REPO, opts.test) : null;
+if (TEST_ABS && !fs.existsSync(TEST_ABS)) { process.stderr.write(`[repro] 找不到被测文件：${TEST_ABS}\n`); process.exit(3); }
 
 // ── 对照组 B：检测器不是瞎的 ────────────────────────────────────────────────
 // 喂一个必然失败的合成子进程，确认「聚合器判红」这条路真的通。
@@ -138,8 +151,9 @@ const RUN_ID = `${process.pid}-${crypto.randomBytes(3).toString("hex")}`;
 // ⚠️ 2026-08-10（issue #253）分工订正 —— **别把这一行读成「排除面问题由这里挡着」**：
 // 它只管**相对**落点。`REPO` 本身是从 `import.meta.url` 长出来的，**整棵树坐落在哪，沙箱
 // 就坐落在哪** ⇒ 把树 checkout 到 `<x>/_tmp/wt/` 之下，沙箱照样落进排除面，这一行拦不住。
-// 那一格现在由**被测文件自己**兜（`dao-rule-echo.tests.js` 的 `pickFixtureRoot()`：夹具落点
-// 命中排除面就退到系统临时目录）。本脚本这一侧**刻意不再复制那份判据**——两份会漂移，而
+// 那一格曾由**被测文件自己**兜（`dao-rule-echo.tests.js` 的 `pickFixtureRoot()`：夹具落点
+// 命中排除面就退到系统临时目录；该测试文件已于 2026-08-11 随 PR #307 归宿表类 C 退役）。
+// 本脚本这一侧**刻意不再复制那份判据**——两份会漂移，而
 // 兜底本来就在下面的对照组 A/A′：树摆错地方时它给的是 exit 2「无从归因」，不是假绿。
 // 实测（2026-08-10，树 = `<repo>/_tmp/verify253-excluded`）：修被测文件之前 exit 2
 //（真位置与沙箱同为 PASS=55 FAIL=10）；修好之后 exit 0，A′ 两侧同为 PASS=70 FAIL=0。

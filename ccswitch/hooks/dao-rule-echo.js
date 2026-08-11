@@ -38,10 +38,11 @@
 //
 // 真相源：windsurf-dao/ccswitch/hooks/dao-rule-echo.js
 // 由 settings.json 的 PostToolUse hook 调用（注册 JSON 片段见本文件末尾「注册片段」注释块）。
-// 自证：node tests/dao-rule-echo.tests.js（两态 + 错误可见性 + 逐条判据样本；
-//   **条数以那次运行末尾的 `=== 汇总: PASS=… ===` 为准，此处刻意不写数字**——
-//   原文写着「46 断言」，而盘上一路涨到 86 一次没跟上：手维护的枚举必过期，
-//   本仓已被咬过三次。改真出处 issue #272 件③，用户 2026-08-10 拍板 issue #70）。
+// 自证：tests/dao-rule-echo.tests.js 已于 2026-08-11 随 PR #307（tests 终局·归宿表类 C）
+//   整套退役——「提示型脚本错了没人死、测试比脚本贵」。本 hook 的业务判据
+//   （RULE_PATTERNS / EXCLUDE / 回灌正文）目前零专项测试，那是归宿表的刻意取舍，
+//   不是欠账；共享脚手架层（hook-selfcheck / hook-budget）的测试仍在 tests/ 下。
+//   若要重新为它加测试，先过归宿表决定——issue #267 的 M3 沙箱补守方案即因此未实施。
 
 const fs = require("node:fs");
 const os = require("node:os");

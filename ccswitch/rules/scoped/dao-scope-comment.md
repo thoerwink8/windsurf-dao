@@ -28,4 +28,4 @@ paths:
 > 之所以仍挂全量：写注释必然要先 Read 那份文件（宿主对「覆写既有文件」有硬规则），
 > 触发时刻天然存在且机器可判，而文件名区分不出哪一次是来写注释的。
 > 觉得吵就删这个文件再跑一次 `node ccswitch/scripts/dao-rules-deploy.mjs`，
-> 不影响 `dao-comment.md` 的判据半，也不影响 `tests/nogo-ledger.tests.js` 那道机检半。
+> 不影响 `dao-comment.md` 的判据半（机检半已随 PR #307 退役）。
