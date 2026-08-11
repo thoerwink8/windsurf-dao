@@ -37,10 +37,10 @@ npm install -g @mariozechner/pi-coding-agent
         "supportsReasoningEffort": false
       },
       "models": [
-        { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "reasoning": true, "input": ["text"], "contextWindow": 800000, "maxTokens": 32768 },
+        { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "reasoning": true, "input": ["text"], "contextWindow": 300000, "maxTokens": 32768 },
         { "id": "glm-5.2", "name": "GLM 5.2", "reasoning": true, "input": ["text"], "contextWindow": 800000, "maxTokens": 32768 },
         { "id": "gpt-5.6-luna", "name": "GPT 5.6 Luna", "reasoning": true, "input": ["text", "image"], "contextWindow": 800000, "maxTokens": 32768 },
-        { "id": "kimi-k3", "name": "Kimi K3", "reasoning": true, "input": ["text", "image"], "contextWindow": 800000, "maxTokens": 32768 }
+        { "id": "kimi-k3", "name": "Kimi K3", "reasoning": true, "input": ["text", "image"], "contextWindow": 300000, "maxTokens": 32768 }
       ]
     }
   }
@@ -58,14 +58,14 @@ npm install -g @mariozechner/pi-coding-agent
   "compaction": {
     "enabled": true,
     "reserveTokens": 32768,
-    "keepRecentTokens": 20000
+    "keepRecentTokens": 32768
   }
 }
 ```
 
 ## 4. 设计决策（写下来让后人不误改）
 
-- **4 个模型真实上下文都是 1M**（网关 `/api/pricing` description 字段 + GLM-5.2 官方文档），但 `contextWindow` **故意声明 800000**：pi 无百分比压缩阈值，触发公式是 `已用 > contextWindow − reserveTokens`（源码 `compaction.js:152` 核实），800000 − 32768 ≈ 真实 1M 的 76.7%，实现「70~80% 自动压缩」的要求。想用满 1M 就改回 1000000。
+- **4 个模型真实上下文都是 1M**（网关 `/api/pricing` description 字段 + GLM-5.2 官方文档），但 `contextWindow` **故意声明得更小**：pi 无百分比压缩阈值，触发公式是 `已用 > contextWindow − reserveTokens`（源码 `compaction.js:152` 核实）。worker 常用的两个模型（deepseek-v4-flash / kimi-k3）声明 **300000**——压缩早触发，单请求峰值受控（长会话实测过 428k/请求的账单曲线后收窄）；worker 的状态都在盘上（提交/任务书），丢会话旧细节无伤。另两个模型保持 800000。想用满 1M 改回 1000000。
 - `supportsDeveloperRole: false` + `supportsReasoningEffort: false`：网关代理场景的兼容设置（pi 官方文档对 OpenAI 兼容代理的建议）。
 - gpt-5.6-luna 计费分层：输入超 272K 后单价翻倍，长上下文任务留意。
 
