@@ -298,7 +298,7 @@ P1 顺手逮到 19d 在说谎，那是那一轮最值钱的产出。
 
 ## C8 · dead-gates.tests.js 分层（env 标记）的由来与条件组过程史
 
-**源文件** `tests/dead-gates.tests.js` · **迁出于 commit `<SHA>`** · 回到当时全文：`git show <SHA>^:tests/dead-gates.tests.js`
+**源文件** `tests/dead-gates.tests.js` · **迁出于 commit `2f06b7b`** · 回到当时全文：`git show 2f06b7b^:tests/dead-gates.tests.js`
 
 原头注「上面那行 `@dao-test-tier: env` 是给 run-tests.mjs 读的（issue #116）」至「跑 --env 要什么环境」
 各节的**过程性溯源**。留在原文件的是分层判据本身与真实语料半边由谁接管的现状。迁走的是：
@@ -337,7 +337,7 @@ P1 顺手逮到 19d 在说谎，那是那一轮最值钱的产出。
 
 ## C9 · dao-merge-cleanup.tests.ps1 场景 9–16 的补史
 
-**源文件** `tests/dao-merge-cleanup.tests.ps1` · **迁出于 commit `<SHA>`** · 回到当时全文：`git show <SHA>^:tests/dao-merge-cleanup.tests.ps1`
+**源文件** `tests/dao-merge-cleanup.tests.ps1` · **迁出于 commit `2f06b7b`** · 回到当时全文：`git show 2f06b7b^:tests/dao-merge-cleanup.tests.ps1`
 
 原 .DESCRIPTION 里「9–15 是 2026-08-10 返修补的」与「16 是同日复抗补的」两段。留在原文件的是
 各场景要证的行为本身。迁走的是补史的**出处与因果**：
@@ -352,7 +352,7 @@ P1 顺手逮到 19d 在说谎，那是那一轮最值钱的产出。
 
 ## C10 · dao-scaffold-check.tests.js mutation 锚点行尾的订正史
 
-**源文件** `tests/dao-scaffold-check.tests.js` · **迁出于 commit `<SHA>`** · 回到当时全文：`git show <SHA>^:tests/dao-scaffold-check.tests.js`
+**源文件** `tests/dao-scaffold-check.tests.js` · **迁出于 commit `2f06b7b`** · 回到当时全文：`git show 2f06b7b^:tests/dao-scaffold-check.tests.js`
 
 原头注「行尾：本文件里的 mutation 锚点为什么写 `\r?\n`（2026-08-06 订正一处实证）」里被划掉的
 **假实证与复测过程**。留在原文件的是订正后的结论（跨检出可移植）。迁走的是：
