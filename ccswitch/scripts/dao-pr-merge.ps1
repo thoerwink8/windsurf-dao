@@ -136,6 +136,10 @@
 .PARAMETER MainBranch
     主干分支名。缺省从 `origin/HEAD` 探测，探不到时回落 main（再回落 master）。
 
+    2026-08-11 tests 终局追加：本仓（有 scripts/dao-affected-tests.mjs）第 4 步免传
+    -VerifyCommand —— 改「改谁才检谁」：按 diff 映射受影响留守套逐套跑（映射表住那个脚本里）；
+    判不出 diff 时 fail-closed 回落全量 --env。跨项目仓行为不变（仍必须显式传）。
+
 .PARAMETER VerifyCommand
     合并后要重跑的验证命令（整串，交给 shell 之外的 `Invoke-Expression` 之前会原样打印）。
     **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，dao 侧是
@@ -296,7 +300,12 @@ Write-Step '0. 前置检查'
 
 if ($PullRequest -le 0) { Fail "PR 号非法：$PullRequest" 3 }
 if ($SkipVerify -and $VerifyCommand) { Fail '-SkipVerify 与 -VerifyCommand 互斥，二选一' 3 }
-if (-not $SkipVerify -and -not $VerifyCommand) {
+# 2026-08-11 tests 终局：本仓（有 scripts/dao-affected-tests.mjs）免传 -VerifyCommand ——
+# 验证步改「改谁才检谁」：按 diff 映射受影响的留守套逐套跑（碰了某 hook 才跑它那套，秒级；
+# 没碰闸一套不跑）。跨项目仓仍必须显式传。
+$affectedScript = Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'
+$useAffected = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $affectedScript)
+if (-not $SkipVerify -and -not $VerifyCommand -and -not $useAffected) {
     Fail '必须传 -VerifyCommand（合并后要重跑什么，跨项目不可知），或显式 -SkipVerify（那时退出码为 2）' 3
 }
 
@@ -404,7 +413,43 @@ if ($SkipVerify) {
     $verifySkipped = $true
     Write-Skip '验证被显式 -SkipVerify 跳过 —— 最终退出码将是 2，不是 0'
 } elseif ($DryRun) {
-    Write-Plan "在 $RepoPath 下执行：$VerifyCommand"
+    if ($useAffected) { Write-Plan "改谁才检谁：node scripts/dao-affected-tests.mjs 算出受影响留守套逐套跑（零套⇒秒过）" }
+    else { Write-Plan "在 $RepoPath 下执行：$VerifyCommand" }
+} elseif ($useAffected) {
+    Push-Location $RepoPath
+    try {
+        $global:LASTEXITCODE = 0
+        $affectedJson = & node scripts/dao-affected-tests.mjs --json
+        $aCode = $LASTEXITCODE
+        $suiteList = @()
+        if ($aCode -eq 0) {
+            try { $suiteList = @(($affectedJson | ConvertFrom-Json).tests) } catch { $suiteList = @() }
+        }
+        if ($aCode -ne 0) {
+            # diff 判不出 ⇒ fail-closed 跑全部（「判不出」不许被读成「不用检」）
+            Write-Info 'affected-tests 判不出 diff ⇒ 回落跑全量：node scripts/run-tests.mjs --env'
+            $global:LASTEXITCODE = 0
+            & node scripts/run-tests.mjs --env
+            $vcode = $LASTEXITCODE
+            if ($vcode -ne 0) { Fail "全量验证退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+            Write-Ok '全量验证通过（退出码 0）'
+        } elseif ($suiteList.Count -eq 0) {
+            Write-Ok '改谁才检谁：本次 diff 没碰任何有行为测试的面（纯文字/文档类）⇒ 零套，秒过'
+        } else {
+            Write-Info ("改谁才检谁：受影响留守套 " + $suiteList.Count + " 套逐套跑：" + ($suiteList -join '、'))
+            foreach ($suite in $suiteList) {
+                $global:LASTEXITCODE = 0
+                if ($suite -like '*.ps1') {
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File $suite
+                } else {
+                    & node $suite
+                }
+                $scode = $LASTEXITCODE
+                if ($scode -ne 0) { Fail "受影响套 $suite 退出码 $scode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+            }
+            Write-Ok ("受影响套全绿（" + $suiteList.Count + " 套）")
+        }
+    } finally { Pop-Location }
 } else {
     Write-Info "执行：$VerifyCommand"
     Push-Location $RepoPath

@@ -105,6 +105,11 @@ worker_done 不是验收，只是铃响。验收 = `scripts/dao-exit-gate.mjs` �
 （格式 / 凭证边界 / 卫生+guardEvidence / 限时重放），契约见该脚本头注。
 人工最终审核不退役——门阀只抬门槛，判断仍是人的。
 
+合并链的验证步走**改谁才检谁**（tests 终局拍板）：`dao-pr-merge.ps1` 在本仓免传
+`-VerifyCommand`——`scripts/dao-affected-tests.mjs` 按 diff 映射受影响的留守测试套
+（碰了某 hook 才跑它那套，秒级；没碰闸一套不跑；判不出 diff 时 fail-closed 跑全量）。
+映射表住脚本里不住文字，加删留守套时同步改它。
+
 ## 四、grill 技能的归位（2026-08-11 用户拍板引入）
 
 `grilling` / `grill-me`（Matt Pocock 原版，MIT）收进 `ccswitch/skills/` 随 `link-claude`
