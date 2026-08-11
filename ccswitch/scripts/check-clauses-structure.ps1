@@ -1,26 +1,22 @@
 ﻿<#
 .SYNOPSIS
     条款库结构完整性硬闸（canonical）。检查一份「带元字段的规则集」自身有没有静默腐坏。
-    **缺省是全量模式**（2026-08-07 · issue #176）：不传 -TargetFile ⇒ 现场扫出本仓
-    全部**含条款**的文件逐份检；传了 -TargetFile ⇒ 只检那一份（那条路径与本参数存在
-    以来完全一致，一个字节没动）。项目可用 -TargetFile 指向自己的条款库全文。
+    **缺省是全量模式**：不传 -TargetFile ⇒ 现场扫出本仓全部**含条款**的文件逐份检；
+    传了 -TargetFile ⇒ 只检那一份（那条路径与本参数存在以来完全一致，一个字节没动）。
+    项目可用 -TargetFile 指向自己的条款库全文。
 
 .DESCRIPTION
-    ── 这份 canonical 从哪来、为什么现在才有 ──────────────────────────────────
-    「规则集只增不减是结构必然」那条自带 `触发:verify-all/check-clauses-structure`（**2026-08-01 起
-    该条正文迁 ccswitch/rules/dao-guard-writing.md**，dao.md 反·归只留存根+条款名，故按名字仍搜得到），
-    而那个检查器**只存在于 mousse-cli/scripts/**（2026-08-01 审计实证：ccswitch/scripts/ 下
-    只有 dao-config-sync.ps1，windsurf-dao/tests/ 无一条款库相关用例）⇒ **dao.md 这个规则集
-    本身从未被它守过**，「立法者不受自己的法约束」的又一实例（同 scaffold-manifest 取消元仓库
-    整体豁免那次）。本文件是把那个检查器搬进共享层。
+    ── 这份 canonical 从哪来 ────────────────────────────────────────────────
+    「规则集只增不减是结构必然」那条自带 `触发:verify-all/check-clauses-structure`（正文已迁
+    ccswitch/rules/dao-guard-writing.md，dao.md 反·归只留存根+条款名），而那个检查器此前**只存在
+    于 mousse-cli/scripts/** ⇒ **dao.md 这个规则集本身从未被它守过**（立法者不受自己的法约束）。
+    本文件是把那个检查器搬进共享层。
 
     ── 搬运时被证伪的一件事：不能只参数化路径 ─────────────────────────────────
     审计官原方案是「路径参数化即可」。对抗验证官证伪：mousse 版的条款判据是
     **「零缩进 `- ` 行一律是条款，必须带元字段」**，而 dao.md 的顶层 bullet 大量是
-    散文分点 —— 2026-08-01 实测 dao.md 有 65 个零缩进 `- ` 行、其中**只有 10 个**带元字段
-    ⇒ 直接指过去会喷 55 条假 FAIL，第一次跑就会被当噪音关掉。
-    更硬的一层（实测才发现，原方案与对抗官都没说到）：dao.md 的条款**不止住在列表项里**——
-    20 条带元字段的行分布为 顶层 `- ` 10 条 / **缩进** `- ` 7 条 / **纯散文段落** 3 条。
+    散文分点 —— 直接指过去会喷大量假 FAIL，第一次跑就会被当噪音关掉。
+    更硬的一层：dao.md 的条款**不止住在列表项里**（纯散文段落里也有带元字段的行）。
     ⇒ 对 dao.md 而言，「行的形态」根本不是条款的签名，**元字段本身才是**。
     故本脚本把「哪些行算条款」提成显式参数（见 -ClauseSelector），两种语义各自成立、
     各自有射程，**不做自动猜测**（猜错的方向是静默少扫，正是检查 5 要防的病）。
@@ -49,9 +45,9 @@
          上的标签，与它所在的节等价。被检文件没有观察区节时本检查自然零条（dao.md 即如此）。
       5. 扫描面塌陷（下限断言）—— **把「本次到底看到了几个样本」变成一条被断言的量**。
          病灶的一般形式：**检测器数到 0 个违例，和检测器根本没看到任何样本，输出一模一样**。
-         mousse 侧实测过最毒的形态：给一个节标题加个装饰 emoji ⇒ 70 条静默缩到 34 条，
-         而「触发:无」占比反而从 54.3%「改善」到 38.2% —— 同一个动作既关掉一半闸、
-         又让最承重的指标变好看，退出码全程干净。
+         mousse 侧实测过最毒的形态：给一个节标题加个装饰 emoji ⇒ 大量条款静默缩水，
+         而「触发:无」占比反而「改善」—— 同一个动作既关掉一半闸、又让最承重的指标变好看，
+         退出码全程干净。
          判据是**集合差不是数字阈值**：分母由一个**不共享节状态机**的独立普查函数产出。
          复用状态机会让两边一起错、集合差恒为 0，闸退化成永远为真的废话
          （＝「拿被测对象自己当基线」）。
@@ -67,7 +63,7 @@
          **v2 补一句**：这个盲区被检查 6 的 `orphan-ledger` **部分**补上了 —— 整条删掉时台账里
          那一条会变成孤儿而现形。**只是部分**：删条款的同时把台账条目一并删掉，两边仍然静默一致。
          台账把「悄悄删一条」的成本从 0 抬到 1 次额外编辑，没有抬到不可能。
-      6. 正文 slug ↔ 台账（`ccswitch/clause-ledger.json`）双向对账 —— **v2（批 2 · 台账搬家）**。
+      6. 正文 slug ↔ 台账（`ccswitch/clause-ledger.json`）双向对账 —— **v2（台账搬家）**。
          台账字段的真相源搬进 JSON，正文只持一个行内 slug `[#<域>-<短名>]`。命中形态
          （`missing-slug` / `dup-slug` / `orphan-slug` / `orphan-ledger` / `ledger-file-mismatch` /
          `ledger-mismatch`，外加台账本身读不了的 `ledger-unreadable`）**全是结构错**，
@@ -76,9 +72,9 @@
          「不适用」并跳过（回归网夹具、别的仓的条款库属这一类）。**不静默跳过** ——
          而无条件激活的话，每份夹具都会被整本台账判成一堆 orphan-ledger。
          **对账只比行内确实写着的字段**：行内没写的不参与（那不是「不等」，是「正文没这一栏」）。
-         **v3（批 3，2026-08-02）改了这一条的另一半**：旧契约还要求「行内没写时台账侧应为 null，
+         **v3（批 3）改了这一条的另一半**：旧契约还要求「行内没写时台账侧应为 null，
          台账有值即红」——那只在**双轨期**成立。批 3 把 dao.md 行内元字段整批删掉、只留 `[#slug]`
-         （台账搬家的终点），于是那 20 条会逐字段判红 84 处，而那正是设计要的终态。
+         （台账搬家的终点），于是那些条会逐字段判红若干处，而那正是设计要的终态。
          新契约：**正文写了才比，没写以台账为准**。**这是放松不是加强**（新通过集是旧的真超集），
          它仍然对是因为被比的契约本身变了，不是断言被放松以求绿。代价与补偿见 marker 的
          `ledgercmp` / `ledgeronly` 两个新字段。
@@ -87,19 +83,18 @@
 
     ── 与 mousse-cli/scripts/check-clauses-structure.ps1 的关系 ────────────────
     那份是本文件的**先行实现**，判据（尤其检查 5 的集合差形态、n 归桶、日期宽限窗）
-    出自它踩过的四个真实缺陷（issue #285 节判定匹配任意位置 / #286 归桶用字符串相等 /
-    零宽限年份回退报 365 天 / 退役区只扫 n=1 漏掉 30% 的 n=?）。本文件继承那些判据，
+    出自它踩过的四个真实缺陷（节判定匹配任意位置 / 归桶用字符串相等 / 零宽限年份回退报 365 天 /
+    退役区只扫 n=1 漏掉 n=?）。本文件继承那些判据，
     **不继承「零缩进 `- ` 即条款」这个隐含前提**（见上）。
     ⚠ 两份现在是**双写**：mousse 那份未改动、仍是它 verify-all 的那一道。收敛成
     「项目侧调 canonical」是另一件事（跨仓改动进不了同一个 PR），**本批不做，照直记**。
 
-    ── 缺省全量模式（2026-08-07 · issue #176）────────────────────────────────
+    ── 缺省全量模式 ──────────────────────────────────────────────────────────
     **本闸此前缺省只检 `ccswitch/dao.md`**，而条款早已散在 `ccswitch/rules/*.md`
-    （`dao-officer-clauses.md` 一份就 72 条）。于是项目 CLAUDE.md 与
+    （`dao-officer-clauses.md` 一份就有几十条）。于是项目 CLAUDE.md 与
     `docs/rules/dispatch-clauses.md` §三那句「node 与 PowerShell **两套独立解析各查一遍**」
-    对那 90+ 条**不成立** —— 它们的台账字段级对账实际是 node 单实现。
-    PR #175 对抗实测（M3）：把 `官抗-语料非自证` 的台账 n 从 12 改回 11 制造正文↔台账不等，
-    （2026-08-11 重设计：clause-index 派生物已消灭，`--check` / `--reconcile` 那两层随之退役；
+    对那批条款**不成立** —— 它们的台账字段级对账实际是 node 单实现。
+    （ 重设计：clause-index 派生物已消灭，`--check` / `--reconcile` 那两层随之退役；
      本闸缺省跑只依赖 clause-sources.mjs 给的源清单 + 本文件自己的解析。）
     处置是**把宣称改真、不是把宣称降级**：缺省扩到源清单里的每一份。判据与代价全写在
     文件末尾「缺省全量模式」那一大段代码注释里（那里是唯一真相源，此处不重复）。
@@ -110,10 +105,9 @@
 
 .PARAMETER TargetFile
     被检文件路径。**不传 = 全量模式**（见上一段）；传了就只检那一份。
-    2026-08-07 之前不传等于 `ccswitch/dao.md`，而那正是 issue #176 那个覆盖缺口。
     相对路径按**当前 PowerShell 位置**解析
     （不这么做的话 .NET 的 CurrentDirectory 与 Set-Location 不同步，会静默读到别的仓的同名
-    文件并报 OK —— mousse 侧 2026-07-27 实测撞到过）。
+    文件并报 OK —— 实测撞到过）。
 
 .PARAMETER ClauseSelector
     **「哪些行算条款」的选择器。** 这是本 canonical 相对 mousse 版新增的那个参数，
@@ -165,7 +159,7 @@
     **v4（退役判官盲区修复）**：扫描面不再只认「行内有完整元字段」——「仅 slug、台账
     n/first_seen 都齐全」的条款由 Set-LedgerBackedFields 回填后同样入栏。此前（批 3
     台账搬家之后）`ccswitch/dao.md` 那批只留 `[#slug]` 的条款结构性看不见台账里的
-    `first_seen`，无论多老都进不了候选退役区——机制体检 2026-08-09 报告 §⑧ 实测坐实。
+    `first_seen`，无论多老都进不了候选退役区——机制体检报告实测坐实。
 
 .PARAMETER FutureGraceDays
     月日解析的**未来宽限窗**（天），缺省 2。`@` 字段只有月日没有年份，零宽限时
@@ -191,7 +185,7 @@
     退出码是「任一份红即红」，另加四条只有聚合层看得见的硬闸：`source-missing`（清单里有、
     盘上没有）· `no-file-checked`（一份都没跑成）· `zero-sample`（跑成了但合计条款为 0）·
     `ledger-out-of-scope`（台账里有未退役条目指着**源清单之外**的文件 ⇒ 那些条款此刻没有
-    任何 PowerShell 守卫在看 —— 那正是 issue #176 那个病的一般形态，做成闸是为了下一次
+    任何 PowerShell 守卫在看 —— 那正是那个病的一般形态，做成闸是为了下一次
     静默缩面能当场现形，而不是等一年后被对抗验证捞出来）。
     **「预期内的零条款细则档」不判红**（判据三件套见 Test-ChildZeroSampleExpected），
     但逐份点名打印且进 marker 的 `zerosample=`。
@@ -212,8 +206,8 @@
         补上了一半：正文删了而台账还在会现形；两边一起删仍然静默）。
       · **台账里的数字对不对本闸同样判不了**：检查 6 只保证正文与台账说的是同一句话。
         两边一起写错、或搬录时一起搬错，闸全绿。
-      · **遮罩这一层现在有三套实现在互核，但仍有一格是结构上盖不住的**（2026-08-02
-        issue #91 落地后的准确状态，别读成"这一层已经封死"）：
+      · **遮罩这一层现在有三套实现在互核，但仍有一格是结构上盖不住的**（
+        落地后的准确状态，别读成"这一层已经封死"）：
           ① Get-MaskedLine（游程表配对）—— 检出用
           ② Get-MaskedLineAlt（逐字符扫描）—— 普查用；①②由检查 5d 逐字节互核（硬闸）
           ③ clause-parser.mjs 的 backtickSpans（游程按长度分桶 + 游标推进）—— node 侧用，
@@ -225,7 +219,7 @@
           回归网 `tests/clause-structure.tests.ps1` 把这一格**钉成了断言**（三侧同坏 ⇒ 静默），
           将来有人加了第四道独立判据时那条断言会变红，那时改它、别把它删了。
       · 上面这一段的历史成因照直留着，免得后来人以为这是天生的设计：
-        2026-08-02 之前**普查与检出共用同一个 Get-MaskedLine**，实测坐实过一次 ——
+        此前**普查与检出共用同一个 Get-MaskedLine**，实测坐实过一次 ——
         未闭合反引号缺陷期，Marked 模式下 census 与检出**同时**少数同一行（85 应为 86），
         检查 5b 全程不响、退出码干净，缺陷是靠人逐行 A/B 老新两版遮罩找出来的。
 #>
@@ -233,7 +227,7 @@
 # `[CmdletBinding()]` 不是装饰：没有它，PowerShell script 会把**认不出的具名参数**
 # 静默吞进 $args ⇒ `-Path <某文件>`（把参数名记错）不报错、`$TargetFile` 保持缺省值
 # ⇒ **本闸转头去扫 dao.md 并报 OK**，而操作者以为扫的是他给的那个文件。
-# 2026-08-02 实测：`... -Path D:\...\mousse-cli\docs\rules\dispatch-clauses.md` ⇒ exit 0、
+#  实测：`... -Path D:\...\mousse-cli\docs\rules\dispatch-clauses.md` ⇒ exit 0、
 # 输出里「目标：」那一行写着 ccswitch/dao.md —— 一次「看起来干净」的**假绿**，
 # 而它恰好就是本批缺陷被误判为「已修好」的那条路径。
 # 加上之后：参数名打错 ⇒ 绑定错误、非零退出。属本闸自己在治的那类病（扫错对象 = 零样本
@@ -252,7 +246,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # stdout 被重定向时（被 hook / CI 以子进程方式调用），PS 5.1 按**本机 ANSI 代码页**写出，
-# 中文到了消费方那边是乱码 —— 2026-08-01 实测：dao-scaffold-check.js 用
+# 中文到了消费方那边是乱码 —— 实测：dao-scaffold-check.js 用
 # `execFileSync(..., {encoding:'utf8'})` 读回来的违规明细是 `�� 343������`。
 # 纯 ASCII 的 marker 行不受影响，**恰恰因此这个缺陷极易被漏掉**：机器读的那一行永远是对的，
 # 只有人读的那半是坏的。这里在源头统一成 UTF-8。
@@ -261,7 +255,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
 # 本文件在 ccswitch/scripts/ ⇒ 仓根是上两层。
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-# **全量模式的判据必须在下面那个缺省赋值之前记下来**（issue #176）：`$targetFile` 一被填上，
+# **全量模式的判据必须在下面那个缺省赋值之前记下来**：`$targetFile` 一被填上，
 # 「没传 -TargetFile」与「显式传了 dao.md」就再也分不开了 —— 而这两者现在要走两条路。
 $script:NoTargetGiven = [string]::IsNullOrWhiteSpace($TargetFile)
 if ([string]::IsNullOrWhiteSpace($TargetFile)) {
@@ -295,7 +289,7 @@ $script:SlugPattern = '\[#([^\]\s]+)\]'
 # 不遮罩会给立法存根凭空造一个台账条目（矩阵实测的那个假阳性）。
 $script:CodeSpanPattern = '`[^`]*`'
 # 节标题判据：**锚到行首**。mousse 侧原写法是 `-match '📌'`（匹配任意位置）⇒ 正文里任何一行
-# 出现这个装饰字符，从那行起整段被当特殊节跳过，实测 70 条静默缩到 34 条（issue #285）。
+# 出现这个装饰字符，从那行起整段被当特殊节跳过，实测大量条款静默缩水。
 $script:SpecialSectionPattern  = '^##\s*📌'
 $script:ObservationZonePattern = '^##\s*观察区'
 $script:BaselinePattern     = '\[基线:([^\]]+)\]'
@@ -374,7 +368,7 @@ function Get-MaskedLine {
       （`归-根路径消歧` 那条的基线写着「本文件 9 处裸 `docs/`」），直接取遮罩串会把
       那段吃成空格，写进台账就成了一句缺字的话。
 
-      ── 未闭合反引号：2026-08-02 反转了处置，理由照直写 ──────────────────────
+      ── 未闭合反引号：反转了处置，理由照直写 ──────────────────────
       **旧行为**：从未闭合的那个反引号起，到行尾一律当代码。头注当时写的理由是
       「刻意选的失败方向 —— 多认一个标记会凭空造出台账条目，少认一个会被
       orphan-ledger 从另一侧报出来」。**那个理由经不起实测，两半都不成立**：
@@ -390,7 +384,7 @@ function Get-MaskedLine {
         ③ 检查 5b 当时抓不到 ②，因为普查（Get-ClauseCensus）与检出走的是**同一个**
            Get-MaskedLine ⇒ 两半一起瞎、集合差恒为 0。
            照 dao-guard-writing「自检那一半绝不能复用被守对象的解析逻辑」，那是那条规则
-           在本文件里的一个现存缺口 —— **2026-08-02 已修（issue #91）**：普查改用
+           在本文件里的一个现存缺口 —— **已修**：普查改用
            Get-MaskedLineAlt（第二套独立实现），两套的一致性由检查 5d 逐字节核。
            **这一格现在会响**，回归网 `tests/clause-structure.tests.ps1` 里有正反四向 mutation。
 
@@ -426,14 +420,14 @@ function Get-MaskedLine {
 
 function Get-MaskedLineAlt {
     <#
-      **遮罩的第二套实现**（2026-08-02 加，issue #91）—— 与 Get-MaskedLine 走**不同的算法
+      **遮罩的第二套实现**—— 与 Get-MaskedLine 走**不同的算法
       路径**、产出必须逐字节相同。它是普查（Get-ClauseCensus）用的那一套，检出不碰它。
 
       ── 它为什么存在（这是刻意的重复，不是 DRY 的疏漏）─────────────────────────
       dao-guard-writing 第②条：「守卫里『我是不是瞎了』那一半，绝不能复用被守对象的解析
       逻辑」。**本脚本此前违反了它**：普查与检出的**节状态机**各写各的（那一层一直是对的），
       而**遮罩这一层两边共用同一个 Get-MaskedLine** ⇒ 遮罩一错两边一起瞎、集合差恒为 0、
-      检查 5b 全程不响。2026-08-02 实测坐实：未闭合反引号缺陷期，Marked 模式下普查与检出
+      检查 5b 全程不响。实测坐实：未闭合反引号缺陷期，Marked 模式下普查与检出
       **同时**少数同一行（85 应为 86），退出码干净 —— 那个缺陷最后是靠人逐行 A/B 老新两版
       遮罩找出来的，不是靠这道闸。
 
@@ -488,7 +482,7 @@ function Get-MaskedLineAlt {
 
 function Get-MaskDivergence {
     <#
-      两套遮罩实现的**逐字节对账**（检查 5d 的判据源，2026-08-02 加，issue #91）。
+      两套遮罩实现的**逐字节对账**（检查 5d 的判据源）。
 
       围栏内的行不比：那里是文档样例，两边都一致地不算数，比它只会制造噪音。
       不含反引号的行也不比：两侧对它恒等，比了只是浪费一次扫描。
@@ -541,7 +535,7 @@ function Get-ClauseNBucket {
     <#
       `n` 取值 → 归桶。**数值判定，不是字符串相等**。
       mousse 侧原写法三处各写一遍字符串比较（`-eq '1'` / `-eq '?'` / 补集 `-ne '1' -and -ne '?'`），
-      于是 `n=0`、`n=01` 两个退役栏都进不去、还被补集**假报成 `n>=2`**（issue #286）——
+      于是 `n=0`、`n=01` 两个退役栏都进不去、还被补集**假报成 `n>=2`**——
       「已知零次」被归进「有复发证据、退出审查面」那一栏。
       根因不是少写一个分支，是**补集判据**：所有没想到的取值都被倒进最后一个桶，
       而那个桶恰好叫「有复发证据」。凡「其余都算 X」型归桶，都要问一句"倒进来的到底是什么"。
@@ -647,7 +641,7 @@ function Get-ClauseRecords {
             SelfDates = @()
             Slug      = $null
             SlugCount = 0
-            # v4（退役判官盲区修复，机制体检 2026-08-09 报告 §⑧）：`-not HasField` 但台账
+            # v4（退役判官盲区修复，机制体检  报告 §⑧）：`-not HasField` 但台账
             # n/first_seen 齐全时，Set-LedgerBackedFields 会回填 N/NBucket/MonthDay（刻意不回填
             # Trigger/Baseline，理由见该函数头注）并把这个标成 $true。与 HasField 互斥（后者只在
             # **行内**有完整元字段时为真），调用方按两者的并集取用（见 $withField 的定义处）。
@@ -658,7 +652,7 @@ function Get-ClauseRecords {
             $rec.HasField = $true
             $rec.N        = Get-GroupValue -Raw $raw -Group $m.Groups[1]
             # 归桶在这里算一次、存在记录上；**所有消费方一律读 NBucket，不再自己比字符串**
-            # （issue #286 的根因之一正是同一份归桶判据被抄了三处）。
+            # （根因之一正是同一份归桶判据被抄了三处）。
             $rec.NBucket  = Get-ClauseNBucket -N $rec.N
             $rec.MonthDay = Get-GroupValue -Raw $raw -Group $m.Groups[2]
             $rec.Trigger  = Get-GroupValue -Raw $raw -Group $m.Groups[3]
@@ -697,7 +691,7 @@ function Get-ClauseCensus {
       若它复用 $inSpecialSection / $sectionAllowed，节判定一错两边一起错、集合差恒为 0，
       检查 5 就变成一句永远为真的废话 ——「拿被测对象自己当基线」。
 
-      ⚠ **2026-08-02（issue #91）：独立性此前只做到「节状态机」这一层，遮罩那一层是共用的**
+      ⚠ **独立性此前只做到「节状态机」这一层，遮罩那一层是共用的**
         ⇒ 遮罩坏掉时两边一起瞎，实测坐实过一次（见 Get-MaskedLineAlt 头注）。现在本函数
         改用 **Get-MaskedLineAlt**（第二套遮罩实现），检出仍用 Get-MaskedLine ——
         **两半各持一套遮罩，遮罩坏掉时两边给出不同的数**。两套遮罩本身的一致性由
@@ -724,7 +718,7 @@ function Get-ClauseCensus {
         if ($t -match '^```') { $inFence = -not $inFence; continue }
         if ($inFence) { continue }
         if ($raw.StartsWith('- ')) { $allTop++ }
-        # **刻意不是 Get-MaskedLine** —— 见本函数头注那段 ⚠。改回去等于把 issue #91 修的洞挖回来。
+        # **刻意不是 Get-MaskedLine** —— 见本函数头注那段 ⚠。改回去等于把那个洞挖回来。
         $masked = Get-MaskedLineAlt -Raw $raw
         # **v2 的分母判据**：完整元字段**或** slug。加 slug 是必须的 —— 批 2 之后一条条款
         # 可以只有 slug 而无行内元字段（台账在 ledger 里），只按完整字段数分母的话，
@@ -745,7 +739,7 @@ function Get-ClauseCensus {
 }
 
 # ── 台账对账三函数（Get-ClauseLedger / Test-LedgerFileMatch / Set-LedgerBackedFields）：
-#     已于 2026-08-11 重设计时随 clause-ledger.json 一起删除（拷问局定案③「文字一致性检查全灭」）。
+#     已于  重设计时随 clause-ledger.json 一起删除（拷问局定案③「文字一致性检查全灭」）。
 
 function Resolve-ClauseDate {
     <#
@@ -753,7 +747,7 @@ function Resolve-ClauseDate {
       取「不超过未来宽限窗」的那些当中离今天最近的一个**。
 
       —— 为什么不是「不在未来就取今年，否则减一年」——
-      mousse 侧 2026-07-27 实测的假阳性：一条 `@07-28` 的新条款（写它的人按 07-28 记日期，
+      mousse 侧实测的假阳性：一条 `@07-28` 的新条款（写它的人按 07-28 记日期，
       本机时钟走到 07-27）被报成「入库 **365** 天」并进了候选退役区。两个缺陷叠加：
         ① 年份判定**零宽限** —— 差一秒就整整回退一年。
         ② 年龄用 `[int](...)` 对**带时分秒**的差值取整 —— `[int]` 是四舍五入不是截断，
@@ -867,13 +861,13 @@ function Format-Summary {
     param([int]$ExitCode, [int]$Clauses, [int]$Violations)
     # v2 三个新字段一律**追加在末尾**：消费方（dao-scaffold-check.js / gen-clause-index.mjs）
     # 的正则不锚定行尾，追加不会让它们匹配失败 —— 而插在中间会。
-    # `maskdiv` / `maskcmp`（2026-08-02，issue #91）同理追加在最末：前者是遮罩双实现的分歧行数，
+    # `maskdiv` / `maskcmp` 同理追加在最末：前者是遮罩双实现的分歧行数，
     # 后者是它的**分母**（真正比过的行数）。两个都进 marker 是刻意的 —— `--reconcile` 拿
     # `maskdiv` 当第四个对账量（**这是「两侧同时错同一处」唯一能被看见的通道**），
     # 而 `maskcmp=0` 说明这一层本轮零样本，那与「比过且没分歧」是两回事。
-    # `ledgercmp` / `ledgeronly`（2026-08-02，批 3）同理追加在最末：前者是检查 6 的**分母**
+    # `ledgercmp` / `ledgeronly`（，批 3）同理追加在最末：前者是检查 6 的**分母**
     # （真正比过的字段数），后者是「正文没这一栏、以台账为准」的字段数。
-    # `mode`（2026-08-07，issue #176）同理追加在最末：`single` = 只检了一份（有 -TargetFile），
+    # `mode` 同理追加在最末：`single` = 只检了一份（有 -TargetFile），
     # `multi` = 全量模式的**聚合**总账。两种模式的数字口径不同（前者是一份文件的，后者是合计），
     # 消费方必须分得开 —— 靠「有没有 files= 这一栏」去反推是**缺席当信号**，那正是本仓在治的病。
     return ('CLAUSE_STRUCTURE_SUMMARY exit={0} clauses={1} violations={2} notrigger={3} retire={4} promote={5} slugs={6} ledger={7} ledgerviol={8} maskdiv={9} maskcmp={10} ledgercmp={11} ledgeronly={12} mode=single' `
@@ -912,7 +906,7 @@ function Test-ClausesStructure {
             if ($inFence) { continue }
             if ($t -match '^##\s') {
                 # 与 Get-ClauseRecords 走同一个 $script:SpecialSectionPattern ——
-                # issue #285 那个 bug 在 mousse 版里是**两处**同样的写法，「一类错不是一处错」。
+                # 那个 bug 在 mousse 版里是**两处**同样的写法，「一类错不是一处错」。
                 $inSpecialSection = ($t -match $script:SpecialSectionPattern)
                 $paragraphOpen = $false
                 continue
@@ -933,7 +927,7 @@ function Test-ClausesStructure {
     foreach ($c in $Records) {
         $snippet = $c.Text.Substring(0, [Math]::Min(48, $c.Text.Length))
         if (-not $c.HasField) {
-            # 2026-08-11 重设计：带 slug 的条款豁免行内元字段 —— slug 是它的稳定 ID，
+            #  重设计：带 slug 的条款豁免行内元字段 —— slug 是它的稳定 ID，
             # 台账字段（n/@/触发点）的归宿是 git 历史，不再要求行内持有一份（定案③）。
             if ($c.Slug) { continue }
             $violations += [PSCustomObject]@{
@@ -967,7 +961,7 @@ function Test-ClausesStructure {
     }
 
     # ---- 检查 5：扫描面塌陷（下限断言）----------------------------------------
-    # d) **遮罩双实现分歧**（2026-08-02 加，issue #91）—— 刻意排在 a/b/c 之前算，
+    # d) **遮罩双实现分歧**—— 刻意排在 a/b/c 之前算，
     #    因为 b 要用它的结果做**归因**：一行既落在分歧集里、又"普查看得见而检出没有"时，
     #    真正的病因是遮罩不是节判定，报成 swallowed-by-section 会把人指去改节状态机。
     #
@@ -1003,7 +997,7 @@ function Test-ClausesStructure {
 
     # b) 被节状态吞掉：带条款签名的行不在检出集合里 ⇒ 落在某个 📌 节内。
     #
-    # **`-SectionPattern` 主动排除的那些不算违规，但也不许静默**（2026-08-01 定，本条是本脚本
+    # **`-SectionPattern` 主动排除的那些不算违规，但也不许静默**（ 定，本条是本脚本
     # 里唯一一处"闸位取舍"，写清楚免得下一个人以为是漏判）：
     #   · 📌 节吞掉条款 ⇒ **代码/结构错了**（没人打算让它消失）⇒ 硬闸。
     #   · 操作者显式传 `-SectionPattern` 把某几节排除在外 ⇒ **那是他自己要的**，不是错误 ⇒
@@ -1023,7 +1017,7 @@ function Test-ClausesStructure {
     foreach ($line in $Census.Selected) {
         if ($detected.ContainsKey($line.LineNo)) { continue }
         if ($WhitelistExcluded -and $WhitelistExcluded.ContainsKey($line.LineNo)) { continue }
-        # **归因分流（2026-08-02）**：普查与检出现在各持一套遮罩，于是"普查看得见而检出没有"
+        # **归因分流（）**：普查与检出现在各持一套遮罩，于是"普查看得见而检出没有"
         # 多了第二个成因 —— 遮罩分歧。该行已由 5d 单独报过，这里不再按节判定报第二遍：
         # 同一个缺陷报成两件事，人会去找两个 bug（本文件既有的同型取舍见检查 5b 头注）。
         if ($divLines.ContainsKey($line.LineNo)) { continue }
@@ -1049,13 +1043,13 @@ function Test-ClausesStructure {
         }
     }
 
-    # ---- 检查 6（slug↔台账双向对账）：已于 2026-08-11 随台账删除而退役（定案③）。
+    # ---- 检查 6（slug↔台账双向对账）：已于  随台账删除而退役（定案③）。
 
     return $violations
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 缺省全量模式（2026-08-07 · issue #176）—— 不传 -TargetFile 就检**全部含条款的文件**
+# 缺省全量模式 —— 不传 -TargetFile 就检**全部含条款的文件**
 # ══════════════════════════════════════════════════════════════════════════════
 # 治的病：本闸缺省只检 dao.md，而条款早已散在 ccswitch/rules/*.md（officer-clauses 一份就
 # 72 条）⇒ 项目 CLAUDE.md 与 docs/rules/dispatch-clauses.md §三那句「node 与 PowerShell
@@ -1067,13 +1061,13 @@ function Test-ClausesStructure {
 # `node ccswitch/scripts/clause-sources.mjs`（一行 JSON）拿它。
 # **为什么不在 PowerShell 里再扫一遍目录**（那是本批第一版的做法，帅裁改掉了）：
 # 那等于给同一个问题造第二份口径 —— 而「两套『哪些 rules 文件带条款』口径分歧」正是
-# issue #169③ 已经在追的账（parser 侧 12 份、hook 侧筛出 5 份），再加一份是把病做大。
+# 已在追的账（parser 侧 12 份、hook 侧筛出 5 份），再加一份是把病做大。
 # **共享的是清单，不是 parser**：每份文件照旧由本文件自己那套解析去读，
 # `--reconcile` 的「两套读法各数一遍」那一层一个字没动 —— 独立性在**解析**上，不在清单上。
 #
 # ── ② 拿不到清单 ⇒ **fail-closed**（这一格是设计的核心，别改成回落）────────────
 # node 不在 / 出口不在 / 退出码非 0 / 输出不是合法 JSON / 清单是空的 ⇒ 一律 **exit 3** 并说清
-# 是哪一种。**绝不静默回落到「只查 dao.md」** —— 那正是 issue #176 那个缺口的形状：
+# 是哪一种。**绝不静默回落到「只查 dao.md」** —— 那正是那个缺口的形状：
 # 一次「其实什么都没查全」的运行，长得和「查了且干净」一模一样。
 # 退出码用 3 而不是 1 是刻意的：1 = 结构真的违例，3 = 这次压根没查成，两件事。
 #
@@ -1116,7 +1110,7 @@ function Test-ClausesStructure {
 
 function Get-ClauseSourceList {
     <#
-      向 node 侧要**源清单**（issue #176 / #169③）：
+      向 node 侧要**源清单**：
       `node <Root>/ccswitch/scripts/clause-sources.mjs` ⇒ 一行 JSON。
       返回 @{ Ok; Why; Sources }，`Sources` 的每项带 `file` / `abs` / `exists` / `ps_selector`。
 
@@ -1250,7 +1244,7 @@ function Invoke-AllClauseFiles {
     $srcDoc = Get-ClauseSourceList -Root $Root
     if (-not $srcDoc.Ok) {
         # **fail-closed**：这里绝不回落到「只查 dao.md」。一次「其实没查全」的运行
-        # 长得和「查了且干净」一样，正是 issue #176 那个缺口的形状。
+        # 长得和「查了且干净」一样，正是那个缺口的形状。
         Write-Host ''
         Write-Host ("FAIL：拿不到源清单 —— {0}" -f $srcDoc.Why)
         Write-Host '     「拿不到清单」不等于「清单是空的」，更不等于「没问题」⇒ 本次不检、不给绿灯。'
@@ -1270,7 +1264,7 @@ function Invoke-AllClauseFiles {
         $note = '清单'
         if ([string]::IsNullOrWhiteSpace($sel)) {
             # 清单没给选择器 ⇒ **说出来再回落**，不静默按缺省检（那样两套东西会按两种口径
-            # 检同一份文件，而输出上看不出来 —— issue #169③ 记的正是这种分歧）。
+            # 检同一份文件，而输出上看不出来 —— 记的正是这种分歧）。
             $sel = $ClauseSelector
             $note = '清单没给选择器，回落到 -ClauseSelector ' + $ClauseSelector
         }
@@ -1290,7 +1284,7 @@ function Invoke-AllClauseFiles {
         }
     }
 
-    # （台账反向覆盖闸 ledger-out-of-scope：2026-08-11 随台账删除退役——node 侧已无对账实现，
+    # （台账反向覆盖闸 ledger-out-of-scope： 随台账删除退役——node 侧已无对账实现，
     #  「带条款却没登记进 defaultSources() 的文件」由 SessionStart 目录扫描那侧独兜。）
 
     $sumClauses = 0; $sumViol = 0; $sumNoTrig = 0; $sumRetire = 0; $sumPromote = 0; $sumSlugs = 0
@@ -1468,7 +1462,7 @@ $lines = [System.IO.File]::ReadAllLines($targetFile, [System.Text.Encoding]::UTF
 # 那正是本脚本要根治的静默失败同一种病，故自身必须先免疫。
 $allRecords = @(Get-ClauseRecords -Lines $lines -Selector $ClauseSelector -SectionFilter $SectionPattern)
 $census     = Get-ClauseCensus   -Lines $lines -Selector $ClauseSelector
-# 遮罩双实现对账（issue #91）：检出走 Get-MaskedLine，普查走 Get-MaskedLineAlt，
+# 遮罩双实现对账：检出走 Get-MaskedLine，普查走 Get-MaskedLineAlt，
 # 这一步逐字节核这两套是不是还在说同一句话。**它必须独立于上面两次扫描**，
 # 因为它要回答的正是「上面那两次里有没有一次是瞎的」。
 $maskDiv    = Get-MaskDivergence -Lines $lines
@@ -1486,7 +1480,7 @@ if (-not [string]::IsNullOrWhiteSpace($SectionPattern)) {
     }
 }
 
-# ── 台账（v2）：已于 2026-08-11 重设计时整段删除（拷问局定案③「文字一致性检查全灭」）──
+# ── 台账（v2）：已于  重设计时整段删除（拷问局定案③「文字一致性检查全灭」）──
 # slug 仍在正文里当条款的稳定 ID，但不再有台账文件与它双向对账。
 $slugsHere = @($allRecords | Where-Object { $_.SlugCount -gt 0 }).Count
 $script:SumSlugs = @($allRecords | Where-Object { $null -ne $_.Slug }).Count
@@ -1510,13 +1504,13 @@ $observing = @($allRecords | Where-Object { $_.Zone -eq 'observation' })
 # 否则 --reconcile 恒不一致）；下面那一大段分布统计的基底**v4 起**是「行内元字段」∪「仅 slug
 # 但台账 n/first_seen 齐全、已由 Set-LedgerBackedFields 回落」的并集。**v3 及之前**只认前者，
 # 于是像 `ccswitch/dao.md` 那批「批 3 台账搬家后只留 slug」的条款，无论台账里记着多老的
-# `first_seen`，都进不了任何一段分布统计、也进不了候选退役区——机制体检 2026-08-09 报告
+# `first_seen`，都进不了任何一段分布统计、也进不了候选退役区——机制体检  报告
 # §⑧「判据类条款」合议实测坐实的真缺陷：「退役判官读不到 dao.md 那 22 条的元数据 ⇒ 它们
 # 无论多老都永远进不了候选退役区」。两个数都打出来，且**先报分母** —— 分母静默变化正是
 # 这套检查在治的病。
 $formal       = @($clauses | Where-Object { $_.HasField -or $_.SlugCount -gt 0 })
 $hasField     = @($clauses | Where-Object { $_.HasField })
-# 2026-08-11 台账删除后：只带 slug 的条款进 $formal（是条款），但进不了 $withField 分布统计
+#  台账删除后：只带 slug 的条款进 $formal（是条款），但进不了 $withField 分布统计
 # （它们没有 n/@/触发点数字可统计——那批字段的归宿是 git 历史）。
 $withField    = $hasField
 
@@ -1532,7 +1526,7 @@ Write-Host ('  扫描面自检：带完整元字段或 slug 且合选择器的�
        @($allRecords | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count,
        $formal.Count,
        @($observing | Where-Object { $_.HasField -or $_.SlugCount -gt 0 }).Count)
-# 遮罩双实现对账的可见面（issue #91）。**先报分母**，同上一行的理由：
+# 遮罩双实现对账的可见面（issue）。**先报分母**，同上一行的理由：
 # 一份零反引号的文件里，「零分歧」与「一行都没比过」在输出上不可区分。
 if ($script:SumMaskCmp -eq 0) {
     Write-Host '  遮罩双实现对账：本轮 0 行含反引号 ⇒ **零样本，不是通过**（这一层本轮什么都没验到）'
@@ -1545,7 +1539,7 @@ Write-Host ('  行形态分布：' + (($shapeGroups | ForEach-Object { "$($_.Nam
             '　（top=零缩进列表项 · indent=缩进列表项 · prose=散文段落）')
 
 # ── 未闭合反引号游程的可见面（观察线，恒不进退出码）────────────────────────────
-# 2026-08-02 起未闭合游程按**字面文本**处理（判据与反转理由见 Get-MaskedLine 头注）。
+#  起未闭合游程按**字面文本**处理（判据与反转理由见 Get-MaskedLine 头注）。
 # 那是遮罩规则**唯一**的模糊地带：这类行上的 `[自定@…]` 之类模板字面量会被当成真标记。
 # 旧规则把这一地带处理成「静默吃掉整条」，代价是条款数少一条而退出码不变；新规则把代价
 # 换成「可能多认一个标记」，而多认是**响的**。这一行是那个取舍的显式补偿面 ——
@@ -1675,7 +1669,7 @@ if ($withField.Count -eq 0) {
         -Note 'n=? 是「未标次数、不等于零次」⇒ 第一步是**回填 n** 不是删；回填后它会落回 n=0/n=1 或 n>=2'
 }
 
-# ---- 台账对账统计：已于 2026-08-11 随台账删除（定案③）。slug 唯一性由检查 1-5 的结构判据间接兜住。
+# ---- 台账对账统计：已于  随台账删除（定案③）。slug 唯一性由检查 1-5 的结构判据间接兜住。
 # ---- 观察区统计（观察线）----------------------------------------------------
 # v4：与条款区的 $withField 同一个并集判据（HasField -or LedgerBacked）——条款区/观察区
 # 「对称是硬要求不是整齐癖」（本文件下方 ⏳ 三栏对称那段注释原话），这里不例外。
