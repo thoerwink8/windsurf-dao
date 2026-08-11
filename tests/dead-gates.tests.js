@@ -484,7 +484,9 @@ console.log("\n──── ⑫ 挂载可达性（「源码里有调用点」是
     const payload = JSON.stringify({
       session_id: "dead-gates-tests", cwd, hook_event_name: "SessionStart", source: "startup",
     });
-    const r = spawnSync(process.execPath, [HOOK], {
+    // 2026-08-11 体检离线化（step 7）后：完整检查路径在 --write-report，默认模式只读落盘报告。
+    // 本节断的是「死闸检测那一行真的被拼进注入正文」⇒ 走完整路径。
+    const r = spawnSync(process.execPath, [HOOK, "--write-report"], {
       input: payload, encoding: "utf8", timeout: 120000,
       env: Object.assign({}, process.env, {
         DAO_SETTINGS_DRIFT_STATE_DIR: DRIFT_STATE,

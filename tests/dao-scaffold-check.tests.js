@@ -645,10 +645,14 @@ console.log("\n=== per-provider 漂移那一行的措辞（末行 → 提醒行�
       /Bash\(grep:\*\)/.test(c), "ctx=" + c.slice(0, 500));
   }
   // ③ 反向：只有 hooks 漂了 ⇒ 不许把 deny 也说成漂了
+  //    2026-08-11 判据收窄（验收红单③）：原断言是全报文级负控 `!/permissions\.deny/`——
+  //    报文里 daoSync 段会带**真机** live settings 的漂移明细（措辞「多出 N 项：permissions.deny」），
+  //    真机有人动了 deny 项这条就红，与本段要验的 provider 面无关。改为对准 provider 段的
+  //    宣称句「permissions.deny** 已经不一致了」（它在 deny 漂移时出现、且只在该面出现）。
   {
     const c = ctx(run(mkStub("pp-hooks", SUM({ exit: 1, drift: 2, cross: 1, denyDrift: 0, denyCross: 0, sampled: 1 }), 1)));
-    check("只有 hooks 漂移 → 说 hooks，且**不许**顺带说 permissions.deny 也漂了",
-      /hooks/.test(c) && !/permissions\.deny/.test(c), "ctx=" + c.slice(0, 500));
+    check("只有 hooks 漂移 → 说 hooks，且**不许**顺带说 deny 也漂了（对准 provider 段宣称句）",
+      /hooks/.test(c) && !/permissions\.deny\*\* 已经不一致/.test(c), "ctx=" + c.slice(0, 500));
   }
   // ④ 末行没有 deny 三字段（lib 比本 hook 旧）⇒ 如实说「那一面没被报出来」，
   //    **不许**报成「契约被改坏了」（那是假的红），也不许静默当成绿。
