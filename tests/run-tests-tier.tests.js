@@ -968,11 +968,11 @@ console.log("\n──── ⑫ 真仓自跑：PS 侧的声明集合退役触发
   //   改这一行之前先答一句——新加/摘掉的那套，它是不是真的该在默认层不跑？不是的话，
   //   正路是修那一套的沙盒/断言，不是往这个集合里加减名字。
   const EXPECT_DECLARED_PS = [
-    "clause-structure.tests.ps1",   // 实测 67-81s，默认层（人人在敲的快速回归）的耗时预算不容
+    // 2026-08-11：clause-structure.tests.ps1 已随条款台账消灭而删除（重设计 step 5）。
     "dao-install.tests.ps1",        // node/claude 缺失时会真的 winget install/npm install -g，动这台机器
     "dao-secrets.tests.ps1",        // 对真 %USERPROFILE%/%APPDATA% 做机器级不变量断言，随机化治不了
   ];
-  check("真实 tests/ 里声明了环境敏感层的 .ps1 恰是那三套（多了要问为什么，少了说明标记掉了）",
+  check("真实 tests/ 里声明了环境敏感层的 .ps1 恰是那两套（多了要问为什么，少了说明标记掉了）",
     JSON.stringify(declaredPs) === JSON.stringify(EXPECT_DECLARED_PS),
     "实况=" + JSON.stringify(declaredPs) + " 期望=" + JSON.stringify(EXPECT_DECLARED_PS));
   // 与真实 run-tests.mjs --list 的输出交叉核对：独立判据与生产链路在真实仓上结论必须一致——
