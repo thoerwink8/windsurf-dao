@@ -1621,6 +1621,51 @@ console.log("\n=== 心跳自证：每次真实触发写一行到 _tmp/scaffold-c
   check("canary：变异体还活着（报告内容不受影响——只有心跳这一件事被摘掉，不是整个 hook 崩了）",
     /dao-hb-mut-probe/.test(ctx(r)), "ctx=" + ctx(r).slice(0, 300));
 }
+{
+  // ── issue #231 账1：崩溃路径「刻意不写心跳」零断言 → 补负控 ──────────────────
+  // 设计决定：uncaughtException 网**刻意不写心跳**（「一个持续崩溃的 scaffold-check
+  // 不该被心跳判成活着」）。本批先破再验：把 writeHeartbeat("crashed") 加进崩溃网（A2
+  // 变体，锚 `process.exit(emitExitCode());` 前）跑全套 325/325 全绿 —— **没有任何既有
+  // 断言在盯这个决定**。下面补两条：①崩溃路径不写心跳 ⇒ fired.log 不被创建；②负控
+  // mutation（A2）⇒ fired.log **被**创建 —— 证明①不是恒真，是把「崩溃不该被心跳判成
+  // 活着」变成可红可绿的断言。
+  // 崩溃注入点选在 hbScaffold 初始化**之后**（若像既有崩溃测试那样在 `const gitSkips`
+  // 那个早起点崩，hbScaffold 还是 null，变异体也写不出心跳 = 假阴性）。锚点单行、
+  // 换行位写 \r?\n（[#守-锚点行尾]）。
+  const CRASH_AFTER_HB = /(const daoSyncAgg = isMetaRepo \? aggregateGreenSync\(daoSyncLines\(\)\) : \{ lines: \[\], aggregated: false \};\r?\n)/;
+  let anchorCrashNohb = false;
+  const crashCwd = mkproj("hb-crash-nohb", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true }); // 缺 CLAUDE.md ⇒ issues>0 ⇒ 走 inject()
+  });
+  const nohbState = path.posix.join(path.basename(SANDBOX), "hb-crash-nohb-state");
+  const nohbHookCopy = mkBrokenLibTree("hb-crash-nohb", null, (p) => {
+    const src = fs.readFileSync(p, "utf8");
+    anchorCrashNohb = CRASH_AFTER_HB.test(src);
+    fs.writeFileSync(p, src.replace(CRASH_AFTER_HB, '$1throw new Error("注入：崩溃不该写心跳");\r\n'), "utf8");
+  });
+  // mkBrokenLibTree 内部同步执行 mutateHook，跑完再跑一次 hook 拿结果
+  const crashNohb = run(crashCwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: nohbState }, nohbHookCopy);
+  const nohbFired = path.join(path.resolve(path.dirname(nohbHookCopy), "..", ".."), "_tmp", nohbState, "fired.log");
+  check("mutation 锚点仍在（hbScaffold 初始化之后的崩溃注入点）", anchorCrashNohb, String(CRASH_AFTER_HB));
+  check("🔴 崩溃路径刻意不写心跳（issue #231 账1）：注入崩溃 → fired.log 不被创建",
+    !fs.existsSync(nohbFired), nohbFired);
+  check("canary：崩溃真的发生了（报文里有「未预期崩溃」，不是没跑到崩溃点）",
+    /未预期崩溃/.test(ctx(crashNohb)), "ctx=" + ctx(crashNohb).slice(0, 200));
+  // 负控 mutation（A2）：崩溃网里塞进 writeHeartbeat → fired.log 被创建（= 上面那条断言会红）
+  const A2_CRASH_ANCHOR = /(process\.exit\(emitExitCode\(\)\);\r?\n\}\);)/;
+  const a2State = path.posix.join(path.basename(SANDBOX), "hb-crash-a2-state");
+  const a2HookCopy = mkBrokenLibTree("hb-crash-a2", null, (p) => {
+    let src = fs.readFileSync(p, "utf8");
+    src = src.replace(CRASH_AFTER_HB, '$1throw new Error("注入：崩溃不该写心跳");\r\n');
+    src = src.replace(A2_CRASH_ANCHOR, '  try { writeHeartbeat("crashed", {}); } catch (_) {}\r\n$1');
+    fs.writeFileSync(p, src, "utf8");
+  });
+  const a2Res = run(crashCwd, { DAO_SCAFFOLD_CHECK_STATE_SUBDIR: a2State }, a2HookCopy);
+  const a2Fired = path.join(path.resolve(path.dirname(a2HookCopy), "..", ".."), "_tmp", a2State, "fired.log");
+  check("🔴 负控 mutation（A2）：崩溃路径塞进 writeHeartbeat → fired.log 被创建（断言①因此会红）",
+    fs.existsSync(a2Fired), a2Fired);
+  check("A2 变异体存活：崩溃照常发生（不是把 hook 弄死了）", /未预期崩溃/.test(ctx(a2Res)), "ctx=" + ctx(a2Res).slice(0, 200));
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 console.log("\n=== 心跳基建（hook-selfcheck.js）自身加载失败必须出声，不静默吞 ===");
@@ -1645,6 +1690,42 @@ console.log("\n=== 心跳基建（hook-selfcheck.js）自身加载失败必须�
   const firedPath = path.join(path.resolve(path.dirname(hookCopy), "..", ".."), "_tmp", stateSubdir, "fired.log");
   check("心跳基建坏掉 → fired.log 压根没被创建（hbScaffold 全程为 null，heartbeat 是彻底的 no-op）",
     !fs.existsSync(firedPath), firedPath);
+}
+{
+  // ── issue #231 账3：模式 B 的 budgetLibErrorLines / heartbeatLibErrorLines 镜像行 ──
+  // 模式 A（daoSyncLines 那两处，:1534-1535）删掉即红（上面「lib 坏掉」那组已覆盖）；
+  // 模式 B（checkDaoDrift 那两处，:1799-1800）删掉任意一行 **325/325 全绿**（本批 mutation
+  // B1/B2 实测）——模式 B 的镜像行零覆盖，祖传洞同族复发（issue #147 账1 记过 gitSkipLines
+  // 那格）。下面对称补齐：普通项目（模式 B）里预算 lib / 心跳 lib 坏掉时，issues 里必须
+  // 出现对应那一行 —— 删掉镜像行即红。
+  const plainCwd = mkproj("b-budgetlib", (root) => {
+    fs.mkdirSync(path.join(root, ".claude", "rules"), { recursive: true });
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# 项目\n", "utf8");
+  });
+  const envB = { DAO_SCAFFOLD_MANIFEST: path.join(REPO, "ccswitch", "scaffold-manifest.json") };
+  // 臂① 预算 lib 缺失（模式 B）：镜像行 `for (const line of budgetLibErrorLines()) issues.push(line);`
+  const bBudget = run(plainCwd, envB, mkBrokenLibTree("b-budgetlib-missing", (p) => fs.rmSync(p)));
+  const cbBudget = ctx(bBudget);
+  check("🔴 模式 B · 预算 lib 缺失 → 报文里有「✗ 墙钟预算模块加载失败」" +
+    "（镜像行 budgetLibErrorLines() 删掉即红）",
+    /✗ 墙钟预算模块加载失败/.test(cbBudget), "ctx=" + cbBudget.slice(0, 500));
+  check("模式 B · 预算 lib 缺失 → 仍 exit 0（其余检查照跑，没被整批静默杀掉）",
+    bBudget.code === 0, "code=" + bBudget.code);
+  // 臂② 心跳 lib 缺失（模式 B）：镜像行 `for (const line of heartbeatLibErrorLines()) issues.push(line);`
+  const bHb = run(plainCwd, envB, mkBrokenLibTree("b-hblib-missing", null, (hp) => {
+    const libDir = path.join(path.dirname(path.dirname(hp)), "lib");
+    fs.writeFileSync(path.join(libDir, "hook-selfcheck.js"), "module.exports = {{{ 语法错误", "utf8");
+  }));
+  const cbHb = ctx(bHb);
+  check("🔴 模式 B · 心跳 lib 缺失 → 报文里有「✗ 心跳基建加载失败」" +
+    "（镜像行 heartbeatLibErrorLines() 删掉即红）",
+    /✗ 心跳基建加载失败/.test(cbHb), "ctx=" + cbHb.slice(0, 500));
+  check("模式 B · 心跳 lib 缺失 → 仍 exit 0（其余检查照跑，没被整批静默杀掉）",
+    bHb.code === 0, "code=" + bHb.code);
+  // 负控：lib 完好 → 两行都不出现（钉住不是恒报）
+  const cbOK = ctx(run(plainCwd, envB));
+  check("负控 · 模式 B · lib 完好 → 零「加载失败」行",
+    !/墙钟预算模块加载失败|心跳基建加载失败/.test(cbOK), "ctx=" + cbOK.slice(0, 400));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1812,6 +1893,16 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
         "——与上面那条整行夹具断言互不替代：生产措辞被改动时本条红、夹具那条不红",
         sisLit.length > 0 && !!PAT5 && PAT5.test(sisLit), sisName + " lit=" + JSON.stringify(sisLit));
     }
+    // ── issue #273 G1（关闭条件㈡）：枚举式判据补基数断言，第 4 个姊妹加入即红 ──
+    // ⑤ 的 NON_PASS_PATTERNS 是「逐个点名」写的（三个子情况各一个字面），测试侧若只维护
+    // 枚举循环，哪天 memoryRefLines() 长出第 4 种子情况，那一行会被判成绿、连同问题一起被
+    // 「N 行全绿」吞掉，而全套零红（PR #271 对抗复核 C2 实测 SURVIVED）。下面这条把
+    // 「恰好 3 处 parts.push(」变成基数闸：多一处即红 —— 与 ㈠（改锚共用前缀）同判据，
+    // 本仓选了测试侧方案不改判据文件（issue #273 G1）。
+    const partsPushCount = (memPartsBlock.match(/parts\.push\(/g) || []).length;
+    check("🔴 G1·⑤ 基数断言：memoryRefLines() parts 段恰好 3 处 parts.push( —— " +
+      "第 4 个姊妹加入即红（issue #273 G1 ㈡；C2 变体：加 `if (sDeclDead !== \"0\") parts.push(...)` ⇒ count=4 ⇒ 本条红）",
+      partsPushCount === 3, "count=" + partsPushCount);
 
     // ── ⑥ PR #237 对抗验证 5231324695 F5 返修：判词自己数的是 6 种「ⓘ 但不是语义上的绿」，
     //    上一轮（F1，5230986835）只覆盖了①～⑤共 5 处，遗漏第 6 处——clauseStructureLines()
@@ -1842,32 +1933,41 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
     //    而 hook 在 sExit==="2" 时走 ⚠「没查成」分支，**根本到不了那条 ⓘ 绿行**。
     //    ⇒ 真正没人守的不是那条夹具，是**这条跨文件耦合本身**（与账 3 同族：hook 那行绿
     //    安不安全，取决于另一个文件的退出码契约，而两边谁都没把它写下来）。本批钉它。
-    const driftSrc = (() => {
-      try { return fs.readFileSync(path.join(REPO, "ccswitch", "lib", "settings-drift.js"), "utf8"); }
-      catch (_) { return ""; }
-    })();
-    check("自检（账4）：读到了 settings-drift.js（读不到时下面两条是空转，不是全绿）",
-      driftSrc.length > 1000, "len=" + driftSrc.length);
-    check("🔴 账4·跨文件耦合钉子：settings-drift.js 仍对「零 claude 型 provider」判 uncheckable ⇒ exit=2 —— " +
+    const sd = require(path.join(REPO, "ccswitch", "lib", "settings-drift.js"));
+    check("自检（账4）：settings-drift.js 可被 require（读不到时下面一条是空转，不是全绿）",
+      typeof sd.providerExitCode === "function", "require 失败");
+    // 零 provider 态：一个非 claude 型 provider（app_type=codex）+ 最小 canonical ⇒ live=0 ⇒ uncheckable
+    const zeroProvState = sd.compareProviderHooks({
+      providers: [{ id: "c1", name: "Codex", app_type: "codex", settings_config: "{}" }],
+      canonical: { hooks: {}, permissions: { deny: [] } },
+    });
+    check("🔴 账4·跨文件耦合钉子（行为级，issue #273 G2①）：零 claude 型 provider → providerExitCode === 2 —— " +
       "hook 那条 ⓘ 绿行不给 scoped=0 设防，全靠这个契约兜着：哪天它改成 exit=0，" +
-      "「一个 provider 都没比到」就会被报成绿并被聚合吞掉。本条在**消费方这一侧留一个可读的跨文件契约留痕**" +
-      "（读 hook 的人不必跑到 settings-drift.js 才知道那条绿行凭什么安全）。" +
-      "🔴 **射程照直写：它是文本存在性判据，只答形态①**——直接把那个 2 改成 0 它会红，但 " +
-      "settings-drift / provider-hooks-drift 两套的功能探针同样会红，谁先谁后取决于跑的顺序" +
-      "（本条此前写作「而本条会先翻红」，那个「先」在盘上不成立）；在它前面插一条抢先 return、" +
-      "字面原样保留 ⇒ **它根本不红**（PR #271 对抗验证 5237938692 发④ C3 实测 SURVIVED，纵深在那两套）。" +
-      "2026-08-10 按对抗判词 T1 改真；换成行为级（真调 providerExitCode({零 provider 态}) 断言 ===2）归 issue #273（G2）",
-      driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0 &&
-      driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0,
-      "exit2契约=" + (driftSrc.indexOf("if (r.uncheckable) return 2;") >= 0) +
-      " 零样本自测=" + (driftSrc.indexOf("零样本·没有 claude 型 provider") >= 0));
+      "「一个 provider 都没比到」就会被报成绿并被聚合吞掉。本条在**消费方这一侧真调一次**" +
+      "（真 require → 真调用 compareProviderHooks({零 provider 态}) → 拿真返回值 → 真判据 providerExitCode === 2），" +
+      "C3 变体（在 `if (r.uncheckable) return 2;` 前面插抢先 return、字面原样保留）本批实测由本条翻红" +
+      "（旧文本存在性判据对 C3 失明，PR #271 对抗验证 5237938692 发④ 实测）",
+      sd.providerExitCode(zeroProvState) === 2, "exit=" + sd.providerExitCode(zeroProvState));
     // 账 4 要的「显式记一句已知未覆盖」——做成机器核的形态而不是一句注释，这样它自己会过期：
     // 今天 scoped=0 那条 ⓘ 绿行**确实判绿**（缺口在，只是不可达）。哪天有人给它补了
     // NON_PASS pattern，本条翻红 ⇒ 那时把本条连同上面那段说明一起删掉，缺口就真的没了。
-    check("⚠️ 账4·已知缺口登记（不是在为它背书）：scoped=0 的 ⓘ 绿行今天仍被判绿 —— " +
-      "判据层没设防，安全性全部来自上面那条 exit=2 契约。补了 pattern 之后本条会红，届时删掉它",
-      j2.isGreenSyncLine("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider 的 dao hook 段互相一致、" +
-        "且与应注册清单一致；deny 规则逐条一致（0 个 provider 与应注册清单）"));
+    // **输入从手写夹具换成从 providerHookLines() 源码抠出来的绿行模板**（issue #273 G2②）：
+    // 旧版手写串与生产模板脱钩——生产把 scoped=0 吐成 ⚠（C9 变体）时手写串照旧含 ⓘ、照绿，
+    // 自过期登记永远不提醒人去删它。从源码抠模板后，生产措辞一改，抠出来的模板跟着变，
+    // isGreenSyncLine 当场翻红。抠法与账1 抠 GREEN5 同一手法（SRC.match 字面量，非手写）。
+    const provGreenHead = ((SRC.match(/"ⓘ per-provider 漂移检查绿："/) || [])[0] || "").replace(/^"|"$/g, "");
+    const provGreenMid = ((SRC.match(/" 个 claude 型 provider 的 dao hook 段互相一致、且与应注册清单一致"/) || [])[0] || "").replace(/^"|"$/g, "");
+    const denyTailGreen = ((SRC.match(/"；deny 规则逐条一致（" \+ sScoped \+ " 个 provider 与应注册清单）"/) || [])[0] || "")
+      .replace(/^"|"$/g, "").replace(/" \+ sScoped \+ "/, "0");
+    const provGreenLine = provGreenHead && provGreenMid && denyTailGreen
+      ? provGreenHead + "0" + provGreenMid + denyTailGreen : "";
+    check("自检（账4 缺口登记）：从 providerHookLines() 源码抠到了 scoped=0 绿行模板（抠不到则下一条空转）",
+      provGreenLine.indexOf("ⓘ per-provider 漂移检查绿：0 个 claude 型 provider") >= 0 &&
+      provGreenLine.indexOf("deny 规则逐条一致（0 个 provider") >= 0, provGreenLine);
+    check("⚠️ 账4·已知缺口登记（模板抠自生产源码，非手写夹具）：scoped=0 的 ⓘ 绿行今天仍被判绿 —— " +
+      "判据层没设防，安全性全部来自上面那条 exit=2 契约。补了 pattern 之后本条会红，届时删掉它" +
+      "（C9 变体：生产把 scoped=0 吐成 ⚠ ⇒ 抠出的模板不再以 ⓘ 开头 ⇒ 本条翻红）",
+      j2.isGreenSyncLine(provGreenLine), provGreenLine);
 
     // ── 账 5（issue #256，出处 PR #237 三轮复看 5231769847 §六）：⑥b 是同谓词冗余 ────────
     //    M-R1b 实测坐实：把 ⑥ 锚点收窄成只认 retire 子项文案 ⇒ ⑥a/⑥b 同生同死、零红；
@@ -1889,16 +1989,22 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       retireBlock.indexOf("条款库观察线") >= 0 && retireBlock.indexOf("return") >= 0,
       "len=" + retireBlock.length);
     check("🔴 账5·「⑥b 是同谓词冗余」这个结论的过期触发器：retire/promote 至今仍在同一条 return 里" +
-      "**无条件**拼接（分支体内零 if，两个子项文案都在）⇒ ⑥a/⑥b 同生同死，⑥b 确实守不住 ⑥a 之外的东西。" +
+      "**无条件**拼接（两个子项文案都在）⇒ ⑥a/⑥b 同生同死，⑥b 确实守不住 ⑥a 之外的东西。" +
       "改成 **`if (` 形态**的条件拼接即翻红 —— 那时 ⑥b 恢复独立判别力，去把盘上三处措辞改真" +
       "（hook 注释 / ⑥b 断言名 / issue #256）。" +
-      "🔴 **射程照直写：第三个合取项只认 `if (`**——改成三元条件拼接（两个字面都在、分支体内零 if）时" +
-      "**本条自己是绿的**（PR #271 对抗验证 5237938692 发⑥ C4 实测；那一发红的是 tests:998 那条 PR #237 " +
-      "就已存在的 e2e 负控，纵深接住了，但它给的提示词不会把人引到「去把盘上三处措辞改真」这个动作上）。" +
-      "本条此前写作「改成条件拼接即翻红」，那句概括过强，2026-08-10 按对抗判词 T2 改真；" +
-      "换成直接断言输出形态（那条 return 里 promote 与文案之间无任何条件运算符）归 issue #273（G2）",
+      "🔴 **射程照直写（2026-08-12 改真，issue #273 G2③）**：第三个合取项原只认 `if (`——" +
+      "改成**直接断言输出形态**：那条 return 里 `promote` 与「 条观察区候选够格升格」之间无任何" +
+      "`?` / `&&` / `||`（C4 变体：两个子项改成三元条件拼接、分支体内零 if，旧合取项对其失明；" +
+      "PR #271 对抗验证 5237938692 发⑥ 实测。新合取项当场盖住：三元拼接时 `?` 出现在两者之间）",
       retireBlock.indexOf("条够老了") >= 0 && retireBlock.indexOf("条观察区候选够格升格") >= 0 &&
-      !/\bif\s*\(/.test(retireBlock.slice(retireBlock.indexOf("{") + 1)),
+      (() => {
+        // 直接断言输出形态：promote 与「 条观察区候选够格升格」之间没有任何 ? / && / ||
+        const pIdx = retireBlock.indexOf("promote");
+        const lIdx = retireBlock.indexOf("条观察区候选够格升格");
+        if (pIdx < 0 || lIdx <= pIdx) return false;
+        const between = retireBlock.slice(pIdx, lIdx);
+        return !/[?]|&&|\|\|/.test(between);
+      })(),
       retireBlock.slice(0, 200));
 
     // ── ⑦ issue #256 账 3（出处 PR #237 对抗验证 5231324695 §八 观察项 1）：
@@ -2145,7 +2251,7 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   // （聚合不会发生）——把它改真：providers/scoped 也从 0 改成 1，让这个夹具名副其实地
   // 走「真的采样比对过、且一致」这条路径。`denySampled=0` 那条真实分支另开负控②验证
   // （不删，改验证方向：从『误判进全绿』翻成『正确挡下聚合』）。
-  function mkGreenMetaRepo(tag, deadGatesRed, denySampledZero) {
+  function mkGreenMetaRepo(tag, deadGatesRed, denySampledZero, memoryDead) {
     const root = path.join(SANDBOX, "green", tag, "windsurf-dao");
     const hooksDir = path.join(root, "ccswitch", "hooks");
     const libDir = path.join(root, "ccswitch", "lib");
@@ -2186,7 +2292,7 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
       'console.log("ALWAYSON_BUDGET_SUMMARY exit=0 total=100 limit=1000 files=1 headroom=900 scoped=0 missing=0 selfcheck=ok target=1000 overtarget=0");',
       "utf8");
     fs.writeFileSync(path.join(libDir, "memory-truth-source.js"),
-      'console.log("MEMORY_REFS_SUMMARY exit=0 scope=all root=1 projects=0 files=0 checked=0 dead=0 declared_dead=0 ambiguous=0 skipped=0 errors=0");',
+      'console.log("MEMORY_REFS_SUMMARY exit=0 scope=all root=1 projects=0 files=0 checked=0 dead=' + (memoryDead || 0) + ' declared_dead=0 ambiguous=0 skipped=0 errors=0");',
       "utf8");
     return hookCopy;
   }
@@ -2283,6 +2389,55 @@ console.log("\n=== J2：全绿行聚合（用户 2026-08-09 拍板 issue #70 评
   check("端到端·负控③·对照：同一棵树、同一份 hook，只把注册 timeout 抬到够用 ⇒ 聚合恢复" +
     "（证明这条尾注是唯一变量，不是夹具坏了）",
     /ⓘ \d+ 行全绿/.test(gc) && !/内层超时常量/.test(gc), "green ctx=" + gc.slice(0, 400));
+}
+{
+  // ── issue #273 G3：memoryRefLines() 补一条行为级断言（真调它、喂 dead>0、判非绿）──
+  // PR #271 对抗复核 C8：把 `if (!parts.length) {` 改成 `if (true) {`（三个姊妹照旧 push、
+  // 字面全在、⑤ 锚点照旧命中）⇒ 全套零红 SURVIVED —— 没有任何测试真调过 memoryRefLines()。
+  // 修法（关闭条件）：真造一棵 memory-truth-source 替身吐 dead=24 的元仓库沙箱，真跑 hook
+  // ⇒ memoryRefLines() 真 spawn 子进程 → 真产出「24 处指向空气」那一行 → 真判据判它**非绿**
+  // （不聚合、整段展开）。C8 变体（if(true)）⇒ 那一行变成「零发现」绿行 → 聚合吞掉 ⇒ 本条红。
+  const memDeadHook = mkGreenMetaRepo("mem-dead24", false, false, 24);
+  const memDeadRoot = path.resolve(path.dirname(memDeadHook), "..", "..");
+  // 家目录：给足预算（内层超时常量够得着），否则 budgetSummaryLines 那条带 ⚠ 的尾注会把
+  // 「非聚合」的原因弄混（那是 issue #273 G4 的形态，不是本条要证的东西）。复用 mkFakeHome
+  // 的算法（按真常量算注册值），与上面「六道全绿」同一手法。
+  const memHome = (() => {
+    const inner = [...fs.readFileSync(HOOK, "utf8")
+      .matchAll(/const\s+\w*TIMEOUT_MS\s*=\s*(\d+);/g)].map((m) => Number(m[1]));
+    const sec = Math.ceil((Math.max(...inner) + DEFAULT_RESERVE_MS) / 1000) + 1;
+    const home = path.join(SANDBOX, "green-fakehome-memdead");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({
+      hooks: { SessionStart: [{ matcher: "startup", hooks: [
+        { type: "command", command: 'node "${PROJECT_ROOT}/ccswitch/hooks/dao-scaffold-check.js"', timeout: sec },
+      ] }] },
+    }), "utf8");
+    return home;
+  })();
+  const memDeadState = path.posix.join(path.basename(SANDBOX), "mem-dead24-state");
+  const memDeadRes = run(memDeadRoot, { HOME: memHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: memDeadState }, memDeadHook);
+  const mdc = ctx(memDeadRes);
+  check("G3 e2e：hook 自己退出 0（降级不是崩溃）", memDeadRes.code === 0, "code=" + memDeadRes.code);
+  check("🔴 G3·memoryRefLines() 行为级（真调它、喂 dead=24）：产出的那一行含「24 处指向空气」" +
+    "且被真判据判**非绿** ⇒ 不聚合、整段展开（C8 把 if(!parts.length) 改成 if(true) 即翻红）",
+    /24 处指向空气/.test(mdc) && !/行全绿/.test(mdc) && /存在以下同步差异/.test(mdc),
+    "ctx=" + mdc.slice(0, 900));
+  // C8 变异臂：改 `if (!parts.length) {` → `if (true) {` ⇒ 真绿行被当成「零发现」吞掉
+  const memC8Hook = mkGreenMetaRepo("mem-dead24-c8", false, false, 24);
+  const C8_ANCHOR = /(if \(!parts\.length\) \{)(\r?\n)/;
+  let c8Hit = false;
+  const c8Src = fs.readFileSync(memC8Hook, "utf8");
+  c8Hit = C8_ANCHOR.test(c8Src);
+  // C8 语义：条件整个换成 if (true)（保留字面，使其不执行 —— dao-guard-writing「改坏多形态」②）
+  fs.writeFileSync(memC8Hook, c8Src.replace(C8_ANCHOR, 'if (true) {$2'), "utf8");
+  const memC8Root = path.resolve(path.dirname(memC8Hook), "..", "..");
+  const memC8State = path.posix.join(path.basename(SANDBOX), "mem-dead24-c8-state");
+  const memC8Res = run(memC8Root, { HOME: memHome, DAO_SCAFFOLD_CHECK_STATE_SUBDIR: memC8State }, memC8Hook);
+  const m8c = ctx(memC8Res);
+  check("C8 mutation 锚点仍在（if (!parts.length) {）", c8Hit, String(C8_ANCHOR));
+  check("🔴 C8 变异臂：if(true) ⇒ dead=24 也被报成「零发现」绿行、被聚合吞掉 —— 证明上面那条行为级断言真的在夹 memoryRefLines 的发现逻辑",
+    !/24 处指向空气/.test(m8c) && /ⓘ \d+ 行全绿/.test(m8c), "ctx=" + m8c.slice(0, 900));
 }
 
 // ══════════════════════════════════════════════════════════════════════════

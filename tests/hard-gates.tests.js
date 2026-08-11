@@ -2447,10 +2447,32 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
               "（「没验完」不等于「没有违例」，这一格不许静默放行）",
           gate(starvePay, { env: asLong, script: m1ms }).code === 2,
           `code=${gate(starvePay, { env: asLong, script: m1ms }).code}`);
-        check("#214 正控·那条拦截文案说的是「这次没验过」而不是「查出你在写 live 配置」" +
-              "（被拦的人不该去找一个并不存在的违例目标）",
-          /这次没验过/.test(gate(starvePay, { env: asLong, script: m1ms }).err),
-          gate(starvePay, { env: asLong, script: m1ms }).err.slice(0, 200));
+        // 🔴 **谓词补强（issue #266 件①，照 PR #261 已修的 #254 组同型样板）**：
+        //    这条原本写的是 `/这次没验过/.test(...)`，**恒真**——那四个字同时住在 `g2Starved`
+        //    的真拦截文案里**和** `starved > 0` 时那条 fail-open 批量告警里（本 hook
+        //    `if (starved > 0)` 那段），而本组构造（候选侧界收到 1 ms）**保证** `starved > 0`
+        //    ⇒ 把饿死 fail-close 整个摘掉，它照样 true（issue #266 件①）。
+        //    **改真形态是换锚点、不是改名**：锚到 `g2Starved` 的 `what` 独有的那句（批量告警里
+        //    没有它），再加一条反向「不许变成另一格的拦截文案」。
+        const RE_STARVED_VERDICT_214 = /一条命令里产生了 \d+ 条待归一的候选/;
+        const RE_LIVE_VERDICT_214 = /要用 shell 写用户级 live 配置/;
+        const starveR = gate(starvePay, { env: asLong, script: m1ms });
+        check("🔴#214 正控·拦下这一条的确实是**饿死 fail-close 那一格**（锚 `g2Starved` 独有句，" +
+              "不是那句 fail-open 批量告警也会打的「没验过」），文案说的是「这次没验过」" +
+              "而不是「查出你在写 live 配置」",
+          RE_STARVED_VERDICT_214.test(starveR.err) && /这次没验过/.test(starveR.err)
+            && !RE_LIVE_VERDICT_214.test(starveR.err), starveR.err.slice(0, 300));
+        // 负控（`#官抗-换靶两态`）：阈值调到天大 ⇒ fail-close 不开火（exit 2 翻 0）⇒ 新谓词翻
+        //   **false**；同一份 stderr 上 `/这次没验过/` **仍为 true**——那条 fail-open 批量告警
+        //   还在喂它，旧谓词的空过在这里现形。
+        const starveHugeR = gate(starvePay, { env: asLong, script: mkMut("mutant-214-starve-huge-neg.js",
+          [RE_STARVE, "const G2_CAND_STARVE_N = 1000000000;"],
+          [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]) });
+        check("🔴#214 负控·阈值调到天大（fail-close 不开火）⇒ 文案谓词翻 **false**（∴ 它不是恒真）；" +
+              "同一份 stderr 上 `/这次没验过/` 仍为 true",
+          !RE_STARVED_VERDICT_214.test(starveHugeR.err) && /这次没验过/.test(starveHugeR.err),
+          `code=${starveHugeR.code} starvedVerdict=${RE_STARVED_VERDICT_214.test(starveHugeR.err)} ` +
+          `旧谓词=${/这次没验过/.test(starveHugeR.err)}`);
         // 🔴 三条负控，都是**误伤方向**（`#官实-误伤反例`：两侧代价都是真代价）
         check("🔴#214 负控·同一条 200 候选在**真界**下批量跑得完 ⇒ exit 0（∴ 拦的不是「候选多」）",
           gate(starvePay, { env: asLong }).code === 0, `code=${gate(starvePay, { env: asLong }).code}`);
@@ -2499,6 +2521,11 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
         const nElapsed = (SRC.match(new RegExp(RE_ELAPSED.source, "g")) || []).length;
         check("#254 锚点恰好命中 1 次（elapsed 赋值）", nElapsed === 1, `命中 ${nElapsed} 次`);
 
+        // 🔴 `g2Starved` 独有锚 + 反向锚，⑤⑦ 两组共用（issue #266 件①：旧谓词 `/这次没验过/`
+        //    同时住在 fail-open 批量告警里，恒真——改真的判据与负控见 #235/#254 那两条）。
+        const RE_STARVED_VERDICT = /一条命令里产生了 \d+ 条待归一的候选/;  // g2Starved 独有
+        const RE_LIVE_VERDICT = /要用 shell 写用户级 live 配置/;            // 另一格的拦截文案
+
         if (n235 === 1 && nMargin === 1) {
           const mNoBudget = mkMut("mutant-235-no-budget.js", [RE_BUDGET_CHECK, "null"]);
           check("#235 变异体存活（摘掉预算闸）：无关输入仍 exit 0 且无 fail-open 告警",
@@ -2531,8 +2558,18 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           check("🔴#235 判别力·同一条 payload，把预算闸的安全边际调到「恒判预算不够」⇒ **由 0 翻 2**" +
                 "（不看 fed 是否过阈值——重跑路自己的开销上界必须先于饿死阈值生效）",
             budgetR.code === 2, `code=${budgetR.code}`);
-          check("#235 正控·拦截文案仍是「没验过」而不是「查出你在写 live 配置」",
-            /这次没验过/.test(budgetR.err), budgetR.err.slice(0, 200));
+          check("🔴#235 正控·拦下这一条的确实是**饿死 fail-close 那一格**（锚 `g2Starved` 独有句，" +
+                "不是那句 fail-open 批量告警也会打的「没验过」），文案说的是「这次没验过」" +
+                "而不是「查出你在写 live 配置」",
+            RE_STARVED_VERDICT.test(budgetR.err) && /这次没验过/.test(budgetR.err)
+              && !RE_LIVE_VERDICT.test(budgetR.err), budgetR.err.slice(0, 300));
+          // 负控（`#官抗-换靶两态`）：预算闸不开火（正常预算 + 界 1 ms ⇒ v3 重跑完没找到真违例，
+          //   exit 0）⇒ 新谓词翻 **false**；同一份 stderr 上 `/这次没验过/` **仍为 true**——
+          //   那条 fail-open 批量告警还在喂它，旧谓词的空过在这里现形。
+          check("🔴#235 负控·预算闸不开火（正常预算）⇒ 文案谓词翻 **false**（∴ 它不是恒真）；" +
+                "同一份 stderr 上 `/这次没验过/` 仍为 true",
+            !RE_STARVED_VERDICT.test(normalR.err) && /这次没验过/.test(normalR.err),
+            `starvedVerdict=${RE_STARVED_VERDICT.test(normalR.err)} 旧谓词=${/这次没验过/.test(normalR.err)}`);
 
           // ⑦ 🔴 **issue #254 ①·真能量到预算闸**（危险窗 v1∈(2.8s,3.5s)，本机约 N≈40000–52000）：
           //    上面 ⑤ 那组只证「预算闸这个机制存在且被读」（安全边际调到 10000 让 deadline≈0，
@@ -2547,24 +2584,27 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
           //    `G2_CAND_STARVE_N`=64）——**末尾饿死闸这一格在这个规模上永远到不了**（fed 太小），
           //    故 exit 2 在这个 payload 上只能来自预算闸，exit 0 只能是预算闸没拦、v3 重跑完
           //    又没找到真违例（`b.md` 不是 live 名，同 `normalR` 那条对照）。
-          //    **v1CostMs / elapsed 直接伪造成危险窗中点**（`v1=3000ms`，`elapsed=1.31·v1≈3930ms`
-          //    ——1.31 那个拟合系数取自 ㉑ 头注同一处出处，不是本节现造）：老系数（=1，issue #254
-          //    修复前的等价值）算得 `3930+3000=6930≤8000` ⇒ 判"还来得及"（漏判）；新系数
-          //    （=2.5，issue #254 拍板值）算得 `3930+2.5×3000=11430>8000` ⇒ 正确判"来不及"。
+          //    **v1CostMs / elapsed 直接伪造成 `v1=2200ms` / `elapsed=2882ms`**（比值保持
+          //    `elapsed≈1.31·v1`，与 ㉑ 头注同一处出处，不是本节现造）：老系数（=1，issue #254
+          //    修复前的等价值）算得 `2882+2200=5082≤8000` ⇒ 判"还来得及"（漏判）；新系数
+          //    （=2.5，issue #254 拍板值）算得 `2882+2.5×2200=8382>8000` ⇒ 正确判"来不及"。
+          //    **⚠ 本构造是合成的，不是危险窗实测值**（`issue #266 件③` 起刻意把翻转点从
+          //    f*≈1.357 抬到 **f*≈2.33**，落在实测均值 2.22 与拍板值 2.5 之间——见下方判别力
+          //    那条的注）：行为侧钉住的不再是「大于约 1.36 就全绿」，而是「低于 f*≈2.33 必红」。
           //    **同带 `G2_CAND_REALPATH_MS→1`**（与 ③④⑤ 同一手法，不是无关改动）：这个 tiny
           //    payload（fed=8）在真界 800 ms 下批量 realpath 会**全部解得开**，`batch.untried`
           //    留空 ⇒ 根本进不了 `if (dirForm)` 那一格，我伪造的 v1CostMs/elapsed 就白伪造了
           //    （本条作者写这一组时先漏了这一步，第一轮跑出 code=0 才捞回来——批内两条都要它）。
           const mDangerWindow = mkMut("mutant-254-danger-window.js",
-            [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+            [RE_V1COST, "const v1CostMs = 2200;"], [RE_ELAPSED, "const elapsed = 2882;"],
             [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"]);
           const mDangerWindowBrokenFactor = mkMut("mutant-254-danger-window-factor1.js",
-            [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+            [RE_V1COST, "const v1CostMs = 2200;"], [RE_ELAPSED, "const elapsed = 2882;"],
             [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"],
             [RE_FACTOR, "const G2_RERUN_COST_FACTOR = 1;"]);
           if (nFactor === 1 && nV1Cost === 1 && nElapsed === 1) {
             const dwR = gate(dirFormPay, { env: asLong, script: mDangerWindow });
-            check("🔴🔴#254 正控·危险窗中点（v1=3000ms,elapsed=3930ms）+ 系数=2.5（当前值）⇒ " +
+            check("🔴🔴#254 正控·危险窗构造（v1=2200ms,elapsed=2882ms）+ 系数=2.5（当前值）⇒ " +
                   "**预算闸真的开**（exit 2；这个 payload 上末尾饿死闸够不到 fed=8，故这个 2 只能" +
                   "来自预算闸——不是像 ⑥ 那条一样的空过）",
               dwR.code === 2, `code=${dwR.code}`);
@@ -2579,8 +2619,6 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
             //    live 配置」。**下面两条负控是它的自证**：闸不开火（系数=1）与闸被整个移除，
             //    两侧新谓词都必须翻 false，而 `/这次没验过/` 在那两侧仍为 true —— 那正是旧谓词
             //    被换掉的理由，也一并钉在断言里，省得后人重推一遍。
-            const RE_STARVED_VERDICT = /一条命令里产生了 \d+ 条待归一的候选/;  // g2Starved 独有
-            const RE_LIVE_VERDICT = /要用 shell 写用户级 live 配置/;            // 另一格的拦截文案
             check("🔴#254 正控·拦下这一条的确实是**饿死 fail-close 那一格**（锚 `g2Starved` 独有句，" +
                   "不是那句 fail-open 批量告警也会打的「没验过」），文案说的是「这次没验过」" +
                   "而不是「查出你在写 live 配置」",
@@ -2588,19 +2626,20 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
                 && !RE_LIVE_VERDICT.test(dwR.err), dwR.err.slice(0, 300));
             const dwBrokenR = gate(dirFormPay, { env: asLong, script: mDangerWindowBrokenFactor });
             // 🔴 **这条断言名被对抗官的换靶变异体证伪过一次（PR #261 定向复核 A6），改真后的射程如下**：
-            //   本组把危险窗伪造成 `v1=3000` / `elapsed=3930`，而 `G2_RERUN_DEADLINE_MS = 10000−2000 = 8000`
-            //   ⇒ 行为翻转点 **f* = 4070/3000 ≈ 1.357**（实测吻合：f=1.3 本条与上一条双红；f=1.36 **并把
-            //   下面那个静态锚点一起改成 1.36**——正是改常量的人会顺手做的事——整套 659 条全绿）。
-            //   ⇒ **行为侧这几条钉住的是 `f > 1.357`，不是 `f = 2.5`**；字面 2.5 只由同组那条静态文本锚点
+            //   本组把危险窗伪造成 `v1=2200` / `elapsed=2882`，而 `G2_RERUN_DEADLINE_MS = 10000−2000 = 8000`
+            //   ⇒ 行为翻转点 **f* = 5118/2200 ≈ 2.33**（落进实测均值 2.22 与拍板值 2.5 之间——issue #266
+            //   件③ 的重挑值：旧构造 f*≈1.357 ⇒ `[1.36, 2.22)` 整段行为侧无守护，系数调到 1.4 测试
+            //   照样绿；现在 f*≈2.33，任何低于它的系数都会让本条与正控那条当场变红）。
+            //   ⇒ **行为侧这几条钉住的是 `f > f*≈2.33`，不是 `f = 2.5`**；字面 2.5 仍由同组那条静态文本锚点
             //   （`#254 锚点恰好命中 1 次（估价系数常量）`）单独钉着，而它拦的是「常量被动过」，
-            //   不是「安全性质退化」。issue #254 的立论基础是实测 v3/v1 均值 ≈2.22 ⇒ **`[1.36, 2.22)`
-            //   这一段行为侧无守护**，修法（重挑伪造值把 f* 抬到 2.22 之上）归 **issue #266 件③**。
-            //   **这不是安全缺口**：生产系数仍是 2.5、闸仍在开火，缺的是回归网的射程。
-            check("🔴#254 判别力·先破再验：同一危险窗中点，系数改回 1（issue #254 修复前的等价值）" +
+            //   不是「安全性质退化」。**issue #266 件③ 已把射程补上**：行为侧现在覆盖
+            //   `[1.36, 2.22)` 那一整段，不再是无人区。
+            //   **这不是安全缺口**：生产系数仍是 2.5、闸仍在开火，缺的是回归网的射程——本批补的就是它。
+            check("🔴#254 判别力·先破再验：同一危险窗构造，系数改回 1（issue #254 修复前的等价值）" +
                   "⇒ 预算闸判定变回「还来得及」、不拦，v3 重跑完也没找到真违例 ⇒ **由 2 翻 0**" +
-                  "（∴ 上一条的通过不是巧合，是**系数大于本构造的翻转点 f*≈1.357** 在起作用，不是随便" +
-                  "什么正数都行；**字面 2.5 由同组那条静态锚点单独钉着**，而 `[1.36, 2.22)` 段行为侧" +
-                  "无守护——账在 issue #266 件③）",
+                  "（∴ 上一条的通过不是巧合，是**系数大于本构造的翻转点 f*≈2.33** 在起作用，不是随便" +
+                  "什么正数都行；**字面 2.5 由同组那条静态锚点单独钉着**，`[1.36, 2.22)` 段行为侧" +
+                  "已由 issue #266 件③ 补上——任何低于 f* 的系数都会让正控那条当场变红）",
               dwBrokenR.code === 0, `code=${dwBrokenR.code}`);
             check("🔴#254 负控①·系数改回 1（预算闸不开火）⇒ 上面那条文案谓词翻 **false**" +
                   "（∴ 它不是恒真）；同一份 stderr 上 `/这次没验过/` **仍为 true**——旧谓词的空过在这里现形",
@@ -2610,7 +2649,7 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
             //   这正是对抗官用来证伪旧谓词的那个变体，钉在这里就不必再靠一次性实测背书。
             const dwNoBudgetR = gate(dirFormPay, { env: asLong,
               script: mkMut("mutant-254-danger-window-no-budget.js",
-                [RE_V1COST, "const v1CostMs = 3000;"], [RE_ELAPSED, "const elapsed = 3930;"],
+                [RE_V1COST, "const v1CostMs = 2200;"], [RE_ELAPSED, "const elapsed = 2882;"],
                 [/const G2_CAND_REALPATH_MS = 800;/, "const G2_CAND_REALPATH_MS = 1;"],
                 [RE_BUDGET_CHECK, "null"]) });
             check("🔴#254 负控②·预算闸整行移除 ⇒ **由 2 翻 0**，且文案谓词同样翻 **false**" +
@@ -2619,6 +2658,39 @@ console.log("\n──── G2 · #133 常量侧有界 realpath + #134 junction 
                 && /这次没验过/.test(dwNoBudgetR.err),
               `code=${dwNoBudgetR.code} starvedVerdict=${RE_STARVED_VERDICT.test(dwNoBudgetR.err)} ` +
               `旧谓词=${/这次没验过/.test(dwNoBudgetR.err)}`);
+          }
+
+          // ⑧ 🔴 **登记（自失效）· 编辑器分支到不了预算闸**（issue #266 件②）
+          //    `g2Phases` 的 2 个上游调用点里，shell 分支（Bash/PowerShell）喂的是整条命令的
+          //    全部写目标位 ⇒ 候选数可以很大 ⇒ `batch.untried` 非空 ⇒ 预算闸开得了火（⑤⑦ 两组
+          //    走的都是它）；**编辑器分支（Edit/Write/MultiEdit/NotebookEdit）只喂一个
+          //    `file_path`**（`g2Resolve` 产出的候选 ≤ 2）⇒ 候选侧时间界（真界 800 ms）内必然
+          //    全部验完 ⇒ `batch.untried` **结构上非空不了** ⇒ `if (batch.untried.length)` 那一块
+          //    （相③ 直判 / 预算闸）在这条路上**到不了**。这句「到不了」此前没有任何断言背书
+          //    ——哪天有人把它改成批量喂候选（例如支持多文件写入、量级足以饿死批量），预算闸
+          //    会**静默**变成真漏测面。**本构造（危险窗伪造值，**刻意不接界 1 ms**）下预算闸一旦
+          //    开得了火必当场拦截（exit 2）⇒ 本条由 0 翻 2、变红并点名**（自失效写法的判据同
+          //    #199 ③-c）。
+          //    **⚠ 与 issue #266 件② 关闭条件㈠ 的一处出入（照直写）**：原案写「界收 1 ms」，
+          //    实测那会让**当前**编辑器路径也饿死（2 条候选只解到第 0 条，机器相关）⇒ 预算闸在
+          //    今天就能开火、断言当场红——那不是「钉住到不了」，是把「到得了」当常数。故本断言
+          //    用**真界**钉「≤2 候选必然验完」这个结构事实（不依赖机器速度），伪造值只负责在
+          //    闸真被走到时当场开火。
+          //    **payload 为什么是 `~/.claude` 目录的 8.3 短名形态**：只有这种候选展开得出
+          //    dirForm（预算闸的开火前件）；它本身不是 live 文件（末段不是 live 名）⇒ 现行
+          //    判据正确放行，exit 0。
+          {
+            const mEditorDanger = mkMut("mutant-266-editor-danger-window.js",
+              [RE_V1COST, "const v1CostMs = 2200;"], [RE_ELAPSED, "const elapsed = 2882;"]);
+            const editorR = gate(edit(path.join(SHORT_HOME, ".claude")),
+              { env: asLong, script: mEditorDanger });
+            check("🔴 登记（自失效）·编辑器分支（Edit 写 `~/.claude` 目录的 8.3 短名形态）同一份" +
+                  "危险窗伪造值（v1=2200ms,elapsed=2882ms，真界）⇒ **仍 exit 0** 且「候选侧批量没跑完" +
+                  "」自陈不出现（候选 ≤2 在真界内必然全部验完 ⇒ `batch.untried` 非空不了 ⇒ 预算闸在" +
+                  "这条路上开不了火；哪天编辑器分支改成批量喂候选，本构造会让预算闸当场开火 ⇒ 本条" +
+                  "变红并点名 —— issue #266 件②）",
+              editorR.code === 0 && !/候选侧批量 realpath 没跑完/.test(editorR.err),
+              `code=${editorR.code}`);
           }
 
           // ⑥ 🔴 **真实规模复测**：判词给出的 N=48000 + 末置 dirForm 触发子形态。
