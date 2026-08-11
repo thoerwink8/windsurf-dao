@@ -7,7 +7,7 @@
 // 各自心算「这算不算过」。机械、零判断、且极易漏跑一道——本文件把它收成一条命令。
 // **本文件通篇刻意不写「几道闸」这个数**（2026-08-10 起）：当前有几道以下面 GATES 数组为准、
 // 对外以 `--list` 的打印为准。写死的数字在加第 6 道闸那天会集体过期，而本仓的手维护枚举
-// 已经被咬过三次。唯一一处刻意留着数字的是回归网里那条 `=== 5` 强断言——它的职责正是
+// 已经被咬过三次。唯一一处刻意留着数字的是回归网里那条 `=== 3` 强断言——它的职责正是
 // 「改了闸数就得有人来改我」，那是特意要它过期的。
 //
 // ── 为什么是独立薄脚本，不是 `run-tests.mjs --gates`（为道日损下的取舍，照直写）──
@@ -50,7 +50,7 @@
 // 同 `run-tests.mjs` 里 `DAO_PS_TIER_SCANNER` / `DAO_PS_TIMEOUT_MS` 那两个口子同型：
 // **给回归网用的，不是给人换真实闸清单的旋钮**。指向一份 JSON（数组，元素形状与下面
 // `GATES` 里每一项相同：`{name, cmd, args, codes, note}`），本次运行改用那份清单而不是
-// 真实 5 道闸——这样才能用秒级的合成夹具脚本覆盖到「red / inconclusive / unknown 三类都
+// 真实 3 道闸——这样才能用秒级的合成夹具脚本覆盖到「red / inconclusive / unknown 三类都
 // 出现」「某道红不影响后面继续跑」这些分支，而不必真的去踩坏条款库。
 //
 // ── 已知的射程缺口，照直写 ───────────────────────────────────────────────────
@@ -135,7 +135,7 @@ if (unknownFlags.length) {
   process.stderr.write("[dao-gates] 用法错误 —— 不认识的参数：" + unknownFlags.join(", ") + "\n");
   process.stderr.write("  合法参数：--list\n");
   process.stderr.write("  **一道闸都没跑**（打错的参数不静默忽略）\n");
-  process.stdout.write(`DAO_GATES_SUMMARY exit=${EXIT_BAD_USAGE} gates=0 ok=0 red=0 inconclusive=0 unknown=0\n`);
+  process.stdout.write(`DAO_GATES_SUMMARY exit=${EXIT_BAD_USAGE} gates=0 ok=0 red=0 inconclusive=0 unknown=0` + (process.env.DAO_GATES_FIXTURE ? " fixture=1" : " fixture=0") + "\n");
   process.exit(EXIT_BAD_USAGE);
 }
 const LIST_ONLY = rawArgs.includes("--list");
@@ -226,5 +226,8 @@ if (inconclusiveN > 0) exitCode = EXIT_INCONCLUSIVE;
 if (redN > 0) exitCode = EXIT_RED;
 if (unknownN > 0) exitCode = EXIT_UNKNOWN;
 
-process.stdout.write(`DAO_GATES_SUMMARY exit=${exitCode} gates=${results.length} ok=${okN} red=${redN} inconclusive=${inconclusiveN} unknown=${unknownN}\n`);
+// 末行的 `fixture=` 字段（#260 件5）：注入口跑出来的那一行必须带 fixture=1、真跑 fixture=0——
+// 否则「贴出来当证据」的汇总行分不出真跑还是假跑（几个无脑返回成功的假闸经注入口跑一遍，
+// 那一行与真跑逐字节相同，证明不了自己是真跑）。
+process.stdout.write(`DAO_GATES_SUMMARY exit=${exitCode} gates=${results.length} ok=${okN} red=${redN} inconclusive=${inconclusiveN} unknown=${unknownN}` + (fixturePath ? " fixture=1" : " fixture=0") + "\n");
 process.exit(exitCode);
