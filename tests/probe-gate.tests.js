@@ -1,7 +1,5 @@
 // dao-probe-gate 两态自证 · 端到端 + 单元（每个行为分支留正控 + 负控 + 先破再验 mutation）
 //
-// 跑法：node tests/probe-gate.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 验的层：探针 × 无标记 → block；探针 × 有标记 → 放行 + 注入标记全文；非探针 prompt → 零输出
 // 零磁盘（含镜像域）；fail-open 三条失败路径全倒向放行；标记陈旧判据（分类不改判定）；
 // 宿主失效态两格；mutation 判据四向（放松/关闭/结果不被消费/文档形态）。

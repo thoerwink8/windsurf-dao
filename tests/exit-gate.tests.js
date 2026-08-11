@@ -1,5 +1,4 @@
 // tests/exit-gate.tests.js — scripts/dao-exit-gate.mjs 的行为测试（先破再验：每道门都有换靶 mutation）
-// 跑法：node tests/exit-gate.tests.js（全绿 exit 0）
 // 夹具：_tmp/exit-gate/ 下造合成 git 仓（真 commit、真 diff），交活单为合成 JSON。
 const fs = require("fs");
 const path = require("path");
