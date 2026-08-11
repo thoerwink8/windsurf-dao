@@ -1,7 +1,5 @@
 // dao-subagent-clauses hook 回归网 — 每个行为分支留正控 + 负控 + mutation 判别力
 //
-// 跑法：node tests/subagent-clauses.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 夹具语料是**合成**的（形态照 dao-officer-clauses.md），真仓条数随条款库增删而变，不拿来当正控。
 // 重设计后渲染端现算、无索引派生物：夹具只需一份 sources-json 指向夹具 md。
 // ⚠ 本文件里的「密钥/变异体」都是合成的；变异体必须落在 ccswitch/hooks/ 自己那一层

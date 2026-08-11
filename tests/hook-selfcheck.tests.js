@@ -1,7 +1,5 @@
 // hook-selfcheck 公共库自证 · 单元级（每个行为分支留正控 + 负控）
 //
-// 跑法：node tests/hook-selfcheck.tests.js   （全绿 exit 0，任一红 exit 1）
-//
 // 为什么单独给库补测：selfcheckLines 是文案模板，改坏了 hook 的行为测试不会红
 // （F1 重构时真踩过一次：`因 ${missNote}不匹配` 多打一个空格，两套 hook 测试全绿）。
 // 心跳半段逐字锚定（logPath 可注入 ⇒ 确定性）；注册半段读真实 live settings.json，
