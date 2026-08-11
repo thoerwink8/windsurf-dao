@@ -77,19 +77,16 @@
     `git worktree prune` 与 `git pull --ff-only`（已是最新时）本身就是幂等操作。**重复跑
     一次已经清干净的现场，预期结果是「全跳过 + exit 0」，不是报错。**
 
-    ⚠️ **上面第一句 2026-08-10 改真了，别按旧版读**（出处：PR #252 第二轮对抗验证 X12）：
-    此前它写作「worktree **不在** `git worktree list` 里 ⇒ 跳过第 3 步」，读起来是**无条件的**，
-    而它真正的前提是「认树这一步没失效」——**而认树有一个已知失效形态，本批没修**：
-      · `-WorktreePath` 那个目录**被人改名挪走或删掉**时 `Test-Path` 为假 ⇒ 下面那道
-        `git rev-parse --show-toplevel` 归一化回落**根本不跑**（它挂在那个 `Test-Path` 之下）
-        ⇒ 只剩字符串比对，而登记里那条路径此刻也 `Test-Path` 不到、两边拼法对不上 ⇒ 判
-        「认不出」⇒ **配对校验（挂在 `$worktreeStillRegistered` 之下）整段被跳过**，第 5 步
-        照删分支、exit 0。**「它没登记」与「我没认出它的登记」在输出上一模一样。**
-      · **危害上限已实测**（复抗探针 A4）：被删的分支必须先过第 2 步差集核验，未合并的分支拿
-        exit 2、原样不动 ⇒ 损的是「盘上这句话不撒谎」与「配对校验一定被执行到」，**不是丢代码**。
-        故定级 🟡 建议、不阻断合并。
-      · **欠账单：issue #265 件 6**（带关闭条件与 owner）。**修好之后连同这段限定语一起删掉**
-        ——限定语留着不删，它自己就变成下一句假话。
+    **认树的两种失效形态均已修**（出处：PR #252 第二轮对抗验证 X12 与 2026-08-10 返修补）：
+      · **路径拼法**（尾杠 / 8.3 短名 / 大小写）——目录还在时靠 Resolve-Path 归一化 + 问
+        `git -C <WorktreePath> rev-parse --show-toplevel`（与 `worktree list` 同源的写法）。
+      · **目录被改名挪走或删掉**（#265 件 6，2026-08-10 复抗 X12 实测）——`Test-Path` 为假时
+        上面那两条都用不上，改走**分隔符归一化后的字面比对**：porcelain 打印正斜杠、调用方
+        多半是反斜杠，不归一化就比不中；登记还在 ⇒ 认得出 ⇒ 配对校验照常执行（`branch
+        refs/heads/...` 行本来就在 porcelain 输出里，不依赖目录存在）。**「它没登记」与
+        「我没认出它的登记」在输出上一模一样**——修法是让认树覆盖登记的全部拼法，而不是
+        用一句话含糊带过。修法承重点在「问 git 自己」（`worktree list` 输出），字符串比对
+        只是目录不在时的回落，不是主路。
 
     ── 不由本脚本兜住的边界（照直写）───────────────────────────────────────────
       ① **不判断「PR 到底该不该合」**——终审不可让渡，那是人（或 `dao-pr-merge.ps1` 第 4/5
@@ -108,8 +105,10 @@
     `branch refs/heads/...` 行，**大小写敏感比对**——git 的 ref 名是大小写敏感的，而
     PowerShell 的 `-ne` 默认不是。detached HEAD 的树同样拒绝：证不出它检出的是 -Branch。）
     **这条校验挂在「那棵树还登记着」之下，所以「认不认得出这棵树」与它同等承重**——
-    认树不靠手工规范化路径，而是问 `git -C <WorktreePath> rev-parse --show-toplevel`
-    （与 `worktree list` 同源的写法），见幂等探测段那条注释。
+    认树不靠手工规范化路径：目录还在时问 `git -C <WorktreePath> rev-parse --show-toplevel`
+    （与 `worktree list` 同源的写法）；目录被改名挪走/删掉时（#265 件 6）改走**分隔符归一化
+    后的字面比对**认登记——porcelain 的 `branch refs/heads/...` 行本来就在输出里、不依赖
+    目录存在，配对照常执行。见幂等探测段那条注释。
 
 .PARAMETER Branch
     要清理的本地分支名（与上面那棵 worktree 对应）。必填。
@@ -267,15 +266,16 @@ if (-not $wtList.Ok) {
 # 打印「视为已清理」这句假话，第 5 步照删分支、exit 0。
 # **「它没登记」与「我没认出它的登记」输出一模一样**——与第 2 步要治的那个病同族，
 # 所以修法也同族：别自己数，去问那个知道答案的。
-# ⚠ **残留，未修，欠账 issue #265 件 6**（2026-08-10 复抗 X12 用长名路径独立复现）：
-#    上面那段治的是**路径拼法**这一个变量，它已修；**目录不在**是另一个变量，**没修**——
-#    下面这道 `Test-Path` 自己就是一条失效路径：目录被人改名挪走/删掉时它为假 ⇒ 那句归一化
-#    回落根本不跑 ⇒ 又回到「认不出」⇒ 配对校验整段被跳过，还会打出「视为已清理」。
-#    危害上限实测（探针 A4）：删得掉的分支必须先过第 2 步差集核验，未合并的拿 exit 2 原样不动。
 $worktreeGitTop = $null
 if (Test-Path -LiteralPath $WorktreePath) {
+    # 目录还在：问 git 自己这棵树怎么写（与 `worktree list` 同源）——路径拼法 / 8.3 短名 /
+    # 大小写差异在这一步全部消掉，认树的承重点在这里（2026-08-10 返修补，PR #252 复抗实测）。
     $worktreeGitTop = GitLine -Cwd $WorktreePath -GitArgs @('rev-parse', '--show-toplevel')
 }
+# 目录被改名挪走/删掉时上面那步跑不了（Test-Path 为假），但 git 登记还在——`worktree list
+# --porcelain` 打印的正是登记里的原样路径，与调用方拿到的路径只差分隔符（porcelain 打正斜杠、
+# 调用方多半反斜杠）。下面第三道比对把分隔符归一化后按字面认登记：登记在就认得出 ⇒ 配对校验
+# 照常执行。#265 件 6（2026-08-10 复抗 X12 用长名路径独立复现，危害上限见 .DESCRIPTION 幂等段）。
 # --porcelain 的每条记录形如：worktree <路径> / HEAD <sha> / branch refs/heads/<名>（或 detached）。
 # 分支行本来就在那份输出里，顺手记下来给下面的配对校验用（不用另跑一条 git）。
 $worktreeStillRegistered = $false
@@ -287,8 +287,11 @@ foreach ($line in $wtList.Out) {
         $wtEntryResolved = $wtEntry
         if (Test-Path -LiteralPath $wtEntry) { $wtEntryResolved = (Resolve-Path -LiteralPath $wtEntry).Path }
         $inTargetEntry = ($wtEntryResolved -eq $worktreePathResolved)
-        # 字符串比对没认出来时，改用 git 自己的写法再比一次（上面那段注释说的就是这一步）。
+        # 字符串比对没认出来时，改用 git 自己的写法再比一次（目录还在时的承重路，见上面注释）。
         if ((-not $inTargetEntry) -and $worktreeGitTop -and ($wtEntry -eq $worktreeGitTop)) { $inTargetEntry = $true }
+        # 目录已不在时上面两条都用不上（$worktreeGitTop 为 $null、两边都过不了 Resolve-Path）：
+        # 分隔符归一化后按字面认登记——porcelain 打正斜杠、调用方多半反斜杠（#265 件 6）。
+        if ((-not $inTargetEntry) -and (($wtEntry -replace '\\', '/') -eq ($worktreePathResolved -replace '\\', '/'))) { $inTargetEntry = $true }
         if ($inTargetEntry) { $worktreeStillRegistered = $true }
     } elseif ($inTargetEntry -and ($line -like 'branch refs/heads/*')) {
         $worktreeCheckedOutBranch = $line.Substring(18)   # 'branch refs/heads/'.Length = 18
@@ -315,12 +318,10 @@ if ($worktreeStillRegistered) {
 }
 
 if (-not $worktreeStillRegistered) {
-    # 这句话此前写作「worktree 已不在 `git worktree list` 里 —— 视为已清理」，是**无条件断言**；
-    # 而脚本此刻真正知道的只有「我没认出它」。认树失效时（目录被挪走，见头注幂等段 ⚠ 段与
-    # issue #265 件 6）它其实还登记着，那句话就是假的 —— 2026-08-10 照直改真，行为一个字没动。
+    # 三道认树路径（Resolve-Path 精确比对 / git 同源写法 / 分隔符归一化字面比对）全都没命中
+    # ⇒ 这棵树确实不在登记里，这句话才成立（#265 件 6 修完后不再是「推断」）。
     Write-Skip ("我在 ``git worktree list`` 里认不出这棵树 —— 视为已清理。" +
-                "⚠ 这是**推断不是事实**：认树失效时（已知形态：那个目录被人改名挪走或删掉）" +
-                "它其实还登记着，这句话就是假的，而配对校验也一并被跳过了 —— 见头注幂等段、欠账 issue #265 件 6")
+                "（三道认树路径均已试过：精确路径 / git 同源写法 / 分隔符归一化比对）")
 }
 if (-not $branchStillExists) { Write-Skip "本地分支 $Branch 已不存在 —— 视为已清理" }
 if (-not $worktreeStillRegistered -and -not $branchStillExists) {
@@ -436,6 +437,9 @@ if (-not $branchStillExists) {
     $bd = Invoke-Git -Cwd $RepoPath -GitArgs @('branch', $deleteFlag, $Branch)
     if ($bd.Ok) {
         Write-Ok "已删本地分支 $Branch（$deleteFlag）"
+        # 机器可读行：给回归网钉「实际选中的 flag」（#260 件2 —— 此前两条断言只盯中文报文、
+        # PowerShell -match 还大小写不敏感，-d/-D 互换两向皆绿）。值域只有 -d / -D 两个字面。
+        Write-Info "DELETE_FLAG=$deleteFlag"
     } else {
         Fail "git branch $deleteFlag $Branch 失败（exit $($bd.Code)）：`n$($bd.Out -join "`n")" 4
     }
