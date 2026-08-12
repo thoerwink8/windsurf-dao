@@ -175,7 +175,10 @@ A. 照此派   B. 调整（说明哪单换谁）   C. 照此派，且本窗口�
 自审全绿才发 `worker_done`，模型档按 §二 每单提案。
 
 - **树帅出生即无写工具（结构约束替代纪律 · 2026-08-13 三犯定形）**：起树帅走低层配方，命令自带工具面裁剪——
-  `terminal create --command "claude --model <档> --disallowedTools \"Edit,Write,NotebookEdit,Task\"" → dispatch --inject`。
+  `terminal create --command "claude --model <档> --autocompact 350k --disallowedTools \"Edit,Write,NotebookEdit,Task\"" → dispatch --inject`。
+  压缩阈值双档（用户 2026-08-13 拍板，任何项目任何机器沿用）：帅位 500k（≈1M 的 50%，settings
+  `autoCompactWindow` 经 config-sync 全局兜底，不用手动带）；树帅与 Claude Code 工兵终端 300~400k 档，
+  起终端的命令行**必带 `--autocompact 350k`**——省着点上下文，压缩宜早不宜满。
   「树帅不亲手干制作活」从此不是纪律是结构：写不了文件、派不了 subagent，只剩读＋终端编排；
   只读勘察用自带 Read/Grep/Glob。教训：散文禁令对模型天性必输（v1 拿 subagent 干活、
   v2 令写明白了仍亲手改码）——**违例动作要从「被禁止」做成「不存在」**。Bash 旁路写文件仍存在，
