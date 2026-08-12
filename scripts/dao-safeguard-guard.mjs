@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // ============================================================================
-// dao-safeguard-guard.mjs —— Orca 层守护：自动救回被安全拦截降级的 Claude Code 会话
+// dao-safeguard-guard.mjs —— Orca 层守护：救回降级会话（issue #336）+ 卡死看门狗（issue #348）
 //
-// 契约：issue https://github.com/thoerwink8/windsurf-dao/issues/336
+// 契约：
+//   issue #336 —— 救回被安全拦截降级的 Claude Code 会话（背景见下）
+//   issue #348 —— --watch-stall 卡死看门狗：同一终端屏面差分连续 N 轮（默认 3 轮×60s）
+//                 零新行且未见 worker_done ⇒ stdout [STALL] 告警；只告警不杀，处置归协调者。
 //   背景：Fable 5 的安全检查偶发误拦正常消息，宿主 Claude Code 自动把会话降级到
 //   Opus 4.8 并提示 "Fable 5's safeguards flagged this message... Switched to Opus 4.8"。
 //   会话内部无法自动补救（hook 无 safeguards 事件、/compact /model 无法从 hook 注入），
@@ -14,6 +17,16 @@
 //      /compact → 等压缩完成 → /model 切回 Fable 5 → 发「继续」
 //   3. 同一终端补救上限 2 次（可配）；超限停手、留在降级模型并告警通知
 //   4. 只碰显式授权的终端（--terminal 白名单），绝不自动发现、不动其他窗
+//
+// --watch-stall 模式（issue #348）做什么：
+//   1. 每轮 `orca terminal read` 取尾内容，复用下方 newLinesStartIndex 差分引擎数新行
+//   2. 连续 N 轮（默认 3）新行数 = 0 且 `orca orchestration inbox` 中未见该终端的
+//      type==='worker_done' 消息（结构化字段判等）⇒ stdout [STALL] 告警（+ 可选 state-file）
+//   3. 只告警不杀：不 send / 不 stop / 不 close；处置归协调者（掐/换人是判断）
+//   4. 判定只用 差分行数 + 结构化信号；禁文案正则（2026-08-13 铁律：中文 Windows
+//      stderr 是 GBK 乱码，文案匹配必死——见 ccswitch/rules/dao-writing-rules.md §二）
+//   5. 完工信号用 inbox（只读 show，不改投递状态）而非 check（会消费/ack，会抢走
+//      协调者正在等的 worker_done）——守护绝不能用 check 当完工探测。
 //
 // 三种态必须可区分（issue #337 教训：数到 0 与没看到样本，输出不许一样）：
 //   'no_match'    —— 读到 ≥1 行，均未命中（正常，静默）
@@ -34,10 +47,20 @@
 //     这不是误报，是如实声明看不见。
 //   - 首次轮询只建立基线、不扫描历史输出（避免陈旧降级提示误触发），除非
 //     --scan-on-start。
+//   - worker_done 检出靠 `orca orchestration inbox`，其 run 解析依赖 CLI 进程所在
+//     worktree 的活跃终端。多 run 环境下若解析到别的 run 会看不到完工消息（保守方向是
+//     误报 [STALL]，协调者以人工判断兜底）。未实测多 run。
+//   - 一旦检出某终端 worker_done，该终端永久停止卡死告警（直到守护进程重启）；若协调者
+//     把同一终端重新派单，旧 worker_done 仍会抑制新告警。未实测重派单场景。
+//   - 工兵的心跳（orca orchestration send --type heartbeat）会在其终端回显响应行
+//     （实测本机 send 打印 "Sent msg_..."），清零 stall 计数 ⇒ 心跳活跃的工兵不会误报。
+//   - 终端 read 的 status 字段（running/exited…）是存活信号：已结束终端的静默合法，不算卡死。
 //
 // 自检与验证（命令坐标，值以跑出来的为准）：
 //   node scripts/dao-safeguard-guard.mjs --selftest        # 纯函数自测，exit 0 = 过
 //   node scripts/dao-safeguard-guard.mjs --dry-run ...     # 干跑演示（见 --help）
+//   node scripts/dao-safeguard-guard.mjs --watch-stall --terminal <h> --stall-rounds 3 --interval N --max-rounds M
+//                                                        # 卡死看门狗实跑；先破（挂起终端 3 分钟内 [STALL]）再验（慢跑终端零误报）
 //   node scripts/dao-check.mjs                             # 全仓体检（本脚本不影响它）
 //
 // 用法与全部参数：`--help`。退出码：0 正常 · 1 运行时失败 · 2 用法错。
@@ -71,6 +94,10 @@ export const DEFAULTS = Object.freeze({
   orcaCallTimeoutMs: 20_000,
   waitMode: 'tui-idle',     // tui-idle | sleep（见头注「近似与未实测处」）
   heartbeatSec: 600,        // 周期心跳行的间隔
+  stallRounds: 3,           // --watch-stall：连续零新行轮数阈值（issue #348 默认 3 轮）
+  stallIntervalSec: 60,     // --watch-stall 下的默认轮询间隔（issue #348：3 轮×60s）
+  inboxLimit: 200,          // worker_done 检查的 inbox 拉取条数
+  maxRounds: 0,             // 0 = 不限；>0 时轮询 N 轮后正常退出（冒烟/验证用）
 });
 
 // ───────────────────────── 纯函数（可测） ─────────────────────────────────
@@ -153,6 +180,41 @@ export function newLinesStartIndex(prev, curr) {
     if (eq) return k;
   }
   return 0;
+}
+
+/**
+ * 卡死计数单步（纯）：一轮的「新行数」进，下一轮计数出。
+ * newLineCount > 0 ⇒ 清零（有输出不算卡死）；== 0 ⇒ 计数 +1，达阈值 → kind 'stall'。
+ * 阈值后继续零新行 ⇒ 每轮仍是 'stall'（持续告警，让协调者看到卡死仍在）。
+ * 判定只用差分行数，不做任何文案匹配（2026-08-13 铁律）。
+ */
+export function stallNext(prevRounds, newLineCount, threshold = DEFAULTS.stallRounds) {
+  if (newLineCount > 0) return { rounds: 0, kind: 'new_output' };
+  const rounds = (prevRounds ?? 0) + 1;
+  return { rounds, kind: rounds >= threshold ? 'stall' : 'counting' };
+}
+
+/**
+ * 完工信号（结构化，纯）：从 `orca orchestration inbox` 的解析结果里查该终端是否已发
+ * worker_done。判定 = 字段判等（type==='worker_done' && from_handle===handle），
+ * 不做文案匹配。返回 true（已完工）/ false（未见）/ 'unknown'（检查本身失败——
+ * 不许把「没查成」当成「没完工」，与 issue #337 三态区分同构）。
+ */
+export function hasWorkerDone(inbox, handle) {
+  if (!inbox || inbox.ok !== true) return 'unknown';
+  const msgs = inbox.result?.messages;
+  if (!Array.isArray(msgs)) return 'unknown';
+  return msgs.some((m) => m && m.type === 'worker_done' && m.from_handle === handle);
+}
+
+/**
+ * 终端是否已结束（结构化，纯）：read 响应带 status 且 ≠ 'running' ⇒ 已结束（exited 等），
+ * 静默合法不该算卡死。status 字段缺失（旧运行时）⇒ 视为存活（未知偏保守）。
+ */
+export function isTerminalEnded(raw) {
+  const status = raw?.result?.terminal?.status;
+  if (typeof status !== 'string' || status === '') return false;
+  return status !== 'running';
 }
 
 /**
@@ -263,6 +325,9 @@ export function formatOutcome(handle, e) {
     case 'rescue_complete_with_model_warn': return `[warn]  ${handle}: /model 后 tui-idle 超时（${e.reason}）——模型切换可能仍在途，仍发「继续」，需人工核对模型`;
     case 'stopped_idle': return `[info]  ${handle}: 已停手（attempts=${p(e.attempts)}/${p(e.maxAttempts)}，failures=${p(e.failures)}/${p(e.maxAttempts)}），跳过后续轮询`;
     case 'unknown_idle': return `[info]  ${handle}: 已挂起（read 失败过多），跳过后续轮询`;
+    case 'stall': return `[STALL] ${handle}: 屏面连续 ${p(e.stallCount)} 轮零新行（阈值 ${p(e.stallRounds)} 轮）且未见 worker_done → 疑似卡死；只告警不杀，处置归协调者（差分行数 + inbox 结构化信号判定）`;
+    case 'stall_completed': return `[ok]    ${handle}: 检测到 worker_done（inbox 结构化信号）→ 静默合法，停止卡死告警`;
+    case 'stall_terminal_ended': return `[ok]    ${handle}: 终端已结束（status=${e.reason}）→ 静默合法，停止卡死告警`;
     default: return `[?]     ${handle}: ${e.outcomeKind}`;
   }
 }
@@ -307,6 +372,12 @@ export function terminalSend(handle, text, enter) {
 
 export function terminalWaitIdle(handle, timeoutMs) {
   return orca(['terminal', 'wait', '--terminal', handle, '--for', 'tui-idle', '--timeout-ms', String(timeoutMs), '--json']);
+}
+
+export function orchestrationInbox(limit = DEFAULTS.inboxLimit) {
+  // 完工信号源：inbox 是只读 show（不改投递状态）；check 会消费/ack，会抢走协调者
+  // 正在等的 worker_done —— 守护绝不能用 check 当完工探测。
+  return orca(['orchestration', 'inbox', '--limit', String(limit), '--json']);
 }
 
 // ───────────────────────── 日志与状态落盘 ─────────────────────────────────
@@ -364,6 +435,7 @@ function makeTerminalState(handle) {
   return {
     handle, state: 'idle', attempts: 0, failures: 0, consecutiveReadFails: 0, events: 0, announcedStop: false,
     prevTail: [], established: false, scannedOnce: false, reBaseline: false, forceScan: false,
+    stallCount: 0, done: false, // --watch-stall：连续零新行计数 / 已完工或已结束标记
   };
 }
 
@@ -421,6 +493,61 @@ async function serviceIdle(t, cfg) {
   if (e.actions?.length) await runSend(t, e.actions[0], cfg);
 }
 
+async function serviceStall(t, cfg) {
+  const j = terminalRead(t.handle, cfg.readLimit);
+  const outcome = classifyRead(j, cfg.patterns);
+  if (outcome.kind === 'read_failed') {
+    const e = stepState(t, { type: 'read_failed', reason: outcome.reason }, cfg);
+    applyState(t, e, cfg);
+    return;
+  }
+  if (isTerminalEnded(j)) {
+    t.done = true;
+    log('info', formatOutcome(t.handle, { outcomeKind: 'stall_terminal_ended', reason: j.result?.terminal?.status || '?' }));
+    return;
+  }
+  const curr = (j.result?.terminal?.tail || []).map(String);
+  if (!t.established) {
+    t.established = true;
+    t.prevTail = curr;
+    log('debug', `${t.handle}: 基线已建立（${curr.length} 行），本轮不计数`);
+    return;
+  }
+  const overlap = newLinesStartIndex(t.prevTail, curr);
+  if (overlap === 0 && t.prevTail.length > 0) {
+    // 输出越过保留环/整屏替换：有输出但看不见 ⇒ 不算卡死（与救援模式同一差分引擎同一语义）
+    t.prevTail = curr;
+    t.stallCount = 0;
+    log('warn', `${t.handle}: 轮询间隔内屏面整体替换/越过保留环——有输出但看不见，不算卡死，stall 计数清零`);
+    return;
+  }
+  const newLines = curr.length - overlap;
+  t.prevTail = curr;
+  if (newLines > 0) {
+    t.stallCount = 0;
+    log('debug', `${t.handle}: 新输出 ${newLines} 行，stall 计数清零`);
+    return;
+  }
+  // 零新行：先问「是不是已完工」（结构化信号；只在此刻查 inbox，省 busy 轮的 orca 调用）
+  const done = hasWorkerDone(orchestrationInbox(cfg.inboxLimit), t.handle);
+  if (done === 'unknown') {
+    log('warn', `${t.handle}: 完工检查失败（inbox 不可读）——无法区分「合法静默」与「卡死」，本轮不计数不告警`);
+    return;
+  }
+  if (done) {
+    t.done = true;
+    log('info', formatOutcome(t.handle, { outcomeKind: 'stall_completed' }));
+    return;
+  }
+  const s = stallNext(t.stallCount, 0, cfg.stallRounds);
+  t.stallCount = s.rounds;
+  if (s.kind === 'counting') {
+    log('debug', `${t.handle}: 零新行 ${s.rounds}/${cfg.stallRounds} 轮（未达阈值）`);
+    return;
+  }
+  applyState(t, { state: 'idle', outcomeKind: 'stall', severity: 'alert', stallCount: s.rounds, stallRounds: cfg.stallRounds }, cfg);
+}
+
 async function serviceWaitCompact(t, cfg) {
   if (cfg.waitMode === 'sleep') {
     await sleep(cfg.compactTimeoutMs);
@@ -462,8 +589,9 @@ async function runSend(t, action, cfg) {
 }
 
 async function serviceOnce(t, cfg) {
+  if (t.done) return; // --watch-stall：已完工/已结束的终端不再轮询
   switch (t.state) {
-    case 'idle': return serviceIdle(t, cfg);
+    case 'idle': return cfg.watchStall ? serviceStall(t, cfg) : serviceIdle(t, cfg);
     case 'waiting_compact': return serviceWaitCompact(t, cfg);
     case 'waiting_model': return serviceWaitModel(t, cfg);
     case 'stopped':
@@ -494,8 +622,14 @@ async function runDaemon(cfg, terminals) {
     for (;;) {
       poll += 1;
       for (const t of terminals) await serviceOnce(t, cfg);
+      if (cfg.maxRounds > 0 && poll >= cfg.maxRounds) {
+        log('info', `达 --max-rounds ${cfg.maxRounds} 轮，正常退出（exit 0）`);
+        return 0;
+      }
       if (poll % heartbeatPolls === 0) {
-        const summary = terminals.map((t) => `${t.handle}=${t.state}(a${t.attempts}/f${t.failures})`).join(' ');
+        const summary = cfg.watchStall
+          ? terminals.map((t) => `${t.handle}=${t.state}(stall ${t.stallCount}/${cfg.stallRounds}${t.done ? ' done' : ''})`).join(' ')
+          : terminals.map((t) => `${t.handle}=${t.state}(a${t.attempts}/f${t.failures})`).join(' ');
         log('info', `心跳 poll#${poll}，运行 ${Math.round((Date.now() - t0) / 1000)}s：${summary}`);
       }
       await sleep(cfg.intervalSec * 1000);
@@ -509,7 +643,12 @@ async function runDaemon(cfg, terminals) {
 function banner(cfg, terminals) {
   process.stdout.write('── dao-safeguard-guard 启动 ─────────────────────────\n');
   process.stdout.write(`受管终端（白名单，仅此列表会被读/写）: ${terminals.map((t) => t.handle).join(', ')}\n`);
-  process.stdout.write(`轮询间隔 ${cfg.intervalSec}s · 补救上限 ${cfg.maxAttempts} 次 · wait 模式 ${cfg.waitMode} · 匹配语料 ${DOWNGRADE_PATTERNS.length} 条（逐字取自 issue #336）\n`);
+  if (cfg.watchStall) {
+    process.stdout.write(`卡死看门狗（issue #348）：连续 ${cfg.stallRounds} 轮（间隔 ${cfg.intervalSec}s）零新行且无 worker_done ⇒ stdout [STALL] 告警；只告警不杀，处置归协调者\n`);
+    process.stdout.write(`判定只用差分行数 + inbox 结构化信号（type===worker_done 字段判等），不做文案匹配（2026-08-13 铁律）\n`);
+  } else {
+    process.stdout.write(`轮询间隔 ${cfg.intervalSec}s · 补救上限 ${cfg.maxAttempts} 次 · wait 模式 ${cfg.waitMode} · 匹配语料 ${DOWNGRADE_PATTERNS.length} 条（逐字取自 issue #336）\n`);
+  }
   process.stdout.write(`注意：不要把本守护自己的工作终端列入 --terminal；输出回显不命中语料，但保持扫描面干净（dao-writing-rules §二）。\n`);
   process.stdout.write('────────────────────────────────────────────────────\n');
 }
@@ -593,6 +732,47 @@ export function runSelfTest() {
   check('差分: 完全没变 → 重叠 = 全长（无新行）', newLinesStartIndex(['A', 'B'], ['A', 'B']) === 2);
   check('差分: 重复行不误判（PS 提示符连续）', newLinesStartIndex(['P', 'P', 'B'], ['P', 'P', 'B', 'P']) === 3);
 
+  // —— --watch-stall 卡死判定（issue #348）：只认差分行数与结构化信号 ——
+  check('stallNext: 有新输出 → 清零', stallNext(2, 1, 3).kind === 'new_output' && stallNext(2, 1, 3).rounds === 0);
+  check('stallNext: 零新行递增未达阈值 → counting', stallNext(0, 0, 3).kind === 'counting' && stallNext(0, 0, 3).rounds === 1);
+  check('stallNext: 达阈值 → stall', stallNext(2, 0, 3).kind === 'stall' && stallNext(2, 0, 3).rounds === 3);
+  check('stallNext: 阈值后继续零新行 → 仍 stall（持续告警）', stallNext(3, 0, 3).kind === 'stall' && stallNext(3, 0, 3).rounds === 4);
+  // 负控：有输出的慢终端（输出穿插，最长静默 2 轮 < 阈值 3）→ 永不 [STALL]
+  {
+    const seq = [2, 0, 0, 1, 0, 0, 1, 0, 0, 1];
+    let r = 0; const kinds = [];
+    for (const n of seq) { const s = stallNext(r, n, 3); r = s.rounds; kinds.push(s.kind); }
+    check('负控: 慢跑终端（输出穿插）连续 10 轮零 [STALL]', kinds.every((k) => k !== 'stall'));
+  }
+  // 正控：静默 3 轮 → 第 3 轮 stall；被输出打断后重新计时
+  {
+    const seq = [1, 0, 0, 0];
+    let r = 0; const kinds = [];
+    for (const n of seq) { const s = stallNext(r, n, 3); r = s.rounds; kinds.push(s.kind); }
+    check('正控: 静默 3 轮 → 第 3 轮 [STALL]（输出打断后重新计时）', kinds[3] === 'stall' && kinds[1] === 'counting' && kinds[2] === 'counting');
+  }
+  check('stall 告警行含 [STALL] 标记', formatOutcome('term_x', { outcomeKind: 'stall', stallCount: 3, stallRounds: 3 }).includes('[STALL]'));
+
+  // —— worker_done 结构化检出（消息形态取自本 run 真样本 msg_b743d080b68c）——
+  const realInboxShape = { ok: true, result: { messages: [
+    { type: 'heartbeat', from_handle: 'term_x' },
+    { type: 'dispatch', from_handle: 'term_coord' },
+    { type: 'worker_done', from_handle: 'term_worker1', payload: '{}' },
+  ] } };
+  check('worker_done: 命中本终端', hasWorkerDone(realInboxShape, 'term_worker1') === true);
+  check('worker_done: 别的终端完工不算本终端', hasWorkerDone(realInboxShape, 'term_worker2') === false);
+  check('worker_done: heartbeat 不是完工', hasWorkerDone(realInboxShape, 'term_x') === false);
+  check('worker_done: 无消息 → false', hasWorkerDone({ ok: true, result: { messages: [] } }, 'x') === false);
+  check('worker_done: ok:false → unknown（不许当 false）', hasWorkerDone({ ok: false, error: {} }, 'x') === 'unknown');
+  check('worker_done: 缺 messages → unknown', hasWorkerDone({ ok: true }, 'x') === 'unknown');
+  check('worker_done: 空响应 → unknown', hasWorkerDone(null, 'x') === 'unknown');
+
+  // —— 终端已结束 ≠ 卡死 ——
+  check('terminal_ended: running 未结束', isTerminalEnded({ ok: true, result: { terminal: { status: 'running' } } }) === false);
+  check('terminal_ended: exited 已结束', isTerminalEnded({ ok: true, result: { terminal: { status: 'exited' } } }) === true);
+  check('terminal_ended: 无 status 字段（旧运行时）→ 未结束', isTerminalEnded({ ok: true, result: { terminal: {} } }) === false);
+  check('terminal_ended: 空响应 → 未结束', isTerminalEnded(null) === false);
+
   const failed = results.filter((r) => !r.ok);
   const lines = results.map((r) => `${r.ok ? '  ok  ' : '  X   '}${r.name}${r.ok ? '' : ' —— ' + r.detail}`).join('\n');
   return { passed: results.length - failed.length, failed: failed.length, lines };
@@ -637,10 +817,11 @@ export function runDryRun(a) {
 // ───────────────────────── CLI 入口 ───────────────────────────────────────
 
 function printUsage(stream = process.stdout) {
-  stream.write(`dao-safeguard-guard.mjs —— Orca 层守护：自动救回被安全拦截降级的 Claude Code 会话（issue #336）
+  stream.write(`dao-safeguard-guard.mjs —— Orca 层守护：救回降级会话（issue #336）+ 卡死看门狗（issue #348）
 
 用法:
-  node scripts/dao-safeguard-guard.mjs --terminal <handle> [--terminal <h2> ...] [选项]   # 长驻轮询
+  node scripts/dao-safeguard-guard.mjs --terminal <handle> [--terminal <h2> ...] [选项]   # 长驻轮询（救回降级会话）
+  node scripts/dao-safeguard-guard.mjs --watch-stall --terminal <handle> [选项]           # 卡死看门狗（只告警不杀）
   node scripts/dao-safeguard-guard.mjs --selftest                                            # 纯函数自测
   node scripts/dao-safeguard-guard.mjs --dry-run --sample-text "<文字>" [--attempts N]      # 干跑演示
 
@@ -658,6 +839,12 @@ function printUsage(stream = process.stdout) {
   --log-level <debug|info|warn> 默认 info
   --once                  只跑一轮（调试/冒烟用）
   --scan-on-start         首轮也扫描历史输出（默认首轮只建立基线，防陈旧提示误触发）
+  --watch-stall           卡死看门狗模式（issue #348）：同一终端屏面差分连续 N 轮（默认 3）零新行
+                          且 orca orchestration inbox 中未见该终端的 worker_done ⇒ stdout [STALL] 告警。
+                          本模式下轮询间隔默认 60s（可用 --interval 改）；只告警不杀，处置归协调者。
+                          判定只用差分行数 + 结构化字段判等，不做文案匹配（中文 Windows GBK 乱码铁律）。
+  --stall-rounds <N>      --watch-stall 的连续零新行阈值轮数，默认 3
+  --max-rounds <N>        轮询 N 轮后正常退出（冒烟/验证用；默认不限）
   --sample-text <文字>    仅 --dry-run：要判定的样本文字
   --attempts <N>          仅 --dry-run：模拟「已补救 N 次」后的触发（演示第 N+1 次决策）
   --help                  本帮助
@@ -675,6 +862,7 @@ function parseArgs(argv) {
     modelTimeoutMs: DEFAULTS.modelTimeoutMs, model: DEFAULTS.model, continueText: DEFAULTS.continueText,
     waitMode: DEFAULTS.waitMode, stateFile: null, sampleText: '', attempts: 0,
     help: false, selftest: false, dryRun: false, once: false, scanOnStart: false, badArgs: null,
+    watchStall: false, stallRounds: DEFAULTS.stallRounds, maxRounds: 0, intervalSet: false,
   };
   const num = (key, v, min) => {
     const n = Number(v);
@@ -689,7 +877,7 @@ function parseArgs(argv) {
     else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) { val = argv[++i]; }
     switch (key) {
       case '--terminal': if (val) a.terminals.push(val); break;
-      case '--interval': { const n = num(key, val, 1); if (n) a.intervalSec = n; break; }
+      case '--interval': { const n = num(key, val, 1); if (n) { a.intervalSec = n; a.intervalSet = true; } break; }
       case '--max-attempts': { const n = num(key, val, 1); if (n) a.maxAttempts = n; break; }
       case '--read-fail-threshold': { const n = num(key, val, 1); if (n) a.readFailThreshold = n; break; }
       case '--compact-timeout-ms': { const n = num(key, val, 1); if (n) a.compactTimeoutMs = n; break; }
@@ -706,6 +894,9 @@ function parseArgs(argv) {
       case '--attempts': { const n = num(key, val, 0); if (n !== null) a.attempts = n; break; }
       case '--once': a.once = true; break;
       case '--scan-on-start': a.scanOnStart = true; break;
+      case '--watch-stall': a.watchStall = true; break;
+      case '--stall-rounds': { const n = num(key, val, 1); if (n) a.stallRounds = n; break; }
+      case '--max-rounds': { const n = num(key, val, 1); if (n) a.maxRounds = n; break; }
       case '--selftest': a.selftest = true; break;
       case '--dry-run': a.dryRun = true; break;
       case '--help': case '-h': a.help = true; break;
@@ -718,7 +909,7 @@ function parseArgs(argv) {
 
 function buildConfig(a) {
   return {
-    intervalSec: a.intervalSec,
+    intervalSec: a.watchStall && !a.intervalSet ? DEFAULTS.stallIntervalSec : a.intervalSec,
     maxAttempts: a.maxAttempts,
     readFailThreshold: a.readFailThreshold,
     compactTimeoutMs: a.compactTimeoutMs,
@@ -731,6 +922,10 @@ function buildConfig(a) {
     patterns: DOWNGRADE_PATTERNS,
     scanOnStart: a.scanOnStart,
     heartbeatSec: DEFAULTS.heartbeatSec,
+    watchStall: a.watchStall,
+    stallRounds: a.stallRounds,
+    maxRounds: a.maxRounds,
+    inboxLimit: DEFAULTS.inboxLimit,
   };
 }
 
