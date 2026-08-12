@@ -13,12 +13,18 @@ import { pathToFileURL } from "node:url";
 // Windows 下必须 shell 解析：npm 装的 CLI 只有 .cmd/.ps1 垫片没有 .exe，
 // 裸 spawnSync 探不到（pi 实测被误报 absent，2026-08-12）。
 const SHELL = process.platform === "win32";
+const NOT_FOUND_RE = /(?:not found|not recognized as an internal or external command|command not found)/i;
 
 function probeOnce(cmd, args, timeoutMs, runner) {
   try {
     const r = runCommand(runner, cmd, args, timeoutMs);
-    if (r.error || r.status == null) return { available: "unknown" };
-    if (r.status !== 0) return { available: false };
+    if (r.error || r.status == null) {
+      return r.error && r.error.code === "ENOENT" ? { available: false } : { available: "unknown" };
+    }
+    if (r.status !== 0) {
+      const detail = String(r.stderr || r.stdout || "");
+      return NOT_FOUND_RE.test(detail) ? { available: false } : { available: "unknown" };
+    }
     const ver = String(r.stdout || r.stderr || "").trim().split(/\r?\n/)[0].slice(0, 80);
     return { available: true, version: ver || "unknown" };
   } catch (_) { return { available: "unknown" }; }
