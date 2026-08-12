@@ -25,14 +25,14 @@
             └─ 准入（用户点名 / AI 确信有证据 / 缺陷坐实）→ gh issue create + 打标 ← 行动层入口
                     │
                     ▼
-       队列（领活循环：自主窗选题与每次心跳对账都扫 P0→P1）
-                    │ 帅派单：三节点之一「⚔️ 已派」评论 + `在途` 标
+       队列（领活循环：自主窗选题与每次心跳对账都扫类型标 open 单；急缓由用户点名或板列顺序定，不设优先级标签）
+                    │ 帅派单：三节点之一「⚔️ 已派」评论（多机/多 AI 并行时含 `dao-claim:` 租约行）+ 看板列移「在途」
                     ▼
        官干活（worktree 隔离 → PR → 止步 gh pr create）
                     │ 官交付：三节点之二「交付结论」评论
                     ▼
        帅终审（独立复验 + 一键验证真退出码 + merge）
-                    │ 帅销账：三节点之三「关单结论」评论 + 摘 `在途`
+                    │ 帅销账：三节点之三「关单结论」评论 + 看板列移「完成」
                     ▼
                  CLOSED（每单关闭都有证据链）
 ```
@@ -40,25 +40,27 @@
 **三节点留痕是硬要求**：派单 / 交付 / 关单各留一条评论。少了任何一节，这张单在事后就只剩标题——
 而「这件事当时为什么这么定」恰恰是最贵的部分。
 
-## 二、label 体系 = 派单标准（四维正交）
+## 二、label 体系 = 派单标准
 
 **canonical 定义在 `windsurf-dao ccswitch/templates/labels.json`（本机 `D:/frank/windsurf-dao/ccswitch/templates/labels.json`），本文不重抄**——
 抄一份就是双份真相源，改一处忘一处是必然而不是意外。这里只放一眼可读的速查与本项目的收窄。
 
 | 维 | 基数 | 标签 |
 |---|---|---|
-| **类型**（建单必打） | 恰选 1 | `缺陷` `任务` `欠账` `候选` `待拍板` `需用户` |
-| **优先级** | 缺陷/任务恰选 1；欠账与蓄水池不打 | `P0` > `P1` > `P2` |
-| **派单约束**（决定「怎么派」） | 可多个 | `结构受阻` <PROJECT_DISPATCH_LABELS> |
-| **状态** | 0-1 | `在途` |
+| **类型**（建单必打） | 恰选 1 | `缺陷` `任务` `欠账` |
+| **收件箱**（等用户动） | 0-1（与类型维互斥） | `待拍板` `需用户` `候选` |
+| **指针** | 全仓恰一张 | `接力` |
+| **派单约束**（决定「怎么派」） | 可多个 | <PROJECT_DISPATCH_LABELS> |
+
+无优先级轴、无状态轴（issue #360 拍板）：急缓由用户会话点名或板列顺序表达；「进行到哪」归看板列、「有没有人在干」归 `dao-claim:` 评论租约——不用标签复刻它们（双头必漂移）。
 
 **帅读标签 → 派单动作速查**（完整判据与派单含义见 labels.json 的 `dispatch` 字段）：
 
-- `缺陷`/`任务` + `P0`/`P1` + 无 `在途` → 领活优先派，按类型选官种（多机/多 AI 并行时：`在途` 但租约过期**且**盘上零活动 ⇒ 走接管流程再领，不直接抢；见 `ccswitch/scripts/dao-claim.ps1`）
+- `缺陷`/`任务` 无有效认领 → 领活派，按类型选官种（多机/多 AI 并行时：租约过期**且**盘上零活动 ⇒ 走接管流程再领，不直接抢；见 `ccswitch/scripts/dao-claim.ps1`）
 - 任意 + `守卫类` → 实现官止步 PR，**必接对抗验证官**才合
 - 任意 + `真机` → 排实例队列串行，PR 证据不许走「随后补」
-- 任意 + `结构受阻` → **先出解锁设计**，不派实现官
 - `候选`/`待拍板`/`需用户` → 不派，进各自蓄水池；`候选` 升级走 **relabel 不是 re-create**
+- 结构性卡死的单不设标签：评论说明卡在哪 + 板列停「待办」，**先出解锁设计**再派实现官
 
 **用户只需要记三个标签**：`待拍板`（要他决策）+ `需用户`（要他动手）+ `候选`（酝酿层，他扫一眼有没有该提优先级的）。
 
@@ -68,7 +70,6 @@
 |---|---|
 | `真机` | <REAL_MACHINE_CRITERIA> |
 | `守卫类` | <GUARD_PATH_CRITERIA> |
-| `结构受阻` | <BLOCKED_EXAMPLES> |
 
 > 为什么这两格必须由项目填：概念是通用的（存在「测试全绿但真机是坏的」这类缺陷、存在以拦截判定为职责的代码），
 > 但**哪些改动算、哪些路径算**只有项目答得出。照抄别的项目会得到一个在自己项目里一眼判不了的判据，
@@ -76,17 +77,17 @@
 
 ## 三、常设单（永不关闭，置顶）
 
-GitHub 每仓**置顶上限 3 个**。三个槽的分配是：两个最高频的可回复 inbox + 一个总览 hub。
+GitHub 每仓**置顶上限 3 个**。三个槽全部给交互面：**置顶 = 等你回话，零例外**（issue #360 拍板 6-A）。
 
 | 单 | 是什么 | 置顶 |
 |---|---|---|
 | <PINNED_DECISION_ISSUE> 📌 待拍板总览 | AI 攒决策，用户在评论区回一条即算拍板 | ✅ |
 | <PINNED_USER_ISSUE> 📌 需用户总览 | 只有用户能做的事集中入口，含耗时估计 | ✅ |
-| <PINNED_HUB_ISSUE> 📌 总览 hub | 一眼对齐入口：看板链接 + 各 inbox + 在途 | ✅ |
-| <CANDIDATE_HUB_ISSUE> 📌 候选总览 | 酝酿层全景 + AI 的按住理由与 promote 条件 | ❌（从 hub 进） |
+| <CANDIDATE_HUB_ISSUE> 📌 候选总览 | 酝酿层全景 + AI 的按住理由与 promote 条件 | ✅ |
 
-**为什么候选总览不占 pin**：用户说「X 也要置顶」时先问「X 是不是已经能进 hub 的某一行」——
-能进就进 hub，别去挤那三个槽。hub 由帅每批收官刷新一次「现况」列。
+**为什么没有「总览 hub」单**：常设 issue 的判据是**能不能在上面回一句话就让事情动起来**（交互面）；
+纯聚合链接的观测面归看板本身——看板入口放**仓库 About 栏**（首页右上一眼可见），
+不占置顶槽也不开单（issue 手维护的全景必然过期，而过期的那份在撒谎）。
 
 **蓄水池纪律**：`待拍板` / `需用户` / `候选` 三类**永不进清零目标**、不催、攒批。
 任何「issue 清零」类目标一律读作「**除蓄水池外**清零」。
@@ -150,7 +151,7 @@ database id 走 `gh api repos/<OWNER>/<REPO>/issues/<n> -q .id`。两个 id 长�
 ## 七、用户视角（只需要知道这四件）
 
 1. **有想法**：对帅说一句话即可，帅代建单打标（或自己开 issue 随手写，帅补标）
-2. **有空了**：打开置顶的 <PINNED_DECISION_ISSUE>（待拍板）/ <PINNED_USER_ISSUE>（需用户），评论区回复即生效
+2. **有空了**：打开置顶的 <PINNED_DECISION_ISSUE>（待拍板）/ <PINNED_USER_ISSUE>（需用户）/ <CANDIDATE_HUB_ISSUE>（候选），评论区回复即生效
 3. **想看全景**：打开 [<PROJECT_TITLE>](<PROJECT_URL>)，六列一眼看完哪些待办/在途/待验/待你拍
 4. **想看细账**：<PROGRESS_FILE> 总账；任何 issue 点开都有三节点留痕
 
@@ -160,8 +161,8 @@ database id 走 `gh api repos/<OWNER>/<REPO>/issues/<n> -q .id`。两个 id 长�
 |---|---|---|
 | `<OWNER>` / `<REPO>` | 仓库归属与名字 | `gh repo view --json owner,name` |
 | `<PROJECT_TITLE>` / `<PROJECT_URL>` | 看板标题与地址 | bootstrap 脚本输出 |
-| `<PINNED_DECISION_ISSUE>` / `<PINNED_USER_ISSUE>` / `<PINNED_HUB_ISSUE>` / `<CANDIDATE_HUB_ISSUE>` | 四张常设单编号（写成 `#123`） | bootstrap 脚本输出 |
-| `<REAL_MACHINE_CRITERIA>` / `<GUARD_PATH_CRITERIA>` / `<BLOCKED_EXAMPLES>` | 本项目判据 | 你自己填，填法示例见 labels.json 的 `placeholders` 段 |
+| `<PINNED_DECISION_ISSUE>` / `<PINNED_USER_ISSUE>` / `<CANDIDATE_HUB_ISSUE>` | 三张常设单编号（写成 `#123`） | bootstrap 脚本输出 |
+| `<REAL_MACHINE_CRITERIA>` / `<GUARD_PATH_CRITERIA>` | 本项目判据 | 你自己填，填法示例见 labels.json 的 `placeholders` 段 |
 | `<PROJECT_DISPATCH_LABELS>` | 本项目采用的派单约束扩展标签 | 通常是 `` `真机` `` 和/或 `` `守卫类` ``；一个都不采就删掉这一格 |
 | `<PROJECT_VERDICT_ROW>` | 本项目特有的 triage 分流向（没有就删这一行） | 例：某类欠账需要独占资源，单独成一向 |
 | `<PROJECT_CONSTRAINTS>` / `<PROJECT_ISSUE_STATE>` / `<PROJECT_NARRATIVE_FILES>` | 本项目特有约束 / 现用标签 / 叙事层文件清单 | 你自己填 |
