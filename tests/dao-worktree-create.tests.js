@@ -37,6 +37,8 @@ console.log("\n=== ① 纯函数：每一种违规各有一例红 ===");
 const ILLEGAL = [
   ["empty", ""],
   ["empty", "   "],
+  ["multiline", "树帅制 · 派单中 · 无阻\n注入"],                // 换行破坏「一行显示」契约
+  ["multiline", "树帅制 · 派单中 · 无阻\r\n注入"],              // CRLF 同拒
   ["too-long", "多树并行 · 实现官在写 · 等" + "x".repeat(25)], // 41 字符
   ["separator", "树帅制·派单中·无阻"],                         // 无空格的「·」⇒ 1 格
   ["separator", "树帅制 · 派单中"],                             // 只有两格
@@ -50,8 +52,9 @@ for (const [code, c] of ILLEGAL) {
   check(`违规红（${code}）：「${c.slice(0, 20)}」`, v.ok === false && v.code === code,
     JSON.stringify(v));
 }
-// 超长样本地面真相：确实是 41 字符
-check("超长样本确实是 41 字符", [...ILLEGAL[2][1]].length === MAX_LEN + 1, String([...ILLEGAL[2][1]].length));
+// 超长样本地面真相：确实是 41 字符（按 code 查找，不依赖数组位置）
+const TOO_LONG_SAMPLE = ILLEGAL.find(([code]) => code === "too-long")[1];
+check("超长样本确实是 41 字符", [...TOO_LONG_SAMPLE].length === MAX_LEN + 1, String([...TOO_LONG_SAMPLE].length));
 // 枚举面完整性：每个枚举值本身都能过（枚举表改动时这里红，防「表改了校验没跟」）
 for (const f of FORMS) {
   check(`枚举形态可用：${f}`, validateComment(`${f} · 派单中 · 无阻`).ok === true);
