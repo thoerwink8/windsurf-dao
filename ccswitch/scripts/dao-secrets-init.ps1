@@ -109,7 +109,7 @@
     ⚠ 消费方三条（照 ccswitch/rules/dao-shell.md）：
       - 判「全成」写 `-eq 0`。**别写 `-le 2`** —— 那个区间把 1（真失败）也放进来了。
       - 接受「2 也算过」时要显式写出来（`@(0,2) -contains $code`），别让它躲在 `-ne 1` 里。
-      - 要拿退出码一律 `powershell -File <脚本>`，**禁 `-Command "& '<脚本>'"`** ——
+      - 要拿退出码一律 `pwsh -File <脚本>`（无 pwsh 时回退 `powershell -File`），**禁 `-Command "& '<脚本>'"`** ——
         后者只按「最后一条命令成败」返回 0/1，**不透传脚本里的 exit N**，分档当场被抹平
         （dao-shell.md 第五坑，实测 exit 3 经 -Command 拿到 1）。
     ~~-DryRun 恒 0（它一个写操作都不做，也就没有 ACL 这一格）。~~
@@ -393,7 +393,7 @@ if ($spacyTemp.Count) {
 
 Write-Host '  凭据根建好了，但**里面还没有你的任何凭据**。搬凭据是下一个脚本：'
 Write-Host ''
-Write-Host '      powershell -File ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun'
+Write-Host '      pwsh -File ccswitch\scripts\dao-secrets-migrate.ps1 -DryRun   （无 pwsh 时回退 powershell -File 同路径）'
 Write-Host ''
 Write-Host '  这把钥匙在这里，没有第二份、也没有找回通道：' -ForegroundColor Yellow
 Write-Host "      $keyFile"

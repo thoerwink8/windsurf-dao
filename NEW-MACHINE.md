@@ -50,7 +50,7 @@ dao.bat
 node config-sync\lib\doctor.mjs
 ```
 
-**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl 等）属正常机器差异，非问题。**「MCP 健康态」一节例外**（issue #92 新增，2026-08-08）：它报的是 `claude mcp list` 实测能不能连上，与「本机是否复刻成功」无关——新机器缺某个 MCP 依赖（如 `uvx`/`npx` 拉不到包、外部服务本身挂了）会在这里显式报 ✗，这是它的职责（不让"注册了但连不上"再次悄悄溜走），不代表换机步骤有问题；照这条 ✗ 的原因去修对应 server 或换机器网络，不要去重跑 `dao.bat`。
+**自检判读**：`问题 0 项` = 复刻成功。其中「settings.json.env.CLAUDE_CODE_* 缺失」三项，需第 3 步 cc-switch 下发后才会变绿（restore 只写进 DB，下发由 cc-switch 负责）。`提醒` 项（Codex node_repl、PowerShell 7 未装等）属正常机器差异，非问题。**「MCP 健康态」一节例外**（issue #92 新增，2026-08-08）：它报的是 `claude mcp list` 实测能不能连上，与「本机是否复刻成功」无关——新机器缺某个 MCP 依赖（如 `uvx`/`npx` 拉不到包、外部服务本身挂了）会在这里显式报 ✗，这是它的职责（不让"注册了但连不上"再次悄悄溜走），不代表换机步骤有问题；照这条 ✗ 的原因去修对应 server 或换机器网络，不要去重跑 `dao.bat`。
 
 **自助排查**：任何"某能力没生效"，先跑 `node config-sync\lib\doctor.mjs` 看哪条 ✗；命令/skill 没出现 → 重跑 `dao.bat` 选 3（部署）或 `dao.bat --deploy`；hook/env 没生效 → 确认第 3 步切过号。
 
@@ -66,6 +66,11 @@ node config-sync\lib\doctor.mjs
 | **cc-switch** 桌面端 | 配置中心与下发引擎 | 已安装并能启动 |
 | **Windows Developer Mode** | symlink 权限（dao.ps1 链接） | 设置 → 系统 → 开发者选项 → 开 |
 | **NTFS 8.3 短名 + junction 建得起来** | **只影响跑回归网，不影响部署**：`tests/hard-gates.tests.js` 的 G2 那几组要造「8.3 短名家目录」与「`.claude` 是 junction」两种 fixture（issue #133/#134） | `node tests/hard-gates.tests.js` —— 造不出来时它的**前置断言会自己红**并写明「只是**没测到**，不是通过」；别把那几条红读成代码坏了。`mklink /J` 在 NTFS 上一般不需要管理员（本机实测不需要），8.3 短名的查询命令 `fsutil 8dot3name query C:` **要管理员**（非管理员 exit 1），所以别拿它当检查手段，以那几条前置断言为准 |
+| **PowerShell 7 (pwsh)** | 仓内 PowerShell 调用面的**优先解释器**（2026-08-13 · issue #338：已全部切「优先 pwsh、缺席回退 powershell 5.1」） | `pwsh -v`；没有 → `winget install Microsoft.PowerShell`（**不装不阻塞**：5.1 回退全兼容，doctor 只多一行提醒） |
+
+> **PowerShell 7（建议装 · issue #338，2026-08-13）**：仓内所有 PowerShell 调用面已切「优先 pwsh、缺席回退 powershell 5.1」——
+> 装上 PS7 立即受益（5.1 特有坑大半消失：无 BOM UTF-8 的 `Get-Content` 中文解码、`2>&1` 混流、无 `&&`/`||`）。
+> **没装不阻塞**：5.1 回退仍全兼容，`node config-sync\lib\doctor.mjs` 只在「外部工具链」节多一行提醒（提醒≠失败）。
 
 可选（按需用哪栈装哪个）：
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
