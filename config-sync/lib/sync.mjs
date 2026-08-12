@@ -25,6 +25,7 @@ import { runExport, redactSettings } from './export.mjs';
 import { runRestore } from './restore.mjs';
 import { SCOPES, SCOPE_KEYS, parseScope, describeScope } from './scope.mjs';
 import { commonSecretsPath, countPlaceholders } from './secrets.mjs';
+import { pickPwsh } from './pwsh.mjs';
 
 const HARD = '🔴';
 const CONFIRM = '🟡';
@@ -71,7 +72,7 @@ function runChild(scriptFile) {
 function runDaoPs1(action) {
   const daoPs1 = path.join(projectRoot, 'dao.ps1');
   try {
-    execFileSync('powershell.exe', [
+    execFileSync(pickPwsh(), [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', daoPs1, action,
     ], { cwd: projectRoot, stdio: 'inherit', timeout: 60000 });
     return 0;
@@ -479,7 +480,7 @@ function runPersonaCmd(action, mode) {
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', personaScript, action];
   if (mode) args.push(mode);
   try {
-    execFileSync('powershell.exe', args, { stdio: 'inherit', timeout: 30000 });
+    execFileSync(pickPwsh(), args, { stdio: 'inherit', timeout: 30000 });
   } catch (error) {
     const code = typeof error.status === 'number' ? error.status : 1;
     if (code !== 0) console.error(`  persona ${action} 失败（exit ${code}）`);
