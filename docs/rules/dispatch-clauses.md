@@ -2,19 +2,12 @@
 
 # windsurf-dao 项目侧派单条款库
 
-> 📌 **上面那行 HTML 注释是给机器读的，别删**（用户 2026-08-07 拍板 · issue #174）。
-> `ccswitch/hooks/dao-subagent-clauses.js` 探到项目侧条款库后会**有界读它的头部**找
-> `<!-- dao-clause-pointer` 这个标记：**有标记 ⇒ 判为指针档**，条款正文源退回 dao 官侧档，
-> 注入末尾另附一行「项目侧（指针档）：<路径>」；**没标记 ⇒ 行为一个字不变**（别的项目那份
-> 装的就是条款正文，不受影响）。
+> 📌 **上面那行 HTML 注释原是给一个注入钩子读的**（用户 2026-08-07 拍板 · issue #174）：
+> 有这个标记 ⇒ 判为指针档，条款正文源退回 dao 那一份。
+> **那个钩子已于 2026-08-12 随条款注入管线退役**（issue #324 A 批），
+> 这个标记此刻**没有任何机器消费方**，留着只作「本档不含正文」的自声明。
 >
-> **同型仓照此办理**：凡「自己就是规则源」的仓（条款正文住在仓内的 dao 内核里，项目侧那份
-> 只做指针），在项目侧档**头部**放一行同样的标记即可 —— 这不是给 windsurf-dao 开的特例。
-> **为什么用自声明而不是让机器猜**：「这份文件里有没有条款正文」是近似判断、两个方向都构造
-> 得出反例；而「作者自己声明它是指针档」是**结构决定的**，零近似。标记必须落在**头部**
-> （有界读窗口内）且**行首**是 `<!--`，正文里提到这个词不会被误判。
->
-> 🔴 **被注入指到这里的官**：本文件**没有条款正文、没有官种分节**。你要读的通用节 + 你那一节在
+> 🔴 **被指到这里的工人**：本文件**没有条款正文、没有分类小节**。你要读的通用节 + 你那一节在
 > `ccswitch/rules/dao-officer-clauses.md`（帅侧的在 `ccswitch/rules/dao-dispatch.md`）。
 > 协议是**两份都读**：那两份回答「怎么判」，本份回答「在这个仓里跑哪个命令」。
 
@@ -47,7 +40,7 @@
 | 扫描面 | 装什么 |
 |---|---|
 | `ccswitch/dao.md` | 常驻场域正文。**很多节只剩一行存根**，正文在下面那行指出去的细则档里 |
-| `ccswitch/rules/*.md` 全部 | 存根指出去的细则正文（dispatch / officer-clauses / guard-writing / legislation / longwindow / powershell / …） |
+| `ccswitch/rules/*.md` 全部 | 指针指出去的细则正文。2026-08-12 起是九份按「什么时候读」分的手册：dispatch（派活）/ officer-clauses（工人便签）/ askuser（跟用户说话）/ shell / docs-lookup（查文档）/ gui-verify（看界面）/ change-batch（收批执行）/ secrets（密钥）/ writing-rules（立规矩·写守卫·写注释） |
 
 （条款的台账与索引两个派生物已于 2026-08-11 删除，字段史归 git 历史；
 行尾 slug `[#<域>-<短名>]` 保留为稳定 ID。）
@@ -59,16 +52,13 @@
 `general` / `reviewer` / `implementer` / `adversary` / `scout` / `dogfood`。
 ⚠️ **对抗验证官那一格叫 `adversary`，不叫 `verifier`** —— 本仓 2026-08-07 收割批的四路收割官通篇用
 `clause-verifier` 称呼它，读者最自然猜的 `verifier` **恰好是非法值**。当前词表随时可查：
-`node ccswitch/scripts/render-clauses.mjs --list-roles`（它同时打印每个官种今天有几条）。
+直接读 `ccswitch/rules/dao-officer-clauses.md` 的分类小节表即可。
+（按工人类型现切条款的那条渲染管线已于 2026-08-12 随条款元数据链整体退役——
+现在是工人自己 Read 那份便签，读到的永远是盘上最新版，而渲染出来的是派单那一刻的快照。）
 
-```
-node ccswitch/scripts/render-clauses.mjs --role <官种>
-```
-
-**元字段（`[n= @ 触发:]` / `[基线:]` / `[自定@]` / `[仅判据·无触发]`）的判据真相源**是
-`ccswitch/rules/dao-legislation.md` 的 `## 📌 条款元字段` 节——**不在本文件**，别在这里找。
-立一条新条款或改一条已有条款之前，Read 那份文件全文（作用域档会把这句话送到眼前，
-它的 `paths:` 里就有本文件的路径）。
+**立一条新规矩、或改一条已有的之前**，Read `ccswitch/rules/dao-writing-rules.md` 第一节
+（这条该我自己定还是该问用户 / 立规矩必带基线数字）——作用域小纸条会把这句话送到眼前，
+它的 `paths:` 里就有本文件的路径。
 
 ---
 
@@ -90,18 +80,14 @@ PowerShell 脚本判成败**看 `$LASTEXITCODE`**，不看输出里有没有 "er
 ## 三、改条款之后的命令序
 
 ```
-powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1   # 条款结构检查（**缺省即全量**）
-node ccswitch/scripts/check-alwayson-budget.mjs                            # 只在改了 ccswitch/dao.md 时跑（常驻注入字节预算）
-node scripts/dao-check.mjs                                                 # 体检，exit 0 才算过
+node ccswitch/scripts/check-alwayson-budget.mjs   # 只在改了 ccswitch/dao.md 时跑（常驻注入字节预算）
+node scripts/dao-check.mjs                        # 体检，exit 0 才算过
 ```
 
-结构检查的**退出码三态**：`0` 全绿 · `1` 有结构违例 · **`3` 拿不到源清单（本次压根没查成，
-fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，别把 3 当"跑了没事"。
-它的源清单来自 `node ccswitch/scripts/clause-sources.mjs`（一行 JSON 的机器出口）。
-⚠️ 它**没有挂在 dao check 上**，是手动闸——原先转调它的聚合入口已随 issue #325 删除。
-
-- **新建一份带条款的 `ccswitch/rules/*.md` 时，记得把它加进
-  `ccswitch/lib/clause-parser.mjs::defaultSources()`**：不在里面 = 结构检查看不见它。
+⚠️ 条款结构检查那一道（编号 / 签名 / 孤儿条款 / 扫描面自检）**已于 2026-08-12 随条款元数据链
+整体退役**，连同它的源清单出口与解析器一起删——那条链的自动调用方在同批 A 已经没了。
+**现在规则文件的结构没有任何机器在检**：新建一份 `ccswitch/rules/*.md` 不需要登记到任何地方，
+代价是格式坏了不会有人红。
   会替你出声的只有 SessionStart hook（`dao-scaffold-check.js` 扫目录，发现未登记打一行 ⓘ）——
   **那只是纵深，不是全覆盖**。
 
@@ -119,7 +105,7 @@ fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，�
 | 任务清单（**唯一**载体，别新建平行追踪文件） | `TODO.md` |
 | 项目活体知识（架构/模式/决策） | `AGENT_GUIDE.md` |
 | 收割记录与待批候选索引 | ~~`docs/ops/harvest-log.md` + `docs/ops/harvest/*.json`~~（2026-08-12 零清理删除，git 历史可找回） |
-| 用户拍板「这件事刻意不做」（编号 / owner / 解冻条件） | `docs/ops/nogo-ledger.json`；代码注释里**只留** `[NOGO:<编号>]` 一行指针（**双向对账机检已随 PR #307 退役，台账为归档记录**；判据 `ccswitch/rules/dao-comment.md`） |
+| 用户拍板「这件事刻意不做」（编号 / owner / 解冻条件） | `docs/ops/nogo-ledger.json`；代码注释里**只留** `[NOGO:<编号>]` 一行指针（**双向对账机检已随 PR #307 退役，台账为归档记录**；判据 `ccswitch/rules/dao-writing-rules.md` 第三节） |
 | 换机部署变更 | `NEW-MACHINE.md` |
 
 - **临时文件**一律放**被操作的目标项目**根下 `_tmp/`（本仓 `.gitignore` 已含 `**/_tmp/`）。
@@ -130,7 +116,7 @@ fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，�
 ## 五、派单中枢与合并链
 
 - **issue 是派单中枢**（2026-08-02 起）：标签体系与三节点留痕照
-  `ccswitch/rules/dao-workitem.md`，项目侧落地细则见 `docs/ops/DISPATCH-HUB.md`。
+  `ccswitch/rules/dao-dispatch.md` §一，项目侧落地细则见 `docs/ops/DISPATCH-HUB.md`。
   用户只需筛 `待拍板` 标签即见所有等他的事。
 - **issue / PR 正文说人话无条件生效**：人话领先、术语首现括注、技术证据折叠。
 - **合并走 `ccswitch/scripts/dao-pr-merge.ps1`**（先 `-DryRun`）。裸手跑 `gh pr merge`
@@ -141,20 +127,15 @@ fail-closed，绝不回落到只查 dao.md）**。判「通过」写 `-eq 0`，�
 
 ## 已知弱处（照直写）
 
-**㈠ 它落盘曾经打坏一道回归网 —— 已修（issue #174，用户 2026-08-07 裁定「指针档自声明」）。**
-留下经过，因为它是这套标记为什么存在的唯一出处：`dao-subagent-clauses.js` 原本「按 cwd 探到
-项目侧条款库就指它」，于是本仓每个官收到的注入末尾从 `ccswitch/rules/dao-officer-clauses.md`
-变成了本文件，而那句话自称「条款库正文（含各官种分节）」——**本文件两样都没有**。
-`tests/subagent-clauses.tests.js` 里那条**前提断言**明写「dao 仓自己没有项目侧条款库
-（**哪天有了，下面那条该期望的就不是官侧档**）」，本文件落盘后该套 **14 条红**
-（无本文件时 PASS=102 FAIL=0，实测归因）。**没有静默**：那是上一个人特意留下的触发器，它响了。
-**现在的形态**：头部标记 ⇒ hook 有界读头部认出指针档 ⇒ 正文源退官侧档 + 附一行项目侧路径；
-前提断言已翻面为「本仓项目侧档在**且带标记**」，并配了「恒判非指针」的反向 mutation 钉住判别力。
+**㈠ 这份文件写错一句，没有任何东西会红。** 曾经守着它的两样——按 cwd 探项目侧条款库的注入钩子、
+以及检查规则文件结构的那道闸——分别于 2026-08-12（issue #324 A 批）与同日 B 批退役。
+头部那行自声明标记同理：删掉它不会有任何东西变红。**这份文件的正确性只由读它的人负责。**
 
-**㈡ 它是指针档，不属条款库扫描面**——`check-clauses-structure.ps1` 的源清单里没有它，
-所以**这里写错一句，没有任何闸会红**。
-**头部那行标记现在也一样**：曾经守着它的那条前提断言随 issue #325 的测试收敛一起删了，
-删掉标记不会有任何东西变红。这份文件的正确性只由读它的人负责。
+**㈡ 留一句历史，因为它是这套标记为什么存在的唯一出处**：那个注入钩子原本「按当前目录探到项目侧
+条款库就指它」，于是本仓每个工人收到的注入末尾从 dao 那份变成了本文件，而那句话自称
+「条款库正文（含各类分节）」——**本文件两样都没有**。当时是一条前提断言把它逮住的
+（上一个人特意留下的触发器，它响了）。修法就是头部那行标记。**现在钩子与断言都不在了**，
+留着标记只作自声明。
 
 **㈢ 标记只治「指针指对了没有」，不治别的两件事**：注入率（派 N 个官几个真收到）仍未审计；
 官种筛选仍因 `agent_type` 不含官种信息而空转。别把这道修法读成那两格也好了。
