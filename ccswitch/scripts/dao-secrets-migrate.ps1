@@ -57,7 +57,7 @@
                   —— 这是好事（响的失败好过静默跑错），恢复就是下面打印的那一行。
 
 .NOTES
-    工艺（照 ccswitch/rules/dao-powershell.md）：
+    工艺（照 ccswitch/rules/dao-shell.md）：
     - **本脚本从不打印任何凭据的值、片段、长度或哈希。** 复核时只打印键名和「一致 / 不一致」。
     - 不用 Get-Content 读凭据文件（PS 5.1 读无 BOM UTF-8 按 ANSI 解码会当场毁内容且不报错），
       一律 [IO.File]::ReadAllText(..., UTF8)。

@@ -74,7 +74,7 @@
     代价是那个文件夹从此**自带钥匙**：谁拷走它谁就解得开。
 
 .NOTES
-    工艺（照 ccswitch/rules/dao-powershell.md）：
+    工艺（照 ccswitch/rules/dao-shell.md）：
     - 不用 `Get-Content` 读任何凭据文件 —— PS 5.1 读无 BOM UTF-8 会按 ANSI 代码页解码，
       内容当场就毁了，而且不报错。要读一律 [IO.File]::ReadAllText(..., UTF8)。
     - 不用 `2>&1` 捕获 native 命令输出 —— 会被包成 NativeCommandError 误判为终止性错误。
@@ -106,12 +106,12 @@
     （U 盘 exFAT）上直接拦人，而「能带走优先」是用户 2026-08-05 拍的方向 ⇒ 两者直接冲突。
     分档两边都不牺牲：**不挡人，也不再谎报。**
 
-    ⚠ 消费方三条（照 ccswitch/rules/dao-powershell.md）：
+    ⚠ 消费方三条（照 ccswitch/rules/dao-shell.md）：
       - 判「全成」写 `-eq 0`。**别写 `-le 2`** —— 那个区间把 1（真失败）也放进来了。
       - 接受「2 也算过」时要显式写出来（`@(0,2) -contains $code`），别让它躲在 `-ne 1` 里。
       - 要拿退出码一律 `powershell -File <脚本>`，**禁 `-Command "& '<脚本>'"`** ——
         后者只按「最后一条命令成败」返回 0/1，**不透传脚本里的 exit N**，分档当场被抹平
-        （dao-powershell.md 第六坑，实测 exit 3 经 -Command 拿到 1）。
+        （dao-shell.md 第五坑，实测 exit 3 经 -Command 拿到 1）。
     ~~-DryRun 恒 0（它一个写操作都不做，也就没有 ACL 这一格）。~~
     **订正（2026-08-07 · PR #170 对抗验证，账 issue #173）**：上面那句是笃定措辞，
     有现实可达的反例。准确的说法是 —— **-DryRun 在「过了第 0 步工具前置检查」之后恒 0**

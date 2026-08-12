@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、commit 前缀、八句根基等不在此重复。（**Grep-first 自 2026-08-04 起不再是常驻文字**：G7 硬闸已于 2026-08-12 随 hooks 三问梳理退役（issue #324 A 批），机器拦截只剩 `permissions.deny` 一层；`cat`/`head`/`tail`/`sed` 当前无机器拦截，收不收进 deny 归规则合并批裁定。背景见 `ccswitch/rules/dao-shell-search.md`。）本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
+> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、commit 前缀、八句根基等不在此重复。（**Grep-first 自 2026-08-04 起不再是常驻文字**：那道硬闸已于 2026-08-12 随 hooks 三问梳理退役（issue #324 A 批），机器拦截只剩 `permissions.deny` 一层；`cat`/`head`/`tail`/`sed` 当前无机器拦截，收不收进 deny 已列成选项报用户拍板（#324 B 批）。背景见 `ccswitch/rules/dao-shell.md` 第三节。）本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
 
 ## 项目类型（必答题 · 用户 2026-08-02 答）
 
@@ -68,20 +68,10 @@ node scripts/dao-check.mjs                    # ★ 等价 `.\dao.bat check`：e
                                               #   SKILL.md 可解析 · git 追踪面无密钥。红了照它打的三行修，契约见脚本头注
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
-node ccswitch/scripts/clause-sources.mjs      # 条款源清单的机器出口（一行 JSON）；PS 缺省全量模式向它要清单
-                                              #   ⚠ 2026-08-11 重设计：clause-index.json 派生物与其生成器已消灭，
-                                              #     渲染端（render-clauses.mjs）改运行时现算；clause-ledger.json 台账
-                                              #     与双向对账同步删除（拷问局定案③）——这两把旧命令已不存在
-powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条款结构检查（焊接签名 / 孤儿条款 / 扫描面自检）
-                                              #   ⚠ **缺省已是全量模式**：不传 -TargetFile ⇒ 向上面那个
-                                              #   出口要源清单，**逐份**检（每份用清单给的选择器；officer-clauses 是 AllTopLevel）。
-                                              #   退出码**三态**：0 全绿 · 1 有结构违例 · **3 = 拿不到源清单（本次压根没查成）**。
-                                              #   判「通过」写 `-eq 0`；3 刻意不与 1 合流——「没查成」不是「查出问题」。
-                                              #   只检一份：加 `-TargetFile <路径>`（那条路径不依赖 node，行为与以前逐字一致）。
-node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（运行时现算，无索引派生物）。
-                                              #   ⚠ 自动调用方 `dao-subagent-clauses.js` hook 已于 2026-08-12 退役
-                                              #     （issue #324 A 批）——当前只能手动跑；条款元数据链整体退役
-                                              #     已列入规则合并批范围，届时本命令一并处置
+powershell -NoProfile -ExecutionPolicy Bypass -File ccswitch/scripts/dao-claim.ps1 -Action selftest
+                                              # 认领协议（两台机 / 两个 AI 抢同一张 issue 时「谁在干哪张单」）的纯函数自测。
+                                              #   实际用法：-Action list | readback -Issue <n> | lease -Issue <n>
+                                              #   退出码：0 正常 · 1 参数或环境错 · 2 = 回读发现自己该让位（readback 专用）
 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
                                               # ★ 合并后的本地收尾：worktree remove + prune + pull + `git branch -d`
@@ -92,13 +82,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps
                                               #   远端分支由仓库设置「合并后自动删 head 分支」负责，脚本不碰
 ```
 
-`ccswitch/clause-index.json` 与 `ccswitch/clause-ledger.json` **已于 2026-08-11 重设计时双双删除**
-（派生物消灭 + 拷问局定案③「文字一致性检查全灭」）。条款行尾的 slug `[#<域>-<短名>]` 保留为稳定 ID，
-其字段史（复发次数/首次入库等）的归宿是 git 历史。立法档案见 `docs/decisions/2026-08-11-*.md`。
+**条款元数据链整体退役（2026-08-12，issue #324 B 批）**：解析器 `ccswitch/lib/clause-parser.mjs`、
+渲染端 `render-clauses.mjs`、源清单出口 `clause-sources.mjs`、结构检查 `check-clauses-structure.ps1`
+四件一并删除；它们的自动调用方（`dao-subagent-clauses.js` hook）已于同批 A 退役，管线整体没有消费方。
+更早的 `clause-index.json` / `clause-ledger.json` 两个派生物已于 2026-08-11 删除。
+条款行尾的 slug `[#<域>-<短名>]` 保留为稳定 ID，其字段史的归宿是 git 历史。
+立法档案见 `docs/decisions/2026-08-11-*.md`。
 
 ## issue 派单中枢（2026-08-02 接入）
 
-本仓自 2026-08-02 起用 **issue 做派单中枢**（当日实况：单日 20+ 单/PR 多官派单，事实中枢先行、基建随后补齐）。标签体系/三节点留痕/蓄水池纪律照 dao 的 `ccswitch/rules/dao-workitem.md`，项目侧落地细则见 `docs/ops/DISPATCH-HUB.md`。用户只需记一件事：**筛 `待拍板` 标签（或看置顶单）即见所有等你的事**；观测看板 https://github.com/users/thoerwink8/projects/1 。
+本仓自 2026-08-02 起用 **issue 做派单中枢**（当日实况：单日 20+ 单/PR 多官派单，事实中枢先行、基建随后补齐）。标签体系/三节点留痕/蓄水池纪律照 dao 的 `ccswitch/rules/dao-dispatch.md` §一，项目侧落地细则见 `docs/ops/DISPATCH-HUB.md`。用户只需记一件事：**筛 `待拍板` 标签（或看置顶单）即见所有等你的事**；观测看板 https://github.com/users/thoerwink8/projects/1 。
 **issue/PR 正文说人话无条件生效**（人话领先、术语首现括注、技术证据折叠——没参与项目的人扫顶部就该知道发生了什么）。
 
 ## 改 dao-* 文件前的自审门（AGENT_GUIDE.md §三）
