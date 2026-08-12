@@ -14,10 +14,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "46cb2de67d5f8e4952cb564aa8fc191faffc61376732cb5b4aa0a77d0c442039",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:chinese-documentation",
@@ -32,10 +32,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "ae8ed81442f1ec6e000e6338543082743663715d3f73db3cea05bc45e4a503dc",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:ci-diagnostics",
@@ -50,10 +50,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "6659ca58c6bcd5a279efdf2f06ce85801133305a9c2f9ef88218b6dd3c5a6b5d",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:code-review",
@@ -68,10 +68,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "bbb7c0a8299e51a553930cfdd080b03346a9b56142ce1c6196a3fbddccaae5e7",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:commit",
@@ -86,10 +86,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "d81935bbe071c3ce0e51b889fb50f280b76167558820f54d71da338d1b56abb6",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:dependency-upgrade",
@@ -104,10 +104,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "5ef96cf7134287962a989c5f75405ce56a0ee729971376ee855fbf7bceea64b9",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:docs-maintainer",
@@ -122,10 +122,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "a1f0d901f4f71b47f8dfec0fce05b918c8d1096f9c334d80123ea96f9bc1e223",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:e2e-testing",
@@ -140,10 +140,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "02210cedeb5d35844c15426e308a457ff710c781c0dddef4c8d6764bc42960d7",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:frontend",
@@ -158,10 +158,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "7241eb23e91edc70a104e25bbde94181889abd7fb30f86300e7824422ad042cc",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:frontend-qa",
@@ -176,10 +176,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "d247814888b462145df8fea2a8ac605d6d901e76b304db34a0c4219ba383b49e",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:perf-benchmark",
@@ -194,10 +194,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "9111e0c798d3bfec32248383227fe847359627cf50c216effb233c2e6d7e3bde",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:project-onboarding",
@@ -212,10 +212,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "baa6afe6f65a44f16fd1024252c67c320152ad9a15640b6a00be505d56255f4b",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:repo-ranger",
@@ -230,10 +230,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "4cda99c5faca52117fe612ca7fc403d0a7232a0afefb39cb4ba4dcb892dda027",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:safe-refactor",
@@ -248,10 +248,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "a91ffdfe21aa1ac54565754d3656eedfcb885829dc1f9a0504b334a604e5be7d",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:security-auditor",
@@ -266,10 +266,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "d4bad8aac9356622b3b1671882a0f4f72aa99a9fc6c7ca1fc6af230eb4f15be8",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:security-scan",
@@ -284,10 +284,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "b6ad32a653d60d9e3c64cca12e19152ec4e0a18e5e07fd257e27e1c9ff31b45e",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:ui-ux-pro-max",
@@ -302,10 +302,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "9d00ce27a6cc475d8928708f7790ecd453e32858ddb5d8e51958de9cd70f6e30",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     },
     {
       "id": "local:windows-dev",
@@ -320,10 +320,10 @@
       "enabled_codex": 1,
       "enabled_gemini": 0,
       "enabled_opencode": 0,
+      "enabled_hermes": 0,
       "installed_at": 1778870134,
       "content_hash": "f972a874e821fce9d8e6e8f9e00307bc169925eaf0661fa3de393dd93f738343",
-      "updated_at": 0,
-      "enabled_hermes": 0
+      "updated_at": 0
     }
   ],
   "skill_repos": [

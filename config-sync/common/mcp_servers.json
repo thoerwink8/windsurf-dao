@@ -45,6 +45,20 @@
       "enabled_hermes": 0
     },
     {
+      "id": "fetch",
+      "name": "fetch",
+      "server_config": "{\"type\":\"stdio\",\"command\":\"uvx\",\"args\":[\"mcp-server-fetch\",\"--ignore-robots-txt\"]}",
+      "description": null,
+      "homepage": null,
+      "docs": null,
+      "tags": "[]",
+      "enabled_claude": 1,
+      "enabled_codex": 0,
+      "enabled_gemini": 0,
+      "enabled_opencode": 0,
+      "enabled_hermes": 0
+    },
+    {
       "id": "filesystem",
       "name": "filesystem",
       "server_config": "{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"c:/frank\"],\"enabled\":true}",
