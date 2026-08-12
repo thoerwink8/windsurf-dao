@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// dao-orch.mjs — Orca 派单薄封装：一条命令完成「渲条款 → 拼 spec → 建 Task → 起 worker」
+// dao-orch.mjs — Orca 派单薄封装：一条命令完成「拼 spec → 建 Task → 起 worker」
 //
-// 为什么需要它：派单令模板靠人记，实测携带率分裂（固定模板 68/68，现场判断 9–24%）。
-// 把模板搬进脚本 = 每次派单强制走同一形态；条款按官种渲染进 spec（Quote 形态，
-// 只给与本官种相关的条款），替代「给整份文件让 worker 自己找」。
+// 为什么需要它：派单书模板靠人记，实测携带率分裂（跟着固定模板走 100%，要现场判断的只有个位数）。
+// 把模板搬进脚本 = 每次派单强制走同一形态。
+//
+// 2026-08-12（issue #324 B 批）改了一件事：**不再把条款渲染进 spec**。
+// 原来那半靠一条渲染管线按工人类型现切条款，管线随条款元数据链整体退役；
+// 现在 spec 第一行让工人**自己去 Read 那份便签**——现场读到的永远是盘上最新版，
+// 而渲染进 spec 的是派单那一刻的快照。少一个会过期的中间层。
 //
 // 用法：
 //   node scripts/dao-orch.mjs dispatch --role <官种> --spec-file <任务正文.md>
@@ -20,16 +24,16 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const RENDER = path.join(ROOT, "ccswitch", "scripts", "render-clauses.mjs");
+const NOTES = "ccswitch/rules/dao-officer-clauses.md";
 const ROLES = ["general", "reviewer", "implementer", "adversary", "scout", "dogfood"];
 const ORCA = process.env.ORCA_BIN || "orca";
 
 const EXIT_OK = 0, EXIT_FAIL = 1, EXIT_USAGE = 2;
 
-export function buildSpec({ role, taskBody, clauses, issue }) {
+export function buildSpec({ role, taskBody, issue, notesPath = NOTES }) {
   return [
-    `【条款】你是 ${role}。下面是这个官种此刻生效的判据（从盘上条款库现切），逐条遵守；与盘上有出入时以 ccswitch/rules/dao-officer-clauses.md 为准。`,
-    clauses.trim(),
+    `【开工第一步】Read \`<dao 仓根>/${notesPath}\`（跨项目通用）+ 本仓 \`docs/rules/dispatch-clauses.md\`（本仓特有，没有就跳过）：`,
+    `两份都通读「所有人」那一节 + 你这一类（${role}）那几行，逐条遵守。有冲突以盘上文件为准，不以本单的转述为准。`,
     ``,
     `【验证】全套验证入口去目标仓根的 CLAUDE.md 自己查——本单刻意不给验证命令。文件没写或与盘上对不上时以盘上为准，并把差异写进交付。`,
     ``,
@@ -64,13 +68,12 @@ function main(argv) {
   let taskBody;
   try { taskBody = fs.readFileSync(specFile, "utf8"); }
   catch (e) { process.stderr.write(`✗ 读不到任务正文：${specFile}（${e.code || e.message}）\n`); return EXIT_USAGE; }
-  // 渲条款（渲染端 fail-closed：索引过期/官种零条款它自己 exit 1，不吞）
-  const rr = spawnSync(process.execPath, [RENDER, "--role", role], { encoding: "utf8", cwd: ROOT });
-  if (rr.status !== 0) {
-    process.stderr.write(`✗ 条款渲染失败（render-clauses exit ${rr.status}）：\n${String(rr.stderr || rr.stdout).slice(0, 400)}\n`);
+  // 便签必须真的在盘上，否则派出去的第一行就是一个指向空气的指针。
+  if (!fs.existsSync(path.join(ROOT, NOTES))) {
+    process.stderr.write(`✗ 工人便签不在：${NOTES} —— 派单书第一行会指向空气，先补回它再派\n`);
     return EXIT_FAIL;
   }
-  const spec = buildSpec({ role, taskBody, clauses: String(rr.stdout), issue });
+  const spec = buildSpec({ role, taskBody, issue });
   const orcaArgs = [
     ["orchestration", "task-create", "--spec", spec, "--json"],
   ];
