@@ -119,6 +119,11 @@ spec 四段式骨架（写进 task-create 的 --spec）：
 
 ## 二½、观测与打回（issue #304，2026-08-11 首日实战沉淀）
 
+- 🔴 **派完看一眼首回合真的烧起来了**（2026-08-12 实咬：A 批 claude 工兵 `input_accepted` 但任务书
+  卡在 TUI 输入框 12 分钟、$0.00 一个回合没跑——注入比 TUI 就绪早一步，回车被吞）。判据：终端
+  预览里计费/API 时长在动才算开跑；躺着的补一发 `terminal send --enter` 即活。`input_accepted`
+  是「送到了」不是「跑起来了」。
+
 - 观测走织物内置通道：日常 = `worker-show`（状态+终端预览）+ 心跳 + 提交流三样，不翻别的。
 - `worker-read` 的深通道是 Codex/Claude/OpenClaude/Grok 四家（指南 1.4.179）；对 pi 降级成有界终端尾巴
   （降级码 `provider_unsupported` 是本仓 #304 实测值，指南只说 typed fallbackReason 不列举）。
