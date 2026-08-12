@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath, piSettingsPath, piThemesDir, piAuthPath } from './paths.mjs';
+import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, decodePaths, homeDir, findWtSettingsPath, piSettingsPath, piThemesDir, piAuthPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 import { sameJson, themeDrift, leakedSecretPaths, countPiSecrets, rehydratePiAuth } from './pi-sync.mjs';
+import { filterOrcaHookGroups, extractHookCommands, checkNodeHookExistence, countCommandOccurrencesRaw } from './hooks-drift.mjs';
 import { pickPwsh } from './pwsh.mjs';
 
 let problems = 0;
@@ -31,6 +32,11 @@ function main() {
   section('snapshot 一致性');
   compareSnapshot('mcp_servers', snapshotPaths.mcpServers, (doc) => asRows(doc));
   compareSkillsSnapshot();
+
+  section('claude hooks 三层对账（issue #366）');
+  checkClaudeHooksDbSnapshotDrift();
+  checkClaudeHooksLiveExistence();
+  checkClaudeHooksLiveSnapshotDrift();
 
   section('common 脱敏门（防 token 进 git）');
   checkCommonRedaction();
@@ -111,6 +117,127 @@ function compareSkillsSnapshot() {
   const reposSame = stableJson(snapshot.skill_repos || []) === stableJson(dbRepos);
   if (skillsSame && reposSame) pass(`skills / skill_repos 与 common 快照一致（skills=${dbSkills.length}, repos=${dbRepos.length}）。`);
   else warn(`skills / skill_repos 与 common 快照不一致：db skills=${dbSkills.length}, snapshot skills=${(snapshot.skills || []).length}; db repos=${dbRepos.length}, snapshot repos=${(snapshot.skill_repos || []).length}。`);
+}
+
+// ── claude hooks 三层对账（issue #366）──────────────────────────────────────
+// 判据全在 config-sync/lib/hooks-drift.mjs（纯函数：结构化遍历找 command + 独立
+// 正则扫描做自检 + Orca 段过滤），本节只做三层各自的取数（DB / live settings.json /
+// 快照）与打印，不复述判据。三层：
+//   ① DB ↔ 快照：settings.common_config_claude 的 .hooks 段深比较（DB 是真实路径，
+//     encodePaths 成占位符形态后再比，跟 compareSnapshot() 对 mcp_servers 的做法同款）。
+//   ② live 存在性：~/.claude/settings.json 里每个 node hook 命令指向的文件在不在——
+//     这一层 dao-check.mjs 的注册面检查够不到，它只查仓库侧快照，live 漂移抓不到。
+//   ③ live ↔ 快照：live（已排除 Orca 注入段）与快照（占位符还原后）深比较。
+// 三层都先过零样本闸：解析出 0 条 command 时不判定，只 warn「本轮没查成」——
+// 判「一致」需要看到过真实内容，看到 0 条不叫一致，叫没查。
+function loadCommonConfigClaude() {
+  const dbRows = selectRows('settings', "WHERE key = 'common_config_claude'");
+  const snapDoc = readJsonIfExists(snapshotPaths.settings, { rows: [] });
+  const snapRow = asRows(snapDoc).find((row) => row.key === 'common_config_claude');
+  return { dbValue: dbRows[0]?.value ?? null, snapValue: snapRow?.value ?? null };
+}
+
+function checkClaudeHooksDbSnapshotDrift() {
+  if (!fs.existsSync(snapshotPaths.settings)) {
+    warn(`缺少 ${snapshotPaths.settings}，请先运行“导出配置.bat”。`);
+    return;
+  }
+  const { dbValue, snapValue } = loadCommonConfigClaude();
+  if (dbValue === null) { warn('cc-switch db 无 common_config_claude 行，跳过 DB↔快照 hooks 对账。'); return; }
+  if (snapValue === null) { warn('common/settings.json 快照无 common_config_claude 行，跳过 DB↔快照 hooks 对账。'); return; }
+
+  let dbHooks;
+  let snapHooks;
+  try { dbHooks = JSON.parse(encodePaths(dbValue)).hooks || {}; }
+  catch (error) { fail(`cc-switch db 的 common_config_claude 不是合法 JSON：${error.message}`); return; }
+  try { snapHooks = JSON.parse(snapValue).hooks || {}; }
+  catch (error) { fail(`common/settings.json 的 common_config_claude 不是合法 JSON：${error.message}`); return; }
+
+  const dbFiltered = filterOrcaHookGroups(dbHooks);
+  const snapFiltered = filterOrcaHookGroups(snapHooks);
+  const dbCount = extractHookCommands(dbFiltered).length;
+  const snapCount = extractHookCommands(snapFiltered).length;
+  if (dbCount === 0 && snapCount === 0) {
+    warn('DB↔快照 hooks 对账：两边都解析出 0 条 command，本轮没查成，不判定。');
+    return;
+  }
+
+  if (stableJson(dbFiltered) === stableJson(snapFiltered)) {
+    pass(`DB ↔ 快照 common_config_claude.hooks 一致（${dbCount} 条 command）。`);
+  } else {
+    warn(`DB ↔ 快照 common_config_claude.hooks 不一致（db=${dbCount} 条，snapshot=${snapCount} 条；方向未知，需人工核对哪边更新）。` +
+      '→ 若刚改过 cc-switch 的 hook 注册，运行"导出配置.bat"（本机 db → 快照）；若刚从别处拉取了快照，运行 `.\\dao.bat --direction=down`（快照 → 本机 db）。');
+  }
+}
+
+function checkClaudeHooksLiveExistence() {
+  if (!fs.existsSync(claudeSettingsPath)) {
+    warn(`找不到 ${claudeSettingsPath}，可能当前机器尚未运行 Claude Code，跳过 live hooks 存在性检查。`);
+    return;
+  }
+  const raw = stripBom(fs.readFileSync(claudeSettingsPath, 'utf8'));
+  let doc;
+  try { doc = JSON.parse(raw); }
+  catch (error) { fail(`~/.claude/settings.json 不是合法 JSON，跳过 live hooks 存在性检查：${error.message}`); return; }
+
+  const { checked, missing } = checkNodeHookExistence(doc.hooks || {}, { existsSync: fs.existsSync });
+
+  // 自检：独立正则扫描核对「结构化遍历真的看到了原文里的样本」，不复用
+  // checkNodeHookExistence 内部那套 JSON 遍历——两半共用一套解析时，解析漏掉
+  // 一整段会让违例数与样本数一起归零，自检就退化成一句永真的废话。
+  const textualCount = countCommandOccurrencesRaw(raw);
+  if (checked.length === 0 && textualCount > 0) {
+    fail(`live hooks 存在性判据自身失效：结构化遍历看到 0 条 node hook，但原文本独立正则扫到 ${textualCount} 条非 Orca command——本轮结论不可信，需先修判据再看结果。`);
+    return;
+  }
+  if (checked.length === 0) {
+    warn('live settings.json 没有 node "<path>" 形态的 hook 命令（已排除 Orca 注入段），跳过存在性判定。');
+    return;
+  }
+
+  if (missing.length) {
+    for (const m of missing) fail(`live ${claudeSettingsPath} 的 ${m.event} hook 指向不存在的文件：${m.path}`);
+  } else {
+    pass(`live settings.json 的 ${checked.length} 条 node hook 命令指向的文件均存在（已排除 Orca 注入段）。`);
+  }
+}
+
+function checkClaudeHooksLiveSnapshotDrift() {
+  if (!fs.existsSync(claudeSettingsPath)) {
+    warn(`找不到 ${claudeSettingsPath}，跳过 live↔快照 hooks 对账。`);
+    return;
+  }
+  if (!fs.existsSync(snapshotPaths.settings)) {
+    warn(`缺少 ${snapshotPaths.settings}，请先运行“导出配置.bat”，跳过 live↔快照 hooks 对账。`);
+    return;
+  }
+
+  let liveDoc;
+  try { liveDoc = JSON.parse(stripBom(fs.readFileSync(claudeSettingsPath, 'utf8'))); }
+  catch (error) { fail(`~/.claude/settings.json 不是合法 JSON，跳过 live↔快照 hooks 对账：${error.message}`); return; }
+
+  const { snapValue } = loadCommonConfigClaude();
+  if (snapValue === null) { warn('common/settings.json 快照无 common_config_claude 行，跳过 live↔快照 hooks 对账。'); return; }
+
+  let snapHooks;
+  try { snapHooks = JSON.parse(decodePaths(snapValue)).hooks || {}; }
+  catch (error) { fail(`common/settings.json 的 common_config_claude 还原路径占位符后不是合法 JSON：${error.message}`); return; }
+
+  const liveFiltered = filterOrcaHookGroups(liveDoc.hooks || {});
+  const snapFiltered = filterOrcaHookGroups(snapHooks);
+  const liveCount = extractHookCommands(liveFiltered).length;
+  const snapCount = extractHookCommands(snapFiltered).length;
+  if (liveCount === 0 && snapCount === 0) {
+    warn('live↔快照 hooks 对账：两边（已排除 Orca 段）都解析出 0 条 command，本轮没查成，不判定。');
+    return;
+  }
+
+  if (stableJson(liveFiltered) === stableJson(snapFiltered)) {
+    pass(`live settings.json ↔ 快照 hooks 一致（已排除 Orca 注入段，${liveCount} 条 command）。`);
+  } else {
+    warn(`live settings.json ↔ 快照 hooks 不一致（已排除 Orca 注入段，live=${liveCount} 条，snapshot=${snapCount} 条）。` +
+      '→ 本机可能落后于快照，运行 `.\\dao.bat --deploy` 重新部署；若是仓库侧刚改了 common/settings.json 但还没跑部署，同样用这条命令。');
+  }
 }
 
 function checkRuntimeSettingsGuard() {
