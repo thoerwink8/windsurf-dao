@@ -80,7 +80,7 @@
 
 ### ⑥ 两套认领账本互相看不见（`dao-claim:` 在 GitHub 评论，Dispatch 状态在 Orca 本地库）——**判定：软重叠，立一条桥接约定，不改代码**
 
-> 凡经 Orca 派出去处理一张 dao 追踪的 issue：派活人（帅）负责在该 issue 评论补 `dao-claim:`，并把 Orca 的 taskId/dispatchId 写进同一条评论。dao 侧的标签与评论永远是工作项状态的**唯一真相源**；Orca 的 Dispatch 状态只是它自己那台机器上的执行账本，不作为「这张单有没有人认领」的判据。反向防撞：Orca 派单前先看目标 issue 有没有 `dao-claim:` 或 `在途` 标签。
+> 凡经 Orca 派出去处理一张 dao 追踪的 issue：派活人（帅）负责在该 issue 评论补 `dao-claim:`，并把 Orca 的 taskId/dispatchId 写进同一条评论。dao 侧的标签与评论永远是工作项状态的**唯一真相源**；Orca 的 Dispatch 状态只是它自己那台机器上的执行账本，不作为「这张单有没有人认领」的判据。反向防撞：Orca 派单前先看目标 issue 有没有 `dao-claim:` 评论（有效认领的算法在 `ccswitch/scripts/dao-claim.ps1`；`在途` 标签已随 issue #360 退役，判据只剩评论租约这一层）。
 
 ---
 

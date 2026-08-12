@@ -52,22 +52,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: priority
-    attributes:
-      label: 有多急
-      description: |
-        P0=挡住主流程/掉数据，现在就得修 · P1=常见路径受影响，本轮该修 · P2=边角/体验，排队。
-        ⚠ 这一栏只写进正文，**不会自动打成标签**（issue forms 的 dropdown 不能设 label）——
-        优先级标签仍要手动或由 AI 补，别以为选了就有了。
-      options:
-        - P0 — 挡住主流程 / 掉数据
-        - P1 — 常见路径受影响
-        - P2 — 边角 / 体验
-        - 说不好，请帮我判
-    validations:
-      required: true
-
   - type: textarea
     id: evidence
     attributes:

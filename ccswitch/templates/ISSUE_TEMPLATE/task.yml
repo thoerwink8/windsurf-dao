@@ -57,19 +57,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: priority
-    attributes:
-      label: 有多急
-      description: ⚠ 只写进正文，**不会自动打成标签**（dropdown 设不了 label），P 标签仍要另补。
-      options:
-        - P0 — 挡住别的事，现在就要
-        - P1 — 本轮该做
-        - P2 — 排队，有空再说
-        - 说不好，请帮我判
-    validations:
-      required: true
-
   - type: textarea
     id: evidence
     attributes:
