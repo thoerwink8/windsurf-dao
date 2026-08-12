@@ -24,13 +24,14 @@ paths:
 
 | hook | matcher | timeout | 备注 |
 |---|---|---|---|
-| dao-config-guard.js | startup | 5s | |
 | dao-remove-session.js | startup\|clear\|resume | 5s | |
-| dao-codegraph-ensure.js | startup | 120s | 独占绝大部分预算，正当理由：CodeGraph 索引首次构建/校验本身就是分钟级操作，超时设太短会在慢机器上把正常初始化误判成故障 |
-| dao-scaffold-check.js | startup | 10s | |
 | dao-playwright-cleanup.js | startup | 15s | |
 
-**合计 155s**（当前实测值，随 `config-sync/common/settings.json` 的 `common_config_claude.hooks.SessionStart`
+**合计 20s**（当前实测值，随 `config-sync/common/settings.json` 的 `common_config_claude.hooks.SessionStart`
 快照演进，此表可能过期——改动前先重新核对快照里的真实 timeout 值，不要凭这张表的旧数字判断余量）。
+
+> 2026-08-12 三问梳理（issue #324 A 批）从这张表上摘掉三行：`dao-config-guard.js`（检测本机
+> 从未跑成过，体检归 `dao check` 一条命令）· `dao-codegraph-ensure.js`（装第三方工具，独占 120s）·
+> `dao-scaffold-check.js`（随离线体检报告链退役）。预算从 155s 降到 20s。
 新增 SessionStart hook 前，评估是否真需要在这条高频路径上再加等待，能挪到别的挂载点（如
 `PostToolUse`/按需触发）就不要挤占 SessionStart 预算。

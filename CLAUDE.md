@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、commit 前缀、八句根基等不在此重复。（**Grep-first 自 2026-08-04 起不再是常驻文字**：改由 `dao-hard-gates.js` G7 硬闸 + `permissions.deny` 两层承载，覆盖面与自验路见 `ccswitch/rules/dao-shell-search.md`。）本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
+> 本仓库的全局 dao 场域（`ccswitch/dao.md`）已经过 `~/.claude/CLAUDE.md` 的 `@import` 每条消息常驻——语言规则、commit 前缀、八句根基等不在此重复。（**Grep-first 自 2026-08-04 起不再是常驻文字**：G7 硬闸已于 2026-08-12 随 hooks 三问梳理退役（issue #324 A 批），机器拦截只剩 `permissions.deny` 一层；`cat`/`head`/`tail`/`sed` 当前无机器拦截，收不收进 deny 归规则合并批裁定。背景见 `ccswitch/rules/dao-shell-search.md`。）本文件只补充**在 windsurf-dao 仓库内工作**才需要的大局与独有约定。
 
 ## 项目类型（必答题 · 用户 2026-08-02 答）
 
@@ -78,14 +78,10 @@ powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1  # 条�
                                               #   退出码**三态**：0 全绿 · 1 有结构违例 · **3 = 拿不到源清单（本次压根没查成）**。
                                               #   判「通过」写 `-eq 0`；3 刻意不与 1 合流——「没查成」不是「查出问题」。
                                               #   只检一份：加 `-TargetFile <路径>`（那条路径不依赖 node，行为与以前逐字一致）。
-node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（2026-08-11 起运行时现算，无索引派生物）；**已接进派单流程**：
-                                              #   `SubagentStart` hook `ccswitch/hooks/dao-subagent-clauses.js` 每次派官都调它
-                                              #   本行此前写作「原型，尚未接进派单流程」，注册完成那一刻即为假而无人订正
-                                              #   ⚠ 已证的是「响过」不是「每次都响」：注入率（派 N 个官、几个真收到）仍未审计，
-                                              #     而那正是退役「派单令首行 Read」双通道的前置门（契约：≥20 次 100%）
-
-node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻能不能算出被守护清单（2026-08-11 起运行时现算 + 指纹缓存，
-                                              #   旧的 gen-guarded-files.mjs 派生物已消灭）
+node ccswitch/scripts/render-clauses.mjs --role <官种>  # 按官种渲染条款集（运行时现算，无索引派生物）。
+                                              #   ⚠ 自动调用方 `dao-subagent-clauses.js` hook 已于 2026-08-12 退役
+                                              #     （issue #324 A 批）——当前只能手动跑；条款元数据链整体退役
+                                              #     已列入规则合并批范围，届时本命令一并处置
 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
                                               # ★ 合并后的本地收尾：worktree remove + prune + pull + `git branch -d`
