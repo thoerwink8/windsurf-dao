@@ -136,18 +136,14 @@
 .PARAMETER MainBranch
     主干分支名。缺省从 `origin/HEAD` 探测，探不到时回落 main（再回落 master）。
 
-    2026-08-11 tests 终局追加：本仓（有 scripts/dao-affected-tests.mjs）第 4 步免传
-    -VerifyCommand —— 改「改谁才检谁」：按 diff 映射受影响留守套逐套跑（映射表住那个脚本里）；
-    判不出 diff 时 fail-closed 回落全量 --env。跨项目仓行为不变（仍必须显式传）。
+    2026-08-12（issue #325）：本仓（有 scripts/dao-check.mjs）第 4 步免传 -VerifyCommand ——
+    直接跑那一条体检命令。跨项目仓行为不变（仍必须显式传）。
 
 .PARAMETER VerifyCommand
     合并后要重跑的验证命令（整串，交给 shell 之外的 `Invoke-Expression` 之前会原样打印）。
-    **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，dao 侧是
-    `node scripts/run-tests.mjs --env`，别的项目又是别的。不传即必须显式 -SkipVerify。
-    ⚠ **dao 侧那个 `--env` 不是可选的**（2026-08-04 · issue #116）：`run-tests.mjs` 分了两层，
-    **默认层恒返回 2**（「本次没跑完」——环境敏感断言被 defer 掉了），只有 `--env` 才拿得到 0。
-    本步的判据是 `-ne 0` 即停，所以不带 `--env` 的那一串会在这里当场停住合并链。
-    这是有意的：合并前是本仓唯一一个「必然发生 + 必然要求 exit 0」的时刻，环境敏感层就挂在这。
+    **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，别的项目又是别的。
+    不传即必须显式 -SkipVerify（本仓例外见上：有 dao-check.mjs 时免传）。
+    判据是 `-ne 0` 即停。合并前是「必然发生 + 必然要求 exit 0」的那一刻，验证就挂在这。
 
 .PARAMETER SkipVerify
     显式跳过第 4 步。跳了以后**最终退出码是 2 不是 0**——「没跑」与「跑过且过了」不许在
@@ -166,11 +162,12 @@
     不跑验证命令）。**任何一次真跑之前先跑一遍这个。**
     ⚠ **DryRun 照不出第 5 步的判据**（issue #114 就是 DryRun 全过之后才撞上的）：
     它在第 5 步只打印不执行，于是「gh 说什么」与「PR 实际是什么状态」这对分歧根本不发生。
-    那一档的判别力在回归网 `tests/dao-pr-merge.tests.ps1`，不在 DryRun。
+    那一档**此刻没有任何自动判别力**：守它的回归网随 issue #325 的测试收敛删掉了，
+    所以 DryRun 全过之后仍要人自己看第 5 步（照直写，别把 DryRun 绿读成那一档也验过了）。
 
 .EXAMPLE
-    # 先看会做什么
-    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath D:\frank\myrepo -VerifyCommand 'node scripts/run-tests.mjs --env' -DryRun
+    # 先看会做什么（本仓免传 -VerifyCommand，它自己会跑 dao check）
+    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath C:\frank\windsurf-dao -DryRun
 
 .EXAMPLE
     # 真跑
@@ -203,9 +200,9 @@
     PowerShell 5.1 兼容：不用 && / || / 三元 / ?? / ?.；成败一律看 $LASTEXITCODE 不看输出文案；
     不用 2>&1（会把 git/gh 的正常 stderr 包成 NativeCommandError）。
 
-    回归网：windsurf-dao/tests/dao-pr-merge.tests.ps1（`gh` 走 PATH 前置的桩，git 是真的；
-            核心是那条负控：gh 非 0 而 PR 实为 MERGED ⇒ 脚本必须走完第 6 步）。
-            **改本脚本的第 5/6 步就去改它**——那里的断言是本文件这段判据的可执行形态。
+    回归网：**没有了**（随 issue #325 的测试收敛删除，判据是「合并链的失败可逆、git 兜底」）。
+            那套断言此前守的核心负控是：gh 非 0 而 PR 实为 MERGED ⇒ 脚本必须走完第 6 步。
+            现在改本脚本的第 5/6 步，**没有任何东西会红**——改完自己拿一个真 PR 走 -DryRun。
 
     真相源：windsurf-dao/ccswitch/scripts/dao-pr-merge.ps1
     判据正文：windsurf-dao/ccswitch/dao.md · Shell 独有项「PR 合并期的机械链走脚本」
@@ -300,12 +297,11 @@ Write-Step '0. 前置检查'
 
 if ($PullRequest -le 0) { Fail "PR 号非法：$PullRequest" 3 }
 if ($SkipVerify -and $VerifyCommand) { Fail '-SkipVerify 与 -VerifyCommand 互斥，二选一' 3 }
-# 2026-08-11 tests 终局：本仓（有 scripts/dao-affected-tests.mjs）免传 -VerifyCommand ——
-# 验证步改「改谁才检谁」：按 diff 映射受影响的留守套逐套跑（碰了某 hook 才跑它那套，秒级；
-# 没碰闸一套不跑）。跨项目仓仍必须显式传。
-$affectedScript = Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'
-$useAffected = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $affectedScript)
-if (-not $SkipVerify -and -not $VerifyCommand -and -not $useAffected) {
+# 2026-08-12（issue #325）：本仓（有 scripts/dao-check.mjs）免传 -VerifyCommand ——
+# 验证步就跑那一条体检命令（二值退出，秒级）。跨项目仓仍必须显式传。
+$daoCheckScript = Join-Path $RepoPath 'scripts/dao-check.mjs'
+$useDaoCheck = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $daoCheckScript)
+if (-not $SkipVerify -and -not $VerifyCommand -and -not $useDaoCheck) {
     Fail '必须传 -VerifyCommand（合并后要重跑什么，跨项目不可知），或显式 -SkipVerify（那时退出码为 2）' 3
 }
 
@@ -413,43 +409,18 @@ if ($SkipVerify) {
     $verifySkipped = $true
     Write-Skip '验证被显式 -SkipVerify 跳过 —— 最终退出码将是 2，不是 0'
 } elseif ($DryRun) {
-    if ($useAffected) { Write-Plan "改谁才检谁：node scripts/dao-affected-tests.mjs 算出受影响留守套逐套跑（零套⇒秒过）" }
+    if ($useDaoCheck) { Write-Plan "在 $RepoPath 下执行：node scripts/dao-check.mjs" }
     else { Write-Plan "在 $RepoPath 下执行：$VerifyCommand" }
-} elseif ($useAffected) {
+} elseif ($useDaoCheck) {
+    Write-Info '执行：node scripts/dao-check.mjs（本仓缺省验证入口，二值退出）'
     Push-Location $RepoPath
     try {
         $global:LASTEXITCODE = 0
-        $affectedJson = & node scripts/dao-affected-tests.mjs --json
-        $aCode = $LASTEXITCODE
-        $suiteList = @()
-        if ($aCode -eq 0) {
-            try { $suiteList = @(($affectedJson | ConvertFrom-Json).tests) } catch { $suiteList = @() }
-        }
-        if ($aCode -ne 0) {
-            # diff 判不出 ⇒ fail-closed 跑全部（「判不出」不许被读成「不用检」）
-            Write-Info 'affected-tests 判不出 diff ⇒ 回落跑全量：node scripts/run-tests.mjs --env'
-            $global:LASTEXITCODE = 0
-            & node scripts/run-tests.mjs --env
-            $vcode = $LASTEXITCODE
-            if ($vcode -ne 0) { Fail "全量验证退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
-            Write-Ok '全量验证通过（退出码 0）'
-        } elseif ($suiteList.Count -eq 0) {
-            Write-Ok '改谁才检谁：本次 diff 没碰任何有行为测试的面（纯文字/文档类）⇒ 零套，秒过'
-        } else {
-            Write-Info ("改谁才检谁：受影响留守套 " + $suiteList.Count + " 套逐套跑：" + ($suiteList -join '、'))
-            foreach ($suite in $suiteList) {
-                $global:LASTEXITCODE = 0
-                if ($suite -like '*.ps1') {
-                    & powershell -NoProfile -ExecutionPolicy Bypass -File $suite
-                } else {
-                    & node $suite
-                }
-                $scode = $LASTEXITCODE
-                if ($scode -ne 0) { Fail "受影响套 $suite 退出码 $scode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
-            }
-            Write-Ok ("受影响套全绿（" + $suiteList.Count + " 套）")
-        }
+        & node scripts/dao-check.mjs
+        $vcode = $LASTEXITCODE
     } finally { Pop-Location }
+    if ($vcode -ne 0) { Fail "dao check 退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+    Write-Ok 'dao check 通过（退出码 0）'
 } else {
     Write-Info "执行：$VerifyCommand"
     Push-Location $RepoPath
@@ -544,7 +515,7 @@ if ($DryRun) {
         # ── 5.5 云审水位线（issue #306）：ci-sweep..master ≥50 提交 或 tag ≥14 天 ⇒
         #     发一针 ci-sweep（发完即走；云上无菌对账，本地链仍是权威门）。
         #     触发失败仅警告不阻塞；仅本仓（workflow 只存在于 dao 仓）。
-        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'))) {
+        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-check.mjs'))) {
             try {
                 git fetch --tags --quiet 2>$null
                 $tagTs = git log -1 --format=%ct refs/tags/ci-sweep 2>$null
