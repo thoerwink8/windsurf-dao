@@ -144,14 +144,14 @@ disable-model-invocation: true
 
 **扩展模式**：发现新的跨层断路或配置陷阱时，先问「这条能不能机器判」——
 
-- **能机器判**（文件/目录存在、`package.json` 键位、行数、子串包含）→ 往 `ccswitch/scaffold-manifest.json` 加一条，**不要在本表加行、也不要往 `dao.md` 加「首次进项目静默执行」条款**。清单由 `dao-scaffold-check` hook 每次 SessionStart 自动求值，不依赖任何人记得跑本 skill。
+- **能机器判**（文件/目录存在、`package.json` 键位、行数、子串包含）→ 往 `ccswitch/scaffold-manifest.json` 加一条，**不要在本表加行、也不要往 `dao.md` 加「首次进项目静默执行」条款**。⚠ 自动求值它的 `dao-scaffold-check` hook 已于 2026-08-12 退役（issue #324 A 批）——清单此刻**没有**自动消费方，归宿待规则合并批裁定；裁定前这些条目靠手动跑本 skill。
 - **需语义理解**（判断 rule 内容对不对、资产结构是否自洽、workflow 收敛得精不精确）→ 才在此表追加一行 + 对应 supporting file。
 
 原则：**能自动检测的不写文档提醒，能测试的不写 check 脚本**。
 
 ## 检查清单
 
-> **下列带 🤖 的条目已由共性 rule 备案清单 `ccswitch/scaffold-manifest.json` 机器化**：`dao-scaffold-check` hook 每次 SessionStart 自动求值并报缺项，本 skill 手动跑时不必重复核对（核对了也无害，只是冗余）。未带 🤖 的仍需人判。
+> **下列带 🤖 的条目此前由 `dao-scaffold-check` hook 按 `ccswitch/scaffold-manifest.json` 机器化核对**——该 hook 已于 2026-08-12 退役（issue #324 A 批），自动求值已停：带 🤖 的条目当前同样需要手动核对，清单归宿待规则合并批裁定。
 
 首次进入项目时逐项检查：
 
