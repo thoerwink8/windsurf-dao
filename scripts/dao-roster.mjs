@@ -7,21 +7,43 @@
 //
 // 用法：node scripts/dao-roster.mjs          一行 JSON
 // 探测失败一律标 absent/unknown，不炸——探测器的职责是报告现状，不是维护面子。
+//
+// 缺席判定（2026-08-12 打回后改 where/which 交叉验证）：中文 Windows 下 cmd 找不到命令时
+// stderr 是 GBK 被 utf8 解码后的乱码，中英文文案正则都命中不了——正则结构性死路，不再修正则。
+// 探测非零退出 / status==null 时追加一次 `where`(win32)/`which`(其他) 交叉验证：
+// 定位器退出 0 = 命令在只是跑坏 ⇒ unknown；非零 = 真缺席 ⇒ false。退出码与编码无关。
+// NOT_FOUND_RE 仅作定位器本身不可用（无 where/which 或定位器崩了）时的兜底。
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 // Windows 下必须 shell 解析：npm 装的 CLI 只有 .cmd/.ps1 垫片没有 .exe，
 // 裸 spawnSync 探不到（pi 实测被误报 absent，2026-08-12）。
 const SHELL = process.platform === "win32";
+const LOCATOR = SHELL ? "where" : "which";
 const NOT_FOUND_RE = /(?:not found|not recognized as an internal or external command|command not found)/i;
 
+// 交叉验证：定位器退出 0 = 命令存在（只是探测跑坏）⇒ true；非零 = 真缺席 ⇒ false；
+// 定位器自身不可用（error / status==null）⇒ null，由调用方走 NOT_FOUND_RE 兜底。
+function locate(cmd, timeoutMs, runner) {
+  const r = runCommand(runner, LOCATOR, [cmd], timeoutMs);
+  if (r.error || r.status == null) return null;
+  return r.status === 0;
+}
+
+// 三态判定：true = 可用（带版本）；false = 真缺席；"unknown" = 存在但跑坏 / 探测失败。
 function probeOnce(cmd, args, timeoutMs, runner) {
   try {
     const r = runCommand(runner, cmd, args, timeoutMs);
     if (r.error || r.status == null) {
-      return r.error && r.error.code === "ENOENT" ? { available: false } : { available: "unknown" };
+      // 探测没跑出状态（超时 / 启动故障）：交给定位器交叉验证，定位器找得到才是 unknown。
+      const found = locate(cmd, timeoutMs, runner);
+      if (found !== null) return found ? { available: "unknown" } : { available: false };
+      const detail = String(r.stderr || r.stdout || "");
+      return NOT_FOUND_RE.test(detail) ? { available: false } : { available: "unknown" };
     }
     if (r.status !== 0) {
+      const found = locate(cmd, timeoutMs, runner);
+      if (found !== null) return found ? { available: "unknown" } : { available: false };
       const detail = String(r.stderr || r.stdout || "");
       return NOT_FOUND_RE.test(detail) ? { available: false } : { available: "unknown" };
     }
