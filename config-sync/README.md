@@ -110,7 +110,7 @@ dao.bat
    - `[2] 上行`（慎重）：`本机 cc-switch → origin`。export → 展示 diff → 确认 → commit → push。
    - `[3] 体检`：只读 doctor。
    - `[4] 盘点`：只读 inventory。
-3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy / terminal`。
+3. **选范围**（下行/上行时）：`全部` 或逗号多选 `settings / mcp / skills / prompts / proxy / terminal / pi`。
 
 #### 三档护栏
 
@@ -132,13 +132,14 @@ node lib/sync.mjs --doctor                          只读体检
 node lib/sync.mjs --inventory                       只读盘点
 ```
 
-选项：`--scope=settings,mcp,skills,prompts,proxy,terminal`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
+选项：`--scope=settings,mcp,skills,prompts,proxy,terminal,pi`（默认 all）、`--yes`（非交互跳过 🟡 确认）、`--dry-run`（只演练不落地）、`--no-fetch`（离线跳过 fetch）。
 
 #### 导出 / 恢复落点
 
 - **下行（恢复）**：读取 `common/` 快照写回 `~/.cc-switch/cc-switch.db`，写前自动备份到 `~/.cc-switch/backups/`。
 - **上行（导出）**：从 `~/.cc-switch/cc-switch.db` 导出快照到 `common/settings.json`、`common/mcp_servers.json`、`common/skills.json`、`common/prompts.json`、`common/proxy.json`（脱敏真实值写入 `common-secrets.json`，被 `.gitignore` 忽略）。
 - **terminal**（文件型，不走 DB）：从 Windows Terminal `settings.json` 提取配色/字体子集到 `common/terminal.json`；恢复时字段级合并回本机，不覆盖 GUID/commandline/actions 等本机特定信息。写前自动备份原文件（`settings.before-dao-sync-*.bak`）。支持商店版与 Preview 版路径自动发现。
+- **pi**（文件型，不走 DB，issue #344）：把 `~/.pi/agent/` 的 `settings.json` 与 `themes/` 原样快照到 `common/pi/`（进 git），`auth.json` 脱敏为占位符快照（真实值进 `config-sync/common-secrets.json`，键形如 `pi_auth :: deepseek.key`，不进 git）；恢复时 settings/themes 原样落位，auth 先用 common-secrets.json 还原真值，缺真实值则跳过 auth 不写坏文件。`sessions/ · models-store.json · bin/ · extensions/` 属本机产物，刻意不同步。
 
 ### 同步客户端 MCP
 
@@ -176,9 +177,12 @@ JSON 配置只替换生成的 `mcpServers` 字段，TOML 配置只替换 `[mcp_s
 - Claude Code CLI / Claude Desktop 的 `mcpServers` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - Claude-3p / CloudCode Desktop 运行态 `--mcp-config` 是否与 cc-switch 中 `enabled_claude=1` 的 MCP 一致；
 - Codex 的 `[mcp_servers]` 是否与 cc-switch 中 `enabled_codex=1` 的 MCP 一致；
+- pi 的 `common/pi/` 快照与 `~/.pi/agent/` 是否一致（settings 结构化比对 / themes 三向缺改多 / auth 占位符与 common-secrets.json 配套，且快照无明文敏感字段）；
 `claude_desktop_gateway_token` 是本机运行态密钥，只存在于当前 cc-switch db 中，不进入 `common/`，也不由恢复脚本覆盖。恢复脚本只 upsert `common_config_` 开头的 settings key，避免把 Desktop Gateway 认证 token 清空后导致 401。
 
 `common/mcp_servers.json` 里的 `server_config` 会把项目路径与 home 路径分别写成 `${PROJECT_ROOT}` / `${HOME}`，恢复时再还原成本机路径，避免把 `D:/frank/windsurf-dao` 或用户 home 直接提交到 git。Pencil 这类安装在 `D:/Program Files/...` 的本机特定路径无法自动泛化，体检只会提醒；换机后需要按新机器安装路径重配。
+
+`common/pi/auth.json`（进 git）只允许脱敏占位符，真实值在 `config-sync/common-secrets.json`（不进 git，换机手动复制）；体检会把快照脱敏还原后与本机 `~/.pi/agent/auth.json` 做结构化比对。漂移判定一律结构化比对 / 文件哈希，不做文案正则。
 
 ### Goal 任务状态检查
 
