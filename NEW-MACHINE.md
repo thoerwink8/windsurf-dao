@@ -165,7 +165,7 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Codex node_r
 | 供应商配置 | cc-switch DB | 需重配 | 新机器在 cc-switch 中重新配置供应商 |
 | Codex 登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
 | hook 本机状态目录 | `~/.claude/dao-state/`（rate-limit-sentinel/fired.log、glob-gate 缓存等） | **不随换机走** | 无需处理：目录由 hook 首次触发时自建、不进 git、不由 config-sync 恢复。**代价照直写**：它攒的是「这台机器被限流过几次」的实战样本（issue #190 的观测面），换机即从零重新攒 —— 那是有意的（样本本就是按机器算的），不是漏配 |
-| 主仓交互会话的 manual 锁 | 主仓 `.claude/settings.local.json` 里 `defaultMode: default` | **不随换机走** | 随仓的 `.claude/settings.json` 把 defaultMode 定为 bypassPermissions（工兵树出生即 auto 的机制，2026-08-12 拍板）。新机主仓若想自己的交互会话仍从 manual 起，克隆后亲手跑一次 `node _tmp/repo-auto-mode.mjs` 等效动作（往主仓 settings.local.json 写 `{"permissions":{"defaultMode":"default"}}`）；不锁则主仓会话默认也是 auto，属可选项不是坑 |
+| 工兵出生即 auto + 主仓 manual 锁 | 用户级 `~/.claude/settings.json` 的 `defaultMode: auto`；主仓 `.claude/settings.local.json` 里 `defaultMode: default` | **锁不随换机走；auto 半随（见处理列）** | 工兵出生即 auto 的机制是**用户级** defaultMode=auto（2026-08-12 拍板；项目级 `.claude/settings.json` 的 auto 被 Claude Code v2.1.142+ 设计性忽略——仓库不能自授权，随仓携带此路不通；bypassPermissions 出生带「接受责任」警告门，也弃用）。恢复流会带 `common_config_claude`，但 cc-switch 下发 live 用的是 providers 当前行且 providers 不同步 ⇒ **换机配完 provider 后跑一次 `node scripts/dao-auto-mode.mjs`（幂等，三层改齐）**。主仓交互会话要从 manual 起：亲手往主仓 `.claude/settings.local.json` 写 `{"permissions":{"defaultMode":"default"}}`（项目级收紧被尊重，不进 git）；不锁则主仓会话也是 auto，属可选项不是坑 |
 
 ## 4. 路径占位机制（为什么换机不怕路径变）
 
