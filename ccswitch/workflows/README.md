@@ -276,17 +276,13 @@
 
 ### 编排契约测试
 
-**目前只 `dao-harvest` 有，其余三个仍是「只做过语法核验」**：workflow 靠 harness 注入
-`args`/`phase`/`agent`/`pipeline`/`log` 执行，语法核验证明不了 args 契约与编排数据流。
-`tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍，验到：必填校验、
-未知参数报错、缺省源集、零候选跳过核验、超 `CHUNK` **分批且逐条可追不丢失**、prompt 真带
-上了该带的硬要求、路径推导与 args 覆盖。它由 `scripts/run-tests.mjs` 扫目录自动纳入——
-**刻意不放 `_tmp/` 当一次性脚本**：躺在 `_tmp/` 里要靠有人想起来跑，那正是本仓实测携带率
-9-24% 的那一类形态。
-
-它**验不到**的（别把全绿读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、schema
-是否被模型遵守、`pipeline` 在真 harness 下的并发度（stub 是串行实现），以及最重要的一条
-**收割出来的候选质量**。
+**目前没有**：曾有 `tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍验
+args 契约与数据流，但随 18 套测试收成 2 套、三个聚合入口收成 `scripts/dao-check.mjs` 一条
+（commit `75e6f32`）已被移除，没有迁移到新的 2 套之一。**`dao check` 的扫描面不含
+`ccswitch/workflows/`**——「meta 纯字面量 + 装载形态可编译」是 workflow 运行时装载器自身的
+行为，装载失败只在真跑那一刻暴露（详见下方 `dao-consolidate.js` 一节）；args 契约、编排数据流、
+真实模型行为（prompt 有效性、schema 是否被模型遵守、`pipeline` 真并发度）与
+**收割出来的候选质量**当前全部没有回归网。
 
 ---
 
@@ -435,21 +431,20 @@ workflow 进不了列表」这个认知处置（该认知 2026-08-09 已被「�
 
 ### 编排契约测试
 
-`tests/dao-consolidate.tests.js`（116 断言，由 `scripts/run-tests.mjs` 扫目录自动纳入）。
-把 `agent` stub 成罐头结果、整条编排跑一遍，验到：必填校验 / 未知镜头报错 / 缺省镜头集 /
-**语料面装配与显式摘面** / 四面全摘抛错 / 零发现跳过核验 / 超 `CHUNK` **分批且逐条可追不丢失** /
-**裁定按 id 回挂且对不上时不静默丢弃** / 两条铁护栏的字样真在 prompt 里 / schema 的 required
-真强制了四件套。
+**目前没有**：曾有 `tests/dao-consolidate.tests.js`（116 断言，验必填校验 / 未知镜头报错 /
+缺省镜头集 / 语料面装配与显式摘面 / 四面全摘抛错 / 零发现跳过核验 / 超 `CHUNK` 分批且逐条
+可追不丢失 / 裁定按 id 回挂且对不上时不静默丢弃 / 两条铁护栏的字样真在 prompt 里 / schema 的
+required 真强制了四件套），但随 18 套测试收成 2 套、三个聚合入口收成 `scripts/dao-check.mjs`
+一条（commit `75e6f32`）已被移除，没有迁移到新的 2 套之一。
 
-它还含一节**货架级**契约：`ccswitch/workflows/*.js` 的 **meta 必须是纯字面量**（`+` 拼接是
-BinaryExpression，会让**整脚本被拒载**——2026-08-01 实测报
-`meta must be a pure literal: non-literal node type in meta: BinaryExpression`）+ 装载形态可编译。
-`dao-harvest.js` 与 `pr-history-postmortem.js` 在那一节里充当**负控**（它们在真 harness 里可载，
-检测器必须对它们报绿）——**这个负控不是形式主义**：该检测器第一版直接对 meta 块原文查 `+` 与
-反引号，把**字符串内容里**的字符当成代码里的拼接，对两个负控双双报假阳性，是负控当场拆穿的。
+`ccswitch/workflows/*.js` 的 **meta 必须是纯字面量**（`+` 拼接是 BinaryExpression，会让
+**整脚本被拒载**——2026-08-01 实测报
+`meta must be a pure literal: non-literal node type in meta: BinaryExpression`）这条契约仍然
+成立，但它是 workflow 运行时装载器自身的行为，**当前没有任何测试在断言它**——上面那套测试
+删除后，`dao check` 没有接手覆盖 `ccswitch/workflows/`。
 
-**它验不到的**（别把全绿读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、schema
-是否被模型遵守、`pipeline` 在真 harness 下的并发度（stub 是串行实现），以及最重要的一条：
+**验不到的**（别把「装载不报错」读成「这个 workflow 好用」）：真实模型行为——prompt 有效性、
+schema 是否被模型遵守、`pipeline` 在真 harness 下的并发度，以及最重要的一条：
 **它提出的合并/退役建议对不对**。那一层只有真跑 + 人读才判得了。
 
 ---
@@ -527,11 +522,11 @@ BinaryExpression，会让**整脚本被拒载**——2026-08-01 实测报
 
 ### 已知弱点（用之前知道）
 
-- **没有编排契约测试**（货架上只有 `dao-harvest` / `dao-consolidate` 有）。本文件上架时
-  只过了货架级契约（meta 纯字面量 + 装载形态可编译，由 `tests/dao-consolidate.tests.js`
-  末节对本目录全部 `*.js` 求值）与 `node --check` 级语法核验，**args 契约与编排数据流
-  未经 stub 跑通**——「必填校验真的会抛错吗」「三镜的产出真的都进了去重」这些没有回归网。
-  别把「上架了」读成「验过了」
+- **没有编排契约测试**（货架上目前一个 workflow 都没有——`dao-harvest`/`dao-consolidate`
+  曾各有一套，随 18 套测试收成 2 套、聚合入口收成 `scripts/dao-check.mjs` 一条
+  （commit `75e6f32`）被移除，未迁移）。本文件上架时只过了「meta 纯字面量 + 装载形态可编译」
+  与 `node --check` 级语法核验，**args 契约与编排数据流未经 stub 跑通**——「必填校验真的
+  会抛错吗」「三镜的产出真的都进了去重」这些没有回归网。别把「上架了」读成「验过了」
 - **三镜的去重键是 `file + title 前 40 字`**：同一文件上两个不同缺陷若标题前缀相同会被
   误并（漏报），不同文件上的同一个缺陷不会被并（重复报）。两个方向都构造得出反例
 - **核验官不重跑扫描**：它抽验每条发现的锚点与推理，**扫描阶段系统性的取数偏差**
