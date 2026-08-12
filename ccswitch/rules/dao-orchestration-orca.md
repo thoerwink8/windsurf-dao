@@ -72,11 +72,14 @@ Edit 级小活与纯问答不弹。
 
 1. **一次绑定 Run**（`run-create --objective`），**先建全部独立 Task**（`task-create --spec`），再起工兵。
 2. **工兵一律 `worker-start` 起可见终端**（组合 worktree+终端+就绪+派单一步到位）——pi 等外族工兵
-   尤其如此：可见标签页，不起无头后台。模型/思考档按提案随 `--model`/`--effort` 传，**读回执**
+   尤其如此：可见标签页，不起无头后台。模型/思考档随 `--model`/`--effort` 传——**只对
+   Claude/Codex/Cursor 的新起终端生效**（pi 等不吃这两个 flag，指定 provider/model 走低层配方），
+   `--effort` 必须搭配 `--model`，两者都不能与 `--terminal` 复用同传。**读回执**
    （`launch.effective`、setup 状态）再继续，失败看 `stage`/`effects` 不盲重试。
 3. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
    用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
-   `worker-retain`）→ 全处理完才 `--ack`。超时/空闲/心跳/被拒的 worker_done 都不是释放理由。
+   `worker-retain`）→ 全处理完才 `--ack`。超时/TUI 空闲/心跳/status/question/escalation/被拒或过期的
+   worker_done——这七样都不是释放理由。
 4. **恢复条件化**：`worker-show` 判 ready（继续等）/ failed·stopped（`--retry-of` 重起，位置显式重选不默继承）/
    outcome_unknown（stop 后再查或显式 abandon），同一 task 连败 3 次 dispatch 自动熔断。
 5. **禁替代**：说了走编排就必须有 task/dispatch 出处（`task-list`/`dispatch-show` 查得到）；
@@ -117,9 +120,11 @@ spec 四段式骨架（写进 task-create 的 --spec）：
 ## 二½、观测与打回（issue #304，2026-08-11 首日实战沉淀）
 
 - 观测走织物内置通道：日常 = `worker-show`（状态+终端预览）+ 心跳 + 提交流三样，不翻别的。
-- `worker-read` 只对 claude/codex 族是深通道；对 pi 降级（provider_unsupported，只吐有界终端尾巴）。
+- `worker-read` 的深通道是 Codex/Claude/OpenClaude/Grok 四家（指南 1.4.179）；对 pi 降级成有界终端尾巴
+  （降级码 `provider_unsupported` 是本仓 #304 实测值，指南只说 typed fallbackReason 不列举）。
 - 直翻 worker 的会话文件只作事故取证的最后手段，不作日常观测面。
-- 给已有终端挂任务必须显式 `--worktree` 选择器（默认瞄协调者所在树，会报 mismatch）。
+- 给已有终端挂任务必须显式 `--worktree` 选择器（默认瞄协调者所在树，会报 mismatch）——
+  #304 实战经验，指南文本没这条，版本升级后若行为变以实测为准。
 - 打回用 `orchestration send --to dispatch:<id>`（结构化收件箱，跨服务器也送达）或 `terminal send`，
   且都排在 `worker-release` 之前（release 会关终端标签页）。
 - `check --wait --types` 的类型名以当前指南为准（1.4.179 实况：`worker_done,escalation,question`——
