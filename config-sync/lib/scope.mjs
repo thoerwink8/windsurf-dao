@@ -8,6 +8,7 @@ export const SCOPES = [
   { key: 'prompts', label: 'Prompts', tables: ['prompts'] },
   { key: 'proxy', label: 'Proxy / 端点 / 定价', tables: ['proxy_config', 'provider_endpoints', 'model_pricing'] },
   { key: 'terminal', label: 'Windows Terminal 配色/字体', tables: [] },
+  { key: 'pi', label: 'pi 配置 (~/.pi/agent：settings/主题/auth)', tables: [] },
 ];
 
 export const SCOPE_KEYS = SCOPES.map((s) => s.key);

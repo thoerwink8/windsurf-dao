@@ -3,6 +3,7 @@ import { ensureSnapshotDirs, snapshotPaths, writeJson, encodePaths, findWtSettin
 import { selectRows, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, redactValue } from './secrets.mjs';
 import { parseScopeArg, wants } from './scope.mjs';
+import { exportPi } from './pi-sync.mjs';
 
 // 对 settings 行脱敏并占位符化路径：value 是 JSON 的逐字段脱敏，非 JSON（如 codex TOML）原样保留但仍做路径占位。
 // 返回 { redactedRows, secrets, skippedNonJson }。
@@ -53,6 +54,11 @@ export function runExport({ only = null } = {}) {
     });
   }
 
+  let piResult = null;
+  if (wants(only, 'pi')) {
+    piResult = exportPi();
+  }
+
   if (wants(only, 'mcp')) {
     writeJson(snapshotPaths.mcpServers, {
       source: 'cc-switch.mcp_servers',
@@ -101,6 +107,7 @@ export function runExport({ only = null } = {}) {
   console.log(`  skill repos: ${skillRepos.length}`);
   console.log(`  prompts: ${prompts.length}`);
   console.log(`  terminal: ${terminalExported ? '已导出' : '跳过（未找到 Windows Terminal）'}`);
+  console.log(`  pi: ${piResult ? (piResult.settings ? `settings.json + ${piResult.themes.length} 个主题 + ${piResult.auth ? 'auth.json（占位快照，真实值入 common-secrets.json）' : 'auth 跳过'}` : '未找到 ~/.pi/agent/settings.json，跳过') : '未选 pi 范围'}`);
   console.log('');
   console.log('安全提醒：common-secrets.json 含脱敏真实值，已由 config-sync/.gitignore 忽略，请不要手动提交。');
 }

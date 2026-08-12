@@ -14,6 +14,14 @@ export const ccSwitchBackupDir = path.join(ccSwitchDir, 'backups');
 export const claudeSettingsPath = path.join(homeDir, '.claude', 'settings.json');
 export const commonDir = path.join(configSyncRoot, 'common');
 
+// pi(~/.pi/agent/) 配置（issue #344）：settings.json + themes/ 进 git 快照，
+// auth.json 走 common-secrets.json 通道（快照只放脱敏占位）；sessions/ · models-store.json · bin/ · extensions/ 不同步。
+export const piAgentDir = path.join(homeDir, '.pi', 'agent');
+export const piSettingsPath = path.join(piAgentDir, 'settings.json');
+export const piThemesDir = path.join(piAgentDir, 'themes');
+export const piAuthPath = path.join(piAgentDir, 'auth.json');
+export const commonPiDir = path.join(commonDir, 'pi');
+
 export const snapshotPaths = {
   settings: path.join(commonDir, 'settings.json'),
   mcpServers: path.join(commonDir, 'mcp_servers.json'),
@@ -21,6 +29,9 @@ export const snapshotPaths = {
   prompts: path.join(commonDir, 'prompts.json'),
   proxy: path.join(commonDir, 'proxy.json'),
   terminal: path.join(commonDir, 'terminal.json'),
+  piSettings: path.join(commonPiDir, 'settings.json'),
+  piThemes: path.join(commonPiDir, 'themes'),
+  piAuth: path.join(commonPiDir, 'auth.json'),
 };
 
 // Windows Terminal settings.json 路径（UWP 商店版 + Preview 版）。
