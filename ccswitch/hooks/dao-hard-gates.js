@@ -908,7 +908,7 @@ const GATES = [
 
   {
     id: "G3-publish",
-    why: "dao.md 帅节留守判据 ㈣「自主边界（永不进自主窗）」（正文见 ccswitch/rules/dao-longwindow.md §心跳对账节 · 丁）——对外发布属不可逆决策 + 需用户在场件",
+    why: "dao.md 帅节留守判据 ㈣「自主边界（永不进自主窗）」（正文见 ccswitch/rules/dao-dispatch.md §七「自主边界」）——对外发布属不可逆决策 + 需用户在场件",
     escapeEnv: "DAO_PUBLISH_APPROVED",
     tools: ["Bash", "PowerShell"],
     test(input) {

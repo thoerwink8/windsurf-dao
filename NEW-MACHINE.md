@@ -169,7 +169,7 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Codex node_r
 
 config-sync 在导出时把两类本机路径替换成占位符，恢复时还原成新机实际路径：
 
-- `${PROJECT_ROOT}` → windsurf-dao 仓库根（如 hooks 命令 `node "${PROJECT_ROOT}/ccswitch/hooks/dao-glob-gate.js"`）
+- `${PROJECT_ROOT}` → windsurf-dao 仓库根（如 hooks 命令 `node "${PROJECT_ROOT}/ccswitch/hooks/dao-hard-gates.js"`）
 - `${HOME}` → 用户主目录
 
 所以 `common/settings.json`、`mcp_servers.json` 进 git 的都是占位符形态，`恢复配置.bat` 在新机自动解回真实路径。**这是换机不强制同路径的根本保障。**

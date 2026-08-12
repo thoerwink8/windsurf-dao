@@ -65,7 +65,7 @@ const INTENT_LOG = (ARGS && ARGS.intentLogFile) || 'docs/user-intent-log.md'
 const CLAUSE_FILE = (ARGS && ARGS.clauseFile) || 'docs/rules/dispatch-clauses.md'
 const DAO_FILE = (ARGS && ARGS.daoFile) || 'D:/frank/windsurf-dao/ccswitch/dao.md'
 // ⚠️ dao 常驻场域的**判重扫描面不止 dao.md 一个文件**(2026-08-01 起):长窗自主排程 ①-⑥.5 已迁到
-// `ccswitch/rules/dao-longwindow.md`,dao.md 那一段只剩一行存根。只 Grep dao.md 会让那整段判据落在
+// `ccswitch/rules/dao-dispatch.md` §七,dao.md 那一段只剩一行指针。只 Grep dao.md 会让那整段判据落在
 // 扫描面之外 ⇒ 收割官把「其实早就有了」的东西重新发明一遍,而 `is_new=true` 看起来完全正常
 // ——这正是 dao.md 反·归讲的「扫描面静默塌陷:检测器数到 0 个违例,和检测器根本没看到样本,输出一模一样」。
 // 故判重提示里同时给出 dao.md 与 rules/ 目录;后者用目录而非枚举文件,是为了以后再迁出别的节时不用回来改这里。
