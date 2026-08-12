@@ -168,7 +168,11 @@ function Invoke-Status {
         Write-Host "`n  Claude Code source: ${cSkills} skills, ${cCmds} commands, ${cAgents} agents" -ForegroundColor Cyan
 
         $userClaude = Join-Path $env:USERPROFILE ".claude"
-        $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "dao-*" -and $_.LinkType -in "SymbolicLink", "Junction" }).Count
+        # 数「dao 部署了几个 skill」按 LinkType + Target 指向 dao 源判定，不看名字前缀——
+        # 单层清单制（issue #340）下 skill 名不再保证 dao-* 开头。旧路径 $DaoRoot/claude 是
+        # 重构前的源，兼容判据与 prune/unlink 段一致。
+        $statusOldSrc = Join-Path $DaoRoot "claude"
+        $linkedSkills = (Get-ChildItem (Join-Path $userClaude "skills") -ErrorAction SilentlyContinue | Where-Object { $_.LinkType -in "SymbolicLink", "Junction" -and ((Test-PathUnderRoot -Path $_.Target -Root $claudeSrc) -or (Test-PathUnderRoot -Path $_.Target -Root $statusOldSrc)) }).Count
         $userClaudeMd = Join-Path $userClaude "CLAUDE.md"
         $importOk = (Test-Path $userClaudeMd) -and ((Get-Content $userClaudeMd -Raw -ErrorAction SilentlyContinue) -match "(claude|ccswitch)/dao\.md")
 
@@ -252,8 +256,65 @@ function Get-InternalOnlySkills {
     )
 }
 
+function Test-PathUnderRoot {
+    # 路径边界判断：$Path 是否等于 $Root 或位于 $Root 之下。
+    # 为什么不能用 -like "$Root*"：那是字符串前缀，会把 <Root>-old 这类同名前缀兄弟目录
+    # 判成"在 Root 下"，prune 段据此删掉外来链（对抗审实证 wouldPrune=true，issue #340）。
+    # 规范化：去 \\?\ 前缀 · 正斜杠统一成反斜杠 · TrimEnd('\\') · 比较用 OrdinalIgnoreCase。
+    param($Path, [string]$Root)
+    # Junction 的 .Target 在 PowerShell 里是集合属性（数组），数组取第一项再判。
+    if ($null -eq $Path) { return $false }
+    if ($Path -is [System.Collections.IEnumerable] -and $Path -isnot [string]) {
+        $first = @($Path)[0]
+        $p = if ($null -ne $first) { [string]$first } else { $null }
+    } else {
+        $p = [string]$Path
+    }
+    if ([string]::IsNullOrWhiteSpace($p) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    $p = $p.Replace('/', '\')
+    $r = ([string]$Root).Replace('/', '\')
+    if ($p.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) { $p = $p.Substring(4) }
+    if ($r.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) { $r = $r.Substring(4) }
+    $p = $p.TrimEnd('\')
+    $r = $r.TrimEnd('\')
+    # ── 折叠 . 与 .. 段（复审必修 N1：字面穿越 <Root>\..\<兄弟>-old 可骗过前缀匹配）──
+    # 只对绝对路径（X:\ 或 \\）折叠；相对路径不基于 cwd 解析（GetFullPath 会拼 cwd 造出假 true），非绝对直接 false。
+    # 手写段折叠而非 [IO.Path]::GetFullPath：GetFullPath 会把 8.3 短路径展开成真名（WINDSU~1→windsurf-dao）
+    # 把原本 false 的 fail-safe 构造翻绿；折叠是纯文本段操作，不查询文件系统。
+    $folded = @($p, $r)
+    for ($fi = 0; $fi -lt 2; $fi++) {
+        $x = $folded[$fi]
+        $isAbsDrive = $x.Length -ge 3 -and [char]::IsLetter($x[0]) -and $x[1] -eq ':' -and $x[2] -eq '\'
+        $isAbsUnc = $x.StartsWith('\\', [StringComparison]::Ordinal)
+        if (-not ($isAbsDrive -or $isAbsUnc)) { return $false }
+        $segs = $x.Split('\')
+        $stack = New-Object System.Collections.Generic.List[string]
+        foreach ($seg in $segs) {
+            if ($seg -eq '') {
+                # 空段：仅当 UNC 的 \\ 前缀区（stack 尚未满两个元素）时保留，其余（重复斜杠）折叠
+                if ($stack.Count -lt 2 -and $isAbsUnc) { $stack.Add($seg) }
+            } elseif ($seg -eq '.') {
+                # 折叠
+            } elseif ($seg -eq '..') {
+                # 弹回上一段。保护只到 \\ 前缀两空段与盘符段（Count>1 且末段非空才弹）；
+                # UNC 主机段本身可被 .. 弹掉（\\other\..\nas\... 折成 \\nas\...），如实声明——
+                # dao 的 Root 恒为本机盘符路径（X:\...），折叠结果只会与本机盘符 root 比较，
+                # 外来链折不出盘符前缀，该缺口在 dao 用法下无害（仅当 root 本身为 UNC 时才有意义）。
+                if ($stack.Count -gt 1 -and $stack[$stack.Count - 1] -ne '') { $stack.RemoveAt($stack.Count - 1) }
+            } else {
+                $stack.Add($seg)
+            }
+        }
+        $folded[$fi] = $stack -join '\'
+    }
+    $p = $folded[0]
+    $r = $folded[1]
+    return $p -eq $r -or $p.StartsWith($r + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+
 function Invoke-LinkClaude {
-    # 把 ccswitch/{skills,commands,agents} 下的 dao-* 项 symlink 到 ~/.claude，
+    # 把 ccswitch/skills 全量（减 Get-InternalOnlySkills 排除清单）与 commands/agents
+    # 下匹配各自 Filter 的项 symlink 到 ~/.claude，
     # 复制 docs/classics/*.md 经文到 ~/.claude/references/，
     # 并幂等追加 dao.md 的 @import 到 ~/.claude/CLAUDE.md。
     param([bool]$IsDryRun = $false)
@@ -316,7 +377,10 @@ function Invoke-LinkClaude {
 
     # ── 三类目录 symlink（skills/agents 链目录，commands 链文件）──
     $specs = @(
-        @{ Name = "skills";   Kind = "dir";  Filter = "dao-*" },
+        # skills 是单层清单制（issue #340）：部署 = 全部 skills 减 Get-InternalOnlySkills
+        # 排除清单——不再用 dao-* 前缀当第二层准入（前缀制会让 grill-me 这类非前缀
+        # skill 进了仓却永远部署不到）。commands/agents 的过滤本单未拍，维持原样。
+        @{ Name = "skills";   Kind = "dir";  Filter = "*" },
         @{ Name = "commands"; Kind = "file"; Filter = "*.md" },
         @{ Name = "agents";   Kind = "file"; Filter = "dao-*.md" }
     )
@@ -402,7 +466,7 @@ function Invoke-LinkClaude {
         }
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
             if ($_.LinkType -notin "SymbolicLink", "Junction") { return }
-            if ($_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*") -and $_.Name -notin $srcNames) {
+            if (((Test-PathUnderRoot -Path $_.Target -Root $claudeSrc) -or (Test-PathUnderRoot -Path $_.Target -Root $oldClaudeSrc)) -and $_.Name -notin $srcNames) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] prune $($_.Name)  (source removed)" -ForegroundColor Yellow
                 } else {
@@ -909,7 +973,10 @@ function Invoke-UnlinkClaude {
     # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
     $oldClaudeSrc = Join-Path $DaoRoot "claude"   # 兼容旧路径(重构前 claude/ → ccswitch/)
     $specs = @(
-        @{ Name = "skills";   Filter = "dao-*" },
+        # skills 用 "*" 与 link-claude 的单层清单制对称（issue #340）：unlink 若仍按
+        # dao-* 筛，会漏删 grill-me 这类非前缀链留悬空。误删保护不靠这里的 Filter，
+        # 靠下面的 target 判断（只删指向本 dao 源的 symlink）。
+        @{ Name = "skills";   Filter = "*" },
         @{ Name = "commands"; Filter = "*.md" },
         @{ Name = "agents";   Filter = "dao-*.md" }
     )
@@ -919,7 +986,7 @@ function Invoke-UnlinkClaude {
         Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
             # 只删 symlink,且 target 指向本 dao 源(新旧路径均匹配);真实文件/他处链接不动
-            if ($_.LinkType -eq "SymbolicLink" -and $_.Target -and ($_.Target -like "$claudeSrc*" -or $_.Target -like "$oldClaudeSrc*")) {
+            if ($_.LinkType -eq "SymbolicLink" -and ((Test-PathUnderRoot -Path $_.Target -Root $claudeSrc) -or (Test-PathUnderRoot -Path $_.Target -Root $oldClaudeSrc))) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
                     $removed++
