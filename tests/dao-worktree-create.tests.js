@@ -39,6 +39,11 @@ const ILLEGAL = [
   ["empty", "   "],
   ["multiline", "树帅制 · 派单中 · 无阻\n注入"],                // 换行破坏「一行显示」契约
   ["multiline", "树帅制 · 派单中 · 无阻\r\n注入"],              // CRLF 同拒
+  ["multiline", "树帅制 · 派单中 · 无\u2028阻"],                // LS：ES LineTerminator，渲染必断行
+  ["multiline", "树帅制 · 派单中 · 无\u2029阻"],                // PS 同上
+  ["multiline", "树帅制 · 派单中 · 无\u0085阻"],                // NEL（ISO 6429 NEXT LINE）
+  ["multiline", "树帅制 · 派单中 · 无\u000B阻"],                // VT：终端垂直位移，同破「一行」契约
+  ["multiline", "树帅制 · 派单中 · 无\u000C阻"],                // FF 同上
   ["too-long", "多树并行 · 实现官在写 · 等" + "x".repeat(25)], // 41 字符
   ["separator", "树帅制·派单中·无阻"],                         // 无空格的「·」⇒ 1 格
   ["separator", "树帅制 · 派单中"],                             // 只有两格
