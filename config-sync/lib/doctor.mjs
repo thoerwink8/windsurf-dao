@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath } from './paths.mjs';
+import { claudeSettingsPath, hasBomBuffer, readJsonIfExists, snapshotPaths, stripBom, encodePaths, homeDir, findWtSettingsPath, piSettingsPath, piThemesDir, piAuthPath } from './paths.mjs';
 import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
+import { sameJson, themeDrift, leakedSecretPaths, countPiSecrets, rehydratePiAuth } from './pi-sync.mjs';
 import { pickPwsh } from './pwsh.mjs';
 
 let problems = 0;
@@ -48,6 +49,9 @@ function main() {
 
   section('Windows Terminal 配色');
   checkTerminalSync();
+
+  section('pi 配置漂移（快照 ↔ ~/.pi/agent，issue #344）');
+  checkPiSync();
 
   finish();
 }
@@ -388,6 +392,73 @@ function checkTerminalSync() {
   } else {
     warn(`自定义 schemes 不一致：本机 [${localSchemes.join(',')}] ≠ 快照 [${snapSchemes.join(',')}]。`);
   }
+}
+
+// pi(~/.pi/agent/) 三件：settings.json / themes/ 进 git 快照，auth.json 占位快照 + common-secrets.json。
+// 漂移判定全是结构化比对（sameJson / themeDrift / 泄漏逐字段），不做文案正则。
+function checkPiSync() {
+  // ── settings.json ──
+  if (!fs.existsSync(snapshotPaths.piSettings)) {
+    warn('缺少 common/pi/settings.json 快照，请先运行 dao.bat 上行导出 pi。');
+  } else if (!fs.existsSync(piSettingsPath)) {
+    warn('~/.pi/agent/settings.json 不存在（本机可能尚未运行 pi），下行可落位。');
+  } else if (sameJson(readJsonIfExists(snapshotPaths.piSettings, null), readJsonIfExists(piSettingsPath, null))) {
+    pass('pi settings.json 与快照一致。');
+  } else {
+    warn('pi settings.json 与快照不一致（漂移）。如需同步，运行 dao.bat 下行或上行。');
+  }
+
+  // ── themes/（三向：缺 / 改 / 多）──
+  const snapThemes = listJsonFiles(snapshotPaths.piThemes);
+  const localThemes = listJsonFiles(piThemesDir);
+  if (!Object.keys(snapThemes).length) {
+    warn('缺少 common/pi/themes/ 快照（无主题文件），请先运行 dao.bat 上行导出 pi。');
+  } else {
+    const drift = themeDrift(snapThemes, localThemes);
+    const bits = [];
+    if (drift.missing.length) bits.push(`缺 ${drift.missing.join(',')}`);
+    if (drift.changed.length) bits.push(`改 ${drift.changed.join(',')}`);
+    if (drift.extra.length) bits.push(`多 ${drift.extra.join(',')}`);
+    if (bits.length) warn(`pi themes/ 与快照不一致：${bits.join('；')}。`);
+    else pass(`pi themes/ 与快照一致（${Object.keys(snapThemes).length} 个主题）。`);
+  }
+
+  // ── auth.json（占位快照 vs common-secrets.json + 本机真值）──
+  if (!fs.existsSync(snapshotPaths.piAuth)) {
+    warn('缺少 common/pi/auth.json 快照，请先运行 dao.bat 上行导出 pi。');
+    return;
+  }
+  const snapAuth = readJsonIfExists(snapshotPaths.piAuth, null);
+  const leaked = leakedSecretPaths(snapAuth);
+  if (leaked.length) {
+    fail(`common/pi/auth.json 泄漏敏感字段（未脱敏）：${leaked.join(', ')}。该文件进 git，请重新导出。`);
+  } else {
+    pass('common/pi/auth.json 无明文敏感字段（已占位化）。');
+  }
+
+  const placeholders = countPlaceholders(snapAuth);
+  const secretsMap = readJsonIfExists(commonSecretsPath, null)?.secrets || {};
+  const piSecrets = countPiSecrets(secretsMap);
+  if (placeholders === 0) {
+    pass('common/pi/auth.json 无脱敏占位符。');
+  } else if (piSecrets < placeholders) {
+    fail(`common/pi/auth.json 有 ${placeholders} 个脱敏占位符，但 common-secrets.json 只有 ${piSecrets} 个 pi 真实值，恢复会失败。换机时需手动复制该文件。`);
+  } else if (!fs.existsSync(piAuthPath)) {
+    pass(`common/pi/auth.json 有 ${placeholders} 个脱敏占位符，common-secrets.json 提供 ${piSecrets} 个真实值；本机尚无 auth.json，下行可落位。`);
+  } else {
+    const merged = rehydratePiAuth(snapAuth, secretsMap);
+    if (merged && sameJson(merged, readJsonIfExists(piAuthPath, null))) pass(`pi auth.json 与快照一致（${placeholders} 个占位符还原比对）。`);
+    else warn('pi auth.json 与快照不一致（漂移）。如需同步，运行 dao.bat 下行或上行。');
+  }
+}
+
+function listJsonFiles(dir) {
+  if (!fs.existsSync(dir)) return {};
+  const out = {};
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.json')) out[entry.name] = path.join(dir, entry.name);
+  }
+  return out;
 }
 
 function asRows(doc) {
