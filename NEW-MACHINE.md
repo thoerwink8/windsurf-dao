@@ -71,6 +71,7 @@ node config-sync\lib\doctor.mjs
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
 - **Codex / Codex++**——用 dao + Codex（镜像）
 - **pi 编码代理**——`npm install -g @mariozechner/pi-coding-agent`，配置处方见 `ccswitch/stacks/pi.md`（安装/4 模型模板/压缩参数/实测坑/验证命令全在里面）
+- **Orca 守护脚本**（`scripts/dao-safeguard-guard.mjs`，issue #336）——依赖 Node + `orca` CLI（Orca IDE 自带，本表已含 Node）；不部署、不进 config-sync、无手动复制资产，`git clone` 即得。用途/参数/自测入口见脚本头注
 - ~~**Windsurf**~~（已退役，无需安装）
 
 > sqlite3 找不到时手动安装，然后设环境变量 `SQLITE3_PATH` 指向 sqlite3 可执行文件（或放进 PATH）；
