@@ -85,8 +85,18 @@ try {
     // 判据搬了家而 mutation 静默变成空操作 ⇒ 这一条会「通过」而什么都没验。必须红。
     check("mutation 锚点还在", false, "MARKED_ERRORS 的定义变了，这条 mutation 已经什么都没验");
   } else {
-    const mutant = path.join(SANDBOX, "sentinel-mutant.js");
     fs.mkdirSync(SANDBOX, { recursive: true });
+
+    // 对照组：**未变异**的副本，跑在与变异体同一个位置上。
+    // 没有它，「判据真的被改坏了」与「副本换了个目录就跑不起来了」在结果上完全一样
+    // （两边都是「没写标记」）——那时下面那条 mutation 证明的是路径，不是判据。
+    const twin = path.join(SANDBOX, "sentinel-twin.js");
+    fs.writeFileSync(twin, SRC, "utf8");
+    const t = fire("rate_limit", "twin", twin);
+    check("未变异副本在同一位置照样写标记（证明变异体不是死于换了个目录）", t.marker !== null,
+      t.marker ? "" : "副本在沙盒里跑不起来 ⇒ 下面那条 mutation 什么都没证明");
+
+    const mutant = path.join(SANDBOX, "sentinel-mutant.js");
     fs.writeFileSync(mutant, SRC.replace(ANCHOR, "const MARKED_ERRORS = new Set([]);"), "utf8");
     const m = fire("rate_limit", "mutant", mutant);
     check("判据集合被改空 ⇒ 正控从「写标记」掉到「不写」", m.marker === null,

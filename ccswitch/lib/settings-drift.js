@@ -66,7 +66,7 @@
 //     是被人写下并审过的，而不是某个运行时状态；且它已经是本文件 live↔快照 那一面的
 //     参照侧，两面共用同一个 canonical ⇒ 两个面不可能对「什么才是 canonical」各执一词。
 //   · 否掉 `ccswitch/hooks/` 目录列表：它表达不了挂载点/matcher/timeout，只答得出
-//     「该不该存在」答不出「该挂哪」；且 check-dead-gates 已确立孤儿文件可能是刻意存货。
+//     「该不该存在」答不出「该挂哪」；且孤儿文件可能是刻意存货，不能一律当缺陷。
 //   · 否掉 live `~/.claude/settings.json`：它是投影，内容由「你最后切到哪个 provider」决定
 //     ⇒ 拿它当 canonical 等于让病灶自己定义健康。
 //   · 否掉「新写一份 manifest」：那是第七种载体，它自己又要跟快照对齐 ⇒ 凭空多一个漂移面。
@@ -1190,7 +1190,7 @@ function censusCommandEntries(text) {
 // 普查是在原始文本上数 `"type":"command"`，而 `statusLine` 也长这个样子
 // ⇒ 只数 hooks 段时真实数据恒为 13 vs 14，**每一次跑都报一条假的「扫描面塌陷」**。
 // 分母口径对不上比数错更糟：一道生下来就吵的闸一定会被静音，而它被静音之后，
-// 真正的扫描面塌陷就再也没人看得见了。同 check-dead-gates 的 walkGates 口径。
+// 真正的扫描面塌陷就再也没人看得见了。
 function countCommandEntries(obj) {
   let n = 0;
   const hooks = obj && obj.hooks && typeof obj.hooks === "object" ? obj.hooks : {};
@@ -1276,7 +1276,8 @@ function denySetOf(obj) {
 // 故面①把「仓库根 + /ccswitch/」整段换成一个固定 token 再比。**代价照直写**：
 // provider 指向**另一个 checkout**（如某次从 worktree 部署过去）这一格，面①看不见了。
 // 那一格不是没人管——①面②（provider 互比）**刻意不做这个归一化**，两个 provider
-// 指向不同 checkout 会被它当场报出；②目标文件到底存不存在归 check-dead-gates。
+// 指向不同 checkout 会被它当场报出；②目标文件到底存不存在归 `node scripts/dao-check.mjs`
+// 的「闸注册面」那一项（原先那个独立扫描器已于 2026-08-12 退役）。
 // 归一化只吃 `/ccswitch/` 这一段：`${HOME}/.claude/hooks/` 形态的路径不受影响
 // （HOME 是机器级的，两侧展开一致），所以「hook 被改回旧的 ~/.claude 副本」仍报得出。
 const REPO_TOKEN = "<repo>";
@@ -1372,7 +1373,7 @@ function repoRootsOf(obj) {
 // **仍然看不见的那一格，照直写**：两侧**各自**内部都只有一个根、但**两侧的那个根不同**
 // （live 整份指着 worktree A，快照展开成 B）——归一化之后这一格无人再看。
 // 它不是被无视的：`printReport` 每次把两侧的根原样打印出来（信息不许凭空消失），
-// 且 hook 文件到底存不存在归 `check-dead-gates`。
+// 且 hook 文件到底存不存在归 `node scripts/dao-check.mjs` 的「闸注册面」那一项。
 //
 // ⚠ 两处与 `repoRootsOf` 的差别，刻意留在这一层而不改那个函数（那样会波及面①）：
 //   ① **先 decodePaths**：快照侧存的是 `${PROJECT_ROOT}` 字面量，不还原的话「根」会是

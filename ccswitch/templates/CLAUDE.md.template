@@ -7,7 +7,7 @@
 
 > 全局 dao 场域（`ccswitch/dao.md`）已由 `~/.claude/CLAUDE.md` 的 `@import` 每轮常驻——
 > 语言规则、commit 前缀、八句根基**不在此重复**。本文件只写这个项目**独有**的增量。
-> （Grep-first 不是常驻文字，由 G7 硬闸 + `permissions.deny` 承载，见 `ccswitch/rules/dao-shell-search.md`。）
+> （搜索用内置工具这条不是常驻文字，机器拦截只剩 `permissions.deny` 一层，见 `ccswitch/rules/dao-shell.md` 第三节。）
 > 预算 80 行（`claude-md-size` 闸），写满就该往 `.claude/rules/` 下沉。
 
 ## 项目类型（必答题 · 二选一，答完把本节的注释删掉）

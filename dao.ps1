@@ -999,48 +999,13 @@ function Invoke-UnlinkClaude {
         }
     }
 
-    # ── 移除 settings.json 里的 dao-glob-gate hook ──
     $settingsPath = Join-Path $userClaude "settings.json"
     if (Test-Path $settingsPath) {
         Write-Host "  [hook]" -ForegroundColor Cyan
-        $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
-        if ($sraw -match "dao-glob-gate") {
-            if ($IsDryRun) {
-                Write-Host "    [DRYRUN] remove dao-glob-gate hook" -ForegroundColor Cyan
-                $removed++
-            } else {
-                try {
-                    $settings = $sraw | ConvertFrom-Json
-                    if ($settings.hooks -and $settings.hooks.PostToolUse) {
-                        $keptPostToolUse = @()
-                        foreach ($entry in @($settings.hooks.PostToolUse)) {
-                            $commands = @($entry.hooks | ForEach-Object { $_.command })
-                            if (-not ($commands -like "*dao-glob-gate*")) {
-                                $keptPostToolUse += $entry
-                            }
-                        }
-                        $settings.hooks.PostToolUse = $keptPostToolUse
-                        if ($settings.hooks.PostToolUse.Count -eq 0) {
-                            $settings.hooks.PSObject.Properties.Remove('PostToolUse')
-                        }
-                        if (-not $settings.hooks.PSObject.Properties.Name) {
-                            $settings.PSObject.Properties.Remove('hooks')
-                        }
-                    }
-                    [System.IO.File]::WriteAllText($settingsPath, ($settings | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
-                    Write-Host "    [remove] dao-glob-gate hook" -ForegroundColor Green
-                    $removed++
-                } catch {
-                    Write-Host "    [error] hook removal failed: $_" -ForegroundColor Red
-                    $err++
-                }
-            }
-        } else {
-            Write-Host "    [skip ] no dao-glob-gate hook found" -ForegroundColor DarkGray
-            $skipped++
-        }
 
-        # ── 移除 settings.json 里的 dao-cn-title hook(重读,因上方可能已改写)──
+        # ── 移除 settings.json 里的 dao-cn-title hook ──
+        # 2026-08-12（issue #324 B 批）删掉了这上面同型的 dao-glob-gate 摘除段：
+        # 那个 hook 本身已随 A 批退役、仓里与下发快照里都没有了，那 7 处代码从此永远走 else 分支。
         $sraw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
         if ($sraw -match "dao-cn-title") {
             if ($IsDryRun) {

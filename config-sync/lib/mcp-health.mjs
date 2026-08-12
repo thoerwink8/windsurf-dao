@@ -62,7 +62,7 @@
 // 输出格式变了导致正则失配 / 探测器本身崩了），一律落「判不出」而非静默当「ok」——
 // 见 evaluateMcpHealth() 的「missing」分支，这是本文件唯一的判据核心，值得反复读。
 //
-// ── 自检半边为什么不需要一套独立解析器（dao-guard-writing.md 的第二条判据）────
+// ── 自检半边为什么不需要一套独立解析器（dao-writing-rules.md 第二节「自检那一半不复用被守对象的解析」）────
 // 常规做法是「结构化解析」与「独立普查」两条腿分别数，数字对不上就报「扫描面塌陷」。
 // 本文件**结构性地**不需要这第二条腿：evaluateMcpHealth() 的默认分支是「没找到 = 判不出」
 // 而不是「没找到 = 健康」，所以哪怕 LINE_RE **全盘**失配（宿主整体改了输出格式），每一个
@@ -226,7 +226,7 @@ export function probeMcpHealth(opts) {
     const partial = e && typeof e.stdout === 'string' ? e.stdout : '';
     const msgFirstLine = e && e.message ? String(e.message).split('\n')[0] : String(e);
     // stderr 才是真原因，message 首行常是 `Command failed: <整条命令>` 这种废话——
-    // 两者都留，废话当上下文、stderr 当主证据（与 check-dead-gates.mjs::errWhy 同一手法）。
+    // 两者都留，废话当上下文、stderr 当主证据（与已退役的 check-dead-gates 同一手法）。
     const why = stderr ? `${msgFirstLine}（stderr: ${stderr.slice(0, 300)}）` : msgFirstLine;
     return {
       state: timedOut ? 'timeout' : (notFound ? 'unavailable' : 'error'),
