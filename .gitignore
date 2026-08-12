@@ -11,6 +11,9 @@ _dao_backup/
 # 会红的闸：tests/hard-gates.tests.js 的 G4 节断言 `git check-ignore` 对它 exit 0。
 .playwright-mcp/
 .dao-targets
+# 主仓的 manual 锁绝不能进仓：settings.local.json 优先级高于随仓 .claude/settings.json，
+# 一旦入库所有 checkout（含工兵树）都被锁回 manual，随仓 auto 权限面整体失效。
+.claude/settings.local.json
 .DS_Store
 Thumbs.db
 image/
