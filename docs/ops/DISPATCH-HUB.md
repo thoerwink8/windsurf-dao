@@ -151,7 +151,7 @@ database id 走 `gh api repos/thoerwink8/windsurf-dao/issues/<n> -q .id`。两�
 它现在同时装着酝酿层候选与历史勾选，候选那半应迁 `候选` 标签的 issue（**未做，见未尽处**）。
 
 🔴 **一次性人工动作**（Projects v2 自动化 gh CLI 建不了）：看板的「新 issue 自动入板」workflow
-要在网页点一次（约 2 分钟）。步骤见 `docs/USER-ACTIONS.md`。在那之前，新建 issue 由帅手动
+要在网页点一次（约 2 分钟）。步骤见 issue #71（原 `docs/USER-ACTIONS.md` 已删并入该单）。在那之前，新建 issue 由帅手动
 `gh project item-add` 灌入。
 
 ## 七、用户视角（只需要知道这四件）
@@ -172,4 +172,4 @@ database id 走 `gh api repos/thoerwink8/windsurf-dao/issues/<n> -q .id`。两�
 - **`TODO.md` 的候选层未迁 issue**（§六.5 末）。迁移属「改用户可见面」，按 dao 分档判据归判断档，
   不由 AI 自定——挂在这里等用户一句话。
 - **看板归列目前是手动的**：`auto:true` 只表示「这一列的归属可由标签机械判定」，不表示 GitHub 会自动放进去。
-  自动入板 workflow 没点之前，新单不进板，看板会静静地过期。这是 `docs/USER-ACTIONS.md` 第 1 条。
+  自动入板 workflow 没点之前，新单不进板，看板会静静地过期。这是 issue #71 里 USER-ACTIONS 并档的第 1 条（原 `docs/USER-ACTIONS.md` 已删）。

@@ -16,7 +16,6 @@
 | 文件/目录                      | 作用                                                   |
 | ------------------------------ | ------------------------------------------------------ |
 | `dao.ps1`                      | 工具脚本（status / link-claude / codegraph；Codex skills 归 cc-switch store，dao 只报告不写） |
-| `global_rules.md`              | 旧 Windsurf 元规则（已 DEPRECATED，仅历史参考，不再被任何端加载） |
 | `ccswitch/commands/dao-*.md` | 9 个命令（dev/commit/distill/doc/evolve/loop/remove/superpowers/gs） |
 | `ccswitch/skills/dao-*/`    | 9 个可复用技能（brainstorm/design/evolution/loop/plan/project-scaffold/review/verify/worktree） |
 | `docs/classics/道德经.md`         | 一切规则的推导源头，不可修改                           |
@@ -211,5 +210,5 @@ windsurf-dao 是货架项目。部署方式：`dao.ps1 link-claude` 将 `ccswitc
 
 ### 5.4 同步问题速查
 
-`找不到 sqlite3` → `config-sync/setup-sqlite.ps1`。`secrets 缺真实值` → 补 DB 或删占位符。`env.* 缺失` → 重启 cc-switch 切 provider。`MCP extra=[pencil]` → 客户端本地多注册，非错误。
+`找不到 sqlite3` → 手动安装 sqlite3 并设 `SQLITE3_PATH`（`config-sync/lib/sqlite.mjs` 按 `SQLITE3_PATH` → PATH → `vendor/sqlite/` 查找）。`secrets 缺真实值` → 补 DB 或删占位符。`env.* 缺失` → 重启 cc-switch 切 provider。`MCP extra=[pencil]` → 客户端本地多注册，非错误。
 
