@@ -83,6 +83,11 @@ Edit 级小活与纯问答不弹。
    Claude/Codex/Cursor 的新起终端生效**（pi 等不吃这两个 flag，指定 provider/model 走低层配方），
    `--effort` 必须搭配 `--model`，两者都不能与 `--terminal` 复用同传。**读回执**
    （`launch.effective`、setup 状态）再继续，失败看 `stage`/`effects` 不盲重试。
+   **Claude 族工兵就绪后，协调者立即隔空切 auto mode**（用户 2026-08-12 拍板：新工兵默认 auto mode；
+   `worker-start` 没有这个参数，起手后补一步）：`orca terminal send --text "<ESC>[Z"`（Shift+Tab 的
+   PTY 编码，PowerShell 写 `"$([char]27)[Z"`）循环 manual→accept edits→plan→auto，**每按一次读屏
+   核对屏底状态行**，见「⏵⏵ auto mode on」才算切到；审批弹窗挂着时按了不生效，先答掉弹窗再切。
+   pi 等外族终端没有这个模式芯片，跳过此步。
 4. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
    用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
    `worker-retain`）→ 全处理完才 `--ack`。超时/TUI 空闲/心跳/status/question/escalation/被拒或过期的
@@ -130,10 +135,12 @@ spec 四段式骨架（写进 task-create 的 --spec）：
   卡在 TUI 输入框 12 分钟、$0.00 一个回合没跑——注入比 TUI 就绪早一步，回车被吞）。判据：终端
   预览里计费/API 时长在动才算开跑；躺着的补一发 `terminal send --enter` 即活。`input_accepted`
   是「送到了」不是「跑起来了」。
-- 🔴 **卡滞侦测不靠人眼**（2026-08-12 同日实咬两次，用户点名）：工兵终端的审批门（权限弹窗）不产生
+- 🔴 **卡滞侦测不靠人眼**（2026-08-12 同日实咬四次，用户点名两次）：工兵终端的审批门（权限弹窗）不产生
   任何编排消息，收活等待对它是瞎的——在跑工兵除 `check --wait` 外必配**看门狗**（周期读屏，
-  撞见审批门/长时间 idle 即介入），或派前请用户给工兵标签页开 Orca auto mode。本仓工兵最常见
-  卡点就是审批门（首例：心跳命令、dao check 基线各卡一次）。
+  异常即退出上报，静默轮询不算侦测）。**发现卡滞第一动作是读屏底模式芯片**：见「manual mode on」
+  即根因——那是 Claude Code 默认权限模式，每条 Bash 都会弹审批门，逐条帮它按 1 是跑步机；
+  根治 = 隔空切 auto mode（配方见上 §二.3），切完再答掉当前弹窗。本仓工兵最常见卡点就是审批门
+  （实录：心跳命令、dao check、git rm 连环三连，切 auto mode 后清零）。
 
 - 观测走织物内置通道：日常 = `worker-show`（状态+终端预览）+ 心跳 + 提交流三样，不翻别的。
 - `worker-read` 的深通道是 Codex/Claude/OpenClaude/Grok 四家（指南 1.4.179）；对 pi 降级成有界终端尾巴
