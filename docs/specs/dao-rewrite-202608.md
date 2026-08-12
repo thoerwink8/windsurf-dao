@@ -71,7 +71,10 @@ dao.md（57KB）+ 用户级 CLAUDE.md（2KB）经 @import 每轮全量注入。�
 3. **条款可达性矩阵逐时刻实弹**：改 .ps1→scoped 到达；改守卫→guard-writing 到达；改 dao.md→legislation 档到达；派官→SubagentStart 渲染到达（**取证 Grep subagent transcript 注入签名，不问 subagent 本人**）；gh pr merge/issue create/dev 裸起→nudge 到达；UI 改动收尾→Stop 门 block 一次；心跳唤醒→WAKEUP 注入。每项配负控（不命中→零注入）
 4. hook 实弹正负控+心跳文件真实触发记录+fail-open 验证（喂坏输入不砖会话）
 5. InstructionsLoaded 审计（能力确认后挂）：验证 paths 门控真的命中才加载
-6. 预算闸新值全绿+gen-clause-index --check --reconcile 双解析器同数
+6. 预算闸新值全绿 + ~~gen-clause-index --check --reconcile 双解析器同数~~
+   **那个索引与它的生成器已于 2026-08-11 删除**：这一格现在跑
+   `powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1`（`-eq 0` 才算过）；
+   整套验收改由 `node scripts/dao-check.mjs` 二值判定（issue #325）
 7. **不宣称遵守率改善**（调研反证在案；正当收益=attention budget+token）
 
 ## 风险与兜底（要点）
