@@ -30,7 +30,7 @@
 
 ## 续力 · 每答必续
 
-用户可见回答的末尾必须调用 `AskUserQuestion` 给 2-4 个选项；subagent 与获全局授权时改用状态陈述。
+用户可见回答的末尾必须调用 `AskUserQuestion` 给 2-4 个选项；subagent 与获全局授权时改用状态陈述（授权可在分工拍板时当场授予「本窗选项自动驾驶」，边界见 `rules/dao-orchestration-orca.md` §一）。
 
 > 🔴 豁免的是「问」不是「续」：授权期每轮工具段必有 `ScheduleWakeup` 或 `{stop:true}`——除 `stop:true` 那轮外每轮都要有心跳。 [#续-每轮心跳]
 
