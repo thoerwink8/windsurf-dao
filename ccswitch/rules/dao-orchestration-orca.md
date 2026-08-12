@@ -71,18 +71,22 @@ Edit 级小活与纯问答不弹。
 只固化**模式本身**：
 
 1. **一次绑定 Run**（`run-create --objective`），**先建全部独立 Task**（`task-create --spec`），再起工兵。
-2. **工兵一律 `worker-start` 起可见终端**（组合 worktree+终端+就绪+派单一步到位）——pi 等外族工兵
+2. **树的谱系跟随工作独立性**（指南原话判据）：独立关注点/独立修复 ⇒ 各开 `new-top-level` 树，
+   一分支＝一关注点＝一 PR；概念上叠在当前工作之上、依赖它的 ⇒ `new-child`；**同一交付物拆给多工兵
+   且文件面不相交** ⇒ 同一棵树里 `worker-start --worktree <该树>` 加终端（指南自己的示例就是同树
+   双工兵）。Orca 明说**不替你推断冲突**——同树多工兵先把文件 ownership 划死，写同一文件必互踩。
+3. **工兵一律 `worker-start` 起可见终端**（组合 worktree+终端+就绪+派单一步到位）——pi 等外族工兵
    尤其如此：可见标签页，不起无头后台。模型/思考档随 `--model`/`--effort` 传——**只对
    Claude/Codex/Cursor 的新起终端生效**（pi 等不吃这两个 flag，指定 provider/model 走低层配方），
    `--effort` 必须搭配 `--model`，两者都不能与 `--terminal` 复用同传。**读回执**
    （`launch.effective`、setup 状态）再继续，失败看 `stage`/`effects` 不盲重试。
-3. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
+4. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
    用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
    `worker-retain`）→ 全处理完才 `--ack`。超时/TUI 空闲/心跳/status/question/escalation/被拒或过期的
    worker_done——这七样都不是释放理由。
-4. **恢复条件化**：`worker-show` 判 ready（继续等）/ failed·stopped（`--retry-of` 重起，位置显式重选不默继承）/
+5. **恢复条件化**：`worker-show` 判 ready（继续等）/ failed·stopped（`--retry-of` 重起，位置显式重选不默继承）/
    outcome_unknown（stop 后再查或显式 abandon），同一 task 连败 3 次 dispatch 自动熔断。
-5. **禁替代**：说了走编排就必须有 task/dispatch 出处（`task-list`/`dispatch-show` 查得到）；
+6. **禁替代**：说了走编排就必须有 task/dispatch 出处（`task-list`/`dispatch-show` 查得到）；
    用非 Orca 途径起的工兵不许事后描述成「已编排」。worker-start 表达不了的自定义 argv
    （如 pi 指定 provider/model）走低层配方：worktree create → terminal create 自定义命令 → dispatch --inject。
 
@@ -99,7 +103,7 @@ spec 四段式骨架（写进 task-create 的 --spec）：
 ```
 
 铁律（每条都有尸检报告，见探索报告痛点矩阵）：
-1. **派单只走 Orchestration 通道**（结论 A），禁手建 worktree+终端的散装路（低层配方也要 dispatch 挂钩，见上第 5 条）。
+1. **派单只走 Orchestration 通道**（结论 A），禁手建 worktree+终端的散装路（低层配方也要 dispatch 挂钩，见上第 6 条）。
 2. spec 一次给全（背景/范围/约束/验收四段），缺一段就是下一轮往返。
 3. **dispatch 上下文 worker 拿不到**——交回的东西必须落盘成文件，worker_done 只报路径。
 4. worker_done **恰好一次**、带 `--outcome`（失败禁只写在散文里）与 `--files-modified`。
