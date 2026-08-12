@@ -58,6 +58,8 @@
 //
 // 自检与验证（命令坐标，值以跑出来的为准）：
 //   node scripts/dao-safeguard-guard.mjs --selftest        # 纯函数自测，exit 0 = 过
+//   node tests/dao-safeguard-guard.tests.js                # 回归网：自测桥接 + serviceStall 端到端
+//                                                          # （假 runner 注入，见 serviceStall 的 deps 参数）+ state-file 字段（issue #361）
 //   node scripts/dao-safeguard-guard.mjs --dry-run ...     # 干跑演示（见 --help）
 //   node scripts/dao-safeguard-guard.mjs --watch-stall --terminal <h> --stall-rounds 3 --interval N --max-rounds M
 //                                                        # 卡死看门狗实跑；先破（挂起终端 3 分钟内 [STALL]）再验（慢跑终端零误报）
@@ -419,6 +421,8 @@ function emitStateLine(t, e, cfg) {
     attempts: t.attempts,
     failures: t.failures,
     consecutiveReadFails: t.consecutiveReadFails,
+    stallCount: e.stallCount ?? undefined,
+    stallRounds: e.stallRounds ?? undefined,
     reason: e.reason ?? undefined,
     step: e.step ?? undefined,
   };
@@ -493,8 +497,17 @@ async function serviceIdle(t, cfg) {
   if (e.actions?.length) await runSend(t, e.actions[0], cfg);
 }
 
-async function serviceStall(t, cfg) {
-  const j = terminalRead(t.handle, cfg.readLimit);
+/**
+ * 卡死看门狗的单轮服务（接线层）。deps 只供测试注入假 runner（issue #361 端到端自动化）：
+ * deps.read  = (handle, limit) => read 响应 JSON（默认真 orca CLI）；
+ * deps.inbox = (limit) => inbox 响应 JSON（默认真 orca CLI）。
+ * 生产调用点 isTerminalEnded 就在本函数里——短路它会破坏「已结束终端的静默合法」，
+ * 由 tests/dao-safeguard-guard.tests.js 的场景 B 兜住（M4 探针）。
+ */
+export async function serviceStall(t, cfg, deps = {}) {
+  const read = deps.read || terminalRead;
+  const inbox = deps.inbox || orchestrationInbox;
+  const j = read(t.handle, cfg.readLimit);
   const outcome = classifyRead(j, cfg.patterns);
   if (outcome.kind === 'read_failed') {
     const e = stepState(t, { type: 'read_failed', reason: outcome.reason }, cfg);
@@ -529,7 +542,7 @@ async function serviceStall(t, cfg) {
     return;
   }
   // 零新行：先问「是不是已完工」（结构化信号；只在此刻查 inbox，省 busy 轮的 orca 调用）
-  const done = hasWorkerDone(orchestrationInbox(cfg.inboxLimit), t.handle);
+  const done = hasWorkerDone(inbox(cfg.inboxLimit), t.handle);
   if (done === 'unknown') {
     log('warn', `${t.handle}: 完工检查失败（inbox 不可读）——无法区分「合法静默」与「卡死」，本轮不计数不告警`);
     return;
@@ -588,10 +601,10 @@ async function runSend(t, action, cfg) {
   applyState(t, e, cfg);
 }
 
-async function serviceOnce(t, cfg) {
+export async function serviceOnce(t, cfg, deps = {}) {
   if (t.done) return; // --watch-stall：已完工/已结束的终端不再轮询
   switch (t.state) {
-    case 'idle': return cfg.watchStall ? serviceStall(t, cfg) : serviceIdle(t, cfg);
+    case 'idle': return cfg.watchStall ? serviceStall(t, cfg, deps) : serviceIdle(t, cfg);
     case 'waiting_compact': return serviceWaitCompact(t, cfg);
     case 'waiting_model': return serviceWaitModel(t, cfg);
     case 'stopped':
