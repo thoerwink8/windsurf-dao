@@ -47,7 +47,7 @@
     {
       "id": "fetch",
       "name": "fetch",
-      "server_config": "{\"type\":\"stdio\",\"command\":\"uvx\",\"args\":[\"mcp-server-fetch\",\"--ignore-robots-txt\"]}",
+      "server_config": "{\"type\":\"stdio\",\"command\":\"uvx\",\"args\":[\"--with\",\"mcp<2\",\"mcp-server-fetch\",\"--ignore-robots-txt\"]}",
       "description": null,
       "homepage": null,
       "docs": null,
