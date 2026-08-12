@@ -30,7 +30,7 @@
 ```
 场域根基（ccswitch/dao.md · always_on，经 @import 每条消息常驻）
         ↓
-按需知识（ccswitch/skills/ · 9 个 skill，全部 disable-model-invocation，用户 /命令 触发）
+按需知识（ccswitch/skills/ · 全部 skill，绝大多数 disable-model-invocation（用户 /命令 触发），grill-me 例外）
         ↓
 入口命令（ccswitch/commands/ · 10 个 slash command）
         ↓
@@ -67,9 +67,9 @@ always_on 唯一入口：八句根基、三才之机、续力、知识归位、�
 > `/dao-doc`（全生态唯一三零孤岛：零使用 + 零曝光 + 零索引；四步骨架已内联进 `/dao-dev` §3.3）·
 > `/dao-evolve`（与演化域另三个载体重叠，正文并入 `dao-evolution/system-review.md`）。
 
-### 技能（`ccswitch/skills/` · 9 个，其中 5 个部署为用户命令）
+### 技能（`ccswitch/skills/` · 部署面 = 全部 skills 减 `Get-InternalOnlySkills` 排除清单，单层清单制不看名字前缀，issue #340）
 
-> 全部 `disable-model-invocation: true`；**用户命令表见 `ccswitch/dao.md`**（唯一真相源）。
+> 绝大多数 `disable-model-invocation: true`（用户 `/name` 手动触发），`grill-me` 例外（触发语可自动召唤）；**用户命令表见 `ccswitch/dao.md`**（唯一真相源）。
 
 | skill | 一句话 | 面向 |
 |---|---|---|
@@ -135,7 +135,7 @@ config-sync/
 | 对象 | 路径 | 数量 | 角色 |
 |---|---|---|---|
 | 场域根基 | `ccswitch/dao.md` | 1 | 道德经场域根基 · 经 `~/.claude/CLAUDE.md` 的 `@import` 全局注入，每条消息常驻 |
-| 技能 | `ccswitch/skills/dao-*/` | 9 | 渐进披露；全部 `disable-model-invocation`，用户 `/name` 手动触发 |
+| 技能 | `ccswitch/skills/*/` | — | 渐进披露；部署是单层清单制（全部 skills 减 `Get-InternalOnlySkills` 排除清单，不看名字前缀，issue #340）；绝大多数 `disable-model-invocation` 由用户 `/name` 手动触发，`grill-me` 例外（触发语可自动召唤） |
 | 命令 | `ccswitch/commands/` | 10 | slash command，`/dao-dev` `/dao-loop` `/dao-serve` 等 |
 | 子代理 | `ccswitch/agents/dao-*.md` | 8+4 | subagent 两族：**能力型 8**（按模型档分，服务 dao-loop 金字塔调度）+ **官种型 4**（`implementer`/`adversary`/`scout`/`dogfood`，让 `agent_type` 带上官种，`SubagentStart` 才筛得出官种条款）|
 | 技术栈处方 | `ccswitch/stacks/` | — | 技术栈处方（`/dev` 基建审计按需加载） |
