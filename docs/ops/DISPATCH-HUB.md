@@ -46,12 +46,12 @@
 🔴 **「类型」与「改动性质」是两根正交轴，别混**：「类型」答「这单归哪种流程」（缺陷/任务/欠账/…）；
 「改动性质」答「这单改的是什么性质的东西」（bug/feature/test/…），程序员英文命名、恰选其一，同单可以两维都贴。
 判据、写作规范（建 issue 三件套：类型标签必贴 + 标题人话式 + 关联用结构化字段）与基线数字的正文在
-`ccswitch/rules/dao-workitem.md`「建单三件套」节（`[#归-建单可读]`），本文件只留这一行速查指针，
+`ccswitch/rules/dao-dispatch.md` §一「开单三件套」，本文件只留这一行速查指针，
 不复述细则——canonical 定义未来若下沉进 `labels.json`，同样只改那一处。
 
 **帅读标签 → 派单动作速查**（完整判据与派单含义见 labels.json 的 `dispatch` 字段）：
 
-- `缺陷`/`任务` + `P0`/`P1` + 无 `在途` → 领活优先派，按类型选官种（多机/多 AI 并行时：`在途` 但租约过期**且**盘上零活动 ⇒ 走接管流程再领，不直接抢；见 `ccswitch/rules/dao-workitem.md` 认领协议节）
+- `缺陷`/`任务` + `P0`/`P1` + 无 `在途` → 领活优先派，按类型选官种（多机/多 AI 并行时：`在途` 但租约过期**且**盘上零活动 ⇒ 走接管流程再领，不直接抢；见 `ccswitch/scripts/dao-claim.ps1`）
 - 任意 + `守卫类` → 实现官止步 PR，**必接对抗验证官**才合
 - 任意 + `真机` → 排实例队列串行，PR 证据不许走「随后补」
 - 任意 + `结构受阻` → **先出解锁设计**，不派实现官
@@ -64,7 +64,7 @@
 | 标签 | 本项目判据（一眼可判） |
 |---|---|
 | `真机` | **本仓当前无适用面，标签建了但留作扩展**。windsurf-dao 是规则/脚本/hook 仓，没有 GUI、没有打包版、没有真实输入设备——「测试全绿但真机是坏的」这一类缺陷在这里不存在。**它的近亲在本仓叫「live 生效面」**（hook 要在 cc-switch 下发后的 live 配置里真的注册上才算数），那一类目前靠 `--selfcheck` 与 settings-drift 自检覆盖，不走这个标签。哪天本仓长出 GUI 或真机依赖面，在这一格写死判据再启用。 |
-| `守卫类` | 改动落在以**拦截 / 守卫 / 扫描 / 判定**为职责的文件：`ccswitch/hooks/**`（尤其 `dao-hard-gates.js` / `dao-glob-gate.js` / `dao-config-guard.js` 这类 PreToolUse 拦截器）· `ccswitch/scripts/check-*` · `ccswitch/scripts/verify-*` · 任何 lint / scanner / drift 检测入口（`check-dead-gates.mjs` / `check-alwayson-budget.mjs` / `check-clauses-structure.ps1` / `settings-drift.js`）。**路径可机械判定**，不靠语义判断。 |
+| `守卫类` | 改动落在以**拦截 / 守卫 / 扫描 / 判定**为职责的文件：`ccswitch/hooks/**`（尤其 `dao-hard-gates.js` 这类 PreToolUse 拦截器）· `ccswitch/scripts/check-*` · `ccswitch/scripts/verify-*` · 任何 lint / scanner / drift 检测入口（`check-alwayson-budget.mjs` / `check-archive-pointers.mjs` / `settings-drift.js`）· `scripts/dao-check.mjs` 与 `scripts/dao-exit-gate.mjs`。**路径可机械判定**，不靠语义判断。 |
 | `结构受阻` | 卡在「不先做一个设计决定就没法动手」的位置。本仓已出现的三种形态：①**写入面归属未定**——要改的东西在 cc-switch DB 的 `providers.settings_config` 里，AI 侧被权限闸拦（#64 是实例，那张单同时是 `需用户`）②**跨仓归属未解**——某份语料/指针该住在哪个仓没定（#48 clause-index 的跨仓语料）③**上游没给 API**——GitHub Projects v2 的自动入板 workflow 无 API，只能人在网页点（见 §六.5 末尾）。 |
 
 > 为什么这几格必须由项目填：概念是通用的（存在「测试全绿但真机是坏的」这类缺陷、存在以拦截判定为职责的代码），
@@ -134,7 +134,7 @@ database id 走 `gh api repos/thoerwink8/windsurf-dao/issues/<n> -q .id`。两�
 ## 六.5 三态归位——什么进 issue，什么留文件，什么进看板
 
 **判据一句话**：说得出「关闭条件 + owner」→ issue；是聚合视图 → 看板；是流水/叙事/跨切 → 文件。
-（dao 通用条款「工作项三态归位」的项目落地，细则正文在 `ccswitch/rules/dao-workitem.md`。）
+（dao 通用条款「工作项三态归位」的项目落地，细则正文在 `ccswitch/rules/dao-dispatch.md` §一。）
 
 | 载体 | 装什么 | 本项目现状 |
 |---|---|---|

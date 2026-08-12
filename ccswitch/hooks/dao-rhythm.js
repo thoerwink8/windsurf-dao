@@ -37,7 +37,7 @@ if (HEARTBEAT_SIG.test(prompt.trim())) {
       hookEventName: "UserPromptSubmit",
       additionalContext:
         "【dao 节律·WAKEUP】[dao-rhythm WAKEUP v1]\n" +
-        "醒来第一动作:Read `ccswitch/rules/dao-longwindow.md` §心跳对账节,按节内次序逐条对账。" +
+        "醒来第一动作:Read `ccswitch/rules/dao-dispatch.md` §七「每次心跳醒来」,按节内次序逐条对账。" +
         "该文件是全文真相源,下面四句只是压缩投影,冲突一律以该文件为准。\n" +
         "㈠心跳·防停摆:监督信号必须独立于作业信道——只靠 task-notification 驱动、任何一路将沉默即饿死整窗;" +
         "故心跳不许断(除了明确 stop:true 的那一轮),且**醒来先对账不凭印象**(在途任务查台账,不查记忆)。\n" +

@@ -81,13 +81,13 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 ### LW-1 · 心跳载荷通道的 compaction 连续性实测 *(2026-08-02 挂账 · owner=帅（下一个长窗的开窗者）)*
 
 **背景**：dao.md 瘦身批 #1 把长窗四条（防停摆 / 收官简报铁序 / 在途水位线 / 自主边界）迁进
-`ccswitch/rules/dao-longwindow.md` §心跳对账节，投递改为「开窗仪式 Read（第一轮）+ 心跳 prompt 载荷（后续轮）」。
+`ccswitch/rules/dao-dispatch.md` §七「每次心跳醒来」，投递改为「开窗仪式 Read（第一轮）+ 心跳 prompt 载荷（后续轮）」。
 
 **为什么是欠账而不是缺陷**：叙事 N10 的诚实边界原话是「compaction 会不会清掉已 armed 的心跳，我不知道」——
 载荷是搭心跳走的，心跳若被清、载荷同去。**这一段至今零实测**，故上线时就按「未验证」标注，没有当成已确认。
 
 **解冻条件（做完这一件即销账）**：下一个长窗里，**compaction 发生之后的第一轮**自查两件事并把结果写回
-`ccswitch/rules/dao-longwindow.md` §📮 投递通道——㈠心跳是否仍 armed；㈡载荷那两句是否仍在 prompt 里。
+`ccswitch/rules/dao-dispatch.md` §七「一轮怎么收尾」——㈠心跳是否仍 armed；㈡载荷那两句是否仍在 prompt 里。
 **两态都要写**（只写成功那态等于没测）。
 
 **在此之前的兜底**：dao.md 帅节存根行的四句留守判据（每句自足，不依赖该文件被读到）。
@@ -95,7 +95,7 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 
 ### LW-2 · cron 常驻心跳兜底的 compaction 连续性实测 *(2026-08-09 挂账 · owner=帅（下一个长窗的开窗者）· 出处：PR #208 对抗复核)*
 
-**背景**：issue #194 落地的 `[dao-heartbeat]` cron 常驻心跳兜底（`ccswitch/rules/dao-longwindow.md`
+**背景**：issue #194 落地的 `[dao-heartbeat]` cron 常驻心跳兜底（`ccswitch/rules/dao-dispatch.md` §七
 一·开窗节①）与 ScheduleWakeup 一样是 **session-only**——它防的是"殿后心跳因限流/API 错/工具报错/
 用户打断没调成"，但它自己扛不扛得住 compaction，与 LW-1 问的是同一个问题，此前一直没有独立编号。
 
@@ -104,7 +104,7 @@ sync 完成后显示 `git diff --stat` 摘要（源文件有未提交变更时�
 
 **解冻条件（做完这一件即销账）**：下一个长窗里，**compaction 发生之后**核实该 session 的
 `[dao-heartbeat]` cron 是否仍能触发（可用下一发唤醒的时间戳与预期间隔比对），把结果写回
-`ccswitch/rules/dao-longwindow.md` §📮 投递通道 LW-2 这一格。**与 LW-1 各自独立销账**，不因其中一条
+`ccswitch/rules/dao-dispatch.md` §七 这一格。**与 LW-1 各自独立销账**，不因其中一条
 测完就假设另一条同态。
 
 **在此之前的兜底**：ScheduleWakeup 心跳（甲①）仍是主驱动，cron 只是补充信道；两路都断才是真正的

@@ -26,7 +26,7 @@
 //     if ($LASTEXITCODE -ne 0) { throw "脱敏失败，拒绝落盘：$src" }   # 别 try/catch 吞掉
 //   Node（mousse-cli 的 scripts/qa/*.mjs 形态）：直接 import ccswitch/lib/redact.js 更省一次进程
 //
-// ── 2026-08-02 全域分布摸底（建护栏前先摸，dao-guard-writing.md 第一条）────────
+// ── 2026-08-02 全域分布摸底（建护栏前先摸，dao-writing-rules.md 第二节第一条）────────
 // 本文件是这组数字的**唯一真相源**（lib 头注指过来，别在两处各记一份）。
 // 命令：`node ccswitch/scripts/dao-redact.mjs --scan <路径>`，逐仓真跑，数字照抄末行 summary。
 //
