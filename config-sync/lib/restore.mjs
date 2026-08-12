@@ -12,6 +12,7 @@ import {
 } from './sqlite.mjs';
 import { applySecrets, commonSecretsPath, countPlaceholders } from './secrets.mjs';
 import { parseScopeArg, wants } from './scope.mjs';
+import { restorePi } from './pi-sync.mjs';
 
 // 把脱敏的 settings 行还原成真实值，并把 ${PROJECT_ROOT}/${HOME} 路径占位符还原成本机路径。
 // JSON 行用 common-secrets.json 合并；非 JSON（如 codex TOML）只还原路径。
@@ -58,6 +59,7 @@ export function runRestore({ only = null, dryRun = false } = {}) {
   if (dryRun) {
     printRestorePreview(snapshots, only);
     if (wants(only, 'terminal')) restoreTerminal({ dryRun: true });
+    if (wants(only, 'pi')) restorePi({ dryRun: true });
     return;
   }
 
@@ -85,6 +87,11 @@ export function runRestore({ only = null, dryRun = false } = {}) {
     terminalResult = restoreTerminal({ dryRun });
   }
 
+  let piResult = null;
+  if (wants(only, 'pi')) {
+    piResult = restorePi({ dryRun });
+  }
+
   console.log('config-sync 恢复完成');
   console.log(`  数据库备份：${backupPath}`);
   console.log(`  settings: ${snapshots.settings.length}`);
@@ -95,6 +102,7 @@ export function runRestore({ only = null, dryRun = false } = {}) {
   console.log(`  proxy_config: ${snapshots.proxy_config.length}`);
   console.log(`  model_pricing: ${snapshots.model_pricing.length}`);
   console.log(`  terminal: ${terminalResult || '跳过'}`);
+  console.log(`  pi: ${piResult ? (piResult.changes.length ? `${piResult.changes.length} 项已写入（重启 pi 生效）` : '跳过（无快照或全跳过）') : '跳过'}`);
   console.log('');
   console.log('请重启 cc-switch，并切换一次 provider，让 cc-switch 重新下发配置到各端。');
 }

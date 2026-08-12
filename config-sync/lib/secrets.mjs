@@ -10,13 +10,16 @@ export const SECRET_PLACEHOLDER = '__CONFIG_SYNC_SECRET__';
 // 字段名命中即视为敏感（大小写不敏感）。
 const SECRET_KEY_RE = /(api[_-]?key|auth[_-]?token|access[_-]?token|secret|password|passwd|app[_-]?secret|bearer|^token$|\.token$)/i;
 
-function isSecretKey(keyName) {
+// 字段名是否命中敏感词表（pi auth 快照的泄漏判定也复用这份，保持单一判据）。
+export function isSecretKey(keyName) {
   return SECRET_KEY_RE.test(keyName);
 }
 
 // 深拷贝 + 按字段名脱敏。返回 { redacted, secrets }。
 // secrets 形如 { "<settingsKey> :: a.b.c": "<realValue>" }。
-export function redactValue(settingsKey, value) {
+// options.isSecretKey：可注入自定义敏感字段名判据（pi auth 的裸 key 字段用，见 pi-sync.mjs）；
+// 缺省用本文件同一份 SECRET_KEY_RE。
+export function redactValue(settingsKey, value, { isSecretKey: isSecret = isSecretKey } = {}) {
   const secrets = {};
 
   function walk(node, dotPath) {
@@ -28,7 +31,7 @@ export function redactValue(settingsKey, value) {
       for (const key of Object.keys(node)) {
         const childPath = dotPath ? `${dotPath}.${key}` : key;
         const child = node[key];
-        if ((typeof child === 'string' || typeof child === 'number') && isSecretKey(key) && String(child).length > 0) {
+        if ((typeof child === 'string' || typeof child === 'number') && isSecret(key) && String(child).length > 0) {
           secrets[`${settingsKey} :: ${childPath}`] = child;
           out[key] = SECRET_PLACEHOLDER;
         } else {
