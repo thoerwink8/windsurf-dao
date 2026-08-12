@@ -140,9 +140,15 @@ node config-sync\lib\sync.mjs --direction=down --yes
 # IDE 终端（cmd → Git Bash）
 .\dao.ps1 set-terminal
 
-# pi 编码代理（按需）：不由 dao 部署，照处方手动配——
-# npm 全局装包 + 写 ~/.pi/agent/{models.json,settings.json}（模板与坑见 ccswitch/stacks/pi.md），
-# 真实 API key 从 new-api 面板生成后只填本地 models.json 一格，然后跑处方 §6 的两条验证命令
+# pi 编码代理（issue #344 起随 config-sync 双轨同步，不再全手动）：
+# - dao.bat 下行/上行新增 pi 范围（选「全部」自动含）：快照 config-sync/common/pi/
+#   （settings.json + themes/ 进 git；auth.json 只放脱敏占位符）
+# - pi auth 真实值（键形如 pi_auth :: <provider>.key）在 config-sync/common-secrets.json——
+#   与「步骤 2 手动复制」是同一份文件，无需额外动作；缺它时下行跳过 auth
+#   （settings/主题照常落位），doctor 的 pi 节会红
+# - sessions/ · models-store.json · bin/ · extensions/ 不同步，换机后由 pi 自建
+# - 下行落位后重启 pi 生效；lastChangelogVersion 被 pi 自己更新属预期，重跑上行导出即回正
+# （npm 装 pi 本体仍照 ccswitch/stacks/pi.md 处方）
 
 # 任意命令加 -DryRun 先预览不写入
 ```
