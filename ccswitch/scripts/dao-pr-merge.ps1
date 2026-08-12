@@ -231,6 +231,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ── 控制台 UTF-8 防呆（issue #339 关单尾巴 · #338）──────────────────────────────
+# 默认 GBK 控制台（含从 Git Bash 调 powershell）下，gh pr view --json 的 UTF-8 中文标题
+# 被按 ANSI 解码毁坏 → ConvertFrom-Json 报「未终止的字符串」直接炸（中文标题 PR 实证）。
+# 在捕获任何外部命令 stdout 之前自设编码，不依赖调用方环境；判据见 dao-shell.md 四坑第 4 条。
+. (Join-Path $PSScriptRoot '..\lib\console-utf8.ps1')
+
 # ── 输出 ─────────────────────────────────────────────────────────────────────
 # （曾有一个 `$script:Skipped` 计数器只被 `Write-Skip` 自增、全脚本无任何读取点，
 #   3.5 步改成遍历清单后它每次还多加 1 —— 2026-08-09 PR #213 对抗官 F5 逮到，本批删除。
@@ -591,12 +597,12 @@ if ($DryRun) {
             Write-Info "  git -C `"$mainWt`" worktree remove `"$selfWt`""
             Write-Info "  git -C `"$mainWt`" pull --ff-only"
             Write-Info "  git -C `"$mainWt`" branch -d $branch      （pull 在前，-d 才判得准）"
-            Write-Info "  或跑收尾脚本（幂等可重跑）：powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $mainWt 'scripts\dao-merge-cleanup.ps1')`" -WorktreePath `"$selfWt`" -Branch $branch -RepoPath `"$mainWt`""
+            Write-Info "  或跑收尾脚本（幂等可重跑；无 pwsh 时把开头 pwsh 换成 powershell）：pwsh -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $mainWt 'scripts\dao-merge-cleanup.ps1')`" -WorktreePath `"$selfWt`" -Branch $branch -RepoPath `"$mainWt`""
         } else {
             Write-Info "  git worktree remove `"$selfWt`""
             Write-Info "  git pull --ff-only"
             Write-Info "  git branch -d $branch      （pull 在前，-d 才判得准）"
-            Write-Info "  或跑收尾脚本（幂等可重跑）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dao-merge-cleanup.ps1 -WorktreePath `"$selfWt`" -Branch $branch"
+            Write-Info "  或跑收尾脚本（幂等可重跑；无 pwsh 时把开头 pwsh 换成 powershell）：pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\dao-merge-cleanup.ps1 -WorktreePath `"$selfWt`" -Branch $branch"
         }
     }
 }

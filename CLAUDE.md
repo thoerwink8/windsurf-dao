@@ -68,18 +68,19 @@ node scripts/dao-check.mjs                    # ★ 等价 `.\dao.bat check`：e
                                               #   SKILL.md 可解析 · git 追踪面无密钥。红了照它打的三行修，契约见脚本头注
 py ccswitch/skills/dao-evolution/scripts/search.py <关键词>   # 搜档案层教训（用 py 不用 python；行为级教训在 dao.md/skill，记忆级在 memory/）
 
-powershell -NoProfile -ExecutionPolicy Bypass -File ccswitch/scripts/dao-claim.ps1 -Action selftest
+pwsh -NoProfile -ExecutionPolicy Bypass -File ccswitch/scripts/dao-claim.ps1 -Action selftest
                                               # 认领协议（两台机 / 两个 AI 抢同一张 issue 时「谁在干哪张单」）的纯函数自测。
                                               #   实际用法：-Action list | readback -Issue <n> | lease -Issue <n>
                                               #   退出码：0 正常 · 1 参数或环境错 · 2 = 回读发现自己该让位（readback 专用）
 
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
                                               # ★ 合并后的本地收尾：worktree remove + prune + pull + `git branch -d`
                                               #   **pull 必须排在删分支前面**：`-d` 的未合并核验参照本地主干，没追平
                                               #   就必然误判 —— 上一版为此自建差集核验再用 `-D` 强删，那一层连同它
                                               #   制造的风险已随 issue #325 删除。幂等可重跑；必须从主仓（不能从
                                               #   -WorktreePath 自己里面）跑；退出码契约见脚本头注 .NOTES。
                                               #   远端分支由仓库设置「合并后自动删 head 分支」负责，脚本不碰
+                                              #   上面两条命令优先用 pwsh（issue #338）；机器没装 PS7 时把开头的 pwsh 换成 powershell，参数相同（5.1 回退全兼容）
 ```
 
 **条款元数据链整体退役（2026-08-12，issue #324 B 批）**：解析器 `ccswitch/lib/clause-parser.mjs`、

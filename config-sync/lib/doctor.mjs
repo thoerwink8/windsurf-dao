@@ -6,6 +6,7 @@ import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 import { sameJson, themeDrift, leakedSecretPaths, countPiSecrets, rehydratePiAuth } from './pi-sync.mjs';
+import { pickPwsh } from './pwsh.mjs';
 
 let problems = 0;
 let warnings = 0;
@@ -173,15 +174,19 @@ function checkExternalTools() {
   const tools = [
     { cmd: 'gh', label: 'GitHub CLI (gh)', installHint: 'winget install GitHub.cli' },
     { cmd: 'uvx', label: 'uv/uvx (Python MCP)', installHint: 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"' },
+    // issue #338：pwsh 缺了只提醒不判失败——5.1 回退仍全兼容，升级属建议（提醒≠失败）。
+    // 判定走 where/which 退出码（见 ./pwsh.mjs 头注），不解析输出文案。
+    { cmd: 'pwsh', label: 'PowerShell 7 (pwsh)', installHint: 'winget install Microsoft.PowerShell', level: 'warn' },
   ];
-  for (const { cmd, label, installHint } of tools) {
+  for (const { cmd, label, installHint, level } of tools) {
     try {
       execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
       });
       pass(`${label} 已安装。`);
     } catch {
-      fail(`${label} 未安装。→ ${installHint}`);
+      if (level === 'warn') warn(`${label} 未安装。→ ${installHint}（5.1 仍可用，仅建议升级）`);
+      else fail(`${label} 未安装。→ ${installHint}`);
       continue;
     }
     if (cmd === 'gh') {
@@ -251,7 +256,7 @@ function checkClaude3pRuntimeMcp(expected) {
       '| Select-Object -ExpandProperty CommandLine',
       '| ConvertTo-Json -Compress',
     ].join(' ');
-    const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim();
+    const raw = execFileSync(pickPwsh(), ['-NoProfile', '-Command', ps], { encoding: 'utf8' }).trim();
     if (raw) commandLines = JSON.parse(raw);
     if (typeof commandLines === 'string') commandLines = [commandLines];
   } catch (error) {

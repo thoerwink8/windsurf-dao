@@ -87,6 +87,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { pickPwsh } = require("./pwsh.js");
 
 const CLASSES = ["universal", "conditional", "product-type"];
 const SEVERITIES = ["warn", "info"];
@@ -427,6 +428,14 @@ function exemptReason(entry, repoName) {
 // （人会照着粘、跑不通、然后不知道该怪谁）。
 function psQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
 
+// issue #338：优先 pwsh、缺席回退 powershell 5.1（判定只看退出码，见 ./pwsh.js 头注）。
+// 复制指令是给人/AI 粘到终端跑的，解释器选生成时机在本机现查；懒 memo 避免每条缺项 spawn 一次。
+let _psInterp = null;
+function psInterp() {
+  if (_psInterp === null) _psInterp = pickPwsh();
+  return _psInterp;
+}
+
 // 生成**零编辑可执行**的复制指令。src 是文件还是目录由**实际 stat** 决定（见头注闸③）。
 // 返回 null = 生成不了（src 不在盘上），调用方据此改写成一句显式的「模板缺失」而不是沉默。
 function copyInstruction(tpl, projectRoot, templatesRoot) {
@@ -438,12 +447,12 @@ function copyInstruction(tpl, projectRoot, templatesRoot) {
   if (st.isDirectory()) {
     // 目录：先建目标目录，再复制**内容**（`\*`）。不写 `Copy-Item <dir> <destParent>` ——
     // 那条的语义随目标存不存在而变（存在则复制成子目录），是经典的"第二次跑就错"。
-    return "powershell -NoProfile -Command " + psQuote(
+    return psInterp() + " -NoProfile -Command " + psQuote(
       "New-Item -ItemType Directory -Force -Path " + psQuote(destAbs) + " | Out-Null; " +
       "Copy-Item -Path " + psQuote(path.join(srcAbs, "*")) + " -Destination " + psQuote(destAbs) + " -Recurse -Force"
     );
   }
-  return "powershell -NoProfile -Command " + psQuote(
+  return psInterp() + " -NoProfile -Command " + psQuote(
     "New-Item -ItemType Directory -Force -Path " + psQuote(path.dirname(destAbs)) + " | Out-Null; " +
     "Copy-Item -LiteralPath " + psQuote(srcAbs) + " -Destination " + psQuote(destAbs) + " -Force"
   );
