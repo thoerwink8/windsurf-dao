@@ -15,11 +15,11 @@
 // 这笔债会一直挂到某次 restore 把 hook 静默抹掉。**当时没有任何机制能发现它。**
 //
 // ── 与既有检查的分工（不重复造轮子）─────────────────────────────────────────
-// · dao-config-guard.js（SessionStart）：查 DB → live 的**单向缺字段**（live 少了什么）。
-//   它查不出反向（live 多出的、源里没有的），而反向正是本检测器要治的那笔债。
-// · dao-scaffold-check.js 的「Hook 未注册」：查 hook **文件**是否被 settings 提及，
-//   只看 live 一侧，不看快照，也不看方向。
-// · 本文件：live ↔ git 快照 双向比对 + 方向判定，可选 `--db` 三方。
+// · dao-config-guard.js / dao-scaffold-check.js：均已退役（职责并入 `node scripts/dao-check.mjs`
+//   一条命令），曾各自查「DB → live 单向缺字段」「hook 文件是否被 settings 提及」，都只看
+//   live 一侧、不看快照、也不看方向。
+// · 本文件：live ↔ git 快照 双向比对 + 方向判定，可选 `--db` 三方——这条职责两者都没做过，
+//   不随它们的退役而失去意义。
 //   hook 面比三样：**是否都有**（basename 身份）· **挂载点/timeout** · **归一化命令串**。
 //   命令串比对**先过仓库根归一化**（issue #58，判据与考古结论见 compareDeployment 头注）。
 //   最后一项是 fortify2-20260726 刀F F3 补的：原先只比 basename，于是「同名但路径被改回
@@ -87,21 +87,20 @@
 // sqlite3 以 `-readonly` 打开 ⇒ 写不了，而不是「我们说好不写」。
 //
 // ── 谁来检查这个检查器（自指）───────────────────────────────────────────────
-// 判据**不用「文件是否存在」**（那是三例 55 天零生效事故的共同死法）。三层：
-//   ① 运行时功能探针 runSelfProbe()：拿一对内存 fixture、故意注入已知漂移，
-//      断言「正例被检出且方向正确 / 负例零误报 / 噪音不误伤」。
-//      比对逻辑若哪天被改瞎（如 dao 归属判据放宽到永不命中 ⇒ 永久报绿），探针立刻变红。
-//      这正是 check-core-loc 被 `-Last 60` 截断致盲 5 天那类事故的对治：
-//      光「跑了」不够，要断言「已知阳性仍被检出」。
-//   ② 真实调用心跳（synthetic 标记）：只有真被 SessionStart 调用过才写得出非 synthetic 记录，
-//      `--selfcheck` 只采信非 synthetic 并报陈旧天数。自测心跳不予采信，防自我染绿。
-//   ③ 接线静态核对（**明说是弱判据**）：dao-scaffold-check.js 源码里是否有调用点、
-//      它自己在 live settings 里是否注册。它证不了「调用点可达」——只有 ② 能证。
+// 判据**不用「文件是否存在」**（那是三例 55 天零生效事故的共同死法）：
+//   运行时功能探针 runSelfProbe()：拿一对内存 fixture、故意注入已知漂移，
+//   断言「正例被检出且方向正确 / 负例零误报 / 噪音不误伤」。
+//   比对逻辑若哪天被改瞎（如 dao 归属判据放宽到永不命中 ⇒ 永久报绿），探针立刻变红。
+//   这正是 check-core-loc 被 `-Last 60` 截断致盲 5 天那类事故的对治：
+//   光「跑了」不够，要断言「已知阳性仍被检出」。
+// （原设计还有「SessionStart 真实调用心跳」「dao-scaffold-check.js 接线静态核对」两层，
+//   随 dao-scaffold-check.js 退役（职责并入 `node scripts/dao-check.mjs`）一并摘除——
+//   本文件目前没有任何自动化调用方，只有 `--selfcheck`/`--providers` 两条人工触发路径。）
 // 残余盲区在 `--selfcheck` 输出末尾与 PR 说明中如实列出，不声称已闭环。
 //
 // 真相源：windsurf-dao/ccswitch/lib/settings-drift.js
-// 调用方：ccswitch/hooks/dao-scaffold-check.js（SessionStart，进程内 require，零新增注册）
-// 自证：node tests/settings-drift.tests.js
+// 调用方：无自动化调用方，手动跑 `node ccswitch/lib/settings-drift.js --selfcheck`（见 dao-verify SKILL.md）
+// 自证：`--selfcheck` 自身跑的 runSelfProbe()（无独立 tests/ 套件）
 
 "use strict";
 
@@ -117,8 +116,6 @@ const LIVE_SETTINGS = path.join(HOME, ".claude", "settings.json");
 const SNAPSHOT_SETTINGS = path.join(ROOT, "config-sync", "common", "settings.json");
 const PATHS_MJS = path.join(ROOT, "config-sync", "lib", "paths.mjs");
 const SECRETS_MJS = path.join(ROOT, "config-sync", "lib", "secrets.mjs");
-const RULE_ECHO_HOOK = path.join(ROOT, "ccswitch", "hooks", "dao-rule-echo.js");
-const SCAFFOLD_HOOK = path.join(ROOT, "ccswitch", "hooks", "dao-scaffold-check.js");
 
 // 运行痕迹目录。测试用 DAO_SETTINGS_DRIFT_STATE_DIR 改写，免得自测心跳污染生产判定
 // ——「自测把自己染绿」正是本检测器要防的病，测试自己更不能犯。
@@ -143,7 +140,6 @@ const MIN_PROBE_CHECKS = 43;
 
 // 软预算：超了就降级并把降级本身报出来（不静默截断 —— check-core-loc 的死法）
 const DEADLINE_MS = 1500;
-const RULE_ECHO_TIMEOUT_MS = 4000;
 const MAX_HOOK_LINES = 6;
 
 // ── 占位符 / 脱敏常量（与 config-sync 对齐，见下方 verifyContractLiterals 守卫）────
@@ -960,7 +956,7 @@ function loadSnapshotClaude(file) {
 
 // ── 主检测 ──────────────────────────────────────────────────────────────────
 /**
- * @param {{real?:boolean, livePath?:string, snapshotPath?:string, skipRuleEcho?:boolean, skipHeartbeat?:boolean}} opts
+ * @param {{real?:boolean, livePath?:string, snapshotPath?:string, skipHeartbeat?:boolean}} opts
  */
 function detect(opts) {
   const o = opts || {};
@@ -968,7 +964,6 @@ function detect(opts) {
   const errors = [];
   const degraded = [];
   let findings = [];
-  let ruleEcho = null;
 
   // ① 功能探针先跑：逻辑本身瞎了的话，后面所有「零发现」都不可信
   let probe = { ok: false, total: 0, failed: [{ name: "probe 未执行", ok: false, detail: "" }], checks: [] };
@@ -995,30 +990,6 @@ function detect(opts) {
     noteError(errors, `读取/比对 settings（live=${livePath} / snap=${snapPath}）`, e);
   }
 
-  // ④ 顺带核 dao-rule-echo 的接线（它自己写过：「靠人记得跑等于没有」）
-  if (!o.skipRuleEcho) {
-    if (Date.now() - t0 > DEADLINE_MS) {
-      degraded.push(`已超 ${DEADLINE_MS}ms 预算，跳过 dao-rule-echo --selfcheck（降级，非通过）`);
-    } else {
-      try {
-        maybeForceError("ruleecho");
-        const r = spawnSync(process.execPath, [RULE_ECHO_HOOK, "--selfcheck"], {
-          input: "", encoding: "utf8", timeout: RULE_ECHO_TIMEOUT_MS, windowsHide: true,
-        });
-        if (r.error) throw r.error;
-        if (r.status === null) {
-          degraded.push(`dao-rule-echo --selfcheck 超时（>${RULE_ECHO_TIMEOUT_MS}ms）未出结论（降级，非通过）`);
-        } else {
-          ruleEcho = {
-            code: r.status,
-            lines: String(r.stdout || "").split(/\r?\n/).filter((l) => l.trim()).slice(1).map((l) => l.trim()),
-            stderr: String(r.stderr || "").trim(),
-          };
-        }
-      } catch (e) { noteError(errors, "dao-rule-echo --selfcheck", e); }
-    }
-  }
-
   const elapsedMs = Date.now() - t0;
   const synthetic = o.real !== true || process.env.DAO_SETTINGS_DRIFT_SELFTEST === "1";
   if (!o.skipHeartbeat) {
@@ -1029,14 +1000,13 @@ function detect(opts) {
       probeOk: probe.ok,
       hard: hardOf(findings).length,
       soft: findings.length - hardOf(findings).length,
-      ruleEchoCode: ruleEcho ? ruleEcho.code : null,
       errors: errors.length,
       degraded: degraded.length,
       cwd: String(o.cwd || ""),
     });
   }
 
-  return { findings, hard: hardOf(findings), probe, ruleEcho, errors, degraded, elapsedMs, livePath, snapPath, roots };
+  return { findings, hard: hardOf(findings), probe, errors, degraded, elapsedMs, livePath, snapPath, roots };
 }
 
 // ── 给 SessionStart hook 的短行输出（只报硬发现 / 探针失败 / 错误 / 降级）──────
@@ -1075,10 +1045,6 @@ function hookLines(opts) {
   if (diff.length) {
     lines.push(`⚙ live 与快照 ${diff.length} 项内容不同（方向不定，需人判）：` + diff.slice(0, 3).map((f) => f.detail).join("；"));
   }
-  if (r.ruleEcho && r.ruleEcho.code !== 0) {
-    lines.push(`✗ dao-rule-echo 接线自检未过（exit ${r.ruleEcho.code}）：` + r.ruleEcho.lines.join(" / "));
-  }
-
   if (lines.length > MAX_HOOK_LINES) {
     const extra = lines.length - MAX_HOOK_LINES;
     return lines.slice(0, MAX_HOOK_LINES).concat([`…另有 ${extra} 条，跑 \`node ccswitch/lib/settings-drift.js\` 看全量`]);
@@ -1087,56 +1053,22 @@ function hookLines(opts) {
 }
 
 // ── --selfcheck：谁来检查这个检查器 ─────────────────────────────────────────
-function readFiredLog() {
-  if (!fs.existsSync(firedLogPath())) return [];
-  return fs.readFileSync(firedLogPath(), "utf8").split(/\r?\n/).filter(Boolean)
-    .map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
-}
-
+// 原设计还有「② SessionStart 真实调用心跳」「③ dao-scaffold-check.js 接线静态核对」两层，
+// 随 dao-scaffold-check.js 退役一并摘除（详见文件头注「谁来检查这个检查器」）；
+// heartbeat() 仍在 detect() 里写运行痕迹到 _tmp/settings-drift/，只是不再被本命令读回来
+// 当「接线是否生效」的判据——本文件目前没有自动化调用方，没有「接线」可证。
 function selfcheck() {
   const out = [];
   let bad = 0;
 
-  // ① 运行时功能探针（强判据：证明比对逻辑此刻仍能检出已知阳性）
+  // 运行时功能探针（强判据：证明比对逻辑此刻仍能检出已知阳性）
   const probe = runSelfProbe();
   if (probe.ok) out.push(`✓ 功能探针 ${probe.total}/${probe.total} 通过（已知阳性仍被检出、已知阴性零误报）`);
   else { bad++; out.push(`✗ 功能探针 ${probe.total - probe.failed.length}/${probe.total}：` + probe.failed.map((f) => `${f.name}${f.detail ? "（" + f.detail + "）" : ""}`).join("；")); }
 
-  // ② 真实调用心跳（强判据：只有真被 SessionStart 调过才写得出非 synthetic 记录）
-  const all = readFiredLog();
-  const real = all.filter((r) => r.synthetic !== true);
-  if (!real.length) {
-    bad++;
-    out.push(`✗ 无真实调用记录（日志 ${all.length} 条，全部为自测/手工）—— 接线可能从未生效。日志：${firedLogPath()}`);
-  } else {
-    const last = real[real.length - 1];
-    const days = (Date.now() - Date.parse(last.at)) / 86400000;
-    out.push(`✓ 有真实调用记录：末次 ${last.at}（${days.toFixed(1)} 天前）· ${last.elapsedMs}ms · 硬发现 ${last.hard}；真实 ${real.length} 条 / 共 ${all.length} 条`);
-    if (days > 7) { bad++; out.push(`  ⚠ 末次真实调用距今 ${days.toFixed(0)} 天，而 SessionStart 应每次进项目都触发 ⇒ 接线大概率已断`); }
-  }
-
-  // ③ 接线静态核对（**弱判据**，明说其局限）
-  try {
-    const src = fs.readFileSync(SCAFFOLD_HOOK, "utf8");
-    const wired = /settings-drift/.test(src);
-    out.push(`${wired ? "✓" : "✗"} dao-scaffold-check.js 源码${wired ? "含" : "不含"}本检测器调用点` +
-      "（弱判据：证不了调用点可达/未被提前 return 跳过，可达性只由 ② 的心跳证明）");
-    if (!wired) bad++;
-  } catch (e) { bad++; out.push(`✗ 读取 dao-scaffold-check.js 失败：${e.message}`); }
-  try {
-    const raw = fs.readFileSync(LIVE_SETTINGS, "utf8");
-    const reg = /dao-scaffold-check/.test(raw);
-    out.push(`${reg ? "✓" : "✗"} 宿主 live settings ${reg ? "已" : "未"}注册 dao-scaffold-check（本检测器的唯一入口）`);
-    if (!reg) bad++;
-  } catch (e) { bad++; out.push(`✗ 读取 live settings 失败：${e.message}`); }
-
   out.push("");
   out.push("残余盲区（不声称闭环）：");
-  out.push("  · 「真实调用」判据是 payload 形状（hook_event_name + transcript_path），可被刻意伪造的 payload 骗过；");
-  out.push("    它挡的是「顺手自测把自己染绿」，挡不住蓄意造假。");
-  out.push("  · ③ 是静态判据，只有 ② 的非 synthetic 心跳能证明「真的被调用过」；而读 ② 的人是本命令，");
-  out.push("    本命令由人手动触发（/dao-verify）⇒ 第三阶「谁记得跑 --selfcheck」未闭环。");
-  out.push("  · 心跳只证明「跑过」，证明不了注入的提醒真被宿主投递给了模型/用户。");
+  out.push("  · 本命令没有自动化调用方，全靠人手动跑（如 /dao-verify）；忘了跑就等于没查。");
   out.push("  · 比对面是白名单（hooks / statusLine / permissions.deny / additionalDirectories / env 键集）；");
   out.push("    白名单外的键只在本命令的软区可见，不触发 SessionStart 提醒。");
   out.push("  · hook 命令串比对（F3）走归一化后全等：占位符/分隔符/引号/空白/大小写差异被有意抹掉。");
@@ -1978,12 +1910,6 @@ function reportLines(r) {
   for (const f of soft) L.push(`  · [${f.face}/${f.kind}] ${f.detail}`);
   if (!soft.length) L.push("  （无）");
 
-  if (r.ruleEcho) {
-    L.push("");
-    L.push(`── dao-rule-echo 接线自检（exit ${r.ruleEcho.code}）──`);
-    for (const l of r.ruleEcho.lines) L.push(`  ${l}`);
-    if (r.ruleEcho.stderr) L.push(`  stderr: ${r.ruleEcho.stderr}`);
-  }
   return L;
 }
 
@@ -2016,7 +1942,7 @@ async function main() {
   // 而「两个信号挤进一个通道」正是本文件反复在治的病。
   if (argv.includes("--providers")) { process.exit(await runProviderCheck(argv)); }
 
-  const r = detect({ real: false, skipRuleEcho: argv.includes("--no-rule-echo") });
+  const r = detect({ real: false });
 
   if (argv.includes("--json")) {
     process.stdout.write(JSON.stringify(r, (k, v) => (v instanceof Set ? [...v] : v), 2) + "\n");
