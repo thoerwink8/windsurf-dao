@@ -9,7 +9,9 @@
       labels.json         —— 标签定义（基础集 + 项目扩展 + 三个 inbox 的措辞）
       project-board.json  —— 看板六列 + 标签→列映射 + 人工步骤清单
       inbox-issue.md      —— 蓄水池 inbox 的 body 骨架（一份服务三个 inbox）
-      pinned-hub-issue.md —— 总览 hub 的 body
+
+    没有「总览 hub」单（issue #360 拍板 6-A 撤）：置顶三槽全给可回话的交互面
+    （待拍板 / 需用户 / 候选），看板入口放仓库 About 栏，纯观测面不开单。
 
     **幂等**：每一步先查现状再动作。标签已存在则跳过（差异只报告，除非 -ForceUpdateLabels）；
     单据按标题匹配，存在则跳过；置顶前先查已置顶清单；看板与字段同理。
@@ -27,10 +29,6 @@
 .PARAMETER ProjectTitle
     看板标题。缺省 "<repo 名> 观测中心"。**已有看板时必须传实际标题**，否则会判成「不存在」。
 
-.PARAMETER HubTitle
-    总览 hub 的单标题。缺省用 canonical 措辞；已有 hub 而标题不同的仓库传实际标题。
-    幂等键是标题，标题差一个字就会被判成「不存在」——这是本脚本的已知弱点，见 .NOTES。
-
 .PARAMETER Extensions
     要建的项目扩展标签名（labels.json 的 labels.extensions）。缺省全建。
     与 -BaseLabelsOnly 互斥。
@@ -41,9 +39,6 @@
 .PARAMETER ForceUpdateLabels
     已存在但与 canonical 有差异的标签，用 `gh label create --force` 覆盖其颜色与描述。
     缺省**不覆盖**——已有仓库的标签描述往往是被人调过的，静默改写别人的措辞不是幂等是破坏。
-
-.PARAMETER ProgressFile
-    项目的流水总账文件名，填进 hub body。缺省 PROGRESS.md。
 
 .PARAMETER BoardFieldName
     看板上承载六列的单选字段名。缺省取 project-board.json 的 field.name。
@@ -73,8 +68,8 @@
     .\dao-issue-bootstrap.ps1 -Repo myorg/myapp
 
 .EXAMPLE
-    # 已有看板/hub 的仓库：传实际标题，否则会被判成不存在
-    .\dao-issue-bootstrap.ps1 -Repo myorg/myapp -ProjectTitle "myapp 观测中心" -HubTitle "📌 总览 · ..." -DryRun
+    # 已有看板的仓库：传实际标题，否则会被判成不存在
+    .\dao-issue-bootstrap.ps1 -Repo myorg/myapp -ProjectTitle "myapp 观测中心" -DryRun
 
 .NOTES
     退出码契约（四态）：
@@ -84,8 +79,8 @@
       3  参数非法——一步都没做
 
     幂等键是**标题**，不是内容。已知弱点：目标单存在但标题差一个字 ⇒ 判成「不存在」⇒ 会建出第二张。
-    没有更好的键——GitHub issue 没有稳定的外部标识位可写。缓解手段是 -HubTitle / -ProjectTitle
-    两个参数 + **永远先 -DryRun 看一遍**。不为此加「模糊标题匹配」：模糊匹配的失败方向是
+    没有更好的键——GitHub issue 没有稳定的外部标识位可写。缓解手段是 -ProjectTitle
+    参数 + **永远先 -DryRun 看一遍**。不为此加「模糊标题匹配」：模糊匹配的失败方向是
     把一张无关的单认成 hub 然后跳过，比多建一张更难发现。
 
     Projects v2 的「新 issue 自动入板」workflow **没有 API**（REST 与 GraphQL 都没有），
@@ -101,11 +96,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Repo,
     [string]$ProjectOwner,
     [string]$ProjectTitle,
-    [string]$HubTitle = '📌 总览 · 从这里一眼对齐全局（看板 + 收件箱 + 在途）',
     [string[]]$Extensions,
     [switch]$BaseLabelsOnly,
     [switch]$ForceUpdateLabels,
-    [string]$ProgressFile = 'PROGRESS.md',
     [string]$BoardFieldName,
     [string]$TemplateDir,
     [string]$WorkDir,
@@ -220,8 +213,7 @@ Write-Ok "仓库可读：$($repoInfo.url)"
 $pathLabels = Join-Path $TemplateDir 'labels.json'
 $pathBoard = Join-Path $TemplateDir 'project-board.json'
 $pathInbox = Join-Path $TemplateDir 'inbox-issue.md'
-$pathHub = Join-Path $TemplateDir 'pinned-hub-issue.md'
-foreach ($p in @($pathLabels, $pathBoard, $pathInbox, $pathHub)) {
+foreach ($p in @($pathLabels, $pathBoard, $pathInbox)) {
     if (-not (Test-Path -LiteralPath $p)) {
         Write-Fail2 "缺 canonical 模板：$p"
         exit 1
@@ -236,8 +228,7 @@ catch {
     exit 1
 }
 $TPL_INBOX = Remove-LeadingComment (Read-Utf8 $pathInbox)
-$TPL_HUB = Remove-LeadingComment (Read-Utf8 $pathHub)
-Write-Ok "canonical 模板 4 份已载入（标签基础集 $($LABELS.labels.base.Count) 个 / 扩展 $($LABELS.labels.extensions.Count) 个 / 看板 $($BOARD.columns.Count) 列）"
+Write-Ok "canonical 模板 3 份已载入（标签基础集 $($LABELS.labels.base.Count) 个 / 扩展 $($LABELS.labels.extensions.Count) 个 / 看板 $($BOARD.columns.Count) 列）"
 
 $extTargets = @()
 if ($BaseLabelsOnly) {
@@ -297,12 +288,12 @@ else {
 }
 
 # ── 阶段二：常设单 + 置顶 ────────────────────────────────────────────────────
-$issueNumbers = @{}   # 池标签名 / '_hub' → 编号
+$issueNumbers = @{}   # 池标签名 → 编号
 if ($SkipIssues) {
     Write-Head '阶段二 · 常设单与置顶（-SkipIssues 跳过）'
 }
 else {
-    Write-Head '阶段二 · 常设单（蓄水池 inbox × N + 总览 hub）'
+    Write-Head '阶段二 · 常设单（蓄水池 inbox × N）'
     $existingIssues = Invoke-GhJson -GhArgs @('issue', 'list', '--repo', $Repo, '--state', 'all', '--limit', "$IssueScanLimit", '--json', 'number,title')
     if ($null -eq $existingIssues) { $existingIssues = @() }
     Write-Info "已扫描 $(@($existingIssues).Count) 张单用于标题查重（上限 $IssueScanLimit）"
@@ -352,48 +343,10 @@ else {
         }
     }
 
-    # 总览 hub（最后建：body 要引用上面几张单的真实编号）
-    $hubExisting = $existingIssues | Where-Object { $_.title -eq $HubTitle } | Select-Object -First 1
-    if ($null -ne $hubExisting) {
-        $issueNumbers['_hub'] = $hubExisting.number
-        Write-Skip2 "总览 hub「$HubTitle」—— 已存在（#$($hubExisting.number)），跳过"
-    }
-    else {
-        function Get-Ref([string]$k) {
-            if ($issueNumbers.ContainsKey($k)) { return '#' + $issueNumbers[$k] }
-            return '#待定'
-        }
-        $projUrl = "https://github.com/orgs/$ProjectOwner/projects/?query=$([uri]::EscapeDataString($ProjectTitle))"
-        $hubBody = Expand-Placeholder $TPL_HUB @{
-            '<PINNED_DECISION_ISSUE>' = (Get-Ref '待拍板')
-            '<PINNED_USER_ISSUE>'     = (Get-Ref '需用户')
-            '<CANDIDATE_HUB_ISSUE>'   = (Get-Ref '候选')
-            '<PROJECT_TITLE>'         = $ProjectTitle
-            '<PROJECT_URL>'           = $projUrl
-            '<OWNER>'                 = $repoOwner
-            '<REPO>'                  = $repoName
-            '<PROGRESS_FILE>'         = $ProgressFile
-        }
-        if ($DryRun) {
-            Write-Plan "建总览 hub「$HubTitle」+ 置顶"
-            Write-Note 'DryRun 下 hub body 里的收件箱编号只能填「#待定」——它们要等上面几张单真建出来才有号；实跑时按真号填。'
-        }
-        else {
-            $hubFile = Join-Path $WorkDir 'pinned-hub.md'
-            Write-Utf8 $hubFile $hubBody
-            $r = Invoke-Gh -GhArgs @('issue', 'create', '--repo', $Repo, '--title', $HubTitle, '--body-file', $hubFile)
-            if ($r.Ok) {
-                $again = Invoke-GhJson -GhArgs @('issue', 'list', '--repo', $Repo, '--state', 'all', '--limit', '30', '--json', 'number,title')
-                $hit = $again | Where-Object { $_.title -eq $HubTitle } | Select-Object -First 1
-                if ($null -ne $hit) { $issueNumbers['_hub'] = $hit.number; Write-Ok "总览 hub 已建（#$($hit.number)）" }
-                else { Write-Fail2 '总览 hub 建单结果未确认' }
-            }
-            else { Write-Fail2 "总览 hub 建单失败（gh exit $($r.Code)）" }
-        }
-        Write-Note "hub body 里的看板链接是按标题拼的搜索地址；看板建好后把它换成真实 URL（重跑本脚本不会改已建的 body）。"
-    }
+    # 没有总览 hub 单（issue #360 拍板 6-A 撤）：置顶三槽全给可回话的交互面，
+    # 看板入口放仓库 About 栏（脚本建不了 About 栏，在末尾人工步骤里提示）。
 
-    # 置顶：GitHub 每仓上限 3 个，按「待拍板 → 需用户 → hub」顺序
+    # 置顶：GitHub 每仓上限 3 个，按 labels.json base 顺序「待拍板 → 需用户 → 候选」
     Write-Head '阶段二.5 · 置顶（gh api graphql · pinIssue mutation）'
     $qPinned = 'query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pinnedIssues(first:3){nodes{issue{number title}}}}}'
     $pinnedResp = Invoke-GhJson -GhArgs @('api', 'graphql', '-f', "query=$qPinned", '-f', "owner=$repoOwner", '-f', "name=$repoName")
@@ -407,7 +360,6 @@ else {
     foreach ($pl in @($LABELS.labels.base | Where-Object { $_.pool -eq $true -and $_.inbox.pinned -eq $true })) {
         $pinOrder += [pscustomobject]@{ Key = $pl.name; Label = $pl.inbox.title }
     }
-    $pinOrder += [pscustomobject]@{ Key = '_hub'; Label = $HubTitle }
 
     foreach ($p in $pinOrder) {
         if (-not $issueNumbers.ContainsKey($p.Key)) {
@@ -509,7 +461,10 @@ else {
             if ($c.auto -eq $true) {
                 if ($c.source -eq 'state') { $how = "state=$($c.match.state)" }
                 elseif ($c.source -eq 'label') { $how = "label ∈ [$(@($c.match.labels_any) -join ', ')]" }
-                elseif ($c.source -eq 'label-combo') { $how = "open ∧ label ∈ [$(@($c.match.labels_any) -join ', ')] ∧ 无 [$(@($c.match.labels_none) -join ', ')]" }
+                elseif ($c.source -eq 'label-combo') {
+                    $how = "open ∧ label ∈ [$(@($c.match.labels_any) -join ', ')]"
+                    if ($c.match.labels_none) { $how += " ∧ 无 [$(@($c.match.labels_none) -join ', ')]" }
+                }
             }
             Write-Info ("  $($c.order). $($c.name.PadRight(4)) ← $how")
         }

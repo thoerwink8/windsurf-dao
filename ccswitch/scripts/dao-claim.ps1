@@ -6,15 +6,17 @@
     要防的事：同一个人两台电脑，或者两个 AI 各当一个同事，两边都从同一个队列里领单——
     没有标注，两边会各自开工同一张单，白干一份还可能撞 PR。
 
-    协议只用两层，不新建任何标签：
-      信号位 = 既有的 `在途` 标签（语义不变）——领活循环一条命令就能把被领的单筛掉；
-      详情层 = 一条固定格式评论——谁 / 哪台机 / 自报租期，**时间由 GitHub 盖**。
+    协议只有一层：一条固定格式评论——谁 / 哪台机 / 自报租期，**时间由 GitHub 盖**。
+    它是唯一带过期语义的一层。（2026-08-13 issue #360 拍板 2-B：`在途` 标签整个退役，
+    它此前兼任的「有人在干」信号位随之取消。不能留半个引用的理由：label 删掉之后
+    `-label:在途` 在 gh 搜索里**静默不过滤**——「找不到标签」和「没人认领」在输出里
+    逐字节相同，已认领的单会原样回到可领清单，撞车病回归而没有任何东西变红。）
 
     改这个脚本前必须知道的四条不变量：
 
     1. **认领的单位是「机器 + 宿主」，不是单个会话，也不是单个 agent。**
-       协调者和它派出去的工人跑在同一台机上，共享同一个认领；工人交付时不摘 `在途`，
-       摘它发生在协调者销账那一刻。分组键因此是 `<机器名>/<宿主>` 两格——
+       协调者和它派出去的工人跑在同一台机上，共享同一个认领；工人交付**不**释放认领，
+       释放（dao-release:）发生在协调者销账那一刻。分组键因此是 `<机器名>/<宿主>` 两格——
        只按机器名分组会产生四种危险答案（同机另一个宿主的撤回把自己的认领一起杀掉 /
        两个宿主各认领一次后发覆盖先发 / 接管指名一个宿主时另一个连坐除名 / 跨宿主冒领续命）。
 
@@ -51,19 +53,20 @@
       ① 先查盘上有没有活动（那台机在租期内推过东西吗）——有活动 ⇒ 它没死只是忘了续租 ⇒
          不接管，留一条续租提醒就走；
       ② 零活动 ⇒ 留一条 dao-takeover: 评论，**旧的认领评论一个字不动**（历史只增不改）；
-      ③ 接管评论落地之后才发自己的 dao-claim:。`在途` 标签不摘也不加——接管是换人不是换状态。
-    谁可以摘 `在途`：只有当前认领的那台机（销账时）与走完三步的接管方。
-    第三方「顺手帮忙摘一下」是禁止的——那恰好抹掉了唯一的撞车证据。
+      ③ 接管评论落地之后才发自己的 dao-claim:。
+    谁可以释放认领（dao-release:）：只有当前认领的那台机（销账时）与走完三步的接管方。
+    第三方「顺手代发释放」是禁止的——那恰好抹掉了唯一的撞车证据。
 
     冲突：先到者胜，判据是 GitHub 的 createdAt，不是本地时间也不是谁手快。
     `gh issue comment` 是追加——两条认领都会成功、都不报错，撞车在写侧完全静默，
     **只有读侧看得见**，所以认领之后必须回读一次。
 
-    什么时候不需要这套：一台机器一个会话的项目，`在途` 标签单独就够了。
+    什么时候不需要这套：一台机器一个会话的项目——没有第二个认领方可撞，
+    「进行到哪」看板列与树备注一眼可见，不必发认领评论。
 
 .PARAMETER Action
     selftest  纯函数自测（不碰网络，唯一可无条件复跑的一档）
-    list      领活队列：把被认领的单摘掉
+    list      领活队列：全列 open 单，被认领的标出持有人（信号只在评论租约里，无 label 位）
     readback  回读某张单，算出每个「机器/宿主」桶当前有效的认领，并判自己该不该让位
     lease     算自己这条租约已经跑了多久
 
@@ -91,7 +94,6 @@ param(
     [string]$MyHost = $env:COMPUTERNAME,
     [string]$MyRuntime = 'cc',
     [string]$MySession = '',
-    [string]$Label = '在途',
     [string]$QueueLabel = '任务'
 )
 
@@ -292,11 +294,34 @@ switch ($Action) {
     'selftest' { exit (Invoke-SelfTest) }
 
     'list' {
-        # 领活队列：用 GitHub 搜索语法把被认领的单摘掉。
+        # 领活队列。旧过滤式 `label:任务 -label:在途` 已随 `在途` 退役（issue #360）——
+        # label 删掉后 `-label:X` 静默不过滤，已认领的单会原样回到可领清单（撞车回归）。
+        # 现在唯一信号源是认领评论，三步：
+        #   ① 全列队列；② `dao-claim in:comments` 粗筛「评论里出现过认领痕迹」的单
+        #   （只多不少：已释放/已过期的也命中，交给 ③ 精算。反方向的漏有一个已知窗口：
+        #   GitHub 搜索索引有延迟，刚发的认领可能搜不到——所以认领动作之后必须 readback，
+        #   list 只是初筛，不是防撞的最后一道）；③ 命中的逐单拉评论算有效认领，标出持有人。
         # ⚠ 刻意不走 jq —— PowerShell 5.1 会把传给 gh 的 jq 表达式里的双引号静默吃掉，
-        #   含中文的 index("在途") 到了 gh 那边成了 index(在途)，报 failed to parse。
-        & gh issue list --state open --search "label:$QueueLabel -label:$Label" --json number,title --limit 50
-        exit $LASTEXITCODE
+        #   含中文的 index("…") 到了 gh 那边少了引号，报 failed to parse。
+        $raw = & gh issue list --state open --label $QueueLabel --json number,title --limit 50
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $queue = @($raw | ConvertFrom-Json)
+        if ($queue.Count -eq 0) { Write-Host "队列（label:$QueueLabel）当前为空。"; exit 0 }
+        $raw2 = & gh issue list --state open --search "label:$QueueLabel dao-claim in:comments" --json number --limit 50
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $touched = @{}
+        foreach ($it in @($raw2 | ConvertFrom-Json)) { $touched[[string]$it.number] = $true }
+        foreach ($it in $queue) {
+            if ($touched.ContainsKey([string]$it.number)) {
+                $eff = Get-EffectiveClaim -Marks (Get-IssueMarks -Number $it.number)
+                if ($eff.Count -gt 0) {
+                    Write-Host ("#{0}  {1}   [已认领：{2}]" -f $it.number, $it.title, (@($eff.Keys) -join ' '))
+                    continue
+                }
+            }
+            Write-Host ("#{0}  {1}" -f $it.number, $it.title)
+        }
+        exit 0
     }
 
     'readback' {
