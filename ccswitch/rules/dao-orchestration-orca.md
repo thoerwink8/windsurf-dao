@@ -94,7 +94,8 @@ Edit 级小活与纯问答不弹。
    worker_done——这七样都不是释放理由。
    **合并链的 -RepoPath 禁手抄，从 PR 反查**（2026-08-12 实咬：两棵 `dao-batch-*` 树只差一词，
    语境切换时手打抄串，被脚本基点核对拦下）：`gh pr view <N> --json headRefName` →
-   `orca worktree show --worktree "branch:<head>"` 取 `worktreePath` 传给脚本——凡是能从
+   `orca worktree show --worktree "branch:<head>"` 取 `.result.worktree.path` 传给脚本
+   （`worktreePath` 是 terminal show 的字段名，两者不同——首跑就取错过一次）——凡是能从
    真相源推导的值都推导，不转写。
 5. **恢复条件化**：`worker-show` 判 ready（继续等）/ failed·stopped（`--retry-of` 重起，位置显式重选不默继承）/
    outcome_unknown（stop 后再查或显式 abandon），同一 task 连败 3 次 dispatch 自动熔断。
