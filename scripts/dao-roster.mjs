@@ -9,9 +9,13 @@
 // 探测失败一律标 absent/unknown，不炸——探测器的职责是报告现状，不是维护面子。
 import { spawnSync } from "node:child_process";
 
+// Windows 下必须 shell 解析：npm 装的 CLI 只有 .cmd/.ps1 垫片没有 .exe，
+// 裸 spawnSync 探不到（pi 实测被误报 absent，2026-08-12）。
+const SHELL = process.platform === "win32";
+
 function probe(cmd, args = ["--version"], timeoutMs = 4000) {
   try {
-    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true });
+    const r = spawnSync(cmd, args, { encoding: "utf8", timeout: timeoutMs, windowsHide: true, shell: SHELL });
     if (r.error || r.status !== 0) return { available: false };
     const ver = String(r.stdout || r.stderr || "").trim().split(/\r?\n/)[0].slice(0, 80);
     return { available: true, version: ver || "unknown" };
@@ -22,7 +26,7 @@ function probe(cmd, args = ["--version"], timeoutMs = 4000) {
 function probePi() {
   const base = probe("pi");
   if (!base.available) return base;
-  const m = spawnSync("pi", ["models", "--json"], { encoding: "utf8", timeout: 6000, windowsHide: true });
+  const m = spawnSync("pi", ["models", "--json"], { encoding: "utf8", timeout: 6000, windowsHide: true, shell: SHELL });
   if (!m.error && m.status === 0 && m.stdout) {
     try {
       const doc = JSON.parse(m.stdout);
