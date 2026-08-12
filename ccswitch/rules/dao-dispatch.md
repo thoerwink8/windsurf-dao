@@ -107,15 +107,15 @@ A. 照此派   B. 调整（说明哪单换谁）   C. 照此派，且本窗口�
    新起终端生效**（别家不吃这两个参数，指定 provider/model 走低层配方），`--effort` 必须搭配 `--model`，
    两者都不能与 `--terminal` 复用同传。**读回执**（`launch.effective`、setup 状态）再继续，
    失败看 `stage`/`effects` 不盲重试。
-   **Claude 族工兵就绪后，同一分钟内切到 auto mode**（用户 2026-08-12 拍板：新工兵默认 auto mode；
-   `worker-start` 没有这个参数）：worker-start 一返回就连做——`--enter` 补一发（回车常被吞）→
-   `orca terminal send --text "<ESC>[Z"`（Shift+Tab 的 PTY 编码，PowerShell 写 `"$([char]27)[Z"`）
-   循环 manual→accept edits→plan→auto，**每按一次读屏核对屏底状态行**，见「⏵⏵ auto mode on」才停手。
-   窗口期功能无害（工兵读完任务书才发第一条命令），但**别把烧起来没有的观察排在切模式前面**——
-   那会把窗口拖到用户眼皮底下。审批弹窗挂着时按了不生效，先答掉弹窗再切；别家终端无此芯片，跳过。
-   **零窗口的两条路（写 worktree 级 `.claude/settings.local.json` 的 defaultMode / `claude
-   --permission-mode bypassPermissions` 起进程）2026-08-12 实测均被宿主权限分类器拦死**——权限面
-   归用户，AI 不绕；用户一次性授权后才可改走（拍板记录见 issue #324）。
+   **Claude 族工兵出生即 auto mode**（用户 2026-08-12 拍板）：机制是**用户级** `~/.claude/settings.json`
+   的 `defaultMode: "auto"`，由进 git 的幂等工具 `scripts/dao-auto-mode.mjs` 三层改齐
+   （live 设置 + cc-switch DB + config-sync 快照），换机配完 provider 后由用户重跑一次即带。
+   就绪后读屏核对一次屏底「⏵⏵ auto mode on」作兜底验证。见「manual mode on」⇒ 用户级设置没生效：
+   查 `~/.claude/settings.json` 的 defaultMode、该仓有没有 `.claude/settings.local.json` 锁回 manual——
+   **AI 不能隔空替工兵按审批或切模式（权限分类器拦死），只能报用户处置**。别家终端无此芯片，跳过。
+   > 历史脚注：AI 代写 settings / 带 `--permission-mode` 起进程两路被分类器拦死的实测不变；
+   > 项目级 `.claude/settings.json` 的 auto 自 Claude Code v2.1.142 被设计性忽略（官方明文：
+   > 仓库不能给自己授 auto），随仓携带方案证伪。正解＝用户级、用户亲手跑工具（拍板见 issue #324）。
 4. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
    用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
    `worker-retain`）→ 全处理完才 `--ack`。超时 / 终端空闲 / 心跳 / status / question / escalation /
@@ -244,10 +244,11 @@ A. 照此派   B. 调整（说明哪单换谁）   C. 照此派，且本窗口�
 - 🔴 **派完看一眼首回合真的烧起来了**：任务书卡在输入框、回车被吞，是真发生过的形态。
   判据：终端预览里计费 / API 时长在动才算开跑；躺着的补一发 `terminal send --enter` 即活。
   **「送到了」不等于「跑起来了」。**
-- 🔴 **卡住这件事不靠人眼发现**：工兵终端的审批弹窗不产生任何编排消息，收活等待对它是瞎的——
-  在跑的工兵除 `check --wait` 外必须配一个看门狗（周期读屏，异常即上报）。
-  **发现卡住第一动作是读屏底那行模式**：见「manual mode on」即根因，逐条帮它按同意是跑步机，
-  根治是隔空切 auto mode（配方见上 §三.3）。
+- 🔴 **卡住这件事不靠人眼发现**：卡住的形态很多（回车被吞 / 限流 / 分类器拦截 / 审批弹窗等），
+  都不产生编排消息，收活等待对它们是瞎的——在跑的工兵除 `check --wait` 外必须配一个看门狗
+  （周期读屏，异常即上报）。**发现卡住第一动作是读屏底那行模式**：见「manual mode on」⇒
+  用户级 auto 没生效，查 `~/.claude/settings.json` 与该仓 local 锁（见上 §三.3）；
+  AI 无法替工兵按审批或切模式，弹窗挂着只能报用户。
 - 日常观测只看三样：`worker-show`（状态 + 终端预览）+ 心跳 + 提交流，不翻别的。
   直接翻工兵的会话文件只作事故取证的最后手段。
 - **「Setup failed」通报点名的是 setup 终端，不是工兵**——先看 agent 终端在不在烧再处置
