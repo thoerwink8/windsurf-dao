@@ -99,7 +99,7 @@ windsurf-dao (源仓库, sidecar workspace)
 
 `link-claude` 做两件事，幂等可重复跑：
 
-1. **symlink** `ccswitch/{skills,commands,agents}` 下的 `dao-*` 项到 `~/.claude/{skills,commands,agents}`（skills 链目录，commands/agents 链文件）。
+1. **symlink** `ccswitch/{skills,commands,agents}` 到 `~/.claude/{skills,commands,agents}`（skills 链目录，commands/agents 链文件）。skills 是单层清单制：全部 skills 减 `Get-InternalOnlySkills` 排除清单（不看名字前缀，issue #340）；commands/agents 仍按各自 Filter。
 2. **幂等追加** `ccswitch/dao.md` 的 `@import` 到 `~/.claude/CLAUDE.md`——已存在则跳过，不重复写。
 
 跑完**重启 Claude Code 会话**（或 `/clear`）才能让新的 skills/commands/agents 被识别。
@@ -123,7 +123,7 @@ Windsurf 用 frontmatter 的 4 种 trigger 控制规则加载时机。Claude Cod
 | Windsurf trigger | 语义 | Claude Code 对应 | 落地 |
 |---|---|---|---|
 | `always_on` | 每条消息常驻 | `CLAUDE.md` 的 `@import` | `ccswitch/dao.md` 全局注入 |
-| `model_decision` | 模型判断相关才加载 | **skills 渐进披露** | `ccswitch/skills/dao-*/`，按 `description` 自动调度全文 |
+| `model_decision` | 模型判断相关才加载 | **skills 渐进披露** | `ccswitch/skills/*/`（全部 skills 减内部件，单层清单制），按 `description` 自动调度全文 |
 | `manual` | 用户显式调用 | **slash command** | `ccswitch/commands/dao-*.md`，`/dao-dev` 等 |
 | `glob` | 匹配文件路径时触发 | skill + 可选 hook | 做成 skill 按需加载；需路径硬触发时配 hook |
 
@@ -135,9 +135,9 @@ Windsurf 用 frontmatter 的 4 种 trigger 控制规则加载时机。Claude Cod
 windsurf-dao/
 ├── ccswitch/                 ← 唯一真相源
 │   ├── dao.md              ← always_on 根基（经 @import 全局注入）
-│   ├── skills/dao-*/       ← 9 skills（disable-model-invocation，用户 /name 手动触发）
-│   ├── commands/dao-*.md   ← 10 slash commands
-│   ├── agents/dao-*.md     ← 8 subagents（服务 dao-pyramid 金字塔调度）
+│   ├── skills/*/           ← 全部 skills 减内部件部署（绝大多数 disable-model-invocation 用户 /name 触发，grill-me 例外）
+│   ├── commands/dao-*.md   ← slash commands（随目录变）
+│   ├── agents/dao-*.md     ← subagents（随目录变，服务 dao-pyramid 金字塔调度）
 │   └── stacks/             ← 技术栈处方
 └── dao.ps1                 ← link-claude（Codex skills 由 cc-switch store 写，dao 不参与）
 ```
