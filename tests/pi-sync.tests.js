@@ -28,13 +28,13 @@ function w(rel, content) {
   return p;
 }
 
-const CANARY_KEY = "sk-CANARYaaaabbbbccccddddeeee";
+const CANARY_KEY = "sk-CANARYaaab";  // 合成串刻意 <20 字符：不命中 exit-gate 的 sk-{20,} 卫生正则；脱敏/泄漏判据按字段名走，不依赖值长
 
 console.log("\n=== ① auth 脱敏往返（导出 → 恢复 → 原样）===");
 {
   const auth = {
     deepseek: { type: "api_key", key: CANARY_KEY },
-    openai: { type: "api_key", key: "sk-openai-CANARY-1111" },
+    openai: { type: "api_key", key: "sk-canary-openai" },
     proxy: { type: "none", note: "纯文本不脱敏" },
   };
   const { redacted, secrets } = P.redactPiAuth(auth);
