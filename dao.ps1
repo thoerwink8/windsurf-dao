@@ -1381,6 +1381,11 @@ console.log(prev);
 # ── 入口 ──
 
 switch ($Action) {
+    "check" {
+        # 全系统唯一体检命令。二值退出（0 好 / 1 坏），契约在 scripts/dao-check.mjs 头注。
+        & node (Join-Path $DaoRoot "scripts/dao-check.mjs")
+        exit $LASTEXITCODE
+    }
     "status" {
         Invoke-Status
     }
@@ -1448,6 +1453,7 @@ switch ($Action) {
     dao.bat --persona                         Persona mode switch
 
   Actions (via dao.bat <action> or .\dao.ps1 <action>):
+    check                                     体检：这套系统现在是好的吗（exit 0 好 / 1 坏）
     status                                    Show dao source info and global link status
     codegraph [-DryRun]                       Install/repair CodeGraph + register MCP + init project
     codegraph <project-path>                  Install + init specified project
