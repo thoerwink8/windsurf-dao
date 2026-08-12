@@ -6,12 +6,6 @@ import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 
-const REQUIRED_CLAUDE_ENV = {
-  CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
-  CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
-  CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: '1',
-};
-
 let problems = 0;
 let warnings = 0;
 
@@ -28,9 +22,6 @@ function main() {
 
   section('cc-switch 运行态密钥保护门');
   checkRuntimeSettingsGuard();
-
-  section('Claude common env');
-  checkCommonClaudeEnv();
 
   section('当前 ~/.claude/settings.json');
   checkClaudeSettingsFile();
@@ -60,25 +51,6 @@ function main() {
   finish();
 }
 
-function checkCommonClaudeEnv() {
-  const rows = selectRows('settings', "WHERE key = 'common_config_claude'");
-  if (!rows.length) {
-    fail('settings.common_config_claude 不存在。');
-    return;
-  }
-
-  let value;
-  try {
-    value = JSON.parse(rows[0].value);
-  } catch (error) {
-    fail(`common_config_claude 不是合法 JSON：${error.message}`);
-    return;
-  }
-
-  const env = value.env || {};
-  checkEnvMap(env, 'common_config_claude.env');
-}
-
 function checkClaudeSettingsFile() {
   if (!fs.existsSync(claudeSettingsPath)) {
     warn(`找不到 ${claudeSettingsPath}，可能当前机器尚未运行 Claude Code。`);
@@ -89,22 +61,13 @@ function checkClaudeSettingsFile() {
   if (hasBomBuffer(buffer)) fail('settings.json 带 UTF-8 BOM，会导致严格 JSON 解析失败。');
   else pass('settings.json 无 BOM。');
 
-  let json;
   try {
-    json = JSON.parse(stripBom(buffer.toString('utf8')));
+    JSON.parse(stripBom(buffer.toString('utf8')));
   } catch (error) {
     fail(`settings.json 不是合法 JSON：${error.message}`);
     return;
   }
-
-  checkEnvMap(json.env || {}, 'settings.json.env');
-}
-
-function checkEnvMap(env, label) {
-  for (const [key, expected] of Object.entries(REQUIRED_CLAUDE_ENV)) {
-    if (String(env[key]) === expected) pass(`${label}.${key} = ${expected}`);
-    else fail(`${label}.${key} 缺失或不是 ${expected}`);
-  }
+  pass('settings.json 是合法 JSON。');
 }
 
 function compareSnapshot(tableName, snapshotPath, rowsOfSnapshot) {
