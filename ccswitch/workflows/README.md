@@ -278,11 +278,11 @@
 
 **目前没有**：曾有 `tests/dao-harvest.tests.js` 把 `agent` stub 成罐头结果、整条编排跑一遍验
 args 契约与数据流，但随 18 套测试收成 2 套、三个聚合入口收成 `scripts/dao-check.mjs` 一条
-（commit `75e6f32`）已被移除，没有迁移到新的 2 套之一。当前 `dao check` 只保证
-`ccswitch/workflows/*.js` 的 **meta 是纯字面量 + 装载形态可编译**（货架级契约，见下方
-`dao-consolidate.js` 一节），验不到 workflow 的 args 契约与编排数据流本身——真实模型行为
-（prompt 有效性、schema 是否被模型遵守、`pipeline` 在真 harness 下的并发度）与
-**收割出来的候选质量**同样验不到。
+（commit `75e6f32`）已被移除，没有迁移到新的 2 套之一。**`dao check` 的扫描面不含
+`ccswitch/workflows/`**——「meta 纯字面量 + 装载形态可编译」是 workflow 运行时装载器自身的
+行为，装载失败只在真跑那一刻暴露（详见下方 `dao-consolidate.js` 一节）；args 契约、编排数据流、
+真实模型行为（prompt 有效性、schema 是否被模型遵守、`pipeline` 真并发度）与
+**收割出来的候选质量**当前全部没有回归网。
 
 ---
 
