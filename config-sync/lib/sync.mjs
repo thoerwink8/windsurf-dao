@@ -521,7 +521,7 @@ function preflight() {
     issues.push({ msg: 'git 未安装', fix: '请安装 Git：https://git-scm.com/download/win' });
   }
 
-  // 2. sqlite3（缺失时按 vendor/sqlite-tools.json 下载 + 校验 SHA256 + 解压，首次需联网）
+  // 2. sqlite3（2026-08-12 起下载器已退役：缺了报错提示手动装 sqlite3 / 设 SQLITE3_PATH）
   try {
     ensureSqlite3();
   } catch (e) {

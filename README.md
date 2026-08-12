@@ -196,8 +196,7 @@ windsurf-dao/                  # 真相源
 │   ├── commands/              # 命令（/dao-* slash command）
 │   └── agents/                # 子代理（dao-loop 金字塔调度）
 ├── config-sync/               # 配置同步（dao.bat 四合一入口）
-├── dao.ps1                    # 链接管理
-└── global_rules.md            # 元规则
+└── dao.ps1                    # 链接管理
 ```
 
 **变更流**：编辑 windsurf-dao → 所有 workspace 即时可见 → `/dao-commit` 提交。
