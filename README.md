@@ -40,7 +40,7 @@
 ```
 
 > Windsurf 时代的「9 文件 5 层规则架构」（global_rules/execution/shell/quality…）已随双栈退役归入历史，
-> `global_rules.md` 留档但带 DEPRECATED 标记。
+> `global_rules.md` 已于 2026-08-12 删除（git 历史可找回）。
 
 ## 包含什么
 
@@ -111,7 +111,7 @@ config-sync/
 
 ### 元规则（`global_rules.md`）
 
-31 行跨项目元规则。Claude Code 侧已整合进 `ccswitch/dao.md`，此文件保留为历史参考。
+31 行跨项目元规则，内容已整合进 `ccswitch/dao.md`；原文件已于 2026-08-12 删除（git 历史可找回）。
 
 ### 项目知识文件
 
@@ -196,8 +196,7 @@ windsurf-dao/                  # 真相源
 │   ├── commands/              # 命令（/dao-* slash command）
 │   └── agents/                # 子代理（dao-loop 金字塔调度）
 ├── config-sync/               # 配置同步（dao.bat 四合一入口）
-├── dao.ps1                    # 链接管理
-└── global_rules.md            # 元规则
+└── dao.ps1                    # 链接管理
 ```
 
 **变更流**：编辑 windsurf-dao → 所有 workspace 即时可见 → `/dao-commit` 提交。

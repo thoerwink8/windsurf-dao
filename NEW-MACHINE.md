@@ -62,7 +62,7 @@ node config-sync\lib\doctor.mjs
 |---|---|---|
 | **Git** | 克隆仓库 | `git --version` |
 | **Node.js** | config-sync 脚本、dao hooks | `node --version` |
-| **sqlite3** | 读写 cc-switch DB | `sqlite3 -version`，或运行 `config-sync/setup-sqlite.ps1`（项目已内置安装包） |
+| **sqlite3** | 读写 cc-switch DB | `sqlite3 -version`；找不到时手动安装或设 `SQLITE3_PATH` 指向它（见下方说明） |
 | **cc-switch** 桌面端 | 配置中心与下发引擎 | 已安装并能启动 |
 | **Windows Developer Mode** | symlink 权限（dao.ps1 链接） | 设置 → 系统 → 开发者选项 → 开 |
 | **NTFS 8.3 短名 + junction 建得起来** | **只影响跑回归网，不影响部署**：`tests/hard-gates.tests.js` 的 G2 那几组要造「8.3 短名家目录」与「`.claude` 是 junction」两种 fixture（issue #133/#134） | `node tests/hard-gates.tests.js` —— 造不出来时它的**前置断言会自己红**并写明「只是**没测到**，不是通过」；别把那几条红读成代码坏了。`mklink /J` 在 NTFS 上一般不需要管理员（本机实测不需要），8.3 短名的查询命令 `fsutil 8dot3name query C:` **要管理员**（非管理员 exit 1），所以别拿它当检查手段，以那几条前置断言为准 |
@@ -73,7 +73,8 @@ node config-sync\lib\doctor.mjs
 - **pi 编码代理**——`npm install -g @mariozechner/pi-coding-agent`，配置处方见 `ccswitch/stacks/pi.md`（安装/4 模型模板/压缩参数/实测坑/验证命令全在里面）
 - ~~**Windsurf**~~（已退役，无需安装）
 
-> sqlite3 找不到时，运行 `config-sync/setup-sqlite.ps1` 即可从项目内置安装包自动解压并设置 `SQLITE3_PATH`；也可手动安装后设环境变量 `SQLITE3_PATH` 指定。
+> sqlite3 找不到时手动安装，然后设环境变量 `SQLITE3_PATH` 指向 sqlite3 可执行文件（或放进 PATH）；
+> `config-sync/lib/sqlite.mjs` 也认 `vendor/sqlite/sqlite3.exe`（首次使用时不再自动下载，2026-08-12 下载器已退役）。
 
 <!-- APPEND-MARKER-1 -->
 
@@ -162,8 +163,7 @@ doctor 报「问题 0 项」即环境恢复成功。提醒项（如 Codex node_r
 | 用户名 | `Administrator` | 可能不同 | `${HOME}` 占位，恢复时还原 |
 | 供应商配置 | cc-switch DB | 需重配 | 新机器在 cc-switch 中重新配置供应商 |
 | Codex 登录态 | cc-switch DB | — | 切号后按需在 Codex 重新登录/MFA |
-| hook 本机状态目录 | `~/.claude/dao-state/`（rate-limit-sentinel/fired.log、glob-gate 缓存、health-report.json 等） | **不随换机走** | 无需处理：目录由 hook 首次触发时自建、不进 git、不由 config-sync 恢复。**代价照直写**：它攒的是「这台机器被限流过几次」的实战样本（issue #190 的观测面），换机即从零重新攒 —— 那是有意的（样本本就是按机器算的），不是漏配 |
-| dao 体检计划任务 | `dao-health-report`（Windows 计划任务，2026-08-11 重设计新增） | **需在新机重注册** | 换机后跑一次 `powershell -File scripts/install-health-check.ps1`；不注册的话 SessionStart 每次提醒「体检报告未生成」。doctor 会查它在不在 |
+| hook 本机状态目录 | `~/.claude/dao-state/`（rate-limit-sentinel/fired.log、glob-gate 缓存等） | **不随换机走** | 无需处理：目录由 hook 首次触发时自建、不进 git、不由 config-sync 恢复。**代价照直写**：它攒的是「这台机器被限流过几次」的实战样本（issue #190 的观测面），换机即从零重新攒 —— 那是有意的（样本本就是按机器算的），不是漏配 |
 
 ## 4. 路径占位机制（为什么换机不怕路径变）
 

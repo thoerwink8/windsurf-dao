@@ -56,7 +56,7 @@ dao 内核全部在 `ccswitch/`，通过 symlink/Junction 部署到各宿主，*
 .\dao.bat --inventory        # 只读盘点
 .\dao.bat --persona          # 系统提示词人设切换（dao / fable5 / off）
 ```
-（前置：首次需 `.\config-sync\setup-sqlite.ps1` 装 sqlite3；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
+（前置：本机需有 `sqlite3` 命令行工具（`config-sync/lib/sqlite.mjs` 会按 `SQLITE3_PATH` → PATH → `vendor/sqlite/` 查找，缺了报错提示手动装）；`common-secrets.json` 含脱敏真实值不进 git，换机手动复制。）
 
 底层工具 `dao.ps1`（一般不需直接调用，dao.bat 内部使用）：子命令 `link-claude`（部署，等效 `--deploy`）/ `unlink-claude` / `set-terminal`；Codex 侧只剩 `link-codex`（只读报告）/ `unlink-codex`（清 dao 旧链与悬空坟）/ `link-codex-prompts`（这个仍写 `~/.codex/prompts`，与 skills 无关）
 

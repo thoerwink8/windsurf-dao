@@ -4,5 +4,6 @@ providers/
 _tmp/
 vendor/sqlite/
 # 安装包不进 git：首次用时按 vendor/sqlite-tools.json 下载并校验 SHA256（清单本身要进 git）
+# 2026-08-12 起下载器已退役（setup-sqlite.ps1 / sqlite-tools.json 已删），这些忽略规则保留以防旧产物残留
 vendor/*.zip
 vendor/*.zip.part

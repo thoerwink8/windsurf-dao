@@ -46,7 +46,6 @@ function parseArgs(argv = process.argv.slice(2)) {
     else if (arg === '--persona') opts.action = 'persona';
     else if (arg === '--deploy') opts.action = 'deploy';
     else if (arg === '--status') opts.action = 'status';
-    else if (arg === '--pack') opts.action = 'pack';
     else if ((m = /^--direction=(.*)$/.exec(arg))) opts.direction = m[1].trim().toLowerCase();
     else if ((m = /^--(?:scope|only)=(.*)$/.exec(arg))) opts.scope = m[1];
     else if ((m = /^--message=(.*)$/.exec(arg))) opts.message = m[1];
@@ -83,18 +82,6 @@ function runDaoPs1(action) {
   }
 }
 
-function runPack() {
-  const packScript = path.join(projectRoot, 'scripts', 'dao-pack.ps1');
-  try {
-    execFileSync('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', packScript,
-    ], { cwd: projectRoot, stdio: 'inherit', timeout: 120000 });
-    process.exit(0);
-  } catch (error) {
-    process.exit(typeof error.status === 'number' ? error.status : 1);
-  }
-}
-
 function printHelp() {
   console.log(`dao —— windsurf-dao 统一入口（配置同步 + 部署 + 状态）
 
@@ -109,7 +96,6 @@ function printHelp() {
   dao.bat --inventory                             只读盘点（inventory）
   dao.bat --goal-health                           只读扫描 goal 任务健康（stale in-progress / 声称完成但状态未更新的 transcript 风险，Codex 用户）
   dao.bat --persona                               Claude Code persona 切换
-  dao.bat --pack                                  打包分发安装包（zip，发给新用户）
 
 选项：
   --scope=all|settings,mcp,skills,prompts,proxy             同步范围（默认 all）
@@ -359,17 +345,15 @@ async function chooseAction() {
   console.log('  [5] 体检  doctor（只读检查一致性）');
   console.log('  [6] 盘点  inventory（只读盘存）');
   console.log('  [7] persona 切换（dao / fable5 / off）');
-  console.log('  [8] 打包  生成分发安装包（zip，发给新用户）');
-  console.log('  [9] goal 任务体检（只读扫描 stale/transcript 风险，Codex 用户）');
-  const answer = await ask('输入 1-9（回车默认 1）：');
+  console.log('  [8] goal 任务体检（只读扫描 stale/transcript 风险，Codex 用户）');
+  const answer = await ask('输入 1-8（回车默认 1）：');
   if (answer === '2' || answer === 'up') return 'up';
   if (answer === '3') return 'deploy';
   if (answer === '4') return 'status';
   if (answer === '5') return 'doctor';
   if (answer === '6') return 'inventory';
   if (answer === '7') return 'persona';
-  if (answer === '8') return 'pack';
-  if (answer === '9') return 'goal-health';
+  if (answer === '8') return 'goal-health';
   return 'down';
 }
 
@@ -537,7 +521,7 @@ function preflight() {
     issues.push({ msg: 'git 未安装', fix: '请安装 Git：https://git-scm.com/download/win' });
   }
 
-  // 2. sqlite3（缺失时按 vendor/sqlite-tools.json 下载 + 校验 SHA256 + 解压，首次需联网）
+  // 2. sqlite3（2026-08-12 起下载器已退役：缺了报错提示手动装 sqlite3 / 设 SQLITE3_PATH）
   try {
     ensureSqlite3();
   } catch (e) {
@@ -636,7 +620,6 @@ async function main() {
   if (opts.action === 'persona') { await runPersona(); closeRl(); return; }
   if (opts.action === 'deploy') { runDaoPs1('link-claude'); return; }
   if (opts.action === 'status') { runDaoPs1('status'); return; }
-  if (opts.action === 'pack') { runPack(); return; }
 
   if (!preflight()) { closeRl(); process.exit(1); }
 
@@ -652,7 +635,6 @@ async function main() {
   if (action === 'persona') { await runPersona(); closeRl(); return; }
   if (action === 'deploy') { runDaoPs1('link-claude'); closeRl(); return; }
   if (action === 'status') { runDaoPs1('status'); closeRl(); return; }
-  if (action === 'pack') { closeRl(); runPack(); return; }
   const direction = action;
   if (!['up', 'down'].includes(direction)) {
     console.error(`未知方向：${direction}（应为 up 或 down）`);
