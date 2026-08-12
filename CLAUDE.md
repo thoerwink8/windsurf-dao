@@ -88,11 +88,12 @@ node ccswitch/hooks/dao-glob-gate.js --selfcheck      # 那个 hook 此刻能不
                                               #   旧的 gen-guarded-files.mjs 派生物已消灭）
 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dao-merge-cleanup.ps1 -WorktreePath <p> -Branch <b>
-                                              # ★ 合并链收尾三连脚本化（issue #70 层2 件②，`dao-pr-merge.ps1` 合并后
-                                              #   若跑在链接 worktree 里只打印这两行手工命令，本脚本把它们脚本化）：
-                                              #   差集核验（只剩 merge 壳或空才准 -D，否则报错停）+ worktree remove +
-                                              #   prune + 删分支 + pull；幂等可重跑。必须从主仓（不能从 -WorktreePath
-                                              #   自己里面）跑；退出码契约见脚本头注 .NOTES
+                                              # ★ 合并后的本地收尾：worktree remove + prune + pull + `git branch -d`
+                                              #   **pull 必须排在删分支前面**：`-d` 的未合并核验参照本地主干，没追平
+                                              #   就必然误判 —— 上一版为此自建差集核验再用 `-D` 强删，那一层连同它
+                                              #   制造的风险已随 issue #325 删除。幂等可重跑；必须从主仓（不能从
+                                              #   -WorktreePath 自己里面）跑；退出码契约见脚本头注 .NOTES。
+                                              #   远端分支由仓库设置「合并后自动删 head 分支」负责，脚本不碰
 ```
 
 `ccswitch/clause-index.json` 与 `ccswitch/clause-ledger.json` **已于 2026-08-11 重设计时双双删除**
