@@ -17,8 +17,11 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { checkCommandTableImplemented, checkSkillsDeployed } from './lib/consistency-gates.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
+const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const t0 = Date.now();
 
 const failures = [];
@@ -140,12 +143,37 @@ function checkSecretsNotTracked() {
   else fail(`疑似密钥进了 git ${hits.length} 个`, '立刻 git rm --cached + 补 .gitignore + 当作已泄漏换掉它', hits.join(' '));
 }
 
+// ── ⑤ 命令表实现面 ──────────────────────────────────────────────────
+// 守的静默失效面：ccswitch/dao.md 的「器 · 命令表」列给用户敲的 /命令，列了但没实现时
+// 无人报错——用户敲下去才发现。命令表看着好好的，实际敲不了。与 ③ 互补：③ 管「仓里有的
+// 能加载」，⑤ 管「表上列的找得到」。零样本闸：节找不到 / 抽出 0 条命令 ⇒ 红（本次没查成）。
+
+function checkCommandTable() {
+  const r = checkCommandTableImplemented({ repoRoot: ROOT });
+  for (const f of r.fails) fail(...f);
+  for (const g of r.greens) green(g);
+}
+
+// ── ⑥ skill 部署面 ──────────────────────────────────────────────────
+// 守的静默失效面：仓里有 skill 却没 symlink 进 ~/.claude/skills，它就永远不会被加载。
+// 本单起因就是实咬：grill-me 进仓两天，因部署过滤器从未部署过，没有任何机器报出来。
+// 排除清单唯一真相源是 dao.ps1 的 Get-InternalOnlySkills（不许手抄），零样本闸防漂移；
+// 部署面不存在（~/.claude 缺失）⇒ 显式跳过，措辞带「跳过/没查」，不许装成通过。
+
+function checkSkillDeployment() {
+  const r = checkSkillsDeployed({ repoRoot: ROOT, homeDir: HOME });
+  for (const f of r.fails) fail(...f);
+  for (const g of r.greens) green(g);
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 checkGateSelfTests();
 checkHookRegistration();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
+checkCommandTable();
+checkSkillDeployment();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
