@@ -8,8 +8,13 @@ REM No args or dashed args → sync path (config-sync interactive menu)
 if "%a%"=="" goto sync
 if "%a:~0,1%"=="-" goto sync
 
-REM Named action → delegate to dao.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" %*
+REM Named action → delegate to dao.ps1（issue #338：优先 pwsh，缺席回退 powershell 5.1；判定只看 where 退出码）
+where pwsh >nul 2>nul
+if errorlevel 1 (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" %*
+) else (
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" %*
+)
 set "ACTION_EXIT=%ERRORLEVEL%"
 exit /b %ACTION_EXIT%
 
@@ -43,7 +48,12 @@ if errorlevel 1 (
 )
 if not exist "%LOCALAPPDATA%\codegraph\current\lib\dist\bin\codegraph.js" (
   echo [预检] CodeGraph 未安装或不完整，自动安装...
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" codegraph
+  where pwsh >nul 2>nul
+  if errorlevel 1 (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" codegraph
+  ) else (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0dao.ps1" codegraph
+  )
 )
 node "%~dp0config-sync\lib\sync.mjs" %*
 set "SYNC_EXIT=%ERRORLEVEL%"
