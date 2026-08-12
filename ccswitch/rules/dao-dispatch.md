@@ -103,11 +103,15 @@ A. 照此派   B. 调整（说明哪单换谁）   C. 照此派，且本窗口�
    新起终端生效**（别家不吃这两个参数，指定 provider/model 走低层配方），`--effort` 必须搭配 `--model`，
    两者都不能与 `--terminal` 复用同传。**读回执**（`launch.effective`、setup 状态）再继续，
    失败看 `stage`/`effects` 不盲重试。
-   **Claude 族工兵就绪后，协调者立即隔空切 auto mode**（用户 2026-08-12 拍板：新工兵默认 auto mode；
-   `worker-start` 没有这个参数，起手后补一步）：`orca terminal send --text "<ESC>[Z"`（Shift+Tab 的
-   PTY 编码，PowerShell 写 `"$([char]27)[Z"`）循环 manual→accept edits→plan→auto，**每按一次读屏
-   核对屏底状态行**，见「⏵⏵ auto mode on」才算切到；审批弹窗挂着时按了不生效，先答掉弹窗再切。
-   别家终端没有这个模式芯片，跳过此步。
+   **Claude 族工兵就绪后，同一分钟内切到 auto mode**（用户 2026-08-12 拍板：新工兵默认 auto mode；
+   `worker-start` 没有这个参数）：worker-start 一返回就连做——`--enter` 补一发（回车常被吞）→
+   `orca terminal send --text "<ESC>[Z"`（Shift+Tab 的 PTY 编码，PowerShell 写 `"$([char]27)[Z"`）
+   循环 manual→accept edits→plan→auto，**每按一次读屏核对屏底状态行**，见「⏵⏵ auto mode on」才停手。
+   窗口期功能无害（工兵读完任务书才发第一条命令），但**别把烧起来没有的观察排在切模式前面**——
+   那会把窗口拖到用户眼皮底下。审批弹窗挂着时按了不生效，先答掉弹窗再切；别家终端无此芯片，跳过。
+   **零窗口的两条路（写 worktree 级 `.claude/settings.local.json` 的 defaultMode / `claude
+   --permission-mode bypassPermissions` 起进程）2026-08-12 实测均被宿主权限分类器拦死**——权限面
+   归用户，AI 不绕；用户一次性授权后才可改走（拍板记录见 issue #324）。
 4. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
    用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
    `worker-retain`）→ 全处理完才 `--ack`。超时 / 终端空闲 / 心跳 / status / question / escalation /
