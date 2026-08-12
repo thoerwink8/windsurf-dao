@@ -46,9 +46,12 @@ export function validateComment(comment) {
     return { ok: false, code: "empty", reason: "备注为空" };
   }
   // 40 字符上限的立法理由是「Orca 卡片一行显示得下」（件五 5.2）——换行直接破坏
-  // 「一行」契约，且能让 ≤40 码点的串占两行，绕过长度闸的本意。CR/LF 单独拒；
-  // 其余控制/零宽字符不拒：黑名单列不全，白名单（如拒 \p{Cf}）会误伤组合 emoji 的 ZWJ。
-  if (/[\r\n]/.test(comment)) {
+  // 「一行」契约，且能让 ≤40 码点的串占两行，绕过长度闸的本意。拒的是全部产生
+  // 垂直位移的字符：CR/LF/CRLF、LS(U+2028)/PS(U+2029)（ES 规范 LineTerminator，
+  // JS 字符串渲染必断行）、NEL(U+0085)、VT(U+000B)/FF(U+000C)——合法备注语料里
+  // 不存在这七个，误伤面为零。其余控制/零宽字符（不产生换行的）仍不拒：黑名单
+  // 列不全，白名单（如拒 \p{Cf}）会误伤组合 emoji 的 ZWJ。
+  if (/[\r\n\u2028\u2029\u0085\u000B\u000C]/.test(comment)) {
     return { ok: false, code: "multiline", reason: "备注必须单行——不许含换行" };
   }
   // 长度按码点数（中英文都算 1 字符），不是 UTF-16 单元数。
