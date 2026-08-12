@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     PR 合并期机械链的 canonical 实现：fetch → 核 rev-parse 真的动了 → merge 主干 → 重跑验证
-    → 合 PR → prune → 核远程分支真的没了。
+    → 合 PR → prune → 追平主干 → 删本地分支。**远端分支交平台自动删，本脚本不碰。**
 
 .DESCRIPTION
     这条链在 dao.md 里长期只以**文字**形态存在，而它每一步都是零判断祈使句
@@ -59,9 +59,12 @@
       5) gh pr merge（**只合，不删分支**）—— 判据是随后 `gh pr view --json state` 实查到的
                                           **PR 状态**，不是 gh 的退出码。理由见下面
                                           「为什么第 5 步不看 gh 的退出码」。
-      6) 删远程分支 + prune + ls-remote  —— 删分支是**独立的一步**、判它自己的退出码；
-                                          删完实查 `ls-remote` 仍在 ⇒ 退出码 4
-                                          （与「全清干净」严格区分）。
+      6) prune → 只读实查远端 → 追平主干 → `git branch -d` ——
+                                          **远端分支不由本脚本删**（2026-08-12 · issue #325）：
+                                          交仓库设置「合并后自动删 head 分支」，GitHub 只删已
+                                          合并的、PR 页可一键 Restore。那行 `ls-remote` 降为
+                                          **观察线**（平台没生效时说出来），不参与退出码。
+                                          删本地分支前必须先 pull：`-d` 的核验参照本地主干。
 
     **为什么第 5 步不看 gh 的退出码，也不再传 --delete-branch（2026-08-04，issue #114）**
 
@@ -79,9 +82,11 @@
       · **止血**：合并成败一律以 `gh pr view <n> --json state,mergedAt` **实查**为准 ——
         问「PR 现在是什么状态」，不问「刚才那条命令返回了几」。gh 非 0 而状态为 MERGED 时
         照常走第 6 步（那才是清理的正路），非 MERGED 才判失败。
-      · **根治**：`--merge` 与删分支拆成两个动作，各判各的退出码。删远程分支归第 6 步
-        （`git push origin --delete`，那本来就是它的活），删本地分支也在第 6 步单独判。
+      · **根治**：`--merge` 与删分支拆成两个动作，各判各的退出码。
         **两个动作本来就不该共用一个退出码。**
+        （2026-08-12 · issue #325 又往前走了一步：删远程分支这个动作**整个交给平台**了——
+        本脚本此前在第 6 步自己 `git push origin --delete` 再实查复核，那是在重新实现一个
+        平台已经做好的动作。删掉那一层，它的失败模式一起没了。删本地分支仍在第 6 步单独判。）
 
     **四个不由脚本兜住的边界（照直写，别当它全包）** —— dao.md Shell 节只留一句指针，
     **这里是这四条的正文与唯一真相源**（成因见 rationales §Shell-1）：
@@ -92,11 +97,11 @@
          也**不判「这份改动该不该合」** —— 终审不可让渡，这一步永远是人的。
       ③ **实查本身读不到时，脚本 fail-closed 停在 2，清理归人**：`gh pr view` 连试 3 次
          （间隔 -StateProbeDelaySeconds）仍读不到状态时，本脚本**不猜** —— 既不拿 gh 的
-         退出码顶替，也不继续删分支（删掉一个未合 PR 的远程分支代价更高）。这一档退出 2
+         退出码顶替，也不往下走清理（删掉一个未合 PR 的本地分支代价更高）。这一档退出 2
          并把该核什么打在屏幕上。**「不确定」不许长得像「干净」**，这是退出码契约的本意。
       ④ **本脚本不拆自己所在的 worktree**（issue #114 方向 3，实现时判定为不做）：进程的
          cwd 就在那棵树里，Windows 上目录被占用删不掉；即便删得掉，脚本也会在自己被删掉的
-         目录里接着跑完。故这一步仍归人 —— 但第 6 步会把**带真实路径、可直接复制**的两行
+         目录里接着跑完。故这一步仍归人 —— 但第 6 步会把**带真实路径、可直接复制**的几行
          收尾命令打出来，不再只说一句「请在主仓跑」。
          ⚠ **顺带修掉的一个隐性死码（2026-08-04 写回归网时发现，不在 issue #114 里）**：
          第 6 步的本地清理原先由 `if (-not $selfWt)` 守着，而 `$selfWt` **恒为真** ——
@@ -109,7 +114,7 @@
     **诊断：判「这份改动进没进主干」（dao.md 只留一句判据，展开在这里）**
     本脚本**不做** `git patch-id` 那类诊断：它内里是取舍不是照做，脚本化会把一个需要人看的
     判断压成一个退出码。但判据必须有个家，就放在这里 —— 因为问出这个问题的时刻
-    （孤儿分支扫描报「某分支未并入」、或本脚本第 6 步复核后远程分支还在）与本脚本同域。
+    （孤儿分支扫描报「某分支未并入」、或第 6 步那行只读实查报远端分支还在）与本脚本同域。
 
       三个判据答的是**三个不同的问题**，极易被当成同一个：
         · `gh pr list --head <branch>` 空   ⇒ 只说明「这个**分支名**下没开过 PR」，
@@ -136,18 +141,14 @@
 .PARAMETER MainBranch
     主干分支名。缺省从 `origin/HEAD` 探测，探不到时回落 main（再回落 master）。
 
-    2026-08-11 tests 终局追加：本仓（有 scripts/dao-affected-tests.mjs）第 4 步免传
-    -VerifyCommand —— 改「改谁才检谁」：按 diff 映射受影响留守套逐套跑（映射表住那个脚本里）；
-    判不出 diff 时 fail-closed 回落全量 --env。跨项目仓行为不变（仍必须显式传）。
+    2026-08-12（issue #325）：本仓（有 scripts/dao-check.mjs）第 4 步免传 -VerifyCommand ——
+    直接跑那一条体检命令。跨项目仓行为不变（仍必须显式传）。
 
 .PARAMETER VerifyCommand
     合并后要重跑的验证命令（整串，交给 shell 之外的 `Invoke-Expression` 之前会原样打印）。
-    **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，dao 侧是
-    `node scripts/run-tests.mjs --env`，别的项目又是别的。不传即必须显式 -SkipVerify。
-    ⚠ **dao 侧那个 `--env` 不是可选的**（2026-08-04 · issue #116）：`run-tests.mjs` 分了两层，
-    **默认层恒返回 2**（「本次没跑完」——环境敏感断言被 defer 掉了），只有 `--env` 才拿得到 0。
-    本步的判据是 `-ne 0` 即停，所以不带 `--env` 的那一串会在这里当场停住合并链。
-    这是有意的：合并前是本仓唯一一个「必然发生 + 必然要求 exit 0」的时刻，环境敏感层就挂在这。
+    **跨项目不可知，所以没有缺省值**：mousse 侧是 `scripts/verify-all.ps1`，别的项目又是别的。
+    不传即必须显式 -SkipVerify（本仓例外见上：有 dao-check.mjs 时免传）。
+    判据是 `-ne 0` 即停。合并前是「必然发生 + 必然要求 exit 0」的那一刻，验证就挂在这。
 
 .PARAMETER SkipVerify
     显式跳过第 4 步。跳了以后**最终退出码是 2 不是 0**——「没跑」与「跑过且过了」不许在
@@ -166,11 +167,12 @@
     不跑验证命令）。**任何一次真跑之前先跑一遍这个。**
     ⚠ **DryRun 照不出第 5 步的判据**（issue #114 就是 DryRun 全过之后才撞上的）：
     它在第 5 步只打印不执行，于是「gh 说什么」与「PR 实际是什么状态」这对分歧根本不发生。
-    那一档的判别力在回归网 `tests/dao-pr-merge.tests.ps1`，不在 DryRun。
+    那一档**此刻没有任何自动判别力**：守它的回归网随 issue #325 的测试收敛删掉了，
+    所以 DryRun 全过之后仍要人自己看第 5 步（照直写，别把 DryRun 绿读成那一档也验过了）。
 
 .EXAMPLE
-    # 先看会做什么
-    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath D:\frank\myrepo -VerifyCommand 'node scripts/run-tests.mjs --env' -DryRun
+    # 先看会做什么（本仓免传 -VerifyCommand，它自己会跑 dao check）
+    .\dao-pr-merge.ps1 -PullRequest 42 -RepoPath C:\frank\windsurf-dao -DryRun
 
 .EXAMPLE
     # 真跑
@@ -181,15 +183,16 @@
     .\dao-pr-merge.ps1 -PullRequest 42 -VerifyCommand 'npm test' -NoMerge
 
 .NOTES
-    退出码契约（五态；只有 0 叫「全链跑完且干净」）：
+    退出码契约（**当前真正产出得了的只有 0/1/2/3 四态**，4 已退役见下；只有 0 叫「全链跑完且干净」）：
       0  全链完成（DryRun 正常走完也是 0）
       1  前置条件不成立（不是 git 仓 / git 或 gh 缺失 / PR 读不到）——一步都没做
       2  跑到一半失败，或**有必经步骤被显式跳过**（fetch 失败 / merge 冲突 / 验证红 /
          PR 实查为未合并 / PR 状态实查不到 / -SkipVerify / clause-index 派生物过期）。
          **判「通过」一律写 `-eq 0`，别写 `-le 2`**——那个区间把 1 也放进来了。
       3  参数非法——一步都没做
-      4  PR 合了，但**清理没干净**（远程分支仍在，删了也没删掉）。刻意与 0 分开：
-         「删干净了」和「没删掉」在唯一的机器可读通道上长得一样，正是本脚本要治的那类病。
+      4  **已退役、当前没有任何一步产出它**（2026-08-12 · issue #325）：它原本的唯一来源是
+         「远程分支删了也没删掉」，而删远程分支这个动作整个交给平台了。号码留空不复用——
+         留着比挪作他用安全（旧消费方若还读着 4，读到的仍是「不是这一档」）。
 
     ⚠ **2026-08-04（issue #114）只改了「哪些情形落进 2」，五态的语义一个字没动**：
     「gh pr merge 退出非 0」此前直接落 2，现在它**不再是判据** —— 落不落 2 由实查到的
@@ -203,9 +206,9 @@
     PowerShell 5.1 兼容：不用 && / || / 三元 / ?? / ?.；成败一律看 $LASTEXITCODE 不看输出文案；
     不用 2>&1（会把 git/gh 的正常 stderr 包成 NativeCommandError）。
 
-    回归网：windsurf-dao/tests/dao-pr-merge.tests.ps1（`gh` 走 PATH 前置的桩，git 是真的；
-            核心是那条负控：gh 非 0 而 PR 实为 MERGED ⇒ 脚本必须走完第 6 步）。
-            **改本脚本的第 5/6 步就去改它**——那里的断言是本文件这段判据的可执行形态。
+    回归网：**没有了**（随 issue #325 的测试收敛删除，判据是「合并链的失败可逆、git 兜底」）。
+            那套断言此前守的核心负控是：gh 非 0 而 PR 实为 MERGED ⇒ 脚本必须走完第 6 步。
+            现在改本脚本的第 5/6 步，**没有任何东西会红**——改完自己拿一个真 PR 走 -DryRun。
 
     真相源：windsurf-dao/ccswitch/scripts/dao-pr-merge.ps1
     判据正文：windsurf-dao/ccswitch/dao.md · Shell 独有项「PR 合并期的机械链走脚本」
@@ -300,12 +303,11 @@ Write-Step '0. 前置检查'
 
 if ($PullRequest -le 0) { Fail "PR 号非法：$PullRequest" 3 }
 if ($SkipVerify -and $VerifyCommand) { Fail '-SkipVerify 与 -VerifyCommand 互斥，二选一' 3 }
-# 2026-08-11 tests 终局：本仓（有 scripts/dao-affected-tests.mjs）免传 -VerifyCommand ——
-# 验证步改「改谁才检谁」：按 diff 映射受影响的留守套逐套跑（碰了某 hook 才跑它那套，秒级；
-# 没碰闸一套不跑）。跨项目仓仍必须显式传。
-$affectedScript = Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'
-$useAffected = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $affectedScript)
-if (-not $SkipVerify -and -not $VerifyCommand -and -not $useAffected) {
+# 2026-08-12（issue #325）：本仓（有 scripts/dao-check.mjs）免传 -VerifyCommand ——
+# 验证步就跑那一条体检命令（二值退出，秒级）。跨项目仓仍必须显式传。
+$daoCheckScript = Join-Path $RepoPath 'scripts/dao-check.mjs'
+$useDaoCheck = (-not $SkipVerify) -and (-not $VerifyCommand) -and (Test-Path -LiteralPath $daoCheckScript)
+if (-not $SkipVerify -and -not $VerifyCommand -and -not $useDaoCheck) {
     Fail '必须传 -VerifyCommand（合并后要重跑什么，跨项目不可知），或显式 -SkipVerify（那时退出码为 2）' 3
 }
 
@@ -413,43 +415,18 @@ if ($SkipVerify) {
     $verifySkipped = $true
     Write-Skip '验证被显式 -SkipVerify 跳过 —— 最终退出码将是 2，不是 0'
 } elseif ($DryRun) {
-    if ($useAffected) { Write-Plan "改谁才检谁：node scripts/dao-affected-tests.mjs 算出受影响留守套逐套跑（零套⇒秒过）" }
+    if ($useDaoCheck) { Write-Plan "在 $RepoPath 下执行：node scripts/dao-check.mjs" }
     else { Write-Plan "在 $RepoPath 下执行：$VerifyCommand" }
-} elseif ($useAffected) {
+} elseif ($useDaoCheck) {
+    Write-Info '执行：node scripts/dao-check.mjs（本仓缺省验证入口，二值退出）'
     Push-Location $RepoPath
     try {
         $global:LASTEXITCODE = 0
-        $affectedJson = & node scripts/dao-affected-tests.mjs --json
-        $aCode = $LASTEXITCODE
-        $suiteList = @()
-        if ($aCode -eq 0) {
-            try { $suiteList = @(($affectedJson | ConvertFrom-Json).tests) } catch { $suiteList = @() }
-        }
-        if ($aCode -ne 0) {
-            # diff 判不出 ⇒ fail-closed 跑全部（「判不出」不许被读成「不用检」）
-            Write-Info 'affected-tests 判不出 diff ⇒ 回落跑全量：node scripts/run-tests.mjs --env'
-            $global:LASTEXITCODE = 0
-            & node scripts/run-tests.mjs --env
-            $vcode = $LASTEXITCODE
-            if ($vcode -ne 0) { Fail "全量验证退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
-            Write-Ok '全量验证通过（退出码 0）'
-        } elseif ($suiteList.Count -eq 0) {
-            Write-Ok '改谁才检谁：本次 diff 没碰任何有行为测试的面（纯文字/文档类）⇒ 零套，秒过'
-        } else {
-            Write-Info ("改谁才检谁：受影响留守套 " + $suiteList.Count + " 套逐套跑：" + ($suiteList -join '、'))
-            foreach ($suite in $suiteList) {
-                $global:LASTEXITCODE = 0
-                if ($suite -like '*.ps1') {
-                    & powershell -NoProfile -ExecutionPolicy Bypass -File $suite
-                } else {
-                    & node $suite
-                }
-                $scode = $LASTEXITCODE
-                if ($scode -ne 0) { Fail "受影响套 $suite 退出码 $scode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
-            }
-            Write-Ok ("受影响套全绿（" + $suiteList.Count + " 套）")
-        }
+        & node scripts/dao-check.mjs
+        $vcode = $LASTEXITCODE
     } finally { Pop-Location }
+    if ($vcode -ne 0) { Fail "dao check 退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
+    Write-Ok 'dao check 通过（退出码 0）'
 } else {
     Write-Info "执行：$VerifyCommand"
     Push-Location $RepoPath
@@ -512,7 +489,7 @@ foreach ($w in $occupying) {
     if ($resolved -eq $RepoPath) { continue }
     if ($DryRun) { Write-Plan "git worktree remove `"$w`""; continue }
     $rm = Invoke-Git -GitArgs @('worktree', 'remove', $w)
-    if ($rm.Ok) { Write-Ok "已拆 worktree $w" } else { Write-Note "拆不掉 worktree $w（exit $($rm.Code)）——第 6 步删本地分支会失败，但删远程与实查照走" }
+    if ($rm.Ok) { Write-Ok "已拆 worktree $w" } else { Write-Note "拆不掉 worktree $w（exit $($rm.Code)）——第 6 步删本地分支会失败，但 prune 与实查照走" }
 }
 if (-not $selfIsMainWorktree) {
     Write-Note "本脚本自己就跑在占用 $branch 的**链接** worktree 里（$selfWt）—— 本地那一半归人，第 6 步会打出可复制的收尾命令"
@@ -532,7 +509,7 @@ if ($DryRun) {
     if ($st.Unknown) {
         Fail ("PR #$PullRequest 的状态实查不到（gh pr view 连试 $($st.Attempts) 次，末次 exit $($st.Code)；gh pr merge exit $($mg.Code)）" + [Environment]::NewLine +
               "         —— 本脚本不猜：不拿 merge 的退出码顶替，也不动分支。人来核 ``gh pr view $PullRequest --json state,mergedAt``，" + [Environment]::NewLine +
-              "         已合就在主仓补 ``git push origin --delete $branch``；没合就重跑本脚本") 2
+              "         已合就在主仓补收尾（远端分支由平台自动删，本地跑 ``git pull --ff-only`` 再 ``git branch -d $branch``）；没合就重跑本脚本") 2
     }
     if ($st.State -eq 'MERGED') {
         if (-not $mg.Ok) {
@@ -544,7 +521,7 @@ if ($DryRun) {
         # ── 5.5 云审水位线（issue #306）：ci-sweep..master ≥50 提交 或 tag ≥14 天 ⇒
         #     发一针 ci-sweep（发完即走；云上无菌对账，本地链仍是权威门）。
         #     触发失败仅警告不阻塞；仅本仓（workflow 只存在于 dao 仓）。
-        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-affected-tests.mjs'))) {
+        if (-not $DryRun -and (Test-Path (Join-Path $RepoPath 'scripts/dao-check.mjs'))) {
             try {
                 git fetch --tags --quiet 2>$null
                 $tagTs = git log -1 --format=%ct refs/tags/ci-sweep 2>$null
@@ -567,15 +544,18 @@ if ($DryRun) {
     }
 }
 
-# ── 6. 清理：删远程分支（独立动作、独立判） + prune + 实查复核 ───────────────
-Write-Step '6. 清理：prune → 实查远程分支 → 删它 → 再实查一眼真的没了'
+# ── 6. 清理：prune → 本地追平 → 删本地分支 ───────────────────────────────────
+# 🔴 **远端分支不由本脚本删**（2026-08-12 · issue #325 二次终审）：那交给仓库设置
+#    「合并后自动删 head 分支」——GitHub 只删已合并的、PR 页可一键 Restore，是业界标准件。
+#    本脚本此前自己 `git push origin --delete` 再实查复核，那是在重新实现一个平台已经做好的
+#    动作，还得为它自己配一道复核。删掉那一层，连同它的失败模式一起没了。
+#    保留一行**只读**实查：平台开关万一没生效，它会说出来（观察线，不参与退出码）。
+Write-Step '6. 清理：prune → 追平主干 → git branch -d'
 
 $exitCode = 0
 if ($DryRun) {
     Write-Plan "git fetch --prune"
-    Write-Plan "git ls-remote --heads origin $branch  （实查；非空则下一行）"
-    Write-Plan "git push origin --delete $branch      （删分支是**这里**的独立动作，判它自己的退出码）"
-    Write-Plan "git ls-remote --heads origin $branch  （删完再实查一眼；仍在 ⇒ 退出码 4）"
+    Write-Plan "git ls-remote --heads origin $branch  （只读实查一眼，报告平台有没有把它删掉）"
     if ($selfIsMainWorktree) {
         Write-Plan "git checkout $MainBranch；git pull --ff-only；git branch -d $branch"
     } else {
@@ -587,44 +567,36 @@ if ($DryRun) {
 
     $ls = Invoke-Git -GitArgs @('ls-remote', '--heads', 'origin', $branch)
     if ($ls.Out) {
-        Write-Info "远程分支 $branch 还在（第 5 步刻意没让 gh 代劳）—— 删它"
-        $del = Invoke-Git -GitArgs @('push', 'origin', '--delete', $branch)
-        if (-not $del.Ok) { Write-Note "git push origin --delete $branch 失败（exit $($del.Code)）—— 下面这一眼会说清结果" }
-        # 无论删的那一步说什么，都再实查一次：**不信任何一步的沉默**，这是整个第 6 步的理由
-        $ls2 = Invoke-Git -GitArgs @('ls-remote', '--heads', 'origin', $branch)
-        if ($ls2.Out) {
-            Write-Host ("  [失败] 远程分支 $branch 删完仍在（实查 ls-remote）") -ForegroundColor Red
-            $exitCode = 4
-        } else {
-            Write-Ok "已删远程分支 $branch（删完实查 ls-remote 确认为空）"
-        }
+        Write-Note "远程分支 $branch 还在 —— 仓库的「合并后自动删分支」可能没开或没生效，去 PR 页点一下（本脚本不代删）"
     } else {
-        Write-Ok "远程分支 $branch 已不存在（实查 ls-remote；仓库开了自动删分支，或已有人删过）"
+        Write-Ok "远程分支 $branch 已不存在（实查 ls-remote —— 平台自动删分支生效）"
     }
 
     if ($selfIsMainWorktree) {
         $co = Invoke-Git -GitArgs @('checkout', $MainBranch)
         if ($co.Ok) {
+            # pull 必须排在 branch -d 前面：`-d` 的核验参照本地主干，没追平就必然误判。
             $null = Invoke-Git -GitArgs @('pull', '--ff-only')
             $bd = Invoke-Git -GitArgs @('branch', '-d', $branch)
-            if ($bd.Ok) { Write-Ok "已删本地分支 $branch" } else { Write-Note "本地分支 $branch 未删（exit $($bd.Code)）——多半仍被别的 worktree 占用" }
+            if ($bd.Ok) { Write-Ok "已删本地分支 $branch" }
+            else { Write-Note "本地分支 $branch 未删（exit $($bd.Code)）——多半仍被别的 worktree 占用；git 的原话：$($bd.Out -join ' ')" }
         } else {
             Write-Note "切回 $MainBranch 失败（exit $($co.Code)）"
         }
     } else {
-        # 本脚本不拆自己所在的 worktree（.DESCRIPTION 边界 ④）——但把可复制的两行打出来，
-        # 别再只说一句「请在主仓跑」（那句话每次都要人自己去查路径）。
-        # 顺带把收尾脚本 scripts/dao-merge-cleanup.ps1 指给人（#265 件 7）：它把这两行手跑
-        # 动作加上差集核验（-d/-D/拒绝）后脚本化，幂等可重跑。
-        Write-Note "本地那半跳过：本脚本正跑在 $branch 的链接 worktree 里，切不到主干、也删不掉自己脚下的目录。到主仓跑这两行收尾（可直接复制）："
+        # 本脚本不拆自己所在的 worktree（.DESCRIPTION 边界 ④）——但把可复制的命令打出来，
+        # 别只说一句「请在主仓跑」（那句话每次都要人自己去查路径）。
+        Write-Note "本地那半跳过：本脚本正跑在 $branch 的链接 worktree 里，切不到主干、也删不掉自己脚下的目录。到主仓跑这几行收尾（可直接复制）："
         if ($mainWt) {
             Write-Info "  git -C `"$mainWt`" worktree remove `"$selfWt`""
-            Write-Info "  git -C `"$mainWt`" branch -d $branch"
-            Write-Info "  或跑收尾脚本（差集核验 + 全流程收尾，可复制）：powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $mainWt 'scripts\dao-merge-cleanup.ps1')`" -WorktreePath `"$selfWt`" -Branch $branch -RepoPath `"$mainWt`""
+            Write-Info "  git -C `"$mainWt`" pull --ff-only"
+            Write-Info "  git -C `"$mainWt`" branch -d $branch      （pull 在前，-d 才判得准）"
+            Write-Info "  或跑收尾脚本（幂等可重跑）：powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $mainWt 'scripts\dao-merge-cleanup.ps1')`" -WorktreePath `"$selfWt`" -Branch $branch -RepoPath `"$mainWt`""
         } else {
             Write-Info "  git worktree remove `"$selfWt`""
-            Write-Info "  git branch -d $branch"
-            Write-Info "  或跑收尾脚本（差集核验 + 全流程收尾，可复制）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dao-merge-cleanup.ps1 -WorktreePath `"$selfWt`" -Branch $branch"
+            Write-Info "  git pull --ff-only"
+            Write-Info "  git branch -d $branch      （pull 在前，-d 才判得准）"
+            Write-Info "  或跑收尾脚本（幂等可重跑）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dao-merge-cleanup.ps1 -WorktreePath `"$selfWt`" -Branch $branch"
         }
     }
 }

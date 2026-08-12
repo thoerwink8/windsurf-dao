@@ -40,11 +40,15 @@
 1. dao.md 对应段替换为存根行：格式对齐既有五个存根（**必经动作 = Read <路径> 全文** + 判据一句话 + 触发器说明/纯文字兜底声明 + 原有元字段保留）
 2. 正文完整迁入目标文件：语义零丢失（迁移 diff 中删除的每句话必须在新文件 diff 中出现或有等价表述；纯搬动优先，改写需在 PR body 说明）
 3. `node ccswitch/scripts/check-alwayson-budget.mjs` exit 0 且 total 较上一项合并后下降
-4. `node ccswitch/scripts/gen-clause-index.mjs --check` exit 0（迁移后条款归属文件变化属预期，clause-index 同 PR 重新生成提交）
-5. `node scripts/run-tests.mjs --env` 全套真退出码全绿（**判据一字未改，只是命令变了**：
-   2026-08-04 issue #116 把 run-tests 分了默认层 / 环境敏感层，**默认层恒退 2**、只有 `--env`
-   拿得到 0 —— 「全套全绿」这个意思现在只有带 `--env` 的那一串表达得出）
-6. **锚先破再验**（每项至少一次）：把该项存根行指向的路径故意改错 → 交叉引用检查（dao-smoke 或补充的存根路径存在性检查）变红 → 复原变绿；若现有检查器不覆盖「存根指向文件必须存在」，第一个做到该情形的官补一个最小检查并入 run-tests 扫描面
+4. ~~`node ccswitch/scripts/gen-clause-index.mjs --check` exit 0（迁移后条款归属文件变化属预期，clause-index 同 PR 重新生成提交）~~
+   **那个命令与它生成的索引派生物已于 2026-08-11 删除**：条款结构检查改跑
+   `powershell -NoProfile -File ccswitch/scripts/check-clauses-structure.ps1`，判「通过」写 `-eq 0`
+5. ~~`node scripts/run-tests.mjs --env` 全套真退出码全绿~~
+   **改跑 `node scripts/dao-check.mjs`，exit 0 才算过**（issue #325：run-tests 与它那套
+   默认层/环境敏感层的六态协议一并删除，二值取代六态。判据一字未改，只是命令变了）
+6. **锚先破再验**（每项至少一次）：把该项存根行指向的路径故意改错 → 交叉引用检查变红 → 复原变绿；
+   若现有检查器不覆盖「存根指向文件必须存在」，第一个做到该情形的官补一个最小检查，
+   **放进 `tests/` 即自动进 `dao check` 的自发现面**（不需要登记到任何清单）
 7. 一项 = 一 PR，止步 `gh pr create`，merge 归指挥官（走 `ccswitch/scripts/dao-pr-merge.ps1`，含合并态门）
 
 ## 回退判据（冻结）
