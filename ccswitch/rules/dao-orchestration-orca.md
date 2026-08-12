@@ -64,32 +64,45 @@ Edit 级小活与纯问答不弹。
 
 ---
 
-## 二、派单（结论 B：一条命令）
+## 二、派单（Orca 推荐模式 · 用户 2026-08-12 拍板全体系遵守）
 
-```powershell
-node scripts/dao-orch.mjs --role implementer --spec-file <路径> --title "<标题>" \
-  --skills orca-cli --dry-run   # 先看渲染出的完整 spec，确认后去掉 --dry-run
-```
+**flags 与子命令的唯一真相源是版本匹配指南**：动手前跑 `orca skills get orchestration` 现查——
+它由将要执行你命令的那个二进制自己吐出，永不漂移。本文件刻意不背参数表（内容决定的字段只写去哪查），
+只固化**模式本身**：
 
-这条命令替协调者做完：按 worker 类型渲染条款进 spec → 建 Orchestration 任务 → 起 worker。
-产物落点：worktree 在 `<repo>-workers\<任务名>`，分支 `orca/<任务名>`。
+1. **一次绑定 Run**（`run-create --objective`），**先建全部独立 Task**（`task-create --spec`），再起工兵。
+2. **工兵一律 `worker-start` 起可见终端**（组合 worktree+终端+就绪+派单一步到位）——pi 等外族工兵
+   尤其如此：可见标签页，不起无头后台。模型/思考档按提案随 `--model`/`--effort` 传，**读回执**
+   （`launch.effective`、setup 状态）再继续，失败看 `stage`/`effects` 不盲重试。
+3. **收活循环**：`check --wait --types worker_done,escalation,question` → 逐条处理 → 同一工兵有接续任务
+   用 `worker-start --terminal <handle>` 转交，否则 `worker-release`（成败都释放，用户明说留才
+   `worker-retain`）→ 全处理完才 `--ack`。超时/空闲/心跳/被拒的 worker_done 都不是释放理由。
+4. **恢复条件化**：`worker-show` 判 ready（继续等）/ failed·stopped（`--retry-of` 重起，位置显式重选不默继承）/
+   outcome_unknown（stop 后再查或显式 abandon），同一 task 连败 3 次 dispatch 自动熔断。
+5. **禁替代**：说了走编排就必须有 task/dispatch 出处（`task-list`/`dispatch-show` 查得到）；
+   用非 Orca 途径起的工兵不许事后描述成「已编排」。worker-start 表达不了的自定义 argv
+   （如 pi 指定 provider/model）走低层配方：worktree create → terminal create 自定义命令 → dispatch --inject。
 
-spec 四段式骨架（按此写，条款段由 dao-orch 自动渲入）：
+> `scripts/dao-orch.mjs` 的条款渲染半边已判退役（全仓三问裁决，随规则合并批处置）；
+> 它改形完成前，直接按上面模式手派。
+
+spec 四段式骨架（写进 task-create 的 --spec）：
 
 ```
 背景：一段说清来龙去脉。
 范围（改这几处）：文件级清单。
-约束（不许碰）：禁项 + 边界。
+约束（不许碰）：禁项 + 边界 + commit 前缀（按宿主：[cc]/[pi]/[codex]）。
 验收：跑哪条命令、exit 0 才算过；完工交 exit-gate 交活单。
 ```
 
 铁律（每条都有尸检报告，见探索报告痛点矩阵）：
-1. **派单只走 Orchestration 通道**（结论 A），禁手建 worktree+终端的散装路。
+1. **派单只走 Orchestration 通道**（结论 A），禁手建 worktree+终端的散装路（低层配方也要 dispatch 挂钩，见上第 5 条）。
 2. spec 一次给全（背景/范围/约束/验收四段），缺一段就是下一轮往返。
 3. **dispatch 上下文 worker 拿不到**——交回的东西必须落盘成文件，worker_done 只报路径。
-4. 开工契约占 spec 开头：分支名、唯一停手点、worker_done 契约（3 句、taskId+dispatchId、--outcome、--files-modified、--report-path）。
-5. orca CLI 只信 `--json` 出口；`report read` 拿不到正文要落 `task_claim_error`。
-6. worker 体内没有 AskUserQuestion（会挂死）；要问走 `orca orchestration ask`。
+4. worker_done **恰好一次**、带 `--outcome`（失败禁只写在散文里）与 `--files-modified`。
+5. orca CLI 只信 `--json` 出口。
+6. worker 体内没有 AskUserQuestion（会挂死）；要问走 `orca orchestration ask`，协调者 `reply` 答；
+   gate 只用于协调者自己的 DAG 决策，不用于答 worker 的 ask。
 7. **底座缺省 = Orca 编排**（#299 裁决，2026-08-11 用户拍板「编排底座整体迁 Orca：Fable 主会话做协调，
    派活/收活/观测走 Orca」，裁决正文 `docs/ops/orca-dao-conflict-ruling.md` 修订版处置表）：
    **供审查/追踪的供给线走 `orchestration`**（task-create + worker-start 的 supervised dispatch，要验要等，
@@ -107,8 +120,10 @@ spec 四段式骨架（按此写，条款段由 dao-orch 自动渲入）：
 - `worker-read` 只对 claude/codex 族是深通道；对 pi 降级（provider_unsupported，只吐有界终端尾巴）。
 - 直翻 worker 的会话文件只作事故取证的最后手段，不作日常观测面。
 - 给已有终端挂任务必须显式 `--worktree` 选择器（默认瞄协调者所在树，会报 mismatch）。
-- 打回用 `terminal send`，且排在 `worker-release` 之前（空闲 worker 不查收件箱；release 会关终端标签页）。
-- `check --wait --types` 只认 `worker_done,escalation`（没有 `ask` 这个类型名）。
+- 打回用 `orchestration send --to dispatch:<id>`（结构化收件箱，跨服务器也送达）或 `terminal send`，
+  且都排在 `worker-release` 之前（release 会关终端标签页）。
+- `check --wait --types` 的类型名以当前指南为准（1.4.179 实况：`worker_done,escalation,question`——
+  此处曾记「没有 ask 类型」，那是旧版本实况，版本一换就过期，故不再背具体清单）。
 - 探测即预案：每次派单先跑 roster 探测，AskUserQuestion 只呈现真实可选项（定案②）。
 
 ## 三、收活（出口门阀）
@@ -117,10 +132,8 @@ worker_done 不是验收，只是铃响。验收 = `scripts/dao-exit-gate.mjs` �
 （格式 / 凭证边界 / 卫生+guardEvidence / 限时重放），契约见该脚本头注。
 人工最终审核不退役——门阀只抬门槛，判断仍是人的。
 
-合并链的验证步走**改谁才检谁**（tests 终局拍板）：`dao-pr-merge.ps1` 在本仓免传
-`-VerifyCommand`——`scripts/dao-affected-tests.mjs` 按 diff 映射受影响的留守测试套
-（碰了某 hook 才跑它那套，秒级；没碰闸一套不跑；判不出 diff 时 fail-closed 跑全量）。
-映射表住脚本里不住文字，加删留守套时同步改它。
+合并链的验证步 = `dao check` 一条命令（issue #325 起）：`dao-pr-merge.ps1` 在本仓免传
+`-VerifyCommand`，缺省即在合并态跑它，exit 0 才合。
 
 ## 四、grill 技能的归位（2026-08-11 用户拍板引入）
 
