@@ -66,13 +66,13 @@ Read 任何 `.ps1` 时，宿主会自动把这份手册送到眼前（靠 `ccswi
 
 | 命令 | 有没有机器拦 |
 |---|---|
-| `grep` · `find` · `rg` · `ag` · `ack` · `Select-String` | **有**（`permissions.deny`） |
-| `sed` · `cat` · `head` · `tail` · `awk` | **没有**——只有上面这句判据在管 |
+| `grep` · `find` · `rg` · `ag` · `ack` · `Select-String` · `cat` · `head` · `tail` | **有**（`permissions.deny`） |
+| `sed` · `awk` | **没有**——只有上面这句判据在管（用户 2026-08-12 拍板放过：流处理无工具替代） |
 | `ls` · `wc` · `Get-Content` | **没有，而且是刻意的**——内置工具给不出时间戳、权限位、字节计数，收进来是凭空造误伤 |
 
 > 2026-08-12 之前还有第二层（一道 PreToolUse 硬闸，会在拦下时当场把该改用什么打进错误信息里）。
-> 那道闸已随钩子精简退役，`sed`/`cat`/`head`/`tail` 因此**失去了它们唯一的机器拦截**。
-> 要不要把它们收进 `permissions.deny`，是待用户拍板的一格。
+> 那道闸已随钩子精简退役；同日用户拍板把 `cat`/`head`/`tail` 收进 `permissions.deny`（读文件
+> 有 Read 替代零误伤），`sed` 放过、只留文字层。
 
 **判据模型照直写**：`permissions.deny` 是**逐字前缀匹配**——它看不懂管道，也看不懂重定向。
 所以 `cmd | grep x` 这种写法它拦不住，而那恰恰是最常见的用法。**别把「有一层 deny」读成「已经管住了」。**
