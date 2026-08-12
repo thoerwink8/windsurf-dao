@@ -39,11 +39,17 @@ export const EXIT = { OK: 0, ORCA_FAIL: 1, NO_COMMENT: 2, BAD_FORMAT: 3, ENV: 4 
 /**
  * 备注格式校验（纯函数，自测直接 import 它）。
  * 返回 { ok:true } 或 { ok:false, code, reason }——code 是机器可判的违规类别：
- *   empty / too-long / separator / form / baton / wait-empty
+ *   empty / multiline / too-long / separator / form / baton / wait-empty
  */
 export function validateComment(comment) {
   if (typeof comment !== "string" || comment.trim() === "") {
     return { ok: false, code: "empty", reason: "备注为空" };
+  }
+  // 40 字符上限的立法理由是「Orca 卡片一行显示得下」（件五 5.2）——换行直接破坏
+  // 「一行」契约，且能让 ≤40 码点的串占两行，绕过长度闸的本意。CR/LF 单独拒；
+  // 其余控制/零宽字符不拒：黑名单列不全，白名单（如拒 \p{Cf}）会误伤组合 emoji 的 ZWJ。
+  if (/[\r\n]/.test(comment)) {
+    return { ok: false, code: "multiline", reason: "备注必须单行——不许含换行" };
   }
   // 长度按码点数（中英文都算 1 字符），不是 UTF-16 单元数。
   const len = [...comment].length;
