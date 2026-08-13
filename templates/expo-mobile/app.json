@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "{{App 显示名}}",
+    "slug": "{{slug-小写短横线}}",
+    "version": "0.1.0",
+    "runtimeVersion": "0.1.0",
+    "scheme": "{{slug-小写短横线}}",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.{{公司}}.{{项目}}"
+    },
+    "android": {
+      "package": "com.{{公司}}.{{项目}}",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#111827"
+      }
+    },
+    "updates": {
+      "enabled": true,
+      "checkOnLaunch": "ALWAYS",
+      "fallbackToCacheTimeout": 8000
+    },
+    "plugins": ["expo-router", "expo-updates"]
+  }
+}
