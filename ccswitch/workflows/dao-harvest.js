@@ -112,7 +112,7 @@ const COMMON = `【身份与红线】你是 workflow subagent,回答对象是编
 A. \`clause_text\` —— **可直接粘贴的条款原文**,一行,格式:
    \`- **<判据名>**:<一句话判据>(<出处>)。 [n=<复发次数> @<首次入库月日,即今天> 触发:<触发点>]\`
    元字段语义以 \`${REPO}/${CLAUSE_FILE}\` 的「条款元字段」节为准(先读那一节再动笔)。\`n\` 取**下界**(只数得出出处里明写的次数),数不出写 \`n=1\`。
-B. \`layer\` —— **该放哪层**:\`dao.md\`(跨项目且属帅位/道层心法) / \`clause-common\`(条款库通用节) / \`clause-implementer\` / \`clause-verifier\` / \`clause-recon\` / \`clause-dogfood\` / \`clause-review\`(条款库对应官种节) / \`project-rules\`(只对本项目有意义) / \`not-worth\`(不值得进,写清为什么)。
+B. \`layer\` —— **该放哪层**:\`dao.md\`(跨项目且属帅位/道层心法) / \`clause-common\`(条款库「所有人」节) / \`clause-implementer\` / \`clause-verifier\` / \`clause-recon\` / \`clause-dogfood\` / \`clause-review\`(条款库对应官种节) / \`project-rules\`(只对本项目有意义) / \`not-worth\`(不值得进,写清为什么)。
    判据同 dao「知识归位」:换个项目还能用 → dao 层;只在当前技术选型下有意义 → 项目层。犹豫时倾向全局,但 \`not-worth\` 是**正常且必要的裁定**,不是失败。
 
 【去重(本 workflow 最容易产出噪音的地方,硬要求)】
