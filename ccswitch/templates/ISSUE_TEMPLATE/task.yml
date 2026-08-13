@@ -1,5 +1,8 @@
 # canonical issue 模板 · 真相源在 windsurf-dao ccswitch/templates/ISSUE_TEMPLATE/。
 # 项目 .github/ISSUE_TEMPLATE/task.yml 从此派生。收益边界见同目录 bug.yml 抬头注释。
+#
+# 下面「为什么要做/做什么/怎么算完」与项目侧 DISPATCH-HUB.md §五.2「类型分骨架」的任务型
+# 小标题（解决什么问题/方案长什么样/怎么验收）同源不同壳（issue #390）；改任一份先看另一份还对不对得上。
 
 name: 🛠 任务
 description: 要做一件事（新功能 / 改造 / 补基建）
