@@ -13,15 +13,16 @@
 //
 // 准入判据（想加一个检查项时用它自问）：这个检查防住的失败，是不可逆的，或者是静默的吗？
 // 两个都不是 ⇒ 不加，让它在使用中被发现。
+//
+// 2026-08-14 拆旧（issue #425）：闸自测 / hook 注册 / 命令表 / skill 部署四个检查面，连同它们
+// 守着的那套体系（hooks、config-sync、dao.md、dao.ps1 部署）一起退役，检查项随之删除；
+// 剩下的两个检查面（skill 装载 + 密钥防线）仍是扫描自发现，零手维护清单。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
-import { checkCommandTableImplemented, checkSkillsDeployed } from './lib/consistency-gates.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
-const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const t0 = Date.now();
 
 const failures = [];
@@ -33,68 +34,9 @@ function fail(what, howToFix, evidence) {
 }
 function green(line) { greens.push(line); }
 
-function firstFailLine(output) {
-  const line = String(output || '').split(/\r?\n/).find(l => /FAIL|✘|Assert|Error|error/.test(l));
-  return (line || '(无输出)').trim().slice(0, 160);
-}
-
-// ── ① 不可逆闸的自测 ────────────────────────────────────────────────
-// 闸是静默失效型部件：挂了没人知道。所以闸的自测是全系统唯一必须存在的测试。
-// 自发现：tests/ 下的每一套都跑，没有清单可以漏登记。
-
-function checkGateSelfTests() {
-  const dir = join(ROOT, 'tests');
-  if (!existsSync(dir)) {
-    fail('tests/ 目录不在', '闸的自测是必须存在的，恢复 tests/ 或改 dao-check.mjs 的约定', dir);
-    return;
-  }
-  const suites = readdirSync(dir).filter(f => /\.tests\.(js|ps1)$/.test(f)).sort();
-  if (suites.length === 0) {
-    fail('一套闸自测都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回闸的自测', dir);
-    return;
-  }
-  for (const f of suites) {
-    const p = join(dir, f);
-    const r = f.endsWith('.ps1')
-      ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p], { encoding: 'utf8', cwd: ROOT })
-      : spawnSync(process.execPath, [p], { encoding: 'utf8', cwd: ROOT });
-    const out = (r.stdout || '') + (r.stderr || '');
-    if (r.status === 0) green(`闸自测 ${f}`);
-    else fail(`闸自测红：${f}`, `复现：node tests/${f}`, firstFailLine(out));
-  }
-}
-
-// ── ② 闸的注册面 ────────────────────────────────────────────────────
-// 闸的文件还在、但注册里指着一个不存在的路径 ⇒ 宿主静默跳过，那道闸就死了而没人知道。
-// 真相源是 config-sync/common/settings.json（下发到宿主的那份配置的仓内源）。
-
-function checkHookRegistration() {
-  const p = join(ROOT, 'config-sync', 'common', 'settings.json');
-  if (!existsSync(p)) {
-    fail('hook 注册源不在', `本次没查成，不是没问题：确认 ${'config-sync/common/settings.json'} 是否被移动`, p);
-    return;
-  }
-  let paths = [];
-  try {
-    const rows = JSON.parse(readFileSync(p, 'utf8')).rows || [];
-    const blob = rows.map(r => String(r.value || '')).join('\n');
-    paths = [...blob.matchAll(/\$\{PROJECT_ROOT\}\/([A-Za-z0-9_./-]+)/g)].map(m => m[1]);
-  } catch (e) {
-    fail('hook 注册源解析不了', '修 config-sync/common/settings.json 的 JSON', String(e.message).slice(0, 160));
-    return;
-  }
-  const uniq = [...new Set(paths)];
-  if (uniq.length === 0) {
-    fail('注册面解析出 0 条', '解析器与配置格式对不上 ⇒ 本次等于没查；核 settings.json 里的 ${PROJECT_ROOT} 写法', p);
-    return;
-  }
-  const missing = uniq.filter(rel => !existsSync(join(ROOT, rel)));
-  if (missing.length === 0) green(`闸注册面 ${uniq.length} 条全部指得到`);
-  else fail(`注册了却不存在的闸 ${missing.length} 个`, '要么补回文件，要么从 config-sync/common/settings.json 里摘掉注册', missing.join(' '));
-}
-
-// ── ③ skill 装载面 ──────────────────────────────────────────────────
+// ── ① skill 装载面 ──────────────────────────────────────────────────
 // frontmatter 坏掉的 skill 不会报错，它只是不加载——同样是静默失效。
+// 自发现：扫 ccswitch/skills 下所有目录，没有清单可以漏登记。
 
 function checkSkillFrontmatter() {
   const dir = join(ROOT, 'ccswitch', 'skills');
@@ -121,7 +63,7 @@ function checkSkillFrontmatter() {
   else fail(`装载不了的 skill ${bad.length} 个`, 'SKILL.md 要有 frontmatter，且 name 必须等于目录名', bad.join(' '));
 }
 
-// ── ④ 密钥不在 git 追踪面 ───────────────────────────────────────────
+// ── ② 密钥不在 git 追踪面 ───────────────────────────────────────────
 // 全系统唯一真正不可逆的伤害：密钥一旦进 git，删不掉、改不回、只能换密钥。
 // 自发现：扫 git 追踪面里所有「密钥形态」的文件名，不维护任何白名单。
 
@@ -143,37 +85,10 @@ function checkSecretsNotTracked() {
   else fail(`疑似密钥进了 git ${hits.length} 个`, '立刻 git rm --cached + 补 .gitignore + 当作已泄漏换掉它', hits.join(' '));
 }
 
-// ── ⑤ 命令表实现面 ──────────────────────────────────────────────────
-// 守的静默失效面：ccswitch/dao.md 的「器 · 命令表」列给用户敲的 /命令，列了但没实现时
-// 无人报错——用户敲下去才发现。命令表看着好好的，实际敲不了。与 ③ 互补：③ 管「仓里有的
-// 能加载」，⑤ 管「表上列的找得到」。零样本闸：节找不到 / 抽出 0 条命令 ⇒ 红（本次没查成）。
-
-function checkCommandTable() {
-  const r = checkCommandTableImplemented({ repoRoot: ROOT });
-  for (const f of r.fails) fail(...f);
-  for (const g of r.greens) green(g);
-}
-
-// ── ⑥ skill 部署面 ──────────────────────────────────────────────────
-// 守的静默失效面：仓里有 skill 却没 symlink 进 ~/.claude/skills，它就永远不会被加载。
-// 本单起因就是实咬：grill-me 进仓两天，因部署过滤器从未部署过，没有任何机器报出来。
-// 排除清单唯一真相源是 dao.ps1 的 Get-InternalOnlySkills（不许手抄），零样本闸防漂移；
-// 部署面不存在（~/.claude 缺失）⇒ 显式跳过，措辞带「跳过/没查」，不许装成通过。
-
-function checkSkillDeployment() {
-  const r = checkSkillsDeployed({ repoRoot: ROOT, homeDir: HOME });
-  for (const f of r.fails) fail(...f);
-  for (const g of r.greens) green(g);
-}
-
 // ── 跑 ──────────────────────────────────────────────────────────────
 
-checkGateSelfTests();
-checkHookRegistration();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
-checkCommandTable();
-checkSkillDeployment();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
