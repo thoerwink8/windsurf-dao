@@ -115,6 +115,11 @@ console.log("\n=== ④ Orca 段被正确忽略（结构层面单独验证，不�
   check("dao 从未注册过的纯 Orca 事件（PostToolUse）过滤后整个键消失", !Object.prototype.hasOwnProperty.call(H.filterOrcaHookGroups(liveHooks), "PostToolUse"));
   // 断言对着「注入前 dao 自己有几条」比较，不硬编码常数——issue #409 第 2 项往 PreToolUse
   // 合法新增了 dao-dispatch-gate.js 这第二条注册后，硬编码的 1 会假红，与「过滤坏了」无法区分。
+  // 🔴 零样本闸（W3 换家对抗审 R5）：下面这行是「注入前=注入后过滤回来的数」型深比较，一旦
+  // 快照里 PreToolUse 哪天被合法清空成 0 条，它会退化成 0===0 静默全绿——违例数与样本数一起
+  // 归零。①的 `cmdCount > 0` 数的是全事件 command 总数，SessionStart 还有别的组撑着，盖不住
+  // 「PreToolUse 这一个事件被清空」。这条前置断言专门守这个特定事件，不能被别处的零样本闸代替。
+  check("零样本闸：注入前 PreToolUse 组数 > 0（否则下面这条会退化成 0===0 静默全绿）", DB_HOOKS_REAL.PreToolUse.length > 0, `实际 ${DB_HOOKS_REAL.PreToolUse.length}`);
   check("dao 已注册事件混入 Orca 分组后，dao 自己那些分组仍原数保留（PreToolUse）", H.filterOrcaHookGroups(liveHooks).PreToolUse.length === DB_HOOKS_REAL.PreToolUse.length);
 }
 

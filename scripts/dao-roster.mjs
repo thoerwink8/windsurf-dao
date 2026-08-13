@@ -24,6 +24,7 @@ import { pathToFileURL } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 // 缓存落点（issue #409 §二 冻结公式，两边 —— 本文件与 CJS 侧的 dao-roster-refresh.js —— 各自独立
 // 实现同一条公式，互不 import：mjs/cjs 不能互相同步 import，重复是硬约束不是偷懒）。
@@ -134,9 +135,24 @@ export function buildRoster() {
 
 // 落盘逻辑单独导出：测试用假 roster + 临时路径直接调用它，绕开 buildRoster() 的真实探测
 // （探测要跑好几个子进程，慢且不确定），只验证「mkdir + write」这半段自己的行为。
+//
+// 写临时文件再 rename，不直写目标文件（W3 换家对抗审 O1）：直写在理论上有一扇读端窗口——
+// 读者用 fs.readFileSync 撞上「正在被截断重写」的那一刻会读到半截 JSON，JSON.parse 失败，
+// 闸把这判成 parse 格 ⇒ 拦，这是零摩擦方向上最不该出现的失败形态（6000 次并发实测零命中，
+// 说明工程上今天不构成问题，但把这一类竞态整个删掉只要一行成本）。同目录内 rename 在
+// Windows/POSIX 都是原子替换，读端只会看到「旧内容」或「新内容」两态之一。
+// **临时文件必须落在 cachePath 的同一目录**——跨卷 rename 会退化成先拷贝再删源，不再原子。
 export function writeRosterCache(roster, cachePath = rosterCachePath()) {
-  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  fs.writeFileSync(cachePath, JSON.stringify(roster));
+  const dir = path.dirname(cachePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = path.join(dir, `.${path.basename(cachePath)}.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(roster));
+    fs.renameSync(tmpPath, cachePath);
+  } catch (e) {
+    try { fs.unlinkSync(tmpPath); } catch (_e2) { /* 临时文件可能压根没写出来，忽略 */ }
+    throw e;
+  }
 }
 
 // 缓存落盘是 CLI 直跑独有的副作用（issue #409 第 1 项：SessionStart 刷新钩子靠这份缓存
