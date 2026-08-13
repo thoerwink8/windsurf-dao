@@ -177,7 +177,9 @@ function runInboxRefresh(repo, runner, now = Date.now()) {
   ];
   const report = [];
   for (const b of buckets) {
-    const issues = fetchInboxBucket(repo, b.label, runner);
+    // 三张收件箱单自己也挂着对应桶的 label（实测 #70/#71/#69 皆如此）——
+    // 不过滤会让单子在自己的表里列出自己，读者会看到「#71 需要 #71 处理」这种自指怪话。
+    const issues = fetchInboxBucket(repo, b.label, runner).filter((i) => i.number !== b.issue);
     const section = b.build(issues, now);
     const currentBody = ghJson(["issue", "view", String(b.issue), "--repo", repo, "--json", "body"], runner).body;
     const newBody = spliceInboxSection(currentBody, section);
