@@ -9,6 +9,10 @@
 // 现在 spec 第一行让工人**自己去 Read 那份便签**——现场读到的永远是盘上最新版，
 // 而渲染进 spec 的是派单那一刻的快照。少一个会过期的中间层。
 //
+// 2026-08-13（issue #405）再削一刀：开工三步的正文也搬出去了（dao-worker-preamble.md），
+// spec 首行只剩一句指针。骨架换成 dao-dispatch.md §四 的四格——
+// 【边界】那一格由调用方写进 --spec-file 正文，本脚本只保证首行、【任务】、【验收】、【审计锚】就位。
+//
 // 用法：
 //   node scripts/dao-orch.mjs dispatch --role <官种> --spec-file <任务正文.md>
 //     [--worktree current] [--agent pi] [--model <id>] [--issue <N>] [--dry-run]
@@ -24,28 +28,30 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
+// 首行指到 PREAMBLE，PREAMBLE 再指到 NOTES —— 两跳都得真在盘上，缺哪一跳都是「指向空气的指针」。
+const PREAMBLE = "ccswitch/rules/dao-worker-preamble.md";
 const NOTES = "ccswitch/rules/dao-officer-clauses.md";
 const ROLES = ["general", "reviewer", "implementer", "adversary", "scout", "dogfood"];
 const ORCA = process.env.ORCA_BIN || "orca";
 
 const EXIT_OK = 0, EXIT_FAIL = 1, EXIT_USAGE = 2;
 
-export function buildSpec({ role, taskBody, issue, notesPath = NOTES }) {
+export function buildSpec({ role, taskBody, issue, preamblePath = PREAMBLE }) {
   return [
-    `【开工第一步】Read \`<dao 仓根>/${notesPath}\`（跨项目通用）+ 本仓 \`docs/rules/dispatch-clauses.md\`（本仓特有，没有就跳过）：`,
-    `两份都通读「所有人」那一节 + 你这一类（${role}）那几行，逐条遵守。有冲突以盘上文件为准，不以本单的转述为准。`,
-    ``,
-    `【验证】全套验证入口去目标仓根的 CLAUDE.md 自己查——本单刻意不给验证命令。文件没写或与盘上对不上时以盘上为准，并把差异写进交付。`,
-    ``,
-    `【交付】完成时发一次 worker_done（--outcome succeeded|failed --files-modified ... --report-path ...），并把交活单 JSON 落盘为 report 文件：`,
-    `{"task":"${issue ? `issue #${issue}` : "<任务标识>"}","commits":["<短哈希>"],"verify":[{"cmd":"<命令>","exit":0,"seconds":N}],"files":["<相对路径>"],"guardEvidence":"<仅护栏类改动必填：先破再验两态记录>","notes":"<可选>"}`,
-    `交活单会被 scripts/dao-exit-gate.mjs 机核（格式/凭据/边界/卫生/限时重放五道秒级门）；缺字段或与盘上对不上会被自动打回，最多两轮。`,
-    issue ? `本单关联 issue #${issue}；完工回写 issue 由协调者做，你只管把交活单写真。` : ``,
+    `开工先 Read \`<dao 仓根>/${preamblePath}\`，照做（你这一类工人是 ${role}）。`,
     ``,
     `【任务】`,
     taskBody.trim(),
     ``,
-  ].filter((l) => l !== "").join("\n");
+    `【验收】完成时发一次 worker_done（--outcome succeeded|failed --files-modified ... --report-path ...），并把交活单 JSON 落盘为 report 文件：`,
+    `{"task":"${issue ? `issue #${issue}` : "<任务标识>"}","commits":["<短哈希>"],"verify":[{"cmd":"<命令>","exit":0,"seconds":N}],"files":["<相对路径>"],"guardEvidence":"<仅护栏类改动必填：先破再验两态记录>","notes":"<可选>"}`,
+    `交活单会被 scripts/dao-exit-gate.mjs 机核（格式/凭据/边界/卫生/限时重放五道秒级门）；缺字段或与盘上对不上会被自动打回，最多两轮。`,
+    ``,
+    issue
+      ? `【审计锚】争议以 issue #${issue} 的拍板评论为准；完工回写 issue 由协调者做，你只管把交活单写真。`
+      : `【审计锚】争议以派你来的那条通道里的原话为准。`,
+    // 空行保留：四格靠空行分隔才读得出是四格，压掉就成一坨。
+  ].join("\n");
 }
 
 function main(argv) {
@@ -68,10 +74,12 @@ function main(argv) {
   let taskBody;
   try { taskBody = fs.readFileSync(specFile, "utf8"); }
   catch (e) { process.stderr.write(`✗ 读不到任务正文：${specFile}（${e.code || e.message}）\n`); return EXIT_USAGE; }
-  // 便签必须真的在盘上，否则派出去的第一行就是一个指向空气的指针。
-  if (!fs.existsSync(path.join(ROOT, NOTES))) {
-    process.stderr.write(`✗ 工人便签不在：${NOTES} —— 派单书第一行会指向空气，先补回它再派\n`);
-    return EXIT_FAIL;
+  // 便签链必须真的在盘上，否则派出去的第一行就是一个指向空气的指针。
+  for (const rel of [PREAMBLE, NOTES]) {
+    if (!fs.existsSync(path.join(ROOT, rel))) {
+      process.stderr.write(`✗ 工人便签不在：${rel} —— 派单书第一行会指向空气，先补回它再派\n`);
+      return EXIT_FAIL;
+    }
   }
   const spec = buildSpec({ role, taskBody, issue });
   const orcaArgs = [
