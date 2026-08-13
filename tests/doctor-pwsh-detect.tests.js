@@ -10,6 +10,10 @@
 // fixture .cmd 文件，或本机真实安装的 pwsh.exe），退出码由那个真进程决定——不直接
 // stub spawnSyncFn 返回一个编好的 {status:0} 对象糊弄判据。existsSyncFn 同理用真实
 // fs.existsSync 查真实磁盘上的 fixture 文件。
+//
+// issue #387（PR #386 对抗审挂账 7 条）收账 §①②⑤⑥：①b/②b 钉住「PATH 命中优先于兜底」
+// 「文件存在但真跑不通不算」两处判别力盲区；⑥ 钉住默认候选 + 注册表查询都覆盖 x86/
+// WOW6432Node 视图；⑦ 钉住探测 spawn 带 timeout、挂起候选不会拖死整套探测。
 
 const fs = require("fs");
 const path = require("path");
@@ -17,7 +21,7 @@ const { execFileSync, spawnSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const PWSH_SRC_PATH = path.join(REPO, "config-sync", "lib", "pwsh.mjs");
-const { detectPwshState, pickPwsh } = require(PWSH_SRC_PATH);
+const { detectPwshState, pickPwsh, queryPwshRegistryPaths, DEFAULT_INSTALL_PATH_X86 } = require(PWSH_SRC_PATH);
 
 // .cmd fixture 在 Windows 上不是原生可执行体，CreateProcess 直接调用会 ENOENT——
 // 真实批处理脚本本就要靠 cmd.exe 解释，这不是在绕开真实执行，是它本来的运行方式。
@@ -47,20 +51,32 @@ function writeFixtureCmd(name, exitCode) {
   return p;
 }
 
+// 存在但真跑不通的候选：模拟「装了个坏掉的 pwsh.exe」——文件在磁盘上，一跑就非 0 退出。
+// 用来钉住「只看文件存在不算」这条头注声明（issue #387 挂账1）。
+function writeFixtureCmdSleepThenExit(name, pingCount, exitCode) {
+  const p = path.join(FIXTURE_DIR, name);
+  fs.writeFileSync(p, `@echo off\r\nping -n ${pingCount} 127.0.0.1 >nul\r\nexit /b ${exitCode}\r\n`, "utf8");
+  return p;
+}
+
 const LOCATOR_FOUND = writeFixtureCmd("locator-found.cmd", 0); // 模拟 where/which 命中
 const LOCATOR_MISSING = writeFixtureCmd("locator-missing.cmd", 1); // 模拟 where/which 未命中
 const FAKE_PWSH_OK = writeFixtureCmd("fake-pwsh.cmd", 0); // 模拟兜底候选：真实存在且真跑通
+const FAKE_PWSH_BROKEN = writeFixtureCmd("fake-pwsh-broken.cmd", 1); // 存在但真跑失败（坏掉的安装）
 const NONEXISTENT_CANDIDATE = path.join(FIXTURE_DIR, "does-not-exist.exe"); // 真实不存在
 
 // 独立确认 fixture 本身的退出码是真的（不是测试自己瞎编的期望），避免「靶死了还判过」。
 console.log("=== 前置：fixture .cmd 本身的真实退出码 ===");
 {
-  let okExit = -1, missExit = -1;
+  let okExit = -1, missExit = -1, brokenExit = -1;
   try { execFileSync(LOCATOR_FOUND, { windowsHide: true, shell: true }); okExit = 0; } catch (e) { okExit = e.status; }
   try { execFileSync(LOCATOR_MISSING, { windowsHide: true, shell: true }); } catch (e) { missExit = e.status; }
+  try { execFileSync(FAKE_PWSH_BROKEN, { windowsHide: true, shell: true }); } catch (e) { brokenExit = e.status; }
   check("locator-found.cmd 真实退出码 0", okExit === 0, `实际 ${okExit}`);
   check("locator-missing.cmd 真实退出码 1", missExit === 1, `实际 ${missExit}`);
   check("fake-pwsh.cmd 在真实磁盘上存在", fs.existsSync(FAKE_PWSH_OK));
+  check("fake-pwsh-broken.cmd 在真实磁盘上存在", fs.existsSync(FAKE_PWSH_BROKEN));
+  check("fake-pwsh-broken.cmd 真实退出码 1（存在但坏）", brokenExit === 1, `实际 ${brokenExit}`);
   check("does-not-exist.exe 在真实磁盘上确实不存在", !fs.existsSync(NONEXISTENT_CANDIDATE));
 }
 
@@ -69,6 +85,20 @@ console.log("\n=== ① 正控：PATH 直接命中 → state='path' ===");
   const state = detectPwshState({ locator: LOCATOR_FOUND, spawnSyncFn: shellSpawnSync, candidatePaths: [], registryQueryFn: () => [] });
   check("state === 'path'", state.state === "path", JSON.stringify(state));
   check("resolvedPath === 'pwsh'（字面量，交给调用方直接当命令名用）", state.resolvedPath === "pwsh");
+}
+
+console.log("\n=== ①b PATH 命中 + 兜底候选也真实存在（重叠态）→ 仍必须是 'path'，判定顺序不可对调（issue #387 挂账2）===");
+{
+  // 装完 PS7 且新终端已生效时的常态：where 命中、默认候选路径也存在。顺序对调
+  // （先查候选再查 PATH）会在这个重叠态下误判成 'fallback'，doctor 会错报「PATH 未刷新」。
+  const state = detectPwshState({
+    locator: LOCATOR_FOUND,
+    spawnSyncFn: shellSpawnSync,
+    candidatePaths: [FAKE_PWSH_OK],
+    registryQueryFn: () => [],
+  });
+  check("state === 'path'（PATH 命中优先于兜底候选，不是 'fallback'）", state.state === "path", JSON.stringify(state));
+  check("resolvedPath === 'pwsh'（不是兜底候选的绝对路径）", state.resolvedPath === "pwsh");
 }
 
 console.log("\n=== ② PATH 未命中但兜底候选真跑通 → state='fallback'（已装，进程 PATH 未刷新）===");
@@ -81,6 +111,18 @@ console.log("\n=== ② PATH 未命中但兜底候选真跑通 → state='fallbac
   });
   check("state === 'fallback'", state.state === "fallback", JSON.stringify(state));
   check("resolvedPath 指向真实兜底候选的绝对路径", state.resolvedPath === FAKE_PWSH_OK);
+}
+
+console.log("\n=== ②b 候选文件存在但真跑不通(exit 1) → state='missing'，不能只看文件存在就判 fallback（issue #387 挂账1）===");
+{
+  const state = detectPwshState({
+    locator: LOCATOR_MISSING,
+    spawnSyncFn: shellSpawnSync,
+    candidatePaths: [FAKE_PWSH_BROKEN],
+    registryQueryFn: () => [],
+  });
+  check("state === 'missing'（存在但坏掉的候选不算已装）", state.state === "missing", JSON.stringify(state));
+  check("resolvedPath === null", state.resolvedPath === null);
 }
 
 console.log("\n=== ③ 负控：PATH 未命中且兜底候选也不存在 → state='missing' ===");
@@ -138,6 +180,73 @@ console.log("\n=== ⑤ 判别力 · mutation：弄坏兜底判据（把「真跑
       fs.rmSync(mutantPath, { force: true });
     }
   }
+}
+
+console.log("\n=== ⑥ x86 变体：默认候选含 (x86) 路径 + 注册表查询覆盖 WOW6432Node 视图（issue #387 挂账6）===");
+{
+  // 6a：不覆盖 candidatePaths，验证「默认候选」这一支本身就含 x86 路径。probe 只认
+  // locator fixture 与 x86 绝对路径两种输入，其余（含真实 64 位默认路径、reg.exe）一律
+  // 判定成「跑不通」，确保命中的必须是 x86 那一支，不是巧合命中别的候选。
+  const probe = (cmd, args, opts) => {
+    if (cmd === LOCATOR_MISSING) return shellSpawnSync(cmd, args, opts);
+    if (cmd === DEFAULT_INSTALL_PATH_X86) return { error: undefined, status: 0 };
+    return { error: new Error("unexpected candidate: " + cmd), status: 1 };
+  };
+  const state = detectPwshState({
+    locator: LOCATOR_MISSING,
+    spawnSyncFn: probe,
+    existsSyncFn: (p) => p === DEFAULT_INSTALL_PATH_X86,
+    registryQueryFn: () => [],
+  });
+  check(
+    "默认候选含 x86 安装路径（不覆盖 candidatePaths 也能探到 Program Files (x86)）",
+    state.state === "fallback" && state.resolvedPath === DEFAULT_INSTALL_PATH_X86,
+    JSON.stringify(state)
+  );
+
+  // 6b：queryPwshRegistryPaths 同时查 64 位主视图与 WOW6432Node 32 位视图两个注册表键。
+  const queriedKeys = [];
+  const spy = (cmd, args) => {
+    if (cmd === "reg") queriedKeys.push(args[1]);
+    return { error: undefined, status: 1, stdout: "" };
+  };
+  queryPwshRegistryPaths(spy);
+  check(
+    "注册表查询覆盖 64 位安装视图键",
+    queriedKeys.some((k) => /PowerShellCore\\InstalledVersions$/i.test(k) && !/WOW6432Node/i.test(k)),
+    JSON.stringify(queriedKeys)
+  );
+  check(
+    "注册表查询覆盖 WOW6432Node 32 位安装视图键",
+    queriedKeys.some((k) => /WOW6432Node/i.test(k)),
+    JSON.stringify(queriedKeys)
+  );
+}
+
+console.log("\n=== ⑦ 探测 spawn 有 timeout：候选真跑挂起不会拖死探测（issue #387 挂账5）===");
+{
+  // ping -n 6 大约耗时 5 秒才退出——用来模拟「pwsh.exe 假死」。timeoutMs 显式调小到
+  // 300ms，探测必须在远小于 5 秒内返回，而不是等挂起的子进程自己结束。
+  const HANG_CANDIDATE = writeFixtureCmdSleepThenExit("hang-pwsh.cmd", 6, 0);
+  const startedAt = Date.now();
+  const state = detectPwshState({
+    locator: LOCATOR_MISSING,
+    spawnSyncFn: shellSpawnSync,
+    candidatePaths: [HANG_CANDIDATE],
+    registryQueryFn: () => [],
+    timeoutMs: 300,
+  });
+  const elapsedMs = Date.now() - startedAt;
+  check(
+    "挂起的候选超时后判 missing（不会因为它最终会 exit 0 就误判 fallback）",
+    state.state === "missing",
+    JSON.stringify(state)
+  );
+  check(
+    `探测在 timeoutMs 附近返回，未被挂起子进程拖住整个 ~5s（实测 ${elapsedMs}ms，阈值 2000ms）`,
+    elapsedMs < 2000,
+    `实测 ${elapsedMs}ms`
+  );
 }
 
 fs.rmSync(FIXTURE_DIR, { recursive: true, force: true });
