@@ -20,7 +20,7 @@
 | 2 | cc-switch 通用配置（env/hooks/model/permissions） | 本仓库 `config-sync/common/` | ✅ 是 |
 | 3 | settings 脱敏真实值 | `config-sync/common-secrets.json` | ❌ **手动复制** |
 | 4 | MCP servers / skills / prompts / proxy | cc-switch DB（经 config-sync 快照） | ✅ 是（脱敏） |
-| 5 | pi 编码代理（处方 + 4 模型配置模板） | 本仓库 `ccswitch/stacks/pi.md` | ✅ 处方进 git；**真实 API key 不进 git**，新机从 new-api 面板生成后只填本地 `~/.pi/agent/models.json` 一格 |
+| 5 | pi 编码代理（从零装机处方：有网/离线双路径 + 每机网关与 key 差异 + 扩展/MCP/skills） | 本仓库 `ccswitch/stacks/pi.md` | ✅ 处方进 git；**真实 API key 不进 git**，每机从该机 Claude Code settings 借 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` 填本地 `~/.pi/agent/models.json`（网关地址各机不同，见处方 §4） |
 
 **核心原则**：能进 git 的都进 git，换机靠 `git clone` + 一条恢复命令带回；只有 `common-secrets.json`（含 settings 脱敏真实值）需手动拷贝；供应商配置在新机器直接配置。
 
@@ -79,7 +79,7 @@ node config-sync\lib\doctor.mjs
 可选（按需用哪栈装哪个）：
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
 - **Codex / Codex++**——用 dao + Codex（镜像）
-- **pi 编码代理**——`npm install -g @mariozechner/pi-coding-agent`，配置处方见 `ccswitch/stacks/pi.md`（安装/4 模型模板/压缩参数/实测坑/验证命令全在里面）
+- **pi 编码代理**——有网机器 `npm install -g @mariozechner/pi-coding-agent`；**纯内网机器走离线路径**（预打包产物 + node-gyp headers 预填，见处方 §3）。配置处方见 `ccswitch/stacks/pi.md`（有网/离线双安装/每机网关与 key/4 模型模板/压缩参数/扩展四件套/MCP/skills/实测坑/验证命令全在里面）
 - **Orca 守护脚本**（`scripts/dao-safeguard-guard.mjs`，issue #336）——依赖 Node + `orca` CLI（Orca IDE 自带，本表已含 Node）；不部署、不进 config-sync、无手动复制资产，`git clone` 即得。用途/参数/自测入口见脚本头注
 - ~~**Windsurf**~~（已退役，无需安装）
 
@@ -152,7 +152,7 @@ node config-sync\lib\sync.mjs --direction=down --yes
 #   （settings/主题照常落位），doctor 的 pi 节会红
 # - sessions/ · models-store.json · bin/ · extensions/ 不同步，换机后由 pi 自建
 # - 下行落位后重启 pi 生效；lastChangelogVersion 被 pi 自己更新属预期，重跑上行导出即回正
-# （npm 装 pi 本体仍照 ccswitch/stacks/pi.md 处方）
+# （装 pi 本体仍照 ccswitch/stacks/pi.md 处方：有网直装 / 纯内网离线路径；models.json 与 mcp.json 不同步，逐机按处方手工）
 
 # 任意命令加 -DryRun 先预览不写入
 ```
