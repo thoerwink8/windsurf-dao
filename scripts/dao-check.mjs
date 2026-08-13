@@ -1,33 +1,35 @@
 #!/usr/bin/env node
 
-// dao check —— 「这套系统现在是好的吗」的唯一答案。
+// dao check —— 仓库现在是不是好的，唯一的答案。
 //
-// 改这个文件前必须知道的四条不变量（来历与推理归 docs/decisions/2026-08-12-blueprint-from-zero.md 件 5）：
+// 改这个文件前必须知道的四条规矩（来历与推理见 docs/decisions/2026-08-12-blueprint-from-zero.md 件 5）：
 //   1. 退出码只有 0 和 1。加第三个态，它就变回了它替换掉的那个东西。
-//   2. 检查面靠扫描算出，不许出现手维护的清单——清单会过期，而过期的清单是静默放行。
-//      每个检查面都必须自带零样本闸：扫出 0 条即判红。「数到 0」和「没看到样本」输出一样，
-//      不分开就等于把「本次没查成」记成了「查过没事」。
-//   3. 失败解释只有 fail(标题, 怎么修, 证据) 三个槽位，第四行物理上写不进去。这是结构约束不是风格。
+//   2. 每个检查都是扫描出来的，不许出现手写的清单——清单会过期，过期的清单等于没查。
+//      每个检查都必须自带「零样本报红」：扫出 0 条就报红。「数到 0」和「没看到样本」输出一样，
+//      不分开就等于把「这次没查成」记成了「查过没事」。
+//   3. 报失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。第四行物理上写不进去。
+//      这是结构约束不是风格。
 //   4. 没有任何东西检查 dao check 自己。它坏了会在使用中被看见——它的输出每次都有人读。
-//      想在它之上再加一层守卫之前，先读上面那份蓝图第六章第 4 条。
+//      想在它之上再加一层检查之前，先读上面那份蓝图第六章第 4 条。
 //
-// 准入判据（想加一个检查项时用它自问）：这个检查防住的失败，是不可逆的，或者是静默的吗？
+// 准入判据（想加一个检查时用它自问）：这个检查防住的失败，是不可逆的，或者是静默的吗？
 // 两个都不是 ⇒ 不加，让它在使用中被发现。
+//
+// 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
+// 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
+// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面，全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import os from 'node:os';
-import { checkCommandTableImplemented, checkSkillsDeployed } from './lib/consistency-gates.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
-const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const t0 = Date.now();
 
 const failures = [];
 const greens = [];
 
-/** 失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。 */
+/** 报失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。 */
 function fail(what, howToFix, evidence) {
   failures.push([what, howToFix, evidence].filter(Boolean).slice(0, 3));
 }
@@ -38,19 +40,19 @@ function firstFailLine(output) {
   return (line || '(无输出)').trim().slice(0, 160);
 }
 
-// ── ① 不可逆闸的自测 ────────────────────────────────────────────────
-// 闸是静默失效型部件：挂了没人知道。所以闸的自测是全系统唯一必须存在的测试。
+// ── ① 跑 tests/ 下所有测试 ─────────────────────────────────────────
+// 测试是静默失效型部件：坏了没人知道。所以自检必须每套都跑。
 // 自发现：tests/ 下的每一套都跑，没有清单可以漏登记。
 
-function checkGateSelfTests() {
+function runTests() {
   const dir = join(ROOT, 'tests');
   if (!existsSync(dir)) {
-    fail('tests/ 目录不在', '闸的自测是必须存在的，恢复 tests/ 或改 dao-check.mjs 的约定', dir);
+    fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
     return;
   }
   const suites = readdirSync(dir).filter(f => /\.tests\.(js|ps1)$/.test(f)).sort();
   if (suites.length === 0) {
-    fail('一套闸自测都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回闸的自测', dir);
+    fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
   }
   for (const f of suites) {
@@ -59,42 +61,14 @@ function checkGateSelfTests() {
       ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p], { encoding: 'utf8', cwd: ROOT })
       : spawnSync(process.execPath, [p], { encoding: 'utf8', cwd: ROOT });
     const out = (r.stdout || '') + (r.stderr || '');
-    if (r.status === 0) green(`闸自测 ${f}`);
-    else fail(`闸自测红：${f}`, `复现：node tests/${f}`, firstFailLine(out));
+    if (r.status === 0) green(`测试 ${f}`);
+    else fail(`测试红：${f}`, `复现：node tests/${f}`, firstFailLine(out));
   }
 }
 
-// ── ② 闸的注册面 ────────────────────────────────────────────────────
-// 闸的文件还在、但注册里指着一个不存在的路径 ⇒ 宿主静默跳过，那道闸就死了而没人知道。
-// 真相源是 config-sync/common/settings.json（下发到宿主的那份配置的仓内源）。
-
-function checkHookRegistration() {
-  const p = join(ROOT, 'config-sync', 'common', 'settings.json');
-  if (!existsSync(p)) {
-    fail('hook 注册源不在', `本次没查成，不是没问题：确认 ${'config-sync/common/settings.json'} 是否被移动`, p);
-    return;
-  }
-  let paths = [];
-  try {
-    const rows = JSON.parse(readFileSync(p, 'utf8')).rows || [];
-    const blob = rows.map(r => String(r.value || '')).join('\n');
-    paths = [...blob.matchAll(/\$\{PROJECT_ROOT\}\/([A-Za-z0-9_./-]+)/g)].map(m => m[1]);
-  } catch (e) {
-    fail('hook 注册源解析不了', '修 config-sync/common/settings.json 的 JSON', String(e.message).slice(0, 160));
-    return;
-  }
-  const uniq = [...new Set(paths)];
-  if (uniq.length === 0) {
-    fail('注册面解析出 0 条', '解析器与配置格式对不上 ⇒ 本次等于没查；核 settings.json 里的 ${PROJECT_ROOT} 写法', p);
-    return;
-  }
-  const missing = uniq.filter(rel => !existsSync(join(ROOT, rel)));
-  if (missing.length === 0) green(`闸注册面 ${uniq.length} 条全部指得到`);
-  else fail(`注册了却不存在的闸 ${missing.length} 个`, '要么补回文件，要么从 config-sync/common/settings.json 里摘掉注册', missing.join(' '));
-}
-
-// ── ③ skill 装载面 ──────────────────────────────────────────────────
-// frontmatter 坏掉的 skill 不会报错，它只是不加载——同样是静默失效。
+// ── ② skill 装载面 ──────────────────────────────────────────────────
+// frontmatter 坏掉的 skill 不会报错，它只是不加载——静默失效。
+// 自发现：扫 ccswitch/skills 下所有目录，没有清单可以漏登记。
 
 function checkSkillFrontmatter() {
   const dir = join(ROOT, 'ccswitch', 'skills');
@@ -121,7 +95,7 @@ function checkSkillFrontmatter() {
   else fail(`装载不了的 skill ${bad.length} 个`, 'SKILL.md 要有 frontmatter，且 name 必须等于目录名', bad.join(' '));
 }
 
-// ── ④ 密钥不在 git 追踪面 ───────────────────────────────────────────
+// ── ③ 密钥不在 git 追踪面 ───────────────────────────────────────────
 // 全系统唯一真正不可逆的伤害：密钥一旦进 git，删不掉、改不回、只能换密钥。
 // 自发现：扫 git 追踪面里所有「密钥形态」的文件名，不维护任何白名单。
 
@@ -143,37 +117,11 @@ function checkSecretsNotTracked() {
   else fail(`疑似密钥进了 git ${hits.length} 个`, '立刻 git rm --cached + 补 .gitignore + 当作已泄漏换掉它', hits.join(' '));
 }
 
-// ── ⑤ 命令表实现面 ──────────────────────────────────────────────────
-// 守的静默失效面：ccswitch/dao.md 的「器 · 命令表」列给用户敲的 /命令，列了但没实现时
-// 无人报错——用户敲下去才发现。命令表看着好好的，实际敲不了。与 ③ 互补：③ 管「仓里有的
-// 能加载」，⑤ 管「表上列的找得到」。零样本闸：节找不到 / 抽出 0 条命令 ⇒ 红（本次没查成）。
-
-function checkCommandTable() {
-  const r = checkCommandTableImplemented({ repoRoot: ROOT });
-  for (const f of r.fails) fail(...f);
-  for (const g of r.greens) green(g);
-}
-
-// ── ⑥ skill 部署面 ──────────────────────────────────────────────────
-// 守的静默失效面：仓里有 skill 却没 symlink 进 ~/.claude/skills，它就永远不会被加载。
-// 本单起因就是实咬：grill-me 进仓两天，因部署过滤器从未部署过，没有任何机器报出来。
-// 排除清单唯一真相源是 dao.ps1 的 Get-InternalOnlySkills（不许手抄），零样本闸防漂移；
-// 部署面不存在（~/.claude 缺失）⇒ 显式跳过，措辞带「跳过/没查」，不许装成通过。
-
-function checkSkillDeployment() {
-  const r = checkSkillsDeployed({ repoRoot: ROOT, homeDir: HOME });
-  for (const f of r.fails) fail(...f);
-  for (const g of r.greens) green(g);
-}
-
 // ── 跑 ──────────────────────────────────────────────────────────────
 
-checkGateSelfTests();
-checkHookRegistration();
+runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
-checkCommandTable();
-checkSkillDeployment();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

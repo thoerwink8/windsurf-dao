@@ -55,11 +55,11 @@
 //       弱的那一份不会报错，它只是少认几个模式，输出看起来完全正常（devin 现状即实证：
 //       Go 侧认 5 类、PS 侧认 4 类，PS 那份少认的恰好是 `x-api-key` 与 snake_case）。
 //   (b) 一份实现 + 一个 CLI 入口，别的语言 `node ...` 调它 —— **选它**。Node 已是 dao 的硬
-//       依赖（全部 hook 都是 .js/.mjs），不引入新依赖；CLI 见 ccswitch/scripts/dao-redact.mjs。
+//       依赖（全部 hook 都是 .js/.mjs），不引入新依赖；CLI 见 scripts/dao-redact.mjs。
 //
 // ── 全域分布摸底（建护栏前先摸，dao-writing-rules.md 第二节第一条）─────────────────
 // 2026-08-02 用本文件的 `--scan` 对四个仓的工件面实扫一遍（**数字、分类与命令的唯一真相源
-// 在 `ccswitch/scripts/dao-redact.mjs` 头注的「摸底」段，本处只留结论，不复述数字**）。
+// 在 `scripts/dao-redact.mjs` 头注的「摸底」段，本处只留结论，不复述数字**）。
 // 结论两句，两句都要读：
 //   ① **dao 自己的 `_tmp/` 里此刻就有真凭据**（cc-switch provider 配置的 live dump + 一份 MCP
 //      配置文档），产出它们的那条链一个脱敏步都没有 —— 即本条不是纸面风险。
@@ -76,7 +76,7 @@
 //   打码预览**，**从不回显密钥原文**。否则扫描报告本身成了新的泄漏面，而且下一轮扫它自己
 //   会越扫越多（那正是「每跑一次命中更多」那条实证）。同理 `findLeaks` 只返回打码值。
 //
-// 真相源：windsurf-dao/ccswitch/lib/redact.js
+// 真相源：windsurf-dao/scripts/lib/redact.js
 
 "use strict";
 
