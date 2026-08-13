@@ -13,6 +13,12 @@
 // 探测非零退出 / status==null 时追加一次 `where`(win32)/`which`(其他) 交叉验证：
 // 定位器退出 0 = 命令在只是跑坏 ⇒ unknown；非零 = 真缺席 ⇒ false。退出码与编码无关。
 // NOT_FOUND_RE 仅作定位器本身不可用（无 where/which 或定位器崩了）时的兜底。
+//
+// 超时预算是负载相关的，不是常数（issue #385 取证）：本机空闲时 `pi --version` 远快于预算，
+// 但派单窗并发把机器压满时，**突发那一刻的第一次 spawn** 会慢上一个量级，随后立刻回落。
+// 所以重试必须放大预算——沿用同一预算立刻重跑，两次会被同一波突发一起咬住，
+// 健康的 CLI 就被判成 unknown（假未知，且它是派单决策的输入）。
+// 放大只是缩小窗口，关不上：突发尾巴无上界。关不上的那部分靠 reason 字段留痕，见下。
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -30,26 +36,29 @@ function locate(cmd, timeoutMs, runner) {
   return r.status === 0;
 }
 
+// 非 true 的判定一律带 reason（issue #385 要求：别让「不知道」不留痕）。
+// reason 只供人读，**不参与任何判定**——加解析它的下游前先想清楚它不是契约。
+function verdict(r, cmd, timeoutMs, runner) {
+  const why = r.error ? "error:" + (r.error.code || r.error.message) : "exit:" + r.status;
+  const found = locate(cmd, timeoutMs, runner);
+  if (found === true) return { available: "unknown", reason: why + ", locator:found" };
+  if (found === false) return { available: false, reason: why + ", locator:miss" };
+  const detail = String(r.stderr || r.stdout || "");
+  return NOT_FOUND_RE.test(detail)
+    ? { available: false, reason: why + ", locator:unavailable, not-found-text" }
+    : { available: "unknown", reason: why + ", locator:unavailable" };
+}
+
 // 三态判定：true = 可用（带版本）；false = 真缺席；"unknown" = 存在但跑坏 / 探测失败。
+// 「跑出状态但非零」与「压根没跑出状态（超时 / 启动故障）」判法完全相同，故合成一个条件：
+// status 为 null/undefined 时 `!== 0` 同样成立。改这里前先核真值表，别只核超时那一态。
 function probeOnce(cmd, args, timeoutMs, runner) {
   try {
     const r = runCommand(runner, cmd, args, timeoutMs);
-    if (r.error || r.status == null) {
-      // 探测没跑出状态（超时 / 启动故障）：交给定位器交叉验证，定位器找得到才是 unknown。
-      const found = locate(cmd, timeoutMs, runner);
-      if (found !== null) return found ? { available: "unknown" } : { available: false };
-      const detail = String(r.stderr || r.stdout || "");
-      return NOT_FOUND_RE.test(detail) ? { available: false } : { available: "unknown" };
-    }
-    if (r.status !== 0) {
-      const found = locate(cmd, timeoutMs, runner);
-      if (found !== null) return found ? { available: "unknown" } : { available: false };
-      const detail = String(r.stderr || r.stdout || "");
-      return NOT_FOUND_RE.test(detail) ? { available: false } : { available: "unknown" };
-    }
+    if (r.error || r.status !== 0) return verdict(r, cmd, timeoutMs, runner);
     const ver = String(r.stdout || r.stderr || "").trim().split(/\r?\n/)[0].slice(0, 80);
     return { available: true, version: ver || "unknown" };
-  } catch (_) { return { available: "unknown" }; }
+  } catch (e) { return { available: "unknown", reason: "threw:" + ((e && e.code) || "unknown") }; }
 }
 
 function runCommand(runner, cmd, args, timeoutMs) {
@@ -60,9 +69,14 @@ function runCommand(runner, cmd, args, timeoutMs) {
   });
 }
 
+// 重试的预算放大倍数。首探已超时才付这个代价：真缺席的命令是快速非零退出，不走重试。
+// 代价面：present-but-hung 的 CLI 单条最坏耗时从 2×预算变成 4×预算。
+export const RETRY_TIMEOUT_FACTOR = 3;
+
 export function probe(cmd, args = ["--version"], timeoutMs = 4000, runner = spawnSync) {
   const first = probeOnce(cmd, args, timeoutMs, runner);
-  return first.available === "unknown" ? probeOnce(cmd, args, timeoutMs, runner) : first;
+  if (first.available !== "unknown") return first;
+  return probeOnce(cmd, args, timeoutMs * RETRY_TIMEOUT_FACTOR, runner);
 }
 
 // pi 的网关模型列表：试它的 models 子命令；拿不到就标 unknown（有 CLI 却不知模型≠没有）。

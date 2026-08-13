@@ -128,6 +128,7 @@ console.log("\n=== ② serviceStall 端到端（假 runner 注入 · 生产链�
 console.log("\n=== ③ state-file 的 stall 行带 stallCount/stallRounds ===");
 {
   const sf = path.join(REPO, "_tmp", "guard-e2e-state.ndjson");
+  fs.mkdirSync(path.dirname(sf), { recursive: true }); // 干净 CI 树没有 _tmp/，写前必须先保证目录存在
   fs.rmSync(sf, { force: true });
   const reads = [
     { ok: true, result: { terminal: { status: "running", tail: ["line1"] } } },

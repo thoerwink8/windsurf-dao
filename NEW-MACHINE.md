@@ -71,8 +71,10 @@ node config-sync\lib\doctor.mjs
 > **PowerShell 7（建议装 · issue #338，2026-08-13）**：仓内所有 PowerShell 调用面已切「优先 pwsh、缺席回退 powershell 5.1」——
 > 装上 PS7 立即受益（5.1 特有坑大半消失：无 BOM UTF-8 的 `Get-Content` 中文解码、`2>&1` 混流、无 `&&`/`||`）。
 > **没装不阻塞**：5.1 回退仍全兼容，`node config-sync\lib\doctor.mjs` 只在「外部工具链」节多一行提醒（提醒≠失败）。
-> **装完最好开个新终端（issue #364，2026-08-13）**：doctor 的 pwsh 探测只查 PATH，长驻进程/已开的终端继承的是装机前的旧 PATH——
-> 若在旧终端里跑 doctor 看到「已安装但当前进程 PATH 未刷新」，不是没装成功，是这个进程还没看见新 PATH；重启终端/Orca 后 `pickPwsh()` 调用面自动走 PS7。
+> **装完最好开个新终端（issue #364/#387，2026-08-13）**：doctor 的 pwsh 探测是三态（PATH 命中 / 兜底候选存在
+> 且真跑通 / 真未装），长驻进程/已开的终端继承的是装机前的旧 PATH——若在旧终端里跑 doctor 看到「已安装但当前
+> 进程 PATH 未刷新」，不是没装成功，`pickPwsh()` 此刻已经在用兜底探到的绝对路径走 7（不影响功能）；重启终端/
+> Orca 后只是改成走 PATH 字面量 `pwsh`，行为不变。
 
 可选（按需用哪栈装哪个）：
 - **Claude Code**（CLI / 桌面端）——用 dao + Claude（主栈）
