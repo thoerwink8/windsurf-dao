@@ -95,7 +95,7 @@ skill 不能自动加载：① 内部路由直接 Read 同目录文件；② 跨
 - 改或新建 `*.ps1` 前 = Read `rules/dao-shell.md`。〔域〕 [#Shell-PS四坑]
 - 查库/API/CLI 文档前 = Read `rules/dao-docs-lookup.md`：库文档走 context7、网页走 WebFetch。 [#Shell-查文档]
 - 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖 ⇒ 认源是追下发链。动过任一层 ⇒ 同一动作内跑漂移检测收尾并贴真退出码。 [#Shell-源与投影]
-- PR 合并链走 `scripts/dao-pr-merge.ps1`（先 `-DryRun`）；裸手 `gh pr merge` 只有提醒不是守卫。合并链验证按「改谁才检谁」触发受影响测试。 [#Shell-合并链]
+- PR 合并链走 `scripts/dao-pr-merge.ps1`（先 `-DryRun`）；裸手 `gh pr merge` 只有提醒不是守卫。合并链验证步 = 全量 `node scripts/dao-check.mjs`（二值退出，非 0 即停）；「改谁才检谁」（按 diff 选测试套）已于 2026-08-12 连根删除（issue #325 第 2 项，`docs/decisions/2026-08-12-blueprint-from-zero.md`）——全量只要 2.7 秒，选择性跑测试的映射表本身是会过期的手维护清单，失去了存在理由。 [#Shell-合并链]
   - 判改动进没进主干只有 `git patch-id --stable` 答得对。 [#Shell-patch-id]
 - PR-first（默认非禁令）：代码类走分支 → PR → 合并，文档微改可直推。
 - 临时文件归目标项目根下 `_tmp/`，项目 `.gitignore` 须含 `**/_tmp/`。
