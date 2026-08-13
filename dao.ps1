@@ -961,16 +961,16 @@ function Invoke-UnlinkCodexPrompts {
 }
 
 function Invoke-UnlinkClaude {
-    # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao symlink、references/ 经文、@import 行、hook 注册。
+    # 卸载 Claude Code 侧部署:移除 ~/.claude 下的 dao 链接(symlink / Junction)、references/ 经文、@import 行、hook 注册。
     # 只删 dao 引入的链接/条目,不碰用户自有 skill/command/agent,不碰 env/token。
     # 与 link-claude 对称。源文件 ccswitch/ 不受影响。
     param([bool]$IsDryRun = $false)
 
     $userClaude = Join-Path $env:USERPROFILE ".claude"
     $claudeSrc = Join-Path $DaoRoot "ccswitch"
-    $removed = 0; $skipped = 0; $err = 0
+    $removed = 0; $skipped = 0; $err = 0; $seen = @{}
 
-    # ── 移除 dao symlink(skills 目录链 / commands·agents 文件链)──
+    # ── 移除 dao 链接(skills 目录链 / commands·agents 文件链,symlink 与 Junction 均认)──
     $oldClaudeSrc = Join-Path $DaoRoot "claude"   # 兼容旧路径(重构前 claude/ → ccswitch/)
     $specs = @(
         # skills 用 "*" 与 link-claude 的单层清单制对称（issue #340）：unlink 若仍按
@@ -985,15 +985,28 @@ function Invoke-UnlinkClaude {
         if (!(Test-Path $dstDir)) { continue }
         Write-Host "  [$($spec.Name)]" -ForegroundColor Cyan
         Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            # 只删 symlink,且 target 指向本 dao 源(新旧路径均匹配);真实文件/他处链接不动
-            if ($_.LinkType -eq "SymbolicLink" -and ((Test-PathUnderRoot -Path $_.Target -Root $claudeSrc) -or (Test-PathUnderRoot -Path $_.Target -Root $oldClaudeSrc))) {
+            # 只删 dao 源指向的链接——形态认 symlink 与 Junction 两种(issue #368:Windows 上的生产
+            # 形态是 Junction,旧判据 -eq "SymbolicLink" 会把它们整批 [keep ] 掉且静默退 0),
+            # target 指向本 dao 源(新旧路径均匹配);真实文件/他处链接不动。
+            # 本行是 tests/dao-path-boundary.tests.ps1 钉死的 3 处同形双调用之一,保持单行不拆。
+            $isDaoLink = $_.LinkType -in "SymbolicLink", "Junction" -and ((Test-PathUnderRoot -Path $_.Target -Root $claudeSrc) -or (Test-PathUnderRoot -Path $_.Target -Root $oldClaudeSrc))
+            $seen["$($spec.Name)/$($_.Name)"] = $isDaoLink
+            if ($isDaoLink) {
                 if ($IsDryRun) {
                     Write-Host "    [DRYRUN] unlink $($_.Name)" -ForegroundColor Cyan
                     $removed++
                 } else {
                     try {
-                        # symlink 用 Remove-Item;目录 symlink 加 -Recurse 仅删链不删源
-                        if ($_.PSIsContainer) { $_.Delete() } else { Remove-Item $_.FullName -Force }
+                        # 目录链(Junction/目录 symlink)用 cmd rmdir 摘链:Remove-Item 对目录 Junction
+                        # 是名坑——PS 5.1 实测 -Force 抛 "Object reference not set to an instance of an
+                        # object" 且摘不掉链,历史上的 -Recurse / 对父目录递归有穿链删源事故;cmd rmdir
+                        # 只删重解析点不碰源,与 link-claude 侧悬空 Junction 清理段同法。文件链走 Remove-Item。
+                        if ($_.PSIsContainer) {
+                            & cmd /c "rmdir `"$($_.FullName)`"" | Out-Null
+                            if ($LASTEXITCODE -ne 0) { throw "cmd rmdir exit $LASTEXITCODE" }
+                        } else {
+                            Remove-Item $_.FullName -Force
+                        }
                         Write-Host "    [unlink] $($_.Name)" -ForegroundColor Green
                         $removed++
                     } catch {
@@ -1002,10 +1015,44 @@ function Invoke-UnlinkClaude {
                     }
                 }
             } else {
-                Write-Host "    [keep ] $($_.Name)  (not a dao symlink)" -ForegroundColor DarkGray
+                Write-Host "    [keep ] $($_.Name)  (not a dao link)" -ForegroundColor DarkGray
                 $skipped++
             }
         }
+    }
+
+    # ── 卸后复扫:「声称清除面 vs 实际清除面」核对(issue #368 方向 3)──
+    # 缺口本体是「没有任何东西检查 unlink 的结果」——本段对卸载后的物理状态独立复扫:
+    # 凡本段上方判为 dao 链($seen 记 true)而此刻仍挂在三路目录下的,一律判红计入 error,
+    # 函数随之返回失败(退出码非 0,不再静默退 0)。
+    # 判据不在此重复书写:dao 归属沿用卸载循环的分类($seen),复扫只认「链形态 + 是否被
+    # 本次卸载声称」——tests/dao-path-boundary.tests.ps1 的核数对账钉死全文件调用点
+    # 为 6(3 处同形双调用),复扫段零新增字面;卸载判据本身的漂移由「三处同形单行」的
+    # 结构约束 + 本函数单行判据注释相互锚定。
+    # skills/commands/agents 三路共用同一循环与同一复扫,改一处即三路同改(issue #368 方向 4)。
+    $leftovers = @()
+    foreach ($spec in $specs) {
+        $dstDir = Join-Path $userClaude $spec.Name
+        if (!(Test-Path $dstDir)) { continue }
+        Get-ChildItem $dstDir -Filter $spec.Filter -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            $key = "$($spec.Name)/$($_.Name)"
+            if ($_.LinkType -in "SymbolicLink", "Junction" -and $seen.ContainsKey($key) -and $seen[$key]) {
+                if ($IsDryRun) { return }   # DryRun 未真删,「仍在」是预期,物理核对留给真实 unlink
+                $leftovers += "$key  ($($_.LinkType) -> $((@($_.Target))[0]))"
+            }
+        }
+    }
+    if ($leftovers.Count -gt 0) {
+        Write-Host "  [verify] 复扫发现 $($leftovers.Count) 个仍指向 dao 源的链:" -ForegroundColor Red
+        foreach ($l in $leftovers) {
+            Write-Host "    [left ] $l" -ForegroundColor Red
+        }
+        Write-Host "  [verify] unlink 未清干净,按失败处理。" -ForegroundColor Red
+        $err += $leftovers.Count
+    } elseif ($IsDryRun) {
+        Write-Host "  [verify] (DryRun 未真删,物理复扫核对在真实 unlink 时执行)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  [verify] 复扫无残留:三路目录下已无指向 dao 源的链。" -ForegroundColor Green
     }
 
     # ── 移除 ~/.claude/references/ 下的经文文件 ──
@@ -1175,6 +1222,9 @@ function Invoke-UnlinkClaude {
     Write-Host ""
     Write-Host "  summary: removed=$removed skipped=$skipped error=$err" -ForegroundColor Cyan
     Write-Host "  Claude Code: restart session to apply. Source claude/ untouched (git-tracked)." -ForegroundColor DarkGray
+
+    # issue #368:卸不干净时退出码不得是 0(旧行为静默退 0 正是本单要修的缺陷)。
+    return ($err -eq 0)
 }
 
 # ── CodeGraph 安装与自愈 ──
@@ -1431,7 +1481,8 @@ switch ($Action) {
     }
     "unlink-claude" {
         Write-Host "`n  Unlinking dao claude/ config from ~/.claude ..." -ForegroundColor Cyan
-        Invoke-UnlinkClaude -IsDryRun:$DryRun.IsPresent
+        $ok = Invoke-UnlinkClaude -IsDryRun:$DryRun.IsPresent
+        if (-not $ok) { exit 1 }
     }
     "link-codex" {
         # 强形态(2026-07-27 拍板):本动作不再写 ~/.codex/skills,只报告归属与现状。
