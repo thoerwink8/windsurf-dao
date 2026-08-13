@@ -16,12 +16,20 @@
 // 3. **判据只用结构化字段**（`tool_input.isolation` / agent 类型字段），**不去 prompt 正文里
 //    grep 关键词**。正文关键词是近似手段，本单没有外部语料来源可以校准它的两侧误差。
 //
-// 4. **判据是近似的，两侧都有反例。** 漏报：用 `general-purpose` 之外的、本表没收录的类型名
-//    干写盘活；`Task` 形态不带类型字段时只剩 isolation 一条特征。误报：拿写权官种去干一件
-//    纯只读的活（代价是一次被拦 + 一条可抄的换法，见拦截消息末段）。刻意不去解析 prompt 正文。
+// 4. **判据是近似的，两侧都有反例。** 漏报：本表没收录的显式类型名去干写盘活；
+//    `isolation` 若有 `worktree` 以外的写盘形态（盘上无样本）。误报：拿写权官种、全权底座、
+//    或**不填类型字段**去干一件纯只读的活（代价是一次被拦 + 三条可抄的换法，见拦截消息末段）。
+//    刻意不去解析 prompt 正文。
+//    🔴 **不填类型字段 = 宿主按缺省全权底座起 ⇒ 与显式 `general-purpose` 同一物 ⇒ 一样拦**
+//    （W3 换家审 R1，树帅 2026-08-13 裁定）。拦显式、放隐式是闸内部自相矛盾，
+//    而且那等于「少填一个字段就绕过全权底座那道裁决」——一个字段就能绕的禁令等于没有。
 //
-// 5. **`--selfcheck` 不许复用主逻辑的缓存解析。** 它只读 live settings.json 回答「我到底接上没有」，
-//    与 readRosterCache/decide 零共享——自检那一半要能在主逻辑瞎掉时仍然看得见。
+// 5. **`--selfcheck` 不许复用主逻辑的缓存解析**（它只读 live settings.json 回答「我到底接上没有」），
+//    **但必须能看见主逻辑判据死没死**。两件事不是一回事：两半不共享解析所以不会一起瞎，
+//    可「decide 被改成恒放行」是静默 exit 0（没抛异常就没有 fail-open 告警），而只答注册面的自检
+//    照样报健康 —— **主逻辑死掉那一刻自检看着是绿的**（W3 换家审 R4 实测）。
+//    ⇒ 自检末尾有 canary：拿合成缓存对必拦/必放两个 payload 真跑一遍 `decide()`，对不上即 exit 1。
+//    canary 用的是**临时目录里现造的缓存**，不读真缓存——真缓存坏掉不许砸掉注册结论。
 //
 // 6. **本闸的退役触发器**（规则只增不减是结构必然，所以退役条件写在这里、并由自测钉住）：
 //    ① roster 探测面若不再产出 `fabric.orca`，本闸的输入恒为「判不出」⇒ 全路降级放行，
@@ -85,6 +93,11 @@ const WRITER_AGENT_TYPES = [
 // 代价照直说：拿通用底座干只读小勘察会被误拦一次，换法在拦截消息末段（改用只读官种）。
 const FULL_ACCESS_AGENT_TYPES = ["claude", "general-purpose"];
 
+// 拦截消息里推荐的只读官种。**不是随手写的名字**：自测按 `ccswitch/agents/*.md` 的实况核，
+// 这里的每一个都必须在那儿、且确实没有 Write/Edit 写权——哪天谁给它们开了写权，dao check 会红
+// （一条指向空气的建议比没有建议更糟：照做的人会以为自己走了合法路径）。
+const READONLY_HINT_TYPES = ["dao-scout", "dao-reviewer", "dao-reviewer-critical", "dao-brainstormer", "dao-debugger"];
+
 // ── 判据 ────────────────────────────────────────────────────────────────────
 
 function agentTypeOf(toolInput) {
@@ -102,7 +115,11 @@ function writerFeature(toolInput) {
     return { kind: "isolation", detail: "`isolation: \"worktree\"`（要独占工作树写文件）" };
   }
   const type = agentTypeOf(ti);
-  if (!type) return null;
+  // 🔴 一个字段都没填 ⇒ 宿主按缺省全权底座起，与显式 `general-purpose` 是同一个东西 ⇒ 一样算写盘特征。
+  //    （树帅 2026-08-13 裁定，出处 W3 换家审 R1；不这么判，任何人少填一个字段就绕过全权底座那道裁决。）
+  if (!type) {
+    return { kind: "agentTypeMissing", detail: "入参里没有任何 agent 类型字段 ⇒ 宿主按**缺省全权底座**起（与显式 `general-purpose` 同一物）" };
+  }
   if (WRITER_AGENT_TYPES.includes(type)) {
     return { kind: "agentType", detail: `agent 类型 \`${type}\`（该官种自己声明了 Write/Edit 写权）` };
   }
@@ -217,6 +234,28 @@ function logDegrade(input, d) {
 // ── 拦截消息：必须自带「怎么办」（用户修订④）────────────────────────────────
 // 三样缺一不可：①人话说清为什么拦 ②走 Orca 的最短命令 ③确认 Orca 真死了的刷新命令。
 // 命令里的参数**不背表**：`ccswitch/rules/dao-dispatch.md` §三 明写动手前现查，这里给形态与出处。
+// 第②段分两种写法，因为「该等」和「该动手」是两件事（W3 换家审 R3，树帅裁最小改法）：
+// 缓存**缺失 / 过期**这两格多半发生在刚开窗——SessionStart 的后台刷新此刻多半正在跑，
+// 一次探测是几十秒量级。这时候再指示一个人去手动跑同一条刷新命令，是让他为一个已经在发生的事
+// 再等一轮，摩擦翻倍。**不许指示一个多半是冗余的动作** ⇒ 那两格改成「等一会儿直接重试」，
+// 手动刷新降格为兜底。其余格（缓存新鲜但说 Orca 活 / 缓存解析不了）没有「已在途」这一说，照旧给命令。
+function refreshSection(d, cachePath) {
+  const cmd = `     node "${path.join(REPO, "scripts", "dao-roster.mjs")}"\n`;
+  const tail = `   （缓存落点 ${cachePath}；本次读到的状态：${d.cacheState}）\n\n`;
+  if (d.cacheState === "missing" || d.cacheState === "stale") {
+    return (
+      `② 这一格**不用你动手**：缓存不新鲜多半是刚开窗，后台探测（SessionStart 起的那个）此刻多半正在跑，\n` +
+      `   一次探测是几十秒量级。**等一会儿直接重试这次派活即可**——探测说 Orca 不可用时本闸自动放行，\n` +
+      `   降级留痕由闸自己写，你一个字都不用写。\n` +
+      `   等不及、或确认压根没有刷新在跑时，才用这条兜底手动重探：\n` + cmd + tail
+    );
+  }
+  return (
+    `② Orca 真的死了？重探一次再重试本次派活——探测说 Orca 不可用时本闸**自动放行**，\n` +
+    `   降级留痕由闸自己写，你一个字都不用写：\n` + cmd + tail
+  );
+}
+
 function blockMessage(d) {
   const cachePath = rosterCachePath();
   return (
@@ -228,12 +267,11 @@ function blockMessage(d) {
     `① 走 Orca（形态出处 ccswitch/rules/dao-dispatch.md §三；参数一律 \`--help\` 现查，别背表）：\n` +
     `     orca orchestration task-create --spec <派单书文件> --json\n` +
     `     orca orchestration worker-start --worktree <本树> --task <taskId> --model <档> --json\n\n` +
-    `② Orca 真的死了 / 缓存过期了？重探一次再重试本次派活——探测说 Orca 不可用时本闸**自动放行**，\n` +
-    `   降级留痕由闸自己写，你一个字都不用写：\n` +
-    `     node "${path.join(REPO, "scripts", "dao-roster.mjs")}"\n` +
-    `   （缓存落点 ${cachePath}；本次读到的状态：${d.cacheState}）\n\n` +
-    `③ 只是想派个只读小勘察？换成只读官种（dao-scout / Explore / dao-reviewer 这一类，或去掉 ` +
-    `\`isolation: "worktree"\`）——本闸对无写盘特征的调用一律放行。\n\n` +
+    refreshSection(d, cachePath) +
+    `③ 只是想派个只读小勘察？**显式指定一个只读官种**——${READONLY_HINT_TYPES.join(" / ")}（定义在本仓 ` +
+    `ccswitch/agents/，部署面 ~/.claude/agents/），或宿主自带的 Explore / Plan；同时别带 ` +
+    `\`isolation: "worktree"\`。⚠ **不填类型字段不等于只读**：宿主会按缺省的全权底座起，` +
+    `所以本闸把「没填」与显式 \`general-purpose\` 同等对待。本闸对显式声明的只读官种一律放行。\n\n` +
     `为什么是一道闸而不是一句提醒：同一条规矩以散文形态存在时被现场解释掉了（issue #409 正文），` +
     `所以它被搬到了 agent 之外。绕过去就等于这条规则不存在。\n`
   );
@@ -246,7 +284,13 @@ function selfcheck() {
   const HOME = process.env.USERPROFILE || process.env.HOME || os.homedir();
   const liveSettings = path.join(HOME, ".claude", "settings.json");
   const lines = [];
-  let bad = 0;
+  // 🔴 两个计数分开，且末尾把「退出码由谁贡献」打出来。合成一个 `bad` 会让本机的常态
+  //    （未注册 ⇒ 注册面已经 1）永久盖住 canary 那一票：canary 红不红，退出码都是 1，
+  //    于是「canary 的红计入退出码了吗」这一问既看不见也测不了（本轮 N5 实咬：把 canary 的
+  //    计数摘掉，全套 77 条无一变红）。**测试断的是这一行的构成，不是退出码本身**——
+  //    退出码是机器状态（注册与否）的函数，而注册是用户动作，测试不许依赖它。
+  let badReg = 0;
+  let badCanary = 0;
   let matchers = [];
 
   try {
@@ -267,16 +311,16 @@ function selfcheck() {
           `⚠ 写 git 快照层 config-sync/common/settings.json 或 DB 的 common_config_* 镜像层不会生效；` +
           `AI 侧写 DB 被权限分类器拦死，这一步是**用户动作**。`
     );
-    if (!matchers.length) bad++;
+    if (!matchers.length) badReg++;
   } catch (e) {
     lines.push(`✗ 读不到 live settings.json（${liveSettings}）：${e.message} —— 无从判定是否注册，按未注册计。`);
-    bad++;
+    badReg++;
   }
 
   if (matchers.length) {
     const uncovered = GATE_TOOLS.filter((t) => !matchers.some((m) => matcherCovers(m, t)));
     if (uncovered.length) {
-      bad++;
+      badReg++;
       lines.push(`  ✗ matcher 覆盖不到 ${uncovered.join(" , ")} ⇒ **本闸对那些工具名静默零覆盖**`);
     } else {
       lines.push(`  ✓ matcher 覆盖本闸声明的全部工具名：${GATE_TOOLS.join(" , ")}`);
@@ -285,13 +329,48 @@ function selfcheck() {
     lines.push(`  · 未注册 ⇒ 覆盖面无从谈起（本闸声明要拦：${GATE_TOOLS.join(" , ")}）`);
   }
 
+  // ── canary：主逻辑判据还活着吗 ──────────────────────────────────────────
+  // 🔴 上面那半只回答「接上没有」。一个 decide 被改成恒放行的闸，生产上是**静默 exit 0**
+  //    （没抛异常就没有 fail-open 告警），而只答注册面的自检照样报健康。所以这里对
+  //    **合成缓存**跑一遍真判据，正负控各一：必拦的要 block，必放的要 allow。
+  //    合成缓存写在临时目录、跑完就删，**全程不读真缓存**——真缓存坏了不许砸掉上面的注册结论。
+  //    整段 try/catch 兜住：canary 自己出事只判它自己红，不影响别的结论。
+  const canary = [];
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dao-dispatch-canary-"));
+    const fake = path.join(dir, "roster.json");
+    fs.writeFileSync(fake, JSON.stringify({ at: new Date().toISOString(), fabric: { orca: { available: true } } }), "utf8");
+    const savedCache = process.env.DAO_ROSTER_CACHE;
+    process.env.DAO_ROSTER_CACHE = fake;
+    try {
+      const mustBlock = decide({ tool_name: "Agent", cwd: dir, tool_input: { subagent_type: WRITER_AGENT_TYPES[0] } });
+      const mustAllow = decide({ tool_name: "Agent", cwd: dir, tool_input: { subagent_type: READONLY_HINT_TYPES[0] } });
+      if (mustBlock.action !== "block") canary.push(`必拦样本判成了 ${mustBlock.action}`);
+      if (mustAllow.action !== "allow") canary.push(`必放样本（只读官种 ${READONLY_HINT_TYPES[0]}）判成了 ${mustAllow.action}`);
+    } finally {
+      if (savedCache === undefined) delete process.env.DAO_ROSTER_CACHE;
+      else process.env.DAO_ROSTER_CACHE = savedCache;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    canary.push(`canary 自己抛了：${e && e.message}`);
+  }
+  if (canary.length) {
+    badCanary++;
+    lines.push(`  ⚠ **主逻辑判据异常**（canary）：${canary.join("；")} ⇒ 闸此刻即使已注册也在错判，别信上面那行绿。`);
+  } else {
+    lines.push(`  ✓ 主逻辑判据 canary：合成缓存下必拦的拦住了、必放的放行了（判据没被改瞎）`);
+  }
+
   lines.push(
     `本闸无逃生阀：它拦的事有一条自动例外（缓存说 Orca 不可用即自动放行并留痕），不需要人设开关。`
   );
   lines.push(`缓存落点 ${rosterCachePath()}；降级留痕落点 ${degradeLogPath()}。`);
+  // 退出码的构成必须摆出来，见本函数开头那段 🔴：只看退出码分不出「谁贡献的」。
+  lines.push(`退出码构成：注册面 ${badReg} + 主逻辑 canary ${badCanary} ⇒ exit ${badReg + badCanary ? 1 : 0}`);
 
   process.stdout.write(lines.join("\n") + "\n");
-  process.exit(bad ? 1 : 0);
+  process.exit(badReg + badCanary ? 1 : 0);
 }
 
 function matcherCovers(matcher, tool) {
@@ -347,6 +426,7 @@ module.exports = {
   AGENT_TYPE_KEYS,
   WRITER_AGENT_TYPES,
   FULL_ACCESS_AGENT_TYPES,
+  READONLY_HINT_TYPES,
   rosterCachePath,
   degradeLogPath,
   ttlMs,

@@ -71,6 +71,11 @@ const scoutOnly = () => agentCall({ subagent_type: "dao-scout" });
 const scoutInWorktree = () => agentCall({ subagent_type: "dao-scout", isolation: "worktree" });
 const genericBase = () => agentCall({ subagent_type: "claude" });
 const notAgentTool = () => ({ tool_name: "Bash", cwd: REPO, tool_input: { command: "git status" } });
+// R1（W3 换家审 · 树帅 2026-08-13 裁定）：一个类型字段都不填 = 宿主按缺省全权底座起，
+// 与显式 general-purpose 同一物。少填一个字段就绕过全权底座那道裁决 ⇒ 视同写盘特征。
+const noTypeAgent = () => ({ tool_name: "Agent", cwd: REPO, tool_input: { description: "d", prompt: "p" } });
+const noTypeTask = () => ({ tool_name: "Task", cwd: REPO, tool_input: { description: "d", prompt: "p" } });
+const onlyModel = () => ({ tool_name: "Agent", cwd: REPO, tool_input: { description: "d", prompt: "p", model: "opus" } });
 
 console.log("\n=== 正控 · Orca 活着 + 会写盘的工兵 ⇒ 必须拦 ===");
 clearLog();
@@ -86,6 +91,19 @@ const posB = run(scoutInWorktree());
 check("正控 B isolation=worktree（哪怕官种只读）⇒ exit 2", posB.status === 2, `status=${posB.status}`);
 const posC = run(genericBase());
 check("正控 C 全权底座（claude）⇒ exit 2", posC.status === 2, `status=${posC.status}`);
+
+// ── R1 · 无类型字段那一整类（W3 换家审实测的漏拦面，树帅裁「视同全权底座」）──────────
+const posD = run(noTypeAgent());
+check("正控 D 无任何类型字段的 Agent ⇒ exit 2（隐式全权 = 显式全权）", posD.status === 2, `status=${posD.status}`);
+check("正控 D 不留痕（被拦不是降级）", logLines().length === 0, JSON.stringify(logLines()));
+check("正控 E 无类型字段的 Task ⇒ exit 2", run(noTypeTask()).status === 2);
+check("正控 F 只带 model、无类型字段 ⇒ exit 2", run(onlyModel()).status === 2);
+// 拦截消息第三段：换法必须是**显式声明只读官种**，而不是「少填字段」。
+check("拦截消息 ③ 要求显式指定只读官种", /显式指定一个只读官种/.test(posD.stderr));
+check("拦截消息 ③ 点名的只读官种一个不少",
+  gate.READONLY_HINT_TYPES.every((t) => posD.stderr.includes(t)),
+  gate.READONLY_HINT_TYPES.filter((t) => !posD.stderr.includes(t)).join(","));
+check("拦截消息 ③ 明说「不填类型字段不等于只读」", /不填类型字段不等于只读/.test(posD.stderr));
 
 console.log("\n=== 负控 · 这三格必须放行（拦住一切的闸会被当场关掉）===");
 clearLog();
@@ -114,6 +132,16 @@ const recU = logLines().length === 1 ? JSON.parse(logLines()[0]) : null;
 check('负控 1b 判不出死活（available="unknown"）⇒ 放行（取 !== true，不是 === false）',
   negUnknown.status === 0 && recU && recU.orcaAvailable === "unknown",
   `status=${negUnknown.status} rec=${JSON.stringify(recU)}`);
+
+// R1 的另一半：无类型字段这一整类进了拦截面，就必须一起进降级面——
+// 否则 Orca 真死时它变成「既不拦也不留痕」的黑洞。
+clearLog();
+writeCache({ available: false, reason: "locator:miss" });
+const negNoType = run(noTypeAgent());
+const recN = logLines().length === 1 ? JSON.parse(logLines()[0]) : null;
+check("负控 1c 无类型字段 + Orca 死 ⇒ 降级放行且留痕（agentType 记 null）",
+  negNoType.status === 0 && recN && recN.agentType === null && recN.tool === "Agent",
+  `status=${negNoType.status} rec=${JSON.stringify(recN)}`);
 
 clearLog();
 writeCache({ available: true });
@@ -150,6 +178,26 @@ check("过期 · 不落降级留痕", logLines().length === 0, JSON.stringify(lo
 // `at` 是垃圾 ⇒ 归解析坏那一格（判不出新鲜度 = 判不出，一律拦）。
 writeCache({ broken: '{"at":"not-a-time","fabric":{"orca":{"available":true}}}' });
 check("缓存 at 不可解析 ⇒ exit 2", run(implementer()).status === 2);
+
+// ── R3 · 缺失/过期那两格不许指示一个多半是冗余的动作 ────────────────────────────
+// W3 实测：开窗后 SessionStart 的后台探测要几十秒，期间缓存缺/旧 ⇒ 全拦；那一刻让人再手动跑
+// 同一条刷新命令，是让他为一个已经在发生的事再等一轮。
+for (const [label, prep] of [
+  ["缓存缺失", () => clearCache()],
+  ["缓存过期", () => writeCache({ available: true, ageMs: 3 * 60 * 60 * 1000 })],
+]) {
+  prep();
+  const s = run(implementer()).stderr;
+  check(`R3 ${label} · 消息先说「不用你动手 / 等一会儿重试」`, /不用你动手/.test(s) && /等一会儿直接重试/.test(s), s.slice(0, 200));
+  check(`R3 ${label} · 手动刷新降格为兜底（带「等不及」限定，不是命令式）`, /等不及[^\n]*兜底|才用这条兜底/.test(s));
+  check(`R3 ${label} · 兜底命令本身仍在（没把出路删掉）`, /dao-roster\.mjs/.test(s));
+}
+// 对照组：缓存新鲜、Orca 活着那一格没有「后台已在途」这一说，照旧给命令式刷新指引。
+// 没有这一条，上面三条在「全篇统一改成等一等」时也会绿 ⇒ 分支没分也测不出来。
+writeCache({ available: true });
+const aliveMsg = run(implementer()).stderr;
+check("R3 对照组 · Orca 活那一格仍是命令式重探（证明分支真的分了）",
+  /Orca 真的死了？重探一次/.test(aliveMsg) && !/不用你动手/.test(aliveMsg));
 
 console.log("\n=== fail-open · 闸自己出事时必须放行 + 留告警 ===");
 const badStdin = spawnSync(process.execPath, [HOOK], {
@@ -239,6 +287,11 @@ const readOnly = declared.filter((a) => a.tools && !a.tools.some((t) => t === "W
   .map((a) => a.name);
 check("只读官种一个都没被收进拦截表", readOnly.length > 0 && readOnly.every((n) => !inGate.includes(n)),
   `只读官种=${JSON.stringify(readOnly)}`);
+// 拦截消息第三段把这几个名字当出路推给人看。哪天谁给它们开了写权、或改了名，这条会红——
+// 一条指向空气的建议比没有建议更糟：照做的人会以为自己走了合法路径。
+check("消息推荐的只读官种 · 每个都在 agents 目录里且确实没有写权",
+  gate.READONLY_HINT_TYPES.length > 0 && gate.READONLY_HINT_TYPES.every((t) => readOnly.includes(t)),
+  `推荐=${JSON.stringify(gate.READONLY_HINT_TYPES)} 目录里的只读官种=${JSON.stringify(readOnly)}`);
 
 console.log("\n=== --selfcheck · 不许依赖注册，也不许复用主逻辑 ===");
 // 🔴 注册是用户动作（写 cc-switch DB），本机此刻大概率未注册 ⇒ 只断言「它敢回答」，不断言答案。
@@ -255,6 +308,21 @@ const scBlind = spawnSync(process.execPath, [HOOK, "--selfcheck"], {
 check("主逻辑的输入全瞎时 --selfcheck 仍然作答（零共享的证据）",
   (scBlind.status === 0 || scBlind.status === 1) && /PreToolUse|未注册/.test(scBlind.stdout || ""),
   `status=${scBlind.status}`);
+
+// ── R4 · canary：自检必须看得见「主逻辑判据死掉」──────────────────────────────
+// W3 实测的洞：decide 被改成恒放行 = 生产上静默 exit 0（没抛异常就没有 fail-open 告警），
+// 而只答注册面的自检照样报健康。canary 用合成缓存跑真判据，正负控各一。
+check("R4 canary 正控 · 判据没被改瞎时自检报「canary 通过」",
+  /主逻辑判据 canary/.test(sc.stdout || "") && !/主逻辑判据异常/.test(sc.stdout || ""), (sc.stdout || "").slice(-300));
+check("R4 canary 不读真缓存 · 真缓存指到不存在的路径也照样通过",
+  /主逻辑判据 canary/.test(scBlind.stdout || "") && !/主逻辑判据异常/.test(scBlind.stdout || ""),
+  (scBlind.stdout || "").slice(-300));
+// 🔴 断的是**退出码的构成**，不是退出码本身：本机常态是未注册 ⇒ 注册面已经贡献 1，
+//    退出码永远是 1，于是「canary 的红到底计没计进去」用退出码问不出来（本轮 N5 实咬）。
+//    构成行还让这套断言与注册状态解耦——注册是用户动作，测试不许依赖它。
+check("R4 canary · 自检摆出退出码构成（注册面 / canary 分开记）",
+  /退出码构成：注册面 \d+ \+ 主逻辑 canary \d+ ⇒ exit [01]/.test(sc.stdout || ""), (sc.stdout || "").slice(-200));
+check("R4 canary 正控 · 构成行里 canary 记 0", /主逻辑 canary 0/.test(sc.stdout || ""));
 
 console.log("\n=== 判别力 · mutation（把判据改坏，正控必须跟着掉下来）===");
 const SRC = fs.readFileSync(HOOK, "utf8");
@@ -314,6 +382,56 @@ mutate("M6 降级留痕的落盘动作被摘掉", `    fs.appendFileSync(p, JSON
     const r = run(implementer(), null, p);
     check("M6 ⇒ 仍放行但留痕不落盘（证明留痕断言真的在断留痕，不是断退出码）",
       r.status === 0 && logLines().length === 0, `status=${r.status} lines=${logLines().length}`);
+  });
+
+writeCache({ available: true });
+mutate("M8 R1「无类型字段视同全权底座」判据被改瞎", `  if (!type) {`, `  if (false) {`,
+  (p) => check("M8 ⇒ 无类型字段的 Agent 从「拦」掉到「放行」（R1 那一整类漏拦复现）",
+    run(noTypeAgent(), null, p).status === 0));
+
+// R3 的判别力：分支没了 ⇒ 缺失格回到命令式文案。
+mutate("M9 R3 的「缺失/过期」消息分支被摘掉",
+  `  if (d.cacheState === "missing" || d.cacheState === "stale") {`, `  if (false) {`,
+  (p) => {
+    clearCache();
+    const s = run(implementer(), null, p).stderr;
+    check("M9 ⇒ 缺失格的消息掉回命令式（R3 断言跟着掉）", !/不用你动手/.test(s));
+    writeCache({ available: true });
+  });
+
+// ── R4 canary 的判别力：判据被改瞎时，--selfcheck 必须自己红 ────────────────────
+// 这两条是本轮新判据里最要紧的：canary 本身要是空转，它带来的安全感全是假的。
+function runSelfcheck(hookPath) {
+  const r = spawnSync(process.execPath, [hookPath, "--selfcheck"], { encoding: "utf8", env: { ...process.env } });
+  return { status: r.status, stdout: r.stdout || "" };
+}
+// canary 红了要满足两件事，缺一不可：**打出来**（人看得见）+ **计进退出码构成**（机器看得见）。
+// 只断前者，把 `badCanary++` 摘掉不会有任何东西红（本轮 N5 实咬）；只断退出码，未注册的机器
+// 会替它蒙混过关。所以两条一起断。
+const canaryRed = (r) => /主逻辑判据异常/.test(r.stdout) && /主逻辑 canary 1/.test(r.stdout);
+mutate("M10 canary 正控半 · decide 的「Orca 活着」判据被改瞎",
+  `if (orca.available === true) {`, `if (orca.available === "__NEVER__") {`,
+  (p) => {
+    const r = runSelfcheck(p);
+    check("M10 ⇒ --selfcheck 打「主逻辑判据异常」且计进退出码构成（自检看得见主逻辑死掉）",
+      canaryRed(r) && r.status === 1, `status=${r.status} ${r.stdout.slice(-200)}`);
+  });
+// 误拦有两种失效形态，canary 都得看得见，所以钉两条：
+// M11 判据变成「拦一切」（干净的误判，不抛异常）；M12 判据抛异常（canary 自己接得住，不许静默）。
+mutate("M11 canary 负控半 · 写权官种表判据被改成恒真（闸变成拦一切）",
+  `  if (WRITER_AGENT_TYPES.includes(type)) {`, `  if (true) {`,
+  (p) => {
+    const r = runSelfcheck(p);
+    check("M11 ⇒ --selfcheck 报「必放样本被判成 block」且计进退出码构成",
+      canaryRed(r) && /必放样本/.test(r.stdout) && r.status === 1, `status=${r.status} ${r.stdout.slice(-200)}`);
+  });
+mutate("M12 canary 兜底半 · decide 被改成会抛异常",
+  `  if (!feature) return { action: "allow", reason: "无写盘特征（只读侦察走这一格）" };`,
+  `  if (false) return { action: "allow", reason: "无写盘特征（只读侦察走这一格）" };`,
+  (p) => {
+    const r = runSelfcheck(p);
+    check("M12 ⇒ canary 自己接住异常并判红，不静默也不砸掉注册结论",
+      canaryRed(r) && /PreToolUse|未注册/.test(r.stdout) && r.status === 1, `status=${r.status}`);
   });
 
 writeCache({ available: true });
