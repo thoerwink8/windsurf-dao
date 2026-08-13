@@ -494,6 +494,17 @@ const GLOSSARY = ["对抗验证官", "对抗审", "挂账", "树帅", "候选", 
   check("mutation 验证：真实路径经过 stripNonProse 后，同一段文本不再命中（证明排除逻辑不是摆设）", strippedOccurrences.length === 0);
 }
 {
+  // 按词去重回归（对抗审 PR #391 必修项 2）：同一个词裸用 3 次、全部未豁免（既没括注也不在
+  // 枚举语境），违例列表必须只出现一次——不是「命中几次就报几次」。3 次出现之间用普通叙述文字
+  // 隔开（不是 / 、分隔），确保不会被举例语境规则误判成豁免。
+  const repeated = "这个改动会被对抗验证官挡下来，对抗验证官还要再看一遍，最后对抗验证官拍板收场。";
+  const occCount = findJargonOccurrences(repeated, GLOSSARY).filter((o) => o.word === "对抗验证官").length;
+  check("前置核对：样本里「对抗验证官」确实命中 3 次（不是样本写错导致只测到 1 次）", occCount === 3, String(occCount));
+  const r = findUnannotatedJargon(repeated, GLOSSARY);
+  const dupCount = r.filter((w) => w === "对抗验证官").length;
+  check("正控：同一词裸用 3 次且全部未豁免 → 违例列表只出现一次（按词去重，不按命中次数）", dupCount === 1, JSON.stringify(r));
+}
+{
   // 真机回归锚点：issue #390 本单自己的正文必须过扫不报（issue #390「怎么验收」明确写了这条）
   const issue390Body = [
     "## 说人话(没参与项目的人扫这段就够)",
