@@ -126,12 +126,10 @@ disable-model-invocation: true
 
 ```powershell
 node ccswitch/lib/settings-drift.js --selfcheck   # live↔快照 漂移检测器自身
-node ccswitch/hooks/dao-rule-echo.js --selfcheck  # 规则回灌 hook 自身
 ```
 
 读法：探针红 ⇒ 检测逻辑已瞎，此期间它报的「无问题」一律不可信，先修检测器再谈体检结论；
-心跳陈旧（SessionStart 型应每次进项目都刷新）⇒ 接线已断，注册串还在也没用。
-两者都绿只说明**跑过且逻辑没坏**，不说明提醒真被投递到人眼前——这一层目前无自动判据，如实挂着。
+探针绿只说明**跑过且逻辑没坏**，不说明提醒真被投递到人眼前——这一层目前无自动判据，如实挂着。
 
 ### 孤儿分支/worktree 扫描（回溯式兜底，教训 L13）
 
