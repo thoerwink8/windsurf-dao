@@ -32,12 +32,25 @@
 // 沉默判 pass。
 
 import fs from 'node:fs';
+import { stableJson } from './sqlite.mjs';
 
 // Orca 在 live settings.json 里注入的 hook 命令里都含这个子串（真实样本见上）。
 export const ORCA_HOOK_MARKER = '.orca/agent-hooks';
 
+// ── 路径归一化（issue #376 边界债 #2/#3）────────────────────────────────────
+// 同一个 hook 文件在不同机器/不同写法下，command 字符串里的路径可能正斜杠、
+// 反斜杠混写，盘符大小写也可能不同——这些差异不改变「指向同一个文件」这件事，
+// 但字节级深比较会把它们当成漂移（#2），marker 子串匹配也会因反斜杠变体而
+// 整段漏滤（#3）。只用于「判断是不是同一个东西」，不用于文件系统操作
+// （existsSync 走原始路径，大小写/斜杠语义交给操作系统自己处理）。
+function normalizeSlashesAndDrive(text) {
+  return String(text || '')
+    .replace(/\\/g, '/')
+    .replace(/\b([A-Za-z]):\//g, (_m, d) => `${d.toLowerCase()}:/`);
+}
+
 export function isOrcaHookCommand(command) {
-  return typeof command === 'string' && command.includes(ORCA_HOOK_MARKER);
+  return typeof command === 'string' && normalizeSlashesAndDrive(command).includes(ORCA_HOOK_MARKER);
 }
 
 // ── 主逻辑：结构化遍历 ────────────────────────────────────────────────────
@@ -79,13 +92,27 @@ export function filterOrcaHookGroups(hooksSection) {
   return out;
 }
 
-// `node "<path>" [...其余参数]` 形态里的路径；不是这个形态返回 null（本闸只射
-// node hook，其余 command 类型——目前只有 Orca 的 shell if 判断——不在射程内，
-// 且 Orca 那条已经在 isOrcaHookCommand 那关被挡）。
-const NODE_HOOK_RE = /^node\s+"([^"]+)"/;
+// `node "<path>" [...其余参数]` 或 `node '<path>' [...]` 形态里的路径；不是这个
+// 形态返回 null（本闸只射 node hook，其余 command 类型——目前只有 Orca 的 shell
+// if 判断——不在射程内，且 Orca 那条已经在 isOrcaHookCommand 那关被挡）。
+// issue #376 边界债 #1：原正则只认双引号，混合形态（单引号 node hook）会被判定
+// 「不是 node 形态」而整条静默漏过存在性检查——死 hook 因此不会被 checked 收进去，
+// 既不报「missing」也不出现在盲信号计数里。两个分支要求引号成对（不接受 `node "x'`
+// 这种首尾不一致的写法）。
+const NODE_HOOK_RE = /^node\s+(?:"([^"]+)"|'([^']+)')/;
 export function extractNodeHookPath(command) {
   const match = NODE_HOOK_RE.exec(String(command || '').trim());
-  return match ? match[1] : null;
+  if (!match) return null;
+  return match[1] !== undefined ? match[1] : match[2];
+}
+
+// 独立于 NODE_HOOK_RE 的「像不像 node hook」判据，只给下面的自检用——不提取路径，
+// 只要求 `node` 后面跟一个引号。若 NODE_HOOK_RE 本身的引号捕获逻辑坏了（例如
+// 手滑把 `(?:...)` 改错），这条判据仍然独立存在，不会跟着一起瞎（dao-writing-rules
+// 第二节：自检那一半不能复用被守对象的解析）。
+const RAW_NODE_FORM_RE = /^node\s+["']/;
+function looksLikeNodeHookRaw(command) {
+  return RAW_NODE_FORM_RE.test(String(command || '').trim());
 }
 
 // live settings.json 里每个 node hook 指向的文件是否存在。existsSync 可注入，
@@ -130,4 +157,82 @@ export function selfCheckHookSampleCount(hooksSection, rawJsonText) {
   const structural = extractHookCommands(hooksSection).filter((c) => !isOrcaHookCommand(c.command)).length;
   const textual = countCommandOccurrencesRaw(rawJsonText);
   return { structural, textual, blind: structural === 0 && textual > 0 };
+}
+
+// ── issue #376 边界债 #4：live 存在性检查的盲信号必须同一个射程 ─────────────
+// checkNodeHookExistence 只看 node 形态的 hook（extractNodeHookPath 命中才收进
+// checked）。旧版盲信号用 countCommandOccurrencesRaw——那是「任意非 Orca command」
+// 的计数，射程比 checked 宽。后果：live 里合法地只有非 node 形态 hook（checked=0
+// 天经地义）时，只要还有别的非 Orca command，textual>0，就会被误判成「判据自身
+// 失效」触发硬 FAIL（2026-08 沙箱实测复现）。本函数把独立正则扫描收窄到 node 形态
+// （用上面的 looksLikeNodeHookRaw，不是 NODE_HOOK_RE），使盲信号与 checked 同射程。
+export function countNodeHookOccurrencesRaw(rawJsonText) {
+  const text = String(rawJsonText || '');
+  let count = 0;
+  let match;
+  RAW_COMMAND_RE.lastIndex = 0;
+  while ((match = RAW_COMMAND_RE.exec(text)) !== null) {
+    let command;
+    try { command = JSON.parse(`"${match[1]}"`); } catch { command = match[1]; }
+    if (isOrcaHookCommand(command)) continue;
+    if (looksLikeNodeHookRaw(command)) count++;
+  }
+  return count;
+}
+
+// ── 两段 hooks 深比较，供 DB↔快照 / live↔快照 两处调用（issue #376 边界债 #6）──
+// 这段判断逻辑本来分别复制在 doctor.mjs 的两个 check* 函数里——「结构遍历是主逻辑，
+// 只测它」的老测试套件测不到这段 glue：filterOrcaHookGroups + 零样本闸 + 深比较
+// 三步怎么拼、拼错了会不会被抓到，此前完全没有断言覆盖（2026-08 对抗审 mutation ③
+// 实测：单元套件全绿而真机假绿，命中的正是这段 glue）。抽成纯函数后 doctor.mjs
+// 只做取数与文案渲染，判断逻辑单独可测。
+//
+// 返回 status 四态：
+//   'blind'       —— 过滤 Orca 段后两边都是 0 条，但过滤前（rawCountA/B，不经过
+//                     isOrcaHookCommand）至少一边 > 0——marker 判据疑似恒真吞掉了
+//                     一切，不能算「没查成」，必须报「判据自身可能失效」（边界债 #5：
+//                     零样本闸的 marker 无关兜底）。
+//   'zero-sample' —— 过滤前后都是 0 条，真的没有样本，不判定。
+//   'match'       —— 归一化（斜杠/盘符）后深比较一致（边界债 #2）。
+//   'drift'       —— 深比较不一致。
+export function compareHookSections(sectionA, sectionB) {
+  const filteredA = filterOrcaHookGroups(sectionA);
+  const filteredB = filterOrcaHookGroups(sectionB);
+  const countA = extractHookCommands(filteredA).length;
+  const countB = extractHookCommands(filteredB).length;
+  // rawCount 不经过 filterOrcaHookGroups/isOrcaHookCommand，是纯结构化计数——
+  // 与 countA/countB 的差异来源只能是 marker 判据本身，不依赖它，才谈得上「兜底」。
+  const rawCountA = extractHookCommands(sectionA).length;
+  const rawCountB = extractHookCommands(sectionB).length;
+
+  if (countA === 0 && countB === 0) {
+    if (rawCountA > 0 || rawCountB > 0) {
+      return { status: 'blind', countA, countB, rawCountA, rawCountB };
+    }
+    return { status: 'zero-sample', countA, countB, rawCountA, rawCountB };
+  }
+
+  const same = stableJson(normalizeHookSectionForCompare(filteredA)) === stableJson(normalizeHookSectionForCompare(filteredB));
+  return { status: same ? 'match' : 'drift', countA, countB, rawCountA, rawCountB };
+}
+
+// 深比较前把每条 command 的斜杠/盘符大小写归一化（issue #376 边界债 #2）。只改
+// 用于比较的副本，不改传入对象、不改文件系统层面的任何东西。
+export function normalizeHookSectionForCompare(hooksSection) {
+  if (!hooksSection || typeof hooksSection !== 'object') return hooksSection;
+  const out = {};
+  for (const [event, groups] of Object.entries(hooksSection)) {
+    if (!Array.isArray(groups)) { out[event] = groups; continue; }
+    out[event] = groups.map((group) => {
+      if (!group || typeof group !== 'object') return group;
+      const hooks = Array.isArray(group.hooks) ? group.hooks : [];
+      return {
+        ...group,
+        hooks: hooks.map((h) => (h && typeof h.command === 'string')
+          ? { ...h, command: normalizeSlashesAndDrive(h.command) }
+          : h),
+      };
+    });
+  }
+  return out;
 }
