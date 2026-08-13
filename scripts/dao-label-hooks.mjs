@@ -31,6 +31,10 @@ import { join } from "node:path";
 export const EXIT = { QUIET: 0, REPORT: 1, GH_FAIL: 2, USAGE: 3 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REPO = "thoerwink8/windsurf-dao";
+// gh 的 issue/pr list 默认 --limit 30，静默截断——本仓单个 label 已实测到 80+ 张（欠账），
+// 超过 30 的部分会被判定函数看不见，老化/解冻扫描就漏单且不报错（PR #383 对抗审 R1 必修项）。
+// 1000 是留够余量的硬顶：gh 内部按需分页取到这个数，仓库实际单量远低于此不会拖慢。
+const LIST_LIMIT = 1000;
 
 const SUBCOMMANDS = [
   "inbox-refresh", "relay-check", "guard-audit", "defect-unassigned",
@@ -57,9 +61,20 @@ export function ghJson(args, runner = spawnSync) {
 
 function issueList(repo, label, fields, runner) {
   return ghJson(
-    ["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", fields.join(",")],
+    ["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", fields.join(","), "--limit", String(LIST_LIMIT)],
     runner,
   );
+}
+
+// 表格单元格转义：标题/标签名是不受控输入（开单人写什么都行），直接拼进 `| a | b |`
+// 结构会被 `|` 拆列、被反引号打开代码跨度、被换行拆行（PR #383 对抗审 R2 必修项）。
+// 标题本来就该显示成纯文本，不是要在表格里保留 markdown 语义——转义不损失任何「本该渲染」的格式。
+export function escapeMdCell(s) {
+  return String(s ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "\\`")
+    .replace(/\r\n|\r|\n/g, " ");
 }
 
 function fmtDate(iso) {
@@ -100,9 +115,9 @@ export function buildInboxSection70(issues, now) {
   const rows = issues.length === 0
     ? ["| — | *（当前无待拍板单——`label:待拍板` 筛出 0 张 open）* | | |"]
     : issues.map((i) => {
-        const other = (i.labels || []).map((l) => l.name).filter((n) => n !== "待拍板").join(" · ") || "—";
+        const other = escapeMdCell((i.labels || []).map((l) => l.name).filter((n) => n !== "待拍板").join(" · ")) || "—";
         const aged = ageDays(i.updatedAt, now) > 7 ? " ⚠老化" : "";
-        return `| [#${i.number}](${i.url}) | ${i.title} | ${other} | ${fmtDate(i.updatedAt)}${aged} |`;
+        return `| [#${i.number}](${i.url}) | ${escapeMdCell(i.title)} | ${other} | ${fmtDate(i.updatedAt)}${aged} |`;
       });
   return [heading, "", aging, "", "| # | 一句话 | 其他标签 | 最近更新 |", "|---|---|---|---|", ...rows]
     .filter((l) => l !== null).join("\n");
@@ -116,7 +131,7 @@ export function buildInboxSection71(issues, now) {
     ? ["| — | *（当前无需用户单——`label:需用户` 筛出 0 张 open）* | |"]
     : issues.map((i) => {
         const aged = ageDays(i.updatedAt, now) > 7 ? " ⚠老化" : "";
-        return `| [#${i.number}](${i.url}) | ${i.title} | ${fmtDate(i.updatedAt)}${aged} |`;
+        return `| [#${i.number}](${i.url}) | ${escapeMdCell(i.title)} | ${fmtDate(i.updatedAt)}${aged} |`;
       });
   return [heading, "", aging, "", "| # | 一句话 | 最近更新 |", "|---|---|---|", ...rows]
     .filter((l) => l !== null).join("\n");
@@ -128,7 +143,7 @@ export function buildInboxSection69(issues, now) {
   const heading = `## 当前清单（快照 ${new Date(now).toISOString().slice(0, 10)} · 按 \`label:候选\` 实况复核，共 ${issues.length} 张）`;
   const rows = issues.length === 0
     ? ["| — | *（当前无候选单——`label:候选` 筛出 0 张 open）* | |"]
-    : issues.map((i) => `| [#${i.number}](${i.url}) | ${i.title} | （机械生成，无判断依据——需人工/agent 补一句） |`);
+    : issues.map((i) => `| [#${i.number}](${i.url}) | ${escapeMdCell(i.title)} | （机械生成，无判断依据——需人工/agent 补一句） |`);
   return [heading, "", "| # | 一句话 | AI 背后逻辑（为什么还是候选 + promote 条件） |", "|---|---|---|", ...rows].join("\n");
 }
 
@@ -229,7 +244,7 @@ const GUARD_PR_FIELDS = ["number", "title", "body", "url", "comments", "closingI
 export function fetchGuardAuditData(repo, runner) {
   const guardIssues = issueList(repo, "守卫类", GUARD_ISSUE_FIELDS, runner);
   const openPRs = ghJson(
-    ["pr", "list", "--repo", repo, "--state", "open", "--json", GUARD_PR_FIELDS.join(",")],
+    ["pr", "list", "--repo", repo, "--state", "open", "--json", GUARD_PR_FIELDS.join(","), "--limit", String(LIST_LIMIT)],
     runner,
   );
   return { guardIssues, openPRs };
