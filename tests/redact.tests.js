@@ -2,7 +2,7 @@
 //
 // 验的层：①模式表正负控 ②fail-closed（抛错/写不了/二进制 ⇒ 拒绝落盘并抛错；in-place 失败
 // 隔离）③渲染层断言三态（泄漏红/干净绿/样本空红）④扫描器自检面（分母、二进制分开、报告
-// 不回显密钥原文）⑤清单条目三态 ⑥CLI 退出码四态（0/1/2/3）。
+// 不回显密钥原文）⑤CLI 退出码四态（0/1/2/3）。
 // 判别力自检问句：任何把脱敏放宽或收紧的改动，是否都至少有一条断言会变红？
 // ⚠ 本文件里所有「密钥」都是合成串（CANARY_* 命名），不是真实凭据；前缀让扫描器自扫
 //   能把它们排除——守卫自己的语料不该被当成事故。
@@ -12,15 +12,11 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
-const LIB = path.join(REPO, "ccswitch", "lib", "redact.js");
-const CLI = path.join(REPO, "ccswitch", "scripts", "dao-redact.mjs");
-const MANIFEST_LIB = path.join(REPO, "ccswitch", "lib", "scaffold-manifest.js");
-const REAL_MANIFEST = path.join(REPO, "ccswitch", "scaffold-manifest.json");
-const TEMPLATES = path.join(REPO, "ccswitch", "templates");
+const LIB = path.join(REPO, "scripts", "lib", "redact.js");
+const CLI = path.join(REPO, "scripts", "dao-redact.mjs");
 const SANDBOX = path.join(REPO, "_tmp", "redact-sandbox");
 
 const R = require(LIB);
-const M = require(MANIFEST_LIB);
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -176,7 +172,7 @@ console.log("\n=== ④ 扫描器 · 自检面 ===");
     R.DEFAULT_SKIP_DIRS.has(".git") && R.DEFAULT_SKIP_DIRS.has("node_modules"));
 }
 
-console.log("\n=== ⑥ CLI · 退出码四态 + 末行契约 ===");
+console.log("\n=== ⑤ CLI · 退出码四态 + 末行契约 ===");
 function cli(args) {
   const r = spawnSync(process.execPath, [CLI].concat(args), { encoding: "utf8" });
   const out = String(r.stdout || "");
@@ -216,45 +212,6 @@ function cli(args) {
   const l = cli(["--in-place", dirAsFile]);
   check("CLI · 读不了且隔离也失败 ⇒ exit 2 且明说需要人手处置",
     l.code === 2 && /隔离也失败/.test(l.out) && /人手处置/.test(l.out), l.out.slice(0, 300));
-}
-
-console.log("\n=== ⑤ 清单条目 qa-artifact-redaction · 三态 ===");
-{
-  const ENTRY_ID = "qa-artifact-redaction";
-  const { manifest, errors } = M.load(REAL_MANIFEST, { templatesRoot: TEMPLATES });
-  const entry = ((manifest && manifest.entries) || []).find((e) => e.id === ENTRY_ID);
-  check("真实清单仍过 schema，条目在且 class=conditional，canonical 模板真实存在",
-    errors.length === 0 && !!entry && entry.class === "conditional" &&
-    fs.existsSync(path.join(TEMPLATES, entry.template.src)));
-
-  const only = { entries: [entry] };
-  const hit = path.join(SANDBOX, "proj-hit");
-  fs.mkdirSync(path.join(hit, "scripts", "qa"), { recursive: true });
-  const fHit = M.evaluate(only, hit, { templatesRoot: TEMPLATES });
-  check("态一 · 命中（有 QA 脚本指纹且缺 rule）⇒ 报一条，带零编辑复制指令与 label",
-    fHit.length === 1 && /零编辑复制 canonical/.test(fHit[0].message) && /QA 脚本目录/.test(fHit[0].message));
-
-  const miss = path.join(SANDBOX, "proj-miss");
-  fs.mkdirSync(path.join(miss, "src"), { recursive: true });
-  fs.writeFileSync(path.join(miss, "package.json"), '{"name":"x"}', "utf8");
-  check("态二 · 不命中（无 QA 脚本指纹）⇒ 零报",
-    M.evaluate(only, miss, { templatesRoot: TEMPLATES }).length === 0);
-
-  const full = path.join(SANDBOX, "proj-full");
-  fs.mkdirSync(path.join(full, "scripts", "qa"), { recursive: true });
-  fs.mkdirSync(path.join(full, ".claude", "rules"), { recursive: true });
-  fs.writeFileSync(path.join(full, ".claude", "rules", "qa-artifact-redaction.md"), "# 派生自 canonical", "utf8");
-  check("态二' · 齐备（指纹命中但 rule 在）⇒ 零报",
-    M.evaluate(only, full, { templatesRoot: TEMPLATES }).length === 0);
-
-  const degraded = path.join(SANDBOX, "proj-degraded");
-  fs.mkdirSync(path.join(degraded, "scripts", "qa"), { recursive: true });
-  fs.mkdirSync(path.join(degraded, ".claude", "rules", "qa-artifact-redaction.md"), { recursive: true });
-  check("态三 · 求值退化（rule 位置是目录不是文件）⇒ 仍然报，失败方向朝「多报」",
-    M.evaluate(only, degraded, { templatesRoot: TEMPLATES }).length === 1);
-  const noTpl = M.evaluate(only, hit, { templatesRoot: path.join(SANDBOX, "no-such-templates") });
-  check("态三' · canonical 模板缺失 ⇒ 报文明说「模板缺失」不静默退回 AI 自己写",
-    noTpl.length === 1 && /canonical 模板缺失/.test(noTpl[0].message));
 }
 
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch (_) {}

@@ -22,13 +22,13 @@
 //
 // ── 怎么从别的语言调（这是本文件存在的理由：一份实现，多语言消费）─────────────
 //   PowerShell（devin-byok 的 QA 链是这个形态）：
-//     node "<dao>/ccswitch/scripts/dao-redact.mjs" --copy $src $dest
+//     node "<dao>/scripts/dao-redact.mjs" --copy $src $dest
 //     if ($LASTEXITCODE -ne 0) { throw "脱敏失败，拒绝落盘：$src" }   # 别 try/catch 吞掉
-//   Node（mousse-cli 的 scripts/qa/*.mjs 形态）：直接 import ccswitch/lib/redact.js 更省一次进程
+//   Node（mousse-cli 的 scripts/qa/*.mjs 形态）：直接 import scripts/lib/redact.js 更省一次进程
 //
 // ── 2026-08-02 全域分布摸底（建护栏前先摸，dao-writing-rules.md 第二节第一条）────────
 // 本文件是这组数字的**唯一真相源**（lib 头注指过来，别在两处各记一份）。
-// 命令：`node ccswitch/scripts/dao-redact.mjs --scan <路径>`，逐仓真跑，数字照抄末行 summary。
+// 命令：`node scripts/dao-redact.mjs --scan <路径>`，逐仓真跑，数字照抄末行 summary。
 //
 //   | 仓 · 扫的面 | scanned | binary | hits | 这些 hit 是什么 |
 //   |---|---|---|---|---|
@@ -64,7 +64,7 @@
 // ⚠ 射程：以上只覆盖**当前工作树**，不覆盖 **git 历史**。历史面要 `git rev-list` 全史扫，
 //   成本另一个量级，本批未做（见 PR 未尽处）。
 //
-// 真相源：windsurf-dao/ccswitch/scripts/dao-redact.mjs
+// 真相源：windsurf-dao/scripts/dao-redact.mjs
 
 import fs from "node:fs";
 import path from "node:path";
@@ -73,7 +73,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const require_ = createRequire(import.meta.url);
-const R = require_(path.join(HERE, "..", "lib", "redact.js"));
+const R = require_(path.join(HERE, "lib", "redact.js"));
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes("--json");
@@ -92,9 +92,9 @@ function usage(msg) {
   if (msg) out("✗ " + msg);
   out([
     "用法：",
-    "  node ccswitch/scripts/dao-redact.mjs --copy <src> <dest>",
-    "  node ccswitch/scripts/dao-redact.mjs --in-place <path...> [--no-quarantine]",
-    "  node ccswitch/scripts/dao-redact.mjs --scan <path...> [--exclude <substr>]...",
+    "  node scripts/dao-redact.mjs --copy <src> <dest>",
+    "  node scripts/dao-redact.mjs --in-place <path...> [--no-quarantine]",
+    "  node scripts/dao-redact.mjs --scan <path...> [--exclude <substr>]...",
     "  通用：--json",
     "退出码：0 干净 / 1 scan 有命中 / 2 fail-closed 失败 / 3 用法错",
   ].join("\n"));
