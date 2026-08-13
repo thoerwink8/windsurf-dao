@@ -6,8 +6,9 @@ import { selectRows, stableJson, tableExists } from './sqlite.mjs';
 import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secrets.mjs';
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 import { sameJson, themeDrift, leakedSecretPaths, countPiSecrets, rehydratePiAuth } from './pi-sync.mjs';
-import { filterOrcaHookGroups, extractHookCommands, checkNodeHookExistence, countCommandOccurrencesRaw } from './hooks-drift.mjs';
+import { checkNodeHookExistence, countNodeHookOccurrencesRaw, compareHookSections } from './hooks-drift.mjs';
 import { pickPwsh, detectPwshState } from './pwsh.mjs';
+import { detectRulesDrift } from '../../ccswitch/scripts/dao-rules-deploy.mjs';
 
 let problems = 0;
 let warnings = 0;
@@ -37,6 +38,9 @@ function main() {
   checkClaudeHooksDbSnapshotDrift();
   checkClaudeHooksLiveExistence();
   checkClaudeHooksLiveSnapshotDrift();
+
+  section('作用域规则漂移（issue #376 A，~/.claude/rules/ ↔ ccswitch/rules/scoped/，只报不改）');
+  checkScopedRulesDrift();
 
   section('common 脱敏门（防 token 进 git）');
   checkCommonRedaction();
@@ -153,19 +157,15 @@ function checkClaudeHooksDbSnapshotDrift() {
   try { snapHooks = JSON.parse(snapValue).hooks || {}; }
   catch (error) { fail(`common/settings.json 的 common_config_claude 不是合法 JSON：${error.message}`); return; }
 
-  const dbFiltered = filterOrcaHookGroups(dbHooks);
-  const snapFiltered = filterOrcaHookGroups(snapHooks);
-  const dbCount = extractHookCommands(dbFiltered).length;
-  const snapCount = extractHookCommands(snapFiltered).length;
-  if (dbCount === 0 && snapCount === 0) {
+  const result = compareHookSections(dbHooks, snapHooks);
+  if (result.status === 'blind') {
+    fail(`DB ↔ 快照 hooks 判据自身可能失效：过滤 Orca 段后两边都是 0 条 command，但过滤前 db=${result.rawCountA} 条、snapshot=${result.rawCountB} 条——isOrcaHookCommand 疑似把所有内容都判成了 Orca 段，本轮结论不可信（issue #376 边界债 #5）。`);
+  } else if (result.status === 'zero-sample') {
     warn('DB↔快照 hooks 对账：两边都解析出 0 条 command，本轮没查成，不判定。');
-    return;
-  }
-
-  if (stableJson(dbFiltered) === stableJson(snapFiltered)) {
-    pass(`DB ↔ 快照 common_config_claude.hooks 一致（${dbCount} 条 command）。`);
+  } else if (result.status === 'match') {
+    pass(`DB ↔ 快照 common_config_claude.hooks 一致（${result.countA} 条 command）。`);
   } else {
-    warn(`DB ↔ 快照 common_config_claude.hooks 不一致（db=${dbCount} 条，snapshot=${snapCount} 条；方向未知，需人工核对哪边更新）。` +
+    warn(`DB ↔ 快照 common_config_claude.hooks 不一致（db=${result.countA} 条，snapshot=${result.countB} 条；方向未知，需人工核对哪边更新）。` +
       '→ 若刚改过 cc-switch 的 hook 注册，运行"导出配置.bat"（本机 db → 快照）；若刚从别处拉取了快照，运行 `.\\dao.bat --direction=down`（快照 → 本机 db）。');
   }
 }
@@ -182,12 +182,15 @@ function checkClaudeHooksLiveExistence() {
 
   const { checked, missing } = checkNodeHookExistence(doc.hooks || {}, { existsSync: fs.existsSync });
 
-  // 自检：独立正则扫描核对「结构化遍历真的看到了原文里的样本」，不复用
+  // 自检：独立正则扫描核对「结构化遍历真的看到了原文里的 node 形态样本」，不复用
   // checkNodeHookExistence 内部那套 JSON 遍历——两半共用一套解析时，解析漏掉
   // 一整段会让违例数与样本数一起归零，自检就退化成一句永真的废话。
-  const textualCount = countCommandOccurrencesRaw(raw);
+  // issue #376 边界债 #4：这里必须用「node 形态」计数（countNodeHookOccurrencesRaw），
+  // 不能用「任意非 Orca command」计数——旧版用后者时，live 里合法地只有非 node
+  // 形态 hook（checked=0 天经地义）会被误判成判据失效触发硬 FAIL。
+  const textualCount = countNodeHookOccurrencesRaw(raw);
   if (checked.length === 0 && textualCount > 0) {
-    fail(`live hooks 存在性判据自身失效：结构化遍历看到 0 条 node hook，但原文本独立正则扫到 ${textualCount} 条非 Orca command——本轮结论不可信，需先修判据再看结果。`);
+    fail(`live hooks 存在性判据自身失效：结构化遍历看到 0 条 node hook，但原文本独立正则扫到 ${textualCount} 条 node 形态 command——本轮结论不可信，需先修判据再看结果。`);
     return;
   }
   if (checked.length === 0) {
@@ -223,20 +226,48 @@ function checkClaudeHooksLiveSnapshotDrift() {
   try { snapHooks = JSON.parse(decodePaths(snapValue)).hooks || {}; }
   catch (error) { fail(`common/settings.json 的 common_config_claude 还原路径占位符后不是合法 JSON：${error.message}`); return; }
 
-  const liveFiltered = filterOrcaHookGroups(liveDoc.hooks || {});
-  const snapFiltered = filterOrcaHookGroups(snapHooks);
-  const liveCount = extractHookCommands(liveFiltered).length;
-  const snapCount = extractHookCommands(snapFiltered).length;
-  if (liveCount === 0 && snapCount === 0) {
+  const result = compareHookSections(liveDoc.hooks || {}, snapHooks);
+  if (result.status === 'blind') {
+    fail(`live↔快照 hooks 判据自身可能失效：过滤 Orca 段后两边都是 0 条 command，但过滤前 live=${result.rawCountA} 条、snapshot=${result.rawCountB} 条——isOrcaHookCommand 疑似把所有内容都判成了 Orca 段，本轮结论不可信（issue #376 边界债 #5）。`);
+  } else if (result.status === 'zero-sample') {
     warn('live↔快照 hooks 对账：两边（已排除 Orca 段）都解析出 0 条 command，本轮没查成，不判定。');
+  } else if (result.status === 'match') {
+    pass(`live settings.json ↔ 快照 hooks 一致（已排除 Orca 注入段，${result.countA} 条 command）。`);
+  } else {
+    warn(`live settings.json ↔ 快照 hooks 不一致（已排除 Orca 注入段，live=${result.countA} 条，snapshot=${result.countB} 条）。` +
+      '→ 本机可能落后于快照，运行 `.\\dao.bat --deploy` 重新部署；若是仓库侧刚改了 common/settings.json 但还没跑部署，同样用这条命令。');
+  }
+}
+
+// ── 作用域规则漂移（issue #376 A）───────────────────────────────────────────
+// ~/.claude/rules/dao-scope-*.md 是 ccswitch/rules/scoped/*.md 的部署投影，正道
+// 是改源再跑 ccswitch/scripts/dao-rules-deploy.mjs 重新部署。今天发现的病：这批
+// 投影今天实测是 8-02 旧版，没人盯——doctor 从未检查过这一层，只有手动跑
+// `--check` 才会发现。本节把该脚本已有的检测逻辑（detectRulesDrift，纯函数、
+// 不写盘）接进 doctor，报出来但绝不改文件——写盘仍然只走
+// `node ccswitch/scripts/dao-rules-deploy.mjs`。
+function checkScopedRulesDrift() {
+  const info = detectRulesDrift();
+  if (info.errorCode === 2) {
+    warn(`作用域规则源目录异常：${info.errorMessage}`);
     return;
   }
-
-  if (stableJson(liveFiltered) === stableJson(snapFiltered)) {
-    pass(`live settings.json ↔ 快照 hooks 一致（已排除 Orca 注入段，${liveCount} 条 command）。`);
-  } else {
-    warn(`live settings.json ↔ 快照 hooks 不一致（已排除 Orca 注入段，live=${liveCount} 条，snapshot=${snapCount} 条）。` +
-      '→ 本机可能落后于快照，运行 `.\\dao.bat --deploy` 重新部署；若是仓库侧刚改了 common/settings.json 但还没跑部署，同样用这条命令。');
+  if (info.errorCode === 3) {
+    fail(`作用域规则不合法（${info.errorMessage}）→ 运行 node ccswitch/scripts/dao-rules-deploy.mjs 查看细节。`);
+    for (const item of info.invalid) {
+      fail(`  ${item.name}：${item.errors.join('；')}`);
+    }
+    return;
+  }
+  if (info.drift.length === 0 && info.orphans.length === 0) {
+    pass(`~/.claude/rules/ 作用域规则与源一致（${info.loaded.length} 份）。`);
+    return;
+  }
+  for (const d of info.drift) {
+    warn(`作用域规则漂移：${d.name}（${d.kind}）→ 运行 node ccswitch/scripts/dao-rules-deploy.mjs 重新部署。`);
+  }
+  for (const o of info.orphans) {
+    warn(`作用域规则孤儿投影：${o}（源已无对应文件）→ 运行 node ccswitch/scripts/dao-rules-deploy.mjs --prune 清理。`);
   }
 }
 
@@ -334,7 +365,7 @@ function checkPwshTool() {
   if (state === 'path') {
     pass('PowerShell 7 (pwsh) 已安装。');
   } else if (state === 'fallback') {
-    warn(`PowerShell 7 (pwsh) 已安装（${resolvedPath}），但当前进程 PATH 未刷新：重启终端/Orca 后 pickPwsh() 调用面自动走 7。`);
+    warn(`PowerShell 7 (pwsh) 已安装（${resolvedPath}），但当前进程 PATH 未刷新：pickPwsh() 已经在用这条绝对路径走 7，不影响功能；重启终端/Orca 后仅改为走 PATH 字面量 pwsh，行为不变。`);
   } else {
     warn('PowerShell 7 (pwsh) 未安装。→ winget install Microsoft.PowerShell（5.1 仍可用，仅建议升级）');
   }

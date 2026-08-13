@@ -45,10 +45,6 @@ const SRC_DIR = join(HERE, "..", "rules", "scoped");
 const DEST_DIR = join(homedir(), ".claude", "rules");
 const PREFIX = "dao-scope-";
 
-const args = new Set(process.argv.slice(2));
-const CHECK_ONLY = args.has("--check");
-const PRUNE = args.has("--prune");
-
 function fail(code, msg) {
   console.error(`✗ ${msg}`);
   process.exit(code);
@@ -57,7 +53,7 @@ function fail(code, msg) {
 // ── 规则合法性校验 ───────────────────────────────────────────────────────────
 // 刻意逐行读原始文本，不用 YAML 库：要检的两个病（`globs:` 键名、未加引号的前导 `*`）
 // 恰恰是**解析器吃不下或静默吃错**的形态，交给解析器就看不见了。
-function validateRule(name, text) {
+export function validateRule(name, text) {
   const errs = [];
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) {
@@ -84,83 +80,128 @@ function validateRule(name, text) {
   return errs;
 }
 
-// ── 取源 ─────────────────────────────────────────────────────────────────────
-if (!existsSync(SRC_DIR)) fail(2, `源目录不存在：${SRC_DIR}`);
-const srcFiles = readdirSync(SRC_DIR).filter((f) => f.endsWith(".md"));
+// ── 纯检测：读源、读投影、校验、算漂移，不落盘（issue #376 A）───────────────
+// doctor.mjs 的「作用域规则漂移」段调这个函数做报告；CLI 的 --check / 部署两条
+// 路径也调它，只是消费方式不同（CLI 会话把结果拿去 fail()/写盘，doctor 只报）。
+// 不落盘、不 process.exit——纯函数，fs 读操作可注入供测试用假文件系统。
+// errorCode 语义与原 CLI 的 exit code 一致：2=源目录空或不存在、3=规则本身不合法；
+// null 表示读取与校验都过了，drift/orphans 里是真正的漂移结果。
+export function detectRulesDrift({
+  srcDir = SRC_DIR,
+  destDir = DEST_DIR,
+  fsExistsSync = existsSync,
+  fsReadFileSync = readFileSync,
+  fsReaddirSync = readdirSync,
+} = {}) {
+  const result = { srcDir, destDir, errorCode: null, errorMessage: null, loaded: [], invalid: [], drift: [], orphans: [] };
 
-// 零样本断言：源目录空 ≠ 「一致」。不区分这两种 0，本脚本就会在源被误删时报绿。
-if (srcFiles.length === 0) fail(2, `源目录 ${SRC_DIR} 里一个 .md 都没有 —— 这不是「无漂移」，是「无样本」`);
-
-const badNames = srcFiles.filter((f) => !f.startsWith(PREFIX));
-if (badNames.length) {
-  fail(3, `源文件名必须以 \`${PREFIX}\` 开头（部署侧靠前缀界定管辖范围）：${badNames.join(", ")}`);
-}
-
-// ── 校验 ─────────────────────────────────────────────────────────────────────
-let invalid = 0;
-const loaded = [];
-for (const f of srcFiles) {
-  const text = readFileSync(join(SRC_DIR, f), "utf8");
-  const errs = validateRule(f, text);
-  if (errs.length) {
-    invalid++;
-    console.error(`✗ ${f}`);
-    for (const e of errs) console.error(`    · ${e}`);
+  if (!fsExistsSync(srcDir)) {
+    result.errorCode = 2;
+    result.errorMessage = `源目录不存在：${srcDir}`;
+    return result;
   }
-  loaded.push({ name: f, text });
-}
-if (invalid) fail(3, `${invalid}/${srcFiles.length} 份作用域规则不合法，未部署`);
+  const srcFiles = fsReaddirSync(srcDir).filter((f) => f.endsWith(".md"));
 
-// ── 比对 / 部署 ──────────────────────────────────────────────────────────────
-if (!existsSync(DEST_DIR)) {
-  if (CHECK_ONLY) fail(1, `投影目录不存在：${DEST_DIR}（${loaded.length} 份规则全部未部署）`);
-  mkdirSync(DEST_DIR, { recursive: true });
-}
-
-// 比对刻意**规范化行尾再比**，不做字节相等：源文件受 git 的 autocrlf 摆布
-// （同一份内容在不同机器/不同 checkout 下 LF 与 CRLF 都可能），而投影是本脚本写的。
-// 拿字节相等去比，会在一次 `git checkout` 之后开始报**永远修不好的漂移**——
-// 而那种「每次都红、修了还红」的检查最终一定会被静音，等于白建。
-const norm = (s) => s.replace(/\r\n/g, "\n");
-
-const drift = [];
-for (const { name, text } of loaded) {
-  const dest = join(DEST_DIR, name);
-  const cur = existsSync(dest) ? readFileSync(dest, "utf8") : null;
-  if (cur !== null && norm(cur) === norm(text)) continue;
-  drift.push({ name, kind: cur === null ? "缺失" : "内容不一致" });
-  if (!CHECK_ONLY) writeFileSync(dest, text, "utf8");
-}
-
-// ── 孤儿投影（源已删、投影还在）──────────────────────────────────────────────
-const srcNames = new Set(loaded.map((r) => r.name));
-const orphans = existsSync(DEST_DIR)
-  ? readdirSync(DEST_DIR).filter((f) => f.startsWith(PREFIX) && f.endsWith(".md") && !srcNames.has(f))
-  : [];
-for (const o of orphans) {
-  if (PRUNE && !CHECK_ONLY) unlinkSync(join(DEST_DIR, o));
-}
-
-// ── 报告 ─────────────────────────────────────────────────────────────────────
-console.log(`源 ${SRC_DIR}`);
-console.log(`投影 ${DEST_DIR}`);
-console.log(`作用域规则 ${loaded.length} 份：${loaded.map((r) => r.name).join(", ")}`);
-
-if (CHECK_ONLY) {
-  if (drift.length === 0 && orphans.length === 0) {
-    console.log("✓ 投影与源一致，无漂移");
-    process.exit(0);
+  // 零样本断言：源目录空 ≠ 「一致」。不区分这两种 0，会在源被误删时报绿。
+  if (srcFiles.length === 0) {
+    result.errorCode = 2;
+    result.errorMessage = `源目录 ${srcDir} 里一个 .md 都没有 —— 这不是「无漂移」，是「无样本」`;
+    return result;
   }
-  for (const d of drift) console.error(`✗ ${d.name}：${d.kind}`);
-  for (const o of orphans) console.error(`✗ ${o}：孤儿投影（源已无对应文件，--prune 可删）`);
-  fail(1, `${drift.length} 份漂移 + ${orphans.length} 份孤儿`);
+
+  const badNames = srcFiles.filter((f) => !f.startsWith(PREFIX));
+  if (badNames.length) {
+    result.errorCode = 3;
+    result.errorMessage = `源文件名必须以 \`${PREFIX}\` 开头（部署侧靠前缀界定管辖范围）：${badNames.join(", ")}`;
+    return result;
+  }
+
+  for (const f of srcFiles) {
+    const text = fsReadFileSync(join(srcDir, f), "utf8");
+    const errs = validateRule(f, text);
+    if (errs.length) result.invalid.push({ name: f, errors: errs });
+    result.loaded.push({ name: f, text });
+  }
+  if (result.invalid.length) {
+    result.errorCode = 3;
+    result.errorMessage = `${result.invalid.length}/${srcFiles.length} 份作用域规则不合法，未部署`;
+    return result;
+  }
+
+  // 比对刻意**规范化行尾再比**，不做字节相等：源文件受 git 的 autocrlf 摆布
+  // （同一份内容在不同机器/不同 checkout 下 LF 与 CRLF 都可能），而投影是本脚本写的。
+  // 拿字节相等去比，会在一次 `git checkout` 之后开始报**永远修不好的漂移**——
+  // 而那种「每次都红、修了还红」的检查最终一定会被静音，等于白建。
+  const norm = (s) => s.replace(/\r\n/g, "\n");
+  for (const { name, text } of result.loaded) {
+    const dest = join(destDir, name);
+    const cur = fsExistsSync(dest) ? fsReadFileSync(dest, "utf8") : null;
+    if (cur !== null && norm(cur) === norm(text)) continue;
+    result.drift.push({ name, kind: cur === null ? "缺失" : "内容不一致" });
+  }
+
+  const srcNames = new Set(result.loaded.map((r) => r.name));
+  result.orphans = fsExistsSync(destDir)
+    ? fsReaddirSync(destDir).filter((f) => f.startsWith(PREFIX) && f.endsWith(".md") && !srcNames.has(f))
+    : [];
+
+  return result;
 }
 
-if (drift.length === 0) console.log("✓ 已是最新，无需写入");
-else for (const d of drift) console.log(`↻ ${d.name}（${d.kind}）已部署`);
-if (orphans.length) {
-  console.log(PRUNE
-    ? `🗑 已删孤儿投影 ${orphans.length} 份：${orphans.join(", ")}`
-    : `⚠ 孤儿投影 ${orphans.length} 份未处理（加 --prune 删）：${orphans.join(", ")}`);
+// ── CLI 入口守卫 ─────────────────────────────────────────────────────────────
+// 本文件同时是「给人跑的 CLI 脚本」和「给 doctor.mjs import 的检测库」。只有直接
+// `node ccswitch/scripts/dao-rules-deploy.mjs` 执行时才跑下面这段（写盘 + exit）；
+// 被 import/require 时（doctor.mjs、测试）只取上面的纯函数，不触发任何副作用。
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
+  const args = new Set(process.argv.slice(2));
+  const CHECK_ONLY = args.has("--check");
+  const PRUNE = args.has("--prune");
+
+  const info = detectRulesDrift();
+  if (info.errorCode) {
+    for (const item of info.invalid) {
+      console.error(`✗ ${item.name}`);
+      for (const e of item.errors) console.error(`    · ${e}`);
+    }
+    fail(info.errorCode, info.errorMessage);
+  }
+
+  // ── 部署（源 → 投影）：detectRulesDrift 只读不写，这里按它算出的 drift/orphans 落盘 ──
+  if (!existsSync(DEST_DIR)) {
+    if (CHECK_ONLY) fail(1, `投影目录不存在：${DEST_DIR}（${info.loaded.length} 份规则全部未部署）`);
+    mkdirSync(DEST_DIR, { recursive: true });
+  }
+
+  if (!CHECK_ONLY) {
+    const driftNames = new Set(info.drift.map((d) => d.name));
+    for (const { name, text } of info.loaded) {
+      if (driftNames.has(name)) writeFileSync(join(DEST_DIR, name), text, "utf8");
+    }
+    if (PRUNE) for (const o of info.orphans) unlinkSync(join(DEST_DIR, o));
+  }
+
+  // ── 报告 ───────────────────────────────────────────────────────────────────
+  console.log(`源 ${SRC_DIR}`);
+  console.log(`投影 ${DEST_DIR}`);
+  console.log(`作用域规则 ${info.loaded.length} 份：${info.loaded.map((r) => r.name).join(", ")}`);
+
+  if (CHECK_ONLY) {
+    if (info.drift.length === 0 && info.orphans.length === 0) {
+      console.log("✓ 投影与源一致，无漂移");
+      process.exit(0);
+    }
+    for (const d of info.drift) console.error(`✗ ${d.name}：${d.kind}`);
+    for (const o of info.orphans) console.error(`✗ ${o}：孤儿投影（源已无对应文件，--prune 可删）`);
+    fail(1, `${info.drift.length} 份漂移 + ${info.orphans.length} 份孤儿`);
+  }
+
+  if (info.drift.length === 0) console.log("✓ 已是最新，无需写入");
+  else for (const d of info.drift) console.log(`↻ ${d.name}（${d.kind}）已部署`);
+  if (info.orphans.length) {
+    console.log(PRUNE
+      ? `🗑 已删孤儿投影 ${info.orphans.length} 份：${info.orphans.join(", ")}`
+      : `⚠ 孤儿投影 ${info.orphans.length} 份未处理（加 --prune 删）：${info.orphans.join(", ")}`);
+  }
+  process.exit(0);
 }
-process.exit(0);

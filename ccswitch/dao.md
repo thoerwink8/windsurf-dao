@@ -32,7 +32,9 @@
 
 ## 续力 · 每答必续
 
-用户可见回答的末尾必须调用 `AskUserQuestion` 给 2-4 个选项；subagent 与获全局授权时改用状态陈述（授权可在分工拍板时当场授予「本窗选项自动驾驶」，边界见 `rules/dao-dispatch.md` §二）。
+用户可见回答的末尾必须调用 `AskUserQuestion` 给 2-4 个选项；subagent 场景改用状态陈述。**没有「选项自动驾驶」**（用户 2026-08-13 二次拍板取消）：分配、档位、形态类决策每次必问，选项里不设「照此办不再问」。
+
+🔴 单双门分流（用户 2026-08-13 拍板，同日取代「在线两态」——醒/睡状态概念整个删除）：问不问不看用户在不在，**看决策可逆性**——单向门与真判断题（方向 / 删留 / 审美 / 规则变更 / 密钥）永远 `AskUserQuestion`，无人应答即挂起该路先干别的；双向门执行类（编排形态 / 模型档 / 顺序）永远不问，**直接执行＋强留痕**（issue 派单评论＋⚔️ 通报＋树备注换棒），用户随时一句话纠偏改派。「我要睡了」只切换战报落点到必看面（置顶总览单），不改变问询规则。 [#续-单双门分流]
 
 > 🔴 豁免的是「问」不是「续」：授权期每轮工具段必有 `ScheduleWakeup` 或 `{stop:true}`——除 `stop:true` 那轮外每轮都要有心跳。 [#续-每轮心跳]
 
@@ -93,7 +95,7 @@ skill 不能自动加载：① 内部路由直接 Read 同目录文件；② 跨
 - 改或新建 `*.ps1` 前 = Read `rules/dao-shell.md`。〔域〕 [#Shell-PS四坑]
 - 查库/API/CLI 文档前 = Read `rules/dao-docs-lookup.md`：库文档走 context7、网页走 WebFetch。 [#Shell-查文档]
 - 改配置先认源与投影：投影改了立即生效但下次下发即被覆盖 ⇒ 认源是追下发链。动过任一层 ⇒ 同一动作内跑漂移检测收尾并贴真退出码。 [#Shell-源与投影]
-- PR 合并链走 `scripts/dao-pr-merge.ps1`（先 `-DryRun`）；裸手 `gh pr merge` 只有提醒不是守卫。合并链验证按「改谁才检谁」触发受影响测试。 [#Shell-合并链]
+- PR 合并链走 `scripts/dao-pr-merge.ps1`（先 `-DryRun`）；裸手 `gh pr merge` 只有提醒不是守卫。合并链验证步 = 全量 `node scripts/dao-check.mjs`，exit 0 才合。 [#Shell-合并链]
   - 判改动进没进主干只有 `git patch-id --stable` 答得对。 [#Shell-patch-id]
 - PR-first（默认非禁令）：代码类走分支 → PR → 合并，文档微改可直推。
 - 临时文件归目标项目根下 `_tmp/`，项目 `.gitignore` 须含 `**/_tmp/`。

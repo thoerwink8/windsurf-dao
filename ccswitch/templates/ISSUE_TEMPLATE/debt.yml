@@ -1,5 +1,8 @@
 # canonical issue 模板 · 真相源在 windsurf-dao ccswitch/templates/ISSUE_TEMPLATE/。
 # 项目 .github/ISSUE_TEMPLATE/debt.yml 从此派生。收益边界见同目录 bug.yml 抬头注释。
+#
+# 下面「本来该做什么/当时为什么没做/解冻条件」与项目侧 DISPATCH-HUB.md §五.2「类型分骨架」的
+# 欠账型小标题（欠什么/解冻条件/验收）同源不同壳（issue #390）；改任一份先看另一份还对不对得上。
 
 name: 🧾 欠账
 description: 当时该做但没做的事（降级挂账 / 验证没跑完 / 半截改造）

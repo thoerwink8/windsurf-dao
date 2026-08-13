@@ -143,8 +143,10 @@ console.log("\n=== ⑦ 判别力 · mutation：弄坏「过滤 Orca 段」判据
   if (!SRC.includes(ANCHOR)) {
     check("mutation 锚点在源文件里找得到", false, `锚点串没命中：${ANCHOR}`);
   } else {
-    const mutantPath = path.join(REPO, "_tmp", `hooks-drift-mutant-${process.pid}-${Math.random().toString(36).slice(2)}.mjs`);
-    fs.mkdirSync(path.dirname(mutantPath), { recursive: true });
+    // 变异体必须落在与源文件同一目录（config-sync/lib/），不能放 _tmp/——本文件
+    // 现在有 `import { stableJson } from './sqlite.mjs'`，相对导入按变异体自己的
+    // 路径解析；放别的目录会导致 ERR_MODULE_NOT_FOUND，而不是「判据被改坏」。
+    const mutantPath = path.join(REPO, "config-sync", "lib", `hooks-drift.MUTANT-${process.pid}-${Math.random().toString(36).slice(2)}.mjs`);
     try {
       fs.writeFileSync(mutantPath, SRC.replace(ANCHOR, "const ORCA_HOOK_MARKER = '.orca/agent-hooks-NEVER-MATCH-XYZ';"), "utf8");
       const M = require(mutantPath);
@@ -164,6 +166,110 @@ console.log("\n=== ⑦ 判别力 · mutation：弄坏「过滤 Orca 段」判据
       fs.rmSync(mutantPath, { force: true });
     }
   }
+}
+
+console.log("\n=== ⑧ issue #376 边界债 #1：单引号 node hook 形态不再静默漏报 ===");
+{
+  check("单引号形态可提取路径", H.extractNodeHookPath("node 'C:/x/y.js'") === "C:/x/y.js");
+  check("单引号+尾随参数", H.extractNodeHookPath("node 'C:/x/y.js' claude") === "C:/x/y.js");
+  check("双引号形态仍可提取（回归）", H.extractNodeHookPath('node "C:/x/y.js"') === "C:/x/y.js");
+  check("首尾引号不一致时不误判为 node 形态", H.extractNodeHookPath(`node "C:/x/y.js'`) === null);
+
+  const singleQuoteHooks = { PreToolUse: [{ hooks: [{ type: "command", command: "node 'C:/does/not/exist/xyz-376-issue.js'" }] }] };
+  const r = H.checkNodeHookExistence(singleQuoteHooks);
+  check("红→绿：单引号 hook 被 checked 收进（此前会被静默漏过，checked 恒为 0）", r.checked.length === 1, JSON.stringify(r));
+  check("单引号 hook 指空被正确抓到 missing", r.missing.length === 1, JSON.stringify(r));
+}
+
+console.log("\n=== ⑨ issue #376 边界债 #2：深比较前归一化路径分隔符/盘符大小写 ===");
+{
+  const a = { PreToolUse: [{ hooks: [{ type: "command", command: 'node "C:/x/y.js"' }] }] };
+  const bSameFileDifferentWriting = { PreToolUse: [{ hooks: [{ type: "command", command: 'node "c:\\x\\y.js"' }] }] };
+  const same = H.compareHookSections(a, bSameFileDifferentWriting);
+  check("同文件不同写法（正斜杠 vs 反斜杠、盘符大小写）归一化后判 match，不是假漂移",
+    same.status === "match", JSON.stringify(same));
+
+  // 负控：真的不同的路径必须仍然判 drift——归一化不能把「真不同」也吃掉。
+  const cRealDiff = { PreToolUse: [{ hooks: [{ type: "command", command: 'node "C:/x/OTHER.js"' }] }] };
+  const diff = H.compareHookSections(a, cRealDiff);
+  check("负控：真实不同路径仍判 drift", diff.status === "drift", JSON.stringify(diff));
+}
+
+console.log("\n=== ⑩ issue #376 边界债 #3：Orca marker 反斜杠变体不再整段漏滤 ===");
+{
+  const backslashOrcaCommand = "if [ -f 'C:\\Users\\Administrator\\.orca\\agent-hooks\\claude-hook.cmd' ]; then :; fi";
+  check("反斜杠变体的 Orca 命令仍被识别为 Orca（此前硬编码正斜杠子串会漏判）",
+    H.isOrcaHookCommand(backslashOrcaCommand));
+
+  const liveWithBackslashOrca = JSON.parse(JSON.stringify(DB_HOOKS_REAL));
+  liveWithBackslashOrca.PreToolUse = [...liveWithBackslashOrca.PreToolUse, { hooks: [{ type: "command", command: backslashOrcaCommand }] }];
+  const filtered = H.filterOrcaHookGroups(liveWithBackslashOrca);
+  check("反斜杠变体 Orca 分组被正确过滤（不再假漂移刷屏）",
+    H.extractHookCommands(filtered).every((c) => !H.isOrcaHookCommand(c.command)));
+}
+
+console.log("\n=== ⑪ issue #376 边界债 #4：live 存在性盲信号收窄到 node 形态射程 ===");
+{
+  // 正控：live 合法地只有非 node 形态 hook 时，checked 天然为 0——这不是判据失效。
+  const nonNodeHooks = { PreToolUse: [{ hooks: [{ type: "command", command: "echo hello" }] }] };
+  const rawText = JSON.stringify({ hooks: nonNodeHooks });
+  const existence = H.checkNodeHookExistence(nonNodeHooks);
+  check("前置：非 node 形态 hook 下 checked 天然为 0", existence.checked.length === 0);
+
+  const oldBlindSignal = H.countCommandOccurrencesRaw(rawText);
+  check("前置：旧版盲信号（任意非 Orca command）> 0——继续用它会把这种合法场景误判成判据失效",
+    oldBlindSignal > 0, `实际 ${oldBlindSignal}`);
+
+  const newBlindSignal = H.countNodeHookOccurrencesRaw(rawText);
+  check("红→绿：新版盲信号（node 形态专属）= 0，不再误报判据失效", newBlindSignal === 0, `实际 ${newBlindSignal}`);
+
+  // 正控：真的丢了 node 形态样本时，新版盲信号仍然能抓到（不是矫枉过正到永远不报）。
+  const liveHooks = buildLiveHooksWithOrca();
+  const rawText2 = JSON.stringify({ hooks: liveHooks });
+  const newBlindSignal2 = H.countNodeHookOccurrencesRaw(rawText2);
+  check("真实语料下新版盲信号 > 0（不是矫枉过正到永远查不出真失效）", newBlindSignal2 > 0, `实际 ${newBlindSignal2}`);
+}
+
+console.log("\n=== ⑫ issue #376 边界债 #5+#6：compareHookSections 四态 + glue mutation（先破再验）===");
+{
+  const zeroSample = H.compareHookSections({}, {});
+  check("双方都空 ⇒ zero-sample", zeroSample.status === "zero-sample", JSON.stringify(zeroSample));
+
+  const SRC_PATH = path.join(REPO, "config-sync", "lib", "hooks-drift.mjs");
+  const SRC = fs.readFileSync(SRC_PATH, "utf8");
+  // 跨行锚点：按 dao-writing-rules 第二节的 mutation 验证守则，用正则 + `\r?\n`，
+  // 断言用的锚（ANCHOR_RE）与替换用的锚必须是同一个表达式。
+  const ANCHOR_RE = /export function isOrcaHookCommand\(command\) \{\r?\n\s*return typeof command === 'string' && normalizeSlashesAndDrive\(command\)\.includes\(ORCA_HOOK_MARKER\);\r?\n\}/;
+  if (!ANCHOR_RE.test(SRC)) {
+    check("mutation 锚点在源文件里找得到", false, "isOrcaHookCommand 实现已变化，需要更新本测试的锚点");
+  } else {
+    // 同上：变异体必须落在源文件同目录，否则 `./sqlite.mjs` 相对导入解析不到。
+    const mutantPath = path.join(REPO, "config-sync", "lib", `hooks-drift.MUTANT-always-orca-${process.pid}-${Math.random().toString(36).slice(2)}.mjs`);
+    try {
+      const mutated = SRC.replace(ANCHOR_RE, "export function isOrcaHookCommand(command) {\n  return true; // MUTATED: 恒真\n}");
+      fs.writeFileSync(mutantPath, mutated, "utf8");
+      const M = require(mutantPath);
+
+      // 两份真实不同的 hooks（都是合法 node 形态、内容确实不同）。
+      const left = { PreToolUse: [{ hooks: [{ type: "command", command: 'node "C:/x/y.js"' }] }] };
+      const right = { PreToolUse: [{ hooks: [{ type: "command", command: 'node "C:/x/z.js"' }] }] };
+
+      const mutantResult = M.compareHookSections(left, right);
+      check("变异体仍存活（不是把靶弄死，抛错/返回 undefined 都算靶死）",
+        mutantResult && typeof mutantResult.status === "string", JSON.stringify(mutantResult));
+      check("mutation：isOrcaHookCommand 恒真 ⇒ compareHookSections 必须报 blind（此前会静默判 zero-sample，三层全静默 warn，边界债 #5 命中的正是这个失效方向）",
+        mutantResult.status === "blind", JSON.stringify(mutantResult));
+
+      const realResult = H.compareHookSections(left, right);
+      check("正控：真实实现同输入下不判 blind（两份内容确实不同，应判 drift）",
+        realResult.status === "drift", JSON.stringify(realResult));
+    } finally {
+      fs.rmSync(mutantPath, { force: true });
+    }
+  }
+
+  check("compareHookSections 返回值含 status 字段（doctor.mjs 三处调用点都靠这个字段分支，边界债 #6：glue 抽出后本文件即是它的单测）",
+    ["blind", "zero-sample", "match", "drift"].includes(H.compareHookSections({}, {}).status));
 }
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);

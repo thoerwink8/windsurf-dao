@@ -14,6 +14,8 @@ import {
   spliceInboxSection, extractReferencedPRs,
   fetchInboxBucket, fetchRelayIssues, fetchGuardAuditData, fetchDefectIssues,
   fetchTaskIssues, fetchDebtThawData, fetchCandidateIssues,
+  loadGlossaryWords, stripNonProse, findJargonOccurrences, findUnannotatedJargon,
+  buildJargonScanReport, fetchJargonScanData,
 } from "../scripts/dao-label-hooks.mjs";
 
 let pass = 0, fail = 0;
@@ -398,10 +400,11 @@ function limitAwareRunner(fullList) {
   fetchTaskIssues("x/y", recorder);
   fetchDebtThawData("x/y", recorder); // body 为空，不会触发 pr view 调用
   fetchCandidateIssues("x/y", recorder);
+  fetchJargonScanData("x/y", recorder); // 真读本仓 docs/ops/jargon-glossary.md，issue list 走 recorder
 
   const listCalls = calls.filter((a) => (a[0] === "issue" || a[0] === "pr") && a[1] === "list");
-  // 8 = inbox(1) + relay(1) + guard 的 issue list(1) + guard 的 pr list(1) + defect(1) + task(1) + debt(1) + candidate(1)
-  check(`R1 结构覆盖：抓到 ${listCalls.length} 条 list 调用（应为 8）`, listCalls.length === 8);
+  // 9 = inbox(1) + relay(1) + guard 的 issue list(1) + guard 的 pr list(1) + defect(1) + task(1) + debt(1) + candidate(1) + jargon-scan(1)
+  check(`R1 结构覆盖：抓到 ${listCalls.length} 条 list 调用（应为 9）`, listCalls.length === 9);
   const missingLimit = listCalls.filter((a) => {
     const i = a.indexOf("--limit");
     return i === -1 || Number(a[i + 1]) < 1000;
@@ -410,7 +413,145 @@ function limitAwareRunner(fullList) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 10) R2 · Markdown 转义：标题/标签名含 | ` 换行 时不许拆坏表格列结构
+// 11) jargon-scan —— 词表加载 / 命中判定 / 举例语境豁免 / 代码块表格排除 /
+//     排除逻辑的 mutation 验证（issue #390 拍板 3）
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== jargon-scan：loadGlossaryWords ===");
+{
+  const fixture = [
+    "# 词表",
+    "",
+    "## 需要括注的词",
+    "",
+    "| 词 | 标准括注 | 可懂度 |",
+    "|---|---|---|",
+    "| 挂账 | 代码已交付但验证还没做 | 完全不懂 |",
+    "| 树帅 | 协调角色 | 完全不懂 |",
+    "",
+    "## 无需括注的词",
+    "",
+    "| 词 | 可懂度 |",
+    "|---|---|",
+    "| 真机 | 懂 |",
+  ].join("\n");
+  const words = loadGlossaryWords(fixture);
+  check("正控：只取「需要括注的词」表的词列", JSON.stringify(words) === JSON.stringify(["挂账", "树帅"]));
+  check("负控：不含「无需括注的词」表里的词（真机不进扫描）", !words.includes("真机"));
+
+  let threwNoAnchor = false;
+  try { loadGlossaryWords("没有任何锚点的文本"); } catch (e) { threwNoAnchor = /锚点/.test(e.message); }
+  check("负控：锚点缺失时拒绝返回空词表（抛错而不是假装扫过）", threwNoAnchor);
+
+  let threwEmptyTable = false;
+  try { loadGlossaryWords("## 需要括注的词\n\n（这里没有表格）\n"); } catch (e) { threwEmptyTable = /词都没解析出来/.test(e.message); }
+  check("负控：锚点在但一个词都没解析出来时同样拒绝（不当「词表本来就是空的」处理）", threwEmptyTable);
+}
+
+console.log("\n=== jargon-scan：findUnannotatedJargon 命中判定 ===");
+const GLOSSARY = ["对抗验证官", "对抗审", "挂账", "树帅", "候选", "解冻条件"];
+{
+  const bad = "这个改动会被对抗验证官挡下来，还要走一遍收活。";
+  const r = findUnannotatedJargon(bad, GLOSSARY);
+  check("正控：裸用未括注的词 → 被抓", r.includes("对抗验证官"));
+}
+{
+  const ok = "这个改动会被对抗验证官(独立于写代码的人，专门找漏洞)挡下来。";
+  const r = findUnannotatedJargon(ok, GLOSSARY);
+  check("负控：紧跟括注 → 不误报", r.length === 0);
+}
+{
+  // 真实句式：issue #390 正文原句，验证「举例语境」豁免不是为了凑巧过 #390 才编的
+  const enumCtx = "这个项目的 issue 里全是内部行话(树帅/挂账/对抗审…),外人读不懂。";
+  const r = findUnannotatedJargon(enumCtx, GLOSSARY);
+  check("负控：枚举语境（词/词/词）→ 不误报（issue #390 真实句式）", r.length === 0);
+}
+{
+  const mixed = "这次由对抗验证官(独立找漏洞的角色)把关，后续对抗验证官继续跟进同一件事。";
+  const r = findUnannotatedJargon(mixed, GLOSSARY);
+  check("负控：词多次出现，只要有一次已解释 → 整体不算违例（不要求每次重复括注）", r.length === 0);
+}
+{
+  const fenced = "正文说明。\n```\n候选 树帅 挂账\n```\n";
+  const rFenced = findUnannotatedJargon(fenced, GLOSSARY);
+  check("负控：围栏代码块内的命中不进违例清单", rFenced.length === 0);
+
+  const tableCase = "正文说明。\n| 词 | 说明 |\n|---|---|\n| 候选 | 占位 |\n";
+  const rTable = findUnannotatedJargon(tableCase, GLOSSARY);
+  check("负控：Markdown 表格行内的命中不进违例清单", rTable.length === 0);
+
+  const inlineCode = "正文说明，`候选` 是标签名不是叙述性用词。";
+  const rInline = findUnannotatedJargon(inlineCode, GLOSSARY);
+  check("负控：行内反引号代码跨度里的命中不进违例清单", rInline.length === 0);
+}
+{
+  // mutation 验证：证明「代码块/表格排除」这一半真的在起作用，不是摆设。
+  // 直接绕过 stripNonProse（等价于把这层排除逻辑删掉/改坏），在同一段原文上找，
+  // 应该看到「候选」被找到——这样 findUnannotatedJargon 的绿色结果才不是「反正没测过」的假绿。
+  const fenced = "正文说明。\n```\n候选\n```\n";
+  const rawOccurrences = findJargonOccurrences(fenced, GLOSSARY); // 故意不经过 stripNonProse
+  check("mutation 验证：排除逻辑被绕过时，围栏内的「候选」确实会被扫到（证明变异体会变红）", rawOccurrences.some((o) => o.word === "候选"));
+  const strippedOccurrences = findJargonOccurrences(stripNonProse(fenced), GLOSSARY);
+  check("mutation 验证：真实路径经过 stripNonProse 后，同一段文本不再命中（证明排除逻辑不是摆设）", strippedOccurrences.length === 0);
+}
+{
+  // 按词去重回归（对抗审 PR #391 必修项 2）：同一个词裸用 3 次、全部未豁免（既没括注也不在
+  // 枚举语境），违例列表必须只出现一次——不是「命中几次就报几次」。3 次出现之间用普通叙述文字
+  // 隔开（不是 / 、分隔），确保不会被举例语境规则误判成豁免。
+  const repeated = "这个改动会被对抗验证官挡下来，对抗验证官还要再看一遍，最后对抗验证官拍板收场。";
+  const occCount = findJargonOccurrences(repeated, GLOSSARY).filter((o) => o.word === "对抗验证官").length;
+  check("前置核对：样本里「对抗验证官」确实命中 3 次（不是样本写错导致只测到 1 次）", occCount === 3, String(occCount));
+  const r = findUnannotatedJargon(repeated, GLOSSARY);
+  const dupCount = r.filter((w) => w === "对抗验证官").length;
+  check("正控：同一词裸用 3 次且全部未豁免 → 违例列表只出现一次（按词去重，不按命中次数）", dupCount === 1, JSON.stringify(r));
+}
+{
+  // 真机回归锚点：issue #390 本单自己的正文必须过扫不报（issue #390「怎么验收」明确写了这条）
+  const issue390Body = [
+    "## 说人话(没参与项目的人扫这段就够)",
+    "这个项目的 issue 里全是内部行话(树帅/挂账/对抗审…),外人读不懂。",
+    "",
+    "## 标准括注节",
+    "对抗验证官/水位线/挂账/树帅/工兵/解冻条件等 8-10 个真必要术语各配一句标准括注,写单直接抄。",
+  ].join("\n");
+  const fullGlossary = ["对抗验证官", "水位线", "挂账", "树帅", "工兵", "对抗审", "解冻条件"];
+  const r = findUnannotatedJargon(issue390Body, fullGlossary);
+  check("回归：issue #390 真实句式（含裸列举「对抗验证官/水位线/挂账/树帅/工兵/解冻条件」）→ 零违例", r.length === 0, JSON.stringify(r));
+}
+
+console.log("\n=== jargon-scan：buildJargonScanReport / main() 全链路 ===");
+{
+  const issuesClean = [{ number: 1, title: "clean", url: "u1", body: "对抗验证官(独立找漏洞)处理" }];
+  const rClean = buildJargonScanReport({ issues: issuesClean, glossaryWords: GLOSSARY });
+  check("负控：全部已解释 → exit 0", rClean.exit === EXIT.QUIET);
+
+  const issuesBad = [{ number: 2, title: "bad", url: "u2", body: "对抗验证官直接挡下来。" }];
+  const rBad = buildJargonScanReport({ issues: issuesBad, glossaryWords: GLOSSARY });
+  check("正控：命中未解释 → exit 1", rBad.exit === EXIT.REPORT);
+  check("正控：报告点名 issue 号与未括注的词", rBad.text.includes("#2") && rBad.text.includes("对抗验证官"));
+}
+{
+  const calls = [];
+  const runner = (cmd, args) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "list") {
+      return { status: 0, stdout: JSON.stringify([{ number: 390, title: "样本单", url: "u390", body: "对抗验证官(独立找漏洞)处理" }]) };
+    }
+    return { status: 1, stdout: "", stderr: "unexpected: " + args.join(" ") };
+  };
+  const exit = main(["jargon-scan"], runner);
+  check("main jargon-scan：exit 0（真实词表文件 + 已括注样本）", exit === EXIT.QUIET);
+  const listCall = calls.find((a) => a[0] === "issue" && a[1] === "list");
+  check("main jargon-scan：不带 --label 过滤（扫全部 open，不按类型筛）", listCall && !listCall.includes("--label"));
+  check("main jargon-scan：--limit >= 1000（R1 同款分页纪律）", listCall && Number(listCall[listCall.indexOf("--limit") + 1]) >= 1000);
+}
+{
+  const runner = () => ({ status: 1, stdout: "", stderr: "gh: not authenticated" });
+  const exit = main(["jargon-scan"], runner);
+  check("main jargon-scan：gh 调用失败 → exit >= 2（脚本自身错，不是巡检结果）", exit >= EXIT.GH_FAIL);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 12) R2 · Markdown 转义：标题/标签名含 | ` 换行 时不许拆坏表格列结构
 //     （PR #383 对抗审必修项 R2）
 // ══════════════════════════════════════════════════════════════════════
 console.log("\n=== R2：Markdown 特殊字符转义 ===");
