@@ -10,7 +10,7 @@ paths:
 
 要往这类文件加一条规矩、或改一条已有的之前，先 Read 全文：
 
-`C:/frank/windsurf-dao/ccswitch/rules/dao-writing-rules.md` 第一节
+`D:/frank/windsurf-dao/ccswitch/rules/dao-writing-rules.md` 第一节
 
 那里是「这条该我自己定还是该问用户」的分界、两条否决项、自己定的对价（可撤回），
 以及「立一条新规矩必须带基线数字」。
