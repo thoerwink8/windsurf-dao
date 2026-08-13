@@ -68,8 +68,14 @@ function budgeted(needMs, locatorResult) {
 }
 const locatorFound = { status: 0, stdout: "C:\\nvm4w\\nodejs\\pi.cmd\n" };
 
-// 正控：健康但首探预算不够（needMs 落在 4000 与放大后预算之间）⇒ 重试放大预算后判 available。
-assert.deepEqual(probe("pi", ["--version"], 4000, budgeted(4000 * RETRY_TIMEOUT_FACTOR, locatorFound)), {
+// 下面的预算全写死字面量，**不许用 RETRY_TIMEOUT_FACTOR 算期望值**：
+// 那样是自指断言——把因子改回 1 时期望值跟着变小，退化测不出来（实测漏网，故改此写法）。
+// 因子是判据契约，改它必须同改这一行和下面两个字面预算。
+assert.equal(RETRY_TIMEOUT_FACTOR, 3, "重试放大倍数变了：下面的字面预算必须同改");
+
+// 正控：健康但首探 4000ms 不够、需 10000ms（落在首探预算与放大后 12000ms 之间）
+// ⇒ 重试放大预算后判 available。因子退回 1 时重试仍是 4000ms，这条转红。
+assert.deepEqual(probe("pi", ["--version"], 4000, budgeted(10000, locatorFound)), {
   available: true, version: "0.84.1",
 });
 
@@ -91,7 +97,7 @@ probe("pi", ["--version"], 4000, (command, args, opts) => {
   budgets.push(opts.timeout);
   return { error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }), status: null };
 });
-assert.deepEqual(budgets, [4000, 4000 * RETRY_TIMEOUT_FACTOR]);
+assert.deepEqual(budgets, [4000, 12000]);
 
 // unknown 重试一次：首探坏（非零 + 定位器找到）→ 重试探出 0。定位器占一次 runner 调用，共 3 次。
 let attempts = 0;
