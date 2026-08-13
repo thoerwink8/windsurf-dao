@@ -7,7 +7,7 @@ import { commonSecretsPath, countPlaceholders, SECRET_PLACEHOLDER } from './secr
 import { probeMcpHealth, evaluateMcpHealth, computeMcpUniverse } from './mcp-health.mjs';
 import { sameJson, themeDrift, leakedSecretPaths, countPiSecrets, rehydratePiAuth } from './pi-sync.mjs';
 import { filterOrcaHookGroups, extractHookCommands, checkNodeHookExistence, countCommandOccurrencesRaw } from './hooks-drift.mjs';
-import { pickPwsh } from './pwsh.mjs';
+import { pickPwsh, detectPwshState } from './pwsh.mjs';
 
 let problems = 0;
 let warnings = 0;
@@ -301,19 +301,15 @@ function checkExternalTools() {
   const tools = [
     { cmd: 'gh', label: 'GitHub CLI (gh)', installHint: 'winget install GitHub.cli' },
     { cmd: 'uvx', label: 'uv/uvx (Python MCP)', installHint: 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"' },
-    // issue #338：pwsh 缺了只提醒不判失败——5.1 回退仍全兼容，升级属建议（提醒≠失败）。
-    // 判定走 where/which 退出码（见 ./pwsh.mjs 头注），不解析输出文案。
-    { cmd: 'pwsh', label: 'PowerShell 7 (pwsh)', installHint: 'winget install Microsoft.PowerShell', level: 'warn' },
   ];
-  for (const { cmd, label, installHint, level } of tools) {
+  for (const { cmd, label, installHint } of tools) {
     try {
       execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
       });
       pass(`${label} 已安装。`);
     } catch {
-      if (level === 'warn') warn(`${label} 未安装。→ ${installHint}（5.1 仍可用，仅建议升级）`);
-      else fail(`${label} 未安装。→ ${installHint}`);
+      fail(`${label} 未安装。→ ${installHint}`);
       continue;
     }
     if (cmd === 'gh') {
@@ -324,6 +320,23 @@ function checkExternalTools() {
         warn('gh 未登录。→ gh auth login');
       }
     }
+  }
+  checkPwshTool();
+}
+
+// pwsh 单独一节而不进上面那个通用循环：它的探测是三态（issue #364），不是通用循环
+// 那种「PATH 有/没有」二态。判据全在 config-sync/lib/pwsh.mjs 的 detectPwshState()
+// （PATH 直接命中 / 兜底候选存在且真跑通但当前进程 PATH 未刷新 / 真未装），本函数只
+// 取数与打印，不复述判据。issue #338 定的「pwsh 缺了只提醒不判失败」不变——三态里
+// 只有 'path' 是 pass，'fallback'/'missing' 都只是 warn，5.1 回退仍全兼容。
+function checkPwshTool() {
+  const { state, resolvedPath } = detectPwshState();
+  if (state === 'path') {
+    pass('PowerShell 7 (pwsh) 已安装。');
+  } else if (state === 'fallback') {
+    warn(`PowerShell 7 (pwsh) 已安装（${resolvedPath}），但当前进程 PATH 未刷新：重启终端/Orca 后 pickPwsh() 调用面自动走 7。`);
+  } else {
+    warn('PowerShell 7 (pwsh) 未安装。→ winget install Microsoft.PowerShell（5.1 仍可用，仅建议升级）');
   }
 }
 
