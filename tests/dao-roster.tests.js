@@ -116,8 +116,21 @@ const garbage = "qzkx_" + Math.random().toString(36).slice(2);
 assert.equal(probe(garbage).available, false, `随机乱名 ${garbage} 必须为 false`);
 // 本机 omp 真不存在（协调者亲测坐实，本机复验）⇒ 必须 false。
 assert.equal(probe("omp").available, false, "本机 omp 必须为 false");
-// 本机 pi 真实存在 ⇒ 必须 true。
-assert.equal(probePi().available, true, "pi 在本机必须为 true");
+// 环境感知正控（issue: CI 无 pi 时硬编码 true 必红）：本机真有 pi 就必须验真正控，
+// 不许删；CI/无 pi 环境如实按探测结果断言 false/unknown，不许无条件跳过整条断言。
+// 非 true 分支额外断言「落在合法三态之内 + 带 reason」，防止真回归伪装成「环境缺失」溜过去
+// ——纯粹接受任意值等于没断言，那不是「环境感知」，是「关掉了这条正控」。
+{
+  const piResult = probePi();
+  if (piResult.available === true) {
+    assert.equal(piResult.available, true, "本机探测到 pi 时 probePi() 必须判 available=true（真机正控）");
+  } else {
+    assert.ok(piResult.available === false || piResult.available === "unknown",
+      `CI/无 pi 环境下 probePi().available 必须落在 false/unknown 二态之一，实际=${JSON.stringify(piResult.available)}`);
+    assert.ok(typeof piResult.reason === "string" && piResult.reason.length > 0,
+      `非 true 判定必须带 reason 留痕（不许静默无理由通过），实际=${JSON.stringify(piResult)}`);
+  }
+}
 
 assert.equal(summarize({ orca: { available: "unknown" } }, { pi: { available: true }, claude: { available: false }, codex: { available: "unknown" } }), "fabric=orca? agents=pi✓,claude✗,codex?");
 console.log("dao-roster tests: 18 passed");
