@@ -10,6 +10,11 @@
 # 状态 = 一个 git tag：`ci-sweep` 指向上次审过的 master 顶点。**绿推、红也推**
 # （红时审计已发生、产出是 issue，下次审新增量）。
 #
+# 落单去重与红项名（issue #406 · 2026-08-13）：红时先按红项名（`dao check` 输出里
+# `  X  <标题>` 那几行）查同题 open 单——命中只追加本次 run 评论、不新开；未命中才新开，
+# 标题与正文都带红项名（如 `云审红 ci-sweep · 闸自测红：xxx.tests.js`）。
+# 同一天同型 6 张重复单（#388/#389/#392/#396/#397/#398）的根治点在此。
+#
 # 退出码：`dao check` 是二值的，exit 0 绿、非 0 红。**不许在这里加"某些非 0 也算绿"的白名单**
 # ——那正是它替换掉的那个东西（issue #325）。
 name: ci-sweep
@@ -41,6 +46,11 @@ jobs:
           node scripts/dao-check.mjs | Tee-Object -Variable out
           $code = $LASTEXITCODE
           "summary=$($out | Select-Object -Last 1)" >> $env:GITHUB_OUTPUT
+          # 红项名（`  X  <标题>` 那几行）用多行值语法写进 GITHUB_OUTPUT，供落单步逐条查重。
+          # 绿时这段是空值，落单步只在红时跑，不影响。多行值语法见 Actions 文档（heredoc 定界符）。
+          "red-items<<CI_SWEEP_RED_EOF" >> $env:GITHUB_OUTPUT
+          $out | Where-Object { $_ -match '^\s*X\s+' } | ForEach-Object { ($_ -replace '^\s*X\s+', '').Trim() } | Select-Object -Unique >> $env:GITHUB_OUTPUT
+          "CI_SWEEP_RED_EOF" >> $env:GITHUB_OUTPUT
           exit $code
 
       # 红也前移水位线：审计已发生、产出是下面的 issue，下次只审新增量。
@@ -53,20 +63,63 @@ jobs:
           git tag -f ci-sweep master
           git push -f origin ci-sweep
 
-      - name: 红 ⇒ 自动开 issue 落驾驶舱
+      # 红 ⇒ 落单/追加（issue #406）：① 按红项名查同题 open 单，命中只评论不新开；
+      # ② 未命中才新开，标题/正文带红项名。正文与评论一律先落文件再 --body-file。
+      - name: 红 ⇒ 落单/追加（同题查重）
         if: failure()
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RED_ITEMS: ${{ steps.check.outputs.red-items }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SUMMARY: ${{ steps.check.outputs.summary }}
         run: |
-          $body = @"
-          ## 云审红（ci-sweep 水位线制 · issue #306）
+          $ErrorActionPreference = 'Stop'
+          $repo = $env:GITHUB_REPOSITORY
+          $runUrl = $env:RUN_URL
+          $summary = $env:SUMMARY
 
-          - dao check：``$("${{ steps.check.outputs.summary }}")``
-          - 运行详情：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          $items = @($env:RED_ITEMS -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+          if ($items.Count -eq 0) { $items = @('') }   # 兜底：红项名解析不出来也照旧落单，正文标注
 
-          处置：本地链（``dao-pr-merge.ps1`` 合并前跑同一条 `dao check`）仍是权威门，
-          本单是云上无菌对账发现的分叉。
-          水位线 tag ``ci-sweep`` 已前移（红也前移：本次审计已发生，下次只审新增量）。
-          "@
-          gh issue create --title "云审红：ci-sweep $(Get-Date -Format yyyy-MM-dd)" --label "缺陷" --body $body
+          $i = 0
+          foreach ($item in $items) {
+            $i++
+            $isFallback = ($item -eq '')
+            $search = if ($isFallback) { '云审红 ci-sweep in:title' } else { "云审红 ci-sweep $item in:title" }
+            $title  = if ($isFallback) { "云审红：ci-sweep $(Get-Date -Format yyyy-MM-dd)" } else { "云审红 ci-sweep · $item" }
+            $itemLabel = if ($isFallback) { '<红项名解析失败，本单为兜底>' } else { $item }
+
+            # ① 查同题 open 单：标题同时含「云审红 ci-sweep」与本红项名
+            $hits = @(gh issue list --repo $repo --state open --search $search --json number,createdAt --limit 20 | ConvertFrom-Json | Sort-Object createdAt -Descending | Select-Object -First 1)
+            if ($LASTEXITCODE -ne 0) { Write-Host "⚠ 查重搜索失败（exit $LASTEXITCODE），按未命中处理，正文已标注" }
+
+            $bodyFile = Join-Path $env:RUNNER_TEMP "ci-sweep-body-$i.md"
+            if ($hits.Count -gt 0 -and $hits[0]) {
+              $n = [int]$hits[0].number
+              $body = @(
+                "（同题已有 open 单 #$n，本次不新开，追加本次 run）"
+                "- 红项：$itemLabel"
+                "- dao check：$summary"
+                "- 运行详情：$runUrl"
+              ) -join "`n"
+              [IO.File]::WriteAllText($bodyFile, $body, [Text.Encoding]::UTF8)
+              gh issue comment $n --repo $repo --body-file $bodyFile
+            } else {
+              $fallbackNote = if ($isFallback) { '- 本单为兜底单（红项名解析失败）' } else { '' }
+              $body = @(
+                '## 云审红（ci-sweep 水位线制 · issue #306）'
+                ''
+                "- 红项：$itemLabel"
+                "- dao check：$summary"
+                "- 运行详情：$runUrl"
+                ''
+                $fallbackNote
+                '处置：本地链（`dao-pr-merge.ps1` 合并前跑同一条 `dao check`）仍是权威门，'
+                '本单是云上无菌对账发现的分叉。'
+                '水位线 tag `ci-sweep` 已前移（红也前移：本次审计已发生，下次只审新增量）。'
+              ) -join "`n"
+              [IO.File]::WriteAllText($bodyFile, $body, [Text.Encoding]::UTF8)
+              gh issue create --repo $repo --title $title --label "缺陷" --body-file $bodyFile
+            }
+          }
