@@ -7,11 +7,13 @@
 // 不 mock「写入」这一步本身。
 import { readFileSync } from "node:fs";
 import {
-  EXIT, main,
+  EXIT, main, escapeMdCell,
   buildRelayReport, buildGuardAuditReport, buildDefectUnassignedReport,
   buildTaskStaleReport, buildDebtThawReport, buildCandidateSweepReport,
   buildInboxSection70, buildInboxSection71, buildInboxSection69,
   spliceInboxSection, extractReferencedPRs,
+  fetchInboxBucket, fetchRelayIssues, fetchGuardAuditData, fetchDefectIssues,
+  fetchTaskIssues, fetchDebtThawData, fetchCandidateIssues,
 } from "../scripts/dao-label-hooks.mjs";
 
 let pass = 0, fail = 0;
@@ -334,6 +336,108 @@ console.log("\n=== main() 全链路（inbox-refresh：过滤单子对自己的�
   check("自指过滤：#70 不出现在自己的表格数据行里", !bodies[70].includes("[#70]"));
   check("自指过滤：真实单 #500 正常出现", bodies[70].includes("[#500]"));
   check("自指过滤：标题张数按过滤后计（共 1 张，不是 2 张）", bodies[70].includes("共 1 张"));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 9) R1 · 分页：gh 默认 --limit 30 会静默截断，超 30 的部分判定看不见
+//    （PR #383 对抗审必修项 R1）。假 runner 精确模拟这个真实行为：
+//    不带足够大 --limit 时只吐前 30 条，带了才吐全量——这样「删掉分页参数」
+//    这个 mutation 会让下面的断言真的读到红，不是摆设。
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== R1：分页（>30 条不许静默漏单） ===");
+function limitAwareRunner(fullList) {
+  return (cmd, args) => {
+    if (args[0] !== "issue" && args[0] !== "pr") return { status: 1, stdout: "", stderr: "unexpected: " + args.join(" ") };
+    const limitIdx = args.indexOf("--limit");
+    const limit = limitIdx === -1 ? 30 : Number(args[limitIdx + 1]); // gh 真实默认值：不传就是 30
+    const capped = limit >= fullList.length ? fullList : fullList.slice(0, Math.min(limit, 30));
+    return { status: 0, stdout: JSON.stringify(capped) };
+  };
+}
+{
+  // 候选：35 张，5 张过期（>60 天），其中一张故意放在第 33 条（索引 32，越过默认 30 条截断线）。
+  const full = Array.from({ length: 35 }, (_, idx) => ({
+    number: 1000 + idx,
+    title: `候选样本 ${idx}`,
+    url: `u${idx}`,
+    updatedAt: idx === 32 ? daysAgo(90) : daysAgo(5), // 只有 #1032 过期，且它排在第 30 条之后
+  }));
+  const runner = limitAwareRunner(full);
+
+  const truncated = fetchCandidateIssues("x/y", (cmd, args) => {
+    // 复现「删掉分页参数」这个 mutation 的效果：把调用方传来的 --limit 连同其值一起剥掉，
+    // 让下面这个假 runner 看到的就是「没传 --limit」，从而按 gh 真实默认值截断到 30 条。
+    const limitIdx = args.indexOf("--limit");
+    const stripped = limitIdx === -1 ? args : [...args.slice(0, limitIdx), ...args.slice(limitIdx + 2)];
+    return runner(cmd, stripped);
+  });
+  check("R1 修前红态复现：不传 --limit 时 gh 只回 30 条（模拟真实截断）", truncated.length === 30);
+  const truncatedReport = buildCandidateSweepReport(truncated, NOW);
+  check("R1 修前红态复现：截断后看不见 #1032，误报「无事」exit 0", truncatedReport.exit === EXIT.QUIET);
+
+  const full35 = fetchCandidateIssues("x/y", runner); // 脚本真实调用（当前代码已带 --limit 1000）
+  check("R1 修后绿：脚本真实调用拿到全部 35 条，不截断", full35.length === 35);
+  const fullReport = buildCandidateSweepReport(full35, NOW);
+  check("R1 修后绿：#1032 被判定命中，exit 1", fullReport.exit === EXIT.REPORT && fullReport.text.includes("#1032"));
+}
+{
+  // 结构覆盖：所有 issue/pr list 调用点都必须带足够大的 --limit，逐个扫描调用记录，
+  // 不止测一条子命令——漏掉任何一个调用点这条都会红。
+  const calls = [];
+  const recorder = (cmd, args) => {
+    calls.push(args);
+    if (args[0] === "issue" && args[1] === "list") return { status: 0, stdout: "[]" };
+    if (args[0] === "pr" && args[1] === "list") return { status: 0, stdout: "[]" };
+    if (args[0] === "issue" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ body: "## 当前清单\n\n## 已消化" }) };
+    return { status: 1, stdout: "", stderr: "unexpected" };
+  };
+  fetchInboxBucket("x/y", "待拍板", recorder);
+  fetchRelayIssues("x/y", recorder);
+  fetchGuardAuditData("x/y", recorder);
+  fetchDefectIssues("x/y", recorder);
+  fetchTaskIssues("x/y", recorder);
+  fetchDebtThawData("x/y", recorder); // body 为空，不会触发 pr view 调用
+  fetchCandidateIssues("x/y", recorder);
+
+  const listCalls = calls.filter((a) => (a[0] === "issue" || a[0] === "pr") && a[1] === "list");
+  // 8 = inbox(1) + relay(1) + guard 的 issue list(1) + guard 的 pr list(1) + defect(1) + task(1) + debt(1) + candidate(1)
+  check(`R1 结构覆盖：抓到 ${listCalls.length} 条 list 调用（应为 8）`, listCalls.length === 8);
+  const missingLimit = listCalls.filter((a) => {
+    const i = a.indexOf("--limit");
+    return i === -1 || Number(a[i + 1]) < 1000;
+  });
+  check("R1 结构覆盖：每一条 list 调用都带 --limit >= 1000（零遗漏）", missingLimit.length === 0, JSON.stringify(missingLimit));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 10) R2 · Markdown 转义：标题/标签名含 | ` 换行 时不许拆坏表格列结构
+//     （PR #383 对抗审必修项 R2）
+// ══════════════════════════════════════════════════════════════════════
+console.log("\n=== R2：Markdown 特殊字符转义 ===");
+{
+  check("escapeMdCell 负控：普通文本原样返回（不过度转义）", escapeMdCell("普通标题") === "普通标题");
+  check("escapeMdCell 正控：| 转义", escapeMdCell("危险 | 标题") === "危险 \\| 标题");
+  check("escapeMdCell 正控：反引号转义", escapeMdCell("带`code`的标题") === "带\\`code\\`的标题");
+  check("escapeMdCell 正控：换行替换成空格（不许拆行）", escapeMdCell("第一行\n第二行\r\n第三行") === "第一行 第二行 第三行");
+  check("escapeMdCell 正控：反斜杠先转义（不然后续转义会双重）", escapeMdCell("反\\斜杠") === "反\\\\斜杠");
+}
+{
+  const dangerTitle = "危险标题 | 带`反引号`\n换行";
+  const issues = [{
+    number: 900, title: dangerTitle, url: "https://x/900", updatedAt: daysAgo(1),
+    labels: [{ name: "待拍板" }, { name: "缺陷 | 假注入" }],
+  }];
+  const section70 = buildInboxSection70(issues, NOW);
+  check("R2 #70 正控：标题里的 | 已转义，原始未转义串不出现", !section70.includes("危险标题 | 带`反引号`") && section70.includes("危险标题 \\| 带\\`反引号\\` 换行"));
+  check("R2 #70 正控：其他标签列里的 | 也已转义", section70.includes("缺陷 \\| 假注入"));
+  const titleLines = section70.split("\n").filter((l) => l.includes("危险标题"));
+  check("R2 #70 正控：该行不因换行被拆成两行（表格行必须单行）", titleLines.length === 1 && titleLines[0].includes("换行 |"));
+
+  const section71 = buildInboxSection71(issues, NOW);
+  check("R2 #71 正控：标题转义同样生效", section71.includes("危险标题 \\| 带\\`反引号\\` 换行"));
+
+  const section69 = buildInboxSection69(issues, NOW);
+  check("R2 #69 正控：标题转义同样生效", section69.includes("危险标题 \\| 带\\`反引号\\` 换行"));
 }
 
 console.log(`\ndao-label-hooks.tests  pass=${pass} fail=${fail}`);
