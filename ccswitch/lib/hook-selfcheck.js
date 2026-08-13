@@ -1,7 +1,7 @@
 // hook-selfcheck.js — dao hook 的加固脚手架公共库
 //
 // ── 为什么有这个库 ───────────────────────────────────────────────────────────
-// dao-rule-echo.js 与 dao-compact-log.js 的**加固层**（不是业务层）曾逐行重复：
+// 本库由两个 dao hook 的**加固层**（不是业务层）抽取而来——它们曾逐行重复：
 // stdout 去重写、三重留痕的 fail()、故障注入闸、synthetic 心跳判据、日志轮转、
 // 两段式 --selfcheck（查注册 + 查真实触发心跳）。这些是「hook 不要变成静默死层」
 // 这一条教训的固化形态，与具体 hook 干什么无关 ⇒ 属公共脚手架，抽出来一处修全处到。
@@ -10,14 +10,13 @@
 // 各 hook 的业务判据（回灌什么 / 记什么 / matcher 怎样才算覆盖 / 陈旧多少天算失联）
 // 全部留在各自文件里、以参数传入——它们本就该各自演进，塞进公共库会制造错误的耦合。
 //
-// ── 有意保留的两处差异（不要「顺手统一」）───────────────────────────────────
-// ① 日志写失败的语义不同：dao-rule-echo 的心跳是**旁证**，写不动也不该拖垮回灌
-//    ⇒ heartbeat() 全程吞异常；dao-compact-log 的落盘日志是**主产物**（systemMessage
-//    的模型侧可见性未被文档担保，落盘才是唯一确定生效的可见化手段）⇒ appendJsonl()
-//    向上抛，由调用方 fail() 报出来。若把两者统一成「都吞」，compact-log 就退化成
-//    它自己头注里点名要防的那种静默死层。
-// ② 陈旧阈值 30 天 / 14 天不同：规则文件不是每天都改，compaction 却几乎每天发生
-//    ⇒ 同一个数字套两个 hook 会让一边过敏、一边失灵。
+// ── 有意保留的两处语义（不要「顺手统一」）───────────────────────────────────
+// ① 日志写失败的语义按用途分两种，刻意都保留：**旁证**（写不动也不该拖垮主流程）
+//    ⇒ heartbeat() 全程吞异常；**主产物**（systemMessage 的模型侧可见性未被文档担保，
+//    落盘才是唯一确定生效的可见化手段）⇒ appendJsonl() 向上抛，由调用方 fail() 报出来。
+//    若把两者统一成「都吞」，主产物型就退化成它要防的那种静默死层。
+// ② 陈旧阈值按 hook 触发频率由调用方传入（staleDays 参数），不写死同一个数字——
+//    触发稀疏的 hook 与几乎每天触发的 hook 套同一个阈值，会让一边过敏、一边失灵。
 //
 // ── 近似说明（禁笃定措辞）─────────────────────────────────────────────────────
 // `isSynthetic` 的判据是 payload 形状（显式自测环境变量，或缺 transcript_path）。
@@ -26,31 +25,17 @@
 // synthetic 而让 --selfcheck 假报「从未生效」。它挡的是「顺手自测把自己染绿」这一类
 // 无心之失，挡不住蓄意造假，也不保证宿主协议不变。
 //
-// ── 留痕域单点：全域分布与本批的覆盖面（issue #190 第 2 条）──────────────────
+// ── 留痕域单点（issue #190 第 2 条）───────────────────────────────────────────
 // 本库把 `errors.log` / `fired.log` / `last.json` **三样全部**放在同一个
 // `<root>/_tmp/<stateSubdir>/` 域里，而 `heartbeat()` 与 `appendErrorLog()` 都吞异常
 // ⇒ 那个域一旦坏掉（`_tmp` 被占成普通文件、盘满、权限变更），三样同时哑掉且退出码干净。
-// **「一条都没记下来」与「本次什么都没发生」在盘上逐字节相同。** 这不是假想：#190 第 2 条
-// 是对抗官把仓根 `_tmp` 换成普通文件实测出来的（限流事件四条通道全哑、exit 0）。
-//
-// **全域分布（建护栏前先摸分布，`[#守-全域分布]`）——本库当前 4 个消费方全部落在这一个域里**：
-//   · `dao-rule-echo.js`           旁证型心跳，**本批未 opt-in**（见下）
-//   · `dao-compact-log.js`         落盘日志是主产物，写不成时 `fail()` 已经出声 ⇒ 不静默
-//   · `dao-rate-limit-sentinel.js` **本批 opt-in**：它的 fired.log 是「真实限流样本」的耐久
-//     数据（#190 重开条件直接指着它），而它挂在 StopFailure 上 —— 输出与退出码都被宿主忽略，
-//     出错时**没有任何人会看见**，是这 4 个里最需要主动探测的一个
-//   · `dao-probe-gate.js`          **本批 opt-in**：验收判据要从它的 fired.log 确认 block 真发生过
-// **为什么前两个没 opt-in，照直写**：它们的 `--selfcheck` 输出被 `tests/hook-selfcheck.tests.js`
-// 以**逐字锚定**的方式钉着（那份断言治的是另一个病：模板文案被改坏没人红），给它们加一段
-// 输出要连那批锚一起改，属另一个批次的判断。⇒ **本条是纵深不是全覆盖**，欠账照记：
-// 那两个 hook 的留痕域此刻仍然只有「写不成就吞掉」这一层。
+// **「一条都没记下来」与「本次什么都没发生」在盘上逐字节相同。** 实测形态见 issue #190。
+// 留痕域可写性由 --selfcheck 的 opt-in 第三段（probeDirs）主动探测，见 selfcheckLines ③。
 //
 // 真相源：windsurf-dao/ccswitch/lib/hook-selfcheck.js
-// 消费方：ccswitch/hooks/dao-rule-echo.js、ccswitch/hooks/dao-compact-log.js、
-//        ccswitch/hooks/dao-rate-limit-sentinel.js、ccswitch/hooks/dao-probe-gate.js
-// 自证：这两个 hook 各自的测试（tests/dao-rule-echo.tests.js / tests/dao-compact-log.tests.js）
-//       原样全绿即证明本库未改变任何既有行为——「重构不改行为」的唯一证明方式。
-//       本库自己的单元自证在 tests/hook-selfcheck.tests.js。
+// 消费方：grep 现查（`grep -rn "hook-selfcheck" ccswitch/ --include="*.js"`），名单不抄进注释
+//         —— 谁在用它、什么时候增减，以 grep 结果为准。
+// 自证：tests/ 里谁引用本库、覆盖到哪条路，grep 现查（跑法统一走 node scripts/dao-check.mjs）。
 
 "use strict";
 
@@ -126,7 +111,7 @@ function probeDirWritable(dir) {
  * 造一个 hook 的加固脚手架。
  *
  * @param {object} cfg
- * @param {string} cfg.name          hook 名（留痕前缀，如 "dao-rule-echo"）
+ * @param {string} cfg.name          hook 名（留痕前缀，如 "dao-rate-limit-sentinel"）
  * @param {string} cfg.stateSubdir   留痕子目录名（落 <root>/_tmp/<stateSubdir>/）
  * @param {string} cfg.failTail      fail() 尾注：说明「本次没做什么」，各 hook 自述
  * @param {string} cfg.forceErrorEnv 故障注入环境变量名（自测「出错不静默」用）
@@ -228,7 +213,7 @@ function createHookScaffold(cfg) {
    * 共同误判：脚本躺在盘上、检查报绿、其实从未被调用过一次。
    *
    * **③ 是 opt-in 的第三段**（`sc.probeDirs`，issue #190 第 2 条）：给了才查留痕域写得进去没有。
-   * 不给 ⇒ 输出与本参数引入之前**逐字节相同**（前两个消费方因此一个字都没变）。
+   * 不给 ⇒ 输出与本参数引入之前**逐字节相同**。
    *
    * @param {object} sc
    * @param {string} sc.event         宿主事件名（如 "PostToolUse"）
