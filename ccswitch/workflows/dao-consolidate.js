@@ -19,7 +19,7 @@ export const meta = {
 //    理由/出处 case」四件套，落地由人一条一条 approve。
 // 2. **没有数值相似度阈值**（与派单契约里「语义重叠 >阈值」的措辞的显式偏离，理由写在这里）：
 //    harness 里没有可调用的 embedding/相似度算子，模型自报的「相似度 0.82」是**编出来的数字**
-//    （dao 条款库通用节「禁笃定措辞」正面命中）。改用 **case-conditioned 判据**：两条是不是
+//    （dao 条款库「所有人」节「禁笃定措辞」正面命中）。改用 **case-conditioned 判据**：两条是不是
 //    重复，不看字面像不像，看**在同一个具体 case 上它们是不是让人做同一件事**。这个判据的
 //    好处是可复核（case 有锚点，读者能自己去看），坏处是它**漏掉「还没有人在同一个 case 上
 //    同时用过这两条」的重复对**——两个方向都写清楚，不宣称覆盖全。
@@ -168,7 +168,7 @@ const clauseRef = (which) => ({
     file: { type: 'string', description: `${which}所在文件的路径(相对仓库根或绝对路径,与你实际读的那个一致)` },
     locator: { type: 'string', description: '定位信息:行号 + 一个能唯一 Grep 到该行的短语。行号会随改动漂移,故两者都要给' },
     before_text: { type: 'string', description: '**改前原文**,逐字复制该条款整行(不许转述、不许省略元字段)。超长条款可截到前 400 字并显式标注「…(后略)」' },
-    section: { type: 'string', description: '它所在的节(如「通用节」「实现官节」「dao.md 帅节」),用于判断归属层是否一致' },
+    section: { type: 'string', description: '它所在的节(如「所有人」「按你这一类」「dao.md 帅节」),用于判断归属层是否一致' },
   },
 })
 
