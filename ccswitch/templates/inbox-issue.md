@@ -11,6 +11,8 @@
 >
 > **你怎么用**：<INBOX_HOW_TO_USE>
 >
+> **修复类 PR body 必带**：`Fixes #单号`（确无对应单才写「无关联单」）——修复不回填，issue 池只进不出。
+>
 > <INBOX_EXTRA_NOTE>
 >
 > 实时清单筛 [`label:<INBOX_LABEL>`](<INBOX_LABEL_QUERY_URL>)（下面的快照可能滞后，以标签筛出来的为准）。

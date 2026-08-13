@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     PR 合并期机械链的 canonical 实现：fetch → 核 rev-parse 真的动了 → merge 主干 → 重跑验证
-    → 合 PR → prune → 追平主干 → 删本地分支。**远端分支交平台自动删，本脚本不碰。**
+    → 修复回填软检 → 合 PR → prune → 追平主干 → 删本地分支。**远端分支交平台自动删，本脚本不碰。**
 
 .DESCRIPTION
     这条链在 dao.md 里长期只以**文字**形态存在，而它每一步都是零判断祈使句
@@ -56,6 +56,9 @@
       4) 重跑验证                       —— 必须在**合并后的树**上跑。跨项目不可知，故命令由
                                           -VerifyCommand 传入；不传就必须显式 -SkipVerify，
                                           且那时退出码是 2 不是 0（见 .NOTES 退出码契约）。
+      4.5) 修复回填软检查（issue #407）  —— 读 PR body，确认带 `Fixes #单号` 或「无关联单」；
+                                          缺失只打印提醒行，**不拦、不改退出码**（先软后议硬，
+                                          噪音评估期两周再议升硬闸）。
       5) gh pr merge（**只合，不删分支**）—— 判据是随后 `gh pr view --json state` 实查到的
                                           **PR 状态**，不是 gh 的退出码。理由见下面
                                           「为什么第 5 步不看 gh 的退出码」。
@@ -443,6 +446,35 @@ if ($SkipVerify) {
     } finally { Pop-Location }
     if ($vcode -ne 0) { Fail "验证命令退出码 $vcode（非 0）——分支态的绿不构成合并态的证据，停" 2 }
     Write-Ok "验证通过（退出码 0）"
+}
+
+# ── 4.5 修复回填检查（issue #407 · 软提醒，非护栏）────────────────────────────
+# 修复类 PR body 必须声明它修了哪张单：`Fixes #单号`（确无对应单才写「无关联单」），
+# 否则修复动作不回填关单动作，issue 池只进不出地腐化（#269/#286/#291 实证后关闭）。
+# 判据照 issue #407 正文：body 含 GitHub 自动关单关键字族 + `#数字`
+#   （fix/fixes/fixed · close/closes/closed · resolve/resolves/resolved，大小写不敏感，
+#   `Fixes #407` 是 canonical 写法），或含「无关联单」。
+#   **启发式是近似**，两个方向都有反例：`Fixes #1, #2` 多单写法命中首单即通过；
+#   `Resolves #1` 等少见拼写会漏匹配（只多打一行提醒——软提醒的代价是噪音不是拦截）；
+#   body 里叙述别处「fix #123」却并非声明本 PR 修它，会误判已声明（损失一次提醒）。
+# 软提醒契约：缺字段只打印提醒行，**不拦、不改退出码**——先软后议硬（验证密度按失效
+# 代价分档，此件属 fail-loud 可见面）。gh 读不到 body 时静默跳过（本步不是护栏，
+# 缺 gh 不制造新噪音）。
+if (Get-Command gh -ErrorAction SilentlyContinue) {
+    $prb = $null
+    Push-Location $RepoPath
+    try { $prb = Invoke-Gh -GhArgs @('pr', 'view', "$PullRequest", '--json', 'body') } finally { Pop-Location }
+    if ($prb.Ok) {
+        $prBody = $null
+        try { $prBody = [string](($prb.Out -join "`n") | ConvertFrom-Json).body } catch { $prBody = $null }
+        if (-not $prBody) {
+            Write-Info "（读不到 PR #$PullRequest 的 body，跳过修复回填软提醒——本步非护栏）"
+        } elseif ($prBody -match '(?i)\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s*#\d+' -or $prBody -match '无关联单') {
+            Write-Ok "PR #$PullRequest body 已声明修复对象（Fixes #… 或「无关联单」）"
+        } else {
+            Write-Note "PR #$PullRequest body 未声明修复对象：修复类 PR 必须带 ``Fixes #单号``（确无对应单才写「无关联单」）——软提醒，不拦合并（issue #407）"
+        }
+    }
 }
 
 if ($NoMerge) {
