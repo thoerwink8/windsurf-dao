@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// dao-label-hooks.mjs — label 体系的确定性巡检钩子集合（issue #373，落地 #360 拍板 2-A 剩余 6 条）
+// dao-label-hooks.mjs — label 体系的确定性巡检钩子集合（issue #373，落地 #360 拍板 2-A 剩余 6 条；
+// issue #390 追加 jargon-scan，落地 #390 拍板 3「黑话词表软闸」）
 //
 // 用户拍板两件：①补齐 #360 设计稿 §1.1 终表「自动化钩子」栏里还没建的 6 条巡检
 // ②判定与产出全部代码化——agent 只剩「跑一条命令 + 失败上报」，省 token 省树。
-// 本文件就是那「一条命令」：七个子命令，每个都是纯 gh 调用 + 确定性判定，零 agent 判断。
+// 本文件就是那「一条命令」：八个子命令，每个都是纯 gh 调用 + 确定性判定，零 agent 判断。
 //
 // 子命令：
 //   inbox-refresh      待拍板/需用户/候选 三类 open 单 → 重写 #70/#71/#69 正文表格（唯一直接写 GitHub 的子命令）
@@ -13,6 +14,7 @@
 //   task-stale         任务 open 且 >30 天无评论 → 降级候选/关单提请清单
 //   debt-thaw          欠账 open 且正文引用的 PR 已合并 → 解冻提请清单
 //   candidate-sweep    候选 open 且 >60 天无动静 → 关单提请清单
+//   jargon-scan        open 单正文命中 docs/ops/jargon-glossary.md 词表且未括注 → 清单（软闸，不阻断）
 //
 // 退出码约定（automation 的 agent 层只认这个）：
 //   0 = 无事，什么都不用做
@@ -26,7 +28,8 @@
 import { spawnSync } from "node:child_process";
 import { writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const EXIT = { QUIET: 0, REPORT: 1, GH_FAIL: 2, USAGE: 3 };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -38,7 +41,7 @@ const LIST_LIMIT = 1000;
 
 const SUBCOMMANDS = [
   "inbox-refresh", "relay-check", "guard-audit", "defect-unassigned",
-  "task-stale", "debt-thaw", "candidate-sweep",
+  "task-stale", "debt-thaw", "candidate-sweep", "jargon-scan",
 ];
 
 // ── gh 调用层（唯一含副作用的部分，可注入 runner） ──────────────────────
@@ -59,11 +62,11 @@ export function ghJson(args, runner = spawnSync) {
   }
 }
 
+// label 为 undefined/null ⇒ 不带 --label 过滤，扫全部 open 单（jargon-scan 用这个形态）。
 function issueList(repo, label, fields, runner) {
-  return ghJson(
-    ["issue", "list", "--repo", repo, "--label", label, "--state", "open", "--json", fields.join(","), "--limit", String(LIST_LIMIT)],
-    runner,
-  );
+  const args = ["issue", "list", "--repo", repo, "--state", "open", "--json", fields.join(","), "--limit", String(LIST_LIMIT)];
+  if (label != null) args.splice(4, 0, "--label", label);
+  return ghJson(args, runner);
 }
 
 // 表格单元格转义：标题/标签名是不受控输入（开单人写什么都行），直接拼进 `| a | b |`
@@ -422,6 +425,137 @@ function runCandidateSweep(repo, runner) {
   return r.exit;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// 8) jargon-scan —— open 单正文命中黑话词表且未括注（issue #390 拍板 3，软闸不阻断）
+//
+// 判定不是「词后 N 字符内有括号」这么简单——见 buildJargonReportForBody 的三条注释，
+// #390 本单自己就是反例样本：它列举黑话词时用的是「词/词/词」枚举，不是逐词单独括注，
+// 但读者一眼就看得出这是在举例，不该被当成「裸用未解释」误伤。判定规则详见
+// docs/ops/jargon-glossary.md「判定规则」一节（两处必须同步，本文件头注不复制第二份）。
+//
+// 「找出违例」与「确认自己真的扫到了样本」两半刻意不共用同一次遍历结果：
+// findJargonOccurrences 只负责定位命中，isOccurrenceExempt 只负责判「这次命中算不算已解释」，
+// 词表本身加载失败会直接抛错（不会把「零违例」误读成「词表是空的所以自然零命中」）。
+// ══════════════════════════════════════════════════════════════════════
+
+const JARGON_FIELDS = ["number", "title", "url", "body"];
+const BRACKET_WINDOW = 20;
+const BRACKET_RE = /[（(]/;
+const CLUSTER_SEP_RE = /^[/、]$/;
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_GLOSSARY_PATH = join(SCRIPT_DIR, "..", "docs", "ops", "jargon-glossary.md");
+
+// 词表只取「## 需要括注的词」表格的「词」列——「## 无需括注的词」表故意不参与扫描（见词表文件说明）。
+// 纯函数：喂字符串即可测，不依赖真文件存在。
+export function loadGlossaryWords(mdText) {
+  const lines = String(mdText || "").split(/\r?\n/);
+  const startIdx = lines.findIndex((l) => /^## 需要括注的词/.test(l));
+  if (startIdx === -1) {
+    throw new Error('词表文件里找不到 "## 需要括注的词" 锚点，格式已变，不敢盲扫——先人工核对 docs/ops/jargon-glossary.md');
+  }
+  const words = [];
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^## /.test(line)) break;
+    const m = line.match(/^\|\s*([^|]+?)\s*\|/);
+    if (!m) continue;
+    const cell = m[1].trim();
+    if (!cell || cell === "词" || /^-+$/.test(cell)) continue; // 跳过表头行 / 分隔行
+    words.push(cell);
+  }
+  if (words.length === 0) {
+    throw new Error('词表文件 "## 需要括注的词" 表下一行词都没解析出来，格式已变——先人工核对，不当「词表本来就是空的」处理');
+  }
+  return words;
+}
+
+export function fetchGlossaryWords(glossaryPath = DEFAULT_GLOSSARY_PATH, reader = readFileSync) {
+  return loadGlossaryWords(reader(glossaryPath, "utf8"));
+}
+
+// 代码块 / 表格行里的命中不算「写给圈外人看的裸黑话」——那两处本来就是标识符或判据说明。
+// 用等长空格占位而不是直接删除，保证后面算的字符位置（括注窗口）不会因为删字而错位。
+export function stripNonProse(body) {
+  return String(body || "")
+    .replace(/```[\s\S]*?```/g, (m) => " ".repeat(m.length))
+    .replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length))
+    .split(/\r?\n/)
+    .map((line) => (/^\s*\|.*\|\s*$/.test(line) ? " ".repeat(line.length) : line))
+    .join("\n");
+}
+
+// 最长匹配优先扫描：避免「对抗审」被拆成「对抗」+「审」两次重复命中同一段文字。
+export function findJargonOccurrences(text, words) {
+  const sorted = [...words].sort((a, b) => b.length - a.length);
+  const occurrences = [];
+  let i = 0;
+  while (i < text.length) {
+    const hit = sorted.find((w) => text.startsWith(w, i));
+    if (hit) {
+      occurrences.push({ word: hit, start: i, end: i + hit.length });
+      i += hit.length;
+    } else {
+      i += 1;
+    }
+  }
+  return occurrences;
+}
+
+// 一次命中算「已解释」，走两条路径之一：
+// ①命中前后 20 字符内出现括号（半角/全角）——标准的「词（解释）」写法；
+// ②命中词紧挨着另一个词表词，中间只隔一个 / 或 、分隔符——这是在枚举一串术语本身
+//   （比如「树帅/挂账/对抗审」），语境已经表明这是在讲这些词，不是在裸用它们。
+function isOccurrenceExempt(text, occurrences, idx) {
+  const occ = occurrences[idx];
+  const before = text.slice(Math.max(0, occ.start - BRACKET_WINDOW), occ.start);
+  const after = text.slice(occ.end, occ.end + BRACKET_WINDOW);
+  if (BRACKET_RE.test(before) || BRACKET_RE.test(after)) return true;
+  const prev = occurrences[idx - 1];
+  const next = occurrences[idx + 1];
+  const linkedToPrev = prev && CLUSTER_SEP_RE.test(text.slice(prev.end, occ.start));
+  const linkedToNext = next && CLUSTER_SEP_RE.test(text.slice(occ.end, next.start));
+  return Boolean(linkedToPrev || linkedToNext);
+}
+
+// 词粒度而非命中粒度判定：同一张单里，某个词只要有任意一次命中已解释，这个词本身就不算违例
+// ——不要求每次重复出现都重新括注一遍，首现讲清楚了就够（DISPATCH-HUB.md §五.5 同一约定）。
+export function findUnannotatedJargon(body, glossaryWords) {
+  const cleaned = stripNonProse(body);
+  const occurrences = findJargonOccurrences(cleaned, glossaryWords);
+  const seen = new Set();
+  const exempted = new Set();
+  occurrences.forEach((occ, idx) => {
+    seen.add(occ.word);
+    if (isOccurrenceExempt(cleaned, occurrences, idx)) exempted.add(occ.word);
+  });
+  return [...seen].filter((w) => !exempted.has(w));
+}
+
+export function fetchJargonScanData(repo, runner, glossaryPath = DEFAULT_GLOSSARY_PATH, reader = readFileSync) {
+  const issues = issueList(repo, undefined, JARGON_FIELDS, runner);
+  return { issues, glossaryWords: fetchGlossaryWords(glossaryPath, reader) };
+}
+
+export function buildJargonScanReport({ issues, glossaryWords }) {
+  const violations = [];
+  for (const issue of issues) {
+    const unannotated = findUnannotatedJargon(issue.body, glossaryWords);
+    if (unannotated.length > 0) {
+      violations.push(`#${issue.number} ${issue.title}（未括注：${unannotated.join("、")}）${issue.url}`);
+    }
+  }
+  if (violations.length === 0) {
+    return { exit: EXIT.QUIET, text: `黑话词表无违例（${issues.length} 张 open 正文全部检查过，命中词均已括注或在举例语境中）` };
+  }
+  return { exit: EXIT.REPORT, text: `黑话未括注 ${violations.length} 条（软闸，不阻断——把清单整理成人话贴 #70）：\n${violations.join("\n")}` };
+}
+
+function runJargonScan(repo, runner) {
+  const r = buildJargonScanReport(fetchJargonScanData(repo, runner));
+  process.stdout.write(r.text + "\n");
+  return r.exit;
+}
+
 // ── CLI 分发 ─────────────────────────────────────────────────────────
 
 function usage() {
@@ -451,6 +585,7 @@ export function main(argv, runner = spawnSync, now = Date.now()) {
       case "task-stale": return runTaskStale(repo, runner);
       case "debt-thaw": return runDebtThaw(repo, runner);
       case "candidate-sweep": return runCandidateSweep(repo, runner);
+      case "jargon-scan": return runJargonScan(repo, runner);
       default: usage(); return EXIT.USAGE;
     }
   } catch (e) {
