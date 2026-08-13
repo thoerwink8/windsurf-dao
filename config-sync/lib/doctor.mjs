@@ -334,7 +334,7 @@ function checkPwshTool() {
   if (state === 'path') {
     pass('PowerShell 7 (pwsh) 已安装。');
   } else if (state === 'fallback') {
-    warn(`PowerShell 7 (pwsh) 已安装（${resolvedPath}），但当前进程 PATH 未刷新：重启终端/Orca 后 pickPwsh() 调用面自动走 7。`);
+    warn(`PowerShell 7 (pwsh) 已安装（${resolvedPath}），但当前进程 PATH 未刷新：pickPwsh() 已经在用这条绝对路径走 7，不影响功能；重启终端/Orca 后仅改为走 PATH 字面量 pwsh，行为不变。`);
   } else {
     warn('PowerShell 7 (pwsh) 未安装。→ winget install Microsoft.PowerShell（5.1 仍可用，仅建议升级）');
   }

@@ -436,6 +436,18 @@ function psInterp() {
   return _psInterp;
 }
 
+// issue #387 挂账 4：三态探测下 psInterp() 可能返回带空格的绝对路径
+// （`C:\Program Files\PowerShell\7\pwsh.exe`）。生成的指令是给人/AI 粘到 PowerShell/pwsh
+// 提示符跑的（-Command 载荷用的是 PowerShell 单引号转义，不是 cmd.exe 语法）——单纯加
+// 双引号不够：PowerShell 里语句开头是带空格的带引号字符串时，解析成的是字符串表达式
+// 而不是命令调用（实测：不加 `&` 直接报「表达式或语句中包含意外的标记 -NoProfile」），
+// 必须配调用运算符 `&` 才会被当成命令执行。只在含空格时加，避免给常见字面量
+// （`pwsh`/`powershell.exe`）徒增视觉噪音——那两种本就不需要 `&` 也能正确调用。
+function psExe() {
+  const p = psInterp();
+  return /\s/.test(p) ? '& "' + p + '"' : p;
+}
+
 // 生成**零编辑可执行**的复制指令。src 是文件还是目录由**实际 stat** 决定（见头注闸③）。
 // 返回 null = 生成不了（src 不在盘上），调用方据此改写成一句显式的「模板缺失」而不是沉默。
 function copyInstruction(tpl, projectRoot, templatesRoot) {
@@ -447,12 +459,12 @@ function copyInstruction(tpl, projectRoot, templatesRoot) {
   if (st.isDirectory()) {
     // 目录：先建目标目录，再复制**内容**（`\*`）。不写 `Copy-Item <dir> <destParent>` ——
     // 那条的语义随目标存不存在而变（存在则复制成子目录），是经典的"第二次跑就错"。
-    return psInterp() + " -NoProfile -Command " + psQuote(
+    return psExe() + " -NoProfile -Command " + psQuote(
       "New-Item -ItemType Directory -Force -Path " + psQuote(destAbs) + " | Out-Null; " +
       "Copy-Item -Path " + psQuote(path.join(srcAbs, "*")) + " -Destination " + psQuote(destAbs) + " -Recurse -Force"
     );
   }
-  return psInterp() + " -NoProfile -Command " + psQuote(
+  return psExe() + " -NoProfile -Command " + psQuote(
     "New-Item -ItemType Directory -Force -Path " + psQuote(path.dirname(destAbs)) + " | Out-Null; " +
     "Copy-Item -LiteralPath " + psQuote(srcAbs) + " -Destination " + psQuote(destAbs) + " -Force"
   );
