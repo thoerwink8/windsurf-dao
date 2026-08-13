@@ -182,6 +182,12 @@ A. 照此派   B. 调整（说明哪单换谁）   C. 照此派，且本窗口�
 10. **依赖未合并产物的后续动作（配 automation / 挂 cron）排进合并后收官链直接做**，
     不造「命令清单文件」中间交接（用户 2026-08-13 拍板；基线：#390 批 automation
     命令落盘再照单配，多一跳 1 例）。
+11. **卡片状态（cardStatus，Orca 面板上那列 todo/in-progress/in-review）随必经动作两迁**：
+    任务书注入成功（回读落屏）即 `orca worktree set --workspace-status in-progress`，
+    收到 `worker_done` 开审即标 `in-review`——与树备注换棒是同一条命令，顺手同传，不新造触发点；
+    `completed` 不设手动步（合并清树即终态，卡片随树消失）。Orca 无「worker_done 自动改卡片」
+    的事件钩子（2026-08-13 查证），此条即唯一机制（用户 2026-08-13 拍板；基线：未测，
+    面板状态全程不动 1 例观察）。
 
 ---
 
