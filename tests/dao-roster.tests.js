@@ -170,6 +170,18 @@ const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "dao-roster-tests-"));
   assert.deepEqual(onDisk, fakeRoster, "缓存内容必须是 buildRoster() 返回对象原样 JSON，不加包装层");
 }
 
+// writeRosterCache()：temp+rename 落盘后目录里不残留临时文件（W3 换家对抗审 O1）。
+// 只断言「写完之后目录是干净的」，不 mock fs.renameSync——mock 掉正是要验证的那个原子操作，
+// 断言会变成守着近似物的假安心。
+{
+  const dir = path.join(TMP_ROOT, "no-leftover-dir");
+  const target = path.join(dir, "cache.json");
+  const fakeRoster = { at: new Date().toISOString(), fabric: {}, agents: {}, summary: "y" };
+  writeRosterCache(fakeRoster, target);
+  const entries = fs.readdirSync(dir);
+  assert.deepEqual(entries, ["cache.json"], `落盘后目录不许残留临时文件，实际：${JSON.stringify(entries)}`);
+}
+
 // ── SessionStart 刷新钩子（ccswitch/hooks/dao-roster-refresh.js）──
 
 // 指针必须配一道会红的闸：rosterScriptPath() 指向的文件必须真实存在。
@@ -251,4 +263,4 @@ assert.equal(path.basename(refreshHook.rosterScriptPath()), "dao-roster.mjs");
 
 fs.rmSync(TMP_ROOT, { recursive: true, force: true });
 
-console.log("dao-roster tests: 33 passed");
+console.log("dao-roster tests: 34 passed");
