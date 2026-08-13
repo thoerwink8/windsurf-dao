@@ -299,5 +299,42 @@ console.log("\n=== main() 全链路（inbox-refresh，真实写临时文件 + �
   check("main inbox-refresh：只对内容变化的单调用 edit（71/69 均空，跳过写入）", editCalls.length === 1 && editCalls[0][2] === "70");
 }
 
+console.log("\n=== main() 全链路（inbox-refresh：过滤单子对自己的自指） ===");
+{
+  // 真机 dry-run 发现的真实 bug：#70/#71/#69 三张收件箱单自己也挂着对应的桶 label
+  // （实测确认），不过滤就会出现「#70 需要 #70 处理」这种自指——这里回归它。
+  const stubBody70 = spliceInboxSection(
+    ["> 说明块", "", "## 当前清单（旧）", "", "## 已消化（留档）", ""].join("\n"),
+    "## 当前清单（占位）\n\n占位",
+  );
+  const bodies = { 70: stubBody70, 71: stubBody70, 69: stubBody70 };
+  const runner = (cmd, args) => {
+    if (args[0] === "issue" && args[1] === "list") {
+      const label = args[args.indexOf("--label") + 1];
+      if (label === "待拍板") {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            { number: 70, title: "📌 待拍板总览", url: "u70", updatedAt: daysAgo(1), labels: [{ name: "待拍板" }] },
+            { number: 500, title: "真实待拍板单", url: "u500", updatedAt: daysAgo(1), labels: [{ name: "待拍板" }] },
+          ]),
+        };
+      }
+      return { status: 0, stdout: "[]" };
+    }
+    if (args[0] === "issue" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ body: bodies[args[2]] }) };
+    if (args[0] === "issue" && args[1] === "edit") {
+      const content = readFileSync(args[args.indexOf("--body-file") + 1], "utf8");
+      bodies[args[2]] = content;
+      return { status: 0, stdout: "" };
+    }
+    return { status: 1, stdout: "", stderr: "unexpected" };
+  };
+  main(["inbox-refresh"], runner, NOW);
+  check("自指过滤：#70 不出现在自己的表格数据行里", !bodies[70].includes("[#70]"));
+  check("自指过滤：真实单 #500 正常出现", bodies[70].includes("[#500]"));
+  check("自指过滤：标题张数按过滤后计（共 1 张，不是 2 张）", bodies[70].includes("共 1 张"));
+}
+
 console.log(`\ndao-label-hooks.tests  pass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);
