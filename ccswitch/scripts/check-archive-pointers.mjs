@@ -336,10 +336,13 @@ export function scan(repoRoot) {
       // ── 折行容错 ㈡：路径完整匹配到行尾（本行再没别的），§ 锚点被拆到下一行 ──
       // 只在「同行没抽到锚点」时才追下一行，且要求本行匹配点到行尾之间只剩空白——
       // 有别的字符就不追（近似手段，见头注「已知不覆盖」段的两个反例）。
+      // 🔴 `rest` 切自原始 text，CRLF 文件里行尾多一个 `\r`；字符类必须显式含 `\r?`，
+      // 否则本判据在 CRLF 上恒假、锚点续行永远追不到（2026-08-13 对抗审 PR #403 实证：
+      // 本仓 201 个文本文件 196 个是 CRLF，回归网夹具全 LF，套件绿但真实工作树漏检）。
       if (!anchors.length) {
         const nl = rest.indexOf("\n");
         const restOnLine = nl >= 0 ? rest.slice(0, nl) : rest;
-        if (/^[ \t]*$/.test(restOnLine) && lineNo < lines.length) {
+        if (/^[ \t]*\r?$/.test(restOnLine) && lineNo < lines.length) {
           let cursor = stripContPrefix(lines[lineNo]);
           let am2;
           while ((am2 = ANCHOR_RE.exec(cursor)) !== null) {
