@@ -15,6 +15,12 @@
 // 下面 §⑦、§⑧ 专测这两个盲区；§①–§⑥ 是从被删除版本迁回并同步锚点的既有判据（存在性/
 // 锚点/塌陷/零样本/历史豁免/用法错），迁回时行为不变，只有内部实现的锚点行随源码同步更新。
 //
+// ── 2026-08-13 补丁（对抗审 PR #403 红项）：折行容错㈡对 CRLF 静默失效 ─────────
+// 原版 §⑦ 夹具全用 LF 写，套件绿；本仓工作树 196/201 个文本文件是 CRLF，折行容错㈡在
+// CRLF 上锚点续行永远追不到（`check-archive-pointers.mjs` 折行容错㈡旁头注有机制说明）。
+// `foldRepo()` 加了可选 `eol` 参数（默认 "\n"，不改既有 LF 夹具的行为），§⑦ 新增一段
+// CRLF 正控，钉住这个行尾态。
+//
 // 🔴 **本文件里的档案层路径字面一律拼出来（`EVO + "x.md"`），不写整串**：被守对象的扫描面
 // 包含 tests/ 目录，写了整串会被真仓那一趟扫到、当成假样本。§⑨ 有一条断言钉住这个拼法奏效。
 
@@ -227,10 +233,16 @@ console.log("\n──── ⑥ 真仓冒烟：此刻盘上这些指针指得准
 
 console.log("\n──── ⑦ 折行容错：issue #284 第 1 项，先破再验的两种折行形态 ────");
 {
-  function foldRepo(tag, prefix) {
+  // eol 默认 "\n"（既有 LF 夹具，行为不变）；传 "\r\n" 造 CRLF 夹具——
+  // 2026-08-13 对抗审 PR #403 实证本仓 201 个文本文件 196 个是 CRLF，回归网夹具原先全 LF、
+  // 与真实工作树行尾分布失真，折行容错㈡在 CRLF 上会静默丢锚（见 check-archive-pointers.mjs
+  // 折行容错㈡旁的头注）。`w()` 走 fs.writeFileSync 直接写传入的字节，不做行尾转译，
+  // 故这里显式拼 "\r\n" 就是真实的 CRLF 语料，不依赖平台。
+  function foldRepo(tag, prefix, eol) {
     const root = path.join(TMP, tag);
     w(path.join(root, "docs", "evolution", "arc.md"), "# 假档\n\n## C1 · 段落\n\n正文\n");
     const P = prefix; // "//" 或 "#"，模拟不同语言的注释记号
+    const nl = eol || "\n";
     const lines = [
       `${P} 形态㈠：路径本身被拆两行（本行以 ${EVO} 结尾，档名在下一行）`,
       `${P} 见 ${EVO}`,
@@ -239,7 +251,7 @@ console.log("\n──── ⑦ 折行容错：issue #284 第 1 项，先破再�
       `${P} 见 ${EVO}arc.md`,
       `${P} §C1`,
     ];
-    w(path.join(root, "src", `a${prefix === "#" ? ".ps1" : ".js"}`), lines.join("\n") + "\n");
+    w(path.join(root, "src", `a${prefix === "#" ? ".ps1" : ".js"}`), lines.join(nl) + nl);
     return root;
   }
   for (const prefix of ["//", "#"]) {
@@ -249,6 +261,16 @@ console.log("\n──── ⑦ 折行容错：issue #284 第 1 项，先破再�
       r.marker && r.marker.refs === 2 && r.marker.anchors === 1, JSON.stringify(r.marker));
     check(`折行容错命中数计入 folded=（前缀 "${prefix}"）`, r.marker && r.marker.folded >= 1, JSON.stringify(r.marker));
     check(`折行修好后仍是绿灯（前缀 "${prefix}"）`, r.code === 0, r.out.slice(0, 500));
+  }
+
+  console.log("  —— 正控：CRLF 行尾下折行两形态同样被拼回（issue #284 对抗审红项，PR #403）——");
+  for (const prefix of ["//", "#"]) {
+    const root = foldRepo(`fold-crlf-${prefix === "#" ? "hash" : "slash"}`, prefix, "\r\n");
+    const r = run(["--repo", root]);
+    check(`CRLF：折行两形态都被拼回（前缀 "${prefix}"）：refs=2 anchors=1`,
+      r.marker && r.marker.refs === 2 && r.marker.anchors === 1, JSON.stringify(r.marker));
+    check(`CRLF：折行容错命中数计入 folded=（前缀 "${prefix}"）`, r.marker && r.marker.folded >= 1, JSON.stringify(r.marker));
+    check(`CRLF：折行修好后仍是绿灯（前缀 "${prefix}"）`, r.code === 0, r.out.slice(0, 500));
   }
 
   console.log("  —— 折行但目标仍是死指针，必须照样判红 ——");
@@ -272,7 +294,7 @@ console.log("\n──── ⑦ 折行容错：issue #284 第 1 项，先破再�
   console.log("  —— mutation：两种折行判据各自的判别力 ——");
   const src = fs.readFileSync(GUARD, "utf8");
   const FOLD1_LINE = '      if (!/docs\\/evolution\\/[ \\t]*$/.test(lines[li])) continue;';
-  const FOLD2_LINE = '        if (/^[ \\t]*$/.test(restOnLine) && lineNo < lines.length) {';
+  const FOLD2_LINE = '        if (/^[ \\t]*\\r?$/.test(restOnLine) && lineNo < lines.length) {';
   check("靶点⑤：折行㈠判据唯一存在", src.split(FOLD1_LINE).length === 2, String(src.split(FOLD1_LINE).length - 1));
   check("靶点⑥：折行㈡判据唯一存在", src.split(FOLD2_LINE).length === 2, String(src.split(FOLD2_LINE).length - 1));
 
