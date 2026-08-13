@@ -273,5 +273,10 @@ Write-Host ''
 Write-Host '──── 汇总 ────'
 Write-Host "  worktree $WorktreePath / 分支 $Branch / 主仓 $RepoPath"
 if ($DryRun) { Write-Host '  DryRun：以上均未执行' }
+else {
+    # 只提醒不自动删（2026-08-13 用户拍板）：会话与 PR 非一一对应，且 commit 的
+    # Claude-Session trailer 靠会话档追溯出处——删不删是人的判断，不是流程。
+    Write-Note '这单已收尾。本会话的结论若都已落盘（commit/issue），可敲 /dao-remove 丢弃会话；拿不准就留着'
+}
 Write-Host 'MERGE_CLEANUP_EXIT=0'
 exit 0
