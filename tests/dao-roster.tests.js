@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { probe, probePi, summarize, RETRY_TIMEOUT_FACTOR } from "../scripts/dao-roster.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { probe, probePi, summarize, RETRY_TIMEOUT_FACTOR, rosterCachePath, writeRosterCache } from "../scripts/dao-roster.mjs";
+import refreshHook from "../ccswitch/hooks/dao-roster-refresh.js";
 
 // 路由假 runner：按命令形态分流「主探测」与「定位器(where/which)」两路结果。
 // win32 下 runCommand 把 where/which 拼成 "where <cmd>" 单串；posix 下是 args[0]。
@@ -133,4 +139,116 @@ assert.equal(probe("omp").available, false, "本机 omp 必须为 false");
 }
 
 assert.equal(summarize({ orca: { available: "unknown" } }, { pi: { available: true }, claude: { available: false }, codex: { available: "unknown" } }), "fabric=orca? agents=pi✓,claude✗,codex?");
-console.log("dao-roster tests: 18 passed");
+
+// ── issue #409 第 1 项：缓存落盘 + SessionStart 刷新钩子（跨工兵冻结常量见 issue 正文 §二）──
+// 全程 env 覆盖把落点指到 os.tmpdir() 下的临时目录，**不许往真 HOME 写**。
+const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "dao-roster-tests-"));
+
+// rosterCachePath()：env 覆盖生效。
+{
+  const custom = path.join(TMP_ROOT, "custom-cache.json");
+  const prev = process.env.DAO_ROSTER_CACHE;
+  process.env.DAO_ROSTER_CACHE = custom;
+  assert.equal(rosterCachePath(), custom, "DAO_ROSTER_CACHE 设了就必须原样生效");
+  if (prev === undefined) delete process.env.DAO_ROSTER_CACHE; else process.env.DAO_ROSTER_CACHE = prev;
+}
+
+// rosterCachePath()：默认公式 = HOME/.claude/dao-roster-cache.json（不写盘，只比对字符串，
+// 所以哪怕算出来的是真 HOME 也安全——这条只断言公式，不落地）。
+{
+  assert.equal(process.env.DAO_ROSTER_CACHE, undefined, "本条断言默认公式前必须确认 env 覆盖已清空");
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  assert.equal(rosterCachePath(), path.join(home, ".claude", "dao-roster-cache.json"));
+}
+
+// writeRosterCache()：mkdir -p 语义（目标目录不存在也能落盘）+ 内容原样 JSON、不加包装层。
+{
+  const nested = path.join(TMP_ROOT, "nested", "dir", "cache.json");
+  const fakeRoster = { at: new Date().toISOString(), fabric: { orca: { available: true } }, agents: {}, summary: "x" };
+  writeRosterCache(fakeRoster, nested);
+  const onDisk = JSON.parse(fs.readFileSync(nested, "utf8"));
+  assert.deepEqual(onDisk, fakeRoster, "缓存内容必须是 buildRoster() 返回对象原样 JSON，不加包装层");
+}
+
+// ── SessionStart 刷新钩子（ccswitch/hooks/dao-roster-refresh.js）──
+
+// 指针必须配一道会红的闸：rosterScriptPath() 指向的文件必须真实存在。
+// 这条不许 mock ——它守的正是「钩子解析 scripts/dao-roster.mjs 的路径」这根指针本身。
+assert.ok(fs.existsSync(refreshHook.rosterScriptPath()),
+  `rosterScriptPath() 指向的文件不存在：${refreshHook.rosterScriptPath()}（指针断了，钩子会静默刷不了缓存）`);
+// 且它确实指到 scripts/dao-roster.mjs，不是随便一个存在的文件。
+assert.equal(path.basename(refreshHook.rosterScriptPath()), "dao-roster.mjs");
+
+// cachePath()/ttlMs()：默认公式与 env 覆盖，各自独立于 mjs 那份重新实现（issue #409 §二硬约束）。
+{
+  assert.equal(process.env.DAO_ROSTER_CACHE, undefined);
+  const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+  assert.equal(refreshHook.cachePath(), path.join(home, ".claude", "dao-roster-cache.json"));
+  assert.equal(refreshHook.ttlMs(), 2 * 60 * 60 * 1000, "默认 TTL 必须是冻结的 2 小时");
+
+  const prevCache = process.env.DAO_ROSTER_CACHE;
+  const prevTtl = process.env.DAO_ROSTER_TTL_MS;
+  process.env.DAO_ROSTER_CACHE = path.join(TMP_ROOT, "env-cache.json");
+  process.env.DAO_ROSTER_TTL_MS = "1234";
+  assert.equal(refreshHook.cachePath(), path.join(TMP_ROOT, "env-cache.json"));
+  assert.equal(refreshHook.ttlMs(), 1234);
+  if (prevCache === undefined) delete process.env.DAO_ROSTER_CACHE; else process.env.DAO_ROSTER_CACHE = prevCache;
+  if (prevTtl === undefined) delete process.env.DAO_ROSTER_TTL_MS; else process.env.DAO_ROSTER_TTL_MS = prevTtl;
+}
+
+// isFresh()：三态——新鲜 / 过期 / 缺失或坏掉，且两端（TTL 边界）都验。
+{
+  const freshFile = path.join(TMP_ROOT, "fresh.json");
+  fs.writeFileSync(freshFile, JSON.stringify({ at: new Date().toISOString() }));
+  assert.equal(refreshHook.isFresh(freshFile, 2 * 60 * 60 * 1000, fs), true);
+
+  const staleFile = path.join(TMP_ROOT, "stale.json");
+  const staleAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(); // 3 小时前，TTL 2 小时
+  fs.writeFileSync(staleFile, JSON.stringify({ at: staleAt }));
+  assert.equal(refreshHook.isFresh(staleFile, 2 * 60 * 60 * 1000, fs), false);
+
+  assert.equal(refreshHook.isFresh(path.join(TMP_ROOT, "does-not-exist.json"), 999999, fs), false, "缺失文件必须判不新鲜");
+
+  const badFile = path.join(TMP_ROOT, "bad.json");
+  fs.writeFileSync(badFile, "{not json");
+  assert.equal(refreshHook.isFresh(badFile, 999999, fs), false, "解析失败必须判不新鲜，不许当异常往外抛");
+
+  const noAtFile = path.join(TMP_ROOT, "no-at.json");
+  fs.writeFileSync(noAtFile, JSON.stringify({ fabric: {} }));
+  assert.equal(refreshHook.isFresh(noAtFile, 999999, fs), false, "无 at 字段必须判不新鲜");
+}
+
+// run()：两态，用注入的假 spawn，绝不真起进程。
+{
+  const freshFile = path.join(TMP_ROOT, "run-fresh.json");
+  fs.writeFileSync(freshFile, JSON.stringify({ at: new Date().toISOString() }));
+  let spawnCalls = 0;
+  const fakeSpawn = () => { spawnCalls++; return { unref() {} }; };
+  const skipResult = refreshHook(({ cachePath: freshFile, ttlMs: 2 * 60 * 60 * 1000, spawn: fakeSpawn }));
+  assert.equal(skipResult.action, "skip-fresh");
+  assert.equal(spawnCalls, 0, "缓存新鲜时绝不许起子进程");
+
+  const staleFile = path.join(TMP_ROOT, "run-stale.json");
+  fs.writeFileSync(staleFile, JSON.stringify({ at: new Date(Date.now() - 999999999).toISOString() }));
+  let spawnArgs = null;
+  const fakeSpawn2 = (cmd, args, opts) => { spawnArgs = { cmd, args, opts }; return { unref() {} }; };
+  const spawnResult = refreshHook({ cachePath: staleFile, ttlMs: 1, spawn: fakeSpawn2 });
+  assert.equal(spawnResult.action, "spawned");
+  assert.ok(spawnArgs, "缓存过期时必须起后台子进程");
+  assert.equal(spawnArgs.args[0], refreshHook.rosterScriptPath(), "子进程必须跑 dao-roster.mjs");
+  assert.equal(spawnArgs.opts.detached, true, "必须 detached，钩子进程退出不许拖着子进程一起死");
+  assert.equal(spawnArgs.opts.stdio, "ignore", "不许同步等子进程的输出");
+
+  // 指针指到不存在的脚本时安静跳过，不许硬起一个必然失败的子进程。
+  let spawnCalls3 = 0;
+  const skipMissingResult = refreshHook({
+    cachePath: staleFile, ttlMs: 1, spawn: () => { spawnCalls3++; return { unref() {} }; },
+    scriptPath: path.join(TMP_ROOT, "no-such-roster.mjs"),
+  });
+  assert.equal(skipMissingResult.action, "skip-missing-script");
+  assert.equal(spawnCalls3, 0);
+}
+
+fs.rmSync(TMP_ROOT, { recursive: true, force: true });
+
+console.log("dao-roster tests: 33 passed");

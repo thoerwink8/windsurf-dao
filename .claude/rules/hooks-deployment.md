@@ -26,8 +26,9 @@ paths:
 |---|---|---|---|
 | dao-remove-session.js | startup\|clear\|resume | 5s | |
 | dao-playwright-cleanup.js | startup | 15s | |
+| dao-roster-refresh.js | startup\|clear\|resume | 5s | 缓存新鲜即毫秒级返回，过期才 detached+unref 后台起子进程，不同步等（issue #409 第 1 项） |
 
-**合计 20s**（当前实测值，随 `config-sync/common/settings.json` 的 `common_config_claude.hooks.SessionStart`
+**合计 25s**（当前实测值，随 `config-sync/common/settings.json` 的 `common_config_claude.hooks.SessionStart`
 快照演进，此表可能过期——改动前先重新核对快照里的真实 timeout 值，不要凭这张表的旧数字判断余量）。
 
 > 2026-08-12 三问梳理（issue #324 A 批）从这张表上摘掉三行：`dao-config-guard.js`（检测本机

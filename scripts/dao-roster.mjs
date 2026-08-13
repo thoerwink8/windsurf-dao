@@ -21,6 +21,19 @@
 // 放大只是缩小窗口，关不上：突发尾巴无上界。关不上的那部分靠 reason 字段留痕，见下。
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// 缓存落点（issue #409 §二 冻结公式，两边 —— 本文件与 CJS 侧的 dao-roster-refresh.js —— 各自独立
+// 实现同一条公式，互不 import：mjs/cjs 不能互相同步 import，重复是硬约束不是偷懒）。
+// 做成函数而非常量：env 覆盖要在同一进程内可被测试改写，模块顶层常量只求值一次。
+function homeDir() {
+  return process.env.USERPROFILE || process.env.HOME || os.homedir();
+}
+export function rosterCachePath() {
+  return process.env.DAO_ROSTER_CACHE || path.join(homeDir(), ".claude", "dao-roster-cache.json");
+}
 
 // Windows 下必须 shell 解析：npm 装的 CLI 只有 .cmd/.ps1 垫片没有 .exe，
 // 裸 spawnSync 探不到（pi 实测被误报 absent，2026-08-12）。
@@ -119,6 +132,22 @@ export function buildRoster() {
   return roster;
 }
 
+// 落盘逻辑单独导出：测试用假 roster + 临时路径直接调用它，绕开 buildRoster() 的真实探测
+// （探测要跑好几个子进程，慢且不确定），只验证「mkdir + write」这半段自己的行为。
+export function writeRosterCache(roster, cachePath = rosterCachePath()) {
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify(roster));
+}
+
+// 缓存落盘是 CLI 直跑独有的副作用（issue #409 第 1 项：SessionStart 刷新钩子靠这份缓存
+// 判新鲜/过期，不重新探测）。stdout 那一行必须逐字节不变——写缓存失败绝不能污染它，
+// 所以缓存写在 stdout.write 之后，且写失败只吞进 try/catch、最多一行 stderr。
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.stdout.write(JSON.stringify(buildRoster()) + "\n");
+  const roster = buildRoster();
+  process.stdout.write(JSON.stringify(roster) + "\n");
+  try {
+    writeRosterCache(roster);
+  } catch (e) {
+    process.stderr.write("dao-roster: 缓存写入失败（不影响 stdout）：" + (e && e.message) + "\n");
+  }
 }

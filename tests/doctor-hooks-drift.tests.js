@@ -113,7 +113,9 @@ console.log("\n=== ④ Orca 段被正确忽略（结构层面单独验证，不�
   check("过滤后不含任何 Orca 命令", afterFilter.every((c) => !H.isOrcaHookCommand(c.command)));
   check("过滤后命令数比过滤前少（真的删了东西，不是空操作）", afterFilter.length < beforeFilter.length);
   check("dao 从未注册过的纯 Orca 事件（PostToolUse）过滤后整个键消失", !Object.prototype.hasOwnProperty.call(H.filterOrcaHookGroups(liveHooks), "PostToolUse"));
-  check("dao 已注册事件混入 Orca 分组后，dao 自己那条分组仍保留（PreToolUse）", H.filterOrcaHookGroups(liveHooks).PreToolUse.length === 1);
+  // 断言对着「注入前 dao 自己有几条」比较，不硬编码常数——issue #409 第 2 项往 PreToolUse
+  // 合法新增了 dao-dispatch-gate.js 这第二条注册后，硬编码的 1 会假红，与「过滤坏了」无法区分。
+  check("dao 已注册事件混入 Orca 分组后，dao 自己那些分组仍原数保留（PreToolUse）", H.filterOrcaHookGroups(liveHooks).PreToolUse.length === DB_HOOKS_REAL.PreToolUse.length);
 }
 
 console.log("\n=== ⑤ 自检半：独立正则扫描与结构化遍历（互不复用解析逻辑）===");
