@@ -9,7 +9,9 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 master 卡只住主会话，永远零工人。每个任务用 `orca worktree create --no-parent` 建顶层任务卡，与 master 平级。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
 
-多工人任务：工人子 worktree 挂任务卡下（`--parent-worktree`）。git 上工人分支从任务分支切出（`--base-branch` 用任务分支，不要用 master）。
+多工人任务：改文件的工人子 worktree 挂任务卡下（`--parent-worktree`）。git 上工人分支从任务分支切出（`--base-branch` 用任务分支，不要用 master）。
+
+审官及一切辅助角色（临时诊断工等）的卡也挂在被审 / 被服务的任务卡下，建卡带 `--parent-worktree worktree:<任务卡>`。任务归档整树收口，辅助卡不要飘成顶层。
 
 ## 主会话红线
 
@@ -23,11 +25,17 @@ master 卡只住主会话，永远零工人。每个任务用 `orca worktree cre
 
 ## 头工人（树帅）
 
-同一任务分支 ≥2 个执行者时，必须指定头工人为任务主。头工人自己也领一块活，兼分派、审队友发到任务分支的 PR、对外答话。
+同一任务分支上，改文件的手 ≥2 个时，必须指定头工人为任务主。审官不计入这条判据——只数改文件的手。单工人 + 审官不需要树帅。
+
+头工人自己也领一块活，兼分派、审队友发到任务分支的 PR、对外答话。
 
 冲突打回冲突方工人自己解，头工人不亲手改内容。专职不干活的树帅只在超大任务实测顾不过来时升格。
 
 头工人选型看判断浓度：机械并行走快档，含分解裁决走判断档。按返工率实测校准，不当公理。
+
+## 设计注记
+
+设计拓扑时把盘面全部角色过一遍（执行者、头工人、审官、临时诊断工），防止只想到主角。
 
 ## 选型
 
@@ -92,8 +100,11 @@ orca orchestration task-create --spec "$(cat 任务书.md)" --json
 # 2) 起工人：task 用上一步 JSON 里的 id；worktree 用任务卡
 orca orchestration worker-start --task <task_id> --worktree <任务卡> --agent <agent> --json
 
-# 多工人时：子卡挂任务卡下，git 从任务分支切
-orca worktree create --parent-worktree <任务卡> --base-branch <任务分支> --name "角色·模型" --json
+# 多工人时：改文件的子卡挂任务卡下，git 从任务分支切
+orca worktree create --parent-worktree worktree:<任务卡> --base-branch <任务分支> --name "角色·模型" --json
+
+# 审官 / 临时诊断工等辅助卡：挂被服务的任务卡下，归档整树收口
+orca worktree create --parent-worktree worktree:<任务卡> --name "审官·<型号>" --json
 
 # 3) 取 dispatch id：从 JSON 里取，不解析人读文本
 orca orchestration dispatch-show --task <task_id> --json
