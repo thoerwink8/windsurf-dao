@@ -111,11 +111,12 @@ console.log("\n=== ⑧ epoch 状态机：updatedAt 刚推进后同屏三轮 → 
   check("第 3 轮还是 OK（没提前报）", r.out.includes("round 3/4") && /round 3\/4[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 3 轮不该报警");
 }
 
-console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变化）→ 新序列第 3 轮才报 ===");
+console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变、屏面不变）→ 重启轮重新起算，第 5 轮才报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-restart"));
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
   check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
+  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /round 3\/5[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 3 轮不该报警");
   check("第 4 轮还是 OK（没串用旧计数）", /round 4\/5[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 4 轮不该报警");
 }
 
