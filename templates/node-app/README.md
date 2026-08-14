@@ -56,3 +56,8 @@
 - **纯逻辑**（`src/lib/`）：默认 node 环境，零配置。
 - **React 组件**：装 `@vitejs/plugin-react` + `happy-dom`，config 里加 `plugins: [react()]`、`environment: 'happy-dom'`（骨架里注释了写法）。
 - 测试文件命名 `xxx.test.ts` 或 `xxx.spec.ts`，放被测文件旁边（colocated）或 `tests/` 都行，config 的 include 两种都认。
+
+## 实测坑
+
+- 在 git worktree 里第一次装依赖前，先删掉继承来的 node_modules——旧目录会让 lockfile 装残，本地全绿但 CI 上 `npm ci` 直接挂。
+- 布局类改动必须真机看一眼：某一列渲染宽度为 0 时，文字仍在 DOM 里，「断言文本存在」的单测全绿；jsdom/happy-dom 里 getBoundingClientRect() 恒返回 0（默认值不是测量值），别用它写布局断言。
