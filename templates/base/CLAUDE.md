@@ -46,7 +46,7 @@ pnpm test
 
 ## Windows / PowerShell 注意（非 Windows 项目删除本节）
 
-- 判断脚本成败看 `$LASTEXITCODE`，不看输出里有没有 "error" 字样。
-- 中文环境的「所在位置 行:X」是 ErrorRecord 提示，不代表命令真的失败。
-- 不要用 `2>&1` 合并流，会制造假错误。
+- 判断原生程序（.exe）的成败看 `$LASTEXITCODE`；cmdlet 看 `$?` 或 try/catch，不要只看输出里有没有 "error" 字样。
+- 中文环境的「所在位置 行:X」是错误定位信息，命令是否真的失败要看 `$?` 与退出码，不能只凭输出观感。
+- `2>&1` 在本机 PowerShell 5.1 下与原生程序组合时曾制造过假错误，谨慎使用。
 - 用 PowerShell 5.1 写文件时注意 BOM：管道重定向默认带 BOM，会坏 JSON。
