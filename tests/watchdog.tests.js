@@ -106,18 +106,21 @@ console.log("\n=== ⑦ 整屏哈希三轮不变——第 3 轮才报警 ===");
 console.log("\n=== ⑧ epoch 状态机：updatedAt 刚推进后同屏三轮 → 第 4 轮才报（红 4 修法判别）===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-activity"));
+  // 轮段提取：断言只针对第 n 轮自身的输出块（懒匹配 + 后续轮 OK 会跨轮误命中，不能直接全文正则）
+  const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/4([\\s\\S]*?)(?:round \\d\\/4|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 4 轮输出 hash-stable（3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
-  check("第 3 轮还是 OK（没提前报）", r.out.includes("round 3/4") && /round 3\/4[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 3 轮不该报警");
+  check("第 4 轮输出 hash-stable（3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(4)), r.out.trim());
+  check("第 3 轮还是 OK（没提前报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
 }
 
 console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变、屏面不变）→ 重启轮重新起算，第 5 轮才报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-restart"));
+  const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/5([\\s\\S]*?)(?:round \\d\\/5|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
-  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /round 3\/5[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 3 轮不该报警");
-  check("第 4 轮还是 OK（没串用旧计数）", /round 4\/5[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 4 轮不该报警");
+  check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(5)), r.out.trim());
+  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
+  check("第 4 轮还是 OK（没串用旧计数）", /OK 扫完 1 个工位/.test(seg(4)) && !/hash-stable:/.test(seg(4)), "第 4 轮不该报警");
 }
 
 console.log("\n=== ⑩ epoch 状态机：屏面变了又变回 → 连击清零，永不报 ===");
