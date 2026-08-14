@@ -1,1 +1,0 @@
-{"result":{"worktrees":[{"id":"wt::worker-2001","branch":"refs/heads/thoerwink8/fake-2001","displayName":"#2001 - 存量审官反查","childWorktreeIds":["wt::reviewer-2001"]},{"id":"wt::reviewer-2001","branch":"refs/heads/thoerwink8/fake-2001","displayName":"#2001 - 审官·gpt-5.6-sol","childWorktreeIds":[]}]}}
