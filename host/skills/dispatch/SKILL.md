@@ -7,7 +7,7 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 ## 拓扑
 
-master 卡只住主会话，永远零工人。每个任务用 `orca worktree create --no-parent --agent` 建顶层任务卡（一步到位起终端，勿裸建卡再两步开终端），与 master 平级。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
+master 卡只住主会话，永远零工人。每个任务用 `orca worktree create --no-parent --agent` 建顶层任务卡（一步到位起终端；默认模型场景，须指定模型 / Claude 族的两步走见「启动序」），与 master 平级。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
 
 多工人任务：改文件的工人子 worktree 挂任务卡下（`--parent-worktree`）。git 上工人分支从任务分支切出（`--base-branch` 用任务分支，不要用 master）。
 
@@ -94,7 +94,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 两条路径，默认模型够用走一步到位，须指定模型走两步（`--agent` 一步到位只拿得到 agent 默认模型）：
 
-- **一步到位（默认模型）**：`orca worktree create --no-parent --name "<卡名>" --agent <agent> --json`。实测（2026-08-14）`--agent pi` 默认模型 = **deepseek-v4-pro**。够用就不两步走。**Claude 族除外**：`--agent` 起不了 reclaude 链（orca 已知 agent 只有 claude/codex/omp/pi/grok），Claude 族一律走下面两步。
+- **一步到位（默认模型）**：`orca worktree create --no-parent --name "<卡名>" --agent <agent> --json`。实测（2026-08-14）`--agent pi` 默认模型 = **deepseek-v4-pro**。够用就不两步走。**Claude 族除外**：`--agent` 起不了 reclaude 链（已知 agent 枚举以 `orca worktree create --help` 为准，会漂），Claude 族一律走下面两步。
 - **两步走（须指定模型）**：`worker-start` 的 `--model` 实测不支持 pi（报 `Agent pi does not support launch-time model selection`）；正解 = 裸建卡（`--setup skip` 免 Setup 页签）→ `orca terminal create --command "<agent> --model <model>"` 起带模型终端 → `worker-start --terminal` 复用（实测 `--command "pi --model deepseek-v4-flash"` 生效，session 实证 modelId=deepseek-v4-flash）。验开工后确认裸建的 fallback shell 未用即关掉。
 
 裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
@@ -141,6 +141,7 @@ orca orchestration worker-start --task <task_id> --worktree <repo-id::path> --te
 
 # 须指定模型时（如写码谷时 deepseek-v4-flash、审官 opus、Claude 族一律）：不走第 0 步 --agent，改两条——
 #   裸建卡（--setup skip 免 Setup 页签）→ terminal create --command 起带模型终端（实测生效；worker-start 的 --model 不支持 pi，Claude 族 --agent 起不了 reclaude 链）
+#   起完的 --terminal 句柄取 terminal create 返回 JSON 的 handle（不是第 0 步的 agentTerminalHandle）
 orca worktree create --no-parent --name "<临时名>" --setup skip --json
 orca terminal create --worktree <repo-id::path> --command "<agent> --model <model_id>" --json
 #   验开工后确认裸建的 fallback shell 未用即关掉
@@ -149,6 +150,7 @@ orca terminal create --worktree <repo-id::path> --command "<agent> --model <mode
 orca worktree create --parent-worktree 'name:#<PR号> - <动宾短语>' --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
 
 # 审官 / 临时诊断工等辅助卡：挂被服务的任务卡下，归档整树收口；同样 --agent 一步到位
+#   （审官若是 Claude Opus——按审官选型序 UI 类 GPT 禁入时顶位——走上面两步走那条，--agent 起不了 reclaude 链）
 orca worktree create --parent-worktree 'name:#<PR号> - <动宾短语>' --name "审官·<型号>" --agent <agent> --json
 
 # 3) 取 dispatch id：从 JSON 里取，不解析人读文本
