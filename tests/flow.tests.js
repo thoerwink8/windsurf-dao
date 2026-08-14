@@ -253,18 +253,31 @@ console.log("\n=== ⑰ 红 4：同一 worktree 多终端选不出唯一 → 报�
   check("解析失败用「预览-阻塞：」前缀而非「动作：」（观察 1）", !/动作：/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑰b 观察 2：dry-run 的解析失败也进 blocked——同状态文件连跑两轮不转绿 ===");
+console.log("\n=== ⑰b 三轮复核红 1：dry-run 不落 blocked 闸（预览不污染值守状态）——A 实验组 round-2 恢复注入 ===");
 {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-dryblock-"));
+  const r = runFlow(path.join(FIXTURES, "blocked-recover"));
+  check("退出码 1（有动作/阻塞）", r.status === 1, `status=${r.status}`);
+  check("round-1 预览-阻塞（选不出唯一）", /round-1[\s\S]*预览-阻塞：#2005（返工注入/.test(r.out), r.out.trim());
+  check("round-1 本轮待帅确认（可见但不落闸）", /round-1[\s\S]*待帅处置：#2005（注入\/目标解析失败待帅确认（本轮，未落闸））/.test(r.out), r.out.trim());
+  check("round-2 终端修好 + 新红判定 → 恢复注入（第 2 轮，不再被旧阻塞吞掉）", /round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）（注入目标：工人终端 term_x_2005）/.test(r.out), r.out.trim());
+  check("round-2 不再有预览-阻塞", !/round-2[\s\S]*预览-阻塞/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑰c 三轮复核红 1：live 落闸自愈——预置 blocked，新红判定到达即清除重试一次 ===");
+{
+  // 预置状态模拟 live 注入失败落闸（blocked.inject-rework + 旧指纹）；夹具里有更新的红判定
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-selfheal-"));
   const stateFile = path.join(tmp, "state.json");
-  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "multi-terminal"), "--state-file", stateFile, "--dry-run"];
-  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const out2 = (r2.stdout || "") + (r2.stderr || "");
-  check("首跑 exit 1", r1.status === 1, `status=${r1.status}`);
-  check("重跑仍 exit 1（阻塞项不转绿）", r2.status === 1, `status=${r2.status}`);
-  check("重跑打出待帅处置常驻行", /待帅处置：#2002（注入\/目标解析失败待帅接手）/.test(out2), out2.trim());
-  check("重跑不打「0 需流转」", !/OK 扫完 1 个 PR，0 需流转/.test(out2), out2.trim());
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 1, inventoried: true,
+    records: {
+      "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, blocked: { "inject-rework": true }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
+    },
+  }), "utf8");
+  const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "blocked-selfheal"), "--state-file", stateFile, "--dry-run"], { encoding: "utf8", cwd: REPO });
+  const out = (r.stdout || "") + (r.stderr || "");
+  check("新红判定到达 → blocked 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）（注入目标：工人终端 term_worker_2006）/.test(out), out.trim());
+  check("不再挂注入失败待帅处置", !/待帅处置：#2006（注入失败/.test(out), out.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
