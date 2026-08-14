@@ -44,9 +44,14 @@ pnpm test
 2. 删掉哪一层能让这个问题不存在？
 3. 从零重做，还会造它吗？
 
+- 跨终端或跨工作区执行关键命令时显式锚定目标仓（git -C、pnpm --dir、npm --prefix）——代理终端的当前目录在两次调用之间可能被重置。
+
 ## Windows / PowerShell 注意（非 Windows 项目删除本节）
 
 - 判断原生程序（.exe）的成败看 `$LASTEXITCODE`；cmdlet 看 `$?` 或 try/catch，不要只看输出里有没有 "error" 字样。
 - 中文环境的「所在位置 行:X」是错误定位信息，命令是否真的失败要看 `$?` 与退出码，不能只凭输出观感。
 - `2>&1` 在本机 PowerShell 5.1 下与原生程序组合时曾制造过假错误，谨慎使用。
 - 用 PowerShell 5.1 写文件时注意 BOM：管道重定向默认带 BOM，会坏 JSON。
+- `Get-Content` 读无 BOM 的 UTF-8 文件会把中文当场毁掉（含 -Raw、含只读）；之后含中文的 -replace 全部不命中、不报错、退出码照样 0。含中文的 .ps1 自己也要带 BOM，否则报看似随机的假语法错。
+- 调 .ps1 拿退出码一律 `pwsh -File`（没有 pwsh 用 `powershell -File`）；`-Command` 模式只按最后一条命令返回 0/1，脚本里的 exit N 会被抹平。
+- 捕获子进程 stdout 时按 [Console]::OutputEncoding 解码（跟着控制台代码页走），中文乱码后所有 -match 静默不命中。

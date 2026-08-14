@@ -39,6 +39,21 @@ pi / Codex 各自的模型配置（API key、模型列表、中转站等）跟�
 - pi CLI：见其官方文档
 - Codex CLI：见其官方文档
 
+## 6. pi 怎么配
+
+pi 是 DeepSeek 系工人的 CLI。装与验：
+
+- npm 包名 `@mariozechner/pi-coding-agent`，命令是 `pi`；`@mariozechner/pi` 是另一个 vLLM 管理工具，别装错。
+- `models.json` / `settings.json` 两份配置：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
+- `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
+- `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把 DSML 标记当文本吐。
+- 两条验证命令：装完跑一遍确认模型列表能列出、发一条最小请求能回。
+
+## 7. 本机工具坑
+
+- playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。
+- 不可逆红线：覆写正在使用的 `~/.claude/settings.json` 可能触发 401 强制登出，把文件改回去也恢复不了——改它前先备份，AI 不得整文件覆写。
+
 ## 自检
 
 做完跑一遍：
