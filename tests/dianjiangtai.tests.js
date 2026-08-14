@@ -119,6 +119,14 @@ check("F9：同刻 override → P = 0.5^0 = 1", ov.models[FLASH].features.P === 
 const ex = run({ jobId: "j-e", events: [{ type: "job.explore", schema_version: 1, ts: TS, machine: "TEST", seq: 0, event_id: "ex-1", job_id: "j-e", model: FLASH, identity: "协调者", work_type: "写码" }] });
 check("F9：explore 不计入 P", ex.models[FLASH].features.P === 0, ex.models[FLASH].features.P);
 
+// F11/F12：job.meter 不带 identity/work_type，格归属由 job 的派单解析（防静默失效）
+const withMeter = run({ jobId: "j-mt", events: [
+  ...sampleJobs({ n: 1 }),
+  { type: "job.meter", schema_version: 1, ts: TS, machine: "TEST", seq: 20, event_id: "meter-1", job_id: "t-1", model: FLASH, token_in: 12000, token_out: 3000, cache_hit: 3000, usd_cash: 0.05 },
+] });
+check("F12：meter 经 job 派单归到 (flash,协调者,写码) 格，token 画像=中位数", withMeter.models[FLASH].cost.tIn === 40000 && withMeter.models[FLASH].cost.tOut === 3000, `${withMeter.models[FLASH].cost.tIn}/${withMeter.models[FLASH].cost.tOut}`);
+check("F11：meter 缓存命中率 EWMA 进成本（h>0 → metered 降低）", withMeter.models[FLASH].cost.h > 0 && withMeter.models[FLASH].cost.h < 1, withMeter.models[FLASH].cost.h);
+
 // F8 缺口：零样本短fall=3，5 单后=0
 check("F8：零样本 shortfall = per_cell_floor(3)", zero.models[FLASH].features.shortfall === 3);
 check("F8：5 单后 shortfall = 0", five.models[FLASH].features.shortfall === 0);

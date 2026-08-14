@@ -95,8 +95,7 @@ export function EVENT_ORDER_KEY(a, b) {
 // 四份额全 0（unknown）不进净指标；env_share 整单不入能力账；钱（usd_cash）永远立记不在此。
 export function buildSamples({ events, at, registryByModel }) {
   const samples = [];
-  const overrides = [];   // job.override → F9 P
-  const explores = [];    // job.explore → 不进 P
+  const overrides = [];   // job.override → F9 P（job.explore 不计入 P，故不收集）
   const metersByCell = new Map();
   const cellKey = (m, i, w) => `${m}\u0000${i}\u0000${w}`;
 
@@ -109,17 +108,19 @@ export function buildSamples({ events, at, registryByModel }) {
     if (e.type === 'job.override' && e.job_id) {
       overrides.push({ model: e.model, identity: e.identity, workType: e.work_type, tsMs: tsMs(e.ts), jobId: e.job_id });
     }
-    if (e.type === 'job.explore' && e.job_id) {
-      explores.push({ model: e.model, identity: e.identity, workType: e.work_type, tsMs: tsMs(e.ts), jobId: e.job_id });
-    }
-    if (e.type === 'job.meter' && e.job_id && e.model && e.identity && e.work_type) {
-      const k = cellKey(e.model, e.identity, e.work_type);
-      if (!metersByCell.has(k)) metersByCell.set(k, []);
-      metersByCell.get(k).push(e);
-    }
     if (e.job_id) {
       if (!byJob.has(e.job_id)) byJob.set(e.job_id, []);
       byJob.get(e.job_id).push(e);
+    }
+  }
+
+  // job.meter 不带 identity/work_type（schema 无此必填），格归属由该 job 的派单解析——
+  // 否则 F11/F12（缓存 EWMA、token 画像）永远取不到计量（静默失效）。
+  const metersByJob = new Map();
+  for (const e of events) {
+    if (e.type === 'job.meter' && e.job_id && e.model) {
+      if (!metersByJob.has(e.job_id)) metersByJob.set(e.job_id, []);
+      metersByJob.get(e.job_id).push(e);
     }
   }
 
@@ -133,6 +134,13 @@ export function buildSamples({ events, at, registryByModel }) {
     const identity = dispatch.identity || opened?.identity || null;
     const workType = dispatch.work_type || opened?.work_type || null;
     const version = dispatch.model_version || 'unknown';
+
+    // 该 job 的计量归到其 (m,i,w) 格（F11/F12 数据源）
+    if (identity && workType) {
+      const k = cellKey(dispatch.model, identity, workType);
+      if (!metersByCell.has(k)) metersByCell.set(k, []);
+      for (const m of metersByJob.get(jobId) || []) metersByCell.get(k).push(m);
+    }
 
     if (closed.success) {
       // 成功合并 → 能力账正样本，记给最终合并作者（handoff 后是接手者）
@@ -171,7 +179,7 @@ export function buildSamples({ events, at, registryByModel }) {
     });
   }
 
-  return { samples, overrides, explores, metersByCell, byJob };
+  return { samples, overrides, metersByCell, byJob };
 }
 
 // ── Beta 后验（设计 C.1）──────────────────────────────────────────────
@@ -205,7 +213,7 @@ function wy(arr) {
 //   ① μ_global 样本集合为空 → 0.5
 //   ② n_model = 0 → Q_parent = μ_global（公式 (0·μ_model+k·μ_global)/(0+k) 自然给出）
 //   ③ σ_parent 加权集合为空 → 当前格先验 σ = √(α0·β0/((α0+β0)²·(α0+β0+1)))
-export function computeModelFeature({ model, identity, workType, samples, overrides, at, taskTokens, weights }) {
+export function computeModelFeature({ model, identity, workType, samples, overrides, at, weights }) {
   const k = weights.shrinkage?.k ?? 4;
   const k0 = weights.shrinkage?.k0 ?? 2;
   const fallback = weights.shrinkage?.prior_center_fallback ?? 0.5;
@@ -399,7 +407,7 @@ export function select({
   const at = tsMs(ts);
 
   const registryByModel = Object.fromEntries(models.map(m => [m.id, m]));
-  const { samples, overrides, explores, metersByCell } = buildSamples({ events, at, registryByModel });
+  const { samples, overrides, metersByCell } = buildSamples({ events, at, registryByModel });
   const cellKey = (m, i, w) => `${m}\u0000${i}\u0000${w}`;
 
   // 逐模型：门闩 + 特征 + 成本（门闩不进分；被剔模型仍在输出里标注拒因）
@@ -407,7 +415,7 @@ export function select({
   for (const model of models) {
     const gates = checkGates({ model, identity, workType, bans, taskTokens, availability });
     const features = computeModelFeature({
-      model: model.id, identity, workType, samples, overrides, at, taskTokens, weights,
+      model: model.id, identity, workType, samples, overrides, at, weights,
     });
     const cost = computeCost({
       model, taskTokens,
