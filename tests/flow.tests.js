@@ -20,7 +20,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
@@ -225,10 +225,12 @@ console.log("\n=== ⑮ 状态机纯函数 ===");
   const green = [{ id: 4, body: "复核结论：绿，可合并", submittedAt: "t3" }];
   const d1 = deriveState(orderedSignals(done, red));
   check("完工+红判定 → rework-needed，红 1 轮", d1.state === "rework-needed" && d1.redReviews === 1 && d1.lastRed === 3);
-  check("pendingAction → inject-rework", pendingAction(d1, { blocked: {} })?.kind === "inject-rework");
-  check("blocked 后不重发（fail-visible 不重试狂发）", pendingAction(d1, { blocked: { "inject-rework": true } }) === null);
+  check("pendingAction → inject-rework", pendingAction(d1)?.kind === "inject-rework");
+  check("pendingShuai 不 gate 注入（待帅记账只管显示，闸已由 fp 去重承担，四轮复核红 1）", pendingAction(d1)?.kind === "inject-rework");
+  check("awaitingShuaiReason 读 pendingShuai（reviewer-unfound 常驻）", awaitingShuaiReason({ state: "rework-needed", redReviews: 1 }, { pendingShuai: { kind: "inject-recheck", reason: "找不到审官终端——待帅接手复核" } }, false) === "找不到审官终端——待帅接手复核");
+  check("awaitingShuaiReason state 兜底：error 态常驻（四轮复核红 1）", awaitingShuaiReason({ state: "error", redReviews: 0 }, {}, false) === "判定行缺失/格式不符待帅分诊");
   const d4 = deriveState(orderedSignals([...done, ...rework], [...red, ...green]));
-  check("复核绿 → approved → report-final", d4.state === "approved" && pendingAction(d4, { blocked: {} })?.kind === "report-final");
+  check("复核绿 → approved → report-final", d4.state === "approved" && pendingAction(d4)?.kind === "report-final");
   check("制度类识别：正文含「体系类改动」", isInstitutional({ body: "## 体系类改动（必答）", title: "x" }) === true);
   check("制度类识别：标题含「制度/体系」", isInstitutional({ body: "## 目标", title: "[pi] 制度修订" }) === true);
   check("标题仅含「拍板」不再误判制度类（对抗审观察 7）", isInstitutional({ body: "## 目标", title: "[pi] 修复 xx 拍板口径" }) === false);
@@ -263,21 +265,40 @@ console.log("\n=== ⑰b 三轮复核红 1：dry-run 不落 blocked 闸（预览�
   check("round-2 不再有预览-阻塞", !/round-2[\s\S]*预览-阻塞/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑰c 三轮复核红 1：live 落闸自愈——预置 blocked，新红判定到达即清除重试一次 ===");
+console.log("\n=== ⑰c 四轮复核红 1：live 落闸自愈——预置 pendingShuai，新红判定到达即清除重试一次 ===");
 {
-  // 预置状态模拟 live 注入失败落闸（blocked.inject-rework + 旧指纹）；夹具里有更新的红判定
+  // 预置状态模拟 live 注入失败落记账（pendingShuai + 旧指纹）；夹具里有更新的红判定
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-selfheal-"));
   const stateFile = path.join(tmp, "state.json");
   fs.writeFileSync(stateFile, JSON.stringify({
     version: 1, inventoried: true,
     records: {
-      "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, blocked: { "inject-rework": true }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
+      "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, pendingShuai: { kind: "inject-rework", reason: "注入失败待帅接手（新信号到来自动重试一次）" }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
     },
   }), "utf8");
   const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "blocked-selfheal"), "--state-file", stateFile, "--dry-run"], { encoding: "utf8", cwd: REPO });
   const out = (r.stdout || "") + (r.stderr || "");
-  check("新红判定到达 → blocked 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）（注入目标：工人终端 term_worker_2006）/.test(out), out.trim());
+  check("新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）（注入目标：工人终端 term_worker_2006）/.test(out), out.trim());
   check("不再挂注入失败待帅处置", !/待帅处置：#2006（注入失败/.test(out), out.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ⑰d 四轮复核红 1：reviewer-unfound 常驻——审官找不到，连跑三轮每轮都有待帅处置 ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-unfound-"));
+  const stateFile = path.join(tmp, "state.json");
+  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "reviewer-unfound"), "--state-file", stateFile, "--dry-run"];
+  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const r3 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const out1 = (r1.stdout || "") + (r1.stderr || "");
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  const out3 = (r3.stdout || "") + (r3.stderr || "");
+  check("首跑 exit 1（报帅 + 待帅处置）", r1.status === 1, `status=${r1.status}`);
+  check("首跑报帅找不到审官终端（待帅接手复核）", /报帅：找不到审官终端.*待帅接手复核/.test(out1), out1.trim());
+  check("二跑仍 exit 1（常驻不转绿）", r2.status === 1, `status=${r2.status}`);
+  check("二跑仍有待帅处置（找不到审官终端）", /待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out2), out2.trim());
+  check("三跑仍常驻", /待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out3), out3.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
