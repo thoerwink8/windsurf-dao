@@ -99,12 +99,18 @@ export function buildSamples({ events, at, registryByModel }) {
   const metersByCell = new Map();
   const cellKey = (m, i, w) => `${m}\u0000${i}\u0000${w}`;
 
+  const atMs = tsMs(at);
+  // 红3 修法首选：复算按选型时刻截断——event.ts > at 的未来事件不参与重放。
+  // 否则 w_time = 0.5^(Δt/30天) 在 Δt 为负时 > 1，未来样本会把当前格权重大于 1
+  // （设计 F6 新鲜度只对过去样本衰减；E.1 决策票可复算要求「当时的输入就是当时的账」）。
+  const cutoffEvents = events.filter(e => tsMs(e.ts) <= atMs);
+
   const retracted = new Set(
-    events.filter(e => e.type === 'attr.retract').map(e => e.target_event_id).filter(Boolean),
+    cutoffEvents.filter(e => e.type === 'attr.retract').map(e => e.target_event_id).filter(Boolean),
   );
 
   const byJob = new Map();
-  for (const e of events) {
+  for (const e of cutoffEvents) {
     if (e.type === 'job.override' && e.job_id) {
       overrides.push({ model: e.model, identity: e.identity, workType: e.work_type, tsMs: tsMs(e.ts), jobId: e.job_id });
     }
@@ -117,14 +123,12 @@ export function buildSamples({ events, at, registryByModel }) {
   // job.meter 不带 identity/work_type（schema 无此必填），格归属由该 job 的派单解析——
   // 否则 F11/F12（缓存 EWMA、token 画像）永远取不到计量（静默失效）。
   const metersByJob = new Map();
-  for (const e of events) {
+  for (const e of cutoffEvents) {
     if (e.type === 'job.meter' && e.job_id && e.model) {
       if (!metersByJob.has(e.job_id)) metersByJob.set(e.job_id, []);
       metersByJob.get(e.job_id).push(e);
     }
   }
-
-  const atMs = tsMs(at);
 
   for (const [jobId, evts] of byJob) {
     const opened = evts.find(e => e.type === 'job.opened');
@@ -147,11 +151,17 @@ export function buildSamples({ events, at, registryByModel }) {
       const model = closed.merged_by || dispatch.model;
       if (!model || !identity || !workType) continue;
       const reg = registryByModel[model];
-      const wVersion = reg?.version && version === reg.version ? 1 : 0;
+      // 红4 修法首选：接手成功（merged_by !== dispatch.model）时，正样本版本取接手者
+      // 当前 registry.version——否则拿源模型 version 比接手者 registry 恒为异版本，
+      // 正样本只进 base_p、接手者当前格永远收不到（D.1「成功合并记给最终合并作者」落空）。
+      const sampleVersion = model === dispatch.model
+        ? version
+        : (registryByModel[model]?.version ?? 'unknown');
+      const wVersion = reg?.version && sampleVersion === reg.version ? 1 : 0;
       const sampleTs = tsMs(closed.ts);
       samples.push({
         model, identity, workType, y: 1, tsMs: sampleTs, conf: 1,
-        wVersion, wTime: 0.5 ** (daysBetweenMs(sampleTs, atMs) / 30), share: 1,
+        wVersion, wTime: 0.5 ** (Math.max(0, daysBetweenMs(sampleTs, atMs)) / 30), share: 1,
         jobId, eventId: closed.event_id,
       });
       continue;
@@ -174,7 +184,7 @@ export function buildSamples({ events, at, registryByModel }) {
     samples.push({
       model, identity, workType, y: 0, tsMs: sampleTs,
       conf: attr.confidence ?? 1,
-      wVersion, wTime: 0.5 ** (daysBetweenMs(sampleTs, atMs) / 30), share: ms,
+      wVersion, wTime: 0.5 ** (Math.max(0, daysBetweenMs(sampleTs, atMs)) / 30), share: ms,
       jobId, eventId: attr.event_id,
     });
   }
@@ -270,9 +280,10 @@ export function computeModelFeature({ model, identity, workType, samples, overri
   const sigmaShrunk = (cell.nEff * cell.sigmaRaw + k * sigmaParent) / (cell.nEff + k);
 
   // F9 用户偏好：P = Σ(job.override)·0.5^(Δt/60天)；job.explore 不计入
+  // （Δt 夹紧 ≥0：红3 双保险，未来 override 直接由 buildSamples 截断丢弃，不靠夹紧收编）
   const P = overrides
     .filter(o => o.model === model && o.identity === identity && o.workType === workType)
-    .reduce((a, o) => a + 0.5 ** (daysBetweenMs(o.tsMs, atMs) / 60), 0);
+    .reduce((a, o) => a + 0.5 ** (Math.max(0, daysBetweenMs(o.tsMs, atMs)) / 60), 0);
 
   // F8 探索缺口：每格保底 + 新模型全局保底（进 C.3 配额覆盖，不进 Score）
   const nEff = cell.nEff;
@@ -406,8 +417,13 @@ export function select({
   if (!workType) throw new Error('work_type 必填');
   const at = tsMs(ts);
 
+  // 红3 修法首选：只纳入 event.ts <= 选型 ts 的事件——未来事件不入重放也不入决策票快照。
+  // 否则账一增长（CLI 读当前全账），同一 --ts/--job-id/政策复算 decision_id 就变，
+  // 旧票不可按当时输入核对（E.1「任何人可重跑同一确定性函数」落空）。
+  const cutoffEvents = events.filter(e => tsMs(e.ts) <= at);
+
   const registryByModel = Object.fromEntries(models.map(m => [m.id, m]));
-  const { samples, overrides, metersByCell } = buildSamples({ events, at, registryByModel });
+  const { samples, overrides, metersByCell } = buildSamples({ events: cutoffEvents, at, registryByModel });
   const cellKey = (m, i, w) => `${m}\u0000${i}\u0000${w}`;
 
   // 逐模型：门闩 + 特征 + 成本（门闩不进分；被剔模型仍在输出里标注拒因）
@@ -470,15 +486,19 @@ export function select({
   }
   const byScore = [...passers].sort((a, b) => b.score - a.score || a.model.localeCompare(b.model));
 
-  // C.3 确定性配额覆盖：门闩通过集合里存在 shortfall>0 且本单 eligible（低风险、可逆/可沙箱）
-  // → 默认项强制从缺口集合轮转：先缺口最大 → 同缺口 c 最低 → 仍并列稳定哈希 hash(job_id‖model_id)
+  // C.3 确定性配额覆盖：门闩通过集合里存在缺口且本单 eligible（低风险、可逆/可沙箱）
+  // → 默认项强制从缺口集合轮转：先每格缺口最大 → 再全局缺口最大 → 同缺口 c 最低 →
+  //   仍并列用稳定哈希 hash(job_id‖model_id) 定序——确定性、可复现，无任何随机数，记 reason=quota_explore。
+  // 红2 修法首选：F8 缺口 = shortfall>0 || globalShortfall>0——此前只 filter(shortfall>0)，
+  // 新模型全局保底 max(0, 全局保底−n_global) 算了不进覆盖，是死字段（硬约束 4「无饿死」落空）。
   const eligibleRisk = (weights.explore?.eligible_risk || ['低']).includes(risk);
   const eligible = eligibleRisk && reversible !== false;
   const quota = eligible
     ? passers
-        .filter(d => d.features.shortfall > 0)
+        .filter(d => d.features.shortfall > 0 || d.features.globalShortfall > 0)
         .sort((a, b) =>
           b.features.shortfall - a.features.shortfall
+          || b.features.globalShortfall - a.features.globalShortfall
           || (a.cost.c ?? Infinity) - (b.cost.c ?? Infinity)
           || hashOf(`${jobId}|${a.model}`).localeCompare(hashOf(`${jobId}|${b.model}`)))
     : [];
@@ -515,7 +535,7 @@ export function select({
     models: byScore.map(d => d.model),
   };
 
-  const exploreCandidates = passers.filter(d => d.features.shortfall > 0);
+  const exploreCandidates = passers.filter(d => d.features.shortfall > 0 || d.features.globalShortfall > 0);
   const C = {
     note: '尝鲜位：用户主动试新/低分模型（缺口模型优先）；记 job.explore，不进 P 但结局照常进 Q',
     models: (exploreCandidates.length ? exploreCandidates : passers).map(d => d.model),
@@ -527,7 +547,7 @@ export function select({
     ts, job_id: jobId, identity, work_type: workType,
     task_tokens: taskTokens, risk, reversible, availability,
     policy_hash: policyHash,
-    events_hash: hashOf(events),
+    events_hash: hashOf(cutoffEvents),
     models: Object.fromEntries(Object.keys(details).sort().map(id => {
       const d = details[id];
       return [id, {
@@ -538,6 +558,7 @@ export function select({
         n_eff: d.features.nEff,
         P: d.features.P,
         shortfall: d.features.shortfall,
+        global_shortfall: d.features.globalShortfall,
         cost_util: d.costUtil ?? null,
         cost: d.cost.c,
       }];

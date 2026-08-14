@@ -86,6 +86,16 @@ const result = select({
 
 // ── --commit：按写权矩阵把选中项落账 ─────────────────────────────────
 if (commit) {
+  if (commit === 'B' || commit === 'C') {
+    // 红1 修法首选：B/C 自选必须落在门闩通过集合（options.B.models）内——
+    // 被 F1 禁令 / F14 上下文 / F15 可用性 剔除的模型拒写、非 0 退出。
+    // 依据：设计 C.4「B 自选 = 门闩通过集合内任选（禁令不可绕过）」、E.5「唯一合法绕行口」、
+    // policy/bans.yml 自述「自选与尝鲜也不可绕过禁令」。
+    if (!result.options.B.models.includes(pick)) {
+      process.stderr.write(`--pick ${pick} 不在门闩通过集合（B 自选位 models: ${result.options.B.models.join('/')}）内——禁令/上下文/可用性不可绕过（设计 E.5）。不落账。\n`);
+      process.exit(1);
+    }
+  }
   const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
   const machine = os.hostname();
   const chosenModel = commit === 'A' ? result.options.A.model : pick;
