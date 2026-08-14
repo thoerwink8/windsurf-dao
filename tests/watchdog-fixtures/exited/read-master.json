@@ -1,0 +1,23 @@
+{
+  "id": "8c0102db-1caf-4857-bdcc-1896e93cbcf2",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_e02bc95d-2fda-4414-ac8e-4bf399ab5bf6",
+      "status": "exited",
+      "tail": [
+        "$ node scripts/dao-check.mjs",
+        "dao check: 好的（6 项，0.5s）"
+      ],
+      "truncated": false,
+      "limited": false,
+      "oldestCursor": "0",
+      "nextCursor": "0",
+      "latestCursor": "0",
+      "returnedLineCount": 47
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}
