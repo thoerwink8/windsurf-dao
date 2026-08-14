@@ -1,0 +1,339 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "点将台事件账 schema（唯一权威）",
+  "version": 1,
+  "description": "事件类型闭集的唯一权威（设计 docs/dianjiangtai-design.md A.1）。加类型先改本文件：在 oneOf 里加一条带 title 的定义；只加字段不改语义翻转；读端容忍未知字段（additionalProperties: true）。事件类型闭集 = oneOf[].title，是它的派生枚举，任何实现不得另抄清单。公共字段：ts（ISO8601 带时区）/ machine（机器名）/ seq（本机单调计数）/ event_id（内容哈希，写入时计算）/ schema_version。全序排序键 = (ts, machine, seq, event_id) 字典序（A.2）。",
+  "definitions": {
+    "base": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "schema_version": { "type": "integer", "const": 1 },
+        "ts": { "type": "string", "description": "ISO8601 带时区，如 2026-08-15T10:00:00+08:00" },
+        "machine": { "type": "string", "description": "机器名（文件名 <ulid>-<machine>.json 的 machine）" },
+        "seq": { "type": "integer", "minimum": 0, "description": "本机单调计数器" },
+        "event_id": { "type": "string", "description": "内容哈希（sha256 hex），写入时由脚本计算，不含本字段" }
+      },
+      "required": ["type", "schema_version", "ts", "machine", "seq", "event_id"],
+      "additionalProperties": true
+    },
+    "attribution": {
+      "type": "object",
+      "description": "责任向量（D.1）。不变量：四份额和为 1；四份额全 0 是唯一合法例外（= 待定 unknown，须 confidence < 0.8）。overrun_attr 独立于失败责任向量。",
+      "properties": {
+        "job_id": { "type": "string" },
+        "model": { "type": "string", "description": "可选：默认取该 job 的派单模型；L0 规则 6/7 换模型场景用它指向源模型" },
+        "model_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "brief_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "coord_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "env_share": { "type": "number", "minimum": 0, "maximum": 1 },
+        "overrun_attr": { "enum": ["model", "brief", "coord", "env", null] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": { "type": "array", "items": { "type": "string" }, "description": "引用的事件 event_id 列表（L0 输出必须引用用过的事件 id）" },
+        "why": { "type": "string", "description": "人读说明，算法永不读" }
+      },
+      "required": ["job_id", "model_share", "brief_share", "coord_share", "env_share", "overrun_attr", "confidence", "evidence", "why"],
+      "additionalProperties": true
+    }
+  },
+  "oneOf": [
+    {
+      "title": "job.opened",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "任务卡快照 + 候选 + 选中 + 解释串",
+          "properties": {
+            "type": { "const": "job.opened" },
+            "job_id": { "type": "string" },
+            "task_class": { "type": "string" },
+            "work_type": { "type": "string", "description": "写码/判断/查证/审查/UI/…，可增枚举" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
+            "scale": { "type": "string" },
+            "risk": { "enum": ["低", "中", "高"] },
+            "reversible": { "type": "boolean" },
+            "task_tokens": { "type": ["integer", "null"], "description": "任务预算 token（F14 门闩用）" },
+            "candidate_models": { "type": "array", "items": { "type": "string" } },
+            "selected": { "type": "string" },
+            "why": { "type": "string" }
+          },
+          "required": ["job_id", "task_class", "work_type", "identity", "scale", "risk", "reversible", "task_tokens", "candidate_models", "selected", "why"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.dispatch",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "实际启动模型 + 终端 + 价目快照 + decision_id（E.1 决策票）",
+          "properties": {
+            "type": { "const": "job.dispatch" },
+            "job_id": { "type": "string" },
+            "model": { "type": "string" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
+            "work_type": { "type": "string" },
+            "model_version": { "type": "string", "description": "派单时该模型版本串（F7 版本折扣）" },
+            "terminal": { "type": "string" },
+            "price_snapshot": { "type": "object", "description": "派单时刻价目快照（B.2 现算依据）" },
+            "decision_id": { "type": "string", "description": "选型脚本输出的决策票（特征快照哈希，可复算）" }
+          },
+          "required": ["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.meter",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "终端计量：token 进/出/缓存命中 + 金额",
+          "properties": {
+            "type": { "const": "job.meter" },
+            "job_id": { "type": "string" },
+            "model": { "type": "string" },
+            "token_in": { "type": "integer", "minimum": 0 },
+            "token_out": { "type": "integer", "minimum": 0 },
+            "cache_hit": { "type": "integer", "minimum": 0, "description": "输入缓存命中 token 数" },
+            "usd_cash": { "type": "number", "description": "现金账（立记，不等归因）" }
+          },
+          "required": ["job_id", "model", "token_in", "token_out", "cache_hit", "usd_cash"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.handoff",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "A→B 接手及原因（F16 配额耗尽可接手，源模型不记能力失败）",
+          "properties": {
+            "type": { "const": "job.handoff" },
+            "job_id": { "type": "string" },
+            "from_model": { "type": "string" },
+            "to_model": { "type": "string" },
+            "reason": { "enum": ["quota", "failure", "capacity", "user", "other"] }
+          },
+          "required": ["job_id", "from_model", "to_model", "reason"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.closed",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "终态 + 总金额 + 是否返工；成功合并 = 能力账正样本（L0 直记）",
+          "properties": {
+            "type": { "const": "job.closed" },
+            "job_id": { "type": "string" },
+            "success": { "type": "boolean" },
+            "rework": { "type": "boolean" },
+            "usd_cash": { "type": "number" },
+            "usd_economic": { "type": "number", "description": "含订阅摊销的经济账" },
+            "merged_by": { "type": "string", "description": "最终合并作者模型（handoff 后是接手者）" }
+          },
+          "required": ["job_id", "success", "rework", "usd_cash", "usd_economic", "merged_by"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.override",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "用户自选（B 位选中）。喂 F9 用户偏好 P（C.4）",
+          "properties": {
+            "type": { "const": "job.override" },
+            "job_id": { "type": "string" },
+            "model": { "type": "string" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
+            "work_type": { "type": "string" }
+          },
+          "required": ["job_id", "model", "identity", "work_type"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "job.explore",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "用户尝鲜（C 位选中）。不进 P（选择不算偏好），结局照常进 Q（结果仍是能力证据）",
+          "properties": {
+            "type": { "const": "job.explore" },
+            "job_id": { "type": "string" },
+            "model": { "type": "string" },
+            "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
+            "work_type": { "type": "string" }
+          },
+          "required": ["job_id", "model", "identity", "work_type"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "attr.rule",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        { "$ref": "#/definitions/attribution" },
+        {
+          "type": "object",
+          "description": "L0 规则归因（close.mjs 零 LLM，每单必跑，按第一条命中即停）",
+          "properties": { "type": { "const": "attr.rule" } },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "attr.llm",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        { "$ref": "#/definitions/attribution" },
+        {
+          "type": "object",
+          "description": "L1 单判官归因（换厂商；一次调用，禁止多模型投票）",
+          "properties": {
+            "type": { "const": "attr.llm" },
+            "judge_model": { "type": "string", "description": "判官模型（判官选型本身也走点将台，工种=判断）" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "attr.human",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        { "$ref": "#/definitions/attribution" },
+        {
+          "type": "object",
+          "description": "L3 人类终裁（最高优先级）",
+          "properties": { "type": { "const": "attr.human" } },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "attr.retract",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "纠错：追加不改历史（D.3）。重放时被 retract 的归因当作没发生，净特征从零算，冷却若仍生效立即解除。",
+          "properties": {
+            "type": { "const": "attr.retract" },
+            "target_event_id": { "type": "string", "description": "被撤事件（attr.*）的 event_id" },
+            "reason": { "type": "string" }
+          },
+          "required": ["target_event_id", "reason"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "policy.patch",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "政策变更摘要（policy/ 层仅人类可写）",
+          "properties": {
+            "type": { "const": "policy.patch" },
+            "summary": { "type": "string" },
+            "changed_files": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["summary", "changed_files"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "sub.usage",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "套餐剩余配额快照（F16）；耗尽时写本事件并触发 job.handoff，源模型本段不记能力失败",
+          "properties": {
+            "type": { "const": "sub.usage" },
+            "model": { "type": "string" },
+            "period_start": { "type": "string" },
+            "period_end": { "type": "string" },
+            "included_tokens": { "type": ["integer", "null"], "description": "无限额为 null" },
+            "used_tokens": { "type": ["integer", "null"] },
+            "quota_left": { "type": ["integer", "null"] }
+          },
+          "required": ["model", "period_start", "period_end", "included_tokens", "used_tokens", "quota_left"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "incident",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "事故账（E.4，issue #443 拍板三字段）：machine 场 = 指纹 + 处置枚举，人场 = why 一句。因果顺序先探测后入账。",
+          "properties": {
+            "type": { "const": "incident" },
+            "fingerprint": { "type": "string", "description": "错误指纹：来自实时探针的当前状态，不是对历史叙述的关键字匹配" },
+            "disposition": { "enum": ["交卷收卷", "报错续命一次", "连续同指纹换人", "升级协调者", "升级用户", "挂账待补"] },
+            "why": { "type": "string", "description": "一句人读说明" }
+          },
+          "required": ["fingerprint", "disposition", "why"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "audit.bypass",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "每日审计发现：退役模型仍被新派单等绕过事件（E.3）",
+          "properties": {
+            "type": { "const": "audit.bypass" },
+            "detail": { "type": "string" },
+            "evidence": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["detail", "evidence"],
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "title": "audit.stale",
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "description": "价目探针发现偏差 >15% 连续两次 → 该模型价目标 suspect（E.2）",
+          "properties": {
+            "type": { "const": "audit.stale" },
+            "model": { "type": "string" },
+            "detail": { "type": "string" },
+            "evidence": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["model", "detail", "evidence"],
+          "additionalProperties": true
+        }
+      ]
+    }
+  ]
+}
