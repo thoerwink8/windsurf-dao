@@ -1,6 +1,6 @@
 ---
 name: worker-brief
-description: 被派工人的开工便签：收到任务书后先读。开工五步、卡备注人话、任务主应答、向任务分支发 PR、打校准标签。
+description: 被派工人的开工便签：收到任务书后先读。开工五步、卡片状态、卡备注人话、任务主应答、向任务分支发 PR、打校准标签。
 ---
 
 # 工人便签
@@ -11,7 +11,18 @@ description: 被派工人的开工便签：收到任务书后先读。开工五�
 2. 开 draft PR：`gh pr create --draft`，标题带宿主前缀，正文必须含三段——**目标 / 验收标准 / 进展**——并回链相关 issue。
 3. 改卡名：`orca worktree set --worktree active --display-name "#<PR号> - <动宾短语>" --json`，再 `orca worktree set --worktree active --workspace-status in-progress --json`。
 4. 给 PR 打标签（不存在先 `gh label create`，幂等）：`gh pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
-5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `gh pr ready` → 卡备注改「待终审」。
+5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `gh pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
+
+## 卡片状态
+
+卡片状态全生命周期由工人维护。漏切等于面板撒谎，用户看不出谁在等审。
+
+- 开工：`--workspace-status in-progress`（开工五步第 3 步）
+- `gh pr ready` 同一轮同步 `--workspace-status in-review`
+- 被打回返工：切回 `in-progress`
+- 合并归档：协调者设 `completed`，工人不要自己标完结
+
+判例：2026-08-14 只有一个工人自觉切了 in-review，其余卡状态失真。
 
 ## 纪律
 
