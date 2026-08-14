@@ -4,11 +4,15 @@
 //   1. 样本 = 同时带 model/* 与 type/* 标签的 PR；累计战绩只使用已合并 PR。
 //   2. 返工轮数 = PR 首次 ready 之后新增的 commit 数。若 PR 从未是 Draft，
 //      GitHub 没有 ready_for_review 事件，以 PR 创建时间作为首次 ready 时间。
-//   3. 审查红项数 = 从每条 review 正文提取「判定：红 N 项」或「红 N 项」的最大 N
+//   3. 审查红项数 = 从每条 review 正文**判定行**提取「判定：红 N 项」或「红 N 项」的最大 N
 //      （issue #444：同账号不能 request-changes，审官以 COMMENT 提交、判定写正文首行，
-//      结构化线程数为 0，红项被计成 0）。跨 review 取最大值 ⇒ 复核绿不清零首审红项；
-//      结构化 request-changes 的线程数仍兼容，取两者最大值。
-//   4. 最近 3 单趋势按合并时间从旧到新显示“返工/红项”。
+//      结构化线程数为 0，红项被计成 0）。判定行 = 行首为「判定」「复核结论」（允许 >、**
+//      前缀）——正文叙述引用他单红数不计入（防引用性多计，对抗审 #449 红 1）。
+//      跨 review 取最大值 ⇒ 复核绿不清零首审红项；结构化 request-changes 的线程数仍兼容，
+//      取两者最大值。
+//   4. 无审读 vs 0 红可区分：0 条 review 记 null、呈现「无审读」，审过零红记 0
+//      （对抗审 #449 红 2，仓规硬条款：扫完 0 条 ≠ 没扫到）。
+//   5. 最近 3 单趋势按合并时间从旧到新显示“返工/红项”。
 //
 // 本脚本只读 GitHub 官方数据，只向 stdout/stderr 输出，不改文件、不发评论。
 
@@ -42,16 +46,24 @@ export function countReworkAfterReady(commits, readyAt) {
 // 红项口径 v2（issue #444）：从 review 正文判定行提取红项数。
 // 判定格式：审官以 COMMENT 提交 review，判定写正文首行，如「判定：红 N 项」
 // 「**判定：红 N 项**」「复核结论：绿，可合并」。跨全部 review 取最大 N ⇒
-// 复核绿（无红数）不清零首审红项。正则配真实语料回归：语料来自 gh api 拉取的
-// PR #446 / #440 真实 review body（tests/fixtures/reviews-446.json、
-// reviews-440.json），断言见 tests/calibrate.tests.js，禁止 mock 内生。
+// 复核绿（无红数）不清零首审红项。
+// 匹配面收窄到判定行（对抗审 #449 红 1）：只认行首为「判定」「复核结论」
+// （允许 >、** 前缀）的行——正文叙述里引用他单「红 N 项」（如「比 #440 的
+// 红 4 项干净多了」）不计入，防引用性多计污染本单成绩。
+// 正则配真实语料回归：语料来自 gh api 拉取的 PR #446 / #440 真实 review body
+// （tests/fixtures/reviews-446.json、reviews-440.json），断言见
+// tests/calibrate.tests.js，禁止 mock 内生。
 const RED_FLAG_PATTERN = /红\s*(\d+)\s*项/g;
+const JUDGMENT_LINE_RE = /^\s*(?:[>*]\s*)*(判定|复核结论)/;
 
 export function redFlagsFromReviewBodies(bodies) {
   let max = 0;
   for (const body of bodies || []) {
-    for (const match of String(body || '').matchAll(RED_FLAG_PATTERN)) {
-      max = Math.max(max, Number(match[1]));
+    for (const line of String(body || '').split(/\r?\n/)) {
+      if (!JUDGMENT_LINE_RE.test(line)) continue;
+      for (const match of line.matchAll(RED_FLAG_PATTERN)) {
+        max = Math.max(max, Number(match[1]));
+      }
     }
   }
   return max;
@@ -87,12 +99,15 @@ export function buildRows(samples, models = [], taskTypes = TASK_TYPES) {
         rows.push({ model, taskType, sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] });
         continue;
       }
+      // 红项口径 v2（对抗审 #449 红 2）：没被审过的样本（redFlags=null）不混进红项平均，
+      // 也不当作 0 红；全组都没审过时平均红项记 null（渲染为「无审读」）。
+      const reviewedRed = matched.filter(sample => sample.redFlags !== null && sample.redFlags !== undefined);
       rows.push({
         model,
         taskType,
         sampleCount: matched.length,
         averageRework: average(matched.map(sample => sample.rework)),
-        averageRedFlags: average(matched.map(sample => sample.redFlags)),
+        averageRedFlags: reviewedRed.length === 0 ? null : average(reviewedRed.map(sample => sample.redFlags)),
         trend: matched.slice(-3).map(sample => ({
           number: sample.number,
           rework: sample.rework,
@@ -104,14 +119,17 @@ export function buildRows(samples, models = [], taskTypes = TASK_TYPES) {
   return rows;
 }
 
-function renderRow(row) {
+export function renderRow(row) {
   if (row.sampleCount === 0) {
     return `| ${row.model} | ${row.taskType} | 无样本 | 无样本 | 无样本 | 无样本 |`;
   }
   const trend = row.trend
-    .map(item => `#${item.number} ${item.rework}/${item.redFlags}`)
+    .map(item => `#${item.number} ${item.rework}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
     .join(' → ');
-  return `| ${row.model} | ${row.taskType} | ${row.sampleCount} | ${formatAverage(row.averageRework)} | ${formatAverage(row.averageRedFlags)} | ${trend} |`;
+  const avgRed = row.averageRedFlags === null || row.averageRedFlags === undefined
+    ? '无审读'
+    : formatAverage(row.averageRedFlags);
+  return `| ${row.model} | ${row.taskType} | ${row.sampleCount} | ${formatAverage(row.averageRework)} | ${avgRed} | ${trend} |`;
 }
 
 export function renderFullReport(rows, unlabelledCount, repository = null) {
@@ -198,10 +216,15 @@ function pullRequestDetails(repository, number) {
     throw new Error(`PR #${number} 有 ${details.reviews.totalCount} 条 review，超过单次读取上限 100，拒绝给出不完整成绩。`);
   }
   return {
-    redFlags: Math.max(
-      redFlagsFromReviewBodies((details.reviews?.nodes || []).map(node => node.body)),
-      details.reviewThreads.totalCount,
-    ),
+    // 红项口径 v2（对抗审 #449 红 2）：没被审过（0 条 review）与审过但 0 红不可混同——
+    // 没人审过记 null，报告呈现「无审读」；审过则按正文判定行与结构化线程取最大。
+    redFlags: details.reviews.totalCount === 0
+      ? null
+      : Math.max(
+          redFlagsFromReviewBodies((details.reviews?.nodes || []).map(node => node.body)),
+          details.reviewThreads.totalCount,
+        ),
+    reviewCount: details.reviews.totalCount,
     commits: details.commits.nodes.map(node => node.commit),
     readyAt: details.timelineItems.nodes
       .map(node => node.createdAt)
@@ -220,6 +243,7 @@ function measurePr(repository, pr) {
     readyAt,
     rework: countReworkAfterReady(details.commits, readyAt),
     redFlags: details.redFlags,
+    reviewCount: details.reviewCount,
   };
 }
 
@@ -256,7 +280,8 @@ function renderSingleReport(sample, cumulativeRow, unlabelledCount) {
     `- 模型：${sample.model || '未标注'}`,
     `- 任务类：${sample.taskType || '未标注'}`,
     `- 返工轮数：${sample.rework}`,
-    `- 审查红项数：${sample.redFlags}`,
+    `- review 条数：${sample.reviewCount ?? 0}`,
+    `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（0 条 review，未审不等于 0 红）' : sample.redFlags}`, 
     '',
     '## 最新累计战绩（含本单）',
     '',
