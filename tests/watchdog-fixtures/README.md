@@ -7,14 +7,15 @@
 
 ## 一、现场实录（real-incidents/）——上线生效证据
 
-2026-08-15 实录，ps / terminal-list / read 字段未改写（除 at-capacity 事故样本注明的一处
-state 字段外）。时间、工位、触发动作记录如下：
+2026-08-15 实录，ps / terminal-list / read 字段未改写；改写处逐样本在表格里列全
+（at-capacity 与 read-error 的 ps 各改**两处** state，at-capacity 的 read 校正
+returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、工位、触发动作记录如下：
 
 | 目录 | 实录内容 | 检测结果 |
 |---|---|---|
 | `real-incidents/at-capacity-450/` | #450 点将台综合稿 codex 工人（gpt-5.6-sol）**正在现场卡在** `⚠ Selected model is at capacity. Please try a different model.`——全量未改写 ps + read（60 行，报错在底部窗口内）。watchdog live 实跑当场抓到 | 退出码 1，`[#450 - 点将台综合稿] fingerprint: 「at capacity、try a different model」` |
-| `real-incidents/at-capacity/` | #452 审官工位（codex）同一事故的**真实终端保留输出**（146 行，报错原文在内）。ps 只把该 agent 的 `state` 从 done 改回 working 以反映事故当时（其余字段零改写）；read 截断到事故当时屏面（22 行，行文本零改写）；全量 146 行原样存 `evidence-全量原始read.json` 留档 | 退出码 1，`fingerprint: 「at capacity、try a different model」` |
-| `real-incidents/read-error/` | 真实 orca 错误响应原样：`orca terminal read` 对轮换后的手柄返回 `terminal_handle_stale`（真实发生过：终端重启后手柄失效） | 退出码 1，首轮 `read-failed: …terminal_handle_stale…` |
+| `real-incidents/at-capacity/` | #452 审官工位（codex）同一事故的**真实终端保留输出**。全量 146 行原样存 `evidence-全量原始read.json` 留档；fixture 的 read 取事故当时屏面前 22 行**连续切片**（起点 0，行文本零改写），`returnedLineCount` 从 146 **校正为 22** 与 tail 行数自洽。ps 相对底稿 `ps-0815.json` 改**两处** `state`（逐字段比对确认，其余零改写）：① #452 codex 事故 agent `state` done→working 反映事故当时；② 同 worktree 的 pi agent `state` working→done 做隔离（#452 只留一个 working 工位） | 退出码 1，`fingerprint: 「at capacity、try a different model」` |
+| `real-incidents/read-error/` | 真实 orca 错误响应原样：`orca terminal read` 对轮换后的手柄返回 `terminal_handle_stale`（真实发生过：终端重启后手柄失效），错误响应零改写。ps 相对底稿 `ps-0815.json` 与 at-capacity 相同地改**两处** `state`：① #452 codex `state` done→working；② 同 worktree 的 pi agent `state` working→done 做隔离 | 退出码 1，首轮 `read-failed: …terminal_handle_stale…` |
 
 > 2026-08-15 实录背景（issue #442 新指纹语料）：GPT/codex 报
 > `⚠ Selected model is at capacity. Please try a different model.` 后当轮中断、TUI 落回空闲、屏面静止。
@@ -34,7 +35,7 @@ state 字段外）。时间、工位、触发动作记录如下：
 | `waiting/` | ps `state` 改 `"waiting"` | 退出码 1，`waiting:` |
 | `hash-stable/` | 真实干净屏面三轮同屏（updatedAt/incarnation 冻结） | 第 3 轮退出码 1，`hash-stable:` |
 | `hash-stable-activity/` | 同屏四轮，updatedAt 第 2 轮推进一次 | 第 4 轮才报（新序列第 3 个同屏轮） |
-| `hash-stable-restart/` | 第 3 轮 incarnationId 变（同 pane 重启）+ 屏面换 | 第 5 轮才报 |
+| `hash-stable-restart/` | 同屏五轮、第 3 轮 incarnationId 变（同 pane 重启、屏面不变）——重启轮重新起算 | 第 5 轮才报（第 3/4 轮必须 OK；判别力：epoch 去 incarnation 会第 3 轮就报） |
 | `hash-stable-screenchange/` | 屏面 X,X,Y,Y | 永不报，退出码 0 |
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
 | `exclusion/` | master(主,指纹屏面) + #452(自,指纹屏面) + #999(工人,干净屏面) | 见 tests/watchdog.tests.js ⑭ |
