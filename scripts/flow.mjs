@@ -235,7 +235,9 @@ function deriveState(signals) {
 }
 
 // 当前态的待办动作（纯函数）：null = 无需流转（扫完 0 需流转）。
-// blocked = 验开工失败后帅持有，不再自动重发（fail-visible，不重试狂发）。
+// blocked = live 注入失败后帅持有；新信号（fp 变化）到来自动清除重试一次
+// （自愈，三轮复核红 1——否则 blocked 永不解除、后续新信号全被吞）。
+// dry-run 预览不落闸（预览不改变值守状态）。
 function pendingAction(derived, rec) {
   if (derived.state === 'working') return null;
   if (derived.state === 'awaiting-review') {
@@ -256,11 +258,14 @@ function pendingAction(derived, rec) {
 }
 
 // 待帅处置原因（红 3：卡着的 PR 每轮都要显形，不能报一次就转绿）
-function awaitingShuaiReason(derived, rec) {
+// thisRoundFailed = 本轮解析失败（dry-run 预览的本轮量，不落盘——三轮复核红 1：
+// 预览不写 blocked，要可见就给本轮显形；blocked 只由 live 注入失败落闸）
+function awaitingShuaiReason(derived, rec, thisRoundFailed) {
   if (derived.state === 'approved') return '复核绿待帅终审';
   if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
   if (derived.state === 'pingpong') return '乒乓两轮仍红待帅换人';
-  if (Object.keys(rec.blocked || {}).length > 0) return '注入/目标解析失败待帅接手';
+  if (Object.keys(rec.blocked || {}).length > 0) return '注入失败待帅接手（新信号到来自动重试一次）';
+  if (thisRoundFailed) return '注入/目标解析失败待帅确认（本轮，未落闸）';
   return null;
 }
 
@@ -754,6 +759,7 @@ function processOneRound(source, state, args) {
   }
 
   const awaitingShuai = []; // 红 3：卡着的 PR 每轮常驻显形
+  const thisRoundFailed = new Set(); // 三轮复核红 1：本轮解析失败（dry-run 预览，不落盘）
 
   for (const pr of open) {
     const rec = records[pr.number] || (records[pr.number] = freshRecord(pr.number));
@@ -788,6 +794,9 @@ function processOneRound(source, state, args) {
 
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
+      // 自愈（三轮复核红 1）：新信号（fp 变化）到来即清除 blocked 给一次重试——
+      // fp 去重保证每个新信号至多重试一次，不变成「重试狂发」（首审红 1 底线不破）
+      if (Object.keys(rec.blocked || {}).length > 0) rec.blocked = {};
       const action = pendingAction(derived, rec);
       if (action) {
         if (action.kind === 'report-final') {
@@ -810,8 +819,9 @@ function processOneRound(source, state, args) {
             events.push(exec.line);
             rec.actedOn = fp;
             if (exec.line.startsWith('[flow] 预览-阻塞')) {
-              // 观察 2：dry-run 的解析失败也进 blocked——长跑时不能第二轮转绿
-              rec.blocked[action.kind] = true;
+              // dry-run 解析失败：本轮可见但不落 blocked 闸（三轮复核红 1——
+              // 预览不改变值守状态，否则真跑一次预览会把 PR 永久锁死）
+              thisRoundFailed.add(pr.number);
             }
             if (action.kind === 'start-reviewer' && exec.handle) {
               rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
@@ -819,8 +829,10 @@ function processOneRound(source, state, args) {
           } else {
             // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
+            // 只有 live 注入失败才落 blocked 闸（fail-visible 不重试狂发）；
+            // 落闸不带指纹——新信号（fp 变化）到来由上方自愈清除重试一次
             if (exec.needsReport !== 'report-unknown' && exec.needsReport !== 'reviewer-unfound') {
-              rec.blocked[action.kind] = true; // 注入失败 → 帅持有，不再自动重发
+              rec.blocked[action.kind] = true;
             }
             rec.actedOn = fp;
           }
@@ -834,8 +846,8 @@ function processOneRound(source, state, args) {
     for (const c of comments) if (c && c.id != null) rec.seenComments[c.id] = true;
     for (const rv of reviews) if (rv && rv.id != null) rec.seenReviews[rv.id] = true;
 
-    // 待帅处置常驻行（红 3）：approved/error/pingpong/blocked 每轮显形
-    const reason = awaitingShuaiReason(derived, rec);
+    // 待帅处置常驻行（红 3）：approved/error/pingpong/blocked/本轮失败每轮显形
+    const reason = awaitingShuaiReason(derived, rec, thisRoundFailed.has(pr.number));
     if (reason) awaitingShuai.push({ pr: pr.number, reason });
 
     // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类；
