@@ -20,7 +20,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
-launch_note = "装机与启动坑见 NEW-MACHINE.md §7（代理前缀、钉版本 1.0.1）——真相源只在那一处，别在此复制。"
+launch_note = "装机与启动坑见 NEW-MACHINE.md「grok 怎么配」节（代理前缀、钉版本 1.0.1）——真相源只在那一处，别在此复制。"
 
 [providers.gpt]
 cli = "codex"
