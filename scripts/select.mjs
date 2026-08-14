@@ -47,6 +47,7 @@ const jobId = arg('job-id');
 if (!identity || !workType || !ts || !jobId) usageAndExit('缺必填参数：--identity / --work-type / --ts / --job-id');
 
 const taskTokens = arg('task-tokens') != null ? Number(arg('task-tokens')) : null;
+if (taskTokens !== null && !Number.isFinite(taskTokens)) usageAndExit(`--task-tokens 必须为数字，实际 ${arg('task-tokens')}`);
 const risk = arg('risk', '低');
 const reversible = arg('reversible', 'true') !== 'false';
 const commit = arg('commit');

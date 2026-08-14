@@ -92,7 +92,7 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
   if (typeof ts !== 'string' || Number.isNaN(Date.parse(ts))) {
     throw new Error(`ts 必须是 ISO8601 带时区字符串，实际 ${JSON.stringify(ts)}`);
   }
-  if (typeof seq !== 'number' || seq < 0) throw new Error(`seq 必须是非负整数，实际 ${JSON.stringify(seq)}`);
+  if (!Number.isInteger(seq) || seq < 0) throw new Error(`seq 必须是非负整数，实际 ${JSON.stringify(seq)}`);
   if (typeof machine !== 'string' || machine.length === 0) throw new Error('machine 必填');
   const clash = RESERVED.filter(k => payload[k] !== undefined);
   if (clash.length) throw new Error(`payload 含保留字段 ${clash.join(', ')}（由调用方传参）`);
