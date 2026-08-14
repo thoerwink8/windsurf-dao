@@ -14,8 +14,7 @@
         " console.log('ok:', d.ok, 'status:', d.result?.terminal?.status, 'lines:', d.result?.terminal?.tail?.length);",
         " \"",
         "",
-        " ⠸ Working...",
-        " $ echo \"restart\""
+        " ⠸ Working..."
       ]
     }
   }
