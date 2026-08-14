@@ -70,7 +70,7 @@ console.log("\n=== ③ 真实事故语料被拦（2026-08-15 现场实录，字�
 
   const r3 = runWatchdog(path.join(FIXTURES, "real-incidents", "read-error"));
   check("read-error 实录（terminal_handle_stale）：退出码 1", r3.status === 1, `status=${r3.status}`);
-  check("read-error 实录：首轮即 read-failed 且带真实错误码", /read-failed:.*terminal_handle_stale/.test(r3.out), r3.out.trim());
+  check("read-error 实录：首轮 read-failed 且错误码透传（快照样本验规整逻辑；live 侧错误码由 runOrca 解析 stdout 保证同形态）", /read-failed:.*terminal_handle_stale/.test(r3.out), r3.out.trim());
 }
 
 console.log("\n=== ④ exited 违规样本被拦 ===");
@@ -106,17 +106,21 @@ console.log("\n=== ⑦ 整屏哈希三轮不变——第 3 轮才报警 ===");
 console.log("\n=== ⑧ epoch 状态机：updatedAt 刚推进后同屏三轮 → 第 4 轮才报（红 4 修法判别）===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-activity"));
+  // 轮段提取：断言只针对第 n 轮自身的输出块（懒匹配 + 后续轮 OK 会跨轮误命中，不能直接全文正则）
+  const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/4([\\s\\S]*?)(?:round \\d\\/4|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 4 轮输出 hash-stable（3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
-  check("第 3 轮还是 OK（没提前报）", r.out.includes("round 3/4") && /round 3\/4[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 3 轮不该报警");
+  check("第 4 轮输出 hash-stable（3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(4)), r.out.trim());
+  check("第 3 轮还是 OK（没提前报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
 }
 
-console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变化）→ 新序列第 3 轮才报 ===");
+console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变、屏面不变）→ 重启轮重新起算，第 5 轮才报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-restart"));
+  const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/5([\\s\\S]*?)(?:round \\d\\/5|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
-  check("第 4 轮还是 OK（没串用旧计数）", /round 4\/5[\s\S]*?OK 扫完 1 个工位/.test(r.out), "第 4 轮不该报警");
+  check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(5)), r.out.trim());
+  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
+  check("第 4 轮还是 OK（没串用旧计数）", /OK 扫完 1 个工位/.test(seg(4)) && !/hash-stable:/.test(seg(4)), "第 4 轮不该报警");
 }
 
 console.log("\n=== ⑩ epoch 状态机：屏面变了又变回 → 连击清零，永不报 ===");
@@ -146,6 +150,13 @@ console.log("\n=== ⑬ read-failed fail-closed：成功响应缺 result.terminal
   const r = runWatchdog(path.join(FIXTURES, "read-malformed"));
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
   check("首轮输出 read-failed", /\[#452 - 看门狗正式版\] read-failed:/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑬b read-failed fail-closed：runOrca 回落形态（stdout 非 JSON 的字符串错误）也透传 ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "read-error-livefallback"));
+  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
+  check("首轮 read-failed 且回落字符串进详情（live 字符串分支有断言看着，审读红 ② 返工）", /\[#452 - 看门狗正式版\] read-failed:.*exit 1/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑭ 结构性排除（红 2 修法）：主工作区 / 自身 / 稳定 pane ID ===");
