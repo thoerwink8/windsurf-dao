@@ -39,6 +39,8 @@ pi / Codex 各自的模型配置（API key、模型列表、中转站等）跟�
 - pi CLI：见其官方文档
 - Codex CLI：见其官方文档
 
+Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
+
 ## 6. pi 怎么配
 
 pi 是 DeepSeek 系工人的 CLI。装与验：
