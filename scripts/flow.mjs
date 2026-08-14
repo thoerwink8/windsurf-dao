@@ -708,6 +708,10 @@ function processOneRound(source, state, args) {
   }
 
   const scanned = open.length;
+  // 退役记录清除（MERGED/CLOSED 的 PR 不再在途，状态文件不堆积）
+  for (const key of Object.keys(records)) {
+    if (records[key].retired) delete records[key];
+  }
   const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
