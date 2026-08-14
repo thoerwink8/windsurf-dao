@@ -1,0 +1,35 @@
+# ============================================================================
+# 点将台权重初值 —— 政策层，人类独占写（设计 docs/dianjiangtai-design.md C.2）
+# λ 们只由人改，每次改动带 reason（本文件 why 字段）；离线 LLM 每月可提议但必须走人合并。
+# 凑满「每类每模型约 30 单」之前不许自动改权重。
+# 禁令、预算、探索保底、门闩永远不在演化范围。
+# ============================================================================
+
+updated: "2026-08-15"
+
+weights:
+  lambda_risk: 1.0     # Score 风险折扣系数（C.1 默认值）
+  lambda_pref: 0.2     # F9 用户偏好系数
+  lambda_cost: 0.15    # cost_util 系数（有界 [0,1]，最多 ±0.15，永不做闸门）
+  why: 设计 C.1 默认权重初值，人可调，改必带 reason
+
+shrinkage:
+  k: 4                 # 层级收缩强度（C.1，Claude 臂形态）
+  k0: 2                # 先验强度（继承家底只改中心、不改强度）
+  prior_center_fallback: 0.5   # 旧版本样本为空时的中立先验中心 p0（红4 退化规则）
+
+explore:
+  per_cell_floor: 3            # F8 每格探索保底单数缺口 = max(0, floor − n_eff)
+  new_model_global_floor: 5    # F8 新模型全局缺口 = max(0, 全局保底 − n_global)
+  eligible_risk: [低]          # C.3 配额覆盖仅低风险单触发；高风险单不让路探索
+  why: 初值（人可调）；新模型/低分模型因此永远有翻身样本，不存在饿死或死刑
+
+cooldown:
+  model_failure_days: 7        # L3：同一模型 7 天内吃第 2 个 model_share>0 失败 → 冷却触发
+  why: 设计 D.2 L3 人类终裁触发条件，初值
+
+cost:
+  cost_util_bound: [0, 1]      # cost_util 有界（C.1）
+  waste_cost_util_floor: 0.7   # F17：质量不低于该类中位数时把 cost_util 上调至 max(cost_util, 0.7)
+  waste_trigger_days_to_reset: 3    # F17 触发：临近重置（天）
+  waste_trigger_max_utilization: 0.3 # F17 触发：利用率低（≤0.3）

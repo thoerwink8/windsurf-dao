@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "scores",
+  "note": "物化层（设计 A.1）：选型只读引用，由 recompute.mjs 整文件重写（本期骨架：空账初始态）。",
+  "generated_at": null,
+  "from_events": 0,
+  "scores": []
+}
