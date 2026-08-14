@@ -43,6 +43,8 @@ master 卡只住主会话，永远零工人。每个任务用 `orca worktree cre
 
 Claude 族终端一律经 reclaude 链路起；启动多一段配置同步期，抢跑注入必被吞。
 
+grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #443）；Grok Build auto 模式会硬拦 git push（对外发布闸），授权词是往终端回一句「推」——假拦（网络抖动）重试即过，真拦（宿主策略）需授权词。
+
 ## 小活打包
 
 多个编辑级小活打包成一单，派一个工人。不因活小而主会话下场。
