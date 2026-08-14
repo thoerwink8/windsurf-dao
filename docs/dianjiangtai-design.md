@@ -25,9 +25,10 @@
 - `policy/weights.yml`：权重初值、探索保底单数、冷却时长。
 - `ledger/events/<ulid>-<machine>.json`：一事件一文件，事件类型闭集（见下）。
 - `derived/features.json` / `quotes.json` / `scores.json`：物化产物，选型只读这些，不扫全账。
-- `scripts/select.mjs`（在线选型纯函数）、`ingest.mjs`（收终端计量写事件）、`close.mjs`（关单 + L0 归因）、`recompute.mjs`（重放事件重生物化）、`audit.mjs`（对账 + 绕过检查）、`watchdog.mjs`（看门狗，见 E.4）。
+- `schemas/events.schema.json`：事件类型 schema 唯一权威——每个事件类型的必填字段与 `schema_version` 落这里；加类型先改它、只加字段不改语义翻转、读端容忍未知字段。由 `audit.mjs` 在写入时与每日对账时校验（schema 是校验器的唯一输入，闭集是它的派生枚举）。
+- `scripts/select.mjs`（在线选型纯函数）、`ingest.mjs`（收终端计量写事件）、`close.mjs`（关单 + L0 归因）、`recompute.mjs`（重放事件重生物化）、`audit.mjs`（对账 + 绕过检查 + schema 校验）、`watchdog.mjs`（看门狗，见 E.4）。
 
-**事件类型（闭集，加类型先改 schema、只加字段不改语义翻转）**：
+**事件类型闭集（下为派生枚举，唯一权威在 `schemas/events.schema.json`；加类型先改 schema 文件、只加字段不改语义翻转）**：
 
 `job.opened`（任务卡快照 + 候选 + 选中 + 解释串）、`job.dispatch`（实际启动模型 + 终端 + 价目快照 + `decision_id`）、`job.meter`（token 进/出/缓存命中 + 金额）、`job.handoff`（A→B 接手及原因）、`job.closed`（终态 + 总金额 + 是否返工）、`job.override`（用户自选）、`job.explore`（用户尝鲜）、`attr.rule`（L0 规则归因）、`attr.llm`（单判官归因）、`attr.human`（人类终裁）、`attr.retract`（纠错，指向被撤事件）、`policy.patch`（政策变更摘要）、`sub.usage`（套餐剩余配额快照）、`incident`（事故账，见 E.4）、`audit.bypass` / `audit.stale`（审计发现）。
 
@@ -127,25 +128,54 @@ usage_unit = T_in(未缓存)·ref_in + T_in(缓存)·ref_cache + T_out·ref_out
 
 ### C.1 层级收缩打分（小样本抗噪核心）
 
-先算 Beta 后验（DS 臂），再套 Claude 臂的收缩形态（k=4）：
+先算 Beta 后验（DS 臂），再套 Claude 臂的收缩形态（k=4）。
+
+**版本先验 base_p**（F7 的归宿）：
 
 ```
-先验:   Beta(α0, β0)，α0 = p0·k0，β0 = (1−p0)·k0；p0=0.5, k0=2（弱先验）
-样本权: w_sample = w_version · w_time · w_conf
-        w_version: 同版本=1；异版本只进基础分 base_p、不进当前格（F7）
-        w_time    = 0.5^(Δt/30天)（F6）
-        w_conf    = 归因置信度 0..1（来自 D）
+base_p(m) = 该模型旧版本样本（version ≠ 当前版本）的衰减加权成功率
+          = Σ_{旧版本样本} w_time·y / Σ_{旧版本样本} w_time   （y=1 成功，0 失败）
+当前版本格的先验中心 p0 = base_p(m)；旧版本样本为空时回退 p0 = 0.5（中立）。
+```
+
+**样本权与后验**：
+
+```
+w_sample = w_version · w_time · w_conf
+  w_version: 同版本=1；异版本样本不进当前格、只进 base_p（F7）
+  w_time    = 0.5^(Δt/30天)（F6，base_p 与当前格同一衰减律）
+  w_conf    = 归因置信度 0..1（来自 D）
 α_eff = α0 + Σ w_sample(正样本)       β_eff = β0 + Σ w_sample(负样本)
+α0 = p0·k0，β0 = (1−p0)·k0；k0 = 2（先验强度固定：继承家底只改中心、不改强度）
 μ_raw = α_eff / (α_eff + β_eff)                                      (F2)
 σ_raw² = α_eff·β_eff / ((α_eff+β_eff)²·(α_eff+β_eff+1))              (F4)
 n_eff = α_eff + β_eff − (α0 + β0)                                    (F3)
+```
 
+**父级聚合（收缩锚点）**——一律**排除当前格 (m,i,w)**，避免当前格样本在 μ_raw 与父级重复计权；每条样本只属一个格、不重复计数：
+
+```
+μ_model(m) = 该模型当前版本、除当前格外所有格的衰减加权成功率
+n_model(m) = 该模型当前版本、除当前格外所有格的有效样本量之和 Σ n_eff
+μ_global   = 全部模型全部格、除当前格外所有样本的衰减加权成功率
+σ_parent   = 该模型当前版本、除当前格外各格 σ_raw 按 n_eff 加权平均
+```
+
+**层级收缩（Claude 臂形态，k=4）**：
+
+```
 Q_parent = (n_model·μ_model + k·μ_global) / (n_model + k)   # 模型全工种 → 全局均值
 μ_shrunk = (n_eff·μ_raw + k·Q_parent) / (n_eff + k)          # 本格 → 模型全工种，k=4
 σ_shrunk = (n_eff·σ_raw + k·σ_parent) / (n_eff + k)          # σ 同式收缩
 ```
 
-收缩形态沿用 Claude 臂，k 取 4。样本少时向「模型全工种均值」借力，仍不足再向「全局均值」借力；`n_eff=1` 时自身只占 20%，单样本不可能把分数掀翻；约 5 单后本格数据接管主导。新工种零样本直接落在父级估计上，无需冷启动特判。
+**三个代入例**（设无旧版本 → p0=0.5、k0=2 → α0=β0=1；父级 Q_parent=μ_global=0.5；样本权全为 1）：
+
+| 情形 | α_eff/β_eff | μ_raw | n_eff | μ_shrunk | 结论 |
+|---|---|---|---|---|---|
+| 零样本 | 1/1 | 0.500 | 0 | (0+4·0.5)/4 = **0.500** | 直接落在父级 Q_parent |
+| 1 单成功 | 2/1 | 0.667 | 1 | (1·0.667+4·0.5)/5 = **0.533** | 单样本只抬约 3 分，掀不翻 |
+| 5 单全成功 | 6/1 | 0.857 | 5 | (5·0.857+4·0.5)/9 = **0.698** | 自身权重 5/9≈56%，本格接管 |
 
 最终分（在线纯算术，每项可单独打印解释）：
 
@@ -217,25 +247,42 @@ min_log = min(log1p(c))，max_log = max(log1p(c))；max_log == min_log 时 cost_
 | 模型能力账 | 净成功 / 净失败 / 冷却 | 是，用最终归因 |
 | 系统质量账 | `brief` 率 / `coord` 率 / `env` 率 | 是。给人类看协调者与任务书，不进模型 Score |
 
-归因主类四枚举（拍板不变）：**模型能力 `model` / 任务书缺陷 `brief` / 协调失误 `coord` / 环境中断 `env`**。为保留 Grok 原卷的语义，另带三个责任分解字段：
+归因主类四枚举（拍板不变）：**模型能力 `model` / 任务书缺陷 `brief` / 协调失误 `coord` / 环境中断 `env`**。混合责任用**责任向量**无损入两本账（Grok 原卷 mixed + share_model 的语义）：
 
 ```
-share_model ∈ [0,1]   # 本单记入模型能力账的份额：纯 model=1，纯其他=0，混合=0.x（其余份额记系统质量账）
-overrun_attr ∈ {model,brief,coord,env} | null   # 超支归因，独立于失败归因（「失败是 env、超支是 model」可表达）
-confidence ∈ [0,1]    # 判官置信度
+attribution = {
+  model_share, brief_share, coord_share, env_share: 0..1（四份额和为 1）,
+  overrun_attr: model | brief | coord | env | null,   # 超支归因，独立于失败责任向量
+  confidence: 0..1,
+  evidence: [event_id...],
+  why: 人读
+}
 ```
 
-**待定 `unknown`**（判不出）不是第五个落地类：L0/L1/L2 均证据不足时标 `class=null`（待定），**不进净指标、只进生指标**，宁可少学不可乱罚。
+- 纯 `model` 失败 → `(1,0,0,0)`；纯 `brief` → `(0,1,0,0)`；混合 → `model 0.3 + brief 0.7` = `(0.3,0.7,0,0)`。
+- `overrun_attr` 独立：失败责任向量 `(0,0,0,1)`（env）+ `overrun_attr=model` = 「失败是 env、超支是 model」。
+- **待定 `unknown`**（判不出）不是第五个落地类：四份额全 0 + `confidence=low` 标记待定，**不进净指标、只进生指标**，宁可少学不可乱罚。
 
-| 归因主类 | 入账 |
+| 份额 | 入账 |
 |---|---|
-| `model` 模型能力 | 能力账负样本 × share_model，记该 `(m,i,w)` |
-| `brief` 任务书缺陷 | 系统质量账，不罚工人模型 |
-| `coord` 协调失误 | 系统质量账，不罚工人模型 |
-| `env` 环境中断 | **整单不入能力账**（钱仍入现金账） |
-| 待定 `unknown` | 不进净指标，只进生指标 |
+| `model_share` | 能力账负样本 × 份额，记该 `(m,i,w)` |
+| `brief_share` / `coord_share` | 系统质量账，不罚工人模型 |
+| `env_share` | 整单不入能力账（钱仍入现金账） |
+| 待定 `unknown`（四份额全 0） | 不进净指标，只进生指标 |
 
 成功合并 → 能力账正样本，记给最终合并作者；中途接手且成果被保留者按贡献份额记正样本。
+
+**事件例（L0/L1/L2/attr.* 同一 schema）**：
+
+```
+# 例 1：换模型同时改任务书才通过（L0 规则 7）
+{ "type": "attr.rule", "model_share": 0.3, "brief_share": 0.7, "coord_share": 0, "env_share": 0,
+  "overrun_attr": null, "confidence": 0.9, "evidence": ["<handoff>", "<job.closed>"] }
+
+# 例 2：失败是环境中断、超支是模型空转（L1 判出）
+{ "type": "attr.llm", "model_share": 0, "brief_share": 0, "coord_share": 0, "env_share": 1,
+  "overrun_attr": "model", "confidence": 0.85, "evidence": ["<厂商状态页失败>", "<meter 异常>"] }
+```
 
 ### D.2 判官结构：L0 规则打底 → 换厂商单判官 → 定罪/低置信升级 → 人终裁
 
@@ -254,17 +301,17 @@ L3  人类终裁（两判官冲突 / 高利害 / 用户主动改判）
 4. 开单后短时间内人类大幅改需求（新增验收项 ≥3 或改 class）→ `brief`。
 5. 工人产出通过了任务卡验收清单、人类仍要求返工 → `brief`（验收没写全）；验收清单为空 → `brief`（任务书不合格，模型不被罚）。
 6. 换模型、未改任务书即一次通过 → 对源模型标 `model`（换人就好 = 能力/适配）。
-7. 换模型、同时改了任务书才通过 → 混合责任：`model` 记 `share_model=0.3`，`brief` 记剩余 0.7。
+7. 换模型、同时改了任务书才通过 → 混合责任向量 `(model 0.3, brief 0.7, coord 0, env 0)`。
 8. 超支且 cache 命中率异常低（低于该模型历史 p20）且是长上下文续作 → `coord`/`brief`，标低置信、留 L1。
 9. 其余返工或超支 → 待定 `unknown`（`confidence=low`），升级 L1。
 
 L0 输出必须引用它用过的事件 id，不允许写「感觉是模型不行」。
 
-**L1 单判官（换厂商）**：只对 L0 判不出的失败单出动。判官**必须是与工人不同厂商**的判断类模型（判官选型本身也走点将台，工种=判断）。**无跨厂商判官可用时不降级调用同厂商**，直接标待定 `unknown` 或升级人类终裁 L3。输入=冻结证据包（任务书终稿、L0 结论、事件时间线、验收清单 vs PR 变更摘要——脚本先 diff，不让 LLM 自己翻仓库）。输出=`class + share_model + overrun_attr + confidence + 引用证据 + 人读 why`。一次调用，禁止多模型投票。
+**L1 单判官（换厂商）**：只对 L0 判不出的失败单出动。判官**必须是与工人不同厂商**的判断类模型（判官选型本身也走点将台，工种=判断）。**无跨厂商判官可用时不降级调用同厂商**，直接标待定 `unknown` 或升级人类终裁 L3。输入=冻结证据包（任务书终稿、L0 结论、事件时间线、验收清单 vs PR 变更摘要——脚本先 diff，不让 LLM 自己翻仓库）。输出=`责任向量(model/brief/coord/env 四份额) + overrun_attr + confidence + 引用证据 + 人读 why`（L0/L1/L2/attr.* 用同一 schema）。一次调用，禁止多模型投票。
 
-**L2 第二判官（升级条件）**：以下任一触发——① L1 准备给 `model` 记负样本（定罪必须复核）；② `confidence < 0.8`（低置信）；③ 用户/协调者争议。第二判官换**另一家**厂商独立复核：一致则采纳，不一致升级人终裁。
+**L2 第二判官（升级条件）**：以下任一触发——① L1 的 `model_share > 0`（准备给模型记负样本，定罪必须复核）；② `confidence < 0.8`（低置信）；③ 用户/协调者争议。第二判官换**另一家**厂商独立复核：一致则采纳，不一致升级人终裁。
 
-**L3 人类终裁**：两判官冲突、金额超阈值且将记 `model` 负样本、同一模型 7 天内将吃第 2 个 `model` 失败（冷却将触发）、用户在 PR 里直接改判。人写 `attr.human`，最高优先级。
+**L3 人类终裁**：两判官冲突、金额超阈值且 `model_share>0`、同一模型 7 天内将吃第 2 个 `model_share>0` 失败（冷却将触发）、用户在 PR 里直接改判。人写 `attr.human`，最高优先级。
 
 ### D.3 判错怎么纠
 
@@ -313,9 +360,11 @@ L0 输出必须引用它用过的事件 id，不允许写「感觉是模型不�
 1. `orca worktree ps --json` 的 `agents[].state`（working/done/interrupted + lastAssistantMessage）——工人实时状态**真相源**；`waiting` 态即报警（有弹窗/等输入的官方信号），协调者第一动作是发一记回车放行或读屏辨弹窗。
 2. **整屏内容哈希三轮不变**判停摆（全屏 TUI 通吃；禁用 cursor 停滞作唯一信号——对 alt-screen 天然失效）。
 3. `exited` 且非完工态**独立报警**（与交卷/报错分开）。
-4. **错误指纹清单即时报警**（与「活动消失」分开）：`Error:` / `Retry failed` / `terminated` / `login rejected` / `stream disconnected` / `no serving account` / `Reconnecting.*5/5` 等，append 一行即生效。
+4. **错误指纹清单即时报警**（与「活动消失」分开）：`Error:` / `Retry failed` / `terminated` / `login rejected` / `stream disconnected` / `no serving account` / `Reconnecting.*5/5` / `Selected model is at capacity` / `try a different model` 等，append 一行即生效。
 
-**分诊三分支（写死）**：交卷 → 收卷；报错 → 原地续命一次（注入续命指令/输入框补回车）；指纹两连同 → 换人不救。对应 issue #442（看门狗：沉默被当「还在跑」）与 #443（教训落库机制：错误指纹进看门狗清单、静态判据进 dao-check、感知判断进常驻注入面）的拍板。
+**分诊三分支（写死）**：交卷 → 收卷；报错 → 原地续命一次（注入续命指令/输入框补回车）；**同一已知错误在原地续命一次后再次出现** → 换人不救。
+
+**两个阈值各管一件事，互不降格**：「整屏哈希三轮不变」只负责**无已知错误指纹的静默停摆**（全屏 TUI 干活时状态栏 token/费用/计时在变、哈希必变）；「指纹两连同换人」指**同一已知错误续命一次后再现**才换人——不是把三轮哈希降回两轮。对应 issue #442（看门狗：沉默被当「还在跑」）与 #443（教训落库机制：错误指纹进看门狗清单、静态判据进 dao-check、感知判断进常驻注入面）的拍板。
 
 ### E.5 唯一合法绕行口
 
@@ -331,10 +380,10 @@ L0 输出必须引用它用过的事件 id，不允许写「感觉是模型不�
 | 2 | 统一美元记账，订阅月费摊销折算 | F18/B.2 摊销公式；事件带 `usd_cash`/`usd_economic` 双记账 |
 | 3 | 硬禁令与预算不被数据侵蚀 | `policy/bans.yml` 仅用户可写，F1 门闩先于评分；成本只做 `λ_c≈0.15` 有界特征、永不做闸门（B.1/C.1） |
 | 4 | 试用期/新模型探索保底 | F8 缺口 + C.3 确定性配额强制覆盖，无饿死无死刑 |
-| 5 | 记录进 git、换机不丢、schema 可生长；三维 cell | A 一事件一文件；cell=(m,i,w)；事件类型闭集、加类型先改 schema、只加字段不改语义 |
+| 5 | 记录进 git、换机不丢、schema 可生长；三维 cell | A 一事件一文件；cell=(m,i,w)；事件闭集以 `schemas/events.schema.json` 为唯一权威、加类型先改它、只加字段不改语义 |
 | 6 | 版本升级旧账降格为先验 | F7 `w_version`：异版本只进 base_p 不进当前格，先验中心改 base_p、k0 不变 |
 | 7 | 结论门槛三分法 | D.1：成功合并→正样本；能力失败→负样本；环境中断→整单不入账 |
-| 8 | 归因决定入账（仅模型能力入能力账） | D.1 `share_model` 份额 + 三本账分离；超支 `overrun_attr` 独立归因 |
+| 8 | 归因决定入账（仅模型能力入能力账） | D.1 责任向量 `model_share` + 三本账分离；超支 `overrun_attr` 独立归因 |
 | 9 | 三选项、尝鲜不进偏好但结局入账 | C.4：`job.override`→P；`job.explore`→不进 P 但进 Q |
 | 10 | 机器数值/枚举与 why 分仓 | 算法只读数值/枚举；why 只进事件 `why` 字段与 PR 正文，算法永不读 |
 | 11 | 一事件一文件杜绝并发冲突、全序可重放 | A.2 三铁律 + 排序键 `(ts, machine, seq, event_id)` |
@@ -361,4 +410,4 @@ L0 输出必须引用它用过的事件 id，不允许写「感觉是模型不�
 
 全票一致、直接进稿的六条（issue #438）：事件溯源纯函数重算；硬禁令 = 门闩先于评分且仅用户可写；权重仅人改、LLM 只提议；归因分层（规则前置零成本 → 单判官换厂商 → 定罪/冲突才升级）；模型升级旧账降格为先验；机器数值与人话分仓。
 
-一处按 Grok 原卷补全（非改拍板）：归因主类仍是拍板四枚举，但恢复 Grok 原卷的 `share_model`（混合责任份额）、`overrun_attr`（超支独立归因）、`unknown`（待定不进净指标）三个责任分解字段——四枚举只说「责任主类」，不说「份额」与「失败/超支分离」，不补全会把混合责任硬掰成四选一、记错净账。
+一处按 Grok 原卷补全（非改拍板）：归因主类仍是拍板四枚举，但恢复 Grok 原卷的混合责任语义——以责任向量 `(model_share, brief_share, coord_share, env_share)` 无损入两本账、`overrun_attr`（超支独立归因）、`unknown`（待定不进净指标）——四枚举只说「责任主类」，不说「份额」与「失败/超支分离」，不补全会把混合责任硬掰成四选一、记错净账。
