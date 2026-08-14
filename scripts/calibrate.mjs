@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-// 模型校准 v1 口径：
+// 模型校准 v2 口径：
 //   1. 样本 = 同时带 model/* 与 type/* 标签的 PR；累计战绩只使用已合并 PR。
 //   2. 返工轮数 = PR 首次 ready 之后新增的 commit 数。若 PR 从未是 Draft，
 //      GitHub 没有 ready_for_review 事件，以 PR 创建时间作为首次 ready 时间。
-//   3. 审查红项数 = GitHub review comment thread 总数（近似，不判断是否已解决）。
+//   3. 审查红项数 = 从每条 review 正文提取「判定：红 N 项」或「红 N 项」的最大 N
+//      （issue #444：同账号不能 request-changes，审官以 COMMENT 提交、判定写正文首行，
+//      结构化线程数为 0，红项被计成 0）。跨 review 取最大值 ⇒ 复核绿不清零首审红项；
+//      结构化 request-changes 的线程数仍兼容，取两者最大值。
 //   4. 最近 3 单趋势按合并时间从旧到新显示“返工/红项”。
 //
 // 本脚本只读 GitHub 官方数据，只向 stdout/stderr 输出，不改文件、不发评论。
@@ -34,6 +37,24 @@ export function countReworkAfterReady(commits, readyAt) {
   if (!readyAt) return 0;
   const boundary = Date.parse(readyAt);
   return commits.filter(commit => Date.parse(commit.committedDate) > boundary).length;
+}
+
+// 红项口径 v2（issue #444）：从 review 正文判定行提取红项数。
+// 判定格式：审官以 COMMENT 提交 review，判定写正文首行，如「判定：红 N 项」
+// 「**判定：红 N 项**」「复核结论：绿，可合并」。跨全部 review 取最大 N ⇒
+// 复核绿（无红数）不清零首审红项。正则配真实语料回归：语料来自 gh api 拉取的
+// PR #446 / #440 真实 review body（tests/fixtures/reviews-446.json、
+// reviews-440.json），断言见 tests/calibrate.tests.js，禁止 mock 内生。
+const RED_FLAG_PATTERN = /红\s*(\d+)\s*项/g;
+
+export function redFlagsFromReviewBodies(bodies) {
+  let max = 0;
+  for (const body of bodies || []) {
+    for (const match of String(body || '').matchAll(RED_FLAG_PATTERN)) {
+      max = Math.max(max, Number(match[1]));
+    }
+  }
+  return max;
 }
 
 function average(values) {
@@ -153,6 +174,7 @@ function pullRequestDetails(repository, number) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $number) {
           reviewThreads(first: 1) { totalCount }
+          reviews(first: 100) { totalCount nodes { state body } }
           commits(first: 100) {
             totalCount
             nodes { commit { committedDate } }
@@ -172,8 +194,14 @@ function pullRequestDetails(repository, number) {
   if (details.commits.totalCount > details.commits.nodes.length) {
     throw new Error(`PR #${number} 有 ${details.commits.totalCount} 个 commit，超过 v1 单次读取上限 100，拒绝给出不完整成绩。`);
   }
+  if (details.reviews.totalCount > details.reviews.nodes.length) {
+    throw new Error(`PR #${number} 有 ${details.reviews.totalCount} 条 review，超过单次读取上限 100，拒绝给出不完整成绩。`);
+  }
   return {
-    redFlags: details.reviewThreads.totalCount,
+    redFlags: Math.max(
+      redFlagsFromReviewBodies((details.reviews?.nodes || []).map(node => node.body)),
+      details.reviewThreads.totalCount,
+    ),
     commits: details.commits.nodes.map(node => node.commit),
     readyAt: details.timelineItems.nodes
       .map(node => node.createdAt)
