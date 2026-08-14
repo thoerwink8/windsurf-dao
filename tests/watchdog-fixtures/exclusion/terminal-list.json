@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "result": {
+    "terminals": [
+      {
+        "handle": "term_master1",
+        "tabId": "d22bc9a4",
+        "leafId": "l1",
+        "incarnationId": "inc-m1",
+        "title": "master"
+      },
+      {
+        "handle": "term_self",
+        "tabId": "self-pane-0001",
+        "leafId": "leaf-0001",
+        "incarnationId": "inc-s1",
+        "title": "self"
+      },
+      {
+        "handle": "term_worker",
+        "tabId": "worker-pane-999",
+        "leafId": "leaf",
+        "incarnationId": "inc-w1",
+        "title": "worker"
+      }
+    ]
+  }
+}
