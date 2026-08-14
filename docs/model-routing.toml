@@ -1,0 +1,131 @@
+# ============================================================================
+# 模型路由真相源（唯一）
+#
+# 路由决策只存在这里，不在任何 prose 偏好段里——prose 只留指针。
+# 每条路由 / 禁令都必须带 why（理由）和 decided（拍板日期）：
+# 缺这两个字段，scripts/dao-check.mjs 直接报红，逼着留下拍板记录。
+# 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
+# ============================================================================
+
+updated = "2026-08-14"
+
+# ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
+
+[providers.deepseek]
+cli = "pi"
+launch_note = """
+DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
+峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
+"""
+
+[providers.grok]
+cli = "grok"
+launch_note = "装机与启动坑见 NEW-MACHINE.md「grok 怎么配」节（代理前缀、钉版本 1.0.1）——真相源只在那一处，别在此复制。"
+
+[providers.gpt]
+cli = "codex"
+default_model = "gpt-5.6-sol"
+launch_note = """
+默认模型 gpt-5.6-sol。token 消耗约 3 倍，比价按每件活总成本算，不按单价。
+"""
+
+[providers.claude]
+cli = "reclaude 链路"
+launch_note = """
+裸 claude 会 login rejected（凭据挂在 reclaude 链上）；启动有一段配置同步期，抢跑注入必被吞。
+"""
+
+[providers.minimax-h3]
+note = "AI 带货视频候选（远期），未接入，无路由。"
+
+# ── 模型条目 ─────────────────────────────────────────────────────────────
+
+[[models]]
+id = "deepseek-v4-flash"
+provider = "deepseek"
+roles = ["写码"]
+status = "正式"
+why = "写码类谷时主选：快且便宜；峰时转 grok 做分时套利（见 routes）"
+decided = "2026-08-14"
+
+[[models]]
+id = "deepseek-v4-pro"
+provider = "deepseek"
+roles = ["判断"]
+status = "正式"
+why = "判断类任务主选"
+decided = "2026-08-14"
+
+[[models]]
+id = "grok-4.6"
+provider = "grok"
+roles = ["写码", "查证"]
+status = "试用"
+trial_since = "2026-08-14"
+why = "写码类峰时主选（会员套餐边际成本≈0，与 ds 峰谷价形成分时套利）；查证/外网信息类可连 X 实时信息"
+decided = "2026-08-14"
+
+[[models]]
+id = "gpt-5.6-sol"
+provider = "gpt"
+roles = ["写码", "判断", "查证", "审查"]
+status = "正式"
+why = "codex 默认通用模型；token 消耗约 3 倍，比价按每件活总成本；UI 类（含复审）被 ban，见 bans"
+decided = "2026-08-12"
+
+# ── 时间窗路由：同一任务类分时段路由到不同模型 ───────────────────────────
+# 时间窗一律北京时间，附 fallback（首选模型不可用时退回哪个）。
+# 时段抄自文件末尾「价目注记」——DeepSeek 改时段时，这里和价目注记两处一起改。
+
+[[routes]]
+role = "写码"
+beijing = "09:00-12:00,14:00-18:00"   # 峰时
+model = "grok-4.6"
+fallback = "deepseek-v4-flash"
+why = "峰时 ds 涨价，grok 会员边际成本≈0，分时套利"
+decided = "2026-08-14"
+
+[[routes]]
+role = "写码"
+beijing = "00:00-09:00,12:00-14:00,18:00-24:00"   # 谷时（峰时以外时段）
+model = "deepseek-v4-flash"
+fallback = "grok-4.6"
+why = "谷时 ds 半价，写码用 flash 省钱"
+decided = "2026-08-14"
+
+# ── 禁令 ─────────────────────────────────────────────────────────────────
+
+[[bans]]
+scope = "deepseek 查证类"
+why = "事实召回差（2026-08 实测），查证/调研不派它"
+decided = "2026-08-14"
+
+[[bans]]
+scope = "gpt UI 类（含复审）"
+why = "用户 2026-08-12 体感裁定"
+decided = "2026-08-12"
+precedence = "高于「审查默认换厂商」"
+
+# ── 通用规则 ─────────────────────────────────────────────────────────────
+
+[[rules]]
+rule = "审查默认换厂商"
+why = "审查与写码同一模型容易放水；哪个配对出错最少按返工率实测校准，不当公理"
+decided = "2026-08-12"
+constraint = "受 gpt 的 UI ban 优先级约束"
+
+# ============================================================================
+# DeepSeek 价目注记（事实快照，非决策）
+# 誊抄自 https://api-docs.deepseek.com/quick_start/pricing 中文页，核对时间 2026-08-14。
+# 高峰时段 = 北京时间 9:00–12:00、14:00–18:00；其余为空闲（谷）时段，空闲价 = 高峰价的一半。
+# 新价自北京时间 2026-08-17 00:00 生效，单位：元 / 百万 tokens。
+#
+#   模型                时段            输入·缓存命中   输入·缓存未命中   输出
+#   deepseek-v4-flash   空闲（谷）      0.05           1.5             4.5
+#   deepseek-v4-flash   高峰（峰）      0.10           3.0             9.0
+#   deepseek-v4-pro     空闲（谷）      0.15           4.5             13.5
+#   deepseek-v4-pro     高峰（峰）      0.30           9.0             27.0
+#
+# 生效前现价：flash 0.02 / 1 / 2；pro 0.025 / 3 / 6（同为 元/百万 tokens）。
+# 模型版本：DeepSeek-V4-Flash-0731、DeepSeek-V4-Pro-0813；上下文 1M，输出最大 384K。
+# ============================================================================

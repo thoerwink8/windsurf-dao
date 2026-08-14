@@ -51,7 +51,15 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
   - `pi --list-models`：预期列出模型表。
   - `pi --no-tools --no-session -p "只回复：OK"`：预期回 OK；失败先查 `~/.pi/agent/models.json` 里的网关地址与 key。一次性连通性测试用 `--no-tools` 无妨，日常跑活别裁工具。
 
-## 7. 本机工具坑
+## 7. grok 怎么配
+
+grok（Grok Build，X 系的 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。装机三条：
+
+- npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
+- 启动命令必须带代理前缀：`HTTPS_PROXY=http://127.0.0.1:7890 grok ...`——grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上。PowerShell 写法：`$env:HTTPS_PROXY = 'http://127.0.0.1:7890'; grok ...`。
+- 模型目录见凭据才显形：pi 的模型表在拿到对应 API key 后才会列出 grok 条目；pi + grok 需另开 `XAI_API_KEY`（按 token 计费），与 grok 会员套餐是两个钱包——这条只是备用通道，日常优先走会员套餐（边际成本≈0）。
+
+## 8. 本机工具坑
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。
 - 不可逆红线：覆写正在使用的 `~/.claude/settings.json` 可能触发 401 强制登出，把文件改回去也恢复不了——改它前先备份，AI 不得整文件覆写。
