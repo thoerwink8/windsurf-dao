@@ -9,7 +9,7 @@
 - 改完运行 `node scripts/dao-check.mjs`。检查通过并完成自查后，用 `gh pr ready` 表示可以评审。
 - 出问题优先 revert 到可用状态，再另开改动处理——回退对象是最近一个能用的提交，先回到能跑的状态，再慢慢补。
 - issue、PR、文档和注释都说人话：先讲发生了什么，再讲必要细节。
-- commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 工人用 `[pi]`，Codex 工人用 `[codex]`。
+- commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 工人用 `[pi]`，Codex 工人用 `[codex]`，Grok Build 工人用 `[grok]`。
 - 改动影响新机安装（前置依赖、部署命令、要手动带的本机资产）时，同一次提交里更新 NEW-MACHINE.md；拿不准就更新——漏更比多更代价大。
 
 ## 体系类改动

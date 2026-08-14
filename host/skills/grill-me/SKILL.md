@@ -4,6 +4,12 @@ description: Grill the user relentlessly about a plan, decision, or idea. Use wh
 ---
 > 来源：设计树那一半是 Matt Pocock 原版（MIT），上游同步义务只覆盖那一半；五步法骨架为本仓扩展。2026-08-11 用户拍板收进本仓（host/），随 dao 部署、换机自带；上游有更新时人工同步（仅设计树节）。
 
+## 出手前对账
+
+每个推荐（➡️ 行）出手前，必须先对账已有拍板记录：搜 `docs/decisions/` 与 GitHub issues。与旧拍板冲突的推荐不得直接给出，须先摆出冲突。
+
+判例：2026-08-14「每任务开 issue」推荐与 #425 冲突，当时未被自查发现。
+
 ## 先判对象，再选拷问法
 
 开拷之前先问一句：被拷问的对象是哪一类？
