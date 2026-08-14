@@ -14,7 +14,9 @@
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `templates/` | 新项目起点：`base/` 公共底座 + `node-app/` / `expo-mobile/` / `docs-vault/` 三份薄层。用法：把 `base/` 全部拷进新仓库根目录，再按项目类型拷一份薄层，按文件头部说明填空改名；详细说明见 `templates/README.md` |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
+| `scripts/watchdog.mjs` | 事故路径停摆看门狗（issue #442）：轮询 `orca worktree ps` 自动枚举 working/waiting 工位，检测终端 exited / ps waiting / 屏面错误指纹 / 整屏哈希三轮不变。协调者用 Monitor 挂载：`node scripts/watchdog.mjs`（默认每 30s 一轮，一行一事件）；`--once` 跑单轮；`--snapshot-dir` 用快照复现/测试 |
 | `tests/redact.tests.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
+| `tests/watchdog.tests.js` | 看门狗回归网：真实语料负向对照 + 五种违规样本逐一被拦（语料在 `tests/watchdog-fixtures/`），dao-check 每次都会跑它 |
 | `docs/classics/` | 三部经文原文，精神源头 |
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/research/` | 旧体系时期的调研报告存档（规则架构调研等），只读 |
