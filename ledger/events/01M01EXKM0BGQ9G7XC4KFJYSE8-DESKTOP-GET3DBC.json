@@ -1,0 +1,15 @@
+{
+  "type": "policy.patch",
+  "schema_version": 1,
+  "ts": "2026-08-15T09:00:00+08:00",
+  "machine": "DESKTOP-GET3DBC",
+  "seq": 0,
+  "summary": "点将台账本骨架落地（PR #456）：初始 policy/models.yml + bans.yml + weights.yml 落盘，schemas/events.schema.json 建立",
+  "changed_files": [
+    "policy/models.yml",
+    "policy/bans.yml",
+    "policy/weights.yml",
+    "schemas/events.schema.json"
+  ],
+  "event_id": "aa01e287883726835b32dbef2b20fa46e100fc8fe8195cb0c989c4f542d168f4"
+}
