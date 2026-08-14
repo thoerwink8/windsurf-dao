@@ -2,7 +2,7 @@
 name: grill-me
 description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
 ---
-> 来源：设计树那一半是 Matt Pocock 原版（MIT），上游同步义务只覆盖那一半；五步法骨架为本仓扩展。2026-08-11 用户拍板收进 ccswitch，随 dao 部署、换机自带；上游有更新时人工同步（仅设计树节）。
+> 来源：设计树那一半是 Matt Pocock 原版（MIT），上游同步义务只覆盖那一半；五步法骨架为本仓扩展。2026-08-11 用户拍板收进本仓（host/），随 dao 部署、换机自带；上游有更新时人工同步（仅设计树节）。
 
 ## 先判对象，再选拷问法
 
