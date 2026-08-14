@@ -38,6 +38,8 @@ launch_note = """
 cli = "reclaude 链路"
 launch_note = """
 裸 claude 会 login rejected（凭据挂在 reclaude 链上）；启动有一段配置同步期，抢跑注入必被吞。
+派工一律 `reclaude --model opus`（Fable 只留帅位，派工须用户点名；拍板 2026-08-14，issue #443）。
+`--agent` 起不了 reclaude 链（已知 agent 枚举以 `orca worktree create --help` 为准，会漂）——Claude 族终端必须 `orca terminal create --command "reclaude --model opus"` 起（实测 2026-08-14）。
 """
 
 [providers.minimax-h3]
@@ -68,6 +70,14 @@ roles = ["写码", "查证"]
 status = "试用"
 trial_since = "2026-08-14"
 why = "写码类峰时主选（会员套餐边际成本≈0，与 ds 峰谷价形成分时套利）；查证/外网信息类可连 X 实时信息"
+decided = "2026-08-14"
+
+[[models]]
+id = "claude-opus"
+provider = "claude"
+roles = ["审查", "写码", "判断"]
+status = "正式"
+why = "审官次选：GPT 优先、Claude(Opus) 次之；UI 类活 GPT 禁入时顶位。启动命令见 [providers.claude]"
 decided = "2026-08-14"
 
 [[models]]
@@ -118,6 +128,12 @@ rule = "审查默认换厂商"
 why = "审查与写码同一模型容易放水；哪个配对出错最少按返工率实测校准，不当公理"
 decided = "2026-08-12"
 constraint = "受 gpt 的 UI ban 优先级约束"
+
+[[rules]]
+rule = "审官选型序"
+why = "帅位注意力最稀缺，审官优先用异厂商的 GPT（写码同模型易放水）；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
+decided = "2026-08-14"
+constraint = "受 bans[gpt UI 类].precedence 约束"
 
 # ============================================================================
 # DeepSeek 价目注记（事实快照，非决策）
