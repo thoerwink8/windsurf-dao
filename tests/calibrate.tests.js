@@ -14,7 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { redFlagsFromReviewBodies } = require("../scripts/calibrate.mjs");
+const { redFlagsFromReviewBodies, buildRows, renderRow } = require("../scripts/calibrate.mjs");
 
 const REPO = path.resolve(__dirname, "..");
 const fixture = name => JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", name), "utf8"));
@@ -56,6 +56,29 @@ check("跨条取最大 N（2 与 5 并存取 5）", redFlagsFromReviewBodies(["*
 // 这里直接验证纯函数与线程数取最大的语义由调用方 Math.max 承担，单测覆盖纯函数。
 check("真实语料 446 战况 = 红 3 项", redFlagsFromReviewBodies(bodies446) === 3);
 check("真实语料 440 战况 = 红 4 项", redFlagsFromReviewBodies(bodies440) === 4);
+
+// ── 红 1 收窄到判定行（对抗审 #449）：正文叙述里引用他单红数不计入 ──
+// 审语讨论口径时天然含「红 N 项」字样（本例审官通篇避免写 N≥3 裸串即是活证据）；
+// 只认行首为「判定」「复核结论」（允许 >、** 前缀）的行，其余行一律不算。
+check("正文叙述引用他单「红 4 项」不计入", redFlagsFromReviewBodies(["比 #440 的红 4 项（N=4）干净多了"]) === 0);
+check("正文讨论语料「红 5 项」不计入", redFlagsFromReviewBodies(["语料样本判定：红 5 项——这条是讨论不是判定"]) === 0);
+check("判定行在首行可识别", redFlagsFromReviewBodies(["**判定：红 3 项**（对抗审）\n比 #440 的红 4 项干净多了"]) === 3);
+check("判定行在次行（> 前缀）可识别", redFlagsFromReviewBodies(["# 对抗审 PR #1\n> **判定：request-changes（红 4 项 + 推测 1 项）**。\n正文里红 6 项不计数"]) === 4);
+check("复核结论行（绿）判 0", redFlagsFromReviewBodies(["**复核结论：绿，可合并**（复核）\n红 3 项逐条验证（叙述不计）"]) === 0);
+
+// ── 红 2 无审读与 0 红可区分（对抗审 #449，仓规硬条款） ───────────────
+// 没人审过（0 条 review）记 redFlags=null，报告呈现「无审读」；审过但 0 红记 0。
+const unreviewed = buildRows([{ model: "m", taskType: "写码", rework: 1, redFlags: null, number: 1, mergedAt: "2026-01-01T00:00:00Z" }], [], ["写码"]);
+check("全组无审读 ⇒ 平均红项=null", unreviewed[0].averageRedFlags === null);
+check("无审读渲染为「无审读」非 0.0", renderRow(unreviewed[0]).includes("无审读"));
+check("无审读趋势记「无审」非 0", renderRow(unreviewed[0]).includes("1/无审"));
+const reviewedZero = buildRows([{ model: "m", taskType: "写码", rework: 0, redFlags: 0, number: 2, mergedAt: "2026-01-02T00:00:00Z" }], [], ["写码"]);
+check("审过 0 红 ⇒ 平均红项=0.0（与无审读区分）", reviewedZero[0].averageRedFlags === 0 && renderRow(reviewedZero[0]).includes("0.0"));
+const mixed = buildRows([
+  { model: "m", taskType: "写码", rework: 1, redFlags: null, number: 1, mergedAt: "2026-01-01T00:00:00Z" },
+  { model: "m", taskType: "写码", rework: 2, redFlags: 4, number: 2, mergedAt: "2026-01-02T00:00:00Z" },
+], [], ["写码"]);
+check("混审：无审读不进平均，平均=4.0", mixed[0].averageRedFlags === 4);
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);
