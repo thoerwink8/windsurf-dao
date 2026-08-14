@@ -167,7 +167,9 @@ function checkResidentBudget() {
 
 // ── ⑤ 模型路由表 ───────────────────────────────────────────────────────
 // 路由真相源是静默失效型部件：字段缺失没人报错，只会让下游按空气路由。
-// 所以必填字段（why/decided/status/roles）缺失即红。
+// 两道校验：①必填字段（why/decided/status/roles）缺失即红；②值校验——路由的
+// model/fallback 必须指向 models[].id（防幽灵引用），beijing 必须是
+// HH:MM-HH:MM 逗号列表（防填错的时段静默不匹配）。
 // 自发现：文件在不在、条目数是不是 0，都单独报红——不把「没扫到」当「扫完 0 违规」。
 
 const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
@@ -176,6 +178,23 @@ function missingKeys(entry, keys) {
   return keys.filter(k => {
     const v = entry[k];
     return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+  });
+}
+
+// beijing 时间窗格式：HH:MM-HH:MM 的逗号列表，小时 00-23、结束允许 24:00、分钟 00-59，
+// 且结束必须晚于开始。
+const BEIJING_WINDOW_RE = /^\d{2}:\d{2}-\d{2}:\d{2}(?:,\s*\d{2}:\d{2}-\d{2}:\d{2})*$/;
+
+function validBeijingWindows(s) {
+  if (typeof s !== 'string' || !BEIJING_WINDOW_RE.test(s.trim())) return false;
+  return s.split(',').every(w => {
+    const [a, b] = w.trim().split('-');
+    const [ah, am] = a.split(':').map(Number);
+    const [bh, bm] = b.split(':').map(Number);
+    const hh = h => h >= 0 && h <= 23;
+    if (!hh(ah) || am < 0 || am > 59) return false;
+    if (!((bh === 24 && bm === 0) || hh(bh)) || bm < 0 || bm > 59) return false;
+    return bh * 60 + bm > ah * 60 + am;
   });
 }
 
@@ -203,6 +222,7 @@ function checkModelRouting() {
   }
 
   const problems = [];
+  const modelIds = new Set(models.map(m => m.id).filter(Boolean));
   if (!doc.updated) problems.push('顶层缺 updated');
   models.forEach((m, i) => {
     const miss = missingKeys(m, ['id', 'provider', 'roles', 'status', 'why', 'decided']);
@@ -211,6 +231,9 @@ function checkModelRouting() {
   routes.forEach((r, i) => {
     const miss = missingKeys(r, ['role', 'beijing', 'model', 'fallback', 'why', 'decided']);
     if (miss.length) problems.push(`routes[${i}]缺${miss.join('/')}`);
+    if (r.model && !modelIds.has(r.model)) problems.push(`routes[${i}].model 幽灵引用 ${JSON.stringify(r.model)}`);
+    if (r.fallback && !modelIds.has(r.fallback)) problems.push(`routes[${i}].fallback 幽灵引用 ${JSON.stringify(r.fallback)}`);
+    if (r.beijing && !validBeijingWindows(r.beijing)) problems.push(`routes[${i}].beijing 格式不对 ${JSON.stringify(r.beijing)}`);
   });
   bans.forEach((b, i) => {
     const miss = missingKeys(b, ['scope', 'why', 'decided']);
@@ -222,9 +245,9 @@ function checkModelRouting() {
   });
 
   if (problems.length === 0) {
-    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，必填字段齐`);
+    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐`);
   } else {
-    fail(`模型路由表必填字段缺失 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided；禁令要 scope/why/decided；规则要 rule/why/decided', problems.slice(0, 6).join(' '));
+    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided', problems.slice(0, 10).join(' '));
   }
 }
 

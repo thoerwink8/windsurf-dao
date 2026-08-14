@@ -20,11 +20,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
-launch_note = """
-两条启动坑（务必照做）：
-1. 启动命令必须带 HTTPS_PROXY=http://127.0.0.1:7890 前缀——grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染。
-2. npm 安装必须钉版本 @xai-official/grok@1.0.1——latest 标签停在仅 macOS 的 0.1.4。
-"""
+launch_note = "装机与启动坑见 NEW-MACHINE.md §7（代理前缀、钉版本 1.0.1）——真相源只在那一处，别在此复制。"
 
 [providers.gpt]
 cli = "codex"
@@ -79,6 +75,7 @@ decided = "2026-08-12"
 
 # ── 时间窗路由：同一任务类分时段路由到不同模型 ───────────────────────────
 # 时间窗一律北京时间，附 fallback（首选模型不可用时退回哪个）。
+# 时段抄自文件末尾「价目注记」——DeepSeek 改时段时，这里和价目注记两处一起改。
 
 [[routes]]
 role = "写码"
