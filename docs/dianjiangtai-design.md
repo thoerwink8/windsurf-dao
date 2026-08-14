@@ -152,13 +152,22 @@ w_sample = w_version · w_time · w_conf
 n_eff = α_eff + β_eff − (α0 + β0)                                    (F3)
 ```
 
-**父级聚合（收缩锚点）**——一律**排除当前格 (m,i,w)**，避免当前格样本在 μ_raw 与父级重复计权；每条样本只属一个格、不重复计数：
+**父级聚合（收缩锚点）**——一律**排除当前格 (m,i,w)**，避免当前格样本在 μ_raw 与父级重复计权；每条样本只属一个格、不重复计数；父级样本权同用完整 `w_sample`（= w_version·w_time·w_conf，见上）：
 
 ```
-μ_model(m) = 该模型当前版本、除当前格外所有格的衰减加权成功率
+μ_model(m) = Σ_{样本∈该模型当前版本, 除当前格} w_sample·y / Σ w_sample
 n_model(m) = 该模型当前版本、除当前格外所有格的有效样本量之和 Σ n_eff
-μ_global   = 全部模型全部格、除当前格外所有样本的衰减加权成功率
+μ_global   = Σ_{全部样本, 除当前格} w_sample·y / Σ w_sample
 σ_parent   = 该模型当前版本、除当前格外各格 σ_raw 按 n_eff 加权平均
+```
+
+**空父级退化规则（冷启动必须写死，否则新模型/新工种第一单出 NaN）**：
+
+```
+μ_global 样本集合为空 → 取 0.5
+n_model = 0 → Q_parent = μ_global（公式 (0·μ_model+k·μ_global)/(0+k) 自然给出）
+σ_parent 加权集合为空 → 取当前格先验 σ = √(α0·β0/((α0+β0)²·(α0+β0+1)))
+                        （α0=β0=k0/2=1 时 = √(1/12) ≈ 0.289）
 ```
 
 **层级收缩（Claude 臂形态，k=4）**：
@@ -251,7 +260,8 @@ min_log = min(log1p(c))，max_log = max(log1p(c))；max_log == min_log 时 cost_
 
 ```
 attribution = {
-  model_share, brief_share, coord_share, env_share: 0..1（四份额和为 1）,
+  model_share, brief_share, coord_share, env_share: 0..1,
+      不变量：四份额和为 1；四份额全 0 是唯一合法例外（= 待定 unknown，须 confidence=low）,
   overrun_attr: model | brief | coord | env | null,   # 超支归因，独立于失败责任向量
   confidence: 0..1,
   evidence: [event_id...],
