@@ -1,0 +1,12 @@
+{
+  "result": {
+    "terminal": {
+      "handle": "term_b45caad6-5a57-44be-aefe-ce54244525e3",
+      "status": "exited",
+      "tail": [
+        "$ node scripts/dao-check.mjs",
+        "dao check: 好的（6 项，0.5s）"
+      ]
+    }
+  }
+}
