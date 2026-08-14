@@ -45,7 +45,7 @@ master 卡只住主会话，永远零工人。每个任务用 `orca worktree cre
 
 ## 选型
 
-派工前读 `docs/model-routing.toml`。例行选型不问用户。选型上面板可见：终端名带角色·模型。用户可随时改派。全新任务类型或高危选型走「重大决策一事一问」。
+派工前读 `docs/model-routing.toml`。新工位派单前出三选项问用户（AskUserQuestion：推荐+备选，含工人数/做法/模型）；已批闭环内的返工/复核流转不重复问。选型上面板可见：终端名带角色·模型。用户可随时改派。全新任务类型或高危选型走「重大决策一事一问」。
 
 审官选型序与 Claude 族启动命令见 `docs/model-routing.toml`（[[rules]] 审官选型序 / [providers.claude]）——路由决策只存在那里，本页只留指针。
 
@@ -53,7 +53,7 @@ grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #44
 
 用户拍板换工具/通道/模型后立即对在途活生效（正在跑的当场切），协调者不得自行解释为「下一单起」；仅用户明说「跑完这单再切」才保留在途（拍板 2026-08-14，issue #443）。
 
-新工位派单前出三选项问用户（AskUserQuestion：推荐+备选，含工人数/做法/模型）；已批闭环内的返工/复核流转不重复问。点将台上线后由选型算法出三选项接替人肉版（拍板 2026-08-15，issue #455）。
+点将台上线后由选型算法出三选项接替人肉版（拍板 2026-08-15，issue #455）。
 
 ## 小活打包
 
@@ -108,8 +108,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 注入四步：
 
 1. 注入前先证终端就绪：终端活着、能收输入。Claude 族还要等 reclaude 配置同步完。
-2. 注入任务书。
-3. 注入后回读，确认任务书完整显示在屏上，不是被吞。
+2. `orca terminal send --terminal <handle> --text "<长提示词>" --enter --json` 直写 TUI，不经 shell；普通长提示词不落文件。仅含逐字 payload 的单才把定案文本放到短路径，提示词里指过去。
+3. 注入后回读，确认长提示词完整显示在屏上，不是被吞。
 4. 补一记回车（manual 态先切 auto 再回车）。
 
 ## 开工判据
@@ -129,19 +129,23 @@ token 计数在增长才算开工——启动返回成功不等于已开工。�
 
 ## 一条完整命令链
 
-任务指令 terminal send 直写 TUI；仅逐字 payload 才落短路径文件。逐条跑时 PowerShell 下读文件用 `Get-Content -Raw` 而不是 `cat`：
+任务指令 `terminal send` 直写 TUI；仅逐字 payload 才落短路径文件。`task-create --spec` 只用短编排摘要，不是任务指令载体。若须读短路径文件，PowerShell 用 `Get-Content -Raw` 而不是 `cat`：
 
 ```bash
 # 0) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
 #    agent 句柄：从返回 JSON 的 result.agentTerminalHandle 取（旧运行时回退 result.startupTerminal.handle）
 orca worktree create --no-parent --name "<临时名>" --agent <agent> --json
 
-# 1) 建编排任务：spec 从文件读，避免 shell 改写文本
-orca orchestration task-create --spec "$(cat 任务书.md)" --json
+# 1) 建编排任务：--spec 只用短摘要（一句话目标，不是任务指令，不落任务书文件）
+orca orchestration task-create --spec "短摘要：<一句话目标>" --json
 
 # 2) 起工人：task 用上一步 JSON 里的 id；worktree 用第 0 步 JSON 的完整 id（repo-id::path，与 id:<repo-id>::<path> 等价；勿加 worktree: 前缀——实测 selector_not_found）
 #    --agent 已在第 0 步起过，这里用 --terminal 复用那个终端，勿再 --agent 起第二个
 orca orchestration worker-start --task <task_id> --worktree <repo-id::path> --terminal <agentTerminalHandle> --json
+
+# 2b) 注入任务指令：terminal send 直写 TUI，不经 shell。普通长提示词不落文件。
+orca terminal send --terminal <agentTerminalHandle> --text "<长提示词>" --enter --json
+#    仅当本单含逐字 payload（必须一字不差落盘的定案文本）时，才把 payload 放到短路径文件，提示词里指过去；任务指令本身仍走 terminal send
 
 # 须指定模型时（如写码谷时 deepseek-v4-flash、审官 opus、Claude 族一律）：不走第 0 步 --agent，改两条——
 #   裸建卡（--setup skip 免 Setup 页签）→ terminal create --command 起带模型终端（实测生效；worker-start 的 --model 不支持 pi，Claude 族 --agent 起不了 reclaude 链）
@@ -166,8 +170,9 @@ orca orchestration worker-read --dispatch <dispatch_id> --json
 # 5) 挂监视（机械步骤，派完必做）：Monitor 挂监视为主 + 20–30 分钟心跳扫兜底（三分诊与看门狗见「非阻塞」节）
 ```
 
-## 三条命令级铁律
+## 命令级铁律
 
-- 多行或含反引号文本先落文件，再 `--spec "$(cat 文件)"`——禁双引号裸拼（反引号裸拼吞字符 2 例）。
+- 任务指令走 `terminal send` 直写 TUI，不经 shell、不落文件；仅含逐字 payload 的单才把定案文本落到短路径文件。
+- 编排 `task-create --spec` 只用短摘要（不是任务指令载体）；禁把任务书当 spec、禁把普通长提示词落文件再 cat 进 `--spec`。含反引号的长文不塞进 `--spec`——走 terminal send。禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
 - 路径从 PR 反查，禁手抄：例：`gh pr view <PR号> --json headRefName -q .headRefName`——分支名从 PR 的 JSON 取，不手抄。
