@@ -32,7 +32,7 @@ node scripts/calibrate.mjs
 
 - **样本**：同时带 `model/*` 和 `type/*` 标签的 PR。全量累计只使用已合并 PR；单单模式会把指定 PR 作为本单展示，并在标签完整时临时纳入该组合的累计战绩。
 - **返工轮数**：PR 首次 ready 之后新增的 commit 数。若 PR 从未是 Draft，GitHub 不会产生 `ready_for_review` 事件，脚本以 PR 创建时间作为首次 ready 时间。
-- **审查红项数**：GitHub review comment thread 总数。v1 不判断线程是否已解决，也不把普通 issue 评论计入红项。
+- **审查红项数**：从每条 review 正文提取「判定：红 N 项」或「红 N 项」的最大 N，跨 review 取最大值（v2，issue #444）。GitHub 不许同账号对自己 PR 打 request-changes，审官以 COMMENT 提交、判定写正文首行，结构化线程数为 0——只数线程会把红项永远计成 0，已两次污染成绩单。跨 review 取最大 ⇒ 复核绿不清零首审红项；结构化 request-changes 的线程数仍兼容，取两者最大值。正则配真实语料回归（tests/calibrate.tests.js，语料为 gh api 拉取的 #446/#440 review body）。
 - **平均值**：对应组合全部样本的算术平均值，保留一位小数。
 - **最近 3 单趋势**：对应组合最近合并的最多 3 个样本，按时间从旧到新展示每单的“返工/红项”。
 - **未标注**：已合并 PR 缺少 `model/*` 或 `type/*` 任一标签。它们只计入“未标注”提示，不混入战绩。
@@ -57,7 +57,7 @@ node scripts/calibrate.mjs
 ## 已知局限
 
 - commit 数只是返工轮数的近似。同一轮返工拆成多个 commit 会被多计，多个修改压成一个 commit 会被少计。
-- review thread 数只是审查红项的近似。同一问题拆成多条线程会被多计；普通 PR 评论、口头反馈和外部审查不会被计入。
+- review 正文红项数只是审查红项的近似。判定行格式约定「判定：红 N 项」（或加粗变体）之外的写法识别不到；同一问题拆成多条线程会被多计（结构化线程数兼容仍计入）；普通 PR 评论、口头反馈和外部审查不会被计入。
 - GitHub 只保留当前标签状态。PR 合并后补标签或改标签，会改变下一次全量报告的归类。
 - 从未是 Draft 的 PR 没有 ready 事件，只能用创建时间近似首次 ready。
 - v1 单个 PR 最多读取 100 个 commit。超过上限时脚本会明确失败，不输出不完整成绩。
