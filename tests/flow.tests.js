@@ -43,17 +43,17 @@ function runFlow(dir, extraArgs = []) {
 console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 假判定行 review → 自动注入下一环且帅零介入）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
-  check("退出码 1（有动作输出）", r.status === 1, `status=${r.status}`);
-  check("存量 完工+红判定 → 启动即识别（dry-run 无 orca 数据 → 预览-阻塞而非吞掉）", /预览-阻塞：#999（返工注入——注入目标解析失败/.test(r.out), r.out.trim());
+  check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
+  check("自动注入发生：返工注入 + 注入目标已解析（真通，非预览-阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), r.out.trim());
   check("返工指令文本含 review 链接", /pull\/999#pullrequestreview-910001/.test(r.out), "review 链接没进指令");
-  check("帅零介入：无任何 报帅 行", !/报帅/.test(r.out), r.out.split("\n").filter(l => /报帅/.test(l)).join(" | "));
+  check("帅零介入：无任何 报帅 行（真注入路径下成立，名副其实）", !/报帅/.test(r.out), r.out.split("\n").filter(l => /报帅/.test(l)).join(" | "));
   check("不重复起审官（红判定已存在 → 不新建审官）", !/起审官/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ② prime 吞存量负控：存量已有完工+红判定，启动即动作（不吞存量）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
-  check("存量信号被识别并进入返工注入（吞存量 = 本轮无任何输出）", /预览-阻塞：#999（返工注入/.test(r.out), r.out.trim());
+  check("存量信号被识别并自动注入返工（吞存量 = 本轮无动作）", /动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), r.out.trim());
   check("打出存量清点标记（先清点再增量）", /存量清点/.test(r.out), "存量清点标记缺失");
 }
 
@@ -132,13 +132,13 @@ console.log("\n=== ⑦b 没查成负控：数据源不可用（缺 prs.json）�
   check("不打出 OK 扫完（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审 ===");
+console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审（全部真通）===");
 {
   const r = runFlow(path.join(FIXTURES, "recheck-green"));
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
-  check("round-1 起审官", /round-1[\s\S]*起审官 #1005/.test(r.out), r.out.trim());
-  check("round-2 返工注入（第 1 轮，红 2 项）", /round-2[\s\S]*返工注入 #1005（第 1 轮，红 2 项）/.test(r.out), r.out.trim());
-  check("round-3 复核注入（第 1 轮返工后）", /round-3[\s\S]*预览-阻塞：#1005（复核注入/.test(r.out), r.out.trim());
+  check("round-1 起审官", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
+  check("round-2 返工注入真通（注入目标已解析）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）（注入目标：工人终端 term_worker_1005）/.test(r.out), r.out.trim());
+  check("round-3 复核注入真通（存量反查找到审官终端）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（审官· 子卡））/.test(r.out), r.out.trim());
   check("round-4 报帅终审", /round-4[\s\S]*报帅：终审 #1005/.test(r.out), r.out.trim());
   check("复核绿后不再注入任何动作", !/round-4[\s\S]*动作：/.test(r.out), r.out.trim());
 }
@@ -251,6 +251,21 @@ console.log("\n=== ⑰ 红 4：同一 worktree 多终端选不出唯一 → 报�
   check("明确「选不出唯一注入目标——请帅指定，不挑第一个」", /选不出唯一注入目标——请帅指定，不挑第一个/.test(r.out), r.out.trim());
   check("没有注入到任一终端（不挑第一个）", !/注入目标：工人终端 term_a_2002/.test(r.out) && !/注入目标：工人终端 term_b_2002/.test(r.out), r.out.trim());
   check("解析失败用「预览-阻塞：」前缀而非「动作：」（观察 1）", !/动作：/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑰b 观察 2：dry-run 的解析失败也进 blocked——同状态文件连跑两轮不转绿 ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-dryblock-"));
+  const stateFile = path.join(tmp, "state.json");
+  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "multi-terminal"), "--state-file", stateFile, "--dry-run"];
+  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("首跑 exit 1", r1.status === 1, `status=${r1.status}`);
+  check("重跑仍 exit 1（阻塞项不转绿）", r2.status === 1, `status=${r2.status}`);
+  check("重跑打出待帅处置常驻行", /待帅处置：#2002（注入\/目标解析失败待帅接手）/.test(out2), out2.trim());
+  check("重跑不打「0 需流转」", !/OK 扫完 1 个 PR，0 需流转/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log("\n=== ⑱ 红 5：--parent-worktree 用合法 selector（branch:，不是 name:）===");
