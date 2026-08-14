@@ -260,7 +260,7 @@ function awaitingShuaiReason(derived, rec) {
   if (derived.state === 'approved') return '复核绿待帅终审';
   if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
   if (derived.state === 'pingpong') return '乒乓两轮仍红待帅换人';
-  if (Object.keys(rec.blocked || {}).length > 0) return '注入失败待帅接手';
+  if (Object.keys(rec.blocked || {}).length > 0) return '注入/目标解析失败待帅接手';
   return null;
 }
 
@@ -373,6 +373,8 @@ function waitTerminalReady(handle, timeoutMs, label) {
 // 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
 // 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
 // （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
+// 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
+// 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
 function verifyStarted(handle, echoHead, terminalName) {
   const first = readTerminalData(handle, null);
   if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
@@ -380,10 +382,14 @@ function verifyStarted(handle, echoHead, terminalName) {
   sleep(VERIFY_WAIT_MS);
   const second = readTerminalData(handle, prev);
   if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
-  // 无新输出：先看是否回显（输入框残留），无论是否回显都补一记裸回车再验
+  if (!echoHead) {
+    // --prompt 路径：无回显概念，不补回车，直接 fail-visible
+    return { ok: false, error: `注入后无新输出（${terminalName}）——疑似未开工` };
+  }
+  // send 路径：看回显，无论是否回显都补一记裸回车再验增量
   const all = readTerminalData(handle, null);
   const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
-  const echoed = Boolean(echoHead) && tailText.includes(echoHead);
+  const echoed = tailText.includes(echoHead);
   runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
   sleep(VERIFY_WAIT_MS);
   const third = readTerminalData(handle, null);
@@ -507,10 +513,12 @@ function makeLiveSource(repo) {
     },
     getReviews(number) {
       // 红 1（复核）：gh pr view 的 review id 是 GraphQL node id（PRR_...），拼不出真锚点——
-      // 返工指令必须给活链接。改走 gh api 直取数字 id + html_url（body/submitted_at 同一次调用拿到）。
-      const r = runGh(['api', `repos/${repo}/pulls/${number}/reviews`, '--paginate', '--jq', '[.[] | {id, body, submitted_at, html_url}]']);
+      // 返工指令必须给活链接。改走 gh api 直取数字 id + html_url。
+      // 注意：--paginate 配 --jq 会逐页输出多段独立 JSON（观察 1：多页时 JSON.parse 必炸）——
+      // 所以不带 --jq，让 --paginate 合并成单个数组，字段在 JS 里映射。
+      const r = runGh(['api', `repos/${repo}/pulls/${number}/reviews`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
-      const reviews = (r.json || []).map(rv => ({
+      const reviews = (Array.isArray(r.json) ? r.json : []).map(rv => ({
         id: rv.id,
         body: rv.body || '',
         submittedAt: rv.submitted_at || '',
@@ -801,6 +809,10 @@ function processOneRound(source, state, args) {
           if (exec.ok) {
             events.push(exec.line);
             rec.actedOn = fp;
+            if (exec.line.startsWith('[flow] 预览-阻塞')) {
+              // 观察 2：dry-run 的解析失败也进 blocked——长跑时不能第二轮转绿
+              rec.blocked[action.kind] = true;
+            }
             if (action.kind === 'start-reviewer' && exec.handle) {
               rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
             }
