@@ -370,9 +370,9 @@ function waitTerminalReady(handle, timeoutMs, label) {
   }
 }
 
-// 验开工（红 1）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
-// 回显判据为辅（send 路径 TUI 回显注入文本头）。被吞第一处置补一记裸回车
-// （#455 连带教训：不是再注入一遍全文）；仍无 → fail-visible。
+// 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
+// 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
+// （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
 function verifyStarted(handle, echoHead, terminalName) {
   const first = readTerminalData(handle, null);
   if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
@@ -380,17 +380,16 @@ function verifyStarted(handle, echoHead, terminalName) {
   sleep(VERIFY_WAIT_MS);
   const second = readTerminalData(handle, prev);
   if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
+  // 无新输出：先看是否回显（输入框残留），无论是否回显都补一记裸回车再验
   const all = readTerminalData(handle, null);
   const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
-  if (echoHead && tailText.includes(echoHead)) return { ok: true, judge: '屏面回显' };
-  // 输入框残留：补一记裸回车（第一处置），不重发全文
+  const echoed = Boolean(echoHead) && tailText.includes(echoHead);
   runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
   sleep(VERIFY_WAIT_MS);
   const third = readTerminalData(handle, null);
-  const tail3 = third.ok ? third.terminal.tail.map(l => String(l)).join('\n') : '';
   const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
-  if (grew3 || (echoHead && tail3.includes(echoHead))) return { ok: true, judge: '补回车后开工' };
-  return { ok: false, error: `注入后无新输出/回显（${terminalName}）——疑似输入框残留或吞注入` };
+  if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
+  return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
 }
 
 // 注入 + 验开工（两步走路径：send 任务文本）
@@ -507,11 +506,15 @@ function makeLiveSource(repo) {
       return { ok: true, comments: r.json.comments || [] };
     },
     getReviews(number) {
-      const r = runGh(['pr', 'view', String(number), '--json', 'reviews']);
+      // 红 1（复核）：gh pr view 的 review id 是 GraphQL node id（PRR_...），拼不出真锚点——
+      // 返工指令必须给活链接。改走 gh api 直取数字 id + html_url（body/submitted_at 同一次调用拿到）。
+      const r = runGh(['api', `repos/${repo}/pulls/${number}/reviews`, '--paginate', '--jq', '[.[] | {id, body, submitted_at, html_url}]']);
       if (!r.ok) return { ok: false, error: r.error };
-      const reviews = (r.json.reviews || []).map(rv => ({
-        id: rv.id, body: rv.body, submittedAt: rv.submittedAt,
-        url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
+      const reviews = (r.json || []).map(rv => ({
+        id: rv.id,
+        body: rv.body || '',
+        submittedAt: rv.submitted_at || '',
+        url: rv.html_url || null,
       }));
       return { ok: true, reviews };
     },
@@ -569,9 +572,12 @@ function makeSnapshotSource(roundDir, repo) {
       if (!r.ok) return { ok: true, reviews: [] };
       return {
         ok: true,
+        // 镜像 live 形态：有 html_url 用真锚点（gh api 口径），没有才退回拼（数字 id 才能拼出活链接）
         reviews: r.json.map(rv => ({
-          id: rv.id, body: rv.body, submittedAt: rv.submittedAt,
-          url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
+          id: rv.id,
+          body: rv.body,
+          submittedAt: rv.submitted_at || rv.submittedAt,
+          url: rv.html_url || `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
         })),
       };
     },
@@ -595,7 +601,6 @@ function makeSnapshotSource(roundDir, repo) {
 // ══════════════════════════════════════════════════════════════════════
 
 function executeAction(action, pr, toml, source, rec, dryRun) {
-  const fmt = (...parts) => parts.filter(Boolean).join(' ');
 
   if (action.kind === 'start-reviewer') {
     const cls = classifyPr(pr);
@@ -612,26 +617,28 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     }
     const label = reviewerLabel(reviewer);
     const taskBook = reviewTaskBook(pr, cls.model, label);
+    // 任务卡名按全局约定「#PR号 - 动宾短语」（观察 3：终端名角色·模型、卡名带号）
+    const cardName = `#${pr.number} - ${label}`;
     // 红 5：--parent-worktree 合法 selector 是 branch:/issue:/id:/path:/folder:/worktree:，
     // name: 是 --repo 的 selector 不是 worktree 的——用 branch:<headRefName>（现成合法）。
     const parentSel = `branch:${pr.headRefName}`;
     const steps = launch.oneShot
-      ? [`orca worktree create --parent-worktree ${parentSel} --name "${label}" --agent ${launch.agent} --prompt <复核任务书> --json`]
-      : [`orca worktree create --parent-worktree ${parentSel} --name "${label}" --setup skip --json`,
+      ? [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --agent ${launch.agent} --prompt <复核任务书> --json`]
+      : [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --setup skip --json`,
          `orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`,
          '（注入前先 terminal read 轮询就绪，再 send 任务书——配置同步期抢跑必被吞）'];
     if (dryRun) {
       return {
         ok: true, dry: true,
-        text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`)
+        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`
           + '\n' + steps.map(s => '  ' + s).join('\n')
           + '\n  ' + '注入复核任务书：' + taskBook.replace(/\n/g, '\n  '),
       };
     }
     // live：起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
     const createR = runOrca(launch.oneShot
-      ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', label, '--agent', launch.agent, '--prompt', taskBook, '--json']
-      : ['worktree', 'create', '--parent-worktree', parentSel, '--name', label, '--setup', 'skip', '--json']);
+      ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--agent', launch.agent, '--prompt', taskBook, '--json']
+      : ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--setup', 'skip', '--json']);
     if (!createR.ok) return { ok: false, error: `起审官卡失败：${createR.error}` };
     const newWtId = createR.json?.result?.worktree?.id || null;
     let handle;
@@ -640,7 +647,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
       if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
       const v = verifyStarted(handle, null, label);
       if (!v.ok) return { ok: false, error: v.error };
-      return { ok: true, handle, worktree: newWtId, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）`) };
+      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）` };
     }
     const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
     if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
@@ -650,7 +657,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     if (!ready.ok) return { ok: false, error: ready.error };
     const v = injectAndVerify(handle, taskBook, label);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, worktree: newWtId, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）`) };
+    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）` };
   }
 
   if (action.kind === 'inject-rework') {
@@ -663,16 +670,17 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     if (workerWt && termsR.ok) target = pickUniqueTerminal(termsR.terminals, workerWt.id, rec.reviewer?.handle || null);
     else if (!termsR.ok) target = { ok: false, error: termsR.error };
     if (dryRun) {
-      const note = target?.ok
-        ? `（注入目标：工人终端 ${target.terminal.handle}）`
-        : `（dry-run：注入目标解析失败——${target?.error || wtErr || '终端列表不可用'}）`;
-      return { ok: true, dry: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）${note}`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      if (target?.ok) {
+        return { ok: true, dry: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）（注入目标：工人终端 ${target.terminal.handle}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      }
+      // 观察 1：解析失败不用「动作：」前缀（grep 动作 应只数真实动作），改「预览-阻塞：」
+      return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——注入目标解析失败：${target?.error || wtErr || '终端列表不可用'}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
     if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
     if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
     const v = injectAndVerify(target.terminal.handle, instruction, pr.title);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）`) };
+    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）` };
   }
 
   if (action.kind === 'inject-recheck') {
@@ -681,15 +689,15 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
     const target = wtsR.ok ? findReviewerTerminal(source, pr, rec, workerWt || undefined) : { ok: false, error: wtsR.error };
     if (dryRun) {
-      const note = target?.ok
-        ? `（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）`
-        : `（dry-run：审官终端解析失败——${target.error}）`;
-      return { ok: true, dry: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）${note}`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      if (target?.ok) {
+        return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      }
+      return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（复核注入——审官终端解析失败：${target.error}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
     if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
     const v = injectAndVerify(target.terminal.handle, instruction, '审官');
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）`) };
+    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
@@ -791,7 +799,7 @@ function processOneRound(source, state, args) {
           };
           const exec = executeAction({ ...action, ...extra }, pr, toml, source, rec, args.dryRun);
           if (exec.ok) {
-            events.push(`[flow] 动作：${exec.text}`);
+            events.push(exec.line);
             rec.actedOn = fp;
             if (action.kind === 'start-reviewer' && exec.handle) {
               rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
@@ -839,7 +847,7 @@ function processOneRound(source, state, args) {
   }
 
   const scanned = open.length;
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
