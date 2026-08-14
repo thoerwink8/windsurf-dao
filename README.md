@@ -19,9 +19,8 @@
 | `docs/decisions/` | 历史拍板记录，冻结的档案：想知道「当初为什么这么定」就来这翻 |
 | `docs/research/` | 旧体系时期的调研报告存档（规则架构调研等），只读 |
 | `docs/global-CLAUDE.md` | 用户级 `~/.claude/CLAUDE.md` 的真相源副本：换机时手动把内容放进 `~/.claude/CLAUDE.md`，git 不带机器配置 |
-| `ccswitch/skills/grill-me/` | 一个拷问想法的技能：用户想被找茬时用它五步追问 |
-| `ccswitch/persona/` | 系统提示词人设（dao / fable5），换人设时替换加载 |
-| `ccswitch/styles/`、`ccswitch/themes/`、`ccswitch/statusline.js` | Claude Code 的界面定制（提示词样式 / 主题 / 状态栏） |
+| `host/skills/grill-me/` | 一个拷问想法的技能：用户想被找茬时用它五步追问 |
+| `host/styles/`、`host/themes/`、`host/statusline.js` | Claude Code 的界面定制（提示词样式 / 主题 / 状态栏） |
 | `.github/workflows/` | 每个 PR 自动跑一遍 dao-check 扫描 |
 
 ## 新机器怎么用

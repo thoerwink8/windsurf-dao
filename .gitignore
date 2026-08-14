@@ -20,3 +20,6 @@ image/
 __pycache__/
 *.pyc
 .codegraph/
+
+# 密钥不进 git（真实值，换机手动复制）
+config-sync/**

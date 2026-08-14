@@ -68,17 +68,17 @@ function runTests() {
 
 // ── ② skill 装载面 ──────────────────────────────────────────────────
 // frontmatter 坏掉的 skill 不会报错，它只是不加载——静默失效。
-// 自发现：扫 ccswitch/skills 下所有目录，没有清单可以漏登记。
+// 自发现：扫 host/skills 下所有目录，没有清单可以漏登记。
 
 function checkSkillFrontmatter() {
-  const dir = join(ROOT, 'ccswitch', 'skills');
+  const dir = join(ROOT, 'host', 'skills');
   if (!existsSync(dir)) {
-    fail('ccswitch/skills 不在', '本次没查成：确认部署源目录是否被移动', dir);
+    fail('host/skills 不在', '本次没查成：确认部署源目录是否被移动', dir);
     return;
   }
   const dirs = readdirSync(dir).filter(d => statSync(join(dir, d)).isDirectory());
   if (dirs.length === 0) {
-    fail('一个 skill 都没扫到', 'ccswitch/skills 空了 ⇒ 本次等于没查', dir);
+    fail('一个 skill 都没扫到', 'host/skills 空了 ⇒ 本次等于没查', dir);
     return;
   }
   const bad = [];
