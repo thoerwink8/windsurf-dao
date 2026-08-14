@@ -39,7 +39,7 @@ cli = "reclaude 链路"
 launch_note = """
 裸 claude 会 login rejected（凭据挂在 reclaude 链上）；启动有一段配置同步期，抢跑注入必被吞。
 派工一律 `reclaude --model opus`（Fable 只留帅位，派工须用户点名；拍板 2026-08-14，issue #443）。
-`--agent` 起不了 reclaude 链（orca 已知 agent 只有 claude/codex/omp/pi/grok）——Claude 族终端必须 `orca terminal create --command "reclaude --model opus"` 起（实测 2026-08-14）。
+`--agent` 起不了 reclaude 链（已知 agent 枚举以 `orca worktree create --help` 为准，会漂）——Claude 族终端必须 `orca terminal create --command "reclaude --model opus"` 起（实测 2026-08-14）。
 """
 
 [providers.minimax-h3]
