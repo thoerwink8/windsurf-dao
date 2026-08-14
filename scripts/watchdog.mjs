@@ -3,34 +3,41 @@
 //
 // 双通道监视里本脚本负责「事故路径」：协调者不再把「沉默」当「还在跑」。
 // 快乐路径（工人完工自报 orchestration worker_done）不归本脚本，见 dispatch skill。
-// 规格书 = issue #442 全部案例与对策（九条评论），一条案例对应下面一条检测。
+// 规格书 = issue #442 全部案例与对策（九条评论 + 2026-08-15 追加），一条案例对应下面一条检测。
 //
-// 检测矩阵（全部来自 #442 评论区实测案例）：
-//   1. exited       —— 终端 read 状态 exited（「终端 exited 且非完工态」独立报警，拍板追加①：
-//                       卡片被误关、工人瞬灭，不能混在交卷/报错里）
-//   2. waiting      —— ps agents[].state=waiting（审批弹窗被刷屏点阵埋没案：弹窗看不见，
-//                       但 ps 的 waiting 就是「有弹窗/等输入」的官方信号，零关键字猜测）
+// 检测矩阵（全部来自 #442 实测案例）：
+//   1. exited       —— 终端 read 状态 exited（「终端 exited 且非完工态」独立报警，拍板追加①）
+//   2. waiting      —— ps agents[].state=waiting（审批弹窗被刷屏点阵埋没案：ps 的 waiting
+//                       就是「有弹窗/等输入」的官方信号，零关键字猜测）
 //   3. fingerprint  —— 屏面底部当前状态窗口命中错误指纹清单（Grok 断线案 + GPT 断流案 +
-//                       盲考案三份指纹，常量数组便于 append）
+//                       盲考案 + 2026-08-15 at-capacity 案，常量数组便于 append）
 //   4. hash-stable  —— 整屏内容哈希连续三轮不变（v0.4 用滚动缓冲 cursor 停滞判停摆，
-//                       对 reclaude 全屏 TUI 恒假阳性——alt-screen 重绘不产生滚动行；
-//                       v0.5 改整屏哈希：干活时状态栏 token/费用/计时在变，哈希必变）
-//   5. read-failed  —— working 工位却读不到屏面（守卫自身失效必须显形，不能静默）
+//                       对 reclaude 全屏 TUI 恒假阳性；v0.5 起改整屏哈希）
+//   5. read-failed  —— 被监视工位却读不到屏面（守卫自身失效必须显形，不能静默）
 //
 // 两个窗口（#442 v0 首战假阳性教训的落点）：
 //   --window       整屏窗口（默认 60 行）：哈希判据用，「整屏内容哈希」是钦定的全屏 TUI 通用信号。
 //   --state-window 屏面底部状态窗口（默认 12 行）：错误指纹判据用。只看屏面底部当前状态，
 //                  不对历史叙述做关键字匹配——v0 就是把审官叙述里的「两个样本都被拦」
-//                  误判成求助等待。指纹字样出现在上部叙述里不算数，出现在底部才算数。
+//                  误判成求助等待。
+//
+// 结构性排除（审读红 2 落点：不能靠 displayName 黑名单）：
+//   - 主工作区（isMainWorktree）：master 卡只住协调者，永远零工人（dispatch skill 拓扑），
+//     协调者/主会话不在被监视集合内。
+//   - 监视器自己的工作区（--self-worktree；live 模式自动从 `orca worktree current` 取）：
+//     监视器运行在被监视集合之外。
+//   - --exclude-pane <paneKey>（可重复）：按稳定 pane ID 排除控制端/审官会话，
+//     不用 displayName 维护名单。
+//   被排除的工位不读屏、不报警——审官/协调者屏面讨论指纹字样不再触发自误报。
 //
 // 仓规硬约束：
 //   - 输出必须区分「扫完 0 异常」（打印一行 OK 汇总，含扫描工位数）与
-//     「没扫到任何工位」（明确打印 NO_TARGETS 警告）——数到 0 和没看到样本不是一回事，
-//     分不开就会把「没查成」记成「查过没事」。
+//     「没扫到任何工位」（明确打印 NO_TARGETS 警告）——数到 0 和没看到样本不是一回事。
 //   - 检测逻辑只用 orca 官方输出（worktree ps / terminal list / terminal read），
 //     不碰工人的自报（lastAssistantMessage 一律不读）。
-//   - 监视对象每轮从 ps 自动枚举 working/waiting 态 agent，无手动名单
-//     （手动名单漏新工位是 2026-08-14 实测踩的坑）。
+//   - 监视对象每轮从 ps 自动枚举 working/waiting 态 agent，无手动名单。
+//   - 读不到屏面一律 fail-visible：读失败 / 成功响应缺字段 / 结构不认识都报 read-failed，
+//     不静默放行（审读红 3 落点）。
 //
 // 退出码：0 扫完 0 异常 / 1 有报警 / 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（ps 拉不到）。
 //
@@ -41,6 +48,8 @@
 //   node scripts/watchdog.mjs --interval 20      轮询间隔秒数
 //   node scripts/watchdog.mjs --window 80        整屏窗口行数
 //   node scripts/watchdog.mjs --state-window 15  屏面底部状态窗口行数
+//   node scripts/watchdog.mjs --self-worktree <id>  指定监视器自己的工作区 id（live 模式默认自动取）
+//   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 排除控制端/审官（可重复）
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -51,7 +60,7 @@ const ORCA_TIMEOUT_MS = 30000;
 
 // ── 屏面错误指纹清单（append-only）────────────────────────────────────
 // 每条指纹对应 #442 评论区一个真实事故案例；新增事故时在这里加一行，
-// 并同步在 tests/watchdog-fixtures/fingerprint/ 里补一条违规样本（上线前先故意构造违规样本，
+// 并同步在 tests/watchdog-fixtures/ 里补一条违规样本（上线前先故意构造违规样本，
 // 被拦住才算生效——v0.4 跳过这步首报即翻车的教训）。
 // 元素可以是普通字符串（大小写不敏感子串匹配）或正则字面量。
 const ERROR_FINGERPRINTS = [
@@ -64,23 +73,29 @@ const ERROR_FINGERPRINTS = [
   'timed out connecting',  // 连接超时
   'Error:',                // #442 钦定的宽指纹，协调者收到后读屏分诊，不直接处置
   /Reconnecting.*5\/5/i,   // 盲考·GPT：Reconnecting 5/5 全败停机
+  'at capacity',           // 2026-08-15 实录：GPT/codex 报 ⚠ Selected model is at capacity
+                           //   → 当轮中断、TUI 落回空闲、屏面静止（#442 新指纹语料）
+  'try a different model', // 同上，同句报错的另一半
 ];
 
 // ── 参数 ─────────────────────────────────────────────────────────────
 
 function printUsage() {
   console.log(`用法：
-  node scripts/watchdog.mjs [--once] [--interval 秒] [--window 行] [--state-window 行] [--snapshot-dir 目录]
+  node scripts/watchdog.mjs [--once] [--interval 秒] [--window 行] [--state-window 行]
+                            [--snapshot-dir 目录] [--self-worktree <id>] [--exclude-pane <paneKey>]...
 
   --once             跑单轮后退出（给测试用）
   --interval <秒>     轮询间隔（默认 30）
   --window <行>       整屏窗口行数，哈希判据用（默认 60）
   --state-window <行> 屏面底部状态窗口行数，错误指纹判据用（默认 12）
-  --snapshot-dir <目录> 从录制的 ps/read JSON 快照跑检测（测试/复现用），跑完即退出`);
+  --snapshot-dir <目录> 从录制的 ps/read JSON 快照跑检测（测试/复现用），跑完即退出
+  --self-worktree <id> 监视器自己的工作区 id（live 模式默认从 orca worktree current 自动取）
+  --exclude-pane <paneKey> 按稳定 pane ID 排除控制端/审官会话（可重复，不维护 displayName 名单）`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 30, window: 60, stateWindow: 12, snapshotDir: null };
+  const args = { once: false, interval: 30, window: 60, stateWindow: 12, snapshotDir: null, selfWorktree: null, excludePanes: [] };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -97,6 +112,8 @@ function parseArgs(argv) {
       case '--window': args.window = take(i++, '--window'); break;
       case '--state-window': args.stateWindow = take(i++, '--state-window'); break;
       case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
+      case '--self-worktree': args.selfWorktree = argv[++i] || ''; break;
+      case '--exclude-pane': args.excludePanes.push(argv[++i] || ''); break;
       case '--help': printUsage(); process.exit(0);
       default:
         console.error(`未知参数: ${a}`);
@@ -128,7 +145,18 @@ function unwrapPayload(json, pathKey, topKey) {
   return null;
 }
 
-// 返回 { ps, handleByPane, readTerminal }；ps 拉不到时返回 { infraError }
+// 终端的 paneKey（tabId:leafId）→ {handle, incarnationId}；读失败一律 fail-visible。
+function buildPaneIndex(terminals) {
+  const idx = new Map();
+  for (const t of terminals) {
+    if (t.tabId && t.leafId && t.handle) {
+      idx.set(`${t.tabId}:${t.leafId}`, { handle: t.handle, incarnationId: t.incarnationId ?? null });
+    }
+  }
+  return idx;
+}
+
+// 返回 { ps, paneByKey, readTerminal, tlError }；ps 拉不到时返回 { infraError }
 function makeLiveSource(window) {
   const psR = runOrca(['worktree', 'ps', '--json']);
   if (!psR.ok) return { infraError: `orca worktree ps --json 失败：${psR.error}` };
@@ -136,25 +164,28 @@ function makeLiveSource(window) {
   if (!Array.isArray(ps)) return { infraError: 'ps 输出结构不认识（没有 result.worktrees 数组）' };
 
   const tlR = runOrca(['terminal', 'list', '--json']);
-  const terminals = tlR.ok ? (unwrapPayload(tlR.json, 'terminals', 'terminals') ?? []) : [];
-  const handleByPane = new Map();
-  for (const t of terminals) {
-    if (t.tabId && t.leafId && t.handle) handleByPane.set(`${t.tabId}:${t.leafId}`, t.handle);
-  }
+  const terminals = tlR.ok ? unwrapPayload(tlR.json, 'terminals', 'terminals') : null;
+  // 成功响应但结构缺失 = 显形，不能当成空表（审读红 3）
+  const paneByKey = Array.isArray(terminals) ? buildPaneIndex(terminals) : new Map();
+  const tlError = tlR.ok
+    ? (Array.isArray(terminals) ? null : 'orca terminal list 成功响应但缺 result.terminals 数组')
+    : `orca terminal list --json 失败：${tlR.error}`;
 
   const cache = new Map();
   const readTerminal = (handle) => {
     if (cache.has(handle)) return cache.get(handle);
     const r = runOrca(['terminal', 'read', '--terminal', handle, '--limit', String(window), '--json']);
     const t = r.ok ? r.json?.result?.terminal : null;
-    const res = r.ok && t
-      ? { handle, status: t.status, tail: Array.isArray(t.tail) ? t.tail : [] }
-      : { error: r.error };
+    let res;
+    if (!r.ok) res = { error: `orca terminal read 失败：${r.error}` };
+    else if (!t) res = { error: 'orca terminal read 成功响应但缺 result.terminal（结构畸形）' };
+    else if (typeof t.status !== 'string' || !Array.isArray(t.tail)) res = { error: 'orca terminal read 成功响应但 status/tail 字段缺失（结构畸形）' };
+    else res = { handle, status: t.status, tail: t.tail };
     cache.set(handle, res);
     return res;
   };
 
-  return { ps, handleByPane, readTerminal };
+  return { ps, paneByKey, readTerminal, tlError };
 }
 
 // ── 快照采集（--snapshot-dir 模式）──────────────────────────────────
@@ -184,23 +215,24 @@ function loadSnapshotRound(roundDir) {
   if (!Array.isArray(ps)) throw new Error(`${roundDir}: ps.json 结构不认识`);
 
   const tlJson = readJson('terminal-list.json');
-  const terminals = tlJson ? (unwrapPayload(tlJson, 'terminals', 'terminals') ?? []) : [];
-  const handleByPane = new Map();
-  for (const t of terminals) {
-    if (t.tabId && t.leafId && t.handle) handleByPane.set(`${t.tabId}:${t.leafId}`, t.handle);
-  }
+  const terminals = tlJson ? unwrapPayload(tlJson, 'terminals', 'terminals') : [];
+  const paneByKey = Array.isArray(terminals) ? buildPaneIndex(terminals) : new Map();
 
   const reads = new Map();
+  const handleFromName = (f) => f.replace(/^read-/, '').replace(/\.json$/, '');
   for (const f of readdirSync(roundDir).filter(f => /^read-.+\.json$/.test(f))) {
     const j = JSON.parse(readFileSync(join(roundDir, f), 'utf8'));
-    const t = j?.result?.terminal ?? j;
-    const handle = t.handle || f.replace(/^read-/, '').replace(/\.json$/, '');
-    reads.set(handle, {
-      handle,
-      status: t.status,
-      tail: Array.isArray(t.tail) ? t.tail : [],
-      error: t.error,
-    });
+    const t = j?.result?.terminal;
+    if (t && typeof t.status === 'string' && Array.isArray(t.tail)) {
+      reads.set(t.handle || handleFromName(f), { handle: t.handle || handleFromName(f), status: t.status, tail: t.tail });
+    } else if (t) {
+      reads.set(t.handle || handleFromName(f), { error: '快照 read 成功响应但 status/tail 字段缺失（结构畸形）' });
+    } else if (j?.ok === false && j?.error?.message) {
+      // 真实 orca 错误响应（如 terminal_handle_stale）原样入库
+      reads.set(handleFromName(f), { error: `orca 报错 ${j.error.code || ''}: ${j.error.message}` });
+    } else {
+      reads.set(handleFromName(f), { error: '快照 read 文件结构不认识' });
+    }
   }
 
   const readTerminal = (handle) => {
@@ -209,7 +241,7 @@ function loadSnapshotRound(roundDir) {
     return t.error ? { error: t.error } : t;
   };
 
-  return { ps, handleByPane, readTerminal, label: basename(roundDir) };
+  return { ps, paneByKey, readTerminal, tlError: null, label: basename(roundDir) };
 }
 
 // ── 一轮扫描 ────────────────────────────────────────────────────────
@@ -229,19 +261,30 @@ const normLines = (lines) => (Array.isArray(lines) ? lines : [])
   .join('\n')
   .trim();
 
-function runRound(source, opts, state) {
+// 结构性排除：主工作区（协调者）、监视器自己的工作区、按稳定 pane ID 排除的控制端/审官。
+// 全部按 id 判，不碰 displayName（审读红 2）。
+function isExcluded(w, a, args) {
+  if (w.isMainWorktree === true) return true;                       // master 卡只住协调者
+  if (args.selfWorktree && w.worktreeId === args.selfWorktree) return true; // 监视器自己
+  if (a.paneKey && args.excludePanes.includes(a.paneKey)) return true;      // 稳定 pane ID
+  return false;
+}
+
+function runRound(source, args, state) {
   const targets = [];
   for (const w of source.ps) {
     const agents = Array.isArray(w.agents) ? w.agents : [];
-    const mon = agents.filter(a => a.state === 'working' || a.state === 'waiting');
+    const mon = agents.filter(a => (a.state === 'working' || a.state === 'waiting') && !isExcluded(w, a, args));
     if (mon.length === 0) continue;
     const multi = mon.length > 1;
     mon.forEach((a, i) => {
+      const pane = a.paneKey ? source.paneByKey.get(a.paneKey) : undefined;
       targets.push({
         key: `${w.worktreeId || w.id || w.path || '?'}|${a.paneKey || i}`,
         name: multi ? `${w.displayName || '?'}#${i + 1}` : (w.displayName || '?'),
         agent: a,
-        handle: a.paneKey ? source.handleByPane.get(a.paneKey) : undefined,
+        handle: pane ? pane.handle : undefined,
+        incarnationId: pane ? pane.incarnationId : null,
       });
     });
   }
@@ -250,7 +293,9 @@ function runRound(source, opts, state) {
 
   const events = [];
   for (const t of targets) {
-    const st = state.stations[t.key] ||= { hashLast: null, hashPrev: null, fired: new Set(), prevUpdatedAt: null };
+    const st = state.stations[t.key] ||= {
+      epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
+    };
 
     // ② ps waiting 态（弹窗/等输入的官方信号）
     if (t.agent.state === 'waiting') {
@@ -262,12 +307,12 @@ function runRound(source, opts, state) {
       st.fired.delete('waiting');
     }
 
-    // 读屏面
-    const read = t.handle ? source.readTerminal(t.handle) : { error: 'paneKey 在 terminal list 里没有对应句柄' };
+    // 读屏面（读失败一律 fail-visible，不静默放行——审读红 3）
+    const read = t.handle ? source.readTerminal(t.handle) : { error: `paneKey 在 terminal list 里没有对应句柄（${source.tlError || 'terminal list 为空'}）` };
     if (read.error) {
       if (!st.fired.has('read-failed')) {
         st.fired.add('read-failed');
-        events.push({ name: t.name, type: 'read-failed', detail: `读不到终端屏面：${read.error}——working 却读不到屏面本身可疑` });
+        events.push({ name: t.name, type: 'read-failed', detail: `读不到终端屏面：${read.error}——被监视工位却读不到屏面本身可疑` });
       }
       continue; // 屏面都读不到，下面的判据无从谈起
     }
@@ -284,7 +329,7 @@ function runRound(source, opts, state) {
     }
 
     const all = normLines(read.tail);
-    const bottom = normLines(read.tail.slice(-opts.stateWindow));
+    const bottom = normLines(read.tail.slice(-args.stateWindow));
 
     // ③ 错误指纹（只看屏面底部当前状态窗口，不对历史叙述做关键字匹配）
     const matched = matchFingerprints(bottom);
@@ -297,28 +342,32 @@ function runRound(source, opts, state) {
       st.fired.delete('fingerprint');
     }
 
-    // ④ 整屏哈希连续三轮不变（停摆候选信号；ps 的 updatedAt 在推进说明有活动，不算停摆）
+    // ④ 整屏哈希连续三轮不变（显式 epoch 状态机——审读红 4）：
+    //    生命周期键 = 终端 incarnationId + ps updatedAt；任一变化 = 新 epoch，
+    //    以当前观测初始化 consecutive=1（本轮不算丢）；同屏递增、异屏重置；
+    //    consecutive===3 报警。ps updatedAt 在推进说明有活动，不算停摆。
     const hash = createHash('sha256').update(all).digest('hex');
     const updatedAt = t.agent.updatedAt ?? null;
-    const activityAdvanced = st.prevUpdatedAt !== null && updatedAt !== null && updatedAt !== st.prevUpdatedAt;
+    const incarnation = t.incarnationId ?? null;
+    const epoch = `${incarnation}|${updatedAt}`;
     st.prevUpdatedAt = updatedAt;
+    st.prevIncarnation = incarnation;
 
-    if (activityAdvanced) {
-      // 官方信号说工人有活动（ps updatedAt 推进）——长命令无输出、静默思考都不算停摆
+    if (st.epoch !== epoch) {
+      st.epoch = epoch;
+      st.lastHash = hash;
+      st.consecutive = 1;                 // 本轮即新序列第 1 轮
       st.fired.delete('hash-stable');
-      st.hashPrev = null;
-      st.hashLast = null;
-    } else if (hash === st.hashLast && hash === st.hashPrev) {
-      if (!st.fired.has('hash-stable')) {
+    } else if (hash === st.lastHash) {
+      st.consecutive += 1;
+      if (st.consecutive >= 3 && !st.fired.has('hash-stable')) {
         st.fired.add('hash-stable');
         events.push({ name: t.name, type: 'hash-stable', detail: '整屏哈希连续 3 轮不变——停摆候选（#442 全屏 TUI 通用信号），读屏分诊' });
       }
-      st.hashPrev = st.hashLast;
-      st.hashLast = hash;
     } else {
-      if (hash !== st.hashLast) st.fired.delete('hash-stable'); // 屏面变了 = 新段落，旧停摆段结案
-      st.hashPrev = st.hashLast;
-      st.hashLast = hash;
+      st.lastHash = hash;
+      st.consecutive = 1;
+      st.fired.delete('hash-stable');
     }
   }
 
@@ -327,7 +376,7 @@ function runRound(source, opts, state) {
 
 function printRound(round) {
   if (round.noTargets) {
-    console.log('NO_TARGETS: 本轮没有 working/waiting 工位——没查成，不是「扫完 0 异常」（数到 0 和没看到样本不是一回事）');
+    console.log('NO_TARGETS: 本轮没有 working/waiting 工位（结构性排除后）——没查成，不是「扫完 0 异常」（数到 0 和没看到样本不是一回事）');
     return { alarm: false, noTargets: true };
   }
   if (round.events.length > 0) {
@@ -358,8 +407,19 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function detectSelfWorktree() {
+  const r = runOrca(['worktree', 'current', '--json']);
+  const id = r.ok ? r.json?.result?.worktree?.id : null;
+  return { id, error: r.ok ? (id ? null : 'orca worktree current 成功响应但缺 worktree.id') : `orca worktree current 失败：${r.error}` };
+}
+
 function liveLoop() {
-  console.log(`# watchdog live：每 ${args.interval}s 一轮（--window ${args.window} / --state-window ${args.stateWindow}）`);
+  if (!args.selfWorktree) {
+    const self = detectSelfWorktree();
+    if (self.id) args.selfWorktree = self.id;
+    else console.log(`[watchdog] SELF_WORKTREE_UNKNOWN: ${self.error}——本轮起不排除自己的工作区，请用 --self-worktree <id> 显式指定`);
+  }
+  console.log(`# watchdog live：每 ${args.interval}s 一轮（--window ${args.window} / --state-window ${args.stateWindow}${args.selfWorktree ? ' / self-worktree ' + args.selfWorktree.slice(0, 24) + '…' : ''}）`);
   for (;;) {
     const source = makeLiveSource(args.window);
     if (source.infraError) {
