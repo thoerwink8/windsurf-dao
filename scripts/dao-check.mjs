@@ -17,7 +17,8 @@
 //
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
-// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面，全部扫描自发现。
+// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算，
+// 全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -117,11 +118,42 @@ function checkSecretsNotTracked() {
   else fail(`疑似密钥进了 git ${hits.length} 个`, '立刻 git rm --cached + 补 .gitignore + 当作已泄漏换掉它', hits.join(' '));
 }
 
+// ── ④ 常驻文件 token 预算 ───────────────────────────────────────────
+// 膨胀是不可感知型失效：每次只加几行，永远不会有人报警，等看见时已经是几百次提交之后。
+// 所以预算类规则不等「第二次违例再升级」，立规即配闸。
+// 自发现：扫仓库根与 docs/ 下所有声明了「总量控制在 N token」的 markdown，按各自声明的 N 强制；
+// 一个声明都扫不到 ⇒ 报红（常驻约定必须自declare预算，0 个声明 = 本次等于没查）。
+// 换算口径与对抗审同源：token ≈ 字符数 / 2。
+
+const BUDGET_MARK = /总量控制在\s*(\d+)\s*token/;
+
+function checkResidentBudget() {
+  const found = [];
+  for (const dir of [ROOT, join(ROOT, 'docs')]) {
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
+      const p = join(dir, f);
+      if (!statSync(p).isFile()) continue;
+      const txt = readFileSync(p, 'utf8');
+      const m = txt.match(BUDGET_MARK);
+      if (m) found.push({ f, budget: Number(m[1]), tokens: Math.round(txt.length / 2) });
+    }
+  }
+  if (found.length === 0) {
+    fail('一个声明了 token 预算的常驻文件都没扫到', '常驻约定文件末尾要有「总量控制在 N token」声明；0 个声明 = 本次等于没查', `${ROOT} 与 docs/`);
+    return;
+  }
+  const over = found.filter(c => c.tokens > c.budget);
+  if (over.length === 0) green(`常驻预算 ${found.map(c => `${c.f} ${c.tokens}/${c.budget}`).join(' · ')}`);
+  else fail(`常驻文件超预算 ${over.length} 个`, '加行前先删行；确实要扩容需用户拍板改声明值', over.map(c => `${c.f} ${c.tokens}>${c.budget}`).join(' '));
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
+checkResidentBudget();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
