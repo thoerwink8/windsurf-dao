@@ -724,10 +724,26 @@ function isInstitutional(pr) {
 // 主流程
 // ══════════════════════════════════════════════════════════════════════
 
-const args = parseArgs(process.argv.slice(2));
+// 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting };
+
+let args = null;
 let anyEmitted = false;
 let anyNoTargets = false;
 let anyInfra = false;
+
+export function main(argv = process.argv.slice(2)) {
+  args = parseArgs(argv);
+  if (args.snapshotDir) snapshotRun();
+  else liveLoop();
+  process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
+}
+
+const isDirectRun = process.argv[1]
+  && resolve(process.argv[1]) === import.meta.filename;
+if (isDirectRun) {
+  main();
+}
 
 function runOneRound(source, state) {
   const round = processOneRound(source, state, args);
@@ -794,10 +810,7 @@ function snapshotRun() {
   }
 }
 
-if (args.snapshotDir) {
-  snapshotRun();
-} else {
-  liveLoop();
+if (isDirectRun) {
+  main();
 }
 
-process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
