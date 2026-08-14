@@ -133,11 +133,15 @@ check("F8：5 单后 shortfall = 0", five.models[FLASH].features.shortfall === 0
 
 // C.3 配额覆盖：零样本低风险单 → A 默认项强制从缺口集合轮转（quota_explore）
 check("C.3：零样本低风险单 A=quota_explore", zero.options.A.reason === "quota_explore", zero.options.A.reason);
-// 所有模型各 3 单后 shortfall=0 → 无覆盖 → highest_score
+// 红2 修法验证：每格 3 单后 shortfall=0 但 globalShortfall=2（新模型全局保底 5）→ 覆盖仍触发
 const many = manyJobs(models, 3);
-const satisfied = run({ jobId: "j-full", events: many });
-check("C.3：全部模型缺口满足后 A=highest_score", satisfied.options.A.reason === "highest_score", satisfied.options.A.reason);
-check("C.3：全部模型缺口满足后所有 shortfall=0", Object.values(satisfied.models).every(d => d.features.shortfall === 0));
+const mid = run({ jobId: "j-mid", events: many });
+check("红2：每格 3 单但全局缺口未满足 → A 仍 quota_explore", mid.options.A.reason === "quota_explore", mid.options.A.reason);
+check("红2：每格 3 单后 shortfall=0 且 globalShortfall=2", Object.values(mid.models).every(d => d.features.shortfall === 0 && d.features.globalShortfall === 2), JSON.stringify(Object.values(mid.models).map(d => [d.model, d.features.shortfall, d.features.globalShortfall])));
+// 每个模型 5 单（每格 n_eff≥3 且 n_global≥5）→ 缺口全满足 → 无覆盖 → highest_score
+const satisfied = run({ jobId: "j-full", events: manyJobs(models, 5) });
+check("C.3：全部模型每格 n_eff≥3 且 n_global≥5 后 A=highest_score", satisfied.options.A.reason === "highest_score", satisfied.options.A.reason);
+check("C.3：缺口全满足后 shortfall=0 且 globalShortfall=0", Object.values(satisfied.models).every(d => d.features.shortfall === 0 && d.features.globalShortfall === 0));
 // 高风险单不让路探索
 const hiRisk = run({ jobId: "j-hi", risk: "高" });
 check("C.3：高风险单不触发配额覆盖（仍 highest_score）", hiRisk.options.A.reason === "highest_score", hiRisk.options.A.reason);
@@ -188,6 +192,39 @@ check("CLI 两次运行 decision_id 相同（确定性）", cli1.status === 0 &&
 const cliArgsChz = cliArgs.map((v, i) => (cliArgs[i - 1] === "--work-type" ? "查证" : v));
 const cli3 = cli(cliArgsChz);
 check("CLI 工种变化（查证，deepseek 被禁）→ decision_id 不同", cli3.status === 0 && cliOut1.decision_id !== JSON.parse(cli3.stdout).decision_id, (cli3.stderr || "").slice(0, 120));
+
+// ── 审官红项回归：红1（B/C 门闩校验）/ 红3（--ts 截断）/ 红4（接手正样本） ──
+
+// 红1：--commit B|C 自选必须落在门闩通过集合（禁令不可绕过，设计 C.4/E.5）
+const r1tmp = fs.mkdtempSync(path.join(os.tmpdir(), "djt-r1-"));
+const r1Files = () => fs.readdirSync(r1tmp).filter(f => f.endsWith(".json"));
+const r1b = cli(["--identity", "协调者", "--work-type", "UI", "--ts", TS, "--job-id", "dj-r1b", "--events-dir", r1tmp, "--commit", "B", "--pick", "gpt-5.6-sol"]);
+check("红1：UI 工种 --commit B --pick gpt（被 ban）→ 非 0 退出", r1b.status !== 0, `status=${r1b.status} stderr=${(r1b.stderr || "").slice(0, 80)}`);
+check("红1：违规自选不落账（0 事件文件）", r1Files().length === 0, r1Files().join(","));
+const r1c = cli(["--identity", "协调者", "--work-type", "UI", "--ts", TS, "--job-id", "dj-r1c", "--events-dir", r1tmp, "--commit", "C", "--pick", "gpt-5.6-sol"]);
+check("红1：--commit C 同样拦截被 ban 模型（不落账）", r1c.status !== 0 && r1Files().length === 0, `status=${r1c.status}`);
+const r1ok = cli(["--identity", "协调者", "--work-type", "UI", "--ts", TS, "--job-id", "dj-r1ok", "--events-dir", r1tmp, "--commit", "B", "--pick", "grok-4.6"]);
+check("红1：合法自选（UI 下 grok 通过门闩）正常落账 3 事件", r1ok.status === 0 && r1Files().length === 3, `status=${r1ok.status} files=${r1Files().length}`);
+fs.rmSync(r1tmp, { recursive: true, force: true });
+
+// 红3：选型时刻之后的事件不得参与重放（复算按 --ts 截断，F6 只对过去衰减）
+const FUTURE_TS = "2026-09-01T10:00:00+08:00"; // 比选型时刻晚 17 天
+const futureEvts = sampleJobs({ n: 1, prefix: "f-" }).map(e => ({ ...e, ts: FUTURE_TS }));
+const r3f = run({ jobId: "j-fut", events: futureEvts });
+check("红3：未来成功样本不入当前格（nEff=0，不被 w_time>1 放大）", r3f.models[FLASH].features.nEff === 0, `nEff=${r3f.models[FLASH].features.nEff}`);
+check("红3：账只多了未来事件 → decision_id 不变（同输入同票可复算）", run({ jobId: "j-fut" }).decision_id === r3f.decision_id, "decision_id 变了");
+
+// 红4：接手成功样本 version 取接手者当前 registry.version → 正样本进接手者当前格
+const handoffEvts = [
+  { type: "job.opened", schema_version: 1, ts: TS, machine: "TEST", seq: 0, event_id: "o-h", job_id: "h-1", task_class: "实现", work_type: "写码", identity: "协调者", scale: "S", risk: "低", reversible: true, task_tokens: 40000, candidate_models: [FLASH], selected: FLASH, why: "fixture" },
+  { type: "job.dispatch", schema_version: 1, ts: TS, machine: "TEST", seq: 1, event_id: "d-h", job_id: "h-1", model: FLASH, identity: "协调者", work_type: "写码", model_version: FLASH_VERSION, terminal: "pi", price_snapshot: {}, decision_id: "dd-h" },
+  { type: "job.handoff", schema_version: 1, ts: TS, machine: "TEST", seq: 2, event_id: "hh-1", job_id: "h-1", from_model: FLASH, to_model: "grok-4.6", reason: "quota", why: "fixture" },
+  { type: "job.closed", schema_version: 1, ts: TS, machine: "TEST", seq: 3, event_id: "c-h", job_id: "h-1", success: true, rework: false, usd_cash: 0.1, usd_economic: 0.1, merged_by: "grok-4.6" },
+];
+const r4h = run({ jobId: "j-h4", events: handoffEvts });
+check("红4：接手成功 → 接手者 grok nEff=1（正样本进当前格）", r4h.models["grok-4.6"].features.nEff === 1, `nEff=${r4h.models["grok-4.6"].features.nEff}`);
+check("红4：grok baseP 仍 0.5（无旧版本样本、不误降格）", r4h.models["grok-4.6"].features.baseP === 0.5, `baseP=${r4h.models["grok-4.6"].features.baseP}`);
+check("红4：源模型 flash 不记正样本（nEff=0）", r4h.models[FLASH].features.nEff === 0, `nEff=${r4h.models[FLASH].features.nEff}`);
 
 // ── ④ 事件写入工具 ────────────────────────────────────────────────────
 
