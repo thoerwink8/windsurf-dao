@@ -156,6 +156,26 @@ function buildPaneIndex(terminals) {
   return idx;
 }
 
+// ── terminal read 响应规整（live 与快照共用同一段逻辑）──────────────
+// #452 复核收口建议 ②：快照样本必须打在 live 用的同一段规整逻辑上，否则
+// makeLiveSource() 的 `!r.ok || !t` 分支只有肉眼 + live 实跑背书。
+// res 形态 = runOrca 返回的 {ok, json, error}；快照加载时把原始 JSON 包成同形态再传入。
+// 返回 {handle, status, tail} 或 {error}；读失败一律 fail-visible（审读红 3）。
+function normalizeReadResponse(res, handle) {
+  if (!res || res.ok !== true) {
+    const raw = res?.error;
+    const err = raw == null ? null
+      : (typeof raw === 'string' ? raw : (raw.code ? `orca 报错 ${raw.code}: ${raw.message}` : raw.message));
+    return { error: `orca terminal read 失败：${err || '无错误详情'}` };
+  }
+  const t = res.json?.result?.terminal;
+  if (!t) return { error: 'orca terminal read 成功响应但缺 result.terminal（结构畸形）' };
+  if (typeof t.status !== 'string' || !Array.isArray(t.tail)) {
+    return { error: 'orca terminal read 成功响应但 status/tail 字段缺失（结构畸形）' };
+  }
+  return { handle: t.handle || handle, status: t.status, tail: t.tail };
+}
+
 // 返回 { ps, paneByKey, readTerminal, tlError }；ps 拉不到时返回 { infraError }
 function makeLiveSource(window) {
   const psR = runOrca(['worktree', 'ps', '--json']);
@@ -174,13 +194,8 @@ function makeLiveSource(window) {
   const cache = new Map();
   const readTerminal = (handle) => {
     if (cache.has(handle)) return cache.get(handle);
-    const r = runOrca(['terminal', 'read', '--terminal', handle, '--limit', String(window), '--json']);
-    const t = r.ok ? r.json?.result?.terminal : null;
-    let res;
-    if (!r.ok) res = { error: `orca terminal read 失败：${r.error}` };
-    else if (!t) res = { error: 'orca terminal read 成功响应但缺 result.terminal（结构畸形）' };
-    else if (typeof t.status !== 'string' || !Array.isArray(t.tail)) res = { error: 'orca terminal read 成功响应但 status/tail 字段缺失（结构畸形）' };
-    else res = { handle, status: t.status, tail: t.tail };
+    // 与快照加载共用同一段规整逻辑：读失败（!r.ok）/ 缺 result.terminal / 缺 status-tail 都 fail-visible
+    const res = normalizeReadResponse(runOrca(['terminal', 'read', '--terminal', handle, '--limit', String(window), '--json']), handle);
     cache.set(handle, res);
     return res;
   };
@@ -222,17 +237,14 @@ function loadSnapshotRound(roundDir) {
   const handleFromName = (f) => f.replace(/^read-/, '').replace(/\.json$/, '');
   for (const f of readdirSync(roundDir).filter(f => /^read-.+\.json$/.test(f))) {
     const j = JSON.parse(readFileSync(join(roundDir, f), 'utf8'));
-    const t = j?.result?.terminal;
-    if (t && typeof t.status === 'string' && Array.isArray(t.tail)) {
-      reads.set(t.handle || handleFromName(f), { handle: t.handle || handleFromName(f), status: t.status, tail: t.tail });
-    } else if (t) {
-      reads.set(t.handle || handleFromName(f), { error: '快照 read 成功响应但 status/tail 字段缺失（结构畸形）' });
-    } else if (j?.ok === false && j?.error?.message) {
-      // 真实 orca 错误响应（如 terminal_handle_stale）原样入库
-      reads.set(handleFromName(f), { error: `orca 报错 ${j.error.code || ''}: ${j.error.message}` });
-    } else {
-      reads.set(handleFromName(f), { error: '快照 read 文件结构不认识' });
-    }
+    // 快照文件即 orca 原始响应：包成 runOrca 返回形态，走 live 同一条规整逻辑
+    // （#452 复核收口建议 ②：read-malformed / read-error 样本打在 live 用的同一段代码上）
+    // 注意：手工变异单元样本（exited/ 等）只存 {result:…} 没有顶层 ok 字段——
+    // 显式 ok:false 才算失败，缺失 ok 视为成功，否则手工样本全被当读失败。
+    const res = normalizeReadResponse({ ok: j?.ok !== false, json: j, error: j?.error }, handleFromName(f));
+    // 索引键：优先文件内 result.terminal.handle（live/ 等样本文件名不含句柄，靠内部 handle 对齐 pane 映射），
+    // 失败响应（只有 error 无 handle）回退文件名（真实实录 read-error/ 文件名即句柄）。
+    reads.set(res.handle || handleFromName(f), res);
   }
 
   const readTerminal = (handle) => {
