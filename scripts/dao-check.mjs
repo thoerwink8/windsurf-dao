@@ -17,12 +17,18 @@
 //
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
-// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算，
-// 全部扫描自发现。
+// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
+// ⑤模型路由表（TOML 可解析 + 必填字段），全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+// 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
+// 不自己写正则拼凑：自己解析自己的格式等于自己查自己，查不出格式错。
+const { parse: parseToml } = require('./lib/smol-toml.cjs');
 
 const ROOT = resolve(import.meta.dirname, '..');
 const t0 = Date.now();
@@ -159,12 +165,76 @@ function checkResidentBudget() {
   else fail(`常驻文件超预算 ${over.length} 个`, '加行前先删行；确实要扩容需用户拍板改声明值', over.map(c => `${c.rel} ${c.tokens}>${c.budget}`).join(' '));
 }
 
+// ── ⑤ 模型路由表 ───────────────────────────────────────────────────────
+// 路由真相源是静默失效型部件：字段缺失没人报错，只会让下游按空气路由。
+// 所以必填字段（why/decided/status/roles）缺失即红。
+// 自发现：文件在不在、条目数是不是 0，都单独报红——不把「没扫到」当「扫完 0 违规」。
+
+const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
+
+function missingKeys(entry, keys) {
+  return keys.filter(k => {
+    const v = entry[k];
+    return v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+  });
+}
+
+function checkModelRouting() {
+  if (!existsSync(ROUTING_FILE)) {
+    fail('docs/model-routing.toml 不在', '路由真相源文件缺失 ⇒ 本次等于没查；恢复文件', ROUTING_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+  } catch (e) {
+    fail('docs/model-routing.toml 不是合法 TOML', '按标准 TOML 解析器报的错修文件', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+
+  const models = Array.isArray(doc.models) ? doc.models : [];
+  const routes = Array.isArray(doc.routes) ? doc.routes : [];
+  const bans = Array.isArray(doc.bans) ? doc.bans : [];
+  const rules = Array.isArray(doc.rules) ? doc.rules : [];
+
+  if (models.length === 0 && routes.length === 0 && bans.length === 0 && rules.length === 0) {
+    fail('路由表里一条模型/路由/禁令/规则都没扫到', '0 条 = 本次等于没查；按 schema 补条目', ROUTING_FILE);
+    return;
+  }
+
+  const problems = [];
+  if (!doc.updated) problems.push('顶层缺 updated');
+  models.forEach((m, i) => {
+    const miss = missingKeys(m, ['id', 'provider', 'roles', 'status', 'why', 'decided']);
+    if (miss.length) problems.push(`models[${i}]缺${miss.join('/')}`);
+  });
+  routes.forEach((r, i) => {
+    const miss = missingKeys(r, ['role', 'beijing', 'model', 'fallback', 'why', 'decided']);
+    if (miss.length) problems.push(`routes[${i}]缺${miss.join('/')}`);
+  });
+  bans.forEach((b, i) => {
+    const miss = missingKeys(b, ['scope', 'why', 'decided']);
+    if (miss.length) problems.push(`bans[${i}]缺${miss.join('/')}`);
+  });
+  rules.forEach((r, i) => {
+    const miss = missingKeys(r, ['rule', 'why', 'decided']);
+    if (miss.length) problems.push(`rules[${i}]缺${miss.join('/')}`);
+  });
+
+  if (problems.length === 0) {
+    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，必填字段齐`);
+  } else {
+    fail(`模型路由表必填字段缺失 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided；禁令要 scope/why/decided；规则要 rule/why/decided', problems.slice(0, 6).join(' '));
+  }
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
+checkModelRouting();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
