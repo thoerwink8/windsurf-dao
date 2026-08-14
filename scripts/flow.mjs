@@ -1,0 +1,803 @@
+#!/usr/bin/env node
+// scripts/flow.mjs —— 闭环自动流转器（issue #455 实现）
+//
+// 分工定论（#455 实录）：看门狗（scripts/watchdog.mjs）管事故（屏面异常），
+// 本脚本管完工（GitHub 确定性信号）——两者正交，不要把完工检测塞回看门狗。
+// 规格源 = issue #455 正文 + 全部评论（拍板、需求语料、边界）。
+//
+// 触发源只用 GitHub 确定性信号，不靠屏面猜测：
+//   ① review 判定行：「判定：红 N 项」「复核结论：绿/红 N 项」——
+//      解析逻辑与 scripts/calibrate.mjs 共用 scripts/lib/judgment.mjs（唯一真相源，不复制两份）
+//   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
+//   ③ PR MERGED 状态
+//
+// 决策规则（②）：
+//   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
+//   - 审官红 N 项       → 输出注入工人返工的指令文本（机械转发，不做内容判断）
+//   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
+//   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
+//   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
+//
+// 执行注入（③）：orca terminal create/send 起审官并注任务；注入后必验开工
+// （屏面回显 token 增长），验不过报帅、不重试狂发（fail-visible）；注入被吞
+// 第一处置是补一记裸回车（#455 连带教训：输入框残留，第二遍全文同样堆积）。
+//
+// 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
+// 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
+// 不出任何自动动作。
+//
+// 存量清点（#455 的 prime 吞存量教训）：本脚本不做「只监听新事件」——
+// 每轮对每个在途 PR 重放全部信号（comments+reviews）推导当前态；首次启动
+// （状态文件为空）即等价于存量清点，存量里已有的完工/判定会被识别并动作，
+// 不会被吞。状态文件 _flow/state.json 只是「已处理信号」游标缓存（GitHub 才是
+// 真相源），可丢可重算：删掉重跑即重新清点。
+//
+// 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作或报帅 / 2 NO_TARGETS
+// （本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
+//
+// 用法：
+//   node scripts/flow.mjs                     轮询模式（默认每 90s 一轮，供 Monitor 挂载）
+//   node scripts/flow.mjs --once              跑单轮后退出（给测试用）
+//   node scripts/flow.mjs --interval 90       轮询间隔秒数
+//   node scripts/flow.mjs --state-file <path> 状态文件位置（默认 _flow/state.json）
+//   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca（测试/预览）
+//   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh JSON 快照跑（测试/复现用），跑完即退出
+//   node scripts/flow.mjs --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
+
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
+import { classifyPr } from './calibrate.mjs';
+
+const require = createRequire(import.meta.url);
+const { parse: parseToml } = require('./lib/smol-toml.cjs');
+
+const ROOT = resolve(import.meta.dirname, '..');
+const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
+const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
+const ORCA_TIMEOUT_MS = 30000;
+const GH_TIMEOUT_MS = 30000;
+const VERIFY_WAIT_MS = 2500;      // 注入后等待回显的静默时间
+const STALE_24H_MS = 24 * 60 * 60 * 1000;
+
+// ══════════════════════════════════════════════════════════════════════
+// 参数
+// ══════════════════════════════════════════════════════════════════════
+
+function printUsage() {
+  console.log(`用法：
+  node scripts/flow.mjs [--once] [--interval 秒] [--state-file <path>] [--dry-run]
+                        [--snapshot-dir <目录>] [--repo <nameWithOwner>]
+
+  --once              跑单轮后退出（给测试用）
+  --interval <秒>     轮询间隔（默认 90，与垫片 Monitor 同频）
+  --state-file <path> 状态文件位置（默认 _flow/state.json）
+  --dry-run           只输出动作与将执行的命令，不碰 orca（测试/预览用）
+  --snapshot-dir <目录> 从录制的 gh JSON 快照跑（测试/复现用），跑完即退出
+  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
+}
+
+function parseArgs(argv) {
+  const args = { once: false, interval: 90, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
+  const take = (i, name) => {
+    const v = Number(argv[i + 1]);
+    if (!Number.isFinite(v) || v <= 0) {
+      console.error(`参数 ${name} 需要正整数`);
+      process.exit(3);
+    }
+    return v;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    switch (a) {
+      case '--once': args.once = true; break;
+      case '--interval': args.interval = take(i++, '--interval'); break;
+      case '--state-file': args.stateFile = resolve(process.cwd(), argv[++i] || ''); break;
+      case '--dry-run': args.dryRun = true; break;
+      case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
+      case '--repo': args.repo = argv[++i] || ''; break;
+      case '--help': printUsage(); process.exit(0); break;
+      default:
+        console.error(`未知参数: ${a}`);
+        printUsage();
+        process.exit(3);
+    }
+  }
+  return args;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 工具
+// ══════════════════════════════════════════════════════════════════════
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function labelNames(pr) {
+  return (pr.labels || []).map(label => typeof label === 'string' ? label : label.name);
+}
+
+function runCmd(cmd, args, timeout = 30000) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
+  if (r.error || r.status !== 0) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 300) };
+  }
+  return { ok: true, out: r.stdout };
+}
+
+function runGh(args) {
+  const r = runCmd('gh', args, GH_TIMEOUT_MS);
+  if (!r.ok) return { ok: false, error: `gh ${args[0]} 失败：${r.error}` };
+  try {
+    return { ok: true, json: JSON.parse(r.out) };
+  } catch (e) {
+    return { ok: false, error: `gh ${args[0]} 输出不是 JSON：${e.message}` };
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 信号提取（纯函数，快照与 live 共用）
+// ══════════════════════════════════════════════════════════════════════
+
+// 完工信号：PR comment 首行命中「完工」或「返工(完成|处置)」。
+function completionSignals(comments) {
+  const out = [];
+  for (const c of comments || []) {
+    if (!c || c.id == null) continue;
+    if (isCompletionComment(c.body)) {
+      out.push({ type: 'completion', id: `c:${c.id}`, at: c.createdAt || '', body: c.body });
+    }
+  }
+  return out;
+}
+
+function reviewSignals(reviews) {
+  const out = [];
+  for (const r of reviews || []) {
+    if (!r || r.id == null) continue;
+    const v = judgmentFromReview(r.body);
+    out.push({
+      type: 'review', id: `r:${r.id}`, at: r.submittedAt || '', body: r.body,
+      verdict: v, url: r.url || null,
+    });
+  }
+  return out;
+}
+
+function orderedSignals(comments, reviews) {
+  return [...completionSignals(comments), ...reviewSignals(reviews)]
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+}
+
+// 由全部信号推导当前态（纯函数，每轮重放——存量清点即此步）：
+//   working → awaiting-review（完工，无审）→ rework-needed（红 N，待返工）
+//   → awaiting-recheck（返工完成，待复核）→ approved（复核绿）/ pingpong（乒乓两轮仍红）
+//   error = 存在判定行缺失的 review（报帅分诊，不作为红/绿处理）。
+function deriveState(signals) {
+  let state = 'working';
+  let redReviews = 0;
+  let lastRed = null;
+  let lastSignalId = null;
+  for (const sig of signals) {
+    lastSignalId = sig.id;
+    if (sig.type === 'completion') {
+      if (state === 'working') state = 'awaiting-review';
+      else if (state === 'rework-needed') state = 'awaiting-recheck';
+      continue;
+    }
+    if (!sig.verdict.kind) { state = 'error'; continue; }
+    if (sig.verdict.green) { state = 'approved'; lastRed = null; continue; }
+    redReviews += 1;
+    lastRed = sig.verdict.red;
+    // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
+    state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
+  }
+  return { state, redReviews, lastRed, lastSignalId };
+}
+
+// 当前态的待办动作（纯函数）：null = 无需流转（扫完 0 需流转）。
+// blocked = 验开工失败后帅持有，不再自动重发（fail-visible，不重试狂发）。
+function pendingAction(derived, rec, prInfo, hasAnyReview) {
+  if (derived.state === 'working' || derived.state === 'merged') return null;
+  if (derived.state === 'awaiting-review') {
+    if (rec.blocked['start-reviewer']) return null;
+    return { kind: 'start-reviewer', round: 0 };
+  }
+  if (derived.state === 'awaiting-recheck') {
+    if (rec.blocked['inject-recheck']) return null;
+    return { kind: 'inject-recheck', round: derived.redReviews };
+  }
+  if (derived.state === 'rework-needed') {
+    if (rec.blocked['inject-rework']) return null;
+    return { kind: 'inject-rework', red: derived.lastRed, round: derived.redReviews };
+  }
+  if (derived.state === 'approved') return { kind: 'report-final' };
+  if (derived.state === 'pingpong') return { kind: 'report-switch', round: derived.redReviews };
+  return null; // error 态由 malformed review 逐条报帅，见 processOneRound
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 审官选型序（docs/model-routing.toml 真相源）
+// ══════════════════════════════════════════════════════════════════════
+
+function loadRouting() {
+  if (!existsSync(ROUTING_FILE)) return { ok: false, error: `${ROUTING_FILE} 不存在` };
+  try {
+    return { ok: true, toml: parseToml(readFileSync(ROUTING_FILE, 'utf8')) };
+  } catch (e) {
+    return { ok: false, error: `${ROUTING_FILE} 解析失败：${String(e.message || e).split(/\r?\n/)[0]}` };
+  }
+}
+
+// 审官选型序（规则「审官选型序」+「审查默认换厂商」+ bans[gpt UI 类]）：
+//   候选 = roles 含「审查」的模型；UI/复审类 → GPT 禁入；工人是 gpt 厂商 → GPT 排除
+//   （审查必换厂商）；结果按「GPT 优先、Claude(Opus) 次之」取第一个。
+function pickReviewer(toml, workerModelId, taskType) {
+  const models = Array.isArray(toml.models) ? toml.models : [];
+  const worker = models.find(m => m.id === workerModelId);
+  const workerProvider = worker ? worker.provider : null;
+  const uiLike = /UI|复审/.test(taskType || '');
+  const isGpt = m => m.provider === 'gpt' || /^gpt/i.test(m.id || '');
+  const candidates = models.filter(m => Array.isArray(m.roles) && m.roles.includes('审查'));
+  let pool = candidates.filter(m => !(uiLike && isGpt(m)));
+  if (workerProvider === 'gpt' || /^gpt/i.test(workerModelId || '')) pool = pool.filter(m => !isGpt(m));
+  return pool.find(m => isGpt(m)) || pool.find(m => !isGpt(m)) || null;
+}
+
+// 审官启动配方（dispatch skill 命令链口径，provider 真相源 = toml providers）：
+//   gpt(codex) 一步到位 --agent codex；claude(reclaude) 两步走 terminal create --command
+//   "reclaude --model opus"（--agent 起不了 reclaude 链）；grok 走 Grok Build（代理前缀必带）。
+function reviewerLaunch(reviewer, toml) {
+  if (reviewer.provider === 'gpt') return { oneShot: true, agent: 'codex', model: reviewer.id };
+  if (reviewer.provider === 'claude') return { oneShot: false, command: 'reclaude --model opus', model: reviewer.id };
+  if (reviewer.provider === 'grok') return { oneShot: true, agent: 'grok', model: reviewer.id, env: { HTTPS_PROXY: 'http://127.0.0.1:7890' } };
+  return null;
+}
+
+function reviewerLabel(reviewer) {
+  return reviewer.provider === 'claude' ? '审官·Claude' : `审官·${reviewer.id}`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 动作文本（决策输出，人读 + 机器可 grep）
+// ══════════════════════════════════════════════════════════════════════
+
+function reviewTaskBook(pr, workerModel, reviewerLabel) {
+  return [
+    `【复核任务书 · 闭环自动流转 · ${reviewerLabel}】`,
+    `任务 PR：#${pr.number} ${pr.title}`,
+    '请审读本 PR 的 diff 与正文（规格源引用、完工自报、验收清单），逐条核对验收标准。',
+    '判定格式（机器可读，写在 review 正文首行）：',
+    '  首审：「判定：红 N 项」或「判定：绿」',
+    '  复核：「复核结论：红 N 项」或「复核结论：绿，可合并」',
+    '同账号不能 request-changes，以 COMMENT 提交 review。红项逐条列明；质疑拍板/规格本身要上帅，不自行改判。',
+  ].join('\n');
+}
+
+function reworkInstruction(pr, red, round, reviewUrl) {
+  return [
+    `【返工指令 · 闭环自动流转 · 第 ${round} 轮】`,
+    `审官对 PR #${pr.number} 判定红 ${red} 项。请读 review：${reviewUrl || `PR #${pr.number} 的最新 review`}`,
+    '逐条处置红项；修完 push，并回一条「返工完成」comment 自报。质疑拍板/规格本身要上帅，不自行改判。',
+  ].join('\n');
+}
+
+function recheckInstruction(pr, round, reviewerLabel) {
+  return [
+    `【复核指令 · 闭环自动流转 · 第 ${round} 轮返工后 · ${reviewerLabel}】`,
+    `工人已完成第 ${round} 轮返工处置。请复核 PR #${pr.number} 最新 diff 与返工自报，`,
+    '判定格式「复核结论：绿/红 N 项」写在 review 正文首行。',
+  ].join('\n');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// orca 执行层（live 用；--dry-run 不触碰）
+// ══════════════════════════════════════════════════════════════════════
+
+function runOrca(args) {
+  const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
+  if (!r.ok) return { ok: false, error: r.error };
+  try {
+    return { ok: true, json: JSON.parse(r.out) };
+  } catch (e) {
+    return { ok: false, error: `orca 输出不是 JSON：${e.message}` };
+  }
+}
+
+function unwrap(json, pathKey, topKey) {
+  const viaPath = json?.result?.[pathKey];
+  if (Array.isArray(viaPath)) return viaPath;
+  if (Array.isArray(json?.[topKey])) return json[topKey];
+  return null;
+}
+
+// 按分支找任务卡 worktree（工人所在的卡，branch = PR headRefName）
+function findWorktreeByBranch(branch) {
+  const r = runOrca(['worktree', 'list', '--json']);
+  if (!r.ok) return { ok: false, error: r.error };
+  const wts = unwrap(r.json, 'worktrees', 'worktrees');
+  if (!Array.isArray(wts)) return { ok: false, error: 'worktree list 结构不认识' };
+  const w = wts.find(x => (x.branch || x.git?.branch) === `refs/heads/${branch}`);
+  return w ? { ok: true, worktree: w } : { ok: false, error: `找不到 branch ${branch} 的 worktree` };
+}
+
+// 找 worktree 里活着的终端（agent 终端优先：connected+writable+title 带角色·模型）
+function findTerminalInWorktree(wtId) {
+  const r = runOrca(['terminal', 'list', '--json']);
+  if (!r.ok) return { ok: false, error: r.error };
+  const terms = unwrap(r.json, 'terminals', 'terminals');
+  if (!Array.isArray(terms)) return { ok: false, error: 'terminal list 结构不认识' };
+  const inWt = terms.filter(t => t.worktreeId === wtId && t.connected && t.writable && !t.orphaned);
+  const agent = inWt.find(t => /·|审官|工人/.test(t.title || ''));
+  const pick = agent || inWt[0];
+  return pick ? { ok: true, terminal: pick } : { ok: false, error: `worktree ${wtId} 没有可用终端` };
+}
+
+// 注入 + 验开工：send 任务文本 → 回读屏面找回显；被吞第一处置补一记裸回车
+// （#455 连带教训：不是再注入一遍全文）；仍无回显 → fail-visible 报帅。
+function injectAndVerify(handle, text, terminalName) {
+  const head = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
+  const sendR = runOrca(['terminal', 'send', '--terminal', handle, '--text', text]);
+  if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
+  sleep(VERIFY_WAIT_MS);
+  let echoed = readEchoes(handle, head);
+  if (!echoed) {
+    // 输入框残留：补一记裸回车（第一处置），不重发全文
+    runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
+    sleep(VERIFY_WAIT_MS);
+    echoed = readEchoes(handle, head);
+  }
+  if (!echoed) return { ok: false, error: `注入后屏面无回显（${terminalName}）——疑似输入框残留/吞注入` };
+  return { ok: true };
+}
+
+function readEchoes(handle, head) {
+  const r = runOrca(['terminal', 'read', '--terminal', handle, '--limit', '80', '--json']);
+  if (!r.ok) return false;
+  const t = r.json?.result?.terminal;
+  const tail = Array.isArray(t?.tail) ? t.tail.map(l => String(l)).join('\n') : '';
+  return tail.includes(head);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 状态文件（游标缓存，GitHub 才是真相源）
+// ══════════════════════════════════════════════════════════════════════
+
+function loadState(path) {
+  if (!existsSync(path)) return { version: 1, inventoried: false, records: {} };
+  try {
+    const s = JSON.parse(readFileSync(path, 'utf8'));
+    if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
+    return { version: 1, inventoried: !!s.inventoried, records: s.records };
+  } catch (e) {
+    return { version: 1, inventoried: false, records: {}, loadError: String(e.message) };
+  }
+}
+
+function saveState(path, state) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  renameSync(tmp, path);
+}
+
+function freshRecord(pr) {
+  return { pr, seenComments: {}, seenReviews: {}, blocked: {}, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, workerWorktree: null };
+}
+
+function fingerprint(derived) {
+  return `${derived.state}|${derived.redReviews}|${derived.lastSignalId || ''}`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// GitHub live 数据源
+// ══════════════════════════════════════════════════════════════════════
+
+function makeLiveSource(repo) {
+  return {
+    listOpenPrs() {
+      const r = runGh(['pr', 'list', '--state', 'open', '--limit', '100', '--json',
+        'number,title,isDraft,state,createdAt,updatedAt,mergedAt,headRefName,labels,body']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, prs: r.json };
+    },
+    getPr(number) {
+      const r = runGh(['pr', 'view', String(number), '--json', 'number,title,isDraft,state,createdAt,updatedAt,mergedAt,headRefName,labels,body']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, pr: r.json };
+    },
+    getComments(number) {
+      const r = runGh(['pr', 'view', String(number), '--json', 'comments']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, comments: r.json.comments || [] };
+    },
+    getReviews(number) {
+      const r = runGh(['pr', 'view', String(number), '--json', 'reviews']);
+      if (!r.ok) return { ok: false, error: r.error };
+      const reviews = (r.json.reviews || []).map(rv => ({
+        id: rv.id, body: rv.body, submittedAt: rv.submittedAt,
+        url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
+      }));
+      return { ok: true, reviews };
+    },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 快照数据源（--snapshot-dir；round-N/ 子目录可多轮，轮间共用状态文件）
+// ══════════════════════════════════════════════════════════════════════
+
+function loadSnapshotRounds(dir) {
+  if (!existsSync(dir)) return { ok: false, error: `快照目录不存在：${dir}` };
+  const roundSubs = readdirSync(dir).filter(d => /^round-\d+$/.test(d))
+    .sort((a, b) => Number(a.slice(6)) - Number(b.slice(6)));
+  const dirs = roundSubs.length > 0 ? roundSubs.map(d => join(dir, d)) : [dir];
+  return { ok: true, dirs };
+}
+
+function readJson(file) {
+  if (!existsSync(file)) return { ok: false, error: `缺文件 ${file}` };
+  try {
+    return { ok: true, json: JSON.parse(readFileSync(file, 'utf8')) };
+  } catch (e) {
+    return { ok: false, error: `${file} 不是合法 JSON：${String(e.message).split(/\r?\n/)[0]}` };
+  }
+}
+
+function makeSnapshotSource(roundDir, repo) {
+  return {
+    listOpenPrs() {
+      const r = readJson(join(roundDir, 'prs.json'));
+      if (!r.ok) return r;
+      if (!Array.isArray(r.json)) return { ok: false, error: 'prs.json 不是数组' };
+      return { ok: true, prs: r.json };
+    },
+    getPr(number) {
+      const r = readJson(join(roundDir, `pr-${number}.json`));
+      if (!r.ok) return r;
+      return { ok: true, pr: r.json };
+    },
+    getComments(number) {
+      const r = readJson(join(roundDir, `pr-${number}-comments.json`));
+      return r.ok ? { ok: true, comments: r.json } : { ok: true, comments: [] };
+    },
+    getReviews(number) {
+      const r = readJson(join(roundDir, `pr-${number}-reviews.json`));
+      if (!r.ok) return { ok: true, reviews: [] };
+      return {
+        ok: true,
+        reviews: r.json.map(rv => ({
+          id: rv.id, body: rv.body, submittedAt: rv.submittedAt,
+          url: `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
+        })),
+      };
+    },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 一轮扫描
+// ══════════════════════════════════════════════════════════════════════
+
+// 执行注入动作；成功返回 {ok:true}，失败返回 {ok:false, error}（调用方报帅+block）。
+function executeAction(action, pr, toml, repo, dryRun) {
+  const fmt = (...parts) => parts.filter(Boolean).join(' ');
+
+  if (action.kind === 'start-reviewer') {
+    const cls = classifyPr(pr);
+    if (!cls.model) {
+      return { ok: false, error: `PR #${pr.number} 缺 model/* 标签（有 type/${cls.taskType || '?'}），不能按选型序确定性选审官`, needsReport: 'report-unknown' };
+    }
+    const reviewer = pickReviewer(toml, cls.model, cls.taskType);
+    if (!reviewer) {
+      return { ok: false, error: `按 docs/model-routing.toml 选不出审官（审查角色模型为空）`, needsReport: 'report-unknown' };
+    }
+    const launch = reviewerLaunch(reviewer, toml);
+    if (!launch) {
+      return { ok: false, error: `审官 ${reviewer.id} 的 provider 无启动配方（${reviewer.provider}）`, needsReport: 'report-unknown' };
+    }
+    const label = reviewerLabel(reviewer);
+    const taskBook = reviewTaskBook(pr, cls.model, label);
+    const steps = [];
+    const placeholderParent = `name:#${pr.number} - ${(pr.title || '').slice(0, 24)}`;
+    if (launch.oneShot) {
+      steps.push(`orca worktree create --parent-worktree ${JSON.stringify(placeholderParent)} --name "${label}" --agent ${launch.agent} --json`);
+    } else {
+      steps.push(`orca worktree create --parent-worktree ${JSON.stringify(placeholderParent)} --name "${label}" --setup skip --json`);
+      steps.push(`orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`);
+    }
+    if (dryRun) {
+      return { ok: true, dry: true, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`) + '\n' + steps.map(s => '  ' + s).join('\n') + '\n' + '  注入复核任务书：' + taskBook.replace(/\n/g, '\n  ') };
+    }
+    // live：先按 PR 分支反查任务卡 worktree（路径从 PR 反查，禁手抄），再起卡 + 起终端 + 注入 + 验开工
+    const wt = findWorktreeByBranch(pr.headRefName);
+    const parent = wt.ok ? wt.worktree.id : placeholderParent;
+    const createR = runOrca(launch.oneShot
+      ? ['worktree', 'create', '--parent-worktree', parent, '--name', label, '--agent', launch.agent, '--json']
+      : ['worktree', 'create', '--parent-worktree', parent, '--name', label, '--setup', 'skip', '--json']);
+    if (!createR.ok) return { ok: false, error: `起审官卡失败：${createR.error}` };
+    let handle;
+    if (launch.oneShot) {
+      handle = createR.json?.result?.agentTerminalHandle || createR.json?.result?.startupTerminal?.handle;
+    } else {
+      const wtId = createR.json?.result?.worktree?.id;
+      if (!wtId) return { ok: false, error: '起审官卡成功响应但缺 worktree.id' };
+      const termR = runOrca(['terminal', 'create', '--worktree', wtId, '--command', launch.command, '--json']);
+      if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
+      handle = termR.json?.result?.terminal?.handle;
+    }
+    if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
+    const v = injectAndVerify(handle, taskBook, label);
+    if (!v.ok) return { ok: false, error: v.error };
+    return { ok: true, handle, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：${label} 已注入复核任务书并验开工（屏面回显）`) };
+  }
+
+  if (action.kind === 'inject-rework') {
+    const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
+    if (dryRun) {
+      return { ok: true, dry: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    }
+    const wt = findWorktreeByBranch(pr.headRefName);
+    if (!wt.ok) return { ok: false, error: `找不到工人终端：${wt.error}` };
+    const t = findTerminalInWorktree(wt.worktree.id);
+    if (!t.ok) return { ok: false, error: `找不到工人终端：${t.error}` };
+    const v = injectAndVerify(t.terminal.handle, instruction, pr.title);
+    if (!v.ok) return { ok: false, error: v.error };
+    return { ok: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工`) };
+  }
+
+  if (action.kind === 'inject-recheck') {
+    const instruction = recheckInstruction(pr, action.round, action.reviewerLabel || '审官');
+    if (dryRun) {
+      return { ok: true, dry: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    }
+    // 复核走审官终端：优先记录过的句柄，句柄失效则按审官卡 worktree 现找
+    let t = null;
+    if (action.reviewerHandle) {
+      t = { ok: true, terminal: { handle: action.reviewerHandle } };
+    } else if (action.reviewerWorktree) {
+      t = findTerminalInWorktree(action.reviewerWorktree);
+    } else {
+      t = { ok: false, error: '没有审官终端句柄/审官卡记录' };
+    }
+    if (!t.ok) return { ok: false, error: `找不到审官终端：${t.error}` };
+    const v = injectAndVerify(t.terminal.handle, instruction, '审官');
+    if (!v.ok) return { ok: false, error: v.error };
+    return { ok: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工`) };
+  }
+
+  return { ok: false, error: `未知动作 ${action.kind}` };
+}
+
+// 一轮：返回 { events, noTargets, infraError }；events 是输出行。
+// noTargets = 本轮没查成（读不到数据，语义「没扫到」）；infraError = 基础设施失败。
+// 两者都要与「扫完 0 需流转」（正常 OK 行）可区分（仓规：数到 0 和没看到样本不是一回事）。
+function processOneRound(source, state, args) {
+  const events = [];
+  const routing = loadRouting();
+  const toml = routing.ok ? routing.toml : null;
+  if (!routing.ok) {
+    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true };
+  }
+
+  const list = source.listOpenPrs();
+  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true };
+  const open = list.prs;
+  const openByNumber = new Map(open.map(p => [p.number, p]));
+  const records = state.records;
+  let noTargets = false;
+  let infraError = false;
+
+  // 退役：上一轮在途、本轮不在 open 列表的 PR → 查终态（MERGED/CLOSED）
+  for (const key of Object.keys(records)) {
+    const rec = records[key];
+    if (openByNumber.has(rec.pr)) continue;
+    if (rec.retired) continue;
+    const prView = source.getPr(rec.pr);
+    const st = prView.ok ? (prView.pr.state || '') : '';
+    if (st === 'MERGED') {
+      rec.retired = true;
+      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）`);
+    } else if (st === 'CLOSED') {
+      rec.retired = true;
+      events.push(`[flow] 退役：PR #${rec.pr} CLOSED（未合并关闭）`);
+    } else if (!prView.ok) {
+      noTargets = true;
+      events.push(`[flow] NO_TARGETS：读 PR #${rec.pr} 终态失败：${prView.error}——本轮没查成`);
+    }
+  }
+
+  for (const pr of open) {
+    const rec = records[pr.number] || (records[pr.number] = freshRecord(pr.number));
+    if (rec.retired) continue;
+
+    const commentsR = source.getComments(pr.number);
+    const reviewsR = source.getReviews(pr.number);
+    if (!commentsR.ok || !reviewsR.ok) {
+      noTargets = true;
+      events.push(`[flow] NO_TARGETS：读 PR #${pr.number} 信号失败（${commentsR.ok ? '' : commentsR.error}${reviewsR.ok ? '' : reviewsR.error}）——本轮没查成`);
+      continue;
+    }
+    const comments = commentsR.comments || [];
+    const reviews = reviewsR.reviews || [];
+
+    // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿
+    for (const rv of reviews) {
+      if (rec.seenReviews[rv.id]) continue;
+      if (rv.id == null) continue;
+      const v = judgmentFromReview(rv.body);
+      if (v.kind) continue;
+      if (!rec.reportedMalformed[rv.id]) {
+        rec.reportedMalformed[rv.id] = true;
+        events.push(`[flow] 报帅：判定行缺失/格式不符 #${pr.number}（review id=${rv.id}，无「判定/复核结论」行）——本脚本不能确定红绿，没查成，请帅分诊`);
+      }
+    }
+
+    // 新信号（完工 comment + 全部 review）按时间序重放推导当前态
+    const all = orderedSignals(comments, reviews);
+    const derived = deriveState(all);
+    const fp = fingerprint(derived);
+    const hasAnyReview = reviews.length > 0;
+
+    if (derived.state === 'merged') {
+      rec.retired = true;
+      continue;
+    }
+
+    // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
+    if (rec.actedOn !== fp) {
+      const action = pendingAction(derived, rec, pr, hasAnyReview);
+      if (action) {
+        if (action.kind === 'report-final') {
+          // 复核绿 → 报帅终审（终审 + 校准 + 合并归档归帅，本脚本不自动合并）
+          events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并`);
+          rec.actedOn = fp;
+        } else if (action.kind === 'report-switch') {
+          // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
+          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红，第 ${action.round} 次复核仍红）——换人决策归帅`);
+          rec.actedOn = fp;
+        } else {
+          const extra = {
+            reviewUrl: action.kind === 'inject-rework' ? lastReviewUrl(reviews) : null,
+            reviewerHandle: rec.reviewer?.handle || null,
+            reviewerWorktree: rec.reviewer?.worktree || null,
+            reviewerLabel: rec.reviewer?.label || null,
+          };
+          const exec = executeAction({ ...action, ...extra }, pr, toml, args.repo || '', args.dryRun);
+          if (exec.ok) {
+            events.push(`[flow] 动作：${exec.text}`);
+            rec.actedOn = fp;
+            if (action.kind === 'start-reviewer' && exec.handle) {
+              rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook };
+            }
+          } else {
+            // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
+            events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
+            if (exec.needsReport === 'report-unknown') {
+              events.push(`[flow] 报帅：PR #${pr.number} 完工但选不出审官（缺 model/type 标签或路由表无审查模型）——不能确定性选审官，请帅处置`);
+            } else {
+              rec.blocked[action.kind] = true; // 注入失败 → 帅持有，不再自动重发
+            }
+            rec.actedOn = fp;
+          }
+        }
+      } else {
+        rec.actedOn = fp; // 无需流转：已扫描该态（防止每轮重复推导输出）
+      }
+    }
+
+    // 新信号记账（动作失败也记账——fail-visible 后不重发，帅持有）
+    for (const c of comments) if (c && c.id != null) rec.seenComments[c.id] = true;
+    for (const rv of reviews) if (rv && rv.id != null) rec.seenReviews[rv.id] = true;
+
+    // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类）
+    if (isInstitutional(pr) && !rec.reportedStale && pr.createdAt) {
+      const age = Date.now() - Date.parse(pr.createdAt);
+      if (age > STALE_24H_MS) {
+        rec.reportedStale = true;
+        events.push(`[flow] 提醒：制度类 PR #${pr.number} ${pr.title} 已停留超 24h（createdAt=${pr.createdAt}）——垫片在顶着，请帅安排收口`);
+      }
+    }
+  }
+
+  const scanned = open.length;
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役'));
+  if (!acted && !noTargets) {
+    events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
+  }
+  return { events, noTargets, infraError };
+}
+
+function lastReviewUrl(reviews) {
+  const withUrl = (reviews || []).filter(r => r.url);
+  return withUrl.length > 0 ? withUrl[withUrl.length - 1].url : null;
+}
+
+function isInstitutional(pr) {
+  return /体系类改动/.test(pr.body || '') || /(制度|体系|拍板)/.test(pr.title || '');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 主流程
+// ══════════════════════════════════════════════════════════════════════
+
+const args = parseArgs(process.argv.slice(2));
+let anyEmitted = false;
+let anyNoTargets = false;
+let anyInfra = false;
+
+function runOneRound(source, state) {
+  const round = processOneRound(source, state, args);
+  for (const line of round.events) {
+    console.log(line);
+    if (line.startsWith('[flow] NO_TARGETS')) anyNoTargets = true;
+    else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
+  }
+  if (round.infraError) anyInfra = true;
+  saveState(args.stateFile, state);
+  return round;
+}
+
+function liveLoop() {
+  let repo = args.repo;
+  if (!repo) {
+    const r = runGh(['repo', 'view', '--json', 'nameWithOwner']);
+    if (!r.ok) {
+      console.log(`[flow] NO_TARGETS：${r.error}——本轮没查成`);
+      process.exit(3);
+    }
+    repo = r.json.nameWithOwner;
+  }
+  console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca' : ''}）`);
+  for (;;) {
+    const state = loadState(args.stateFile);
+    if (state.loadError) {
+      console.log(`[flow] NO_TARGETS：状态文件损坏（${state.loadError}）——本轮没查成，先修状态文件`);
+      if (args.once) process.exit(2);
+      sleep(args.interval * 1000);
+      continue;
+    }
+    if (!state.inventoried) {
+      console.log('[flow] 存量清点：首次启动，重放全部在途 PR 信号作为基线（prime 吞存量防线）');
+      state.inventoried = true;
+    }
+    const source = makeLiveSource(repo);
+    const round = runOneRound(source, state);
+    if (args.once) break;
+    sleep(args.interval * 1000);
+  }
+}
+
+function snapshotRun() {
+  const loaded = loadSnapshotRounds(args.snapshotDir);
+  if (!loaded.ok) {
+    console.log(`[flow] NO_TARGETS：${loaded.error}`);
+    process.exit(3);
+  }
+  const state = loadState(args.stateFile);
+  if (state.loadError) {
+    console.log(`[flow] NO_TARGETS：状态文件损坏（${state.loadError}）`);
+    process.exit(2);
+  }
+  if (!state.inventoried) {
+    console.log('[flow] 存量清点：首次启动，重放全部在途 PR 信号作为基线（prime 吞存量防线）');
+    state.inventoried = true;
+  }
+  const multi = loaded.dirs.length > 1;
+  for (const dir of loaded.dirs) {
+    if (multi) console.log(`# snapshot round ${basename(dir)}`);
+    const source = makeSnapshotSource(dir, args.repo || 'thoerwink8/windsurf-dao');
+    runOneRound(source, state);
+  }
+}
+
+if (args.snapshotDir) {
+  snapshotRun();
+} else {
+  liveLoop();
+}
+
+process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);

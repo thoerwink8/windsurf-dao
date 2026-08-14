@@ -1,5 +1,9 @@
 _tmp/
 _scratch/
+# 流转器游标缓存（GitHub 才是真相源，本地只记已处理信号与终端句柄，可丢可重算）
+_flow/
+# PR 正文草稿（进 PR body 的文书，不进 git）
+.flow-pr-body.md
 # 测试夹具与复现沙箱（跑完即删；崩溃残留也不该进版本库）
 # 刻意不放 _tmp/：被测 hook dao-rule-echo.js 的 EXCLUDE 把 _tmp/_scratch 判为非规则面
 tests/.fixtures-scope*/

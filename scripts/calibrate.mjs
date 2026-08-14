@@ -19,6 +19,9 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { redFlagsFromReviewBodies } from './lib/judgment.mjs';
+
+export { redFlagsFromReviewBodies } from './lib/judgment.mjs';
 
 export const TASK_TYPES = ['写码', '判断', '查证', '审查', 'UI'];
 
@@ -47,27 +50,9 @@ export function countReworkAfterReady(commits, readyAt) {
 // 判定格式：审官以 COMMENT 提交 review，判定写正文首行，如「判定：红 N 项」
 // 「**判定：红 N 项**」「复核结论：绿，可合并」。跨全部 review 取最大 N ⇒
 // 复核绿（无红数）不清零首审红项。
-// 匹配面收窄到判定行（对抗审 #449 红 1）：只认行首为「判定」「复核结论」
-// （允许 >、** 前缀）的行——正文叙述里引用他单「红 N 项」（如「比 #440 的
-// 红 4 项干净多了」）不计入，防引用性多计污染本单成绩。
-// 正则配真实语料回归：语料来自 gh api 拉取的 PR #446 / #440 真实 review body
-// （tests/fixtures/reviews-446.json、reviews-440.json），断言见
-// tests/calibrate.tests.js，禁止 mock 内生。
-const RED_FLAG_PATTERN = /红\s*(\d+)\s*项/g;
-const JUDGMENT_LINE_RE = /^\s*(?:[>*]\s*)*(判定|复核结论)/;
-
-export function redFlagsFromReviewBodies(bodies) {
-  let max = 0;
-  for (const body of bodies || []) {
-    for (const line of String(body || '').split(/\r?\n/)) {
-      if (!JUDGMENT_LINE_RE.test(line)) continue;
-      for (const match of line.matchAll(RED_FLAG_PATTERN)) {
-        max = Math.max(max, Number(match[1]));
-      }
-    }
-  }
-  return max;
-}
+// 解析逻辑的单一真相源 = scripts/lib/judgment.mjs（本脚本与 scripts/flow.mjs
+// 共用，禁止复制第二份）。判定行 = 行首为「判定」「复核结论」（允许 >、** 前缀）
+// 的行——正文叙述里引用他单「红 N 项」不计入，防引用性多计（对抗审 #449 红 1）。
 
 function average(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
