@@ -43,3 +43,10 @@ pnpm test
 1. 谁提的、什么场景？
 2. 删掉哪一层能让这个问题不存在？
 3. 从零重做，还会造它吗？
+
+## Windows / PowerShell 注意（非 Windows 项目删除本节）
+
+- 判断脚本成败看 `$LASTEXITCODE`，不看输出里有没有 "error" 字样。
+- 中文环境的「所在位置 行:X」是 ErrorRecord 提示，不代表命令真的失败。
+- 不要用 `2>&1` 合并流，会制造假错误。
+- 用 PowerShell 5.1 写文件时注意 BOM：管道重定向默认带 BOM，会坏 JSON。
