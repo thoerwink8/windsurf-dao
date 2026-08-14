@@ -108,6 +108,14 @@ console.log("\n=== ⑦ 无需流转 vs 没查成：0 个 open PR → OK 扫完 0
   check("不打出 NO_TARGETS（不是没查成）", !/NO_TARGETS/.test(r.out), r.out.trim());
 }
 
+console.log("\n=== ⑦b 没查成负控：数据源不可用（缺 prs.json）→ NO_TARGETS，与「扫完 0 条」区分 ===");
+{
+  const r = runFlow(path.join(FIXTURES, "broken-source"));
+  check("退出码 3（基础设施失败/没查成）", r.status === 3, `status=${r.status}`);
+  check("明确打印 NO_TARGETS", /NO_TARGETS/.test(r.out), r.out.trim());
+  check("不打出 OK 扫完（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
+}
+
 console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审 ===");
 {
   const r = runFlow(path.join(FIXTURES, "recheck-green"));
@@ -168,10 +176,13 @@ console.log("\n=== ⑫ 完工 comment 识别变体（真实语料）===");
 
 console.log("\n=== ⑬ 判定行解析与 calibrate 同源（共享模块单一真相源，不复制两份）===");
 {
-  check("判定：红 5 项 → kind=判定 red=5", JSON.stringify(judgmentFromReview("判定：红 5 项\n正文")) === '{"kind":"判定","red":5,"green":false}');
-  check("复核结论：红 2 项 → kind=复核结论 red=2", JSON.stringify(judgmentFromReview("复核结论：红 2 项")) === '{"kind":"复核结论","red":2,"green":false}');
-  check("复核结论：绿，可合并 → green", JSON.stringify(judgmentFromReview("复核结论：绿，可合并")) === '{"kind":"复核结论","red":null,"green":true}');
-  check("无判定行 → kind=null（报帅不猜）", JSON.stringify(judgmentFromReview("普通 review 正文")) === '{"kind":null,"red":null,"green":false}');
+  check("判定：红 5 项 → kind=判定 red=5", JSON.stringify(judgmentFromReview("判定：红 5 项\n正文")) === '{"kind":"判定","red":5,"green":false,"malformed":false}');
+  check("复核结论：红 2 项 → kind=复核结论 red=2", JSON.stringify(judgmentFromReview("复核结论：红 2 项")) === '{"kind":"复核结论","red":2,"green":false,"malformed":false}');
+  check("复核结论：绿，可合并 → green", JSON.stringify(judgmentFromReview("复核结论：绿，可合并")) === '{"kind":"复核结论","red":null,"green":true,"malformed":false}');
+  check("无判定行 → kind=null（报帅不猜）", JSON.stringify(judgmentFromReview("普通 review 正文")) === '{"kind":null,"red":null,"green":false,"malformed":false}');
+  check("格式不符「判定：红 项」缺数字 → malformed（报帅不猜红）", judgmentFromReview("判定：红 项\n缺数字").malformed === true);
+  check("格式不符「判定：红」无 N 项 → malformed", judgmentFromReview("判定：红").malformed === true);
+  check("判定行含绿且无红数 → green（确定性规则：绿优先）", judgmentFromReview("复核结论：绿/红，可合并").green === true);
   check("正文叙述引用他单红数不计（#449 红 1 口径）", judgmentFromReview("比 #440 的红 4 项干净多了\n复核结论：绿").green === true, "叙述里红数不应影响判定");
   const real453 = JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"));
   check("真实语料 #453 跨 review 最大红 = 5（复核绿不清零）", redFlagsFromReviewBodies(real453.map(r => r.body)) === 5, "应为 5");

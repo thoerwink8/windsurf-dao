@@ -30,21 +30,21 @@ export function redFlagsFromReviewBodies(bodies) {
   return max;
 }
 
-// 单条 review 的判定行 → { kind, red, green }（流转器用，比红项数更细）：
-//   kind  = '判定'（首审）| '复核结论'（复核）| null（该 body 无判定行）
-//   red   = 判定行里「红 N 项」的 N；判定行无红数且含「绿」→ green=true、red=null
-//   判定行缺失（body 有内容但无判定行）→ kind=null、red=null、green=false
-//   ——流转器对 kind=null 的 review 必须报帅（格式不符/没查成），不得自行猜红绿。
+// 单条 review 的判定行 → { kind, red, green, malformed }（流转器用，比红项数更细）：
+//   kind      = '判定'（首审）| '复核结论'（复核）| null（该 body 无判定行）
+//   red       = 判定行里「红 N 项」的 N；判定行无红数且含「绿」→ green=true、red=null
+//   malformed = 判定行在但红绿都判不出（如「判定：红 项」缺数字、或「判定：绿/红」格式怪异）
+//               ——流转器对 kind=null 或 malformed=true 的 review 必须报帅，不得自行猜红绿。
 export function judgmentFromReview(body) {
   const firstLine = String(body || '').split(/\r?\n/).find(line => JUDGMENT_LINE_RE.test(line));
-  if (!firstLine) return { kind: null, red: null, green: false };
+  if (!firstLine) return { kind: null, red: null, green: false, malformed: false };
   const kind = firstLine.match(JUDGMENT_LINE_RE)[1];
   let red = null;
   for (const match of firstLine.matchAll(RED_FLAG_PATTERN)) {
     red = Math.max(red ?? 0, Number(match[1]));
   }
   const green = red === null && /绿/.test(firstLine);
-  return { kind, red, green };
+  return { kind, red, green, malformed: red === null && !green };
 }
 
 // 完工 comment 识别（流转器用）：工人完工的信号 = PR comment 首行命中

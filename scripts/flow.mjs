@@ -188,12 +188,16 @@ function deriveState(signals) {
       else if (state === 'rework-needed') state = 'awaiting-recheck';
       continue;
     }
-    if (!sig.verdict.kind) { state = 'error'; continue; }
-    if (sig.verdict.green) { state = 'approved'; lastRed = null; continue; }
-    redReviews += 1;
-    lastRed = sig.verdict.red;
-    // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
-    state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
+    if (sig.type === 'review') {
+      const v = sig.verdict;
+      // 判定行缺失（kind=null）或格式不符（红绿都判不出）→ 报帅分诊，不作为红/绿处理
+      if (!v.kind || v.malformed) { state = 'error'; continue; }
+      if (v.green) { state = 'approved'; lastRed = null; continue; }
+      redReviews += 1;
+      lastRed = v.red;
+      // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
+      state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
+    }
   }
   return { state, redReviews, lastRed, lastSignalId };
 }
@@ -629,10 +633,10 @@ function processOneRound(source, state, args) {
       if (rec.seenReviews[rv.id]) continue;
       if (rv.id == null) continue;
       const v = judgmentFromReview(rv.body);
-      if (v.kind) continue;
+      if (v.kind && !v.malformed) continue;
       if (!rec.reportedMalformed[rv.id]) {
         rec.reportedMalformed[rv.id] = true;
-        events.push(`[flow] 报帅：判定行缺失/格式不符 #${pr.number}（review id=${rv.id}，无「判定/复核结论」行）——本脚本不能确定红绿，没查成，请帅分诊`);
+        events.push(`[flow] 报帅：判定行缺失/格式不符 #${pr.number}（review id=${rv.id}，无「判定/复核结论」行或红绿都判不出）——本脚本不能确定红绿，没查成，请帅分诊`);
       }
     }
 
