@@ -118,14 +118,15 @@ token 计数在增长才算开工——启动返回成功不等于已开工。�
 
 ```bash
 # 0) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
+#    agent 句柄：从返回 JSON 的 result.agentTerminalHandle 取（旧运行时回退 result.startupTerminal.handle）
 orca worktree create --no-parent --name "<临时名>" --agent <agent> --json
 
 # 1) 建编排任务：spec 从文件读，避免 shell 改写文本
 orca orchestration task-create --spec "$(cat 任务书.md)" --json
 
-# 2) 起工人：task 用上一步 JSON 里的 id；worktree 用第 0 步 JSON 的完整 id（repo-id::path）
+# 2) 起工人：task 用上一步 JSON 里的 id；worktree 用第 0 步 JSON 的完整 id（repo-id::path，勿加 worktree: 前缀——实测 selector_not_found）
 #    --agent 已在第 0 步起过，这里用 --terminal 复用那个终端，勿再 --agent 起第二个
-orca orchestration worker-start --task <task_id> --worktree worktree:<repo-id::path> --terminal <agentTerminalHandle> --json
+orca orchestration worker-start --task <task_id> --worktree <repo-id::path> --terminal <agentTerminalHandle> --json
 
 # 多工人时：改文件的子卡挂任务卡下，git 从任务分支切；同样 --agent 一步到位
 orca worktree create --parent-worktree 'name:#<PR号> - <动宾短语>' --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
