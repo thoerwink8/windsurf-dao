@@ -38,6 +38,7 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `hash-stable-restart/` | 同屏五轮、第 3 轮 incarnationId 变（同 pane 重启、屏面不变）——重启轮重新起算 | 第 5 轮才报（第 3/4 轮必须 OK；判别力：epoch 去 incarnation 会第 3 轮就报） |
 | `hash-stable-screenchange/` | 屏面 X,X,Y,Y | 永不报，退出码 0 |
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
+| `read-error-livefallback/` | 基于 read-malformed，read 文件换成 **runOrca 回落形态**（`{ok:false, error:"exit 1"}` 字符串错误，模拟 orca stdout 非 JSON / spawn 失败时 runOrca 返回的形态，不是原始 orca 响应） | 首轮 `read-failed:` 且回落字符串进详情（live 字符串分支的自动化覆盖） |
 | `exclusion/` | master(主,指纹屏面) + #452(自,指纹屏面) + #999(工人,干净屏面) | 见 tests/watchdog.tests.js ⑭ |
 | `no-targets/` | 全部 agent `state=done` | 退出码 2，`NO_TARGETS` |
 

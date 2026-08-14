@@ -70,7 +70,7 @@ console.log("\n=== ③ 真实事故语料被拦（2026-08-15 现场实录，字�
 
   const r3 = runWatchdog(path.join(FIXTURES, "real-incidents", "read-error"));
   check("read-error 实录（terminal_handle_stale）：退出码 1", r3.status === 1, `status=${r3.status}`);
-  check("read-error 实录：首轮即 read-failed 且带真实错误码", /read-failed:.*terminal_handle_stale/.test(r3.out), r3.out.trim());
+  check("read-error 实录：首轮 read-failed 且错误码透传（快照样本验规整逻辑；live 侧错误码由 runOrca 解析 stdout 保证同形态）", /read-failed:.*terminal_handle_stale/.test(r3.out), r3.out.trim());
 }
 
 console.log("\n=== ④ exited 违规样本被拦 ===");
@@ -150,6 +150,13 @@ console.log("\n=== ⑬ read-failed fail-closed：成功响应缺 result.terminal
   const r = runWatchdog(path.join(FIXTURES, "read-malformed"));
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
   check("首轮输出 read-failed", /\[#452 - 看门狗正式版\] read-failed:/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑬b read-failed fail-closed：runOrca 回落形态（stdout 非 JSON 的字符串错误）也透传 ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "read-error-livefallback"));
+  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
+  check("首轮 read-failed 且回落字符串进详情（live 字符串分支有断言看着，审读红 ② 返工）", /\[#452 - 看门狗正式版\] read-failed:.*exit 1/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑭ 结构性排除（红 2 修法）：主工作区 / 自身 / 稳定 pane ID ===");
