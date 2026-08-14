@@ -98,6 +98,22 @@ console.log("\n=== ⑥ 判定行缺失负控：review 无判定行 → 报帅分
   check("报帅判定行缺失/格式不符", /报帅：判定行缺失\/格式不符 #1001/.test(r.out), r.out.trim());
   check("明确区分没查成（不猜红绿）", /没查成，请帅分诊/.test(r.out), r.out.trim());
   check("不产生任何自动动作", !/动作：/.test(r.out), r.out.trim());
+  check("同时打出待帅处置常驻行", /待帅处置：#1001（判定行缺失\/格式不符待帅分诊）/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑥b 红 3：待帅事项必须每轮常驻显形——连跑两轮不能转绿 ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-shuai-"));
+  const stateFile = path.join(tmp, "state.json");
+  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "malformed"), "--state-file", stateFile, "--dry-run"];
+  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("首跑 exit 1", r1.status === 1, `status=${r1.status}`);
+  check("重跑仍 exit 1（待办不能报一次就转绿）", r2.status === 1, `status=${r2.status}`);
+  check("重跑仍打待帅处置常驻行", /待帅处置：#1001/.test(out2), out2.trim());
+  check("重跑不打「0 需流转」（有待办就不是无事）", !/OK 扫完 1 个 PR，0 需流转/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log("\n=== ⑦ 无需流转 vs 没查成：0 个 open PR → OK 扫完 0（数到 0 ≠ 没扫到）===");
@@ -133,7 +149,7 @@ console.log("\n=== ⑨ 乒乓两轮仍红：第 1/2 轮红自动返工，第 3 �
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
   check("round-2 返工注入（第 1 轮，红 3 项）", /round-2[\s\S]*返工注入 #1006（第 1 轮，红 3 项）/.test(r.out), r.out.trim());
   check("round-4 返工注入（第 2 轮，红 2 项）", /round-4[\s\S]*返工注入 #1006（第 2 轮，红 2 项）/.test(r.out), r.out.trim());
-  check("round-6 报帅换人（乒乓两轮仍红）", /round-6[\s\S]*报帅：换人 #1006（乒乓两轮仍红，第 3 次复核仍红）/.test(r.out), r.out.trim());
+  check("round-6 报帅换人（乒乓两轮仍红，第 3 次红判定）", /round-6[\s\S]*报帅：换人 #1006（乒乓两轮仍红——两轮返工后第 3 次红判定）/.test(r.out), r.out.trim());
   check("第 3 次红不再注入返工", !/round-6[\s\S]*返工注入/.test(r.out), r.out.trim());
 }
 
@@ -209,14 +225,39 @@ console.log("\n=== ⑮ 状态机纯函数 ===");
   const green = [{ id: 4, body: "复核结论：绿，可合并", submittedAt: "t3" }];
   const d1 = deriveState(orderedSignals(done, red));
   check("完工+红判定 → rework-needed，红 1 轮", d1.state === "rework-needed" && d1.redReviews === 1 && d1.lastRed === 3);
-  const d2 = deriveState(orderedSignals(done, red));
-  check("pendingAction → inject-rework", pendingAction(d2, { blocked: {} }, {}, false)?.kind === "inject-rework");
-  const d3 = deriveState(orderedSignals(done, red));
-  check("blocked 后不重发（fail-visible 不重试狂发）", pendingAction(d3, { blocked: { "inject-rework": true } }, {}, false) === null);
+  check("pendingAction → inject-rework", pendingAction(d1, { blocked: {} })?.kind === "inject-rework");
+  check("blocked 后不重发（fail-visible 不重试狂发）", pendingAction(d1, { blocked: { "inject-rework": true } }) === null);
   const d4 = deriveState(orderedSignals([...done, ...rework], [...red, ...green]));
-  check("复核绿 → approved → report-final", d4.state === "approved" && pendingAction(d4, { blocked: {} }, {}, true)?.kind === "report-final");
+  check("复核绿 → approved → report-final", d4.state === "approved" && pendingAction(d4, { blocked: {} })?.kind === "report-final");
   check("制度类识别：正文含「体系类改动」", isInstitutional({ body: "## 体系类改动（必答）", title: "x" }) === true);
+  check("制度类识别：标题含「制度/体系」", isInstitutional({ body: "## 目标", title: "[pi] 制度修订" }) === true);
+  check("标题仅含「拍板」不再误判制度类（对抗审观察 7）", isInstitutional({ body: "## 目标", title: "[pi] 修复 xx 拍板口径" }) === false);
   check("非制度类不识别", isInstitutional({ body: "## 目标", title: "写码 PR" }) === false);
+}
+
+console.log("\n=== ⑯ 红 2：存量审官反查——帅手起审官、流转器后启动，复核注入仍能找到审官终端 ===");
+{
+  const r = runFlow(path.join(FIXTURES, "recheck-reviewer"));
+  check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
+  check("复核注入动作（存量场景不退化报帅）", /动作：复核注入 #2001（第 1 轮返工后）/ .test(r.out), r.out.trim());
+  check("通过「审官· 子卡」反查找到审官终端", /复核目标：审官终端 term_reviewer_2001，存量反查（审官· 子卡）/.test(r.out), r.out.trim());
+  check("没有报帅（不是当注入失败）", !/报帅：/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑰ 红 4：同一 worktree 多终端选不出唯一 → 报帅不挑第一个 ===");
+{
+  const r = runFlow(path.join(FIXTURES, "multi-terminal"));
+  check("退出码 1（有动作输出）", r.status === 1, `status=${r.status}`);
+  check("明确「选不出唯一注入目标——请帅指定，不挑第一个」", /选不出唯一注入目标——请帅指定，不挑第一个/.test(r.out), r.out.trim());
+  check("没有注入到任一终端（不挑第一个）", !/注入目标：工人终端 term_a_2002/.test(r.out) && !/注入目标：工人终端 term_b_2002/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑱ 红 5：--parent-worktree 用合法 selector（branch:，不是 name:）===");
+{
+  const r = runFlow(path.join(FIXTURES, "real-456"));
+  check("起审官命令用 branch:<headRefName> selector", /--parent-worktree branch:thoerwink8\/点将台实现/.test(r.out), r.out.trim());
+  check("不再用 name: selector（不是 orca 认识的 worktree selector）", !/--parent-worktree name:/.test(r.out), r.out.trim());
+  check("oneShot 走官方首注入通道 --prompt（免就绪竞态）", /--agent codex --prompt <复核任务书> --json/.test(r.out), r.out.trim());
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

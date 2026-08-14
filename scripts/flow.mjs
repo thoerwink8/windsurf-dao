@@ -2,7 +2,8 @@
 // scripts/flow.mjs —— 闭环自动流转器（issue #455 实现）
 //
 // 分工定论（#455 实录）：看门狗（scripts/watchdog.mjs）管事故（屏面异常），
-// 本脚本管完工（GitHub 确定性信号）——两者正交，不要把完工检测塞回看门狗。
+// 本脚本管完工（GitHub 确定性信号）——两者正交，不要把完工检测塞回看门狗；
+// 反过来同理：屏面特征（如「待授权」）归看门狗，不塞进本脚本。
 // 规格源 = issue #455 正文 + 全部评论（拍板、需求语料、边界）。
 //
 // 触发源只用 GitHub 确定性信号，不靠屏面猜测：
@@ -18,13 +19,26 @@
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
-// 执行注入（③）：orca terminal create/send 起审官并注任务；注入后必验开工
-// （屏面回显 token 增长），验不过报帅、不重试狂发（fail-visible）；注入被吞
-// 第一处置是补一记裸回车（#455 连带教训：输入框残留，第二遍全文同样堆积）。
+// 执行注入（③）：
+//   - 起审官：oneShot（codex/grok）走官方首注入通道 `--agent X --prompt <任务书>`
+//     （orca worktree create --help：--prompt sends initial work to that agent），
+//     不手工 send 进就绪竞态；两步走（claude）注入前先 terminal read 轮询就绪
+//     （[providers.claude] 配置同步期抢跑注入必被吞），就绪后才 send。
+//   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
+//     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
+//     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
+//   - 注入目标确定性定位：起审官时记 handle+审官卡 id；返工注入按任务卡 worktree 内
+//     唯一候选终端（排除审官句柄与 shell），选不出唯一目标就报帅，不挑第一个。
+//   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查「审官·」子卡；全找不到
+//     报「待帅接手复核」——这是 #455 原痛点的存量场景（帅手起审官、流转器后启动）。
 //
 // 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
 // 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
 // 不出任何自动动作。
+//
+// 待帅处置常驻行（对抗审红 3）：有待帅事项（复核绿待终审 / 判定行缺失待分诊 /
+// 乒乓仍红待换人 / 注入失败待接手）的 PR，每轮都输出「[flow] 待帅处置：#N（原因）」
+// 且 exit 1——「0 需流转」只允许用在真没有待办时；待办不能因报过一次就转绿。
 //
 // 存量清点（#455 的 prime 吞存量教训）：本脚本不做「只监听新事件」——
 // 每轮对每个在途 PR 重放全部信号（comments+reviews）推导当前态；首次启动
@@ -32,17 +46,22 @@
 // 不会被吞。状态文件 _flow/state.json 只是「已处理信号」游标缓存（GitHub 才是
 // 真相源），可丢可重算：删掉重跑即重新清点。
 //
-// 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作或报帅 / 2 NO_TARGETS
-// （本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
+// 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
+// 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
 //
 // 用法：
 //   node scripts/flow.mjs                     轮询模式（默认每 90s 一轮，供 Monitor 挂载）
 //   node scripts/flow.mjs --once              跑单轮后退出（给测试用）
 //   node scripts/flow.mjs --interval 90       轮询间隔秒数
 //   node scripts/flow.mjs --state-file <path> 状态文件位置（默认 _flow/state.json）
-//   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca（测试/预览）
-//   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh JSON 快照跑（测试/复现用），跑完即退出
+//   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca 写操作
+//                                             （目标解析仍跑——快照/实读，测试可覆盖）
+//   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh/orca JSON 快照跑（测试/复现用）
 //   node scripts/flow.mjs --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
+//
+// 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
+//   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
+//   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -59,7 +78,9 @@ const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
 const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
 const ORCA_TIMEOUT_MS = 30000;
 const GH_TIMEOUT_MS = 30000;
-const VERIFY_WAIT_MS = 2500;      // 注入后等待回显的静默时间
+const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
+const READY_WAIT_MS = 2000;       // 就绪轮询间隔
+const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -74,8 +95,8 @@ function printUsage() {
   --once              跑单轮后退出（给测试用）
   --interval <秒>     轮询间隔（默认 90，与垫片 Monitor 同频）
   --state-file <path> 状态文件位置（默认 _flow/state.json）
-  --dry-run           只输出动作与将执行的命令，不碰 orca（测试/预览用）
-  --snapshot-dir <目录> 从录制的 gh JSON 快照跑（测试/复现用），跑完即退出
+  --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
+  --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
   --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
 }
 
@@ -116,10 +137,6 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function labelNames(pr) {
-  return (pr.labels || []).map(label => typeof label === 'string' ? label : label.name);
-}
-
 function runCmd(cmd, args, timeout = 30000) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
   if (r.error || r.status !== 0) {
@@ -136,6 +153,23 @@ function runGh(args) {
   } catch (e) {
     return { ok: false, error: `gh ${args[0]} 输出不是 JSON：${e.message}` };
   }
+}
+
+function runOrca(args) {
+  const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
+  if (!r.ok) return { ok: false, error: r.error };
+  try {
+    return { ok: true, json: JSON.parse(r.out) };
+  } catch (e) {
+    return { ok: false, error: `orca 输出不是 JSON：${e.message}` };
+  }
+}
+
+function unwrap(json, pathKey, topKey) {
+  const viaPath = json?.result?.[pathKey];
+  if (Array.isArray(viaPath)) return viaPath;
+  if (Array.isArray(json?.[topKey])) return json[topKey];
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -175,7 +209,7 @@ function orderedSignals(comments, reviews) {
 // 由全部信号推导当前态（纯函数，每轮重放——存量清点即此步）：
 //   working → awaiting-review（完工，无审）→ rework-needed（红 N，待返工）
 //   → awaiting-recheck（返工完成，待复核）→ approved（复核绿）/ pingpong（乒乓两轮仍红）
-//   error = 存在判定行缺失的 review（报帅分诊，不作为红/绿处理）。
+//   error = 存在判定行缺失/格式不符的 review（报帅分诊，不作为红/绿处理）。
 function deriveState(signals) {
   let state = 'working';
   let redReviews = 0;
@@ -188,24 +222,22 @@ function deriveState(signals) {
       else if (state === 'rework-needed') state = 'awaiting-recheck';
       continue;
     }
-    if (sig.type === 'review') {
-      const v = sig.verdict;
-      // 判定行缺失（kind=null）或格式不符（红绿都判不出）→ 报帅分诊，不作为红/绿处理
-      if (!v.kind || v.malformed) { state = 'error'; continue; }
-      if (v.green) { state = 'approved'; lastRed = null; continue; }
-      redReviews += 1;
-      lastRed = v.red;
-      // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
-      state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
-    }
+    const v = sig.verdict;
+    // 判定行缺失（kind=null）或格式不符（红绿都判不出）→ 报帅分诊，不作为红/绿处理
+    if (!v.kind || v.malformed) { state = 'error'; continue; }
+    if (v.green) { state = 'approved'; lastRed = null; continue; }
+    redReviews += 1;
+    lastRed = v.red;
+    // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
+    state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
   }
   return { state, redReviews, lastRed, lastSignalId };
 }
 
 // 当前态的待办动作（纯函数）：null = 无需流转（扫完 0 需流转）。
 // blocked = 验开工失败后帅持有，不再自动重发（fail-visible，不重试狂发）。
-function pendingAction(derived, rec, prInfo, hasAnyReview) {
-  if (derived.state === 'working' || derived.state === 'merged') return null;
+function pendingAction(derived, rec) {
+  if (derived.state === 'working') return null;
   if (derived.state === 'awaiting-review') {
     if (rec.blocked['start-reviewer']) return null;
     return { kind: 'start-reviewer', round: 0 };
@@ -220,7 +252,16 @@ function pendingAction(derived, rec, prInfo, hasAnyReview) {
   }
   if (derived.state === 'approved') return { kind: 'report-final' };
   if (derived.state === 'pingpong') return { kind: 'report-switch', round: derived.redReviews };
-  return null; // error 态由 malformed review 逐条报帅，见 processOneRound
+  return null; // error 态由 malformed review 逐条报帅 + 待帅处置常驻行覆盖
+}
+
+// 待帅处置原因（红 3：卡着的 PR 每轮都要显形，不能报一次就转绿）
+function awaitingShuaiReason(derived, rec) {
+  if (derived.state === 'approved') return '复核绿待帅终审';
+  if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
+  if (derived.state === 'pingpong') return '乒乓两轮仍红待帅换人';
+  if (Object.keys(rec.blocked || {}).length > 0) return '注入失败待帅接手';
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -252,12 +293,14 @@ function pickReviewer(toml, workerModelId, taskType) {
 }
 
 // 审官启动配方（dispatch skill 命令链口径，provider 真相源 = toml providers）：
-//   gpt(codex) 一步到位 --agent codex；claude(reclaude) 两步走 terminal create --command
-//   "reclaude --model opus"（--agent 起不了 reclaude 链）；grok 走 Grok Build（代理前缀必带）。
-function reviewerLaunch(reviewer, toml) {
+//   gpt(codex) oneShot --agent codex --prompt（官方首注入通道，免就绪竞态）；
+//   claude(reclaude) 两步走 terminal create --command "reclaude --model opus"，
+//   注入前必须先等配置同步（抢跑必被吞）。
+//   grok 不在审查角色（toml roles 无「审查」），pickReviewer 选不到——不写启动配方，
+//   免得 env/命令看似生效实则从未执行（对抗审观察 4）。
+function reviewerLaunch(reviewer) {
   if (reviewer.provider === 'gpt') return { oneShot: true, agent: 'codex', model: reviewer.id };
   if (reviewer.provider === 'claude') return { oneShot: false, command: 'reclaude --model opus', model: reviewer.id };
-  if (reviewer.provider === 'grok') return { oneShot: true, agent: 'grok', model: reviewer.id, env: { HTTPS_PROXY: 'http://127.0.0.1:7890' } };
   return null;
 }
 
@@ -298,72 +341,117 @@ function recheckInstruction(pr, round, reviewerLabel) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// orca 执行层（live 用；--dry-run 不触碰）
+// orca 终端操作（live 用；注入目标解析走 source，dry-run 也能覆盖）
 // ══════════════════════════════════════════════════════════════════════
 
-function runOrca(args) {
-  const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
+function readTerminalData(handle, cursor) {
+  const args = ['terminal', 'read', '--terminal', handle, '--limit', '80', '--json'];
+  if (cursor != null) args.push('--cursor', String(cursor));
+  const r = runOrca(args);
   if (!r.ok) return { ok: false, error: r.error };
-  try {
-    return { ok: true, json: JSON.parse(r.out) };
-  } catch (e) {
-    return { ok: false, error: `orca 输出不是 JSON：${e.message}` };
+  const t = r.json?.result?.terminal;
+  if (!t || typeof t.status !== 'string' || !Array.isArray(t.tail)) return { ok: false, error: 'read 成功响应但 status/tail 字段缺失（结构畸形）' };
+  return { ok: true, terminal: t };
+}
+
+// 注入前证就绪（红 1）：两步走（claude）配置同步期抢跑必被吞——轮询到
+// 屏面有内容且不在启动占位态才放行；终端退出/超时 fail-visible。
+function waitTerminalReady(handle, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  const starting = /Starting|Connecting|登录|login|初始化|配置同步|请稍候|加载中/i;
+  for (;;) {
+    if (Date.now() >= deadline) return { ok: false, error: `等待终端就绪超时（${label}，${Math.round(timeoutMs / 1000)}s）——未见到可收输入迹象` };
+    const r = readTerminalData(handle, null);
+    if (!r.ok) { sleep(READY_WAIT_MS); continue; }
+    if (r.terminal.status === 'exited') return { ok: false, error: `终端已退出（${label}）` };
+    const tail = r.terminal.tail.map(l => String(l)).join('\n').trim();
+    if (tail.length > 0 && !starting.test(tail)) return { ok: true }; // 有内容且不在启动态 = 可收输入
+    sleep(READY_WAIT_MS);
   }
 }
 
-function unwrap(json, pathKey, topKey) {
-  const viaPath = json?.result?.[pathKey];
-  if (Array.isArray(viaPath)) return viaPath;
-  if (Array.isArray(json?.[topKey])) return json[topKey];
-  return null;
+// 验开工（红 1）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
+// 回显判据为辅（send 路径 TUI 回显注入文本头）。被吞第一处置补一记裸回车
+// （#455 连带教训：不是再注入一遍全文）；仍无 → fail-visible。
+function verifyStarted(handle, echoHead, terminalName) {
+  const first = readTerminalData(handle, null);
+  if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
+  const prev = first.terminal.nextCursor;
+  sleep(VERIFY_WAIT_MS);
+  const second = readTerminalData(handle, prev);
+  if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
+  const all = readTerminalData(handle, null);
+  const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
+  if (echoHead && tailText.includes(echoHead)) return { ok: true, judge: '屏面回显' };
+  // 输入框残留：补一记裸回车（第一处置），不重发全文
+  runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
+  sleep(VERIFY_WAIT_MS);
+  const third = readTerminalData(handle, null);
+  const tail3 = third.ok ? third.terminal.tail.map(l => String(l)).join('\n') : '';
+  const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
+  if (grew3 || (echoHead && tail3.includes(echoHead))) return { ok: true, judge: '补回车后开工' };
+  return { ok: false, error: `注入后无新输出/回显（${terminalName}）——疑似输入框残留或吞注入` };
 }
 
-// 按分支找任务卡 worktree（工人所在的卡，branch = PR headRefName）
-function findWorktreeByBranch(branch) {
-  const r = runOrca(['worktree', 'list', '--json']);
-  if (!r.ok) return { ok: false, error: r.error };
-  const wts = unwrap(r.json, 'worktrees', 'worktrees');
-  if (!Array.isArray(wts)) return { ok: false, error: 'worktree list 结构不认识' };
-  const w = wts.find(x => (x.branch || x.git?.branch) === `refs/heads/${branch}`);
-  return w ? { ok: true, worktree: w } : { ok: false, error: `找不到 branch ${branch} 的 worktree` };
-}
-
-// 找 worktree 里活着的终端（agent 终端优先：connected+writable+title 带角色·模型）
-function findTerminalInWorktree(wtId) {
-  const r = runOrca(['terminal', 'list', '--json']);
-  if (!r.ok) return { ok: false, error: r.error };
-  const terms = unwrap(r.json, 'terminals', 'terminals');
-  if (!Array.isArray(terms)) return { ok: false, error: 'terminal list 结构不认识' };
-  const inWt = terms.filter(t => t.worktreeId === wtId && t.connected && t.writable && !t.orphaned);
-  const agent = inWt.find(t => /·|审官|工人/.test(t.title || ''));
-  const pick = agent || inWt[0];
-  return pick ? { ok: true, terminal: pick } : { ok: false, error: `worktree ${wtId} 没有可用终端` };
-}
-
-// 注入 + 验开工：send 任务文本 → 回读屏面找回显；被吞第一处置补一记裸回车
-// （#455 连带教训：不是再注入一遍全文）；仍无回显 → fail-visible 报帅。
+// 注入 + 验开工（两步走路径：send 任务文本）
 function injectAndVerify(handle, text, terminalName) {
-  const head = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
+  const echoHead = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
   const sendR = runOrca(['terminal', 'send', '--terminal', handle, '--text', text]);
   if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  sleep(VERIFY_WAIT_MS);
-  let echoed = readEchoes(handle, head);
-  if (!echoed) {
-    // 输入框残留：补一记裸回车（第一处置），不重发全文
-    runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
-    sleep(VERIFY_WAIT_MS);
-    echoed = readEchoes(handle, head);
-  }
-  if (!echoed) return { ok: false, error: `注入后屏面无回显（${terminalName}）——疑似输入框残留/吞注入` };
-  return { ok: true };
+  return verifyStarted(handle, echoHead, terminalName);
 }
 
-function readEchoes(handle, head) {
-  const r = runOrca(['terminal', 'read', '--terminal', handle, '--limit', '80', '--json']);
-  if (!r.ok) return false;
-  const t = r.json?.result?.terminal;
-  const tail = Array.isArray(t?.tail) ? t.tail.map(l => String(l)).join('\n') : '';
-  return tail.includes(head);
+// ══════════════════════════════════════════════════════════════════════
+// 注入目标定位（红 2/红 4：确定性定位，选不出唯一就报帅，不挑第一个）
+// ══════════════════════════════════════════════════════════════════════
+
+const SHELL_LIKE = /^(PS |PowerShell|Terminal \d|cmd|bash|zsh)/;
+
+// worktree 里活着的终端里挑唯一注入目标：
+//   connected+writable+非 orphaned；排除审官句柄（返工不能注给审官）；
+//   排除 shell（title 空 / PS / Terminal N / cmd / bash / zsh —— agent 的 title
+//   会被 orca 覆写成对话摘要，不能按「角色·模型」猜，对抗审红 4 实录）。
+//   候选恰 1 个 → 用；0 个 → 报错；多个 → 报帅指定（不挑第一个）。
+function pickUniqueTerminal(terminals, wtId, excludeHandle) {
+  const inWt = (terminals || []).filter(t => t.worktreeId === wtId && t.connected && t.writable && !t.orphaned);
+  const candidates = inWt
+    .filter(t => t.handle !== excludeHandle)
+    .filter(t => {
+      const title = (t.title || '').trim();
+      return title !== '' && !SHELL_LIKE.test(title);
+    });
+  if (candidates.length === 1) return { ok: true, terminal: candidates[0] };
+  if (candidates.length === 0) {
+    const why = inWt.length === 0 ? 'worktree 无活着终端' : `全部 ${inWt.length} 个终端被排除（shell/审官句柄）`;
+    return { ok: false, error: `worktree ${wtId} 没有唯一可用终端（${why}）` };
+  }
+  return { ok: false, error: `worktree ${wtId} 有 ${candidates.length} 个候选终端（${candidates.map(t => t.handle).join('、')}），选不出唯一注入目标——请帅指定，不挑第一个` };
+}
+
+// 审官终端反查（红 2）：①起审官时记下的句柄（优先）②记下的审官卡 id
+// ③兜底存量反查：任务卡子卡里找「审官」卡（帅手起审官、流转器后启动的场景）。
+function findReviewerTerminal(source, pr, rec, workerWt) {
+  const termsR = source.orcaTerminals();
+  if (!termsR.ok) return { ok: false, error: termsR.error };
+  const terms = termsR.terminals;
+  if (rec.reviewer?.handle && terms.some(t => t.handle === rec.reviewer.handle)) {
+    return { ok: true, terminal: terms.find(t => t.handle === rec.reviewer.handle), via: '起审官记录句柄' };
+  }
+  if (rec.reviewer?.worktree) {
+    const t = pickUniqueTerminal(terms, rec.reviewer.worktree, null);
+    if (t.ok) return { ok: true, terminal: t.terminal, via: '起审官记录审官卡' };
+  }
+  if (workerWt && Array.isArray(workerWt.childWorktreeIds) && workerWt.childWorktreeIds.length > 0) {
+    const wtsR = source.orcaWorktrees();
+    if (wtsR.ok) {
+      const reviewerWt = wtsR.worktrees.find(w => workerWt.childWorktreeIds.includes(w.id) && /审官/.test(w.displayName || ''));
+      if (reviewerWt) {
+        const t = pickUniqueTerminal(terms, reviewerWt.id, null);
+        if (t.ok) return { ok: true, terminal: t.terminal, via: '存量反查（审官· 子卡）' };
+      }
+    }
+  }
+  return { ok: false, error: '找不到审官终端（未记录句柄/审官卡，子卡里也没有审官卡）——待帅接手复核' };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -397,7 +485,7 @@ function fingerprint(derived) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// GitHub live 数据源
+// 数据源（live：gh/orca 实调；快照：录制 JSON；两者接口一致）
 // ══════════════════════════════════════════════════════════════════════
 
 function makeLiveSource(repo) {
@@ -427,19 +515,19 @@ function makeLiveSource(repo) {
       }));
       return { ok: true, reviews };
     },
+    orcaWorktrees() {
+      const r = runOrca(['worktree', 'list', '--json']);
+      if (!r.ok) return { ok: false, error: r.error };
+      const wts = unwrap(r.json, 'worktrees', 'worktrees');
+      return Array.isArray(wts) ? { ok: true, worktrees: wts } : { ok: false, error: 'worktree list 结构不认识' };
+    },
+    orcaTerminals() {
+      const r = runOrca(['terminal', 'list', '--json']);
+      if (!r.ok) return { ok: false, error: r.error };
+      const terms = unwrap(r.json, 'terminals', 'terminals');
+      return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'terminal list 结构不认识' };
+    },
   };
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// 快照数据源（--snapshot-dir；round-N/ 子目录可多轮，轮间共用状态文件）
-// ══════════════════════════════════════════════════════════════════════
-
-function loadSnapshotRounds(dir) {
-  if (!existsSync(dir)) return { ok: false, error: `快照目录不存在：${dir}` };
-  const roundSubs = readdirSync(dir).filter(d => /^round-\d+$/.test(d))
-    .sort((a, b) => Number(a.slice(6)) - Number(b.slice(6)));
-  const dirs = roundSubs.length > 0 ? roundSubs.map(d => join(dir, d)) : [dir];
-  return { ok: true, dirs };
 }
 
 function readJson(file) {
@@ -449,6 +537,14 @@ function readJson(file) {
   } catch (e) {
     return { ok: false, error: `${file} 不是合法 JSON：${String(e.message).split(/\r?\n/)[0]}` };
   }
+}
+
+function loadSnapshotRounds(dir) {
+  if (!existsSync(dir)) return { ok: false, error: `快照目录不存在：${dir}` };
+  const roundSubs = readdirSync(dir).filter(d => /^round-\d+$/.test(d))
+    .sort((a, b) => Number(a.slice(6)) - Number(b.slice(6)));
+  const dirs = roundSubs.length > 0 ? roundSubs.map(d => join(dir, d)) : [dir];
+  return { ok: true, dirs };
 }
 
 function makeSnapshotSource(roundDir, repo) {
@@ -479,15 +575,26 @@ function makeSnapshotSource(roundDir, repo) {
         })),
       };
     },
+    orcaWorktrees() {
+      const r = readJson(join(roundDir, 'orca-worktrees.json'));
+      if (!r.ok) return { ok: true, worktrees: [] };
+      const wts = unwrap(r.json, 'worktrees', 'worktrees');
+      return Array.isArray(wts) ? { ok: true, worktrees: wts } : { ok: false, error: 'orca-worktrees.json 结构不认识' };
+    },
+    orcaTerminals() {
+      const r = readJson(join(roundDir, 'orca-terminals.json'));
+      if (!r.ok) return { ok: true, terminals: [] };
+      const terms = unwrap(r.json, 'terminals', 'terminals');
+      return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'orca-terminals.json 结构不认识' };
+    },
   };
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 一轮扫描
+// 动作执行（红 1/2/4/5 落点：目标解析走 source，dry-run 也覆盖解析路径）
 // ══════════════════════════════════════════════════════════════════════
 
-// 执行注入动作；成功返回 {ok:true}，失败返回 {ok:false, error}（调用方报帅+block）。
-function executeAction(action, pr, toml, repo, dryRun) {
+function executeAction(action, pr, toml, source, rec, dryRun) {
   const fmt = (...parts) => parts.filter(Boolean).join(' ');
 
   if (action.kind === 'start-reviewer') {
@@ -497,84 +604,100 @@ function executeAction(action, pr, toml, repo, dryRun) {
     }
     const reviewer = pickReviewer(toml, cls.model, cls.taskType);
     if (!reviewer) {
-      return { ok: false, error: `按 docs/model-routing.toml 选不出审官（审查角色模型为空）`, needsReport: 'report-unknown' };
+      return { ok: false, error: '按 docs/model-routing.toml 选不出审官（审查角色模型为空）', needsReport: 'report-unknown' };
     }
-    const launch = reviewerLaunch(reviewer, toml);
+    const launch = reviewerLaunch(reviewer);
     if (!launch) {
       return { ok: false, error: `审官 ${reviewer.id} 的 provider 无启动配方（${reviewer.provider}）`, needsReport: 'report-unknown' };
     }
     const label = reviewerLabel(reviewer);
     const taskBook = reviewTaskBook(pr, cls.model, label);
-    const steps = [];
-    const placeholderParent = `name:#${pr.number} - ${(pr.title || '').slice(0, 24)}`;
-    if (launch.oneShot) {
-      steps.push(`orca worktree create --parent-worktree ${JSON.stringify(placeholderParent)} --name "${label}" --agent ${launch.agent} --json`);
-    } else {
-      steps.push(`orca worktree create --parent-worktree ${JSON.stringify(placeholderParent)} --name "${label}" --setup skip --json`);
-      steps.push(`orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`);
-    }
+    // 红 5：--parent-worktree 合法 selector 是 branch:/issue:/id:/path:/folder:/worktree:，
+    // name: 是 --repo 的 selector 不是 worktree 的——用 branch:<headRefName>（现成合法）。
+    const parentSel = `branch:${pr.headRefName}`;
+    const steps = launch.oneShot
+      ? [`orca worktree create --parent-worktree ${parentSel} --name "${label}" --agent ${launch.agent} --prompt <复核任务书> --json`]
+      : [`orca worktree create --parent-worktree ${parentSel} --name "${label}" --setup skip --json`,
+         `orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`,
+         '（注入前先 terminal read 轮询就绪，再 send 任务书——配置同步期抢跑必被吞）'];
     if (dryRun) {
-      return { ok: true, dry: true, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`) + '\n' + steps.map(s => '  ' + s).join('\n') + '\n' + '  注入复核任务书：' + taskBook.replace(/\n/g, '\n  ') };
+      return {
+        ok: true, dry: true,
+        text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`)
+          + '\n' + steps.map(s => '  ' + s).join('\n')
+          + '\n  ' + '注入复核任务书：' + taskBook.replace(/\n/g, '\n  '),
+      };
     }
-    // live：先按 PR 分支反查任务卡 worktree（路径从 PR 反查，禁手抄），再起卡 + 起终端 + 注入 + 验开工
-    const wt = findWorktreeByBranch(pr.headRefName);
-    const parent = wt.ok ? wt.worktree.id : placeholderParent;
+    // live：起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
     const createR = runOrca(launch.oneShot
-      ? ['worktree', 'create', '--parent-worktree', parent, '--name', label, '--agent', launch.agent, '--json']
-      : ['worktree', 'create', '--parent-worktree', parent, '--name', label, '--setup', 'skip', '--json']);
+      ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', label, '--agent', launch.agent, '--prompt', taskBook, '--json']
+      : ['worktree', 'create', '--parent-worktree', parentSel, '--name', label, '--setup', 'skip', '--json']);
     if (!createR.ok) return { ok: false, error: `起审官卡失败：${createR.error}` };
+    const newWtId = createR.json?.result?.worktree?.id || null;
     let handle;
     if (launch.oneShot) {
       handle = createR.json?.result?.agentTerminalHandle || createR.json?.result?.startupTerminal?.handle;
-    } else {
-      const wtId = createR.json?.result?.worktree?.id;
-      if (!wtId) return { ok: false, error: '起审官卡成功响应但缺 worktree.id' };
-      const termR = runOrca(['terminal', 'create', '--worktree', wtId, '--command', launch.command, '--json']);
-      if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
-      handle = termR.json?.result?.terminal?.handle;
+      if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
+      const v = verifyStarted(handle, null, label);
+      if (!v.ok) return { ok: false, error: v.error };
+      return { ok: true, handle, worktree: newWtId, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）`) };
     }
+    const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
+    if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
+    handle = termR.json?.result?.terminal?.handle;
     if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
+    const ready = waitTerminalReady(handle, READY_TIMEOUT_MS, label);
+    if (!ready.ok) return { ok: false, error: ready.error };
     const v = injectAndVerify(handle, taskBook, label);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：${label} 已注入复核任务书并验开工（屏面回显）`) };
+    return { ok: true, handle, worktree: newWtId, label, taskBook, text: fmt(`起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）`) };
   }
 
   if (action.kind === 'inject-rework') {
     const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
+    const wtsR = source.orcaWorktrees();
+    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
+    const wtErr = !wtsR.ok ? wtsR.error : workerWt ? null : `找不到 branch ${pr.headRefName} 的 worktree`;
+    const termsR = source.orcaTerminals();
+    let target = null;
+    if (workerWt && termsR.ok) target = pickUniqueTerminal(termsR.terminals, workerWt.id, rec.reviewer?.handle || null);
+    else if (!termsR.ok) target = { ok: false, error: termsR.error };
     if (dryRun) {
-      return { ok: true, dry: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      const note = target?.ok
+        ? `（注入目标：工人终端 ${target.terminal.handle}）`
+        : `（dry-run：注入目标解析失败——${target?.error || wtErr || '终端列表不可用'}）`;
+      return { ok: true, dry: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）${note}`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
-    const wt = findWorktreeByBranch(pr.headRefName);
-    if (!wt.ok) return { ok: false, error: `找不到工人终端：${wt.error}` };
-    const t = findTerminalInWorktree(wt.worktree.id);
-    if (!t.ok) return { ok: false, error: `找不到工人终端：${t.error}` };
-    const v = injectAndVerify(t.terminal.handle, instruction, pr.title);
+    if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
+    if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
+    const v = injectAndVerify(target.terminal.handle, instruction, pr.title);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工`) };
+    return { ok: true, text: fmt(`返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）`) };
   }
 
   if (action.kind === 'inject-recheck') {
     const instruction = recheckInstruction(pr, action.round, action.reviewerLabel || '审官');
+    const wtsR = source.orcaWorktrees();
+    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
+    const target = wtsR.ok ? findReviewerTerminal(source, pr, rec, workerWt || undefined) : { ok: false, error: wtsR.error };
     if (dryRun) {
-      return { ok: true, dry: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      const note = target?.ok
+        ? `（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）`
+        : `（dry-run：审官终端解析失败——${target.error}）`;
+      return { ok: true, dry: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）${note}`) + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
-    // 复核走审官终端：优先记录过的句柄，句柄失效则按审官卡 worktree 现找
-    let t = null;
-    if (action.reviewerHandle) {
-      t = { ok: true, terminal: { handle: action.reviewerHandle } };
-    } else if (action.reviewerWorktree) {
-      t = findTerminalInWorktree(action.reviewerWorktree);
-    } else {
-      t = { ok: false, error: '没有审官终端句柄/审官卡记录' };
-    }
-    if (!t.ok) return { ok: false, error: `找不到审官终端：${t.error}` };
-    const v = injectAndVerify(t.terminal.handle, instruction, '审官');
+    if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
+    const v = injectAndVerify(target.terminal.handle, instruction, '审官');
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工`) };
+    return { ok: true, text: fmt(`复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）`) };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 一轮扫描
+// ══════════════════════════════════════════════════════════════════════
 
 // 一轮：返回 { events, noTargets, infraError }；events 是输出行。
 // noTargets = 本轮没查成（读不到数据，语义「没扫到」）；infraError = 基础设施失败。
@@ -614,6 +737,8 @@ function processOneRound(source, state, args) {
     }
   }
 
+  const awaitingShuai = []; // 红 3：卡着的 PR 每轮常驻显形
+
   for (const pr of open) {
     const rec = records[pr.number] || (records[pr.number] = freshRecord(pr.number));
     if (rec.retired) continue;
@@ -644,16 +769,10 @@ function processOneRound(source, state, args) {
     const all = orderedSignals(comments, reviews);
     const derived = deriveState(all);
     const fp = fingerprint(derived);
-    const hasAnyReview = reviews.length > 0;
-
-    if (derived.state === 'merged') {
-      rec.retired = true;
-      continue;
-    }
 
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
-      const action = pendingAction(derived, rec, pr, hasAnyReview);
+      const action = pendingAction(derived, rec);
       if (action) {
         if (action.kind === 'report-final') {
           // 复核绿 → 报帅终审（终审 + 校准 + 合并归档归帅，本脚本不自动合并）
@@ -661,7 +780,7 @@ function processOneRound(source, state, args) {
           rec.actedOn = fp;
         } else if (action.kind === 'report-switch') {
           // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
-          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红，第 ${action.round} 次复核仍红）——换人决策归帅`);
+          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅`);
           rec.actedOn = fp;
         } else {
           const extra = {
@@ -670,19 +789,17 @@ function processOneRound(source, state, args) {
             reviewerWorktree: rec.reviewer?.worktree || null,
             reviewerLabel: rec.reviewer?.label || null,
           };
-          const exec = executeAction({ ...action, ...extra }, pr, toml, args.repo || '', args.dryRun);
+          const exec = executeAction({ ...action, ...extra }, pr, toml, source, rec, args.dryRun);
           if (exec.ok) {
             events.push(`[flow] 动作：${exec.text}`);
             rec.actedOn = fp;
             if (action.kind === 'start-reviewer' && exec.handle) {
-              rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook };
+              rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
             }
           } else {
             // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
-            if (exec.needsReport === 'report-unknown') {
-              events.push(`[flow] 报帅：PR #${pr.number} 完工但选不出审官（缺 model/type 标签或路由表无审查模型）——不能确定性选审官，请帅处置`);
-            } else {
+            if (exec.needsReport !== 'report-unknown' && exec.needsReport !== 'reviewer-unfound') {
               rec.blocked[action.kind] = true; // 注入失败 → 帅持有，不再自动重发
             }
             rec.actedOn = fp;
@@ -697,22 +814,32 @@ function processOneRound(source, state, args) {
     for (const c of comments) if (c && c.id != null) rec.seenComments[c.id] = true;
     for (const rv of reviews) if (rv && rv.id != null) rec.seenReviews[rv.id] = true;
 
-    // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类）
-    if (isInstitutional(pr) && !rec.reportedStale && pr.createdAt) {
-      const age = Date.now() - Date.parse(pr.createdAt);
+    // 待帅处置常驻行（红 3）：approved/error/pingpong/blocked 每轮显形
+    const reason = awaitingShuaiReason(derived, rec);
+    if (reason) awaitingShuai.push({ pr: pr.number, reason });
+
+    // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类；
+    // 用 updatedAt 算停留——天天在推的长战线 PR 不算「停留」，对抗审观察 7）
+    if (isInstitutional(pr) && !rec.reportedStale && (pr.updatedAt || pr.createdAt)) {
+      const age = Date.now() - Date.parse(pr.updatedAt || pr.createdAt);
       if (age > STALE_24H_MS) {
         rec.reportedStale = true;
-        events.push(`[flow] 提醒：制度类 PR #${pr.number} ${pr.title} 已停留超 24h（createdAt=${pr.createdAt}）——垫片在顶着，请帅安排收口`);
+        events.push(`[flow] 提醒：制度类 PR #${pr.number} ${pr.title} 已停留超 24h（updatedAt=${pr.updatedAt || pr.createdAt}）——垫片在顶着，请帅安排收口`);
       }
     }
   }
 
-  const scanned = open.length;
+  for (const item of awaitingShuai) {
+    events.push(`[flow] 待帅处置：#${item.pr}（${item.reason}）`);
+  }
+
   // 退役记录清除（MERGED/CLOSED 的 PR 不再在途，状态文件不堆积）
   for (const key of Object.keys(records)) {
     if (records[key].retired) delete records[key];
   }
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役'));
+
+  const scanned = open.length;
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
@@ -724,8 +851,10 @@ function lastReviewUrl(reviews) {
   return withUrl.length > 0 ? withUrl[withUrl.length - 1].url : null;
 }
 
+// 制度类识别：PR 正文「体系类改动」段为主（PR 模板必答节）；标题兜底只认
+// 「制度|体系」不认「拍板」（拍板一词会误伤普通任务 PR，对抗审观察 7）。
 function isInstitutional(pr) {
-  return /体系类改动/.test(pr.body || '') || /(制度|体系|拍板)/.test(pr.title || '');
+  return /体系类改动/.test(pr.body || '') || /(制度|体系)/.test(pr.title || '');
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -733,7 +862,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason };
 
 let args = null;
 let anyEmitted = false;
@@ -745,12 +874,6 @@ export function main(argv = process.argv.slice(2)) {
   if (args.snapshotDir) snapshotRun();
   else liveLoop();
   process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
-}
-
-const isDirectRun = process.argv[1]
-  && resolve(process.argv[1]) === import.meta.filename;
-if (isDirectRun) {
-  main();
 }
 
 function runOneRound(source, state) {
@@ -775,7 +898,7 @@ function liveLoop() {
     }
     repo = r.json.nameWithOwner;
   }
-  console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca' : ''}）`);
+  console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
   for (;;) {
     const state = loadState(args.stateFile);
     if (state.loadError) {
@@ -818,7 +941,8 @@ function snapshotRun() {
   }
 }
 
+const isDirectRun = process.argv[1]
+  && resolve(process.argv[1]) === import.meta.filename;
 if (isDirectRun) {
   main();
 }
-
