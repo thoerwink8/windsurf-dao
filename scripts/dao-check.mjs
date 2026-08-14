@@ -17,7 +17,8 @@
 //
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
-// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面，全部扫描自发现。
+// 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算，
+// 全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -117,11 +118,53 @@ function checkSecretsNotTracked() {
   else fail(`疑似密钥进了 git ${hits.length} 个`, '立刻 git rm --cached + 补 .gitignore + 当作已泄漏换掉它', hits.join(' '));
 }
 
+// ── ④ 常驻文件 token 预算 ───────────────────────────────────────────
+// 膨胀是不可感知型失效：每次只加几行，永远不会有人报警，等看见时已经是几百次提交之后。
+// 所以预算类规则不等「第二次违例再升级」，立规即配闸。
+// 期望集合从宿主约定推导（不是手写清单）：文件名是 CLAUDE.md / *-CLAUDE.md 的就是常驻注入面
+// （CLAUDE.md 这个名字是宿主的注入机制本身），这类文件必须声明预算，缺声明即红——
+// 否则删掉一行声明就能让单个文件静默逃出保护（对抗审 PR #437 抓出的绕过路径）。
+// 其他 markdown 自愿声明的同样强制。
+// 口径：token 按 字符数/2 估算——这是近似字符预算不是真 tokenizer 值，对以中文为主的
+// 文本会低估 token（偏宽松），对英文偏严格；预算值应据此保守设定。
+
+const BUDGET_MARK = /总量控制在\s*(\d+)\s*token/;
+const RESIDENT_NAME = /(^|-)CLAUDE\.md$/;
+
+function checkResidentBudget() {
+  const found = [];
+  const missing = [];
+  for (const dir of [ROOT, join(ROOT, 'docs')]) {
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir).filter(x => x.endsWith('.md'))) {
+      const p = join(dir, f);
+      if (!statSync(p).isFile()) continue;
+      const rel = dir === ROOT ? f : `docs/${f}`;
+      const txt = readFileSync(p, 'utf8');
+      const m = txt.match(BUDGET_MARK);
+      if (m) found.push({ rel, budget: Number(m[1]), tokens: Math.round(txt.length / 2) });
+      else if (RESIDENT_NAME.test(f)) missing.push(rel);
+    }
+  }
+  if (missing.length > 0) {
+    fail(`常驻注入面缺预算声明 ${missing.length} 个`, '每个 CLAUDE.md 形态的文件末尾都要有「总量控制在 N token」声明，删声明=逃出保护', missing.join(' '));
+    return;
+  }
+  if (found.length === 0) {
+    fail('一个声明了 token 预算的常驻文件都没扫到', '常驻约定文件末尾要有「总量控制在 N token」声明；0 个声明 = 本次等于没查', `${ROOT} 与 docs/`);
+    return;
+  }
+  const over = found.filter(c => c.tokens > c.budget);
+  if (over.length === 0) green(`常驻预算(字符/2 估算,中文偏宽) ${found.map(c => `${c.rel} ${c.tokens}/${c.budget}`).join(' · ')}`);
+  else fail(`常驻文件超预算 ${over.length} 个`, '加行前先删行；确实要扩容需用户拍板改声明值', over.map(c => `${c.rel} ${c.tokens}>${c.budget}`).join(' '));
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
+checkResidentBudget();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
