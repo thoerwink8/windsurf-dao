@@ -1,0 +1,1 @@
+[{"number":1003,"title":"制度类测试 PR","isDraft":false,"state":"OPEN","createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-01T12:00:00Z","mergedAt":null,"headRefName":"thoerwink8/fake-1003","labels":[{"name":"model/deepseek-v4-flash"},{"name":"type/写码"}],"body":"## 目标\n制度修订。\n\n## 体系类改动（必答）\n1. 谁提的？\n2. 删哪层？\n3. 从零重做？\n"}]
