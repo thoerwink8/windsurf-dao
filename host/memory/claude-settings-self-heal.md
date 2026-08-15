@@ -1,11 +1,13 @@
 ---
 name: claude-settings-self-heal
-description: "~/.claude/settings.json 的真实 owner 与 BOM 坑——cc-switch DB 下发通用配置；dao.ps1 link-claude 写 hooks，曾用 Set-Content -Encoding UTF8 写 BOM 把文件刷坏"
+description: "~/.claude/settings.json 的真实 owner 与 BOM 坑——cc-switch DB 下发通用配置；PS 5.1 的 Set-Content -Encoding UTF8 会写 BOM 把文件刷坏"
 metadata: 
   node_type: memory
   type: project
   originSessionId: 63a59d85-078a-4cb2-830a-3707b6978338
 ---
+
+> 失效（2026-08-15）：`dao.ps1` 已随 #425 退役、文件不存在，`ccswitch/` 已改名 `host/`。下文凡以 dao.ps1 为写入方/根治方向的部分不要照做。本条只留结论：settings.json 无单一 owner（cc-switch DB 下发 / CC 本体重置互相覆盖），PS 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM 把文件刷坏。
 
 **2026-06-15 实地核实（修正旧记忆）**：旧版记忆描述的 `dao-settings-heal.js` + `claude/settings.template.json` + `claude-strip.mjs` + `strip-db-claude.mjs` + SessionStart 自愈 hook **全部不存在于代码**（Glob 全空，restore.mjs 无剥离逻辑）。那套重构只写进了记忆、从没落地（或在 claude/→ccswitch/ 重构里被删）。别再依赖它。
 

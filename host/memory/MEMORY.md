@@ -3,9 +3,9 @@
 - [ralph-loop 已禁用](ralph-loop-disabled.md) — 官方插件的 Stop hook 会卡死会话,已在全局 settings.json 禁用,改完须重启 claude 生效
 - [dao 部署机制已换代](dao-claude-migration.md) — dao.ps1 已随 #425 退役不存在(2026-08-15 实证),现行=逐个 SymbolicLink 直连仓内 host/,无自愈
 - [TraceyU 测试环境坑](traceyu-test-env-trap.md) — 全量 vitest 有 pre-existing 失败(document undefined),验收 pencil 任务只看四关别看全量
-- [codex/claude 共用 skills](codex-claude-shared-skills.md) — git 单源 + dao.ps1 link-claude;~/.codex/skills 写入方已归 cc-switch store(2026-07-27 拍板,dao.ps1:89);cc-switch 分发用 Junction 不是 symlink,判断要 -in "SymbolicLink","Junction"
+- [codex/claude 共用 skills](codex-claude-shared-skills.md) — ~/.codex/skills 写入方已归 cc-switch store(2026-07-27 拍板);【dao.ps1 已退役,操作指令勿照做】cc-switch 分发用 Junction 不是 symlink,判断要 -in "SymbolicLink","Junction"
 - [python 是 stub 用 py](python-stub-use-py.md) — 本机 python 是 WindowsApps stub(exit 49 静默失败),跑脚本/教训门控一律用 py
-- [settings.json 真实写入方与 BOM 坑](claude-settings-self-heal.md) — 无单一 owner 三方互覆盖(cc-switch DB 下发/dao.ps1 link/CC 本体重置);旧「自愈机制」2026-06-15 核实从未落地勿依赖;写文件防 PS5.1 BOM 坑(索引陈旧由 2026-07-22 查冲突 spike 抓获修正)
+- [settings.json 真实写入方与 BOM 坑](claude-settings-self-heal.md) — 【dao.ps1 已退役】无单一 owner 多方互覆盖(cc-switch DB 下发/CC 本体重置);旧「自愈机制」2026-06-15 核实从未落地勿依赖;写文件防 PS5.1 BOM 坑(索引陈旧由 2026-07-22 查冲突 spike 抓获修正)
 - [WebFetch 域名校验被挡](webfetch-domain-block-use-fetch-mcp.md) — 本机抓网页优先用 fetch MCP,内置 WebFetch 的 claude.ai 回连校验被网络挡,抓国内站会报 Unable to verify domain
 - [多会话卡死 auto-update](claude-multisession-blocks-autoupdate.md) — 多个 claude.exe 同跑会让 auto-update 永远失败卡旧版,旧版长思考+工具调用触发 "tool call could not be parsed"/"malformed";loop/autopilot 派 subagent 做 web 研究最易触发,卡死数小时;诊断看会话 jsonl 的 stop_reason+thinking 空壳
 - [补丁 vs 闭环](evolution-patch-vs-loop.md) — 加规则补丁是治标,加验证闭环才治本;想加"禁止X"时先问能否自动检测
@@ -13,7 +13,7 @@
 - [Skill 价值公式](evolution-skill-value-formula.md) — 价值=调度频率×不可替代性,不被用的 skill 是纯 context 开销(38→7 实证)
 - [统一入口原则](evolution-unified-entry.md) — 用户不该理解工具链拓扑,下游自动调上游,一个入口搞定
 - [重构后 grep 同步](evolution-grep-after-refactor.md) — 删/改核心文件后必 grep 全项目同步引用,门面文档优先
-- [symlink 静默断开](evolution-symlink-silent-break.md) — Windows symlink/Junction 会悄悄失效,dao.ps1 status 自检+Junction 自愈
+- [symlink 静默断开](evolution-symlink-silent-break.md) — Windows symlink/Junction 会悄悄失效【dao.ps1 status 自检已随 #425 退役,无替代自愈】
 - [文档按需读](doc-read-on-demand.md) — 不主动通读项目 md,规则类 harness 每轮自动注入无需重读,其他文档要改哪个才读哪个
 - [Loop Go Gate 教训](loop-go-gate-lesson.md) — 造线入口必须先切分支再动手,状态元数据转换≠实际操作完成,已加 Go Gate 四步门控
 - [工具渲染通道污染](session-tool-render-pollution.md) — 工具结果可能重复刷行/夹带注入,文件本身不受影响;git show 是可信读取通道

@@ -7,7 +7,7 @@ metadata:
   originSessionId: 6bfa8d8e-a4b9-40c9-8a84-e9cea6028678
 ---
 
-> 失效（2026-08-15）：`dao.ps1` 已随 #425 退役、文件不存在，`ccswitch/` 已改名 `host/`。下文的操作指令不要照做，现行部署见 NEW-MACHINE.md。本条只留结论（链接会静默断开、Junction 与 SymbolicLink 要一起认）。
+> 失效（2026-08-15）：`dao.ps1` 已随 #425 退役、文件不存在，`ccswitch/` 已改名 `host/`。下文的操作指令不要照做，现行部署见 NEW-MACHINE.md。本条只留结论：~/.codex/skills 写入方是 cc-switch store；判断链接类型要 `-in "SymbolicLink","Junction"`，只认 SymbolicLink 会漏掉 Junction。
 
 dao skills 走 git 单一真相源:仓库 `ccswitch/skills/`(原 `claude/skills/`)是唯一源,`dao.ps1 link-claude` 软链到 `~/.claude/skills/`。**~/.codex/skills 的写入方已归 cc-switch store**(用户 2026-07-27 拍板,判据与归属注释见 dao.ps1:89 起)——dao.ps1 对它只剩 status 报告与 unlink-codex 删除方向,不再主动建链。
 
