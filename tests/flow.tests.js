@@ -87,9 +87,9 @@ console.log("\n=== ④ 真实语料 #453（实录：判定红5→复核红2→�
 {
   const r = runFlow(path.join(FIXTURES, "real-453"));
   check("退出码 1（有报帅）", r.status === 1, `status=${r.status}`);
-  check("复核绿无 merge/auto 标签 → 报帅终审（缺一不合）", /报帅：终审 #453（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(r.out), r.out.trim());
+  check("复核绿无 merge/auto 标签 → 报帅终审（缺一不合）", /报帅：终审 #453（复核结论：绿，无 merge\/auto 标签——等用户终审(；mergeable 还在算，下轮重查)?）/.test(r.out), r.out.trim());
   check("终审不自动合并（无 动作： 行）", !/动作：/.test(r.out), r.out.trim());
-  check("同时打出待帅处置（等用户终审）", /待帅处置：#453（复核绿待帅终审（无 merge\/auto 标签——等用户终审））/.test(r.out), r.out.trim());
+  check("同时打出待帅处置（等用户终审）", /待帅处置：#453（复核绿待帅终审（无 merge\/auto 标签——等用户终审(；mergeable 还在算)?））/.test(r.out), r.out.trim());
   check("真实语料判定行解析：#453 首审红 5 项", redFlagsFromReviewBodies([JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"))[0].body]) === 5, "红项数应为 5");
 }
 
@@ -152,7 +152,7 @@ console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工 / 
   check("round-1 起审官（task-create + worker-start）", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
   check("round-2 返工注入真通（worker-start --terminal 推闲置工人）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_1005/.test(r.out), r.out.trim());
   check("round-3 复核注入真通（审官 handle）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）：task-create \+ worker-start --task <新> --terminal term_reviewer_1005/.test(r.out), r.out.trim());
-  check("round-4 报帅终审（无 merge/auto → 等用户终审）", /round-4[\s\S]*报帅：终审 #1005（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(r.out), r.out.trim());
+  check("round-4 报帅终审（无 merge/auto → 等用户终审）", /round-4[\s\S]*报帅：终审 #1005（复核结论：绿，无 merge\/auto 标签——等用户终审(；mergeable 还在算，下轮重查)?）/.test(r.out), r.out.trim());
   check("复核绿后不再注入任何动作", !/round-4[\s\S]*动作：/.test(r.out), r.out.trim());
 }
 
@@ -651,6 +651,44 @@ console.log("\n=== ㉝ 活性判据禁令（#500 实证：禁止屏面形态当�
   const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
   check("dispatch SKILL 开工判据不再用 token/cursor 增量当活性证据", !/token\/cursor 在涨才算开工/.test(skill), "残留旧判据");
   check("dispatch SKILL 写明 #500 实证", /#500/.test(skill));
+}
+
+console.log("\n=== ㉞ 判绿 + 冲突漏报修正（#497 第五轮：无论走不走自动合都查 mergeable 说清）===");
+{
+  // 三态：MERGEABLE→待终审（merge-no-auto 已有断言）；CONFLICTING→冲突提示压过温和文案；UNKNOWN→还在算不打回（real-453 已断言）
+  const conflict = runFlow(path.join(FIXTURES, "merge-no-auto-conflict"));
+  check("判绿+无标签+CONFLICTING → 冲突提示（不再只说待终审）", /报帅：终审 #3207（复核结论：绿，无 merge\/auto 标签——等用户终审；且 mergeable=CONFLICTING（DIRTY）——有冲突，需 rebase 后才能合）/.test(conflict.out), conflict.out.trim());
+  check("判绿+冲突 → 待帅处置常驻行写明冲突（压过「待终审」）", /待帅处置：#3207（复核绿但有冲突，需 rebase 后才能合（无 merge\/auto 标签——等用户终审））/.test(conflict.out), conflict.out.trim());
+  check("判绿+冲突 → 不再说「复核绿待帅终审」", !/待帅处置：#3207（复核绿待帅终审/.test(conflict.out), conflict.out.trim());
+  check("判绿+冲突 → 不合并", !/动作：合并/.test(conflict.out), conflict.out.trim());
+  // UNKNOWN（无 gate 数据 → mergeable 缺省）：还在算，不打回（real-453 断言过文案，这里再验退出码路径不变）
+  const unknown = runFlow(path.join(FIXTURES, "real-453"));
+  check("UNKNOWN → 仍在算下轮重查，不报冲突不打回", /mergeable 还在算，下轮重查/.test(unknown.out) && !/有冲突/.test(unknown.out), unknown.out.trim());
+}
+
+console.log("\n=== ㉟ 未归类状态报警（#497 第五轮：显式白名单 + 未知状态必须叫，不能静默消失）===");
+{
+  check("pendingAction 白名单：working → null（合法无待办）", pendingAction({ state: "working" }) === null);
+  check("pendingAction 白名单：shang-shuai → null（报帅覆盖）", pendingAction({ state: "shang-shuai" }) === null);
+  check("pendingAction 白名单：error → null（报帅覆盖）", pendingAction({ state: "error" }) === null);
+  const u = pendingAction({ state: "test-only-future-state" });
+  check("pendingAction 未知状态 → unclassified 动作（不静默 null）", u && u.kind === "unclassified" && u.state === "test-only-future-state", JSON.stringify(u));
+  check("awaitingShuaiReason 未知状态 → 给原因（不 null 消失）", awaitingShuaiReason({ state: "test-only-future-state" }, {}, false) === "落入未归类状态 test-only-future-state——设计时没想到的状态组合，请帅分诊");
+  check("awaitingShuaiReason 白名单 working → null", awaitingShuaiReason({ state: "working" }, {}, false) === null);
+  // 端到端：预置 unclassified 待帅账 → 常驻行每轮显形（未归类 PR 不静默）
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-unclass-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 1, inventoried: true, round: 0, dispatchCache: {}, chainWatchNoSampleReported: false,
+    records: {
+      "3407": { pr: 3407, seenComments: {}, seenReviews: {}, pendingShuai: { kind: "unclassified", reason: "落入未归类状态 test-only——设计时没想到的状态组合，请帅分诊" }, reportedMalformed: {}, reportedStale: false, actedOn: "working|0|", reviewer: null, escalated: null, workerDispatch: null, policyBackfilled: false, chainBrokenSince: null, mergeAttempted: false, mergeBlocked: false, stateSince: Date.now() },
+    },
+  }), "utf8");
+  const r = runFlowShared(path.join(FIXTURES, "unclassified-hold"), stateFile, hbFile);
+  const out = (r.stdout || "") + (r.stderr || "");
+  check("端到端：未归类待帅账 → 待帅处置常驻行显形（不静默）", /待帅处置：#3407（落入未归类状态 test-only——设计时没想到的状态组合，请帅分诊）/.test(out), out.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

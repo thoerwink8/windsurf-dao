@@ -359,6 +359,20 @@ function deriveState(signals) {
   return { state, redReviews, lastRed, lastSignalId, latestAnnotation: latest };
 }
 
+// 状态白名单（#497 第五轮：任何 PR 在任何时刻都必须落在某一类里，且要有一个「未归类」兜底类
+// 而不是让它消失。白名单外的状态 = 设计时没想到的组合，必须报警——漏掉的永远是没想到的那个）。
+// pendingAction 与 awaitingShuaiReason 共用同一集合，两处各自维护就又会不一致。
+const KNOWN_FLOW_STATES = new Set([
+  'working',          // 工人干活中，无待办
+  'awaiting-review',  // 等审官复核（动作：start-reviewer）
+  'awaiting-recheck', // 等复核注入（动作：inject-recheck）
+  'rework-needed',    // 返工（动作：inject-rework）
+  'approved',         // 复核绿（动作：merge-gate）
+  'switch',           // 审官标注「同一处未修好」（动作：report-switch）
+  'shang-shuai',      // 上帅：停手，报帅覆盖
+  'error',            // 判定行缺失：停手，报帅覆盖
+]);
+
 // 当前态的待办动作（纯函数）：null = 无需流转（扫完 0 需流转）。
 // 注入重试的闸是 actedOn 指纹去重（每个新信号至多一次，不重试狂发）；
 // pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示。
@@ -369,7 +383,9 @@ function pendingAction(derived) {
   if (derived.state === 'rework-needed') return { kind: 'inject-rework', red: derived.lastRed, round: derived.redReviews };
   if (derived.state === 'approved') return { kind: 'merge-gate' };
   if (derived.state === 'switch') return { kind: 'report-switch', round: derived.redReviews };
-  return null; // shang-shuai / error 态：停手/报帅，由 awaitingShuaiReason + 待帅处置常驻行覆盖
+  if (derived.state === 'shang-shuai' || derived.state === 'error') return null; // 停手/报帅，由 awaitingShuaiReason + 待帅处置常驻行覆盖
+  // 白名单外 = 设计时没想到的状态组合：不静默消失，报警待帅分诊
+  return { kind: 'unclassified', state: derived.state };
 }
 
 // 待帅处置原因（红 3：卡着的 PR 每轮都要显形，不能报一次就转绿）
@@ -384,6 +400,7 @@ function awaitingShuaiReason(derived, rec, thisRoundFailed) {
     if (rec.mergeAttempted && !rec.mergeBlocked) return null; // 合并动作已发起，等 GitHub 收口
     return '复核绿待帅终审';
   }
+  if (derived.state === 'working') return null; // 工人干活中：无待办（白名单）
   if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
   if (derived.state === 'switch') return '审官标注「同一处未修好」待帅换人';
   if (derived.state === 'shang-shuai') {
@@ -392,7 +409,8 @@ function awaitingShuaiReason(derived, rec, thisRoundFailed) {
     return '上帅——停手叫人，不再自动流转';
   }
   if (thisRoundFailed) return '投递/目标解析失败待帅确认（本轮，未落闸）';
-  return null;
+  if (KNOWN_FLOW_STATES.has(derived.state)) return null; // 白名单内且动作表覆盖（awaiting-* 动作成功/失败已记账）
+  return `落入未归类状态 ${derived.state}——设计时没想到的状态组合，请帅分诊`; // 白名单外：必须给原因，不能 null 消失
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -653,8 +671,25 @@ function handleApproved(pr, rec, source, args, repo) {
   const gate = mergeGate(gpr, ci);
 
   if (!gate.ok) {
-    // 缺一不合：报帅/待帅处置，不合并
+    // 缺一不合：报帅/待帅处置，不合并。但合并前重查 mergeable 不只属于「准备合并」——
+    // 判绿 + 冲突恰恰是最该被看见的状态（#497 第五轮实证：#497 判绿且 CONFLICTING 时走的是
+    // 「只通知不合」分支，没到重查那步，结果从所有类别里掉出去，用户以为能终审、真合才发现冲突）。
+    // 所以无论走不走自动合都查一次 mergeable 并说清，三态可分：
+    //   MERGEABLE → 现状文案（待终审）；CONFLICTING/DIRTY → 冲突提示 + 待帅处置常驻（压过温和文案）；
+    //   UNKNOWN → 瞬态（GitHub 还在算），不打回，文案带一句下轮重查。
+    const verdict = mergeableVerdict(gpr.mergeable, gpr.mergeStateStatus);
     const reason = `复核结论：绿，${gate.reason}`;
+    if (!verdict.ok && !verdict.wait) {
+      const conflictNote = `；且 mergeable=${gpr.mergeable}${gpr.mergeStateStatus ? `（${gpr.mergeStateStatus}）` : ''}——有冲突，需 rebase 后才能合`;
+      lines.push(`[flow] 报帅：终审 #${pr.number}（${reason}${conflictNote}）`);
+      rec.pendingShuai = { kind: 'approved', reason: `复核绿但有冲突，需 rebase 后才能合（${gate.reason}）` };
+      return { lines };
+    }
+    if (verdict.wait) {
+      lines.push(`[flow] 报帅：终审 #${pr.number}（${reason}；mergeable 还在算，下轮重查）`);
+      rec.pendingShuai = { kind: 'approved', reason: `复核绿待帅终审（${gate.reason}；mergeable 还在算）` };
+      return { lines };
+    }
     lines.push(`[flow] 报帅：终审 #${pr.number}（${reason}）`);
     rec.pendingShuai = { kind: 'approved', reason: `复核绿待帅终审（${gate.reason}）` };
     return { lines };
@@ -1403,7 +1438,12 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
       if (rec.pendingShuai && derived.state !== 'shang-shuai' && derived.state !== 'switch' && derived.state !== 'error') rec.pendingShuai = null;
       const action = pendingAction(derived);
       if (action) {
-        if (action.kind === 'report-switch') {
+        if (action.kind === 'unclassified') {
+          // 白名单外状态：设计时没想到的组合——不静默，报警 + 待帅处置常驻（#497 第五轮）
+          events.push(`[flow] 报帅：PR #${pr.number} 落入未归类状态 ${action.state}——设计时没想到的状态组合，请帅分诊`);
+          rec.pendingShuai = { kind: 'unclassified', reason: `落入未归类状态 ${action.state}——设计时没想到的状态组合，请帅分诊` };
+          rec.actedOn = fp;
+        } else if (action.kind === 'report-switch') {
           events.push(`[flow] 报帅：换人 #${pr.number}（审官标注「同一处未修好」，第 ${action.round} 次红判定）——换人决策归帅，不自动换`);
           rec.pendingShuai = { kind: 'report-switch', reason: '审官标注「同一处未修好」待帅换人' };
           rec.actedOn = fp;
