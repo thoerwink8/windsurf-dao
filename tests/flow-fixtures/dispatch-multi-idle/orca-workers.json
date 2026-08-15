@@ -1,22 +1,22 @@
 [
  {
-  "dispatchId": "ctx_i1",
-  "taskId": "task_i1",
-  "runId": "run_ctx_i1",
+  "dispatchId": "ctx_830029358976",
+  "taskId": "task_43ef488ea2af",
+  "runId": "run_0c7c8fdfe40c",
   "worktreeId": "wt::worker-999",
-  "agentTerminalHandle": "term_worker_999",
+  "agentTerminalHandle": "term_1002ddd7-0cb4-4076-8df9-a4beca722b4d",
   "dispatchStatus": "completed",
   "workerState": "succeeded",
-  "terminalState": "retained"
+  "terminalState": "released"
  },
  {
-  "dispatchId": "ctx_i2",
-  "taskId": "task_i2",
-  "runId": "run_ctx_i2",
+  "dispatchId": "ctx_a91bdf3aedde",
+  "taskId": "task_5f1335d776b7",
+  "runId": "run_0c7c8fdfe40c",
   "worktreeId": "wt::worker-999",
-  "agentTerminalHandle": "term_worker_999",
+  "agentTerminalHandle": "term_ca9ee372-e27c-494c-a790-fc54caa809c2",
   "dispatchStatus": "completed",
   "workerState": "succeeded",
-  "terminalState": "retained"
+  "terminalState": "released"
  }
 ]

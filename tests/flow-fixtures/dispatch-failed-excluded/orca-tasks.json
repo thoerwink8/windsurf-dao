@@ -1,8 +1,0 @@
-[
- {
-  "id": "task_999",
-  "spec": "工人任务：构造假闭环 #999。",
-  "dispatchId": "ctx_worker_999",
-  "agentTerminalHandle": "term_worker_999"
- }
-]
