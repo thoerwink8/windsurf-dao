@@ -16,6 +16,6 @@ metadata:
 - 派工写法 `pi --provider opencode-go --model <id>`，可用模型跑 `pi --list-models opencode` 看。
 - 实测通：glm-5.2（openai-completions）、minimax-m3（anthropic-messages）、grok-4.5 与 kimi-k3（responses）。
 - **gpt-5.6-luna 在本区被上游 403 拒（"not available in your region"）**，不是 key 问题，别浪费时间查凭据；grok-4.5 走同一端点却正常，说明是模型级区域限制。
-- provider 表和 auth.json 写法见本机 pi 文档 `docs/providers.md`，别去网上找。
+- provider 表和 auth.json 写法见 pi 自带文档的 `docs/providers.md`（pi 安装目录下，**不是本仓的 docs/**），别去网上找。
 
 相关：[[pi-universal-harness]]、[[claude-workers-use-opus]]
