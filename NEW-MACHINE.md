@@ -78,13 +78,35 @@ node scripts/inbox-station.mjs ensure
 
 ## 10. 接上 memory
 
-本机 Claude 项目 memory 默认写在 `~/.claude/projects/<编码后的仓库路径>/memory/`，换机即丢。仓内 `host/memory/` 是真相源。克隆后在仓库根跑：
+本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`（`D:\frank\windsurf-dao` → `D--frank-windsurf-dao`），换机即丢。仓内 `host/memory/` 是真相源。克隆后在**仓库根**跑这一段（已是正确 Junction 则什么都不做；真目录会改名备份再接上）：
 
 ```powershell
-.\dao.ps1 link
+& {
+  $ErrorActionPreference = 'Stop'
+  $repo = (Resolve-Path .).Path
+  $hostMem = Join-Path $repo 'host\memory'
+  if (-not (Test-Path -LiteralPath $hostMem)) { throw "host/memory 不在: $hostMem" }
+  $encoded = $repo -replace ':', '-' -replace '[\\/]', '-'
+  $local = Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
+  $want = [IO.Path]::GetFullPath($hostMem)
+  $item = Get-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
+  if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
+    $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
+    if ($got -eq $want) { Write-Host "memory already linked: $local -> $want"; return }
+    $item.Delete()
+  } elseif ($item) {
+    $bak = "$local.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+    Rename-Item -LiteralPath $local -NewName (Split-Path $bak -Leaf)
+    Write-Host "backed up $local -> $bak"
+  }
+  New-Item -ItemType Directory -Path (Split-Path $local -Parent) -Force | Out-Null
+  New-Item -ItemType Junction -Path $local -Target $want | Out-Null
+  Write-Host "linked $local -> $want"
+}
 ```
 
-本机目录还不存在就建一条指向 `host/memory/` 的 Junction；本机已是真目录（第一次从孤岛切过来）会先按「内容相同跳过、不同则有效修改时间新者胜」合并进仓，再换成 Junction。之后用 `.\dao.ps1 status` 看断链，断了会自愈。
+本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
 
 ## 11. Orca 快捷命令：从零拷问
 
