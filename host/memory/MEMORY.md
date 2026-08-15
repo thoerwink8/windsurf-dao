@@ -36,3 +36,4 @@
 - [grok TUI 横幅吃注入](grok-tui-optin-banner-trap.md) — 首启 opt-in 横幅吞首次 send，先 Esc 再直给；等授权词屏面与停摆同貌看 Recap
 - [Orca 工兵启动三约定](orca-worker-launch-conventions.md) — 启动命令用 reclaude 不用裸 claude(裸的会静默 exited);独立树必带 --no-parent 否则变子工作区;特殊字符文本走文件禁双引号拼
 - [grok 原生通道坑](grok-native-launch-trap.md) — worker-start --agent grok 裸起必卡死(无代理+模型落4.5),正确姿势带前缀手动起终端再 worker-start --terminal 收口
+- [Orca 终端快捷键](orca-terminal-shortcuts.md) — 缩放 Ctrl+= / Ctrl+- / Ctrl+0，滚动 Shift+PgUp/PgDn、Ctrl+Home/End，用户实测确认

@@ -80,7 +80,9 @@ node scripts/inbox-station.mjs ensure
 
 本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。
 
-先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。已是正确 Junction 则什么都不做；真目录会改名备份再接上。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
+先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。
+
+**事前拦截**：本机是真目录时，脚本先核对仓内 `host/memory/` 是不是本机文件的超集。本机有、仓内没有的文件会直接 throw，**不会改名、不会建 Junction**。先把缺的拷进 `host/memory/` 再跑。已是正确 Junction 则什么都不做。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
 ```powershell
 & {
@@ -98,6 +100,12 @@ node scripts/inbox-station.mjs ensure
     if ($got -eq $want) { Write-Host "memory already linked: $local -> $want"; return }
     $item.Delete()
   } elseif ($item) {
+    $missing = @(Get-ChildItem -LiteralPath $local -File | Where-Object {
+      -not (Test-Path -LiteralPath (Join-Path $hostMem $_.Name))
+    } | ForEach-Object { $_.Name })
+    if ($missing.Count -gt 0) {
+      throw "仓内不是本机超集，先把这些拷进 host/memory/ 再接: $($missing -join ', ')"
+    }
     $bak = "$local.bak-$(Get-Date -Format yyyyMMddHHmmss)"
     Rename-Item -LiteralPath $local -NewName (Split-Path $bak -Leaf)
     Write-Host "backed up $local -> $bak"
@@ -108,7 +116,7 @@ node scripts/inbox-station.mjs ensure
 }
 ```
 
-本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
+skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
 
 ## 11. Orca 快捷命令：从零拷问
 
