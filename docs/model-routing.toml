@@ -78,8 +78,8 @@ Command Code 官方 CLI 做工人载具（拍板 2026-08-16，issue #508；本�
 启动坑（2026-08-16 帅实测）：
 - 登录必须真 TTY（Ink raw mode），无 TTY 报 "Raw mode is not supported"；登录只能用户跑 `command-code login`。
 - 自动化一律 `--skip-onboarding`，否则撞 onboarding 会静默挂住（同 #500 型坑）。
+- 无人值守开关三档（launch 模板用最狠的 `--yolo`，与本仓 codex/pi/grok 一致全程无提示）：`--yolo`（= `--dangerously-skip-permissions`）绕过**所有**权限提示；`--auto-accept` 只是以 auto-accept 模式启动，危险操作**仍可能提示**；`--permission-mode <standard|plan|auto-accept>` 显式设档。要更保守的备选，把 launch 里的 `--yolo` 换成 `--auto-accept` 即可（本文件一处改）。`--yolo` 生效标志：底栏 `» permission bypass on [shift+tab]`（#511 工人全程无提示）。
 - 命令发出后需补一记空回车才执行；之后约 20 秒内 TUI 就绪（屏面 `# Command Code` / 输入框 `❯ Ask your question...`）。
-- `--yolo` 生效标志：底栏 `» permission bypass on [shift+tab]`。
 - 非交互契约：`-p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
 社区插件方案（pi-commandcode-provider）2026-08-16 拍板不采用，插件已卸载；pi 保持 DeepSeek 官方 API 原通道。
 """
