@@ -16,7 +16,7 @@ const { spawnSync } = require("node:child_process");
 const REPO = path.resolve(__dirname, "..");
 const {
   select, hashOf, beijingMinutes, canonicalStringify, matchBeijingRoute,
-  parseWindow, isInWindows,
+  parseWindow, isInWindows, computeCost,
 } = require("../scripts/lib/dianjiangtai-core.mjs");
 const { parseYaml } = require("../scripts/lib/yaml-min.mjs");
 const { buildEvent, writeEvent, schemaMeta, nextSeq, ulidFromMs } = require("../scripts/lib/event-writer.mjs");
@@ -147,10 +147,28 @@ check("C.3：缺口全满足后 shortfall=0 且 globalShortfall=0", Object.value
 const hiRisk = run({ jobId: "j-hi", risk: "高" });
 check("C.3：高风险单不触发配额覆盖（仍 highest_score）", hiRisk.options.A.reason === "highest_score", hiRisk.options.A.reason);
 
-// 峰谷现算：同一任务 10:00（峰）vs 13:00（谷）flash 成本不同
-const peakCost = zero.models[FLASH].cost.c;
-const valleyRun = run({ ts: TS_VALLEY });
-check("F10 峰谷现算：峰时 flash 成本 > 谷时（3.0/1.5 与 9.0/4.5 阶梯）", peakCost > valleyRun.models[FLASH].cost.c, `${peakCost} vs ${valleyRun.models[FLASH].cost.c}`);
+// 峰谷现算（F10）：用夹具验算法，不绑政策文件。
+// ds-flash 2026-08-16 主通道换成 opencode Go 额度池后，policy/models.yml 里已无按量计价模型，
+// 但 computeCost 的 metered 分支仍在服役（应急直连、将来新增按量模型都走它）——
+// 断言若继续读真实 flash 条目，就会随通道变更一起哑掉，把「没样本可查」伪装成「查过没事」。
+const METERED_FIXTURE = {
+  id: "fixture-metered",
+  pricing: {
+    verified_at: "2026-08-14",
+    unit: "元/百万tokens",
+    metered: {
+      peak_windows_beijing: ["09:00-12:00", "14:00-18:00"],
+      peak: { cache_hit: 0.10, cache_miss: 3.0, output: 9.0 },
+      valley: { cache_hit: 0.05, cache_miss: 1.5, output: 4.5 },
+    },
+    fixed_fee: 0,
+    subscription: null,
+  },
+};
+const fxPeak = computeCost({ model: METERED_FIXTURE, taskTokens: 40000, meters: [], at: TS });
+const fxValley = computeCost({ model: METERED_FIXTURE, taskTokens: 40000, meters: [], at: TS_VALLEY });
+check("F10 峰谷现算：峰时成本 > 谷时（3.0/1.5 与 9.0/4.5 阶梯）", fxPeak.c > fxValley.c, `${fxPeak.c} vs ${fxValley.c}`);
+check("F10 夹具确实算出非零成本（防两边都 0 的假通过）", fxPeak.c > 0 && fxValley.c > 0, `${fxPeak.c}/${fxValley.c}`);
 check("峰谷时刻判定：10:00 峰、13:00 谷", beijingMinutes(TS) === 600 && beijingMinutes(TS_VALLEY) === 780);
 
 // 禁令门闩（F1）：gpt 被禁 UI、deepseek 被禁查证
@@ -267,12 +285,16 @@ fs.rmSync(tmp, { recursive: true, force: true });
 
 // ── 政策 YAML 解析 ────────────────────────────────────────────────────
 
-check("models.yml 解析出 5 个现役模型", models.length === 5, String(models.length));
+check("models.yml 解析出 6 个现役模型", models.length === 6, String(models.length));
 const flash = models.find(m => m.id === FLASH);
-check("models.yml：flash 版本/窗口/峰谷价与 model-routing.toml 注记一致", flash.version === FLASH_VERSION && flash.pricing.metered.peak_windows_beijing[0] === "09:00-12:00" && flash.pricing.metered.peak.cache_miss === 3.0 && flash.pricing.metered.valley.output === 4.5);
+// 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
+// 版本串照旧核对；计价口径改核「主通道是 Go 的额度包月」——直连按量价目退到
+// model-routing.toml 末尾的价目注记，只在切回应急直连时参考。
+check("models.yml：flash 版本串与 model-routing.toml 注记一致", flash.version === FLASH_VERSION, flash.version);
+check("models.yml：flash 主通道 = opencode-go 额度包月（不是按量）", flash.provider === "opencode-go" && flash.pricing.subscription.marginal_cost === 0 && flash.pricing.metered === null, `${flash.provider}/${JSON.stringify(flash.pricing.metered)}`);
 check("models.yml：grok 订阅边际成本≈0（拍板口径）", models.find(m => m.id === "grok-4.6").pricing.subscription.marginal_cost === 0);
 check("models.yml：gpt/claude 价目 verified_at=null（待补）", models.find(m => m.id === "gpt-5.6-sol").pricing.verified_at === null && models.find(m => m.id === "claude-opus").pricing.verified_at === null);
-check("bans.yml：2 条硬禁令", bans.length === 2, String(bans.length));
+check("bans.yml：3 条硬禁令", bans.length === 3, String(bans.length));
 check("bans.yml：gpt UI ban、deepseek 查证 ban 就位", bans.some(b => b.models.includes("gpt-5.6-sol") && b.work_types.includes("UI")) && bans.some(b => b.models.includes(FLASH) && b.work_types.includes("查证")));
 check("weights.yml：λ_risk=1.0 / λ_pref=0.2 / λ_cost=0.15（C.1 默认）", weights.weights.lambda_risk === 1.0 && weights.weights.lambda_pref === 0.2 && weights.weights.lambda_cost === 0.15);
 check("weights.yml：k=4、k0=2", weights.shrinkage.k === 4 && weights.shrinkage.k0 === 2);
