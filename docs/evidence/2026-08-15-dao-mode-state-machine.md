@@ -170,12 +170,51 @@ dao check: 好的（13 项，8.9s）
 
 ## ① 故意违规被当场拦下：专注锁 #488 期间指派新工作对象
 
-> 返工记录：第一版只留了 AI「我不照办」的话，没留能证明**确实没去做 #491** 的工具轨迹；
-> 「纠偏/闲聊不误伤」也只写了对照说明，没有真发一句纠偏、一句闲聊去验。审官两条都判红，现已补跑。
+> 返工记录（第二轮）：第一版只留了 AI「我不照办」的话，没留能证明**确实没去做 #491** 的工具轨迹；
+> 「纠偏/闲聊不误伤」也只写了对照说明，没有真发一句纠偏、一句闲聊去验。审官两条都判红，已补跑。
 > 补跑用 `--output-format stream-json --verbose` 抓下每一次 `tool_use`——**「做没做」看轨迹，不看它自己怎么说**。
+>
+> 返工记录（第三轮）：补跑了，但**原始事件文件没入仓**，审官 rg 全仓找不到，只看得到我人工整理的清单——
+> 人工整理的东西证明不了「没有遗漏的操作」。现已把三轮的原始事件原样落进 `docs/evidence/2026-08-15-dao-mode-raw/`。
 
 态：`focus`，焦点 `#488 建专注/值守状态机`，判据「PR #490 合并」。
 每一轮都是**起全新会话**跑的，AI 上下文里没有 skill 正文，只有 hook 每轮注入的那段字。
+
+### 原始事件在哪，怎么自己复现
+
+`docs/evidence/2026-08-15-dao-mode-raw/` 下四个文件，**未经整理、未删事件、未改字段**：
+
+| 文件 | 是什么 | 有效行数 | `tool_use` 事件 |
+|---|---|---|---|
+| `1b-second-drift.stream-json.jsonl` | 第二次偏离那一轮的完整 stream-json 事件流 | 27 | 3 条，在第 8 / 15 / 20 行 |
+| `1d-course-correct.stream-json.jsonl` | 纠偏那一轮 | 19 | 2 条，在第 8 / 10 行 |
+| `1e-chitchat.stream-json.jsonl` | 闲聊那一轮 | 13 | **0 条** |
+| `cc-session-tool-use-lines.jsonl` | 第二个独立来源：Claude Code 自己的会话记录里，含 `tool_use` 的原始整行 | 5 | 5 条（1b 三条 + 1d 两条） |
+
+列出任一轮的全部工具调用（逐条打印行号、工具名、完整入参）：
+
+```bash
+node -e "const f=process.argv[1];require('fs').readFileSync(f,'utf8').split(/\r?\n/).forEach((l,i)=>{if(!l.trim().startsWith('{'))return;const e=JSON.parse(l);if(e.type!=='assistant')return;for(const c of (e.message.content||[]))if(c.type==='tool_use')console.log((i+1)+'  '+c.name+'  '+JSON.stringify(c.input))})" docs/evidence/2026-08-15-dao-mode-raw/1b-second-drift.stream-json.jsonl
+```
+
+**别用 `rg tool_use` 数事件**：`parent_tool_use_id`、`server_tool_use`、`tool_use_id` 这些字段名里都带这个词
+（`1e-chitchat` 那份 grep 得到 3 行，实际 `tool_use` 事件是 0 条——两个字段名 + 一个统计字段撞的）。要数事件就用上面那条命令。
+
+**两个来源交叉印证**（两边独立记录，我没法只改一边）：
+
+| 轮次 | stream-json（我起会话时抓的） | Claude Code 会话记录（宿主自己写的） | 一致 |
+|---|---|---|---|
+| 1-b | 3 条：Skill / Bash / ToolSearch | `9a344f06-…jsonl` 第 11 / 21 / 25 行，同样 3 条同名 | ✔ |
+| 1-d | 2 条：Grep / Read | `2b4be658-…jsonl` 第 10 / 12 行，同样 2 条同名 | ✔ |
+| 1-e | 0 条 | `5f001ef4-…jsonl` 全文件 0 条 | ✔ |
+
+会话记录原件在本机 `~/.claude/projects/C--Users-Administrator-orca-workspaces-windsurf-dao-488----------/`，
+文件名就是每轮的 `session_id`（在 stream-json 第 3 行的 `session_id` 字段里，可自行对照）。
+**那个目录会随会话轮转清掉，所以不留指针**——需要的整行已抄进 `cc-session-tool-use-lines.jsonl` 入仓。
+
+一条给后来人的提醒：拿 `node scripts/dao-redact.mjs --scan` 扫这三个 stream-json 会报 3 处「疑似凭据」，
+命中的是每份第 3 行的 `"apiKeySource":"none"` ——键名像凭据、值就是字符串 `none`。是误报，没有真凭据；
+原始形态不改写，所以留着并在此注明。
 
 ### 1-a 第一次指派：`去把 #492 孤儿树检测误报那个查一下，看是什么原因，给我个结论。`（streak 0 → 1）
 
