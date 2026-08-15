@@ -7,6 +7,8 @@ metadata:
   originSessionId: 6bfa8d8e-a4b9-40c9-8a84-e9cea6028678
 ---
 
+> 失效（2026-08-15）：`dao.ps1` 已随 #425 退役、文件不存在，`ccswitch/` 已改名 `host/`。下文的操作指令不要照做，现行部署见 NEW-MACHINE.md。本条只留结论（链接会静默断开、Junction 与 SymbolicLink 要一起认）。
+
 dao skills 走 git 单一真相源:仓库 `ccswitch/skills/`(原 `claude/skills/`)是唯一源,`dao.ps1 link-claude` 软链到 `~/.claude/skills/`。**~/.codex/skills 的写入方已归 cc-switch store**(用户 2026-07-27 拍板,判据与归属注释见 dao.ps1:89 起)——dao.ps1 对它只剩 status 报告与 unlink-codex 删除方向,不再主动建链。
 
 **cc-switch 的坑**:它管理的 skill 分发到 `~/.codex/skills/` / `~/.claude/skills/` 用的是 **Junction(目录联接点),不是 SymbolicLink**。PowerShell 判断链接类型时 `$_.LinkType -eq "SymbolicLink"` 会漏掉 Junction,导致误判为"用户真实文件"。正确写法:`$_.LinkType -in "SymbolicLink","Junction"`(加括号避免 `-and` 优先级问题)。

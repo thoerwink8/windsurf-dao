@@ -1,11 +1,13 @@
 ---
 name: evolution-symlink-silent-break
-description: "Windows symlink/Junction 会静默断开(更新/权限/工具操作),定期 dao.ps1 status 自检"
+description: "Windows symlink/Junction 会静默断开(更新/权限/工具操作)"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: 54958f16-8057-4087-9e28-72c3efd87573
 ---
+
+> 失效（2026-08-15）：`dao.ps1` 已随 #425 退役、文件不存在，`ccswitch/` 已改名 `host/`。下文的操作指令不要照做，现行部署见 NEW-MACHINE.md。本条只留结论（链接会静默断开、Junction 与 SymbolicLink 要一起认）。
 
 Symlink 和 Junction 可能在 Windows 更新、权限变更、工具操作后静默断开，且不会报错——skill/command 悄悄失效。
 

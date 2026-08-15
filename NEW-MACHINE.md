@@ -78,7 +78,9 @@ node scripts/inbox-station.mjs ensure
 
 ## 10. 接上 memory
 
-本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`（`D:\frank\windsurf-dao` → `D--frank-windsurf-dao`），换机即丢。仓内 `host/memory/` 是真相源。克隆后在**仓库根**跑这一段（已是正确 Junction 则什么都不做；真目录会改名备份再接上）：
+本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。
+
+先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。已是正确 Junction 则什么都不做；真目录会改名备份再接上。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
 ```powershell
 & {
@@ -86,7 +88,7 @@ node scripts/inbox-station.mjs ensure
   $repo = (Resolve-Path .).Path
   $hostMem = Join-Path $repo 'host\memory'
   if (-not (Test-Path -LiteralPath $hostMem)) { throw "host/memory 不在: $hostMem" }
-  $encoded = $repo -replace ':', '-' -replace '[\\/]', '-'
+  $encoded = $repo -replace '[^a-zA-Z0-9]', '-'
   $local = Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
   $want = [IO.Path]::GetFullPath($hostMem)
   $item = Get-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue

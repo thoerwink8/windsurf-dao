@@ -30,6 +30,7 @@
 - [skills add 大仓必超时](skills-add-large-repo-timeout.md) — 内置 300s clone 超时,正解是 sparse+blobless 浅克隆再传本地路径;--agent 必传否则装进 ~75 个 agent
 - [派单语料与卡死判定](dispatch-regex-corpus-and-stall.md) — 正则/判定类派单必带真实语料格(禁 mock 内生);工兵屏面指纹两次相同即换人不救(看门狗自动化挂 #348)
 - [pi 是统一工人载具](pi-universal-harness.md) — 派工默认 pi --model 换模型；例外 grok 单走 Grok Build（2026-08-14 拍板 pi-grok 退役，网络暴露面大两次断线）
+- [Claude 工人用 opus](claude-workers-use-opus.md) — 派 Claude 族工人/审官一律 reclaude --model opus,Fable 只留帅位;派 Fable 须用户点名
 - [拍板默认含在途](decision-applies-to-inflight.md) — 用户拍板换X立即对在途活生效，协调者不得自行解释为「下一单起」
 - [汇报前必实刷状态](report-requires-fresh-state.md) — 工位/PR 状态汇报前先跑 worktree ps agents[].state + gh pr，凭印象汇报被用户连抓三次
 - [grok TUI 横幅吃注入](grok-tui-optin-banner-trap.md) — 首启 opt-in 横幅吞首次 send，先 Esc 再直给；等授权词屏面与停摆同貌看 Recap
