@@ -93,7 +93,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 - 任务卡：`#<PR号> - <动宾短语>`（PR 开出来立刻改名）。
 - 终端 / 工人副本：角色·模型（如「审官·GPT」）。默认名不上面板。
-- 主帅终端：`<身份或原标题>｜[#N #M]`。单号只写在末尾 `｜[…]` 定界区，加删只动这个区，不扫描标题其余部分。身份（帅·A / 帅·B）主帅自己定一次，脚本不猜。派工名里要带 `#单号`（如 `#499+#495 - 修通道`），`dao.mjs dispatch` 成功后往**当前这条**主帅终端追加；合并侧调 `applyRemoveTicket({ id, env, runOrca })`（`scripts/lib/master-title.mjs`，#497 接线）。
+- 主帅终端标题：**不要用 `orca terminal rename` 写在途单号。** 带 agent 的终端 rename 回 `ok:true` 但 list/show 标题不变（#502 真机：立刻回读仍是「⠋ Grok」；裸 shell 对照立刻生效）。主帅终端一定带 agent，这条路是死的。落点待定（候选：任务卡 comment / 主工作树 comment）。
 
 ## 通道判据
 

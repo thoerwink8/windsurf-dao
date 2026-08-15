@@ -97,6 +97,7 @@ async function main() {
   console.log('\n=== 两位主帅：A 派单只改 A 的 handle ===');
   {
     const calls = [];
+    const titles = { term_A: '帅·A', term_B: '帅·B' };
     const runOrca = (args) => {
       calls.push(args);
       if (args[0] === 'worktree' && args[1] === 'show') {
@@ -107,15 +108,15 @@ async function main() {
           ok: true,
           json: {
             result: {
-              terminals: [
-                { handle: 'term_A', title: '帅·A' },
-                { handle: 'term_B', title: '帅·B' },
-              ],
+              terminals: Object.entries(titles).map(([handle, title]) => ({ handle, title })),
             },
           },
         };
       }
       if (args[0] === 'terminal' && args[1] === 'rename') {
+        const h = args[args.indexOf('--terminal') + 1];
+        const title = args[args.indexOf('--title') + 1];
+        titles[h] = title;
         return { ok: true, json: { ok: true } };
       }
       return { ok: false, error: `unexpected ${args.join(' ')}` };
@@ -126,23 +127,39 @@ async function main() {
       runOrca,
     });
     const renames = calls.filter(a => a[1] === 'rename');
-    check('派工成功会改标题', r.ok === true && r.action === 'updated' && r.title === '帅·A｜[#499]', JSON.stringify(r));
+    check('派工成功会改标题（回读对得上才算）', r.ok === true && r.action === 'updated' && r.title === '帅·A｜[#499]', JSON.stringify(r));
     check('rename 只打 A 的 handle', renames.length === 1 && renames[0].includes('term_A'), JSON.stringify(renames));
     check('没有 rename 打到 B', renames.every(a => !a.includes('term_B')));
 
+    const titles2 = { term_A: '帅·A｜[#499 #495]' };
     const rm = T.applyRemoveTicket({
       id: '#499',
       env: { ORCA_TERMINAL_HANDLE: 'term_A', ORCA_WORKTREE_ID: 'wt_master' },
       runOrca: (args) => {
         if (args[0] === 'worktree') return { ok: true, json: { result: { worktree: { isMainWorktree: true } } } };
         if (args[1] === 'list') {
-          return { ok: true, json: { result: { terminals: [{ handle: 'term_A', title: '帅·A｜[#499 #495]' }] } } };
+          return { ok: true, json: { result: { terminals: [{ handle: 'term_A', title: titles2.term_A }] } } };
         }
-        if (args[1] === 'rename') return { ok: true, json: { ok: true } };
+        if (args[1] === 'rename') {
+          titles2.term_A = args[args.indexOf('--title') + 1];
+          return { ok: true, json: { ok: true } };
+        }
         return { ok: false, error: 'nope' };
       },
     });
     check('删除入口去掉该号、其余还在', rm.ok && rm.title === '帅·A｜[#495]', JSON.stringify(rm));
+
+    const lie = T.afterDispatchSuccess({
+      name: '#499 - 修通道',
+      env: { ORCA_TERMINAL_HANDLE: 'term_A', ORCA_WORKTREE_ID: 'wt_master' },
+      runOrca: (args) => {
+        if (args[1] === 'show') return { ok: true, json: { result: { worktree: { isMainWorktree: true } } } };
+        if (args[1] === 'list') return { ok: true, json: { result: { terminals: [{ handle: 'term_A', title: '⠋ Grok' }] } } };
+        if (args[1] === 'rename') return { ok: true, json: { result: { rename: { title: '帅·A｜[#499]' } } } };
+        return { ok: false, error: 'nope' };
+      },
+    });
+    check('rename ok 但回读仍是 agent 标题 → 投递成功≠送达', lie.ok === false && lie.action === 'warn' && /投递成功≠送达/.test(lie.reason), JSON.stringify(lie));
   }
 
   console.log('\n=== 工人树上 afterDispatch 不 rename ===');

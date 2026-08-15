@@ -32,6 +32,7 @@ import {
   parseArgs,
   planDispatchRollback,
   probeMarkFound,
+  probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
@@ -42,7 +43,6 @@ import {
   terminalProbeExec,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { afterDispatchSuccess } from './lib/master-title.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -161,12 +161,11 @@ function readOnceHandle(handle) {
   return read.json;
 }
 
-function liveSendAndRead(handle) {
+function liveSendAndRead(handle, waitMs) {
   return (cmd, name) => {
     const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
     if (!sent.ok) return { error: errText(sent.error) };
-    // grok TUI 要把 send 当用户消息再跑命令，8s 不够（#499 实测）。
-    const deadline = Date.now() + 45000;
+    const deadline = Date.now() + waitMs;
     let last = { text: '' };
     while (Date.now() < deadline) {
       const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
@@ -180,9 +179,9 @@ function liveSendAndRead(handle) {
   };
 }
 
-function runTerminalProbes(handle) {
+function runTerminalProbes(handle, waitMs) {
   return runCapabilityProbes({
-    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle) }),
+    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle, waitMs) }),
   });
 }
 
@@ -244,7 +243,7 @@ function cmdDispatch(args) {
   const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
   if (!workerVerify.ok) failCreated(created, '工人验开工失败', { verify: workerVerify, ...plan });
 
-  const workerProbes = runTerminalProbes(created.workerHandle);
+  const workerProbes = runTerminalProbes(created.workerHandle, probeWaitMs(routing, workerLaunch.provider));
   if (!workerProbes.ok) failCreated(created, workerProbes.error, { probes: workerProbes, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
@@ -271,7 +270,7 @@ function cmdDispatch(args) {
   const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
   if (!revVerify.ok) failCreated(created, '审官验开工失败', { verify: revVerify, ...plan });
 
-  const revProbes = runTerminalProbes(created.reviewerHandle);
+  const revProbes = runTerminalProbes(created.reviewerHandle, probeWaitMs(routing, reviewerLaunch.provider));
   if (!revProbes.ok) failCreated(created, revProbes.error, { probes: revProbes, ...plan });
 
   let taskId = args.task || null;
@@ -289,15 +288,12 @@ function cmdDispatch(args) {
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
-  const title = afterDispatchSuccess({ name: args.name, env: process.env, runOrca: orca });
-
   emit({
     ok: true,
     ...plan,
     ...created,
     taskId,
     probes: { worker: workerProbes, reviewer: revProbes },
-    title,
   });
 }
 
@@ -346,7 +342,7 @@ function cmdStart(args) {
     }, 1);
   }
 
-  const probes = runTerminalProbes(handle);
+  const probes = runTerminalProbes(handle, probeWaitMs(routing, launch.provider));
   if (!probes.ok) {
     orca(argsTerminalClose({ terminal: handle, tab: true }));
     fail(probes.error, { handle, command: launch.command, probes });

@@ -343,7 +343,11 @@ async function main() {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
-    check('#495 dao.mjs 派工成功后只调 afterDispatchSuccess', /afterDispatchSuccess/.test(daoSrc));
+    check('#495 dao.mjs 不再接线 rename（带 agent 终端改标题是死路）', !/afterDispatchSuccess/.test(daoSrc));
+    check('探针等待从表读，不写死 45000', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
+    check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
+    check('没配的 provider 回落 8s', S.probeWaitMs(routing, 'gpt') === S.DEFAULT_PROBE_WAIT_MS);
+    check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 8000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 8000);
     check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });

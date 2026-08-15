@@ -19,6 +19,15 @@ export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
 
 export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
 export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
+/** 探针等屏默认值。TUI 要把 send 当用户消息再跑命令，grok 8s 不够（#499 实测）。 */
+export const DEFAULT_PROBE_WAIT_MS = 8000;
+
+export function probeWaitMs(routing, provider) {
+  const raw = routing?.providers?.[provider]?.probe_wait_ms;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return n;
+  return DEFAULT_PROBE_WAIT_MS;
+}
 
 const SKIP_DIRS = new Set([
   '.git', 'node_modules', '_flow', '_tmp', '_scratch', '.codegraph',

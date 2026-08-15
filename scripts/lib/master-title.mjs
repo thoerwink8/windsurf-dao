@@ -5,8 +5,9 @@
 //    （#463/#489 用自由中文 + 子串匹配连打四层补丁全部失守）。
 // 2. 谁的标题被改，只认「正在跑 dispatch 的那条终端」+「它在主工作树」。
 //    不是「我不认识的终端就是主帅」（#492 三次把别人的工位判成孤儿）。
-// 3. 合并侧删单号：import { applyRemoveTicket } from './master-title.mjs'
-//    然后 applyRemoveTicket({ id: '#499', env, runOrca })。本文件不碰 flow.mjs。
+// 3. 2026-08-15 #502 实测：带 agent 的终端 rename 回 ok:true，list/show 标题不变。
+//    主帅终端一定带 agent，用本文件改终端标题是死路。dao.mjs 已断开调用。
+//    定界区函数仍可用于别的落点（comment 等），合并侧若换落点再接。
 
 export const TICKET_ZONE_RE = /｜\[((?:#\d+)(?: #\d+)*)?\]$/;
 
@@ -161,6 +162,16 @@ export function mutateMasterTitle({ env = {}, runOrca, mutate } = {}) {
     const reason = `terminal rename 失败：${renamed?.error || '无详情'}`;
     console.error(`[dao] ${reason}`);
     return { ok: false, action: 'warn', reason, handle: policy.handle, from: current, to: next };
+  }
+  // 投递成功≠送达：带 agent 的终端 rename 回 ok:true 但 list/show 标题不变（#502 实测）。
+  const listed2 = runOrca(['terminal', 'list', '--json']);
+  const terms2 = listed2?.ok ? listed2.json?.result?.terminals : null;
+  const mine2 = Array.isArray(terms2) ? terms2.find(t => t && t.handle === policy.handle) : null;
+  const actual = mine2 && mine2.title != null ? String(mine2.title) : '';
+  if (actual !== next) {
+    const reason = `terminal rename 回读不是所设（投递成功≠送达）：想要「${next}」，实际「${actual || '(空)'}」`;
+    console.error(`[dao] ${reason}`);
+    return { ok: false, action: 'warn', reason, handle: policy.handle, from: current, to: next, actual };
   }
   return { ok: true, action: 'updated', handle: policy.handle, from: current, title: next };
 }
