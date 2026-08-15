@@ -107,6 +107,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 **禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
 
+**受控例外（自动起审官，随 #480 退役）**：`scripts/flow.mjs` 闭环内起审官仍走 `worktree create --parent-worktree`（oneShot 带 `--prompt`，Claude 两步走），不经 `worker-start`。原因：flow 自建注入/验开工/存量反查，整段将随 #480 换成原生 orchestration（结构化 worker_done / escalation / check --wait）。人工派工（含多工人/辅助卡）禁止抄这条例外——必须 `worker-start` 记账。
+
 裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
 
 grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，无需两步（2026-08-15 三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
@@ -180,11 +182,15 @@ orca orchestration worker-read --dispatch <dispatch_id> --json
 #    复用同一终端接下单用 worker-start --task <next> --terminal <handle>（所有权转走后再等）；
 #    合并后 orca worktree rm 整棵任务树仍归帅终审
 
-# 多工人 / 辅助卡（审官、临时诊断工）：子卡挂任务卡下，git 从任务分支切（--base-branch 用任务分支）；
-#   --parent-worktree 用 branch:<任务分支>（name: 不是 orca 认识的 worktree selector——审读实测，勿用；
-#   也勿加 worktree: 前缀，selector_not_found）
+# 多工人 / 辅助卡（审官、临时诊断工）：子卡挂任务卡下，git 从任务分支切。
+#   worker-start 无 --parent-worktree（--worktree new-child 挂的是当前卡，帅在 master 上会挂错），
+#   所以先 create 子卡，再 worker-start --terminal 收口记账——禁裸 create --agent 起完就走。
+#   --parent-worktree 用 branch:<任务分支>（name: 不是合法 selector；勿加 worktree: 前缀）。
+#   flow.mjs 自动起审官是受控例外（见「启动序」），不要把那条抄回这里。
 orca worktree create --parent-worktree branch:<任务分支> --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
-#   审官若是 Claude Opus（审官选型序 UI 类 GPT 禁入时顶位）走两步收口——--agent 起不了 reclaude 链
+orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --terminal <agentTerminalHandle> --json
+#   审官若是 Claude Opus（审官选型序 UI 类 GPT 禁入时顶位）走两步收口——--agent 起不了 reclaude 链：
+#   建卡 --setup skip → terminal create --command → worker-start --terminal
 ```
 
 ## 命令级铁律

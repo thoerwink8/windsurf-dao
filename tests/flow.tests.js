@@ -359,5 +359,25 @@ console.log("\n=== ⑳b 敏感路径越权报警持续显形：同状态重跑�
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自动起审官受控例外（#480）===");
+{
+  const r = runFlow(path.join(FIXTURES, "real-456"));
+  check("起审官 dry-run 标明受控例外", /受控例外：不走 worker-start，随 #480 重做/.test(r.out), r.out.trim());
+  check("起审官命令仍是 worktree create（未偷接 worker-start）", /orca worktree create --parent-worktree branch:/.test(r.out), r.out.trim());
+  check("起审官命令不含 worker-start（例外未半吊子统一）", !/orca orchestration worker-start/.test(r.out), r.out.trim());
+
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  const liveStart = flowSrc.split("if (action.kind === 'start-reviewer')")[1]?.split("if (action.kind === 'inject-rework')")[0] || "";
+  check("live 起审官 argv 仍是 worktree create", /\['worktree', 'create'/.test(liveStart), liveStart.slice(0, 200));
+  check("live 起审官 argv 不含 orchestration worker-start", !/\['orchestration',\s*'worker-start'/.test(liveStart), liveStart.slice(0, 200));
+  check("flow 头注写明受控例外随 #480 退役", /起审官（受控例外，随 #480 退役）/.test(flowSrc));
+
+  const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
+  const chain = (skill.split("## 一条完整命令链")[1] || "").split("## 命令级铁律")[0];
+  const multi = (chain.split("多工人")[1] || "");
+  check("SKILL 命令链多工人/辅助卡示例含 worker-start --terminal", /worker-start --task <task_id> --worktree <新建子卡 id> --terminal/.test(multi), multi.slice(0, 300));
+  check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
+}
+
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);
 process.exit(fail > 0 ? 1 : 0);

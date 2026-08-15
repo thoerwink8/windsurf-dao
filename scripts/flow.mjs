@@ -24,10 +24,10 @@
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
 // 执行注入（③）：
-//   - 起审官：oneShot（codex/grok）走官方首注入通道 `--agent X --prompt <任务书>`
-//     （orca worktree create --help：--prompt sends initial work to that agent），
-//     不手工 send 进就绪竞态；两步走（claude）注入前先 terminal read 轮询就绪
-//     （[providers.claude] 配置同步期抢跑注入必被吞），就绪后才 send。
+//   - 起审官（受控例外，随 #480 退役）：不走 worker-start。oneShot（codex）走
+//     `worktree create --agent --prompt`（官方首注入通道，免就绪竞态）；两步走
+//     （claude）create --setup skip + terminal create --command，注入前先
+//     terminal read 轮询就绪（配置同步期抢跑必被吞）。人工派工禁止抄这条例外。
 //   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
 //     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
 //     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
@@ -680,12 +680,13 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     if (dryRun) {
       return {
         ok: true, dry: true,
-        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）`
+        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）（受控例外：不走 worker-start，随 #480 重做）`
           + '\n' + steps.map(s => '  ' + s).join('\n')
           + '\n  ' + '注入复核任务书：' + taskBook.replace(/\n/g, '\n  '),
       };
     }
-    // live：起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
+    // live：受控例外（随 #480 退役）——不走 worker-start，worktree create 直起。
+    // 人工路径禁止抄。起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
     const createR = runOrca(launch.oneShot
       ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--agent', launch.agent, '--prompt', taskBook, '--json']
       : ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--setup', 'skip', '--json']);
@@ -697,7 +698,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
       if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
       const v = verifyStarted(handle, null, label);
       if (!v.ok) return { ok: false, error: v.error };
-      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）` };
+      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
     }
     const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
     if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
@@ -707,7 +708,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     if (!ready.ok) return { ok: false, error: ready.error };
     const v = injectAndVerify(handle, taskBook, label);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）` };
+    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
   }
 
   if (action.kind === 'inject-rework') {
