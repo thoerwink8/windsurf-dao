@@ -781,19 +781,28 @@ export function recommendModel({ role, routing, now = new Date() } = {}) {
 }
 
 /**
- * 派工三参数硬闸。缺一即失败，并列出缺什么。
+ * 派工约束硬闸。缺一即失败，并列出缺什么。
  * --role 而无 --model：读分时路由给推荐，必须 --confirm，禁静默默认。
+ * --merge-policy 默认 auto（拍板 issue #511：帅不再是合并关口）；选 manual 必须
+ * 同时给 --merge-reason（例外留痕，理由为空即退出，不靠记性）。
  */
 export function resolveDispatchConstraints({
-  mergePolicy, model, role, reviewer, confirm, routing, now = new Date(),
+  mergePolicy, mergeReason, model, role, reviewer, confirm, routing, now = new Date(),
 } = {}) {
   const missing = [];
-  if (!mergePolicy) missing.push('--merge-policy');
-  else if (!MERGE_POLICIES.includes(mergePolicy)) {
+  const policy = mergePolicy || 'auto';
+  if (!MERGE_POLICIES.includes(policy)) {
     return {
       ok: false,
       missing: [],
-      error: `--merge-policy 只允许 auto|manual，实际 ${mergePolicy}`,
+      error: `--merge-policy 只允许 auto|manual，实际 ${policy}`,
+    };
+  }
+  if (policy === 'manual' && !String(mergeReason || '').trim()) {
+    return {
+      ok: false,
+      missing: ['--merge-reason'],
+      error: '--merge-policy manual 必须给 --merge-reason（例外留痕；只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱，见 #511）',
     };
   }
 
@@ -838,7 +847,8 @@ export function resolveDispatchConstraints({
 
   return {
     ok: true,
-    mergePolicy,
+    mergePolicy: policy,
+    mergeReason: policy === 'manual' ? String(mergeReason || '').trim() : null,
     model: resolvedModel,
     role: role || null,
     reviewer,
@@ -850,8 +860,12 @@ export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
 }
 
-export function dispatchComment({ mergePolicy, model, reviewer }) {
-  return `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
+export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
+  const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
+  if (mergePolicy === 'manual' && mergeReason) {
+    return `${base} · manual 理由: ${mergeReason}`;
+  }
+  return base;
 }
 
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
@@ -876,7 +890,7 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
-    '--name', '--merge-policy', '--model', '--role', '--reviewer', '--confirm',
+    '--name', '--merge-policy', '--merge-reason', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--now', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
@@ -886,7 +900,7 @@ export const FLAGS_BY_VERB = {
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--json', '--help', '-h']),
   'worker-start': new Set([
-    '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy',
+    '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
@@ -935,15 +949,15 @@ export function parseArgs(argv) {
 
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
-派工（约束载体，缺一即退）：
-  dispatch --name <名> --merge-policy auto|manual --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+派工（约束载体，缺一即退；merge-policy 默认 auto）：
+  dispatch --name <名> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <名> [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
-  worker-start --task <id> --worktree <sel> --terminal <handle> --merge-policy auto|manual --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   send --terminal <handle> --text <文> [--enter]
 其他:
   liveness [--path <工作树>]
@@ -952,4 +966,6 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
+merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
+理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
 `;
