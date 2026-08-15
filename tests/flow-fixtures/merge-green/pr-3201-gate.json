@@ -18,5 +18,6 @@
   }
  ],
  "mergeable": "MERGEABLE",
- "mergeStateStatus": "CLEAN"
+ "mergeStateStatus": "CLEAN",
+ "headRefOid": "head-3201-abc"
 }

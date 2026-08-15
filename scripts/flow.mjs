@@ -98,7 +98,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { judgmentFromReview, isCompletionComment, reviewAnnotations, mergePolicyFromComment } from './lib/judgment.mjs';
+import { judgmentFromReview, isCompletionComment, reviewAnnotations, mergePolicyFromComment, JUDGMENT_LINE_RE_EXPORT as JUDGMENT_LINE_RE } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 
 const require = createRequire(import.meta.url);
@@ -642,6 +642,55 @@ export function mergeableVerdict(mergeable, mergeStateStatus) {
   return { ok: false, reason: `mergeable=${mergeable}${mergeStateStatus ? `，mergeStateStatus=${mergeStateStatus}` : ''}——打回人工` };
 }
 
+// 合并门第四条（#497 第八轮）：判绿的 commit 必须等于当前 HEAD——审官判绿后又推了几轮，
+// 流转器看到「绿 + CI 绿 + 标签」直接合 = 合并未经审读的代码（本单自己就是活样本：
+// 审官判绿在 cc53837、HEAD 在 c73b0e4，差一点被合，拦住的是人眼看时间戳不是机制）。
+// 数据来源是 GitHub review 对象自带字段（commit_id），不解析文本。
+// 取最新一条带判定行的 review（JUDGMENT_LINE_RE 判），不是最新 review（中间可能有不带判定行的普通评论）。
+// 四种情形必须分开报：
+//   1 相等 → 放行；2 review commit 是 HEAD 祖先 → 不合（判绿后又推 N 个 commit，需重新复核）；
+//   3 不在 HEAD 历史（rebase 重写）→ 不合，**不给 N**（A..B 计数在重写后是看起来精确的假数，比不给更糟）；
+//   4 commit_id 缺失 / 判不出关系 → 不合（没查成）——禁止「查不到就当通过」。
+export function greenCommitVerdict(reviews, headRefOid, isAncestorProbe) {
+  const judged = (reviews || []).filter(r => r && r.body && JUDGMENT_LINE_RE.test(r.body));
+  if (judged.length === 0) return { ok: false, kind: 'unreadable', reason: '没查到带判定行的 review——没查成' };
+  const latest = judged[judged.length - 1];
+  const commitId = latest.commitId;
+  if (!commitId) return { ok: false, kind: 'unreadable', reason: '判绿 review 的 commit_id 缺失——没查成' };
+  if (commitId === headRefOid) return { ok: true };
+  const rel = isAncestorProbe(commitId, headRefOid); // { ancestor: true|false|null, count: n|null }
+  if (rel && rel.ancestor === true) {
+    const n = rel.count ?? revListCount(commitId, headRefOid);
+    return { ok: false, kind: 'ahead', reason: `判绿后又推了 ${n} 个 commit，需重新复核`, n };
+  }
+  if (rel && rel.ancestor === false) {
+    return { ok: false, kind: 'rewritten', reason: '判绿的 commit 已被 rebase 重写，与当前 HEAD 无共同历史，需重新复核' };
+  }
+  return { ok: false, kind: 'unreadable', reason: '判绿 commit 与当前 HEAD 的关系判不出——没查成' };
+}
+
+// 祖先判定（仓规：检查逻辑不得复用被检查对象自己的解析逻辑——用 git 外部真相，不 import flow 的提交历史逻辑）：
+// git merge-base --is-ancestor <commit> <head>：exit 0 = 祖先；exit 1 = 非祖先；fatal = 对象取不到。
+// 对象不在本地（新 clone / rebase 后被 gc）→ fetch 一次再判，仍取不到 → null（判不出，走情形 4）。
+// 返回 { ancestor, count }：count 只在 ancestor=true 时有意义（判绿后又推的 commit 数）。
+function gitIsAncestor(commit, head, args) {
+  const probe = (c, h) => runCmd('git', ['merge-base', '--is-ancestor', c, h]);
+  let r = probe(commit, head);
+  if (!r.ok && /fatal|unknown revision|not a valid/i.test(r.error)) {
+    runCmd('git', ['fetch', 'origin', commit]); // 对象缺失：fetch 一次再判
+    r = probe(commit, head);
+    if (!r.ok && /fatal|unknown revision|not a valid/i.test(r.error)) return { ancestor: null, count: null };
+  }
+  if (!r.ok) return { ancestor: false, count: null }; // exit 1 = 非祖先（rebase 重写）
+  return { ancestor: true, count: revListCount(commit, head) };
+}
+
+function revListCount(from, head) {
+  const r = runCmd('git', ['rev-list', '--count', `${from}..${head}`]);
+  const n = parseInt(String(r.ok ? r.out : '').trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 // 打回人工（#478 Q5）：comment 写明失败原因 + 打「等你」标签 + 停手不重试（等你 标签天然停手）。
 function blockToHuman(lines, pr, reason, args, repo) {
   const body = [
@@ -695,7 +744,20 @@ function handleApproved(pr, rec, source, args, repo) {
     return { lines };
   }
 
-  // 三条件齐 → 合并前重查 mergeable
+  // 三条件齐 → 第四条（#497 第八轮）：判绿的 commit 必须等于当前 HEAD——防合并未经审读的代码
+  const reviewsR = source.getReviews(pr.number);
+  if (!reviewsR.ok) {
+    return { lines: [`[flow] NO_TARGETS：读 PR #${pr.number} reviews 失败：${reviewsR.error}——第四条没查成`], noTargets: true };
+  }
+  const greenVerdict = greenCommitVerdict(reviewsR.reviews, gpr.headRefOid, gitIsAncestor);
+  if (!greenVerdict.ok) {
+    const reason = `复核结论：绿，${greenVerdict.reason}`;
+    lines.push(`[flow] 报帅：终审 #${pr.number}（${reason}）`);
+    rec.pendingShuai = { kind: 'approved', reason: `复核绿但未达合并条件（${greenVerdict.reason}）` };
+    return { lines };
+  }
+
+  // 四条件齐 → 合并前重查 mergeable
   const verdict = mergeableVerdict(gpr.mergeable, gpr.mergeStateStatus);
   if (!verdict.ok) {
     if (verdict.wait) {
@@ -925,9 +987,10 @@ function makeLiveSource(repo) {
       if (!r.ok) return { ok: false, error: r.error };
       return { ok: true, pr: r.json };
     },
-    // 合并门数据：labels + CI rollup + mergeable（合并前重查一次，防判绿后被撞冲突）
+    // 合并门数据：labels + CI rollup + mergeable + headRefOid（合并前重查一次，防判绿后被撞冲突；
+    // headRefOid 供第四条「判绿的 commit == 当前 HEAD」比对，见 greenCommitVerdict）
     getPrGate(number) {
-      const r = runGh(['pr', 'view', String(number), '--json', 'labels,isDraft,statusCheckRollup,mergeable,mergeStateStatus']);
+      const r = runGh(['pr', 'view', String(number), '--json', 'labels,isDraft,statusCheckRollup,mergeable,mergeStateStatus,headRefOid']);
       if (!r.ok) return { ok: false, error: r.error };
       return { ok: true, pr: r.json };
     },
@@ -944,6 +1007,7 @@ function makeLiveSource(repo) {
       if (!r.ok) return { ok: false, error: r.error };
       const reviews = (Array.isArray(r.json) ? r.json : []).map(rv => ({
         id: rv.id, body: rv.body || '', submittedAt: rv.submitted_at || '', url: rv.html_url || null,
+        commitId: rv.commit_id || null, // 第四条：判绿的 commit 必须等于当前 HEAD（#497 第八轮）
       }));
       return { ok: true, reviews };
     },
@@ -1051,6 +1115,7 @@ function makeSnapshotSource(roundDir, repo) {
           id: rv.id, body: rv.body,
           submittedAt: rv.submitted_at || rv.submittedAt,
           url: rv.html_url || `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
+          commitId: rv.commit_id || rv.commitId || null, // 第四条（#497 第八轮）：快照夹具可带 commit_id/commitId
         })),
       };
     },

@@ -9,6 +9,7 @@
   "id": 332002,
   "body": "复核结论：绿，可合并",
   "state": "COMMENTED",
-  "submittedAt": "2026-08-15T02:00:00Z"
+  "submittedAt": "2026-08-15T02:00:00Z",
+  "commit_id": "head-3201-abc"
  }
 ]

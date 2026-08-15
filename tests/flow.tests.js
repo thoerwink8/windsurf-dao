@@ -22,7 +22,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec, runCmd, taskIdFromTaskCreate, handleFromWorkerShow, worktreeIdFromWorktreeCreate, terminalHandleFromTerminalCreate, dispatchIdFromDispatchShow } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, greenCommitVerdict, extractPrsFromSpec, runCmd, taskIdFromTaskCreate, handleFromWorkerShow, worktreeIdFromWorktreeCreate, terminalHandleFromTerminalCreate, dispatchIdFromDispatchShow } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, mergePolicyFromComment, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0, skip = 0;
@@ -700,6 +700,35 @@ console.log("\n=== ㉟ 未归类状态报警（#497 第五轮：显式白名单 
   const out = (r.stdout || "") + (r.stderr || "");
   check("端到端：未归类待帅账 → 待帅处置常驻行显形（不静默）", /待帅处置：#3407（落入未归类状态 test-only——设计时没想到的状态组合，请帅分诊）/.test(out), out.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㊱ 合并门第四条（#497 第八轮：判绿的 commit 必须等于当前 HEAD）===");
+{
+  const mkRev = (id, body, commitId) => ({ id, body, commitId });
+  // 纯函数四情形 + 边界
+  check("相等 → 放行", greenCommitVerdict([mkRev(1, "复核结论：绿", "abc123")], "abc123", () => { throw new Error("相等不该调 probe"); }).ok === true);
+  const ahead = greenCommitVerdict([mkRev(1, "复核结论：绿", "old")], "new", () => ({ ancestor: true, count: 3 }));
+  check("祖先 → 不合：判绿后又推 N 个 commit（N=3）", ahead.ok === false && ahead.kind === "ahead" && ahead.n === 3 && /判绿后又推了 3 个 commit，需重新复核/.test(ahead.reason), JSON.stringify(ahead));
+  const rew = greenCommitVerdict([mkRev(1, "复核结论：绿", "old")], "new", () => ({ ancestor: false, count: null }));
+  check("rebase 重写 → 不合：无共同历史，不给 N", rew.ok === false && rew.kind === "rewritten" && !/\d 个 commit/.test(rew.reason) && /无共同历史/.test(rew.reason), JSON.stringify(rew));
+  const unread = greenCommitVerdict([mkRev(1, "复核结论：绿", "old")], "new", () => ({ ancestor: null, count: null }));
+  check("关系判不出 → 不合：没查成", unread.ok === false && unread.kind === "unreadable" && /没查成/.test(unread.reason), JSON.stringify(unread));
+  const noCid = greenCommitVerdict([mkRev(1, "复核结论：绿", null)], "new", () => { throw new Error("不该调 probe"); });
+  check("commit_id 缺失 → 不合：没查成（禁止查不到就当通过）", noCid.ok === false && /commit_id 缺失——没查成/.test(noCid.reason), JSON.stringify(noCid));
+  const noJudge = greenCommitVerdict([mkRev(1, "普通评论", "abc")], "new", () => { throw new Error("不该调 probe"); });
+  check("无带判定行 review → 不合：没查成", noJudge.ok === false && /没查到带判定行的 review/.test(noJudge.reason), JSON.stringify(noJudge));
+  // 取最新一条带判定行的 review（中间有不带判定行的普通评论也算）
+  const latest = greenCommitVerdict([mkRev(1, "普通评论", "x"), mkRev(2, "复核结论：绿", "first"), mkRev(3, "普通评论", "y"), mkRev(4, "复核结论：绿，可合并", "second")], "head", () => ({ ancestor: true, count: 5 }));
+  check("取最新带判定行的 review（跳过中间普通评论）", latest.ok === false && latest.kind === "ahead" && latest.n === 5, JSON.stringify(latest));
+  // 端到端（快照 + 真实 git probe）
+  const rebased = runFlow(path.join(FIXTURES, "merge-rebased"));
+  check("负样本1（本单真实数据：cc53837 判绿 vs c73b0e4 HEAD）：rebase 重写不合，不给 N", /报帅：终审 #3208（复核结论：绿，判绿的 commit 已被 rebase 重写，与当前 HEAD 无共同历史，需重新复核）/.test(rebased.out) && !/\d 个 commit/.test(rebased.out), rebased.out.trim());
+  const aheadFlow = runFlow(path.join(FIXTURES, "merge-ahead"));
+  check("负样本2（review commit 是 HEAD 祖先）：判绿后又推 5 个 commit，不合", /报帅：终审 #3209（复核结论：绿，判绿后又推了 5 个 commit，需重新复核）/.test(aheadFlow.out), aheadFlow.out.trim());
+  const noCommit = runFlow(path.join(FIXTURES, "merge-no-commit"));
+  check("负样本3（commit_id 缺失）：没查成，不合，不放行", /报帅：终审 #3210（复核结论：绿，判绿 review 的 commit_id 缺失——没查成）/.test(noCommit.out) && !/动作：合并/.test(noCommit.out), noCommit.out.trim());
+  const fresh = runFlow(path.join(FIXTURES, "merge-green"));
+  check("正样本（判绿 commit == HEAD + CI 绿 + merge/auto）：放行合并", /动作：合并 #3201（复核绿 \+ CI 全绿 \+ merge\/auto \+ MERGEABLE）：gh pr merge 3201 --squash/.test(fresh.out), fresh.out.trim());
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);

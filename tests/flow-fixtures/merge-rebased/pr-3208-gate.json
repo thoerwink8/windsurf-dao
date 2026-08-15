@@ -14,7 +14,7 @@
    "workflowName": "dao-check"
   }
  ],
- "mergeable": "CONFLICTING",
- "mergeStateStatus": "DIRTY",
- "headRefOid": "head-3206-abc"
+ "mergeable": "MERGEABLE",
+ "mergeStateStatus": "CLEAN",
+ "headRefOid": "c73b0e45e3cdab0f1a11cf554bfad09e10ad11ad"
 }
