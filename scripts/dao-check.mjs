@@ -18,7 +18,7 @@
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段），全部扫描自发现。
+// ⑤模型路由表（TOML 可解析 + 必填字段）⑥ host/memory 条目与 MEMORY.md 索引双向齐，全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -251,6 +251,57 @@ function checkModelRouting() {
   }
 }
 
+// ── ⑥ memory 索引双向齐 ──────────────────────────────────────────────
+// MEMORY.md 是每轮注入的唯一索引面。有文件无索引 = 条目永不被 recall（静默）。
+// 只读仓内 host/memory/，不碰本机 ~/.claude。链接用检查器自己的正则抽，
+// 不复用任何「memory 自己的解析」。
+// 零样本：目录不在 / 一个 md 都没有 / MEMORY.md 不在 / 索引 0 条但目录有条目 / 只有索引没有条目 → 没查成。
+
+function checkMemoryIndex() {
+  const dir = join(ROOT, 'host', 'memory');
+  if (!existsSync(dir)) {
+    fail('host/memory 不在', '本次没查成：确认 memory 真相源目录是否被移动', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.md') && statSync(join(dir, f)).isFile());
+  if (files.length === 0) {
+    fail('host/memory 一个 md 都没扫到', '目录空了 ⇒ 本次等于没查', dir);
+    return;
+  }
+  const indexPath = join(dir, 'MEMORY.md');
+  if (!existsSync(indexPath)) {
+    fail('host/memory/MEMORY.md 不在', '索引面缺失 ⇒ 条目不会被 recall；补回 MEMORY.md', indexPath);
+    return;
+  }
+  const txt = readFileSync(indexPath, 'utf8');
+  const indexed = new Set();
+  const re = /\[[^\]]*\]\(([^)\s]+\.md)\)/gi;
+  let m;
+  while ((m = re.exec(txt))) {
+    const target = m[1].replace(/\\/g, '/').split('/').pop();
+    if (target && target.toLowerCase() !== 'memory.md') indexed.add(target);
+  }
+  const entries = files.filter(f => f !== 'MEMORY.md');
+  if (entries.length === 0) {
+    fail('host/memory 除 MEMORY.md 外一个条目都没扫到', '只有索引没有条目 ⇒ 本次等于没查', dir);
+    return;
+  }
+  if (indexed.size === 0) {
+    fail('MEMORY.md 一条索引都没扫到', '索引面空了但目录里有条目 ⇒ 本次等于没查', indexPath);
+    return;
+  }
+  const missing = entries.filter(f => !indexed.has(f));
+  const ghosts = [...indexed].filter(i => !entries.includes(i));
+  if (missing.length === 0 && ghosts.length === 0) {
+    green(`memory 索引 ${entries.length} 条与 MEMORY.md 双向齐`);
+  } else {
+    const bits = [];
+    if (missing.length) bits.push(`有文件无索引: ${missing.join(' ')}`);
+    if (ghosts.length) bits.push(`有索引无文件: ${ghosts.join(' ')}`);
+    fail(`memory 索引不齐 ${missing.length + ghosts.length} 处`, 'MEMORY.md 每个条目要有 [标题](文件.md)，目录里每个 md（除 MEMORY.md）都要被点到', bits.join('；'));
+  }
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
@@ -258,6 +309,7 @@ checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkModelRouting();
+checkMemoryIndex();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
