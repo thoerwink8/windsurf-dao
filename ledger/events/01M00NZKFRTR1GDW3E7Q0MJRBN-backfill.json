@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T01:44:11+08:00",
+  "machine": "backfill",
+  "seq": 16,
+  "job_id": "gh-pr-456",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #456；[pi] 点将台实现：选型脚本 + 账本骨架（#450 设计落地，只做选型+账本）；判定行红 4 项",
+  "pr_number": 456,
+  "source": "github-backfill",
+  "event_id": "a046014e3525c0999b93dd8eeb157633c7fb126f91734e0ce5bb9e818f2a3cdd"
+}

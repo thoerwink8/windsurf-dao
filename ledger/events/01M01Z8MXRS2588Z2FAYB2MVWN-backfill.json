@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T13:45:39+08:00",
+  "machine": "backfill",
+  "seq": 40,
+  "job_id": "gh-pr-463",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #463；[pi] 融合改造落地单：flow/watchdog 双瘦身 + 敏感路径越权报警 + SKILL 启动序重写 + pi 默认 flash 固化 + regrok 收录；判定行红 2 项",
+  "pr_number": 463,
+  "source": "github-backfill",
+  "event_id": "913ebe45861b05901519dbccdc8195e89174a07f74cf847d08e455ed7d6502a1"
+}

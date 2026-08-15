@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T00:11:56+08:00",
+  "machine": "backfill",
+  "seq": 12,
+  "job_id": "gh-pr-453",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #453；[pi] dispatch/worker-brief 顺车大修：2026-08-14 拍板一次落地（#443 全量 + 新拍板两条）；判定行红 5 项",
+  "pr_number": 453,
+  "source": "github-backfill",
+  "event_id": "bbf9641a1c37632b568c92d21da1cdd5ef121b21781ee19eabe269ef5e0cdce7"
+}

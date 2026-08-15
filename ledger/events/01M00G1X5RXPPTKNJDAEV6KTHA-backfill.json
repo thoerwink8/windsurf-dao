@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T00:00:35+08:00",
+  "machine": "backfill",
+  "seq": 8,
+  "job_id": "gh-pr-452",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #452；[pi] 正式看门狗：事故路径轮询侦测（issue #442）；判定行红 4 项",
+  "pr_number": 452,
+  "source": "github-backfill",
+  "event_id": "7b86b9b432d8db77aa2fb4c046bd0f23b09c6cca071dc1caabe4755e62d0f8fe"
+}
