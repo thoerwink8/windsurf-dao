@@ -49,7 +49,9 @@ function contractSlice(txt) {
   if (!m) return "";
   const rest = txt.slice(m.index + m[0].length);
   const end = /^###\s*边界判例/m.exec(rest);
-  return end ? rest.slice(0, end.index) : rest;
+  // 尾锚找不到时返回空串（⇒ 契约断言全红），不是把后面全部正文并进来——
+  // 并进来会让切片变宽，本该报红的样本反而变绿（三轮观察项 1）。
+  return end ? rest.slice(0, end.index) : "";
 }
 
 // ── 指针 1：五步法本体在 grill-me 的这一节 ───────────────────────
@@ -120,12 +122,35 @@ for (const when of ["何时创建", "何时更新", "何时读取"]) {
 }
 
 // 跨 PR 可追溯：正文落点会随 PR 归档失联，锚必须在 git 历史里。
-g("跨 PR 锚点：commit 标记 chain:<slug>#<层号>",
-  () => /\[chain:/.test(contractSlice(grillAi)),
-  "没有 git 历史锚 ⇒ 第二层在新 PR 里动手时读不到上一层，退回回忆");
-g("跨 PR 读取：给了 git log --grep 检索命令",
-  () => /git log[^\n]*--grep[^\n]*chain:/.test(contractSlice(grillAi)),
-  "只说记不说怎么查回来 ⇒ 契约在最需要它的跨 PR 场景失效");
+// 断言要认**载体**不只认字面——审官样本 O 把锚从 commit 挪回 PR 正文（病灶原样复活），
+// 只查 /\[chain:/ 的旧断言一条不响。所以要求同一行里 commit 与锚串共现。
+g("跨 PR 锚点：锚在 commit 消息里（不是 PR 正文）",
+  () => contractSlice(grillAi).split(/\r?\n/).some(
+    l => l.includes("[chain:") && /commit/.test(l)),
+  "锚挪出 commit（如挪回 PR 正文）⇒ 跨 PR 就失联，正是二轮红 1 的病灶");
+g("跨 PR 读取：检索命令带 --all（不只搜当前分支）",
+  () => /git log[^\n]*--all[^\n]*--grep[^\n]*chain:/.test(contractSlice(grillAi)),
+  "少了 --all 就只搜当前分支 ⇒ 新分支上必然 0 命中，闸静默开门");
+g("锚自带层号是与回抄互不依赖的双保险",
+  () => /双保险/.test(contractSlice(grillAi)),
+  "只写回抄 ⇒ 读者以为正文没了就判不出层数，实际锚串里的 #N 就够落闸");
+
+// 0 命中的自证：「查不到」与「没查成」同貌，不自证就 fail-open（三轮红 1）。
+g("0 命中要先自证「查得成」，不直接判第 0 层",
+  () => /没查成/.test(contractSlice(grillAi)) && /第 0 层/.test(contractSlice(grillAi)),
+  "「查不到才当第 0 层」没有自证 ⇒ 浅克隆/锚没进主干时静默判成没有链");
+g("自证含浅克隆探针 is-shallow-repository",
+  () => /--is-shallow-repository/.test(contractSlice(grillAi)),
+  "浅克隆下 git log --all 恒 0 命中且 exit=0，与「没有链」同貌");
+g("自证含合并口径前提 squash_merge_commit_message",
+  () => /squash_merge_commit_message/.test(contractSlice(grillAi)),
+  "锚能否进主干挂在这个仓库设置上，skill 不写明 ⇒ 换个项目就静默失效");
+g("查不成时 fail-close：按有链处理",
+  () => /按\*\*有链\*\*处理|按有链处理/.test(contractSlice(grillAi)),
+  "查不成当没查出问题 ⇒ 闸朝开门那侧失效");
+g("不进 git 的补丁链有落点（建 issue）",
+  () => /不进 git/.test(contractSlice(grillAi)) && /issue/.test(contractSlice(grillAi)),
+  "本机配置/面板按钮类的链没有 commit 可锚，不给替代落点就无处可记");
 g("建段要回抄全部历史层",
   () => /回抄/.test(contractSlice(grillAi)),
   "不回抄 ⇒ 要逐个 PR 翻，链越长越读不全");
