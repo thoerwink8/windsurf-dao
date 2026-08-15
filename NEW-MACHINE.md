@@ -86,6 +86,16 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
     注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。
 - auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
 
+## 7b. command-code 怎么配
+
+command-code（Command Code 官方 CLI）2026-08-16 起做工人载具（拍板 issue #508；本仓第一个 command-code 工人 #511）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
+
+- 装机：`npm i -g command-code`；验证：`command-code --version`（本机 v1.26.0）。
+- **登录必须在真 TTY 里跑**（Ink raw mode）：`command-code login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`command-code status` 应回 `Authenticated as <用户名>`。
+- 模型列表（无需登录）：`command-code --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
+- 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
+- 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
+
 ## 8. 本机工具坑
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。

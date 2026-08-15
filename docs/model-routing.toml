@@ -7,7 +7,7 @@
 # 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
 # ============================================================================
 
-updated = "2026-08-15"
+updated = "2026-08-16"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
@@ -64,6 +64,27 @@ launch_note = """
 
 走过的弯路：先以为是 project trust，再以为是 sandbox 档位；分水岭是第 2 条。
 """
+
+[providers.commandcode]
+cli = "command-code"
+launch = "command-code -m {model} --skip-onboarding --yolo"
+launch_model = "deepseek/deepseek-v4-flash"
+# 2026-08-16 帅实测：命令发出后需补一记空回车才执行（与 pi/grok 同坑），之后约 20 秒内 TUI 就绪。45s = 20s + 余量。
+probe_wait_ms = 45000
+launch_note = """
+Command Code 官方 CLI 做工人载具（拍板 2026-08-16，issue #508；本仓第一个 command-code 工人 #511）。
+模型 id 两段式 `deepseek/deepseek-v4-flash`（-m 直传）。可执行文件是 `cmdc`（`command-code` 也可用），
+不是 `cmd`（撞 Windows cmd.exe）。装机与登录见 NEW-MACHINE.md「command-code 怎么配」节。
+启动坑（2026-08-16 帅实测）：
+- 登录必须真 TTY（Ink raw mode），无 TTY 报 "Raw mode is not supported"；登录只能用户跑 `command-code login`。
+- 自动化一律 `--skip-onboarding`，否则撞 onboarding 会静默挂住（同 #500 型坑）。
+- 命令发出后需补一记空回车才执行；之后约 20 秒内 TUI 就绪（屏面 `# Command Code` / 输入框 `❯ Ask your question...`）。
+- `--yolo` 生效标志：底栏 `» permission bypass on [shift+tab]`。
+- 非交互契约：`-p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
+社区插件方案（pi-commandcode-provider）2026-08-16 拍板不采用，插件已卸载；pi 保持 DeepSeek 官方 API 原通道。
+"""
+why = "用户 2026-08-16 购买 Command Code 会员（$10/月 GOAT 档），派单优先用它跑 DeepSeek 模型：非交互 5.5s 出结果，交互 TUI 可做工人载具（terminal send 注入任务书成功、屏面可判进度），且官方 CLI 断链会明确报错（vs 社区插件可能静默退回默认 provider）。"
+decided = "2026-08-16"
 
 [providers.claude]
 cli = "reclaude"
