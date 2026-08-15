@@ -23,12 +23,15 @@
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
 // ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
+// ⑨本机 memory 是否指向仓内 host/memory 的 Junction（local-only，issue #503）：
+//   普通目录/指向别处/悬空均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
+import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -428,6 +431,22 @@ function checkModeHookAlive() {
   else fail(...r.fail);
 }
 
+// ── ⑨ 本机 memory 断链检查（local-only，issue #503）───────────────────
+// 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向本仓
+// `host/memory/` 的 Junction，Claude 每写一条 memory 主仓 git status 就多一条未提交变更。
+// #503 的病：本机是普通目录，与仓内完全漂移，今天写的每条教训换机就丢，而 dao-check 全绿——
+// 它只查仓内副本（CI 没有本机 ~/.claude）。所以本项只验本机文件系统，CI/新机/未接 worktree
+// 无该项目目录时出 SKIP 不是绿（SKIP 与绿分不开 ⇒ CI 永远绿、本机永远没人查）。
+// 实现放 scripts/lib/dao-memory-link-check.mjs，让 tests/memory-link.tests.js 拿假 HOME 造
+// 违规样本（普通目录/指向别处/悬空=红，正确 Junction=绿，无目录=SKIP）单独验判别力。
+
+function checkMemoryLinkAlive() {
+  const r = checkMemoryLink({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
+  else fail(...r.fail);
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
@@ -438,6 +457,7 @@ checkModelRouting();
 checkMemoryIndex();
 await checkCommandHelp();
 checkModeHookAlive();
+checkMemoryLinkAlive();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

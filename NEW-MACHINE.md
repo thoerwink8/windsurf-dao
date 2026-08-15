@@ -156,6 +156,8 @@ node scripts/inbox-station.mjs ensure
 
 本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。
 
+接上后跑 `node scripts/dao-check.mjs` 自检：第 ⑨ 项「本机 memory 断链检查」应变绿——本机 memory 是普通目录/指向别处/链接悬空都会报红，CI 无本机目录则出 SKIP（不是绿）。
+
 ## 11. 接上 skills
 
 skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
