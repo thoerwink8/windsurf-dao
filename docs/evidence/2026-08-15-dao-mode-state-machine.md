@@ -362,3 +362,39 @@ orca 态标：已打「待终审：#488 三态状态机做完了。skill+hook �
 
 即：**交卷时真状态是常态、偏离计数 0、暂存队列空、卡备注没有残留态标**，用户不会看到我实证留下的假状态。
 实证期间临时装过的探针插件 `dao-probe` 也已删掉；`~/.claude/settings.local.json` 里试过的那条注册已撤回（该文件现在只剩 `permissions`）。
+
+## ⑧ CI 一直是红的，已修（审官没提，但它挡合并）
+
+`.github/workflows/check.yml` 只跑 `node scripts/dao-check.mjs`。第 ⑦ 项验的是「**这台机器**装没装、还跑不跑得动」，
+干净 runner 上当然没装，于是从本单第一次 push 起 CI 就一直红：
+
+```
+  X  态注入 hook 一个装载面都没点到
+     找过：C:\Users\runneradmin\.claude\skills 下的插件面（settings 面也没有）
+dao check: 不好（1 项红 / 13 项绿，11.0s）
+##[error]Process completed with exit code 1.
+```
+
+修法不是把检查放宽，而是**让 CI 照 NEW-MACHINE.md 第 12 节真装一遍再跑**——这样每个 PR 顺带验一次那份装机文档还灵不灵，
+文档过期会在这一步炸，不必等到换机那天才发现。装载步扫的是「仓内所有自带 `hooks/hooks.json` 的 skill」，不是写死 dao-mode。
+
+本地拿一个空的假 HOME 当干净 runner 复现并验证（`USERPROFILE` 指到空目录，跑 workflow 里那段装载脚本原文）：
+
+```
+### A. 干净机器、没装（这就是 CI 之前一直红的原因）
+  X  态注入 hook 一个装载面都没点到
+     找过：…\_tmp\ci-sim-home\.claude\skills 下的插件面（settings 面也没有）
+dao check: 不好（1 项红 / 12 项绿，10.1s）
+退出码=1
+
+### B. 照 check.yml 那段装载脚本装一遍（原样抄）
+linked  …\_tmp\ci-sim-home\.claude\skills\dao-mode -> …\host\skills\dao-mode
+
+### C. 装完再跑
+  ok  态注入 hook 1 个已装载且真跑得动（插件面 dao-mode；常态/非常态/文件不在/文件坏了 四形两两可分辨）
+dao check: 好的（13 项，9.4s）
+退出码=0
+```
+
+一条踩过的坑写在这儿免得下次再犯：**清理这种含 SymbolicLink 的假 HOME，必须先把 reparse point 逐个摘掉再递归删**，
+直接 `Delete($path, $true)` 会顺着链接把仓内文件一起删了。
