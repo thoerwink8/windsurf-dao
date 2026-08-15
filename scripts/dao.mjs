@@ -11,6 +11,7 @@ import {
   ROOT,
   USAGE,
   argsTaskCreate,
+  argsTerminalClose,
   argsTerminalCreate,
   argsTerminalRead,
   argsTerminalSend,
@@ -18,18 +19,23 @@ import {
   argsWorktreeRm,
   argsWorkerStart,
   assessWorktreeLiveness,
+  assertReviewerLaunch,
   catalogUsedFlags,
   checkHelpLiveness,
   dispatchComment,
   extractHandleFromCreate,
   extractWorktreeId,
+  extractWorktreePath,
   fetchHelpPreferLive,
+  hostProbeExec,
   loadRouting,
   parseArgs,
+  planDispatchRollback,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
   reviewerCardName,
+  runCapabilityProbes,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 
@@ -108,15 +114,55 @@ function constrainDispatch(args, routing) {
   return gate;
 }
 
+function rollbackCreated(created) {
+  const rollback = [];
+  for (const args of planDispatchRollback(created)) {
+    const r = orca(args);
+    rollback.push({
+      cmd: args.join(' '),
+      ok: !!r.ok,
+      error: r.ok ? undefined : errText(r.error),
+    });
+  }
+  return rollback;
+}
+
+function failCreated(created, error, extra = {}) {
+  const rollback = rollbackCreated(created);
+  emit({ ok: false, error, rollback, ...created, ...extra }, 1);
+}
+
+function readOnceHandle(handle) {
+  const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
+  if (!read.ok) return { error: errText(read.error) };
+  return read.json;
+}
+
+function probeOrFail(cwd, extra) {
+  const probes = runCapabilityProbes({ exec: hostProbeExec(cwd) });
+  if (!probes.ok) fail(probes.error, { probes, ...extra });
+  return probes;
+}
+
 function cmdDispatch(args) {
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
+  if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
+  if (!args.name && !args.dryRun) fail('dispatch 要 --name');
+
   let workerLaunch;
   let reviewerLaunch;
   try {
     workerLaunch = resolveLaunch({ model: gate.model, routing, root: ROOT });
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
+
+  const capable = assertReviewerLaunch({
+    reviewer: gate.reviewer,
+    command: reviewerLaunch.command,
+    routing,
+  });
+  if (!capable.ok) fail(capable.error);
 
   const plan = {
     mergePolicy: gate.mergePolicy,
@@ -133,6 +179,8 @@ function cmdDispatch(args) {
   }
   if (!args.name) fail('dispatch 要 --name');
 
+  const created = {};
+
   const workerWt = orca(argsWorktreeCreate({
     name: args.name,
     noParent: true,
@@ -140,81 +188,73 @@ function cmdDispatch(args) {
     comment: plan.comment,
   }));
   if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, plan);
-  const workerId = extractWorktreeId(workerWt.json);
-  if (!workerId) fail('工人卡没返回 id', plan);
+  created.workerId = extractWorktreeId(workerWt.json);
+  created.workerPath = extractWorktreePath(workerWt.json);
+  if (!created.workerId) fail('工人卡没返回 id', plan);
 
   const workerTerm = orca(argsTerminalCreate({
-    worktree: workerId,
+    worktree: created.workerId,
     title: args.name,
     command: workerLaunch.command,
   }));
-  if (!workerTerm.ok) fail(`工人终端创建失败: ${errText(workerTerm.error)}`, { ...plan, workerId });
-  const workerHandle = extractHandleFromCreate(workerTerm.json);
-  if (!workerHandle) fail('工人终端没返回 handle', { ...plan, workerId });
-  const workerVerify = waitAndVerify({
-    readOnce: () => {
-      const read = orca(argsTerminalRead({ terminal: workerHandle, limit: 80 }));
-      if (!read.ok) return { error: errText(read.error) };
-      return read.json;
-    },
-  });
-  if (!workerVerify.ok) {
-    emit({ ok: false, error: '工人验开工失败', verify: workerVerify, ...plan, workerId, workerHandle }, 1);
-  }
+  if (!workerTerm.ok) failCreated(created, `工人终端创建失败: ${errText(workerTerm.error)}`, plan);
+  created.workerHandle = extractHandleFromCreate(workerTerm.json);
+  if (!created.workerHandle) failCreated(created, '工人终端没返回 handle', plan);
+
+  const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
+  if (!workerVerify.ok) failCreated(created, '工人验开工失败', { verify: workerVerify, ...plan });
+
+  const workerProbes = runCapabilityProbes({ exec: hostProbeExec(created.workerPath || process.cwd()) });
+  if (!workerProbes.ok) failCreated(created, workerProbes.error, { probes: workerProbes, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',
-    parentWorktree: workerId,
+    parentWorktree: created.workerId,
     comment: plan.comment,
   }));
-  if (!revWt.ok) fail(`审官子卡创建失败: ${errText(revWt.error)}`, { ...plan, workerId, workerHandle });
-  const reviewerId = extractWorktreeId(revWt.json);
-  if (!reviewerId) fail('审官子卡没返回 id', { ...plan, workerId, workerHandle });
+  if (!revWt.ok) failCreated(created, `审官子卡创建失败: ${errText(revWt.error)}`, plan);
+  created.reviewerId = extractWorktreeId(revWt.json);
+  created.reviewerPath = extractWorktreePath(revWt.json);
+  if (!created.reviewerId) failCreated(created, '审官子卡没返回 id', plan);
 
   const revTerm = orca(argsTerminalCreate({
-    worktree: reviewerId,
+    worktree: created.reviewerId,
     title: revName,
     command: reviewerLaunch.command,
   }));
-  if (!revTerm.ok) fail(`审官终端创建失败: ${errText(revTerm.error)}`, { ...plan, workerId, workerHandle, reviewerId });
-  const reviewerHandle = extractHandleFromCreate(revTerm.json);
-  if (!reviewerHandle) fail('审官终端没返回 handle', { ...plan, workerId, workerHandle, reviewerId });
-  const revVerify = waitAndVerify({
-    readOnce: () => {
-      const read = orca(argsTerminalRead({ terminal: reviewerHandle, limit: 80 }));
-      if (!read.ok) return { error: errText(read.error) };
-      return read.json;
-    },
-  });
-  if (!revVerify.ok) {
-    emit({ ok: false, error: '审官验开工失败', verify: revVerify, ...plan, workerId, workerHandle, reviewerId, reviewerHandle }, 1);
-  }
+  if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${errText(revTerm.error)}`, plan);
+  created.reviewerHandle = extractHandleFromCreate(revTerm.json);
+  if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
+
+  const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
+  if (!revVerify.ok) failCreated(created, '审官验开工失败', { verify: revVerify, ...plan });
+
+  const revProbes = runCapabilityProbes({ exec: hostProbeExec(created.reviewerPath || created.workerPath || process.cwd()) });
+  if (!revProbes.ok) failCreated(created, revProbes.error, { probes: revProbes, ...plan });
 
   let taskId = args.task || null;
   if (args.spec) {
     const task = orca(argsTaskCreate({ spec: args.spec }));
-    if (!task.ok) fail(`task-create 失败: ${errText(task.error)}`, { ...plan, workerId });
+    if (!task.ok) failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
     taskId = task.json?.result?.id || task.json?.id || taskId;
   }
-  if (taskId) {
-    const started = orca(argsWorkerStart({
-      task: taskId,
-      worktree: workerId,
-      terminal: workerHandle,
-    }));
-    if (!started.ok) fail(`worker-start 失败: ${errText(started.error)}`, { ...plan, workerId, workerHandle, taskId });
-  }
+  if (!taskId) failCreated(created, 'dispatch 没拿到 taskId', plan);
+
+  const started = orca(argsWorkerStart({
+    task: taskId,
+    worktree: created.workerId,
+    terminal: created.workerHandle,
+  }));
+  if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
   emit({
     ok: true,
     ...plan,
-    workerId,
-    workerHandle,
-    reviewerId,
-    reviewerHandle,
+    ...created,
     taskId,
+    probes: { worker: workerProbes, reviewer: revProbes },
   });
 }
 
@@ -247,11 +287,7 @@ function cmdStart(args) {
   if (!handle) fail('terminal create 没返回 handle', { command: launch.command });
 
   const verified = waitAndVerify({
-    readOnce: () => {
-      const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
-      if (!read.ok) return { error: errText(read.error) };
-      return read.json;
-    },
+    readOnce: () => readOnceHandle(handle),
   });
   if (!verified.ok) {
     emit({
@@ -262,12 +298,21 @@ function cmdStart(args) {
       verify: verified,
     }, 1);
   }
+
+  let probeCwd = process.cwd();
+  if (args.worktree && args.worktree !== 'active' && args.worktree !== 'current') {
+    const shown = orca(['worktree', 'show', '--worktree', args.worktree, '--json']);
+    probeCwd = extractWorktreePath(shown.json) || probeCwd;
+  }
+  const probes = probeOrFail(probeCwd, { handle, command: launch.command });
+
   emit({
     ok: true,
     handle,
     provider: launch.provider,
     command: launch.command,
     verify: { ok: true },
+    probes,
   });
 }
 

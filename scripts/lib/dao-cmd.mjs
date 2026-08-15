@@ -4,7 +4,7 @@
 // 这里禁止写死 codex / reclaude / grok 的参数。读表失败必须抛，不许静默回退。
 // --help 自检的比对函数不调用 orca 自己的 schema（agent-context），只解析 --help 文本。
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -187,6 +187,14 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   return a;
 }
 
+export function argsTerminalClose({ terminal, tab } = {}) {
+  const a = ['terminal', 'close'];
+  if (terminal) a.push('--terminal', terminal);
+  if (tab) a.push('--tab');
+  a.push('--json');
+  return a;
+}
+
 function flagsOf(args) {
   return args.filter(x => typeof x === 'string' && x.startsWith('--'));
 }
@@ -203,6 +211,14 @@ export function extractWorktreeId(json) {
   return json?.result?.worktree?.id
     || json?.result?.id
     || json?.worktree?.id
+    || null;
+}
+
+export function extractWorktreePath(json) {
+  return json?.result?.worktree?.path
+    || json?.result?.worktree?.git?.path
+    || json?.worktree?.path
+    || json?.path
     || null;
 }
 
@@ -228,6 +244,7 @@ export function catalogUsedFlags() {
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsTaskCreate({ spec: 's' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsTerminalClose({ terminal: 't', tab: true }),
   ];
   return samples.map(args => ({
     cmd: commandKey(args),
@@ -365,27 +382,130 @@ export function extractTerminalText(readJson) {
   return '';
 }
 
-export function verifyStarted(readJson) {
+/** 分得开「没读成」和「读了是空的」。unread 不能当成 empty。 */
+export function classifyRead(readJson) {
+  if (readJson == null) return { kind: 'unread', reason: '没读成', error: 'read 结果为空' };
+  if (typeof readJson === 'string') {
+    return String(readJson).trim()
+      ? { kind: 'text', text: readJson }
+      : { kind: 'empty', reason: '读了是空的', text: '' };
+  }
+  if (readJson.error) {
+    return { kind: 'unread', reason: '没读成', error: readJson.error };
+  }
   const text = extractTerminalText(readJson);
-  if (!String(text).trim()) return { ok: false, reason: '无输出', text: '' };
+  if (!String(text).trim()) return { kind: 'empty', reason: '读了是空的', text: '' };
+  return { kind: 'text', text };
+}
+
+export function verifyStarted(readJson) {
+  const cls = classifyRead(readJson);
+  if (cls.kind === 'unread') {
+    return { ok: false, reason: '没读成', error: cls.error, unscanned: true, text: '' };
+  }
+  if (cls.kind === 'empty') {
+    return { ok: false, reason: '读了是空的', unscanned: false, text: '' };
+  }
+  const text = cls.text;
   for (const re of CONFIRM_PATTERNS) {
     const m = String(text).match(re);
-    if (m) return { ok: false, reason: '有待确认提示', evidence: m[0], text };
+    if (m) return { ok: false, reason: '有待确认提示', evidence: m[0], text, unscanned: false };
   }
-  return { ok: true, text };
+  return { ok: true, text, unscanned: false };
 }
 
 export function waitAndVerify({ readOnce, timeoutMs = 8000, intervalMs = 400, sleep = sleepSync } = {}) {
   if (typeof readOnce !== 'function') throw new Error('waitAndVerify 要 readOnce');
   const t0 = Date.now();
-  let last = { ok: false, reason: '无输出', text: '' };
+  let last = { ok: false, reason: '读了是空的', text: '', unscanned: false };
   while (Date.now() - t0 < timeoutMs) {
     last = verifyStarted(readOnce());
     if (last.ok) return last;
-    if (last.reason === '有待确认提示') return last;
+    if (last.reason === '有待确认提示' || last.reason === '没读成') return last;
     sleep(intervalMs);
   }
   return last;
+}
+
+export const CODEX_CAPABLE_FLAG = '--dangerously-bypass-approvals-and-sandbox';
+export const PROBE_LABELS = { write: '能写文件', node: '能跑 node', gh: '能调 gh' };
+
+/** 审官若走 codex，launch 必须带 danger 旗标，否则就是哑审官。 */
+export function assertReviewerLaunch({ reviewer, command, routing } = {}) {
+  const cmd = String(command || '');
+  const models = Array.isArray(routing?.models) ? routing.models : [];
+  const hit = reviewer ? models.find(m => m && m.id === reviewer) : null;
+  const isCodex = (hit && hit.provider === 'gpt') || /\bcodex\b/.test(cmd);
+  if (!isCodex) return { ok: true };
+  if (!cmd.includes(CODEX_CAPABLE_FLAG)) {
+    return {
+      ok: false,
+      error: `codex 审官 launch 缺 ${CODEX_CAPABLE_FLAG}，会起成哑审官（-a never 单用会拦 gh/node）`,
+    };
+  }
+  return { ok: true };
+}
+
+export function runCapabilityProbes({ exec } = {}) {
+  if (typeof exec !== 'function') throw new Error('runCapabilityProbes 要 exec');
+  const failed = [];
+  const details = {};
+  for (const name of ['write', 'node', 'gh']) {
+    const r = exec(name);
+    details[name] = r;
+    if (!r || !r.ok) failed.push(name);
+  }
+  return {
+    ok: failed.length === 0,
+    failed,
+    details,
+    error: failed.length ? `能力探针失败：缺 ${failed.map(k => PROBE_LABELS[k]).join('、')}` : null,
+  };
+}
+
+export function hostProbeExec(cwd = process.cwd()) {
+  return (name) => {
+    if (name === 'write') {
+      const p = join(cwd, '_dao_probe_write.txt');
+      try {
+        writeFileSync(p, 'ok\n');
+        const ok = existsSync(p);
+        try { unlinkSync(p); } catch { /* ignore */ }
+        return { ok };
+      } catch (e) {
+        return { ok: false, error: String(e.message || e) };
+      }
+    }
+    if (name === 'node') {
+      const r = spawnSync(process.execPath, ['-e', "process.stdout.write('ok')"], {
+        cwd, encoding: 'utf8', windowsHide: true, timeout: 15000,
+      });
+      return {
+        ok: !r.error && r.status === 0 && /ok/.test(r.stdout || ''),
+        error: r.error?.message || r.stderr || undefined,
+      };
+    }
+    if (name === 'gh') {
+      const r = spawnSync('gh', ['--version'], {
+        cwd, encoding: 'utf8', windowsHide: true, timeout: 15000,
+      });
+      const out = `${r.stdout || ''}${r.stderr || ''}`;
+      return {
+        ok: !r.error && r.status === 0 && /gh version/i.test(out),
+        error: r.error?.message || r.stderr || undefined,
+      };
+    }
+    return { ok: false, error: `未知探针 ${name}` };
+  };
+}
+
+export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle } = {}) {
+  const steps = [];
+  if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
+  if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
+  if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
+  if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
+  return steps;
 }
 
 export function sleepSync(ms) {
@@ -636,6 +756,27 @@ export const VERBS = [
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
 
+export const FLAGS_BY_VERB = {
+  start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
+  dispatch: new Set([
+    '--name', '--merge-policy', '--model', '--role', '--reviewer', '--confirm',
+    '--spec', '--task', '--now', '--dry-run', '--json', '--help', '-h',
+  ]),
+  'worktree-create': new Set([
+    '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
+    '--comment', '--json', '--help', '-h',
+  ]),
+  'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
+  'task-create': new Set(['--spec', '--json', '--help', '-h']),
+  'worker-start': new Set([
+    '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy',
+    '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
+  ]),
+  send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
+  liveness: new Set(['--path', '--json', '--help', '-h']),
+  'check-help': new Set(['--json', '--help', '-h']),
+};
+
 function camelFlag(s) {
   return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
@@ -653,15 +794,18 @@ export function parseArgs(argv) {
     return { verb: 'raw', cmd };
   }
   if (!VERBS.includes(verb)) throw new Error(`未知动词: ${verb}（只要 ${VERBS.join(' / ')}）`);
+  const allowed = FLAGS_BY_VERB[verb];
   const args = { verb };
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
-    if (a === '--help' || a === '-h') { args.help = true; continue; }
-    if (!a.startsWith('--')) throw new Error(`未知参数: ${a}`);
-    const key = a.slice(2);
+    const flag = a.split('=')[0];
+    if (flag === '--help' || flag === '-h') { args.help = true; continue; }
+    if (!flag.startsWith('--')) throw new Error(`未知参数: ${a}`);
+    if (allowed && !allowed.has(flag)) throw new Error(`未知参数: ${flag}`);
+    const key = flag.slice(2);
     if (BOOL_FLAGS.has(key)) { args[camelFlag(key)] = true; continue; }
     const val = rest[++i];
-    if (val == null || val.startsWith('--')) throw new Error(`参数 --${key} 缺值`);
+    if (val == null || String(val).startsWith('--')) throw new Error(`参数 --${key} 缺值`);
     args[camelFlag(key)] = val;
   }
   return args;
@@ -669,8 +813,8 @@ export function parseArgs(argv) {
 
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
-派工（约束载体，三参数缺一即退）：
-  dispatch --name <名> --merge-policy auto|manual --reviewer <模型id> (--model <id> | --role <角色> [--confirm]) [--spec <文>] [--dry-run]
+派工（约束载体，缺一即退）：
+  dispatch --name <名> --merge-policy auto|manual --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
@@ -685,5 +829,5 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   raw -- <任意命令...>     逃生口，必须留痕
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
-派工不给 --model 时只推荐、要 --confirm，禁静默默认。
+派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
 `;

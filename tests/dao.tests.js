@@ -35,27 +35,27 @@ async function main() {
   const S = await import('file://' + LIB.replace(/\\/g, '/'));
   const routing = S.loadRouting();
 
-  console.log('\n=== ① 漏 -a never（#468 / #482）===');
+  console.log('\n=== ① R2 起 codex 必须带 danger 旗标（#468 实测换路）===');
   {
     const gpt = S.resolveLaunch({ provider: 'gpt', routing });
-    check('gpt launch 含 -a never', gpt.command.includes('-a never'), gpt.command);
+    check('gpt launch 含 --dangerously-bypass-approvals-and-sandbox', gpt.command.includes(S.CODEX_CAPABLE_FLAG), gpt.command);
     check('gpt launch 含 codex', /\bcodex\b/.test(gpt.command), gpt.command);
-    check('gpt 用的是表里的模板', gpt.template.includes('-a never'), gpt.template);
+    check('gpt 不用单挂 -a never（会拦 gh/node）', !/(^|\s)-a\s+never\b/.test(gpt.command), gpt.command);
 
     const dry = spawnSync(process.execPath, [CLI, 'start', '--provider', 'gpt', '--worktree', 'active', '--dry-run'], {
       encoding: 'utf8', cwd: REPO,
     });
     check('dao start --dry-run 退出 0', dry.status === 0, dry.stderr || dry.stdout);
-    check('CLI 起 gpt 自动带 -a never', (dry.stdout || '').includes('-a never'), dry.stdout);
+    check('CLI 起 gpt 自动带 danger 旗标', (dry.stdout || '').includes(S.CODEX_CAPABLE_FLAG), dry.stdout);
 
-    const missing = { ...routing, providers: { ...routing.providers, gpt: { ...routing.providers.gpt, launch: 'codex -m {model}' } } };
-    const stripped = S.resolveLaunch({ provider: 'gpt', routing: missing });
-    check('判别力：模板去掉 -a never 时断言能看见', !stripped.command.includes('-a never'), stripped.command);
+    const mute = { ...routing, providers: { ...routing.providers, gpt: { ...routing.providers.gpt, launch: 'codex -a never -m {model}' } } };
+    const muteLaunch = S.resolveLaunch({ provider: 'gpt', routing: mute });
+    const muteGate = S.assertReviewerLaunch({ reviewer: 'gpt-5.6-sol', command: muteLaunch.command, routing: mute });
+    check('判别力：-a never 单用当审官 → 拦哑审官', muteGate.ok === false && /哑审官/.test(muteGate.error), JSON.stringify(muteGate));
 
     const confirm = S.verifyStarted({ text: 'Allow command?\n[Yes] [No] [Always allow]' });
-    check('漏 -a never 的确认屏被验开工拦住', confirm.ok === false && confirm.reason === '有待确认提示', JSON.stringify(confirm));
+    check('确认屏被验开工拦住', confirm.ok === false && confirm.reason === '有待确认提示', JSON.stringify(confirm));
     check('正常有输出无确认 → 过', S.verifyStarted({ text: 'codex ready\nmodel gpt-5.6-sol' }).ok === true);
-    check('空输出不过', S.verifyStarted({ text: '' }).ok === false && S.verifyStarted({ text: '' }).reason === '无输出');
   }
 
   console.log('\n=== 启动模板：reclaude / shim / fail-loud ===');
@@ -237,20 +237,26 @@ async function main() {
     check('缺 --reviewer → 非零', noRev.status !== 0, `status=${noRev.status}`);
     check('缺 --reviewer → 打印缺什么', p3.error && String(p3.error).includes('--reviewer'), JSON.stringify(p3));
 
-    const ok = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
+    const noSpec = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
+    const pSpec = payload(noSpec);
+    check('R5 缺 --spec → 非零', noSpec.status !== 0, `status=${noSpec.status}`);
+    check('R5 缺 --spec → 打印缺什么', pSpec.error && String(pSpec.error).includes('--spec'), JSON.stringify(pSpec));
+
+    const ok = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要：修命令库', '--dry-run']);
     const pOk = payload(ok);
-    check('三参数齐 → dry-run 过', ok.status === 0 && pOk.ok === true, JSON.stringify(pOk));
+    check('三参数齐 + --spec → dry-run 过', ok.status === 0 && pOk.ok === true, JSON.stringify(pOk));
     check('dry-run 写出审官预建计划', pOk.reviewerCard === '审官·gpt-5.6-sol' && /codex/.test(pOk.reviewerLaunch), JSON.stringify(pOk));
-    check('dry-run 工人命令带 -a never 以外的 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
+    check('审官 launch 带 danger 旗标', String(pOk.reviewerLaunch || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
+    check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
-    const roleOnly = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--name', 'x', '--dry-run']);
+    const roleOnly = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pRole = payload(roleOnly);
     check('峰时只给 --role 不给 --model → 非零（禁静默默认）', roleOnly.status !== 0, JSON.stringify(pRole));
     check('峰时推荐 grok-4.6 不是 ds-flash', pRole.recommendation && pRole.recommendation.model === 'grok-4.6', JSON.stringify(pRole));
     check('峰时推荐不是 deepseek-v4-flash（误推钉）', !(pRole.recommendation && pRole.recommendation.model === 'deepseek-v4-flash'), JSON.stringify(pRole));
 
-    const roleConfirm = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--confirm', '--name', 'x', '--dry-run']);
+    const roleConfirm = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pConf = payload(roleConfirm);
     check('--role + --confirm 采用峰时推荐 grok-4.6', roleConfirm.status === 0 && pConf.model === 'grok-4.6', JSON.stringify(pConf));
 
@@ -264,6 +270,53 @@ async function main() {
     ], { encoding: 'utf8', cwd: REPO });
     const pWs = payload(ws);
     check('worker-start 也受三参数约束', ws.status !== 0 && String(pWs.error || '').includes('--merge-policy'), JSON.stringify(pWs));
+  }
+
+  console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
+  {
+    const allOk = S.runCapabilityProbes({ exec: (n) => ({ ok: true, name: n }) });
+    check('R1 三项探针都过', allOk.ok === true && allOk.failed.length === 0, JSON.stringify(allOk));
+    const noWrite = S.runCapabilityProbes({ exec: (n) => ({ ok: n !== 'write' }) });
+    check('R1 不能写文件 → 点名缺能写文件', noWrite.ok === false && noWrite.failed.includes('write') && /能写文件/.test(noWrite.error), JSON.stringify(noWrite));
+    const noNode = S.runCapabilityProbes({ exec: (n) => ({ ok: n !== 'node' }) });
+    check('R1 不能跑 node → 点名缺能跑 node', noNode.ok === false && /能跑 node/.test(noNode.error), JSON.stringify(noNode));
+    const noGh = S.runCapabilityProbes({ exec: (n) => ({ ok: n !== 'gh' }) });
+    check('R1 不能调 gh → 点名缺能调 gh', noGh.ok === false && /能调 gh/.test(noGh.error), JSON.stringify(noGh));
+    const liveProbe = S.runCapabilityProbes({ exec: S.hostProbeExec(REPO) });
+    check('R1 本机三项探针真跑过', liveProbe.ok === true, JSON.stringify(liveProbe));
+
+    const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
+    check('R4 没读成 ≠ 读了是空的', unread.reason === '没读成' && unread.unscanned === true, JSON.stringify(unread));
+    const empty = S.verifyStarted({ text: '' });
+    check('R4 读了是空的', empty.reason === '读了是空的' && empty.unscanned === false, JSON.stringify(empty));
+    const unreadWait = S.waitAndVerify({
+      readOnce: () => ({ error: 'boom' }),
+      timeoutMs: 5000,
+      intervalMs: 10,
+      sleep: () => { throw new Error('unread 不该再睡'); },
+    });
+    check('R4 没读成立即返回（不等满超时）', unreadWait.reason === '没读成', JSON.stringify(unreadWait));
+
+    const badStart = spawnSync(process.execPath, [
+      CLI, 'start', '--provider', 'gpt', '--worktree', 'active', '--dry-run', '--submit', 'yes',
+    ], { encoding: 'utf8', cwd: REPO });
+    const badText = `${badStart.stdout || ''}${badStart.stderr || ''}`;
+    check('R3 --submit 被 CLI 拦住非零', badStart.status !== 0, `status=${badStart.status} ${badText}`);
+    check('R3 打印未知参数 --submit', /未知参数: --submit/.test(badText), badText);
+
+    const badSandbox = spawnSync(process.execPath, [
+      CLI, 'dispatch', '--name', 'x', '--merge-policy', 'auto', '--model', 'grok-4.6',
+      '--reviewer', 'gpt-5.6-sol', '--spec', '短摘要', '--dry-run', '--sandbox', 'danger-full-access',
+    ], { encoding: 'utf8', cwd: REPO });
+    const sandText = `${badSandbox.stdout || ''}${badSandbox.stderr || ''}`;
+    check('R3 --sandbox 不再被静默吞掉', badSandbox.status !== 0 && /未知参数: --sandbox/.test(sandText), sandText);
+
+    const steps = S.planDispatchRollback({
+      workerId: 'w1', workerHandle: 'th1', reviewerId: 'r1', reviewerHandle: 'rh1',
+    });
+    check('R6 回滚先关审官终端', steps[0] && steps[0].includes('--terminal') && steps[0].includes('rh1'), JSON.stringify(steps));
+    check('R6 回滚最后删工人卡', steps[steps.length - 1] && steps[steps.length - 1].includes('worktree') && steps[steps.length - 1].includes('w1'), JSON.stringify(steps));
+    check('R6 什么都没建 → 回滚空', S.planDispatchRollback({}).length === 0);
   }
 
   console.log('\n=== 编排 builder / 逃生口 ===');

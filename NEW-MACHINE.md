@@ -204,15 +204,15 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 
 ## 统一命令库
 
-起终端和编排不要手拼 orca 命令（漏 `-a never`、写不存在的 `--submit` 都在这里栽过）。走：
+起终端和编排不要手拼 orca 命令（手打 `codex -a never` 会把 gh/node 拦死、写不存在的 `--submit` 都在这里栽过）。走：
 
 ```bash
 node scripts/dao.mjs --help
 node scripts/dao.mjs start --provider gpt --worktree active --dry-run
-node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --dry-run
+node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --spec "短摘要" --dry-run
 ```
 
-派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
+派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
 
 ## 自检
 

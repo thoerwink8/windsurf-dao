@@ -1,0 +1,21 @@
+orca terminal close
+
+Usage: orca terminal close [--terminal <handle>] [--tab] [--json]
+
+Close a terminal pane/session, or its whole tab with --tab
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --terminal <handle>  Runtime-issued terminal handle
+  --tab                  Close the whole tab and wait for durable persistence
+
+Notes:
+  Without --tab, preserves the existing pane/session close behavior. With --tab, waits until the whole tab is durably removed.
+
+Examples:
+  $ orca terminal close --terminal term_abc123
+  $ orca terminal close --terminal term_abc123 --tab --json
+
