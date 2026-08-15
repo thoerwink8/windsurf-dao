@@ -22,11 +22,13 @@
 // ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
+// ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -321,8 +323,6 @@ function checkMemoryIndex() {
   }
 }
 
-// ── 跑 ──────────────────────────────────────────────────────────────
-
 // ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
 // 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
 // dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
@@ -400,6 +400,36 @@ async function checkCommandHelp() {
   }
 }
 
+// ── ⑧ 态注入 hook 活着（issue #488）────────────────────────────────────
+// 专注/值守三态的承重墙是 UserPromptSubmit hook：它每轮把当前态注入上下文。
+// 它是静默失效型部件的极端例子——被覆盖/断链/坏掉之后，态标还挂在那儿，
+// AI 却什么都收不到，用户以为自己锁着，实际没锁。假状态比没状态更糟。
+//
+// 装载面没有单一 owner：插件面（~/.claude/skills/<名>/）会随仓库搬家、worktree 删除而断链，
+// settings.json 更是 cc-switch DB 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖
+// （见 memory claude-settings-self-heal）。所以「装过一次」不等于「现在还在」，必须每次重验。
+//
+// 两层验，缺一不可（静态门控拦不住运行时失效）：
+//   静态：仓内每个自带 hook 的 skill（host/skills/<名>/hooks/hooks.json）声明的脚本，
+//         都要能在本机某个装载面上被点到。
+//   运行时：把点到的那条命令真跑四次，四种状态文件各一次——读到且常态 / 读到且非常态 /
+//         文件不在 / 文件坏了——断言四种输出两两不同形，且只有非常态那次带得出哨兵焦点。
+//         这是「读到了且是常态」「读到了且非常态」「压根没读到」三形不得同形那条硬规矩的常驻闸
+//         （第四形「读到了但坏了」一并单列：没读到和读坏了是两件事，处置不一样）。
+// 自发现：期望集合从 host/skills/ 扫出来，没有手写清单可以漏登记。
+// 零样本：skills 目录不在 / 没有任何 hook 声明 / 声明了但脚本没了 / 一个装载面都点不到，全部单独报红。
+
+// 实现在 scripts/lib/dao-mode-hook-check.mjs（那里能被 tests/dao-mode.tests.js 拿假 HOME 造违规
+// 样本单独验，不必跑整个 dao-check——dao-check 会跑 tests/，tests 再跑 dao-check 就递归了）。
+
+function checkModeHookAlive() {
+  const r = checkModeHook({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+// ── 跑 ──────────────────────────────────────────────────────────────
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -407,6 +437,7 @@ checkResidentBudget();
 checkModelRouting();
 checkMemoryIndex();
 await checkCommandHelp();
+checkModeHookAlive();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
