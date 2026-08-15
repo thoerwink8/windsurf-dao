@@ -36,11 +36,13 @@ import {
   resolveDispatchConstraints,
   resolveLaunch,
   reviewerCardName,
+  rollbackReport,
   runCapabilityProbes,
   sleepSync,
   terminalProbeExec,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
+import { afterDispatchSuccess } from './lib/master-title.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -120,19 +122,37 @@ function constrainDispatch(args, routing) {
 function rollbackCreated(created) {
   const rollback = [];
   for (const args of planDispatchRollback(created)) {
-    const r = orca(args);
-    rollback.push({
+    let r = orca(args);
+    const step = {
       cmd: args.join(' '),
       ok: !!r.ok,
       error: r.ok ? undefined : errText(r.error),
-    });
+    };
+    if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
+      const retryArgs = args.filter(a => a !== '--tab');
+      const retry = orca(retryArgs);
+      step.retryWithoutTab = {
+        cmd: retryArgs.join(' '),
+        ok: !!retry.ok,
+        error: retry.ok ? undefined : errText(retry.error),
+      };
+      if (retry.ok) {
+        step.ok = true;
+        step.recovered = true;
+        step.error = undefined;
+        r = retry;
+      }
+    }
+    rollback.push(step);
   }
-  return rollback;
+  const report = rollbackReport(rollback);
+  if (report.alarm) console.error(`[dao] ${report.alarm}`);
+  return { rollback, rollbackFailed: report.rollbackFailed };
 }
 
 function failCreated(created, error, extra = {}) {
-  const rollback = rollbackCreated(created);
-  emit({ ok: false, error, rollback, ...created, ...extra }, 1);
+  const { rollback, rollbackFailed } = rollbackCreated(created);
+  emit({ ok: false, error, rollback, rollbackFailed, ...created, ...extra }, 1);
 }
 
 function readOnceHandle(handle) {
@@ -145,7 +165,8 @@ function liveSendAndRead(handle) {
   return (cmd, name) => {
     const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
     if (!sent.ok) return { error: errText(sent.error) };
-    const deadline = Date.now() + 8000;
+    // grok TUI 要把 send 当用户消息再跑命令，8s 不够（#499 实测）。
+    const deadline = Date.now() + 45000;
     let last = { text: '' };
     while (Date.now() < deadline) {
       const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
@@ -268,12 +289,15 @@ function cmdDispatch(args) {
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
+  const title = afterDispatchSuccess({ name: args.name, env: process.env, runOrca: orca });
+
   emit({
     ok: true,
     ...plan,
     ...created,
     taskId,
     probes: { worker: workerProbes, reviewer: revProbes },
+    title,
   });
 }
 

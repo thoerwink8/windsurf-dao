@@ -1,0 +1,14 @@
+{
+  "id": "8996ca70-5c4a-4b01-95bc-7b3ec3016f40",
+  "ok": false,
+  "error": {
+    "code": "runtime_error",
+    "message": "tab_not_found"
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3",
+    "capturedAt": "2026-08-15",
+    "command": "orca terminal close --terminal term_a106c2c9-62cc-440b-afde-0b9416ffb630 --json",
+    "note": "echo 探针终端刚建完就关，带不带 --tab 都报 tab_not_found。不是 extract 语料，只作回滚失败形态存档。"
+  }
+}

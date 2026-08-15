@@ -363,20 +363,24 @@ export function extractTerminalText(readJson) {
   const result = readJson.result ?? readJson;
   if (typeof result === 'string') return result;
   const chunks = [];
-  if (typeof result.text === 'string') chunks.push(result.text);
-  if (typeof result.output === 'string') chunks.push(result.output);
-  if (typeof result.preview === 'string') chunks.push(result.preview);
-  if (Array.isArray(result.lines)) {
-    for (const line of result.lines) {
+  const pushLines = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const line of arr) {
       if (typeof line === 'string') chunks.push(line);
       else if (line && typeof line.text === 'string') chunks.push(line.text);
     }
+  };
+  // 2026-08-15 真返回：文本在 result.terminal.tail（字符串数组），不在 result.text/output/lines。
+  if (result.terminal && typeof result.terminal === 'object') {
+    pushLines(result.terminal.tail);
+    if (typeof result.terminal.preview === 'string') chunks.push(result.terminal.preview);
   }
-  if (Array.isArray(result.output)) {
-    for (const line of result.output) {
-      if (typeof line === 'string') chunks.push(line);
-    }
-  }
+  pushLines(result.tail);
+  if (typeof result.text === 'string') chunks.push(result.text);
+  if (typeof result.output === 'string') chunks.push(result.output);
+  if (typeof result.preview === 'string') chunks.push(result.preview);
+  pushLines(result.lines);
+  pushLines(Array.isArray(result.output) ? result.output : null);
   if (chunks.length) return chunks.join('\n');
   if (typeof readJson.preview === 'string') return readJson.preview;
   return '';
@@ -565,6 +569,21 @@ export function planDispatchRollback({ workerId, workerHandle, reviewerId, revie
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
+}
+
+/** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
+export function rollbackReport(steps) {
+  const list = Array.isArray(steps) ? steps : [];
+  const failed = list.filter(s => s && s.ok === false);
+  if (failed.length === 0) {
+    return { rollbackFailed: false, alarm: null, failed: [] };
+  }
+  const detail = failed.map(s => `${s.cmd || '?'} → ${s.error || '失败'}`).join('; ');
+  return {
+    rollbackFailed: true,
+    alarm: `回滚失败，可能留下孤儿终端/树：${detail}`,
+    failed,
+  };
 }
 
 export function sleepSync(ms) {

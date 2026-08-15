@@ -343,6 +343,7 @@ async function main() {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
+    check('#495 dao.mjs 派工成功后只调 afterDispatchSuccess', /afterDispatchSuccess/.test(daoSrc));
     check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
@@ -387,6 +388,13 @@ async function main() {
     check('R6 回滚先关审官终端', steps[0] && steps[0].includes('--terminal') && steps[0].includes('rh1'), JSON.stringify(steps));
     check('R6 回滚最后删工人卡', steps[steps.length - 1] && steps[steps.length - 1].includes('worktree') && steps[steps.length - 1].includes('w1'), JSON.stringify(steps));
     check('R6 什么都没建 → 回滚空', S.planDispatchRollback({}).length === 0);
+    const rbOk = S.rollbackReport([{ cmd: 'terminal close x --tab', ok: true }]);
+    check('R6 回滚全成功 → 不叫', rbOk.rollbackFailed === false && rbOk.alarm == null, JSON.stringify(rbOk));
+    const rbFail = S.rollbackReport([
+      { cmd: 'terminal close th1 --tab', ok: false, error: 'tab_not_found' },
+      { cmd: 'worktree rm w1 --force', ok: true },
+    ]);
+    check('R6 回滚失败单独可见', rbFail.rollbackFailed === true && /孤儿/.test(rbFail.alarm) && /tab_not_found/.test(rbFail.alarm), JSON.stringify(rbFail));
   }
 
   console.log('\n=== 编排 builder / 逃生口 ===');
@@ -409,6 +417,31 @@ async function main() {
     });
     check('dao raw 退出跟随子进程', raw.status === 0, raw.stderr || raw.stdout);
     check('dao raw 在 stderr 留痕', /已记账/.test(raw.stderr || ''), raw.stderr);
+  }
+
+  console.log('\n=== 真语料：orca --json 存档必须能被解析函数吃下（#499）===');
+  {
+    const fx = (name) => JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', name), 'utf8'));
+    const readLive = fx('terminal-read.json');
+    const createLive = fx('terminal-create.json');
+    const wtLive = fx('worktree-create.json');
+
+    check('terminal-read 信封是真 orca 形（ok + result.terminal.tail）',
+      readLive.ok === true && Array.isArray(readLive.result?.terminal?.tail) && readLive.result.terminal.tail.length > 0,
+      JSON.stringify(Object.keys(readLive.result || {})));
+
+    const extracted = S.extractTerminalText(readLive);
+    check('真 terminal read → extractTerminalText 非空', String(extracted).trim().length > 0, `len=${String(extracted).length}`);
+    check('真 terminal read 含屏面原文', /Grok 4\.6/.test(extracted), extracted.slice(0, 160));
+    const started = S.verifyStarted(readLive);
+    check('真 terminal read → verifyStarted 过', started.ok === true, JSON.stringify({ ok: started.ok, reason: started.reason, len: String(started.text || '').length }));
+
+    check('真 terminal create → extractHandleFromCreate',
+      S.extractHandleFromCreate(createLive) === 'term_a106c2c9-62cc-440b-afde-0b9416ffb630');
+    check('真 worktree create → extractWorktreeId',
+      S.extractWorktreeId(wtLive) === '1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
+    check('真 worktree create → extractWorktreePath',
+      S.extractWorktreePath(wtLive) === 'C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
