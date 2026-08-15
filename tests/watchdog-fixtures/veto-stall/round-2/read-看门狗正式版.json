@@ -6,24 +6,15 @@
       "handle": "term_fe858b3f-491a-4601-aac3-03638f5dfa9a",
       "status": "running",
       "tail": [
-        " Elapsed 0.0s",
-        "",
-        "",
-        "",
-        " $ cd \"C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版\" && orca terminal read --terminal term_e02bc95d-2fda-4414-ac8e-4bf399ab5bf6",
-        " --limit 500 --json > tests/watchdog-fixtures/read-master-live.json 2>&1 && node -e \"",
-        " const d=require('./tests/watchdog-fixtures/read-master-live.json');",
-        " console.log('ok:', d.ok, 'status:', d.result?.terminal?.status, 'lines:', d.result?.terminal?.tail?.length);",
-        " \"",
-        "",
+        "审官讨论：这两个样本都被拦住",
         " ⠸ Working...",
         "⚠ Selected model is at capacity. Please try a different model."
       ],
       "truncated": true,
       "limited": false,
       "oldestCursor": "1361",
-      "nextCursor": "3000",
-      "latestCursor": "3000",
+      "nextCursor": 3000,
+      "latestCursor": "3361",
       "returnedLineCount": 11
     }
   },

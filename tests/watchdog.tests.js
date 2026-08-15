@@ -1,9 +1,12 @@
-// 正式看门狗回归网（issue #442）——每个检测项留正控 + 负控 + 判别力
+// 正式看门狗回归网（issue #442 + #500/#492/#471/#476 换代）——每个检测项留正控 + 负控 + 判别力
 //
 // 验的层：①真实语料（live/ 2026-08-14 实录）扫完 0 异常 ②真实事故语料被拦（at-capacity 两起
-// 实录 + terminal_handle_stale 读失败实录，字段未改写）③exited / 错误指纹 / waiting / 哈希三轮 /
-// NO_TARGETS 违规样本被拦 ④epoch 状态机三类边界（活动推进 / 同 pane 重启 / 屏面变化）⑤结构性
-// 排除（主工作区 / 自身 / 稳定 pane ID）⑥--once 只跑单轮 ⑦检测不依赖工人自报。
+// 实录 + terminal_handle_stale 读失败实录，字段未改写）③exited / 错误指纹 / waiting / 停摆 /
+// NO_TARGETS 违规样本被拦 ④epoch 状态机边界（同 pane 重启 / 内容变化）⑤结构性排除（主工作区 /
+// 自身 / 稳定 pane ID）⑥--once 只跑单轮 ⑦检测不依赖工人自报。
+// #500 换代：⑧停摆判据 = 非 spinner 真实内容连续三轮不变（spinner 重绘/cursor 前进/ps updatedAt
+// 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
+// ⑩孤儿树（活跃执行者判据，跨主帅不误伤）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
 //
 // 判别力自检问句：任何把检测放宽或收紧的改动，是否都至少有一条断言会变红？
 // 每个违规样本都是「故意构造的违规，被当场拦下」——上线生效证据，v0.4 跳过这步首报即翻车。
@@ -56,17 +59,19 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|hash-stable|read-failed):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
+const NOW = 1786800000000;
 
 console.log("\n=== ① 真实语料（2026-08-14 实录）——负向对照：健康工位不误报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "live"));
   check("退出码 0（扫完 0 异常）", r.status === 0, `status=${r.status}`);
   check("OK 汇总含工位数（主工作区被结构性排除，剩 1 个）", /OK 扫完 1 个工位/.test(r.out), r.out.trim());
-  check("被监视工位：看门狗正式版在列", r.out.includes("看门狗正式版"), "无 看门狗正式版");
+  check("被监视工位：#452 - 看门狗正式版在列", r.out.includes("#452 - 看门狗正式版"), "无 #452 - 看门狗正式版");
   check("主工作区 master 不在监视集合（结构性排除）", !r.out.includes("master"), r.out.trim());
   check("屏面上部叙述里的指纹字样不误报（v0 教训）", !EVENT_RE.test(r.out), r.out.split("\n").filter(l => EVENT_RE.test(l)).join(" | "));
+  check("命名合规树不报 naming（#476）", !/naming:/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ② 真实语料 + 自身排除：全被排除 → NO_TARGETS ===");
@@ -88,6 +93,7 @@ console.log("\n=== ③ 真实事故语料被拦（2026-08-15 现场实录，字�
   check("at-capacity-450：第二轮报 fingerprint 命中 at capacity（现场实录第二轮到）", /round 2\/2[\s\S]*\[#450 - 点将台综合稿\] fingerprint:.*at capacity/.test(r2.out), r2.out.trim());
   const seg1 = (r2.out.match(/round 1\/2([\s\S]*?)(?:round 2\/2|$)/) || [])[1] || "";
   check("at-capacity-450：第一轮不报（streak 1）", !/fingerprint:/.test(seg1), r2.out.trim());
+  check("at-capacity-450：处置矩阵动作行出现（#471：at capacity → 注入续命 keepalive）", /动作: 注入续命，错峰退避 120s→300s：将发送「看门狗续命/.test(r2.out), r2.out.trim());
 
   const r3 = runMultiRounds(path.join(FIXTURES, "real-incidents", "at-capacity"), 2);
   check("at-capacity（审官实录）：两轮同屏 → 退出码 1", r3.status === 1, `status=${r3.status}`);
@@ -108,14 +114,11 @@ console.log("\n=== ④ exited 违规样本被拦 ===");
 console.log("\n=== ⑤ 宽指纹退役（2026-08-15 裁定书：删单发即唤醒的 'Error:'/'terminated'/'Connection error' 类）===");
 {
   // 判别力：指纹一律两连同才报警，单轮本来就不响——退役断言必须用两轮同屏证明
-  // 「两连同下宽指纹也不报」；若把退役指纹加回 ERROR_FINGERPRINTS，这两条断言必须变红。
-  // fingerprint/ 样本 = 盲考·Grok 真实报错原文（含 terminated）——宽指纹退役后不再匹配
   const r = runMultiRounds(path.join(FIXTURES, "fingerprint"), 2);
   check("fingerprint 样本两轮同屏：退出码 0（'terminated' 已退役，两连同也不报）", r.status === 0, `status=${r.status}`);
   check("fingerprint 样本两轮同屏：无 fingerprint 事件", !/fingerprint:/.test(r.out), r.out.trim());
   check("fingerprint 样本两轮同屏：OK 扫完（不是没查成）", /OK 扫完 1 个工位/.test(r.out), r.out.trim());
 
-  // wide-fp-deleted 样本：屏面底部写入 'Error:' 与 'Connection error'——同样退役
   const r2 = runMultiRounds(path.join(FIXTURES, "wide-fp-deleted"), 2);
   check("wide-fp-deleted 两轮同屏：'Error:'/'Connection error' 不再报警 → 退出码 0", r2.status === 0, `status=${r2.status}`);
   check("wide-fp-deleted 两轮同屏：宽指纹字样在屏面但不报", !/fingerprint:/.test(r2.out), r2.out.trim());
@@ -128,39 +131,41 @@ console.log("\n=== ⑥ waiting 官方信号样本被拦 ===");
   check("输出 waiting: 事件", /\[#452 - 看门狗正式版\] waiting:/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑦ 整屏哈希三轮不变——第 3 轮才报警 ===");
+console.log("\n=== ⑦ 停摆判据（#500 换代）：非 spinner 真实内容三轮不变——第 3 轮才报警 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable"));
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 3 轮输出 hash-stable 事件", /\[#452 - 看门狗正式版\] hash-stable:/.test(r.out), r.out.trim());
+  check("第 3 轮输出 stall 事件", /\[#452 - 看门狗正式版\] stall:/.test(r.out), r.out.trim());
   check("前两轮是 OK 汇总不是报警", (r.out.match(/OK 扫完 1 个工位/g) || []).length === 2, "OK 行数不对");
 }
 
-console.log("\n=== ⑧ epoch 状态机：updatedAt 刚推进后同屏三轮 → 第 4 轮才报（红 4 修法判别）===");
+console.log("\n=== ⑧ 判别力：ps updatedAt 前进不算活性（#500：转圈挂死时 ps 也可能在动）——第 3 轮即报 ===");
 {
+  // hash-stable-activity 原样本：ps updatedAt 第 2 轮推进一次、真实内容不动。
+  // 旧判据以 updatedAt 重启计数 → 第 4 轮才报；新判据只认非 spinner 真实内容 → 第 3 轮报。
+  // 判别力：把 updatedAt 重新接回 epoch 会让断言变红（改坏自检）。
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-activity"));
-  // 轮段提取：断言只针对第 n 轮自身的输出块（懒匹配 + 后续轮 OK 会跨轮误命中，不能直接全文正则）
   const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/4([\\s\\S]*?)(?:round \\d\\/4|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 4 轮输出 hash-stable（3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(4)), r.out.trim());
-  check("第 3 轮还是 OK（没提前报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
+  check("第 3 轮输出 stall（updatedAt 前进不重启计数）", /\[#452 - 看门狗正式版\] stall:/.test(seg(3)), r.out.trim());
+  check("第 2 轮还是 OK（streak 2 未达阈值）", /OK 扫完 1 个工位/.test(seg(2)) && !/stall:/.test(seg(2)), "第 2 轮不该报警");
 }
 
-console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变、屏面不变）→ 重启轮重新起算，第 5 轮才报 ===");
+console.log("\n=== ⑨ epoch 状态机：同 pane 重启（incarnation 变、内容不变）→ 重启轮重新起算，第 5 轮才报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-restart"));
   const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/5([\\s\\S]*?)(?:round \\d\\/5|$)`)) || [])[1] || "";
   check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 5 轮输出 hash-stable（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] hash-stable:/.test(seg(5)), r.out.trim());
-  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /OK 扫完 1 个工位/.test(seg(3)) && !/hash-stable:/.test(seg(3)), "第 3 轮不该报警");
-  check("第 4 轮还是 OK（没串用旧计数）", /OK 扫完 1 个工位/.test(seg(4)) && !/hash-stable:/.test(seg(4)), "第 4 轮不该报警");
+  check("第 5 轮输出 stall（重启后 3 个同屏轮）", /\[#452 - 看门狗正式版\] stall:/.test(seg(5)), r.out.trim());
+  check("第 3 轮还是 OK（重启轮重新起算——判别力：把 epoch 去掉 incarnation 会在第 3 轮就报）", /OK 扫完 1 个工位/.test(seg(3)) && !/stall:/.test(seg(3)), "第 3 轮不该报警");
+  check("第 4 轮还是 OK（没串用旧计数）", /OK 扫完 1 个工位/.test(seg(4)) && !/stall:/.test(seg(4)), "第 4 轮不该报警");
 }
 
-console.log("\n=== ⑩ epoch 状态机：屏面变了又变回 → 连击清零，永不报 ===");
+console.log("\n=== ⑩ epoch 状态机：内容变了又变回 → 连击清零，永不报 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "hash-stable-screenchange"));
   check("退出码 0（无报警）", r.status === 0, `status=${r.status}`);
-  check("没有 hash-stable 事件", !/hash-stable:/.test(r.out), r.out.trim());
+  check("没有 stall 事件", !/stall:/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑪ NO_TARGETS 与 OK 的区分（数到 0 ≠ 没看到样本）===");
@@ -169,6 +174,7 @@ console.log("\n=== ⑪ NO_TARGETS 与 OK 的区分（数到 0 ≠ 没看到样�
   check("退出码 2（NO_TARGETS）", r.status === 2, `status=${r.status}`);
   check("明确打印 NO_TARGETS 警告", /NO_TARGETS/.test(r.out), r.out.trim());
   check("不打出 OK 汇总（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
+  check("无关联单证据的树不误报孤儿（查不到≠孤儿，#492）", !/orphan:/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑫ --once 只跑单轮 ===");
@@ -213,7 +219,6 @@ console.log("\n=== ⑭ 结构性排除（红 2 修法）：主工作区 / 自身
 console.log("\n=== ⑮ 检测不依赖工人自报（删掉 lastAssistantMessage 依旧报警）===");
 {
   // 在临时目录复制 exited 样本，把 ps.json 里全部 lastAssistantMessage 清掉再跑
-  // （不用 fs.cpSync：本机 Node 24 在 Windows 上 cpSync 会静默崩进程，手动递归拷贝）
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-noself-"));
   (function copyDir(src, dst) {
     fs.mkdirSync(dst, { recursive: true });
@@ -233,43 +238,110 @@ console.log("\n=== ⑮ 检测不依赖工人自报（删掉 lastAssistantMessage
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("\n=== ⑮b 停摆主判据：输出 cursor 三轮不前进（2026-08-15 裁定书：整屏哈希会被 TUI 计时器动画骗过）===");
+console.log("\n=== ⑯ 判别性实验（#500）：转圈假工人——spinner 重绘 + cursor 前进 + ps updatedAt 前进 ===");
 {
-  const r = runWatchdog(path.join(FIXTURES, "cursor-stall"));
-  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("第 3 轮输出 cursor-stalled 事件", /round 3\/3[\s\S]*\[#452 - 看门狗正式版\] cursor-stalled:/.test(r.out), r.out.trim());
-  check("前两轮是 OK 汇总不是报警", (r.out.match(/OK 扫完 1 个工位/g) || []).length === 2, "OK 行数不对");
+  // spinner-hang/：三轮真实内容完全不动，spinner 帧轮换、nextCursor 前进、ps updatedAt 前进。
+  // 旧判据（cursor 增量/整屏哈希/ps updatedAt）：全放行 → 瞎（这就是 #500 当天三种探头全瞎的复现）。
+  // 新判据（非 spinner 内容哈希）：第 3 轮 stall。
+  const r = runWatchdog(path.join(FIXTURES, "spinner-hang"));
+  check("退出码 1（新判据当场抓住）", r.status === 1, `status=${r.status}`);
+  check("第 3 轮输出 stall 事件", /round 3\/3[\s\S]*\[#452 - 看门狗正式版\] stall:/.test(r.out), r.out.trim());
+  check("前两轮是 OK（streak 1/2 未达阈值）", (r.out.match(/OK 扫完 1 个工位/g) || []).length === 2, "OK 行数不对");
+  // 判别力自检：把 spinner 剔除逻辑改坏（比如直接用整屏哈希）→ spinner 帧轮换让哈希每轮都变 → 永不报 → 本条断言变红。
+  // 原始输出（判别性实验 2）已贴 PR #505 正文。
 
-  const ra = runWatchdog(path.join(FIXTURES, "cursor-advance"));
-  check("cursor 每轮前进 → 退出码 0（永不报）", ra.status === 0, `status=${ra.status}`);
-  check("cursor 前进不报 cursor-stalled", !/cursor-stalled:/.test(ra.out), ra.out.trim());
+  // 负对照：真实内容逐轮变化 + spinner 也在转 → 健康工人不误报
+  const ra = runWatchdog(path.join(FIXTURES, "real-advance"));
+  check("real-advance：退出码 0（真实内容在动 = 活着）", ra.status === 0, `status=${ra.status}`);
+  check("real-advance：不报 stall", !/stall:/.test(ra.out), ra.out.trim());
 }
 
-console.log("\n=== ⑮c 活证否决：指纹两连同但输出 cursor 在前进 → 降级观察行不唤醒（审官屏面讨论止血阀）===");
+console.log("\n=== ⑰ 空转强判据（#471 第四类事故）：进程在动但工作树 N 分钟无 git 活动 ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "idle"), ["--once", "--now", String(NOW)]);
+  check("idle：退出码 1（空转报警）", r.status === 1, `status=${r.status}`);
+  check("idle：输出 idle 事件且带 git 证据分钟数", /\[#452 - 看门狗正式版\] idle:.*30 分钟无 git 活动/.test(r.out), r.out.trim());
+
+  const rf = runWatchdog(path.join(FIXTURES, "idle-fresh"), ["--once", "--now", String(NOW)]);
+  check("idle-fresh：5 分钟内有活动 → 退出码 0", rf.status === 0, `status=${rf.status}`);
+  check("idle-fresh：不报 idle", !/idle:/.test(rf.out), rf.out.trim());
+}
+
+console.log("\n=== ⑱ 孤儿树判据（#492/#476）：还有没有活跃执行者，跨主帅不误伤 ===");
+{
+  const rc = runWatchdog(path.join(FIXTURES, "orphan-closed"), ["--once"]);
+  check("真孤儿（无活跃执行者 + 关联 issue 已关 + 终端已关）：退出码 1", rc.status === 1, `status=${rc.status}`);
+  check("真孤儿：输出 orphan 事件且带判断依据", /\[#483 - 调研单\] orphan:.*关联 issue 483/.test(rc.out), rc.out.trim());
+
+  const ro = runWatchdog(path.join(FIXTURES, "orphan-open"), ["--once"]);
+  check("关联单还开着：不报 orphan（#492 v3：任一开着就不算孤儿）", !/orphan:/.test(ro.out), ro.out.trim());
+
+  const ra = runWatchdog(path.join(FIXTURES, "orphan-active"), ["--once"]);
+  check("另一位主帅的活跃工位（working agent）：退出码 0 且不报 orphan（#492 关条件 3）", ra.status === 0 && !/orphan:/.test(ra.out), `status=${ra.status} ${ra.out.trim()}`);
+
+  const rs = runWatchdog(path.join(FIXTURES, "orphan-noassoc-stale"), ["--once"]);
+  check("无关联 + 静置超 60 分钟：退出码 1（孤儿候选）", rs.status === 1, `status=${rs.status}`);
+  check("无关联 + 静置超阈值：输出 orphan 且带静置分钟数", /orphan:.*无关联.*静置 \d+ 分钟/.test(rs.out), rs.out.trim());
+
+  const rf = runWatchdog(path.join(FIXTURES, "orphan-noassoc-fresh"), ["--once"]);
+  check("无关联 + 静置 5 分钟：不报 orphan（未超阈值）", !/orphan:/.test(rf.out), rf.out.trim());
+}
+
+console.log("\n=== ⑲ 命名校验（#476）：任务卡显示名格式 ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "naming-bad"), ["--once"]);
+  check("不合规卡名：退出码 1（naming 报警）", r.status === 1, `status=${r.status}`);
+  check("输出 naming 事件且带卡名", /\[审官·GPT\] naming:.*审官·GPT/.test(r.out), r.out.trim());
+  check("命名违规但终端在跑的树不报 orphan（活跃执行者判据优先）", !/orphan:/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契约 #497 立约）===");
+{
+  const rs = runWatchdog(path.join(FIXTURES, "heartbeat-stale"), ["--once", "--now", String(NOW)]);
+  check("心跳 10 分钟未更新：退出码 1（flow 停摆候选）", rs.status === 1, `status=${rs.status}`);
+  check("心跳 10 分钟未更新：输出 flow-stalled", /\[flow\] flow-stalled:.*10 分钟未更新/.test(rs.out), rs.out.trim());
+
+  const rp = runWatchdog(path.join(FIXTURES, "heartbeat-pending"), ["--once", "--now", String(NOW)]);
+  check("在途 PR 停留 40 分钟：退出码 1（停滞态：该发生而没发生）", rp.status === 1, `status=${rp.status}`);
+  check("在途 PR 停留超阈值：输出 stagnation 且带 state", /\[PR#456\] stagnation:.*state=approved.*40 分钟/.test(rp.out), rp.out.trim());
+
+  const rf = runWatchdog(path.join(FIXTURES, "heartbeat-fresh"), ["--once", "--now", String(NOW)]);
+  check("心跳新鲜 + 无停滞 PR：不报 flow-stalled/stagnation", !/flow-stalled:/.test(rf.out) && !/stagnation:/.test(rf.out), rf.out.trim());
+  check("心跳缺失样本单独显形（HEARTBEAT_MISSING，不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
+}
+
+console.log("\n=== ⑳b 处置矩阵连败：同指纹连续命中超阈值 → 报帅（#471）===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "fp-loss"));
+  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
+  check("第 2 轮 fingerprint + 动作行", /round 2\/5[\s\S]*fingerprint:.*at capacity/.test(r.out) && /动作: 注入续命/.test(r.out), r.out.trim());
+  check("第 5 轮报帅（连败阈值）", /round 5\/5[\s\S]*报帅:.*连败/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑳c 活证否决（#500 换代）：否决只看非 spinner 真实内容在动 ===");
 {
   const r = runWatchdog(path.join(FIXTURES, "veto"));
   check("退出码 0（否决 = 不唤醒）", r.status === 0, `status=${r.status}`);
-  check("打印观察行（活证否决）", /\[看门狗正式版\] 观察: 指纹两连同「at capacity、try a different model」但输出 cursor 在前进——活证否决/.test(r.out), r.out.trim());
+  check("打印观察行（活证否决，真实内容在动）", /\[#452 - 看门狗正式版\] 观察: 指纹两连同「at capacity、try a different model」但非 spinner 真实内容在动——活证否决/.test(r.out), r.out.trim());
   check("不报 fingerprint（被否决）", !/fingerprint:/.test(r.out), r.out.trim());
-  check("仍有 OK 汇总（观察行不升级为报警）", /OK 扫完 1 个工位/.test(r.out), r.out.trim());
 
   const rs = runWatchdog(path.join(FIXTURES, "veto-stall"));
-  check("cursor 静止 → 指纹两连同照常报警（退出码 1）", rs.status === 1, `status=${rs.status}`);
-  check("cursor 静止 → fingerprint 事件命中 at capacity", /round 2\/2[\s\S]*\[看门狗正式版\] fingerprint:.*at capacity/.test(rs.out), rs.out.trim());
+  check("真实内容静止 → 指纹两连同照常报警（退出码 1）", rs.status === 1, `status=${rs.status}`);
+  check("真实内容静止 → fingerprint 事件命中 at capacity", /round 2\/2[\s\S]*\[#452 - 看门狗正式版\] fingerprint:.*at capacity/.test(rs.out), rs.out.trim());
 }
 
-console.log("\n=== ⑮d 分级排除：--exclude-pane 豁免指纹/停摆判据但保留死活判据（2026-08-15 裁定书）===");
+console.log("\n=== ⑳d 分级排除：--exclude-pane 豁免指纹/停摆判据但保留死活判据（2026-08-15 裁定书）===");
 {
-  // veto-stall 的工位屏面有 at capacity 指纹 + cursor 静止：不排除会报警；排除后指纹豁免 → 不报但仍在监视
+  // veto-stall 的工位屏面有 at capacity 指纹 + 真实内容静止：不排除会报警；排除后指纹豁免 → 不报但仍在监视
   const paneKey = "e9f1fff3-f73d-4624-a619-99c0cb257267:60cb698e-d683-446b-aaab-6e475a3b0c56";
   const r = runWatchdog(path.join(FIXTURES, "veto-stall"), ["--exclude-pane", paneKey]);
   check("退出码 0（指纹判据被豁免）", r.status === 0, `status=${r.status}`);
   check("不报 fingerprint", !/fingerprint:/.test(r.out), r.out.trim());
-  check("工位仍被监视（保留死活判据）→ OK 扫完 1 个工位", /OK 扫完 1 个工位（看门狗正式版）/.test(r.out), r.out.trim());
+  check("工位仍被监视（保留死活判据）→ OK 扫完 1 个工位", /OK 扫完 1 个工位（#452 - 看门狗正式版）/.test(r.out), r.out.trim());
   check("不是 NO_TARGETS（旧版整体排除的盲区没了）", !/NO_TARGETS/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑮e 分级排除保留死活判据：--exclude-pane 下 exited/waiting 仍会响（2026-08-15 裁定书）===");
+console.log("\n=== ⑳e 分级排除保留死活判据：--exclude-pane 下 exited/waiting 仍会响（2026-08-15 裁定书）===");
 {
   // 豁免的是指纹/停摆判据，不是死活判据——exited/waiting 在分级排除下必须照常报警
   const paneKey = "a04a1b0a-c845-4ec2-842b-41816b364e87:d539fff1-47d1-4a97-b479-69523fc1778f";

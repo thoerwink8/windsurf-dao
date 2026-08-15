@@ -91,6 +91,25 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。
 - 不可逆红线：覆写正在使用的 `~/.claude/settings.json` 可能触发 401 强制登出，把文件改回去也恢复不了——改它前先备份，AI 不得整文件覆写。
 
+## 8b. git 编辑器/分页器兑底（#500，新机必做）
+
+工人跑 `git rebase --continue` / `git commit`（无 -m）等命令时，git 会拉起编辑器——默认落到 vim 等 stdin，挂死 27 分钟无人叫（#500 实证：pi 工人 rebase 冲突全解后 git 拉起 vim，永远等不到输入）。帅的会话 shell 自带 `GIT_EDITOR=true`，工人的 pi 终端没有。**在仓库主 checkout 执行一次，worktrees 共享 .git/config 全覆盖：**
+
+```bash
+git config core.editor true    # 编辑器变 no-op：rebase --continue 用预填信息直接提交；裸 commit 空信息快速中止（不挂死）
+git config core.pager cat      # 分页器变 cat：git log 等不再拉 less 等输入
+```
+
+验证（不是「已配置」，是实测不挂）：
+
+```bash
+git var GIT_EDITOR   # 应回 true
+git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
+# 构造一次会拉起编辑器的命令：rebase 造冲突→解完→rebase --continue，应在 1 秒内完成且保留提交信息
+```
+
+取舍说明：仓库级配置影响真人在同一仓库的手工 git 操作——无 `-m` 的 `git commit` 会快速中止而不是进编辑器（想要编辑器时显式 `git -c core.editor=... commit` 或设 `GIT_EDITOR` 临时覆盖）。本机是 AI 协作机器，挂死比空中止贵得多，选仓库级全覆盖；同域命令一并扫过：`git commit`（无 `-m`）、`git merge`、`git tag -a`、`git rebase -i`（todo 表用默认 pick 直接执行）、`gh pr create`（无 `--body`）都不再挂死。
+
 ## 9. 信箱台
 
 Orca 未读横幅会强制接管输入框（issue #464）。新机一条命令重建哑终端 + 中继 + coordinator 归属：
