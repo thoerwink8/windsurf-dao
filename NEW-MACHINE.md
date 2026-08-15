@@ -265,7 +265,7 @@ node scripts/dao.mjs start --provider gpt --worktree active --dry-run
 node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --spec "短摘要" --dry-run
 ```
 
-派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
+派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
 ## 自检
 
 做完跑一遍：
