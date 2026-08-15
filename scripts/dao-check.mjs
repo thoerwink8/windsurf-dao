@@ -23,9 +23,11 @@
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
 // ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
-// ⑨ extract* 解析外部 JSON 必须有真语料存档（#499）
-// ⑩ 主帅标题核对样本（一致 / 过期 各至少一份）
-// ⑪ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
+// ⑨本机 memory 是否指向仓内 host/memory 的 Junction（local-only，issue #503）：
+//   普通目录/指向别处/悬空均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
+// ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
+// ⑪ 主帅标题核对样本（一致 / 过期 各至少一份）
+// ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -33,6 +35,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
+import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -432,7 +435,23 @@ function checkModeHookAlive() {
   else fail(...r.fail);
 }
 
-// ── ⑨ extract* 必须有 orca 真语料 ──────────────────────────────────
+// ── ⑨ 本机 memory 断链检查（local-only，issue #503）───────────────────
+// 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向本仓
+// `host/memory/` 的 Junction，Claude 每写一条 memory 主仓 git status 就多一条未提交变更。
+// #503 的病：本机是普通目录，与仓内完全漂移，今天写的每条教训换机就丢，而 dao-check 全绿——
+// 它只查仓内副本（CI 没有本机 ~/.claude）。所以本项只验本机文件系统，CI/新机/未接 worktree
+// 无该项目目录时出 SKIP 不是绿（SKIP 与绿分不开 ⇒ CI 永远绿、本机永远没人查）。
+// 实现放 scripts/lib/dao-memory-link-check.mjs，让 tests/memory-link.tests.js 拿假 HOME 造
+// 违规样本（普通目录/指向别处/悬空=红，正确 Junction=绿，无目录=SKIP）单独验判别力。
+
+function checkMemoryLinkAlive() {
+  const r = checkMemoryLink({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
+  else fail(...r.fail);
+}
+
+// ── ⑩ extract* 必须有 orca 真语料 ──────────────────────────────────
 // 自发现：扫 dao-cmd.mjs 的 export function extract*，不手写函数名单。
 // 检查器只验信封（ok+result），不调用 extract*。
 // 零样本：一个 extract* 都扫不到 / 语料目录不在 / index 不在 → 没查成。
@@ -458,7 +477,7 @@ function checkExtractFixtures() {
   green(`orca 真语料 ${report.scanned.length}/${report.parserCount} 个 extract* 有存档`);
 }
 
-// ── ⑩ 主帅标题核对样本 ─────────────────────────────────────────────
+// ── ⑪ 主帅标题核对样本 ─────────────────────────────────────────────
 // 检查器自己抽 ｜[#N] 定界区，不调用 master-title.mjs。
 // 零样本：目录不在 / 一个样本都没有 / 只有一致没有过期（或反过来）→ 没查成。
 
@@ -513,7 +532,7 @@ function checkMasterTitleSamples() {
   green(`主帅标题样本 ${files.length} 份（一致 ${kinds.ok} / 过期 ${kinds.stale}）`);
 }
 
-// ── ⑪ 派工卡 comment 必须有定界区 ──────────────────────────────────
+// ── ⑫ 派工卡 comment 必须有定界区 ──────────────────────────────────
 // 检查器自己抽 ｜[#N]，不调用 master-title.mjs。
 // 零样本：目录不在 / 一个样本都没有 / 只有 ok 没有 missing（或反过来）→ 没查成。
 
@@ -573,6 +592,7 @@ checkModelRouting();
 checkMemoryIndex();
 await checkCommandHelp();
 checkModeHookAlive();
+checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
