@@ -55,10 +55,35 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 
 ## 7. grok 怎么配
 
-grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。装机三条：
+grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
 
 - npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
-- 启动命令必须带代理前缀：`HTTPS_PROXY=http://127.0.0.1:7890 grok ...`——grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上。PowerShell 写法：`$env:HTTPS_PROXY = 'http://127.0.0.1:7890'; grok ...`。
+- regrok shim：在 `~/.local/bin/` 下放两个文件（覆盖 PATH 第一位，包装真实二进制 `C:\nvm4w\nodejs\grok.cmd`；真实二进制路径因机而异，shim 里改对即可）。shim 内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上）并默认追加 `-m grok-4.6`；显式传 `-m/--model` 时原样透传不覆盖。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。
+  - `~/.local/bin/grok.cmd`（Windows cmd 版）：
+    ```bat
+    @echo off
+    rem regrok shim: proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
+    rem real binary: C:\nvm4w\nodejs\grok.cmd ; explicit -m/--model passes through untouched
+    set HTTPS_PROXY=http://127.0.0.1:7890
+    echo %* | findstr /C:"-m " /C:"--model" >nul
+    if %errorlevel%==0 (
+      "C:\nvm4w\nodejs\grok.cmd" %*
+    ) else (
+      "C:\nvm4w\nodejs\grok.cmd" -m grok-4.6 %*
+    )
+    ```
+  - `~/.local/bin/grok`（Git Bash 版）：
+    ```sh
+    #!/bin/sh
+    # regrok shim (Git Bash): proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
+    # real binary: C:/nvm4w/nodejs/grok.cmd ; explicit -m/--model passes through untouched
+    export HTTPS_PROXY=http://127.0.0.1:7890
+    case " $* " in
+      *" -m "*|" --model"*) exec "C:/nvm4w/nodejs/grok.cmd" "$@" ;;
+      *) exec "C:/nvm4w/nodejs/grok.cmd" -m grok-4.6 "$@" ;;
+    esac
+    ```
+    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。
 - auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
 
 ## 8. 本机工具坑
@@ -129,23 +154,52 @@ node scripts/inbox-station.mjs ensure
 }
 ```
 
-本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
+本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。
 
-## 11. Orca 快捷命令：从零拷问
+## 11. 接上 skills
 
-换机后在 Orca 里重建一条智能体提示（Claude），按「不对劲就按我」触发：
+skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
+
+建 SymbolicLink 需要开发者模式或管理员权限（Windows）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只警告不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $src = Join-Path (Resolve-Path .).Path 'host\skills'
+  if (-not (Test-Path -LiteralPath $src)) { throw "host/skills 不在: $src" }
+  $dstRoot = Join-Path $env:USERPROFILE '.claude\skills'
+  New-Item -ItemType Directory -Path $dstRoot -Force | Out-Null
+  foreach ($s in Get-ChildItem -LiteralPath $src -Directory) {
+    $want = $s.FullName
+    $dst = Join-Path $dstRoot $s.Name
+    $item = Get-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
+      $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
+      if ($got -eq $want) { Write-Host "ok   $($s.Name)"; continue }
+      $item.Delete()
+    } elseif ($item) {
+      Write-Warning "跳过 $($s.Name)：本机是真目录（可能是插件自带），先移走再重跑"
+      continue
+    }
+    New-Item -ItemType SymbolicLink -Path $dst -Target $want | Out-Null
+    Write-Host "link $($s.Name) -> $want"
+  }
+}
+```
+
+验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。
+
+## 12. Orca 快捷命令：从零拷问
+
+清单本体已随 `grill-ai` skill 入仓（第 11 节接上即得），Orca 按钮只留一个触发器，**不再复制清单正文**——两处维护必然分叉。换机后在 Orca 里重建一条智能体提示（Claude）：
 
 - 标签：`从零拷问（不对劲就按我）`
 - 类型：智能体提示（Claude）
 - 提示词全文：
 
 ```
-用户觉得当前做法不对劲，触发本令。立即停下手头动作，按清单自查并逐条回答：
-1) 第一性原理：剥掉全部现状与已有实现，这件事的本质需求是什么？从零推，最佳实践长什么样？
-2) 补丁链检查：你现在的方案是不是在给现状做兼容、打补丁？画出补丁链——每一层在修谁的副作用。补丁已到第二层即触发「同一种办法连错两次就换路」（反者道之动），必须停手从零重推，不许在原方向打第三层。
-3) 马斯克五步法按序过一遍且顺序不可换：质疑需求→删除（必须含「删掉整层」选项）→简化→加速→自动化。
-4) 把「从零方案」与「现状方案」的差异和代价表摆出来，用 AskUserQuestion 交用户拍板，禁止替用户默认取舍。
-5) 判制度：这次偏差是制度缺失还是执行失守？执行失守则写判例进 memory；确属制度缺失才提议改协作约定。
+用户觉得当前做法不对劲。立即停下手头动作，读 grill-ai skill 并按它的五条清单逐条自查回答。
 ```
 
 ## 12. 专注/值守态注入（hook + `/dao-mode` skill）
@@ -174,11 +228,23 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\da
 - 用户级 `~/.claude/settings.local.json` 的 `hooks` 段**宿主根本不读**（注册在那儿，新会话上下文里一个字都没有；同一条注册放进项目级 `.claude/settings.local.json` 立刻生效）。
 - `~/.claude/settings.json` 能生效，但它是本页第 8 条那条红线文件（覆写可能触发 401 强制登出，改回去也恢复不了），且被 cc-switch 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖。既然插件面够用，就不碰它。
 
-**③ 验**：`node scripts/dao-check.mjs` 第 ⑦ 项会把装载面上那条命令真跑两次（一次喂造好的专注态、一次喂不存在的状态文件），
-两次输出同形、跑不动、或哪个装载面都点不到，都报红。链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 ① 即可。
+**③ 验**：`node scripts/dao-check.mjs` 第 ⑧ 项会把装载面上那条命令真跑四次（四种状态文件各一次：读到且常态 /
+读到且非常态 / 文件不在 / 文件坏了），四种输出两两同形、跑不动、或哪个装载面都点不到，都报红。
+链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 ① 即可。
 
 状态文件是 `~/.claude/state.json`，跨会话跨工作区唯一，由 `dao-mode.mjs` 独家读写，不要手改。
 
+## 统一命令库
+
+起终端和编排不要手拼 orca 命令（手打 `codex -a never` 会把 gh/node 拦死、写不存在的 `--submit` 都在这里栽过）。走：
+
+```bash
+node scripts/dao.mjs --help
+node scripts/dao.mjs start --provider gpt --worktree active --dry-run
+node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --spec "短摘要" --dry-run
+```
+
+派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
 ## 自检
 
 做完跑一遍：

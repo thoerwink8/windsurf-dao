@@ -91,4 +91,4 @@ node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs standby --decide "选型；改
 装载只要一条 SymbolicLink（`~/.claude/skills/dao-mode` → 仓内本目录），**不用改 `settings.json`**。装法见 `NEW-MACHINE.md` 第 12 节。
 
 hook 没装上的话，这个 skill 就退化成「我说我专注了」——切完态之后没有任何东西会在后续轮次提醒 AI。
-`node scripts/dao-check.mjs` 第 ⑦ 项专门查它：装载面点不点得到 + 把那条命令真跑两次看输出对不对。
+`node scripts/dao-check.mjs` 第 ⑧ 项专门查它：装载面点不点得到 + 把那条命令真跑四次（四种状态文件各一次）看四形分不分得开。

@@ -1,4 +1,4 @@
-// 态注入 hook 的活检（dao-check 第 ⑦ 项的实现，issue #488）。
+// 态注入 hook 的活检（dao-check 第 ⑧ 项的实现，issue #488）。
 //
 // 单独成文件只为一件事：让 tests/dao-mode.tests.js 能拿假 HOME 造违规样本来验它自己的判别力，
 // 而不必去跑整个 dao-check（那会递归——dao-check 会跑 tests/，tests 再跑 dao-check）。

@@ -73,7 +73,7 @@ exit=0
 
 判定：**过**。四形首行各不相同、退出码一律 0（降级不是错误），且三、四形各自说清了「是哪种降级、该怎么办」。
 
-**门控对四形都有判别力**（不是一次性验完就算）：`dao-check.mjs` 第 ⑦ 项每次跑都把注册的那条命令跑四次、四形两两比，
+**门控对四形都有判别力**（不是一次性验完就算）：`dao-check.mjs` 第 ⑧ 项每次跑都把注册的那条命令跑四次、四形两两比，
 任何两形被合并就报「输出同形」。判别力本身也有回归样本——`tests/dao-mode.tests.js` 里造了两个假 hook：
 
 ```
@@ -112,7 +112,7 @@ orca 态标：已打「[专注 #488 建专注/值守状态机] 」
 
 ## ④ 覆盖检测：被覆盖 / 断链 / 装死，都有东西叫
 
-装在 `dao-check.mjs` 第 ⑦ 项（实现 `scripts/lib/dao-mode-hook-check.mjs`），每次 `node scripts/dao-check.mjs` 重验一遍。
+装在 `dao-check.mjs` 第 ⑧ 项（实现 `scripts/lib/dao-mode-hook-check.mjs`），每次 `node scripts/dao-check.mjs` 重验一遍。
 两层：静态（仓内每个自带 hook 的 skill —— `host/skills/<名>/hooks/hooks.json` —— 的脚本，都要能在本机某个装载面上被点到；
 装载面包括插件面和 settings 面，期望集合扫描自发现，没有手写清单）
 ＋ 运行时（把点到的那条命令原样跑四次，四种状态文件各一次——读到且常态 / 读到且非常态 / 文件不在 / 文件坏了——
@@ -365,7 +365,7 @@ orca 态标：已打「待终审：#488 三态状态机做完了。skill+hook �
 
 ## ⑧ CI 一直是红的，已修（审官没提，但它挡合并）
 
-`.github/workflows/check.yml` 只跑 `node scripts/dao-check.mjs`。第 ⑦ 项验的是「**这台机器**装没装、还跑不跑得动」，
+`.github/workflows/check.yml` 只跑 `node scripts/dao-check.mjs`。第 ⑧ 项验的是「**这台机器**装没装、还跑不跑得动」，
 干净 runner 上当然没装，于是从本单第一次 push 起 CI 就一直红：
 
 ```

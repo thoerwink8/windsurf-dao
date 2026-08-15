@@ -4,7 +4,7 @@
 //   ① host/skills/dao-mode/hooks/dao-mode.mjs —— 态的读写与每轮注入文本。重点不是「能不能切态」，
 //      而是三条硬规矩：四种结局各自不同形（常态 / 非常态 / 文件不在 / 文件坏了）、
 //      失效方向朝安全一侧（hook 永远 exit 0）、连续第二次偏离才升级为弹确认。
-//   ② scripts/lib/dao-mode-hook-check.mjs —— dao-check 第 ⑦ 项的判别力。这里拿假 HOME
+//   ② scripts/lib/dao-mode-hook-check.mjs —— dao-check 第 ⑧ 项的判别力。这里拿假 HOME
 //      故意造违规样本（没注册 / 断链 / 输出恒定 / settings 坏了），每一种都必须报红。
 //      不这么验，就只能证明「装过」，证明不了「被覆盖时会叫」。
 //
@@ -175,7 +175,7 @@ console.log("\n=== ⑥ 值守：只问授权边界，行为规范不复述 ===")
 }
 
 // ── ② 检查器自己的判别力 ────────────────────────────────────────────
-// 下面这段验的是 dao-check 第 ⑦ 项：被覆盖 / 断链 / 输出写死时，它到底会不会叫。
+// 下面这段验的是 dao-check 第 ⑧ 项：被覆盖 / 断链 / 输出写死时，它到底会不会叫。
 
 async function checkerTests() {
   const { checkModeHook } = await import("../scripts/lib/dao-mode-hook-check.mjs");

@@ -1,0 +1,18 @@
+orca worktree rm
+
+Usage: orca worktree rm --worktree <selector> [--force] [--run-hooks] [--json]
+
+Remove a worktree from Orca and git
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --force                Force worktree removal when supported
+  --run-hooks
+
+Notes:
+  Repo-defined orca.yaml archive hooks are skipped unless --run-hooks is passed.
+
