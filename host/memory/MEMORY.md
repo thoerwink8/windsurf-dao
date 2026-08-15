@@ -29,6 +29,7 @@
 - [GitHub not found ≠ 认证失败](github-not-found-vs-auth.md) — 不存在和没权限统一回 Repository not found,CLI 普遍误报成认证问题;先验仓库存不存在再查权限
 - [skills add 大仓必超时](skills-add-large-repo-timeout.md) — 内置 300s clone 超时,正解是 sparse+blobless 浅克隆再传本地路径;--agent 必传否则装进 ~75 个 agent
 - [派单语料与卡死判定](dispatch-regex-corpus-and-stall.md) — 正则/判定类派单必带真实语料格(禁 mock 内生);屏面指纹判据 2026-08-15 被证不足(spinner 打败三种探头),改数非 spinner 真实输出行 + 「该发生的事有没有发生」
+- [急停令禁含破坏性动作](stop-order-must-not-destroy.md) — 止血指令只写「停手/不要 commit/报告动过什么」;写了 git checkout -- . 会被工人在别人的树上执行,未 staged 改动 git 救不回,唯一恢复路径是那个工人的 scrollback
 - [工人续活两情形](worker-resume-vs-reengage.md) — 已完工闲置才新建任务卡;任务中途被打断直接 terminal send 一句继续,别重发任务书;send --to dispatch: 两种都叫不醒
 - [orca JSON 字段路径](orca-json-field-paths.md) — 实测清单(task-create 在 result.task.id 等);禁写 || 串猜字段;解析器必配真实返回夹具;check --wait 禁接 head
 - [pi 是统一工人载具](pi-universal-harness.md) — 派工默认 pi --model 换模型；例外 grok 单走 Grok Build（2026-08-14 拍板 pi-grok 退役，网络暴露面大两次断线）
@@ -43,3 +44,8 @@
 - [挂监视前先问它怎么坏](monitor-self-check-design.md) — 自写检查器连三次判据失效(漏扫/静默盲区/噪音误报);挂之前过覆盖面、失败可见性、判据纯度三问，并让它自报样本数
 - [测试全绿≠目标达成](green-tests-vs-goal-met.md) — 派单必点名判别性实验(破坏识别源/要求反向证据);#496 单测104全绿而核心目标零达成，靠改标题再跑 ensure 才抓出
 - [CI 没触发先查冲突](ci-silent-when-pr-conflicts.md) — PR 冲突时 merge ref 建不出，on:pull_request 压根不触发，貌似 Actions 挂了;诊断先看 mergeable
+- [CC 会话名进终端标题](cc-session-name-terminal-title.md) — --name/`/rename` 可设;外部 orca rename 必被 CC 的 OSC 盖掉(曾被误判成"标题改不了、方案证伪");AI 可 send /rename 给自己终端不打断会话
+- [grep 范围主树 vs 在途](grep-scope-main-vs-inflight.md) — 问「有没有人做这件事」grep 主树必漏,正在做的还没合,答案在在途分支
+- [spec 被当成任务边界](spec-is-read-as-task-scope.md) — 工人以 task-create --spec 短摘要划范围,长任务书里超出 spec 的职责被当背景;spec 必须枚举全部职责类别
+- [Bash 吃掉斜杠开头的文本](bash-path-conv-breaks-slash-text.md) — MSYS 路径转换把 /rename 改写成 C:/Program Files/Git/rename,发斜杠命令走 PowerShell
+- [判绿只对当时那个 commit 有效](review-green-must-match-head.md) — 合并前必比对 review.commit_id 与 headRefOid;判绿后又推的改动无人审过,差点误合 #497
