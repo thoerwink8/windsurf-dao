@@ -76,6 +76,78 @@ node scripts/inbox-station.mjs ensure
 
 全活着秒退，stdout 一行 JSON（runId / handle / 日志路径，默认 `_flow/inbox.log`）。缺任何一环自动重建。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，ensure 必须再跑一次把横幅交回信箱台。
 
+## 10. 接上 memory
+
+本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。
+
+先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。
+
+**事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在仓内。本机有、仓内没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction 则什么都不做。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $repo = (Resolve-Path .).Path
+  $hostMem = Join-Path $repo 'host\memory'
+  if (-not (Test-Path -LiteralPath $hostMem)) { throw "host/memory 不在: $hostMem" }
+  $encoded = $repo -replace '[^a-zA-Z0-9]', '-'
+  $local = Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
+  $want = [IO.Path]::GetFullPath($hostMem)
+  $item = Get-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
+  if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
+    $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
+    if ($got -eq $want) { Write-Host "memory already linked: $local -> $want"; return }
+    $item.Delete()
+  } elseif ($item) {
+    $norm = { param($p) ((Get-Content -LiteralPath $p -Raw -Encoding UTF8) -replace "`r`n", "`n").TrimEnd() }
+    $relOf = {
+      param($root, $full)
+      $prefix = [IO.Path]::GetFullPath($root).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+      return ([IO.Path]::GetFullPath($full).Substring($prefix.Length) -replace '\\', '/')
+    }
+    $missing = @(); $diverged = @()
+    foreach ($f in Get-ChildItem -LiteralPath $local -File -Recurse) {
+      $rel = & $relOf $local $f.FullName
+      $peer = Join-Path $hostMem ($rel -replace '/', '\')
+      if (-not (Test-Path -LiteralPath $peer)) { $missing += $rel }
+      elseif ((& $norm $f.FullName) -cne (& $norm $peer)) { $diverged += $rel }
+    }
+    if ($missing.Count -gt 0) {
+      throw "仓内不是本机超集，先把这些拷进 host/memory/ 再接: $($missing -join ', ')"
+    }
+    if ($diverged.Count -gt 0) {
+      Write-Warning "同名但内容不同（接上后本机这几条会变成仓内版本，旧内容留在备份目录里，需要就去比对）: $($diverged -join ', ')"
+    }
+    $bak = "$local.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+    Rename-Item -LiteralPath $local -NewName (Split-Path $bak -Leaf)
+    Write-Host "backed up $local -> $bak"
+  }
+  New-Item -ItemType Directory -Path (Split-Path $local -Parent) -Force | Out-Null
+  New-Item -ItemType Junction -Path $local -Target $want | Out-Null
+  Write-Host "linked $local -> $want"
+}
+```
+
+本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
+
+## 11. Orca 快捷命令：从零拷问
+
+换机后在 Orca 里重建一条智能体提示（Claude），按「不对劲就按我」触发：
+
+- 标签：`从零拷问（不对劲就按我）`
+- 类型：智能体提示（Claude）
+- 提示词全文：
+
+```
+用户觉得当前做法不对劲，触发本令。立即停下手头动作，按清单自查并逐条回答：
+1) 第一性原理：剥掉全部现状与已有实现，这件事的本质需求是什么？从零推，最佳实践长什么样？
+2) 补丁链检查：你现在的方案是不是在给现状做兼容、打补丁？画出补丁链——每一层在修谁的副作用。补丁已到第二层即触发「同一种办法连错两次就换路」（反者道之动），必须停手从零重推，不许在原方向打第三层。
+3) 马斯克五步法按序过一遍且顺序不可换：质疑需求→删除（必须含「删掉整层」选项）→简化→加速→自动化。
+4) 把「从零方案」与「现状方案」的差异和代价表摆出来，用 AskUserQuestion 交用户拍板，禁止替用户默认取舍。
+5) 判制度：这次偏差是制度缺失还是执行失守？执行失守则写判例进 memory；确属制度缺失才提议改协作约定。
+```
+
 ## 自检
 
 做完跑一遍：

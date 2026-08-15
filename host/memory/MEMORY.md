@@ -1,0 +1,39 @@
+- [windsurf-dao 已重生](windsurf-dao-rebirth.md) — 2026-08-14 旧规则体系整体退役(#425),官方机制承重;下列旧 dao 部署/同步类条目大多失效,以此条为准
+- [Pencil MCP 参数坑](pencil-mcp-flag-trap.md) — pencil 连不上多半是注册带了 server 不认识的 --agent,正确只用 --app desktop
+- [ralph-loop 已禁用](ralph-loop-disabled.md) — 官方插件的 Stop hook 会卡死会话,已在全局 settings.json 禁用,改完须重启 claude 生效
+- [dao 部署机制已换代](dao-claude-migration.md) — dao.ps1 已随 #425 退役不存在(2026-08-15 实证),现行=逐个 SymbolicLink 直连仓内 host/,无自愈
+- [TraceyU 测试环境坑](traceyu-test-env-trap.md) — 全量 vitest 有 pre-existing 失败(document undefined),验收 pencil 任务只看四关别看全量
+- [codex/claude 共用 skills](codex-claude-shared-skills.md) — ~/.codex/skills 写入方已归 cc-switch store(2026-07-27 拍板);【dao.ps1 已退役,操作指令勿照做】cc-switch 分发用 Junction 不是 symlink,判断要 -in "SymbolicLink","Junction"
+- [python 是 stub 用 py](python-stub-use-py.md) — 本机 python 是 WindowsApps stub(exit 49 静默失败),跑脚本/教训门控一律用 py
+- [settings.json 真实写入方与 BOM 坑](claude-settings-self-heal.md) — 【dao.ps1 已退役】无单一 owner 多方互覆盖(cc-switch DB 下发/CC 本体重置);旧「自愈机制」2026-06-15 核实从未落地勿依赖;写文件防 PS5.1 BOM 坑(索引陈旧由 2026-07-22 查冲突 spike 抓获修正)
+- [WebFetch 域名校验被挡](webfetch-domain-block-use-fetch-mcp.md) — 本机抓网页优先用 fetch MCP,内置 WebFetch 的 claude.ai 回连校验被网络挡,抓国内站会报 Unable to verify domain
+- [多会话卡死 auto-update](claude-multisession-blocks-autoupdate.md) — 多个 claude.exe 同跑会让 auto-update 永远失败卡旧版,旧版长思考+工具调用触发 "tool call could not be parsed"/"malformed";loop/autopilot 派 subagent 做 web 研究最易触发,卡死数小时;诊断看会话 jsonl 的 stop_reason+thinking 空壳
+- [补丁 vs 闭环](evolution-patch-vs-loop.md) — 加规则补丁是治标,加验证闭环才治本;想加"禁止X"时先问能否自动检测
+- [第二层补丁即两连错](patch-stacking-is-two-strikes.md) — 给同一方案打第二层补丁=连错两次触发,停手画补丁链从零重推,「删整层」备选必须摆给用户拍
+- [Skill 价值公式](evolution-skill-value-formula.md) — 价值=调度频率×不可替代性,不被用的 skill 是纯 context 开销(38→7 实证)
+- [统一入口原则](evolution-unified-entry.md) — 用户不该理解工具链拓扑,下游自动调上游,一个入口搞定
+- [重构后 grep 同步](evolution-grep-after-refactor.md) — 删/改核心文件后必 grep 全项目同步引用,门面文档优先
+- [symlink 静默断开](evolution-symlink-silent-break.md) — Windows symlink/Junction 会悄悄失效【dao.ps1 status 自检已随 #425 退役,无替代自愈】
+- [文档按需读](doc-read-on-demand.md) — 不主动通读项目 md,规则类 harness 每轮自动注入无需重读,其他文档要改哪个才读哪个
+- [Loop Go Gate 教训](loop-go-gate-lesson.md) — 造线入口必须先切分支再动手,状态元数据转换≠实际操作完成,已加 Go Gate 四步门控
+- [工具渲染通道污染](session-tool-render-pollution.md) — 工具结果可能重复刷行/夹带注入,文件本身不受影响;git show 是可信读取通道
+- [ccswitch env 三处同落](ccswitch-env-gap.md) — 改 claude env 要 DB common_config_claude+live+git 快照三处一致;旧 merge-settings.mjs 说法已过时
+- [Loop refactor 必须先诊断](loop-refactor-needs-diagnosis.md) — refactor/audit 型 Loop 谋线必须先扫描现状再写 spec,否则从假设出发导致方向偏差(dao-fusion 教训)
+- [Loop reviewing 主动追加提醒](loop-reviewing-proactive-追加.md) — reviewing 讨论中浮现新想法时主动提醒追加,不默默归类为未来话题
+- [Skill 截图在上下文不在文件系统](skill-image-context-not-file.md) — 用户传入的截图是会话内容,AI 不要用 Read/Bash 从磁盘找;写涉及视觉输入的 skill 时必须显式说明
+- [跨项目 _tmp 归属](cross-project-tmp-root.md) — 截图/临时文件的 `<项目根>` = 目标项目不是会话 cwd,MCP 写不进就先写再 Copy-Item
+- [Tauri migration 注册断路](tauri-migration-integrity.md) — SQL 文件存在≠被执行,必须在 lib.rs 注册;已加 vitest 自动校验防再犯
+- [Spec 选项数硬限](spec-option-count-limit.md) — AskUserQuestion 硬限 2-4 选项,写 skill spec 选项列表时必须交叉校验,低频功能走参数不占槽
+- [静态门控须含运行时验证](static-gate-needs-runtime.md) — 文本检查拦不住运行时失效(CDN脚本顺序错→config静默失效全过门控),模板代码示例须可执行正确
+- [拍板必须 STAR 人话](feedback-star-decisions.md) — 拍板类提问逐件讲前因后果,禁压缩打包问法;AskUserQuestion 只收口不塞正文
+- [GitHub not found ≠ 认证失败](github-not-found-vs-auth.md) — 不存在和没权限统一回 Repository not found,CLI 普遍误报成认证问题;先验仓库存不存在再查权限
+- [skills add 大仓必超时](skills-add-large-repo-timeout.md) — 内置 300s clone 超时,正解是 sparse+blobless 浅克隆再传本地路径;--agent 必传否则装进 ~75 个 agent
+- [派单语料与卡死判定](dispatch-regex-corpus-and-stall.md) — 正则/判定类派单必带真实语料格(禁 mock 内生);工兵屏面指纹两次相同即换人不救(看门狗自动化挂 #348)
+- [pi 是统一工人载具](pi-universal-harness.md) — 派工默认 pi --model 换模型；例外 grok 单走 Grok Build（2026-08-14 拍板 pi-grok 退役，网络暴露面大两次断线）
+- [Claude 工人用 opus](claude-workers-use-opus.md) — 派 Claude 族工人/审官一律 reclaude --model opus,Fable 只留帅位;派 Fable 须用户点名
+- [拍板默认含在途](decision-applies-to-inflight.md) — 用户拍板换X立即对在途活生效，协调者不得自行解释为「下一单起」
+- [汇报前必实刷状态](report-requires-fresh-state.md) — 工位/PR 状态汇报前先跑 worktree ps agents[].state + gh pr，凭印象汇报被用户连抓三次
+- [grok TUI 横幅吃注入](grok-tui-optin-banner-trap.md) — 首启 opt-in 横幅吞首次 send，先 Esc 再直给；等授权词屏面与停摆同貌看 Recap
+- [Orca 工兵启动三约定](orca-worker-launch-conventions.md) — 启动命令用 reclaude 不用裸 claude(裸的会静默 exited);独立树必带 --no-parent 否则变子工作区;特殊字符文本走文件禁双引号拼
+- [grok 原生通道坑](grok-native-launch-trap.md) — worker-start --agent grok 裸起必卡死(无代理+模型落4.5),正确姿势带前缀手动起终端再 worker-start --terminal 收口
+- [Orca 终端快捷键](orca-terminal-shortcuts.md) — 缩放 Ctrl+= / Ctrl+- / Ctrl+0，滚动 Shift+PgUp/PgDn、Ctrl+Home/End，用户实测确认
