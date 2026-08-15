@@ -53,6 +53,28 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
   - `pi --list-models`：预期列出模型表。
   - `pi --no-tools --no-session -p "只回复：OK"`：预期回 OK；失败先查 `~/.pi/agent/models.json` 里的网关地址与 key。一次性连通性测试用 `--no-tools` 无妨，日常跑活别裁工具。
 
+## 6b. pi 扩展怎么配（go-fallback，issue #520）
+
+go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话接着把活做完（不是重启、不是从头来）。
+
+- 源码在仓内 `host/pi-extensions/go-fallback.ts`（仓库资产，不留在本机自生自灭），换机一条命令装上：
+  ```bash
+  cp host/pi-extensions/go-fallback.ts "$HOME/.pi/agent/extensions/"
+  ```
+  验证已生效（新开 pi 会话后扩展自动加载，对所有 pi 工人生效，不用改 orca 派工链路）：
+  ```bash
+  ls ~/.pi/agent/extensions/go-fallback.ts   # 文件在即生效（pi 每次启动扫 extensions/ 目录）
+  ```
+- 行为：只在主通道（`opencode-go`）上动作；命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连后 `pi.setModel` + followUp 续跑，会话上下文完整保留。直连凭据缺失时明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARY`（主通道，默认 `opencode-go`）、`PI_GO_FALLBACK_PROVIDER`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。
+- 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
+  ```bash
+  node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景
+  node host/pi-extensions/test/e2e.mjs rate-limit # 瞬时限流场景
+  node host/pi-extensions/test/e2e.mjs no-creds   # 凭据缺失场景
+  ```
+  三个场景全绿才算生效；测试用一次性 pi 环境 + 随机端口 fake 上游，不碰本机 `~/.pi/agent`。
+
 ## 7. grok 怎么配
 
 grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
