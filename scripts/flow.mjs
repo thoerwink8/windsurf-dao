@@ -45,6 +45,12 @@
 //   看门狗判据示例（#471 实现）：state=approved 但 merge 迟迟不发生、且 heartbeat 不再更新
 //   （ts 太老）或 pendingCount 长期不为 0 → 报警。
 //
+// 活性判据禁令（#497 第四轮，实证 #500）：流转器盯工人的活性判据**禁止使用任何屏面形态**——
+// 包括屏面指纹、cursor 增量、tui-idle。三者已被实证会被 spinner 动画整体骗过（#500：转圈挂死
+// 45 秒涨 21 行全屏面都像活的，恢复后 30 秒 143 行真实内容）。合法判据只有「该发生的事有没有
+// 发生」：工人接活超 N 分钟无新 commit、push 后超 N 分钟无新 review、_flow/heartbeat.json 的
+// ts 停止更新。实现归 #471，本单只立约。
+//
 // 保留不动：fingerprint + actedOn 幂等去重、pendingShuai 待帅记账、存量清点（GitHub 重放）、
 //   退出码口径、--dry-run / --snapshot-dir 测试通道、isCompletionComment 兜底（无 dispatch
 //   身份的工人完工信号）、JUDGMENT_LINE_RE 判定入口、pickReviewer 选型序与 model-routing.toml。
@@ -112,6 +118,8 @@ export const MERGE_AUTO_LABEL = 'merge/auto';
 export const WAIT_YOU_LABEL = '等你';
 // 硬兜底轮次（#480 S3-3：只防无限踢皮球，触发上帅，不自动换人）
 export const RED_FALLBACK_ROUNDS = 6;
+// 合并权链断报警阈值（#497 第四轮：comment auto 但 PR 无标签超此时长 → 待帅处置）
+export const CHAIN_BROKEN_MS = 15 * 60 * 1000;
 
 // ══════════════════════════════════════════════════════════════════════
 // 参数
@@ -224,6 +232,28 @@ function writeJsonAtomic(path, obj) {
 function hasLabel(pr, name) {
   return Array.isArray(pr?.labels) && pr.labels.some(l => (l.name || l) === name);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// orca JSON 返回字段提取（#497 第四轮：真实返回契约，防「自造夹具自洽」）
+//
+// 真实返回已采集到 tests/fixtures/orca-returns/（采集时间 2026-08-15 22:41-22:44
+// 北京时；task-create 为本会话实跑，其余见 PR 正文）。字段路径以实测/帅核实为准：
+//   task-create    → result.task.id（实测三次一致；result.id 是 RPC id、json.task.id 不存在——
+//                    旧代码两路全错，taskId 恒 null 使整个闭环一行都跑不起来）
+//   worker-start   → result.dispatch.id | result.dispatchId（帅核实 ✅）
+//   worker-show    → result.worker.agent_terminal_handle（实测 ✅）
+//   dispatch-show  → result.dispatch.id（帅核实 ✅）
+//   task-list      → result.tasks（实测 ✅）
+//   worktree create→ result.worktree.id（实测 ✅）
+//   terminal create→ result.terminal.handle（实测 ✅）
+// 任何消费点不得在别处再写一份提取链——改这里一处，tests 用真实夹具锁住。
+// ══════════════════════════════════════════════════════════════════════
+export function taskIdFromTaskCreate(json) { return json?.result?.task?.id || null; }
+export function dispatchIdFromWorkerStart(json) { return json?.result?.dispatch?.id || json?.result?.dispatchId || null; }
+export function handleFromWorkerShow(json) { return json?.result?.worker?.agent_terminal_handle || json?.result?.worker?.agentTerminalHandle || null; }
+export function dispatchIdFromDispatchShow(json) { return json?.result?.dispatchId || json?.result?.dispatch?.id || json?.dispatchId || null; }
+export function worktreeIdFromWorktreeCreate(json) { return json?.result?.worktree?.id || null; }
+export function terminalHandleFromTerminalCreate(json) { return json?.result?.terminal?.handle || null; }
 
 // ══════════════════════════════════════════════════════════════════════
 // 信号提取（纯函数，快照与 live 共用）
@@ -345,7 +375,11 @@ function pendingAction(derived) {
 // 待帅处置原因（红 3：卡着的 PR 每轮都要显形，不能报一次就转绿）
 // rec.pendingShuai = 独立于注入闸的待帅记账；清除时机与自愈同步（fp 变化重试时清、动作成功时清）。
 function awaitingShuaiReason(derived, rec, thisRoundFailed) {
-  if (rec.pendingShuai) return rec.pendingShuai.reason;
+  if (rec.pendingShuai) {
+    // 链断由 chainWatch 自己的常驻行显形（每轮一条），防止与 PR 循环再各出一条
+    if (rec.pendingShuai.kind === 'chain-broken') return null;
+    return rec.pendingShuai.reason;
+  }
   if (derived.state === 'approved') {
     if (rec.mergeAttempted && !rec.mergeBlocked) return null; // 合并动作已发起，等 GitHub 收口
     return '复核绿待帅终审';
@@ -540,11 +574,11 @@ function resolveDeliveryHandle(source, map, dispatchId) {
 function deliverFollowUp(taskSpec, handle, args) {
   const tc = runOrca(['orchestration', 'task-create', '--spec', taskSpec, '--json']);
   if (!tc.ok) return { ok: false, error: `task-create 失败：${tc.error}` };
-  const taskId = tc.json?.result?.id || tc.json?.task?.id || null;
+  const taskId = taskIdFromTaskCreate(tc.json);
   if (!taskId) return { ok: false, error: 'task-create 成功响应但缺 task id（结构畸形）' };
   const ws = runOrca(['orchestration', 'worker-start', '--task', taskId, '--terminal', handle, '--json']);
   if (!ws.ok) return { ok: false, error: `worker-start --terminal 失败：${ws.error}` };
-  const dispatchId = ws.json?.result?.dispatch?.id || ws.json?.result?.dispatchId || null;
+  const dispatchId = dispatchIdFromWorkerStart(ws.json);
   return { ok: true, taskId, dispatchId };
 }
 
@@ -700,6 +734,57 @@ function backfillMergePolicy(pr, rec, source, args) {
   return { lines };
 }
 
+// 合并权链运行时观察（#497 第四轮：断链报警——治「这一单断了」）
+// 断链有两种（见 PR 正文表）：这一单断了（comment 有 merge-policy:auto 但 PR 无标签超 N 分钟）
+// 由本观察报警；所有单都会断（dispatch 改了产出格式）由契约测试报警（治第二种）。
+// 输出三态必须能分开（仓规）：
+//   1 有 merge-policy 树且对应在途 PR 标签齐 → [flow] OK 合并权链：N 棵 auto 树标签齐（OK 前缀，不推 exit）
+//   2 一棵带 merge-policy 字段的树都没有 → [flow] 提醒：合并权链没扫到样本（每状态文件一次）——
+//     不是「全部正常」，可能是没人走 dao.mjs dispatch，也可能是格式变了
+//   3 读不到 worktree 列表 → NO_TARGETS（沿用现有口径）
+function chainWatch(source, open, records, state, args) {
+  const lines = [];
+  const wts = source.orcaWorktrees();
+  if (!wts.ok) return { lines: [`[flow] NO_TARGETS：读 worktree 列表失败（${wts.error}）——合并权链观察没查成`], noTargets: true };
+  // 带 merge-policy 字段的树 = dispatch 产出的证据（auto 或 manual 都算——manual 也说明链活着）
+  const policyTrees = wts.worktrees.filter(w => mergePolicyFromComment(w.comment) != null);
+  const autoTrees = policyTrees.filter(w => mergePolicyFromComment(w.comment) === 'auto');
+  if (policyTrees.length === 0) {
+    if (!state.chainWatchNoSampleReported) {
+      state.chainWatchNoSampleReported = true;
+      lines.push('[flow] 提醒：合并权链没扫到样本（0 棵带 merge-policy 的树——可能没人走 dao.mjs dispatch，也可能格式变了；契约测试兜格式，本行兜「整链没活动」）');
+    }
+    return { lines };
+  }
+  const now = Date.now();
+  let healthy = 0;
+  const broken = [];
+  for (const wt of autoTrees) {
+    const branch = String(wt.branch || '').replace(/^refs\/heads\//, '');
+    const pr = open.find(p => p.headRefName === branch);
+    if (!pr) continue; // 不在途（已合并/关闭/外部树）——无需看标签
+    const rec = records[pr.number];
+    if (hasLabel(pr, MERGE_AUTO_LABEL)) {
+      if (rec?.chainBrokenSince) rec.chainBrokenSince = null; // 标签到位，链恢复
+      healthy += 1;
+      continue;
+    }
+    // 有 auto 树但 PR 无标签：记起始时刻，超 N 分钟报警（回填垫片失效/gh 失败/flow 没跑过窗口）
+    if (rec) {
+      if (!rec.chainBrokenSince) rec.chainBrokenSince = now;
+      if (now - rec.chainBrokenSince > CHAIN_BROKEN_MS) {
+        broken.push(pr.number);
+        rec.pendingShuai = { kind: 'chain-broken', reason: '合并权链断：回填失败（comment 是 merge-policy:auto 但 PR 无 merge/auto 标签超 15 分钟）' };
+      }
+    }
+  }
+  for (const n of broken) lines.push(`[flow] 待帅处置：#${n}（合并权链断：回填失败）`);
+  if (broken.length === 0) {
+    lines.push(`[flow] OK 合并权链：${healthy} 棵 auto 树标签齐`);
+  }
+  return { lines };
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 原生消息处理（live：check --wait 投递；快照：orca-messages.json）
 // ══════════════════════════════════════════════════════════════════════
@@ -755,16 +840,17 @@ function processNativeMessages(messages, state, dispatchMap, args) {
 // ══════════════════════════════════════════════════════════════════════
 
 function loadState(path) {
-  if (!existsSync(path)) return { version: 1, inventoried: false, round: 0, dispatchCache: {}, records: {} };
+  if (!existsSync(path)) return { version: 1, inventoried: false, round: 0, dispatchCache: {}, chainWatchNoSampleReported: false, records: {} };
   try {
     const s = JSON.parse(readFileSync(path, 'utf8'));
     if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
     return {
       version: 1, inventoried: !!s.inventoried, round: Number(s.round) || 0,
-      dispatchCache: s.dispatchCache || {}, records: s.records,
+      dispatchCache: s.dispatchCache || {}, chainWatchNoSampleReported: !!s.chainWatchNoSampleReported,
+      records: s.records,
     };
   } catch (e) {
-    return { version: 1, inventoried: false, round: 0, dispatchCache: {}, records: {}, loadError: String(e.message) };
+    return { version: 1, inventoried: false, round: 0, dispatchCache: {}, chainWatchNoSampleReported: false, records: {}, loadError: String(e.message) };
   }
 }
 
@@ -778,6 +864,7 @@ function freshRecord(pr) {
     reportedStale: false, actedOn: null, reviewer: null, escalated: null,
     workerDispatch: null, // 当前工人 dispatch 上下文（返工投递后更新）
     policyBackfilled: false, // merge-policy 回填只做一次（#498 过渡垫片）
+    chainBrokenSince: null,  // 合并权链断计时（comment auto 但 PR 无标签的起始时刻）
     mergeAttempted: false, mergeBlocked: false, stateSince: Date.now(),
   };
 }
@@ -846,17 +933,13 @@ function makeLiveSource(repo) {
     dispatchIdFor(taskId) {
       const r = runOrca(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
       if (!r.ok) return null;
-      const d = r.json?.result?.dispatchId || r.json?.result?.dispatch?.id || r.json?.dispatchId || null;
-      return d || null;
+      return dispatchIdFromDispatchShow(r.json) || null;
     },
     // dispatch id → 终端 handle（#480 实测纠正：投递走 worker-start --terminal，不用 send --to dispatch）
     workerHandleFor(dispatchId) {
       const r = runOrca(['orchestration', 'worker-show', '--dispatch', dispatchId, '--json']);
       if (!r.ok) return null;
-      return r.json?.result?.worker?.agent_terminal_handle
-        || r.json?.result?.worker?.agentTerminalHandle
-        || r.json?.result?.agent_terminal_handle
-        || null;
+      return handleFromWorkerShow(r.json);
     },
     // live 门铃：check --wait（阻塞替代 sleep）。返回 { ok, messages, deliveryId }；
     // 超时（count 0）也是正常 checkpoint，不是失败。
@@ -938,14 +1021,20 @@ function makeSnapshotSource(roundDir, repo) {
     },
     orcaTasks() {
       const r = readJson(join(roundDir, 'orca-tasks.json'));
-      if (!r.ok) return { ok: true, tasks: [] };
+      if (!r.ok) {
+        if (String(r.error).includes('缺文件')) return { ok: true, tasks: [] }; // 无夹具 = 无数据
+        return { ok: false, error: r.error }; // 文件在但读不了 → 没查成（不把坏数据当没数据）
+      }
       const tasks = Array.isArray(r.json) ? r.json : unwrap(r.json, 'tasks', 'tasks') || [];
       const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatchId || t.dispatch_id || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null }));
       return { ok: true, tasks: out };
     },
     orcaWorktrees() {
       const r = readJson(join(roundDir, 'orca-worktrees.json'));
-      if (!r.ok) return { ok: true, worktrees: [] };
+      if (!r.ok) {
+        if (String(r.error).includes('缺文件')) return { ok: true, worktrees: [] }; // 无夹具 = 无数据
+        return { ok: false, error: r.error }; // 文件在但读不了 → 没查成（链观察态 3）
+      }
       const wts = unwrap(r.json, 'worktrees', 'worktrees') || [];
       if (!Array.isArray(wts)) return { ok: false, error: 'orca-worktrees.json 结构不认识' };
       return { ok: true, worktrees: wts.map(w => ({ id: w.id, branch: w.branch || w.git?.branch || null, comment: w.comment || w.git?.comment || null })) };
@@ -1011,23 +1100,23 @@ function executeAction(action, pr, toml, source, rec, args) {
     // live：task-create → worker-start（dispatch 身份硬要求；Claude 族按 routing 两步收口）
     const tc = runOrca(['orchestration', 'task-create', '--spec', taskSpec, '--json']);
     if (!tc.ok) return { ok: false, error: `起审官 task-create 失败：${tc.error}`, needsReport: 'report-unknown' };
-    const taskId = tc.json?.result?.id || tc.json?.task?.id || null;
+    const taskId = taskIdFromTaskCreate(tc.json);
     if (!taskId) return { ok: false, error: '起审官 task-create 成功响应但缺 task id（结构畸形）', needsReport: 'report-unknown' };
     let dispatchId = null;
     if (launch.twoStep) {
       const wtR = runOrca(['worktree', 'create', '--parent-worktree', `branch:${pr.headRefName}`, '--name', cardName, '--setup', 'skip', '--json']);
       if (!wtR.ok) return { ok: false, error: `起审官卡失败：${wtR.error}`, needsReport: 'report-unknown' };
-      const wtId = wtR.json?.result?.worktree?.id || null;
+      const wtId = worktreeIdFromWorktreeCreate(wtR.json);
       const termR = runOrca(['terminal', 'create', '--worktree', wtId, '--command', launch.command, '--json']);
       if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}`, needsReport: 'report-unknown' };
-      const handle = termR.json?.result?.terminal?.handle || null;
+      const handle = terminalHandleFromTerminalCreate(termR.json);
       const wsR = runOrca(['orchestration', 'worker-start', '--task', taskId, '--worktree', wtId, '--terminal', handle, '--json']);
       if (!wsR.ok) return { ok: false, error: `起审官 worker-start 失败：${wsR.error}`, needsReport: 'report-unknown' };
-      dispatchId = wsR.json?.result?.dispatch?.id || wsR.json?.result?.dispatchId || null;
+      dispatchId = dispatchIdFromWorkerStart(wsR.json);
     } else {
       const wsR = runOrca(['orchestration', 'worker-start', '--task', taskId, '--worktree', 'current', '--agent', launch.agent, '--model', launch.model, '--json']);
       if (!wsR.ok) return { ok: false, error: `起审官 worker-start 失败：${wsR.error}`, needsReport: 'report-unknown' };
-      dispatchId = wsR.json?.result?.dispatch?.id || wsR.json?.result?.dispatchId || null;
+      dispatchId = dispatchIdFromWorkerStart(wsR.json);
     }
     return {
       ok: true, taskId, dispatchId, label, taskBook,
@@ -1392,6 +1481,13 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
     events.push(`[flow] 待帅处置：#${item.pr}（${item.reason}）`);
   }
 
+  // 合并权链观察（#497 第四轮断链报警）：有在途 PR 才看（链只在有活时才有意义）；explain 只读不加戏
+  if (!args.explain && open.length > 0) {
+    const watch = chainWatch(source, open, records, state, args);
+    for (const l of watch.lines) events.push(l);
+    if (watch.noTargets) noTargets = true;
+  }
+
   // 退役记录清除（MERGED/CLOSED 的 PR 不再在途，状态文件不堆积）
   for (const key of Object.keys(records)) {
     if (records[key].retired) delete records[key];
@@ -1425,7 +1521,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, extractPrsFromSpec };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, extractPrsFromSpec, runCmd };
 
 let args = null;
 let anyEmitted = false;

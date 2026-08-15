@@ -1,0 +1,20 @@
+{
+  "id": "e642e46a-1c7d-4f2a-b582-af878ff9759f",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_46398e1b-d1d3-4feb-ae74-7bb813b36394",
+      "tabId": "694450f6-c4b3-4f84-99ff-d0a4a8ead077",
+      "paneKey": "694450f6-c4b3-4f84-99ff-d0a4a8ead077:91393bbe-3687-4a11-bbd3-3998bdec0b1b",
+      "ptyId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/契约夹具采集-第4轮@@05acb3f7",
+      "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/契约夹具采集-第4轮",
+      "title": "契约夹具采集",
+      "executionHostId": "local",
+      "hostPlatform": "win32",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

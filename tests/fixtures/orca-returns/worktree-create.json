@@ -1,0 +1,69 @@
+{
+  "id": "5cdadc35-6e16-42cb-97bc-a5814850f238",
+  "ok": true,
+  "result": {
+    "worktree": {
+      "id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/契约夹具采集-第4轮",
+      "instanceId": "87a2df87-a79e-41f3-ac1e-93180b5fb8d5",
+      "repoId": "1770a430-983a-4e86-9277-9f1e5c376b83",
+      "projectId": "github:thoerwink8/windsurf-dao",
+      "hostId": "local",
+      "projectHostSetupId": "1770a430-983a-4e86-9277-9f1e5c376b83",
+      "path": "C:/Users/Administrator/orca/workspaces/windsurf-dao/契约夹具采集-第4轮",
+      "head": "7e582812ce345a3c76e987795d1cbdf4d04786b7",
+      "branch": "refs/heads/thoerwink8/契约夹具采集-第4轮",
+      "isBare": false,
+      "isMainWorktree": false,
+      "displayName": "契约夹具采集-第4轮",
+      "comment": "",
+      "linkedIssue": null,
+      "linkedPR": null,
+      "linkedLinearIssue": null,
+      "linkedLinearIssueWorkspaceId": null,
+      "linkedLinearIssueOrganizationUrlKey": null,
+      "linkedGitLabMR": null,
+      "linkedGitLabIssue": null,
+      "linkedBitbucketPR": null,
+      "linkedAzureDevOpsPR": null,
+      "linkedGiteaPR": null,
+      "linkedWorkItem": null,
+      "linkedTaskSourceContext": null,
+      "isArchived": false,
+      "isUnread": false,
+      "isPinned": false,
+      "sortOrder": 1786804960677,
+      "lastActivityAt": 1786804960677,
+      "createdAt": 1786804960677,
+      "cliProvenance": {
+        "kind": "created-by-cli",
+        "createdAt": 1786804954501,
+        "callerTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239"
+      },
+      "baseRef": "refs/remotes/origin/master",
+      "workspaceStatus": "in-progress",
+      "parentWorktreeId": null,
+      "childWorktreeIds": [],
+      "lineage": null,
+      "workspaceLineage": null,
+      "git": {
+        "path": "C:/Users/Administrator/orca/workspaces/windsurf-dao/契约夹具采集-第4轮",
+        "head": "7e582812ce345a3c76e987795d1cbdf4d04786b7",
+        "branch": "refs/heads/thoerwink8/契约夹具采集-第4轮",
+        "isBare": false,
+        "isMainWorktree": false
+      }
+    },
+    "lineage": null,
+    "workspaceLineage": null,
+    "warnings": [],
+    "localBaseRefRefresh": {
+      "baseRef": "origin/master",
+      "localBranch": "master",
+      "status": "updated",
+      "ownerWorktreePath": "D:/frank/windsurf-dao"
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "5103f148-e0ca-48bf-a251-2991c08c99e3",
+  "ok": true,
+  "result": {
+    "task": {
+      "id": "task_72992e47f0f4",
+      "run_id": "run_11579e3b6e2c",
+      "parent_id": null,
+      "created_by_terminal_handle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+      "created_by_pane_key": "1aa6e43b-032e-46e9-a9ff-29b6b304fc31:e97df931-734a-4d16-aee3-ed41f37ac444",
+      "created_by_process_incarnation": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作@@ef2f2aeb:190dd6d9-a36d-4968-99b9-cd536d92c23b",
+      "created_by_run_generation": 1,
+      "task_title": "契约夹具采集：task-create 真实返回（采集后闲置）",
+      "display_name": "契约夹具采集：task-create 真实返回（采集后闲置）",
+      "spec": "契约夹具采集：task-create 真实返回（采集后闲置）",
+      "status": "ready",
+      "deps": "[]",
+      "result": null,
+      "created_at": "2026-08-15 14:41:59",
+      "completed_at": null
+    },
+    "mutation": {
+      "requestId": "67863c29-13fb-458e-bf41-de09c8a3cd3b",
+      "replayed": false
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

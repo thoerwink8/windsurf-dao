@@ -164,7 +164,7 @@ command-code（Command Code 官方 CLI）：**当前不能承载需进 git 的 O
 
 ## 开工判据
 
-token 计数在增长才算开工——启动返回成功不等于已开工。worker-start 后 `orca orchestration worker-read --dispatch <id> --json` 读回，token/cursor 在涨才算开工；见输入框残留就补一记回车（吞注入补救见「启动序」）。
+启动返回成功不等于已开工。worker-start 的 receipt（`state: ready` / `stage: input_accepted`）是送达证据，送达由 orca 保证。**不许用 token/cursor 增量当活性证据**（#500 实证：spinner 每次重绘都涨 cursor/token，转圈挂死 45 秒涨 21 行看着像活的——「该发生的事有没有发生」才是判据：接到任务后该出现的产物/提交有没有出现）。见输入框残留就补一记回车（吞注入补救见「启动序」）。
 
 ## 判断工人是否完成的四个信号
 
@@ -212,7 +212,9 @@ orca terminal create --worktree <repo-id::path> --command "<agent> --model <mode
 orca orchestration worker-start --task <task_id> --worktree <repo-id::path> --terminal <handle> --json
 #   验开工后确认裸建的 fallback shell 未用即关掉
 
-# 3) 验开工（保留）：读回输出，token/cursor 在涨才算开工；见输入框残留补一记回车
+# 3) 验开工：worker-start receipt（state: ready / stage: input_accepted）即送达证据；
+#    不许用 token/cursor 增量当活性证据（#500：spinner 重绘也涨，转圈挂死看着像活的）
+#    见输入框残留补一记回车
 orca orchestration worker-read --dispatch <dispatch_id> --json
 
 # 4) 挂门铃（机械步骤，派完必做）：Monitor 后台 check --wait（零 token），收 worker_done/escalation/question

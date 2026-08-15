@@ -22,7 +22,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec, runCmd, taskIdFromTaskCreate, handleFromWorkerShow, worktreeIdFromWorktreeCreate, terminalHandleFromTerminalCreate, dispatchIdFromDispatchShow } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, mergePolicyFromComment, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
@@ -462,7 +462,7 @@ console.log("\n=== ㉔ 反例回归样本：review 判定行「判定：红 2 �
   const r = runFlow(path.join(FIXTURES, "anti-sample"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
   check("判红（引用代码块的 判定：绿 不得算数——搜全文会被骗，本防线在）", /动作：返工注入 #3305（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_3305/.test(r.out), r.out.trim());
-  check("不判绿不合并", !/合并|复核结论：绿/.test(r.out), r.out.trim());
+  check("不判绿不合并", !/动作：合并|复核结论：绿/.test(r.out), r.out.trim());
   check("红 2 与判定行一致（redFlagsFromReviewBodies 口径）", redFlagsFromReviewBodies(["判定：红 2 项\n\n```js\nif (verdict.line === \"判定：绿\") { return approve(); }\n```"]) === 2, "应为 2");
 }
 
@@ -505,7 +505,8 @@ console.log("\n=== ㉘ merge-policy 回填（#498 过渡垫片：worktree 卡备
   check("merge-policy:manual → 不回填，落安全默认", !/回填|动作：/.test(manual.out) && /OK 扫完 1 个 PR，0 需流转/.test(manual.out), manual.out.trim());
 
   const prose = runFlow(path.join(FIXTURES, "policy-prose"));
-  check("备注被覆写成人话（master 真备注语料）→ 不回填不报错", !/回填|报帅/.test(prose.out) && /OK 扫完 1 个 PR，0 需流转/.test(prose.out), prose.out.trim());
+  check("备注被覆写成人话（master 真备注语料）→ 不回填不报错", !/回填|报帅/.test(prose.out), prose.out.trim());
+  check("链观察：无 merge-policy 树 → 没扫到样本显形（非「全部正常」）", /提醒：合并权链没扫到样本/.test(prose.out), prose.out.trim());
 
   const exists = runFlow(path.join(FIXTURES, "policy-label-exists"));
   check("标签已存在（帅手工优先）→ 不重复打", !/回填/.test(exists.out) && /OK 扫完 1 个 PR，0 需流转/.test(exists.out), exists.out.trim());
@@ -546,6 +547,110 @@ console.log("\n=== ㉗ --explain：对每个在途 PR 输出「当前态 + 下�
   check("working PR：当前态 + 下一步", /\[explain\] PR #3308[\s\S]*当前态：工人开工中/.test(out), out.trim());
   check("explain 只读：不产生动作/报帅行，不写状态文件", !/动作：|报帅：/.test(out) && !fs.existsSync(stateFile), out.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㉙ orca 真实返回契约（#497 第四轮：taskId 恒 null bug 防线，夹具 = orca 原样输出）===");
+{
+  const load = f => JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", "orca-returns", f), "utf8"));
+  const tc = load("task-create.json");
+  check("task-create 真实返回：result.task.id 可取（旧代码 result.id / json.task.id 两路全错）", String(taskIdFromTaskCreate(tc)).startsWith("task_"), JSON.stringify(tc).slice(0, 160));
+  check("task-create 真实返回：顶层 id 是 RPC id 不是 task id", tc.result.task.id !== tc.id, JSON.stringify(tc).slice(0, 160));
+  check("task-create 真实返回：result.id 不存在（旧代码第一路永远 null）", tc.result.id === undefined, JSON.stringify(tc).slice(0, 160));
+  const ts = load("task-list.json");
+  check("task-list 真实返回：result.tasks 是数组", Array.isArray(ts.result.tasks) && ts.result.tasks.length > 0);
+  const ws = load("worker-show.json");
+  check("worker-show 真实返回：result.worker.agent_terminal_handle 可取", typeof handleFromWorkerShow(ws) === "string" && handleFromWorkerShow(ws).length > 0);
+  check("worker-show 真实返回里的 result.dispatch.id 可被 dispatchIdFromDispatchShow 取到（已派工形态）", dispatchIdFromDispatchShow(ws) === (ws.result.dispatch || {}).id, JSON.stringify(ws.result.dispatch || {}).slice(0, 120));
+  const ds = load("dispatch-show.json");
+  check("dispatch-show 真实返回：result.dispatch 字段存在（未派工为 null）", "dispatch" in (ds.result || {}));
+  const wc = load("worktree-create.json");
+  check("worktree create 真实返回：result.worktree.id 可取", typeof worktreeIdFromWorktreeCreate(wc) === "string" && worktreeIdFromWorktreeCreate(wc).length > 0);
+  const term = load("terminal-create.json");
+  check("terminal create 真实返回：result.terminal.handle 可取", typeof terminalHandleFromTerminalCreate(term) === "string" && terminalHandleFromTerminalCreate(term).length > 0);
+}
+
+console.log("\n=== ㉚ merge-policy 契约（dispatch 真实产出 → flow 解析器；禁手写字面量 = 禁 mock 内生）===");
+{
+  const { dispatchComment } = require("../scripts/lib/dao-cmd.mjs");
+  const c1 = dispatchComment({ mergePolicy: "auto", model: "gpt-5.6-sol", reviewer: "gpt-5.6-sol" });
+  check("dispatchComment(auto) 真实产出 → 解出 auto", mergePolicyFromComment(c1) === "auto", c1);
+  const c2 = dispatchComment({ mergePolicy: "manual", model: "gpt-5.6-sol", reviewer: "gpt-5.6-sol" });
+  check("dispatchComment(manual) 真实产出 → 解出 manual", mergePolicyFromComment(c2) === "manual", c2);
+  // 端到端：dao dispatch --dry-run 的 JSON 输出里 comment 字段（dao.mjs:196 emit）
+  for (const policy of ["auto", "manual"]) {
+    const r = spawnSync(process.execPath, [path.join(REPO, "scripts", "dao.mjs"), "dispatch", "--dry-run", "--name", "契约语料", "--merge-policy", policy, "--model", "gpt-5.6-sol", "--reviewer", "gpt-5.6-sol", "--spec", "契约语料：不做实际派工", "--json"], { encoding: "utf8", cwd: REPO });
+    const out = (r.stdout || "") + (r.stderr || "");
+    let parsed = null;
+    try { parsed = JSON.parse(out); } catch { /* 非 JSON */ }
+    check(`dao dispatch --dry-run(${policy}) 真实 comment → 解出 ${policy}`, parsed && mergePolicyFromComment(parsed.comment) === policy, out.slice(0, 200));
+  }
+}
+
+console.log("\n=== ㉛ 合并权链断报警（comment auto 但 PR 无标签超 15 分钟 → 待帅处置常驻）===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-chain-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 1, inventoried: true, round: 0, dispatchCache: {}, chainWatchNoSampleReported: false,
+    records: {
+      "3405": { pr: 3405, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, escalated: null, workerDispatch: null, policyBackfilled: true, chainBrokenSince: Date.now() - 20 * 60 * 1000, mergeAttempted: false, mergeBlocked: false, stateSince: Date.now() },
+    },
+  }), "utf8");
+  const r = runFlowShared(path.join(FIXTURES, "chain-broken"), stateFile, hbFile);
+  const out = (r.stdout || "") + (r.stderr || "");
+  check("退出码 1（待帅处置）", r.status === 1, `status=${r.status}`);
+  check("链断 → 待帅处置：合并权链断（#3405 回填失败）", /待帅处置：#3405（合并权链断：回填失败）/.test(out), out.trim());
+  check("不误报 0 需流转", !/OK 扫完 1 个 PR，0 需流转/.test(out), out.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㉛b 链观察三态（扫过有样本 / 没扫到样本 / 没查成）===");
+{
+  const healthy = runFlow(path.join(FIXTURES, "policy-label-exists"));
+  check("态1：auto 树 + 标签齐 → OK 合并权链（非报帅非 NO_TARGETS）", /OK 合并权链：1 棵 auto 树标签齐/.test(healthy.out), healthy.out.trim());
+  const nt = runFlow(path.join(FIXTURES, "chain-notargets"));
+  check("态3：读不到 worktree 列表 → NO_TARGETS（没查成，非查过没事）", /NO_TARGETS：读 worktree 列表失败/.test(nt.out), nt.out.trim());
+  check("态3 退出码 2（没查成）", nt.status === 2, `status=${nt.status}`);
+  // 态2 once-only：policy-prose（无 merge-policy 树）提醒一次，重跑不重复
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-chain2-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "policy-prose"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "policy-prose"), stateFile, hbFile);
+  const out1 = (r1.stdout || "") + (r1.stderr || "");
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("态2：首跑提醒没扫到样本（显形，非全部正常）", /提醒：合并权链没扫到样本/.test(out1), out1.trim());
+  check("态2：提醒只一次（重跑不刷屏）", !/提醒：合并权链没扫到样本/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㉜ 引号坑锁（#499/#497 第六轮：runCmd 数组传参 + 无 shell，带空格参数不被拆）===");
+{
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  const runCmdSrc = flowSrc.split("function runCmd(")[1]?.split(/\nfunction /)[0] || "";
+  check("runCmd 用 spawnSync(cmd, args, {...})（第二个参数是数组）", /spawnSync\(\s*cmd\s*,\s*args\s*,/.test(runCmdSrc), runCmdSrc.slice(0, 160));
+  check("runCmd 选项不含 shell（shell:true 会经 cmd 二次解析丢引号）", !/shell\s*:/.test(runCmdSrc), runCmdSrc.slice(0, 160));
+  // 行为断言：带空格参数走完整调用不被拆（实测证据：dispatch_not_found = 参数完整到达 RPC 解析）
+  const sp = spawnSync("orca", ["orchestration", "send", "--to", "dispatch:__nonexistent__", "--subject", "A B C", "--body", "d e f", "--json"], { encoding: "utf8", timeout: 30000, windowsHide: true });
+  const rawOut = ((sp.stdout || "") + (sp.stderr || "")).trim();
+  if (/dispatch_not_found/.test(rawOut)) {
+    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", true, rawOut.slice(0, 120));
+  } else if (/(not recognized|ENOENT|不是内部|外部命令|Cannot find)/i.test(rawOut)) {
+    check("本机无 orca：行为断言 SKIP（显形跳过，不算过）", true, "SKIP: " + rawOut.slice(0, 120));
+  } else {
+    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", false, rawOut.slice(0, 200));
+  }
+}
+
+console.log("\n=== ㉝ 活性判据禁令（#500 实证：禁止屏面形态当活性证据）===");
+{
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("flow 头注写死活性判据禁令（屏面指纹/cursor 增量/tui-idle 禁用）", /禁止使用任何屏面形态/.test(flowSrc) && /tui-idle/.test(flowSrc), "禁令缺失");
+  check("flow 无运行时 cursor 增量判活代码（无 terminal read 调用）", !/\['terminal', 'read'/.test(flowSrc) && !/nextCursor/.test(flowSrc), "屏面形态判活代码残留");
+  const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
+  check("dispatch SKILL 开工判据不再用 token/cursor 增量当活性证据", !/token\/cursor 在涨才算开工/.test(skill), "残留旧判据");
+  check("dispatch SKILL 写明 #500 实证", /#500/.test(skill));
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);
