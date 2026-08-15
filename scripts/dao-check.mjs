@@ -25,7 +25,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { checkModeHook } from './lib/mode-hook-check.mjs';
+import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -309,20 +309,22 @@ function checkMemoryIndex() {
 // 它是静默失效型部件的极端例子——被覆盖/断链/坏掉之后，态标还挂在那儿，
 // AI 却什么都收不到，用户以为自己锁着，实际没锁。假状态比没状态更糟。
 //
-// 而本机 ~/.claude/settings.json 没有单一 owner（cc-switch DB 下发 / 部署 link /
-// CC 本体重置三方互相覆盖，见 memory claude-settings-self-heal），所以「装过一次」
-// 不等于「现在还在」，必须每次 dao check 都重新验。
+// 装载面没有单一 owner：插件面（~/.claude/skills/<名>/）会随仓库搬家、worktree 删除而断链，
+// settings.json 更是 cc-switch DB 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖
+// （见 memory claude-settings-self-heal）。所以「装过一次」不等于「现在还在」，必须每次重验。
 //
 // 两层验，缺一不可（静态门控拦不住运行时失效）：
-//   静态：host/hooks/ 下每个 *.mjs 都要在某个 settings 面的 UserPromptSubmit 里被点到。
-//   运行时：把注册的那条命令真跑两次——一次喂造好的专注态、一次喂不存在的路径，
-//           断言两次输出不同形，且专注那次带得出焦点原文。
-//           这同时是「读到了且是常态」与「压根没读到」不得同形那条硬规矩的常驻闸。
-// 自发现：期望集合从 host/hooks/ 扫出来，没有手写清单可以漏登记。
-// 零样本：目录不在 / 没有 .mjs / 一个 settings 文件都读不到，全部单独报红。
+//   静态：仓内每个自带 hook 的 skill（host/skills/<名>/hooks/hooks.json）声明的脚本，
+//         都要能在本机某个装载面上被点到。
+//   运行时：把点到的那条命令真跑四次，四种状态文件各一次——读到且常态 / 读到且非常态 /
+//         文件不在 / 文件坏了——断言四种输出两两不同形，且只有非常态那次带得出哨兵焦点。
+//         这是「读到了且是常态」「读到了且非常态」「压根没读到」三形不得同形那条硬规矩的常驻闸
+//         （第四形「读到了但坏了」一并单列：没读到和读坏了是两件事，处置不一样）。
+// 自发现：期望集合从 host/skills/ 扫出来，没有手写清单可以漏登记。
+// 零样本：skills 目录不在 / 没有任何 hook 声明 / 声明了但脚本没了 / 一个装载面都点不到，全部单独报红。
 
-// 实现在 scripts/lib/mode-hook-check.mjs（那里能被 tests/mode.tests.js 拿假 HOME 造违规样本单独验，
-// 不必跑整个 dao-check——dao-check 会跑 tests/，tests 再跑 dao-check 就递归了）。
+// 实现在 scripts/lib/dao-mode-hook-check.mjs（那里能被 tests/dao-mode.tests.js 拿假 HOME 造违规
+// 样本单独验，不必跑整个 dao-check——dao-check 会跑 tests/，tests 再跑 dao-check 就递归了）。
 
 function checkModeHookAlive() {
   const r = checkModeHook({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });

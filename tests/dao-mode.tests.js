@@ -1,10 +1,10 @@
 // 专注/值守三态状态机 · 回归网（issue #488）
 //
 // 验两个部件：
-//   ① host/hooks/dao-mode.mjs —— 态的读写与每轮注入文本。重点不是「能不能切态」，
-//      而是三条硬规矩：读不到 ≠ 常态、失效方向朝安全一侧（hook 永远 exit 0）、
-//      连续第二次偏离才升级为弹确认。
-//   ② scripts/lib/mode-hook-check.mjs —— dao-check 第 ⑦ 项的判别力。这里拿假 HOME
+//   ① host/skills/dao-mode/hooks/dao-mode.mjs —— 态的读写与每轮注入文本。重点不是「能不能切态」，
+//      而是三条硬规矩：四种结局各自不同形（常态 / 非常态 / 文件不在 / 文件坏了）、
+//      失效方向朝安全一侧（hook 永远 exit 0）、连续第二次偏离才升级为弹确认。
+//   ② scripts/lib/dao-mode-hook-check.mjs —— dao-check 第 ⑦ 项的判别力。这里拿假 HOME
 //      故意造违规样本（没注册 / 断链 / 输出恒定 / settings 坏了），每一种都必须报红。
 //      不这么验，就只能证明「装过」，证明不了「被覆盖时会叫」。
 //
@@ -48,27 +48,46 @@ function injection(promptText, state) {
   return mode(["hook"], { input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: promptText }), state });
 }
 
-console.log("\n=== ① 读不到 ≠ 常态（两种形必须分得开）===");
+console.log("\n=== ① 四种结局各自不同形（规格要的三形 + 「读坏了」单列）===");
 {
-  const missing = injection("随便一句", path.join(SANDBOX, "不存在.json"));
-  check("没有状态文件 ⇒ 说「读不到」", /读不到状态文件/.test(missing.out), missing.out.slice(0, 100));
-  check("没有状态文件 ⇒ 退出码 0（读不到是降级不是错误）", missing.status === 0, `status=${missing.status}`);
-  check("没有状态文件 ⇒ 不冒充常态", !/常态 · 无锁/.test(missing.out), missing.out.slice(0, 100));
+  // ③ 文件压根不在
+  const absent = injection("随便一句", path.join(SANDBOX, "不存在.json"));
+  check("文件不在 ⇒ 明说「状态文件不在，一个字都没读到」", /状态文件不在/.test(absent.out), absent.out.slice(0, 120));
+  check("文件不在 ⇒ 退出码 0（没读到是降级不是错误）", absent.status === 0, `status=${absent.status}`);
+  check("文件不在 ⇒ 不冒充常态", !/常态 · 无锁/.test(absent.out), absent.out.slice(0, 120));
 
+  // ④ 文件在但用不了——和 ③ 是两件事，不许合并
   const brokenPath = path.join(SANDBOX, "broken.json");
   fs.writeFileSync(brokenPath, "{oops", "utf8");
   const broken = injection("x", brokenPath);
-  check("状态文件坏了 ⇒ 说「读不到」并带原因", /读不到状态文件/.test(broken.out) && /JSON 解析失败/.test(broken.out), broken.out.slice(0, 120));
+  check("文件坏了 ⇒ 明说「读到了但用不了」并带原因", /读到了但用不了/.test(broken.out) && /JSON 解析失败/.test(broken.out), broken.out.slice(0, 140));
+  check("文件坏了 ≠ 文件不在（两种降级分得开）", !/状态文件不在/.test(broken.out) && broken.out.trim() !== absent.out.trim(), broken.out.slice(0, 140));
 
   const aliasPath = path.join(SANDBOX, "alien.json");
   fs.writeFileSync(aliasPath, JSON.stringify({ mode: "睡了" }), "utf8");
   const alien = injection("x", aliasPath);
-  check("mode 字段不认识 ⇒ 当作读不到，不猜", /读不到状态文件/.test(alien.out), alien.out.slice(0, 120));
+  check("mode 字段不认识 ⇒ 归「读到了但用不了」，不猜也不冒充没读到", /读到了但用不了/.test(alien.out) && !/状态文件不在/.test(alien.out), alien.out.slice(0, 140));
 
+  // ① 读到了且是常态
   mode(["normal"]);
   const normal = injection("随便一句");
   check("常态 ⇒ 明说「已读到」", /常态 · 无锁/.test(normal.out) && /已读到/.test(normal.out), normal.out.slice(0, 120));
-  check("常态与读不到两种输出不同形", normal.out.trim() !== missing.out.trim());
+
+  // ② 读到了且非常态
+  mode(["focus", "--what", "#四形自检", "--done-when", "验完"]);
+  const engaged = injection("随便一句");
+  check("非常态 ⇒ 出的是态块不是一行常态", /━━ 当前态/.test(engaged.out) && !/常态 · 无锁/.test(engaged.out), engaged.out.slice(0, 120));
+
+  const shapes = { "常态": normal.out.trim(), "非常态": engaged.out.trim(), "文件不在": absent.out.trim(), "文件坏了": broken.out.trim() };
+  const names = Object.keys(shapes);
+  let allDistinct = true, dup = "";
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      if (shapes[names[i]] === shapes[names[j]]) { allDistinct = false; dup = `${names[i]}==${names[j]}`; }
+    }
+  }
+  check("四形两两不同（任何两形被合并都在这里红）", allDistinct, dup);
+  mode(["normal"]);
 }
 
 console.log("\n=== ② hook 路径永不把用户锁死（失效方向朝安全一侧）===");
@@ -159,7 +178,7 @@ console.log("\n=== ⑥ 值守：只问授权边界，行为规范不复述 ===")
 // 下面这段验的是 dao-check 第 ⑦ 项：被覆盖 / 断链 / 输出写死时，它到底会不会叫。
 
 async function checkerTests() {
-  const { checkModeHook } = await import("../scripts/lib/mode-hook-check.mjs");
+  const { checkModeHook } = await import("../scripts/lib/dao-mode-hook-check.mjs");
 
   function reg(command) {
     return { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command, timeout: 10 }] }] } };
@@ -205,6 +224,34 @@ async function checkerTests() {
   function checkModeHome_liar() {
     // 装载面点得到、跑得动、退出码 0，但根本不看状态文件——最难抓的一种「装死」。
     return checkModeHook({ root: REPO, home: fakeHome("liar", { plugin: 'process.stdout.write("[态] 常态 · 无锁\\n");\n' }) });
+  }
+  {
+    // 把「常态」「文件不在」「文件坏了」揉成同一句话的假 hook：专注那形照样吐焦点，所以
+    // 只有「四形两两不同」那条断言拦得住它。这正是本单第一版栽的坑（拿坏 JSON 顶替「没读到」）。
+    const merger = [
+      "import { readFileSync } from 'node:fs';",
+      "let doc = null;",
+      "try { doc = JSON.parse(readFileSync(process.env.DAO_STATE_FILE, 'utf8')); } catch {}",
+      "if (doc && doc.mode !== 'normal') process.stdout.write('焦点：' + doc.focus.what + '\\n');",
+      "else process.stdout.write('[态] 常态\\n');",
+      "",
+    ].join("\n");
+    const r = checkModeHook({ root: REPO, home: fakeHome("merger-all", { plugin: merger }) });
+    check("假 hook 把常态/不在/坏了揉成一句 ⇒ 报「输出同形」", !!r.fail && /同形/.test(r.fail[2]), JSON.stringify(r).slice(0, 260));
+  }
+  {
+    // 只把「文件不在」和「文件坏了」合并——原实现就是这样，审官抓的就是这一条。
+    const conflate = [
+      "import { readFileSync } from 'node:fs';",
+      "let doc = null;",
+      "try { doc = JSON.parse(readFileSync(process.env.DAO_STATE_FILE, 'utf8')); } catch {}",
+      "if (doc && doc.mode !== 'normal') process.stdout.write('焦点：' + doc.focus.what + '\\n');",
+      "else if (doc) process.stdout.write('[态] 常态 · 无锁\\n');",
+      "else process.stdout.write('[态] 读不到状态文件\\n');",
+      "",
+    ].join("\n");
+    const r = checkModeHook({ root: REPO, home: fakeHome("conflate-absent-corrupt", { plugin: conflate }) });
+    check("假 hook 把「文件不在」和「文件坏了」并成一形 ⇒ 报「输出同形」", !!r.fail && /同形/.test(r.fail[2]), JSON.stringify(r).slice(0, 260));
   }
   {
     const r = checkModeHook({ root: REPO, home: fakeHome("broken-json", { settings: { "settings.json": "{oops" }, plugin: realScript }) });

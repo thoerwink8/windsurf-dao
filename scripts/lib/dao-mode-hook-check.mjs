@@ -10,9 +10,13 @@
 //
 // 验两层，缺一不可（静态门控拦不住运行时失效）：
 //   静态：仓内声明的每个 hook 脚本，都要能在本机某个装载面上被点到（插件面或 settings 面）。
-//   运行时：把点到的那条命令原样跑两次——一次喂造好的专注态、一次喂不存在的状态文件。
-//           断言专注那次带得出焦点原文、缺失那次带不出、且两次输出不同形。
-//           symlink 断了、node 不在、脚本坏了、输出写死了，只有这一层抓得住。
+//   运行时：把点到的那条命令原样跑**四次**，四种状态文件各喂一次，断言四种输出两两不同形：
+//             ① 读到了且是常态      ② 读到了且非常态（专注，带哨兵焦点）
+//             ③ 文件压根不在        ④ 文件在但内容坏了
+//           ①②③ 是规格明列必须各自可辨的三形；④ 单列是因为「没读到」和「读坏了」是两件事，
+//           合并它们等于把「这次没查成」记成「查过没事」。
+//           只有专注那次准许带出哨兵焦点，其余三次带出来就说明它没在读给它的文件。
+//           symlink 断了、node 不在、脚本坏了、输出写死了、把某两形合并了，只有这一层抓得住。
 //
 // 为什么必须每次 dao check 都重验：装载面没有单一 owner——插件面会随 worktree 删除断链，
 // settings.json 更是 cc-switch 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖。
@@ -144,36 +148,60 @@ export function checkModeHook({ root, home }) {
     ] };
   }
 
-  // 运行时：真跑，两种输入必须出两种形。
-  const tmpState = join(tmpdir(), `dao-check-state-${process.pid}.json`);
-  const gone = join(tmpdir(), `dao-check-gone-${process.pid}-不存在.json`);
+  // 运行时：真跑四次，四种状态文件各一次，四种输出必须两两不同形。
+  const focusFile = join(tmpdir(), `dao-check-focus-${process.pid}.json`);
+  const normalFile = join(tmpdir(), `dao-check-normal-${process.pid}.json`);
+  const corruptFile = join(tmpdir(), `dao-check-corrupt-${process.pid}.json`);
+  const absentFile = join(tmpdir(), `dao-check-absent-${process.pid}-不存在.json`);
+  writeFileSync(focusFile, JSON.stringify({
+    mode: 'focus', since: new Date().toISOString(),
+    focus: { what: SENTINEL, doneWhen: '自检跑完' },
+    offTopicStreak: 0, parked: [],
+  }), 'utf8');
+  writeFileSync(normalFile, JSON.stringify({
+    mode: 'normal', since: new Date().toISOString(),
+    focus: null, standby: null, offTopicStreak: 0, parked: [],
+  }), 'utf8');
+  writeFileSync(corruptFile, '{这不是合法 JSON', 'utf8');
+
   const problems = [];
   const hitWheres = [];
   for (const f of scripts) {
     const hit = candidates.find(c => c.command.includes(f));
     hitWheres.push(hit.where);
-    writeFileSync(tmpState, JSON.stringify({
-      mode: 'focus', since: new Date().toISOString(),
-      focus: { what: SENTINEL, doneWhen: '自检跑完' },
-      offTopicStreak: 0, parked: [],
-    }), 'utf8');
-    const onFocus = runRegistered(hit.command, tmpState, hit.pluginRoot);
-    const onMissing = runRegistered(hit.command, gone, hit.pluginRoot);
     const tag = `${f}(${hit.where})`;
-    if (onFocus.status !== 0) problems.push(`${tag} 喂专注态退出码 ${onFocus.status}`);
-    else if (!onFocus.out.includes(SENTINEL)) problems.push(`${tag} 喂专注态没把焦点吐出来：${onFocus.out.slice(0, 60) || '(空输出)'}`);
-    if (onMissing.status !== 0) problems.push(`${tag} 喂缺失态退出码 ${onMissing.status}`);
-    else if (onMissing.out.includes(SENTINEL)) problems.push(`${tag} 喂缺失态还吐焦点（读的不是给它的状态文件）`);
-    else if (onFocus.out && onFocus.out === onMissing.out) problems.push(`${tag} 两种输入输出同形 ⇒ 「读到了」和「没读到」分不开`);
+    const shapes = [
+      ['读到且非常态(专注)', runRegistered(hit.command, focusFile, hit.pluginRoot), true],
+      ['读到且常态', runRegistered(hit.command, normalFile, hit.pluginRoot), false],
+      ['文件不在', runRegistered(hit.command, absentFile, hit.pluginRoot), false],
+      ['文件坏了', runRegistered(hit.command, corruptFile, hit.pluginRoot), false],
+    ];
+    for (const [label, r, wantSentinel] of shapes) {
+      if (r.status !== 0) { problems.push(`${tag} 喂「${label}」退出码 ${r.status}`); continue; }
+      if (!r.out) { problems.push(`${tag} 喂「${label}」没有输出`); continue; }
+      if (wantSentinel && !r.out.includes(SENTINEL)) problems.push(`${tag} 喂「${label}」没把焦点吐出来：${r.out.slice(0, 60)}`);
+      if (!wantSentinel && r.out.includes(SENTINEL)) problems.push(`${tag} 喂「${label}」却吐出了焦点（读的不是给它的状态文件）`);
+    }
+    // 两两不同形：任何两形被合并（最典型是把「没读到」当「常态」、把「读坏了」当「没读到」）都在这里红。
+    // 只比跑成功的那几形——跑挂了的上面已经按「退出码 N」报过，再报一遍同形只是噪音。
+    for (let i = 0; i < shapes.length; i++) {
+      for (let j = i + 1; j < shapes.length; j++) {
+        const [la, ra] = shapes[i], [lb, rb] = shapes[j];
+        if (ra.status !== 0 || rb.status !== 0) continue;
+        if (ra.out && ra.out === rb.out) problems.push(`${tag}「${la}」与「${lb}」输出同形 ⇒ 这两种情况分不开`);
+      }
+    }
   }
-  try { rmSync(tmpState, { force: true }); } catch { /* 清不掉不影响判定 */ }
+  for (const f of [focusFile, normalFile, corruptFile]) {
+    try { rmSync(f, { force: true }); } catch { /* 清不掉不影响判定 */ }
+  }
 
   if (problems.length) {
     return { fail: [
       `态注入 hook 跑不出正确输出 ${problems.length} 处`,
-      '装载面点到了但跑不动 = 断链/坏了：手跑 `node host/skills/<名>/hooks/<名>.mjs hook` 看报什么',
+      '装载面点到了但跑不动/分不开 = 断链、脚本坏了、或某两形被合并：手跑 `node host/skills/<名>/hooks/<名>.mjs hook` 看报什么',
       problems.slice(0, 6).join('；'),
     ] };
   }
-  return { green: `态注入 hook ${scripts.length} 个已装载且真跑得动（${[...new Set(hitWheres)].join('/')}；读到/没读到两种形可分辨）` };
+  return { green: `态注入 hook ${scripts.length} 个已装载且真跑得动（${[...new Set(hitWheres)].join('/')}；常态/非常态/文件不在/文件坏了 四形两两可分辨）` };
 }

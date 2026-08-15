@@ -38,22 +38,30 @@ const MODE_CN = { normal: '常态', focus: '专注', standby: '值守' };
 
 // ── 读写 ────────────────────────────────────────────────────────────
 
-/** 读态。读不到不是「常态」——返回 {unreadable:true, why} 让调用方区分。 */
+/**
+ * 读态。四种结局，各自不同形，一个都不许合并：
+ *   ① 读到了且 mode=normal        —— 常态，没锁
+ *   ② 读到了且 mode≠normal        —— 专注 / 值守
+ *   ③ 文件不在                    —— 压根没读到（unreadable, kind='absent'）
+ *   ④ 文件在但用不了（坏 JSON / mode 字段不认识）—— 读到了但坏了（unreadable, kind='corrupt'）
+ * ③ 和 ④ 是两件事：③ 多半是没装/没切过态，④ 是文件被写坏了，处置不一样。
+ * 合并它们等于把「没读到」和「读坏了」记成同一件事，跟把「没查成」记成「查过没事」一个性质。
+ */
 function readState() {
   let raw;
   try {
     raw = readFileSync(STATE_FILE, 'utf8');
   } catch (e) {
-    return { unreadable: true, why: `${e.code || 'ERR'} ${STATE_FILE}` };
+    return { unreadable: true, kind: 'absent', why: `${e.code || 'ERR'} ${STATE_FILE}` };
   }
   let doc;
   try {
     doc = JSON.parse(raw.replace(/^﻿/, ''));
   } catch (e) {
-    return { unreadable: true, why: `JSON 解析失败 ${STATE_FILE}: ${String(e.message).slice(0, 60)}` };
+    return { unreadable: true, kind: 'corrupt', why: `JSON 解析失败：${String(e.message).slice(0, 60)}` };
   }
   if (!doc || typeof doc !== 'object' || !MODES.includes(doc.mode)) {
-    return { unreadable: true, why: `mode 字段不是 ${MODES.join('/')} 之一（${STATE_FILE}）` };
+    return { unreadable: true, kind: 'corrupt', why: `mode 字段不是 ${MODES.join('/')} 之一，读到的是 ${JSON.stringify(doc?.mode)}` };
   }
   return doc;
 }
@@ -150,10 +158,16 @@ function driftHint(prompt, focusWhat) {
 
 function renderInjection(doc, prompt) {
   if (doc.unreadable) {
+    const head = doc.kind === 'absent'
+      ? `[态] 未知 · 状态文件不在，一个字都没读到 —— 按常态办，但这是降级不是常态。`
+      : `[态] 未知 · 状态文件读到了但用不了（内容坏了）—— 按常态办，但这是降级不是常态。`;
     return [
-      '[态] 未知 · 读不到状态文件 —— 按常态办，但这是降级不是常态。',
+      head,
+      `     文件：${STATE_FILE}`,
       `     原因：${doc.why}`,
-      '     要确认当前是不是专注/值守，调 `/dao-mode`。',
+      doc.kind === 'absent'
+        ? '     多半是没装或从没切过态。要确认当前是不是专注/值守，调 `/dao-mode`。'
+        : '     文件被写坏了。调 `/dao-mode` 重切一次态即可覆盖重写，不要手改。',
     ].join('\n');
   }
 
@@ -226,7 +240,7 @@ function cmdStatus(argv) {
     return;
   }
   if (doc.unreadable) {
-    process.stdout.write(`态：未知（读不到）\n原因：${doc.why}\n`);
+    process.stdout.write(`态：未知（${doc.kind === 'absent' ? '状态文件不在' : '状态文件坏了'}）\n文件：${STATE_FILE}\n原因：${doc.why}\n`);
     return;
   }
   process.stdout.write(`态：${MODE_CN[doc.mode]}\n` +

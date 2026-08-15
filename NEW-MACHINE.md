@@ -164,6 +164,10 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\da
 
 下次开 Claude Code 生效（当前会话里可以 `/reload-plugins`）。
 
+**这条命令必须用 PowerShell 7（`pwsh`）跑**：同一条 `New-Item -ItemType SymbolicLink` 在 Windows PowerShell 5.1
+（`powershell.exe`，双击默认打开的那个）会报 `Administrator privilege required for this operation` 而失败，pwsh 7 下正常。
+2026-08-15 实测，装机脚本里也别用 5.1 建这条链。
+
 **② 不要去改 `settings.json`**。2026-08-15 实测过三条路，结论：
 
 - **插件面（上面这条 link）生效，且完全不碰 `settings.json`** —— 装完 `enabledPlugins` 与 `hooks` 段一个字没变，新会话第一轮就拿到态文本。
