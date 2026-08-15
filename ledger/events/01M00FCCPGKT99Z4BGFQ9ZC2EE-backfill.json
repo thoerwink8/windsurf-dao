@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-14T23:48:50+08:00",
+  "machine": "backfill",
+  "seq": 4,
+  "job_id": "gh-pr-450",
+  "task_class": "回填",
+  "work_type": "判断",
+  "identity": "协调者",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-pro"
+  ],
+  "selected": "deepseek-v4-pro",
+  "why": "回填自 GitHub PR #450；点将台设计综合稿：五方盲答合成；判定行红 10 项",
+  "pr_number": 450,
+  "source": "github-backfill",
+  "event_id": "db0ca27f20bad08011c730ba70090f747d18f936902cf72a9a9a3a6de76c250b"
+}

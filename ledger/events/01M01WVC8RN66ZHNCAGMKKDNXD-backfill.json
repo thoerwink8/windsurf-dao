@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T13:03:27+08:00",
+  "machine": "backfill",
+  "seq": 36,
+  "job_id": "gh-pr-461",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #461；[pi] 派工流程试点单 A：记录运行日志；无审读",
+  "pr_number": 461,
+  "source": "github-backfill",
+  "event_id": "6b04098a1400d988aecb06fe00cc13c82006f75038d5589884c61c9581406026"
+}

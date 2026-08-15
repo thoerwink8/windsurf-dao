@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-14T23:12:38+08:00",
+  "machine": "backfill",
+  "seq": 0,
+  "job_id": "gh-pr-449",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #449；[pi] 修校准红项口径：红项统计改解析 review 正文判定行（#444）；判定行红 2 项",
+  "pr_number": 449,
+  "source": "github-backfill",
+  "event_id": "c7ee14887f022e2dbf77545fe2a421bcb7f2a93bab30913173c9ff403da207f4"
+}

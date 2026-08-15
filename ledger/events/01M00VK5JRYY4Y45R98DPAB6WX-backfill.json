@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-15T03:22:15+08:00",
+  "machine": "backfill",
+  "seq": 23,
+  "job_id": "gh-pr-457",
+  "model": "deepseek-v4-flash",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#457，红 1 项）",
+  "evidence": [
+    "github:pr-457"
+  ],
+  "pr_number": 457,
+  "source": "github-backfill",
+  "event_id": "fe8d2683c3919ac46416d019e36df4f857b42ecf84893bbb5bd196373e8d4e22"
+}

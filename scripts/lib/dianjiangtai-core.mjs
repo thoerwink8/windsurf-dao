@@ -82,6 +82,22 @@ export function isInWindows(minute, windows) {
   return windows.some(([a, b]) => minute >= a && minute < b);
 }
 
+/**
+ * 匹配 model-routing.toml [[routes]] 的分时路由。
+ * beijing 字段是 "HH:MM-HH:MM,..." 逗号列表（与 dao-check validBeijingWindows 同口径）。
+ * 命中第一条 role + 北京墙钟窗口的路由；无命中返回 null。纯函数，禁 Date.now。
+ */
+export function matchBeijingRoute(routes, workType, ts) {
+  if (!Array.isArray(routes) || routes.length === 0 || !workType) return null;
+  const minute = beijingMinutes(ts);
+  for (const r of routes) {
+    if (!r || r.role !== workType || !r.beijing) continue;
+    const windows = String(r.beijing).split(',').map(s => parseWindow(s.trim()));
+    if (isInWindows(minute, windows)) return r;
+  }
+  return null;
+}
+
 /** 全序排序键 (ts, machine, seq, event_id) 字典序（设计 A.2） */
 export function EVENT_ORDER_KEY(a, b) {
   const ka = [a.ts, a.machine, a.seq ?? 0, a.event_id ?? ''].join('\u0000');
@@ -404,12 +420,14 @@ export function checkGates({ model, identity, workType, bans, taskTokens, availa
  * @param {object} [args.availability] 模型 → 空闲/忙/离线
  * @param {object} [args.usageByModel] F17 套餐用量：modelId → { days_to_reset, utilization }
  * @param {string|null} [args.policyHash] 政策内容哈希（决策票可复算依据）
+ * @param {object[]} [args.routes] model-routing.toml [[routes]]（分时路由，参与 A 推荐）
  */
 export function select({
   ts, jobId, identity, workType,
   taskTokens = null, risk = '低', reversible = true,
   events = [], models = [], bans = [], weights = {},
   availability = {}, usageByModel = {}, policyHash = null,
+  routes = [],
 }) {
   if (!IDENTITIES.includes(identity)) {
     throw new Error(`未知身份「${identity}」（允许 ${IDENTITIES.join('/')}）`);
@@ -503,11 +521,28 @@ export function select({
           || hashOf(`${jobId}|${a.model}`).localeCompare(hashOf(`${jobId}|${b.model}`)))
     : [];
   const quotaTop = quota[0] || null;
-  const defaultPick = quotaTop || byScore[0] || null;
+  // 分时路由（docs/model-routing.toml [[routes]]）优先于配额覆盖与最高分：
+  // 峰时写码必须出 grok-4.6 而非 ds-flash（2026-08-15 拍板，人肉两次违例后改机制）。
+  // 路由模型被门闩剔除 → fallback；两者都过不了门闩才退回配额/最高分。
+  const matchedRoute = matchBeijingRoute(routes, workType, ts);
+  const routedPick = matchedRoute
+    ? (passers.find(d => d.model === matchedRoute.model)
+      || passers.find(d => d.model === matchedRoute.fallback)
+      || null)
+    : null;
+  const defaultPick = routedPick || quotaTop || byScore[0] || null;
+  const choiceReason = routedPick
+    ? (routedPick.model === matchedRoute.model ? 'route_beijing' : 'route_fallback')
+    : quotaTop ? 'quota_explore'
+    : defaultPick ? 'highest_score'
+    : 'no_candidate';
 
   const choice = {
     model: defaultPick ? defaultPick.model : null,
-    reason: quotaTop ? 'quota_explore' : defaultPick ? 'highest_score' : 'no_candidate',
+    reason: choiceReason,
+    route: matchedRoute
+      ? { role: matchedRoute.role, beijing: matchedRoute.beijing, model: matchedRoute.model, fallback: matchedRoute.fallback }
+      : null,
   };
 
   // 三选项（C.4）：A 默认推荐 / B 自选 / C 尝鲜
@@ -548,6 +583,7 @@ export function select({
     task_tokens: taskTokens, risk, reversible, availability,
     policy_hash: policyHash,
     events_hash: hashOf(cutoffEvents),
+    routes_hash: routes.length ? hashOf(routes) : null,
     models: Object.fromEntries(Object.keys(details).sort().map(id => {
       const d = details[id];
       return [id, {
