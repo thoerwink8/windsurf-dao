@@ -19,8 +19,10 @@ export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
 
 export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
 export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
-/** 探针等屏默认值。TUI 要把 send 当用户消息再跑命令，grok 8s 不够（#499 实测）。 */
-export const DEFAULT_PROBE_WAIT_MS = 8000;
+/** 探针等屏默认值。一个所有已知情况都不成立的缺省值是陷阱：
+ * grok 配 45s、codex 第一项实测 84s，没有任何 TUI 能在 8s 内跑完第一项。
+ * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。 */
+export const DEFAULT_PROBE_WAIT_MS = 120000;
 
 export function probeWaitMs(routing, provider) {
   const raw = routing?.providers?.[provider]?.probe_wait_ms;

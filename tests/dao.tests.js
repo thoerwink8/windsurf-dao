@@ -347,10 +347,11 @@ async function main() {
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('探针等待从表读，不写死 45000', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
+    check('探针等待从表读，不写死毫秒数', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc) && !/120000/.test(daoSrc));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
-    check('没配的 provider 回落 8s', S.probeWaitMs(routing, 'gpt') === S.DEFAULT_PROBE_WAIT_MS);
-    check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 8000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 8000);
+    check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
+    check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
+    check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 120000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 120000);
     check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
