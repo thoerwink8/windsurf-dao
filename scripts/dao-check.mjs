@@ -23,7 +23,8 @@
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
 // ⑧ extract* 解析外部 JSON 必须有真语料存档（#499）
-// ⑨ 主帅标题核对样本（一致 / 过期 各至少一份，#495）
+// ⑨ 主帅标题核对样本（一致 / 过期 各至少一份）
+// ⑩ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -484,6 +485,58 @@ function checkMasterTitleSamples() {
   green(`主帅标题样本 ${files.length} 份（一致 ${kinds.ok} / 过期 ${kinds.stale}）`);
 }
 
+// ── ⑩ 派工卡 comment 必须有定界区 ──────────────────────────────────
+// 检查器自己抽 ｜[#N]，不调用 master-title.mjs。
+// 零样本：目录不在 / 一个样本都没有 / 只有 ok 没有 missing（或反过来）→ 没查成。
+
+function checkCardCommentSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'card-comment');
+  if (!existsSync(dir)) {
+    fail('派工卡 comment 样本目录不在', '本次没查成：恢复 tests/fixtures/card-comment/', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+  if (files.length === 0) {
+    fail('派工卡 comment 一套样本都没扫到', '目录空了 ⇒ 本次等于没查', dir);
+    return;
+  }
+  const kinds = { ok: 0, missing: 0 };
+  const problems = [];
+  for (const f of files) {
+    let doc;
+    try { doc = JSON.parse(readFileSync(join(dir, f), 'utf8')); }
+    catch (e) { problems.push(`${f} 不是 JSON`); continue; }
+    if (!doc || !('comment' in doc) || !('expectedTickets' in doc) || !doc.expect) {
+      problems.push(`${f} 缺 comment/expectedTickets/expect`);
+      continue;
+    }
+    const parsed = zoneTicketsIndependent(doc.comment);
+    const expected = (doc.expectedTickets || []).map(x => `#${String(x).replace(/^#/, '')}`);
+    const missing = expected.filter(t => !parsed.tickets.includes(t));
+    if (doc.expect === 'ok') {
+      kinds.ok++;
+      if (!parsed.hasZone) problems.push(`${f} 自称有区但抽不到 ｜[#N]`);
+      else if (missing.length) problems.push(`${f} 自称齐全但缺 ${missing.join(' ')}`);
+    } else if (doc.expect === 'missing') {
+      kinds.missing++;
+      if (parsed.hasZone && missing.length === 0) {
+        problems.push(`${f} 自称缺区但定界区与期望一致（样本没判别力）`);
+      }
+    } else {
+      problems.push(`${f} expect 只能是 ok|missing`);
+    }
+  }
+  if (kinds.ok === 0 || kinds.missing === 0) {
+    fail('派工卡 comment 样本种类不够', '至少各要一份有区（expect:ok）和一份缺区（expect:missing），缺一种 = 没查成', `ok=${kinds.ok} missing=${kinds.missing}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`派工卡 comment 样本对不上 ${problems.length} 处`, '样本的 expect 必须和定界区 vs expectedTickets 的独立核对一致', problems.join(' '));
+    return;
+  }
+  green(`派工卡 comment 样本 ${files.length} 份（有区 ${kinds.ok} / 缺区 ${kinds.missing}）`);
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -493,6 +546,7 @@ checkMemoryIndex();
 await checkCommandHelp();
 checkExtractFixtures();
 checkMasterTitleSamples();
+checkCardCommentSamples();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

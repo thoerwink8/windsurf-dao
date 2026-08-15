@@ -43,6 +43,7 @@ import {
   terminalProbeExec,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
+import { afterDispatchComment } from './lib/master-title.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -288,12 +289,19 @@ function cmdDispatch(args) {
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
+  const comment = afterDispatchComment({
+    name: args.name,
+    worktreeId: created.workerId,
+    runOrca: orca,
+  });
+
   emit({
     ok: true,
     ...plan,
     ...created,
     taskId,
     probes: { worker: workerProbes, reviewer: revProbes },
+    comment,
   });
 }
 

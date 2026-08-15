@@ -1,4 +1,4 @@
-// 主帅终端标题：定界区加删 + 身份判据 + 缺失 handle 策略（#495）
+// 任务卡 comment 定界区：加删只动区、写完回读、缺区报警（#495）
 
 const fs = require('fs');
 const path = require('path');
@@ -19,26 +19,26 @@ async function main() {
   const T = await import('file://' + LIB.replace(/\\/g, '/'));
   const F = await import('file://' + FIX.replace(/\\/g, '/'));
 
-  console.log('\n=== 定界区加删：不碰标题其余部分 ===');
+  console.log('\n=== 定界区加删：不碰叙述其余部分 ===');
   {
-    const base = '创建专注模式skill功能';
+    const base = 'merge-policy:manual · model:grok-4.6';
     const added = T.addTicket(base, '#499');
-    check('无区标题追加定界区', added === '创建专注模式skill功能｜[#499]', added);
+    check('无区 comment 追加定界区', added === 'merge-policy:manual · model:grok-4.6｜[#499]', added);
     const added2 = T.addTicket(added, 495);
-    check('再加一个单号', added2 === '创建专注模式skill功能｜[#499 #495]', added2);
+    check('再加一个单号', added2 === 'merge-policy:manual · model:grok-4.6｜[#499 #495]', added2);
     const dup = T.addTicket(added2, '#499');
     check('重复加不复制', dup === added2, dup);
     const removed = T.removeTicket(added2, '#499');
-    check('删一个，前缀完好', removed === '创建专注模式skill功能｜[#495]', removed);
+    check('删一个，叙述完好', removed === 'merge-policy:manual · model:grok-4.6｜[#495]', removed);
     const cleared = T.removeTicket(removed, '#495');
-    check('删光后区消失、前缀还在', cleared === base, cleared);
+    check('删光后区消失、叙述还在', cleared === base, cleared);
 
-    const messy = '修#499的派工和 #495 遗留';
-    check('前缀里的 #N 不是单号区', T.parseTicketZone(messy).hasZone === false);
-    check('删前缀里的 #N 不动标题', T.removeTicket(messy, '#499') === messy);
+    const messy = '正在修#499的派工和 #495 遗留';
+    check('叙述里的 #N 不是单号区', T.parseTicketZone(messy).hasZone === false);
+    check('删叙述里的 #N 不动 comment', T.removeTicket(messy, '#499') === messy);
     const zoned = T.addTicket(messy, '#480');
-    check('有前缀井号时只在末尾开新区', zoned === '修#499的派工和 #495 遗留｜[#480]', zoned);
-    check('删区里的号不影响前缀井号', T.removeTicket(zoned, '#480') === messy);
+    check('有叙述井号时只在末尾开新区', zoned === '正在修#499的派工和 #495 遗留｜[#480]', zoned);
+    check('删区里的号不影响叙述井号', T.removeTicket(zoned, '#480') === messy);
   }
 
   console.log('\n=== 派工名抽单号 ===');
@@ -47,135 +47,88 @@ async function main() {
     check('没有井号就不猜数字', T.ticketsFromName('499-495-派工通道').length === 0);
   }
 
-  console.log('\n=== 兜底核对：过期报警 / 一致不报 / 没查成分开 ===');
+  console.log('\n=== 派工卡 comment 必须有定界区 ===');
   {
-    const stale = T.auditTitleTickets({ title: '帅·B｜[#999 #495]', openIds: ['#495'] });
-    check('标题有已关 #999 → 报警', stale.ok === false && stale.stale.includes('#999') && stale.unscanned === false, JSON.stringify(stale));
-    const match = T.auditTitleTickets({ title: '帅·A｜[#499 #495]', openIds: ['#499', '#495'] });
-    check('一致 → 不报警', match.ok === true && match.stale.length === 0 && match.unscanned === false, JSON.stringify(match));
-    const emptyZone = T.auditTitleTickets({ title: '随便一句闲聊', openIds: ['#499'] });
-    check('无单号区 = 扫完 0 条（不是没查成）', emptyZone.ok === true && emptyZone.scanned === 0 && emptyZone.unscanned === false, JSON.stringify(emptyZone));
-    const noOpen = T.auditTitleTickets({ title: '帅·A｜[#499]' });
-    check('没给 openIds = 没查成', noOpen.unscanned === true && noOpen.ok === false, JSON.stringify(noOpen));
+    const missing = T.auditDispatchComment({
+      comment: 'merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol',
+      expectedTickets: ['#499'],
+    });
+    check('故意无区 → 报警', missing.ok === false && missing.unscanned === false && missing.reason && /缺单号定界区/.test(missing.reason), JSON.stringify(missing));
+
+    const ok = T.auditDispatchComment({
+      comment: 'merge-policy:manual · model:grok-4.6｜[#499 #495]',
+      expectedTickets: ['#499', '#495'],
+    });
+    check('有区且含期望单号 → 不报', ok.ok === true && ok.unscanned === false, JSON.stringify(ok));
+
+    const noSample = T.auditDispatchComment({ comment: 'x' });
+    check('没给 expectedTickets = 没查成', noSample.unscanned === true && noSample.ok === false, JSON.stringify(noSample));
+
+    const noneExpected = T.auditDispatchComment({ comment: '闲聊', expectedTickets: [] });
+    check('没有期望单号 = 扫完 0 条（不是没查成）', noneExpected.ok === true && noneExpected.scanned === 0 && noneExpected.unscanned === false, JSON.stringify(noneExpected));
   }
 
-  console.log('\n=== 身份：正识别主工作树，不把不认识当主帅 ===');
-  {
-    const master = T.titleUpdatePolicy({
-      env: { ORCA_TERMINAL_HANDLE: 'term_A' },
-      worktree: { isMainWorktree: true },
-    });
-    check('主工作树+handle → 更新自己', master.action === 'update' && master.handle === 'term_A', JSON.stringify(master));
-
-    const worker = T.titleUpdatePolicy({
-      env: { ORCA_TERMINAL_HANDLE: 'term_worker' },
-      worktree: { isMainWorktree: false },
-    });
-    check('工人树不改标题', worker.action === 'skip', JSON.stringify(worker));
-
-    const reviewer = T.titleUpdatePolicy({
-      env: { ORCA_TERMINAL_HANDLE: 'term_rev', CI: 'true' },
-      worktree: { isMainWorktree: false },
-    });
-    check('审官树也不改', reviewer.action === 'skip', JSON.stringify(reviewer));
-
-    const unknown = T.titleUpdatePolicy({
-      env: { ORCA_TERMINAL_HANDLE: 'term_A' },
-      worktree: null,
-    });
-    check('认不出是不是主树 → 报警不改（不是当成主帅）', unknown.action === 'warn', JSON.stringify(unknown));
-  }
-
-  console.log('\n=== ORCA_TERMINAL_HANDLE 缺失：CI 跳过 / 本机报警 ===');
-  {
-    const ci = T.titleUpdatePolicy({ env: { CI: 'true' }, worktree: { isMainWorktree: true } });
-    check('CI 无 handle → skip', ci.action === 'skip', JSON.stringify(ci));
-    const local = T.titleUpdatePolicy({ env: {}, worktree: { isMainWorktree: true } });
-    check('本机无 handle → warn', local.action === 'warn', JSON.stringify(local));
-  }
-
-  console.log('\n=== 两位主帅：A 派单只改 A 的 handle ===');
+  console.log('\n=== 写 comment：只动定界区 + 回读 ===');
   {
     const calls = [];
-    const titles = { term_A: '帅·A', term_B: '帅·B' };
+    let comment = 'merge-policy:manual · 人写的进度';
     const runOrca = (args) => {
-      calls.push(args);
-      if (args[0] === 'worktree' && args[1] === 'show') {
-        return { ok: true, json: { result: { worktree: { isMainWorktree: true } } } };
+      calls.push(args.slice());
+      if (args[1] === 'show') {
+        return { ok: true, json: { result: { worktree: { comment } } } };
       }
-      if (args[0] === 'terminal' && args[1] === 'list') {
-        return {
-          ok: true,
-          json: {
-            result: {
-              terminals: Object.entries(titles).map(([handle, title]) => ({ handle, title })),
-            },
-          },
-        };
-      }
-      if (args[0] === 'terminal' && args[1] === 'rename') {
-        const h = args[args.indexOf('--terminal') + 1];
-        const title = args[args.indexOf('--title') + 1];
-        titles[h] = title;
+      if (args[1] === 'set') {
+        comment = args[args.indexOf('--comment') + 1];
         return { ok: true, json: { ok: true } };
       }
       return { ok: false, error: `unexpected ${args.join(' ')}` };
     };
-    const r = T.afterDispatchSuccess({
-      name: '#499 - 修通道',
-      env: { ORCA_TERMINAL_HANDLE: 'term_A', ORCA_WORKTREE_ID: 'wt_master' },
+    const r = T.afterDispatchComment({
+      name: '#499+#495 - 修通道',
+      worktreeId: 'wt_task',
       runOrca,
     });
-    const renames = calls.filter(a => a[1] === 'rename');
-    check('派工成功会改标题（回读对得上才算）', r.ok === true && r.action === 'updated' && r.title === '帅·A｜[#499]', JSON.stringify(r));
-    check('rename 只打 A 的 handle', renames.length === 1 && renames[0].includes('term_A'), JSON.stringify(renames));
-    check('没有 rename 打到 B', renames.every(a => !a.includes('term_B')));
+    const sets = calls.filter(a => a[1] === 'set');
+    check('派工成功会写任务卡 comment', r.ok === true && r.action === 'updated', JSON.stringify(r));
+    check('定界区含两个单号、叙述还在', r.comment === 'merge-policy:manual · 人写的进度｜[#499 #495]', r.comment);
+    check('set 打的是这张任务卡', sets.length === 1 && sets[0].includes('wt_task'), JSON.stringify(sets));
+    check('写完回读用了 show', calls.filter(a => a[1] === 'show').length >= 2);
 
-    const titles2 = { term_A: '帅·A｜[#499 #495]' };
     const rm = T.applyRemoveTicket({
       id: '#499',
-      env: { ORCA_TERMINAL_HANDLE: 'term_A', ORCA_WORKTREE_ID: 'wt_master' },
-      runOrca: (args) => {
-        if (args[0] === 'worktree') return { ok: true, json: { result: { worktree: { isMainWorktree: true } } } };
-        if (args[1] === 'list') {
-          return { ok: true, json: { result: { terminals: [{ handle: 'term_A', title: titles2.term_A }] } } };
-        }
-        if (args[1] === 'rename') {
-          titles2.term_A = args[args.indexOf('--title') + 1];
-          return { ok: true, json: { ok: true } };
-        }
-        return { ok: false, error: 'nope' };
-      },
+      worktreeId: 'wt_task',
+      runOrca,
     });
-    check('删除入口去掉该号、其余还在', rm.ok && rm.title === '帅·A｜[#495]', JSON.stringify(rm));
+    check('删除入口去掉该号、叙述还在', rm.ok && rm.comment === 'merge-policy:manual · 人写的进度｜[#495]', rm.comment);
 
-    const lie = T.afterDispatchSuccess({
+    const lie = T.afterDispatchComment({
       name: '#499 - 修通道',
-      env: { ORCA_TERMINAL_HANDLE: 'term_A', ORCA_WORKTREE_ID: 'wt_master' },
+      worktreeId: 'wt_task',
       runOrca: (args) => {
-        if (args[1] === 'show') return { ok: true, json: { result: { worktree: { isMainWorktree: true } } } };
-        if (args[1] === 'list') return { ok: true, json: { result: { terminals: [{ handle: 'term_A', title: '⠋ Grok' }] } } };
-        if (args[1] === 'rename') return { ok: true, json: { result: { rename: { title: '帅·A｜[#499]' } } } };
+        if (args[1] === 'show') return { ok: true, json: { result: { worktree: { comment: '人写的进度' } } } };
+        if (args[1] === 'set') return { ok: true, json: { ok: true } };
         return { ok: false, error: 'nope' };
       },
     });
-    check('rename ok 但回读仍是 agent 标题 → 投递成功≠送达', lie.ok === false && lie.action === 'warn' && /投递成功≠送达/.test(lie.reason), JSON.stringify(lie));
+    check('set ok 但回读没变 → 投递成功≠送达', lie.ok === false && lie.action === 'warn' && /投递成功≠送达/.test(lie.reason), JSON.stringify(lie));
   }
 
-  console.log('\n=== 工人树上 afterDispatch 不 rename ===');
+  console.log('\n=== 没单号 / 没树 不瞎写 ===');
   {
-    let renamed = false;
-    const r = T.afterDispatchSuccess({
-      name: '#499 - 探针',
-      env: { ORCA_TERMINAL_HANDLE: 'term_worker', ORCA_WORKTREE_ID: 'wt_child' },
+    let setCalled = false;
+    const skip = T.afterDispatchComment({
+      name: '通道探针',
+      worktreeId: 'wt_task',
       runOrca: (args) => {
-        if (args[1] === 'show') return { ok: true, json: { result: { worktree: { isMainWorktree: false } } } };
-        if (args[1] === 'rename') { renamed = true; return { ok: true, json: { ok: true } }; }
-        return { ok: false, error: 'should not reach' };
+        if (args[1] === 'set') setCalled = true;
+        return { ok: true, json: {} };
       },
     });
-    check('工人树 skip', r.action === 'skip', JSON.stringify(r));
-    check('工人树没有 rename', renamed === false);
+    check('名里没有 #单号 → skip', skip.action === 'skip', JSON.stringify(skip));
+    check('没单号不 set', setCalled === false);
+
+    const noId = T.afterDispatchComment({ name: '#499 - x', runOrca: () => ({ ok: true }) });
+    check('没 worktreeId → 报警不写', noId.ok === false && /worktreeId/.test(noId.reason), JSON.stringify(noId));
   }
 
   console.log('\n=== 真语料规矩：缺存档必须被拦 ===');
