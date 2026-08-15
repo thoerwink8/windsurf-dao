@@ -1,0 +1,22 @@
+[
+  {
+    "number": 3004,
+    "title": "[pi] files 被截断成 100（changedFiles=150）",
+    "isDraft": true,
+    "state": "OPEN",
+    "createdAt": "2026-08-15T06:00:00Z",
+    "updatedAt": "2026-08-15T06:00:00Z",
+    "mergedAt": null,
+    "headRefName": "thoerwink8/files-truncated",
+    "labels": [
+      {
+        "name": "type/写码"
+      },
+      {
+        "name": "model/deepseek-v4-flash"
+      }
+    ],
+    "changedFiles": 150,
+    "body": "## 目标\n负控：清单只拿到 100，真实 150，必须报没查成。"
+  }
+]

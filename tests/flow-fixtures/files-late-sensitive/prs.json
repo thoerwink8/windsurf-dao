@@ -1,0 +1,22 @@
+[
+  {
+    "number": 3005,
+    "title": "[pi] files 第 150 位才是敏感路径（截断窗口外）",
+    "isDraft": true,
+    "state": "OPEN",
+    "createdAt": "2026-08-15T06:00:00Z",
+    "updatedAt": "2026-08-15T06:00:00Z",
+    "mergedAt": null,
+    "headRefName": "thoerwink8/files-late-sensitive",
+    "labels": [
+      {
+        "name": "type/写码"
+      },
+      {
+        "name": "model/deepseek-v4-flash"
+      }
+    ],
+    "changedFiles": 150,
+    "body": "## 目标\n负控：敏感文件排在第 150 位，正文无声明段。"
+  }
+]

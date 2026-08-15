@@ -14,7 +14,9 @@
 //   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
 //   ③ PR MERGED 状态
 //   ④ 敏感路径越权报警（2026-08-15 新增）：PR diff 触碰 docs/global-CLAUDE.md、根 CLAUDE.md、
-//      host/skills/、scripts/dao-check.mjs 且正文未声明 → 报警行（此前越权完全无自动检测）
+//      host/skills/、scripts/dao-check.mjs 且正文「本 PR 触碰敏感路径声明」段未肯定列出 → 报警行
+//      （关键词散落 / 否定句「未触碰 X」都不算声明；取 files 必须分页且与 changedFiles 对账，
+//      取不全走 NO_TARGETS「没查成」，禁止把截断清单当成扫完）
 //
 // 决策规则（②）：
 //   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
@@ -67,7 +69,8 @@
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
 //   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
-//   pr-<N>-files.json（可选，敏感路径报警用；数组元素可为路径字符串或 {path}）
+//   pr-<N>-files.json（可选，敏感路径报警用；数组元素可为路径字符串或 {path}/{filename}）
+//   prs.json / pr-<N>.json 的 changedFiles（可选）：有则与 files 条数对账，少了算没查成
 //   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
 
 import { spawnSync } from 'node:child_process';
@@ -92,15 +95,41 @@ const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 // ── 敏感路径越权报警（fusion-verdict 2026-08-15）──────────────────────
 // PR diff 触碰这些路径但正文未声明 → 报警行（此前越权完全无自动检测）。
-// 声明口径：正文出现该规则的指名串（如 host/skills）即视为已声明，
-// 指名串覆盖该规则下全部命中文件。每轮重算——违规持续则每轮报警。
+// 声明口径（第三轮红 2）：只认正文「本 PR 触碰敏感路径声明」段里的肯定行；
+// 段外关键词、否定句（未触碰/不涉及/未改…）都不算声明。指名串覆盖该规则下
+// 全部命中文件。每轮重算——违规持续则每轮报警。
+const DECLARE_HEADING = /触碰敏感路径声明/;
+const DECLARE_NEGATION = /未触碰|不涉及|没有改|未改|未动|不改|未声明/;
+
+function declaredSection(body) {
+  const lines = String(body || '').split(/\r?\n/);
+  const start = lines.findIndex(l => /^#{1,3}\s/.test(l) && DECLARE_HEADING.test(l));
+  if (start < 0) return '';
+  const out = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^#{1,3}\s/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+function isAffirmativeDeclaration(body, needle) {
+  const section = declaredSection(body);
+  if (!section) return false;
+  for (const line of section.split('\n')) {
+    if (DECLARE_NEGATION.test(line)) continue;
+    if (needle.test(line)) return true;
+  }
+  return false;
+}
+
 const SENSITIVE_RULES = [
   // 根 CLAUDE.md：声明正则必须不被 docs/global-CLAUDE.md 子串满足（审读红 2：
   // 正文只提 global-CLAUDE.md ≠ 声明了根 CLAUDE.md）——(?<!global-) 负向环视挡掉
-  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => /(?<!global-)CLAUDE\.md/.test(b) },
-  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => /global-CLAUDE/.test(b) },
-  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => /host\/skills/.test(b) },
-  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => /dao-check/.test(b) },
+  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => isAffirmativeDeclaration(b, /(?<!global-)CLAUDE\.md/) },
+  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => isAffirmativeDeclaration(b, /global-CLAUDE/) },
+  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => isAffirmativeDeclaration(b, /host\/skills/) },
+  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => isAffirmativeDeclaration(b, /dao-check/) },
 ];
 
 // 返回未声明命中的规则列表 [{ rule, files }]；全部已声明或未触碰 → []。
@@ -112,6 +141,20 @@ function sensitiveEscalations(pr, filePaths) {
     if (touched.length > 0 && !r.declared(body)) out.push({ rule: r.name, files: touched });
   }
   return out;
+}
+
+// files 条数必须能跟 changedFiles 对上；对不上 = 没查全，不能当扫完。
+// changedFiles 缺数字时：live 必须报红；快照旧夹具没这个字段则跳过对账。
+function reconcileFileList(files, changedFiles, { requireCount = true } = {}) {
+  if (changedFiles == null || !Number.isFinite(Number(changedFiles))) {
+    if (requireCount) return { ok: false, error: 'files 取数无法核对 changedFiles（缺数字）' };
+    return { ok: true, files };
+  }
+  const n = Number(changedFiles);
+  if (files.length < n) {
+    return { ok: false, error: `files 取数被截断（拿到 ${files.length}，changedFiles=${n}）` };
+  }
+  return { ok: true, files };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -535,9 +578,16 @@ function makeLiveSource(repo) {
       return { ok: true, pr: r.json };
     },
     getComments(number) {
-      const r = runGh(['pr', 'view', String(number), '--json', 'comments']);
+      // 与 getReviews 同口径：gh pr view --json comments 硬截断 100。
+      // 走 issue comments REST + --paginate；字段映射成 createdAt（完工信号用）。
+      const r = runGh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
-      return { ok: true, comments: r.json.comments || [] };
+      const comments = (Array.isArray(r.json) ? r.json : []).map(c => ({
+        id: c.id,
+        body: c.body || '',
+        createdAt: c.created_at || c.createdAt || '',
+      }));
+      return { ok: true, comments };
     },
     getReviews(number) {
       // 红 1（复核）：gh pr view 的 review id 是 GraphQL node id（PRR_...），拼不出真锚点——
@@ -555,11 +605,16 @@ function makeLiveSource(repo) {
       return { ok: true, reviews };
     },
     getPrFiles(number) {
-      // 敏感路径越权报警（fusion-verdict 2026-08-15）：取 diff 触碰的文件列表
-      const r = runGh(['pr', 'view', String(number), '--json', 'files']);
-      if (!r.ok) return { ok: false, error: r.error };
-      const files = (r.json.files || []).map(f => f.path).filter(Boolean);
-      return { ok: true, files };
+      // 第三轮红 1：gh pr view --json files 硬截断 100（#459=113、#429=237 实测只回 100）。
+      // 改走 pulls/.../files --paginate（不带 --jq，同 getReviews），取 .filename；
+      // 再跟 changed_files 对账，少了就 ok:false 走「没查成」，禁止静默当扫完。
+      const filesR = runGh(['api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate']);
+      if (!filesR.ok) return { ok: false, error: filesR.error };
+      const raw = Array.isArray(filesR.json) ? filesR.json : [];
+      const files = raw.map(f => f && (f.filename || f.path)).filter(Boolean);
+      const meta = runGh(['api', `repos/${repo}/pulls/${number}`, '--jq', '.changed_files']);
+      if (!meta.ok) return { ok: false, error: `files 取数无法核对 changedFiles：${meta.error}` };
+      return reconcileFileList(files, meta.json, { requireCount: true });
     },
     orcaWorktrees() {
       const r = runOrca(['worktree', 'list', '--json']);
@@ -591,6 +646,23 @@ function loadSnapshotRounds(dir) {
     .sort((a, b) => Number(a.slice(6)) - Number(b.slice(6)));
   const dirs = roundSubs.length > 0 ? roundSubs.map(d => join(dir, d)) : [dir];
   return { ok: true, dirs };
+}
+
+function snapshotChangedFiles(roundDir, number) {
+  const fromPr = readJson(join(roundDir, `pr-${number}.json`));
+  if (fromPr.ok && fromPr.json) {
+    const n = fromPr.json.changedFiles ?? fromPr.json.changed_files;
+    if (Number.isFinite(Number(n))) return Number(n);
+  }
+  const list = readJson(join(roundDir, 'prs.json'));
+  if (list.ok && Array.isArray(list.json)) {
+    const pr = list.json.find(p => p && p.number === number);
+    if (pr) {
+      const n = pr.changedFiles ?? pr.changed_files;
+      if (Number.isFinite(Number(n))) return Number(n);
+    }
+  }
+  return null;
 }
 
 function makeSnapshotSource(roundDir, repo) {
@@ -625,11 +697,12 @@ function makeSnapshotSource(roundDir, repo) {
       };
     },
     getPrFiles(number) {
-      // 可选文件：数组元素可为路径字符串或 {path}（live 形态镜像）
+      // 可选文件：数组元素可为路径字符串或 {path}/{filename}（live 形态镜像）
       const r = readJson(join(roundDir, `pr-${number}-files.json`));
-      if (!r.ok) return { ok: true, files: [] };
-      const raw = Array.isArray(r.json) ? r.json : [];
-      return { ok: true, files: raw.map(f => (typeof f === 'string' ? f : f && f.path)).filter(Boolean) };
+      const raw = r.ok && Array.isArray(r.json) ? r.json : [];
+      const files = raw.map(f => (typeof f === 'string' ? f : f && (f.filename || f.path))).filter(Boolean);
+      const changed = snapshotChangedFiles(roundDir, number);
+      return reconcileFileList(files, changed, { requireCount: false });
     },
     orcaWorktrees() {
       const r = readJson(join(roundDir, 'orca-worktrees.json'));
@@ -947,7 +1020,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations, reconcileFileList, declaredSection };
 
 let args = null;
 let anyEmitted = false;
