@@ -677,7 +677,9 @@ function gitIsAncestor(commit, head, args) {
   const probe = (c, h) => runCmd('git', ['merge-base', '--is-ancestor', c, h]);
   let r = probe(commit, head);
   if (!r.ok && /fatal|unknown revision|not a valid/i.test(r.error)) {
-    runCmd('git', ['fetch', 'origin', commit]); // 对象缺失：fetch 一次再判
+    // 对象不在本地（CI 浅 clone 只取 HEAD / 新 clone / rebase 后被 gc）→ 两个对象都 fetch 一次再判。
+    // 只 fetch review commit 不够：浅仓连 headRefOid 对象也没有，probe 仍会 fatal。
+    runCmd('git', ['fetch', 'origin', commit, head]);
     r = probe(commit, head);
     if (!r.ok && /fatal|unknown revision|not a valid/i.test(r.error)) return { ancestor: null, count: null };
   }
