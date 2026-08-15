@@ -41,14 +41,26 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `fingerprint/` | read 底部窗口写入**已退役宽指纹**（`Error:`/`terminated`/`Connection error`，故意不含保留指纹 `Retry failed`/`Reconnecting 5/5`——否则两连同会命中保留项，退不退役分不出） | 两轮同屏退出码 0，无 `fingerprint:`（两连同也不报）；判别力自检：把退役指纹加回清单必须变红 |
 | `wide-fp-deleted/` | 基于 live/，底部窗口写入 `Error: ...` 与 `Connection error: ...`（退役宽指纹） | 两轮同屏退出码 0，不报 fingerprint |
 | `waiting/` | ps `state` 改 `"waiting"` | 退出码 1，`waiting:` |
-| `hash-stable/` | 真实干净屏面三轮同屏（updatedAt/incarnation 冻结，无 cursor 字段） | 第 3 轮退出码 1，`hash-stable:`（无 cursor 时回退哈希判据） |
-| `hash-stable-activity/` | 同屏四轮，updatedAt 第 2 轮推进一次 | 第 4 轮才报（新序列第 3 个同屏轮） |
+| `hash-stable/` | 真实干净屏面三轮同屏（updatedAt/incarnation 冻结，无 cursor 字段） | 第 3 轮退出码 1，`stall:`（非 spinner 内容三轮不变） |
+| `hash-stable-activity/` | 同屏四轮，updatedAt 第 2 轮推进一次——**#500 判别力：ps updatedAt 前进不算活性**（转圈挂死时 ps 也可能在动） | 第 3 轮报（第 2 轮必须 OK；判别力：把 updatedAt 接回 epoch 会第 4 轮才报 → 断言变红） |
 | `hash-stable-restart/` | 同屏五轮、第 3 轮 incarnationId 变（同 pane 重启、屏面不变）——重启轮重新起算 | 第 5 轮才报（第 3/4 轮必须 OK；判别力：epoch 去 incarnation 会第 3 轮就报） |
 | `hash-stable-screenchange/` | 屏面 X,X,Y,Y | 永不报，退出码 0 |
-| `cursor-stall/` | 基于 hash-stable/，三轮 read 注入静态 cursor（4000,4000,4000）——**主判据** | 第 3 轮退出码 1，`cursor-stalled:` |
-| `cursor-advance/` | 基于 hash-stable/，三轮 read 注入前进 cursor（4000,4100,4200） | 永不报，退出码 0 |
-| `veto/` | 基于 live/ 两轮，底部窗口写入 at capacity 指纹，cursor 前进（3000→3400）——**活证否决** | 退出码 0，第 2 轮 `观察:`（不唤醒），无 fingerprint |
-| `veto-stall/` | 基于 live/ 两轮，底部窗口写入 at capacity 指纹，cursor 静止（3000,3000） | 第 2 轮退出码 1，`fingerprint:`（两连同 + 无活证 → 报警） |
+| `spinner-hang/` | **#500 判别性实验：转圈假工人**——三轮真实内容完全不动，spinner 帧轮换（⠸→⠼→⠴）+ cursor 前进 + ps updatedAt 前进 | 第 3 轮退出码 1，`stall:`（旧判据 cursor/哈希/updatedAt 全放行=瞎）；判别力：改坏 spinner 剔除 → 永不报 → 断言变红 |
+| `real-advance/` | 健康工人负对照：真实内容逐轮变化 + spinner 也在转 | 永不报，退出码 0 |
+| `idle/` | 空转：ps working + git-evidence 显示 30 分钟无 git 活动（#471） | 首轮退出码 1，`idle:` 带分钟数 |
+| `idle-fresh/` | 5 分钟内有 git 活动 | 退出码 0，不报 idle |
+| `orphan-closed/` | 真孤儿：无活跃执行者（终端已关）+ 关联 issue 已关 | 退出码 1，`orphan:` 带判断依据（#492 关条件 4） |
+| `orphan-open/` | 关联单还开着（#492 v3：任一开着就不算孤儿） | 不报 orphan |
+| `orphan-active/` | 另一位主帅的活跃工位（working agent + 合规名） | 退出码 0，不报 orphan（#492 关条件 3） |
+| `orphan-noassoc-stale/` | 无关联 + 静置超 60 分钟 | 退出码 1，`orphan:` 带静置分钟数 |
+| `orphan-noassoc-fresh/` | 无关联 + 静置 5 分钟（未超阈值） | 不报 orphan（命名不合规另报 naming） |
+| `naming-bad/` | 卡名 `审官·GPT`（另一主帅的卡，终端在跑） | 退出码 1，`naming:`；不报 orphan（活跃执行者判据优先） |
+| `heartbeat-stale/` | flow 心跳 ts 10 分钟未更新（#497 契约） | 退出码 1，`flow-stalled:` |
+| `heartbeat-pending/` | 心跳新鲜但 PR state=approved 停留 40 分钟 | 退出码 1，`stagnation:`（该发生而没发生） |
+| `heartbeat-fresh/` | 心跳新鲜 + 无停滞 PR | 不报；心跳缺失样本（如 live/）显形 HEARTBEAT_MISSING |
+| `fp-loss/` | at capacity 指纹连续 5 轮 | 第 2 轮 fingerprint + 动作行，第 5 轮 `报帅:`（#471 连败阈值） |
+| `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化**（讨论在推进）——活证否决 | 退出码 0，第 2 轮 `观察:`（不唤醒），无 fingerprint |
+| `veto-stall/` | 两轮底部窗口写入 at capacity 指纹，真实内容两轮相同 | 第 2 轮退出码 1，`fingerprint:`（两连同 + 无活证 → 报警） |
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
 | `read-error-livefallback/` | 基于 read-malformed，read 文件换成 **runOrca 回落形态**（`{ok:false, error:"exit 1"}` 字符串错误，模拟 orca stdout 非 JSON / spawn 失败时 runOrca 返回的形态，不是原始 orca 响应） | 首轮 `read-failed:` 且回落字符串进详情（live 字符串分支的自动化覆盖） |
 | `exclusion/` | master(主,指纹屏面) + #452(自,指纹屏面) + #999(工人,干净屏面) | 见 tests/watchdog.tests.js ⑭（--exclude-pane 已是分级排除：豁免指纹/停摆、保留死活判据） |
