@@ -51,4 +51,6 @@
 - [判绿只对当时那个 commit 有效](review-green-must-match-head.md) — 合并前必比对 review.commit_id 与 headRefOid;判绿后又推的改动无人审过,差点误合 #497
 - [接链前必须逐文件比内容](memory-relink-needs-content-diff.md) — 只比文件名不够,同名不同内容脚本只警告不拦截,方向判反就静默丢记忆
 - [进程活着≠信号进得来](process-alive-vs-signal-arriving.md) — 闭环不动先验信号源产出,别只验消费者在跑;流转器认 PR 评论而工人发 worker_done,两通道没接上导致三个 PR 从无审读且不报错
+- [pi 接 opencode Go](pi-opencode-go-provider.md) — 2026-08-16 已接入,key 落 auth.json 的 opencode-go 键(不是 opencode);20 模型实测通,gpt-5.6-luna 本区被上游 403 别查凭据
 - [command-code 三个坑](commandcode-worktree-residue.md) — 进不了 orca 编排(worker-start 认不出)、--yolo 被分类器拦、工作树留 .commandcode 卡归档;落盘的活退回 pi
+- [commit memory 要点名文件](memory-commit-scope-per-file.md) — 两帅共用 host/memory,git add 整个目录会带走对方未提交的条目;一律 add 具体文件名
