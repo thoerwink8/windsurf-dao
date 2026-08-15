@@ -138,6 +138,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，无需两步（2026-08-15 三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
 
+command-code（Command Code 官方 CLI）：**当前不能承载需进 git 的 Orca 工人**——Orca agent 识别清单不含它，`worker-start --terminal` 必返回 `agent_unconfigured`（2026-08-16 帅·A 裁定，勿再走两步收口）。可用范围是**非交互查证/测速**：`command-code -p "问" -m <模型> --max-turns N --skip-onboarding`（实测 5.5s 出结果；启动模板只读 docs/model-routing.toml `[providers.commandcode].launch`）。需要进 git 的活一律走 pi / codex / claude 三条在册通道。**反例 #514**：那个 command-code 工人是派工旁路起的，`worker-list` 精确查询命中 0 条——从没进过编排却产出了进 git 的 PR，没有任何机制拦住，事后人工查 worker-list 才发现（账记帅·A 派工旁路，不是工人的问题）。
+
 批量起灶（多臂同时起）先做全员就绪清单：循环读每一臂，人人达 ready 或弹窗被处理才注题，禁止处理完一臂就走；弹窗会连环（信任框→沙箱框→登录框），过一道不等于就绪，每处理一道后重读；判「未开工」不能只看状态栏（会陈旧渲染），要看思考行 / 活动迹象。
 
 吞注入补救四步（`terminal send` 不再是默认注入器，只在吞注入时补救）：
