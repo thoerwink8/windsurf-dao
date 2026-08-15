@@ -85,5 +85,19 @@ export function reviewAnnotations(body) {
   return { shangShuai, sameSpot, newIntroduced };
 }
 
+// merge-policy 解析（#498 过渡垫片：派单时写在 worktree 卡备注里的合并权，流转器读它回填
+// GitHub 标签 merge/auto）。格式（dao.mjs dispatchComment 产出）：
+//   merge-policy:auto · model:X · reviewer:Y
+// 字段锚定：行首或「·」/「,」/「;」分隔后，值只认 auto|manual。卡备注是自由文本，人覆写后
+// 读不到 → null（安全默认：不打标签，落到等用户终审）。禁止搜全文——正文引用不算数。
+export const MERGE_POLICY_FIELD_RE = /(?:^|[·,;]\s*)merge-policy\s*:\s*(auto|manual)(?=\s|$|[·,;])/;
+
+// 单条卡备注的 merge-policy → 'auto' | 'manual' | null（读不到/格式不符）
+export function mergePolicyFromComment(comment) {
+  const m = String(comment || '').match(MERGE_POLICY_FIELD_RE);
+  if (!m) return null;
+  return m[1];
+}
+
 // 供测试与 calibrate.mjs 引用正则本身（calibrate.tests.js 语义依赖）
 export const JUDGMENT_LINE_RE_EXPORT = JUDGMENT_LINE_RE;

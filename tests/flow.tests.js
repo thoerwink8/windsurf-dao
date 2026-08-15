@@ -23,7 +23,7 @@ const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
 const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec } = require("../scripts/flow.mjs");
-const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
+const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, mergePolicyFromComment, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -237,6 +237,12 @@ console.log("\n=== ⑬b 审官标注行解析（#480：上帅：/同一处未修
   check("正文引用「上帅：」不算（行首锚定）", reviewAnnotations("他单上帅：xxx 的 review 里……").shangShuai === null, JSON.stringify(reviewAnnotations("他单上帅：xxx 的 review 里……")));
   check("代码块引用「同一处未修好」不算（行首锚定）", reviewAnnotations('```\nif (x === "同一处未修好") {}\n```').sameSpot === false);
   check("正则导出可用（测试与 calibrate 引用）", SHANG_SHUAI_LINE_RE.test("上帅：x") && SAME_SPOT_LINE_RE.test("同一处未修好") && NEW_INTRODUCED_LINE_RE.test("新引入"));
+  check("merge-policy:auto 行首 → auto", mergePolicyFromComment("merge-policy:auto · model:gpt-5.6-sol · reviewer:gpt-5.6-sol") === "auto");
+  check("merge-policy:manual → manual", mergePolicyFromComment("merge-policy:manual · model:X") === "manual");
+  check("备注被覆写成人话（master 真备注语料）→ null", mergePolicyFromComment("主会话：对话/派单/终审。在途：#439 #440 待复审、#441 在审+补丁") === null);
+  check("空备注 → null（安全默认）", mergePolicyFromComment("") === null);
+  check("值不在词表（auto|manual）→ null", mergePolicyFromComment("merge-policy:maybe · model:X") === null);
+  check("正文叙述引用不算（字段锚定，非搜全文）", mergePolicyFromComment("之前的 merge-policy:auto 作废了") === null);
 }
 
 console.log("\n=== ⑭ 审官选型序纯函数（docs/model-routing.toml 真相源）===");
@@ -488,6 +494,31 @@ console.log("\n=== ㉕b handle 缺失：dispatch 有但 worker-show 取不到 ha
   check("退出码 1（有输出）", r.status === 1, `status=${r.status}`);
   check("预览-阻塞：取不到 agentTerminalHandle——待帅转交", /预览-阻塞：#3310（返工注入——投递目标解析失败：worker-show --dispatch ctx_worker_3310 取不到 agentTerminalHandle——待帅转交）/.test(r.out), r.out.trim());
   check("不猜终端、不注入（没有 worker-start 动作）", !/动作：返工注入 #3310/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ㉘ merge-policy 回填（#498 过渡垫片：worktree 卡备注 → GitHub 标签，只做一次不覆盖）===");
+{
+  const auto = runFlow(path.join(FIXTURES, "policy-auto"));
+  check("comment 有 merge-policy:auto → 回填动作", /动作：回填 merge\/auto 标签 #3401（worktree comment 读 merge-policy:auto）→ gh pr edit 3401 --add-label merge\/auto/.test(auto.out), auto.out.trim());
+
+  const manual = runFlow(path.join(FIXTURES, "policy-manual"));
+  check("merge-policy:manual → 不回填，落安全默认", !/回填|动作：/.test(manual.out) && /OK 扫完 1 个 PR，0 需流转/.test(manual.out), manual.out.trim());
+
+  const prose = runFlow(path.join(FIXTURES, "policy-prose"));
+  check("备注被覆写成人话（master 真备注语料）→ 不回填不报错", !/回填|报帅/.test(prose.out) && /OK 扫完 1 个 PR，0 需流转/.test(prose.out), prose.out.trim());
+
+  const exists = runFlow(path.join(FIXTURES, "policy-label-exists"));
+  check("标签已存在（帅手工优先）→ 不重复打", !/回填/.test(exists.out) && /OK 扫完 1 个 PR，0 需流转/.test(exists.out), exists.out.trim());
+
+  // 幂等：同状态文件重跑不再回填
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-policy-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "policy-auto"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "policy-auto"), stateFile, hbFile);
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("回填只做一次：重跑零动作", r1.status === 1 && r2.status === 0 && !/回填/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log("\n=== ㉖ heartbeat：每轮结束原子写，字段契约（看门狗 #471 读它）===");

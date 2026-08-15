@@ -372,6 +372,58 @@ function checkFlowHeartbeat() {
   green(`流转器心跳存活（${Math.max(0, Math.round(age / 1000))}s 前，round=${round ?? '?'}）`);
 }
 
+// ── ⑨ 流转器直拼 orca vs 命令库覆盖（#497 第三轮：写了指针就要配报警器）────
+// 扫 scripts/flow.mjs 里直接拼 orca 命令的调用点，与 dao-cmd 导出的 DISPATCH_VERBS 对照：
+// 命中「派工闸门动词」（dispatch/worker-start——#478 合并权约束 merge-policy/reviewer 的载体）
+// 且不在已登记豁免表 → 红。通用透传动词（task-create/worktree-create 等）无闸门值，
+// 不构成 merge-policy 旁路，不在报警范围。解析器自己写（正则扫 runOrca([...]) 的字符串
+// 字面量），不复用 flow/dao-cmd 的任何解析逻辑。零样本：flow.mjs 读不到 → 没查成报红；
+// 读得到但 0 个直拼调用 → 扫完 0 条（绿）——两者必须能分开。
+
+const FLOW_FILE = join(ROOT, 'scripts', 'flow.mjs');
+// 已登记豁免：动词 → 理由。#498 补上「续活/审官」场景后删掉本条，本检查立即报红，逼流转器改走库。
+const FLOW_DAO_BYPASS_EXEMPT = {
+  'worker-start': '库 worker-start 强制 --merge-policy+--reviewer+--worktree 且不用 --agent；flow 起审官/续活三类调用填不出真值（审官不产 PR；续活 merge-policy 派单时已定）——硬填=造假数据喂闸门',
+};
+
+async function checkFlowVsDaoLibrary() {
+  if (!existsSync(FLOW_FILE)) {
+    fail('scripts/flow.mjs 读不到', '本次没查成：确认文件在', FLOW_FILE);
+    return;
+  }
+  let gateVerbs;
+  try {
+    const mod = await import(new URL('./lib/dao-cmd.mjs', import.meta.url));
+    gateVerbs = mod.DISPATCH_VERBS || ['dispatch', 'worker-start'];
+  } catch (e) {
+    fail('命令库模块加载失败（⑨ 对照参考读不到）', '恢复 scripts/lib/dao-cmd.mjs', String(e.message || e).slice(0, 160));
+    return;
+  }
+  const src = readFileSync(FLOW_FILE, 'utf8');
+  const calls = [];
+  const re = /runOrca\(\s*\[([\s\S]*?)\]\s*\)/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const lits = [...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map(x => x[1] || x[2]);
+    calls.push(lits.slice(0, 2).join(' '));
+  }
+  if (calls.length === 0) {
+    green(`流转器 orca 直拼 0 条（全走库或无需 orca）——扫完 0 条`);
+    return;
+  }
+  const hits = calls.filter(p => gateVerbs.includes(p.split(' ')[1]));
+  if (hits.length === 0) {
+    green(`流转器直拼 orca ${calls.length} 处，均非派工闸门动词（${gateVerbs.join('/')}）——扫完 0 条违规`);
+    return;
+  }
+  const unexempted = hits.filter(p => !FLOW_DAO_BYPASS_EXEMPT[p.split(' ')[1]]);
+  if (unexempted.length === 0) {
+    green(`流转器直拼派工闸门动词 ${hits.length} 处，全在登记豁免内（${Object.keys(FLOW_DAO_BYPASS_EXEMPT).join('/')}）——扫完 0 条违规`);
+    return;
+  }
+  fail(`流转器直拼命令库已覆盖的派工闸门动词 ${unexempted.length} 处`, 'flow 该走 scripts/dao.mjs 封装（#498 补上续活/审官后豁免已删）；改调用为走库', [...new Set(unexempted)].join(' '));
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 // ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
 // 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
@@ -640,6 +692,8 @@ checkFlowHeartbeat();     // #497 侧（b929782 引入）
 checkExtractFixtures();   // master（#502 侧）
 checkMasterTitleSamples(); // master（#502 侧）
 checkCardCommentSamples(); // master（#502 侧）
+await checkFlowVsDaoLibrary(); // #497 第三轮（⑨ 直拼对照）
+
 
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);

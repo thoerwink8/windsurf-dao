@@ -92,7 +92,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { judgmentFromReview, isCompletionComment, reviewAnnotations } from './lib/judgment.mjs';
+import { judgmentFromReview, isCompletionComment, reviewAnnotations, mergePolicyFromComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 
 const require = createRequire(import.meta.url);
@@ -658,6 +658,48 @@ function handleApproved(pr, rec, source, args, repo) {
   return { lines };
 }
 
+// 过渡垫片（#498 根治前）：派单时 merge-policy 只写在 worktree 卡备注（dao.mjs dispatchComment），
+// 而卡备注是人在用的自由文本，一覆盖就没了。流转器首次发现某 PR 时从对应 worktree 的 comment
+// 解析 merge-policy，当场回填 merge/auto 标签到 PR——把易失字段当一次性传递介质，落到不易失的
+// GitHub 标签上（回填后真相源就是标签，备注之后被覆写也不影响）。
+// 只做一次（rec.policyBackfilled）；merge-policy:manual 或读不到 → 不打标签（安全默认 = 等用户终审）；
+// 已存在的标签（帅手工打的）优先，不覆盖。失败方向必须落在安全一侧（不打 = 只是慢）。
+function backfillMergePolicy(pr, rec, source, args) {
+  const lines = [];
+  if (rec.policyBackfilled) return { lines };
+  if (hasLabel(pr, MERGE_AUTO_LABEL)) {
+    rec.policyBackfilled = true; // 已有标签（帅手工优先），不重复打
+    return { lines };
+  }
+  const wts = source.orcaWorktrees();
+  if (!wts.ok) {
+    return { lines: [`[flow] NO_TARGETS：读 worktree 列表失败（${wts.error}）——merge-policy 回填没查成`], noTargets: true };
+  }
+  const wt = wts.worktrees.find(w => w.branch === `refs/heads/${pr.headRefName}`);
+  if (!wt) {
+    rec.policyBackfilled = true; // 找不到 worktree（外部起的/存量树）——不打标签，安全默认
+    return { lines };
+  }
+  const policy = mergePolicyFromComment(wt.comment);
+  if (policy !== 'auto') {
+    rec.policyBackfilled = true; // manual / 备注被覆写成人话 / 读不到 → 不打标签（#478 Q1 默认：忘勾自动合只是慢）
+    return { lines };
+  }
+  if (args.dryRun) {
+    rec.policyBackfilled = true;
+    lines.push(`[flow] 动作：回填 merge/auto 标签 #${pr.number}（worktree comment 读 merge-policy:auto）→ gh pr edit ${pr.number} --add-label ${MERGE_AUTO_LABEL}`);
+    return { lines };
+  }
+  const r = runGh(['pr', 'edit', String(pr.number), '--add-label', MERGE_AUTO_LABEL]);
+  if (r.ok) {
+    rec.policyBackfilled = true;
+    lines.push(`[flow] 动作：回填 merge/auto 标签 #${pr.number}（worktree comment 读 merge-policy:auto）`);
+  } else {
+    lines.push(`[flow] 报帅：回填 merge/auto 标签 #${pr.number} 失败：${r.error}——下轮重试`);
+  }
+  return { lines };
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 原生消息处理（live：check --wait 投递；快照：orca-messages.json）
 // ══════════════════════════════════════════════════════════════════════
@@ -735,6 +777,7 @@ function freshRecord(pr) {
     pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {},
     reportedStale: false, actedOn: null, reviewer: null, escalated: null,
     workerDispatch: null, // 当前工人 dispatch 上下文（返工投递后更新）
+    policyBackfilled: false, // merge-policy 回填只做一次（#498 过渡垫片）
     mergeAttempted: false, mergeBlocked: false, stateSince: Date.now(),
   };
 }
@@ -791,6 +834,14 @@ function makeLiveSource(repo) {
       // dispatchId 不随 task-list 给全，按需 dispatch-show（慢路径只发生在投递时）
       const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatch_id || t.dispatchId || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null }));
       return { ok: true, tasks: out };
+    },
+    // worktree 卡备注（#498 过渡垫片读 merge-policy 用；按 branch 匹配）
+    orcaWorktrees() {
+      const r = runOrca(['worktree', 'list', '--json']);
+      if (!r.ok) return { ok: false, error: r.error };
+      const wts = unwrap(r.json, 'worktrees', 'worktrees');
+      if (!Array.isArray(wts)) return { ok: false, error: 'worktree list 结构不认识' };
+      return { ok: true, worktrees: wts.map(w => ({ id: w.id, branch: w.branch || w.git?.branch || null, comment: w.comment || w.git?.comment || null })) };
     },
     dispatchIdFor(taskId) {
       const r = runOrca(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
@@ -891,6 +942,13 @@ function makeSnapshotSource(roundDir, repo) {
       const tasks = Array.isArray(r.json) ? r.json : unwrap(r.json, 'tasks', 'tasks') || [];
       const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatchId || t.dispatch_id || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null }));
       return { ok: true, tasks: out };
+    },
+    orcaWorktrees() {
+      const r = readJson(join(roundDir, 'orca-worktrees.json'));
+      if (!r.ok) return { ok: true, worktrees: [] };
+      const wts = unwrap(r.json, 'worktrees', 'worktrees') || [];
+      if (!Array.isArray(wts)) return { ok: false, error: 'orca-worktrees.json 结构不认识' };
+      return { ok: true, worktrees: wts.map(w => ({ id: w.id, branch: w.branch || w.git?.branch || null, comment: w.comment || w.git?.comment || null })) };
     },
     dispatchIdFor() { return null; },
     workerHandleFor(dispatchId) {
@@ -1173,6 +1231,12 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
     }
     const comments = commentsR.comments || [];
     const reviews = reviewsR.reviews || [];
+
+    // merge-policy 回填（#498 过渡垫片）：首次发现 PR 时读 worktree 卡备注回填 merge/auto 标签；
+    // 幂等（rec.policyBackfilled），不覆盖已存在标签，manual/读不到落安全默认。
+    const policy = backfillMergePolicy(pr, rec, source, args);
+    for (const l of policy.lines) events.push(l);
+    if (policy.noTargets) noTargets = true;
 
     // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿。
     // 带标注行（上帅：/同一处未修好/新引入）的 review 不算缺判定行——标注本身就是要流转器做的事。
