@@ -55,10 +55,35 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 
 ## 7. grok 怎么配
 
-grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。装机三条：
+grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
 
 - npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
-- 启动命令必须带代理前缀：`HTTPS_PROXY=http://127.0.0.1:7890 grok ...`——grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上。PowerShell 写法：`$env:HTTPS_PROXY = 'http://127.0.0.1:7890'; grok ...`。
+- regrok shim：在 `~/.local/bin/` 下放两个文件（覆盖 PATH 第一位，包装真实二进制 `C:\nvm4w\nodejs\grok.cmd`；真实二进制路径因机而异，shim 里改对即可）。shim 内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上）并默认追加 `-m grok-4.6`；显式传 `-m/--model` 时原样透传不覆盖。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。
+  - `~/.local/bin/grok.cmd`（Windows cmd 版）：
+    ```bat
+    @echo off
+    rem regrok shim: proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
+    rem real binary: C:\nvm4w\nodejs\grok.cmd ; explicit -m/--model passes through untouched
+    set HTTPS_PROXY=http://127.0.0.1:7890
+    echo %* | findstr /C:"-m " /C:"--model" >nul
+    if %errorlevel%==0 (
+      "C:\nvm4w\nodejs\grok.cmd" %*
+    ) else (
+      "C:\nvm4w\nodejs\grok.cmd" -m grok-4.6 %*
+    )
+    ```
+  - `~/.local/bin/grok`（Git Bash 版）：
+    ```sh
+    #!/bin/sh
+    # regrok shim (Git Bash): proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
+    # real binary: C:/nvm4w/nodejs/grok.cmd ; explicit -m/--model passes through untouched
+    export HTTPS_PROXY=http://127.0.0.1:7890
+    case " $* " in
+      *" -m "*|" --model"*) exec "C:/nvm4w/nodejs/grok.cmd" "$@" ;;
+      *) exec "C:/nvm4w/nodejs/grok.cmd" -m grok-4.6 "$@" ;;
+    esac
+    ```
+    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。
 - auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
 
 ## 8. 本机工具坑
