@@ -17,14 +17,21 @@
 //
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
+// 2026-08-16 拆旧（issue #529）：memory 整体搬到独立仓 thoerwink8/windsurf-dao-memory（#518），
+// ⑥ 主仓 memory 索引双向齐随检查对象删除（索引齐的价值转到新仓自己的 gen-index.mjs --check）；
+// ⑨ 判据从「Junction 指向仓内 memory 真相源」改为「Junction 目标仓的 origin ==
+// thoerwink8/windsurf-dao-memory」。编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，
+// ⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch）⑥ host/memory 索引双向齐
+// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch）
 // ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
 // ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
-// ⑨本机 memory 是否指向仓内 host/memory 的 Junction（local-only，issue #503）：
-//   普通目录/指向别处/悬空均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
+// ⑨本机 memory 是否指向 windsurf-dao-memory 仓的 Junction（local-only，#503 判据改写 #529）：
+//   Junction 目标必须是 git 仓且 origin remote 指向 thoerwink8/windsurf-dao-memory（从 URL 抽
+//   owner/repo 再比，SSH/HTTPS 两种形式都认）；普通目录/悬空/目标不是 memory 仓/无 origin/
+//   origin 不对均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
 // ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
 // ⑪ 主帅标题核对样本（一致 / 过期 各至少一份）
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
@@ -279,57 +286,6 @@ function checkModelRouting() {
   }
 }
 
-// ── ⑥ memory 索引双向齐 ──────────────────────────────────────────────
-// MEMORY.md 是每轮注入的唯一索引面。有文件无索引 = 条目永不被 recall（静默）。
-// 只读仓内 host/memory/，不碰本机 ~/.claude。链接用检查器自己的正则抽，
-// 不复用任何「memory 自己的解析」。
-// 零样本：目录不在 / 一个 md 都没有 / MEMORY.md 不在 / 索引 0 条但目录有条目 / 只有索引没有条目 → 没查成。
-
-function checkMemoryIndex() {
-  const dir = join(ROOT, 'host', 'memory');
-  if (!existsSync(dir)) {
-    fail('host/memory 不在', '本次没查成：确认 memory 真相源目录是否被移动', dir);
-    return;
-  }
-  const files = readdirSync(dir).filter(f => f.endsWith('.md') && statSync(join(dir, f)).isFile());
-  if (files.length === 0) {
-    fail('host/memory 一个 md 都没扫到', '目录空了 ⇒ 本次等于没查', dir);
-    return;
-  }
-  const indexPath = join(dir, 'MEMORY.md');
-  if (!existsSync(indexPath)) {
-    fail('host/memory/MEMORY.md 不在', '索引面缺失 ⇒ 条目不会被 recall；补回 MEMORY.md', indexPath);
-    return;
-  }
-  const txt = readFileSync(indexPath, 'utf8');
-  const indexed = new Set();
-  const re = /\[[^\]]*\]\(([^)\s]+\.md)\)/gi;
-  let m;
-  while ((m = re.exec(txt))) {
-    const target = m[1].replace(/\\/g, '/').split('/').pop();
-    if (target && target.toLowerCase() !== 'memory.md') indexed.add(target);
-  }
-  const entries = files.filter(f => f !== 'MEMORY.md');
-  if (entries.length === 0) {
-    fail('host/memory 除 MEMORY.md 外一个条目都没扫到', '只有索引没有条目 ⇒ 本次等于没查', dir);
-    return;
-  }
-  if (indexed.size === 0) {
-    fail('MEMORY.md 一条索引都没扫到', '索引面空了但目录里有条目 ⇒ 本次等于没查', indexPath);
-    return;
-  }
-  const missing = entries.filter(f => !indexed.has(f));
-  const ghosts = [...indexed].filter(i => !entries.includes(i));
-  if (missing.length === 0 && ghosts.length === 0) {
-    green(`memory 索引 ${entries.length} 条与 MEMORY.md 双向齐`);
-  } else {
-    const bits = [];
-    if (missing.length) bits.push(`有文件无索引: ${missing.join(' ')}`);
-    if (ghosts.length) bits.push(`有索引无文件: ${ghosts.join(' ')}`);
-    fail(`memory 索引不齐 ${missing.length + ghosts.length} 处`, 'MEMORY.md 每个条目要有 [标题](文件.md)，目录里每个 md（除 MEMORY.md）都要被点到', bits.join('；'));
-  }
-}
-
 // ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
 // 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
 // dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
@@ -435,14 +391,21 @@ function checkModeHookAlive() {
   else fail(...r.fail);
 }
 
-// ── ⑨ 本机 memory 断链检查（local-only，issue #503）───────────────────
-// 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向本仓
-// `host/memory/` 的 Junction，Claude 每写一条 memory 主仓 git status 就多一条未提交变更。
-// #503 的病：本机是普通目录，与仓内完全漂移，今天写的每条教训换机就丢，而 dao-check 全绿——
-// 它只查仓内副本（CI 没有本机 ~/.claude）。所以本项只验本机文件系统，CI/新机/未接 worktree
-// 无该项目目录时出 SKIP 不是绿（SKIP 与绿分不开 ⇒ CI 永远绿、本机永远没人查）。
+// ── ⑨ 本机 memory 断链检查（local-only，issue #503 / 判据改写 #529）───────────────────
+// 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向
+// **windsurf-dao-memory 独立仓 clone** 的 Junction（memory 已自 #518 搬出主仓），
+// Claude 每写一条 memory，memory 仓 git status 就多一条未提交变更。
+// #529 之前的判据是「Junction 必须指向仓内 memory 真相源」，memory 搬家后本机必红——
+// 判据改为：Junction 目标必须是一个 git 仓库，且它的 origin remote 指向
+// thoerwink8/windsurf-dao-memory（从 URL 抽 owner/repo 再比，SSH/HTTPS 两种形态都认），
+// 不硬编码本机路径，换机成立。
+// #503 的病：本机 memory 是**普通目录**，与真相源完全漂移——今天写的每条教训
+// 只在本机，换机即丢；而 dao-check 只查仓内副本（CI 没有本机 ~/.claude）……本项只验本机
+// 文件系统，CI/新机/未接 worktree 无该项目目录时出 SKIP 不是绿（SKIP 与绿分不开 ⇒
+// CI 永远绿、本机永远没人查）。
 // 实现放 scripts/lib/dao-memory-link-check.mjs，让 tests/memory-link.tests.js 拿假 HOME 造
-// 违规样本（普通目录/指向别处/悬空=红，正确 Junction=绿，无目录=SKIP）单独验判别力。
+// 违规样本（普通目录/悬空/目标不是 git 仓/无 origin/origin 不是 memory 仓=红，
+// 正确 Junction=绿，SSH/HTTPS 两种 origin 形式都验，无目录=SKIP）单独验判别力。
 
 function checkMemoryLinkAlive() {
   const r = checkMemoryLink({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
@@ -589,7 +552,6 @@ checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkModelRouting();
-checkMemoryIndex();
 await checkCommandHelp();
 checkModeHookAlive();
 checkMemoryLinkAlive();
