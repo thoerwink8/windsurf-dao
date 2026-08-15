@@ -1,0 +1,16 @@
+orca terminal send
+
+Usage: orca terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--json]
+
+Send input to a live terminal
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --terminal <handle>  Runtime-issued terminal handle
+  --text <text>          Text payload to send or type
+  --enter                Append Enter after sending text
+  --interrupt            Send as an interrupt-style input when supported
+

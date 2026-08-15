@@ -83,7 +83,7 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
       *) exec "C:/nvm4w/nodejs/grok.cmd" -m grok-4.6 "$@" ;;
     esac
     ```
-    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。
+    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。
 - auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
 
 ## 8. 本机工具坑
@@ -201,6 +201,18 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 ```
 用户觉得当前做法不对劲。立即停下手头动作，读 grill-ai skill 并按它的五条清单逐条自查回答。
 ```
+
+## 统一命令库
+
+起终端和编排不要手拼 orca 命令（漏 `-a never`、写不存在的 `--submit` 都在这里栽过）。走：
+
+```bash
+node scripts/dao.mjs --help
+node scripts/dao.mjs start --provider gpt --worktree active --dry-run
+node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --dry-run
+```
+
+派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
 
 ## 自检
 
