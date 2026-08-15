@@ -763,5 +763,22 @@ console.log("\n=== ㊲ PR→工人映射结构化归属（#497 第九轮：删 s
   check("硬禁：flow.mjs 无 spec 子串匹配判归属（spec.*includes/match/indexOf(#) 零命中）", !/spec.*includes|spec.*match|indexOf\(.*#/.test(flowSrc));
 }
 
+console.log("\n=== ㊳ worker_done 反向寻址（#497 第十一轮返工：普通工人门铃不能静默断链）===");
+{
+  // 样本 1+2（审官变异回归化）：只有 worker_done、无完工 comment、无 review → 映射出 PR → 起审官
+  const bell = runFlow(path.join(FIXTURES, "doorbell-only"));
+  check("纯门铃（人写任务书 + 只有 worker_done）：dispatchId 反查 → 映射出 PR → 起审官", /动作：起审官 #3411/.test(bell.out), bell.out.trim());
+  check("纯门铃不再停在 working（无 GitHub 完工评论也能推进）", !/OK 扫完 1 个 PR，0 需流转/.test(bell.out), bell.out.trim());
+  check("纯门铃不报孤儿（反查命中不算孤儿）", !/映射不出 PR/.test(bell.out), bell.out.trim());
+  // 样本 3（兜底）：dispatchId 反查不出 → 报帅 + 待帅处置常驻行，不静默
+  const orphan = runFlow(path.join(FIXTURES, "orphan-doorbell"));
+  check("孤儿门铃：映射不出 → 报帅（不静默丢弃）", /报帅：收到 worker_done 但映射不出 PR（task=task_3412x，dispatch=ctx_unknown_3412）——待帅转交/.test(orphan.out), orphan.out.trim());
+  check("孤儿门铃：待帅处置常驻行每轮显形（taskId 标识，帅可 task-show 查）", /待帅处置：#task_3412x（worker_done 映射不出 PR（dispatch=ctx_unknown_3412）——待帅转交）/.test(orphan.out), orphan.out.trim());
+  check("孤儿门铃：不猜不崩（不注入任何工位）", !/动作：/.test(orphan.out), orphan.out.trim());
+  // 样本 4（回旧病演示，见下）：把 buildDispatchMap 的 dispatchId 反查删掉 → 纯门铃样本必红
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("结构反查在 buildDispatchMap（dispatchId → worktree → branch → PR headRefName 全等）", /dispatchWorktreeId/.test(flowSrc) && /worktreeBranchById/.test(flowSrc));
+}
+
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);
 process.exit(fail > 0 ? 1 : 0);

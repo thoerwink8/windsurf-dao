@@ -516,15 +516,27 @@ function extractPrsFromSpec(spec) {
 // 建 taskId→PR / PR→dispatch 映射（live：task-list + dispatch-show；快照：orca-tasks.json）。
 // 快照条目形态：{ id, spec, dispatchId }；live 的 dispatchId 经 dispatch-show 取（惰性）。
 // 审官任务 = 本脚本 task-create 建的（spec 含「审官任务：#N - 审官·」标记）。
-function buildDispatchMap(source, state) {
+// #497 第十一轮：普通工人（人写任务书，spec 无受控前缀）走 dispatchId 结构反查——
+// dispatchId → worker-list 的 resource.worktreeId → worktree 的 branch → 与在途 PR 的 headRefName
+// 全等比较（分支↔PR 是 1:1 结构事实，与第九轮硬禁不冲突）。映射不出 → 不进 prByTaskId
+// （processNativeMessages 对 worker_done 单独报帅 + 待帅处置常驻，不静默）。
+function buildDispatchMap(source, state, openPrs) {
   const map = { prByTaskId: {}, tasksByPr: {}, dispatchIdFor: source.dispatchIdFor || null };
+  const openByHead = new Map((openPrs || []).map(p => [`refs/heads/${p.headRefName || ''}`, p.number]));
   const tasksR = source.orcaTasks();
   const tasks = tasksR.ok ? tasksR.tasks : [];
   for (const t of tasks) {
     const id = t.id || t.taskId || null;
     const spec = t.spec || t.title || '';
     if (!id) continue;
-    const prs = extractPrsFromSpec(spec);
+    let prs = extractPrsFromSpec(spec);
+    // 受控前缀没命中 + 有 dispatchId → dispatchId 结构反查（普通工人任务书）
+    if (prs.length === 0 && t.dispatchId && source.dispatchWorktreeId && source.worktreeBranchById) {
+      const wtId = source.dispatchWorktreeId(t.dispatchId);
+      const branch = wtId ? source.worktreeBranchById(wtId) : null;
+      const pr2 = branch ? openByHead.get(branch) : null;
+      if (pr2) prs = [pr2];
+    }
     const isReviewer = /审官任务/.test(spec);
     for (const n of prs) {
       if (!map.tasksByPr[n]) map.tasksByPr[n] = [];
@@ -916,6 +928,15 @@ function processNativeMessages(messages, state, dispatchMap, args) {
           lines.push(`[flow] 门铃：worker_done（task=${taskId}，dispatch=${dispatchId}）——触发 GitHub 重放`);
         }
       }
+      // #497 第十一轮：worker_done 反向寻址——映射不出 PR 不许静默（普通工人人写任务书
+      // 连 dispatchId 结构反查都失败时 = 真孤儿）。报帅一次 + 记账进待帅处置常驻行。
+      if (taskId && !dispatchMap.prByTaskId[taskId]) {
+        state.orphanWorkerDones = state.orphanWorkerDones || {};
+        if (!state.orphanWorkerDones[taskId]) {
+          state.orphanWorkerDones[taskId] = dispatchId || '?'; // 常驻行去重：同一 taskId 只报一次帅
+          lines.push(`[flow] 报帅：收到 worker_done 但映射不出 PR（task=${taskId}，dispatch=${dispatchId || '?'}）——待帅转交`);
+        }
+      }
       continue;
     }
     if (type === 'escalation') {
@@ -1058,6 +1079,23 @@ function makeLiveSource(repo) {
       const hits = workers.filter(w => w.resource?.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
       return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
     },
+    // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址的结构事实——普通工人人写任务书
+    // spec 无受控前缀，只能从 dispatchId 反查：worker-list → resource.worktreeId）。多候选 → null。
+    dispatchWorktreeId(dispatchId) {
+      const r = runOrca(['orchestration', 'worker-list', '--json']);
+      if (!r.ok) return null;
+      const workers = unwrap(r.json, 'workers', 'workers');
+      if (!Array.isArray(workers)) return null;
+      const hits = workers.filter(w => w.dispatchId === dispatchId && w.dispatchStatus !== 'completed');
+      return hits.length === 1 ? (hits[0].resource?.worktreeId || null) : null;
+    },
+    // worktreeId → branch（#497 第十一轮：dispatch → worktree → branch → PR headRefName 全等）
+    worktreeBranchById(worktreeId) {
+      const wts = this.orcaWorktrees();
+      if (!wts.ok) return null;
+      const hit = (wts.worktrees || []).filter(w => w.id === worktreeId);
+      return hit.length === 1 ? hit[0].branch : null;
+    },
     dispatchIdFor(taskId) {
       const r = runOrca(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
       if (!r.ok) return null;
@@ -1182,6 +1220,20 @@ function makeSnapshotSource(roundDir, repo) {
       if (!r.ok || !Array.isArray(r.json)) return null;
       const hits = r.json.filter(w => w.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
       return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
+    },
+    // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址，快照读 orca-workers.json）
+    dispatchWorktreeId(dispatchId) {
+      const r = readJson(join(roundDir, 'orca-workers.json'));
+      if (!r.ok || !Array.isArray(r.json)) return null;
+      const hits = r.json.filter(w => (w.dispatchId || w.dispatch_id) === dispatchId && w.dispatchStatus !== 'completed');
+      return hits.length === 1 ? (hits[0].worktreeId || null) : null;
+    },
+    // worktreeId → branch（快照读 orca-worktrees.json）
+    worktreeBranchById(worktreeId) {
+      const wts = this.orcaWorktrees();
+      if (!wts.ok) return null;
+      const hit = (wts.worktrees || []).filter(w => w.id === worktreeId);
+      return hit.length === 1 ? hit[0].branch : null;
     },
     dispatchIdFor() { return null; },
     workerHandleFor(dispatchId) {
@@ -1409,20 +1461,21 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
     };
   }
 
-  // 原生消息先处理（escalation → 上帅记账；worker_done → dispatch 缓存）
-  const dispatchMap = buildDispatchMap(source, state);
-  const native = processNativeMessages(nativeMessages || [], state, dispatchMap, args);
-  for (const l of native.lines) events.push(l);
-  wakeSource = wakeSource || native.wakeSource || 'github-poll';
-
+  // 原生消息先处理（escalation → 上帅记账；worker_done → dispatch 缓存 + 反向寻址）。
+  // 先读在途 PR（buildDispatchMap 的 dispatchId 结构反查需要 branch → PR headRefName 全等表）。
   const list = source.listOpenPrs();
   if (!list.ok) {
     return {
       events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true,
-      hb: { wakeSource, pendingCount: 0, prs: [] },
+      hb: { wakeSource: wakeSource || 'github-poll', pendingCount: 0, prs: [] },
     };
   }
   const open = list.prs;
+  const dispatchMap = buildDispatchMap(source, state, open);
+  const native = processNativeMessages(nativeMessages || [], state, dispatchMap, args);
+  for (const l of native.lines) events.push(l);
+  wakeSource = wakeSource || native.wakeSource || 'github-poll';
+
   const openByNumber = new Map(open.map(p => [p.number, p]));
   const records = state.records;
   let noTargets = false;
@@ -1627,6 +1680,11 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
 
   for (const item of awaitingShuai) {
     events.push(`[flow] 待帅处置：#${item.pr}（${item.reason}）`);
+  }
+  // #497 第十一轮：孤儿 worker_done（反向寻址映射不出 PR）每轮显形——「收到了但不知道是谁的」
+  // 必须可见（仓规：没扫到样本 ≠ 扫完 0 条）。pr 用 taskId 标识（帅可 task-show 查）。
+  for (const [taskId, dispatchId] of Object.entries(state.orphanWorkerDones || {})) {
+    events.push(`[flow] 待帅处置：#${taskId}（worker_done 映射不出 PR（dispatch=${dispatchId}）——待帅转交）`);
   }
 
   // 合并权链观察（#497 第四轮断链报警）：有在途 PR 才看（链只在有活时才有意义）；explain 只读不加戏
