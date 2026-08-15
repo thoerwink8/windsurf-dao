@@ -5,6 +5,7 @@
 ## 怎么工作
 
 - 所有改动都从 draft PR 开始，不直接改主分支——任何要进 git 的改动都走这条路，不进仓库的临时草稿不需要。
+- memory 例外：`host/memory/` 下的改动是事实记录、没有评审对象，主会话可直接 commit + push，不走 draft PR。例外只覆盖 `host/memory/`，不含 `host/skills/`、`docs/`、`scripts/`、`NEW-MACHINE.md`、`CLAUDE.md`。
 - PR 正文写清目标、验收标准和进展；每次 push 都留下可查看的记录。
 - 改完运行 `node scripts/dao-check.mjs`。检查通过并完成自查后，用 `gh pr ready` 表示可以评审。
 - 出问题优先 revert 到可用状态，再另开改动处理——回退对象是最近一个能用的提交，先回到能跑的状态，再慢慢补。
