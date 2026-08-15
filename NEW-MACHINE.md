@@ -154,21 +154,27 @@ node scripts/inbox-station.mjs ensure
 
 ## 10. 接上 memory
 
-本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。
+memory 住在**独立仓** `thoerwink8/windsurf-dao-memory`（私有，clone 需有权限）。本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`，是一个指向那个仓 clone 的 Junction。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。
 
-先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。
+**第一步：clone 一次 memory 仓**（本机任意位置，例：`D:\frank\windsurf-dao-memory`）：
 
-**事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在仓内。本机有、仓内没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction 则什么都不做。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
+```bash
+git clone git@github.com:thoerwink8/windsurf-dao-memory.git
+```
+
+先关掉所有 Claude Code 窗口再跑下面的命令（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。**把 `$memRepo` 换成你 clone 的位置。**
+
+**事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在 memory 仓里。本机有、memory 仓没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction（目标 = 你的 memory 仓）则什么都不做、原地返回。接上之后 Claude 每写一条 memory，memory 仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
+  $memRepo = 'D:\frank\windsurf-dao-memory'   # ← 换成你 clone windsurf-dao-memory 的位置
+  if (-not (Test-Path -LiteralPath $memRepo)) { throw "memory 仓不在: $memRepo（先 clone thoerwink8/windsurf-dao-memory）" }
   $repo = (Resolve-Path .).Path
-  $hostMem = Join-Path $repo 'host\memory'
-  if (-not (Test-Path -LiteralPath $hostMem)) { throw "host/memory 不在: $hostMem" }
+  $want = [IO.Path]::GetFullPath($memRepo)
   $encoded = $repo -replace '[^a-zA-Z0-9]', '-'
   $local = Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
-  $want = [IO.Path]::GetFullPath($hostMem)
   $item = Get-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
   if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
@@ -185,12 +191,12 @@ node scripts/inbox-station.mjs ensure
     $missing = @(); $diverged = @()
     foreach ($f in Get-ChildItem -LiteralPath $local -File -Recurse) {
       $rel = & $relOf $local $f.FullName
-      $peer = Join-Path $hostMem ($rel -replace '/', '\')
+      $peer = Join-Path $memRepo ($rel -replace '/', '\')
       if (-not (Test-Path -LiteralPath $peer)) { $missing += $rel }
       elseif ((& $norm $f.FullName) -cne (& $norm $peer)) { $diverged += $rel }
     }
     if ($missing.Count -gt 0) {
-      throw "仓内不是本机超集，先把这些拷进 host/memory/ 再接: $($missing -join ', ')"
+      throw "memory 仓不是本机超集，先把这些拷进 $memRepo 再接: $($missing -join ', ')"
     }
     if ($diverged.Count -gt 0) {
       Write-Warning "同名但内容不同（接上后本机这几条会变成仓内版本，旧内容留在备份目录里，需要就去比对）: $($diverged -join ', ')"
@@ -205,9 +211,9 @@ node scripts/inbox-station.mjs ensure
 }
 ```
 
-本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。
+本机若有比仓新的条目，先从改名备份里拷进 `$memRepo` 再提交。
 
-接上后跑 `node scripts/dao-check.mjs` 自检：第 ⑨ 项「本机 memory 断链检查」应变绿——本机 memory 是普通目录/指向别处/链接悬空都会报红，CI 无本机目录则出 SKIP（不是绿）。
+接上后跑 `node scripts/dao-check.mjs` 自检：第 ⑨ 项「本机 memory 断链检查」应变绿——判据是 Junction 目标是一个 git 仓、且它的 `origin` remote 指向 `thoerwink8/windsurf-dao-memory`（SSH / HTTPS 两种 URL 形式都认）；普通目录/链接悬空/目标不是 memory 仓/origin 不对（含搬家前指向主仓旧 memory 目录的形态）都会报红，CI 无本机目录则出 SKIP（不是绿）。
 
 ## 11. 接上 skills
 
