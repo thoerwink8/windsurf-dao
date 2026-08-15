@@ -115,6 +115,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，无需两步（2026-08-15 三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
 
+command-code（Command Code 官方 CLI，2026-08-16 起做工人载具，拍板 issue #508；本仓第一个 command-code 工人 #511）：**两步走**——建卡（`--setup skip`）→ `orca terminal create --command` 起带模型终端（启动模板只读 docs/model-routing.toml `[providers.commandcode].launch`，别手拼）→ `worker-start --terminal` 收口。启动后必须**补一记空回车**才执行（与 pi/grok 同坑）；之后约 20 秒内 TUI 就绪，就绪判据：屏面出现 `# Command Code` 与输入框 `❯ Ask your question...`（`--yolo` 生效时底栏 `» permission bypass on [shift+tab]`）。可执行文件是 `cmdc`，不是 `cmd`（撞 Windows cmd.exe）。
+
 批量起灶（多臂同时起）先做全员就绪清单：循环读每一臂，人人达 ready 或弹窗被处理才注题，禁止处理完一臂就走；弹窗会连环（信任框→沙箱框→登录框），过一道不等于就绪，每处理一道后重读；判「未开工」不能只看状态栏（会陈旧渲染），要看思考行 / 活动迹象。
 
 吞注入补救四步（`terminal send` 不再是默认注入器，只在吞注入时补救）：
