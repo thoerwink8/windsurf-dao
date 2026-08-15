@@ -129,23 +129,52 @@ node scripts/inbox-station.mjs ensure
 }
 ```
 
-本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。skills 同样是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。
+本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。
 
-## 11. Orca 快捷命令：从零拷问
+## 11. 接上 skills
 
-换机后在 Orca 里重建一条智能体提示（Claude），按「不对劲就按我」触发：
+skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
+
+建 SymbolicLink 需要开发者模式或管理员权限（Windows）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只警告不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $src = Join-Path (Resolve-Path .).Path 'host\skills'
+  if (-not (Test-Path -LiteralPath $src)) { throw "host/skills 不在: $src" }
+  $dstRoot = Join-Path $env:USERPROFILE '.claude\skills'
+  New-Item -ItemType Directory -Path $dstRoot -Force | Out-Null
+  foreach ($s in Get-ChildItem -LiteralPath $src -Directory) {
+    $want = $s.FullName
+    $dst = Join-Path $dstRoot $s.Name
+    $item = Get-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
+      $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
+      if ($got -eq $want) { Write-Host "ok   $($s.Name)"; continue }
+      $item.Delete()
+    } elseif ($item) {
+      Write-Warning "跳过 $($s.Name)：本机是真目录（可能是插件自带），先移走再重跑"
+      continue
+    }
+    New-Item -ItemType SymbolicLink -Path $dst -Target $want | Out-Null
+    Write-Host "link $($s.Name) -> $want"
+  }
+}
+```
+
+验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。
+
+## 12. Orca 快捷命令：从零拷问
+
+清单本体已随 `grill-ai` skill 入仓（第 11 节接上即得），Orca 按钮只留一个触发器，**不再复制清单正文**——两处维护必然分叉。换机后在 Orca 里重建一条智能体提示（Claude）：
 
 - 标签：`从零拷问（不对劲就按我）`
 - 类型：智能体提示（Claude）
 - 提示词全文：
 
 ```
-用户觉得当前做法不对劲，触发本令。立即停下手头动作，按清单自查并逐条回答：
-1) 第一性原理：剥掉全部现状与已有实现，这件事的本质需求是什么？从零推，最佳实践长什么样？
-2) 补丁链检查：你现在的方案是不是在给现状做兼容、打补丁？画出补丁链——每一层在修谁的副作用。补丁已到第二层即触发「同一种办法连错两次就换路」（反者道之动），必须停手从零重推，不许在原方向打第三层。
-3) 马斯克五步法按序过一遍且顺序不可换：质疑需求→删除（必须含「删掉整层」选项）→简化→加速→自动化。
-4) 把「从零方案」与「现状方案」的差异和代价表摆出来，用 AskUserQuestion 交用户拍板，禁止替用户默认取舍。
-5) 判制度：这次偏差是制度缺失还是执行失守？执行失守则写判例进 memory；确属制度缺失才提议改协作约定。
+用户觉得当前做法不对劲。立即停下手头动作，读 grill-ai skill 并按它的五条清单逐条自查回答。
 ```
 
 ## 自检
