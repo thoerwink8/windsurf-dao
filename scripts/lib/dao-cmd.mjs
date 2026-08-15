@@ -19,6 +19,17 @@ export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
 
 export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
 export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
+/** 探针等屏默认值。一个所有已知情况都不成立的缺省值是陷阱：
+ * grok 配 45s、codex 第一项实测 84s，没有任何 TUI 能在 8s 内跑完第一项。
+ * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。 */
+export const DEFAULT_PROBE_WAIT_MS = 120000;
+
+export function probeWaitMs(routing, provider) {
+  const raw = routing?.providers?.[provider]?.probe_wait_ms;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return n;
+  return DEFAULT_PROBE_WAIT_MS;
+}
 
 const SKIP_DIRS = new Set([
   '.git', 'node_modules', '_flow', '_tmp', '_scratch', '.codegraph',
@@ -231,6 +242,27 @@ export function extractHandleFromCreate(json) {
     || null;
 }
 
+/** 真返回在 result.task.id。result.id / 顶层 id 是 RPC id，不能当 taskId（#497/#502）。 */
+export function extractTaskId(json) {
+  return json?.result?.task?.id || null;
+}
+
+export function isRunRequired(error) {
+  const text = typeof error === 'object' && error
+    ? `${error.code || ''} ${error.message || ''}`
+    : String(error || '');
+  return /run_required/i.test(text);
+}
+
+export const RUN_REQUIRED_HINT = '未绑 orchestration Run，先跑 orca orchestration run-create 或 run-use';
+
+export function rollbackErrorAlreadyGone(error) {
+  const text = typeof error === 'object' && error
+    ? `${error.code || ''} ${error.message || ''}`
+    : String(error || '');
+  return /tab_not_found|terminal_handle_stale/i.test(text);
+}
+
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
 export function catalogUsedFlags() {
   const samples = [
@@ -363,20 +395,24 @@ export function extractTerminalText(readJson) {
   const result = readJson.result ?? readJson;
   if (typeof result === 'string') return result;
   const chunks = [];
-  if (typeof result.text === 'string') chunks.push(result.text);
-  if (typeof result.output === 'string') chunks.push(result.output);
-  if (typeof result.preview === 'string') chunks.push(result.preview);
-  if (Array.isArray(result.lines)) {
-    for (const line of result.lines) {
+  const pushLines = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const line of arr) {
       if (typeof line === 'string') chunks.push(line);
       else if (line && typeof line.text === 'string') chunks.push(line.text);
     }
+  };
+  // 2026-08-15 真返回：文本在 result.terminal.tail（字符串数组），不在 result.text/output/lines。
+  if (result.terminal && typeof result.terminal === 'object') {
+    pushLines(result.terminal.tail);
+    if (typeof result.terminal.preview === 'string') chunks.push(result.terminal.preview);
   }
-  if (Array.isArray(result.output)) {
-    for (const line of result.output) {
-      if (typeof line === 'string') chunks.push(line);
-    }
-  }
+  pushLines(result.tail);
+  if (typeof result.text === 'string') chunks.push(result.text);
+  if (typeof result.output === 'string') chunks.push(result.output);
+  if (typeof result.preview === 'string') chunks.push(result.preview);
+  pushLines(result.lines);
+  pushLines(Array.isArray(result.output) ? result.output : null);
   if (chunks.length) return chunks.join('\n');
   if (typeof readJson.preview === 'string') return readJson.preview;
   return '';
@@ -565,6 +601,28 @@ export function planDispatchRollback({ workerId, workerHandle, reviewerId, revie
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
+}
+
+/** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
+export function rollbackReport(steps) {
+  const list = (Array.isArray(steps) ? steps : []).map((s) => {
+    if (!s || s.ok) return s;
+    if (s.alreadyGone || rollbackErrorAlreadyGone(s.error)) {
+      return { ...s, ok: true, alreadyGone: true, error: undefined };
+    }
+    return s;
+  });
+  const failed = list.filter(s => s && s.ok === false);
+  if (failed.length === 0) {
+    return { rollbackFailed: false, alarm: null, failed: [], steps: list };
+  }
+  const detail = failed.map(s => `${s.cmd || '?'} → ${s.error || '失败'}`).join('; ');
+  return {
+    rollbackFailed: true,
+    alarm: `回滚失败，可能留下孤儿终端/树：${detail}`,
+    failed,
+    steps: list,
+  };
 }
 
 export function sleepSync(ms) {

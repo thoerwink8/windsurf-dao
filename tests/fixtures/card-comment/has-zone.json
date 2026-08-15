@@ -1,0 +1,6 @@
+{
+  "comment": "merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol｜[#499 #495]",
+  "expectedTickets": ["#499", "#495"],
+  "expect": "ok",
+  "why": "派工成功后 comment 有定界区且含期望单号"
+}

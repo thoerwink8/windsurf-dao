@@ -28,6 +28,8 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 cli = "grok"
 launch = "scripts/grok-shim.cmd -m {model}"
 launch_model = "grok-4.6"
+# grok TUI 把 terminal send 当用户消息再跑命令，8s 探针等不到真执行标记（#499/#502 实测）。
+probe_wait_ms = 45000
 launch_note = """
 grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-08-14，issue #443）。
 2026-08-15 起经 regrok shim（~/.local/bin，覆盖 PATH）已是普通 agent，`--agent grok` 直接可用。
@@ -43,6 +45,9 @@ cli = "codex"
 default_model = "gpt-5.6-sol"
 launch = "codex --dangerously-bypass-approvals-and-sandbox -m {model}"
 launch_model = "gpt-5.6-sol"
+# 2026-08-16 本树实测：验开工 1.7s，第一项写探针 84s（MCP 还在初始化），后两项 19s/25s。
+# 8s 必失败。120s = 84s + 余量。
+probe_wait_ms = 120000
 launch_note = """
 默认模型 gpt-5.6-sol。token 消耗约 3 倍，比价按每件活总成本算，不按单价。
 
