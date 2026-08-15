@@ -1,0 +1,20 @@
+orca orchestration task-create
+
+Usage: orca orchestration task-create --spec <text> [--task-title <text>] [--display-name <text>] [--deps <json_array>] [--parent <task_id>] [--run <run_id>] [--from <handle>] [--json]
+
+Create an orchestration task
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --spec
+  --task-title <text>  Concise title for the orchestration task
+  --display-name <text> UI label shown for dispatched worker rows
+  --deps
+  --parent
+  --run
+  --from
+  --retry-request
+

@@ -18,7 +18,10 @@
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段）⑥ host/memory 条目与 MEMORY.md 索引双向齐，全部扫描自发现。
+// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch）⑥ host/memory 索引双向齐
+// ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
+//   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
+//   不许静默跳过——SKIP 和 ok 必须能分开）。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -35,12 +38,14 @@ const t0 = Date.now();
 
 const failures = [];
 const greens = [];
+const skips = [];
 
 /** 报失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。 */
 function fail(what, howToFix, evidence) {
   failures.push([what, howToFix, evidence].filter(Boolean).slice(0, 3));
 }
 function green(line) { greens.push(line); }
+function skip(line) { skips.push(line); }
 
 function firstFailLine(output) {
   const line = String(output || '').split(/\r?\n/).find(l => /FAIL|✘|Assert|Error|error/.test(l));
@@ -244,10 +249,24 @@ function checkModelRouting() {
     if (miss.length) problems.push(`rules[${i}]缺${miss.join('/')}`);
   });
 
-  if (problems.length === 0) {
-    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐`);
+  const usedProviders = [...new Set(models.map(m => m && m.provider).filter(Boolean))];
+  if (usedProviders.length === 0) {
+    problems.push('没扫到任何带 provider 的模型，providers.launch 没查成');
   } else {
-    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided', problems.slice(0, 10).join(' '));
+    for (const name of usedProviders) {
+      const p = doc.providers?.[name];
+      if (!p) { problems.push(`${name} 无 providers 节`); continue; }
+      if (!p.launch || String(p.launch).trim() === '') { problems.push(`${name} 缺 launch`); continue; }
+      if (String(p.launch).includes('{model}') && !p.launch_model && !p.default_model) {
+        problems.push(`${name} 的 launch 含 {model} 但缺 launch_model/default_model`);
+      }
+    }
+  }
+
+  if (problems.length === 0) {
+    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.length} 个 provider 有 launch`);
+  } else {
+    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；被模型引用的 provider 要有 launch', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -304,18 +323,98 @@ function checkMemoryIndex() {
 
 // ── 跑 ──────────────────────────────────────────────────────────────
 
+// ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
+// 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
+// dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
+// 零样本：catalog 空 / help 空 / 一个 flag 都解析不到 → 没查成，不是「0 个缺失」。
+// SKIP ≠ ok：输出必须能分开「扫完 0 条」和「这次没扫到」。
+
+function parseHelpOptionsIndependent(text) {
+  const flags = new Set();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const opt = line.match(/^\s+(--[a-z0-9][a-z0-9-]*)\b/i);
+    if (opt) flags.add(opt[1]);
+    const usage = line.match(/^\s*Usage:/i);
+    if (usage) {
+      const re = /(--[a-z0-9][a-z0-9-]*)/gi;
+      let m;
+      while ((m = re.exec(line))) flags.add(m[1]);
+    }
+  }
+  return flags;
+}
+
+async function checkCommandHelp() {
+  let catalogUsedFlags, fetchOrcaHelp, orcaHelpAvailable, isCiEnv, helpCheckPolicy;
+  try {
+    const mod = await import(new URL('./lib/dao-cmd.mjs', import.meta.url));
+    catalogUsedFlags = mod.catalogUsedFlags;
+    fetchOrcaHelp = mod.fetchOrcaHelp;
+    orcaHelpAvailable = mod.orcaHelpAvailable;
+    isCiEnv = mod.isCiEnv;
+    helpCheckPolicy = mod.helpCheckPolicy;
+  } catch (e) {
+    fail('命令库模块加载失败', '恢复 scripts/lib/dao-cmd.mjs', String(e.message || e).slice(0, 160));
+    return;
+  }
+
+  const policy = helpCheckPolicy({ ci: isCiEnv(), orca: orcaHelpAvailable() });
+  if (policy.action === 'skip') {
+    skip(`命令库 --help 参数存活：${policy.reason}`);
+    return;
+  }
+  if (policy.action === 'fail') {
+    fail('命令库 --help 自检没查成', '本机装 orca 并保证在 PATH。此项本机必须真跑，不能跳过', policy.reason);
+    return;
+  }
+
+  const catalog = catalogUsedFlags();
+  if (!catalog || catalog.length === 0) {
+    fail('命令库一条 orca 命令都没扫到', 'builder 空了 ⇒ 本次等于没查', 'catalogUsedFlags()');
+    return;
+  }
+  const missing = [];
+  let scanned = 0;
+  for (const item of catalog) {
+    let text;
+    try {
+      text = fetchOrcaHelp(item.cmd);
+    } catch (e) {
+      fail('命令库 --help 自检没查成', '本机 orca --help 必须能跑', `${item.cmd}: ${String(e.message || e).slice(0, 120)}`);
+      return;
+    }
+    const available = parseHelpOptionsIndependent(text);
+    if (available.size === 0) {
+      fail('命令库 --help 一个参数都没解析到', 'help 文本形态变了，本次等于没查', item.cmd);
+      return;
+    }
+    scanned++;
+    for (const flag of item.flags || []) {
+      if (!available.has(flag)) missing.push(`${item.cmd} ${flag}`);
+    }
+  }
+  if (missing.length === 0) {
+    green(`命令库参数存活 ${scanned} 条命令 / 源=live`);
+  } else {
+    fail(`库参数已不在 orca --help ${missing.length} 个`, 'orca 升级删了参数，或库用了从未存在的旗标（#482 的 --submit 坑）', missing.join(' '));
+  }
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkModelRouting();
 checkMemoryIndex();
+await checkCommandHelp();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
 if (failures.length === 0) {
   for (const g of greens) console.log(`  ok  ${g}`);
-  console.log(`\ndao check: 好的（${greens.length} 项，${secs}s）`);
+  for (const s of skips) console.log(`  SKIP  ${s}`);
+  const skipBit = skips.length ? `，${skips.length} 项跳过` : '';
+  console.log(`\ndao check: 好的（${greens.length} 项${skipBit}，${secs}s）`);
   process.exit(0);
 }
 
@@ -324,5 +423,6 @@ for (const [what, how, evidence] of failures) {
   if (how) console.log(`     修：${how}`);
   if (evidence) console.log(`     ${evidence}`);
 }
-console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿，${secs}s）`);
+for (const s of skips) console.log(`  SKIP  ${s}`);
+console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿 / ${skips.length} 项跳过，${secs}s）`);
 process.exit(1);
