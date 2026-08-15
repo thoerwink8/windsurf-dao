@@ -8,6 +8,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 选型 CLI 读 origin/master 的模型路由（issue #533），浅克隆没有这个 ref，必须全量。
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22

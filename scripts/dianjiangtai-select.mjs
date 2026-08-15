@@ -10,8 +10,14 @@
 //   node scripts/dianjiangtai-select.mjs --role 审读 --ts 2026-08-15T15:00:00+08:00 --job-id dj-002
 //
 // 纪律：选型时刻必须 --ts 传入，禁 Date.now（决策票按它复算）。
+// 路由真相源只读 origin/master 版本（issue #533），不读工作区；读不到就拒绝出推荐。
+// 三选项模型标识渲染成 provider/model（#533），可直接拷进 pi --model。
+//
+// 选项：--routing 默认 docs/model-routing.toml，指 git 仓内 blob 路径（git show origin/master:<它>），
+//       不是本地文件路径——留这个口子是为了让「读 master 失败」可构造（#533 验收样本）。
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseYaml } from './lib/yaml-min.mjs';
@@ -63,10 +69,20 @@ const reversible = arg('reversible', 'true') !== 'false';
 
 const policyDir = resolve(ROOT, arg('policy-dir', 'policy'));
 const eventsDir = resolve(ROOT, arg('events-dir', 'ledger/events'));
-const routingPath = resolve(ROOT, arg('routing', 'docs/model-routing.toml'));
-
-if (!existsSync(routingPath)) usageAndExit(`路由真相源不在：${routingPath}`);
-const routing = parseToml(readFileSync(routingPath, 'utf8'));
+// 路由真相源只读 master 版本（issue #533 拍板）：选型结果不许取决于主树碰巧切在谁的分支上。
+// 工作区可能在途分支（如改过 provider 的 #519）时，读工作区 = 拿一条还没生效的规则出推荐。
+// 读不到 master 版本 = 本次没查成，拒绝出推荐，绝不静默回退工作区（同 [[routes]] 为 0 条的写法）。
+const routingBlob = arg('routing', 'docs/model-routing.toml');
+let routing;
+try {
+  routing = parseToml(execFileSync('git', ['show', `origin/master:${routingBlob}`], {
+    encoding: 'utf8', cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+  }));
+} catch (e) {
+  const detail = String(e.stderr || e.message || e).trim().split(/\r?\n/)[0].slice(0, 300);
+  process.stderr.write(`路由真相源读 master 没查成（git show origin/master:${routingBlob}）——本次等于没读 master 规则，拒绝出推荐，不静默回退工作区（#533）：${detail}\n`);
+  process.exit(1);
+}
 const routes = routing.routes || [];
 if (routes.length === 0) {
   process.stderr.write('docs/model-routing.toml 里 0 条 [[routes]]——本次等于没读到分时路由，拒绝出推荐（没查成 ≠ 查过没事）。\n');
@@ -77,6 +93,19 @@ const models = parseYaml(readFileSync(join(policyDir, 'models.yml'), 'utf8')).mo
 const bans = parseYaml(readFileSync(join(policyDir, 'bans.yml'), 'utf8')).bans || [];
 const weights = parseYaml(readFileSync(join(policyDir, 'weights.yml'), 'utf8'));
 const policyHash = hashOf({ models, bans, weights, routes });
+
+// 模型标识一律 provider/model 全称（issue #533 拍板）：显示值 = pi --model 启动参数值，
+// 一个串三处同源，不可能对不上；不另造别名映射层（那层会漂移）。
+// 通道来源以刚读的 master 路由表 [[models]].provider 为准（两条通道同模型名的场景只看它）；
+// policy/models.yml 的 provider 只兜底主表没收录的模型（理论上两者同源一致）。
+const providerByModel = new Map();
+for (const m of routing.models || []) {
+  if (m && m.id && m.provider) providerByModel.set(m.id, m.provider);
+}
+for (const m of models) {
+  if (m && m.id && m.provider && !providerByModel.has(m.id)) providerByModel.set(m.id, m.provider);
+}
+const renderModel = id => (id == null ? null : providerByModel.has(id) ? `${providerByModel.get(id)}/${id}` : id);
 
 const events = existsSync(eventsDir)
   ? readdirSync(eventsDir)
@@ -91,6 +120,8 @@ const result = select({
 });
 
 // 协调者转述用的瘦身输出：三选项 + decision_id + 分时命中。完整明细仍挂在 models/snapshot。
+// 三选项的模型标识渲染成 provider/model（#533）；decision_id 与 snapshot 照旧记裸 id，不受影响。
+const rawA = result.options.A;
 const out = {
   decision_id: result.decision_id,
   role,
@@ -100,9 +131,11 @@ const out = {
   job_id: jobId,
   route: result.snapshot.choice.route,
   options: {
-    A: result.options.A,
-    B: result.options.B,
-    C: result.options.C,
+    A: rawA.model == null
+      ? { ...rawA }
+      : { ...rawA, provider: providerByModel.get(rawA.model) ?? null, model: renderModel(rawA.model) },
+    B: { ...result.options.B, models: result.options.B.models.map(renderModel) },
+    C: { ...result.options.C, models: result.options.C.models.map(renderModel) },
   },
 };
 process.stdout.write(JSON.stringify(out, null, 2) + '\n');
