@@ -376,8 +376,8 @@ console.log("\n=== ⑰c reviewer-unfound 常驻：审官 dispatch 找不到，�
   check("首跑 exit 1（报帅 + 待帅处置）", r1.status === 1, `status=${r1.status}`);
   check("首跑报帅找不到审官 dispatch（待帅接手复核）", /报帅：找不到审官 dispatch.*待帅接手复核/.test(out1), out1.trim());
   check("二跑仍 exit 1（常驻不转绿）", r2.status === 1, `status=${r2.status}`);
-  check("二跑仍有待帅处置（找不到投递目标 dispatch）", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交（补好工位后自动重试））/.test(out2), out2.trim());
-  check("三跑仍常驻", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交（补好工位后自动重试））/.test(out3), out3.trim());
+  check("二跑仍有待帅处置（找不到投递目标 dispatch）", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交）/.test(out2), out2.trim());
+  check("三跑仍常驻", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交）/.test(out3), out3.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
@@ -850,79 +850,6 @@ console.log("\n=== ㊶ 选择器纯函数单测（#497 第十四轮：真实存�
   check("跨工位隔离：他工位 worker 不入选", selectDeliveryDispatch([mk("d1", "dispatched", "wt::other")], W) === null, "");
   // 语料闸对照：这些构造输入**不是**夹具语料（语料闸只扫 flow-fixtures），不得混入
   check("构造输入不入语料：语料闸扫的 flow-fixtures 夹具不包含这些构造 dispatch", !fs.readdirSync(path.join(FIXTURES, "dispatch-multi-idle")).includes("ctx_ok") && !fs.readdirSync(path.join(FIXTURES, "dispatch-multi-active")).includes("ctx_ok"), "");
-}
-
-console.log("\n=== ㊷ 单实例闸（#497 第十四轮：合并动作与不可重算绑定都是本单加的，两实例会双重合并/覆盖丢绑定）===");
-{
-  // 用 --once 跑不了锁路径（--once 不加锁）；直接 spawn live 子进程（interval 2 秒）持锁。
-  // 样本①：锁被活进程占用 → 拒绝启动 + 独立退出码 4 + 明确 LOCKED 行（可辨）
-  const { spawn } = require("child_process");
-  const lockFile = path.join(REPO, "_flow", "flow.lock");
-  fs.rmSync(lockFile, { force: true });
-  const holder = spawn(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-holder.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-holder-hb.json")], { stdio: "ignore", detached: true });
-  const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); // 同步阻塞
-  sleepMs(4500); // 等 holder 起锁
-  const held = fs.existsSync(lockFile) ? JSON.parse(fs.readFileSync(lockFile, "utf8")) : null;
-  check("样本①：live 启动写入锁（含 pid）", held && typeof held.pid === "number", JSON.stringify(held));
-  const r2 = spawnSync(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-reject.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-reject-hb.json")], { encoding: "utf8", cwd: REPO });
-  const out2 = (r2.stdout || "") + (r2.stderr || "");
-  check("样本①：被活锁占用 → 拒绝启动（退出码 4）", r2.status === 4, `status=${r2.status}`);
-  check("样本①：拒绝信息含占用者 pid（可辨）", new RegExp(`LOCKED.*pid=${held.pid}`).test(out2), out2.trim());
-  // 样本②：陈旧锁（pid 不存在）→ 接管覆盖（写新 pid），不拒绝
-  fs.rmSync(lockFile, { force: true });
-  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: 99999999, startedAt: "2020-01-01T00:00:00Z", argv: ["--dead"] }));
-  const r3 = spawn(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-takeover.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-takeover-hb.json")], { stdio: "ignore", detached: true });
-  sleepMs(4500); // 等 takeover 进程起锁（live 不退出，不能 spawnSync 等待）
-  const out3 = "";
-  const taken = fs.existsSync(lockFile) ? JSON.parse(fs.readFileSync(lockFile, "utf8")) : null;
-  check("样本②：陈旧锁 → 接管覆盖（不拒绝启动）", taken && taken.pid === r3.pid, JSON.stringify(taken));
-  try { process.kill(r3.pid); } catch { /* 已退 */ }
-  sleepMs(1500);
-  // 样本③（说明性）：正常退出的释放走 process.on('exit') 钩子（Node 语义保证触发）；
-  // Windows 下 SIGTERM 是 TerminateProcess（不触发 JS handler），SIGINT 仅 console 有效——
-  // 信号退出留残留锁属可接受（下次启动走接管路径，样本②已覆盖安全侧）。
-  // 样本④：--once / --snapshot-dir 测试通道不加锁
-  fs.rmSync(lockFile, { force: true });
-  const r4 = spawnSync(process.execPath, [FLOW, "--once", "--snapshot-dir", path.join(FIXTURES, "fake-loop")], { encoding: "utf8", cwd: REPO });
-  check("样本④：--once 测试通道不受锁影响（跑完无锁文件）", r4.status === 1 && !fs.existsSync(lockFile), `status=${r4.status}`);
-  fs.rmSync(lockFile, { force: true });
-  try { process.kill(holder.pid); } catch { /* 已退 */ }
-}
-
-console.log("\n=== ㊸ 待帅事项自愈（#497 第十四轮帅判定：帅的补救不进 fp 指纹，解冻挂在机器可判的阻塞消失上）===");
-{
-  // 样本①：report-unknown（无 model 标签选不出审官）→ 帅补标签 → 下一轮自动重试起审官，无需新评论
-  const t1 = fs.mkdtempSync(path.join(os.tmpdir(), "flow-heal-unknown-"));
-  const s1 = path.join(t1, "state.json");
-  const h1 = path.join(t1, "hb.json");
-  const a = path.join(FIXTURES, "shuai-heal-report-unknown"); // 无 model 标签
-  const b = path.join(FIXTURES, "doorbell-only"); // 补了 model 标签（同一 PR 3411，评论/review 同形）
-  const ra1 = runFlowShared(a, s1, h1);
-  const ra2 = runFlowShared(a, s1, h1);
-  const rb3 = runFlowShared(b, s1, h1);
-  const oa1 = (ra1.stdout || "") + (ra1.stderr || "");
-  const oa2 = (ra2.stdout || "") + (ra2.stderr || "");
-  const ob3 = (rb3.stdout || "") + (rb3.stderr || "");
-  check("样本①：首跑 report-unknown → 报帅 + 待帅处置（选不出审官）", /报帅：PR #3411 缺 model\/\* 标签/.test(oa1) && /待帅处置：#3411（选不出审官/.test(oa1), oa1.trim());
-  check("样本①：二跑（阻塞未消失）保持常驻，不狂发", /待帅处置：#3411（选不出审官/.test(oa2) && !/阻塞已消失/.test(oa2), oa2.trim());
-  check("样本①：帅补标签（无新评论）→ 阻塞消失沿 → 自动重试起审官", /待帅阻塞已消失（report-unknown）——自动重试一次（帅补救无需伪造新评论）/.test(ob3) && /动作：起审官 #3411/.test(ob3), ob3.trim());
-  fs.rmSync(t1, { recursive: true, force: true });
-  // 样本②：reviewer-unfound（找不到审官 dispatch）→ 审官 dispatch 恢复 → 自动重试复核注入
-  const t2 = fs.mkdtempSync(path.join(os.tmpdir(), "flow-heal-unfound-"));
-  const s2 = path.join(t2, "state.json");
-  const h2 = path.join(t2, "hb.json");
-  const a2 = path.join(FIXTURES, "reviewer-unfound");
-  const b2 = path.join(FIXTURES, "reviewer-unfound-healed");
-  const ra2a = runFlowShared(a2, s2, h2);
-  const ra2b = runFlowShared(a2, s2, h2);
-  const rb2c = runFlowShared(b2, s2, h2);
-  const ob2c = (rb2c.stdout || "") + (rb2c.stderr || "");
-  check("样本②：审官 dispatch 恢复 → 阻塞消失沿 → 自动重试复核注入", /待帅阻塞已消失（reviewer-unfound）——自动重试一次（帅补救无需伪造新评论）/.test(ob2c) && /动作：复核注入 #2007/.test(ob2c), ob2c.trim());
-  // 样本③：阻塞未消失 → 保持常驻（⑰c 已验三跑常驻；这里验沿不触发：二跑不出现「阻塞已消失」）
-  const ob2 = (ra2b.stdout || "") + (ra2b.stderr || "");
-  check("样本③：阻塞未消失 → 二跑无自动重试（不狂发）", !/阻塞已消失/.test(ob2), ob2.trim());
-  fs.rmSync(t2, { recursive: true, force: true });
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);

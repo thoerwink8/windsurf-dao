@@ -95,7 +95,7 @@
 //   orca-messages.json（原生信箱本轮投递的消息，可缺省） / orca-tasks.json（task-list 镜像）
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { judgmentFromReview, isCompletionComment, reviewAnnotations, mergePolicyFromComment, JUDGMENT_LINE_RE_EXPORT as JUDGMENT_LINE_RE } from './lib/judgment.mjs';
@@ -1280,30 +1280,6 @@ function makeSnapshotSource(roundDir, repo) {
 // 动作执行
 // ══════════════════════════════════════════════════════════════════════
 
-// 待帅阻塞自愈判据（#497 第十四轮帅判定）：pendingShuai 的 fp 只由 PR 评论+review 推导，帅的补救
-// （补标签/修终端等）不进指纹——挂在「人肉伪造新评论」上的自愈等于没有自愈；解冻条件必须挂在
-// **机器可判的阻塞消失**上（dispatch skill §七同源）。每轮重查：
-//   report-unknown（选不出审官）→ 重算选型序（标签/路由表/启动配方），能选出 = 阻塞消失
-//   reviewer-unfound（找不到审官终端/投递目标）→ 重查 dispatch 目标可解 = 阻塞消失
-// 其余类型保持原判据（fp 变化）。沿触发（gone false→true）防每轮狂发；重试仍走 actedOn 去重。
-function shuaiBlockGone(block, pr, rec, source, toml) {
-  if (block === 'report-unknown') {
-    const cls = classifyPr(pr);
-    if (!cls.model) return false;
-    const reviewer = pickReviewer(toml, cls.model, cls.taskType);
-    if (!reviewer) return false;
-    return !!reviewerLaunch(reviewer);
-  }
-  if (block === 'reviewer-unfound') {
-    // 投递目标可解：返工看 workerDispatchFor（flow 绑定 / worktree 分支反查），复核看 reviewerDispatchFor
-    const map = buildDispatchMap(source, { dispatchCache: rec?.dispatchCache || {} }, [pr]);
-    if (workerDispatchFor(source, pr, rec)) return true;
-    if (reviewerDispatchFor(map, pr.number, rec)) return true;
-    return false;
-  }
-  return false;
-}
-
 function executeAction(action, pr, toml, source, rec, args) {
   const repo = args.repo || 'thoerwink8/windsurf-dao';
 
@@ -1645,22 +1621,6 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
       events.push(`[flow] 报帅：上帅 #${pr.number}（${why}）——停止自动流转，不再自动流转该 PR`);
     }
 
-    // 待帅阻塞自愈（#497 第十四轮）：帅的补救不进 fp 指纹，解冻条件挂在机器可判的阻塞消失上。
-    // 沿触发（gone false→true）防每轮狂发；重试仍走 actedOn 去重。
-    if (!args.explain && rec.pendingShuai && derived.state !== 'approved' && derived.state !== 'shang-shuai' && derived.state !== 'switch' && derived.state !== 'error') {
-      const block = rec.pendingShuai.block;
-      if (block === 'report-unknown' || block === 'reviewer-unfound') {
-        const goneNow = shuaiBlockGone(block, pr, rec, source, toml);
-        const wasGone = rec.pendingShuai.gone === true;
-        rec.pendingShuai.gone = goneNow;
-        if (goneNow && !wasGone) {
-          events.push(`[flow] 待帅阻塞已消失（${block}）——自动重试一次（帅补救无需伪造新评论）`);
-          rec.pendingShuai = null;
-          rec.actedOn = null; // 解除去重：下一轮进动作分支重试一次（成败都重新记账）
-        }
-      }
-    }
-
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）；--explain 只读不动作
     if (!args.explain && rec.actedOn !== fp && derived.state !== 'approved') {
       // 自愈：新信号（fp 变化）到来即清除待帅记账给一次重试——fp 去重保证每个新信号至多重试一次
@@ -1691,9 +1651,9 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
             rec.pendingShuai = {
               kind: action.kind,
-              block: exec.needsReport === 'report-unknown' ? 'report-unknown' : 'generic',
-              gone: true, // 本次阻塞消失沿已消费：下一轮同阻塞不自动重试（等新的 gone 沿或 fp 变化）
-              reason: exec.needsReport === 'report-unknown' ? '选不出审官待帅处置（补 model/type 标签或路由表加审查模型，自动重试）' : '起审官失败待帅接手',
+
+
+              reason: exec.needsReport === 'reviewer-unfound' ? '找不到投递目标 dispatch——待帅转交' : '起审官失败待帅接手（新信号到来自动重试一次）',
             };
             rec.actedOn = fp;
           }
@@ -1720,9 +1680,9 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
             rec.pendingShuai = {
               kind: action.kind,
-              block: exec.needsReport === 'reviewer-unfound' ? 'reviewer-unfound' : 'generic',
-              gone: true, // 本次阻塞消失沿已消费：下一轮同阻塞不自动重试（等新的 gone 沿或 fp 变化）
-              reason: exec.needsReport === 'reviewer-unfound' ? '找不到投递目标 dispatch——待帅转交（补好工位后自动重试）' : '投递失败待帅接手',
+
+
+              reason: exec.needsReport === 'reviewer-unfound' ? '找不到投递目标 dispatch——待帅转交' : '投递失败待帅接手（新信号到来自动重试一次）',
             };
             rec.actedOn = fp;
           }
@@ -1809,48 +1769,9 @@ let anyInfra = false;
 export function main(argv = process.argv.slice(2)) {
   args = parseArgs(argv);
   if (args.snapshotDir) snapshotRun();
-  else {
-    // #497 第十四轮：单实例闸（_flow/flow.lock）——合并动作与不可重算绑定（PR↔dispatch）都是本单加的，
-    // 两个实例会双重合并/并发覆盖丢绑定。安全默认 = 拒绝启动（跑两个是静默双动作，跑零个心跳闸会红、看得见）。
-    // --once / --snapshot-dir（测试通道）不加锁。
-    if (!args.once && !acquireFlowLock()) process.exit(4);
-    liveLoop();
-  }
-  process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
-}
+  else liveLoop(); // #522 承接单：单实例锁（原子创建 + 持有者身份校验）拆出本单（#497 第十五轮拆单收口）
 
-// 单实例闸：锁文件 _flow/flow.lock。返回 true = 拿到锁（写入/接管），false = 被活进程占用（拒绝启动）。
-// 锁陈旧（PID 已死）→ 接管覆盖；正常退出（process.exit）时经 exit 钩子释放。
-// 注意：拒绝启动时不得删除占用者的锁。
-function acquireFlowLock() {
-  const lockFile = join(ROOT, '_flow', 'flow.lock');
-  const mine = { pid: process.pid, startedAt: new Date().toISOString(), argv: process.argv.slice(2) };
-  try {
-    const existing = JSON.parse(readFileSync(lockFile, 'utf8'));
-    if (existing && existing.pid && existing.pid !== process.pid) {
-      let alive = true;
-      try { process.kill(existing.pid, 0); } catch (e) { alive = !(e && e.code === 'ESRCH'); }
-      if (alive) {
-        console.log(`[flow] LOCKED：已有 flow 实例在跑（pid=${existing.pid}，startedAt=${existing.startedAt || '?'}）——拒绝启动；请先停掉占用者或等它退出。`);
-        return false;
-      }
-      // 锁陈旧：PID 已死 → 接管覆盖
-      console.log(`[flow] 接管陈旧锁（pid=${existing.pid} 已不在）`);
-    }
-  } catch (e) {
-    // 锁不存在或损坏：接管
-  }
-  mkdirSync(dirname(lockFile), { recursive: true });
-  writeFileSync(lockFile, JSON.stringify(mine, null, 1));
-  const cleanupLock = () => {
-    try { unlinkSync(lockFile); } catch { /* 已删或不存在 */ }
-  };
-  process.on('exit', cleanupLock);
-  // SIGTERM/SIGINT 默认行为不触发 exit 钩子 → 显式清理（协调器常规停进程方式，留陈旧锁会让下次启动
-  // 走接管路径，但「正常退出即释放」是承诺，信号退出也释放）
-  process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
-  process.on('SIGINT', () => { cleanupLock(); process.exit(0); });
-  return true;
+  process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
 }
 
 function runOneRound(source, state, wakeSource, nativeMessages) {
