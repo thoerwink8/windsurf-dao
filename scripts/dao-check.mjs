@@ -18,12 +18,14 @@
 // 2026-08-14 拆旧（issue #425）：hook 注册 / 命令表 / skill 部署三个检查连同一套旧体系退役，
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段）⑥ host/memory 条目与 MEMORY.md 索引双向齐，全部扫描自发现。
+// ⑤模型路由表（TOML 可解析 + 必填字段）⑥ host/memory 条目与 MEMORY.md 索引双向齐
+// ⑦态注入 hook 注册在且真跑得动（issue #488），全部扫描自发现。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { checkModeHook } from './lib/mode-hook-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -302,6 +304,32 @@ function checkMemoryIndex() {
   }
 }
 
+// ── ⑦ 态注入 hook 活着（issue #488）────────────────────────────────────
+// 专注/值守三态的承重墙是 UserPromptSubmit hook：它每轮把当前态注入上下文。
+// 它是静默失效型部件的极端例子——被覆盖/断链/坏掉之后，态标还挂在那儿，
+// AI 却什么都收不到，用户以为自己锁着，实际没锁。假状态比没状态更糟。
+//
+// 而本机 ~/.claude/settings.json 没有单一 owner（cc-switch DB 下发 / 部署 link /
+// CC 本体重置三方互相覆盖，见 memory claude-settings-self-heal），所以「装过一次」
+// 不等于「现在还在」，必须每次 dao check 都重新验。
+//
+// 两层验，缺一不可（静态门控拦不住运行时失效）：
+//   静态：host/hooks/ 下每个 *.mjs 都要在某个 settings 面的 UserPromptSubmit 里被点到。
+//   运行时：把注册的那条命令真跑两次——一次喂造好的专注态、一次喂不存在的路径，
+//           断言两次输出不同形，且专注那次带得出焦点原文。
+//           这同时是「读到了且是常态」与「压根没读到」不得同形那条硬规矩的常驻闸。
+// 自发现：期望集合从 host/hooks/ 扫出来，没有手写清单可以漏登记。
+// 零样本：目录不在 / 没有 .mjs / 一个 settings 文件都读不到，全部单独报红。
+
+// 实现在 scripts/lib/mode-hook-check.mjs（那里能被 tests/mode.tests.js 拿假 HOME 造违规样本单独验，
+// 不必跑整个 dao-check——dao-check 会跑 tests/，tests 再跑 dao-check 就递归了）。
+
+function checkModeHookAlive() {
+  const r = checkModeHook({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
 // ── 跑 ──────────────────────────────────────────────────────────────
 
 runTests();
@@ -310,6 +338,7 @@ checkSecretsNotTracked();
 checkResidentBudget();
 checkModelRouting();
 checkMemoryIndex();
+checkModeHookAlive();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

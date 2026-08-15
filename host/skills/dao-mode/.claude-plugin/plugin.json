@@ -1,0 +1,7 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "dao-mode",
+  "version": "1.0.0",
+  "description": "专注/值守/常态三态开关：skill 负责切，UserPromptSubmit hook 负责每轮把当前态注入上下文（issue #488）",
+  "skills": ["./"]
+}

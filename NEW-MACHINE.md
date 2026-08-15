@@ -148,6 +148,33 @@ node scripts/inbox-station.mjs ensure
 5) 判制度：这次偏差是制度缺失还是执行失守？执行失守则写判例进 memory；确属制度缺失才提议改协作约定。
 ```
 
+## 12. 专注/值守态注入（hook + `/dao-mode` skill）
+
+三态开关（常态 / 专注 / 值守）靠两件东西：`/dao-mode` skill 负责切，UserPromptSubmit hook 负责**每轮把当前态注入上下文**。
+承重的是 hook——skill 的字只在调用那一轮进上下文，不装 hook 等于「我说我专注了」。设计与拍板记录见 issue #488。
+
+**① 一条 SymbolicLink，装完就齐**。`host/skills/dao-mode/` 同时是一个 Claude Code 插件（自带
+`.claude-plugin/plugin.json` 与 `hooks/hooks.json`），链到 `~/.claude/skills/` 下之后宿主会自动加载成
+`dao-mode@skills-dir`，skill 和 hook 一起生效：
+
+```powershell
+$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
+New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\dao-mode" -Target "$repo\host\skills\dao-mode" | Out-Null
+```
+
+下次开 Claude Code 生效（当前会话里可以 `/reload-plugins`）。
+
+**② 不要去改 `settings.json`**。2026-08-15 实测过三条路，结论：
+
+- **插件面（上面这条 link）生效，且完全不碰 `settings.json`** —— 装完 `enabledPlugins` 与 `hooks` 段一个字没变，新会话第一轮就拿到态文本。
+- 用户级 `~/.claude/settings.local.json` 的 `hooks` 段**宿主根本不读**（注册在那儿，新会话上下文里一个字都没有；同一条注册放进项目级 `.claude/settings.local.json` 立刻生效）。
+- `~/.claude/settings.json` 能生效，但它是本页第 8 条那条红线文件（覆写可能触发 401 强制登出，改回去也恢复不了），且被 cc-switch 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖。既然插件面够用，就不碰它。
+
+**③ 验**：`node scripts/dao-check.mjs` 第 ⑦ 项会把装载面上那条命令真跑两次（一次喂造好的专注态、一次喂不存在的状态文件），
+两次输出同形、跑不动、或哪个装载面都点不到，都报红。链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 ① 即可。
+
+状态文件是 `~/.claude/state.json`，跨会话跨工作区唯一，由 `dao-mode.mjs` 独家读写，不要手改。
+
 ## 自检
 
 做完跑一遍：
