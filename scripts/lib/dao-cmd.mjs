@@ -429,11 +429,17 @@ export function waitAndVerify({ readOnce, timeoutMs = 8000, intervalMs = 400, sl
 
 export const CODEX_CAPABLE_FLAG = '--dangerously-bypass-approvals-and-sandbox';
 export const PROBE_LABELS = { write: '能写文件', node: '能跑 node', gh: '能调 gh' };
-export const PROBE_SENTINELS = {
-  write: 'DAO_PROBE_WRITE_OK',
-  node: 'DAO_PROBE_NODE_OK',
-  gh: 'DAO_PROBE_GH_OK',
+/** 只在真执行的 stdout 里出现；命令原文里不能有这个形态（否则回显即自证）。 */
+export const PROBE_MARK_RE = {
+  write: /\bW\d{13}\b/,
+  node: /\bN\d{13}\b/,
+  gh: /gh version \d/i,
 };
+
+export function probeMarkFound(name, text) {
+  const re = PROBE_MARK_RE[name];
+  return !!(re && re.test(String(text || '')));
+}
 
 /** 任何 codex launch 都必须带 danger 旗标。工人和审官同一把尺子。 */
 export function assertCodexLaunch({ command } = {}) {
@@ -454,20 +460,21 @@ export function assertReviewerLaunch(opts) {
 
 export function probeCommand(name) {
   if (name === 'write') {
-    return `node -e "require('fs').writeFileSync('_dao_probe_write.txt','ok');require('fs').unlinkSync('_dao_probe_write.txt');process.stdout.write('DAO_PROBE_WRITE_OK')"`;
+    return `node -e "var t=Date.now();require('fs').writeFileSync('_dao_probe_w',String(t));process.stdout.write('W'+t)"`;
   }
   if (name === 'node') {
-    return `node -e "process.stdout.write('DAO_PROBE_NODE_OK')"`;
+    return `node -e "process.stdout.write('N'+Date.now())"`;
   }
   if (name === 'gh') {
-    return 'gh --version && echo DAO_PROBE_GH_OK';
+    return 'gh --version';
   }
   throw new Error(`未知探针 ${name}`);
 }
 
 /**
- * 探针必须走目标终端：send 命令、read 回哨兵。
- * sendAndRead(cmd) → { text, error }；error 表示没送成/没读成。
+ * 探针必须走目标终端：send 命令，在屏面找「只有真执行才会出现」的标记。
+ * 不能找命令原文里的字面量——回显/Ran xxx 会自证。
+ * sendAndRead(cmd, name) → { text, error }。
  */
 export function terminalProbeExec({ sendAndRead } = {}) {
   if (typeof sendAndRead !== 'function') throw new Error('terminalProbeExec 要 sendAndRead');
@@ -475,14 +482,14 @@ export function terminalProbeExec({ sendAndRead } = {}) {
     let cmd;
     try { cmd = probeCommand(name); }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
-    const r = sendAndRead(cmd);
+    const r = sendAndRead(cmd, name);
     if (!r || r.error) return { ok: false, unread: true, error: r?.error || '没读成' };
     const text = String(r.text || '');
-    const sentinel = PROBE_SENTINELS[name];
+    const ok = probeMarkFound(name, text);
     return {
-      ok: text.includes(sentinel),
+      ok,
       text,
-      error: text.includes(sentinel) ? undefined : '终端输出没有哨兵',
+      error: ok ? undefined : '终端没有真执行标记（命令回显或 policy 拦截都不算）',
     };
   };
 }

@@ -293,20 +293,40 @@ async function main() {
     const termEmpty = S.runCapabilityProbes({
       exec: S.terminalProbeExec({ sendAndRead: () => ({ text: 'Working...' }) }),
     });
-    check('R1 终端无哨兵 → 探针红（验的是终端）', termEmpty.ok === false && termEmpty.failed.length === 3, JSON.stringify(termEmpty));
-    const termOk = S.runCapabilityProbes({
+    check('R1 终端无真执行标记 → 探针红', termEmpty.ok === false && termEmpty.failed.length === 3, JSON.stringify(termEmpty));
+
+    const echoOnly = S.runCapabilityProbes({
       exec: S.terminalProbeExec({
-        sendAndRead: (cmd) => ({
-          text: cmd.includes('gh') ? 'DAO_PROBE_GH_OK' : cmd.includes('WRITE') || cmd.includes('writeFileSync') ? 'DAO_PROBE_WRITE_OK' : 'DAO_PROBE_NODE_OK',
-        }),
+        sendAndRead: (cmd) => ({ text: `• Ran ${cmd}\nrejected: blocked by policy` }),
       }),
     });
-    check('R1 终端回哨兵 → 三项过', termOk.ok === true, JSON.stringify(termOk));
+    check('R1 命令回显+policy 拦 → 三项都红（自证不绿）', echoOnly.ok === false && echoOnly.failed.length === 3, JSON.stringify(echoOnly));
+
+    const corpus = '• Ran gh --version\nrejected: blocked by policy';
+    check('R1 帅语料：Ran gh --version + blocked by policy ≠ 能调 gh', S.probeMarkFound('gh', corpus) === false);
+
+    for (const name of ['write', 'node', 'gh']) {
+      check(`R1 命令原文不含 ${name} 真执行标记`, S.probeMarkFound(name, S.probeCommand(name)) === false, S.probeCommand(name));
+    }
+
+    const termOk = S.runCapabilityProbes({
+      exec: S.terminalProbeExec({
+        sendAndRead: (cmd) => {
+          if (/gh --version/.test(cmd)) return { text: 'gh version 2.82.1 (2026-01-15)' };
+          if (/writeFileSync/.test(cmd)) return { text: 'W1734123456789' };
+          return { text: 'N1734123456789' };
+        },
+      }),
+    });
+    check('R1 真执行标记出现 → 三项过', termOk.ok === true, JSON.stringify(termOk));
+    check('R1 写/node/gh 标记互相独立', S.probeMarkFound('write', 'N1734123456789') === false && S.probeMarkFound('gh', 'W1734123456789') === false);
+
     const unreadProbe = S.terminalProbeExec({ sendAndRead: () => ({ error: 'terminal_handle_stale' }) })('write');
     check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
+    check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
     check('R4 没读成 ≠ 读了是空的', unread.reason === '没读成' && unread.unscanned === true, JSON.stringify(unread));

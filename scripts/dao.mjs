@@ -31,6 +31,7 @@ import {
   loadRouting,
   parseArgs,
   planDispatchRollback,
+  probeMarkFound,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
@@ -141,7 +142,7 @@ function readOnceHandle(handle) {
 }
 
 function liveSendAndRead(handle) {
-  return (cmd) => {
+  return (cmd, name) => {
     const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
     if (!sent.ok) return { error: errText(sent.error) };
     const deadline = Date.now() + 8000;
@@ -151,7 +152,7 @@ function liveSendAndRead(handle) {
       if (!read.ok) return { error: errText(read.error) };
       const text = extractTerminalText(read.json);
       last = { text };
-      if (/DAO_PROBE_/.test(text)) return { text };
+      if (probeMarkFound(name, text)) return { text };
       sleepSync(400);
     }
     return last;
