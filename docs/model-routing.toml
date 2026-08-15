@@ -81,9 +81,27 @@ Command Code 官方 CLI 做工人载具（拍板 2026-08-16，issue #508；本�
 - 无人值守开关三档（launch 模板用最狠的 `--yolo`，与本仓 codex/pi/grok 一致全程无提示）：`--yolo`（= `--dangerously-skip-permissions`）绕过**所有**权限提示；`--auto-accept` 只是以 auto-accept 模式启动，危险操作**仍可能提示**；`--permission-mode <standard|plan|auto-accept>` 显式设档。要更保守的备选，把 launch 里的 `--yolo` 换成 `--auto-accept` 即可（本文件一处改）。`--yolo` 生效标志：底栏 `» permission bypass on [shift+tab]`（#511 工人全程无提示）。
 - 命令发出后需补一记空回车才执行；之后约 20 秒内 TUI 就绪（屏面 `# Command Code` / 输入框 `❯ Ask your question...`）。
 - 非交互契约：`-p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
-社区插件方案（pi-commandcode-provider）2026-08-16 拍板不采用，插件已卸载；pi 保持 DeepSeek 官方 API 原通道。
+
+覆盖面与速度（2026-08-16 帅·A 本机实测）：
+- **GOAT 档（$10/月）覆盖面只有开源模型**：`claude-opus-5` / `claude-sonnet-5` / `gpt-5.6-sol` 一律返回 `MODEL_NOT_IN_PLAN`（提示需 Pro 及以上档位）。早先「一个会员覆盖 Claude+GPT+DeepSeek」的说法是错的，已撤回。
+- `google/gemini-3.7-flash` 不可用：403 "This model is not available in your region."——Gemini 全系在本机走不通，别写进候选。
+- 同一道题（「写 Python 回文判断函数」，`command-code -p ... --max-turns 1 --skip-onboarding`，含 CLI 启动）实测速度：
+
+  模型                         耗时
+  zai-org/GLM-5.2              5.9s
+  deepseek/deepseek-v4-flash   5.5s
+  moonshotai/Kimi-K3           8.3s
+  deepseek/deepseek-v4-pro     11.9s
+  zai-org/GLM-5.3              14.6s
+
+- 对「审查换厂商」的意义（候选记录，2026-08-16 帅·A）：GOAT 内可用的异厂商选项是 `moonshotai/Kimi-K3` 与 `zai-org/GLM-5.2` / `GLM-5.3`（Claude/GPT 都不在 plan 内）。**只作候选记录，未改 [[rules]] 审官选型序、未动 [[bans]]**——换审官人选要用户拍板，本文件不越权。
+
+pi 接不上 commandcode 的根因（2026-08-16 帅·A 实测，不是 key 的问题）：
+- Provider API 协议通：`https://api.commandcode.ai/provider/v1/chat/completions`（OpenAI 兼容）与 `/messages`（Anthropic 兼容）实测可用，`Authorization: Bearer <key>`，模型列表在 `/provider/v1/models`（55 个）。
+- 但 pi 的 provider 是**代码里注册**的，不是配置里声明的：往 `~/.pi/agent/models-store.json` 凭空写一个 `commandcode` provider 会被静默忽略，`pi auth check --provider commandcode` 返回 `{"status":"not_ready","reason":"provider_not_found"}`，`pi --list-models` 也不列出。
+- 所以「拿到 apikey 就能在 pi 里用」这个前提**不成立**；要在 pi 里用的唯一路是写 provider 插件，而插件方案 2026-08-16 已拍板不采用。**pi 保持 DeepSeek 官方 API 原通道。**
 """
-why = "用户 2026-08-16 购买 Command Code 会员（$10/月 GOAT 档），派单优先用它跑 DeepSeek 模型：非交互 5.5s 出结果，交互 TUI 可做工人载具（terminal send 注入任务书成功、屏面可判进度），且官方 CLI 断链会明确报错（vs 社区插件可能静默退回默认 provider）。"
+why = "用户 2026-08-16 购买 Command Code 会员（$10/月 GOAT 档），派单优先用它跑 DeepSeek 模型：非交互 5.5s 出结果，交互 TUI 可做工人载具（terminal send 注入任务书成功、屏面可判进度），且官方 CLI 断链会明确报错（vs 社区插件可能静默退回默认 provider）。GOAT 覆盖面只有开源模型（Claude/GPT 全系 MODEL_NOT_IN_PLAN），Gemini 本机不可用（2026-08-16 帅·A 实测）。"
 decided = "2026-08-16"
 
 [providers.claude]
