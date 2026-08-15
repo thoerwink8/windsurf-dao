@@ -118,11 +118,21 @@ async function main() {
     });
     check('help 无输出 → 没查成', blank.unscanned === true && blank.ok === false);
 
-    let liveText = null;
-    try { liveText = S.fetchOrcaHelp('orchestration worker-start'); } catch (e) {
-      check('live orca --help 可跑', false, e.message);
-    }
-    if (liveText) {
+    const skipCi = S.helpCheckPolicy({ ci: true, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
+    check('CI 无 orca → SKIP（不计失败）', skipCi.action === 'skip' && /本项需本机 orca/.test(skipCi.reason), JSON.stringify(skipCi));
+    const failLocal = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
+    check('本机无 orca → FAIL（不许悄悄跳过）', failLocal.action === 'fail', JSON.stringify(failLocal));
+    const runLive = S.helpCheckPolicy({ ci: true, orca: { ok: true, missing: false } });
+    check('有 orca 时 CI 也必须真跑', runLive.action === 'run', JSON.stringify(runLive));
+
+    const avail = S.orcaHelpAvailable();
+    const policy = S.helpCheckPolicy({ ci: S.isCiEnv(), orca: avail });
+    if (policy.action === 'skip') {
+      console.log(`  SKIP  live orca --help（${policy.reason}）`);
+    } else if (policy.action === 'fail') {
+      check('live orca --help 可跑', false, policy.reason);
+    } else {
+      const liveText = S.fetchOrcaHelp('orchestration worker-start');
       check('live --help 也不含 --submit', !S.parseHelpFlags(liveText).has('--submit'));
     }
   }

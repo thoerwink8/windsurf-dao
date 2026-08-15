@@ -245,6 +245,35 @@ export function parseHelpFlags(helpText) {
   return flags;
 }
 
+export function isCiEnv(env = process.env) {
+  return env.GITHUB_ACTIONS === 'true' || env.CI === 'true';
+}
+
+export function orcaHelpAvailable(spawn = spawnSync) {
+  const r = spawn('orca', ['--help'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+  if (r.error) {
+    const msg = r.error.message || String(r.error);
+    const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
+    return { ok: false, missing, error: msg };
+  }
+  const text = `${r.stdout || ''}${r.stderr || ''}`;
+  if (!String(text).trim()) return { ok: false, missing: false, error: 'orca --help 无输出' };
+  return { ok: true, missing: false };
+}
+
+/**
+ * --help 自检是 local-only：真跑 orca --help。
+ * CI 无 orca → SKIP（可见，不计失败）；本机无 orca → FAIL（不许悄悄跳过）。
+ * 静默跳过会把「没查成」当成「查过没事」；直接 FAIL 会让 CI 永远红。
+ */
+export function helpCheckPolicy({ ci, orca } = {}) {
+  if (orca && orca.ok) return { action: 'run' };
+  if (ci && orca && orca.missing) {
+    return { action: 'skip', reason: '本项需本机 orca，CI 无法验证' };
+  }
+  return { action: 'fail', reason: (orca && orca.error) || '本机 orca 不在 PATH，--help 自检没查成' };
+}
+
 export function fetchOrcaHelp(cmd, spawn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');

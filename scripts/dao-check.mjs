@@ -19,7 +19,9 @@
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
 // ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch）⑥ host/memory 索引双向齐
-// ⑦命令库 --help 参数存活（真 orca --help，缺夹具且 orca 不在 = 没查成）。
+// ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
+//   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
+//   不许静默跳过——SKIP 和 ok 必须能分开）。
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -36,12 +38,14 @@ const t0 = Date.now();
 
 const failures = [];
 const greens = [];
+const skips = [];
 
 /** 报失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。 */
 function fail(what, howToFix, evidence) {
   failures.push([what, howToFix, evidence].filter(Boolean).slice(0, 3));
 }
 function green(line) { greens.push(line); }
+function skip(line) { skips.push(line); }
 
 function firstFailLine(output) {
   const line = String(output || '').split(/\r?\n/).find(l => /FAIL|✘|Assert|Error|error/.test(l));
@@ -319,11 +323,11 @@ function checkMemoryIndex() {
 
 // ── 跑 ──────────────────────────────────────────────────────────────
 
-// ── ⑦ 命令库 --help 参数存活 ────────────────────────────────────────
-// 库里用到的 orca 参数必须还在对应命令的 --help 里。解析器自己写，不复用
-// dao-cmd.parseHelpFlags（自己查自己查不出解析漏洞）。取数优先跑真
-// `orca <cmd> --help`；orca 不在 PATH 才用 tests/fixtures/orca-help/ 里某次真输出。
+// ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
+// 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
+// dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
 // 零样本：catalog 空 / help 空 / 一个 flag 都解析不到 → 没查成，不是「0 个缺失」。
+// SKIP ≠ ok：输出必须能分开「扫完 0 条」和「这次没扫到」。
 
 function parseHelpOptionsIndependent(text) {
   const flags = new Set();
@@ -341,35 +345,47 @@ function parseHelpOptionsIndependent(text) {
 }
 
 async function checkCommandHelp() {
-  let catalogUsedFlags, fetchHelpPreferLive;
+  let catalogUsedFlags, fetchOrcaHelp, orcaHelpAvailable, isCiEnv, helpCheckPolicy;
   try {
     const mod = await import(new URL('./lib/dao-cmd.mjs', import.meta.url));
     catalogUsedFlags = mod.catalogUsedFlags;
-    fetchHelpPreferLive = mod.fetchHelpPreferLive;
+    fetchOrcaHelp = mod.fetchOrcaHelp;
+    orcaHelpAvailable = mod.orcaHelpAvailable;
+    isCiEnv = mod.isCiEnv;
+    helpCheckPolicy = mod.helpCheckPolicy;
   } catch (e) {
     fail('命令库模块加载失败', '恢复 scripts/lib/dao-cmd.mjs', String(e.message || e).slice(0, 160));
     return;
   }
+
+  const policy = helpCheckPolicy({ ci: isCiEnv(), orca: orcaHelpAvailable() });
+  if (policy.action === 'skip') {
+    skip(`命令库 --help 参数存活：${policy.reason}`);
+    return;
+  }
+  if (policy.action === 'fail') {
+    fail('命令库 --help 自检没查成', '本机装 orca 并保证在 PATH。此项本机必须真跑，不能跳过', policy.reason);
+    return;
+  }
+
   const catalog = catalogUsedFlags();
   if (!catalog || catalog.length === 0) {
     fail('命令库一条 orca 命令都没扫到', 'builder 空了 ⇒ 本次等于没查', 'catalogUsedFlags()');
     return;
   }
-  const sources = new Set();
   const missing = [];
   let scanned = 0;
   for (const item of catalog) {
-    let fetched;
+    let text;
     try {
-      fetched = fetchHelpPreferLive(item.cmd);
+      text = fetchOrcaHelp(item.cmd);
     } catch (e) {
-      fail('命令库 --help 自检没查成', '本机装 orca 并保证在 PATH，或补回 tests/fixtures/orca-help 里的真 --help 落盘', `${item.cmd}: ${String(e.message || e).slice(0, 120)}`);
+      fail('命令库 --help 自检没查成', '本机 orca --help 必须能跑', `${item.cmd}: ${String(e.message || e).slice(0, 120)}`);
       return;
     }
-    sources.add(fetched.source);
-    const available = parseHelpOptionsIndependent(fetched.text);
+    const available = parseHelpOptionsIndependent(text);
     if (available.size === 0) {
-      fail('命令库 --help 一个参数都没解析到', 'help 文本形态变了或夹具空了，本次等于没查', item.cmd);
+      fail('命令库 --help 一个参数都没解析到', 'help 文本形态变了，本次等于没查', item.cmd);
       return;
     }
     scanned++;
@@ -378,7 +394,7 @@ async function checkCommandHelp() {
     }
   }
   if (missing.length === 0) {
-    green(`命令库参数存活 ${scanned} 条命令 / 源=${[...sources].join('+')}`);
+    green(`命令库参数存活 ${scanned} 条命令 / 源=live`);
   } else {
     fail(`库参数已不在 orca --help ${missing.length} 个`, 'orca 升级删了参数，或库用了从未存在的旗标（#482 的 --submit 坑）', missing.join(' '));
   }
@@ -396,7 +412,9 @@ const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
 if (failures.length === 0) {
   for (const g of greens) console.log(`  ok  ${g}`);
-  console.log(`\ndao check: 好的（${greens.length} 项，${secs}s）`);
+  for (const s of skips) console.log(`  SKIP  ${s}`);
+  const skipBit = skips.length ? `，${skips.length} 项跳过` : '';
+  console.log(`\ndao check: 好的（${greens.length} 项${skipBit}，${secs}s）`);
   process.exit(0);
 }
 
@@ -405,5 +423,6 @@ for (const [what, how, evidence] of failures) {
   if (how) console.log(`     修：${how}`);
   if (evidence) console.log(`     ${evidence}`);
 }
-console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿，${secs}s）`);
+for (const s of skips) console.log(`  SKIP  ${s}`);
+console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿 / ${skips.length} 项跳过，${secs}s）`);
 process.exit(1);
