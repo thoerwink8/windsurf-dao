@@ -50,7 +50,10 @@
 - [Bash 吃掉斜杠开头的文本](bash-path-conv-breaks-slash-text.md) — MSYS 路径转换把 /rename 改写成 C:/Program Files/Git/rename,发斜杠命令走 PowerShell
 - [判绿只对当时那个 commit 有效](review-green-must-match-head.md) — 合并前必比对 review.commit_id 与 headRefOid;判绿后又推的改动无人审过,差点误合 #497
 - [接链前必须逐文件比内容](memory-relink-needs-content-diff.md) — 只比文件名不够,同名不同内容脚本只警告不拦截,方向判反就静默丢记忆
-- [进程活着≠信号进得来](process-alive-vs-signal-arriving.md) — 闭环不动先验信号源产出,别只验消费者在跑;流转器认 PR 评论而工人发 worker_done,两通道没接上导致三个 PR 从无审读且不报错
+- [进程活着≠信号进得来](process-alive-vs-signal-arriving.md) — 三形态:通道没接上/消费者没在跑/信号到了没人取(idle 协调者不轮询信箱);授权自主处置≠信号会到,判据永远是「该发生的事有没有发生」
 - [pi 接 opencode Go](pi-opencode-go-provider.md) — 2026-08-16 已接入,key 落 auth.json 的 opencode-go 键(不是 opencode);20 模型实测通,gpt-5.6-luna 本区被上游 403 别查凭据
 - [command-code 三个坑](commandcode-worktree-residue.md) — 进不了 orca 编排(worker-start 认不出)、--yolo 被分类器拦、工作树留 .commandcode 卡归档;落盘的活退回 pi
 - [commit memory 要点名文件](memory-commit-scope-per-file.md) — 两帅共用 host/memory,git add 整个目录会带走对方未提交的条目;一律 add 具体文件名
+- [裁定移交必须落到目标](verdict-handoff-must-land-at-target.md) — 说「挂回 #N」就当场去改 #N,只在本单写「已移交」等于没交;改法用顶部覆盖段别逐处改
+- [通道不是模型身份](model-channel-is-not-identity.md) — 同一模型换计费通道别拆两个 id:战绩记成两本账,新 id 还会触发探索期抢查证/审查/UI 的 A 位
+- [roles 是幽灵字段](roles-is-ghost-field.md) — 模型条目的 roles 不参与选型门闩(core 里 grep 不到),真拦人的只有 bans.yml;加模型后必跑判别性实测
