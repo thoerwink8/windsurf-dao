@@ -583,8 +583,10 @@ console.log("\n=== ㉚ merge-policy 契约（dispatch 真实产出 → flow 解�
   const c2 = dispatchComment({ mergePolicy: "manual", model: "gpt-5.6-sol", reviewer: "gpt-5.6-sol" });
   check("dispatchComment(manual) 真实产出 → 解出 manual", mergePolicyFromComment(c2) === "manual", c2);
   // 端到端：dao dispatch --dry-run 的 JSON 输出里 comment 字段（dao.mjs:196 emit）
+  // manual 需 --merge-reason（#511 例外留痕；测试是构造语料，给个合法值域内的留痕理由）
   for (const policy of ["auto", "manual"]) {
-    const r = spawnSync(process.execPath, [path.join(REPO, "scripts", "dao.mjs"), "dispatch", "--dry-run", "--name", "契约语料", "--merge-policy", policy, "--model", "gpt-5.6-sol", "--reviewer", "gpt-5.6-sol", "--spec", "契约语料：不做实际派工", "--json"], { encoding: "utf8", cwd: REPO });
+    const extra = policy === "manual" ? ["--merge-reason", "改协作约定"] : [];
+    const r = spawnSync(process.execPath, [path.join(REPO, "scripts", "dao.mjs"), "dispatch", "--dry-run", "--name", "契约语料", "--merge-policy", policy, "--model", "gpt-5.6-sol", "--reviewer", "gpt-5.6-sol", "--spec", "契约语料：不做实际派工", "--json", ...extra], { encoding: "utf8", cwd: REPO });
     const out = (r.stdout || "") + (r.stderr || "");
     let parsed = null;
     try { parsed = JSON.parse(out); } catch { /* 非 JSON */ }
