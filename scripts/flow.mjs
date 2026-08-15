@@ -1069,18 +1069,26 @@ function makeLiveSource(repo) {
       const hit = (wts.worktrees || []).filter(w => w.branch === branch);
       return hit.length === 1 ? hit[0] : null;
     },
-    // worktree → 唯一 dispatch（#497 第九轮：worker-list 按 resource.worktreeId 反查（结构化关联）。
-    // **不过滤 dispatchStatus**（#497 第十二轮审官红项 + dual-native 实证）：
-    // completed 是「已 worker_done 的闲置工人」——返工注入的目标恰恰是它（完工 → 审官判红 →
-    // 推回同一终端）；dispatched 是在岗。过滤 completed 会把「已完工待返工」的工人滤掉。
-    // 多候选 → null（待帅转交，不猜）。
+    // worktree → 现任投递目标（#497 第九轮：worker-list 按 resource.worktreeId 反查）。
+    // 语义 = 选现任投递目标（#497 第十三轮审官红项：与 dispatchWorktreeId 是两种语义，
+    // 不能共用一个过滤策略）：
+    // ① dispatched（在岗）优先——唯一则它；多条 = 真歧义 → null 待帅转交（不猜）；
+    // ② 无在岗 → 唯一 completed（已 worker_done 的闲置工人，正是返工注入目标）→ 它；
+    //    多条 completed → worker-list 返回**无时间字段**（见 orca-returns/worker-list.json），
+    //    不猜顺序 → null 待帅转交（fail-visible，注释写明原因）；
+    // ③ failed 一律排除（不是投递目标）；
+    // ④ 定不出唯一 → null（待帅转交，不崩不猜）。
     dispatchForWorktree(worktreeId) {
       const r = runOrca(['orchestration', 'worker-list', '--json']);
       if (!r.ok) return null;
       const workers = unwrap(r.json, 'workers', 'workers');
       if (!Array.isArray(workers)) return null;
-      const hits = workers.filter(w => w.resource?.worktreeId === worktreeId);
-      return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
+      const inWork = workers.filter(w => w.resource?.worktreeId === worktreeId && w.dispatchStatus === 'dispatched');
+      if (inWork.length === 1) return { dispatchId: inWork[0].dispatchId || null };
+      if (inWork.length > 1) return null;
+      const idle = workers.filter(w => w.resource?.worktreeId === worktreeId && w.dispatchStatus === 'completed');
+      if (idle.length === 1) return { dispatchId: idle[0].dispatchId || null };
+      return null; // 0 或多条 completed / 只 failed：无时间字段不可排序 → 待帅转交
     },
     // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址的结构事实——普通工人人写任务书
     // spec 无受控前缀，只能从 dispatchId 反查：worker-list → resource.worktreeId）。
@@ -1218,15 +1226,20 @@ function makeSnapshotSource(roundDir, repo) {
       const hit = (wts.worktrees || []).filter(w => w.branch === branch);
       return hit.length === 1 ? hit[0] : null;
     },
-    // worktree → 唯一 dispatch（快照：orca-workers.json 可选，条目平铺形态
+    // worktree → 现任投递目标（快照：orca-workers.json 可选，条目平铺形态
     // { dispatchId, worktreeId, agentTerminalHandle, dispatchStatus }）。
-    // **不过滤 dispatchStatus**（#497 第十二轮：completed 是闲置可投递态、dispatched 是在岗态，
-    // 都是返工注入的合法目标；过滤 completed = 滤掉「已完工待返工」的工人）。
+    // 语义与 live 同：选现任投递目标——① dispatched 在岗优先（多条真歧义 → null）；
+    // ② 无在岗 → 唯一 completed（闲置可投递）；多条 completed → 快照无时间字段不猜顺序 → null；
+    // ③ failed 排除；④ 定不出唯一 → null（待帅转交）。
     dispatchForWorktree(worktreeId) {
       const r = readJson(join(roundDir, 'orca-workers.json'));
       if (!r.ok || !Array.isArray(r.json)) return null;
-      const hits = r.json.filter(w => w.worktreeId === worktreeId);
-      return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
+      const inWork = r.json.filter(w => w.worktreeId === worktreeId && w.dispatchStatus === 'dispatched');
+      if (inWork.length === 1) return { dispatchId: inWork[0].dispatchId || null };
+      if (inWork.length > 1) return null;
+      const idle = r.json.filter(w => w.worktreeId === worktreeId && w.dispatchStatus === 'completed');
+      if (idle.length === 1) return { dispatchId: idle[0].dispatchId || null };
+      return null; // 0 或多条 completed / 只 failed：无时间字段不可排序 → 待帅转交
     },
     // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址，快照读 orca-workers.json）。
     // **不过滤 dispatchStatus**（worker_done 到达时 dispatch 已是 completed——#497 第十二轮审官实证）。

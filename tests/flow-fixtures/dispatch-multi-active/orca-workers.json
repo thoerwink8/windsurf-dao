@@ -1,0 +1,32 @@
+[
+ {
+  "dispatchId": "ctx_a1",
+  "taskId": "task_a1",
+  "runId": "run_ctx_a1",
+  "worktreeId": "wt::worker-999",
+  "agentTerminalHandle": "term_worker_999",
+  "dispatchStatus": "dispatched",
+  "workerState": "ready",
+  "terminalState": "retained"
+ },
+ {
+  "dispatchId": "ctx_a2",
+  "taskId": "task_a2",
+  "runId": "run_ctx_a2",
+  "worktreeId": "wt::worker-999",
+  "agentTerminalHandle": "term_worker_999",
+  "dispatchStatus": "dispatched",
+  "workerState": "ready",
+  "terminalState": "retained"
+ },
+ {
+  "dispatchId": "ctx_hist_a",
+  "taskId": "task_hist_a",
+  "runId": "run_ctx_hist_a",
+  "worktreeId": "wt::worker-999",
+  "agentTerminalHandle": "term_worker_999",
+  "dispatchStatus": "completed",
+  "workerState": "succeeded",
+  "terminalState": "retained"
+ }
+]

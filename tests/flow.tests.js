@@ -809,5 +809,25 @@ console.log("\n=== ㊴ 语料闸：夹具必须有真实完成态样本（#497 �
   check("红项验收（completed + 纯门铃）：映射出 PR → 起审官，不误报孤儿", /动作：起审官 #3411/.test(bell.out) && !/映射不出 PR/.test(bell.out), bell.out.trim());
 }
 
+console.log("\n=== ㊵ 投递目标选现任（#497 第十三轮：dispatchForWorktree 两种语义不能共用一个过滤）===");
+{
+  // 样本1（审官变异固化，已在 fake-loop）：当前 dispatched 工人 + 同 worktree 旧 completed 历史 → 正常返工照常注入
+  const hist = runFlow(path.join(FIXTURES, "fake-loop"));
+  check("样本1：dispatched + 同 worktree 历史 completed → 正常返工照常注入（不因多历史阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）：task-create \+ worker-start --task <新> --terminal term_worker_999/.test(hist.out), hist.out.trim());
+  check("样本1：不预览-阻塞（没退化成待帅转交）", !/预览-阻塞/.test(hist.out), hist.out.trim());
+  // 样本4：dispatched + failed → failed 排除，注入照常
+  const fex = runFlow(path.join(FIXTURES, "dispatch-failed-excluded"));
+  check("样本4：dispatched + failed → failed 排除，注入照常（目标 term_worker_999）", /动作：返工注入 #999（第 1 轮，红 3 项）：task-create \+ worker-start --task <新> --terminal term_worker_999/.test(fex.out), fex.out.trim());
+  // 样本3：多条 dispatched（真歧义）→ 待帅转交，不猜
+  const ma = runFlow(path.join(FIXTURES, "dispatch-multi-active"));
+  check("样本3：多条 dispatched → 预览-阻塞待帅转交（真歧义不猜）", /预览-阻塞：\#999（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(ma.out), ma.out.trim());
+  check("样本3：不猜一个工位（无 worker-start 注入）", !/worker-start --task/.test(ma.out), ma.out.trim());
+  // 样本2：多条 completed 无在岗 → worker-list 无时间字段不猜顺序 → 待帅转交
+  const mi = runFlow(path.join(FIXTURES, "dispatch-multi-idle"));
+  check("样本2：多条 completed 无在岗 → 预览-阻塞待帅转交（无时间字段不猜顺序）", /预览-阻塞：\#999（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(mi.out), mi.out.trim());
+  check("样本2：不猜一个工位（无 worker-start 注入）", !/worker-start --task/.test(mi.out), mi.out.trim());
+  // 语料闸补充：这些新夹具的 completed 样本计入语料（在 ㊴ 已扫，fake-loop 追加的 completed 也计入）
+}
+
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);
 process.exit(fail > 0 ? 1 : 0);
