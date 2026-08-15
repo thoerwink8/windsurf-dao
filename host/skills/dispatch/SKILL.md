@@ -19,6 +19,17 @@ master 卡只住主会话，永远零工人。每个任务用 `orca orchestratio
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
 
+## 主树常驻 master
+
+主树（帅日常所在的那棵 worktree，见「拓扑」master 卡）只住 master，只做 master 态的活。帅在主树的 git 写操作（memory 例外等）前**先验分支，不是 master 就停手**——#518：主树被切到在途分支后，memory commit 连做两次落地，第三次 commit 落进另一位帅的在途分支、还推成了新远端分支，全程无一步报警（「看起来成功、实际落错地方」）。**在途分支的活一律在自己（或任务）的 worktree 做**，不在主树切分支、不 reset、不强推——主树上可能有另一位帅的未提交改动（#518 实测当时工作区 5 个文件未提交；「同一个 worktree 同时只让一个执行者改文件」同样管两位主帅共用主树）。
+
+可复制写法（git 写操作前先跑，非 master 直接失败退出）：
+
+```bash
+test "$(git branch --show-current)" = master \
+  || { echo "主树不在 master，停手（当前：$(git branch --show-current)）" >&2; exit 1; }
+```
+
 ## 非阻塞
 
 派完即回对话态，帅不前台长等。门铃：派工后挂 Monitor 后台跑 `orca orchestration check --wait --types worker_done,escalation,question`（阻塞 CLI、等待期间零 token、消息到即返回），收 `worker_done`/`escalation`/`question` 才唤醒；不等 heartbeat——心跳空转实测 ~650 token/轮，只进信箱供怀疑时 peek，不唤醒。旧「check --wait 禁手」改写为「禁帅前台长等」：wait 由 Monitor 进程跑，不是帅的对话阻塞。
@@ -40,6 +51,29 @@ master 卡只住主会话，永远零工人。每个任务用 `orca orchestratio
 冲突打回冲突方工人自己解，头工人不亲手改内容。专职不干活的树帅只在超大任务实测顾不过来时升格。
 
 头工人选型看判断浓度：机械并行走快档，含分解裁决走判断档。按返工率实测校准，不当公理。
+
+## 任务官（#511 落盘）
+
+判断密度高、规模大到帅盯不住的单才派任务官——不是所有单都要。任务官替帅执行本单全部决策，帅退到感知层。
+
+**权限**（本单内的，任务官自己定，不停下来问）：
+- 技术判断：方案选型、实现取舍
+- 修法选择：返工怎么修（用「本单造成的缺陷 ⇒ 本单修」判据划范围）
+- 范围判断：单内/单外由本判据定，不预设清单
+- 开新单：单内派生任务直接开
+- 派自己的工人与审官：走 `worker-start` / 审官流程（见「一条完整命令链」）
+- **按合并门自己合**：`merge-policy: auto` 是本单默认（#511 拍板），审官 approve 即合，不再等帅点头
+
+**仍须知会帅的**（报了继续做，不等回话）：
+- 事故与损失
+- 合并完成
+
+**仍须停下来等的**（三类，不可再加）：
+1. 不可逆且跨出本单的动作
+2. 需要用户本人拍板的
+3. 它判断帅给的前提可能是错的——先问，别照做后发现（#511 当天两次错误前提都是照做后才发现的代价样本）
+
+派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.toml 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）；帅没收到时靠看门狗兜底（`scripts/watchdog.mjs` 检测矩阵第 9 项已在 master）。
 
 ## 设计注记
 
@@ -104,7 +138,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 默认一条命令走 Orca 原生编排（B 路实测 90 秒闭环），须特殊 argv 的才走两步收口；两条路径都以 `worker-start` 记账，release 才认得到：
 
-- **一步到位（默认）**：`orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json`——建树、起 agent、注任务书、记账一次完成；`worker_done` 有效即自动结账。任务书承运：中等长度、无裸反引号的走 `--spec`（短摘要+要点），长文/逐字大材料按「材料三去处」处置（要留存的进 GitHub，用完即弃的进 scratchpad），提示词里只给编号/指针；`worker_done` 后帅必做 PR 核对（见「非阻塞」）。
+- **一步到位（默认）**：`orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json`——建树、起 agent、注任务书、记账一次完成；`worker_done` 有效即自动结账。任务书承运：中等长度、无裸反引号的走 `--spec`（短摘要+要点；spec 必须枚举全部职责类别，见「任务书口径」），长文/逐字大材料按「材料三去处」处置（要留存的进 GitHub，用完即弃的进 scratchpad），提示词里只给编号/指针；`worker_done` 后帅必做 PR 核对（见「非阻塞」）。
 - **两步走（须特殊 argv：reclaude 链路、pi 指定非默认模型）**：`worker-start` 的 `--model` 实测不支持 pi（报 `Agent pi does not support launch-time model selection`），`--agent claude` 起不了 reclaude 链——这两类 = 建卡（`--setup skip` 免 Setup 页签）→ `orca terminal create --command "<agent> --model <model>"` 起带模型终端（实测 `--command "pi --model deepseek-v4-flash"` 生效）→ `worker-start --task <id> --worktree <wt> --terminal <handle>` 复用收口。验开工后确认裸建的 fallback shell 未用即关掉。
 
 **禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
@@ -114,6 +148,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
 
 grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，无需两步（2026-08-15 三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
+
+command-code（Command Code 官方 CLI）：**当前不能承载需进 git 的 Orca 工人**——Orca agent 识别清单不含它，`worker-start --terminal` 必返回 `agent_unconfigured`（2026-08-16 帅·A 裁定，勿再走两步收口）。可用范围是**非交互查证/测速**：`command-code -p "问" -m <模型> --max-turns N --skip-onboarding`（实测 5.5s 出结果；启动模板只读 docs/model-routing.toml `[providers.commandcode].launch`）。需要进 git 的活一律走 pi / codex / claude 三条在册通道。**反例 #514**：那个 command-code 工人是派工旁路起的，`worker-list` 精确查询命中 0 条——从没进过编排却产出了进 git 的 PR，没有任何机制拦住，事后人工查 worker-list 才发现（账记帅·A 派工旁路，不是工人的问题）。
 
 批量起灶（多臂同时起）先做全员就绪清单：循环读每一臂，人人达 ready 或弹窗被处理才注题，禁止处理完一臂就走；弹窗会连环（信任框→沙箱框→登录框），过一道不等于就绪，每处理一道后重读；判「未开工」不能只看状态栏（会陈旧渲染），要看思考行 / 活动迹象。
 
@@ -139,7 +175,17 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 ## 任务书口径
 
-任务书承运 = worker-start 注入：中等长度、无裸反引号的走 `--spec`（短摘要+要点）；逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+`--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+
+spec 样例（正反例；具体职责清单以**当时的审官任务书为准**——#530 换路后审官动作会变，勿硬编码会过时的清单）：
+
+```bash
+# ❌ 反例（#505 实证）：只写技术目标，PR 侧职责被当背景略过
+orca orchestration task-create --spec "短摘要：#505 链C活性判据换真证据 审读"
+
+# ✅ 审官单：职责类别逐条列全，动作内容指当时的审官任务书
+orca orchestration task-create --spec "短摘要：审读 #505 + 按审官任务书落判定/收尾动作"
+```
 
 ## 材料三去处（2026-08-15 拍板：临时树材料绑架树生命周期，pilot-B 实证）
 
@@ -153,13 +199,13 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 ## 一条完整命令链
 
-任务书承运 = worker-start 注入（`--spec` 短摘要+要点；逐字大材料按「材料三去处」分流）；`terminal send` 只在吞注入时补救（见「启动序」）。须读 GitHub 上的材料用 `gh` 取，不靠本机文件：
+任务书承运 = worker-start 注入（`--spec` 短摘要枚举全部职责类别；逐字大材料按「材料三去处」分流）；`terminal send` 只在吞注入时补救（见「启动序」）。须读 GitHub 上的材料用 `gh` 取，不靠本机文件：
 
 ```bash
 # 0) 信箱台：派工前/后都跑，保证横幅归属信箱台（帅 run-use 派工后必须再 ensure 归还）
 node scripts/inbox-station.mjs ensure
 
-# 0) 建编排任务：--spec 只放短摘要+要点（任务书承运；要留存的逐字大材料进 GitHub——issue/PR 正文或 docs/，提示词只给编号）
+# 0) 建编排任务：--spec 短摘要必须枚举全部职责类别（任务书承运；要留存的逐字大材料进 GitHub——issue/PR 正文或 docs/，提示词只给编号）
 orca orchestration task-create --spec "短摘要：<一句话目标>" --json
 
 # 1) 起工人一步到位：--worktree new-top-level 建顶层任务卡 + 起 agent + 注入任务书 + 记账一次完成
@@ -197,8 +243,19 @@ orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --
 
 ## 命令级铁律
 
-- 任务书承运 = worker-start 注入：`--spec` 只放短摘要+要点；逐字大材料按「材料三去处」分流（要留存的进 GitHub，用完即弃的进 scratchpad，禁止临时树/本机临时目录）。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
+- 任务书承运 = worker-start 注入：`--spec` 必须枚举全部职责类别（短摘要含要点，见「任务书口径」，禁只写技术目标）；逐字大材料按「材料三去处」分流（要留存的进 GitHub，用完即弃的进 scratchpad，禁止临时树/本机临时目录）。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
 - `terminal send` 只在吞注入时补救（见「启动序」）；默认注入器是 worker-start，不手工 send 进就绪竞态。
 - 禁裸 `terminal create + dispatch --inject` 旁路（release 认不到 → 误关终端旧事故）；例外通道必须先挂 `worker-start --terminal`。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
 - 路径从 PR 反查，禁手抄：例：`gh pr view <PR号> --json headRefName -q .headRefName`——分支名从 PR 的 JSON 取，不手抄。
+- **拿不到就报出来**（#532 升格为通用原则）：凡是拿不到东西——gh 输出失败、文件读不到、查不到、超时——必须报出来，**不许编、不许当成 0**。「没查成」当「查过没事」不报警，是会出事故的那类错（#532 次级限流让 `gh api` 全线失败拿到空列表；#538 第一轮审官编造执行证据、整轮作废）。两个落点，审官/工人/临时脚本一视同仁：
+  - **gh 输出**：命令失败与查到 0 条分开，失败分支单独报错退出，命令成功返回的空数组才算真 0：
+
+    ```bash
+    review_list=$(gh pr view <PR号> --json reviews -q '.reviews') \
+      || { echo "gh 读 <PR号> reviews 失败（$?）——不是没有 review，是没查成" >&2; exit 1; }
+    state=$(gh pr view <PR号> --json state -q '.state') \
+      || { echo "gh 读 <PR号> state 失败（$?）——不是查过没事" >&2; exit 1; }
+    ```
+  - **文件读取 / 审官自证**：审官开工第一步贴出 `git log --oneline -1` 与被审文件存在性检查的**真实输出**（PowerShell `'路径1','路径2' | ForEach-Object { '{0} -> {1}' -f $_, (Test-Path $_) }`；bash `ls 路径1 路径2`——给错 shell 是这次实咬的现场）。任何一个要审的文件读不到 → **停手 escalation**，禁止用 `gh pr diff` 代替本地文件、禁止推测。
+- PR 正文关多张 issue：**每个编号前面都要有自己的关键词**，连写只认第一个（#527 实证：`Closes #500 #492 #471 #476` 合并后只自动关 #500，其余手工补关——「看起来成功、实际只做了四分之一」，没有任何东西提示漏关）。正例：`Closes #500, closes #492, closes #471, closes #476`。多 issue 单选一个主 issue 写全，其余关单评论留「已并入 #X」（#487 拍板）。

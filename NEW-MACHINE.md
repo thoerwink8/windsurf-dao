@@ -64,6 +64,28 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
   - `pi auth check --provider opencode-go --json`：预期 `{"status":"ready",...}`；回 `credentials_not_configured` 就是 §4 的 key 没带。
   - `pi --no-tools --no-session -p "只回复：OK"`：预期回 OK；失败先查 `~/.pi/agent/models.json` 里的网关地址与 key。一次性连通性测试用 `--no-tools` 无妨，日常跑活别裁工具。
 
+## 6b. pi 扩展怎么配（go-fallback，issue #520）
+
+go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话接着把活做完（不是重启、不是从头来）。
+
+- 源码在仓内 `host/pi-extensions/go-fallback.ts`（仓库资产，不留在本机自生自灭），换机一条命令装上：
+  ```bash
+  cp host/pi-extensions/go-fallback.ts "$HOME/.pi/agent/extensions/"
+  ```
+  验证已生效（新开 pi 会话后扩展自动加载，对所有 pi 工人生效，不用改 orca 派工链路）：
+  ```bash
+  ls ~/.pi/agent/extensions/go-fallback.ts   # 文件在即生效（pi 每次启动扫 extensions/ 目录）
+  ```
+- 行为：只在主通道（`opencode-go`）上动作；命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连后 `pi.setModel` + followUp 续跑，会话上下文完整保留。直连凭据缺失时明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARY`（主通道，默认 `opencode-go`）、`PI_GO_FALLBACK_PROVIDER`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。
+- 回归验收（构造真实限流响应，看着工人被切走并把活做完）：
+  ```bash
+  node host/pi-extensions/test/e2e.mjs            # 硬限流（quota）场景
+  node host/pi-extensions/test/e2e.mjs rate-limit # 瞬时限流场景
+  node host/pi-extensions/test/e2e.mjs no-creds   # 凭据缺失场景
+  ```
+  三个场景全绿才算生效；测试用一次性 pi 环境 + 随机端口 fake 上游，不碰本机 `~/.pi/agent`。
+
 ## 7. grok 怎么配
 
 grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
@@ -96,6 +118,16 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
     ```
     注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。
 - auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
+
+## 7b. command-code 怎么配
+
+command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
+
+- 装机：`npm i -g command-code`；验证：`command-code --version`（本机 v1.26.0）。
+- **登录必须在真 TTY 里跑**（Ink raw mode）：`command-code login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`command-code status` 应回 `Authenticated as <用户名>`。
+- 模型列表（无需登录）：`command-code --list-models`（55 个模型，`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-pro` 都在）；模型 id 两段式 `deepseek/deepseek-v4-flash`，`-m` 直传。
+- 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
+- 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
 
 ## 8. 本机工具坑
 
@@ -133,21 +165,27 @@ node scripts/inbox-station.mjs ensure
 
 ## 10. 接上 memory
 
-本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。
+memory 住在**独立仓** `thoerwink8/windsurf-dao-memory`（私有，clone 需有权限）。本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`，是一个指向那个仓 clone 的 Junction。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。
 
-先关掉所有 Claude Code 窗口再跑（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。
+**第一步：clone 一次 memory 仓**（本机任意位置，例：`D:\frank\windsurf-dao-memory`）：
 
-**事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在仓内。本机有、仓内没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction 则什么都不做。接上之后 Claude 每写一条 memory，主仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
+```bash
+git clone git@github.com:thoerwink8/windsurf-dao-memory.git
+```
+
+先关掉所有 Claude Code 窗口再跑下面的命令（它可能占着 `memory/` 句柄，改名会失败）。在**主仓根**执行下面这段——只接你正在跑命令的那份克隆，Orca worktree 各有自己的 `projects/<编码>` 目录，不会一起接上。**把 `$memRepo` 换成你 clone 的位置。**
+
+**事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在 memory 仓里。本机有、memory 仓没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction（目标 = 你的 memory 仓）则什么都不做、原地返回。接上之后 Claude 每写一条 memory，memory 仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
+  $memRepo = 'D:\frank\windsurf-dao-memory'   # ← 换成你 clone windsurf-dao-memory 的位置
+  if (-not (Test-Path -LiteralPath $memRepo)) { throw "memory 仓不在: $memRepo（先 clone thoerwink8/windsurf-dao-memory）" }
   $repo = (Resolve-Path .).Path
-  $hostMem = Join-Path $repo 'host\memory'
-  if (-not (Test-Path -LiteralPath $hostMem)) { throw "host/memory 不在: $hostMem" }
+  $want = [IO.Path]::GetFullPath($memRepo)
   $encoded = $repo -replace '[^a-zA-Z0-9]', '-'
   $local = Join-Path $env:USERPROFILE ".claude\projects\$encoded\memory"
-  $want = [IO.Path]::GetFullPath($hostMem)
   $item = Get-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
   if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
@@ -164,12 +202,12 @@ node scripts/inbox-station.mjs ensure
     $missing = @(); $diverged = @()
     foreach ($f in Get-ChildItem -LiteralPath $local -File -Recurse) {
       $rel = & $relOf $local $f.FullName
-      $peer = Join-Path $hostMem ($rel -replace '/', '\')
+      $peer = Join-Path $memRepo ($rel -replace '/', '\')
       if (-not (Test-Path -LiteralPath $peer)) { $missing += $rel }
       elseif ((& $norm $f.FullName) -cne (& $norm $peer)) { $diverged += $rel }
     }
     if ($missing.Count -gt 0) {
-      throw "仓内不是本机超集，先把这些拷进 host/memory/ 再接: $($missing -join ', ')"
+      throw "memory 仓不是本机超集，先把这些拷进 $memRepo 再接: $($missing -join ', ')"
     }
     if ($diverged.Count -gt 0) {
       Write-Warning "同名但内容不同（接上后本机这几条会变成仓内版本，旧内容留在备份目录里，需要就去比对）: $($diverged -join ', ')"
@@ -184,9 +222,9 @@ node scripts/inbox-station.mjs ensure
 }
 ```
 
-本机若有比仓新的条目，先从改名备份里拷进 `host/memory/` 再提交。
+本机若有比仓新的条目，先从改名备份里拷进 `$memRepo` 再提交。
 
-接上后跑 `node scripts/dao-check.mjs` 自检：第 ⑨ 项「本机 memory 断链检查」应变绿——本机 memory 是普通目录/指向别处/链接悬空都会报红，CI 无本机目录则出 SKIP（不是绿）。
+接上后跑 `node scripts/dao-check.mjs` 自检：第 ⑨ 项「本机 memory 断链检查」应变绿——判据是 Junction 目标是一个 git 仓、且它的 `origin` remote 指向 `thoerwink8/windsurf-dao-memory`（SSH / HTTPS 两种 URL 形式都认）；普通目录/链接悬空/目标不是 memory 仓/origin 不对（含搬家前指向主仓旧 memory 目录的形态）都会报红，CI 无本机目录则出 SKIP（不是绿）。
 
 ## 11. 接上 skills
 
@@ -276,7 +314,7 @@ node scripts/dao.mjs start --provider gpt --worktree active --dry-run
 node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --spec "短摘要" --dry-run
 ```
 
-派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
+派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
 ## 自检
 
 做完跑一遍：

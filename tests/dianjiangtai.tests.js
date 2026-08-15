@@ -359,12 +359,18 @@ discEvents.forEach((e, i) => fs.writeFileSync(path.join(discDir, `${i}.json`), J
 const djPeak = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS, "--job-id", "wire-peak", "--events-dir", discDir]);
 check("CLI dianjangtai-select 峰时退出码 0", djPeak.status === 0, (djPeak.stderr || "").slice(0, 200));
 const djPeakOut = djPeak.status === 0 ? JSON.parse(djPeak.stdout) : { options: { A: {} } };
-check("CLI 伪造峰时输入：写码推荐 grok-4.6", djPeakOut.options.A.model === "grok-4.6", JSON.stringify(djPeakOut.options && djPeakOut.options.A));
-check("CLI 峰时写码不是 ds-flash（钉死分时违例）", djPeakOut.options.A.model !== FLASH);
+check("CLI 伪造峰时输入：写码推荐 grok/grok-4.6（#533 provider/model 全称）", djPeakOut.options.A.model === "grok/grok-4.6", JSON.stringify(djPeakOut.options && djPeakOut.options.A));
+check("CLI 峰时写码不是 ds-flash（钉死分时违例）", djPeakOut.options.A.model !== "deepseek/deepseek-v4-flash");
+check("CLI 峰时 A 带 provider 字段（#533）", djPeakOut.options.A.provider === "grok", JSON.stringify(djPeakOut.options.A));
+check("CLI 峰时 A/B/C 三个选项模型标识都渲染成 provider/model（#533）", ["A", "B", "C"].every(k => {
+  const opt = djPeakOut.options[k];
+  const ids = Array.isArray(opt.models) ? opt.models : [opt.model];
+  return ids.every(m => typeof m === "string" && m.includes("/"));
+}), JSON.stringify(djPeakOut.options));
 check("CLI 峰时输出含 decision_id 与三选项", !!(djPeakOut.decision_id && djPeakOut.options.A && djPeakOut.options.B && djPeakOut.options.C));
 check("CLI 峰时 reason=route_beijing", djPeakOut.options.A.reason === "route_beijing", djPeakOut.options.A.reason);
 const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
-check("CLI 谷时写码推荐 deepseek-v4-flash", djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === FLASH, (djValley.stderr || "").slice(0, 120));
+check("CLI 谷时写码推荐 deepseek/deepseek-v4-flash（#533）", djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `deepseek/${FLASH}`, (djValley.stderr || "").slice(0, 120));
 const djNoTs = cliDj(["--role", "写码"]);
 check("CLI 缺 --ts 非 0 退出（禁 Date.now）", djNoTs.status !== 0);
 fs.rmSync(discDir, { recursive: true, force: true });

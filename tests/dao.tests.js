@@ -11,7 +11,7 @@
 //   2. 用了不存在的 --submit
 //   3. pi 界面 Working 一行，活证判据改走 mtime + git
 // 规格重定义三钉（约束层，缺参数必须报错）：
-//   4. 缺 --merge-policy（帅漏问合并权）
+//   4. merge-policy 默认 auto（#511：帅只感知不再是关口）；选 manual 必须给 --merge-reason
 //   5. 缺 --model/--role（峰时误推 ds-flash：不给则只推荐、禁静默）
 //   6. 缺 --reviewer（现建现起造成流转断点）
 
@@ -216,7 +216,7 @@ async function main() {
     check('真实目录+git：git 干净', scanned.gitDirty === false, JSON.stringify(scanned));
   }
 
-  console.log('\n=== ④⑤⑥ 派工三参数硬闸（规格重定义，缺一即报错）===');
+  console.log('\n=== ④⑤⑥ 派工硬闸（merge-policy 默认 auto；manual 必带理由；缺 model/reviewer 报错）===');
   {
     function dispatch(extra) {
       return spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
@@ -226,10 +226,27 @@ async function main() {
       catch { return { raw: r.stdout, err: r.stderr }; }
     }
 
-    const noMerge = dispatch(['--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
+    const noMerge = dispatch(['--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const p1 = payload(noMerge);
-    check('缺 --merge-policy → 非零', noMerge.status !== 0, `status=${noMerge.status}`);
-    check('缺 --merge-policy → 打印缺什么', p1.error && String(p1.error).includes('--merge-policy'), JSON.stringify(p1));
+    check('缺 --merge-policy → 默认 auto 通过', noMerge.status === 0 && p1.mergePolicy === 'auto', JSON.stringify(p1));
+
+    const noReason = dispatch(['--merge-policy', 'manual', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const p1b = payload(noReason);
+    check('manual 无 --merge-reason → 非零', noReason.status !== 0, `status=${noReason.status}`);
+    check('manual 无 --merge-reason → 打印缺什么', p1b.error && String(p1b.error).includes('--merge-reason'), JSON.stringify(p1b));
+
+    const withReason = dispatch(['--merge-policy', 'manual', '--merge-reason', '改协作约定 CLAUDE.md', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const p1c = payload(withReason);
+    check('manual 带理由 → 通过且理由落 comment', withReason.status === 0 && p1c.mergePolicy === 'manual' && /manual 理由: 改协作约定/.test(p1c.comment), JSON.stringify(p1c));
+    check('manual 带理由 → mergeReason 透传', p1c.mergeReason === '改协作约定 CLAUDE.md', JSON.stringify(p1c));
+
+    const emptyReason = dispatch(['--merge-policy', 'manual', '--merge-reason', '  ', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const p1d = payload(emptyReason);
+    check('manual 理由为空白 → 非零（理由为空即退出）', emptyReason.status !== 0 && /--merge-reason/.test(p1d.error || ''), JSON.stringify(p1d));
+
+    const autoExplicit = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const p1e = payload(autoExplicit);
+    check('显式 auto 无需理由 → 通过', autoExplicit.status === 0 && p1e.mergePolicy === 'auto', JSON.stringify(p1e));
 
     const noModel = dispatch(['--merge-policy', 'auto', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
     const p2 = payload(noModel);
@@ -264,6 +281,15 @@ async function main() {
     const pConf = payload(roleConfirm);
     check('--role + --confirm 采用峰时推荐 grok-4.6', roleConfirm.status === 0 && pConf.model === 'grok-4.6', JSON.stringify(pConf));
 
+    const fnDefault = S.resolveDispatchConstraints({
+      model: 'grok-4.6', reviewer: 'gpt-5.6-sol', routing,
+    });
+    check('函数层不给 mergePolicy → 默认 auto', fnDefault.ok === true && fnDefault.mergePolicy === 'auto', JSON.stringify(fnDefault));
+    const fnManualNoReason = S.resolveDispatchConstraints({
+      mergePolicy: 'manual', model: 'grok-4.6', reviewer: 'gpt-5.6-sol', routing,
+    });
+    check('函数层 manual 无理由 → 失败', fnManualNoReason.ok === false && (fnManualNoReason.missing || []).includes('--merge-reason'), JSON.stringify(fnManualNoReason));
+
     const fnMiss = S.resolveDispatchConstraints({
       mergePolicy: 'auto', model: 'grok-4.6', routing,
     });
@@ -273,7 +299,14 @@ async function main() {
       CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h',
     ], { encoding: 'utf8', cwd: REPO });
     const pWs = payload(ws);
-    check('worker-start 也受三参数约束', ws.status !== 0 && String(pWs.error || '').includes('--merge-policy'), JSON.stringify(pWs));
+    check('worker-start 缺 model/reviewer → 非零', ws.status !== 0 && String(pWs.error || '').includes('--model'), JSON.stringify(pWs));
+
+    const wsManual = spawnSync(process.execPath, [
+      CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h',
+      '--merge-policy', 'manual', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+    ], { encoding: 'utf8', cwd: REPO });
+    const pWsManual = payload(wsManual);
+    check('worker-start manual 无理由 → 非零', wsManual.status !== 0 && /--merge-reason/.test(pWsManual.error || ''), JSON.stringify(pWsManual));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
