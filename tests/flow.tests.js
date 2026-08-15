@@ -322,61 +322,6 @@ console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id
   check("real-453 语料 3 条 review body 未改写（判定行口径仍成立）", redFlagsFromReviewBodies(real453.map(x => x.body)) === 5, "应为 5");
 }
 
-console.log("\n=== ⑳ 敏感路径越权报警（fusion-verdict 2026-08-15：diff 触碰敏感路径且正文未声明 → 报警行）===");
-{
-  const { sensitiveEscalations, reconcileFileList, declaredPath } = require("../scripts/flow.mjs");
-  const declared = (lines) => `## 目标\n\n## 本 PR 触碰敏感路径声明\n${lines}`;
-  const dao = ["scripts/dao-check.mjs"];
-  const daoRules = (line) => sensitiveEscalations({ body: declared(line) }, dao).map(v => v.rule);
-  check("纯函数：host/skills + dao-check 未声明 → 2 条", sensitiveEscalations({ body: "## 目标" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
-  check("纯函数：正文声明过 → 0 条", sensitiveEscalations({ body: declared("- host/skills/dispatch/SKILL.md\n- scripts/dao-check.mjs") }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 0);
-  check("纯函数：CLAUDE.md 与 docs/global-CLAUDE.md 分开算（声明 CLAUDE.md 不覆盖 global）", JSON.stringify(sensitiveEscalations({ body: declared("- CLAUDE.md") }, ["CLAUDE.md", "docs/global-CLAUDE.md"]).map(v => v.rule)) === '["docs/global-CLAUDE.md"]');
-  check("纯函数：正文只提 docs/global-CLAUDE.md 不覆盖根 CLAUDE.md（审读红 2 负控：仍须报根）", JSON.stringify(sensitiveEscalations({ body: declared("- docs/global-CLAUDE.md") }, ["CLAUDE.md"]).map(v => v.rule)) === '["CLAUDE.md"]');
-  check("纯函数：正文提根 CLAUDE.md 且只动根 → 不报", sensitiveEscalations({ body: declared("- CLAUDE.md") }, ["CLAUDE.md"]).length === 0);
-  check("纯函数：未触碰敏感路径 → 0 条", sensitiveEscalations({ body: "## 目标" }, ["scripts/flow.mjs", "docs/model-routing.toml"]).length === 0);
-  check("纯函数：段外关键词不算声明（散落「改动 host/skills」→ 仍报）", sensitiveEscalations({ body: "改动 host/skills/dispatch/SKILL.md 与 scripts/dao-check.mjs" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
-  check("结构：正例「- scripts/dao-check.mjs 已按需修改」→ 算声明", daoRules("- scripts/dao-check.mjs 已按需修改").length === 0);
-  check("结构：反例「- 未触碰 scripts/dao-check.mjs」→ 不算（首 token=未触碰）", JSON.stringify(daoRules("- 未触碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
-  check("结构：反例「- 本单没有触碰 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 本单没有触碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
-  check("结构：反例「- 未修改 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 未修改 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
-  check("结构：反例「- 本单不碰 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 本单不碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
-  check("结构：反例「- 与 scripts/dao-check.mjs 无关」→ 不算", JSON.stringify(daoRules("- 与 scripts/dao-check.mjs 无关")) === '["scripts/dao-check.mjs"]');
-  check("结构：反例「- scripts/dao-check.mjs 保持原样」→ 路径在声明位，结构算声明（人为写反，不回黑名单）", daoRules("- scripts/dao-check.mjs 保持原样").length === 0);
-  check("declaredPath 去反引号+冒号：「- `scripts/dao-check.mjs`：重写」→ 路径", declaredPath("- `scripts/dao-check.mjs`：重写检查逻辑") === "scripts/dao-check.mjs");
-  check("结构：带反引号说明行仍算声明", daoRules("- `scripts/dao-check.mjs`：重写检查逻辑").length === 0);
-  check("结构：声明段「未触碰 A、B、C」三连 → 三条都报（首 token=未触碰）", sensitiveEscalations({ body: declared("- 未触碰 docs/global-CLAUDE.md、根 CLAUDE.md、scripts/dao-check.mjs") }, ["docs/global-CLAUDE.md", "CLAUDE.md", "scripts/dao-check.mjs"]).length === 3);
-  check("纯函数：files 条数 < changedFiles → 截断", reconcileFileList(Array(100).fill("a"), 150).ok === false);
-  check("纯函数：files 条数 = changedFiles → 齐", reconcileFileList(Array(150).fill("a"), 150).ok === true);
-  check("纯函数：快照缺 changedFiles 且 requireCount=false → 跳过对账", reconcileFileList(["x"], null, { requireCount: false }).ok === true);
-  check("纯函数：live 缺 changedFiles 且 requireCount=true → 没查成", reconcileFileList(["x"], null, { requireCount: true }).ok === false);
-
-  const r = runFlow(path.join(FIXTURES, "sensitive-undeclared"));
-  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
-  check("报警 host/skills/ 越权（含命中文件）", /报警：敏感路径越权 #3002（diff 触碰 host\/skills\/——host\/skills\/dispatch\/SKILL\.md，正文未声明）/.test(r.out), r.out.trim());
-  check("报警 dao-check 越权", /报警：敏感路径越权 #3002（diff 触碰 scripts\/dao-check\.mjs——scripts\/dao-check\.mjs，正文未声明）/.test(r.out), r.out.trim());
-  check("不打出 OK 扫完（有报警不是无事）", !/OK 扫完/.test(r.out), r.out.trim());
-
-  const rd = runFlow(path.join(FIXTURES, "sensitive-declared"));
-  check("声明过 → 退出码 0（无报警）", rd.status === 0, `status=${rd.status}`);
-  check("声明过 → OK 扫完", /OK 扫完 1 个 PR，0 需流转/.test(rd.out), rd.out.trim());
-  check("声明过 → 无报警行", !/报警：/.test(rd.out), rd.out.trim());
-}
-
-console.log("\n=== ⑳b 敏感路径越权报警持续显形：同状态重跑仍报警（待办不因报过一次就转绿）===");
-{
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-sensitive-"));
-  const stateFile = path.join(tmp, "state.json");
-  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "sensitive-undeclared"), "--state-file", stateFile, "--dry-run"];
-  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const out1 = (r1.stdout || "") + (r1.stderr || "");
-  const out2 = (r2.stdout || "") + (r2.stderr || "");
-  check("首跑 exit 1（报警）", r1.status === 1, `status=${r1.status}`);
-  check("重跑仍 exit 1（每轮重算，违规持续则持续报警）", r2.status === 1, `status=${r2.status}`);
-  check("重跑仍有报警行", /报警：敏感路径越权 #3002/.test(out2), out2.trim());
-  fs.rmSync(tmp, { recursive: true, force: true });
-}
-
 console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自动起审官受控例外（#480）===");
 {
   const r = runFlow(path.join(FIXTURES, "real-456"));
@@ -395,25 +340,8 @@ console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自�
   const multi = (chain.split("多工人")[1] || "");
   check("SKILL 命令链多工人/辅助卡示例含 worker-start --terminal", /worker-start --task <task_id> --worktree <新建子卡 id> --terminal/.test(multi), multi.slice(0, 300));
   check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
-}
-
-console.log("\n=== ㉒ files 取数截断必须报没查成；第 150 位敏感文件必须报（第三轮红 1）===");
-{
-  const src = fs.readFileSync(FLOW, "utf8");
-  const liveFn = src.split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
-  check("live getPrFiles 走 pulls/.../files --paginate", /pulls\/\$\{number\}\/files/.test(liveFn) && /--paginate/.test(liveFn));
-  check("live getPrFiles 不再用 pr view --json files", !/pr', 'view'[\s\S]{0,80}--json', 'files'/.test(liveFn));
+  const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
   check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
-
-  const late = runFlow(path.join(FIXTURES, "files-late-sensitive"));
-  check("第 150 位 dao-check 仍报警（没被 100 截断吞掉）", /报警：敏感路径越权 #3005（diff 触碰 scripts\/dao-check\.mjs/.test(late.out), late.out.trim());
-  check("第 150 位命中后不打 OK 扫完", !/OK 扫完/.test(late.out), late.out.trim());
-  check("第 150 位夹具 exit 1", late.status === 1, `status=${late.status}`);
-
-  const trunc = runFlow(path.join(FIXTURES, "files-truncated"));
-  check("截断夹具 exit 2（NO_TARGETS / 没查成）", trunc.status === 2, `status=${trunc.status}`);
-  check("截断夹具打出没查成（拿到 100，changedFiles=150）", /NO_TARGETS：读 PR #3004 信号失败（files 取数被截断（拿到 100，changedFiles=150））——本轮没查成/.test(trunc.out), trunc.out.trim());
-  check("截断夹具不打 OK 扫完（分得开没查成和扫完 0 条）", !/OK 扫完/.test(trunc.out), trunc.out.trim());
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

@@ -13,10 +13,6 @@
 //      解析逻辑与 scripts/calibrate.mjs 共用 scripts/lib/judgment.mjs（唯一真相源，不复制两份）
 //   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
 //   ③ PR MERGED 状态
-//   ④ 敏感路径越权报警（2026-08-15 新增）：PR diff 触碰 docs/global-CLAUDE.md、根 CLAUDE.md、
-//      host/skills/、scripts/dao-check.mjs 且声明段没有「以该路径开头」的行 → 报警行
-//      （结构判据：首 token 才是路径；段外关键词 / 路径不在行首都不算。取 files 必须分页
-//      且与 changedFiles 对账，取不全走 NO_TARGETS「没查成」，禁止把截断清单当成扫完）
 //
 // 决策规则（②）：
 //   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
@@ -69,8 +65,6 @@
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
 //   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
-//   pr-<N>-files.json（可选，敏感路径报警用；数组元素可为路径字符串或 {path}/{filename}）
-//   prs.json / pr-<N>.json 的 changedFiles（可选）：有则与 files 条数对账，少了算没查成
 //   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
 
 import { spawnSync } from 'node:child_process';
@@ -92,75 +86,6 @@ const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
 const READY_WAIT_MS = 2000;       // 就绪轮询间隔
 const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
-
-// ── 敏感路径越权报警（fusion-verdict 2026-08-15）──────────────────────
-// PR diff 触碰这些路径但正文未声明 → 报警行（此前越权完全无自动检测）。
-// 声明口径（第四轮换路）：只认正文「本 PR 触碰敏感路径声明」段里
-// 「以路径开头的行」。去掉列表标记和反引号后取第一个 token（切分于
-// 空格 / ：: / ，,、），用规则指名串测这个 token——路径不在声明位就不算。
-// 禁止再枚举否定词（关键词匹配已连错三次：子串误配 → 否定句 → 同义词）。
-// 指名串覆盖该规则下全部命中文件。每轮重算——违规持续则每轮报警。
-const DECLARE_HEADING = /触碰敏感路径声明/;
-
-function declaredSection(body) {
-  const lines = String(body || '').split(/\r?\n/);
-  const start = lines.findIndex(l => /^#{1,3}\s/.test(l) && DECLARE_HEADING.test(l));
-  if (start < 0) return '';
-  const out = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^#{1,3}\s/.test(lines[i])) break;
-    out.push(lines[i]);
-  }
-  return out.join('\n');
-}
-
-function declaredPath(line) {
-  const s = String(line || '').replace(/^\s*[-*+]\s*/, '').replace(/`/g, '').trim();
-  return s.split(/[\s：:，,、]/)[0] || '';
-}
-
-function isPathDeclaration(body, needle) {
-  const section = declaredSection(body);
-  if (!section) return false;
-  return section.split('\n').some(l => {
-    const token = declaredPath(l);
-    return token !== '' && needle.test(token);
-  });
-}
-
-const SENSITIVE_RULES = [
-  // 根 CLAUDE.md：声明正则必须不被 docs/global-CLAUDE.md 子串满足（审读红 2：
-  // 正文只提 global-CLAUDE.md ≠ 声明了根 CLAUDE.md）——(?<!global-) 负向环视挡掉
-  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => isPathDeclaration(b, /(?<!global-)CLAUDE\.md/) },
-  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => isPathDeclaration(b, /global-CLAUDE/) },
-  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => isPathDeclaration(b, /host\/skills/) },
-  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => isPathDeclaration(b, /dao-check/) },
-];
-
-// 返回未声明命中的规则列表 [{ rule, files }]；全部已声明或未触碰 → []。
-function sensitiveEscalations(pr, filePaths) {
-  const body = pr.body || '';
-  const out = [];
-  for (const r of SENSITIVE_RULES) {
-    const touched = (filePaths || []).filter(f => typeof f === 'string' && r.match(f));
-    if (touched.length > 0 && !r.declared(body)) out.push({ rule: r.name, files: touched });
-  }
-  return out;
-}
-
-// files 条数必须能跟 changedFiles 对上；对不上 = 没查全，不能当扫完。
-// changedFiles 缺数字时：live 必须报红；快照旧夹具没这个字段则跳过对账。
-function reconcileFileList(files, changedFiles, { requireCount = true } = {}) {
-  if (changedFiles == null || !Number.isFinite(Number(changedFiles))) {
-    if (requireCount) return { ok: false, error: 'files 取数无法核对 changedFiles（缺数字）' };
-    return { ok: true, files };
-  }
-  const n = Number(changedFiles);
-  if (files.length < n) {
-    return { ok: false, error: `files 取数被截断（拿到 ${files.length}，changedFiles=${n}）` };
-  }
-  return { ok: true, files };
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // 参数
@@ -609,18 +534,6 @@ function makeLiveSource(repo) {
       }));
       return { ok: true, reviews };
     },
-    getPrFiles(number) {
-      // 第三轮红 1：gh pr view --json files 硬截断 100（#459=113、#429=237 实测只回 100）。
-      // 改走 pulls/.../files --paginate（不带 --jq，同 getReviews），取 .filename；
-      // 再跟 changed_files 对账，少了就 ok:false 走「没查成」，禁止静默当扫完。
-      const filesR = runGh(['api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate']);
-      if (!filesR.ok) return { ok: false, error: filesR.error };
-      const raw = Array.isArray(filesR.json) ? filesR.json : [];
-      const files = raw.map(f => f && (f.filename || f.path)).filter(Boolean);
-      const meta = runGh(['api', `repos/${repo}/pulls/${number}`, '--jq', '.changed_files']);
-      if (!meta.ok) return { ok: false, error: `files 取数无法核对 changedFiles：${meta.error}` };
-      return reconcileFileList(files, meta.json, { requireCount: true });
-    },
     orcaWorktrees() {
       const r = runOrca(['worktree', 'list', '--json']);
       if (!r.ok) return { ok: false, error: r.error };
@@ -653,23 +566,6 @@ function loadSnapshotRounds(dir) {
   return { ok: true, dirs };
 }
 
-function snapshotChangedFiles(roundDir, number) {
-  const fromPr = readJson(join(roundDir, `pr-${number}.json`));
-  if (fromPr.ok && fromPr.json) {
-    const n = fromPr.json.changedFiles ?? fromPr.json.changed_files;
-    if (Number.isFinite(Number(n))) return Number(n);
-  }
-  const list = readJson(join(roundDir, 'prs.json'));
-  if (list.ok && Array.isArray(list.json)) {
-    const pr = list.json.find(p => p && p.number === number);
-    if (pr) {
-      const n = pr.changedFiles ?? pr.changed_files;
-      if (Number.isFinite(Number(n))) return Number(n);
-    }
-  }
-  return null;
-}
-
 function makeSnapshotSource(roundDir, repo) {
   return {
     listOpenPrs() {
@@ -700,14 +596,6 @@ function makeSnapshotSource(roundDir, repo) {
           url: rv.html_url || `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
         })),
       };
-    },
-    getPrFiles(number) {
-      // 可选文件：数组元素可为路径字符串或 {path}/{filename}（live 形态镜像）
-      const r = readJson(join(roundDir, `pr-${number}-files.json`));
-      const raw = r.ok && Array.isArray(r.json) ? r.json : [];
-      const files = raw.map(f => (typeof f === 'string' ? f : f && (f.filename || f.path))).filter(Boolean);
-      const changed = snapshotChangedFiles(roundDir, number);
-      return reconcileFileList(files, changed, { requireCount: false });
     },
     orcaWorktrees() {
       const r = readJson(join(roundDir, 'orca-worktrees.json'));
@@ -883,20 +771,13 @@ function processOneRound(source, state, args) {
 
     const commentsR = source.getComments(pr.number);
     const reviewsR = source.getReviews(pr.number);
-    const filesR = source.getPrFiles(pr.number);
-    if (!commentsR.ok || !reviewsR.ok || !filesR.ok) {
+    if (!commentsR.ok || !reviewsR.ok) {
       noTargets = true;
-      events.push(`[flow] NO_TARGETS：读 PR #${pr.number} 信号失败（${commentsR.ok ? '' : commentsR.error}${reviewsR.ok ? '' : reviewsR.error}${filesR.ok ? '' : filesR.error}）——本轮没查成`);
+      events.push(`[flow] NO_TARGETS：读 PR #${pr.number} 信号失败（${commentsR.ok ? '' : commentsR.error}${reviewsR.ok ? '' : reviewsR.error}）——本轮没查成`);
       continue;
     }
     const comments = commentsR.comments || [];
     const reviews = reviewsR.reviews || [];
-    const diffFiles = filesR.files || [];
-
-    // 敏感路径越权报警（fusion-verdict 2026-08-15）：diff 触碰敏感路径且正文未声明 → 每轮报警行
-    for (const v of sensitiveEscalations(pr, diffFiles)) {
-      events.push(`[flow] 报警：敏感路径越权 #${pr.number}（diff 触碰 ${v.rule}——${v.files.join('、')}，正文未声明）——越权改动（此前完全无自动检测），请帅确认`);
-    }
 
     // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿
     for (const rv of reviews) {
@@ -1002,7 +883,7 @@ function processOneRound(source, state, args) {
   }
 
   const scanned = open.length;
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 报警') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
@@ -1025,7 +906,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations, reconcileFileList, declaredSection, declaredPath };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason };
 
 let args = null;
 let anyEmitted = false;
