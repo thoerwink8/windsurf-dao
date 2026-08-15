@@ -22,7 +22,7 @@
 // ensure stdout 一行 JSON：{ok, runId, handle, logPath, action, reason}
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +35,10 @@ const READY_POLL_MS = 1000;
 export const TITLE = '信箱台（勿关）';
 export const READY_MARK = 'INBOX_STATION_READY';
 export const DEFAULT_LOG_REL = join('_flow', 'inbox.log');
+export const LEASE_NAME = 'inbox-station.lease';
+// 无租约自带 ttl 时的默认窗口：覆盖默认 check --wait 15s + 余量
+export const LEASE_TTL_MS = 25000;
+export const LEASE_GRACE_MS = 10000;
 
 // ══════════════════════════════════════════════════════════════════════
 // 纯函数（单测直接 import，不经过 live orca）
@@ -86,12 +90,149 @@ export function findInboxTerminal(terminals) {
   return terminals.find((t) => String(t?.title || '').includes(TITLE)) || null;
 }
 
-export function isRelayAlive(terminal) {
+export function leasePath(logPath) {
+  return join(dirname(logPath || DEFAULT_LOG_REL), LEASE_NAME);
+}
+
+export function formatLease({ pid, runId, ts, ttlMs }) {
+  return `${JSON.stringify({
+    pid,
+    runId: runId ?? null,
+    ts,
+    ttlMs: ttlMs ?? LEASE_TTL_MS,
+  })}\n`;
+}
+
+export function parseLease(raw) {
+  if (raw == null) return null;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text) return null;
+  try {
+    const obj = JSON.parse(text);
+    const pid = Number(obj?.pid);
+    const ts = Number(obj?.ts);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ts)) return null;
+    const ttlMs = Number(obj?.ttlMs);
+    return {
+      pid,
+      ts,
+      runId: obj.runId ?? null,
+      ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LEASE_TTL_MS,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isLeaseFresh(lease, now = Date.now(), ttlMs) {
+  if (!lease || !Number.isFinite(lease.ts) || !Number.isFinite(now)) return false;
+  const window = ttlMs ?? lease.ttlMs ?? LEASE_TTL_MS;
+  const age = now - lease.ts;
+  return age >= 0 && age <= window;
+}
+
+export function isProcessAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (e) {
+    // EPERM：进程在，只是没权限发信号。ESRCH 才是不存在。
+    return e && e.code === 'EPERM';
+  }
+}
+
+// 活性只认「租约未过期 + PID 仍在」。READY 行 / 脚本名 / check 字样是历史屏面，
+// relay 退回 shell 后仍会留在 preview，不能当活。
+export function isRelayAlive(terminal, opts = {}) {
   if (!terminal || terminal.connected === false || terminal.orphaned === true) return false;
-  const text = `${terminal.title || ''}\n${terminal.preview || ''}`;
-  return text.includes(READY_MARK)
-    || text.includes('inbox-station.mjs')
-    || /orchestration check/.test(text);
+  const lease = opts.lease ?? null;
+  const now = opts.now ?? Date.now();
+  const ttlMs = opts.ttlMs;
+  if (!isLeaseFresh(lease, now, ttlMs)) return false;
+  return isProcessAlive(lease.pid);
+}
+
+export function decideReady({ terminal, lease, coordinatorHandle, now, ttlMs } = {}) {
+  const handle = terminal?.handle || null;
+  if (!handle) return { ok: false, error: 'no-terminal' };
+  if (!isRelayAlive(terminal, { lease, now, ttlMs })) {
+    return { ok: false, error: 'relay-not-alive' };
+  }
+  if (!coordinatorHandle || coordinatorHandle !== handle) {
+    return { ok: false, error: 'coordinator-not-held' };
+  }
+  return { ok: true };
+}
+
+// rebuild 等就绪：超时不得降成 warning 成功。
+export function acceptRebuildReady(ready) {
+  if (!ready?.ok) {
+    return { ok: false, error: ready?.error || '中继未就绪或 coordinator 未夺回' };
+  }
+  return { ok: true, handle: ready.handle || ready.terminal?.handle || null };
+}
+
+export function finalizeEnsure({
+  runShowOk,
+  coordinatorHandle,
+  handle,
+  relayAlive,
+  runId,
+  logPath,
+  action,
+  reason,
+} = {}) {
+  if (!relayAlive) {
+    return {
+      exitCode: 1,
+      payload: statusPayload({
+        ok: false,
+        runId,
+        handle,
+        logPath,
+        action,
+        reason: 'relay-not-alive',
+        error: '中继未存活',
+        coordinatorHandle,
+      }),
+    };
+  }
+  if (!runShowOk) {
+    return {
+      exitCode: 1,
+      payload: statusPayload({
+        ok: false,
+        runId,
+        handle,
+        logPath,
+        action,
+        reason: 'coordinator-unknown',
+        error: 'run-show 失败',
+        coordinatorHandle: coordinatorHandle || null,
+      }),
+    };
+  }
+  if (!coordinatorHandle || coordinatorHandle !== handle) {
+    return {
+      exitCode: 1,
+      payload: statusPayload({
+        ok: false,
+        runId,
+        handle,
+        logPath,
+        action,
+        reason: 'coordinator-not-held',
+        error: coordinatorHandle ? `coordinator 仍是 ${coordinatorHandle}` : 'coordinator 为空',
+        coordinatorHandle: coordinatorHandle || null,
+      }),
+    };
+  }
+  return {
+    exitCode: 0,
+    payload: statusPayload({ ok: true, runId, handle, logPath, action, reason }),
+  };
 }
 
 export function decideEnsureAction({ terminal, relayAlive, coordinatorHandle }) {
@@ -205,8 +346,20 @@ export function buildRelayCommand({ launchPath }) {
   return `cmd.exe /c ${quoteWin(launchPath)}`;
 }
 
-export function statusPayload({ runId, handle, logPath, action, reason }) {
-  return { ok: true, runId, handle, logPath, action, reason };
+export function statusPayload({
+  ok = true,
+  runId,
+  handle,
+  logPath,
+  action,
+  reason,
+  error,
+  coordinatorHandle,
+} = {}) {
+  const payload = { ok, runId, handle, logPath, action, reason };
+  if (error) payload.error = error;
+  if (coordinatorHandle != null) payload.coordinatorHandle = coordinatorHandle;
+  return payload;
 }
 
 export function quoteWin(s) {
@@ -352,30 +505,40 @@ function resolveCreateWorktree(arg) {
 // ensure / rebuild / reclaim
 // ══════════════════════════════════════════════════════════════════════
 
-function readTerminalText(handle) {
-  const read = runOrca(['terminal', 'read', '--terminal', handle, '--limit', '40', '--json']);
-  if (!read.ok) return '';
-  const term = unwrapOrca(read.json, 'terminal') || read.json?.result?.terminal || {};
-  if (Array.isArray(term.tail)) return term.tail.join('\n');
-  const preview = term.preview || unwrapOrca(read.json, 'preview') || unwrapOrca(read.json, 'text') || '';
-  if (typeof preview === 'string') return preview;
-  if (Array.isArray(preview)) return preview.join('\n');
-  return '';
+function loadLease(logPath) {
+  try {
+    return parseLease(readFileSync(leasePath(logPath), 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
-async function waitReady(handle, timeoutMs = READY_WAIT_MS) {
+function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS) {
+  writeFileSync(leasePath(logPath), formatLease({
+    pid: process.pid,
+    runId,
+    ts: Date.now(),
+    ttlMs,
+  }), 'utf8');
+}
+
+async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } = {}) {
   const t0 = Date.now();
+  let lastError = '中继未就绪或 coordinator 未夺回';
   while (Date.now() - t0 < timeoutMs) {
     const listed = listTerminals();
-    const mine = (listed.terminals || []).find((t) => t.handle === handle);
-    if (mine && isRelayAlive(mine)) return { ok: true, terminal: mine };
-    const joined = `${mine?.preview || ''}\n${readTerminalText(handle)}`;
-    if (joined.includes(READY_MARK) || joined.includes('inbox-station.mjs')) {
-      return { ok: true, terminal: mine || { handle } };
-    }
+    const mine = (listed.terminals || []).find((t) => t.handle === handle) || null;
+    const shown = runId ? showRun(runId) : { ok: false, run: null };
+    const ready = decideReady({
+      terminal: mine || { handle, connected: true },
+      lease: loadLease(logPath),
+      coordinatorHandle: shown.run?.coordinator_handle || null,
+    });
+    if (ready.ok && mine) return { ok: true, terminal: mine };
+    lastError = ready.error || lastError;
     await sleep(READY_POLL_MS);
   }
-  return { ok: false, error: `等 ${timeoutMs}ms 未见 ${READY_MARK}` };
+  return { ok: false, error: `等 ${timeoutMs}ms ${lastError}` };
 }
 
 function writeLaunchFile(logPath, runId) {
@@ -408,12 +571,8 @@ async function rebuildStation({ old, runId, logPath, worktree }) {
   const handle = extractHandle(created.json);
   if (!handle) return { ok: false, error: `terminal create 没返回 handle: ${JSON.stringify(created.json).slice(0, 200)}` };
   runOrca(['terminal', 'rename', '--terminal', handle, '--title', TITLE, '--json']);
-  const ready = await waitReady(handle);
-  if (!ready.ok) {
-    // 进程可能已起、只是标记还没刷到 preview；handle 仍可用，ensure 继续夺回
-    return { ok: true, handle, warning: ready.error };
-  }
-  return { ok: true, handle };
+  const ready = await waitReady(handle, { runId, logPath });
+  return acceptRebuildReady({ ...ready, handle });
 }
 
 async function cmdEnsure(args) {
@@ -432,7 +591,7 @@ async function cmdEnsure(args) {
     process.exit(1);
   }
   const terminal = findInboxTerminal(listed.terminals);
-  const relayAlive = isRelayAlive(terminal);
+  const relayAlive = isRelayAlive(terminal, { lease: loadLease(logPath) });
   const shown = showRun(runId);
   const decision = decideEnsureAction({
     terminal,
@@ -456,16 +615,24 @@ async function cmdEnsure(args) {
       process.exit(1);
     }
     handle = rebuilt.handle;
-    if (rebuilt.warning) reason = `${reason}; ${rebuilt.warning}`;
-    // 启动串里的 run-use 需要一点时间落到 run-show
-    await sleep(1500);
   }
 
-  const after = showRun(runId);
-  const coord = after.run?.coordinator_handle || null;
-  const payload = statusPayload({ runId, handle, logPath, action, reason });
-  if (coord && coord !== handle) payload.coordinatorHandle = coord;
-  console.log(JSON.stringify(payload));
+  const afterShow = showRun(runId);
+  const afterList = listTerminals();
+  const afterTerm = (afterList.terminals || []).find((t) => t.handle === handle)
+    || findInboxTerminal(afterList.terminals);
+  const final = finalizeEnsure({
+    runShowOk: afterShow.ok,
+    coordinatorHandle: afterShow.run?.coordinator_handle || null,
+    handle,
+    relayAlive: isRelayAlive(afterTerm, { lease: loadLease(logPath) }),
+    runId,
+    logPath,
+    action,
+    reason,
+  });
+  console.log(JSON.stringify(final.payload));
+  if (final.exitCode !== 0) process.exit(final.exitCode);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -487,11 +654,14 @@ async function cmdRelay(args) {
   const runId = runResolved.runId;
   const logPath = resolveLogPath(args.log);
   mkdirSync(dirname(logPath), { recursive: true });
+  const leaseTtlMs = args.timeoutMs + LEASE_GRACE_MS;
 
   console.log(`${READY_MARK} run=${runId} log=${logPath}`);
+  persistLease(logPath, runId, leaseTtlMs);
 
   let lastAck = null;
   for (;;) {
+    persistLease(logPath, runId, leaseTtlMs);
     const used = runOrca(['orchestration', 'run-use', '--id', runId, '--json']);
     if (!used.ok) {
       console.error(`${READY_MARK} run-use 失败: ${errText(used.error)}`);
@@ -499,11 +669,13 @@ async function cmdRelay(args) {
       continue;
     }
     console.log(`${READY_MARK} run-use ok run=${runId}`);
+    persistLease(logPath, runId, leaseTtlMs);
 
     const waited = await waitCheck({ ackId: lastAck, timeoutMs: args.timeoutMs });
+    persistLease(logPath, runId, leaseTtlMs);
     const parsed = parseOrcaStdout(waited.out);
     if (!parsed.ok) {
-      // 超时空转也算活着，打印标记让 ensure 认得出中继还在
+      // 超时空转也算活着：租约已在 wait 前后续期，PID 仍在即可
       console.error(`${READY_MARK} check 无 JSON: ${(waited.err || waited.out || '').slice(0, 160)}`);
       lastAck = null;
       continue;

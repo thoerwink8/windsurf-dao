@@ -1,9 +1,11 @@
 // 信箱台幂等脚本 · 纯函数回归（不碰 live orca）
 //
-// 验的层：①参数/选型 ②终端+中继活着判据 ③ensure 三岔（秒退/夺回/重建）
+// 验的层：①参数/选型 ②终端+中继活着判据（租约+PID，不是历史屏面）
+// ③ensure 三岔（秒退/夺回/重建）
 // ④收信分流（heartbeat 不落盘、业务信落盘）⑤check JSON 多形态解析
 // ⑥重建命令串（run-use 由 relay 进程自己做，--command 不走 stdin）
-// 判别力：任何把 heartbeat 写进日志、或 all-alive 误判成 rebuild 的改动，必有一条变红。
+// ⑦waitReady / finalizeEnsure 故障注入（超时与夺回失败必须 ok:false 非零）
+// 判别力：READY 历史行当活、或超时仍 ok:true，必有一条变红。
 
 const path = require('path');
 
@@ -55,13 +57,40 @@ async function main() {
 
     check('未连 = 死', S.isRelayAlive({ ...titled, connected: false }) === false);
     check('孤儿 = 死', S.isRelayAlive({ ...titled, connected: true, orphaned: true }) === false);
-    check('有 READY 标记 = 活', S.isRelayAlive({
-      handle: 'term_a', title: S.TITLE, connected: true, preview: `${S.READY_MARK} run=x`,
-    }) === true);
-    check('preview 含脚本名 = 活', S.isRelayAlive({
-      handle: 'term_a', title: S.TITLE, connected: true, preview: 'node scripts/inbox-station.mjs relay',
-    }) === true);
     check('只有标题没有中继痕迹 = 死', S.isRelayAlive(titled) === false);
+
+    // 审官红1 原样：connected + lastOutputAt:0 + 仅历史 READY preview
+    const residue = {
+      handle: 'term_a',
+      title: S.TITLE,
+      connected: true,
+      lastOutputAt: 0,
+      preview: `${S.READY_MARK} run=x\nnode scripts/inbox-station.mjs relay\norchestration check --wait`,
+    };
+    check('READY 历史行在但 relay 已退出 = 死', S.isRelayAlive(residue) === false);
+    check('脚本名/check 历史残留不能当活', S.isRelayAlive({
+      handle: 'term_a', title: S.TITLE, connected: true,
+      preview: 'node scripts/inbox-station.mjs relay',
+    }) === false);
+
+    const now = 1_000_000;
+    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const deadPidLease = { pid: 2147483647, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const staleLease = { pid: process.pid, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
+    check('新鲜租约 + 本进程 PID = 活', S.isRelayAlive(residue, { lease: liveLease, now }) === true);
+    check('新鲜租约但 PID 已死 = 死', S.isRelayAlive(residue, { lease: deadPidLease, now }) === false);
+    check('过期租约 + 活 PID = 死', S.isRelayAlive(residue, { lease: staleLease, now }) === false);
+    check('preview 已滚没但租约新鲜+PID 活 = 活', S.isRelayAlive({
+      handle: 'term_a', title: S.TITLE, connected: true, preview: 'PS>',
+    }, { lease: liveLease, now }) === true);
+
+    check('parseLease 坏 JSON → null', S.parseLease('not-json') === null);
+    check('parseLease 缺 pid → null', S.parseLease(JSON.stringify({ ts: now })) === null);
+    const parsed = S.parseLease(S.formatLease({ pid: 12, runId: 'run_x', ts: now, ttlMs: 9000 }));
+    check('format/parse 租约往返', parsed && parsed.pid === 12 && parsed.runId === 'run_x' && parsed.ttlMs === 9000);
+    check('本进程 PID 活', S.isProcessAlive(process.pid) === true);
+    check('非法 PID 死', S.isProcessAlive(0) === false && S.isProcessAlive(-1) === false);
+    check('leasePath 落在日志同目录', S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox-station.lease'));
   }
 
   console.log('\n=== ③ ensure 三岔 ===');
@@ -159,6 +188,11 @@ async function main() {
     });
     check('现状 JSON 三件套', st.runId === 'run_x' && st.handle === 'term_y' && st.logPath === 'p');
     check('现状 JSON ok', st.ok === true && st.action === 'ok');
+    const stFail = S.statusPayload({
+      ok: false, runId: 'run_x', handle: 'term_y', logPath: 'p',
+      action: 'rebuild', reason: 'relay-not-alive', error: '中继未存活',
+    });
+    check('现状 JSON 失败带 ok:false', stFail.ok === false && stFail.error === '中继未存活');
 
     check('标题常量', S.TITLE === '信箱台（勿关）');
     check('unwrap result.key', S.unwrapOrca({ result: { terminals: [1] } }, 'terminals')[0] === 1);
@@ -167,6 +201,61 @@ async function main() {
       { id: 'a', isMainWorktree: false },
       { id: 'b', isMainWorktree: true },
     ]).id === 'b');
+  }
+
+  console.log('\n=== ⑦ waitReady / finalizeEnsure 故障注入 ===');
+  {
+    const now = 2_000_000;
+    const term = { handle: 'term_box', title: S.TITLE, connected: true, preview: S.READY_MARK };
+    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS };
+
+    check('decideReady 全好 → ok', S.decideReady({
+      terminal: term, lease: liveLease, coordinatorHandle: 'term_box', now,
+    }).ok === true);
+    check('decideReady 无终端 → 失败', S.decideReady({
+      terminal: null, lease: liveLease, coordinatorHandle: 'term_box', now,
+    }).ok === false);
+    check('decideReady 历史 READY 无租约 → relay-not-alive', S.decideReady({
+      terminal: term, lease: null, coordinatorHandle: 'term_box', now,
+    }).error === 'relay-not-alive');
+    check('decideReady coordinator 空 → coordinator-not-held', S.decideReady({
+      terminal: term, lease: liveLease, coordinatorHandle: null, now,
+    }).error === 'coordinator-not-held');
+    check('decideReady coordinator 是别人 → coordinator-not-held', S.decideReady({
+      terminal: term, lease: liveLease, coordinatorHandle: 'term_thief', now,
+    }).error === 'coordinator-not-held');
+
+    check('超时不得降级成功', S.acceptRebuildReady({ ok: false, error: 'timeout' }).ok === false);
+    check('超时不得带 warning 当成功', !('warning' in S.acceptRebuildReady({ ok: false, error: 'timeout' })));
+    check('acceptRebuildReady 成功带 handle', S.acceptRebuildReady({
+      ok: true, terminal: term,
+    }).handle === 'term_box');
+
+    const base = {
+      handle: 'term_box', runId: 'run_x', logPath: 'p', action: 'rebuild', reason: 'no-terminal',
+    };
+    const deadRelay = S.finalizeEnsure({ ...base, relayAlive: false, runShowOk: true, coordinatorHandle: 'term_box' });
+    check('finalize 中继死 → ok:false 非零', deadRelay.exitCode === 1 && deadRelay.payload.ok === false);
+    check('finalize 中继死 reason', deadRelay.payload.reason === 'relay-not-alive');
+
+    const showFail = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: false, coordinatorHandle: null });
+    check('finalize run-show 失败 → ok:false 非零', showFail.exitCode === 1 && showFail.payload.ok === false);
+    check('finalize run-show 失败 reason', showFail.payload.reason === 'coordinator-unknown');
+
+    const emptyCoord = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: true, coordinatorHandle: null });
+    check('finalize coordinator 空 → ok:false 非零', emptyCoord.exitCode === 1 && emptyCoord.payload.ok === false);
+    check('finalize coordinator 空 reason', emptyCoord.payload.reason === 'coordinator-not-held');
+
+    const stolen = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: true, coordinatorHandle: 'term_thief' });
+    check('finalize 未夺回 → ok:false 非零', stolen.exitCode === 1 && stolen.payload.ok === false);
+    check('finalize 未夺回写出对方 handle', stolen.payload.coordinatorHandle === 'term_thief');
+
+    const okFinal = S.finalizeEnsure({
+      ...base, action: 'ok', reason: 'all-alive',
+      relayAlive: true, runShowOk: true, coordinatorHandle: 'term_box',
+    });
+    check('finalize 全好 → ok:true 零退出', okFinal.exitCode === 0 && okFinal.payload.ok === true);
+    check('finalize 成功不带 error', okFinal.payload.error === undefined);
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
