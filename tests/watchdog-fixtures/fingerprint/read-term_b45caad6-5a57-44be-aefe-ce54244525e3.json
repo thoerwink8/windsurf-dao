@@ -5,8 +5,8 @@
       "status": "running",
       "tail": [
         "$ cd \"C:/Users/Administrator/orca/workspaces/windsurf-dao/点将台综合稿\" && node scripts/dao-check.mjs",
-        "Error: Retry failed after 3 attempts: terminated",
-        "Reconnecting... 5/5 failed"
+        "Error: upstream terminated — Connection error",
+        "Reconnecting... 3/5 failed"
       ]
     }
   }

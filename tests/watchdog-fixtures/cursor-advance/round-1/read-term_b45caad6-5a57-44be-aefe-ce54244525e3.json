@@ -1,0 +1,23 @@
+{
+  "result": {
+    "terminal": {
+      "handle": "term_b45caad6-5a57-44be-aefe-ce54244525e3",
+      "status": "running",
+      "tail": [
+        " Elapsed 0.0s",
+        "",
+        "",
+        "",
+        " $ cd \"C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版\" && orca terminal read --terminal term_e02bc95d-2fda-4414-ac8e-4bf399ab5bf6",
+        " --limit 500 --json > tests/watchdog-fixtures/read-master-live.json 2>&1 && node -e \"",
+        " const d=require('./tests/watchdog-fixtures/read-master-live.json');",
+        " console.log('ok:', d.ok, 'status:', d.result?.terminal?.status, 'lines:', d.result?.terminal?.tail?.length);",
+        " \"",
+        "",
+        " ⠸ Working..."
+      ],
+      "nextCursor": "4000",
+      "latestCursor": "4000"
+    }
+  }
+}

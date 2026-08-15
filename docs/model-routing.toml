@@ -7,21 +7,25 @@
 # 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
 # ============================================================================
 
-updated = "2026-08-14"
+updated = "2026-08-15"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 
 [providers.deepseek]
 cli = "pi"
+default_model = "deepseek-v4-flash"   # 拍板 issue #462：pi 派单默认 flash（~/.pi/agent/settings.json 已手改，本字段固化）；ds-pro 仅限重型任务
 launch_note = """
 DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
+派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
 峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
 """
 
 [providers.grok]
 cli = "grok"
 launch_note = """
-grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-08-14，issue #443）。装机与启动坑见 NEW-MACHINE.md「grok 怎么配」节（代理前缀、钉版本 1.0.1）——真相源只在那一处，别在此复制。
+grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-08-14，issue #443）。
+2026-08-15 起经 regrok shim（~/.local/bin，覆盖 PATH）已是普通 agent，`--agent grok` 直接可用。
+shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
 """
 why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
 note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节（HTTPS_PROXY=http://127.0.0.1:7890 必带）见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
