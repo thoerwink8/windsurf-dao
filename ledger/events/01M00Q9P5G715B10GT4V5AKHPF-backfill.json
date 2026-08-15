@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T02:07:10+08:00",
+  "machine": "backfill",
+  "seq": 20,
+  "job_id": "gh-pr-457",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #457；[pi] 看门狗收口：#452 复核 4 条收口建议落地（issue #454）；判定行红 1 项",
+  "pr_number": 457,
+  "source": "github-backfill",
+  "event_id": "a7392a60e542578fb798af7a7ca98a632161e6d71119d13eae917d9775400e39"
+}

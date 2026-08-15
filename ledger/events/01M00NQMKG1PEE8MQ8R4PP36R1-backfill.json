@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-15T01:39:50+08:00",
+  "machine": "backfill",
+  "seq": 7,
+  "job_id": "gh-pr-450",
+  "model": "deepseek-v4-pro",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#450，红 10 项）",
+  "evidence": [
+    "github:pr-450"
+  ],
+  "pr_number": 450,
+  "source": "github-backfill",
+  "event_id": "e18336ba66951b2660188bfb311de6f6428092f5742622ce8d4b0ef8fa4176a4"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T02:15:08+08:00",
+  "machine": "backfill",
+  "seq": 28,
+  "job_id": "gh-pr-459",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #459；[pi] 闭环自动流转器：完工→自动派复核、红项→自动派返工（issue #455）；判定行红 6 项",
+  "pr_number": 459,
+  "source": "github-backfill",
+  "event_id": "2f2f89d620f8a1625b046cf494ba4c877a7513692e7cb0711c66a2d262cea9aa"
+}

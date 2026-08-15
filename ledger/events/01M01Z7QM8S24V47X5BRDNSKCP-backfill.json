@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-15T13:45:09+08:00",
+  "machine": "backfill",
+  "seq": 39,
+  "job_id": "gh-pr-461",
+  "model": "deepseek-v4-flash",
+  "model_share": 0,
+  "brief_share": 0,
+  "coord_share": 1,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：未合并关闭的试点/试测单，记协调实验（#461）",
+  "evidence": [
+    "github:pr-461"
+  ],
+  "pr_number": 461,
+  "source": "github-backfill",
+  "event_id": "cfb97302e32f91b7c91caccebfa274e409f08ddfebebdc9273f32d0297d8dba4"
+}
