@@ -177,14 +177,14 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 `--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
 
-spec 样例（正反例；合并权类的单尤其要把 PR 侧职责写进 spec）：
+spec 样例（正反例；具体职责清单以**当时的审官任务书为准**——#530 换路后审官动作会变，勿硬编码会过时的清单）：
 
 ```bash
 # ❌ 反例（#505 实证）：只写技术目标，PR 侧职责被当背景略过
 orca orchestration task-create --spec "短摘要：#505 链C活性判据换真证据 审读"
 
-# ✅ 审官单：职责全列，一条一类
-orca orchestration task-create --spec "短摘要：#505 审读 + 判定行落 PR + 重查 mergeable/CI + 自合"
+# ✅ 审官单：职责类别逐条列全，动作内容指当时的审官任务书
+orca orchestration task-create --spec "短摘要：审读 #505 + 按审官任务书落判定/收尾动作"
 ```
 
 ## 材料三去处（2026-08-15 拍板：临时树材料绑架树生命周期，pilot-B 实证）
@@ -248,12 +248,14 @@ orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --
 - 禁裸 `terminal create + dispatch --inject` 旁路（release 认不到 → 误关终端旧事故）；例外通道必须先挂 `worker-start --terminal`。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
 - 路径从 PR 反查，禁手抄：例：`gh pr view <PR号> --json headRefName -q .headRefName`——分支名从 PR 的 JSON 取，不手抄。
-- 解析 gh 输出必须把「命令失败」与「查到 0 条」分开：失败要报出来，**不得当成事实**（#532：次级限流让 `gh api` 全线失败时，拿到空结果会被当成「没有 review」「没有 PR」，照空列表往下判——「没查成」当「查过没事」不报警，是会出事故的那类错；审官、工人、临时脚本一视同仁）。可复制写法，失败分支单独报错退出，命令成功返回的空数组才算真 0：
+- **拿不到就报出来**（#532 升格为通用原则）：凡是拿不到东西——gh 输出失败、文件读不到、查不到、超时——必须报出来，**不许编、不许当成 0**。「没查成」当「查过没事」不报警，是会出事故的那类错（#532 次级限流让 `gh api` 全线失败拿到空列表；#538 第一轮审官编造执行证据、整轮作废）。两个落点，审官/工人/临时脚本一视同仁：
+  - **gh 输出**：命令失败与查到 0 条分开，失败分支单独报错退出，命令成功返回的空数组才算真 0：
 
-  ```bash
-  review_list=$(gh pr view <PR号> --json reviews -q '.reviews') \
-    || { echo "gh 读 <PR号> reviews 失败（$?）——不是没有 review，是没查成" >&2; exit 1; }
-  state=$(gh pr view <PR号> --json state -q '.state') \
-    || { echo "gh 读 <PR号> state 失败（$?）——不是查过没事" >&2; exit 1; }
-  ```
+    ```bash
+    review_list=$(gh pr view <PR号> --json reviews -q '.reviews') \
+      || { echo "gh 读 <PR号> reviews 失败（$?）——不是没有 review，是没查成" >&2; exit 1; }
+    state=$(gh pr view <PR号> --json state -q '.state') \
+      || { echo "gh 读 <PR号> state 失败（$?）——不是查过没事" >&2; exit 1; }
+    ```
+  - **文件读取 / 审官自证**：审官开工第一步贴出 `git log --oneline -1` 与被审文件存在性检查的**真实输出**（PowerShell `'路径1','路径2' | ForEach-Object { '{0} -> {1}' -f $_, (Test-Path $_) }`；bash `ls 路径1 路径2`——给错 shell 是这次实咬的现场）。任何一个要审的文件读不到 → **停手 escalation**，禁止用 `gh pr diff` 代替本地文件、禁止推测。
 - PR 正文关多张 issue：**每个编号前面都要有自己的关键词**，连写只认第一个（#527 实证：`Closes #500 #492 #471 #476` 合并后只自动关 #500，其余手工补关——「看起来成功、实际只做了四分之一」，没有任何东西提示漏关）。正例：`Closes #500, closes #492, closes #471, closes #476`。多 issue 单选一个主 issue 写全，其余关单评论留「已并入 #X」（#487 拍板）。
