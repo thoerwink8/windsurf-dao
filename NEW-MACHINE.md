@@ -30,7 +30,15 @@ node --version
 
 ## 4. 密钥类文件手动带
 
-任何不进 git 的密钥类文件（API key、脱敏前的真实配置等），换机都要手动复制，git 不会带它们。原则：**能进 git 的都进 git，不能进 git 的手动带**。本仓库当前没有这类文件；若未来有，放在这里说明位置。
+任何不进 git 的密钥类文件（API key、脱敏前的真实配置等），换机都要手动复制，git 不会带它们。原则：**能进 git 的都进 git，不能进 git 的手动带**。
+
+清单：
+
+| 文件 | 里面是什么 | 不带的后果 |
+|---|---|---|
+| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 写码/判断类派工的主通道是 opencode Go（`docs/model-routing.toml`），缺 key 时工人一起手就挂 |
+
+新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
 
 ## 5. 模型配置
 
@@ -49,8 +57,11 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- 两条验证命令：
-  - `pi --list-models`：预期列出模型表。
+- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --provider opencode-go --model deepseek-v4-flash`；不带 `--provider` 就是应急直连通道。
+  - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
+- 三条验证命令：
+  - `pi --list-models`：预期列出模型表（配好 Go 后会多出 20 个 `opencode-go` 模型）。
+  - `pi auth check --provider opencode-go --json`：预期 `{"status":"ready",...}`；回 `credentials_not_configured` 就是 §4 的 key 没带。
   - `pi --no-tools --no-session -p "只回复：OK"`：预期回 OK；失败先查 `~/.pi/agent/models.json` 里的网关地址与 key。一次性连通性测试用 `--no-tools` 无妨，日常跑活别裁工具。
 
 ## 6b. pi 扩展怎么配（go-fallback，issue #520）
