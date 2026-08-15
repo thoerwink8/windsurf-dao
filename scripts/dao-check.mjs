@@ -347,11 +347,19 @@ function checkMemoryIndex() {
 // CI 不是 flow 宿主（CI 每次全新检出，flow 只跑在主仓运行机）——GITHUB_ACTIONS 下跳过并显式声明。
 
 const HEARTBEAT_FILE = join(ROOT, '_flow', 'heartbeat.json');
+const FLOW_STATE_FILE = join(ROOT, '_flow', 'state.json'); // flow 默认状态文件（flow.mjs:108）：宿主树标记
 const HEARTBEAT_STALE_MS = 15 * 60 * 1000; // 轮询间隔 300s × 3 余量
 
 function checkFlowHeartbeat() {
   if (process.env.GITHUB_ACTIONS === 'true') {
     green(`流转器心跳 CI 环境跳过（CI 不是 flow 宿主；存活闸只在主仓运行机生效）`);
+    return;
+  }
+  // 本树不是 flow 宿主（无 _flow/state.json = flow 从未在这棵树跑过）→ 显形跳过，不算红不算绿。
+  // #497 第六轮返工：#497 合进 master 后每棵干净 worktree 都没有心跳文件（.gitignore 掉了 _flow/），
+  // 缺失 ≠ 没在跑——把「没扫到样本」当「查过是红」会训练每个工人无视 dao-check（真红一起被忽略）。
+  if (!existsSync(FLOW_STATE_FILE)) {
+    skip('流转器心跳：本树不是 flow 宿主（无 _flow/state.json），本项无法验证——心跳存活闸只在 flow 值守的宿主树生效；flow 在这棵树跑过后再验');
     return;
   }
   if (!existsSync(HEARTBEAT_FILE)) {
