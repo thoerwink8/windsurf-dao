@@ -49,7 +49,8 @@ launch_note = """
 起法（2026-08-15 进程命令行对照实测）：
 - 首选 orca 原生 `--agent codex`（参数由 orca 管，不复制可能过期的值）。
 - 已存在树里只能 terminal create 时：`codex --dangerously-bypass-approvals-and-sandbox`（与 orca 原生一致）。
-- 反例：手打 `codex -a never`（PID 45148）把 gh/node/组合命令全拦死；orca 原生（PID 6880）三条全过。
+- 库默认走第二条，因为帅遇到的都是树已存在。
+- 反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生三条全过。
 
 三层机制（缺一层就查错方向）：
 1. policy 白名单：`~/.codex/rules/default.rules` 是历史上逐条批准过的 prefix_rule。

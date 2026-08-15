@@ -50,8 +50,12 @@ async function main() {
 
     const mute = { ...routing, providers: { ...routing.providers, gpt: { ...routing.providers.gpt, launch: 'codex -a never -m {model}' } } };
     const muteLaunch = S.resolveLaunch({ provider: 'gpt', routing: mute });
-    const muteGate = S.assertReviewerLaunch({ reviewer: 'gpt-5.6-sol', command: muteLaunch.command, routing: mute });
-    check('判别力：-a never 单用当审官 → 拦哑审官', muteGate.ok === false && /哑审官/.test(muteGate.error), JSON.stringify(muteGate));
+    const muteRev = S.assertCodexLaunch({ command: muteLaunch.command });
+    check('判别力：-a never 单用当审官 → 拦', muteRev.ok === false && /哑终端/.test(muteRev.error), JSON.stringify(muteRev));
+    const muteWorker = S.assertCodexLaunch({ command: 'codex -a never -m gpt-5.6-sol' });
+    check('R2 工人位 -a never 同样拦', muteWorker.ok === false, JSON.stringify(muteWorker));
+    const okWorker = S.assertCodexLaunch({ command: `codex ${S.CODEX_CAPABLE_FLAG} -m gpt-5.6-sol` });
+    check('R2 工人位带 danger 旗标放行', okWorker.ok === true, JSON.stringify(okWorker));
 
     const confirm = S.verifyStarted({ text: 'Allow command?\n[Yes] [No] [Always allow]' });
     check('确认屏被验开工拦住', confirm.ok === false && confirm.reason === '有待确认提示', JSON.stringify(confirm));
@@ -282,8 +286,27 @@ async function main() {
     check('R1 不能跑 node → 点名缺能跑 node', noNode.ok === false && /能跑 node/.test(noNode.error), JSON.stringify(noNode));
     const noGh = S.runCapabilityProbes({ exec: (n) => ({ ok: n !== 'gh' }) });
     check('R1 不能调 gh → 点名缺能调 gh', noGh.ok === false && /能调 gh/.test(noGh.error), JSON.stringify(noGh));
-    const liveProbe = S.runCapabilityProbes({ exec: S.hostProbeExec(REPO) });
-    check('R1 本机三项探针真跑过', liveProbe.ok === true, JSON.stringify(liveProbe));
+
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-empty-'));
+    const hostOnEmpty = S.runCapabilityProbes({ exec: S.hostProbeExec(emptyDir) });
+    check('判别力：空目录上 hostProbe 仍绿（验错主体）', hostOnEmpty.ok === true, JSON.stringify(hostOnEmpty));
+    const termEmpty = S.runCapabilityProbes({
+      exec: S.terminalProbeExec({ sendAndRead: () => ({ text: 'Working...' }) }),
+    });
+    check('R1 终端无哨兵 → 探针红（验的是终端）', termEmpty.ok === false && termEmpty.failed.length === 3, JSON.stringify(termEmpty));
+    const termOk = S.runCapabilityProbes({
+      exec: S.terminalProbeExec({
+        sendAndRead: (cmd) => ({
+          text: cmd.includes('gh') ? 'DAO_PROBE_GH_OK' : cmd.includes('WRITE') || cmd.includes('writeFileSync') ? 'DAO_PROBE_WRITE_OK' : 'DAO_PROBE_NODE_OK',
+        }),
+      }),
+    });
+    check('R1 终端回哨兵 → 三项过', termOk.ok === true, JSON.stringify(termOk));
+    const unreadProbe = S.terminalProbeExec({ sendAndRead: () => ({ error: 'terminal_handle_stale' }) })('write');
+    check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
+    check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
     check('R4 没读成 ≠ 读了是空的', unread.reason === '没读成' && unread.unscanned === true, JSON.stringify(unread));
@@ -310,6 +333,16 @@ async function main() {
     ], { encoding: 'utf8', cwd: REPO });
     const sandText = `${badSandbox.stdout || ''}${badSandbox.stderr || ''}`;
     check('R3 --sandbox 不再被静默吞掉', badSandbox.status !== 0 && /未知参数: --sandbox/.test(sandText), sandText);
+
+    check('R3 VERBS 与 FLAGS_BY_VERB 齐（除 raw）', S.verbFlagGaps().length === 0, S.verbFlagGaps().join(','));
+    check('R3 缺 FLAGS 条目能被发现', S.verbFlagGaps(['start', 'newverb']).includes('newverb'));
+    const saved = S.FLAGS_BY_VERB.start;
+    delete S.FLAGS_BY_VERB.start;
+    let gapThrew = false;
+    try { S.parseArgs(['node', 'dao.mjs', 'start', '--submit', 'yes']); }
+    catch (e) { gapThrew = /没登记参数表/.test(String(e.message || e)); }
+    S.FLAGS_BY_VERB.start = saved;
+    check('R3 动词没登记参数表 → 抛（不许静默回落）', gapThrew);
 
     const steps = S.planDispatchRollback({
       workerId: 'w1', workerHandle: 'th1', reviewerId: 'r1', reviewerHandle: 'rh1',

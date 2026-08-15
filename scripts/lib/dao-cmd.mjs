@@ -429,21 +429,62 @@ export function waitAndVerify({ readOnce, timeoutMs = 8000, intervalMs = 400, sl
 
 export const CODEX_CAPABLE_FLAG = '--dangerously-bypass-approvals-and-sandbox';
 export const PROBE_LABELS = { write: '能写文件', node: '能跑 node', gh: '能调 gh' };
+export const PROBE_SENTINELS = {
+  write: 'DAO_PROBE_WRITE_OK',
+  node: 'DAO_PROBE_NODE_OK',
+  gh: 'DAO_PROBE_GH_OK',
+};
 
-/** 审官若走 codex，launch 必须带 danger 旗标，否则就是哑审官。 */
-export function assertReviewerLaunch({ reviewer, command, routing } = {}) {
+/** 任何 codex launch 都必须带 danger 旗标。工人和审官同一把尺子。 */
+export function assertCodexLaunch({ command } = {}) {
   const cmd = String(command || '');
-  const models = Array.isArray(routing?.models) ? routing.models : [];
-  const hit = reviewer ? models.find(m => m && m.id === reviewer) : null;
-  const isCodex = (hit && hit.provider === 'gpt') || /\bcodex\b/.test(cmd);
-  if (!isCodex) return { ok: true };
+  if (!/\bcodex\b/.test(cmd)) return { ok: true };
   if (!cmd.includes(CODEX_CAPABLE_FLAG)) {
     return {
       ok: false,
-      error: `codex 审官 launch 缺 ${CODEX_CAPABLE_FLAG}，会起成哑审官（-a never 单用会拦 gh/node）`,
+      error: `codex launch 缺 ${CODEX_CAPABLE_FLAG}，会起成哑终端（-a never 单用会拦 gh/node）`,
     };
   }
   return { ok: true };
+}
+
+export function assertReviewerLaunch(opts) {
+  return assertCodexLaunch(opts);
+}
+
+export function probeCommand(name) {
+  if (name === 'write') {
+    return `node -e "require('fs').writeFileSync('_dao_probe_write.txt','ok');require('fs').unlinkSync('_dao_probe_write.txt');process.stdout.write('DAO_PROBE_WRITE_OK')"`;
+  }
+  if (name === 'node') {
+    return `node -e "process.stdout.write('DAO_PROBE_NODE_OK')"`;
+  }
+  if (name === 'gh') {
+    return 'gh --version && echo DAO_PROBE_GH_OK';
+  }
+  throw new Error(`未知探针 ${name}`);
+}
+
+/**
+ * 探针必须走目标终端：send 命令、read 回哨兵。
+ * sendAndRead(cmd) → { text, error }；error 表示没送成/没读成。
+ */
+export function terminalProbeExec({ sendAndRead } = {}) {
+  if (typeof sendAndRead !== 'function') throw new Error('terminalProbeExec 要 sendAndRead');
+  return (name) => {
+    let cmd;
+    try { cmd = probeCommand(name); }
+    catch (e) { return { ok: false, error: String(e.message || e) }; }
+    const r = sendAndRead(cmd);
+    if (!r || r.error) return { ok: false, unread: true, error: r?.error || '没读成' };
+    const text = String(r.text || '');
+    const sentinel = PROBE_SENTINELS[name];
+    return {
+      ok: text.includes(sentinel),
+      text,
+      error: text.includes(sentinel) ? undefined : '终端输出没有哨兵',
+    };
+  };
 }
 
 export function runCapabilityProbes({ exec } = {}) {
@@ -777,6 +818,10 @@ export const FLAGS_BY_VERB = {
   'check-help': new Set(['--json', '--help', '-h']),
 };
 
+export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
+  return verbs.filter(v => v !== 'raw' && !table[v]);
+}
+
 function camelFlag(s) {
   return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
@@ -795,13 +840,14 @@ export function parseArgs(argv) {
   }
   if (!VERBS.includes(verb)) throw new Error(`未知动词: ${verb}（只要 ${VERBS.join(' / ')}）`);
   const allowed = FLAGS_BY_VERB[verb];
+  if (!allowed) throw new Error(`动词 ${verb} 没登记参数表`);
   const args = { verb };
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
     const flag = a.split('=')[0];
     if (flag === '--help' || flag === '-h') { args.help = true; continue; }
     if (!flag.startsWith('--')) throw new Error(`未知参数: ${a}`);
-    if (allowed && !allowed.has(flag)) throw new Error(`未知参数: ${flag}`);
+    if (!allowed.has(flag)) throw new Error(`未知参数: ${flag}`);
     const key = flag.slice(2);
     if (BOOL_FLAGS.has(key)) { args[camelFlag(key)] = true; continue; }
     const val = rest[++i];

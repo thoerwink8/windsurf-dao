@@ -19,15 +19,15 @@ import {
   argsWorktreeRm,
   argsWorkerStart,
   assessWorktreeLiveness,
-  assertReviewerLaunch,
+  assertCodexLaunch,
   catalogUsedFlags,
   checkHelpLiveness,
   dispatchComment,
   extractHandleFromCreate,
+  extractTerminalText,
   extractWorktreeId,
   extractWorktreePath,
   fetchHelpPreferLive,
-  hostProbeExec,
   loadRouting,
   parseArgs,
   planDispatchRollback,
@@ -36,6 +36,8 @@ import {
   resolveLaunch,
   reviewerCardName,
   runCapabilityProbes,
+  sleepSync,
+  terminalProbeExec,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 
@@ -138,10 +140,28 @@ function readOnceHandle(handle) {
   return read.json;
 }
 
-function probeOrFail(cwd, extra) {
-  const probes = runCapabilityProbes({ exec: hostProbeExec(cwd) });
-  if (!probes.ok) fail(probes.error, { probes, ...extra });
-  return probes;
+function liveSendAndRead(handle) {
+  return (cmd) => {
+    const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
+    if (!sent.ok) return { error: errText(sent.error) };
+    const deadline = Date.now() + 8000;
+    let last = { text: '' };
+    while (Date.now() < deadline) {
+      const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
+      if (!read.ok) return { error: errText(read.error) };
+      const text = extractTerminalText(read.json);
+      last = { text };
+      if (/DAO_PROBE_/.test(text)) return { text };
+      sleepSync(400);
+    }
+    return last;
+  };
+}
+
+function runTerminalProbes(handle) {
+  return runCapabilityProbes({
+    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle) }),
+  });
 }
 
 function cmdDispatch(args) {
@@ -157,12 +177,10 @@ function cmdDispatch(args) {
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
 
-  const capable = assertReviewerLaunch({
-    reviewer: gate.reviewer,
-    command: reviewerLaunch.command,
-    routing,
-  });
-  if (!capable.ok) fail(capable.error);
+  const workerCap = assertCodexLaunch({ command: workerLaunch.command });
+  if (!workerCap.ok) fail(workerCap.error);
+  const reviewerCap = assertCodexLaunch({ command: reviewerLaunch.command });
+  if (!reviewerCap.ok) fail(reviewerCap.error);
 
   const plan = {
     mergePolicy: gate.mergePolicy,
@@ -204,7 +222,7 @@ function cmdDispatch(args) {
   const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
   if (!workerVerify.ok) failCreated(created, '工人验开工失败', { verify: workerVerify, ...plan });
 
-  const workerProbes = runCapabilityProbes({ exec: hostProbeExec(created.workerPath || process.cwd()) });
+  const workerProbes = runTerminalProbes(created.workerHandle);
   if (!workerProbes.ok) failCreated(created, workerProbes.error, { probes: workerProbes, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
@@ -231,7 +249,7 @@ function cmdDispatch(args) {
   const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
   if (!revVerify.ok) failCreated(created, '审官验开工失败', { verify: revVerify, ...plan });
 
-  const revProbes = runCapabilityProbes({ exec: hostProbeExec(created.reviewerPath || created.workerPath || process.cwd()) });
+  const revProbes = runTerminalProbes(created.reviewerHandle);
   if (!revProbes.ok) failCreated(created, revProbes.error, { probes: revProbes, ...plan });
 
   let taskId = args.task || null;
@@ -272,6 +290,9 @@ function cmdStart(args) {
     });
   } catch (e) { fail(String(e.message || e)); }
 
+  const startCap = assertCodexLaunch({ command: launch.command });
+  if (!startCap.ok) fail(startCap.error);
+
   if (args.dryRun) {
     emit({ ok: true, dryRun: true, provider: launch.provider, command: launch.command, template: launch.template });
   }
@@ -290,6 +311,7 @@ function cmdStart(args) {
     readOnce: () => readOnceHandle(handle),
   });
   if (!verified.ok) {
+    orca(argsTerminalClose({ terminal: handle, tab: true }));
     emit({
       ok: false,
       handle,
@@ -299,12 +321,11 @@ function cmdStart(args) {
     }, 1);
   }
 
-  let probeCwd = process.cwd();
-  if (args.worktree && args.worktree !== 'active' && args.worktree !== 'current') {
-    const shown = orca(['worktree', 'show', '--worktree', args.worktree, '--json']);
-    probeCwd = extractWorktreePath(shown.json) || probeCwd;
+  const probes = runTerminalProbes(handle);
+  if (!probes.ok) {
+    orca(argsTerminalClose({ terminal: handle, tab: true }));
+    fail(probes.error, { handle, command: launch.command, probes });
   }
-  const probes = probeOrFail(probeCwd, { handle, command: launch.command });
 
   emit({
     ok: true,
