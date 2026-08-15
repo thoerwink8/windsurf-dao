@@ -10,7 +10,7 @@ metadata:
 
 2026-08-13 夜窗用户两次纠偏落定(windsurf-dao,但全项目适用):
 
-1. **Claude Code 终端启动命令是 `reclaude` 不是裸 `claude`**(用户明设:`C:\Users\Administrator\AppData\Local\Programs\reclaude\bin\reclaude.exe`,2.1.228,先 Syncing config 再起,--model/--autocompact/--disallowedTools 全透传)。实证:裸 `claude` 起的 orca 终端曾静默 exited(0 token),reclaude 起的正常。persona 层也只包装 reclaude(ccswitch/persona/dao-persona-manager.ps1:68)。
+1. **Claude Code 终端启动命令是 `reclaude` 不是裸 `claude`**(用户明设:`C:\Users\Administrator\AppData\Local\Programs\reclaude\bin\reclaude.exe`,2.1.228,先 Syncing config 再起,--model/--autocompact/--disallowedTools 全透传)。实证:裸 `claude` 起的 orca 终端曾静默 exited(0 token),reclaude 起的正常。
 
 2. **独立任务的 orca worktree create 必带 `--no-parent`**:默认会从当前上下文推父级 ⇒ 树变成子工作区挂在别人名下,用户看侧栏即抓。只有真正叠在当前工作之上的才用默认/--parent-worktree。
 
