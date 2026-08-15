@@ -321,6 +321,23 @@ async function main() {
     check('R1 真执行标记出现 → 三项过', termOk.ok === true, JSON.stringify(termOk));
     check('R1 写/node/gh 标记互相独立', S.probeMarkFound('write', 'N1734123456789') === false && S.probeMarkFound('gh', 'W1734123456789') === false);
 
+    check('R1 写探针命令含 finally+unlink', /finally/.test(S.probeCommand('write')) && /unlinkSync/.test(S.probeCommand('write')), S.probeCommand('write'));
+    const probeRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-probe-git-'));
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const gitIn = (args) => spawnSync('git', args, { cwd: probeRepo, encoding: 'utf8', env: gitEnv });
+    gitIn(['init', '-q']);
+    gitIn(['config', 'user.email', 't@t']);
+    gitIn(['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(probeRepo, 'app.js'), '1\n');
+    gitIn(['add', 'app.js']);
+    gitIn(['commit', '-q', '-m', 'init']);
+    const ran = spawnSync(process.execPath, ['-e', S.writeProbeScript()], { cwd: probeRepo, encoding: 'utf8' });
+    check('R1 写探针真跑出发标记', ran.status === 0 && S.probeMarkFound('write', ran.stdout || ''), ran.stdout);
+    check('R1 写探针跑完探测文件不在', fs.existsSync(path.join(probeRepo, S.WRITE_PROBE_FILE)) === false);
+    const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: probeRepo, encoding: 'utf8' });
+    check('R1 写探针跑完 git status 无新增', String(dirty.stdout || '').trim() === '', dirty.stdout);
+    check('R1 残留探测文件会被当成产出（所以必须清）', S.isWorkFile(S.WRITE_PROBE_FILE) === true);
+
     const unreadProbe = S.terminalProbeExec({ sendAndRead: () => ({ error: 'terminal_handle_stale' }) })('write');
     check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
     const daoSrc = fs.readFileSync(CLI, 'utf8');

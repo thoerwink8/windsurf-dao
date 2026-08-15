@@ -458,10 +458,21 @@ export function assertReviewerLaunch(opts) {
   return assertCodexLaunch(opts);
 }
 
+export const WRITE_PROBE_FILE = '_dao_probe_w';
+
+/** 写→读回核对→finally 必删。成功才打 W+时间戳。 */
+export function writeProbeScript() {
+  return [
+    "var t=Date.now(),f=require('fs'),ok=false;",
+    "try{f.writeFileSync('_dao_probe_w',String(t));",
+    "ok=f.readFileSync('_dao_probe_w','utf8')===String(t)}",
+    "finally{try{f.unlinkSync('_dao_probe_w')}catch(e){}}",
+    "if(ok)process.stdout.write('W'+t)",
+  ].join('');
+}
+
 export function probeCommand(name) {
-  if (name === 'write') {
-    return `node -e "var t=Date.now();require('fs').writeFileSync('_dao_probe_w',String(t));process.stdout.write('W'+t)"`;
-  }
+  if (name === 'write') return `node -e ${JSON.stringify(writeProbeScript())}`;
   if (name === 'node') {
     return `node -e "process.stdout.write('N'+Date.now())"`;
   }
