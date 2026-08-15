@@ -1069,24 +1069,29 @@ function makeLiveSource(repo) {
       const hit = (wts.worktrees || []).filter(w => w.branch === branch);
       return hit.length === 1 ? hit[0] : null;
     },
-    // worktree → 唯一 dispatch（#497 第九轮）：worker-list 按 resource.worktreeId 反查（结构化关联），
-    // 排除已完成的 dispatch（dispatchStatus=completed 是历史）；多候选 → null。
+    // worktree → 唯一 dispatch（#497 第九轮：worker-list 按 resource.worktreeId 反查（结构化关联）。
+    // **不过滤 dispatchStatus**（#497 第十二轮审官红项 + dual-native 实证）：
+    // completed 是「已 worker_done 的闲置工人」——返工注入的目标恰恰是它（完工 → 审官判红 →
+    // 推回同一终端）；dispatched 是在岗。过滤 completed 会把「已完工待返工」的工人滤掉。
+    // 多候选 → null（待帅转交，不猜）。
     dispatchForWorktree(worktreeId) {
       const r = runOrca(['orchestration', 'worker-list', '--json']);
       if (!r.ok) return null;
       const workers = unwrap(r.json, 'workers', 'workers');
       if (!Array.isArray(workers)) return null;
-      const hits = workers.filter(w => w.resource?.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
+      const hits = workers.filter(w => w.resource?.worktreeId === worktreeId);
       return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
     },
     // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址的结构事实——普通工人人写任务书
-    // spec 无受控前缀，只能从 dispatchId 反查：worker-list → resource.worktreeId）。多候选 → null。
+    // spec 无受控前缀，只能从 dispatchId 反查：worker-list → resource.worktreeId）。
+    // **不过滤 dispatchStatus**：worker_done 到达时该 dispatch 已是 completed（#497 第十二轮审官实证），
+    // 过滤会把恰好需要反查的记录滤掉 → 纯门铃误报孤儿 → PR 停在 working。多候选 → null。
     dispatchWorktreeId(dispatchId) {
       const r = runOrca(['orchestration', 'worker-list', '--json']);
       if (!r.ok) return null;
       const workers = unwrap(r.json, 'workers', 'workers');
       if (!Array.isArray(workers)) return null;
-      const hits = workers.filter(w => w.dispatchId === dispatchId && w.dispatchStatus !== 'completed');
+      const hits = workers.filter(w => w.dispatchId === dispatchId);
       return hits.length === 1 ? (hits[0].resource?.worktreeId || null) : null;
     },
     // worktreeId → branch（#497 第十一轮：dispatch → worktree → branch → PR headRefName 全等）
@@ -1214,18 +1219,21 @@ function makeSnapshotSource(roundDir, repo) {
       return hit.length === 1 ? hit[0] : null;
     },
     // worktree → 唯一 dispatch（快照：orca-workers.json 可选，条目平铺形态
-    // { dispatchId, worktreeId, agentTerminalHandle, dispatchStatus }）；排除已完成的。
+    // { dispatchId, worktreeId, agentTerminalHandle, dispatchStatus }）。
+    // **不过滤 dispatchStatus**（#497 第十二轮：completed 是闲置可投递态、dispatched 是在岗态，
+    // 都是返工注入的合法目标；过滤 completed = 滤掉「已完工待返工」的工人）。
     dispatchForWorktree(worktreeId) {
       const r = readJson(join(roundDir, 'orca-workers.json'));
       if (!r.ok || !Array.isArray(r.json)) return null;
-      const hits = r.json.filter(w => w.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
+      const hits = r.json.filter(w => w.worktreeId === worktreeId);
       return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
     },
-    // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址，快照读 orca-workers.json）
+    // dispatchId → worktree（#497 第十一轮：worker_done 反向寻址，快照读 orca-workers.json）。
+    // **不过滤 dispatchStatus**（worker_done 到达时 dispatch 已是 completed——#497 第十二轮审官实证）。
     dispatchWorktreeId(dispatchId) {
       const r = readJson(join(roundDir, 'orca-workers.json'));
       if (!r.ok || !Array.isArray(r.json)) return null;
-      const hits = r.json.filter(w => (w.dispatchId || w.dispatch_id) === dispatchId && w.dispatchStatus !== 'completed');
+      const hits = r.json.filter(w => (w.dispatchId || w.dispatch_id) === dispatchId);
       return hits.length === 1 ? (hits[0].worktreeId || null) : null;
     },
     // worktreeId → branch（快照读 orca-worktrees.json）

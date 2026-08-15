@@ -4,6 +4,6 @@
   "taskId": "task_2005w",
   "worktreeId": "wt::worker-2005",
   "agentTerminalHandle": "term_worker_2005",
-  "dispatchStatus": "in_progress"
+  "dispatchStatus": "dispatched"
  }
 ]

@@ -4,13 +4,13 @@
   "taskId": "task_1006w",
   "worktreeId": "wt::worker-1006",
   "agentTerminalHandle": "term_worker_1006",
-  "dispatchStatus": "in_progress"
+  "dispatchStatus": "dispatched"
  },
  {
   "dispatchId": "ctx_reviewer_1006",
   "taskId": "task_1006r",
   "worktreeId": "wt::reviewer-1006",
   "agentTerminalHandle": "term_reviewer_1006",
-  "dispatchStatus": "in_progress"
+  "dispatchStatus": "dispatched"
  }
 ]

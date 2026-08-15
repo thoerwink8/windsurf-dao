@@ -1,0 +1,3043 @@
+{
+  "id": "1c74665a-1deb-4e6a-b602-2aea0bff35e9",
+  "ok": true,
+  "result": {
+    "workers": [
+      {
+        "dispatchId": "ctx_adfee0055aef",
+        "taskId": "task_4d19869a58bd",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_4a041e537851",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259",
+          "originDispatchId": "ctx_adfee0055aef",
+          "ownerDispatchId": "ctx_adfee0055aef",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_13fdec69da02",
+        "taskId": "task_d7cfdf58548f",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_355afe2b-b704-48b6-99f0-df6069eacaf9",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_7b266bf44068",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_355afe2b-b704-48b6-99f0-df6069eacaf9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-266-290",
+          "originDispatchId": "ctx_13fdec69da02",
+          "ownerDispatchId": "ctx_13fdec69da02",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_75c902bb5594",
+        "taskId": "task_f740aa55a497",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_266aeff9-3b5a-4df1-a962-bd3215ae4dd8",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_0bd30b47b12c",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_266aeff9-3b5a-4df1-a962-bd3215ae4dd8",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-267",
+          "originDispatchId": "ctx_75c902bb5594",
+          "ownerDispatchId": "ctx_75c902bb5594",
+          "releaseRequestedAt": "2026-08-11 17:32:52",
+          "releaseCompletedAt": "2026-08-11 17:32:52",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a9ce04e5b7e8",
+        "taskId": "task_97c7140c0da8",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2ce14787-b0cd-4480-89e0-7b79b8dec4a9",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_fec0a844d183",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_2ce14787-b0cd-4480-89e0-7b79b8dec4a9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-231-273",
+          "originDispatchId": "ctx_a9ce04e5b7e8",
+          "ownerDispatchId": "ctx_a9ce04e5b7e8",
+          "releaseRequestedAt": "2026-08-11 17:32:54",
+          "releaseCompletedAt": "2026-08-11 17:32:54",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_94b7f47a4df2",
+        "taskId": "task_a775b4d0cb42",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_330c4cc5-6b1f-41ab-97e4-c804a920a687",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_306e4c1609fb",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_330c4cc5-6b1f-41ab-97e4-c804a920a687",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-260-265",
+          "originDispatchId": "ctx_94b7f47a4df2",
+          "ownerDispatchId": "ctx_94b7f47a4df2",
+          "releaseRequestedAt": "2026-08-11 17:32:53",
+          "releaseCompletedAt": "2026-08-11 17:32:53",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_0ca2f1aeeda6",
+        "taskId": "task_47ca410f9457",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_ea2734ff-2f4a-4481-b421-f0f65b05469c",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_53874f3b551f",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_ea2734ff-2f4a-4481-b421-f0f65b05469c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-288-289",
+          "originDispatchId": "ctx_0ca2f1aeeda6",
+          "ownerDispatchId": "ctx_0ca2f1aeeda6",
+          "releaseRequestedAt": "2026-08-11 17:32:52",
+          "releaseCompletedAt": "2026-08-11 17:32:52",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8e8b1b05ee7d",
+        "taskId": "task_ec5f8770993a",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_c72c9a8a-1765-4b80-a6ca-f0330883f118",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_864ce9cb4336",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_c72c9a8a-1765-4b80-a6ca-f0330883f118",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fabric-routing-rules",
+          "originDispatchId": "ctx_8e8b1b05ee7d",
+          "ownerDispatchId": "ctx_8e8b1b05ee7d",
+          "releaseRequestedAt": "2026-08-11 17:32:52",
+          "releaseCompletedAt": "2026-08-11 17:32:52",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_774714cb8bef",
+        "taskId": "task_fbfb617260df",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_7dfd6800-b568-4b66-b9a3-cc3aacec10d4",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_96095ba40772",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_7dfd6800-b568-4b66-b9a3-cc3aacec10d4",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-275-comments",
+          "originDispatchId": "ctx_774714cb8bef",
+          "ownerDispatchId": "ctx_774714cb8bef",
+          "releaseRequestedAt": "2026-08-11 17:32:53",
+          "releaseCompletedAt": "2026-08-11 17:32:53",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8c72cb34547e",
+        "taskId": "task_dc5075e2f132",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_48c01d4d-135c-4f6a-b3ae-a0fb69455e62",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_a31b27c6535c",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_48c01d4d-135c-4f6a-b3ae-a0fb69455e62",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::D:/frank/windsurf-dao",
+          "originDispatchId": "ctx_8c72cb34547e",
+          "ownerDispatchId": "ctx_8c72cb34547e",
+          "releaseRequestedAt": "2026-08-11 17:32:54",
+          "releaseCompletedAt": "2026-08-11 17:32:54",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_e1328d64876a",
+        "taskId": "task_cd2c5c14dbe8",
+        "runId": "run_f9a798718ab8",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_d45cd8f6-a4e3-4069-9530-f2603aefc64a",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_c634147ee5d2",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_d45cd8f6-a4e3-4069-9530-f2603aefc64a",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::D:/frank/windsurf-dao",
+          "originDispatchId": "ctx_e1328d64876a",
+          "ownerDispatchId": "ctx_e1328d64876a",
+          "releaseRequestedAt": "2026-08-11 17:32:51",
+          "releaseCompletedAt": "2026-08-11 17:32:51",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_603fdb3a1310",
+        "taskId": "task_b5a4989531d4",
+        "runId": "run_f835b7baf734",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_468dce9a-2a65-4dc8-9a28-01f0cedf5dc2",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_3e362dec9370",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_468dce9a-2a65-4dc8-9a28-01f0cedf5dc2",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/reliability-339",
+          "originDispatchId": "ctx_603fdb3a1310",
+          "ownerDispatchId": "ctx_603fdb3a1310",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_d686b1f9396e",
+        "taskId": "task_7025969b1eef",
+        "runId": "run_f835b7baf734",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_cc8749c2-5c62-49f5-9bd7-76b1896b5eb4",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_a7577b4960ab",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_cc8749c2-5c62-49f5-9bd7-76b1896b5eb4",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-340",
+          "originDispatchId": "ctx_d686b1f9396e",
+          "ownerDispatchId": "ctx_d686b1f9396e",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_400399c8f883",
+        "taskId": "task_3222b3082ec1",
+        "runId": "run_f835b7baf734",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0c8783f4-95b5-4e56-90c5-624de11ce593",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_b2563cbc556b",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_0c8783f4-95b5-4e56-90c5-624de11ce593",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-340v2",
+          "originDispatchId": "ctx_400399c8f883",
+          "ownerDispatchId": "ctx_400399c8f883",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_253d20b387c7",
+        "taskId": "task_872843c1d190",
+        "runId": "run_f835b7baf734",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_d1b3f040-a9a1-4e81-a189-e32b459bde41",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_c3429813a3fc",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_d1b3f040-a9a1-4e81-a189-e32b459bde41",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/design-360",
+          "originDispatchId": "ctx_253d20b387c7",
+          "ownerDispatchId": "ctx_253d20b387c7",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_abeb5af5960f",
+        "taskId": "task_a50cd8338d04",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0df72ea2-9599-4a04-9a9d-2aec67050a7a",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_6aa34bc94c7f",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_0df72ea2-9599-4a04-9a9d-2aec67050a7a",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_abeb5af5960f",
+          "ownerDispatchId": "ctx_abeb5af5960f",
+          "releaseRequestedAt": "2026-08-12 20:48:03",
+          "releaseCompletedAt": "2026-08-12 20:48:03",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_fea3606fe542",
+        "taskId": "task_85fa02b0b957",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_45726248-c705-4f88-a697-81ced11bdb0d",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_03d511e24b4d",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_45726248-c705-4f88-a697-81ced11bdb0d",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_fea3606fe542",
+          "ownerDispatchId": "ctx_fea3606fe542",
+          "releaseRequestedAt": "2026-08-12 20:37:35",
+          "releaseCompletedAt": "2026-08-12 20:37:35",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_4bf38922f224",
+        "taskId": "task_196e12c072b9",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_92361462-1b9d-4d45-83d0-1bfcab7baeef",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ed18c41a22c4",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_92361462-1b9d-4d45-83d0-1bfcab7baeef",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_4bf38922f224",
+          "ownerDispatchId": "ctx_4bf38922f224",
+          "releaseRequestedAt": "2026-08-12 20:39:21",
+          "releaseCompletedAt": "2026-08-12 20:39:21",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5fe7cd041485",
+        "taskId": "task_5831145ffcc0",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_54516e20-b70c-44d3-908e-7cd63d477afc",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_7994b3a33b42",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_54516e20-b70c-44d3-908e-7cd63d477afc",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_5fe7cd041485",
+          "ownerDispatchId": "ctx_5fe7cd041485",
+          "releaseRequestedAt": "2026-08-12 20:40:51",
+          "releaseCompletedAt": "2026-08-12 20:40:51",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_68473c9fd50e",
+        "taskId": "task_0f66d7c75665",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_24cb390d-efcb-4c9f-ad30-dc9b5955812c",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_5d90f20f261e",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_24cb390d-efcb-4c9f-ad30-dc9b5955812c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_68473c9fd50e",
+          "ownerDispatchId": "ctx_68473c9fd50e",
+          "releaseRequestedAt": "2026-08-12 21:06:16",
+          "releaseCompletedAt": "2026-08-12 21:06:16",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8362df79f1f2",
+        "taskId": "task_f0e58270a6dd",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_5e34db6f-1ae6-46bb-8051-a11dbf7da3c7",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_81fc07cb489c",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_5e34db6f-1ae6-46bb-8051-a11dbf7da3c7",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_8362df79f1f2",
+          "ownerDispatchId": "ctx_8362df79f1f2",
+          "releaseRequestedAt": "2026-08-12 21:08:22",
+          "releaseCompletedAt": "2026-08-12 21:08:22",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_71429cf6cc79",
+        "taskId": "task_f7a2be58efe2",
+        "runId": "run_b179b7009f26",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_dcd37669-34ed-4f74-9393-da3f9318a739",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_f0dc87f86e0f",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_dcd37669-34ed-4f74-9393-da3f9318a739",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_71429cf6cc79",
+          "ownerDispatchId": "ctx_71429cf6cc79",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_710c74781f61",
+        "taskId": "task_f7a2be58efe2",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2b2d5a70-7e24-468e-a0d7-a0c3eaa33dd1",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_0934c4ca1478",
+        "taskId": "task_6b5563528fc8",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_269b1292-126a-4b56-b532-5d5afce6c2d9",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_1e22fc99ad92",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_269b1292-126a-4b56-b532-5d5afce6c2d9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_0934c4ca1478",
+          "ownerDispatchId": "ctx_0934c4ca1478",
+          "releaseRequestedAt": "2026-08-12 21:51:38",
+          "releaseCompletedAt": "2026-08-12 21:51:38",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c4bf10bb9d9c",
+        "taskId": "task_5096c7f5123b",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2b2d5a70-7e24-468e-a0d7-a0c3eaa33dd1",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_a430114aecf1",
+        "taskId": "task_fc45c0a7d159",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_717b633e-44ea-4803-89fd-fd1227958ba1",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_c09169350cf8",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_717b633e-44ea-4803-89fd-fd1227958ba1",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_a430114aecf1",
+          "ownerDispatchId": "ctx_a430114aecf1",
+          "releaseRequestedAt": "2026-08-12 22:02:54",
+          "releaseCompletedAt": "2026-08-12 22:02:54",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_0372f215aad9",
+        "taskId": "task_2498ab0e8bcc",
+        "runId": "run_b179b7009f26",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2b2d5a70-7e24-468e-a0d7-a0c3eaa33dd1",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_873fd35f42b8",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_2b2d5a70-7e24-468e-a0d7-a0c3eaa33dd1",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/treelord-360",
+          "originDispatchId": "ctx_710c74781f61",
+          "ownerDispatchId": "ctx_0372f215aad9",
+          "releaseRequestedAt": "2026-08-12 22:04:45",
+          "releaseCompletedAt": "2026-08-12 22:04:45",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_d537103ae4ac",
+        "taskId": "task_d464270acc97",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_06bcba58-30b8-4291-8285-8d124974bf4f",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_8173fb086c9f",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_06bcba58-30b8-4291-8285-8d124974bf4f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::D:/frank/windsurf-dao",
+          "originDispatchId": "ctx_d537103ae4ac",
+          "ownerDispatchId": "ctx_d537103ae4ac",
+          "releaseRequestedAt": "2026-08-13 06:20:47",
+          "releaseCompletedAt": "2026-08-13 06:20:47",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8d8dd659936b",
+        "taskId": "task_4aadc44a4022",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_ab2af873-3315-4472-a61b-3a42917bcb58",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_e6c38f85c4ff",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_ab2af873-3315-4472-a61b-3a42917bcb58",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::D:/frank/windsurf-dao",
+          "originDispatchId": "ctx_8d8dd659936b",
+          "ownerDispatchId": "ctx_8d8dd659936b",
+          "releaseRequestedAt": "2026-08-13 06:18:52",
+          "releaseCompletedAt": "2026-08-13 06:18:52",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_558468c7f176",
+        "taskId": "task_f3892c185240",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_f089e169-c01d-40b7-a99a-618a93d4eef9",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_107ddcc44b64",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_f089e169-c01d-40b7-a99a-618a93d4eef9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-323-affected-tests",
+          "originDispatchId": "ctx_558468c7f176",
+          "ownerDispatchId": "ctx_558468c7f176",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c5ff219f9d67",
+        "taskId": "task_db9886db98b8",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_5bb03a36-231f-4b7b-a5b7-28d77b297558",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_a200dfabe837",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_5bb03a36-231f-4b7b-a5b7-28d77b297558",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-364-ps7-detect",
+          "originDispatchId": "ctx_c5ff219f9d67",
+          "ownerDispatchId": "ctx_c5ff219f9d67",
+          "releaseRequestedAt": "2026-08-13 06:14:10",
+          "releaseCompletedAt": "2026-08-13 06:14:10",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_4bd681b20c48",
+        "taskId": "task_82c33c4b94f9",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_07677ecb-00d0-4a99-8fa8-a900d47bddc9",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_ba9dc319744b",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_07677ecb-00d0-4a99-8fa8-a900d47bddc9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-385-roster-pi",
+          "originDispatchId": "ctx_4bd681b20c48",
+          "ownerDispatchId": "ctx_4bd681b20c48",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_6e5dc533b80e",
+        "taskId": "task_7ff9e6ca30e9",
+        "runId": "run_29c05b72417c",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_736b69b2-48ba-481a-bc9a-4837b3b5c95b",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_970b992a52f0",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_736b69b2-48ba-481a-bc9a-4837b3b5c95b",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-385-roster-pi",
+          "originDispatchId": "ctx_6e5dc533b80e",
+          "ownerDispatchId": "ctx_6e5dc533b80e",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a63bb6a6e688",
+        "taskId": "task_961586cb7b63",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_53e88742-4cb7-4da5-a18e-47034343a5c9",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_7b1b961ce4aa",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_53e88742-4cb7-4da5-a18e-47034343a5c9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-ci-env-coupling",
+          "originDispatchId": "ctx_a63bb6a6e688",
+          "ownerDispatchId": "ctx_a63bb6a6e688",
+          "releaseRequestedAt": "2026-08-13 07:22:41",
+          "releaseCompletedAt": "2026-08-13 07:22:42",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_98db99425ca6",
+        "taskId": "task_f01388ba451d",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_c7bf9eae-5f4c-4023-8bcc-0c6e274586a6",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_212180820fbe",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_c7bf9eae-5f4c-4023-8bcc-0c6e274586a6",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/guard-292-pointers",
+          "originDispatchId": "ctx_98db99425ca6",
+          "ownerDispatchId": "ctx_98db99425ca6",
+          "releaseRequestedAt": "2026-08-13 07:54:21",
+          "releaseCompletedAt": "2026-08-13 07:54:21",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_f3328a8ec587",
+        "taskId": "task_f229ce4c196e",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2b46c9df-a2da-4331-8ba5-9000237e18e1",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_1cf32b18e780",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_2b46c9df-a2da-4331-8ba5-9000237e18e1",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-284-archive-gate",
+          "originDispatchId": "ctx_f3328a8ec587",
+          "ownerDispatchId": "ctx_f3328a8ec587",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5259e6585366",
+        "taskId": "task_632d7664f720",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_fe45e5f8-451b-40b8-ac0c-f5bd5aac011c",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_08f76d39b17a",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_fe45e5f8-451b-40b8-ac0c-f5bd5aac011c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-384-hardgate-fp",
+          "originDispatchId": "ctx_5259e6585366",
+          "ownerDispatchId": "ctx_5259e6585366",
+          "releaseRequestedAt": "2026-08-13 07:47:49",
+          "releaseCompletedAt": "2026-08-13 07:47:49",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_90fde06e9dbc",
+        "taskId": "task_15709f12e8f5",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_42e66949-9a86-4d73-bb54-f147d0020bca",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_f2195fcaa309",
+        "taskId": "task_9df7e9a0d3ad",
+        "runId": "run_29c05b72417c",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_8422ae01-c2f2-4bb4-b8d8-4ead47776443",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_d64dc5beddbb",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_8422ae01-c2f2-4bb4-b8d8-4ead47776443",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/guard-292-pointers",
+          "originDispatchId": "ctx_f2195fcaa309",
+          "ownerDispatchId": "ctx_f2195fcaa309",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3efe58022dab",
+        "taskId": "task_9df7e9a0d3ad",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_704a1b00-c35a-49e4-8411-3ddfbdb68d10",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_edd312abfe87",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_704a1b00-c35a-49e4-8411-3ddfbdb68d10",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/guard-292-pointers",
+          "originDispatchId": "ctx_3efe58022dab",
+          "ownerDispatchId": "ctx_3efe58022dab",
+          "releaseRequestedAt": "2026-08-13 07:54:21",
+          "releaseCompletedAt": "2026-08-13 07:54:21",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8fe6e722f249",
+        "taskId": "task_4fd6bccc0b3e",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_42e66949-9a86-4d73-bb54-f147d0020bca",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_93ba73a5e8e2",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_42e66949-9a86-4d73-bb54-f147d0020bca",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-250-claim-runtime",
+          "originDispatchId": "ctx_90fde06e9dbc",
+          "ownerDispatchId": "ctx_8fe6e722f249",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_6352130ff629",
+        "taskId": "task_9742b70ae370",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a6f96db6-ce9d-42db-bff4-0222b978cb88",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_327d367c9b01",
+        "taskId": "task_66738f975274",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_b917b9d5-14e6-4d37-acee-2d2f16727484",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_ac32ac7acb38",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_b917b9d5-14e6-4d37-acee-2d2f16727484",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-284-archive-gate",
+          "originDispatchId": "ctx_327d367c9b01",
+          "ownerDispatchId": "ctx_327d367c9b01",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a9ca1b620354",
+        "taskId": "task_722e9fb7872b",
+        "runId": "run_29c05b72417c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a6f96db6-ce9d-42db-bff4-0222b978cb88",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_2af84a383017",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_a6f96db6-ce9d-42db-bff4-0222b978cb88",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/fix-284-archive-gate",
+          "originDispatchId": "ctx_6352130ff629",
+          "ownerDispatchId": "ctx_a9ca1b620354",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_f8c786ca1728",
+        "taskId": "task_3c781542530e",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_9d7ff0bc-267e-49fa-b08a-543e81d7752c",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ea42573a8863",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_9d7ff0bc-267e-49fa-b08a-543e81d7752c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tpl-build",
+          "originDispatchId": "ctx_f8c786ca1728",
+          "ownerDispatchId": "ctx_f8c786ca1728",
+          "releaseRequestedAt": "2026-08-13 17:58:47",
+          "releaseCompletedAt": "2026-08-13 17:58:48",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_628eea606fde",
+        "taskId": "task_65678889550b",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_5177d3f2-c95e-4a5f-a8f1-b32ecb0ecaff",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_a49b7fad7663",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_5177d3f2-c95e-4a5f-a8f1-b32ecb0ecaff",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/rebirth-drafts",
+          "originDispatchId": "ctx_628eea606fde",
+          "ownerDispatchId": "ctx_628eea606fde",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a0af884ea35d",
+        "taskId": "task_65678889550b",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_3462ad4b-151f-442a-a17d-f5e932f8d61f",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_0cdf525477f5",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_3462ad4b-151f-442a-a17d-f5e932f8d61f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/rebirth-drafts",
+          "originDispatchId": "ctx_a0af884ea35d",
+          "ownerDispatchId": "ctx_a0af884ea35d",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_227059150bdd",
+        "taskId": "task_1cce84d4948f",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_6cc2fea1-0566-453d-ae42-8b297bcec74c",
+        "terminalState": "active",
+        "resource": {
+          "id": "wtr_e084faeea7e7",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_6cc2fea1-0566-453d-ae42-8b297bcec74c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-cleanup",
+          "originDispatchId": "ctx_227059150bdd",
+          "ownerDispatchId": "ctx_227059150bdd",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_359c464ed01d",
+        "taskId": "task_65678889550b",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_e766bbe5-8e15-4457-b44a-8dd934853fba",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_5c7233256889",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_e766bbe5-8e15-4457-b44a-8dd934853fba",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/rebirth-drafts-2",
+          "originDispatchId": "ctx_359c464ed01d",
+          "ownerDispatchId": "ctx_359c464ed01d",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c00230fe9570",
+        "taskId": "task_65678889550b",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_bceea2f9-5c03-4d7c-94ae-8ca308a6fb8f",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_166b8ab70895",
+        "taskId": "task_1cce84d4948f",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_4ca2acb3-d9ab-49be-9967-7ae6ddabd21e",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_d1ce5bec13fc",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_4ca2acb3-d9ab-49be-9967-7ae6ddabd21e",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-cleanup-2",
+          "originDispatchId": "ctx_166b8ab70895",
+          "ownerDispatchId": "ctx_166b8ab70895",
+          "releaseRequestedAt": "2026-08-13 18:40:00",
+          "releaseCompletedAt": "2026-08-13 18:40:01",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8298eecfb610",
+        "taskId": "task_8cd42778af17",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e1649fa2-d51b-4c71-ab93-9f895824d395",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_51c685ec2c8a",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_e1649fa2-d51b-4c71-ab93-9f895824d395",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/rebirth-drafts-2",
+          "originDispatchId": "ctx_8298eecfb610",
+          "ownerDispatchId": "ctx_8298eecfb610",
+          "releaseRequestedAt": "2026-08-13 18:43:42",
+          "releaseCompletedAt": "2026-08-13 18:43:42",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_18c76f2cb740",
+        "taskId": "task_92ebe0e84464",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_bceea2f9-5c03-4d7c-94ae-8ca308a6fb8f",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_174f1fb6b0f2",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_bceea2f9-5c03-4d7c-94ae-8ca308a6fb8f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/rebirth-drafts-2",
+          "originDispatchId": "ctx_c00230fe9570",
+          "ownerDispatchId": "ctx_18c76f2cb740",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3faf334b4ae1",
+        "taskId": "task_331a871cd12a",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_ca9ee372-e27c-494c-a790-fc54caa809c2",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_830029358976",
+        "taskId": "task_43ef488ea2af",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_1002ddd7-0cb4-4076-8df9-a4beca722b4d",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_dc5263f01051",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_1002ddd7-0cb4-4076-8df9-a4beca722b4d",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/大扫除-拆旧规则",
+          "originDispatchId": "ctx_830029358976",
+          "ownerDispatchId": "ctx_830029358976",
+          "releaseRequestedAt": "2026-08-13 19:14:32",
+          "releaseCompletedAt": "2026-08-13 19:14:32",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a91bdf3aedde",
+        "taskId": "task_5f1335d776b7",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_ca9ee372-e27c-494c-a790-fc54caa809c2",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_fe8168043b12",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_ca9ee372-e27c-494c-a790-fc54caa809c2",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/大扫除-拆旧规则",
+          "originDispatchId": "ctx_3faf334b4ae1",
+          "ownerDispatchId": "ctx_a91bdf3aedde",
+          "releaseRequestedAt": "2026-08-13 19:22:45",
+          "releaseCompletedAt": "2026-08-13 19:22:45",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_ab4e5421c363",
+        "taskId": "task_8431ffc4c649",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_63b6d414-30f9-41fc-960a-b881c7864456",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_e03746e8573b",
+        "taskId": "task_e1a31481ecd3",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_04444257-c595-4038-9b4b-907b73e18214",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_a98c98b719ba",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_04444257-c595-4038-9b4b-907b73e18214",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/机制回迁-誊写",
+          "originDispatchId": "ctx_e03746e8573b",
+          "ownerDispatchId": "ctx_e03746e8573b",
+          "releaseRequestedAt": "2026-08-14 03:36:46",
+          "releaseCompletedAt": "2026-08-14 03:36:46",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_67456dfb602b",
+        "taskId": "task_37e179cdd8fe",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_63b6d414-30f9-41fc-960a-b881c7864456",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_6e0c8d9bf5d5",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_63b6d414-30f9-41fc-960a-b881c7864456",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/机制回迁-誊写",
+          "originDispatchId": "ctx_ab4e5421c363",
+          "ownerDispatchId": "ctx_67456dfb602b",
+          "releaseRequestedAt": "2026-08-14 03:41:54",
+          "releaseCompletedAt": "2026-08-14 03:41:54",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_2dac6c3b987a",
+        "taskId": "task_cd011bac0ea4",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_7853a691-2ef4-47a8-9b13-ad825d1b8fbd",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_b80724bb9847",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_7853a691-2ef4-47a8-9b13-ad825d1b8fbd",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/旧库淘金A-DS",
+          "originDispatchId": "ctx_2dac6c3b987a",
+          "ownerDispatchId": "ctx_2dac6c3b987a",
+          "releaseRequestedAt": "2026-08-14 06:00:34",
+          "releaseCompletedAt": "2026-08-14 06:00:34",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_6341c14a227d",
+        "taskId": "task_a8556f1910c6",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_bdd564ba-b27a-4c40-88be-9b935625d0aa",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_b282e2c8d7e1",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_bdd564ba-b27a-4c40-88be-9b935625d0aa",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/旧库淘金B-GPT",
+          "originDispatchId": "ctx_6341c14a227d",
+          "ownerDispatchId": "ctx_6341c14a227d",
+          "releaseRequestedAt": "2026-08-14 06:00:35",
+          "releaseCompletedAt": "2026-08-14 06:00:35",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_94ecaeaf01f4",
+        "taskId": "task_2b1087bf71b5",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_d2c55cd5-d37a-4854-acb7-d084075eb99e",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_a6945ae5c30e",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_d2c55cd5-d37a-4854-acb7-d084075eb99e",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/旧库淘金C-Opus",
+          "originDispatchId": "ctx_94ecaeaf01f4",
+          "ownerDispatchId": "ctx_94ecaeaf01f4",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_2cfa5f27b79f",
+        "taskId": "task_3cef48d302ba",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2c9c16ed-98bf-4ee6-b085-57e442c32cef",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_f5f0cb229070",
+        "taskId": "task_5065a7b54924",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_bf38b8e4-625a-4858-b593-98548a49348f",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_1b05acfc4e40",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_bf38b8e4-625a-4858-b593-98548a49348f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/淘金落地-誊写",
+          "originDispatchId": "ctx_f5f0cb229070",
+          "ownerDispatchId": "ctx_f5f0cb229070",
+          "releaseRequestedAt": "2026-08-14 06:18:18",
+          "releaseCompletedAt": "2026-08-14 06:18:18",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_73920ebd70b0",
+        "taskId": "task_094d43d4cb43",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2c9c16ed-98bf-4ee6-b085-57e442c32cef",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_781037610a1c",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_2c9c16ed-98bf-4ee6-b085-57e442c32cef",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/淘金落地-誊写",
+          "originDispatchId": "ctx_2cfa5f27b79f",
+          "ownerDispatchId": "ctx_73920ebd70b0",
+          "releaseRequestedAt": "2026-08-14 06:22:57",
+          "releaseCompletedAt": "2026-08-14 06:22:57",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a72764c2f43b",
+        "taskId": "task_73d51b50d0e8",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_fb8265e0-f814-457e-8e7a-d1346ea9b9f2",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_7d8b428d9b6b",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_fb8265e0-f814-457e-8e7a-d1346ea9b9f2",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审437-预算闸",
+          "originDispatchId": "ctx_a72764c2f43b",
+          "ownerDispatchId": "ctx_a72764c2f43b",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c711d1fb9635",
+        "taskId": "task_8d88dcf15179",
+        "runId": "run_0c7c8fdfe40c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_fb8265e0-f814-457e-8e7a-d1346ea9b9f2",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_423287bf2caf",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_fb8265e0-f814-457e-8e7a-d1346ea9b9f2",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审437-预算闸",
+          "originDispatchId": "ctx_c711d1fb9635",
+          "ownerDispatchId": "ctx_c711d1fb9635",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_0dc58f85709a",
+        "taskId": "task_b71777193251",
+        "runId": "run_9b832b8f8e2c",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_5ac34022-3666-4546-89e3-f1ff73385943",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_73304a8a032e",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_5ac34022-3666-4546-89e3-f1ff73385943",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t3",
+          "originDispatchId": "ctx_0dc58f85709a",
+          "ownerDispatchId": "ctx_0dc58f85709a",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c9688579f449",
+        "taskId": "task_8de0faee138e",
+        "runId": "run_6e498aa0579b",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_3a62d884-5bb0-4136-9e73-e915a6d867a3",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_20b96486d92d",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_3a62d884-5bb0-4136-9e73-e915a6d867a3",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t4",
+          "originDispatchId": "ctx_c9688579f449",
+          "ownerDispatchId": "ctx_c9688579f449",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_2fdbcb43f473",
+        "taskId": "task_dab9bb382b20",
+        "runId": "run_a0794fbd38e7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_5f27de75-a059-4199-8dc9-6f50ba4f0670",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_46e9f5034c5d",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_5f27de75-a059-4199-8dc9-6f50ba4f0670",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t5",
+          "originDispatchId": "ctx_2fdbcb43f473",
+          "ownerDispatchId": "ctx_2fdbcb43f473",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_b36bedf88145",
+        "taskId": "task_9358de87b6e8",
+        "runId": "run_a0794fbd38e7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a932c47c-d106-4b76-8c8f-f798dd6e574b",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_a4c726315230",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_a932c47c-d106-4b76-8c8f-f798dd6e574b",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t6",
+          "originDispatchId": "ctx_b36bedf88145",
+          "ownerDispatchId": "ctx_b36bedf88145",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_7d7774d51202",
+        "taskId": "task_5d216eb24223",
+        "runId": "run_a0794fbd38e7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_16ab754c-3134-4049-820e-7b940a448f1b",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_8e47c85ae955",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_16ab754c-3134-4049-820e-7b940a448f1b",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t7",
+          "originDispatchId": "ctx_7d7774d51202",
+          "ownerDispatchId": "ctx_7d7774d51202",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_281029b7a7f8",
+        "taskId": "task_076ae0c8bfb0",
+        "runId": "run_a0794fbd38e7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_71ab1f24-6722-4cd3-ba80-3874f76fb014",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_a24803c69490",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_71ab1f24-6722-4cd3-ba80-3874f76fb014",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t8",
+          "originDispatchId": "ctx_281029b7a7f8",
+          "ownerDispatchId": "ctx_281029b7a7f8",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_1943d415ebdb",
+        "taskId": "task_9b23e5f4888a",
+        "runId": "run_a0794fbd38e7",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_e744ed38-0836-4d57-8be2-62f5823a481b",
+        "terminalState": "active",
+        "resource": {
+          "id": "wtr_d2cd7c0d3dcb",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_e744ed38-0836-4d57-8be2-62f5823a481b",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/tmp-t8",
+          "originDispatchId": "ctx_1943d415ebdb",
+          "ownerDispatchId": "ctx_1943d415ebdb",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_bd025bcd8c64",
+        "taskId": "task_052d449dc2eb",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_8a3b8f1b-c1dd-4af3-b4db-91093d35d404",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ac01ff8b9dad",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_8a3b8f1b-c1dd-4af3-b4db-91093d35d404",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/pilot-B",
+          "originDispatchId": "ctx_bd025bcd8c64",
+          "ownerDispatchId": "ctx_bd025bcd8c64",
+          "releaseRequestedAt": "2026-08-15 05:05:41",
+          "releaseCompletedAt": "2026-08-15 05:05:41",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_879f5904d5b9",
+        "taskId": "task_e8e2c19682cd",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_378b8949-c273-4a1b-9da7-fbee4d7c227d",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_10e41362c82d",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_378b8949-c273-4a1b-9da7-fbee4d7c227d",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/pilot-B",
+          "originDispatchId": "ctx_879f5904d5b9",
+          "ownerDispatchId": "ctx_879f5904d5b9",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_f315146bc830",
+        "taskId": "task_e8e2c19682cd",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_3c03a7d4-fbf7-455f-8bc2-3e9213a092ec",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_a4e43381b594",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_3c03a7d4-fbf7-455f-8bc2-3e9213a092ec",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/pilot-B",
+          "originDispatchId": "ctx_f315146bc830",
+          "ownerDispatchId": "ctx_f315146bc830",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_dad06639fe2a",
+        "taskId": "task_b7fbdda0aaa1",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0c238c60-7e7b-48bf-97b7-5f57a9e9fa84",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ae9b4784d985",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_0c238c60-7e7b-48bf-97b7-5f57a9e9fa84",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/pilot-B",
+          "originDispatchId": "ctx_dad06639fe2a",
+          "ownerDispatchId": "ctx_dad06639fe2a",
+          "releaseRequestedAt": "2026-08-15 05:35:17",
+          "releaseCompletedAt": "2026-08-15 05:35:17",
+          "releaseError": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_89658e8d4466",
+        "taskId": "task_af8a80a1a562",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0ba879e1-408d-4098-8239-9e3f37d745c8",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_444648bcfbdc",
+        "taskId": "task_d1ce1bc210aa",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2146ce38-ed6b-4bf0-aeb8-caab8db153e7",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_9e8be85ccbd2",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_2146ce38-ed6b-4bf0-aeb8-caab8db153e7",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/融合改造",
+          "originDispatchId": "ctx_444648bcfbdc",
+          "ownerDispatchId": "ctx_444648bcfbdc",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_aeae44a2e721",
+        "taskId": "task_67f3152e9a6d",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_0ba879e1-408d-4098-8239-9e3f37d745c8",
+        "terminalState": "active",
+        "resource": {
+          "id": "wtr_10ba8a34824a",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_0ba879e1-408d-4098-8239-9e3f37d745c8",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/融合改造",
+          "originDispatchId": "ctx_89658e8d4466",
+          "ownerDispatchId": "ctx_aeae44a2e721",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_0a7c7282fe6f",
+        "taskId": "task_986be49ba878",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_fa894a15-f5ba-4fef-be4a-72a203393e54",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_8e7feea04a02",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_fa894a15-f5ba-4fef-be4a-72a203393e54",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/pilot-B",
+          "originDispatchId": "ctx_0a7c7282fe6f",
+          "ownerDispatchId": "ctx_0a7c7282fe6f",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3344c52f775e",
+        "taskId": "task_c024b9327cfe",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_4fc12d49-cc5e-4733-aca3-769ca77764b8",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ac58ff886ca0",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_4fc12d49-cc5e-4733-aca3-769ca77764b8",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/盲考-ds",
+          "originDispatchId": "ctx_3344c52f775e",
+          "ownerDispatchId": "ctx_3344c52f775e",
+          "releaseRequestedAt": "2026-08-15 06:15:32",
+          "releaseCompletedAt": "2026-08-15 06:15:32",
+          "releaseError": null,
+          "archive": {
+            "source": "terminal",
+            "status": "captured"
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_37aa51465d7c",
+        "taskId": "task_f68f66778866",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_69744b5a-42cf-437f-90e0-740984d9c7a9",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_36296825b8f3",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_69744b5a-42cf-437f-90e0-740984d9c7a9",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/信箱台脚本",
+          "originDispatchId": "ctx_37aa51465d7c",
+          "ownerDispatchId": "ctx_37aa51465d7c",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_286bddc26ef6",
+        "taskId": "task_f68f66778866",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_65b5d204-5886-46d9-861a-3628c7880fed",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_0ab101d02c66",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_65b5d204-5886-46d9-861a-3628c7880fed",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/信箱台脚本",
+          "originDispatchId": "ctx_286bddc26ef6",
+          "ownerDispatchId": "ctx_286bddc26ef6",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_179357977c45",
+        "taskId": "task_3fe08e1bd285",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_1808699e-c9bd-4010-8c5f-6f704948f430",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_4b2edefd43bc",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_1808699e-c9bd-4010-8c5f-6f704948f430",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/memory入仓",
+          "originDispatchId": "ctx_179357977c45",
+          "ownerDispatchId": "ctx_179357977c45",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_474235acd74d",
+        "taskId": "task_c91167c83071",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_2d518899-f2e2-4b99-92fe-943cb754e91f",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_86ef195cbeab",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_2d518899-f2e2-4b99-92fe-943cb754e91f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/信箱台脚本",
+          "originDispatchId": "ctx_474235acd74d",
+          "ownerDispatchId": "ctx_474235acd74d",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a260a23dd1ab",
+        "taskId": "task_4e448b2f4067",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0fa0cbd8-9eb8-4e00-bf9f-1dfa8c8404ce",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_d21cf85ee930",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_0fa0cbd8-9eb8-4e00-bf9f-1dfa8c8404ce",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/点将台接线",
+          "originDispatchId": "ctx_a260a23dd1ab",
+          "ownerDispatchId": "ctx_a260a23dd1ab",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_ead8fb36f21f",
+        "taskId": "task_57720e80d774",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a8426ac4-a897-4b48-bc38-f5f9f4099a1b",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_490a237a29ad",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_a8426ac4-a897-4b48-bc38-f5f9f4099a1b",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/465-调研标签体系",
+          "originDispatchId": "ctx_ead8fb36f21f",
+          "ownerDispatchId": "ctx_ead8fb36f21f",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_74bc879d09f0",
+        "taskId": "task_5dfbb05450dc",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_38bda6daa90f",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/488-建专注-值守状态机",
+          "originDispatchId": "ctx_74bc879d09f0",
+          "ownerDispatchId": "ctx_74bc879d09f0",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_f26b77349412",
+        "taskId": "task_e48aa77c403e",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_206433d54a66",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审官-GPT",
+          "originDispatchId": "ctx_f26b77349412",
+          "ownerDispatchId": "ctx_f26b77349412",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_dc69d4f9c964",
+        "taskId": "task_69effbce921f",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0a418ff9-9656-4444-bb1c-6284208a35ca",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_55fe7594e82f",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_0a418ff9-9656-4444-bb1c-6284208a35ca",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/493-修信箱台身份判据",
+          "originDispatchId": "ctx_dc69d4f9c964",
+          "ownerDispatchId": "ctx_dc69d4f9c964",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_cb048d95eea2",
+        "taskId": "task_a00fb6727061",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_644a2dbd5eb1",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/488-建专注-值守状态机",
+          "originDispatchId": "ctx_cb048d95eea2",
+          "ownerDispatchId": "ctx_cb048d95eea2",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_fc5d2409b384",
+        "taskId": "task_597ec7779480",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_e21327a4088e",
+        "taskId": "task_d7d210a248cc",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_6f2e0d54ad8a",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审官-GPT",
+          "originDispatchId": "ctx_e21327a4088e",
+          "ownerDispatchId": "ctx_e21327a4088e",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_f47ebf5a6675",
+        "taskId": "task_d2ffcae9f91c",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_699fd4a65591",
+        "taskId": "task_aa88e60cb072",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_00caffc8-cf47-41b0-b846-f1166b5bdd87",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_70afd800bb91",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_00caffc8-cf47-41b0-b846-f1166b5bdd87",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/496-审官-GPT",
+          "originDispatchId": "ctx_699fd4a65591",
+          "ownerDispatchId": "ctx_699fd4a65591",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_49d37718e9c3",
+        "taskId": "task_adc873accf3b",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_f8312b5519a6",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/488-建专注-值守状态机",
+          "originDispatchId": "ctx_49d37718e9c3",
+          "ownerDispatchId": "ctx_49d37718e9c3",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_92f662d23af3",
+        "taskId": "task_132f05a5adf4",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_86288c0eef62",
+        "taskId": "task_0a78db9ea44f",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_0a418ff9-9656-4444-bb1c-6284208a35ca",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_7777ddef3674",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_0a418ff9-9656-4444-bb1c-6284208a35ca",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/493-修信箱台身份判据",
+          "originDispatchId": "ctx_86288c0eef62",
+          "ownerDispatchId": "ctx_86288c0eef62",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_752e5d4695d9",
+        "taskId": "task_87da0dbefa82",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_00caffc8-cf47-41b0-b846-f1166b5bdd87",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_cec2b27a341d",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_00caffc8-cf47-41b0-b846-f1166b5bdd87",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/496-审官-GPT",
+          "originDispatchId": "ctx_752e5d4695d9",
+          "ownerDispatchId": "ctx_752e5d4695d9",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_7977660b4e5c",
+        "taskId": "task_baf03e0fb2e0",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_f975d2f232f4",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e2faff8a-2ca1-412a-ad34-474bfc672a62",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/488-建专注-值守状态机",
+          "originDispatchId": "ctx_7977660b4e5c",
+          "ownerDispatchId": "ctx_7977660b4e5c",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_13f8bdf4191d",
+        "taskId": "task_fafee47242b5",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_f45e25284487",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_9e547499-7ac9-4f65-ab60-f2755c9ff723",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审官-GPT",
+          "originDispatchId": "ctx_13f8bdf4191d",
+          "ownerDispatchId": "ctx_13f8bdf4191d",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3d71060ef1e6",
+        "taskId": "task_b01a601b82d1",
+        "runId": "run_3252e690bf76",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_e570931427b6",
+          "ownershipState": "user_owned",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_fc5d2409b384",
+          "ownerDispatchId": "ctx_3d71060ef1e6",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5a59f2b680ca",
+        "taskId": "task_d82138404321",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_859320801019",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_5a59f2b680ca",
+          "ownerDispatchId": "ctx_5a59f2b680ca",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5ce749573bfc",
+        "taskId": "task_3102e2abb3cd",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_3dde5847-9714-485c-ac9a-dcdd6e92a373",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_514658eac79f",
+        "taskId": "task_77ef99d46956",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_7bfbea00-e7dd-46b9-93f3-f2c0231abc5e",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_adc6821b9636",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_7bfbea00-e7dd-46b9-93f3-f2c0231abc5e",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/500-活性判据换真证据",
+          "originDispatchId": "ctx_514658eac79f",
+          "ownerDispatchId": "ctx_514658eac79f",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_027b00a93212",
+        "taskId": "task_228406064ad4",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_95ae47a0884e",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_027b00a93212",
+          "ownerDispatchId": "ctx_027b00a93212",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5c75ff5e9c7c",
+        "taskId": "task_34a3ad04cc17",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a1a63dbf-1e92-4be4-b9de-cf3327a2be4d",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_75c717d00bec",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_a1a63dbf-1e92-4be4-b9de-cf3327a2be4d",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/505-审官-GPT",
+          "originDispatchId": "ctx_5c75ff5e9c7c",
+          "ownerDispatchId": "ctx_5c75ff5e9c7c",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_be065f0e6c32",
+        "taskId": "task_7ed19a4d588f",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_613a5da3fbe2",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_be065f0e6c32",
+          "ownerDispatchId": "ctx_be065f0e6c32",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_53bf6ae59aa2",
+        "taskId": "task_2e0b340a93de",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_a1a63dbf-1e92-4be4-b9de-cf3327a2be4d",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_057e57945623",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_a1a63dbf-1e92-4be4-b9de-cf3327a2be4d",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/505-审官-GPT",
+          "originDispatchId": "ctx_53bf6ae59aa2",
+          "ownerDispatchId": "ctx_53bf6ae59aa2",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_7f5b9347f61f",
+        "taskId": "task_09547796e229",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_dd6bedeb7cdf",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_7f5b9347f61f",
+          "ownerDispatchId": "ctx_7f5b9347f61f",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_5b69a12a20be",
+        "taskId": "task_e8a4dd075443",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_3793cbca4d3b",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_5b69a12a20be",
+          "ownerDispatchId": "ctx_5b69a12a20be",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_823065648abb",
+        "taskId": "task_7231933aa076",
+        "runId": "run_3252e690bf76",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_3b8ff249e4d9",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_823065648abb",
+          "ownerDispatchId": "ctx_823065648abb",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_196dddc4dde3",
+        "taskId": "task_e860dcf08b00",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_1e2d919e845d",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_196dddc4dde3",
+          "ownerDispatchId": "ctx_196dddc4dde3",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_94fb67b00296",
+        "taskId": "task_99ba4386ff30",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_9a649066-e097-44f3-b170-347824b9ab49",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_e53b1753cd4c",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_9a649066-e097-44f3-b170-347824b9ab49",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/501-返工口径换判定行",
+          "originDispatchId": "ctx_94fb67b00296",
+          "ownerDispatchId": "ctx_94fb67b00296",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3d00c00be881",
+        "taskId": "task_2c8a1be02a1d",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_5eeef4d0256a",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_3d00c00be881",
+          "ownerDispatchId": "ctx_3d00c00be881",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_86ddbc5c590a",
+        "taskId": "task_5d27fae4494b",
+        "runId": "run_0f4d68c17c72",
+        "workerState": "stopped",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_fe4b2c9b-174f-4242-96c0-fc6f332dfc52",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_c5bcc9f52c1f",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_fe4b2c9b-174f-4242-96c0-fc6f332dfc52",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/502-e2e-120s-final-20260816",
+          "originDispatchId": "ctx_86ddbc5c590a",
+          "ownerDispatchId": "ctx_86ddbc5c590a",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_de0866702670",
+        "taskId": "task_729122e7e233",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_c7d3f89c-574c-4a6b-947d-79b73f041913",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_389ec4e2bb01",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_c7d3f89c-574c-4a6b-947d-79b73f041913",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审官-gpt-5.6-sol-2",
+          "originDispatchId": "ctx_de0866702670",
+          "ownerDispatchId": "ctx_de0866702670",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_a23478208c22",
+        "taskId": "task_2f8d96368644",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_3dde5847-9714-485c-ac9a-dcdd6e92a373",
+        "terminalState": "retained",
+        "resource": null
+      },
+      {
+        "dispatchId": "ctx_cad8245dbb5e",
+        "taskId": "task_a199a32cfcd6",
+        "runId": "run_0f4d68c17c72",
+        "workerState": "ready",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_142162bc-5512-4b70-9e14-d1ed50281ff7",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_bd28447e8ae6",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_142162bc-5512-4b70-9e14-d1ed50281ff7",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/502-e2e-502-comment-20260816",
+          "originDispatchId": "ctx_cad8245dbb5e",
+          "ownerDispatchId": "ctx_cad8245dbb5e",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_72acc26b2b24",
+        "taskId": "task_a584526f1266",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_710fc7788e1f",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_72acc26b2b24",
+          "ownerDispatchId": "ctx_72acc26b2b24",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_ae7e566caea5",
+        "taskId": "task_87eebdb63f73",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_8ec7d7b1-9e78-4175-a4d6-6f955302622c",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_9f207601b8e9",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_8ec7d7b1-9e78-4175-a4d6-6f955302622c",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/memory-同步入仓",
+          "originDispatchId": "ctx_ae7e566caea5",
+          "ownerDispatchId": "ctx_ae7e566caea5",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_60e162cf544b",
+        "taskId": "task_754eb457d739",
+        "runId": "run_3252e690bf76",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_3dde5847-9714-485c-ac9a-dcdd6e92a373",
+        "terminalState": "reclaimable",
+        "resource": {
+          "id": "wtr_80297b502b69",
+          "ownershipState": "owned",
+          "releaseState": "not_requested",
+          "retainedReason": null,
+          "terminalHandle": "term_3dde5847-9714-485c-ac9a-dcdd6e92a373",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/497-审官-gpt-5.6-sol",
+          "originDispatchId": "ctx_5ce749573bfc",
+          "ownerDispatchId": "ctx_60e162cf544b",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_3ded792f973b",
+        "taskId": "task_58998120b64d",
+        "runId": "run_af8fc3144eb7",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_31172c0a-a131-4e80-ac10-29601875a91f",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_eca5d6eca39d",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_31172c0a-a131-4e80-ac10-29601875a91f",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/审官-gpt-5.6-sol",
+          "originDispatchId": "ctx_3ded792f973b",
+          "ownerDispatchId": "ctx_3ded792f973b",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_c9425c14571a",
+        "taskId": "task_da551adf85f8",
+        "runId": "run_3252e690bf76",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "terminalState": "retained",
+        "resource": {
+          "id": "wtr_27ff432a1550",
+          "ownershipState": "external",
+          "releaseState": "not_requested",
+          "retainedReason": "external_terminal",
+          "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+          "originDispatchId": "ctx_c9425c14571a",
+          "ownerDispatchId": "ctx_c9425c14571a",
+          "releaseRequestedAt": null,
+          "releaseCompletedAt": null,
+          "releaseError": null,
+          "archive": {
+            "source": null,
+            "status": null
+          }
+        }
+      }
+    ],
+    "counts": {
+      "retained": 78,
+      "released": 38,
+      "reclaimable": 6,
+      "active": 3
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

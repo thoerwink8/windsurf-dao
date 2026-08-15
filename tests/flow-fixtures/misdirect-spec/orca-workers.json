@@ -1,3 +1,9 @@
 [
- {"dispatchId":"ctx_3407","taskId":"task_3407w","worktreeId":"wt::worker-3407","agentTerminalHandle":"term_3407","dispatchStatus":"in_progress"}
+ {
+  "dispatchId": "ctx_3407",
+  "taskId": "task_3407w",
+  "worktreeId": "wt::worker-3407",
+  "agentTerminalHandle": "term_3407",
+  "dispatchStatus": "dispatched"
+ }
 ]

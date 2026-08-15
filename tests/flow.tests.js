@@ -780,5 +780,34 @@ console.log("\n=== ㊳ worker_done 反向寻址（#497 第十一轮返工：普�
   check("结构反查在 buildDispatchMap（dispatchId → worktree → branch → PR headRefName 全等）", /dispatchWorktreeId/.test(flowSrc) && /worktreeBranchById/.test(flowSrc));
 }
 
+console.log("\n=== ㊴ 语料闸：夹具必须有真实完成态样本（#497 第十二轮：自造夹具第五次的制度化防线）===");
+{
+  // 扫全部 flow-fixtures 的 orca-workers.json，统计 dispatchStatus；必须至少一个 completed——
+  // 没有 = 「没扫到完成态样本」红（不是扫完 0 违规；仓规：分不清就会把没查成当查过没事）。
+  let files = 0, completed = 0, dispatched = 0, others = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name === "orca-workers.json") {
+        files++;
+        let arr = [];
+        try { arr = JSON.parse(fs.readFileSync(p, "utf8")); } catch { /* 解析不了当没样本 */ }
+        for (const w of Array.isArray(arr) ? arr : []) {
+          if (w.dispatchStatus === "completed") completed++;
+          else if (w.dispatchStatus === "dispatched") dispatched++;
+          else if (w.dispatchStatus) others.push(w.dispatchStatus);
+        }
+      }
+    }
+  };
+  walk(path.join(REPO, "tests", "flow-fixtures"));
+  check("语料闸：worker 夹具集合含 completed 样本（否则本次没扫到完成态）", completed > 0, `files=${files} completed=${completed} dispatched=${dispatched} others=${[...new Set(others)].join(",") || "-"}`);
+  check("语料闸：dispatched（在跑）样本也在（注入寻址语义）", dispatched > 0, `dispatched=${dispatched}`);
+  // 红项直接验收固化：doorbell-only 已是真实完成态（completed）+ 只有 worker_done → 起审官不误报孤儿
+  const bell = runFlow(path.join(FIXTURES, "doorbell-only"));
+  check("红项验收（completed + 纯门铃）：映射出 PR → 起审官，不误报孤儿", /动作：起审官 #3411/.test(bell.out) && !/映射不出 PR/.test(bell.out), bell.out.trim());
+}
+
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);
 process.exit(fail > 0 ? 1 : 0);
