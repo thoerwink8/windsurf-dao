@@ -93,7 +93,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 - 任务卡：`#<PR号> - <动宾短语>`（PR 开出来立刻改名）。
 - 终端 / 工人副本：角色·模型（如「审官·GPT」）。默认名不上面板。
-- 任务卡 comment：叙述 + 末尾定界区 `｜[#N #M]`。`dao.mjs dispatch` 成功后只往**这张任务卡**的 comment 追加单号，人写的叙述原样保留。写完必回读。不要用终端 rename（带 agent 的终端 rename 回 ok 但标题不变，#502 证伪）。合并侧调 `applyRemoveTicket({ id, worktreeId, runOrca })`。
+- 任务卡 / 工人 / 审官归属：卡 comment 末尾定界区 `｜[#N #M]`。`dao.mjs dispatch` 成功后只往**这张任务卡**的 comment 追加单号，人写的叙述原样保留，写完必回读。不要用 `orca terminal rename` 写这类归属（对 grok 等由宿主持续改标题的终端，rename 回 ok 但 list/show 不变）。
+- Claude 主帅终端自己改自己：用 CC 内置 `/rename`（每帅私有，不互相覆盖）。给终端发以 `/` 开头的斜杠命令必须走 PowerShell，或设 `MSYS_NO_PATHCONV=1`——Git Bash/MSYS2 会把 `/rename` 转成 `C:/Program Files/Git/rename`，命令送不到、标题不变，看起来像无效。
 
 ## 通道判据
 

@@ -18,5 +18,11 @@
     "file": "worktree-create.json",
     "command": "orca worktree create --name _fixture-499-delete-me --no-parent --setup skip --json",
     "capturedAt": "2026-08-15"
+  },
+  "extractTaskId": {
+    "file": "task-create.json",
+    "command": "orca orchestration task-create --spec \"契约夹具采集：task-create 真实返回（采集后闲置）\" --json",
+    "capturedAt": "2026-08-15",
+    "note": "与 #497 tests/fixtures/orca-returns/task-create.json 同一份实采（result.task.id，顶层 id 是 RPC id）"
   }
 }

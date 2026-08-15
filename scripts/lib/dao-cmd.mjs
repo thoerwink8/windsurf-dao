@@ -240,6 +240,27 @@ export function extractHandleFromCreate(json) {
     || null;
 }
 
+/** 真返回在 result.task.id。result.id / 顶层 id 是 RPC id，不能当 taskId（#497/#502）。 */
+export function extractTaskId(json) {
+  return json?.result?.task?.id || null;
+}
+
+export function isRunRequired(error) {
+  const text = typeof error === 'object' && error
+    ? `${error.code || ''} ${error.message || ''}`
+    : String(error || '');
+  return /run_required/i.test(text);
+}
+
+export const RUN_REQUIRED_HINT = '未绑 orchestration Run，先跑 orca orchestration run-create 或 run-use';
+
+export function rollbackErrorAlreadyGone(error) {
+  const text = typeof error === 'object' && error
+    ? `${error.code || ''} ${error.message || ''}`
+    : String(error || '');
+  return /tab_not_found|terminal_handle_stale/i.test(text);
+}
+
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
 export function catalogUsedFlags() {
   const samples = [
@@ -582,16 +603,23 @@ export function planDispatchRollback({ workerId, workerHandle, reviewerId, revie
 
 /** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
 export function rollbackReport(steps) {
-  const list = Array.isArray(steps) ? steps : [];
+  const list = (Array.isArray(steps) ? steps : []).map((s) => {
+    if (!s || s.ok) return s;
+    if (s.alreadyGone || rollbackErrorAlreadyGone(s.error)) {
+      return { ...s, ok: true, alreadyGone: true, error: undefined };
+    }
+    return s;
+  });
   const failed = list.filter(s => s && s.ok === false);
   if (failed.length === 0) {
-    return { rollbackFailed: false, alarm: null, failed: [] };
+    return { rollbackFailed: false, alarm: null, failed: [], steps: list };
   }
   const detail = failed.map(s => `${s.cmd || '?'} → ${s.error || '失败'}`).join('; ');
   return {
     rollbackFailed: true,
     alarm: `回滚失败，可能留下孤儿终端/树：${detail}`,
     failed,
+    steps: list,
   };
 }
 

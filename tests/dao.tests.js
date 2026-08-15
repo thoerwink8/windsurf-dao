@@ -344,6 +344,8 @@ async function main() {
     check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
     check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
+    check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
+    check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
     check('探针等待从表读，不写死 45000', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
@@ -395,11 +397,19 @@ async function main() {
     check('R6 什么都没建 → 回滚空', S.planDispatchRollback({}).length === 0);
     const rbOk = S.rollbackReport([{ cmd: 'terminal close x --tab', ok: true }]);
     check('R6 回滚全成功 → 不叫', rbOk.rollbackFailed === false && rbOk.alarm == null, JSON.stringify(rbOk));
-    const rbFail = S.rollbackReport([
+    const rbGone = S.rollbackReport([
       { cmd: 'terminal close th1 --tab', ok: false, error: 'tab_not_found' },
       { cmd: 'worktree rm w1 --force', ok: true },
     ]);
-    check('R6 回滚失败单独可见', rbFail.rollbackFailed === true && /孤儿/.test(rbFail.alarm) && /tab_not_found/.test(rbFail.alarm), JSON.stringify(rbFail));
+    check('R6 tab_not_found = 目标已不在，不算回滚失败', rbGone.rollbackFailed === false, JSON.stringify(rbGone));
+    const closeFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'close-tab-not-found.json'), 'utf8'));
+    check('R6 真 tab_not_found 夹具判已不在', S.rollbackErrorAlreadyGone(closeFx.error) === true, JSON.stringify(closeFx.error));
+    const rbFail = S.rollbackReport([
+      { cmd: 'terminal close th1 --tab', ok: false, error: 'permission denied' },
+    ]);
+    check('R6 真正清理失败单独可见', rbFail.rollbackFailed === true && /孤儿/.test(rbFail.alarm) && /permission denied/.test(rbFail.alarm), JSON.stringify(rbFail));
+    check('R6 run_required 能认出', S.isRunRequired({ code: 'run_required', message: 'No Run is bound' }) === true);
+    check('R6 普通错误不是 run_required', S.isRunRequired('tab_not_found') === false);
   }
 
   console.log('\n=== 编排 builder / 逃生口 ===');
@@ -447,6 +457,14 @@ async function main() {
       S.extractWorktreeId(wtLive) === '1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
     check('真 worktree create → extractWorktreePath',
       S.extractWorktreePath(wtLive) === 'C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
+
+    const taskLive = fx('task-create.json');
+    check('真 task-create → extractTaskId 走 result.task.id',
+      S.extractTaskId(taskLive) === 'task_72992e47f0f4');
+    check('真 task-create 顶层 id 不是 taskId',
+      taskLive.id !== S.extractTaskId(taskLive) && taskLive.result.id === undefined);
+    check('旧路径 result.id / 顶层 id 都取不到',
+      S.extractTaskId({ id: 'rpc', result: { id: 'rpc2' } }) === null);
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

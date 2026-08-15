@@ -10,6 +10,8 @@ orca terminal read --terminal $ORCA_TERMINAL_HANDLE --limit 10 --json
 orca terminal create --worktree $ORCA_WORKTREE_ID --title fixture-capture --command "cmd /c echo fixture-probe" --json
 orca worktree create --name _fixture-recapture --no-parent --setup skip --json
 # create 完立刻 worktree rm --force，不要留孤儿树
+orca orchestration task-create --spec "夹具采集" --json
+# task-create 要已绑 Run；id 在 result.task.id，不是 result.id
 ```
 
 `index.json` 把 `scripts/lib/dao-cmd.mjs` 里每个 `export function extract*` 映射到一份语料。

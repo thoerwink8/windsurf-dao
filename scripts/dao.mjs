@@ -24,9 +24,13 @@ import {
   checkHelpLiveness,
   dispatchComment,
   extractHandleFromCreate,
+  extractTaskId,
   extractTerminalText,
   extractWorktreeId,
   extractWorktreePath,
+  isRunRequired,
+  RUN_REQUIRED_HINT,
+  rollbackErrorAlreadyGone,
   fetchHelpPreferLive,
   loadRouting,
   parseArgs,
@@ -129,7 +133,11 @@ function rollbackCreated(created) {
       ok: !!r.ok,
       error: r.ok ? undefined : errText(r.error),
     };
-    if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
+    if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
+      step.ok = true;
+      step.alreadyGone = true;
+      step.error = undefined;
+    } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
       const retryArgs = args.filter(a => a !== '--tab');
       const retry = orca(retryArgs);
       step.retryWithoutTab = {
@@ -137,9 +145,10 @@ function rollbackCreated(created) {
         ok: !!retry.ok,
         error: retry.ok ? undefined : errText(retry.error),
       };
-      if (retry.ok) {
+      if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
         step.ok = true;
-        step.recovered = true;
+        step.alreadyGone = !retry.ok;
+        step.recovered = !!retry.ok;
         step.error = undefined;
         r = retry;
       }
@@ -277,8 +286,11 @@ function cmdDispatch(args) {
   let taskId = args.task || null;
   if (args.spec) {
     const task = orca(argsTaskCreate({ spec: args.spec }));
-    if (!task.ok) failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
-    taskId = task.json?.result?.id || task.json?.id || taskId;
+    if (!task.ok) {
+      if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
+      failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
+    }
+    taskId = extractTaskId(task.json) || taskId;
   }
   if (!taskId) failCreated(created, 'dispatch 没拿到 taskId', plan);
 
@@ -390,8 +402,11 @@ function cmdWorktreeRm(args) {
 function cmdTaskCreate(args) {
   if (!args.spec) fail('task-create 要 --spec');
   const r = orca(argsTaskCreate({ spec: args.spec }));
-  if (!r.ok) fail(`task-create 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  if (!r.ok) {
+    if (isRunRequired(r.error)) fail(RUN_REQUIRED_HINT);
+    fail(`task-create 失败: ${errText(r.error)}`);
+  }
+  emit({ ok: true, json: r.json, taskId: extractTaskId(r.json) });
 }
 
 function cmdWorkerStart(args) {
