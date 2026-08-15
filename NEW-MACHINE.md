@@ -88,7 +88,7 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
 
 ## 7b. command-code 怎么配
 
-command-code（Command Code 官方 CLI）2026-08-16 起做工人载具（拍板 issue #508；本仓第一个 command-code 工人 #511）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
+command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速**（2026-08-16 帅·A 裁定：当前不能承载需进 git 的 Orca 工人，见 dispatch SKILL）。npm 包名就是 `command-code`，可执行文件 `command-code` 与别名 `cmdc` 同包两个入口；**没有 `cmd`**（会撞 Windows cmd.exe）。
 
 - 装机：`npm i -g command-code`；验证：`command-code --version`（本机 v1.26.0）。
 - **登录必须在真 TTY 里跑**（Ink raw mode）：`command-code login` 是浏览器交互流程，只能用户做；无 TTY 报 "Raw mode is not supported on the current process.stdin"。登录态落在 `~/.commandcode/auth.json`。验证：`command-code status` 应回 `Authenticated as <用户名>`。
