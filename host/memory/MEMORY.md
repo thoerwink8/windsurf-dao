@@ -28,13 +28,18 @@
 - [拍板必须 STAR 人话](feedback-star-decisions.md) — 拍板类提问逐件讲前因后果,禁压缩打包问法;AskUserQuestion 只收口不塞正文
 - [GitHub not found ≠ 认证失败](github-not-found-vs-auth.md) — 不存在和没权限统一回 Repository not found,CLI 普遍误报成认证问题;先验仓库存不存在再查权限
 - [skills add 大仓必超时](skills-add-large-repo-timeout.md) — 内置 300s clone 超时,正解是 sparse+blobless 浅克隆再传本地路径;--agent 必传否则装进 ~75 个 agent
-- [派单语料与卡死判定](dispatch-regex-corpus-and-stall.md) — 正则/判定类派单必带真实语料格(禁 mock 内生);工兵屏面指纹两次相同即换人不救(看门狗自动化挂 #348)
+- [派单语料与卡死判定](dispatch-regex-corpus-and-stall.md) — 正则/判定类派单必带真实语料格(禁 mock 内生);屏面指纹判据 2026-08-15 被证不足(spinner 打败三种探头),改数非 spinner 真实输出行 + 「该发生的事有没有发生」
+- [工人续活两情形](worker-resume-vs-reengage.md) — 已完工闲置才新建任务卡;任务中途被打断直接 terminal send 一句继续,别重发任务书;send --to dispatch: 两种都叫不醒
+- [orca JSON 字段路径](orca-json-field-paths.md) — 实测清单(task-create 在 result.task.id 等);禁写 || 串猜字段;解析器必配真实返回夹具;check --wait 禁接 head
 - [pi 是统一工人载具](pi-universal-harness.md) — 派工默认 pi --model 换模型；例外 grok 单走 Grok Build（2026-08-14 拍板 pi-grok 退役，网络暴露面大两次断线）
 - [Claude 工人用 opus](claude-workers-use-opus.md) — 派 Claude 族工人/审官一律 reclaude --model opus,Fable 只留帅位;派 Fable 须用户点名
 - [拍板默认含在途](decision-applies-to-inflight.md) — 用户拍板换X立即对在途活生效，协调者不得自行解释为「下一单起」
-- [汇报前必实刷状态](report-requires-fresh-state.md) — 工位/PR 状态汇报前先跑 worktree ps agents[].state + gh pr，凭印象汇报被用户连抓三次
+- [汇报前必实刷状态](report-requires-fresh-state.md) — 工位/PR 状态汇报前先跑 worktree ps + gh pr；以「某工具坏了」当理由否选项前必须实测（对话里的故障陈述会过期且不报警），共被抓四次
 - [grok TUI 横幅吃注入](grok-tui-optin-banner-trap.md) — 首启 opt-in 横幅吞首次 send，先 Esc 再直给；等授权词屏面与停摆同貌看 Recap
 - [Orca 工兵启动三约定](orca-worker-launch-conventions.md) — 启动命令用 reclaude 不用裸 claude(裸的会静默 exited);独立树必带 --no-parent 否则变子工作区;特殊字符文本走文件禁双引号拼
 - [grok 原生通道坑](grok-native-launch-trap.md) — worker-start --agent grok 裸起必卡死(无代理+模型落4.5),正确姿势带前缀手动起终端再 worker-start --terminal 收口
 - [Orca 终端快捷键](orca-terminal-shortcuts.md) — 缩放 Ctrl+= / Ctrl+- / Ctrl+0，滚动 Shift+PgUp/PgDn、Ctrl+Home/End，用户实测确认
 - [反引号让 node -e 真跑命令](shell-backtick-executes-node-eval.md) — bash 双引号包 node -e 时脚本里的反引号被当命令替换执行：文本被掏空 + 静默写脏状态文件；改文件用 Edit，报错刷屏后要回头核对状态文件
+- [挂监视前先问它怎么坏](monitor-self-check-design.md) — 自写检查器连三次判据失效(漏扫/静默盲区/噪音误报);挂之前过覆盖面、失败可见性、判据纯度三问，并让它自报样本数
+- [测试全绿≠目标达成](green-tests-vs-goal-met.md) — 派单必点名判别性实验(破坏识别源/要求反向证据);#496 单测104全绿而核心目标零达成，靠改标题再跑 ensure 才抓出
+- [CI 没触发先查冲突](ci-silent-when-pr-conflicts.md) — PR 冲突时 merge ref 建不出，on:pull_request 压根不触发，貌似 Actions 挂了;诊断先看 mergeable
