@@ -59,7 +59,7 @@
 - 派工走哪条通道看一件事：产出要进 git（commit/PR）的必走 Orca 编排；只读不落盘的查证类才可用会话内子代理。
 - 怀疑工人越权时，先读它自己的会话记录（~/.claude/projects/<项目>/<会话>/subagents/agent-*.jsonl，用户中途插话有固定签名 "The user sent a new message while you were working"）；找到证据前不回滚、不指控。
 - 凡要开 branch/PR 的改动一律派工人，主会话手不碰 git。
-- 起工人的完整启动序和判断工人是否完成的方法见 dispatch skill；纲领是：注入前先证终端就绪，注入后回读，确认任务书完整显示在屏上，确认 token 计数在增长才算开工。
+- 起工人的完整启动序和判断工人是否完成的方法见 dispatch skill；纲领是：注入前先证终端就绪，注入后回读，确认任务书完整显示在屏上；**开工与活性判据只用「该发生的事有没有发生」**（worker-start receipt、产物/提交出现），不用 token 计数/cursor 增量/屏面指纹——spinner 重绘会骗过全部屏面指标（#500）。
 
 ## 模型偏好
 
