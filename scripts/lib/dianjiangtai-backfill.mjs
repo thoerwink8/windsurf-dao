@@ -30,6 +30,21 @@ const TITLE_MODEL = [
   [/^\[cc\]/i, 'claude-opus'],
 ];
 
+// 标签短名 → registry id。model/grok 不是模型 id，必须映射，否则落账成幽灵格。
+const MODEL_ALIASES = {
+  grok: 'grok-4.6',
+};
+
+/** 标签/标题推出的原始串 → registry id；对不上返回 null（调用方 skip，不落幽灵账）。 */
+export function resolveModelId(raw, models) {
+  if (!raw) return null;
+  const ids = new Set((models || []).map(m => m.id));
+  if (ids.has(raw)) return raw;
+  const aliased = MODEL_ALIASES[raw];
+  if (aliased && ids.has(aliased)) return aliased;
+  return null;
+}
+
 const TYPE_IDENTITY = {
   写码: '工人',
   判断: '协调者',
@@ -54,18 +69,29 @@ export function beijingDateOf(input) {
   return toBeijingIso(input).slice(0, 10);
 }
 
-export function classifyFromGithub(pr) {
+export function classifyFromGithub(pr, { models = [] } = {}) {
   const names = labelNames(pr);
   const modelLabel = names.find(n => n.startsWith('model/'));
   const typeLabel = names.find(n => n.startsWith('type/'));
-  let model = modelLabel ? modelLabel.slice('model/'.length) : null;
+  const rawFromLabel = modelLabel ? modelLabel.slice('model/'.length) : null;
   let workType = typeLabel ? typeLabel.slice('type/'.length) : null;
-  if (!model) {
-    const hit = TITLE_MODEL.find(([re]) => re.test(pr.title || ''));
-    if (hit) model = hit[1];
-  }
   if (!workType) workType = /审/.test(pr.title || '') ? '审查' : '写码';
-  return { model, workType, identity: TYPE_IDENTITY[workType] || '工人' };
+  const identity = TYPE_IDENTITY[workType] || '工人';
+
+  if (rawFromLabel) {
+    const resolved = resolveModelId(rawFromLabel, models);
+    if (!resolved) {
+      return {
+        model: null, workType, identity, unresolved: rawFromLabel,
+        skipReason: `model/${rawFromLabel} 不在 registry 且无别名`,
+      };
+    }
+    return { model: resolved, workType, identity };
+  }
+
+  const hit = TITLE_MODEL.find(([re]) => re.test(pr.title || ''));
+  const fromTitle = hit ? resolveModelId(hit[1], models) : null;
+  return { model: fromTitle, workType, identity };
 }
 
 export function isClosedOnDate(pr, dateBeijing) {
@@ -76,9 +102,16 @@ export function isClosedOnDate(pr, dateBeijing) {
 
 /** 从一条 GitHub PR 记录重建事件载荷（不写盘）。reviews[].body 用判定行算红项。 */
 export function reconstructJob(pr, { models = [] } = {}) {
-  const { model, workType, identity } = classifyFromGithub(pr);
+  const classified = classifyFromGithub(pr, { models });
+  const { model, workType, identity } = classified;
   if (!model) {
-    return { skip: true, reason: `PR #${pr.number} 无 model/* 标签且标题推不出模型`, pr: pr.number };
+    return {
+      skip: true,
+      reason: classified.skipReason
+        ? `PR #${pr.number} ${classified.skipReason}`
+        : `PR #${pr.number} 无 model/* 标签且标题推不出模型`,
+      pr: pr.number,
+    };
   }
   const registry = models.find(m => m.id === model);
   const reviews = pr.reviews || [];

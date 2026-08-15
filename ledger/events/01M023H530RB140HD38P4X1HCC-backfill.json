@@ -3,7 +3,7 @@
   "schema_version": 1,
   "ts": "2026-08-15T15:00:12+08:00",
   "machine": "backfill",
-  "seq": 42,
+  "seq": 46,
   "job_id": "gh-pr-466",
   "task_class": "回填",
   "work_type": "写码",
@@ -13,11 +13,11 @@
   "reversible": true,
   "task_tokens": null,
   "candidate_models": [
-    "grok"
+    "grok-4.6"
   ],
-  "selected": "grok",
+  "selected": "grok-4.6",
   "why": "回填自 GitHub PR #466；[grok] 信箱台幂等脚本：ensure 一键重建哑终端+中继+coordinator；判定行红 2 项",
   "pr_number": 466,
   "source": "github-backfill",
-  "event_id": "f3f2edef7d4e6f8c6c38adfdc39f63d5c6726c0736e0340dfa104ba8d3875bcf"
+  "event_id": "37f11dd6aa9917c636c3cdada1400dfed47408ac312fe7bb6967ec369849374c"
 }

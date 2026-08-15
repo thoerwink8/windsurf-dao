@@ -16,6 +16,7 @@ const { spawnSync } = require("node:child_process");
 const REPO = path.resolve(__dirname, "..");
 const {
   select, hashOf, beijingMinutes, canonicalStringify, matchBeijingRoute,
+  parseWindow, isInWindows,
 } = require("../scripts/lib/dianjiangtai-core.mjs");
 const { parseYaml } = require("../scripts/lib/yaml-min.mjs");
 const { buildEvent, writeEvent, schemaMeta, nextSeq, ulidFromMs } = require("../scripts/lib/event-writer.mjs");
@@ -289,10 +290,41 @@ check("matchBeijingRoute：峰时 10:00 写码 → grok-4.6", matchBeijingRoute(
 check("matchBeijingRoute：谷时 13:00 写码 → deepseek-v4-flash", matchBeijingRoute(routes, "写码", TS_VALLEY).model === FLASH);
 check("matchBeijingRoute：审查无分时路由 → null", matchBeijingRoute(routes, "审查", TS) === null);
 
-const routedPeak = run({ jobId: "j-route-peak", routes });
+// 红2：四个切换点 + 邻点，表驱动十时刻（M3 开下界 / M4 闭上界会在此红）
+const SWITCH = [
+  ["00:00", FLASH], ["08:59", FLASH], ["09:00", "grok-4.6"], ["11:59", "grok-4.6"], ["12:00", FLASH],
+  ["13:59", FLASH], ["14:00", "grok-4.6"], ["17:59", "grok-4.6"], ["18:00", FLASH], ["23:59", FLASH],
+];
+for (const [hm, want] of SWITCH) {
+  const got = matchBeijingRoute(routes, "写码", `2026-08-15T${hm}:00+08:00`);
+  check(`切换点 ${hm} → ${want === FLASH ? "谷 flash" : "峰 grok"}`, !!got && got.model === want, got && got.model);
+}
+const writeRoutes = routes.filter(r => r.role === "写码");
+let holes = 0, overlaps = 0;
+for (let min = 0; min < 1440; min++) {
+  const hits = writeRoutes.filter(r => isInWindows(min, String(r.beijing).split(",").map(s => parseWindow(s.trim()))));
+  if (hits.length === 0) holes++;
+  if (hits.length > 1) overlaps++;
+}
+check("全天 1440 分钟恰好 1 条写码路由（无空洞）", holes === 0, `holes=${holes}`);
+check("全天 1440 分钟恰好 1 条写码路由（无重叠）", overlaps === 0, `overlaps=${overlaps}`);
+
+// 红3：判别力账本——不接线则 highest_score 不是 grok（flash 5 正 + grok 6 负，配额已满）
+const discEvents = [
+  ...manyJobs(models.filter(m => m.id !== "grok-4.6"), 5),
+  ...sampleJobs({ n: 6, model: "grok-4.6", version: "grok-4.6", success: false }),
+];
+const discBare = run({ jobId: "j-disc", events: discEvents });
+const discWired = run({ jobId: "j-disc", events: discEvents, routes });
+check("判别力：不接线（无 routes）A ≠ grok-4.6", discBare.options.A.model !== "grok-4.6", discBare.options.A.model);
+check("判别力：接线后峰时 A = grok-4.6", discWired.options.A.model === "grok-4.6" && discWired.options.A.model !== FLASH, discWired.options.A.model);
+check("判别力：接线后 reason=route_beijing（与 A.model 同源）", discWired.options.A.reason === "route_beijing", discWired.options.A.reason);
+check("判别力：不接线 reason ≠ route_beijing", discBare.options.A.reason !== "route_beijing", discBare.options.A.reason);
+
+const routedPeak = run({ jobId: "j-route-peak", events: discEvents, routes });
 check("select+routes：峰时写码 A = grok-4.6（不是 ds-flash）", routedPeak.options.A.model === "grok-4.6" && routedPeak.options.A.model !== FLASH, routedPeak.options.A.model);
 check("select+routes：峰时 reason=route_beijing", routedPeak.options.A.reason === "route_beijing", routedPeak.options.A.reason);
-const routedValley = run({ jobId: "j-route-valley", ts: TS_VALLEY, routes });
+const routedValley = run({ jobId: "j-route-valley", ts: TS_VALLEY, events: discEvents, routes });
 check("select+routes：谷时写码 A = deepseek-v4-flash", routedValley.options.A.model === FLASH, routedValley.options.A.model);
 check("select+routes：谷时 reason=route_beijing", routedValley.options.A.reason === "route_beijing", routedValley.options.A.reason);
 check("无 routes 时行为不变：零样本仍 quota_explore", zero.options.A.reason === "quota_explore");
@@ -300,21 +332,42 @@ check("无 routes 时行为不变：零样本仍 quota_explore", zero.options.A.
 function cliDj(args) {
   return spawnSync(process.execPath, [path.join(REPO, "scripts", "dianjiangtai-select.mjs"), ...args], { encoding: "utf8", cwd: REPO });
 }
-const djPeak = cliDj(["--role", "写码", "--ts", TS, "--job-id", "wire-peak"]);
+const discDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-disc-"));
+discEvents.forEach((e, i) => fs.writeFileSync(path.join(discDir, `${i}.json`), JSON.stringify(e)));
+const djPeak = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS, "--job-id", "wire-peak", "--events-dir", discDir]);
 check("CLI dianjangtai-select 峰时退出码 0", djPeak.status === 0, (djPeak.stderr || "").slice(0, 200));
 const djPeakOut = djPeak.status === 0 ? JSON.parse(djPeak.stdout) : { options: { A: {} } };
 check("CLI 伪造峰时输入：写码推荐 grok-4.6", djPeakOut.options.A.model === "grok-4.6", JSON.stringify(djPeakOut.options && djPeakOut.options.A));
 check("CLI 峰时写码不是 ds-flash（钉死分时违例）", djPeakOut.options.A.model !== FLASH);
 check("CLI 峰时输出含 decision_id 与三选项", !!(djPeakOut.decision_id && djPeakOut.options.A && djPeakOut.options.B && djPeakOut.options.C));
-const djValley = cliDj(["--role", "写码", "--ts", TS_VALLEY, "--job-id", "wire-valley"]);
+check("CLI 峰时 reason=route_beijing", djPeakOut.options.A.reason === "route_beijing", djPeakOut.options.A.reason);
+const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
 check("CLI 谷时写码推荐 deepseek-v4-flash", djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === FLASH, (djValley.stderr || "").slice(0, 120));
 const djNoTs = cliDj(["--role", "写码"]);
 check("CLI 缺 --ts 非 0 退出（禁 Date.now）", djNoTs.status !== 0);
+fs.rmSync(discDir, { recursive: true, force: true });
 
 // ── ⑥ 回填幂等：GitHub 实录快照写事件，重跑不重复 ──────────────────
 
-const { reconstructJob, writeReconstructedJobs, isClosedOnDate } = require("../scripts/lib/dianjiangtai-backfill.mjs");
+const { reconstructJob, writeReconstructedJobs, isClosedOnDate, resolveModelId, classifyFromGithub } = require("../scripts/lib/dianjiangtai-backfill.mjs");
 const backfillSnap = JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", "backfill-github-2026-08-15.json"), "utf8"));
+check("resolveModelId：grok → grok-4.6 且 ∈ registry", resolveModelId("grok", models) === "grok-4.6" && models.some(m => m.id === "grok-4.6"));
+check("resolveModelId：未知串 → null", resolveModelId("not-a-model", models) === null);
+const recGrok = reconstructJob(backfillSnap.prs.find(p => p.number === 458) || {
+  number: 458, title: "[grok] x", createdAt: "2026-08-15T02:00:00Z", mergedAt: "2026-08-15T02:00:00Z",
+  labels: [{ name: "model/grok" }, { name: "type/写码" }], reviews: [],
+}, { models });
+check("红1：model/grok 标签落账 id=grok-4.6（∈ registry）", !recGrok.skip && recGrok.model === "grok-4.6" && models.some(m => m.id === recGrok.model), recGrok.model || recGrok.reason);
+const ghostPr = { number: 9999, title: "ghost", createdAt: "2026-08-15T02:00:00Z", labels: [{ name: "model/not-a-model" }, { name: "type/写码" }], reviews: [] };
+const recGhost = reconstructJob(ghostPr, { models });
+check("红1：未知 model/* skip 并报原因", recGhost.skip && /not-a-model/.test(recGhost.reason || ""), recGhost.reason);
+const ghostDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-ghost-"));
+const ghostWrite = writeReconstructedJobs({
+  jobs: [recGhost], dir: ghostDir, schema, machine: "TEST-GHOST",
+});
+check("红1：skip 进 details 不落账", ghostWrite.written === 0 && ghostWrite.details[0].skip && /not-a-model/.test(ghostWrite.details[0].reason || ""), JSON.stringify(ghostWrite));
+fs.rmSync(ghostDir, { recursive: true, force: true });
+check("classifyFromGithub：model/grok 规范化", classifyFromGithub({ title: "x", labels: [{ name: "model/grok" }] }, { models }).model === "grok-4.6");
 check("回填夹具来自 GitHub 实录（有 source + prs）", Array.isArray(backfillSnap.prs) && backfillSnap.prs.length >= 2 && /gh /.test(backfillSnap.source || ""));
 const closedToday = backfillSnap.prs.filter(pr => isClosedOnDate(pr, "2026-08-15"));
 check("2026-08-15 北京日已结单至少含 #456/#460", closedToday.some(p => p.number === 456) && closedToday.some(p => p.number === 460), closedToday.map(p => p.number).join(","));

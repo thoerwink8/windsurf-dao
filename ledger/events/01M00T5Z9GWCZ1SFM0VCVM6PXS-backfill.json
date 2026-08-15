@@ -3,9 +3,9 @@
   "schema_version": 1,
   "ts": "2026-08-15T02:57:34+08:00",
   "machine": "backfill",
-  "seq": 27,
+  "seq": 45,
   "job_id": "gh-pr-458",
-  "model": "grok",
+  "model": "grok-4.6",
   "model_share": 1,
   "brief_share": 0,
   "coord_share": 0,
@@ -18,5 +18,5 @@
   ],
   "pr_number": 458,
   "source": "github-backfill",
-  "event_id": "47463020a9483617db310021f88092b7023440bda44b15e013d740235b104a29"
+  "event_id": "46d0c1185cea440ad5cd2e076e8c088a97d7150d83ea1880aeb284dec7362d13"
 }

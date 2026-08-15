@@ -3,15 +3,15 @@
   "schema_version": 1,
   "ts": "2026-08-15T02:57:34+08:00",
   "machine": "backfill",
-  "seq": 26,
+  "seq": 44,
   "job_id": "gh-pr-458",
   "success": true,
   "rework": true,
   "usd_cash": 0,
   "usd_economic": 0,
-  "merged_by": "grok",
+  "merged_by": "grok-4.6",
   "pr_number": 458,
   "red_flags": 2,
   "source": "github-backfill",
-  "event_id": "c5684c6dd931c2807f4270737d00b402b36ab20fec3215cf82a397a9d6209bc3"
+  "event_id": "81de40ef4e19f9faae9c5564e739c190ee90caea9fab1345bafcdd31baae93ed"
 }

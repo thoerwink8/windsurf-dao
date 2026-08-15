@@ -531,16 +531,18 @@ export function select({
       || null)
     : null;
   const defaultPick = routedPick || quotaTop || byScore[0] || null;
-  const choiceReason = routedPick
-    ? (routedPick.model === matchedRoute.model ? 'route_beijing' : 'route_fallback')
-    : quotaTop ? 'quota_explore'
+  // reason 从 defaultPick 反推（与 A.model 同源）：拆掉 routedPick 接线时 reason 不能再谎称 route_beijing。
+  const routedApplied = Boolean(defaultPick && routedPick && defaultPick === routedPick);
+  const choiceReason = routedApplied
+    ? (defaultPick.model === matchedRoute.model ? 'route_beijing' : 'route_fallback')
+    : defaultPick && defaultPick === quotaTop ? 'quota_explore'
     : defaultPick ? 'highest_score'
     : 'no_candidate';
 
   const choice = {
     model: defaultPick ? defaultPick.model : null,
     reason: choiceReason,
-    route: matchedRoute
+    route: routedApplied
       ? { role: matchedRoute.role, beijing: matchedRoute.beijing, model: matchedRoute.model, fallback: matchedRoute.fallback }
       : null,
   };

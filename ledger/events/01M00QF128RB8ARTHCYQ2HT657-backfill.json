@@ -3,7 +3,7 @@
   "schema_version": 1,
   "ts": "2026-08-15T02:10:05+08:00",
   "machine": "backfill",
-  "seq": 24,
+  "seq": 42,
   "job_id": "gh-pr-458",
   "task_class": "回填",
   "work_type": "写码",
@@ -13,11 +13,11 @@
   "reversible": true,
   "task_tokens": null,
   "candidate_models": [
-    "grok"
+    "grok-4.6"
   ],
-  "selected": "grok",
+  "selected": "grok-4.6",
   "why": "回填自 GitHub PR #458；[grok] 出错后的制度化：先垫后固；判定行红 2 项",
   "pr_number": 458,
   "source": "github-backfill",
-  "event_id": "e0e5b5bad49bc2db29b70c17410fb49be7f9edd8a8f4380b9e7b9d189ab822d1"
+  "event_id": "e3d600bc1c3361d72e4c60f269144a5f7616bfa96af245336fd424187737ed40"
 }
