@@ -1,0 +1,10 @@
+[
+ {
+  "id": "m_3306",
+  "type": "worker_done",
+  "task_id": "task_3306w",
+  "dispatch_id": "ctx_worker_3306",
+  "subject": "完工",
+  "body": "完工自报"
+ }
+]

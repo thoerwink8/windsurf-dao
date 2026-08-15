@@ -1,0 +1,22 @@
+{
+ "labels": [
+  {
+   "name": "merge/auto"
+  },
+  {
+   "name": "等你"
+  }
+ ],
+ "isDraft": false,
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "name": "check",
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "workflowName": "dao-check"
+  }
+ ],
+ "mergeable": "MERGEABLE",
+ "mergeStateStatus": "CLEAN"
+}

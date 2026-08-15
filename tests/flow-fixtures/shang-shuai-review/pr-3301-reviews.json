@@ -1,0 +1,20 @@
+[
+ {
+  "id": 333001,
+  "body": "判定：红 2 项",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T01:00:00Z"
+ },
+ {
+  "id": 333002,
+  "body": "复核结论：红 1 项",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T02:00:00Z"
+ },
+ {
+  "id": 333003,
+  "body": "上帅：规格本身有疑问，需帅仲裁\n\n红项处置无法继续。",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T03:00:00Z"
+ }
+]

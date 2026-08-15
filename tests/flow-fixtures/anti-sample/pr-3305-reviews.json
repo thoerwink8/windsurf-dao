@@ -1,0 +1,8 @@
+[
+ {
+  "id": 333041,
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T01:00:00Z",
+  "body": "判定：红 2 项\n\n## 红 1：引用代码含「判定：绿」字样\n正文里引用了一段他单的代码：\n```js\nif (verdict.line === \"判定：绿\") { return approve(); }\n```\n这段引用不得影响本单判定。\n\n## 红 2：……"
+ }
+]

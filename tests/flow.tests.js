@@ -1,12 +1,14 @@
-// 闭环自动流转器回归网（issue #455）——正控 + 负控 + 判别力
+// 闭环自动流转器回归网（issue #455/#480/#478）——正控 + 负控 + 判别力
 //
 // 验的层：①真实语料（#453/#456 实录）推导当前态并给出正确动作/报帅 ②假闭环验收
 // （draft PR + 假判定行 review → 自动注入下一环且帅零介入）③prime 吞存量负控
 // （存量已有完工+红判定的 PR 启动即识别并注入返工，不被吞）④重启不重复动作负控
 // （同状态文件重跑零动作）⑤判定行缺失负控（报帅、不猜红绿、区分没查成与无需流转）
-// ⑥乒乓两轮仍红→报帅换人 ⑦复核绿→报帅终审 ⑧审官选型序（deepseek→gpt/gpt→claude/
-// UI→claude）⑨制度类 24h 提醒只提醒一次 ⑩MERGED 退役 ⑪完工 comment 识别变体
-// ⑫judgment 解析与 calibrate 同源（共享模块单一真相源）。
+// ⑥乒乓标注驱动换人（同一处未修好 → 报帅换人，不自动换）⑦复核绿 → 合并门（三条件）
+// ⑧审官选型序 ⑨MERGED 退役 ⑩完工 comment 识别变体 ⑪judgment 解析与 calibrate 同源
+// ⑫上帅（review 行 / 原生 escalation / 六轮兜底）⑬合并打回人工（冲突/失败）
+// ⑭反例回归样本（正文引用代码块含「判定：绿」不得算数）⑮双通道等价（原生消息 vs
+// GitHub 兜底，动作一致且只动作一次）⑯heartbeat 落盘 ⑰--explain。
 //
 // 语料分类：real-453/real-456 为现场实录（gh 拉取未改写）；其余目录为构造样本。
 // 每个负控样本都是「故意构造的违规，被当场拦下」——上线生效证据（仓规：上线前先
@@ -20,31 +22,39 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason } = require("../scripts/flow.mjs");
-const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec } = require("../scripts/flow.mjs");
+const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
-  else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + detail : ""}`); }
+  else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + String(detail).trim().slice(0, 400) : ""}`); }
 }
 
 function runFlow(dir, extraArgs = []) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-test-"));
   const stateFile = path.join(tmp, "state.json");
-  const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", dir, "--state-file", stateFile, "--dry-run", ...extraArgs], {
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", dir, "--state-file", stateFile, "--heartbeat-file", hbFile, "--dry-run", ...extraArgs], {
     encoding: "utf8", cwd: REPO,
   });
   const out = (r.stdout || "") + (r.stderr || "");
+  const heartbeat = fs.existsSync(hbFile) ? JSON.parse(fs.readFileSync(hbFile, "utf8")) : null;
   fs.rmSync(tmp, { recursive: true, force: true });
-  return { status: r.status, out };
+  return { status: r.status, out, heartbeat };
 }
 
-console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 假判定行 review → 自动注入下一环且帅零介入）===");
+function runFlowShared(dir, stateFile, hbFile, extraArgs = []) {
+  return spawnSync(process.execPath, [FLOW, "--snapshot-dir", dir, "--state-file", stateFile, "--heartbeat-file", hbFile, "--dry-run", ...extraArgs], {
+    encoding: "utf8", cwd: REPO,
+  });
+}
+
+console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 完工 + 假判定行 review → 自动注入下一环且帅零介入）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("自动注入发生：返工注入 + 注入目标已解析（真通，非预览-阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), r.out.trim());
+  check("自动注入发生：返工走 send --to dispatch（非预览-阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）：send --to dispatch:ctx_worker_999/.test(r.out), r.out.trim());
   check("返工指令文本含 review 链接", /pull\/999#pullrequestreview-910001/.test(r.out), "review 链接没进指令");
   check("帅零介入：无任何 报帅 行（真注入路径下成立，名副其实）", !/报帅/.test(r.out), r.out.split("\n").filter(l => /报帅/.test(l)).join(" | "));
   check("不重复起审官（红判定已存在 → 不新建审官）", !/起审官/.test(r.out), r.out.trim());
@@ -53,7 +63,7 @@ console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 假判定行 r
 console.log("\n=== ② prime 吞存量负控：存量已有完工+红判定，启动即动作（不吞存量）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
-  check("存量信号被识别并自动注入返工（吞存量 = 本轮无动作）", /动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), r.out.trim());
+  check("存量信号被识别并自动注入返工（吞存量 = 本轮无动作）", /动作：返工注入 #999（第 1 轮，红 3 项）：send --to dispatch:ctx_worker_999/.test(r.out), r.out.trim());
   check("打出存量清点标记（先清点再增量）", /存量清点/.test(r.out), "存量清点标记缺失");
 }
 
@@ -61,9 +71,9 @@ console.log("\n=== ③ 重启不重复动作负控：同状态文件重跑 → �
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-restart-"));
   const stateFile = path.join(tmp, "state.json");
-  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "fake-loop"), "--state-file", stateFile, "--dry-run"];
-  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "fake-loop"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "fake-loop"), stateFile, hbFile);
   const out2 = (r2.stdout || "") + (r2.stderr || "");
   check("首跑退出码 1（有动作）", r1.status === 1, `status=${r1.status}`);
   check("重跑退出码 0（无动作）", r2.status === 0, `status=${r2.status}`);
@@ -72,12 +82,13 @@ console.log("\n=== ③ 重启不重复动作负控：同状态文件重跑 → �
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("\n=== ④ 真实语料 #453（实录：判定红5→复核红2→复核绿 → 报帅终审）===");
+console.log("\n=== ④ 真实语料 #453（实录：判定红5→复核红2→复核绿 → 报帅终审，不自动合）===");
 {
   const r = runFlow(path.join(FIXTURES, "real-453"));
   check("退出码 1（有报帅）", r.status === 1, `status=${r.status}`);
-  check("复核绿 → 报帅终审", /报帅：终审 #453（复核结论：绿）/.test(r.out), r.out.trim());
+  check("复核绿无 merge/auto 标签 → 报帅终审（缺一不合）", /报帅：终审 #453（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(r.out), r.out.trim());
   check("终审不自动合并（无 动作： 行）", !/动作：/.test(r.out), r.out.trim());
+  check("同时打出待帅处置（等用户终审）", /待帅处置：#453（复核绿待帅终审（无 merge\/auto 标签——等用户终审））/.test(r.out), r.out.trim());
   check("真实语料判定行解析：#453 首审红 5 项", redFlagsFromReviewBodies([JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"))[0].body]) === 5, "红项数应为 5");
 }
 
@@ -87,7 +98,8 @@ console.log("\n=== ⑤ 真实语料 #456（实录：完工自报×2 重复 → �
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
   check("完工自报 → 起审官", /动作：起审官 #456/.test(r.out), r.out.trim());
   check("审官选型序：deepseek 工人 → gpt-5.6-sol（异厂商 GPT 优先）", /审官·gpt-5.6-sol/.test(r.out), r.out.trim());
-  check("起审官命令走 codex 一步到位", /--agent codex/.test(r.out), r.out.trim());
+  check("起审官走 task-create + worker-start（--agent codex --model gpt-5.6-sol）", /orca orchestration worker-start --task <task_id> --worktree current --agent codex --model gpt-5.6-sol --json/.test(r.out), r.out.trim());
+  check("不再走 worktree create --agent --prompt（#480 受控例外退役）", !/worktree create.*--agent codex --prompt/.test(r.out), r.out.trim());
   check("重复完工自报不重复起审官（只一次）", (r.out.match(/起审官 #456/g) || []).length === 1, r.out.trim());
 }
 
@@ -105,9 +117,9 @@ console.log("\n=== ⑥b 红 3：待帅事项必须每轮常驻显形——连跑
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-shuai-"));
   const stateFile = path.join(tmp, "state.json");
-  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "malformed"), "--state-file", stateFile, "--dry-run"];
-  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "malformed"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "malformed"), stateFile, hbFile);
   const out2 = (r2.stdout || "") + (r2.stderr || "");
   check("首跑 exit 1", r1.status === 1, `status=${r1.status}`);
   check("重跑仍 exit 1（待办不能报一次就转绿）", r2.status === 1, `status=${r2.status}`);
@@ -132,25 +144,34 @@ console.log("\n=== ⑦b 没查成负控：数据源不可用（缺 prs.json）�
   check("不打出 OK 扫完（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审（全部真通）===");
+console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工 / 返工完成→复核 / 复核绿→终审（全部真通）===");
 {
   const r = runFlow(path.join(FIXTURES, "recheck-green"));
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
-  check("round-1 起审官", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
-  check("round-2 返工注入真通（注入目标已解析）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）（注入目标：工人终端 term_worker_1005）/.test(r.out), r.out.trim());
-  check("round-3 复核注入真通（存量反查找到审官终端）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（审官· 子卡））/.test(r.out), r.out.trim());
-  check("round-4 报帅终审", /round-4[\s\S]*报帅：终审 #1005/.test(r.out), r.out.trim());
+  check("round-1 起审官（task-create + worker-start）", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
+  check("round-2 返工注入真通（send --to dispatch）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_1005/.test(r.out), r.out.trim());
+  check("round-3 复核注入真通（审官 dispatch）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）：send --to dispatch:ctx_reviewer_1005/.test(r.out), r.out.trim());
+  check("round-4 报帅终审（无 merge/auto → 等用户终审）", /round-4[\s\S]*报帅：终审 #1005（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(r.out), r.out.trim());
   check("复核绿后不再注入任何动作", !/round-4[\s\S]*动作：/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑨ 乒乓两轮仍红：第 1/2 轮红自动返工，第 3 轮红报帅换人（不再注入）===");
+console.log("\n=== ⑨ 审官标注驱动换人：round-2/4 红自动返工；round-6 标「同一处未修好」→ 报帅换人（不自动换）===");
 {
   const r = runFlow(path.join(FIXTURES, "pingpong"));
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
   check("round-2 返工注入（第 1 轮，红 3 项）", /round-2[\s\S]*返工注入 #1006（第 1 轮，红 3 项）/.test(r.out), r.out.trim());
-  check("round-4 返工注入（第 2 轮，红 2 项）", /round-4[\s\S]*返工注入 #1006（第 2 轮，红 2 项）/.test(r.out), r.out.trim());
-  check("round-6 报帅换人（乒乓两轮仍红，第 3 次红判定）", /round-6[\s\S]*报帅：换人 #1006（乒乓两轮仍红——两轮返工后第 3 次红判定）/.test(r.out), r.out.trim());
-  check("第 3 次红不再注入返工", !/round-6[\s\S]*返工注入/.test(r.out), r.out.trim());
+  check("round-4 返工注入（第 2 轮，红 2 项，无标注不换人）", /round-4[\s\S]*返工注入 #1006（第 2 轮，红 2 项）/.test(r.out), r.out.trim());
+  check("round-6 报帅换人（审官标「同一处未修好」）", /round-6[\s\S]*报帅：换人 #1006（审官标注「同一处未修好」，第 3 次红判定）/.test(r.out), r.out.trim());
+  check("round-6 不再注入返工（换人信号停手）", !/round-6[\s\S]*返工注入/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑨b 六轮红判定硬兜底：第 6 次红 → 上帅（不自动换人）===");
+{
+  const r = runFlow(path.join(FIXTURES, "six-rounds"));
+  check("退出码 1（有报帅）", r.status === 1, `status=${r.status}`);
+  check("六轮兜底 → 报帅上帅", /报帅：上帅 #3304（六轮红判定兜底上帅（第 6 次红判定，不自动换人））/.test(r.out), r.out.trim());
+  check("不再注入返工（上帅停手）", !/动作：/.test(r.out), r.out.trim());
+  check("待帅处置常驻", /待帅处置：#3304（六轮红判定兜底上帅/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑩ 制度类 PR 停留超 24h 提醒一声（round-2 不重复提醒）===");
@@ -167,7 +188,7 @@ console.log("\n=== ⑪ MERGED 退役：round-1 在途起审官，round-2 合并 
   const r = runFlow(path.join(FIXTURES, "merged"));
   check("退出码 1（有动作/退役）", r.status === 1, `status=${r.status}`);
   check("round-1 起审官（在途）", /round-1[\s\S]*起审官 #1004/.test(r.out), r.out.trim());
-  check("round-2 退役（MERGED 收口，终审+归档归帅）", /round-2[\s\S]*退役：PR #1004 MERGED/.test(r.out), r.out.trim());
+  check("round-2 退役（MERGED 收口）", /round-2[\s\S]*退役：PR #1004 MERGED/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑫ 完工 comment 识别变体（真实语料）===");
@@ -204,6 +225,19 @@ console.log("\n=== ⑬ 判定行解析与 calibrate 同源（共享模块单一�
   check("真实语料 #453 跨 review 最大红 = 5（复核绿不清零）", redFlagsFromReviewBodies(real453.map(r => r.body)) === 5, "应为 5");
 }
 
+console.log("\n=== ⑬b 审官标注行解析（#480：上帅：/同一处未修好/新引入，行首锚定不搜全文）===");
+{
+  const a1 = reviewAnnotations("判定：红 2 项\n上帅：规格本身有疑问");
+  check("上帅：行 → shangShuai=原因", a1.shangShuai === "规格本身有疑问", JSON.stringify(a1));
+  check("上帅：无原因 → 占位", reviewAnnotations("上帅：").shangShuai === "（未写原因）");
+  check("** 前缀也可（同判定行口径）", reviewAnnotations("**上帅：** 需求不成立").shangShuai === "** 需求不成立" || reviewAnnotations("**上帅：** 需求不成立").shangShuai === "需求不成立", JSON.stringify(reviewAnnotations("**上帅：** 需求不成立")));
+  check("同一处未修好 → sameSpot", reviewAnnotations("复核结论：红 1 项\n同一处未修好").sameSpot === true);
+  check("新引入 → newIntroduced", reviewAnnotations("复核结论：红 2 项\n新引入").newIntroduced === true);
+  check("正文引用「上帅：」不算（行首锚定）", reviewAnnotations("他单上帅：xxx 的 review 里……").shangShuai === null, JSON.stringify(reviewAnnotations("他单上帅：xxx 的 review 里……")));
+  check("代码块引用「同一处未修好」不算（行首锚定）", reviewAnnotations('```\nif (x === "同一处未修好") {}\n```').sameSpot === false);
+  check("正则导出可用（测试与 calibrate 引用）", SHANG_SHUAI_LINE_RE.test("上帅：x") && SAME_SPOT_LINE_RE.test("同一处未修好") && NEW_INTRODUCED_LINE_RE.test("新引入"));
+}
+
 console.log("\n=== ⑭ 审官选型序纯函数（docs/model-routing.toml 真相源）===");
 {
   const { loadRouting } = require("../scripts/flow.mjs");
@@ -217,7 +251,7 @@ console.log("\n=== ⑭ 审官选型序纯函数（docs/model-routing.toml 真相
   check("未知模型 → 不炸，回退 gpt", pickReviewer(toml, "model/不存在", "写码")?.id === "gpt-5.6-sol");
 }
 
-console.log("\n=== ⑮ 状态机纯函数 ===");
+console.log("\n=== ⑮ 状态机纯函数（含 #480 新态：switch / shang-shuai / 六轮兜底）===");
 {
   const done = [{ id: 1, body: "## 完工报告", createdAt: "t0" }];
   const red = [{ id: 2, body: "判定：红 3 项", submittedAt: "t1" }];
@@ -226,122 +260,251 @@ console.log("\n=== ⑮ 状态机纯函数 ===");
   const d1 = deriveState(orderedSignals(done, red));
   check("完工+红判定 → rework-needed，红 1 轮", d1.state === "rework-needed" && d1.redReviews === 1 && d1.lastRed === 3);
   check("pendingAction → inject-rework", pendingAction(d1)?.kind === "inject-rework");
-  check("pendingShuai 不 gate 注入（待帅记账只管显示，闸已由 fp 去重承担，四轮复核红 1）", pendingAction(d1)?.kind === "inject-rework");
-  check("awaitingShuaiReason 读 pendingShuai（reviewer-unfound 常驻）", awaitingShuaiReason({ state: "rework-needed", redReviews: 1 }, { pendingShuai: { kind: "inject-recheck", reason: "找不到审官终端——待帅接手复核" } }, false) === "找不到审官终端——待帅接手复核");
-  check("awaitingShuaiReason state 兜底：error 态常驻（四轮复核红 1）", awaitingShuaiReason({ state: "error", redReviews: 0 }, {}, false) === "判定行缺失/格式不符待帅分诊");
-  const d4 = deriveState(orderedSignals([...done, ...rework], [...red, ...green]));
-  check("复核绿 → approved → report-final", d4.state === "approved" && pendingAction(d4)?.kind === "report-final");
+  check("复核绿 → approved → merge-gate", deriveState(orderedSignals([...done, ...rework], [...red, ...green])).state === "approved" && pendingAction(deriveState(orderedSignals([...done, ...rework], [...red, ...green])))?.kind === "merge-gate");
+  // 标注驱动
+  const sameSpot = [{ id: 5, body: "复核结论：红 1 项\n同一处未修好", submittedAt: "t4" }];
+  const dSwitch = deriveState(orderedSignals([...done, ...rework], [...red, ...sameSpot]));
+  check("同一处未修好 → switch → report-switch", dSwitch.state === "switch" && pendingAction(dSwitch)?.kind === "report-switch");
+  const shang = [{ id: 6, body: "上帅：规格有疑问", submittedAt: "t5" }];
+  const dShang = deriveState(orderedSignals([...done, ...rework], [...red, ...sameSpot, ...shang]));
+  check("上帅：行 → shang-shuai（不再自动流转，pendingAction=null）", dShang.state === "shang-shuai" && pendingAction(dShang) === null);
+  const dAfterResolve = deriveState(orderedSignals([...done, ...rework], [...red, ...sameSpot, { id: 9, body: "复核结论：绿，可合并", submittedAt: "t9" }]));
+  check("旧标注不粘：同一处未修好之后审官再判绿 → 恢复 approved", dAfterResolve.state === "approved", JSON.stringify(dAfterResolve));
+  const dNoAnn = deriveState(orderedSignals([...done], [{ id: 7, body: "上帅：规格有疑问", submittedAt: "t6" }, { id: 8, body: "复核结论：绿，可合并", submittedAt: "t7" }]));
+  check("旧上帅不粘：上帅后审官判绿 → 恢复 approved", dNoAnn.state === "approved", JSON.stringify(dNoAnn));
+  // 六轮兜底
+  const sixReds = [];
+  for (let i = 0; i < 6; i++) sixReds.push({ id: 100 + i, body: i === 0 ? "判定：红 1 项" : `复核结论：红 ${i + 1} 项`, submittedAt: `t${i}` });
+  const d6 = deriveState(orderedSignals(done, sixReds));
+  check("6 次红判定 → shang-shuai（六轮硬兜底，不自动换人）", d6.state === "shang-shuai" && d6.redReviews === 6, JSON.stringify(d6));
+  const d5 = deriveState(orderedSignals(done, sixReds.slice(0, 5)));
+  check("5 次红判定还不到兜底 → rework-needed", d5.state === "rework-needed" && d5.redReviews === 5);
+  check("pendingShuai 不 gate 注入（待帅记账只管显示，闸已由 fp 去重承担）", pendingAction(d1)?.kind === "inject-rework");
+  check("awaitingShuaiReason 读 pendingShuai（reviewer-unfound 常驻）", awaitingShuaiReason({ state: "rework-needed", redReviews: 1 }, { pendingShuai: { kind: "inject-recheck", reason: "找不到投递目标 dispatch——待帅转交" } }, false) === "找不到投递目标 dispatch——待帅转交");
+  check("awaitingShuaiReason state 兜底：error 态常驻", awaitingShuaiReason({ state: "error", redReviews: 0 }, {}, false) === "判定行缺失/格式不符待帅分诊");
+  check("awaitingShuaiReason shang-shuai 带原因（上帅：行）", awaitingShuaiReason({ state: "shang-shuai", redReviews: 2, latestAnnotation: { shangShuai: "规格有疑问" } }, {}, false) === "上帅：规格有疑问——停手叫人，不再自动流转");
+  check("awaitingShuaiReason 六轮带轮次", awaitingShuaiReason({ state: "shang-shuai", redReviews: 6, latestAnnotation: null }, {}, false) === "六轮红判定兜底上帅（第 6 次红判定）——停手叫人，不自动换人");
+  check("awaitingShuaiReason approved 已发起合并 → 不欠待帅", awaitingShuaiReason({ state: "approved", redReviews: 1 }, { mergeAttempted: true, mergeBlocked: false, pendingShuai: null }, false) === null);
   check("制度类识别：正文含「体系类改动」", isInstitutional({ body: "## 体系类改动（必答）", title: "x" }) === true);
   check("制度类识别：标题含「制度/体系」", isInstitutional({ body: "## 目标", title: "[pi] 制度修订" }) === true);
   check("标题仅含「拍板」不再误判制度类（对抗审观察 7）", isInstitutional({ body: "## 目标", title: "[pi] 修复 xx 拍板口径" }) === false);
   check("非制度类不识别", isInstitutional({ body: "## 目标", title: "写码 PR" }) === false);
 }
 
-console.log("\n=== ⑯ 红 2：存量审官反查——帅手起审官、流转器后启动，复核注入仍能找到审官终端 ===");
+console.log("\n=== ⑮b 合并门纯函数（三条件硬查 + 等你撤回 + CI 0 条 ≠ 全绿）===");
+{
+  const mk = (labels, rollup, extra = {}) => ({ labels: labels.map(n => ({ name: n })), isDraft: false, statusCheckRollup: rollup, ...extra });
+  const okCi = { count: 1, allGreen: true, redNames: "" };
+  const zeroCi = { count: 0, allGreen: false, redNames: "" };
+  const redCi = { count: 2, allGreen: false, redNames: "check" };
+  check("三条件齐 → ok", mergeGate(mk(["merge/auto"], [{ conclusion: "SUCCESS" }]), okCi).ok === true);
+  check("无 merge/auto → 缺一不合（等用户终审）", mergeGate(mk([], [{ conclusion: "SUCCESS" }]), okCi).ok === false && /merge\/auto/.test(mergeGate(mk([], [{ conclusion: "SUCCESS" }]), okCi).reason));
+  check("带等你 → 撤回不合（最高优先）", mergeGate(mk(["merge/auto", "等你"], [{ conclusion: "SUCCESS" }]), okCi).reason.includes("等你"));
+  check("CI 0 条 check → 没查成≠全绿", mergeGate(mk(["merge/auto"], []), zeroCi).reason.includes("0 条 check"));
+  check("CI 有红 → 不合", mergeGate(mk(["merge/auto"], [{ conclusion: "FAILURE" }]), redCi).reason.includes("CI 未全绿"));
+  check("ciState：全 SUCCESS 且 ≥1 → 绿", ciState([{ conclusion: "SUCCESS" }, { conclusion: "SUCCESS" }]).allGreen === true);
+  check("ciState：0 条 → 不绿（数到 0 ≠ 没扫到）", ciState([]).allGreen === false && ciState([]).count === 0);
+  check("ciState：PENDING → 不绿", ciState([{ status: "PENDING" }]).allGreen === false);
+  check("ciState：StatusContext 形态（state 字段）", ciState([{ state: "SUCCESS" }]).allGreen === true);
+  check("mergeable MERGEABLE → 可合", mergeableVerdict("MERGEABLE", "CLEAN").ok === true);
+  check("mergeable CONFLICTING → 打回", mergeableVerdict("CONFLICTING", "DIRTY").ok === false && !mergeableVerdict("CONFLICTING", "DIRTY").wait);
+  check("mergeable UNKNOWN → 下轮重查（不打回误伤瞬态）", mergeableVerdict("UNKNOWN", "UNKNOWN").wait === true);
+  check("spec 提取 PR 号", JSON.stringify(extractPrsFromSpec("审官任务：#456 - 审官·gpt。任务 PR：#456")) === "[456]");
+  check("spec 多号去重", JSON.stringify(extractPrsFromSpec("Closes #480 #478")) === "[480,478]");
+}
+
+console.log("\n=== ⑯ dispatch 寻址：存量审官任务卡反查（task-list spec 含审官任务标记）===");
 {
   const r = runFlow(path.join(FIXTURES, "recheck-reviewer"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("复核注入动作（存量场景不退化报帅）", /动作：复核注入 #2001（第 1 轮返工后）/ .test(r.out), r.out.trim());
-  check("通过「审官· 子卡」反查找到审官终端", /复核目标：审官终端 term_reviewer_2001，存量反查（审官· 子卡）/.test(r.out), r.out.trim());
+  check("复核注入动作（存量场景不退化报帅）", /动作：复核注入 #2001（第 1 轮返工后）：send --to dispatch:ctx_reviewer_2001/.test(r.out), r.out.trim());
   check("没有报帅（不是当注入失败）", !/报帅：/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑰ 红 4：同一 worktree 多终端选不出唯一 → 报帅不挑第一个 ===");
-{
-  const r = runFlow(path.join(FIXTURES, "multi-terminal"));
-  check("退出码 1（有输出）", r.status === 1, `status=${r.status}`);
-  check("明确「选不出唯一注入目标——请帅指定，不挑第一个」", /选不出唯一注入目标——请帅指定，不挑第一个/.test(r.out), r.out.trim());
-  check("没有注入到任一终端（不挑第一个）", !/注入目标：工人终端 term_a_2002/.test(r.out) && !/注入目标：工人终端 term_b_2002/.test(r.out), r.out.trim());
-  check("解析失败用「预览-阻塞：」前缀而非「动作：」（观察 1）", !/动作：/.test(r.out), r.out.trim());
-}
-
-console.log("\n=== ⑰b 三轮复核红 1：dry-run 不落 blocked 闸（预览不污染值守状态）——A 实验组 round-2 恢复注入 ===");
+console.log("\n=== ⑰ dispatch 映射不出 → 退回 GitHub 通道：返工投递缺工人 dispatch → 预览-阻塞，不报错停手 ===");
 {
   const r = runFlow(path.join(FIXTURES, "blocked-recover"));
-  check("退出码 1（有动作/阻塞）", r.status === 1, `status=${r.status}`);
-  check("round-1 预览-阻塞（选不出唯一）", /round-1[\s\S]*预览-阻塞：#2005（返工注入/.test(r.out), r.out.trim());
-  check("round-1 本轮待帅确认（可见但不落闸）", /round-1[\s\S]*待帅处置：#2005（注入\/目标解析失败待帅确认（本轮，未落闸））/.test(r.out), r.out.trim());
-  check("round-2 终端修好 + 新红判定 → 恢复注入（第 2 轮，不再被旧阻塞吞掉）", /round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）（注入目标：工人终端 term_x_2005）/.test(r.out), r.out.trim());
+  check("退出码 1（有输出）", r.status === 1, `status=${r.status}`);
+  check("round-1 预览-阻塞（找不到工人 dispatch）", /round-1[\s\S]*预览-阻塞：#2005（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(r.out), r.out.trim());
+  check("round-1 本轮待帅确认（可见但不落闸）", /round-1[\s\S]*待帅处置：#2005（投递\/目标解析失败待帅确认（本轮，未落闸））/.test(r.out), r.out.trim());
+  check("round-2 dispatch 就位 + 新红判定 → 恢复注入（第 2 轮）", /round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）：send --to dispatch:ctx_worker_2005/.test(r.out), r.out.trim());
   check("round-2 不再有预览-阻塞", !/round-2[\s\S]*预览-阻塞/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑰c 四轮复核红 1：live 落闸自愈——预置 pendingShuai，新红判定到达即清除重试一次 ===");
+console.log("\n=== ⑰b 自愈：预置 pendingShuai，新红判定到达即清除重试一次 ===");
 {
-  // 预置状态模拟 live 注入失败落记账（pendingShuai + 旧指纹）；夹具里有更新的红判定
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-selfheal-"));
   const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
   fs.writeFileSync(stateFile, JSON.stringify({
-    version: 1, inventoried: true,
+    version: 1, inventoried: true, round: 0, dispatchCache: {},
     records: {
-      "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, pendingShuai: { kind: "inject-rework", reason: "注入失败待帅接手（新信号到来自动重试一次）" }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
+      "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, pendingShuai: { kind: "inject-rework", reason: "投递失败待帅接手（新信号到来自动重试一次）" }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, escalated: null, mergeAttempted: false, mergeBlocked: false, stateSince: Date.now() },
     },
   }), "utf8");
-  const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "blocked-selfheal"), "--state-file", stateFile, "--dry-run"], { encoding: "utf8", cwd: REPO });
+  const r = runFlowShared(path.join(FIXTURES, "blocked-selfheal"), stateFile, hbFile);
   const out = (r.stdout || "") + (r.stderr || "");
-  check("新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）（注入目标：工人终端 term_worker_2006）/.test(out), out.trim());
-  check("不再挂注入失败待帅处置", !/待帅处置：#2006（注入失败/.test(out), out.trim());
+  check("新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）：send --to dispatch:ctx_worker_2006/.test(out), out.trim());
+  check("不再挂投递失败待帅处置", !/待帅处置：#2006（投递失败/.test(out), out.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("\n=== ⑰d 四轮复核红 1：reviewer-unfound 常驻——审官找不到，连跑三轮每轮都有待帅处置 ===");
+console.log("\n=== ⑰c reviewer-unfound 常驻：审官 dispatch 找不到，连跑三轮每轮都有待帅处置 ===");
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-unfound-"));
   const stateFile = path.join(tmp, "state.json");
-  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "reviewer-unfound"), "--state-file", stateFile, "--dry-run"];
-  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
-  const r3 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "reviewer-unfound"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "reviewer-unfound"), stateFile, hbFile);
+  const r3 = runFlowShared(path.join(FIXTURES, "reviewer-unfound"), stateFile, hbFile);
   const out1 = (r1.stdout || "") + (r1.stderr || "");
   const out2 = (r2.stdout || "") + (r2.stderr || "");
   const out3 = (r3.stdout || "") + (r3.stderr || "");
   check("首跑 exit 1（报帅 + 待帅处置）", r1.status === 1, `status=${r1.status}`);
-  check("首跑报帅找不到审官终端（待帅接手复核）", /报帅：找不到审官终端.*待帅接手复核/.test(out1), out1.trim());
+  check("首跑报帅找不到审官 dispatch（待帅接手复核）", /报帅：找不到审官 dispatch.*待帅接手复核/.test(out1), out1.trim());
   check("二跑仍 exit 1（常驻不转绿）", r2.status === 1, `status=${r2.status}`);
-  check("二跑仍有待帅处置（找不到审官终端）", /待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out2), out2.trim());
-  check("三跑仍常驻", /待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out3), out3.trim());
+  check("二跑仍有待帅处置（找不到投递目标 dispatch）", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交）/.test(out2), out2.trim());
+  check("三跑仍常驻", /待帅处置：#2007（找不到投递目标 dispatch——待帅转交）/.test(out3), out3.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("\n=== ⑱ 红 5：--parent-worktree 用合法 selector（branch:，不是 name:）===");
+console.log("\n=== ⑱ 启动序：#480 受控例外退役——起审官一律 worker-start（dispatch 身份硬要求）===");
 {
   const r = runFlow(path.join(FIXTURES, "real-456"));
-  check("起审官命令用 branch:<headRefName> selector", /--parent-worktree branch:thoerwink8\/点将台实现/.test(r.out), r.out.trim());
-  check("不再用 name: selector（不是 orca 认识的 worktree selector）", !/--parent-worktree name:/.test(r.out), r.out.trim());
-  check("oneShot 走官方首注入通道 --prompt（免就绪竞态）", /--agent codex --prompt <复核任务书> --json/.test(r.out), r.out.trim());
-  check("审官卡名按全局约定 #PR号 - 角色·模型（观察 3）", /--name "#456 - 审官·gpt-5.6-sol"/.test(r.out), r.out.trim());
+  check("起审官 dry-run 标明 task-create + worker-start", /task-create \+ worker-start/.test(r.out), r.out.trim());
+  check("起审官命令含 worker-start --worktree current --agent codex", /orca orchestration worker-start --task <task_id> --worktree current --agent codex --model gpt-5.6-sol --json/.test(r.out), r.out.trim());
+  check("不再用 worktree create --agent --prompt（例外已退役）", !/worktree create.*--prompt/.test(r.out), r.out.trim());
+  check("不再标受控例外（随 #480 退役即现在）", !/受控例外/.test(r.out), r.out.trim());
+
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  const liveStart = flowSrc.split("if (action.kind === 'start-reviewer')")[1]?.split("if (action.kind === 'inject-rework')")[0] || "";
+  check("live 起审官 argv 含 orchestration worker-start", /\['orchestration', 'worker-start'/.test(liveStart), liveStart.slice(0, 200));
+  check("live 起审官不再有 worktree create --agent --prompt", !/\['worktree', 'create', '--parent-worktree', `branch:\${\${pr.headRefName}}`, '--name', cardName, '--agent'/.test(liveStart) && !/--prompt'\]/.test(liveStart), liveStart.slice(0, 200));
+  check("flow 头注写明受控例外退役（#480 换原生）", /起审官走 worktree create --agent --prompt（自称「受控例外，随 #480 退役」——就是现在）/.test(flowSrc) || /task-create \+ worker-start --task <id> --worktree current --agent <cli> --model <id>/.test(flowSrc));
+  check("flow 头注写明删除 pickUniqueTerminal / findReviewerTerminal", /pickUniqueTerminal \/ findReviewerTerminal/.test(flowSrc));
+  check("flow 头注写明 heartbeat 契约", /heartbeat\.json/.test(flowSrc));
+
+  const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
+  check("SKILL 启动序写明 flow 起审官走 worker-start（受控例外已退役）", /flow\.mjs 闭环内起审官仍走/.test(skill) === false && /起审官/.test(skill) && /worker-start/.test(skill));
+  const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
+  check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
+  check("live getPrGate 拉 statusCheckRollup + mergeable（合并前重查）", /statusCheckRollup/.test(liveFn) && /mergeable/.test(liveFn));
 }
 
-console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id，不是 GraphQL node id）===");
+console.log("\n=== ⑲ review 链接必须可用（数字锚点 id，不是 GraphQL node id）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
   check("返工指令链接是数字锚点形态（无 PRR_ node-id）", /pull\/999#pullrequestreview-910001/.test(r.out) && !/pull\/999#pullrequestreview-PRR_/.test(r.out), r.out.trim());
-  // 真实语料夹具改走 gh api 口径（数字 id + html_url），镜像 live 数据形态
   const real453 = JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"));
   check("real-453 语料 id 全是数字锚点（无 PRR_ node-id）", real453.every(x => /^\d+$/.test(String(x.id))), real453.map(x => x.id).join(","));
   check("real-453 语料 html_url 现成（live 口径镜像）", real453.every(x => /^https:\/\/github\.com\/.+pullrequestreview-\d+$/.test(x.html_url || "")), real453.map(x => x.html_url).join(","));
   check("real-453 语料 3 条 review body 未改写（判定行口径仍成立）", redFlagsFromReviewBodies(real453.map(x => x.body)) === 5, "应为 5");
 }
 
-console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自动起审官受控例外（#480）===");
+console.log("\n=== ㉒ 合并三条件硬查：绿→合 / 缺一不合各一条 ===");
 {
-  const r = runFlow(path.join(FIXTURES, "real-456"));
-  check("起审官 dry-run 标明受控例外", /受控例外：不走 worker-start，随 #480 重做/.test(r.out), r.out.trim());
-  check("起审官命令仍是 worktree create（未偷接 worker-start）", /orca worktree create --parent-worktree branch:/.test(r.out), r.out.trim());
-  check("起审官命令不含 worker-start（例外未半吊子统一）", !/orca orchestration worker-start/.test(r.out), r.out.trim());
+  const green = runFlow(path.join(FIXTURES, "merge-green"));
+  check("绿→合：退出码 1（有合并动作）", green.status === 1, `status=${green.status}`);
+  check("绿→合：输出合并动作（三条件 + MERGEABLE）", /动作：合并 #3201（复核绿 \+ CI 全绿 \+ merge\/auto \+ MERGEABLE）：gh pr merge 3201 --squash/.test(green.out), green.out.trim());
+  check("绿→合：不再挂待帅处置", !/待帅处置：#3201/.test(green.out), green.out.trim());
 
-  const flowSrc = fs.readFileSync(FLOW, "utf8");
-  const liveStart = flowSrc.split("if (action.kind === 'start-reviewer')")[1]?.split("if (action.kind === 'inject-rework')")[0] || "";
-  check("live 起审官 argv 仍是 worktree create", /\['worktree', 'create'/.test(liveStart), liveStart.slice(0, 200));
-  check("live 起审官 argv 不含 orchestration worker-start", !/\['orchestration',\s*'worker-start'/.test(liveStart), liveStart.slice(0, 200));
-  check("flow 头注写明受控例外随 #480 退役", /起审官（受控例外，随 #480 退役）/.test(flowSrc));
+  const noAuto = runFlow(path.join(FIXTURES, "merge-no-auto"));
+  check("无 merge/auto 标签 → 只通知不合（等用户终审），不合并", /报帅：终审 #3202（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(noAuto.out) && !/动作：合并/.test(noAuto.out), noAuto.out.trim());
 
-  const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
-  const chain = (skill.split("## 一条完整命令链")[1] || "").split("## 命令级铁律")[0];
-  const multi = (chain.split("多工人")[1] || "");
-  check("SKILL 命令链多工人/辅助卡示例含 worker-start --terminal", /worker-start --task <task_id> --worktree <新建子卡 id> --terminal/.test(multi), multi.slice(0, 300));
-  check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
-  const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
-  check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
+  const ciRed = runFlow(path.join(FIXTURES, "merge-ci-red"));
+  check("CI 有红 → 不合（报红项名）", /报帅：终审 #3203（复核结论：绿，CI 未全绿（check）——不合）/.test(ciRed.out) && !/动作：合并/.test(ciRed.out), ciRed.out.trim());
+
+  const ciZero = runFlow(path.join(FIXTURES, "merge-ci-zero"));
+  check("CI 0 条 check → 没查成≠全绿，不合", /CI 0 条 check——没查成≠全绿，不合/.test(ciZero.out) && !/动作：合并/.test(ciZero.out), ciZero.out.trim());
+
+  const waitingYou = runFlow(path.join(FIXTURES, "merge-waiting-you"));
+  check("带等你标签 → 撤回不合", /带「等你」标签——撤回，不合/.test(waitingYou.out) && !/动作：合并/.test(waitingYou.out), waitingYou.out.trim());
+}
+
+console.log("\n=== ㉒b 合并前重查 mergeable：判绿后被撞 CONFLICTING → comment + 等你 + 停手不重试 ===");
+{
+  const r = runFlow(path.join(FIXTURES, "merge-conflict"));
+  check("退出码 1（有打回）", r.status === 1, `status=${r.status}`);
+  check("打回人工：写明冲突原因", /打回人工：#3206（mergeable=CONFLICTING，mergeStateStatus=DIRTY——打回人工）/.test(r.out), r.out.trim());
+  check("打回动作：comment + 等你 标签 + 停手不重试", /comment \+ 「等你」标签 \+ 停手不重试/.test(r.out), r.out.trim());
+  check("不执行合并", !/gh pr merge 3206/.test(r.out) || /gh pr merge 3206 --squash 成功/.test(r.out) === false, r.out.trim());
+  check("待帅处置常驻（打回人工）", /待帅处置：#3206（合并前重查 mergeable 失败——打回人工/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ㉓ 上帅→停手叫人：review 首行「上帅：」/ 原生 escalation / 六轮兜底 ===");
+{
+  const rev = runFlow(path.join(FIXTURES, "shang-shuai-review"));
+  check("review 上帅：行 → 报帅上帅（停手）", /报帅：上帅 #3301（审官上帅：规格本身有疑问，需帅仲裁）——停止自动流转，不再自动流转该 PR/.test(rev.out), rev.out.trim());
+  check("不再自动流转（无任何动作）", !/动作：/.test(rev.out), rev.out.trim());
+  check("待帅处置常驻（带原因）", /待帅处置：#3301（上帅：规格本身有疑问，需帅仲裁——停手叫人，不再自动流转）/.test(rev.out), rev.out.trim());
+  check("上帅 review 不误报判定行缺失（标注行不算缺判定）", !/判定行缺失/.test(rev.out), rev.out.trim());
+
+  const esc = runFlow(path.join(FIXTURES, "shang-shuai-escalation"));
+  check("原生 escalation → 报帅上帅（停手）", /报帅：上帅 #3302（worker 上帅：规格有疑问/.test(esc.out), esc.out.trim());
+  check("escalation 后不再自动流转（红判定不触发返工注入）", !/动作：/.test(esc.out), esc.out.trim());
+  check("escalation 待帅处置常驻", /待帅处置：#3302（worker 上帅：规格有疑问/.test(esc.out), esc.out.trim());
+
+  const escResolve = runFlow(path.join(FIXTURES, "escalation-resolve"));
+  check("round-1 escalation → 上帅停手", /round-1[\s\S]*报帅：上帅 #3309/.test(escResolve.out), escResolve.out.trim());
+  check("round-2 新 review（帅已处置）→ 上帅解除，恢复自动流转", /round-2[\s\S]*上帅解除 #3309/.test(escResolve.out), escResolve.out.trim());
+  check("round-2 恢复后正常终审（等用户终审）", /round-2[\s\S]*报帅：终审 #3309/.test(escResolve.out), escResolve.out.trim());
+}
+
+console.log("\n=== ㉔ 反例回归样本：review 判定行「判定：红 2 项」，正文引用代码块含「判定：绿」→ 必须判红 ===");
+{
+  const r = runFlow(path.join(FIXTURES, "anti-sample"));
+  check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
+  check("判红（引用代码块的 判定：绿 不得算数——搜全文会被骗，本防线在）", /动作：返工注入 #3305（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_3305/.test(r.out), r.out.trim());
+  check("不判绿不合并", !/合并|复核结论：绿/.test(r.out), r.out.trim());
+  check("红 2 与判定行一致（redFlagsFromReviewBodies 口径）", redFlagsFromReviewBodies(["判定：红 2 项\n\n```js\nif (verdict.line === \"判定：绿\") { return approve(); }\n```"]) === 2, "应为 2");
+}
+
+console.log("\n=== ㉕ 双通道等价：原生消息通道 vs GitHub 兜底通道，动作结果一致且只动作一次 ===");
+{
+  const native = runFlow(path.join(FIXTURES, "dual-native"));
+  const github = runFlow(path.join(FIXTURES, "dual-github"));
+  const actionLine = /动作：返工注入 #3306（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_3306/;
+  check("原生通道：worker_done 门铃 → 同一动作", actionLine.test(native.out), native.out.trim());
+  check("GitHub 通道：完工 comment 兜底 → 同一动作", actionLine.test(github.out), github.out.trim());
+  check("两通道动作结果一致（同一行）", (native.out.match(actionLine) || []).length === 1 && (github.out.match(actionLine) || []).length === 1);
+  check("原生通道打出门铃记账（dispatchCache）", /门铃：worker_done（task=task_3306w，dispatch=ctx_worker_3306）/.test(native.out), native.out.trim());
+
+  // 幂等：同状态文件重跑不重复动作
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-dual-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r1 = runFlowShared(path.join(FIXTURES, "dual-native"), stateFile, hbFile);
+  const r2 = runFlowShared(path.join(FIXTURES, "dual-native"), stateFile, hbFile);
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("原生通道重跑零动作（幂等，只动作一次）", r1.status === 1 && r2.status === 0 && !/动作：/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㉖ heartbeat：每轮结束原子写，字段契约（看门狗 #471 读它）===");
+{
+  const r = runFlow(path.join(FIXTURES, "fake-loop"));
+  check("heartbeat.json 写出", r.heartbeat !== null, "heartbeat 未写");
+  check("字段齐：ts/round/lastWakeSource/pendingCount/prs", r.heartbeat && typeof r.heartbeat.ts === "string" && typeof r.heartbeat.round === "number" && typeof r.heartbeat.lastWakeSource === "string" && typeof r.heartbeat.pendingCount === "number" && Array.isArray(r.heartbeat.prs), JSON.stringify(r.heartbeat));
+  check("prs 含在途 PR 的 state 与 sinceMs", r.heartbeat && r.heartbeat.prs.some(p => p.number === 999 && typeof p.state === "string" && typeof p.sinceMs === "number"), JSON.stringify(r.heartbeat?.prs));
+  check("lastWakeSource 为快照通道", r.heartbeat && (r.heartbeat.lastWakeSource === "native" || r.heartbeat.lastWakeSource === "github-poll"), r.heartbeat?.lastWakeSource);
+
+  // 快照多轮 round 递增 + 有待帅处置时 pendingCount 计数
+  const r2 = runFlow(path.join(FIXTURES, "real-453"));
+  check("待帅处置 PR 计入 pendingCount", r2.heartbeat && r2.heartbeat.pendingCount >= 1 && r2.heartbeat.prs.some(p => p.number === 453 && p.state === "approved"), JSON.stringify(r2.heartbeat));
+}
+
+console.log("\n=== ㉗ --explain：对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」，帅照着人肉执行 ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-explain-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const r = runFlowShared(path.join(FIXTURES, "explain"), stateFile, hbFile, ["--explain"]);
+  const out = (r.stdout || "") + (r.stderr || "");
+  check("explain 对每个在途 PR 输出 explain 行", (out.match(/\[explain\] PR #3307/g) || []).length === 1 && /\[explain\] PR #3308/.test(out), out.trim());
+  check("approved PR：当前态 + 卡在哪（无 merge/auto → 等用户终审）", /\[explain\] PR #3307[\s\S]*当前态：复核绿[\s\S]*卡在哪：无 merge\/auto 标签——等用户终审/.test(out), out.trim());
+  check("working PR：当前态 + 下一步", /\[explain\] PR #3308[\s\S]*当前态：工人开工中/.test(out), out.trim());
+  check("explain 只读：不产生动作/报帅行，不写状态文件", !/动作：|报帅：/.test(out) && !fs.existsSync(stateFile), out.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

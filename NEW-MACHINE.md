@@ -130,6 +130,17 @@ node scripts/inbox-station.mjs ensure
 
 全活着秒退，stdout 一行 JSON（runId / handle / 日志路径 / action）。身份判据（issue #493 返工）：归属从 `run-show` 的 `coordinator_handle` 取，**标题只出不进**——标题仍带 run 后缀（`信箱台·<run后缀>（勿关）`）但只是给人看，改名/被重置成 pwsh.exe 也不影响认台；默认日志按 run 隔离（`_flow/inbox-<run后缀>.log`，不传 `--log` 也天然安全）。本 run 的台 = coordinator_handle 对应的终端且租约新鲜（活不活看租约+PID）；本 run 台死了是 `action:restart`，撞上别的 run 的台（本 run coordinator 被别的 run 的活台占着）是 `action:reject`（报对方 run id）。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，中继每轮自夺回，ensure 再跑一次把横幅交回信箱台。
 
+## 9b. 流转器（flow）值守
+
+红项闭环由 `scripts/flow.mjs` 值守（#480）：`check --wait` 收 worker_done/escalation 门铃，超时即 GitHub 兜底轮询；起审官/返工/复核/合并全自动。起法：
+
+```bash
+node scripts/flow.mjs --run <runId>          # runId 用 run-list 取；每轮 run-use 自夺回（同信箱台中继）
+node scripts/flow.mjs --once --explain       # 只读：对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」
+```
+
+每轮结束原子写 `_flow/heartbeat.json`（字段契约见 scripts/flow.mjs 文件头），看门狗（#471）靠它判「该发生而没发生」——本机别删这个文件。合并权落点 = GitHub 标签 `merge/auto`（自动合）/ `等你`（撤回、打回人工），两个标签需先在仓库建好（`gh label create` 幂等）。
+
 ## 10. 接上 memory
 
 本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。仓内 `host/memory/` 是真相源。

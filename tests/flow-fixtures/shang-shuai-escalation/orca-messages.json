@@ -1,0 +1,10 @@
+[
+ {
+  "id": "m_3302",
+  "type": "escalation",
+  "task_id": "task_3302",
+  "dispatch_id": "ctx_3302",
+  "subject": "规格有疑问",
+  "body": "这条规格与 #480 冲突，请帅仲裁。"
+ }
+]

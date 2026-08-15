@@ -1,1 +1,21 @@
-[{"number":1006,"title":"乒乓换人闭环","isDraft":false,"state":"OPEN","createdAt":"2026-08-15T00:00:00Z","updatedAt":"2026-08-15T02:00:00Z","mergedAt":null,"headRefName":"thoerwink8/fake-1006","labels":[{"name":"model/deepseek-v4-flash"},{"name":"type/写码"}],"body":"## 目标\n测试件。\n## 验收标准\n- [ ] 测试\n## 进展\n- [x] 已交付"}]
+[
+ {
+  "number": 1006,
+  "title": "乒乓换人闭环（标注驱动）",
+  "isDraft": false,
+  "state": "OPEN",
+  "createdAt": "2026-08-15T00:00:00Z",
+  "updatedAt": "2026-08-15T02:00:00Z",
+  "mergedAt": null,
+  "headRefName": "thoerwink8/fake-1006",
+  "labels": [
+   {
+    "name": "model/deepseek-v4-flash"
+   },
+   {
+    "name": "type/写码"
+   }
+  ],
+  "body": "## 目标\n测试件。\n## 验收标准\n- [ ] 测试\n## 进展\n- [x] 已交付"
+ }
+]

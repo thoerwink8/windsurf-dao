@@ -1,77 +1,96 @@
 #!/usr/bin/env node
-// scripts/flow.mjs —— 闭环自动流转器（issue #455 实现，2026-08-15 融合改造瘦身）
+// scripts/flow.mjs —— 闭环自动流转器（#480/#478 改造：换 orca 原生 + 合并权落地）
 //
-// 分工（fusion-verdict.md 拍板）：首发完工发现 = 门铃（Monitor 挂
-// `orca orchestration check --wait --types worker_done,...`，见 dispatch skill）；
-// 本脚本降为备份通道（轮询默认 300s）+ 审读闭环——重放 GitHub 确定性信号推导当前态，
-// 起审官/返工/复核/乒乓报帅/终审报帅。看门狗（scripts/watchdog.mjs）管事故（屏面异常），
-// 三者正交：不要把完工检测塞回看门狗，也不要把屏面特征（如「待授权」）塞进本脚本。
-// 规格源 = issue #455 正文 + 全部评论 + fusion-verdict.md。
+// 架构一句话：**原生消息只做「唤醒 + 寻址」，GitHub 仍是判定与账本的唯一真相源。**
 //
-// 触发源只用 GitHub 确定性信号，不靠屏面猜测：
-//   ① review 判定行：「判定：红 N 项」「复核结论：绿/红 N 项」——
-//      解析逻辑与 scripts/calibrate.mjs 共用 scripts/lib/judgment.mjs（唯一真相源，不复制两份）
-//   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
-//   ③ PR MERGED 状态
+// 双输入通道（任一通道单独可用，缺一条不炸）：
+//   ① 原生通道：`orca orchestration check --wait --types worker_done,escalation,question`
+//      ——替代旧的 `sleep(interval)` 轮询；worker_done 是门铃（payload 只带 reviewId 不带判定），
+//      escalation 是「上帅」的 native 侧信号。
+//   ② GitHub 兜底通道：check --wait 超时即兜底轮询一轮（`terminal create` 起的、没有 dispatch
+//      身份的执行者，完工/判定信号照旧从 GitHub comments/reviews 读出）。
+//   check --wait 不是替代状态机，它替代的是 sleep(interval)：两个唤醒源汇进同一套
+//   `fingerprint + actedOn` 幂等状态机，不维护两套状态。
 //
-// 决策规则（②）：
-//   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
-//   - 审官红 N 项       → 输出注入工人返工的指令文本（机械转发，不做内容判断）
-//   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
-//   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
-//   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
+// 判定真相源（用户拍板 2026-08-15，三条依据写进 PR 正文）：
+//   审官把「判定：红 N 项」/「复核结论：绿」写进 GitHub review 正文 = 唯一真相源；
+//   worker_done 的 payload 只带 reviewId，作用仅是门铃；流转器收到门铃 → GitHub 重放
+//   → JUDGMENT_LINE_RE（scripts/lib/judgment.mjs，行首锚定）判红绿。兜底通道走同一条路径。
+//   禁止搜全文：判定行以外的正文（含引用的代码块）一律不算数。
 //
-// 执行注入（③）：
-//   - 起审官（受控例外，随 #480 退役）：不走 worker-start。oneShot（codex）走
-//     `worktree create --agent --prompt`（官方首注入通道，免就绪竞态）；两步走
-//     （claude）create --setup skip + terminal create --command，注入前先
-//     terminal read 轮询就绪（配置同步期抢跑必被吞）。人工派工禁止抄这条例外。
-//   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
-//     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
-//     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
-//   - 注入目标确定性定位：起审官时记 handle+审官卡 id；返工注入按任务卡 worktree 内
-//     唯一候选终端（排除审官句柄与 shell），选不出唯一目标就报帅，不挑第一个。
-//   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查「审官·」子卡；全找不到
-//     报「待帅接手复核」——这是 #455 原痛点的存量场景（帅手起审官、流转器后启动）。
+// 审官标注行（同进 judgment.mjs 单一真相源，行首锚定）：
+//   「上帅：<原因>」→ 停手叫人（review 侧兜底，对应原生 escalation 消息）
+//   「同一处未修好」→ 报帅换人信号（#480 S3-1：换人判据从数轮次改成审官标注驱动，不自动换人）
+//   「新引入」→ 继续闭环
+//   硬兜底 6 轮：只防无限踢皮球，触发上帅，不自动换人（#480 S3-3）。
 //
-// 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
-// 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
-// 不出任何自动动作。
+// 合并权（#478，落点 = GitHub 标签 merge/auto，与撤回标签「等你」同域，兜底通道也读得到）：
+//   三条件硬查，缺一不合：①最新 review 判定行绿 ②CI 全绿（statusCheckRollup 全部 SUCCESS
+//   且至少一条 check——0 条 check ≠ 全绿）③PR 带 merge/auto 标签。
+//   外加：带「等你」标签 → 撤回不合（反向不做）；合并前重查一次 mergeable（#478 实战教训：
+//   #467 判绿后、合并前被 #466 撞成 CONFLICTING），非 MERGEABLE → 走打回流程；合并失败一律
+//   打回人工（comment 写明失败原因 + 打「等你」标签 + 停手不重试）。默认等用户终审——没勾
+//   自动合的绿 PR 报帅终审，不自动合。
 //
-// 待帅处置常驻行（对抗审红 3）：有待帅事项（复核绿待终审 / 判定行缺失待分诊 /
-// 乒乓仍红待换人 / 注入失败待接手 / 找不到审官待接手 / 选不出审官）的 PR，每轮都
-// 输出「[flow] 待帅处置：#N（原因）」且 exit 1——「0 需流转」只允许用在真没有待办时；
-// 待办不能因报过一次就转绿。记账字段 = rec.pendingShuai（四轮复核红 1，独立于注入闸）。
+// 流转器停摆可被发现：每轮结束原子写 _flow/heartbeat.json（同 saveState 口径），看门狗
+// （#471）读它判「该发生而没发生」。格式契约（本单只写文件 + 立约，看门狗改动在 #471）：
+//   {
+//     "ts": "<ISO 时间>",              // 本轮结束时刻
+//     "round": 42,                     // 轮次（进程内 + 状态文件持久）
+//     "lastWakeSource": "native:worker_done" | "native:escalation" | "native:question"
+//                        | "github-poll" | "startup" | "snapshot",
+//     "pendingCount": 2,               // 有待帅处置的 PR 数（= 该发生而没发生的候选）
+//     "prs": [{ "number": 456, "state": "approved", "sinceMs": 12345 }]  // 在途 PR 当前态与停留时长
+//   }
+//   看门狗判据示例（#471 实现）：state=approved 但 merge 迟迟不发生、且 heartbeat 不再更新
+//   （ts 太老）或 pendingCount 长期不为 0 → 报警。
 //
-// 存量清点（#455 的 prime 吞存量教训）：本脚本不做「只监听新事件」——
-// 每轮对每个在途 PR 重放全部信号（comments+reviews）推导当前态；首次启动
-// （状态文件为空）即等价于存量清点，存量里已有的完工/判定会被识别并动作，
-// 不会被吞。状态文件 _flow/state.json 只是「已处理信号」游标缓存（GitHub 才是
-// 真相源），可丢可重算：删掉重跑即重新清点。
+// 保留不动：fingerprint + actedOn 幂等去重、pendingShuai 待帅记账、存量清点（GitHub 重放）、
+//   退出码口径、--dry-run / --snapshot-dir 测试通道、isCompletionComment 兜底（无 dispatch
+//   身份的工人完工信号）、JUDGMENT_LINE_RE 判定入口、pickReviewer 选型序与 model-routing.toml。
+//
+// 删掉换原生（#480 对照表）：
+//   isCompletionComment 当主通道 → worker_done 门铃（comment 兜底保留）
+//   搜 review「上帅：」当主通道 → escalation 消息（review 行兜底保留）
+//   sleep(300s) 轮询 → check --wait --timeout-ms N
+//   pickUniqueTerminal / findReviewerTerminal（按 title 猜终端、三级反查）→ send --to dispatch:<id>
+//   waitTerminalReady / verifyStarted / injectAndVerify（读 cursor、补回车、验开工，约 60 行）
+//     → worker-start receipt 的 ready + send --to dispatch: 是结构化收件箱不是敲键盘
+//   起审官走 worktree create --agent --prompt（自称「受控例外，随 #480 退役」——就是现在）
+//     → task-create + worker-start --task <id> --worktree current --agent <cli> --model <id>
+//       （Claude 族按 model-routing.toml 真相源走两步：terminal create --command "reclaude ..."
+//        再 worker-start --terminal 收口拿 dispatch——dispatch 身份是硬要求，启动通道随 provider）
+//
+// 映射不出 dispatch 就退回 GitHub 通道，不报错停手：指令投递目标（返工→工人、复核→审官）
+//   解析不到 dispatch id 时，输出指令文本 + 挂待帅处置（「找不到 X dispatch——待帅转交」），
+//   流转器继续值守其他 PR，不崩不重试狂发。
 //
 // 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
 //
 // 用法：
-//   node scripts/flow.mjs                     轮询模式（默认每 300s 一轮——备份通道；
-//                                             首发完工由门铃 check --wait 接管，供 Monitor 挂载）
+//   node scripts/flow.mjs                     值守模式：存量清点一轮 → check --wait（原生门铃，
+//                                             默认 300s 超时即 GitHub 兜底轮询）循环
 //   node scripts/flow.mjs --once              跑单轮后退出（给测试用）
-//   node scripts/flow.mjs --interval 300      轮询间隔秒数
+//   node scripts/flow.mjs --interval 300      check --wait 超时毫秒/秒数（= 兜底轮询间隔）
+//   node scripts/flow.mjs --run <runId>       orca orchestration run-use 绑定的 Run（信箱台同款）
 //   node scripts/flow.mjs --state-file <path> 状态文件位置（默认 _flow/state.json）
-//   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca 写操作
-//                                             （目标解析仍跑——快照/实读，测试可覆盖）
+//   node scripts/flow.mjs --heartbeat-file <path> heartbeat 位置（默认 _flow/heartbeat.json）
+//   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca/gh 写操作
+//   node scripts/flow.mjs --explain           对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」，
+//                                             帅照着人肉执行（只读，不动作）
 //   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh/orca JSON 快照跑（测试/复现用）
 //   node scripts/flow.mjs --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
 //   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
-//   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
+//   orca-messages.json（原生信箱本轮投递的消息，可缺省） / orca-tasks.json（task-list 镜像）
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
+import { judgmentFromReview, isCompletionComment, reviewAnnotations } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 
 const require = createRequire(import.meta.url);
@@ -79,13 +98,18 @@ const { parse: parseToml } = require('./lib/smol-toml.cjs');
 
 const ROOT = resolve(import.meta.dirname, '..');
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
+const DEFAULT_HEARTBEAT = join(ROOT, '_flow', 'heartbeat.json');
 const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
 const ORCA_TIMEOUT_MS = 30000;
 const GH_TIMEOUT_MS = 30000;
-const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
-const READY_WAIT_MS = 2000;       // 就绪轮询间隔
-const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
+const CHECK_KEEPALIVE_SLACK_MS = 15000; // check --wait 每 15s 一条 keepalive，spawnSync 超时留余量
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
+
+// 合并权标签（#478 拍板：落点 = GitHub 标签，与撤回标签同域）
+export const MERGE_AUTO_LABEL = 'merge/auto';
+export const WAIT_YOU_LABEL = '等你';
+// 硬兜底轮次（#480 S3-3：只防无限踢皮球，触发上帅，不自动换人）
+export const RED_FALLBACK_ROUNDS = 6;
 
 // ══════════════════════════════════════════════════════════════════════
 // 参数
@@ -93,19 +117,27 @@ const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 function printUsage() {
   console.log(`用法：
-  node scripts/flow.mjs [--once] [--interval 秒] [--state-file <path>] [--dry-run]
+  node scripts/flow.mjs [--once] [--interval 秒] [--run <runId>] [--state-file <path>]
+                        [--heartbeat-file <path>] [--dry-run] [--explain]
                         [--snapshot-dir <目录>] [--repo <nameWithOwner>]
 
   --once              跑单轮后退出（给测试用）
-  --interval <秒>     轮询间隔（默认 300——备份通道；首发完工由门铃 check --wait 接管）
+  --interval <秒>     check --wait 超时（默认 300——超时即 GitHub 兜底轮询）
+  --run <runId>       orca orchestration run-use 绑定该 Run（信箱台同款，每轮自夺回）
   --state-file <path> 状态文件位置（默认 _flow/state.json）
-  --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
+  --heartbeat-file <path> heartbeat 位置（默认 _flow/heartbeat.json）
+  --dry-run           只输出动作与将执行的命令，不碰 orca/gh 写操作（目标解析仍跑）
+  --explain           对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」，只读不动作
   --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
   --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
+  const args = {
+    once: false, interval: 300, run: null, stateFile: DEFAULT_STATE,
+    heartbeatFile: DEFAULT_HEARTBEAT, dryRun: false, explain: false,
+    snapshotDir: null, repo: null,
+  };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -119,8 +151,11 @@ function parseArgs(argv) {
     switch (a) {
       case '--once': args.once = true; break;
       case '--interval': args.interval = take(i++, '--interval'); break;
+      case '--run': args.run = argv[++i] || ''; break;
       case '--state-file': args.stateFile = resolve(process.cwd(), argv[++i] || ''); break;
+      case '--heartbeat-file': args.heartbeatFile = resolve(process.cwd(), argv[++i] || ''); break;
       case '--dry-run': args.dryRun = true; break;
+      case '--explain': args.explain = true; break;
       case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
       case '--repo': args.repo = argv[++i] || ''; break;
       case '--help': printUsage(); process.exit(0); break;
@@ -142,7 +177,7 @@ function sleep(ms) {
 }
 
 function runCmd(cmd, args, timeout = 30000) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true });
   if (r.error || r.status !== 0) {
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 300) };
   }
@@ -176,11 +211,24 @@ function unwrap(json, pathKey, topKey) {
   return null;
 }
 
+// 原子写（state 与 heartbeat 同口径）：先写 .tmp 再 rename，看门狗读到的要么旧要么新，不会半截。
+function writeJsonAtomic(path, obj) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+  renameSync(tmp, path);
+}
+
+function hasLabel(pr, name) {
+  return Array.isArray(pr?.labels) && pr.labels.some(l => (l.name || l) === name);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 信号提取（纯函数，快照与 live 共用）
 // ══════════════════════════════════════════════════════════════════════
 
-// 完工信号：PR comment 首行命中「完工」或「返工(完成|处置)」。
+// 完工信号：PR comment 首行命中「完工」或「返工(完成|处置)」——GitHub 兜底通道；
+// 有 dispatch 身份的工人走 worker_done 门铃（nativeCompletionSignals），两路汇进同一状态机。
 function completionSignals(comments) {
   const out = [];
   for (const c of comments || []) {
@@ -192,33 +240,65 @@ function completionSignals(comments) {
   return out;
 }
 
-function reviewSignals(reviews) {
+// worker_done 门铃映射出的完工信号（dispatchMap 建好 taskId→PR 后，每个已映射的
+// 工人 worker_done 补一条 completion 事件，id 用 dispatchId 去重）。GitHub 侧没有完工 comment
+// 时，门铃就是完工信号；两边都有也不重复动作（deriveState 对连续 completion 幂等）。
+// 审官的 worker_done 只是门铃（payload 带 reviewId），不是完工信号——跳过。
+// at 用空串：完工事件必须排在 review 之前（工人先完工、审官后评审）。
+function nativeCompletionSignals(messages, dispatchMap) {
   const out = [];
-  for (const r of reviews || []) {
-    if (!r || r.id == null) continue;
-    const v = judgmentFromReview(r.body);
+  for (const m of messages || []) {
+    if (String(m.type || '').toLowerCase() !== 'worker_done') continue;
+    const taskId = m.task_id || m.taskId || m.payload?.taskId || null;
+    if (!taskId) continue;
+    const pr = dispatchMap.prByTaskId[taskId];
+    if (!pr) continue; // 映射不出 dispatch 就退回 GitHub 通道，不报错停手
+    const entry = (dispatchMap.tasksByPr?.[pr] || []).find(e => e.taskId === taskId);
+    if (entry?.isReviewer) continue; // 审官门铃不是完工
     out.push({
-      type: 'review', id: `r:${r.id}`, at: r.submittedAt || '', body: r.body,
-      verdict: v, url: r.url || null,
+      type: 'completion',
+      id: `w:${m.dispatch_id || m.dispatchId || taskId}`,
+      at: '',
+      body: `worker_done：${m.subject || ''}`,
+      viaNative: true,
     });
   }
   return out;
 }
 
-function orderedSignals(comments, reviews) {
-  return [...completionSignals(comments), ...reviewSignals(reviews)]
+function reviewSignals(reviews) {
+  const out = [];
+  for (const r of reviews || []) {
+    if (!r || r.id == null) continue;
+    const v = judgmentFromReview(r.body);
+    const ann = reviewAnnotations(r.body);
+    out.push({
+      type: 'review', id: `r:${r.id}`, at: r.submittedAt || '', body: r.body,
+      verdict: v, url: r.url || null,
+      shangShuai: ann.shangShuai, sameSpot: ann.sameSpot, newIntroduced: ann.newIntroduced,
+    });
+  }
+  return out;
+}
+
+function orderedSignals(comments, reviews, native, dispatchMap) {
+  return [...completionSignals(comments), ...nativeCompletionSignals(native, dispatchMap || { prByTaskId: {} }), ...reviewSignals(reviews)]
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 }
 
 // 由全部信号推导当前态（纯函数，每轮重放——存量清点即此步）：
 //   working → awaiting-review（完工，无审）→ rework-needed（红 N，待返工）
-//   → awaiting-recheck（返工完成，待复核）→ approved（复核绿）/ pingpong（乒乓两轮仍红）
+//   → awaiting-recheck（返工完成，待复核）→ approved（复核绿）
+//   switch = 最新 review 标「同一处未修好」（报帅换人信号，不自动换人）
+//   shang-shuai = 最新 review 标「上帅：」或 红判定累计 ≥ 6 轮（硬兜底，停手叫人，不再自动流转）
 //   error = 存在判定行缺失/格式不符的 review（报帅分诊，不作为红/绿处理）。
+// 标注取「最新 review」：帅处置后审官再判，新的判定行接管状态（上帅 只挡「它仍是最近信号」时）。
 function deriveState(signals) {
   let state = 'working';
   let redReviews = 0;
   let lastRed = null;
   let lastSignalId = null;
+  let latest = null; // 最新 review 的标注
   for (const sig of signals) {
     lastSignalId = sig.id;
     if (sig.type === 'completion') {
@@ -226,42 +306,56 @@ function deriveState(signals) {
       else if (state === 'rework-needed') state = 'awaiting-recheck';
       continue;
     }
+    // 标注对任何 review 都适用（上帅：行可单独出现、不写判定行）；每条 review 都刷新
+    // latest——最新 review 无标注即清空，避免旧标注粘住新态
+    latest = { shangShuai: sig.shangShuai ?? null, sameSpot: !!sig.sameSpot, newIntroduced: !!sig.newIntroduced };
     const v = sig.verdict;
     // 判定行缺失（kind=null）或格式不符（红绿都判不出）→ 报帅分诊，不作为红/绿处理
-    if (!v.kind || v.malformed) { state = 'error'; continue; }
+    if (!v.kind || v.malformed) {
+      if (!sig.shangShuai && !sig.sameSpot) state = 'error';
+      continue;
+    }
     if (v.green) { state = 'approved'; lastRed = null; continue; }
     redReviews += 1;
     lastRed = v.red;
-    // 乒乓两轮仍红 → 报帅换人（第 3 次红判定起不再自动注入返工）
-    state = redReviews >= 3 ? 'pingpong' : 'rework-needed';
+    state = 'rework-needed';
   }
-  return { state, redReviews, lastRed, lastSignalId };
+  // 标注覆盖 + 硬兜底（优先级：上帅 > 六轮 > 同一处未修好）
+  if (latest?.shangShuai) state = 'shang-shuai';
+  else if (redReviews >= RED_FALLBACK_ROUNDS) state = 'shang-shuai';
+  else if (latest?.sameSpot) state = 'switch';
+  return { state, redReviews, lastRed, lastSignalId, latestAnnotation: latest };
 }
 
 // 当前态的待办动作（纯函数）：null = 无需流转（扫完 0 需流转）。
 // 注入重试的闸是 actedOn 指纹去重（每个新信号至多一次，不重试狂发）；
-// pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示（四轮复核红 1）。
+// pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示。
 function pendingAction(derived) {
   if (derived.state === 'working') return null;
   if (derived.state === 'awaiting-review') return { kind: 'start-reviewer', round: 0 };
   if (derived.state === 'awaiting-recheck') return { kind: 'inject-recheck', round: derived.redReviews };
   if (derived.state === 'rework-needed') return { kind: 'inject-rework', red: derived.lastRed, round: derived.redReviews };
-  if (derived.state === 'approved') return { kind: 'report-final' };
-  if (derived.state === 'pingpong') return { kind: 'report-switch', round: derived.redReviews };
-  return null; // error 态由 malformed review 逐条报帅 + 待帅处置常驻行覆盖
+  if (derived.state === 'approved') return { kind: 'merge-gate' };
+  if (derived.state === 'switch') return { kind: 'report-switch', round: derived.redReviews };
+  return null; // shang-shuai / error 态：停手/报帅，由 awaitingShuaiReason + 待帅处置常驻行覆盖
 }
 
 // 待帅处置原因（红 3：卡着的 PR 每轮都要显形，不能报一次就转绿）
-// rec.pendingShuai = 独立于注入闸的待帅记账（四轮复核红 1）：注入失败 / reviewer-unfound /
-// report-unknown / 四类状态原因都经它显示——blocked 管「要不要再注入」（闸已由 fp 去重承担），
-// pendingShuai 管「有没有人还欠一个动作」；清除时机与自愈同步（fp 变化重试时清、动作成功时清）。
-// thisRoundFailed = 本轮 dry-run 解析失败（预览的本轮量，不落盘）。
+// rec.pendingShuai = 独立于注入闸的待帅记账；清除时机与自愈同步（fp 变化重试时清、动作成功时清）。
 function awaitingShuaiReason(derived, rec, thisRoundFailed) {
   if (rec.pendingShuai) return rec.pendingShuai.reason;
-  if (derived.state === 'approved') return '复核绿待帅终审';
+  if (derived.state === 'approved') {
+    if (rec.mergeAttempted && !rec.mergeBlocked) return null; // 合并动作已发起，等 GitHub 收口
+    return '复核绿待帅终审';
+  }
   if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
-  if (derived.state === 'pingpong') return '乒乓两轮仍红待帅换人';
-  if (thisRoundFailed) return '注入/目标解析失败待帅确认（本轮，未落闸）';
+  if (derived.state === 'switch') return '审官标注「同一处未修好」待帅换人';
+  if (derived.state === 'shang-shuai') {
+    if (derived.latestAnnotation?.shangShuai) return `上帅：${derived.latestAnnotation.shangShuai}——停手叫人，不再自动流转`;
+    if (derived.redReviews >= RED_FALLBACK_ROUNDS) return `六轮红判定兜底上帅（第 ${derived.redReviews} 次红判定）——停手叫人，不自动换人`;
+    return '上帅——停手叫人，不再自动流转';
+  }
+  if (thisRoundFailed) return '投递/目标解析失败待帅确认（本轮，未落闸）';
   return null;
 }
 
@@ -293,15 +387,15 @@ function pickReviewer(toml, workerModelId, taskType) {
   return pool.find(m => isGpt(m)) || pool.find(m => !isGpt(m)) || null;
 }
 
-// 审官启动配方（dispatch skill 命令链口径，provider 真相源 = toml providers）：
-//   gpt(codex) oneShot --agent codex --prompt（官方首注入通道，免就绪竞态）；
-//   claude(reclaude) 两步走 terminal create --command "reclaude --model opus"，
-//   注入前必须先等配置同步（抢跑必被吞）。
-//   grok 不在审查角色（toml roles 无「审查」），pickReviewer 选不到——不写启动配方，
-//   免得 env/命令看似生效实则从未执行（对抗审观察 4）。
+// 审官启动配方（provider 真相源 = model-routing.toml providers，只允许有 dispatch 身份的路径）：
+//   gpt → worker-start --agent codex --model <id>（fresh terminal in current worktree）
+//   claude → model-routing.toml 实证：--agent 起不了 reclaude 链，须两步——
+//            task-create + worktree create（--setup skip）+ terminal create --command "reclaude --model opus"
+//            + worker-start --task <id> --worktree <卡 id> --terminal <handle> 收口拿 dispatch。
+//   其他 provider 不在审查角色（pickReviewer 选不到）——不写启动配方，免得命令看似生效实则从未执行。
 function reviewerLaunch(reviewer) {
-  if (reviewer.provider === 'gpt') return { oneShot: true, agent: 'codex', model: reviewer.id };
-  if (reviewer.provider === 'claude') return { oneShot: false, command: 'reclaude --model opus', model: reviewer.id };
+  if (reviewer.provider === 'gpt') return { twoStep: false, agent: 'codex', model: reviewer.id };
+  if (reviewer.provider === 'claude') return { twoStep: true, agent: 'claude', model: reviewer.id, command: 'reclaude --model opus' };
   return null;
 }
 
@@ -313,14 +407,18 @@ function reviewerLabel(reviewer) {
 // 动作文本（决策输出，人读 + 机器可 grep）
 // ══════════════════════════════════════════════════════════════════════
 
-function reviewTaskBook(pr, workerModel, reviewerLabel) {
+function reviewTaskBook(pr, reviewerLabel) {
   return [
     `【复核任务书 · 闭环自动流转 · ${reviewerLabel}】`,
     `任务 PR：#${pr.number} ${pr.title}`,
     '请审读本 PR 的 diff 与正文（规格源引用、完工自报、验收清单），逐条核对验收标准。',
-    '判定格式（机器可读，写在 review 正文首行）：',
+    '判定格式（机器可读，写在 review 正文首行，行首锚定）：',
     '  首审：「判定：红 N 项」或「判定：绿」',
     '  复核：「复核结论：红 N 项」或「复核结论：绿，可合并」',
+    '标注行（review 正文任意位置，行首锚定）：',
+    '  「上帅：<原因>」= 质疑拍板/规格本身或需帅决策 → 流转器停手叫人',
+    '  「同一处未修好」= 本轮红项与前几轮同一处反复 → 报帅换人信号（不自动换人）',
+    '  「新引入」= 本轮红项是新引入的问题 → 继续闭环',
     '同账号不能 request-changes，以 COMMENT 提交 review。红项逐条列明；质疑拍板/规格本身要上帅，不自行改判。',
   ].join('\n');
 }
@@ -342,122 +440,243 @@ function recheckInstruction(pr, round, reviewerLabel) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// orca 终端操作（live 用；注入目标解析走 source，dry-run 也能覆盖）
+// dispatch 寻址（send --to dispatch:<id>；映射不出就退回 GitHub 通道，不报错停手）
 // ══════════════════════════════════════════════════════════════════════
 
-function readTerminalData(handle, cursor) {
-  const args = ['terminal', 'read', '--terminal', handle, '--limit', '80', '--json'];
-  if (cursor != null) args.push('--cursor', String(cursor));
-  const r = runOrca(args);
-  if (!r.ok) return { ok: false, error: r.error };
-  const t = r.json?.result?.terminal;
-  if (!t || typeof t.status !== 'string' || !Array.isArray(t.tail)) return { ok: false, error: 'read 成功响应但 status/tail 字段缺失（结构畸形）' };
-  return { ok: true, terminal: t };
+// 从任务书 spec 提取 PR 号：#N 或 PR #N / 任务 PR：#N。spec 里可能带多个号
+// （如「Closes #480 #478」），只认能唯一对应一个 PR 的（任务卡按「#PR号 - 动宾短语」命名，
+// 首号通常就是 PR）。返回去重后的号列表。
+function extractPrsFromSpec(spec) {
+  const out = [];
+  const re = /(?:PR\s*)?#(\d+)/g;
+  let m;
+  while ((m = re.exec(String(spec || '')))) {
+    const n = Number(m[1]);
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
 }
 
-// 注入前证就绪（红 1）：两步走（claude）配置同步期抢跑必被吞——轮询到
-// 屏面有内容且不在启动占位态才放行；终端退出/超时 fail-visible。
-function waitTerminalReady(handle, timeoutMs, label) {
-  const deadline = Date.now() + timeoutMs;
-  const starting = /Starting|Connecting|登录|login|初始化|配置同步|请稍候|加载中/i;
-  for (;;) {
-    if (Date.now() >= deadline) return { ok: false, error: `等待终端就绪超时（${label}，${Math.round(timeoutMs / 1000)}s）——未见到可收输入迹象` };
-    const r = readTerminalData(handle, null);
-    if (!r.ok) { sleep(READY_WAIT_MS); continue; }
-    if (r.terminal.status === 'exited') return { ok: false, error: `终端已退出（${label}）` };
-    const tail = r.terminal.tail.map(l => String(l)).join('\n').trim();
-    if (tail.length > 0 && !starting.test(tail)) return { ok: true }; // 有内容且不在启动态 = 可收输入
-    sleep(READY_WAIT_MS);
-  }
-}
-
-// 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
-// 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
-// （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
-// 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
-// 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
-function verifyStarted(handle, echoHead, terminalName) {
-  const first = readTerminalData(handle, null);
-  if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
-  const prev = first.terminal.nextCursor;
-  sleep(VERIFY_WAIT_MS);
-  const second = readTerminalData(handle, prev);
-  if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
-  if (!echoHead) {
-    // --prompt 路径：无回显概念，不补回车，直接 fail-visible
-    return { ok: false, error: `注入后无新输出（${terminalName}）——疑似未开工` };
-  }
-  // send 路径：看回显，无论是否回显都补一记裸回车再验增量
-  const all = readTerminalData(handle, null);
-  const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
-  const echoed = tailText.includes(echoHead);
-  runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
-  sleep(VERIFY_WAIT_MS);
-  const third = readTerminalData(handle, null);
-  const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
-  if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
-  return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
-}
-
-// 注入 + 验开工（两步走路径：send 任务文本）
-function injectAndVerify(handle, text, terminalName) {
-  const echoHead = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
-  const sendR = runOrca(['terminal', 'send', '--terminal', handle, '--text', text]);
-  if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  return verifyStarted(handle, echoHead, terminalName);
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// 注入目标定位（红 2/红 4：确定性定位，选不出唯一就报帅，不挑第一个）
-// ══════════════════════════════════════════════════════════════════════
-
-const SHELL_LIKE = /^(PS |PowerShell|Terminal \d|cmd|bash|zsh)/;
-
-// worktree 里活着的终端里挑唯一注入目标：
-//   connected+writable+非 orphaned；排除审官句柄（返工不能注给审官）；
-//   排除 shell（title 空 / PS / Terminal N / cmd / bash / zsh —— agent 的 title
-//   会被 orca 覆写成对话摘要，不能按「角色·模型」猜，对抗审红 4 实录）。
-//   候选恰 1 个 → 用；0 个 → 报错；多个 → 报帅指定（不挑第一个）。
-function pickUniqueTerminal(terminals, wtId, excludeHandle) {
-  const inWt = (terminals || []).filter(t => t.worktreeId === wtId && t.connected && t.writable && !t.orphaned);
-  const candidates = inWt
-    .filter(t => t.handle !== excludeHandle)
-    .filter(t => {
-      const title = (t.title || '').trim();
-      return title !== '' && !SHELL_LIKE.test(title);
-    });
-  if (candidates.length === 1) return { ok: true, terminal: candidates[0] };
-  if (candidates.length === 0) {
-    const why = inWt.length === 0 ? 'worktree 无活着终端' : `全部 ${inWt.length} 个终端被排除（shell/审官句柄）`;
-    return { ok: false, error: `worktree ${wtId} 没有唯一可用终端（${why}）` };
-  }
-  return { ok: false, error: `worktree ${wtId} 有 ${candidates.length} 个候选终端（${candidates.map(t => t.handle).join('、')}），选不出唯一注入目标——请帅指定，不挑第一个` };
-}
-
-// 审官终端反查（红 2）：①起审官时记下的句柄（优先）②记下的审官卡 id
-// ③兜底存量反查：任务卡子卡里找「审官」卡（帅手起审官、流转器后启动的场景）。
-function findReviewerTerminal(source, pr, rec, workerWt) {
-  const termsR = source.orcaTerminals();
-  if (!termsR.ok) return { ok: false, error: termsR.error };
-  const terms = termsR.terminals;
-  if (rec.reviewer?.handle && terms.some(t => t.handle === rec.reviewer.handle)) {
-    return { ok: true, terminal: terms.find(t => t.handle === rec.reviewer.handle), via: '起审官记录句柄' };
-  }
-  if (rec.reviewer?.worktree) {
-    const t = pickUniqueTerminal(terms, rec.reviewer.worktree, null);
-    if (t.ok) return { ok: true, terminal: t.terminal, via: '起审官记录审官卡' };
-  }
-  if (workerWt && Array.isArray(workerWt.childWorktreeIds) && workerWt.childWorktreeIds.length > 0) {
-    const wtsR = source.orcaWorktrees();
-    if (wtsR.ok) {
-      const reviewerWt = wtsR.worktrees.find(w => workerWt.childWorktreeIds.includes(w.id) && /审官/.test(w.displayName || ''));
-      if (reviewerWt) {
-        const t = pickUniqueTerminal(terms, reviewerWt.id, null);
-        if (t.ok) return { ok: true, terminal: t.terminal, via: '存量反查（审官· 子卡）' };
+// 建 taskId→PR / PR→dispatch 映射（live：task-list + dispatch-show；快照：orca-tasks.json）。
+// 快照条目形态：{ id, spec, dispatchId }；live 的 dispatchId 经 dispatch-show 取（惰性）。
+// 审官任务 = 本脚本 task-create 建的（spec 含「审官任务：#N - 审官·」标记）。
+function buildDispatchMap(source, state) {
+  const map = { prByTaskId: {}, tasksByPr: {}, dispatchIdFor: source.dispatchIdFor || null };
+  const tasksR = source.orcaTasks();
+  const tasks = tasksR.ok ? tasksR.tasks : [];
+  for (const t of tasks) {
+    const id = t.id || t.taskId || null;
+    const spec = t.spec || t.title || '';
+    if (!id) continue;
+    const prs = extractPrsFromSpec(spec);
+    const isReviewer = /审官任务/.test(spec);
+    for (const n of prs) {
+      if (!map.tasksByPr[n]) map.tasksByPr[n] = [];
+      map.tasksByPr[n].push({ taskId: id, spec, isReviewer, dispatchId: t.dispatchId || t.dispatch_id || null });
+    }
+    if (prs.length === 1) map.prByTaskId[id] = prs[0];
+    // 有状态文件里记过的 dispatchId（doorbell/worker-start 收的）优先
+    const cached = state.dispatchCache?.[id];
+    if (cached) {
+      for (const n of prs) {
+        const entry = map.tasksByPr[n]?.find(e => e.taskId === id);
+        if (entry) entry.dispatchId = entry.dispatchId || cached;
       }
     }
   }
-  return { ok: false, error: '找不到审官终端（未记录句柄/审官卡，子卡里也没有审官卡）——待帅接手复核' };
+  return map;
+}
+
+function resolveDispatchId(map, entry) {
+  if (!entry) return null;
+  if (entry.dispatchId) return entry.dispatchId;
+  if (map.dispatchIdFor && entry.taskId) {
+    const d = map.dispatchIdFor(entry.taskId);
+    if (d) { entry.dispatchId = d; return d; }
+  }
+  return null;
+}
+
+// 找 PR 的工人 dispatch（唯一候选且非审官任务）；多候选/零候选 → null（待帅转交）
+function workerDispatchFor(map, prNumber) {
+  const list = (map.tasksByPr[prNumber] || []).filter(e => !e.isReviewer);
+  if (list.length !== 1) return null;
+  return resolveDispatchId(map, list[0]);
+}
+
+// 找 PR 的审官 dispatch：①起审官时记的 rec.reviewer.dispatchId ②审官任务候选（唯一）
+function reviewerDispatchFor(map, prNumber, rec) {
+  if (rec.reviewer?.dispatchId) return rec.reviewer.dispatchId;
+  const list = (map.tasksByPr[prNumber] || []).filter(e => e.isReviewer);
+  if (list.length !== 1) return null;
+  return resolveDispatchId(map, list[0]);
+}
+
+function sendToDispatch(dispatchId, subject, body, args) {
+  if (!dispatchId) return { ok: false, error: '无 dispatch id' };
+  const r = runOrca(['orchestration', 'send', '--to', `dispatch:${dispatchId}`, '--subject', subject, '--body', body, '--json']);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 合并三条件 + 合并前重查 mergeable + 打回人工（#478 拍板）
+// ══════════════════════════════════════════════════════════════════════
+
+// CI 态（纯函数）：statusCheckRollup 全部 SUCCESS 且至少一条 check ——「0 条 check」≠「全绿」
+// （仓规：分不开「扫完查出 0 条」和「这次没扫到样本」就会把没查成当查过没事）。
+export function ciState(rollup) {
+  const list = Array.isArray(rollup) ? rollup : [];
+  const red = [];
+  for (const c of list) {
+    const ok = c.conclusion === 'SUCCESS' || c.state === 'SUCCESS';
+    if (!ok) red.push(c.name || c.context || c.__typename || '?');
+  }
+  return {
+    count: list.length,
+    allGreen: list.length > 0 && red.length === 0,
+    redNames: red.join('、'),
+  };
+}
+
+// 合并门（纯函数）：三条件硬查 + 「等你」撤回（#478 Q4）。缺一不合。
+//   返回 { ok:true } 或 { ok:false, reason }；reason 直接进报帅/待帅处置行。
+export function mergeGate(pr, ci) {
+  if (hasLabel(pr, WAIT_YOU_LABEL)) return { ok: false, reason: '带「等你」标签——撤回，不合' };
+  if (!hasLabel(pr, MERGE_AUTO_LABEL)) return { ok: false, reason: '无 merge/auto 标签——等用户终审' };
+  if (pr.isDraft) return { ok: false, reason: 'PR 仍是 draft——等 ready，不合' };
+  if (ci.count === 0) return { ok: false, reason: 'CI 0 条 check——没查成≠全绿，不合' };
+  if (!ci.allGreen) return { ok: false, reason: `CI 未全绿（${ci.redNames}）——不合` };
+  return { ok: true };
+}
+
+// 合并前重查 mergeable（#478 实战教训：#467 判绿后、合并前被 #466 撞成 CONFLICTING）：
+//   MERGEABLE → 可合；UNKNOWN → GitHub 还在算，下轮重查（瞬态，不打回误伤）；
+//   其余（CONFLICTING/DIRTY/BLOCKED 等）→ 打回人工。
+export function mergeableVerdict(mergeable, mergeStateStatus) {
+  if (mergeable === 'MERGEABLE') return { ok: true };
+  if (mergeable === 'UNKNOWN' || mergeable == null || mergeable === '') {
+    return { ok: false, wait: true, reason: `mergeable=${mergeable || '未知'}（GitHub 还在算）——下轮重查` };
+  }
+  return { ok: false, reason: `mergeable=${mergeable}${mergeStateStatus ? `，mergeStateStatus=${mergeStateStatus}` : ''}——打回人工` };
+}
+
+// 打回人工（#478 Q5）：comment 写明失败原因 + 打「等你」标签 + 停手不重试（等你 标签天然停手）。
+function blockToHuman(lines, pr, reason, args, repo) {
+  const body = [
+    '【流转器打回人工】',
+    `PR #${pr.number} 自动合并失败：${reason}`,
+    '已打「等你」标签，流转器停手不重试。冲突/CI 需人工处置（解冲突按「rebase 只做合并不改逻辑」）。',
+  ].join('\n');
+  if (!args.dryRun) {
+    // 正文不走 shell 字符串拼接：先写文件再 --input（本仓 2026-08-15 实测教训）
+    const tmp = join(dirname(args.stateFile), `.flow-comment-${pr.number}.json`);
+    writeJsonAtomic(tmp, { body });
+    runGh(['api', `repos/${repo}/issues/${pr.number}/comments`, '--input', tmp]);
+    try { runGh(['pr', 'edit', String(pr.number), '--add-label', WAIT_YOU_LABEL]); } catch { /* label 缺就缺，不重试 */ }
+    try { runGh(['label', 'create', WAIT_YOU_LABEL]); } catch { /* 已存在幂等 */ }
+  }
+  lines.push(`[flow] 打回人工：#${pr.number}（${reason}）——comment + 「等你」标签 + 停手不重试`);
+}
+
+// 复核绿的处理（每轮重查，合并只做一次；gate 的输入 CI/标签/mergeable 会在无新信号时变化，
+// 所以不走 fp 去重，靠 rec.mergeAttempted / rec.mergeBlocked 防重）
+function handleApproved(pr, rec, source, args, repo) {
+  const lines = [];
+  const gateR = source.getPrGate(pr.number);
+  if (!gateR.ok) return { lines: [`[flow] NO_TARGETS：读 PR #${pr.number} 合并门数据失败：${gateR.error}——本轮没查成`], noTargets: true };
+  const gpr = gateR.pr;
+  const ci = ciState(gpr.statusCheckRollup);
+  const gate = mergeGate(gpr, ci);
+
+  if (!gate.ok) {
+    // 缺一不合：报帅/待帅处置，不合并
+    const reason = `复核结论：绿，${gate.reason}`;
+    lines.push(`[flow] 报帅：终审 #${pr.number}（${reason}）`);
+    rec.pendingShuai = { kind: 'approved', reason: `复核绿待帅终审（${gate.reason}）` };
+    return { lines };
+  }
+
+  // 三条件齐 → 合并前重查 mergeable
+  const verdict = mergeableVerdict(gpr.mergeable, gpr.mergeStateStatus);
+  if (!verdict.ok) {
+    if (verdict.wait) {
+      lines.push(`[flow] 通知：终审 #${pr.number}（复核绿 + CI 全绿 + merge/auto，${verdict.reason}）`);
+      rec.pendingShuai = { kind: 'approved', reason: `复核绿待合并（${verdict.reason}）` };
+      return { lines };
+    }
+    rec.mergeBlocked = true;
+    rec.pendingShuai = { kind: 'merge-blocked', reason: '合并前重查 mergeable 失败——打回人工，等你 标签停手不重试' };
+    blockToHuman(lines, pr, verdict.reason, args, repo);
+    return { lines };
+  }
+
+  if (rec.mergeBlocked || rec.mergeAttempted) return { lines }; // 停手不重试 / 已尝试过
+  rec.mergeAttempted = true;
+  rec.pendingShuai = null; // 合并动作已发起：不再欠待帅
+  if (args.dryRun) {
+    lines.push(`[flow] 动作：合并 #${pr.number}（复核绿 + CI 全绿 + merge/auto + MERGEABLE）：gh pr merge ${pr.number} --squash`);
+    return { lines };
+  }
+  const m = runGh(['pr', 'merge', String(pr.number), '--squash']);
+  if (m.ok) {
+    lines.push(`[flow] 动作：合并 #${pr.number}（复核绿 + CI 全绿 + merge/auto + MERGEABLE）：gh pr merge ${pr.number} --squash 成功`);
+  } else {
+    rec.mergeBlocked = true;
+    rec.pendingShuai = { kind: 'merge-blocked', reason: '合并失败——打回人工，等你 标签停手不重试' };
+    blockToHuman(lines, pr, `gh pr merge 失败：${m.error}`, args, repo);
+  }
+  return { lines };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 原生消息处理（live：check --wait 投递；快照：orca-messages.json）
+// ══════════════════════════════════════════════════════════════════════
+
+// 处理一批信箱消息：worker_done → 记 dispatch 映射（门铃，GitHub 重放判态）；
+// escalation → 上帅记账（停手叫人，映射到 PR 的进 escalations 由 PR 循环落地）；
+// question → 报帅待应答；其余 → 报帅备忘。
+// 返回 { wakeSource, lines, escalations }。
+function processNativeMessages(messages, state, dispatchMap, args) {
+  const lines = [];
+  const escalations = [];
+  let wakeSource = null;
+  for (const m of messages || []) {
+    const type = String(m.type || '').toLowerCase();
+    const taskId = m.task_id || m.taskId || m.payload?.taskId || null;
+    const dispatchId = m.dispatch_id || m.dispatchId || null;
+    if (type === 'worker_done') {
+      wakeSource = wakeSource || 'native:worker_done';
+      if (taskId && dispatchId) {
+        state.dispatchCache = state.dispatchCache || {};
+        if (!state.dispatchCache[taskId]) {
+          state.dispatchCache[taskId] = dispatchId;
+          lines.push(`[flow] 门铃：worker_done（task=${taskId}，dispatch=${dispatchId}）——触发 GitHub 重放`);
+        }
+      }
+      continue;
+    }
+    if (type === 'escalation') {
+      wakeSource = wakeSource || 'native:escalation';
+      const pr = taskId ? dispatchMap.prByTaskId[taskId] : null;
+      const reason = `worker 上帅：${m.subject || ''}${m.body ? `（${String(m.body).slice(0, 120)}）` : ''}`;
+      if (pr) {
+        escalations.push({ pr, reason });
+        lines.push(`[flow] 报帅：上帅 #${pr}（${reason}）——停手，不再自动流转`);
+      } else {
+        lines.push(`[flow] 报帅：收到 escalation（task=${taskId || '?'}）：${reason}——待帅处置（映射不出 PR，退回 GitHub 通道）`);
+      }
+      continue;
+    }
+    if (type === 'question') {
+      wakeSource = wakeSource || 'native:question';
+      lines.push(`[flow] 报帅：工人提问（task=${taskId || '?'}）：${m.subject || ''}——帅用 orca orchestration reply --id ${m.id} 应答`);
+      continue;
+    }
+    // 其他类型（status/merge_ready 等）：报帅备忘，不吞
+    lines.push(`[flow] 报帅：信箱消息（type=${type}，task=${taskId || '?'}）：${String(m.subject || '').slice(0, 120)}——请帅处理`);
+  }
+  return { wakeSource, lines, escalations };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -465,25 +684,29 @@ function findReviewerTerminal(source, pr, rec, workerWt) {
 // ══════════════════════════════════════════════════════════════════════
 
 function loadState(path) {
-  if (!existsSync(path)) return { version: 1, inventoried: false, records: {} };
+  if (!existsSync(path)) return { version: 1, inventoried: false, round: 0, dispatchCache: {}, records: {} };
   try {
     const s = JSON.parse(readFileSync(path, 'utf8'));
     if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
-    return { version: 1, inventoried: !!s.inventoried, records: s.records };
+    return {
+      version: 1, inventoried: !!s.inventoried, round: Number(s.round) || 0,
+      dispatchCache: s.dispatchCache || {}, records: s.records,
+    };
   } catch (e) {
-    return { version: 1, inventoried: false, records: {}, loadError: String(e.message) };
+    return { version: 1, inventoried: false, round: 0, dispatchCache: {}, records: {}, loadError: String(e.message) };
   }
 }
 
 function saveState(path, state) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-  renameSync(tmp, path);
+  writeJsonAtomic(path, state);
 }
 
 function freshRecord(pr) {
-  return { pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, workerWorktree: null };
+  return {
+    pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {},
+    reportedStale: false, actedOn: null, reviewer: null, escalated: null,
+    mergeAttempted: false, mergeBlocked: false, stateSince: Date.now(),
+  };
 }
 
 function fingerprint(derived) {
@@ -507,44 +730,63 @@ function makeLiveSource(repo) {
       if (!r.ok) return { ok: false, error: r.error };
       return { ok: true, pr: r.json };
     },
+    // 合并门数据：labels + CI rollup + mergeable（合并前重查一次，防判绿后被撞冲突）
+    getPrGate(number) {
+      const r = runGh(['pr', 'view', String(number), '--json', 'labels,isDraft,statusCheckRollup,mergeable,mergeStateStatus']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, pr: r.json };
+    },
     getComments(number) {
-      // 与 getReviews 同口径：gh pr view --json comments 硬截断 100。
-      // 走 issue comments REST + --paginate；字段映射成 createdAt（完工信号用）。
       const r = runGh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
       const comments = (Array.isArray(r.json) ? r.json : []).map(c => ({
-        id: c.id,
-        body: c.body || '',
-        createdAt: c.created_at || c.createdAt || '',
+        id: c.id, body: c.body || '', createdAt: c.created_at || c.createdAt || '',
       }));
       return { ok: true, comments };
     },
     getReviews(number) {
-      // 红 1（复核）：gh pr view 的 review id 是 GraphQL node id（PRR_...），拼不出真锚点——
-      // 返工指令必须给活链接。改走 gh api 直取数字 id + html_url。
-      // 注意：--paginate 配 --jq 会逐页输出多段独立 JSON（观察 1：多页时 JSON.parse 必炸）——
-      // 所以不带 --jq，让 --paginate 合并成单个数组，字段在 JS 里映射。
       const r = runGh(['api', `repos/${repo}/pulls/${number}/reviews`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
       const reviews = (Array.isArray(r.json) ? r.json : []).map(rv => ({
-        id: rv.id,
-        body: rv.body || '',
-        submittedAt: rv.submitted_at || '',
-        url: rv.html_url || null,
+        id: rv.id, body: rv.body || '', submittedAt: rv.submitted_at || '', url: rv.html_url || null,
       }));
       return { ok: true, reviews };
     },
-    orcaWorktrees() {
-      const r = runOrca(['worktree', 'list', '--json']);
+    // task-list 镜像（dispatch 寻址）：spec 含任务书，PR 号从 spec 提取
+    orcaTasks() {
+      const r = runOrca(['orchestration', 'task-list', '--json']);
       if (!r.ok) return { ok: false, error: r.error };
-      const wts = unwrap(r.json, 'worktrees', 'worktrees');
-      return Array.isArray(wts) ? { ok: true, worktrees: wts } : { ok: false, error: 'worktree list 结构不认识' };
+      const tasks = unwrap(r.json, 'tasks', 'tasks');
+      if (!Array.isArray(tasks)) return { ok: false, error: 'task-list 结构不认识' };
+      // dispatchId 不随 task-list 给全，按需 dispatch-show（慢路径只发生在投递时）
+      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatch_id || t.dispatchId || null }));
+      return { ok: true, tasks: out };
     },
-    orcaTerminals() {
-      const r = runOrca(['terminal', 'list', '--json']);
+    dispatchIdFor(taskId) {
+      const r = runOrca(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
+      if (!r.ok) return null;
+      const d = r.json?.result?.dispatchId || r.json?.result?.dispatch?.id || r.json?.dispatchId || null;
+      return d || null;
+    },
+    // live 门铃：check --wait（阻塞替代 sleep）。返回 { ok, messages, deliveryId }；
+    // 超时（count 0）也是正常 checkpoint，不是失败。
+    checkWait(ackId, timeoutMs) {
+      const args = ['orchestration', 'check', '--wait', '--types', 'worker_done,escalation,question',
+        '--timeout-ms', String(timeoutMs), '--json'];
+      if (ackId) args.push('--ack', ackId);
+      const r = runCmd('orca', args, timeoutMs + CHECK_KEEPALIVE_SLACK_MS);
       if (!r.ok) return { ok: false, error: r.error };
-      const terms = unwrap(r.json, 'terminals', 'terminals');
-      return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'terminal list 结构不认识' };
+      let json;
+      try { json = JSON.parse(r.out); } catch (e) { return { ok: false, error: `check --wait 输出不是 JSON：${e.message}` }; }
+      const result = json?.result ?? json ?? {};
+      const messages = result.messages ?? result.delivery?.messages ?? result.batch?.messages ?? (Array.isArray(result) ? result : []);
+      const deliveryId = result.delivery_id ?? result.deliveryId ?? result.delivery?.id ?? result.batch?.id ?? result.ack ?? json.delivery_id ?? null;
+      return { ok: true, messages: Array.isArray(messages) ? messages : [], deliveryId: deliveryId || null, timedOut: (messages?.length || 0) === 0 };
+    },
+    runUse(runId) {
+      const r = runOrca(['orchestration', 'run-use', '--id', runId, '--json']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true };
     },
   };
 }
@@ -579,6 +821,15 @@ function makeSnapshotSource(roundDir, repo) {
       if (!r.ok) return r;
       return { ok: true, pr: r.json };
     },
+    getPrGate(number) {
+      // 快照优先 pr-<N>-gate.json（可只含 labels/isDraft/statusCheckRollup/mergeable），
+      // 没有则从 pr-<N>.json 取（老夹具无这些字段时按缺失处理）
+      const r = readJson(join(roundDir, `pr-${number}-gate.json`));
+      if (r.ok) return { ok: true, pr: r.json };
+      const r2 = readJson(join(roundDir, `pr-${number}.json`));
+      if (!r2.ok) return { ok: true, pr: {} };
+      return { ok: true, pr: r2.json };
+    },
     getComments(number) {
       const r = readJson(join(roundDir, `pr-${number}-comments.json`));
       return r.ok ? { ok: true, comments: r.json } : { ok: true, comments: [] };
@@ -588,35 +839,32 @@ function makeSnapshotSource(roundDir, repo) {
       if (!r.ok) return { ok: true, reviews: [] };
       return {
         ok: true,
-        // 镜像 live 形态：有 html_url 用真锚点（gh api 口径），没有才退回拼（数字 id 才能拼出活链接）
         reviews: r.json.map(rv => ({
-          id: rv.id,
-          body: rv.body,
+          id: rv.id, body: rv.body,
           submittedAt: rv.submitted_at || rv.submittedAt,
           url: rv.html_url || `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
         })),
       };
     },
-    orcaWorktrees() {
-      const r = readJson(join(roundDir, 'orca-worktrees.json'));
-      if (!r.ok) return { ok: true, worktrees: [] };
-      const wts = unwrap(r.json, 'worktrees', 'worktrees');
-      return Array.isArray(wts) ? { ok: true, worktrees: wts } : { ok: false, error: 'orca-worktrees.json 结构不认识' };
+    orcaTasks() {
+      const r = readJson(join(roundDir, 'orca-tasks.json'));
+      if (!r.ok) return { ok: true, tasks: [] };
+      const tasks = Array.isArray(r.json) ? r.json : unwrap(r.json, 'tasks', 'tasks') || [];
+      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatchId || t.dispatch_id || null }));
+      return { ok: true, tasks: out };
     },
-    orcaTerminals() {
-      const r = readJson(join(roundDir, 'orca-terminals.json'));
-      if (!r.ok) return { ok: true, terminals: [] };
-      const terms = unwrap(r.json, 'terminals', 'terminals');
-      return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'orca-terminals.json 结构不认识' };
-    },
+    dispatchIdFor() { return null; },
+    checkWait() { return { ok: true, messages: [], deliveryId: null, timedOut: true }; },
+    runUse() { return { ok: true }; },
   };
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 动作执行（红 1/2/4/5 落点：目标解析走 source，dry-run 也覆盖解析路径）
+// 动作执行
 // ══════════════════════════════════════════════════════════════════════
 
-function executeAction(action, pr, toml, source, rec, dryRun) {
+function executeAction(action, pr, toml, source, rec, args) {
+  const repo = args.repo || 'thoerwink8/windsurf-dao';
 
   if (action.kind === 'start-reviewer') {
     const cls = classifyPr(pr);
@@ -632,111 +880,185 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
       return { ok: false, error: `审官 ${reviewer.id} 的 provider 无启动配方（${reviewer.provider}）`, needsReport: 'report-unknown' };
     }
     const label = reviewerLabel(reviewer);
-    const taskBook = reviewTaskBook(pr, cls.model, label);
-    // 任务卡名按全局约定「#PR号 - 动宾短语」（观察 3：终端名角色·模型、卡名带号）
+    const taskBook = reviewTaskBook(pr, label);
+    // 任务卡 spec 带「审官任务」标记 + #PR 号（dispatch 寻址与 task-list 反查用）
     const cardName = `#${pr.number} - ${label}`;
-    // 红 5：--parent-worktree 合法 selector 是 branch:/issue:/id:/path:/folder:/worktree:，
-    // name: 是 --repo 的 selector 不是 worktree 的——用 branch:<headRefName>（现成合法）。
-    const parentSel = `branch:${pr.headRefName}`;
-    const steps = launch.oneShot
-      ? [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --agent ${launch.agent} --prompt <复核任务书> --json`]
-      : [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --setup skip --json`,
-         `orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`,
-         '（注入前先 terminal read 轮询就绪，再 send 任务书——配置同步期抢跑必被吞）'];
-    if (dryRun) {
+    const taskSpec = `审官任务：${cardName}。任务 PR：#${pr.number} ${pr.title}。${taskBook.replace(/\r?\n/g, ' ').slice(0, 400)}`;
+    const steps = [
+      `orca orchestration task-create --spec "<审官任务：${cardName}，任务 PR：#${pr.number}>" --json`,
+    ];
+    if (launch.twoStep) {
+      steps.push(
+        `orca worktree create --parent-worktree branch:${pr.headRefName} --name "${cardName}" --setup skip --json`,
+        `orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`,
+        `orca orchestration worker-start --task <task_id> --worktree <审官卡 id> --terminal <handle> --json`,
+      );
+    } else {
+      steps.push(`orca orchestration worker-start --task <task_id> --worktree current --agent ${launch.agent} --model ${launch.model} --json`);
+    }
+    if (args.dryRun) {
       return {
         ok: true, dry: true,
-        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）（受控例外：不走 worker-start，随 #480 重做）`
+        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）：task-create + worker-start`
           + '\n' + steps.map(s => '  ' + s).join('\n')
           + '\n  ' + '注入复核任务书：' + taskBook.replace(/\n/g, '\n  '),
       };
     }
-    // live：受控例外（随 #480 退役）——不走 worker-start，worktree create 直起。
-    // 人工路径禁止抄。起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
-    const createR = runOrca(launch.oneShot
-      ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--agent', launch.agent, '--prompt', taskBook, '--json']
-      : ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--setup', 'skip', '--json']);
-    if (!createR.ok) return { ok: false, error: `起审官卡失败：${createR.error}` };
-    const newWtId = createR.json?.result?.worktree?.id || null;
-    let handle;
-    if (launch.oneShot) {
-      handle = createR.json?.result?.agentTerminalHandle || createR.json?.result?.startupTerminal?.handle;
-      if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
-      const v = verifyStarted(handle, null, label);
-      if (!v.ok) return { ok: false, error: v.error };
-      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
+    // live：task-create → worker-start（dispatch 身份硬要求；Claude 族按 routing 两步收口）
+    const tc = runOrca(['orchestration', 'task-create', '--spec', taskSpec, '--json']);
+    if (!tc.ok) return { ok: false, error: `起审官 task-create 失败：${tc.error}`, needsReport: 'report-unknown' };
+    const taskId = tc.json?.result?.id || tc.json?.task?.id || null;
+    if (!taskId) return { ok: false, error: '起审官 task-create 成功响应但缺 task id（结构畸形）', needsReport: 'report-unknown' };
+    let dispatchId = null;
+    if (launch.twoStep) {
+      const wtR = runOrca(['worktree', 'create', '--parent-worktree', `branch:${pr.headRefName}`, '--name', cardName, '--setup', 'skip', '--json']);
+      if (!wtR.ok) return { ok: false, error: `起审官卡失败：${wtR.error}`, needsReport: 'report-unknown' };
+      const wtId = wtR.json?.result?.worktree?.id || null;
+      const termR = runOrca(['terminal', 'create', '--worktree', wtId, '--command', launch.command, '--json']);
+      if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}`, needsReport: 'report-unknown' };
+      const handle = termR.json?.result?.terminal?.handle || null;
+      const wsR = runOrca(['orchestration', 'worker-start', '--task', taskId, '--worktree', wtId, '--terminal', handle, '--json']);
+      if (!wsR.ok) return { ok: false, error: `起审官 worker-start 失败：${wsR.error}`, needsReport: 'report-unknown' };
+      dispatchId = wsR.json?.result?.dispatch?.id || wsR.json?.result?.dispatchId || null;
+    } else {
+      const wsR = runOrca(['orchestration', 'worker-start', '--task', taskId, '--worktree', 'current', '--agent', launch.agent, '--model', launch.model, '--json']);
+      if (!wsR.ok) return { ok: false, error: `起审官 worker-start 失败：${wsR.error}`, needsReport: 'report-unknown' };
+      dispatchId = wsR.json?.result?.dispatch?.id || wsR.json?.result?.dispatchId || null;
     }
-    const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
-    if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
-    handle = termR.json?.result?.terminal?.handle;
-    if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
-    const ready = waitTerminalReady(handle, READY_TIMEOUT_MS, label);
-    if (!ready.ok) return { ok: false, error: ready.error };
-    const v = injectAndVerify(handle, taskBook, label);
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
+    return {
+      ok: true, taskId, dispatchId, label, taskBook,
+      line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：task-create + worker-start（dispatch=${dispatchId || '?'}）`,
+    };
   }
 
   if (action.kind === 'inject-rework') {
     const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
-    const wtsR = source.orcaWorktrees();
-    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
-    const wtErr = !wtsR.ok ? wtsR.error : workerWt ? null : `找不到 branch ${pr.headRefName} 的 worktree`;
-    const termsR = source.orcaTerminals();
-    let target = null;
-    if (workerWt && termsR.ok) target = pickUniqueTerminal(termsR.terminals, workerWt.id, rec.reviewer?.handle || null);
-    else if (!termsR.ok) target = { ok: false, error: termsR.error };
-    if (dryRun) {
-      if (target?.ok) {
-        return { ok: true, dry: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）（注入目标：工人终端 ${target.terminal.handle}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    const map = buildDispatchMap(source, { dispatchCache: {} });
+    const dispatchId = workerDispatchFor(map, pr.number);
+    if (!dispatchId) {
+      if (args.dryRun) {
+        // 预览-阻塞：可见但不落闸（旧观察 1 口径——预览不改变值守状态）
+        return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——投递目标解析失败：找不到工人 dispatch）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
       }
-      // 观察 1：解析失败不用「动作：」前缀（grep 动作 应只数真实动作），改「预览-阻塞：」
-      return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——注入目标解析失败：${target?.error || wtErr || '终端列表不可用'}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      return { ok: false, error: `找不到 PR #${pr.number} 工人 dispatch（task-list 里 spec 含 #${pr.number} 的非审官任务应为唯一候选）——待帅转交返工指令`, needsReport: 'reviewer-unfound' };
     }
-    if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
-    if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
-    const v = injectAndVerify(target.terminal.handle, instruction, pr.title);
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）` };
+    if (args.dryRun) {
+      return { ok: true, dry: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：send --to dispatch:${dispatchId}` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    }
+    const s = sendToDispatch(dispatchId, `返工指令 · PR #${pr.number} · 第 ${action.round} 轮`, instruction, args);
+    if (!s.ok) return { ok: false, error: `send --to dispatch:${dispatchId} 失败：${s.error}` };
+    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：send --to dispatch:${dispatchId}` };
   }
 
   if (action.kind === 'inject-recheck') {
     const instruction = recheckInstruction(pr, action.round, action.reviewerLabel || '审官');
-    const wtsR = source.orcaWorktrees();
-    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
-    const target = wtsR.ok ? findReviewerTerminal(source, pr, rec, workerWt || undefined) : { ok: false, error: wtsR.error };
-    // 四轮复核红 1：reviewer-unfound 是「待帅接手复核」的结构性卡住，不是预览工件——
-    // dry-run 也走失败路径（写 pendingShuai 常驻），不短路成预览-阻塞
-    if (!target?.ok) return { ok: false, error: target.error, needsReport: 'reviewer-unfound' };
-    if (dryRun) {
-      return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    const map = buildDispatchMap(source, { dispatchCache: {} });
+    const dispatchId = reviewerDispatchFor(map, pr.number, rec);
+    if (!dispatchId) {
+      // reviewer-unfound 是结构性卡住（流转器没起过审官 / task-list 里没有审官卡）——
+      // dry-run 也走失败路径写 pendingShuai 常驻，不短路成预览（旧四轮复核红 1 口径）
+      return { ok: false, error: '找不到审官 dispatch（未记录起审官 dispatchId，task-list 里也没有审官任务卡）——待帅接手复核', needsReport: 'reviewer-unfound' };
     }
-    if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
-    const v = injectAndVerify(target.terminal.handle, instruction, '审官');
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）` };
+    if (args.dryRun) {
+      return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：send --to dispatch:${dispatchId}` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    }
+    const s = sendToDispatch(dispatchId, `复核指令 · PR #${pr.number} · 第 ${action.round} 轮返工后`, instruction, args);
+    if (!s.ok) return { ok: false, error: `send --to dispatch:${dispatchId} 失败：${s.error}`, needsReport: 'reviewer-unfound' };
+    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：send --to dispatch:${dispatchId}` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// heartbeat（流转器停摆判据的数据源；看门狗在 #471 读它）
+// ══════════════════════════════════════════════════════════════════════
+
+function writeHeartbeat(args, state, round, wakeSource, pendingCount, prs) {
+  const hb = {
+    ts: new Date().toISOString(),
+    round,
+    lastWakeSource: wakeSource || 'startup',
+    pendingCount,
+    prs,
+  };
+  try {
+    writeJsonAtomic(args.heartbeatFile, hb);
+  } catch (e) {
+    // heartbeat 写失败不崩值守（报一行即可）；看门狗会因 ts 不更新而报警
+    console.log(`[flow] heartbeat 写失败：${String(e.message || e).slice(0, 160)}`);
+  }
+}
+
+function heartbeatPrs(open, records) {
+  const now = Date.now();
+  return open.map(p => {
+    const rec = records[p.number];
+    return {
+      number: p.number,
+      state: rec?.derivedState || 'working',
+      sinceMs: rec?.stateSince ? now - rec.stateSince : null,
+    };
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// --explain：对每个在途 PR 输出「当前态 + 下一步该做什么 + 卡在哪」，帅照着人肉执行
+// ══════════════════════════════════════════════════════════════════════
+
+const STATE_NEXT = {
+  working: '工人开工中——等完工信号（worker_done 门铃 / GitHub 完工 comment）。卡点：超 24h 无动静需帅查工位。',
+  'awaiting-review': '已完工无审官——下一步：起审官（task-create + worker-start）。卡点：起审官失败时见待帅处置。',
+  'rework-needed': '审官判红——下一步：send --to dispatch:<工人> 返工指令。卡点：找不到工人 dispatch 时待帅转交。',
+  'awaiting-recheck': '返工完成——下一步：send --to dispatch:<审官> 复核指令。卡点：找不到审官 dispatch 时待帅接手。',
+  approved: '复核绿——下一步：合并三条件检查（CI 全绿 + merge/auto 标签 + mergeable 重查）。卡点：见下方 gate 原因。',
+  switch: '审官标注「同一处未修好」——下一步：帅决定换人（换人决策归帅，不自动换）。',
+  'shang-shuai': '上帅（上帅：行 / 六轮兜底 / escalation）——停手。下一步：帅处置；不再自动流转。',
+  error: '判定行缺失/格式不符——报帅分诊，不猜红绿。',
+};
+
+function explainLine(pr, derived, rec, gateReason) {
+  const lines = [`[explain] PR #${pr.number} ${pr.title}：state=${derived.state}${derived.redReviews ? `（红 ${derived.redReviews} 轮）` : ''}`];
+  lines.push(`  当前态：${STATE_NEXT[derived.state] || derived.state}`);
+  if (rec?.pendingShuai?.reason) lines.push(`  卡在哪：${rec.pendingShuai.reason}`);
+  else if (derived.state === 'approved' && gateReason) lines.push(`  卡在哪：${gateReason}`);
+  if (derived.state === 'approved') {
+    lines.push('  人工可执行：gh pr view ' + pr.number + ' --json statusCheckRollup,mergeable,mergeStateStatus 自查三条件；齐了跑 gh pr merge ' + pr.number + ' --squash');
+  }
+  return lines;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 一轮扫描
 // ══════════════════════════════════════════════════════════════════════
 
-// 一轮：返回 { events, noTargets, infraError }；events 是输出行。
-// noTargets = 本轮没查成（读不到数据，语义「没扫到」）；infraError = 基础设施失败。
-// 两者都要与「扫完 0 需流转」（正常 OK 行）可区分（仓规：数到 0 和没看到样本不是一回事）。
-function processOneRound(source, state, args) {
+// 一轮：返回 { events, noTargets, infraError, hb }；events 是输出行。hb = heartbeat 数据
+// （wakeSource/pendingCount/prs），早退（读不到数据）也带——看门狗靠「ts 不更新」区分
+// 「流转器死了」和「流转器活着但没查成」。
+function processOneRound(source, state, args, wakeSource, nativeMessages) {
   const events = [];
   const routing = loadRouting();
   const toml = routing.ok ? routing.toml : null;
   if (!routing.ok) {
-    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true };
+    return {
+      events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true,
+      hb: { wakeSource: wakeSource || 'github-poll', pendingCount: 0, prs: [] },
+    };
   }
 
+  // 原生消息先处理（escalation → 上帅记账；worker_done → dispatch 缓存）
+  const dispatchMap = buildDispatchMap(source, state);
+  const native = processNativeMessages(nativeMessages || [], state, dispatchMap, args);
+  for (const l of native.lines) events.push(l);
+  wakeSource = wakeSource || native.wakeSource || 'github-poll';
+
   const list = source.listOpenPrs();
-  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true };
+  if (!list.ok) {
+    return {
+      events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true,
+      hb: { wakeSource, pendingCount: 0, prs: [] },
+    };
+  }
   const open = list.prs;
   const openByNumber = new Map(open.map(p => [p.number, p]));
   const records = state.records;
@@ -752,7 +1074,7 @@ function processOneRound(source, state, args) {
     const st = prView.ok ? (prView.pr.state || '') : '';
     if (st === 'MERGED') {
       rec.retired = true;
-      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）`);
+      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（合并即归档归帅）`);
     } else if (st === 'CLOSED') {
       rec.retired = true;
       events.push(`[flow] 退役：PR #${rec.pr} CLOSED（未合并关闭）`);
@@ -779,72 +1101,124 @@ function processOneRound(source, state, args) {
     const comments = commentsR.comments || [];
     const reviews = reviewsR.reviews || [];
 
-    // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿
+    // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿。
+    // 带标注行（上帅：/同一处未修好/新引入）的 review 不算缺判定行——标注本身就是要流转器做的事。
     for (const rv of reviews) {
       if (rec.seenReviews[rv.id]) continue;
       if (rv.id == null) continue;
       const v = judgmentFromReview(rv.body);
+      const ann = reviewAnnotations(rv.body);
+      if (ann.shangShuai || ann.sameSpot || ann.newIntroduced) continue;
       if (v.kind && !v.malformed) continue;
       if (!rec.reportedMalformed[rv.id]) {
         rec.reportedMalformed[rv.id] = true;
         events.push(`[flow] 报帅：判定行缺失/格式不符 #${pr.number}（review id=${rv.id}，无「判定/复核结论」行或红绿都判不出）——本脚本不能确定红绿，没查成，请帅分诊`);
-        // 四轮复核红 1：四类状态原因并入 pendingShuai（error 态由 state 兜底也常驻）
         rec.pendingShuai = { kind: 'error', reason: '判定行缺失/格式不符待帅分诊' };
       }
     }
 
-    // 新信号（完工 comment + 全部 review）按时间序重放推导当前态
-    const all = orderedSignals(comments, reviews);
-    const derived = deriveState(all);
-    const fp = fingerprint(derived);
+    // 新信号（完工 comment + 门铃完工 + 全部 review）按时间序重放推导当前态
+    const all = orderedSignals(comments, reviews, nativeMessages, dispatchMap);
+    const derivedRaw = deriveState(all);
+    const fp = fingerprint(derivedRaw);
+    let derived = derivedRaw;
 
-    // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
-    if (rec.actedOn !== fp) {
-      // 自愈（三轮复核红 1 + 四轮扩展）：新信号（fp 变化）到来即清除待帅记账给一次重试——
-      // fp 去重保证每个新信号至多重试一次，不变成「重试狂发」（首审红 1 底线不破）
-      if (rec.pendingShuai) rec.pendingShuai = null;
+    // escalation 上帅记账：消息已到 → 落账并强制 shang-shuai；无新 review 前一直强制，
+    // 新 review（= 帅已处置）到达即恢复自动流转
+    const newEsc = native.escalations.filter(e => e.pr === pr.number);
+    if (newEsc.length > 0) {
+      rec.escalated = { at: Date.now(), reason: newEsc[0].reason };
+      rec.pendingShuai = { kind: 'shang-shuai', reason: newEsc[0].reason };
+      derived = { ...derivedRaw, state: 'shang-shuai' };
+    } else if (rec.escalated) {
+      const newReview = (reviews || []).some(rv => rv.id != null && !rec.seenReviews[rv.id]);
+      if (newReview && derivedRaw.state !== 'shang-shuai') {
+        rec.escalated = null;
+        rec.pendingShuai = null;
+        events.push(`[flow] 上帅解除 #${pr.number}：新 review 到达，恢复自动流转`);
+      } else {
+        derived = { ...derivedRaw, state: 'shang-shuai' };
+      }
+    }
+
+    rec.derivedState = derived.state;
+    if (fp !== rec.actedOn) rec.stateSince = Date.now();
+
+    // 复核绿：合并门每轮重查（CI/标签/mergeable 会无信号变化），不塞 fp 闸
+    if (derived.state === 'approved') {
+      if (args.explain) {
+        const gateR = source.getPrGate(pr.number);
+        const ci = gateR.ok ? ciState(gateR.pr.statusCheckRollup) : ciState(null);
+        const gate = gateR.ok ? mergeGate(gateR.pr, ci) : { ok: false, reason: '读合并门数据失败' };
+        for (const l of explainLine(pr, derived, rec, gate.ok ? null : gate.reason)) events.push(l);
+      } else {
+        const h = handleApproved(pr, rec, source, args, args.repo || 'thoerwink8/windsurf-dao');
+        for (const l of h.lines) events.push(l);
+        if (h.noTargets) noTargets = true;
+        rec.actedOn = fp; // 防 stateSince 每轮重置；gate 每轮仍重查
+      }
+    } else if (args.explain) {
+      for (const l of explainLine(pr, derived, rec, null)) events.push(l);
+    }
+
+    // 上帅首现报帅（fp 变化时一次；escalation 路径已在消息处理时报过）
+    if (!args.explain && derived.state === 'shang-shuai' && rec.actedOn !== fp && rec.pendingShuai?.kind !== 'shang-shuai') {
+      const why = derived.latestAnnotation?.shangShuai
+        ? `审官上帅：${derived.latestAnnotation.shangShuai}`
+        : derived.redReviews >= RED_FALLBACK_ROUNDS
+          ? `六轮红判定兜底上帅（第 ${derived.redReviews} 次红判定，不自动换人）`
+          : '上帅';
+      events.push(`[flow] 报帅：上帅 #${pr.number}（${why}）——停止自动流转，不再自动流转该 PR`);
+    }
+
+    // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）；--explain 只读不动作
+    if (!args.explain && rec.actedOn !== fp && derived.state !== 'approved') {
+      // 自愈：新信号（fp 变化）到来即清除待帅记账给一次重试——fp 去重保证每个新信号至多重试一次
+      if (rec.pendingShuai && derived.state !== 'shang-shuai' && derived.state !== 'switch' && derived.state !== 'error') rec.pendingShuai = null;
       const action = pendingAction(derived);
       if (action) {
-        if (action.kind === 'report-final') {
-          // 复核绿 → 报帅终审（终审 + 校准 + 合并归档归帅，本脚本不自动合并）
-          events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并`);
-          rec.pendingShuai = { kind: 'report-final', reason: '复核绿待帅终审' };
+        if (action.kind === 'report-switch') {
+          events.push(`[flow] 报帅：换人 #${pr.number}（审官标注「同一处未修好」，第 ${action.round} 次红判定）——换人决策归帅，不自动换`);
+          rec.pendingShuai = { kind: 'report-switch', reason: '审官标注「同一处未修好」待帅换人' };
           rec.actedOn = fp;
-        } else if (action.kind === 'report-switch') {
-          // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
-          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅`);
-          rec.pendingShuai = { kind: 'report-switch', reason: '乒乓两轮仍红待帅换人' };
-          rec.actedOn = fp;
+        } else if (action.kind === 'start-reviewer') {
+          const exec = executeAction(action, pr, toml, source, rec, args);
+          if (exec.ok) {
+            events.push(exec.line);
+            rec.pendingShuai = null;
+            rec.actedOn = fp;
+            if (action.kind === 'start-reviewer' && exec.taskId) {
+              rec.reviewer = { taskId: exec.taskId, dispatchId: exec.dispatchId || null, label: exec.label, taskBook: exec.taskBook };
+              state.dispatchCache = state.dispatchCache || {};
+              if (exec.dispatchId) state.dispatchCache[exec.taskId] = exec.dispatchId;
+            }
+          } else {
+            events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
+            rec.pendingShuai = {
+              kind: action.kind,
+              reason: exec.needsReport === 'reviewer-unfound' ? '找不到投递目标 dispatch——待帅转交' : '起审官失败待帅接手（新信号到来自动重试一次）',
+            };
+            rec.actedOn = fp;
+          }
         } else {
           const extra = {
             reviewUrl: action.kind === 'inject-rework' ? lastReviewUrl(reviews) : null,
-            reviewerHandle: rec.reviewer?.handle || null,
-            reviewerWorktree: rec.reviewer?.worktree || null,
             reviewerLabel: rec.reviewer?.label || null,
           };
-          const exec = executeAction({ ...action, ...extra }, pr, toml, source, rec, args.dryRun);
+          const exec = executeAction({ ...action, ...extra }, pr, toml, source, rec, args);
           if (exec.ok) {
             events.push(exec.line);
-            rec.pendingShuai = null; // 动作成功：待帅记账清（四轮复核红 1）
+            rec.pendingShuai = null; // 动作成功：待帅记账清
             rec.actedOn = fp;
             if (exec.line.startsWith('[flow] 预览-阻塞')) {
-              // dry-run 注入目标解析失败：本轮可见但不落 pendingShuai（三轮复核红 1——
-              // 预览不改变值守状态，否则真跑一次预览会把 PR 永久锁死）
+              // dry-run 投递目标解析失败：本轮可见但不落 pendingShuai（预览不改变值守状态）
               thisRoundFailed.add(pr.number);
             }
-            if (action.kind === 'start-reviewer' && exec.handle) {
-              rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
-            }
           } else {
-            // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
-            // 待帅记账独立于注入闸（四轮复核红 1）：注入失败 / reviewer-unfound /
-            // report-unknown 三处都写 pendingShuai（不 gate 注入，闸已由 fp 去重承担）
             rec.pendingShuai = {
               kind: action.kind,
-              reason: exec.needsReport === 'reviewer-unfound' ? '找不到审官终端——待帅接手复核'
-                : exec.needsReport === 'report-unknown' ? '选不出审官（缺 model/type 标签或路由表无审查模型）——请帅处置'
-                : '注入失败待帅接手（新信号到来自动重试一次）',
+              reason: exec.needsReport === 'reviewer-unfound' ? '找不到投递目标 dispatch——待帅转交' : '投递失败待帅接手（新信号到来自动重试一次）',
             };
             rec.actedOn = fp;
           }
@@ -858,17 +1232,16 @@ function processOneRound(source, state, args) {
     for (const c of comments) if (c && c.id != null) rec.seenComments[c.id] = true;
     for (const rv of reviews) if (rv && rv.id != null) rec.seenReviews[rv.id] = true;
 
-    // 待帅处置常驻行（红 3）：pendingShuai/approved/error/pingpong/本轮失败每轮显形
+    // 待帅处置常驻行（红 3）：pendingShuai/approved/error/switch/shang-shuai/本轮失败每轮显形
     const reason = awaitingShuaiReason(derived, rec, thisRoundFailed.has(pr.number));
     if (reason) awaitingShuai.push({ pr: pr.number, reason });
 
-    // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类；
-    // 用 updatedAt 算停留——天天在推的长战线 PR 不算「停留」，对抗审观察 7）
+    // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类）
     if (isInstitutional(pr) && !rec.reportedStale && (pr.updatedAt || pr.createdAt)) {
       const age = Date.now() - Date.parse(pr.updatedAt || pr.createdAt);
       if (age > STALE_24H_MS) {
         rec.reportedStale = true;
-        events.push(`[flow] 提醒：制度类 PR #${pr.number} ${pr.title} 已停留超 24h（updatedAt=${pr.updatedAt || pr.createdAt}）——垫片在顶着，请帅安排收口`);
+        events.push(`[flow] 提醒：制度类 PR #${pr.number} ${pr.title} 已停留超 24h（updatedAt=${pr.updatedAt || pr.createdAt}）——请帅安排收口`);
       }
     }
   }
@@ -882,12 +1255,16 @@ function processOneRound(source, state, args) {
     if (records[key].retired) delete records[key];
   }
 
+  // heartbeat：每轮结束原子写（格式契约见文件头 + PR 正文；看门狗 #471 读它）
+  state.round = (Number(state.round) || 0) + 1;
+  const hb = { wakeSource, pendingCount: awaitingShuai.length, prs: heartbeatPrs(open, records) };
+
   const scanned = open.length;
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置') || e.startsWith('[flow] 打回人工') || e.startsWith('[flow] 门铃') || e.startsWith('[flow] 上帅解除'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
-  return { events, noTargets, infraError };
+  return { events, noTargets, infraError, hb };
 }
 
 function lastReviewUrl(reviews) {
@@ -906,7 +1283,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, extractPrsFromSpec };
 
 let args = null;
 let anyEmitted = false;
@@ -920,15 +1297,18 @@ export function main(argv = process.argv.slice(2)) {
   process.exit(anyInfra ? 3 : anyNoTargets ? 2 : anyEmitted ? 1 : 0);
 }
 
-function runOneRound(source, state) {
-  const round = processOneRound(source, state, args);
+function runOneRound(source, state, wakeSource, nativeMessages) {
+  const round = processOneRound(source, state, args, wakeSource, nativeMessages);
   for (const line of round.events) {
     console.log(line);
     if (line.startsWith('[flow] NO_TARGETS')) anyNoTargets = true;
     else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
-  saveState(args.stateFile, state);
+  if (!args.explain) {
+    writeHeartbeat(args, state, state.round, round.hb.wakeSource, round.hb.pendingCount, round.hb.prs);
+    saveState(args.stateFile, state); // explain 只读，不落状态
+  }
   return round;
 }
 
@@ -942,13 +1322,17 @@ function liveLoop() {
     }
     repo = r.json.nameWithOwner;
   }
-  console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
+  args.repo = repo;
+  const waitMs = args.interval * 1000;
+  console.log(`# flow live：check --wait ${args.interval}s 超时即 GitHub 兜底轮询（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca/gh 写操作' : ''}${args.run ? `，run=${args.run}` : ''}）`);
+  let lastAck = null;
+  let pendingNative = [];
   for (;;) {
     const state = loadState(args.stateFile);
     if (state.loadError) {
       console.log(`[flow] NO_TARGETS：状态文件损坏（${state.loadError}）——本轮没查成，先修状态文件`);
       if (args.once) process.exit(2);
-      sleep(args.interval * 1000);
+      sleep(waitMs);
       continue;
     }
     if (!state.inventoried) {
@@ -956,9 +1340,30 @@ function liveLoop() {
       state.inventoried = true;
     }
     const source = makeLiveSource(repo);
-    const round = runOneRound(source, state);
-    if (args.once) break;
-    sleep(args.interval * 1000);
+    if (args.run) {
+      const used = source.runUse(args.run);
+      if (!used.ok) {
+        console.log(`[flow] NO_TARGETS：run-use 失败（${used.error}）——本轮没查成`);
+        if (args.once) process.exit(2);
+        sleep(waitMs);
+        continue;
+      }
+    }
+    // 首轮先存量清点（不等门铃），之后上一轮 check --wait 收的消息先处理，再 GitHub 重放判态
+    const wake = lastAck === null ? 'startup' : (pendingNative.length > 0 ? 'native' : 'github-poll');
+    runOneRound(source, state, wake, pendingNative);
+    pendingNative = [];
+    if (args.once || args.explain) break;
+    const waited = source.checkWait(lastAck, waitMs);
+    if (!waited.ok) {
+      console.log(`[flow] NO_TARGETS：check --wait 失败（${waited.error}）——本轮没查成`);
+      lastAck = null;
+      sleep(5000);
+      continue;
+    }
+    lastAck = waited.deliveryId;
+    // 门铃消息在下一轮处理（消息本身只负责唤醒 + 寻址，GitHub 重放判态）
+    pendingNative = waited.messages || [];
   }
 }
 
@@ -981,7 +1386,10 @@ function snapshotRun() {
   for (const dir of loaded.dirs) {
     if (multi) console.log(`# snapshot round ${basename(dir)}`);
     const source = makeSnapshotSource(dir, args.repo || 'thoerwink8/windsurf-dao');
-    runOneRound(source, state);
+    // 快照本轮的信箱投递（orca-messages.json，可缺省）
+    const msgsR = readJson(join(dir, 'orca-messages.json'));
+    const msgs = msgsR.ok && Array.isArray(msgsR.json) ? msgsR.json : [];
+    runOneRound(source, state, msgs.length > 0 ? 'native' : 'github-poll', msgs);
   }
 }
 

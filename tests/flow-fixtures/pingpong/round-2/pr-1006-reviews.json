@@ -1,1 +1,8 @@
-[{"id":301006,"body":"判定：红 3 项","state":"COMMENTED","submittedAt":"2026-08-15T01:00:00Z"}]
+[
+ {
+  "id": 301006,
+  "body": "判定：红 3 项",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T01:00:00Z"
+ }
+]

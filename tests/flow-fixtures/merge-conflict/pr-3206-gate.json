@@ -1,0 +1,19 @@
+{
+ "labels": [
+  {
+   "name": "merge/auto"
+  }
+ ],
+ "isDraft": false,
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "name": "check",
+   "status": "COMPLETED",
+   "conclusion": "SUCCESS",
+   "workflowName": "dao-check"
+  }
+ ],
+ "mergeable": "CONFLICTING",
+ "mergeStateStatus": "DIRTY"
+}

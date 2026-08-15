@@ -21,7 +21,7 @@ master 卡只住主会话，永远零工人。每个任务用 `orca orchestratio
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。门铃：派工后挂 Monitor 后台跑 `orca orchestration check --wait --types worker_done,escalation,question`（阻塞 CLI、等待期间零 token、消息到即返回），收 `worker_done`/`escalation`/`question` 才唤醒；不等 heartbeat——心跳空转实测 ~650 token/轮，只进信箱供怀疑时 peek，不唤醒。旧「check --wait 禁手」改写为「禁帅前台长等」：wait 由 Monitor 进程跑，不是帅的对话阻塞。
+派完即回对话态，帅不前台长等。门铃 + 流转 = `scripts/flow.mjs` 值守（Monitor 后台跑，阻塞 CLI、等待期间零 token、消息到即返回）：`orca orchestration check --wait --types worker_done,escalation,question` 收门铃，超时即 GitHub 兜底轮询；红项闭环（起审官/返工/复核/合并）全部自动，帅只在报警推到面前时处置。不等 heartbeat——心跳空转实测 ~650 token/轮，只进信箱供怀疑时 peek，不唤醒。旧「check --wait 禁手」改写为「禁帅前台长等」：wait 由流转器进程跑，不是帅的对话阻塞。
 
 完工信号：`worker_done` 是触发器、GitHub 是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
 
@@ -74,6 +74,17 @@ master 卡只住主会话，永远零工人。每个任务用 `orca orchestratio
 
 审官选型序与 Claude 族启动命令见 `docs/model-routing.toml`（[[rules]] 审官选型序 / [providers.claude]）——路由决策只存在那里，本页只留指针。pi 派单默认 deepseek-v4-flash（拍板 issue #462，model-routing.toml [providers.deepseek].default_model 固化），ds-pro 仅限重型任务。
 
+## 合并权（#478 拍板）
+
+派单问答里加一栏：**审完自动合，还是等用户终审？**
+
+- **默认「等用户终审」**：自动合必须显式勾选——代价不对称，忘勾自动合只是慢，忘勾终审就是没经用户眼的东西进了 master（#478 Q1）。
+- 勾了自动合 = 给 PR 打 `merge/auto` 标签（流转器合并三条件之一；落点用 GitHub 标签，不用 orca payload——撤回标签「等你」同域，兜底通道也读得到）。
+- **动 SKILL/CI/合并链的单**，问答里加一句提示「此单动 SKILL/CI，确认自动合？」——**提示不阻断**（#478 Q3，硬禁清单被用户否决）。
+- 中途撤回：给 PR 打 `等你` 标签即撤回，流转器合并前必查；反向（中途改自动合）不做（#478 Q4）。
+- 合并失败一律打回人工：流转器 comment 写明失败原因（冲突文件/CI 哪项红）+ 打 `等你` 标签 + 停手不重试（#478 Q5）。
+- 执行者是 `scripts/flow.mjs` 流转器（判定与执行分开），不是审官；合并三条件硬查：审官判定行绿 + CI 全绿（≥1 条 check 且全 SUCCESS）+ `merge/auto` 标签，合并前再重查一次 mergeable（#478 实战教训：#467 判绿后、合并前被 #466 撞成 CONFLICTING）。
+
 grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #443）；2026-08-15 起经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，装机见 NEW-MACHINE.md「grok 怎么配」；Grok Build auto 模式会硬拦 git push（对外发布闸），授权词是往终端回一句「推」——假拦（网络抖动）重试即过，真拦（宿主策略）需授权词。
 
 用户拍板换工具/通道/模型后立即对在途活生效（正在跑的当场切），协调者不得自行解释为「下一单起」；仅用户明说「跑完这单再切」才保留在途（拍板 2026-08-14，issue #443）。
@@ -108,8 +119,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 审官审完有红项，直接让工人改掉，内部解决完再报结果；实在解决不了才上帅（2026-08-14 拍板，issue #447）。边界三条：
 
-1. 通道：工人完工后不收信箱，「通知士兵」由协调者机械转发（不判断纯管道）；后续由 scripts/flow.mjs 流转器自动化（监听 review 判定行 / 完工 comment → 注入下一环，见 issue #455 分工定论：看门狗管事故、流转器管完工）。审官不自造旁路。
-2. 必须上帅：① 审官质疑拍板/规格本身；② 乒乓两轮仍有红项（换人信号）；③ 合并动作——终审 + 校准入口仍归帅，内部闭环止于审官 approve。
+1. 通道：工人完工后不收信箱，「通知士兵」由 `scripts/flow.mjs` 流转器接管（监听 review 判定行 / worker_done 门铃 → send --to dispatch 注入下一环，见 issue #455/#480 分工定论：看门狗管事故、流转器管完工；原生消息只做唤醒+寻址，GitHub 仍是判定与账本唯一真相源）。审官不自造旁路。
+2. 必须上帅：① 审官质疑拍板/规格本身（review 写「上帅：<原因>」行，或原生 escalation）——流转器停手叫人；② 审官标「同一处未修好」= 换人信号（决策归帅，不自动换）；③ 六轮红判定硬兜底——上帅不自动换人；④ 合并权默认等用户终审（勾了 merge/auto 才由流转器自动合，见「合并权」节）。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
 ## 命名规矩
@@ -132,7 +143,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 **禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
 
-**受控例外（自动起审官，随 #480 退役）**：`scripts/flow.mjs` 闭环内起审官仍走 `worktree create --parent-worktree`（oneShot 带 `--prompt`，Claude 两步走），不经 `worker-start`。原因：flow 自建注入/验开工/存量反查，整段将随 #480 换成原生 orchestration（结构化 worker_done / escalation / check --wait）。人工派工（含多工人/辅助卡）禁止抄这条例外——必须 `worker-start` 记账。
+**受控例外已退役（#480）**：`scripts/flow.mjs` 闭环内起审官一律 `task-create + worker-start` 拿 dispatch（codex 一步：`--worktree current --agent codex --model <id>`；Claude 族按 model-routing.toml 两步：建卡 + `terminal create --command "reclaude --model opus"` + `worker-start --terminal` 收口）。flow 不再注入终端、不再按 title 反查——指令投递走 `send --to dispatch:<id>` 结构化收件箱。人工派工同样必须 `worker-start` 记账，无例外。
 
 裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
 
@@ -213,7 +224,8 @@ orca orchestration worker-read --dispatch <dispatch_id> --json
 #   worker-start 无 --parent-worktree（--worktree new-child 挂的是当前卡，帅在 master 上会挂错），
 #   所以先 create 子卡，再 worker-start --terminal 收口记账——禁裸 create --agent 起完就走。
 #   --parent-worktree 用 branch:<任务分支>（name: 不是合法 selector；勿加 worktree: 前缀）。
-#   flow.mjs 自动起审官是受控例外（见「启动序」），不要把那条抄回这里。
+#   flow.mjs 闭环内起审官也走 task-create + worker-start（见「启动序」受控例外已退役），
+#   人工派工与自动流转同一条路，无例外。
 orca worktree create --parent-worktree branch:<任务分支> --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
 orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --terminal <agentTerminalHandle> --json
 #   审官若是 Claude Opus（审官选型序 UI 类 GPT 禁入时顶位）走两步收口——--agent 起不了 reclaude 链：

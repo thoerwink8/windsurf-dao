@@ -1,1 +1,20 @@
-[{"id":301006,"body":"判定：红 3 项","state":"COMMENTED","submittedAt":"2026-08-15T01:00:00Z"},{"id":310062,"body":"复核结论：红 2 项","state":"COMMENTED","submittedAt":"2026-08-15T02:00:00Z"},{"id":310064,"body":"复核结论：红 1 项","state":"COMMENTED","submittedAt":"2026-08-15T03:00:00Z"}]
+[
+ {
+  "id": 301006,
+  "body": "判定：红 3 项",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T01:00:00Z"
+ },
+ {
+  "id": 310062,
+  "body": "复核结论：红 2 项",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T02:00:00Z"
+ },
+ {
+  "id": 310064,
+  "body": "复核结论：红 1 项\n\n同一处未修好：红 1 与前两轮同一处反复。",
+  "state": "COMMENTED",
+  "submittedAt": "2026-08-15T03:00:00Z"
+ }
+]

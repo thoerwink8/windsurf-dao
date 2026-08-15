@@ -58,5 +58,32 @@ export function isCompletionComment(body) {
   return /^完工/.test(stripped) || /返工(?:完成|处置)/.test(stripped);
 }
 
+// 审官标注行（#480 拍板：换人判据从数轮次改成审官标注驱动）。行首锚定，允许 >/** 前缀，
+// 禁止搜全文——正文里引用的代码段含同样字样不得算标注（同 JUDGMENT_LINE_RE 的防骗口径）。
+//   「上帅：<原因>」  = 质疑拍板/规格本身或需帅决策 → 流转器停手叫人（review 侧兜底，对应原生 escalation 消息）
+//   「同一处未修好」  = 本轮红项与前几轮同一处反复 → 报帅换人信号（不自动换人，决策归帅）
+//   「新引入」        = 本轮红项是新引入的问题 → 继续闭环（不触发换人信号）
+export const SHANG_SHUAI_LINE_RE = /^\s*(?:[>*]\s*)*(上帅：)/;
+export const SAME_SPOT_LINE_RE = /^\s*(?:[>*]\s*)*(同一处未修好)/;
+export const NEW_INTRODUCED_LINE_RE = /^\s*(?:[>*]\s*)*(新引入)/;
+
+// 单条 review 的标注 → { shangShuai, sameSpot, newIntroduced }：
+//   shangShuai = 上帅原因文本（无原因行则 null）；sameSpot/newIntroduced = 布尔。
+// 标注与判定行互相独立：上帅：行可以单独出现（不写判定行）。
+export function reviewAnnotations(body) {
+  let shangShuai = null;
+  let sameSpot = false;
+  let newIntroduced = false;
+  for (const line of String(body || '').split(/\r?\n/)) {
+    if (shangShuai === null) {
+      const m = line.match(SHANG_SHUAI_LINE_RE);
+      if (m) shangShuai = line.slice(m[0].length).trim() || '（未写原因）';
+    }
+    if (SAME_SPOT_LINE_RE.test(line)) sameSpot = true;
+    if (NEW_INTRODUCED_LINE_RE.test(line)) newIntroduced = true;
+  }
+  return { shangShuai, sameSpot, newIntroduced };
+}
+
 // 供测试与 calibrate.mjs 引用正则本身（calibrate.tests.js 语义依赖）
 export const JUDGMENT_LINE_RE_EXPORT = JUDGMENT_LINE_RE;
