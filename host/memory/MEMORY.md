@@ -49,3 +49,4 @@
 - [spec 被当成任务边界](spec-is-read-as-task-scope.md) — 工人以 task-create --spec 短摘要划范围,长任务书里超出 spec 的职责被当背景;spec 必须枚举全部职责类别
 - [Bash 吃掉斜杠开头的文本](bash-path-conv-breaks-slash-text.md) — MSYS 路径转换把 /rename 改写成 C:/Program Files/Git/rename,发斜杠命令走 PowerShell
 - [判绿只对当时那个 commit 有效](review-green-must-match-head.md) — 合并前必比对 review.commit_id 与 headRefOid;判绿后又推的改动无人审过,差点误合 #497
+- [接链前必须逐文件比内容](memory-relink-needs-content-diff.md) — 只比文件名不够,同名不同内容脚本只警告不拦截,方向判反就静默丢记忆
