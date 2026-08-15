@@ -53,9 +53,11 @@
 //   isCompletionComment 当主通道 → worker_done 门铃（comment 兜底保留）
 //   搜 review「上帅：」当主通道 → escalation 消息（review 行兜底保留）
 //   sleep(300s) 轮询 → check --wait --timeout-ms N
-//   pickUniqueTerminal / findReviewerTerminal（按 title 猜终端、三级反查）→ send --to dispatch:<id>
+//   pickUniqueTerminal / findReviewerTerminal（按 title 猜终端、三级反查）→ worker-show --dispatch
+//     的 worker.agent_terminal_handle（不猜终端）。#480 实测纠正：send --to dispatch: 是收件箱不是
+//     推送——闲置工人不主动 check，投了等于扔进真空且不报错；返工/复核必须 task-create + worker-start --terminal
 //   waitTerminalReady / verifyStarted / injectAndVerify（读 cursor、补回车、验开工，约 60 行）
-//     → worker-start receipt 的 ready + send --to dispatch: 是结构化收件箱不是敲键盘
+//     → worker-start receipt 的 ready（送达由 orca 保证，不自己读 cursor 补回车）
 //   起审官走 worktree create --agent --prompt（自称「受控例外，随 #480 退役」——就是现在）
 //     → task-create + worker-start --task <id> --worktree current --agent <cli> --model <id>
 //       （Claude 族按 model-routing.toml 真相源走两步：terminal create --command "reclaude ..."
@@ -440,7 +442,13 @@ function recheckInstruction(pr, round, reviewerLabel) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// dispatch 寻址（send --to dispatch:<id>；映射不出就退回 GitHub 通道，不报错停手）
+// 投递（task-create + worker-start --terminal；#480 实测纠正：send --to dispatch: 是收件箱
+// 不是推送——正在干活/已 worker_done 闲置的工人都不会主动 check，等于扔进真空且不报错。
+// 正解 = 手册「Preferred Supervised Worker Loop」：复用同一 agent 终端跑后续任务，
+// worker-start --task <新> --terminal <handle>，Orca 把新 TASK 块作为终端输入推给工人。
+// handle 从 worker-show --dispatch <id> 的 worker.agent_terminal_handle 取——
+// 仍然免掉旧代码 pickUniqueTerminal 按 title 猜终端那一整套；verifyStarted 照删（worker-start
+// 返回 receipt，送达由 orca 保证）。映射不出就退回 GitHub 通道，不报错停手。)
 // ══════════════════════════════════════════════════════════════════════
 
 // 从任务书 spec 提取 PR 号：#N 或 PR #N / 任务 PR：#N。spec 里可能带多个号
@@ -472,7 +480,7 @@ function buildDispatchMap(source, state) {
     const isReviewer = /审官任务/.test(spec);
     for (const n of prs) {
       if (!map.tasksByPr[n]) map.tasksByPr[n] = [];
-      map.tasksByPr[n].push({ taskId: id, spec, isReviewer, dispatchId: t.dispatchId || t.dispatch_id || null });
+      map.tasksByPr[n].push({ taskId: id, spec, isReviewer, dispatchId: t.dispatchId || t.dispatch_id || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null });
     }
     if (prs.length === 1) map.prByTaskId[id] = prs[0];
     // 有状态文件里记过的 dispatchId（doorbell/worker-start 收的）优先
@@ -497,8 +505,10 @@ function resolveDispatchId(map, entry) {
   return null;
 }
 
-// 找 PR 的工人 dispatch（唯一候选且非审官任务）；多候选/零候选 → null（待帅转交）
-function workerDispatchFor(map, prNumber) {
+// 找 PR 的工人 dispatch（①rec.workerDispatch 当前工人上下文 ②唯一非审官任务）；
+// 多候选/零候选 → null（待帅转交）。
+function workerDispatchFor(map, prNumber, rec) {
+  if (rec?.workerDispatch) return rec.workerDispatch;
   const list = (map.tasksByPr[prNumber] || []).filter(e => !e.isReviewer);
   if (list.length !== 1) return null;
   return resolveDispatchId(map, list[0]);
@@ -512,11 +522,30 @@ function reviewerDispatchFor(map, prNumber, rec) {
   return resolveDispatchId(map, list[0]);
 }
 
-function sendToDispatch(dispatchId, subject, body, args) {
+// dispatch id → 终端 handle：①map 条目自带（快照便捷）②live worker-show --dispatch
+// 的 worker.agent_terminal_handle。取不到 → 待帅转交（不猜终端、不按 title 猜）。
+function resolveDeliveryHandle(source, map, dispatchId) {
   if (!dispatchId) return { ok: false, error: '无 dispatch id' };
-  const r = runOrca(['orchestration', 'send', '--to', `dispatch:${dispatchId}`, '--subject', subject, '--body', body, '--json']);
-  if (!r.ok) return { ok: false, error: r.error };
-  return { ok: true };
+  for (const pr of Object.keys(map.tasksByPr || {})) {
+    const hit = (map.tasksByPr[pr] || []).find(e => e.dispatchId === dispatchId && e.agentTerminalHandle);
+    if (hit) return { ok: true, handle: hit.agentTerminalHandle };
+  }
+  const h = source.workerHandleFor ? source.workerHandleFor(dispatchId) : null;
+  if (h) return { ok: true, handle: h };
+  return { ok: false, error: `worker-show --dispatch ${dispatchId} 取不到 agentTerminalHandle——待帅转交` };
+}
+
+// 投递后续任务：task-create（任务书）→ worker-start --task <新> --terminal <handle>。
+// 返回 { taskId, dispatchId }（新 dispatch 上下文，record 里替换旧引用）。
+function deliverFollowUp(taskSpec, handle, args) {
+  const tc = runOrca(['orchestration', 'task-create', '--spec', taskSpec, '--json']);
+  if (!tc.ok) return { ok: false, error: `task-create 失败：${tc.error}` };
+  const taskId = tc.json?.result?.id || tc.json?.task?.id || null;
+  if (!taskId) return { ok: false, error: 'task-create 成功响应但缺 task id（结构畸形）' };
+  const ws = runOrca(['orchestration', 'worker-start', '--task', taskId, '--terminal', handle, '--json']);
+  if (!ws.ok) return { ok: false, error: `worker-start --terminal 失败：${ws.error}` };
+  const dispatchId = ws.json?.result?.dispatch?.id || ws.json?.result?.dispatchId || null;
+  return { ok: true, taskId, dispatchId };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -705,6 +734,7 @@ function freshRecord(pr) {
   return {
     pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {},
     reportedStale: false, actedOn: null, reviewer: null, escalated: null,
+    workerDispatch: null, // 当前工人 dispatch 上下文（返工投递后更新）
     mergeAttempted: false, mergeBlocked: false, stateSince: Date.now(),
   };
 }
@@ -759,7 +789,7 @@ function makeLiveSource(repo) {
       const tasks = unwrap(r.json, 'tasks', 'tasks');
       if (!Array.isArray(tasks)) return { ok: false, error: 'task-list 结构不认识' };
       // dispatchId 不随 task-list 给全，按需 dispatch-show（慢路径只发生在投递时）
-      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatch_id || t.dispatchId || null }));
+      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatch_id || t.dispatchId || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null }));
       return { ok: true, tasks: out };
     },
     dispatchIdFor(taskId) {
@@ -767,6 +797,15 @@ function makeLiveSource(repo) {
       if (!r.ok) return null;
       const d = r.json?.result?.dispatchId || r.json?.result?.dispatch?.id || r.json?.dispatchId || null;
       return d || null;
+    },
+    // dispatch id → 终端 handle（#480 实测纠正：投递走 worker-start --terminal，不用 send --to dispatch）
+    workerHandleFor(dispatchId) {
+      const r = runOrca(['orchestration', 'worker-show', '--dispatch', dispatchId, '--json']);
+      if (!r.ok) return null;
+      return r.json?.result?.worker?.agent_terminal_handle
+        || r.json?.result?.worker?.agentTerminalHandle
+        || r.json?.result?.agent_terminal_handle
+        || null;
     },
     // live 门铃：check --wait（阻塞替代 sleep）。返回 { ok, messages, deliveryId }；
     // 超时（count 0）也是正常 checkpoint，不是失败。
@@ -850,10 +889,17 @@ function makeSnapshotSource(roundDir, repo) {
       const r = readJson(join(roundDir, 'orca-tasks.json'));
       if (!r.ok) return { ok: true, tasks: [] };
       const tasks = Array.isArray(r.json) ? r.json : unwrap(r.json, 'tasks', 'tasks') || [];
-      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatchId || t.dispatch_id || null }));
+      const out = tasks.map(t => ({ id: t.id || t.taskId, spec: t.spec || t.title || '', dispatchId: t.dispatchId || t.dispatch_id || null, agentTerminalHandle: t.agentTerminalHandle || t.agent_terminal_handle || null }));
       return { ok: true, tasks: out };
     },
     dispatchIdFor() { return null; },
+    workerHandleFor(dispatchId) {
+      // 快照：orca-workers.json（worker-show 镜像）为可选；夹具习惯直接在 orca-tasks.json 条目带 agentTerminalHandle
+      const r = readJson(join(roundDir, 'orca-workers.json'));
+      if (!r.ok || !Array.isArray(r.json)) return null;
+      const hit = r.json.find(w => (w.dispatchId || w.dispatch_id) === dispatchId);
+      return hit ? (hit.agentTerminalHandle || hit.agent_terminal_handle || null) : null;
+    },
     checkWait() { return { ok: true, messages: [], deliveryId: null, timedOut: true }; },
     runUse() { return { ok: true }; },
   };
@@ -934,7 +980,7 @@ function executeAction(action, pr, toml, source, rec, args) {
   if (action.kind === 'inject-rework') {
     const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
     const map = buildDispatchMap(source, { dispatchCache: {} });
-    const dispatchId = workerDispatchFor(map, pr.number);
+    const dispatchId = workerDispatchFor(map, pr.number, rec);
     if (!dispatchId) {
       if (args.dryRun) {
         // 预览-阻塞：可见但不落闸（旧观察 1 口径——预览不改变值守状态）
@@ -942,12 +988,27 @@ function executeAction(action, pr, toml, source, rec, args) {
       }
       return { ok: false, error: `找不到 PR #${pr.number} 工人 dispatch（task-list 里 spec 含 #${pr.number} 的非审官任务应为唯一候选）——待帅转交返工指令`, needsReport: 'reviewer-unfound' };
     }
-    if (args.dryRun) {
-      return { ok: true, dry: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：send --to dispatch:${dispatchId}` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    const target = resolveDeliveryHandle(source, map, dispatchId);
+    if (!target.ok) {
+      if (args.dryRun) {
+        return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——投递目标解析失败：${target.error}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+      }
+      return { ok: false, error: target.error, needsReport: 'reviewer-unfound' };
     }
-    const s = sendToDispatch(dispatchId, `返工指令 · PR #${pr.number} · 第 ${action.round} 轮`, instruction, args);
-    if (!s.ok) return { ok: false, error: `send --to dispatch:${dispatchId} 失败：${s.error}` };
-    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：send --to dispatch:${dispatchId}` };
+    const taskSpec = `返工任务：#${pr.number} 第 ${action.round} 轮返工。${instruction.replace(/\r?\n/g, ' ')}`;
+    if (args.dryRun) {
+      return {
+        ok: true, dry: true,
+        line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：task-create + worker-start --task <新> --terminal ${target.handle}（推给闲置工人，非信箱消息）`
+          + '\n  ' + `orca orchestration task-create --spec "<返工任务：#${pr.number} 第 ${action.round} 轮>" --json`
+          + '\n  ' + `orca orchestration worker-start --task <task_id> --terminal ${target.handle} --json`
+          + '\n  ' + instruction.replace(/\n/g, '\n  '),
+      };
+    }
+    const d = deliverFollowUp(taskSpec, target.handle, args);
+    if (!d.ok) return { ok: false, error: d.error, needsReport: 'reviewer-unfound' };
+    if (d.dispatchId) rec.workerDispatch = d.dispatchId; // 新 dispatch 上下文（后续返工寻址用）
+    return { ok: true, taskId: d.taskId, dispatchId: d.dispatchId, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：task-create + worker-start --terminal ${target.handle}（dispatch=${d.dispatchId || '?'}）` };
   }
 
   if (action.kind === 'inject-recheck') {
@@ -959,12 +1020,24 @@ function executeAction(action, pr, toml, source, rec, args) {
       // dry-run 也走失败路径写 pendingShuai 常驻，不短路成预览（旧四轮复核红 1 口径）
       return { ok: false, error: '找不到审官 dispatch（未记录起审官 dispatchId，task-list 里也没有审官任务卡）——待帅接手复核', needsReport: 'reviewer-unfound' };
     }
-    if (args.dryRun) {
-      return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：send --to dispatch:${dispatchId}` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+    const target = resolveDeliveryHandle(source, map, dispatchId);
+    if (!target.ok) {
+      return { ok: false, error: target.error, needsReport: 'reviewer-unfound' };
     }
-    const s = sendToDispatch(dispatchId, `复核指令 · PR #${pr.number} · 第 ${action.round} 轮返工后`, instruction, args);
-    if (!s.ok) return { ok: false, error: `send --to dispatch:${dispatchId} 失败：${s.error}`, needsReport: 'reviewer-unfound' };
-    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：send --to dispatch:${dispatchId}` };
+    const taskSpec = `审官任务：复核 #${pr.number} 第 ${action.round} 轮返工。${instruction.replace(/\r?\n/g, ' ')}`;
+    if (args.dryRun) {
+      return {
+        ok: true, dry: true,
+        line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：task-create + worker-start --task <新> --terminal ${target.handle}（推给审官，非信箱消息）`
+          + '\n  ' + `orca orchestration task-create --spec "<审官任务：复核 #${pr.number}>" --json`
+          + '\n  ' + `orca orchestration worker-start --task <task_id> --terminal ${target.handle} --json`
+          + '\n  ' + instruction.replace(/\n/g, '\n  '),
+      };
+    }
+    const d = deliverFollowUp(taskSpec, target.handle, args);
+    if (!d.ok) return { ok: false, error: d.error, needsReport: 'reviewer-unfound' };
+    if (rec.reviewer) rec.reviewer.dispatchId = d.dispatchId || rec.reviewer.dispatchId; // 新 dispatch 上下文
+    return { ok: true, taskId: d.taskId, dispatchId: d.dispatchId, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：task-create + worker-start --terminal ${target.handle}（dispatch=${d.dispatchId || '?'}）` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
@@ -1009,8 +1082,8 @@ function heartbeatPrs(open, records) {
 const STATE_NEXT = {
   working: '工人开工中——等完工信号（worker_done 门铃 / GitHub 完工 comment）。卡点：超 24h 无动静需帅查工位。',
   'awaiting-review': '已完工无审官——下一步：起审官（task-create + worker-start）。卡点：起审官失败时见待帅处置。',
-  'rework-needed': '审官判红——下一步：send --to dispatch:<工人> 返工指令。卡点：找不到工人 dispatch 时待帅转交。',
-  'awaiting-recheck': '返工完成——下一步：send --to dispatch:<审官> 复核指令。卡点：找不到审官 dispatch 时待帅接手。',
+  'rework-needed': '审官判红——下一步：task-create（返工任务书）+ worker-start --terminal <工人 handle> 推返工。卡点：找不到工人 dispatch/handle 时待帅转交。',
+  'awaiting-recheck': '返工完成——下一步：task-create（复核任务书）+ worker-start --terminal <审官 handle> 推复核。卡点：找不到审官 dispatch/handle 时待帅接手。',
   approved: '复核绿——下一步：合并三条件检查（CI 全绿 + merge/auto 标签 + mergeable 重查）。卡点：见下方 gate 原因。',
   switch: '审官标注「同一处未修好」——下一步：帅决定换人（换人决策归帅，不自动换）。',
   'shang-shuai': '上帅（上帅：行 / 六轮兜底 / escalation）——停手。下一步：帅处置；不再自动流转。',
@@ -1210,6 +1283,11 @@ function processOneRound(source, state, args, wakeSource, nativeMessages) {
             events.push(exec.line);
             rec.pendingShuai = null; // 动作成功：待帅记账清
             rec.actedOn = fp;
+            if (exec.taskId && exec.dispatchId) {
+              // 新投递的 dispatch 上下文记账（返工/复核后续寻址用）
+              state.dispatchCache = state.dispatchCache || {};
+              state.dispatchCache[exec.taskId] = exec.dispatchId;
+            }
             if (exec.line.startsWith('[flow] 预览-阻塞')) {
               // dry-run 投递目标解析失败：本轮可见但不落 pendingShuai（预览不改变值守状态）
               thisRoundFailed.add(pr.number);

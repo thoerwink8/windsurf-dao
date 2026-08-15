@@ -2,6 +2,7 @@
  {
   "id": "task_1004w",
   "spec": "工人任务：#1004 合并退役。",
-  "dispatchId": "ctx_worker_1004"
+  "dispatchId": "ctx_worker_1004",
+  "agentTerminalHandle": "term_worker_1004"
  }
 ]

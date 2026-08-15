@@ -2,6 +2,7 @@
  {
   "id": "task_3305w",
   "spec": "工人任务：#3305 反例回归。",
-  "dispatchId": "ctx_worker_3305"
+  "dispatchId": "ctx_worker_3305",
+  "agentTerminalHandle": "term_worker_3305"
  }
 ]

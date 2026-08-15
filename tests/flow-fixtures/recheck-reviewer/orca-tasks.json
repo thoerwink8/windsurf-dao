@@ -2,11 +2,13 @@
  {
   "id": "task_2001w",
   "spec": "工人任务：#2001 存量审官反查。",
-  "dispatchId": "ctx_worker_2001"
+  "dispatchId": "ctx_worker_2001",
+  "agentTerminalHandle": "term_worker_2001"
  },
  {
   "id": "task_2001r",
   "spec": "审官任务：#2001 - 审官·gpt-5.6-sol。任务 PR：#2001",
-  "dispatchId": "ctx_reviewer_2001"
+  "dispatchId": "ctx_reviewer_2001",
+  "agentTerminalHandle": "term_reviewer_2001"
  }
 ]

@@ -132,14 +132,17 @@ node scripts/inbox-station.mjs ensure
 
 ## 9b. 流转器（flow）值守
 
-红项闭环由 `scripts/flow.mjs` 值守（#480）：`check --wait` 收 worker_done/escalation 门铃，超时即 GitHub 兜底轮询；起审官/返工/复核/合并全自动。起法：
+红项闭环由 `scripts/flow.mjs` 值守（#480）：`check --wait` 收 worker_done/escalation 门铃，超时即 GitHub 兜底轮询；起审官/返工/复核/合并全自动。
+
+**常驻方式（唯一一种，别造第二种）**：帅手起——开工时信箱台 ensure 之后起 flow，收工前保持不关：
 
 ```bash
-node scripts/flow.mjs --run <runId>          # runId 用 run-list 取；每轮 run-use 自夺回（同信箱台中继）
-node scripts/flow.mjs --once --explain       # 只读：对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」
+node scripts/inbox-station.mjs ensure          # 先保证信箱台
+node scripts/flow.mjs --run <runId>            # 再起流转器（runId 用 run-list 取；每轮 run-use 自夺回）
+node scripts/flow.mjs --once --explain         # 只读：对每个在途 PR 输出「当前态 + 下一步 + 卡在哪」
 ```
 
-每轮结束原子写 `_flow/heartbeat.json`（字段契约见 scripts/flow.mjs 文件头），看门狗（#471）靠它判「该发生而没发生」——本机别删这个文件。合并权落点 = GitHub 标签 `merge/auto`（自动合）/ `等你`（撤回、打回人工），两个标签需先在仓库建好（`gh label create` 幂等）。
+忘了起 = dao-check 红（流转器心跳缺失/超时），不会静默。每轮结束原子写 `_flow/heartbeat.json`（字段契约见 scripts/flow.mjs 文件头），dao-check 心跳闸与看门狗（#471）都读它——本机别删这个文件。合并权落点 = GitHub 标签 `merge/auto`（自动合）/ `等你`（撤回、打回人工），两个标签需先在仓库建好（`gh label create` 幂等）。
 
 ## 10. 接上 memory
 

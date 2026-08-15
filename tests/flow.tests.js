@@ -54,7 +54,8 @@ console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 完工 + 假�
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("自动注入发生：返工走 send --to dispatch（非预览-阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）：send --to dispatch:ctx_worker_999/.test(r.out), r.out.trim());
+  check("自动注入发生：返工走 task-create + worker-start --terminal（非预览-阻塞）", /动作：返工注入 #999（第 1 轮，红 3 项）：task-create \+ worker-start --task <新> --terminal term_worker_999/.test(r.out), r.out.trim());
+  check("返工注入不再用 send --to dispatch（收件箱不是推送，#480 实测纠正）", !/send --to dispatch/.test(r.out), r.out.trim());
   check("返工指令文本含 review 链接", /pull\/999#pullrequestreview-910001/.test(r.out), "review 链接没进指令");
   check("帅零介入：无任何 报帅 行（真注入路径下成立，名副其实）", !/报帅/.test(r.out), r.out.split("\n").filter(l => /报帅/.test(l)).join(" | "));
   check("不重复起审官（红判定已存在 → 不新建审官）", !/起审官/.test(r.out), r.out.trim());
@@ -63,7 +64,7 @@ console.log("\n=== ① 假闭环验收（#455 验收：draft PR + 完工 + 假�
 console.log("\n=== ② prime 吞存量负控：存量已有完工+红判定，启动即动作（不吞存量）===");
 {
   const r = runFlow(path.join(FIXTURES, "fake-loop"));
-  check("存量信号被识别并自动注入返工（吞存量 = 本轮无动作）", /动作：返工注入 #999（第 1 轮，红 3 项）：send --to dispatch:ctx_worker_999/.test(r.out), r.out.trim());
+  check("存量信号被识别并自动注入返工（吞存量 = 本轮无动作）", /动作：返工注入 #999（第 1 轮，红 3 项）：task-create \+ worker-start --task <新> --terminal term_worker_999/.test(r.out), r.out.trim());
   check("打出存量清点标记（先清点再增量）", /存量清点/.test(r.out), "存量清点标记缺失");
 }
 
@@ -149,8 +150,8 @@ console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工 / 
   const r = runFlow(path.join(FIXTURES, "recheck-green"));
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
   check("round-1 起审官（task-create + worker-start）", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
-  check("round-2 返工注入真通（send --to dispatch）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_1005/.test(r.out), r.out.trim());
-  check("round-3 复核注入真通（审官 dispatch）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）：send --to dispatch:ctx_reviewer_1005/.test(r.out), r.out.trim());
+  check("round-2 返工注入真通（worker-start --terminal 推闲置工人）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_1005/.test(r.out), r.out.trim());
+  check("round-3 复核注入真通（审官 handle）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）：task-create \+ worker-start --task <新> --terminal term_reviewer_1005/.test(r.out), r.out.trim());
   check("round-4 报帅终审（无 merge/auto → 等用户终审）", /round-4[\s\S]*报帅：终审 #1005（复核结论：绿，无 merge\/auto 标签——等用户终审）/.test(r.out), r.out.trim());
   check("复核绿后不再注入任何动作", !/round-4[\s\S]*动作：/.test(r.out), r.out.trim());
 }
@@ -317,7 +318,7 @@ console.log("\n=== ⑯ dispatch 寻址：存量审官任务卡反查（task-list
 {
   const r = runFlow(path.join(FIXTURES, "recheck-reviewer"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("复核注入动作（存量场景不退化报帅）", /动作：复核注入 #2001（第 1 轮返工后）：send --to dispatch:ctx_reviewer_2001/.test(r.out), r.out.trim());
+  check("复核注入动作（存量场景不退化报帅）", /动作：复核注入 #2001（第 1 轮返工后）：task-create \+ worker-start --task <新> --terminal term_reviewer_2001/.test(r.out), r.out.trim());
   check("没有报帅（不是当注入失败）", !/报帅：/.test(r.out), r.out.trim());
 }
 
@@ -327,7 +328,7 @@ console.log("\n=== ⑰ dispatch 映射不出 → 退回 GitHub 通道：返工�
   check("退出码 1（有输出）", r.status === 1, `status=${r.status}`);
   check("round-1 预览-阻塞（找不到工人 dispatch）", /round-1[\s\S]*预览-阻塞：#2005（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(r.out), r.out.trim());
   check("round-1 本轮待帅确认（可见但不落闸）", /round-1[\s\S]*待帅处置：#2005（投递\/目标解析失败待帅确认（本轮，未落闸））/.test(r.out), r.out.trim());
-  check("round-2 dispatch 就位 + 新红判定 → 恢复注入（第 2 轮）", /round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）：send --to dispatch:ctx_worker_2005/.test(r.out), r.out.trim());
+  check("round-2 dispatch 就位 + 新红判定 → 恢复注入（第 2 轮）", /round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_2005/.test(r.out), r.out.trim());
   check("round-2 不再有预览-阻塞", !/round-2[\s\S]*预览-阻塞/.test(r.out), r.out.trim());
 }
 
@@ -344,7 +345,7 @@ console.log("\n=== ⑰b 自愈：预置 pendingShuai，新红判定到达即清�
   }), "utf8");
   const r = runFlowShared(path.join(FIXTURES, "blocked-selfheal"), stateFile, hbFile);
   const out = (r.stdout || "") + (r.stderr || "");
-  check("新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）：send --to dispatch:ctx_worker_2006/.test(out), out.trim());
+  check("新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）", /动作：返工注入 #2006（第 2 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_2006/.test(out), out.trim());
   check("不再挂投递失败待帅处置", !/待帅处置：#2006（投递失败/.test(out), out.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
 }
@@ -454,7 +455,7 @@ console.log("\n=== ㉔ 反例回归样本：review 判定行「判定：红 2 �
 {
   const r = runFlow(path.join(FIXTURES, "anti-sample"));
   check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("判红（引用代码块的 判定：绿 不得算数——搜全文会被骗，本防线在）", /动作：返工注入 #3305（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_3305/.test(r.out), r.out.trim());
+  check("判红（引用代码块的 判定：绿 不得算数——搜全文会被骗，本防线在）", /动作：返工注入 #3305（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_3305/.test(r.out), r.out.trim());
   check("不判绿不合并", !/合并|复核结论：绿/.test(r.out), r.out.trim());
   check("红 2 与判定行一致（redFlagsFromReviewBodies 口径）", redFlagsFromReviewBodies(["判定：红 2 项\n\n```js\nif (verdict.line === \"判定：绿\") { return approve(); }\n```"]) === 2, "应为 2");
 }
@@ -463,8 +464,9 @@ console.log("\n=== ㉕ 双通道等价：原生消息通道 vs GitHub 兜底通�
 {
   const native = runFlow(path.join(FIXTURES, "dual-native"));
   const github = runFlow(path.join(FIXTURES, "dual-github"));
-  const actionLine = /动作：返工注入 #3306（第 1 轮，红 2 项）：send --to dispatch:ctx_worker_3306/;
+  const actionLine = /动作：返工注入 #3306（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_worker_3306/;
   check("原生通道：worker_done 门铃 → 同一动作", actionLine.test(native.out), native.out.trim());
+  check("闲置工人（已 worker_done）收返工走 worker-start 路径，绝无 send --to dispatch（#480 实测回归）", !/send --to dispatch/.test(native.out) && !/send --to dispatch/.test(github.out), native.out.trim());
   check("GitHub 通道：完工 comment 兜底 → 同一动作", actionLine.test(github.out), github.out.trim());
   check("两通道动作结果一致（同一行）", (native.out.match(actionLine) || []).length === 1 && (github.out.match(actionLine) || []).length === 1);
   check("原生通道打出门铃记账（dispatchCache）", /门铃：worker_done（task=task_3306w，dispatch=ctx_worker_3306）/.test(native.out), native.out.trim());
@@ -478,6 +480,14 @@ console.log("\n=== ㉕ 双通道等价：原生消息通道 vs GitHub 兜底通�
   const out2 = (r2.stdout || "") + (r2.stderr || "");
   check("原生通道重跑零动作（幂等，只动作一次）", r1.status === 1 && r2.status === 0 && !/动作：/.test(out2), out2.trim());
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ㉕b handle 缺失：dispatch 有但 worker-show 取不到 handle → 预览-阻塞（不猜终端）===");
+{
+  const r = runFlow(path.join(FIXTURES, "handle-missing"));
+  check("退出码 1（有输出）", r.status === 1, `status=${r.status}`);
+  check("预览-阻塞：取不到 agentTerminalHandle——待帅转交", /预览-阻塞：#3310（返工注入——投递目标解析失败：worker-show --dispatch ctx_worker_3310 取不到 agentTerminalHandle——待帅转交）/.test(r.out), r.out.trim());
+  check("不猜终端、不注入（没有 worker-start 动作）", !/动作：返工注入 #3310/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ㉖ heartbeat：每轮结束原子写，字段契约（看门狗 #471 读它）===");

@@ -330,6 +330,49 @@ function checkMemoryIndex() {
   }
 }
 
+// ── ⑧ 流转器存活心跳（#480 收口：合并 ≠ 生效——flow 已合并但从未在跑且不报警）────
+// _flow/heartbeat.json 由 scripts/flow.mjs 每轮原子写（字段契约见 flow.mjs 文件头）。
+// 看门狗（#471）读它判「该发生而没发生」；这里只做最外层「有没有在跑」的闸：
+// 缺失或 ts 超时即红——把「flow 没在跑」从「今天恰好没事」里分出来。
+// 仓规两条：①解析用 dao-check 自己的 Date.parse，不 import flow.mjs 的解析逻辑；
+// ②缺失（没扫到样本）与超时分别报，缺失 ≠ 查过没事。
+// CI 不是 flow 宿主（CI 每次全新检出，flow 只跑在主仓运行机）——GITHUB_ACTIONS 下跳过并显式声明。
+
+const HEARTBEAT_FILE = join(ROOT, '_flow', 'heartbeat.json');
+const HEARTBEAT_STALE_MS = 15 * 60 * 1000; // 轮询间隔 300s × 3 余量
+
+function checkFlowHeartbeat() {
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    green(`流转器心跳 CI 环境跳过（CI 不是 flow 宿主；存活闸只在主仓运行机生效）`);
+    return;
+  }
+  if (!existsSync(HEARTBEAT_FILE)) {
+    fail('流转器心跳缺失——flow 没在跑', 'node scripts/flow.mjs --run <runId> 值守（NEW-MACHINE §9b）；心跳文件每轮原子写，缺失 = 合并≠生效的老病', HEARTBEAT_FILE);
+    return;
+  }
+  let ts = null;
+  let round = null;
+  try {
+    const raw = JSON.parse(readFileSync(HEARTBEAT_FILE, 'utf8'));
+    ts = Date.parse(raw && raw.ts);
+    round = raw && raw.round;
+  } catch (e) {
+    fail('流转器心跳文件读不出 ts', '心跳文件损坏/半截（flow 在写时被删？）；重启流转器', `${HEARTBEAT_FILE}：${String(e.message || e).split(/\r?\n/)[0].slice(0, 120)}`);
+    return;
+  }
+  if (!Number.isFinite(ts)) {
+    fail('流转器心跳 ts 不是时间', 'ts 字段非法——flow 版本不对或文件被手改；重启流转器', `${HEARTBEAT_FILE}（ts=${String(ts)}）`);
+    return;
+  }
+  const age = Date.now() - ts;
+  if (age > HEARTBEAT_STALE_MS) {
+    fail(`流转器心跳超时（${Math.round(age / 60000)} 分钟前，阈值 ${HEARTBEAT_STALE_MS / 60000} 分钟）`, 'flow 可能停了——该发生而没发生；查终端与 _flow/state.json，重启 flow', `${HEARTBEAT_FILE}（round=${round ?? '?'}，ts=${new Date(ts).toISOString()}）`);
+    return;
+  }
+  green(`流转器心跳存活（${Math.max(0, Math.round(age / 1000))}s 前，round=${round ?? '?'}）`);
+}
+
+// ── 跑 ──────────────────────────────────────────────────────────────
 // ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
 // 库里用到的 orca 参数必须还在对应命令的真 --help 里。解析器自己写，不复用
 // dao-cmd.parseHelpFlags。本机必须真跑 orca；CI 无 orca 走 SKIP，不计失败。
@@ -591,11 +634,13 @@ checkResidentBudget();
 checkModelRouting();
 checkMemoryIndex();
 await checkCommandHelp();
-checkModeHookAlive();
-checkMemoryLinkAlive();
-checkExtractFixtures();
-checkMasterTitleSamples();
-checkCardCommentSamples();
+checkModeHookAlive();     // master（#490/#496 侧）
+checkMemoryLinkAlive();   // master（#504 侧）
+checkFlowHeartbeat();     // #497 侧（b929782 引入）
+checkExtractFixtures();   // master（#502 侧）
+checkMasterTitleSamples(); // master（#502 侧）
+checkCardCommentSamples(); // master（#502 侧）
+
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

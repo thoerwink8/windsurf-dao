@@ -23,6 +23,8 @@ master 卡只住主会话，永远零工人。每个任务用 `orca orchestratio
 
 派完即回对话态，帅不前台长等。门铃 + 流转 = `scripts/flow.mjs` 值守（Monitor 后台跑，阻塞 CLI、等待期间零 token、消息到即返回）：`orca orchestration check --wait --types worker_done,escalation,question` 收门铃，超时即 GitHub 兜底轮询；红项闭环（起审官/返工/复核/合并）全部自动，帅只在报警推到面前时处置。不等 heartbeat——心跳空转实测 ~650 token/轮，只进信箱供怀疑时 peek，不唤醒。旧「check --wait 禁手」改写为「禁帅前台长等」：wait 由流转器进程跑，不是帅的对话阻塞。
 
+**check --wait 禁止接 `head`/`grep` 等会提前关管道的命令**（#480 实测：`check --wait --timeout-ms 3000000 | head -80`——head 收满 80 行 keepalive 就关管道，check 跟着退出，3000 秒只等了 1200 秒且退出码 0，看起来像正常返回）。要么裸跑、要么 `> 文件` 重定向，别套管道。
+
 完工信号：`worker_done` 是触发器、GitHub 是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
 
 向用户汇报工位状态前，先实刷 orca worktree ps 的 agents[].state 与 gh pr 状态——凭上次印象汇报会状态失真（2026-08-14 三次实测，issue #443）。
@@ -119,7 +121,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 审官审完有红项，直接让工人改掉，内部解决完再报结果；实在解决不了才上帅（2026-08-14 拍板，issue #447）。边界三条：
 
-1. 通道：工人完工后不收信箱，「通知士兵」由 `scripts/flow.mjs` 流转器接管（监听 review 判定行 / worker_done 门铃 → send --to dispatch 注入下一环，见 issue #455/#480 分工定论：看门狗管事故、流转器管完工；原生消息只做唤醒+寻址，GitHub 仍是判定与账本唯一真相源）。审官不自造旁路。
+1. 通道：工人完工后不收信箱，「通知士兵」由 `scripts/flow.mjs` 流转器接管（监听 review 判定行 / worker_done 门铃 → task-create + worker-start --terminal 注入下一环，见 issue #455/#480 分工定论：看门狗管事故、流转器管完工；原生消息只做唤醒+寻址，GitHub 仍是判定与账本唯一真相源。返工/复核必须 worker-start --terminal 推送——send --to dispatch 是收件箱不是推送，闲置工人不收信）。审官不自造旁路。
 2. 必须上帅：① 审官质疑拍板/规格本身（review 写「上帅：<原因>」行，或原生 escalation）——流转器停手叫人；② 审官标「同一处未修好」= 换人信号（决策归帅，不自动换）；③ 六轮红判定硬兜底——上帅不自动换人；④ 合并权默认等用户终审（勾了 merge/auto 才由流转器自动合，见「合并权」节）。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
@@ -143,7 +145,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 **禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
 
-**受控例外已退役（#480）**：`scripts/flow.mjs` 闭环内起审官一律 `task-create + worker-start` 拿 dispatch（codex 一步：`--worktree current --agent codex --model <id>`；Claude 族按 model-routing.toml 两步：建卡 + `terminal create --command "reclaude --model opus"` + `worker-start --terminal` 收口）。flow 不再注入终端、不再按 title 反查——指令投递走 `send --to dispatch:<id>` 结构化收件箱。人工派工同样必须 `worker-start` 记账，无例外。
+**受控例外已退役（#480）**：`scripts/flow.mjs` 闭环内起审官一律 `task-create + worker-start` 拿 dispatch（codex 一步：`--worktree current --agent codex --model <id>`；Claude 族按 model-routing.toml 两步：建卡 + `terminal create --command "reclaude --model opus"` + `worker-start --terminal` 收口）。flow 不再注入终端、不再按 title 反查——指令投递 = `task-create + worker-start --task <新> --terminal <handle>`（#480 实测纠正：send --to dispatch 是收件箱不是推送，闲置工人不收信；handle 从 `worker-show --dispatch <id>` 的 worker.agent_terminal_handle 取）。人工派工同样必须 `worker-start` 记账，无例外。
 
 裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
 
@@ -234,6 +236,7 @@ orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --
 
 ## 命令级铁律
 
+- `orca orchestration check --wait` 禁止接 `head`/`grep` 等会提前关管道的命令（#480 实测：keepalive 撑满 head 上限就关管道，check 提前退出且退出码 0）；直接跑或重定向到文件。
 - 任务书承运 = worker-start 注入：`--spec` 只放短摘要+要点；逐字大材料按「材料三去处」分流（要留存的进 GitHub，用完即弃的进 scratchpad，禁止临时树/本机临时目录）。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
 - `terminal send` 只在吞注入时补救（见「启动序」）；默认注入器是 worker-start，不手工 send 进就绪竞态。
 - 禁裸 `terminal create + dispatch --inject` 旁路（release 认不到 → 误关终端旧事故）；例外通道必须先挂 `worker-start --terminal`。

@@ -2,6 +2,7 @@
  {
   "id": "task_3309",
   "spec": "工人任务：#3309 上帅解除。",
-  "dispatchId": "ctx_3309"
+  "dispatchId": "ctx_3309",
+  "agentTerminalHandle": "term_3309"
  }
 ]
