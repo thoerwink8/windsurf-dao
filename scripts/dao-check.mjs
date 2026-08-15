@@ -347,19 +347,39 @@ function checkMemoryIndex() {
 // CI 不是 flow 宿主（CI 每次全新检出，flow 只跑在主仓运行机）——GITHUB_ACTIONS 下跳过并显式声明。
 
 const HEARTBEAT_FILE = join(ROOT, '_flow', 'heartbeat.json');
-const FLOW_STATE_FILE = join(ROOT, '_flow', 'state.json'); // flow 默认状态文件（flow.mjs:108）：宿主树标记
 const HEARTBEAT_STALE_MS = 15 * 60 * 1000; // 轮询间隔 300s × 3 余量
+
+// 主工作树判定（#497 第七轮：宿主判据从可变状态换成拓扑事实——帅住主工作树，NEW-MACHINE §9b 帅手起 flow）。
+// 仓规：检查逻辑不得复用被检查对象自己的解析逻辑——自己跑 git 问拓扑，不 import flow/watchdog 的判定。
+// git rev-parse --git-dir 与 --git-common-dir 相同 = 主工作树；linked worktree 的 --git-dir 指向 .git/worktrees/<name>。
+// 判不出来（非 git 仓 / git 不可用）→ 显形跳过并说明原因，不默认当宿主也不默认跳过掉无声。
+function mainWorktreeTopo() {
+  const r = spawnSync('git', ['rev-parse', '--git-dir', '--git-common-dir'], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+  if (r.error || r.status !== 0) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 120) };
+  }
+  const lines = String(r.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return { ok: false, error: 'git rev-parse 输出不可识别' };
+  const norm = p => resolve(p).replace(/[\\/]+$/, '').toLowerCase();
+  return { ok: true, isMain: norm(lines[0]) === norm(lines[1]) };
+}
 
 function checkFlowHeartbeat() {
   if (process.env.GITHUB_ACTIONS === 'true') {
     green(`流转器心跳 CI 环境跳过（CI 不是 flow 宿主；存活闸只在主仓运行机生效）`);
     return;
   }
-  // 本树不是 flow 宿主（无 _flow/state.json = flow 从未在这棵树跑过）→ 显形跳过，不算红不算绿。
-  // #497 第六轮返工：#497 合进 master 后每棵干净 worktree 都没有心跳文件（.gitignore 掉了 _flow/），
-  // 缺失 ≠ 没在跑——把「没扫到样本」当「查过是红」会训练每个工人无视 dao-check（真红一起被忽略）。
-  if (!existsSync(FLOW_STATE_FILE)) {
-    skip('流转器心跳：本树不是 flow 宿主（无 _flow/state.json），本项无法验证——心跳存活闸只在 flow 值守的宿主树生效；flow 在这棵树跑过后再验');
+  // #497 第七轮：宿主判据用拓扑事实（主工作树 = 帅住的树 = flow 唯一常驻地），不用可变状态。
+  // 第六轮的「无 _flow/state.json = 非宿主」会自我循环：flow 从未启动 → 任何树都没有 state.json →
+  // 每棵树都跳过 → 「流转器压根没启动」谁都不报（watchdog.mjs:795-798 正是把缺失托付给 dao-check ⑧，
+  // 上一版让那行注释变成指向空气的指针）。主工作树该跑而没跑 → 真红；非主工作树 → 显形跳过。
+  const topo = mainWorktreeTopo();
+  if (!topo.ok) {
+    skip(`流转器心跳：判不出本树是不是主工作树（${topo.error}）——本项无法验证，显形跳过`);
+    return;
+  }
+  if (!topo.isMain) {
+    skip('流转器心跳：本树不是 flow 宿主（非主工作树），本项无法验证——心跳存活闸只在主工作树生效；帅住主树、flow 由帅手起（NEW-MACHINE §9b）');
     return;
   }
   if (!existsSync(HEARTBEAT_FILE)) {
