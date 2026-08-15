@@ -324,17 +324,27 @@ console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id
 
 console.log("\n=== ⑳ 敏感路径越权报警（fusion-verdict 2026-08-15：diff 触碰敏感路径且正文未声明 → 报警行）===");
 {
-  const { sensitiveEscalations, reconcileFileList } = require("../scripts/flow.mjs");
+  const { sensitiveEscalations, reconcileFileList, declaredPath } = require("../scripts/flow.mjs");
   const declared = (lines) => `## 目标\n\n## 本 PR 触碰敏感路径声明\n${lines}`;
+  const dao = ["scripts/dao-check.mjs"];
+  const daoRules = (line) => sensitiveEscalations({ body: declared(line) }, dao).map(v => v.rule);
   check("纯函数：host/skills + dao-check 未声明 → 2 条", sensitiveEscalations({ body: "## 目标" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
   check("纯函数：正文声明过 → 0 条", sensitiveEscalations({ body: declared("- host/skills/dispatch/SKILL.md\n- scripts/dao-check.mjs") }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 0);
   check("纯函数：CLAUDE.md 与 docs/global-CLAUDE.md 分开算（声明 CLAUDE.md 不覆盖 global）", JSON.stringify(sensitiveEscalations({ body: declared("- CLAUDE.md") }, ["CLAUDE.md", "docs/global-CLAUDE.md"]).map(v => v.rule)) === '["docs/global-CLAUDE.md"]');
   check("纯函数：正文只提 docs/global-CLAUDE.md 不覆盖根 CLAUDE.md（审读红 2 负控：仍须报根）", JSON.stringify(sensitiveEscalations({ body: declared("- docs/global-CLAUDE.md") }, ["CLAUDE.md"]).map(v => v.rule)) === '["CLAUDE.md"]');
   check("纯函数：正文提根 CLAUDE.md 且只动根 → 不报", sensitiveEscalations({ body: declared("- CLAUDE.md") }, ["CLAUDE.md"]).length === 0);
   check("纯函数：未触碰敏感路径 → 0 条", sensitiveEscalations({ body: "## 目标" }, ["scripts/flow.mjs", "docs/model-routing.toml"]).length === 0);
-  check("纯函数：否定句不算声明（未触碰 dao-check + files 含该文件 → 必须报）", JSON.stringify(sensitiveEscalations({ body: declared("- 未触碰 scripts/dao-check.mjs") }, ["scripts/dao-check.mjs"]).map(v => v.rule)) === '["scripts/dao-check.mjs"]');
   check("纯函数：段外关键词不算声明（散落「改动 host/skills」→ 仍报）", sensitiveEscalations({ body: "改动 host/skills/dispatch/SKILL.md 与 scripts/dao-check.mjs" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
-  check("纯函数：声明段里「未触碰」三连也不算（审官反例 A）", sensitiveEscalations({ body: declared("- 未触碰 docs/global-CLAUDE.md、根 CLAUDE.md、scripts/dao-check.mjs") }, ["docs/global-CLAUDE.md", "CLAUDE.md", "scripts/dao-check.mjs"]).length === 3);
+  check("结构：正例「- scripts/dao-check.mjs 已按需修改」→ 算声明", daoRules("- scripts/dao-check.mjs 已按需修改").length === 0);
+  check("结构：反例「- 未触碰 scripts/dao-check.mjs」→ 不算（首 token=未触碰）", JSON.stringify(daoRules("- 未触碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
+  check("结构：反例「- 本单没有触碰 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 本单没有触碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
+  check("结构：反例「- 未修改 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 未修改 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
+  check("结构：反例「- 本单不碰 scripts/dao-check.mjs」→ 不算", JSON.stringify(daoRules("- 本单不碰 scripts/dao-check.mjs")) === '["scripts/dao-check.mjs"]');
+  check("结构：反例「- 与 scripts/dao-check.mjs 无关」→ 不算", JSON.stringify(daoRules("- 与 scripts/dao-check.mjs 无关")) === '["scripts/dao-check.mjs"]');
+  check("结构：反例「- scripts/dao-check.mjs 保持原样」→ 路径在声明位，结构算声明（人为写反，不回黑名单）", daoRules("- scripts/dao-check.mjs 保持原样").length === 0);
+  check("declaredPath 去反引号+冒号：「- `scripts/dao-check.mjs`：重写」→ 路径", declaredPath("- `scripts/dao-check.mjs`：重写检查逻辑") === "scripts/dao-check.mjs");
+  check("结构：带反引号说明行仍算声明", daoRules("- `scripts/dao-check.mjs`：重写检查逻辑").length === 0);
+  check("结构：声明段「未触碰 A、B、C」三连 → 三条都报（首 token=未触碰）", sensitiveEscalations({ body: declared("- 未触碰 docs/global-CLAUDE.md、根 CLAUDE.md、scripts/dao-check.mjs") }, ["docs/global-CLAUDE.md", "CLAUDE.md", "scripts/dao-check.mjs"]).length === 3);
   check("纯函数：files 条数 < changedFiles → 截断", reconcileFileList(Array(100).fill("a"), 150).ok === false);
   check("纯函数：files 条数 = changedFiles → 齐", reconcileFileList(Array(150).fill("a"), 150).ok === true);
   check("纯函数：快照缺 changedFiles 且 requireCount=false → 跳过对账", reconcileFileList(["x"], null, { requireCount: false }).ok === true);

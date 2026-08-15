@@ -14,9 +14,9 @@
 //   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
 //   ③ PR MERGED 状态
 //   ④ 敏感路径越权报警（2026-08-15 新增）：PR diff 触碰 docs/global-CLAUDE.md、根 CLAUDE.md、
-//      host/skills/、scripts/dao-check.mjs 且正文「本 PR 触碰敏感路径声明」段未肯定列出 → 报警行
-//      （关键词散落 / 否定句「未触碰 X」都不算声明；取 files 必须分页且与 changedFiles 对账，
-//      取不全走 NO_TARGETS「没查成」，禁止把截断清单当成扫完）
+//      host/skills/、scripts/dao-check.mjs 且声明段没有「以该路径开头」的行 → 报警行
+//      （结构判据：首 token 才是路径；段外关键词 / 路径不在行首都不算。取 files 必须分页
+//      且与 changedFiles 对账，取不全走 NO_TARGETS「没查成」，禁止把截断清单当成扫完）
 //
 // 决策规则（②）：
 //   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
@@ -95,11 +95,12 @@ const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 // ── 敏感路径越权报警（fusion-verdict 2026-08-15）──────────────────────
 // PR diff 触碰这些路径但正文未声明 → 报警行（此前越权完全无自动检测）。
-// 声明口径（第三轮红 2）：只认正文「本 PR 触碰敏感路径声明」段里的肯定行；
-// 段外关键词、否定句（未触碰/不涉及/未改…）都不算声明。指名串覆盖该规则下
-// 全部命中文件。每轮重算——违规持续则每轮报警。
+// 声明口径（第四轮换路）：只认正文「本 PR 触碰敏感路径声明」段里
+// 「以路径开头的行」。去掉列表标记和反引号后取第一个 token（切分于
+// 空格 / ：: / ，,、），用规则指名串测这个 token——路径不在声明位就不算。
+// 禁止再枚举否定词（关键词匹配已连错三次：子串误配 → 否定句 → 同义词）。
+// 指名串覆盖该规则下全部命中文件。每轮重算——违规持续则每轮报警。
 const DECLARE_HEADING = /触碰敏感路径声明/;
-const DECLARE_NEGATION = /未触碰|不涉及|没有改|未改|未动|不改|未声明/;
 
 function declaredSection(body) {
   const lines = String(body || '').split(/\r?\n/);
@@ -113,23 +114,27 @@ function declaredSection(body) {
   return out.join('\n');
 }
 
-function isAffirmativeDeclaration(body, needle) {
+function declaredPath(line) {
+  const s = String(line || '').replace(/^\s*[-*+]\s*/, '').replace(/`/g, '').trim();
+  return s.split(/[\s：:，,、]/)[0] || '';
+}
+
+function isPathDeclaration(body, needle) {
   const section = declaredSection(body);
   if (!section) return false;
-  for (const line of section.split('\n')) {
-    if (DECLARE_NEGATION.test(line)) continue;
-    if (needle.test(line)) return true;
-  }
-  return false;
+  return section.split('\n').some(l => {
+    const token = declaredPath(l);
+    return token !== '' && needle.test(token);
+  });
 }
 
 const SENSITIVE_RULES = [
   // 根 CLAUDE.md：声明正则必须不被 docs/global-CLAUDE.md 子串满足（审读红 2：
   // 正文只提 global-CLAUDE.md ≠ 声明了根 CLAUDE.md）——(?<!global-) 负向环视挡掉
-  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => isAffirmativeDeclaration(b, /(?<!global-)CLAUDE\.md/) },
-  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => isAffirmativeDeclaration(b, /global-CLAUDE/) },
-  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => isAffirmativeDeclaration(b, /host\/skills/) },
-  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => isAffirmativeDeclaration(b, /dao-check/) },
+  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => isPathDeclaration(b, /(?<!global-)CLAUDE\.md/) },
+  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => isPathDeclaration(b, /global-CLAUDE/) },
+  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => isPathDeclaration(b, /host\/skills/) },
+  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => isPathDeclaration(b, /dao-check/) },
 ];
 
 // 返回未声明命中的规则列表 [{ rule, files }]；全部已声明或未触碰 → []。
@@ -1020,7 +1025,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations, reconcileFileList, declaredSection };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations, reconcileFileList, declaredSection, declaredPath };
 
 let args = null;
 let anyEmitted = false;
