@@ -11,10 +11,20 @@
 // 两个 PR 的真实战况：#446 首审红 3、复核绿；#440 首审红 4+推测 1、二轮残留轻红 1。
 // 判定格式约定（与 CLAUDE.md / issue #444 一致）：红项数 = 各 review body 中
 // 「红 N 项」的最大 N；跨 review 取最大值 ⇒ 复核绿不清零首审红项。
+//
+// 返工轮数口径 v3（issue #501 缺陷二）语料：tests/fixtures/reviews-496.json、
+// reviews-505.json、reviews-439.json 是 gh pr view --json reviews 的真实返回，生成命令：
+//   gh pr view 496 --json reviews > tests/fixtures/reviews-496.json
+//   gh pr view 505 --json reviews > tests/fixtures/reviews-505.json
+//   gh pr view 439 --json reviews > tests/fixtures/reviews-439.json
+// 真实战况：#496 首审红 1 + 复核绿（补录，2 条判定行 ⇒ 返工 1 轮）；#505 判定绿 0 项
+// （1 条判定行 ⇒ 返工 0 轮）；#439 零 review（0 条判定行 ⇒ 没测成，不是 0 轮）。
+// 旧口径（首次 ready 之后新增 commit 数）下 #496 这种 draft 到底的合规工人返工记 0，
+// 新口径必须报 1。
 
 const fs = require("fs");
 const path = require("path");
-const { redFlagsFromReviewBodies, buildRows, renderRow } = require("../scripts/calibrate.mjs");
+const { redFlagsFromReviewBodies, buildRows, renderRow, countVerdictLines, reworkFromVerdictLines, describeRework } = require("../scripts/calibrate.mjs");
 
 const REPO = path.resolve(__dirname, "..");
 const fixture = name => JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", name), "utf8"));
@@ -79,6 +89,55 @@ const mixed = buildRows([
   { model: "m", taskType: "写码", rework: 2, redFlags: 4, number: 2, mergedAt: "2026-01-02T00:00:00Z" },
 ], [], ["写码"]);
 check("混审：无审读不进平均，平均=4.0", mixed[0].averageRedFlags === 4);
+
+// ── 返工轮数口径 v3（issue #501 缺陷二）：判定行条数 - 1 ───────────────
+// 旧口径「首次 ready 之后新增 commit 数」惩罚「draft 到底、完工才 ready」的合规工人：
+// #496 全程 draft、实返工 1 轮，旧口径测出 0。新口径数审官判定行的条数 - 1，
+// 与 ready/commit 节奏无关，数据源与红项数同一处（review 正文判定行）。
+const r496 = fixture("reviews-496.json").reviews;
+const r505 = fixture("reviews-505.json").reviews;
+const r439 = fixture("reviews-439.json").reviews;
+const bodies496 = r496.map(r => r.body);
+const bodies505 = r505.map(r => r.body);
+const bodies439 = r439.map(r => r.body);
+
+// 真语料（gh 拉取，禁止手写 mock）：#496 两条补录判定行、#505 一条、#439 零 review。
+check("真语料 496：2 条判定行 ⇒ 返工 1 轮", reworkFromVerdictLines(bodies496) === 1, `得 ${reworkFromVerdictLines(bodies496)}`);
+check("真语料 505：1 条判定行 ⇒ 返工 0 轮", reworkFromVerdictLines(bodies505) === 0, `得 ${reworkFromVerdictLines(bodies505)}`);
+check("真反例 439：0 条判定行 ⇒ null（不是 0 轮）", reworkFromVerdictLines(bodies439) === null, `得 ${reworkFromVerdictLines(bodies439)}`);
+check("countVerdictLines 496 = 2", countVerdictLines(bodies496) === 2, String(countVerdictLines(bodies496)));
+check("countVerdictLines 505 = 1", countVerdictLines(bodies505) === 1, String(countVerdictLines(bodies505)));
+check("countVerdictLines 439 = 0", countVerdictLines(bodies439) === 0, String(countVerdictLines(bodies439)));
+
+// 边界：什么算一条判定行（与红项解析共用 judgment.mjs 的判定行定义）
+check("空数组 0 条判定行", countVerdictLines([]) === 0);
+check("无正文不数", countVerdictLines([null, undefined, ""]) === 0);
+check("普通评论不算判定行", countVerdictLines(["普通评论，没有判定行"]) === 0);
+check("正文叙述引用他单「红 4 项」不算（非行首）", countVerdictLines(["比 #440 的红 4 项干净多了"]) === 0);
+check("首行判定算 1 条", countVerdictLines(["**判定：红 3 项**\n叙述"]) === 1);
+check("复核结论算 1 条", countVerdictLines(["**复核结论：绿，可合并**"]) === 1);
+check("多条 body 逐条数", countVerdictLines(["判定：红 1 项", "复核结论：绿", "普通评论"]) === 2);
+check("rework：1 条→0 轮", reworkFromVerdictLines(["判定：红 1 项"]) === 0);
+check("rework：2 条→1 轮", reworkFromVerdictLines(["判定：红 1 项", "复核结论：绿"]) === 1);
+check("rework：3 条→2 轮", reworkFromVerdictLines(["判定：红 1 项", "判定：红 1 项", "复核结论：绿"]) === 2);
+
+// 三态输出可分辨（仓规硬条款：没查成 ≠ 查过没事）：0 轮 / N-1 轮 / 无判定行
+check("三态①：1 条判定行 → 「0 轮（审过一次，零返工）」", describeRework(0).startsWith("0 轮") && describeRework(0).includes("零返工"));
+check("三态②：2 条判定行 → 「1 轮（判定行 2 条）」", describeRework(1).startsWith("1 轮") && describeRework(1).includes("判定行 2 条"));
+check("三态③：0 条判定行 → 「无判定行（本项没测成）」，不是 0 轮", describeRework(null).includes("无判定行") && describeRework(null).includes("没测成") && !describeRework(null).startsWith("0 轮"));
+
+// 累计表镜像：无判定行不混进返工平均，也不当作 0 轮
+const noVerdict = buildRows([{ model: "m", taskType: "写码", rework: null, redFlags: null, number: 1, mergedAt: "2026-01-01T00:00:00Z" }], [], ["写码"]);
+check("全组无判定行 ⇒ 平均返工=null", noVerdict[0].averageRework === null);
+check("无判定行渲染为「无判定行」非 0.0", renderRow(noVerdict[0]).includes("无判定行"));
+check("无判定行趋势记「无判定」非 0", renderRow(noVerdict[0]).includes("无判定/无审"));
+const zeroRework = buildRows([{ model: "m", taskType: "写码", rework: 0, redFlags: 0, number: 2, mergedAt: "2026-01-02T00:00:00Z" }], [], ["写码"]);
+check("审过零返工 ⇒ 平均返工=0.0（与无判定行区分）", zeroRework[0].averageRework === 0 && renderRow(zeroRework[0]).includes("0.0"));
+const mixedRework = buildRows([
+  { model: "m", taskType: "写码", rework: null, redFlags: null, number: 1, mergedAt: "2026-01-01T00:00:00Z" },
+  { model: "m", taskType: "写码", rework: 1, redFlags: 4, number: 2, mergedAt: "2026-01-02T00:00:00Z" },
+], [], ["写码"]);
+check("混判：无判定行样本不进平均，平均=1.0", mixedRework[0].averageRework === 1);
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);
