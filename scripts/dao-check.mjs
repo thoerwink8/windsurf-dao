@@ -57,8 +57,16 @@ function green(line) { greens.push(line); }
 function skip(line) { skips.push(line); }
 
 function firstFailLine(output) {
-  const line = String(output || '').split(/\r?\n/).find(l => /FAIL|✘|Assert|Error|error/.test(l));
-  return (line || '(无输出)').trim().slice(0, 160);
+  const lines = String(output || '').split(/\r?\n/);
+  // 优先抓失败断言本身（测试输出里「  FAIL  断言名」行首标记；PASS 行 detail 里可能含 error 字样，
+  // 不能整行搜 error——#497 第五轮帅实证：报红时证据贴的是 PASS 行，等于指不出红在哪）。
+  const failLine = lines.find(l => /^\s*(FAIL|✘|✗)\s/.test(l));
+  if (failLine) return failLine.trim().slice(0, 200);
+  const xLine = lines.find(l => /^\s*X\s+/.test(l)); // dao-check 自己的 fail 形（runTests 外的兜底）
+  if (xLine) return xLine.trim().slice(0, 200);
+  // 抓不到失败标记：退回输出末尾几行 + 注明（不是静默贴末尾）
+  const tail = lines.slice(-8).join(' | ').trim().slice(0, 300);
+  return `(未找到失败标记，以下为输出末尾) ${tail || '(无输出)'}`;
 }
 
 // ── ① 跑 tests/ 下所有测试 ─────────────────────────────────────────

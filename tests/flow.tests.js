@@ -25,10 +25,16 @@ const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
 const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, mergeGate, ciState, mergeableVerdict, extractPrsFromSpec, runCmd, taskIdFromTaskCreate, handleFromWorkerShow, worktreeIdFromWorktreeCreate, terminalHandleFromTerminalCreate, dispatchIdFromDispatchShow } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies, reviewAnnotations, mergePolicyFromComment, SHANG_SHUAI_LINE_RE, SAME_SPOT_LINE_RE, NEW_INTRODUCED_LINE_RE } = require("../scripts/lib/judgment.mjs");
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skip = 0;
 function check(name, cond, detail) {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? "  →  " + String(detail).trim().slice(0, 400) : ""}`); }
+}
+// 显形跳过（#497 第五轮帅补正）：依赖本机 orca 的行为断言在 CI/无 orca 机器上必须 SKIP——
+// 不算过也不算红，计入跳过数。分不清「查过没事」和「没查成」正是仓规禁的形态。
+function skipCheck(name, detail) {
+  skip++;
+  console.log(`  SKIP  ${name}${detail ? "  →  " + String(detail).trim().slice(0, 200) : ""}`);
 }
 
 function runFlow(dir, extraArgs = []) {
@@ -632,14 +638,17 @@ console.log("\n=== ㉜ 引号坑锁（#499/#497 第六轮：runCmd 数组传参 
   check("runCmd 用 spawnSync(cmd, args, {...})（第二个参数是数组）", /spawnSync\(\s*cmd\s*,\s*args\s*,/.test(runCmdSrc), runCmdSrc.slice(0, 160));
   check("runCmd 选项不含 shell（shell:true 会经 cmd 二次解析丢引号）", !/shell\s*:/.test(runCmdSrc), runCmdSrc.slice(0, 160));
   // 行为断言：带空格参数走完整调用不被拆（实测证据：dispatch_not_found = 参数完整到达 RPC 解析）
+  // 行为断言：带空格参数走完整调用不被拆（实测证据：dispatch_not_found = 参数完整到达 RPC 解析）。
+  // 依赖本机 orca：无 orca（CI）时显形 SKIP——不算过不算红（帅补正：#475 同类问题，分不清
+  // 「orca 说引号没问题」和「orca 没装」就把后者当成了前者的反面）。
   const sp = spawnSync("orca", ["orchestration", "send", "--to", "dispatch:__nonexistent__", "--subject", "A B C", "--body", "d e f", "--json"], { encoding: "utf8", timeout: 30000, windowsHide: true });
   const rawOut = ((sp.stdout || "") + (sp.stderr || "")).trim();
-  // 无 orca 的机器（CI）：错误落在 sp.error.message（stdout/stderr 为空），要并进来才能显形 SKIP
+  // 无 orca 的机器（CI）：错误落在 sp.error（stdout/stderr 为空），要并进来才能显形
   const rawErr = (((sp.error && sp.error.message) || "") + " " + rawOut).trim();
   if (/dispatch_not_found/.test(rawErr)) {
     check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", true, rawErr.slice(0, 120));
-  } else if (/(not recognized|ENOENT|不是内部|外部命令|Cannot find)/i.test(rawErr)) {
-    check("本机无 orca：行为断言 SKIP（显形跳过，不算过）", true, "SKIP: " + rawErr.slice(0, 120));
+  } else if (sp.error || /(not recognized|ENOENT|不是内部|外部命令|Cannot find)/i.test(rawErr)) {
+    skipCheck("带空格参数完整到达（本机无 orca，CI 无法验证，源码断言已锁传参形态）", "SKIP: " + rawErr.slice(0, 120));
   } else {
     check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", false, rawErr.slice(0, 200));
   }
@@ -693,5 +702,5 @@ console.log("\n=== ㉟ 未归类状态报警（#497 第五轮：显式白名单 
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);
+console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);
 process.exit(fail > 0 ? 1 : 0);
