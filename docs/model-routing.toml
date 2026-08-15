@@ -24,8 +24,8 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 cli = "grok"
 launch_note = """
 grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-08-14，issue #443）。
-2026-08-15 起经 regrok shim（~/.local/bin/grok.cmd 覆盖 PATH，内置 HTTPS_PROXY + 默认 -m grok-4.6）变回普通 agent，`--agent grok` 直接可用（三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
-shim 两文件全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
+2026-08-15 起经 regrok shim（~/.local/bin，覆盖 PATH）已是普通 agent，`--agent grok` 直接可用。
+shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
 """
 why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
 note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节（HTTPS_PROXY=http://127.0.0.1:7890 必带）见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"

@@ -95,7 +95,9 @@ const STALE_24H_MS = 24 * 60 * 60 * 1000;
 // 声明口径：正文出现该规则的指名串（如 host/skills）即视为已声明，
 // 指名串覆盖该规则下全部命中文件。每轮重算——违规持续则每轮报警。
 const SENSITIVE_RULES = [
-  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => /CLAUDE\.md/.test(b) },
+  // 根 CLAUDE.md：声明正则必须不被 docs/global-CLAUDE.md 子串满足（审读红 2：
+  // 正文只提 global-CLAUDE.md ≠ 声明了根 CLAUDE.md）——(?<!global-) 负向环视挡掉
+  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => /(?<!global-)CLAUDE\.md/.test(b) },
   { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => /global-CLAUDE/.test(b) },
   { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => /host\/skills/.test(b) },
   { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => /dao-check/.test(b) },

@@ -107,16 +107,18 @@ console.log("\n=== ④ exited 违规样本被拦 ===");
 
 console.log("\n=== ⑤ 宽指纹退役（2026-08-15 裁定书：删单发即唤醒的 'Error:'/'terminated'/'Connection error' 类）===");
 {
+  // 判别力：指纹一律两连同才报警，单轮本来就不响——退役断言必须用两轮同屏证明
+  // 「两连同下宽指纹也不报」；若把退役指纹加回 ERROR_FINGERPRINTS，这两条断言必须变红。
   // fingerprint/ 样本 = 盲考·Grok 真实报错原文（含 terminated）——宽指纹退役后不再匹配
-  const r = runWatchdog(path.join(FIXTURES, "fingerprint"));
-  check("退出码 0（'terminated' 宽指纹已退役，不再单发报警）", r.status === 0, `status=${r.status}`);
-  check("不报 fingerprint", !/fingerprint:/.test(r.out), r.out.trim());
-  check("OK 扫完 1 个工位", /OK 扫完 1 个工位/.test(r.out), r.out.trim());
+  const r = runMultiRounds(path.join(FIXTURES, "fingerprint"), 2);
+  check("fingerprint 样本两轮同屏：退出码 0（'terminated' 已退役，两连同也不报）", r.status === 0, `status=${r.status}`);
+  check("fingerprint 样本两轮同屏：无 fingerprint 事件", !/fingerprint:/.test(r.out), r.out.trim());
+  check("fingerprint 样本两轮同屏：OK 扫完（不是没查成）", /OK 扫完 1 个工位/.test(r.out), r.out.trim());
 
   // wide-fp-deleted 样本：屏面底部写入 'Error:' 与 'Connection error'——同样退役
-  const r2 = runWatchdog(path.join(FIXTURES, "wide-fp-deleted"));
-  check("'Error:'/'Connection error' 单发不再报警 → 退出码 0", r2.status === 0, `status=${r2.status}`);
-  check("宽指纹字样在屏面但不报", !/fingerprint:/.test(r2.out), r2.out.trim());
+  const r2 = runMultiRounds(path.join(FIXTURES, "wide-fp-deleted"), 2);
+  check("wide-fp-deleted 两轮同屏：'Error:'/'Connection error' 不再报警 → 退出码 0", r2.status === 0, `status=${r2.status}`);
+  check("wide-fp-deleted 两轮同屏：宽指纹字样在屏面但不报", !/fingerprint:/.test(r2.out), r2.out.trim());
 }
 
 console.log("\n=== ⑥ waiting 官方信号样本被拦 ===");
@@ -265,6 +267,16 @@ console.log("\n=== ⑮d 分级排除：--exclude-pane 豁免指纹/停摆判据�
   check("不报 fingerprint", !/fingerprint:/.test(r.out), r.out.trim());
   check("工位仍被监视（保留死活判据）→ OK 扫完 1 个工位", /OK 扫完 1 个工位（看门狗正式版）/.test(r.out), r.out.trim());
   check("不是 NO_TARGETS（旧版整体排除的盲区没了）", !/NO_TARGETS/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑮e 分级排除保留死活判据：--exclude-pane 下 exited/waiting 仍会响（2026-08-15 裁定书）===");
+{
+  // 豁免的是指纹/停摆判据，不是死活判据——exited/waiting 在分级排除下必须照常报警
+  const paneKey = "a04a1b0a-c845-4ec2-842b-41816b364e87:d539fff1-47d1-4a97-b479-69523fc1778f";
+  const re = runWatchdog(path.join(FIXTURES, "exited"), ["--exclude-pane", paneKey]);
+  check("exited 工位被 --exclude-pane 后仍报 exited（保留死活判据）", re.status === 1 && /\[#452 - 看门狗正式版\] exited:/.test(re.out), `status=${re.status} ${re.out.trim()}`);
+  const rw = runWatchdog(path.join(FIXTURES, "waiting"), ["--exclude-pane", paneKey]);
+  check("waiting 工位被 --exclude-pane 后仍报 waiting（保留死活判据）", rw.status === 1 && /\[#452 - 看门狗正式版\] waiting:/.test(rw.out), `status=${rw.status} ${rw.out.trim()}`);
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);

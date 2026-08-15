@@ -328,6 +328,8 @@ console.log("\n=== ⑳ 敏感路径越权报警（fusion-verdict 2026-08-15：di
   check("纯函数：host/skills + dao-check 未声明 → 2 条", sensitiveEscalations({ body: "## 目标" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
   check("纯函数：正文声明过 → 0 条", sensitiveEscalations({ body: "改动 host/skills/dispatch/SKILL.md 与 scripts/dao-check.mjs" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 0);
   check("纯函数：CLAUDE.md 与 docs/global-CLAUDE.md 分开算（声明 CLAUDE.md 不覆盖 global）", JSON.stringify(sensitiveEscalations({ body: "只声明 CLAUDE.md" }, ["CLAUDE.md", "docs/global-CLAUDE.md"]).map(v => v.rule)) === '["docs/global-CLAUDE.md"]');
+  check("纯函数：正文只提 docs/global-CLAUDE.md 不覆盖根 CLAUDE.md（审读红 2 负控：仍须报根）", JSON.stringify(sensitiveEscalations({ body: "改了 docs/global-CLAUDE.md" }, ["CLAUDE.md"]).map(v => v.rule)) === '["CLAUDE.md"]');
+  check("纯函数：正文提根 CLAUDE.md 且只动根 → 不报", sensitiveEscalations({ body: "改了根 CLAUDE.md" }, ["CLAUDE.md"]).length === 0);
   check("纯函数：未触碰敏感路径 → 0 条", sensitiveEscalations({ body: "## 目标" }, ["scripts/flow.mjs", "docs/model-routing.toml"]).length === 0);
 
   const r = runFlow(path.join(FIXTURES, "sensitive-undeclared"));

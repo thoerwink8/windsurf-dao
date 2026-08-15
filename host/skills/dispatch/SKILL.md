@@ -181,8 +181,9 @@ orca orchestration worker-read --dispatch <dispatch_id> --json
 #    合并后 orca worktree rm 整棵任务树仍归帅终审
 
 # 多工人 / 辅助卡（审官、临时诊断工）：子卡挂任务卡下，git 从任务分支切（--base-branch 用任务分支）；
-#   已知显示名建卡带 --parent-worktree 'name:#<PR号> - <动宾短语>'；勿加 worktree: 前缀（selector_not_found）
-orca worktree create --parent-worktree 'name:#<PR号> - <动宾短语>' --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
+#   --parent-worktree 用 branch:<任务分支>（name: 不是 orca 认识的 worktree selector——审读实测，勿用；
+#   也勿加 worktree: 前缀，selector_not_found）
+orca worktree create --parent-worktree branch:<任务分支> --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
 #   审官若是 Claude Opus（审官选型序 UI 类 GPT 禁入时顶位）走两步收口——--agent 起不了 reclaude 链
 ```
 

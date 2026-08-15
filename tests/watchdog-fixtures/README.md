@@ -38,8 +38,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 |---|---|---|
 | `live/` | 2026-08-14 实录（master + 看门狗正式版 两工位，含真实 read 与 cursor） | 退出码 0，OK 扫完 1 个工位（master 被结构性排除）；带 `--self-worktree` 则 NO_TARGETS |
 | `exited/` | read `status` 改 `"exited"` | 退出码 1，`[#452 - 看门狗正式版] exited:` |
-| `fingerprint/` | read 底部窗口写入盲考·Grok 真实报错原文（含 terminated）——**宽指纹已退役**：不再匹配 | 退出码 0，`OK 扫完 1 个工位`（宽指纹退役负控） |
-| `wide-fp-deleted/` | 基于 live/，底部窗口写入 `Error: ...` 与 `Connection error: ...`（退役宽指纹） | 退出码 0，不报 fingerprint |
+| `fingerprint/` | read 底部窗口写入**已退役宽指纹**（`Error:`/`terminated`/`Connection error`，故意不含保留指纹 `Retry failed`/`Reconnecting 5/5`——否则两连同会命中保留项，退不退役分不出） | 两轮同屏退出码 0，无 `fingerprint:`（两连同也不报）；判别力自检：把退役指纹加回清单必须变红 |
+| `wide-fp-deleted/` | 基于 live/，底部窗口写入 `Error: ...` 与 `Connection error: ...`（退役宽指纹） | 两轮同屏退出码 0，不报 fingerprint |
 | `waiting/` | ps `state` 改 `"waiting"` | 退出码 1，`waiting:` |
 | `hash-stable/` | 真实干净屏面三轮同屏（updatedAt/incarnation 冻结，无 cursor 字段） | 第 3 轮退出码 1，`hash-stable:`（无 cursor 时回退哈希判据） |
 | `hash-stable-activity/` | 同屏四轮，updatedAt 第 2 轮推进一次 | 第 4 轮才报（新序列第 3 个同屏轮） |
