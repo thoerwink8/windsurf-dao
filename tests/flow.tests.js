@@ -323,7 +323,7 @@ console.log("\n=== ⑮b 合并门纯函数（三条件硬查 + 等你撤回 + CI
   check("mergeable CONFLICTING → 打回", mergeableVerdict("CONFLICTING", "DIRTY").ok === false && !mergeableVerdict("CONFLICTING", "DIRTY").wait);
   check("mergeable UNKNOWN → 下轮重查（不打回误伤瞬态）", mergeableVerdict("UNKNOWN", "UNKNOWN").wait === true);
   check("spec 提取 PR 号", JSON.stringify(extractPrsFromSpec("审官任务：#456 - 审官·gpt。任务 PR：#456")) === "[456]");
-  check("spec 多号去重", JSON.stringify(extractPrsFromSpec("Closes #480 #478")) === "[480,478]");
+  check("spec 只认 flow 受控前缀（人写自由文本不再提取——#497 第九轮硬禁，合并顺序 #502 → #497 不得命中）", JSON.stringify(extractPrsFromSpec("Closes #480 #478")) === "[]" && JSON.stringify(extractPrsFromSpec("合并顺序 #502 → #497")) === "[]" && JSON.stringify(extractPrsFromSpec("返工任务：#502 第 4 轮返工。")) === "[502]");
 }
 
 console.log("\n=== ⑯ dispatch 寻址：存量审官任务卡反查（task-list spec 含审官任务标记）===");
@@ -729,6 +729,38 @@ console.log("\n=== ㊱ 合并门第四条（#497 第八轮：判绿的 commit �
   check("负样本3（commit_id 缺失）：没查成，不合，不放行", /报帅：终审 #3210（复核结论：绿，判绿 review 的 commit_id 缺失——没查成）/.test(noCommit.out) && !/动作：合并/.test(noCommit.out), noCommit.out.trim());
   const fresh = runFlow(path.join(FIXTURES, "merge-green"));
   check("正样本（判绿 commit == HEAD + CI 绿 + merge/auto）：放行合并", /动作：合并 #3201（复核绿 \+ CI 全绿 \+ merge\/auto \+ MERGEABLE）：gh pr merge 3201 --squash/.test(fresh.out), fresh.out.trim());
+}
+
+console.log("\n=== ㊲ PR→工人映射结构化归属（#497 第九轮：删 spec 子串匹配，真实事故：合并顺序 #502 → #497 被误派）===");
+{
+  // 违规样本 1+2（帅·A 点名 + 事故真实复现）：spec 自由文本含 PR 号不得命中归属
+  const mis = runFlow(path.join(FIXTURES, "misdirect-spec"));
+  check("违规样本：spec 写「合并顺序 #A → #B」自由文本 → 不得把 #A 的活派进任何工位", !/动作：返工注入 #3408/.test(mis.out), mis.out.trim());
+  check("违规样本：走待帅转交（预览-阻塞：找不到工人 dispatch）", /预览-阻塞：#3408（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(mis.out), mis.out.trim());
+  check("违规样本：不得误伤真正工位（#3407 的 task 不被 #3408 抢）", !/--terminal term_3407/.test(mis.out), mis.out.trim());
+  // 正样本 1：flow 自己起的工位（rec.workerDispatch 绑定，落 state.json）
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-disp-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 1, inventoried: true, round: 0, dispatchCache: {}, chainWatchNoSampleReported: false,
+    records: {
+      "3409": { pr: 3409, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, escalated: null, workerDispatch: "ctx_3409", policyBackfilled: false, chainBrokenSince: null, mergeAttempted: false, mergeBlocked: false, stateSince: Date.now() },
+    },
+  }), "utf8");
+  const bound = runFlowShared(path.join(FIXTURES, "dispatch-bound"), stateFile, hbFile);
+  const boundOut = (bound.stdout || "") + (bound.stderr || "");
+  check("正样本 1：flow 绑定（rec.workerDispatch）→ 正确注入", /动作：返工注入 #3409（第 1 轮，红 2 项）：task-create \+ worker-start --task <新> --terminal term_3409/.test(boundOut), boundOut.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+  // 正样本 2：worktree 分支全等（fake-loop 等既有注入 fixture 全走这条，这里再显式断言一条）
+  const fake = runFlow(path.join(FIXTURES, "fake-loop"));
+  check("正样本 2：worktree 分支全等 → 正确注入（term_worker_999）", /动作：返工注入 #999（第 1 轮，红 3 项）：task-create \+ worker-start --task <新> --terminal term_worker_999/.test(fake.out), fake.out.trim());
+  // 兜底样本：绑定丢失 + 分支匹配不出唯一 → 待帅转交，不崩不猜
+  const fallback = runFlow(path.join(FIXTURES, "no-target-fallback"));
+  check("兜底样本：无绑定无 worktree 匹配 → 待帅转交（不崩不猜不静默）", /预览-阻塞：#3410（返工注入——投递目标解析失败：找不到工人 dispatch）/.test(fallback.out) && !/--terminal term_/.test(fallback.out), fallback.out.trim());
+  // 硬禁自检：flow.mjs 无 spec 子串/正则匹配判归属
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("硬禁：flow.mjs 无 spec 子串匹配判归属（spec.*includes/match/indexOf(#) 零命中）", !/spec.*includes|spec.*match|indexOf\(.*#/.test(flowSrc));
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红 / ${skip} 跳过`);

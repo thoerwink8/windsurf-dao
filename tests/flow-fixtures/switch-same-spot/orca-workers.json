@@ -1,0 +1,9 @@
+[
+ {
+  "dispatchId": "ctx_worker_3303",
+  "taskId": "task_3303w",
+  "worktreeId": "wt::worker-3303",
+  "agentTerminalHandle": "term_worker_3303",
+  "dispatchStatus": "in_progress"
+ }
+]

@@ -503,18 +503,14 @@ function recheckInstruction(pr, round, reviewerLabel) {
 // 返回 receipt，送达由 orca 保证）。映射不出就退回 GitHub 通道，不报错停手。)
 // ══════════════════════════════════════════════════════════════════════
 
-// 从任务书 spec 提取 PR 号：#N 或 PR #N / 任务 PR：#N。spec 里可能带多个号
-// （如「Closes #480 #478」），只认能唯一对应一个 PR 的（任务卡按「#PR号 - 动宾短语」命名，
-// 首号通常就是 PR）。返回去重后的号列表。
+// 从任务书 spec 提取 PR 号（#497 第九轮：只认 flow 自己生成的受控前缀，不认任意 #N——
+// 人写 spec 里的 #N 是给人看的文字，出现不代表归属（真实事故：「合并顺序 #502 → #497」被当成
+// #502 归属，返工派进了 #497 工位）。flow 生成的 task spec 只有两种前缀：
+//   「返工任务：#N 第 X 轮…」/「审官任务：#N…」（deliverFollowUp），首号即 PR 号，结构已知。
+const FLOW_TASK_SPEC_RE = /^(?:返工任务|审官任务)：#(\d+)/;
 function extractPrsFromSpec(spec) {
-  const out = [];
-  const re = /(?:PR\s*)?#(\d+)/g;
-  let m;
-  while ((m = re.exec(String(spec || '')))) {
-    const n = Number(m[1]);
-    if (!out.includes(n)) out.push(n);
-  }
-  return out;
+  const m = FLOW_TASK_SPEC_RE.exec(String(spec || '').trim());
+  return m ? [Number(m[1])] : [];
 }
 
 // 建 taskId→PR / PR→dispatch 映射（live：task-list + dispatch-show；快照：orca-tasks.json）。
@@ -557,26 +553,37 @@ function resolveDispatchId(map, entry) {
   return null;
 }
 
-// 找 PR 的工人 dispatch（①rec.workerDispatch 当前工人上下文 ②唯一非审官任务）；
-// 多候选/零候选 → null（待帅转交）。
-function workerDispatchFor(map, prNumber, rec) {
+// 找 PR 的工人 dispatch（#497 第九轮：删掉 task spec 子串匹配——事故根因：「合并顺序 #502 → #497」
+// 被当成 #502 归属，返工派进了 #497 工位，抢走整个工位且双方不报错）。三条路径，没有第四条：
+//   1 flow 自己起的工位（rec.workerDispatch：起返工/复核时记账，落 _flow/state.json——权威绑定）；
+//   2 worktree 分支全等（refs/heads/<headRefName> 精确比较，分支↔PR 是 1:1 结构事实，不是文本猜测）
+//     → 由该 worktree 经 worker-list 反查唯一 dispatch；
+//   3 以上定不出唯一 → null（待帅转交：fail-visible + pendingShuai 常驻 + 不重试狂发）。
+// 硬禁：对 task spec / 任务卡标题 / 任何自由文本做子串或正则匹配判归属。
+function workerDispatchFor(source, pr, rec) {
   if (rec?.workerDispatch) return rec.workerDispatch;
-  const list = (map.tasksByPr[prNumber] || []).filter(e => !e.isReviewer);
-  if (list.length !== 1) return null;
-  return resolveDispatchId(map, list[0]);
+  const branch = `refs/heads/${pr.headRefName || ''}`;
+  const wt = source.worktreeForBranch ? source.worktreeForBranch(branch) : null;
+  if (wt && source.dispatchForWorktree) {
+    const d = source.dispatchForWorktree(wt.id);
+    if (d && d.dispatchId) return d.dispatchId;
+  }
+  return null;
 }
 
-// 找 PR 的审官 dispatch：①起审官时记的 rec.reviewer.dispatchId ②审官任务候选（唯一）
+// 找 PR 的审官 dispatch（#497 第九轮）：路径 1 起审官时记账的 rec.reviewer.dispatchId（flow 自己起的
+// 审官一定有）；路径 2 审官任务 spec 的受控前缀兜底（「审官任务：#N」是 flow 生成的受控格式，不是人写
+// 自由文本——硬禁只禁后者）；其余 → null（待帅转交）。审官 worktree 分支不是 PR 分支，分支匹配不适用。
 function reviewerDispatchFor(map, prNumber, rec) {
   if (rec.reviewer?.dispatchId) return rec.reviewer.dispatchId;
-  const list = (map.tasksByPr[prNumber] || []).filter(e => e.isReviewer);
+  const list = (map.tasksByPr?.[prNumber] || []).filter(e => e.isReviewer);
   if (list.length !== 1) return null;
   return resolveDispatchId(map, list[0]);
 }
 
-// dispatch id → 终端 handle：①map 条目自带（快照便捷）②live worker-show --dispatch
+// dispatch id → 终端 handle：①map 条目自带（快照便捷，可缺省）②live worker-show --dispatch
 // 的 worker.agent_terminal_handle。取不到 → 待帅转交（不猜终端、不按 title 猜）。
-function resolveDeliveryHandle(source, map, dispatchId) {
+function resolveDeliveryHandle(source, dispatchId, map = { tasksByPr: {} }) {
   if (!dispatchId) return { ok: false, error: '无 dispatch id' };
   for (const pr of Object.keys(map.tasksByPr || {})) {
     const hit = (map.tasksByPr[pr] || []).find(e => e.dispatchId === dispatchId && e.agentTerminalHandle);
@@ -935,7 +942,9 @@ function processNativeMessages(messages, state, dispatchMap, args) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 状态文件（游标缓存，GitHub 才是真相源）
+// 状态文件（游标缓存 + 不可重算绑定：#497 第九轮起含 PR↔dispatchId 绑定——flow 自己起的工位
+// 映射只能从这棵树找回（rec.workerDispatch / state.dispatchCache），GitHub 重算不出来）。
+// 绑定丢失不报错不崩：退回 worktree 分支全等 → 待帅转交（安全默认 = 最坏是待帅转交，绝不能是猜一个工位）。
 // ══════════════════════════════════════════════════════════════════════
 
 function loadState(path) {
@@ -1030,6 +1039,24 @@ function makeLiveSource(repo) {
       const wts = unwrap(r.json, 'worktrees', 'worktrees');
       if (!Array.isArray(wts)) return { ok: false, error: 'worktree list 结构不认识' };
       return { ok: true, worktrees: wts.map(w => ({ id: w.id, branch: w.branch || w.git?.branch || null, comment: w.comment || w.git?.comment || null })) };
+    },
+    // PR→工人 dispatch 路径 2（#497 第九轮）：worktree 分支全等（refs/heads/<headRefName> 精确比较，
+    // 分支↔PR 是 1:1 结构事实不是文本猜测）；唯一才认，多候选/读不到 → null（待帅转交）。
+    worktreeForBranch(branch) {
+      const wts = this.orcaWorktrees();
+      if (!wts.ok) return null;
+      const hit = (wts.worktrees || []).filter(w => w.branch === branch);
+      return hit.length === 1 ? hit[0] : null;
+    },
+    // worktree → 唯一 dispatch（#497 第九轮）：worker-list 按 resource.worktreeId 反查（结构化关联），
+    // 排除已完成的 dispatch（dispatchStatus=completed 是历史）；多候选 → null。
+    dispatchForWorktree(worktreeId) {
+      const r = runOrca(['orchestration', 'worker-list', '--json']);
+      if (!r.ok) return null;
+      const workers = unwrap(r.json, 'workers', 'workers');
+      if (!Array.isArray(workers)) return null;
+      const hits = workers.filter(w => w.resource?.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
+      return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
     },
     dispatchIdFor(taskId) {
       const r = runOrca(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
@@ -1141,6 +1168,21 @@ function makeSnapshotSource(roundDir, repo) {
       if (!Array.isArray(wts)) return { ok: false, error: 'orca-worktrees.json 结构不认识' };
       return { ok: true, worktrees: wts.map(w => ({ id: w.id, branch: w.branch || w.git?.branch || null, comment: w.comment || w.git?.comment || null })) };
     },
+    // PR→工人 dispatch 路径 2（#497 第九轮，快照）：orca-worktrees.json 分支全等；唯一才认。
+    worktreeForBranch(branch) {
+      const wts = this.orcaWorktrees();
+      if (!wts.ok) return null;
+      const hit = (wts.worktrees || []).filter(w => w.branch === branch);
+      return hit.length === 1 ? hit[0] : null;
+    },
+    // worktree → 唯一 dispatch（快照：orca-workers.json 可选，条目平铺形态
+    // { dispatchId, worktreeId, agentTerminalHandle, dispatchStatus }）；排除已完成的。
+    dispatchForWorktree(worktreeId) {
+      const r = readJson(join(roundDir, 'orca-workers.json'));
+      if (!r.ok || !Array.isArray(r.json)) return null;
+      const hits = r.json.filter(w => w.worktreeId === worktreeId && w.dispatchStatus !== 'completed');
+      return hits.length === 1 ? { dispatchId: hits[0].dispatchId || null } : null;
+    },
     dispatchIdFor() { return null; },
     workerHandleFor(dispatchId) {
       // 快照：orca-workers.json（worker-show 镜像）为可选；夹具习惯直接在 orca-tasks.json 条目带 agentTerminalHandle
@@ -1228,16 +1270,15 @@ function executeAction(action, pr, toml, source, rec, args) {
 
   if (action.kind === 'inject-rework') {
     const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
-    const map = buildDispatchMap(source, { dispatchCache: {} });
-    const dispatchId = workerDispatchFor(map, pr.number, rec);
+    const dispatchId = workerDispatchFor(source, pr, rec);
     if (!dispatchId) {
       if (args.dryRun) {
         // 预览-阻塞：可见但不落闸（旧观察 1 口径——预览不改变值守状态）
         return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——投递目标解析失败：找不到工人 dispatch）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
       }
-      return { ok: false, error: `找不到 PR #${pr.number} 工人 dispatch（task-list 里 spec 含 #${pr.number} 的非审官任务应为唯一候选）——待帅转交返工指令`, needsReport: 'reviewer-unfound' };
+      return { ok: false, error: `找不到 PR #${pr.number} 工人 dispatch（flow 无绑定记录、worktree 分支匹配不出唯一）——待帅转交返工指令`, needsReport: 'reviewer-unfound' };
     }
-    const target = resolveDeliveryHandle(source, map, dispatchId);
+    const target = resolveDeliveryHandle(source, dispatchId);
     if (!target.ok) {
       if (args.dryRun) {
         return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——投递目标解析失败：${target.error}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
@@ -1265,11 +1306,11 @@ function executeAction(action, pr, toml, source, rec, args) {
     const map = buildDispatchMap(source, { dispatchCache: {} });
     const dispatchId = reviewerDispatchFor(map, pr.number, rec);
     if (!dispatchId) {
-      // reviewer-unfound 是结构性卡住（流转器没起过审官 / task-list 里没有审官卡）——
+      // reviewer-unfound 是结构性卡住（流转器没起过审官 / 未记录起审官 dispatchId）——
       // dry-run 也走失败路径写 pendingShuai 常驻，不短路成预览（旧四轮复核红 1 口径）
-      return { ok: false, error: '找不到审官 dispatch（未记录起审官 dispatchId，task-list 里也没有审官任务卡）——待帅接手复核', needsReport: 'reviewer-unfound' };
+      return { ok: false, error: '找不到审官 dispatch（未记录起审官 dispatchId）——待帅接手复核', needsReport: 'reviewer-unfound' };
     }
-    const target = resolveDeliveryHandle(source, map, dispatchId);
+    const target = resolveDeliveryHandle(source, dispatchId);
     if (!target.ok) {
       return { ok: false, error: target.error, needsReport: 'reviewer-unfound' };
     }

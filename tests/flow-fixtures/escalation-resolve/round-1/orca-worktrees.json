@@ -1,0 +1,12 @@
+{
+ "result": {
+  "worktrees": [
+   {
+    "id": "wt::worker-3309",
+    "branch": "refs/heads/thoerwink8/fake-3309",
+    "displayName": "#3309",
+    "childWorktreeIds": []
+   }
+  ]
+ }
+}

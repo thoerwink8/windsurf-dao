@@ -1,0 +1,16 @@
+[
+ {
+  "dispatchId": "ctx_worker_2001",
+  "taskId": "task_2001w",
+  "worktreeId": "wt::worker-2001",
+  "agentTerminalHandle": "term_worker_2001",
+  "dispatchStatus": "in_progress"
+ },
+ {
+  "dispatchId": "ctx_reviewer_2001",
+  "taskId": "task_2001r",
+  "worktreeId": "wt::reviewer-2001",
+  "agentTerminalHandle": "term_reviewer_2001",
+  "dispatchStatus": "in_progress"
+ }
+]

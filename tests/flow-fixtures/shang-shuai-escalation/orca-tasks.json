@@ -1,7 +1,7 @@
 [
  {
   "id": "task_3302",
-  "spec": "工人任务：上帅 escalation 测试 #3302。",
+  "spec": "审官任务：#3302 - 审官·gpt-5.6-sol。任务 PR：#3302（上帅 escalation）",
   "dispatchId": "ctx_3302",
   "agentTerminalHandle": "term_3302"
  }
