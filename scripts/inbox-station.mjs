@@ -20,6 +20,11 @@
 //   node scripts/inbox-station.mjs relay  [--run <id>] [--log <path>]
 //
 // ensure stdout 一行 JSON：{ok, runId, handle, logPath, action, reason}
+//
+// 身份判据（issue #493）：run id 是身份，标题/日志路径都带 run 维度。
+//   - 终端标题 = 信箱台·<run后缀>（勿关），不再用裸「信箱台（勿关）」当身份
+//   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
+//   - ensure 按 run 归属找终端；撞上别的 run 的台必须拒绝顶替并报出对方 run id
 
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -32,13 +37,36 @@ const ORCA_TIMEOUT_MS = 30000;
 const READY_WAIT_MS = 30000;
 const READY_POLL_MS = 1000;
 
+// 裸标题（信箱台（勿关））只用于识别「长得像信箱台」的旧格式终端：
+// 无 run 后缀 = 归属不明，一律按外来处理，不得复用/顶替，只报出来。
 export const TITLE = '信箱台（勿关）';
 export const READY_MARK = 'INBOX_STATION_READY';
+// 无 run 时的兜底日志（正常路径永远带 run，见 defaultLogRel）
 export const DEFAULT_LOG_REL = join('_flow', 'inbox.log');
-export const LEASE_NAME = 'inbox-station.lease';
 // 无租约自带 ttl 时的默认窗口：覆盖默认 check --wait 15s + 余量
 export const LEASE_TTL_MS = 25000;
 export const LEASE_GRACE_MS = 10000;
+
+export function runShort(runId) {
+  return String(runId || '').replace(/^run_/, '');
+}
+
+export function stationTitle(runId) {
+  return `信箱台·${runShort(runId)}（勿关）`;
+}
+
+// 从标题里抽 run 记号（信箱台·xxx 的 xxx）。抽不到 = 旧格式/不是信箱台。
+export function extractRunToken(title) {
+  const m = String(title || '').match(/信箱台·([0-9a-z_]+)/i);
+  return m ? m[1] : null;
+}
+
+// 默认日志按 run 隔离：_flow/inbox-<run后缀>.log。不传 --log 是这个脚本的最常见用法，
+// 必须天然安全（issue #493：默认写死同一个 inbox.log 是「必混」隐患）。
+export function defaultLogRel(runId) {
+  const short = runShort(runId);
+  return short ? join('_flow', `inbox-${short}.log`) : DEFAULT_LOG_REL;
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // 纯函数（单测直接 import，不经过 live orca）
@@ -85,13 +113,47 @@ export function parseArgs(argv) {
   return args;
 }
 
-export function findInboxTerminal(terminals) {
+export function findInboxTerminal(terminals, { runId } = {}) {
   if (!Array.isArray(terminals)) return null;
-  return terminals.find((t) => String(t?.title || '').includes(TITLE)) || null;
+  const want = runShort(runId);
+  if (!want) return terminals.find((t) => String(t?.title || '').includes(TITLE)) || null;
+  return terminals.find((t) => extractRunToken(t?.title) === want) || null;
+}
+
+// 所有「长得像信箱台、但不属于本 run」的终端。
+// 旧格式裸标题无法判定归属，一律当外来：ensure 不得复用、不得顶替，只报出来。
+export function findForeignInboxTerminals(terminals, { runId } = {}) {
+  if (!Array.isArray(terminals)) return [];
+  const want = runShort(runId);
+  const foreign = [];
+  for (const t of terminals) {
+    const title = String(t?.title || '');
+    const token = extractRunToken(title);
+    if (!token) {
+      if (title.includes(TITLE)) foreign.push({ terminal: t, token: null, kind: 'legacy-bare' });
+      continue;
+    }
+    if (token !== want) foreign.push({ terminal: t, token, kind: 'other-run' });
+  }
+  return foreign;
+}
+
+// 租约/启动脚本都落在日志同目录、按日志名区分：_flow/inbox-<run>.log →
+// _flow/inbox-<run>.lease / _flow/inbox-<run>.cmd。默认日志按 run 隔离后，
+// 这些伴生文件必须也按 run 隔离，否则两条 run 的台共写同一个 lease，
+// 活性判断互相污染（issue #493：身份必须一路贯穿）。
+export function logStem(logPath) {
+  const log = String(logPath || DEFAULT_LOG_REL).replace(/\\/g, '/');
+  const base = log.split('/').pop() || 'inbox.log';
+  return base.replace(/\.log$/i, '');
 }
 
 export function leasePath(logPath) {
-  return join(dirname(logPath || DEFAULT_LOG_REL), LEASE_NAME);
+  return join(dirname(logPath || DEFAULT_LOG_REL), `${logStem(logPath)}.lease`);
+}
+
+export function launchFilePath(logPath) {
+  return join(dirname(logPath || DEFAULT_LOG_REL), `${logStem(logPath)}.cmd`);
 }
 
 export function formatLease({ pid, runId, ts, ttlMs }) {
@@ -235,16 +297,39 @@ export function finalizeEnsure({
   };
 }
 
-export function decideEnsureAction({ terminal, relayAlive, coordinatorHandle }) {
-  if (!terminal) return { action: 'rebuild', reason: 'no-terminal' };
-  if (!relayAlive) return { action: 'rebuild', reason: 'relay-dead' };
-  // 被夺走也走重建：run-use --from 从 ensure 进程调用会绑错终端
-  // （实测绑到新 pwsh，不是 --from 指定的信箱台）。夺回必须在信箱台
-  // 自己的 PTY 里执行 run-use，而 --command 启动串是唯一不污染 stdin 的入口。
-  if (!coordinatorHandle || coordinatorHandle !== terminal.handle) {
-    return { action: 'rebuild', reason: 'coordinator-stolen' };
+export function decideEnsureAction({ terminal, relayAlive, coordinatorHandle, foreign } = {}) {
+  // 本 run 自己的台在 → 活着且持 coordinator 才算 ok；台死了是本 run 的事，restart 不碰别人。
+  if (terminal) {
+    if (!relayAlive) return { action: 'restart', reason: 'relay-dead' };
+    // 被夺走也走重建：run-use --from 从 ensure 进程调用会绑错终端
+    // （实测绑到新 pwsh，不是 --from 指定的信箱台）。夺回必须在信箱台
+    // 自己的 PTY 里执行 run-use，而 --command 启动串是唯一不污染 stdin 的入口。
+    if (!coordinatorHandle || coordinatorHandle !== terminal.handle) {
+      return { action: 'restart', reason: 'coordinator-stolen' };
+    }
+    return { action: 'ok', reason: 'all-alive' };
   }
-  return { action: 'ok', reason: 'all-alive' };
+  // 本 run 无台，但场上存在别的 run 的信箱台 → 拒绝顶替，报出对方 run id（issue #493）。
+  const list = Array.isArray(foreign) ? foreign : foreign ? [foreign] : [];
+  if (list.length > 0) {
+    const first = list[0];
+    const token = first.token || extractRunToken(first.terminal?.title);
+    const toRunId = (tok) => (tok && !tok.startsWith('run_') ? `run_${tok}` : tok);
+    return {
+      action: 'reject',
+      reason: 'foreign-station',
+      foreignRunId: toRunId(token),
+      foreignHandle: first.terminal?.handle || null,
+      foreignTitle: first.terminal?.title || null,
+      foreignList: list.map((f) => ({
+        runId: toRunId(f.token || extractRunToken(f.terminal?.title)),
+        handle: f.terminal?.handle || null,
+        title: f.terminal?.title || null,
+      })),
+    };
+  }
+  // 场上一个信箱台都没有 → 本 run 无台新建。
+  return { action: 'rebuild', reason: 'no-terminal' };
 }
 
 export function shouldLogMessage(msg) {
@@ -484,12 +569,12 @@ function resolveRunId(preferredId) {
   return { ok: true, runId: picked.id };
 }
 
-function resolveLogPath(arg) {
+function resolveLogPath(arg, runId) {
   if (arg) return resolve(arg);
   const listed = listWorktrees();
   const main = findMainWorktree(listed.worktrees);
   const base = main?.path || ROOT;
-  return join(base, DEFAULT_LOG_REL);
+  return join(base, defaultLogRel(runId));
 }
 
 function resolveCreateWorktree(arg) {
@@ -542,7 +627,7 @@ async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } =
 }
 
 function writeLaunchFile(logPath, runId) {
-  const launchPath = join(dirname(logPath), 'inbox-station.cmd');
+  const launchPath = launchFilePath(logPath);
   mkdirSync(dirname(launchPath), { recursive: true });
   writeFileSync(launchPath, buildLaunchScript({
     nodePath: process.execPath,
@@ -560,17 +645,18 @@ async function rebuildStation({ old, runId, logPath, worktree }) {
   }
   const launchPath = writeLaunchFile(logPath, runId);
   const cmd = buildRelayCommand({ launchPath });
+  const title = stationTitle(runId);
   const created = runOrca([
     'terminal', 'create',
     '--worktree', worktree,
-    '--title', TITLE,
+    '--title', title,
     '--command', cmd,
     '--json',
   ]);
   if (!created.ok) return { ok: false, error: `terminal create 失败: ${errText(created.error)}` };
   const handle = extractHandle(created.json);
   if (!handle) return { ok: false, error: `terminal create 没返回 handle: ${JSON.stringify(created.json).slice(0, 200)}` };
-  runOrca(['terminal', 'rename', '--terminal', handle, '--title', TITLE, '--json']);
+  runOrca(['terminal', 'rename', '--terminal', handle, '--title', title, '--json']);
   const ready = await waitReady(handle, { runId, logPath });
   return acceptRebuildReady({ ...ready, handle });
 }
@@ -582,7 +668,7 @@ async function cmdEnsure(args) {
     process.exit(1);
   }
   const runId = runResolved.runId;
-  const logPath = resolveLogPath(args.log);
+  const logPath = resolveLogPath(args.log, runId);
   mkdirSync(dirname(logPath), { recursive: true });
 
   const listed = listTerminals();
@@ -590,20 +676,38 @@ async function cmdEnsure(args) {
     console.log(JSON.stringify({ ok: false, error: `terminal list 失败: ${errText(listed.error)}` }));
     process.exit(1);
   }
-  const terminal = findInboxTerminal(listed.terminals);
+  const terminal = findInboxTerminal(listed.terminals, { runId });
+  const foreign = findForeignInboxTerminals(listed.terminals, { runId });
   const relayAlive = isRelayAlive(terminal, { lease: loadLease(logPath) });
   const shown = showRun(runId);
   const decision = decideEnsureAction({
     terminal,
     relayAlive,
     coordinatorHandle: shown.run?.coordinator_handle || null,
+    foreign,
   });
 
   let handle = terminal?.handle || null;
   let action = decision.action;
   let reason = decision.reason;
 
-  if (decision.action === 'rebuild') {
+  if (decision.action === 'reject') {
+    console.log(JSON.stringify({
+      ok: false,
+      runId,
+      logPath,
+      action: 'reject',
+      reason: 'foreign-station',
+      foreignRunId: decision.foreignRunId,
+      foreignHandle: decision.foreignHandle,
+      foreignTitle: decision.foreignTitle,
+      foreignList: decision.foreignList,
+      error: `场上存在别的 run 的信箱台，拒绝顶替；先退役对方或改用 relay --run ${runId}`,
+    }));
+    process.exit(1);
+  }
+
+  if (decision.action === 'rebuild' || decision.action === 'restart') {
     const rebuilt = await rebuildStation({
       old: terminal,
       runId,
@@ -620,7 +724,7 @@ async function cmdEnsure(args) {
   const afterShow = showRun(runId);
   const afterList = listTerminals();
   const afterTerm = (afterList.terminals || []).find((t) => t.handle === handle)
-    || findInboxTerminal(afterList.terminals);
+    || findInboxTerminal(afterList.terminals, { runId });
   const final = finalizeEnsure({
     runShowOk: afterShow.ok,
     coordinatorHandle: afterShow.run?.coordinator_handle || null,
@@ -652,7 +756,7 @@ async function cmdRelay(args) {
     process.exit(1);
   }
   const runId = runResolved.runId;
-  const logPath = resolveLogPath(args.log);
+  const logPath = resolveLogPath(args.log, runId);
   mkdirSync(dirname(logPath), { recursive: true });
   const leaseTtlMs = args.timeoutMs + LEASE_GRACE_MS;
 
@@ -708,8 +812,9 @@ function printUsage() {
   node scripts/inbox-station.mjs relay  [--run <id>] [--log <path>] [--timeout-ms <n>]
 
   ensure  幂等保证哑终端 + 中继 + coordinator 归属；全活着秒退，stdout 一行 JSON
+          action: rebuild(本 run 无台新建) / restart(本 run 台死了重启) / reject(撞上别的 run 的台)
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
-          heartbeat 只 ack 不写日志；默认日志 _flow/inbox.log`);
+          heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离`);
 }
 
 async function main() {

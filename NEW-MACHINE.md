@@ -99,7 +99,7 @@ Orca 未读横幅会强制接管输入框（issue #464）。新机一条命令�
 node scripts/inbox-station.mjs ensure
 ```
 
-全活着秒退，stdout 一行 JSON（runId / handle / 日志路径，默认 `_flow/inbox.log`）。缺任何一环自动重建。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，ensure 必须再跑一次把横幅交回信箱台。
+全活着秒退，stdout 一行 JSON（runId / handle / 日志路径 / action）。身份判据（issue #493）：run id 贯穿标题/日志/查找——终端标题带 run 后缀（`信箱台·<run后缀>（勿关）`），默认日志按 run 隔离（`_flow/inbox-<run后缀>.log`，不传 `--log` 也天然安全）；ensure 按 run 归属找终端，撞上别的 run 的台会拒绝顶替并报出对方 run id（`action:reject`）。缺任何一环自动重建（本 run 台死了是 `action:restart`）。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，ensure 必须再跑一次把横幅交回信箱台。
 
 ## 10. 接上 memory
 

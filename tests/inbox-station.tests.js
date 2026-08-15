@@ -51,9 +51,29 @@ async function main() {
   console.log('\n=== ② 终端 + 中继活着 ===');
   {
     const titled = { handle: 'term_a', title: '◑ 信箱台（勿关）', connected: true, preview: 'PS>' };
-    check('标题带前缀也能认出', S.findInboxTerminal([titled])?.handle === 'term_a');
+    check('标题带前缀也能认出（无 run 时走旧格式）', S.findInboxTerminal([titled])?.handle === 'term_a');
     check('没有信箱台 → null', S.findInboxTerminal([{ title: 'Grok', handle: 'term_x' }]) === null);
     check('非数组 → null', S.findInboxTerminal(null) === null);
+
+    // #493：run id 是身份，标题带 run 后缀；按 run 归属找，撞上别的 run 的台不认
+    const mine = { handle: 'term_my', title: S.stationTitle('run_bfd7e4e193ce') };
+    const other = { handle: 'term_other', title: S.stationTitle('run_af8fc3144eb7') };
+    const legacy = { handle: 'term_legacy', title: S.TITLE };
+    check('runShort 去掉 run_ 前缀', S.runShort('run_bfd7e4e193ce') === 'bfd7e4e193ce');
+    check('stationTitle 带 run 后缀', S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）');
+    check('extractRunToken 抽全后缀', S.extractRunToken(S.stationTitle('run_bfd7e4e193ce')) === 'bfd7e4e193ce');
+    check('extractRunToken 抽到垫片短号', S.extractRunToken('信箱台·af8fc（勿关·垫片）') === 'af8fc');
+    check('extractRunToken 非信箱台 → null', S.extractRunToken('Grok') === null);
+    check('按 run 找到自己的台', S.findInboxTerminal([mine, other], { runId: 'run_bfd7e4e193ce' })?.handle === 'term_my');
+    check('不认别的 run 的台', S.findInboxTerminal([other], { runId: 'run_bfd7e4e193ce' }) === null);
+    check('不认旧格式裸标题（归属不明）', S.findInboxTerminal([legacy], { runId: 'run_bfd7e4e193ce' }) === null);
+    const foreignList = S.findForeignInboxTerminals([mine, other, legacy], { runId: 'run_bfd7e4e193ce' });
+    check('外来台扫出别的 run + 裸标题两台', foreignList.length === 2
+      && foreignList.some((f) => f.kind === 'other-run' && f.token === 'af8fc3144eb7')
+      && foreignList.some((f) => f.kind === 'legacy-bare' && f.terminal.handle === 'term_legacy'));
+    check('自己的台不算外来', S.findForeignInboxTerminals([mine], { runId: 'run_bfd7e4e193ce' }).length === 0);
+    check('defaultLogRel 按 run 隔离', S.defaultLogRel('run_bfd7e4e193ce').replace(/\\/g, '/') === '_flow/inbox-bfd7e4e193ce.log');
+    check('defaultLogRel 无 run 兑底 inbox.log', S.defaultLogRel(null) === S.DEFAULT_LOG_REL);
 
     check('未连 = 死', S.isRelayAlive({ ...titled, connected: false }) === false);
     check('孤儿 = 死', S.isRelayAlive({ ...titled, connected: true, orphaned: true }) === false);
@@ -90,34 +110,70 @@ async function main() {
     check('format/parse 租约往返', parsed && parsed.pid === 12 && parsed.runId === 'run_x' && parsed.ttlMs === 9000);
     check('本进程 PID 活', S.isProcessAlive(process.pid) === true);
     check('非法 PID 死', S.isProcessAlive(0) === false && S.isProcessAlive(-1) === false);
-    check('leasePath 落在日志同目录', S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox-station.lease'));
+    check('leasePath 落在日志同目录且按日志名区分', S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox.lease'));
+    check('默认日志的租约按 run 隔离', S.leasePath('D:/repo/_flow/inbox-72d9e54bbf7f.log').replace(/\\/g, '/').endsWith('/_flow/inbox-72d9e54bbf7f.lease'));
+    check('显式日志的租约跟随日志名', S.leasePath('D:/repo/_flow/inbox-A.log').replace(/\\/g, '/').endsWith('/_flow/inbox-A.lease'));
+    check('启动脚本也按日志名区分', S.launchFilePath('D:/repo/_flow/inbox-72d9e54bbf7f.log').replace(/\\/g, '/').endsWith('/_flow/inbox-72d9e54bbf7f.cmd'));
+    check('两条 run 的租约不共用', S.leasePath('D:/repo/_flow/inbox-72d9e54bbf7f.log') !== S.leasePath('D:/repo/_flow/inbox-883935d71262.log'));
   }
 
-  console.log('\n=== ③ ensure 三岔 ===');
+  console.log('\n=== ③ ensure 三岔（#493 扩成四岔：rebuild / restart / reject / ok）===');
   {
-    const term = { handle: 'term_box', title: S.TITLE, connected: true, preview: S.READY_MARK };
+    const term = { handle: 'term_box', title: S.stationTitle('run_bfd7e4e193ce'), connected: true, preview: S.READY_MARK };
     check('全活着 → ok', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_box',
+      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign: [],
     }).action === 'ok');
     check('全活着 reason=all-alive', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_box',
+      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign: [],
     }).reason === 'all-alive');
-    check('被夺走 → rebuild（必须在信箱台 PTY 里 run-use）', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief',
-    }).action === 'rebuild');
+    check('被夺走 → restart（本 run 的台，不碰别人）', S.decideEnsureAction({
+      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief', foreign: [],
+    }).action === 'restart');
     check('coordinator 空 → coordinator-stolen', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: null,
+      terminal: term, relayAlive: true, coordinatorHandle: null, foreign: [],
     }).reason === 'coordinator-stolen');
-    check('没终端 → rebuild', S.decideEnsureAction({
-      terminal: null, relayAlive: false, coordinatorHandle: 'term_x',
+    check('没终端没外来 → rebuild', S.decideEnsureAction({
+      terminal: null, relayAlive: false, coordinatorHandle: 'term_x', foreign: [],
+    }).action === 'rebuild');
+    check('没终端没外来 reason=no-terminal', S.decideEnsureAction({
+      terminal: null, relayAlive: false, coordinatorHandle: 'term_x', foreign: [],
     }).reason === 'no-terminal');
-    check('中继死 → rebuild', S.decideEnsureAction({
-      terminal: term, relayAlive: false, coordinatorHandle: 'term_box',
+    check('中继死 → restart（本 run 台死了重启，不再叫 rebuild）', S.decideEnsureAction({
+      terminal: term, relayAlive: false, coordinatorHandle: 'term_box', foreign: [],
+    }).action === 'restart');
+    check('中继死 reason=relay-dead', S.decideEnsureAction({
+      terminal: term, relayAlive: false, coordinatorHandle: 'term_box', foreign: [],
     }).reason === 'relay-dead');
     // 判别力：若有人改回「ensure 进程自己 run-use --from」（实测绑错终端），这条会红
     check('被夺走不能当 ok', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief',
+      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief', foreign: [],
     }).action !== 'ok');
+
+    // #493 回归样本：A 顶掉 B 时旧代码返回 ok:true / rebuild / coordinator-stolen，
+    // 修好后同样场景（本 run 无台 + 场上别的 run 的台在）必须拒绝并报出对方 run id。
+    const foreign = [{
+      terminal: { handle: 'term_af8fc', title: S.stationTitle('run_af8fc3144eb7') },
+      token: 'af8fc3144eb7', kind: 'other-run',
+    }];
+    const stolen = S.decideEnsureAction({
+      terminal: null, relayAlive: false, coordinatorHandle: null, foreign,
+    });
+    check('撞上别的 run 的台 → reject', stolen.action === 'reject' && stolen.reason === 'foreign-station');
+    check('拒绝时报出对方 run id', stolen.foreignRunId === 'run_af8fc3144eb7');
+    check('拒绝时带对方 handle', stolen.foreignHandle === 'term_af8fc');
+    check('回归反例：不再返回 ok:true/rebuild/coordinator-stolen',
+      !(stolen.ok === true && stolen.action === 'rebuild' && stolen.reason === 'coordinator-stolen'));
+    check('回归反例：顶替场景不再返回 ok', stolen.ok !== true);
+    // 裸标题外来台：归属不明也要拒绝（token 为 null，run id 报不出来但不顶替）
+    const legacyForeign = S.decideEnsureAction({
+      terminal: null, relayAlive: false, coordinatorHandle: null,
+      foreign: [{ terminal: { handle: 'term_legacy', title: S.TITLE }, token: null, kind: 'legacy-bare' }],
+    });
+    check('旧格式裸标题外来也拒绝', legacyForeign.action === 'reject' && legacyForeign.foreignRunId === null);
+    // 本 run 的台在时，外来存在不影响（restart/ok 优先，不因别人在就拒绝自己）
+    check('自己的台在 + 外来在 → 按自己台判', S.decideEnsureAction({
+      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign,
+    }).action === 'ok');
   }
 
   console.log('\n=== ④ 收信分流（heartbeat 不落盘）===');
@@ -194,7 +250,8 @@ async function main() {
     });
     check('现状 JSON 失败带 ok:false', stFail.ok === false && stFail.error === '中继未存活');
 
-    check('标题常量', S.TITLE === '信箱台（勿关）');
+    check('标题常量（旧格式裸标题保留作识别用）', S.TITLE === '信箱台（勿关）');
+    check('新标题带 run 后缀', S.stationTitle('run_af8fc3144eb7') === '信箱台·af8fc3144eb7（勿关）');
     check('unwrap result.key', S.unwrapOrca({ result: { terminals: [1] } }, 'terminals')[0] === 1);
     check('extractHandle 几种形状', S.extractHandle({ result: { handle: 'term_z' } }) === 'term_z');
     check('findMainWorktree', S.findMainWorktree([
