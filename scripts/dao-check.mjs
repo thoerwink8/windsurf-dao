@@ -25,11 +25,15 @@
 // ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
 // ⑨本机 memory 是否指向仓内 host/memory 的 Junction（local-only，issue #503）：
 //   普通目录/指向别处/悬空均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
+// ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
+// ⑪ 主帅标题核对样本（一致 / 过期 各至少一份）
+// ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 
@@ -447,7 +451,138 @@ function checkMemoryLinkAlive() {
   else fail(...r.fail);
 }
 
-// ── 跑 ──────────────────────────────────────────────────────────────
+// ── ⑩ extract* 必须有 orca 真语料 ──────────────────────────────────
+// 自发现：扫 dao-cmd.mjs 的 export function extract*，不手写函数名单。
+// 检查器只验信封（ok+result），不调用 extract*。
+// 零样本：一个 extract* 都扫不到 / 语料目录不在 / index 不在 → 没查成。
+
+function checkExtractFixtures() {
+  const daoCmdPath = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
+  if (!existsSync(daoCmdPath)) {
+    fail('dao-cmd.mjs 不在', '本次没查成：恢复 scripts/lib/dao-cmd.mjs', daoCmdPath);
+    return;
+  }
+  const report = checkOrcaJsonFixtures({
+    daoCmdText: readFileSync(daoCmdPath, 'utf8'),
+    fixtureDir: join(ROOT, 'tests', 'fixtures', 'orca-json'),
+  });
+  if (report.unscanned) {
+    fail('orca 真语料检查没查成', 'tests/fixtures/orca-json/ 要有 index.json，且 dao-cmd 要有 extract* 导出', report.error);
+    return;
+  }
+  if (!report.ok) {
+    fail(`extract* 缺真语料 ${report.missing.length} 处`, '每个 extract* 在 orca-json/index.json 登记一份真实 --json 存档（含采集命令和日期）', report.missing.join(' '));
+    return;
+  }
+  green(`orca 真语料 ${report.scanned.length}/${report.parserCount} 个 extract* 有存档`);
+}
+
+// ── ⑪ 主帅标题核对样本 ─────────────────────────────────────────────
+// 检查器自己抽 ｜[#N] 定界区，不调用 master-title.mjs。
+// 零样本：目录不在 / 一个样本都没有 / 只有一致没有过期（或反过来）→ 没查成。
+
+function zoneTicketsIndependent(title) {
+  const m = String(title || '').match(/｜\[([^\]]*)\]$/);
+  if (!m) return { hasZone: false, tickets: [] };
+  return { hasZone: true, tickets: m[1].match(/#\d+/g) || [] };
+}
+
+function checkMasterTitleSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'master-title');
+  if (!existsSync(dir)) {
+    fail('主帅标题样本目录不在', '本次没查成：恢复 tests/fixtures/master-title/', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+  if (files.length === 0) {
+    fail('主帅标题一套样本都没扫到', '目录空了 ⇒ 本次等于没查', dir);
+    return;
+  }
+  const kinds = { ok: 0, stale: 0 };
+  const problems = [];
+  for (const f of files) {
+    let doc;
+    try { doc = JSON.parse(readFileSync(join(dir, f), 'utf8')); }
+    catch (e) { problems.push(`${f} 不是 JSON`); continue; }
+    if (!doc || !('title' in doc) || !('openIds' in doc) || !doc.expect) {
+      problems.push(`${f} 缺 title/openIds/expect`);
+      continue;
+    }
+    const parsed = zoneTicketsIndependent(doc.title);
+    const open = new Set((doc.openIds || []).map(x => `#${String(x).replace(/^#/, '')}`));
+    const stale = parsed.hasZone ? parsed.tickets.filter(t => !open.has(t)) : [];
+    if (doc.expect === 'ok') {
+      kinds.ok++;
+      if (stale.length) problems.push(`${f} 自称一致但定界区有过期 ${stale.join(' ')}`);
+    } else if (doc.expect === 'stale') {
+      kinds.stale++;
+      if (stale.length === 0) problems.push(`${f} 自称过期但定界区与 openIds 一致（样本没判别力）`);
+    } else {
+      problems.push(`${f} expect 只能是 ok|stale`);
+    }
+  }
+  if (kinds.ok === 0 || kinds.stale === 0) {
+    fail('主帅标题样本种类不够', '至少各要一份一致（expect:ok）和一份过期（expect:stale），缺一种 = 没查成', `ok=${kinds.ok} stale=${kinds.stale}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`主帅标题样本对不上 ${problems.length} 处`, '样本的 expect 必须和定界区 vs openIds 的独立核对一致', problems.join(' '));
+    return;
+  }
+  green(`主帅标题样本 ${files.length} 份（一致 ${kinds.ok} / 过期 ${kinds.stale}）`);
+}
+
+// ── ⑫ 派工卡 comment 必须有定界区 ──────────────────────────────────
+// 检查器自己抽 ｜[#N]，不调用 master-title.mjs。
+// 零样本：目录不在 / 一个样本都没有 / 只有 ok 没有 missing（或反过来）→ 没查成。
+
+function checkCardCommentSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'card-comment');
+  if (!existsSync(dir)) {
+    fail('派工卡 comment 样本目录不在', '本次没查成：恢复 tests/fixtures/card-comment/', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+  if (files.length === 0) {
+    fail('派工卡 comment 一套样本都没扫到', '目录空了 ⇒ 本次等于没查', dir);
+    return;
+  }
+  const kinds = { ok: 0, missing: 0 };
+  const problems = [];
+  for (const f of files) {
+    let doc;
+    try { doc = JSON.parse(readFileSync(join(dir, f), 'utf8')); }
+    catch (e) { problems.push(`${f} 不是 JSON`); continue; }
+    if (!doc || !('comment' in doc) || !('expectedTickets' in doc) || !doc.expect) {
+      problems.push(`${f} 缺 comment/expectedTickets/expect`);
+      continue;
+    }
+    const parsed = zoneTicketsIndependent(doc.comment);
+    const expected = (doc.expectedTickets || []).map(x => `#${String(x).replace(/^#/, '')}`);
+    const missing = expected.filter(t => !parsed.tickets.includes(t));
+    if (doc.expect === 'ok') {
+      kinds.ok++;
+      if (!parsed.hasZone) problems.push(`${f} 自称有区但抽不到 ｜[#N]`);
+      else if (missing.length) problems.push(`${f} 自称齐全但缺 ${missing.join(' ')}`);
+    } else if (doc.expect === 'missing') {
+      kinds.missing++;
+      if (parsed.hasZone && missing.length === 0) {
+        problems.push(`${f} 自称缺区但定界区与期望一致（样本没判别力）`);
+      }
+    } else {
+      problems.push(`${f} expect 只能是 ok|missing`);
+    }
+  }
+  if (kinds.ok === 0 || kinds.missing === 0) {
+    fail('派工卡 comment 样本种类不够', '至少各要一份有区（expect:ok）和一份缺区（expect:missing），缺一种 = 没查成', `ok=${kinds.ok} missing=${kinds.missing}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`派工卡 comment 样本对不上 ${problems.length} 处`, '样本的 expect 必须和定界区 vs expectedTickets 的独立核对一致', problems.join(' '));
+    return;
+  }
+  green(`派工卡 comment 样本 ${files.length} 份（有区 ${kinds.ok} / 缺区 ${kinds.missing}）`);
+}
 
 runTests();
 checkSkillFrontmatter();
@@ -458,6 +593,9 @@ checkMemoryIndex();
 await checkCommandHelp();
 checkModeHookAlive();
 checkMemoryLinkAlive();
+checkExtractFixtures();
+checkMasterTitleSamples();
+checkCardCommentSamples();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

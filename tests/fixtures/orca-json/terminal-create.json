@@ -1,0 +1,20 @@
+{
+  "id": "0ce2429b-3f1b-4f2c-b56a-82e64c031c0e",
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_a106c2c9-62cc-440b-afde-0b9416ffb630",
+      "tabId": "995beb00-b037-43ee-b1f8-c23134b831ae",
+      "paneKey": "995beb00-b037-43ee-b1f8-c23134b831ae:4e0a6883-75bc-4fc0-98a4-2334005884df",
+      "ptyId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/499-495-派工通道修复与主帅标题@@08410d45",
+      "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/499-495-派工通道修复与主帅标题",
+      "title": "fixture-capture-499",
+      "executionHostId": "local",
+      "hostPlatform": "win32",
+      "surface": "visible"
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

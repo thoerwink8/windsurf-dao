@@ -1,0 +1,6 @@
+{
+  "comment": "merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol",
+  "expectedTickets": ["#499"],
+  "expect": "missing",
+  "why": "派工成功后 comment 没有 ｜[#N]，必须报警"
+}

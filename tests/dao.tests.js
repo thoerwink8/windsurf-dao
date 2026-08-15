@@ -343,6 +343,15 @@ async function main() {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
+    check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
+    check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
+    check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
+    check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
+    check('探针等待从表读，不写死毫秒数', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc) && !/120000/.test(daoSrc));
+    check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
+    check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
+    check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
+    check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 120000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 120000);
     check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
 
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
@@ -387,6 +396,21 @@ async function main() {
     check('R6 回滚先关审官终端', steps[0] && steps[0].includes('--terminal') && steps[0].includes('rh1'), JSON.stringify(steps));
     check('R6 回滚最后删工人卡', steps[steps.length - 1] && steps[steps.length - 1].includes('worktree') && steps[steps.length - 1].includes('w1'), JSON.stringify(steps));
     check('R6 什么都没建 → 回滚空', S.planDispatchRollback({}).length === 0);
+    const rbOk = S.rollbackReport([{ cmd: 'terminal close x --tab', ok: true }]);
+    check('R6 回滚全成功 → 不叫', rbOk.rollbackFailed === false && rbOk.alarm == null, JSON.stringify(rbOk));
+    const rbGone = S.rollbackReport([
+      { cmd: 'terminal close th1 --tab', ok: false, error: 'tab_not_found' },
+      { cmd: 'worktree rm w1 --force', ok: true },
+    ]);
+    check('R6 tab_not_found = 目标已不在，不算回滚失败', rbGone.rollbackFailed === false, JSON.stringify(rbGone));
+    const closeFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'close-tab-not-found.json'), 'utf8'));
+    check('R6 真 tab_not_found 夹具判已不在', S.rollbackErrorAlreadyGone(closeFx.error) === true, JSON.stringify(closeFx.error));
+    const rbFail = S.rollbackReport([
+      { cmd: 'terminal close th1 --tab', ok: false, error: 'permission denied' },
+    ]);
+    check('R6 真正清理失败单独可见', rbFail.rollbackFailed === true && /孤儿/.test(rbFail.alarm) && /permission denied/.test(rbFail.alarm), JSON.stringify(rbFail));
+    check('R6 run_required 能认出', S.isRunRequired({ code: 'run_required', message: 'No Run is bound' }) === true);
+    check('R6 普通错误不是 run_required', S.isRunRequired('tab_not_found') === false);
   }
 
   console.log('\n=== 编排 builder / 逃生口 ===');
@@ -409,6 +433,39 @@ async function main() {
     });
     check('dao raw 退出跟随子进程', raw.status === 0, raw.stderr || raw.stdout);
     check('dao raw 在 stderr 留痕', /已记账/.test(raw.stderr || ''), raw.stderr);
+  }
+
+  console.log('\n=== 真语料：orca --json 存档必须能被解析函数吃下（#499）===');
+  {
+    const fx = (name) => JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', name), 'utf8'));
+    const readLive = fx('terminal-read.json');
+    const createLive = fx('terminal-create.json');
+    const wtLive = fx('worktree-create.json');
+
+    check('terminal-read 信封是真 orca 形（ok + result.terminal.tail）',
+      readLive.ok === true && Array.isArray(readLive.result?.terminal?.tail) && readLive.result.terminal.tail.length > 0,
+      JSON.stringify(Object.keys(readLive.result || {})));
+
+    const extracted = S.extractTerminalText(readLive);
+    check('真 terminal read → extractTerminalText 非空', String(extracted).trim().length > 0, `len=${String(extracted).length}`);
+    check('真 terminal read 含屏面原文', /Grok 4\.6/.test(extracted), extracted.slice(0, 160));
+    const started = S.verifyStarted(readLive);
+    check('真 terminal read → verifyStarted 过', started.ok === true, JSON.stringify({ ok: started.ok, reason: started.reason, len: String(started.text || '').length }));
+
+    check('真 terminal create → extractHandleFromCreate',
+      S.extractHandleFromCreate(createLive) === 'term_a106c2c9-62cc-440b-afde-0b9416ffb630');
+    check('真 worktree create → extractWorktreeId',
+      S.extractWorktreeId(wtLive) === '1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
+    check('真 worktree create → extractWorktreePath',
+      S.extractWorktreePath(wtLive) === 'C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
+
+    const taskLive = fx('task-create.json');
+    check('真 task-create → extractTaskId 走 result.task.id',
+      S.extractTaskId(taskLive) === 'task_72992e47f0f4');
+    check('真 task-create 顶层 id 不是 taskId',
+      taskLive.id !== S.extractTaskId(taskLive) && taskLive.result.id === undefined);
+    check('旧路径 result.id / 顶层 id 都取不到',
+      S.extractTaskId({ id: 'rpc', result: { id: 'rpc2' } }) === null);
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

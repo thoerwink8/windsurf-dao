@@ -24,23 +24,30 @@ import {
   checkHelpLiveness,
   dispatchComment,
   extractHandleFromCreate,
+  extractTaskId,
   extractTerminalText,
   extractWorktreeId,
   extractWorktreePath,
+  isRunRequired,
+  RUN_REQUIRED_HINT,
+  rollbackErrorAlreadyGone,
   fetchHelpPreferLive,
   loadRouting,
   parseArgs,
   planDispatchRollback,
   probeMarkFound,
+  probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
   reviewerCardName,
+  rollbackReport,
   runCapabilityProbes,
   sleepSync,
   terminalProbeExec,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
+import { afterDispatchComment } from './lib/master-title.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -120,19 +127,42 @@ function constrainDispatch(args, routing) {
 function rollbackCreated(created) {
   const rollback = [];
   for (const args of planDispatchRollback(created)) {
-    const r = orca(args);
-    rollback.push({
+    let r = orca(args);
+    const step = {
       cmd: args.join(' '),
       ok: !!r.ok,
       error: r.ok ? undefined : errText(r.error),
-    });
+    };
+    if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
+      step.ok = true;
+      step.alreadyGone = true;
+      step.error = undefined;
+    } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
+      const retryArgs = args.filter(a => a !== '--tab');
+      const retry = orca(retryArgs);
+      step.retryWithoutTab = {
+        cmd: retryArgs.join(' '),
+        ok: !!retry.ok,
+        error: retry.ok ? undefined : errText(retry.error),
+      };
+      if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
+        step.ok = true;
+        step.alreadyGone = !retry.ok;
+        step.recovered = !!retry.ok;
+        step.error = undefined;
+        r = retry;
+      }
+    }
+    rollback.push(step);
   }
-  return rollback;
+  const report = rollbackReport(rollback);
+  if (report.alarm) console.error(`[dao] ${report.alarm}`);
+  return { rollback, rollbackFailed: report.rollbackFailed };
 }
 
 function failCreated(created, error, extra = {}) {
-  const rollback = rollbackCreated(created);
-  emit({ ok: false, error, rollback, ...created, ...extra }, 1);
+  const { rollback, rollbackFailed } = rollbackCreated(created);
+  emit({ ok: false, error, rollback, rollbackFailed, ...created, ...extra }, 1);
 }
 
 function readOnceHandle(handle) {
@@ -141,11 +171,11 @@ function readOnceHandle(handle) {
   return read.json;
 }
 
-function liveSendAndRead(handle) {
+function liveSendAndRead(handle, waitMs) {
   return (cmd, name) => {
     const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
     if (!sent.ok) return { error: errText(sent.error) };
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + waitMs;
     let last = { text: '' };
     while (Date.now() < deadline) {
       const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
@@ -159,9 +189,9 @@ function liveSendAndRead(handle) {
   };
 }
 
-function runTerminalProbes(handle) {
+function runTerminalProbes(handle, waitMs) {
   return runCapabilityProbes({
-    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle) }),
+    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle, waitMs) }),
   });
 }
 
@@ -223,7 +253,7 @@ function cmdDispatch(args) {
   const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
   if (!workerVerify.ok) failCreated(created, '工人验开工失败', { verify: workerVerify, ...plan });
 
-  const workerProbes = runTerminalProbes(created.workerHandle);
+  const workerProbes = runTerminalProbes(created.workerHandle, probeWaitMs(routing, workerLaunch.provider));
   if (!workerProbes.ok) failCreated(created, workerProbes.error, { probes: workerProbes, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
@@ -250,14 +280,17 @@ function cmdDispatch(args) {
   const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
   if (!revVerify.ok) failCreated(created, '审官验开工失败', { verify: revVerify, ...plan });
 
-  const revProbes = runTerminalProbes(created.reviewerHandle);
+  const revProbes = runTerminalProbes(created.reviewerHandle, probeWaitMs(routing, reviewerLaunch.provider));
   if (!revProbes.ok) failCreated(created, revProbes.error, { probes: revProbes, ...plan });
 
   let taskId = args.task || null;
   if (args.spec) {
     const task = orca(argsTaskCreate({ spec: args.spec }));
-    if (!task.ok) failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
-    taskId = task.json?.result?.id || task.json?.id || taskId;
+    if (!task.ok) {
+      if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
+      failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
+    }
+    taskId = extractTaskId(task.json) || taskId;
   }
   if (!taskId) failCreated(created, 'dispatch 没拿到 taskId', plan);
 
@@ -268,12 +301,19 @@ function cmdDispatch(args) {
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
+  const comment = afterDispatchComment({
+    name: args.name,
+    worktreeId: created.workerId,
+    runOrca: orca,
+  });
+
   emit({
     ok: true,
     ...plan,
     ...created,
     taskId,
     probes: { worker: workerProbes, reviewer: revProbes },
+    comment,
   });
 }
 
@@ -322,7 +362,7 @@ function cmdStart(args) {
     }, 1);
   }
 
-  const probes = runTerminalProbes(handle);
+  const probes = runTerminalProbes(handle, probeWaitMs(routing, launch.provider));
   if (!probes.ok) {
     orca(argsTerminalClose({ terminal: handle, tab: true }));
     fail(probes.error, { handle, command: launch.command, probes });
@@ -362,8 +402,11 @@ function cmdWorktreeRm(args) {
 function cmdTaskCreate(args) {
   if (!args.spec) fail('task-create 要 --spec');
   const r = orca(argsTaskCreate({ spec: args.spec }));
-  if (!r.ok) fail(`task-create 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  if (!r.ok) {
+    if (isRunRequired(r.error)) fail(RUN_REQUIRED_HINT);
+    fail(`task-create 失败: ${errText(r.error)}`);
+  }
+  emit({ ok: true, json: r.json, taskId: extractTaskId(r.json) });
 }
 
 function cmdWorkerStart(args) {
