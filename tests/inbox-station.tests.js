@@ -48,36 +48,38 @@ async function main() {
     check('pickRun 空列表空', S.pickRun([]) === null);
   }
 
-  console.log('\n=== ② 终端 + 中继活着 ===');
+  console.log('\n=== ② 终端 + 中继活着（#493 返工：身份从 coordinator_handle 取，标题只出不进）===');
   {
     const titled = { handle: 'term_a', title: '◑ 信箱台（勿关）', connected: true, preview: 'PS>' };
-    check('标题带前缀也能认出（无 run 时走旧格式）', S.findInboxTerminal([titled])?.handle === 'term_a');
-    check('没有信箱台 → null', S.findInboxTerminal([{ title: 'Grok', handle: 'term_x' }]) === null);
-    check('非数组 → null', S.findInboxTerminal(null) === null);
-
-    // #493：run id 是身份，标题带 run 后缀；按 run 归属找，撞上别的 run 的台不认
-    const mine = { handle: 'term_my', title: S.stationTitle('run_bfd7e4e193ce') };
-    const other = { handle: 'term_other', title: S.stationTitle('run_af8fc3144eb7') };
-    const legacy = { handle: 'term_legacy', title: S.TITLE };
     check('runShort 去掉 run_ 前缀', S.runShort('run_bfd7e4e193ce') === 'bfd7e4e193ce');
-    check('stationTitle 带 run 后缀', S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）');
-    check('extractRunToken 抽全后缀', S.extractRunToken(S.stationTitle('run_bfd7e4e193ce')) === 'bfd7e4e193ce');
-    check('extractRunToken 抽到垫片短号', S.extractRunToken('信箱台·af8fc（勿关·垫片）') === 'af8fc');
-    check('extractRunToken 非信箱台 → null', S.extractRunToken('Grok') === null);
-    check('按 run 找到自己的台', S.findInboxTerminal([mine, other], { runId: 'run_bfd7e4e193ce' })?.handle === 'term_my');
-    check('不认别的 run 的台', S.findInboxTerminal([other], { runId: 'run_bfd7e4e193ce' }) === null);
-    check('不认旧格式裸标题（归属不明）', S.findInboxTerminal([legacy], { runId: 'run_bfd7e4e193ce' }) === null);
-    const foreignList = S.findForeignInboxTerminals([mine, other, legacy], { runId: 'run_bfd7e4e193ce' });
-    check('外来台扫出别的 run + 裸标题两台', foreignList.length === 2
-      && foreignList.some((f) => f.kind === 'other-run' && f.token === 'af8fc3144eb7')
-      && foreignList.some((f) => f.kind === 'legacy-bare' && f.terminal.handle === 'term_legacy'));
-    check('自己的台不算外来', S.findForeignInboxTerminals([mine], { runId: 'run_bfd7e4e193ce' }).length === 0);
+    check('stationTitle 带 run 后缀（输出给人看）', S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）');
     check('defaultLogRel 按 run 隔离', S.defaultLogRel('run_bfd7e4e193ce').replace(/\\/g, '/') === '_flow/inbox-bfd7e4e193ce.log');
     check('defaultLogRel 无 run 兑底 inbox.log', S.defaultLogRel(null) === S.DEFAULT_LOG_REL);
+
+    // 身份 = run-show 的 coordinator_handle：标题是 pwsh.exe 也认得；标题是信箱台也认得
+    const reset = { handle: 'term_station', title: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', connected: true };
+    const fancy = { handle: 'term_fancy', title: S.stationTitle('run_ev'), connected: true };
+    check('按 handle 认出被重置标题的台', S.findCoordinatorTerminal([reset, fancy], 'term_station')?.handle === 'term_station');
+    check('按 handle 认出正常标题的台', S.findCoordinatorTerminal([reset, fancy], 'term_fancy')?.handle === 'term_fancy');
+    check('coordinator 空 → null', S.findCoordinatorTerminal([reset], null) === null);
+    check('handle 不在列表 → null', S.findCoordinatorTerminal([reset], 'term_nope') === null);
+    check('非数组 → null', S.findCoordinatorTerminal(null, 'term_a') === null);
+
+    const now = 1_000_000;
+    const liveLease = { pid: process.pid, runId: 'run_ev', ts: now, ttlMs: S.LEASE_TTL_MS };
+    const deadPidLease = { pid: 2147483647, runId: 'run_ev', ts: now, ttlMs: S.LEASE_TTL_MS };
+    const staleLease = { pid: process.pid, runId: 'run_ev', ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
+    const wrongRunLease = { pid: process.pid, runId: 'run_other', ts: now, ttlMs: S.LEASE_TTL_MS };
+    check('isStationAlive 新鲜+PID在+runId对 = 活', S.isStationAlive(liveLease, 'run_ev', { now }) === true);
+    check('isStationAlive 死 PID = 死', S.isStationAlive(deadPidLease, 'run_ev', { now }) === false);
+    check('isStationAlive 过期租约 = 死', S.isStationAlive(staleLease, 'run_ev', { now }) === false);
+    check('isStationAlive runId 不对 = 死', S.isStationAlive(wrongRunLease, 'run_ev', { now }) === false);
+    check('isStationAlive 无租约 = 死', S.isStationAlive(null, 'run_ev') === false);
 
     check('未连 = 死', S.isRelayAlive({ ...titled, connected: false }) === false);
     check('孤儿 = 死', S.isRelayAlive({ ...titled, connected: true, orphaned: true }) === false);
     check('只有标题没有中继痕迹 = 死', S.isRelayAlive(titled) === false);
+    check('isRelayAlive 租约 runId 不对 = 死', S.isRelayAlive(reset, { lease: wrongRunLease, runId: 'run_ev', now }) === false);
 
     // 审官红1 原样：connected + lastOutputAt:0 + 仅历史 READY preview
     const residue = {
@@ -93,10 +95,6 @@ async function main() {
       preview: 'node scripts/inbox-station.mjs relay',
     }) === false);
 
-    const now = 1_000_000;
-    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS };
-    const deadPidLease = { pid: 2147483647, ts: now, ttlMs: S.LEASE_TTL_MS };
-    const staleLease = { pid: process.pid, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
     check('新鲜租约 + 本进程 PID = 活', S.isRelayAlive(residue, { lease: liveLease, now }) === true);
     check('新鲜租约但 PID 已死 = 死', S.isRelayAlive(residue, { lease: deadPidLease, now }) === false);
     check('过期租约 + 活 PID = 死', S.isRelayAlive(residue, { lease: staleLease, now }) === false);
@@ -117,63 +115,78 @@ async function main() {
     check('两条 run 的租约不共用', S.leasePath('D:/repo/_flow/inbox-72d9e54bbf7f.log') !== S.leasePath('D:/repo/_flow/inbox-883935d71262.log'));
   }
 
-  console.log('\n=== ③ ensure 三岔（#493 扩成四岔：rebuild / restart / reject / ok）===');
+  console.log('\n=== ③ ensure 判定（#493 返工：coordinator_handle 是身份，标题只出不进）===');
   {
-    const term = { handle: 'term_box', title: S.stationTitle('run_bfd7e4e193ce'), connected: true, preview: S.READY_MARK };
-    check('全活着 → ok', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign: [],
-    }).action === 'ok');
-    check('全活着 reason=all-alive', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign: [],
-    }).reason === 'all-alive');
-    check('被夺走 → restart（本 run 的台，不碰别人）', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief', foreign: [],
-    }).action === 'restart');
-    check('coordinator 空 → coordinator-stolen', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: null, foreign: [],
-    }).reason === 'coordinator-stolen');
-    check('没终端没外来 → rebuild', S.decideEnsureAction({
-      terminal: null, relayAlive: false, coordinatorHandle: 'term_x', foreign: [],
-    }).action === 'rebuild');
-    check('没终端没外来 reason=no-terminal', S.decideEnsureAction({
-      terminal: null, relayAlive: false, coordinatorHandle: 'term_x', foreign: [],
-    }).reason === 'no-terminal');
-    check('中继死 → restart（本 run 台死了重启，不再叫 rebuild）', S.decideEnsureAction({
-      terminal: term, relayAlive: false, coordinatorHandle: 'term_box', foreign: [],
-    }).action === 'restart');
-    check('中继死 reason=relay-dead', S.decideEnsureAction({
-      terminal: term, relayAlive: false, coordinatorHandle: 'term_box', foreign: [],
-    }).reason === 'relay-dead');
-    // 判别力：若有人改回「ensure 进程自己 run-use --from」（实测绑错终端），这条会红
-    check('被夺走不能当 ok', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_thief', foreign: [],
-    }).action !== 'ok');
+    const now = 2_000_000;
+    const RUN = 'run_ev';
+    const freshLease = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const staleLease = { pid: process.pid, runId: RUN, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
+    const wrongRunLease = { pid: process.pid, runId: 'run_other', ts: now, ttlMs: S.LEASE_TTL_MS };
+    // 审官红1 的现场：台的标题被重置成 pwsh.exe，但 run-show 的 coordinator_handle 仍是它
+    const resetStation = { handle: 'term_station', title: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', connected: true };
+    const station = { handle: 'term_station2', title: S.stationTitle(RUN), connected: true };
+    const shuaiTerm = { handle: 'term_shuai', title: 'A 主帅（Branch）', connected: true };
 
-    // #493 回归样本：A 顶掉 B 时旧代码返回 ok:true / rebuild / coordinator-stolen，
-    // 修好后同样场景（本 run 无台 + 场上别的 run 的台在）必须拒绝并报出对方 run id。
-    const foreign = [{
-      terminal: { handle: 'term_af8fc', title: S.stationTitle('run_af8fc3144eb7') },
-      token: 'af8fc3144eb7', kind: 'other-run',
-    }];
-    const stolen = S.decideEnsureAction({
-      terminal: null, relayAlive: false, coordinatorHandle: null, foreign,
+    // ★ 判别测试：标题被重置成 pwsh.exe 仍按 coordinator_handle 认出自己的台 → ok / all-alive / handle 不变
+    const resetDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_station', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
     });
-    check('撞上别的 run 的台 → reject', stolen.action === 'reject' && stolen.reason === 'foreign-station');
-    check('拒绝时报出对方 run id', stolen.foreignRunId === 'run_af8fc3144eb7');
-    check('拒绝时带对方 handle', stolen.foreignHandle === 'term_af8fc');
-    check('回归反例：不再返回 ok:true/rebuild/coordinator-stolen',
-      !(stolen.ok === true && stolen.action === 'rebuild' && stolen.reason === 'coordinator-stolen'));
-    check('回归反例：顶替场景不再返回 ok', stolen.ok !== true);
-    // 裸标题外来台：归属不明也要拒绝（token 为 null，run id 报不出来但不顶替）
-    const legacyForeign = S.decideEnsureAction({
-      terminal: null, relayAlive: false, coordinatorHandle: null,
-      foreign: [{ terminal: { handle: 'term_legacy', title: S.TITLE }, token: null, kind: 'legacy-bare' }],
+    check('★ 标题被重置仍认出台 → ok', resetDec.action === 'ok' && resetDec.reason === 'all-alive');
+    check('★ 标题被重置 handle 不变', resetDec.handle === 'term_station');
+    check('★ 标题被重置不新建不顶替（无 rebuild/restart/reject）',
+      !['rebuild', 'restart', 'reject'].includes(resetDec.action));
+
+    // 正常标题的台同样 ok
+    const okDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_station2', terminals: [station], lease: freshLease, now,
     });
-    check('旧格式裸标题外来也拒绝', legacyForeign.action === 'reject' && legacyForeign.foreignRunId === null);
-    // 本 run 的台在时，外来存在不影响（restart/ok 优先，不因别人在就拒绝自己）
-    check('自己的台在 + 外来在 → 按自己台判', S.decideEnsureAction({
-      terminal: term, relayAlive: true, coordinatorHandle: 'term_box', foreign,
+    check('正常标题 → ok', okDec.action === 'ok' && okDec.reason === 'all-alive' && okDec.handle === 'term_station2');
+    // coordinator 被帅临时借走 + 中继活着 → ok（中继每轮 run-use 自夺回）
+    check('coordinator 在帅的终端但中继活 → ok', S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_shuai', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
     }).action === 'ok');
+    // coordinator 还没回来（null）但中继活 → ok
+    check('coordinator 暂空但中继活 → ok', S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: null, terminals: [resetStation], lease: freshLease, now,
+    }).action === 'ok');
+
+    // 台死了：租约过期 + coordinator 挂在死壳/帅的终端上 → restart（本 run 台死重启，不碰别人）
+    const restartDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_station', terminals: [resetStation], lease: staleLease, now,
+    });
+    check('台死 + coordinator 在死壳 → restart', restartDec.action === 'restart' && restartDec.reason === 'relay-dead');
+    check('台死 + coordinator 空 → restart', S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: null, terminals: [], lease: staleLease, now,
+    }).action === 'restart');
+
+    // 从没有台：无租约 + 无 coordinator → rebuild（本 run 无台新建）
+    const rebuildDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: null, terminals: [], lease: null, now,
+    });
+    check('无台无租约 → rebuild', rebuildDec.action === 'rebuild' && rebuildDec.reason === 'no-terminal');
+    // coordinator 在帅的终端但无本 run 租约 → rebuild（帅的终端不是台，绝不复用/顶替）
+    check('coordinator 在帅的终端且无租约 → rebuild 不动它', S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_shuai', terminals: [shuaiTerm], lease: null, now,
+    }).action === 'rebuild');
+    // 租约 runId 不对（别人的）→ 当没有
+    check('租约 runId 不对 → 当无台 rebuild', S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: null, terminals: [], lease: wrongRunLease, now,
+    }).action === 'rebuild');
+
+    // 撞上别的 run 的台：本 run 台死，coordinator 被别的 run 的活台占着 → reject + 报对方 run id
+    const rejectDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_foreign',
+      terminals: [{ handle: 'term_foreign', title: S.stationTitle('run_other'), connected: true }],
+      lease: staleLease, now,
+      foreignStation: { runId: 'run_other', handle: 'term_foreign' },
+    });
+    check('撞上别的 run 的台 → reject', rejectDec.action === 'reject' && rejectDec.reason === 'foreign-station');
+    check('拒绝时报出对方 run id', rejectDec.foreignRunId === 'run_other' && rejectDec.foreignHandle === 'term_foreign');
+    // 回归反例：任何场景不得再返回 ok:true/rebuild/coordinator-stolen
+    check('回归反例：不再出现 ok:true+rebuild+coordinator-stolen',
+      ![resetDec, okDec, restartDec, rebuildDec, rejectDec].some(
+        (d) => d.ok === true && d.action === 'rebuild' && d.reason === 'coordinator-stolen'));
+    check('回归反例：reject 不带 ok:true', rejectDec.ok !== true);
   }
 
   console.log('\n=== ④ 收信分流（heartbeat 不落盘）===');

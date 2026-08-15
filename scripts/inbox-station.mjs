@@ -21,10 +21,12 @@
 //
 // ensure stdout 一行 JSON：{ok, runId, handle, logPath, action, reason}
 //
-// 身份判据（issue #493）：run id 是身份，标题/日志路径都带 run 维度。
-//   - 终端标题 = 信箱台·<run后缀>（勿关），不再用裸「信箱台（勿关）」当身份
+// 身份判据（issue #493 返工）：终端归属从 run-show 的 coordinator_handle 取得，
+// 标题只出不进——标题仍带 run 后缀（信箱台·<run后缀>（勿关））但只是给人看的显示，
+// ensure 的判定一律不读标题：标题被改名/被重置成 pwsh.exe 也不影响认台。
+//   - 本 run 的台 = run-show(runId).coordinator_handle 对应的终端（租约新鲜+PID在+runId对）
+//   - 撞上别的 run 的台（本 run coordinator 被别的 run 的活台占着）→ 拒绝顶替并报出对方 run id
 //   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
-//   - ensure 按 run 归属找终端；撞上别的 run 的台必须拒绝顶替并报出对方 run id
 
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -37,8 +39,7 @@ const ORCA_TIMEOUT_MS = 30000;
 const READY_WAIT_MS = 30000;
 const READY_POLL_MS = 1000;
 
-// 裸标题（信箱台（勿关））只用于识别「长得像信箱台」的旧格式终端：
-// 无 run 后缀 = 归属不明，一律按外来处理，不得复用/顶替，只报出来。
+// 旧裸标题（信箱台（勿关））只是历史格式的说明，判定路径一律不读标题（#493 返工：标题只出不进）。
 export const TITLE = '信箱台（勿关）';
 export const READY_MARK = 'INBOX_STATION_READY';
 // 无 run 时的兜底日志（正常路径永远带 run，见 defaultLogRel）
@@ -51,14 +52,9 @@ export function runShort(runId) {
   return String(runId || '').replace(/^run_/, '');
 }
 
+// 标题只出不进：仍生成带 run 后缀的标题给人看，但没有任何判定路径读标题。
 export function stationTitle(runId) {
   return `信箱台·${runShort(runId)}（勿关）`;
-}
-
-// 从标题里抽 run 记号（信箱台·xxx 的 xxx）。抽不到 = 旧格式/不是信箱台。
-export function extractRunToken(title) {
-  const m = String(title || '').match(/信箱台·([0-9a-z_]+)/i);
-  return m ? m[1] : null;
 }
 
 // 默认日志按 run 隔离：_flow/inbox-<run后缀>.log。不传 --log 是这个脚本的最常见用法，
@@ -113,29 +109,18 @@ export function parseArgs(argv) {
   return args;
 }
 
-export function findInboxTerminal(terminals, { runId } = {}) {
-  if (!Array.isArray(terminals)) return null;
-  const want = runShort(runId);
-  if (!want) return terminals.find((t) => String(t?.title || '').includes(TITLE)) || null;
-  return terminals.find((t) => extractRunToken(t?.title) === want) || null;
+// 身份从 run 层取：run-show(runId).coordinator_handle 指向谁，谁就是本 run 的台。
+// 标题改名/被重置成 pwsh.exe 不影响——handle 是身份，标题是显示（#493 返工）。
+export function findCoordinatorTerminal(terminals, coordinatorHandle) {
+  if (!Array.isArray(terminals) || !coordinatorHandle) return null;
+  return terminals.find((t) => t?.handle === coordinatorHandle) || null;
 }
 
-// 所有「长得像信箱台、但不属于本 run」的终端。
-// 旧格式裸标题无法判定归属，一律当外来：ensure 不得复用、不得顶替，只报出来。
-export function findForeignInboxTerminals(terminals, { runId } = {}) {
-  if (!Array.isArray(terminals)) return [];
-  const want = runShort(runId);
-  const foreign = [];
-  for (const t of terminals) {
-    const title = String(t?.title || '');
-    const token = extractRunToken(title);
-    if (!token) {
-      if (title.includes(TITLE)) foreign.push({ terminal: t, token: null, kind: 'legacy-bare' });
-      continue;
-    }
-    if (token !== want) foreign.push({ terminal: t, token, kind: 'other-run' });
-  }
-  return foreign;
+// 本 run 的中继活着 = 本 run 的租约新鲜 + PID 在 + runId 对。
+// 与具体终端无关：中继每轮 run-use 自夺回，coordinator 被帅临时借走也会自己回来。
+export function isStationAlive(lease, runId, opts = {}) {
+  if (!lease || lease.runId !== runId) return false;
+  return isLeaseFresh(lease, opts.now, opts.ttlMs) && isProcessAlive(lease.pid);
 }
 
 // 租约/启动脚本都落在日志同目录、按日志名区分：_flow/inbox-<run>.log →
@@ -205,13 +190,15 @@ export function isProcessAlive(pid) {
   }
 }
 
-// 活性只认「租约未过期 + PID 仍在」。READY 行 / 脚本名 / check 字样是历史屏面，
-// relay 退回 shell 后仍会留在 preview，不能当活。
+// 活性只认「租约未过期 + PID 仍在 + （给了 runId 时）租约归属对」。
+// READY 行 / 脚本名 / check 字样是历史屏面，relay 退回 shell 后仍会留在 preview，不能当活。
 export function isRelayAlive(terminal, opts = {}) {
   if (!terminal || terminal.connected === false || terminal.orphaned === true) return false;
   const lease = opts.lease ?? null;
   const now = opts.now ?? Date.now();
   const ttlMs = opts.ttlMs;
+  const runId = opts.runId;
+  if (runId && lease?.runId && lease.runId !== runId) return false;
   if (!isLeaseFresh(lease, now, ttlMs)) return false;
   return isProcessAlive(lease.pid);
 }
@@ -297,38 +284,31 @@ export function finalizeEnsure({
   };
 }
 
-export function decideEnsureAction({ terminal, relayAlive, coordinatorHandle, foreign } = {}) {
-  // 本 run 自己的台在 → 活着且持 coordinator 才算 ok；台死了是本 run 的事，restart 不碰别人。
-  if (terminal) {
-    if (!relayAlive) return { action: 'restart', reason: 'relay-dead' };
-    // 被夺走也走重建：run-use --from 从 ensure 进程调用会绑错终端
-    // （实测绑到新 pwsh，不是 --from 指定的信箱台）。夺回必须在信箱台
-    // 自己的 PTY 里执行 run-use，而 --command 启动串是唯一不污染 stdin 的入口。
-    if (!coordinatorHandle || coordinatorHandle !== terminal.handle) {
-      return { action: 'restart', reason: 'coordinator-stolen' };
+export function decideEnsureAction({ runId, coordinatorHandle, terminals, lease, foreignStation, now, ttlMs } = {}) {
+  // 身份从 run 层独立取得：本 run 的台 = run-show 的 coordinator_handle 对应的终端，
+  // 活不活看本 run 的租约（新鲜 + PID 在 + runId 对）。判定不读任何标题。
+  const coordTerm = findCoordinatorTerminal(terminals, coordinatorHandle);
+  const relayAlive = isStationAlive(lease, runId, { now, ttlMs });
+  if (relayAlive) {
+    // 中继活着即全活着：coordinator 若被帅临时借走，中继每轮 run-use 会自夺回。
+    return { action: 'ok', reason: 'all-alive', handle: coordTerm?.handle || null };
+  }
+  // 本 run 的台死了或从没有过。coordinator 可能仍挂在死壳/帅的终端上。
+  if (coordTerm) {
+    if (foreignStation) {
+      // 本 run 的 coordinator 被别的 run 的活台占着 → 拒绝顶替，报出对方 run id。
+      return {
+        action: 'reject',
+        reason: 'foreign-station',
+        foreignRunId: foreignStation.runId,
+        foreignHandle: foreignStation.handle || coordTerm.handle,
+      };
     }
-    return { action: 'ok', reason: 'all-alive' };
+    // coordinator 被非本 run 台的终端占着（帅的终端 / 死壳）：本 run 台死了就重启。
+    if (lease && lease.runId === runId) return { action: 'restart', reason: 'relay-dead' };
+    return { action: 'rebuild', reason: 'no-terminal' };
   }
-  // 本 run 无台，但场上存在别的 run 的信箱台 → 拒绝顶替，报出对方 run id（issue #493）。
-  const list = Array.isArray(foreign) ? foreign : foreign ? [foreign] : [];
-  if (list.length > 0) {
-    const first = list[0];
-    const token = first.token || extractRunToken(first.terminal?.title);
-    const toRunId = (tok) => (tok && !tok.startsWith('run_') ? `run_${tok}` : tok);
-    return {
-      action: 'reject',
-      reason: 'foreign-station',
-      foreignRunId: toRunId(token),
-      foreignHandle: first.terminal?.handle || null,
-      foreignTitle: first.terminal?.title || null,
-      foreignList: list.map((f) => ({
-        runId: toRunId(f.token || extractRunToken(f.terminal?.title)),
-        handle: f.terminal?.handle || null,
-        title: f.terminal?.title || null,
-      })),
-    };
-  }
-  // 场上一个信箱台都没有 → 本 run 无台新建。
+  if (lease && lease.runId === runId) return { action: 'restart', reason: 'relay-dead' };
   return { action: 'rebuild', reason: 'no-terminal' };
 }
 
@@ -639,6 +619,9 @@ function writeLaunchFile(logPath, runId) {
 }
 
 async function rebuildStation({ old, runId, logPath, worktree }) {
+  // old 只在调用方能验证归属时才传（本版 ensure 一律传 null：归属从 run-show 取，
+  // 标题只出不进无法反查旧台；新台的启动脚本 run-use 会自行夺回 coordinator，
+  // 死壳/帅的终端留在场上无害，绝不误关不是自己的终端）。
   if (old?.handle) {
     runOrca(['terminal', 'close', '--terminal', old.handle, '--tab', '--json']);
     await sleep(800);
@@ -676,18 +659,24 @@ async function cmdEnsure(args) {
     console.log(JSON.stringify({ ok: false, error: `terminal list 失败: ${errText(listed.error)}` }));
     process.exit(1);
   }
-  const terminal = findInboxTerminal(listed.terminals, { runId });
-  const foreign = findForeignInboxTerminals(listed.terminals, { runId });
-  const relayAlive = isRelayAlive(terminal, { lease: loadLease(logPath) });
+  // 身份从 run 层独立取得：本 run 的台 = coordinator_handle 对应的终端；判定不读标题。
   const shown = showRun(runId);
+  const coordinatorHandle = shown.run?.coordinator_handle || null;
+  const lease = loadLease(logPath);
+  const coordTerm = findCoordinatorTerminal(listed.terminals, coordinatorHandle);
+  const relayAlive = isStationAlive(lease, runId);
+  const foreignStation = !relayAlive && coordTerm
+    ? await findForeignStation(coordTerm, runId)
+    : null;
   const decision = decideEnsureAction({
-    terminal,
-    relayAlive,
-    coordinatorHandle: shown.run?.coordinator_handle || null,
-    foreign,
+    runId,
+    coordinatorHandle,
+    terminals: listed.terminals,
+    lease,
+    foreignStation,
   });
 
-  let handle = terminal?.handle || null;
+  let handle = coordTerm?.handle || null;
   let action = decision.action;
   let reason = decision.reason;
 
@@ -700,16 +689,14 @@ async function cmdEnsure(args) {
       reason: 'foreign-station',
       foreignRunId: decision.foreignRunId,
       foreignHandle: decision.foreignHandle,
-      foreignTitle: decision.foreignTitle,
-      foreignList: decision.foreignList,
-      error: `场上存在别的 run 的信箱台，拒绝顶替；先退役对方或改用 relay --run ${runId}`,
+      error: `本 run 的 coordinator 被别的 run 的信箱台占着（${decision.foreignRunId ?? '未知'}），拒绝顶替`,
     }));
     process.exit(1);
   }
 
   if (decision.action === 'rebuild' || decision.action === 'restart') {
     const rebuilt = await rebuildStation({
-      old: terminal,
+      old: null,
       runId,
       logPath,
       worktree: resolveCreateWorktree(args.worktree),
@@ -724,12 +711,12 @@ async function cmdEnsure(args) {
   const afterShow = showRun(runId);
   const afterList = listTerminals();
   const afterTerm = (afterList.terminals || []).find((t) => t.handle === handle)
-    || findInboxTerminal(afterList.terminals, { runId });
+    || findCoordinatorTerminal(afterList.terminals, afterShow.run?.coordinator_handle || null);
   const final = finalizeEnsure({
     runShowOk: afterShow.ok,
     coordinatorHandle: afterShow.run?.coordinator_handle || null,
     handle,
-    relayAlive: isRelayAlive(afterTerm, { lease: loadLease(logPath) }),
+    relayAlive: isRelayAlive(afterTerm, { lease: loadLease(logPath), runId }),
     runId,
     logPath,
     action,
@@ -737,6 +724,24 @@ async function cmdEnsure(args) {
   });
   console.log(JSON.stringify(final.payload));
   if (final.exitCode !== 0) process.exit(final.exitCode);
+}
+
+// 只在「本 run 台死 + coordinator 还挂在某个终端上」时查：那个终端是不是别的 run 的活台。
+// 身份全部从 run-show / 各 run 的租约取，不读标题。
+async function findForeignStation(coordTerm, runId) {
+  if (!coordTerm) return null;
+  const listed = listRuns();
+  if (!listed.ok) return null;
+  for (const r of Array.isArray(listed.runs) ? listed.runs : []) {
+    if (!r?.id || r.id === runId || r.legacy) continue;
+    const shown = showRun(r.id);
+    if (!shown.ok || shown.run?.coordinator_handle !== coordTerm.handle) continue;
+    const yLease = loadLease(resolveLogPath(null, r.id));
+    if (isStationAlive(yLease, r.id)) {
+      return { runId: r.id, handle: coordTerm.handle };
+    }
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -813,6 +818,7 @@ function printUsage() {
 
   ensure  幂等保证哑终端 + 中继 + coordinator 归属；全活着秒退，stdout 一行 JSON
           action: rebuild(本 run 无台新建) / restart(本 run 台死了重启) / reject(撞上别的 run 的台)
+          身份从 run-show 的 coordinator_handle 取，标题只出不进（改名/重置不影响认台）
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离`);
 }
