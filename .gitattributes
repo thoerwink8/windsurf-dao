@@ -1,2 +1,5 @@
 # bash 脚本必须保持 LF 行尾,避免 Windows clone 时 CRLF 化导致 shebang 失效
 *.sh text eol=lf
+
+# 实证原件按字节原样入仓：这些是「机器原始输出」，行尾被规范化过就不再是原件
+docs/evidence/**/*.jsonl -text

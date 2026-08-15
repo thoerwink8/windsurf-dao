@@ -11,4 +11,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # dao check 第 ⑦ 项验的是「自带 hook 的 skill 在这台机器上装没装、还跑不跑得动」，
+      # 干净 runner 上当然没装。所以这里照 NEW-MACHINE.md 第 12 节的装法真装一遍——
+      # 顺带让每个 PR 都验一次那份装机文档还灵不灵（文档过期会在这一步炸，不会等到换机那天）。
+      - name: 照 NEW-MACHINE 第 12 节装自带 hook 的 skill
+        shell: pwsh
+        run: |
+          $skills = Join-Path $env:USERPROFILE '.claude\skills'
+          New-Item -ItemType Directory -Force $skills | Out-Null
+          Get-ChildItem 'host\skills' -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'hooks\hooks.json') } |
+            ForEach-Object {
+              $link = Join-Path $skills $_.Name
+              try {
+                New-Item -ItemType SymbolicLink -Force -Path $link -Target $_.FullName -ErrorAction Stop | Out-Null
+                "linked  $link -> $($_.FullName)"
+              } catch {
+                # runner 建不了 SymbolicLink 时退到拷贝：插件面只看目录内容，装载效果一样。
+                Copy-Item -Recurse -Force $_.FullName $link
+                "copied  $link  （这台机器建不了 SymbolicLink：$($_.Exception.Message)）"
+              }
+            }
+
       - run: node scripts/dao-check.mjs
