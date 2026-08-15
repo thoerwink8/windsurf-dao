@@ -107,6 +107,7 @@ function loadOrFail() {
 function constrainDispatch(args, routing) {
   const gate = resolveDispatchConstraints({
     mergePolicy: args.mergePolicy,
+    mergeReason: args.mergeReason,
     model: args.model,
     role: args.role,
     reviewer: args.reviewer,
@@ -215,6 +216,7 @@ function cmdDispatch(args) {
 
   const plan = {
     mergePolicy: gate.mergePolicy,
+    mergeReason: gate.mergeReason,
     model: gate.model,
     reviewer: gate.reviewer,
     workerLaunch: workerLaunch.command,

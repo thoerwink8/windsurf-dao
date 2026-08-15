@@ -1,0 +1,36 @@
+name: blocked-notify
+
+# issue #526：前置解除的那一刻有东西主动出声。
+# 关掉一张 issue 后，搜所有 open issue 里写 `Blocked-by: #<刚关的号>` 的，
+# 给每一张发评论提醒「请先确认这单还成不成立」——输出是提醒不是自动开工。
+# 口径（#532）：搜索失败与「搜到 0 条」分开，失败在日志里 ::error:: 报红，非 0 退出。
+#
+# 注意：issues 事件只认默认分支（master）上的 workflow，合并前本文件不触发；
+# 手工补测走 workflow_dispatch（填 issue_number），或本地跑
+#   node scripts/notify-blocked.mjs <关掉的号>
+# （验收的构造样本就是这条命令 + 真实 comment 落账，见 PR 描述）。
+
+on:
+  issues:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 手动补测：查哪张 issue 的等待者（issues:closed 触发不了时用）
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 前置解除提醒（#526）
+        run: node scripts/notify-blocked.mjs "$NUMBER"
+        env:
+          NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
