@@ -132,7 +132,10 @@ token 计数在增长才算开工——启动返回成功不等于已开工。�
 任务指令 `terminal send` 直写 TUI；仅逐字 payload 才落短路径文件。`task-create --spec` 只用短编排摘要，不是任务指令载体。若须读短路径文件，PowerShell 用 `Get-Content -Raw` 而不是 `cat`：
 
 ```bash
-# 0) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
+# 0) 信箱台：派工前/后都跑，保证横幅归属信箱台（帅 run-use 派工后必须再 ensure 归还）
+node scripts/inbox-station.mjs ensure
+
+# 1) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
 #    agent 句柄：从返回 JSON 的 result.agentTerminalHandle 取（旧运行时回退 result.startupTerminal.handle）
 orca worktree create --no-parent --name "<临时名>" --agent <agent> --json
 
