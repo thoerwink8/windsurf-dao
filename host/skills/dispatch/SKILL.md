@@ -73,6 +73,8 @@ grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #44
 
 合并即归档：PR 合并后当场 `orca worktree rm` 该任务卡（分支已进 master，副本无保留价值）——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443）。
 
+收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `orca worktree rm`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
+
 issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 issue，合并时当场关闭并引用落点 PR（落地即关）；拍板写进真正对应的 issue/PR，禁止把不相干拍板塞进同一张 issue，没有对应载体宁可开小 issue（拍板归位）；「落点 PR 已 merged 但 issue 未关」的自动闸在 #442 看门狗审计清单。
 
 终审核对垫片退役：PR 正文登记的垫片（临时 Monitor / 手动流程）合并时当场退役换正式版，防影子制度（拍板 2026-08-15）。
@@ -132,7 +134,10 @@ token 计数在增长才算开工——启动返回成功不等于已开工。�
 任务指令 `terminal send` 直写 TUI；仅逐字 payload 才落短路径文件。`task-create --spec` 只用短编排摘要，不是任务指令载体。若须读短路径文件，PowerShell 用 `Get-Content -Raw` 而不是 `cat`：
 
 ```bash
-# 0) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
+# 0) 信箱台：派工前/后都跑，保证横幅归属信箱台（帅 run-use 派工后必须再 ensure 归还）
+node scripts/inbox-station.mjs ensure
+
+# 1) 建任务卡 + 起终端一步到位：与 master 平级；--agent 默认模型（pi=deepseek-v4-pro，2026-08-14 实测）够用就不两步走
 #    agent 句柄：从返回 JSON 的 result.agentTerminalHandle 取（旧运行时回退 result.startupTerminal.handle）
 orca worktree create --no-parent --name "<临时名>" --agent <agent> --json
 
