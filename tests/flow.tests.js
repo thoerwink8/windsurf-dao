@@ -634,12 +634,14 @@ console.log("\n=== ㉜ 引号坑锁（#499/#497 第六轮：runCmd 数组传参 
   // 行为断言：带空格参数走完整调用不被拆（实测证据：dispatch_not_found = 参数完整到达 RPC 解析）
   const sp = spawnSync("orca", ["orchestration", "send", "--to", "dispatch:__nonexistent__", "--subject", "A B C", "--body", "d e f", "--json"], { encoding: "utf8", timeout: 30000, windowsHide: true });
   const rawOut = ((sp.stdout || "") + (sp.stderr || "")).trim();
-  if (/dispatch_not_found/.test(rawOut)) {
-    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", true, rawOut.slice(0, 120));
-  } else if (/(not recognized|ENOENT|不是内部|外部命令|Cannot find)/i.test(rawOut)) {
-    check("本机无 orca：行为断言 SKIP（显形跳过，不算过）", true, "SKIP: " + rawOut.slice(0, 120));
+  // 无 orca 的机器（CI）：错误落在 sp.error.message（stdout/stderr 为空），要并进来才能显形 SKIP
+  const rawErr = (((sp.error && sp.error.message) || "") + " " + rawOut).trim();
+  if (/dispatch_not_found/.test(rawErr)) {
+    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", true, rawErr.slice(0, 120));
+  } else if (/(not recognized|ENOENT|不是内部|外部命令|Cannot find)/i.test(rawErr)) {
+    check("本机无 orca：行为断言 SKIP（显形跳过，不算过）", true, "SKIP: " + rawErr.slice(0, 120));
   } else {
-    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", false, rawOut.slice(0, 200));
+    check("带空格参数完整到达（返回 dispatch_not_found，不是参数解析就炸）", false, rawErr.slice(0, 200));
   }
 }
 
