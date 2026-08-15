@@ -99,7 +99,7 @@ Orca 未读横幅会强制接管输入框（issue #464）。新机一条命令�
 node scripts/inbox-station.mjs ensure
 ```
 
-全活着秒退，stdout 一行 JSON（runId / handle / 日志路径，默认 `_flow/inbox.log`）。缺任何一环自动重建。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，ensure 必须再跑一次把横幅交回信箱台。
+全活着秒退，stdout 一行 JSON（runId / handle / 日志路径 / action）。身份判据（issue #493 返工）：归属从 `run-show` 的 `coordinator_handle` 取，**标题只出不进**——标题仍带 run 后缀（`信箱台·<run后缀>（勿关）`）但只是给人看，改名/被重置成 pwsh.exe 也不影响认台；默认日志按 run 隔离（`_flow/inbox-<run后缀>.log`，不传 `--log` 也天然安全）。本 run 的台 = coordinator_handle 对应的终端且租约新鲜（活不活看租约+PID）；本 run 台死了是 `action:restart`，撞上别的 run 的台（本 run coordinator 被别的 run 的活台占着）是 `action:reject`（报对方 run id）。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，中继每轮自夺回，ensure 再跑一次把横幅交回信箱台。
 
 ## 10. 接上 memory
 
@@ -202,6 +202,38 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 用户觉得当前做法不对劲。立即停下手头动作，读 grill-ai skill 并按它的五条清单逐条自查回答。
 ```
 
+## 12. 专注/值守态注入（hook + `/dao-mode` skill）
+
+三态开关（常态 / 专注 / 值守）靠两件东西：`/dao-mode` skill 负责切，UserPromptSubmit hook 负责**每轮把当前态注入上下文**。
+承重的是 hook——skill 的字只在调用那一轮进上下文，不装 hook 等于「我说我专注了」。设计与拍板记录见 issue #488。
+
+**① 一条 SymbolicLink，装完就齐**。`host/skills/dao-mode/` 同时是一个 Claude Code 插件（自带
+`.claude-plugin/plugin.json` 与 `hooks/hooks.json`），链到 `~/.claude/skills/` 下之后宿主会自动加载成
+`dao-mode@skills-dir`，skill 和 hook 一起生效：
+
+```powershell
+$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
+New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\dao-mode" -Target "$repo\host\skills\dao-mode" | Out-Null
+```
+
+下次开 Claude Code 生效（当前会话里可以 `/reload-plugins`）。
+
+**这条命令必须用 PowerShell 7（`pwsh`）跑**：同一条 `New-Item -ItemType SymbolicLink` 在 Windows PowerShell 5.1
+（`powershell.exe`，双击默认打开的那个）会报 `Administrator privilege required for this operation` 而失败，pwsh 7 下正常。
+2026-08-15 实测，装机脚本里也别用 5.1 建这条链。
+
+**② 不要去改 `settings.json`**。2026-08-15 实测过三条路，结论：
+
+- **插件面（上面这条 link）生效，且完全不碰 `settings.json`** —— 装完 `enabledPlugins` 与 `hooks` 段一个字没变，新会话第一轮就拿到态文本。
+- 用户级 `~/.claude/settings.local.json` 的 `hooks` 段**宿主根本不读**（注册在那儿，新会话上下文里一个字都没有；同一条注册放进项目级 `.claude/settings.local.json` 立刻生效）。
+- `~/.claude/settings.json` 能生效，但它是本页第 8 条那条红线文件（覆写可能触发 401 强制登出，改回去也恢复不了），且被 cc-switch 下发 / Orca 写 hooks / CC 本体重置三方互相覆盖。既然插件面够用，就不碰它。
+
+**③ 验**：`node scripts/dao-check.mjs` 第 ⑧ 项会把装载面上那条命令真跑四次（四种状态文件各一次：读到且常态 /
+读到且非常态 / 文件不在 / 文件坏了），四种输出两两同形、跑不动、或哪个装载面都点不到，都报红。
+链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 ① 即可。
+
+状态文件是 `~/.claude/state.json`，跨会话跨工作区唯一，由 `dao-mode.mjs` 独家读写，不要手改。
+
 ## 统一命令库
 
 起终端和编排不要手拼 orca 命令（手打 `codex -a never` 会把 gh/node 拦死、写不存在的 `--submit` 都在这里栽过）。走：
@@ -213,7 +245,6 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 ```
 
 派工必须带 `--merge-policy`、`--model` 或 `--role`、`--reviewer`、`--spec`，缺一就停。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`。
-
 ## 自检
 
 做完跑一遍：

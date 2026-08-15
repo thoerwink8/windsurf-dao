@@ -37,3 +37,4 @@
 - [Orca 工兵启动三约定](orca-worker-launch-conventions.md) — 启动命令用 reclaude 不用裸 claude(裸的会静默 exited);独立树必带 --no-parent 否则变子工作区;特殊字符文本走文件禁双引号拼
 - [grok 原生通道坑](grok-native-launch-trap.md) — worker-start --agent grok 裸起必卡死(无代理+模型落4.5),正确姿势带前缀手动起终端再 worker-start --terminal 收口
 - [Orca 终端快捷键](orca-terminal-shortcuts.md) — 缩放 Ctrl+= / Ctrl+- / Ctrl+0，滚动 Shift+PgUp/PgDn、Ctrl+Home/End，用户实测确认
+- [反引号让 node -e 真跑命令](shell-backtick-executes-node-eval.md) — bash 双引号包 node -e 时脚本里的反引号被当命令替换执行：文本被掏空 + 静默写脏状态文件；改文件用 Edit，报错刷屏后要回头核对状态文件
