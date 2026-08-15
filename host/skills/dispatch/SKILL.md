@@ -102,7 +102,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 默认一条命令走 Orca 原生编排（B 路实测 90 秒闭环），须特殊 argv 的才走两步收口；两条路径都以 `worker-start` 记账，release 才认得到：
 
-- **一步到位（默认）**：`orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json`——建树、起 agent、注任务书、记账一次完成；`worker_done` 有效即自动结账。任务书承运：中等长度、无裸反引号的走 `--spec`（短摘要+要点），长文/逐字 payload 走短路径文件指针（提示词里指过去）；`worker_done` 后帅必做 PR 核对（见「非阻塞」）。
+- **一步到位（默认）**：`orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json`——建树、起 agent、注任务书、记账一次完成；`worker_done` 有效即自动结账。任务书承运：中等长度、无裸反引号的走 `--spec`（短摘要+要点），长文/逐字大材料按「材料三去处」处置（要留存的进 GitHub，用完即弃的进 scratchpad），提示词里只给编号/指针；`worker_done` 后帅必做 PR 核对（见「非阻塞」）。
 - **两步走（须特殊 argv：reclaude 链路、pi 指定非默认模型）**：`worker-start` 的 `--model` 实测不支持 pi（报 `Agent pi does not support launch-time model selection`），`--agent claude` 起不了 reclaude 链——这两类 = 建卡（`--setup skip` 免 Setup 页签）→ `orca terminal create --command "<agent> --model <model>"` 起带模型终端（实测 `--command "pi --model deepseek-v4-flash"` 生效）→ `worker-start --task <id> --worktree <wt> --terminal <handle>` 复用收口。验开工后确认裸建的 fallback shell 未用即关掉。
 
 **禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
@@ -116,7 +116,7 @@ grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6�
 吞注入补救四步（`terminal send` 不再是默认注入器，只在吞注入时补救）：
 
 1. 注入前先证终端就绪：终端活着、能收输入。Claude 族还要等 reclaude 配置同步完。
-2. `orca terminal send --terminal <handle> --text "<长提示词>" --enter --json` 直写 TUI，不经 shell；普通长提示词不落文件。仅含逐字 payload 的单才把定案文本放到短路径，提示词里指过去。
+2. `orca terminal send --terminal <handle> --text "<长提示词>" --enter --json` 直写 TUI，不经 shell；指令不落文件。逐字大材料按「材料三去处」处置。
 3. 注入后回读，确认长提示词完整显示在屏上，不是被吞。
 4. 补一记回车（manual 态先切 auto 再回车）。
 
@@ -135,17 +135,27 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 ## 任务书口径
 
-任务书承运 = worker-start 注入：中等长度、无裸反引号的走 `--spec`（短摘要+要点）；长文/逐字 payload（必须一字不差落盘的定案文本）走短路径文件、提示词里指过去；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+任务书承运 = worker-start 注入：中等长度、无裸反引号的走 `--spec`（短摘要+要点）；逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+
+## 材料三去处（2026-08-15 拍板：临时树材料绑架树生命周期，pilot-B 实证）
+
+指令与逐字大材料（必须一字不差落盘的定案文本）按三个去处分流，**任务树/本机临时目录不是去处**：
+
+1. **指令**：一律直给提示词（worker-start 注入；吞注入才走 terminal send 补救），不落文件。
+2. **用完即弃的逐字大材料**：放 scratchpad（临时工作区），用完即弃，不进任务树、不进 git。
+3. **要留存的逐字大材料**（规格/裁定书/拍板）：一律进 GitHub——issue/PR 正文或仓内 docs/；任务书只给编号/指针，不复制全文。
+
+禁止放进临时树或本机临时目录：临时树材料会绑架树生命周期（树删不得、留不得，pilot-B 实证）——要留存的材料进了 GitHub，临时树才能随时 rm。
 
 ## 一条完整命令链
 
-任务书承运 = worker-start 注入（`--spec` 短摘要+要点，或短路径文件指针）；`terminal send` 只在吞注入时补救（见「启动序」）。须读短路径文件用 `Get-Content -Raw` 而不是 `cat`：
+任务书承运 = worker-start 注入（`--spec` 短摘要+要点；逐字大材料按「材料三去处」分流）；`terminal send` 只在吞注入时补救（见「启动序」）。须读 GitHub 上的材料用 `gh` 取，不靠本机文件：
 
 ```bash
 # 0) 信箱台：派工前/后都跑，保证横幅归属信箱台（帅 run-use 派工后必须再 ensure 归还）
 node scripts/inbox-station.mjs ensure
 
-# 0) 建编排任务：--spec 只放短摘要+要点（任务书承运；长文/逐字 payload 落短路径文件、提示词里指过去）
+# 0) 建编排任务：--spec 只放短摘要+要点（任务书承运；要留存的逐字大材料进 GitHub——issue/PR 正文或 docs/，提示词只给编号）
 orca orchestration task-create --spec "短摘要：<一句话目标>" --json
 
 # 1) 起工人一步到位：--worktree new-top-level 建顶层任务卡 + 起 agent + 注入任务书 + 记账一次完成
@@ -178,7 +188,7 @@ orca worktree create --parent-worktree 'name:#<PR号> - <动宾短语>' --base-b
 
 ## 命令级铁律
 
-- 任务书承运 = worker-start 注入：`--spec` 只放短摘要+要点；长文/逐字 payload 走短路径文件指针。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
+- 任务书承运 = worker-start 注入：`--spec` 只放短摘要+要点；逐字大材料按「材料三去处」分流（要留存的进 GitHub，用完即弃的进 scratchpad，禁止临时树/本机临时目录）。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
 - `terminal send` 只在吞注入时补救（见「启动序」）；默认注入器是 worker-start，不手工 send 进就绪竞态。
 - 禁裸 `terminal create + dispatch --inject` 旁路（release 认不到 → 误关终端旧事故）；例外通道必须先挂 `worker-start --terminal`。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
