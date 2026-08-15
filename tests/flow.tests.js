@@ -857,12 +857,12 @@ console.log("\n=== ㊷ 单实例闸（#497 第十四轮：合并动作与不可�
   const { spawn } = require("child_process");
   const lockFile = path.join(REPO, "_flow", "flow.lock");
   fs.rmSync(lockFile, { force: true });
-  const holder = spawn(process.execPath, [FLOW, "--interval", "2", "--state-file", path.join(os.tmpdir(), "flow-lock-holder.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-holder-hb.json")], { stdio: "ignore", detached: true });
+  const holder = spawn(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-holder.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-holder-hb.json")], { stdio: "ignore", detached: true });
   const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); // 同步阻塞
   sleepMs(4500); // 等 holder 起锁
   const held = fs.existsSync(lockFile) ? JSON.parse(fs.readFileSync(lockFile, "utf8")) : null;
   check("样本①：live 启动写入锁（含 pid）", held && typeof held.pid === "number", JSON.stringify(held));
-  const r2 = spawnSync(process.execPath, [FLOW, "--interval", "2", "--state-file", path.join(os.tmpdir(), "flow-lock-reject.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-reject-hb.json")], { encoding: "utf8", cwd: REPO });
+  const r2 = spawnSync(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-reject.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-reject-hb.json")], { encoding: "utf8", cwd: REPO });
   const out2 = (r2.stdout || "") + (r2.stderr || "");
   check("样本①：被活锁占用 → 拒绝启动（退出码 4）", r2.status === 4, `status=${r2.status}`);
   check("样本①：拒绝信息含占用者 pid（可辨）", new RegExp(`LOCKED.*pid=${held.pid}`).test(out2), out2.trim());
@@ -870,7 +870,7 @@ console.log("\n=== ㊷ 单实例闸（#497 第十四轮：合并动作与不可�
   fs.rmSync(lockFile, { force: true });
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   fs.writeFileSync(lockFile, JSON.stringify({ pid: 99999999, startedAt: "2020-01-01T00:00:00Z", argv: ["--dead"] }));
-  const r3 = spawn(process.execPath, [FLOW, "--interval", "2", "--state-file", path.join(os.tmpdir(), "flow-lock-takeover.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-takeover-hb.json")], { stdio: "ignore", detached: true });
+  const r3 = spawn(process.execPath, [FLOW, "--interval", "2", "--repo", "thoerwink8/windsurf-dao", "--state-file", path.join(os.tmpdir(), "flow-lock-takeover.json"), "--heartbeat-file", path.join(os.tmpdir(), "flow-lock-takeover-hb.json")], { stdio: "ignore", detached: true });
   sleepMs(4500); // 等 takeover 进程起锁（live 不退出，不能 spawnSync 等待）
   const out3 = "";
   const taken = fs.existsSync(lockFile) ? JSON.parse(fs.readFileSync(lockFile, "utf8")) : null;
