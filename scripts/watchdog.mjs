@@ -1,22 +1,24 @@
 #!/usr/bin/env node
-// scripts/watchdog.mjs —— 事故路径停摆侦测（issue #442 正式版）
+// scripts/watchdog.mjs —— 事故路径停摆侦测（issue #442 正式版，2026-08-15 融合改造瘦身）
 //
 // 双通道监视里本脚本负责「事故路径」：协调者不再把「沉默」当「还在跑」。
 // 快乐路径（工人完工自报 orchestration worker_done）不归本脚本，见 dispatch skill。
-// 规格书 = issue #442 全部案例与对策（九条评论 + 2026-08-15 追加），一条案例对应下面一条检测。
+// 规格书 = issue #442 全部案例与对策 + fusion-verdict.md（2026-08-15 拍板裁定书）。
 //
 // 检测矩阵（全部来自 #442 实测案例）：
 //   1. exited       —— 终端 read 状态 exited（「终端 exited 且非完工态」独立报警，拍板追加①）
 //   2. waiting      —— ps agents[].state=waiting（审批弹窗被刷屏点阵埋没案：ps 的 waiting
 //                       就是「有弹窗/等输入」的官方信号，零关键字猜测）
-//   3. fingerprint  —— 屏面底部当前状态窗口命中错误指纹清单（Grok 断线案 + GPT 断流案 +
-//                       盲考案 + 2026-08-15 at-capacity 案，常量数组便于 append）
-//   4. hash-stable  —— 整屏内容哈希连续三轮不变（v0.4 用滚动缓冲 cursor 停滞判停摆，
-//                       对 reclaude 全屏 TUI 恒假阳性；v0.5 起改整屏哈希）
+//   3. fingerprint  —— 屏面底部当前状态窗口命中错误指纹清单，**两连同才报警**（2026-08-15 裁定书：
+//                       单发即唤醒的宽指纹 'Error:'/'terminated'/'Connection error' 已退役）；
+//                       报警前活证否决：输出 cursor 在前进 → 降级为日志行不唤醒（审官屏面讨论止血阀）
+//   4. stall        —— 主判据 = 输出 cursor 连续三轮不前进（2026-08-15 裁定书：整屏哈希会被 TUI
+//                       计时器动画骗过——grok 卡流 3 分钟实证，屏面动画在动、cursor 不动）；
+//                       快照无 cursor 数据时回退整屏哈希三轮不变（v0.5 信号保留为兜底）
 //   5. read-failed  —— 被监视工位却读不到屏面（守卫自身失效必须显形，不能静默）
 //
 // 两个窗口（#442 v0 首战假阳性教训的落点）：
-//   --window       整屏窗口（默认 60 行）：哈希判据用，「整屏内容哈希」是钦定的全屏 TUI 通用信号。
+//   --window       整屏窗口（默认 60 行）：哈希兜底判据用。
 //   --state-window 屏面底部状态窗口（默认 12 行）：错误指纹判据用。只看屏面底部当前状态，
 //                  不对历史叙述做关键字匹配——v0 就是把审官叙述里的「两个样本都被拦」
 //                  误判成求助等待。
@@ -26,9 +28,9 @@
 //     协调者/主会话不在被监视集合内。
 //   - 监视器自己的工作区（--self-worktree；live 模式自动从 `orca worktree current` 取）：
 //     监视器运行在被监视集合之外。
-//   - --exclude-pane <paneKey>（可重复）：按稳定 pane ID 排除控制端/审官会话，
-//     不用 displayName 维护名单。
-//   被排除的工位不读屏、不报警——审官/协调者屏面讨论指纹字样不再触发自误报。
+//   - --exclude-pane <paneKey>（可重复）：按稳定 pane ID **分级排除**（2026-08-15 裁定书）——
+//     豁免指纹与停摆判据（审官/控制端屏面讨论不再自误报），但保留 exited/waiting 死活判据
+//     （旧版整体排除 = 死活也没人盯，再造盲区）。
 //
 // 仓规硬约束：
 //   - 输出必须区分「扫完 0 异常」（打印一行 OK 汇总，含扫描工位数）与
@@ -39,7 +41,7 @@
 //   - 读不到屏面一律 fail-visible：读失败 / 成功响应缺字段 / 结构不认识都报 read-failed，
 //     不静默放行（审读红 3 落点）。
 //
-// 退出码：0 扫完 0 异常 / 1 有报警 / 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（ps 拉不到）。
+// 退出码：0 扫完 0 异常（活证否决的观察行不唤醒）/ 1 有报警 / 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败。
 //
 // 用法：
 //   node scripts/watchdog.mjs                    轮询模式（默认每 30s 一轮，供 Monitor 挂载）
@@ -49,7 +51,7 @@
 //   node scripts/watchdog.mjs --window 80        整屏窗口行数
 //   node scripts/watchdog.mjs --state-window 15  屏面底部状态窗口行数
 //   node scripts/watchdog.mjs --self-worktree <id>  指定监视器自己的工作区 id（live 模式默认自动取）
-//   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 排除控制端/审官（可重复）
+//   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 分级排除（可重复）
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -62,16 +64,15 @@ const ORCA_TIMEOUT_MS = 30000;
 // 每条指纹对应 #442 评论区一个真实事故案例；新增事故时在这里加一行，
 // 并同步在 tests/watchdog-fixtures/ 里补一条违规样本（上线前先故意构造违规样本，
 // 被拦住才算生效——v0.4 跳过这步首报即翻车的教训）。
+// 2026-08-15 裁定书：单发即唤醒的宽指纹（'Error:'/'terminated'/'Connection error'）已退役——
+// 宽指纹命中正常叙述/讨论的概率高，是假阳性温床；且现在一律两连同才报警 + 活证否决兜底。
 // 元素可以是普通字符串（大小写不敏感子串匹配）或正则字面量。
 const ERROR_FINGERPRINTS = [
-  'terminated',            // 盲考·Grok：Error: Retry failed after 3 attempts: terminated
-  'Retry failed',          // 盲考·Grok：代理链路断线重试全败，几乎零产出死亡
+  'Retry failed',          // 盲考·Grok：代理链路断线重试全败（Retry failed after 3 attempts）
   'no serving account',    // 盲考·GPT：pqgpt 中转池无可用账号（池竭/限流）断流
   'stream disconnected',   // 盲考·GPT：中转站断流（与 Grok 的 clash 抖动是两种不同断流）
   'login rejected',        // 登录被拒
-  'Connection error',      // 连接错误
   'timed out connecting',  // 连接超时
-  'Error:',                // #442 钦定的宽指纹，协调者收到后读屏分诊，不直接处置
   /Reconnecting.*5\/5/i,   // 盲考·GPT：Reconnecting 5/5 全败停机
   'at capacity',           // 2026-08-15 实录：GPT/codex 报 ⚠ Selected model is at capacity
                            //   → 当轮中断、TUI 落回空闲、屏面静止（#442 新指纹语料）
@@ -180,7 +181,8 @@ function buildPaneIndex(terminals) {
 // #452 复核收口建议 ②：快照样本必须打在 live 用的同一段规整逻辑上，否则
 // makeLiveSource() 的 `!r.ok || !t` 分支只有肉眼 + live 实跑背书。
 // res 形态 = runOrca 返回的 {ok, json, error}；快照加载时把原始 JSON 包成同形态再传入。
-// 返回 {handle, status, tail} 或 {error}；读失败一律 fail-visible（审读红 3）。
+// 返回 {handle, status, tail, nextCursor} 或 {error}；读失败一律 fail-visible（审读红 3）。
+// nextCursor：输出光标位置（绝对进度），活证否决 + 停摆主判据共用；旧快照可能没有 → null。
 function normalizeReadResponse(res, handle) {
   if (!res || res.ok !== true) {
     // res.error 可能是结构化对象（orca JSON 错误，live/快照同形态）或字符串（runOrca 回落）
@@ -191,7 +193,13 @@ function normalizeReadResponse(res, handle) {
   if (typeof t.status !== 'string' || !Array.isArray(t.tail)) {
     return { error: 'orca terminal read 成功响应但 status/tail 字段缺失（结构畸形）' };
   }
-  return { handle: t.handle || handle, status: t.status, tail: t.tail };
+  const nc = t.nextCursor;
+  return {
+    handle: t.handle || handle,
+    status: t.status,
+    tail: t.tail,
+    nextCursor: nc == null ? null : Number(nc),
+  };
 }
 
 // 返回 { ps, paneByKey, readTerminal, tlError }；ps 拉不到时返回 { infraError }
@@ -291,13 +299,18 @@ const normLines = (lines) => (Array.isArray(lines) ? lines : [])
   .join('\n')
   .trim();
 
-// 结构性排除：主工作区（协调者）、监视器自己的工作区、按稳定 pane ID 排除的控制端/审官。
+// 结构性排除：主工作区（协调者）、监视器自己的工作区——整体不进监视集合。
+// --exclude-pane 是分级排除（2026-08-15 裁定书）：豁免指纹/停摆判据，保留 exited/waiting 死活判据——
+// 审官/控制端屏面讨论不再自误报，但死活仍有人盯（旧版整体排除 = 死活也没人盯，再造盲区）。
 // 全部按 id 判，不碰 displayName（审读红 2）。
 function isExcluded(w, a, args) {
   if (w.isMainWorktree === true) return true;                       // master 卡只住协调者
   if (args.selfWorktree && w.worktreeId === args.selfWorktree) return true; // 监视器自己
-  if (a.paneKey && args.excludePanes.includes(a.paneKey)) return true;      // 稳定 pane ID
   return false;
+}
+
+function isGradedExcluded(a, args) {
+  return !!(a.paneKey && args.excludePanes.includes(a.paneKey));    // 稳定 pane ID → 分级排除
 }
 
 function runRound(source, args, state) {
@@ -315,6 +328,7 @@ function runRound(source, args, state) {
         agent: a,
         handle: pane ? pane.handle : undefined,
         incarnationId: pane ? pane.incarnationId : null,
+        graded: isGradedExcluded(a, args),
       });
     });
   }
@@ -322,10 +336,13 @@ function runRound(source, args, state) {
   if (targets.length === 0) return { noTargets: true, targets, events: [] };
 
   const events = [];
+  const notes = []; // 活证否决降级的观察行：打印但不唤醒（退出码不算报警）
   for (const t of targets) {
     const st = state.stations[t.key] ||= {
       epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
+      fpStreak: 0, prevCursor: null, cursorStreak: 0,
     };
+    const graded = t.graded === true; // 分级排除：豁免指纹/停摆，保留 exited/waiting 死活判据
 
     // ② ps waiting 态（弹窗/等输入的官方信号）
     if (t.agent.state === 'waiting') {
@@ -361,21 +378,38 @@ function runRound(source, args, state) {
     const all = normLines(read.tail);
     const bottom = normLines(read.tail.slice(-args.stateWindow));
 
-    // ③ 错误指纹（只看屏面底部当前状态窗口，不对历史叙述做关键字匹配）
-    const matched = matchFingerprints(bottom);
-    if (matched.length > 0) {
-      if (!st.fired.has('fingerprint')) {
-        st.fired.add('fingerprint');
-        events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
+    // cursor 跟踪（活证否决 + 停摆主判据共用）：nextCursor 前进 = 有新增输出 = token 在动；
+    // 无 cursor 数据（旧快照）→ null，两个判据各自回退。
+    const cursorVal = read.nextCursor;
+    const cursorAdvancing = st.prevCursor != null && cursorVal != null && cursorVal > st.prevCursor;
+    st.prevCursor = cursorVal;
+
+    // ③ 错误指纹（只看屏面底部当前状态窗口，不对历史叙述做关键字匹配）——
+    //    两连同才报警（2026-08-15 裁定书：单发宽指纹已退役）+ 活证否决（cursor 前进降级为观察行）。
+    if (!graded) {
+      const matched = matchFingerprints(bottom);
+      if (matched.length > 0) {
+        st.fpStreak += 1;
+        if (st.fpStreak >= 2 && !st.fired.has('fingerprint')) {
+          if (cursorAdvancing) {
+            // 活证否决：输出 cursor 在前进 = 讨论/输出在动——审官屏面讨论误报的止血阀，不唤醒
+            notes.push({ name: t.name, type: '观察', detail: `指纹两连同「${matched.join('、')}」但输出 cursor 在前进——活证否决，不唤醒，仅记录（审官屏面讨论止血阀）` });
+          } else {
+            st.fired.add('fingerprint');
+            events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
+          }
+        }
+      } else {
+        st.fpStreak = 0;
+        st.fired.delete('fingerprint');
       }
-    } else {
-      st.fired.delete('fingerprint');
     }
 
-    // ④ 整屏哈希连续三轮不变（显式 epoch 状态机——审读红 4）：
-    //    生命周期键 = 终端 incarnationId + ps updatedAt；任一变化 = 新 epoch，
-    //    以当前观测初始化 consecutive=1（本轮不算丢）；同屏递增、异屏重置；
-    //    consecutive===3 报警。ps updatedAt 在推进说明有活动，不算停摆。
+    // ④ 停摆判据（显式 epoch 状态机——审读红 4）：
+    //    主判据 = 输出 cursor 连续三轮不前进（2026-08-15 裁定书：整屏哈希会被 TUI 计时器动画骗过——
+    //    2026-08-15 grok 卡流 3 分钟实证，屏面动画在动、cursor 不动）；
+    //    快照无 cursor 数据时回退整屏哈希三轮不变（v0.5 信号保留为兜底）。
+    //    生命周期键 = 终端 incarnationId + ps updatedAt；任一变化 = 新 epoch，计数重新起算。
     const hash = createHash('sha256').update(all).digest('hex');
     const updatedAt = t.agent.updatedAt ?? null;
     const incarnation = t.incarnationId ?? null;
@@ -383,25 +417,41 @@ function runRound(source, args, state) {
     st.prevUpdatedAt = updatedAt;
     st.prevIncarnation = incarnation;
 
-    if (st.epoch !== epoch) {
-      st.epoch = epoch;
-      st.lastHash = hash;
-      st.consecutive = 1;                 // 本轮即新序列第 1 轮
-      st.fired.delete('hash-stable');
-    } else if (hash === st.lastHash) {
-      st.consecutive += 1;
-      if (st.consecutive >= 3 && !st.fired.has('hash-stable')) {
-        st.fired.add('hash-stable');
-        events.push({ name: t.name, type: 'hash-stable', detail: '整屏哈希连续 3 轮不变——停摆候选（#442 全屏 TUI 通用信号），读屏分诊' });
+    if (!graded && cursorVal != null) {
+      // 主判据：输出 cursor 三轮不前进
+      if (st.epoch !== epoch || cursorAdvancing) {
+        st.epoch = epoch;
+        st.cursorStreak = 1;                 // 本轮即新序列第 1 轮
+        st.fired.delete('cursor-stalled');
+      } else {
+        st.cursorStreak += 1;
+        if (st.cursorStreak >= 3 && !st.fired.has('cursor-stalled')) {
+          st.fired.add('cursor-stalled');
+          events.push({ name: t.name, type: 'cursor-stalled', detail: '输出 cursor 连续 3 轮不前进——停摆候选（主判据；整屏哈希会被 TUI 计时器动画骗过，2026-08-15 grok 卡流实证），读屏分诊' });
+        }
       }
-    } else {
-      st.lastHash = hash;
-      st.consecutive = 1;
-      st.fired.delete('hash-stable');
+    } else if (!graded) {
+      // 兜底（快照无 cursor 数据）：整屏哈希连续三轮不变
+      if (st.epoch !== epoch) {
+        st.epoch = epoch;
+        st.lastHash = hash;
+        st.consecutive = 1;                 // 本轮即新序列第 1 轮
+        st.fired.delete('hash-stable');
+      } else if (hash === st.lastHash) {
+        st.consecutive += 1;
+        if (st.consecutive >= 3 && !st.fired.has('hash-stable')) {
+          st.fired.add('hash-stable');
+          events.push({ name: t.name, type: 'hash-stable', detail: '整屏哈希连续 3 轮不变——停摆候选（#442 全屏 TUI 通用信号，无 cursor 数据时回退），读屏分诊' });
+        }
+      } else {
+        st.lastHash = hash;
+        st.consecutive = 1;
+        st.fired.delete('hash-stable');
+      }
     }
   }
 
-  return { noTargets: false, targets, events };
+  return { noTargets: false, targets, events, notes };
 }
 
 function printRound(round) {
@@ -409,6 +459,8 @@ function printRound(round) {
     console.log('NO_TARGETS: 本轮没有 working/waiting 工位（结构性排除后）——没查成，不是「扫完 0 异常」（数到 0 和没看到样本不是一回事）');
     return { alarm: false, noTargets: true };
   }
+  // 活证否决的观察行：打印但不唤醒（只记日志，不升级为报警）
+  for (const n of round.notes || []) console.log(`[${n.name}] ${n.type}: ${n.detail}`);
   if (round.events.length > 0) {
     for (const e of round.events) console.log(`[${e.name}] ${e.type}: ${e.detail}`);
     return { alarm: true, noTargets: false };

@@ -322,5 +322,40 @@ console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id
   check("real-453 语料 3 条 review body 未改写（判定行口径仍成立）", redFlagsFromReviewBodies(real453.map(x => x.body)) === 5, "应为 5");
 }
 
+console.log("\n=== ⑳ 敏感路径越权报警（fusion-verdict 2026-08-15：diff 触碰敏感路径且正文未声明 → 报警行）===");
+{
+  const { sensitiveEscalations } = require("../scripts/flow.mjs");
+  check("纯函数：host/skills + dao-check 未声明 → 2 条", sensitiveEscalations({ body: "## 目标" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 2);
+  check("纯函数：正文声明过 → 0 条", sensitiveEscalations({ body: "改动 host/skills/dispatch/SKILL.md 与 scripts/dao-check.mjs" }, ["host/skills/dispatch/SKILL.md", "scripts/dao-check.mjs"]).length === 0);
+  check("纯函数：CLAUDE.md 与 docs/global-CLAUDE.md 分开算（声明 CLAUDE.md 不覆盖 global）", JSON.stringify(sensitiveEscalations({ body: "只声明 CLAUDE.md" }, ["CLAUDE.md", "docs/global-CLAUDE.md"]).map(v => v.rule)) === '["docs/global-CLAUDE.md"]');
+  check("纯函数：未触碰敏感路径 → 0 条", sensitiveEscalations({ body: "## 目标" }, ["scripts/flow.mjs", "docs/model-routing.toml"]).length === 0);
+
+  const r = runFlow(path.join(FIXTURES, "sensitive-undeclared"));
+  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
+  check("报警 host/skills/ 越权（含命中文件）", /报警：敏感路径越权 #3002（diff 触碰 host\/skills\/——host\/skills\/dispatch\/SKILL\.md，正文未声明）/.test(r.out), r.out.trim());
+  check("报警 dao-check 越权", /报警：敏感路径越权 #3002（diff 触碰 scripts\/dao-check\.mjs——scripts\/dao-check\.mjs，正文未声明）/.test(r.out), r.out.trim());
+  check("不打出 OK 扫完（有报警不是无事）", !/OK 扫完/.test(r.out), r.out.trim());
+
+  const rd = runFlow(path.join(FIXTURES, "sensitive-declared"));
+  check("声明过 → 退出码 0（无报警）", rd.status === 0, `status=${rd.status}`);
+  check("声明过 → OK 扫完", /OK 扫完 1 个 PR，0 需流转/.test(rd.out), rd.out.trim());
+  check("声明过 → 无报警行", !/报警：/.test(rd.out), rd.out.trim());
+}
+
+console.log("\n=== ⑳b 敏感路径越权报警持续显形：同状态重跑仍报警（待办不因报过一次就转绿）===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-sensitive-"));
+  const stateFile = path.join(tmp, "state.json");
+  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "sensitive-undeclared"), "--state-file", stateFile, "--dry-run"];
+  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const out1 = (r1.stdout || "") + (r1.stderr || "");
+  const out2 = (r2.stdout || "") + (r2.stderr || "");
+  check("首跑 exit 1（报警）", r1.status === 1, `status=${r1.status}`);
+  check("重跑仍 exit 1（每轮重算，违规持续则持续报警）", r2.status === 1, `status=${r2.status}`);
+  check("重跑仍有报警行", /报警：敏感路径越权 #3002/.test(out2), out2.trim());
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);
 process.exit(fail > 0 ? 1 : 0);

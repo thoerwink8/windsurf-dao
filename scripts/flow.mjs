@@ -1,16 +1,20 @@
 #!/usr/bin/env node
-// scripts/flow.mjs —— 闭环自动流转器（issue #455 实现）
+// scripts/flow.mjs —— 闭环自动流转器（issue #455 实现，2026-08-15 融合改造瘦身）
 //
-// 分工定论（#455 实录）：看门狗（scripts/watchdog.mjs）管事故（屏面异常），
-// 本脚本管完工（GitHub 确定性信号）——两者正交，不要把完工检测塞回看门狗；
-// 反过来同理：屏面特征（如「待授权」）归看门狗，不塞进本脚本。
-// 规格源 = issue #455 正文 + 全部评论（拍板、需求语料、边界）。
+// 分工（fusion-verdict.md 拍板）：首发完工发现 = 门铃（Monitor 挂
+// `orca orchestration check --wait --types worker_done,...`，见 dispatch skill）；
+// 本脚本降为备份通道（轮询默认 300s）+ 审读闭环——重放 GitHub 确定性信号推导当前态，
+// 起审官/返工/复核/乒乓报帅/终审报帅。看门狗（scripts/watchdog.mjs）管事故（屏面异常），
+// 三者正交：不要把完工检测塞回看门狗，也不要把屏面特征（如「待授权」）塞进本脚本。
+// 规格源 = issue #455 正文 + 全部评论 + fusion-verdict.md。
 //
 // 触发源只用 GitHub 确定性信号，不靠屏面猜测：
 //   ① review 判定行：「判定：红 N 项」「复核结论：绿/红 N 项」——
 //      解析逻辑与 scripts/calibrate.mjs 共用 scripts/lib/judgment.mjs（唯一真相源，不复制两份）
 //   ② 完工 comment：行首「完工」「返工(完成|处置)」（完工报告/完工自报/返工完成/返工处置）
 //   ③ PR MERGED 状态
+//   ④ 敏感路径越权报警（2026-08-15 新增）：PR diff 触碰 docs/global-CLAUDE.md、根 CLAUDE.md、
+//      host/skills/、scripts/dao-check.mjs 且正文未声明 → 报警行（此前越权完全无自动检测）
 //
 // 决策规则（②）：
 //   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
@@ -51,9 +55,10 @@
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
 //
 // 用法：
-//   node scripts/flow.mjs                     轮询模式（默认每 90s 一轮，供 Monitor 挂载）
+//   node scripts/flow.mjs                     轮询模式（默认每 300s 一轮——备份通道；
+//                                             首发完工由门铃 check --wait 接管，供 Monitor 挂载）
 //   node scripts/flow.mjs --once              跑单轮后退出（给测试用）
-//   node scripts/flow.mjs --interval 90       轮询间隔秒数
+//   node scripts/flow.mjs --interval 300      轮询间隔秒数
 //   node scripts/flow.mjs --state-file <path> 状态文件位置（默认 _flow/state.json）
 //   node scripts/flow.mjs --dry-run           只输出动作与将执行的命令，不碰 orca 写操作
 //                                             （目标解析仍跑——快照/实读，测试可覆盖）
@@ -62,6 +67,7 @@
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
 //   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
+//   pr-<N>-files.json（可选，敏感路径报警用；数组元素可为路径字符串或 {path}）
 //   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
 
 import { spawnSync } from 'node:child_process';
@@ -84,6 +90,28 @@ const READY_WAIT_MS = 2000;       // 就绪轮询间隔
 const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
+// ── 敏感路径越权报警（fusion-verdict 2026-08-15）──────────────────────
+// PR diff 触碰这些路径但正文未声明 → 报警行（此前越权完全无自动检测）。
+// 声明口径：正文出现该规则的指名串（如 host/skills）即视为已声明，
+// 指名串覆盖该规则下全部命中文件。每轮重算——违规持续则每轮报警。
+const SENSITIVE_RULES = [
+  { name: 'CLAUDE.md', match: f => f === 'CLAUDE.md', declared: b => /CLAUDE\.md/.test(b) },
+  { name: 'docs/global-CLAUDE.md', match: f => f === 'docs/global-CLAUDE.md', declared: b => /global-CLAUDE/.test(b) },
+  { name: 'host/skills/', match: f => f.startsWith('host/skills/'), declared: b => /host\/skills/.test(b) },
+  { name: 'scripts/dao-check.mjs', match: f => f === 'scripts/dao-check.mjs', declared: b => /dao-check/.test(b) },
+];
+
+// 返回未声明命中的规则列表 [{ rule, files }]；全部已声明或未触碰 → []。
+function sensitiveEscalations(pr, filePaths) {
+  const body = pr.body || '';
+  const out = [];
+  for (const r of SENSITIVE_RULES) {
+    const touched = (filePaths || []).filter(f => typeof f === 'string' && r.match(f));
+    if (touched.length > 0 && !r.declared(body)) out.push({ rule: r.name, files: touched });
+  }
+  return out;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 参数
 // ══════════════════════════════════════════════════════════════════════
@@ -94,7 +122,7 @@ function printUsage() {
                         [--snapshot-dir <目录>] [--repo <nameWithOwner>]
 
   --once              跑单轮后退出（给测试用）
-  --interval <秒>     轮询间隔（默认 90，与垫片 Monitor 同频）
+  --interval <秒>     轮询间隔（默认 300——备份通道；首发完工由门铃 check --wait 接管）
   --state-file <path> 状态文件位置（默认 _flow/state.json）
   --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
   --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
@@ -102,7 +130,7 @@ function printUsage() {
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 90, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
+  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -524,6 +552,13 @@ function makeLiveSource(repo) {
       }));
       return { ok: true, reviews };
     },
+    getPrFiles(number) {
+      // 敏感路径越权报警（fusion-verdict 2026-08-15）：取 diff 触碰的文件列表
+      const r = runGh(['pr', 'view', String(number), '--json', 'files']);
+      if (!r.ok) return { ok: false, error: r.error };
+      const files = (r.json.files || []).map(f => f.path).filter(Boolean);
+      return { ok: true, files };
+    },
     orcaWorktrees() {
       const r = runOrca(['worktree', 'list', '--json']);
       if (!r.ok) return { ok: false, error: r.error };
@@ -586,6 +621,13 @@ function makeSnapshotSource(roundDir, repo) {
           url: rv.html_url || `https://github.com/${repo}/pull/${number}#pullrequestreview-${rv.id}`,
         })),
       };
+    },
+    getPrFiles(number) {
+      // 可选文件：数组元素可为路径字符串或 {path}（live 形态镜像）
+      const r = readJson(join(roundDir, `pr-${number}-files.json`));
+      if (!r.ok) return { ok: true, files: [] };
+      const raw = Array.isArray(r.json) ? r.json : [];
+      return { ok: true, files: raw.map(f => (typeof f === 'string' ? f : f && f.path)).filter(Boolean) };
     },
     orcaWorktrees() {
       const r = readJson(join(roundDir, 'orca-worktrees.json'));
@@ -760,13 +802,20 @@ function processOneRound(source, state, args) {
 
     const commentsR = source.getComments(pr.number);
     const reviewsR = source.getReviews(pr.number);
-    if (!commentsR.ok || !reviewsR.ok) {
+    const filesR = source.getPrFiles(pr.number);
+    if (!commentsR.ok || !reviewsR.ok || !filesR.ok) {
       noTargets = true;
-      events.push(`[flow] NO_TARGETS：读 PR #${pr.number} 信号失败（${commentsR.ok ? '' : commentsR.error}${reviewsR.ok ? '' : reviewsR.error}）——本轮没查成`);
+      events.push(`[flow] NO_TARGETS：读 PR #${pr.number} 信号失败（${commentsR.ok ? '' : commentsR.error}${reviewsR.ok ? '' : reviewsR.error}${filesR.ok ? '' : filesR.error}）——本轮没查成`);
       continue;
     }
     const comments = commentsR.comments || [];
     const reviews = reviewsR.reviews || [];
+    const diffFiles = filesR.files || [];
+
+    // 敏感路径越权报警（fusion-verdict 2026-08-15）：diff 触碰敏感路径且正文未声明 → 每轮报警行
+    for (const v of sensitiveEscalations(pr, diffFiles)) {
+      events.push(`[flow] 报警：敏感路径越权 #${pr.number}（diff 触碰 ${v.rule}——${v.files.join('、')}，正文未声明）——越权改动（此前完全无自动检测），请帅确认`);
+    }
 
     // 判定行缺失/格式不符的 review：逐条报帅（「没查成」，非「无需流转」），不猜红绿
     for (const rv of reviews) {
@@ -872,7 +921,7 @@ function processOneRound(source, state, args) {
   }
 
   const scanned = open.length;
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 报警') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
@@ -895,7 +944,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, sensitiveEscalations };
 
 let args = null;
 let anyEmitted = false;
