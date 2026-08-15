@@ -1,0 +1,40 @@
+orca orchestration worker-start
+
+Usage: orca orchestration worker-start --task <task_id> [--on <saved-environment>] [--worktree <current|selector|new-child|new-top-level>] (--agent <agent> | --terminal <handle>) [--model <id>] [--effort <level>] [--name <name>] [--repo <selector>] [--base-branch <ref>] [--display-name <text>] [--comment <text>] [--setup <run|skip|inherit>] [--retry-of <dispatch_id>] [--timeout-ms <n>] [--run <run_id>] [--from <handle>] [--retry-request <id>] [--json]
+
+Start one supervised worker on the Run home or a connected Orca server
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --task
+  --on
+  --worktree <selector>  Worktree selector such as id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --name <name>          Name for the new worktree or automation
+  --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+  --base-branch <ref>    Base branch/ref to create the worktree from
+  --display-name <name>  Override the Orca display name
+  --comment <text>       Comment stored in Orca metadata
+  --setup run|skip|inherit Setup policy for repo-defined setup hooks
+  --agent <id>          Launch a known TUI agent in the first terminal
+  --model <id>          Provider model id for a new agent launch
+  --effort <level>      Reasoning effort for the selected model
+  --terminal <handle>  Runtime-issued terminal handle
+  --retry-of
+  --timeout-ms <ms>     Maximum wait time before timing out
+  --run
+  --from
+  --retry-request
+
+Notes:
+  Current and existing worktrees never rerun setup; a fresh agent terminal is created unless --terminal is explicit.
+  --model supports Claude, Codex, and Cursor opaque provider model ids; --effort requires --model. Neither can combine with --terminal.
+  New worktrees use agent-first creation and default --setup to run. Repository start-immediately runs setup beside the agent; wait-for-setup gates agent readiness and task input.
+  Creation flags (--name, --repo, --base-branch, --display-name, --comment, --setup) are rejected for current/existing worktrees. Use exact --repo on the selected server; project/host convenience routing remains on worktree create.
+  --on selects only the worker server; the Run and this command remain on the current Orca server.
+  Remote current and new-child are invalid; discover an exact remote selector or use new-top-level.
+  --retry-of links the replacement attempt but does not inherit placement; repeat the intended --on/worktree and --agent/terminal choices.
+  The call exits 0 only for ready. Failed or outcome_unknown exits 1 and JSON includes stage/failedStage, setup, effects, residualResources, and recovery commands when needed.
+

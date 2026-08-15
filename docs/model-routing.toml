@@ -10,10 +10,14 @@
 updated = "2026-08-15"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
+# launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
+# {model} 用 --model / launch_model / default_model 替换；缺了 fail-loud。
 
 [providers.deepseek]
 cli = "pi"
 default_model = "deepseek-v4-flash"   # 拍板 issue #462：pi 派单默认 flash（~/.pi/agent/settings.json 已手改，本字段固化）；ds-pro 仅限重型任务
+launch = "pi --model {model}"
+launch_model = "deepseek-v4-flash"
 launch_note = """
 DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
 派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
@@ -22,28 +26,48 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
+launch = "scripts/grok-shim.cmd -m {model}"
+launch_model = "grok-4.6"
 launch_note = """
 grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-08-14，issue #443）。
 2026-08-15 起经 regrok shim（~/.local/bin，覆盖 PATH）已是普通 agent，`--agent grok` 直接可用。
 shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
+日常启动模板见本表 launch（terminal create 用）。
 """
 why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
-note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节（HTTPS_PROXY=http://127.0.0.1:7890 必带）见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
+note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
 decided = "2026-08-14"
 
 [providers.gpt]
 cli = "codex"
 default_model = "gpt-5.6-sol"
+launch = "codex --dangerously-bypass-approvals-and-sandbox -m {model}"
+launch_model = "gpt-5.6-sol"
 launch_note = """
 默认模型 gpt-5.6-sol。token 消耗约 3 倍，比价按每件活总成本算，不按单价。
+
+起法（2026-08-15 进程命令行对照实测）：
+- 首选 orca 原生 `--agent codex`（参数由 orca 管，不复制可能过期的值）。
+- 已存在树里只能 terminal create 时：`codex --dangerously-bypass-approvals-and-sandbox`（与 orca 原生一致）。
+- 库默认走第二条，因为帅遇到的都是树已存在。
+- 反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生三条全过。
+
+三层机制（缺一层就查错方向）：
+1. policy 白名单：`~/.codex/rules/default.rules` 是历史上逐条批准过的 prefix_rule。
+2. approval 与 sandbox 是正交两维：`-a` 管「不能做的要不要问」，`--sandbox` 管「能做什么」。
+3. `-a never` 的真实语义 = 不在白名单就直接拒（因为不能问）。所以 `-a never` 单用比不给还严。
+
+走过的弯路：先以为是 project trust，再以为是 sandbox 档位；分水岭是第 2 条。
 """
 
 [providers.claude]
-cli = "reclaude 链路"
+cli = "reclaude"
+launch = "reclaude --model {model}"
+launch_model = "opus"
 launch_note = """
 裸 claude 会 login rejected（凭据挂在 reclaude 链上）；启动有一段配置同步期，抢跑注入必被吞。
 派工一律 `reclaude --model opus`（Fable 只留帅位，派工须用户点名；拍板 2026-08-14，issue #443）。
-`--agent` 起不了 reclaude 链（已知 agent 枚举以 `orca worktree create --help` 为准，会漂）——Claude 族终端必须 `orca terminal create --command "reclaude --model opus"` 起（实测 2026-08-14）。
+`--agent` 起不了 reclaude 链（已知 agent 枚举以 `orca worktree create --help` 为准，会漂）——Claude 族终端必须 `orca terminal create --command` 读本表 launch。
 """
 
 [providers.minimax-h3]
@@ -79,6 +103,7 @@ decided = "2026-08-14"
 [[models]]
 id = "claude-opus"
 provider = "claude"
+cli_model = "opus"
 roles = ["审查", "写码", "判断"]
 status = "正式"
 why = "审官次选：GPT 优先、Claude(Opus) 次之；UI 类活 GPT 禁入时顶位。启动命令见 [providers.claude]"
