@@ -1,4 +1,4 @@
-// 正式看门狗回归网（issue #442 + #500/#492/#471/#476 换代）——每个检测项留正控 + 负控 + 判别力
+// 正式看门狗回归网（issue #442 + #500/#492/#471/#476 换代 + #569 降噪/换 provider/权限框）——每个检测项留正控 + 负控 + 判别力
 //
 // 验的层：①真实语料（live/ 2026-08-14 实录）扫完 0 异常 ②真实事故语料被拦（at-capacity 两起
 // 实录 + terminal_handle_stale 读失败实录，字段未改写）③exited / 错误指纹 / waiting / 停摆 /
@@ -7,6 +7,10 @@
 // #500 换代：⑧停摆判据 = 非 spinner 真实内容连续三轮不变（spinner 重绘/cursor 前进/ps updatedAt
 // 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
 // ⑩孤儿树（活跃执行者判据，跨主帅不误伤）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
+// #569：⑭空转降噪三类豁免（角色·在途PR·活性否决，各留正控 negative + 真阳对照）⑮权限确认框
+// selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进，
+// 2026-08-17 判据订正：有活终端且查不到 dispatch 记账才报，agents=0 不算数）⑰model-change
+// （pi 静默换 provider：诱因 errorMessage、初始选型不报）。
 //
 // 判别力自检问句：任何把检测放宽或收紧的改动，是否都至少有一条断言会变红？
 // 每个违规样本都是「故意构造的违规，被当场拦下」——上线生效证据，v0.4 跳过这步首报即翻车。
@@ -59,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|selector|blind|model-change|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -267,6 +271,39 @@ console.log("\n=== ⑰ 空转强判据（#471 第四类事故）：进程在动�
   check("idle-fresh：不报 idle", !/idle:/.test(rf.out), rf.out.trim());
 }
 
+console.log("\n=== ⑰a #569 降噪①（角色判据）：审官/辅助子卡不判 git 空转（#568 审官案例同类） ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "idle-reviewer"), ["--once", "--now", String(NOW)]);
+  check("idle-reviewer：退出码 0（子卡豁免，不再是假阳）", r.status === 0, `status=${r.status}`);
+  check("idle-reviewer：不报 idle（审官产出是 review comment 与 notify 不是 commit）", !/idle:/.test(r.out), r.out.trim());
+  check("idle-reviewer：打角色豁免观察行（判据可见）", /\[#455 - 审官·grok-4.6\] 观察: 子卡（审官\/辅助，卡名带 ·）不判 git 空转/.test(r.out), r.out.trim());
+}
+
+console.log("\n=== ⑰b #569 降噪②（在途 PR 豁免）：已交付等下一环的工位不算空转 ===");
+{
+  const re = runWatchdog(path.join(FIXTURES, "idle-pr-exempt"), ["--once", "--now", String(NOW)]);
+  check("idle-pr-exempt（OPEN 非 draft APPROVED）：退出码 0（在途 PR 等着别人 = 不算空转）", re.status === 0, `status=${re.status}`);
+  check("idle-pr-exempt：不报 idle", !/idle:/.test(re.out), re.out.trim());
+  check("idle-pr-exempt：打在途 PR 观察行（判据可见）", /观察: 在途 PR #999（OPEN 非 draft，APPROVED）等着别人/.test(re.out), re.out.trim());
+
+  const rr = runWatchdog(path.join(FIXTURES, "idle-pr-rework"), ["--once", "--now", String(NOW)]);
+  check("idle-pr-rework（CHANGES_REQUESTED 要返工）：退出码 1（责任仍在本工位，真阳不减）", rr.status === 1, `status=${rr.status}`);
+  check("idle-pr-rework：idle 照报", /\[#999 - 返工PR测试\] idle:/.test(rr.out), rr.out.trim());
+}
+
+console.log("\n=== ⑰c #569 降噪③（活性否决）：非 spinner 真实内容在动 = 不算空转（#500 一致性） ===");
+{
+  // 三轮：第 1 轮冻结（git 空置）→ idle 报；第 2 轮真实内容在动 → 豁免（刚重启正在开 PR 的形态）；
+  // 第 3 轮内容又冻结 → idle 再报。判别力：把否决删掉 → 第 2 轮把 idle 再报一遍 → 断言变红。
+  const r = runWatchdog(path.join(FIXTURES, "idle-veto"), ["--now", String(NOW)]);
+  const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/3([\\s\\S]*?)(?:round \\d\\/3|$)`)) || [])[1] || "";
+  check("退出码 1（有报警）", r.status === 1, `status=${r.status}`);
+  check("第 1 轮：idle 报（屏面冻结 + git 空置）", /idle:/.test(seg(1)), seg(1).trim());
+  check("第 2 轮：不报 idle，打活性否决观察行", !/idle:/.test(seg(2)) && /观察: 空转豁免：非 spinner 真实内容在动——活性否决/.test(seg(2)), seg(2).trim());
+  check("第 3 轮：内容冻结回来 → idle 再报（豁免不是永久放行）", /idle:/.test(seg(3)), seg(3).trim());
+}
+
+
 console.log("\n=== ⑱ 孤儿树判据（#492/#476）：还有没有活跃执行者，跨主帅不误伤 ===");
 {
   const rc = runWatchdog(path.join(FIXTURES, "orphan-closed"), ["--once"]);
@@ -349,6 +386,63 @@ console.log("\n=== ⑳e 分级排除保留死活判据：--exclude-pane 下 exit
   check("exited 工位被 --exclude-pane 后仍报 exited（保留死活判据）", re.status === 1 && /\[#452 - 看门狗正式版\] exited:/.test(re.out), `status=${re.status} ${re.out.trim()}`);
   const rw = runWatchdog(path.join(FIXTURES, "waiting"), ["--exclude-pane", paneKey]);
   check("waiting 工位被 --exclude-pane 后仍报 waiting（保留死活判据）", rw.status === 1 && /\[#452 - 看门狗正式版\] waiting:/.test(rw.out), `status=${rw.status} ${rw.out.trim()}`);
+}
+
+console.log("\n=== ㉑ #569 ④ 权限确认框停摆指纹：N/M:select 持续超阈轮才报，不自动替它选 ===");
+{
+  // 真阳样本形态直接抄 #568 现场（grok 审官卡在权限确认框 7 分钟）：屏面底部 1/3:select、进程活着、屏面冻结。
+  const r1 = runWatchdog(path.join(FIXTURES, "selector-freeze"), ["--once"]);
+  check("单轮：退出码 0（持续未达阈轮，不唤醒）", r1.status === 0, `status=${r1.status}`);
+  check("单轮：不报 selector", !/selector:/.test(r1.out), r1.out.trim());
+
+  const r2 = runMultiRounds(path.join(FIXTURES, "selector-freeze", "round-1"), 2);
+  check("两轮同屏：退出码 1（选择器持续超阈轮）", r2.status === 1, `status=${r2.status}`);
+  check("两轮同屏：第 2 轮报 selector 且带选择器原文", /round 2\/2[\s\S]*\[#452 - 看门狗正式版\] selector:.*「1\/3:select」/.test(r2.out), r2.out.trim());
+  check("selector 事件不带处置动作（不自动替它选——选哪个有后果）", !/动作:/.test(r2.out), r2.out.trim());
+
+  const rn = runWatchdog(path.join(FIXTURES, "live"), ["--once"]);
+  check("健康语料（无选择器提示）：不报 selector", !/selector:/.test(rn.out), rn.out.trim());
+}
+
+console.log("\n=== ㉒ #569 垫片并进：编排层隐形工人 BLIND（2026-08-17 判据订正：有活终端 + 查不到 dispatch 记账才算真隐形） ===");
+{
+  // 真判据 = 有活终端（>1）+ orca orchestration worker-list 的 resource.worktreeId 里没有它
+  // （从没走 worker-start/dispatch = 编排层不知道有工人在跑）。worker-list-evidence.json 里
+  // 列了现存非主树（#450/#452/#449）但没列 #555 → #555 无记账 → 报。
+  const r = runWatchdog(path.join(FIXTURES, "blind"), ["--once"]);
+  check("退出码 1（隐形工人必须显形）", r.status === 1, `status=${r.status}`);
+  check("输出 blind 事件且带判据（有活终端、无 dispatch 记账）", /\[#555 - 隐形工人测试\] blind: 编排层隐形工人：有 2 个活终端且查不到 dispatch 记账/.test(r.out), r.out.trim());
+  check("有记账的非主树（#452 等）不报 blind", !/\[#452 - 看门狗正式版\] blind:/.test(r.out), r.out.trim());
+  check("隐形工人树不误报 orphan（有活终端 = 有活跃执行者）", !/\[#555 - 隐形工人测试\] orphan:/.test(r.out), r.out.trim());
+
+  // 负控（2026-08-17 帅实证形态）：同一棵树出现在记账里（agents=0 的审官 worker-read 读得到、
+  // token 在涨）→ 编排层看得见 → 不报。判别力：把判据改回垫片的 agents=0 → 本条断言变红。
+  const rt = runWatchdog(path.join(FIXTURES, "blind-tracked"), ["--once"]);
+  check("blind-tracked（#555 有 dispatch 记账）：退出码 0，不报 blind（有记账的 agents=0 不算隐形）", rt.status === 0 && !/blind:/.test(rt.out), `${rt.status} ${rt.out.trim()}`);
+
+  // 没查成 ≠ 查过没事：无 worker-list-evidence.json 的快照显式 DISPATCH_BOOKKEEPING_MISSING
+  const rm = runWatchdog(path.join(FIXTURES, "live"), ["--once"]);
+  check("缺记账证据：显式 DISPATCH_BOOKKEEPING_MISSING（不是静默放过）", /DISPATCH_BOOKKEEPING_MISSING/.test(rm.out), rm.out.trim());
+}
+
+console.log("\n=== ㉓ #569 降噪命名：无 agent 且无 #N 前缀的树不参与命名校验（windsurf-dao 假阳修复） ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "naming-skip"), ["--once"]);
+  check("退出码 0（无报警）", r.status === 0, `status=${r.status}`);
+  check("windsurf-dao（0 agent、无 #N）不再报 naming（#569：它不是任务卡）", !/naming:.*windsurf-dao/.test(r.out), r.out.trim());
+  check("有 agent 的误命名卡仍报（naming-bad 就是正控）", /\[审官·GPT\] naming:/.test(runWatchdog(path.join(FIXTURES, "naming-bad"), ["--once"]).out), "naming-bad 应照常报警");
+}
+
+console.log("\n=== ㉔ #569 ② pi 静默换 provider：model_change 事件 + 诱因（errorMessage） ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "model-change"), ["--once"]);
+  check("退出码 1（静默换 provider 报警）", r.status === 1, `status=${r.status}`);
+  check("输出 model-change 事件且带诱因（前一条 message 的 errorMessage）", /\[pi\] model-change:.*诱因：503 status code \(no body\)/.test(r.out), r.out.trim());
+  check("切换到 deepseek 直连被点出（止血验证手段）", /model_change → provider=deepseek/.test(r.out), r.out.trim());
+  check("会话开头的初始选型（前无 message）不报——只报中途切换", (r.out.match(/\[pi\] model-change:/g) || []).length === 1, r.out.trim());
+
+  const rm = runWatchdog(path.join(FIXTURES, "live"), ["--once", "--sessions-dir", path.join(FIXTURES, "live", "no-sessions")]);
+  check("sessions 目录不存在：显式 PI_SESSIONS_MISSING（没查成≠查过没事），不误报", rm.status === 0 && /PI_SESSIONS_MISSING/.test(rm.out), `${rm.status} ${rm.out.trim()}`);
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);
