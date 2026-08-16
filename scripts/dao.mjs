@@ -18,6 +18,7 @@ import {
   argsWorktreeCreate,
   argsWorktreeRm,
   argsWorkerStart,
+  argsWorkerRelease,
   argsOrchestrationReply,
   argsGateCreate,
   argsGateResolve,
@@ -510,6 +511,13 @@ function cmdWorkerStart(args) {
   emit({ ok: true, json: r.json, dispatchId, inject: injected });
 }
 
+function cmdWorkerRelease(args) {
+  if (!args.dispatch) fail('worker-release 要 --dispatch');
+  const r = orca(argsWorkerRelease({ dispatch: args.dispatch, retryRequest: args.retryRequest }));
+  if (!r.ok) fail(`worker-release 失败: ${errText(r.error)}`);
+  emit({ ok: true, json: r.json, dispatchId: args.dispatch });
+}
+
 function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
@@ -685,6 +693,7 @@ function main() {
     case 'worktree-rm': return cmdWorktreeRm(args);
     case 'task-create': return cmdTaskCreate(args);
     case 'worker-start': return cmdWorkerStart(args);
+    case 'worker-release': return cmdWorkerRelease(args);
     case 'reviewer-create': return cmdReviewerCreate(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);

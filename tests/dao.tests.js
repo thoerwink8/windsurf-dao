@@ -484,6 +484,12 @@ async function main() {
     const gateParsed = S.parseArgs(['node', 'dao.mjs', 'gate-resolve', '--id', 'gate_x', '--resolution', '换']);
     check('CLI 收 gate-resolve --id/--resolution', gateParsed.id === 'gate_x' && gateParsed.resolution === '换', JSON.stringify(gateParsed));
 
+    check('#559 ⑤ worker-release 已登记进 VERBS', S.VERBS.includes('worker-release'), S.VERBS.join(','));
+    const wr = S.argsWorkerRelease({ dispatch: 'ctx_x' });
+    check('worker-release 拼 --dispatch', wr.includes('--dispatch') && wr[wr.indexOf('--dispatch') + 1] === 'ctx_x', wr.join(' '));
+    const wrParsed = S.parseArgs(['node', 'dao.mjs', 'worker-release', '--dispatch', 'ctx_x']);
+    check('CLI 收 worker-release --dispatch', wrParsed.dispatch === 'ctx_x', JSON.stringify(wrParsed));
+
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-escape-'));
     const log = path.join(tmp, 'cmd-escape.jsonl');
     S.recordEscape({ argv: ['orca', 'foo', '--submit'], ts: '2026-08-15T00:00:00.000Z', cwd: tmp }, log);
