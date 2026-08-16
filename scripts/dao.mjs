@@ -17,6 +17,7 @@ import {
   argsTerminalSend,
   argsWorktreeCreate,
   argsWorktreeRm,
+  assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
   argsWorkerRead,
@@ -217,9 +218,11 @@ function cmdDispatch(args) {
     mergeReason: gate.mergeReason,
     model: gate.model,
     reviewer: gate.reviewer,
+    issue: args.issue ? String(args.issue).trim() : null,
+    workerCard: assembleCardName({ name: args.name, issue: args.issue }),
     workerLaunch: workerLaunch.command,
     reviewerLaunch: reviewerLaunch.command,
-    reviewerCard: reviewerCardName(gate.reviewer),
+    reviewerCard: assembleCardName({ name: reviewerCardName(gate.reviewer), issue: args.issue }),
     comment: dispatchComment(gate),
   };
   const hereBranch = gitBranchName(process.cwd());
@@ -233,9 +236,10 @@ function cmdDispatch(args) {
   const created = {};
 
   const workerWt = orca(argsWorktreeCreate({
-    name: args.name,
+    name: plan.workerCard,
     noParent: true,
     setup: 'skip',
+    issue: args.issue,
     comment: plan.comment,
   }));
   if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, plan);
@@ -266,12 +270,13 @@ function cmdDispatch(args) {
   });
   if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
 
-  const revName = reviewerCardName(gate.reviewer);
+  const revName = assembleCardName({ name: reviewerCardName(gate.reviewer), issue: args.issue });
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',
     parentWorktree: created.workerId,
     baseBranch: workerBranch.branch,
+    issue: args.issue,
     comment: plan.comment,
   }));
   if (!revWt.ok) failCreated(created, `审官子卡创建失败: ${errText(revWt.error)}`, plan);
@@ -474,13 +479,14 @@ function cmdStart(args) {
 }
 
 function cmdWorktreeCreate(args) {
-  if (!args.name) fail('worktree-create 要 --name');
+  if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
   const r = orca(argsWorktreeCreate({
-    name: args.name,
+    name: assembleCardName({ name: args.name, issue: args.issue }),
     noParent: args.noParent,
     setup: args.setup,
     parentWorktree: args.parentWorktree,
     baseBranch: args.baseBranch,
+    issue: args.issue,
     comment: args.comment,
   }));
   if (!r.ok) fail(`worktree create 失败: ${errText(r.error)}`);

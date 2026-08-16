@@ -278,6 +278,11 @@ async function main() {
     check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
     check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
+    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '559', '--spec', '短摘要', '--dry-run']);
+    const pIssue = payload(okIssue);
+    check('#559 追加：dry-run 带 --issue → 卡名带号', okIssue.status === 0 && pIssue.workerCard === '#559 - 修地基' && pIssue.reviewerCard === '#559 - 审官·gpt-5.6-sol', JSON.stringify(pIssue));
+    check('#559 追加：dry-run 带 --issue → issue 字段透出', pIssue.issue === '559', JSON.stringify(pIssue));
+
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
     const roleOnly = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pRole = payload(roleOnly);
@@ -459,6 +464,12 @@ async function main() {
   {
     const wt = S.argsWorktreeCreate({ name: 'x', noParent: true, setup: 'skip' });
     check('worktree create 带 --no-parent --setup --json', wt.includes('--no-parent') && wt.includes('--setup') && wt.includes('--json'));
+    const wtIssue = S.argsWorktreeCreate({ name: '修地基', issue: 559 });
+    check('#559 追加：worktree create 带 --issue 透传', wtIssue.includes('--issue') && wtIssue[wtIssue.indexOf('--issue') + 1] === '559', wtIssue.join(' '));
+    check('#559 追加：assembleCardName 拼 #<issue> - <动宾短语>', S.assembleCardName({ name: '修地基', issue: 559 }) === '#559 - 修地基', S.assembleCardName({ name: '修地基', issue: 559 }));
+    check('#559 追加：assembleCardName 幂等（name 已带 #N 前缀）', S.assembleCardName({ name: '#559 - 修地基', issue: 559 }) === '#559 - 修地基', S.assembleCardName({ name: '#559 - 修地基', issue: 559 }));
+    check('#559 追加：assembleCardName 子卡 = #N - 审官·模型', S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), issue: 559 }) === '#559 - 审官·gpt-5.6-sol');
+    check('#559 追加：没给 issue 原样返回', S.assembleCardName({ name: '审读 #505' }) === '审读 #505' && S.assembleCardName({ name: 'x' }) === 'x');
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
     check('worker-start 用 --terminal 不用 --agent', ws.includes('--terminal') && !ws.includes('--agent'));
     const wsContinue = S.argsWorkerStart({ task: 't', terminal: 'h' });

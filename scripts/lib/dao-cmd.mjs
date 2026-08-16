@@ -162,7 +162,7 @@ export function argsTerminalSend({ terminal, text, enter } = {}) {
 }
 
 export function argsWorktreeCreate({
-  name, noParent, setup, parentWorktree, baseBranch, comment,
+  name, noParent, setup, parentWorktree, baseBranch, comment, issue,
 } = {}) {
   const a = ['worktree', 'create'];
   if (name) a.push('--name', name);
@@ -170,6 +170,7 @@ export function argsWorktreeCreate({
   if (setup) a.push('--setup', setup);
   if (parentWorktree) a.push('--parent-worktree', parentWorktree);
   if (baseBranch) a.push('--base-branch', baseBranch);
+  if (issue != null && String(issue).trim() !== '') a.push('--issue', String(issue).trim());
   if (comment) a.push('--comment', comment);
   a.push('--json');
   return a;
@@ -348,7 +349,7 @@ export function catalogUsedFlags() {
     argsTerminalSend({ terminal: 't', text: 'x', enter: true }),
     argsWorktreeCreate({
       name: 'n', noParent: true, setup: 'skip',
-      parentWorktree: 'p', baseBranch: 'b', comment: 'c',
+      parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559,
     }),
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsTaskCreate({ spec: 's' }),
@@ -1086,6 +1087,19 @@ export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
 }
 
+/** 卡名组装（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
+ * 给了 --issue N：`#N - <动宾短语>`（name 已带 #N 前缀则去重）；子卡 `#N - 审官·<模型>`。
+ * 没给 --issue：原样返回 name。 */
+export function assembleCardName({ name, issue } = {}) {
+  const issueText = String(issue ?? '').trim();
+  if (!issueText || !/^\d+$/.test(issueText)) return String(name ?? '').trim();
+  const n = String(name ?? '').trim();
+  const prefix = `#${issueText}`;
+  let stem = n;
+  if (n.startsWith(prefix)) stem = n.slice(prefix.length).replace(/^\s*[-–—]\s*/, '').trim();
+  return [prefix, stem].filter(Boolean).join(' - ');
+}
+
 export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
   const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
   if (mergePolicy === 'manual' && mergeReason) {
@@ -1363,11 +1377,11 @@ export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--now', '--dry-run', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
-    '--comment', '--json', '--help', '-h',
+    '--issue', '--comment', '--json', '--help', '-h',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--json', '--help', '-h']),
@@ -1434,11 +1448,11 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <名> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
-  worktree-create --name <名> [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+  worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
@@ -1472,4 +1486,6 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
 续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
+给了 --issue <issue号> 时卡名自动组装成「#<issue号> - <动宾短语>」（子卡「#<issue号> - 审官·<模型>」），
+并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
 `;

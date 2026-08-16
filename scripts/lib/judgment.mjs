@@ -14,6 +14,15 @@
 
 const RED_FLAG_PATTERN = /红\s*(\d+)\s*项/g;
 const JUDGMENT_LINE_RE = /^\s*(?:[>*]\s*)*(判定|复核结论)/;
+// #559 A（#501/#554 实录）：审官写「审官第 3 轮返工复核：绿」「审官判定：绿」这类近义变体，
+// 行首不命中 JUDGMENT_LINE_RE，旧逻辑当「无判定」——战绩记成无判定/无审，流转器也看不见。
+// 近义尝试 = 行首（允许 markdown 前缀）出现「判定/复核(结论)」判定词 + 紧跟绿/红判定词，
+// 但行首不命中 JUDGMENT_LINE_RE：疑似判定行但格式歪了（实录：「审官判定：绿」「审官第 3 轮返工复核：绿」），
+// 必须报「没查成」停手上报，绝不当「没有判定」继续走（仓规：没查成 ≠ 查过没事）。
+// 锚行首 + 只放行 审官/第N轮/返工 前缀，不咬「语料样本判定：红 5 项——这条是讨论」这类叙述（对抗审 #449 防误伤）。
+const JUDGMENT_ATTEMPT_RE = /^\s*(?:[>*#\-\s]*)(?:审官)?\s*(?:第\s*\d+\s*(?:轮|次))?\s*(?:返工)?(?:判定|复核结论|复核)[:：]?\s*(绿|红)/;
+
+export const JUDGMENT_FORMAT_HINT = '判定行只允许四种形态，写在 review 正文首行：判定：红 N 项 / 判定：绿，可合并 / 复核结论：红 N 项 / 复核结论：绿，可合并（scripts/lib/judgment.mjs 单一解析器，格式歪了算没查成）';
 
 // 红项口径 v2：从 review 正文判定行提取红项数，跨全部 body 取最大 N。
 // 复核绿（无红数）不清零首审红项；0 条 review 由调用方记 null（无审读 ≠ 0 红）。
@@ -33,11 +42,24 @@ export function redFlagsFromReviewBodies(bodies) {
 // 单条 review 的判定行 → { kind, red, green, malformed }（流转器用，比红项数更细）：
 //   kind      = '判定'（首审）| '复核结论'（复核）| null（该 body 无判定行）
 //   red       = 判定行里「红 N 项」的 N；判定行无红数且含「绿」→ green=true、red=null
-//   malformed = 判定行在但红绿都判不出（如「判定：红 项」缺数字、或「判定：绿/红」格式怪异）
-//               ——流转器对 kind=null 或 malformed=true 的 review 必须报帅，不得自行猜红绿。
+//   malformed = 判定行在但红绿都判不出（如「判定：红 项」缺数字），或近义变体判定行
+//               （#559 A：「审官判定：绿」这类行首不规范的判定）——流转器对 kind=null 或
+//               malformed=true 的 review 必须报帅，不得自行猜红绿。
 export function judgmentFromReview(body) {
-  const firstLine = String(body || '').split(/\r?\n/).find(line => JUDGMENT_LINE_RE.test(line));
-  if (!firstLine) return { kind: null, red: null, green: false, malformed: false };
+  const lines = String(body || '').split(/\r?\n/);
+  const firstLine = lines.find(line => JUDGMENT_LINE_RE.test(line));
+  if (!firstLine) {
+    const attempt = lines.find(line => JUDGMENT_ATTEMPT_RE.test(line));
+    if (attempt) {
+      const snippet = attempt.trim().slice(0, 80);
+      return {
+        kind: null, red: null, green: false, malformed: true,
+        attempt: snippet,
+        reason: `疑似判定行但格式不合规（${JUDGMENT_FORMAT_HINT}）：${snippet}`,
+      };
+    }
+    return { kind: null, red: null, green: false, malformed: false };
+  }
   const kind = firstLine.match(JUDGMENT_LINE_RE)[1];
   let red = null;
   for (const match of firstLine.matchAll(RED_FLAG_PATTERN)) {
@@ -45,6 +67,17 @@ export function judgmentFromReview(body) {
   }
   const green = red === null && /绿/.test(firstLine);
   return { kind, red, green, malformed: red === null && !green };
+}
+
+// 一批 review body 里所有解析失败的判定行（#559 A）。扫不到判定行但也没近义变体 → 空数组（真 0）；
+// 有 malformed → 数组非空（没查成）。供 calibrate / 流转器把「没查成」和「没有判定」分开。
+export function malformedJudgmentLines(bodies) {
+  const out = [];
+  for (const body of bodies || []) {
+    const j = judgmentFromReview(body);
+    if (j.malformed) out.push({ attempt: j.attempt ?? null, reason: j.reason ?? '判定行格式不合规' });
+  }
+  return out;
 }
 
 // 完工 comment 识别（流转器用）：工人完工的信号 = PR comment 首行命中
