@@ -563,11 +563,12 @@ function checkCardCommentSamples() {
 // 判据独立：直接 JSON.parse gh 的输出，不复用仓内任何解析逻辑。
 // 「没查成」与「查了是 0」必须分得开：gh 不可用（没装/没登录/CI 无 token/断网）→ SKIP
 // 不是绿；输出不是合法 JSON number 数组 → 红（没查成）；parse 成功且 0 张 → 绿（真 0）。
-// 阈值是棘轮：本项上线时基线 44，默认取 44 = 最大允许数（「任何净新增立即报警」：
-// 第 45 张就红，n > max）。帅批量执行分流后应随之下调，目标 10（一组在施 + 下一批小活）。
-// 变异测试：DAO_CHECK_OPEN_ISSUE_MAX=0 必红（当前非零数据）；边界：44/44 绿、45/44 红。
+// 阈值是棘轮：只降不升，默认取当前 open 数 + 1 = 最大允许数（「任何净新增立即报警」：
+// 多一张就红，n > max）。#556 分流关掉 14 张后由 44 降到 30（当时实际 29 张）。
+// 帅批量分流后应随之下调，目标 10（一组在施 + 下一批小活）。
+// 变异测试：DAO_CHECK_OPEN_ISSUE_MAX=0 必红（当前非零数据）；边界：30/30 绿、31/30 红。
 
-const OPEN_ISSUE_MAX_DEFAULT = 44;
+const OPEN_ISSUE_MAX_DEFAULT = 30;
 
 function checkOpenIssueCount() {
   const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
