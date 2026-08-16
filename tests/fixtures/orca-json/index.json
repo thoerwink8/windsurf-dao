@@ -19,6 +19,12 @@
     "command": "orca worktree create --name _fixture-499-delete-me --no-parent --setup skip --json",
     "capturedAt": "2026-08-15"
   },
+  "extractSentMessage": {
+    "file": "orchestration-send.json",
+    "command": "orca orchestration send --to $ORCA_TERMINAL_HANDLE --subject fixture-capture-548 --body \"契约夹具采集：orchestration send 真实返回\" --json",
+    "capturedAt": "2026-08-16",
+    "note": "#548 红项 1 的物证：ok:true + 顶层 exit 0，delivered_at 仍是 null——对活着的收件人也是 null，所以 delivered_at 不能当投递判据（消息 id 在 result.message.id，顶层 id 是 RPC id）"
+  },
   "extractTaskId": {
     "file": "task-create.json",
     "command": "orca orchestration task-create --spec \"契约夹具采集：task-create 真实返回（采集后闲置）\" --json",

@@ -1,0 +1,14 @@
+orca orchestration inbox
+
+Usage: orca orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]
+
+Show messages across (or for) recipients
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --limit <n>            Maximum number of rows to return
+  --terminal <handle>  Runtime-issued terminal handle
+  --full                 Include all supported V1 issue context within caps

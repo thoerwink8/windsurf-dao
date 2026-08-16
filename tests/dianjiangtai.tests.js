@@ -354,14 +354,27 @@ check("无 routes 时行为不变：零样本仍 quota_explore", zero.options.A.
 function cliDj(args) {
   return spawnSync(process.execPath, [path.join(REPO, "scripts", "dianjiangtai-select.mjs"), ...args], { encoding: "utf8", cwd: REPO });
 }
+
+// CLI 的 provider 前缀来自 origin/master 路由表（#533），这里从同一来源派生期望值——
+// 不硬编码前缀（#519 教训：换通道会咬断言），只钉模型 id 与 provider 的对应关系。
+function masterProviderOf(modelId) {
+  const r = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });
+  if (r.status !== 0) throw new Error(`git show origin/master 失败: ${(r.stderr || r.stdout || "").slice(0, 200)}`);
+  const models = parseToml(r.stdout).models || [];
+  const m = models.find(x => x && x.id === modelId);
+  return m && m.provider ? m.provider : null;
+}
+const flashProvider = masterProviderOf(FLASH);
+const grokProvider = masterProviderOf("grok-4.6");
+check("master 路由表里 flash/grok 都有 provider（前缀期望来源）", !!flashProvider && !!grokProvider, `${flashProvider}/${grokProvider}`);
 const discDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-disc-"));
 discEvents.forEach((e, i) => fs.writeFileSync(path.join(discDir, `${i}.json`), JSON.stringify(e)));
 const djPeak = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS, "--job-id", "wire-peak", "--events-dir", discDir]);
 check("CLI dianjangtai-select 峰时退出码 0", djPeak.status === 0, (djPeak.stderr || "").slice(0, 200));
 const djPeakOut = djPeak.status === 0 ? JSON.parse(djPeak.stdout) : { options: { A: {} } };
-check("CLI 伪造峰时输入：写码推荐 grok/grok-4.6（#533 provider/model 全称）", djPeakOut.options.A.model === "grok/grok-4.6", JSON.stringify(djPeakOut.options && djPeakOut.options.A));
-check("CLI 峰时写码不是 ds-flash（钉死分时违例）", djPeakOut.options.A.model !== "deepseek/deepseek-v4-flash");
-check("CLI 峰时 A 带 provider 字段（#533）", djPeakOut.options.A.provider === "grok", JSON.stringify(djPeakOut.options.A));
+check("CLI 伪造峰时输入：写码推荐 provider/grok-4.6（#533 provider/model 全称）", djPeakOut.options.A.model === `${grokProvider}/grok-4.6`, JSON.stringify(djPeakOut.options && djPeakOut.options.A));
+check("CLI 峰时写码不是 ds-flash（钉死分时违例）", djPeakOut.options.A.model !== `${flashProvider}/${FLASH}`);
+check("CLI 峰时 A 带 provider 字段（#533）", djPeakOut.options.A.provider === grokProvider, JSON.stringify(djPeakOut.options.A));
 check("CLI 峰时 A/B/C 三个选项模型标识都渲染成 provider/model（#533）", ["A", "B", "C"].every(k => {
   const opt = djPeakOut.options[k];
   const ids = Array.isArray(opt.models) ? opt.models : [opt.model];
@@ -370,7 +383,7 @@ check("CLI 峰时 A/B/C 三个选项模型标识都渲染成 provider/model（#5
 check("CLI 峰时输出含 decision_id 与三选项", !!(djPeakOut.decision_id && djPeakOut.options.A && djPeakOut.options.B && djPeakOut.options.C));
 check("CLI 峰时 reason=route_beijing", djPeakOut.options.A.reason === "route_beijing", djPeakOut.options.A.reason);
 const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
-check("CLI 谷时写码推荐 deepseek/deepseek-v4-flash（#533）", djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `deepseek/${FLASH}`, (djValley.stderr || "").slice(0, 120));
+check("CLI 谷时写码推荐 provider/deepseek-v4-flash（#533，前缀随 master 路由表）", djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `${flashProvider}/${FLASH}`, (djValley.stderr || "").slice(0, 120));
 const djNoTs = cliDj(["--role", "写码"]);
 check("CLI 缺 --ts 非 0 退出（禁 Date.now）", djNoTs.status !== 0);
 fs.rmSync(discDir, { recursive: true, force: true });

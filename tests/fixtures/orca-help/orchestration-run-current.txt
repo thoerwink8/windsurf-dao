@@ -1,0 +1,12 @@
+orca orchestration run-current
+
+Usage: orca orchestration run-current [--from <handle>] [--json]
+
+Show the Run bound to this coordinator terminal
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --from

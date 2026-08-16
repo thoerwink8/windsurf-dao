@@ -35,6 +35,7 @@
 // ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
 // ⑪ 主帅标题核对样本（一致 / 过期 各至少一份）
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
+// ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517）：旁路 exit 2、逃生口放行、崩了也 exit 2
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -43,6 +44,7 @@ import { createRequire } from 'node:module';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
+import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -391,6 +393,12 @@ function checkModeHookAlive() {
   else fail(...r.fail);
 }
 
+function checkDispatchGateAlive() {
+  const r = checkDispatchGate({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
 // ── ⑨ 本机 memory 断链检查（local-only，issue #503 / 判据改写 #529）───────────────────
 // 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向
 // **windsurf-dao-memory 独立仓 clone** 的 Junction（memory 已自 #518 搬出主仓），
@@ -554,6 +562,7 @@ checkResidentBudget();
 checkModelRouting();
 await checkCommandHelp();
 checkModeHookAlive();
+checkDispatchGateAlive();
 checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
