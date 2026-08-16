@@ -309,26 +309,20 @@ function cmdDispatch(args) {
   });
   if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
-  // ── 闭环接线（#546 追加第五件 → #559 换官方原语）：两个 Dispatch id 互相写进对方任务书 ──
+  // ── 闭环接线（#546 追加第五件 → #559 换官方原语 → 审官红项修正拓扑）──
   // #559 ①：send 要发 --to dispatch:<id>（结构化收件箱）不是 terminal handle。
-  // 士兵任务书 = 模板 + 本单 spec + 审官 dispatch id（完工后它自己通知审官，不发给帅）。
-  // 审官任务书 = 模板 + 士兵 dispatch id + merge-policy（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→通知帅可归档）。
+  // 拓扑硬约束：dispatch id 由 worker-start 创建，而 worker-start 需要先有 task，task 的 spec 就是任务书；
+  // 两份任务书都内嵌对方 dispatch id 互为前置、无合法顺序（审官红项实证）。所以：
+  //   · 士兵任务书 = 模板 + 本单 spec（**不含任何 dispatch id**；审官 dispatch id 以「审官身份」消息
+  //     发进士兵收件箱，notify 四关确认送达，先收信记下再发完工通知）。
+  //   · 审官任务书 = 模板 + 士兵 dispatch id（**先 worker-start 士兵拿到真 id 并校验，再渲染**）。
   let soldierBook = null;
-  let reviewerBook = null;
   try {
     soldierBook = args.spec
-      ? renderDispatchTemplate('soldier-book.md', {
-          SPEC: String(args.spec),
-          REVIEWER_DISPATCH_ID: String(created.reviewerDispatchId),
-        })
+      ? renderDispatchTemplate('soldier-book.md', { SPEC: String(args.spec) })
       : null;
-    reviewerBook = renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_DISPATCH_ID: String(created.workerDispatchId),
-      MERGE_POLICY: gate.mergePolicy,
-      MERGE_REASON: gate.mergeReason ? String(gate.mergeReason) : '',
-    });
   } catch (e) {
-    failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null, reviewerBook: null });
+    failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
   }
 
   let taskId = args.task || null;
@@ -362,6 +356,18 @@ function cmdDispatch(args) {
   if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, startProof: workerProof, ...plan, taskId });
 
   // 审官也是 worker：起自己的 task + worker-start，拿到编排身份才能收士兵消息、发红项、判绿后通知帅。
+  // 审官任务书此刻才渲染：SOLDIER_DISPATCH_ID = 上面已校验的真 id，结构上不可能再出现 dispatch:undefined。
+  let reviewerBook = null;
+  try {
+    reviewerBook = renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_DISPATCH_ID: String(created.workerDispatchId),
+      MERGE_POLICY: gate.mergePolicy,
+      MERGE_REASON: gate.mergeReason ? String(gate.mergeReason) : '',
+    });
+  } catch (e) {
+    failCreated(created, `审官任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook, taskId });
+  }
+
   let reviewerTaskId = null;
   let reviewerInject = null;
   let reviewerProof = null;
@@ -394,6 +400,23 @@ function cmdDispatch(args) {
     if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject, reviewerProof });
   }
 
+  // 士兵的「审官身份」：审官 dispatch id 发进士兵结构化收件箱（notify 四关确认送达；
+  // 失败 = 士兵完工时不知道该发到哪，整单回滚）。
+  if (!reviewerBook || !created.reviewerDispatchId) {
+    failCreated(created, '审官 dispatch id 没拿到（没查成）——不发身份消息，杜绝 审官身份：undefined', { ...plan, taskId, reviewerTaskId });
+  }
+  const identity = deliverMessage({
+    to: `dispatch:${created.workerDispatchId}`,
+    subject: `审官身份：${created.reviewerDispatchId}`,
+    body: `你的审官 dispatch id = ${created.reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
+先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
+    hop: '派工→士兵（审官身份）',
+    orca: (a) => orca(a),
+  });
+  if (!identity.ok) {
+    failCreated(created, `审官身份消息没送到士兵收件箱: ${identity.error}`, { ...plan, taskId, reviewerTaskId, identity });
+  }
+
   const comment = afterDispatchComment({
     name: args.name,
     worktreeId: created.workerId,
@@ -409,8 +432,9 @@ function cmdDispatch(args) {
     loop: {
       soldierBook: !!soldierBook,
       reviewerBook: !!reviewerBook,
-      soldierDoneTo: `dispatch:${created.reviewerDispatchId}`,   // 士兵完工消息的收件人 = 审官 Dispatch
-      reviewerRedTo: `dispatch:${created.workerDispatchId}`,     // 审官红项消息的收件人 = 士兵 Dispatch
+      soldierDoneTo: `dispatch:${created.reviewerDispatchId}`,   // 士兵完工消息的收件人 = 审官 Dispatch（身份消息送达士兵）
+      reviewerRedTo: `dispatch:${created.workerDispatchId}`,     // 审官红项消息的收件人 = 士兵 Dispatch（内嵌审官任务书）
+      identityTo: `dispatch:${created.workerDispatchId}`,        // 「审官身份」消息发进士兵收件箱（四关确认）
       archivedBy: '帅（归档动作帅做，审官不 rm 树）',
     },
     probes: { worker: workerEnv, reviewer: reviewerEnv },
@@ -419,6 +443,7 @@ function cmdDispatch(args) {
     startProof: workerProof,
     reviewerInject,
     reviewerProof,
+    identity,
     comment,
   });
 }

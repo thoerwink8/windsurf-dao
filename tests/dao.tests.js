@@ -630,12 +630,12 @@ async function main() {
 
     const soldier = S.renderDispatchTemplate('soldier-book.md', {
       SPEC: '短摘要：修 X',
-      REVIEWER_DISPATCH_ID: 'ctx_reviewer-1',
     });
     check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
-    check('soldier-book 填进审官 dispatch id', /ctx_reviewer-1/.test(soldier), soldier.slice(-200));
-    check('soldier-book 完工通知发 dispatch:<id> 不是 terminal handle', /--to dispatch:\{\{REVIEWER_DISPATCH_ID\}\}/.test(soldier) === false && /dispatch:ctx_reviewer-1/.test(soldier), soldier.slice(-220));
-    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_DISPATCH_ID/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
+    check('soldier-book 不再内嵌审官 dispatch id（身份消息另行送达，审官红项修正）', !/REVIEWER_DISPATCH_ID/.test(soldier) && !/dispatch:undefined/.test(soldier), soldier.slice(-220));
+    check('soldier-book 完工通知写 dispatch:<id> 且指明先收信取 id', /--to dispatch:/.test(soldier) && /审官身份/.test(soldier) && !/term_/.test(soldier), soldier.slice(-260));
+    check('soldier-book 要求完工后告知审官不告帅', /审官/.test(soldier));
+    check('soldier-book 渲染后无任何 dispatch:undefined', /dispatch:undefined/.test(soldier) === false);
 
     const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
       SOLDIER_DISPATCH_ID: 'ctx_worker-1',
@@ -654,9 +654,19 @@ async function main() {
     check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /gh pr ready/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
 
     let threw = false, threwMsg = '';
-    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_DISPATCH_ID
+    try { S.renderDispatchTemplate('reviewer-book.md', { MERGE_POLICY: 'auto', MERGE_REASON: '' }); } // 缺 SOLDIER_DISPATCH_ID
     catch (e) { threw = true; threwMsg = String(e.message || e); }
-    check('缺占位符值 → 抛', threw && /REVIEWER_DISPATCH_ID/.test(threwMsg), threwMsg);
+    check('缺占位符值 → 抛', threw && /SOLDIER_DISPATCH_ID/.test(threwMsg), threwMsg);
+
+    // 审官红项回归：dispatch id 缺失时渲染必须变红（不许出现 dispatch:undefined）
+    let threwU = false, uMsg = '';
+    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: String(undefined), MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    catch (e) { threwU = true; uMsg = String(e.message || e); }
+    check('审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红', threwU && /SOLDIER_DISPATCH_ID/.test(uMsg) && /dispatch:undefined|无效值/.test(uMsg), uMsg);
+    let threwN = false;
+    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: 'null', MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    catch (e) { threwN = true; }
+    check('审官红项回归：占位符填字面量 null 也抛', threwN);
 
     let notFound = false;
     try { S.renderDispatchTemplate('no-such-template.md', {}); }
@@ -668,11 +678,13 @@ async function main() {
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
-    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_DISPATCH_ID/.test(daoSrc));
+    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
     check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
     check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
     check('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', /extractDispatchId/.test(daoSrc));
     check('dao.mjs 输出双方收件 dispatch（loop 段，soldierDoneTo=dispatch:…）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc) && /dispatch:\$\{created\.reviewerDispatchId\}/.test(daoSrc));
+    check('审官红项修正：审官任务书在士兵 worker-start 之后才渲染', /SOLDIER_DISPATCH_ID: String\(created\.workerDispatchId\)/.test(daoSrc), '渲染顺序检查');
+    check('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', /审官身份/.test(daoSrc) && /identity/.test(daoSrc));
   }
 
   console.log('\n=== ⑨ 闭环三跳：投递失败必须炸，不许静默（#548 红项 1）===');

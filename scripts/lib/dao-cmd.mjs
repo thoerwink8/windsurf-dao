@@ -1130,13 +1130,19 @@ export function readDispatchTemplate(name) {
   return readFileSync(p, 'utf8');
 }
 
-/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。 */
+/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。
+ * #559 审官红项：占位符填成字面量 "undefined"/"null"（如 String(missingId)）等于没填，
+ * 必须抛——否则渲染出 dispatch:undefined，士兵/审官把消息发进不存在的收件箱。 */
 export function renderDispatchTemplate(name, vars = {}) {
   const text = readDispatchTemplate(name);
   const out = String(text).replace(/\{\{(\w+)\}\}/g, (m, key) => {
     const v = vars[key];
     if (v === undefined || v === null) throw new Error(`模板 ${name} 占位符 {{${key}}} 没给值`);
-    return String(v);
+    const s = String(v);
+    if (/^(undefined|null)$/i.test(s.trim())) {
+      throw new Error(`模板 ${name} 占位符 {{${key}}} 填了无效值（${s.trim()}）——真 id 缺失，不许渲染出 dispatch:undefined`);
+    }
+    return s;
   });
   if (/\{\{\w+\}\}/.test(out)) throw new Error(`模板 ${name} 还有未替换占位符`);
   return out;

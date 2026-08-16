@@ -119,11 +119,12 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 审官审完有红项，直接让工人改掉，内部解决完再报结果；实在解决不了才上帅（2026-08-14 拍板，issue #447）。
 
-**已接成机器闭环（#546 追加第五件，用户拍板；#559 换官方原语）**：`dao.mjs dispatch` 内部把两个 **Dispatch id** 互相写进对方任务书（不再用 terminal handle）：
+**已接成机器闭环（#546 追加第五件，用户拍板；#559 换官方原语 + 审官红项修正拓扑）**：`dao.mjs dispatch` 用 **Dispatch id**（不再用 terminal handle）接线：
 
-- 士兵任务书（`host/skills/dispatch/templates/soldier-book.md`）写进**审官 dispatch id**：完工后士兵**自己** `notify --to dispatch:<审官id>` 通知审官，不发给帅。
+- 士兵任务书（`host/skills/dispatch/templates/soldier-book.md`）**不内嵌**审官 dispatch id——派工那一刻审官 dispatch 还不存在（拓扑硬约束：两份任务书互嵌对方 dispatch id 互为前置、无合法顺序）；派工方把审官 id 以「**审官身份**」消息发进士兵结构化收件箱（notify 四关确认送达），士兵完工前先收信记下，再 `notify --to dispatch:<审官 id>`。
+- 审官任务书（`host/skills/dispatch/templates/reviewer-book.md`）内嵌**士兵 dispatch id**——先 worker-start 士兵拿到真 id 并校验（缺 id 当场 failCreated），**再渲染**审官任务书，结构上不可能出现 `dispatch:undefined`；审官红项 `notify --to dispatch:<士兵 id>` 发回士兵。
 - 闭环三跳（士兵→审官、审官→士兵、审官→帅）的发信口只有 `node scripts/dao.mjs notify` 一个：裸 `orca orchestration send` 对**不存在的收件人**也返回 exit 0 / `ok:true` / `delivered_at:null`，链断和链走完在帅眼里都是「没有消息」。`notify` 先证收件人在（terminal 读的 `terminal_handle_stale` / run-show 的 `run_not_found` / worker-show 的 `dispatch_not_found`）、再发、再核回执与落库，四关缺一即非零退出并打「链断」。`delivered_at` 只报出不当判据。**士兵↔审官互发一律 `--to dispatch:<id>`**（官方结构化收件箱，worker 的下一步 `orchestration check` 会收到）；审官→帅用 `run:<Run id>`。
-- 审官任务书（`host/skills/dispatch/templates/reviewer-book.md`）写进**士兵 dispatch id**：红 → `notify --to dispatch:<士兵id>` 发回士兵改；乒乓两轮仍红才上帅（上帅时带士兵 dispatch id，帅换人走 `worker-start --retry-of`）；绿 → 按 merge-policy 收口：auto 自己 `gh pr merge --auto`；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
+- 审官任务书还写：乒乓两轮仍红才上帅（上帅时带士兵 dispatch id，帅换人走 `worker-start --retry-of`）；绿 → 按 merge-policy 收口：auto 自己 `gh pr merge --auto`；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
 - 归档（`worktree rm`）由帅做——审官不能 rm 自己所在的树，它只负责把「可归档」通知到帅。
 - 模板是原则 + 「以当时的任务书为准」，不复制会随 #530 过时的具体职责（#507 教训）。
 
@@ -163,7 +164,7 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 `dispatch` 内部已经做完：选型闸、建工人卡、建审官卡（base 跟工人分支、建完核对 HEAD）、起终端、等 TUI 就绪、**注入任务书后再验开工**（屏上还挂着 `[Pasted Content N chars]` 就当没派出去）、失败回滚。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**闭环接线（#546 追加第五件 → #559 换官方原语）**：`dispatch` 把两个 **Dispatch id** 互相写进对方任务书——士兵任务书里写审官 dispatch id（完工后士兵自己 `dao.mjs notify --to dispatch:<审官id>` 通知审官，不发给帅——发不到当场非零，不静默断链）；审官也起自己的 task + worker-start（红→发回士兵；乒乓两轮仍红才上帅；绿→auto 自己合并 / manual 转 draft 后报帅）。审官那条「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件 → #559 换官方原语 → 审官红项修正）**：`dispatch` 用 Dispatch id 接线——士兵任务书不内嵌审官 id（身份消息送达，完工前先收信）；审官任务书内嵌士兵真 id（先起士兵校验再渲染，杜绝 dispatch:undefined）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人 / 给已有 PR 补审官，仍在约束载体内：
 
