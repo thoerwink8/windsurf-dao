@@ -472,7 +472,7 @@ function cmdDispatch(args) {
     role: gate.role,
     runGh: ghRunner(),
   });
-  if (!labels.ok) {
+  if (!labels.ok && !labels.skipped) {
     console.error(`[dao] dispatch label 没打上（派工本身成功）：${labels.error}`);
   }
 
