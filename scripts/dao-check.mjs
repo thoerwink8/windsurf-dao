@@ -37,6 +37,7 @@
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
+// ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -556,6 +557,50 @@ function checkCardCommentSamples() {
   green(`派工卡 comment 样本 ${files.length} 份（有区 ${kinds.ok} / 缺区 ${kinds.missing}）`);
 }
 
+// ── ⑭ open issue 数量阈值（#556）─────────────────────────────
+// 知识网堆回工作队列是不可感知型失效：每张单只多一条，看见时已细成一团（#556 实测：
+// 四天积 45 张、缠绕度 89%）。超过阈值报红，附「过一遍 ideas 分流」。
+// 判据独立：直接 JSON.parse gh 的输出，不复用仓内任何解析逻辑。
+// 「没查成」与「查了是 0」必须分得开：gh 不可用（没装/没登录/CI 无 token/断网）→ SKIP
+// 不是绿；输出不是合法 JSON number 数组 → 红（没查成）；parse 成功且 0 张 → 绿（真 0）。
+// 阈值是棘轮：本项上线时基线 44，默认取 44 = 最大允许数（「任何净新增立即报警」：
+// 第 45 张就红，n > max）。帅批量执行分流后应随之下调，目标 10（一组在施 + 下一批小活）。
+// 变异测试：DAO_CHECK_OPEN_ISSUE_MAX=0 必红（当前非零数据）；边界：44/44 绿、45/44 红。
+
+const OPEN_ISSUE_MAX_DEFAULT = 44;
+
+function checkOpenIssueCount() {
+  const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
+  if (!Number.isFinite(max) || max < 0) {
+    fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
+    return;
+  }
+  const r = spawnSync('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number'], { encoding: 'utf8', cwd: ROOT });
+  if (r.error) {
+    skip(`open 单数量阈值：本机没装 gh（${r.error.code}），本次没查成，不是绿`);
+    return;
+  }
+  if (r.status !== 0) {
+    skip(`open 单数量阈值：gh issue list 失败（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}），本次没查成，不是绿`);
+    return;
+  }
+  let doc;
+  try { doc = JSON.parse(r.stdout); } catch (e) {
+    fail('open 单数量没查成', 'gh issue list 输出不是 JSON——不许把没查成当查过没事', String(e.message || e).slice(0, 120));
+    return;
+  }
+  if (!Array.isArray(doc) || doc.some(x => !x || typeof x.number !== 'number')) {
+    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${Array.isArray(doc) ? '数组含非条目' : typeof doc}`);
+    return;
+  }
+  const n = doc.length;
+  if (n > max) {
+    fail(`open issue ${n} 张，超阈值 ${max}`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number');
+    return;
+  }
+  green(`open 单数量 ${n}/${max}`);
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -568,6 +613,7 @@ checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
+checkOpenIssueCount();
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
