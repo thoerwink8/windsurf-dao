@@ -43,6 +43,7 @@ import {
   resolveLaunch,
   reviewerCardName,
   rollbackReport,
+  renderDispatchTemplate,
   runGh,
   verifyInjection,
   verifyReviewerFiles,
@@ -278,9 +279,29 @@ function cmdDispatch(args) {
   const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
   if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
+  // ── 闭环接线（#546 追加第五件）：两个 handle 互相写进对方任务书，完工→审官→帅 ──
+  // 士兵任务书 = 模板 + 本单 spec + 审官 handle（完工后它自己通知审官，不发给帅）。
+  // 审官任务书 = 模板 + 士兵 handle + merge-policy（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→通知帅可归档）。
+  let soldierBook = null;
+  let reviewerBook = null;
+  try {
+    soldierBook = args.spec
+      ? renderDispatchTemplate('soldier-book.md', {
+          SPEC: String(args.spec),
+          REVIEWER_HANDLE: String(created.reviewerHandle),
+        })
+      : null;
+    reviewerBook = renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_HANDLE: String(created.workerHandle),
+      MERGE_POLICY: gate.mergePolicy,
+    });
+  } catch (e) {
+    failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null, reviewerBook: null });
+  }
+
   let taskId = args.task || null;
-  if (args.spec) {
-    const task = orca(argsTaskCreate({ spec: args.spec }));
+  if (soldierBook) {
+    const task = orca(argsTaskCreate({ spec: soldierBook }));
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
       failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
@@ -303,6 +324,33 @@ function cmdDispatch(args) {
   });
   if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, ...plan, taskId });
 
+  // 审官也是 worker：起自己的 task + worker-start，拿到编排身份才能收士兵消息、发红项、判绿后通知帅。
+  let reviewerTaskId = null;
+  let reviewerInject = null;
+  if (reviewerBook) {
+    const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+    if (!revTask.ok) {
+      if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, { ...plan, taskId });
+      failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, { ...plan, taskId });
+    }
+    reviewerTaskId = extractTaskId(revTask.json);
+    if (!reviewerTaskId) failCreated(created, '审官 task-create 没拿到 taskId', { ...plan, taskId });
+
+    const revStarted = orca(argsWorkerStart({
+      task: reviewerTaskId,
+      worktree: created.reviewerId,
+      terminal: created.reviewerHandle,
+    }));
+    if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, taskId, reviewerTaskId });
+
+    const revInjectRead = readOnceHandle(created.reviewerHandle);
+    reviewerInject = verifyInjection({
+      text: revInjectRead.error ? undefined : extractTerminalText(revInjectRead),
+      readError: revInjectRead.error,
+    });
+    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject });
+  }
+
   const comment = afterDispatchComment({
     name: args.name,
     worktreeId: created.workerId,
@@ -314,9 +362,18 @@ function cmdDispatch(args) {
     ...plan,
     ...created,
     taskId,
+    reviewerTaskId,
+    loop: {
+      soldierBook: !!soldierBook,
+      reviewerBook: !!reviewerBook,
+      soldierDoneTo: created.reviewerHandle,   // 士兵完工消息的收件人 = 审官 handle
+      reviewerRedTo: created.workerHandle,     // 审官红项消息的收件人 = 士兵 handle
+      archivedBy: '帅（归档动作帅做，审官不 rm 树）',
+    },
     probes: { worker: workerEnv, reviewer: reviewerEnv },
     heads,
     inject: injected,
+    reviewerInject,
     comment,
   });
 }

@@ -983,6 +983,40 @@ export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
   return base;
 }
 
+// ── 闭环任务书模板（#546 追加第五件）──────────────────────────
+// 士兵 / 审官任务书模板在 host/skills/dispatch/templates/，不硬编码进代码——
+// 模板要能被读、被改（#507 教训：写原则 + 「以当时的任务书为准」，别写死会过时的具体职责）。
+// 占位符 {{KEY}} 填充失败（模板缺文件 / 占位符没被换掉）必须失败退出，不许带着空位派出去。
+
+export const DISPATCH_TEMPLATE_DIR = join(ROOT, 'host', 'skills', 'dispatch', 'templates');
+
+export function listDispatchTemplates() {
+  if (!existsSync(DISPATCH_TEMPLATE_DIR)) return [];
+  return readdirSync(DISPATCH_TEMPLATE_DIR)
+    .filter(f => f.endsWith('.md'))
+    .sort();
+}
+
+/** 读模板原文。拿不到就抛（同 dao 全局：不许静默当成空模板）。 */
+export function readDispatchTemplate(name) {
+  if (!/^[a-z0-9-]+\.md$/.test(String(name || ''))) throw new Error(`模板名不合法: ${name}`);
+  const p = join(DISPATCH_TEMPLATE_DIR, name);
+  if (!existsSync(p)) throw new Error(`任务书模板不在: ${p}`);
+  return readFileSync(p, 'utf8');
+}
+
+/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。 */
+export function renderDispatchTemplate(name, vars = {}) {
+  const text = readDispatchTemplate(name);
+  const out = String(text).replace(/\{\{(\w+)\}\}/g, (m, key) => {
+    const v = vars[key];
+    if (v === undefined || v === null) throw new Error(`模板 ${name} 占位符 {{${key}}} 没给值`);
+    return String(v);
+  });
+  if (/\{\{\w+\}\}/.test(out)) throw new Error(`模板 ${name} 还有未替换占位符`);
+  return out;
+}
+
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
 
 export function recordEscape({ argv, ts = new Date().toISOString(), cwd = process.cwd() } = {}, logPath = ESCAPE_LOG) {

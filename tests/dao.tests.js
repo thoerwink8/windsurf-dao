@@ -562,6 +562,49 @@ async function main() {
     check('reviewer-create 缺 --pr → 非零', revMiss.status !== 0 && /--pr/.test(String(pRevMiss.error || revMiss.stderr || '')), JSON.stringify(pRevMiss));
   }
 
+  console.log('\n=== #546 追加第五件：士兵—审官闭环任务书模板 ===');
+  {
+    const tmplDir = path.join(REPO, 'host', 'skills', 'dispatch', 'templates');
+    const files = S.listDispatchTemplates();
+    check('模板目录有 soldier-book.md + reviewer-book.md', files.includes('soldier-book.md') && files.includes('reviewer-book.md'), files.join(','));
+
+    const soldier = S.renderDispatchTemplate('soldier-book.md', {
+      SPEC: '短摘要：修 X',
+      REVIEWER_HANDLE: 'term_reviewer-1',
+    });
+    check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
+    check('soldier-book 填进审官 handle', /term_reviewer-1/.test(soldier), soldier.slice(-200));
+    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_HANDLE/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
+
+    const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_HANDLE: 'term_worker-1',
+      MERGE_POLICY: 'auto',
+    });
+    check('reviewer-book 填进士兵 handle', /term_worker-1/.test(reviewer));
+    check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
+    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_HANDLE/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+
+    let threw = false, threwMsg = '';
+    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_HANDLE
+    catch (e) { threw = true; threwMsg = String(e.message || e); }
+    check('缺占位符值 → 抛', threw && /REVIEWER_HANDLE/.test(threwMsg), threwMsg);
+
+    let notFound = false;
+    try { S.renderDispatchTemplate('no-such-template.md', {}); }
+    catch (e) { notFound = true; }
+    check('模板文件不在 → 抛（不静默空模板）', notFound);
+
+    const badName = (() => { try { S.readDispatchTemplate('..\evil.md'); return false; } catch { return true; } })();
+    check('模板名不合法 → 拒绝', badName);
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
+    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_HANDLE/.test(daoSrc));
+    check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
+    check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
+    check('dao.mjs 输出双方收件 handle（loop 段）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc));
+  }
+
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
