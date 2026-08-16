@@ -42,10 +42,15 @@
 
 ```bash
 node scripts/dao.mjs notify --hop "审官→帅" --to run:<你这单的 Run id> \
-  --type worker_done --outcome succeeded --subject "可归档：<PR号>" --body "<判绿依据 + 合并结果>"
+  --subject "可归档：<PR号>" --body "<判绿依据 + 合并结果>"
 ```
 
 （语义是「这单可以归档了」；Run id 从 `orca orchestration run-current` 取，别手抄。）
+
+**这条是普通告知，不是结算信号**——不要加 `--type worker_done`。它**不会**把你自己的
+Dispatch 结算掉（编排里那条任务不会因此变 completed）；把普通通知伪装成 `worker_done`
+只会让面板显示得像结算了而实际没有，比不发更糟。Dispatch 结算是另一件事，见 **issue #551**。
+
 **确认送达才算收尾**：`notify` 非零 = 帅那边永远等不到这条，本单在面板上会一直挂着——
 必须当场报出来并重发，不许把「发过了」当「归档通知到位了」。
 **归档动作本身（worktree rm）由帅做，你不执行也不省略这个通知。**

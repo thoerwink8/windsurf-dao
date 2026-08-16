@@ -1134,6 +1134,12 @@ export function findInboxMessage(inboxJson, messageId) {
 /**
  * 闭环一跳的投递：收件人在 → 发 → 有回执 → 落库可查。四关缺一即失败。
  * 失败一律返回 ok:false（调用方非零退出并升级），不许当「发成功了只是还没读」。
+ *
+ * 边界（别误读）：**四关验的是投递，不是结算**。`ok:true` 只说明这条消息确实进了
+ * 收件人的信箱，不代表对面读了、更不代表事情办完了——编排里那条任务不会因为
+ * 发过一条消息就变 completed。要「发出即结算」的信号（worker_done 那类）另有一套
+ * Dispatch 身份要求，notify 目前不提供，见 issue #551；在那之前不要给 notify 加
+ * `--type worker_done` 来假装结算：面板会显示成结算了而实际没有，比不发更糟。
  */
 export function deliverMessage({
   to = null, subject, body = '', type, outcome, hop = '闭环通知', orca, inboxLimit = 50,
@@ -1295,6 +1301,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
 落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
 delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
+notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱，不代表对面读了、
+更不代表编排里那条任务变 completed。别加 --type worker_done 假装结算（见 issue #551）。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
