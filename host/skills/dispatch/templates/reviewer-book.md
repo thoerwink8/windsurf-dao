@@ -54,6 +54,10 @@ review 正文**首行**必须原样写判定行，只允许这四种形态，一
     （改回 ready 用 `gh pr ready <PR号>`）；然后通知帅「需人工合并」并把派单理由带上：`理由：{{MERGE_REASON}}`。
     帅合并、解除 draft 后才收尾。
 
+  合并前（两条路都跑）：`node scripts/dao.mjs pr-sync-labels --pr <PR号>`——把署名 issue 上的
+  `model/*` `type/*` label 同步到 PR（#564：dispatch 时已打到 issue，校准数据源；worker 手打遗漏时
+  这道兜底抄上去；非零退出 = 没同步成，查报错补上再合并，不许带着空 label 合）。
+
 ### 3. 收尾（最关键的一条）
 
 判绿且合并完成之后，**由你通知帅「可归档」**：

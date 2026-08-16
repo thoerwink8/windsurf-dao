@@ -380,6 +380,91 @@ async function main() {
     check('dao.mjs dispatch 与 worker-start 都调消歧门', (daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, daoSrc565.slice(0, 60));
   }
 
+  console.log('\n=== #564 label 自动打：dispatch 记 issue + pr-sync-labels 合并侧同步到 PR ===');
+  {
+    // 纯函数：label 名组装（角色缺省写码）。
+    const ln1 = S.dispatchLabelNames({ model: 'grok-4.6' });
+    check('label 名：model/<id> + type/写码（缺省）', ln1.includes('model/grok-4.6') && ln1.includes('type/写码'), JSON.stringify(ln1));
+    const ln2 = S.dispatchLabelNames({ model: 'gpt-5.6-sol', role: '审查' });
+    check('label 名：给角色 → type/<角色>', ln2.includes('model/gpt-5.6-sol') && ln2.includes('type/审查') && !ln2.includes('type/写码'), JSON.stringify(ln2));
+
+    // PR 署名单号：只认 Closes/Fixes 关键词，正文随手引用的 #N 不算。
+    const refs = S.linkedIssueNumbers('Closes #564\n参考 #498 #480（历史相关）');
+    check('署名单号只认 Closes 关键词（#498 #480 不被抄 label）',
+      refs.length === 1 && refs[0] === 564, JSON.stringify(refs));
+    const refs2 = S.linkedIssueNumbers('Fixes #12');
+    check('Fixes 也算署名单号', refs2.length === 1 && refs2[0] === 12, JSON.stringify(refs2));
+
+    // dispatch 侧打标：stub runGh 验证调用面（label list → 缺的建 → issue edit --add-label）。
+    const calls = [];
+    const recGh = (a) => {
+      calls.push(a.slice());
+      if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }]) };
+      if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
+      if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: `未预期 ${a.join(' ')}` };
+    };
+    const stamped = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', runGh: recGh });
+    check('dispatch 打标成功：names 对、缺的 label 先建、issue edit 带 --add-label',
+      stamped.ok === true && stamped.names.length === 2
+      && calls.some(a => a[0] === 'label' && a[1] === 'create' && a[2] === 'type/写码')
+      && calls.some(a => a[0] === 'issue' && a[1] === 'edit' && a[2] === '123' && a.includes('--add-label') && a.includes('model/grok-4.6') && a.includes('type/写码')),
+      JSON.stringify({ stamped, calls }));
+
+    // 没 gh 执行器 / 没合法 issue：不许当「查过没事」。
+    const noGh = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', runGh: null });
+    check('打标没 gh 执行器 → 报没查成', noGh.ok === false && noGh.unscanned === true, JSON.stringify(noGh));
+    const skip = S.stampIssueLabels({ issue: '', model: 'grok-4.6', runGh: recGh });
+    check('打标没合法 issue 号 → skipped 不瞎打', skip.ok === false && skip.skipped === true, JSON.stringify(skip));
+
+    // 合并侧同步：stub runGh（PR 正文 Closes #7，issue #7 有 model+type）。
+    const syncGh = (a) => {
+      calls2.push(a.slice());
+      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '修 X', body: 'Closes #7\n验收：过' }) };
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: '已消歧' }] }) };
+      if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
+      if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: `未预期 ${a.join(' ')}` };
+    };
+    const calls2 = [];
+    const synced = S.syncPrLabelsFromIssue({ pr: '7', runGh: syncGh });
+    check('pr-sync-labels：从署名 issue 把 model/type 抄到 PR（非 model/type 不抄）',
+      synced.ok === true && synced.labels.length === 2 && synced.labels.includes('model/grok-4.6') && synced.labels.includes('type/写码')
+      && calls2.some(a => a[0] === 'pr' && a[1] === 'edit' && a[2] === '7' && a.includes('--add-label')),
+      JSON.stringify({ synced, calls2 }));
+
+    // PR 没署名单号 → 说清楚，不许静默。
+    const noRef = S.syncPrLabelsFromIssue({ pr: '9', runGh: (a) => {
+      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: '无署名', body: '改动：修 bug' }) };
+      return { ok: false, error: `未预期 ${a.join(' ')}` };
+    } });
+    check('pr-sync-labels 无署名单号 → 报错需人工补', noRef.ok === false && /Closes|署名/.test(noRef.error), JSON.stringify(noRef));
+
+    // 署名 issue 没有 model/type label → 说清楚。
+    const noLabel = S.syncPrLabelsFromIssue({ pr: '10', runGh: (a) => {
+      if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #10' }) };
+      if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: '已消歧' }] }) };
+      return { ok: false, error: `未预期 ${a.join(' ')}` };
+    } });
+    check('署名 issue 无 model/type → 报错需人工补', noLabel.ok === false && /model|type/.test(noLabel.error), JSON.stringify(noLabel));
+
+    // CLI 级：pr-sync-labels --pr 42（fake-gh 固定：正文 Closes #565，565 带 model/type）→ 退出 0。
+    const FAKE_GH2 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
+    const cliSync = spawnSync(process.execPath, [CLI, 'pr-sync-labels', '--pr', '42'], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH2 } });
+    const pSync = (() => { try { return JSON.parse((cliSync.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI pr-sync-labels --pr 42（假 gh）→ 退出 0 且 label 抄到',
+      cliSync.status === 0 && pSync.ok === true && (pSync.labels || []).includes('model/grok-4.6') && (pSync.labels || []).includes('type/写码'),
+      `status=${cliSync.status} ${JSON.stringify(pSync)}`);
+    const cliSyncNoRef = spawnSync(process.execPath, [CLI, 'pr-sync-labels', '--pr', '41'], { encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH2 } });
+    const pSyncNoRef = (() => { try { return JSON.parse((cliSyncNoRef.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI pr-sync-labels 无署名单号 → 非 0 且说清',
+      cliSyncNoRef.status !== 0 && /署名/.test(String(pSyncNoRef.error || '')), `status=${cliSyncNoRef.status} ${JSON.stringify(pSyncNoRef)}`);
+
+    const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
+    check('dao.mjs dispatch 成功后调 stampIssueLabels', /stampIssueLabels\(\{/.test(daoSrcLabels), daoSrcLabels.slice(0, 60));
+  }
+
+
   console.log('\n=== #565 追加：注入后开工验证 = 轮询 + 命中 Pasted Content 自动补回车救活 ===');
   {
     const MARKER = '› [Pasted Content 7383 chars]\n';
