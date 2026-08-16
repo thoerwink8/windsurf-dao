@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-gate.mjs\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/dispatch-gate-hook.mjs\"",
             "timeout": 8
           }
         ]
