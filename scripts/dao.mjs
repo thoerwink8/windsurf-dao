@@ -29,6 +29,7 @@ import {
   assertCodexLaunch,
   catalogUsedFlags,
   checkHelpLiveness,
+  checkIssueDisambiguated,
   deliverMessage,
   dispatchComment,
   envProbeWorktree,
@@ -228,8 +229,16 @@ function cmdDispatch(args) {
   const hereBranch = gitBranchName(process.cwd());
   plan.reviewerBase = hereBranch.ok ? hereBranch.branch : '(工人树当前分支)';
 
+  // 消歧门（#565）：带 --issue 的目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
+  // dry-run 同样拦——预览一个根本派不出去的活等于假绿灯；gh 查失败单独报「没查成」，不许当有 label 放行。
+  // 门在一切建卡动作之前：被拦下时什么都不会创建。
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh });
+  if (!disambiguation.ok) {
+    fail(disambiguation.error, { disambiguation, ...plan });
+  }
+
   if (args.dryRun) {
-    emit({ ok: true, dryRun: true, ...plan });
+    emit({ ok: true, dryRun: true, ...plan, disambiguation });
   }
   if (!args.name) fail('dispatch 要 --name');
 
@@ -540,6 +549,10 @@ function cmdWorkerStart(args) {
   constrainDispatch(args, routing);
   if (!args.task) fail('worker-start 要 --task');
   if (!args.terminal) fail('worker-start 要 --terminal（不用 --agent，参数在启动模板里）');
+  // 消歧门（#565）：worker-start 带 --issue 同样受门控（项化路径续派/换人时带号）。
+  // 在碰 orca 之前拦：被拦下时不会起任何终端/任务。
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh });
+  if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   // #559 ②：worker_done 后同一终端续 Dispatch 走 worker-start --task <next> --terminal <handle>，
   // 不用 --worktree（工作区由终端决定，官方：Reuse an existing agent only with --terminal <handle>）。
   const r = orca(argsWorkerStart({
