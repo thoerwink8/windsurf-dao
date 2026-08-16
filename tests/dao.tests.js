@@ -461,6 +461,12 @@ async function main() {
     check('worktree create 带 --no-parent --setup --json', wt.includes('--no-parent') && wt.includes('--setup') && wt.includes('--json'));
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
     check('worker-start 用 --terminal 不用 --agent', ws.includes('--terminal') && !ws.includes('--agent'));
+    const wsContinue = S.argsWorkerStart({ task: 't', terminal: 'h' });
+    check('#559 续 Dispatch：worker-start 可只给 --task + --terminal（不带 --worktree）', wsContinue.includes('--task') && wsContinue.includes('--terminal') && !wsContinue.includes('--worktree'), wsContinue.join(' '));
+    const wsRetry = S.argsWorkerStart({ task: 't', terminal: 'h', retryOf: 'ctx_old' });
+    check('#559 换人：worker-start --retry-of 透传旧 dispatch id', wsRetry.includes('--retry-of') && wsRetry[wsRetry.indexOf('--retry-of') + 1] === 'ctx_old', wsRetry.join(' '));
+    const parsedContinue = S.parseArgs(['node', 'dao.mjs', 'worker-start', '--task', 't', '--terminal', 'h', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol']);
+    check('#559 续 Dispatch：CLI 收 --task+--terminal 不带 --worktree', parsedContinue.task === 't' && parsedContinue.terminal === 'h' && parsedContinue.worktree === undefined, JSON.stringify(parsedContinue));
 
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-escape-'));
     const log = path.join(tmp, 'cmd-escape.jsonl');
