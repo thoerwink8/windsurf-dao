@@ -16,7 +16,7 @@ updated = "2026-08-16"
 [providers.deepseek]
 cli = "pi"
 default_model = "deepseek-v4-flash"   # 拍板 issue #462：pi 派单默认 flash（~/.pi/agent/settings.json 已手改，本字段固化）；ds-pro 仅限重型任务
-launch = "pi --model {model}"
+launch = "pi --provider deepseek --model {model}"
 launch_model = "deepseek-v4-flash"
 launch_note = """
 DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
