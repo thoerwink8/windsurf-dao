@@ -21,7 +21,9 @@ export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
 export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
 /** 探针等屏默认值。一个所有已知情况都不成立的缺省值是陷阱：
  * grok 配 45s、codex 第一项实测 84s，没有任何 TUI 能在 8s 内跑完第一项。
- * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。 */
+ * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。
+ * #559：waitAndVerify 原默认 8000ms 硬编码，pi 启动加载 skills 常常超过，
+ * 派工连续死在这里——默认改为本常量，调用方再按 provider 的 probe_wait_ms 显式覆盖。 */
 export const DEFAULT_PROBE_WAIT_MS = 120000;
 
 export function probeWaitMs(routing, provider) {
@@ -454,7 +456,7 @@ export function verifyStarted(readJson) {
   return { ok: true, text, unscanned: false };
 }
 
-export function waitAndVerify({ readOnce, timeoutMs = 8000, intervalMs = 400, sleep = sleepSync } = {}) {
+export function waitAndVerify({ readOnce, timeoutMs = DEFAULT_PROBE_WAIT_MS, intervalMs = 400, sleep = sleepSync } = {}) {
   if (typeof readOnce !== 'function') throw new Error('waitAndVerify 要 readOnce');
   const t0 = Date.now();
   let last = { ok: false, reason: '读了是空的', text: '', unscanned: false };

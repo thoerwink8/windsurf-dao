@@ -390,7 +390,8 @@ async function main() {
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('#546 dao.mjs 不再按 agent 等探针', !/probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
+    check('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', /probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), 'waitAndVerify 要按 provider 覆盖 timeoutMs');
+    check('#559 waitAndVerify 默认超时不再是 8000ms', !/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
     check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
     check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
