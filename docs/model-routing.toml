@@ -190,7 +190,8 @@ decided = "2026-08-12"
 
 # opencode Go 新增模型（2026-08-16 接入，拍板见 [providers.opencode-go].why）。
 # ds-flash/pro 不在这里另立条目——它们和直连是同一个模型，只是换通道，见上面两条。
-# 2026-08-16 实测通过：glm-5.2 / minimax-m3 / grok-4.5 / kimi-k3 均正常返回；
+# 用户 2026-08-16 拍板 og 通道只留 4 个模型：deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3；
+# 2026-08-16 实测通过：kimi-k3 正常返回；glm-5.2 / minimax-m3 / grok-4.5 已随拍板移出 og 通道，不入表；
 # gpt-5.6-luna 被上游按区域 403 拒（"not available in your region"），不入表；
 # deepseek-v4-flash-free 属 Zen 侧且已被服务端禁用（"Model is disabled"），不入表。
 
@@ -202,6 +203,16 @@ roles = ["写码", "判断"]
 status = "试用"
 trial_since = "2026-08-16"
 why = "GLM 系主打编码，1M 上下文 / 131K 输出；先进写码+判断候选池，按返工率实测校准再谈定位（用户拍板 2026-08-16）"
+decided = "2026-08-16"
+
+[[models]]
+id = "kimi-k3"
+provider = "opencode-go"
+cli_model = "kimi-k3"
+roles = ["写码", "判断"]
+status = "试用"
+trial_since = "2026-08-16"
+why = "用户 2026-08-16 拍板保留的 4 个 og 模型之一（deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3）；先进写码+判断候选池，按返工率实测校准再谈定位"
 decided = "2026-08-16"
 
 # ── 时间窗路由：同一任务类分时段路由到不同模型 ───────────────────────────
