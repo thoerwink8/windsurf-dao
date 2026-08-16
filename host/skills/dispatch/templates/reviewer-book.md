@@ -44,11 +44,11 @@ review 正文**首行**必须原样写判定行，只允许这四种形态，一
 
 - **乒乓两轮仍红**：才上帅（既有规矩，别改——这是换人信号）。上帅时把士兵的 Dispatch id
   （`{{SOLDIER_DISPATCH_ID}}`）一并报上，帅换人走 `worker-start --task <task> --retry-of <id>`，战绩不断链。
-- **绿**：按 merge-policy `{{MERGE_POLICY}}` 收口，两条路分开（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上）：
+- **绿**：按 merge-policy `{{MERGE_POLICY}}` 收口（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上），两条路分开：
 
-  - `{{MERGE_POLICY}}` = **auto**（默认）：**你自己合并**，不再问帅：`gh pr merge <PR号> --auto`
+  - `merge-policy: auto`（默认）：**你自己合并**，不再问帅：`gh pr merge <PR号> --auto`
     （服务端 auto-merge，checks 过了自动合；当时合并命令以审读规矩为准）。合并完进第 3 步。
-  - `{{MERGE_POLICY}}` = **manual**（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
+  - `merge-policy: manual`（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
     **转 draft**（机器可读的「禁止合并」状态，draft PR 在 GitHub 上无法正常合并，这是 #549 审官
     第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，`gh pr ready <PR号> --undo` 转 draft
     （改回 ready 用 `gh pr ready <PR号>`）；然后通知帅「需人工合并」并把派单理由带上：`理由：{{MERGE_REASON}}`。
