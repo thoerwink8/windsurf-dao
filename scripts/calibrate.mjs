@@ -61,7 +61,10 @@ export function reworkFromVerdictLines(bodies) {
 //   - 判定行 1 条 → 「0 轮（判定行 1 条：审过一次，零返工）」
 //   - 判定行 N>1 条 → 「N-1 轮（判定行 N 条）」
 //   - 0 条判定行 → 「无判定行（本项没测成）」并说明可能原因——不是 0 轮。
-export function describeRework(rework) {
+export function describeRework(rework, malformed = []) {
+  if (malformed.length > 0) {
+    return `判定行不合规（没查成）：${malformed.map(m => `「${m.attempt || '?'}」`).join('、')}——格式只认 判定：红 N 项 / 判定：绿，可合并 / 复核结论：…（见 scripts/lib/judgment.mjs），流转器与校准都把它当没查成，不许当无判定`;
+  }
   if (rework === null || rework === undefined) {
     return '无判定行（本项没测成）：PR 上一条审官判定行都没有——审读可能走了 Orca 消息没落 PR review，流转器自动同步（缺陷一修法）生效后会自动补上';
   }
@@ -124,6 +127,7 @@ export function buildRows(samples, models = [], taskTypes = TASK_TYPES) {
           number: sample.number,
           rework: sample.rework,
           redFlags: sample.redFlags,
+          malformed: (sample.judgmentMalformed || []).length > 0,
         })),
       });
     }
@@ -136,7 +140,7 @@ export function renderRow(row) {
     return `| ${row.model} | ${row.taskType} | 无样本 | 无样本 | 无样本 | 无样本 |`;
   }
   const trend = row.trend
-    .map(item => `#${item.number} ${item.rework === null || item.rework === undefined ? '无判定' : item.rework}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
+    .map(item => `#${item.number} ${item.malformed ? '判定不合规' : (item.rework === null || item.rework === undefined ? '无判定' : item.rework)}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
     .join(' → ');
   const avgRework = row.averageRework === null || row.averageRework === undefined
     ? '无判定行'
@@ -279,7 +283,7 @@ function renderSingleReport(sample, cumulativeRow, unlabelledCount) {
     `- 状态：${stateName(sample)}`,
     `- 模型：${sample.model || '未标注'}`,
     `- 任务类：${sample.taskType || '未标注'}`,
-    `- 返工轮数：${describeRework(sample.rework)}`,
+    `- 返工轮数：${describeRework(sample.rework, sample.judgmentMalformed || [])}`,
     `- review 条数：${sample.reviewCount ?? 0}`,
     `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（0 条 review，未审不等于 0 红）' : sample.redFlags}`, 
     '',

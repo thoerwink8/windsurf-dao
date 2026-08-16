@@ -278,6 +278,11 @@ async function main() {
     check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
     check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
+    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '559', '--spec', '短摘要', '--dry-run']);
+    const pIssue = payload(okIssue);
+    check('#559 追加：dry-run 带 --issue → 卡名带号', okIssue.status === 0 && pIssue.workerCard === '#559 - 修地基' && pIssue.reviewerCard === '#559 - 审官·gpt-5.6-sol', JSON.stringify(pIssue));
+    check('#559 追加：dry-run 带 --issue → issue 字段透出', pIssue.issue === '559', JSON.stringify(pIssue));
+
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
     const roleOnly = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pRole = payload(roleOnly);
@@ -390,7 +395,8 @@ async function main() {
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('#546 dao.mjs 不再按 agent 等探针', !/probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
+    check('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', /probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), 'waitAndVerify 要按 provider 覆盖 timeoutMs');
+    check('#559 waitAndVerify 默认超时不再是 8000ms', !/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
     check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
     check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
@@ -458,8 +464,42 @@ async function main() {
   {
     const wt = S.argsWorktreeCreate({ name: 'x', noParent: true, setup: 'skip' });
     check('worktree create 带 --no-parent --setup --json', wt.includes('--no-parent') && wt.includes('--setup') && wt.includes('--json'));
+    const wtIssue = S.argsWorktreeCreate({ name: '修地基', issue: 559 });
+    check('#559 追加：worktree create 带 --issue 透传', wtIssue.includes('--issue') && wtIssue[wtIssue.indexOf('--issue') + 1] === '559', wtIssue.join(' '));
+    check('#559 追加：assembleCardName 拼 #<issue> - <动宾短语>', S.assembleCardName({ name: '修地基', issue: 559 }) === '#559 - 修地基', S.assembleCardName({ name: '修地基', issue: 559 }));
+    check('#559 追加：assembleCardName 幂等（name 已带 #N 前缀）', S.assembleCardName({ name: '#559 - 修地基', issue: 559 }) === '#559 - 修地基', S.assembleCardName({ name: '#559 - 修地基', issue: 559 }));
+    check('#559 追加：assembleCardName 子卡 = #N - 审官·模型', S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), issue: 559 }) === '#559 - 审官·gpt-5.6-sol');
+    check('#559 追加：没给 issue 原样返回', S.assembleCardName({ name: '审读 #505' }) === '审读 #505' && S.assembleCardName({ name: 'x' }) === 'x');
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
     check('worker-start 用 --terminal 不用 --agent', ws.includes('--terminal') && !ws.includes('--agent'));
+    const wsContinue = S.argsWorkerStart({ task: 't', terminal: 'h' });
+    check('#559 续 Dispatch：worker-start 可只给 --task + --terminal（不带 --worktree）', wsContinue.includes('--task') && wsContinue.includes('--terminal') && !wsContinue.includes('--worktree'), wsContinue.join(' '));
+    const wsRetry = S.argsWorkerStart({ task: 't', terminal: 'h', retryOf: 'ctx_old' });
+    check('#559 换人：worker-start --retry-of 透传旧 dispatch id', wsRetry.includes('--retry-of') && wsRetry[wsRetry.indexOf('--retry-of') + 1] === 'ctx_old', wsRetry.join(' '));
+    const parsedContinue = S.parseArgs(['node', 'dao.mjs', 'worker-start', '--task', 't', '--terminal', 'h', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol']);
+    check('#559 续 Dispatch：CLI 收 --task+--terminal 不带 --worktree', parsedContinue.task === 't' && parsedContinue.terminal === 'h' && parsedContinue.worktree === undefined, JSON.stringify(parsedContinue));
+
+    check('#559 ③ reply 已登记进 VERBS', S.VERBS.includes('reply'), S.VERBS.join(','));
+    const replyArgs = S.argsOrchestrationReply({ id: 'msg_q1', body: '可以' });
+    check('reply 拼 --id + --body', replyArgs.includes('--id') && replyArgs[replyArgs.indexOf('--id') + 1] === 'msg_q1' && replyArgs[replyArgs.indexOf('--body') + 1] === '可以', replyArgs.join(' '));
+    const replyParsed = S.parseArgs(['node', 'dao.mjs', 'reply', '--id', 'msg_q1', '--body', '可以']);
+    check('CLI 收 reply --id/--body', replyParsed.id === 'msg_q1' && replyParsed.body === '可以', JSON.stringify(replyParsed));
+
+    check('#559 ④ gate-create/gate-resolve/gate-list 已登记进 VERBS', S.VERBS.includes('gate-create') && S.VERBS.includes('gate-resolve') && S.VERBS.includes('gate-list'), S.VERBS.join(','));
+    const gc = S.argsGateCreate({ task: 'task_x', question: '乒乓两轮仍红，换人？', options: '["换","不换"]' });
+    check('gate-create 拼 --task/--question/--options', gc.includes('--task') && gc.includes('--question') && gc.includes('--options'), gc.join(' '));
+    const gr = S.argsGateResolve({ id: 'gate_x', resolution: '换' });
+    check('gate-resolve 拼 --id/--resolution', gr.includes('--id') && gr[gr.indexOf('--resolution') + 1] === '换', gr.join(' '));
+    const gl = S.argsGateList({ task: 'task_x', status: 'pending' });
+    check('gate-list 拼 --task/--status', gl.includes('--task') && gl.includes('--status'), gl.join(' '));
+    const gateParsed = S.parseArgs(['node', 'dao.mjs', 'gate-resolve', '--id', 'gate_x', '--resolution', '换']);
+    check('CLI 收 gate-resolve --id/--resolution', gateParsed.id === 'gate_x' && gateParsed.resolution === '换', JSON.stringify(gateParsed));
+
+    check('#559 ⑤ worker-release 已登记进 VERBS', S.VERBS.includes('worker-release'), S.VERBS.join(','));
+    const wr = S.argsWorkerRelease({ dispatch: 'ctx_x' });
+    check('worker-release 拼 --dispatch', wr.includes('--dispatch') && wr[wr.indexOf('--dispatch') + 1] === 'ctx_x', wr.join(' '));
+    const wrParsed = S.parseArgs(['node', 'dao.mjs', 'worker-release', '--dispatch', 'ctx_x']);
+    check('CLI 收 worker-release --dispatch', wrParsed.dispatch === 'ctx_x', JSON.stringify(wrParsed));
 
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-escape-'));
     const log = path.join(tmp, 'cmd-escape.jsonl');
@@ -521,6 +561,19 @@ async function main() {
     const landed = S.verifyInjection({ text: '短摘要：修命令库\nThinking...\n' });
     check('屏上无 Pasted Content → 注入验证绿', landed.ok === true, JSON.stringify(landed));
 
+    // #559 ⑥：判开工优先 worker-read --source auto（官方可证明 transcript 源）
+    const provenAuto = S.verifyWorkerStarted({ ok: true, result: { source: 'auto', transcript: { messages: [] } } });
+    check('#559 worker-read source=auto → 开工证明绿（官方 transcript 源）', provenAuto.ok === true && provenAuto.proven === true, JSON.stringify(provenAuto));
+    const provenTranscript = S.verifyWorkerStarted({ ok: true, result: { source: 'transcript', transcript: { messages: [{ role: 'user', blocks: [] }] } } });
+    check('#559 worker-read source=transcript → 同样绿', provenTranscript.ok === true && provenTranscript.proven === true, JSON.stringify(provenTranscript));
+    const weakTerminal = S.verifyWorkerStarted({ ok: true, result: { source: 'terminal', fallbackReason: 'no_hook_report', terminal: { tail: [] } } });
+    check('#559 worker-read source=terminal → 降级（proven=false，带 fallbackReason）', weakTerminal.ok === false && weakTerminal.proven === false && weakTerminal.fallbackReason === 'no_hook_report', JSON.stringify(weakTerminal));
+    const unreadProof = S.verifyWorkerStarted({ ok: false, error: { code: 'dispatch_not_found', message: 'x' } });
+    check('#559 worker-read 没读成 → unscanned（不许当成没开工）', unreadProof.ok === false && unreadProof.unscanned === true, JSON.stringify(unreadProof));
+    check('#559 worker-read 已登记进 VERBS', S.VERBS.includes('worker-read'), S.VERBS.join(','));
+    const wrRead = S.argsWorkerRead({ dispatch: 'ctx_x', source: 'auto', limit: 50 });
+    check('worker-read 拼 --dispatch/--source/--limit', wrRead.includes('--source') && wrRead.includes('--limit'), wrRead.join(' '));
+
     const filesUnscanned = S.verifyReviewerFiles({ reviewerPath: REPO });
     check('#541 没给清单 = 没查成', filesUnscanned.ok === false && filesUnscanned.unscanned === true, JSON.stringify(filesUnscanned));
     const filesEmpty = S.verifyReviewerFiles({ reviewerPath: REPO, files: [] });
@@ -577,24 +630,43 @@ async function main() {
 
     const soldier = S.renderDispatchTemplate('soldier-book.md', {
       SPEC: '短摘要：修 X',
-      REVIEWER_HANDLE: 'term_reviewer-1',
     });
     check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
-    check('soldier-book 填进审官 handle', /term_reviewer-1/.test(soldier), soldier.slice(-200));
-    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_HANDLE/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
+    check('soldier-book 不再内嵌审官 dispatch id（身份消息另行送达，审官红项修正）', !/REVIEWER_DISPATCH_ID/.test(soldier) && !/dispatch:undefined/.test(soldier), soldier.slice(-220));
+    check('soldier-book 完工通知写 dispatch:<id> 且指明先收信取 id', /--to dispatch:/.test(soldier) && /审官身份/.test(soldier) && !/term_/.test(soldier), soldier.slice(-260));
+    check('soldier-book 要求完工后告知审官不告帅', /审官/.test(soldier));
+    check('soldier-book 渲染后无任何 dispatch:undefined', /dispatch:undefined/.test(soldier) === false);
 
     const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_HANDLE: 'term_worker-1',
+      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
       MERGE_POLICY: 'auto',
+      MERGE_REASON: '',
     });
-    check('reviewer-book 填进士兵 handle', /term_worker-1/.test(reviewer));
+    check('reviewer-book 填进士兵 dispatch id', /ctx_worker-1/.test(reviewer));
     check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
-    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_HANDLE/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+    check('reviewer-book 红项发回 dispatch:<id> 不是 handle', /dispatch:ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer.slice(-300));
+    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_DISPATCH_ID/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+    const reviewerManual = S.renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
+      MERGE_POLICY: 'manual',
+      MERGE_REASON: '改协作约定',
+    });
+    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /gh pr ready/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
 
     let threw = false, threwMsg = '';
-    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_HANDLE
+    try { S.renderDispatchTemplate('reviewer-book.md', { MERGE_POLICY: 'auto', MERGE_REASON: '' }); } // 缺 SOLDIER_DISPATCH_ID
     catch (e) { threw = true; threwMsg = String(e.message || e); }
-    check('缺占位符值 → 抛', threw && /REVIEWER_HANDLE/.test(threwMsg), threwMsg);
+    check('缺占位符值 → 抛', threw && /SOLDIER_DISPATCH_ID/.test(threwMsg), threwMsg);
+
+    // 审官红项回归：dispatch id 缺失时渲染必须变红（不许出现 dispatch:undefined）
+    let threwU = false, uMsg = '';
+    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: String(undefined), MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    catch (e) { threwU = true; uMsg = String(e.message || e); }
+    check('审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红', threwU && /SOLDIER_DISPATCH_ID/.test(uMsg) && /dispatch:undefined|无效值/.test(uMsg), uMsg);
+    let threwN = false;
+    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: 'null', MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    catch (e) { threwN = true; }
+    check('审官红项回归：占位符填字面量 null 也抛', threwN);
 
     let notFound = false;
     try { S.renderDispatchTemplate('no-such-template.md', {}); }
@@ -606,10 +678,13 @@ async function main() {
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
-    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_HANDLE/.test(daoSrc));
+    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
     check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
     check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
-    check('dao.mjs 输出双方收件 handle（loop 段）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc));
+    check('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', /extractDispatchId/.test(daoSrc));
+    check('dao.mjs 输出双方收件 dispatch（loop 段，soldierDoneTo=dispatch:…）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc) && /dispatch:\$\{created\.reviewerDispatchId\}/.test(daoSrc));
+    check('审官红项修正：审官任务书在士兵 worker-start 之后才渲染', /SOLDIER_DISPATCH_ID: String\(created\.workerDispatchId\)/.test(daoSrc), '渲染顺序检查');
+    check('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', /审官身份/.test(daoSrc) && /identity/.test(daoSrc));
   }
 
   console.log('\n=== ⑨ 闭环三跳：投递失败必须炸，不许静默（#548 红项 1）===');
@@ -619,6 +694,8 @@ async function main() {
     const DEAD = 'term_00000000-0000-0000-0000-000000000000';
     const LIVE_RUN = 'run_live0001';
     const DEAD_RUN = 'run_00000000';
+    const LIVE_DISPATCH = 'ctx_live-0001';
+    const DEAD_DISPATCH = 'ctx_00000000-0000-0000-0000-000000000000';
 
     // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
     function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
@@ -638,6 +715,13 @@ async function main() {
         }
         if (key === 'orchestration run-current') {
           return { ok: true, json: { ok: true, result: { run: null } } };
+        }
+        if (key === 'orchestration worker-show') {
+          const d = a[a.indexOf('--dispatch') + 1];
+          if (d === LIVE_DISPATCH) {
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+          }
+          return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
         }
         if (key === 'orchestration send') {
           const to = a.includes('--to') ? a[a.indexOf('--to') + 1] : null;
@@ -661,6 +745,9 @@ async function main() {
       { hop: '审官→士兵', live: { to: LIVE }, dead: { to: DEAD } },
       // 审官→帅 是普通告知，不带 --type worker_done：notify 验投递不验结算（#551）
       { hop: '审官→帅', live: { to: `run:${LIVE_RUN}` }, dead: { to: `run:${DEAD_RUN}` } },
+      // #559 ①：士兵↔审官互发走 dispatch:<id>（结构化收件箱）不是 terminal handle
+      { hop: '士兵→审官(dispatch)', live: { to: `dispatch:${LIVE_DISPATCH}` }, dead: { to: `dispatch:${DEAD_DISPATCH}` } },
+      { hop: '审官→士兵(dispatch)', live: { to: `dispatch:${LIVE_DISPATCH}` }, dead: { to: `dispatch:${DEAD_DISPATCH}` } },
     ];
     for (const h of HOPS) {
       const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
@@ -684,6 +771,17 @@ async function main() {
 
     const noRun = S.deliverMessage({ subject: 'x', orca: fakeOrca() });
     check('省略收件人但没绑 Run → 拦下（发进真空）', noRun.ok === false && /真空/.test(noRun.error), JSON.stringify(noRun));
+
+    const badDispatchForm = S.classifyNotifyTarget('dispatch_ctx-x');
+    check('dispatch_xxx 不带冒号 → 不收（只收 dispatch:）', badDispatchForm.kind === 'unsupported', JSON.stringify(badDispatchForm));
+    const okDispatchForm = S.classifyNotifyTarget('dispatch:ctx_x');
+    check('dispatch:<id> 形态被认', okDispatchForm.kind === 'dispatch' && okDispatchForm.id === 'ctx_x', JSON.stringify(okDispatchForm));
+
+    const wsFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));
+    check('真语料 worker-show → extractDispatchId 取 result.dispatch.id', S.extractDispatchId(wsFx) === 'ctx_5a59f2b680ca', JSON.stringify(S.extractDispatchId(wsFx)));
+    check('extractDispatchId 认 worker-start 的 result.dispatchId（CLI 源码形态）', S.extractDispatchId({ result: { dispatchId: 'ctx_abc' } }) === 'ctx_abc');
+    check('extractDispatchId 认 worker.dispatch_id', S.extractDispatchId({ result: { worker: { dispatch_id: 'ctx_def' } } }) === 'ctx_def');
+    check('extractDispatchId 不认 RPC 顶层 id', S.extractDispatchId({ id: 'rpc-123', result: {} }) === null);
 
     const group = S.deliverMessage({ to: '@all', subject: 'x', orca: fakeOrca() });
     check('组播收件人 → 拒发（没人负责签收）', group.ok === false && /组播/.test(group.error), JSON.stringify(group));

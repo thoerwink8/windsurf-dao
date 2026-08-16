@@ -13,12 +13,15 @@
 2. **通知审官开工审查**，不要发给帅。发信只走这一个口子：
 
    ```bash
-   node scripts/dao.mjs notify --hop "士兵→审官" --to {{REVIEWER_HANDLE}} \
+   node scripts/dao.mjs notify --hop "士兵→审官" --to dispatch:<审官 dispatch id> \
      --subject "完工：<PR号> <摘要>" --body "<改了什么、测试结果、PR 号>"
    ```
 
-   审官是你的**直接接手人**（handle: `{{REVIEWER_HANDLE}}`）。收件人是审官不是帅——
-   发给帅的消息元帅不会优先看还会漏；**只有审官判绿合并后帅才会出现**。
+   审官是你的**直接接手人**。**审官的 Dispatch id 不由本任务书内嵌**（派工那一刻审官 dispatch 还不存在），
+   派工方已把它以「**审官身份**」消息发进你的结构化收件箱（notify 四关确认送达）。
+   **发完工通知之前，先 `orca orchestration check` 收信记下那个 dispatch id**——收不到就 escalation，
+   不许手抄、不许猜、不许退回 terminal handle（#559 ①）。
+   收件人是审官不是帅——发给帅的消息元帅不会优先看还会漏；**只有审官判绿合并后帅才会出现**。
 
    **不许改用裸 `orca orchestration send`**：它对不存在的 handle 也返回 exit 0 / `ok:true`，
    链断和链走完在帅眼里长得一模一样。`notify` 先证收件人在、再发、再核回执与落库，四关缺一即非零。

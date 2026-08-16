@@ -1,0 +1,18 @@
+orca orchestration gate-list
+
+Usage: orca orchestration gate-list [--task <task_id>] [--status <status>] [--run <run_id>] [--from <handle>] [--json]
+
+List decision gates
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --task
+  --status
+  --run
+  --from
+
+Notes:
+  --run inspects a named Run without binding; otherwise gates are scoped to the caller.

@@ -1,0 +1,16 @@
+orca orchestration reply
+
+Usage: orca orchestration reply --id <msg_id> --body <text> [--run <run_id>] [--from <handle>] [--json]
+
+Reply to a message
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+  --body
+  --run
+  --from
+  --retry-request
