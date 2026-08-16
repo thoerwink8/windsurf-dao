@@ -569,18 +569,66 @@ function checkCardCommentSamples() {
   green(`派工卡 comment 样本 ${files.length} 份（有区 ${kinds.ok} / 缺区 ${kinds.missing}）`);
 }
 
-// ── ⑭ open issue 数量阈值（#556）─────────────────────────────
+// ── ⑭ open issue 数量阈值（#556；#564 口径改版：只数没在做的单）──────────────────
 // 知识网堆回工作队列是不可感知型失效：每张单只多一条，看见时已细成一团（#556 实测：
 // 四天积 45 张、缠绕度 89%）。超过阈值报红，附「过一遍 ideas 分流」。
-// 判据独立：直接 JSON.parse gh 的输出，不复用仓内任何解析逻辑。
-// 「没查成」与「查了是 0」必须分得开：gh 不可用（没装/没登录/CI 无 token/断网）→ SKIP
-// 不是绿；输出不是合法 JSON number 数组 → 红（没查成）；parse 成功且 0 张 → 绿（真 0）。
-// 阈值是棘轮：只降不升，默认取当前 open 数 + 1 = 最大允许数（「任何净新增立即报警」：
-// 多一张就红，n > max）。#556 分流关掉 14 张后由 44 降到 30（当时实际 29 张）。
+//
+// #564 阈值口径改版：原来把在途单也算进积压，开两张施工单就撞顶。改成只数**没在做的**单，
+// 判据用**有无在途 PR / worktree 卡关联**（机器可见的事实），不用 label（靠自觉打标会烂）。
+//   在途 PR 面：gh pr list --state open，正文/标题里 Closes/Fixes 署名的 issue 号（独立正则，
+//             不调用 dao-cmd 的解析——自己查自己查不出错）。
+//   在途卡面：orca worktree list，卡名 ^#N 的号（master 主树与 archived 不算）。
+// 两道面缺一道 = 判不全面，不许当查过没事：缺了 orca 面会把在途卡算成积压（惩罚正在工作，
+// 正是本改版要防的）；gh 面缺了本来就什么都查不了。CI 无 GH_TOKEN → SKIP 不是绿。
+// 判据独立：直接 JSON.parse gh/orca 的输出。「没查成」与「查了是 0」必须分得开。
+// 阈值是棘轮：只降不升，默认取当前 backlog 数 + 1。#556 分流关掉 14 张后由 44 降到 30；
 // 帅批量分流后应随之下调，目标 10（一组在施 + 下一批小活）。
-// 变异测试：DAO_CHECK_OPEN_ISSUE_MAX=0 必红（当前非零数据）；边界：30/30 绿、31/30 红。
+// 变异测试：DAO_CHECK_OPEN_ISSUE_MAX=0 必红（当前非零数据）；边界：N/N 绿、N+1/N 红。
 
 const OPEN_ISSUE_MAX_DEFAULT = 30;
+
+/** PR/标题/正文里的署名 issue 号（只认 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
+function closesNumbers(text) {
+  const found = [];
+  const re = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const t = Number(m[1]);
+    if (!found.includes(t)) found.push(t);
+  }
+  return found;
+}
+
+function runGhJson(args) {
+  const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT });
+  if (r.error) return { unscanned: true, error: `gh 不可用（${r.error.code}）` };
+  if (r.status !== 0) return { unscanned: true, error: String(r.stderr || r.stdout || '').trim().slice(0, 100) };
+  let doc;
+  try { doc = JSON.parse(r.stdout); } catch (e) { return { unscanned: true, error: `输出不是 JSON（${String(e.message || e).slice(0, 80)}）` }; }
+  if (!Array.isArray(doc)) return { unscanned: true, error: `输出形态不对（要数组：${typeof doc}）` };
+  return { array: doc };
+}
+
+function runOrcaCardNumbers() {
+  const win = process.platform === 'win32';
+  const direct = spawnSync(win ? 'orca.exe' : 'orca', ['worktree', 'list', '--json'], { encoding: 'utf8', cwd: ROOT });
+  const r = direct.error ? (() => {
+    const line = ['orca', 'worktree', 'list', '--json'].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
+    return spawnSync(line, { encoding: 'utf8', shell: true, cwd: ROOT });
+  })() : direct;
+  if (r.error || r.status !== 0) return null;
+  let doc;
+  try { doc = JSON.parse(r.stdout || ''); } catch { return null; }
+  const wts = Array.isArray(doc?.result?.worktrees) ? doc.result.worktrees : [];
+  const cards = [];
+  for (const w of wts) {
+    if (!w || w.isMainWorktree || w.isArchived) continue;
+    const name = String(w.displayName || '');
+    const m = name.match(/^#(\d+)/);
+    if (m) cards.push(Number(m[1]));
+  }
+  return cards;
+}
 
 function checkOpenIssueCount() {
   const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
@@ -588,30 +636,37 @@ function checkOpenIssueCount() {
     fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
     return;
   }
-  const r = spawnSync('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number'], { encoding: 'utf8', cwd: ROOT });
-  if (r.error) {
-    skip(`open 单数量阈值：本机没装 gh（${r.error.code}），本次没查成，不是绿`);
+  const issues = runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']);
+  if (issues.unscanned) {
+    skip(`open 单数量阈值：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  if (r.status !== 0) {
-    skip(`open 单数量阈值：gh issue list 失败（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}），本次没查成，不是绿`);
+  const prs = runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']);
+  if (prs.unscanned) {
+    skip(`open 单数量阈值：open PR 面没查成（${prs.error}）——在途排除做不全，不是绿`);
     return;
   }
-  let doc;
-  try { doc = JSON.parse(r.stdout); } catch (e) {
-    fail('open 单数量没查成', 'gh issue list 输出不是 JSON——不许把没查成当查过没事', String(e.message || e).slice(0, 120));
+  const cards = runOrcaCardNumbers();
+  if (cards === null) {
+    skip('open 单数量阈值：worktree 卡面没查成（orca 不可用或输出畸形）——少这张卡面会把在途单算成积压，本次没查成，不是绿');
     return;
   }
-  if (!Array.isArray(doc) || doc.some(x => !x || typeof x.number !== 'number')) {
-    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${Array.isArray(doc) ? '数组含非条目' : typeof doc}`);
+  const inPr = new Set();
+  for (const p of prs.array) {
+    for (const n of closesNumbers(`${p.title || ''}\n${p.body || ''}`)) inPr.add(n);
+  }
+  const inCard = new Set(cards);
+  if (issues.array.some(i => !i || typeof i.number !== 'number')) {
+    fail('open 单数量没查成', 'gh issue list 输出形态不对（要 number 对象数组）', `拿到 ${typeof issues.array[0]}`);
     return;
   }
-  const n = doc.length;
+  const backlog = issues.array.filter(i => !inPr.has(i.number) && !inCard.has(i.number));
+  const n = backlog.length;
   if (n > max) {
-    fail(`open issue ${n} 张，超阈值 ${max}`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number');
+    fail(`open 未在做单 ${n} 张，超阈值 ${max}（共 ${issues.array.length} 张 open，${inPr.size} 张有在途 PR、${inCard.size} 张有本地卡）`, '过一遍 ideas 分流：每张单答开单三问（#556），排不上队的转 docs/ideas.md', 'gh issue list --state open --limit 500 --json number,title,body');
     return;
   }
-  green(`open 单数量 ${n}/${max}`);
+  green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
 }
 
 runTests();
