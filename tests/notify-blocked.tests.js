@@ -9,15 +9,16 @@
 //   ④ 等待者按编号排序、评论体逐张生成。
 //
 // 不依赖真实 GitHub：搜索/评论的 gh 调用用假 gh（node shim 发 JSON）注入；
-// 真实仓库的构造样本（真关真评论）在自测里做，看 PR 描述。
 // #544：等待者可能同时是 issue 与 PR（gh issue list / gh pr list 各查一面，合并去重），
 // 任一面的失败都走 search_failed 报红，不得退化成「0 条」。
+// #554 审官返工：默认回归测试全部用固定 fixture，不再直查线上 GitHub——
+// 线上冒烟（真实 gh 召回验证）移出到 scripts/notify-blocked-smoke.mjs，显式跑，不进回归。
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const {
-  findWaiters, buildComment, markerPattern, runNotify, searchWaiters,
+  findWaiters, buildComment, markerPattern, runNotify,
 } = require("../scripts/notify-blocked.mjs");
 
 let pass = 0, fail = 0;
@@ -104,14 +105,8 @@ check("PR 面失败：ok=false（#544）", killPrRes.ok === false, JSON.stringif
 check("PR 面失败：reason=search_failed", killPrRes.reason === "search_failed", killPrRes.reason);
 check("PR 面失败：报 ::error:: 且点名 gh pr list（不当 0 条）", errPr.join("").includes("::error::") && errPr.join("").includes("gh pr list"), errPr.join("").slice(0, 200));
 
-// 真实 gh 前置飞行检查（本地已登录）：两项搜索面至少能跑通、能召回真实样本序号。
-// 不评论——只调 searchWaiters 拿召回；跑不动时 SKIP 不算失败（CI/未登录环境）。
-const preflight = searchWaiters(519, {});
-if (preflight.ok) {
-  check("真实 gh：#519 召回含 #539（#544 实证盲区样本）", preflight.items.some(i => i.number === 539), JSON.stringify(preflight.items.map(i => i.number)));
-} else {
-  console.log(`  SKIP  真实 gh 前置飞行检查（未登录/无 gh：${preflight.detail.slice(0, 80)}）`);
-}
+// 真实 gh 线上冒烟已移出默认回归（#554 审官返工）：固定 fixture 保证回归确定性，
+// 线上验证走显式命令：node scripts/notify-blocked-smoke.mjs（见 scripts/ 下脚本头注释）。
 
 fs.rmSync(fakeDir, { recursive: true, force: true });
 fs.rmSync(prDir, { recursive: true, force: true });
