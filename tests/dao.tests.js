@@ -278,10 +278,10 @@ async function main() {
     check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
     check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
-    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '559', '--spec', '短摘要', '--dry-run']);
+    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);
-    check('#559 追加：dry-run 带 --issue → 卡名带号', okIssue.status === 0 && pIssue.workerCard === '#559 - 修地基' && pIssue.reviewerCard === '#559 - 审官·gpt-5.6-sol', JSON.stringify(pIssue));
-    check('#559 追加：dry-run 带 --issue → issue 字段透出', pIssue.issue === '559', JSON.stringify(pIssue));
+    check('#559 追加：dry-run 带 --issue → 卡名带号', okIssue.status === 0 && pIssue.workerCard === '#565 - 修地基' && pIssue.reviewerCard === '#565 - 审官·gpt-5.6-sol', JSON.stringify(pIssue));
+    check('#559 追加：dry-run 带 --issue → issue 字段透出', pIssue.issue === '565', JSON.stringify(pIssue));
 
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
     const roleOnly = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--name', 'x', '--spec', '短摘要', '--dry-run']);
@@ -320,6 +320,56 @@ async function main() {
     ], { encoding: 'utf8', cwd: REPO });
     const pWsManual = payload(wsManual);
     check('worker-start manual 无理由 → 非零', wsManual.status !== 0 && /--merge-reason/.test(pWsManual.error || ''), JSON.stringify(pWsManual));
+  }
+
+  console.log('\n=== #565 消歧门：dispatch/worker-start 带 --issue 时缺「已消歧」label 拒派 ===');
+  {
+    // 纯函数三态判别（假 gh，不碰网络）：查成有 label / 查成没 label / 没查成（gh 失败 / 非 JSON）。
+    const ghHas = () => ({ ok: true, out: JSON.stringify({ labels: [{ name: '已消歧' }, { name: '任务' }] }) });
+    const ghNone = () => ({ ok: true, out: JSON.stringify({ labels: [{ name: '任务' }] }) });
+    const ghFail = () => ({ ok: false, error: 'gh exit 1: network down' });
+    const ghBroken = () => ({ ok: true, out: 'not json at all' });
+
+    const ok1 = S.checkIssueDisambiguated({ issue: '565', runGh: ghHas });
+    check('消歧门：有 已消歧 label → 放行', ok1.ok === true && ok1.hasLabel === true && ok1.gated === true, JSON.stringify(ok1));
+    const no1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghNone });
+    check('消歧门：查成但没 label → 拒派并点名缺什么', no1.ok === false && no1.hasLabel === false && /已消歧/.test(no1.error) && /补消歧记录|label/.test(no1.error), JSON.stringify(no1));
+    check('消歧门：没 label ≠ 没查成（两态分开）', no1.unscanned !== true, JSON.stringify(no1));
+    const f1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghFail });
+    check('消歧门：gh 失败 → 没查成，不许当没 label 放行', f1.ok === false && f1.unscanned === true && /没查成/.test(f1.error), JSON.stringify(f1));
+    const b1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghBroken });
+    check('消歧门：gh 返回非 JSON → 没查成', b1.ok === false && b1.unscanned === true, JSON.stringify(b1));
+    const noIssue = S.checkIssueDisambiguated({ issue: '', runGh: ghNone });
+    check('消歧门：无 --issue → 不受门控', noIssue.ok === true && noIssue.gated === false, JSON.stringify(noIssue));
+    const badIssue = S.checkIssueDisambiguated({ issue: 'abc', runGh: ghNone });
+    check('消歧门：--issue 非数字 → 拒派', badIssue.ok === false && /issue 号/.test(badIssue.error), JSON.stringify(badIssue));
+
+    // CLI 级：假 gh（CI 无 GH_TOKEN，dao.mjs 消歧门读 DAO_GH_FAKE 用它替真 gh；
+    // 判据固定：565 有「已消歧」、559 无）。真 gh 的端到端验收在合并证据里手跑。
+    const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
+    const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
+    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('消歧门：dispatch --issue 565（有 label）--dry-run 过', cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, `status=${cliHas.status} ${String(pHas.error || '')}`);
+
+    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('消歧门：dispatch --issue 559（无 label）→ 非 0 拒派', cliNo.status !== 0 && /已消歧/.test(String(pNo.error || '')), `status=${cliNo.status} ${JSON.stringify(pNo)}`);
+    check('消歧门：拒派错误说清去哪补', /消歧记录|label/.test(String(pNo.error || '')), String(pNo.error || ''));
+
+    // worker-start 带 --issue 同样受门控：559 无 label → 在碰 orca 之前就被拦（非 0）。
+    const wsNo = spawnSync(process.execPath, [CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const pWsNo = (() => { try { return JSON.parse((wsNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('消歧门：worker-start --issue 559（无 label）→ 非 0 拒派', wsNo.status !== 0 && /已消歧/.test(String(pWsNo.error || '')), `status=${wsNo.status} ${JSON.stringify(pWsNo)}`);
+    check('worker-start 的 FLAGS_BY_VERB 登记了 --issue', S.FLAGS_BY_VERB['worker-start'].has('--issue'));
+
+    // CI 场景（无 GH_TOKEN → gh 失败）：必须报「没查成」拒派，不许放行（#565 硬约束）。
+    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('消歧门：gh 失败（CI 无 token）→ dispatch 非 0 且报「没查成」', cliFail.status !== 0 && /没查成/.test(String(pFail.error || '')) && (pFail.disambiguation || {}).unscanned === true, `status=${cliFail.status} ${JSON.stringify(pFail)}`);
+
+    const daoSrc565 = fs.readFileSync(CLI, 'utf8');
+    check('dao.mjs dispatch 与 worker-start 都调消歧门', (daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, daoSrc565.slice(0, 60));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
