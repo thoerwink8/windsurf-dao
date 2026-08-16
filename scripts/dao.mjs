@@ -105,6 +105,22 @@ function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
   return { ok: true, json: parsed.json };
 }
 
+/** 消歧门（#565）的 gh 执行器。测试注入：DAO_GH_FAKE 指向假 gh 脚本时用它——
+ * CI（check.yml）无 GH_TOKEN，CLI 级门测试改走假 gh 造违规/通过样本（
+ * tests/fixtures/fake-gh.mjs），否则门按「没查成」拒派、测试假红。生产不设该变量。
+ * 只替消歧门这一处；reviewer-create 等其余 gh 调用不受影响。 */
+function ghRunner() {
+  const fake = process.env.DAO_GH_FAKE;
+  if (!fake) return runGh;
+  return (args) => {
+    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    if (r.error || (r.status !== 0 && r.status != null)) {
+      return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
+    }
+    return { ok: true, out: String(r.stdout || '') };
+  };
+}
+
 function emit(payload, exit = 0) {
   console.log(JSON.stringify(payload));
   process.exit(exit);
@@ -232,7 +248,7 @@ function cmdDispatch(args) {
   // 消歧门（#565）：带 --issue 的目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
   // dry-run 同样拦——预览一个根本派不出去的活等于假绿灯；gh 查失败单独报「没查成」，不许当有 label 放行。
   // 门在一切建卡动作之前：被拦下时什么都不会创建。
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh });
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
   if (!disambiguation.ok) {
     fail(disambiguation.error, { disambiguation, ...plan });
   }
@@ -551,7 +567,7 @@ function cmdWorkerStart(args) {
   if (!args.terminal) fail('worker-start 要 --terminal（不用 --agent，参数在启动模板里）');
   // 消歧门（#565）：worker-start 带 --issue 同样受门控（项化路径续派/换人时带号）。
   // 在碰 orca 之前拦：被拦下时不会起任何终端/任务。
-  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh });
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   // #559 ②：worker_done 后同一终端续 Dispatch 走 worker-start --task <next> --terminal <handle>，
   // 不用 --worktree（工作区由终端决定，官方：Reuse an existing agent only with --terminal <handle>）。
