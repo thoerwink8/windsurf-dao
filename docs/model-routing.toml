@@ -23,8 +23,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
 峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
 
-2026-08-16 起本节降为**应急直连通道**：ds-flash/pro 的日常派工走 [providers.opencode-go]（同一模型、
-额度池更便宜），本节的 `pi --model {model}` 只在 Go 限流/撞额度顶时手动顶上。
+2026-08-16 起本节降为**应急直连通道**：通道规则唯一落点见 [providers.opencode-go].why（2026-08-16 追加拍板）。
 两条通道跑的是同一个模型，所以模型条目只有一条（战绩记在一处，不拆两本账）。
 """
 
@@ -129,14 +128,20 @@ Zen 与 Go 在 pi 里是两个独立 provider（`opencode` / `opencode-go`），
 
 **ds-flash/pro 是同一个模型的两条通道，不是两个模型**（用户拍板 2026-08-16：「没区别，算法记录要互通」）。
 所以模型条目只有一条、id 不带通道前缀，战绩天然记在一处；通道信息在 provider + cli_model 上。
-日常走本节（Go 额度池），[providers.deepseek] 是限流时的应急直连。
+通道规则唯一落点见本节 why。
 
 额度是账户级共享硬顶（美元额度制，按各模型单价折算），撞顶后 pi 当场报错。
-**[[routes]] 的 fallback 只在选型时主选被门闩剔除才生效，救不了运行时撞顶**——
-运行时降级（限流自动切直连接着做）要靠 pi 扩展实现，见 issue（另开一单），不要指望 fallback 字段。
+**[[routes]] 的 fallback 只在选型时主选被门闩剔除才生效，救不了运行时额度耗尽**——额度耗尽的处置见本节 why。
 限额与折算价见 https://opencode.ai/docs/go/ 与账号控制台，本文件不复制会过期的数字。
 """
-why = "Go 的 ds-flash/pro 与直连 deepseek 是同一模型、能力相同、无质量风险，走额度池比按量便宜（官方口径 $10/月买 6 倍价值额度）"
+why = """
+opencode-go 是 ds-flash/pro 的唯一日常通道（用户 2026-08-16 追加拍板，本字段为通道规则唯一权威落点）：
+**deepseek flash/pro 不分峰谷一律走本节（opencode-go）**，[providers.deepseek] 直连只在用户拍板时启用——
+撞额度顶后必须报给用户，由用户在「等恢复 / 充值 / 换模型 / 停单 / 手动切直连」之间决定，**AI 不得自行切换通道**。
+判例（2026-08-16 og 402 成本跃迁）：og 撞顶报 402 后，擅自先切 ds 直连、再换 claude-opus，成本从 ¥0.05 级
+跃到 $10 级——「AI 自行切换」的代价样本，故立此规。
+与直连 deepseek 是同一模型、能力相同、无质量风险，额度池比按量便宜（官方口径 $10/月买 6 倍价值额度）。
+"""
 decided = "2026-08-16"
 
 [providers.minimax-h3]
@@ -150,7 +155,7 @@ provider = "opencode-go"          # 2026-08-16 主通道换成 Go 额度池；�
 cli_model = "deepseek-v4-flash"   # 两条通道的真实模型名相同，dao-cmd 拼 launch 时用它
 roles = ["写码"]
 status = "正式"
-why = "写码类谷时主选；主通道走 opencode-go（同一模型、额度池比直连按量便宜），Go 限流时切直连接着做——同一模型只留一条记录，战绩不拆两本账（用户拍板 2026-08-16）"
+why = "写码类谷时主选；同一模型只留一条记录，战绩不拆两本账；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
 decided = "2026-08-16"
 
 [[models]]
@@ -159,7 +164,7 @@ provider = "opencode-go"
 cli_model = "deepseek-v4-pro"
 roles = ["判断"]
 status = "正式"
-why = "判断类主选；主通道走 opencode-go，Go 限流时切直连接着做（用户拍板 2026-08-16）"
+why = "判断类主选；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
 decided = "2026-08-16"
 
 [[models]]
@@ -190,7 +195,8 @@ decided = "2026-08-12"
 
 # opencode Go 新增模型（2026-08-16 接入，拍板见 [providers.opencode-go].why）。
 # ds-flash/pro 不在这里另立条目——它们和直连是同一个模型，只是换通道，见上面两条。
-# 2026-08-16 实测通过：glm-5.2 / minimax-m3 / grok-4.5 / kimi-k3 均正常返回；
+# 用户 2026-08-16 拍板 og 通道只留 4 个模型：deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3；
+# 2026-08-16 实测通过：kimi-k3 正常返回；glm-5.2 / minimax-m3 / grok-4.5 已随拍板移出 og 通道，不入表；
 # gpt-5.6-luna 被上游按区域 403 拒（"not available in your region"），不入表；
 # deepseek-v4-flash-free 属 Zen 侧且已被服务端禁用（"Model is disabled"），不入表。
 
@@ -202,6 +208,16 @@ roles = ["写码", "判断"]
 status = "试用"
 trial_since = "2026-08-16"
 why = "GLM 系主打编码，1M 上下文 / 131K 输出；先进写码+判断候选池，按返工率实测校准再谈定位（用户拍板 2026-08-16）"
+decided = "2026-08-16"
+
+[[models]]
+id = "kimi-k3"
+provider = "opencode-go"
+cli_model = "kimi-k3"
+roles = ["写码", "判断"]
+status = "试用"
+trial_since = "2026-08-16"
+why = "用户 2026-08-16 拍板保留的 4 个 og 模型之一（deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3）；先进写码+判断候选池，按返工率实测校准再谈定位"
 decided = "2026-08-16"
 
 # ── 时间窗路由：同一任务类分时段路由到不同模型 ───────────────────────────
