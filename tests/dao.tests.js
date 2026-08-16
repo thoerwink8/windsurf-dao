@@ -659,7 +659,8 @@ async function main() {
     const HOPS = [
       { hop: '士兵→审官', live: { to: LIVE }, dead: { to: DEAD } },
       { hop: '审官→士兵', live: { to: LIVE }, dead: { to: DEAD } },
-      { hop: '审官→帅', live: { to: `run:${LIVE_RUN}`, type: 'worker_done', outcome: 'succeeded' }, dead: { to: `run:${DEAD_RUN}`, type: 'worker_done', outcome: 'succeeded' } },
+      // 审官→帅 是普通告知，不带 --type worker_done：notify 验投递不验结算（#551）
+      { hop: '审官→帅', live: { to: `run:${LIVE_RUN}` }, dead: { to: `run:${DEAD_RUN}` } },
     ];
     for (const h of HOPS) {
       const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
@@ -707,6 +708,13 @@ async function main() {
     check('士兵任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
     check('审官任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), tmplReviewer.slice(0, 200));
     check('两份任务书都写明「确认送达才准进下一步」', /确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer));
+
+    // 审官那条「可归档」是普通告知，不许伪装成结算信号（#548 第二轮红项 → 轻量修正，完整修法 #551）
+    const archiveBlock = tmplReviewer.slice(tmplReviewer.indexOf('### 3. 收尾'));
+    check('审官「可归档」命令行不带 --type worker_done', !/```bash[\s\S]*?--type worker_done[\s\S]*?```/.test(archiveBlock), archiveBlock.slice(0, 300));
+    check('审官任务书明写「不结算自己的 Dispatch」并指向 #551', /不是结算信号/.test(archiveBlock) && /#551/.test(archiveBlock));
+    check('notify 文档点明验的是投递不是结算', /投递\*\*不是\*\*结算|投递.*不.*结算/.test(S.USAGE) && /#551/.test(S.USAGE), S.USAGE.slice(-400));
+    check('deliverMessage 注释点明 ok:true ≠ 事情办完', /不是结算/.test(libSrc) && /#551/.test(libSrc));
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

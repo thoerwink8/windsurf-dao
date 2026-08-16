@@ -157,7 +157,7 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 `dispatch` 内部已经做完：选型闸、建工人卡、建审官卡（base 跟工人分支、建完核对 HEAD）、起终端、等 TUI 就绪、**注入任务书后再验开工**（屏上还挂着 `[Pasted Content N chars]` 就当没派出去）、失败回滚。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**闭环接线（#546 追加第五件）**：`dispatch` 把两个 handle 互相写进对方任务书——士兵任务书里写审官 handle（完工后士兵自己 `dao.mjs notify` 通知审官，不发给帅——发不到当场非零，不静默断链）；审官也起自己的 task + worker-start（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→`worker_done` 通知帅可归档）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件）**：`dispatch` 把两个 handle 互相写进对方任务书——士兵任务书里写审官 handle（完工后士兵自己 `dao.mjs notify` 通知审官，不发给帅——发不到当场非零，不静默断链）；审官也起自己的 task + worker-start（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→发「可归档」告知帅）。审官那条「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人 / 给已有 PR 补审官，仍在约束载体内：
 

@@ -553,6 +553,9 @@ function cmdSend(args) {
 /**
  * 闭环发信口（#548 红项 1）。裸 orca orchestration send 对不存在的 handle 也 exit 0 + ok:true，
  * 从帅的视角「链断了」和「链走完了」都表现为没有消息——这里把断链变成当场非零 + 升级。
+ *
+ * 管的是投递，不管结算：ok:true = 消息进了对方信箱，不等于对面读了、也不等于任务变 completed。
+ * 结算（worker_done 那类）另有 Dispatch 身份要求，本口不提供，见 issue #551。
  */
 function cmdNotify(args) {
   const r = deliverMessage({
