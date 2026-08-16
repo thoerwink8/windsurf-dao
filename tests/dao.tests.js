@@ -474,6 +474,16 @@ async function main() {
     const replyParsed = S.parseArgs(['node', 'dao.mjs', 'reply', '--id', 'msg_q1', '--body', '可以']);
     check('CLI 收 reply --id/--body', replyParsed.id === 'msg_q1' && replyParsed.body === '可以', JSON.stringify(replyParsed));
 
+    check('#559 ④ gate-create/gate-resolve/gate-list 已登记进 VERBS', S.VERBS.includes('gate-create') && S.VERBS.includes('gate-resolve') && S.VERBS.includes('gate-list'), S.VERBS.join(','));
+    const gc = S.argsGateCreate({ task: 'task_x', question: '乒乓两轮仍红，换人？', options: '["换","不换"]' });
+    check('gate-create 拼 --task/--question/--options', gc.includes('--task') && gc.includes('--question') && gc.includes('--options'), gc.join(' '));
+    const gr = S.argsGateResolve({ id: 'gate_x', resolution: '换' });
+    check('gate-resolve 拼 --id/--resolution', gr.includes('--id') && gr[gr.indexOf('--resolution') + 1] === '换', gr.join(' '));
+    const gl = S.argsGateList({ task: 'task_x', status: 'pending' });
+    check('gate-list 拼 --task/--status', gl.includes('--task') && gl.includes('--status'), gl.join(' '));
+    const gateParsed = S.parseArgs(['node', 'dao.mjs', 'gate-resolve', '--id', 'gate_x', '--resolution', '换']);
+    check('CLI 收 gate-resolve --id/--resolution', gateParsed.id === 'gate_x' && gateParsed.resolution === '换', JSON.stringify(gateParsed));
+
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-escape-'));
     const log = path.join(tmp, 'cmd-escape.jsonl');
     S.recordEscape({ argv: ['orca', 'foo', '--submit'], ts: '2026-08-15T00:00:00.000Z', cwd: tmp }, log);

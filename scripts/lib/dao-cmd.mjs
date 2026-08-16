@@ -216,6 +216,34 @@ export function argsOrchestrationReply({ id, body, from } = {}) {
   return a;
 }
 
+export function argsGateCreate({ task, question, options, from } = {}) {
+  const a = ['orchestration', 'gate-create'];
+  if (task) a.push('--task', task);
+  if (question != null) a.push('--question', question);
+  if (options != null) a.push('--options', options);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+export function argsGateResolve({ id, resolution, from } = {}) {
+  const a = ['orchestration', 'gate-resolve'];
+  if (id) a.push('--id', id);
+  if (resolution != null) a.push('--resolution', resolution);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+export function argsGateList({ task, status, run } = {}) {
+  const a = ['orchestration', 'gate-list'];
+  if (task) a.push('--task', task);
+  if (status) a.push('--status', status);
+  if (run) a.push('--run', run);
+  a.push('--json');
+  return a;
+}
+
 export function argsTerminalClose({ terminal, tab } = {}) {
   const a = ['terminal', 'close'];
   if (terminal) a.push('--terminal', terminal);
@@ -311,6 +339,9 @@ export function catalogUsedFlags() {
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
     argsOrchestrationReply({ id: 'm', body: 'b' }),
+    argsGateCreate({ task: 't', question: 'q', options: '["a"]' }),
+    argsGateResolve({ id: 'g', resolution: 'r' }),
+    argsGateList({ task: 't', status: 'pending' }),
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
     argsRunShow({ id: 'r' }),
     argsRunCurrent(),
@@ -1279,7 +1310,8 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'reviewer-create', 'send', 'notify', 'reply', 'liveness', 'check-help', 'raw',
+  'worker-start', 'reviewer-create', 'send', 'notify', 'reply',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -1308,6 +1340,9 @@ export const FLAGS_BY_VERB = {
     '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
   ]),
   reply: new Set(['--id', '--body', '--from', '--json', '--help', '-h']),
+  'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
+  'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
+  'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
 };
@@ -1366,6 +1401,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   send --terminal <handle> --text <文> [--enter]
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
   reply --id <消息id> --body <回答> [--from <handle>]   # 帅回答工人的 ask 提问，回答进编排记录（#559 ③）
+  gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
+  gate-resolve --id <gate_id> --resolution <裁定>                          # 帅裁定决议门
+  gate-list [--task <task_id>] [--status <状态>]
 其他:
   liveness [--path <工作树>]
   check-help

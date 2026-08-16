@@ -19,6 +19,9 @@ import {
   argsWorktreeRm,
   argsWorkerStart,
   argsOrchestrationReply,
+  argsGateCreate,
+  argsGateResolve,
+  argsGateList,
   assessWorktreeLiveness,
   assertCodexLaunch,
   catalogUsedFlags,
@@ -606,6 +609,28 @@ function cmdReply(args) {
   emit({ ok: true, json: r.json, messageId: args.id });
 }
 
+function cmdGateCreate(args) {
+  if (!args.task) fail('gate-create 要 --task');
+  if (!args.question) fail('gate-create 要 --question');
+  const r = orca(argsGateCreate({ task: args.task, question: args.question, options: args.options, from: args.from }));
+  if (!r.ok) fail(`gate-create 失败: ${errText(r.error)}`);
+  emit({ ok: true, json: r.json });
+}
+
+function cmdGateResolve(args) {
+  if (!args.id) fail('gate-resolve 要 --id');
+  if (!args.resolution) fail('gate-resolve 要 --resolution');
+  const r = orca(argsGateResolve({ id: args.id, resolution: args.resolution, from: args.from }));
+  if (!r.ok) fail(`gate-resolve 失败: ${errText(r.error)}`);
+  emit({ ok: true, json: r.json });
+}
+
+function cmdGateList(args) {
+  const r = orca(argsGateList({ task: args.task, status: args.status, run: args.run }));
+  if (!r.ok) fail(`gate-list 失败: ${errText(r.error)}`);
+  emit({ ok: true, json: r.json });
+}
+
 function cmdLiveness(args) {
   const path = args.path || process.cwd();
   try {
@@ -664,6 +689,9 @@ function main() {
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
     case 'reply': return cmdReply(args);
+    case 'gate-create': return cmdGateCreate(args);
+    case 'gate-resolve': return cmdGateResolve(args);
+    case 'gate-list': return cmdGateList(args);
     case 'liveness': return cmdLiveness(args);
     case 'check-help': return cmdCheckHelp();
     case 'raw': return cmdRaw(args);
