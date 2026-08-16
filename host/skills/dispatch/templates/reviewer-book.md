@@ -32,6 +32,18 @@ review 正文**首行**必须原样写判定行，只允许这四种形态，一
 - 首审全绿：`判定：绿，可合并`
 - 复核轮次同样：`复核结论：红 N 项` / `复核结论：绿，可合并`
 
+**判定怎么交到 GitHub（#573：你现在能真 approve）**：
+你是 `dao-reviewer[bot]`，不是工人那个账号。「同账号不能批准自己 PR」已经不挡你。
+绿走 `--approve`，红走 `--request-changes`。判定行仍写在 review 正文**首行**（四种形态不变）。
+Windows 上不要把多行 `--body` 直接塞进命令行（会被拆）。先写文件，再用 `--body-file`：
+
+```bash
+node scripts/gh-as.mjs reviewer -- pr review <PR号> --approve --body-file <判定文件>
+node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-file <判定文件>
+```
+
+缺凭据会报「这台机器没装」——那是没查成，不许改走本人 `gh` 装成交过卷。
+
 - **红**（有要返工的项）：把红项清单**直接发回士兵**，说清每条的位置/问题/期望，**不上帅**：
 
   ```bash
@@ -46,12 +58,14 @@ review 正文**首行**必须原样写判定行，只允许这四种形态，一
   （`{{SOLDIER_DISPATCH_ID}}`）一并报上，帅换人走 `worker-start --task <task> --retry-of <id>`，战绩不断链。
 - **绿**：按 merge-policy `{{MERGE_POLICY}}` 收口（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上），两条路分开：
 
-  - `merge-policy: auto`（默认）：**你自己合并**，不再问帅：`gh pr merge <PR号> --auto`
+  - `merge-policy: auto`（默认）：**你自己合并**，不再问帅。审官 App 只有 `contents:read`，合不了；
+    合并走帅身份：`node scripts/gh-as.mjs marshal -- pr merge <PR号> --auto`
     （服务端 auto-merge，checks 过了自动合；当时合并命令以审读规矩为准）。合并完进第 3 步。
   - `merge-policy: manual`（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
     **转 draft**（机器可读的「禁止合并」状态，draft PR 在 GitHub 上无法正常合并，这是 #549 审官
-    第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，`gh pr ready <PR号> --undo` 转 draft
-    （改回 ready 用 `gh pr ready <PR号>`）；然后通知帅「需人工合并」并把派单理由带上：`理由：{{MERGE_REASON}}`。
+    第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，
+    `node scripts/gh-as.mjs reviewer -- pr ready <PR号> --undo` 转 draft
+    （改回 ready 用 `node scripts/gh-as.mjs reviewer -- pr ready <PR号>`）；然后通知帅「需人工合并」并把派单理由带上：`理由：{{MERGE_REASON}}`。
     帅合并、解除 draft 后才收尾。
 
 ### 3. 收尾（最关键的一条）
@@ -75,6 +89,6 @@ Dispatch 结算掉（编排里那条任务不会因此变 completed）；把普�
 
 ## 边界
 
-- 拿不到就报出来：`gh` 命令失败、文件读不到、消息发失败，一律**报出来并 escalation**，
+- 拿不到就报出来：`gh-as` / `gh` 命令失败、凭据缺失（「这台机器没装」）、文件读不到、消息发失败，一律**报出来并 escalation**，
   不许编造红项/执行证据（#541 假审教训：审空气 + 编行号）。
 - 具体判定标准、验证命令、PR 动作清单：以当时的审官任务书与审读规矩为准，本框架不复制。

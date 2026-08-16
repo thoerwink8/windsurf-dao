@@ -8,6 +8,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statS
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { ghAs } from './gh.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -908,7 +909,9 @@ export function parseDiffNameStatus(text) {
   return mustExist;
 }
 
-export function runGh(args, { cwd } = {}) {
+export function runGh(args, { cwd, role } = {}) {
+  // role 有值 → 走 GitHub App 身份（#573）。其余裸调用先保持本人 gh，全量替换另开单。
+  if (role) return ghAs(role, args, { cwd });
   const r = spawnSync('gh', args, {
     encoding: 'utf8', windowsHide: true, timeout: 30000, cwd,
   });

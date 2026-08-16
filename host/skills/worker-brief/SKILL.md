@@ -7,11 +7,11 @@ description: 被派工人的开工便签：收到任务书后先读。开工五�
 
 ## 开工五步（进 git 的活，先做这个再干活）
 
-1. 空提交撑分支并推送：`git commit --allow-empty -m "[宿主] chore: 起<任务>分支"`，然后 `git push -u origin HEAD`。
-2. 开 draft PR：`gh pr create --draft`，标题带宿主前缀，正文必须含三段——**目标 / 验收标准 / 进展**——并回链相关 issue。
+1. 空提交撑分支并推送：`git commit --allow-empty -m "[宿主] chore: 起<任务>分支"`，然后 `git push -u origin HEAD`。先 `git log -1 --format='%an <%ae>'` 确认作者是 `dao-worker[bot]`（dispatch 会写 worktree 级身份；已有树补一句 `node scripts/gh-as.mjs worker --set-git-identity`）。不是 bot 就停手——PR 页和 git log 会对不上。
+2. 开 draft PR：`node scripts/gh-as.mjs worker -- pr create --draft`，标题带宿主前缀，正文必须含三段——**目标 / 验收标准 / 进展**——并回链相关 issue。多行正文用 `--body-file`，不要把换行塞进 `--body`。
 3. 改卡名：`orca worktree set --worktree active --display-name "#<PR号> - <动宾短语>" --json`，再 `orca worktree set --worktree active --workspace-status in-progress --json`。
-4. 给 PR 打标签（不存在先 `gh label create`，幂等）：`gh pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
-5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `gh pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
+4. 给 PR 打标签（不存在先 `node scripts/gh-as.mjs worker -- label create`，幂等）：`node scripts/gh-as.mjs worker -- pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
+5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
 
 ## 卡片状态
 

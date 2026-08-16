@@ -1,8 +1,10 @@
 // calibrate.mjs 红项口径回归网（issue #444）
 //
-// 背景：GitHub 不许同账号对自己 PR 打 request-changes，审官以 COMMENT 提交 review、
-// 判定写在正文首行（格式如「判定：红 N 项」「**判定：红 N 项**」「复核结论：绿，可合并」）。
-// v1 只数结构化 review 线程，这类评审线程数为 0，红项被永远计成 0。
+// 背景：#444 当时 GitHub 不许同账号对自己 PR 打 request-changes，审官以 COMMENT
+// 提交 review、判定写在正文首行（格式如「判定：红 N 项」「**判定：红 N 项**」
+// 「复核结论：绿，可合并」）。v1 只数结构化 review 线程，这类评审线程数为 0，
+// 红项被永远计成 0。#573 已废同账号限制（审官改走 approve），但判定行口径不变，
+// 本回归仍用当时 COMMENT 语料——解析认正文，不认 event 类型。
 //
 // 语料来源（禁止 mock 内生）：tests/fixtures/reviews-446.json 与 reviews-440.json
 // 是 gh api 拉取的真实 review 原文，生成命令：

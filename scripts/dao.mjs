@@ -64,6 +64,7 @@ import {
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
+import { applyGitIdentity } from './lib/gh.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -276,6 +277,12 @@ function cmdDispatch(args) {
 
   const workerEnv = envProbeWorktree(created.workerPath);
   if (!workerEnv.ok) failCreated(created, `工人树环境自检失败: ${workerEnv.error}`, { probes: workerEnv, ...plan });
+
+  // #573：commit author 跟身份走。token 只改 PR 页，git log 仍读 user.name——
+  // 只改一半比不改更容易误判。写在 worktree 级 config，不碰共用 user.name。
+  const workerIdent = applyGitIdentity('worker', { cwd: created.workerPath });
+  if (!workerIdent.ok) failCreated(created, `工人 git 身份没设上：${workerIdent.error}`, plan);
+  created.workerGitIdentity = `${workerIdent.name} <${workerIdent.email}>`;
 
   const workerBranch = gitBranchName(created.workerPath);
   if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, plan);
@@ -623,7 +630,7 @@ function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid']);
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid'], { role: 'reviewer' });
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -632,7 +639,7 @@ function cmdReviewerCreate(args) {
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
 
-  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);
+  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
   let fileJson;
   try { fileJson = JSON.parse(fileList.out); }
