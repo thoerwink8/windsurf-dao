@@ -751,6 +751,20 @@ export function parseGhPullFiles(json) {
 /** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
 export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
 
+/** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
+ * 命中这些屏面文本 = TUI 还在加载（MCP servers 0/5 之类），任务书还没渲染——
+ * 绝不判绿，稳定轮数归零，继续等 proof/marker。 */
+export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正在启动|初始化|配置同步|请稍候|加载中|登录/i;
+
+/** proof 不可用的可辨识 reason（#568 回归修法）：这两个值是 provider 级别不支持
+ * transcript 证明（pi 实测 provider_unsupported / session_not_reported），
+ * **不是「工人没开工」**——此时降级到屏面判据（连续稳定轮）判绿。
+ * 其他值（null / no_hook_report 等）不降级：宁可继续等，不许假绿。 */
+export function proofUnavailableReason(p) {
+  const reason = String((p && p.fallbackReason) || '');
+  return /provider_unsupported|session_not_reported/.test(reason) ? reason : null;
+}
+
 export function verifyInjection({ text, readError } = {}) {
   if (readError) return { ok: false, reason: '没读成', error: readError, unscanned: true };
   if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
@@ -783,14 +797,22 @@ export function verifyInjection({ text, readError } = {}) {
  *   3. 重读后 Pasted Content 消失 = 提交成功（继续正常流程）；仍在 = 真失败（这时才回滚）。
  *
  * 三态分开（第二种必须留痕，否则「补救生效过多少次」永远没人知道）：
- *   started（worker-read 官方证明，或没补过回车直接走完）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
+ *   started（worker-read 官方证明，或 proof 不可用时屏面连续稳定轮）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
  * worker-read 官方开工证明（#559 ⑥ 判开工优先用它；source≠terminal = 任务书进 transcript = 已提交）
  * 是权威信号，也覆盖「paste 自动提交快到没被看见 marker」的路径；#565 实测补回车后 proof 立刻 proven。
- * 屏面「非空且无 marker」在 TUI 加载期也成立，**不算绿**——只当 proof 或 marker 出现才定论，超时兜底。
+ *
+ * #568 回归（本函数 2026-08-16 被挡死的正常提交路径）：pi 工人正常提交时 proof.proven 恒为 false
+ * （provider_unsupported，pi 不给 transcript 证明）且全程无 Pasted Content——原实现两条出口都走不到，
+ * 必然超时回滚。修法：区分「TUI 加载期」和「已提交」，不用「有没有补过回车」当区分——
+ *   1. 加载期有自己的指纹（Starting MCP servers (N/5) 等，见 TUI_LOADING_RE），加载期内不算稳定轮、不判绿；
+ *   2. proof 不可用（fallbackReason = provider_unsupported / session_not_reported，见 proofUnavailableReason）
+ *      时降级到屏面判据：非空 + 无 marker + 连续 stableRoundsNeeded 轮稳定 = 已提交（proofFallback 留痕）；
+ *   3. 「从没出现过 marker」不再永远不绿；TUI 加载期防误判的意图仍在（加载指纹清零稳定轮）。
  */
 export function verifyInjectionPolling({
   dispatchId, readOnce, sendEnter, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
+  stableRoundsNeeded = 3,
 } = {}) {
   if (typeof readOnce !== 'function' || typeof sendEnter !== 'function') {
     throw new Error('verifyInjectionPolling 要 readOnce + sendEnter');
@@ -800,6 +822,8 @@ export function verifyInjectionPolling({
   let enter = null; // 补回车留痕：{ ok, error?, elapsedMs }；没补过是 null
   let unscanned = null; // 最后一次「没读成/没送成」记录（不许当「查过没事」）
   let lastText = '';
+  let proofUnavailable = null; // proof 不可用确认记录（provider 不支持证明，见 proofUnavailableReason）
+  let stableRounds = 0;        // 屏面「非空 + 无 marker + 非加载期」连续轮数（降级判绿用）
   while (Date.now() - t0 < timeoutMs) {
     // ① worker-read 官方开工证明：任务书进 transcript = 已提交（权威信号）。
     if (dispatchId && typeof proofOnce === 'function') {
@@ -814,6 +838,10 @@ export function verifyInjectionPolling({
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
+      // #568：proof 不可用（provider 不支持证明）是降级触发条件，不是失败——先记下来。
+      if (proof && proof.proven === false && proofUnavailableReason(proof)) {
+        proofUnavailable = proof;
+      }
     }
     // ② 屏面指纹轮询。
     reads++;
@@ -823,8 +851,7 @@ export function verifyInjectionPolling({
     lastText = text;
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
-      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）；
-      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5）——不算绿，继续等 proof/marker，超时兜底。
+      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）。
       if (enter) {
         return {
           ok: true,
@@ -833,6 +860,25 @@ export function verifyInjectionPolling({
           elapsedMs: Date.now() - t0,
           text,
         };
+      }
+      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5 等指纹）——不算稳定轮，继续等 proof/marker。
+      if (TUI_LOADING_RE.test(text)) {
+        stableRounds = 0;
+      } else {
+        // #568 回归修法：proof 不可用（provider_unsupported / session_not_reported）时降级到屏面判据——
+        // 非空 + 无 marker + 连续稳定轮 = 任务书已进上下文（pi 正常提交路径，全程无 marker 也必须判绿）。
+        stableRounds++;
+        if (proofUnavailable && stableRounds >= stableRoundsNeeded) {
+          return {
+            ok: true,
+            state: 'started',
+            proofFallback: true,
+            proof: proofUnavailable,
+            enter, reads, stableRounds,
+            elapsedMs: Date.now() - t0,
+            text,
+          };
+        }
       }
     } else if (v.reason && /Pasted Content/.test(v.reason)) {
       if (!enter) {
@@ -865,6 +911,7 @@ export function verifyInjectionPolling({
     reason: `超时没等到任务书进上下文（${label || '注入'}，${timeoutMs}ms）`,
     unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
     enter, reads,
+    stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
   };

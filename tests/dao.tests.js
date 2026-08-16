@@ -456,6 +456,61 @@ async function main() {
     });
     check('回车没送出去且 marker 仍在 → failed，reason 说得出「没送出去」', f.ok === false && /没送出去/.test(f.reason), JSON.stringify(f));
 
+    // G. #568 回归钉：pi 工人正常提交 = proof 恒 false（provider_unsupported）+ 全程无 marker + 屏面稳定 → 判绿。
+    // 这是最常见的成功路径（#568 之前唯一没被测的）；修法 = proof 不可用时降级到屏面连续稳定轮。
+    const g = S.verifyInjectionPolling({
+      dispatchId: 'ctx_g',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [CLEAN] } } }),
+      sendEnter: () => { throw new Error('不该发回车'); },
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('pi 正常提交：proof 恒 false + 全程无 marker → 连续稳定轮判绿 started（proofFallback 留痕）',
+      g.ok === true && g.state === 'started' && g.enter === null && g.proofFallback === true && g.stableRounds >= 3, JSON.stringify(g));
+    check('pi 正常提交：不该发回车', true, '（sendEnter 抛错但没被调 = 该路径不发回车）');
+
+    // H. pi 正常提交但开头有加载期：加载指纹轮不计稳定、清零，加载结束后连续稳定才判绿。
+    let readsH = 0;
+    const h = S.verifyInjectionPolling({
+      dispatchId: 'ctx_h',
+      readOnce: () => {
+        readsH++;
+        return { ok: true, result: { terminal: { tail: [readsH <= 4 ? LOADING : CLEAN] } } };
+      },
+      sendEnter: () => { throw new Error('不该发回车'); },
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'session_not_reported' }),
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('pi 正常提交带加载开头：加载期不算绿，加载结束后连续稳定才判绿',
+      h.ok === true && h.state === 'started' && h.proofFallback === true && h.stableRounds >= 3 && readsH >= 7, JSON.stringify(h));
+
+    // I. 加载指纹凑不满稳定轮但没到稳定阈值就超时：仍 failed（防误判意图保留，不许因为加了降级路就把加载期判绿）。
+    let readsI = 0;
+    const i = S.verifyInjectionPolling({
+      dispatchId: 'ctx_i',
+      readOnce: () => {
+        readsI++;
+        // 加载态后只稳定 1 轮就回到加载态：稳定轮永远攒不满。
+        return { ok: true, result: { terminal: { tail: [readsI % 2 === 1 ? LOADING : CLEAN] } } };
+      },
+      sendEnter: () => ({ ok: true }),
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('加载指纹被清零：稳定 1 轮又回加载态 → 攒不满降级条件 → 超时 failed',
+      i.ok === false && i.state === 'failed' && i.stableRounds < 3 && /超时/.test(i.reason), JSON.stringify(i));
+
+    // J. proof 不可用但全程空屏：不许按屏面判绿（空屏 ≠ 已提交）。
+    const j = S.verifyInjectionPolling({
+      dispatchId: 'ctx_j',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [] } } }),
+      sendEnter: () => ({ ok: true }),
+      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('proof 不可用 + 空屏 → 不许判绿（空屏 ≠ 已提交），超时 failed',
+      j.ok === false && j.state === 'failed' && /超时/.test(j.reason), JSON.stringify(j));
+
     // wiring：dao.mjs 工人与审官两处注入验证都走轮询（#565 追加第 5 条）。
     const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 工人/审官注入验证两处都走 verifyInjectionPolling', (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 2, daoSrcPoll.slice(0, 80));
