@@ -1,0 +1,12 @@
+orca orchestration run-show
+
+Usage: orca orchestration run-show --id <run_id> [--json]
+
+Show one lightweight orchestration Run
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission

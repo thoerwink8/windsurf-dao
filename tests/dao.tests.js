@@ -113,6 +113,13 @@ async function main() {
     check('库里用到的参数都还在 help 里', clean.ok === true && clean.unscanned === false, JSON.stringify(clean));
     check('自检扫到了命令（不是 0 样本）', clean.scanned.length > 0, String(clean.scanned.length));
 
+    // 上一条在本机永远走 live，加了 builder 忘补夹具本机照样绿、到 CI（无 orca）才炸成「没查成」。
+    // 这条把「夹具齐不齐」在本机就问出来——判据是文件在不在，不看 orca 在不在。
+    const noFixture = S.catalogUsedFlags()
+      .map(item => item.cmd)
+      .filter(cmd => !fs.existsSync(S.helpFixturePath(cmd)));
+    check('catalogUsedFlags 每条命令都有 --help 夹具（CI 无 orca 时靠它）', noFixture.length === 0, noFixture.join(' '));
+
     const empty = S.checkHelpLiveness({ catalog: [], fetchHelp: () => fetched.text });
     check('catalog 空 → 没查成', empty.unscanned === true && empty.ok === false);
 
