@@ -345,17 +345,25 @@ async function main() {
     check('消歧门：--issue 非数字 → 拒派', badIssue.ok === false && /issue 号/.test(badIssue.error), JSON.stringify(badIssue));
 
     // CLI 级：假 gh（CI 无 GH_TOKEN，dao.mjs 消歧门读 DAO_GH_FAKE 用它替真 gh；
-    // 判据固定：565 有「已消歧」、559 无）。真 gh 的端到端验收在合并证据里手跑。
+    // 判据固定：565 有「已消歧」、559 无、999 = gh 失败）。真 gh 的端到端验收在合并证据里手跑。
+    // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
     const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
     const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('消歧门：dispatch --issue 565（有 label）--dry-run 过', cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, `status=${cliHas.status} ${String(pHas.error || '')}`);
+    check('消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿', cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, `status=${cliHas.status} ${String(pHas.error || '')}`);
 
     const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('消歧门：dispatch --issue 559（无 label）→ 非 0 拒派', cliNo.status !== 0 && /已消歧/.test(String(pNo.error || '')), `status=${cliNo.status} ${JSON.stringify(pNo)}`);
-    check('消歧门：拒派错误说清去哪补', /消歧记录|label/.test(String(pNo.error || '')), String(pNo.error || ''));
+    check('消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）', cliNo.status === 0 && pNo.disambiguation && pNo.disambiguation.ok === false && pNo.disambiguation.hasLabel === false, `status=${cliNo.status} ${JSON.stringify(pNo)}`);
+    check('消歧门：dry-run 报告仍说清去哪补', /消歧记录|label/.test(String(pNo.disambiguation && pNo.disambiguation.error || '')), String(pNo.disambiguation && pNo.disambiguation.error || ''));
+
+    // 真派工（非 dry-run）：门在碰 orca / 建卡之前拦——被拦下时什么都不会创建（#565 硬约束）。
+    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('消歧门：真派工 --issue 559（无 label）→ 非 0 当场拦下', cliReal.status !== 0 && /已消歧/.test(String(pReal.error || '')), `status=${cliReal.status} ${JSON.stringify(pReal)}`);
+    check('消歧门：真派工被拦时错误说清去哪补', /消歧记录|label/.test(String(pReal.error || '')), String(pReal.error || ''));
+    check('消歧门：真派工被拦发生在建卡前（disambiguation.hasLabel=false，无 workerId）', (pReal.disambiguation || {}).hasLabel === false && !pReal.workerId, JSON.stringify(pReal));
 
     // worker-start 带 --issue 同样受门控：559 无 label → 在碰 orca 之前就被拦（非 0）。
     const wsNo = spawnSync(process.execPath, [CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
@@ -363,13 +371,94 @@ async function main() {
     check('消歧门：worker-start --issue 559（无 label）→ 非 0 拒派', wsNo.status !== 0 && /已消歧/.test(String(pWsNo.error || '')), `status=${wsNo.status} ${JSON.stringify(pWsNo)}`);
     check('worker-start 的 FLAGS_BY_VERB 登记了 --issue', S.FLAGS_BY_VERB['worker-start'].has('--issue'));
 
-    // CI 场景（无 GH_TOKEN → gh 失败）：必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
+    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('消歧门：gh 失败（CI 无 token）→ dispatch 非 0 且报「没查成」', cliFail.status !== 0 && /没查成/.test(String(pFail.error || '')) && (pFail.disambiguation || {}).unscanned === true, `status=${cliFail.status} ${JSON.stringify(pFail)}`);
+    check('消歧门：gh 失败（CI 无 token）真派工 → 非 0 且报「没查成」', cliFail.status !== 0 && /没查成/.test(String(pFail.error || '')) && (pFail.disambiguation || {}).unscanned === true, `status=${cliFail.status} ${JSON.stringify(pFail)}`);
 
     const daoSrc565 = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs dispatch 与 worker-start 都调消歧门', (daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, daoSrc565.slice(0, 60));
+  }
+
+  console.log('\n=== #565 追加：注入后开工验证 = 轮询 + 命中 Pasted Content 自动补回车救活 ===');
+  {
+    const MARKER = '› [Pasted Content 7383 chars]\n';
+    const CLEAN = '短摘要：修命令库\nThinking...\n';
+    const LOADING = 'Starting MCP servers (0/5)\n';
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+    const noopSleep = () => {};
+
+    // A. 快路径：worker-read 官方开工证明（paste 自动提交，没看见 marker）→ started，不带 enter。
+    const a = S.verifyInjectionPolling({
+      dispatchId: 'ctx_a',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
+      sendEnter: () => { throw new Error('不该发回车'); },
+      proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('轮询：worker-read 证明（transcript）→ started（不带 enter）', a.ok === true && a.state === 'started' && a.enter === null, JSON.stringify(a));
+
+    // B. 故意造 Pasted Content 残留 → 自动补回车 → 重读消失 = startedAfterEnter（救活留痕）。
+    let enterCalls = 0;
+    let readsB = 0;
+    const b = S.verifyInjectionPolling({
+      dispatchId: 'ctx_b',
+      readOnce: () => {
+        readsB++;
+        return readsB === 1
+          ? { ok: true, result: { terminal: { tail: [MARKER] } } }
+          : { ok: true, result: { terminal: { tail: [CLEAN] } } };
+      },
+      sendEnter: () => { enterCalls++; return { ok: true }; },
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    check('故意残留：命中 Pasted Content 自动补回车救活 → startedAfterEnter', b.ok === true && b.state === 'startedAfterEnter' && b.enter && b.enter.ok === true, JSON.stringify(b));
+    check('故意残留：补回车只发一次（enter 留痕）', enterCalls === 1, `enterCalls=${enterCalls}`);
+
+    // C. 真失败：补回车后 marker 仍在 = 回滚信号（仍在才回滚，处置代价与判据对称）。
+    const c = S.verifyInjectionPolling({
+      dispatchId: 'ctx_c',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      sendEnter: () => ({ ok: true }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    check('补回车后 marker 仍在 → failed，reason 点名「仍停在输入框」', c.ok === false && c.state === 'failed' && /仍停在输入框/.test(c.reason), JSON.stringify(c));
+
+    // D. TUI 加载期（非空无 marker）不得判绿——时序 bug 回归钉（#565 实测现场：MCP servers 0/5）。
+    const d = S.verifyInjectionPolling({
+      dispatchId: 'ctx_d',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
+      sendEnter: () => ({ ok: true }),
+      proofOnce: unproven,
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('TUI 加载期（非空无 marker）不算开工 → 超时 failed（时序 bug 回归钉）', d.ok === false && d.state === 'failed' && /超时/.test(d.reason), JSON.stringify(d));
+
+    // E. 全程没读成：不许当「没查成=没开工」以外的东西（scanned 与 unscanned 分开）。
+    const e = S.verifyInjectionPolling({
+      dispatchId: 'ctx_e',
+      readOnce: () => ({ error: 'terminal read timeout' }),
+      sendEnter: () => ({ ok: true }),
+      proofOnce: unproven,
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
+    });
+    check('全程没读成 → 超时 failed 且带 unscanned（没查成 ≠ 查过没事）', e.ok === false && e.unscanned && e.unscanned.unscanned === true, JSON.stringify(e));
+
+    // F. 回车没送出去且 marker 仍在：reason 说得出「没送出去」，不许伪装成「补了没救活」。
+    const f = S.verifyInjectionPolling({
+      dispatchId: 'ctx_f',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      sendEnter: () => ({ ok: false, error: 'orca terminal send 失败' }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    check('回车没送出去且 marker 仍在 → failed，reason 说得出「没送出去」', f.ok === false && /没送出去/.test(f.reason), JSON.stringify(f));
+
+    // wiring：dao.mjs 工人与审官两处注入验证都走轮询（#565 追加第 5 条）。
+    const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
+    check('dao.mjs 工人/审官注入验证两处都走 verifyInjectionPolling', (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 2, daoSrcPoll.slice(0, 80));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
