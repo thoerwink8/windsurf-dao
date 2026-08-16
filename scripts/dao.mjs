@@ -39,6 +39,7 @@ import {
   parseArgs,
   parseGhPullFiles,
   planDispatchRollback,
+  probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
@@ -242,7 +243,10 @@ function cmdDispatch(args) {
   created.workerHandle = extractHandleFromCreate(workerTerm.json);
   if (!created.workerHandle) failCreated(created, '工人终端没返回 handle', plan);
 
-  const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
+  const workerVerify = waitAndVerify({
+    readOnce: () => readOnceHandle(created.workerHandle),
+    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+  });
   if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
@@ -277,7 +281,10 @@ function cmdDispatch(args) {
   created.reviewerHandle = extractHandleFromCreate(revTerm.json);
   if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
 
-  const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
+  const revVerify = waitAndVerify({
+    readOnce: () => readOnceHandle(created.reviewerHandle),
+    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+  });
   if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
   // ── 闭环接线（#546 追加第五件）：两个 handle 互相写进对方任务书，完工→审官→帅 ──
@@ -412,6 +419,7 @@ function cmdStart(args) {
 
   const verified = waitAndVerify({
     readOnce: () => readOnceHandle(handle),
+    timeoutMs: probeWaitMs(routing, launch.provider),
   });
   if (!verified.ok) {
     orca(argsTerminalClose({ terminal: handle, tab: true }));
