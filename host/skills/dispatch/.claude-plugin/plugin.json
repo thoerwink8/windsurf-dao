@@ -1,7 +1,0 @@
-{
-  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-  "name": "dispatch",
-  "version": "1.0.0",
-  "description": "派工唯一入口：PreToolUse 拦裸 orca worker-start/task-create（#546 #517）",
-  "skills": ["./"]
-}
