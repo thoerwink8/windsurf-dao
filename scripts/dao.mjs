@@ -19,6 +19,7 @@ import {
   argsWorktreeRm,
   argsWorkerStart,
   argsWorkerRelease,
+  argsWorkerRead,
   argsOrchestrationReply,
   argsGateCreate,
   argsGateResolve,
@@ -54,6 +55,7 @@ import {
   renderDispatchTemplate,
   runGh,
   verifyInjection,
+  verifyWorkerStarted,
   verifyReviewerFiles,
   verifyReviewerTree,
   waitAndVerify,
@@ -181,6 +183,15 @@ function readOnceHandle(handle) {
   const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
   if (!read.ok) return { error: errText(read.error) };
   return read.json;
+}
+
+/** 开工证明（#559 ⑥）：worker-read --source auto 官方 transcript 源优先。
+ * 证明不了（source=terminal）不硬失败——verifyInjection 屏面检查兜底（③单接上后删）。
+ * 没读成（unscanned）如实上报，不许当成「查过没事」。 */
+function workerStartProof(dispatchId) {
+  const r = orca(argsWorkerRead({ dispatch: dispatchId }));
+  if (!r.ok) return { ok: false, unscanned: true, error: errText(r.error) };
+  return verifyWorkerStarted(r.json);
 }
 
 function cmdDispatch(args) {
@@ -337,16 +348,18 @@ function cmdDispatch(args) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
 
+  const workerProof = workerStartProof(created.workerDispatchId);
   const injectRead = readOnceHandle(created.workerHandle);
   const injected = verifyInjection({
     text: injectRead.error ? undefined : extractTerminalText(injectRead),
     readError: injectRead.error,
   });
-  if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, ...plan, taskId });
+  if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, startProof: workerProof, ...plan, taskId });
 
   // 审官也是 worker：起自己的 task + worker-start，拿到编排身份才能收士兵消息、发红项、判绿后通知帅。
   let reviewerTaskId = null;
   let reviewerInject = null;
+  let reviewerProof = null;
   if (reviewerBook) {
     const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
     if (!revTask.ok) {
@@ -367,12 +380,13 @@ function cmdDispatch(args) {
       failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，审官收不到士兵消息）', { ...plan, taskId, reviewerTaskId });
     }
 
+    reviewerProof = workerStartProof(created.reviewerDispatchId);
     const revInjectRead = readOnceHandle(created.reviewerHandle);
     reviewerInject = verifyInjection({
       text: revInjectRead.error ? undefined : extractTerminalText(revInjectRead),
       readError: revInjectRead.error,
     });
-    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject });
+    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject, reviewerProof });
   }
 
   const comment = afterDispatchComment({
@@ -397,7 +411,9 @@ function cmdDispatch(args) {
     probes: { worker: workerEnv, reviewer: reviewerEnv },
     heads,
     inject: injected,
+    startProof: workerProof,
     reviewerInject,
+    reviewerProof,
     comment,
   });
 }
@@ -516,6 +532,19 @@ function cmdWorkerRelease(args) {
   const r = orca(argsWorkerRelease({ dispatch: args.dispatch, retryRequest: args.retryRequest }));
   if (!r.ok) fail(`worker-release 失败: ${errText(r.error)}`);
   emit({ ok: true, json: r.json, dispatchId: args.dispatch });
+}
+
+function cmdWorkerRead(args) {
+  if (!args.dispatch) fail('worker-read 要 --dispatch');
+  const r = orca(argsWorkerRead({
+    dispatch: args.dispatch,
+    source: args.source,
+    cursor: args.cursor,
+    limit: args.limit,
+  }));
+  if (!r.ok) fail(`worker-read 失败: ${errText(r.error)}`);
+  const proof = verifyWorkerStarted(r.json);
+  emit({ ok: true, json: r.json, dispatchId: args.dispatch, proof });
 }
 
 function cmdReviewerCreate(args) {
@@ -694,6 +723,7 @@ function main() {
     case 'task-create': return cmdTaskCreate(args);
     case 'worker-start': return cmdWorkerStart(args);
     case 'worker-release': return cmdWorkerRelease(args);
+    case 'worker-read': return cmdWorkerRead(args);
     case 'reviewer-create': return cmdReviewerCreate(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);

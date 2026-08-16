@@ -550,6 +550,19 @@ async function main() {
     const landed = S.verifyInjection({ text: '短摘要：修命令库\nThinking...\n' });
     check('屏上无 Pasted Content → 注入验证绿', landed.ok === true, JSON.stringify(landed));
 
+    // #559 ⑥：判开工优先 worker-read --source auto（官方可证明 transcript 源）
+    const provenAuto = S.verifyWorkerStarted({ ok: true, result: { source: 'auto', transcript: { messages: [] } } });
+    check('#559 worker-read source=auto → 开工证明绿（官方 transcript 源）', provenAuto.ok === true && provenAuto.proven === true, JSON.stringify(provenAuto));
+    const provenTranscript = S.verifyWorkerStarted({ ok: true, result: { source: 'transcript', transcript: { messages: [{ role: 'user', blocks: [] }] } } });
+    check('#559 worker-read source=transcript → 同样绿', provenTranscript.ok === true && provenTranscript.proven === true, JSON.stringify(provenTranscript));
+    const weakTerminal = S.verifyWorkerStarted({ ok: true, result: { source: 'terminal', fallbackReason: 'no_hook_report', terminal: { tail: [] } } });
+    check('#559 worker-read source=terminal → 降级（proven=false，带 fallbackReason）', weakTerminal.ok === false && weakTerminal.proven === false && weakTerminal.fallbackReason === 'no_hook_report', JSON.stringify(weakTerminal));
+    const unreadProof = S.verifyWorkerStarted({ ok: false, error: { code: 'dispatch_not_found', message: 'x' } });
+    check('#559 worker-read 没读成 → unscanned（不许当成没开工）', unreadProof.ok === false && unreadProof.unscanned === true, JSON.stringify(unreadProof));
+    check('#559 worker-read 已登记进 VERBS', S.VERBS.includes('worker-read'), S.VERBS.join(','));
+    const wrRead = S.argsWorkerRead({ dispatch: 'ctx_x', source: 'auto', limit: 50 });
+    check('worker-read 拼 --dispatch/--source/--limit', wrRead.includes('--source') && wrRead.includes('--limit'), wrRead.join(' '));
+
     const filesUnscanned = S.verifyReviewerFiles({ reviewerPath: REPO });
     check('#541 没给清单 = 没查成', filesUnscanned.ok === false && filesUnscanned.unscanned === true, JSON.stringify(filesUnscanned));
     const filesEmpty = S.verifyReviewerFiles({ reviewerPath: REPO, files: [] });
