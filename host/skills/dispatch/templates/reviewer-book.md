@@ -18,22 +18,36 @@
 用收信方式等士兵的消息（`orca orchestration check` 或当时编排文档的收信命令）。
 收到士兵的「完工：PR 号 + 摘要」才算开工。**在这之前不审**——没收到消息就开始审 = 审空气。
 收信拿不到（报错/超时/`The caller is not the Dispatch pane`）必须**报出来并重试**，不许当 0。
+（发信同理，走 `node scripts/dao.mjs notify`——裸 `orca orchestration send` 对不存在的 handle
+也返回 exit 0 / `ok:true`，链断和没消息分不开。）
 
 ### 2. 判红 / 判绿
 
 - **红**（有要返工的项）：把红项清单**直接发回士兵**，说清每条的位置/问题/期望，**不上帅**：
 
   ```bash
-  orca orchestration send --subject "红项：<N> 条" --body "<每条：位置 + 问题 + 期望>" --to {{SOLDIER_HANDLE}} --json
+  node scripts/dao.mjs notify --hop "审官→士兵" --to {{SOLDIER_HANDLE}} \
+    --subject "红项：<N> 条" --body "<每条：位置 + 问题 + 期望>"
   ```
+
+  **确认送达才算发完**：`notify` 非零 = 没送到，士兵根本不知道要返工，
+  **不许接着等回音**——先修（handle 过期就重新取当时的士兵 handle），修不好升级给帅。
 
 - **乒乓两轮仍红**：才上帅（既有规矩，别改——这是换人信号）。
 - **绿**：按 merge-policy `{{MERGE_POLICY}}` 自己合并（#511：帅只感知不做关口，审官 approve 即合，不再问帅）。
 
 ### 3. 收尾（最关键的一条）
 
-判绿且合并完成之后，**由你通知帅「可归档」**（用 orca orchestration 的完工/收尾信号，
-具体命令以当时编排文档为准——例如 worker_done；其语义是「这单可以归档了」）。
+判绿且合并完成之后，**由你通知帅「可归档」**：
+
+```bash
+node scripts/dao.mjs notify --hop "审官→帅" --to run:<你这单的 Run id> \
+  --type worker_done --outcome succeeded --subject "可归档：<PR号>" --body "<判绿依据 + 合并结果>"
+```
+
+（语义是「这单可以归档了」；Run id 从 `orca orchestration run-current` 取，别手抄。）
+**确认送达才算收尾**：`notify` 非零 = 帅那边永远等不到这条，本单在面板上会一直挂着——
+必须当场报出来并重发，不许把「发过了」当「归档通知到位了」。
 **归档动作本身（worktree rm）由帅做，你不执行也不省略这个通知。**
 
 ## 边界
