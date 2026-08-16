@@ -17,7 +17,7 @@ name: dao-check
 on:
   pull_request:
   push:
-    branches: [master, thoerwink8/567-master-补-dao-check-守卫]  # 实验：#567 验收临时放宽，验完即撤
+    branches: [master]
 
 permissions:
   contents: read
