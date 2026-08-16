@@ -468,6 +468,12 @@ async function main() {
     const parsedContinue = S.parseArgs(['node', 'dao.mjs', 'worker-start', '--task', 't', '--terminal', 'h', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol']);
     check('#559 续 Dispatch：CLI 收 --task+--terminal 不带 --worktree', parsedContinue.task === 't' && parsedContinue.terminal === 'h' && parsedContinue.worktree === undefined, JSON.stringify(parsedContinue));
 
+    check('#559 ③ reply 已登记进 VERBS', S.VERBS.includes('reply'), S.VERBS.join(','));
+    const replyArgs = S.argsOrchestrationReply({ id: 'msg_q1', body: '可以' });
+    check('reply 拼 --id + --body', replyArgs.includes('--id') && replyArgs[replyArgs.indexOf('--id') + 1] === 'msg_q1' && replyArgs[replyArgs.indexOf('--body') + 1] === '可以', replyArgs.join(' '));
+    const replyParsed = S.parseArgs(['node', 'dao.mjs', 'reply', '--id', 'msg_q1', '--body', '可以']);
+    check('CLI 收 reply --id/--body', replyParsed.id === 'msg_q1' && replyParsed.body === '可以', JSON.stringify(replyParsed));
+
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-escape-'));
     const log = path.join(tmp, 'cmd-escape.jsonl');
     S.recordEscape({ argv: ['orca', 'foo', '--submit'], ts: '2026-08-15T00:00:00.000Z', cwd: tmp }, log);

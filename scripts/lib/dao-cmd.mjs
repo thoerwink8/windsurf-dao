@@ -207,6 +207,15 @@ export function argsWorkerShow({ dispatch } = {}) {
   return a;
 }
 
+export function argsOrchestrationReply({ id, body, from } = {}) {
+  const a = ['orchestration', 'reply'];
+  if (id) a.push('--id', id);
+  if (body != null) a.push('--body', body);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
 export function argsTerminalClose({ terminal, tab } = {}) {
   const a = ['terminal', 'close'];
   if (terminal) a.push('--terminal', terminal);
@@ -301,6 +310,7 @@ export function catalogUsedFlags() {
     argsWorkerShow({ dispatch: 'd' }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
+    argsOrchestrationReply({ id: 'm', body: 'b' }),
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
     argsRunShow({ id: 'r' }),
     argsRunCurrent(),
@@ -1269,7 +1279,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'reviewer-create', 'send', 'notify', 'liveness', 'check-help', 'raw',
+  'worker-start', 'reviewer-create', 'send', 'notify', 'reply', 'liveness', 'check-help', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -1297,6 +1307,7 @@ export const FLAGS_BY_VERB = {
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
   ]),
+  reply: new Set(['--id', '--body', '--from', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
 };
@@ -1354,6 +1365,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   send --terminal <handle> --text <文> [--enter]
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+  reply --id <消息id> --body <回答> [--from <handle>]   # 帅回答工人的 ask 提问，回答进编排记录（#559 ③）
 其他:
   liveness [--path <工作树>]
   check-help

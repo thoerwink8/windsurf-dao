@@ -18,6 +18,7 @@ import {
   argsWorktreeCreate,
   argsWorktreeRm,
   argsWorkerStart,
+  argsOrchestrationReply,
   assessWorktreeLiveness,
   assertCodexLaunch,
   catalogUsedFlags,
@@ -597,6 +598,14 @@ function cmdNotify(args) {
   emit(r);
 }
 
+function cmdReply(args) {
+  if (!args.id) fail('reply 要 --id（被回答的消息 id）');
+  if (args.body == null) fail('reply 要 --body');
+  const r = orca(argsOrchestrationReply({ id: args.id, body: args.body, from: args.from }));
+  if (!r.ok) fail(`reply 失败: ${errText(r.error)}`);
+  emit({ ok: true, json: r.json, messageId: args.id });
+}
+
 function cmdLiveness(args) {
   const path = args.path || process.cwd();
   try {
@@ -654,6 +663,7 @@ function main() {
     case 'reviewer-create': return cmdReviewerCreate(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
+    case 'reply': return cmdReply(args);
     case 'liveness': return cmdLiveness(args);
     case 'check-help': return cmdCheckHelp();
     case 'raw': return cmdRaw(args);
