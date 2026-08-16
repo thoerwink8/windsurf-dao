@@ -1,0 +1,31 @@
+{
+  "id": "9d31d819-65c0-4ded-9530-7d146336f0e0",
+  "ok": true,
+  "result": {
+    "message": {
+      "id": "msg_12f99ca2b46b",
+      "run_id": "run_legacy_local",
+      "delivery_contract": "current_delivery",
+      "from_handle": "term_24e179c2-dbdf-4412-ab49-bcc36da44d16",
+      "to_handle": "term_24e179c2-dbdf-4412-ab49-bcc36da44d16",
+      "subject": "fixture-capture-548",
+      "body": "契约夹具采集：orchestration send 真实返回",
+      "type": "status",
+      "priority": "normal",
+      "thread_id": null,
+      "payload": null,
+      "read": 0,
+      "sequence": 465,
+      "created_at": "2026-08-16T02:03:06Z",
+      "delivered_at": null,
+      "sender_pane_key": "32700a76-5c5a-4a78-b665-f2f2031d8658:f5e2fcd8-f708-4340-b21f-4d02255193f8"
+    },
+    "mutation": {
+      "requestId": "00448562-5453-4e65-a701-6906c237e7ab",
+      "replayed": false
+    }
+  },
+  "_meta": {
+    "runtimeId": "9b872f95-5b56-48bf-b0b7-c13504566177"
+  }
+}

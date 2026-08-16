@@ -605,6 +605,103 @@ async function main() {
     check('dao.mjs 输出双方收件 handle（loop 段）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc));
   }
 
+  console.log('\n=== ⑨ 闭环三跳：投递失败必须炸，不许静默（#548 红项 1）===');
+  {
+    // 判别性：同一套判据，活收件人必须放行、死收件人必须拦下。只会拦不会放的守卫等于天天假红。
+    const LIVE = 'term_live-0001';
+    const DEAD = 'term_00000000-0000-0000-0000-000000000000';
+    const LIVE_RUN = 'run_live0001';
+    const DEAD_RUN = 'run_00000000';
+
+    // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
+    function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
+      let seq = 0;
+      const sent = [];
+      const fn = (a) => {
+        const key = `${a[0]} ${a[1]}`;
+        if (key === 'terminal read') {
+          const h = a[a.indexOf('--terminal') + 1];
+          if (h === LIVE) return { ok: true, json: { ok: true, result: { terminal: { handle: h, status: 'running' } } } };
+          return { ok: false, error: { code: 'terminal_handle_stale', message: 'terminal_handle_stale' } };
+        }
+        if (key === 'orchestration run-show') {
+          const id = a[a.indexOf('--id') + 1];
+          if (id === LIVE_RUN) return { ok: true, json: { ok: true, result: { run: { id } } } };
+          return { ok: false, error: { code: 'run_not_found', message: `Run ${id} was not found.` } };
+        }
+        if (key === 'orchestration run-current') {
+          return { ok: true, json: { ok: true, result: { run: null } } };
+        }
+        if (key === 'orchestration send') {
+          const to = a.includes('--to') ? a[a.indexOf('--to') + 1] : null;
+          const id = `msg_fake${++seq}`;
+          const m = { id, to_handle: misroute || to, delivered_at: null };
+          if (!inboxDrops) sent.push(m);
+          if (sentMissingId) return { ok: true, json: { ok: true, result: { mutation: {} } } };
+          return { ok: true, json: { ok: true, result: { message: m } } };
+        }
+        if (key === 'orchestration inbox') {
+          if (inboxBroken) return { ok: true, json: { ok: true, result: {} } };
+          return { ok: true, json: { ok: true, result: { messages: sent.slice().reverse() } } };
+        }
+        throw new Error(`假 orca 没登记这条命令: ${a.join(' ')}`);
+      };
+      return fn;
+    }
+
+    const HOPS = [
+      { hop: '士兵→审官', live: { to: LIVE }, dead: { to: DEAD } },
+      { hop: '审官→士兵', live: { to: LIVE }, dead: { to: DEAD } },
+      { hop: '审官→帅', live: { to: `run:${LIVE_RUN}`, type: 'worker_done', outcome: 'succeeded' }, dead: { to: `run:${DEAD_RUN}`, type: 'worker_done', outcome: 'succeeded' } },
+    ];
+    for (const h of HOPS) {
+      const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      check(`${h.hop}：收件人在 → 放行并给消息 id`, good.ok === true && /^msg_/.test(good.messageId || ''), JSON.stringify(good));
+      const bad = S.deliverMessage({ ...h.dead, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      check(`${h.hop}：故意错 handle → 拦下`, bad.ok === false && bad.stage === '收件人', JSON.stringify(bad));
+      check(`${h.hop}：错 handle 的报错说得出「不存在」`, bad.ok === false && /不存在/.test(bad.error), bad.error);
+    }
+
+    const dropped = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxDrops: true }) });
+    check('回执给了 id 但编排里查不到 → 拦下', dropped.ok === false && dropped.stage === '复核', JSON.stringify(dropped));
+
+    const unscanned = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxBroken: true }) });
+    check('复核一条样本都没扫到 → 标 unscanned 且非 ok（没查成 ≠ 查过没事）', unscanned.ok === false && unscanned.unscanned === true, JSON.stringify(unscanned));
+
+    const noReceipt = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ sentMissingId: true }) });
+    check('send 说成功却没回执 → 拦下', noReceipt.ok === false && noReceipt.stage === '回执', JSON.stringify(noReceipt));
+
+    const wrong = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ misroute: 'term_someone-else' }) });
+    check('回执收件人与请求不一致（错投）→ 拦下', wrong.ok === false && /错投/.test(wrong.error), JSON.stringify(wrong));
+
+    const noRun = S.deliverMessage({ subject: 'x', orca: fakeOrca() });
+    check('省略收件人但没绑 Run → 拦下（发进真空）', noRun.ok === false && /真空/.test(noRun.error), JSON.stringify(noRun));
+
+    const group = S.deliverMessage({ to: '@all', subject: 'x', orca: fakeOrca() });
+    check('组播收件人 → 拒发（没人负责签收）', group.ok === false && /组播/.test(group.error), JSON.stringify(group));
+
+    const noSubject = S.deliverMessage({ to: LIVE, orca: fakeOrca() });
+    check('缺 subject → 拦下', noSubject.ok === false && noSubject.stage === '参数', JSON.stringify(noSubject));
+
+    // delivered_at 不是判据：真语料里活收件人也是 null，当门就是每条都假红。
+    const fx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'orchestration-send.json'), 'utf8'));
+    check('真语料：send 对活收件人 delivered_at 也是 null', fx.ok === true && fx.result.message.delivered_at === null, JSON.stringify(fx.result?.message?.delivered_at));
+    const libSrc = fs.readFileSync(LIB, 'utf8');
+    check('deliverMessage 不拿 delivered_at 当门（只报出）', !/delivered_at[^\n]*\?\s*[^:]*:\s*\{\s*ok:\s*false/.test(libSrc) && /deliveredAt: found\.message/.test(libSrc));
+
+    // CLI 接线：动词登记 + 失败非零
+    check('notify 已登记进 VERBS', S.VERBS.includes('notify'), S.VERBS.join(','));
+    const cliBad = spawnSync(process.execPath, [CLI, 'notify', '--to', DEAD, '--subject', '回归样本'], { encoding: 'utf8', cwd: REPO });
+    check('CLI notify 故意错 handle → 非零退出', cliBad.status !== 0, `status=${cliBad.status} ${cliBad.stdout}`);
+    check('CLI notify 失败时 stderr 明说链断', /链断/.test(cliBad.stderr || ''), cliBad.stderr);
+
+    const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
+    const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md'), 'utf8');
+    check('士兵任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
+    check('审官任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), tmplReviewer.slice(0, 200));
+    check('两份任务书都写明「确认送达才准进下一步」', /确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer));
+  }
+
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }

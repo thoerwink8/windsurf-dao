@@ -12,6 +12,8 @@ orca worktree create --name _fixture-recapture --no-parent --setup skip --json
 # create 完立刻 worktree rm --force，不要留孤儿树
 orca orchestration task-create --spec "夹具采集" --json
 # task-create 要已绑 Run；id 在 result.task.id，不是 result.id
+orca orchestration send --to $ORCA_TERMINAL_HANDLE --subject fixture-capture --body "夹具采集" --json
+# send 的消息 id 在 result.message.id；注意 delivered_at 对活着的收件人也是 null
 ```
 
 `index.json` 把 `scripts/lib/dao-cmd.mjs` 里每个 `export function extract*` 映射到一份语料。

@@ -121,7 +121,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 **已接成机器闭环（#546 追加第五件，用户拍板）**：`dao.mjs dispatch` 内部把两个 handle 互相写进对方任务书——
 
-- 士兵任务书（`host/skills/dispatch/templates/soldier-book.md`）写进**审官 handle**：完工后士兵**自己** `orchestration send` 通知审官，不发给帅。
+- 士兵任务书（`host/skills/dispatch/templates/soldier-book.md`）写进**审官 handle**：完工后士兵**自己**发通知给审官，不发给帅。
+- 闭环三跳（士兵→审官、审官→士兵、审官→帅）的发信口只有 `node scripts/dao.mjs notify` 一个：裸 `orca orchestration send` 对**不存在的 handle** 也返回 exit 0 / `ok:true` / `delivered_at:null`，链断和链走完在帅眼里都是「没有消息」。`notify` 先证收件人在（`terminal read` 的 `terminal_handle_stale` / `run-show` 的 `run_not_found`）、再发、再核回执与落库，四关缺一即非零退出并打「链断」。`delivered_at` 只报出不当判据——对活着的收件人它同样是 null（真语料见 `tests/fixtures/orca-json/orchestration-send.json`）。
 - 审官任务书（`host/skills/dispatch/templates/reviewer-book.md`）写进**士兵 handle**：红 → 直接发回士兵改；乒乓两轮仍红才上帅；绿 → 按 merge-policy 自己合并 → 通知帅「可归档」。
 - 归档（`worktree rm`）由帅做——审官不能 rm 自己所在的树，它只负责把「可归档」通知到帅。
 - 模板是原则 + 「以当时的任务书为准」，不复制会随 #530 过时的具体职责（#507 教训）。
@@ -156,7 +157,7 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 `dispatch` 内部已经做完：选型闸、建工人卡、建审官卡（base 跟工人分支、建完核对 HEAD）、起终端、等 TUI 就绪、**注入任务书后再验开工**（屏上还挂着 `[Pasted Content N chars]` 就当没派出去）、失败回滚。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**闭环接线（#546 追加第五件）**：`dispatch` 把两个 handle 互相写进对方任务书——士兵任务书里写审官 handle（完工后士兵自己 `orchestration send` 通知审官，不发给帅）；审官也起自己的 task + worker-start（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→`worker_done` 通知帅可归档）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件）**：`dispatch` 把两个 handle 互相写进对方任务书——士兵任务书里写审官 handle（完工后士兵自己 `dao.mjs notify` 通知审官，不发给帅——发不到当场非零，不静默断链）；审官也起自己的 task + worker-start（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→`worker_done` 通知帅可归档）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人 / 给已有 PR 补审官，仍在约束载体内：
 
