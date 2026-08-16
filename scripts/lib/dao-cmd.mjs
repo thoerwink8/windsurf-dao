@@ -770,6 +770,107 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
+ * 注入后开工验证，轮询版（#565 追加，用户 2026-08-16 当场要求）。
+ *
+ * 时序 bug（同型第二次发作；判例 memory probe-checks-env-not-startup）：worker-start 返回
+ * 那一刻 codex TUI 还在加载 MCP servers（同屏可见 Starting MCP servers (0/5)），任务书还没
+ * 渲染出来——「立即读一次」读到非空且无 Pasted Content 的屏面就判通过，实际任务书折在输入框里
+ * 几十分钟没人处理（#565 实测：审官任务书坐输入框 40 分钟）。
+ *
+ * 处置三件（只改注入后验证这一段；任务书太长是模板问题归 #554）：
+ *   1. 轮询等开工，不是注入后读一次；超时走调用方给的 probe_wait_ms（表上 provider 显式值），不硬编码；
+ *   2. 命中 [Pasted Content N chars] 先自动补一记回车（terminal send --enter）再重读；
+ *   3. 重读后 Pasted Content 消失 = 提交成功（继续正常流程）；仍在 = 真失败（这时才回滚）。
+ *
+ * 三态分开（第二种必须留痕，否则「补救生效过多少次」永远没人知道）：
+ *   started（worker-read 官方证明，或没补过回车直接走完）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
+ * worker-read 官方开工证明（#559 ⑥ 判开工优先用它；source≠terminal = 任务书进 transcript = 已提交）
+ * 是权威信号，也覆盖「paste 自动提交快到没被看见 marker」的路径；#565 实测补回车后 proof 立刻 proven。
+ * 屏面「非空且无 marker」在 TUI 加载期也成立，**不算绿**——只当 proof 或 marker 出现才定论，超时兜底。
+ */
+export function verifyInjectionPolling({
+  dispatchId, readOnce, sendEnter, proofOnce, timeoutMs,
+  intervalMs = 400, sleep = sleepSync, label = '',
+} = {}) {
+  if (typeof readOnce !== 'function' || typeof sendEnter !== 'function') {
+    throw new Error('verifyInjectionPolling 要 readOnce + sendEnter');
+  }
+  const t0 = Date.now();
+  let reads = 0;
+  let enter = null; // 补回车留痕：{ ok, error?, elapsedMs }；没补过是 null
+  let unscanned = null; // 最后一次「没读成/没送成」记录（不许当「查过没事」）
+  let lastText = '';
+  while (Date.now() - t0 < timeoutMs) {
+    // ① worker-read 官方开工证明：任务书进 transcript = 已提交（权威信号）。
+    if (dispatchId && typeof proofOnce === 'function') {
+      const proof = proofOnce(dispatchId);
+      if (proof && proof.ok && proof.proven) {
+        return {
+          ok: true,
+          state: enter ? 'startedAfterEnter' : 'started',
+          proof, enter, reads,
+          elapsedMs: Date.now() - t0,
+          text: lastText,
+        };
+      }
+      if (proof && proof.unscanned) unscanned = proof;
+    }
+    // ② 屏面指纹轮询。
+    reads++;
+    const read = readOnce();
+    if (read && read.error) unscanned = { reason: '没读成', error: read.error };
+    const text = read && !read.error ? extractTerminalText(read) : '';
+    lastText = text;
+    const v = verifyInjection({ text, readError: read && read.error });
+    if (v.ok) {
+      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）；
+      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5）——不算绿，继续等 proof/marker，超时兜底。
+      if (enter) {
+        return {
+          ok: true,
+          state: 'startedAfterEnter',
+          enter, reads,
+          elapsedMs: Date.now() - t0,
+          text,
+        };
+      }
+    } else if (v.reason && /Pasted Content/.test(v.reason)) {
+      if (!enter) {
+        const sent = sendEnter();
+        enter = sent && sent.ok
+          ? { ok: true, elapsedMs: Date.now() - t0 }
+          : { ok: false, error: sent && !sent.ok ? String(sent.error || 'send 失败') : 'sendEnter 无返回', elapsedMs: Date.now() - t0 };
+        if (!enter.ok) unscanned = { reason: '补回车没送出去', error: enter.error };
+        // 送没送出去都重读定论：下轮 marker 仍在 = 真失败（这时才回滚）。
+      } else {
+        const reason = enter.ok
+          ? `补回车后任务书仍停在输入框（${label}）——真没开工`
+          : `补回车没送出去（${enter.error}），任务书仍停在输入框（${label}）`;
+        return {
+          ok: false,
+          state: 'failed',
+          reason,
+          evidence: v.evidence,
+          enter, reads,
+          elapsedMs: Date.now() - t0,
+          text,
+        };
+      }
+    }
+    sleep(intervalMs);
+  }
+  return {
+    ok: false,
+    state: 'failed',
+    reason: `超时没等到任务书进上下文（${label || '注入'}，${timeoutMs}ms）`,
+    unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
+    enter, reads,
+    elapsedMs: Date.now() - t0,
+    text: lastText,
+  };
+}
+
+/**
  * worker-read 的开工证明（#559 ⑥）。官方可靠源：source ≠ 'terminal' = hook 报告的
  * Codex/Claude/Grok transcript（可证明 worker session）；source = 'terminal' = 只给了
  * 有界终端输出（老式屏面证据，会假阳）。没读成必须标 unscanned——不许当成「没开工」。
@@ -1541,5 +1642,5 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（非 0 退出，fail-close）——
 去该 issue 补消歧记录再打「已消歧」label（dao-project skill 第二节）；gh 查失败单独报「没查成」，不许当有 label 放行。
-无 --issue 的派工不受门控（辅助终端不经 dispatch）。
+dispatch --dry-run 不走门控（不实际派工，disambiguation 只作报告，不影响退出码；#565 返工）。无 --issue 的派工不受门控（辅助终端不经 dispatch）。
 `;
