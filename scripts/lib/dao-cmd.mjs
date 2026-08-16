@@ -1087,6 +1087,51 @@ export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
 }
 
+// ── 消歧门（#565）：项化派工前的硬门控 ────────────────────────────────────
+// dao-project skill 第二节：待拍板不是停车场，是所有项都要过的一道门，过不了不许派。
+// dispatch / worker-start 带 --issue 时，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
+// 三态必须分得开（#565 硬约束）：查成且有 label / 查成但没 label / 没查成（gh 失败）。
+// 没查成不许当有 label 放行——「没查成」当「查过没事」是事故类（#532 通用原则）。
+export const DISAMBIGUATED_LABEL = '已消歧';
+
+export function checkIssueDisambiguated({ issue, runGh } = {}) {
+  const n = String(issue ?? '').trim();
+  if (!n) return { ok: true, gated: false, issue: null };
+  if (!/^\d+$/.test(n)) {
+    return { ok: false, gated: true, issue: n, error: `--issue 必须是 issue 号，实际「${n}」` };
+  }
+  if (typeof runGh !== 'function') {
+    return { ok: false, gated: true, issue: n, unscanned: true, error: '消歧门没拿到 gh 执行器——没查成，不许放行' };
+  }
+  const r = runGh(['issue', 'view', n, '--json', 'labels']);
+  if (!r.ok) {
+    return {
+      ok: false, gated: true, issue: n, unscanned: true,
+      error: `gh 读 issue #${n} labels 失败——不是查过没事，是没查成：${r.error}`,
+    };
+  }
+  let labels = [];
+  try {
+    const parsed = JSON.parse(r.out);
+    labels = Array.isArray(parsed?.labels) ? parsed.labels : [];
+  } catch {
+    return {
+      ok: false, gated: true, issue: n, unscanned: true,
+      error: `gh 读 issue #${n} labels 返回不是 JSON——没查成，不许放行：${String(r.out).slice(0, 120)}`,
+    };
+  }
+  const names = labels.map(l => l && l.name).filter(Boolean);
+  if (!names.includes(DISAMBIGUATED_LABEL)) {
+    return {
+      ok: false, gated: true, issue: n, hasLabel: false, labels: names,
+      error: `issue #${n} 缺「${DISAMBIGUATED_LABEL}」label，拒派（fail-close，忘打标是拦住不是放行）。`
+        + `去该 issue 补消歧记录（岔路清单 + 结论 + 依据，依据要用户拍的或有旧拍板可依，见 dao-project skill 第二节），`
+        + `再打「${DISAMBIGUATED_LABEL}」label 后重试派工。`,
+    };
+  }
+  return { ok: true, gated: true, issue: n, hasLabel: true, labels: names };
+}
+
 /** 卡名组装（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
  * 给了 --issue N：`#N - <动宾短语>`（name 已带 #N 前缀则去重）；子卡 `#N - 审官·<模型>`。
  * 没给 --issue：原样返回 name。 */
@@ -1392,7 +1437,7 @@ export const FLAGS_BY_VERB = {
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--json', '--help', '-h']),
   'worker-start': new Set([
-    '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy', '--merge-reason',
+    '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
@@ -1462,7 +1507,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
-  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send --terminal <handle> --text <文> [--enter]
@@ -1494,4 +1539,7 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
 给了 --issue <issue号> 时卡名自动组装成「#<issue号> - <动宾短语>」（子卡「#<issue号> - 审官·<模型>」），
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
+dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（非 0 退出，fail-close）——
+去该 issue 补消歧记录再打「已消歧」label（dao-project skill 第二节）；gh 查失败单独报「没查成」，不许当有 label 放行。
+无 --issue 的派工不受门控（辅助终端不经 dispatch）。
 `;

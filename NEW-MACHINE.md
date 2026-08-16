@@ -260,6 +260,15 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 
 验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。
 
+`dao-project`（项化派工，含消歧门）由上面循环自动接上，无需单独动作；要单条建链（或循环没覆盖时手动补）：
+
+```powershell
+$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
+New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\dao-project" -Target "$repo\host\skills\dao-project" | Out-Null
+```
+
+建链是本机动作、不进 git（#565 消歧记录：symlink 归帅建）；验证 `ls ~/.claude/skills/dao-project` 能看到 `SKILL.md`。
+
 ## 12. Orca 快捷命令：从零拷问
 
 清单本体已随 `grill-ai` skill 入仓（第 11 节接上即得），Orca 按钮只留一个触发器，**不再复制清单正文**——两处维护必然分叉。换机后在 Orca 里重建一条智能体提示（Claude）：
