@@ -1,7 +1,27 @@
 name: dao-check
 
+# issue #567：master 上不跑 dao-check——push 不触发，盘面上显示「绿」的是 notify job，
+# 跟代码健康无关，而且永远绿。比没有守卫更坏：它长得像有守卫。
+# 修法：push 到 master 也触发同一套 check。合并本 PR 之后，master 每次被推都会当场跑
+# dao-check，带病进 master 不再无人报警。
+#
+# GH_TOKEN 口径（#567 顺带确认，必须显式选一种并注明理由，不能默认沉默）：给。
+#   1. ⑭ open 单数量阈值靠 gh issue list——不给 token 它在 CI 永远 SKIP（SKIP 是
+#      「没查成」的显式标记，不是绿），一个核心检查永远没查成，等于这个闸不存在。
+#   2. 两个触发面（pull_request / push）共用同一份 workflow、同一组 steps、同一个
+#      github.token——给 token 后两边的检查是同一套行为，两边的绿是同一个意思
+#      （#567 审读硬判据②的顺带确认项，验收时对照的是同一份日志形态）。
+#   3. 先例：blocked-notify.yml 的 GH_TOKEN: ${{ github.token }} 同款用法。
+# 权限按最小化给：checkout 要 contents: read，gh issue list 要 issues: read。
+
 on:
   pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  issues: read
 
 jobs:
   check:
@@ -38,3 +58,8 @@ jobs:
             }
 
       - run: node scripts/dao-check.mjs
+        env:
+          # #567：不给 token 时 gh 在 Actions 里必报「set the GH_TOKEN environment variable」，
+          # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。给了之后 pull_request 与
+          # push 两个触发面行为一致，两边的绿是同一个意思。
+          GH_TOKEN: ${{ github.token }}
