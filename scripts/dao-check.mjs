@@ -35,7 +35,8 @@
 // ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
 // ⑪ 主帅标题核对样本（一致 / 过期 各至少一份）
 // ⑫ 派工卡 comment 必须有单号定界区（#495：有区 / 缺区 各至少一份）
-// ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517）：旁路 exit 2、逃生口放行、崩了也 exit 2
+// ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
+// 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';

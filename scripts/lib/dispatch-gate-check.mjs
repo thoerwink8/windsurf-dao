@@ -1,12 +1,21 @@
-// 派工闸门活检（dao-check 第 ⑬ 项，#546 #517）。
+// 派工闸门活检（dao-check 第 ⑬ 项，#546 #517 #553）。
 //
-// 自己 JSON.parse hooks.json，不复用闸门自己的解析——自己查自己查不出错。
-// 把声明的脚本当真进程跑：旁路应 exit 2、普通 orca 应 exit 0、崩了也应 exit 2。
-// 零样本（一个 PreToolUse 都没扫到 / 脚本不在 / JSON 坏了）单独报红，不许记成绿。
+// 闸门挂载在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法：clone 即生效、cc-switch 碰不到、
+// 装机零步骤），不再扫 host/skills/<名>/hooks/hooks.json 的插件面。
+// 自己 JSON.parse settings.json 并自己遍历 PreToolUse，不复用闸门自己的解析——自己查自己查不出错。
+// 判据三层，缺一即红：
+//   ① 装载：settings.json 的 PreToolUse 里至少有一条指向 dispatch-gate 脚本的命令（独立标记，见 GATE_MARK）。
+//   ② 指向：从命令里抽出的脚本路径在仓里真存在（注册指向空气 = 红）。
+//   ③ 行为：把声明的脚本当真进程跑——旁路应 exit 2、普通 orca 应 exit 0、崩了也应 exit 2。
+// 零样本（settings.json 不在 / JSON 坏了 / 一个 PreToolUse 派工闸都没扫到）单独报红，不许记成绿。
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
+
+// 检查器自己的标记：settings.json 里哪条 PreToolUse command 算「派工闸」。
+// 不以闸门自己的解析逻辑为准，只认命令里带 dispatch-gate 字样的脚本路径。
+const GATE_MARK = /dispatch-gate/i;
 
 function readJson(file) {
   if (!existsSync(file)) return { exists: false };
@@ -17,6 +26,7 @@ function readJson(file) {
   }
 }
 
+/** 从 settings.json 的 hooks 结构里抽出全部 PreToolUse command（检查器自己的遍历）。 */
 function preToolUseCommands(doc) {
   const entries = doc?.hooks?.PreToolUse;
   if (!Array.isArray(entries)) return [];
@@ -29,29 +39,15 @@ function preToolUseCommands(doc) {
   return out;
 }
 
-function declaredPreToolUse(root) {
-  const dir = join(root, 'host', 'skills');
-  if (!existsSync(dir)) return { missingDir: dir, list: [] };
-  const list = [];
-  for (const name of readdirSync(dir)) {
-    const skillDir = join(dir, name);
-    if (!statSync(skillDir).isDirectory()) continue;
-    const hooksFile = join(skillDir, 'hooks', 'hooks.json');
-    const r = readJson(hooksFile);
-    if (!r.exists) continue;
-    if (r.broken) {
-      list.push({ name, hooksFile, broken: r.broken, commands: [], scripts: [] });
-      continue;
-    }
-    const commands = preToolUseCommands(r.doc);
-    if (commands.length === 0) continue;
-    const hooksDir = join(skillDir, 'hooks');
-    const scripts = existsSync(hooksDir)
-      ? readdirSync(hooksDir).filter(f => f.endsWith('.mjs'))
-      : [];
-    list.push({ name, hooksFile, commands, scripts, hooksDir });
-  }
-  return { list };
+/** 从一条 hook 命令里抽出脚本路径，并相对仓库根解析。返回 '' 表示抽不出。 */
+function resolveScript(command, root) {
+  const m = String(command || '').match(/["']?((?:[^"'\s]|\\ )*dispatch-gate[^"'\s]*\.mjs)["']?/);
+  if (!m) return '';
+  let p = m[1].replace(/^["']|["']$/g, '').trim();
+  // 展开 Claude Code 注入的项目根变量；检查器只验路径存在性，不模拟宿主展开
+  p = p.replace(/^\$\{?CLAUDE_PROJECT_DIR\}?[\\/]?/, '');
+  if (!p) return '';
+  return isAbsolute(p) ? p : join(root, p);
 }
 
 function payload(command) {
@@ -77,62 +73,67 @@ function runScript(script, { command, envExtra = {} } = {}) {
  */
 export function checkDispatchGate({ root } = {}) {
   if (!root) return { fail: ['没给仓库根', 'checkDispatchGate 要 root', ''] };
-  const declared = declaredPreToolUse(root);
-  if (declared.missingDir) {
-    return { fail: ['host/skills 不在', '本次没查成：确认 skill 真相源目录是否被移动', declared.missingDir] };
-  }
-  const broken = declared.list.filter(s => s.broken);
-  if (broken.length) {
+  const settingsFile = join(root, '.claude', 'settings.json');
+  const r = readJson(settingsFile);
+  if (!r.exists) {
     return {
       fail: [
-        `派工闸 hooks.json 解析不了 ${broken.length} 个`,
-        '修 JSON；解析不了 = 本次等于没查',
-        broken.map(s => `${s.name}: ${s.broken}`).join(' '),
+        '随仓 .claude/settings.json 不在',
+        '派工闸挂在这里（#553）：恢复文件；0 个装载面 = 本次等于没查',
+        settingsFile,
       ],
     };
   }
-  if (declared.list.length === 0) {
+  if (r.broken) {
+    return {
+      fail: [
+        '随仓 .claude/settings.json 解析不了',
+        '修 JSON；解析不了 = 本次等于没查',
+        r.broken,
+      ],
+    };
+  }
+  const gateCommands = preToolUseCommands(r.doc).filter(c => GATE_MARK.test(c));
+  if (gateCommands.length === 0) {
     return {
       fail: [
         '一个 PreToolUse 派工闸都没扫到',
-        '本仓的派工闸应声明在 host/skills/<名>/hooks/hooks.json 的 PreToolUse；0 个 = 本次等于没查',
-        join(root, 'host', 'skills'),
+        `settings.json 的 PreToolUse 里要有指向 dispatch-gate 脚本的 command（标记 ${GATE_MARK}）；0 个 = 本次等于没查`,
+        settingsFile,
       ],
     };
   }
 
   const problems = [];
   let scanned = 0;
-  for (const s of declared.list) {
-    const script = (s.scripts || [])
-      .map(f => join(s.hooksDir, f))
-      .find(p => existsSync(p));
-    if (!script) {
-      problems.push(`${s.name} 声明了 PreToolUse 但 hooks/ 下没有 .mjs`);
+  for (const command of gateCommands) {
+    const script = resolveScript(command, root);
+    if (!script || !existsSync(script)) {
+      problems.push(`PreToolUse 指向的脚本不存在：${command}`);
       continue;
     }
     scanned++;
 
     const blocked = runScript(script, { command: 'orca orchestration worker-start --task t --worktree w' });
     if (blocked.status !== 2) {
-      problems.push(`${s.name} 旁路 worker-start 应 exit 2，实际 ${blocked.status} ${String(blocked.stderr || blocked.stdout || '').slice(0, 80)}`);
+      problems.push(`旁路 worker-start 应 exit 2，实际 ${blocked.status} ${String(blocked.stderr || blocked.stdout || '').slice(0, 80)}`);
     } else if (!/dao\.mjs dispatch/.test(`${blocked.stderr || ''}${blocked.stdout || ''}`)) {
-      problems.push(`${s.name} 拦住了但没指出 dao.mjs dispatch`);
+      problems.push(`拦住了但没指出 dao.mjs dispatch：${command}`);
     }
 
     const taskCreate = runScript(script, { command: 'orca orchestration task-create --spec x' });
     if (taskCreate.status !== 2) {
-      problems.push(`${s.name} 旁路 task-create 应 exit 2，实际 ${taskCreate.status}`);
+      problems.push(`旁路 task-create 应 exit 2，实际 ${taskCreate.status}`);
     }
 
     const allowed = runScript(script, { command: 'orca orchestration send --type heartbeat --subject alive' });
     if (allowed.status !== 0) {
-      problems.push(`${s.name} 普通 orca send 应放行，实际 ${allowed.status} ${String(allowed.stderr || '').slice(0, 80)}`);
+      problems.push(`普通 orca send 应放行，实际 ${allowed.status} ${String(allowed.stderr || '').slice(0, 80)}`);
     }
 
     const raw = runScript(script, { command: 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t' });
     if (raw.status !== 0) {
-      problems.push(`${s.name} 逃生口 raw 应放行，实际 ${raw.status}`);
+      problems.push(`逃生口 raw 应放行，实际 ${raw.status}`);
     }
 
     const crashed = runScript(script, {
@@ -140,18 +141,18 @@ export function checkDispatchGate({ root } = {}) {
       envExtra: { DISPATCH_GATE_CRASH: '1' },
     });
     if (crashed.status !== 2) {
-      problems.push(`${s.name} 崩了应 exit 2（fail-closed），实际 ${crashed.status} —— 崩了等于放行`);
+      problems.push(`崩了应 exit 2（fail-closed），实际 ${crashed.status} —— 崩了等于放行`);
     } else if (!/fail-closed|崩/.test(`${crashed.stderr || ''}${crashed.stdout || ''}`)) {
-      problems.push(`${s.name} 崩了 exit 2 但没报出来`);
+      problems.push(`崩了 exit 2 但没报出来`);
     }
   }
 
   if (scanned === 0) {
     return {
       fail: [
-        '声明了 PreToolUse 但一个脚本都没跑成',
-        'hooks.json 在、脚本没了 ⇒ 注册指向空气',
-        declared.list.map(s => s.hooksFile).join(' '),
+        '声明了 PreToolUse 派工闸但一个脚本都没跑成',
+        'settings.json 在、脚本没了 ⇒ 注册指向空气',
+        gateCommands.join(' | '),
       ],
     };
   }
@@ -159,10 +160,10 @@ export function checkDispatchGate({ root } = {}) {
     return {
       fail: [
         `派工闸跑不出正确拦截 ${problems.length} 处`,
-        '旁路必须 exit 2、普通 orca 必须放行、崩了必须 exit 2：手跑 node host/skills/dispatch/hooks/dispatch-gate.mjs',
+        '旁路必须 exit 2、普通 orca 必须放行、崩了必须 exit 2：手跑 node scripts/lib/dispatch-gate-hook.mjs',
         problems.slice(0, 6).join('；'),
       ],
     };
   }
-  return { green: `派工闸 ${scanned} 个已声明且真拦得住（旁路 exit 2 / 逃生口放行 / 崩了 exit 2）` };
+  return { green: `派工闸 ${scanned} 个已挂载且真拦得住（旁路 exit 2 / 逃生口放行 / 崩了 exit 2）` };
 }
