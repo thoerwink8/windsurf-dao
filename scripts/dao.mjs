@@ -456,6 +456,7 @@ function cmdDispatch(args) {
 
   const comment = afterDispatchComment({
     name: args.name,
+    issue: args.issue,
     worktreeId: created.workerId,
     runOrca: orca,
   });

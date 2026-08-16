@@ -127,6 +127,33 @@ async function main() {
     check('名里没有 #单号 → skip', skip.action === 'skip', JSON.stringify(skip));
     check('没单号不 set', setCalled === false);
 
+    // #564 顺带修：派工名里没有 #单号、但 --issue 带了单号 → 也要写定界区（#565 实测漏记）。
+    let issueComment = '卡名：造 dao-project skill'
+    const issueRunOrca = (args) => {
+      if (args[1] === 'show') return { ok: true, json: { result: { worktree: { comment: issueComment } } } };
+      if (args[1] === 'set') {
+        issueComment = args[args.indexOf('--comment') + 1];
+        return { ok: true, json: { ok: true } };
+      }
+      return { ok: false, error: 'nope' };
+    };
+    const withIssue = T.afterDispatchComment({
+      name: '造 dao-project skill 与消歧门门控',
+      issue: '565',
+      worktreeId: 'wt_task',
+      runOrca: issueRunOrca,
+    });
+    check('名里没单号但 --issue 有 → 写定界区（#565 漏记回归钉）',
+      withIssue.ok === true && withIssue.action === 'updated' && withIssue.comment === '卡名：造 dao-project skill｜[#565]', JSON.stringify(withIssue));
+    const withIssue2 = T.afterDispatchComment({
+      name: '#499 名里有号',
+      issue: '565',
+      worktreeId: 'wt_task',
+      runOrca: issueRunOrca,
+    });
+    check('名里和 --issue 都有号 → 定界区去重合写',
+      withIssue2.ok === true && withIssue2.tickets.length === 2 && /#565/.test(withIssue2.comment), JSON.stringify(withIssue2));
+
     const noId = T.afterDispatchComment({ name: '#499 - x', runOrca: () => ({ ok: true }) });
     check('没 worktreeId → 报警不写', noId.ok === false && /worktreeId/.test(noId.reason), JSON.stringify(noId));
   }

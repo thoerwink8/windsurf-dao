@@ -67,9 +67,21 @@ function fail(what, howToFix, evidence) {
 function green(line) { greens.push(line); }
 function skip(line) { skips.push(line); }
 
-function firstFailLine(output) {
-  const line = String(output || '').split(/\r?\n/).find(l => /FAIL|✘|Assert|Error|error/.test(l));
-  return (line || '(无输出)').trim().slice(0, 160);
+/** 取测试失败行：只认固定格式前缀「  FAIL  」（各测试套 check() 共用的输出形态），
+ * 不按关键词匹配——测试名里带 fail/错误/红 字样的 PASS 行不许冒充失败证据（#566 排查实证）。
+ * 一套红多条就全列，不许只报第一条（只报头一条会让人以为修完就绿了，然后再红一轮）。
+ * 退出非 0 却没标准 FAIL 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
+function extractFailLines(output) {
+  const lines = String(output || '').split(/\r?\n/);
+  const fails = lines.filter(l => /^ {2}FAIL  /.test(l));
+  if (fails.length) return fails.map(l => l.trim().slice(0, 200));
+  return null;
+}
+
+function failLinesEvidence(output) {
+  const fails = extractFailLines(output);
+  if (fails) return `测试输出 ${fails.length} 条红：\n${fails.join('\n')}`;
+  return '退出非 0 但没扫到标准「  FAIL  」行——测试崩了或输出格式变了，本次没查成，需人工复现';
 }
 
 // ── ① 跑 tests/ 下所有测试 ─────────────────────────────────────────
@@ -94,7 +106,7 @@ function runTests() {
       : spawnSync(process.execPath, [p], { encoding: 'utf8', cwd: ROOT });
     const out = (r.stdout || '') + (r.stderr || '');
     if (r.status === 0) green(`测试 ${f}`);
-    else fail(`测试红：${f}`, `复现：node tests/${f}`, firstFailLine(out));
+    else fail(`测试红：${f}`, `复现：node tests/${f}`, failLinesEvidence(out));
   }
 }
 
