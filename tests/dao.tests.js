@@ -268,6 +268,7 @@ async function main() {
     check('三参数齐 + --spec → dry-run 过', ok.status === 0 && pOk.ok === true, JSON.stringify(pOk));
     check('dry-run 写出审官预建计划', pOk.reviewerCard === '审官·gpt-5.6-sol' && /codex/.test(pOk.reviewerLaunch), JSON.stringify(pOk));
     check('审官 launch 带 danger 旗标', String(pOk.reviewerLaunch || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
+    check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
     check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
@@ -374,19 +375,19 @@ async function main() {
     const unreadProbe = S.terminalProbeExec({ sendAndRead: () => ({ error: 'terminal_handle_stale' }) })('write');
     check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
+    check('#546 dao.mjs 环境自检走 envProbeWorktree，不经 agent 探针', /envProbeWorktree/.test(daoSrc) && !/terminalProbeExec/.test(daoSrc) && !/runTerminalProbes/.test(daoSrc));
+    check('#546 审官卡带 baseBranch 且建完自证', /baseBranch: workerBranch\.branch/.test(daoSrc) && /verifyReviewerTree/.test(daoSrc));
+    check('#546 注入后验开工走 verifyInjection', /verifyInjection/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
     check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('探针等待从表读，不写死毫秒数', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc) && !/120000/.test(daoSrc));
+    check('#546 dao.mjs 不再按 agent 等探针', !/probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
     check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
     check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
     check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 120000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 120000);
-    check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
-
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
     check('R4 没读成 ≠ 读了是空的', unread.reason === '没读成' && unread.unscanned === true, JSON.stringify(unread));
     const empty = S.verifyStarted({ text: '' });
@@ -499,6 +500,66 @@ async function main() {
       taskLive.id !== S.extractTaskId(taskLive) && taskLive.result.id === undefined);
     check('旧路径 result.id / 顶层 id 都取不到',
       S.extractTaskId({ id: 'rpc', result: { id: 'rpc2' } }) === null);
+  }
+
+  console.log('\n=== #546 #541 审官树自证 / 注入后开工 / 环境自检 ===');
+  {
+    const folded = S.verifyInjection({ text: '⚠ MCP failed\n[Pasted Content 4686 chars]\n›' });
+    check('故意违规：Pasted Content 折叠 → 注入验证红', folded.ok === false && /Pasted Content/.test(folded.reason), JSON.stringify(folded));
+    check('折叠证据带字符数', folded.evidence === '[Pasted Content 4686 chars]', JSON.stringify(folded));
+    const unreadInj = S.verifyInjection({ readError: 'terminal_handle_stale' });
+    check('注入后没读成 ≠ 已开工', unreadInj.ok === false && unreadInj.unscanned === true, JSON.stringify(unreadInj));
+    const emptyInj = S.verifyInjection({ text: '   ' });
+    check('注入后屏面空 → 红', emptyInj.ok === false && /空/.test(emptyInj.reason), JSON.stringify(emptyInj));
+    const landed = S.verifyInjection({ text: '短摘要：修命令库\nThinking...\n' });
+    check('屏上无 Pasted Content → 注入验证绿', landed.ok === true, JSON.stringify(landed));
+
+    const filesUnscanned = S.verifyReviewerFiles({ reviewerPath: REPO });
+    check('#541 没给清单 = 没查成', filesUnscanned.ok === false && filesUnscanned.unscanned === true, JSON.stringify(filesUnscanned));
+    const filesEmpty = S.verifyReviewerFiles({ reviewerPath: REPO, files: [] });
+    check('#541 空文件清单（PR 尚无改文件）→ 绿', filesEmpty.ok === true && filesEmpty.checked === 0, JSON.stringify(filesEmpty));
+    check('#541 parseGhPullFiles 跳过 removed', JSON.stringify(S.parseGhPullFiles([
+      { filename: 'a.js', status: 'added' },
+      { filename: 'gone.js', status: 'removed' },
+    ])) === JSON.stringify(['a.js']));
+    const filesOk = S.verifyReviewerFiles({ reviewerPath: REPO, files: ['scripts/dao.mjs', 'scripts/lib/dao-cmd.mjs'] });
+    check('#541 被审文件在 → 绿', filesOk.ok === true && filesOk.checked === 2, JSON.stringify(filesOk));
+    const filesMiss = S.verifyReviewerFiles({ reviewerPath: REPO, files: ['scripts/dao.mjs', 'this-file-does-not-exist-541.js'] });
+    check('#541 缺被审文件 → 红并点名', filesMiss.ok === false && (filesMiss.missing || []).includes('this-file-does-not-exist-541.js'), JSON.stringify(filesMiss));
+
+    const parsed = S.parseDiffNameStatus('M\tscripts/dao.mjs\nA\thost/skills/dispatch/hooks/hooks.json\nD\told.txt\nR100\ta.txt\tb.txt\n');
+    check('name-status 收 A/M/R 新名、跳过 D', parsed.includes('scripts/dao.mjs') && parsed.includes('host/skills/dispatch/hooks/hooks.json') && parsed.includes('b.txt') && !parsed.includes('old.txt'), JSON.stringify(parsed));
+
+    const tmpA = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rev-a-'));
+    const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rev-b-'));
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const gitIn = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv });
+    gitIn(tmpA, ['init', '-q']);
+    gitIn(tmpA, ['config', 'user.email', 't@t']);
+    gitIn(tmpA, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(tmpA, 'f.txt'), 'a\n');
+    gitIn(tmpA, ['add', 'f.txt']);
+    gitIn(tmpA, ['commit', '-q', '-m', 'a']);
+    gitIn(tmpB, ['init', '-q']);
+    gitIn(tmpB, ['config', 'user.email', 't@t']);
+    gitIn(tmpB, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(tmpB, 'f.txt'), 'b\n');
+    gitIn(tmpB, ['add', 'f.txt']);
+    gitIn(tmpB, ['commit', '-q', '-m', 'b']);
+    const mismatch = S.verifyReviewerTree({ workerPath: tmpA, reviewerPath: tmpB });
+    check('#541 审官 HEAD ≠ 工人 HEAD → 红', mismatch.ok === false && /审空气/.test(mismatch.error), JSON.stringify(mismatch));
+    const same = S.verifyReviewerTree({ workerPath: tmpA, reviewerPath: tmpA });
+    check('#541 两树 HEAD 相同 → 绿', same.ok === true && same.reviewerHead === same.expectedOid, JSON.stringify(same));
+
+    const missingDir = path.join(os.tmpdir(), `dao-env-missing-${Date.now()}`);
+    const ro = S.envProbeWorktree(missingDir);
+    check('#546 故意让工作区不可写 → 环境自检红（写探针）', ro.ok === false && (ro.failed || []).includes('write'), JSON.stringify(ro));
+
+    const revHelp = spawnSync(process.execPath, [CLI, 'reviewer-create', '--help'], { encoding: 'utf8', cwd: REPO });
+    check('reviewer-create 出现在 help', /reviewer-create/.test(revHelp.stdout || ''), (revHelp.stdout || '').slice(0, 200));
+    const revMiss = spawnSync(process.execPath, [CLI, 'reviewer-create', '--name', 'x'], { encoding: 'utf8', cwd: REPO });
+    const pRevMiss = (() => { try { return JSON.parse(revMiss.stdout || '{}'); } catch { return {}; } })();
+    check('reviewer-create 缺 --pr → 非零', revMiss.status !== 0 && /--pr/.test(String(pRevMiss.error || revMiss.stderr || '')), JSON.stringify(pRevMiss));
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

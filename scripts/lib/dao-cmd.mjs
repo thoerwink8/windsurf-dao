@@ -594,6 +594,121 @@ export function hostProbeExec(cwd = process.cwd()) {
   };
 }
 
+export function gitCapture(cwd, args) {
+  if (!cwd) return { ok: false, error: 'git 没给工作区路径' };
+  const r = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8', windowsHide: true, timeout: 15000,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `git exit ${r.status}`).trim().slice(0, 200) };
+  }
+  return { ok: true, out: String(r.stdout || '').trim() };
+}
+
+export function gitHeadOid(cwd) {
+  const r = gitCapture(cwd, ['rev-parse', 'HEAD']);
+  if (!r.ok) return r;
+  if (!/^[0-9a-f]{7,40}$/i.test(r.out)) return { ok: false, error: `git HEAD 不是 oid：${r.out.slice(0, 80)}` };
+  return { ok: true, oid: r.out };
+}
+
+export function gitBranchName(cwd) {
+  const r = gitCapture(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!r.ok) return r;
+  if (!r.out || r.out === 'HEAD') return { ok: false, error: '工作区处于 detached HEAD，推不出分支名' };
+  return { ok: true, branch: r.out };
+}
+
+export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {}) {
+  const rev = gitHeadOid(reviewerPath);
+  if (!rev.ok) return { ok: false, error: `审官树 HEAD 没查成：${rev.error}` };
+  let want = expectedOid || null;
+  if (!want) {
+    const w = gitHeadOid(workerPath);
+    if (!w.ok) return { ok: false, error: `工人树 HEAD 没查成：${w.error}` };
+    want = w.oid;
+  }
+  if (rev.oid !== want) {
+    return {
+      ok: false,
+      error: `审官树 HEAD ${rev.oid} ≠ 期望 ${want}（在审空气）`,
+      reviewerHead: rev.oid,
+      expectedOid: want,
+    };
+  }
+  return { ok: true, reviewerHead: rev.oid, expectedOid: want };
+}
+
+export function verifyReviewerFiles({ reviewerPath, files } = {}) {
+  if (!Array.isArray(files)) {
+    return { ok: false, error: '被审文件清单没查成', missing: [], unscanned: true };
+  }
+  const missing = [];
+  for (const f of files) {
+    if (!existsSync(join(reviewerPath, f))) missing.push(f);
+  }
+  if (missing.length) return { ok: false, error: `审官树缺被审文件 ${missing.length} 个`, missing };
+  return { ok: true, checked: files.length, missing: [] };
+}
+
+/** GitHub pull file 列表：跳过 removed，取 filename。没查成时返回 null。 */
+export function parseGhPullFiles(json) {
+  if (!Array.isArray(json)) return null;
+  return json
+    .filter(f => f && f.status !== 'removed' && f.filename)
+    .map(f => f.filename);
+}
+
+/** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
+export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
+
+export function verifyInjection({ text, readError } = {}) {
+  if (readError) return { ok: false, reason: '没读成', error: readError, unscanned: true };
+  if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
+  const t = String(text);
+  if (!t.trim()) return { ok: false, reason: '注入后屏面是空的', unscanned: false, text: '' };
+  const m = t.match(PASTED_CONTENT_RE);
+  if (m) {
+    return {
+      ok: false,
+      reason: '任务书停在输入框（Pasted Content），没有进上下文',
+      evidence: m[0],
+      unscanned: false,
+      text: t,
+    };
+  }
+  return { ok: true, text: t, unscanned: false };
+}
+
+export function parseDiffNameStatus(text) {
+  const mustExist = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const status = line.slice(0, tab).trim();
+    const rest = line.slice(tab + 1);
+    if (!status || status[0] === 'D') continue;
+    const parts = rest.split('\t');
+    mustExist.push(parts[parts.length - 1]);
+  }
+  return mustExist;
+}
+
+export function runGh(args, { cwd } = {}) {
+  const r = spawnSync('gh', args, {
+    encoding: 'utf8', windowsHide: true, timeout: 30000, cwd,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `gh exit ${r.status}`).trim().slice(0, 240) };
+  }
+  return { ok: true, out: String(r.stdout || '') };
+}
+
+export function envProbeWorktree(cwd) {
+  return runCapabilityProbes({ exec: hostProbeExec(cwd) });
+}
+
 export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle } = {}) {
   const steps = [];
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
@@ -724,7 +839,7 @@ export function assessWorktreeLiveness(root, opts = {}) {
 }
 
 // ── 派工约束（CLI 是约束载体，不是提醒。issue #482 规格重定义）────────
-// 缺参数就跑不起来。不靠 hook：2026-08-12 df217ee 已写明「提醒值一行偏好，不值一个进程」。
+// 缺参数就跑不起来。拦旁路的闸门在 dispatch-gate.mjs（#546）：载体只有在「唯一入口」时才是约束。
 
 export const MERGE_POLICIES = ['auto', 'manual'];
 export const DISPATCH_VERBS = ['dispatch', 'worker-start'];
@@ -882,7 +997,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'send', 'liveness', 'check-help', 'raw',
+  'worker-start', 'reviewer-create', 'send', 'liveness', 'check-help', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -902,6 +1017,9 @@ export const FLAGS_BY_VERB = {
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
+  ]),
+  'reviewer-create': new Set([
+    '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
@@ -955,6 +1073,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <名> [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+  reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
   worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]

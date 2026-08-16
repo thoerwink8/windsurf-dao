@@ -7,11 +7,11 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 ## 拓扑
 
-master 卡只住主会话，永远零工人。每个任务用 `orca orchestration worker-start --worktree new-top-level --agent` 起（建顶层任务卡+起终端+记账一步到位，与 master 平级；默认模型场景一步到位，须指定模型 / Claude 族的两步走见「启动序」）。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
+master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+审官卡+起终端+注入任务书+记账；用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
 
 多工人任务：改文件的工人子 worktree 挂任务卡下（`--parent-worktree`）。git 上工人分支从任务分支切出（`--base-branch` 用任务分支，不要用 master）。
 
-审官及一切辅助角色（临时诊断工等）的卡也挂在被审 / 被服务的任务卡下。已知显示名时建卡带 `--parent-worktree 'name:#<PR号> - <动宾短语>'`。不要写 `worktree:<显示名>`——`worktree:` 前缀只要完整 `repo-id::path`（从 `orca worktree list/show --json` 取），否则 `selector_not_found`。任务归档整树收口，辅助卡不要飘成顶层。
+审官卡走 `node scripts/dao.mjs reviewer-create --pr <N>`：base 从 PR 推导，建完自证 HEAD 与被审文件，对不上就拒绝起 agent。不要手填 `--base-branch`。任务归档整树收口，辅助卡不要飘成顶层。
 
 ## 主会话红线
 
@@ -32,7 +32,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。门铃：派工后挂 Monitor 后台跑 `orca orchestration check --wait --types worker_done,escalation,question`（阻塞 CLI、等待期间零 token、消息到即返回），收 `worker_done`/`escalation`/`question` 才唤醒；不等 heartbeat——心跳空转实测 ~650 token/轮，只进信箱供怀疑时 peek，不唤醒。旧「check --wait 禁手」改写为「禁帅前台长等」：wait 由 Monitor 进程跑，不是帅的对话阻塞。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）已经守着同一个 run，**帅不要再挂 `check --wait` 门铃**——一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏（#525）。完工信号经信箱台转发到帅对话（`You have N orchestration messages`），外加工位闲置监视、待办队列监视。要手查信箱用一次性 `orca orchestration check --json`（不带 `--wait`）；`--ack` 语义是「确认上一批」，有 `deliveryId` 才带。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。心跳只进信箱供怀疑时 peek，不唤醒——空转实测 ~650 token/轮。
 
 完工信号：`worker_done` 是触发器、GitHub 是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
 
@@ -61,7 +61,7 @@ test "$(git branch --show-current)" = master \
 - 修法选择：返工怎么修（用「本单造成的缺陷 ⇒ 本单修」判据划范围）
 - 范围判断：单内/单外由本判据定，不预设清单
 - 开新单：单内派生任务直接开
-- 派自己的工人与审官：走 `worker-start` / 审官流程（见「一条完整命令链」）
+- 派自己的工人与审官：走 `dao.mjs dispatch` / `dao.mjs reviewer-create --pr <N>`（见「启动序」）
 - **按合并门自己合**：`merge-policy: auto` 是本单默认（#511 拍板），审官 approve 即合，不再等帅点头
 
 **仍须知会帅的**（报了继续做，不等回话）：
@@ -136,29 +136,30 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 ## 启动序
 
-默认一条命令走 Orca 原生编排（B 路实测 90 秒闭环），须特殊 argv 的才走两步收口；两条路径都以 `worker-start` 记账，release 才认得到：
+派工只有一条命令。旗标以 `node scripts/dao.mjs --help` / `node scripts/dao.mjs check-help` 为准，本页不复制。
 
-- **一步到位（默认）**：`orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json`——建树、起 agent、注任务书、记账一次完成；`worker_done` 有效即自动结账。任务书承运：中等长度、无裸反引号的走 `--spec`（短摘要+要点；spec 必须枚举全部职责类别，见「任务书口径」），长文/逐字大材料按「材料三去处」处置（要留存的进 GitHub，用完即弃的进 scratchpad），提示词里只给编号/指针；`worker_done` 后帅必做 PR 核对（见「非阻塞」）。
-- **两步走（须特殊 argv：reclaude 链路、pi 指定非默认模型）**：`worker-start` 的 `--model` 实测不支持 pi（报 `Agent pi does not support launch-time model selection`），`--agent claude` 起不了 reclaude 链——这两类 = 建卡（`--setup skip` 免 Setup 页签）→ `orca terminal create --command "<agent> --model <model>"` 起带模型终端（实测 `--command "pi --model deepseek-v4-flash"` 生效）→ `worker-start --task <id> --worktree <wt> --terminal <handle>` 复用收口。验开工后确认裸建的 fallback shell 未用即关掉。
+```bash
+node scripts/inbox-station.mjs ensure
+node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "短摘要：<目标 + 全部职责类别>" --model <id>
+```
 
-**禁手：裸 `terminal create + dispatch --inject` 旁路**（不起 worker-start）——release 认不到这种工位（返回 dispatch_not_found），收尾会回到误关工人终端的旧事故；例外通道必须先挂上 `worker-start --terminal`。
+`dispatch` 内部已经做完：选型闸、建工人卡、建审官卡（base 跟工人分支、建完核对 HEAD）、起终端、等 TUI 就绪、**注入任务书后再验开工**（屏上还挂着 `[Pasted Content N chars]` 就当没派出去）、失败回滚。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**受控例外（自动起审官，随 #480 退役）**：`scripts/flow.mjs` 闭环内起审官仍走 `worktree create --parent-worktree`（oneShot 带 `--prompt`，Claude 两步走），不经 `worker-start`。原因：flow 自建注入/验开工/存量反查，整段将随 #480 换成原生 orchestration（结构化 worker_done / escalation / check --wait）。人工派工（含多工人/辅助卡）禁止抄这条例外——必须 `worker-start` 记账。
+多工人 / 给已有 PR 补审官，仍在约束载体内：
 
-裸建卡再两步开终端（不 `--setup skip` 也不关 fallback shell）会多出 Terminal / Setup 两个死页签（用户实测截图）。
+```bash
+node scripts/dao.mjs worktree-create --name "<卡名>" --no-parent --setup skip
+node scripts/dao.mjs reviewer-create --pr <N> --name "审官·<模型>" --parent-worktree <任务卡>
+node scripts/dao.mjs worker-start --task <id> --worktree <sel> --terminal <handle> --model <id> --reviewer <id>
+```
 
-grok：经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，无需两步（2026-08-15 三证验收：shim 命中第一位、服务端确认默认 4.6、裸起探针 13 秒闭环）。
+裸敲 `orca orchestration worker-start` / `task-create` / `dispatch --inject` 会被 PreToolUse 闸门 exit 2 拦住（#546 #517）。逃生口（必须留痕）：`node scripts/dao.mjs raw -- <命令>`。只在闸门误伤、或库还没覆盖的场景用。
 
-command-code（Command Code 官方 CLI）：**当前不能承载需进 git 的 Orca 工人**——Orca agent 识别清单不含它，`worker-start --terminal` 必返回 `agent_unconfigured`（2026-08-16 帅·A 裁定，勿再走两步收口）。可用范围是**非交互查证/测速**：`command-code -p "问" -m <模型> --max-turns N --skip-onboarding`（实测 5.5s 出结果；启动模板只读 docs/model-routing.toml `[providers.commandcode].launch`）。需要进 git 的活一律走 pi / codex / claude 三条在册通道。**反例 #514**：那个 command-code 工人是派工旁路起的，`worker-list` 精确查询命中 0 条——从没进过编排却产出了进 git 的 PR，没有任何机制拦住，事后人工查 worker-list 才发现（账记帅·A 派工旁路，不是工人的问题）。
+**受控例外（自动起审官，随 #480 退役）**：`scripts/flow.mjs` 闭环内起审官仍走 `worktree create --parent-worktree`，不经 `worker-start`。人工派工禁止抄那条。
 
-批量起灶（多臂同时起）先做全员就绪清单：循环读每一臂，人人达 ready 或弹窗被处理才注题，禁止处理完一臂就走；弹窗会连环（信任框→沙箱框→登录框），过一道不等于就绪，每处理一道后重读；判「未开工」不能只看状态栏（会陈旧渲染），要看思考行 / 活动迹象。
+command-code 不能承载需进 git 的 Orca 工人（#514：旁路产出，worker-list 命中 0）。非交互查证另说，启动模板只读 `docs/model-routing.toml`。
 
-吞注入补救四步（`terminal send` 不再是默认注入器，只在吞注入时补救）：
-
-1. 注入前先证终端就绪：终端活着、能收输入。Claude 族还要等 reclaude 配置同步完。
-2. `orca terminal send --terminal <handle> --text "<长提示词>" --enter --json` 直写 TUI，不经 shell；指令不落文件。逐字大材料按「材料三去处」处置。
-3. 注入后回读，确认长提示词完整显示在屏上，不是被吞。
-4. 补一记回车（manual 态先切 auto 再回车）。
+吞注入只在 `dispatch` 的开工验证报红之后补救：先证终端就绪，再 `dao.mjs send`，回读确认不是 `[Pasted Content]`。
 
 ## 开工判据
 
@@ -181,10 +182,10 @@ spec 样例（正反例；具体职责清单以**当时的审官任务书为准*
 
 ```bash
 # ❌ 反例（#505 实证）：只写技术目标，PR 侧职责被当背景略过
-orca orchestration task-create --spec "短摘要：#505 链C活性判据换真证据 审读"
+# --spec "短摘要：#505 链C活性判据换真证据 审读"
 
 # ✅ 审官单：职责类别逐条列全，动作内容指当时的审官任务书
-orca orchestration task-create --spec "短摘要：审读 #505 + 按审官任务书落判定/收尾动作"
+# --spec "短摘要：审读 #505 + 按审官任务书落判定/收尾动作"
 ```
 
 ## 材料三去处（2026-08-15 拍板：临时树材料绑架树生命周期，pilot-B 实证）
@@ -199,53 +200,19 @@ orca orchestration task-create --spec "短摘要：审读 #505 + 按审官任务
 
 ## 一条完整命令链
 
-任务书承运 = worker-start 注入（`--spec` 短摘要枚举全部职责类别；逐字大材料按「材料三去处」分流）；`terminal send` 只在吞注入时补救（见「启动序」）。须读 GitHub 上的材料用 `gh` 取，不靠本机文件：
+见「启动序」。不要在本页维护第二份裸 orca 派工清单——那份拷贝会和 CLI 销叉（#546）。
+
+多工人 / 辅助卡仍在约束载体内：
 
 ```bash
-# 0) 信箱台：派工前/后都跑，保证横幅归属信箱台（帅 run-use 派工后必须再 ensure 归还）
-node scripts/inbox-station.mjs ensure
-
-# 0) 建编排任务：--spec 短摘要必须枚举全部职责类别（任务书承运；要留存的逐字大材料进 GitHub——issue/PR 正文或 docs/，提示词只给编号）
-orca orchestration task-create --spec "短摘要：<一句话目标>" --json
-
-# 1) 起工人一步到位：--worktree new-top-level 建顶层任务卡 + 起 agent + 注入任务书 + 记账一次完成
-#    pi 默认模型 = deepseek-v4-flash（拍板 issue #462）；task id 取第 0 步 JSON 里的 id
-orca orchestration worker-start --task <task_id> --worktree new-top-level --agent <agent> --setup run --json
-
-# 2) 须指定模型 / reclaude 链路（worker-start --model 不支持 pi、--agent claude 起不了 reclaude 链）：
-#    建卡（--setup skip）→ terminal create --command 起带模型终端 → worker-start --terminal 复用收口
-#    禁裸 terminal create + dispatch --inject 旁路（release 认不到 → 误关终端旧事故）
-orca worktree create --no-parent --name "<卡名>" --setup skip --json
-orca terminal create --worktree <repo-id::path> --command "<agent> --model <model_id>" --json
-orca orchestration worker-start --task <task_id> --worktree <repo-id::path> --terminal <handle> --json
-#   验开工后确认裸建的 fallback shell 未用即关掉
-
-# 3) 验开工（保留）：读回输出，token/cursor 在涨才算开工；见输入框残留补一记回车
-orca orchestration worker-read --dispatch <dispatch_id> --json
-
-# 4) 挂门铃（机械步骤，派完必做）：Monitor 后台 check --wait（零 token），收 worker_done/escalation/question
-#    才唤醒；收到 worker_done 后必查该分支 PR 存在（gh pr view <headRefName>）才收卷
-
-# 5) 收尾：worker-start 起的工位，worker_done 后一律 orca orchestration worker-release --dispatch <id>；
-#    复用同一终端接下单用 worker-start --task <next> --terminal <handle>（所有权转走后再等）；
-#    合并后 orca worktree rm 整棵任务树仍归帅终审
-
-# 多工人 / 辅助卡（审官、临时诊断工）：子卡挂任务卡下，git 从任务分支切。
-#   worker-start 无 --parent-worktree（--worktree new-child 挂的是当前卡，帅在 master 上会挂错），
-#   所以先 create 子卡，再 worker-start --terminal 收口记账——禁裸 create --agent 起完就走。
-#   --parent-worktree 用 branch:<任务分支>（name: 不是合法 selector；勿加 worktree: 前缀）。
-#   flow.mjs 自动起审官是受控例外（见「启动序」），不要把那条抄回这里。
-orca worktree create --parent-worktree branch:<任务分支> --base-branch <任务分支> --name "角色·模型" --agent <agent> --json
-orca orchestration worker-start --task <task_id> --worktree <新建子卡 id> --terminal <agentTerminalHandle> --json
-#   审官若是 Claude Opus（审官选型序 UI 类 GPT 禁入时顶位）走两步收口——--agent 起不了 reclaude 链：
-#   建卡 --setup skip → terminal create --command → worker-start --terminal
+node scripts/dao.mjs reviewer-create --pr <N> --name "审官·<模型>" --parent-worktree <任务卡>
+node scripts/dao.mjs worker-start --task <task_id> --worktree <新建子卡 id> --terminal <handle> --model <id> --reviewer <id>
 ```
 
 ## 命令级铁律
 
-- 任务书承运 = worker-start 注入：`--spec` 必须枚举全部职责类别（短摘要含要点，见「任务书口径」，禁只写技术目标）；逐字大材料按「材料三去处」分流（要留存的进 GitHub，用完即弃的进 scratchpad，禁止临时树/本机临时目录）。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文（反引号裸拼吞字符 2 例）。
-- `terminal send` 只在吞注入时补救（见「启动序」）；默认注入器是 worker-start，不手工 send 进就绪竞态。
-- 禁裸 `terminal create + dispatch --inject` 旁路（release 认不到 → 误关终端旧事故）；例外通道必须先挂 `worker-start --terminal`。
+- 任务书承运 = `dao.mjs dispatch` 的 `--spec`：必须枚举全部职责类别（短摘要含要点，见「任务书口径」，禁只写技术目标）；逐字大材料按「材料三去处」分流。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文。
+- 派工走 `dao.mjs dispatch`。裸 `orca orchestration worker-start` / `task-create` 会被闸门拦住；逃生口 `dao.mjs raw --` 必须留痕。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
 - 路径从 PR 反查，禁手抄：例：`gh pr view <PR号> --json headRefName -q .headRefName`——分支名从 PR 的 JSON 取，不手抄。
 - **拿不到就报出来**（#532 升格为通用原则）：凡是拿不到东西——gh 输出失败、文件读不到、查不到、超时——必须报出来，**不许编、不许当成 0**。「没查成」当「查过没事」不报警，是会出事故的那类错（#532 次级限流让 `gh api` 全线失败拿到空列表；#538 第一轮审官编造执行证据、整轮作废）。两个落点，审官/工人/临时脚本一视同仁：
