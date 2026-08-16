@@ -124,6 +124,7 @@ export function buildRows(samples, models = [], taskTypes = TASK_TYPES) {
           number: sample.number,
           rework: sample.rework,
           redFlags: sample.redFlags,
+          malformed: (sample.judgmentMalformed || []).length > 0,
         })),
       });
     }
@@ -136,7 +137,7 @@ export function renderRow(row) {
     return `| ${row.model} | ${row.taskType} | 无样本 | 无样本 | 无样本 | 无样本 |`;
   }
   const trend = row.trend
-    .map(item => `#${item.number} ${item.rework === null || item.rework === undefined ? '无判定' : item.rework}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
+    .map(item => `#${item.number} ${item.malformed ? '判定不合规' : (item.rework === null || item.rework === undefined ? '无判定' : item.rework)}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
     .join(' → ');
   const avgRework = row.averageRework === null || row.averageRework === undefined
     ? '无判定行'
@@ -279,7 +280,7 @@ function renderSingleReport(sample, cumulativeRow, unlabelledCount) {
     `- 状态：${stateName(sample)}`,
     `- 模型：${sample.model || '未标注'}`,
     `- 任务类：${sample.taskType || '未标注'}`,
-    `- 返工轮数：${describeRework(sample.rework)}`,
+    `- 返工轮数：${describeRework(sample.rework, sample.judgmentMalformed || [])}`,
     `- review 条数：${sample.reviewCount ?? 0}`,
     `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（0 条 review，未审不等于 0 红）' : sample.redFlags}`, 
     '',
