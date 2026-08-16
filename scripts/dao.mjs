@@ -487,20 +487,23 @@ function cmdWorkerStart(args) {
   const routing = loadOrFail();
   constrainDispatch(args, routing);
   if (!args.task) fail('worker-start 要 --task');
-  if (!args.worktree) fail('worker-start 要 --worktree');
   if (!args.terminal) fail('worker-start 要 --terminal（不用 --agent，参数在启动模板里）');
+  // #559 ②：worker_done 后同一终端续 Dispatch 走 worker-start --task <next> --terminal <handle>，
+  // 不用 --worktree（工作区由终端决定，官方：Reuse an existing agent only with --terminal <handle>）。
   const r = orca(argsWorkerStart({
     task: args.task,
-    worktree: args.worktree,
+    worktree: args.worktree || undefined,
     terminal: args.terminal,
     retryOf: args.retryOf,
   }));
   if (!r.ok) fail(`worker-start 失败: ${errText(r.error)}`);
+  const dispatchId = extractDispatchId(r.json);
+  if (!dispatchId) fail('worker-start 成功但没拿到 dispatch id——不是已开工，是没查成（续 Dispatch 需要新身份）', { json: r.json });
   const read = orca(argsTerminalRead({ terminal: args.terminal, limit: 80 }));
   if (!read.ok) fail(`worker-start 成功但读屏失败——不是已开工，是没查成: ${errText(read.error)}`);
   const injected = verifyInjection({ text: extractTerminalText(read.json) });
   if (!injected.ok) fail(`注入后开工验证失败: ${injected.reason}`, { inject: injected });
-  emit({ ok: true, json: r.json, inject: injected });
+  emit({ ok: true, json: r.json, dispatchId, inject: injected });
 }
 
 function cmdReviewerCreate(args) {

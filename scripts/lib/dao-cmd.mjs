@@ -1351,7 +1351,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
-  worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   send --terminal <handle> --text <文> [--enter]
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
 其他:
@@ -1371,4 +1371,8 @@ notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
 merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
 理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
+worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
+#559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
+换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
+续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
 `;
