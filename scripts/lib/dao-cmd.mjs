@@ -200,6 +200,13 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   return a;
 }
 
+export function argsWorkerShow({ dispatch } = {}) {
+  const a = ['orchestration', 'worker-show'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  a.push('--json');
+  return a;
+}
+
 export function argsTerminalClose({ terminal, tab } = {}) {
   const a = ['terminal', 'close'];
   if (terminal) a.push('--terminal', terminal);
@@ -249,6 +256,19 @@ export function extractTaskId(json) {
   return json?.result?.task?.id || null;
 }
 
+/** worker-start / dispatch-show / worker-show 的 Dispatch id。
+ * 真返回位置：worker-start 的 result.dispatchId（CLI 源码 worker-start 格式化器直接读它）；
+ * dispatch-show / worker-show 的 result.dispatch.id；worker-show 的 worker 对象另有 worker.dispatch_id。
+ * 顶层 id 是 RPC id，不能当 dispatchId（#502 同款教训）。
+ * #559：闭环发信改用 --to dispatch:<id>，派工流程从 worker-start 返回里取它。 */
+export function extractDispatchId(json) {
+  return json?.result?.dispatchId
+    || json?.result?.worker?.dispatchId
+    || json?.result?.worker?.dispatch_id
+    || json?.result?.dispatch?.id
+    || null;
+}
+
 export function isRunRequired(error) {
   const text = typeof error === 'object' && error
     ? `${error.code || ''} ${error.message || ''}`
@@ -278,6 +298,7 @@ export function catalogUsedFlags() {
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsTaskCreate({ spec: 's' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsWorkerShow({ dispatch: 'd' }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
@@ -1065,16 +1086,20 @@ export function argsRunCurrent() {
   return ['orchestration', 'run-current', '--json'];
 }
 
-/** 收件人形态。闭环三跳只有三种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。 */
+/** 收件人形态。闭环三跳只有四种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。
+ * term_… = 终端 handle（低层通道）；run:… = Run 信箱；dispatch:… = 受监督工人的结构化收件箱
+ * （#559 官方通道优先：`send --to dispatch:<id>` 是结构化收件箱邮件，不是 prompt injection，
+ * worker 的下一步 orchestration check 会收到它）；省略 = 自己那条 Run 信箱。 */
 export function classifyNotifyTarget(to) {
   const t = String(to ?? '').trim();
   if (!t) return { kind: 'own-run', id: null };
   if (/^term_/.test(t)) return { kind: 'terminal', id: t };
   if (/^run:/.test(t)) return { kind: 'run', id: t.slice(4) };
+  if (/^dispatch:/.test(t)) return { kind: 'dispatch', id: t.slice('dispatch:'.length) };
   if (t.startsWith('@')) {
     return { kind: 'unsupported', error: `闭环通知不发组播（${t}）：组播没人负责签收，收不到也看不出来` };
   }
-  return { kind: 'unsupported', error: `收件人形态不认识: ${t}（只收 term_… / run:… / 省略=自己那条 Run 信箱）` };
+  return { kind: 'unsupported', error: `收件人形态不认识: ${t}（只收 term_… / run:… / dispatch:… / 省略=自己那条 Run 信箱）` };
 }
 
 function orcaErrText(error) {
@@ -1108,6 +1133,26 @@ export function probeRecipient(target, orca) {
     }
     return { ok: false, unscanned: true, kind: 'run', id: target.id, error: `Run 信箱没查成: ${text}` };
   }
+  if (target.kind === 'dispatch') {
+    // #559 官方通道：dispatch:<id> 是受监督工人的结构化收件箱。
+    // 活性判据 = worker-show 能查到该 Dispatch（dispatch_not_found = 收件人不在，链断当场炸）。
+    const r = orca(argsWorkerShow({ dispatch: target.id }));
+    if (r.ok && r.json?.result?.dispatch?.id === target.id) {
+      return {
+        ok: true, kind: 'dispatch', id: target.id,
+        status: r.json?.result?.worker?.state ?? null,
+        assigneeHandle: r.json?.result?.dispatch?.assignee_handle ?? null,
+      };
+    }
+    if (r.ok) {
+      return { ok: false, kind: 'dispatch', id: target.id, error: `Dispatch 查无此 id: ${target.id}` };
+    }
+    const text = orcaErrText(r.error);
+    if (/dispatch_not_found|not_found|stale/i.test(text)) {
+      return { ok: false, kind: 'dispatch', id: target.id, error: `收件人 Dispatch 不存在或已失效（${text}）：${target.id}` };
+    }
+    return { ok: false, unscanned: true, kind: 'dispatch', id: target.id, error: `收件人 Dispatch 活性没查成（不等于收件人不在）：${text}` };
+  }
   const r = orca(argsRunCurrent());
   if (!r.ok) {
     const text = orcaErrText(r.error);
@@ -1118,11 +1163,17 @@ export function probeRecipient(target, orca) {
   return { ok: true, kind: 'own-run', id: run.id || null };
 }
 
-/** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。 */
+/** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。
+ * to_handle / to_dispatch 都可能是收件人落点（send --to dispatch:<id> 的消息字段形态以当时返回为准）。 */
 export function extractSentMessage(json) {
   const m = json?.result?.message || json?.message || null;
   if (!m || !m.id) return null;
-  return { id: m.id, toHandle: m.to_handle ?? null, deliveredAt: m.delivered_at ?? null };
+  return {
+    id: m.id,
+    toHandle: m.to_handle ?? null,
+    toDispatch: m.to_dispatch ?? null,
+    deliveredAt: m.delivered_at ?? null,
+  };
 }
 
 /** 落库复核。扫不到任何样本 → unscanned（「没查成」不许当「查过没事」）。 */
@@ -1167,11 +1218,19 @@ export function deliverMessage({
   if (!msg) {
     return { ok: false, hop, stage: '回执', error: `${hop}：orca 说发出去了却没给消息回执 —— 拿不到回执就当没送到`, recipient: pre };
   }
-  if (to && msg.toHandle && msg.toHandle !== String(to)) {
-    return {
-      ok: false, hop, stage: '回执', messageId: msg.id,
-      error: `${hop}：回执收件人是 ${msg.toHandle}，与请求的 ${to} 不一致（错投）`, recipient: pre,
-    };
+  if (to) {
+    const expected = String(to);
+    const badHandle = msg.toHandle && msg.toHandle !== expected;
+    const badDispatch = msg.toDispatch
+      && (expected.startsWith('dispatch:')
+        ? msg.toDispatch !== expected && msg.toDispatch !== expected.slice('dispatch:'.length)
+        : msg.toDispatch !== expected);
+    if (badHandle || badDispatch) {
+      return {
+        ok: false, hop, stage: '回执', messageId: msg.id,
+        error: `${hop}：回执收件人是 ${msg.toHandle || msg.toDispatch}，与请求的 ${expected} 不一致（错投）`, recipient: pre,
+      };
+    }
   }
 
   const inbox = orca(argsOrchestrationInbox({ limit: inboxLimit, full: true }));
@@ -1294,7 +1353,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   task-create --spec <文>
   worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   send --terminal <handle> --text <文> [--enter]
-  notify --subject <文> [--to <term_…|run:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+  notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
 其他:
   liveness [--path <工作树>]
   check-help
@@ -1302,6 +1361,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
 落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
+收件人形态：dispatch:<id>（官方结构化收件箱，士兵↔审官互发用；#559 ①）、run:…（审官→帅）、
+term_…（低层通道）、省略（自己那条 Run 信箱）。
 delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
 notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱，不代表对面读了、
 更不代表编排里那条任务变 completed。别加 --type worker_done 假装结算（见 issue #551）。

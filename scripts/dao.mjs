@@ -26,6 +26,7 @@ import {
   dispatchComment,
   envProbeWorktree,
   extractHandleFromCreate,
+  extractDispatchId,
   extractTaskId,
   extractTerminalText,
   extractWorktreeId,
@@ -287,21 +288,23 @@ function cmdDispatch(args) {
   });
   if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
-  // ── 闭环接线（#546 追加第五件）：两个 handle 互相写进对方任务书，完工→审官→帅 ──
-  // 士兵任务书 = 模板 + 本单 spec + 审官 handle（完工后它自己通知审官，不发给帅）。
-  // 审官任务书 = 模板 + 士兵 handle + merge-policy（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→通知帅可归档）。
+  // ── 闭环接线（#546 追加第五件 → #559 换官方原语）：两个 Dispatch id 互相写进对方任务书 ──
+  // #559 ①：send 要发 --to dispatch:<id>（结构化收件箱）不是 terminal handle。
+  // 士兵任务书 = 模板 + 本单 spec + 审官 dispatch id（完工后它自己通知审官，不发给帅）。
+  // 审官任务书 = 模板 + 士兵 dispatch id + merge-policy（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→通知帅可归档）。
   let soldierBook = null;
   let reviewerBook = null;
   try {
     soldierBook = args.spec
       ? renderDispatchTemplate('soldier-book.md', {
           SPEC: String(args.spec),
-          REVIEWER_HANDLE: String(created.reviewerHandle),
+          REVIEWER_DISPATCH_ID: String(created.reviewerDispatchId),
         })
       : null;
     reviewerBook = renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_HANDLE: String(created.workerHandle),
+      SOLDIER_DISPATCH_ID: String(created.workerDispatchId),
       MERGE_POLICY: gate.mergePolicy,
+      MERGE_REASON: gate.mergeReason ? String(gate.mergeReason) : '',
     });
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null, reviewerBook: null });
@@ -324,6 +327,10 @@ function cmdDispatch(args) {
     terminal: created.workerHandle,
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
+  created.workerDispatchId = extractDispatchId(started.json);
+  if (!created.workerDispatchId) {
+    failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
+  }
 
   const injectRead = readOnceHandle(created.workerHandle);
   const injected = verifyInjection({
@@ -350,6 +357,10 @@ function cmdDispatch(args) {
       terminal: created.reviewerHandle,
     }));
     if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, taskId, reviewerTaskId });
+    created.reviewerDispatchId = extractDispatchId(revStarted.json);
+    if (!created.reviewerDispatchId) {
+      failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，审官收不到士兵消息）', { ...plan, taskId, reviewerTaskId });
+    }
 
     const revInjectRead = readOnceHandle(created.reviewerHandle);
     reviewerInject = verifyInjection({
@@ -374,8 +385,8 @@ function cmdDispatch(args) {
     loop: {
       soldierBook: !!soldierBook,
       reviewerBook: !!reviewerBook,
-      soldierDoneTo: created.reviewerHandle,   // 士兵完工消息的收件人 = 审官 handle
-      reviewerRedTo: created.workerHandle,     // 审官红项消息的收件人 = 士兵 handle
+      soldierDoneTo: `dispatch:${created.reviewerDispatchId}`,   // 士兵完工消息的收件人 = 审官 Dispatch
+      reviewerRedTo: `dispatch:${created.workerDispatchId}`,     // 审官红项消息的收件人 = 士兵 Dispatch
       archivedBy: '帅（归档动作帅做，审官不 rm 树）',
     },
     probes: { worker: workerEnv, reviewer: reviewerEnv },

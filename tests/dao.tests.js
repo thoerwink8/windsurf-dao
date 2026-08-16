@@ -578,24 +578,33 @@ async function main() {
 
     const soldier = S.renderDispatchTemplate('soldier-book.md', {
       SPEC: '短摘要：修 X',
-      REVIEWER_HANDLE: 'term_reviewer-1',
+      REVIEWER_DISPATCH_ID: 'ctx_reviewer-1',
     });
     check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
-    check('soldier-book 填进审官 handle', /term_reviewer-1/.test(soldier), soldier.slice(-200));
-    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_HANDLE/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
+    check('soldier-book 填进审官 dispatch id', /ctx_reviewer-1/.test(soldier), soldier.slice(-200));
+    check('soldier-book 完工通知发 dispatch:<id> 不是 terminal handle', /--to dispatch:\{\{REVIEWER_DISPATCH_ID\}\}/.test(soldier) === false && /dispatch:ctx_reviewer-1/.test(soldier), soldier.slice(-220));
+    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_DISPATCH_ID/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
 
     const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_HANDLE: 'term_worker-1',
+      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
       MERGE_POLICY: 'auto',
+      MERGE_REASON: '',
     });
-    check('reviewer-book 填进士兵 handle', /term_worker-1/.test(reviewer));
+    check('reviewer-book 填进士兵 dispatch id', /ctx_worker-1/.test(reviewer));
     check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
-    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_HANDLE/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+    check('reviewer-book 红项发回 dispatch:<id> 不是 handle', /dispatch:ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer.slice(-300));
+    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_DISPATCH_ID/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+    const reviewerManual = S.renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
+      MERGE_POLICY: 'manual',
+      MERGE_REASON: '改协作约定',
+    });
+    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /gh pr ready/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
 
     let threw = false, threwMsg = '';
-    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_HANDLE
+    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_DISPATCH_ID
     catch (e) { threw = true; threwMsg = String(e.message || e); }
-    check('缺占位符值 → 抛', threw && /REVIEWER_HANDLE/.test(threwMsg), threwMsg);
+    check('缺占位符值 → 抛', threw && /REVIEWER_DISPATCH_ID/.test(threwMsg), threwMsg);
 
     let notFound = false;
     try { S.renderDispatchTemplate('no-such-template.md', {}); }
@@ -607,10 +616,11 @@ async function main() {
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
-    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_HANDLE/.test(daoSrc));
+    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_DISPATCH_ID/.test(daoSrc));
     check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
     check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
-    check('dao.mjs 输出双方收件 handle（loop 段）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc));
+    check('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', /extractDispatchId/.test(daoSrc));
+    check('dao.mjs 输出双方收件 dispatch（loop 段，soldierDoneTo=dispatch:…）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc) && /dispatch:\$\{created\.reviewerDispatchId\}/.test(daoSrc));
   }
 
   console.log('\n=== ⑨ 闭环三跳：投递失败必须炸，不许静默（#548 红项 1）===');
@@ -620,6 +630,8 @@ async function main() {
     const DEAD = 'term_00000000-0000-0000-0000-000000000000';
     const LIVE_RUN = 'run_live0001';
     const DEAD_RUN = 'run_00000000';
+    const LIVE_DISPATCH = 'ctx_live-0001';
+    const DEAD_DISPATCH = 'ctx_00000000-0000-0000-0000-000000000000';
 
     // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
     function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
@@ -639,6 +651,13 @@ async function main() {
         }
         if (key === 'orchestration run-current') {
           return { ok: true, json: { ok: true, result: { run: null } } };
+        }
+        if (key === 'orchestration worker-show') {
+          const d = a[a.indexOf('--dispatch') + 1];
+          if (d === LIVE_DISPATCH) {
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+          }
+          return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
         }
         if (key === 'orchestration send') {
           const to = a.includes('--to') ? a[a.indexOf('--to') + 1] : null;
@@ -662,6 +681,9 @@ async function main() {
       { hop: '审官→士兵', live: { to: LIVE }, dead: { to: DEAD } },
       // 审官→帅 是普通告知，不带 --type worker_done：notify 验投递不验结算（#551）
       { hop: '审官→帅', live: { to: `run:${LIVE_RUN}` }, dead: { to: `run:${DEAD_RUN}` } },
+      // #559 ①：士兵↔审官互发走 dispatch:<id>（结构化收件箱）不是 terminal handle
+      { hop: '士兵→审官(dispatch)', live: { to: `dispatch:${LIVE_DISPATCH}` }, dead: { to: `dispatch:${DEAD_DISPATCH}` } },
+      { hop: '审官→士兵(dispatch)', live: { to: `dispatch:${LIVE_DISPATCH}` }, dead: { to: `dispatch:${DEAD_DISPATCH}` } },
     ];
     for (const h of HOPS) {
       const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
@@ -685,6 +707,17 @@ async function main() {
 
     const noRun = S.deliverMessage({ subject: 'x', orca: fakeOrca() });
     check('省略收件人但没绑 Run → 拦下（发进真空）', noRun.ok === false && /真空/.test(noRun.error), JSON.stringify(noRun));
+
+    const badDispatchForm = S.classifyNotifyTarget('dispatch_ctx-x');
+    check('dispatch_xxx 不带冒号 → 不收（只收 dispatch:）', badDispatchForm.kind === 'unsupported', JSON.stringify(badDispatchForm));
+    const okDispatchForm = S.classifyNotifyTarget('dispatch:ctx_x');
+    check('dispatch:<id> 形态被认', okDispatchForm.kind === 'dispatch' && okDispatchForm.id === 'ctx_x', JSON.stringify(okDispatchForm));
+
+    const wsFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));
+    check('真语料 worker-show → extractDispatchId 取 result.dispatch.id', S.extractDispatchId(wsFx) === 'ctx_5a59f2b680ca', JSON.stringify(S.extractDispatchId(wsFx)));
+    check('extractDispatchId 认 worker-start 的 result.dispatchId（CLI 源码形态）', S.extractDispatchId({ result: { dispatchId: 'ctx_abc' } }) === 'ctx_abc');
+    check('extractDispatchId 认 worker.dispatch_id', S.extractDispatchId({ result: { worker: { dispatch_id: 'ctx_def' } } }) === 'ctx_def');
+    check('extractDispatchId 不认 RPC 顶层 id', S.extractDispatchId({ id: 'rpc-123', result: {} }) === null);
 
     const group = S.deliverMessage({ to: '@all', subject: 'x', orca: fakeOrca() });
     check('组播收件人 → 拒发（没人负责签收）', group.ok === false && /组播/.test(group.error), JSON.stringify(group));

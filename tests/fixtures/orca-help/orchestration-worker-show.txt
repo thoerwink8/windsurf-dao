@@ -1,0 +1,12 @@
+orca orchestration worker-show
+
+Usage: orca orchestration worker-show --dispatch <dispatch_id> [--json]
+
+Inspect one supervised worker Dispatch
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --dispatch

@@ -30,5 +30,11 @@
     "command": "orca orchestration task-create --spec \"契约夹具采集：task-create 真实返回（采集后闲置）\" --json",
     "capturedAt": "2026-08-15",
     "note": "与 #497 tests/fixtures/orca-returns/task-create.json 同一份实采（result.task.id，顶层 id 是 RPC id）"
+  },
+  "extractDispatchId": {
+    "file": "worker-show.json",
+    "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
+    "capturedAt": "2026-08-15",
+    "note": "实采自 #497 分支 tests/fixtures/orca-returns/worker-show.json（result.dispatch.id 与 result.worker.dispatch_id 双位同值；worker-start 成功返回另有 result.dispatchId，CLI 源码 worker-start 格式化器直接读它——shape 以当时返回为准，本单用耐受提取）"
   }
 }
