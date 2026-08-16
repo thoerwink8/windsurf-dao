@@ -215,6 +215,16 @@ export function argsWorkerRelease({ dispatch, retryRequest } = {}) {
   return a;
 }
 
+export function argsWorkerRead({ dispatch, source, cursor, limit } = {}) {
+  const a = ['orchestration', 'worker-read'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  if (source) a.push('--source', source);
+  if (cursor != null) a.push('--cursor', String(cursor));
+  if (limit != null) a.push('--limit', String(limit));
+  a.push('--json');
+  return a;
+}
+
 export function argsOrchestrationReply({ id, body, from } = {}) {
   const a = ['orchestration', 'reply'];
   if (id) a.push('--id', id);
@@ -345,6 +355,7 @@ export function catalogUsedFlags() {
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
+    argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
     argsOrchestrationReply({ id: 'm', body: 'b' }),
@@ -755,6 +766,29 @@ export function verifyInjection({ text, readError } = {}) {
     };
   }
   return { ok: true, text: t, unscanned: false };
+}
+
+/**
+ * worker-read 的开工证明（#559 ⑥）。官方可靠源：source ≠ 'terminal' = hook 报告的
+ * Codex/Claude/Grok transcript（可证明 worker session）；source = 'terminal' = 只给了
+ * 有界终端输出（老式屏面证据，会假阳）。没读成必须标 unscanned——不许当成「没开工」。
+ * 判开工优先用它；证明不了时降级回 verifyInjection 屏面检查兜底（③单接上后删）。
+ */
+export function verifyWorkerStarted(readJson) {
+  if (readJson == null) return { ok: false, reason: '没读成', unscanned: true, error: 'worker-read 结果为空' };
+  if (readJson.error) return { ok: false, reason: '没读成', unscanned: true, error: orcaErrText(readJson.error) };
+  const r = readJson.result ?? readJson;
+  const source = r.source ?? 'terminal';
+  if (source !== 'terminal') {
+    return { ok: true, proven: true, source, reason: '官方 transcript 源（source=' + String(source) + '）' };
+  }
+  return {
+    ok: false,
+    proven: false,
+    source: 'terminal',
+    fallbackReason: r.fallbackReason ?? null,
+    reason: 'worker-read 只给终端输出（source=terminal），没证明 worker session——降级回屏面验开工',
+  };
 }
 
 export function parseDiffNameStatus(text) {
@@ -1319,7 +1353,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'worker-release', 'reviewer-create', 'send', 'notify', 'reply',
+  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'raw',
 ];
 
@@ -1342,6 +1376,7 @@ export const FLAGS_BY_VERB = {
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
+  'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'reviewer-create': new Set([
     '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
   ]),
@@ -1409,6 +1444,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
+  worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send --terminal <handle> --text <文> [--enter]
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
   reply --id <消息id> --body <回答> [--from <handle>]   # 帅回答工人的 ask 提问，回答进编排记录（#559 ③）
