@@ -18,7 +18,7 @@
 //   - 该发生而没发生：flow 心跳 ts 停止更新、在途 PR 停留超 N（#471 停滞态/帅停摆）
 //   - 孤儿树：还有没有活跃执行者（#492：任何「我不认识它⇒它是孤儿」的判据都必然误伤同僚）
 //
-// 检测矩阵（全部来自 #442 实测案例 + #500/#492/#471/#476 换代）：
+// 检测矩阵（全部来自 #442 实测案例 + #500/#492/#471/#476 换代 + #569 降噪/换 provider/权限框）：
 //   1. exited       —— 终端 read 状态 exited（「终端 exited 且非完工态」独立报警）
 //   2. waiting      —— ps agents[].state=waiting（弹窗/等输入的官方信号，零关键字猜测）
 //   3. fingerprint  —— 屏面底部当前状态窗口命中错误指纹清单，**两连同才报警**；
@@ -29,11 +29,31 @@
 //                       ps updatedAt 前进都不算活性——#500：spinner 重绘既改屏面又动 cursor）
 //   5. read-failed  —— 被监视工位却读不到屏面（守卫自身失效必须显形，不能静默）
 //   6. idle         —— 空转（#471 第四类事故）：进程在动（ps state=working）但工作树
-//                       N 分钟无 git 活动（last commit / 未提交文件 mtime / 未推送）
+//                       N 分钟无 git 活动（last commit / 未提交文件 mtime / 未推送）。
+//                       #569 降噪只减假阳不减真阳，三类豁免（各自的判据，不是名单）：
+//                       ① 子卡（审官/辅助，卡名带 ·）产出是 review comment 与 notify 不是
+//                          commit——git 判据无意义，其停摆由 stall/指纹/selector/waiting 兜底；
+//                       ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的
+//                          PR = 「已交付、正在等下一环」，不算空转（PR 要返工时仍判）；
+//                       ③ 活性否决（#500 一致性）：非 spinner 真实内容在动 = 活，不算空转
+//                          （刚重启正在开 PR / 正在做非 commit 活都不算）。
+//                       真空转（working + 屏面冻结 + 无在途 PR + 非子卡）照旧报。
 //   7. orphan       —— 孤儿树（#492/#476）：无活跃执行者 + 关联 #N 已关（或 无关联且静置超 N）
-//   8. naming       —— 任务卡命名不合规（#476：顶层 #N - 动宾短语 / 子卡 #N - xxx·yyy）
+//   8. naming       —— 任务卡命名不合规（#476：顶层 #N - 动宾短语 / 子卡 #N - xxx·yyy）。
+//                      #569 降噪：master 卡（isMainWorktree）与「无 agent 且无 #N 前缀」的非任务卡
+//                      不参与命名校验（windsurf-dao 这类 review 工作区不是任务卡，报它=假阳）
 //   9. flow-stalled / stagnation —— 读 flow.mjs 心跳（#497 立约 _flow/heartbeat.json）：
 //                       心跳 ts 太旧 = flow 停摆；在途 PR 停留超 N = 该发生而没发生（#471）
+//   10. selector      —— 权限确认框停摆指纹（#569 ④）：屏面底部持续出现 N/M:select 选择器提示。
+//                        进程活着、开过工、但卡在等一个永远不会来的人类输入——编排层看一切正常，
+//                        只有屏面底部选择器显形。检测到就报，不自动替它选（选哪个有后果，尤其 reject）
+//   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
+//                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
+//                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
+//                        最近 message 的 errorMessage；新会话开头的初始选型（无前序 message）不报
+//   BLIND          —— 编排层隐形工人（#569 垫片 watch-board.mjs 并进）：树级判据，有活终端但
+//                        agents=0（reclaude/Claude 起法 orca 认不出 agent）——看门狗与流转器都
+//                        监视不到，只能人工盯
 //
 // 两个窗口（#442 v0 首战假阳性教训的落点）：
 //   --window       整屏窗口（默认 60 行）：停摆判据用。
@@ -74,12 +94,15 @@
 //   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 分级排除（可重复）
 //   node scripts/watchdog.mjs --dispose-actions off  处置矩阵动作关掉（只检测不动作）
 //   node scripts/watchdog.mjs --heartbeat-file <path> flow 心跳文件路径（默认 _flow/heartbeat.json）
+//   node scripts/watchdog.mjs --sessions-dir <dir> pi 会话日志目录（默认 ~/.pi/agent/sessions；
+//                       快照模式默认 <快照轮目录>/sessions）
 //   node scripts/watchdog.mjs --now <epochMs>    固定「现在」（测试确定性用；默认 Date.now()）
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, join, relative, resolve } from 'node:path';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -134,6 +157,8 @@ const PARAMS = {
   stallRounds: 3,           // 停摆判据：非 spinner 真实内容连续 N 轮不变才报
   idleMinutes: 20,          // 空转判据：活着但工作树 N 分钟无 git 活动（#471 起步建议 20 分钟）
   orphanStaleMinutes: 30,   // 孤儿次判据：无活跃执行者且无关联时，静置 N 分钟才报
+  selectorRounds: 2,        // 权限确认框停摆（#569 ④）：屏面底部 N/M:select 持续 N 轮才报（
+                            // 两连同，与指纹同口径；真阳#568 实证：卡 7 分钟没人应）
   namingTop: /^#\d+ - /,        // 顶层任务卡：#<PR号> - 动宾短语（SKILL 拓扑节）
   namingSub: /^#\d+ - .+·/,     // 子卡（审官/辅助）：#<PR号> - xxx·yyy
   fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471）
@@ -148,7 +173,8 @@ function printUsage() {
   console.log(`用法：
   node scripts/watchdog.mjs [--once] [--interval 秒] [--window 行] [--state-window 行]
                             [--snapshot-dir 目录] [--self-worktree <id>] [--exclude-pane <paneKey>]...
-                            [--dispose-actions on|off] [--heartbeat-file <path>] [--now <epochMs>]
+                            [--dispose-actions on|off] [--heartbeat-file <path>]
+                            [--sessions-dir <目录>] [--now <epochMs>]
 
   --once             跑单轮后退出（给测试用）
   --interval <秒>     轮询间隔（默认 30）
@@ -159,11 +185,12 @@ function printUsage() {
   --exclude-pane <paneKey> 按稳定 pane ID 排除控制端/审官会话（可重复，不维护 displayName 名单）
   --dispose-actions off  处置矩阵动作关掉（只检测不动作；默认 on）
   --heartbeat-file <path> flow 心跳文件路径（默认 _flow/heartbeat.json）
+  --sessions-dir <目录> pi 会话日志目录（默认 ~/.pi/agent/sessions；快照模式默认 <快照轮目录>/sessions）
   --now <epochMs>     固定「现在」（测试确定性用）`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 30, window: 60, stateWindow: 12, snapshotDir: null, selfWorktree: null, excludePanes: [], disposeActions: true, heartbeatFile: null, now: null };
+  const args = { once: false, interval: 30, window: 60, stateWindow: 12, snapshotDir: null, selfWorktree: null, excludePanes: [], disposeActions: true, heartbeatFile: null, sessionsDir: null, now: null };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -189,6 +216,7 @@ function parseArgs(argv) {
         break;
       }
       case '--heartbeat-file': args.heartbeatFile = argv[++i] || ''; break;
+      case '--sessions-dir': args.sessionsDir = resolve(process.cwd(), argv[++i] || ''); break;
       case '--now': {
         const v = Number(argv[++i]);
         if (!Number.isFinite(v) || v <= 0) { console.error('--now 需要正数 epochMs'); process.exit(3); }
@@ -360,7 +388,7 @@ function makeLiveSource(window) {
     return res;
   };
 
-  return { ps, paneByKey, readTerminal, tlError, terminalsByPath: buildTerminalsByPath(terminals) };
+  return { ps, paneByKey, readTerminal, tlError, terminalsByPath: buildTerminalsByPath(terminals), prEvidence: livePrEvidence() };
 }
 
 function buildTerminalsByPath(terminals) {
@@ -421,9 +449,11 @@ function loadSnapshotRound(roundDir) {
   // 证据文件（可缺省；缺省时对应判据明确报「没查成」而不是当作查过没事）：
   //   git-evidence.json  { capturedAt: <ms>, worktrees: { <worktreeId>: { lastActivityTs: <ms> } } }
   //   gh-evidence.json   { <worktreeId>: { ticketOpen: bool, ticket: "pr 505"|"issue 483"|null } }
+  //   pr-evidence.json   { <worktreeId>: { number, open: bool, isDraft: bool, reviewDecision } }（#569）
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
+  const prEv = readJson('pr-evidence.json');
   const hb = readJson('heartbeat.json');
 
   return {
@@ -432,7 +462,9 @@ function loadSnapshotRound(roundDir) {
     gitEvidence: gitEv?.worktrees || null,
     gitCapturedAt: gitEv?.capturedAt ?? null,
     ghEvidence: ghEv || null,
+    prEvidence: prEv || null,
     heartbeat: hb || null,
+    sessionsDir: join(roundDir, 'sessions'),
   };
 }
 
@@ -545,6 +577,47 @@ function assocNumber(name) {
   return m ? Number(m[1]) : null;
 }
 
+// ── 在途 PR 证据（#569 降噪 ②：已交付等下一环的工位不算空转）──────────
+// 一轮一次批量 `gh pr list`（按 head 分支名匹配各工作树），不逐个查。
+// 快照模式从 pr-evidence.json 读：{ <worktreeId>: { number, open, isDraft, reviewDecision } }。
+function livePrEvidence() {
+  const r = spawnSync('gh', ['pr', 'list', '--json', 'number,headRefName,state,isDraft,reviewDecision', '--limit', '100'], { encoding: 'utf8', timeout: 15000 });
+  if (r.error || r.status !== 0) {
+    return { error: `gh pr list 失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 160)}` };
+  }
+  try {
+    const prs = JSON.parse(r.stdout);
+    const byBranch = new Map();
+    for (const p of Array.isArray(prs) ? prs : []) {
+      if (!p.headRefName) continue;
+      byBranch.set(`refs/heads/${p.headRefName}`, {
+        number: p.number,
+        open: p.state === 'OPEN',
+        isDraft: p.isDraft === true,
+        reviewDecision: p.reviewDecision || null, // '' / null 都归 null（未请求评审）
+      });
+    }
+    return { byBranch };
+  } catch (e) {
+    return { error: `gh pr list 输出解析失败：${e.message}` };
+  }
+}
+
+// 每树在途 PR 证据：{ open,isDraft,reviewDecision,number } / { none } / { missing } / { error }。
+// missing/error 一律显式「没查成」——查不到不等于「没在途 PR」，不放行空转豁免（fail-visible）。
+function prEvidenceFor(w, source, args) {
+  if (!args.snapshotDir) {
+    if (source.prEvidence?.error) return { error: source.prEvidence.error };
+    if (!source.prEvidence?.byBranch) return { missing: true };
+    const branch = String(w.branch || '').replace(/^refs\/heads\//, '');
+    if (!branch) return { missing: true };
+    const hit = source.prEvidence.byBranch.get(branch) || source.prEvidence.byBranch.get(`refs/heads/${branch}`);
+    return hit || { none: true };
+  }
+  const ev = source.prEvidence && (source.prEvidence[w.worktreeId] || source.prEvidence[w.path]);
+  return ev ? { ...ev } : { missing: true };
+}
+
 function runRound(source, args, state) {
   const targets = [];
   for (const w of source.ps) {
@@ -576,6 +649,7 @@ function runRound(source, args, state) {
     const st = state.stations[t.key] ||= {
       epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
       fpStreak: 0, fpLoss: { persistCount: 0, firstTs: 0, reported: false },
+      selStreak: 0, idleExempt: null,
     };
     const graded = t.graded === true; // 分级排除：豁免指纹/停摆/空转，保留 exited/waiting 死活判据
 
@@ -658,6 +732,29 @@ function runRound(source, args, state) {
       }
     }
 
+    // ⑩ 权限确认框停摆指纹（#569 ④）：屏面底部出现 N/M:select 选择器提示且持续超阈轮。
+    // 判据很硬、可机检：进程活着（ps working/status.terminal=running）、开过工（proof.proven）、
+    // 但在等一个永远不会来的人类输入——#568 实证 grok 审官卡在权限确认框 7 分钟一个字没审。
+    // 检测到就报，不自动替它选（选哪个有后果，尤其 reject 那一项）。活证否决：非 spinner 真实
+    // 内容在动 = 可能正在作答，不唤醒。
+    if (!graded) {
+      const sel = bottom.match(/(\d+)\/(\d+)\s*:select/i);
+      if (sel) {
+        st.selStreak += 1;
+        if (st.selStreak >= PARAMS.selectorRounds && !st.fired.has('selector')) {
+          if (realChanged) {
+            notes.push({ name: t.name, type: '观察', detail: `屏面底部选择器「${sel[0]}」持续 ${st.selStreak} 轮但非 spinner 真实内容在动——活证否决（可能正在作答），不唤醒` });
+          } else {
+            st.fired.add('selector');
+            events.push({ name: t.name, type: 'selector', detail: `屏面底部选择器「${sel[0]}」持续 ${st.selStreak} 轮——agent 卡在权限确认框等人类输入（#569；#568 实证：没人应就永远停在那里，编排层一切正常）。不自动替它选（选哪个有后果，尤其 reject），读屏分诊/terminal send 叫醒` });
+          }
+        }
+      } else {
+        st.selStreak = 0;
+        st.fired.delete('selector');
+      }
+    }
+
     // ④ 停摆判据（#500 换代）：
     //    主判据 = 非 spinner 真实内容连续 N 轮不变（strippedHash 不变）。
     //    生命周期键 = 终端 incarnationId（同 pane 重启重新起算）；ps updatedAt 变化不算活性——
@@ -681,8 +778,17 @@ function runRound(source, args, state) {
       st.lastHash = strippedHash; // 分级排除工位仍记录哈希，回来时不串旧值
     }
 
-    // ⑥ 空转（#471 第四类事故，强判据）：进程在动（ps working）+ 工作树 N 分钟无 git 活动。
-    //    文件系统是区分「思考中/卡死/空转」的唯一硬证据（#471 实证：state.json 在动+代码零改动=空转）。
+    // ⑥ 空转 v2（#471 第四类事故 + #569 降噪只减假阳不减真阳）：
+    //    强判据 = 进程在动（ps working）+ 工作树 N 分钟无 git 活动。三类豁免各自的判据（不是名单）：
+    //      ① 子卡（审官/辅助，卡名带 ·）：产出是 review comment 与 notify 不是 commit——git 判据
+    //         对它们无意义，停摆由 stall/指纹/选择器⑩/waiting 判据兜底（#568 那个卡权限框的
+    //         审官就是被这组判据接住的，不是没人看）；
+    //      ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的 PR =
+    //         「已交付、正在等下一环」，不算空转（#565 已推 PR 等审实证）；PR 要返工时仍判；
+    //      ③ 活性否决（#500 一致性）：非 spinner 真实内容在动 = 活（弱判据），不算空转——
+    //         刚重启正在开 PR（#567 实证）/ 正在做非 commit 活都不算。
+    //    git 证据缺失/拉不到 → 显式「没查成」note（查不到 ≠ 查过没事，不猜）。
+    //    真空转（working + 屏面冻结 + 无在途 PR + 非子卡）照旧报——验收 2 的对照样本就是它。
     if (!graded && t.agent.state === 'working') {
       const w = source.ps.find(x => (Array.isArray(x.agents) ? x.agents : []).some(a => a.paneKey === t.agent.paneKey));
       const ev = w ? gitEvidenceFor(w, source, args) : { missing: true };
@@ -692,12 +798,39 @@ function runRound(source, args, state) {
         notes.push({ name: t.name, type: '观察', detail: `git 证据拉不到：${ev.error}——空转项没查成（不猜）` });
       } else if (ev.lastActivityTs != null && (now - ev.lastActivityTs) > PARAMS.idleMinutes * 60000) {
         const mins = Math.round((now - ev.lastActivityTs) / 60000);
-        if (!st.fired.has('idle')) {
-          st.fired.add('idle');
-          events.push({ name: t.name, type: 'idle', detail: `空转候选：进程在动（ps state=working）但工作树 ${mins} 分钟无 git 活动（#471：4 小时空转实证；处置：先 interrupt+催交付一次，仍无产出→换人不救；审官/只读类工位若符合预期请忽略）` });
+        // 豁免判断（按证据、按角色，不是 pane 名单）
+        const roleExempt = w ? /·/.test(String(w.displayName || '')) : false;
+        const prEv = w ? prEvidenceFor(w, source, args) : null;
+        const prExempt = !!(prEv && prEv.open === true && prEv.isDraft !== true && prEv.reviewDecision !== 'CHANGES_REQUESTED');
+        const liveVeto = realChanged === true;
+        const exempt = roleExempt ? 'role' : prExempt ? 'pr' : liveVeto ? 'live' : null;
+        if (exempt) {
+          st.fired.delete('idle');
+          const changed = st.idleExempt !== exempt;
+          st.idleExempt = exempt;
+          // 豁免 note 只在状态切换时打一次，不每轮刷屏（常驻状态不重复唤醒）
+          if (changed && exempt === 'role') {
+            notes.push({ name: t.name, type: '观察', detail: '子卡（审官/辅助，卡名带 ·）不判 git 空转——产出是 review comment 与 notify 不是 commit（#569），其停摆由 stall/指纹/选择器/waiting 判据兜底' });
+          } else if (changed && exempt === 'pr') {
+            const prNo = prEv.number != null ? ` #${prEv.number}` : '';
+            const dec = prEv.reviewDecision || '等待评审/合并';
+            notes.push({ name: t.name, type: '观察', detail: `在途 PR${prNo}（OPEN 非 draft，${dec}）等着别人——已交付的工位不算空转（#569），等待环不在本工位` });
+          } else if (changed && exempt === 'live') {
+            notes.push({ name: t.name, type: '观察', detail: '空转豁免：非 spinner 真实内容在动——活性否决（#500 弱判据，刚重启正在开 PR / 正在做非 commit 活），本轮不算空转' });
+          }
+        } else {
+          st.idleExempt = null;
+          if (prEv && (prEv.missing || prEv.error)) {
+            notes.push({ name: t.name, type: '观察', detail: `PR_EVIDENCE_${prEv.error ? 'ERROR' : 'MISSING'}: ${prEv.error || '本轮没有在途 PR 证据（快照缺 pr-evidence.json / 无分支）'}——空转豁免没查成，不是查过没事（查不到不等于没在途 PR）` });
+          }
+          if (!st.fired.has('idle')) {
+            st.fired.add('idle');
+            events.push({ name: t.name, type: 'idle', detail: `空转候选：进程在动（ps state=working）但工作树 ${mins} 分钟无 git 活动，屏面无真实内容在动、无在途 PR、非子卡（#471：4 小时空转实证；#569 降噪后只剩这类真阳；处置：先 interrupt+催交付一次，仍无产出→换人不救）` });
+          }
         }
       } else {
         st.fired.delete('idle');
+        st.idleExempt = null;
       }
     }
   }
@@ -724,11 +857,34 @@ function runWorktreePass(source, args, state) {
     if (args.selfWorktree && w.worktreeId === args.selfWorktree) continue;
     const name = w.displayName || id;
     const st = state.worktrees[id] ||= { fired: new Set() };
+    const agentsOf = Array.isArray(w.agents) ? w.agents : [];
+
+    // 编排层隐形工人（#569 垫片 watch-board.mjs 的 BLIND 判据并进）：
+    // reclaude/Claude 起法 orca 认不出 agent（agents=0）——有活终端却零 agent 的卡 = 隐形工人，
+    // 看门狗工位循环与流转器都监视不到（#569 实证：Claude 工人跑全程没人看见），只能人工盯。
+    // 主卡/自卡已在上层排除；liveTerminalCount>1 排除单终端残留壳/浏览窗（review-566 这类）。
+    if (agentsOf.length === 0) {
+      if ((w.liveTerminalCount || 0) > 1) {
+        if (!st.fired.has('blind')) {
+          st.fired.add('blind');
+          events.push({ name, type: 'blind', detail: `编排层隐形工人：有 ${w.liveTerminalCount} 个活终端但 agents=0（reclaude/Claude 起法的已知盲区，orca 认不出 agent）——看门狗工位循环与流转器都监视不到，只能人工盯（#569 垫片 BLIND 判据并进）` });
+        }
+      } else {
+        st.fired.delete('blind');
+      }
+    } else {
+      st.fired.delete('blind');
+    }
 
     // 命名校验（#476）：任务卡显示名格式。只查本仓（selfWorktree 的 repo 前缀），
     // 别的仓库/主帅的盘面命名约定可能不同，不越界（#492 跨主帅教训）。
     if (selfRepo && !String(w.worktreeId || '').startsWith(selfRepo)) continue;
-    if (name && !PARAMS.namingTop.test(name) && !PARAMS.namingSub.test(name)) {
+    // #569 降噪：无 agent 且无 #N 前缀的树不是任务卡（master 已在上层按 isMainWorktree 排除；
+    // review-566 这类「windsurf-dao」残留工作区按定义就不叫 #N - 动宾短语）——命名校验不适用；
+    // 有 agent 的卡（含 agent 已 done 的历史卡）照查，误命名的活跃卡不丢。
+    if (agentsOf.length === 0 && !/^#\d+/.test(String(name || ''))) {
+      // 非任务卡，跳过
+    } else if (name && !PARAMS.namingTop.test(name) && !PARAMS.namingSub.test(name)) {
       if (!st.fired.has('naming')) {
         st.fired.add('naming');
         events.push({ name, type: 'naming', detail: `任务卡命名不合规「${name}」——顶层应为「#<PR号> - 动宾短语」、子卡应为「#<PR号> - xxx·yyy」（#476 命名校验；见 dispatch SKILL 命名规矩）` });
@@ -739,7 +895,7 @@ function runWorktreePass(source, args, state) {
 
     // 孤儿树（#492/#476）主判据：还有没有活跃执行者 = 树内有 terminal 且 agent 活着。
     // 与「我认不认识它」无关，跨主帅通用。terminal-list 拉不到 = 不知道有没有终端，不判孤儿（fail-visible）。
-    const agents = Array.isArray(w.agents) ? w.agents : [];
+    const agents = agentsOf;
     const agentAlive = agents.some(a => a.state === 'working' || a.state === 'waiting');
     const hasTerminal = source.terminalsByPath.has(w.path) || source.terminalsByPath.has(id);
     const activeExecutor = agentAlive || hasTerminal;
@@ -836,6 +992,92 @@ function checkHeartbeat(source, args, state) {
   return { events, notes };
 }
 
+// ── pi 静默换 provider 检测（#569 ②）──────────────────────────────────
+// 扫 ~/.pi/agent/sessions/**/*.jsonl 里的 {"type":"model_change"} 事件，出现即报，附诱因。
+// 为何要报：pi 遇 provider 瞬时失败会 1ms 内切到「同 model id 的别的 provider」（2026-08-16 实证：
+// opencode-go 503 → deepseek 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。本检测同时也是
+// 本机 models-store.json 的 -direct 止血（见 NEW-MACHINE §6）的验证手段：下次真 503 是报错还是又切了。
+// 判据：
+//   - 会话中途的切换（model_change 前有 message 事件）→ 报；新会话开头的初始选型
+//     （前无 message，即“启动选模型”）→ 不报，那是正常选型不是静默切换。
+//   - 诱因 = 切换前最近 message 的 errorMessage（2026-08-16 实证形态：stdout 上 errorMessage="503
+//     status code (no body)" 后 1ms 就是 model_change）；无前序报错则注明。
+// live 模式首轮只记基线、不回放历史（同 watch-board「首轮只记位置」）；快照模式全量扫。
+// 会话目录不存在 / 无 jsonl → 显式 PI_SESSIONS_MISSING / PI_SESSIONS_EMPTY note（没查成≠查过没事）。
+function checkPiSessions(source, args, state) {
+  const events = [];
+  const notes = [];
+  const st = state.piSessions ||= { files: new Map(), baselineDone: false };
+  let dir = args.sessionsDir;
+  if (!dir) {
+    dir = args.snapshotDir
+      ? source.sessionsDir // 快照默认 <快照轮目录>/sessions
+      : join(homedir(), '.pi', 'agent', 'sessions');
+  }
+  if (!dir || !existsSync(dir)) {
+    notes.push({ name: 'pi', type: '观察', detail: `PI_SESSIONS_MISSING: ${dir || '(未指定)'} 不存在——model_change 项没查成，不是扫完 0` });
+    return { events, notes };
+  }
+  const jsonls = [];
+  try {
+    (function walk(d) {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(d, e.name));
+        else if (e.name.endsWith('.jsonl')) jsonls.push(join(d, e.name));
+      }
+    })(dir);
+  } catch (e) {
+    notes.push({ name: 'pi', type: '观察', detail: `PI_SESSIONS_UNREADABLE: ${dir} 扫描失败（${e.message}）——model_change 项没查成` });
+    return { events, notes };
+  }
+  if (jsonls.length === 0) {
+    notes.push({ name: 'pi', type: '观察', detail: `PI_SESSIONS_EMPTY: ${dir} 下没有 jsonl——model_change 项没查成，不是扫完 0` });
+    return { events, notes };
+  }
+  const firstRound = !args.snapshotDir && !st.baselineDone;
+  st.baselineDone = true;
+  for (const f of jsonls) {
+    if (!st.files.has(f)) st.files.set(f, { linesSeen: 0, msgs: 0, lastErr: null, size: null, seenSwitch: new Set() });
+    const rec = st.files.get(f);
+    let lines = [];
+    try {
+      const size = statSync(f).size;
+      if (!firstRound && rec.size != null && size <= rec.size) continue; // 没新增就不读，省每轮全量 IO
+      rec.size = size;
+      lines = readFileSync(f, 'utf8').split(/\r?\n/);
+    } catch (e) {
+      if (!firstRound) notes.push({ name: 'pi', type: '观察', detail: `PI_SESSION_UNREADABLE ${f}: ${e.message}——该文件本轮没查成` });
+      continue;
+    }
+    // 上次可能读到半行（pi 边写边读）：重叠 1 行重扫，配合按事件 id 去重防重复报。
+    const from = firstRound ? 0 : Math.max(0, Math.min(rec.linesSeen, lines.length) - 1);
+    // 基线轮也要数 message/记 lastErr（后续增量轮才有上下文），只是不报。
+    for (let i = from; i < lines.length; i++) {
+      let ev;
+      try { ev = JSON.parse(lines[i]); } catch { continue; }
+      const t = ev && ev.type;
+      if (t === 'message' && ev.message) {
+        rec.msgs += 1;
+        const em = ev.message.errorMessage;
+        if (em) rec.lastErr = String(em);
+        else if (ev.message.stopReason === 'error' && !rec.lastErr) rec.lastErr = '(stopReason=error，无 errorMessage)'; // 保底：错误轮但没带 errorMessage
+      } else if (t === 'model_change') {
+        if (firstRound) continue; // 基线轮不回放历史
+        if (rec.seenSwitch.has(String(ev.id || i))) continue; // 半行重扫去的重，不重复报
+        rec.seenSwitch.add(String(ev.id || i));
+        if (rec.msgs > 0) {
+          // 会话中途的切换（前有 message）→ 报；初始选型（msgs=0）不报
+          const rel = relative(dir, f);
+          const cause = rec.lastErr ? `，诱因：${rec.lastErr}` : '，无前序报错信息（手动切换或未留痕）';
+          events.push({ name: 'pi', type: 'model-change', detail: `pi 静默换 provider：会话 ${rel} 内 model_change → provider=${ev.provider || '?'} modelId=${ev.modelId || '?'}${cause}` });
+        }
+      }
+    }
+    rec.linesSeen = lines.length;
+  }
+  return { events, notes };
+}
+
 function printRound(round) {
   if (round.noTargets) {
     console.log('NO_TARGETS: 本轮没有 working/waiting 工位（结构性排除后）——没查成，不是「扫完 0 异常」（数到 0 和没看到样本不是一回事）');
@@ -866,12 +1108,13 @@ function executeOneRound(source) {
 
   const wt = runWorktreePass(source, args, state);
   const hb = checkHeartbeat(source, args, state);
-  const extra = [...wt.events, ...hb.events];
+  const ses = checkPiSessions(source, args, state);
+  const extra = [...wt.events, ...hb.events, ...ses.events];
   if (extra.length > 0) {
     for (const e of extra) console.log(`[${e.name}] ${e.type}: ${e.detail}`);
     anyAlarm = true;
   }
-  for (const n of [...wt.notes, ...hb.notes]) console.log(`[${n.name}] ${n.type}: ${n.detail}`);
+  for (const n of [...wt.notes, ...hb.notes, ...ses.notes]) console.log(`[${n.name}] ${n.type}: ${n.detail}`);
 }
 
 function detectSelfWorktree() {

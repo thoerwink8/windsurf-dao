@@ -25,6 +25,14 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 2026-08-16 起本节降为**应急直连通道**：通道规则唯一落点见 [providers.opencode-go].why（2026-08-16 追加拍板）。
 两条通道跑的是同一个模型，所以模型条目只有一条（战绩记在一处，不拆两本账）。
+
+**-direct 止血（#569）与 cli_model 的限制**：本机 `~/.pi/agent/models-store.json` 的 deepseek provider
+两条 model id 已加 `-direct` 后缀（deepseek-v4-flash-direct / deepseek-v4-pro-direct），断掉 pi 内置
+「同 model id 找别的 provider」的静默 fallback（2026-08-16 实证：og 503 → ds 直连 1ms 内切换，成本翻倍
+除账单外零信号）。**本文件表达不了这条通道差异**：[[models]] 的 cli_model 只有一个字段，两个通道的
+真实模型名不同（opencode-go 侧 `deepseek-v4-flash` / 直连侧 `deepseek-v4-flash-direct`），这儿只能记
+主通道的。将来充值后切直连派工时，在 launch 模板/派工参数里显式写 `-direct` 模型名（NEW-MACHINE §6），
+别指望本文件帮你变。止血本身的验证手段 = scripts/watchdog.mjs 的 model-change 检测（#569 ②）。
 """
 
 [providers.grok]
@@ -38,6 +46,14 @@ grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-
 2026-08-15 起经 regrok shim（~/.local/bin，覆盖 PATH）已是普通 agent，`--agent grok` 直接可用。
 shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
 日常启动模板见本表 launch（terminal create 用）。
+
+**权限确认框与 --always-approve（#569 顺带查过，决定：不加）**：grok TUI 支持 `--always-approve`
+（auto-approve all tool executions），能免掉 always-approve / proceed / reject 三选一弹框；但 launch
+**故意不带它**——① auto 模式下对外发布闸会硬拦 git push（授权词是往终端回「推」，见 dispatch skill），
+加 always-approve 后这个授权流程怎么与自动批准交互不成一遍想清楚前，不修好一个坏另一个；② 弹框选哪项
+有后果（尤其 reject），人工在场才有判别；③ 卡框没人应的停摆已由 watchdog 的 selector 指纹兜底
+（#569 ④：屏面底部 N/M:select 持续超阈轮报警，不自动替它选）。将来若弹框反复咬人，再按上述三点
+重新权衡，别只看「能免框」就加。
 """
 why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
 note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
