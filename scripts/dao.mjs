@@ -57,6 +57,7 @@ import {
   renderDispatchTemplate,
   runGh,
   verifyInjection,
+  verifyInjectionPolling,
   verifyWorkerStarted,
   verifyReviewerFiles,
   verifyReviewerTree,
@@ -245,16 +246,16 @@ function cmdDispatch(args) {
   const hereBranch = gitBranchName(process.cwd());
   plan.reviewerBase = hereBranch.ok ? hereBranch.branch : '(工人树当前分支)';
 
-  // 消歧门（#565）：带 --issue 的目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
-  // dry-run 同样拦——预览一个根本派不出去的活等于假绿灯；gh 查失败单独报「没查成」，不许当有 label 放行。
-  // 门在一切建卡动作之前：被拦下时什么都不会创建。
+  // 消歧门（#565）：带 --issue 的**真派工**，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
+  // #565 返工：dry-run 不实际派工，门控对预览无意义——disambiguation 字段只作报告保留，**不影响退出码**；
+  // 真派工在一切建卡动作之前拦（被拦下时什么都不会创建）。gh 查失败单独报「没查成」，不许当有 label 放行。
   const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
-  if (!disambiguation.ok) {
-    fail(disambiguation.error, { disambiguation, ...plan });
-  }
 
   if (args.dryRun) {
     emit({ ok: true, dryRun: true, ...plan, disambiguation });
+  }
+  if (!disambiguation.ok) {
+    fail(disambiguation.error, { disambiguation, ...plan });
   }
   if (!args.name) fail('dispatch 要 --name');
 
@@ -372,13 +373,21 @@ function cmdDispatch(args) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
 
-  const workerProof = workerStartProof(created.workerDispatchId);
-  const injectRead = readOnceHandle(created.workerHandle);
-  const injected = verifyInjection({
-    text: injectRead.error ? undefined : extractTerminalText(injectRead),
-    readError: injectRead.error,
+  // 注入后开工验证（#565 追加，用户拍板：轮询等开工，不是一次性读屏）。
+  // 时序 bug 判例：worker-start 返回时 codex TUI 还在加载 MCP servers，任务书还没渲染，
+  // 「立即读一次」读到非空无 Pasted Content 的屏面就判通过——实际任务书折在输入框几十分钟。
+  // 轮询 + 命中 Pasted Content 自动补回车（terminal send --enter）再重读；仍在 = 真失败才回滚。
+  // 三态分开：started / startedAfterEnter（enter 留痕）/ failed。超时走 probe_wait_ms，不硬编码。
+  const workerInject = verifyInjectionPolling({
+    dispatchId: created.workerDispatchId,
+    readOnce: () => readOnceHandle(created.workerHandle),
+    sendEnter: () => orca(argsTerminalSend({ terminal: created.workerHandle, enter: true })),
+    proofOnce: workerStartProof,
+    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+    label: '工人',
   });
-  if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, startProof: workerProof, ...plan, taskId });
+  if (!workerInject.ok) failCreated(created, `注入后开工验证失败: ${workerInject.reason}`, { inject: workerInject, ...plan, taskId });
+  const workerProof = workerStartProof(created.workerDispatchId); // 成功后再取一次留档（emit 用）
 
   // 审官也是 worker：起自己的 task + worker-start，拿到编排身份才能收士兵消息、发红项、判绿后通知帅。
   // 审官任务书此刻才渲染：SOLDIER_DISPATCH_ID = 上面已校验的真 id，结构上不可能再出现 dispatch:undefined。
@@ -416,13 +425,16 @@ function cmdDispatch(args) {
       failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，审官收不到士兵消息）', { ...plan, taskId, reviewerTaskId });
     }
 
-    reviewerProof = workerStartProof(created.reviewerDispatchId);
-    const revInjectRead = readOnceHandle(created.reviewerHandle);
-    reviewerInject = verifyInjection({
-      text: revInjectRead.error ? undefined : extractTerminalText(revInjectRead),
-      readError: revInjectRead.error,
+    reviewerInject = verifyInjectionPolling({
+      dispatchId: created.reviewerDispatchId,
+      readOnce: () => readOnceHandle(created.reviewerHandle),
+      sendEnter: () => orca(argsTerminalSend({ terminal: created.reviewerHandle, enter: true })),
+      proofOnce: workerStartProof,
+      timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+      label: '审官',
     });
-    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject, reviewerProof });
+    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject });
+    reviewerProof = workerStartProof(created.reviewerDispatchId); // 成功后再取一次留档（emit 用）
   }
 
   // 士兵的「审官身份」：审官 dispatch id 发进士兵结构化收件箱（notify 四关确认送达；
@@ -464,7 +476,7 @@ function cmdDispatch(args) {
     },
     probes: { worker: workerEnv, reviewer: reviewerEnv },
     heads,
-    inject: injected,
+    inject: workerInject,
     startProof: workerProof,
     reviewerInject,
     reviewerProof,
