@@ -9,7 +9,10 @@
 //   ④ 等待者按编号排序、评论体逐张生成。
 //
 // 不依赖真实 GitHub：搜索/评论的 gh 调用用假 gh（node shim 发 JSON）注入；
-// 真实仓库的构造样本（真关真评论）在自测里做，看 PR 描述。
+// #544：等待者可能同时是 issue 与 PR（gh issue list / gh pr list 各查一面，合并去重），
+// 任一面的失败都走 search_failed 报红，不得退化成「0 条」。
+// #554 审官返工：默认回归测试全部用固定 fixture，不再直查线上 GitHub——
+// 线上冒烟（真实 gh 召回验证）移出到 scripts/notify-blocked-smoke.mjs，显式跑，不进回归。
 
 const fs = require("fs");
 const os = require("os");
@@ -78,7 +81,35 @@ const zeroRes = runNotify(497, { gh: process.execPath, ghArgs: [emptyGh] });
 check("搜到 0 条：ok=true（0 条是成功结果）", zeroRes.ok === true, JSON.stringify(zeroRes));
 check("搜到 0 条：waiters 空数组", Array.isArray(zeroRes.waiters) && zeroRes.waiters.length === 0);
 
+// ── ④ #544：等待者搜索同时覆盖 issue 与 PR，任一面的失败都报红 ────────
+// 假 gh：argv 含 'pr' 时回 PR 召回，否则回 issue 召回——证明两个面被合并去重。
+
+const prDir = fs.mkdtempSync(path.join(os.tmpdir(), "notify-blocked-prs-"));
+const splitGh = path.join(prDir, "split-gh.mjs");
+fs.writeFileSync(splitGh, "const isPr = process.argv.includes('pr');\n" +
+  "console.log(JSON.stringify(isPr\n" +
+  "  ? [{ number: 501, title: '等它的一张 PR', body: '前置：Blocked-by: #497' }]\n" +
+  "  : [{ number: 502, title: '等它的一张 issue', body: 'Blocked-by: #497 的事' }]));\n");
+const mergedRes = runNotify(497, { gh: process.execPath, ghArgs: [splitGh] });
+check("issue 面与 PR 面被合并（#544）", mergedRes.ok === true && mergedRes.waiters.map(w => w.number).join(",") === "501,502", JSON.stringify(mergedRes));
+
+// PR 面（第二次 gh 调用）失败：必须仍走 search_failed + ::error::，不是静默当 0 条。
+const killPrGh = path.join(prDir, "kill-pr-gh.mjs");
+fs.writeFileSync(killPrGh, "if (process.argv.includes('pr')) { process.stderr.write('gh pr list 限流模拟'); process.exit(1); }\nconsole.log('[]');\n");
+const errPr = [];
+const origErrPr = process.stderr.write.bind(process.stderr);
+process.stderr.write = s => { errPr.push(String(s)); return true; };
+const killPrRes = runNotify(497, { gh: process.execPath, ghArgs: [killPrGh] });
+process.stderr.write = origErrPr;
+check("PR 面失败：ok=false（#544）", killPrRes.ok === false, JSON.stringify(killPrRes));
+check("PR 面失败：reason=search_failed", killPrRes.reason === "search_failed", killPrRes.reason);
+check("PR 面失败：报 ::error:: 且点名 gh pr list（不当 0 条）", errPr.join("").includes("::error::") && errPr.join("").includes("gh pr list"), errPr.join("").slice(0, 200));
+
+// 真实 gh 线上冒烟已移出默认回归（#554 审官返工）：固定 fixture 保证回归确定性，
+// 线上验证走显式命令：node scripts/notify-blocked-smoke.mjs（见 scripts/ 下脚本头注释）。
+
 fs.rmSync(fakeDir, { recursive: true, force: true });
+fs.rmSync(prDir, { recursive: true, force: true });
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // scripts/notify-blocked.mjs —— 前置解除提醒（issue #526）
 //
-// 触发：.github/workflows/blocked-notify.yml，on: issues: types: [closed]。
-// 关掉一张 issue 后，找出所有 open issue 正文里写着 `Blocked-by: #<刚关的号>` 的，
-// 给每一张发一条评论提醒。也可以在本地直接跑同一条命令补测（构造样本用）。
+// 触发：.github/workflows/blocked-notify.yml（issues: closed + pull_request: closed
+// + workflow_dispatch）。关闭一张 issue / 合并一张 PR 后，找出所有 open issue 和
+// open PR 里写着 `Blocked-by: #<刚关的号>` 的，给每一张发一条评论提醒。
+// 也可以在本地直接跑同一条命令补测（构造样本用）。
 //
 // 拍板（#526）：
 //   - 写法只认一种：`Blocked-by: #N`，一行一张；其他写法（「前置」「等 #N」
@@ -12,11 +13,17 @@
 //     输出是提醒不是自动开工，默认动作是重估不是继续（反例：#518 落错分支的
 //     commit、#501 缺陷一：前置解除后基础假设已被推翻）。
 //
-// 口径（#532，本单是第一个用上的点）：
+// 口径（#532）：
 //   「搜到 0 条」是成功结果，「搜索失败」是没查成，两者必须分开——
 //   搜索失败要在日志里报出来并以非 0 退出，绝不静默当成「没人等」。
 //
-// 用法：node scripts/notify-blocked.mjs <closedIssueNumber>
+// #544（本单）：
+//   - 前置常常是 PR（#539 等 #519、#489/#481/#480/#478/#475 等 #463），而合并 PR
+//     不触发 issues 事件——所以触发面要认 PR 号，等待者搜索也同时认 issue 与 PR：
+//     gh issue list 只回 issue、gh pr list 只回 PR，两次都要搜、合并去重；
+//     任何一次失败都会 ::error:: 报红并非 0 退出，不会退化成「0 条」。
+//
+// 用法：node scripts/notify-blocked.mjs <closedIssueOrPrNumber>
 
 import { spawnSync } from 'node:child_process';
 import { writeFileSync, unlinkSync } from 'node:fs';
@@ -52,35 +59,61 @@ export function buildComment(closedNumber, waiter) {
   ].join('\n');
 }
 
+// 搜等待者候选：open issue 与 open PR 两个面都搜（#544：等待者可以是 PR，gh issue
+// list 只回 issue、gh pr list 只回 PR，缺一个面就会漏提醒）。返回
+// { ok: true, items }（合并去重后的原始召回，交给 findWaiters 精确过滤）或
+// { ok: false, detail }（哪一面失败都在日志 ::error:: 报红——#532 口径：
+// 搜索失败 = 没查成，绝不是「没人等」）。
+export function searchWaiters(closedNumber, opts = {}) {
+  const gh = opts.gh || 'gh';
+  const ghArgs = opts.ghArgs || [];
+  const query = `Blocked-by: #${closedNumber}`;
+  const faces = [
+    ['issue', ['issue', 'list', '--state', 'open', '--search', query, '--json', 'number,title,body', '--limit', '100']],
+    ['pr', ['pr', 'list', '--state', 'open', '--search', query, '--json', 'number,title,body', '--limit', '100']],
+  ];
+  const items = [];
+  for (const [face, args] of faces) {
+    const out = spawnSync(gh, [...ghArgs, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    if (out.error || out.status !== 0) {
+      const detail = String(out.stderr || (out.error && out.error.message) || `gh ${face} 调用异常`).trim().slice(0, 400);
+      process.stderr.write(`::error::前置提醒搜索失败（gh ${face} list --search "${query}"）——本次没查成，不是搜到 0 条。\n${detail}\n`);
+      return { ok: false, detail, raw: items };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(out.stdout);
+    } catch (e) {
+      process.stderr.write(`::error::前置提醒搜索返回不是 JSON（gh ${face} list）——本次没查成，不是搜到 0 条。\n${out.stdout.slice(0, 400)}\n`);
+      return { ok: false, detail: String(e.message || e).slice(0, 200), raw: items };
+    }
+    items.push(...(Array.isArray(parsed) ? parsed : []));
+  }
+  // 两个面按号去重（issue 与 PR 共用号段、正常不会撞，防御一次召回两遍导致双评论）。
+  const seen = new Set();
+  const merged = [];
+  for (const item of items) {
+    if (Number.isInteger(item && item.number) && !seen.has(item.number)) {
+      seen.add(item.number);
+      merged.push(item);
+    }
+  }
+  return { ok: true, items: merged };
+}
+
 // 跑一轮提醒。返回 { ok, waiters, reason?, detail?, failures? }，绝不静默吞失败。
 export function runNotify(closedNumber, opts = {}) {
   const gh = opts.gh || 'gh';
   const ghArgs = opts.ghArgs || [];
-  const searchOut = spawnSync(gh, [...ghArgs, 'issue', 'list', '--state', 'open',
-    '--search', `Blocked-by: #${closedNumber}`,
-    '--json', 'number,title,body', '--limit', '100'],
-  { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-
-  if (searchOut.error || searchOut.status !== 0) {
-    const detail = String(searchOut.stderr || (searchOut.error && searchOut.error.message) || 'gh 调用异常').trim().slice(0, 400);
-    // ::error:: 是 GitHub Actions 日志注记，本地跑时同样直接可见；
-    // 搜索失败 = 没查成，按 #532 口径不得当「没人等」。
-    process.stderr.write(`::error::前置提醒搜索失败（gh issue list --search "Blocked-by: #${closedNumber}"）——本次没查成，不是搜到 0 条。\n${detail}\n`);
-    return { ok: false, reason: 'search_failed', detail, waiters: [] };
+  const searchRes = searchWaiters(closedNumber, opts);
+  if (!searchRes.ok) {
+    return { ok: false, reason: 'search_failed', detail: searchRes.detail, waiters: [] };
   }
 
-  let issues;
-  try {
-    issues = JSON.parse(searchOut.stdout);
-  } catch (e) {
-    process.stderr.write(`::error::前置提醒搜索返回不是 JSON（gh issue list）——本次没查成，不是搜到 0 条。\n${searchOut.stdout.slice(0, 400)}\n`);
-    return { ok: false, reason: 'search_failed', detail: String(e.message || e).slice(0, 200), waiters: [] };
-  }
-
-  const waiters = findWaiters(issues, closedNumber);
+  const waiters = findWaiters(searchRes.items, closedNumber);
   if (waiters.length === 0) {
-    // 0 条是成功结果：搜索本身成功了（gh 退出码 0、JSON 可解析），只是没人等。
-    console.log(`前置提醒：open issue 里写 \`Blocked-by: #${closedNumber}\` 的 0 张（搜索本身成功——0 条是结果，不是失败）。`);
+    // 0 条是成功结果：搜索本身成功了（两个面 gh 退出码都 0、JSON 都可解析），只是没人等。
+    console.log(`前置提醒：open issue/PR 里写 \`Blocked-by: #${closedNumber}\` 的 0 张（搜索本身成功——0 条是结果，不是失败）。`);
     return { ok: true, waiters: [] };
   }
 
@@ -108,14 +141,14 @@ export function runNotify(closedNumber, opts = {}) {
 
 function usageAndExit(msg) {
   process.stderr.write(`${msg}\n`);
-  process.stderr.write('用法: node scripts/notify-blocked.mjs <closedIssueNumber>\n');
+  process.stderr.write('用法: node scripts/notify-blocked.mjs <closedIssueOrPrNumber>\n');
   process.exit(2);
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const n = Number(process.argv[2]);
-  if (!Number.isInteger(n) || n <= 0) usageAndExit(`要一个合法的 issue 号，实际：${process.argv[2] || '(空)'}`);
+  if (!Number.isInteger(n) || n <= 0) usageAndExit(`要一个合法的 issue 或 PR 号（已关闭/已合并的），实际：${process.argv[2] || '(空)'}`);
   const res = runNotify(n);
   process.exit(res.ok ? 0 : 1);
 }
