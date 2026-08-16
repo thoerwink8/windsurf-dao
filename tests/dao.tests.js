@@ -113,6 +113,13 @@ async function main() {
     check('库里用到的参数都还在 help 里', clean.ok === true && clean.unscanned === false, JSON.stringify(clean));
     check('自检扫到了命令（不是 0 样本）', clean.scanned.length > 0, String(clean.scanned.length));
 
+    // 上一条在本机永远走 live，加了 builder 忘补夹具本机照样绿、到 CI（无 orca）才炸成「没查成」。
+    // 这条把「夹具齐不齐」在本机就问出来——判据是文件在不在，不看 orca 在不在。
+    const noFixture = S.catalogUsedFlags()
+      .map(item => item.cmd)
+      .filter(cmd => !fs.existsSync(S.helpFixturePath(cmd)));
+    check('catalogUsedFlags 每条命令都有 --help 夹具（CI 无 orca 时靠它）', noFixture.length === 0, noFixture.join(' '));
+
     const empty = S.checkHelpLiveness({ catalog: [], fetchHelp: () => fetched.text });
     check('catalog 空 → 没查成', empty.unscanned === true && empty.ok === false);
 
@@ -268,6 +275,7 @@ async function main() {
     check('三参数齐 + --spec → dry-run 过', ok.status === 0 && pOk.ok === true, JSON.stringify(pOk));
     check('dry-run 写出审官预建计划', pOk.reviewerCard === '审官·gpt-5.6-sol' && /codex/.test(pOk.reviewerLaunch), JSON.stringify(pOk));
     check('审官 launch 带 danger 旗标', String(pOk.reviewerLaunch || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
+    check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
     check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
@@ -374,19 +382,19 @@ async function main() {
     const unreadProbe = S.terminalProbeExec({ sendAndRead: () => ({ error: 'terminal_handle_stale' }) })('write');
     check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    check('R1 dao.mjs 走 terminalProbeExec 不走 hostProbeExec', /terminalProbeExec/.test(daoSrc) && !/hostProbeExec/.test(daoSrc));
+    check('#546 dao.mjs 环境自检走 envProbeWorktree，不经 agent 探针', /envProbeWorktree/.test(daoSrc) && !/terminalProbeExec/.test(daoSrc) && !/runTerminalProbes/.test(daoSrc));
+    check('#546 审官卡带 baseBranch 且建完自证', /baseBranch: workerBranch\.branch/.test(daoSrc) && /verifyReviewerTree/.test(daoSrc));
+    check('#546 注入后验开工走 verifyInjection', /verifyInjection/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
     check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('探针等待从表读，不写死毫秒数', /probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc) && !/120000/.test(daoSrc));
+    check('#546 dao.mjs 不再按 agent 等探针', !/probeWaitMs/.test(daoSrc) && !/45000/.test(daoSrc));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
     check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
     check('没配的 provider 回落默认', S.probeWaitMs(routing, 'claude') === S.DEFAULT_PROBE_WAIT_MS);
     check('缺字段 / 非法值回落默认', S.probeWaitMs({ providers: { x: {} } }, 'x') === 120000 && S.probeWaitMs({ providers: { x: { probe_wait_ms: -1 } } }, 'x') === 120000);
-    check('R1 真机等待认 probeMarkFound 不认 DAO_PROBE_ 字面量', /probeMarkFound/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
-
     const unread = S.verifyStarted({ error: 'terminal_handle_stale' });
     check('R4 没读成 ≠ 读了是空的', unread.reason === '没读成' && unread.unscanned === true, JSON.stringify(unread));
     const empty = S.verifyStarted({ text: '' });
@@ -499,6 +507,214 @@ async function main() {
       taskLive.id !== S.extractTaskId(taskLive) && taskLive.result.id === undefined);
     check('旧路径 result.id / 顶层 id 都取不到',
       S.extractTaskId({ id: 'rpc', result: { id: 'rpc2' } }) === null);
+  }
+
+  console.log('\n=== #546 #541 审官树自证 / 注入后开工 / 环境自检 ===');
+  {
+    const folded = S.verifyInjection({ text: '⚠ MCP failed\n[Pasted Content 4686 chars]\n›' });
+    check('故意违规：Pasted Content 折叠 → 注入验证红', folded.ok === false && /Pasted Content/.test(folded.reason), JSON.stringify(folded));
+    check('折叠证据带字符数', folded.evidence === '[Pasted Content 4686 chars]', JSON.stringify(folded));
+    const unreadInj = S.verifyInjection({ readError: 'terminal_handle_stale' });
+    check('注入后没读成 ≠ 已开工', unreadInj.ok === false && unreadInj.unscanned === true, JSON.stringify(unreadInj));
+    const emptyInj = S.verifyInjection({ text: '   ' });
+    check('注入后屏面空 → 红', emptyInj.ok === false && /空/.test(emptyInj.reason), JSON.stringify(emptyInj));
+    const landed = S.verifyInjection({ text: '短摘要：修命令库\nThinking...\n' });
+    check('屏上无 Pasted Content → 注入验证绿', landed.ok === true, JSON.stringify(landed));
+
+    const filesUnscanned = S.verifyReviewerFiles({ reviewerPath: REPO });
+    check('#541 没给清单 = 没查成', filesUnscanned.ok === false && filesUnscanned.unscanned === true, JSON.stringify(filesUnscanned));
+    const filesEmpty = S.verifyReviewerFiles({ reviewerPath: REPO, files: [] });
+    check('#541 空文件清单（PR 尚无改文件）→ 绿', filesEmpty.ok === true && filesEmpty.checked === 0, JSON.stringify(filesEmpty));
+    check('#541 parseGhPullFiles 跳过 removed', JSON.stringify(S.parseGhPullFiles([
+      { filename: 'a.js', status: 'added' },
+      { filename: 'gone.js', status: 'removed' },
+    ])) === JSON.stringify(['a.js']));
+    const filesOk = S.verifyReviewerFiles({ reviewerPath: REPO, files: ['scripts/dao.mjs', 'scripts/lib/dao-cmd.mjs'] });
+    check('#541 被审文件在 → 绿', filesOk.ok === true && filesOk.checked === 2, JSON.stringify(filesOk));
+    const filesMiss = S.verifyReviewerFiles({ reviewerPath: REPO, files: ['scripts/dao.mjs', 'this-file-does-not-exist-541.js'] });
+    check('#541 缺被审文件 → 红并点名', filesMiss.ok === false && (filesMiss.missing || []).includes('this-file-does-not-exist-541.js'), JSON.stringify(filesMiss));
+
+    const parsed = S.parseDiffNameStatus('M\tscripts/dao.mjs\nA\thost/skills/dispatch/hooks/hooks.json\nD\told.txt\nR100\ta.txt\tb.txt\n');
+    check('name-status 收 A/M/R 新名、跳过 D', parsed.includes('scripts/dao.mjs') && parsed.includes('host/skills/dispatch/hooks/hooks.json') && parsed.includes('b.txt') && !parsed.includes('old.txt'), JSON.stringify(parsed));
+
+    const tmpA = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rev-a-'));
+    const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-rev-b-'));
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const gitIn = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv });
+    gitIn(tmpA, ['init', '-q']);
+    gitIn(tmpA, ['config', 'user.email', 't@t']);
+    gitIn(tmpA, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(tmpA, 'f.txt'), 'a\n');
+    gitIn(tmpA, ['add', 'f.txt']);
+    gitIn(tmpA, ['commit', '-q', '-m', 'a']);
+    gitIn(tmpB, ['init', '-q']);
+    gitIn(tmpB, ['config', 'user.email', 't@t']);
+    gitIn(tmpB, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(tmpB, 'f.txt'), 'b\n');
+    gitIn(tmpB, ['add', 'f.txt']);
+    gitIn(tmpB, ['commit', '-q', '-m', 'b']);
+    const mismatch = S.verifyReviewerTree({ workerPath: tmpA, reviewerPath: tmpB });
+    check('#541 审官 HEAD ≠ 工人 HEAD → 红', mismatch.ok === false && /审空气/.test(mismatch.error), JSON.stringify(mismatch));
+    const same = S.verifyReviewerTree({ workerPath: tmpA, reviewerPath: tmpA });
+    check('#541 两树 HEAD 相同 → 绿', same.ok === true && same.reviewerHead === same.expectedOid, JSON.stringify(same));
+
+    const missingDir = path.join(os.tmpdir(), `dao-env-missing-${Date.now()}`);
+    const ro = S.envProbeWorktree(missingDir);
+    check('#546 故意让工作区不可写 → 环境自检红（写探针）', ro.ok === false && (ro.failed || []).includes('write'), JSON.stringify(ro));
+
+    const revHelp = spawnSync(process.execPath, [CLI, 'reviewer-create', '--help'], { encoding: 'utf8', cwd: REPO });
+    check('reviewer-create 出现在 help', /reviewer-create/.test(revHelp.stdout || ''), (revHelp.stdout || '').slice(0, 200));
+    const revMiss = spawnSync(process.execPath, [CLI, 'reviewer-create', '--name', 'x'], { encoding: 'utf8', cwd: REPO });
+    const pRevMiss = (() => { try { return JSON.parse(revMiss.stdout || '{}'); } catch { return {}; } })();
+    check('reviewer-create 缺 --pr → 非零', revMiss.status !== 0 && /--pr/.test(String(pRevMiss.error || revMiss.stderr || '')), JSON.stringify(pRevMiss));
+  }
+
+  console.log('\n=== #546 追加第五件：士兵—审官闭环任务书模板 ===');
+  {
+    const tmplDir = path.join(REPO, 'host', 'skills', 'dispatch', 'templates');
+    const files = S.listDispatchTemplates();
+    check('模板目录有 soldier-book.md + reviewer-book.md', files.includes('soldier-book.md') && files.includes('reviewer-book.md'), files.join(','));
+
+    const soldier = S.renderDispatchTemplate('soldier-book.md', {
+      SPEC: '短摘要：修 X',
+      REVIEWER_HANDLE: 'term_reviewer-1',
+    });
+    check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
+    check('soldier-book 填进审官 handle', /term_reviewer-1/.test(soldier), soldier.slice(-200));
+    check('soldier-book 要求完工后告知审官不告帅', /REVIEWER_HANDLE/.test(soldier) === false && /审官/.test(soldier), '占位符应已被替换');
+
+    const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_HANDLE: 'term_worker-1',
+      MERGE_POLICY: 'auto',
+    });
+    check('reviewer-book 填进士兵 handle', /term_worker-1/.test(reviewer));
+    check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
+    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_HANDLE/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+
+    let threw = false, threwMsg = '';
+    try { S.renderDispatchTemplate('soldier-book.md', { SPEC: 'x' }); } // 缺 REVIEWER_HANDLE
+    catch (e) { threw = true; threwMsg = String(e.message || e); }
+    check('缺占位符值 → 抛', threw && /REVIEWER_HANDLE/.test(threwMsg), threwMsg);
+
+    let notFound = false;
+    try { S.renderDispatchTemplate('no-such-template.md', {}); }
+    catch (e) { notFound = true; }
+    check('模板文件不在 → 抛（不静默空模板）', notFound);
+
+    const badName = (() => { try { S.readDispatchTemplate('..\evil.md'); return false; } catch { return true; } })();
+    check('模板名不合法 → 拒绝', badName);
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
+    check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && /REVIEWER_HANDLE/.test(daoSrc));
+    check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
+    check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
+    check('dao.mjs 输出双方收件 handle（loop 段）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc));
+  }
+
+  console.log('\n=== ⑨ 闭环三跳：投递失败必须炸，不许静默（#548 红项 1）===');
+  {
+    // 判别性：同一套判据，活收件人必须放行、死收件人必须拦下。只会拦不会放的守卫等于天天假红。
+    const LIVE = 'term_live-0001';
+    const DEAD = 'term_00000000-0000-0000-0000-000000000000';
+    const LIVE_RUN = 'run_live0001';
+    const DEAD_RUN = 'run_00000000';
+
+    // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
+    function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
+      let seq = 0;
+      const sent = [];
+      const fn = (a) => {
+        const key = `${a[0]} ${a[1]}`;
+        if (key === 'terminal read') {
+          const h = a[a.indexOf('--terminal') + 1];
+          if (h === LIVE) return { ok: true, json: { ok: true, result: { terminal: { handle: h, status: 'running' } } } };
+          return { ok: false, error: { code: 'terminal_handle_stale', message: 'terminal_handle_stale' } };
+        }
+        if (key === 'orchestration run-show') {
+          const id = a[a.indexOf('--id') + 1];
+          if (id === LIVE_RUN) return { ok: true, json: { ok: true, result: { run: { id } } } };
+          return { ok: false, error: { code: 'run_not_found', message: `Run ${id} was not found.` } };
+        }
+        if (key === 'orchestration run-current') {
+          return { ok: true, json: { ok: true, result: { run: null } } };
+        }
+        if (key === 'orchestration send') {
+          const to = a.includes('--to') ? a[a.indexOf('--to') + 1] : null;
+          const id = `msg_fake${++seq}`;
+          const m = { id, to_handle: misroute || to, delivered_at: null };
+          if (!inboxDrops) sent.push(m);
+          if (sentMissingId) return { ok: true, json: { ok: true, result: { mutation: {} } } };
+          return { ok: true, json: { ok: true, result: { message: m } } };
+        }
+        if (key === 'orchestration inbox') {
+          if (inboxBroken) return { ok: true, json: { ok: true, result: {} } };
+          return { ok: true, json: { ok: true, result: { messages: sent.slice().reverse() } } };
+        }
+        throw new Error(`假 orca 没登记这条命令: ${a.join(' ')}`);
+      };
+      return fn;
+    }
+
+    const HOPS = [
+      { hop: '士兵→审官', live: { to: LIVE }, dead: { to: DEAD } },
+      { hop: '审官→士兵', live: { to: LIVE }, dead: { to: DEAD } },
+      // 审官→帅 是普通告知，不带 --type worker_done：notify 验投递不验结算（#551）
+      { hop: '审官→帅', live: { to: `run:${LIVE_RUN}` }, dead: { to: `run:${DEAD_RUN}` } },
+    ];
+    for (const h of HOPS) {
+      const good = S.deliverMessage({ ...h.live, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      check(`${h.hop}：收件人在 → 放行并给消息 id`, good.ok === true && /^msg_/.test(good.messageId || ''), JSON.stringify(good));
+      const bad = S.deliverMessage({ ...h.dead, subject: '完工', hop: h.hop, orca: fakeOrca() });
+      check(`${h.hop}：故意错 handle → 拦下`, bad.ok === false && bad.stage === '收件人', JSON.stringify(bad));
+      check(`${h.hop}：错 handle 的报错说得出「不存在」`, bad.ok === false && /不存在/.test(bad.error), bad.error);
+    }
+
+    const dropped = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxDrops: true }) });
+    check('回执给了 id 但编排里查不到 → 拦下', dropped.ok === false && dropped.stage === '复核', JSON.stringify(dropped));
+
+    const unscanned = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ inboxBroken: true }) });
+    check('复核一条样本都没扫到 → 标 unscanned 且非 ok（没查成 ≠ 查过没事）', unscanned.ok === false && unscanned.unscanned === true, JSON.stringify(unscanned));
+
+    const noReceipt = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ sentMissingId: true }) });
+    check('send 说成功却没回执 → 拦下', noReceipt.ok === false && noReceipt.stage === '回执', JSON.stringify(noReceipt));
+
+    const wrong = S.deliverMessage({ to: LIVE, subject: 'x', orca: fakeOrca({ misroute: 'term_someone-else' }) });
+    check('回执收件人与请求不一致（错投）→ 拦下', wrong.ok === false && /错投/.test(wrong.error), JSON.stringify(wrong));
+
+    const noRun = S.deliverMessage({ subject: 'x', orca: fakeOrca() });
+    check('省略收件人但没绑 Run → 拦下（发进真空）', noRun.ok === false && /真空/.test(noRun.error), JSON.stringify(noRun));
+
+    const group = S.deliverMessage({ to: '@all', subject: 'x', orca: fakeOrca() });
+    check('组播收件人 → 拒发（没人负责签收）', group.ok === false && /组播/.test(group.error), JSON.stringify(group));
+
+    const noSubject = S.deliverMessage({ to: LIVE, orca: fakeOrca() });
+    check('缺 subject → 拦下', noSubject.ok === false && noSubject.stage === '参数', JSON.stringify(noSubject));
+
+    // delivered_at 不是判据：真语料里活收件人也是 null，当门就是每条都假红。
+    const fx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'orchestration-send.json'), 'utf8'));
+    check('真语料：send 对活收件人 delivered_at 也是 null', fx.ok === true && fx.result.message.delivered_at === null, JSON.stringify(fx.result?.message?.delivered_at));
+    const libSrc = fs.readFileSync(LIB, 'utf8');
+    check('deliverMessage 不拿 delivered_at 当门（只报出）', !/delivered_at[^\n]*\?\s*[^:]*:\s*\{\s*ok:\s*false/.test(libSrc) && /deliveredAt: found\.message/.test(libSrc));
+
+    // CLI 接线：动词登记 + 失败非零
+    check('notify 已登记进 VERBS', S.VERBS.includes('notify'), S.VERBS.join(','));
+    const cliBad = spawnSync(process.execPath, [CLI, 'notify', '--to', DEAD, '--subject', '回归样本'], { encoding: 'utf8', cwd: REPO });
+    check('CLI notify 故意错 handle → 非零退出', cliBad.status !== 0, `status=${cliBad.status} ${cliBad.stdout}`);
+    check('CLI notify 失败时 stderr 明说链断', /链断/.test(cliBad.stderr || ''), cliBad.stderr);
+
+    const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
+    const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md'), 'utf8');
+    check('士兵任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
+    check('审官任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), tmplReviewer.slice(0, 200));
+    check('两份任务书都写明「确认送达才准进下一步」', /确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer));
+
+    // 审官那条「可归档」是普通告知，不许伪装成结算信号（#548 第二轮红项 → 轻量修正，完整修法 #551）
+    const archiveBlock = tmplReviewer.slice(tmplReviewer.indexOf('### 3. 收尾'));
+    check('审官「可归档」命令行不带 --type worker_done', !/```bash[\s\S]*?--type worker_done[\s\S]*?```/.test(archiveBlock), archiveBlock.slice(0, 300));
+    check('审官任务书明写「不结算自己的 Dispatch」并指向 #551', /不是结算信号/.test(archiveBlock) && /#551/.test(archiveBlock));
+    check('notify 文档点明验的是投递不是结算', /投递\*\*不是\*\*结算|投递.*不.*结算/.test(S.USAGE) && /#551/.test(S.USAGE), S.USAGE.slice(-400));
+    check('deliverMessage 注释点明 ok:true ≠ 事情办完', /不是结算/.test(libSrc) && /#551/.test(libSrc));
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

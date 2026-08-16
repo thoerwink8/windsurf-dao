@@ -22,29 +22,33 @@ import {
   assertCodexLaunch,
   catalogUsedFlags,
   checkHelpLiveness,
+  deliverMessage,
   dispatchComment,
+  envProbeWorktree,
   extractHandleFromCreate,
   extractTaskId,
   extractTerminalText,
   extractWorktreeId,
   extractWorktreePath,
+  gitBranchName,
   isRunRequired,
   RUN_REQUIRED_HINT,
   rollbackErrorAlreadyGone,
   fetchHelpPreferLive,
   loadRouting,
   parseArgs,
+  parseGhPullFiles,
   planDispatchRollback,
-  probeMarkFound,
-  probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
   resolveLaunch,
   reviewerCardName,
   rollbackReport,
-  runCapabilityProbes,
-  sleepSync,
-  terminalProbeExec,
+  renderDispatchTemplate,
+  runGh,
+  verifyInjection,
+  verifyReviewerFiles,
+  verifyReviewerTree,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
@@ -172,30 +176,6 @@ function readOnceHandle(handle) {
   return read.json;
 }
 
-function liveSendAndRead(handle, waitMs) {
-  return (cmd, name) => {
-    const sent = orca(argsTerminalSend({ terminal: handle, text: cmd, enter: true }));
-    if (!sent.ok) return { error: errText(sent.error) };
-    const deadline = Date.now() + waitMs;
-    let last = { text: '' };
-    while (Date.now() < deadline) {
-      const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
-      if (!read.ok) return { error: errText(read.error) };
-      const text = extractTerminalText(read.json);
-      last = { text };
-      if (probeMarkFound(name, text)) return { text };
-      sleepSync(400);
-    }
-    return last;
-  };
-}
-
-function runTerminalProbes(handle, waitMs) {
-  return runCapabilityProbes({
-    exec: terminalProbeExec({ sendAndRead: liveSendAndRead(handle, waitMs) }),
-  });
-}
-
 function cmdDispatch(args) {
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
@@ -224,6 +204,8 @@ function cmdDispatch(args) {
     reviewerCard: reviewerCardName(gate.reviewer),
     comment: dispatchComment(gate),
   };
+  const hereBranch = gitBranchName(process.cwd());
+  plan.reviewerBase = hereBranch.ok ? hereBranch.branch : '(工人树当前分支)';
 
   if (args.dryRun) {
     emit({ ok: true, dryRun: true, ...plan });
@@ -242,6 +224,14 @@ function cmdDispatch(args) {
   created.workerId = extractWorktreeId(workerWt.json);
   created.workerPath = extractWorktreePath(workerWt.json);
   if (!created.workerId) fail('工人卡没返回 id', plan);
+  if (!created.workerPath) failCreated(created, '工人卡没返回 path', plan);
+
+  const workerEnv = envProbeWorktree(created.workerPath);
+  if (!workerEnv.ok) failCreated(created, `工人树环境自检失败: ${workerEnv.error}`, { probes: workerEnv, ...plan });
+
+  const workerBranch = gitBranchName(created.workerPath);
+  if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, plan);
+  plan.reviewerBase = workerBranch.branch;
 
   const workerTerm = orca(argsTerminalCreate({
     worktree: created.workerId,
@@ -253,22 +243,30 @@ function cmdDispatch(args) {
   if (!created.workerHandle) failCreated(created, '工人终端没返回 handle', plan);
 
   const workerVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.workerHandle) });
-  if (!workerVerify.ok) failCreated(created, '工人验开工失败', { verify: workerVerify, ...plan });
-
-  const workerProbes = runTerminalProbes(created.workerHandle, probeWaitMs(routing, workerLaunch.provider));
-  if (!workerProbes.ok) failCreated(created, workerProbes.error, { probes: workerProbes, ...plan });
+  if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
 
   const revName = reviewerCardName(gate.reviewer);
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',
     parentWorktree: created.workerId,
+    baseBranch: workerBranch.branch,
     comment: plan.comment,
   }));
   if (!revWt.ok) failCreated(created, `审官子卡创建失败: ${errText(revWt.error)}`, plan);
   created.reviewerId = extractWorktreeId(revWt.json);
   created.reviewerPath = extractWorktreePath(revWt.json);
   if (!created.reviewerId) failCreated(created, '审官子卡没返回 id', plan);
+  if (!created.reviewerPath) failCreated(created, '审官子卡没返回 path', plan);
+
+  const reviewerEnv = envProbeWorktree(created.reviewerPath);
+  if (!reviewerEnv.ok) failCreated(created, `审官树环境自检失败: ${reviewerEnv.error}`, { probes: reviewerEnv, ...plan });
+
+  const heads = verifyReviewerTree({
+    workerPath: created.workerPath,
+    reviewerPath: created.reviewerPath,
+  });
+  if (!heads.ok) failCreated(created, heads.error, { heads, ...plan });
 
   const revTerm = orca(argsTerminalCreate({
     worktree: created.reviewerId,
@@ -280,14 +278,31 @@ function cmdDispatch(args) {
   if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
 
   const revVerify = waitAndVerify({ readOnce: () => readOnceHandle(created.reviewerHandle) });
-  if (!revVerify.ok) failCreated(created, '审官验开工失败', { verify: revVerify, ...plan });
+  if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
-  const revProbes = runTerminalProbes(created.reviewerHandle, probeWaitMs(routing, reviewerLaunch.provider));
-  if (!revProbes.ok) failCreated(created, revProbes.error, { probes: revProbes, ...plan });
+  // ── 闭环接线（#546 追加第五件）：两个 handle 互相写进对方任务书，完工→审官→帅 ──
+  // 士兵任务书 = 模板 + 本单 spec + 审官 handle（完工后它自己通知审官，不发给帅）。
+  // 审官任务书 = 模板 + 士兵 handle + merge-policy（红→发回士兵；乒乓两轮仍红才上帅；绿→合并→通知帅可归档）。
+  let soldierBook = null;
+  let reviewerBook = null;
+  try {
+    soldierBook = args.spec
+      ? renderDispatchTemplate('soldier-book.md', {
+          SPEC: String(args.spec),
+          REVIEWER_HANDLE: String(created.reviewerHandle),
+        })
+      : null;
+    reviewerBook = renderDispatchTemplate('reviewer-book.md', {
+      SOLDIER_HANDLE: String(created.workerHandle),
+      MERGE_POLICY: gate.mergePolicy,
+    });
+  } catch (e) {
+    failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null, reviewerBook: null });
+  }
 
   let taskId = args.task || null;
-  if (args.spec) {
-    const task = orca(argsTaskCreate({ spec: args.spec }));
+  if (soldierBook) {
+    const task = orca(argsTaskCreate({ spec: soldierBook }));
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
       failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
@@ -303,6 +318,40 @@ function cmdDispatch(args) {
   }));
   if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
 
+  const injectRead = readOnceHandle(created.workerHandle);
+  const injected = verifyInjection({
+    text: injectRead.error ? undefined : extractTerminalText(injectRead),
+    readError: injectRead.error,
+  });
+  if (!injected.ok) failCreated(created, `注入后开工验证失败: ${injected.reason}`, { inject: injected, ...plan, taskId });
+
+  // 审官也是 worker：起自己的 task + worker-start，拿到编排身份才能收士兵消息、发红项、判绿后通知帅。
+  let reviewerTaskId = null;
+  let reviewerInject = null;
+  if (reviewerBook) {
+    const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+    if (!revTask.ok) {
+      if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, { ...plan, taskId });
+      failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, { ...plan, taskId });
+    }
+    reviewerTaskId = extractTaskId(revTask.json);
+    if (!reviewerTaskId) failCreated(created, '审官 task-create 没拿到 taskId', { ...plan, taskId });
+
+    const revStarted = orca(argsWorkerStart({
+      task: reviewerTaskId,
+      worktree: created.reviewerId,
+      terminal: created.reviewerHandle,
+    }));
+    if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, taskId, reviewerTaskId });
+
+    const revInjectRead = readOnceHandle(created.reviewerHandle);
+    reviewerInject = verifyInjection({
+      text: revInjectRead.error ? undefined : extractTerminalText(revInjectRead),
+      readError: revInjectRead.error,
+    });
+    if (!reviewerInject.ok) failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, { ...plan, taskId, reviewerTaskId, reviewerInject });
+  }
+
   const comment = afterDispatchComment({
     name: args.name,
     worktreeId: created.workerId,
@@ -314,7 +363,18 @@ function cmdDispatch(args) {
     ...plan,
     ...created,
     taskId,
-    probes: { worker: workerProbes, reviewer: revProbes },
+    reviewerTaskId,
+    loop: {
+      soldierBook: !!soldierBook,
+      reviewerBook: !!reviewerBook,
+      soldierDoneTo: created.reviewerHandle,   // 士兵完工消息的收件人 = 审官 handle
+      reviewerRedTo: created.workerHandle,     // 审官红项消息的收件人 = 士兵 handle
+      archivedBy: '帅（归档动作帅做，审官不 rm 树）',
+    },
+    probes: { worker: workerEnv, reviewer: reviewerEnv },
+    heads,
+    inject: injected,
+    reviewerInject,
     comment,
   });
 }
@@ -364,19 +424,12 @@ function cmdStart(args) {
     }, 1);
   }
 
-  const probes = runTerminalProbes(handle, probeWaitMs(routing, launch.provider));
-  if (!probes.ok) {
-    orca(argsTerminalClose({ terminal: handle, tab: true }));
-    fail(probes.error, { handle, command: launch.command, probes });
-  }
-
   emit({
     ok: true,
     handle,
     provider: launch.provider,
     command: launch.command,
     verify: { ok: true },
-    probes,
   });
 }
 
@@ -424,7 +477,65 @@ function cmdWorkerStart(args) {
     retryOf: args.retryOf,
   }));
   if (!r.ok) fail(`worker-start 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  const read = orca(argsTerminalRead({ terminal: args.terminal, limit: 80 }));
+  if (!read.ok) fail(`worker-start 成功但读屏失败——不是已开工，是没查成: ${errText(read.error)}`);
+  const injected = verifyInjection({ text: extractTerminalText(read.json) });
+  if (!injected.ok) fail(`注入后开工验证失败: ${injected.reason}`, { inject: injected });
+  emit({ ok: true, json: r.json, inject: injected });
+}
+
+function cmdReviewerCreate(args) {
+  if (!args.pr) fail('reviewer-create 要 --pr');
+  if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
+
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid']);
+  if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
+  let head;
+  try { head = JSON.parse(meta.out); }
+  catch { fail(`gh 读 PR #${args.pr} 返回不是 JSON: ${String(meta.out).slice(0, 120)}`); }
+  const baseBranch = head?.headRefName;
+  const expectedOid = head?.headRefOid;
+  if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
+
+  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);
+  if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
+  let fileJson;
+  try { fileJson = JSON.parse(fileList.out); }
+  catch { fail(`gh 读 PR #${args.pr} 文件列表不是 JSON: ${String(fileList.out).slice(0, 120)}`); }
+  const files = parseGhPullFiles(fileJson);
+  if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
+
+  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null };
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
+
+  const created = orca(argsWorktreeCreate({
+    name: args.name,
+    setup: 'skip',
+    parentWorktree: args.parentWorktree,
+    baseBranch,
+    comment: args.comment,
+  }));
+  if (!created.ok) fail(`审官卡创建失败: ${errText(created.error)}`, plan);
+  const reviewerId = extractWorktreeId(created.json);
+  const reviewerPath = extractWorktreePath(created.json);
+  if (!reviewerId || !reviewerPath) fail('审官卡没返回 id/path', { ...plan, reviewerId, reviewerPath });
+
+  const env = envProbeWorktree(reviewerPath);
+  if (!env.ok) {
+    orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    fail(`审官树环境自检失败: ${env.error}`, { ...plan, reviewerId, reviewerPath, probes: env });
+  }
+  const heads = verifyReviewerTree({ reviewerPath, expectedOid });
+  if (!heads.ok) {
+    orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    fail(heads.error, { ...plan, reviewerId, reviewerPath, heads });
+  }
+  const filesOk = verifyReviewerFiles({ reviewerPath, files });
+  if (!filesOk.ok) {
+    orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    fail(filesOk.error, { ...plan, reviewerId, reviewerPath, files: filesOk });
+  }
+  emit({ ok: true, ...plan, reviewerId, reviewerPath, heads, filesChecked: filesOk.checked, probes: env });
 }
 
 function cmdSend(args) {
@@ -437,6 +548,31 @@ function cmdSend(args) {
   }));
   if (!r.ok) fail(`terminal send 失败: ${errText(r.error)}`);
   emit({ ok: true, json: r.json });
+}
+
+/**
+ * 闭环发信口（#548 红项 1）。裸 orca orchestration send 对不存在的 handle 也 exit 0 + ok:true，
+ * 从帅的视角「链断了」和「链走完了」都表现为没有消息——这里把断链变成当场非零 + 升级。
+ *
+ * 管的是投递，不管结算：ok:true = 消息进了对方信箱，不等于对面读了、也不等于任务变 completed。
+ * 结算（worker_done 那类）另有 Dispatch 身份要求，本口不提供，见 issue #551。
+ */
+function cmdNotify(args) {
+  const r = deliverMessage({
+    to: args.to || null,
+    subject: args.subject,
+    body: args.body ?? '',
+    type: args.type,
+    outcome: args.outcome,
+    hop: args.hop || '闭环通知',
+    orca: (a) => orca(a),
+  });
+  if (!r.ok) {
+    console.error(`[dao notify] 链断，没送到（${r.stage}）：${r.error}`);
+    console.error('[dao notify] 别往下走：确认送达前不许进入下一步，修不好就升级给帅。');
+    emit(r, 1);
+  }
+  emit(r);
 }
 
 function cmdLiveness(args) {
@@ -493,7 +629,9 @@ function main() {
     case 'worktree-rm': return cmdWorktreeRm(args);
     case 'task-create': return cmdTaskCreate(args);
     case 'worker-start': return cmdWorkerStart(args);
+    case 'reviewer-create': return cmdReviewerCreate(args);
     case 'send': return cmdSend(args);
+    case 'notify': return cmdNotify(args);
     case 'liveness': return cmdLiveness(args);
     case 'check-help': return cmdCheckHelp();
     case 'raw': return cmdRaw(args);

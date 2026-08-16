@@ -277,6 +277,10 @@ export function catalogUsedFlags() {
     argsTaskCreate({ spec: 's' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsTerminalClose({ terminal: 't', tab: true }),
+    argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
+    argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
+    argsRunShow({ id: 'r' }),
+    argsRunCurrent(),
   ];
   return samples.map(args => ({
     cmd: commandKey(args),
@@ -594,6 +598,121 @@ export function hostProbeExec(cwd = process.cwd()) {
   };
 }
 
+export function gitCapture(cwd, args) {
+  if (!cwd) return { ok: false, error: 'git 没给工作区路径' };
+  const r = spawnSync('git', ['-C', cwd, ...args], {
+    encoding: 'utf8', windowsHide: true, timeout: 15000,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `git exit ${r.status}`).trim().slice(0, 200) };
+  }
+  return { ok: true, out: String(r.stdout || '').trim() };
+}
+
+export function gitHeadOid(cwd) {
+  const r = gitCapture(cwd, ['rev-parse', 'HEAD']);
+  if (!r.ok) return r;
+  if (!/^[0-9a-f]{7,40}$/i.test(r.out)) return { ok: false, error: `git HEAD 不是 oid：${r.out.slice(0, 80)}` };
+  return { ok: true, oid: r.out };
+}
+
+export function gitBranchName(cwd) {
+  const r = gitCapture(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!r.ok) return r;
+  if (!r.out || r.out === 'HEAD') return { ok: false, error: '工作区处于 detached HEAD，推不出分支名' };
+  return { ok: true, branch: r.out };
+}
+
+export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {}) {
+  const rev = gitHeadOid(reviewerPath);
+  if (!rev.ok) return { ok: false, error: `审官树 HEAD 没查成：${rev.error}` };
+  let want = expectedOid || null;
+  if (!want) {
+    const w = gitHeadOid(workerPath);
+    if (!w.ok) return { ok: false, error: `工人树 HEAD 没查成：${w.error}` };
+    want = w.oid;
+  }
+  if (rev.oid !== want) {
+    return {
+      ok: false,
+      error: `审官树 HEAD ${rev.oid} ≠ 期望 ${want}（在审空气）`,
+      reviewerHead: rev.oid,
+      expectedOid: want,
+    };
+  }
+  return { ok: true, reviewerHead: rev.oid, expectedOid: want };
+}
+
+export function verifyReviewerFiles({ reviewerPath, files } = {}) {
+  if (!Array.isArray(files)) {
+    return { ok: false, error: '被审文件清单没查成', missing: [], unscanned: true };
+  }
+  const missing = [];
+  for (const f of files) {
+    if (!existsSync(join(reviewerPath, f))) missing.push(f);
+  }
+  if (missing.length) return { ok: false, error: `审官树缺被审文件 ${missing.length} 个`, missing };
+  return { ok: true, checked: files.length, missing: [] };
+}
+
+/** GitHub pull file 列表：跳过 removed，取 filename。没查成时返回 null。 */
+export function parseGhPullFiles(json) {
+  if (!Array.isArray(json)) return null;
+  return json
+    .filter(f => f && f.status !== 'removed' && f.filename)
+    .map(f => f.filename);
+}
+
+/** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
+export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
+
+export function verifyInjection({ text, readError } = {}) {
+  if (readError) return { ok: false, reason: '没读成', error: readError, unscanned: true };
+  if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
+  const t = String(text);
+  if (!t.trim()) return { ok: false, reason: '注入后屏面是空的', unscanned: false, text: '' };
+  const m = t.match(PASTED_CONTENT_RE);
+  if (m) {
+    return {
+      ok: false,
+      reason: '任务书停在输入框（Pasted Content），没有进上下文',
+      evidence: m[0],
+      unscanned: false,
+      text: t,
+    };
+  }
+  return { ok: true, text: t, unscanned: false };
+}
+
+export function parseDiffNameStatus(text) {
+  const mustExist = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const status = line.slice(0, tab).trim();
+    const rest = line.slice(tab + 1);
+    if (!status || status[0] === 'D') continue;
+    const parts = rest.split('\t');
+    mustExist.push(parts[parts.length - 1]);
+  }
+  return mustExist;
+}
+
+export function runGh(args, { cwd } = {}) {
+  const r = spawnSync('gh', args, {
+    encoding: 'utf8', windowsHide: true, timeout: 30000, cwd,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return { ok: false, error: String(r.error?.message || r.stderr || `gh exit ${r.status}`).trim().slice(0, 240) };
+  }
+  return { ok: true, out: String(r.stdout || '') };
+}
+
+export function envProbeWorktree(cwd) {
+  return runCapabilityProbes({ exec: hostProbeExec(cwd) });
+}
+
 export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle } = {}) {
   const steps = [];
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
@@ -724,7 +843,7 @@ export function assessWorktreeLiveness(root, opts = {}) {
 }
 
 // ── 派工约束（CLI 是约束载体，不是提醒。issue #482 规格重定义）────────
-// 缺参数就跑不起来。不靠 hook：2026-08-12 df217ee 已写明「提醒值一行偏好，不值一个进程」。
+// 缺参数就跑不起来。拦旁路的闸门在 dispatch-gate.mjs（#546）：载体只有在「唯一入口」时才是约束。
 
 export const MERGE_POLICIES = ['auto', 'manual'];
 export const DISPATCH_VERBS = ['dispatch', 'worker-start'];
@@ -868,6 +987,213 @@ export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
   return base;
 }
 
+// ── 闭环任务书模板（#546 追加第五件）──────────────────────────
+// 士兵 / 审官任务书模板在 host/skills/dispatch/templates/，不硬编码进代码——
+// 模板要能被读、被改（#507 教训：写原则 + 「以当时的任务书为准」，别写死会过时的具体职责）。
+// 占位符 {{KEY}} 填充失败（模板缺文件 / 占位符没被换掉）必须失败退出，不许带着空位派出去。
+
+export const DISPATCH_TEMPLATE_DIR = join(ROOT, 'host', 'skills', 'dispatch', 'templates');
+
+export function listDispatchTemplates() {
+  if (!existsSync(DISPATCH_TEMPLATE_DIR)) return [];
+  return readdirSync(DISPATCH_TEMPLATE_DIR)
+    .filter(f => f.endsWith('.md'))
+    .sort();
+}
+
+/** 读模板原文。拿不到就抛（同 dao 全局：不许静默当成空模板）。 */
+export function readDispatchTemplate(name) {
+  if (!/^[a-z0-9-]+\.md$/.test(String(name || ''))) throw new Error(`模板名不合法: ${name}`);
+  const p = join(DISPATCH_TEMPLATE_DIR, name);
+  if (!existsSync(p)) throw new Error(`任务书模板不在: ${p}`);
+  return readFileSync(p, 'utf8');
+}
+
+/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。 */
+export function renderDispatchTemplate(name, vars = {}) {
+  const text = readDispatchTemplate(name);
+  const out = String(text).replace(/\{\{(\w+)\}\}/g, (m, key) => {
+    const v = vars[key];
+    if (v === undefined || v === null) throw new Error(`模板 ${name} 占位符 {{${key}}} 没给值`);
+    return String(v);
+  });
+  if (/\{\{\w+\}\}/.test(out)) throw new Error(`模板 ${name} 还有未替换占位符`);
+  return out;
+}
+
+// ── 闭环投递（发不到必须炸，#548 红项 1）──────────────────────────
+//
+// 为什么判据放在「发之前」而不是 delivered_at：
+// orca orchestration send 对**不存在的 handle** 也返回 exit 0 / ok:true / delivered_at:null；
+// 而对**活着的 handle**（自发自收实测）返回的同样是 delivered_at:null。
+// 也就是说 delivered_at 在本机这版 Orca 上分不开「链断了」和「刚发出去」，
+// 拿它当门 = 每条都判红的假守卫。真正能分辨收件人在不在的只有两处：
+//   term_ handle → terminal read 报 terminal_handle_stale
+//   run: 信箱    → run-show 报 run_not_found
+// 所以：投递前先证收件人在，投递后核回执与落库，delivered_at 只如实报出、不当唯一判据。
+
+export function argsOrchestrationSend({ to, subject, body, type, outcome } = {}) {
+  const a = ['orchestration', 'send'];
+  if (to) a.push('--to', to);
+  if (subject != null) a.push('--subject', subject);
+  if (body != null) a.push('--body', body);
+  if (type) a.push('--type', type);
+  if (outcome) a.push('--outcome', outcome);
+  a.push('--json');
+  return a;
+}
+
+export function argsOrchestrationInbox({ terminal, limit, full } = {}) {
+  const a = ['orchestration', 'inbox'];
+  if (terminal) a.push('--terminal', terminal);
+  if (limit != null) a.push('--limit', String(limit));
+  if (full) a.push('--full');
+  a.push('--json');
+  return a;
+}
+
+export function argsRunShow({ id } = {}) {
+  const a = ['orchestration', 'run-show'];
+  if (id) a.push('--id', id);
+  a.push('--json');
+  return a;
+}
+
+export function argsRunCurrent() {
+  return ['orchestration', 'run-current', '--json'];
+}
+
+/** 收件人形态。闭环三跳只有三种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。 */
+export function classifyNotifyTarget(to) {
+  const t = String(to ?? '').trim();
+  if (!t) return { kind: 'own-run', id: null };
+  if (/^term_/.test(t)) return { kind: 'terminal', id: t };
+  if (/^run:/.test(t)) return { kind: 'run', id: t.slice(4) };
+  if (t.startsWith('@')) {
+    return { kind: 'unsupported', error: `闭环通知不发组播（${t}）：组播没人负责签收，收不到也看不出来` };
+  }
+  return { kind: 'unsupported', error: `收件人形态不认识: ${t}（只收 term_… / run:… / 省略=自己那条 Run 信箱）` };
+}
+
+function orcaErrText(error) {
+  if (typeof error === 'object' && error) {
+    const code = String(error.code || '').trim();
+    const msg = String(error.message || '').trim();
+    return code && msg && code !== msg ? `${code}: ${msg}` : (code || msg);
+  }
+  return String(error || '').trim();
+}
+
+/** 投递前证收件人真的在。拿不到 ≠ 没有：分不开就标 unscanned，一样非零。 */
+export function probeRecipient(target, orca) {
+  if (typeof orca !== 'function') throw new Error('probeRecipient 要 orca 执行器');
+  if (target.kind === 'terminal') {
+    const r = orca(argsTerminalRead({ terminal: target.id, limit: 1 }));
+    if (r.ok) return { ok: true, kind: 'terminal', id: target.id, status: r.json?.result?.terminal?.status ?? null };
+    const text = orcaErrText(r.error);
+    if (/terminal_handle_stale|not_found/i.test(text)) {
+      return { ok: false, kind: 'terminal', id: target.id, error: `收件人终端不存在或已失效（${text}）：${target.id}` };
+    }
+    return { ok: false, unscanned: true, kind: 'terminal', id: target.id, error: `收件人活性没查成（不等于收件人不在）：${text}` };
+  }
+  if (target.kind === 'run') {
+    const r = orca(argsRunShow({ id: target.id }));
+    if (r.ok && r.json?.result?.run) return { ok: true, kind: 'run', id: target.id };
+    if (r.ok) return { ok: false, kind: 'run', id: target.id, error: `Run 信箱查无此 Run: ${target.id}` };
+    const text = orcaErrText(r.error);
+    if (/run_not_found/i.test(text)) {
+      return { ok: false, kind: 'run', id: target.id, error: `Run 信箱不存在（run_not_found）：${target.id}` };
+    }
+    return { ok: false, unscanned: true, kind: 'run', id: target.id, error: `Run 信箱没查成: ${text}` };
+  }
+  const r = orca(argsRunCurrent());
+  if (!r.ok) {
+    const text = orcaErrText(r.error);
+    return { ok: false, unscanned: true, kind: 'own-run', error: `本终端绑的 Run 没查成: ${text}` };
+  }
+  const run = r.json?.result?.run;
+  if (!run) return { ok: false, kind: 'own-run', error: '本终端没绑 orchestration Run，省略收件人 = 发进真空' };
+  return { ok: true, kind: 'own-run', id: run.id || null };
+}
+
+/** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。 */
+export function extractSentMessage(json) {
+  const m = json?.result?.message || json?.message || null;
+  if (!m || !m.id) return null;
+  return { id: m.id, toHandle: m.to_handle ?? null, deliveredAt: m.delivered_at ?? null };
+}
+
+/** 落库复核。扫不到任何样本 → unscanned（「没查成」不许当「查过没事」）。 */
+export function findInboxMessage(inboxJson, messageId) {
+  const list = inboxJson?.result?.messages;
+  if (!Array.isArray(list)) return { scanned: false, found: false, message: null };
+  const hit = list.find(m => m && m.id === messageId) || null;
+  return { scanned: true, found: !!hit, message: hit, sampled: list.length };
+}
+
+/**
+ * 闭环一跳的投递：收件人在 → 发 → 有回执 → 落库可查。四关缺一即失败。
+ * 失败一律返回 ok:false（调用方非零退出并升级），不许当「发成功了只是还没读」。
+ *
+ * 边界（别误读）：**四关验的是投递，不是结算**。`ok:true` 只说明这条消息确实进了
+ * 收件人的信箱，不代表对面读了、更不代表事情办完了——编排里那条任务不会因为
+ * 发过一条消息就变 completed。要「发出即结算」的信号（worker_done 那类）另有一套
+ * Dispatch 身份要求，notify 目前不提供，见 issue #551；在那之前不要给 notify 加
+ * `--type worker_done` 来假装结算：面板会显示成结算了而实际没有，比不发更糟。
+ */
+export function deliverMessage({
+  to = null, subject, body = '', type, outcome, hop = '闭环通知', orca, inboxLimit = 50,
+} = {}) {
+  if (typeof orca !== 'function') throw new Error('deliverMessage 要 orca 执行器');
+  if (!subject) return { ok: false, hop, stage: '参数', error: `${hop}：缺 --subject，没主题的通知等于没通知` };
+
+  const target = classifyNotifyTarget(to);
+  if (target.kind === 'unsupported') return { ok: false, hop, stage: '收件人', error: `${hop}：${target.error}` };
+
+  const pre = probeRecipient(target, orca);
+  if (!pre.ok) {
+    return { ok: false, hop, stage: '收件人', unscanned: !!pre.unscanned, error: `${hop}：${pre.error}`, recipient: pre };
+  }
+
+  const sent = orca(argsOrchestrationSend({ to, subject, body, type, outcome }));
+  if (!sent.ok) {
+    const text = orcaErrText(sent.error);
+    return { ok: false, hop, stage: '发送', error: `${hop}：orca send 失败: ${text}`, recipient: pre };
+  }
+
+  const msg = extractSentMessage(sent.json);
+  if (!msg) {
+    return { ok: false, hop, stage: '回执', error: `${hop}：orca 说发出去了却没给消息回执 —— 拿不到回执就当没送到`, recipient: pre };
+  }
+  if (to && msg.toHandle && msg.toHandle !== String(to)) {
+    return {
+      ok: false, hop, stage: '回执', messageId: msg.id,
+      error: `${hop}：回执收件人是 ${msg.toHandle}，与请求的 ${to} 不一致（错投）`, recipient: pre,
+    };
+  }
+
+  const inbox = orca(argsOrchestrationInbox({ limit: inboxLimit, full: true }));
+  if (!inbox.ok) {
+    const text = orcaErrText(inbox.error);
+    return { ok: false, hop, stage: '复核', unscanned: true, messageId: msg.id, error: `${hop}：投递复核没查成: ${text}`, recipient: pre };
+  }
+  const found = findInboxMessage(inbox.json, msg.id);
+  if (!found.scanned) {
+    return { ok: false, hop, stage: '复核', unscanned: true, messageId: msg.id, error: `${hop}：复核没扫到任何消息样本，这次没查成`, recipient: pre };
+  }
+  if (!found.found) {
+    return { ok: false, hop, stage: '复核', messageId: msg.id, error: `${hop}：回执给了 ${msg.id}，编排里却查不到这条消息`, recipient: pre };
+  }
+
+  return {
+    ok: true, hop, stage: '已送达', messageId: msg.id,
+    to: msg.toHandle ?? (pre.id || null),
+    deliveredAt: found.message?.delivered_at ?? null,
+    recipient: pre,
+    sampled: found.sampled,
+  };
+}
+
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
 
 export function recordEscape({ argv, ts = new Date().toISOString(), cwd = process.cwd() } = {}, logPath = ESCAPE_LOG) {
@@ -882,7 +1208,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'send', 'liveness', 'check-help', 'raw',
+  'worker-start', 'reviewer-create', 'send', 'notify', 'liveness', 'check-help', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -903,7 +1229,13 @@ export const FLAGS_BY_VERB = {
     '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
+  'reviewer-create': new Set([
+    '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+  ]),
   send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
+  notify: new Set([
+    '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
+  ]),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
 };
@@ -955,14 +1287,22 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <名> [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+  reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
   worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   send --terminal <handle> --text <文> [--enter]
+  notify --subject <文> [--to <term_…|run:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
 其他:
   liveness [--path <工作树>]
   check-help
   raw -- <任意命令...>     逃生口，必须留痕
+
+notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
+落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
+delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
+notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱，不代表对面读了、
+更不代表编排里那条任务变 completed。别加 --type worker_done 假装结算（见 issue #551）。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
