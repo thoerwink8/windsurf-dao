@@ -23,7 +23,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
 峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
 
-2026-08-16 起本节降为**应急直连通道**：ds-flash/pro 不分峰谷一律走 [providers.opencode-go]（规则唯一权威落点见该节 why，2026-08-16 追加拍板）；本节 `pi --model {model}` 只在**用户**拍板切直连时手动用，AI 不得自行切换。
+2026-08-16 起本节降为**应急直连通道**：通道规则唯一落点见 [providers.opencode-go].why（2026-08-16 追加拍板）。
 两条通道跑的是同一个模型，所以模型条目只有一条（战绩记在一处，不拆两本账）。
 """
 
@@ -128,10 +128,10 @@ Zen 与 Go 在 pi 里是两个独立 provider（`opencode` / `opencode-go`），
 
 **ds-flash/pro 是同一个模型的两条通道，不是两个模型**（用户拍板 2026-08-16：「没区别，算法记录要互通」）。
 所以模型条目只有一条、id 不带通道前缀，战绩天然记在一处；通道信息在 provider + cli_model 上。
-通道规则（不分峰谷一律走本节 / 撞顶由用户拍板 / AI 不得自行切换 / 402 判例）唯一权威落点见本节 why。
+通道规则唯一落点见本节 why。
 
 额度是账户级共享硬顶（美元额度制，按各模型单价折算），撞顶后 pi 当场报错。
-**[[routes]] 的 fallback 只在选型时主选被门闩剔除才生效，救不了运行时撞顶**——撞顶按本节 why 的规则走。
+**[[routes]] 的 fallback 只在选型时主选被门闩剔除才生效，救不了运行时额度耗尽**——额度耗尽的处置见本节 why。
 限额与折算价见 https://opencode.ai/docs/go/ 与账号控制台，本文件不复制会过期的数字。
 """
 why = """
@@ -155,7 +155,7 @@ provider = "opencode-go"          # 2026-08-16 主通道换成 Go 额度池；�
 cli_model = "deepseek-v4-flash"   # 两条通道的真实模型名相同，dao-cmd 拼 launch 时用它
 roles = ["写码"]
 status = "正式"
-why = "写码类谷时主选；不分峰谷一律走 opencode-go（同一模型、额度池比直连按量便宜），通道规则（撞顶由用户拍板、AI 不得自行切换）唯一落点见 [providers.opencode-go].why——同一模型只留一条记录，战绩不拆两本账（用户拍板 2026-08-16）"
+why = "写码类谷时主选；同一模型只留一条记录，战绩不拆两本账；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
 decided = "2026-08-16"
 
 [[models]]
@@ -164,7 +164,7 @@ provider = "opencode-go"
 cli_model = "deepseek-v4-pro"
 roles = ["判断"]
 status = "正式"
-why = "判断类主选；不分峰谷一律走 opencode-go，通道规则（撞顶由用户拍板、AI 不得自行切换）唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
+why = "判断类主选；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
 decided = "2026-08-16"
 
 [[models]]
