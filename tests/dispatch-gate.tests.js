@@ -9,7 +9,7 @@ const { spawnSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const GATE = path.join(REPO, 'scripts', 'lib', 'dispatch-gate.mjs');
-const HOOK = path.join(REPO, 'host', 'skills', 'dispatch', 'hooks', 'dispatch-gate.mjs');
+const HOOK = path.join(REPO, 'scripts', 'lib', 'dispatch-gate-hook.mjs'); // 随仓 .claude/settings.json 挂的入口（#553）
 const CHECK = path.join(REPO, 'scripts', 'lib', 'dispatch-gate-check.mjs');
 
 let pass = 0;
@@ -56,7 +56,7 @@ async function main() {
   check('decideGate 旁路 block + 指向 dao.mjs dispatch', blocked.block === true && /dao\.mjs dispatch/.test(blocked.message), JSON.stringify(blocked));
 
   console.log('\n=== 故意违规：真跑 hook 进程 ===');
-  for (const [label, script] of [['lib', GATE], ['plugin hook', HOOK]]) {
+  for (const [label, script] of [['lib', GATE], ['settings hook', HOOK]]) {
     const bypass = runGate(script, 'orca orchestration worker-start --task t --worktree w');
     check(`${label} 故意旁路 worker-start → exit 2`, bypass.status === 2, `status=${bypass.status} ${bypass.stderr}`);
     check(`${label} 提示走 dao.mjs dispatch`, /dao\.mjs dispatch/.test(bypass.stderr || ''), bypass.stderr);
@@ -77,16 +77,30 @@ async function main() {
   check('本仓闸门检查绿', !!live.green && !live.fail, JSON.stringify(live));
 
   const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-empty-'));
-  fs.mkdirSync(path.join(emptyRoot, 'host', 'skills'), { recursive: true });
   const empty = checkDispatchGate({ root: emptyRoot });
-  check('零样本（没有 PreToolUse）→ 报没查成', !!empty.fail && /没扫到|没查成/.test(empty.fail[0] + empty.fail[1]), JSON.stringify(empty));
+  check('零样本（没有随仓 .claude/settings.json）→ 报没查成', !!empty.fail && /没查成|不在/.test(empty.fail[0] + empty.fail[1]), JSON.stringify(empty));
+
+  const noGateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-nogate-'));
+  fs.mkdirSync(path.join(noGateRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(noGateRoot, '.claude', 'settings.json'), JSON.stringify({
+    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/scripts/lib/dao-mode.mjs" hook' }] }] },
+  }), 'utf8');
+  const noGate = checkDispatchGate({ root: noGateRoot });
+  check('有 PreToolUse 但无 dispatch-gate 条目 → 报没扫到', !!noGate.fail && /没扫到/.test(noGate.fail[0]), JSON.stringify(noGate));
 
   const badRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-bad-'));
-  const badHooks = path.join(badRoot, 'host', 'skills', 'dispatch', 'hooks');
-  fs.mkdirSync(badHooks, { recursive: true });
-  fs.writeFileSync(path.join(badHooks, 'hooks.json'), '{oops', 'utf8');
+  fs.mkdirSync(path.join(badRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(badRoot, '.claude', 'settings.json'), '{oops', 'utf8');
   const bad = checkDispatchGate({ root: badRoot });
-  check('hooks.json 坏 JSON → 没查成', !!bad.fail && /解析不了/.test(bad.fail[0]), JSON.stringify(bad));
+  check('settings.json 坏 JSON → 没查成', !!bad.fail && /解析不了/.test(bad.fail[0]), JSON.stringify(bad));
+
+  const ghostRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-ghost-'));
+  fs.mkdirSync(path.join(ghostRoot, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(ghostRoot, '.claude', 'settings.json'), JSON.stringify({
+    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/scripts/lib/dispatch-gate-ghost.mjs"' }] }] },
+  }), 'utf8');
+  const ghost = checkDispatchGate({ root: ghostRoot });
+  check('闸门指向的脚本不存在 → 报没跑成/指向空气', !!ghost.fail && /脚本都没跑成|指向空气/.test(ghost.fail[0]), JSON.stringify(ghost));
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
