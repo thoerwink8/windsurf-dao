@@ -61,7 +61,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `orphan-noassoc-fresh/` | 无关联 + 静置 5 分钟（未超阈值） | 不报 orphan（命名不合规另报 naming） |
 | `naming-bad/` | 卡名 `审官·GPT`（另一主帅的卡，终端在跑） | 退出码 1，`naming:`；不报 orphan（活跃执行者判据优先） |
 | `naming-skip/` | **#569 降噪**：基于 idle/，加一条 live 实录形态的 `windsurf-dao` 卡（review-566：0 agent、1 活终端、无 #N 前缀） | 退出码 0，不报 naming（无 agent 且无 #N 前缀的树不是任务卡；有 agent 的误命名卡仍会报，见 naming-bad） |
-| `blind/` | **#569 垫片并进（BLIND）**：加一条 `#555 - 隐形工人测试` 卡，agents=0 + liveTerminalCount=2（reclaude/Claude 起法 orca 认不出 agent） | 退出码 1，`blind:`（看门狗工位循环与流转器都监视不到，只能人工盯） |
+| `blind/` | **#569 垫片并进（BLIND，2026-08-17 判据订正）**：加一条 `#555 - 隐形工人测试` 卡，liveTerminalCount=2，worker-list-evidence.json 的记账集合里不含它（从没走 worker-start/dispatch） | 退出码 1，`blind:`（有活终端且查不到 dispatch 记账 = 编排层看不见，只能人工盯） |
+| `blind-tracked/` | 同 blind/ 但 #555 出现在记账集合里（2026-08-17 帅实证形态：agents=0 的审官 worker-read 读得到、token 在涨） | 退出码 0，不报 blind（有记账 = 编排层看得见，agents=0 不算数） |
 | `heartbeat-stale/` | flow 心跳 ts 10 分钟未更新（#497 契约） | 退出码 1，`flow-stalled:` |
 | `heartbeat-pending/` | 心跳新鲜但 PR state=approved 停留 40 分钟 | 退出码 1，`stagnation:`（该发生而没发生） |
 | `heartbeat-fresh/` | 心跳新鲜 + 无停滞 PR | 不报；心跳缺失样本（如 live/）显形 HEARTBEAT_MISSING |
@@ -97,3 +98,6 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 - `gh-evidence.json`：孤儿判据的关联单状态
 - `heartbeat.json`：flow 心跳（#497 契约）
 - `sessions/` 子目录（#569）：pi 会话 jsonl 树，model_change 检测用（快照默认读 `<轮目录>/sessions`）
+- `worker-list-evidence.json`（#569 BLIND，2026-08-17 判据订正）：`{ worktrees: [ <worktreeId>, ... ] }`——
+  dispatch 记账集合（镜像 live 的 `orca orchestration worker-list` 的 resource.worktreeId）。
+  缺省 = BLIND 判据显式「没查成」（查不到记账 ≠ 查过没事）；出现在集合里 = 编排层看得见，不报

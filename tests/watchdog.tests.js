@@ -8,8 +8,9 @@
 // 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
 // ⑩孤儿树（活跃执行者判据，跨主帅不误伤）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
 // #569：⑭空转降噪三类豁免（角色·在途PR·活性否决，各留正控 negative + 真阳对照）⑮权限确认框
-// selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进）
-// ⑰model-change（pi 静默换 provider：诱因 errorMessage、初始选型不报）。
+// selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进，
+// 2026-08-17 判据订正：有活终端且查不到 dispatch 记账才报，agents=0 不算数）⑰model-change
+// （pi 静默换 provider：诱因 errorMessage、初始选型不报）。
 //
 // 判别力自检问句：任何把检测放宽或收紧的改动，是否都至少有一条断言会变红？
 // 每个违规样本都是「故意构造的违规，被当场拦下」——上线生效证据，v0.4 跳过这步首报即翻车。
@@ -403,12 +404,25 @@ console.log("\n=== ㉑ #569 ④ 权限确认框停摆指纹：N/M:select 持续�
   check("健康语料（无选择器提示）：不报 selector", !/selector:/.test(rn.out), rn.out.trim());
 }
 
-console.log("\n=== ㉒ #569 垫片并进：编排层隐形工人 BLIND（有活终端但 agents=0） ===");
+console.log("\n=== ㉒ #569 垫片并进：编排层隐形工人 BLIND（2026-08-17 判据订正：有活终端 + 查不到 dispatch 记账才算真隐形） ===");
 {
+  // 真判据 = 有活终端（>1）+ orca orchestration worker-list 的 resource.worktreeId 里没有它
+  // （从没走 worker-start/dispatch = 编排层不知道有工人在跑）。worker-list-evidence.json 里
+  // 列了现存非主树（#450/#452/#449）但没列 #555 → #555 无记账 → 报。
   const r = runWatchdog(path.join(FIXTURES, "blind"), ["--once"]);
   check("退出码 1（隐形工人必须显形）", r.status === 1, `status=${r.status}`);
-  check("输出 blind 事件（reclaude/Claude 起法盲区）", /\[#555 - 隐形工人测试\] blind: 编排层隐形工人：有 2 个活终端但 agents=0/.test(r.out), r.out.trim());
+  check("输出 blind 事件且带判据（有活终端、无 dispatch 记账）", /\[#555 - 隐形工人测试\] blind: 编排层隐形工人：有 2 个活终端且查不到 dispatch 记账/.test(r.out), r.out.trim());
+  check("有记账的非主树（#452 等）不报 blind", !/\[#452 - 看门狗正式版\] blind:/.test(r.out), r.out.trim());
   check("隐形工人树不误报 orphan（有活终端 = 有活跃执行者）", !/\[#555 - 隐形工人测试\] orphan:/.test(r.out), r.out.trim());
+
+  // 负控（2026-08-17 帅实证形态）：同一棵树出现在记账里（agents=0 的审官 worker-read 读得到、
+  // token 在涨）→ 编排层看得见 → 不报。判别力：把判据改回垫片的 agents=0 → 本条断言变红。
+  const rt = runWatchdog(path.join(FIXTURES, "blind-tracked"), ["--once"]);
+  check("blind-tracked（#555 有 dispatch 记账）：退出码 0，不报 blind（有记账的 agents=0 不算隐形）", rt.status === 0 && !/blind:/.test(rt.out), `${rt.status} ${rt.out.trim()}`);
+
+  // 没查成 ≠ 查过没事：无 worker-list-evidence.json 的快照显式 DISPATCH_BOOKKEEPING_MISSING
+  const rm = runWatchdog(path.join(FIXTURES, "live"), ["--once"]);
+  check("缺记账证据：显式 DISPATCH_BOOKKEEPING_MISSING（不是静默放过）", /DISPATCH_BOOKKEEPING_MISSING/.test(rm.out), rm.out.trim());
 }
 
 console.log("\n=== ㉓ #569 降噪命名：无 agent 且无 #N 前缀的树不参与命名校验（windsurf-dao 假阳修复） ===");

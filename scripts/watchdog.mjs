@@ -51,9 +51,14 @@
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
 //                        最近 message 的 errorMessage；新会话开头的初始选型（无前序 message）不报
-//   BLIND          —— 编排层隐形工人（#569 垫片 watch-board.mjs 并进）：树级判据，有活终端但
-//                        agents=0（reclaude/Claude 起法 orca 认不出 agent）——看门狗与流转器都
-//                        监视不到，只能人工盯
+//   BLIND          —— 编排层隐形工人（#569 垫片 watch-board.mjs 并进；2026-08-17 判据订正）：
+//                        树级判据 = 有活终端（>1）且**查不到 dispatch 记账**（orca orchestration
+//                        worker-list 的 resource.worktreeId 里没有它）——从没走 worker-start/
+//                        dispatch 的工位 = 编排层不知道有工人在跑，看门狗与流转器都监视不到，
+//                        只能人工盯。订正实证（2026-08-17）：「agents=0」是假阳——reclaude/Claude
+//                        起法 orca worktree ps 不报 agent，但 worker-read 读得到、token 在涨，
+//                        编排层其实看得见；有 dispatch 记账的一律不报；worker-list 查不动 → 没查成
+//                        note，不猜（垫片当初用 agents 凑合，就因为它长驻没绑 run 查不了记账）
 //
 // 两个窗口（#442 v0 首战假阳性教训的落点）：
 //   --window       整屏窗口（默认 60 行）：停摆判据用。
@@ -388,7 +393,7 @@ function makeLiveSource(window) {
     return res;
   };
 
-  return { ps, paneByKey, readTerminal, tlError, terminalsByPath: buildTerminalsByPath(terminals), prEvidence: livePrEvidence() };
+  return { ps, paneByKey, readTerminal, tlError, terminalsByPath: buildTerminalsByPath(terminals), prEvidence: livePrEvidence(), dispatchTracked: liveDispatchTracked() };
 }
 
 function buildTerminalsByPath(terminals) {
@@ -451,10 +456,12 @@ function loadSnapshotRound(roundDir) {
   //   gh-evidence.json   { <worktreeId>: { ticketOpen: bool, ticket: "pr 505"|"issue 483"|null } }
   //   pr-evidence.json   { <worktreeId>: { number, open: bool, isDraft: bool, reviewDecision } }（#569）
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
+  //   worker-list-evidence.json  { worktrees: [ <worktreeId>, ... ] }（#569 BLIND：dispatch 记账集合）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
   const prEv = readJson('pr-evidence.json');
   const hb = readJson('heartbeat.json');
+  const wlEv = readJson('worker-list-evidence.json');
 
   return {
     ps, paneByKey, readTerminal, tlError: null, label: basename(roundDir),
@@ -465,6 +472,7 @@ function loadSnapshotRound(roundDir) {
     prEvidence: prEv || null,
     heartbeat: hb || null,
     sessionsDir: join(roundDir, 'sessions'),
+    dispatchTracked: wlEv && Array.isArray(wlEv.worktrees) ? { tracked: new Set(wlEv.worktrees.filter(Boolean)) } : { missing: true },
   };
 }
 
@@ -616,6 +624,25 @@ function prEvidenceFor(w, source, args) {
   }
   const ev = source.prEvidence && (source.prEvidence[w.worktreeId] || source.prEvidence[w.path]);
   return ev ? { ...ev } : { missing: true };
+}
+
+// ── dispatch 记账证据（#569 BLIND 判据订正，2026-08-17）────────────────
+// 真隐形判据 = 有活终端 + **查不到 dispatch 记账**。记账集合 = orca orchestration worker-list 的
+// resource.worktreeId（worker-list / worker-show 是独立查询通道，不需要绑 run——垫片当初只能拿
+// agents 凑合，就是因为它长驻没绑 run，task-list 类命令报 run_required；watchdog 每次 spawn 新
+// orca 进程，worker-list 直接可用）。快照模式从 worker-list-evidence.json 读：
+// { worktrees: [ <worktreeId>, ... ] }。
+function liveDispatchTracked() {
+  const r = runOrca(['orchestration', 'worker-list', '--json']);
+  if (!r.ok) return { error: `orca orchestration worker-list 失败：${errText(r.error)}` };
+  const workers = r.json?.result?.workers;
+  if (!Array.isArray(workers)) return { error: 'orca orchestration worker-list 返回结构不认识（缺 result.workers 数组）' };
+  const tracked = new Set();
+  for (const wk of workers) {
+    const wt = wk?.resource?.worktreeId;
+    if (wt) tracked.add(wt);
+  }
+  return { tracked };
 }
 
 function runRound(source, args, state) {
@@ -859,17 +886,26 @@ function runWorktreePass(source, args, state) {
     const st = state.worktrees[id] ||= { fired: new Set() };
     const agentsOf = Array.isArray(w.agents) ? w.agents : [];
 
-    // 编排层隐形工人（#569 垫片 watch-board.mjs 的 BLIND 判据并进）：
-    // reclaude/Claude 起法 orca 认不出 agent（agents=0）——有活终端却零 agent 的卡 = 隐形工人，
-    // 看门狗工位循环与流转器都监视不到（#569 实证：Claude 工人跑全程没人看见），只能人工盯。
-    // 主卡/自卡已在上层排除；liveTerminalCount>1 排除单终端残留壳/浏览窗（review-566 这类）。
-    if (agentsOf.length === 0) {
-      if ((w.liveTerminalCount || 0) > 1) {
+    // 编排层隐形工人（#569 垫片 watch-board.mjs 并进；2026-08-17 判据订正——原「agents=0」是假阳）：
+    // 真判据 = 有活终端（>1，排除单终端残留壳/浏览窗）且**查不到 dispatch 记账**（orca orchestration
+    // worker-list 的 resource.worktreeId 没有它）——从没走 worker-start/dispatch 的工位 = 编排层
+    // 不知道有工人在跑，看门狗工位循环与流转器都监视不到，只能人工盯。
+    // 有记账的一律不报（订正实证：agents=0 的审官 worker-read 读得到、token 在涨，编排层看得见）；
+    // worker-list 查不动 → 显式「没查成」note（查不到记账 ≠ 查过没事，不猜）。
+    if ((w.liveTerminalCount || 0) > 1) {
+      const tr = source.dispatchTracked;
+      if (tr?.error) {
+        notes.push({ name, type: '观察', detail: `DISPATCH_BOOKKEEPING_UNSCANNED: ${tr.error}——BLIND 判据没查成，不是查过没事` });
+        st.fired.delete('blind');
+      } else if (tr?.tracked && (tr.tracked.has(id) || tr.tracked.has(w.path))) {
+        st.fired.delete('blind'); // 有记账 = 编排层看得见（哪怕 agents=0）
+      } else if (tr?.tracked) {
         if (!st.fired.has('blind')) {
           st.fired.add('blind');
-          events.push({ name, type: 'blind', detail: `编排层隐形工人：有 ${w.liveTerminalCount} 个活终端但 agents=0（reclaude/Claude 起法的已知盲区，orca 认不出 agent）——看门狗工位循环与流转器都监视不到，只能人工盯（#569 垫片 BLIND 判据并进）` });
+          events.push({ name, type: 'blind', detail: `编排层隐形工人：有 ${w.liveTerminalCount} 个活终端且查不到 dispatch 记账（orca orchestration worker-list 无此工作树）——从没走 worker-start/dispatch = 编排层不知道有工人在跑，看门狗与流转器都监视不到，只能人工盯（#569 垫片并进；2026-08-17 判据订正：agents=0 不算数，记账缺失才算真隐形）` });
         }
       } else {
+        notes.push({ name, type: '观察', detail: 'DISPATCH_BOOKKEEPING_MISSING: 本轮没有 dispatch 记账证据（快照缺 worker-list-evidence.json）——BLIND 没查成，不是查过没事' });
         st.fired.delete('blind');
       }
     } else {
