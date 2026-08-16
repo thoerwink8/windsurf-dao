@@ -25,6 +25,7 @@
 const fs = require("fs");
 const path = require("path");
 const { redFlagsFromReviewBodies, buildRows, renderRow, countVerdictLines, reworkFromVerdictLines, describeRework } = require("../scripts/calibrate.mjs");
+const { malformedJudgmentLines } = require("../scripts/lib/judgment.mjs");
 
 const REPO = path.resolve(__dirname, "..");
 const fixture = name => JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", name), "utf8"));
@@ -125,6 +126,16 @@ check("rework：3 条→2 轮", reworkFromVerdictLines(["判定：红 1 项", "�
 check("三态①：1 条判定行 → 「0 轮（审过一次，零返工）」", describeRework(0).startsWith("0 轮") && describeRework(0).includes("零返工"));
 check("三态②：2 条判定行 → 「1 轮（判定行 2 条）」", describeRework(1).startsWith("1 轮") && describeRework(1).includes("判定行 2 条"));
 check("三态③：0 条判定行 → 「无判定行（本项没测成）」，不是 0 轮", describeRework(null).includes("无判定行") && describeRework(null).includes("没测成") && !describeRework(null).startsWith("0 轮"));
+
+// #559 A：近义变体判定行必须报「没查成」而不是「无判定」——战绩记错、流转器看不见的根因
+check("不合规判定行1：审官第 3 轮返工复核：绿 → malformed（没查成）", malformedJudgmentLines(["审官第 3 轮返工复核：绿\n红 1 项逐条验证：…"]).length === 1, JSON.stringify(malformedJudgmentLines(["审官第 3 轮返工复核：绿"])));
+check("不合规判定行2：审官判定：绿 → malformed（没查成）", malformedJudgmentLines(["审官判定：绿"]).length === 1);
+check("合规判定行不误伤 → malformed 空", malformedJudgmentLines(["判定：绿，可合并", "**复核结论：红 2 项**"]).length === 0);
+check("叙述讨论不误伤：语料样本判定：红 5 项——这条是讨论 → 不算 malformed", malformedJudgmentLines(["语料样本判定：红 5 项——这条是讨论不是判定"]).length === 0);
+check("真语料 446/440 判定行不误伤为 malformed", malformedJudgmentLines([...bodies446, ...bodies440]).length === 0);
+check("判定行不合规 → describeRework 报「没查成」不是「无判定」", describeRework(null, [{ attempt: "审官判定：绿" }]).includes("判定行不合规（没查成）") && !describeRework(null, [{ attempt: "审官判定：绿" }]).includes("无判定行"));
+const malformedSample = buildRows([{ model: "m", taskType: "写码", rework: null, redFlags: 2, judgmentMalformed: [{ attempt: "审官判定：绿" }], number: 9, mergedAt: "2026-01-09T00:00:00Z" }], [], ["写码"]);
+check("累计表趋势：判定不合规样本记「判定不合规」非「无判定」", renderRow(malformedSample[0]).includes("判定不合规"));
 
 // 累计表镜像：无判定行不混进返工平均，也不当作 0 轮
 const noVerdict = buildRows([{ model: "m", taskType: "写码", rework: null, redFlags: null, number: 1, mergedAt: "2026-01-01T00:00:00Z" }], [], ["写码"]);

@@ -1,0 +1,130 @@
+{
+  "id": "e860f0b0-5eb0-4165-b15f-170b1b9ba49b",
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "ctx_5a59f2b680ca",
+      "run_id": "run_3252e690bf76",
+      "task_id": "task_d82138404321",
+      "contract_version": 1,
+      "launch_token_hash": "a1a737cde84031dada57c3ec3945e1b7b5bfdd1a64728fc534ec0f7a50b081d7",
+      "assignee_handle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+      "assignee_pane_key": "1aa6e43b-032e-46e9-a9ff-29b6b304fc31:e97df931-734a-4d16-aee3-ed41f37ac444",
+      "capability_hash": "611fb26180cea4eb16319c0d2fec5bb37385bfc68d568184a12fd4144d24a608",
+      "process_incarnation": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作@@ef2f2aeb:190dd6d9-a36d-4968-99b9-cd536d92c23b",
+      "capability_revoked_at": null,
+      "status": "dispatched",
+      "failure_count": 0,
+      "last_failure": null,
+      "dispatched_at": "2026-08-15 14:40:54",
+      "completed_at": null,
+      "created_at": "2026-08-15 14:40:54",
+      "last_heartbeat_at": null
+    },
+    "worker": {
+      "dispatch_id": "ctx_5a59f2b680ca",
+      "runtime_epoch": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3",
+      "state": "ready",
+      "stage": "input_accepted",
+      "worktree_id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+      "agent_terminal_handle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+      "setup_state": "not_applicable",
+      "effects": [
+        {
+          "kind": "worktree",
+          "action": "reused",
+          "id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作"
+        },
+        {
+          "kind": "setup",
+          "action": "not_applicable",
+          "state": "not_applicable"
+        },
+        {
+          "kind": "terminal",
+          "role": "agent",
+          "action": "reused",
+          "id": "term_e525f71f-29a9-419c-9469-b8ef2a277239"
+        },
+        {
+          "kind": "dispatch_input",
+          "role": "agent",
+          "id": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+          "state": "accepted"
+        }
+      ],
+      "residual_resources": "[]",
+      "start_options": "{\"worktree\":\"current\",\"resolvedWorktreeId\":\"1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作\",\"name\":null,\"repo\":null,\"baseBranch\":null,\"terminal\":\"term_e525f71f-29a9-419c-9469-b8ef2a277239\",\"agent\":null,\"launch\":{\"requested\":{\"agent\":null,\"model\":null,\"effort\":null},\"effective\":{\"agent\":null,\"model\":null,\"effort\":null}},\"timeoutMs\":60000,\"setup\":\"not_applicable\",\"setupSource\":\"existing_worktree\"}",
+      "last_error": null,
+      "created_at": "2026-08-15 14:40:54",
+      "updated_at": "2026-08-15 14:40:55",
+      "residualResources": [],
+      "startOptions": {
+        "worktree": "current",
+        "resolvedWorktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+        "name": null,
+        "repo": null,
+        "baseBranch": null,
+        "terminal": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+        "agent": null,
+        "launch": {
+          "requested": {
+            "agent": null,
+            "model": null,
+            "effort": null
+          },
+          "effective": {
+            "agent": null,
+            "model": null,
+            "effort": null
+          }
+        },
+        "timeoutMs": 60000,
+        "setup": "not_applicable",
+        "setupSource": "existing_worktree"
+      }
+    },
+    "terminal": {
+      "handle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+      "ptyId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作@@ef2f2aeb",
+      "incarnationId": "190dd6d9-a36d-4968-99b9-cd536d92c23b",
+      "orphaned": false,
+      "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+      "worktreePath": "C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+      "branch": "refs/heads/thoerwink8/480-478-流转器接管机械动作",
+      "tabId": "1aa6e43b-032e-46e9-a9ff-29b6b304fc31",
+      "leafId": "e97df931-734a-4d16-aee3-ed41f37ac444",
+      "title": "⠹ Pi",
+      "connected": true,
+      "writable": true,
+      "lastOutputAt": 1786804940823,
+      "preview": "=== worker-show 真实返回（本 dispatch）===\nElapsed 0.1s\n⠋ Working...",
+      "paneRuntimeId": 1,
+      "rendererGraphEpoch": 1
+    },
+    "observation": {
+      "status": "running",
+      "exactWorker": true
+    },
+    "terminalResource": {
+      "id": "wtr_859320801019",
+      "ownershipState": "external",
+      "releaseState": "not_requested",
+      "retainedReason": "external_terminal",
+      "terminalHandle": "term_e525f71f-29a9-419c-9469-b8ef2a277239",
+      "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/480-478-流转器接管机械动作",
+      "originDispatchId": "ctx_5a59f2b680ca",
+      "ownerDispatchId": "ctx_5a59f2b680ca",
+      "releaseRequestedAt": null,
+      "releaseCompletedAt": null,
+      "releaseError": null,
+      "archive": {
+        "source": null,
+        "status": null
+      }
+    }
+  },
+  "_meta": {
+    "runtimeId": "b5fb0354-3bda-47c8-ae87-eaf9481d06a3"
+  }
+}

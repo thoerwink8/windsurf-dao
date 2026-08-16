@@ -1,0 +1,16 @@
+orca orchestration gate-create
+
+Usage: orca orchestration gate-create --task <task_id> --question <text> [--options <json_array>] [--from <handle>] [--json]
+
+Create a decision gate blocking a task
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --task
+  --question
+  --options
+  --from
+  --retry-request

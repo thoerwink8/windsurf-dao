@@ -1,0 +1,19 @@
+orca orchestration worker-read
+
+Usage: orca orchestration worker-read --dispatch <dispatch_id> [--source <auto|transcript|terminal>] [--cursor <cursor>] [--limit <n>] [--json]
+
+Read bounded output from one supervised worker
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --dispatch
+  --source
+  --cursor <cursor>      Opaque cursor returned by a previous worker-read page
+  --limit <n>            Maximum number of rows to return
+
+Notes:
+  The default auto source uses an exact hook-reported transcript when available and otherwise returns labeled terminal output.
+  A returned cursor is pinned to the exact source; start a fresh read if Orca reports source_changed.

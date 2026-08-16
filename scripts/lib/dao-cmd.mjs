@@ -21,7 +21,9 @@ export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
 export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
 /** 探针等屏默认值。一个所有已知情况都不成立的缺省值是陷阱：
  * grok 配 45s、codex 第一项实测 84s，没有任何 TUI 能在 8s 内跑完第一项。
- * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。 */
+ * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。
+ * #559：waitAndVerify 原默认 8000ms 硬编码，pi 启动加载 skills 常常超过，
+ * 派工连续死在这里——默认改为本常量，调用方再按 provider 的 probe_wait_ms 显式覆盖。 */
 export const DEFAULT_PROBE_WAIT_MS = 120000;
 
 export function probeWaitMs(routing, provider) {
@@ -160,7 +162,7 @@ export function argsTerminalSend({ terminal, text, enter } = {}) {
 }
 
 export function argsWorktreeCreate({
-  name, noParent, setup, parentWorktree, baseBranch, comment,
+  name, noParent, setup, parentWorktree, baseBranch, comment, issue,
 } = {}) {
   const a = ['worktree', 'create'];
   if (name) a.push('--name', name);
@@ -168,6 +170,7 @@ export function argsWorktreeCreate({
   if (setup) a.push('--setup', setup);
   if (parentWorktree) a.push('--parent-worktree', parentWorktree);
   if (baseBranch) a.push('--base-branch', baseBranch);
+  if (issue != null && String(issue).trim() !== '') a.push('--issue', String(issue).trim());
   if (comment) a.push('--comment', comment);
   a.push('--json');
   return a;
@@ -194,6 +197,68 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   if (worktree) a.push('--worktree', worktree);
   if (terminal) a.push('--terminal', terminal);
   if (retryOf) a.push('--retry-of', retryOf);
+  a.push('--json');
+  return a;
+}
+
+export function argsWorkerShow({ dispatch } = {}) {
+  const a = ['orchestration', 'worker-show'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  a.push('--json');
+  return a;
+}
+
+export function argsWorkerRelease({ dispatch, retryRequest } = {}) {
+  const a = ['orchestration', 'worker-release'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  if (retryRequest) a.push('--retry-request', retryRequest);
+  a.push('--json');
+  return a;
+}
+
+export function argsWorkerRead({ dispatch, source, cursor, limit } = {}) {
+  const a = ['orchestration', 'worker-read'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  if (source) a.push('--source', source);
+  if (cursor != null) a.push('--cursor', String(cursor));
+  if (limit != null) a.push('--limit', String(limit));
+  a.push('--json');
+  return a;
+}
+
+export function argsOrchestrationReply({ id, body, from } = {}) {
+  const a = ['orchestration', 'reply'];
+  if (id) a.push('--id', id);
+  if (body != null) a.push('--body', body);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+export function argsGateCreate({ task, question, options, from } = {}) {
+  const a = ['orchestration', 'gate-create'];
+  if (task) a.push('--task', task);
+  if (question != null) a.push('--question', question);
+  if (options != null) a.push('--options', options);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+export function argsGateResolve({ id, resolution, from } = {}) {
+  const a = ['orchestration', 'gate-resolve'];
+  if (id) a.push('--id', id);
+  if (resolution != null) a.push('--resolution', resolution);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+export function argsGateList({ task, status, run } = {}) {
+  const a = ['orchestration', 'gate-list'];
+  if (task) a.push('--task', task);
+  if (status) a.push('--status', status);
+  if (run) a.push('--run', run);
   a.push('--json');
   return a;
 }
@@ -247,6 +312,19 @@ export function extractTaskId(json) {
   return json?.result?.task?.id || null;
 }
 
+/** worker-start / dispatch-show / worker-show 的 Dispatch id。
+ * 真返回位置：worker-start 的 result.dispatchId（CLI 源码 worker-start 格式化器直接读它）；
+ * dispatch-show / worker-show 的 result.dispatch.id；worker-show 的 worker 对象另有 worker.dispatch_id。
+ * 顶层 id 是 RPC id，不能当 dispatchId（#502 同款教训）。
+ * #559：闭环发信改用 --to dispatch:<id>，派工流程从 worker-start 返回里取它。 */
+export function extractDispatchId(json) {
+  return json?.result?.dispatchId
+    || json?.result?.worker?.dispatchId
+    || json?.result?.worker?.dispatch_id
+    || json?.result?.dispatch?.id
+    || null;
+}
+
 export function isRunRequired(error) {
   const text = typeof error === 'object' && error
     ? `${error.code || ''} ${error.message || ''}`
@@ -271,13 +349,20 @@ export function catalogUsedFlags() {
     argsTerminalSend({ terminal: 't', text: 'x', enter: true }),
     argsWorktreeCreate({
       name: 'n', noParent: true, setup: 'skip',
-      parentWorktree: 'p', baseBranch: 'b', comment: 'c',
+      parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559,
     }),
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsTaskCreate({ spec: 's' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsWorkerShow({ dispatch: 'd' }),
+    argsWorkerRelease({ dispatch: 'd' }),
+    argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
+    argsOrchestrationReply({ id: 'm', body: 'b' }),
+    argsGateCreate({ task: 't', question: 'q', options: '["a"]' }),
+    argsGateResolve({ id: 'g', resolution: 'r' }),
+    argsGateList({ task: 't', status: 'pending' }),
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
     argsRunShow({ id: 'r' }),
     argsRunCurrent(),
@@ -454,7 +539,7 @@ export function verifyStarted(readJson) {
   return { ok: true, text, unscanned: false };
 }
 
-export function waitAndVerify({ readOnce, timeoutMs = 8000, intervalMs = 400, sleep = sleepSync } = {}) {
+export function waitAndVerify({ readOnce, timeoutMs = DEFAULT_PROBE_WAIT_MS, intervalMs = 400, sleep = sleepSync } = {}) {
   if (typeof readOnce !== 'function') throw new Error('waitAndVerify 要 readOnce');
   const t0 = Date.now();
   let last = { ok: false, reason: '读了是空的', text: '', unscanned: false };
@@ -682,6 +767,29 @@ export function verifyInjection({ text, readError } = {}) {
     };
   }
   return { ok: true, text: t, unscanned: false };
+}
+
+/**
+ * worker-read 的开工证明（#559 ⑥）。官方可靠源：source ≠ 'terminal' = hook 报告的
+ * Codex/Claude/Grok transcript（可证明 worker session）；source = 'terminal' = 只给了
+ * 有界终端输出（老式屏面证据，会假阳）。没读成必须标 unscanned——不许当成「没开工」。
+ * 判开工优先用它；证明不了时降级回 verifyInjection 屏面检查兜底（③单接上后删）。
+ */
+export function verifyWorkerStarted(readJson) {
+  if (readJson == null) return { ok: false, reason: '没读成', unscanned: true, error: 'worker-read 结果为空' };
+  if (readJson.error) return { ok: false, reason: '没读成', unscanned: true, error: orcaErrText(readJson.error) };
+  const r = readJson.result ?? readJson;
+  const source = r.source ?? 'terminal';
+  if (source !== 'terminal') {
+    return { ok: true, proven: true, source, reason: '官方 transcript 源（source=' + String(source) + '）' };
+  }
+  return {
+    ok: false,
+    proven: false,
+    source: 'terminal',
+    fallbackReason: r.fallbackReason ?? null,
+    reason: 'worker-read 只给终端输出（source=terminal），没证明 worker session——降级回屏面验开工',
+  };
 }
 
 export function parseDiffNameStatus(text) {
@@ -979,6 +1087,19 @@ export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
 }
 
+/** 卡名组装（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
+ * 给了 --issue N：`#N - <动宾短语>`（name 已带 #N 前缀则去重）；子卡 `#N - 审官·<模型>`。
+ * 没给 --issue：原样返回 name。 */
+export function assembleCardName({ name, issue } = {}) {
+  const issueText = String(issue ?? '').trim();
+  if (!issueText || !/^\d+$/.test(issueText)) return String(name ?? '').trim();
+  const n = String(name ?? '').trim();
+  const prefix = `#${issueText}`;
+  let stem = n;
+  if (n.startsWith(prefix)) stem = n.slice(prefix.length).replace(/^\s*[-–—]\s*/, '').trim();
+  return [prefix, stem].filter(Boolean).join(' - ');
+}
+
 export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
   const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
   if (mergePolicy === 'manual' && mergeReason) {
@@ -1009,13 +1130,19 @@ export function readDispatchTemplate(name) {
   return readFileSync(p, 'utf8');
 }
 
-/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。 */
+/** 填充 {{KEY}} 占位符。所有占位符必须全部被替换，剩一个就是失败。
+ * #559 审官红项：占位符填成字面量 "undefined"/"null"（如 String(missingId)）等于没填，
+ * 必须抛——否则渲染出 dispatch:undefined，士兵/审官把消息发进不存在的收件箱。 */
 export function renderDispatchTemplate(name, vars = {}) {
   const text = readDispatchTemplate(name);
   const out = String(text).replace(/\{\{(\w+)\}\}/g, (m, key) => {
     const v = vars[key];
     if (v === undefined || v === null) throw new Error(`模板 ${name} 占位符 {{${key}}} 没给值`);
-    return String(v);
+    const s = String(v);
+    if (/^(undefined|null)$/i.test(s.trim())) {
+      throw new Error(`模板 ${name} 占位符 {{${key}}} 填了无效值（${s.trim()}）——真 id 缺失，不许渲染出 dispatch:undefined`);
+    }
+    return s;
   });
   if (/\{\{\w+\}\}/.test(out)) throw new Error(`模板 ${name} 还有未替换占位符`);
   return out;
@@ -1063,16 +1190,20 @@ export function argsRunCurrent() {
   return ['orchestration', 'run-current', '--json'];
 }
 
-/** 收件人形态。闭环三跳只有三种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。 */
+/** 收件人形态。闭环三跳只有四种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。
+ * term_… = 终端 handle（低层通道）；run:… = Run 信箱；dispatch:… = 受监督工人的结构化收件箱
+ * （#559 官方通道优先：`send --to dispatch:<id>` 是结构化收件箱邮件，不是 prompt injection，
+ * worker 的下一步 orchestration check 会收到它）；省略 = 自己那条 Run 信箱。 */
 export function classifyNotifyTarget(to) {
   const t = String(to ?? '').trim();
   if (!t) return { kind: 'own-run', id: null };
   if (/^term_/.test(t)) return { kind: 'terminal', id: t };
   if (/^run:/.test(t)) return { kind: 'run', id: t.slice(4) };
+  if (/^dispatch:/.test(t)) return { kind: 'dispatch', id: t.slice('dispatch:'.length) };
   if (t.startsWith('@')) {
     return { kind: 'unsupported', error: `闭环通知不发组播（${t}）：组播没人负责签收，收不到也看不出来` };
   }
-  return { kind: 'unsupported', error: `收件人形态不认识: ${t}（只收 term_… / run:… / 省略=自己那条 Run 信箱）` };
+  return { kind: 'unsupported', error: `收件人形态不认识: ${t}（只收 term_… / run:… / dispatch:… / 省略=自己那条 Run 信箱）` };
 }
 
 function orcaErrText(error) {
@@ -1106,6 +1237,26 @@ export function probeRecipient(target, orca) {
     }
     return { ok: false, unscanned: true, kind: 'run', id: target.id, error: `Run 信箱没查成: ${text}` };
   }
+  if (target.kind === 'dispatch') {
+    // #559 官方通道：dispatch:<id> 是受监督工人的结构化收件箱。
+    // 活性判据 = worker-show 能查到该 Dispatch（dispatch_not_found = 收件人不在，链断当场炸）。
+    const r = orca(argsWorkerShow({ dispatch: target.id }));
+    if (r.ok && r.json?.result?.dispatch?.id === target.id) {
+      return {
+        ok: true, kind: 'dispatch', id: target.id,
+        status: r.json?.result?.worker?.state ?? null,
+        assigneeHandle: r.json?.result?.dispatch?.assignee_handle ?? null,
+      };
+    }
+    if (r.ok) {
+      return { ok: false, kind: 'dispatch', id: target.id, error: `Dispatch 查无此 id: ${target.id}` };
+    }
+    const text = orcaErrText(r.error);
+    if (/dispatch_not_found|not_found|stale/i.test(text)) {
+      return { ok: false, kind: 'dispatch', id: target.id, error: `收件人 Dispatch 不存在或已失效（${text}）：${target.id}` };
+    }
+    return { ok: false, unscanned: true, kind: 'dispatch', id: target.id, error: `收件人 Dispatch 活性没查成（不等于收件人不在）：${text}` };
+  }
   const r = orca(argsRunCurrent());
   if (!r.ok) {
     const text = orcaErrText(r.error);
@@ -1116,11 +1267,17 @@ export function probeRecipient(target, orca) {
   return { ok: true, kind: 'own-run', id: run.id || null };
 }
 
-/** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。 */
+/** send 的回执。真返回在 result.message，顶层 id 是 RPC id，不能当消息 id。
+ * to_handle / to_dispatch 都可能是收件人落点（send --to dispatch:<id> 的消息字段形态以当时返回为准）。 */
 export function extractSentMessage(json) {
   const m = json?.result?.message || json?.message || null;
   if (!m || !m.id) return null;
-  return { id: m.id, toHandle: m.to_handle ?? null, deliveredAt: m.delivered_at ?? null };
+  return {
+    id: m.id,
+    toHandle: m.to_handle ?? null,
+    toDispatch: m.to_dispatch ?? null,
+    deliveredAt: m.delivered_at ?? null,
+  };
 }
 
 /** 落库复核。扫不到任何样本 → unscanned（「没查成」不许当「查过没事」）。 */
@@ -1165,11 +1322,19 @@ export function deliverMessage({
   if (!msg) {
     return { ok: false, hop, stage: '回执', error: `${hop}：orca 说发出去了却没给消息回执 —— 拿不到回执就当没送到`, recipient: pre };
   }
-  if (to && msg.toHandle && msg.toHandle !== String(to)) {
-    return {
-      ok: false, hop, stage: '回执', messageId: msg.id,
-      error: `${hop}：回执收件人是 ${msg.toHandle}，与请求的 ${to} 不一致（错投）`, recipient: pre,
-    };
+  if (to) {
+    const expected = String(to);
+    const badHandle = msg.toHandle && msg.toHandle !== expected;
+    const badDispatch = msg.toDispatch
+      && (expected.startsWith('dispatch:')
+        ? msg.toDispatch !== expected && msg.toDispatch !== expected.slice('dispatch:'.length)
+        : msg.toDispatch !== expected);
+    if (badHandle || badDispatch) {
+      return {
+        ok: false, hop, stage: '回执', messageId: msg.id,
+        error: `${hop}：回执收件人是 ${msg.toHandle || msg.toDispatch}，与请求的 ${expected} 不一致（错投）`, recipient: pre,
+      };
+    }
   }
 
   const inbox = orca(argsOrchestrationInbox({ limit: inboxLimit, full: true }));
@@ -1208,7 +1373,8 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'reviewer-create', 'send', 'notify', 'liveness', 'check-help', 'raw',
+  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'send', 'notify', 'reply',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -1217,11 +1383,11 @@ export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--now', '--dry-run', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
-    '--comment', '--json', '--help', '-h',
+    '--issue', '--comment', '--json', '--help', '-h',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
   'task-create': new Set(['--spec', '--json', '--help', '-h']),
@@ -1229,6 +1395,8 @@ export const FLAGS_BY_VERB = {
     '--task', '--worktree', '--terminal', '--retry-of', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
+  'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
+  'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'reviewer-create': new Set([
     '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
   ]),
@@ -1236,6 +1404,10 @@ export const FLAGS_BY_VERB = {
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
   ]),
+  reply: new Set(['--id', '--body', '--from', '--json', '--help', '-h']),
+  'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
+  'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
+  'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
 };
@@ -1282,17 +1454,23 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <名> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
-  worktree-create --name <名> [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
+  worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
-  worker-start --task <id> --worktree <sel> --terminal <handle> [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
+  worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send --terminal <handle> --text <文> [--enter]
-  notify --subject <文> [--to <term_…|run:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+  notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+  reply --id <消息id> --body <回答> [--from <handle>]   # 帅回答工人的 ask 提问，回答进编排记录（#559 ③）
+  gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
+  gate-resolve --id <gate_id> --resolution <裁定>                          # 帅裁定决议门
+  gate-list [--task <task_id>] [--status <状态>]
 其他:
   liveness [--path <工作树>]
   check-help
@@ -1300,6 +1478,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、
 落库查不到，一律非零退出并在 stderr 打「链断」，不许当「发成功了只是还没读」。
+收件人形态：dispatch:<id>（官方结构化收件箱，士兵↔审官互发用；#559 ①）、run:…（审官→帅）、
+term_…（低层通道）、省略（自己那条 Run 信箱）。
 delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
 notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱，不代表对面读了、
 更不代表编排里那条任务变 completed。别加 --type worker_done 假装结算（见 issue #551）。
@@ -1308,4 +1488,10 @@ notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
 merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
 理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
+worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
+#559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
+换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
+续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
+给了 --issue <issue号> 时卡名自动组装成「#<issue号> - <动宾短语>」（子卡「#<issue号> - 审官·<模型>」），
+并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
 `;
