@@ -1457,14 +1457,154 @@ export function assembleCardName({ name, issue } = {}) {
 // calibrate 读的是 PR 上的 model/* 与 type/*（每 label 必须有程序读它）；派工时 PR 还不存在，
 // 所以：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue；帅合并时由
 // `dao pr-sync-labels --pr <N>` 从 issue 同步到 PR。角色缺省写码（dispatch 默认写码类派工）。
+// #586：审官选型另记 reviewer/<模型>。label 记「决定」，工人完工时用 pickReviewer 复算。
 
 export const DEFAULT_DISPATCH_TYPE = '写码';
+export const REVIEWER_LABEL_PREFIX = 'reviewer/';
 
-export function dispatchLabelNames({ model, role } = {}) {
+export function dispatchLabelNames({ model, role, reviewer } = {}) {
   const names = [];
   if (model && String(model).trim()) names.push(`model/${String(model).trim()}`);
   names.push(`type/${String(role || DEFAULT_DISPATCH_TYPE).trim()}`);
+  if (reviewer && String(reviewer).trim()) names.push(`${REVIEWER_LABEL_PREFIX}${String(reviewer).trim()}`);
   return names;
+}
+
+function labelNameOf(item) {
+  if (typeof item === 'string') return item;
+  if (item && typeof item === 'object' && typeof item.name === 'string') return item.name;
+  return '';
+}
+
+/**
+ * 从 label 列表读出唯一的审官模型。无 IO、可复算。
+ * 三态必须输出不同的话：查到一个 / 没有 reviewer/* / 有多个。
+ * 后两者都算没查成，不许猜一个。没拿到列表（null/非数组）和「扫完 0 条」也要分开。
+ */
+export function pickReviewer(labels) {
+  if (labels == null || !Array.isArray(labels)) {
+    return {
+      ok: false,
+      state: 'unscanned',
+      error: 'pickReviewer 没拿到 label 列表（没查成，不许猜）',
+    };
+  }
+  const hits = labels
+    .map(labelNameOf)
+    .filter(name => name.startsWith(REVIEWER_LABEL_PREFIX) && name.length > REVIEWER_LABEL_PREFIX.length);
+  if (hits.length === 0) {
+    return {
+      ok: false,
+      state: 'none',
+      error: '没有 reviewer/* label（扫完 0 条，不许猜一个）',
+    };
+  }
+  if (hits.length > 1) {
+    return {
+      ok: false,
+      state: 'many',
+      labels: hits,
+      error: `有多个 reviewer/* label（${hits.join('、')}，不许猜一个）`,
+    };
+  }
+  return {
+    ok: true,
+    state: 'one',
+    modelId: hits[0].slice(REVIEWER_LABEL_PREFIX.length),
+    label: hits[0],
+  };
+}
+
+/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
+export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
+  if (reviewer && String(reviewer).trim()) {
+    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+  }
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没给 PR 号' };
+  if (typeof runGh !== 'function') {
+    return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没拿到 gh 执行器（没查成，不许猜）' };
+  }
+  const view = runGh(['pr', 'view', n, '--json', 'title,body']);
+  if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
+  let meta;
+  try { meta = JSON.parse(view.out); }
+  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
+  const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
+  if (!refs.length) {
+    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
+  }
+  const collected = [];
+  for (const issueNum of refs) {
+    const iv = runGh(['issue', 'view', String(issueNum), '--json', 'labels']);
+    if (!iv.ok) return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 失败：${iv.error}` };
+    let parsed;
+    try { parsed = JSON.parse(iv.out); }
+    catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
+    const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
+    collected.push(...names);
+  }
+  const picked = pickReviewer(collected);
+  if (!picked.ok) return { ...picked, source: 'label', refs };
+  return { ...picked, source: 'label', refs };
+}
+
+/** 阶段一骨架：发完工 comment 的计划 + 自读选型。不建审官卡。 */
+export function planWorkerDone({ pr, body, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };
+  const resolved = resolveReviewerFromPr({ pr: n, runGh });
+  if (!resolved.ok) return resolved;
+  const issue = Array.isArray(resolved.refs) && resolved.refs[0] ? resolved.refs[0] : null;
+  if (!issue) {
+    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
+  }
+  const custom = body == null ? '' : String(body);
+  if (custom && !/^完工/.test(custom)) {
+    return { ok: false, unscanned: false, error: 'worker-done --body 首行必须以「完工」开头（流转器只认这个）' };
+  }
+  const comment = custom || [
+    `完工：PR #${n} 阶段一骨架（未起审官）`,
+    '',
+    `自读选型：${resolved.modelId}`,
+    '阶段一不接线：调 reviewer-create --dry-run，不建树。',
+  ].join('\n');
+  return {
+    ok: true,
+    wired: false,
+    pr: n,
+    issue,
+    reviewer: resolved.modelId,
+    reviewerSource: resolved.source,
+    comment,
+    reviewerCreate: {
+      verb: 'reviewer-create',
+      pr: n,
+      args: ['--pr', n, '--dry-run'],
+      invoked: false,
+      reason: '阶段一骨架：要调 reviewer-create --dry-run（不建树），由 cmdWorkerDone 执行',
+    },
+  };
+}
+
+export function postIssueComment({ issue, body, runGh } = {}) {
+  const n = String(issue ?? '').trim();
+  if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };
+  if (!String(body || '').trim()) return { ok: false, error: 'postIssueComment 没给正文' };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'postIssueComment 没拿到 gh 执行器' };
+  const r = runGh(['issue', 'comment', n, '--body', String(body)]);
+  if (!r.ok) return { ok: false, error: `issue #${n} 发评论失败：${r.error}` };
+  return { ok: true, issue: n };
+}
+
+export function postPrComment({ pr, body, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postPrComment 没给合法 PR 号' };
+  if (!String(body || '').trim()) return { ok: false, error: 'postPrComment 没给正文' };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'postPrComment 没拿到 gh 执行器' };
+  const r = runGh(['pr', 'comment', n, '--body', String(body)]);
+  if (!r.ok) return { ok: false, error: `PR #${n} 发评论失败：${r.error}` };
+  return { ok: true, pr: n };
 }
 
 /** 仓内现有 label 名。没查成返回 null（不许当「没有」去瞎建）。 */
@@ -1494,13 +1634,13 @@ export function ensureRepoLabels({ names, runGh } = {}) {
   return { ok: true, created, existing };
 }
 
-/** 派工成功侧：把 model/<模型> type/<角色> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
-export function stampIssueLabels({ issue, model, role, runGh } = {}) {
+/** 派工成功侧：把 model/<模型> type/<角色> reviewer/<审官> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
+export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) {
     return { ok: false, skipped: true, issue: n, error: '没给合法 issue 号，label 不打' };
   }
-  const names = dispatchLabelNames({ model, role });
+  const names = dispatchLabelNames({ model, role, reviewer });
   if (typeof runGh !== 'function') {
     return { ok: false, issue: n, unscanned: true, error: 'stampIssueLabels 没拿到 gh 执行器——label 没打' };
   }
@@ -1526,8 +1666,9 @@ export function linkedIssueNumbers(text) {
   return found;
 }
 
-/** 合并侧（帅合并时跑）：PR 正文 Closes 到的 issue 上取 model/* type/* label，抄到 PR。
- * PR 上没署名 issue / 署名 issue 没有这两个 label / gh 没查成——三种都要说清楚，不许静默。 */
+/** 合并侧（帅合并时跑）：PR 正文 Closes 到的 issue 上取 model/* type/* reviewer/* label，抄到 PR。
+ * PR 上没署名 issue / 署名 issue 缺 model/* 或 type/* / gh 没查成——三种都要说清楚，不许静默。
+ * reviewer/* 有则抄、没有不挡；但只有 reviewer/*、缺校准标签，不许 pr edit。 */
 export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没给 PR 号' };
@@ -1552,12 +1693,21 @@ export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
     } catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
     const names = labels
       .map(l => (l && typeof l === 'object' ? l.name : l))
-      .filter(name => typeof name === 'string' && /^(model\/|type\/)/.test(name));
+      .filter(name => typeof name === 'string' && /^(model\/|type\/|reviewer\/)/.test(name));
     if (names.length) from.push({ issue: issueNum, labels: names });
   }
   const want = [...new Set(from.flatMap(f => f.labels))];
-  if (!want.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 的署名 issue 上没有 model/* 或 type/* label（派工漏打？）——需人工补`, refs };
+  const hasModel = want.some(name => name.startsWith('model/'));
+  const hasType = want.some(name => name.startsWith('type/'));
+  if (!hasModel || !hasType) {
+    const missing = [!hasModel && 'model/*', !hasType && 'type/*'].filter(Boolean).join(' 和 ');
+    return {
+      ok: false,
+      unscanned: false,
+      error: `PR #${n} 的署名 issue 上缺 ${missing} label（派工漏打？）——需人工补，不许只靠 reviewer/* 过关`,
+      refs,
+      labels: want,
+    };
   }
   const ensured = ensureRepoLabels({ names: want, runGh });
   if (!ensured.ok) return { ok: false, unscanned: ensured.unscanned === true, error: ensured.error };
@@ -1842,7 +1992,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
+  'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'raw',
 ];
 
@@ -1866,8 +2016,9 @@ export const FLAGS_BY_VERB = {
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
+  'worker-done': new Set(['--pr', '--body', '--dry-run', '--json', '--help', '-h']),
   'reviewer-create': new Set([
-    '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+    '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
@@ -1933,11 +2084,14 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
-  reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
+  worker-done --pr <N> [--body <文>] [--dry-run]
+                  # 阶段一骨架：发完工 comment（issue+PR）+ 调 reviewer-create --dry-run；不建审官卡
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
-  pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* label 同步到 PR（#564：校准数据源）
+  pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
