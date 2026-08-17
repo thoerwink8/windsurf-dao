@@ -47,6 +47,7 @@
 // 真相源），可丢可重算：删掉重跑即重新清点。
 // 心跳（#580 补 #497 欠账）：live 每轮写 _flow/heartbeat.json，字段照 watchdog
 // 消费端契约。快照默认不写。三态：新鲜 / 过期 / 从未存在。
+// #595：live 心跳带 revision（current / behind / unknown）。落后或查不成必须报警。
 //
 // 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
@@ -76,6 +77,9 @@ import {
   writeJobDispatch, writeJobClosed, workerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
 } from './lib/ledger-job.mjs';
+import {
+  recordStartupRevision, checkGuardRevision, formatRevisionAlarm, attachRevision,
+} from './lib/guard-revision.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
@@ -979,6 +983,7 @@ let args = null;
 let anyEmitted = false;
 let anyNoTargets = false;
 let anyInfra = false;
+let startupRev = null;
 
 export function main(argv = process.argv.slice(2)) {
   args = parseArgs(argv);
@@ -997,7 +1002,16 @@ function runOneRound(source, state) {
   }
   if (round.infraError) anyInfra = true;
   // #575 ① / #580：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。
-  try { writeHeartbeat(heartbeatPath(args.stateFile), heartbeatFromState(state)); }
+  const hb = heartbeatFromState(state);
+  if (!args.snapshotDir) {
+    const rev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
+    attachRevision(hb, rev);
+    if (rev.alarm) {
+      console.log(`[flow] STALE_CODE：${formatRevisionAlarm(rev)}`);
+      anyEmitted = true;
+    }
+  }
+  try { writeHeartbeat(heartbeatPath(args.stateFile), hb); }
   catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——本轮心跳没写成`); }
   saveState(args.stateFile, state);
   return round;
@@ -1014,7 +1028,15 @@ function liveLoop() {
     repo = r.json.nameWithOwner;
   }
   console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
-  try { writeHeartbeat(heartbeatPath(args.stateFile), { ts: new Date().toISOString(), round: 0, lastWakeSource: 'poll', pendingCount: 0, prs: [] }); }
+  startupRev = recordStartupRevision({ cwd: process.cwd() });
+  const boot = { ts: new Date().toISOString(), round: 0, lastWakeSource: 'poll', pendingCount: 0, prs: [] };
+  const bootRev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
+  attachRevision(boot, bootRev);
+  if (bootRev.alarm) {
+    console.log(`[flow] STALE_CODE：${formatRevisionAlarm(bootRev)}`);
+    anyEmitted = true;
+  }
+  try { writeHeartbeat(heartbeatPath(args.stateFile), boot); }
   catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——启动心跳没写成`); }
   for (;;) {
     const state = loadState(args.stateFile);

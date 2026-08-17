@@ -1,4 +1,7 @@
 // #588 worktree-rm 整树后序删：先计划、再执行。占用必须在开删前拦住。
+// #595：orca 错误对象不得变成 [object Object]；未进主树的账本事件拦住。
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'dao-cmd.mjs');
@@ -135,6 +138,53 @@ async function main() {
     const ids = plan.order.map(n => n.id);
     check('三层都在', [...ids].sort().join(',') === 'a,b,c', ids.join(','));
     check('孙 → 子 → 父', ids.indexOf('c') < ids.indexOf('b') && ids.indexOf('b') < ids.indexOf('a'), ids.join(','));
+  }
+
+  console.log('\n=== #595 ③ 错误对象不得变成 [object Object] ===');
+  {
+    const plan = S.planWorktreeRm(forest, 'p1');
+    const applied = S.applyWorktreeRmPlan(plan, {
+      rm: () => ({
+        ok: false,
+        error: { code: 'dirty_worktree', files: ['review-592.txt', 'ledger/events/x.json'] },
+      }),
+    });
+    check('失败非零', applied.ok === false, JSON.stringify(applied));
+    check('输出不含 [object Object]', !String(applied.error).includes('[object Object]'), applied.error);
+    check('输出含真因', /dirty_worktree|review-592|ledger\/events/.test(applied.error), applied.error);
+  }
+
+  console.log('\n=== #595 ② 未进主树的账本事件拦住 ===');
+  {
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-595-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-595-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(workerDir, 'ledger', 'events', 'orphan-595.json'), '{"type":"job.dispatch"}');
+    const sample = [
+      wt({ id: 'master', name: 'master', main: true, path: mainDir }),
+      wt({ id: 'w1', name: '#595 - 工人', path: workerDir }),
+    ];
+    const blocked = S.prepareWorktreeRm(sample, 'w1', {
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+    });
+    check('有孤本拒删', blocked.ok === false, JSON.stringify(blocked));
+    check('报出文件名', /orphan-595\.json/.test(blocked.error), blocked.error);
+
+    fs.writeFileSync(path.join(mainDir, 'ledger', 'events', 'orphan-595.json'), '{"type":"job.dispatch"}');
+    const synced = S.prepareWorktreeRm(sample, 'w1', {
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+    });
+    check('主树已有同名则放行', synced.ok === true, JSON.stringify(synced));
+
+    fs.unlinkSync(path.join(workerDir, 'ledger', 'events', 'orphan-595.json'));
+    const clean = S.prepareWorktreeRm(sample, 'w1', {
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+    });
+    check('工人树干净放行', clean.ok === true, JSON.stringify(clean));
+
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
   }
 
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);

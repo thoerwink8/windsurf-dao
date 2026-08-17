@@ -22,8 +22,8 @@ import {
   argsWorktreeCreate,
   argsWorktreeRm,
   argsWorktreePs,
-  planWorktreeRm,
   applyWorktreeRmPlan,
+  prepareWorktreeRm,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
@@ -88,15 +88,14 @@ import { applyGitIdentity } from './lib/gh.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
+  resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
 function errText(e) {
-  if (e == null) return '';
-  if (typeof e === 'string') return e;
-  if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
-  return '';
+  return orcaErrorText(e);
 }
 
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
@@ -914,8 +913,11 @@ function cmdWorktreeRm(args) {
   if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
   const wts = listed.json?.result?.worktrees;
   if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
-  const plan = planWorktreeRm(wts, args.worktree);
-  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [] });
+  const main = resolveMainWorktreeRoot({ from: ROOT });
+  const plan = prepareWorktreeRm(wts, args.worktree, {
+    mainEventsDir: main.ok ? join(main.root, 'ledger', 'events') : null,
+  });
+  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
   const applied = applyWorktreeRmPlan(plan, {
     rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
   });

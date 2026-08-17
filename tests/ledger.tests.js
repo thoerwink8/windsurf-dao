@@ -7,6 +7,7 @@ const REPO = path.resolve(__dirname, '..');
 const {
   writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
+  resolveMainWorktreeRoot,
 } = require('../scripts/lib/ledger-job.mjs');
 const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR } = require('../scripts/lib/ledger-gap-check.mjs');
 const { pinReviewerSlotA } = require('../scripts/lib/dianjiangtai-reviewer-slot.mjs');
@@ -54,6 +55,63 @@ fs.rmSync(dir, { recursive: true, force: true });
 
 check('beijingIsoFrom(Date) 带 +08:00', /[+]08:00$/.test(beijingIsoFrom(new Date('2026-08-17T04:00:00Z'))));
 check('loadLedgerContext 默认指向仓内 schema', loadLedgerContext({ root: REPO, machine: 'X' }).schema.version === 1 || Array.isArray(loadLedgerContext({ root: REPO, machine: 'X' }).schema.oneOf));
+
+// ── #595 ② 工人树里写，事件必须进主树 ──
+{
+  const worker = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-w-'));
+  const main = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-m-'));
+  fs.mkdirSync(path.join(worker, 'schemas'), { recursive: true });
+  fs.copyFileSync(path.join(REPO, 'schemas', 'events.schema.json'), path.join(worker, 'schemas', 'events.schema.json'));
+  const git = (args) => {
+    if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) {
+      return { ok: true, out: path.join(main, '.git') };
+    }
+    return { ok: false, error: `unexpected git ${args.join(' ')}` };
+  };
+  const ctx = loadLedgerContext({ root: worker, machine: 'T595', git });
+  check('落点是主树 ledger/events', path.resolve(ctx.dir) === path.resolve(path.join(main, 'ledger', 'events')), ctx.dir);
+  const w = writeJobDispatch({
+    ...ctx, ts, jobId: workerJobId(595), model: 'grok-4.6', identity: '工人',
+    workType: '写码', terminal: 'test', prNumber: 595,
+  });
+  check('写入成功', w.ok && w.path && fs.existsSync(w.path), w.error);
+  check('文件在主树', w.path && w.path.startsWith(path.resolve(main)), w.path);
+  const workerEvents = path.join(worker, 'ledger', 'events');
+  const orphan = fs.existsSync(workerEvents) && fs.readdirSync(workerEvents).filter(f => f.endsWith('.json'));
+  check('工人树没有孤本', !orphan || orphan.length === 0, JSON.stringify(orphan));
+
+  let threw = null;
+  try {
+    loadLedgerContext({
+      root: worker,
+      machine: 'T595',
+      git: () => ({ ok: false, error: 'not a git repository' }),
+    });
+  } catch (e) { threw = e; }
+  check('落点查不成不许退回工人树', threw && /没查成/.test(threw.message), threw && threw.message);
+
+  const override = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-e-'));
+  const prev = process.env.LEDGER_EVENTS_DIR;
+  process.env.LEDGER_EVENTS_DIR = override;
+  try {
+    const over = loadLedgerContext({
+      root: worker,
+      machine: 'T595',
+      git: () => ({ ok: false, error: 'should not call git' }),
+    });
+    check('LEDGER_EVENTS_DIR 仍可覆盖', path.resolve(over.dir) === path.resolve(override), over.dir);
+  } finally {
+    if (prev == null) delete process.env.LEDGER_EVENTS_DIR;
+    else process.env.LEDGER_EVENTS_DIR = prev;
+    fs.rmSync(override, { recursive: true, force: true });
+  }
+  fs.rmSync(worker, { recursive: true, force: true });
+  fs.rmSync(main, { recursive: true, force: true });
+}
+check('resolveMainWorktreeRoot 认出本仓主树', (() => {
+  const r = resolveMainWorktreeRoot({ from: REPO });
+  return r.ok && /windsurf-dao$/i.test(r.root.replace(/\\/g, '/'));
+})(), JSON.stringify(resolveMainWorktreeRoot({ from: REPO })));
 
 // ── 绿之后再来的判定 = 帅追加，不记工人返工 ──
 const stats0 = verdictStatsFromReviews([{ body: '判定：绿，可合并' }]);

@@ -437,6 +437,7 @@ console.log("\n=== ㉓ #575 ① flow 每轮写心跳（watchdog 不再假红 HEA
   check("心跳写入不改变退出语义（本样本仍按原判据退出）", r.status === 0 || r.status === 1 || r.status === 2, `status=${r.status}`);
   const flowSrc = fs.readFileSync(FLOW, "utf8");
   check("flow.mjs 真有写 heartbeat.json 的实现（不是只在注释里）", /writeHeartbeat\(/.test(flowSrc) && /heartbeat\.json/.test(flowSrc));
+  check("flow live 心跳带 revision 且落后要报警", /attachRevision\(/.test(flowSrc) && /STALE_CODE/.test(flowSrc));
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

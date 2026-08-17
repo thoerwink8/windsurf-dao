@@ -63,6 +63,8 @@
 //   15. stale-completion —— #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新
 //                        （或根本没有完工 comment）。#584/#585 两次实咬：推了新代码没报。
 //                        子卡（卡名带 ·）不判——审官产出是 review 不是完工 comment。
+//   16. stale-code    —— #595：启动时记下的 HEAD 落后 origin/master，或版本没查成。
+//                        落后即报，无裕度。查不成不许当最新。heartbeat.revision 同样报。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
@@ -127,6 +129,8 @@ import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
+import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
@@ -290,10 +294,7 @@ function runOrca(cmdArgs) {
 
 // 错误详情转可读文本（runOrca 对 orca JSON 错误原样透传结构化 error）。
 function errText(e) {
-  if (e == null) return '';
-  if (typeof e === 'string') return e;
-  if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
-  return '';
+  return orcaErrorText(e);
 }
 
 function unwrapPayload(json, pathKey, topKey) {
@@ -1389,6 +1390,18 @@ function checkHeartbeat(source, args, state) {
       st.fired.delete(key);
     }
   }
+  const rev = hb.revision;
+  if (rev && (rev.state === 'behind' || rev.state === 'unknown')) {
+    if (!st.fired.has('stale-code')) {
+      st.fired.add('stale-code');
+      const detail = rev.state === 'unknown'
+        ? `守卫版本没查成：${rev.reason || '未知'}——查不成不能当最新`
+        : `守卫代码落后 origin/master ${rev.behind == null ? '?' : rev.behind} 个 commit——在跑旧代码，先 pull 再重启`;
+      events.push({ name: 'flow', type: 'stale-code', detail });
+    }
+  } else {
+    st.fired.delete('stale-code');
+  }
   return { events, notes };
 }
 
@@ -1499,8 +1512,16 @@ const args = parseArgs(process.argv.slice(2));
 const state = { stations: new Map(), worktrees: new Map(), heartbeat: null };
 let anyAlarm = false;
 let anyNoTargets = false;
+let startupRev = null;
 
 function executeOneRound(source) {
+  if (!args.snapshotDir && startupRev) {
+    const rev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
+    if (rev.alarm) {
+      console.log(`[watchdog] stale-code: ${formatRevisionAlarm(rev)}`);
+      anyAlarm = true;
+    }
+  }
   const round = runRound(source, args, state);
   const r = printRound(round);
   if (r.alarm) anyAlarm = true;
@@ -1524,6 +1545,7 @@ function detectSelfWorktree() {
 }
 
 function liveLoop() {
+  startupRev = recordStartupRevision({ cwd: process.cwd() });
   if (!args.selfWorktree) {
     const self = detectSelfWorktree();
     if (self.id) args.selfWorktree = self.id;
