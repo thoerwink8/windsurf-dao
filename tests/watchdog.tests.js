@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -534,6 +534,23 @@ console.log("\n=== ㉕ #575 Pasted Content 停摆指纹 + ALL_IDLE（全员卡�
   const ri2 = runMultiRounds(path.join(FIXTURES, "pasted-idle", "round-1"), 2);
   check("idle+Pasted 两轮：ALL_IDLE + pasted-content 都响（agents=[] 也能扫到折在输入框）",
     ri2.status === 1 && /all-idle:/.test(ri2.out) && /pasted-content:.*5711 chars/.test(ri2.out), ri2.out.trim());
+}
+
+console.log("\n=== ㉖ #580 追加：503/5xx 指纹 + 重试循环（内容在变也报；有产出不报；stall 不弱） ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "retry-503"), ["--now", String(NOW)]);
+  check("503 重试三轮（内容在变、无产出）：退出码 1", r.status === 1, `status=${r.status} ${r.out.trim()}`);
+  check("503 重试三轮：报 retry-loop", /retry-loop:.*同一错误行连续 3 轮/.test(r.out), r.out.trim());
+  check("503 重试三轮：不报 stall（真实内容在变，停摆判据没被放宽也没被误伤）", !/stall:/.test(r.out), r.out.trim());
+
+  const p = runWatchdog(path.join(FIXTURES, "retry-503-progress"), ["--now", String(NOW)]);
+  check("503 重试但 git 产出新鲜：不报 retry-loop", !/retry-loop:/.test(p.out), p.out.trim());
+
+  const s = runWatchdog(path.join(FIXTURES, "hash-stable"));
+  check("屏面全冻三轮：stall 照旧报（不许为修重试循环把停摆判弱）", s.status === 1 && /stall:/.test(s.out), s.out.trim());
+
+  const h = runWatchdog(path.join(FIXTURES, "real-advance"));
+  check("正常输出且内容在动：不报 retry-loop / stall", h.status === 0 && !/retry-loop:/.test(h.out) && !/stall:/.test(h.out), h.out.trim());
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);
