@@ -24,6 +24,14 @@
    - 审官回「红项」→ 逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（带新 PR head）。
    - 审官回「绿/已合并」→ 收工，本单结束。
 
+## 问帅 / 上报地址（#593）
+
+- 问帅用 `node scripts/dao.mjs ask --question "..." [--run <本单 Run id>]`，**不要用** `orca orchestration ask`。
+  原生 ask 超时后屏上继续 "Continuing to wait"，看不出已经失败过一次。
+  `dao.mjs ask` 超时打 `ASK_TIMEOUT` 并非零退出。
+- 本单上报地址是 `run:<本单 Run id>`。Run id 从 `orca orchestration worker-show --dispatch <你的 dispatch id> --json` 的 `result.dispatch.run_id` 取。
+  **不要用 `run-current`**——工人终端上它经常是 null。
+
 ## 边界
 
 - **你不做审查、不做合并、不删任何 worktree**——审查是审官，合并与归档收尾是帅（审官不能 rm 自己所在的树，归档是帅的机械动作）。

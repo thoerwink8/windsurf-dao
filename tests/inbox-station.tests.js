@@ -47,6 +47,8 @@ async function main() {
     check('pickRun --run 优先', S.pickRun(runs, { preferredId: 'run_old' }).id === 'run_old');
     check('pickRun current 次之', S.pickRun(runs, { currentId: 'run_old' }).id === 'run_old');
     check('pickRun 空列表空', S.pickRun([]) === null);
+    check('pickRun 只认在途 allowedIds', S.pickRun(runs, { allowedIds: ['run_old'] }).id === 'run_old');
+    check('pickRun 无在途 → 空（不认最新墓碑）', S.pickRun(runs, { allowedIds: [] }) === null);
   }
 
   console.log('\n=== ② 终端 + 中继活着（#493 返工：身份从 coordinator_handle 取，标题只出不进）===');
