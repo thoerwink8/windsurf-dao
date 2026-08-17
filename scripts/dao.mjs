@@ -572,7 +572,7 @@ function reuseReviewerOnTerminal({
     task: reviewerTaskId,
     worktree: reviewerWorktreeId,
     terminal: handle,
-  }));
+  }), 180000);
   if (!revStarted.ok) {
     return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${errText(revStarted.error)}（必须带 --worktree 指审官树）` };
   }
