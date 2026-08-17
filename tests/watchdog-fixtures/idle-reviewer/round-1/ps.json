@@ -106,7 +106,9 @@
         "hasHostSidebarActivity": true,
         "worktreeInstanceId": "90a328e5-f21b-4822-895a-236cd2f4d51a",
         "parentWorktreeId": null,
-        "childWorktreeIds": [],
+        "childWorktreeIds": [
+          "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版"
+        ],
         "displayName": "#450 - 点将台综合稿",
         "workspaceStatus": "in-review",
         "sortOrder": 1786722931049,
@@ -160,7 +162,7 @@
         "isMainWorktree": false,
         "hasHostSidebarActivity": true,
         "worktreeInstanceId": "f9f535fe-a47e-43e9-a5c7-63296e3eeae7",
-        "parentWorktreeId": null,
+        "parentWorktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/点将台综合稿",
         "childWorktreeIds": [],
         "displayName": "#455 - 审官·grok-4.6",
         "workspaceStatus": "in-progress",

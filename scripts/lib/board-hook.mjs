@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { displayNumberFromWorktree } from './card-identity.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -32,9 +33,8 @@ const INBOX_SCRIPT = join(ROOT, 'scripts', 'inbox-station.mjs');
 
 function cardRef(w) {
   const name = String(w.displayName || '');
-  const m = name.match(/#(\d+)/);
   return {
-    number: m ? Number(m[1]) : null,
+    number: displayNumberFromWorktree(w),
     name,
     id: w.worktreeId || w.id || null,
   };

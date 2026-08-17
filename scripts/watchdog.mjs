@@ -31,7 +31,7 @@
 //   6. idle         —— 空转（#471 第四类事故）：进程在动（ps state=working）但工作树
 //                       N 分钟无 git 活动（last commit / 未提交文件 mtime / 未推送）。
 //                       #569 降噪只减假阳不减真阳，三类豁免（各自的判据，不是名单）：
-//                       ① 子卡（审官/辅助，卡名带 ·）产出是 review comment 与 notify 不是
+//                       ① 子卡（parentWorktreeId 非空）产出是 review comment 与 notify 不是
 //                          commit——git 判据无意义，其停摆由 stall/指纹/selector/waiting 兜底；
 //                       ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的
 //                          PR = 「已交付、正在等下一环」，不算空转（PR 要返工时仍判）；
@@ -39,9 +39,8 @@
 //                          （刚重启正在开 PR / 正在做非 commit 活都不算）。
 //                       真空转（working + 屏面冻结 + 无在途 PR + 非子卡）照旧报。
 //   7. orphan       —— 孤儿树（#492/#476）：无活跃执行者 + 关联 #N 已关（或 无关联且静置超 N）
-//   8. naming       —— 任务卡命名不合规（#476：顶层 #N - 动宾短语 / 子卡 #N - xxx·yyy）。
-//                      #569 降噪：master 卡（isMainWorktree）与「无 agent 且无 #N 前缀」的非任务卡
-//                      不参与命名校验（windsurf-dao 这类 review 工作区不是任务卡，报它=假阳）
+//   8. naming       —— 任务卡命名不合规（#589：新格式 PR-/ISSUE- + 角色·模型；旧 #N - 仍算合规）。
+//                      是不是任务卡看记账/顶层字段，不看卡名。非任务卡不参与命名校验。
 //   9. flow-stalled / flow-absent / stagnation —— 读 flow 心跳（#497 立约，#580 补写入）：
 //                       三态三话：心跳新鲜 / 心跳过期 / 心跳从未存在。
 //                       过期 = flow-stalled；从未存在且有待流转对象 = flow-absent
@@ -56,7 +55,7 @@
 //                        产出则不报。503 进指纹表是补洞，本判据不依赖认识具体错误串。
 //   15. stale-completion —— #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新
 //                        （或根本没有完工 comment）。#584/#585 两次实咬：推了新代码没报。
-//                        子卡（卡名带 ·）不判——审官产出是 review 不是完工 comment。
+//                        子卡（parentWorktreeId 非空）不判——审官产出是 review 不是完工 comment。
 //   16. stale-code    —— #595：启动时记下的 HEAD 落后 origin/master，或版本没查成。
 //                        落后即报，无裕度。查不成不许当最新。heartbeat.revision 同样报。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
@@ -125,6 +124,7 @@ import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
+import { isChildWorktree, isTaskCard, classifyCardName } from './lib/card-identity.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -188,8 +188,10 @@ const PARAMS = {
   selectorRounds: 2,        // 权限确认框停摆（#569 ④）：屏面底部 N/M:select 持续 N 轮才报（
                             // 两连同，与指纹同口径；真阳#568 实证：卡 7 分钟没人应）
 
-  namingTop: /^#\d+ - /,        // 顶层任务卡：#<PR号> - 动宾短语（SKILL 拓扑节）
-  namingSub: /^#\d+ - .+·/,     // 子卡（审官/辅助）：#<PR号> - xxx·yyy
+  namingOk: name => {
+    const kind = classifyCardName(name);
+    return kind === 'new' || kind === 'legacy';
+  },
   fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471）
   fpLossWindowMs: 10 * 60 * 1000, // 或跨 N 分钟报帅
   stagnationMs: 30 * 60 * 1000,   // flow 心跳里在途 PR 停留超 N → 停滞态报警（#471 处置矩阵补一行）
@@ -599,8 +601,8 @@ function isGradedExcluded(a, args) {
   return !!(a.paneKey && args.excludePanes.includes(a.paneKey));
 }
 
-function isTaskCard(w) {
-  return /^#\d+ - /.test(String(w.displayName || ''));
+function trackedSet(source) {
+  return source?.dispatchTracked?.tracked || null;
 }
 
 // git 证据：live 现查；快照读 git-evidence.json；都没有 → { missing: true }（判据显式没查成）。
@@ -951,7 +953,7 @@ function runRound(source, args, state) {
 
     // ⑥ 空转 v2（#471 第四类事故 + #569 降噪只减假阳不减真阳）：
     //    强判据 = 进程在动（ps working）+ 工作树 N 分钟无 git 活动。三类豁免各自的判据（不是名单）：
-    //      ① 子卡（审官/辅助，卡名带 ·）：产出是 review comment 与 notify 不是 commit——git 判据
+    //      ① 子卡（parentWorktreeId 非空）：产出是 review comment 与 notify 不是 commit——git 判据
     //         对它们无意义，停摆由 stall/指纹/选择器⑩/waiting 判据兜底（#568 那个卡权限框的
     //         审官就是被这组判据接住的，不是没人看）；
     //      ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的 PR =
@@ -970,7 +972,7 @@ function runRound(source, args, state) {
       } else if (ev.lastActivityTs != null && (now - ev.lastActivityTs) > PARAMS.idleMinutes * 60000) {
         const mins = Math.round((now - ev.lastActivityTs) / 60000);
         // 豁免判断（按证据、按角色，不是 pane 名单）
-        const roleExempt = w ? /·/.test(String(w.displayName || '')) : false;
+        const roleExempt = w ? isChildWorktree(w) : false;
         const prEv = w ? prEvidenceFor(w, source, args) : null;
         const prExempt = !!(prEv && prEv.open === true && prEv.isDraft !== true && prEv.reviewDecision !== 'CHANGES_REQUESTED');
         const liveVeto = realChanged === true;
@@ -981,7 +983,7 @@ function runRound(source, args, state) {
           st.idleExempt = exempt;
           // 豁免 note 只在状态切换时打一次，不每轮刷屏（常驻状态不重复唤醒）
           if (changed && exempt === 'role') {
-            notes.push({ name: t.name, type: '观察', detail: '子卡（审官/辅助，卡名带 ·）不判 git 空转——产出是 review comment 与 notify 不是 commit（#569），其停摆由 stall/指纹/选择器/waiting 判据兜底' });
+            notes.push({ name: t.name, type: '观察', detail: '子卡（parentWorktreeId 非空）不判 git 空转——产出是 review comment 与 notify 不是 commit（#569/#589），其停摆由 stall/指纹/选择器/waiting 判据兜底' });
           } else if (changed && exempt === 'pr') {
             const prNo = prEv.number != null ? ` #${prEv.number}` : '';
             const dec = prEv.reviewDecision || '等待评审/合并';
@@ -1059,26 +1061,25 @@ function runWorktreePass(source, args, state) {
     // 命名校验（#476）：任务卡显示名格式。只查本仓（selfWorktree 的 repo 前缀），
     // 别的仓库/主帅的盘面命名约定可能不同，不越界（#492 跨主帅教训）。
     if (selfRepo && !String(w.worktreeId || '').startsWith(selfRepo)) continue;
-    // #569 降噪：无 agent 且无 #N 前缀的树不是任务卡（master 已在上层按 isMainWorktree 排除；
-    // review-566 这类「windsurf-dao」残留工作区按定义就不叫 #N - 动宾短语）——命名校验不适用；
-    // 有 agent 的卡（含 agent 已 done 的历史卡）照查，误命名的活跃卡不丢。
-    if (agentsOf.length === 0 && !/^#\d+/.test(String(name || ''))) {
-      // 非任务卡，跳过
-    } else if (name && !PARAMS.namingTop.test(name) && !PARAMS.namingSub.test(name)) {
+    // #589：是不是任务卡看字段，不看卡名。非任务卡不参与命名校验。
+    // 新格式与旧 #N - 都算合规；完全对不上才报。不许把旧格式静默当成非任务卡。
+    if (!isTaskCard(w, { tracked: trackedSet(source) })) {
+      st.fired.delete('naming');
+    } else if (name && !PARAMS.namingOk(name)) {
       if (!st.fired.has('naming')) {
         st.fired.add('naming');
-        events.push({ name, type: 'naming', detail: `任务卡命名不合规「${name}」——顶层应为「#<PR号> - 动宾短语」、子卡应为「#<PR号> - xxx·yyy」（#476 命名校验；见 dispatch SKILL 命名规矩）` });
+        events.push({ name, type: 'naming', detail: `任务卡命名不合规「${name}」——应为「PR-N 工人·模型 动宾」或「ISSUE-N 工人·模型 动宾」（旧「#N - …」仍算合规，#589）` });
       }
     } else if (name) {
       st.fired.delete('naming');
     }
 
     // #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新（或没有完工 comment）。
-    // 子卡（卡名带 ·）不判。快照缺 completion-evidence.json = 本项没查，不猜。
+    // 子卡（parentWorktreeId）不判。快照缺 completion-evidence.json = 本项没查，不猜。
     const workerDone = agentsOf.length > 0
       && agentsOf.every(a => a.state === 'done')
-      && isTaskCard(w)
-      && !/·/.test(String(name || ''));
+      && isTaskCard(w, { tracked: trackedSet(source) })
+      && !isChildWorktree(w);
     if (workerDone) {
       const ev = completionEvidenceFor(w, source, args);
       if (ev.missing) {

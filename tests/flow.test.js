@@ -193,7 +193,7 @@ describe('flow', () => {
       assert.ok(/round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）（注入目标：工人终端 term_worker_1005）/.test(r.out), 'round-2 返工注入真通（注入目标已解析）  →  ' + r.out.trim());
     });
     await t.test('round-3 复核注入真通（存量反查找到审官终端）', () => {
-      assert.ok(/round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（审官· 子卡））/.test(r.out), 'round-3 复核注入真通（存量反查找到审官终端）  →  ' + r.out.trim());
+      assert.ok(/round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（子卡））/.test(r.out), 'round-3 复核注入真通（存量反查找到审官终端）  →  ' + r.out.trim());
     });
     await t.test('round-4 报帅终审', () => {
       assert.ok(/round-4[\s\S]*报帅：终审 #1005/.test(r.out), 'round-4 报帅终审  →  ' + r.out.trim());
@@ -368,7 +368,7 @@ describe('flow', () => {
       assert.ok(/动作：复核注入 #2001（第 1 轮返工后）/ .test(r.out), '复核注入动作（存量场景不退化报帅）  →  ' + r.out.trim());
     });
     await t.test('通过「审官· 子卡」反查找到审官终端', () => {
-      assert.ok(/复核目标：审官终端 term_reviewer_2001，存量反查（审官· 子卡）/.test(r.out), '通过「审官· 子卡」反查找到审官终端  →  ' + r.out.trim());
+      assert.ok(/复核目标：审官终端 term_reviewer_2001，存量反查（子卡）/.test(r.out), '通过「审官· 子卡」反查找到审官终端  →  ' + r.out.trim());
     });
     await t.test('没有报帅（不是当注入失败）', () => {
       assert.ok(!/报帅：/.test(r.out), '没有报帅（不是当注入失败）  →  ' + r.out.trim());

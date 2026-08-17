@@ -6,9 +6,11 @@
 // 判据（#577 正文，本检查自己解析，不调用 dao-cmd / ⑭ 的 closesNumbers）：
 //   可立即起 = open issue 带「已消歧」label
 //              + 无在途 PR（标题/正文里的 GitHub 关闭关键词署名）
-//              + 无本地 worktree 卡（卡名 ^#N；master 主树与 archived 不计）
+//              + 无本地 worktree 卡（linkedIssue / 定界区 / ISSUE- / 旧 #N；PR- 不是 issue 号）
 // 并发上限随 #576 next 落地；落地前不发明一个数字。满位是正当理由，所以本项
 // 只出可见行、永不报红。没查成必须和「扫完 0 个」不同形。
+
+import { issueNumberFromWorktree } from './card-identity.mjs';
 
 const READY_LABEL = '已消歧';
 
@@ -31,12 +33,8 @@ export function cardNumbersFromWorktrees(wts) {
   const numbers = [];
   for (const w of wts) {
     if (!w || w.isMainWorktree || w.isArchived) continue;
-    const name = String(w.displayName || '');
-    const m = name.match(/^#(\d+)/);
-    if (m) {
-      const n = Number(m[1]);
-      if (Number.isInteger(n) && n > 0 && !numbers.includes(n)) numbers.push(n);
-    }
+    const n = issueNumberFromWorktree(w);
+    if (Number.isInteger(n) && n > 0 && !numbers.includes(n)) numbers.push(n);
   }
   return { unscanned: false, numbers };
 }

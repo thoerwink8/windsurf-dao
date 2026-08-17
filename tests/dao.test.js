@@ -417,8 +417,8 @@ describe('dao', () => {
 
     const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);
-    await t.test('#559 追加：dry-run 带 --issue → 工人卡名带号（审官卡推迟到 worker-done）', () => {
-      assert.ok(okIssue.status === 0 && pIssue.workerCard === '#565 - 修地基' && pIssue.reviewerDeferred === true, '#559 追加：dry-run 带 --issue → 工人卡名带号（审官卡推迟到 worker-done）  →  ' + JSON.stringify(pIssue));
+    await t.test('#589：dry-run 带 --issue → 工人卡 ISSUE- + 角色·模型（审官卡推迟到 worker-done）', () => {
+      assert.ok(okIssue.status === 0 && pIssue.workerCard === 'ISSUE-565 工人·grok-4.6 修地基' && pIssue.reviewerDeferred === true, '#589：dry-run 带 --issue → 工人卡 ISSUE- + 角色·模型  →  ' + JSON.stringify(pIssue));
     });
     await t.test('#559 追加：dry-run 带 --issue → issue 字段透出', () => {
       assert.ok(pIssue.issue === '565', '#559 追加：dry-run 带 --issue → issue 字段透出  →  ' + JSON.stringify(pIssue));
@@ -1509,17 +1509,26 @@ describe('dao', () => {
     await t.test('#559 追加：worktree create 带 --issue 透传', () => {
       assert.ok(wtIssue.includes('--issue') && wtIssue[wtIssue.indexOf('--issue') + 1] === '559', '#559 追加：worktree create 带 --issue 透传  →  ' + wtIssue.join(' '));
     });
-    await t.test('#559 追加：assembleCardName 拼 #<issue> - <动宾短语>', () => {
-      assert.ok(S.assembleCardName({ name: '修地基', issue: 559 }) === '#559 - 修地基', '#559 追加：assembleCardName 拼 #<issue> - <动宾短语>  →  ' + S.assembleCardName({ name: '修地基', issue: 559 }));
+    await t.test('#589：assembleCardName 拼 ISSUE- + 工人·模型', () => {
+      assert.strictEqual(S.assembleCardName({ name: '修地基', issue: 559, role: '工人', model: 'grok-4.6' }), 'ISSUE-559 工人·grok-4.6 修地基');
     });
-    await t.test('#559 追加：assembleCardName 幂等（name 已带 #N 前缀）', () => {
-      assert.ok(S.assembleCardName({ name: '#559 - 修地基', issue: 559 }) === '#559 - 修地基', '#559 追加：assembleCardName 幂等（name 已带 #N 前缀）  →  ' + S.assembleCardName({ name: '#559 - 修地基', issue: 559 }));
+    await t.test('#589：assembleCardName 见到 PR 号升级前缀', () => {
+      assert.strictEqual(S.assembleCardName({ name: 'ISSUE-559 工人·grok-4.6 修地基', pr: 616 }), 'PR-616 工人·grok-4.6 修地基');
     });
-    await t.test('#559 追加：assembleCardName 子卡 = #N - 审官·模型', () => {
-      assert.ok(S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), issue: 559 }) === '#559 - 审官·gpt-5.6-sol', '#559 追加：assembleCardName 子卡 = #N - 审官·模型');
+    await t.test('#589：assembleCardName 审官卡用 PR 号', () => {
+      assert.strictEqual(S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), pr: 616, role: '审官', model: 'gpt-5.6-sol' }), 'PR-616 审官·gpt-5.6-sol');
     });
-    await t.test('#559 追加：没给 issue 原样返回', () => {
-      assert.ok(S.assembleCardName({ name: '审读 #505' }) === '审读 #505' && S.assembleCardName({ name: 'x' }) === 'x', '#559 追加：没给 issue 原样返回');
+    await t.test('#589：assembleCardName 旧 #N 前缀升级', () => {
+      assert.strictEqual(S.assembleCardName({ name: '#559 - 修地基', pr: 616, role: '工人', model: 'grok-4.6' }), 'PR-616 工人·grok-4.6 修地基');
+    });
+    await t.test('#559 追加：没给号原样返回', () => {
+      assert.ok(S.assembleCardName({ name: '审读 #505' }) === '审读 #505' && S.assembleCardName({ name: 'x' }) === 'x', '#559 追加：没给号原样返回');
+    });
+    const wdSrc = fs.readFileSync(CLI, 'utf8');
+    await t.test('#589 worker-done 建审官卡名用 PR 不用 issue', () => {
+      assert.ok(/assembleCardName\(\{[\s\S]*pr: plan\.pr/.test(wdSrc)
+        && !/reviewerCardName\(plan\.reviewer\), issue: plan\.issue/.test(wdSrc),
+        'createName 必须传 pr: plan.pr');
     });
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
     await t.test('worker-start 用 --terminal 不用 --agent', () => {

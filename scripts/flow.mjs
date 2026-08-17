@@ -28,7 +28,7 @@
 //     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
 //   - 注入目标确定性定位：返工注入按任务卡 worktree 内唯一候选终端（排除审官句柄
 //     与 shell），选不出唯一目标就报帅，不挑第一个。
-//   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查「审官·」子卡；全找不到
+//   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查子卡（parent/child 字段，不读卡名）；全找不到
 //     报「待帅接手复核」。
 //
 // 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
@@ -82,6 +82,7 @@ import { readLedgerEvents } from './lib/ledger-query.mjs';
 import {
   recordStartupRevision, checkGuardRevision, formatRevisionAlarm, attachRevision,
 } from './lib/guard-revision.mjs';
+import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
@@ -563,8 +564,8 @@ function pickUniqueTerminal(terminals, wtId, excludeHandle) {
   return { ok: false, error: `worktree ${wtId} 有 ${candidates.length} 个候选终端（${candidates.map(t => t.handle).join('、')}），选不出唯一注入目标——请帅指定，不挑第一个` };
 }
 
-// 审官终端反查（红 2）：①起审官时记下的句柄（优先）②记下的审官卡 id
-// ③兜底存量反查：任务卡子卡里找「审官」卡（帅手起审官、流转器后启动的场景）。
+// 审官终端反查：①起审官时记下的句柄（优先）②记下的审官卡 id
+// ③兜底存量反查：工人卡子卡 + 可选 dispatch 记账（#589：不读卡名）。
 function findReviewerTerminal(source, pr, rec, workerWt) {
   const termsR = source.orcaTerminals();
   if (!termsR.ok) return { ok: false, error: termsR.error };
@@ -576,13 +577,22 @@ function findReviewerTerminal(source, pr, rec, workerWt) {
     const t = pickUniqueTerminal(terms, rec.reviewer.worktree, null);
     if (t.ok) return { ok: true, terminal: t.terminal, via: '起审官记录审官卡' };
   }
-  if (workerWt && Array.isArray(workerWt.childWorktreeIds) && workerWt.childWorktreeIds.length > 0) {
+  if (workerWt) {
     const wtsR = source.orcaWorktrees();
     if (wtsR.ok) {
-      const reviewerWt = wtsR.worktrees.find(w => workerWt.childWorktreeIds.includes(w.id) && /审官/.test(w.displayName || ''));
-      if (reviewerWt) {
-        const t = pickUniqueTerminal(terms, reviewerWt.id, null);
-        if (t.ok) return { ok: true, terminal: t.terminal, via: '存量反查（审官· 子卡）' };
+      const found = findReviewerWorktree({
+        parent: workerWt,
+        worktrees: wtsR.worktrees,
+        workers: typeof source.orcaWorkers === 'function' ? (source.orcaWorkers().workers || null) : null,
+      });
+      if (found.ok) {
+        const t = pickUniqueTerminal(terms, found.worktreeId, null);
+        if (t.ok) return { ok: true, terminal: t.terminal, via: `存量反查（${found.via}）` };
+        const fallbackId = worktreeIdOf(found.worktree);
+        if (fallbackId && fallbackId !== found.worktreeId) {
+          const t2 = pickUniqueTerminal(terms, fallbackId, null);
+          if (t2.ok) return { ok: true, terminal: t2.terminal, via: `存量反查（${found.via}）` };
+        }
       }
     }
   }
