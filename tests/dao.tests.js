@@ -596,17 +596,16 @@ async function main() {
       && /^完工/.test(pWd.comment || ''),
       `status=${cliWd.status} ${JSON.stringify(pWd)}`);
 
-    const cliWdLive = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46'], {
+    const cliWdRework = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
-    const pWdLive = (() => { try { return JSON.parse((cliWdLive.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('CLI worker-done 返工：发返工完成 comment，不起第二个审官',
-      cliWdLive.status === 0 && pWdLive.commentPosted === true && pWdLive.wired === true
-      && pWdLive.round === 'rework' && pWdLive.shouldCreate === false
-      && pWdLive.postedIssue && pWdLive.postedPr
-      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.skipped === true
-      && /^返工完成/.test(pWdLive.comment || ''),
-      `status=${cliWdLive.status} ${JSON.stringify(pWdLive)}`);
+    const pWdRework = (() => { try { return JSON.parse((cliWdRework.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI worker-done --dry-run 返工：shouldCreate=false，不起第二个审官',
+      cliWdRework.status === 0 && pWdRework.ok === true && pWdRework.wired === true
+      && pWdRework.round === 'rework' && pWdRework.shouldCreate === false
+      && pWdRework.reviewerCreate && pWdRework.reviewerCreate.skipped === true
+      && /^返工完成/.test(pWdRework.comment || ''),
+      `status=${cliWdRework.status} ${JSON.stringify(pWdRework)}`);
 
     const badBody = S.planWorkerDone({
       pr: '42',
@@ -630,10 +629,49 @@ async function main() {
     check('#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）',
       /invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
       wdFn.slice(0, 240));
-    check('#586 worker-done 首审新建后用 reviewerDispatchId 投递完工（投失败即停）',
-      /create\.reviewerDispatchId/.test(wdFn) && /hop: '士兵→审官'/.test(wdFn)
-      && /没返回 reviewerDispatchId/.test(wdFn),
+    check('#586 worker-done 首审/返工都走 completeWorkerDoneNotify（投失败即停）',
+      /create\.reviewerDispatchId/.test(wdFn) && /completeWorkerDoneNotify/.test(wdFn)
+      && !/plan\.round === 'first' && reviewerDispatchId/.test(wdFn),
       wdFn.slice(0, 400));
+    const reworkNotifyCalls = [];
+    const reworkNotify = S.completeWorkerDoneNotify({
+      round: 'rework',
+      pr: '46',
+      comment: '返工完成：PR #46\n\n已修红项',
+      reviewerDispatchId: 'ctx_reviewer_existing',
+      deliver: (opts) => {
+        reworkNotifyCalls.push(opts);
+        return { ok: true, messageId: 'msg_rework1', hop: opts.hop };
+      },
+    });
+    check('#586 返工路径 notified.ok===true（不只是 commentPosted）',
+      reworkNotify.ok === true && reworkNotify.notified && reworkNotify.notified.ok === true,
+      JSON.stringify(reworkNotify));
+    check('#586 返工投递主题是「返工完成：PR #…」且收件人是现有审官 dispatch',
+      reworkNotifyCalls.length === 1
+      && reworkNotifyCalls[0].to === 'dispatch:ctx_reviewer_existing'
+      && reworkNotifyCalls[0].subject === '返工完成：PR #46'
+      && reworkNotifyCalls[0].hop === '士兵→审官',
+      JSON.stringify(reworkNotifyCalls));
+    const reworkNoId = S.completeWorkerDoneNotify({
+      round: 'rework',
+      pr: '46',
+      comment: '返工完成：PR #46',
+      reviewerDispatchId: null,
+    });
+    check('#586 返工找不到审官 dispatch → fail-visible',
+      reworkNoId.ok === false && /审官/.test(reworkNoId.error || ''),
+      JSON.stringify(reworkNoId));
+    const reworkFailDeliver = S.completeWorkerDoneNotify({
+      round: 'rework',
+      pr: '46',
+      comment: '返工完成：PR #46',
+      reviewerDispatchId: 'ctx_x',
+      deliver: () => ({ ok: false, error: '士兵→审官：收件人不存在' }),
+    });
+    check('#586 返工投递失败 → fail-visible',
+      reworkFailDeliver.ok === false && /没送到|不存在/.test(reworkFailDeliver.error || ''),
+      JSON.stringify(reworkFailDeliver));
     const reworkPlan = S.planWorkerDone({
       pr: '46',
       runGh: (a) => {
@@ -1410,6 +1448,19 @@ async function main() {
 
     const noSubject = S.deliverMessage({ to: LIVE, orca: fakeOrca() });
     check('缺 subject → 拦下', noSubject.ok === false && noSubject.stage === '参数', JSON.stringify(noSubject));
+
+    const reworkFourGate = S.completeWorkerDoneNotify({
+      round: 'rework',
+      pr: '592',
+      comment: '返工完成：PR #592\n\n已修红项',
+      reviewerDispatchId: LIVE_DISPATCH,
+      deliver: S.deliverMessage,
+      orca: fakeOrca(),
+    });
+    check('#586 返工走四关投递 notified.ok===true',
+      reworkFourGate.ok === true && reworkFourGate.notified && reworkFourGate.notified.ok === true
+      && /^msg_/.test(reworkFourGate.notified.messageId || ''),
+      JSON.stringify(reworkFourGate));
 
     // delivered_at 不是判据：真语料里活收件人也是 null，当门就是每条都假红。
     const fx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'orchestration-send.json'), 'utf8'));

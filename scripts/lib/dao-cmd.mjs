@@ -1848,6 +1848,50 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
   };
 }
 
+/**
+ * 士兵→审官 完工/返工投递决策。无 IO：投递走传入的 deliver。
+ * 首审、返工都必须送到审官 dispatch；缺 id 或投失败一律 ok:false（fail-visible）。
+ */
+export function completeWorkerDoneNotify({
+  round,
+  pr,
+  comment,
+  reviewerDispatchId,
+  shouldCreate,
+  deliver,
+  orca,
+} = {}) {
+  const prefix = round === 'rework' ? '返工完成' : '完工';
+  const id = reviewerDispatchId == null ? '' : String(reviewerDispatchId).trim();
+  if (!id) {
+    if (round === 'rework') {
+      return { ok: false, notified: null, error: '返工找不到现有审官 dispatch，返工完成消息没处可投（没查成）' };
+    }
+    if (shouldCreate) {
+      return { ok: false, notified: null, error: 'reviewer-create 没返回 reviewerDispatchId，完工消息没处可投（没查成）' };
+    }
+    return { ok: false, notified: null, error: `${prefix}找不到审官 dispatch，完工消息没处可投（没查成）` };
+  }
+  if (typeof deliver !== 'function') {
+    return { ok: false, notified: null, error: 'completeWorkerDoneNotify 没拿到投递器（没查成）' };
+  }
+  const notified = deliver({
+    to: `dispatch:${id}`,
+    subject: `${prefix}：PR #${pr}`,
+    body: comment,
+    hop: '士兵→审官',
+    orca,
+  });
+  if (!notified || !notified.ok) {
+    return {
+      ok: false,
+      notified: notified || null,
+      error: `${prefix}通知没送到审官：${notified && notified.error ? notified.error : '投递器没返回'}`,
+    };
+  }
+  return { ok: true, notified };
+}
+
 export function postIssueComment({ issue, body, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };
@@ -2353,7 +2397,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
-                  # 原子完工：发完工/返工 comment；首审（无 review）真调 reviewer-create 起审官；返工不起第二个
+                  # 原子完工：发完工/返工 comment；首审真调 reviewer-create 起审官；返工不起第二个；两条路径都 notify 审官（投失败即停）
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）

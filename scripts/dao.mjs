@@ -66,6 +66,7 @@ import {
   syncPrLabelsFromIssue,
   resolveReviewerFromPr,
   planWorkerDone,
+  completeWorkerDoneNotify,
   postIssueComment,
   postPrComment,
   verifyInjection,
@@ -491,7 +492,8 @@ function cmdWorkerDone(args) {
 
   let parentId = args.parentWorktree || null;
   let existing = null;
-  if (!args.dryRun && plan.shouldCreate) {
+  // 首审、返工都要能找到现有审官卡：首审用来避免起第二个，返工用来解析 dispatch 投递。
+  if (!args.dryRun) {
     if (!parentId) {
       const cur = currentWorktreeId();
       if (!cur.ok) fail(`worker-done 找不到当前工人卡：${cur.error}（给 --parent-worktree）`, plan);
@@ -500,6 +502,9 @@ function cmdWorkerDone(args) {
     const looked = findExistingReviewerChild(parentId);
     if (!looked.ok) fail(`worker-done 查已有审官卡失败：${looked.error}`, plan);
     existing = looked.found;
+  }
+  if (!args.dryRun && plan.round === 'rework' && !existing) {
+    fail('返工找不到现有审官卡，无法通知审官', plan);
   }
 
   const shouldCreate = plan.shouldCreate && !existing;
@@ -544,11 +549,10 @@ function cmdWorkerDone(args) {
   const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reviewerCreate: create });
 
-  // 首审必须把完工摘要投到审官 dispatch：新建路径用 reviewer-create 返回的 id；
-  // 旧路/重试（卡已在）再反查。投递失败 fail-visible（审官任务书等这条信号才开工审）。
-  let notified = null;
+  // 首审、返工都必须把摘要投到审官 dispatch：新建用 reviewer-create 返回的 id；
+  // 返工/重试（卡已在）反查现有审官卡。投递失败 fail-visible。
   let reviewerDispatchId = create && create.reviewerDispatchId ? create.reviewerDispatchId : null;
-  if (!reviewerDispatchId && existing && plan.round === 'first') {
+  if (!reviewerDispatchId && existing) {
     const childId = existing.id || existing.worktreeId;
     const wl = orca(argsWorkerList());
     if (!wl.ok) fail(`已有审官卡但 worker-list 没查成：${errText(wl.error)}`, { ...plan, postedIssue, postedPr });
@@ -556,18 +560,17 @@ function cmdWorkerDone(args) {
     if (!found.ok) fail(`已有审官卡但找不到 dispatch：${found.error}`, { ...plan, postedIssue, postedPr, found });
     reviewerDispatchId = found.dispatchId;
   }
-  if (plan.round === 'first' && reviewerDispatchId) {
-    notified = deliverMessage({
-      to: `dispatch:${reviewerDispatchId}`,
-      subject: `完工：PR #${plan.pr}`,
-      body: plan.comment,
-      hop: '士兵→审官',
-      orca: (a) => orca(a),
-    });
-    if (!notified.ok) fail(`完工通知没送到审官：${notified.error}`, { ...plan, postedIssue, postedPr, notified });
-  } else if (plan.round === 'first' && shouldCreate && !reviewerDispatchId) {
-    fail('reviewer-create 没返回 reviewerDispatchId，完工消息没处可投（没查成）', { ...plan, postedIssue, postedPr, reviewerCreate: create });
-  }
+  const notify = completeWorkerDoneNotify({
+    round: plan.round,
+    pr: plan.pr,
+    comment: plan.comment,
+    reviewerDispatchId,
+    shouldCreate,
+    deliver: deliverMessage,
+    orca: (a) => orca(a),
+  });
+  if (!notify.ok) fail(notify.error, { ...plan, postedIssue, postedPr, notified: notify.notified, reviewerCreate: create });
+  const notified = notify.notified;
 
   emit({
     ok: true,
