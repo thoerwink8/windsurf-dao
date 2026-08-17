@@ -57,6 +57,9 @@
 //   13. all-idle      —— #575：盘面上有仍在途的任务卡（#N - ，非 in-review/已完成），
 //                        却零 working/waiting 工位。这不是 NO_TARGETS（没样本），是全员卡死。
 //                        in-review + agent=done 的待合并盘面仍报 NO_TARGETS（那是等帅，不是卡死）。
+//   14. retry-loop    —— #580 追加：屏面尾部同一条 5xx/不可用 行连续 N 轮出现，即使真实
+//                        内容在变也报（指纹活证否决正好把「在重试」当成活着）。有新鲜 git
+//                        产出则不报。503 进指纹表是补洞，本判据不依赖认识具体错误串。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
@@ -146,6 +149,9 @@ const ERROR_FINGERPRINTS = [
   'session 已绑定另外的 ai 账号', // reclaude 会话绑定错账号（#471 当日实证）
   'Set up auto mode',      // #464 遗留「弹窗自处理」授权（发 3）
   "Don't show again",      // 同上
+  '503 Service Unavailable',       // #580：codex/pqapi 503，用户先于守卫发现
+  'api_key_registry_unavailable',  // 同上现场原文
+  /unexpected status 5\d\d/i,      // 一般 HTTP 5xx（只加 503 等于等下一次没见过的码）
 ];
 
 // ── 处置矩阵（#471 v0，全部当日实证）───────────────────────────────────
@@ -168,6 +174,9 @@ const DISPOSE_MATRIX = [
   { fp: 'Set up auto mode',                   action: 'send3', label: '发 3（#464 弹窗自处理授权）' },
   { fp: "Don't show again",                   action: 'send3', label: '发 3' },
   { fp: 'Remote Control disconnected 404',    action: 'ignore', label: '忽略（噪音，不阻塞）' },
+  { fp: '503 Service Unavailable',            action: 'keepalive', label: '注入续命（HTTP 5xx）' },
+  { fp: 'api_key_registry_unavailable',       action: 'keepalive', label: '注入续命（registry 不可用）' },
+  { fp: /unexpected status 5\d\d/i,           action: 'keepalive', label: '注入续命（HTTP 5xx）' },
 ];
 
 // ── 参数块（阈值集中一处；迁移路径见 PR #505）──────────────────────────
@@ -184,6 +193,7 @@ const PARAMS = {
   fpLossWindowMs: 10 * 60 * 1000, // 或跨 N 分钟报帅
   stagnationMs: 30 * 60 * 1000,   // flow 心跳里在途 PR 停留超 N → 停滞态报警（#471 处置矩阵补一行）
   heartbeatStaleMs: 5 * 60 * 1000, // flow 心跳 ts 超 N 未更新 = flow 停摆候选
+  retryLoopRounds: 3,       // #580：同一错误行连续 N 轮 = 重试循环（不看屏面是否在滚）
 };
 
 // ── 参数 ─────────────────────────────────────────────────────────────
@@ -703,7 +713,32 @@ function stationState(state, key) {
     epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
     fpStreak: 0, fpLoss: { persistCount: 0, firstTs: 0, reported: false },
     selStreak: 0, pastedStreak: 0, idleExempt: null,
+    retryLine: null, retryStreak: 0,
   };
+}
+
+// #580 追加：不依赖「认识这条错误」——尾部像 5xx/不可用 的行，去掉时间/ray/hex 后比同一性。
+const RETRY_LINE_RE = /unexpected status\s*5\d\d|status\s*5\d\d|Service Unavailable|api_key_registry_unavailable|\b5\d\d\b.{0,60}unavailable|ECONNRESET|ETIMEDOUT|ENOTFOUND/i;
+
+function normalizeRetryLine(line) {
+  return String(line)
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.Z+-]+/g, 'TS')
+    .replace(/cf-ray:\s*\S+/gi, 'CFRAY')
+    .replace(/[0-9a-f]{8,}/gi, 'HEX')
+    .replace(/\b\d+\b/g, 'N')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function lastRetryLine(lines) {
+  const arr = Array.isArray(lines) ? lines : [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const s = String(arr[i] || '');
+    if (RETRY_LINE_RE.test(s)) return normalizeRetryLine(s);
+  }
+  return null;
 }
 
 function checkPastedContent(t, read, strippedHash, args, st, events, notes) {
@@ -902,6 +937,26 @@ function runRound(source, args, state) {
     // ⑫ Pasted Content 停摆（#575）：任务书折在输入框。照 selector 两连同 + 活证否决；
     // 处置是补回车（当晚已知救活动作，没有「选哪个」的后果）。
     checkPastedContent(t, read, strippedHash, args, st, events, notes);
+
+    // ⑭ 重试循环（#580 追加）：尾部同一条 5xx/不可用 行连续 N 轮，即使真实内容在变也报。
+    // 指纹活证否决会把「在重试」当成活着；本判据不看 strippedHash。有新鲜 git 产出则不报。
+    if (!graded) {
+      const retryLine = lastRetryLine(read.tail);
+      if (retryLine && retryLine === st.retryLine) st.retryStreak += 1;
+      else if (retryLine) { st.retryLine = retryLine; st.retryStreak = 1; }
+      else { st.retryLine = null; st.retryStreak = 0; st.fired.delete('retry-loop'); }
+      if (retryLine && st.retryStreak >= PARAMS.retryLoopRounds && !st.fired.has('retry-loop')) {
+        const w = source.ps.find(x => (Array.isArray(x.agents) ? x.agents : []).some(a => a.paneKey === t.agent.paneKey));
+        const ev = w ? gitEvidenceFor(w, source, args) : { missing: true };
+        const freshGit = !!(ev && ev.lastActivityTs != null && (now - ev.lastActivityTs) <= PARAMS.idleMinutes * 60000);
+        if (freshGit) {
+          notes.push({ name: t.name, type: '观察', detail: `重试行连续 ${st.retryStreak} 轮但 git 产出新鲜——有进展，不报` });
+        } else {
+          st.fired.add('retry-loop');
+          events.push({ name: t.name, type: 'retry-loop', detail: `屏面尾部同一错误行连续 ${st.retryStreak} 轮（「${retryLine.slice(0, 80)}」）——疑似重试循环，真实内容在变也不算进展（#580；503 审官哑火实证）` });
+        }
+      }
+    }
 
     // ④ 停摆判据（#500 换代）：
     //    主判据 = 非 spinner 真实内容连续 N 轮不变（strippedHash 不变）。
