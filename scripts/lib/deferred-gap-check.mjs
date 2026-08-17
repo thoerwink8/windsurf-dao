@@ -1,4 +1,4 @@
-// 挂账差集检查（#583，dao-check 第 ⑰ 项）。
+// 挂账差集检查（#583，dao-check 第 ⑱ 项）。
 //
 // 判据形状抄 #581：外部事实 \ 本地记录，不是时钟。
 //   外部 = transcript 文本里出现的 [[挂账:]] 标记（不问 hook 自己怎么解析）
@@ -31,6 +31,10 @@ const STOP_EVENT = 'Stop';
 const BOARD_HOOK_REL = 'scripts/lib/board-hook.mjs';
 const INJECT_MARK = "from './deferred-hook.mjs'";
 const INJECT_CALL = 'promptLines';
+const SKILL_REL = 'host/skills/deferred/SKILL.md';
+// 检查器自己持有的硬边界原文，不从 SKILL.md import。
+const SKILL_BAN = 'AI 不许用这个 skill 落账';
+const SKILL_ONLY_TAG = 'AI 落账只有回复里写 [[挂账:]]';
 
 // 检查器自己的标记：只认 [[挂账:...]]，写法与 deferred.mjs 的 MARK_RE 故意不同
 // （那边允许跨行 [\s\S]，这边单行到 ]；那边捕获四种动作，这边只扫入账动作）。
@@ -233,7 +237,21 @@ export function checkDeferred({ root } = {}) {
   const mounted = checkHookMounted(root);
   if (mounted.fail) return { fail: mounted.fail };
 
+  const skill = readRel(root, SKILL_REL);
+  if (skill.missing) {
+    return { fail: ['用户侧挂账 skill 不在', '恢复 host/skills/deferred/SKILL.md；用户入口丢了等于只剩 cat 文件', SKILL_REL] };
+  }
+  if (!skill.text.includes(SKILL_BAN) || !skill.text.includes(SKILL_ONLY_TAG)) {
+    return {
+      fail: [
+        '用户侧 skill 没写死「AI 不许用这个 skill 落账」',
+        '描述和正文都必须声明：AI 落账只有打标。删掉这句 = 设计被掏空',
+        SKILL_REL,
+      ],
+    };
+  }
+
   return {
-    green: `挂账差集：样本 A 红 / 样本 B 绿；Stop 已挂搬运，写法提醒走 board-hook`,
+    green: `挂账差集：样本 A 红 / 样本 B 绿；Stop 已挂搬运；用户侧 skill 写死禁 AI 落账`,
   };
 }

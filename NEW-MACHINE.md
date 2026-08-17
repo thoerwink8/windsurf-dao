@@ -303,7 +303,7 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 }
 ```
 
-验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。
+验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`deferred` 在 = 用户侧挂账入口随机器带走了（#583：只查/补/改状态，AI 不许用它落账）。
 
 `dao-project`（项化派工，含消歧门）由上面循环自动接上，无需单独动作；要单条建链（或循环没覆盖时手动补）：
 

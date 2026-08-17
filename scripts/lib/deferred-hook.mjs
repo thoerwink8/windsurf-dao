@@ -44,9 +44,32 @@ function projectRoot(env) {
 }
 
 function statePath(_raw, env) {
-  // 状态按项目根分，不按 cwd：Stop 的 cwd 和 UserPromptSubmit 可能不一致。
+  // 状态文件按项目根分；lastUuid 必须再按 session 分桶，见 sessionBucket。
   const slug = projectSlug(projectRoot(env)) || 'unknown';
   return join(homeDir(env), '.claude', 'deferred', `${slug}.json`);
+}
+
+/** 去重键：同一条 assistant 只在自己的 session 里算处理过。 */
+export function sessionBucket(raw) {
+  if (raw && raw.session_id) return `sid:${raw.session_id}`;
+  if (raw && raw.transcript_path) return `tp:${raw.transcript_path}`;
+  return 'unknown';
+}
+
+function lastUuidFor(state, raw) {
+  const key = sessionBucket(raw);
+  const sess = state && state.sessions && state.sessions[key];
+  return (sess && sess.lastUuid) || '';
+}
+
+function patchState(raw, env, patch) {
+  const prev = loadState(raw, env);
+  const key = sessionBucket(raw);
+  const sessions = { ...(prev.sessions || {}) };
+  sessions[key] = { ...(sessions[key] || {}), ...('lastUuid' in patch ? { lastUuid: patch.lastUuid } : {}) };
+  const next = { ...prev, sessions };
+  if (Object.prototype.hasOwnProperty.call(patch, 'pendingDelta')) next.pendingDelta = patch.pendingDelta;
+  saveState(raw, env, next);
 }
 
 function loadState(raw, env) {
@@ -125,7 +148,7 @@ function onStop(raw, env) {
   const now = new Date().toISOString();
   const harvested = harvestFromTranscript(loaded.text, current, {
     now,
-    lastUuid: state.lastUuid || '',
+    lastUuid: lastUuidFor(state, raw),
   });
   if (harvested.skipped) return 0;
   if (harvested.changed) {
@@ -133,9 +156,9 @@ function onStop(raw, env) {
       process.stderr.write(`[挂账] 写账本失败：${String(e.message || e).slice(0, 80)}\n`);
       return 0;
     }
-    saveState(raw, env, { lastUuid: harvested.lastUuid, pendingDelta: harvested.delta });
+    patchState(raw, env, { lastUuid: harvested.lastUuid, pendingDelta: harvested.delta });
   } else {
-    saveState(raw, env, { lastUuid: harvested.lastUuid, pendingDelta: state.pendingDelta || null });
+    patchState(raw, env, { lastUuid: harvested.lastUuid });
   }
   return 0;
 }

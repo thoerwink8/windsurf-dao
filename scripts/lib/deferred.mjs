@@ -151,6 +151,8 @@ function parseItemBlock(chunk) {
     evidence: fields.evidence || '',
     scope: fields.scope || 'branch',
     at: fields.at || '',
+    notes: fields.notes || '',
+    priority: fields.priority || 'normal',
   };
 }
 
@@ -167,6 +169,8 @@ export function serializeLedger(doc) {
     `evidence: ${item.evidence || ''}`,
     `scope: ${item.scope || 'branch'}`,
     `at: ${item.at || ''}`,
+    `notes: ${item.notes || ''}`,
+    `priority: ${item.priority || 'normal'}`,
   ].join('\n'));
   return `${LEDGER_HEADER}\n\n---\n\n${blocks.join('\n\n---\n\n')}\n`;
 }
@@ -178,6 +182,12 @@ export function nextId(items) {
     if (Number.isInteger(n) && n > max) max = n;
   }
   return `D-${String(max + 1).padStart(3, '0')}`;
+}
+
+export const USER_PRIORITIES = ['high', 'normal', 'low'];
+
+export function findLedgerItem(items, ref) {
+  return findItem(items, ref);
 }
 
 function findItem(items, ref) {
@@ -276,4 +286,70 @@ export function applyMarks(doc, marks, { now = '' } = {}) {
     }
   }
   return { doc: { items }, delta };
+}
+
+/** 用户侧处置。没有「新建」——那是打标的事。 */
+export function applyUserOp(doc, op = {}) {
+  const items = (doc?.items || []).map((i) => ({ ...i }));
+  const type = op.type;
+  if (type === 'add' || type === 'create' || type === 'new' || type === '挂账') {
+    return { ok: false, error: 'AI 不许用这个入口落账；落账只有回复里写 [[挂账:]]', doc: { items } };
+  }
+  const item = findItem(items, op.id);
+  if (!item) return { ok: false, error: `无此 id ${op.id || ''}`, doc: { items } };
+  if (type === 'note') {
+    const text = String(op.text || '').trim();
+    if (!text) return { ok: false, error: '补信息要 --text', doc: { items } };
+    item.notes = item.notes ? `${item.notes}；${text}` : text;
+    return { ok: true, item, doc: { items }, changed: 'note' };
+  }
+  if (type === 'reject') {
+    const why = String(op.why || '').trim();
+    if (!why) return { ok: false, error: '驳回要 --why', doc: { items } };
+    item.status = 'rejected';
+    item.evidence = why;
+    return { ok: true, item, doc: { items }, changed: 'reject' };
+  }
+  if (type === 'wontfix') {
+    const why = String(op.why || '').trim();
+    if (!why) return { ok: false, error: '不做要 --why', doc: { items } };
+    item.status = 'wontfix';
+    item.evidence = why;
+    item.why = why;
+    return { ok: true, item, doc: { items }, changed: 'wontfix' };
+  }
+  if (type === 'priority') {
+    const to = String(op.to || '').trim();
+    if (!USER_PRIORITIES.includes(to)) {
+      return { ok: false, error: '优先级只认 high / normal / low', doc: { items } };
+    }
+    item.priority = to;
+    return { ok: true, item, doc: { items }, changed: 'priority' };
+  }
+  return { ok: false, error: `未知操作 ${type || ''}`, doc: { items } };
+}
+
+export function formatList(doc) {
+  const items = Array.isArray(doc?.items) ? doc.items : [];
+  if (items.length === 0) return '挂账 0 条（扫完是空的，不是没查成）';
+  const hanging = items.filter((i) => i.status === 'open' || i.status === 'escalated');
+  const lines = [`挂账 ${hanging.length} 条在挂 / 共 ${items.length} 条`];
+  for (const i of items) {
+    const pri = i.priority && i.priority !== 'normal' ? ` !${i.priority}` : '';
+    lines.push(`- ${i.id} [${i.status}${pri}] ${clip(i.what, 60)}`);
+  }
+  return lines.join('\n');
+}
+
+export function formatShow(item) {
+  if (!item) return '没有这一条';
+  return [
+    `${item.id} [${item.status}]${item.priority && item.priority !== 'normal' ? ` priority=${item.priority}` : ''}`,
+    `是什么: ${item.what}`,
+    `为何不做: ${item.why || ''}`,
+    `解冻: ${item.thaw || ''}`,
+    `继续挂: ${item.continues || 0}`,
+    `证据: ${item.evidence || ''}`,
+    `备注: ${item.notes || ''}`,
+  ].join('\n');
 }

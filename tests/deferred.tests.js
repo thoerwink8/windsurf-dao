@@ -231,6 +231,31 @@ async function main() {
 
     const resolved = H.resolveTranscriptPath({ session_id: sid, cwd }, { USERPROFILE: home, HOME: home });
     check('session_id 能拼出 transcript 路径', resolved.how === 'session_id' && resolved.path.endsWith(`${sid}.jsonl`), JSON.stringify(resolved));
+
+    const sidA = 'sess-A';
+    const sidB = 'sess-B';
+    const writeSess = (sid, uuid, what) => {
+      const body = [
+        JSON.stringify({ message: { role: 'user', content: 'go' } }),
+        JSON.stringify({
+          uuid,
+          message: { role: 'assistant', content: [{ type: 'text', text: `[[挂账: ${what} | 因 | 解]]` }] },
+        }),
+      ].join('\n');
+      fs.writeFileSync(path.join(tdir, `${sid}.jsonl`), body, 'utf8');
+    };
+    writeSess(sidA, 'asst-A1', '来自A');
+    writeSess(sidB, 'asst-B1', '来自B');
+    runHook({ event: 'Stop', home, project, cwd, stdinExtra: { session_id: sidA, cwd } });
+    runHook({ event: 'Stop', home, project, cwd, stdinExtra: { session_id: sidB, cwd } });
+    const afterAB = D.parseLedger(fs.readFileSync(path.join(project, 'DEFERRED.md'), 'utf8'));
+    const itemA = afterAB.items.find((i) => i.what === '来自A');
+    const itemB = afterAB.items.find((i) => i.what === '来自B');
+    check('A 然后 B：两条各入账且 continues=0', !!(itemA && itemB && itemA.continues === 0 && itemB.continues === 0), JSON.stringify(afterAB.items));
+    runHook({ event: 'Stop', home, project, cwd, stdinExtra: { session_id: sidA, cwd } });
+    const afterABA = D.parseLedger(fs.readFileSync(path.join(project, 'DEFERRED.md'), 'utf8'));
+    const itemA2 = afterABA.items.find((i) => i.what === '来自A');
+    check('再 Stop A：同一条不因跨 session 被当成继续挂', !!(itemA2 && itemA2.continues === 0 && afterABA.items.filter((i) => i.what === '来自A').length === 1), JSON.stringify(afterABA.items));
   }
 
   console.log('\n=== 装载面故意拆掉应红 ===');
@@ -240,6 +265,30 @@ async function main() {
     fs.writeFileSync(path.join(tmp, '.claude', 'settings.json'), '{"hooks":{}}', 'utf8');
     const r = C.checkDeferred({ root: tmp });
     check('settings 没有 hook 且没有样本 → 没查成（不是绿）', !!r.fail && !r.green, JSON.stringify(r));
+  }
+
+  console.log('\n=== 用户侧 skill：查/补/改，没有新建 ===');
+  {
+    const started = D.applyMarks({ items: [] }, [{ action: '挂账', what: '用户来处置', why: '先挂', thaw: '再说' }]);
+    const noted = D.applyUserOp(started.doc, { type: 'note', id: 'D-001', text: '补充背景' });
+    check('补信息写进 notes', noted.ok && noted.item.notes === '补充背景', JSON.stringify(noted));
+    const pri = D.applyUserOp(noted.doc, { type: 'priority', id: 'D-001', to: 'high' });
+    check('改优先级', pri.ok && pri.item.priority === 'high', JSON.stringify(pri));
+    const rej = D.applyUserOp(pri.doc, { type: 'reject', id: 'D-001', why: '不是问题' });
+    check('用户驳回', rej.ok && rej.item.status === 'rejected', JSON.stringify(rej));
+    const add = D.applyUserOp(started.doc, { type: 'add', what: '想从 skill 新建' });
+    check('用户入口拒绝新建', !add.ok && /不许用这个入口落账/.test(add.error), add.error);
+    check('空账本 list 是 0 条不是没查成', /扫完是空的/.test(D.formatList({ items: [] })));
+
+    const cli = path.join(REPO, 'scripts', 'deferred.mjs');
+    const blocked = spawnSync(process.execPath, [cli, 'add', '--what', '偷偷记一笔'], {
+      encoding: 'utf8', cwd: REPO, timeout: 15000, windowsHide: true,
+    });
+    check('CLI add 故意违规 → exit 2', blocked.status === 2, `status=${blocked.status} ${blocked.stderr}`);
+    check('CLI add 提示只能打标', /AI 不许用这个 skill 落账/.test(blocked.stderr), blocked.stderr);
+
+    const skill = fs.readFileSync(path.join(REPO, 'host/skills/deferred/SKILL.md'), 'utf8');
+    check('skill 描述写死禁 AI 落账', skill.includes('AI 不许用这个 skill 落账') && skill.includes('AI 落账只有回复里写 [[挂账:]]'), skill.slice(0, 200));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
