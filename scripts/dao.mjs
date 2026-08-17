@@ -517,15 +517,22 @@ function reuseReviewerOnTerminal({
   if (!mergeable.ok) return { ok: false, reused: true, error: mergeable.error, mergeable };
 
   let soldierDispatchId = soldierDispatch || null;
-  if (!soldierDispatchId && parentWorktree) {
+  let runId = null;
+  if (parentWorktree) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) return { ok: false, reused: true, error: `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}` };
     const found = findDispatchForWorktree(wl.json, parentWorktree);
-    if (!found.ok) return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
-    soldierDispatchId = found.dispatchId;
+    if (!found.ok && !soldierDispatchId) {
+      return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
+    }
+    if (!soldierDispatchId && found.ok) soldierDispatchId = found.dispatchId;
+    if (found.ok) runId = found.runId || null;
   }
   if (!soldierDispatchId) {
     return { ok: false, reused: true, error: '复用审官没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）' };
+  }
+  if (!runId) {
+    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
   }
 
   let reviewerBook;
@@ -540,7 +547,7 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
 
-  const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+  const revTask = orca(argsTaskCreate({ spec: reviewerBook, run: runId }));
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) return { ok: false, reused: true, error: RUN_REQUIRED_HINT };
     return { ok: false, reused: true, error: `复用审官 task-create 失败: ${errText(revTask.error)}` };

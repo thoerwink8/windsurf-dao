@@ -402,9 +402,10 @@ export function applyWorktreeRmPlan(plan, { rm } = {}) {
   return { ok: true, removed };
 }
 
-export function argsTaskCreate({ spec } = {}) {
+export function argsTaskCreate({ spec, run } = {}) {
   const a = ['orchestration', 'task-create'];
   if (spec != null) a.push('--spec', spec);
+  if (run) a.push('--run', run);
   a.push('--json');
   return a;
 }
@@ -443,7 +444,7 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
   if (!pick?.dispatchId) {
     return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
   }
-  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, scanned: workers.length };
+  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, runId: pick.runId || null, scanned: workers.length };
 }
 
 export function argsWorkerShow({ dispatch } = {}) {
@@ -2422,7 +2423,7 @@ export const FLAGS_BY_VERB = {
     '--issue', '--comment', '--json', '--help', '-h',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
-  'task-create': new Set(['--spec', '--json', '--help', '-h']),
+  'task-create': new Set(['--spec', '--run', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
