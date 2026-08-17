@@ -675,7 +675,7 @@ export function isRunRequired(error) {
   return /run_required/i.test(orcaErrorText(error));
 }
 
-export const RUN_REQUIRED_HINT = '未绑 orchestration Run，先跑 orca orchestration run-create 或 run-use';
+export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——有信箱台在 relay 时它抢不住（台每轮自夺回）；run-use 只在该 Run 还没起信箱台时有效';
 
 export function rollbackErrorAlreadyGone(error) {
   return /tab_not_found|terminal_handle_stale/i.test(orcaErrorText(error));

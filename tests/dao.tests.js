@@ -1076,7 +1076,10 @@ async function main() {
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
     check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
-    check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
+    check('#502 未绑 Run 先指 run-create，不并列 run-use', /RUN_REQUIRED_HINT/.test(daoSrc)
+      && /run-create/.test(S.RUN_REQUIRED_HINT)
+      && /不要先试 run-use/.test(S.RUN_REQUIRED_HINT)
+      && !/或 run-use/.test(S.RUN_REQUIRED_HINT), S.RUN_REQUIRED_HINT);
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
     check('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', /probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), 'waitAndVerify 要按 provider 覆盖 timeoutMs');
     check('#559 waitAndVerify 默认超时不再是 8000ms', !/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')));
