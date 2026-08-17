@@ -17,6 +17,9 @@ import {
   argsTerminalSend,
   argsWorktreeCreate,
   argsWorktreeRm,
+  argsWorktreePs,
+  planWorktreeRm,
+  applyWorktreeRmPlan,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
@@ -689,9 +692,17 @@ function cmdWorktreeCreate(args) {
 
 function cmdWorktreeRm(args) {
   if (!args.worktree) fail('worktree-rm 要 --worktree');
-  const r = orca(argsWorktreeRm({ worktree: args.worktree, force: args.force }));
-  if (!r.ok) fail(`worktree rm 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  const listed = orca(argsWorktreePs());
+  if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
+  const wts = listed.json?.result?.worktrees;
+  if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
+  const plan = planWorktreeRm(wts, args.worktree);
+  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [] });
+  const applied = applyWorktreeRmPlan(plan, {
+    rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
+  });
+  if (!applied.ok) fail(applied.error, { removed: applied.removed || [] });
+  emit({ ok: true, removed: applied.removed });
 }
 
 function cmdTaskCreate(args) {
