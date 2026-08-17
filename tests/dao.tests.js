@@ -465,6 +465,166 @@ async function main() {
 
     const daoSrcLabels = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs dispatch 成功后调 stampIssueLabels', /stampIssueLabels\(\{/.test(daoSrcLabels), daoSrcLabels.slice(0, 60));
+    check('dao.mjs dispatch 打 reviewer/*', /reviewer:\s*gate\.reviewer/.test(daoSrcLabels), daoSrcLabels.slice(0, 60));
+  }
+
+  console.log('\n=== #586 审官按需起阶段一：pickReviewer + 自读选型 + worker-done 骨架 ===');
+  {
+    const one = S.pickReviewer(['model/grok-4.6', 'type/写码', 'reviewer/gpt-5.6-sol', '已消歧']);
+    check('pickReviewer 查到一个 → ok + modelId', one.ok === true && one.state === 'one' && one.modelId === 'gpt-5.6-sol', JSON.stringify(one));
+    const none = S.pickReviewer(['model/grok-4.6', 'type/写码', '已消歧']);
+    check('pickReviewer 没有 reviewer/* → none，不许猜', none.ok === false && none.state === 'none' && /没有 reviewer/.test(none.error), JSON.stringify(none));
+    const many = S.pickReviewer(['reviewer/gpt-5.6-sol', 'reviewer/claude-opus']);
+    check('pickReviewer 有多个 → many，不许猜', many.ok === false && many.state === 'many' && /多个 reviewer/.test(many.error), JSON.stringify(many));
+    const unscanned = S.pickReviewer(null);
+    check('pickReviewer 没拿到列表 → unscanned，和「扫完 0 条」不同话',
+      unscanned.ok === false && unscanned.state === 'unscanned'
+      && unscanned.error !== none.error && unscanned.error !== many.error && one.state !== none.state,
+      JSON.stringify({ unscanned, none, many }));
+    check('pickReviewer 三态话面互不相同',
+      one.state !== none.state && none.state !== many.state && many.state !== one.state
+      && none.error !== many.error,
+      JSON.stringify({ none: none.error, many: many.error }));
+
+    const lnRev = S.dispatchLabelNames({ model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol' });
+    check('label 名含 reviewer/<id>', lnRev.includes('reviewer/gpt-5.6-sol') && lnRev.includes('model/grok-4.6'), JSON.stringify(lnRev));
+
+    const stampCalls = [];
+    const stampGh = (a) => {
+      stampCalls.push(a.slice());
+      if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }]) };
+      if (a[0] === 'label' && a[1] === 'create') return { ok: true, out: JSON.stringify({ name: a[2] }) };
+      if (a[0] === 'issue' && a[1] === 'edit') return { ok: true, out: '{}' };
+      return { ok: false, error: `未预期 ${a.join(' ')}` };
+    };
+    const stampedRev = S.stampIssueLabels({ issue: '123', model: 'grok-4.6', role: '写码', reviewer: 'gpt-5.6-sol', runGh: stampGh });
+    check('dispatch 打标含 reviewer/*',
+      stampedRev.ok === true && stampedRev.names.includes('reviewer/gpt-5.6-sol')
+      && stampCalls.some(a => a[0] === 'issue' && a.includes('reviewer/gpt-5.6-sol')),
+      JSON.stringify({ stampedRev, stampCalls }));
+
+    const syncRevCalls = [];
+    const syncRev = S.syncPrLabelsFromIssue({
+      pr: '8',
+      runGh: (a) => {
+        syncRevCalls.push(a.slice());
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #8' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: '已消歧' }] }) };
+        if (a[0] === 'label' && a[1] === 'list') return { ok: true, out: JSON.stringify([{ name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }]) };
+        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('pr-sync-labels 抄 reviewer/*（已消歧仍不抄）',
+      syncRev.ok === true && syncRev.labels.includes('reviewer/gpt-5.6-sol') && syncRev.labels.includes('model/grok-4.6')
+      && !syncRev.labels.includes('已消歧'),
+      JSON.stringify(syncRev));
+
+    const onlyRevCalls = [];
+    const onlyRev = S.syncPrLabelsFromIssue({
+      pr: '11',
+      runGh: (a) => {
+        onlyRevCalls.push(a.slice());
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit',
+      onlyRev.ok === false && /model/.test(onlyRev.error) && /type/.test(onlyRev.error)
+      && !onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
+      JSON.stringify({ onlyRev, onlyRevCalls }));
+
+    const modelOnlyCalls = [];
+    const modelOnly = S.syncPrLabelsFromIssue({
+      pr: '12',
+      runGh: (a) => {
+        modelOnlyCalls.push(a.slice());
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #12' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('pr-sync-labels 有 model 无 type → 拒且不调 pr edit',
+      modelOnly.ok === false && /type/.test(modelOnly.error)
+      && !modelOnlyCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
+      JSON.stringify({ modelOnly, modelOnlyCalls }));
+
+    const FAKE_GH3 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
+    const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
+    });
+    const pPick = (() => { try { return JSON.parse((cliPick.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI reviewer-create --pr 42 --dry-run 打印出自读选型',
+      cliPick.status === 0 && pPick.ok === true && pPick.dryRun === true && pPick.reviewer === 'gpt-5.6-sol' && pPick.reviewerSource === 'label',
+      `status=${cliPick.status} ${JSON.stringify(pPick)} stderr=${cliPick.stderr}`);
+
+    const cliNone = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '43', '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
+    });
+    const pNone = (() => { try { return JSON.parse((cliNone.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI reviewer-create 没有 reviewer/* → 非 0 且话面是「没有」',
+      cliNone.status !== 0 && /没有 reviewer/.test(String(pNone.error || '')),
+      `status=${cliNone.status} ${JSON.stringify(pNone)}`);
+
+    const cliMany = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '44', '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
+    });
+    const pMany = (() => { try { return JSON.parse((cliMany.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI reviewer-create 有多个 reviewer/* → 非 0 且话面是「多个」',
+      cliMany.status !== 0 && /多个 reviewer/.test(String(pMany.error || '')),
+      `status=${cliMany.status} ${JSON.stringify(pMany)}`);
+    check('CLI 没有 / 多个 话面不同', String(pNone.error || '') !== String(pMany.error || ''));
+
+    check('worker-done 已登记进 VERBS', S.VERBS.includes('worker-done'), S.VERBS.join(','));
+    const wdHelp = spawnSync(process.execPath, [CLI, 'worker-done', '--help'], { encoding: 'utf8', cwd: REPO });
+    check('worker-done 出现在 help', /worker-done/.test(wdHelp.stdout || ''), (wdHelp.stdout || '').slice(0, 200));
+    const wdMiss = spawnSync(process.execPath, [CLI, 'worker-done'], { encoding: 'utf8', cwd: REPO });
+    const pWdMiss = (() => { try { return JSON.parse(wdMiss.stdout || '{}'); } catch { return {}; } })();
+    check('worker-done 缺 --pr → 非零', wdMiss.status !== 0 && /--pr/.test(String(pWdMiss.error || wdMiss.stderr || '')), JSON.stringify(pWdMiss));
+
+    const cliWd = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42', '--dry-run'], {
+      encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
+    });
+    const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI worker-done --dry-run 自读选型且调 reviewer-create --dry-run',
+      cliWd.status === 0 && pWd.ok === true && pWd.wired === false && pWd.reviewer === 'gpt-5.6-sol'
+      && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
+      && pWd.reviewerCreate.reviewer === 'gpt-5.6-sol'
+      && /^完工/.test(pWd.comment || ''),
+      `status=${cliWd.status} ${JSON.stringify(pWd)}`);
+
+    const cliWdLive = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42'], {
+      encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
+    });
+    const pWdLive = (() => { try { return JSON.parse((cliWdLive.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
+    check('CLI worker-done 发 issue+PR 完工 comment，调 reviewer-create 但不建树',
+      cliWdLive.status === 0 && pWdLive.commentPosted === true && pWdLive.wired === false
+      && pWdLive.postedIssue && pWdLive.postedPr
+      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.invoked === true && pWdLive.reviewerCreate.dryRun === true,
+      `status=${cliWdLive.status} ${JSON.stringify(pWdLive)}`);
+
+    const badBody = S.planWorkerDone({
+      pr: '42',
+      body: '已完成：漏了首行关键字',
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('worker-done --body 不以「完工」开头 → 拒', badBody.ok === false && /完工/.test(badBody.error), JSON.stringify(badBody));
+
+    const daoSrc586 = fs.readFileSync(CLI, 'utf8');
+    check('#586 不重写 reviewer-create 既有坑：仍走 assessPrMergeable + trialMergeMaster',
+      /function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrc586)
+      && /function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrc586));
+    const wdFn = (daoSrc586.match(/function cmdWorkerDone\([\s\S]*?\n\}/) || [''])[0];
+    check('#586 worker-done 不调用 orca 建树',
+      /function cmdWorkerDone/.test(wdFn) && !/argsWorktreeCreate|worktree create/.test(wdFn),
+      wdFn.slice(0, 200));
   }
 
 
