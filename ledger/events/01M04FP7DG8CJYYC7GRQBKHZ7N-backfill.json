@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T13:11:10+08:00",
+  "machine": "backfill",
+  "seq": 108,
+  "job_id": "gh-pr-555",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #555；[pi] #553 派工闸改挂随仓 settings（删 plugin 层）+ 路由表补 kimi-k3；无审读",
+  "pr_number": 555,
+  "source": "github-backfill",
+  "event_id": "6579d93fd8656f1214d29c90e97c1101b499c11323b2059a4fdcc68eaf7bad0b"
+}

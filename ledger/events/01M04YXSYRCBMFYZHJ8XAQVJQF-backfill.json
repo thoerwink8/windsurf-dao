@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T17:37:27+08:00",
+  "machine": "backfill",
+  "seq": 116,
+  "job_id": "gh-pr-560",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #560；#559 流转器①地基：修 7 条官方 orchestration 原语误用 + waitAndVerify 可配 + 判定行格式强制 + merge-policy 机器落点 + --issue 卡名；无审读",
+  "pr_number": 560,
+  "source": "github-backfill",
+  "event_id": "587f754e5cbb1f4c5a5e7e02435b3a124d30172695b7c35f7d0822d578a80442"
+}

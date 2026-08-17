@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T05:19:09+08:00",
+  "machine": "backfill",
+  "seq": 88,
+  "job_id": "gh-pr-538",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #538；[pi] 前置解除提醒（Actions）+ 选型输出带通道读 master 路由表（#526 #533）；判定行红 3 项",
+  "pr_number": 538,
+  "source": "github-backfill",
+  "event_id": "0a8021e78f8e48acf0719fc8869c0f58a64515b8f7e58ec3a59ef448ac1ea7d7"
+}

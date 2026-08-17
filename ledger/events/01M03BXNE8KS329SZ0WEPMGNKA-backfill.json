@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T02:46:05+08:00",
+  "machine": "backfill",
+  "seq": 76,
+  "job_id": "gh-pr-515",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #515；[pi] CLAUDE.md 写明 memory 例外：host/memory/ 主会话可直接 commit，不走 PR（#503 拍板）；判定行红 0 项",
+  "pr_number": 515,
+  "source": "github-backfill",
+  "event_id": "874388008f480553314b655861a62804e5953d56d686641f9d9e97fb06cbc6ca"
+}

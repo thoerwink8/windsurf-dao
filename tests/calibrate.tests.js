@@ -26,7 +26,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { redFlagsFromReviewBodies, buildRows, renderRow, countVerdictLines, reworkFromVerdictLines, describeRework } = require("../scripts/calibrate.mjs");
+const { redFlagsFromReviewBodies, buildRows, renderRow, countVerdictLines, reworkFromVerdictLines, describeRework, samplesFromEvents, describeNoEvents } = require("../scripts/calibrate.mjs");
 const { malformedJudgmentLines } = require("../scripts/lib/judgment.mjs");
 
 const REPO = path.resolve(__dirname, "..");
@@ -151,6 +151,14 @@ const mixedRework = buildRows([
   { model: "m", taskType: "写码", rework: 1, redFlags: 4, number: 2, mergedAt: "2026-01-02T00:00:00Z" },
 ], [], ["写码"]);
 check("混判：无判定行样本不进平均，平均=1.0", mixedRework[0].averageRework === 1);
+
+// #581：校准改读账本后，判定行函数仍导出（flow / 回归网用），样本识别走事件
+check("没有事件的话术 ≠ 0 红", describeNoEvents(12).includes("没有事件") && !describeNoEvents(12).startsWith("0"));
+const fromLedger = samplesFromEvents([
+  { type: "job.dispatch", job_id: "gh-pr-12-review", model: "gpt-5.6-sol", identity: "审官", work_type: "审查" },
+  { type: "job.closed", job_id: "gh-pr-12-review", pr_number: 12, red_flags: 0, worker_rework: 0, ts: "2026-08-17T12:00:00+08:00" },
+]);
+check("账本 0 红样本 redFlags=0 且任务类=审查", fromLedger[0].redFlags === 0 && fromLedger[0].taskType === "审查");
 
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);
