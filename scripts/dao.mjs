@@ -60,6 +60,9 @@ import {
   runGh,
   stampIssueLabels,
   syncPrLabelsFromIssue,
+  resolveReviewerFromPr,
+  planWorkerDone,
+  postIssueComment,
   verifyInjection,
   verifyInjectionPolling,
   verifyWorkerStarted,
@@ -116,13 +119,12 @@ function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
   return { ok: true, json: parsed.json };
 }
 
-/** 消歧门（#565）的 gh 执行器。测试注入：DAO_GH_FAKE 指向假 gh 脚本时用它——
- * CI（check.yml）无 GH_TOKEN，CLI 级门测试改走假 gh 造违规/通过样本（
- * tests/fixtures/fake-gh.mjs），否则门按「没查成」拒派、测试假红。生产不设该变量。
- * 只替消歧门这一处；reviewer-create 等其余 gh 调用不受影响。 */
-function ghRunner() {
+/** gh 执行器。测试注入：DAO_GH_FAKE 指向假 gh 脚本时用它——
+ * CI（check.yml）无 GH_TOKEN，CLI 级测试改走假 gh（tests/fixtures/fake-gh.mjs）。
+ * 生产不设该变量。opts.role 在真 gh 路径透传给 runGh（#573 App 身份）。 */
+function ghRunner(opts = {}) {
   const fake = process.env.DAO_GH_FAKE;
-  if (!fake) return runGh;
+  if (!fake) return (args) => runGh(args, opts);
   return (args) => {
     const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     if (r.error || (r.status !== 0 && r.status != null)) {
@@ -484,6 +486,7 @@ function cmdDispatch(args) {
     issue: args.issue,
     model: gate.model,
     role: gate.role,
+    reviewer: gate.reviewer,
     runGh: ghRunner(),
   });
   if (!labels.ok && !labels.skipped) {
@@ -557,6 +560,17 @@ function cmdPrSyncLabels(args) {
   const r = syncPrLabelsFromIssue({ pr: args.pr, runGh: ghRunner() });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
+}
+
+function cmdWorkerDone(args) {
+  if (!args.pr) fail('worker-done 要 --pr');
+  const gh = ghRunner({ role: 'worker' });
+  const plan = planWorkerDone({ pr: args.pr, body: args.body, runGh: gh });
+  if (!plan.ok) fail(plan.error, plan);
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
+  const posted = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
+  if (!posted.ok) fail(posted.error, { ...plan, posted });
+  emit({ ok: true, commentPosted: true, ...plan, posted });
 }
 
 function cmdStart(args) {
@@ -697,7 +711,8 @@ function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
+  const gh = ghRunner({ role: 'reviewer' });
+  const meta = gh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -709,7 +724,7 @@ function cmdReviewerCreate(args) {
   const mergeable = assessPrMergeable(head?.mergeable);
   if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
-  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
+  const fileList = gh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
   let fileJson;
   try { fileJson = JSON.parse(fileList.out); }
@@ -717,7 +732,20 @@ function cmdReviewerCreate(args) {
   const files = parseGhPullFiles(fileJson);
   if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
 
-  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null, mergeable };
+  // #586：不传 --reviewer 时自读署名 issue 的 reviewer/*。工人不传模型。
+  const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
+  if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
+
+  const plan = {
+    pr: String(args.pr),
+    baseBranch,
+    expectedOid,
+    files,
+    name: args.name || null,
+    mergeable,
+    reviewer: picked.modelId,
+    reviewerSource: picked.source,
+  };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
   const created = orca(argsWorktreeCreate({
@@ -1079,6 +1107,7 @@ function main() {
     case 'worker-release': return cmdWorkerRelease(args);
     case 'worker-read': return cmdWorkerRead(args);
     case 'reviewer-create': return cmdReviewerCreate(args);
+    case 'worker-done': return cmdWorkerDone(args);
     case 'reviewer-attach': return cmdReviewerAttach(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
