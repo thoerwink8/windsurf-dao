@@ -136,6 +136,15 @@ export function checkDispatchGate({ root } = {}) {
       problems.push(`逃生口 raw 应放行，实际 ${raw.status}`);
     }
 
+    // #575 ③：放行判据是「实际执行的命令」，不是整串关键词。故意把 dao.mjs raw
+    // 写进 echo 字符串再裸跑 worker-start——旧闸会放行，新闸必须仍 exit 2。
+    const decoy = runScript(script, {
+      command: 'echo "dao.mjs raw" && orca orchestration worker-start --task t --worktree w',
+    });
+    if (decoy.status !== 2) {
+      problems.push(`echo "dao.mjs raw" && worker-start 应仍被拦（exit 2），实际 ${decoy.status}——关键词匹配过宽`);
+    }
+
     const crashed = runScript(script, {
       command: 'orca orchestration send --type heartbeat',
       envExtra: { DISPATCH_GATE_CRASH: '1' },

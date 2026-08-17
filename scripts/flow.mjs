@@ -64,11 +64,9 @@
 //                                             （目标解析仍跑——快照/实读，测试可覆盖）
 //   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh/orca JSON 快照跑（测试/复现用）
 //   node scripts/flow.mjs --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
-//   node scripts/flow.mjs --heartbeat-file <path> 心跳文件（live 默认 _flow/heartbeat.json；
-//                                             快照默认不写，避免测污染仓。#580 补 #497 欠账）
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
-//   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
+//   prs.json / issue-<N>-comments.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
 //   orca-worktrees.json / orca-terminals.json（orca 侧，可缺省为无数据）
 
 import { spawnSync } from 'node:child_process';
@@ -106,12 +104,11 @@ function printUsage() {
   --state-file <path> 状态文件位置（默认 _flow/state.json）
   --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
   --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
-  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
-  --heartbeat-file <path> 心跳文件（live 默认 _flow/heartbeat.json；快照默认不写）`);
+  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null, heartbeatFile: null };
+  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -129,7 +126,6 @@ function parseArgs(argv) {
       case '--dry-run': args.dryRun = true; break;
       case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
       case '--repo': args.repo = argv[++i] || ''; break;
-      case '--heartbeat-file': args.heartbeatFile = resolve(process.cwd(), argv[++i] || ''); break;
       case '--help': printUsage(); process.exit(0); break;
       default:
         console.error(`未知参数: ${a}`);
@@ -186,7 +182,17 @@ function unwrap(json, pathKey, topKey) {
 // 信号提取（纯函数，快照与 live 共用）
 // ══════════════════════════════════════════════════════════════════════
 
-// 完工信号：PR comment 首行命中「完工」或「返工(完成|处置)」。
+// 完工信号：issue comment 首行命中「完工」或「返工(完成|处置)」。
+// #575 ⑥：读关联 issue（标题 #N 或 Closes #N），不读 PR 会话——工人被 push 闸拦住时仍能交棒。
+function ticketIssueNumber(pr) {
+  const title = String(pr?.title || '');
+  const fromTitle = title.match(/#(\d+)/);
+  if (fromTitle) return Number(fromTitle[1]);
+  const body = String(pr?.body || '');
+  const fromClose = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body);
+  return fromClose ? Number(fromClose[1]) : null;
+}
+
 function completionSignals(comments) {
   const out = [];
   for (const c of comments || []) {
@@ -506,25 +512,42 @@ function loadState(path) {
   }
 }
 
-function heartbeatPath(args) {
-  if (args.heartbeatFile) return args.heartbeatFile;
-  if (args.snapshotDir) return null;
-  return join(ROOT, '_flow', 'heartbeat.json');
+function saveState(path, state) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  renameSync(tmp, path);
+}
+
+/** #575 ① / #497：心跳与状态文件同目录（测试写到 tmp，live 写 _flow/heartbeat.json）。 */
+function heartbeatPath(stateFile) {
+  return join(dirname(stateFile || DEFAULT_STATE), 'heartbeat.json');
 }
 
 function writeHeartbeat(path, payload) {
-  if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
   renameSync(tmp, path);
 }
 
-function saveState(path, state) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-  renameSync(tmp, path);
+function heartbeatFromState(state) {
+  const prs = [];
+  for (const rec of Object.values(state.records || {})) {
+    if (!rec || rec.retired || !rec.pendingShuai) continue;
+    prs.push({
+      number: rec.pr,
+      state: rec.pendingShuai.kind || rec.pendingShuai.reason || 'pending',
+      sinceMs: rec.pendingShuai.sinceMs ?? null,
+    });
+  }
+  return {
+    ts: new Date().toISOString(),
+    round: state.round || 0,
+    lastWakeSource: 'poll',
+    pendingCount: prs.length,
+    prs,
+  };
 }
 
 function freshRecord(pr) {
@@ -553,7 +576,7 @@ function makeLiveSource(repo) {
       return { ok: true, pr: r.json };
     },
     getComments(number) {
-      // 与 getReviews 同口径：gh pr view --json comments 硬截断 100。
+      // #575 ⑥：number 是关联 issue（标题 #N / Closes #N），不是 PR 号。
       // 走 issue comments REST + --paginate；字段映射成 createdAt（完工信号用）。
       const r = runGh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
@@ -625,7 +648,9 @@ function makeSnapshotSource(roundDir, repo) {
       return { ok: true, pr: r.json };
     },
     getComments(number) {
-      const r = readJson(join(roundDir, `pr-${number}-comments.json`));
+      const issueFile = join(roundDir, `issue-${number}-comments.json`);
+      const prFile = join(roundDir, `pr-${number}-comments.json`);
+      const r = existsSync(issueFile) ? readJson(issueFile) : readJson(prFile);
       return r.ok ? { ok: true, comments: r.json } : { ok: true, comments: [] };
     },
     getReviews(number) {
@@ -817,7 +842,8 @@ function processOneRound(source, state, args) {
     const rec = records[pr.number] || (records[pr.number] = freshRecord(pr.number));
     if (rec.retired) continue;
 
-    const commentsR = source.getComments(pr.number);
+    const ticket = ticketIssueNumber(pr);
+    const commentsR = source.getComments(ticket || pr.number);
     const reviewsR = source.getReviews(pr.number);
     if (!commentsR.ok || !reviewsR.ok) {
       noTargets = true;
@@ -976,7 +1002,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, parseOrcaStdout };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, parseOrcaStdout, ticketIssueNumber };
 
 let args = null;
 let anyEmitted = false;
@@ -999,10 +1025,9 @@ function runOneRound(source, state) {
     else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
-  const hb = round.heartbeat || emptyHeartbeat(state);
-  hb.round = state.round;
-  hb.ts = hb.ts || new Date().toISOString();
-  writeHeartbeat(heartbeatPath(args), hb);
+  // #575 ① / #580：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。
+  try { writeHeartbeat(heartbeatPath(args.stateFile), heartbeatFromState(state)); }
+  catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——本轮心跳没写成`); }
   saveState(args.stateFile, state);
   return round;
 }
@@ -1018,7 +1043,8 @@ function liveLoop() {
     repo = r.json.nameWithOwner;
   }
   console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
-  writeHeartbeat(heartbeatPath(args), { ts: new Date().toISOString(), round: 0, lastWakeSource: 'github-poll', pendingCount: 0, prs: [] });
+  try { writeHeartbeat(heartbeatPath(args.stateFile), { ts: new Date().toISOString(), round: 0, lastWakeSource: 'poll', pendingCount: 0, prs: [] }); }
+  catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——启动心跳没写成`); }
   for (;;) {
     const state = loadState(args.stateFile);
     if (state.loadError) {

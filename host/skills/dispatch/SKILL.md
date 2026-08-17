@@ -34,7 +34,10 @@ test "$(git branch --show-current)" = master \
 
 派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）已经守着同一个 run，**帅不要再挂 `check --wait` 门铃**——一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏（#525）。完工信号经信箱台转发到帅对话（`You have N orchestration messages`），外加工位闲置监视、待办队列监视。要手查信箱用一次性 `orca orchestration check --json`（不带 `--wait`）；`--ack` 语义是「确认上一批」，有 `deliveryId` 才带。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。心跳只进信箱供怀疑时 peek，不唤醒——空转实测 ~650 token/轮。
 
-完工信号：`worker_done` 是触发器、GitHub 是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
+完工信号分两层，缺一层就会静默停：
+
+- **编排层**：`worker_done` 是触发器、GitHub PR 存在是裁决器——帅收到 worker_done 后必查该分支 PR 存在才收卷（`gh pr view <headRefName>`；#459 工人闷头写码不开 PR 防线）；没有 PR 就当没做完，escalation / 补开 PR，不收卷。反向（GitHub 有完工信号但没 worker_done）照常流转、记校准。
+- **流转器（#575 ⑥ 订正）**：交棒发到 **issue comment** 首行「完工」（issue 一直在，不绑 push）。`scripts/flow.mjs:183` 读关联 issue 的评论（标题 `#N` 或正文 Closes #N）。工人发评论走 `node scripts/gh-as.mjs worker -- issue comment <issue号> --body-file <文件>`，格式见 worker-brief。
 
 向用户汇报工位状态前，先实刷 orca worktree ps 的 agents[].state 与 gh pr 状态——凭上次印象汇报会状态失真（2026-08-14 三次实测，issue #443）。
 
@@ -146,7 +149,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 2. 必须上帅：① 审官质疑拍板/规格本身；② 乒乓两轮仍有红项（换人信号）；③ 归档动作——归档由帅执行，审官只发「可归档」通知。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
-人工补起审官（给已有 PR 补审官）走 `dao.mjs reviewer-create --pr <N>`，不抄闭环模板。
+人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入、`verifyInjectionPolling`（Pasted Content 自动补回车，仍未开工 fail-visible）一次做完，不碰 `raw`。`reviewer-create` 只建树，不再当补派通道。
 
 ## 命名规矩
 
@@ -172,12 +175,12 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 **闭环接线（#546 追加第五件 → #559 换官方原语 → 审官红项修正）**：`dispatch` 用 Dispatch id 接线——士兵任务书不内嵌审官 id（身份消息送达，完工前先收信）；审官任务书内嵌士兵真 id（先起士兵校验再渲染，杜绝 dispatch:undefined）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
-多工人 / 给已有 PR 补审官，仍在约束载体内：
+多工人仍在约束载体内；给已有 PR 补审官走 `reviewer-attach`，不要再拼五步 + `raw`：
 
 ```bash
 node scripts/dao.mjs worktree-create --name "<卡名>" --no-parent --setup skip
-node scripts/dao.mjs reviewer-create --pr <N> --name "审官·<模型>" --parent-worktree <任务卡>
 node scripts/dao.mjs worker-start --task <id> --worktree <sel> --terminal <handle> --model <id> --reviewer <id>
+node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id>
 ```
 
 裸敲 `orca orchestration worker-start` / `task-create` / `dispatch --inject` 会被 PreToolUse 闸门 exit 2 拦住（#546 #517）。逃生口（必须留痕）：`node scripts/dao.mjs raw -- <命令>`。只在闸门误伤、或库还没覆盖的场景用。
@@ -203,7 +206,7 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 ## 任务书口径
 
-`--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+`--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。**注入只给指针，长材料进 GitHub**（#575：5711 字符任务书被 TUI 折成 Pasted Content，全链路返回值皆绿、一个字没审）。自动补回车是兜底，不是许可证。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
 
 spec 样例（正反例；具体职责清单以**当时的审官任务书为准**——#530 换路后审官动作会变，勿硬编码会过时的清单）：
 
@@ -234,6 +237,7 @@ spec 样例（正反例；具体职责清单以**当时的审官任务书为准*
 ```bash
 node scripts/dao.mjs reviewer-create --pr <N> --name "审官·<模型>" --parent-worktree <任务卡>
 node scripts/dao.mjs worker-start --task <task_id> --worktree <新建子卡 id> --terminal <handle> --model <id> --reviewer <id>
+node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id>
 ```
 
 ## 命令级铁律

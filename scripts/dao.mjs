@@ -39,6 +39,8 @@ import {
   extractTerminalText,
   extractWorktreeId,
   extractWorktreePath,
+  findDispatchForWorktree,
+  argsWorkerList,
   gitBranchName,
   isRunRequired,
   RUN_REQUIRED_HINT,
@@ -63,6 +65,8 @@ import {
   verifyWorkerStarted,
   verifyReviewerFiles,
   verifyReviewerTree,
+  assessPrMergeable,
+  trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
@@ -638,7 +642,7 @@ function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid'], { role: 'reviewer' });
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -646,6 +650,9 @@ function cmdReviewerCreate(args) {
   const baseBranch = head?.headRefName;
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
+  // #575 ⑦：建树前查 mergeable。UNKNOWN 不是绿。rebase 会改 sha 让 APPROVED 失效，只能先对齐再审。
+  const mergeable = assessPrMergeable(head?.mergeable);
+  if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
   const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
@@ -655,7 +662,7 @@ function cmdReviewerCreate(args) {
   const files = parseGhPullFiles(fileJson);
   if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
 
-  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null };
+  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null, mergeable };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
   const created = orca(argsWorktreeCreate({
@@ -685,7 +692,210 @@ function cmdReviewerCreate(args) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail(filesOk.error, { ...plan, reviewerId, reviewerPath, files: filesOk });
   }
-  emit({ ok: true, ...plan, reviewerId, reviewerPath, heads, filesChecked: filesOk.checked, probes: env });
+  const align = trialMergeMaster({ cwd: reviewerPath });
+  if (!align.ok) {
+    orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    fail(`对齐 master 试合失败: ${align.error}`, { ...plan, reviewerId, reviewerPath, align });
+  }
+  emit({ ok: true, ...plan, reviewerId, reviewerPath, heads, filesChecked: filesOk.checked, probes: env, align });
+}
+
+/**
+ * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
+ * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
+ * verifyInjectionPolling（命中 Pasted Content 自动补回车，仍未开工 fail-visible）。
+ * 不碰 raw，所以不会绕过开工验证。
+ */
+function cmdReviewerAttach(args) {
+  if (!args.pr) fail('reviewer-attach 要 --pr');
+  if (!args.worktree) fail('reviewer-attach 要 --worktree（工人卡）');
+  if (!args.reviewer) fail('reviewer-attach 要 --reviewer（审官模型 id）');
+
+  const policy = args.mergePolicy || 'auto';
+  if (policy !== 'auto' && policy !== 'manual') fail(`--merge-policy 只允许 auto|manual，实际 ${policy}`);
+  if (policy === 'manual' && !String(args.mergeReason || '').trim()) {
+    fail('--merge-policy manual 必须给 --merge-reason');
+  }
+
+  const routing = loadOrFail();
+  let reviewerLaunch;
+  try {
+    reviewerLaunch = resolveLaunch({ model: args.reviewer, routing, root: ROOT });
+  } catch (e) { fail(String(e.message || e)); }
+  const cap = assertCodexLaunch({ command: reviewerLaunch.command });
+  if (!cap.ok) fail(cap.error);
+
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
+  if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
+  let head;
+  try { head = JSON.parse(meta.out); }
+  catch { fail(`gh 读 PR #${args.pr} 返回不是 JSON: ${String(meta.out).slice(0, 120)}`); }
+  const baseBranch = head?.headRefName;
+  const expectedOid = head?.headRefOid;
+  if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
+  const mergeable = assessPrMergeable(head?.mergeable);
+  if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
+
+  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
+  if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
+  let fileJson;
+  try { fileJson = JSON.parse(fileList.out); }
+  catch { fail(`gh 读 PR #${args.pr} 文件列表不是 JSON: ${String(fileList.out).slice(0, 120)}`); }
+  const files = parseGhPullFiles(fileJson);
+  if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
+
+  const revName = assembleCardName({
+    name: args.name || reviewerCardName(args.reviewer),
+    issue: args.issue,
+  });
+  const plan = {
+    pr: String(args.pr),
+    worktree: args.worktree,
+    reviewer: args.reviewer,
+    name: revName,
+    baseBranch,
+    expectedOid,
+    files,
+    mergePolicy: policy,
+    mergeReason: args.mergeReason || null,
+    launch: reviewerLaunch.command,
+    mergeable,
+  };
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
+
+  const created = {};
+  const revWt = orca(argsWorktreeCreate({
+    name: revName,
+    setup: 'skip',
+    parentWorktree: args.worktree,
+    baseBranch,
+    issue: args.issue,
+    comment: args.comment,
+  }));
+  if (!revWt.ok) fail(`审官卡创建失败: ${errText(revWt.error)}`, plan);
+  created.reviewerId = extractWorktreeId(revWt.json);
+  created.reviewerPath = extractWorktreePath(revWt.json);
+  if (!created.reviewerId || !created.reviewerPath) {
+    failCreated(created, '审官卡没返回 id/path', plan);
+  }
+
+  const env = envProbeWorktree(created.reviewerPath);
+  if (!env.ok) failCreated(created, `审官树环境自检失败: ${env.error}`, { probes: env, ...plan });
+
+  const heads = verifyReviewerTree({ reviewerPath: created.reviewerPath, expectedOid });
+  if (!heads.ok) failCreated(created, heads.error, { heads, ...plan });
+
+  const filesOk = verifyReviewerFiles({ reviewerPath: created.reviewerPath, files });
+  if (!filesOk.ok) failCreated(created, filesOk.error, { files: filesOk, ...plan });
+
+  const align = trialMergeMaster({ cwd: created.reviewerPath });
+  if (!align.ok) failCreated(created, `对齐 master 试合失败: ${align.error}`, { align, ...plan });
+
+  const revTerm = orca(argsTerminalCreate({
+    worktree: created.reviewerId,
+    title: revName,
+    command: reviewerLaunch.command,
+  }));
+  if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${errText(revTerm.error)}`, plan);
+  created.reviewerHandle = extractHandleFromCreate(revTerm.json);
+  if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
+
+  const revVerify = waitAndVerify({
+    readOnce: () => readOnceHandle(created.reviewerHandle),
+    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+  });
+  if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+
+  let soldierDispatchId = args.soldierDispatch || null;
+  if (!soldierDispatchId && !args.spec) {
+    const wl = orca(argsWorkerList());
+    if (!wl.ok) failCreated(created, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
+    const found = findDispatchForWorktree(wl.json, args.worktree);
+    if (!found.ok) failCreated(created, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch，或确认工人卡走过 worker-start`, { found, ...plan });
+    soldierDispatchId = found.dispatchId;
+  }
+
+  let reviewerBook = null;
+  try {
+    const body = args.spec
+      ? String(args.spec)
+      : renderDispatchTemplate('reviewer-book.md', {
+        SOLDIER_DISPATCH_ID: String(soldierDispatchId),
+        MERGE_POLICY: policy,
+        MERGE_REASON: args.mergeReason ? String(args.mergeReason) : '',
+      });
+    const overlap = (align.masterFiles || []).filter(f => files.includes(f));
+    const alignNote = `你审的分支落后 master ${align.behind} 个 commit，试合${align.conflict ? '有冲突' : '无冲突'}。重点核这 ${align.behind} 个 commit 碰过的文件与本 PR 的交集${overlap.length ? `（${overlap.join(', ')}）` : ''}——那是语义冲突最可能藏身的地方。`;
+    reviewerBook = `## 与 master 对齐（#575 ⑦）\n\n${alignNote}\n\n${body}`;
+  } catch (e) {
+    failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
+  }
+
+  const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+  if (!revTask.ok) {
+    if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
+    failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
+  }
+  const reviewerTaskId = extractTaskId(revTask.json);
+  if (!reviewerTaskId) failCreated(created, '审官 task-create 没拿到 taskId', plan);
+
+  const revStarted = orca(argsWorkerStart({
+    task: reviewerTaskId,
+    worktree: created.reviewerId,
+    terminal: created.reviewerHandle,
+  }));
+  if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, reviewerTaskId });
+  created.reviewerDispatchId = extractDispatchId(revStarted.json);
+  if (!created.reviewerDispatchId) {
+    failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
+  }
+
+  const reviewerInject = verifyInjectionPolling({
+    dispatchId: created.reviewerDispatchId,
+    readOnce: () => readOnceHandle(created.reviewerHandle),
+    sendEnter: () => orca(argsTerminalSend({ terminal: created.reviewerHandle, enter: true })),
+    proofOnce: workerStartProof,
+    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+    label: '审官',
+  });
+  if (!reviewerInject.ok) {
+    failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
+      ...plan, reviewerTaskId, reviewerInject,
+    });
+  }
+  const reviewerProof = workerStartProof(created.reviewerDispatchId);
+
+  let identity = null;
+  if (soldierDispatchId && created.reviewerDispatchId) {
+    identity = deliverMessage({
+      to: `dispatch:${soldierDispatchId}`,
+      subject: `审官身份：${created.reviewerDispatchId}`,
+      body: `你的审官 dispatch id = ${created.reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
+先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
+      hop: '补派审官→士兵（审官身份）',
+      orca: (a) => orca(a),
+    });
+    if (!identity.ok) {
+      failCreated(created, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
+        ...plan, reviewerTaskId, identity,
+      });
+    }
+  }
+
+  emit({
+    ok: true,
+    ...plan,
+    ...created,
+    reviewerTaskId,
+    soldierDispatchId,
+    heads,
+    filesChecked: filesOk.checked,
+    probes: env,
+    inject: reviewerInject,
+    startProof: reviewerProof,
+    identity,
+    align,
+  });
 }
 
 function cmdSend(args) {
@@ -786,7 +996,9 @@ function cmdCheckHelp() {
 function cmdRaw(args) {
   const argv = args.cmd;
   const logPath = recordEscape({ argv, cwd: process.cwd() });
-  console.error(`[dao raw] 已记账 ${logPath}: ${argv.join(' ')}`);
+  // #575 ②：记账只走 stderr，且压成一行——多行 spec 不能把 JSON 拆碎。
+  const oneLine = argv.map(a => String(a).replace(/\s+/g, ' ')).join(' ');
+  console.error(`[dao raw] 已记账 ${logPath}: ${oneLine}`);
   const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit', windowsHide: true });
   process.exit(r.status == null ? 1 : r.status);
 }
@@ -812,6 +1024,7 @@ function main() {
     case 'worker-release': return cmdWorkerRelease(args);
     case 'worker-read': return cmdWorkerRead(args);
     case 'reviewer-create': return cmdReviewerCreate(args);
+    case 'reviewer-attach': return cmdReviewerAttach(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
     case 'reply': return cmdReply(args);

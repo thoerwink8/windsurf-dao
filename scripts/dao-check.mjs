@@ -39,6 +39,8 @@
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
 // ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
 // ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
+// ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
+//   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -49,6 +51,7 @@ import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
+import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -725,6 +728,13 @@ checkCardCommentSamples();
 const openBoard = loadOpenBoard();
 checkOpenIssueCount(openBoard);
 checkReadyQueue(openBoard);
+checkCompletionSignalAlive();
+
+function checkCompletionSignalAlive() {
+  const r = checkCompletionSignal({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 const noteBit = notes.length ? `，${notes.length} 条可见` : '';
