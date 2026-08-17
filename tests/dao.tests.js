@@ -520,6 +520,38 @@ async function main() {
       && !syncRev.labels.includes('已消歧'),
       JSON.stringify(syncRev));
 
+    const onlyRevCalls = [];
+    const onlyRev = S.syncPrLabelsFromIssue({
+      pr: '11',
+      runGh: (a) => {
+        onlyRevCalls.push(a.slice());
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #11' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('pr-sync-labels 只有 reviewer/* → 拒且不调 pr edit',
+      onlyRev.ok === false && /model/.test(onlyRev.error) && /type/.test(onlyRev.error)
+      && !onlyRevCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
+      JSON.stringify({ onlyRev, onlyRevCalls }));
+
+    const modelOnlyCalls = [];
+    const modelOnly = S.syncPrLabelsFromIssue({
+      pr: '12',
+      runGh: (a) => {
+        modelOnlyCalls.push(a.slice());
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #12' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'model/grok-4.6' }, { name: 'reviewer/gpt-5.6-sol' }] }) };
+        if (a[0] === 'pr' && a[1] === 'edit') return { ok: true, out: '{}' };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('pr-sync-labels 有 model 无 type → 拒且不调 pr edit',
+      modelOnly.ok === false && /type/.test(modelOnly.error)
+      && !modelOnlyCalls.some(a => a[0] === 'pr' && a[1] === 'edit'),
+      JSON.stringify({ modelOnly, modelOnlyCalls }));
+
     const FAKE_GH3 = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliPick = spawnSync(process.execPath, [CLI, 'reviewer-create', '--pr', '42', '--dry-run'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
