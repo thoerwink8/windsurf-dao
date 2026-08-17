@@ -41,6 +41,8 @@
 // ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
+// ⑰ 挂账差集（#583）：transcript 里的 [[挂账:]] \ DEFERRED.md；形状抄 #581（外部\本地，禁 Date.now）
+//   样本 A 有标记无账本必须红，样本 B 已入账必须绿；Stop 挂搬运，写法提醒走已有 board-hook
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -52,6 +54,7 @@ import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
+import { checkDeferred } from './lib/deferred-gap-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -729,9 +732,16 @@ const openBoard = loadOpenBoard();
 checkOpenIssueCount(openBoard);
 checkReadyQueue(openBoard);
 checkCompletionSignalAlive();
+checkDeferredAlive();
 
 function checkCompletionSignalAlive() {
   const r = checkCompletionSignal({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkDeferredAlive() {
+  const r = checkDeferred({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
 }
