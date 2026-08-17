@@ -411,7 +411,7 @@ function cmdDispatch(args) {
   });
   if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
 
-  // #602：注入只给一行指针 + spec + 参数。含换行当场拒（主闸）；过长是次闸。
+  // #602：注入只给一行指针 + spec + 参数。换行按 agent 转码（grok 转 ESC+CR），不禁换行；硬闸只有 UTF-8 字节 ≤500。
   let soldierBook = null;
   try {
     soldierBook = args.spec
@@ -1456,7 +1456,7 @@ function cmdReviewerCreate(args) {
 /**
  * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
  * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
- * verifyStartedPolling（开工证明；含换行的注入已在发之前被拒）。
+ * verifyStartedPolling（开工证明）。换行按 agent 转码，不禁换行；硬闸只有 UTF-8 字节 ≤500。
  * 不碰 raw，所以不会绕过开工验证。
  */
 function cmdReviewerAttach(args) {

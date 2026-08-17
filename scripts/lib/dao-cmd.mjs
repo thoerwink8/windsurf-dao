@@ -2254,9 +2254,8 @@ export function renderDispatchTemplate(name, vars = {}) {
   return out;
 }
 
-// ── 注入闸（#602 根因更正）：主约束 = 一行指针；换行/长度是兜底。
-// ① \n = 提交（主因）；② 单行超阈值被截断（701 字节实证）。量的是 UTF-8 字节。
-// 模板文件末尾允许一个 EOF 换行，渲染后剥掉；正文里的换行必须炸，不许压平。
+// ── 注入闸（#602）：主约束 = 一行指针。换行按 agent 转码（grok 转 ESC+CR），不禁换行。
+// 唯一硬闸 = UTF-8 字节 ≤500。模板文件末尾允许一个 EOF 换行，渲染后剥掉。
 // 二分实测（2026-08-17，grok 探针 term + 帅 701 截断）：
 //   orca terminal send 单行 200/350/450/550/650/701 均送达（模型回出末尾标记）
 //   帅经 TUI 输入框提交 701 字节：前半进消息、后半留输入框
@@ -2288,7 +2287,7 @@ export function assertInjectText(text, { label } = {}) {
   return { ok: true, length: s.length, bytes, newlines: /[\r\n]/.test(s), limit: INJECT_MAX_BYTES };
 }
 
-/** 兼容旧名：先禁换行，再量长度。 */
+/** 兼容旧名：与 assertInjectText 相同，唯一硬闸是 UTF-8 字节上限。 */
 export function assertInjectLen(text, opts) {
   return assertInjectText(text, opts);
 }
