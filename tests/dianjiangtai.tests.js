@@ -443,5 +443,31 @@ const bfFiles2 = fs.readdirSync(bfDir).filter(f => f.endsWith(".json")).sort();
 check("回填重跑文件集合不变", JSON.stringify(bfFiles1) === JSON.stringify(bfFiles2));
 fs.rmSync(bfDir, { recursive: true, force: true });
 
+console.log("\n=== #581 审读 A 位锁 GPT ===");
+const { pinReviewerSlotA } = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
+check("pinReviewerSlotA 在门闩集合有 GPT 时锁 GPT", pinReviewerSlotA({
+  models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
+  passerIds: ["grok-4.6", "claude-opus", "gpt-5.6-sol"],
+}).model === "gpt-5.6-sol");
+check("pinReviewerSlotA GPT 被剔后顺延 Opus", pinReviewerSlotA({
+  models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
+  passerIds: ["grok-4.6", "claude-opus"],
+}).model === "claude-opus");
+const revDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-rev-"));
+const djReview = cliDj(["--role", "审读", "--ts", "2026-08-15T15:00:00+08:00", "--job-id", "rev-pin", "--events-dir", revDir]);
+check("CLI 审读退出码 0", djReview.status === 0, (djReview.stderr || "").slice(0, 240));
+const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
+const gptProvider = masterProviderOf("gpt-5.6-sol");
+check("CLI 审读 A = provider/gpt-5.6-sol", !!gptProvider && djReviewOut.options.A.model === `${gptProvider}/gpt-5.6-sol`, JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+check("CLI 审读 A reason=reviewer_default_gpt", djReviewOut.options.A.reason === "reviewer_default_gpt", JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+check("CLI 审读 B 仍走评分（集合长度>1）", Array.isArray(djReviewOut.options.B.models) && djReviewOut.options.B.models.length > 1, JSON.stringify(djReviewOut.options && djReviewOut.options.B));
+const djUi = cliDj(["--role", "审读", "--work-type", "UI", "--ts", "2026-08-15T15:00:00+08:00", "--job-id", "rev-ui", "--events-dir", revDir]);
+check("CLI 审读+UI 退出码 0", djUi.status === 0, (djUi.stderr || "").slice(0, 240));
+const djUiOut = djUi.status === 0 ? JSON.parse(djUi.stdout) : { options: { A: {} } };
+const opusProvider = masterProviderOf("claude-opus");
+check("CLI 审读撞 UI ban → A = provider/claude-opus", !!opusProvider && djUiOut.options.A.model === `${opusProvider}/claude-opus`, JSON.stringify(djUiOut.options && djUiOut.options.A));
+check("CLI 审读撞 UI ban reason=reviewer_order", djUiOut.options.A.reason === "reviewer_order", JSON.stringify(djUiOut.options && djUiOut.options.A));
+fs.rmSync(revDir, { recursive: true, force: true });
+
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);

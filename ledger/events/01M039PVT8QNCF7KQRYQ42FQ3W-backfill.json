@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T02:07:25+08:00",
+  "machine": "backfill",
+  "seq": 68,
+  "job_id": "gh-pr-513",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #513；[pi] 接入 Command Code 做工人载具：路由表 + dispatch SKILL + NEW-MACHINE 落库（#508）；判定行红 2 项",
+  "pr_number": 513,
+  "source": "github-backfill",
+  "event_id": "99799ef027c2fc715fceb9358f1dbf9292e9909388148ecb9d14b63db1de0bf6"
+}

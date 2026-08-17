@@ -1,0 +1,19 @@
+{
+  "expect": "ok",
+  "why": "样本B：同一快照 + 账本有 #999 的 job.closed → 必须绿",
+  "baselinePr": 0,
+  "newestBuffer": 0,
+  "githubPrs": [
+    {
+      "number": 999,
+      "labels": ["model/grok-4.6", "type/写码"]
+    }
+  ],
+  "events": [
+    {
+      "type": "job.closed",
+      "pr_number": 999,
+      "job_id": "gh-pr-999"
+    }
+  ]
+}

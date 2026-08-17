@@ -1,0 +1,17 @@
+{
+  "type": "job.closed",
+  "schema_version": 1,
+  "ts": "2026-08-16T07:55:42+08:00",
+  "machine": "backfill",
+  "seq": 82,
+  "job_id": "gh-pr-519",
+  "success": true,
+  "rework": false,
+  "usd_cash": 0,
+  "usd_economic": 0,
+  "merged_by": "grok-4.6",
+  "pr_number": 519,
+  "red_flags": 0,
+  "source": "github-backfill",
+  "event_id": "49e65284cdc237f1fe620c91399fafacd387400506b8f6830ead1a88a2d944d3"
+}

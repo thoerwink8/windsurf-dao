@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-16T14:26:50+08:00",
+  "machine": "backfill",
+  "seq": 113,
+  "job_id": "gh-pr-557",
+  "model": "glm-5.3",
+  "identity": "工人",
+  "work_type": "写码",
+  "model_version": "glm-5.3",
+  "terminal": "pi --provider opencode-go",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "343e21b2b4ba421f1456aca5c131a221f1b80de41d94753bcd21e189cc067d64",
+  "pr_number": 557,
+  "source": "github-backfill",
+  "event_id": "fb60b832344c00e23cbb031d126acd7b6d30292a23635582b1da7c60959d868d"
+}

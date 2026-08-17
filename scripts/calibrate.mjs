@@ -1,33 +1,93 @@
 #!/usr/bin/env node
 
-// 模型校准 v3 口径：
-//   1. 样本 = 同时带 model/* 与 type/* 标签的 PR；累计战绩只使用已合并 PR。
-//   2. 返工轮数 = 该 PR 上审官判定行的条数 - 1（issue #501 缺陷二：旧口径「首次 ready
-//      之后新增 commit 数」惩罚「draft 到底、完工才 ready」的合规工人——#496 实返工
-//      1 轮测出 0）。一条判定行 = 审官审过一次 = 零返工；两条 = 返工一轮；与 ready 状态
-//      无关。0 条判定行记 null、呈现「无判定行（本项没测成）」，与「审过零返工（0 轮）」
-//      分开——没查成 ≠ 查过没事（仓规硬条款）。
-//   3. 审查红项数 = 从每条 review 正文**判定行**提取「判定：红 N 项」或「红 N 项」的最大 N
-//      （issue #444 当时：同账号不能 request-changes，审官以 COMMENT 提交、判定写正文首行，
-//      结构化线程数为 0，红项被计成 0。#573 已废这条限制：审官是 dao-reviewer[bot]，
-//      走 approve / request-changes；判定行仍写正文首行，本口径继续认）。判定行 = 行首为
-//      「判定」「复核结论」（允许 >、** 前缀）——正文叙述引用他单红数不计入（防引用性多计，
-//      对抗审 #449 红 1）。跨 review 取最大值 ⇒ 复核绿不清零首审红项；结构化
-//      request-changes 的线程数仍兼容，取两者最大值。
-//   4. 无审读 vs 0 红可区分：0 条 review 记 null、呈现「无审读」，审过零红记 0
-//      （对抗审 #449 红 2，仓规硬条款：扫完 0 条 ≠ 没扫到）。
-//   5. 最近 3 单趋势按合并时间从旧到新显示“返工/红项”。
+// 模型校准 v4 口径（#581）：
+//   1. 样本 = ledger/events 里成对的 job.dispatch + job.closed（一事件一模型，
+//      审官 identity=审官 / work_type=审查 第一次进战绩）。
+//   2. 返工轮数优先读 closed.worker_rework（已扣除帅追加需求的判定行）；
+//      否则 closed.verdict_rounds - 1 - marshal_rounds；再否则 boolean rework。
+//      null = 没测成，不是 0 轮。
+//   3. 红项数读 closed.red_flags。undefined = 没记（无审读）；0 = 审过零红。
+//      没有事件 ≠ 有事件但 0 红。
+//   4. judgment.mjs 不再承担校准计量，只给 flow 判红绿。
+//   5. classifyPr 仍导出给 flow 起审官时读标签。
 //
-// 本脚本只读 GitHub 官方数据，只向 stdout/stderr 输出，不改文件、不发评论。
+// 本脚本只读账本（--pr 标题可问 GitHub，失败单独说），只向 stdout/stderr 输出。
 
-import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { redFlagsFromReviewBodies, judgmentFromReview } from './lib/judgment.mjs';
 
 export { redFlagsFromReviewBodies } from './lib/judgment.mjs';
 
 export const TASK_TYPES = ['写码', '判断', '查证', '审查', 'UI'];
+
+const ROOT = resolve(import.meta.dirname, '..');
+
+export function loadLedgerEvents(dir = join(ROOT, 'ledger/events')) {
+  if (!existsSync(dir)) return { ok: false, error: `账本目录不在：${dir}`, events: [] };
+  const files = readdirSync(dir).filter(f => f.endsWith('.json'));
+  const events = [];
+  const bad = [];
+  for (const f of files) {
+    try { events.push(JSON.parse(readFileSync(join(dir, f), 'utf8'))); }
+    catch { bad.push(f); }
+  }
+  if (bad.length) {
+    return { ok: false, error: `账本 ${bad.length} 个文件不是 JSON：${bad.slice(0, 3).join(',')}`, events };
+  }
+  return { ok: true, events, emptyDir: files.length === 0 };
+}
+
+export function reworkFromClosed(closed) {
+  if (!closed) return null;
+  if (closed.worker_rework != null) return closed.worker_rework;
+  const marshal = Number(closed.marshal_rounds) || 0;
+  if (closed.verdict_rounds != null) return Math.max(0, Number(closed.verdict_rounds) - 1 - marshal);
+  if (typeof closed.rework === 'boolean') return closed.rework ? 1 : 0;
+  return null;
+}
+
+export function redFlagsFromClosed(closed) {
+  if (!closed || closed.red_flags === undefined) return null;
+  return closed.red_flags;
+}
+
+/** 有 closed 才是样本。没有 dispatch 的 closed 用 merged_by 当模型，工种记空（不进矩阵）。 */
+export function samplesFromEvents(events) {
+  const dispatches = new Map();
+  for (const e of events || []) {
+    if (e && e.type === 'job.dispatch' && e.job_id) dispatches.set(e.job_id, e);
+  }
+  const samples = [];
+  for (const e of events || []) {
+    if (!e || e.type !== 'job.closed' || !e.job_id) continue;
+    const d = dispatches.get(e.job_id);
+    const model = (d && d.model) || e.merged_by || null;
+    const taskType = (d && d.work_type) || null;
+    const identity = (d && d.identity) || null;
+    samples.push({
+      number: e.pr_number ?? null,
+      jobId: e.job_id,
+      model,
+      taskType,
+      identity,
+      tagged: Boolean(model && taskType),
+      rework: reworkFromClosed(e),
+      redFlags: redFlagsFromClosed(e),
+      triggeredBy: e.triggered_by || null,
+      marshalRounds: e.marshal_rounds || 0,
+      mergedAt: e.ts,
+      title: (d && d.why) || e.job_id,
+    });
+  }
+  return samples;
+}
+
+export function describeNoEvents(prNumber) {
+  return `没有事件（没查成）：ledger/events 里 PR #${prNumber} 一条 job.dispatch/job.closed 都没有——不是 0 红，是没查成`;
+}
 
 function labelNames(pr) {
   return (pr.labels || []).map(label => typeof label === 'string' ? label : label.name);
@@ -165,135 +225,51 @@ export function renderFullReport(rows, unlabelledCount, repository = null) {
     '| --- | --- | ---: | ---: | ---: | --- |',
     ...dataRows,
     '',
-    `未标注的已合并 PR：${unlabelledCount} 个（缺少 model/* 或 type/* 标签，未混入战绩）。`,
+    `账本未结单：${unlabelledCount} 个（有 job.dispatch 无 job.closed，未混入战绩）。`,
   ];
   return lines.join('\n');
 }
 
-function runGh(args) {
-  const result = spawnSync('gh', args, { encoding: 'utf8', cwd: process.cwd() });
-  if (result.error) throw new Error(`无法运行 gh：${result.error.message}`);
-  if (result.status !== 0) {
-    const reason = String(result.stderr || result.stdout || '').trim();
-    throw new Error(`GitHub 数据读取失败：${reason || `gh 退出码 ${result.status}`}`);
+function openDispatchCount(events) {
+  const closed = new Set((events || []).filter(e => e && e.type === 'job.closed' && e.job_id).map(e => e.job_id));
+  return (events || []).filter(e => e && e.type === 'job.dispatch' && e.job_id && !closed.has(e.job_id)).length;
+}
+
+function tryGhPrTitle(number) {
+  const result = spawnSync('gh', ['pr', 'view', String(number), '--json', 'title,state,mergedAt,isDraft'], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) {
+    return { ok: false, error: String(result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim().slice(0, 160) };
   }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error('GitHub 返回了无法解析的 JSON。');
-  }
-}
-
-function repositoryName() {
-  return runGh(['repo', 'view', '--json', 'nameWithOwner']).nameWithOwner;
-}
-
-function mergedPullRequests() {
-  return runGh([
-    'pr', 'list', '--state', 'merged', '--limit', '1000',
-    '--json', 'number,title,labels,createdAt,updatedAt,mergedAt,isDraft,state,url',
-  ]);
-}
-
-function pullRequest(number) {
-  return runGh([
-    'pr', 'view', String(number),
-    '--json', 'number,title,labels,createdAt,updatedAt,mergedAt,isDraft,state,url',
-  ]);
-}
-
-function labelCatalog() {
-  return runGh(['label', 'list', '--limit', '1000', '--json', 'name']).map(label => label.name);
-}
-
-function pullRequestDetails(repository, number) {
-  const [owner, name] = repository.split('/');
-  const query = `
-    query($owner: String!, $name: String!, $number: Int!) {
-      repository(owner: $owner, name: $name) {
-        pullRequest(number: $number) {
-          reviewThreads(first: 1) { totalCount }
-          reviews(first: 100) { totalCount nodes { state body } }
-        }
-      }
-    }`;
-  const data = runGh([
-    'api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
-    '-F', `number=${number}`,
-  ]);
-  const details = data.data?.repository?.pullRequest;
-  if (!details) throw new Error(`读取不到 PR #${number} 的校准数据。`);
-  if (details.reviews.totalCount > details.reviews.nodes.length) {
-    throw new Error(`PR #${number} 有 ${details.reviews.totalCount} 条 review，超过单次读取上限 100，拒绝给出不完整成绩。`);
-  }
-  return {
-    // 红项口径 v2（对抗审 #449 红 2）：没被审过（0 条 review）与审过但 0 红不可混同——
-    // 没人审过记 null，报告呈现「无审读」；审过则按正文判定行与结构化线程取最大。
-    redFlags: details.reviews.totalCount === 0
-      ? null
-      : Math.max(
-          redFlagsFromReviewBodies((details.reviews?.nodes || []).map(node => node.body)),
-          details.reviewThreads.totalCount,
-        ),
-    reviewCount: details.reviews.totalCount,
-    reviewBodies: (details.reviews?.nodes || []).map(node => node.body),
-  };
-}
-
-function measurePr(repository, pr) {
-  const classification = classifyPr(pr);
-  const details = pullRequestDetails(repository, pr.number);
-  return {
-    ...pr,
-    ...classification,
-    // 返工口径 v3（issue #501 缺陷二）：数判定行条数 - 1，与 ready/commit 节奏无关。
-    rework: reworkFromVerdictLines(details.reviewBodies),
-    redFlags: details.redFlags,
-    reviewCount: details.reviewCount,
-  };
-}
-
-function combinations(labels, samples) {
-  const models = labels.filter(label => label.startsWith('model/')).map(label => label.slice(6));
-  const types = [
-    ...TASK_TYPES,
-    ...labels.filter(label => label.startsWith('type/')).map(label => label.slice(5)),
-  ];
-  return {
-    models: [...new Set([...models, ...samples.map(sample => sample.model).filter(Boolean)])],
-    taskTypes: [...new Set(types)],
-  };
-}
-
-function collectMergedSamples(repository, prs) {
-  const tagged = prs.filter(pr => classifyPr(pr).tagged);
-  return tagged.map(pr => measurePr(repository, pr));
+  try { return { ok: true, pr: JSON.parse(result.stdout) }; }
+  catch { return { ok: false, error: 'gh 返回不是 JSON' }; }
 }
 
 function stateName(pr) {
+  if (!pr) return '账本有结单';
   if (pr.mergedAt) return '已合并';
   if (pr.isDraft) return 'Draft';
   if (pr.state === 'CLOSED') return '已关闭';
-  return '开放';
+  return pr.state || '开放';
 }
 
-function renderSingleReport(sample, cumulativeRow, unlabelledCount) {
+function renderSingleReport(sample, cumulativeRow, openCount, extra = {}) {
   const lines = [
-    `# PR #${sample.number} 本单成绩`,
+    `# ${sample.number != null ? `PR #${sample.number}` : sample.jobId} 本单成绩`,
     '',
-    `- 标题：${sample.title}`,
-    `- 状态：${stateName(sample)}`,
-    `- 模型：${sample.model || '未标注'}`,
-    `- 任务类：${sample.taskType || '未标注'}`,
+    `- 标题：${extra.title || sample.title || '（账本无标题）'}`,
+    `- 状态：${stateName(extra.pr)}`,
+    `- 模型：${sample.model || '未记录'}`,
+    `- 身份：${sample.identity || '未记录'}`,
+    `- 任务类：${sample.taskType || '未记录'}`,
     `- 返工轮数：${describeRework(sample.rework, sample.judgmentMalformed || [])}`,
-    `- review 条数：${sample.reviewCount ?? 0}`,
-    `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（0 条 review，未审不等于 0 红）' : sample.redFlags}`, 
+    `- 触发方：${sample.triggeredBy || '未记'}`,
+    `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（账本没记红项，未审不等于 0 红）' : sample.redFlags}`,
     '',
     '## 最新累计战绩（含本单）',
     '',
   ];
   if (!sample.tagged) {
-    lines.push('此 PR 缺少 model/* 或 type/* 标签，不能归入模型×任务类累计战绩。');
+    lines.push('此条结单缺模型或工种，不能归入模型×任务类累计战绩。');
   } else {
     lines.push(
       '| 模型 | 任务类 | 样本数 | 平均返工轮数 | 平均红项 | 最近 3 单（返工/红项） |',
@@ -301,7 +277,7 @@ function renderSingleReport(sample, cumulativeRow, unlabelledCount) {
       renderRow(cumulativeRow),
     );
   }
-  lines.push('', `未标注的已合并 PR：${unlabelledCount} 个（未混入战绩）。`);
+  lines.push('', `账本未结单：${openCount} 个（未混入战绩）。`);
   return lines.join('\n');
 }
 
@@ -315,26 +291,33 @@ function parseArgs(argv) {
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const repository = repositoryName();
-  const merged = mergedPullRequests();
-  const unlabelledCount = merged.filter(pr => !classifyPr(pr).tagged).length;
+  const loaded = loadLedgerEvents();
+  if (!loaded.ok) throw new Error(loaded.error);
+  const samples = samplesFromEvents(loaded.events).filter(s => s.tagged);
+  const openCount = openDispatchCount(loaded.events);
+  const models = [...new Set(samples.map(s => s.model).filter(Boolean))];
+  const taskTypes = [...new Set([...TASK_TYPES, ...samples.map(s => s.taskType).filter(Boolean)])];
 
   if (args.pr === null) {
-    const samples = collectMergedSamples(repository, merged);
-    const known = combinations(labelCatalog(), samples);
-    console.log(renderFullReport(buildRows(samples, known.models, known.taskTypes), unlabelledCount, repository));
+    console.log(renderFullReport(buildRows(samples, models, taskTypes), openCount, 'ledger/events'));
     return;
   }
 
-  const targetPr = pullRequest(args.pr);
-  const target = measurePr(repository, targetPr);
-  const samples = collectMergedSamples(repository, merged);
-  if (target.tagged && !samples.some(sample => sample.number === target.number)) samples.push(target);
-  const row = target.tagged
-    ? buildRows(samples, [target.model], [target.taskType])
-      .find(candidate => candidate.model === target.model && candidate.taskType === target.taskType)
-    : null;
-  console.log(renderSingleReport(target, row, unlabelledCount));
+  const related = samplesFromEvents(loaded.events).filter(s => s.number === args.pr);
+  if (related.length === 0) {
+    console.log(`# PR #${args.pr} 本单成绩\n\n- ${describeNoEvents(args.pr)}`);
+    return;
+  }
+  const gh = tryGhPrTitle(args.pr);
+  const extra = gh.ok ? { pr: gh.pr, title: gh.pr.title } : { title: `（GitHub 标题没查成：${gh.error}）` };
+  const blocks = related.map(target => {
+    const row = target.tagged
+      ? buildRows(samples.some(s => s.jobId === target.jobId) ? samples : [...samples, target], [target.model], [target.taskType])
+        .find(candidate => candidate.model === target.model && candidate.taskType === target.taskType)
+      : null;
+    return renderSingleReport(target, row, openCount, extra);
+  });
+  console.log(blocks.join('\n\n'));
 }
 
 const isDirectRun = process.argv[1]

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T23:24:05+08:00",
+  "machine": "backfill",
+  "seq": 56,
+  "job_id": "gh-pr-505",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #505；[pi] 链C活性判据换真证据：spinner 骗不过新判据（Closes #500 #492 #471 #476）；判定行红 0 项",
+  "pr_number": 505,
+  "source": "github-backfill",
+  "event_id": "a2db46310fd321a9316db0aacb693e979a2b39cfa6ac6ce46e8d09e32dcdb3f6"
+}

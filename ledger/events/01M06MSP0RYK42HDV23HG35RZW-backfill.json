@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T09:18:55+08:00",
+  "machine": "backfill",
+  "seq": 144,
+  "job_id": "gh-pr-574",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #574；[grok] #573 固化身份体系：gh-as 正式版 + 审官改走 approve；判定行红 0 项",
+  "pr_number": 574,
+  "source": "github-backfill",
+  "event_id": "f6b23edf06449ffd80a204a34dfe776fcf5aa861e4c23a38ef98a2e78715330f"
+}
