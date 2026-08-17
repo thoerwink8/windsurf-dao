@@ -7,6 +7,7 @@
 // ⑦waitReady / finalizeEnsure 故障注入（超时与夺回失败必须 ok:false 非零）
 // 判别力：READY 历史行当活、或超时仍 ok:true，必有一条变红。
 
+const fs = require('fs');
 const path = require('path');
 
 const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'inbox-station.mjs');
@@ -235,6 +236,13 @@ async function main() {
     const e = S.parseOrcaStdout('noise\n{"ok":true,"result":{"x":1}}\n');
     check('stdout 夹杂时取 JSON', e.ok === true && e.json.result.x === 1);
     check('空 stdout 失败', S.parseOrcaStdout('').ok === false);
+    const plain = fs.readFileSync(path.join(__dirname, 'fixtures', 'orca-json', 'terminal-send-plaintext.txt'), 'utf8');
+    const sent = S.parseOrcaStdout(plain);
+    check('Sent N bytes to term_ 判成功（#580 真语料）', sent.ok === true && sent.sentPlaintext === true && sent.bytes === 11, JSON.stringify(sent));
+    check('Sent N bytes 归一成 result.send.accepted', sent.json?.result?.send?.accepted === true);
+    const jsonSend = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'orca-json', 'terminal-send.json'), 'utf8'));
+    const parsedJson = S.parseOrcaStdout(JSON.stringify(jsonSend));
+    check('send --json 信封过解析', parsedJson.ok === true && parsedJson.json.result.send.accepted === true);
   }
 
   console.log('\n=== ⑥ 重建命令串 / 现状 JSON ===');
