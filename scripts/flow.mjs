@@ -74,9 +74,11 @@ import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
-  writeJobDispatch, writeJobClosed, workerJobId,
+  writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
+  scopeOverridesFor, linkAliasesToSuccessor,
 } from './lib/ledger-job.mjs';
+import { readLedgerEvents } from './lib/ledger-query.mjs';
 import {
   recordStartupRevision, checkGuardRevision, formatRevisionAlarm, attachRevision,
 } from './lib/guard-revision.mjs';
@@ -99,10 +101,22 @@ function ledgerTs(input) {
   catch { return beijingIsoFrom(new Date()); }
 }
 
+function ledgerEventsOrEmpty(ctx) {
+  const listed = readLedgerEvents(ctx.dir);
+  return listed.unscanned ? [] : listed.events;
+}
+
 function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
   if (dryRun) return '';
   const ctx = ledgerCtx();
-  const stats = verdictStatsFromReviews(reviews);
+  const events = ledgerEventsOrEmpty(ctx);
+  const issueNumber = ticketIssueNumber(pr);
+  const overrides = scopeOverridesFor(events, {
+    jobId: workerJobId(pr.number),
+    prNumber: pr.number,
+    issueNumber,
+  });
+  const stats = verdictStatsFromReviews(reviews, { overrides });
   const last = [...(reviews || [])].reverse().find(r => r && (r.submittedAt || r.submitted_at));
   const ts = ledgerTs((last && (last.submittedAt || last.submitted_at)) || new Date());
   const payload = {
@@ -115,7 +129,9 @@ function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
     workerRework: stats.workerRework,
     marshalRounds: stats.marshalRounds,
     triggeredBy: stats.triggeredBy,
-    extra: { source: 'flow' },
+    attributionSource: stats.attributionSource,
+    attributionNote: stats.attributionNote,
+    extra: { source: 'flow', issue_number: issueNumber },
   };
   const cls = classifyPr(pr);
   if (cls.model) {
@@ -128,9 +144,19 @@ function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
       workType: cls.taskType || '写码',
       terminal: 'flow',
       prNumber: pr.number,
-      extra: { source: 'flow' },
+      extra: { source: 'flow', issue_number: issueNumber },
     });
   }
+  const links = [
+    ...linkAliasesToSuccessor({
+      ctx, ts, events, successorJobId: workerJobId(pr.number),
+      issueNumber, prNumber: pr.number, model: cls.model, identity: '工人',
+    }),
+    ...linkAliasesToSuccessor({
+      ctx, ts, events, successorJobId: reviewerJobId(pr.number),
+      issueNumber, prNumber: pr.number, model: cls.model, identity: '审官',
+    }),
+  ];
   const worker = writeJobClosed({
     ...ctx, ...payload,
     jobId: workerJobId(pr.number),
@@ -147,6 +173,8 @@ function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
     else if (r.skipped) bits.push(`${side}closed已在`);
     else bits.push(`${side}closed已写`);
   }
+  const linked = links.filter(r => r && r.ok && !r.skipped).length;
+  if (linked) bits.push(`接续${linked}`);
   return bits.length ? `（账本 ${bits.join('，')}）` : '';
 }
 
@@ -155,6 +183,8 @@ function noteWorkerMergedLedger(pr, dryRun) {
   const ctx = ledgerCtx();
   const cls = classifyPr(pr);
   const ts = ledgerTs(pr.mergedAt || pr.closedAt || new Date());
+  const events = ledgerEventsOrEmpty(ctx);
+  const issueNumber = ticketIssueNumber(pr);
   if (cls.model) {
     writeJobDispatch({
       ...ctx,
@@ -165,10 +195,18 @@ function noteWorkerMergedLedger(pr, dryRun) {
       workType: cls.taskType || '写码',
       terminal: 'flow',
       prNumber: pr.number,
-      extra: { source: 'flow' },
+      extra: { source: 'flow', issue_number: issueNumber },
     });
   }
-  const r = writeJobClosed({
+  linkAliasesToSuccessor({
+    ctx, ts, events, successorJobId: workerJobId(pr.number),
+    issueNumber, prNumber: pr.number, model: cls.model, identity: '工人',
+  });
+  linkAliasesToSuccessor({
+    ctx, ts, events, successorJobId: reviewerJobId(pr.number),
+    issueNumber, prNumber: pr.number, model: cls.model, identity: '审官',
+  });
+  const worker = writeJobClosed({
     ...ctx,
     ts,
     jobId: workerJobId(pr.number),
@@ -176,11 +214,27 @@ function noteWorkerMergedLedger(pr, dryRun) {
     rework: false,
     mergedBy: cls.model || 'unknown',
     prNumber: pr.number,
-    extra: { source: 'flow' },
+    extra: { source: 'flow', issue_number: issueNumber },
   });
-  if (!r.ok) return `（账本 工人closed失败:${r.error}）`;
-  if (r.skipped) return '（账本 工人closed已在）';
-  return '（账本 工人closed已写）';
+  const hasReviewDispatch = events.some(e => e && e.type === 'job.dispatch' && e.job_id === reviewerJobId(pr.number));
+  const reviewer = hasReviewDispatch ? writeJobClosed({
+    ...ctx,
+    ts,
+    jobId: reviewerJobId(pr.number),
+    success: true,
+    rework: false,
+    mergedBy: 'reviewer',
+    prNumber: pr.number,
+    extra: { source: 'flow', issue_number: issueNumber },
+  }) : null;
+  const bits = [];
+  for (const [side, r] of [['工人', worker], ['审官', reviewer]]) {
+    if (!r) continue;
+    if (!r.ok) bits.push(`${side}closed失败:${r.error}`);
+    else if (r.skipped) bits.push(`${side}closed已在`);
+    else bits.push(`${side}closed已写`);
+  }
+  return bits.length ? `（账本 ${bits.join('，')}）` : '';
 }
 
 // ══════════════════════════════════════════════════════════════════════

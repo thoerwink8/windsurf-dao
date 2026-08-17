@@ -2511,7 +2511,8 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query',
+<<<<<<< HEAD
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend',
   'inbox-collect', 'run-gc', 'ask', 'raw',
 ];
 
@@ -2561,6 +2562,7 @@ export const FLAGS_BY_VERB = {
   'check-help': new Set(['--json', '--help', '-h']),
   'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
+  amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -2645,6 +2647,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   check-help
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
+  amend --issue <号> --why <一句话> [--pr <号>] [--by 帅|用户] [--model <id>]
+                  # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕
 
 notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、

@@ -117,6 +117,8 @@ check("失败样本按 w_conf×model_share 计入（0.9×1）", Math.abs(oneFail
 // F9 用户偏好：override 计 P，explore 不计
 const ov = run({ jobId: "j-p", events: [{ type: "job.override", schema_version: 1, ts: TS, machine: "TEST", seq: 0, event_id: "ov-1", job_id: "j-p", model: FLASH, identity: "协调者", work_type: "写码" }] });
 check("F9：同刻 override → P = 0.5^0 = 1", ov.models[FLASH].features.P === 1, ov.models[FLASH].features.P);
+const ovScope = run({ jobId: "j-ps", events: [{ type: "job.override", schema_version: 1, ts: TS, machine: "TEST", seq: 0, event_id: "ov-s", job_id: "j-ps", model: FLASH, identity: "协调者", work_type: "写码", override_kind: "scope", why: "追加职责" }] });
+check("F9：scope 追加不计入 P", ovScope.models[FLASH].features.P === 0, ovScope.models[FLASH].features.P);
 const ex = run({ jobId: "j-e", events: [{ type: "job.explore", schema_version: 1, ts: TS, machine: "TEST", seq: 0, event_id: "ex-1", job_id: "j-e", model: FLASH, identity: "协调者", work_type: "写码" }] });
 check("F9：explore 不计入 P", ex.models[FLASH].features.P === 0, ex.models[FLASH].features.P);
 
