@@ -85,26 +85,43 @@ function fail(what, howToFix, evidence) {
 function green(line) { greens.push(line); }
 function skip(line) { skips.push(line); }
 
-/** 取测试失败行：只认固定格式前缀「  FAIL  」（各测试套 check() 共用的输出形态），
- * 不按关键词匹配——测试名里带 fail/错误/红 字样的 PASS 行不许冒充失败证据（#566 排查实证）。
+/** 取测试失败行：只认 TAP 的 not ok 行（node --test 的输出形态），不按关键词匹配——
+ * 测试名里带 fail/错误/红 字样的 ok 行不许冒充失败证据（#566 排查实证）。
  * 一套红多条就全列，不许只报第一条（只报头一条会让人以为修完就绿了，然后再红一轮）。
- * 退出非 0 却没标准 FAIL 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
+ * 退出非 0 却没标准 not ok 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
 function extractFailLines(output) {
   const lines = String(output || '').split(/\r?\n/);
-  const fails = lines.filter(l => /^ {2}FAIL  /.test(l));
-  if (fails.length) return fails.map(l => l.trim().slice(0, 200));
+  const fails = lines.filter(l => /^\s{0,4}not ok /.test(l));
+  if (fails.length) return fails.map(l => l.trim().replace(/^not ok \d+ - /, '').slice(0, 200));
   return null;
 }
 
 function failLinesEvidence(output) {
   const fails = extractFailLines(output);
   if (fails) return `测试输出 ${fails.length} 条红：\n${fails.join('\n')}`;
-  return '退出非 0 但没扫到标准「  FAIL  」行——测试崩了或输出格式变了，本次没查成，需人工复现';
+  return '退出非 0 但没扫到标准 not ok 行——测试崩了或输出格式变了，本次没查成，需人工复现';
+}
+
+/** 从 node --test 的 TAP 汇总抽计数（#608：自造 check() runner 退役，改 node:test）。
+ * 每个检查必须自带「零样本报红」：tests=0 就报红。「数到 0」和「没看到样本」输出一样，
+ * 不分开就等于把「这次没查成」记成了「查过没事」。 */
+function parseTapSummary(output) {
+  const g = (re) => { const m = String(output || '').match(re); return m ? Number(m[1]) : null; };
+  return {
+    tests: g(/# tests (\d+)/),
+    pass: g(/# pass (\d+)/),
+    fail: g(/# fail (\d+)/),
+    skipped: g(/# skipped (\d+)/),
+  };
 }
 
 // ── ① 跑 tests/ 下所有测试 ─────────────────────────────────────────
 // 测试是静默失效型部件：坏了没人知道。所以自检必须每套都跑。
 // 自发现：tests/ 下的每一套都跑，没有清单可以漏登记。
+// #608：26 套从自造 check() runner 迁到 node --test（node:test + node:assert），
+// 文件名 *.test.js 即 node --test 默认发现规则；此处按同一规则扫文件、逐套用
+// node --test 跑（目录参数在本机 Node 上不可靠，逐文件等价且保持逐套粒度），
+// .tests.ps1 仍走 powershell（历史兼容，当前无此类文件）。
 
 function runTests() {
   const dir = join(ROOT, 'tests');
@@ -112,19 +129,28 @@ function runTests() {
     fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
     return;
   }
-  const suites = readdirSync(dir).filter(f => /\.tests\.(js|ps1)$/.test(f)).sort();
+  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f) || /\.tests\.ps1$/i.test(f)).sort();
   if (suites.length === 0) {
     fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
   }
   for (const f of suites) {
     const p = join(dir, f);
-    const r = f.endsWith('.ps1')
+    const r = f.toLowerCase().endsWith('.ps1')
       ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p], { encoding: 'utf8', cwd: ROOT })
-      : spawnSync(process.execPath, [p], { encoding: 'utf8', cwd: ROOT });
+      : spawnSync(process.execPath, ['--test', '--test-reporter=tap', p], { encoding: 'utf8', cwd: ROOT });
     const out = (r.stdout || '') + (r.stderr || '');
-    if (r.status === 0) green(`测试 ${f}`);
-    else fail(`测试红：${f}`, `复现：node tests/${f}`, failLinesEvidence(out));
+    const tap = parseTapSummary(out);
+    if (r.status === 0) {
+      // 零样本报红：node --test 跑了但一条测试都没扫到 = 本次没查成，不是绿。
+      if (tap.tests === 0 || tap.tests == null) {
+        fail(`测试没查成：${f}`, 'node --test 跑了但 0 条测试（发现规则/文件形态变了）', out.slice(0, 200));
+      } else {
+        green(`测试 ${f}（${tap.pass ?? '?'} 过 / ${tap.fail ?? 0} 红 / ${tap.skipped ?? 0} 跳过 / ${tap.tests} 条）`);
+      }
+    } else {
+      fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
+    }
   }
 }
 
