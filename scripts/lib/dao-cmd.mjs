@@ -552,6 +552,18 @@ export function extractHandleFromCreate(json) {
     || null;
 }
 
+/** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
+ * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
+export function extractTerminalSend(json) {
+  const s = json?.result?.send;
+  if (!s || s.accepted !== true) return null;
+  return {
+    handle: s.handle ?? null,
+    accepted: true,
+    bytesWritten: Number.isFinite(s.bytesWritten) ? s.bytesWritten : null,
+  };
+}
+
 /** 真返回在 result.task.id。result.id / 顶层 id 是 RPC id，不能当 taskId（#497/#502）。 */
 export function extractTaskId(json) {
   return json?.result?.task?.id || null;

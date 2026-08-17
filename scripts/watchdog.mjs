@@ -42,8 +42,11 @@
 //   8. naming       —— 任务卡命名不合规（#476：顶层 #N - 动宾短语 / 子卡 #N - xxx·yyy）。
 //                      #569 降噪：master 卡（isMainWorktree）与「无 agent 且无 #N 前缀」的非任务卡
 //                      不参与命名校验（windsurf-dao 这类 review 工作区不是任务卡，报它=假阳）
-//   9. flow-stalled / stagnation —— 读 flow.mjs 心跳（#497 立约 _flow/heartbeat.json）：
-//                       心跳 ts 太旧 = flow 停摆；在途 PR 停留超 N = 该发生而没发生（#471）
+//   9. flow-stalled / flow-absent / stagnation —— 读 flow 心跳（#497 立约，#580 补写入）：
+//                       三态三话：心跳新鲜 / 心跳过期 / 心跳从未存在。
+//                       过期 = flow-stalled；从未存在且有待流转对象 = flow-absent
+//                       （判据锚在「该发生的事有没有发生」，不锚进程名，#480 换代后仍成立）。
+//                       无待流转对象时心跳缺失只记 note，不报（假阳会把守卫关掉）。
 //   10. selector      —— 权限确认框停摆指纹（#569 ④）：屏面底部持续出现 N/M:select 选择器提示。
 //                        进程活着、开过工、但卡在等一个永远不会来的人类输入——编排层看一切正常，
 //                        只有屏面底部选择器显形。检测到就报，不自动替它选（选哪个有后果，尤其 reject）
@@ -54,6 +57,9 @@
 //   13. all-idle      —— #575：盘面上有仍在途的任务卡（#N - ，非 in-review/已完成），
 //                        却零 working/waiting 工位。这不是 NO_TARGETS（没样本），是全员卡死。
 //                        in-review + agent=done 的待合并盘面仍报 NO_TARGETS（那是等帅，不是卡死）。
+//   14. retry-loop    —— #580 追加：屏面尾部同一条 5xx/不可用 行连续 N 轮出现，即使真实
+//                        内容在变也报（指纹活证否决正好把「在重试」当成活着）。有新鲜 git
+//                        产出则不报。503 进指纹表是补洞，本判据不依赖认识具体错误串。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
@@ -116,6 +122,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -141,6 +149,9 @@ const ERROR_FINGERPRINTS = [
   'session 已绑定另外的 ai 账号', // reclaude 会话绑定错账号（#471 当日实证）
   'Set up auto mode',      // #464 遗留「弹窗自处理」授权（发 3）
   "Don't show again",      // 同上
+  '503 Service Unavailable',       // #580：codex/pqapi 503，用户先于守卫发现
+  'api_key_registry_unavailable',  // 同上现场原文
+  /unexpected status 5\d\d/i,      // 一般 HTTP 5xx（只加 503 等于等下一次没见过的码）
 ];
 
 // ── 处置矩阵（#471 v0，全部当日实证）───────────────────────────────────
@@ -163,6 +174,9 @@ const DISPOSE_MATRIX = [
   { fp: 'Set up auto mode',                   action: 'send3', label: '发 3（#464 弹窗自处理授权）' },
   { fp: "Don't show again",                   action: 'send3', label: '发 3' },
   { fp: 'Remote Control disconnected 404',    action: 'ignore', label: '忽略（噪音，不阻塞）' },
+  { fp: '503 Service Unavailable',            action: 'keepalive', label: '注入续命（HTTP 5xx）' },
+  { fp: 'api_key_registry_unavailable',       action: 'keepalive', label: '注入续命（registry 不可用）' },
+  { fp: /unexpected status 5\d\d/i,           action: 'keepalive', label: '注入续命（HTTP 5xx）' },
 ];
 
 // ── 参数块（阈值集中一处；迁移路径见 PR #505）──────────────────────────
@@ -179,6 +193,7 @@ const PARAMS = {
   fpLossWindowMs: 10 * 60 * 1000, // 或跨 N 分钟报帅
   stagnationMs: 30 * 60 * 1000,   // flow 心跳里在途 PR 停留超 N → 停滞态报警（#471 处置矩阵补一行）
   heartbeatStaleMs: 5 * 60 * 1000, // flow 心跳 ts 超 N 未更新 = flow 停摆候选
+  retryLoopRounds: 3,       // #580：同一错误行连续 N 轮 = 重试循环（不看屏面是否在滚）
 };
 
 // ── 参数 ─────────────────────────────────────────────────────────────
@@ -257,18 +272,16 @@ function runOrca(cmdArgs) {
     // 拿到 error 就原样透传（live 与快照同形态、错误码不丢，审读红 ② 返工）；
     // 拿不到（spawn 失败/超时/stdout 不是 JSON）再回落 stderr/exit N 字符串。
     if (r.stdout) {
-      try {
-        const parsed = JSON.parse(r.stdout);
-        if (parsed && parsed.error) return { ok: false, error: parsed.error };
-      } catch { /* stdout 不是 JSON，走回落 */ }
+      const parsed = parseOrcaStdout(r.stdout);
+      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
+      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
     }
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200) };
   }
-  try {
-    return { ok: true, json: JSON.parse(r.stdout) };
-  } catch (e) {
-    return { ok: false, error: `orca 输出不是 JSON: ${e.message}` };
-  }
+  const parsed = parseOrcaStdout(r.stdout);
+  if (!parsed.ok) return parsed;
+  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
+  return { ok: true, json: parsed.json };
 }
 
 // 错误详情转可读文本（runOrca 对 orca JSON 错误原样透传结构化 error）。
@@ -471,11 +484,13 @@ function loadSnapshotRound(roundDir) {
   //   gh-evidence.json   { <worktreeId>: { ticketOpen: bool, ticket: "pr 505"|"issue 483"|null } }
   //   pr-evidence.json   { <worktreeId>: { number, open: bool, isDraft: bool, reviewDecision } }（#569）
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
+  //   flow-signals.json  { prs: [{ number, comments, reviews }] }（#580：心跳缺失时的待流转证据）
   //   worker-list-evidence.json  { worktrees: [ <worktreeId>, ... ] }（#569 BLIND：dispatch 记账集合）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
   const prEv = readJson('pr-evidence.json');
   const hb = readJson('heartbeat.json');
+  const flowSignals = readJson('flow-signals.json');
   const wlEv = readJson('worker-list-evidence.json');
 
   return {
@@ -487,6 +502,7 @@ function loadSnapshotRound(roundDir) {
     ghEvidence: ghEv || null,
     prEvidence: prEv || null,
     heartbeat: hb || null,
+    flowSignals: flowSignals || null,
     sessionsDir: join(roundDir, 'sessions'),
     dispatchTracked: wlEv && Array.isArray(wlEv.worktrees) ? { tracked: new Set(wlEv.worktrees.filter(Boolean)) } : { missing: true },
   };
@@ -697,7 +713,32 @@ function stationState(state, key) {
     epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
     fpStreak: 0, fpLoss: { persistCount: 0, firstTs: 0, reported: false },
     selStreak: 0, pastedStreak: 0, idleExempt: null,
+    retryLine: null, retryStreak: 0,
   };
+}
+
+// #580 追加：不依赖「认识这条错误」——尾部像 5xx/不可用 的行，去掉时间/ray/hex 后比同一性。
+const RETRY_LINE_RE = /unexpected status\s*5\d\d|status\s*5\d\d|Service Unavailable|api_key_registry_unavailable|\b5\d\d\b.{0,60}unavailable|ECONNRESET|ETIMEDOUT|ENOTFOUND/i;
+
+function normalizeRetryLine(line) {
+  return String(line)
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.Z+-]+/g, 'TS')
+    .replace(/cf-ray:\s*\S+/gi, 'CFRAY')
+    .replace(/[0-9a-f]{8,}/gi, 'HEX')
+    .replace(/\b\d+\b/g, 'N')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function lastRetryLine(lines) {
+  const arr = Array.isArray(lines) ? lines : [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const s = String(arr[i] || '');
+    if (RETRY_LINE_RE.test(s)) return normalizeRetryLine(s);
+  }
+  return null;
 }
 
 function checkPastedContent(t, read, strippedHash, args, st, events, notes) {
@@ -896,6 +937,26 @@ function runRound(source, args, state) {
     // ⑫ Pasted Content 停摆（#575）：任务书折在输入框。照 selector 两连同 + 活证否决；
     // 处置是补回车（当晚已知救活动作，没有「选哪个」的后果）。
     checkPastedContent(t, read, strippedHash, args, st, events, notes);
+
+    // ⑭ 重试循环（#580 追加）：尾部同一条 5xx/不可用 行连续 N 轮，即使真实内容在变也报。
+    // 指纹活证否决会把「在重试」当成活着；本判据不看 strippedHash。有新鲜 git 产出则不报。
+    if (!graded) {
+      const retryLine = lastRetryLine(read.tail);
+      if (retryLine && retryLine === st.retryLine) st.retryStreak += 1;
+      else if (retryLine) { st.retryLine = retryLine; st.retryStreak = 1; }
+      else { st.retryLine = null; st.retryStreak = 0; st.fired.delete('retry-loop'); }
+      if (retryLine && st.retryStreak >= PARAMS.retryLoopRounds && !st.fired.has('retry-loop')) {
+        const w = source.ps.find(x => (Array.isArray(x.agents) ? x.agents : []).some(a => a.paneKey === t.agent.paneKey));
+        const ev = w ? gitEvidenceFor(w, source, args) : { missing: true };
+        const freshGit = !!(ev && ev.lastActivityTs != null && (now - ev.lastActivityTs) <= PARAMS.idleMinutes * 60000);
+        if (freshGit) {
+          notes.push({ name: t.name, type: '观察', detail: `重试行连续 ${st.retryStreak} 轮但 git 产出新鲜——有进展，不报` });
+        } else {
+          st.fired.add('retry-loop');
+          events.push({ name: t.name, type: 'retry-loop', detail: `屏面尾部同一错误行连续 ${st.retryStreak} 轮（「${retryLine.slice(0, 80)}」）——疑似重试循环，真实内容在变也不算进展（#580；503 审官哑火实证）` });
+        }
+      }
+    }
 
     // ④ 停摆判据（#500 换代）：
     //    主判据 = 非 spinner 真实内容连续 N 轮不变（strippedHash 不变）。
@@ -1099,24 +1160,118 @@ function runWorktreePass(source, args, state) {
   return { events, notes };
 }
 
-// ── flow 心跳消费端（#471 停滞态/帅停摆 + flow 停摆；契约由 #497 立约）──
-// 读 _flow/heartbeat.json：ts 太旧 = flow 停摆；在途 PR 停留超 N = 该发生而没发生
-// （下一步该帅做而帅没做）。文件缺失 = flow 未在跑（打印 HEARTBEAT_MISSING 不报警，
-// 由 dao-check ⑧ 心跳闸兜底；缺样本 ≠ 查过没事）。
+// ── flow 心跳消费端（#471 停滞态 + #580 从未存在）──
+// 三态三话：心跳新鲜 / 心跳过期 / 心跳从未存在。
+// 文件缺失不再一律 note：有待流转对象（完工未起审官 / 判定行未处置）必须报。
+// 待流转没查成 ≠ 没有待流转（仓规：没查成不许当查过没事）。
+function loadPendingFlow(source, args) {
+  if (args.snapshotDir) {
+    if (!source.flowSignals) return { scanned: false, items: [], why: '快照无 flow-signals.json' };
+    const raw = Array.isArray(source.flowSignals.prs) ? source.flowSignals.prs : [];
+    const prs = raw.map(pr => ({
+      number: pr.number,
+      comments: commentsForPendingScan(pr),
+      reviews: pr.reviews || [],
+    }));
+    return { scanned: true, items: pendingFlowItems(prs) };
+  }
+  return scanPendingFlowLive();
+}
+
+function mapGhComments(raw) {
+  return (Array.isArray(raw) ? raw : []).map(c => ({
+    id: c.id,
+    body: c.body || '',
+    createdAt: c.created_at || c.createdAt || '',
+  }));
+}
+
+function mapGhReviews(raw) {
+  return (Array.isArray(raw) ? raw : []).map(rv => ({
+    id: rv.id,
+    body: rv.body || '',
+    submittedAt: rv.submitted_at || rv.submittedAt || '',
+  }));
+}
+
+function scanPendingFlowLive() {
+  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body'], { encoding: 'utf8', timeout: 20000 });
+  if (list.error || list.status !== 0) {
+    return { scanned: false, items: [], why: `gh pr list 失败：${String(list.error?.message || list.stderr || `exit ${list.status}`).trim().slice(0, 120)}` };
+  }
+  let prs;
+  try { prs = JSON.parse(list.stdout || ''); }
+  catch (e) { return { scanned: false, items: [], why: `gh pr list 不是 JSON：${e.message}` }; }
+  if (!Array.isArray(prs)) return { scanned: false, items: [], why: 'gh pr list 不是数组' };
+
+  const repoR = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], { encoding: 'utf8', timeout: 15000 });
+  if (repoR.error || repoR.status !== 0) {
+    return { scanned: false, items: [], why: `gh repo view 失败：${String(repoR.error?.message || repoR.stderr || `exit ${repoR.status}`).trim().slice(0, 120)}` };
+  }
+  let repo;
+  try { repo = JSON.parse(repoR.stdout || '').nameWithOwner; }
+  catch (e) { return { scanned: false, items: [], why: `gh repo view 不是 JSON：${e.message}` }; }
+  if (!repo) return { scanned: false, items: [], why: 'gh repo view 缺 nameWithOwner' };
+
+  const packed = [];
+  for (const pr of prs) {
+    const ticket = ticketIssueNumber(pr) || pr.number;
+    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${ticket}/comments`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    if (c.error || c.status !== 0) {
+      return { scanned: false, items: [], why: `读 issue #${ticket} comments 失败（PR #${pr.number} 署名单）` };
+    }
+    const r = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    if (r.error || r.status !== 0) {
+      return { scanned: false, items: [], why: `读 PR #${pr.number} reviews 失败` };
+    }
+    let comments, reviews;
+    try { comments = JSON.parse(c.stdout || '[]'); }
+    catch (e) { return { scanned: false, items: [], why: `issue #${ticket} comments 不是 JSON：${e.message}` }; }
+    try { reviews = JSON.parse(r.stdout || '[]'); }
+    catch (e) { return { scanned: false, items: [], why: `PR #${pr.number} reviews 不是 JSON：${e.message}` }; }
+    packed.push({ number: pr.number, comments: mapGhComments(comments), reviews: mapGhReviews(reviews) });
+  }
+  return { scanned: true, items: pendingFlowItems(packed) };
+}
+
 function checkHeartbeat(source, args, state) {
   const events = [];
   const notes = [];
   const st = state.heartbeat ||= { fired: new Set() };
   let hb = null;
-  const missNote = (why) => notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MISSING: ${why}——flow 心跳项没查成，不是扫完 0（dao-check ⑧ 会红）` });
+  let absent = false;
+  let absentWhy = '';
   if (args.snapshotDir) {
     hb = source.heartbeat;
-    if (!hb) { missNote('快照无 heartbeat.json'); return { events, notes }; }
+    if (!hb) { absent = true; absentWhy = '快照无 heartbeat.json'; }
   } else {
     const p = args.heartbeatFile || resolve(process.cwd(), '_flow', 'heartbeat.json');
-    if (!existsSync(p)) { missNote('_flow/heartbeat.json 不存在——流转器未在跑'); return { events, notes }; }
-    try { hb = JSON.parse(readFileSync(p, 'utf8')); } catch (e) { notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MALFORMED: ${e.message}` }); return { events, notes }; }
+    if (!existsSync(p)) { absent = true; absentWhy = '_flow/heartbeat.json 不存在'; }
+    else {
+      try { hb = JSON.parse(readFileSync(p, 'utf8')); }
+      catch (e) { notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MALFORMED: ${e.message}` }); return { events, notes }; }
+    }
   }
+
+  if (absent) {
+    const pending = loadPendingFlow(source, args);
+    if (!pending.scanned) {
+      notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MISSING: ${absentWhy}；待流转没查成（${pending.why}）——不是扫完 0` });
+      return { events, notes };
+    }
+    if (pending.items.length === 0) {
+      notes.push({ name: 'flow', type: '观察', detail: `心跳从未存在（${absentWhy}）——无待流转对象，不报` });
+      st.fired.delete('flow-absent');
+      return { events, notes };
+    }
+    if (!st.fired.has('flow-absent')) {
+      st.fired.add('flow-absent');
+      const list = pending.items.map(i => `#${i.number} ${i.kind}`).join('、');
+      events.push({ name: 'flow', type: 'flow-absent', detail: `心跳从未存在——有待流转对象却无人流转（${list}，#580），该发生的事没发生` });
+    }
+    return { events, notes };
+  }
+
   const now = args.now != null ? args.now : Date.now();
   const ts = Date.parse(hb.ts);
   if (!Number.isFinite(ts)) { notes.push({ name: 'flow', type: '观察', detail: 'HEARTBEAT_MALFORMED: ts 不可解析' }); return { events, notes }; }
@@ -1124,10 +1279,11 @@ function checkHeartbeat(source, args, state) {
   if (now - ts > PARAMS.heartbeatStaleMs) {
     if (!st.fired.has('flow-stalled')) {
       st.fired.add('flow-stalled');
-      events.push({ name: 'flow', type: 'flow-stalled', detail: `流转器心跳 ${ageMin} 分钟未更新——flow 停摆候选（该发生而没发生，#471），恢复：重启 flow.mjs` });
+      events.push({ name: 'flow', type: 'flow-stalled', detail: `心跳过期：流转器心跳 ${ageMin} 分钟未更新——flow 停摆候选（该发生而没发生，#471），恢复：重启 flow.mjs` });
     }
   } else {
     st.fired.delete('flow-stalled');
+    notes.push({ name: 'flow', type: '观察', detail: `心跳新鲜（${Math.round((now - ts) / 1000)} 秒前更新）` });
   }
   for (const pr of Array.isArray(hb.prs) ? hb.prs : []) {
     const key = `stagnation-${pr.number}`;

@@ -78,6 +78,7 @@ import {
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, recordPair,
 } from './lib/ledger-job.mjs';
@@ -89,22 +90,6 @@ function errText(e) {
   if (typeof e === 'string') return e;
   if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
   return '';
-}
-
-function parseOrcaStdout(stdout) {
-  const text = String(stdout || '').trim();
-  if (!text) return { ok: false, error: 'orca 无输出' };
-  try {
-    return { ok: true, json: JSON.parse(text) };
-  } catch {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try { return { ok: true, json: JSON.parse(text.slice(start, end + 1)) }; }
-      catch { /* fall through */ }
-    }
-    return { ok: false, error: `orca 输出不是 JSON: ${text.slice(0, 160)}` };
-  }
 }
 
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {

@@ -48,6 +48,8 @@
 // （状态文件为空）即等价于存量清点，存量里已有的完工/判定会被识别并动作，
 // 不会被吞。状态文件 _flow/state.json 只是「已处理信号」游标缓存（GitHub 才是
 // 真相源），可丢可重算：删掉重跑即重新清点。
+// 心跳（#580 补 #497 欠账）：live 每轮写 _flow/heartbeat.json，字段照 watchdog
+// 消费端契约。快照默认不写。三态：新鲜 / 过期 / 从未存在。
 //
 // 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
@@ -73,6 +75,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews, recordPair,
@@ -294,11 +297,10 @@ function runGh(args) {
 function runOrca(args) {
   const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
   if (!r.ok) return { ok: false, error: r.error };
-  try {
-    return { ok: true, json: JSON.parse(r.out) };
-  } catch (e) {
-    return { ok: false, error: `orca 输出不是 JSON：${e.message}` };
-  }
+  const parsed = parseOrcaStdout(r.out);
+  if (!parsed.ok) return parsed;
+  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
+  return { ok: true, json: parsed.json, sentPlaintext: !!parsed.sentPlaintext };
 }
 
 function unwrap(json, pathKey, topKey) {
@@ -513,40 +515,82 @@ function waitTerminalReady(handle, timeoutMs, label) {
   }
 }
 
+function defaultFlowIo() {
+  return { read: readTerminalData, send: (cmd) => runOrca(cmd), sleep };
+}
+
 // 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
 // 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
 // （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
 // 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
 // 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
-function verifyStarted(handle, echoHead, terminalName) {
-  const first = readTerminalData(handle, null);
-  if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
-  const prev = first.terminal.nextCursor;
-  sleep(VERIFY_WAIT_MS);
-  const second = readTerminalData(handle, prev);
+// #580：补回车后再读必须带 cursor（read --cursor 有新输出），整屏 returnedLineCount
+// 几乎永远 > 0，不能当增量。
+export function verifyStarted(handle, echoHead, terminalName, io, baselineCursor) {
+  const ops = io || defaultFlowIo();
+  let prev = baselineCursor;
+  if (prev == null) {
+    const first = ops.read(handle, null);
+    if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
+    prev = first.terminal.nextCursor;
+  }
+  ops.sleep(VERIFY_WAIT_MS);
+  const second = ops.read(handle, prev);
   if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
   if (!echoHead) {
     // --prompt 路径：无回显概念，不补回车，直接 fail-visible
     return { ok: false, error: `注入后无新输出（${terminalName}）——疑似未开工` };
   }
   // send 路径：看回显，无论是否回显都补一记裸回车再验增量
-  const all = readTerminalData(handle, null);
+  const all = ops.read(handle, null);
   const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
   const echoed = tailText.includes(echoHead);
-  runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
-  sleep(VERIFY_WAIT_MS);
-  const third = readTerminalData(handle, null);
+  const afterEnterBase = second.ok && second.terminal.nextCursor != null ? second.terminal.nextCursor : prev;
+  ops.send(['terminal', 'send', '--terminal', handle, '--enter', '--json']);
+  ops.sleep(VERIFY_WAIT_MS);
+  const third = ops.read(handle, afterEnterBase);
   const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
   if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
   return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
 }
 
 // 注入 + 验开工（两步走路径：send 任务文本）
-function injectAndVerify(handle, text, terminalName) {
-  const echoHead = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
-  const sendR = runOrca(['terminal', 'send', '--terminal', handle, '--text', text]);
+// #580 ④ / 审官红 1：send 前先记 cursor，再 send，再从该 cursor 验增量。
+export function injectAndVerify(handle, text, terminalName, io) {
+  const ops = io || defaultFlowIo();
+  const echoHead = String(text || '').replace(/\r?\n/g, ' ').slice(0, 24).trim();
+  const baseline = ops.read(handle, null);
+  if (!baseline.ok) return { ok: false, error: `读终端失败：${baseline.error}` };
+  const prev = baseline.terminal.nextCursor;
+  const sendR = ops.send(['terminal', 'send', '--terminal', handle, '--text', text, '--json']);
   if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  return verifyStarted(handle, echoHead, terminalName);
+  return verifyStarted(handle, echoHead, terminalName, ops, prev);
+}
+
+// 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
+// 心跳缺失时不能拿它们当「有待流转」——那是帅的事（#580 消歧：有条件报）。
+export function isFlowWork(action) {
+  return !!action && (action.kind === 'start-reviewer' || action.kind === 'inject-rework' || action.kind === 'inject-recheck');
+}
+
+// 从 PR 信号列表算出「流转器该做而没人做」的项。watchdog 心跳缺失时用，不猜进程名。
+export function pendingFlowItems(prs) {
+  const items = [];
+  for (const pr of prs || []) {
+    const derived = deriveState(orderedSignals(pr.comments, pr.reviews));
+    const action = pendingAction(derived);
+    if (isFlowWork(action)) items.push({ number: pr.number, kind: action.kind, state: derived.state });
+  }
+  return items;
+}
+
+// 待流转评论源：完工信号在署名 issue，不在 PR 会话（#575 ⑥ / #580 审官红 2）。
+// 给了 issueComments 就用它（快照可造 PR号≠issue号）；没给才退回 comments。
+export function commentsForPendingScan(pr) {
+  if (pr && Object.prototype.hasOwnProperty.call(pr, 'issueComments')) {
+    return Array.isArray(pr.issueComments) ? pr.issueComments : [];
+  }
+  return Array.isArray(pr?.comments) ? pr.comments : [];
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -904,14 +948,17 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
 // 两者都要与「扫完 0 需流转」（正常 OK 行）可区分（仓规：数到 0 和没看到样本不是一回事）。
 function processOneRound(source, state, args) {
   const events = [];
+  const now = Date.now();
+  const hbPrs = [];
+  let pendingCount = 0;
   const routing = loadRouting();
   const toml = routing.ok ? routing.toml : null;
   if (!routing.ok) {
-    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true };
+    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true, heartbeat: emptyHeartbeat(state, now) };
   }
 
   const list = source.listOpenPrs();
-  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true };
+  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true, heartbeat: emptyHeartbeat(state, now) };
   const open = list.prs;
   const openByNumber = new Map(open.map(p => [p.number, p]));
   const records = state.records;
@@ -974,6 +1021,11 @@ function processOneRound(source, state, args) {
     const all = orderedSignals(comments, reviews);
     const derived = deriveState(all);
     const fp = fingerprint(derived);
+    const lastSig = all[all.length - 1];
+    const lastAt = lastSig?.at ? Date.parse(lastSig.at) : Date.parse(pr.updatedAt || pr.createdAt || '');
+    const sinceMs = Number.isFinite(lastAt) ? Math.max(0, now - lastAt) : 0;
+    hbPrs.push({ number: pr.number, state: derived.state, sinceMs });
+    if (pendingAction(derived)) pendingCount += 1;
 
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
@@ -1066,7 +1118,24 @@ function processOneRound(source, state, args) {
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
-  return { events, noTargets, infraError };
+  return {
+    events, noTargets, infraError,
+    heartbeat: {
+      ts: new Date(now).toISOString(),
+      lastWakeSource: 'github-poll',
+      pendingCount,
+      prs: hbPrs,
+    },
+  };
+}
+
+function emptyHeartbeat(state, now) {
+  return {
+    ts: new Date(now || Date.now()).toISOString(),
+    lastWakeSource: 'github-poll',
+    pendingCount: 0,
+    prs: [],
+  };
 }
 
 function lastReviewUrl(reviews) {
@@ -1085,7 +1154,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, ticketIssueNumber };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, parseOrcaStdout, ticketIssueNumber };
 
 let args = null;
 let anyEmitted = false;
@@ -1100,6 +1169,7 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 function runOneRound(source, state) {
+  state.round = (Number(state.round) || 0) + 1;
   const round = processOneRound(source, state, args);
   for (const line of round.events) {
     console.log(line);
@@ -1107,8 +1177,7 @@ function runOneRound(source, state) {
     else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
-  state.round = (state.round || 0) + 1;
-  // #575 ①：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。
+  // #575 ① / #580：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。
   try { writeHeartbeat(heartbeatPath(args.stateFile), heartbeatFromState(state)); }
   catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——本轮心跳没写成`); }
   saveState(args.stateFile, state);
@@ -1126,6 +1195,8 @@ function liveLoop() {
     repo = r.json.nameWithOwner;
   }
   console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
+  try { writeHeartbeat(heartbeatPath(args.stateFile), { ts: new Date().toISOString(), round: 0, lastWakeSource: 'poll', pendingCount: 0, prs: [] }); }
+  catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——启动心跳没写成`); }
   for (;;) {
     const state = loadState(args.stateFile);
     if (state.loadError) {

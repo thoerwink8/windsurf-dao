@@ -1,0 +1,24 @@
+{
+  "prs": [
+    {
+      "number": 582,
+      "title": "[grok] #580 补 flow 心跳与守卫判据",
+      "body": "Closes #580",
+      "comments": [
+        {
+          "id": 9,
+          "body": "完工\n这是 PR 会话上的完工，不算。",
+          "createdAt": "2026-08-17T00:00:00Z"
+        }
+      ],
+      "issueComments": [
+        {
+          "id": 1,
+          "body": "开工。还在写。",
+          "createdAt": "2026-08-17T00:00:00Z"
+        }
+      ],
+      "reviews": []
+    }
+  ]
+}
