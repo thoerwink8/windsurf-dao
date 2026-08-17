@@ -77,11 +77,11 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 判绿且合并完成之后，**由你通知帅「可归档」**：
 
 ```bash
-node scripts/dao.mjs notify --hop "审官→帅" --to run:<你这单的 Run id> \
+node scripts/dao.mjs notify --hop "审官→帅" --to run:<本单 Run id> \
   --subject "可归档：<PR号>" --body "<判绿依据 + 合并结果>"
 ```
 
-（语义是「这单可以归档了」；Run id 从 `orca orchestration run-current` 取，别手抄。）
+（语义是「这单可以归档了」。Run id 从 `orca orchestration worker-show --dispatch {{SOLDIER_DISPATCH_ID}} --json` 的 `result.dispatch.run_id` 取，**不要用 `run-current`**——审官终端上它经常是 null。）
 
 **这条是普通告知，不是结算信号**——不要加 `--type worker_done`。它**不会**把你自己的
 Dispatch 结算掉（编排里那条任务不会因此变 completed）；把普通通知伪装成 `worker_done`

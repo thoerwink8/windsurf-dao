@@ -1165,6 +1165,7 @@ async function main() {
     const parsedContinue = S.parseArgs(['node', 'dao.mjs', 'worker-start', '--task', 't', '--terminal', 'h', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol']);
     check('#559 续 Dispatch：CLI 收 --task+--terminal 不带 --worktree', parsedContinue.task === 't' && parsedContinue.terminal === 'h' && parsedContinue.worktree === undefined, JSON.stringify(parsedContinue));
 
+    check('#593 inbox-collect / run-gc / ask 已登记进 VERBS', S.VERBS.includes('inbox-collect') && S.VERBS.includes('run-gc') && S.VERBS.includes('ask'), S.VERBS.join(','));
     check('#559 ③ reply 已登记进 VERBS', S.VERBS.includes('reply'), S.VERBS.join(','));
     const replyArgs = S.argsOrchestrationReply({ id: 'msg_q1', body: '可以' });
     check('reply 拼 --id + --body', replyArgs.includes('--id') && replyArgs[replyArgs.indexOf('--id') + 1] === 'msg_q1' && replyArgs[replyArgs.indexOf('--body') + 1] === '可以', replyArgs.join(' '));
@@ -1634,6 +1635,8 @@ async function main() {
 
     const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
     const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md'), 'utf8');
+    check('士兵任务书问帅走 dao.mjs ask，并写 ASK_TIMEOUT', /dao\.mjs ask/.test(tmplSoldier) && /ASK_TIMEOUT/.test(tmplSoldier) && /run-current/.test(tmplSoldier));
+    check('审官上报不用 run-current 当地址', /不要用 `run-current`/.test(tmplReviewer) && /worker-show/.test(tmplReviewer));
     check('士兵任务书完工走 dao.mjs worker-done（不是裸 orca send）', /dao\.mjs worker-done/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
     check('审官任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), tmplReviewer.slice(0, 200));
     check('两份任务书都写明「确认送达才准进下一步」', /确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer));

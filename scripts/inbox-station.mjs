@@ -29,11 +29,12 @@
 //   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
+import { planStationRetire, applyStationRetire } from './lib/run-lifecycle.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -106,8 +107,8 @@ export function parseArgs(argv) {
         throw new Error(`未知参数: ${a}`);
     }
   }
-  if (!['ensure', 'relay'].includes(args.cmd)) {
-    throw new Error(`未知命令: ${args.cmd}（只要 ensure / relay）`);
+  if (!['ensure', 'relay', 'retire'].includes(args.cmd)) {
+    throw new Error(`未知命令: ${args.cmd}（只要 ensure / relay / retire）`);
   }
   return args;
 }
@@ -363,19 +364,23 @@ export function parseCheckResult(json) {
   };
 }
 
-export function pickRun(runs, { preferredId, currentId } = {}) {
+export function pickRun(runs, { preferredId, currentId, allowedIds } = {}) {
   const list = Array.isArray(runs) ? runs : [];
   const alive = (r) => r && r.legacy !== 1 && r.legacy !== true && r.id !== 'run_legacy_local';
+  const allowed = allowedIds == null
+    ? null
+    : (allowedIds instanceof Set ? allowedIds : new Set(allowedIds));
+  const allow = (r) => !allowed || allowed.has(r.id);
   if (preferredId) {
     const hit = list.find((r) => r.id === preferredId);
     if (hit) return hit;
   }
   if (currentId) {
-    const hit = list.find((r) => r.id === currentId && alive(r));
+    const hit = list.find((r) => r.id === currentId && alive(r) && allow(r));
     if (hit) return hit;
   }
   return list
-    .filter(alive)
+    .filter((r) => alive(r) && allow(r))
     .slice()
     .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null;
 }
@@ -509,6 +514,26 @@ function listRuns() {
   return { ok: Array.isArray(runs), runs: Array.isArray(runs) ? runs : [], error: r.error };
 }
 
+function listWorkers() {
+  const r = runOrca(['orchestration', 'worker-list', '--json']);
+  if (!r.ok) return { ok: false, error: r.error, workers: [] };
+  const workers = unwrapOrca(r.json, 'workers');
+  return { ok: Array.isArray(workers), workers: Array.isArray(workers) ? workers : [], error: r.error };
+}
+
+function inFlightRunIds(workers) {
+  const ids = new Set();
+  for (const w of Array.isArray(workers) ? workers : []) {
+    if (!w?.runId) continue;
+    const st = w.dispatchStatus;
+    const ws = w.workerState;
+    if (st === 'dispatched' || st === 'running' || ws === 'ready' || ws === 'working' || ws === 'waiting') {
+      ids.add(w.runId);
+    }
+  }
+  return ids;
+}
+
 function currentRunId() {
   const r = runOrca(['orchestration', 'run-current', '--json']);
   if (!r.ok) return null;
@@ -526,8 +551,21 @@ function resolveRunId(preferredId) {
   const listed = listRuns();
   if (!listed.ok && preferredId) return { ok: true, runId: preferredId };
   if (!listed.ok) return { ok: false, error: `run-list 失败: ${errText(listed.error)}` };
-  const picked = pickRun(listed.runs, { preferredId, currentId: currentRunId() });
-  if (!picked) return { ok: false, error: '找不到可绑定的编排 Run（run-list 空或只剩 legacy）' };
+  const workers = preferredId ? { ok: true, workers: [] } : listWorkers();
+  const allowedIds = preferredId ? null : (workers.ok ? inFlightRunIds(workers.workers) : null);
+  const picked = pickRun(listed.runs, {
+    preferredId,
+    currentId: currentRunId(),
+    allowedIds,
+  });
+  if (!picked) {
+    return {
+      ok: false,
+      error: preferredId
+        ? `找不到可绑定的编排 Run（run-list 空或只剩 legacy）`
+        : '没有在途单的 Run，不建台（ensure 不再认最新墓碑，避免实验/孤儿 Run 再起一台）',
+    };
+  }
   return { ok: true, runId: picked.id };
 }
 
@@ -793,16 +831,45 @@ async function cmdRelay(args) {
   }
 }
 
+function cmdRetire(args) {
+  if (!args.run) {
+    console.log(JSON.stringify({ ok: false, error: 'retire 要 --run' }));
+    process.exit(1);
+  }
+  const shown = showRun(args.run);
+  if (!shown.ok) {
+    const text = errText(shown.error);
+    const state = /run_not_found/i.test(text) ? 'run_not_found' : 'unscanned';
+    console.log(JSON.stringify({ ok: false, state, runId: args.run, error: text }));
+    process.exit(1);
+  }
+  const logPath = resolveLogPath(args.log, args.run);
+  const plan = planStationRetire({
+    runId: args.run,
+    coordinatorHandle: shown.run?.coordinator_handle || null,
+    files: [leasePath(logPath), launchFilePath(logPath), logPath],
+  });
+  const applied = applyStationRetire(plan, {
+    closeTerminal: (h) => runOrca(['terminal', 'close', '--terminal', h, '--tab', '--json']),
+    unlink: unlinkSync,
+  });
+  console.log(JSON.stringify(applied));
+  if (!applied.ok) process.exit(1);
+}
+
 function printUsage() {
   console.log(`用法：
   node scripts/inbox-station.mjs ensure [--run <id>] [--log <path>] [--worktree <sel>]
   node scripts/inbox-station.mjs relay  [--run <id>] [--log <path>] [--timeout-ms <n>]
+  node scripts/inbox-station.mjs retire --run <id> [--log <path>]
 
   ensure  幂等保证哑终端 + 中继 + coordinator 归属；全活着秒退，stdout 一行 JSON
           action: rebuild(本 run 无台新建) / restart(本 run 台死了重启) / reject(撞上别的 run 的台)
           身份从 run-show 的 coordinator_handle 取，标题只出不进（改名/重置不影响认台）
+          不传 --run 时只认在途 dispatch 的 Run，不认最新墓碑（#593）
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
-          heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离`);
+          heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
+  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）`);
 }
 
 async function main() {
@@ -819,6 +886,7 @@ async function main() {
     process.exit(0);
   }
   if (args.cmd === 'relay') return cmdRelay(args);
+  if (args.cmd === 'retire') return cmdRetire(args);
   return cmdEnsure(args);
 }
 

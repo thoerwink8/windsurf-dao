@@ -46,7 +46,7 @@ node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件>
 
 ## 纪律
 
-1. 回答对象是派你的人——不要调 AskUserQuestion（会挂死）。问协调者用 `orca orchestration ask`。
+1. 回答对象是派你的人——不要调 AskUserQuestion（会挂死）。问协调者用 `node scripts/dao.mjs ask --question "..."`，不要用 `orca orchestration ask`（超时后屏上继续空转）。
 2. 作为任务主时，用户可直接点卡进终端下指令：如实响应，不装没看见。
 3. 异步/后台任务必须亲手读到终态才停手：收不到通知就自己读输出文件，或前台重跑拿真退出码，禁止把「等不到通知」静默当「已通过」；等待超 15 分钟不就绪就换手段，把欠账写进交付。
 4. 收账一律 `git add <具体路径>`，禁 `-A` 和 `.`（共享工作树会把别人半成品收走）。
