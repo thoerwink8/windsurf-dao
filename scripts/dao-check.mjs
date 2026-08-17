@@ -38,6 +38,8 @@
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
 // ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
+// ⑮ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
+//   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -47,6 +49,7 @@ import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -682,6 +685,13 @@ checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
 checkOpenIssueCount();
+checkCompletionSignalAlive();
+
+function checkCompletionSignalAlive() {
+  const r = checkCompletionSignal({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 

@@ -465,13 +465,13 @@ function findReviewerTerminal(source, pr, rec, workerWt) {
 // ══════════════════════════════════════════════════════════════════════
 
 function loadState(path) {
-  if (!existsSync(path)) return { version: 1, inventoried: false, records: {} };
+  if (!existsSync(path)) return { version: 1, inventoried: false, records: {}, round: 0 };
   try {
     const s = JSON.parse(readFileSync(path, 'utf8'));
     if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
-    return { version: 1, inventoried: !!s.inventoried, records: s.records };
+    return { version: 1, inventoried: !!s.inventoried, records: s.records, round: Number(s.round) || 0 };
   } catch (e) {
-    return { version: 1, inventoried: false, records: {}, loadError: String(e.message) };
+    return { version: 1, inventoried: false, records: {}, round: 0, loadError: String(e.message) };
   }
 }
 
@@ -480,6 +480,37 @@ function saveState(path, state) {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
   renameSync(tmp, path);
+}
+
+/** #575 ① / #497：心跳与状态文件同目录（测试写到 tmp，live 写 _flow/heartbeat.json）。 */
+function heartbeatPath(stateFile) {
+  return join(dirname(stateFile || DEFAULT_STATE), 'heartbeat.json');
+}
+
+function writeHeartbeat(path, payload) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  renameSync(tmp, path);
+}
+
+function heartbeatFromState(state) {
+  const prs = [];
+  for (const rec of Object.values(state.records || {})) {
+    if (!rec || rec.retired || !rec.pendingShuai) continue;
+    prs.push({
+      number: rec.pr,
+      state: rec.pendingShuai.kind || rec.pendingShuai.reason || 'pending',
+      sinceMs: rec.pendingShuai.sinceMs ?? null,
+    });
+  }
+  return {
+    ts: new Date().toISOString(),
+    round: state.round || 0,
+    lastWakeSource: 'poll',
+    pendingCount: prs.length,
+    prs,
+  };
 }
 
 function freshRecord(pr) {
@@ -928,6 +959,10 @@ function runOneRound(source, state) {
     else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
+  state.round = (state.round || 0) + 1;
+  // #575 ①：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。
+  try { writeHeartbeat(heartbeatPath(args.stateFile), heartbeatFromState(state)); }
+  catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——本轮心跳没写成`); }
   saveState(args.stateFile, state);
   return round;
 }

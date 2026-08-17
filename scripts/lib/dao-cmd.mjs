@@ -202,6 +202,33 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   return a;
 }
 
+export function argsWorkerList() {
+  return ['orchestration', 'worker-list', '--json'];
+}
+
+/** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。 */
+export function findDispatchForWorktree(workerListJson, worktreeSel) {
+  const workers = workerListJson?.result?.workers;
+  if (!Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
+  }
+  const sel = String(worktreeSel || '').trim();
+  if (!sel) return { ok: false, error: 'findDispatchForWorktree 没给 worktree' };
+  const hits = workers.filter(w => {
+    const id = String(w?.resource?.worktreeId || '');
+    return id === sel || id.endsWith(`::${sel}`) || id.endsWith(sel);
+  });
+  if (hits.length === 0) {
+    return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
+  }
+  const live = hits.filter(w => w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded');
+  const pick = live[0] || hits[0];
+  if (!pick?.dispatchId) {
+    return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
+  }
+  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, scanned: workers.length };
+}
+
 export function argsWorkerShow({ dispatch } = {}) {
   const a = ['orchestration', 'worker-show'];
   if (dispatch) a.push('--dispatch', dispatch);
@@ -1684,7 +1711,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'send', 'notify', 'reply',
+  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'raw',
 ];
 
@@ -1710,6 +1737,10 @@ export const FLAGS_BY_VERB = {
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'reviewer-create': new Set([
     '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+  ]),
+  'reviewer-attach': new Set([
+    '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
+    '--merge-policy', '--merge-reason', '--comment', '--issue', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
   notify: new Set([
@@ -1772,6 +1803,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
+                  # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* label 同步到 PR（#564：校准数据源）
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
