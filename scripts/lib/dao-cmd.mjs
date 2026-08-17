@@ -508,6 +508,10 @@ export function argsGateList({ task, status, run } = {}) {
   return a;
 }
 
+export function argsTerminalList() {
+  return ['terminal', 'list', '--json'];
+}
+
 export function argsTerminalClose({ terminal, tab } = {}) {
   const a = ['terminal', 'close'];
   if (terminal) a.push('--terminal', terminal);
@@ -1892,6 +1896,92 @@ export function completeWorkerDoneNotify({
   return { ok: true, notified };
 }
 
+function worktreeIdMatches(workerWtId, sel) {
+  const id = String(workerWtId || '');
+  const want = String(sel || '');
+  if (!id || !want) return false;
+  return id === want || id.endsWith(`::${want}`) || id.endsWith(want);
+}
+
+function reviewerHandleFromWorker(w) {
+  return w?.agentTerminalHandle || w?.resource?.terminalHandle || null;
+}
+
+function terminalIsLive(handle, terminals) {
+  if (!handle) return false;
+  if (!Array.isArray(terminals)) return false;
+  const t = terminals.find(x => x && x.handle === handle);
+  if (!t) return false;
+  const st = String(t.status || t.state || '').toLowerCase();
+  if (!st) return true;
+  return !/^(exited|closed|stopped|stale|dead)$/.test(st);
+}
+
+/**
+ * 找可复用审官：工人卡子卡（parentWorktreeId）∩ dispatch 记账。
+ * 不看卡名、不看 PR 号。终端还在 → reuse；没有子卡或终端已关 → create 并写明原因。
+ */
+export function resolveReviewerReuse({
+  parentId,
+  worktrees,
+  workers,
+  terminals,
+} = {}) {
+  if (!parentId) return { ok: false, unscanned: true, error: 'resolveReviewerReuse 没给工人卡 id' };
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktree list 没查成（没查成，不许猜有没有审官卡）' };
+  }
+  if (!Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 没查成（没查成，不许猜 dispatch 记账）' };
+  }
+  if (!Array.isArray(terminals)) {
+    return { ok: false, unscanned: true, error: 'terminal list 没查成（没查成，不许猜终端死活）' };
+  }
+
+  const children = worktrees.filter(w => (w.parentWorktreeId || null) === parentId);
+  const candidates = [];
+  for (const child of children) {
+    const cid = child.id || child.worktreeId;
+    if (!cid) continue;
+    const hits = workers.filter(w => worktreeIdMatches(w?.resource?.worktreeId, cid));
+    if (hits.length === 0) continue;
+    const handle = reviewerHandleFromWorker(hits.find(w => reviewerHandleFromWorker(w)) || hits[0]);
+    candidates.push({
+      worktreeId: cid,
+      handle,
+      live: terminalIsLive(handle, terminals),
+      createdAt: Number(child.createdAt) || 0,
+    });
+  }
+
+  if (candidates.length === 0) {
+    return {
+      ok: true,
+      action: 'create',
+      reason: '工人卡下没有带 dispatch 记账的审官子卡（parentWorktreeId + 记账，不按卡名/PR 号）',
+    };
+  }
+
+  const live = candidates.filter(c => c.live && c.handle).sort((a, b) => b.createdAt - a.createdAt);
+  if (live.length) {
+    const pick = live[0];
+    return {
+      ok: true,
+      action: 'reuse',
+      worktreeId: pick.worktreeId,
+      handle: pick.handle,
+      reason: '复用工人卡下已有审官终端（parentWorktreeId + dispatch 记账，不按 PR 号）',
+    };
+  }
+
+  return {
+    ok: true,
+    action: 'create',
+    reason: '老审官终端已关闭/不存在，允许新建',
+    closedWorktrees: candidates.map(c => c.worktreeId),
+  };
+}
+
 export function postIssueComment({ issue, body, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };
@@ -2397,7 +2487,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
-                  # 原子完工：发完工/返工 comment；首审真调 reviewer-create 起审官；返工不起第二个；两条路径都 notify 审官（投失败即停）
+                  # 原子完工：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端（必须 --worktree）；终端已关才允许新建并写原因；两条路径都 notify（投失败即停）
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）

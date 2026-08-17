@@ -687,6 +687,114 @@ async function main() {
       reworkPlan.ok === true && reworkPlan.round === 'rework' && reworkPlan.shouldCreate === false
       && /^返工完成/.test(reworkPlan.comment),
       JSON.stringify(reworkPlan));
+
+    const parent = 'wt_worker';
+    const parentWt = { id: parent, parentWorktreeId: null };
+    const first = S.resolveReviewerReuse({
+      parentId: parent, worktrees: [parentWt], workers: [], terminals: [],
+    });
+    const afterCreate = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_rev', parentWorktreeId: parent, createdAt: 10, displayName: '随便叫啥' },
+      ],
+      workers: [{
+        dispatchId: 'ctx_r1',
+        resource: { worktreeId: 'wt_rev', terminalHandle: 'term_r' },
+        agentTerminalHandle: 'term_r',
+        terminalState: 'retained',
+      }],
+      terminals: [{ handle: 'term_r', worktreeId: 'wt_rev', status: 'running' }],
+    });
+    const afterRework = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_rev', parentWorktreeId: parent, createdAt: 10, displayName: '随便叫啥' },
+      ],
+      workers: [{
+        dispatchId: 'ctx_r2',
+        resource: { worktreeId: 'wt_rev', terminalHandle: 'term_r' },
+        agentTerminalHandle: 'term_r',
+      }],
+      terminals: [{ handle: 'term_r', worktreeId: 'wt_rev', status: 'running' }],
+    });
+    check('#586 样本① 首审→返工→复核全程只有一个审官卡',
+      first.action === 'create' && afterCreate.action === 'reuse' && afterCreate.worktreeId === 'wt_rev'
+      && afterRework.action === 'reuse' && afterRework.worktreeId === 'wt_rev'
+      && afterRework.handle === 'term_r',
+      JSON.stringify({ first, afterCreate, afterRework }));
+
+    const closed = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_rev_dead', parentWorktreeId: parent, createdAt: 10 },
+      ],
+      workers: [{
+        dispatchId: 'ctx_dead',
+        resource: { worktreeId: 'wt_rev_dead', terminalHandle: 'term_dead' },
+        agentTerminalHandle: 'term_dead',
+      }],
+      terminals: [{ handle: 'term_dead', worktreeId: 'wt_rev_dead', status: 'exited' }],
+    });
+    check('#586 样本② 老审官终端已关闭才允许新建并写原因',
+      closed.action === 'create' && /已关闭|不存在/.test(closed.reason || '')
+      && Array.isArray(closed.closedWorktrees) && closed.closedWorktrees.includes('wt_rev_dead'),
+      JSON.stringify(closed));
+
+    const secondPr = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_rev_590', parentWorktreeId: parent, createdAt: 1, displayName: '#590 - 别的号' },
+      ],
+      workers: [{
+        dispatchId: 'ctx_590',
+        resource: { worktreeId: 'wt_rev_590', terminalHandle: 'term_590' },
+        agentTerminalHandle: 'term_590',
+      }],
+      terminals: [{ handle: 'term_590', worktreeId: 'wt_rev_590', status: 'running' }],
+    });
+    check('#586 样本③ 同一工人换 PR 号不新建审官',
+      secondPr.action === 'reuse' && secondPr.worktreeId === 'wt_rev_590',
+      JSON.stringify(secondPr));
+
+    const namedOnly = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_named', parentWorktreeId: parent, createdAt: 1, displayName: '#1 - 审官·gpt' },
+      ],
+      workers: [],
+      terminals: [],
+    });
+    const bookedAnon = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_aux', parentWorktreeId: parent, createdAt: 1, displayName: '辅助·foo' },
+      ],
+      workers: [{
+        dispatchId: 'ctx_aux',
+        resource: { worktreeId: 'wt_aux', terminalHandle: 'term_aux' },
+        agentTerminalHandle: 'term_aux',
+      }],
+      terminals: [{ handle: 'term_aux', status: 'running' }],
+    });
+    check('#586 找审官不靠卡名：有「审官」二字但无记账 ≠ 审官卡',
+      namedOnly.action === 'create', JSON.stringify(namedOnly));
+    check('#586 找审官不靠卡名：有记账的子卡就算（即使卡名没有审官）',
+      bookedAnon.action === 'reuse' && bookedAnon.worktreeId === 'wt_aux',
+      JSON.stringify(bookedAnon));
+
+    check('#586 worker-done 源码不再用卡名匹配找审官',
+      !/\/审官\//.test(wdFn) && /resolveReviewerReuse/.test(wdFn) && /reuseReviewerOnTerminal/.test(wdFn),
+      wdFn.slice(0, 280));
+    check('#586 复用路径 worker-start 必带审官树 --worktree',
+      /worktree: reviewerWorktreeId/.test(daoSrc586) && /result\.task\.id/.test(daoSrc586),
+      '复用路径要显式 --worktree，task id 取 result.task.id');
   }
 
 
