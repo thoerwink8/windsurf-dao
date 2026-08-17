@@ -50,13 +50,7 @@
 //   10. selector      —— 权限确认框停摆指纹（#569 ④）：屏面底部持续出现 N/M:select 选择器提示。
 //                        进程活着、开过工、但卡在等一个永远不会来的人类输入——编排层看一切正常，
 //                        只有屏面底部选择器显形。检测到就报，不自动替它选（选哪个有后果，尤其 reject）
-//   12. pasted-content—— #575：终端 running + 屏面含 [Pasted Content N chars] + 非 spinner
-//                        内容无增长，持续超阈轮。#574 审官 5711 字符任务书折在输入框，
-//                        worker-start 全绿、一个字没审。处置：补一记回车（与 selector 不同——
-//                        回车没有「选哪个」的后果，是当晚已知救活动作）。
-//   13. all-idle      —— #575：盘面上有仍在途的任务卡（#N - ，非 in-review/已完成），
-//                        却零 working/waiting 工位。这不是 NO_TARGETS（没样本），是全员卡死。
-//                        in-review + agent=done 的待合并盘面仍报 NO_TARGETS（那是等帅，不是卡死）。
+//   12/13. pasted-content / all-idle —— #602 退役：治的是「折叠」这个不存在的病因。
 //   14. retry-loop    —— #580 追加：屏面尾部同一条 5xx/不可用 行连续 N 轮出现，即使真实
 //                        内容在变也报（指纹活证否决正好把「在重试」当成活着）。有新鲜 git
 //                        产出则不报。503 进指纹表是补洞，本判据不依赖认识具体错误串。
@@ -97,8 +91,7 @@
 //
 // 仓规硬约束：
 //   - 输出必须区分「扫完 0 异常」（打印一行 OK 汇总，含扫描工位数）、
-//     「没扫到任何工位」（NO_TARGETS）与「有在途卡却零活工位」（ALL_IDLE，#575）——
-//     数到 0、没看到样本、全员卡死，三件事不是一回事。
+//     「没扫到任何工位」（NO_TARGETS）与「扫完 0 异常」（OK）必须分开。
 //   - 检测逻辑只用外部证据（orca 官方输出 / git / gh / flow 心跳文件 / 快照语料），
 //     不碰工人的自报（lastAssistantMessage 一律不读）。
 //   - 监视对象每轮从 ps 自动枚举 working/waiting 态 agent，无手动名单。
@@ -194,7 +187,7 @@ const PARAMS = {
   orphanStaleMinutes: 30,   // 孤儿次判据：无活跃执行者且无关联时，静置 N 分钟才报
   selectorRounds: 2,        // 权限确认框停摆（#569 ④）：屏面底部 N/M:select 持续 N 轮才报（
                             // 两连同，与指纹同口径；真阳#568 实证：卡 7 分钟没人应）
-  pastedRounds: 2,          // #575 Pasted Content 停摆：屏面含 [Pasted Content N chars] 持续 N 轮才报
+
   namingTop: /^#\d+ - /,        // 顶层任务卡：#<PR号> - 动宾短语（SKILL 拓扑节）
   namingSub: /^#\d+ - .+·/,     // 子卡（审官/辅助）：#<PR号> - xxx·yyy
   fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471）
@@ -545,8 +538,6 @@ function actionCommands(handle, action) {
       return [{ send: { handle, text: '看门狗续命：检测到连接波动，请继续当前任务', enter: true } }];
     case 'send3':
       return [{ send: { handle, text: '3', enter: true } }];
-    case 'send-enter':
-      return [{ send: { handle, text: '', enter: true } }];
     case 'reclaude-branch':
       return [
         { send: { handle, text: '/branch', enter: true } },
@@ -610,29 +601,6 @@ function isGradedExcluded(a, args) {
 
 function isTaskCard(w) {
   return /^#\d+ - /.test(String(w.displayName || ''));
-}
-
-/** 仍在途、还该有活工人的任务卡。in-review/completed = 已交付等下一环，不算卡死。 */
-function expectsLiveWorker(w, args) {
-  if (!w || w.isArchived === true) return false;
-  if (w.isMainWorktree === true) return false;
-  if (args.selfWorktree && w.worktreeId === args.selfWorktree) return false;
-  if (!isTaskCard(w)) return false;
-  const st = String(w.workspaceStatus || '');
-  if (st === 'in-review' || st === 'completed' || st === 'done') return false;
-  return true;
-}
-
-function terminalsForWorktree(w, source) {
-  const list = Array.isArray(source.terminals) ? source.terminals : [];
-  return list.filter(t => t && t.handle && (t.worktreeId === w.worktreeId || t.worktreePath === w.path));
-}
-
-const PASTED_CONTENT_FP = /\[Pasted Content \d+ chars?\]/i;
-
-function matchPastedContent(text) {
-  const m = String(text || '').match(PASTED_CONTENT_FP);
-  return m ? m[0] : null;
 }
 
 // git 证据：live 现查；快照读 git-evidence.json；都没有 → { missing: true }（判据显式没查成）。
@@ -776,7 +744,7 @@ function stationState(state, key) {
   return state.stations[key] ||= {
     epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
     fpStreak: 0, fpLoss: { persistCount: 0, firstTs: 0, reported: false },
-    selStreak: 0, pastedStreak: 0, idleExempt: null,
+    selStreak: 0, idleExempt: null,
     retryLine: null, retryStreak: 0,
   };
 }
@@ -805,55 +773,6 @@ function lastRetryLine(lines) {
   return null;
 }
 
-function checkPastedContent(t, read, strippedHash, args, st, events, notes) {
-  if (t.graded) return;
-  const pasted = matchPastedContent(normLines(read.tail));
-  const running = read.status === 'running';
-  const realChanged = st.lastHash != null && strippedHash !== st.lastHash;
-  if (pasted && running) {
-    st.pastedStreak += 1;
-    if (st.pastedStreak >= PARAMS.pastedRounds && !st.fired.has('pasted-content')) {
-      if (realChanged) {
-        notes.push({ name: t.name, type: '观察', detail: `屏面含「${pasted}」持续 ${st.pastedStreak} 轮但非 spinner 真实内容在动——活证否决，不唤醒` });
-      } else {
-        st.fired.add('pasted-content');
-        events.push({
-          name: t.name,
-          type: 'pasted-content',
-          detail: `终端 running 且屏面「${pasted}」持续 ${st.pastedStreak} 轮、非 spinner 内容无增长——任务书折在输入框（#575；#574 审官 5711 字符实证：全链路返回值皆绿、一个字没审）。补一记回车是已知救活动作`,
-        });
-        if (args.disposeActions) {
-          executeDispose(t, { action: 'send-enter', label: '补一记回车（Pasted Content 停摆）' }, normLines(read.tail), !args.snapshotDir, events, notes);
-        }
-      }
-    }
-  } else {
-    st.pastedStreak = 0;
-    st.fired.delete('pasted-content');
-  }
-}
-
-function scanIdleCardsForPasted(idleCards, source, args, state, events, notes) {
-  for (const w of idleCards) {
-    for (const term of terminalsForWorktree(w, source)) {
-      const t = {
-        key: `${w.worktreeId || w.path || '?'}|idle|${term.handle}`,
-        name: w.displayName || '?',
-        handle: term.handle,
-        agent: { state: 'idle' },
-        incarnationId: term.incarnationId ?? null,
-        graded: false,
-      };
-      const st = stationState(state, t.key);
-      const read = source.readTerminal(t.handle);
-      if (read.error) continue; // 卡死报警已经打了，读屏失败不另起 read-failed 刷屏
-      const strippedHash = sha256(stripChrome(normLines(read.tail)));
-      checkPastedContent(t, read, strippedHash, args, st, events, notes);
-      st.lastHash = strippedHash;
-    }
-  }
-}
-
 function runRound(source, args, state) {
   const targets = [];
   for (const w of source.ps) {
@@ -877,18 +796,7 @@ function runRound(source, args, state) {
   const events = [];
   const notes = []; // 活证否决/守卫降级的观察行：打印但不唤醒
   if (targets.length === 0) {
-    const idleCards = source.ps.filter(w => expectsLiveWorker(w, args));
-    if (idleCards.length === 0) {
-      return { noTargets: true, targets, events, notes };
-    }
-    const names = idleCards.map(w => w.displayName).join('、');
-    events.push({
-      name: '盘面',
-      type: 'all-idle',
-      detail: `盘面有 ${idleCards.length} 张仍在途的任务卡（${names}）却零 working/waiting 工位——不是没查成，是全员卡死（#575；#574 当晚审官折在输入框 + 工人 idle = 零活工位，旧口径每轮把这事当成没样本）`,
-    });
-    scanIdleCardsForPasted(idleCards, source, args, state, events, notes);
-    return { allIdle: true, noTargets: false, targets, events, notes };
+    return { noTargets: true, targets, events, notes };
   }
 
   const now = nowMs(source, args);
@@ -997,10 +905,6 @@ function runRound(source, args, state) {
         st.fired.delete('selector');
       }
     }
-
-    // ⑫ Pasted Content 停摆（#575）：任务书折在输入框。照 selector 两连同 + 活证否决；
-    // 处置是补回车（当晚已知救活动作，没有「选哪个」的后果）。
-    checkPastedContent(t, read, strippedHash, args, st, events, notes);
 
     // ⑭ 重试循环（#580 追加）：尾部同一条 5xx/不可用 行连续 N 轮，即使真实内容在变也报。
     // 指纹活证否决会把「在重试」当成活着；本判据不看 strippedHash。有新鲜 git 产出则不报。

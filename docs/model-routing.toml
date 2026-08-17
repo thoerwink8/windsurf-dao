@@ -15,9 +15,9 @@ updated = "2026-08-17"
 
 [providers.deepseek]
 cli = "pi"
-default_model = "deepseek-v4-flash"   # 拍板 issue #462：pi 派单默认 flash（~/.pi/agent/settings.json 已手改，本字段固化）；ds-pro 仅限重型任务
-launch = "pi --provider deepseek --model {model}"
-launch_model = "deepseek-v4-flash"
+default_model = "opencode-go/deepseek-v4-flash"   # #602：裸 model 名跨 provider 歧义；日常通道走 og。拍板 issue #462 默认仍是 flash
+launch = "pi --model {model}"
+launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
 DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
 派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
@@ -132,8 +132,8 @@ launch_note = """
 
 [providers.opencode-go]
 cli = "pi"
-launch = "pi --provider opencode-go --model {model}"
-launch_model = "deepseek-v4-flash"
+launch = "pi --model {model}"
+launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
 opencode Go 订阅（2026-08-16 接入）。凭据在 ~/.pi/agent/auth.json 的 `opencode-go` 键——
 Zen 与 Go 在 pi 里是两个独立 provider（`opencode` / `opencode-go`），共用 OPENCODE_API_KEY 环境变量，
@@ -165,7 +165,7 @@ note = "AI 带货视频候选（远期），未接入，无路由。"
 [[models]]
 id = "deepseek-v4-flash"
 provider = "opencode-go"          # 2026-08-16 主通道换成 Go 额度池；应急直连见 [providers.deepseek]
-cli_model = "deepseek-v4-flash"   # 两条通道的真实模型名相同，dao-cmd 拼 launch 时用它
+cli_model = "opencode-go/deepseek-v4-flash"   # #602：裸名跨 provider 歧义，必须带前缀
 roles = ["写码"]
 status = "正式"
 why = "写码类谷时主选；同一模型只留一条记录，战绩不拆两本账；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"
@@ -174,7 +174,7 @@ decided = "2026-08-16"
 [[models]]
 id = "deepseek-v4-pro"
 provider = "opencode-go"
-cli_model = "deepseek-v4-pro"
+cli_model = "opencode-go/deepseek-v4-pro"
 roles = ["判断"]
 status = "正式"
 why = "判断类主选；通道规则唯一落点见 [providers.opencode-go].why（用户拍板 2026-08-16）"

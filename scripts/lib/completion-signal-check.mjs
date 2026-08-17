@@ -11,7 +11,7 @@ import { join } from 'node:path';
 const FILES = {
   flow: 'scripts/flow.mjs',
   judgment: 'scripts/lib/judgment.mjs',
-  brief: 'host/skills/worker-brief/SKILL.md',
+  brief: 'host/skills/dispatch/templates/soldier-book.md',
   dispatch: 'host/skills/dispatch/SKILL.md',
 };
 
@@ -61,13 +61,13 @@ export function checkCompletionSignal({ root, files } = {}) {
     problems.push(`judgment.mjs 缺首行正则 ${JUDGMENT_MARK}（改成 /^已完成/ 就会让 flow 认不出工人评论）`);
   }
   if (!loaded.brief.includes(BRIEF_HEAD)) {
-    problems.push(`worker-brief 没教「${BRIEF_HEAD}」（把「完工」改成「已完成」就会踩这里）`);
+    problems.push(`soldier-book 没教「${BRIEF_HEAD}」（把「完工」改成「已完成」就会踩这里）`);
   }
   if (!loaded.brief.includes(BRIEF_CMD)) {
-    problems.push(`worker-brief 没写发评论命令「${BRIEF_CMD}」`);
+    problems.push(`soldier-book 没写发评论命令「${BRIEF_CMD}」`);
   }
   if (!loaded.brief.includes(BRIEF_EXAMPLE)) {
-    problems.push(`worker-brief 没给格式例子「${BRIEF_EXAMPLE}」`);
+    problems.push(`soldier-book 没给格式例子「${BRIEF_EXAMPLE}」`);
   }
   if (!loaded.dispatch.includes(DISPATCH_MARK) || !loaded.dispatch.includes(DISPATCH_LINE)) {
     problems.push(`dispatch skill 完工信号节没写「${DISPATCH_MARK}」/ ${DISPATCH_LINE}`);
@@ -77,10 +77,10 @@ export function checkCompletionSignal({ root, files } = {}) {
     return {
       fail: [
         `完工信号契约两边对不上 ${problems.length} 处`,
-        'flow 读首行「完工」，worker-brief / dispatch skill 必须教同一句话；改一边必须改另一边',
+        'flow 读首行「完工」，soldier-book / dispatch skill 必须教同一句话；改一边必须改另一边',
         problems.slice(0, 4).join('；'),
       ],
     };
   }
-  return { green: '完工信号契约：worker-brief / flow 都读 issue comment 首行「完工」' };
+  return { green: '完工信号契约：soldier-book / flow 都读 issue comment 首行「完工」' };
 }
