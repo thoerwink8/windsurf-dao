@@ -179,7 +179,7 @@ console.log("\n=== ⑪ NO_TARGETS 与 OK 的区分（数到 0 ≠ 没看到样�
   check("明确打印 NO_TARGETS 警告", /NO_TARGETS/.test(r.out), r.out.trim());
   check("不打出 OK 汇总（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
   check("无关联单证据的树不误报孤儿（查不到≠孤儿，#492）", !/orphan:/.test(r.out), r.out.trim());
-  check("#575：in-review 待合并盘面不报 ALL_IDLE（那是等帅，不是卡死）", !/all-idle:/.test(r.out), r.out.trim());
+  check("#602：in-review 待合并盘面不报 all-idle（该扩判已退役）", !/all-idle:/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑫ --once 只跑单轮 ===");
@@ -526,28 +526,19 @@ console.log("\n=== ㉔ #569 ② pi 静默换 provider：model_change 事件 + �
   check("sessions 目录不存在：显式 PI_SESSIONS_MISSING（没查成≠查过没事），不误报", rm.status === 0 && /PI_SESSIONS_MISSING/.test(rm.out), `${rm.status} ${rm.out.trim()}`);
 }
 
-console.log("\n=== ㉕ #575 Pasted Content 停摆指纹 + ALL_IDLE（全员卡死 ≠ 没样本） ===");
+console.log("\n=== ㉕ #602：Pasted/ALL_IDLE 扩判退役（治错了病） ===");
 {
   const r1 = runWatchdog(path.join(FIXTURES, "pasted-content"), ["--once"]);
-  check("Pasted Content 单轮：退出码 0（未达阈轮，不唤醒）", r1.status === 0, `status=${r1.status}`);
-  check("Pasted Content 单轮：不报 pasted-content", !/pasted-content:/.test(r1.out), r1.out.trim());
+  check("Pasted Content 单轮：不再报 pasted-content", !/pasted-content:/.test(r1.out), r1.out.trim());
 
   const r2 = runMultiRounds(path.join(FIXTURES, "pasted-content", "round-1"), 2);
-  check("Pasted Content 两轮同屏：退出码 1", r2.status === 1, `status=${r2.status}`);
-  check("Pasted Content 两轮同屏：第 2 轮报 pasted-content 且带 5711 chars", /round 2\/2[\s\S]*\[#452 - 看门狗正式版\] pasted-content:.*5711 chars/.test(r2.out), r2.out.trim());
-  check("Pasted Content 处置是补回车（不是只报警）", /动作: 补一记回车（Pasted Content 停摆）：将发送「回车」/.test(r2.out), r2.out.trim());
+  check("Pasted Content 两轮：仍不报 pasted-content，不补回车", !/pasted-content:/.test(r2.out) && !/补一记回车/.test(r2.out), r2.out.trim());
 
   const ra = runWatchdog(path.join(FIXTURES, "all-idle"), ["--once"]);
-  check("ALL_IDLE：in-progress 任务卡 + 零活工位 → 退出码 1（不是 2）", ra.status === 1, `status=${ra.status}`);
-  check("ALL_IDLE：打 all-idle 不打 NO_TARGETS", /all-idle:/.test(ra.out) && !/^NO_TARGETS:/m.test(ra.out), ra.out.trim());
-  check("ALL_IDLE：点得出仍在途的卡名", /#453 - dispatch 顺车修订/.test(ra.out), ra.out.trim());
+  check("原 ALL_IDLE 盘面：回到 NO_TARGETS（exit 2），不打 all-idle", ra.status === 2 && /NO_TARGETS/.test(ra.out) && !/all-idle:/.test(ra.out), ra.out.trim());
 
   const ri1 = runWatchdog(path.join(FIXTURES, "pasted-idle"), ["--once"]);
-  check("idle+Pasted 单轮：报 ALL_IDLE（卡死已显形），未达阈轮不报 pasted-content", ri1.status === 1 && /all-idle:/.test(ri1.out) && !/pasted-content:/.test(ri1.out), ri1.out.trim());
-
-  const ri2 = runMultiRounds(path.join(FIXTURES, "pasted-idle", "round-1"), 2);
-  check("idle+Pasted 两轮：ALL_IDLE + pasted-content 都响（agents=[] 也能扫到折在输入框）",
-    ri2.status === 1 && /all-idle:/.test(ri2.out) && /pasted-content:.*5711 chars/.test(ri2.out), ri2.out.trim());
+  check("idle+Pasted：不报 all-idle / pasted-content", !/all-idle:/.test(ri1.out) && !/pasted-content:/.test(ri1.out), ri1.out.trim());
 }
 
 console.log("\n=== ㉖ #580 追加：503/5xx 指纹 + 重试循环（内容在变也报；有产出不报；stall 不弱） ===");

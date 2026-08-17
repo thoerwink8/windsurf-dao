@@ -72,6 +72,10 @@ import {
   reviewerCardName,
   rollbackReport,
   renderDispatchTemplate,
+  buildSoldierInject,
+  buildReviewerInject,
+  assertInjectText,
+  encodeSendText,
   runGh,
   stampIssueLabels,
   syncPrLabelsFromIssue,
@@ -83,7 +87,7 @@ import {
   postIssueComment,
   postPrComment,
   verifyInjection,
-  verifyInjectionPolling,
+  verifyStartedPolling,
   verifyWorkerStarted,
   verifyReviewerFiles,
   verifyReviewerTree,
@@ -236,7 +240,7 @@ function readOnceHandle(handle) {
 }
 
 /** 开工证明（#559 ⑥）：worker-read --source auto 官方 transcript 源优先。
- * 证明不了（source=terminal）不硬失败——verifyInjection 屏面检查兜底（③单接上后删）。
+ * 证明不了（source=terminal）不硬失败——verifyStartedPolling 降级到屏面稳定轮。
  * 没读成（unscanned）如实上报，不许当成「查过没事」。 */
 function workerStartProof(dispatchId) {
   const r = orca(argsWorkerRead({ dispatch: dispatchId }));
@@ -407,12 +411,11 @@ function cmdDispatch(args) {
   });
   if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
 
-  // #586 阶段二：派工不再建审官卡。选型写进 reviewer/* label，工人完工调 worker-done 起审官。
-  // 士兵任务书不含审官 dispatch id（那时审官还不存在）。
+  // #602：注入只给一行指针 + spec + 参数。换行按 agent 转码（grok 转 ESC+CR），不禁换行；硬闸只有 UTF-8 字节 ≤500。
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? renderDispatchTemplate('soldier-book.md', { SPEC: String(args.spec) })
+      ? encodeSendText(buildSoldierInject({ spec: String(args.spec), issue: args.issue }), workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
@@ -442,15 +445,10 @@ function cmdDispatch(args) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
 
-  // 注入后开工验证（#565 追加，用户拍板：轮询等开工，不是一次性读屏）。
-  // 时序 bug 判例：worker-start 返回时 codex TUI 还在加载 MCP servers，任务书还没渲染，
-  // 「立即读一次」读到非空无 Pasted Content 的屏面就判通过——实际任务书折在输入框几十分钟。
-  // 轮询 + 命中 Pasted Content 自动补回车（terminal send --enter）再重读；仍在 = 真失败才回滚。
-  // 三态分开：started / startedAfterEnter（enter 留痕）/ failed。超时走 probe_wait_ms，不硬编码。
-  const workerInject = verifyInjectionPolling({
+  // 开工验证：等 worker-read 证明。不再为折叠补回车（#602）。
+  const workerInject = verifyStartedPolling({
     dispatchId: created.workerDispatchId,
     readOnce: () => readOnceHandle(created.workerHandle),
-    sendEnter: () => orca(argsTerminalSend({ terminal: created.workerHandle, enter: true })),
     proofOnce: workerStartProof,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
     label: '工人',
@@ -646,12 +644,12 @@ function reuseReviewerOnTerminal({
 
   let reviewerBook;
   try {
-    reviewerBook = renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_DISPATCH_ID: String(soldierDispatchId),
-      MERGE_POLICY: 'auto',
-      MERGE_REASON: '',
-    });
-    reviewerBook = `## 复用审官终端（#586）\n\n同一终端新 Task，不建第二张审官卡。PR #${pr}。\n\n${reviewerBook}`;
+    reviewerBook = encodeSendText(buildReviewerInject({
+      spec: `复用审官终端审 PR #${pr}`,
+      pr: String(pr),
+      soldierDispatchId: String(soldierDispatchId),
+      mergePolicy: 'auto',
+    }), reviewer);
   } catch (e) {
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
@@ -695,10 +693,9 @@ function reuseReviewerOnTerminal({
   try { launch = resolveLaunch({ model: reviewer, routing, root: ROOT }); }
   catch { launch = { provider: 'gpt' }; }
 
-  const reviewerInject = verifyInjectionPolling({
+  const reviewerInject = verifyStartedPolling({
     dispatchId: reviewerDispatchId,
     readOnce: () => readOnceHandle(handle),
-    sendEnter: () => orca(argsTerminalSend({ terminal: handle, enter: true })),
     proofOnce: workerStartProof,
     timeoutMs: probeWaitMs(routing, launch.provider),
     label: '审官',
@@ -1153,7 +1150,10 @@ function cmdWorktreeRm(args) {
 
 function cmdTaskCreate(args) {
   if (!args.spec) fail('task-create 要 --spec');
-  const r = orca(argsTaskCreate({ spec: args.spec }));
+  const spec = encodeSendText(String(args.spec), args.agent);
+  const gate = assertInjectText(spec, { label: 'task-create' });
+  if (!gate.ok) fail(gate.error);
+  const r = orca(argsTaskCreate({ spec }));
   if (!r.ok) {
     if (isRunRequired(r.error)) fail(RUN_REQUIRED_HINT);
     fail(`task-create 失败: ${errText(r.error)}`);
@@ -1352,14 +1352,14 @@ function cmdReviewerCreate(args) {
 
   let reviewerBook = null;
   try {
-    const body = renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_DISPATCH_ID: String(soldierDispatchId),
-      MERGE_POLICY: policy,
-      MERGE_REASON: args.mergeReason ? String(args.mergeReason) : '',
-    });
-    const overlap = (align.masterFiles || []).filter(f => files.includes(f));
-    const alignNote = `你审的分支落后 master ${align.behind} 个 commit，试合${align.conflict ? '有冲突' : '无冲突'}。重点核这 ${align.behind} 个 commit 碰过的文件与本 PR 的交集${overlap.length ? `（${overlap.join(', ')}）` : ''}——那是语义冲突最可能藏身的地方。`;
-    reviewerBook = `## 与 master 对齐（#575 ⑦）\n\n${alignNote}\n\n${body}`;
+    reviewerBook = encodeSendText(buildReviewerInject({
+      spec: `按审官任务书审 PR #${args.pr}`,
+      issue: args.issue,
+      pr: String(args.pr),
+      soldierDispatchId: String(soldierDispatchId),
+      mergePolicy: policy,
+      mergeReason: args.mergeReason,
+    }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
@@ -1383,10 +1383,9 @@ function cmdReviewerCreate(args) {
     failCreated(launched, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
 
-  const reviewerInject = verifyInjectionPolling({
+  const reviewerInject = verifyStartedPolling({
     dispatchId: reviewerDispatchId,
     readOnce: () => readOnceHandle(launched.reviewerHandle),
-    sendEnter: () => orca(argsTerminalSend({ terminal: launched.reviewerHandle, enter: true })),
     proofOnce: workerStartProof,
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     label: '审官',
@@ -1457,7 +1456,7 @@ function cmdReviewerCreate(args) {
 /**
  * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
  * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
- * verifyInjectionPolling（命中 Pasted Content 自动补回车，仍未开工 fail-visible）。
+ * verifyStartedPolling（开工证明）。换行按 agent 转码，不禁换行；硬闸只有 UTF-8 字节 ≤500。
  * 不碰 raw，所以不会绕过开工验证。
  */
 function cmdReviewerAttach(args) {
@@ -1574,16 +1573,20 @@ function cmdReviewerAttach(args) {
 
   let reviewerBook = null;
   try {
-    const body = args.spec
-      ? String(args.spec)
-      : renderDispatchTemplate('reviewer-book.md', {
-        SOLDIER_DISPATCH_ID: String(soldierDispatchId),
-        MERGE_POLICY: policy,
-        MERGE_REASON: args.mergeReason ? String(args.mergeReason) : '',
-      });
-    const overlap = (align.masterFiles || []).filter(f => files.includes(f));
-    const alignNote = `你审的分支落后 master ${align.behind} 个 commit，试合${align.conflict ? '有冲突' : '无冲突'}。重点核这 ${align.behind} 个 commit 碰过的文件与本 PR 的交集${overlap.length ? `（${overlap.join(', ')}）` : ''}——那是语义冲突最可能藏身的地方。`;
-    reviewerBook = `## 与 master 对齐（#575 ⑦）\n\n${alignNote}\n\n${body}`;
+    reviewerBook = encodeSendText(args.spec
+      ? (() => {
+        const gate = assertInjectText(String(args.spec), { label: '审官注入' });
+        if (!gate.ok) throw new Error(gate.error);
+        return String(args.spec);
+      })()
+      : buildReviewerInject({
+        spec: `按审官任务书审 PR #${args.pr}`,
+        issue: args.issue,
+        pr: String(args.pr),
+        soldierDispatchId: String(soldierDispatchId),
+        mergePolicy: policy,
+        mergeReason: args.mergeReason,
+      }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
@@ -1607,10 +1610,9 @@ function cmdReviewerAttach(args) {
     failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
 
-  const reviewerInject = verifyInjectionPolling({
+  const reviewerInject = verifyStartedPolling({
     dispatchId: created.reviewerDispatchId,
     readOnce: () => readOnceHandle(created.reviewerHandle),
-    sendEnter: () => orca(argsTerminalSend({ terminal: created.reviewerHandle, enter: true })),
     proofOnce: workerStartProof,
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     label: '审官',
@@ -1662,6 +1664,7 @@ function cmdSend(args) {
     terminal: args.terminal,
     text: args.text,
     enter: args.enter,
+    agent: args.agent,
   }));
   if (!r.ok) fail(`terminal send 失败: ${errText(r.error)}`);
   emit({ ok: true, json: r.json });

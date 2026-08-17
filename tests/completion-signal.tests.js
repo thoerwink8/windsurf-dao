@@ -1,6 +1,6 @@
-// #575 ⑥ 完工信号契约检查：flow 读的首行「完工」与 worker-brief 教的必须是同一句。
+// #575 ⑥ 完工信号契约检查：flow 读的首行「完工」与 soldier-book 教的必须是同一句。
 // 检查器自己持有标记，不 import flow/judgment 的正则。
-// 负控：把 worker-brief 里的「完工」改成「已完成」必须报红。
+// 负控：把 soldier-book 里的「完工」改成「已完成」必须报红。
 
 const fs = require('fs');
 const path = require('path');
@@ -24,14 +24,14 @@ async function main() {
   const empty = checkCompletionSignal({ root: path.join(REPO, 'tests', 'fixtures', 'no-such-root') });
   check('文件不在 → 没查成（不是绿）', !!empty.fail && /不在|没查/.test(empty.fail[0] + empty.fail[1]), JSON.stringify(empty));
 
-  const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'worker-brief', 'SKILL.md'), 'utf8');
+  const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
   const broken = brief.replaceAll('完工', '已完成');
-  check('负控样本：worker-brief 里已没有「完工」二字', !broken.includes('完工') && broken.includes('已完成'));
+  check('负控样本：soldier-book 里已没有「完工」二字', !broken.includes('完工') && broken.includes('已完成'));
   const mutated = checkCompletionSignal({
     root: REPO,
-    files: { 'host/skills/worker-brief/SKILL.md': broken },
+    files: { 'host/skills/dispatch/templates/soldier-book.md': broken },
   });
-  check('把 worker-brief 的「完工」改成「已完成」→ 必须报红',
+  check('把 soldier-book 的「完工」改成「已完成」→ 必须报红',
     !!mutated.fail && /对不上|已完成|完工/.test(mutated.fail.join(' ')),
     JSON.stringify(mutated));
 

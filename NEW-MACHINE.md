@@ -98,7 +98,7 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --provider opencode-go --model deepseek-v4-flash`；不带 `--provider` 就是应急直连通道。
+- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --model opencode-go/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。
   - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
 - **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
   - 这条止血本身没被验证过——`scripts/watchdog.mjs` 的 model-change 检测（#569 ②，扫 `~/.pi/agent/sessions/**/*.jsonl` 的 model_change 事件）就是验证手段：下次真 503 是当场报错（止血生效）还是又切了（止血失效，检测会报出诱因）。
