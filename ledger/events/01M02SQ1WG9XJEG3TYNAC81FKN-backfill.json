@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T21:27:54+08:00",
+  "machine": "backfill",
+  "seq": 48,
+  "job_id": "gh-pr-497",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #497；[pi] 流转器接管帅位机械动作：flow.mjs 换 orca 原生 + 合并权落地（Closes #480 #478）；判定行红 2 项",
+  "pr_number": 497,
+  "source": "github-backfill",
+  "event_id": "b7413fdfc0bddc3273bb38440561d99b77bb29600bf201fe3f75204d613c58d7"
+}

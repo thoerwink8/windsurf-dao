@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T07:48:57+08:00",
+  "machine": "backfill",
+  "seq": 100,
+  "job_id": "gh-pr-548",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #548；[grok] 组A 派工通道一次改到位；判定行红 1 项",
+  "pr_number": 548,
+  "source": "github-backfill",
+  "event_id": "7687f7609c31d63045186f3b485d9a93bc199aecd0e1dfd6d0b0f4c373b4daf3"
+}

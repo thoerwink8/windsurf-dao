@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T01:36:11+08:00",
+  "machine": "backfill",
+  "seq": 136,
+  "job_id": "gh-pr-571",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #571；569 watchdog 降噪只减假阳不减真阳 + pi 静默换 provider 检测 + 权限确认框指纹 + BLIND 并进；判定行红 0 项",
+  "pr_number": 571,
+  "source": "github-backfill",
+  "event_id": "6f46733832e74fef8af690a429bb585227ae104fb962f3e0e4159efa675cca56"
+}

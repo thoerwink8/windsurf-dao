@@ -1,0 +1,17 @@
+{
+  "type": "job.closed",
+  "schema_version": 1,
+  "ts": "2026-08-16T19:04:28+08:00",
+  "machine": "backfill",
+  "seq": 122,
+  "job_id": "gh-pr-562",
+  "success": true,
+  "rework": false,
+  "usd_cash": 0,
+  "usd_economic": 0,
+  "merged_by": "claude-opus",
+  "pr_number": 562,
+  "red_flags": null,
+  "source": "github-backfill",
+  "event_id": "cc742c1690da3822b386fa3573510b32626d21d7b8ea02ac6bbb1fed4b5b9d93"
+}
