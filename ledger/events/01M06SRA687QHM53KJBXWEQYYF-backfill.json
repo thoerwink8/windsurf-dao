@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T10:45:33+08:00",
+  "machine": "backfill",
+  "seq": 148,
+  "job_id": "gh-pr-578",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #578；[grok] #575 补管道缺口：心跳/raw/守卫/reviewer-attach/Pasted+ALL_IDLE/完工契约/对齐master；判定行红 2 项",
+  "pr_number": 578,
+  "source": "github-backfill",
+  "event_id": "c02af138a8bdc16e85feb2d29f1ba63e6a0369ab0ebbdb66f250a98a3570c4f3"
+}

@@ -1,0 +1,13 @@
+{
+  "expect": "gap",
+  "why": "样本A：GitHub 有带标 PR #999，账本无 job.closed → 必须红",
+  "baselinePr": 0,
+  "newestBuffer": 0,
+  "githubPrs": [
+    {
+      "number": 999,
+      "labels": ["model/grok-4.6", "type/写码"]
+    }
+  ],
+  "events": []
+}

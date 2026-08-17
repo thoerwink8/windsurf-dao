@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T02:22:35+08:00",
+  "machine": "backfill",
+  "seq": 72,
+  "job_id": "gh-pr-514",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #514；[cc] 任务官放权落盘：dispatch 默认 merge-policy auto + SKILL 补任务官一节 (#511)；判定行红 1 项",
+  "pr_number": 514,
+  "source": "github-backfill",
+  "event_id": "be341fde5e9a74e45537c3955662fb91a75f166df9c9811bb4e30c40407b1166"
+}

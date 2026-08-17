@@ -76,6 +76,10 @@ import { createRequire } from 'node:module';
 import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import {
+  writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
+  loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews, recordPair,
+} from './lib/ledger-job.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -89,6 +93,134 @@ const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
 const READY_WAIT_MS = 2000;       // 就绪轮询间隔
 const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
+
+let _ledgerCtx = null;
+function ledgerCtx() {
+  if (!_ledgerCtx) _ledgerCtx = loadLedgerContext({ root: ROOT });
+  return _ledgerCtx;
+}
+
+function ledgerTs(input) {
+  try { return beijingIsoFrom(input || new Date()); }
+  catch { return beijingIsoFrom(new Date()); }
+}
+
+function noteStartReviewerLedger(pr, reviewer, cls, dryRun) {
+  if (dryRun) return '';
+  const written = recordPair({
+    ctx: ledgerCtx(),
+    ts: ledgerTs(pr.updatedAt || pr.createdAt || new Date()),
+    source: 'flow',
+    worker: cls.model ? {
+      jobId: workerJobId(pr.number),
+      model: cls.model,
+      identity: '工人',
+      workType: cls.taskType || '写码',
+      terminal: 'flow',
+      prNumber: pr.number,
+    } : null,
+    reviewer: {
+      jobId: reviewerJobId(pr.number),
+      model: reviewer.id,
+      identity: '审官',
+      workType: '审查',
+      terminal: reviewer.provider || 'flow',
+      prNumber: pr.number,
+    },
+  });
+  const bits = [];
+  for (const [side, r] of [['工人', written.worker], ['审官', written.reviewer]]) {
+    if (!r) continue;
+    if (!r.ok) bits.push(`${side}dispatch失败:${r.error}`);
+    else if (r.skipped) bits.push(`${side}dispatch已在`);
+    else bits.push(`${side}dispatch已写`);
+  }
+  return bits.length ? `（账本 ${bits.join('，')}）` : '';
+}
+
+function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
+  if (dryRun) return '';
+  const ctx = ledgerCtx();
+  const stats = verdictStatsFromReviews(reviews);
+  const last = [...(reviews || [])].reverse().find(r => r && (r.submittedAt || r.submitted_at));
+  const ts = ledgerTs((last && (last.submittedAt || last.submitted_at)) || new Date());
+  const payload = {
+    ts,
+    success: Boolean(success),
+    rework: (stats.workerRework || 0) > 0,
+    prNumber: pr.number,
+    redFlags: stats.redFlags,
+    verdictRounds: stats.verdictRounds,
+    workerRework: stats.workerRework,
+    marshalRounds: stats.marshalRounds,
+    triggeredBy: stats.triggeredBy,
+    extra: { source: 'flow' },
+  };
+  const cls = classifyPr(pr);
+  if (cls.model) {
+    writeJobDispatch({
+      ...ctx,
+      ts,
+      jobId: workerJobId(pr.number),
+      model: cls.model,
+      identity: '工人',
+      workType: cls.taskType || '写码',
+      terminal: 'flow',
+      prNumber: pr.number,
+      extra: { source: 'flow' },
+    });
+  }
+  const worker = writeJobClosed({
+    ...ctx, ...payload,
+    jobId: workerJobId(pr.number),
+    mergedBy: cls.model || 'unknown',
+  });
+  const reviewer = writeJobClosed({
+    ...ctx, ...payload,
+    jobId: reviewerJobId(pr.number),
+    mergedBy: 'reviewer',
+  });
+  const bits = [];
+  for (const [side, r] of [['工人', worker], ['审官', reviewer]]) {
+    if (!r.ok) bits.push(`${side}closed失败:${r.error}`);
+    else if (r.skipped) bits.push(`${side}closed已在`);
+    else bits.push(`${side}closed已写`);
+  }
+  return bits.length ? `（账本 ${bits.join('，')}）` : '';
+}
+
+function noteWorkerMergedLedger(pr, dryRun) {
+  if (dryRun || !pr) return '';
+  const ctx = ledgerCtx();
+  const cls = classifyPr(pr);
+  const ts = ledgerTs(pr.mergedAt || pr.closedAt || new Date());
+  if (cls.model) {
+    writeJobDispatch({
+      ...ctx,
+      ts,
+      jobId: workerJobId(pr.number),
+      model: cls.model,
+      identity: '工人',
+      workType: cls.taskType || '写码',
+      terminal: 'flow',
+      prNumber: pr.number,
+      extra: { source: 'flow' },
+    });
+  }
+  const r = writeJobClosed({
+    ...ctx,
+    ts,
+    jobId: workerJobId(pr.number),
+    success: true,
+    rework: false,
+    mergedBy: cls.model || 'unknown',
+    prNumber: pr.number,
+    extra: { source: 'flow' },
+  });
+  if (!r.ok) return `（账本 工人closed失败:${r.error}）`;
+  if (r.skipped) return '（账本 工人closed已在）';
+  return '（账本 工人closed已写）';
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // 参数
@@ -751,7 +883,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
       if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
       const v = verifyStarted(handle, null, label);
       if (!v.ok) return { ok: false, error: v.error };
-      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
+      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）${noteStartReviewerLedger(pr, reviewer, cls, dryRun)}` };
     }
     const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
     if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
@@ -761,7 +893,7 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
     if (!ready.ok) return { ok: false, error: ready.error };
     const v = injectAndVerify(handle, taskBook, label);
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）` };
+    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）${noteStartReviewerLedger(pr, reviewer, cls, dryRun)}` };
   }
 
   if (action.kind === 'inject-rework') {
@@ -842,7 +974,8 @@ function processOneRound(source, state, args) {
     const st = prView.ok ? (prView.pr.state || '') : '';
     if (st === 'MERGED') {
       rec.retired = true;
-      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）`);
+      const bit = noteWorkerMergedLedger(prView.ok ? prView.pr : null, args.dryRun);
+      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）${bit}`);
     } else if (st === 'CLOSED') {
       rec.retired = true;
       events.push(`[flow] 退役：PR #${rec.pr} CLOSED（未合并关闭）`);
@@ -903,12 +1036,14 @@ function processOneRound(source, state, args) {
       if (action) {
         if (action.kind === 'report-final') {
           // 复核绿 → 报帅终审（终审 + 校准 + 合并归档归帅，本脚本不自动合并）
-          events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并`);
+          const bit = noteJudgmentClosedLedger(pr, reviews, { success: true, dryRun: args.dryRun });
+          events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并${bit}`);
           rec.pendingShuai = { kind: 'report-final', reason: '复核绿待帅终审' };
           rec.actedOn = fp;
         } else if (action.kind === 'report-switch') {
           // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
-          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅`);
+          const bit = noteJudgmentClosedLedger(pr, reviews, { success: false, dryRun: args.dryRun });
+          events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅${bit}`);
           rec.pendingShuai = { kind: 'report-switch', reason: '乒乓两轮仍红待帅换人' };
           rec.actedOn = fp;
         } else {

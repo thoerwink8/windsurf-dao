@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-15T23:24:05+08:00",
+  "machine": "backfill",
+  "seq": 57,
+  "job_id": "gh-pr-505",
+  "model": "deepseek-v4-flash",
+  "identity": "工人",
+  "work_type": "写码",
+  "model_version": "DeepSeek-V4-Flash-0731",
+  "terminal": "pi --provider opencode-go",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "18c6a166c79383222f8b8ee3762afad8ce6bdccd08fa3841a50e9efd49f40506",
+  "pr_number": 505,
+  "source": "github-backfill",
+  "event_id": "15f63b8a24cd3968a6d7c4879517c62ebd72f273f68e554b10b3e3cb0b6102cc"
+}
