@@ -602,6 +602,37 @@ async function main() {
     // wiring：dao.mjs 工人与审官两处注入验证都走轮询（#565 追加第 5 条）。
     const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 工人/审官注入验证两处都走 verifyInjectionPolling', (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 2, daoSrcPoll.slice(0, 80));
+    check('#575 ④ reviewer-attach 也走 verifyInjectionPolling（不另写一份）',
+      (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 3
+      && /function cmdReviewerAttach/.test(daoSrcPoll));
+
+    // 连带验收：6000+ 字符任务书折在输入框 → 自动补回车留痕；仍在 → fail-visible。
+    const LONG = `› [Pasted Content ${'x'.repeat(6000).length} chars]\n`;
+    let enterLong = 0;
+    let readsLong = 0;
+    const longOk = S.verifyInjectionPolling({
+      dispatchId: 'ctx_long',
+      readOnce: () => {
+        readsLong++;
+        return readsLong === 1
+          ? { ok: true, result: { terminal: { tail: [LONG] } } }
+          : { ok: true, result: { terminal: { tail: ['审官已开工\n'] } } };
+      },
+      sendEnter: () => { enterLong++; return { ok: true }; },
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    check('#575 ④ 6000+ 字符 Pasted Content → 自动补回车 startedAfterEnter',
+      longOk.ok === true && longOk.state === 'startedAfterEnter' && enterLong === 1, JSON.stringify(longOk));
+    const longFail = S.verifyInjectionPolling({
+      dispatchId: 'ctx_long_fail',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [LONG] } } }),
+      sendEnter: () => ({ ok: true }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    check('#575 ④ 6000+ 字符补回车后仍在 → failed 不许静默成功',
+      longFail.ok === false && longFail.state === 'failed' && /仍停在输入框/.test(longFail.reason), JSON.stringify(longFail));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
@@ -796,6 +827,48 @@ async function main() {
     });
     check('dao raw 退出跟随子进程', raw.status === 0, raw.stderr || raw.stdout);
     check('dao raw 在 stderr 留痕', /已记账/.test(raw.stderr || ''), raw.stderr);
+
+    const rawJson = spawnSync(process.execPath, [CLI, 'raw', '--', process.execPath, '-e', 'console.log(JSON.stringify({ok:true,id:"t575"}))'], {
+      encoding: 'utf8', cwd: REPO,
+    });
+    let parsedRaw = null;
+    try { parsedRaw = JSON.parse(rawJson.stdout); } catch { parsedRaw = null; }
+    check('#575 ② dao raw stdout 可直接 JSON.parse（记账不污染 stdout）',
+      parsedRaw && parsedRaw.ok === true && parsedRaw.id === 't575', rawJson.stdout);
+    check('#575 ② 记账行在 stderr 不在 stdout',
+      /已记账/.test(rawJson.stderr || '') && !/已记账/.test(rawJson.stdout || ''),
+      `stdout=${rawJson.stdout} stderr=${rawJson.stderr}`);
+
+    const rawSpec = spawnSync(process.execPath, [
+      CLI, 'raw', '--', process.execPath, '-e', 'console.log(JSON.stringify({ok:true}))',
+    ], { encoding: 'utf8', cwd: REPO });
+    let parsedSpec = null;
+    try { parsedSpec = JSON.parse(rawSpec.stdout); } catch { parsedSpec = null; }
+    check('#575 ② 子进程 JSON 不被多行记账拆碎', parsedSpec && parsedSpec.ok === true, rawSpec.stdout);
+
+    check('#575 ④ reviewer-attach 已登记进 VERBS', S.VERBS.includes('reviewer-attach'), S.VERBS.join(','));
+    const attachHelp = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--help'], { encoding: 'utf8', cwd: REPO });
+    check('reviewer-attach 出现在 help', /reviewer-attach/.test(attachHelp.stdout || ''), (attachHelp.stdout || '').slice(0, 200));
+    const attachMiss = spawnSync(process.execPath, [CLI, 'reviewer-attach'], { encoding: 'utf8', cwd: REPO });
+    const pAttach = (() => { try { return JSON.parse(attachMiss.stdout || '{}'); } catch { return {}; } })();
+    check('reviewer-attach 缺 --pr → 非零', attachMiss.status !== 0 && /--pr/.test(String(pAttach.error || attachMiss.stderr || '')), JSON.stringify(pAttach));
+    const attachMissWt = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--pr', '1'], { encoding: 'utf8', cwd: REPO });
+    const pAttachWt = (() => { try { return JSON.parse(attachMissWt.stdout || '{}'); } catch { return {}; } })();
+    check('reviewer-attach 缺 --worktree → 非零', attachMissWt.status !== 0 && /--worktree/.test(String(pAttachWt.error || attachMissWt.stderr || '')), JSON.stringify(pAttachWt));
+    const attachMissRev = spawnSync(process.execPath, [CLI, 'reviewer-attach', '--pr', '1', '--worktree', 'w'], { encoding: 'utf8', cwd: REPO });
+    const pAttachRev = (() => { try { return JSON.parse(attachMissRev.stdout || '{}'); } catch { return {}; } })();
+    check('reviewer-attach 缺 --reviewer → 非零', attachMissRev.status !== 0 && /--reviewer/.test(String(pAttachRev.error || attachMissRev.stderr || '')), JSON.stringify(pAttachRev));
+
+    const wlFx = { result: { workers: [
+      { dispatchId: 'ctx_live', workerState: 'working', dispatchStatus: 'running', resource: { worktreeId: 'repo::C:/wt/worker' } },
+      { dispatchId: 'ctx_old', workerState: 'succeeded', dispatchStatus: 'completed', resource: { worktreeId: 'repo::C:/wt/worker' } },
+    ] } };
+    const foundLive = S.findDispatchForWorktree(wlFx, 'repo::C:/wt/worker');
+    check('findDispatchForWorktree 优先活着的 dispatch', foundLive.ok && foundLive.dispatchId === 'ctx_live', JSON.stringify(foundLive));
+    const foundMiss = S.findDispatchForWorktree(wlFx, 'no-such-tree');
+    check('findDispatchForWorktree 查到 0 条不是没查成', foundMiss.ok === false && !foundMiss.unscanned && foundMiss.scanned === 2, JSON.stringify(foundMiss));
+    const foundBad = S.findDispatchForWorktree({ result: {} }, 'x');
+    check('findDispatchForWorktree 结构不认识 → unscanned', foundBad.ok === false && foundBad.unscanned === true, JSON.stringify(foundBad));
   }
 
   console.log('\n=== 真语料：orca --json 存档必须能被解析函数吃下（#499）===');
@@ -896,6 +969,82 @@ async function main() {
     const missingDir = path.join(os.tmpdir(), `dao-env-missing-${Date.now()}`);
     const ro = S.envProbeWorktree(missingDir);
     check('#546 故意让工作区不可写 → 环境自检红（写探针）', ro.ok === false && (ro.failed || []).includes('write'), JSON.stringify(ro));
+
+    check('#575 ⑦ MERGEABLE → 放行', S.assessPrMergeable('MERGEABLE').ok === true);
+    check('#575 ⑦ CONFLICTING → 拒建树', S.assessPrMergeable('CONFLICTING').ok === false && /rebase master/.test(S.assessPrMergeable('CONFLICTING').error));
+    check('#575 ⑦ UNKNOWN → 没查成，不是绿', S.assessPrMergeable('UNKNOWN').ok === false && S.assessPrMergeable('UNKNOWN').unscanned === true);
+    check('#575 ⑦ 空值 → 没查成', S.assessPrMergeable('').unscanned === true);
+    check('#575 ⑦ 不认识的值 → 没查成', S.assessPrMergeable('DIRTY').unscanned === true);
+
+    const alignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-align-'));
+    const originDir = path.join(alignRoot, 'origin');
+    const workDir = path.join(alignRoot, 'work');
+    fs.mkdirSync(originDir);
+    const envGit = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const g = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: envGit });
+    g(originDir, ['init', '-q', '-b', 'master']);
+    g(originDir, ['config', 'user.email', 't@t']);
+    g(originDir, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'a0\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'base']);
+    g(originDir, ['checkout', '-q', '-b', 'feature']);
+    fs.writeFileSync(path.join(originDir, 'b.txt'), 'b\n');
+    g(originDir, ['add', 'b.txt']);
+    g(originDir, ['commit', '-q', '-m', 'feature']);
+    g(originDir, ['checkout', '-q', 'master']);
+    fs.writeFileSync(path.join(originDir, 'c.txt'), 'c\n');
+    g(originDir, ['add', 'c.txt']);
+    g(originDir, ['commit', '-q', '-m', 'master-ahead']);
+    spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, workDir], { encoding: 'utf8', env: envGit });
+    g(workDir, ['config', 'user.email', 't@t']);
+    g(workDir, ['config', 'user.name', 't']);
+    const headBefore = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const alignOk = S.trialMergeMaster({ cwd: workDir });
+    const headAfter = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const dirty = String(g(workDir, ['status', '--porcelain']).stdout).trim();
+    check('#575 ⑦ 试合无冲突：ok 且落后 ≥1', alignOk.ok === true && alignOk.behind >= 1 && alignOk.conflict === false, JSON.stringify(alignOk));
+    const fakeFail = S.trialMergeMaster({
+      cwd: workDir,
+      runGit: (args) => {
+        if (args[0] === 'merge' && args[1] !== '--abort') return { ok: false, error: 'Author identity unknown' };
+        const { spawnSync } = require('child_process');
+        const r = spawnSync('git', ['-C', workDir, ...args], { encoding: 'utf8' });
+        if (r.error || (r.status !== 0 && r.status != null)) {
+          return { ok: false, error: String(r.stderr || r.status) };
+        }
+        return { ok: true, out: String(r.stdout || '').trim() };
+      },
+    });
+    check('#575 ⑦ merge 非零但无 unmerged → 没查成，不是 conflict',
+      fakeFail.ok === false && fakeFail.unscanned === true && !fakeFail.conflict, JSON.stringify(fakeFail));
+    check('#575 ⑦ 试合后 HEAD 仍是 PR head', headAfter === headBefore, `${headBefore} → ${headAfter}`);
+    check('#575 ⑦ 试合后工作区干净', dirty === '', dirty);
+
+    const clashDir = path.join(alignRoot, 'clash');
+    g(originDir, ['checkout', '-q', 'feature']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'feature-change\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'feature-touch-a']);
+    g(originDir, ['checkout', '-q', 'master']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'master-change\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'master-touch-a']);
+    spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, clashDir], { encoding: 'utf8', env: envGit });
+    g(clashDir, ['config', 'user.email', 't@t']);
+    g(clashDir, ['config', 'user.name', 't']);
+    const clashHead = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const alignClash = S.trialMergeMaster({ cwd: clashDir });
+    const clashHeadAfter = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const clashDirty = String(g(clashDir, ['status', '--porcelain']).stdout).trim();
+    check('#575 ⑦ 试合有冲突：conflict=true 且仍 ok（树已还原）', alignClash.ok === true && alignClash.conflict === true, JSON.stringify(alignClash));
+    check('#575 ⑦ 冲突试合后 HEAD 不变', clashHeadAfter === clashHead);
+    check('#575 ⑦ 冲突试合后工作区干净', clashDirty === '', clashDirty);
+
+    const daoSrcAlign = fs.readFileSync(CLI, 'utf8');
+    check('#575 ⑦ reviewer-create 建树前走 assessPrMergeable', /function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrcAlign));
+    check('#575 ⑦ reviewer-attach 建树前走 assessPrMergeable', /function cmdReviewerAttach[\s\S]*assessPrMergeable/.test(daoSrcAlign));
+    check('#575 ⑦ reviewer-create 建树后试合', /function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrcAlign));
 
     const revHelp = spawnSync(process.execPath, [CLI, 'reviewer-create', '--help'], { encoding: 'utf8', cwd: REPO });
     check('reviewer-create 出现在 help', /reviewer-create/.test(revHelp.stdout || ''), (revHelp.stdout || '').slice(0, 200));

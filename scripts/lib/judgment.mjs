@@ -82,7 +82,7 @@ export function malformedJudgmentLines(bodies) {
   return out;
 }
 
-// 完工 comment 识别（流转器用）：工人完工的信号 = PR comment 首行命中
+// 完工 comment 识别（流转器用）：工人完工的信号 = issue comment 首行命中
 // 「完工」或「返工(完成|处置)」。真实语料（2026-08-14/15 实录）：
 //   「## 完工报告」「## 完工自报（pi 工人，model/...）」「完工，转 ready。」
 //   「## 对抗审返工处置（红 5 项全修，push ...）」「## 二轮返工完成，红 4 项逐条处置」
