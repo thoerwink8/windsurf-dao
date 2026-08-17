@@ -46,16 +46,126 @@ export function commandFromHookInput(stdinText, argv = []) {
   return extractHookCommand(text);
 }
 
-/** 裸 orca 派工动作。dao.mjs 自己的 dispatch/raw/worker-start 不拦。 */
+/**
+ * 把一条 shell 命令拆成「会真跑起来的语句」。
+ * 独立实现，不复用 dao.mjs 的 parseArgs（仓规：检查逻辑不得复用被检查对象自己的解析）。
+ * 拆点：未加引号的 && || ; | 换行。未加引号的 # 当注释丢掉。
+ */
+export function splitShellStatements(cmd) {
+  const s = String(cmd || '');
+  const parts = [];
+  let buf = '';
+  let quote = null;
+  let escaped = false;
+  const flush = () => {
+    const t = stripUnquotedComment(buf).trim();
+    if (t) parts.push(t);
+    buf = '';
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escaped) { buf += c; escaped = false; continue; }
+    if (quote) {
+      if (c === '\\' && quote !== "'") { escaped = true; buf += c; continue; }
+      if (c === quote) quote = null;
+      buf += c;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; buf += c; continue; }
+    if (c === '\\') { escaped = true; buf += c; continue; }
+    if (c === '\n' || c === '\r' || c === ';') { flush(); continue; }
+    if (c === '&' && s[i + 1] === '&') { flush(); i++; continue; }
+    if (c === '|' && s[i + 1] === '|') { flush(); i++; continue; }
+    if (c === '|') { flush(); continue; }
+    buf += c;
+  }
+  flush();
+  return parts;
+}
+
+function stripUnquotedComment(stmt) {
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < stmt.length; i++) {
+    const c = stmt[i];
+    if (escaped) { escaped = false; continue; }
+    if (quote) {
+      if (c === '\\' && quote !== "'") { escaped = true; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+    if (c === '#') return stmt.slice(0, i);
+  }
+  return stmt;
+}
+
+/** 把一句拆成 token。带引号的整段算一个 token，quoted=true。 */
+export function tokenizeShell(stmt) {
+  const s = String(stmt || '');
+  const tokens = [];
+  let buf = '';
+  let quote = null;
+  let escaped = false;
+  let quoted = false;
+  const flush = () => {
+    if (buf.length || quoted) tokens.push({ value: buf, quoted });
+    buf = '';
+    quoted = false;
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escaped) { buf += c; escaped = false; continue; }
+    if (quote) {
+      if (c === '\\' && quote !== "'") { escaped = true; continue; }
+      if (c === quote) { quote = null; continue; }
+      buf += c;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; quoted = true; continue; }
+    if (c === '\\') { escaped = true; continue; }
+    if (/\s/.test(c)) { flush(); continue; }
+    buf += c;
+  }
+  flush();
+  return tokens;
+}
+
+function bareTokens(stmt) {
+  return tokenizeShell(stmt)
+    .filter(t => !t.quoted && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t.value))
+    .map(t => t.value);
+}
+
+/** 这句真正跑起来的程序是不是 dao.mjs（任意 verb，含 raw）。 */
+export function isDaoMjsInvocation(stmt) {
+  const toks = bareTokens(stmt);
+  return toks.some(t => /(^|[\\/])dao\.mjs$/i.test(t));
+}
+
+/** 这句未加引号的 token 序列里有没有 orca orchestration (worker-start|task-create|dispatch)。 */
+export function isOrcaDispatchInvocation(stmt) {
+  const toks = bareTokens(stmt);
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'orchestration') continue;
+    if (/^(worker-start|task-create|dispatch)$/.test(toks[i + 2])) return true;
+  }
+  return false;
+}
+
+/**
+ * 裸 orca 派工动作。dao.mjs 自己的 dispatch / raw / worker-start 不拦。
+ * #575：放行判据是「这句实际执行的命令是不是 dao.mjs」，不是「整条命令串里有没有这两个词」。
+ * `echo "dao.mjs raw" && orca orchestration worker-start` 必须仍被拦。
+ */
 export function isDispatchBypass(cmd) {
-  const s = normalizeCmd(cmd);
-  if (!s) return false;
-  if (/\bdao\.mjs\b/.test(s) && /\braw\b/.test(s)) return false;
-  if (/\bdao\.mjs\b/.test(s)) return false;
-  if (!/(^|[\\/\s])orca(\.exe|\.cmd)?\b/i.test(s)) return false;
-  if (/\borchestration\s+worker-start\b/.test(s)) return true;
-  if (/\borchestration\s+task-create\b/.test(s)) return true;
-  if (/\borchestration\s+dispatch\b/.test(s)) return true;
+  const statements = splitShellStatements(cmd);
+  if (statements.length === 0) return false;
+  for (const stmt of statements) {
+    if (isDaoMjsInvocation(stmt)) continue;
+    if (isOrcaDispatchInvocation(stmt)) return true;
+  }
   return false;
 }
 

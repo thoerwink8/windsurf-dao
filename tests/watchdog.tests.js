@@ -179,6 +179,7 @@ console.log("\n=== ⑪ NO_TARGETS 与 OK 的区分（数到 0 ≠ 没看到样�
   check("明确打印 NO_TARGETS 警告", /NO_TARGETS/.test(r.out), r.out.trim());
   check("不打出 OK 汇总（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
   check("无关联单证据的树不误报孤儿（查不到≠孤儿，#492）", !/orphan:/.test(r.out), r.out.trim());
+  check("#575：in-review 待合并盘面不报 ALL_IDLE（那是等帅，不是卡死）", !/all-idle:/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑫ --once 只跑单轮 ===");
@@ -357,6 +358,57 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   check("无心跳 + 无待流转：心跳从未存在但不报", /心跳从未存在.*无待流转对象，不报/.test(ai.out), ai.out.trim());
 }
 
+console.log("\n=== ⑳k #575 ① 真实故障注入：跑 flow 写心跳 → 停写（kill）→ 5 分钟报 flow-stalled ===");
+{
+  // 硬证据：心跳必须是 flow.mjs 自己写的，不是测试手搓 JSON。
+  // kill = 只跑一轮然后不再跑（停写）。阈值 = heartbeatStaleMs = 5 分钟。
+  // 不真睡 5 分钟：用 --now 把「现在」拨过阈值。报警必须是 [flow] flow-stalled / 5 分钟未更新。
+  const FLOW = path.join(REPO, "scripts", "flow.mjs");
+  const FLOW_FIXTURE = path.join(REPO, "tests", "flow-fixtures", "no-open");
+  const STALE_MS = 5 * 60 * 1000;
+  const tmpFlow = fs.mkdtempSync(path.join(os.tmpdir(), "wd-kill-flow-src-"));
+  const stateFile = path.join(tmpFlow, "state.json");
+  const flowRun = spawnSync(process.execPath, [
+    FLOW, "--snapshot-dir", FLOW_FIXTURE, "--state-file", stateFile, "--dry-run",
+  ], { encoding: "utf8", cwd: REPO });
+  const hbFile = path.join(tmpFlow, "heartbeat.json");
+  let hb = null;
+  try { hb = JSON.parse(fs.readFileSync(hbFile, "utf8")); } catch { hb = null; }
+  const tWrite = hb && Date.parse(hb.ts);
+  check("kill 前：flow.mjs 真写下 heartbeat.json（含可解析 ts）",
+    fs.existsSync(hbFile) && Number.isFinite(tWrite),
+    `status=${flowRun.status} hb=${JSON.stringify(hb)}`);
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wd-kill-flow-"));
+  const src = path.join(FIXTURES, "heartbeat-fresh", "round-1");
+  for (const f of fs.readdirSync(src)) {
+    const s = path.join(src, f);
+    if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(tmp, f));
+  }
+  if (fs.existsSync(hbFile)) fs.copyFileSync(hbFile, path.join(tmp, "heartbeat.json"));
+
+  if (!Number.isFinite(tWrite)) {
+    check("kill 后 1s：不报 flow-stalled", false, "flow 没写下可解析心跳，后续注入无法跑");
+    check("刚好 5 分钟还不报", false, "跳过");
+    check("kill 后超过 5 分钟：退出码 1", false, "跳过");
+    check("kill 后超过 5 分钟：输出 [flow] flow-stalled", false, "跳过");
+    check("报警写得出停了几分钟（5 分钟）", false, "跳过");
+  } else {
+    const alive = runWatchdog(tmp, ["--once", "--now", String(tWrite + 1000)]);
+    check("kill 后 1s（心跳仍新鲜）：不报 flow-stalled", !/flow-stalled:/.test(alive.out), alive.out.trim());
+
+    const atThreshold = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS)]);
+    check("刚好 5 分钟（now-ts == 阈值）：还不报（判据是 > 不是 >=）", !/flow-stalled:/.test(atThreshold.out), atThreshold.out.trim());
+
+    const killed = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS + 1)]);
+    check("kill 后超过 5 分钟：退出码 1", killed.status === 1, `status=${killed.status}`);
+    check("kill 后超过 5 分钟：输出 [flow] flow-stalled", /\[flow\] flow-stalled:/.test(killed.out), killed.out.trim());
+    check("报警写得出停了几分钟（5 分钟）", /flow-stalled:.*5 分钟未更新/.test(killed.out), killed.out.trim());
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(tmpFlow, { recursive: true, force: true });
+}
+
 console.log("\n=== ⑳b 处置矩阵连败：同指纹连续命中超阈值 → 报帅（#471）===");
 {
   const r = runWatchdog(path.join(FIXTURES, "fp-loss"));
@@ -453,6 +505,30 @@ console.log("\n=== ㉔ #569 ② pi 静默换 provider：model_change 事件 + �
 
   const rm = runWatchdog(path.join(FIXTURES, "live"), ["--once", "--sessions-dir", path.join(FIXTURES, "live", "no-sessions")]);
   check("sessions 目录不存在：显式 PI_SESSIONS_MISSING（没查成≠查过没事），不误报", rm.status === 0 && /PI_SESSIONS_MISSING/.test(rm.out), `${rm.status} ${rm.out.trim()}`);
+}
+
+console.log("\n=== ㉕ #575 Pasted Content 停摆指纹 + ALL_IDLE（全员卡死 ≠ 没样本） ===");
+{
+  const r1 = runWatchdog(path.join(FIXTURES, "pasted-content"), ["--once"]);
+  check("Pasted Content 单轮：退出码 0（未达阈轮，不唤醒）", r1.status === 0, `status=${r1.status}`);
+  check("Pasted Content 单轮：不报 pasted-content", !/pasted-content:/.test(r1.out), r1.out.trim());
+
+  const r2 = runMultiRounds(path.join(FIXTURES, "pasted-content", "round-1"), 2);
+  check("Pasted Content 两轮同屏：退出码 1", r2.status === 1, `status=${r2.status}`);
+  check("Pasted Content 两轮同屏：第 2 轮报 pasted-content 且带 5711 chars", /round 2\/2[\s\S]*\[#452 - 看门狗正式版\] pasted-content:.*5711 chars/.test(r2.out), r2.out.trim());
+  check("Pasted Content 处置是补回车（不是只报警）", /动作: 补一记回车（Pasted Content 停摆）：将发送「回车」/.test(r2.out), r2.out.trim());
+
+  const ra = runWatchdog(path.join(FIXTURES, "all-idle"), ["--once"]);
+  check("ALL_IDLE：in-progress 任务卡 + 零活工位 → 退出码 1（不是 2）", ra.status === 1, `status=${ra.status}`);
+  check("ALL_IDLE：打 all-idle 不打 NO_TARGETS", /all-idle:/.test(ra.out) && !/^NO_TARGETS:/m.test(ra.out), ra.out.trim());
+  check("ALL_IDLE：点得出仍在途的卡名", /#453 - dispatch 顺车修订/.test(ra.out), ra.out.trim());
+
+  const ri1 = runWatchdog(path.join(FIXTURES, "pasted-idle"), ["--once"]);
+  check("idle+Pasted 单轮：报 ALL_IDLE（卡死已显形），未达阈轮不报 pasted-content", ri1.status === 1 && /all-idle:/.test(ri1.out) && !/pasted-content:/.test(ri1.out), ri1.out.trim());
+
+  const ri2 = runMultiRounds(path.join(FIXTURES, "pasted-idle", "round-1"), 2);
+  check("idle+Pasted 两轮：ALL_IDLE + pasted-content 都响（agents=[] 也能扫到折在输入框）",
+    ri2.status === 1 && /all-idle:/.test(ri2.out) && /pasted-content:.*5711 chars/.test(ri2.out), ri2.out.trim());
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);

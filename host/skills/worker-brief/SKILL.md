@@ -13,6 +13,28 @@ description: 被派工人的开工便签：收到任务书后先读。开工五�
 4. 给 PR 打标签（不存在先 `node scripts/gh-as.mjs worker -- label create`，幂等）：`node scripts/gh-as.mjs worker -- pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
 5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
 
+## 完工（两条都要发，缺一不可）
+
+编排层 `worker_done` **不能**触发流转器。交棒发到 **issue** 评论（issue 一直在，不依赖 push / PR；#575 ⑥ 订正）。首行以「完工」开头（或「阻塞：」「返工完成：」）。
+
+用工人身份发，多行必须走 `--body-file`：
+
+```bash
+node scripts/gh-as.mjs worker -- issue comment <issue号> --body-file <文件>
+```
+
+文件内容例子（首行必须是「完工」两个字打头，后面随便写）：
+
+```
+完工：PR #575 补管道五缺口
+
+- ① flow 每轮写心跳
+- ② dao raw 记账走 stderr
+下面正常写改了什么、测试结果、验收怎么验的。
+```
+
+反例（首行对不上，流转器当没完工）：`已完成：…`、`完工报告如下`（前面多了字）、把「完工」写在第二行。
+
 ## 卡片状态
 
 卡片状态全生命周期由工人维护。漏切等于面板撒谎，用户看不出谁在等审。
