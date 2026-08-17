@@ -838,7 +838,7 @@ async function main() {
   }
 
 
-  console.log('\n=== #565 追加：注入后开工验证 = 轮询 + 命中 Pasted Content 自动补回车救活 ===');
+  console.log('\n=== #602：开工验证保留；折叠抢救删掉；注入主闸=禁换行 ===');
   {
     const MARKER = '› [Pasted Content 7383 chars]\n';
     const CLEAN = '短摘要：修命令库\nThinking...\n';
@@ -846,163 +846,79 @@ async function main() {
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
     const noopSleep = () => {};
 
-    // A. 快路径：worker-read 官方开工证明（paste 自动提交，没看见 marker）→ started，不带 enter。
-    const a = S.verifyInjectionPolling({
+    const a = S.verifyStartedPolling({
       dispatchId: 'ctx_a',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
-      sendEnter: () => { throw new Error('不该发回车'); },
       proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('轮询：worker-read 证明（transcript）→ started（不带 enter）', a.ok === true && a.state === 'started' && a.enter === null, JSON.stringify(a));
+    check('开工验证：worker-read 证明（transcript）→ started', a.ok === true && a.state === 'started', JSON.stringify(a));
 
-    // B. 故意造 Pasted Content 残留 → 自动补回车 → 重读消失 = startedAfterEnter（救活留痕）。
-    let enterCalls = 0;
-    let readsB = 0;
-    const b = S.verifyInjectionPolling({
+    const b = S.verifyStartedPolling({
       dispatchId: 'ctx_b',
-      readOnce: () => {
-        readsB++;
-        return readsB === 1
-          ? { ok: true, result: { terminal: { tail: [MARKER] } } }
-          : { ok: true, result: { terminal: { tail: [CLEAN] } } };
-      },
-      sendEnter: () => { enterCalls++; return { ok: true }; },
-      proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
-    });
-    check('故意残留：命中 Pasted Content 自动补回车救活 → startedAfterEnter', b.ok === true && b.state === 'startedAfterEnter' && b.enter && b.enter.ok === true, JSON.stringify(b));
-    check('故意残留：补回车只发一次（enter 留痕）', enterCalls === 1, `enterCalls=${enterCalls}`);
-
-    // C. 真失败：补回车后 marker 仍在 = 回滚信号（仍在才回滚，处置代价与判据对称）。
-    const c = S.verifyInjectionPolling({
-      dispatchId: 'ctx_c',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
-      sendEnter: () => ({ ok: true }),
       proofOnce: unproven,
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    check('补回车后 marker 仍在 → failed，reason 点名「仍停在输入框」', c.ok === false && c.state === 'failed' && /仍停在输入框/.test(c.reason), JSON.stringify(c));
+    check('Pasted Content → 当场 failed，不再补回车', b.ok === false && b.state === 'failed' && /不再补回车/.test(b.reason), JSON.stringify(b));
 
-    // D. TUI 加载期（非空无 marker）不得判绿——时序 bug 回归钉（#565 实测现场：MCP servers 0/5）。
-    const d = S.verifyInjectionPolling({
+    const d = S.verifyStartedPolling({
       dispatchId: 'ctx_d',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [LOADING] } } }),
-      sendEnter: () => ({ ok: true }),
       proofOnce: unproven,
       timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('TUI 加载期（非空无 marker）不算开工 → 超时 failed（时序 bug 回归钉）', d.ok === false && d.state === 'failed' && /超时/.test(d.reason), JSON.stringify(d));
+    check('TUI 加载期不算开工 → 超时 failed', d.ok === false && d.state === 'failed' && /超时/.test(d.reason), JSON.stringify(d));
 
-    // E. 全程没读成：不许当「没查成=没开工」以外的东西（scanned 与 unscanned 分开）。
-    const e = S.verifyInjectionPolling({
+    const e = S.verifyStartedPolling({
       dispatchId: 'ctx_e',
       readOnce: () => ({ error: 'terminal read timeout' }),
-      sendEnter: () => ({ ok: true }),
       proofOnce: unproven,
       timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('全程没读成 → 超时 failed 且带 unscanned（没查成 ≠ 查过没事）', e.ok === false && e.unscanned && e.unscanned.unscanned === true, JSON.stringify(e));
+    check('全程没读成 → 超时 failed 且带 unscanned', e.ok === false && e.unscanned && e.unscanned.unscanned === true, JSON.stringify(e));
 
-    // F. 回车没送出去且 marker 仍在：reason 说得出「没送出去」，不许伪装成「补了没救活」。
-    const f = S.verifyInjectionPolling({
-      dispatchId: 'ctx_f',
-      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
-      sendEnter: () => ({ ok: false, error: 'orca terminal send 失败' }),
-      proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
-    });
-    check('回车没送出去且 marker 仍在 → failed，reason 说得出「没送出去」', f.ok === false && /没送出去/.test(f.reason), JSON.stringify(f));
-
-    // G. #568 回归钉：pi 工人正常提交 = proof 恒 false（provider_unsupported）+ 全程无 marker + 屏面稳定 → 判绿。
-    // 这是最常见的成功路径（#568 之前唯一没被测的）；修法 = proof 不可用时降级到屏面连续稳定轮。
-    const g = S.verifyInjectionPolling({
+    const g = S.verifyStartedPolling({
       dispatchId: 'ctx_g',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CLEAN] } } }),
-      sendEnter: () => { throw new Error('不该发回车'); },
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('pi 正常提交：proof 恒 false + 全程无 marker → 连续稳定轮判绿 started（proofFallback 留痕）',
-      g.ok === true && g.state === 'started' && g.enter === null && g.proofFallback === true && g.stableRounds >= 3, JSON.stringify(g));
-    check('pi 正常提交：不该发回车', true, '（sendEnter 抛错但没被调 = 该路径不发回车）');
+    check('pi 正常提交：proof 不可用 + 屏面稳定 → started（proofFallback）',
+      g.ok === true && g.state === 'started' && g.proofFallback === true && g.stableRounds >= 3, JSON.stringify(g));
 
-    // H. pi 正常提交但开头有加载期：加载指纹轮不计稳定、清零，加载结束后连续稳定才判绿。
     let readsH = 0;
-    const h = S.verifyInjectionPolling({
+    const h = S.verifyStartedPolling({
       dispatchId: 'ctx_h',
       readOnce: () => {
         readsH++;
         return { ok: true, result: { terminal: { tail: [readsH <= 4 ? LOADING : CLEAN] } } };
       },
-      sendEnter: () => { throw new Error('不该发回车'); },
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'session_not_reported' }),
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('pi 正常提交带加载开头：加载期不算绿，加载结束后连续稳定才判绿',
+    check('pi 加载开头：加载期不算绿，结束后连续稳定才判绿',
       h.ok === true && h.state === 'started' && h.proofFallback === true && h.stableRounds >= 3 && readsH >= 7, JSON.stringify(h));
 
-    // I. 加载指纹凑不满稳定轮但没到稳定阈值就超时：仍 failed（防误判意图保留，不许因为加了降级路就把加载期判绿）。
-    let readsI = 0;
-    const i = S.verifyInjectionPolling({
-      dispatchId: 'ctx_i',
-      readOnce: () => {
-        readsI++;
-        // 加载态后只稳定 1 轮就回到加载态：稳定轮永远攒不满。
-        return { ok: true, result: { terminal: { tail: [readsI % 2 === 1 ? LOADING : CLEAN] } } };
-      },
-      sendEnter: () => ({ ok: true }),
-      proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
-      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
-    });
-    check('加载指纹被清零：稳定 1 轮又回加载态 → 攒不满降级条件 → 超时 failed',
-      i.ok === false && i.state === 'failed' && i.stableRounds < 3 && /超时/.test(i.reason), JSON.stringify(i));
-
-    // J. proof 不可用但全程空屏：不许按屏面判绿（空屏 ≠ 已提交）。
-    const j = S.verifyInjectionPolling({
+    const j = S.verifyStartedPolling({
       dispatchId: 'ctx_j',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [] } } }),
-      sendEnter: () => ({ ok: true }),
       proofOnce: () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' }),
       timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '工人',
     });
-    check('proof 不可用 + 空屏 → 不许判绿（空屏 ≠ 已提交），超时 failed',
+    check('proof 不可用 + 空屏 → 不许判绿，超时 failed',
       j.ok === false && j.state === 'failed' && /超时/.test(j.reason), JSON.stringify(j));
 
-    // wiring：dao.mjs 工人与审官两处注入验证都走轮询（#565 追加第 5 条）。
     const daoSrcPoll = fs.readFileSync(CLI, 'utf8');
-    check('dao.mjs 工人/审官注入验证两处都走 verifyInjectionPolling', (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 2, daoSrcPoll.slice(0, 80));
-    check('#575 ④ reviewer-attach 也走 verifyInjectionPolling（不另写一份）',
-      (daoSrcPoll.match(/verifyInjectionPolling\(\{/g) || []).length >= 3
-      && /function cmdReviewerAttach/.test(daoSrcPoll));
+    check('dao.mjs 不再调用 verifyInjectionPolling', !/verifyInjectionPolling\(/.test(daoSrcPoll));
+    check('dao.mjs 工人/审官/attach 走 verifyStartedPolling', (daoSrcPoll.match(/verifyStartedPolling\(\{/g) || []).length >= 3);
 
-    // 连带验收：6000+ 字符任务书折在输入框 → 自动补回车留痕；仍在 → fail-visible。
-    const LONG = `› [Pasted Content ${'x'.repeat(6000).length} chars]\n`;
-    let enterLong = 0;
-    let readsLong = 0;
-    const longOk = S.verifyInjectionPolling({
-      dispatchId: 'ctx_long',
-      readOnce: () => {
-        readsLong++;
-        return readsLong === 1
-          ? { ok: true, result: { terminal: { tail: [LONG] } } }
-          : { ok: true, result: { terminal: { tail: ['审官已开工\n'] } } };
-      },
-      sendEnter: () => { enterLong++; return { ok: true }; },
-      proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
-    });
-    check('#575 ④ 6000+ 字符 Pasted Content → 自动补回车 startedAfterEnter',
-      longOk.ok === true && longOk.state === 'startedAfterEnter' && enterLong === 1, JSON.stringify(longOk));
-    const longFail = S.verifyInjectionPolling({
-      dispatchId: 'ctx_long_fail',
-      readOnce: () => ({ ok: true, result: { terminal: { tail: [LONG] } } }),
-      sendEnter: () => ({ ok: true }),
-      proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
-    });
-    check('#575 ④ 6000+ 字符补回车后仍在 → failed 不许静默成功',
-      longFail.ok === false && longFail.state === 'failed' && /仍停在输入框/.test(longFail.reason), JSON.stringify(longFail));
+    const nl = S.assertInjectText('先读 x\n本单 spec：y', { label: '士兵注入' });
+    check('主闸：注入含换行 → 拒，不靠 Pasted Content', nl.ok === false && nl.newlines === true && /换行/.test(nl.error), JSON.stringify(nl));
+    const okLine = S.assertInjectText('先读 host/skills/dispatch/templates/soldier-book.md 全文，那是你的闭环框架。本单 spec：修 X。', { label: '士兵注入' });
+    check('主闸：单行注入放行', okLine.ok === true && okLine.newlines === false, JSON.stringify(okLine));
+    const tooLong = S.assertInjectText('x'.repeat(S.INJECT_MAX_CHARS + 1), { label: '士兵注入' });
+    check('次闸：超长单行仍拒', tooLong.ok === false && tooLong.newlines === false && /上限/.test(tooLong.error), JSON.stringify(tooLong));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
@@ -1457,48 +1373,59 @@ async function main() {
   {
     const tmplDir = path.join(REPO, 'host', 'skills', 'dispatch', 'templates');
     const files = S.listDispatchTemplates();
-    check('模板目录有 soldier-book.md + reviewer-book.md', files.includes('soldier-book.md') && files.includes('reviewer-book.md'), files.join(','));
+    check('模板目录有 soldier-book + reviewer-book + 两份 inject', files.includes('soldier-book.md') && files.includes('reviewer-book.md') && files.includes('soldier-inject.md') && files.includes('reviewer-inject.md'), files.join(','));
 
-    const soldier = S.renderDispatchTemplate('soldier-book.md', {
-      SPEC: '短摘要：修 X',
-    });
-    check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
-    check('soldier-book 不再内嵌审官 dispatch id（#586 按需起）', !/REVIEWER_DISPATCH_ID/.test(soldier) && !/dispatch:undefined/.test(soldier), soldier.slice(-220));
-    check('soldier-book 完工走 worker-done', /worker-done/.test(soldier) && /--pr/.test(soldier), soldier.slice(-260));
-    check('soldier-book 要求不要自己发 comment / notify', /不要自己/.test(soldier));
-    check('soldier-book 渲染后无任何 dispatch:undefined', /dispatch:undefined/.test(soldier) === false);
+    const soldierBook = fs.readFileSync(path.join(tmplDir, 'soldier-book.md'), 'utf8');
+    check('soldier-book 不再内嵌审官 dispatch id（#586 按需起）', !/REVIEWER_DISPATCH_ID/.test(soldierBook) && !/dispatch:undefined/.test(soldierBook), soldierBook.slice(-220));
+    check('soldier-book 完工走 worker-done', /worker-done/.test(soldierBook) && /--pr/.test(soldierBook), soldierBook.slice(-260));
+    check('soldier-book 要求不要自己发 comment / notify', /不要自己/.test(soldierBook));
 
-    const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
-      MERGE_POLICY: 'auto',
-      MERGE_REASON: '',
+    const soldier = S.buildSoldierInject({ spec: '短摘要：修 X', issue: 602 });
+    check('士兵注入是单行且含 spec', !/[\r\n]/.test(soldier) && /短摘要：修 X/.test(soldier), soldier);
+    check('士兵注入含指针路径', /host\/skills\/dispatch\/templates\/soldier-book\.md/.test(soldier), soldier);
+
+    const reviewer = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #1',
+      pr: '1',
+      soldierDispatchId: 'ctx_worker-1',
+      mergePolicy: 'auto',
     });
-    check('reviewer-book 填进士兵 dispatch id', /ctx_worker-1/.test(reviewer));
-    check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
-    check('reviewer-book 红项发回 dispatch:<id> 不是 handle', /dispatch:ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer.slice(-300));
-    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_DISPATCH_ID/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
-    check('reviewer-book 走 gh-as reviewer approve（#573）', /gh-as\.mjs reviewer/.test(reviewer) && /--approve/.test(reviewer) && /真 approve/.test(reviewer), reviewer.slice(0, 400));
-    const reviewerManual = S.renderDispatchTemplate('reviewer-book.md', {
-      SOLDIER_DISPATCH_ID: 'ctx_worker-1',
-      MERGE_POLICY: 'manual',
-      MERGE_REASON: '改协作约定',
+    check('审官注入是单行', !/[\r\n]/.test(reviewer), reviewer);
+    check('审官注入填进士兵 dispatch id', /ctx_worker-1/.test(reviewer));
+    check('审官注入填进 merge-policy', /merge-policy=auto/.test(reviewer));
+    check('审官注入红项目标是 dispatch:<id> 不是 handle', /dispatch=ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer);
+
+    const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book.md'), 'utf8');
+    check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /乒乓/.test(reviewerBook));
+    check('reviewer-book 走 gh-as reviewer approve（#573）', /gh-as\.mjs reviewer/.test(reviewerBook) && /--approve/.test(reviewerBook) && /真 approve/.test(reviewerBook), reviewerBook.slice(0, 400));
+    const reviewerManual = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #1',
+      pr: '1',
+      soldierDispatchId: 'ctx_worker-1',
+      mergePolicy: 'manual',
+      mergeReason: '改协作约定',
     });
-    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /pr ready/.test(reviewerManual) && /gh-as\.mjs reviewer/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
+    check('审官注入 manual 带 merge-reason', /merge-reason=改协作约定/.test(reviewerManual) && !/[\r\n]/.test(reviewerManual), reviewerManual);
+    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerBook) && /pr ready/.test(reviewerBook) && /gh-as\.mjs reviewer/.test(reviewerBook), reviewerBook.slice(-400));
 
     let threw = false, threwMsg = '';
-    try { S.renderDispatchTemplate('reviewer-book.md', { MERGE_POLICY: 'auto', MERGE_REASON: '' }); } // 缺 SOLDIER_DISPATCH_ID
+    try { S.buildReviewerInject({ spec: 'x', pr: '1', mergePolicy: 'auto' }); }
     catch (e) { threw = true; threwMsg = String(e.message || e); }
     check('缺占位符值 → 抛', threw && /SOLDIER_DISPATCH_ID/.test(threwMsg), threwMsg);
 
-    // 审官红项回归：dispatch id 缺失时渲染必须变红（不许出现 dispatch:undefined）
     let threwU = false, uMsg = '';
-    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: String(undefined), MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: String(undefined), mergePolicy: 'auto' }); }
     catch (e) { threwU = true; uMsg = String(e.message || e); }
     check('审官红项回归：dispatch id 缺失（"undefined" 字符串）→ 渲染抛错变红', threwU && /SOLDIER_DISPATCH_ID/.test(uMsg) && /dispatch:undefined|无效值/.test(uMsg), uMsg);
     let threwN = false;
-    try { S.renderDispatchTemplate('reviewer-book.md', { SOLDIER_DISPATCH_ID: 'null', MERGE_POLICY: 'auto', MERGE_REASON: '' }); }
+    try { S.buildReviewerInject({ spec: 'x', pr: '1', soldierDispatchId: 'null', mergePolicy: 'auto' }); }
     catch (e) { threwN = true; }
     check('审官红项回归：占位符填字面量 null 也抛', threwN);
+
+    let threwNl = false, nlMsg = '';
+    try { S.buildSoldierInject({ spec: '短摘要\n第二行' }); }
+    catch (e) { threwNl = true; nlMsg = String(e.message || e); }
+    check('spec 自带换行 → 注入渲染炸（主闸，不是 Pasted Content）', threwNl && /换行/.test(nlMsg), nlMsg);
 
     let notFound = false;
     try { S.renderDispatchTemplate('no-such-template.md', {}); }
@@ -1509,7 +1436,7 @@ async function main() {
     check('模板名不合法 → 拒绝', badName);
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
+    check('dao.mjs 士兵任务书走短注入（buildSoldierInject）', /buildSoldierInject/.test(daoSrc));
     check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
     check('dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）',
       /function cmdReviewerCreate[\s\S]*reviewerTaskId/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*revStarted/.test(daoSrc)
@@ -1517,7 +1444,7 @@ async function main() {
     check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
     check('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', /extractDispatchId/.test(daoSrc));
     check('dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）', /soldierDoneVia: 'worker-done'/.test(daoSrc) && /reviewerDeferred: true/.test(daoSrc));
-    check('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', /function cmdReviewerCreate[\s\S]*SOLDIER_DISPATCH_ID: String\(soldierDispatchId\)/.test(daoSrc), '渲染落点检查');
+    check('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', /function cmdReviewerCreate[\s\S]*soldierDispatchId: String\(soldierDispatchId\)/.test(daoSrc), '渲染落点检查');
     check('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', /审官身份/.test(daoSrc) && /identity/.test(daoSrc));
   }
 

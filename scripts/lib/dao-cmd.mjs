@@ -1276,66 +1276,47 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * 注入后开工验证，轮询版（#565 追加，用户 2026-08-16 当场要求）。
+ * 开工验证（#602：保留「token/cursor / transcript 在涨才算开工」，删掉折叠抢救）。
  *
- * 时序 bug（同型第二次发作；判例 memory probe-checks-env-not-startup）：worker-start 返回
- * 那一刻 codex TUI 还在加载 MCP servers（同屏可见 Starting MCP servers (0/5)），任务书还没
- * 渲染出来——「立即读一次」读到非空且无 Pasted Content 的屏面就判通过，实际任务书折在输入框里
- * 几十分钟没人处理（#565 实测：审官任务书坐输入框 40 分钟）。
+ * 不再轮询 Pasted Content、不再自动补回车。折叠应由注入长度硬上限拦在发之前。
+ * 若屏上仍出现 Pasted Content：当场失败（硬上限漏了），不许救活。
  *
- * 处置三件（只改注入后验证这一段；任务书太长是模板问题归 #554）：
- *   1. 轮询等开工，不是注入后读一次；超时走调用方给的 probe_wait_ms（表上 provider 显式值），不硬编码；
- *   2. 命中 [Pasted Content N chars] 先自动补一记回车（terminal send --enter）再重读；
- *   3. 重读后 Pasted Content 消失 = 提交成功（继续正常流程）；仍在 = 真失败（这时才回滚）。
- *
- * 三态分开（第二种必须留痕，否则「补救生效过多少次」永远没人知道）：
- *   started（worker-read 官方证明，或 proof 不可用时屏面连续稳定轮）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
- * worker-read 官方开工证明（#559 ⑥ 判开工优先用它；source≠terminal = 任务书进 transcript = 已提交）
- * 是权威信号，也覆盖「paste 自动提交快到没被看见 marker」的路径；#565 实测补回车后 proof 立刻 proven。
- *
- * #568 回归（本函数 2026-08-16 被挡死的正常提交路径）：pi 工人正常提交时 proof.proven 恒为 false
- * （provider_unsupported，pi 不给 transcript 证明）且全程无 Pasted Content——原实现两条出口都走不到，
- * 必然超时回滚。修法：区分「TUI 加载期」和「已提交」，不用「有没有补过回车」当区分——
- *   1. 加载期有自己的指纹（Starting MCP servers (N/5) 等，见 TUI_LOADING_RE），加载期内不算稳定轮、不判绿；
- *   2. proof 不可用（fallbackReason = provider_unsupported / session_not_reported，见 proofUnavailableReason）
- *      时降级到屏面判据：非空 + 无 marker + 连续 stableRoundsNeeded 轮稳定 = 已提交（proofFallback 留痕）；
- *   3. 「从没出现过 marker」不再永远不绿；TUI 加载期防误判的意图仍在（加载指纹清零稳定轮）。
+ * 仍轮询的只有开工证明本身：
+ *   1. worker-read 官方 transcript（source≠terminal）→ started；
+ *   2. TUI 加载期（Starting MCP servers 等）不算绿；
+ *   3. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
  */
-export function verifyInjectionPolling({
-  dispatchId, readOnce, sendEnter, proofOnce, timeoutMs,
+export function verifyStartedPolling({
+  dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
   stableRoundsNeeded = 3,
 } = {}) {
-  if (typeof readOnce !== 'function' || typeof sendEnter !== 'function') {
-    throw new Error('verifyInjectionPolling 要 readOnce + sendEnter');
+  if (typeof readOnce !== 'function') {
+    throw new Error('verifyStartedPolling 要 readOnce');
   }
   const t0 = Date.now();
   let reads = 0;
-  let enter = null; // 补回车留痕：{ ok, error?, elapsedMs }；没补过是 null
-  let unscanned = null; // 最后一次「没读成/没送成」记录（不许当「查过没事」）
+  let unscanned = null;
   let lastText = '';
-  let proofUnavailable = null; // proof 不可用确认记录（provider 不支持证明，见 proofUnavailableReason）
-  let stableRounds = 0;        // 屏面「非空 + 无 marker + 非加载期」连续轮数（降级判绿用）
+  let proofUnavailable = null;
+  let stableRounds = 0;
   while (Date.now() - t0 < timeoutMs) {
-    // ① worker-read 官方开工证明：任务书进 transcript = 已提交（权威信号）。
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
       if (proof && proof.ok && proof.proven) {
         return {
           ok: true,
-          state: enter ? 'startedAfterEnter' : 'started',
-          proof, enter, reads,
+          state: 'started',
+          proof, reads,
           elapsedMs: Date.now() - t0,
           text: lastText,
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
-      // #568：proof 不可用（provider 不支持证明）是降级触发条件，不是失败——先记下来。
       if (proof && proof.proven === false && proofUnavailableReason(proof)) {
         proofUnavailable = proof;
       }
     }
-    // ② 屏面指纹轮询。
     reads++;
     const read = readOnce();
     if (read && read.error) unscanned = { reason: '没读成', error: read.error };
@@ -1343,22 +1324,9 @@ export function verifyInjectionPolling({
     lastText = text;
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
-      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）。
-      if (enter) {
-        return {
-          ok: true,
-          state: 'startedAfterEnter',
-          enter, reads,
-          elapsedMs: Date.now() - t0,
-          text,
-        };
-      }
-      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5 等指纹）——不算稳定轮，继续等 proof/marker。
       if (TUI_LOADING_RE.test(text)) {
         stableRounds = 0;
       } else {
-        // #568 回归修法：proof 不可用（provider_unsupported / session_not_reported）时降级到屏面判据——
-        // 非空 + 无 marker + 连续稳定轮 = 任务书已进上下文（pi 正常提交路径，全程无 marker 也必须判绿）。
         stableRounds++;
         if (proofUnavailable && stableRounds >= stableRoundsNeeded) {
           return {
@@ -1366,43 +1334,31 @@ export function verifyInjectionPolling({
             state: 'started',
             proofFallback: true,
             proof: proofUnavailable,
-            enter, reads, stableRounds,
+            reads, stableRounds,
             elapsedMs: Date.now() - t0,
             text,
           };
         }
       }
     } else if (v.reason && /Pasted Content/.test(v.reason)) {
-      if (!enter) {
-        const sent = sendEnter();
-        enter = sent && sent.ok
-          ? { ok: true, elapsedMs: Date.now() - t0 }
-          : { ok: false, error: sent && !sent.ok ? String(sent.error || 'send 失败') : 'sendEnter 无返回', elapsedMs: Date.now() - t0 };
-        if (!enter.ok) unscanned = { reason: '补回车没送出去', error: enter.error };
-        // 送没送出去都重读定论：下轮 marker 仍在 = 真失败（这时才回滚）。
-      } else {
-        const reason = enter.ok
-          ? `补回车后任务书仍停在输入框（${label}）——真没开工`
-          : `补回车没送出去（${enter.error}），任务书仍停在输入框（${label}）`;
-        return {
-          ok: false,
-          state: 'failed',
-          reason,
-          evidence: v.evidence,
-          enter, reads,
-          elapsedMs: Date.now() - t0,
-          text,
-        };
-      }
+      return {
+        ok: false,
+        state: 'failed',
+        reason: `任务书停在输入框（${label || '注入'}）——硬上限应已拦住，不再补回车救活`,
+        evidence: v.evidence,
+        reads,
+        elapsedMs: Date.now() - t0,
+        text,
+      };
     }
     sleep(intervalMs);
   }
   return {
     ok: false,
     state: 'failed',
-    reason: `超时没等到任务书进上下文（${label || '注入'}，${timeoutMs}ms）`,
+    reason: `超时没等到开工证明（${label || '注入'}，${timeoutMs}ms）`,
     unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
-    enter, reads,
+    reads,
     stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
@@ -1413,7 +1369,7 @@ export function verifyInjectionPolling({
  * worker-read 的开工证明（#559 ⑥）。官方可靠源：source ≠ 'terminal' = hook 报告的
  * Codex/Claude/Grok transcript（可证明 worker session）；source = 'terminal' = 只给了
  * 有界终端输出（老式屏面证据，会假阳）。没读成必须标 unscanned——不许当成「没开工」。
- * 判开工优先用它；证明不了时降级回 verifyInjection 屏面检查兜底（③单接上后删）。
+ * 判开工优先用它；证明不了时降级回 verifyStartedPolling 的屏面稳定轮。
  */
 export function verifyWorkerStarted(readJson) {
   if (readJson == null) return { ok: false, reason: '没读成', unscanned: true, error: 'worker-read 结果为空' };
@@ -2288,6 +2244,72 @@ export function renderDispatchTemplate(name, vars = {}) {
   });
   if (/\{\{\w+\}\}/.test(out)) throw new Error(`模板 ${name} 还有未替换占位符`);
   return out;
+}
+
+// ── 注入闸（#602）：主判据 = 不含换行；长度是次要。
+// 每个换行会被 TUI 拆成一次提交（本单工人屏上 8 条短消息实证）。
+// 模板文件末尾允许一个 EOF 换行（编辑器会加），渲染后剥掉；正文里的换行必须炸。
+export const INJECT_MAX_CHARS = 800;
+export const INJECT_OVER_LIMIT_HINT = '正文挪去仓内文件或 GitHub，注入只给指针，且整段不许换行';
+
+export function stripInjectEof(text) {
+  return String(text ?? '').replace(/(?:\r\n|\n|\r)+$/g, '');
+}
+
+export function assertInjectText(text, { label } = {}) {
+  const s = String(text ?? '');
+  if (/[\r\n]/.test(s)) {
+    return {
+      ok: false,
+      length: s.length,
+      newlines: true,
+      error: `注入含换行符（${label || 'task spec'}）——每个换行会被 TUI 拆成一次提交。${INJECT_OVER_LIMIT_HINT}`,
+    };
+  }
+  if (s.length > INJECT_MAX_CHARS) {
+    return {
+      ok: false,
+      length: s.length,
+      newlines: false,
+      limit: INJECT_MAX_CHARS,
+      error: `注入 ${s.length} 字符超过上限 ${INJECT_MAX_CHARS}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}`,
+    };
+  }
+  return { ok: true, length: s.length, newlines: false, limit: INJECT_MAX_CHARS };
+}
+
+/** 兼容旧名：先禁换行，再量长度。 */
+export function assertInjectLen(text, opts) {
+  return assertInjectText(text, opts);
+}
+
+function renderInjectTemplate(name, vars) {
+  return stripInjectEof(renderDispatchTemplate(name, vars));
+}
+
+export function buildSoldierInject({ spec, issue } = {}) {
+  const text = renderInjectTemplate('soldier-inject.md', {
+    SPEC: spec,
+    ISSUE_REF: issue ? `全文见 issue #${issue}。` : '',
+  });
+  const gate = assertInjectText(text, { label: '士兵注入' });
+  if (!gate.ok) throw new Error(gate.error);
+  return text;
+}
+
+export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason } = {}) {
+  const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
+  const text = renderInjectTemplate('reviewer-inject.md', {
+    SPEC: spec,
+    ISSUE_REF: issue ? `全文见 issue #${issue}。` : '',
+    PR: pr,
+    SOLDIER_DISPATCH_ID: soldierDispatchId,
+    MERGE_POLICY: policy,
+    MERGE_REASON_REF: policy === 'manual' && mergeReason ? ` merge-reason=${mergeReason}` : '',
+  });
+  const gate = assertInjectText(text, { label: '审官注入' });
+  if (!gate.ok) throw new Error(gate.error);
+  return text;
 }
 
 // ── 闭环投递（发不到必须炸，#548 红项 1）──────────────────────────
