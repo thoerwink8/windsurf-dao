@@ -29,12 +29,17 @@
 //   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
-import { planStationRetire, applyStationRetire } from './lib/run-lifecycle.mjs';
+import {
+  planStationRetire,
+  applyStationRetire,
+  resolveStationCloseTarget,
+  previewHandlesForRun,
+} from './lib/run-lifecycle.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -145,13 +150,15 @@ export function launchFilePath(logPath) {
   return join(dirname(logPath || DEFAULT_LOG_REL), `${logStem(logPath)}.cmd`);
 }
 
-export function formatLease({ pid, runId, ts, ttlMs }) {
-  return `${JSON.stringify({
+export function formatLease({ pid, runId, ts, ttlMs, handle }) {
+  const obj = {
     pid,
     runId: runId ?? null,
     ts,
     ttlMs: ttlMs ?? LEASE_TTL_MS,
-  })}\n`;
+  };
+  if (handle) obj.handle = handle;
+  return `${JSON.stringify(obj)}\n`;
 }
 
 export function parseLease(raw) {
@@ -164,10 +171,12 @@ export function parseLease(raw) {
     const ts = Number(obj?.ts);
     if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ts)) return null;
     const ttlMs = Number(obj?.ttlMs);
+    const handle = typeof obj.handle === 'string' && obj.handle.trim() ? obj.handle.trim() : null;
     return {
       pid,
       ts,
       runId: obj.runId ?? null,
+      handle,
       ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LEASE_TTL_MS,
     };
   } catch {
@@ -598,13 +607,26 @@ function loadLease(logPath) {
   }
 }
 
-function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS) {
+export function mergeLeaseHandle(prev, nextHandle) {
+  return nextHandle || (prev && prev.handle) || null;
+}
+
+function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS, handle) {
+  const prev = loadLease(logPath);
   writeFileSync(leasePath(logPath), formatLease({
     pid: process.pid,
     runId,
     ts: Date.now(),
     ttlMs,
+    handle: mergeLeaseHandle(prev, handle),
   }), 'utf8');
+}
+
+function stampLeaseHandle(logPath, handle) {
+  if (!handle) return;
+  const prev = loadLease(logPath);
+  if (!prev) return;
+  writeFileSync(leasePath(logPath), formatLease({ ...prev, handle }), 'utf8');
 }
 
 async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } = {}) {
@@ -728,6 +750,8 @@ async function cmdEnsure(args) {
     handle = rebuilt.handle;
   }
 
+  if (handle) stampLeaseHandle(logPath, handle);
+
   const afterShow = showRun(runId);
   const afterList = listTerminals();
   const afterTerm = (afterList.terminals || []).find((t) => t.handle === handle)
@@ -844,9 +868,39 @@ function cmdRetire(args) {
     process.exit(1);
   }
   const logPath = resolveLogPath(args.log, args.run);
+  const listed = listTerminals();
+  if (!listed.ok) {
+    console.log(JSON.stringify({ ok: false, unscanned: true, runId: args.run, error: `terminal list 失败: ${errText(listed.error)}` }));
+    process.exit(1);
+  }
+  const leaseFile = leasePath(logPath);
+  let lease = null;
+  let leaseRead = 'missing';
+  if (existsSync(leaseFile)) {
+    lease = parseLease(readFileSync(leaseFile, 'utf8'));
+    if (!lease) {
+      console.log(JSON.stringify({ ok: false, unscanned: true, runId: args.run, error: `租约坏了 ${leaseFile}` }));
+      process.exit(1);
+    }
+    leaseRead = 'ok';
+  }
+  const pidAlive = lease && lease.pid ? isProcessAlive(lease.pid) : null;
+  const target = resolveStationCloseTarget({
+    runId: args.run,
+    lease,
+    leaseRead,
+    pidAlive,
+    coordinatorHandle: shown.run?.coordinator_handle || null,
+    terminals: listed.terminals,
+    previewHandles: previewHandlesForRun(listed.terminals, args.run),
+  });
+  if (!target.ok) {
+    console.log(JSON.stringify({ ok: false, unscanned: !!target.unscanned, runId: args.run, error: target.error }));
+    process.exit(1);
+  }
   const plan = planStationRetire({
     runId: args.run,
-    coordinatorHandle: shown.run?.coordinator_handle || null,
+    closeHandle: target.closeHandle,
     files: [leasePath(logPath), launchFilePath(logPath), logPath],
   });
   const applied = applyStationRetire(plan, {
@@ -870,7 +924,8 @@ function printUsage() {
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
   retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
-          台还活着看 closed.alreadyGone / tab 存活性，不看 terminal list 条数（#601）`);
+          关台身份看租约 PID/runId/handle（或 preview 唯一命中），不看 coordinator_handle
+          证不出且 PID 还活着就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
 }
 
 async function main() {

@@ -266,6 +266,101 @@ export function parseAskTimeoutMs(raw, { defaultMs = 600000 } = {}) {
 }
 
 /**
+ * 关台目标必须能证明「这就是本 Run 的信箱台」。
+ * coordinator_handle 会被 run-use 临时借走或指到帅的终端，不能单独当身份（#601 审官红 1）。
+ * 证明链：租约 runId 对，再加租约 handle 在盘面，或 preview 唯一命中本 run 的 READY 行。
+ * PID 还活着却证不出 → 失败，不许只删文件宣告 retired。
+ */
+export function previewHandlesForRun(terminals, runId, mark = 'INBOX_STATION_READY') {
+  if (!Array.isArray(terminals) || !runId) return [];
+  const needle = `run=${runId}`;
+  const out = [];
+  for (const t of terminals) {
+    const preview = String(t?.preview || '');
+    if (preview.includes(mark) && preview.includes(needle) && t.handle) out.push(t.handle);
+  }
+  return out;
+}
+
+export function resolveStationCloseTarget({
+  runId,
+  lease,
+  leaseRead,
+  pidAlive,
+  coordinatorHandle,
+  terminals,
+  previewHandles,
+} = {}) {
+  if (!runId) return { ok: false, error: 'retire 要 --run' };
+  if (leaseRead === 'unscanned') {
+    return { ok: false, unscanned: true, error: '租约没读成，不能关台' };
+  }
+  if (!Array.isArray(terminals)) {
+    return { ok: false, unscanned: true, error: 'terminal list 没查成，不能关台' };
+  }
+  if (lease && pidAlive == null) {
+    return { ok: false, unscanned: true, error: 'PID 没查成，不能关台' };
+  }
+  if (lease && lease.runId && lease.runId !== runId) {
+    return { ok: false, error: `租约归属 ${lease.runId}，不是 ${runId}，拒关` };
+  }
+
+  const previews = [...new Set((previewHandles || []).filter(Boolean).map(String))];
+  const onBoard = new Set(
+    (terminals || []).map(t => t && t.handle).filter(Boolean).map(String),
+  );
+  const leaseHandle = lease && typeof lease.handle === 'string' && lease.handle
+    ? lease.handle
+    : null;
+
+  if (leaseHandle) {
+    const seen = onBoard.has(leaseHandle);
+    if (pidAlive === true && !seen) {
+      return {
+        ok: false,
+        error: `租约 PID 还活着，但 terminal list 找不到 handle ${leaseHandle}，证不出对应关系`,
+      };
+    }
+    if (pidAlive === true || seen) {
+      return {
+        ok: true,
+        action: 'close',
+        closeHandle: leaseHandle,
+        reason: seen ? 'lease-handle' : 'lease-handle-zombie',
+        coordinatorStolen: Boolean(coordinatorHandle && coordinatorHandle !== leaseHandle),
+      };
+    }
+    return { ok: true, action: 'alreadyGone', closeHandle: null, reason: 'pid-dead-no-tab' };
+  }
+
+  if (pidAlive === true) {
+    if (previews.length === 1) {
+      return {
+        ok: true,
+        action: 'close',
+        closeHandle: previews[0],
+        reason: 'preview-unique',
+        coordinatorStolen: Boolean(coordinatorHandle && coordinatorHandle !== previews[0]),
+      };
+    }
+    if (previews.length > 1) {
+      return { ok: false, error: `租约无 handle 且 preview 命中 ${previews.length} 个台，证不唯一` };
+    }
+    return {
+      ok: false,
+      error: '租约 PID 还活着，但没有 handle、preview 也认不出信箱台，拒删文件',
+    };
+  }
+
+  return {
+    ok: true,
+    action: 'alreadyGone',
+    closeHandle: null,
+    reason: leaseRead === 'missing' || !lease ? 'no-lease' : 'pid-dead',
+  };
+}
+
+/**
  * 租约/日志还在 = 待退；orca 没有 run-delete，run-list 里剩下的是墓碑。
  * 探头没查成必须 unscanned，不许把「没查成」当成「全是墓碑」。
  */
@@ -310,7 +405,7 @@ export function partitionGcTargets(retireRuns, { leaseExistsFor } = {}) {
   return { ok: true, unscanned: false, pending, tombstones };
 }
 
-/** 真关 = 当场关掉了活台或删了租约；本已关 = 台本来就不在且没有文件可删。 */
+/** 真关 = 当场 terminal close 掉了活台；本已关 = 没关到活台（含只删到租约）。不许用删文件冒充关台。 */
 export function classifyRetireOutcome(one) {
   if (!one || one.ok !== true) {
     return {
@@ -322,8 +417,7 @@ export function classifyRetireOutcome(one) {
   const closedLive = Boolean(
     one.closed && one.closed.handle && one.closed.ok && !one.closed.alreadyGone,
   );
-  const removed = Array.isArray(one.removed) && one.removed.length > 0;
-  if (closedLive || removed) {
+  if (closedLive) {
     return { bucket: 'closed', runId: one.runId, closed: one.closed, removed: one.removed || [] };
   }
   return { bucket: 'alreadyGone', runId: one.runId, closed: one.closed, removed: one.removed || [] };
@@ -346,6 +440,22 @@ export function summarizeRetireResults(results) {
     closed,
     alreadyGone,
     failed,
+  };
+}
+
+/** --apply 时墓碑不再次关台，但必须计入 alreadyGone，否则「本已关」永远不含它们。 */
+export function summarizeGcApply({ pendingResults, tombstones } = {}) {
+  const tallied = summarizeRetireResults(pendingResults);
+  const tombstoneItems = (tombstones || []).map((r) => ({
+    bucket: 'alreadyGone',
+    runId: r && (r.id || r.runId),
+    source: 'tombstone',
+  }));
+  return {
+    ...tallied,
+    alreadyGone: [...tallied.alreadyGone, ...tombstoneItems],
+    alreadyGoneCount: tallied.alreadyGoneCount + tombstoneItems.length,
+    tombstoneAlreadyGoneCount: tombstoneItems.length,
   };
 }
 
@@ -421,12 +531,12 @@ export function classifyAskPoll({ reply, elapsedMs, timeoutMs, unscanned, error 
   return { state: 'waiting' };
 }
 
-export function planStationRetire({ runId, coordinatorHandle, files } = {}) {
+export function planStationRetire({ runId, coordinatorHandle, closeHandle, files } = {}) {
   if (!runId) return { ok: false, error: 'retire 要 --run' };
   return {
     ok: true,
     runId,
-    closeHandle: coordinatorHandle || null,
+    closeHandle: closeHandle ?? coordinatorHandle ?? null,
     files: Array.isArray(files) ? files.filter(Boolean) : [],
   };
 }
@@ -435,7 +545,7 @@ export function applyStationRetire(plan, { closeTerminal, unlink } = {}) {
   if (!plan || plan.ok !== true) {
     return { ok: false, error: (plan && plan.error) || '没有退役计划', removed: [] };
   }
-  const closed = { handle: plan.closeHandle, ok: true, alreadyGone: false };
+  const closed = { handle: plan.closeHandle, ok: true, alreadyGone: !plan.closeHandle };
   if (plan.closeHandle) {
     if (typeof closeTerminal !== 'function') {
       return { ok: false, error: 'applyStationRetire 没给 closeTerminal', removed: [] };
