@@ -857,10 +857,10 @@ async function main() {
     const b = S.verifyStartedPolling({
       dispatchId: 'ctx_b',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
-      proofOnce: unproven,
+      proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    check('Pasted Content → 当场 failed，不再补回车', b.ok === false && b.state === 'failed' && /不再补回车/.test(b.reason), JSON.stringify(b));
+    check('Pasted Content 不挡开工证明，也不补回车', b.ok === true && b.state === 'started', JSON.stringify(b));
 
     const d = S.verifyStartedPolling({
       dispatchId: 'ctx_d',

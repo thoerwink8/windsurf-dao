@@ -1340,17 +1340,9 @@ export function verifyStartedPolling({
           };
         }
       }
-    } else if (v.reason && /Pasted Content/.test(v.reason)) {
-      return {
-        ok: false,
-        state: 'failed',
-        reason: `任务书停在输入框（${label || '注入'}）——硬上限应已拦住，不再补回车救活`,
-        evidence: v.evidence,
-        reads,
-        elapsedMs: Date.now() - t0,
-        text,
-      };
     }
+    // #602：屏上 Pasted Content 是 TUI 显示形态，不是开工判据（Orca preamble 也会折）。
+    // 不补回车、不据此失败；只等 worker-read 证明或屏面稳定。
     sleep(intervalMs);
   }
   return {
