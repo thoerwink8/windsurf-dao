@@ -38,6 +38,7 @@
 // ⑬ 派工闸 PreToolUse 活着且 fail-closed（#546 #517 #553）：挂载面=随仓 .claude/settings.json（#553 从 plugin 换挂法），
 // 装载（有 dispatch-gate 条目）→ 指向（脚本真存在）→ 行为（旁路 exit 2、逃生口放行、崩了也 exit 2）三层全验
 // ⑭ open issue 数量阈值（#556）：知识网堆回工作队列要报红；gh 不可用 SKIP 不是绿
+// ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -47,6 +48,7 @@ import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
+import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -59,6 +61,7 @@ const t0 = Date.now();
 const failures = [];
 const greens = [];
 const skips = [];
+const notes = [];
 
 /** 报失败只有三个槽位：什么坏了 / 怎么修 / 机器自己给的一行证据。 */
 function fail(what, howToFix, evidence) {
@@ -609,47 +612,56 @@ function runGhJson(args) {
   return { array: doc };
 }
 
-function runOrcaCardNumbers() {
+function runOrcaWorktrees() {
   const win = process.platform === 'win32';
   const direct = spawnSync(win ? 'orca.exe' : 'orca', ['worktree', 'list', '--json'], { encoding: 'utf8', cwd: ROOT });
   const r = direct.error ? (() => {
     const line = ['orca', 'worktree', 'list', '--json'].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
     return spawnSync(line, { encoding: 'utf8', shell: true, cwd: ROOT });
   })() : direct;
-  if (r.error || r.status !== 0) return null;
+  if (r.error || r.status !== 0) return { unscanned: true, error: r.error?.code || `exit ${r.status}` };
   let doc;
-  try { doc = JSON.parse(r.stdout || ''); } catch { return null; }
-  const wts = Array.isArray(doc?.result?.worktrees) ? doc.result.worktrees : [];
-  const cards = [];
-  for (const w of wts) {
-    if (!w || w.isMainWorktree || w.isArchived) continue;
-    const name = String(w.displayName || '');
-    const m = name.match(/^#(\d+)/);
-    if (m) cards.push(Number(m[1]));
-  }
-  return cards;
+  try { doc = JSON.parse(r.stdout || ''); } catch { return { unscanned: true, error: 'orca worktree list 输出不是 JSON' }; }
+  const wts = Array.isArray(doc?.result?.worktrees) ? doc.result.worktrees : null;
+  if (!wts) return { unscanned: true, error: 'orca worktree list 没有 result.worktrees 数组' };
+  return { worktrees: wts };
 }
 
-function checkOpenIssueCount() {
+function loadOpenBoard() {
+  return {
+    issues: runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels']),
+    prs: runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']),
+    worktrees: runOrcaWorktrees(),
+  };
+}
+
+function checkOpenIssueCount(board) {
   const max = Number(process.env.DAO_CHECK_OPEN_ISSUE_MAX || OPEN_ISSUE_MAX_DEFAULT);
   if (!Number.isFinite(max) || max < 0) {
     fail('open 单阈值没查成', `DAO_CHECK_OPEN_ISSUE_MAX 不是非负数: ${process.env.DAO_CHECK_OPEN_ISSUE_MAX}`);
     return;
   }
-  const issues = runGhJson(['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']);
+  const issues = board.issues;
   if (issues.unscanned) {
     skip(`open 单数量阈值：gh issue list 没查成（${issues.error}），本次没查成，不是绿`);
     return;
   }
-  const prs = runGhJson(['pr', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body']);
+  const prs = board.prs;
   if (prs.unscanned) {
     skip(`open 单数量阈值：open PR 面没查成（${prs.error}）——在途排除做不全，不是绿`);
     return;
   }
-  const cards = runOrcaCardNumbers();
-  if (cards === null) {
+  const wt = board.worktrees;
+  if (wt.unscanned) {
     skip('open 单数量阈值：worktree 卡面没查成（orca 不可用或输出畸形）——少这张卡面会把在途单算成积压，本次没查成，不是绿');
     return;
+  }
+  const cards = [];
+  for (const w of wt.worktrees) {
+    if (!w || w.isMainWorktree || w.isArchived) continue;
+    const name = String(w.displayName || '');
+    const m = name.match(/^#(\d+)/);
+    if (m) cards.push(Number(m[1]));
   }
   const inPr = new Set();
   for (const p of prs.array) {
@@ -669,6 +681,35 @@ function checkOpenIssueCount() {
   green(`open 未在做单 ${n}/${max}（共 ${issues.array.length} 张 open，在途排除：PR ${inPr.size} 张 / 卡 ${inCard.size} 张）`);
 }
 
+// ── ⑮ 可立即起但没起（#577：规矩不配检查等于没有；本项只可见不报红）────────
+// 已消歧 + 无在途 PR/卡 → 打「有 N 个可立即起的单没起」。帅可能有正当理由
+// （并发满、真依赖），所以不翻转退出码；今晚的病是它完全不可见。
+// 解析在 ready-queue-check.mjs，不复用 ⑭ 的 closesNumbers。
+// 并发上限随 #576 落地，本项不发明数字。#576 的 next 接手列表后本项退役。
+
+function checkReadyQueue(board) {
+  if (board.issues.unscanned) {
+    skip(`可立即起：没查成（issue 面：${board.issues.error}，≠ 扫完是 0）`);
+    return;
+  }
+  if (board.prs.unscanned) {
+    skip(`可立即起：没查成（PR 面：${board.prs.error}，≠ 扫完是 0）`);
+    return;
+  }
+  if (board.worktrees.unscanned) {
+    skip(`可立即起：没查成（卡面：${board.worktrees.error}，≠ 扫完是 0）`);
+    return;
+  }
+  const r = inspectReadyQueue({
+    issues: board.issues.array,
+    prs: board.prs.array,
+    worktrees: board.worktrees.worktrees,
+  });
+  if (r.kind === 'unscanned') skip(r.line);
+  else if (r.kind === 'zero') green(r.line);
+  else notes.push(r.line);
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -681,15 +722,19 @@ checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
-checkOpenIssueCount();
+const openBoard = loadOpenBoard();
+checkOpenIssueCount(openBoard);
+checkReadyQueue(openBoard);
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
+const noteBit = notes.length ? `，${notes.length} 条可见` : '';
 
 if (failures.length === 0) {
   for (const g of greens) console.log(`  ok  ${g}`);
+  for (const n of notes) console.log(`  见  ${n}`);
   for (const s of skips) console.log(`  SKIP  ${s}`);
   const skipBit = skips.length ? `，${skips.length} 项跳过` : '';
-  console.log(`\ndao check: 好的（${greens.length} 项${skipBit}，${secs}s）`);
+  console.log(`\ndao check: 好的（${greens.length} 项${noteBit}${skipBit}，${secs}s）`);
   process.exit(0);
 }
 
@@ -698,6 +743,7 @@ for (const [what, how, evidence] of failures) {
   if (how) console.log(`     修：${how}`);
   if (evidence) console.log(`     ${evidence}`);
 }
+for (const n of notes) console.log(`  见  ${n}`);
 for (const s of skips) console.log(`  SKIP  ${s}`);
-console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿 / ${skips.length} 项跳过，${secs}s）`);
+console.log(`\ndao check: 不好（${failures.length} 项红 / ${greens.length} 项绿 / ${skips.length} 项跳过${noteBit}，${secs}s）`);
 process.exit(1);
