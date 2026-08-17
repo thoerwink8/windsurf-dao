@@ -547,9 +547,18 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
 
-  const revTask = orca(argsTaskCreate({ spec: reviewerBook, run: runId }));
+  let revTask = { ok: false, error: 'task-create 还没跑' };
+  for (let i = 0; i < 3; i++) {
+    orca(['orchestration', 'run-use', '--id', runId, '--json']);
+    revTask = orca(argsTaskCreate({ spec: reviewerBook, run: runId }));
+    if (revTask.ok) break;
+    const why = errText(revTask.error);
+    if (!/run_required|consumer_fenced/i.test(why)) break;
+  }
   if (!revTask.ok) {
-    if (isRunRequired(revTask.error)) return { ok: false, reused: true, error: RUN_REQUIRED_HINT };
+    if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
+      return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
+    }
     return { ok: false, reused: true, error: `复用审官 task-create 失败: ${errText(revTask.error)}` };
   }
   const reviewerTaskId = extractTaskId(revTask.json);
