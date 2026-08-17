@@ -2511,7 +2511,6 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
-<<<<<<< HEAD
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend',
   'inbox-collect', 'run-gc', 'ask', 'raw',
 ];
