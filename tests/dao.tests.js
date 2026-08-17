@@ -74,6 +74,8 @@ async function main() {
     check('grok launch 带 --effort xhigh', /--effort\s+xhigh/.test(grok.command), grok.command);
     check('grok launch 带 --always-approve', /--always-approve/.test(grok.command), grok.command);
     check('grok launch 不再用 --permission-mode auto 冒充免确认', !/--permission-mode\s+auto/.test(grok.command), grok.command);
+    const flash = S.resolveLaunch({ model: 'deepseek-v4-flash', routing });
+    check('#602 pi 启动带 provider 前缀，避免裸名歧义', flash.command.includes('opencode-go/deepseek-v4-flash'), flash.command);
     check('shim 文件在仓里', fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')));
     const shim = fs.readFileSync(path.join(REPO, 'scripts', 'grok-shim.cmd'), 'utf8');
     check('shim 带 HTTPS_PROXY', /HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/.test(shim));
@@ -913,12 +915,19 @@ async function main() {
     check('dao.mjs 不再调用 verifyInjectionPolling', !/verifyInjectionPolling\(/.test(daoSrcPoll));
     check('dao.mjs 工人/审官/attach 走 verifyStartedPolling', (daoSrcPoll.match(/verifyStartedPolling\(\{/g) || []).length >= 3);
 
-    const nl = S.assertInjectText('先读 x\n本单 spec：y', { label: '士兵注入' });
-    check('主闸：注入含换行 → 拒，不靠 Pasted Content', nl.ok === false && nl.newlines === true && /换行/.test(nl.error), JSON.stringify(nl));
-    const okLine = S.assertInjectText('先读 host/skills/dispatch/templates/soldier-book.md 全文，那是你的闭环框架。本单 spec：修 X。', { label: '士兵注入' });
-    check('主闸：单行注入放行', okLine.ok === true && okLine.newlines === false, JSON.stringify(okLine));
+    const okLine = S.assertInjectText('读 host/skills/dispatch/templates/soldier-book.md spec=修 X #602', { label: '士兵注入' });
+    check('短指针放行', okLine.ok === true, JSON.stringify(okLine));
+    const withNl = S.assertInjectText('a\nb', { label: '士兵注入' });
+    check('含换行不再拒（按 agent 转码，不禁换行）', withNl.ok === true && withNl.newlines === true, JSON.stringify(withNl));
     const tooLong = S.assertInjectText('x'.repeat(S.INJECT_MAX_BYTES + 1), { label: '士兵注入' });
-    check('次闸：超长单行仍拒', tooLong.ok === false && tooLong.newlines === false && /上限/.test(tooLong.error), JSON.stringify(tooLong));
+    check('次闸：超长单行仍拒', tooLong.ok === false && /上限/.test(tooLong.error), JSON.stringify(tooLong));
+
+    check('grok：\\n → ESC+CR', S.encodeSendText('a\nb\nc', 'grok') === 'a\x1b\rb\x1b\rc');
+    check('claude：\\n 原样', S.encodeSendText('a\nb', 'claude') === 'a\nb');
+    check('pi / opencode-go：\\n 原样', S.encodeSendText('a\nb', 'opencode-go') === 'a\nb' && S.newlineCodec('pi') === 'passthrough');
+    check('codex：不转码（换行留不住）', S.encodeSendText('a\nb', 'codex') === 'a\nb' && S.newlineCodec('gpt-5.6-sol') === 'passthrough-lost');
+    const sent = S.argsTerminalSend({ terminal: 't', text: '一\n二', agent: 'grok' });
+    check('argsTerminalSend(grok) 载荷已转码且不含裸 LF', sent.includes('一\x1b\r二') && !sent.includes('一\n二'));
   }
 
   console.log('\n=== R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚 ===');
@@ -1424,10 +1433,8 @@ async function main() {
     catch (e) { threwN = true; }
     check('审官红项回归：占位符填字面量 null 也抛', threwN);
 
-    let threwNl = false, nlMsg = '';
-    try { S.buildSoldierInject({ spec: '短摘要\n第二行' }); }
-    catch (e) { threwNl = true; nlMsg = String(e.message || e); }
-    check('spec 自带换行 → 注入渲染炸（主闸，不是 Pasted Content）', threwNl && /换行/.test(nlMsg), nlMsg);
+    const multi = S.buildSoldierInject({ spec: '短摘要\n第二行' });
+    check('spec 自带换行：注入渲染不炸，grok 发送前才转码', /\n/.test(multi) && S.encodeSendText(multi, 'grok').includes('\x1b\r') && !S.encodeSendText(multi, 'grok').includes('\n'));
 
     let notFound = false;
     try { S.renderDispatchTemplate('no-such-template.md', {}); }

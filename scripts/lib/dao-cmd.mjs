@@ -154,10 +154,26 @@ export function argsTerminalRead({ terminal, limit, cursor } = {}) {
   return a;
 }
 
-export function argsTerminalSend({ terminal, text, enter } = {}) {
+/** #602 四家对照：只有 grok 要把 LF 转成 Alt+Enter（ESC+CR）。claude/pi 原样；codex 换行留不住，不打补丁。 */
+export function newlineCodec(agentOrProvider) {
+  const a = String(agentOrProvider || '').toLowerCase();
+  if (/grok|xai/.test(a)) return 'esc-cr';
+  if (/gpt|codex/.test(a)) return 'passthrough-lost';
+  return 'passthrough';
+}
+
+export function encodeSendText(text, agentOrProvider) {
+  const s = String(text ?? '');
+  if (newlineCodec(agentOrProvider) === 'esc-cr') {
+    return s.replace(/\r\n|\n|\r/g, '\x1b\r');
+  }
+  return s;
+}
+
+export function argsTerminalSend({ terminal, text, enter, agent } = {}) {
   const a = ['terminal', 'send'];
   if (terminal) a.push('--terminal', terminal);
-  if (text != null) a.push('--text', text);
+  if (text != null) a.push('--text', encodeSendText(text, agent));
   if (enter) a.push('--enter');
   a.push('--json');
   return a;
@@ -2259,26 +2275,17 @@ export function stripInjectEof(text) {
 export function assertInjectText(text, { label } = {}) {
   const s = String(text ?? '');
   const bytes = injectUtf8Bytes(s);
-  if (/[\r\n]/.test(s)) {
-    return {
-      ok: false,
-      length: s.length,
-      bytes,
-      newlines: true,
-      error: `注入含换行符（${label || 'task spec'}）——每个换行会被 TUI 拆成一次提交。${INJECT_OVER_LIMIT_HINT}`,
-    };
-  }
   if (bytes > INJECT_MAX_BYTES) {
     return {
       ok: false,
       length: s.length,
       bytes,
-      newlines: false,
+      newlines: /[\r\n]/.test(s),
       limit: INJECT_MAX_BYTES,
       error: `注入 ${bytes} 字节超过上限 ${INJECT_MAX_BYTES}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}`,
     };
   }
-  return { ok: true, length: s.length, bytes, newlines: false, limit: INJECT_MAX_BYTES };
+  return { ok: true, length: s.length, bytes, newlines: /[\r\n]/.test(s), limit: INJECT_MAX_BYTES };
 }
 
 /** 兼容旧名：先禁换行，再量长度。 */
@@ -2553,7 +2560,7 @@ export const FLAGS_BY_VERB = {
     '--issue', '--comment', '--json', '--help', '-h',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
-  'task-create': new Set(['--spec', '--run', '--json', '--help', '-h']),
+  'task-create': new Set(['--spec', '--run', '--agent', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
@@ -2571,7 +2578,7 @@ export const FLAGS_BY_VERB = {
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--dry-run', '--json', '--help', '-h',
   ]),
-  send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
+  send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
   ]),
@@ -2659,7 +2666,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
-  send --terminal <handle> --text <文> [--enter]
+  send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
+                  # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle

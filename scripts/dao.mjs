@@ -75,6 +75,7 @@ import {
   buildSoldierInject,
   buildReviewerInject,
   assertInjectText,
+  encodeSendText,
   runGh,
   stampIssueLabels,
   syncPrLabelsFromIssue,
@@ -414,7 +415,7 @@ function cmdDispatch(args) {
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? buildSoldierInject({ spec: String(args.spec), issue: args.issue })
+      ? encodeSendText(buildSoldierInject({ spec: String(args.spec), issue: args.issue }), workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
@@ -643,12 +644,12 @@ function reuseReviewerOnTerminal({
 
   let reviewerBook;
   try {
-    reviewerBook = buildReviewerInject({
+    reviewerBook = encodeSendText(buildReviewerInject({
       spec: `复用审官终端审 PR #${pr}`,
       pr: String(pr),
       soldierDispatchId: String(soldierDispatchId),
       mergePolicy: 'auto',
-    });
+    }), reviewer);
   } catch (e) {
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
   }
@@ -1149,9 +1150,10 @@ function cmdWorktreeRm(args) {
 
 function cmdTaskCreate(args) {
   if (!args.spec) fail('task-create 要 --spec');
-  const gate = assertInjectText(String(args.spec), { label: 'task-create' });
+  const spec = encodeSendText(String(args.spec), args.agent);
+  const gate = assertInjectText(spec, { label: 'task-create' });
   if (!gate.ok) fail(gate.error);
-  const r = orca(argsTaskCreate({ spec: args.spec }));
+  const r = orca(argsTaskCreate({ spec }));
   if (!r.ok) {
     if (isRunRequired(r.error)) fail(RUN_REQUIRED_HINT);
     fail(`task-create 失败: ${errText(r.error)}`);
@@ -1350,14 +1352,14 @@ function cmdReviewerCreate(args) {
 
   let reviewerBook = null;
   try {
-    reviewerBook = buildReviewerInject({
+    reviewerBook = encodeSendText(buildReviewerInject({
       spec: `按审官任务书审 PR #${args.pr}`,
       issue: args.issue,
       pr: String(args.pr),
       soldierDispatchId: String(soldierDispatchId),
       mergePolicy: policy,
       mergeReason: args.mergeReason,
-    });
+    }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
@@ -1571,7 +1573,7 @@ function cmdReviewerAttach(args) {
 
   let reviewerBook = null;
   try {
-    reviewerBook = args.spec
+    reviewerBook = encodeSendText(args.spec
       ? (() => {
         const gate = assertInjectText(String(args.spec), { label: '审官注入' });
         if (!gate.ok) throw new Error(gate.error);
@@ -1584,7 +1586,7 @@ function cmdReviewerAttach(args) {
         soldierDispatchId: String(soldierDispatchId),
         mergePolicy: policy,
         mergeReason: args.mergeReason,
-      });
+      }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
@@ -1662,6 +1664,7 @@ function cmdSend(args) {
     terminal: args.terminal,
     text: args.text,
     enter: args.enter,
+    agent: args.agent,
   }));
   if (!r.ok) fail(`terminal send 失败: ${errText(r.error)}`);
   emit({ ok: true, json: r.json });
