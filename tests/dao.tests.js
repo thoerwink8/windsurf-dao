@@ -1166,6 +1166,19 @@ async function main() {
     check('#559 续 Dispatch：CLI 收 --task+--terminal 不带 --worktree', parsedContinue.task === 't' && parsedContinue.terminal === 'h' && parsedContinue.worktree === undefined, JSON.stringify(parsedContinue));
 
     check('#593 inbox-collect / run-gc / ask 已登记进 VERBS', S.VERBS.includes('inbox-collect') && S.VERBS.includes('run-gc') && S.VERBS.includes('ask'), S.VERBS.join(','));
+    const askZero = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', '0'], { encoding: 'utf8', cwd: REPO });
+    const askZeroJ = (() => { try { return JSON.parse(askZero.stdout || '{}'); } catch { return {}; } })();
+    check('#598 红项3：--timeout-ms 0 非零且不空转', askZero.status !== 0 && /正整数/.test(String(askZeroJ.error || askZero.stderr || '')), JSON.stringify(askZeroJ));
+    const askNan = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', 'nope'], { encoding: 'utf8', cwd: REPO });
+    const askNanJ = (() => { try { return JSON.parse(askNan.stdout || '{}'); } catch { return {}; } })();
+    check('#598 红项3：--timeout-ms 非数字 非零', askNan.status !== 0 && /正整数/.test(String(askNanJ.error || '')), JSON.stringify(askNanJ));
+    const askFrac = spawnSync(process.execPath, [CLI, 'ask', '--question', 'x', '--timeout-ms', '1.5'], { encoding: 'utf8', cwd: REPO });
+    const askFracJ = (() => { try { return JSON.parse(askFrac.stdout || '{}'); } catch { return {}; } })();
+    check('#598 红项3：--timeout-ms 小数 非零', askFrac.status !== 0 && /正整数/.test(String(askFracJ.error || '')), JSON.stringify(askFracJ));
+    const daoCliSrc = fs.readFileSync(CLI, 'utf8');
+    check('#598 红项1：worktree-rm 删树前要先查 worker-list/run-list', /worker-list 没查成，未删任何树/.test(daoCliSrc) && /run-list 没查成，未删任何树/.test(daoCliSrc));
+    check('#598 红项1：退役失败走 fail 不是 ok:true', /finalizeWorktreeRmLifecycle/.test(daoCliSrc) && /if \(!life\.ok\)/.test(daoCliSrc));
+    check('#598 红项2：reply 无 --from 不许裸发', /reply 没有信箱台 --from/.test(daoCliSrc) && /resolveReplySender/.test(daoCliSrc));
     check('#559 ③ reply 已登记进 VERBS', S.VERBS.includes('reply'), S.VERBS.join(','));
     const replyArgs = S.argsOrchestrationReply({ id: 'msg_q1', body: '可以' });
     check('reply 拼 --id + --body', replyArgs.includes('--id') && replyArgs[replyArgs.indexOf('--id') + 1] === 'msg_q1' && replyArgs[replyArgs.indexOf('--body') + 1] === '可以', replyArgs.join(' '));

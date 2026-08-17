@@ -202,6 +202,98 @@ export function resolveReplyTarget({
   return { ok: true, runId, from, message: msg };
 }
 
+/** reply 发信前的闸：没查成 / 没有台 handle 一律拦下，不许裸 reply。 */
+export function resolveReplySender({
+  messageId, explicitFrom, explicitRun, inboxOk, inboxMessages, runListOk, runs,
+} = {}) {
+  if (explicitFrom && explicitRun) {
+    return { ok: true, from: explicitFrom, runId: explicitRun };
+  }
+  if (inboxOk === false) {
+    return { ok: false, unscanned: true, error: 'inbox 没查成，不能猜 --from' };
+  }
+  if (runListOk === false && !explicitFrom) {
+    return { ok: false, unscanned: true, error: 'run-list 没查成，不能猜 coordinator' };
+  }
+  const resolved = resolveReplyTarget({
+    messageId,
+    inboxMessages: inboxOk === false ? null : inboxMessages,
+    runs: runListOk === false ? null : runs,
+    explicitFrom,
+    explicitRun,
+  });
+  if (!resolved.ok) return resolved;
+  const from = explicitFrom || resolved.from;
+  if (!from) {
+    return { ok: false, error: '这个 Run 没有活着的 coordinator，给 --from <信箱台 handle>' };
+  }
+  return { ok: true, from, runId: explicitRun || resolved.runId };
+}
+
+export function parseAskTimeoutMs(raw, { defaultMs = 600000 } = {}) {
+  if (raw == null || raw === '') {
+    return { ok: true, timeoutMs: defaultMs, defaulted: true };
+  }
+  if (typeof raw === 'string' && !/^\d+$/.test(raw.trim())) {
+    return { ok: false, error: `ask --timeout-ms 要正整数，实际 ${raw}` };
+  }
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return { ok: false, error: `ask --timeout-ms 要正整数，实际 ${raw}` };
+  }
+  return { ok: true, timeoutMs: n, defaulted: false };
+}
+
+/** 删树之后的退役收口。任何映射/名单/关台失败都 ok:false，不许装成归档成功。 */
+export function finalizeWorktreeRmLifecycle({ mapped, gc, retireResults } = {}) {
+  if (!mapped || mapped.ok !== true) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: (mapped && mapped.error) || 'Run 映射没查成',
+      retired: [],
+      failed: [],
+      skipped: [],
+    };
+  }
+  if (!gc || gc.ok !== true) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: (gc && gc.error) || '退役名单没查成',
+      retired: [],
+      failed: [],
+      skipped: [],
+    };
+  }
+  const retired = [];
+  const skipped = [];
+  const failed = [];
+  for (const runId of mapped.runIds || []) {
+    if (!gc.retire.some(r => r.id === runId)) {
+      skipped.push({ runId, reason: '仍有在途单占用，不退役' });
+      continue;
+    }
+    const one = (retireResults || []).find(r => r && r.runId === runId);
+    if (!one) {
+      failed.push({ runId, error: '退役结果缺失' });
+      continue;
+    }
+    if (one.ok) retired.push(one);
+    else failed.push(one);
+  }
+  if (failed.length) {
+    return {
+      ok: false,
+      error: `Run 退役失败：${failed.map(f => f.runId || f.error).join('、')}`,
+      retired,
+      failed,
+      skipped,
+    };
+  }
+  return { ok: true, retired, failed, skipped };
+}
+
 export function findThreadReply(messages, questionId) {
   if (!Array.isArray(messages) || !questionId) return null;
   return messages.find(m => m && m.thread_id === questionId) || null;

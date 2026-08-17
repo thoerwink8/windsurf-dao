@@ -105,11 +105,13 @@ import {
   resolveRunsForWorktrees,
   planInboxCollect,
   classifyMailboxRead,
-  resolveReplyTarget,
   findThreadReply,
   classifyAskPoll,
   planStationRetire,
   applyStationRetire,
+  resolveReplySender,
+  parseAskTimeoutMs,
+  finalizeWorktreeRmLifecycle,
 } from './lib/run-lifecycle.mjs';
 import { defaultLogRel, leasePath, launchFilePath } from './inbox-station.mjs';
 
@@ -1019,11 +1021,18 @@ function cmdWorktreeRm(args) {
   });
   if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
   const wl = orca(argsWorkerList());
-  const workers = wl.ok ? unwrapWorkers(wl.json) : null;
+  if (!wl.ok) fail(`worker-list 没查成，未删任何树: ${errText(wl.error)}`);
+  const workers = unwrapWorkers(wl.json);
+  if (!Array.isArray(workers)) fail('worker-list 没有 result.workers，未删任何树');
+  const rl = orca(argsRunList());
+  if (!rl.ok) fail(`run-list 没查成，未删任何树: ${errText(rl.error)}`);
+  const runs = unwrapRuns(rl.json);
+  if (!Array.isArray(runs)) fail('run-list 没有 result.runs，未删任何树');
   const mapped = resolveRunsForWorktrees({
     workers,
     treeIds: plan.order.map(n => n.id),
   });
+  if (!mapped.ok) fail(`Run 映射没查成，未删任何树: ${mapped.error}`);
   const applied = applyWorktreeRmPlan(plan, {
     rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
   });
@@ -1034,38 +1043,21 @@ function cmdWorktreeRm(args) {
     const id = w.worktreeId || w.id;
     return id && !removedIds.has(id);
   });
-  const rl = orca(argsRunList());
-  const runs = rl.ok ? unwrapRuns(rl.json) : null;
-  const gc = planRunGc({
-    runs: Array.isArray(runs) ? runs : [],
-    workers: Array.isArray(workers) ? workers : [],
-    worktrees: remaining,
-  });
-  const retired = [];
-  const skipped = [];
-  const failed = [];
-  if (!mapped.ok) {
-    skipped.push({ reason: mapped.error, unscanned: true });
-  } else {
-    for (const runId of mapped.runIds) {
-      if (!gc.ok || !gc.retire.some(r => r.id === runId)) {
-        skipped.push({ runId, reason: '仍有在途单占用，不退役' });
-        continue;
-      }
-      const one = retireOneRun(runId);
-      if (one.ok) retired.push(one);
-      else failed.push(one);
-    }
+  const gc = planRunGc({ runs, workers, worktrees: remaining });
+  if (!gc.ok) fail(`退役名单没查成，树已删: ${gc.error}`, { removed: applied.removed });
+  const retireResults = [];
+  for (const runId of mapped.runIds) {
+    if (!gc.retire.some(r => r.id === runId)) continue;
+    retireResults.push(retireOneRun(runId));
+  }
+  const life = finalizeWorktreeRmLifecycle({ mapped, gc, retireResults });
+  if (!life.ok) {
+    fail(life.error, { removed: applied.removed, runs: life });
   }
   emit({
     ok: true,
     removed: applied.removed,
-    runs: {
-      retired,
-      skipped,
-      failed,
-      mapUnscanned: !mapped.ok,
-    },
+    runs: life,
   });
 }
 
@@ -1613,25 +1605,29 @@ function cmdNotify(args) {
 function cmdReply(args) {
   if (!args.id) fail('reply 要 --id（被回答的消息 id）');
   if (args.body == null) fail('reply 要 --body');
-  let from = args.from || null;
-  let run = args.run || null;
-  if (!from || !run) {
+  let sender;
+  if (args.from && args.run) {
+    sender = { ok: true, from: args.from, runId: args.run };
+  } else {
     const inbox = orca(argsOrchestrationInbox({ limit: 80, full: true }));
     const rl = orca(argsRunList());
-    const resolved = resolveReplyTarget({
+    sender = resolveReplySender({
       messageId: args.id,
+      explicitFrom: args.from || null,
+      explicitRun: args.run || null,
+      inboxOk: inbox.ok,
       inboxMessages: inbox.ok ? (inbox.json?.result?.messages || []) : null,
-      runs: rl.ok ? unwrapRuns(rl.json) : [],
-      explicitFrom: from,
-      explicitRun: run,
+      runListOk: rl.ok,
+      runs: rl.ok ? unwrapRuns(rl.json) : null,
     });
-    if (!resolved.ok) fail(`reply 定位失败: ${resolved.error}`);
-    if (!from) from = resolved.from;
-    if (!run) run = resolved.runId;
   }
-  const r = orca(argsOrchestrationReply({ id: args.id, body: args.body, from, run }));
+  if (!sender.ok) fail(`reply 定位失败: ${sender.error}`);
+  if (!sender.from) fail('reply 没有信箱台 --from，不许裸发');
+  const r = orca(argsOrchestrationReply({
+    id: args.id, body: args.body, from: sender.from, run: sender.runId,
+  }));
   if (!r.ok) fail(`reply 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json, messageId: args.id, from: from || null, run: run || null });
+  emit({ ok: true, json: r.json, messageId: args.id, from: sender.from, run: sender.runId || null });
 }
 
 function cmdInboxCollect(args) {
@@ -1699,8 +1695,9 @@ function cmdRunGc(args) {
 
 function cmdAsk(args) {
   if (!args.question) fail('ask 要 --question');
-  const timeoutMs = Number(args.timeoutMs) || 600000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) fail('ask --timeout-ms 要正整数');
+  const parsedTimeout = parseAskTimeoutMs(args.timeoutMs);
+  if (!parsedTimeout.ok) fail(parsedTimeout.error);
+  const timeoutMs = parsedTimeout.timeoutMs;
   let runId = args.run || null;
   if (!runId) {
     const cur = orca(argsRunCurrent());

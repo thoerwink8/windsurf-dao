@@ -193,6 +193,57 @@ async function main() {
     check('关台真失败要报', boom.ok === false && /关信箱台失败/.test(boom.error), boom.error);
   }
 
+  console.log('\n=== #598 审官红项：reply / timeout / 退役收口 fail-closed ===');
+  {
+    const noCoord = S.resolveReplySender({
+      messageId: 'msg_q',
+      inboxOk: true,
+      inboxMessages: [{ id: 'msg_q', run_id: 'run_a' }],
+      runListOk: true,
+      runs: [run({ id: 'run_a', coord: null })],
+    });
+    check('没有 coordinator 不许发', noCoord.ok === false && /coordinator/.test(noCoord.error), JSON.stringify(noCoord));
+    const inboxDown = S.resolveReplySender({
+      messageId: 'msg_q', inboxOk: false, runListOk: true, runs: [],
+    });
+    check('inbox 没查成 fail-closed', inboxDown.ok === false && inboxDown.unscanned === true);
+    const listDown = S.resolveReplySender({
+      messageId: 'msg_q', inboxOk: true, inboxMessages: [{ id: 'msg_q', run_id: 'run_a' }],
+      runListOk: false,
+    });
+    check('run-list 没查成 fail-closed', listDown.ok === false && listDown.unscanned === true);
+    const explicit = S.resolveReplySender({
+      messageId: 'msg_q', explicitFrom: 'term_s', explicitRun: 'run_a',
+    });
+    check('显式 --from/--run 放行', explicit.ok && explicit.from === 'term_s');
+
+    check('timeout 未给 → 默认', S.parseAskTimeoutMs(undefined).timeoutMs === 600000 && S.parseAskTimeoutMs(undefined).defaulted === true);
+    check('timeout 0 非零', S.parseAskTimeoutMs(0).ok === false);
+    check('timeout 字符串 0 非零', S.parseAskTimeoutMs('0').ok === false);
+    check('timeout NaN 非零', S.parseAskTimeoutMs('nope').ok === false);
+    check('timeout 小数 非零', S.parseAskTimeoutMs('1.5').ok === false);
+    check('timeout 正整数过', S.parseAskTimeoutMs('12').ok && S.parseAskTimeoutMs('12').timeoutMs === 12);
+
+    const lifeFail = S.finalizeWorktreeRmLifecycle({
+      mapped: { ok: true, runIds: ['run_a'] },
+      gc: { ok: true, retire: [{ id: 'run_a' }] },
+      retireResults: [{ ok: false, runId: 'run_a', error: '关台失败' }],
+    });
+    check('退役失败 → 归档非零', lifeFail.ok === false && /退役失败/.test(lifeFail.error), JSON.stringify(lifeFail));
+    const mapDown = S.finalizeWorktreeRmLifecycle({
+      mapped: { ok: false, unscanned: true, error: 'worker-list 结构不认识' },
+      gc: { ok: true, retire: [] },
+      retireResults: [],
+    });
+    check('映射没查成 → 归档非零', mapDown.ok === false && mapDown.unscanned === true);
+    const lifeOk = S.finalizeWorktreeRmLifecycle({
+      mapped: { ok: true, runIds: ['run_a'] },
+      gc: { ok: true, retire: [{ id: 'run_a' }] },
+      retireResults: [{ ok: true, runId: 'run_a', state: 'retired' }],
+    });
+    check('退役成功才 ok', lifeOk.ok === true && lifeOk.retired.length === 1);
+  }
+
   console.log(`\n${fail === 0 ? 'OK' : 'FAIL'}  ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }
