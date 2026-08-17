@@ -276,7 +276,9 @@ export function finalizeEnsure({
       }),
     };
   }
-  if (!coordinatorHandle || coordinatorHandle !== handle) {
+  // all-alive 秒退：中继活着即可，coordinator 被借走不失败（也不改租约 handle）。
+  // rebuild/restart 仍要夺回，否则新台横幅不在自己手里。
+  if (action !== 'ok' && (!coordinatorHandle || coordinatorHandle !== handle)) {
     return {
       exitCode: 1,
       payload: statusPayload({
@@ -304,7 +306,8 @@ export function decideEnsureAction({ runId, coordinatorHandle, terminals, lease,
   const relayAlive = isStationAlive(lease, runId, { now, ttlMs });
   if (relayAlive) {
     // 中继活着即全活着：coordinator 若被帅临时借走，中继每轮 run-use 会自夺回。
-    return { action: 'ok', reason: 'all-alive', handle: coordTerm?.handle || null };
+    // 返回的 handle 只能是租约里已验证的台，不能是当前 coordinator（#601 审官红：借走时会污染租约）。
+    return { action: 'ok', reason: 'all-alive', handle: (lease && lease.handle) || null };
   }
   // 本 run 的台死了或从没有过。coordinator 可能仍挂在死壳/帅的终端上。
   if (coordTerm) {
@@ -611,6 +614,14 @@ export function mergeLeaseHandle(prev, nextHandle) {
   return nextHandle || (prev && prev.handle) || null;
 }
 
+/** 租约 handle 只来自创建出来的信箱台。ensure 活着时不得用当前 coordinator 覆写。 */
+export function acceptLeaseHandleStamp({ prevHandle, nextHandle, source } = {}) {
+  if (!nextHandle) return false;
+  if (source === 'rebuild') return true;
+  if (prevHandle && prevHandle === nextHandle) return true;
+  return false;
+}
+
 function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS, handle) {
   const prev = loadLease(logPath);
   writeFileSync(leasePath(logPath), formatLease({
@@ -718,7 +729,7 @@ async function cmdEnsure(args) {
     foreignStation,
   });
 
-  let handle = coordTerm?.handle || null;
+  let handle = (lease && lease.handle) || decision.handle || null;
   let action = decision.action;
   let reason = decision.reason;
 
@@ -748,9 +759,20 @@ async function cmdEnsure(args) {
       process.exit(1);
     }
     handle = rebuilt.handle;
+    if (acceptLeaseHandleStamp({
+      prevHandle: loadLease(logPath)?.handle || null,
+      nextHandle: handle,
+      source: 'rebuild',
+    })) {
+      stampLeaseHandle(logPath, handle);
+    }
+  } else if (acceptLeaseHandleStamp({
+    prevHandle: (lease && lease.handle) || null,
+    nextHandle: handle,
+    source: 'ensure',
+  })) {
+    stampLeaseHandle(logPath, handle);
   }
-
-  if (handle) stampLeaseHandle(logPath, handle);
 
   const afterShow = showRun(runId);
   const afterList = listTerminals();
