@@ -167,6 +167,14 @@ check("混判：无判定行样本不进平均，平均=1.0", mixedRework[0].ave
   check("有样本的 0 轮仍是 0.0 不是无样本", renderRow(mixedRows[0]).includes("0.0") && !renderRow(mixedRows[0]).includes("无样本"));
 }
 
+{
+  const allEmpty = [{ model: "a", taskType: "写码", sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] }];
+  const report = renderFullReport(allEmpty, 0);
+  check("全量无样本不打废表行", !report.includes("| 无样本 | 无样本 | 无样本 | 无样本 | 无样本 | 无样本 |"), report);
+  check("全量无样本只留汇总句", /另有 1 个模型×任务类组合无样本/.test(report), report);
+  check("全量无样本不残留表头", !/\| 模型 \| 任务类 \|/.test(report), report);
+}
+
 // #581：校准改读账本后，判定行函数仍导出（flow / 回归网用），样本识别走事件
 check("没有事件的话术 ≠ 0 红", describeNoEvents(12).includes("没有事件") && !describeNoEvents(12).startsWith("0"));
 const fromLedger = samplesFromEvents([
