@@ -148,10 +148,12 @@ export function mutateWorktreeComment({ worktreeId, mutate, runOrca } = {}) {
   return { ok: true, action: 'updated', worktreeId, from: current, comment: next };
 }
 
-export function afterDispatchComment({ name, worktreeId, runOrca } = {}) {
-  const tickets = ticketsFromName(name);
+export function afterDispatchComment({ name, issue, worktreeId, runOrca } = {}) {
+  let tickets = ticketsFromName(name);
+  const t = normalizeTicket(issue);
+  if (t && !tickets.includes(t)) tickets = [...tickets, t];
   if (!tickets.length) {
-    return { ok: true, action: 'skip', reason: '派工名里没有 #单号，comment 不定界区', tickets };
+    return { ok: true, action: 'skip', reason: '派工名与 --issue 里都没有 #单号，comment 不定界区', tickets };
   }
   const r = mutateWorktreeComment({
     worktreeId,
