@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-16T05:22:03+08:00",
+  "machine": "backfill",
+  "seq": 51,
+  "job_id": "gh-pr-497",
+  "model": "deepseek-v4-flash",
+  "model_share": 0,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.5,
+  "why": "L0：未合并关闭且判不出主责，待定 unknown（#497）",
+  "evidence": [
+    "github:pr-497"
+  ],
+  "pr_number": 497,
+  "source": "github-backfill",
+  "event_id": "5df5c1df19bd38c6cf7ee78c348550b8cb0c4a1acb6eea7287180fa5f03f72c3"
+}

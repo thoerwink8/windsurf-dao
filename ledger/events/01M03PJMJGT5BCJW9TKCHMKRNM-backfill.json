@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T05:52:18+08:00",
+  "machine": "backfill",
+  "seq": 96,
+  "job_id": "gh-pr-543",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #543；[pi] memory 搬家收尾：删主仓 host/memory，dao-check ⑥ 退役 ⑨ 改指独立仓 windsurf-dao-memory（#529）；判定行红 0 项",
+  "pr_number": 543,
+  "source": "github-backfill",
+  "event_id": "6fb4ca8003d71f4b339f373419a51090c1e38ab548e62b772e32889e764b598d"
+}

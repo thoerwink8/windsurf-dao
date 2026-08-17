@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T01:28:50+08:00",
+  "machine": "backfill",
+  "seq": 60,
+  "job_id": "gh-pr-509",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #509；[pi] fix(校准): 返工轮数口径改数判定行条数-1（#501 缺陷二）；判定行红 0 项",
+  "pr_number": 509,
+  "source": "github-backfill",
+  "event_id": "577b5b1cb03e299f9d89c6ed00cc3a2aadc94eb882e973deecfaba3805ac3712"
+}

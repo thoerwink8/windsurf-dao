@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T05:46:29+08:00",
+  "machine": "backfill",
+  "seq": 92,
+  "job_id": "gh-pr-542",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #542；[pi] dispatch skill 口径四条：#507 spec 枚举全职责 + #527 Closes 逐号带词 + #532 gh 失败分开 + 主树常驻 master；判定行红 0 项",
+  "pr_number": 542,
+  "source": "github-backfill",
+  "event_id": "f5df92ef73f6b671b19964962c1971e946b586f6fa716d77cbe238ad4ce89c20"
+}
