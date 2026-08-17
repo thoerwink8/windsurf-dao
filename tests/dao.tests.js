@@ -1114,6 +1114,8 @@ async function main() {
     check('R3 --sandbox 不再被静默吞掉', badSandbox.status !== 0 && /未知参数: --sandbox/.test(sandText), sandText);
 
     check('R3 VERBS 与 FLAGS_BY_VERB 齐（除 raw）', S.verbFlagGaps().length === 0, S.verbFlagGaps().join(','));
+    check('#591 amend 已登记进 VERBS', S.VERBS.includes('amend'), S.VERBS.join(','));
+    check('#591 USAGE 有 amend', /amend --issue/.test(S.USAGE));
     check('R3 缺 FLAGS 条目能被发现', S.verbFlagGaps(['start', 'newverb']).includes('newverb'));
     const saved = S.FLAGS_BY_VERB.start;
     delete S.FLAGS_BY_VERB.start;

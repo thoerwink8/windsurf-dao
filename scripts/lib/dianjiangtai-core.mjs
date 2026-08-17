@@ -127,7 +127,7 @@ export function buildSamples({ events, at, registryByModel }) {
 
   const byJob = new Map();
   for (const e of cutoffEvents) {
-    if (e.type === 'job.override' && e.job_id) {
+    if (e.type === 'job.override' && e.job_id && e.override_kind !== 'scope') {
       overrides.push({ model: e.model, identity: e.identity, workType: e.work_type, tsMs: tsMs(e.ts), jobId: e.job_id });
     }
     if (e.job_id) {

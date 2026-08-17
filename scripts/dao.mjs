@@ -9,7 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { readLedgerEvents, queryLedger } from './lib/ledger-query.mjs';
+import { readLedgerEvents, queryLedger, describeUnclosedJobs } from './lib/ledger-query.mjs';
 import {
   ROOT,
   USAGE,
@@ -96,7 +96,8 @@ import { applyGitIdentity } from './lib/gh.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
-  resolveMainWorktreeRoot,
+  writeJobOverride, resolveAmendTarget, formatAmendComment, workerJobId,
+  linkAliasesToSuccessor, resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import {
@@ -491,7 +492,11 @@ function cmdDispatch(args) {
       identity: '工人',
       workType: gate.role || '写码',
       terminal: workerLaunch.provider || 'dao',
-      extra: args.issue ? { issue_number: Number(args.issue) || args.issue } : {},
+      extra: {
+      source: 'dao-dispatch',
+      dispatch_id: created.workerDispatchId,
+      ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
+    },
     });
     if (!ledger.ok && !ledger.skipped) {
       console.error(`[dao] dispatch 账本没写上（派工本身成功）：${ledger.error}`);
@@ -895,6 +900,24 @@ function cmdWorkerDone(args) {
   if (!notify.ok) fail(notify.error, { ...plan, postedIssue, postedPr, notified: notify.notified, reviewerCreate: create, reviewerReuse: reused });
   const notified = notify.notified;
 
+  let ledgerLink = null;
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    const events = listed.unscanned ? [] : listed.events;
+    ledgerLink = linkAliasesToSuccessor({
+      ctx,
+      ts: beijingIsoFrom(new Date()),
+      events,
+      successorJobId: workerJobId(Number(args.pr)),
+      issueNumber: plan.issue ? Number(plan.issue) : null,
+      prNumber: Number(args.pr),
+      identity: '工人',
+    });
+  } catch (e) {
+    ledgerLink = { ok: false, error: String(e.message || e) };
+  }
+
   emit({
     ok: true,
     commentPosted: true,
@@ -908,6 +931,7 @@ function cmdWorkerDone(args) {
     reviewerReuse: reused,
     notified,
     notifiedDispatchId: reviewerDispatchId,
+    ledgerLink,
   });
 }
 
@@ -994,11 +1018,13 @@ function cmdLedgerQuery(args) {
     unclosed: !!args.unclosed,
   });
   if (r.kind === 'unscanned') fail(`账本没查成：${r.error}`);
+  const unclosed = args.unclosed ? describeUnclosedJobs(listed.events) : undefined;
   emit({
     ok: true,
     kind: r.kind,
     count: r.count,
     line: r.line,
+    ...(unclosed ? { unclosed } : {}),
     events: r.events.map(e => ({
       ts: e.ts || null,
       type: e.type || null,
@@ -1006,6 +1032,70 @@ function cmdLedgerQuery(args) {
       pr_number: e.pr_number ?? null,
       model: e.model || null,
     })),
+  });
+}
+
+function cmdAmend(args) {
+  if (!args.why || !String(args.why).trim()) fail('amend 要 --why <一句话>');
+  const by = args.by || '帅';
+  if (by !== '帅' && by !== '用户') fail('amend --by 只认 帅 或 用户');
+  let ctx;
+  try { ctx = loadLedgerContext({ root: ROOT }); }
+  catch (e) { fail(`账本落点没查成：${e.message || e}`); }
+  const listed = readLedgerEvents(ctx.dir);
+  if (listed.unscanned) fail(`账本没查成：${listed.error}`);
+  const target = resolveAmendTarget({ events: listed.events, issue: args.issue, pr: args.pr });
+  if (!target.ok) fail(target.error);
+  const model = args.model || target.model;
+  if (!model) fail('amend 找不到该单模型——给 --model');
+  const issue = args.issue || target.issueNumber;
+  if (!issue) fail('amend 要 --issue（正文要发到 issue）');
+  if (args.dryRun) {
+    emit({
+      ok: true,
+      dryRun: true,
+      jobId: target.jobId,
+      prNumber: target.prNumber,
+      issueNumber: Number(issue),
+      model,
+      why: String(args.why).trim(),
+      triggeredBy: by,
+    });
+  }
+  const written = writeJobOverride({
+    ...ctx,
+    ts: beijingIsoFrom(new Date()),
+    jobId: target.jobId,
+    model,
+    identity: '帅',
+    workType: target.workType || '写码',
+    triggeredBy: by,
+    why: String(args.why).trim(),
+    prNumber: target.prNumber,
+    issueNumber: Number(issue),
+    extra: { source: 'dao-amend' },
+  });
+  if (!written.ok) fail(`job.override 没写上：${written.error}`);
+  const body = formatAmendComment({
+    triggeredBy: by,
+    why: String(args.why).trim(),
+    jobId: target.jobId,
+    eventId: written.event && written.event.event_id,
+  });
+  const posted = postIssueComment({ issue, body, runGh: ghRunner() });
+  if (!posted.ok) fail(`override 已写入但 issue 评论没发出：${posted.error}`, { ledger: written, posted });
+  emit({
+    ok: true,
+    skipped: Boolean(written.skipped),
+    jobId: target.jobId,
+    prNumber: target.prNumber,
+    issueNumber: Number(issue),
+    model,
+    triggeredBy: by,
+    why: String(args.why).trim(),
+    eventId: written.event && written.event.event_id,
+    path: written.path || null,
+    posted,
   });
 }
 
@@ -1835,6 +1925,7 @@ function main() {
     case 'check-help': return cmdCheckHelp();
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
     case 'ledger-query': return cmdLedgerQuery(args);
+    case 'amend': return cmdAmend(args);
     case 'raw': return cmdRaw(args);
     default:
       console.error(`未知动词: ${args.verb}`);

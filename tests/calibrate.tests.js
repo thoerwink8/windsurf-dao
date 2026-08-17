@@ -183,5 +183,50 @@ const fromLedger = samplesFromEvents([
 ]);
 check("账本 0 红样本 redFlags=0 且任务类=审查", fromLedger[0].redFlags === 0 && fromLedger[0].taskType === "审查");
 
+// #591 读取侧三态：未记录 / 0 / 无审，表上不许长得一样；未记录不进均值
+{
+  const { formatRedCell, renderRow, buildRows, samplesFromEvents } = require("../scripts/calibrate.mjs");
+  const unrecorded = samplesFromEvents([
+    { type: "job.dispatch", job_id: "gh-pr-582", model: "grok-4.6", identity: "工人", work_type: "写码" },
+    { type: "job.dispatch", job_id: "gh-pr-582-review", model: "gpt-5.6-sol", identity: "审官", work_type: "审查" },
+    { type: "job.closed", job_id: "gh-pr-582", pr_number: 582, success: true, ts: "2026-08-17T12:00:00+08:00" },
+  ]);
+  check("#582 残缺 closed → redKind=unrecorded", unrecorded[0].redKind === "unrecorded" && unrecorded[0].redFlags === null, JSON.stringify(unrecorded[0]));
+  const zero = samplesFromEvents([
+    { type: "job.dispatch", job_id: "gh-pr-592", model: "grok-4.6", identity: "工人", work_type: "写码" },
+    { type: "job.closed", job_id: "gh-pr-592", pr_number: 592, red_flags: 0, worker_rework: 0, ts: "2026-08-17T12:00:00+08:00" },
+  ]);
+  check("#592 完整 0 红 → redKind=zero", zero[0].redKind === "zero" && zero[0].redFlags === 0);
+  const none = samplesFromEvents([
+    { type: "job.dispatch", job_id: "gh-pr-10", model: "grok-4.6", identity: "工人", work_type: "写码" },
+    { type: "job.closed", job_id: "gh-pr-10", pr_number: 10, success: true, ts: "2026-08-17T12:00:00+08:00" },
+  ]);
+  check("无审官 job → redKind=none", none[0].redKind === "none");
+  const rowU = buildRows([{ model: "m", taskType: "写码", rework: 1, redFlags: null, redKind: "unrecorded", number: 582, mergedAt: "2026-08-17T00:00:00Z" }], [], ["写码"]);
+  const row0 = buildRows([{ model: "m", taskType: "写码", rework: 0, redFlags: 0, redKind: "zero", number: 592, mergedAt: "2026-08-17T00:00:00Z" }], [], ["写码"]);
+  const rowN = buildRows([{ model: "m", taskType: "写码", rework: 1, redFlags: null, redKind: "none", number: 10, mergedAt: "2026-08-17T00:00:00Z" }], [], ["写码"]);
+  check("趋势 未记录 ≠ 0 ≠ 无审", renderRow(rowU[0]).includes("未记录") && renderRow(row0[0]).includes("/0") && renderRow(rowN[0]).includes("无审"));
+  check("未记录不进红项均值（平均栏写未记录）", rowU[0].averageRedFlags === null && renderRow(rowU[0]).includes("未记录"));
+  check("0 红进均值", row0[0].averageRedFlags === 0);
+  const mixed = buildRows([
+    { model: "m", taskType: "写码", rework: 1, redFlags: null, redKind: "unrecorded", number: 582, mergedAt: "2026-08-16T00:00:00Z" },
+    { model: "m", taskType: "写码", rework: 0, redFlags: 2, redKind: "counted", number: 594, mergedAt: "2026-08-17T00:00:00Z" },
+  ], [], ["写码"]);
+  check("未记录不拉低均值，平均=2.0", mixed[0].averageRedFlags === 2);
+  check("formatRedCell 三态互异", formatRedCell({ redKind: "unrecorded" }) === "未记录" && formatRedCell({ redKind: "zero", redFlags: 0 }) === "0" && formatRedCell({ redKind: "none" }) === "无审");
+
+  const withOv = samplesFromEvents([
+    { type: "job.dispatch", job_id: "gh-pr-585", model: "grok-4.6", identity: "工人", work_type: "写码" },
+    { type: "job.override", override_kind: "scope", job_id: "gh-pr-585", pr_number: 585, why: "拆掉平行账本" },
+    { type: "job.closed", job_id: "gh-pr-585", pr_number: 585, red_flags: 1, worker_rework: 1, verdict_rounds: 2, ts: "2026-08-17T12:00:00+08:00" },
+  ]);
+  check("#585 读侧按 override 把那一轮归帅", withOv[0].attributionSource === "event" && withOv[0].marshalRounds === 1 && withOv[0].rework === 0, JSON.stringify(withOv[0]));
+  const inferred = samplesFromEvents([
+    { type: "job.dispatch", job_id: "gh-pr-11", model: "grok-4.6", identity: "工人", work_type: "写码" },
+    { type: "job.closed", job_id: "gh-pr-11", pr_number: 11, red_flags: 1, worker_rework: 1, ts: "2026-08-17T12:00:00+08:00" },
+  ]);
+  check("无 override 历史单标反推", inferred[0].attributionSource === "inferred" && /反推/.test(inferred[0].attributionNote));
+}
+
 console.log(`\n=== 汇总: PASS=${pass} FAIL=${fail} ===`);
 process.exit(fail ? 1 : 0);

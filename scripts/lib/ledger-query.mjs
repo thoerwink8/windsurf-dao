@@ -72,20 +72,61 @@ export function matchesIssue(event, issue) {
   return id === `gh-pr-${n}` || id === `gh-pr-${n}-review`;
 }
 
+/** dispatch-<id> 已被 handoff 接到还在账本里的 gh-pr-N 时，不算未结。 */
+export function continuedJobIds(events) {
+  const dispatchIds = new Set();
+  for (const e of events || []) {
+    if (e && e.type === 'job.dispatch' && e.job_id) dispatchIds.add(e.job_id);
+  }
+  const continued = new Set();
+  for (const e of events || []) {
+    if (!e || e.type !== 'job.handoff' || e.kind !== 'job_id_rename') continue;
+    const from = e.from_job_id;
+    const to = e.to_job_id;
+    if (from && to && dispatchIds.has(to)) continued.add(from);
+  }
+  return continued;
+}
+
 export function unclosedJobIds(events) {
   const closed = new Set();
   for (const e of events || []) {
     if (e && e.type === 'job.closed' && e.job_id) closed.add(e.job_id);
   }
+  const continued = continuedJobIds(events);
   const open = [];
   const seen = new Set();
   for (const e of events || []) {
     if (!e || e.type !== 'job.dispatch' || !e.job_id) continue;
-    if (closed.has(e.job_id) || seen.has(e.job_id)) continue;
+    if (closed.has(e.job_id) || continued.has(e.job_id) || seen.has(e.job_id)) continue;
     seen.add(e.job_id);
     open.push(e.job_id);
   }
   return open;
+}
+
+export function describeUnclosedJobs(events) {
+  const ids = unclosedJobIds(events);
+  const firstDispatch = new Map();
+  for (const e of events || []) {
+    if (e && e.type === 'job.dispatch' && e.job_id && !firstDispatch.has(e.job_id)) {
+      firstDispatch.set(e.job_id, e);
+    }
+  }
+  return ids.map(id => {
+    const d = firstDispatch.get(id);
+    const missing = [];
+    const alias = String(id).startsWith('dispatch-');
+    if (alias && d && d.pr_number == null) missing.push('job.closed（尚无 PR，等接续）');
+    else if (alias) missing.push('job.closed', '接续到 gh-pr-N');
+    else missing.push('job.closed');
+    return {
+      job_id: id,
+      identity: (d && d.identity) || null,
+      model: (d && d.model) || null,
+      missing,
+    };
+  });
 }
 
 /**
@@ -120,6 +161,16 @@ export function queryLedger({ events, recent, issue, unclosed } = {}) {
     return { kind: 'zero', events: [], count: 0, line: '账本查询：查到 0 条（不是没查成）' };
   }
   return { kind: 'ok', events: out, count: out.length, line: `账本查询：查到 ${out.length} 条` };
+}
+
+export function formatUnclosedDetails(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return '账本未结单：0 个（未混入战绩）。';
+  const lines = [`账本未结单：${rows.length} 个（未混入战绩）：`];
+  for (const row of rows) {
+    const who = row.identity ? ` ${row.identity}` : '';
+    lines.push(`- ${row.job_id}${who} 缺：${(row.missing || []).join('、')}`);
+  }
+  return lines.join('\n');
 }
 
 export function formatLedgerQuery(result) {

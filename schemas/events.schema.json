@@ -153,13 +153,16 @@
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
-          "description": "用户自选（B 位选中）。喂 F9 用户偏好 P（C.4）",
+          "description": "用户自选模型（B 位，喂 F9）或帅追加范围（override_kind=scope，#591；scope 不喂 F9）",
           "properties": {
             "type": { "const": "job.override" },
             "job_id": { "type": "string" },
             "model": { "type": "string" },
             "identity": { "enum": ["帅", "协调者", "工人", "审官"] },
-            "work_type": { "type": "string" }
+            "work_type": { "type": "string" },
+            "override_kind": { "enum": ["model", "scope"], "description": "缺省=model（B 位自选）；scope=追加职责/改范围" },
+            "triggered_by": { "enum": ["帅", "用户"], "description": "scope 追加的触发方" },
+            "why": { "type": "string", "description": "scope 追加的一句话原因" }
           },
           "required": ["job_id", "model", "identity", "work_type"],
           "additionalProperties": true

@@ -87,33 +87,120 @@ export function loadLedgerContext({ root = DEFAULT_ROOT, eventsDir, schemaPath, 
   return { dir, schema, machine: machine || process.env.LEDGER_MACHINE || os.hostname(), root };
 }
 
-/** 从 review 正文判定行汇总轮次 / 红项，并把「绿之后又来的判定」记成帅追加。 */
-export function verdictStatsFromReviews(reviews) {
+export function isScopeOverride(event) {
+  return Boolean(event && event.type === 'job.override' && event.override_kind === 'scope');
+}
+
+/** 收集某单的范围追加事件（按 job_id / pr / issue，不 grep 数字）。 */
+export function scopeOverridesFor(events, { jobId, prNumber, issueNumber } = {}) {
+  const ids = new Set();
+  if (jobId) ids.add(String(jobId));
+  if (prNumber != null) {
+    ids.add(workerJobId(prNumber));
+    ids.add(reviewerJobId(prNumber));
+  }
+  return (events || []).filter(e => {
+    if (!isScopeOverride(e)) return false;
+    if (e.job_id && ids.has(String(e.job_id))) return true;
+    if (prNumber != null && Number(e.pr_number) === Number(prNumber)) return true;
+    if (issueNumber != null && (Number(e.issue_number) === Number(issueNumber) || Number(e.issue) === Number(issueNumber))) {
+      return true;
+    }
+    return false;
+  });
+}
+
+function triggeredByOf(marshalRounds, workerRework) {
+  if (marshalRounds > 0 && workerRework > 0) return '混合';
+  if (marshalRounds > 0) return '帅';
+  return '审官';
+}
+
+/**
+ * 从 review 正文判定行汇总轮次 / 红项。
+ * opts.overrides：该单 job.override(scope) 列表——有则按事件算帅轮次，不再看 review 序列。
+ * opts.unscanned：判定行/账本没查成，三态第三档。
+ * 无 override 时退回 sawGreen 反推，并标 attributionSource=inferred（红之后追加会低估）。
+ */
+export function verdictStatsFromReviews(reviews, opts = {}) {
+  if (opts.unscanned) {
+    return {
+      verdictRounds: null,
+      reviewerRounds: null,
+      marshalRounds: 0,
+      redFlags: null,
+      workerRework: null,
+      triggeredBy: null,
+      attributionSource: 'unscanned',
+      attributionNote: opts.unscannedError || '判定行没查成',
+      inferredMayUnderestimate: false,
+    };
+  }
+
   let reviewerRounds = 0;
-  let marshalRounds = 0;
+  let inferredMarshal = 0;
   let maxRed = null;
   let sawGreen = false;
+  let lastColor = null;
+  let redAfterRed = false;
   for (const rv of reviews || []) {
     const v = judgmentFromReview(rv && rv.body);
     if (!v.kind || v.malformed) continue;
     if (v.red != null) maxRed = Math.max(maxRed ?? 0, v.red);
+    const color = v.green ? 'green' : (v.red != null ? 'red' : null);
+    if (color === 'red' && lastColor === 'red') redAfterRed = true;
+    if (color) lastColor = color;
     if (sawGreen) {
-      marshalRounds += 1;
+      inferredMarshal += 1;
       continue;
     }
     reviewerRounds += 1;
     if (v.green) sawGreen = true;
   }
-  const saw = reviewerRounds + marshalRounds > 0;
-  const workerRework = reviewerRounds === 0 ? null : Math.max(0, reviewerRounds - 1);
+  const inferredTotal = reviewerRounds + inferredMarshal;
+  const saw = inferredTotal > 0;
+  const inferredWorker = reviewerRounds === 0 ? null : Math.max(0, reviewerRounds - 1);
+
+  const overrides = Array.isArray(opts.overrides) ? opts.overrides.filter(isScopeOverride) : [];
+  if (overrides.length > 0) {
+    const marshalRounds = overrides.length;
+    const total = saw ? inferredTotal : null;
+    const workerRework = total == null ? null : Math.max(0, total - 1 - marshalRounds);
+    return {
+      verdictRounds: total,
+      reviewerRounds: total == null ? null : Math.max(0, total - marshalRounds),
+      marshalRounds,
+      redFlags: saw ? (maxRed ?? 0) : null,
+      workerRework,
+      triggeredBy: !saw ? null : triggeredByOf(marshalRounds, workerRework || 0),
+      attributionSource: 'event',
+      attributionNote: '按 job.override 事件归因',
+      inferredMayUnderestimate: false,
+    };
+  }
+
   return {
-    verdictRounds: saw ? reviewerRounds + marshalRounds : null,
+    verdictRounds: saw ? inferredTotal : null,
     reviewerRounds: saw ? reviewerRounds : null,
-    marshalRounds,
+    marshalRounds: inferredMarshal,
     redFlags: saw ? (maxRed ?? 0) : null,
-    workerRework,
-    triggeredBy: !saw ? null : marshalRounds > 0 && workerRework > 0 ? '混合' : marshalRounds > 0 ? '帅' : '审官',
+    workerRework: inferredWorker,
+    triggeredBy: !saw ? null : triggeredByOf(inferredMarshal, inferredWorker || 0),
+    attributionSource: saw ? 'inferred' : 'unscanned',
+    attributionNote: saw
+      ? (redAfterRed
+        ? '归因来自反推，可能低估帅的轮次（红之后追加这一类反推覆盖不到）'
+        : '归因来自反推，可能低估帅的轮次')
+      : '无判定行（没查成）',
+    inferredMayUnderestimate: Boolean(saw),
   };
+}
+
+export function describeAttribution(stats) {
+  const src = stats && stats.attributionSource;
+  if (src === 'event') return '按事件归因';
+  if (src === 'inferred') return stats.attributionNote || '按反推归因，可能低估帅的轮次';
+  return (stats && stats.attributionNote) || '归因没查成';
 }
 
 export function writeJobDispatch({
@@ -152,9 +239,122 @@ export function writeJobDispatch({
   }
 }
 
+export function writeJobOverride({
+  dir, ts, machine, schema, jobId, model, identity, workType,
+  triggeredBy, why, prNumber, issueNumber, extra = {},
+} = {}) {
+  if (!jobId) return { ok: false, skipped: false, error: 'job.override 缺 job_id' };
+  if (!model) return { ok: false, skipped: false, error: 'job.override 缺 model' };
+  if (!ts) return { ok: false, skipped: false, error: 'job.override 缺 ts' };
+  if (!why || !String(why).trim()) return { ok: false, skipped: false, error: 'job.override 缺 why' };
+  try {
+    const seq = nextSeq(dir, machine);
+    const w = writeEvent({
+      dir,
+      type: 'job.override',
+      ts,
+      machine,
+      seq,
+      schema,
+      payload: {
+        job_id: jobId,
+        model,
+        identity: identity || '帅',
+        work_type: workType || '写码',
+        override_kind: 'scope',
+        triggered_by: triggeredBy || '帅',
+        why: String(why).trim(),
+        ...(prNumber != null ? { pr_number: prNumber } : {}),
+        ...(issueNumber != null ? { issue_number: issueNumber } : {}),
+        ...extra,
+      },
+    });
+    return { ok: true, skipped: false, path: w.path, event: w.event };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true, error: String(e.message || e) };
+    return { ok: false, skipped: false, error: String(e.message || e) };
+  }
+}
+
+export function writeJobHandoff({
+  dir, ts, machine, schema, jobId, fromModel, toModel, reason, extra = {},
+} = {}) {
+  if (!jobId) return { ok: false, skipped: false, error: 'job.handoff 缺 job_id' };
+  if (!ts) return { ok: false, skipped: false, error: 'job.handoff 缺 ts' };
+  try {
+    const seq = nextSeq(dir, machine);
+    const w = writeEvent({
+      dir,
+      type: 'job.handoff',
+      ts,
+      machine,
+      seq,
+      schema,
+      payload: {
+        job_id: jobId,
+        from_model: fromModel || 'unknown',
+        to_model: toModel || fromModel || 'unknown',
+        reason: reason || 'other',
+        ...extra,
+      },
+    });
+    return { ok: true, skipped: false, path: w.path, event: w.event };
+  } catch (e) {
+    if (isDuplicateWriteError(e)) return { ok: true, skipped: true, error: String(e.message || e) };
+    return { ok: false, skipped: false, error: String(e.message || e) };
+  }
+}
+
+function alreadyRenamed(events, fromId, toId) {
+  return (events || []).some(e => (
+    e && e.type === 'job.handoff' && e.kind === 'job_id_rename'
+    && e.from_job_id === fromId && e.to_job_id === toId
+  ));
+}
+
+/** 把 dispatch-<id> 接到 gh-pr-N / gh-pr-N-review，不另写一条假 closed。 */
+export function linkAliasesToSuccessor({
+  ctx, ts, events, successorJobId, issueNumber, prNumber, model, identity,
+} = {}) {
+  const out = [];
+  if (!successorJobId) return out;
+  const wantIdentity = identity || null;
+  const seen = new Set();
+  for (const e of events || []) {
+    if (!e || e.type !== 'job.dispatch' || !e.job_id) continue;
+    if (!String(e.job_id).startsWith('dispatch-')) continue;
+    if (e.job_id === successorJobId) continue;
+    if (wantIdentity && e.identity && e.identity !== wantIdentity) continue;
+    const issueHit = issueNumber != null && (
+      Number(e.issue_number) === Number(issueNumber) || Number(e.issue) === Number(issueNumber)
+    );
+    const prHit = prNumber != null && e.pr_number != null && Number(e.pr_number) === Number(prNumber);
+    if (!issueHit && !prHit) continue;
+    if (seen.has(e.job_id) || alreadyRenamed(events, e.job_id, successorJobId)) continue;
+    seen.add(e.job_id);
+    out.push(writeJobHandoff({
+      ...ctx,
+      ts,
+      jobId: e.job_id,
+      fromModel: e.model || model || 'unknown',
+      toModel: model || e.model || 'unknown',
+      reason: 'other',
+      extra: {
+        kind: 'job_id_rename',
+        from_job_id: e.job_id,
+        to_job_id: successorJobId,
+        ...(prNumber != null ? { pr_number: prNumber } : {}),
+        ...(issueNumber != null ? { issue_number: issueNumber } : {}),
+      },
+    }));
+  }
+  return out;
+}
+
 export function writeJobClosed({
   dir, ts, machine, schema, jobId, success, rework, mergedBy,
   prNumber, redFlags, verdictRounds, workerRework, marshalRounds, triggeredBy,
+  attributionSource, attributionNote,
   extra = {},
 } = {}) {
   if (!jobId) return { ok: false, skipped: false, error: 'job.closed 缺 job_id' };
@@ -181,6 +381,8 @@ export function writeJobClosed({
         ...(workerRework !== undefined ? { worker_rework: workerRework } : {}),
         ...(marshalRounds !== undefined ? { marshal_rounds: marshalRounds } : {}),
         ...(triggeredBy ? { triggered_by: triggeredBy } : {}),
+        ...(attributionSource ? { attribution_source: attributionSource } : {}),
+        ...(attributionNote ? { attribution_note: attributionNote } : {}),
         ...Object.fromEntries(Object.entries(extra).filter(([k]) => !['usd_cash', 'usd_economic'].includes(k))),
       },
     });
@@ -229,4 +431,68 @@ export function recordPair({ ctx, ts, source, worker, reviewer }) {
 /** 给测试与调用方拼路径用；不读事件内容（读事件是检查方自己的事）。 */
 export function eventPathHint(dir, machine) {
   return join(dir, `*-${machine}.json`);
+}
+
+/** 给 amend 找所属 job：优先 --pr 的 gh-pr-N，否则 issue 对上的工人 dispatch。 */
+export function resolveAmendTarget({ events, issue, pr } = {}) {
+  const prNumber = pr != null && String(pr).trim() !== '' ? Number(pr) : null;
+  const issueNumber = issue != null && String(issue).trim() !== '' ? Number(issue) : null;
+  if (prNumber != null && !Number.isInteger(prNumber)) {
+    return { ok: false, error: `--pr 不是正整数: ${pr}` };
+  }
+  if (issueNumber != null && !Number.isInteger(issueNumber)) {
+    return { ok: false, error: `--issue 不是正整数: ${issue}` };
+  }
+  if (prNumber == null && issueNumber == null) {
+    return { ok: false, error: 'amend 要 --issue <号> 或 --pr <号>' };
+  }
+  const list = events || [];
+  if (prNumber != null) {
+    const jobId = workerJobId(prNumber);
+    const d = list.find(e => e && e.type === 'job.dispatch' && (
+      e.job_id === jobId || Number(e.pr_number) === prNumber
+    ));
+    return {
+      ok: true,
+      jobId,
+      prNumber,
+      issueNumber: issueNumber ?? (d && (d.issue_number ?? d.issue) != null ? Number(d.issue_number ?? d.issue) : null),
+      model: (d && d.model) || null,
+      workType: (d && d.work_type) || '写码',
+    };
+  }
+  const matches = list.filter(e => e && (
+    Number(e.issue_number) === issueNumber
+    || Number(e.issue) === issueNumber
+    || e.job_id === workerJobId(issueNumber)
+  ));
+  const worker = matches.find(e => e.type === 'job.dispatch' && String(e.job_id || '').startsWith('gh-pr-') && !String(e.job_id).endsWith('-review'))
+    || matches.find(e => e.type === 'job.dispatch' && String(e.job_id || '').startsWith('dispatch-'))
+    || matches.find(e => e.type === 'job.dispatch');
+  if (!worker) {
+    return { ok: false, error: `账本里没有 issue #${issueNumber} 的 job.dispatch——给 --pr，或先派工再追加` };
+  }
+  const prFromId = String(worker.job_id || '').startsWith('gh-pr-')
+    ? Number(String(worker.job_id).replace(/^gh-pr-/, '').replace(/-review$/, ''))
+    : (worker.pr_number != null ? Number(worker.pr_number) : null);
+  return {
+    ok: true,
+    jobId: worker.job_id,
+    prNumber: Number.isInteger(prFromId) ? prFromId : null,
+    issueNumber,
+    model: worker.model || null,
+    workType: worker.work_type || '写码',
+  };
+}
+
+export function formatAmendComment({ triggeredBy, why, jobId, eventId } = {}) {
+  return [
+    '追加职责（账本已记 job.override）',
+    '',
+    `- 触发方：${triggeredBy || '帅'}`,
+    `- 为什么：${why}`,
+    `- job：${jobId}`,
+    eventId ? `- event：${eventId}` : null,
+    '<!-- dao-amend -->',
+  ].filter(line => line != null).join('\n');
 }
