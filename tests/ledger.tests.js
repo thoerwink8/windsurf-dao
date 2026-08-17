@@ -13,7 +13,7 @@ const {
 } = require('../scripts/lib/ledger-job.mjs');
 const { unclosedJobIds, describeUnclosedJobs } = require('../scripts/lib/ledger-query.mjs');
 const { redKindFromClosed, formatRedCell } = require('../scripts/calibrate.mjs');
-const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR } = require('../scripts/lib/ledger-gap-check.mjs');
+const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_HISTORICAL_GAPS, historicalGapNote } = require('../scripts/lib/ledger-gap-check.mjs');
 const { pinReviewerSlotA } = require('../scripts/lib/dianjiangtai-reviewer-slot.mjs');
 const { samplesFromEvents, reworkFromClosed, describeNoEvents } = require('../scripts/calibrate.mjs');
 
@@ -243,7 +243,9 @@ check('reworkFromClosed 扣 marshal_rounds', reworkFromClosed({ verdict_rounds: 
 // ── 差集：两个反例都要过；禁 Date.now ──
 const src = fs.readFileSync(path.join(REPO, 'scripts/lib/ledger-gap-check.mjs'), 'utf8');
 check('差集检查不含 Date.now() 调用', !/Date\.now\s*\(/.test(src));
-check('基准 PR 写死为本单 #584', LEDGER_GAP_BASELINE_PR === 584);
+check('基准 PR 写死为 #590（#591 追加③）', LEDGER_GAP_BASELINE_PR === 590);
+check('存量缺口点名 585/587/590', LEDGER_GAP_HISTORICAL_GAPS.join(',') === '585,587,590');
+check('存量 note 不许静默', /#585/.test(historicalGapNote()) && /#587/.test(historicalGapNote()) && /#590/.test(historicalGapNote()) && /不对照/.test(historicalGapNote()));
 const gapA = inspectLedgerGap({
   githubPrs: [{ number: 999, labels: ['model/x', 'type/写码'] }],
   closedNumbers: new Set(),
@@ -275,6 +277,28 @@ const beforeBase = inspectLedgerGap({
   newestBuffer: 1,
 });
 check('基准之前的单不对照 → empty-github', beforeBase.kind === 'empty-github', JSON.stringify(beforeBase));
+
+const labeled = n => ({ number: n, labels: ['model/x', 'type/写码'] });
+const currentShape = inspectLedgerGap({
+  githubPrs: [585, 587, 590, 592, 594, 596, 597].map(labeled),
+  closedNumbers: new Set([592, 594, 596, 597]),
+  newestBuffer: 1,
+});
+check('现状工人侧 closed → 对照转绿', currentShape.kind === 'ok' && currentShape.checked.includes(592) && currentShape.checked.includes(596) && !currentShape.checked.includes(597), JSON.stringify(currentShape));
+check('转绿仍带存量缺口 note', /#585/.test(currentShape.historicalNote) && /#590/.test(currentShape.historicalNote), currentShape.historicalNote);
+const guardStill = inspectLedgerGap({
+  githubPrs: [592, 600].map(labeled),
+  closedNumbers: new Set([592]),
+  newestBuffer: 0,
+});
+check('baseline 之后缺 closed → 仍红（守卫还活着）', guardStill.kind === 'gap' && guardStill.missing.includes(600), JSON.stringify(guardStill));
+check('#592 形：红后追加 + override 归帅', (() => {
+  const s = verdictStatsFromReviews(
+    [{ body: '判定：红 2 项' }, { body: '复核结论：绿，可合并' }],
+    { overrides: [{ type: 'job.override', override_kind: 'scope', job_id: 'gh-pr-592', why: '帅追加' }] },
+  );
+  return s.attributionSource === 'event' && s.marshalRounds === 1 && s.workerRework === 0;
+})());
 
 // ── 审读 A 位锁 GPT，撞 UI ban 顺延 Opus ──
 const models = [
