@@ -19,7 +19,6 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { promptLines } from './deferred-hook.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -137,10 +136,6 @@ function main() {
   const lines = [boardInjection()];
   const inbox = inboxInjection();
   if (inbox) lines.push(inbox);
-  // #583：写法提醒每轮注入；有增量才多一行。失败不挡盘面。
-  try {
-    for (const line of promptLines({}, process.env)) lines.push(line);
-  } catch { /* 挂账提醒挂了 ≠ 盘面没查成 */ }
   process.stdout.write(`${lines.join('\n')}\n`);
   process.exit(0);
 }

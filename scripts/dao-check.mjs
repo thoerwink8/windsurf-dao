@@ -43,8 +43,6 @@
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 // ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
 //    两个反例都要过（有差集必红、无差集必绿）；基准 PR 号之后才对照
-// ⑱ 挂账差集（#583）：transcript 里的 [[挂账:]] \ DEFERRED.md；形状抄 #581（外部\本地，禁 Date.now）
-//    样本 A 有标记无账本必须红，样本 B 已入账必须绿；Stop 挂搬运，写法提醒走已有 board-hook
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -59,7 +57,6 @@ import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
-import { checkDeferred } from './lib/deferred-gap-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -832,16 +829,9 @@ checkReadyQueue(openBoard);
 checkCompletionSignalAlive();
 checkLedgerGapSamples();
 checkLedgerGapLive();
-checkDeferredAlive();
 
 function checkCompletionSignalAlive() {
   const r = checkCompletionSignal({ root: ROOT });
-  if (r.green) green(r.green);
-  else fail(...r.fail);
-}
-
-function checkDeferredAlive() {
-  const r = checkDeferred({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
 }

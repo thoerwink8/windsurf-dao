@@ -303,7 +303,7 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 }
 ```
 
-验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`deferred` 在 = 用户侧挂账入口随机器带走了（#583：只查/补/改状态，AI 不许用它落账）。
+验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`admit-push` 在 = 承认即派入口随机器带走了（#583：用户调用后走 issue / dispatch / park，不加账本）。
 
 `dao-project`（项化派工，含消歧门）由上面循环自动接上，无需单独动作；要单条建链（或循环没覆盖时手动补）：
 
@@ -373,8 +373,6 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
 
 同一份随仓 `.claude/settings.json` 还挂 `UserPromptSubmit` → `scripts/lib/board-hook.mjs`（#564）：每轮往上下文注入一行 `[盘]` 摘要（在途/待消歧/待收口，orca 本地状态 + 60s TTL 缓存，不打 GitHub），并顺手跑 `inbox-station.mjs ensure` 自愈信箱台（只报不拦，永远 exit 0）。随仓生效，无需装机动作。
-
-同一份随仓 `.claude/settings.json` 还挂 `Stop` → `scripts/lib/deferred-hook.mjs`（#583）：Stop 从 transcript 尾部 assistant 消息搬 `[[挂账:]]` 进仓库根 `DEFERRED.md`（Claude Code 的 Stop stdin 不含回复正文，hook 用 `session_id` 自己读 `~/.claude/projects/<slug>/<session>.jsonl`）。写法提醒和 `[挂账·增量]` 由已有的 `board-hook` UserPromptSubmit 顺带注入（不另挂第二条，避免互相拖超时）。随仓生效，无需装机动作。`node scripts/dao-check.mjs` 第 ⑱ 项验装载 + 差集样本 A 红 / B 绿。
 ## 自检
 
 做完跑一遍：

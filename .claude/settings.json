@@ -21,17 +21,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/deferred-hook.mjs\"",
-            "timeout": 15
-          }
-        ]
-      }
     ]
   }
 }
