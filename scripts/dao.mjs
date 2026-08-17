@@ -65,6 +65,8 @@ import {
   verifyWorkerStarted,
   verifyReviewerFiles,
   verifyReviewerTree,
+  assessPrMergeable,
+  trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
@@ -655,7 +657,7 @@ function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
   if (!args.name && !args.dryRun) fail('reviewer-create 要 --name');
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid'], { role: 'reviewer' });
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -663,6 +665,9 @@ function cmdReviewerCreate(args) {
   const baseBranch = head?.headRefName;
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
+  // #575 ⑦：建树前查 mergeable。UNKNOWN 不是绿。rebase 会改 sha 让 APPROVED 失效，只能先对齐再审。
+  const mergeable = assessPrMergeable(head?.mergeable);
+  if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
   const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
@@ -672,7 +677,7 @@ function cmdReviewerCreate(args) {
   const files = parseGhPullFiles(fileJson);
   if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
 
-  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null };
+  const plan = { pr: String(args.pr), baseBranch, expectedOid, files, name: args.name || null, mergeable };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
   const created = orca(argsWorktreeCreate({
@@ -702,7 +707,12 @@ function cmdReviewerCreate(args) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail(filesOk.error, { ...plan, reviewerId, reviewerPath, files: filesOk });
   }
-  emit({ ok: true, ...plan, reviewerId, reviewerPath, heads, filesChecked: filesOk.checked, probes: env });
+  const align = trialMergeMaster({ cwd: reviewerPath });
+  if (!align.ok) {
+    orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
+    fail(`对齐 master 试合失败: ${align.error}`, { ...plan, reviewerId, reviewerPath, align });
+  }
+  emit({ ok: true, ...plan, reviewerId, reviewerPath, heads, filesChecked: filesOk.checked, probes: env, align });
 }
 
 /**
@@ -730,7 +740,7 @@ function cmdReviewerAttach(args) {
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) fail(cap.error);
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid'], { role: 'reviewer' });
+  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -738,6 +748,8 @@ function cmdReviewerAttach(args) {
   const baseBranch = head?.headRefName;
   const expectedOid = head?.headRefOid;
   if (!baseBranch || !expectedOid) fail(`gh 读 PR #${args.pr} 缺 headRefName/headRefOid`);
+  const mergeable = assessPrMergeable(head?.mergeable);
+  if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
   const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
@@ -762,6 +774,7 @@ function cmdReviewerAttach(args) {
     mergePolicy: policy,
     mergeReason: args.mergeReason || null,
     launch: reviewerLaunch.command,
+    mergeable,
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
@@ -790,6 +803,9 @@ function cmdReviewerAttach(args) {
   const filesOk = verifyReviewerFiles({ reviewerPath: created.reviewerPath, files });
   if (!filesOk.ok) failCreated(created, filesOk.error, { files: filesOk, ...plan });
 
+  const align = trialMergeMaster({ cwd: created.reviewerPath });
+  if (!align.ok) failCreated(created, `对齐 master 试合失败: ${align.error}`, { align, ...plan });
+
   const revTerm = orca(argsTerminalCreate({
     worktree: created.reviewerId,
     title: revName,
@@ -816,13 +832,16 @@ function cmdReviewerAttach(args) {
 
   let reviewerBook = null;
   try {
-    reviewerBook = args.spec
+    const body = args.spec
       ? String(args.spec)
       : renderDispatchTemplate('reviewer-book.md', {
         SOLDIER_DISPATCH_ID: String(soldierDispatchId),
         MERGE_POLICY: policy,
         MERGE_REASON: args.mergeReason ? String(args.mergeReason) : '',
       });
+    const overlap = (align.masterFiles || []).filter(f => files.includes(f));
+    const alignNote = `你审的分支落后 master ${align.behind} 个 commit，试合${align.conflict ? '有冲突' : '无冲突'}。重点核这 ${align.behind} 个 commit 碰过的文件与本 PR 的交集${overlap.length ? `（${overlap.join(', ')}）` : ''}——那是语义冲突最可能藏身的地方。`;
+    reviewerBook = `## 与 master 对齐（#575 ⑦）\n\n${alignNote}\n\n${body}`;
   } catch (e) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
@@ -890,6 +909,7 @@ function cmdReviewerAttach(args) {
     inject: reviewerInject,
     startProof: reviewerProof,
     identity,
+    align,
   });
 }
 

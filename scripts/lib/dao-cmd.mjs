@@ -736,6 +736,121 @@ export function gitBranchName(cwd) {
   return { ok: true, branch: r.out };
 }
 
+/**
+ * #575 ⑦：审官开审前对齐 master。
+ * rebase 会改 commit sha → review.commit_id != headRefOid → APPROVED 当场失效
+ * （判例 review-green-must-match-head）。所以只能先对齐 → 再审 → 再合。
+ *
+ * mergeable 三态必须分开：MERGEABLE / CONFLICTING / UNKNOWN。
+ * UNKNOWN 是「GitHub 还在算」，不是绿——没查成，不许当 MERGEABLE 放行。
+ */
+export function assessPrMergeable(raw) {
+  const v = String(raw ?? '').trim().toUpperCase();
+  if (v === 'MERGEABLE') return { ok: true, mergeable: 'MERGEABLE' };
+  if (v === 'CONFLICTING') {
+    return {
+      ok: false,
+      mergeable: 'CONFLICTING',
+      error: '先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）',
+    };
+  }
+  if (!v || v === 'UNKNOWN') {
+    return {
+      ok: false,
+      unscanned: true,
+      mergeable: v || null,
+      error: `mergeable=${v || '空'}——GitHub 还在算或没查成，不许当 MERGEABLE 放行`,
+    };
+  }
+  return {
+    ok: false,
+    unscanned: true,
+    mergeable: v,
+    error: `mergeable 值不认识：${v}——没查成，不许当绿放行`,
+  };
+}
+
+function gitRun(cwd, args, runGit) {
+  if (typeof runGit === 'function') return runGit(args);
+  return gitCapture(cwd, args);
+}
+
+/**
+ * 试合 origin/master（或 origin/main），记录落后数/冲突/触及文件，然后 --abort。
+ * 树必须停在原 HEAD：审官审的是 PR head，expectedOid 校验才有意义。
+ */
+export function trialMergeMaster({ cwd, runGit } = {}) {
+  if (!cwd && typeof runGit !== 'function') {
+    return { ok: false, unscanned: true, error: 'trialMergeMaster 没给工作区' };
+  }
+  const run = (args) => gitRun(cwd, args, runGit);
+  const head = run(['rev-parse', 'HEAD']);
+  if (!head.ok) return { ok: false, unscanned: true, error: `试合前 HEAD 没查成：${head.error}` };
+  const before = head.out;
+
+  let base = 'origin/master';
+  const hasMaster = run(['rev-parse', '--verify', 'origin/master']);
+  if (!hasMaster.ok) {
+    const hasMain = run(['rev-parse', '--verify', 'origin/main']);
+    if (!hasMain.ok) {
+      return { ok: false, unscanned: true, error: 'origin/master 与 origin/main 都没有——试合没查成' };
+    }
+    base = 'origin/main';
+  }
+
+  const behindR = run(['rev-list', '--count', `HEAD..${base}`]);
+  if (!behindR.ok) return { ok: false, unscanned: true, error: `落后 commit 数没查成：${behindR.error}` };
+  const behind = Number(behindR.out);
+  if (!Number.isFinite(behind)) {
+    return { ok: false, unscanned: true, error: `落后 commit 数不是数字：${behindR.out}` };
+  }
+
+  const touchedR = run(['diff', '--name-only', `HEAD...${base}`]);
+  const masterFiles = touchedR.ok
+    ? String(touchedR.out || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const merge = run(['merge', base, '--no-commit', '--no-ff']);
+  const conflict = !merge.ok;
+  const abort = run(['merge', '--abort']);
+  // 没进合并时 abort 会失败——只要 HEAD 还原且工作区干净就算成功。
+  const after = run(['rev-parse', 'HEAD']);
+  if (!after.ok) {
+    return { ok: false, error: `试合后 HEAD 没查成：${after.error}`, behind, conflict, masterFiles };
+  }
+  if (after.out !== before) {
+    return {
+      ok: false,
+      error: `试合后 HEAD ${after.out} ≠ 原 ${before}（--abort 没还原，审官树漂了）`,
+      behind, conflict, masterFiles, head: after.out, expectedOid: before,
+    };
+  }
+  const st = run(['status', '--porcelain']);
+  if (!st.ok) return { ok: false, error: `试合后 git status 没查成：${st.error}`, behind, conflict };
+  if (String(st.out || '').trim()) {
+    return {
+      ok: false,
+      error: `试合后工作区不干净（--abort 有残留）：${String(st.out).slice(0, 120)}`,
+      behind, conflict, masterFiles,
+    };
+  }
+  return {
+    ok: true,
+    behind,
+    conflict,
+    clean: true,
+    base,
+    masterFiles,
+    head: before,
+    abortOk: abort.ok,
+    hint: behind === 0
+      ? '与 master 同步'
+      : conflict
+        ? `落后 ${behind} 个 commit，试合有冲突——工人应先 rebase`
+        : `落后 ${behind} 个 commit，试合无冲突。重点核这 ${behind} 个 commit 碰过的文件与本 PR 的交集`,
+  };
+}
+
 export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {}) {
   const rev = gitHeadOid(reviewerPath);
   if (!rev.ok) return { ok: false, error: `审官树 HEAD 没查成：${rev.error}` };
@@ -1803,6 +1918,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+                  # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* label 同步到 PR（#564：校准数据源）

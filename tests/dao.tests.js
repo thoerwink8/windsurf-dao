@@ -969,6 +969,64 @@ async function main() {
     const ro = S.envProbeWorktree(missingDir);
     check('#546 故意让工作区不可写 → 环境自检红（写探针）', ro.ok === false && (ro.failed || []).includes('write'), JSON.stringify(ro));
 
+    check('#575 ⑦ MERGEABLE → 放行', S.assessPrMergeable('MERGEABLE').ok === true);
+    check('#575 ⑦ CONFLICTING → 拒建树', S.assessPrMergeable('CONFLICTING').ok === false && /rebase master/.test(S.assessPrMergeable('CONFLICTING').error));
+    check('#575 ⑦ UNKNOWN → 没查成，不是绿', S.assessPrMergeable('UNKNOWN').ok === false && S.assessPrMergeable('UNKNOWN').unscanned === true);
+    check('#575 ⑦ 空值 → 没查成', S.assessPrMergeable('').unscanned === true);
+    check('#575 ⑦ 不认识的值 → 没查成', S.assessPrMergeable('DIRTY').unscanned === true);
+
+    const alignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-align-'));
+    const originDir = path.join(alignRoot, 'origin');
+    const workDir = path.join(alignRoot, 'work');
+    fs.mkdirSync(originDir);
+    const envGit = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const g = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: envGit });
+    g(originDir, ['init', '-q', '-b', 'master']);
+    g(originDir, ['config', 'user.email', 't@t']);
+    g(originDir, ['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'a0\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'base']);
+    g(originDir, ['checkout', '-q', '-b', 'feature']);
+    fs.writeFileSync(path.join(originDir, 'b.txt'), 'b\n');
+    g(originDir, ['add', 'b.txt']);
+    g(originDir, ['commit', '-q', '-m', 'feature']);
+    g(originDir, ['checkout', '-q', 'master']);
+    fs.writeFileSync(path.join(originDir, 'c.txt'), 'c\n');
+    g(originDir, ['add', 'c.txt']);
+    g(originDir, ['commit', '-q', '-m', 'master-ahead']);
+    spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, workDir], { encoding: 'utf8', env: envGit });
+    const headBefore = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const alignOk = S.trialMergeMaster({ cwd: workDir });
+    const headAfter = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const dirty = String(g(workDir, ['status', '--porcelain']).stdout).trim();
+    check('#575 ⑦ 试合无冲突：ok 且落后 ≥1', alignOk.ok === true && alignOk.behind >= 1 && alignOk.conflict === false, JSON.stringify(alignOk));
+    check('#575 ⑦ 试合后 HEAD 仍是 PR head', headAfter === headBefore, `${headBefore} → ${headAfter}`);
+    check('#575 ⑦ 试合后工作区干净', dirty === '', dirty);
+
+    const clashDir = path.join(alignRoot, 'clash');
+    g(originDir, ['checkout', '-q', 'feature']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'feature-change\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'feature-touch-a']);
+    g(originDir, ['checkout', '-q', 'master']);
+    fs.writeFileSync(path.join(originDir, 'a.txt'), 'master-change\n');
+    g(originDir, ['add', 'a.txt']);
+    g(originDir, ['commit', '-q', '-m', 'master-touch-a']);
+    spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, clashDir], { encoding: 'utf8', env: envGit });
+    const clashHead = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const alignClash = S.trialMergeMaster({ cwd: clashDir });
+    const clashHeadAfter = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();
+    const clashDirty = String(g(clashDir, ['status', '--porcelain']).stdout).trim();
+    check('#575 ⑦ 试合有冲突：conflict=true 且仍 ok（树已还原）', alignClash.ok === true && alignClash.conflict === true, JSON.stringify(alignClash));
+    check('#575 ⑦ 冲突试合后 HEAD 不变', clashHeadAfter === clashHead);
+    check('#575 ⑦ 冲突试合后工作区干净', clashDirty === '', clashDirty);
+
+    const daoSrcAlign = fs.readFileSync(CLI, 'utf8');
+    check('#575 ⑦ reviewer-create 建树前走 assessPrMergeable', /function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrcAlign));
+    check('#575 ⑦ reviewer-attach 建树前走 assessPrMergeable', /function cmdReviewerAttach[\s\S]*assessPrMergeable/.test(daoSrcAlign));
+    check('#575 ⑦ reviewer-create 建树后试合', /function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrcAlign));
+
     const revHelp = spawnSync(process.execPath, [CLI, 'reviewer-create', '--help'], { encoding: 'utf8', cwd: REPO });
     check('reviewer-create 出现在 help', /reviewer-create/.test(revHelp.stdout || ''), (revHelp.stdout || '').slice(0, 200));
     const revMiss = spawnSync(process.execPath, [CLI, 'reviewer-create', '--name', 'x'], { encoding: 'utf8', cwd: REPO });
