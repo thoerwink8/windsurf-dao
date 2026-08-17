@@ -22,6 +22,7 @@ import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select, hashOf, EVENT_ORDER_KEY } from './lib/dianjiangtai-core.mjs';
+import { pinReviewerSlotA, REVIEWER_SELECT_ROLES } from './lib/dianjiangtai-reviewer-slot.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -118,6 +119,27 @@ const result = select({
   ts, jobId, identity, workType, taskTokens, risk, reversible,
   events, models, bans, weights, policyHash, routes,
 });
+
+// #581：审读/审查 A 位锁 GPT；B/C 仍是评分结果。GPT 被 UI ban 剔出门闩集合时按选型序顺延。
+if (REVIEWER_SELECT_ROLES.has(role)) {
+  const pinned = pinReviewerSlotA({
+    models,
+    passerIds: result.options.B.models || [],
+  });
+  if (pinned.model) {
+    const detail = result.snapshot && result.snapshot.models
+      ? result.snapshot.models[pinned.model]
+      : null;
+    result.options.A = {
+      ...result.options.A,
+      model: pinned.model,
+      reason: pinned.reason,
+      score: detail && detail.score != null ? detail.score : result.options.A.score,
+    };
+  } else {
+    result.options.A = { ...result.options.A, model: null, reason: pinned.reason };
+  }
+}
 
 // 协调者转述用的瘦身输出：三选项 + decision_id + 分时命中。完整明细仍挂在 models/snapshot。
 // 三选项的模型标识渲染成 provider/model（#533）；decision_id 与 snapshot 照旧记裸 id，不受影响。
