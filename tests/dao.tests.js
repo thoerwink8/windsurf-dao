@@ -645,8 +645,18 @@ async function main() {
       },
     });
     check('#586 返工路径 notified.ok===true（不只是 commentPosted）',
-      reworkNotify.ok === true && reworkNotify.notified && reworkNotify.notified.ok === true,
+      reworkNotify.ok === true && reworkNotify.notified && reworkNotify.notified.ok === true
+      && reworkNotify.notified.dispatchId === 'ctx_reviewer_existing',
       JSON.stringify(reworkNotify));
+    const pickedExisting = S.pickWorkerDoneDispatchId({
+      create: { skipped: true },
+      reused: { ok: false, error: 'runtime_unavailable' },
+      existingDispatchId: 'ctx_reviewer_existing',
+    });
+    check('#586 复用 worker-start 失败仍用已有审官 dispatch 投递（不许 notified=null）',
+      pickedExisting.ok === true && pickedExisting.reviewerDispatchId === 'ctx_reviewer_existing'
+      && pickedExisting.source === 'existing',
+      JSON.stringify(pickedExisting));
     check('#586 返工投递主题是「返工完成：PR #…」且收件人是现有审官 dispatch',
       reworkNotifyCalls.length === 1
       && reworkNotifyCalls[0].to === 'dispatch:ctx_reviewer_existing'

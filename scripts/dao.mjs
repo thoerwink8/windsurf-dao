@@ -70,6 +70,7 @@ import {
   resolveReviewerFromPr,
   planWorkerDone,
   completeWorkerDoneNotify,
+  pickWorkerDoneDispatchId,
   resolveReviewerReuse,
   postIssueComment,
   postPrComment,
@@ -757,17 +758,30 @@ function cmdWorkerDone(args) {
       reviewer: plan.reviewer,
       dryRun: false,
     });
-    if (!reused.ok) fail(reused.error, { ...plan, reviewerReuse: reused, reuse });
+    // 续 capability 失败不能吞掉返工投递：审官要的是结构化消息，帅会另开复核 Task。
+    if (!reused.ok) {
+      reused = { ...reused, invoked: true, skipped: true, reuseFailed: true };
+    }
   }
+
+  let existingDispatchId = null;
+  const needExisting = !((create && create.reviewerDispatchId) || (reused && reused.reviewerDispatchId));
+  if (needExisting && reuse.worktreeId) {
+    const wl = orca(argsWorkerList());
+    if (!wl.ok) fail(`已有审官树但 worker-list 没查成：${errText(wl.error)}`, { ...plan, reviewerCreate: create, reviewerReuse: reused });
+    const found = findDispatchForWorktree(wl.json, reuse.worktreeId);
+    if (!found.ok) fail(`已有审官树但找不到 dispatch：${found.error}`, { ...plan, reviewerCreate: create, reviewerReuse: reused, found });
+    existingDispatchId = found.dispatchId;
+  }
+  const picked = pickWorkerDoneDispatchId({ create, reused, existingDispatchId });
+  if (!picked.ok) fail(picked.error, { ...plan, reviewerCreate: create, reviewerReuse: reused, reuse });
 
   const postedIssue = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
   if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue, reviewerCreate: create, reviewerReuse: reused });
   const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reviewerCreate: create, reviewerReuse: reused });
 
-  const reviewerDispatchId = (create && create.reviewerDispatchId)
-    || (reused && reused.reviewerDispatchId)
-    || null;
+  const reviewerDispatchId = picked.reviewerDispatchId;
   const notify = completeWorkerDoneNotify({
     round: plan.round,
     pr: plan.pr,
@@ -792,6 +806,7 @@ function cmdWorkerDone(args) {
     reviewerCreate: create,
     reviewerReuse: reused,
     notified,
+    notifiedDispatchId: reviewerDispatchId,
   });
 }
 

@@ -1894,7 +1894,18 @@ export function completeWorkerDoneNotify({
       error: `${prefix}通知没送到审官：${notified && notified.error ? notified.error : '投递器没返回'}`,
     };
   }
-  return { ok: true, notified };
+  return { ok: true, notified: { ...notified, dispatchId: id } };
+}
+
+/** 返工/首审投递目标：新建或复用返回的 id，否则用已有审官树上的活 dispatch。 */
+export function pickWorkerDoneDispatchId({ create, reused, existingDispatchId } = {}) {
+  const fromCreate = create && create.reviewerDispatchId ? String(create.reviewerDispatchId).trim() : '';
+  if (fromCreate) return { ok: true, reviewerDispatchId: fromCreate, source: 'create' };
+  const fromReuse = reused && reused.reviewerDispatchId ? String(reused.reviewerDispatchId).trim() : '';
+  if (fromReuse) return { ok: true, reviewerDispatchId: fromReuse, source: 'reuse' };
+  const existing = existingDispatchId == null ? '' : String(existingDispatchId).trim();
+  if (existing) return { ok: true, reviewerDispatchId: existing, source: 'existing' };
+  return { ok: false, reviewerDispatchId: null, source: null, error: '没有审官 dispatch 可投' };
 }
 
 function worktreeIdMatches(workerWtId, sel) {
