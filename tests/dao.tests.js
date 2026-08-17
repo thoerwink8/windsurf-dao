@@ -996,11 +996,27 @@ async function main() {
     g(originDir, ['add', 'c.txt']);
     g(originDir, ['commit', '-q', '-m', 'master-ahead']);
     spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, workDir], { encoding: 'utf8', env: envGit });
+    g(workDir, ['config', 'user.email', 't@t']);
+    g(workDir, ['config', 'user.name', 't']);
     const headBefore = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
     const alignOk = S.trialMergeMaster({ cwd: workDir });
     const headAfter = String(g(workDir, ['rev-parse', 'HEAD']).stdout).trim();
     const dirty = String(g(workDir, ['status', '--porcelain']).stdout).trim();
     check('#575 ⑦ 试合无冲突：ok 且落后 ≥1', alignOk.ok === true && alignOk.behind >= 1 && alignOk.conflict === false, JSON.stringify(alignOk));
+    const fakeFail = S.trialMergeMaster({
+      cwd: workDir,
+      runGit: (args) => {
+        if (args[0] === 'merge' && args[1] !== '--abort') return { ok: false, error: 'Author identity unknown' };
+        const { spawnSync } = require('child_process');
+        const r = spawnSync('git', ['-C', workDir, ...args], { encoding: 'utf8' });
+        if (r.error || (r.status !== 0 && r.status != null)) {
+          return { ok: false, error: String(r.stderr || r.status) };
+        }
+        return { ok: true, out: String(r.stdout || '').trim() };
+      },
+    });
+    check('#575 ⑦ merge 非零但无 unmerged → 没查成，不是 conflict',
+      fakeFail.ok === false && fakeFail.unscanned === true && !fakeFail.conflict, JSON.stringify(fakeFail));
     check('#575 ⑦ 试合后 HEAD 仍是 PR head', headAfter === headBefore, `${headBefore} → ${headAfter}`);
     check('#575 ⑦ 试合后工作区干净', dirty === '', dirty);
 
@@ -1014,6 +1030,8 @@ async function main() {
     g(originDir, ['add', 'a.txt']);
     g(originDir, ['commit', '-q', '-m', 'master-touch-a']);
     spawnSync('git', ['clone', '-q', '-b', 'feature', originDir, clashDir], { encoding: 'utf8', env: envGit });
+    g(clashDir, ['config', 'user.email', 't@t']);
+    g(clashDir, ['config', 'user.name', 't']);
     const clashHead = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();
     const alignClash = S.trialMergeMaster({ cwd: clashDir });
     const clashHeadAfter = String(g(clashDir, ['rev-parse', 'HEAD']).stdout).trim();

@@ -815,7 +815,19 @@ export function trialMergeMaster({ cwd, runGit } = {}) {
     : [];
 
   const merge = run(['merge', base, '--no-commit', '--no-ff']);
-  const conflict = !merge.ok;
+  // 冲突只认未合并文件。merge 非零可能是没配 user.name（CI 实证 #578）——那是没查成，不是冲突。
+  const unmerged = run(['diff', '--name-only', '--diff-filter=U']);
+  const conflict = !!(unmerged.ok && String(unmerged.out || '').trim());
+  if (!merge.ok && !conflict) {
+    run(['merge', '--abort']);
+    return {
+      ok: false,
+      unscanned: true,
+      behind,
+      masterFiles,
+      error: `试合没跑成（不是冲突）：${merge.error}`,
+    };
+  }
   const abort = run(['merge', '--abort']);
   // 没进合并时 abort 会失败——只要 HEAD 还原且工作区干净就算成功。
   const after = run(['rev-parse', 'HEAD']);
