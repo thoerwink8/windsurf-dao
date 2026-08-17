@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T18:19:51+08:00",
+  "machine": "backfill",
+  "seq": 120,
+  "job_id": "gh-pr-562",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "claude-opus"
+  ],
+  "selected": "claude-opus",
+  "why": "回填自 GitHub PR #562；[cc] #561 验收 #560 新派工通道（载体：#558 迁 ideas.md + dao-check ⑭ 阈值 44→30）；无审读",
+  "pr_number": 562,
+  "source": "github-backfill",
+  "event_id": "88ba00fc5f6d58f62d3ff7b4e36b46dd4c21afbae7578d52f4da6b4655994230"
+}

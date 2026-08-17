@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T22:30:53+08:00",
+  "machine": "backfill",
+  "seq": 52,
+  "job_id": "gh-pr-502",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #502；[grok] fix: 验开工认 result.terminal.tail，主帅标题只动定界区；判定行红 3 项",
+  "pr_number": 502,
+  "source": "github-backfill",
+  "event_id": "fd0f969f3f9aeffae68fa30ec1139a1a2582f00c3d8465ea64e046c223bcc761"
+}

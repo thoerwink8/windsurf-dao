@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T08:55:23+08:00",
+  "machine": "backfill",
+  "seq": 104,
+  "job_id": "gh-pr-549",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #549；[pi] #544 修 blocked-notify 提醒链：GH_TOKEN + pull_request:closed 触发 + 脚本认 issue/PR；无审读",
+  "pr_number": 549,
+  "source": "github-backfill",
+  "event_id": "cb06d28ef72670e87dc07b9e8942823c16c61e8d2a22606b5b02a1b07b44e0d3"
+}
