@@ -276,14 +276,13 @@ async function main() {
     const ok = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要：修命令库', '--dry-run']);
     const pOk = payload(ok);
     check('三参数齐 + --spec → dry-run 过', ok.status === 0 && pOk.ok === true, JSON.stringify(pOk));
-    check('dry-run 写出审官预建计划', pOk.reviewerCard === '审官·gpt-5.6-sol' && /codex/.test(pOk.reviewerLaunch), JSON.stringify(pOk));
-    check('审官 launch 带 danger 旗标', String(pOk.reviewerLaunch || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
-    check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
+    check('dry-run 不再预建审官卡（#586 按需起）', pOk.reviewerDeferred === true && pOk.reviewerCard == null, JSON.stringify(pOk));
+    check('dry-run 仍校验审官 launch（不建卡但选型要合法）', /codex/.test(pOk.reviewerLaunchChecked) && String(pOk.reviewerLaunchChecked || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
     check('dry-run 工人走 grok --always-approve', /\bgrok\b/.test(pOk.workerLaunch) && /--always-approve/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
     const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);
-    check('#559 追加：dry-run 带 --issue → 卡名带号', okIssue.status === 0 && pIssue.workerCard === '#565 - 修地基' && pIssue.reviewerCard === '#565 - 审官·gpt-5.6-sol', JSON.stringify(pIssue));
+    check('#559 追加：dry-run 带 --issue → 工人卡名带号（审官卡推迟到 worker-done）', okIssue.status === 0 && pIssue.workerCard === '#565 - 修地基' && pIssue.reviewerDeferred === true, JSON.stringify(pIssue));
     check('#559 追加：dry-run 带 --issue → issue 字段透出', pIssue.issue === '565', JSON.stringify(pIssue));
 
     const peak = '2026-08-15T02:00:00.000Z'; // 北京 10:00 峰时
@@ -589,27 +588,33 @@ async function main() {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('CLI worker-done --dry-run 自读选型且调 reviewer-create --dry-run',
-      cliWd.status === 0 && pWd.ok === true && pWd.wired === false && pWd.reviewer === 'gpt-5.6-sol'
+    check('CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run',
+      cliWd.status === 0 && pWd.ok === true && pWd.wired === true && pWd.round === 'first' && pWd.shouldCreate === true
+      && pWd.reviewer === 'gpt-5.6-sol'
       && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
       && pWd.reviewerCreate.reviewer === 'gpt-5.6-sol'
       && /^完工/.test(pWd.comment || ''),
       `status=${cliWd.status} ${JSON.stringify(pWd)}`);
 
-    const cliWdLive = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '42'], {
+    const cliWdLive = spawnSync(process.execPath, [CLI, 'worker-done', '--pr', '46'], {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWdLive = (() => { try { return JSON.parse((cliWdLive.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('CLI worker-done 发 issue+PR 完工 comment，调 reviewer-create 但不建树',
-      cliWdLive.status === 0 && pWdLive.commentPosted === true && pWdLive.wired === false
+    check('CLI worker-done 返工：发返工完成 comment，不起第二个审官',
+      cliWdLive.status === 0 && pWdLive.commentPosted === true && pWdLive.wired === true
+      && pWdLive.round === 'rework' && pWdLive.shouldCreate === false
       && pWdLive.postedIssue && pWdLive.postedPr
-      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.invoked === true && pWdLive.reviewerCreate.dryRun === true,
+      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.skipped === true
+      && /^返工完成/.test(pWdLive.comment || ''),
       `status=${cliWdLive.status} ${JSON.stringify(pWdLive)}`);
 
     const badBody = S.planWorkerDone({
       pr: '42',
       body: '已完成：漏了首行关键字',
       runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
+          return { ok: true, out: JSON.stringify({ reviews: [] }) };
+        }
         if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
         if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
         return { ok: false, error: `未预期 ${a.join(' ')}` };
@@ -621,10 +626,25 @@ async function main() {
     check('#586 不重写 reviewer-create 既有坑：仍走 assessPrMergeable + trialMergeMaster',
       /function cmdReviewerCreate[\s\S]*assessPrMergeable/.test(daoSrc586)
       && /function cmdReviewerCreate[\s\S]*trialMergeMaster/.test(daoSrc586));
-    const wdFn = (daoSrc586.match(/function cmdWorkerDone\([\s\S]*?\n\}/) || [''])[0];
-    check('#586 worker-done 不调用 orca 建树',
-      /function cmdWorkerDone/.test(wdFn) && !/argsWorktreeCreate|worktree create/.test(wdFn),
-      wdFn.slice(0, 200));
+    const wdFn = (daoSrc586.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
+    check('#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）',
+      /invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
+      wdFn.slice(0, 240));
+    const reworkPlan = S.planWorkerDone({
+      pr: '46',
+      runGh: (a) => {
+        if (a[0] === 'pr' && a[1] === 'view' && String(a).includes('reviews')) {
+          return { ok: true, out: JSON.stringify({ reviews: [{ id: 1, body: '判定：红 1 项' }] }) };
+        }
+        if (a[0] === 'pr' && a[1] === 'view') return { ok: true, out: JSON.stringify({ title: 'x', body: 'Closes #565' }) };
+        if (a[0] === 'issue' && a[1] === 'view') return { ok: true, out: JSON.stringify({ labels: [{ name: 'reviewer/gpt-5.6-sol' }] }) };
+        return { ok: false, error: `未预期 ${a.join(' ')}` };
+      },
+    });
+    check('planWorkerDone 已有 review → rework，shouldCreate=false',
+      reworkPlan.ok === true && reworkPlan.round === 'rework' && reworkPlan.shouldCreate === false
+      && /^返工完成/.test(reworkPlan.comment),
+      JSON.stringify(reworkPlan));
   }
 
 
@@ -861,14 +881,14 @@ async function main() {
     check('R1 终端没读成 ≠ 探针绿', unreadProbe.ok === false && unreadProbe.unread === true, JSON.stringify(unreadProbe));
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('#546 dao.mjs 环境自检走 envProbeWorktree，不经 agent 探针', /envProbeWorktree/.test(daoSrc) && !/terminalProbeExec/.test(daoSrc) && !/runTerminalProbes/.test(daoSrc));
-    check('#546 审官卡带 baseBranch 且建完自证', /baseBranch: workerBranch\.branch/.test(daoSrc) && /verifyReviewerTree/.test(daoSrc));
+    check('#546 审官卡由 reviewer-create 建完自证（dispatch 不再建）', /function cmdReviewerCreate[\s\S]*verifyReviewerTree/.test(daoSrc) && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc));
     check('#546 注入后验开工走 verifyInjection', /verifyInjection/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc));
     check('R1 dao.mjs 不再裸调 worktree show', !/orca\(\['worktree', 'show'/.test(daoSrc));
     check('#495 dao.mjs 派工成功后写任务卡 comment 定界区', /afterDispatchComment/.test(daoSrc));
     check('#502 取 taskId 走 extractTaskId 不猜 result.id', /extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc));
     check('#502 未绑 Run 报 run-create/run-use', /RUN_REQUIRED_HINT/.test(daoSrc) && /run-create/.test(S.RUN_REQUIRED_HINT));
     check('#495 dao.mjs 不走终端 rename', !/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc));
-    check('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', /probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), 'waitAndVerify 要按 provider 覆盖 timeoutMs');
+    check('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', /probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), 'waitAndVerify 要按 provider 覆盖 timeoutMs');
     check('#559 waitAndVerify 默认超时不再是 8000ms', !/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')));
     check('grok 表上 probe_wait_ms=45000', S.probeWaitMs(routing, 'grok') === 45000, String(S.probeWaitMs(routing, 'grok')));
     check('gpt 表上 probe_wait_ms=120000', S.probeWaitMs(routing, 'gpt') === 120000, String(S.probeWaitMs(routing, 'gpt')));
@@ -1223,9 +1243,9 @@ async function main() {
       SPEC: '短摘要：修 X',
     });
     check('soldier-book 填进 spec', /短摘要：修 X/.test(soldier), soldier.slice(0, 120));
-    check('soldier-book 不再内嵌审官 dispatch id（身份消息另行送达，审官红项修正）', !/REVIEWER_DISPATCH_ID/.test(soldier) && !/dispatch:undefined/.test(soldier), soldier.slice(-220));
-    check('soldier-book 完工通知写 dispatch:<id> 且指明先收信取 id', /--to dispatch:/.test(soldier) && /审官身份/.test(soldier) && !/term_/.test(soldier), soldier.slice(-260));
-    check('soldier-book 要求完工后告知审官不告帅', /审官/.test(soldier));
+    check('soldier-book 不再内嵌审官 dispatch id（#586 按需起）', !/REVIEWER_DISPATCH_ID/.test(soldier) && !/dispatch:undefined/.test(soldier), soldier.slice(-220));
+    check('soldier-book 完工走 worker-done', /worker-done/.test(soldier) && /--pr/.test(soldier), soldier.slice(-260));
+    check('soldier-book 要求不要自己发 comment / notify', /不要自己/.test(soldier));
     check('soldier-book 渲染后无任何 dispatch:undefined', /dispatch:undefined/.test(soldier) === false);
 
     const reviewer = S.renderDispatchTemplate('reviewer-book.md', {
@@ -1271,11 +1291,13 @@ async function main() {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     check('dao.mjs 士兵任务书走模板渲染（renderDispatchTemplate）', /renderDispatchTemplate/.test(daoSrc));
     check('dao.mjs 士兵 spec 不再是裸 args.spec（闭环包装）', /soldierBook/.test(daoSrc) && !/REVIEWER_DISPATCH_ID/.test(daoSrc), 'REVIEWER_DISPATCH_ID 已从 dao.mjs 移除');
-    check('dao.mjs 审官也 task-create + worker-start（拿到编排身份）', /reviewerTaskId/.test(daoSrc) && /revStarted/.test(daoSrc));
+    check('dao.mjs 审官由 reviewer-create 起终端 + worker-start（dispatch 不再起）',
+      /function cmdReviewerCreate[\s\S]*reviewerTaskId/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*revStarted/.test(daoSrc)
+      && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc));
     check('dao.mjs 审官注入后也验开工（reviewerInject）', /reviewerInject/.test(daoSrc));
     check('dao.mjs 从 worker-start 返回取 dispatch id（extractDispatchId）', /extractDispatchId/.test(daoSrc));
-    check('dao.mjs 输出双方收件 dispatch（loop 段，soldierDoneTo=dispatch:…）', /soldierDoneTo/.test(daoSrc) && /reviewerRedTo/.test(daoSrc) && /dispatch:\$\{created\.reviewerDispatchId\}/.test(daoSrc));
-    check('审官红项修正：审官任务书在士兵 worker-start 之后才渲染', /SOLDIER_DISPATCH_ID: String\(created\.workerDispatchId\)/.test(daoSrc), '渲染顺序检查');
+    check('dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）', /soldierDoneVia: 'worker-done'/.test(daoSrc) && /reviewerDeferred: true/.test(daoSrc));
+    check('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', /function cmdReviewerCreate[\s\S]*SOLDIER_DISPATCH_ID: String\(soldierDispatchId\)/.test(daoSrc), '渲染落点检查');
     check('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', /审官身份/.test(daoSrc) && /identity/.test(daoSrc));
   }
 
@@ -1395,7 +1417,7 @@ async function main() {
 
     const tmplSoldier = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
     const tmplReviewer = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md'), 'utf8');
-    check('士兵任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
+    check('士兵任务书完工走 dao.mjs worker-done（不是裸 orca send）', /dao\.mjs worker-done/.test(tmplSoldier) && !/^\s*orca orchestration send/m.test(tmplSoldier), tmplSoldier.slice(0, 200));
     check('审官任务书发信走 dao.mjs notify（不是裸 orca send）', /dao\.mjs notify/.test(tmplReviewer) && !/^\s*orca orchestration send/m.test(tmplReviewer), tmplReviewer.slice(0, 200));
     check('两份任务书都写明「确认送达才准进下一步」', /确认送达/.test(tmplSoldier) && /确认送达/.test(tmplReviewer));
 

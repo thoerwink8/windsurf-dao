@@ -9,7 +9,7 @@
 //   3. 红项数读 closed.red_flags。undefined = 没记（无审读）；0 = 审过零红。
 //      没有事件 ≠ 有事件但 0 红。
 //   4. judgment.mjs 不再承担校准计量，只给 flow 判红绿。
-//   5. classifyPr 仍导出给 flow 起审官时读标签。
+//   5. classifyPr 仍导出给 flow 写账本时读标签。
 //
 // 本脚本只读账本（--pr 标题可问 GitHub，失败单独说），只向 stdout/stderr 输出。
 

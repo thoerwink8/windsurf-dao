@@ -1549,7 +1549,25 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   return { ...picked, source: 'label', refs };
 }
 
-/** 阶段一骨架：发完工 comment 的计划 + 自读选型。不建审官卡。 */
+/** 读 PR 上的 review 条数。没查成和「0 条」分开。 */
+export function listPrReviews({ pr, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'listPrReviews 没给 PR 号' };
+  if (typeof runGh !== 'function') {
+    return { ok: false, unscanned: true, error: 'listPrReviews 没拿到 gh 执行器（没查成，不许猜）' };
+  }
+  const view = runGh(['pr', 'view', n, '--json', 'reviews']);
+  if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 失败：${view.error}` };
+  let parsed;
+  try { parsed = JSON.parse(view.out); }
+  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 返回非 JSON` }; }
+  if (!parsed || !Array.isArray(parsed.reviews)) {
+    return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 reviews 数组（没查成，不许当 0 条）` };
+  }
+  return { ok: true, reviews: parsed.reviews, count: parsed.reviews.length };
+}
+
+/** 完工计划：按已有 review 条数分首审 / 返工。首审才建审官。 */
 export function planWorkerDone({ pr, body, runGh } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };
@@ -1559,31 +1577,44 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
   if (!issue) {
     return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
   }
+  const listed = listPrReviews({ pr: n, runGh });
+  if (!listed.ok) return listed;
+  const round = listed.count > 0 ? 'rework' : 'first';
+  const prefix = round === 'rework' ? '返工完成' : '完工';
   const custom = body == null ? '' : String(body);
-  if (custom && !/^完工/.test(custom)) {
-    return { ok: false, unscanned: false, error: 'worker-done --body 首行必须以「完工」开头（流转器只认这个）' };
+  if (custom && !new RegExp(`^${prefix}`).test(custom)) {
+    return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
-  const comment = custom || [
-    `完工：PR #${n} 阶段一骨架（未起审官）`,
-    '',
-    `自读选型：${resolved.modelId}`,
-    '阶段一不接线：调 reviewer-create --dry-run，不建树。',
-  ].join('\n');
+  const shouldCreate = round === 'first';
+  const comment = custom || (round === 'rework'
+    ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
+    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
   return {
     ok: true,
-    wired: false,
+    wired: true,
+    round,
+    shouldCreate,
+    reviewCount: listed.count,
     pr: n,
     issue,
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
     comment,
-    reviewerCreate: {
-      verb: 'reviewer-create',
-      pr: n,
-      args: ['--pr', n, '--dry-run'],
-      invoked: false,
-      reason: '阶段一骨架：要调 reviewer-create --dry-run（不建树），由 cmdWorkerDone 执行',
-    },
+    reviewerCreate: shouldCreate
+      ? {
+        verb: 'reviewer-create',
+        pr: n,
+        args: ['--pr', n],
+        invoked: false,
+        reason: '首审：真调 reviewer-create（自读选型、建树、起终端、注入）',
+      }
+      : {
+        verb: 'reviewer-create',
+        pr: n,
+        invoked: false,
+        skipped: true,
+        reason: '已有 review，返工轮不起第二个审官',
+      },
   };
 }
 
@@ -2016,9 +2047,12 @@ export const FLAGS_BY_VERB = {
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
-  'worker-done': new Set(['--pr', '--body', '--dry-run', '--json', '--help', '-h']),
+  'worker-done': new Set([
+    '--pr', '--body', '--parent-worktree', '--soldier-dispatch', '--dry-run', '--json', '--help', '-h',
+  ]),
   'reviewer-create': new Set([
-    '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+    '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
@@ -2084,11 +2118,12 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--dry-run]
-                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；--dry-run 只打印选型不建树
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
+                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
+                  # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
-  worker-done --pr <N> [--body <文>] [--dry-run]
-                  # 阶段一骨架：发完工 comment（issue+PR）+ 调 reviewer-create --dry-run；不建审官卡
+  worker-done --pr <N> [--body <文>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
+                  # 原子完工：发完工/返工 comment；首审（无 review）真调 reviewer-create 起审官；返工不起第二个
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）

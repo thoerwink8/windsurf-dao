@@ -4,7 +4,8 @@
 // 分工（fusion-verdict.md 拍板）：首发完工发现 = 门铃（Monitor 挂
 // `orca orchestration check --wait --types worker_done,...`，见 dispatch skill）；
 // 本脚本降为备份通道（轮询默认 300s）+ 审读闭环——重放 GitHub 确定性信号推导当前态，
-// 起审官/返工/复核/乒乓报帅/终审报帅。看门狗（scripts/watchdog.mjs）管事故（屏面异常），
+// 返工/复核/乒乓报帅/终审报帅。审官由 worker-done 按需起（#586），本器不再起审官。
+// 看门狗（scripts/watchdog.mjs）管事故（屏面异常），
 // 三者正交：不要把完工检测塞回看门狗，也不要把屏面特征（如「待授权」）塞进本脚本。
 // 规格源 = issue #455 正文 + 全部评论 + fusion-verdict.md。
 //
@@ -15,24 +16,20 @@
 //   ③ PR MERGED 状态
 //
 // 决策规则（②）：
-//   - 工人完工且无审官  → 按 docs/model-routing.toml 审官选型序输出起审官配置
+//   - 工人完工且待审    → 不起审官（#586：worker-done 已按需起）
 //   - 审官红 N 项       → 输出注入工人返工的指令文本（机械转发，不做内容判断）
 //   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
 // 执行注入（③）：
-//   - 起审官（受控例外，随 #480 退役）：不走 worker-start。oneShot（codex）走
-//     `worktree create --agent --prompt`（官方首注入通道，免就绪竞态）；两步走
-//     （claude）create --setup skip + terminal create --command，注入前先
-//     terminal read 轮询就绪（配置同步期抢跑必被吞）。人工派工禁止抄这条例外。
 //   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
 //     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
 //     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
-//   - 注入目标确定性定位：起审官时记 handle+审官卡 id；返工注入按任务卡 worktree 内
-//     唯一候选终端（排除审官句柄与 shell），选不出唯一目标就报帅，不挑第一个。
+//   - 注入目标确定性定位：返工注入按任务卡 worktree 内唯一候选终端（排除审官句柄
+//     与 shell），选不出唯一目标就报帅，不挑第一个。
 //   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查「审官·」子卡；全找不到
-//     报「待帅接手复核」——这是 #455 原痛点的存量场景（帅手起审官、流转器后启动）。
+//     报「待帅接手复核」。
 //
 // 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
 // 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
@@ -70,25 +67,18 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { createRequire } from 'node:module';
 import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 import {
-  writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
-  loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews, recordPair,
+  writeJobDispatch, writeJobClosed, workerJobId,
+  loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
 } from './lib/ledger-job.mjs';
-
-const require = createRequire(import.meta.url);
-const { parse: parseToml } = require('./lib/smol-toml.cjs');
 
 const ROOT = resolve(import.meta.dirname, '..');
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
-const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
 const ORCA_TIMEOUT_MS = 30000;
 const GH_TIMEOUT_MS = 30000;
 const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
-const READY_WAIT_MS = 2000;       // 就绪轮询间隔
-const READY_TIMEOUT_MS = 120000;  // 两步走（claude 配置同步期）就绪等待上限
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 let _ledgerCtx = null;
@@ -100,39 +90,6 @@ function ledgerCtx() {
 function ledgerTs(input) {
   try { return beijingIsoFrom(input || new Date()); }
   catch { return beijingIsoFrom(new Date()); }
-}
-
-function noteStartReviewerLedger(pr, reviewer, cls, dryRun) {
-  if (dryRun) return '';
-  const written = recordPair({
-    ctx: ledgerCtx(),
-    ts: ledgerTs(pr.updatedAt || pr.createdAt || new Date()),
-    source: 'flow',
-    worker: cls.model ? {
-      jobId: workerJobId(pr.number),
-      model: cls.model,
-      identity: '工人',
-      workType: cls.taskType || '写码',
-      terminal: 'flow',
-      prNumber: pr.number,
-    } : null,
-    reviewer: {
-      jobId: reviewerJobId(pr.number),
-      model: reviewer.id,
-      identity: '审官',
-      workType: '审查',
-      terminal: reviewer.provider || 'flow',
-      prNumber: pr.number,
-    },
-  });
-  const bits = [];
-  for (const [side, r] of [['工人', written.worker], ['审官', written.reviewer]]) {
-    if (!r) continue;
-    if (!r.ok) bits.push(`${side}dispatch失败:${r.error}`);
-    else if (r.skipped) bits.push(`${side}dispatch已在`);
-    else bits.push(`${side}dispatch已写`);
-  }
-  return bits.length ? `（账本 ${bits.join('，')}）` : '';
 }
 
 function noteJudgmentClosedLedger(pr, reviews, { success, dryRun }) {
@@ -385,7 +342,7 @@ function deriveState(signals) {
 // pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示（四轮复核红 1）。
 function pendingAction(derived) {
   if (derived.state === 'working') return null;
-  if (derived.state === 'awaiting-review') return { kind: 'start-reviewer', round: 0 };
+  if (derived.state === 'awaiting-review') return null; // #586：审官由 worker-done 按需起
   if (derived.state === 'awaiting-recheck') return { kind: 'inject-recheck', round: derived.redReviews };
   if (derived.state === 'rework-needed') return { kind: 'inject-rework', red: derived.lastRed, round: derived.redReviews };
   if (derived.state === 'approved') return { kind: 'report-final' };
@@ -408,64 +365,8 @@ function awaitingShuaiReason(derived, rec, thisRoundFailed) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 审官选型序（docs/model-routing.toml 真相源）
-// ══════════════════════════════════════════════════════════════════════
-
-function loadRouting() {
-  if (!existsSync(ROUTING_FILE)) return { ok: false, error: `${ROUTING_FILE} 不存在` };
-  try {
-    return { ok: true, toml: parseToml(readFileSync(ROUTING_FILE, 'utf8')) };
-  } catch (e) {
-    return { ok: false, error: `${ROUTING_FILE} 解析失败：${String(e.message || e).split(/\r?\n/)[0]}` };
-  }
-}
-
-// 审官选型序（规则「审官选型序」+「审查默认换厂商」+ bans[gpt UI 类]）：
-//   候选 = roles 含「审查」的模型；UI/复审类 → GPT 禁入；工人是 gpt 厂商 → GPT 排除
-//   （审查必换厂商）；结果按「GPT 优先、Claude(Opus) 次之」取第一个。
-function pickReviewer(toml, workerModelId, taskType) {
-  const models = Array.isArray(toml.models) ? toml.models : [];
-  const worker = models.find(m => m.id === workerModelId);
-  const workerProvider = worker ? worker.provider : null;
-  const uiLike = /UI|复审/.test(taskType || '');
-  const isGpt = m => m.provider === 'gpt' || /^gpt/i.test(m.id || '');
-  const candidates = models.filter(m => Array.isArray(m.roles) && m.roles.includes('审查'));
-  let pool = candidates.filter(m => !(uiLike && isGpt(m)));
-  if (workerProvider === 'gpt' || /^gpt/i.test(workerModelId || '')) pool = pool.filter(m => !isGpt(m));
-  return pool.find(m => isGpt(m)) || pool.find(m => !isGpt(m)) || null;
-}
-
-// 审官启动配方（dispatch skill 命令链口径，provider 真相源 = toml providers）：
-//   gpt(codex) oneShot --agent codex --prompt（官方首注入通道，免就绪竞态）；
-//   claude(reclaude) 两步走 terminal create --command "reclaude --model opus"，
-//   注入前必须先等配置同步（抢跑必被吞）。
-//   grok 不在审查角色（toml roles 无「审查」），pickReviewer 选不到——不写启动配方，
-//   免得 env/命令看似生效实则从未执行（对抗审观察 4）。
-function reviewerLaunch(reviewer) {
-  if (reviewer.provider === 'gpt') return { oneShot: true, agent: 'codex', model: reviewer.id };
-  if (reviewer.provider === 'claude') return { oneShot: false, command: 'reclaude --model opus', model: reviewer.id };
-  return null;
-}
-
-function reviewerLabel(reviewer) {
-  return reviewer.provider === 'claude' ? '审官·Claude' : `审官·${reviewer.id}`;
-}
-
-// ══════════════════════════════════════════════════════════════════════
 // 动作文本（决策输出，人读 + 机器可 grep）
 // ══════════════════════════════════════════════════════════════════════
-
-function reviewTaskBook(pr, workerModel, reviewerLabel) {
-  return [
-    `【复核任务书 · 闭环自动流转 · ${reviewerLabel}】`,
-    `任务 PR：#${pr.number} ${pr.title}`,
-    '请审读本 PR 的 diff 与正文（规格源引用、完工自报、验收清单），逐条核对验收标准。',
-    '判定格式（机器可读，写在 review 正文首行）：',
-    '  首审：「判定：红 N 项」或「判定：绿」',
-    '  复核：「复核结论：红 N 项」或「复核结论：绿，可合并」',
-    '你是 dao-reviewer[bot]，能真 approve / request-changes（#573）。提交走 node scripts/gh-as.mjs reviewer -- pr review <PR> --approve|--request-changes --body-file <判定文件>。判定行仍写正文首行。红项逐条列明；质疑拍板/规格本身要上帅，不自行改判。',
-  ].join('\n');
-}
 
 function reworkInstruction(pr, red, round, reviewUrl) {
   return [
@@ -497,23 +398,7 @@ function readTerminalData(handle, cursor) {
   return { ok: true, terminal: t };
 }
 
-// 注入前证就绪（红 1）：两步走（claude）配置同步期抢跑必被吞——轮询到
-// 屏面有内容且不在启动占位态才放行；终端退出/超时 fail-visible。
-function waitTerminalReady(handle, timeoutMs, label) {
-  const deadline = Date.now() + timeoutMs;
-  const starting = /Starting|Connecting|登录|login|初始化|配置同步|请稍候|加载中/i;
-  for (;;) {
-    if (Date.now() >= deadline) return { ok: false, error: `等待终端就绪超时（${label}，${Math.round(timeoutMs / 1000)}s）——未见到可收输入迹象` };
-    const r = readTerminalData(handle, null);
-    if (!r.ok) { sleep(READY_WAIT_MS); continue; }
-    if (r.terminal.status === 'exited') return { ok: false, error: `终端已退出（${label}）` };
-    const tail = r.terminal.tail.map(l => String(l)).join('\n').trim();
-    if (tail.length > 0 && !starting.test(tail)) return { ok: true }; // 有内容且不在启动态 = 可收输入
-    sleep(READY_WAIT_MS);
-  }
-}
-
-// 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
+// 验开工：增量判据为主（cursor 前进 = 有新输出 = token 在动），
 // 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
 // （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
 // 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
@@ -791,66 +676,7 @@ function makeSnapshotSource(roundDir, repo) {
 // 动作执行（红 1/2/4/5 落点：目标解析走 source，dry-run 也覆盖解析路径）
 // ══════════════════════════════════════════════════════════════════════
 
-function executeAction(action, pr, toml, source, rec, dryRun) {
-
-  if (action.kind === 'start-reviewer') {
-    const cls = classifyPr(pr);
-    if (!cls.model) {
-      return { ok: false, error: `PR #${pr.number} 缺 model/* 标签（有 type/${cls.taskType || '?'}），不能按选型序确定性选审官`, needsReport: 'report-unknown' };
-    }
-    const reviewer = pickReviewer(toml, cls.model, cls.taskType);
-    if (!reviewer) {
-      return { ok: false, error: '按 docs/model-routing.toml 选不出审官（审查角色模型为空）', needsReport: 'report-unknown' };
-    }
-    const launch = reviewerLaunch(reviewer);
-    if (!launch) {
-      return { ok: false, error: `审官 ${reviewer.id} 的 provider 无启动配方（${reviewer.provider}）`, needsReport: 'report-unknown' };
-    }
-    const label = reviewerLabel(reviewer);
-    const taskBook = reviewTaskBook(pr, cls.model, label);
-    // 任务卡名按全局约定「#PR号 - 动宾短语」（观察 3：终端名角色·模型、卡名带号）
-    const cardName = `#${pr.number} - ${label}`;
-    // 红 5：--parent-worktree 合法 selector 是 branch:/issue:/id:/path:/folder:/worktree:，
-    // name: 是 --repo 的 selector 不是 worktree 的——用 branch:<headRefName>（现成合法）。
-    const parentSel = `branch:${pr.headRefName}`;
-    const steps = launch.oneShot
-      ? [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --agent ${launch.agent} --prompt <复核任务书> --json`]
-      : [`orca worktree create --parent-worktree ${parentSel} --name "${cardName}" --setup skip --json`,
-         `orca terminal create --worktree <新建审官卡 id> --command "${launch.command}" --json`,
-         '（注入前先 terminal read 轮询就绪，再 send 任务书——配置同步期抢跑必被吞）'];
-    if (dryRun) {
-      return {
-        ok: true, dry: true,
-        line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}，provider=${reviewer.provider}）（受控例外：不走 worker-start，随 #480 重做）`
-          + '\n' + steps.map(s => '  ' + s).join('\n')
-          + '\n  ' + '注入复核任务书：' + taskBook.replace(/\n/g, '\n  '),
-      };
-    }
-    // live：受控例外（随 #480 退役）——不走 worker-start，worktree create 直起。
-    // 人工路径禁止抄。起卡 + 起终端 + （两步走先证就绪）+ 注入 + 验开工
-    const createR = runOrca(launch.oneShot
-      ? ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--agent', launch.agent, '--prompt', taskBook, '--json']
-      : ['worktree', 'create', '--parent-worktree', parentSel, '--name', cardName, '--setup', 'skip', '--json']);
-    if (!createR.ok) return { ok: false, error: `起审官卡失败：${createR.error}` };
-    const newWtId = createR.json?.result?.worktree?.id || null;
-    let handle;
-    if (launch.oneShot) {
-      handle = createR.json?.result?.agentTerminalHandle || createR.json?.result?.startupTerminal?.handle;
-      if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
-      const v = verifyStarted(handle, null, label);
-      if (!v.ok) return { ok: false, error: v.error };
-      return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：--prompt 官方通道注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）${noteStartReviewerLedger(pr, reviewer, cls, dryRun)}` };
-    }
-    const termR = runOrca(['terminal', 'create', '--worktree', newWtId, '--command', launch.command, '--json']);
-    if (!termR.ok) return { ok: false, error: `起审官终端失败：${termR.error}` };
-    handle = termR.json?.result?.terminal?.handle;
-    if (!handle) return { ok: false, error: '起审官成功响应但缺 terminal handle（结构畸形）' };
-    const ready = waitTerminalReady(handle, READY_TIMEOUT_MS, label);
-    if (!ready.ok) return { ok: false, error: ready.error };
-    const v = injectAndVerify(handle, taskBook, label);
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, handle, worktree: newWtId, label, taskBook, line: `[flow] 动作：起审官 #${pr.number}（${label}，model=${reviewer.id}）：就绪后注入，验开工（${v.judge}）（受控例外：不走 worker-start，随 #480 重做）${noteStartReviewerLedger(pr, reviewer, cls, dryRun)}` };
-  }
+function executeAction(action, pr, source, rec, dryRun) {
 
   if (action.kind === 'inject-rework') {
     const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
@@ -904,11 +730,6 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
 // 两者都要与「扫完 0 需流转」（正常 OK 行）可区分（仓规：数到 0 和没看到样本不是一回事）。
 function processOneRound(source, state, args) {
   const events = [];
-  const routing = loadRouting();
-  const toml = routing.ok ? routing.toml : null;
-  if (!routing.ok) {
-    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true };
-  }
 
   const list = source.listOpenPrs();
   if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true };
@@ -1001,7 +822,7 @@ function processOneRound(source, state, args) {
             reviewerWorktree: rec.reviewer?.worktree || null,
             reviewerLabel: rec.reviewer?.label || null,
           };
-          const exec = executeAction({ ...action, ...extra }, pr, toml, source, rec, args.dryRun);
+          const exec = executeAction({ ...action, ...extra }, pr, source, rec, args.dryRun);
           if (exec.ok) {
             events.push(exec.line);
             rec.pendingShuai = null; // 动作成功：待帅记账清（四轮复核红 1）
@@ -1011,9 +832,7 @@ function processOneRound(source, state, args) {
               // 预览不改变值守状态，否则真跑一次预览会把 PR 永久锁死）
               thisRoundFailed.add(pr.number);
             }
-            if (action.kind === 'start-reviewer' && exec.handle) {
-              rec.reviewer = { handle: exec.handle, label: exec.label, taskBook: exec.taskBook, worktree: exec.worktree || null };
-            }
+
           } else {
             // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
@@ -1085,7 +904,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, ticketIssueNumber };
+export { deriveState, pendingAction, orderedSignals, completionSignals, reviewSignals, isInstitutional, awaitingShuaiReason, ticketIssueNumber };
 
 let args = null;
 let anyEmitted = false;

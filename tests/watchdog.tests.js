@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|selector|blind|model-change|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|selector|blind|model-change|stale-completion|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -519,6 +519,19 @@ console.log("\n=== ㉕ #575 Pasted Content 停摆指纹 + ALL_IDLE（全员卡�
   const ri2 = runMultiRounds(path.join(FIXTURES, "pasted-idle", "round-1"), 2);
   check("idle+Pasted 两轮：ALL_IDLE + pasted-content 都响（agents=[] 也能扫到折在输入框）",
     ri2.status === 1 && /all-idle:/.test(ri2.out) && /pasted-content:.*5711 chars/.test(ri2.out), ri2.out.trim());
+}
+
+console.log("\n=== ㉖ #586 工人 done 但 head 比完工信号新 ===");
+{
+  const stale = runWatchdog(path.join(FIXTURES, "stale-completion"), ["--once"]);
+  check("正样本：head 比完工 comment 新 → 退出码 1", stale.status === 1, `status=${stale.status}`);
+  check("正样本：报 stale-completion", /stale-completion:/.test(stale.out) && /#453 - dispatch 顺车修订/.test(stale.out), stale.out.trim());
+
+  const fresh = runWatchdog(path.join(FIXTURES, "stale-completion-fresh"), ["--once"]);
+  check("负样本：完工 comment 不早于 head → 不报 stale-completion", !/stale-completion:/.test(fresh.out), fresh.out.trim());
+
+  const none = runWatchdog(path.join(FIXTURES, "no-targets"), ["--once"]);
+  check("缺 completion-evidence：不猜、不报 stale-completion（没查成 ≠ 查过有事）", !/stale-completion:/.test(none.out), none.out.trim());
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);
