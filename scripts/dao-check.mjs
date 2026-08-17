@@ -43,6 +43,8 @@
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
 // ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
 //    两个反例都要过（有差集必红、无差集必绿）；基准 PR 号之后才对照
+// ⑱ strikes 机械闸（#588）：基准后 memory 条目 strikes≥2 且 gate 空 → 红；
+//    存量按文件名豁免；本机 memory 未接 → SKIP 不是绿；红/绿夹具都要有判别力
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -57,6 +59,10 @@ import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
+import {
+  inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
+} from './lib/memory-strikes-check.mjs';
+import { defaultHome } from './lib/dao-memory-link-check.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -776,6 +782,95 @@ function checkLedgerGapSamples() {
   green(`账本断流样本 ${files.length} 份（有差集 ${kinds.gap} / 无差集 ${kinds.ok}）`);
 }
 
+function checkStrikesSamples() {
+  const root = join(ROOT, 'tests', 'fixtures', 'memory-strikes');
+  if (!existsSync(root)) {
+    fail('strikes 闸样本目录不在', '本次没查成：恢复 tests/fixtures/memory-strikes/{red,ok}', root);
+    return;
+  }
+  const kinds = { red: 0, ok: 0 };
+  const problems = [];
+  for (const kind of ['red', 'ok']) {
+    const dir = join(root, kind);
+    if (!existsSync(dir)) {
+      problems.push(`缺 ${kind}/`);
+      continue;
+    }
+    const listed = listMemoryEntries(dir);
+    if (listed.unscanned) {
+      problems.push(`${kind}: ${listed.error}`);
+      continue;
+    }
+    if (listed.entries.length === 0) {
+      problems.push(`${kind}: 0 个 md——没查成`);
+      continue;
+    }
+    const base = loadStrikesBaseline(join(dir, 'baseline.json'));
+    if (base.unscanned) {
+      problems.push(`${kind} 基准: ${base.error}`);
+      continue;
+    }
+    const r = inspectStrikes({
+      entries: listed.entries,
+      baselineNames: base.files,
+      baselineAt: base.baselineAt,
+    });
+    kinds[kind] += 1;
+    if (kind === 'red' && r.kind !== 'red') {
+      problems.push(`red/ 自称该红但判成 ${r.kind}（样本没判别力）`);
+    }
+    if (kind === 'ok' && r.kind !== 'ok') {
+      problems.push(`ok/ 自称该绿但判成 ${r.kind}：${r.line}`);
+    }
+  }
+  if (kinds.red === 0 || kinds.ok === 0) {
+    fail('strikes 闸样本种类不够', '至少各要一份红（≥2 无闸）和一份绿（有闸/存量豁免），缺一种 = 没查成', `red=${kinds.red} ok=${kinds.ok}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`strikes 闸样本对不上 ${problems.length} 处`, '红夹具必须红、绿夹具必须绿', problems.join(' '));
+    return;
+  }
+  green(`strikes 闸样本红/绿各 ${kinds.red}/${kinds.ok}（有判别力）`);
+}
+
+function checkStrikesLive() {
+  const located = resolveMemoryDir({ root: ROOT, home: defaultHome() });
+  if (located.skip) {
+    skip(`strikes 闸：${located.error}——本机未接 memory，本次没查成，不是绿`);
+    return;
+  }
+  const listed = listMemoryEntries(located.dir);
+  if (listed.unscanned) {
+    fail('strikes 闸没查成', 'memory 目录读失败，不是对照过没事', listed.error);
+    return;
+  }
+  if (listed.entries.length === 0) {
+    fail('strikes 闸没查成', 'memory 目录里 0 条条目，本次等于没扫', located.dir);
+    return;
+  }
+  const base = loadStrikesBaseline(join(ROOT, 'scripts', 'lib', 'memory-strikes-baseline.json'));
+  if (base.unscanned) {
+    fail('strikes 闸没查成', '基准文件读失败', base.error);
+    return;
+  }
+  const r = inspectStrikes({
+    entries: listed.entries,
+    baselineNames: base.files,
+    baselineAt: base.baselineAt,
+  });
+  if (r.kind === 'unscanned') {
+    fail('strikes 闸没查成', 'frontmatter 读失败，不是对照过没事', r.error);
+    return;
+  }
+  if (r.kind === 'red') {
+    fail(r.line, '给这条 memory 配机械闸（hook/检查器/工具改造/主动注入），把路径写入 metadata.gate', r.violations.join('；'));
+    return;
+  }
+  if (r.notes.length) notes.push(`strikes 存量待补闸 ${r.notes.length}：${r.notes.slice(0, 6).join('；')}`);
+  green(r.line);
+}
+
 function checkLedgerGapLive() {
   const prs = runGhJson([
     'pr', 'list', '--state', 'merged', '--limit', '1000',
@@ -829,6 +924,8 @@ checkReadyQueue(openBoard);
 checkCompletionSignalAlive();
 checkLedgerGapSamples();
 checkLedgerGapLive();
+checkStrikesSamples();
+checkStrikesLive();
 
 function checkCompletionSignalAlive() {
   const r = checkCompletionSignal({ root: ROOT });

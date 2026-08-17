@@ -1,0 +1,12 @@
+orca worktree ps
+
+Usage: orca worktree ps [--limit <n>] [--json]
+
+Show a compact orchestration summary across worktrees
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --limit <n>            Maximum number of rows to return
