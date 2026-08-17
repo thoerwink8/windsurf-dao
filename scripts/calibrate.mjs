@@ -6,8 +6,8 @@
 //   2. 返工轮数优先读 closed.worker_rework（已扣除帅追加需求的判定行）；
 //      否则 closed.verdict_rounds - 1 - marshal_rounds；再否则 boolean rework。
 //      null = 没测成，不是 0 轮。
-//   3. 红项数读 closed.red_flags。undefined = 没记（无审读）；0 = 审过零红。
-//      没有事件 ≠ 有事件但 0 红。
+//   3. 红项三态（#591）：undefined = 未记录（有审官痕迹但没记住，不进均值）；
+//      0 = 审过零红；无 -review job 且无 red_flags = 无审。三者表上不许长得一样。
 //   4. judgment.mjs 不再承担校准计量，只给 flow 判红绿。
 //   5. classifyPr 仍导出给 flow 写账本时读标签。
 //
@@ -18,6 +18,8 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { redFlagsFromReviewBodies, judgmentFromReview } from './lib/judgment.mjs';
+import { describeUnclosedJobs, formatUnclosedDetails, unclosedJobIds } from './lib/ledger-query.mjs';
+import { describeAttribution, scopeOverridesFor } from './lib/ledger-job.mjs';
 
 export { redFlagsFromReviewBodies } from './lib/judgment.mjs';
 
@@ -54,6 +56,72 @@ export function redFlagsFromClosed(closed) {
   return closed.red_flags;
 }
 
+/** 未记录 / 0 / 无审。无 redKind 的旧样本（测试手造）按 null → 无审。 */
+export function redKindFromClosed(closed, events) {
+  if (!closed) return 'none';
+  if (closed.red_flags === 0) return 'zero';
+  if (closed.red_flags != null) return 'counted';
+  const pr = closed.pr_number;
+  const jobId = String(closed.job_id || '');
+  const isReview = jobId.endsWith('-review');
+  const hasReviewJob = (events || []).some(e => (
+    e && e.type === 'job.dispatch' && (
+      e.job_id === `gh-pr-${pr}-review`
+      || (pr != null && Number(e.pr_number) === Number(pr) && e.identity === '审官')
+    )
+  ));
+  if (isReview || hasReviewJob) return 'unrecorded';
+  return 'none';
+}
+
+export function formatRedCell(item) {
+  if (!item) return '无审';
+  if (item.redKind === 'unrecorded') return '未记录';
+  if (item.redKind === 'zero' || item.redFlags === 0) return '0';
+  if (item.redKind === 'none' || item.redFlags == null || item.redFlags === undefined) return '无审';
+  return String(item.redFlags);
+}
+
+function attributionForClosed(closed, events) {
+  const overrides = scopeOverridesFor(events, {
+    jobId: closed.job_id,
+    prNumber: closed.pr_number,
+  });
+  if (overrides.length > 0 && closed.attribution_source !== 'event') {
+    const marshalRounds = overrides.length;
+    let rework = null;
+    if (closed.verdict_rounds != null) {
+      rework = Math.max(0, Number(closed.verdict_rounds) - 1 - marshalRounds);
+    } else if (closed.worker_rework != null) {
+      rework = Math.max(0, Number(closed.worker_rework) - marshalRounds);
+    } else {
+      rework = reworkFromClosed(closed);
+    }
+    return {
+      rework,
+      marshalRounds,
+      triggeredBy: marshalRounds > 0 && rework > 0 ? '混合' : marshalRounds > 0 ? '帅' : (closed.triggered_by || null),
+      attributionSource: 'event',
+      attributionNote: '按 job.override 事件归因',
+    };
+  }
+  const source = closed.attribution_source
+    || ((closed.worker_rework == null && closed.verdict_rounds == null && closed.rework == null)
+      ? 'unscanned'
+      : 'inferred');
+  return {
+    rework: reworkFromClosed(closed),
+    marshalRounds: Number(closed.marshal_rounds) || 0,
+    triggeredBy: closed.triggered_by || null,
+    attributionSource: source,
+    attributionNote: closed.attribution_note || (
+      source === 'event' ? '按 job.override 事件归因'
+        : source === 'inferred' ? '归因来自反推，可能低估帅的轮次'
+          : '归因没查成'
+    ),
+  };
+}
+
 /** 有 closed 才是样本。没有 dispatch 的 closed 用 merged_by 当模型，工种记空（不进矩阵）。 */
 export function samplesFromEvents(events) {
   const dispatches = new Map();
@@ -63,10 +131,13 @@ export function samplesFromEvents(events) {
   const samples = [];
   for (const e of events || []) {
     if (!e || e.type !== 'job.closed' || !e.job_id) continue;
+    if (String(e.job_id).startsWith('dispatch-')) continue;
     const d = dispatches.get(e.job_id);
     const model = (d && d.model) || e.merged_by || null;
     const taskType = (d && d.work_type) || null;
     const identity = (d && d.identity) || null;
+    const redKind = redKindFromClosed(e, events);
+    const attr = attributionForClosed(e, events);
     samples.push({
       number: e.pr_number ?? null,
       jobId: e.job_id,
@@ -74,10 +145,13 @@ export function samplesFromEvents(events) {
       taskType,
       identity,
       tagged: Boolean(model && taskType),
-      rework: reworkFromClosed(e),
+      rework: attr.rework,
       redFlags: redFlagsFromClosed(e),
-      triggeredBy: e.triggered_by || null,
-      marshalRounds: e.marshal_rounds || 0,
+      redKind,
+      triggeredBy: attr.triggeredBy,
+      marshalRounds: attr.marshalRounds,
+      attributionSource: attr.attributionSource,
+      attributionNote: attr.attributionNote,
       mergedAt: e.ts,
       title: (d && d.why) || e.job_id,
     });
@@ -173,22 +247,25 @@ export function buildRows(samples, models = [], taskTypes = TASK_TYPES) {
         rows.push({ model, taskType, sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] });
         continue;
       }
-      // 红项口径 v2（对抗审 #449 红 2）：没被审过的样本（redFlags=null）不混进红项平均，
-      // 也不当作 0 红；全组都没审过时平均红项记 null（渲染为「无审读」）。
+      // 红项口径 v2 + #591：未记录 / 无审 都不进平均，也不当 0。
       const reviewedRed = matched.filter(sample => sample.redFlags !== null && sample.redFlags !== undefined);
-      // 返工口径 v3（#501 缺陷二）：无判定行的样本（rework=null）不混进返工平均，也不当作
-      // 0 轮；全组都没判定行时平均返工记 null（渲染为「无判定行」），与「审过零返工」分开。
       const measuredRework = matched.filter(sample => sample.rework !== null && sample.rework !== undefined);
+      const redBlank = reviewedRed.length === 0
+        && matched.some(sample => sample.redKind === 'unrecorded')
+        ? 'unrecorded'
+        : 'none';
       rows.push({
         model,
         taskType,
         sampleCount: matched.length,
         averageRework: measuredRework.length === 0 ? null : average(measuredRework.map(sample => sample.rework)),
         averageRedFlags: reviewedRed.length === 0 ? null : average(reviewedRed.map(sample => sample.redFlags)),
+        redBlank,
         trend: matched.slice(-3).map(sample => ({
           number: sample.number,
           rework: sample.rework,
           redFlags: sample.redFlags,
+          redKind: sample.redKind,
           malformed: (sample.judgmentMalformed || []).length > 0,
         })),
       });
@@ -202,18 +279,18 @@ export function renderRow(row) {
     return `| ${row.model} | ${row.taskType} | 无样本 | 无样本 | 无样本 | 无样本 |`;
   }
   const trend = row.trend
-    .map(item => `#${item.number} ${item.malformed ? '判定不合规' : (item.rework === null || item.rework === undefined ? '无判定' : item.rework)}/${item.redFlags === null || item.redFlags === undefined ? '无审' : item.redFlags}`)
+    .map(item => `#${item.number} ${item.malformed ? '判定不合规' : (item.rework === null || item.rework === undefined ? '无判定' : item.rework)}/${formatRedCell(item)}`)
     .join(' → ');
   const avgRework = row.averageRework === null || row.averageRework === undefined
     ? '无判定行'
     : formatAverage(row.averageRework);
   const avgRed = row.averageRedFlags === null || row.averageRedFlags === undefined
-    ? '无审读'
+    ? (row.redBlank === 'unrecorded' ? '未记录' : '无审读')
     : formatAverage(row.averageRedFlags);
   return `| ${row.model} | ${row.taskType} | ${row.sampleCount} | ${avgRework} | ${avgRed} | ${trend} |`;
 }
 
-export function renderFullReport(rows, unlabelledCount, repository = null) {
+export function renderFullReport(rows, unlabelledCount, repository = null, unclosedRows = null) {
   const list = Array.isArray(rows) ? rows : [];
   const withSamples = list.filter(r => r && r.sampleCount > 0);
   const emptyCount = list.filter(r => r && r.sampleCount === 0).length;
@@ -225,20 +302,22 @@ export function renderFullReport(rows, unlabelledCount, repository = null) {
         '',
       ]
     : [];
+  const unclosedLine = Array.isArray(unclosedRows)
+    ? formatUnclosedDetails(unclosedRows)
+    : `账本未结单：${unlabelledCount} 个（未混入战绩）。`;
   const lines = [
     '# 模型累计战绩',
     '',
     ...(repository ? [`仓库：${repository}`, ''] : []),
     ...table,
     ...(emptyCount > 0 ? [`另有 ${emptyCount} 个模型×任务类组合无样本。`, ''] : []),
-    `账本未结单：${unlabelledCount} 个（有 job.dispatch 无 job.closed，未混入战绩）。`,
+    unclosedLine,
   ];
   return lines.join('\n');
 }
 
 function openDispatchCount(events) {
-  const closed = new Set((events || []).filter(e => e && e.type === 'job.closed' && e.job_id).map(e => e.job_id));
-  return (events || []).filter(e => e && e.type === 'job.dispatch' && e.job_id && !closed.has(e.job_id)).length;
+  return unclosedJobIds(events).length;
 }
 
 function tryGhPrTitle(number) {
@@ -269,7 +348,10 @@ function renderSingleReport(sample, cumulativeRow, openCount, extra = {}) {
     `- 任务类：${sample.taskType || '未记录'}`,
     `- 返工轮数：${describeRework(sample.rework, sample.judgmentMalformed || [])}`,
     `- 触发方：${sample.triggeredBy || '未记'}`,
-    `- 审查红项数：${sample.redFlags === null || sample.redFlags === undefined ? '无审读（账本没记红项，未审不等于 0 红）' : sample.redFlags}`,
+    `- 归因：${describeAttribution({ attributionSource: sample.attributionSource, attributionNote: sample.attributionNote })}`,
+    `- 审查红项数：${formatRedCell(sample) === '0' || formatRedCell(sample) === String(sample.redFlags)
+      ? sample.redFlags
+      : `${formatRedCell(sample)}（${formatRedCell(sample) === '未记录' ? '账本没记住，不是 0 红' : '没有审官，不是 0 红'}）`}`,
     '',
     '## 最新累计战绩（含本单）',
     '',
@@ -283,7 +365,8 @@ function renderSingleReport(sample, cumulativeRow, openCount, extra = {}) {
       renderRow(cumulativeRow),
     );
   }
-  lines.push('', `账本未结单：${openCount} 个（未混入战绩）。`);
+  const extraUnclosed = extra.unclosedRows;
+  lines.push('', Array.isArray(extraUnclosed) ? formatUnclosedDetails(extraUnclosed) : `账本未结单：${openCount} 个（未混入战绩）。`);
   return lines.join('\n');
 }
 
@@ -300,12 +383,13 @@ export function main(argv = process.argv.slice(2)) {
   const loaded = loadLedgerEvents();
   if (!loaded.ok) throw new Error(loaded.error);
   const samples = samplesFromEvents(loaded.events).filter(s => s.tagged);
-  const openCount = openDispatchCount(loaded.events);
+  const unclosedRows = describeUnclosedJobs(loaded.events);
+  const openCount = unclosedRows.length;
   const models = [...new Set(samples.map(s => s.model).filter(Boolean))];
   const taskTypes = [...new Set([...TASK_TYPES, ...samples.map(s => s.taskType).filter(Boolean)])];
 
   if (args.pr === null) {
-    console.log(renderFullReport(buildRows(samples, models, taskTypes), openCount, 'ledger/events'));
+    console.log(renderFullReport(buildRows(samples, models, taskTypes), openCount, 'ledger/events', unclosedRows));
     return;
   }
 
@@ -321,7 +405,7 @@ export function main(argv = process.argv.slice(2)) {
       ? buildRows(samples.some(s => s.jobId === target.jobId) ? samples : [...samples, target], [target.model], [target.taskType])
         .find(candidate => candidate.model === target.model && candidate.taskType === target.taskType)
       : null;
-    return renderSingleReport(target, row, openCount, extra);
+    return renderSingleReport(target, row, openCount, { ...extra, unclosedRows });
   });
   console.log(blocks.join('\n\n'));
 }

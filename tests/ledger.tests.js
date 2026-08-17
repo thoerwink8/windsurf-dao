@@ -5,11 +5,15 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const {
-  writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
+  writeJobDispatch, writeJobClosed, writeJobOverride,
+  workerJobId, reviewerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
-  resolveMainWorktreeRoot,
+  resolveMainWorktreeRoot, scopeOverridesFor, describeAttribution,
+  resolveAmendTarget, formatAmendComment, linkAliasesToSuccessor,
 } = require('../scripts/lib/ledger-job.mjs');
-const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR } = require('../scripts/lib/ledger-gap-check.mjs');
+const { unclosedJobIds, describeUnclosedJobs } = require('../scripts/lib/ledger-query.mjs');
+const { redKindFromClosed, formatRedCell } = require('../scripts/calibrate.mjs');
+const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_HISTORICAL_GAPS, historicalGapNote } = require('../scripts/lib/ledger-gap-check.mjs');
 const { pinReviewerSlotA } = require('../scripts/lib/dianjiangtai-reviewer-slot.mjs');
 const { samplesFromEvents, reworkFromClosed, describeNoEvents } = require('../scripts/calibrate.mjs');
 
@@ -145,10 +149,112 @@ check('审官×审查 进样本', reviewSample[0].identity === '审官' && revie
 check('reworkFromClosed 优先 worker_rework', reworkFromClosed({ worker_rework: 1, verdict_rounds: 9, rework: true }) === 1);
 check('reworkFromClosed 扣 marshal_rounds', reworkFromClosed({ verdict_rounds: 3, marshal_rounds: 1 }) === 1);
 
+// ── #591 归因三态 + 红之后追加 ──
+{
+  const ov582 = [{
+    type: 'job.override', override_kind: 'scope', job_id: 'gh-pr-582',
+    why: '补 503 指纹', triggered_by: '帅',
+  }];
+  const reviews582 = [
+    { body: '判定：红 2 项' },
+    { body: '复核结论：绿，可合并' },
+  ];
+  const inferred582 = verdictStatsFromReviews(reviews582);
+  check('#582 无 override：整轮记工人（反推低估）', inferred582.workerRework === 1 && inferred582.marshalRounds === 0 && inferred582.attributionSource === 'inferred', JSON.stringify(inferred582));
+  check('#582 反推话术点明可能低估', /可能低估帅的轮次/.test(describeAttribution(inferred582)), inferred582.attributionNote);
+  const event582 = verdictStatsFromReviews(reviews582, { overrides: ov582 });
+  check('#582 有 override：那一轮归帅', event582.marshalRounds === 1 && event582.workerRework === 0 && event582.attributionSource === 'event', JSON.stringify(event582));
+  const redAfterRed = verdictStatsFromReviews([
+    { body: '判定：红 2 项' },
+    { body: '判定：红 1 项' },
+    { body: '复核结论：绿，可合并' },
+  ]);
+  check('红→红→绿 反推点名覆盖不到', redAfterRed.inferredMayUnderestimate && /红之后追加/.test(redAfterRed.attributionNote), redAfterRed.attributionNote);
+  const unscanned = verdictStatsFromReviews([], { unscanned: true, unscannedError: 'reviews 没查成' });
+  check('归因三态：没查成', unscanned.attributionSource === 'unscanned' && describeAttribution(unscanned).includes('没查成'));
+  check('#579 形仍标 inferred 但不改数字', stats579.attributionSource === 'inferred' && stats579.marshalRounds === 1 && stats579.workerRework === 1);
+
+  const miss = { type: 'job.closed', job_id: 'gh-pr-582', pr_number: 582 };
+  const withReview = [
+    { type: 'job.dispatch', job_id: 'gh-pr-582-review', pr_number: 582, identity: '审官' },
+  ];
+  check('有审官 job 但没记 red_flags → 未记录', redKindFromClosed(miss, withReview) === 'unrecorded' && formatRedCell({ redKind: 'unrecorded' }) === '未记录');
+  check('red_flags=0 → 0', redKindFromClosed({ red_flags: 0 }, []) === 'zero' && formatRedCell({ redKind: 'zero', redFlags: 0 }) === '0');
+  check('无审官 job 且没记 → 无审', redKindFromClosed(miss, []) === 'none' && formatRedCell({ redKind: 'none' }) === '无审');
+  check('三态话面不同', formatRedCell({ redKind: 'unrecorded' }) !== '0' && formatRedCell({ redKind: 'unrecorded' }) !== '无审');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-591-'));
+  const ctx = { dir, schema, machine: 'TEST-591' };
+  const d = writeJobDispatch({
+    ...ctx, ts, jobId: 'dispatch-ctx_591', model: 'grok-4.6', identity: '工人',
+    workType: '写码', terminal: 'test', extra: { issue_number: 591 },
+  });
+  check('dispatch-* 写入', d.ok && !d.skipped, d.error);
+  const ov = writeJobOverride({
+    ...ctx, ts, jobId: 'gh-pr-599', model: 'grok-4.6', identity: '帅',
+    workType: '写码', triggeredBy: '帅', why: '补未结明细', prNumber: 599, issueNumber: 591,
+  });
+  check('scope override 写入', ov.ok && ov.event.override_kind === 'scope' && ov.event.why === '补未结明细', ov.error);
+  const ov2 = writeJobOverride({
+    ...ctx, ts: '2026-08-17T13:00:00+08:00', jobId: 'gh-pr-599', model: 'grok-4.6', identity: '帅',
+    workType: '写码', triggeredBy: '用户', why: '再改一次范围', prNumber: 599, issueNumber: 591,
+  });
+  check('同一 job 第二条 scope override 可写', ov2.ok && !ov2.skipped, ov2.error);
+  const found = scopeOverridesFor([ov.event, ov2.event], { prNumber: 599 });
+  check('scopeOverridesFor 按 pr 收集 2 条', found.length === 2, String(found.length));
+
+  writeJobDispatch({
+    ...ctx, ts, jobId: workerJobId(599), model: 'grok-4.6', identity: '工人',
+    workType: '写码', terminal: 'test', prNumber: 599, extra: { issue_number: 591 },
+  });
+  const listedBefore = [
+    d.event,
+    { type: 'job.dispatch', job_id: workerJobId(599), pr_number: 599, identity: '工人', issue_number: 591 },
+  ];
+  check('接续前 dispatch-* 算未结', unclosedJobIds(listedBefore).includes('dispatch-ctx_591'));
+  const links = linkAliasesToSuccessor({
+    ctx, ts, events: listedBefore, successorJobId: workerJobId(599),
+    issueNumber: 591, prNumber: 599, model: 'grok-4.6', identity: '工人',
+  });
+  check('handoff 接续写成功', links.length === 1 && links[0].ok, JSON.stringify(links));
+  const after = [
+    ...listedBefore,
+    links[0].event,
+    { type: 'job.closed', job_id: workerJobId(599), pr_number: 599 },
+  ];
+  check('接续后 dispatch-* 不再算未结', !unclosedJobIds(after).includes('dispatch-ctx_591'), unclosedJobIds(after).join(','));
+  check('接续后未结只剩已 closed 的不算', unclosedJobIds(after).length === 0, unclosedJobIds(after).join(','));
+
+  const stuck = describeUnclosedJobs([
+    { type: 'job.dispatch', job_id: 'gh-pr-700', pr_number: 700, identity: '审官' },
+  ]);
+  check('真卡住的单列得出 job_id 和缺失项', stuck.length === 1 && stuck[0].job_id === 'gh-pr-700' && stuck[0].missing.includes('job.closed'), JSON.stringify(stuck));
+  const reviewOrphans = describeUnclosedJobs([
+    { type: 'job.dispatch', job_id: 'gh-pr-596', pr_number: 596, identity: '工人' },
+    { type: 'job.closed', job_id: 'gh-pr-596', pr_number: 596 },
+    { type: 'job.dispatch', job_id: 'gh-pr-596-review', pr_number: 596, identity: '审官' },
+    { type: 'job.dispatch', job_id: 'gh-pr-597', pr_number: 597, identity: '工人' },
+    { type: 'job.closed', job_id: 'gh-pr-597', pr_number: 597 },
+    { type: 'job.dispatch', job_id: 'gh-pr-597-review', pr_number: 597, identity: '审官' },
+  ]);
+  check('#596/#597 审官缺 closed 报得出', reviewOrphans.length === 2 && reviewOrphans.every(r => r.job_id.endsWith('-review') && r.identity === '审官' && r.missing.includes('job.closed')), JSON.stringify(reviewOrphans));
+
+  const tgt = resolveAmendTarget({
+    events: [{ type: 'job.dispatch', job_id: 'dispatch-ctx_591', model: 'grok-4.6', work_type: '写码', issue_number: 591 }],
+    issue: 591,
+  });
+  check('amend 按 issue 找到 dispatch job', tgt.ok && tgt.jobId === 'dispatch-ctx_591' && tgt.model === 'grok-4.6', JSON.stringify(tgt));
+  const comment = formatAmendComment({ triggeredBy: '帅', why: '补指纹', jobId: 'gh-pr-599', eventId: 'abc' });
+  check('amend 评论带机械标记', comment.includes('账本已记 job.override') && comment.includes('<!-- dao-amend -->'));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // ── 差集：两个反例都要过；禁 Date.now ──
 const src = fs.readFileSync(path.join(REPO, 'scripts/lib/ledger-gap-check.mjs'), 'utf8');
 check('差集检查不含 Date.now() 调用', !/Date\.now\s*\(/.test(src));
-check('基准 PR 写死为本单 #584', LEDGER_GAP_BASELINE_PR === 584);
+check('基准 PR 写死为 #590（#591 追加③）', LEDGER_GAP_BASELINE_PR === 590);
+check('存量缺口点名 585/587/590', LEDGER_GAP_HISTORICAL_GAPS.join(',') === '585,587,590');
+check('存量 note 不许静默', /#585/.test(historicalGapNote()) && /#587/.test(historicalGapNote()) && /#590/.test(historicalGapNote()) && /不对照/.test(historicalGapNote()));
 const gapA = inspectLedgerGap({
   githubPrs: [{ number: 999, labels: ['model/x', 'type/写码'] }],
   closedNumbers: new Set(),
@@ -180,6 +286,28 @@ const beforeBase = inspectLedgerGap({
   newestBuffer: 1,
 });
 check('基准之前的单不对照 → empty-github', beforeBase.kind === 'empty-github', JSON.stringify(beforeBase));
+
+const labeled = n => ({ number: n, labels: ['model/x', 'type/写码'] });
+const currentShape = inspectLedgerGap({
+  githubPrs: [585, 587, 590, 592, 594, 596, 597].map(labeled),
+  closedNumbers: new Set([592, 594, 596, 597]),
+  newestBuffer: 1,
+});
+check('现状工人侧 closed → 对照转绿', currentShape.kind === 'ok' && currentShape.checked.includes(592) && currentShape.checked.includes(596) && !currentShape.checked.includes(597), JSON.stringify(currentShape));
+check('转绿仍带存量缺口 note', /#585/.test(currentShape.historicalNote) && /#590/.test(currentShape.historicalNote), currentShape.historicalNote);
+const guardStill = inspectLedgerGap({
+  githubPrs: [592, 600].map(labeled),
+  closedNumbers: new Set([592]),
+  newestBuffer: 0,
+});
+check('baseline 之后缺 closed → 仍红（守卫还活着）', guardStill.kind === 'gap' && guardStill.missing.includes(600) && !guardStill.missing.includes(592), JSON.stringify(guardStill));
+check('#592 形：红后追加 + override 归帅', (() => {
+  const s = verdictStatsFromReviews(
+    [{ body: '判定：红 2 项' }, { body: '复核结论：绿，可合并' }],
+    { overrides: [{ type: 'job.override', override_kind: 'scope', job_id: 'gh-pr-592', why: '帅追加' }] },
+  );
+  return s.attributionSource === 'event' && s.marshalRounds === 1 && s.workerRework === 0;
+})());
 
 // ── 审读 A 位锁 GPT，撞 UI ban 顺延 Opus ──
 const models = [

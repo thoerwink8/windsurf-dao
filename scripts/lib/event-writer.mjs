@@ -153,7 +153,11 @@ export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }
   if (dup) {
     throw new Error(`同内容事件已入账（event_id=${event.event_id}，已存在 ${dup}）；拒绝重复写入`);
   }
-  const jobDup = ONE_PER_JOB.has(event.type) && event.job_id ? scanJobType(dir, event.type, event.job_id) : null;
+  // scope 追加（#591）可多次发生，不走「每 job 一条」；模型自选仍一人一次。
+  const scopeAmend = event.type === 'job.override' && event.override_kind === 'scope';
+  const jobDup = ONE_PER_JOB.has(event.type) && event.job_id && !scopeAmend
+    ? scanJobType(dir, event.type, event.job_id)
+    : null;
   if (jobDup) {
     throw new Error(`该 job 已有 ${event.type} 事件（${jobDup}）；每 job 一次，防重复计账——重复派单请另立 job_id`);
   }

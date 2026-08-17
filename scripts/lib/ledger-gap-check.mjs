@@ -11,9 +11,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** 本 PR（#584）号。只管这个号之后的已合并带标单。 */
-export const LEDGER_GAP_BASELINE_PR = 584;
+/**
+ * 只管这个号之后的已合并带标单。
+ * 584→590（#591 追加③）：#585 #587 #590 缺 closed 的成因是常驻 flow 跑旧代码
+ * （#595 ①），机械闸已随 #596 上线；#597 手工 squash 后新代码正确写入 closed。
+ * 再推必须同时有「成因已修」和「新代码实证会写」——缺一条就是掩盖。
+ */
+export const LEDGER_GAP_BASELINE_PR = 590;
 export const LEDGER_GAP_NEWEST_BUFFER = 1;
+/** 推 baseline 收进去的存量缺口。不对照，但输出必须点名，不许静默消失。 */
+export const LEDGER_GAP_HISTORICAL_GAPS = [585, 587, 590];
 
 export function labelNames(pr) {
   return (pr && pr.labels ? pr.labels : []).map(l => (typeof l === 'string' ? l : l && l.name)).filter(Boolean);
@@ -63,12 +70,18 @@ export function closedPrNumbersFromEvents(events) {
   return numbers;
 }
 
+export function historicalGapNote(baselinePr = LEDGER_GAP_BASELINE_PR) {
+  if (Number(baselinePr) !== LEDGER_GAP_BASELINE_PR) return '';
+  return `存量缺口 ${LEDGER_GAP_HISTORICAL_GAPS.map(n => `#${n}`).join(' ')}（baseline #${LEDGER_GAP_BASELINE_PR} 之前不对照；成因是常驻 flow 跑旧代码，#596 已闸，#597 实证新代码会写 closed）`;
+}
+
 /**
  * @returns {{
  *   kind: 'empty-github'|'ok'|'gap',
  *   missing: number[],
  *   checked: number[],
  *   labeled: number[],
+ *   historicalNote: string,
  *   line: string
  * }}
  */
@@ -80,12 +93,14 @@ export function inspectLedgerGap({
 } = {}) {
   const labeled = [...new Set(labeledMergedNumbers(githubPrs))].sort((a, b) => a - b);
   const afterBaseline = labeled.filter(n => n > baselinePr);
+  const note = historicalGapNote(baselinePr);
   if (afterBaseline.length === 0) {
     return {
       kind: 'empty-github',
       missing: [],
       checked: [],
       labeled,
+      historicalNote: note,
       line: `账本断流：基准 PR #${baselinePr} 之后 0 个已合并带标 PR——没扫到样本，不是绿`,
     };
   }
@@ -99,6 +114,7 @@ export function inspectLedgerGap({
       missing: [],
       checked,
       labeled,
+      historicalNote: note,
       line: `账本断流：基准 #${baselinePr} 之后 ${afterBaseline.length} 个带标单均在序数缓冲内（最新 ${buf} 个不对照），差集空`,
     };
   }
@@ -108,6 +124,7 @@ export function inspectLedgerGap({
       missing,
       checked,
       labeled,
+      historicalNote: note,
       line: `账本断流：已合并带标但无 job.closed：${missing.map(n => `#${n}`).join(' ')}（对照 ${checked.length} 个，缓冲最新 ${buf} 个）`,
     };
   }
@@ -116,6 +133,7 @@ export function inspectLedgerGap({
     missing: [],
     checked,
     labeled,
+    historicalNote: note,
     line: `账本断流：对照 ${checked.length} 个已合并带标 PR，差集空（基准 #${baselinePr}，缓冲最新 ${buf} 个）`,
   };
 }

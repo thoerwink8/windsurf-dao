@@ -68,6 +68,17 @@ async function main() {
     const r = S.queryLedger({ events, unclosed: true });
     check('只剩 591 和 dispatch-aaa', r.count === 2 && r.events.every(e => e.type === 'job.dispatch'), r.events.map(e => e.job_id).join(','));
     check('已关闭的 588 不在', !r.events.some(e => e.job_id === 'gh-pr-588'), JSON.stringify(r.events));
+    const linked = [
+      ...events,
+      ev({ ts: '2026-08-17T10:30:00+08:00', type: 'job.handoff', job_id: 'dispatch-aaa', event_id: 'h1', seq: 5 }),
+    ];
+    linked[linked.length - 1].kind = 'job_id_rename';
+    linked[linked.length - 1].from_job_id = 'dispatch-aaa';
+    linked[linked.length - 1].to_job_id = 'gh-pr-588';
+    const after = S.queryLedger({ events: linked, unclosed: true });
+    check('handoff 接续后 dispatch-aaa 不再未结', after.events.every(e => e.job_id !== 'dispatch-aaa'), after.events.map(e => e.job_id).join(','));
+    const detail = S.describeUnclosedJobs(events);
+    check('未结明细带缺失项', detail.some(d => d.job_id === 'dispatch-aaa' && d.missing.length > 0), JSON.stringify(detail));
   }
 
   console.log('\n=== 三态：0 条 ≠ 没查成 ===');
