@@ -60,6 +60,9 @@
 //   14. retry-loop    —— #580 追加：屏面尾部同一条 5xx/不可用 行连续 N 轮出现，即使真实
 //                        内容在变也报（指纹活证否决正好把「在重试」当成活着）。有新鲜 git
 //                        产出则不报。503 进指纹表是补洞，本判据不依赖认识具体错误串。
+//   15. stale-completion —— #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新
+//                        （或根本没有完工 comment）。#584/#585 两次实咬：推了新代码没报。
+//                        子卡（卡名带 ·）不判——审官产出是 review 不是完工 comment。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
@@ -122,6 +125,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
+import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 
@@ -421,6 +425,7 @@ function makeLiveSource(window) {
     terminalsByPath: buildTerminalsByPath(terminals),
     prEvidence: livePrEvidence(),
     dispatchTracked: liveDispatchTracked(),
+    completionEvidence: null,
   };
 }
 
@@ -486,12 +491,14 @@ function loadSnapshotRound(roundDir) {
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
   //   flow-signals.json  { prs: [{ number, comments, reviews }] }（#580：心跳缺失时的待流转证据）
   //   worker-list-evidence.json  { worktrees: [ <worktreeId>, ... ] }（#569 BLIND：dispatch 记账集合）
+  //   completion-evidence.json { <worktreeId>: { headCommittedAt, lastCompletionAt } }（#586）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
   const prEv = readJson('pr-evidence.json');
   const hb = readJson('heartbeat.json');
   const flowSignals = readJson('flow-signals.json');
   const wlEv = readJson('worker-list-evidence.json');
+  const compEv = readJson('completion-evidence.json');
 
   return {
     ps, paneByKey, readTerminal, tlError: null, label: basename(roundDir),
@@ -505,6 +512,7 @@ function loadSnapshotRound(roundDir) {
     flowSignals: flowSignals || null,
     sessionsDir: join(roundDir, 'sessions'),
     dispatchTracked: wlEv && Array.isArray(wlEv.worktrees) ? { tracked: new Set(wlEv.worktrees.filter(Boolean)) } : { missing: true },
+    completionEvidence: compEv || null,
   };
 }
 
@@ -687,6 +695,61 @@ function prEvidenceFor(w, source, args) {
   }
   const ev = source.prEvidence && (source.prEvidence[w.worktreeId] || source.prEvidence[w.path]);
   return ev ? { ...ev } : { missing: true };
+}
+
+/** #586：head 提交时间 vs 最后一条完工/返工 comment。没查成和「没有 comment」分开。 */
+function assessStaleCompletion({ headCommittedAt, lastCompletionAt } = {}) {
+  const head = Number(headCommittedAt);
+  if (!Number.isFinite(head)) return { state: 'unscanned', stale: false };
+  if (lastCompletionAt == null) return { state: 'missing', stale: true };
+  const last = Number(lastCompletionAt);
+  if (!Number.isFinite(last)) return { state: 'unscanned', stale: false };
+  if (head > last) return { state: 'stale', stale: true };
+  return { state: 'fresh', stale: false };
+}
+
+function liveCompletionEvidence(w, source, args) {
+  const prEv = prEvidenceFor(w, source, args);
+  const prNo = prEv?.number || w.linkedPR?.number || assocNumber(w.displayName);
+  if (!prNo) return { missing: true };
+  const view = spawnSync('gh', ['pr', 'view', String(prNo), '--json', 'commits,title,body'], { encoding: 'utf8', timeout: 15000 });
+  if (view.error || view.status !== 0) {
+    return { error: `gh pr view #${prNo} 失败：${String(view.error?.message || view.stderr || `exit ${view.status}`).trim().slice(0, 160)}` };
+  }
+  let meta;
+  try { meta = JSON.parse(view.stdout); }
+  catch { return { error: `gh pr view #${prNo} 返回非 JSON` }; }
+  const commits = Array.isArray(meta.commits) ? meta.commits : [];
+  const lastCommit = commits[commits.length - 1];
+  const headMs = lastCommit?.committedDate ? Date.parse(lastCommit.committedDate) : NaN;
+  if (!Number.isFinite(headMs)) return { error: `gh pr view #${prNo} 没有 commits[].committedDate（没查成）` };
+  const title = String(meta.title || '');
+  const body = String(meta.body || '');
+  const issueNo = (title.match(/#(\d+)/) || /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body) || [])[1]
+    || String(prNo);
+  const comments = spawnSync('gh', ['api', `repos/{owner}/{repo}/issues/${issueNo}/comments`, '--paginate'], { encoding: 'utf8', timeout: 15000 });
+  if (comments.error || comments.status !== 0) {
+    return { error: `gh 读 issue #${issueNo} 评论失败：${String(comments.error?.message || comments.stderr || `exit ${comments.status}`).trim().slice(0, 160)}` };
+  }
+  let list;
+  try { list = JSON.parse(comments.stdout); }
+  catch { return { error: `issue #${issueNo} 评论不是 JSON` }; }
+  if (!Array.isArray(list)) return { error: `issue #${issueNo} 评论不是数组（没查成）` };
+  let lastCompletionAt = null;
+  for (const c of list) {
+    if (!isCompletionComment(c.body)) continue;
+    const ts = Date.parse(c.created_at || c.createdAt || '');
+    if (Number.isFinite(ts) && (lastCompletionAt == null || ts > lastCompletionAt)) lastCompletionAt = ts;
+  }
+  return { headCommittedAt: headMs, lastCompletionAt };
+}
+
+function completionEvidenceFor(w, source, args) {
+  if (args.snapshotDir) {
+    const ev = source.completionEvidence && (source.completionEvidence[w.worktreeId] || source.completionEvidence[w.path]);
+    return ev ? ev : { missing: true };
+  }
+  return liveCompletionEvidence(w, source, args);
 }
 
 // ── dispatch 记账证据（#569 BLIND 判据订正，2026-08-17）────────────────
@@ -1103,6 +1166,36 @@ function runWorktreePass(source, args, state) {
       }
     } else if (name) {
       st.fired.delete('naming');
+    }
+
+    // #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新（或没有完工 comment）。
+    // 子卡（卡名带 ·）不判。快照缺 completion-evidence.json = 本项没查，不猜。
+    const workerDone = agentsOf.length > 0
+      && agentsOf.every(a => a.state === 'done')
+      && isTaskCard(w)
+      && !/·/.test(String(name || ''));
+    if (workerDone) {
+      const ev = completionEvidenceFor(w, source, args);
+      if (ev.missing) {
+        // 快照没给这项证据：不猜。live 没关联 PR 也走 missing。
+      } else if (ev.error) {
+        notes.push({ name, type: '观察', detail: `COMPLETION_EVIDENCE_ERROR: ${ev.error}——完工信号过期项没查成，不是查过没事` });
+      } else {
+        const judged = assessStaleCompletion(ev);
+        if (judged.state === 'unscanned') {
+          notes.push({ name, type: '观察', detail: 'COMPLETION_EVIDENCE_UNSCANNED: head/comment 时间不可解析——完工信号过期项没查成' });
+        } else if (judged.stale) {
+          if (!st.fired.has('stale-completion')) {
+            st.fired.add('stale-completion');
+            const why = judged.state === 'missing'
+              ? '工人 agent=done 但没有完工/返工 comment'
+              : '工人 agent=done 且 PR head 比最后一条完工/返工 comment 新';
+            events.push({ name, type: 'stale-completion', detail: `${why}——推了新代码却没报（#586；#584/#585 两次实咬）。处置：催工人调 dao.mjs worker-done` });
+          }
+        } else {
+          st.fired.delete('stale-completion');
+        }
+      }
     }
 
     // 孤儿树（#492/#476）主判据：还有没有活跃执行者 = 树内有 terminal 且 agent 活着。

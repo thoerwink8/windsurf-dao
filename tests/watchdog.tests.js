@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -349,7 +349,7 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   check("心跳缺失且待流转没查成：HEARTBEAT_MISSING（不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
 
   const ap = runWatchdog(path.join(FIXTURES, "heartbeat-absent-pending"), ["--once"]);
-  check("无心跳 + 有待流转（完工未起审官）：退出码 1", ap.status === 1, `status=${ap.status}`);
+  check("无心跳 + 有待流转（红判定待返工注入）：退出码 1", ap.status === 1, `status=${ap.status}`);
   check("无心跳 + 有待流转：报 flow-absent 心跳从未存在", /\[flow\] flow-absent:.*心跳从未存在.*待流转/.test(ap.out), ap.out.trim());
   check("无心跳 + 有待流转：不报 flow-stalled（过期和从未存在分得开）", !/flow-stalled:/.test(ap.out), ap.out.trim());
 
@@ -358,7 +358,7 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   check("无心跳 + 无待流转：心跳从未存在但不报", /心跳从未存在.*无待流转对象，不报/.test(ai.out), ai.out.trim());
 
   const tp = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-pending"), ["--once"]);
-  check("PR#582≠issue#580：署名 issue 上有完工 → 报 flow-absent", /\[flow\] flow-absent:.*心跳从未存在/.test(tp.out), tp.out.trim());
+  check("PR#582≠issue#580：署名 issue 完工 + 红判定 → 报 flow-absent", /\[flow\] flow-absent:.*心跳从未存在/.test(tp.out), tp.out.trim());
   const ti = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-idle"), ["--once"]);
   check("PR#582≠issue#580：完工只在 PR 会话 → 不报", !/flow-absent:/.test(ti.out) && /心跳从未存在.*无待流转对象/.test(ti.out), ti.out.trim());
 }
@@ -551,6 +551,19 @@ console.log("\n=== ㉖ #580 追加：503/5xx 指纹 + 重试循环（内容在�
 
   const h = runWatchdog(path.join(FIXTURES, "real-advance"));
   check("正常输出且内容在动：不报 retry-loop / stall", h.status === 0 && !/retry-loop:/.test(h.out) && !/stall:/.test(h.out), h.out.trim());
+}
+
+console.log("\n=== ㉗ #586 工人 done 但 head 比完工信号新 ===");
+{
+  const stale = runWatchdog(path.join(FIXTURES, "stale-completion"), ["--once"]);
+  check("正样本：head 比完工 comment 新 → 退出码 1", stale.status === 1, `status=${stale.status}`);
+  check("正样本：报 stale-completion", /stale-completion:/.test(stale.out) && /#453 - dispatch 顺车修订/.test(stale.out), stale.out.trim());
+
+  const fresh = runWatchdog(path.join(FIXTURES, "stale-completion-fresh"), ["--once"]);
+  check("负样本：完工 comment 不早于 head → 不报 stale-completion", !/stale-completion:/.test(fresh.out), fresh.out.trim());
+
+  const none = runWatchdog(path.join(FIXTURES, "no-targets"), ["--once"]);
+  check("缺 completion-evidence：不猜、不报 stale-completion（没查成 ≠ 查过有事）", !/stale-completion:/.test(none.out), none.out.trim());
 }
 
 console.log(`\nwatchdog 回归网：${pass} 过 / ${fail} 红`);

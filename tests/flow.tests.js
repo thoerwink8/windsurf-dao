@@ -20,7 +20,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
@@ -81,14 +81,11 @@ console.log("\n=== ④ 真实语料 #453（实录：判定红5→复核红2→�
   check("真实语料判定行解析：#453 首审红 5 项", redFlagsFromReviewBodies([JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"))[0].body]) === 5, "红项数应为 5");
 }
 
-console.log("\n=== ⑤ 真实语料 #456（实录：完工自报×2 重复 → 起审官一次，选型序 deepseek→gpt）===");
+console.log("\n=== ⑤ 真实语料 #456（#586：完工自报不再由 flow 起审官）===");
 {
   const r = runFlow(path.join(FIXTURES, "real-456"));
-  check("退出码 1（有动作）", r.status === 1, `status=${r.status}`);
-  check("完工自报 → 起审官", /动作：起审官 #456/.test(r.out), r.out.trim());
-  check("审官选型序：deepseek 工人 → gpt-5.6-sol（异厂商 GPT 优先）", /审官·gpt-5.6-sol/.test(r.out), r.out.trim());
-  check("起审官命令走 codex 一步到位", /--agent codex/.test(r.out), r.out.trim());
-  check("重复完工自报不重复起审官（只一次）", (r.out.match(/起审官 #456/g) || []).length === 1, r.out.trim());
+  check("完工自报 → flow 不起审官（worker-done 已按需起）", !/起审官/.test(r.out), r.out.trim());
+  check("不打出 动作： 行（待审态无需流转）", !/动作：/.test(r.out), r.out.trim());
 }
 
 console.log("\n=== ⑥ 判定行缺失负控：review 无判定行 → 报帅分诊，不动作 ===");
@@ -132,11 +129,11 @@ console.log("\n=== ⑦b 没查成负控：数据源不可用（缺 prs.json）�
   check("不打出 OK 扫完（不能把没查成说成查过没事）", !/OK 扫完/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑧ 完整闭环四轮：完工→起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审（全部真通）===");
+console.log("\n=== ⑧ 完整闭环四轮：完工不由 flow 起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审 ===");
 {
   const r = runFlow(path.join(FIXTURES, "recheck-green"));
   check("退出码 1（有动作/报帅）", r.status === 1, `status=${r.status}`);
-  check("round-1 起审官", /round-1[\s\S]*动作：起审官 #1005/.test(r.out), r.out.trim());
+  check("round-1 不起审官（#586）", /round-1[\s\S]*起审官/.test(r.out) === false, r.out.trim());
   check("round-2 返工注入真通（注入目标已解析）", /round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）（注入目标：工人终端 term_worker_1005）/.test(r.out), r.out.trim());
   check("round-3 复核注入真通（存量反查找到审官终端）", /round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（审官· 子卡））/.test(r.out), r.out.trim());
   check("round-4 报帅终审", /round-4[\s\S]*报帅：终审 #1005/.test(r.out), r.out.trim());
@@ -162,11 +159,11 @@ console.log("\n=== ⑩ 制度类 PR 停留超 24h 提醒一声（round-2 不重�
   check("round-2 正常 OK 扫完", /round-2[\s\S]*OK 扫完 1 个 PR，0 需流转/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑪ MERGED 退役：round-1 在途起审官，round-2 合并 → 退役收口 ===");
+console.log("\n=== ⑪ MERGED 退役：round-1 待审（flow 不起审官），round-2 合并 → 退役收口 ===");
 {
   const r = runFlow(path.join(FIXTURES, "merged"));
-  check("退出码 1（有动作/退役）", r.status === 1, `status=${r.status}`);
-  check("round-1 起审官（在途）", /round-1[\s\S]*起审官 #1004/.test(r.out), r.out.trim());
+  check("退出码 1（有退役）", r.status === 1, `status=${r.status}`);
+  check("round-1 不起审官（#586）", !/round-1[\s\S]*起审官/.test(r.out), r.out.trim());
   check("round-2 退役（MERGED 收口，终审+归档归帅）", /round-2[\s\S]*退役：PR #1004 MERGED/.test(r.out), r.out.trim());
 }
 
@@ -204,17 +201,12 @@ console.log("\n=== ⑬ 判定行解析与 calibrate 同源（共享模块单一�
   check("真实语料 #453 跨 review 最大红 = 5（复核绿不清零）", redFlagsFromReviewBodies(real453.map(r => r.body)) === 5, "应为 5");
 }
 
-console.log("\n=== ⑭ 审官选型序纯函数（docs/model-routing.toml 真相源）===");
+console.log("\n=== ⑭ #586 flow 不再按 toml 起审官（选型在 label / worker-done）===");
 {
-  const { loadRouting } = require("../scripts/flow.mjs");
-  const toml = loadRouting().toml;
-  check("deepseek 工人 → gpt-5.6-sol（异厂商 GPT 优先）", pickReviewer(toml, "deepseek-v4-flash", "写码")?.id === "gpt-5.6-sol");
-  check("grok 工人 → gpt-5.6-sol（异厂商 GPT 优先）", pickReviewer(toml, "grok-4.6", "写码")?.id === "gpt-5.6-sol");
-  check("claude 工人 → gpt-5.6-sol（异厂商）", pickReviewer(toml, "claude-opus", "写码")?.id === "gpt-5.6-sol");
-  check("gpt 工人 → claude-opus（审查必换厂商）", pickReviewer(toml, "gpt-5.6-sol", "写码")?.id === "claude-opus");
-  check("UI 类 → claude-opus（gpt UI ban 顶位）", pickReviewer(toml, "deepseek-v4-flash", "UI")?.id === "claude-opus");
-  check("复审 → claude-opus（gpt UI 类含复审禁入）", pickReviewer(toml, "deepseek-v4-flash", "复审")?.id === "claude-opus");
-  check("未知模型 → 不炸，回退 gpt", pickReviewer(toml, "model/不存在", "写码")?.id === "gpt-5.6-sol");
+  const done = [{ type: "completion", id: "c:1", at: "t0", body: "完工：x" }];
+  const awaiting = deriveState(done);
+  check("仅完工 → awaiting-review", awaiting.state === "awaiting-review");
+  check("awaiting-review → pendingAction 为 null（不起审官）", pendingAction(awaiting) === null);
 }
 
 console.log("\n=== ⑮ 状态机纯函数 ===");
@@ -302,13 +294,11 @@ console.log("\n=== ⑰d 四轮复核红 1：reviewer-unfound 常驻——审官�
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("\n=== ⑱ 红 5：--parent-worktree 用合法 selector（branch:，不是 name:）===");
+console.log("\n=== ⑱ #586 flow 源码不再含起审官动作 ===");
 {
-  const r = runFlow(path.join(FIXTURES, "real-456"));
-  check("起审官命令用 branch:<headRefName> selector", /--parent-worktree branch:thoerwink8\/点将台实现/.test(r.out), r.out.trim());
-  check("不再用 name: selector（不是 orca 认识的 worktree selector）", !/--parent-worktree name:/.test(r.out), r.out.trim());
-  check("oneShot 走官方首注入通道 --prompt（免就绪竞态）", /--agent codex --prompt <复核任务书> --json/.test(r.out), r.out.trim());
-  check("审官卡名按全局约定 #PR号 - 角色·模型（观察 3）", /--name "#456 - 审官·gpt-5.6-sol"/.test(r.out), r.out.trim());
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("没有 start-reviewer 动作", !/start-reviewer/.test(flowSrc));
+  check("没有受控例外 / #480 退役字样", !/受控例外：不走 worker-start，随 #480 重做/.test(flowSrc));
 }
 
 console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id，不是 GraphQL node id）===");
@@ -322,24 +312,21 @@ console.log("\n=== ⑲ 复核红 1：review 链接必须可用（数字锚点 id
   check("real-453 语料 3 条 review body 未改写（判定行口径仍成立）", redFlagsFromReviewBodies(real453.map(x => x.body)) === 5, "应为 5");
 }
 
-console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自动起审官受控例外（#480）===");
+console.log("\n=== ㉑ #586 退役 flow 起审官：SKILL 受控例外删除，flow 不再起审官 ===");
 {
   const r = runFlow(path.join(FIXTURES, "real-456"));
-  check("起审官 dry-run 标明受控例外", /受控例外：不走 worker-start，随 #480 重做/.test(r.out), r.out.trim());
-  check("起审官命令仍是 worktree create（未偷接 worker-start）", /orca worktree create --parent-worktree branch:/.test(r.out), r.out.trim());
-  check("起审官命令不含 worker-start（例外未半吊子统一）", !/orca orchestration worker-start/.test(r.out), r.out.trim());
+  check("完工语料不再打起审官 / 受控例外", !/起审官/.test(r.out) && !/受控例外/.test(r.out), r.out.trim());
 
   const flowSrc = fs.readFileSync(FLOW, "utf8");
-  const liveStart = flowSrc.split("if (action.kind === 'start-reviewer')")[1]?.split("if (action.kind === 'inject-rework')")[0] || "";
-  check("live 起审官 argv 仍是 worktree create", /\['worktree', 'create'/.test(liveStart), liveStart.slice(0, 200));
-  check("live 起审官 argv 不含 orchestration worker-start", !/\['orchestration',\s*'worker-start'/.test(liveStart), liveStart.slice(0, 200));
-  check("flow 头注写明受控例外随 #480 退役", /起审官（受控例外，随 #480 退役）/.test(flowSrc));
+  check("flow 源码不含 start-reviewer", !/start-reviewer/.test(flowSrc));
+  check("flow 头注写明审官由 worker-done 按需起", /审官由 worker-done 按需起/.test(flowSrc));
 
   const skill = fs.readFileSync(path.join(REPO, "host", "skills", "dispatch", "SKILL.md"), "utf8");
   const chain = (skill.split("## 一条完整命令链")[1] || "").split("## 命令级铁律")[0];
   const multi = (chain.split("多工人")[1] || "");
   check("SKILL 命令链多工人/辅助卡示例含 worker-start --terminal", /worker-start --task <task_id> --worktree <新建子卡 id> --terminal/.test(multi), multi.slice(0, 300));
-  check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
+  check("SKILL 已删受控例外（随 #480 退役）那段", !/受控例外（自动起审官，随 #480 退役）/.test(skill));
+  check("SKILL 写明审官由 worker-done 按需起", /worker-done/.test(skill));
   const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
   check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
 }
@@ -385,10 +372,11 @@ console.log("\n=== ⑳ #580 send 纯文本成功 + 注入后验开工/补回车 
   check("Sent N bytes 不当失败，注入走进验开工", inj.ok === true, JSON.stringify(inj));
   check("send 带 --json（不再裸 send）", sent[0] && sent[0].includes("--json") && sent[0].includes("--text"), JSON.stringify(sent[0]));
 
-  check("起审官/返工/复核是流转器活", isFlowWork({ kind: "start-reviewer" }) && isFlowWork({ kind: "inject-rework" }) && isFlowWork({ kind: "inject-recheck" }));
+  check("返工/复核是流转器活", isFlowWork({ kind: "inject-rework" }) && isFlowWork({ kind: "inject-recheck" }));
+  check("起审官不再是流转器活（#586 worker-done）", isFlowWork({ kind: "start-reviewer" }) === false);
   check("报帅终审不是流转器活", isFlowWork({ kind: "report-final" }) === false);
   const pending = pendingFlowItems([{ number: 580, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [] }]);
-  check("完工未起审官 → 待流转 start-reviewer", pending.length === 1 && pending[0].kind === "start-reviewer");
+  check("完工未起审官 → 不是流转器待办（worker-done 起）", pending.length === 0);
   const idle = pendingFlowItems([{ number: 579, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [{ id: 2, body: "判定：绿，可合并", submittedAt: "t2" }] }]);
   check("已绿待帅 → 不是流转器待办", idle.length === 0);
 
@@ -418,7 +406,7 @@ console.log("\n=== ㉒ #575 ⑥ issue comment 首行「完工：」触发起审�
   check("正文随手引用 #443 不算", ticketIssueNumber({ title: "无号", body: "规格源 = #443 全部评论" }) === null);
 
   const r = runFlow(path.join(FIXTURES, "completion-head"));
-  check("issue 首行「完工：」→ 起审官", /动作：起审官 #998/.test(r.out), r.out.trim());
+  check("issue 首行「完工：」被识别但 flow 不起审官（#586）", !/起审官/.test(r.out), r.out.trim());
 
   const n = runFlow(path.join(FIXTURES, "completion-neg"));
   check("issue 首行「已完成：…」→ 不起审官（负控，防判据放宽成含完工二字）", !/起审官/.test(n.out), n.out.trim());
