@@ -917,7 +917,7 @@ async function main() {
     check('主闸：注入含换行 → 拒，不靠 Pasted Content', nl.ok === false && nl.newlines === true && /换行/.test(nl.error), JSON.stringify(nl));
     const okLine = S.assertInjectText('先读 host/skills/dispatch/templates/soldier-book.md 全文，那是你的闭环框架。本单 spec：修 X。', { label: '士兵注入' });
     check('主闸：单行注入放行', okLine.ok === true && okLine.newlines === false, JSON.stringify(okLine));
-    const tooLong = S.assertInjectText('x'.repeat(S.INJECT_MAX_CHARS + 1), { label: '士兵注入' });
+    const tooLong = S.assertInjectText('x'.repeat(S.INJECT_MAX_BYTES + 1), { label: '士兵注入' });
     check('次闸：超长单行仍拒', tooLong.ok === false && tooLong.newlines === false && /上限/.test(tooLong.error), JSON.stringify(tooLong));
   }
 
@@ -1383,6 +1383,7 @@ async function main() {
     const soldier = S.buildSoldierInject({ spec: '短摘要：修 X', issue: 602 });
     check('士兵注入是单行且含 spec', !/[\r\n]/.test(soldier) && /短摘要：修 X/.test(soldier), soldier);
     check('士兵注入含指针路径', /host\/skills\/dispatch\/templates\/soldier-book\.md/.test(soldier), soldier);
+    check('主约束：士兵注入 ≤100 字节', S.injectUtf8Bytes(soldier) <= 100, `bytes=${S.injectUtf8Bytes(soldier)} ${soldier}`);
 
     const reviewer = S.buildReviewerInject({
       spec: '按审官任务书审 PR #1',
@@ -1391,9 +1392,10 @@ async function main() {
       mergePolicy: 'auto',
     });
     check('审官注入是单行', !/[\r\n]/.test(reviewer), reviewer);
+    check('审官注入低于长度上限', S.injectUtf8Bytes(reviewer) <= S.INJECT_MAX_BYTES, `bytes=${S.injectUtf8Bytes(reviewer)} ${reviewer}`);
     check('审官注入填进士兵 dispatch id', /ctx_worker-1/.test(reviewer));
-    check('审官注入填进 merge-policy', /merge-policy=auto/.test(reviewer));
-    check('审官注入红项目标是 dispatch:<id> 不是 handle', /dispatch=ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer);
+    check('审官注入填进 merge-policy', /m=auto/.test(reviewer));
+    check('审官注入红项目标是 dispatch:<id> 不是 handle', /d=ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer);
 
     const reviewerBook = fs.readFileSync(path.join(tmplDir, 'reviewer-book.md'), 'utf8');
     check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /乒乓/.test(reviewerBook));
@@ -1405,7 +1407,7 @@ async function main() {
       mergePolicy: 'manual',
       mergeReason: '改协作约定',
     });
-    check('审官注入 manual 带 merge-reason', /merge-reason=改协作约定/.test(reviewerManual) && !/[\r\n]/.test(reviewerManual), reviewerManual);
+    check('审官注入 manual 带 merge-reason', /r=改协作约定/.test(reviewerManual) && !/[\r\n]/.test(reviewerManual), reviewerManual);
     check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerBook) && /pr ready/.test(reviewerBook) && /gh-as\.mjs reviewer/.test(reviewerBook), reviewerBook.slice(-400));
 
     let threw = false, threwMsg = '';

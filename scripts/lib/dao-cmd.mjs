@@ -2246,11 +2246,19 @@ export function renderDispatchTemplate(name, vars = {}) {
   return out;
 }
 
-// ── 注入闸（#602）：主判据 = 不含换行；长度是次要。
-// 每个换行会被 TUI 拆成一次提交（本单工人屏上 8 条短消息实证）。
-// 模板文件末尾允许一个 EOF 换行（编辑器会加），渲染后剥掉；正文里的换行必须炸。
-export const INJECT_MAX_CHARS = 800;
-export const INJECT_OVER_LIMIT_HINT = '正文挪去仓内文件或 GitHub，注入只给指针，且整段不许换行';
+// ── 注入闸（#602 根因更正）：主约束 = 一行指针；换行/长度是兜底。
+// ① \n = 提交（主因）；② 单行超阈值被截断（701 字节实证）。量的是 UTF-8 字节。
+// 模板文件末尾允许一个 EOF 换行，渲染后剥掉；正文里的换行必须炸，不许压平。
+// 二分实测（2026-08-17，grok 探针 term + 帅 701 截断）：
+//   orca terminal send 单行 200/350/450/550/650/701 均送达（模型回出末尾标记）
+//   帅经 TUI 输入框提交 701 字节：前半进消息、后半留输入框
+// 安全值取 500：低于 TUI 截断点，高于目标 100，send 路径 550 仍绿。
+export const INJECT_MAX_BYTES = 500;
+export const INJECT_OVER_LIMIT_HINT = '正文挪去仓内文件或 GitHub，注入只给指针';
+
+export function injectUtf8Bytes(text) {
+  return Buffer.byteLength(String(text ?? ''), 'utf8');
+}
 
 export function stripInjectEof(text) {
   return String(text ?? '').replace(/(?:\r\n|\n|\r)+$/g, '');
@@ -2258,24 +2266,27 @@ export function stripInjectEof(text) {
 
 export function assertInjectText(text, { label } = {}) {
   const s = String(text ?? '');
+  const bytes = injectUtf8Bytes(s);
   if (/[\r\n]/.test(s)) {
     return {
       ok: false,
       length: s.length,
+      bytes,
       newlines: true,
       error: `注入含换行符（${label || 'task spec'}）——每个换行会被 TUI 拆成一次提交。${INJECT_OVER_LIMIT_HINT}`,
     };
   }
-  if (s.length > INJECT_MAX_CHARS) {
+  if (bytes > INJECT_MAX_BYTES) {
     return {
       ok: false,
       length: s.length,
+      bytes,
       newlines: false,
-      limit: INJECT_MAX_CHARS,
-      error: `注入 ${s.length} 字符超过上限 ${INJECT_MAX_CHARS}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}`,
+      limit: INJECT_MAX_BYTES,
+      error: `注入 ${bytes} 字节超过上限 ${INJECT_MAX_BYTES}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}`,
     };
   }
-  return { ok: true, length: s.length, newlines: false, limit: INJECT_MAX_CHARS };
+  return { ok: true, length: s.length, bytes, newlines: false, limit: INJECT_MAX_BYTES };
 }
 
 /** 兼容旧名：先禁换行，再量长度。 */
@@ -2290,7 +2301,7 @@ function renderInjectTemplate(name, vars) {
 export function buildSoldierInject({ spec, issue } = {}) {
   const text = renderInjectTemplate('soldier-inject.md', {
     SPEC: spec,
-    ISSUE_REF: issue ? `全文见 issue #${issue}。` : '',
+    ISSUE_REF: issue ? ` #${issue}` : '',
   });
   const gate = assertInjectText(text, { label: '士兵注入' });
   if (!gate.ok) throw new Error(gate.error);
@@ -2301,11 +2312,11 @@ export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergeP
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
   const text = renderInjectTemplate('reviewer-inject.md', {
     SPEC: spec,
-    ISSUE_REF: issue ? `全文见 issue #${issue}。` : '',
+    ISSUE_REF: issue ? ` #${issue}` : '',
     PR: pr,
     SOLDIER_DISPATCH_ID: soldierDispatchId,
     MERGE_POLICY: policy,
-    MERGE_REASON_REF: policy === 'manual' && mergeReason ? ` merge-reason=${mergeReason}` : '',
+    MERGE_REASON_REF: policy === 'manual' && mergeReason ? ` r=${mergeReason}` : '',
   });
   const gate = assertInjectText(text, { label: '审官注入' });
   if (!gate.ok) throw new Error(gate.error);

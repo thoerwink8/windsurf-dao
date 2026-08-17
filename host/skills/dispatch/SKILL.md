@@ -149,7 +149,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 2. 必须上帅：① 审官质疑拍板/规格本身；② 乒乓两轮仍有红项（换人信号）；③ 归档动作——归档由帅执行，审官只发「可归档」通知。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
-人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入、`verifyInjectionPolling`（Pasted Content 自动补回车，仍未开工 fail-visible）一次做完，不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
+人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
 
 ## 命名规矩
 
@@ -171,7 +171,7 @@ node scripts/inbox-station.mjs ensure
 node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "短摘要：<目标 + 全部职责类别>" --model <id>
 ```
 
-`dispatch` 内部已经做完：选型闸、建工人卡、打 `reviewer/*`、起工人终端、等 TUI 就绪、**注入任务书后再验开工**（屏上还挂着 `[Pasted Content N chars]` 就当没派出去）、失败回滚。**不建审官卡**（#586：工人完工 `worker-done` 才起）。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
+`dispatch` 内部已经做完：选型闸、建工人卡、打 `reviewer/*`、起工人终端、等 TUI 就绪、**注入一行指针后再验开工**（含换行或超实测上限当场拒）、失败回滚。**不建审官卡**（#586：工人完工 `worker-done` 才起）。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
 **闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`，它调 `reviewer-create`（自读 `reviewer/*`、建树、起终端、注入审官任务书；审官任务书内嵌士兵真 id，杜绝 dispatch:undefined）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
@@ -187,11 +187,11 @@ node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer 
 
 command-code 不能承载需进 git 的 Orca 工人（#514：旁路产出，worker-list 命中 0）。非交互查证另说，启动模板只读 `docs/model-routing.toml`。
 
-吞注入只在 `dispatch` 的开工验证报红之后补救：先证终端就绪，再 `dao.mjs send`，回读确认不是 `[Pasted Content]`。
+注入必须是一行指针。含换行或超实测上限应被硬闸拦住，不要补回车救。
 
 ## 开工判据
 
-token 计数在增长才算开工——启动返回成功不等于已开工。worker-start 后 `orca orchestration worker-read --dispatch <id> --json` 读回，token/cursor 在涨才算开工；见输入框残留就补一记回车（吞注入补救见「启动序」）。
+token 计数在增长才算开工——启动返回成功不等于已开工。worker-start 后 `orca orchestration worker-read --dispatch <id> --json` 读回，token/cursor 在涨才算开工。
 
 ## 判断工人是否完成的四个信号
 
@@ -204,7 +204,7 @@ token 计数在增长才算开工——启动返回成功不等于已开工。wo
 
 ## 任务书口径
 
-`--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。**注入只给指针，长材料进 GitHub**（#575：5711 字符任务书被 TUI 折成 Pasted Content，全链路返回值皆绿、一个字没审）。自动补回车是兜底，不是许可证。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body（拍板 2026-08-15）。`terminal send` 降为吞注入时的补救，不再是默认注入器。
+`--spec` 必须枚举**全部职责类别**，不能只写技术目标（#507：#505 审官把只含技术目标的 spec 当任务边界，任务书里超出 spec 的 PR 侧四条职责整段跳过、直接发 worker_done，PR 上零落痕）。任务书再长也压不过 spec——工人侧把编排系统里那句正式任务描述当权威范围。判断职责有没有被执行，不看完工报告，看外部可验证落点（那次是 `gh pr view --json reviews` 为空）。**注入只给一行指针，长材料进仓内文件或 GitHub**（#602：换行=提交，单行过长会截断）。逐字大材料按「材料三去处」分流（见下节）；永久本在 PR body。
 
 spec 样例（正反例；具体职责清单以**当时的审官任务书为准**——#530 换路后审官动作会变，勿硬编码会过时的清单）：
 
