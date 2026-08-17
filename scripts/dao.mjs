@@ -7,6 +7,7 @@
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import {
   ROOT,
   USAGE,
@@ -491,8 +492,13 @@ function findExistingReviewerChild(parentId) {
 
 function cmdWorkerDone(args) {
   if (!args.pr) fail('worker-done 要 --pr');
+  let body = args.body;
+  if (args.bodyFile) {
+    try { body = readFileSync(args.bodyFile, 'utf8'); }
+    catch (e) { fail(`worker-done 读 --body-file 失败：${e.message || e}`); }
+  }
   const gh = ghRunner({ role: 'worker' });
-  const plan = planWorkerDone({ pr: args.pr, body: args.body, runGh: gh });
+  const plan = planWorkerDone({ pr: args.pr, body, runGh: gh });
   if (!plan.ok) fail(plan.error, plan);
 
   let parentId = args.parentWorktree || null;

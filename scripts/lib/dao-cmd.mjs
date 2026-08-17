@@ -2048,7 +2048,7 @@ export const FLAGS_BY_VERB = {
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'worker-done': new Set([
-    '--pr', '--body', '--parent-worktree', '--soldier-dispatch', '--dry-run', '--json', '--help', '-h',
+    '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
@@ -2122,7 +2122,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
-  worker-done --pr <N> [--body <文>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 原子完工：发完工/返工 comment；首审（无 review）真调 reviewer-create 起审官；返工不起第二个
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
