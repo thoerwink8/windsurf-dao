@@ -229,6 +229,15 @@ check('reworkFromClosed 扣 marshal_rounds', reworkFromClosed({ verdict_rounds: 
     { type: 'job.dispatch', job_id: 'gh-pr-700', pr_number: 700, identity: '审官' },
   ]);
   check('真卡住的单列得出 job_id 和缺失项', stuck.length === 1 && stuck[0].job_id === 'gh-pr-700' && stuck[0].missing.includes('job.closed'), JSON.stringify(stuck));
+  const reviewOrphans = describeUnclosedJobs([
+    { type: 'job.dispatch', job_id: 'gh-pr-596', pr_number: 596, identity: '工人' },
+    { type: 'job.closed', job_id: 'gh-pr-596', pr_number: 596 },
+    { type: 'job.dispatch', job_id: 'gh-pr-596-review', pr_number: 596, identity: '审官' },
+    { type: 'job.dispatch', job_id: 'gh-pr-597', pr_number: 597, identity: '工人' },
+    { type: 'job.closed', job_id: 'gh-pr-597', pr_number: 597 },
+    { type: 'job.dispatch', job_id: 'gh-pr-597-review', pr_number: 597, identity: '审官' },
+  ]);
+  check('#596/#597 审官缺 closed 报得出', reviewOrphans.length === 2 && reviewOrphans.every(r => r.job_id.endsWith('-review') && r.identity === '审官' && r.missing.includes('job.closed')), JSON.stringify(reviewOrphans));
 
   const tgt = resolveAmendTarget({
     events: [{ type: 'job.dispatch', job_id: 'dispatch-ctx_591', model: 'grok-4.6', work_type: '写码', issue_number: 591 }],
@@ -291,7 +300,7 @@ const guardStill = inspectLedgerGap({
   closedNumbers: new Set([592]),
   newestBuffer: 0,
 });
-check('baseline 之后缺 closed → 仍红（守卫还活着）', guardStill.kind === 'gap' && guardStill.missing.includes(600), JSON.stringify(guardStill));
+check('baseline 之后缺 closed → 仍红（守卫还活着）', guardStill.kind === 'gap' && guardStill.missing.includes(600) && !guardStill.missing.includes(592), JSON.stringify(guardStill));
 check('#592 形：红后追加 + override 归帅', (() => {
   const s = verdictStatsFromReviews(
     [{ body: '判定：红 2 项' }, { body: '复核结论：绿，可合并' }],
