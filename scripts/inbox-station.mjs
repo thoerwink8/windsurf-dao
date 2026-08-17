@@ -869,7 +869,8 @@ function printUsage() {
           不传 --run 时只认在途 dispatch 的 Run，不认最新墓碑（#593）
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
-  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）`);
+  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
+          台还活着看 closed.alreadyGone / tab 存活性，不看 terminal list 条数（#601）`);
 }
 
 async function main() {
