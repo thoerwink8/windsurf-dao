@@ -214,17 +214,23 @@ export function renderRow(row) {
 }
 
 export function renderFullReport(rows, unlabelledCount, repository = null) {
-  const dataRows = rows.length > 0
-    ? rows.map(renderRow)
-    : ['| 无样本 | 无样本 | 无样本 | 无样本 | 无样本 | 无样本 |'];
+  const list = Array.isArray(rows) ? rows : [];
+  const withSamples = list.filter(r => r && r.sampleCount > 0);
+  const emptyCount = list.filter(r => r && r.sampleCount === 0).length;
+  const table = withSamples.length > 0
+    ? [
+        '| 模型 | 任务类 | 样本数 | 平均返工轮数 | 平均红项 | 最近 3 单（返工/红项） |',
+        '| --- | --- | ---: | ---: | ---: | --- |',
+        ...withSamples.map(renderRow),
+        '',
+      ]
+    : [];
   const lines = [
     '# 模型累计战绩',
     '',
     ...(repository ? [`仓库：${repository}`, ''] : []),
-    '| 模型 | 任务类 | 样本数 | 平均返工轮数 | 平均红项 | 最近 3 单（返工/红项） |',
-    '| --- | --- | ---: | ---: | ---: | --- |',
-    ...dataRows,
-    '',
+    ...table,
+    ...(emptyCount > 0 ? [`另有 ${emptyCount} 个模型×任务类组合无样本。`, ''] : []),
     `账本未结单：${unlabelledCount} 个（有 job.dispatch 无 job.closed，未混入战绩）。`,
   ];
   return lines.join('\n');

@@ -26,7 +26,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { redFlagsFromReviewBodies, buildRows, renderRow, countVerdictLines, reworkFromVerdictLines, describeRework, samplesFromEvents, describeNoEvents } = require("../scripts/calibrate.mjs");
+const { redFlagsFromReviewBodies, buildRows, renderRow, renderFullReport, countVerdictLines, reworkFromVerdictLines, describeRework, samplesFromEvents, describeNoEvents } = require("../scripts/calibrate.mjs");
 const { malformedJudgmentLines } = require("../scripts/lib/judgment.mjs");
 
 const REPO = path.resolve(__dirname, "..");
@@ -151,6 +151,29 @@ const mixedRework = buildRows([
   { model: "m", taskType: "写码", rework: 1, redFlags: 4, number: 2, mergedAt: "2026-01-02T00:00:00Z" },
 ], [], ["写码"]);
 check("混判：无判定行样本不进平均，平均=1.0", mixedRework[0].averageRework === 1);
+
+// #588：整表不打无样本行，末尾汇总；单行 renderRow 仍保留三态
+{
+  const mixedRows = [
+    { model: "a", taskType: "写码", sampleCount: 2, averageRework: 0, averageRedFlags: 0, trend: [{ number: 1, rework: 0, redFlags: 0 }] },
+    { model: "b", taskType: "判断", sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] },
+    { model: "c", taskType: "查证", sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] },
+  ];
+  const report = renderFullReport(mixedRows, 0);
+  check("整表不出现无样本废行", !/\| b \| 判断 \| 无样本 \|/.test(report) && !/\| c \| 查证 \| 无样本 \|/.test(report), report);
+  check("整表仍有有样本行", /\| a \| 写码 \| 2 \|/.test(report), report);
+  check("末尾汇总无样本组合数", /另有 2 个模型×任务类组合无样本/.test(report), report);
+  check("单行「无样本」三态还在（不铺开）", renderRow(mixedRows[1]).includes("无样本"));
+  check("有样本的 0 轮仍是 0.0 不是无样本", renderRow(mixedRows[0]).includes("0.0") && !renderRow(mixedRows[0]).includes("无样本"));
+}
+
+{
+  const allEmpty = [{ model: "a", taskType: "写码", sampleCount: 0, averageRework: null, averageRedFlags: null, trend: [] }];
+  const report = renderFullReport(allEmpty, 0);
+  check("全量无样本不打废表行", !report.includes("| 无样本 | 无样本 | 无样本 | 无样本 | 无样本 | 无样本 |"), report);
+  check("全量无样本只留汇总句", /另有 1 个模型×任务类组合无样本/.test(report), report);
+  check("全量无样本不残留表头", !/\| 模型 \| 任务类 \|/.test(report), report);
+}
 
 // #581：校准改读账本后，判定行函数仍导出（flow / 回归网用），样本识别走事件
 check("没有事件的话术 ≠ 0 红", describeNoEvents(12).includes("没有事件") && !describeNoEvents(12).startsWith("0"));
