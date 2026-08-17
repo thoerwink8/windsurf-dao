@@ -778,6 +778,10 @@ function gitRun(cwd, args, runGit) {
 /**
  * 试合 origin/master（或 origin/main），记录落后数/冲突/触及文件，然后 --abort。
  * 树必须停在原 HEAD：审官审的是 PR head，expectedOid 校验才有意义。
+ *
+ * 顺序陷阱：rebase 会改 commit sha，导致 review.commit_id != headRefOid、
+ * 审官的 APPROVED 失效（判例 review-green-must-match-head）。
+ * 只能「先对齐 master → 再审 → 再合」，不能审完再 rebase。
  */
 export function trialMergeMaster({ cwd, runGit } = {}) {
   if (!cwd && typeof runGit !== 'function') {
