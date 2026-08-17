@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|selector|blind|model-change|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -332,11 +332,11 @@ console.log("\n=== ⑲ 命名校验（#476）：任务卡显示名格式 ===");
   check("命名违规但终端在跑的树不报 orphan（活跃执行者判据优先）", !/orphan:/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契约 #497 立约）===");
+console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契约 #497 立约；#580 从未存在）===");
 {
   const rs = runWatchdog(path.join(FIXTURES, "heartbeat-stale"), ["--once", "--now", String(NOW)]);
   check("心跳 10 分钟未更新：退出码 1（flow 停摆候选）", rs.status === 1, `status=${rs.status}`);
-  check("心跳 10 分钟未更新：输出 flow-stalled", /\[flow\] flow-stalled:.*10 分钟未更新/.test(rs.out), rs.out.trim());
+  check("心跳过期三态话：flow-stalled 含「心跳过期」", /\[flow\] flow-stalled:.*心跳过期.*10 分钟未更新/.test(rs.out), rs.out.trim());
 
   const rp = runWatchdog(path.join(FIXTURES, "heartbeat-pending"), ["--once", "--now", String(NOW)]);
   check("在途 PR 停留 40 分钟：退出码 1（停滞态：该发生而没发生）", rp.status === 1, `status=${rp.status}`);
@@ -344,7 +344,17 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
 
   const rf = runWatchdog(path.join(FIXTURES, "heartbeat-fresh"), ["--once", "--now", String(NOW)]);
   check("心跳新鲜 + 无停滞 PR：不报 flow-stalled/stagnation", !/flow-stalled:/.test(rf.out) && !/stagnation:/.test(rf.out), rf.out.trim());
-  check("心跳缺失样本单独显形（HEARTBEAT_MISSING，不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
+  check("心跳新鲜三态话", /心跳新鲜/.test(rf.out), rf.out.trim());
+  check("心跳缺失且待流转没查成：HEARTBEAT_MISSING（不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
+
+  const ap = runWatchdog(path.join(FIXTURES, "heartbeat-absent-pending"), ["--once"]);
+  check("无心跳 + 有待流转（完工未起审官）：退出码 1", ap.status === 1, `status=${ap.status}`);
+  check("无心跳 + 有待流转：报 flow-absent 心跳从未存在", /\[flow\] flow-absent:.*心跳从未存在.*待流转/.test(ap.out), ap.out.trim());
+  check("无心跳 + 有待流转：不报 flow-stalled（过期和从未存在分得开）", !/flow-stalled:/.test(ap.out), ap.out.trim());
+
+  const ai = runWatchdog(path.join(FIXTURES, "heartbeat-absent-idle"), ["--once"]);
+  check("无心跳 + 无待流转（已绿待帅）：不报 flow-absent/flow-stalled", !/flow-absent:/.test(ai.out) && !/flow-stalled:/.test(ai.out), ai.out.trim());
+  check("无心跳 + 无待流转：心跳从未存在但不报", /心跳从未存在.*无待流转对象，不报/.test(ai.out), ai.out.trim());
 }
 
 console.log("\n=== ⑳b 处置矩阵连败：同指纹连续命中超阈值 → 报帅（#471）===");

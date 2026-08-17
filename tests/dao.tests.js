@@ -822,6 +822,10 @@ async function main() {
     check('真 worktree create → extractWorktreePath',
       S.extractWorktreePath(wtLive) === 'C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
 
+    const sendLive = fx('terminal-send.json');
+    const sent = S.extractTerminalSend(sendLive);
+    check('真 terminal send --json → extractTerminalSend accepted', sent && sent.accepted === true && sent.bytesWritten === 9, JSON.stringify(sent));
+
     const taskLive = fx('task-create.json');
     check('真 task-create → extractTaskId 走 result.task.id',
       S.extractTaskId(taskLive) === 'task_72992e47f0f4');

@@ -48,6 +48,8 @@
 // （状态文件为空）即等价于存量清点，存量里已有的完工/判定会被识别并动作，
 // 不会被吞。状态文件 _flow/state.json 只是「已处理信号」游标缓存（GitHub 才是
 // 真相源），可丢可重算：删掉重跑即重新清点。
+// 心跳（#580 补 #497 欠账）：live 每轮写 _flow/heartbeat.json，字段照 watchdog
+// 消费端契约。快照默认不写。三态：新鲜 / 过期 / 从未存在。
 //
 // 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
@@ -62,6 +64,8 @@
 //                                             （目标解析仍跑——快照/实读，测试可覆盖）
 //   node scripts/flow.mjs --snapshot-dir <dir> 从录制的 gh/orca JSON 快照跑（测试/复现用）
 //   node scripts/flow.mjs --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
+//   node scripts/flow.mjs --heartbeat-file <path> 心跳文件（live 默认 _flow/heartbeat.json；
+//                                             快照默认不写，避免测污染仓。#580 补 #497 欠账）
 //
 // 快照目录可选文件（round-N/ 子目录同 watchdog 约定）：
 //   prs.json / pr-<N>-comments.json / pr-<N>-reviews.json / pr-<N>.json（gh 侧）
@@ -73,6 +77,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -101,11 +106,12 @@ function printUsage() {
   --state-file <path> 状态文件位置（默认 _flow/state.json）
   --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
   --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
-  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
+  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
+  --heartbeat-file <path> 心跳文件（live 默认 _flow/heartbeat.json；快照默认不写）`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
+  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null, heartbeatFile: null };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -123,6 +129,7 @@ function parseArgs(argv) {
       case '--dry-run': args.dryRun = true; break;
       case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
       case '--repo': args.repo = argv[++i] || ''; break;
+      case '--heartbeat-file': args.heartbeatFile = resolve(process.cwd(), argv[++i] || ''); break;
       case '--help': printUsage(); process.exit(0); break;
       default:
         console.error(`未知参数: ${a}`);
@@ -162,11 +169,10 @@ function runGh(args) {
 function runOrca(args) {
   const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
   if (!r.ok) return { ok: false, error: r.error };
-  try {
-    return { ok: true, json: JSON.parse(r.out) };
-  } catch (e) {
-    return { ok: false, error: `orca 输出不是 JSON：${e.message}` };
-  }
+  const parsed = parseOrcaStdout(r.out);
+  if (!parsed.ok) return parsed;
+  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
+  return { ok: true, json: parsed.json, sentPlaintext: !!parsed.sentPlaintext };
 }
 
 function unwrap(json, pathKey, topKey) {
@@ -371,40 +377,65 @@ function waitTerminalReady(handle, timeoutMs, label) {
   }
 }
 
+function defaultFlowIo() {
+  return { read: readTerminalData, send: (cmd) => runOrca(cmd), sleep };
+}
+
 // 验开工（红 1 首审）：增量判据为主（cursor 前进 = 有新输出 = token 在动），
 // 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
 // （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
 // 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
 // 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
-function verifyStarted(handle, echoHead, terminalName) {
-  const first = readTerminalData(handle, null);
+// #580：补回车后再读必须带 cursor（read --cursor 有新输出），整屏 returnedLineCount
+// 几乎永远 > 0，不能当增量。
+export function verifyStarted(handle, echoHead, terminalName, io) {
+  const ops = io || defaultFlowIo();
+  const first = ops.read(handle, null);
   if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
   const prev = first.terminal.nextCursor;
-  sleep(VERIFY_WAIT_MS);
-  const second = readTerminalData(handle, prev);
+  ops.sleep(VERIFY_WAIT_MS);
+  const second = ops.read(handle, prev);
   if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
   if (!echoHead) {
     // --prompt 路径：无回显概念，不补回车，直接 fail-visible
     return { ok: false, error: `注入后无新输出（${terminalName}）——疑似未开工` };
   }
   // send 路径：看回显，无论是否回显都补一记裸回车再验增量
-  const all = readTerminalData(handle, null);
+  const all = ops.read(handle, null);
   const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
   const echoed = tailText.includes(echoHead);
-  runOrca(['terminal', 'send', '--terminal', handle, '--enter']);
-  sleep(VERIFY_WAIT_MS);
-  const third = readTerminalData(handle, null);
+  ops.send(['terminal', 'send', '--terminal', handle, '--enter', '--json']);
+  ops.sleep(VERIFY_WAIT_MS);
+  const third = ops.read(handle, prev);
   const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
   if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
   return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
 }
 
 // 注入 + 验开工（两步走路径：send 任务文本）
-function injectAndVerify(handle, text, terminalName) {
-  const echoHead = text.replace(/\r?\n/g, ' ').slice(0, 24).trim();
-  const sendR = runOrca(['terminal', 'send', '--terminal', handle, '--text', text]);
+export function injectAndVerify(handle, text, terminalName, io) {
+  const ops = io || defaultFlowIo();
+  const echoHead = String(text || '').replace(/\r?\n/g, ' ').slice(0, 24).trim();
+  const sendR = ops.send(['terminal', 'send', '--terminal', handle, '--text', text, '--json']);
   if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  return verifyStarted(handle, echoHead, terminalName);
+  return verifyStarted(handle, echoHead, terminalName, ops);
+}
+
+// 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
+// 心跳缺失时不能拿它们当「有待流转」——那是帅的事（#580 消歧：有条件报）。
+export function isFlowWork(action) {
+  return !!action && (action.kind === 'start-reviewer' || action.kind === 'inject-rework' || action.kind === 'inject-recheck');
+}
+
+// 从 PR 信号列表算出「流转器该做而没人做」的项。watchdog 心跳缺失时用，不猜进程名。
+export function pendingFlowItems(prs) {
+  const items = [];
+  for (const pr of prs || []) {
+    const derived = deriveState(orderedSignals(pr.comments, pr.reviews));
+    const action = pendingAction(derived);
+    if (isFlowWork(action)) items.push({ number: pr.number, kind: action.kind, state: derived.state });
+  }
+  return items;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -465,14 +496,28 @@ function findReviewerTerminal(source, pr, rec, workerWt) {
 // ══════════════════════════════════════════════════════════════════════
 
 function loadState(path) {
-  if (!existsSync(path)) return { version: 1, inventoried: false, records: {} };
+  if (!existsSync(path)) return { version: 1, inventoried: false, records: {}, round: 0 };
   try {
     const s = JSON.parse(readFileSync(path, 'utf8'));
     if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
-    return { version: 1, inventoried: !!s.inventoried, records: s.records };
+    return { version: 1, inventoried: !!s.inventoried, records: s.records, round: Number(s.round) || 0 };
   } catch (e) {
-    return { version: 1, inventoried: false, records: {}, loadError: String(e.message) };
+    return { version: 1, inventoried: false, records: {}, round: 0, loadError: String(e.message) };
   }
+}
+
+function heartbeatPath(args) {
+  if (args.heartbeatFile) return args.heartbeatFile;
+  if (args.snapshotDir) return null;
+  return join(ROOT, '_flow', 'heartbeat.json');
+}
+
+function writeHeartbeat(path, payload) {
+  if (!path) return;
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  renameSync(tmp, path);
 }
 
 function saveState(path, state) {
@@ -729,14 +774,17 @@ function executeAction(action, pr, toml, source, rec, dryRun) {
 // 两者都要与「扫完 0 需流转」（正常 OK 行）可区分（仓规：数到 0 和没看到样本不是一回事）。
 function processOneRound(source, state, args) {
   const events = [];
+  const now = Date.now();
+  const hbPrs = [];
+  let pendingCount = 0;
   const routing = loadRouting();
   const toml = routing.ok ? routing.toml : null;
   if (!routing.ok) {
-    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true };
+    return { events: [`[flow] NO_TARGETS：${routing.error}——本轮没查成`], noTargets: true, infraError: true, heartbeat: emptyHeartbeat(state, now) };
   }
 
   const list = source.listOpenPrs();
-  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true };
+  if (!list.ok) return { events: [`[flow] NO_TARGETS：${list.error}——本轮没查成`], noTargets: true, infraError: true, heartbeat: emptyHeartbeat(state, now) };
   const open = list.prs;
   const openByNumber = new Map(open.map(p => [p.number, p]));
   const records = state.records;
@@ -797,6 +845,11 @@ function processOneRound(source, state, args) {
     const all = orderedSignals(comments, reviews);
     const derived = deriveState(all);
     const fp = fingerprint(derived);
+    const lastSig = all[all.length - 1];
+    const lastAt = lastSig?.at ? Date.parse(lastSig.at) : Date.parse(pr.updatedAt || pr.createdAt || '');
+    const sinceMs = Number.isFinite(lastAt) ? Math.max(0, now - lastAt) : 0;
+    hbPrs.push({ number: pr.number, state: derived.state, sinceMs });
+    if (pendingAction(derived)) pendingCount += 1;
 
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
@@ -887,7 +940,24 @@ function processOneRound(source, state, args) {
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
-  return { events, noTargets, infraError };
+  return {
+    events, noTargets, infraError,
+    heartbeat: {
+      ts: new Date(now).toISOString(),
+      lastWakeSource: 'github-poll',
+      pendingCount,
+      prs: hbPrs,
+    },
+  };
+}
+
+function emptyHeartbeat(state, now) {
+  return {
+    ts: new Date(now || Date.now()).toISOString(),
+    lastWakeSource: 'github-poll',
+    pendingCount: 0,
+    prs: [],
+  };
 }
 
 function lastReviewUrl(reviews) {
@@ -906,7 +976,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason };
+export { deriveState, pendingAction, pickReviewer, orderedSignals, completionSignals, reviewSignals, isInstitutional, loadRouting, awaitingShuaiReason, parseOrcaStdout };
 
 let args = null;
 let anyEmitted = false;
@@ -921,6 +991,7 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 function runOneRound(source, state) {
+  state.round = (Number(state.round) || 0) + 1;
   const round = processOneRound(source, state, args);
   for (const line of round.events) {
     console.log(line);
@@ -928,6 +999,10 @@ function runOneRound(source, state) {
     else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
+  const hb = round.heartbeat || emptyHeartbeat(state);
+  hb.round = state.round;
+  hb.ts = hb.ts || new Date().toISOString();
+  writeHeartbeat(heartbeatPath(args), hb);
   saveState(args.stateFile, state);
   return round;
 }
@@ -943,6 +1018,7 @@ function liveLoop() {
     repo = r.json.nameWithOwner;
   }
   console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
+  writeHeartbeat(heartbeatPath(args), { ts: new Date().toISOString(), round: 0, lastWakeSource: 'github-poll', pendingCount: 0, prs: [] });
   for (;;) {
     const state = loadState(args.stateFile);
     if (state.loadError) {

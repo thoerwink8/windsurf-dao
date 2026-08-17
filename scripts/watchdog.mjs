@@ -42,8 +42,11 @@
 //   8. naming       —— 任务卡命名不合规（#476：顶层 #N - 动宾短语 / 子卡 #N - xxx·yyy）。
 //                      #569 降噪：master 卡（isMainWorktree）与「无 agent 且无 #N 前缀」的非任务卡
 //                      不参与命名校验（windsurf-dao 这类 review 工作区不是任务卡，报它=假阳）
-//   9. flow-stalled / stagnation —— 读 flow.mjs 心跳（#497 立约 _flow/heartbeat.json）：
-//                       心跳 ts 太旧 = flow 停摆；在途 PR 停留超 N = 该发生而没发生（#471）
+//   9. flow-stalled / flow-absent / stagnation —— 读 flow 心跳（#497 立约，#580 补写入）：
+//                       三态三话：心跳新鲜 / 心跳过期 / 心跳从未存在。
+//                       过期 = flow-stalled；从未存在且有待流转对象 = flow-absent
+//                       （判据锚在「该发生的事有没有发生」，不锚进程名，#480 换代后仍成立）。
+//                       无待流转对象时心跳缺失只记 note，不报（假阳会把守卫关掉）。
 //   10. selector      —— 权限确认框停摆指纹（#569 ④）：屏面底部持续出现 N/M:select 选择器提示。
 //                        进程活着、开过工、但卡在等一个永远不会来的人类输入——编排层看一切正常，
 //                        只有屏面底部选择器显形。检测到就报，不自动替它选（选哪个有后果，尤其 reject）
@@ -108,6 +111,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { pendingFlowItems } from './flow.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -248,18 +253,16 @@ function runOrca(cmdArgs) {
     // 拿到 error 就原样透传（live 与快照同形态、错误码不丢，审读红 ② 返工）；
     // 拿不到（spawn 失败/超时/stdout 不是 JSON）再回落 stderr/exit N 字符串。
     if (r.stdout) {
-      try {
-        const parsed = JSON.parse(r.stdout);
-        if (parsed && parsed.error) return { ok: false, error: parsed.error };
-      } catch { /* stdout 不是 JSON，走回落 */ }
+      const parsed = parseOrcaStdout(r.stdout);
+      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
+      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
     }
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200) };
   }
-  try {
-    return { ok: true, json: JSON.parse(r.stdout) };
-  } catch (e) {
-    return { ok: false, error: `orca 输出不是 JSON: ${e.message}` };
-  }
+  const parsed = parseOrcaStdout(r.stdout);
+  if (!parsed.ok) return parsed;
+  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
+  return { ok: true, json: parsed.json };
 }
 
 // 错误详情转可读文本（runOrca 对 orca JSON 错误原样透传结构化 error）。
@@ -456,11 +459,13 @@ function loadSnapshotRound(roundDir) {
   //   gh-evidence.json   { <worktreeId>: { ticketOpen: bool, ticket: "pr 505"|"issue 483"|null } }
   //   pr-evidence.json   { <worktreeId>: { number, open: bool, isDraft: bool, reviewDecision } }（#569）
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
+  //   flow-signals.json  { prs: [{ number, comments, reviews }] }（#580：心跳缺失时的待流转证据）
   //   worker-list-evidence.json  { worktrees: [ <worktreeId>, ... ] }（#569 BLIND：dispatch 记账集合）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
   const prEv = readJson('pr-evidence.json');
   const hb = readJson('heartbeat.json');
+  const flowSignals = readJson('flow-signals.json');
   const wlEv = readJson('worker-list-evidence.json');
 
   return {
@@ -471,6 +476,7 @@ function loadSnapshotRound(roundDir) {
     ghEvidence: ghEv || null,
     prEvidence: prEv || null,
     heartbeat: hb || null,
+    flowSignals: flowSignals || null,
     sessionsDir: join(roundDir, 'sessions'),
     dispatchTracked: wlEv && Array.isArray(wlEv.worktrees) ? { tracked: new Set(wlEv.worktrees.filter(Boolean)) } : { missing: true },
   };
@@ -984,24 +990,112 @@ function runWorktreePass(source, args, state) {
   return { events, notes };
 }
 
-// ── flow 心跳消费端（#471 停滞态/帅停摆 + flow 停摆；契约由 #497 立约）──
-// 读 _flow/heartbeat.json：ts 太旧 = flow 停摆；在途 PR 停留超 N = 该发生而没发生
-// （下一步该帅做而帅没做）。文件缺失 = flow 未在跑（打印 HEARTBEAT_MISSING 不报警，
-// 由 dao-check ⑧ 心跳闸兜底；缺样本 ≠ 查过没事）。
+// ── flow 心跳消费端（#471 停滞态 + #580 从未存在）──
+// 三态三话：心跳新鲜 / 心跳过期 / 心跳从未存在。
+// 文件缺失不再一律 note：有待流转对象（完工未起审官 / 判定行未处置）必须报。
+// 待流转没查成 ≠ 没有待流转（仓规：没查成不许当查过没事）。
+function loadPendingFlow(source, args) {
+  if (args.snapshotDir) {
+    if (!source.flowSignals) return { scanned: false, items: [], why: '快照无 flow-signals.json' };
+    const prs = Array.isArray(source.flowSignals.prs) ? source.flowSignals.prs : [];
+    return { scanned: true, items: pendingFlowItems(prs) };
+  }
+  return scanPendingFlowLive();
+}
+
+function mapGhComments(raw) {
+  return (Array.isArray(raw) ? raw : []).map(c => ({
+    id: c.id,
+    body: c.body || '',
+    createdAt: c.created_at || c.createdAt || '',
+  }));
+}
+
+function mapGhReviews(raw) {
+  return (Array.isArray(raw) ? raw : []).map(rv => ({
+    id: rv.id,
+    body: rv.body || '',
+    submittedAt: rv.submitted_at || rv.submittedAt || '',
+  }));
+}
+
+function scanPendingFlowLive() {
+  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number'], { encoding: 'utf8', timeout: 20000 });
+  if (list.error || list.status !== 0) {
+    return { scanned: false, items: [], why: `gh pr list 失败：${String(list.error?.message || list.stderr || `exit ${list.status}`).trim().slice(0, 120)}` };
+  }
+  let prs;
+  try { prs = JSON.parse(list.stdout || ''); }
+  catch (e) { return { scanned: false, items: [], why: `gh pr list 不是 JSON：${e.message}` }; }
+  if (!Array.isArray(prs)) return { scanned: false, items: [], why: 'gh pr list 不是数组' };
+
+  const repoR = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], { encoding: 'utf8', timeout: 15000 });
+  if (repoR.error || repoR.status !== 0) {
+    return { scanned: false, items: [], why: `gh repo view 失败：${String(repoR.error?.message || repoR.stderr || `exit ${repoR.status}`).trim().slice(0, 120)}` };
+  }
+  let repo;
+  try { repo = JSON.parse(repoR.stdout || '').nameWithOwner; }
+  catch (e) { return { scanned: false, items: [], why: `gh repo view 不是 JSON：${e.message}` }; }
+  if (!repo) return { scanned: false, items: [], why: 'gh repo view 缺 nameWithOwner' };
+
+  const packed = [];
+  for (const pr of prs) {
+    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${pr.number}/comments`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    if (c.error || c.status !== 0) {
+      return { scanned: false, items: [], why: `读 PR #${pr.number} comments 失败` };
+    }
+    const r = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    if (r.error || r.status !== 0) {
+      return { scanned: false, items: [], why: `读 PR #${pr.number} reviews 失败` };
+    }
+    let comments, reviews;
+    try { comments = JSON.parse(c.stdout || '[]'); }
+    catch (e) { return { scanned: false, items: [], why: `PR #${pr.number} comments 不是 JSON：${e.message}` }; }
+    try { reviews = JSON.parse(r.stdout || '[]'); }
+    catch (e) { return { scanned: false, items: [], why: `PR #${pr.number} reviews 不是 JSON：${e.message}` }; }
+    packed.push({ number: pr.number, comments: mapGhComments(comments), reviews: mapGhReviews(reviews) });
+  }
+  return { scanned: true, items: pendingFlowItems(packed) };
+}
+
 function checkHeartbeat(source, args, state) {
   const events = [];
   const notes = [];
   const st = state.heartbeat ||= { fired: new Set() };
   let hb = null;
-  const missNote = (why) => notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MISSING: ${why}——flow 心跳项没查成，不是扫完 0（dao-check ⑧ 会红）` });
+  let absent = false;
+  let absentWhy = '';
   if (args.snapshotDir) {
     hb = source.heartbeat;
-    if (!hb) { missNote('快照无 heartbeat.json'); return { events, notes }; }
+    if (!hb) { absent = true; absentWhy = '快照无 heartbeat.json'; }
   } else {
     const p = args.heartbeatFile || resolve(process.cwd(), '_flow', 'heartbeat.json');
-    if (!existsSync(p)) { missNote('_flow/heartbeat.json 不存在——流转器未在跑'); return { events, notes }; }
-    try { hb = JSON.parse(readFileSync(p, 'utf8')); } catch (e) { notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MALFORMED: ${e.message}` }); return { events, notes }; }
+    if (!existsSync(p)) { absent = true; absentWhy = '_flow/heartbeat.json 不存在'; }
+    else {
+      try { hb = JSON.parse(readFileSync(p, 'utf8')); }
+      catch (e) { notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MALFORMED: ${e.message}` }); return { events, notes }; }
+    }
   }
+
+  if (absent) {
+    const pending = loadPendingFlow(source, args);
+    if (!pending.scanned) {
+      notes.push({ name: 'flow', type: '观察', detail: `HEARTBEAT_MISSING: ${absentWhy}；待流转没查成（${pending.why}）——不是扫完 0` });
+      return { events, notes };
+    }
+    if (pending.items.length === 0) {
+      notes.push({ name: 'flow', type: '观察', detail: `心跳从未存在（${absentWhy}）——无待流转对象，不报` });
+      st.fired.delete('flow-absent');
+      return { events, notes };
+    }
+    if (!st.fired.has('flow-absent')) {
+      st.fired.add('flow-absent');
+      const list = pending.items.map(i => `#${i.number} ${i.kind}`).join('、');
+      events.push({ name: 'flow', type: 'flow-absent', detail: `心跳从未存在——有待流转对象却无人流转（${list}，#580），该发生的事没发生` });
+    }
+    return { events, notes };
+  }
+
   const now = args.now != null ? args.now : Date.now();
   const ts = Date.parse(hb.ts);
   if (!Number.isFinite(ts)) { notes.push({ name: 'flow', type: '观察', detail: 'HEARTBEAT_MALFORMED: ts 不可解析' }); return { events, notes }; }
@@ -1009,10 +1103,11 @@ function checkHeartbeat(source, args, state) {
   if (now - ts > PARAMS.heartbeatStaleMs) {
     if (!st.fired.has('flow-stalled')) {
       st.fired.add('flow-stalled');
-      events.push({ name: 'flow', type: 'flow-stalled', detail: `流转器心跳 ${ageMin} 分钟未更新——flow 停摆候选（该发生而没发生，#471），恢复：重启 flow.mjs` });
+      events.push({ name: 'flow', type: 'flow-stalled', detail: `心跳过期：流转器心跳 ${ageMin} 分钟未更新——flow 停摆候选（该发生而没发生，#471），恢复：重启 flow.mjs` });
     }
   } else {
     st.fired.delete('flow-stalled');
+    notes.push({ name: 'flow', type: '观察', detail: `心跳新鲜（${Math.round((now - ts) / 1000)} 秒前更新）` });
   }
   for (const pr of Array.isArray(hb.prs) ? hb.prs : []) {
     const key = `stagnation-${pr.number}`;

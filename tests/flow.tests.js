@@ -20,7 +20,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, isFlowWork, pendingFlowItems } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
@@ -342,6 +342,75 @@ console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自�
   check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
   const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
   check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
+}
+
+console.log("\n=== ⑲ #580 心跳写入：快照加 --heartbeat-file 必落盘且字段照契约 ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-hb-"));
+  const stateFile = path.join(tmp, "state.json");
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "no-open"), "--state-file", stateFile, "--heartbeat-file", hbFile, "--dry-run"];
+  const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  check("首跑成功写心跳文件", fs.existsSync(hbFile), `status=${r1.status}`);
+  let j1 = null;
+  try { j1 = JSON.parse(fs.readFileSync(hbFile, "utf8")); } catch (e) { /* keep null */ }
+  check("心跳含 ts/round/pendingCount/prs", !!(j1 && j1.ts && Number.isFinite(j1.round) && Array.isArray(j1.prs) && Number.isFinite(j1.pendingCount)), JSON.stringify(j1));
+  check("无 open PR：pendingCount=0", j1 && j1.pendingCount === 0 && j1.prs.length === 0, JSON.stringify(j1));
+  const ts1 = j1 && j1.ts;
+  const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+  const j2 = JSON.parse(fs.readFileSync(hbFile, "utf8"));
+  check("第二轮 round 递增", j2.round > j1.round, `r1=${j1.round} r2=${j2.round} status2=${r2.status}`);
+  check("第二轮 ts 更新", j2.ts !== ts1, `${ts1} → ${j2.ts}`);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log("\n=== ⑳ #580 send 纯文本成功 + 注入后验开工/补回车 ===");
+{
+  const plain = fs.readFileSync(path.join(REPO, "tests/fixtures/orca-json/terminal-send-plaintext.txt"), "utf8");
+  const parsed = parseOrcaStdout(plain);
+  check("Sent N bytes to term_ 判成功", parsed.ok === true && parsed.sentPlaintext === true && parsed.bytes === 11, JSON.stringify(parsed));
+
+  const jsonSend = JSON.parse(fs.readFileSync(path.join(REPO, "tests/fixtures/orca-json/terminal-send.json"), "utf8"));
+  const parsedJson = parseOrcaStdout(JSON.stringify(jsonSend));
+  check("send --json 信封过解析", parsedJson.ok && parsedJson.json.result.send.accepted === true);
+
+  const sent = [];
+  let reads = 0;
+  const leftoverIo = {
+    read(_h, cursor) {
+      reads += 1;
+      if (reads === 1) return { ok: true, terminal: { status: "running", nextCursor: 10, returnedLineCount: 2, tail: ["[Pasted Content 236 chars]"] } };
+      if (cursor != null && reads === 2) return { ok: true, terminal: { status: "running", nextCursor: 10, returnedLineCount: 0, tail: [] } };
+      if (cursor != null) return { ok: true, terminal: { status: "running", nextCursor: 16, returnedLineCount: 4, tail: ["token grew"] } };
+      return { ok: true, terminal: { status: "running", nextCursor: 10, returnedLineCount: 2, tail: ["[Pasted Content 236 chars]"] } };
+    },
+    send(cmd) { sent.push(cmd); return { ok: true, json: { ok: true, result: { send: { accepted: true, bytesWritten: 236 } } } }; },
+    sleep() {},
+  };
+  const v = verifyStarted("term_x", "【返工指令", "工人", leftoverIo);
+  check("残留后补回车再看 cursor 增量 → 开工", v.ok === true && /补回车/.test(v.judge), JSON.stringify(v));
+  check("补回车走 terminal send --enter --json", sent.some(c => c.includes("--enter") && c.includes("--json")), JSON.stringify(sent));
+
+  const sendPlainIo = {
+    send(cmd) {
+      sent.push(cmd);
+      if (cmd.includes("--text")) return parseOrcaStdout(plain);
+      return { ok: true, json: { ok: true, result: { send: { accepted: true, bytesWritten: 0 } } } };
+    },
+    read() { return { ok: true, terminal: { status: "running", nextCursor: 3, returnedLineCount: 2, tail: ["working"] } }; },
+    sleep() {},
+  };
+  sent.length = 0;
+  const inj = injectAndVerify("term_x", "【返工指令 · 测试】请修", "工人", sendPlainIo);
+  check("Sent N bytes 不当失败，注入走进验开工", inj.ok === true, JSON.stringify(inj));
+  check("send 带 --json（不再裸 send）", sent[0] && sent[0].includes("--json") && sent[0].includes("--text"), JSON.stringify(sent[0]));
+
+  check("起审官/返工/复核是流转器活", isFlowWork({ kind: "start-reviewer" }) && isFlowWork({ kind: "inject-rework" }) && isFlowWork({ kind: "inject-recheck" }));
+  check("报帅终审不是流转器活", isFlowWork({ kind: "report-final" }) === false);
+  const pending = pendingFlowItems([{ number: 580, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [] }]);
+  check("完工未起审官 → 待流转 start-reviewer", pending.length === 1 && pending[0].kind === "start-reviewer");
+  const idle = pendingFlowItems([{ number: 579, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [{ id: 2, body: "判定：绿，可合并", submittedAt: "t2" }] }]);
+  check("已绿待帅 → 不是流转器待办", idle.length === 0);
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

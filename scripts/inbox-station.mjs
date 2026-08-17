@@ -32,6 +32,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -440,24 +442,6 @@ function errText(e) {
   if (typeof e === 'string') return e;
   if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
   return '';
-}
-
-export function parseOrcaStdout(stdout) {
-  const text = String(stdout || '').trim();
-  if (!text) return { ok: false, error: 'orca 无输出' };
-  try {
-    return { ok: true, json: JSON.parse(text) };
-  } catch {
-    // 有时 stdout 夹了非 JSON 行，取最后一段像 JSON 的
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return { ok: true, json: JSON.parse(text.slice(start, end + 1)) };
-      } catch { /* fall through */ }
-    }
-    return { ok: false, error: `orca 输出不是 JSON: ${text.slice(0, 160)}` };
-  }
 }
 
 function runOrca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
