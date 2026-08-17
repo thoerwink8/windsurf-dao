@@ -557,9 +557,10 @@ async function main() {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWd = (() => { try { return JSON.parse((cliWd.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('CLI worker-done --dry-run 自读选型且不接线',
+    check('CLI worker-done --dry-run 自读选型且调 reviewer-create --dry-run',
       cliWd.status === 0 && pWd.ok === true && pWd.wired === false && pWd.reviewer === 'gpt-5.6-sol'
-      && pWd.reviewerCreate && pWd.reviewerCreate.invoked === false
+      && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
+      && pWd.reviewerCreate.reviewer === 'gpt-5.6-sol'
       && /^完工/.test(pWd.comment || ''),
       `status=${cliWd.status} ${JSON.stringify(pWd)}`);
 
@@ -567,9 +568,10 @@ async function main() {
       encoding: 'utf8', cwd: REPO, env: { ...process.env, DAO_GH_FAKE: FAKE_GH3 },
     });
     const pWdLive = (() => { try { return JSON.parse((cliWdLive.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    check('CLI worker-done 发完工 comment 但仍不建审官卡',
+    check('CLI worker-done 发 issue+PR 完工 comment，调 reviewer-create 但不建树',
       cliWdLive.status === 0 && pWdLive.commentPosted === true && pWdLive.wired === false
-      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.invoked === false,
+      && pWdLive.postedIssue && pWdLive.postedPr
+      && pWdLive.reviewerCreate && pWdLive.reviewerCreate.invoked === true && pWdLive.reviewerCreate.dryRun === true,
       `status=${cliWdLive.status} ${JSON.stringify(pWdLive)}`);
 
     const badBody = S.planWorkerDone({
