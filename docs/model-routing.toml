@@ -7,7 +7,7 @@
 # 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
 # ============================================================================
 
-updated = "2026-08-17"
+updated = "2026-08-18"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
@@ -157,10 +157,28 @@ opencode-go 是 ds-flash/pro 的唯一日常通道（用户 2026-08-16 追加拍
 """
 decided = "2026-08-16"
 
+[providers.cursor]
+cli = "cursor-agent"
+launch = "cursor-agent --model {model} --force"
+launch_model = "composer-2.5"
+probe_wait_ms = 45000
+launch_note = """
+Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代理 shim、
+无代理时选择器只剩 Grok/Composer/Kimi/GLM：见 NEW-MACHINE.md「cursor 怎么配」。
+本机 ~/.local/bin 的 shim 已带 127.0.0.1:7890。不装 pi-cursor-sdk（官方无第三方 chat API；
+撞「pi 不写插件」）。管子不进打分。
+"""
+why = "用户 2026-08-18：SuperGrok Heavy 送 Cursor Ultra。Composer/Kimi/Gemini 走 Cursor CLI；GPT 主路仍 Codex、支路可走本 provider。"
+decided = "2026-08-18"
+
 [providers.minimax-h3]
 note = "AI 带货视频候选（远期），未接入，无路由。"
 
 # ── 模型条目 ─────────────────────────────────────────────────────────────
+# 每个 [[models]] 可有 pipes。缺省 = 只一根，等于本条 provider+cli_model。
+# 有 pipes 时 pipes[0] 必须与该条 provider/cli_model 一致（dao-check 红）。
+# 每根管子的 provider 必须有 launch。派工/验开工/换管只读 pipes。
+# 管子不进打分；战绩记在模型 id 上，不为管子另立 id。
 
 [[models]]
 id = "deepseek-v4-flash"
@@ -203,8 +221,12 @@ id = "gpt-5.6-sol"
 provider = "gpt"
 roles = ["写码", "判断", "查证", "审查"]
 status = "正式"
-why = "codex 默认通用模型；token 消耗约 3 倍，比价按每件活总成本；UI 类（含复审）被 ban，见 bans"
+why = "codex 默认通用模型；token 消耗约 3 倍，比价按每件活总成本；UI 类（含复审）被 ban，见 bans。#615：主路仍 Codex，支路 cursor/gpt-5.6-sol-high；战绩共用一个 id"
 decided = "2026-08-12"
+pipes = [
+  { provider = "gpt" },
+  { provider = "cursor", cli_model = "gpt-5.6-sol-high" },
+]
 
 # opencode Go 新增模型（2026-08-16 接入，拍板见 [providers.opencode-go].why）。
 # ds-flash/pro 不在这里另立条目——它们和直连是同一个模型，只是换通道，见上面两条。
@@ -225,13 +247,37 @@ decided = "2026-08-16"
 
 [[models]]
 id = "kimi-k3"
-provider = "opencode-go"
-cli_model = "kimi-k3"
+provider = "cursor"
+cli_model = "kimi-k3-high"
 roles = ["写码", "判断"]
 status = "试用"
 trial_since = "2026-08-16"
-why = "用户 2026-08-16 拍板保留的 4 个 og 模型之一（deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3）；先进写码+判断候选池，按返工率实测校准再谈定位"
-decided = "2026-08-16"
+why = "用户 2026-08-18：主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；仍一条记录，战绩不拆。og 侧仍是 2026-08-16 拍板保留的 4 个模型之一"
+decided = "2026-08-18"
+pipes = [
+  { provider = "cursor", cli_model = "kimi-k3-high" },
+  { provider = "opencode-go", cli_model = "kimi-k3" },
+]
+
+[[models]]
+id = "composer-2.5"
+provider = "cursor"
+cli_model = "composer-2.5"
+roles = ["写码", "判断"]
+status = "试用"
+trial_since = "2026-08-18"
+why = "Cursor 自研，试用写码+判断；单管 cursor / composer-2.5（#615）"
+decided = "2026-08-18"
+
+[[models]]
+id = "gemini-3.7-flash"
+provider = "cursor"
+cli_model = "gemini-3.7-flash-high"
+roles = ["写码", "判断", "查证"]
+status = "试用"
+trial_since = "2026-08-18"
+why = "试用写码+判断+查证；单管 cursor / gemini-3.7-flash-high。走 Cursor Ultra，不走 command-code（本机 command-code 对 Gemini 区域 403）"
+decided = "2026-08-18"
 
 # ── 时间窗路由：同一任务类分时段路由到不同模型 ───────────────────────────
 # 时间窗一律北京时间，附 fallback（首选模型不可用时退回哪个）。

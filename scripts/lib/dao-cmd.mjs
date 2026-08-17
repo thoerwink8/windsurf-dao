@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
+import { normalizePipes } from './next-launch.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -72,19 +73,18 @@ export function loadRouting(file = ROUTING_FILE) {
   return doc;
 }
 
-export function resolveLaunch({ provider, model, routing, root = ROOT } = {}) {
+export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = {}) {
   if (!routing) throw new Error('resolveLaunch 没给 routing（读表失败应在 loadRouting 就抛）');
   const providers = routing.providers;
   if (!providers || typeof providers !== 'object') throw new Error('路由表缺 [providers] 节');
 
-  let providerName = provider || null;
-  if (!providerName && model) {
-    const models = Array.isArray(routing.models) ? routing.models : [];
-    const hit = models.find(m => m && m.id === model);
-    if (!hit) throw new Error(`模型 ${model} 不在路由表`);
-    if (!hit.provider) throw new Error(`模型 ${model} 缺 provider`);
-    providerName = hit.provider;
-  }
+  const models = Array.isArray(routing.models) ? routing.models : [];
+  const hit = model ? models.find(m => m && m.id === model) : null;
+  if (model && !hit) throw new Error(`模型 ${model} 不在路由表`);
+
+  const chosen = pipe || (hit ? normalizePipes(hit)[0] : null);
+  let providerName = (chosen && chosen.provider) || provider || (hit && hit.provider) || null;
+  if (!providerName && model && hit && !hit.provider) throw new Error(`模型 ${model} 缺 provider`);
   if (!providerName) throw new Error('要 --provider 或 --model');
 
   const p = providers[providerName];
@@ -95,9 +95,7 @@ export function resolveLaunch({ provider, model, routing, root = ROOT } = {}) {
 
   let command = String(p.launch).trim();
   if (command.includes('{model}')) {
-    const models = Array.isArray(routing.models) ? routing.models : [];
-    const hit = model ? models.find(m => m && m.id === model) : null;
-    const cliModel = (hit && hit.cli_model) || model || p.launch_model || p.default_model;
+    const cliModel = (chosen && chosen.cli_model) || (hit && hit.cli_model) || model || p.launch_model || p.default_model;
     if (!cliModel) {
       throw new Error(`providers.${providerName}.launch 含 {model} 但没给模型（--model / launch_model / default_model）`);
     }
@@ -107,6 +105,7 @@ export function resolveLaunch({ provider, model, routing, root = ROOT } = {}) {
     provider: providerName,
     command: materializeLaunch(command, root),
     template: String(p.launch).trim(),
+    pipe: chosen || null,
   };
 }
 
@@ -120,8 +119,14 @@ export function materializeLaunch(command, root = ROOT) {
 
 export function providerLaunchProblems(doc) {
   const models = Array.isArray(doc?.models) ? doc.models : [];
-  const used = [...new Set(models.map(m => m && m.provider).filter(Boolean))];
-  if (used.length === 0) return { unscanned: true, problems: ['没扫到任何带 provider 的模型'] };
+  const used = new Set();
+  for (const m of models) {
+    if (m && m.provider) used.add(m.provider);
+    for (const pipe of m && Array.isArray(m.pipes) ? m.pipes : []) {
+      if (pipe && pipe.provider) used.add(pipe.provider);
+    }
+  }
+  if (used.size === 0) return { unscanned: true, problems: ['没扫到任何带 provider 的模型'] };
   const problems = [];
   for (const name of used) {
     const p = doc.providers?.[name];

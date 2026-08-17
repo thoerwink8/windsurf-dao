@@ -7,7 +7,7 @@
 # 加模型：先改这里，再（若涉及路由/禁令）同步 model-routing.toml。
 # ============================================================================
 
-updated: "2026-08-16"
+updated: "2026-08-18"
 currency: CNY
 fx_usd_per_cny: null      # 待补：汇率拍板后填，并给 fx_verified_at 打时间戳
 fx_verified_at: null
@@ -136,3 +136,70 @@ models:
       verified_at: null          # 待补
       metered: null
       subscription: null
+
+  # #615：kimi 主路改 cursor，仍一条记录（战绩不拆）。管子形状只在 model-routing.toml。
+  - id: kimi-k3
+    provider: cursor
+    cli: cursor-agent
+    version: kimi-k3
+    context_window: null
+    max_output: null
+    roles: [写码, 判断]
+    status: 试用
+    retired: false
+    trial_since: "2026-08-16"
+    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）
+    decided: "2026-08-18"
+    pricing:
+      verified_at: "2026-08-18"
+      subscription:
+        kind: 畅用包月
+        marginal_cost: 0
+        monthly_fee: null
+        included_tokens: null
+        fair_share_jobs: null
+      metered: null
+
+  - id: composer-2.5
+    provider: cursor
+    cli: cursor-agent
+    version: composer-2.5
+    context_window: null
+    max_output: null
+    roles: [写码, 判断]
+    status: 试用
+    retired: false
+    trial_since: "2026-08-18"
+    why: Cursor 自研，试用写码+判断；单管 cursor / composer-2.5（#615）
+    decided: "2026-08-18"
+    pricing:
+      verified_at: "2026-08-18"
+      subscription:
+        kind: 畅用包月
+        marginal_cost: 0
+        monthly_fee: null
+        included_tokens: null
+        fair_share_jobs: null
+      metered: null
+
+  - id: gemini-3.7-flash
+    provider: cursor
+    cli: cursor-agent
+    version: gemini-3.7-flash
+    context_window: null
+    max_output: null
+    roles: [写码, 判断, 查证]
+    status: 试用
+    retired: false
+    trial_since: "2026-08-18"
+    why: 试用写码+判断+查证；单管 cursor / gemini-3.7-flash-high（#615）
+    decided: "2026-08-18"
+    pricing:
+      verified_at: "2026-08-18"
+      subscription:
+        kind: 畅用包月
+        marginal_cost: 0
+        monthly_fee: null
+        included_tokens: null
+        fair_share_jobs: null
+      metered: null
