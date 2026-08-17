@@ -20,7 +20,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, pickReviewer, orderedSignals, isInstitutional, awaitingShuaiReason, ticketIssueNumber } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 let pass = 0, fail = 0;
@@ -342,6 +342,47 @@ console.log("\n=== ㉑ 启动序入口：人工路径统一 worker-start / 自�
   check("SKILL 启动序写明 flow 起审官是受控例外", /受控例外（自动起审官，随 #480 退役）/.test(skill));
   const liveFn = fs.readFileSync(FLOW, "utf8").split("function makeLiveSource")[1]?.split("function readJson")[0] || "";
   check("live getComments 走 issues/.../comments --paginate", /issues\/\$\{number\}\/comments/.test(liveFn) && /--paginate/.test(liveFn));
+}
+
+console.log("\n=== ㉒ #575 ⑥ issue comment 首行「完工：」触发起审官；PR 会话上的完工不算 ===");
+{
+  check("标题 #575 → ticket 575", ticketIssueNumber({ title: "[grok] #575 完工首行正控" }) === 575);
+  check("正文 Closes #512 → ticket 512", ticketIssueNumber({ title: "无号", body: "Closes #512" }) === 512);
+  check("正文随手引用 #443 不算", ticketIssueNumber({ title: "无号", body: "规格源 = #443 全部评论" }) === null);
+
+  const r = runFlow(path.join(FIXTURES, "completion-head"));
+  check("issue 首行「完工：」→ 起审官", /动作：起审官 #998/.test(r.out), r.out.trim());
+
+  const n = runFlow(path.join(FIXTURES, "completion-neg"));
+  check("issue 首行「已完成：…」→ 不起审官（负控，防判据放宽成含完工二字）", !/起审官/.test(n.out), n.out.trim());
+
+  const p = runFlow(path.join(FIXTURES, "completion-pr-only"));
+  check("完工只在 PR 会话、issue 上没有 → 不起审官（证明改读 issue）", !/起审官/.test(p.out), p.out.trim());
+
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("processOneRound 用 ticketIssueNumber 取评论，不写死 pr.number",
+    /ticketIssueNumber\(pr\)/.test(flowSrc) && /getComments\(ticket \|\| pr\.number\)/.test(flowSrc));
+}
+
+console.log("\n=== ㉓ #575 ① flow 每轮写心跳（watchdog 不再假红 HEARTBEAT_MISSING） ===");
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-hb-"));
+  const stateFile = path.join(tmp, "state.json");
+  const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "no-open"), "--state-file", stateFile, "--dry-run"], {
+    encoding: "utf8", cwd: REPO,
+  });
+  const hbFile = path.join(tmp, "heartbeat.json");
+  const exists = fs.existsSync(hbFile);
+  let hb = null;
+  try { hb = JSON.parse(fs.readFileSync(hbFile, "utf8")); } catch { hb = null; }
+  const ts = hb && Date.parse(hb.ts);
+  check("跑完一轮后心跳文件在（与 state 同目录）", exists, hbFile);
+  check("心跳含可解析 ts", Number.isFinite(ts), JSON.stringify(hb));
+  check("心跳 ts 是本轮写下的（60s 内）", Number.isFinite(ts) && Math.abs(Date.now() - ts) < 60 * 1000, hb && hb.ts);
+  check("心跳写入不改变退出语义（本样本仍按原判据退出）", r.status === 0 || r.status === 1 || r.status === 2, `status=${r.status}`);
+  const flowSrc = fs.readFileSync(FLOW, "utf8");
+  check("flow.mjs 真有写 heartbeat.json 的实现（不是只在注释里）", /writeHeartbeat\(/.test(flowSrc) && /heartbeat\.json/.test(flowSrc));
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n流转器回归网：${pass} 过 / ${fail} 红`);

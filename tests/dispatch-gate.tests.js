@@ -50,6 +50,14 @@ async function main() {
   check('dao.mjs dispatch 不是旁路', isDispatchBypass('node scripts/dao.mjs dispatch --name x') === false);
   check('dao.mjs raw 逃生口不是旁路', isDispatchBypass('node scripts/dao.mjs raw -- orca orchestration worker-start --task t') === false);
   check('空命令不是旁路', isDispatchBypass('') === false && isDispatchBypass(null) === false);
+  check('#575：echo "dao.mjs raw" && worker-start 仍是旁路（关键词出现在别处不算放行）',
+    isDispatchBypass('echo "dao.mjs raw" && orca orchestration worker-start --task t') === true);
+  check('#575：注释里写 dao.mjs raw 仍是旁路',
+    isDispatchBypass('orca orchestration worker-start --task t # dao.mjs raw') === true);
+  check('#575：任务书正文提到 dao.mjs raw 的 dispatch 不是旁路',
+    isDispatchBypass('node scripts/dao.mjs dispatch --spec "请走 dao.mjs raw 不要裸 orca orchestration worker-start"') === false);
+  check('#575：分号连接的 echo + 裸 worker-start 仍是旁路',
+    isDispatchBypass('echo dao.mjs raw; orca orchestration worker-start --task t') === true);
   check('PreToolUse JSON 能抽出 command', extractHookCommand(JSON.parse(payload('orca orchestration worker-start'))) === 'orca orchestration worker-start');
 
   const blocked = decideGate('orca orchestration worker-start --task t');
@@ -62,6 +70,8 @@ async function main() {
     check(`${label} 提示走 dao.mjs dispatch`, /dao\.mjs dispatch/.test(bypass.stderr || ''), bypass.stderr);
     const raw = runGate(script, 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t');
     check(`${label} 逃生口 raw → 放行`, raw.status === 0, `status=${raw.status} ${raw.stderr}`);
+    const decoy = runGate(script, 'echo "dao.mjs raw" && orca orchestration worker-start --task t --worktree w');
+    check(`${label} 故意违规 echo "dao.mjs raw" && worker-start → exit 2`, decoy.status === 2, `status=${decoy.status} ${decoy.stderr}`);
     const send = runGate(script, 'orca orchestration send --type heartbeat --subject alive');
     check(`${label} 普通 send → 放行`, send.status === 0, `status=${send.status} ${send.stderr}`);
     const crashed = runGate(script, 'orca orchestration send --type heartbeat', { DISPATCH_GATE_CRASH: '1' });

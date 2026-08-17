@@ -202,6 +202,33 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   return a;
 }
 
+export function argsWorkerList() {
+  return ['orchestration', 'worker-list', '--json'];
+}
+
+/** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。 */
+export function findDispatchForWorktree(workerListJson, worktreeSel) {
+  const workers = workerListJson?.result?.workers;
+  if (!Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
+  }
+  const sel = String(worktreeSel || '').trim();
+  if (!sel) return { ok: false, error: 'findDispatchForWorktree 没给 worktree' };
+  const hits = workers.filter(w => {
+    const id = String(w?.resource?.worktreeId || '');
+    return id === sel || id.endsWith(`::${sel}`) || id.endsWith(sel);
+  });
+  if (hits.length === 0) {
+    return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
+  }
+  const live = hits.filter(w => w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded');
+  const pick = live[0] || hits[0];
+  if (!pick?.dispatchId) {
+    return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
+  }
+  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, scanned: workers.length };
+}
+
 export function argsWorkerShow({ dispatch } = {}) {
   const a = ['orchestration', 'worker-show'];
   if (dispatch) a.push('--dispatch', dispatch);
@@ -707,6 +734,137 @@ export function gitBranchName(cwd) {
   if (!r.ok) return r;
   if (!r.out || r.out === 'HEAD') return { ok: false, error: '工作区处于 detached HEAD，推不出分支名' };
   return { ok: true, branch: r.out };
+}
+
+/**
+ * #575 ⑦：审官开审前对齐 master。
+ * rebase 会改 commit sha → review.commit_id != headRefOid → APPROVED 当场失效
+ * （判例 review-green-must-match-head）。所以只能先对齐 → 再审 → 再合。
+ *
+ * mergeable 三态必须分开：MERGEABLE / CONFLICTING / UNKNOWN。
+ * UNKNOWN 是「GitHub 还在算」，不是绿——没查成，不许当 MERGEABLE 放行。
+ */
+export function assessPrMergeable(raw) {
+  const v = String(raw ?? '').trim().toUpperCase();
+  if (v === 'MERGEABLE') return { ok: true, mergeable: 'MERGEABLE' };
+  if (v === 'CONFLICTING') {
+    return {
+      ok: false,
+      mergeable: 'CONFLICTING',
+      error: '先让工人 rebase master，别派审官白审（mergeable=CONFLICTING）',
+    };
+  }
+  if (!v || v === 'UNKNOWN') {
+    return {
+      ok: false,
+      unscanned: true,
+      mergeable: v || null,
+      error: `mergeable=${v || '空'}——GitHub 还在算或没查成，不许当 MERGEABLE 放行`,
+    };
+  }
+  return {
+    ok: false,
+    unscanned: true,
+    mergeable: v,
+    error: `mergeable 值不认识：${v}——没查成，不许当绿放行`,
+  };
+}
+
+function gitRun(cwd, args, runGit) {
+  if (typeof runGit === 'function') return runGit(args);
+  return gitCapture(cwd, args);
+}
+
+/**
+ * 试合 origin/master（或 origin/main），记录落后数/冲突/触及文件，然后 --abort。
+ * 树必须停在原 HEAD：审官审的是 PR head，expectedOid 校验才有意义。
+ *
+ * 顺序陷阱：rebase 会改 commit sha，导致 review.commit_id != headRefOid、
+ * 审官的 APPROVED 失效（判例 review-green-must-match-head）。
+ * 只能「先对齐 master → 再审 → 再合」，不能审完再 rebase。
+ */
+export function trialMergeMaster({ cwd, runGit } = {}) {
+  if (!cwd && typeof runGit !== 'function') {
+    return { ok: false, unscanned: true, error: 'trialMergeMaster 没给工作区' };
+  }
+  const run = (args) => gitRun(cwd, args, runGit);
+  const head = run(['rev-parse', 'HEAD']);
+  if (!head.ok) return { ok: false, unscanned: true, error: `试合前 HEAD 没查成：${head.error}` };
+  const before = head.out;
+
+  let base = 'origin/master';
+  const hasMaster = run(['rev-parse', '--verify', 'origin/master']);
+  if (!hasMaster.ok) {
+    const hasMain = run(['rev-parse', '--verify', 'origin/main']);
+    if (!hasMain.ok) {
+      return { ok: false, unscanned: true, error: 'origin/master 与 origin/main 都没有——试合没查成' };
+    }
+    base = 'origin/main';
+  }
+
+  const behindR = run(['rev-list', '--count', `HEAD..${base}`]);
+  if (!behindR.ok) return { ok: false, unscanned: true, error: `落后 commit 数没查成：${behindR.error}` };
+  const behind = Number(behindR.out);
+  if (!Number.isFinite(behind)) {
+    return { ok: false, unscanned: true, error: `落后 commit 数不是数字：${behindR.out}` };
+  }
+
+  const touchedR = run(['diff', '--name-only', `HEAD...${base}`]);
+  const masterFiles = touchedR.ok
+    ? String(touchedR.out || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const merge = run(['merge', base, '--no-commit', '--no-ff']);
+  // 冲突只认未合并文件。merge 非零可能是没配 user.name（CI 实证 #578）——那是没查成，不是冲突。
+  const unmerged = run(['diff', '--name-only', '--diff-filter=U']);
+  const conflict = !!(unmerged.ok && String(unmerged.out || '').trim());
+  if (!merge.ok && !conflict) {
+    run(['merge', '--abort']);
+    return {
+      ok: false,
+      unscanned: true,
+      behind,
+      masterFiles,
+      error: `试合没跑成（不是冲突）：${merge.error}`,
+    };
+  }
+  const abort = run(['merge', '--abort']);
+  // 没进合并时 abort 会失败——只要 HEAD 还原且工作区干净就算成功。
+  const after = run(['rev-parse', 'HEAD']);
+  if (!after.ok) {
+    return { ok: false, error: `试合后 HEAD 没查成：${after.error}`, behind, conflict, masterFiles };
+  }
+  if (after.out !== before) {
+    return {
+      ok: false,
+      error: `试合后 HEAD ${after.out} ≠ 原 ${before}（--abort 没还原，审官树漂了）`,
+      behind, conflict, masterFiles, head: after.out, expectedOid: before,
+    };
+  }
+  const st = run(['status', '--porcelain']);
+  if (!st.ok) return { ok: false, error: `试合后 git status 没查成：${st.error}`, behind, conflict };
+  if (String(st.out || '').trim()) {
+    return {
+      ok: false,
+      error: `试合后工作区不干净（--abort 有残留）：${String(st.out).slice(0, 120)}`,
+      behind, conflict, masterFiles,
+    };
+  }
+  return {
+    ok: true,
+    behind,
+    conflict,
+    clean: true,
+    base,
+    masterFiles,
+    head: before,
+    abortOk: abort.ok,
+    hint: behind === 0
+      ? '与 master 同步'
+      : conflict
+        ? `落后 ${behind} 个 commit，试合有冲突——工人应先 rebase`
+        : `落后 ${behind} 个 commit，试合无冲突。重点核这 ${behind} 个 commit 碰过的文件与本 PR 的交集`,
+  };
 }
 
 export function verifyReviewerTree({ workerPath, reviewerPath, expectedOid } = {}) {
@@ -1684,7 +1842,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
-  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'send', 'notify', 'reply',
+  'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'raw',
 ];
 
@@ -1710,6 +1868,10 @@ export const FLAGS_BY_VERB = {
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'reviewer-create': new Set([
     '--pr', '--name', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+  ]),
+  'reviewer-attach': new Set([
+    '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
+    '--merge-policy', '--merge-reason', '--comment', '--issue', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--json', '--help', '-h']),
   notify: new Set([
@@ -1772,6 +1934,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+                  # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
+                  # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* label 同步到 PR（#564：校准数据源）
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>

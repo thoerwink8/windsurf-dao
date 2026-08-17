@@ -73,7 +73,10 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
 | `read-error-livefallback/` | 基于 read-malformed，read 文件换成 **runOrca 回落形态**（`{ok:false, error:"exit 1"}` 字符串错误，模拟 orca stdout 非 JSON / spawn 失败时 runOrca 返回的形态，不是原始 orca 响应） | 首轮 `read-failed:` 且回落字符串进详情（live 字符串分支的自动化覆盖） |
 | `exclusion/` | master(主,指纹屏面) + #452(自,指纹屏面) + #999(工人,干净屏面) | 见 tests/watchdog.tests.js ⑭（--exclude-pane 已是分级排除：豁免指纹/停摆、保留死活判据） |
-| `no-targets/` | 全部 agent `state=done` | 退出码 2，`NO_TARGETS` |
+| `no-targets/` | 全部 agent `state=done`，任务卡均为 in-review | 退出码 2，`NO_TARGETS`（待合并盘面不是全员卡死） |
+| `all-idle/` | 同 no-targets，但 `#453` 改为 `in-progress` | 退出码 1，`all-idle:`（有在途卡却零活工位） |
+| `pasted-content/` | **#575**：working 工位屏面写成 `[Pasted Content 5711 chars]`（#574 审官实证形态） | 单轮不报；两轮同屏退出码 1，`pasted-content:` + 补回车动作 |
+| `pasted-idle/` | **#575**：in-progress 卡、agent=done、屏面 Pasted Content（#574 当晚：审官折在输入框、不在 working 集合里） | 单轮 `all-idle:`；两轮再报 `pasted-content:` |
 
 ## 原始录制底稿（根目录）
 
