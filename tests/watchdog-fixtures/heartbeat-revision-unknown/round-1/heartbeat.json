@@ -1,0 +1,14 @@
+{
+  "ts": "2026-08-15T13:19:00.000Z",
+  "round": 5,
+  "lastWakeSource": "poll",
+  "pendingCount": 0,
+  "prs": [],
+  "revision": {
+    "state": "unknown",
+    "behind": null,
+    "startupSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "originSha": null,
+    "reason": "git fetch 失败：Could not resolve host"
+  }
+}

@@ -4,16 +4,49 @@
 // 定 job_id、把「已有同 job 事件」收成幂等 skip。
 // 工人 job_id = gh-pr-N（与回填同口径）；审官 job_id = gh-pr-N-review
 // （一 job 只能一条 job.dispatch / job.closed）。
+// #595：默认落点是主树 ledger/events（git-common-dir），不随调用者所在树漂移。
+// 测试或显式覆盖走 eventsDir / LEDGER_EVENTS_DIR。落点查不成必须抛，不许退回工人树。
 
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { writeEvent, nextSeq } from './event-writer.mjs';
 import { hashOf } from './dianjiangtai-core.mjs';
 import { toBeijingIso } from './dianjiangtai-backfill.mjs';
 import { judgmentFromReview } from './judgment.mjs';
 
 const DEFAULT_ROOT = resolve(import.meta.dirname, '../..');
+
+function defaultGit(args, { cwd } = {}) {
+  const r = spawnSync('git', args, {
+    encoding: 'utf8',
+    cwd,
+    windowsHide: true,
+    timeout: 30000,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return {
+      ok: false,
+      error: String(r.error?.message || r.stderr || r.stdout || `git exit ${r.status}`).trim(),
+    };
+  }
+  return { ok: true, out: String(r.stdout || '').trim() };
+}
+
+/** 主树根 = git-common-dir 的上一级。工人树里调也必须落到这里。 */
+export function resolveMainWorktreeRoot({ from = DEFAULT_ROOT, git } = {}) {
+  const run = git || defaultGit;
+  const r = run(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: from });
+  if (!r.ok || !r.out) {
+    return { ok: false, error: r.error || 'git-common-dir 为空' };
+  }
+  const gitDir = String(r.out).replace(/[/\\]+$/, '');
+  if (!/\.git$/i.test(gitDir)) {
+    return { ok: false, error: `git-common-dir 不是 .git：${gitDir}` };
+  }
+  return { ok: true, root: resolve(gitDir, '..'), gitDir };
+}
 
 export function workerJobId(prNumber) {
   return `gh-pr-${prNumber}`;
@@ -36,8 +69,18 @@ export function isDuplicateWriteError(err) {
   return /已存在|已入账|已有/.test(String(err && err.message ? err.message : err));
 }
 
-export function loadLedgerContext({ root = DEFAULT_ROOT, eventsDir, schemaPath, machine } = {}) {
-  const dir = resolve(root, eventsDir || process.env.LEDGER_EVENTS_DIR || 'ledger/events');
+export function loadLedgerContext({ root = DEFAULT_ROOT, eventsDir, schemaPath, machine, git } = {}) {
+  const explicit = eventsDir || process.env.LEDGER_EVENTS_DIR || '';
+  let dir;
+  if (explicit) {
+    dir = resolve(root, explicit);
+  } else {
+    const main = resolveMainWorktreeRoot({ from: root, git });
+    if (!main.ok) {
+      throw new Error(`账本落点没查成：${main.error}——不许退回调用者所在树`);
+    }
+    dir = join(main.root, 'ledger', 'events');
+  }
   const schemaFile = resolve(root, schemaPath || 'schemas/events.schema.json');
   if (!existsSync(schemaFile)) throw new Error(`事件 schema 不在：${schemaFile}`);
   const schema = JSON.parse(readFileSync(schemaFile, 'utf8'));

@@ -9,6 +9,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
+import { orcaErrorText } from './orca-error.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -350,7 +351,7 @@ export function planWorktreeRm(worktrees, selector) {
         states: occ.map(a => a.state),
       });
     }
-    order.push({ id, name: w.displayName || id });
+    order.push({ id, name: w.displayName || id, path: w.path || null });
   }
 
   walk(root);
@@ -388,7 +389,8 @@ export function applyWorktreeRmPlan(plan, { rm } = {}) {
   for (const node of plan.order) {
     const r = rm(node);
     if (!r || r.ok !== true) {
-      const why = (r && (r.error || r.err)) || 'rm 失败';
+      const raw = r && (r.error || r.err);
+      const why = raw != null && raw !== '' ? (orcaErrorText(raw) || 'rm 失败') : 'rm 失败';
       const done = removed.length ? `已删 ${removed.map(n => n.name).join('、')}；` : '一棵都还没删；';
       return {
         ok: false,
@@ -400,6 +402,86 @@ export function applyWorktreeRmPlan(plan, { rm } = {}) {
     removed.push(node);
   }
   return { ok: true, removed };
+}
+
+function samePath(a, b) {
+  return normPath(a) === normPath(b);
+}
+
+export function formatStrayLedgerError(stray) {
+  const list = (stray || []).map(s => s.file).join('、') || '（未列出文件名）';
+  return `删树前拦住：树内有未进主树的账本事件（${list}）——先把它们拷回主树 ledger/events/ 再删`;
+}
+
+/** 工人树 ledger/events 里有、主树没有的事件文件。读失败 = 没查成，不许当 0。 */
+export function listStrayLedgerEvents({ treePaths, mainEventsDir, readdir = readdirSync, exists = existsSync } = {}) {
+  if (!mainEventsDir) {
+    return { ok: false, unscanned: true, stray: [], error: '主树账本目录没给，兜底没查成' };
+  }
+  const paths = Array.isArray(treePaths) ? treePaths.filter(Boolean) : [];
+  const stray = [];
+  const scanned = [];
+  const mainRoot = resolve(mainEventsDir, '..', '..');
+  for (const treePath of paths) {
+    if (samePath(treePath, mainRoot)) continue;
+    const dir = join(treePath, 'ledger', 'events');
+    scanned.push(dir);
+    if (!exists(dir)) continue;
+    let names;
+    try { names = readdir(dir); }
+    catch (e) {
+      return { ok: false, unscanned: true, stray: [], error: `读 ${dir} 失败：${e && e.message ? e.message : e}` };
+    }
+    for (const name of names) {
+      if (!String(name).endsWith('.json')) continue;
+      if (!exists(join(mainEventsDir, name))) {
+        stray.push({ tree: treePath, file: name, path: join(dir, name) });
+      }
+    }
+  }
+  return { ok: true, unscanned: false, stray, scanned };
+}
+
+/** 计划 + 账本孤本闸。占用/缺 path/落点没查成/有孤本 → 整树不删。 */
+export function prepareWorktreeRm(worktrees, selector, { mainEventsDir, readdir, exists } = {}) {
+  const plan = planWorktreeRm(worktrees, selector);
+  if (!plan.ok) return plan;
+  const paths = [];
+  for (const node of plan.order) {
+    if (!node.path) {
+      return {
+        ok: false,
+        error: `盘面卡 ${node.name} 缺 path，账本兜底没查成，未删任何树`,
+        order: [],
+        occupied: [],
+      };
+    }
+    paths.push(node.path);
+  }
+  const stray = listStrayLedgerEvents({
+    treePaths: paths,
+    mainEventsDir,
+    readdir,
+    exists,
+  });
+  if (!stray.ok) {
+    return {
+      ok: false,
+      error: `账本兜底没查成，未删任何树：${stray.error}`,
+      order: [],
+      occupied: [],
+    };
+  }
+  if (stray.stray.length) {
+    return {
+      ok: false,
+      error: formatStrayLedgerError(stray.stray),
+      order: [],
+      occupied: [],
+      stray: stray.stray,
+    };
+  }
+  return plan;
 }
 
 export function argsTaskCreate({ spec, run } = {}) {
@@ -590,19 +672,13 @@ export function extractDispatchId(json) {
 }
 
 export function isRunRequired(error) {
-  const text = typeof error === 'object' && error
-    ? `${error.code || ''} ${error.message || ''}`
-    : String(error || '');
-  return /run_required/i.test(text);
+  return /run_required/i.test(orcaErrorText(error));
 }
 
 export const RUN_REQUIRED_HINT = '未绑 orchestration Run，先跑 orca orchestration run-create 或 run-use';
 
 export function rollbackErrorAlreadyGone(error) {
-  const text = typeof error === 'object' && error
-    ? `${error.code || ''} ${error.message || ''}`
-    : String(error || '');
-  return /tab_not_found|terminal_handle_stale/i.test(text);
+  return /tab_not_found|terminal_handle_stale/i.test(orcaErrorText(error));
 }
 
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
@@ -2253,12 +2329,7 @@ export function classifyNotifyTarget(to) {
 }
 
 function orcaErrText(error) {
-  if (typeof error === 'object' && error) {
-    const code = String(error.code || '').trim();
-    const msg = String(error.message || '').trim();
-    return code && msg && code !== msg ? `${code}: ${msg}` : (code || msg);
-  }
-  return String(error || '').trim();
+  return orcaErrorText(error);
 }
 
 /** 投递前证收件人真的在。拿不到 ≠ 没有：分不开就标 unscanned，一样非零。 */
@@ -2526,6 +2597,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
+                  # #595：树内 ledger/events 有未进主树的事件文件 → 整树不删，报清是哪几条
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
