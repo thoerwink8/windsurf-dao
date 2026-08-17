@@ -36,7 +36,7 @@ async function main() {
     JSON.stringify(mutated));
 
   const flow = fs.readFileSync(path.join(REPO, 'scripts', 'flow.mjs'), 'utf8');
-  const flowBroken = flow.replace('完工信号：PR comment 首行命中「完工」', '完工信号：PR comment 首行命中「已完成」');
+  const flowBroken = flow.replace('完工信号：issue comment 首行命中「完工」', '完工信号：issue comment 首行命中「已完成」');
   const flowMut = checkCompletionSignal({
     root: REPO,
     files: { 'scripts/flow.mjs': flowBroken },

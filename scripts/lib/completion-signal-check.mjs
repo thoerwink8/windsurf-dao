@@ -1,6 +1,7 @@
 // 完工信号契约检查（#575 ⑥，dao-check 第 ⑮ 项）。
 //
 // 病：flow 读 PR comment 首行「完工」，worker-brief 只教 worker_done → 自动起审官从未触发。
+// #575 ⑥ 订正：交棒发 issue comment；本检查要求 flow 契约注释与 brief/dispatch 同读 issue。
 // 检查逻辑自己持有契约文本，不 import flow / judgment 的正则（自己查自己查不出错）。
 // 两边对不上（比如把 worker-brief 的「完工」改成「已完成」）必须报红。
 
@@ -15,7 +16,7 @@ const FILES = {
 };
 
 // 检查器自己写的标记，不从被检查对象 import。
-const FLOW_MARK = '完工信号：PR comment 首行命中「完工」';
+const FLOW_MARK = '完工信号：issue comment 首行命中「完工」';
 const JUDGMENT_MARK = '/^完工/';
 const BRIEF_HEAD = '首行以「完工」开头';
 const BRIEF_CMD = 'gh-as.mjs worker -- issue comment';
@@ -81,5 +82,5 @@ export function checkCompletionSignal({ root, files } = {}) {
       ],
     };
   }
-  return { green: '完工信号契约：worker-brief 教 issue comment 首行「完工」；flow.mjs:183 仍读 PR（改读 issue 未落地）' };
+  return { green: '完工信号契约：worker-brief / flow 都读 issue comment 首行「完工」' };
 }
