@@ -12,8 +12,8 @@
 //      新鲜（<60s）直接用，过期重算，不参与任何判断——它只是节流。
 //   3. 「扫完是空的」和「这次没扫到」必须不同形：[盘] 全 0 行 ≠ [盘] 没查成行。
 //      守卫崩了（整体无输出）和守卫说没事（[盘] 行在）也要分得开。
-//   4. 别在这里复述别的文件的事实：在途/待消歧/待收口的本地口径见函数注释与 issue #564，
-//      本文件只产出那一行字。
+//   4. 别在这里复述别的文件的事实：在途/待消歧/待收口的本地口径见函数注释与 issue #564/#588，
+//      本文件只产出那一行字。#588 起这一行必须带单号和状态——只有计数，帅还是要「记得去查」。
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -30,37 +30,73 @@ const ORCA_TIMEOUT_MS = 15000;
 const INBOX_TIMEOUT_MS = 45000; // READY_WAIT_MS(30s) + 余量；健康时秒退
 const INBOX_SCRIPT = join(ROOT, 'scripts', 'inbox-station.mjs');
 
-/** 从 orca worktree ps 的 JSON 算盘面三数（纯函数，测试喂 fixture 不碰 orca）。
- * 口径（不打 GitHub，本地能看到的三个数字，注释写清各自的近似语义）：
- *   在途 = 有 working agent 的卡数（真在干活的）。
- *   待收口 = 有 agent 但没一个在 working 的卡数（干完/停了的，等帅合并/归档——收口是帅的动作）。
- *   待消歧 = 建了卡但 status=todo、还没有 agent 的卡数（派工前那道门/拍板还挂在盘面上；
- *             GitHub 上的真·待消歧数 hook 不打 GitHub 取不到，这是本地最接近的形态）。
+function cardRef(w) {
+  const name = String(w.displayName || '');
+  const m = name.match(/#(\d+)/);
+  return {
+    number: m ? Number(m[1]) : null,
+    name,
+    id: w.worktreeId || w.id || null,
+  };
+}
+
+/** 卡级状态：人维护的 workspaceStatus 优先，agent 态兜底。子卡不进这一行。 */
+export function cardStatus(w) {
+  const agents = Array.isArray(w.agents) ? w.agents : [];
+  const st = w.workspaceStatus;
+  if (st === 'todo' && agents.length === 0) return '待消歧';
+  if (st === 'completed') return '待收口';
+  if (st === 'in-review') return '审中';
+  const active = agents.some(a => a && (a.state === 'working' || a.state === 'waiting'));
+  if (st === 'in-progress' && (active || agents.length > 0)) return '做中';
+  if (active) return '做中';
+  if (agents.length > 0) return '待收口';
+  return null;
+}
+
+function fmtCards(list, withStatus) {
+  if (!Array.isArray(list) || list.length === 0) return '无';
+  return list.map(c => {
+    const n = c.number != null ? `#${c.number}` : (c.name || '?');
+    return withStatus && c.status ? `${n}(${c.status})` : n;
+  }).join(' ');
+}
+
+/** 从 orca worktree ps 的 JSON 算盘面（纯函数，测试喂 fixture 不碰 orca）。
+ * 口径（不打 GitHub；#588 起带单号和状态，不再只报计数）：
+ *   在途 = 顶层任务卡里还在做 / 在审的（做中、审中）。
+ *   待收口 = 顶层任务卡已做完、等帅合并/归档。
+ *   待消歧 = 建了卡但 status=todo、还没有 agent。
+ * 子卡（审官等，有 parentWorktreeId）并进父卡，不单独占一行。
  * master 主树与 archived 卡不算。 */
 export function summarizeBoard(psJson) {
   const wts = Array.isArray(psJson?.result?.worktrees) ? psJson.result.worktrees : null;
   if (!wts) return { unscanned: true, error: 'worktree ps 返回没有 result.worktrees 数组' };
-  const out = { inFlight: 0, closing: 0, todo: 0, scanned: 0, unscanned: false };
+  const out = { inFlight: [], closing: [], todo: [], scanned: 0, unscanned: false };
   for (const w of wts) {
     if (!w || w.isMainWorktree || w.isArchived) continue;
     out.scanned++;
-    const agents = Array.isArray(w.agents) ? w.agents : [];
-    if (agents.length > 0) {
-      if (agents.some(a => a && a.state === 'working')) out.inFlight++;
-      else out.closing++;
-    } else if (w.workspaceStatus === 'todo') {
-      out.todo++;
-    }
+    if (w.parentWorktreeId) continue;
+    const status = cardStatus(w);
+    if (!status) continue;
+    const card = { ...cardRef(w), status };
+    if (status === '待消歧') out.todo.push(card);
+    else if (status === '待收口') out.closing.push(card);
+    else out.inFlight.push(card);
   }
   return out;
 }
 
-/** 一行盘面摘要。扫完真空（全 0）与没扫到（未查成）必须是不同的形。 */
+/** 一行盘面摘要。扫完真空（全无）与没扫到（未查成）必须是不同的形。 */
 export function boardLine(summary) {
   if (!summary || summary.unscanned) {
     return `[盘] 没查成：${summary?.error || '摘要没算出来'}（≠ 扫完是空的）`;
   }
-  return `[盘] 在途 ${summary.inFlight} · 待消歧 ${summary.todo} · 待收口 ${summary.closing}`;
+  if (!Array.isArray(summary.inFlight) || !Array.isArray(summary.closing) || !Array.isArray(summary.todo)) {
+    return `[盘] 没查成：缓存还是旧计数形，作废重算（≠ 扫完是空的）`;
+  }
+  const todoBit = summary.todo.length ? ` · 待消歧 ${fmtCards(summary.todo, false)}` : '';
+  return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit}`;
 }
 
 function runOrca(args) {
@@ -76,7 +112,8 @@ function runOrca(args) {
 function loadCache() {
   try {
     const doc = JSON.parse(readFileSync(CACHE_FILE, 'utf8'));
-    if (doc && typeof doc.ts === 'number' && doc.summary && !doc.summary.unscanned) return doc;
+    if (doc && typeof doc.ts === 'number' && doc.summary && !doc.summary.unscanned
+      && Array.isArray(doc.summary.inFlight)) return doc;
   } catch { /* 缓存不在/坏了 = 重算 */ }
   return null;
 }

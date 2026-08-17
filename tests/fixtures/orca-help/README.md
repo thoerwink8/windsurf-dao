@@ -10,6 +10,7 @@ orca terminal send --help > tests/fixtures/orca-help/terminal-send.txt
 orca terminal close --help > tests/fixtures/orca-help/terminal-close.txt
 orca worktree create --help > tests/fixtures/orca-help/worktree-create.txt
 orca worktree rm --help > tests/fixtures/orca-help/worktree-rm.txt
+orca worktree ps --help > tests/fixtures/orca-help/worktree-ps.txt
 orca orchestration task-create --help > tests/fixtures/orca-help/orchestration-task-create.txt
 orca orchestration worker-start --help > tests/fixtures/orca-help/orchestration-worker-start.txt
 orca orchestration send --help > tests/fixtures/orca-help/orchestration-send.txt

@@ -37,8 +37,12 @@ async function main() {
       },
     };
     const s = H.summarizeBoard(fixture);
-    check('三数口径：master/archived/无 agent 壳卡不计，在途/待收口/待消歧各归各',
-      s.scanned === 5 && s.inFlight === 2 && s.closing === 1 && s.todo === 1, JSON.stringify(s));
+    check('口径：master/archived/壳卡不计，在途/待收口/待消歧各归各',
+      s.scanned === 5 && s.inFlight.length === 2 && s.closing.length === 1 && s.todo.length === 1, JSON.stringify(s));
+    check('在途带单号和做中', s.inFlight[0].number === 1 && s.inFlight[0].status === '做中'
+      && s.inFlight[1].number === 2 && s.inFlight[1].status === '做中', JSON.stringify(s.inFlight));
+    check('待收口是 #3', s.closing[0].number === 3, JSON.stringify(s.closing));
+    check('待消歧是 #4', s.todo[0].number === 4, JSON.stringify(s.todo));
     check('扫完是真扫了（scanned>0 且 unscanned=false）', s.unscanned === false && s.scanned > 0, JSON.stringify(s));
 
     const bad = H.summarizeBoard({ result: {} });
@@ -47,10 +51,48 @@ async function main() {
 
   console.log('\n=== #564 盘面摘要：两形分得开（扫完真空 ≠ 没扫到）===');
   {
-    const emptyLine = H.boardLine({ inFlight: 0, closing: 0, todo: 0, scanned: 3, unscanned: false });
+    const emptyLine = H.boardLine({ inFlight: [], closing: [], todo: [], scanned: 3, unscanned: false });
     const unscanLine = H.boardLine({ unscanned: true, error: 'orca worktree ps 失败（exit 1）' });
-    check('扫完全 0 → 「在途 0 · 待消歧 0 · 待收口 0」', /在途 0 · 待消歧 0 · 待收口 0/.test(emptyLine), emptyLine);
-    check('没扫到 → 「[盘] 没查成：…」不是全 0 形', /没查成/.test(unscanLine) && unscanLine !== emptyLine, unscanLine);
+    check('扫完全空 → 「在途 无 · 待收口 无」', /在途 无 · 待收口 无/.test(emptyLine) && !/待消歧/.test(emptyLine), emptyLine);
+    check('没扫到 → 「[盘] 没查成：…」不是全空形', /没查成/.test(unscanLine) && unscanLine !== emptyLine, unscanLine);
+    const stale = H.boardLine({ inFlight: 4, closing: 4, todo: 0, unscanned: false });
+    check('旧计数缓存 → 没查成（不作全空）', /没查成/.test(stale), stale);
+  }
+
+  console.log('\n=== #588 盘面摘要：单号+状态，子卡不单独占行 ===');
+  {
+    const fixture = {
+      result: {
+        worktrees: [
+          { isMainWorktree: true, displayName: 'master', agents: [] },
+          {
+            displayName: '#588 - strikes', workspaceStatus: 'in-progress',
+            parentWorktreeId: null,
+            worktreeId: 'parent-588',
+            agents: [{ state: 'working' }],
+          },
+          {
+            displayName: '#588 - 审官', workspaceStatus: 'in-progress',
+            parentWorktreeId: 'parent-588',
+            worktreeId: 'child-588',
+            agents: [{ state: 'working' }],
+          },
+          {
+            displayName: '#582 - flow', workspaceStatus: 'in-review',
+            parentWorktreeId: null,
+            worktreeId: 'parent-582',
+            agents: [{ state: 'working' }],
+          },
+        ],
+      },
+    };
+    const s = H.summarizeBoard(fixture);
+    check('子卡不进在途名单', s.inFlight.length === 2 && s.inFlight.every(c => c.number !== null), JSON.stringify(s.inFlight));
+    check('in-review 标审中，即使 agent 还在 working', s.inFlight.some(c => c.number === 582 && c.status === '审中'), JSON.stringify(s.inFlight));
+    check('in-progress 标做中', s.inFlight.some(c => c.number === 588 && c.status === '做中'), JSON.stringify(s.inFlight));
+    const line = H.boardLine(s);
+    check('一行能读出单号和状态', /在途 #588\(做中\) #582\(审中\)/.test(line) && /待收口 无/.test(line), line);
+    check('待消歧为空时不占位', !/待消歧/.test(line), line);
   }
 
   console.log('\n=== #564 信箱台自愈：健康静音 / 自愈留痕 / 失败可辨认 ===');
