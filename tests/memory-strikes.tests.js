@@ -80,6 +80,18 @@ async function main() {
     check('更新后无闸变红', r.kind === 'red' && /legacy/.test(r.line), r.line);
   }
 
+  console.log('\n=== 红 3：基准不得晚于上线提交，当天午后更新必须纳入 ===');
+  {
+    const live = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'memory-strikes-baseline.json'), 'utf8'));
+    check('live baselineAt 不晚于 #590 提交 07:19:21Z', live.baselineAt <= '2026-08-17T07:19:21.000Z', live.baselineAt);
+    const r = S.inspectStrikes({
+      entries: [mem({ name: 'legacy.md', strikes: 3, gate: 'null', modified: '2026-08-17T12:00:00.000Z' })],
+      baselineNames: ['legacy.md'],
+      baselineAt: live.baselineAt,
+    });
+    check('上线后、旧 23:59 窗口内的更新 → 红（不再豁免）', r.kind === 'red', r.line);
+  }
+
   console.log('\n=== 0 样本与没查成不同形 ===');
   {
     const empty = S.inspectStrikes({ entries: [] });

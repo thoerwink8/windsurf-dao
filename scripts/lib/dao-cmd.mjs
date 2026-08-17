@@ -2223,10 +2223,10 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'raw',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
@@ -2265,6 +2265,7 @@ export const FLAGS_BY_VERB = {
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
   'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
+  'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -2337,6 +2338,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 其他:
   liveness [--path <工作树>]
   check-help
+  ledger-query (--recent <n> | --issue <号> | --unclosed)
+                  # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   raw -- <任意命令...>     逃生口，必须留痕
 
 notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯一的发信口：收件人不在、回执拿不到、

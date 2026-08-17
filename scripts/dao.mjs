@@ -7,6 +7,8 @@
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { readLedgerEvents, queryLedger } from './lib/ledger-query.mjs';
 import {
   ROOT,
   USAGE,
@@ -675,6 +677,34 @@ function cmdWorktreeCreate(args) {
   emit({ ok: true, json: r.json });
 }
 
+function cmdLedgerQuery(args) {
+  if (args.recent == null && args.issue == null && !args.unclosed) {
+    fail('ledger-query 要 --recent <n> 或 --issue <号> 或 --unclosed');
+  }
+  const listed = readLedgerEvents(join(ROOT, 'ledger', 'events'));
+  if (listed.unscanned) fail(`账本没查成：${listed.error}`);
+  const r = queryLedger({
+    events: listed.events,
+    recent: args.recent,
+    issue: args.issue,
+    unclosed: !!args.unclosed,
+  });
+  if (r.kind === 'unscanned') fail(`账本没查成：${r.error}`);
+  emit({
+    ok: true,
+    kind: r.kind,
+    count: r.count,
+    line: r.line,
+    events: r.events.map(e => ({
+      ts: e.ts || null,
+      type: e.type || null,
+      job_id: e.job_id || null,
+      pr_number: e.pr_number ?? null,
+      model: e.model || null,
+    })),
+  });
+}
+
 function cmdWorktreeRm(args) {
   if (!args.worktree) fail('worktree-rm 要 --worktree');
   const listed = orca(argsWorktreePs());
@@ -1158,6 +1188,7 @@ function main() {
     case 'liveness': return cmdLiveness(args);
     case 'check-help': return cmdCheckHelp();
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
+    case 'ledger-query': return cmdLedgerQuery(args);
     case 'raw': return cmdRaw(args);
     default:
       console.error(`未知动词: ${args.verb}`);
