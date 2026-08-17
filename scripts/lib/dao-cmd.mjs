@@ -751,6 +751,20 @@ export function parseGhPullFiles(json) {
 /** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
 export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
 
+/** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
+ * 命中这些屏面文本 = TUI 还在加载（MCP servers 0/5 之类），任务书还没渲染——
+ * 绝不判绿，稳定轮数归零，继续等 proof/marker。 */
+export const TUI_LOADING_RE = /Starting MCP servers \(\d+\/\d+\)|Connecting|正在启动|初始化|配置同步|请稍候|加载中|登录/i;
+
+/** proof 不可用的可辨识 reason（#568 回归修法）：这两个值是 provider 级别不支持
+ * transcript 证明（pi 实测 provider_unsupported / session_not_reported），
+ * **不是「工人没开工」**——此时降级到屏面判据（连续稳定轮）判绿。
+ * 其他值（null / no_hook_report 等）不降级：宁可继续等，不许假绿。 */
+export function proofUnavailableReason(p) {
+  const reason = String((p && p.fallbackReason) || '');
+  return /provider_unsupported|session_not_reported/.test(reason) ? reason : null;
+}
+
 export function verifyInjection({ text, readError } = {}) {
   if (readError) return { ok: false, reason: '没读成', error: readError, unscanned: true };
   if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
@@ -783,14 +797,22 @@ export function verifyInjection({ text, readError } = {}) {
  *   3. 重读后 Pasted Content 消失 = 提交成功（继续正常流程）；仍在 = 真失败（这时才回滚）。
  *
  * 三态分开（第二种必须留痕，否则「补救生效过多少次」永远没人知道）：
- *   started（worker-read 官方证明，或没补过回车直接走完）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
+ *   started（worker-read 官方证明，或 proof 不可用时屏面连续稳定轮）/ startedAfterEnter（补回车救活，enter 留痕）/ failed。
  * worker-read 官方开工证明（#559 ⑥ 判开工优先用它；source≠terminal = 任务书进 transcript = 已提交）
  * 是权威信号，也覆盖「paste 自动提交快到没被看见 marker」的路径；#565 实测补回车后 proof 立刻 proven。
- * 屏面「非空且无 marker」在 TUI 加载期也成立，**不算绿**——只当 proof 或 marker 出现才定论，超时兜底。
+ *
+ * #568 回归（本函数 2026-08-16 被挡死的正常提交路径）：pi 工人正常提交时 proof.proven 恒为 false
+ * （provider_unsupported，pi 不给 transcript 证明）且全程无 Pasted Content——原实现两条出口都走不到，
+ * 必然超时回滚。修法：区分「TUI 加载期」和「已提交」，不用「有没有补过回车」当区分——
+ *   1. 加载期有自己的指纹（Starting MCP servers (N/5) 等，见 TUI_LOADING_RE），加载期内不算稳定轮、不判绿；
+ *   2. proof 不可用（fallbackReason = provider_unsupported / session_not_reported，见 proofUnavailableReason）
+ *      时降级到屏面判据：非空 + 无 marker + 连续 stableRoundsNeeded 轮稳定 = 已提交（proofFallback 留痕）；
+ *   3. 「从没出现过 marker」不再永远不绿；TUI 加载期防误判的意图仍在（加载指纹清零稳定轮）。
  */
 export function verifyInjectionPolling({
   dispatchId, readOnce, sendEnter, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
+  stableRoundsNeeded = 3,
 } = {}) {
   if (typeof readOnce !== 'function' || typeof sendEnter !== 'function') {
     throw new Error('verifyInjectionPolling 要 readOnce + sendEnter');
@@ -800,6 +822,8 @@ export function verifyInjectionPolling({
   let enter = null; // 补回车留痕：{ ok, error?, elapsedMs }；没补过是 null
   let unscanned = null; // 最后一次「没读成/没送成」记录（不许当「查过没事」）
   let lastText = '';
+  let proofUnavailable = null; // proof 不可用确认记录（provider 不支持证明，见 proofUnavailableReason）
+  let stableRounds = 0;        // 屏面「非空 + 无 marker + 非加载期」连续轮数（降级判绿用）
   while (Date.now() - t0 < timeoutMs) {
     // ① worker-read 官方开工证明：任务书进 transcript = 已提交（权威信号）。
     if (dispatchId && typeof proofOnce === 'function') {
@@ -814,6 +838,10 @@ export function verifyInjectionPolling({
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
+      // #568：proof 不可用（provider 不支持证明）是降级触发条件，不是失败——先记下来。
+      if (proof && proof.proven === false && proofUnavailableReason(proof)) {
+        proofUnavailable = proof;
+      }
     }
     // ② 屏面指纹轮询。
     reads++;
@@ -823,8 +851,7 @@ export function verifyInjectionPolling({
     lastText = text;
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
-      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）；
-      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5）——不算绿，继续等 proof/marker，超时兜底。
+      // 屏面非空且无 Pasted Content。补过回车后的这个形态 = 提交成功（#565：消失 = 提交成功）。
       if (enter) {
         return {
           ok: true,
@@ -833,6 +860,25 @@ export function verifyInjectionPolling({
           elapsedMs: Date.now() - t0,
           text,
         };
+      }
+      // 没补过回车时可能是 TUI 加载期（MCP servers 0/5 等指纹）——不算稳定轮，继续等 proof/marker。
+      if (TUI_LOADING_RE.test(text)) {
+        stableRounds = 0;
+      } else {
+        // #568 回归修法：proof 不可用（provider_unsupported / session_not_reported）时降级到屏面判据——
+        // 非空 + 无 marker + 连续稳定轮 = 任务书已进上下文（pi 正常提交路径，全程无 marker 也必须判绿）。
+        stableRounds++;
+        if (proofUnavailable && stableRounds >= stableRoundsNeeded) {
+          return {
+            ok: true,
+            state: 'started',
+            proofFallback: true,
+            proof: proofUnavailable,
+            enter, reads, stableRounds,
+            elapsedMs: Date.now() - t0,
+            text,
+          };
+        }
       }
     } else if (v.reason && /Pasted Content/.test(v.reason)) {
       if (!enter) {
@@ -865,6 +911,7 @@ export function verifyInjectionPolling({
     reason: `超时没等到任务书进上下文（${label || '注入'}，${timeoutMs}ms）`,
     unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
     enter, reads,
+    stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
   };
@@ -1194,7 +1241,6 @@ export function reviewerCardName(reviewerId) {
 // 三态必须分得开（#565 硬约束）：查成且有 label / 查成但没 label / 没查成（gh 失败）。
 // 没查成不许当有 label 放行——「没查成」当「查过没事」是事故类（#532 通用原则）。
 export const DISAMBIGUATED_LABEL = '已消歧';
-
 export function checkIssueDisambiguated({ issue, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!n) return { ok: true, gated: false, issue: null };
@@ -1245,6 +1291,122 @@ export function assembleCardName({ name, issue } = {}) {
   if (n.startsWith(prefix)) stem = n.slice(prefix.length).replace(/^\s*[-–—]\s*/, '').trim();
   return [prefix, stem].filter(Boolean).join(' - ');
 }
+
+// ── #564 label 自动打：dispatch 记 issue，帅合并时同步到 PR ─────────
+// calibrate 读的是 PR 上的 model/* 与 type/*（每 label 必须有程序读它）；派工时 PR 还不存在，
+// 所以：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue；帅合并时由
+// `dao pr-sync-labels --pr <N>` 从 issue 同步到 PR。角色缺省写码（dispatch 默认写码类派工）。
+
+export const DEFAULT_DISPATCH_TYPE = '写码';
+
+export function dispatchLabelNames({ model, role } = {}) {
+  const names = [];
+  if (model && String(model).trim()) names.push(`model/${String(model).trim()}`);
+  names.push(`type/${String(role || DEFAULT_DISPATCH_TYPE).trim()}`);
+  return names;
+}
+
+/** 仓内现有 label 名。没查成返回 null（不许当「没有」去瞎建）。 */
+export function ghLabelNames(runGh) {
+  if (typeof runGh !== 'function') return null;
+  const r = runGh(['label', 'list', '--limit', '1000', '--json', 'name']);
+  if (!r.ok) return null;
+  try {
+    const arr = JSON.parse(r.out);
+    return Array.isArray(arr) ? arr.map(x => x && x.name).filter(Boolean) : null;
+  } catch { return null; }
+}
+
+/** 确保仓里存在这些 label（缺的建，已存在不动）。建 label 是仓库级一次性动作，幂等。 */
+export function ensureRepoLabels({ names, runGh } = {}) {
+  if (!Array.isArray(names) || !names.length) return { ok: true, created: [] };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'ensureRepoLabels 没拿到 gh 执行器' };
+  const existing = ghLabelNames(runGh);
+  if (existing === null) return { ok: false, unscanned: true, error: 'gh label list 没查成——不知道该建哪些' };
+  const missing = names.filter(n => !existing.includes(n));
+  const created = [];
+  for (const name of missing) {
+    const c = runGh(['label', 'create', name]);
+    if (!c.ok) return { ok: false, error: `建 label「${name}」失败：${c.error}` };
+    created.push(name);
+  }
+  return { ok: true, created, existing };
+}
+
+/** 派工成功侧：把 model/<模型> type/<角色> 打到目标 issue（best-effort：失败只报告，不翻转派工结果）。 */
+export function stampIssueLabels({ issue, model, role, runGh } = {}) {
+  const n = String(issue ?? '').trim();
+  if (!/^\d+$/.test(n)) {
+    return { ok: false, skipped: true, issue: n, error: '没给合法 issue 号，label 不打' };
+  }
+  const names = dispatchLabelNames({ model, role });
+  if (typeof runGh !== 'function') {
+    return { ok: false, issue: n, unscanned: true, error: 'stampIssueLabels 没拿到 gh 执行器——label 没打' };
+  }
+  const ensured = ensureRepoLabels({ names, runGh });
+  if (!ensured.ok) return { ok: false, issue: n, unscanned: ensured.unscanned === true, error: ensured.error };
+  const add = [];
+  for (const name of names) add.push('--add-label', name);
+  const r = runGh(['issue', 'edit', n, ...add]);
+  if (!r.ok) return { ok: false, issue: n, error: `issue #${n} 打 label 失败：${r.error}` };
+  return { ok: true, issue: n, names, created: ensured.created, labels: names };
+}
+
+/** PR 正文/标题里的署名单号：只认 GitHub 的关闭关键词（Closes/Fixes/Resolves…），
+ * 正文里随手引用的 #单号 不是署名，不许拿去抄 label（会串到别的单的 model/type）。 */
+export function linkedIssueNumbers(text) {
+  const found = [];
+  const re = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const t = Number(m[1]);
+    if (!found.includes(t)) found.push(t);
+  }
+  return found;
+}
+
+/** 合并侧（帅合并时跑）：PR 正文 Closes 到的 issue 上取 model/* type/* label，抄到 PR。
+ * PR 上没署名 issue / 署名 issue 没有这两个 label / gh 没查成——三种都要说清楚，不许静默。 */
+export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没给 PR 号' };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没拿到 gh 执行器' };
+  const view = runGh(['pr', 'view', n, '--json', 'title,body']);
+  if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
+  let meta;
+  try { meta = JSON.parse(view.out); }
+  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
+  const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
+  if (!refs.length) {
+    return { ok: false, unscanned: false, error: `PR #${n} 正文/标题里没有 Closes/Fixes 署名单号——label 无从同步，需人工补` };
+  }
+  const from = [];
+  for (const issueNum of refs) {
+    const iv = runGh(['issue', 'view', String(issueNum), '--json', 'labels']);
+    if (!iv.ok) return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 失败：${iv.error}` };
+    let labels = [];
+    try {
+      const parsed = JSON.parse(iv.out);
+      labels = Array.isArray(parsed?.labels) ? parsed.labels : [];
+    } catch { return { ok: false, unscanned: true, error: `gh issue view #${issueNum} 返回非 JSON` }; }
+    const names = labels
+      .map(l => (l && typeof l === 'object' ? l.name : l))
+      .filter(name => typeof name === 'string' && /^(model\/|type\/)/.test(name));
+    if (names.length) from.push({ issue: issueNum, labels: names });
+  }
+  const want = [...new Set(from.flatMap(f => f.labels))];
+  if (!want.length) {
+    return { ok: false, unscanned: false, error: `PR #${n} 的署名 issue 上没有 model/* 或 type/* label（派工漏打？）——需人工补`, refs };
+  }
+  const ensured = ensureRepoLabels({ names: want, runGh });
+  if (!ensured.ok) return { ok: false, unscanned: ensured.unscanned === true, error: ensured.error };
+  const add = [];
+  for (const name of want) add.push('--add-label', name);
+  const edit = runGh(['pr', 'edit', n, ...add]);
+  if (!edit.ok) return { ok: false, error: `PR #${n} 打 label 失败：${edit.error}` };
+  return { ok: true, pr: n, labels: want, refs, from, created: ensured.created };
+}
+
 
 export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
   const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
@@ -1520,7 +1682,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'reviewer-create', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'raw',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm']);
@@ -1556,6 +1718,7 @@ export const FLAGS_BY_VERB = {
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
   liveness: new Set(['--path', '--json', '--help', '-h']),
   'check-help': new Set(['--json', '--help', '-h']),
+  'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -1606,6 +1769,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> --name <名> [--parent-worktree <sel>] [--comment <文>] [--dry-run]
+  pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* label 同步到 PR（#564：校准数据源）
   worktree-rm --worktree <sel> [--force]
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]

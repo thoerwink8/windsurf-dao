@@ -13,14 +13,64 @@
 // （fail-loud：测试里出现未预期的调用 = 直接红，不许静默返回假数据）。
 
 const args = process.argv.slice(2);
+// #564：label 自动打 / pr-sync-labels 的 CLI 测试也要走假 gh（CI 无 GH_TOKEN）。
+// 固定判定：
+//   issue 565 → 有「已消歧」+ model/grok-4.6 + type/写码（派工打标与同步的样本）；
+//   issue 999 → 模拟 gh 失败（CI 无 GH_TOKEN 场景：必须报「没查成」拒派）；
+//   其余号 → 无 label。
+//   PR 42 正文 Closes #565（pr-sync-labels 样本）；label 仓内已存在，不需要建。
+// 只实现测试用到的调用面；其它 gh 调用一律报错退出（fail-loud，不许静默返回假数据）。
+const ISSUE_LABELS = {
+  '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }],
+};
+const REPO_LABELS = ['已消歧', '任务', 'model/grok-4.6', 'type/写码'];
+
 if (args[0] === 'issue' && args[1] === 'view' && args[3] === '--json' && args[4] === 'labels') {
   const n = args[2];
   if (n === '999') {
     process.stderr.write('fake-gh: 模拟 gh 失败（CI 无 GH_TOKEN）');
     process.exit(1);
   }
-  const labels = n === '565' ? [{ name: '已消歧' }, { name: '任务' }] : [];
+  const labels = ISSUE_LABELS[n] || [];
   process.stdout.write(JSON.stringify({ labels }));
+  process.exit(0);
+}
+if (args[0] === 'issue' && args[1] === 'edit') {
+  const n = args[2];
+  if (n === '999') {
+    process.stderr.write('fake-gh: 模拟 issue edit 失败');
+    process.exit(1);
+  }
+  const addLabels = [];
+  for (let i = 3; i < args.length; i++) {
+    if (args[i] === '--add-label' && args[i + 1]) addLabels.push(args[i + 1]);
+  }
+  process.stdout.write(JSON.stringify({ number: Number(n), labels: addLabels.map(name => ({ name })) }));
+  process.exit(0);
+}
+if (args[0] === 'label' && args[1] === 'list') {
+  process.stdout.write(JSON.stringify(REPO_LABELS.map(name => ({ name }))));
+  process.exit(0);
+}
+if (args[0] === 'label' && args[1] === 'create') {
+  process.stdout.write(JSON.stringify({ name: args[2] }));
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'view') {
+  const n = args[2];
+  if (n === '42') {
+    process.stdout.write(JSON.stringify({ title: '修注入轮询回归', body: 'Closes #565\n验收：测试 306 过' }));
+    process.exit(0);
+  }
+  if (n === '41') {
+    process.stdout.write(JSON.stringify({ title: '无署名', body: '改动：修复登录' }));
+    process.exit(0);
+  }
+  process.stderr.write(`fake-gh: 未预期的 PR ${n}`);
+  process.exit(1);
+}
+if (args[0] === 'pr' && args[1] === 'edit') {
+  process.stdout.write(JSON.stringify({ number: Number(args[2]) }));
   process.exit(0);
 }
 process.stderr.write(`fake-gh: 未预期的调用 ${args.join(' ')}`);

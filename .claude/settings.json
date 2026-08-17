@@ -10,6 +10,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/board-hook.mjs\"",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   }
 }
