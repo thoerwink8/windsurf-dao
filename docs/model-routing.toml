@@ -37,7 +37,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
-launch = "scripts/grok-shim.cmd -m {model} --effort xhigh --permission-mode auto"
+launch = "grok -m {model} --effort xhigh --always-approve"
 launch_model = "grok-4.6"
 # grok TUI 把 terminal send 当用户消息再跑命令，8s 探针等不到真执行标记（#499/#502 实测）。
 probe_wait_ms = 45000
@@ -47,10 +47,10 @@ grok 单统一走 Grok Build（X 系官方），pi-grok 已退役（拍板 2026-
 shim 全文、装机三条与启动坑见 NEW-MACHINE.md「grok 怎么配」节——真相源只在那一处，别在此复制。
 日常启动模板见本表 launch（terminal create 用）。
 
-**默认起法（#573，用户 2026-08-17 拍板）**：`--effort xhigh --permission-mode auto`。
-`--permission-mode auto` 是 grok TUI 的工具许可档，不是宿主对外发布闸。
-git push 仍会被宿主硬拦，授权词还是往终端回「推」——auto 不管那一闸。
-#569 旧注「故意不带 --always-approve」被这条拍板取代：日常起法以本表 launch 为准。
+**默认起法（2026-08-17 帅实测订正）**：`--effort xhigh --always-approve`。
+`--permission-mode auto` ≠ 免确认框，两者不是一回事。#573 当晚 launch 用了前者，帅用同一条起工人：每执行一次外部命令就弹一次 3 选 1（git push / gh api PATCH / gh-as pr comment 各卡一次），每次都要帅手工放行；Ctrl+O 打开 always-approve 才不卡。`--always-approve` 是 grok --help 里的独立参数，才是用户要的「auto」。
+每弹一次框就是帅被叫醒一次，正是要消灭的「帅退不出闭环」。
+git push 仍会被宿主硬拦，授权词还是往终端回「推」——那是对外发布闸，和 TUI 确认框不是一层。
 """
 why = "pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，暴露面大，点将台盲考两次断线死亡（Connection error / terminated）；官方 Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度），稳定且会员边际成本≈0。"
 note = "授权词「推」（push 硬拦的放行方式）与代理前缀细节见 NEW-MACHINE §7 与 dispatch skill，别在此复制。"
