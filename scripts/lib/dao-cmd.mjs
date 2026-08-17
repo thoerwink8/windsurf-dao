@@ -1446,11 +1446,14 @@ export function envProbeWorktree(cwd) {
   return runCapabilityProbes({ exec: hostProbeExec(cwd) });
 }
 
-export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle } = {}) {
+export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle, childIds } = {}) {
   const steps = [];
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
   if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
+  for (const id of Array.isArray(childIds) ? childIds : []) {
+    if (id) steps.push(argsWorktreeRm({ worktree: id, force: true }));
+  }
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
 }
@@ -1705,6 +1708,88 @@ export function resolveDispatchConstraints({
     role: role || null,
     reviewer,
     recommendation,
+  };
+}
+
+/** --split 判据的真相源（#611）。skill 只留指针，勿在别处复制一份。 */
+export const SPLIT_CRITERION = '产出物能不能按文件切开？能切 + 块数 ≥2 + 每块够一个工人干 → --split N；切不开（同几个文件反复改）→ --split no + --split-reason';
+
+/**
+ * dispatch --split 硬闸。取值只允许 no 或 ≥2 的整数；缺了就退。
+ * --split no 必须同时给非空 --split-reason（入账本，防仪式化）。
+ */
+export function resolveSplitConstraint({ split, splitReason } = {}) {
+  const raw = split == null ? '' : String(split).trim();
+  if (!raw) {
+    return {
+      ok: false,
+      missing: ['--split'],
+      error: `dispatch 要 --split <no|N>（N≥2）。${SPLIT_CRITERION}`,
+    };
+  }
+  if (/^no$/i.test(raw)) {
+    const reason = String(splitReason || '').trim();
+    if (!reason) {
+      return {
+        ok: false,
+        missing: ['--split-reason'],
+        error: '--split no 必须给 --split-reason（理由入账本，防仪式化）',
+      };
+    }
+    return { ok: true, split: 'no', splitReason: reason, childCount: 0 };
+  }
+  if (!/^\d+$/.test(raw)) {
+    return {
+      ok: false,
+      missing: [],
+      error: `--split 只允许 no 或 ≥2 的整数，实际「${raw}」`,
+    };
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 2) {
+    return {
+      ok: false,
+      missing: [],
+      error: `--split N 必须 ≥2，实际 ${n}（切不开请用 --split no --split-reason）`,
+    };
+  }
+  const reason = String(splitReason || '').trim();
+  return { ok: true, split: n, splitReason: reason || null, childCount: n };
+}
+
+/**
+ * 三单回归用的那条可判定规则（#611）。
+ * 只回答「该不该拆」：能按文件切开且块数≥2 且每块够干 → N；否则 no。
+ * N 由调用方给（#608 是 24 个文件拆 4 工人），函数不猜块怎么切。
+ */
+export function decideSplit({ filesSeparable, chunkCount, eachChunkEnoughWork, n } = {}) {
+  if (filesSeparable === true && Number(chunkCount) >= 2 && eachChunkEnoughWork === true) {
+    const workers = n != null ? Number(n) : Number(chunkCount);
+    if (Number.isInteger(workers) && workers >= 2) return { split: workers };
+  }
+  return { split: 'no' };
+}
+
+export function planSplitCards({
+  name, issue, childCount = 0,
+  role, model,
+  parentSelector = '<父卡>',
+  baseBranch = '<任务分支>',
+} = {}) {
+  const parentName = assembleCardName({ name, issue, role, model });
+  const children = [];
+  const n = Number(childCount) || 0;
+  for (let i = 1; i <= n; i++) {
+    children.push({
+      name: parentName ? `${parentName} · ${i}` : String(i),
+      parentWorktree: parentSelector,
+      baseBranch,
+      flags: ['--parent-worktree', parentSelector, '--base-branch', baseBranch],
+    });
+  }
+  return {
+    parent: { name: parentName, noParent: true },
+    children,
   };
 }
 
@@ -2280,8 +2365,15 @@ export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
 }
 
 
-export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
-  const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
+export function dispatchComment({ mergePolicy, mergeReason, model, reviewer, split, splitReason } = {}) {
+  const parts = [`merge-policy:${mergePolicy}`, `model:${model}`, `reviewer:${reviewer}`];
+  if (split != null && String(split).trim() !== '') {
+    parts.push(`split:${split}`);
+    if (String(split).toLowerCase() === 'no' && splitReason) {
+      parts.push(`split 理由: ${splitReason}`);
+    }
+  }
+  const base = parts.join(' · ');
   if (mergePolicy === 'manual' && mergeReason) {
     return `${base} · manual 理由: ${mergeReason}`;
   }
@@ -2625,7 +2717,7 @@ const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'c
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
-    '--name', '--merge-policy', '--merge-reason', '--model', '--role', '--reviewer', '--confirm',
+    '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
@@ -2711,7 +2803,7 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
@@ -2768,6 +2860,9 @@ notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
 merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
 理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
+--split 必填（#611）：no 或 ≥2 的整数；两个都不给 → 非零退出。--split no 必须给 --split-reason（理由入账本）。
+--split N 建父卡 + N 张子卡（子卡 --parent-worktree 挂父卡、--base-branch 用任务分支），父卡工人是头工人。
+判据：产出物能不能按文件切开？能切 + 块数 ≥2 + 每块够一个工人干 → --split N；切不开（同几个文件反复改）→ --split no + 理由。
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。

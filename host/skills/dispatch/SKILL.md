@@ -191,6 +191,12 @@ command-code 不能承载需进 git 的 Orca 工人（#514：旁路产出，work
 
 注入必须是一行指针。含换行或超实测上限应被硬闸拦住，不要补回车救。
 
+## 能不能拆（#611）
+
+`dispatch` 必填 `--split`。判据与取值只认 `node scripts/dao.mjs dispatch --help`，本页不复制。
+`--split no` 必须带 `--split-reason`。`--split N`（N≥2）建父卡 + N 张子卡，父卡工人是头工人。
+同分支多工人走这条命令；多 PR 项化仍走 `dao-project`。
+
 ## 开工判据
 
 token 计数在增长才算开工——启动返回成功不等于已开工。worker-start 后 `orca orchestration worker-read --dispatch <id> --json` 读回，token/cursor 在涨才算开工。

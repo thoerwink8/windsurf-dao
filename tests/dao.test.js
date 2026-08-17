@@ -374,8 +374,13 @@ describe('dao', () => {
   it('④⑤⑥ 派工硬闸（merge-policy 默认 auto；manual 必带理由；缺 model/reviewer 报错）', async (t) => {
     const S = await S_LOAD;
     const routing = await ROUTING_LOAD;
-    function dispatch(extra) {
-      return spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+    function withSplit(extra) {
+      if (extra.includes('--split')) return extra;
+      return [...extra, '--split', 'no', '--split-reason', '单测默认：不测拆分'];
+    }
+    function dispatch(extra, opts = {}) {
+      const args = opts.raw ? extra : withSplit(extra);
+      return spawnSync(process.execPath, [CLI, 'dispatch', ...args], { encoding: 'utf8', cwd: REPO });
     }
     function payload(r) {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
@@ -570,13 +575,13 @@ describe('dao', () => {
     // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
     const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
-    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿', () => {
       assert.ok(cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, '消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿  →  ' + `status=${cliHas.status} ${String(pHas.error || '')}`);
     });
 
-    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）', () => {
       assert.ok(cliNo.status === 0 && pNo.disambiguation && pNo.disambiguation.ok === false && pNo.disambiguation.hasLabel === false, '消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）  →  ' + `status=${cliNo.status} ${JSON.stringify(pNo)}`);
@@ -586,7 +591,7 @@ describe('dao', () => {
     });
 
     // 真派工（非 dry-run）：门在碰 orca / 建卡之前拦——被拦下时什么都不会创建（#565 硬约束）。
-    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：真派工 --issue 559（无 label）→ 非 0 当场拦下', () => {
       assert.ok(cliReal.status !== 0 && /已消歧/.test(String(pReal.error || '')), '消歧门：真派工 --issue 559（无 label）→ 非 0 当场拦下  →  ' + `status=${cliReal.status} ${JSON.stringify(pReal)}`);
@@ -609,7 +614,7 @@ describe('dao', () => {
     });
 
     // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：gh 失败（CI 无 token）真派工 → 非 0 且报「没查成」', () => {
       assert.ok(cliFail.status !== 0 && /没查成/.test(String(pFail.error || '')) && (pFail.disambiguation || {}).unscanned === true, '消歧门：gh 失败（CI 无 token）真派工 → 非 0 且报「没查成」  →  ' + `status=${cliFail.status} ${JSON.stringify(pFail)}`);
@@ -1518,6 +1523,12 @@ describe('dao', () => {
     await t.test('R6 什么都没建 → 回滚空', () => {
       assert.ok(S.planDispatchRollback({}).length === 0, 'R6 什么都没建 → 回滚空');
     });
+    const stepsKids = S.planDispatchRollback({ workerId: 'w1', childIds: ['c1', 'c2'] });
+    const kidIdx = stepsKids.findIndex(s => s.includes('c1'));
+    const parentIdx = stepsKids.findIndex(s => s.includes('w1'));
+    await t.test('#611 回滚先删子卡再删父卡', () => {
+      assert.ok(kidIdx >= 0 && parentIdx > kidIdx, '#611 回滚先删子卡再删父卡  →  ' + JSON.stringify(stepsKids));
+    });
     const rbOk = S.rollbackReport([{ cmd: 'terminal close x --tab', ok: true }]);
     await t.test('R6 回滚全成功 → 不叫', () => {
       assert.ok(rbOk.rollbackFailed === false && rbOk.alarm == null, 'R6 回滚全成功 → 不叫  →  ' + JSON.stringify(rbOk));
@@ -2391,6 +2402,132 @@ describe('dao', () => {
     });
     await t.test('deliverMessage 注释点明 ok:true ≠ 事情办完', () => {
       assert.ok(/不是结算/.test(libSrc) && /#551/.test(libSrc), 'deliverMessage 注释点明 ok:true ≠ 事情办完');
+    });
+  });
+
+  it('#611 dispatch --split 必填（fail-close + 三单回归 + 建卡计划）', async (t) => {
+    const S = await S_LOAD;
+    function dispatchRaw(extra) {
+      return spawnSync(process.execPath, [CLI, 'dispatch', ...extra], { encoding: 'utf8', cwd: REPO });
+    }
+    function payload(r) {
+      try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
+      catch { return { raw: r.stdout, err: r.stderr }; }
+    }
+    const base = ['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run'];
+
+    const noSplit = dispatchRaw(base);
+    const pNo = payload(noSplit);
+    await t.test('② 不给 --split → 非零', () => {
+      assert.ok(noSplit.status !== 0, '② 不给 --split → 非零  →  status=' + noSplit.status);
+    });
+    await t.test('② 不给 --split → 报缺 --split', () => {
+      assert.ok(pNo.error && String(pNo.error).includes('--split'), '② 不给 --split → 报缺 --split  →  ' + JSON.stringify(pNo));
+    });
+
+    const noReason = dispatchRaw([...base, '--split', 'no']);
+    const pReason = payload(noReason);
+    await t.test('② --split no 不给 --split-reason → 非零', () => {
+      assert.ok(noReason.status !== 0, '② --split no 不给 --split-reason → 非零  →  status=' + noReason.status);
+    });
+    await t.test('② --split no 不给理由 → 报 --split-reason', () => {
+      assert.ok(pReason.error && String(pReason.error).includes('--split-reason'), '② --split no 不给理由 → 报 --split-reason  →  ' + JSON.stringify(pReason));
+    });
+
+    const emptyReason = dispatchRaw([...base, '--split', 'no', '--split-reason', '  ']);
+    await t.test('② --split no 理由空白 → 非零', () => {
+      assert.ok(emptyReason.status !== 0 && /--split-reason/.test(payload(emptyReason).error || ''), '② --split no 理由空白 → 非零  →  ' + JSON.stringify(payload(emptyReason)));
+    });
+
+    const one = dispatchRaw([...base, '--split', '1']);
+    await t.test('--split 1 → 非零（N≥2）', () => {
+      assert.ok(one.status !== 0 && /≥2/.test(payload(one).error || ''), '--split 1 → 非零（N≥2）  →  ' + JSON.stringify(payload(one)));
+    });
+
+    const fnMiss = S.resolveSplitConstraint({});
+    await t.test('函数层缺 --split → 失败', () => {
+      assert.ok(fnMiss.ok === false && (fnMiss.missing || []).includes('--split'), '函数层缺 --split → 失败  →  ' + JSON.stringify(fnMiss));
+    });
+    const fnNoReason = S.resolveSplitConstraint({ split: 'no' });
+    await t.test('函数层 --split no 无理由 → 失败', () => {
+      assert.ok(fnNoReason.ok === false && (fnNoReason.missing || []).includes('--split-reason'), '函数层 --split no 无理由 → 失败  →  ' + JSON.stringify(fnNoReason));
+    });
+    const fnOk = S.resolveSplitConstraint({ split: 'no', splitReason: '同几个文件反复改' });
+    await t.test('函数层 --split no + 理由 → 过', () => {
+      assert.ok(fnOk.ok === true && fnOk.split === 'no' && fnOk.childCount === 0, '函数层 --split no + 理由 → 过  →  ' + JSON.stringify(fnOk));
+    });
+    const fnN = S.resolveSplitConstraint({ split: '2' });
+    await t.test('函数层 --split 2 → childCount=2', () => {
+      assert.ok(fnN.ok === true && fnN.split === 2 && fnN.childCount === 2, '函数层 --split 2 → childCount=2  →  ' + JSON.stringify(fnN));
+    });
+
+    const cases = [
+      { issue: 608, title: '迁24套测试', filesSeparable: true, chunkCount: 24, eachChunkEnoughWork: true, n: 4, expect: 4, reason: null },
+      { issue: 604, title: '拆提示词整层', filesSeparable: false, chunkCount: 3, eachChunkEnoughWork: true, expect: 'no', reason: '同几个文件反复改' },
+      { issue: 603, title: '归档收口', filesSeparable: false, chunkCount: 3, eachChunkEnoughWork: true, expect: 'no', reason: '三个红项互相关联' },
+    ];
+    for (const c of cases) {
+      const decided = S.decideSplit(c);
+      await t.test(`① #${c.issue} 判据 → ${c.expect}`, () => {
+        assert.ok(decided.split === c.expect, `① #${c.issue} 判据 → ${c.expect}  →  ` + JSON.stringify(decided));
+      });
+      const flags = decided.split === 'no'
+        ? ['--split', 'no', '--split-reason', c.reason]
+        : ['--split', String(decided.split)];
+      const r = dispatchRaw([
+        '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+        '--name', c.title, '--issue', String(c.issue), '--spec', `短摘要：#${c.issue}`,
+        ...flags, '--dry-run',
+      ]);
+      const p = payload(r);
+      await t.test(`① #${c.issue} dry-run 结论 ${c.expect}`, () => {
+        assert.ok(r.status === 0 && p.split === c.expect, `① #${c.issue} dry-run 结论 ${c.expect}  →  ` + JSON.stringify(p));
+      });
+    }
+    await t.test('① 判据挑出 #608、不误伤另两单', () => {
+      assert.ok(
+        S.decideSplit(cases[0]).split === 4
+        && S.decideSplit(cases[1]).split === 'no'
+        && S.decideSplit(cases[2]).split === 'no',
+        '① 判据挑出 #608、不误伤另两单',
+      );
+    });
+
+    const split2 = dispatchRaw([
+      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      '--name', '并行两块', '--spec', '短摘要', '--split', '2', '--dry-run',
+    ]);
+    const p2 = payload(split2);
+    const kids = Array.isArray(p2.childCards) ? p2.childCards : [];
+    const kidsText = JSON.stringify(p2);
+    await t.test('④ --split 2 dry-run 过', () => {
+      assert.ok(split2.status === 0 && p2.split === 2, '④ --split 2 dry-run 过  →  ' + JSON.stringify(p2));
+    });
+    await t.test('④ 输出有父卡', () => {
+      assert.ok(p2.parentCard && p2.parentCard.noParent === true && p2.workerCard, '④ 输出有父卡  →  ' + JSON.stringify(p2.parentCard));
+    });
+    await t.test('④ 输出有 2 张子卡', () => {
+      assert.ok(kids.length === 2, '④ 输出有 2 张子卡  →  ' + kidsText);
+    });
+    await t.test('④ 子卡带 --parent-worktree', () => {
+      assert.ok(kids.every(c => (c.flags || []).includes('--parent-worktree')) && /--parent-worktree/.test(kidsText), '④ 子卡带 --parent-worktree  →  ' + kidsText);
+    });
+    await t.test('④ 子卡带 --base-branch', () => {
+      assert.ok(kids.every(c => (c.flags || []).includes('--base-branch')) && /--base-branch/.test(kidsText), '④ 子卡带 --base-branch  →  ' + kidsText);
+    });
+
+    await t.test('FLAGS 登记 --split / --split-reason', () => {
+      assert.ok(S.FLAGS_BY_VERB.dispatch.has('--split') && S.FLAGS_BY_VERB.dispatch.has('--split-reason'), 'FLAGS 登记 --split / --split-reason');
+    });
+    await t.test('USAGE 有 --split <no|N>', () => {
+      assert.ok(/--split <no\|N>/.test(S.USAGE), 'USAGE 有 --split <no|N>');
+    });
+    await t.test('USAGE 写了判据真相源', () => {
+      assert.ok(/能不能按文件切开/.test(S.USAGE) && /块数/.test(S.USAGE), 'USAGE 写了判据真相源');
+    });
+    await t.test('skill 只留指针不复制判据全文', () => {
+      const skill = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'SKILL.md'), 'utf8');
+      assert.ok(/#611/.test(skill) && /dispatch --help/.test(skill) && !/能切 \+ 块数/.test(skill), 'skill 只留指针不复制判据全文');
     });
   });
 });
