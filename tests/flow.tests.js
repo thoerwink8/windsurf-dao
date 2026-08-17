@@ -391,6 +391,24 @@ console.log("\n=== ⑳ #580 send 纯文本成功 + 注入后验开工/补回车 
   check("完工未起审官 → 待流转 start-reviewer", pending.length === 1 && pending[0].kind === "start-reviewer");
   const idle = pendingFlowItems([{ number: 579, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [{ id: 2, body: "判定：绿，可合并", submittedAt: "t2" }] }]);
   check("已绿待帅 → 不是流转器待办", idle.length === 0);
+
+  const order = [];
+  const earlyIo = {
+    sent: false,
+    read(_h, cursor) {
+      order.push(cursor == null ? 'read-full' : `read-cursor:${cursor}`);
+      if (!this.sent) return { ok: true, terminal: { status: "running", nextCursor: 10, returnedLineCount: 1, tail: ["idle"] } };
+      if (cursor == null) return { ok: true, terminal: { status: "running", nextCursor: 20, returnedLineCount: 5, tail: ["echo already passed"] } };
+      if (Number(cursor) === 10) return { ok: true, terminal: { status: "running", nextCursor: 20, returnedLineCount: 3, tail: ["new after send"] } };
+      return { ok: true, terminal: { status: "running", nextCursor: 20, returnedLineCount: 0, tail: [] } };
+    },
+    send(cmd) { this.sent = true; order.push(cmd.includes("--enter") ? "enter" : "send"); return { ok: true, json: { ok: true } }; },
+    sleep() {},
+  };
+  const early = injectAndVerify("term_x", "【返工指令 · 时序】", "工人", earlyIo);
+  check("send 前先读 cursor：早期输出算增量", early.ok === true && /cursor 增量/.test(early.judge), JSON.stringify({ early, order }));
+  check("时序是 read → send → read-cursor，不先 send", order[0] === "read-full" && order[1] === "send" && order[2] === "read-cursor:10", JSON.stringify(order));
+  check("早期输出路径不必补回车", !order.includes("enter"), JSON.stringify(order));
 }
 
 console.log("\n=== ㉒ #575 ⑥ issue comment 首行「完工：」触发起审官；PR 会话上的完工不算 ===");

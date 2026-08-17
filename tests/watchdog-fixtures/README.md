@@ -68,6 +68,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `heartbeat-fresh/` | 心跳新鲜 + 无停滞 PR | 不报 flow-stalled/stagnation；打印「心跳新鲜」；心跳缺失样本（如 live/）显形 HEARTBEAT_MISSING |
 | `heartbeat-absent-pending/` | **#580**：无 heartbeat.json + flow-signals 有完工未起审官 | 退出码 1，`flow-absent:` 心跳从未存在（有待流转却无人流转） |
 | `heartbeat-absent-idle/` | **#580**：无 heartbeat.json + 已绿待帅（不是流转器活） | 不报 flow-absent/flow-stalled；note「心跳从未存在——无待流转对象，不报」 |
+| `heartbeat-absent-ticket-pending/` | **#580 审官红 2**：PR #582 署名 issue #580，完工在 issue 评论 | 报 flow-absent |
+| `heartbeat-absent-ticket-idle/` | **#580 审官红 2**：完工只在 PR 会话、issue 上没有 | 不报 |
 | `model-change/` | **#569 ②（pi 静默换 provider）**：`sessions/` 下一条手写 jsonl——会话开头初始选型（model_change 前无 message）→ 随后 assistant 报错（errorMessage="503 status code (no body)"）→ 紧接着 model_change 切到 deepseek | 退出码 1，`[pi] model-change: …诱因：503 status code (no body)`；初始选型那条不报（那是正常选型号不是静默切换） |
 | `fp-loss/` | at capacity 指纹连续 5 轮 | 第 2 轮 fingerprint + 动作行，第 5 轮 `报帅:`（#471 连败阈值） |
 | `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化**（讨论在推进）——活证否决 | 退出码 0，第 2 轮 `观察:`（不唤醒），无 fingerprint |

@@ -120,7 +120,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
-import { pendingFlowItems } from './flow.mjs';
+import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -1112,7 +1112,12 @@ function runWorktreePass(source, args, state) {
 function loadPendingFlow(source, args) {
   if (args.snapshotDir) {
     if (!source.flowSignals) return { scanned: false, items: [], why: '快照无 flow-signals.json' };
-    const prs = Array.isArray(source.flowSignals.prs) ? source.flowSignals.prs : [];
+    const raw = Array.isArray(source.flowSignals.prs) ? source.flowSignals.prs : [];
+    const prs = raw.map(pr => ({
+      number: pr.number,
+      comments: commentsForPendingScan(pr),
+      reviews: pr.reviews || [],
+    }));
     return { scanned: true, items: pendingFlowItems(prs) };
   }
   return scanPendingFlowLive();
@@ -1135,7 +1140,7 @@ function mapGhReviews(raw) {
 }
 
 function scanPendingFlowLive() {
-  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number'], { encoding: 'utf8', timeout: 20000 });
+  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body'], { encoding: 'utf8', timeout: 20000 });
   if (list.error || list.status !== 0) {
     return { scanned: false, items: [], why: `gh pr list 失败：${String(list.error?.message || list.stderr || `exit ${list.status}`).trim().slice(0, 120)}` };
   }
@@ -1155,9 +1160,10 @@ function scanPendingFlowLive() {
 
   const packed = [];
   for (const pr of prs) {
-    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${pr.number}/comments`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    const ticket = ticketIssueNumber(pr) || pr.number;
+    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${ticket}/comments`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
     if (c.error || c.status !== 0) {
-      return { scanned: false, items: [], why: `读 PR #${pr.number} comments 失败` };
+      return { scanned: false, items: [], why: `读 issue #${ticket} comments 失败（PR #${pr.number} 署名单）` };
     }
     const r = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
     if (r.error || r.status !== 0) {
@@ -1165,7 +1171,7 @@ function scanPendingFlowLive() {
     }
     let comments, reviews;
     try { comments = JSON.parse(c.stdout || '[]'); }
-    catch (e) { return { scanned: false, items: [], why: `PR #${pr.number} comments 不是 JSON：${e.message}` }; }
+    catch (e) { return { scanned: false, items: [], why: `issue #${ticket} comments 不是 JSON：${e.message}` }; }
     try { reviews = JSON.parse(r.stdout || '[]'); }
     catch (e) { return { scanned: false, items: [], why: `PR #${pr.number} reviews 不是 JSON：${e.message}` }; }
     packed.push({ number: pr.number, comments: mapGhComments(comments), reviews: mapGhReviews(reviews) });

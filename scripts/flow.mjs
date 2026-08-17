@@ -394,11 +394,14 @@ function defaultFlowIo() {
 // 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
 // #580：补回车后再读必须带 cursor（read --cursor 有新输出），整屏 returnedLineCount
 // 几乎永远 > 0，不能当增量。
-export function verifyStarted(handle, echoHead, terminalName, io) {
+export function verifyStarted(handle, echoHead, terminalName, io, baselineCursor) {
   const ops = io || defaultFlowIo();
-  const first = ops.read(handle, null);
-  if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
-  const prev = first.terminal.nextCursor;
+  let prev = baselineCursor;
+  if (prev == null) {
+    const first = ops.read(handle, null);
+    if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
+    prev = first.terminal.nextCursor;
+  }
   ops.sleep(VERIFY_WAIT_MS);
   const second = ops.read(handle, prev);
   if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
@@ -410,21 +413,26 @@ export function verifyStarted(handle, echoHead, terminalName, io) {
   const all = ops.read(handle, null);
   const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
   const echoed = tailText.includes(echoHead);
+  const afterEnterBase = second.ok && second.terminal.nextCursor != null ? second.terminal.nextCursor : prev;
   ops.send(['terminal', 'send', '--terminal', handle, '--enter', '--json']);
   ops.sleep(VERIFY_WAIT_MS);
-  const third = ops.read(handle, prev);
+  const third = ops.read(handle, afterEnterBase);
   const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
   if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
   return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
 }
 
 // 注入 + 验开工（两步走路径：send 任务文本）
+// #580 ④ / 审官红 1：send 前先记 cursor，再 send，再从该 cursor 验增量。
 export function injectAndVerify(handle, text, terminalName, io) {
   const ops = io || defaultFlowIo();
   const echoHead = String(text || '').replace(/\r?\n/g, ' ').slice(0, 24).trim();
+  const baseline = ops.read(handle, null);
+  if (!baseline.ok) return { ok: false, error: `读终端失败：${baseline.error}` };
+  const prev = baseline.terminal.nextCursor;
   const sendR = ops.send(['terminal', 'send', '--terminal', handle, '--text', text, '--json']);
   if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  return verifyStarted(handle, echoHead, terminalName, ops);
+  return verifyStarted(handle, echoHead, terminalName, ops, prev);
 }
 
 // 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
@@ -442,6 +450,15 @@ export function pendingFlowItems(prs) {
     if (isFlowWork(action)) items.push({ number: pr.number, kind: action.kind, state: derived.state });
   }
   return items;
+}
+
+// 待流转评论源：完工信号在署名 issue，不在 PR 会话（#575 ⑥ / #580 审官红 2）。
+// 给了 issueComments 就用它（快照可造 PR号≠issue号）；没给才退回 comments。
+export function commentsForPendingScan(pr) {
+  if (pr && Object.prototype.hasOwnProperty.call(pr, 'issueComments')) {
+    return Array.isArray(pr.issueComments) ? pr.issueComments : [];
+  }
+  return Array.isArray(pr?.comments) ? pr.comments : [];
 }
 
 // ══════════════════════════════════════════════════════════════════════
