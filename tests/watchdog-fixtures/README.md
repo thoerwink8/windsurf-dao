@@ -83,6 +83,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `all-idle/` | 同 no-targets，但 `#453` 改为 `in-progress` | 退出码 1，`all-idle:`（有在途卡却零活工位） |
 | `pasted-content/` | **#575**：working 工位屏面写成 `[Pasted Content 5711 chars]`（#574 审官实证形态） | 单轮不报；两轮同屏退出码 1，`pasted-content:` + 补回车动作 |
 | `pasted-idle/` | **#575**：in-progress 卡、agent=done、屏面 Pasted Content（#574 当晚：审官折在输入框、不在 working 集合里） | 单轮 `all-idle:`；两轮再报 `pasted-content:` |
+| `stale-completion/` | **#586**：agent=done 的工人卡 + completion-evidence（head 比最后完工 comment 新） | 退出码 1，`stale-completion:` |
+| `stale-completion-fresh/` | 同结构但完工 comment 不早于 head | 不报 `stale-completion` |
 
 ## 原始录制底稿（根目录）
 

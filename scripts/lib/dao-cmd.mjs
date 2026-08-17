@@ -402,9 +402,10 @@ export function applyWorktreeRmPlan(plan, { rm } = {}) {
   return { ok: true, removed };
 }
 
-export function argsTaskCreate({ spec } = {}) {
+export function argsTaskCreate({ spec, run } = {}) {
   const a = ['orchestration', 'task-create'];
   if (spec != null) a.push('--spec', spec);
+  if (run) a.push('--run', run);
   a.push('--json');
   return a;
 }
@@ -439,11 +440,13 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
   }
   const live = hits.filter(w => w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded');
-  const pick = live[0] || hits[0];
+  const ready = live.filter(w => w.workerState === 'ready' || w.workerState === 'working'
+    || w.dispatchStatus === 'dispatched' || w.dispatchStatus === 'running');
+  const pick = ready[0] || live[0] || hits[0];
   if (!pick?.dispatchId) {
     return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
   }
-  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, scanned: workers.length };
+  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, runId: pick.runId || null, scanned: workers.length };
 }
 
 export function argsWorkerShow({ dispatch } = {}) {
@@ -506,6 +509,10 @@ export function argsGateList({ task, status, run } = {}) {
   if (run) a.push('--run', run);
   a.push('--json');
   return a;
+}
+
+export function argsTerminalList() {
+  return ['terminal', 'list', '--json'];
 }
 
 export function argsTerminalClose({ terminal, tab } = {}) {
@@ -1779,7 +1786,25 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   return { ...picked, source: 'label', refs };
 }
 
-/** 阶段一骨架：发完工 comment 的计划 + 自读选型。不建审官卡。 */
+/** 读 PR 上的 review 条数。没查成和「0 条」分开。 */
+export function listPrReviews({ pr, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!n) return { ok: false, unscanned: true, error: 'listPrReviews 没给 PR 号' };
+  if (typeof runGh !== 'function') {
+    return { ok: false, unscanned: true, error: 'listPrReviews 没拿到 gh 执行器（没查成，不许猜）' };
+  }
+  const view = runGh(['pr', 'view', n, '--json', 'reviews']);
+  if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 失败：${view.error}` };
+  let parsed;
+  try { parsed = JSON.parse(view.out); }
+  catch { return { ok: false, unscanned: true, error: `gh pr view #${n} reviews 返回非 JSON` }; }
+  if (!parsed || !Array.isArray(parsed.reviews)) {
+    return { ok: false, unscanned: true, error: `gh pr view #${n} 缺 reviews 数组（没查成，不许当 0 条）` };
+  }
+  return { ok: true, reviews: parsed.reviews, count: parsed.reviews.length };
+}
+
+/** 完工计划：按已有 review 条数分首审 / 返工。首审才建审官。 */
 export function planWorkerDone({ pr, body, runGh } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'worker-done 要 --pr' };
@@ -1789,31 +1814,203 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
   if (!issue) {
     return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，完工 comment 没处可发` };
   }
+  const listed = listPrReviews({ pr: n, runGh });
+  if (!listed.ok) return listed;
+  const round = listed.count > 0 ? 'rework' : 'first';
+  const prefix = round === 'rework' ? '返工完成' : '完工';
   const custom = body == null ? '' : String(body);
-  if (custom && !/^完工/.test(custom)) {
-    return { ok: false, unscanned: false, error: 'worker-done --body 首行必须以「完工」开头（流转器只认这个）' };
+  if (custom && !new RegExp(`^${prefix}`).test(custom)) {
+    return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
-  const comment = custom || [
-    `完工：PR #${n} 阶段一骨架（未起审官）`,
-    '',
-    `自读选型：${resolved.modelId}`,
-    '阶段一不接线：调 reviewer-create --dry-run，不建树。',
-  ].join('\n');
+  const shouldCreate = round === 'first';
+  const comment = custom || (round === 'rework'
+    ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
+    : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
   return {
     ok: true,
-    wired: false,
+    wired: true,
+    round,
+    shouldCreate,
+    reviewCount: listed.count,
     pr: n,
     issue,
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
     comment,
-    reviewerCreate: {
-      verb: 'reviewer-create',
-      pr: n,
-      args: ['--pr', n, '--dry-run'],
-      invoked: false,
-      reason: '阶段一骨架：要调 reviewer-create --dry-run（不建树），由 cmdWorkerDone 执行',
-    },
+    reviewerCreate: shouldCreate
+      ? {
+        verb: 'reviewer-create',
+        pr: n,
+        args: ['--pr', n],
+        invoked: false,
+        reason: '首审：真调 reviewer-create（自读选型、建树、起终端、注入）',
+      }
+      : {
+        verb: 'reviewer-create',
+        pr: n,
+        invoked: false,
+        skipped: true,
+        reason: '已有 review，返工轮不起第二个审官',
+      },
+  };
+}
+
+/**
+ * 士兵→审官 完工/返工投递决策。无 IO：投递走传入的 deliver。
+ * 首审、返工都必须送到审官 dispatch；缺 id 或投失败一律 ok:false（fail-visible）。
+ */
+export function completeWorkerDoneNotify({
+  round,
+  pr,
+  comment,
+  reviewerDispatchId,
+  shouldCreate,
+  deliver,
+  orca,
+} = {}) {
+  const prefix = round === 'rework' ? '返工完成' : '完工';
+  const id = reviewerDispatchId == null ? '' : String(reviewerDispatchId).trim();
+  if (!id) {
+    if (round === 'rework') {
+      return { ok: false, notified: null, error: '返工找不到现有审官 dispatch，返工完成消息没处可投（没查成）' };
+    }
+    if (shouldCreate) {
+      return { ok: false, notified: null, error: 'reviewer-create 没返回 reviewerDispatchId，完工消息没处可投（没查成）' };
+    }
+    return { ok: false, notified: null, error: `${prefix}找不到审官 dispatch，完工消息没处可投（没查成）` };
+  }
+  if (typeof deliver !== 'function') {
+    return { ok: false, notified: null, error: 'completeWorkerDoneNotify 没拿到投递器（没查成）' };
+  }
+  const notified = deliver({
+    to: `dispatch:${id}`,
+    subject: `${prefix}：PR #${pr}`,
+    body: comment,
+    hop: '士兵→审官',
+    orca,
+  });
+  if (!notified || !notified.ok) {
+    return {
+      ok: false,
+      notified: notified || null,
+      error: `${prefix}通知没送到审官：${notified && notified.error ? notified.error : '投递器没返回'}`,
+    };
+  }
+  return { ok: true, notified: { ...notified, dispatchId: id } };
+}
+
+/** 返工/首审投递目标：新建或复用返回的 id，否则用已有审官树上的活 dispatch。 */
+export function pickWorkerDoneDispatchId({ create, reused, existingDispatchId } = {}) {
+  const fromCreate = create && create.reviewerDispatchId ? String(create.reviewerDispatchId).trim() : '';
+  if (fromCreate) return { ok: true, reviewerDispatchId: fromCreate, source: 'create' };
+  const fromReuse = reused && reused.reviewerDispatchId ? String(reused.reviewerDispatchId).trim() : '';
+  if (fromReuse) return { ok: true, reviewerDispatchId: fromReuse, source: 'reuse' };
+  const existing = existingDispatchId == null ? '' : String(existingDispatchId).trim();
+  if (existing) return { ok: true, reviewerDispatchId: existing, source: 'existing' };
+  return { ok: false, reviewerDispatchId: null, source: null, error: '没有审官 dispatch 可投' };
+}
+
+function worktreeIdMatches(workerWtId, sel) {
+  const id = String(workerWtId || '');
+  const want = String(sel || '');
+  if (!id || !want) return false;
+  return id === want || id.endsWith(`::${want}`) || id.endsWith(want);
+}
+
+function reviewerHandleFromWorker(w) {
+  return w?.agentTerminalHandle || w?.resource?.terminalHandle || null;
+}
+
+function terminalIsLive(handle, terminals) {
+  if (!handle) return false;
+  if (!Array.isArray(terminals)) return false;
+  const t = terminals.find(x => x && x.handle === handle);
+  if (!t) return false;
+  if (t.connected === false || t.writable === false || t.orphaned === true) return false;
+  const st = String(t.status || t.state || '').toLowerCase();
+  if (!st) return true;
+  return !/^(exited|closed|stopped|stale|dead)$/.test(st);
+}
+
+function isActiveDispatch(w) {
+  return w && w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded';
+}
+
+function pickHandleFromHits(hits, terminals) {
+  const prefer = hits.filter(isActiveDispatch);
+  const ordered = prefer.concat(hits.filter(w => !prefer.includes(w)));
+  const seen = [];
+  for (const w of ordered) {
+    const h = reviewerHandleFromWorker(w);
+    if (!h || seen.includes(h)) continue;
+    seen.push(h);
+    if (terminalIsLive(h, terminals)) return { handle: h, live: true };
+  }
+  return { handle: seen[0] || null, live: false };
+}
+
+/**
+ * 找可复用审官：工人卡子卡（parentWorktreeId）∩ dispatch 记账。
+ * 不看卡名、不看 PR 号。终端还在 → reuse；没有子卡或终端已关 → create 并写明原因。
+ */
+export function resolveReviewerReuse({
+  parentId,
+  worktrees,
+  workers,
+  terminals,
+} = {}) {
+  if (!parentId) return { ok: false, unscanned: true, error: 'resolveReviewerReuse 没给工人卡 id' };
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktree list 没查成（没查成，不许猜有没有审官卡）' };
+  }
+  if (!Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 没查成（没查成，不许猜 dispatch 记账）' };
+  }
+  if (!Array.isArray(terminals)) {
+    return { ok: false, unscanned: true, error: 'terminal list 没查成（没查成，不许猜终端死活）' };
+  }
+
+  const children = worktrees.filter(w => (w.parentWorktreeId || null) === parentId);
+  const candidates = [];
+  for (const child of children) {
+    const cid = child.id || child.worktreeId;
+    if (!cid) continue;
+    const hits = workers.filter(w => worktreeIdMatches(w?.resource?.worktreeId, cid));
+    if (hits.length === 0) continue;
+    const picked = pickHandleFromHits(hits, terminals);
+    candidates.push({
+      worktreeId: cid,
+      handle: picked.handle,
+      live: picked.live,
+      createdAt: Number(child.createdAt) || 0,
+    });
+  }
+
+  if (candidates.length === 0) {
+    return {
+      ok: true,
+      action: 'create',
+      reason: '工人卡下没有带 dispatch 记账的审官子卡（parentWorktreeId + 记账，不按卡名/PR 号）',
+    };
+  }
+
+  const live = candidates.filter(c => c.live && c.handle).sort((a, b) => b.createdAt - a.createdAt);
+  if (live.length) {
+    const pick = live[0];
+    return {
+      ok: true,
+      action: 'reuse',
+      worktreeId: pick.worktreeId,
+      handle: pick.handle,
+      reason: '复用工人卡下已有审官终端（parentWorktreeId + dispatch 记账，不按 PR 号）',
+    };
+  }
+
+  return {
+    ok: true,
+    action: 'create',
+    reason: '老审官终端已关闭/不存在，允许新建',
+    closedWorktrees: candidates.map(c => c.worktreeId),
   };
 }
 
@@ -2239,16 +2436,19 @@ export const FLAGS_BY_VERB = {
     '--issue', '--comment', '--json', '--help', '-h',
   ]),
   'worktree-rm': new Set(['--worktree', '--force', '--json', '--help', '-h']),
-  'task-create': new Set(['--spec', '--json', '--help', '-h']),
+  'task-create': new Set(['--spec', '--run', '--json', '--help', '-h']),
   'worker-start': new Set([
     '--task', '--worktree', '--terminal', '--retry-of', '--issue', '--merge-policy', '--merge-reason',
     '--model', '--role', '--reviewer', '--confirm', '--now', '--json', '--help', '-h',
   ]),
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
-  'worker-done': new Set(['--pr', '--body', '--dry-run', '--json', '--help', '-h']),
+  'worker-done': new Set([
+    '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--dry-run', '--json', '--help', '-h',
+  ]),
   'reviewer-create': new Set([
-    '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--dry-run', '--json', '--help', '-h',
+    '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
@@ -2315,11 +2515,12 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--dry-run]
-                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；--dry-run 只打印选型不建树
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
+                  # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
+                  # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
-  worker-done --pr <N> [--body <文>] [--dry-run]
-                  # 阶段一骨架：发完工 comment（issue+PR）+ 调 reviewer-create --dry-run；不建审官卡
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
+                  # 原子完工：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端（必须 --worktree）；终端已关才允许新建并写原因；两条路径都 notify（投失败即停）
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）

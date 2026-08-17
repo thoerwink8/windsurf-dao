@@ -21,7 +21,7 @@ const args = process.argv.slice(2);
 //   issue 569 → reviewer/gpt-5.6-sol + reviewer/claude-opus（有多个）；
 //   issue 999 → 模拟 gh 失败（CI 无 GH_TOKEN 场景：必须报「没查成」拒派）；
 //   其余号 → 无 label。
-//   PR 42 正文 Closes #565；PR 43 Closes #568；PR 44 Closes #569。
+//   PR 42 正文 Closes #565；PR 43 Closes #568；PR 44 Closes #569；PR 46 Closes #565 且已有 review。
 // 只实现测试用到的调用面；其它 gh 调用一律报错退出（fail-loud，不许静默返回假数据）。
 const ISSUE_LABELS = {
   '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
@@ -72,18 +72,20 @@ if (args[0] === 'pr' && args[1] === 'view') {
     process.stdout.write(JSON.stringify({
       title: '修注入轮询回归',
       body: 'Closes #565\n验收：测试 306 过',
+      reviews: [],
       ...PR_HEAD,
     }));
     process.exit(0);
   }
   if (n === '41') {
-    process.stdout.write(JSON.stringify({ title: '无署名', body: '改动：修复登录', ...PR_HEAD }));
+    process.stdout.write(JSON.stringify({ title: '无署名', body: '改动：修复登录', reviews: [], ...PR_HEAD }));
     process.exit(0);
   }
   if (n === '43') {
     process.stdout.write(JSON.stringify({
       title: '无审官 label',
       body: 'Closes #568',
+      reviews: [],
       ...PR_HEAD,
     }));
     process.exit(0);
@@ -92,6 +94,16 @@ if (args[0] === 'pr' && args[1] === 'view') {
     process.stdout.write(JSON.stringify({
       title: '两个审官 label',
       body: 'Closes #569',
+      reviews: [],
+      ...PR_HEAD,
+    }));
+    process.exit(0);
+  }
+  if (n === '46') {
+    process.stdout.write(JSON.stringify({
+      title: '返工轮',
+      body: 'Closes #565',
+      reviews: [{ id: 1, body: '判定：红 1 项' }],
       ...PR_HEAD,
     }));
     process.exit(0);
