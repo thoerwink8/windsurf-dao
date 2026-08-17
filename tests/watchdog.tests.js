@@ -348,37 +348,55 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   check("心跳缺失样本单独显形（HEARTBEAT_MISSING，不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
 }
 
-console.log("\n=== ⑳k #575 ① 故意 kill 心跳：阈值 5 分钟，过阈必须报 flow-stalled ===");
+console.log("\n=== ⑳k #575 ① 真实故障注入：跑 flow 写心跳 → 停写（kill）→ 5 分钟报 flow-stalled ===");
 {
-  // 故障注入：先写一拍新鲜心跳（= flow 还在跑），再停写（= kill flow），
-  // 用 --now 把「现在」拨过 heartbeatStaleMs（5 分钟）。不真睡 5 分钟。
+  // 硬证据：心跳必须是 flow.mjs 自己写的，不是测试手搓 JSON。
+  // kill = 只跑一轮然后不再跑（停写）。阈值 = heartbeatStaleMs = 5 分钟。
+  // 不真睡 5 分钟：用 --now 把「现在」拨过阈值。报警必须是 [flow] flow-stalled / 5 分钟未更新。
+  const FLOW = path.join(REPO, "scripts", "flow.mjs");
+  const FLOW_FIXTURE = path.join(REPO, "tests", "flow-fixtures", "no-open");
   const STALE_MS = 5 * 60 * 1000;
-  const tWrite = 1_700_000_000_000;
+  const tmpFlow = fs.mkdtempSync(path.join(os.tmpdir(), "wd-kill-flow-src-"));
+  const stateFile = path.join(tmpFlow, "state.json");
+  const flowRun = spawnSync(process.execPath, [
+    FLOW, "--snapshot-dir", FLOW_FIXTURE, "--state-file", stateFile, "--dry-run",
+  ], { encoding: "utf8", cwd: REPO });
+  const hbFile = path.join(tmpFlow, "heartbeat.json");
+  let hb = null;
+  try { hb = JSON.parse(fs.readFileSync(hbFile, "utf8")); } catch { hb = null; }
+  const tWrite = hb && Date.parse(hb.ts);
+  check("kill 前：flow.mjs 真写下 heartbeat.json（含可解析 ts）",
+    fs.existsSync(hbFile) && Number.isFinite(tWrite),
+    `status=${flowRun.status} hb=${JSON.stringify(hb)}`);
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wd-kill-flow-"));
   const src = path.join(FIXTURES, "heartbeat-fresh", "round-1");
   for (const f of fs.readdirSync(src)) {
     const s = path.join(src, f);
     if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(tmp, f));
   }
-  fs.writeFileSync(path.join(tmp, "heartbeat.json"), JSON.stringify({
-    ts: new Date(tWrite).toISOString(),
-    round: 1,
-    lastWakeSource: "kill-inject",
-    pendingCount: 0,
-    prs: [],
-  }), "utf8");
+  if (fs.existsSync(hbFile)) fs.copyFileSync(hbFile, path.join(tmp, "heartbeat.json"));
 
-  const alive = runWatchdog(tmp, ["--once", "--now", String(tWrite + 1000)]);
-  check("kill 前（心跳写下 1s）：不报 flow-stalled", !/flow-stalled:/.test(alive.out), alive.out.trim());
+  if (!Number.isFinite(tWrite)) {
+    check("kill 后 1s：不报 flow-stalled", false, "flow 没写下可解析心跳，后续注入无法跑");
+    check("刚好 5 分钟还不报", false, "跳过");
+    check("kill 后超过 5 分钟：退出码 1", false, "跳过");
+    check("kill 后超过 5 分钟：输出 [flow] flow-stalled", false, "跳过");
+    check("报警写得出停了几分钟（5 分钟）", false, "跳过");
+  } else {
+    const alive = runWatchdog(tmp, ["--once", "--now", String(tWrite + 1000)]);
+    check("kill 后 1s（心跳仍新鲜）：不报 flow-stalled", !/flow-stalled:/.test(alive.out), alive.out.trim());
 
-  const atThreshold = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS)]);
-  check("刚好 5 分钟（now-ts == 阈值）：还不报（判据是 > 不是 >=）", !/flow-stalled:/.test(atThreshold.out), atThreshold.out.trim());
+    const atThreshold = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS)]);
+    check("刚好 5 分钟（now-ts == 阈值）：还不报（判据是 > 不是 >=）", !/flow-stalled:/.test(atThreshold.out), atThreshold.out.trim());
 
-  const killed = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS + 1)]);
-  check("kill 后超过 5 分钟：退出码 1", killed.status === 1, `status=${killed.status}`);
-  check("kill 后超过 5 分钟：输出 [flow] flow-stalled", /\[flow\] flow-stalled:/.test(killed.out), killed.out.trim());
-  check("报警写得出停了几分钟（5 分钟）", /flow-stalled:.*5 分钟未更新/.test(killed.out), killed.out.trim());
+    const killed = runWatchdog(tmp, ["--once", "--now", String(tWrite + STALE_MS + 1)]);
+    check("kill 后超过 5 分钟：退出码 1", killed.status === 1, `status=${killed.status}`);
+    check("kill 后超过 5 分钟：输出 [flow] flow-stalled", /\[flow\] flow-stalled:/.test(killed.out), killed.out.trim());
+    check("报警写得出停了几分钟（5 分钟）", /flow-stalled:.*5 分钟未更新/.test(killed.out), killed.out.trim());
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(tmpFlow, { recursive: true, force: true });
 }
 
 console.log("\n=== ⑳b 处置矩阵连败：同指纹连续命中超阈值 → 报帅（#471）===");
