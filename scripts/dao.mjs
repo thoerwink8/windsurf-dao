@@ -22,12 +22,13 @@ import {
   argsWorktreeCreate,
   argsWorktreeRm,
   argsWorktreePs,
-  planWorktreeRm,
   applyWorktreeRmPlan,
+  prepareWorktreeRm,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
   argsWorkerRead,
+  argsWorkerShow,
   argsOrchestrationReply,
   argsGateCreate,
   argsGateResolve,
@@ -88,15 +89,14 @@ import { applyGitIdentity } from './lib/gh.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
+  resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
 function errText(e) {
-  if (e == null) return '';
-  if (typeof e === 'string') return e;
-  if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
-  return '';
+  return orcaErrorText(e);
 }
 
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
@@ -219,6 +219,29 @@ function workerStartProof(dispatchId) {
   const r = orca(argsWorkerRead({ dispatch: dispatchId }));
   if (!r.ok) return { ok: false, unscanned: true, error: errText(r.error) };
   return verifyWorkerStarted(r.json);
+}
+
+/** 信箱台每轮 run-use 会抢走 coordinator。task-create 前当场夺回并带 --run，跟复用审官同一条重试。 */
+function taskCreateOnRun(spec, runId) {
+  let last = { ok: false, error: 'task-create 还没跑' };
+  for (let i = 0; i < 3; i++) {
+    if (runId) orca(['orchestration', 'run-use', '--id', runId, '--json']);
+    last = orca(argsTaskCreate({ spec, run: runId || undefined }));
+    if (last.ok) return last;
+    const why = errText(last.error);
+    if (!/run_required|consumer_fenced/i.test(why)) return last;
+  }
+  return last;
+}
+
+function runIdFromDispatch(dispatchId) {
+  if (!dispatchId) return null;
+  const shown = orca(argsWorkerShow({ dispatch: dispatchId }));
+  if (!shown.ok) return null;
+  return shown.json?.result?.dispatch?.run_id
+    || shown.json?.result?.dispatch?.runId
+    || shown.json?.result?.worker?.run_id
+    || null;
 }
 
 function cmdDispatch(args) {
@@ -914,8 +937,11 @@ function cmdWorktreeRm(args) {
   if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
   const wts = listed.json?.result?.worktrees;
   if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
-  const plan = planWorktreeRm(wts, args.worktree);
-  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [] });
+  const main = resolveMainWorktreeRoot({ from: ROOT });
+  const plan = prepareWorktreeRm(wts, args.worktree, {
+    mainEventsDir: main.ok ? join(main.root, 'ledger', 'events') : null,
+  });
+  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
   const applied = applyWorktreeRmPlan(plan, {
     rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
   });
@@ -1098,16 +1124,23 @@ function cmdReviewerCreate(args) {
   }
 
   let soldierDispatchId = args.soldierDispatch || null;
-  if (!soldierDispatchId && args.parentWorktree) {
+  let soldierRunId = null;
+  if (args.parentWorktree) {
     const wl = orca(argsWorkerList());
-    if (!wl.ok) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
-    const found = findDispatchForWorktree(wl.json, args.parentWorktree);
-    if (!found.ok) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
-    soldierDispatchId = found.dispatchId;
+    if (!wl.ok && !soldierDispatchId) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
+    if (wl.ok) {
+      const found = findDispatchForWorktree(wl.json, args.parentWorktree);
+      if (!found.ok && !soldierDispatchId) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
+      if (found.ok) {
+        if (!soldierDispatchId) soldierDispatchId = found.dispatchId;
+        soldierRunId = found.runId || null;
+      }
+    }
   }
   if (!soldierDispatchId) {
     failCreated(launched, 'reviewer-create 没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）', plan);
   }
+  if (!soldierRunId) soldierRunId = runIdFromDispatch(soldierDispatchId);
 
   const policy = args.mergePolicy || 'auto';
   if (policy !== 'auto' && policy !== 'manual') failCreated(launched, `--merge-policy 只允许 auto|manual，实际 ${policy}`, plan);
@@ -1129,7 +1162,7 @@ function cmdReviewerCreate(args) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
 
-  const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+  const revTask = taskCreateOnRun(reviewerBook, soldierRunId);
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(launched, RUN_REQUIRED_HINT, plan);
     failCreated(launched, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -1326,13 +1359,16 @@ function cmdReviewerAttach(args) {
   if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
 
   let soldierDispatchId = args.soldierDispatch || null;
+  let soldierRunId = null;
   if (!soldierDispatchId && !args.spec) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) failCreated(created, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
     const found = findDispatchForWorktree(wl.json, args.worktree);
     if (!found.ok) failCreated(created, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch，或确认工人卡走过 worker-start`, { found, ...plan });
     soldierDispatchId = found.dispatchId;
+    soldierRunId = found.runId || null;
   }
+  if (!soldierRunId && soldierDispatchId) soldierRunId = runIdFromDispatch(soldierDispatchId);
 
   let reviewerBook = null;
   try {
@@ -1350,7 +1386,7 @@ function cmdReviewerAttach(args) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
 
-  const revTask = orca(argsTaskCreate({ spec: reviewerBook }));
+  const revTask = taskCreateOnRun(reviewerBook, soldierRunId);
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
     failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, plan);

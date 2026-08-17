@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -361,6 +361,20 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   check("PR#582≠issue#580：署名 issue 完工 + 红判定 → 报 flow-absent", /\[flow\] flow-absent:.*心跳从未存在/.test(tp.out), tp.out.trim());
   const ti = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-idle"), ["--once"]);
   check("PR#582≠issue#580：完工只在 PR 会话 → 不报", !/flow-absent:/.test(ti.out) && /心跳从未存在.*无待流转对象/.test(ti.out), ti.out.trim());
+}
+
+console.log("\n=== ⑳r #595 守卫版本闸（heartbeat.revision 三态）===");
+{
+  const behind = runWatchdog(path.join(FIXTURES, "heartbeat-revision-behind"), ["--once", "--now", String(NOW)]);
+  check("落后 1 个 commit：报 stale-code", /\[flow\] stale-code:.*落后 origin\/master 1 个 commit/.test(behind.out), behind.out.trim());
+  check("落后样本不含「已是最新」", !/已是最新/.test(behind.out), behind.out.trim());
+
+  const current = runWatchdog(path.join(FIXTURES, "heartbeat-revision-current"), ["--once", "--now", String(NOW)]);
+  check("已是最新：不报 stale-code", !/stale-code:/.test(current.out), current.out.trim());
+
+  const unknown = runWatchdog(path.join(FIXTURES, "heartbeat-revision-unknown"), ["--once", "--now", String(NOW)]);
+  check("fetch 失败：报查不成", /\[flow\] stale-code:.*查不成/.test(unknown.out), unknown.out.trim());
+  check("查不成不含「已是最新」", !/已是最新/.test(unknown.out), unknown.out.trim());
 }
 
 console.log("\n=== ⑳k #575 ① 真实故障注入：跑 flow 写心跳 → 停写（kill）→ 5 分钟报 flow-stalled ===");

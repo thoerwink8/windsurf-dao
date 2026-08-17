@@ -33,6 +33,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -438,10 +439,7 @@ export function quoteWin(s) {
 // ══════════════════════════════════════════════════════════════════════
 
 function errText(e) {
-  if (e == null) return '';
-  if (typeof e === 'string') return e;
-  if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
-  return '';
+  return orcaErrorText(e);
 }
 
 function runOrca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
