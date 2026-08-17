@@ -356,6 +356,11 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
   const ai = runWatchdog(path.join(FIXTURES, "heartbeat-absent-idle"), ["--once"]);
   check("无心跳 + 无待流转（已绿待帅）：不报 flow-absent/flow-stalled", !/flow-absent:/.test(ai.out) && !/flow-stalled:/.test(ai.out), ai.out.trim());
   check("无心跳 + 无待流转：心跳从未存在但不报", /心跳从未存在.*无待流转对象，不报/.test(ai.out), ai.out.trim());
+
+  const tp = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-pending"), ["--once"]);
+  check("PR#582≠issue#580：署名 issue 上有完工 → 报 flow-absent", /\[flow\] flow-absent:.*心跳从未存在/.test(tp.out), tp.out.trim());
+  const ti = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-idle"), ["--once"]);
+  check("PR#582≠issue#580：完工只在 PR 会话 → 不报", !/flow-absent:/.test(ti.out) && /心跳从未存在.*无待流转对象/.test(ti.out), ti.out.trim());
 }
 
 console.log("\n=== ⑳k #575 ① 真实故障注入：跑 flow 写心跳 → 停写（kill）→ 5 分钟报 flow-stalled ===");
