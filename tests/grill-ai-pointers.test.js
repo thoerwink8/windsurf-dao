@@ -87,6 +87,9 @@ describe('grill-ai-pointers', () => {
     g("grill-ai 引用了判例 patch-stacking-is-two-strikes",
       () => grillAi.includes(PRECEDENT),
       "判例引用被删 ⇒ 要么补回，要么删掉这条检查");
+    g("判例文件的 name 就是 patch-stacking-is-two-strikes",
+      () => /^name:\s*patch-stacking-is-two-strikes\s*$/m.test(verdict),
+      "memory 条目改名 ⇒ 修 grill-ai 的引用");
 
     // ── 不复制：五步法本体的正文不得出现在 grill-ai（两处维护必然分叉）──
     const BODY_FINGERPRINTS = [

@@ -91,7 +91,7 @@ function skip(line) { skips.push(line); }
  * 退出非 0 却没标准 not ok 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
 function extractFailLines(output) {
   const lines = String(output || '').split(/\r?\n/);
-  const fails = lines.filter(l => /^\s{0,4}not ok /.test(l));
+  const fails = lines.filter(l => /^\s*not ok /.test(l));
   if (fails.length) return fails.map(l => l.trim().replace(/^not ok \d+ - /, '').slice(0, 200));
   return null;
 }
