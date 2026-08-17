@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T14:26:50+08:00",
+  "machine": "backfill",
+  "seq": 112,
+  "job_id": "gh-pr-557",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "glm-5.3"
+  ],
+  "selected": "glm-5.3",
+  "why": "回填自 GitHub PR #557；[pi] #556 存量分流四件：ideas.md + 开单三问 + dao-check ⑭ open 单阈值；无审读",
+  "pr_number": 557,
+  "source": "github-backfill",
+  "event_id": "4a676f0015610064a0bc38175e11c51691a004f8f8d4cbe1bd5eb7e5982d3479"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T03:36:29+08:00",
+  "machine": "backfill",
+  "seq": 80,
+  "job_id": "gh-pr-519",
+  "task_class": "回填",
+  "work_type": "收口",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #519；[cc] feat(路由): ds 主通道换 opencode Go，新增 glm-5.3；判定行红 0 项",
+  "pr_number": 519,
+  "source": "github-backfill",
+  "event_id": "c243dd6e24dc139fbe972ef8d48efb449a9fa89b54ef926406fb29ab0630c686"
+}

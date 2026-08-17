@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-16T15:26:36+08:00",
+  "machine": "backfill",
+  "seq": 115,
+  "job_id": "gh-pr-557",
+  "model": "glm-5.3",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#557，无审读）",
+  "evidence": [
+    "github:pr-557"
+  ],
+  "pr_number": 557,
+  "source": "github-backfill",
+  "event_id": "230852623796e312952372f796103ddfb5036714c642c2aff0227cb00879bc20"
+}

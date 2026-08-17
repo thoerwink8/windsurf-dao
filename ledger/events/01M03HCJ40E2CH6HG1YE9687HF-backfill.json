@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-16T04:21:36+08:00",
+  "machine": "backfill",
+  "seq": 84,
+  "job_id": "gh-pr-528",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #528；[pi] Go 限流自动切直连 ds 继续干活（扩展 + 端到端验收，#520）；无审读",
+  "pr_number": 528,
+  "source": "github-backfill",
+  "event_id": "aa95ed92f3c5366dc1ded883c2f6cf7a420621030252d229990fc52c70d8388f"
+}

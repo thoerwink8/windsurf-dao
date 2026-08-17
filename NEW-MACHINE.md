@@ -374,7 +374,7 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 
 同一份随仓 `.claude/settings.json` 还挂 `UserPromptSubmit` → `scripts/lib/board-hook.mjs`（#564）：每轮往上下文注入一行 `[盘]` 摘要（在途/待消歧/待收口，orca 本地状态 + 60s TTL 缓存，不打 GitHub），并顺手跑 `inbox-station.mjs ensure` 自愈信箱台（只报不拦，永远 exit 0）。随仓生效，无需装机动作。
 
-同一份随仓 `.claude/settings.json` 还挂 `Stop` → `scripts/lib/deferred-hook.mjs`（#583）：Stop 从 transcript 尾部 assistant 消息搬 `[[挂账:]]` 进仓库根 `DEFERRED.md`（Claude Code 的 Stop stdin 不含回复正文，hook 用 `session_id` 自己读 `~/.claude/projects/<slug>/<session>.jsonl`）。写法提醒和 `[挂账·增量]` 由已有的 `board-hook` UserPromptSubmit 顺带注入（不另挂第二条，避免互相拖超时）。随仓生效，无需装机动作。`node scripts/dao-check.mjs` 第 ⑰ 项验装载 + 差集样本 A 红 / B 绿。
+同一份随仓 `.claude/settings.json` 还挂 `Stop` → `scripts/lib/deferred-hook.mjs`（#583）：Stop 从 transcript 尾部 assistant 消息搬 `[[挂账:]]` 进仓库根 `DEFERRED.md`（Claude Code 的 Stop stdin 不含回复正文，hook 用 `session_id` 自己读 `~/.claude/projects/<slug>/<session>.jsonl`）。写法提醒和 `[挂账·增量]` 由已有的 `board-hook` UserPromptSubmit 顺带注入（不另挂第二条，避免互相拖超时）。随仓生效，无需装机动作。`node scripts/dao-check.mjs` 第 ⑱ 项验装载 + 差集样本 A 红 / B 绿。
 ## 自检
 
 做完跑一遍：

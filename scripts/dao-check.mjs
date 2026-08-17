@@ -41,8 +41,10 @@
 // ⑮ 可立即起但没起（#577）：已消歧且无在途 PR/卡 → 打可见行，不报红；没查成 ≠ 0
 // ⑯ 完工信号契约（#575 ⑥）：flow 读的「首行完工」与 worker-brief / dispatch skill 教的必须是同一句
 //   （检查器自己持有标记文本，不 import flow/judgment 的正则）
-// ⑰ 挂账差集（#583）：transcript 里的 [[挂账:]] \ DEFERRED.md；形状抄 #581（外部\本地，禁 Date.now）
-//   样本 A 有标记无账本必须红，样本 B 已入账必须绿；Stop 挂搬运，写法提醒走已有 board-hook
+// ⑰ 账本断流差集（#581）：GitHub 已合并带标 PR ∖ job.closed.pr_number；禁 Date.now；
+//    两个反例都要过（有差集必红、无差集必绿）；基准 PR 号之后才对照
+// ⑱ 挂账差集（#583）：transcript 里的 [[挂账:]] \ DEFERRED.md；形状抄 #581（外部\本地，禁 Date.now）
+//    样本 A 有标记无账本必须红，样本 B 已入账必须绿；Stop 挂搬运，写法提醒走已有 board-hook
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -54,6 +56,9 @@ import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
+import {
+  inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
+} from './lib/ledger-gap-check.mjs';
 import { checkDeferred } from './lib/deferred-gap-check.mjs';
 
 const require = createRequire(import.meta.url);
@@ -716,6 +721,99 @@ function checkReadyQueue(board) {
   else notes.push(r.line);
 }
 
+// ── ⑰ 账本断流差集（#581）──────────────────────────────────────────
+// 判据是集合差不是时钟。样本必须两种都有：有差集必红、无差集必绿。
+// 只验一种会把「永远红」或「永远绿」当生效。
+
+function checkLedgerGapSamples() {
+  const dir = join(ROOT, 'tests', 'fixtures', 'ledger-gap');
+  if (!existsSync(dir)) {
+    fail('账本断流样本目录不在', '本次没查成：恢复 tests/fixtures/ledger-gap/', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+  if (files.length === 0) {
+    fail('账本断流一套样本都没扫到', '目录空了 ⇒ 本次等于没查', dir);
+    return;
+  }
+  const kinds = { gap: 0, ok: 0 };
+  const problems = [];
+  for (const f of files) {
+    let doc;
+    try { doc = JSON.parse(readFileSync(join(dir, f), 'utf8')); }
+    catch { problems.push(`${f} 不是 JSON`); continue; }
+    if (!doc || !Array.isArray(doc.githubPrs) || !Array.isArray(doc.events) || !doc.expect) {
+      problems.push(`${f} 缺 githubPrs/events/expect`);
+      continue;
+    }
+    if (doc.expect !== 'gap' && doc.expect !== 'ok') {
+      problems.push(`${f} expect 只能是 gap|ok`);
+      continue;
+    }
+    const r = inspectLedgerGap({
+      githubPrs: doc.githubPrs,
+      closedNumbers: new Set(
+        (doc.events || [])
+          .filter(e => e && e.type === 'job.closed' && Number.isInteger(e.pr_number))
+          .map(e => e.pr_number),
+      ),
+      baselinePr: doc.baselinePr ?? 0,
+      newestBuffer: doc.newestBuffer ?? 0,
+    });
+    kinds[doc.expect] += 1;
+    if (doc.expect === 'gap' && r.kind !== 'gap') {
+      problems.push(`${f} 自称有差集但判成 ${r.kind}（样本没判别力）`);
+    }
+    if (doc.expect === 'ok' && r.kind !== 'ok') {
+      problems.push(`${f} 自称无差集但判成 ${r.kind}：${r.line}`);
+    }
+  }
+  if (kinds.gap === 0 || kinds.ok === 0) {
+    fail('账本断流样本种类不够', '至少各要一份有差集（expect:gap）和一份无差集（expect:ok），缺一种 = 没查成', `gap=${kinds.gap} ok=${kinds.ok}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`账本断流样本对不上 ${problems.length} 处`, '样本的 expect 必须和独立差集核对一致', problems.join(' '));
+    return;
+  }
+  green(`账本断流样本 ${files.length} 份（有差集 ${kinds.gap} / 无差集 ${kinds.ok}）`);
+}
+
+function checkLedgerGapLive() {
+  const prs = runGhJson([
+    'pr', 'list', '--state', 'merged', '--limit', '1000',
+    '--json', 'number,labels',
+  ]);
+  if (prs.unscanned) {
+    skip(`账本断流：gh pr list 没查成（${prs.error}），本次没查成，不是绿`);
+    return;
+  }
+  if (prs.array.some(p => !p || typeof p.number !== 'number')) {
+    fail('账本断流没查成', 'gh pr list 输出形态不对（要 number 对象数组）', `拿到 ${typeof prs.array[0]}`);
+    return;
+  }
+  const closed = readClosedPrNumbers(join(ROOT, 'ledger/events'));
+  if (closed.unscanned) {
+    fail('账本断流没查成', 'ledger/events 读失败，不是差集空', closed.error);
+    return;
+  }
+  const r = inspectLedgerGap({
+    githubPrs: prs.array,
+    closedNumbers: closed.numbers,
+    baselinePr: LEDGER_GAP_BASELINE_PR,
+    newestBuffer: LEDGER_GAP_NEWEST_BUFFER,
+  });
+  if (r.kind === 'empty-github') {
+    skip(r.line);
+    return;
+  }
+  if (r.kind === 'gap') {
+    fail(r.line, '先跑 dianjiangtai-backfill 补存量，或查 flow/dao 为何没写 job.closed', `缺 ${r.missing.map(n => `#${n}`).join(' ')}`);
+    return;
+  }
+  green(r.line);
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -732,6 +830,8 @@ const openBoard = loadOpenBoard();
 checkOpenIssueCount(openBoard);
 checkReadyQueue(openBoard);
 checkCompletionSignalAlive();
+checkLedgerGapSamples();
+checkLedgerGapLive();
 checkDeferredAlive();
 
 function checkCompletionSignalAlive() {
