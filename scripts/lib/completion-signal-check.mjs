@@ -18,9 +18,9 @@ const FILES = {
 const FLOW_MARK = '完工信号：PR comment 首行命中「完工」';
 const JUDGMENT_MARK = '/^完工/';
 const BRIEF_HEAD = '首行以「完工」开头';
-const BRIEF_CMD = 'gh-as.mjs worker -- pr comment';
+const BRIEF_CMD = 'gh-as.mjs worker -- issue comment';
 const BRIEF_EXAMPLE = '完工：PR #';
-const DISPATCH_MARK = 'PR comment 首行「完工」是流转器';
+const DISPATCH_MARK = '交棒发到 **issue comment**';
 const DISPATCH_LINE = 'flow.mjs:183';
 
 function readRel(root, rel, override) {
@@ -81,5 +81,5 @@ export function checkCompletionSignal({ root, files } = {}) {
       ],
     };
   }
-  return { green: '完工信号契约一致（flow 首行「完工」= worker-brief 教的同一句）' };
+  return { green: '完工信号契约：worker-brief 教 issue comment 首行「完工」；flow.mjs:183 仍读 PR（改读 issue 未落地）' };
 }

@@ -15,12 +15,12 @@ description: 被派工人的开工便签：收到任务书后先读。开工五�
 
 ## 完工（两条都要发，缺一不可）
 
-编排层 `worker_done` **不能**触发流转器。`scripts/flow.mjs` 认的是 PR comment **首行以「完工」开头**（或「返工完成 / 返工处置」）。只发 worker_done、不发这条，自动起审官永远不会动。
+编排层 `worker_done` **不能**触发流转器。交棒发到 **issue** 评论（issue 一直在，不依赖 push / PR；#575 ⑥ 订正）。首行以「完工」开头（或「阻塞：」「返工完成：」）。
 
 用工人身份发，多行必须走 `--body-file`：
 
 ```bash
-node scripts/gh-as.mjs worker -- pr comment <PR号> --body-file <文件>
+node scripts/gh-as.mjs worker -- issue comment <issue号> --body-file <文件>
 ```
 
 文件内容例子（首行必须是「完工」两个字打头，后面随便写）：
