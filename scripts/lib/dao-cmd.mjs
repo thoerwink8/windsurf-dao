@@ -1567,7 +1567,7 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     `完工：PR #${n} 阶段一骨架（未起审官）`,
     '',
     `自读选型：${resolved.modelId}`,
-    '阶段一不接线：未调用 reviewer-create 建树。',
+    '阶段一不接线：调 reviewer-create --dry-run，不建树。',
   ].join('\n');
   return {
     ok: true,
@@ -1580,8 +1580,9 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     reviewerCreate: {
       verb: 'reviewer-create',
       pr: n,
+      args: ['--pr', n, '--dry-run'],
       invoked: false,
-      reason: '阶段一骨架不接线：dispatch 仍建审官卡，此处只发完工 comment + 记下自读选型',
+      reason: '阶段一骨架：要调 reviewer-create --dry-run（不建树），由 cmdWorkerDone 执行',
     },
   };
 }
@@ -1594,6 +1595,16 @@ export function postIssueComment({ issue, body, runGh } = {}) {
   const r = runGh(['issue', 'comment', n, '--body', String(body)]);
   if (!r.ok) return { ok: false, error: `issue #${n} 发评论失败：${r.error}` };
   return { ok: true, issue: n };
+}
+
+export function postPrComment({ pr, body, runGh } = {}) {
+  const n = String(pr ?? '').trim();
+  if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postPrComment 没给合法 PR 号' };
+  if (!String(body || '').trim()) return { ok: false, error: 'postPrComment 没给正文' };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'postPrComment 没拿到 gh 执行器' };
+  const r = runGh(['pr', 'comment', n, '--body', String(body)]);
+  if (!r.ok) return { ok: false, error: `PR #${n} 发评论失败：${r.error}` };
+  return { ok: true, pr: n };
 }
 
 /** 仓内现有 label 名。没查成返回 null（不许当「没有」去瞎建）。 */
@@ -2068,7 +2079,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文>] [--dry-run]
-                  # 阶段一骨架：发完工 comment + 自读选型；不建审官卡（#586 不接线）
+                  # 阶段一骨架：发完工 comment（issue+PR）+ 调 reviewer-create --dry-run；不建审官卡
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）

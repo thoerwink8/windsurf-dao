@@ -103,6 +103,10 @@ if (args[0] === 'pr' && args[1] === 'edit') {
   process.stdout.write(JSON.stringify({ number: Number(args[2]) }));
   process.exit(0);
 }
+if (args[0] === 'pr' && args[1] === 'comment') {
+  process.stdout.write(JSON.stringify({ id: 1, pr: Number(args[2]) }));
+  process.exit(0);
+}
 if (args[0] === 'api' && /\/pulls\/\d+\/files$/.test(String(args[1] || ''))) {
   process.stdout.write(JSON.stringify([{ filename: 'scripts/dao.mjs', status: 'modified' }]));
   process.exit(0);

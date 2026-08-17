@@ -63,6 +63,7 @@ import {
   resolveReviewerFromPr,
   planWorkerDone,
   postIssueComment,
+  postPrComment,
   verifyInjection,
   verifyInjectionPolling,
   verifyWorkerStarted,
@@ -562,15 +563,58 @@ function cmdPrSyncLabels(args) {
   emit({ ok: true, ...r });
 }
 
+function invokeReviewerCreateDryRun(pr) {
+  // 骨架「调 reviewer-create」：真跑这条命令的 --dry-run，不建树。
+  const r = spawnSync(process.execPath, [process.argv[1], 'reviewer-create', '--pr', String(pr), '--dry-run'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    env: process.env,
+    windowsHide: true,
+    timeout: 60000,
+  });
+  let json = null;
+  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { json = null; }
+  if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+    return {
+      ok: false,
+      invoked: true,
+      dryRun: true,
+      error: (json && json.error) || String(r.stderr || '').trim() || `reviewer-create --dry-run exit ${r.status}`,
+    };
+  }
+  return {
+    ok: true,
+    invoked: true,
+    dryRun: true,
+    verb: 'reviewer-create',
+    pr: String(pr),
+    reviewer: json.reviewer,
+    reviewerSource: json.reviewerSource,
+    reason: '阶段一骨架：已调 reviewer-create --dry-run，不建树',
+  };
+}
+
 function cmdWorkerDone(args) {
   if (!args.pr) fail('worker-done 要 --pr');
   const gh = ghRunner({ role: 'worker' });
   const plan = planWorkerDone({ pr: args.pr, body: args.body, runGh: gh });
   if (!plan.ok) fail(plan.error, plan);
-  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
-  const posted = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
-  if (!posted.ok) fail(posted.error, { ...plan, posted });
-  emit({ ok: true, commentPosted: true, ...plan, posted });
+  const create = invokeReviewerCreateDryRun(args.pr);
+  if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create });
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan, reviewerCreate: create });
+  const postedIssue = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue, reviewerCreate: create });
+  const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
+  if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reviewerCreate: create });
+  emit({
+    ok: true,
+    commentPosted: true,
+    ...plan,
+    postedIssue,
+    postedPr,
+    reviewerCreate: create,
+  });
 }
 
 function cmdStart(args) {
