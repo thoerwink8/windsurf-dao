@@ -71,6 +71,8 @@ async function main() {
 
     const grok = S.resolveLaunch({ provider: 'grok', routing });
     check('grok 走 shim', /grok-shim\.cmd/.test(grok.command), grok.command);
+    check('grok launch 带 --effort xhigh', /--effort\s+xhigh/.test(grok.command), grok.command);
+    check('grok launch 带 --permission-mode auto', /--permission-mode\s+auto/.test(grok.command), grok.command);
     check('shim 文件在仓里', fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')));
     const shim = fs.readFileSync(path.join(REPO, 'scripts', 'grok-shim.cmd'), 'utf8');
     check('shim 带 HTTPS_PROXY', /HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/.test(shim));
@@ -925,12 +927,13 @@ async function main() {
     check('reviewer-book 填进 merge-policy', /merge-policy.*auto|auto/.test(reviewer));
     check('reviewer-book 红项发回 dispatch:<id> 不是 handle', /dispatch:ctx_worker-1/.test(reviewer) && !/term_/.test(reviewer), reviewer.slice(-300));
     check('reviewer-book 要求红项发回士兵、乒乓两轮仍红才上帅', /SOLDIER_DISPATCH_ID/.test(reviewer) === false && /乒乓/.test(reviewer), '占位符应已被替换');
+    check('reviewer-book 走 gh-as reviewer approve（#573）', /gh-as\.mjs reviewer/.test(reviewer) && /--approve/.test(reviewer) && /真 approve/.test(reviewer), reviewer.slice(0, 400));
     const reviewerManual = S.renderDispatchTemplate('reviewer-book.md', {
       SOLDIER_DISPATCH_ID: 'ctx_worker-1',
       MERGE_POLICY: 'manual',
       MERGE_REASON: '改协作约定',
     });
-    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /gh pr ready/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
+    check('reviewer-book manual 模式含转 draft 机器落点（#498/#559）', /--undo/.test(reviewerManual) && /pr ready/.test(reviewerManual) && /gh-as\.mjs reviewer/.test(reviewerManual) && /MERGE_REASON/.test(reviewerManual) === false && /改协作约定/.test(reviewerManual), reviewerManual.slice(-400));
 
     let threw = false, threwMsg = '';
     try { S.renderDispatchTemplate('reviewer-book.md', { MERGE_POLICY: 'auto', MERGE_REASON: '' }); } // 缺 SOLDIER_DISPATCH_ID

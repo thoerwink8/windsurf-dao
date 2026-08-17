@@ -321,7 +321,7 @@ function reviewTaskBook(pr, workerModel, reviewerLabel) {
     '判定格式（机器可读，写在 review 正文首行）：',
     '  首审：「判定：红 N 项」或「判定：绿」',
     '  复核：「复核结论：红 N 项」或「复核结论：绿，可合并」',
-    '同账号不能 request-changes，以 COMMENT 提交 review。红项逐条列明；质疑拍板/规格本身要上帅，不自行改判。',
+    '你是 dao-reviewer[bot]，能真 approve / request-changes（#573）。提交走 node scripts/gh-as.mjs reviewer -- pr review <PR> --approve|--request-changes --body-file <判定文件>。判定行仍写正文首行。红项逐条列明；质疑拍板/规格本身要上帅，不自行改判。',
   ].join('\n');
 }
 

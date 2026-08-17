@@ -37,8 +37,49 @@ node --version
 | 文件 | 里面是什么 | 不带的后果 |
 |---|---|---|
 | `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 写码/判断类派工的主通道是 opencode Go（`docs/model-routing.toml`），缺 key 时工人一起手就挂 |
+| `~/.dao/apps/*.{pem,json}` | 三个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并全断。详 §4b |
 
 新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
+
+## 4b. GitHub App 身份凭据（#573）
+
+三个 App 的 private key 只此一份，丢了要回 GitHub 重新生成。换机把 `~/.dao/apps/` 整目录拷过来，**不要**进 git。
+
+| 文件 | 角色 | App ID | Installation ID |
+|---|---|---|---|
+| `reviewer.{pem,json}` | `dao-reviewer[bot]` 审官 | 4616659 | 154244051 |
+| `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
+| `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
+
+`*.json` 形态（数字不要加引号）：
+
+```json
+{ "appId": 4616659, "installationId": 154244051, "slug": "dao-reviewer" }
+```
+
+查号（密钥丢了或换机对不上时）：
+
+- App ID：GitHub → Settings → Developer settings → GitHub Apps → `dao-reviewer` / `dao-worker` / `dao-marshal` 页顶的 App ID。
+- Installation ID：同一 App 页 → Install App → 点进这条安装，URL 末段就是；或用 App JWT 调 `GET /app/installations`。
+
+验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这六份文件，再跑）：
+
+```bash
+node scripts/gh-as.mjs reviewer --whoami
+node scripts/gh-as.mjs worker --whoami
+node scripts/gh-as.mjs marshal --whoami
+```
+
+缺文件会报 `缺凭据: ...（不是没配好，是这台机器没装——见 NEW-MACHINE）`，退出码 2。这和 json 缺字段的「配置错了」不是一回事。
+
+打印出的 `permissions` 应与 issue #573 表逐字一致（GitHub 还会多一个自动加的 `metadata:read`，不算我们声明的权限）。已有工人树若 git log 还是本人，补一句：
+
+```bash
+node scripts/gh-as.mjs worker --set-git-identity
+git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[bot]@users.noreply.github.com>
+```
+
+`dao-worker` 的 `pull_requests` 现在是 write，因为自动开 PR 的 workflow 还没写（#480）。workflow 上线后降回 read——不做这一步，权限隔离是装饰。
 
 ## 5. 模型配置
 
