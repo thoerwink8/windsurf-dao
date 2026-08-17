@@ -67,6 +67,9 @@ import {
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
+import {
+  loadLedgerContext, beijingIsoFrom, dispatchJobId, recordPair,
+} from './lib/ledger-job.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -483,6 +486,42 @@ function cmdDispatch(args) {
     console.error(`[dao] dispatch label 没打上（派工本身成功）：${labels.error}`);
   }
 
+  // #581：派工当下写 job.dispatch。此时多半还没有 PR 号，job_id 用 dispatch-<id>；
+  // flow 在起审官/收判定/合并时再写 gh-pr-N（含 pr_number）。写入失败不回滚派工。
+  let ledger = null;
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const ts = beijingIsoFrom(new Date());
+    ledger = recordPair({
+      ctx,
+      ts,
+      source: 'dao-dispatch',
+      worker: {
+        jobId: dispatchJobId(created.workerDispatchId),
+        model: gate.model,
+        identity: '工人',
+        workType: gate.role || '写码',
+        terminal: workerLaunch.provider || 'dao',
+        extra: args.issue ? { issue_number: Number(args.issue) || args.issue } : {},
+      },
+      reviewer: {
+        jobId: dispatchJobId(created.reviewerDispatchId),
+        model: gate.reviewer,
+        identity: '审官',
+        workType: '审查',
+        terminal: reviewerLaunch.provider || 'dao',
+        extra: args.issue ? { issue_number: Number(args.issue) || args.issue } : {},
+      },
+    });
+    const failed = [ledger.worker, ledger.reviewer].filter(r => r && !r.ok);
+    if (failed.length) {
+      console.error(`[dao] dispatch 账本没写上（派工本身成功）：${failed.map(r => r.error).join('；')}`);
+    }
+  } catch (e) {
+    ledger = { ok: false, error: String(e.message || e) };
+    console.error(`[dao] dispatch 账本没写上（派工本身成功）：${ledger.error}`);
+  }
+
   emit({
     ok: true,
     ...plan,
@@ -506,6 +545,7 @@ function cmdDispatch(args) {
     identity,
     comment,
     labels,
+    ledger,
   });
 }
 
