@@ -1667,8 +1667,8 @@ export function linkedIssueNumbers(text) {
 }
 
 /** 合并侧（帅合并时跑）：PR 正文 Closes 到的 issue 上取 model/* type/* reviewer/* label，抄到 PR。
- * PR 上没署名 issue / 署名 issue 没有 model/type / gh 没查成——三种都要说清楚，不许静默。
- * reviewer/* 有则抄、没有不挡（旧单还没打这类 label）。 */
+ * PR 上没署名 issue / 署名 issue 缺 model/* 或 type/* / gh 没查成——三种都要说清楚，不许静默。
+ * reviewer/* 有则抄、没有不挡；但只有 reviewer/*、缺校准标签，不许 pr edit。 */
 export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
   if (!n) return { ok: false, unscanned: true, error: 'syncPrLabelsFromIssue 没给 PR 号' };
@@ -1697,8 +1697,17 @@ export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
     if (names.length) from.push({ issue: issueNum, labels: names });
   }
   const want = [...new Set(from.flatMap(f => f.labels))];
-  if (!want.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 的署名 issue 上没有 model/* 或 type/* label（派工漏打？）——需人工补`, refs };
+  const hasModel = want.some(name => name.startsWith('model/'));
+  const hasType = want.some(name => name.startsWith('type/'));
+  if (!hasModel || !hasType) {
+    const missing = [!hasModel && 'model/*', !hasType && 'type/*'].filter(Boolean).join(' 和 ');
+    return {
+      ok: false,
+      unscanned: false,
+      error: `PR #${n} 的署名 issue 上缺 ${missing} label（派工漏打？）——需人工补，不许只靠 reviewer/* 过关`,
+      refs,
+      labels: want,
+    };
   }
   const ensured = ensureRepoLabels({ names: want, runGh });
   if (!ensured.ok) return { ok: false, unscanned: ensured.unscanned === true, error: ensured.error };
