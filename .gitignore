@@ -25,6 +25,11 @@ __pycache__/
 *.pyc
 .codegraph/
 
+# 审官草稿（#601）：判定正文进 GitHub review，树里这份只会挡住 orca worktree rm
+# 收窄到根目录；不许靠「删树时按白名单删文件」
+/review-*.txt
+/.tmp-review-*/
+
 # 密钥不进 git（真实值，换机手动复制）
 config-sync/**
 *.pem

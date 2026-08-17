@@ -7,8 +7,8 @@
 //      coordinator 变空或指向死终端。
 //   3. check --run 只有指定终端是该 Run 当前 coordinator 才放行；跨 Run 读信
 //      用 orchestration inbox（不绑 coordinator）或 check --terminal <台>。
-//   4. 在途单的 Run 不许被 gc。活着的 dispatch、以及盘面上还在的任务树
-//     （含待收口）都算在途。
+//   4. 在途单的 Run 不许被 gc。判据是盘面上还挂着它的任务树（含待收口）。
+//     活着但树已不在盘面 = 归档正在收自己，不保护（#601）。
 
 export const ASK_TIMEOUT_MARK = 'ASK_TIMEOUT';
 
@@ -46,7 +46,12 @@ function worktreeMatches(boardIds, workerTreeId) {
   return false;
 }
 
-/** 不许退役的 Run：活着的 dispatch，或盘面上还挂着任务树（含待收口）的。 */
+/**
+ * 不许退役的 Run：盘面上还挂着它的任务树（含待收口）。
+ * 活着但树已经不在盘面 = 归档正在收自己的树，不保护（#601：#598 实跑
+ * 时 dispatch 仍是 ready/dispatched，退役被跳过，台没关）。
+ * 活着但没有 worktreeId：无法证明树已走，保守保护。
+ */
 export function protectedRunIds({ workers, worktrees } = {}) {
   const prot = new Set();
   if (!Array.isArray(workers)) return prot;
@@ -54,11 +59,12 @@ export function protectedRunIds({ workers, worktrees } = {}) {
   for (const w of workers) {
     const runId = w?.runId;
     if (!runId || isLegacyRun({ id: runId, legacy: 0 })) continue;
-    if (isLiveDispatch(w)) {
+    const wt = w.resource?.worktreeId;
+    if (worktreeMatches(board, wt)) {
       prot.add(runId);
       continue;
     }
-    if (worktreeMatches(board, w.resource?.worktreeId)) prot.add(runId);
+    if (isLiveDispatch(w) && !wt) prot.add(runId);
   }
   return prot;
 }
@@ -96,18 +102,33 @@ export function planRunGc({ runs, workers, worktrees } = {}) {
   };
 }
 
+function pathMatches(workerTreeId, paths) {
+  if (!workerTreeId || !paths || paths.size === 0) return false;
+  const norm = String(workerTreeId).replace(/\\/g, '/').toLowerCase();
+  for (const raw of paths) {
+    const p = String(raw || '').replace(/\\/g, '/').toLowerCase();
+    if (!p) continue;
+    if (norm === p || norm.endsWith(`/${p}`) || norm.endsWith(`::${p}`)) return true;
+  }
+  return false;
+}
+
 /** 即将删掉的树对应哪些 Run（从 worker-list 反查）。没查成与查到 0 分开。 */
-export function resolveRunsForWorktrees({ workers, treeIds } = {}) {
+export function resolveRunsForWorktrees({ workers, treeIds, treePaths } = {}) {
   if (!Array.isArray(workers)) {
     return { ok: false, unscanned: true, error: 'worker-list 结构不认识', runIds: [] };
   }
   const want = new Set((treeIds || []).filter(Boolean).map(String));
-  if (want.size === 0) return { ok: true, unscanned: false, runIds: [], scanned: workers.length };
+  const paths = new Set((treePaths || []).filter(Boolean).map(String));
+  if (want.size === 0 && paths.size === 0) {
+    return { ok: true, unscanned: false, runIds: [], scanned: workers.length };
+  }
   const runIds = [];
   const seen = new Set();
   for (const w of workers) {
     const wt = w?.resource?.worktreeId;
-    if (!wt || !worktreeMatches(want, wt)) continue;
+    if (!wt) continue;
+    if (!worktreeMatches(want, wt) && !pathMatches(wt, paths)) continue;
     const runId = w.runId;
     if (!runId || seen.has(runId)) continue;
     seen.add(runId);
@@ -244,7 +265,91 @@ export function parseAskTimeoutMs(raw, { defaultMs = 600000 } = {}) {
   return { ok: true, timeoutMs: n, defaulted: false };
 }
 
-/** 删树之后的退役收口。任何映射/名单/关台失败都 ok:false，不许装成归档成功。 */
+/**
+ * 租约/日志还在 = 待退；orca 没有 run-delete，run-list 里剩下的是墓碑。
+ * 探头没查成必须 unscanned，不许把「没查成」当成「全是墓碑」。
+ */
+export function partitionGcTargets(retireRuns, { leaseExistsFor } = {}) {
+  const pending = [];
+  const tombstones = [];
+  if (typeof leaseExistsFor !== 'function') {
+    return {
+      ok: false,
+      unscanned: true,
+      error: '没给租约探头，分不出待退和墓碑',
+      pending,
+      tombstones,
+    };
+  }
+  for (const run of retireRuns || []) {
+    if (!run?.id) continue;
+    let exists;
+    try {
+      exists = leaseExistsFor(run.id);
+    } catch (e) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `租约没查成 ${run.id}：${e && e.message ? e.message : e}`,
+        pending,
+        tombstones,
+      };
+    }
+    if (exists == null) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `租约没查成 ${run.id}：探头返回空`,
+        pending,
+        tombstones,
+      };
+    }
+    if (exists) pending.push(run);
+    else tombstones.push(run);
+  }
+  return { ok: true, unscanned: false, pending, tombstones };
+}
+
+/** 真关 = 当场关掉了活台或删了租约；本已关 = 台本来就不在且没有文件可删。 */
+export function classifyRetireOutcome(one) {
+  if (!one || one.ok !== true) {
+    return {
+      bucket: 'failed',
+      runId: one && one.runId,
+      error: (one && one.error) || '退役失败',
+    };
+  }
+  const closedLive = Boolean(
+    one.closed && one.closed.handle && one.closed.ok && !one.closed.alreadyGone,
+  );
+  const removed = Array.isArray(one.removed) && one.removed.length > 0;
+  if (closedLive || removed) {
+    return { bucket: 'closed', runId: one.runId, closed: one.closed, removed: one.removed || [] };
+  }
+  return { bucket: 'alreadyGone', runId: one.runId, closed: one.closed, removed: one.removed || [] };
+}
+
+export function summarizeRetireResults(results) {
+  const closed = [];
+  const alreadyGone = [];
+  const failed = [];
+  for (const one of results || []) {
+    const c = classifyRetireOutcome(one);
+    if (c.bucket === 'closed') closed.push(c);
+    else if (c.bucket === 'alreadyGone') alreadyGone.push(c);
+    else failed.push(c);
+  }
+  return {
+    closedCount: closed.length,
+    alreadyGoneCount: alreadyGone.length,
+    failedCount: failed.length,
+    closed,
+    alreadyGone,
+    failed,
+  };
+}
+
+/** 删树之前的退役收口。任何映射/名单/关台失败都 ok:false，不许装成归档成功。 */
 export function finalizeWorktreeRmLifecycle({ mapped, gc, retireResults } = {}) {
   if (!mapped || mapped.ok !== true) {
     return {

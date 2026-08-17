@@ -124,6 +124,8 @@ import {
   resolveReplySender,
   parseAskTimeoutMs,
   finalizeWorktreeRmLifecycle,
+  partitionGcTargets,
+  summarizeRetireResults,
 } from './lib/run-lifecycle.mjs';
 import { defaultLogRel, leasePath, launchFilePath } from './inbox-station.mjs';
 
@@ -1267,20 +1269,18 @@ function cmdWorktreeRm(args) {
   const mapped = resolveRunsForWorktrees({
     workers,
     treeIds: plan.order.map(n => n.id),
+    treePaths: plan.order.map(n => n.path).filter(Boolean),
   });
   if (!mapped.ok) fail(`Run 映射没查成，未删任何树: ${mapped.error}`);
-  const applied = applyWorktreeRmPlan(plan, {
-    rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
-  });
-  if (!applied.ok) fail(applied.error, { removed: applied.removed || [] });
-
-  const removedIds = new Set((applied.removed || []).map(n => n.id));
+  // 先按「删完之后还剩哪些树」算保护，再退役，最后才删树。
+  // #601：#598 把退役排在删树之后，活着的 dispatch 仍保护本单 Run，台没关。
+  const removing = new Set(plan.order.map(n => n.id));
   const remaining = wts.filter(w => {
     const id = w.worktreeId || w.id;
-    return id && !removedIds.has(id);
+    return id && !removing.has(id);
   });
   const gc = planRunGc({ runs, workers, worktrees: remaining });
-  if (!gc.ok) fail(`退役名单没查成，树已删: ${gc.error}`, { removed: applied.removed });
+  if (!gc.ok) fail(`退役名单没查成，未删任何树: ${gc.error}`);
   const retireResults = [];
   for (const runId of mapped.runIds) {
     if (!gc.retire.some(r => r.id === runId)) continue;
@@ -1288,8 +1288,12 @@ function cmdWorktreeRm(args) {
   }
   const life = finalizeWorktreeRmLifecycle({ mapped, gc, retireResults });
   if (!life.ok) {
-    fail(life.error, { removed: applied.removed, runs: life });
+    fail(life.error, { runs: life });
   }
+  const applied = applyWorktreeRmPlan(plan, {
+    rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
+  });
+  if (!applied.ok) fail(applied.error, { removed: applied.removed || [], runs: life });
   emit({
     ok: true,
     removed: applied.removed,
@@ -1919,22 +1923,35 @@ function cmdRunGc(args) {
   if (!src.ok) fail(src.error);
   const plan = planRunGc(src);
   if (!plan.ok) fail(plan.error);
+  const parts = partitionGcTargets(plan.retire, {
+    leaseExistsFor: (runId) => stationFilesFor(runId).some((f) => existsSync(f)),
+  });
+  if (!parts.ok) fail(parts.error);
   const summary = {
-    retire: plan.retire.map(r => r.id),
+    pending: parts.pending.map(r => r.id),
+    tombstones: parts.tombstones.map(r => r.id),
     keep: plan.keep.map(r => r.id),
     skippedLegacy: plan.skippedLegacy.map(r => r.id),
+    pendingCount: parts.pending.length,
+    tombstoneCount: parts.tombstones.length,
+    keepCount: plan.keep.length,
+    note: 'orca 没有 run-delete；tombstones = 已退但墓碑仍在 run-list。待退看租约/日志还在不在，不看 terminal list 条数。',
   };
   if (!args.apply) {
     emit({ ok: true, dryRun: true, ...summary });
   }
-  const retired = [];
-  const failed = [];
-  for (const r of plan.retire) {
-    const one = retireOneRun(r.id);
-    if (one.ok) retired.push(one);
-    else failed.push(one);
-  }
-  emit({ ok: failed.length === 0, retired, failed, ...summary }, failed.length ? 1 : 0);
+  const results = parts.pending.map((r) => retireOneRun(r.id));
+  const tallied = summarizeRetireResults(results);
+  emit({
+    ok: tallied.failedCount === 0,
+    closedCount: tallied.closedCount,
+    alreadyGoneCount: tallied.alreadyGoneCount,
+    failedCount: tallied.failedCount,
+    closed: tallied.closed,
+    alreadyGone: tallied.alreadyGone,
+    failed: tallied.failed,
+    ...summary,
+  }, tallied.failedCount ? 1 : 0);
 }
 
 function cmdAsk(args) {
