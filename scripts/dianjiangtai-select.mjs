@@ -23,6 +23,7 @@ import { createRequire } from 'node:module';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select, hashOf, EVENT_ORDER_KEY } from './lib/dianjiangtai-core.mjs';
 import { pinReviewerSlotA, REVIEWER_SELECT_ROLES } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { attachPipes } from './lib/next-launch.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -144,6 +145,7 @@ if (REVIEWER_SELECT_ROLES.has(role)) {
 // 协调者转述用的瘦身输出：三选项 + decision_id + 分时命中。完整明细仍挂在 models/snapshot。
 // 三选项的模型标识渲染成 provider/model（#533）；decision_id 与 snapshot 照旧记裸 id，不受影响。
 const rawA = result.options.A;
+const slate = attachPipes(result.slate || [], routing.models || []);
 const out = {
   decision_id: result.decision_id,
   role,
@@ -159,5 +161,6 @@ const out = {
     B: { ...result.options.B, models: result.options.B.models.map(renderModel) },
     C: { ...result.options.C, models: result.options.C.models.map(renderModel) },
   },
+  slate,
 };
 process.stdout.write(JSON.stringify(out, null, 2) + '\n');

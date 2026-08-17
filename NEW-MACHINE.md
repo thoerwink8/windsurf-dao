@@ -174,6 +174,38 @@ command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速
 - 非交互契约：`command-code -p "问" --max-turns N --skip-onboarding` 输出纯文本、退出码 0；`--output-format json` 出 NDJSON 事件流 + 末尾 result 行。
 - 自动化调用一律 `--skip-onboarding`（非交互撞 onboarding 会静默挂住，同 #500 型坑）；交互 TUI 启动后需补一记空回车才执行。
 
+## 7c. cursor 怎么配
+
+Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主路仍 Codex）。路由与管子见 `docs/model-routing.toml` `[providers.cursor]`。**不装 pi-cursor-sdk**（官方无第三方 chat API；撞「pi 不写插件」）。
+
+- 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
+- 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
+- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。在 `~/.local/bin/` 放两个文件（覆盖 PATH 第一位，包装真实二进制 `%LOCALAPPDATA%\cursor-agent\cursor-agent.cmd`）：
+  - `~/.local/bin/cursor-agent.cmd`（Windows cmd 版）：
+    ```bat
+    @echo off
+    rem cursor-agent shim: Clash Party proxy required (CN IP hides GPT/Claude)
+    rem real binary: %LOCALAPPDATA%\cursor-agent\cursor-agent.cmd
+    set HTTPS_PROXY=http://127.0.0.1:7890
+    set HTTP_PROXY=http://127.0.0.1:7890
+    set ALL_PROXY=http://127.0.0.1:7890
+    set NODE_USE_ENV_PROXY=1
+    "C:\Users\Administrator\AppData\Local\cursor-agent\cursor-agent.cmd" %*
+    ```
+  - `~/.local/bin/cursor-agent`（Git Bash 版）：
+    ```sh
+    #!/bin/sh
+    # cursor-agent shim (Git Bash): Clash Party proxy required (CN IP hides GPT/Claude)
+    export HTTPS_PROXY=http://127.0.0.1:7890
+    export HTTP_PROXY=http://127.0.0.1:7890
+    export ALL_PROXY=http://127.0.0.1:7890
+    export NODE_USE_ENV_PROXY=1
+    exec "/c/Users/Administrator/AppData/Local/cursor-agent/cursor-agent.cmd" "$@"
+    ```
+    注释保持纯 ASCII。`agent` 入口同样要套一层代理（本机 `~/.local/bin/agent.cmd` 已有）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
+- 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force`）。`--force` 是无人值守放行（等同 `--yolo`）。
+- 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
+
 ## 8. 本机工具坑
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。

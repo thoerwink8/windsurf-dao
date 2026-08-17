@@ -7,8 +7,16 @@
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseYaml } from './lib/yaml-min.mjs';
+import { select } from './lib/dianjiangtai-core.mjs';
+import {
+  advanceLaunchState,
+  attachPipes,
+  classifyLaunchFailure,
+  routingSlateIds,
+} from './lib/next-launch.mjs';
 import { readLedgerEvents, queryLedger, describeUnclosedJobs } from './lib/ledger-query.mjs';
 import {
   ROOT,
@@ -233,6 +241,125 @@ function failCreated(created, error, extra = {}) {
   emit({ ok: false, error, rollback, rollbackFailed, ...created, ...extra }, 1);
 }
 
+function loadDispatchSlate({ model, role, routing, now, live }) {
+  let ids = null;
+  if (live) {
+    try {
+      const models = parseYaml(readFileSync(join(ROOT, 'policy', 'models.yml'), 'utf8')).models;
+      const bans = parseYaml(readFileSync(join(ROOT, 'policy', 'bans.yml'), 'utf8')).bans || [];
+      const weights = parseYaml(readFileSync(join(ROOT, 'policy', 'weights.yml'), 'utf8'));
+      const eventsDir = join(ROOT, 'ledger', 'events');
+      const events = existsSync(eventsDir)
+        ? readdirSync(eventsDir).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(eventsDir, f), 'utf8')))
+        : [];
+      const result = select({
+        ts: now instanceof Date ? now.toISOString() : String(now || new Date().toISOString()),
+        jobId: 'dispatch-slate',
+        identity: '工人',
+        workType: role || '写码',
+        events, models, bans, weights, routes: routing.routes || [],
+      });
+      if (Array.isArray(result.slate) && result.slate.length) ids = result.slate;
+    } catch {
+      ids = null;
+    }
+  }
+  if (!ids || !ids.length) ids = routingSlateIds({ routing, role, now, model });
+  const slate = attachPipes(ids, routing.models);
+  if (!slate.length) throw new Error('slate 是空的（没查成）');
+  const startIndex = model ? slate.findIndex(s => s.id === model) : 0;
+  if (startIndex < 0) throw new Error(`模型 ${model} 不在预计算名单里，禁止现场另点`);
+  return { slate, startIndex };
+}
+
+function closeWorkerHandle(handle) {
+  if (!handle) return;
+  const r = orca(argsTerminalClose({ terminal: handle, tab: true }));
+  if (r.ok) return;
+  orca(argsTerminalClose({ terminal: handle, tab: false }));
+}
+
+function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created }) {
+  let modelId = slate[startIndex].id;
+  let pipeIndex = 0;
+  let hardFailsOnThisPipe = 0;
+  let transientFailsOnThisPipe = 0;
+  const attempts = [];
+  const maxSteps = 24;
+
+  for (let step = 0; step < maxSteps; step++) {
+    const entry = slate.find(s => s.id === modelId);
+    if (!entry || !entry.pipes || !entry.pipes[pipeIndex]) {
+      return { ok: false, error: `slate 缺 ${modelId} pipes[${pipeIndex}]`, attempts };
+    }
+    const pipe = entry.pipes[pipeIndex];
+    let launch;
+    try {
+      launch = resolveLaunch({ model: modelId, pipe, routing, root: ROOT });
+    } catch (e) {
+      return { ok: false, error: String(e.message || e), attempts };
+    }
+    const cap = assertCodexLaunch({ command: launch.command });
+    if (!cap.ok) return { ok: false, error: cap.error, attempts };
+
+    const term = orca(argsTerminalCreate({
+      worktree: worktreeId,
+      title,
+      command: launch.command,
+    }));
+    if (!term.ok) {
+      const kind = classifyLaunchFailure({ error: errText(term.error) });
+      attempts.push({ modelId, pipeIndex, provider: pipe.provider, kind, error: errText(term.error) });
+      const next = advanceLaunchState({
+        slate, modelId, pipeIndex, hardFailsOnThisPipe, transientFailsOnThisPipe, kind,
+      });
+      if (next.action === 'abort' || next.action === 'fail') {
+        return { ok: false, error: `工人终端创建失败且名单走完: ${errText(term.error)}`, attempts, exhausted: true };
+      }
+      modelId = next.modelId;
+      pipeIndex = next.pipeIndex;
+      hardFailsOnThisPipe = next.hardFailsOnThisPipe;
+      transientFailsOnThisPipe = next.transientFailsOnThisPipe;
+      continue;
+    }
+    const handle = extractHandleFromCreate(term.json);
+    if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
+    created.workerHandle = handle;
+
+    const verify = waitAndVerify({
+      readOnce: () => readOnceHandle(handle),
+      timeoutMs: probeWaitMs(routing, launch.provider),
+    });
+    if (verify.ok) {
+      return { ok: true, modelId, pipeIndex, pipe, launch, handle, attempts };
+    }
+
+    const kind = classifyLaunchFailure({
+      error: verify.error,
+      verifyReason: verify.reason,
+      text: verify.text,
+    });
+    attempts.push({ modelId, pipeIndex, provider: pipe.provider, kind, reason: verify.reason });
+    closeWorkerHandle(handle);
+    created.workerHandle = undefined;
+
+    if (kind === 'config') {
+      return { ok: false, error: `工人 TUI 未就绪（配置）：${verify.reason}`, verify, attempts };
+    }
+    const next = advanceLaunchState({
+      slate, modelId, pipeIndex, hardFailsOnThisPipe, transientFailsOnThisPipe, kind,
+    });
+    if (next.action === 'abort' || next.action === 'fail') {
+      return { ok: false, error: '工人 TUI 未就绪且名单走完', verify, attempts, exhausted: true };
+    }
+    modelId = next.modelId;
+    pipeIndex = next.pipeIndex;
+    hardFailsOnThisPipe = next.hardFailsOnThisPipe;
+    transientFailsOnThisPipe = next.transientFailsOnThisPipe;
+  }
+  return { ok: false, error: '启动序步数用尽', attempts };
+}
+
 function readOnceHandle(handle) {
   const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
   if (!read.ok) return { error: errText(read.error) };
@@ -331,10 +458,23 @@ function cmdDispatch(args) {
   if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
   if (!args.name && !args.dryRun) fail('dispatch 要 --name');
 
+  const now = args.now ? new Date(args.now) : new Date();
+  let slatePack;
+  try {
+    slatePack = loadDispatchSlate({
+      model: gate.model,
+      role: gate.role,
+      routing,
+      now,
+      live: !args.dryRun,
+    });
+  } catch (e) { fail(String(e.message || e)); }
+
+  const startEntry = slatePack.slate[slatePack.startIndex];
   let workerLaunch;
   let reviewerLaunch;
   try {
-    workerLaunch = resolveLaunch({ model: gate.model, routing, root: ROOT });
+    workerLaunch = resolveLaunch({ model: startEntry.id, pipe: startEntry.pipes[0], routing, root: ROOT });
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
 
@@ -346,7 +486,7 @@ function cmdDispatch(args) {
   const plan = {
     mergePolicy: gate.mergePolicy,
     mergeReason: gate.mergeReason,
-    model: gate.model,
+    model: startEntry.id,
     reviewer: gate.reviewer,
     issue: args.issue ? String(args.issue).trim() : null,
     workerCard: assembleCardName({ name: args.name, issue: args.issue }),
@@ -354,6 +494,8 @@ function cmdDispatch(args) {
     reviewerDeferred: true,
     reviewerLaunchChecked: reviewerLaunch.command,
     comment: dispatchComment(gate),
+    slate: slatePack.slate,
+    pipeIndex: 0,
   };
 
   // 消歧门（#565）：带 --issue 的**真派工**，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
@@ -396,20 +538,23 @@ function cmdDispatch(args) {
   const workerBranch = gitBranchName(created.workerPath);
   if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, plan);
 
-  const workerTerm = orca(argsTerminalCreate({
-    worktree: created.workerId,
+  const launched = startWorkerBySlate({
+    slate: slatePack.slate,
+    startIndex: slatePack.startIndex,
+    routing,
+    worktreeId: created.workerId,
     title: args.name,
-    command: workerLaunch.command,
-  }));
-  if (!workerTerm.ok) failCreated(created, `工人终端创建失败: ${errText(workerTerm.error)}`, plan);
-  created.workerHandle = extractHandleFromCreate(workerTerm.json);
-  if (!created.workerHandle) failCreated(created, '工人终端没返回 handle', plan);
-
-  const workerVerify = waitAndVerify({
-    readOnce: () => readOnceHandle(created.workerHandle),
-    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+    created,
   });
-  if (!workerVerify.ok) failCreated(created, '工人 TUI 未就绪', { verify: workerVerify, ...plan });
+  if (!launched.ok) {
+    failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, ...plan });
+  }
+  workerLaunch = launched.launch;
+  created.workerHandle = launched.handle;
+  plan.model = launched.modelId;
+  plan.pipeIndex = launched.pipeIndex;
+  plan.workerLaunch = launched.launch.command;
+  plan.launchAttempts = launched.attempts;
 
   // #602：注入只给一行指针 + spec + 参数。换行按 agent 转码（grok 转 ESC+CR），不禁换行；硬闸只有 UTF-8 字节 ≤500。
   let soldierBook = null;
@@ -468,7 +613,7 @@ function cmdDispatch(args) {
   // 用 pr-sync-labels 从 issue 同步到 PR）。gh 没查成 != 查过没事：失败也要说清楚。
   const labels = stampIssueLabels({
     issue: args.issue,
-    model: gate.model,
+    model: plan.model,
     role: gate.role,
     reviewer: gate.reviewer,
     runGh: ghRunner(),
@@ -486,13 +631,15 @@ function cmdDispatch(args) {
       ...ctx,
       ts,
       jobId: dispatchJobId(created.workerDispatchId),
-      model: gate.model,
+      model: plan.model,
       identity: '工人',
       workType: gate.role || '写码',
       terminal: workerLaunch.provider || 'dao',
       extra: {
       source: 'dao-dispatch',
       dispatch_id: created.workerDispatchId,
+      pipe_index: plan.pipeIndex,
+      pipe_provider: workerLaunch.provider,
       ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
     },
     });
@@ -1172,6 +1319,8 @@ function cmdWorkerStart(args) {
   if (!disambiguation.ok) fail(disambiguation.error, { disambiguation });
   // #559 ②：worker_done 后同一终端续 Dispatch 走 worker-start --task <next> --terminal <handle>，
   // 不用 --worktree（工作区由终端决定，官方：Reuse an existing agent only with --terminal <handle>）。
+  // #615 缺口：retry-of 复用同一终端、同一条 launch，接不上 nextLaunch。
+  // 启动期（建终端 / TUI 探针 / 屏上拒模）已走管子序；中途硬失败不会切管。
   const r = orca(argsWorkerStart({
     task: args.task,
     worktree: args.worktree || undefined,
