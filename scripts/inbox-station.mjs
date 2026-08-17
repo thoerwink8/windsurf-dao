@@ -622,14 +622,32 @@ export function acceptLeaseHandleStamp({ prevHandle, nextHandle, source } = {}) 
   return false;
 }
 
-function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS, handle) {
+/**
+ * cmdEnsure 写租约 handle 的唯一决策。all-alive 一律不写——coordinator 可能是帅/工人。
+ * 只有刚 rebuild/restart 出来的台才能盖。
+ */
+export function planEnsureLeaseStamp({ action, leaseHandle, rebuiltHandle } = {}) {
+  if (action === 'rebuild' || action === 'restart') {
+    return {
+      handle: rebuiltHandle || null,
+      stamp: acceptLeaseHandleStamp({
+        prevHandle: leaseHandle || null,
+        nextHandle: rebuiltHandle || null,
+        source: 'rebuild',
+      }),
+    };
+  }
+  return { handle: leaseHandle || null, stamp: false };
+}
+
+function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS) {
   const prev = loadLease(logPath);
   writeFileSync(leasePath(logPath), formatLease({
     pid: process.pid,
     runId,
     ts: Date.now(),
     ttlMs,
-    handle: mergeLeaseHandle(prev, handle),
+    handle: prev && prev.handle ? prev.handle : null,
   }), 'utf8');
 }
 
@@ -759,20 +777,14 @@ async function cmdEnsure(args) {
       process.exit(1);
     }
     handle = rebuilt.handle;
-    if (acceptLeaseHandleStamp({
-      prevHandle: loadLease(logPath)?.handle || null,
-      nextHandle: handle,
-      source: 'rebuild',
-    })) {
-      stampLeaseHandle(logPath, handle);
-    }
-  } else if (acceptLeaseHandleStamp({
-    prevHandle: (lease && lease.handle) || null,
-    nextHandle: handle,
-    source: 'ensure',
-  })) {
-    stampLeaseHandle(logPath, handle);
   }
+  const stampPlan = planEnsureLeaseStamp({
+    action,
+    leaseHandle: (loadLease(logPath) && loadLease(logPath).handle) || (lease && lease.handle) || null,
+    rebuiltHandle: (action === 'rebuild' || action === 'restart') ? handle : null,
+  });
+  if (stampPlan.handle) handle = stampPlan.handle;
+  if (stampPlan.stamp) stampLeaseHandle(logPath, stampPlan.handle);
 
   const afterShow = showRun(runId);
   const afterList = listTerminals();
