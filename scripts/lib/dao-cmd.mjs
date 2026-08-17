@@ -185,6 +185,223 @@ export function argsWorktreeRm({ worktree, force } = {}) {
   return a;
 }
 
+export function argsWorktreePs({ limit } = {}) {
+  const a = ['worktree', 'ps'];
+  if (limit != null) a.push('--limit', String(limit));
+  a.push('--json');
+  return a;
+}
+
+function worktreeKey(w) {
+  return (w && (w.worktreeId || w.id)) || null;
+}
+
+function occupyingAgents(w) {
+  return (Array.isArray(w && w.agents) ? w.agents : [])
+    .filter(a => a && (a.state === 'working' || a.state === 'waiting'));
+}
+
+function normPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function branchTail(b) {
+  return String(b || '').replace(/^refs\/heads\//, '');
+}
+
+/** 把 --worktree 选择器落到盘面上一棵卡。对不上 / 对上多棵都 fail-visible。 */
+export function resolveWorktreeSelector(worktrees, selector) {
+  const list = Array.isArray(worktrees) ? worktrees.filter(Boolean) : [];
+  const raw = String(selector || '').trim();
+  if (!raw) return { ok: false, error: 'worktree-rm 要 --worktree' };
+  if (!list.length) return { ok: false, error: '盘面一张卡都没有，未删' };
+
+  const hits = [];
+  const wantIssue = raw.startsWith('issue:') ? Number(raw.slice(6)) : null;
+  const wantName = raw.startsWith('name:') ? raw.slice(5) : null;
+  const wantPath = raw.startsWith('path:') ? raw.slice(5) : null;
+  const wantBranch = raw.startsWith('branch:') ? raw.slice(7) : null;
+  const wantId = raw.startsWith('id:') ? raw.slice(3) : raw;
+
+  for (const w of list) {
+    const id = worktreeKey(w);
+    if (raw === 'active' || raw === 'current') {
+      if (w.isActive) hits.push(w);
+      continue;
+    }
+    if (wantIssue != null && Number.isFinite(wantIssue) && Number(w.linkedIssue) === wantIssue) {
+      hits.push(w);
+      continue;
+    }
+    if (wantName != null && String(w.displayName || '') === wantName) {
+      hits.push(w);
+      continue;
+    }
+    if (wantPath != null && normPath(w.path) === normPath(wantPath)) {
+      hits.push(w);
+      continue;
+    }
+    if (wantBranch != null && (branchTail(w.branch) === branchTail(wantBranch) || w.branch === wantBranch)) {
+      hits.push(w);
+      continue;
+    }
+    if (id && (id === raw || id === wantId)) {
+      hits.push(w);
+      continue;
+    }
+    if (String(w.displayName || '') === raw) {
+      hits.push(w);
+      continue;
+    }
+    if (normPath(w.path) === normPath(raw)) {
+      hits.push(w);
+      continue;
+    }
+  }
+
+  const uniq = [];
+  const seen = new Set();
+  for (const w of hits) {
+    const id = worktreeKey(w) || String(w.path || '');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    uniq.push(w);
+  }
+  if (uniq.length === 0) return { ok: false, error: `找不到卡：${raw}` };
+  if (uniq.length > 1) {
+    return {
+      ok: false,
+      error: `选择器对上 ${uniq.length} 棵（${uniq.map(w => w.displayName || worktreeKey(w)).join('、')}），未删`,
+    };
+  }
+  return { ok: true, worktree: uniq[0] };
+}
+
+function childrenOf(w, byId, all) {
+  const ids = Array.isArray(w.childWorktreeIds) ? w.childWorktreeIds : [];
+  const kids = [];
+  const missing = [];
+  const seen = new Set();
+  for (const id of ids) {
+    const child = byId.get(id);
+    if (!child) missing.push({ id, name: id });
+    else {
+      kids.push(child);
+      seen.add(worktreeKey(child));
+    }
+  }
+  const selfId = worktreeKey(w);
+  for (const other of all) {
+    const oid = worktreeKey(other);
+    if (!oid || seen.has(oid)) continue;
+    if (other.parentWorktreeId === selfId) {
+      kids.push(other);
+      seen.add(oid);
+    }
+  }
+  return { kids, missing };
+}
+
+/**
+ * 整树后序删除计划：先查占用，再给出叶子→根的顺序。
+ * 占用中 / 子卡失踪 / 主树 → ok:false，调用方不得开删。
+ */
+export function planWorktreeRm(worktrees, selector) {
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, error: '盘面没查成（不是数组），未删任何树', order: [], occupied: [] };
+  }
+  const found = resolveWorktreeSelector(worktrees, selector);
+  if (!found.ok) return { ok: false, error: found.error, order: [], occupied: [] };
+  const root = found.worktree;
+  if (root.isMainWorktree) {
+    return {
+      ok: false,
+      error: `拒绝删主树（${root.displayName || worktreeKey(root)}）`,
+      order: [],
+      occupied: [],
+    };
+  }
+  const byId = new Map();
+  for (const w of worktrees) {
+    const id = worktreeKey(w);
+    if (id) byId.set(id, w);
+  }
+  const order = [];
+  const occupied = [];
+  const missing = [];
+  const visiting = new Set();
+
+  function walk(w) {
+    const id = worktreeKey(w);
+    if (!id) {
+      missing.push({ id: '(无 id)', name: w.displayName || '?' });
+      return;
+    }
+    if (visiting.has(id)) return;
+    visiting.add(id);
+    const rel = childrenOf(w, byId, worktrees);
+    for (const m of rel.missing) missing.push(m);
+    for (const c of rel.kids) walk(c);
+    const occ = occupyingAgents(w);
+    if (occ.length) {
+      occupied.push({
+        id,
+        name: w.displayName || id,
+        states: occ.map(a => a.state),
+      });
+    }
+    order.push({ id, name: w.displayName || id });
+  }
+
+  walk(root);
+
+  if (missing.length) {
+    return {
+      ok: false,
+      error: `子卡在名单里但盘面找不到，占用没查成，未删任何树：${missing.map(m => m.name || m.id).join('、')}`,
+      order: [],
+      occupied,
+      missing,
+    };
+  }
+  if (occupied.length) {
+    const detail = occupied.map(o => `${o.name}（agent=${o.states.join(',')}）`).join('；');
+    return {
+      ok: false,
+      error: `占用中，未删任何树：${detail}`,
+      order: [],
+      occupied,
+    };
+  }
+  return { ok: true, order, occupied: [], root: { id: worktreeKey(root), name: root.displayName || worktreeKey(root) } };
+}
+
+/** 按计划逐个删。中途失败必须带上已删名单，不许装成「没动过」。 */
+export function applyWorktreeRmPlan(plan, { rm } = {}) {
+  if (!plan || plan.ok !== true) {
+    return { ok: false, error: (plan && plan.error) || '没有可执行的删除计划', removed: [] };
+  }
+  if (typeof rm !== 'function') {
+    return { ok: false, error: 'applyWorktreeRmPlan 没给 rm', removed: [] };
+  }
+  const removed = [];
+  for (const node of plan.order) {
+    const r = rm(node);
+    if (!r || r.ok !== true) {
+      const why = (r && (r.error || r.err)) || 'rm 失败';
+      const done = removed.length ? `已删 ${removed.map(n => n.name).join('、')}；` : '一棵都还没删；';
+      return {
+        ok: false,
+        error: `删到一半停了：${done}失败在 ${node.name}：${why}。盘面可能半删，先处理再重跑`,
+        removed,
+        failed: node,
+      };
+    }
+    removed.push(node);
+  }
+  return { ok: true, removed };
+}
+
 export function argsTaskCreate({ spec } = {}) {
   const a = ['orchestration', 'task-create'];
   if (spec != null) a.push('--spec', spec);
@@ -335,6 +552,18 @@ export function extractHandleFromCreate(json) {
     || null;
 }
 
+/** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
+ * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
+export function extractTerminalSend(json) {
+  const s = json?.result?.send;
+  if (!s || s.accepted !== true) return null;
+  return {
+    handle: s.handle ?? null,
+    accepted: true,
+    bytesWritten: Number.isFinite(s.bytesWritten) ? s.bytesWritten : null,
+  };
+}
+
 /** 真返回在 result.task.id。result.id / 顶层 id 是 RPC id，不能当 taskId（#497/#502）。 */
 export function extractTaskId(json) {
   return json?.result?.task?.id || null;
@@ -380,6 +609,7 @@ export function catalogUsedFlags() {
       parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559,
     }),
     argsWorktreeRm({ worktree: 'w', force: true }),
+    argsWorktreePs(),
     argsTaskCreate({ spec: 's' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsWorkerShow({ dispatch: 'd' }),
@@ -2128,6 +2358,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
+                  # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位

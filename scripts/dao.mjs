@@ -18,6 +18,9 @@ import {
   argsTerminalSend,
   argsWorktreeCreate,
   argsWorktreeRm,
+  argsWorktreePs,
+  planWorktreeRm,
+  applyWorktreeRmPlan,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
@@ -76,6 +79,7 @@ import {
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
+import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
 } from './lib/ledger-job.mjs';
@@ -87,22 +91,6 @@ function errText(e) {
   if (typeof e === 'string') return e;
   if (typeof e === 'object') return e.code ? `orca 报错 ${e.code}: ${e.message}` : String(e.message || e);
   return '';
-}
-
-function parseOrcaStdout(stdout) {
-  const text = String(stdout || '').trim();
-  if (!text) return { ok: false, error: 'orca 无输出' };
-  try {
-    return { ok: true, json: JSON.parse(text) };
-  } catch {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try { return { ok: true, json: JSON.parse(text.slice(start, end + 1)) }; }
-      catch { /* fall through */ }
-    }
-    return { ok: false, error: `orca 输出不是 JSON: ${text.slice(0, 160)}` };
-  }
 }
 
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
@@ -556,22 +544,29 @@ function cmdWorkerDone(args) {
   const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reviewerCreate: create });
 
-  // 旧路/重试：审官卡已在，本命令没新建。首审仍要把完工信号送到已有审官（flow 待审态不再起审官）。
+  // 首审必须把完工摘要投到审官 dispatch：新建路径用 reviewer-create 返回的 id；
+  // 旧路/重试（卡已在）再反查。投递失败 fail-visible（审官任务书等这条信号才开工审）。
   let notified = null;
-  if (existing && plan.round === 'first') {
+  let reviewerDispatchId = create && create.reviewerDispatchId ? create.reviewerDispatchId : null;
+  if (!reviewerDispatchId && existing && plan.round === 'first') {
     const childId = existing.id || existing.worktreeId;
     const wl = orca(argsWorkerList());
     if (!wl.ok) fail(`已有审官卡但 worker-list 没查成：${errText(wl.error)}`, { ...plan, postedIssue, postedPr });
     const found = findDispatchForWorktree(wl.json, childId);
     if (!found.ok) fail(`已有审官卡但找不到 dispatch：${found.error}`, { ...plan, postedIssue, postedPr, found });
+    reviewerDispatchId = found.dispatchId;
+  }
+  if (plan.round === 'first' && reviewerDispatchId) {
     notified = deliverMessage({
-      to: `dispatch:${found.dispatchId}`,
+      to: `dispatch:${reviewerDispatchId}`,
       subject: `完工：PR #${plan.pr}`,
       body: plan.comment,
       hop: '士兵→审官',
       orca: (a) => orca(a),
     });
-    if (!notified.ok) fail(`完工通知没送到已有审官：${notified.error}`, { ...plan, postedIssue, postedPr, notified });
+    if (!notified.ok) fail(`完工通知没送到审官：${notified.error}`, { ...plan, postedIssue, postedPr, notified });
+  } else if (plan.round === 'first' && shouldCreate && !reviewerDispatchId) {
+    fail('reviewer-create 没返回 reviewerDispatchId，完工消息没处可投（没查成）', { ...plan, postedIssue, postedPr, reviewerCreate: create });
   }
 
   emit({
@@ -659,9 +654,17 @@ function cmdWorktreeCreate(args) {
 
 function cmdWorktreeRm(args) {
   if (!args.worktree) fail('worktree-rm 要 --worktree');
-  const r = orca(argsWorktreeRm({ worktree: args.worktree, force: args.force }));
-  if (!r.ok) fail(`worktree rm 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json });
+  const listed = orca(argsWorktreePs());
+  if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
+  const wts = listed.json?.result?.worktrees;
+  if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
+  const plan = planWorktreeRm(wts, args.worktree);
+  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [] });
+  const applied = applyWorktreeRmPlan(plan, {
+    rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
+  });
+  if (!applied.ok) fail(applied.error, { removed: applied.removed || [] });
+  emit({ ok: true, removed: applied.removed });
 }
 
 function cmdTaskCreate(args) {

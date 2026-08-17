@@ -31,6 +31,12 @@
     "capturedAt": "2026-08-15",
     "note": "与 #497 tests/fixtures/orca-returns/task-create.json 同一份实采（result.task.id，顶层 id 是 RPC id）"
   },
+  "extractTerminalSend": {
+    "file": "terminal-send.json",
+    "command": "orca terminal send --terminal $ORCA_TERMINAL_HANDLE --text probe-580 --json",
+    "capturedAt": "2026-08-17",
+    "note": "#580：terminal send --json 真语料。result.send.{handle,accepted,bytesWritten}。不带 --json 是纯文本 Sent N bytes to term_xxx.（见 terminal-send-plaintext.txt）"
+  },
   "extractDispatchId": {
     "file": "worker-show.json",
     "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",

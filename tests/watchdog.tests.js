@@ -63,7 +63,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|stagnation|selector|blind|model-change|stale-completion|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -333,11 +333,11 @@ console.log("\n=== ⑲ 命名校验（#476）：任务卡显示名格式 ===");
   check("命名违规但终端在跑的树不报 orphan（活跃执行者判据优先）", !/orphan:/.test(r.out), r.out.trim());
 }
 
-console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契约 #497 立约）===");
+console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契约 #497 立约；#580 从未存在）===");
 {
   const rs = runWatchdog(path.join(FIXTURES, "heartbeat-stale"), ["--once", "--now", String(NOW)]);
   check("心跳 10 分钟未更新：退出码 1（flow 停摆候选）", rs.status === 1, `status=${rs.status}`);
-  check("心跳 10 分钟未更新：输出 flow-stalled", /\[flow\] flow-stalled:.*10 分钟未更新/.test(rs.out), rs.out.trim());
+  check("心跳过期三态话：flow-stalled 含「心跳过期」", /\[flow\] flow-stalled:.*心跳过期.*10 分钟未更新/.test(rs.out), rs.out.trim());
 
   const rp = runWatchdog(path.join(FIXTURES, "heartbeat-pending"), ["--once", "--now", String(NOW)]);
   check("在途 PR 停留 40 分钟：退出码 1（停滞态：该发生而没发生）", rp.status === 1, `status=${rp.status}`);
@@ -345,7 +345,22 @@ console.log("\n=== ⑳ flow 心跳消费端（#471 停滞态/flow 停摆；契�
 
   const rf = runWatchdog(path.join(FIXTURES, "heartbeat-fresh"), ["--once", "--now", String(NOW)]);
   check("心跳新鲜 + 无停滞 PR：不报 flow-stalled/stagnation", !/flow-stalled:/.test(rf.out) && !/stagnation:/.test(rf.out), rf.out.trim());
-  check("心跳缺失样本单独显形（HEARTBEAT_MISSING，不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
+  check("心跳新鲜三态话", /心跳新鲜/.test(rf.out), rf.out.trim());
+  check("心跳缺失且待流转没查成：HEARTBEAT_MISSING（不是查过没事）", /HEARTBEAT_MISSING/.test(runWatchdog(path.join(FIXTURES, "live"), ["--once"]).out), "live/ 快照无 heartbeat.json 应显形");
+
+  const ap = runWatchdog(path.join(FIXTURES, "heartbeat-absent-pending"), ["--once"]);
+  check("无心跳 + 有待流转（红判定待返工注入）：退出码 1", ap.status === 1, `status=${ap.status}`);
+  check("无心跳 + 有待流转：报 flow-absent 心跳从未存在", /\[flow\] flow-absent:.*心跳从未存在.*待流转/.test(ap.out), ap.out.trim());
+  check("无心跳 + 有待流转：不报 flow-stalled（过期和从未存在分得开）", !/flow-stalled:/.test(ap.out), ap.out.trim());
+
+  const ai = runWatchdog(path.join(FIXTURES, "heartbeat-absent-idle"), ["--once"]);
+  check("无心跳 + 无待流转（已绿待帅）：不报 flow-absent/flow-stalled", !/flow-absent:/.test(ai.out) && !/flow-stalled:/.test(ai.out), ai.out.trim());
+  check("无心跳 + 无待流转：心跳从未存在但不报", /心跳从未存在.*无待流转对象，不报/.test(ai.out), ai.out.trim());
+
+  const tp = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-pending"), ["--once"]);
+  check("PR#582≠issue#580：署名 issue 完工 + 红判定 → 报 flow-absent", /\[flow\] flow-absent:.*心跳从未存在/.test(tp.out), tp.out.trim());
+  const ti = runWatchdog(path.join(FIXTURES, "heartbeat-absent-ticket-idle"), ["--once"]);
+  check("PR#582≠issue#580：完工只在 PR 会话 → 不报", !/flow-absent:/.test(ti.out) && /心跳从未存在.*无待流转对象/.test(ti.out), ti.out.trim());
 }
 
 console.log("\n=== ⑳k #575 ① 真实故障注入：跑 flow 写心跳 → 停写（kill）→ 5 分钟报 flow-stalled ===");
@@ -521,7 +536,24 @@ console.log("\n=== ㉕ #575 Pasted Content 停摆指纹 + ALL_IDLE（全员卡�
     ri2.status === 1 && /all-idle:/.test(ri2.out) && /pasted-content:.*5711 chars/.test(ri2.out), ri2.out.trim());
 }
 
-console.log("\n=== ㉖ #586 工人 done 但 head 比完工信号新 ===");
+console.log("\n=== ㉖ #580 追加：503/5xx 指纹 + 重试循环（内容在变也报；有产出不报；stall 不弱） ===");
+{
+  const r = runWatchdog(path.join(FIXTURES, "retry-503"), ["--now", String(NOW)]);
+  check("503 重试三轮（内容在变、无产出）：退出码 1", r.status === 1, `status=${r.status} ${r.out.trim()}`);
+  check("503 重试三轮：报 retry-loop", /retry-loop:.*同一错误行连续 3 轮/.test(r.out), r.out.trim());
+  check("503 重试三轮：不报 stall（真实内容在变，停摆判据没被放宽也没被误伤）", !/stall:/.test(r.out), r.out.trim());
+
+  const p = runWatchdog(path.join(FIXTURES, "retry-503-progress"), ["--now", String(NOW)]);
+  check("503 重试但 git 产出新鲜：不报 retry-loop", !/retry-loop:/.test(p.out), p.out.trim());
+
+  const s = runWatchdog(path.join(FIXTURES, "hash-stable"));
+  check("屏面全冻三轮：stall 照旧报（不许为修重试循环把停摆判弱）", s.status === 1 && /stall:/.test(s.out), s.out.trim());
+
+  const h = runWatchdog(path.join(FIXTURES, "real-advance"));
+  check("正常输出且内容在动：不报 retry-loop / stall", h.status === 0 && !/retry-loop:/.test(h.out) && !/stall:/.test(h.out), h.out.trim());
+}
+
+console.log("\n=== ㉗ #586 工人 done 但 head 比完工信号新 ===");
 {
   const stale = runWatchdog(path.join(FIXTURES, "stale-completion"), ["--once"]);
   check("正样本：head 比完工 comment 新 → 退出码 1", stale.status === 1, `status=${stale.status}`);

@@ -11,7 +11,7 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 多块活（能拆成几块、各够一个工人干一阵的）走 `host/skills/dao-project/SKILL.md` 的项化路径（项卡 + 多 worker 子卡 + 各自审官 + 收口官，消歧门门控），本页不复制；单卡场景仍走本页。
 
-审官卡走 `node scripts/dao.mjs reviewer-create --pr <N>`：base 从 PR 推导，建完自证 HEAD 与被审文件，对不上就拒绝起 agent。不要手填 `--base-branch`。任务归档整树收口，辅助卡不要飘成顶层。
+审官卡走 `node scripts/dao.mjs reviewer-create --pr <N>`：base 从 PR 推导，建完自证 HEAD 与被审文件，对不上就拒绝起 agent。不要手填 `--base-branch`。任务归档整树收口（`node scripts/dao.mjs worktree-rm --worktree <任务卡>` 一条命令，含子卡），辅助卡不要飘成顶层。
 
 ## 主会话红线
 
@@ -116,9 +116,9 @@ grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #44
 
 累计数据触发定位调整信号时，以策略 PR 提案形式摆给用户拍板。一个任务只做一次，不为测评搞对跑或重复实验——校准数据全部来自真实任务流。
 
-合并即归档：PR 合并后当场 `orca worktree rm` 该任务卡（分支已进 master，副本无保留价值）——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443）。
+合并即归档：PR 合并后当场 `node scripts/dao.mjs worktree-rm --worktree <任务卡>`（一条命令整树收口，含子卡；子卡占用中会拒删并报是哪棵，不会半删）。分支已进 master，副本无保留价值——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443；递归删 #588）。
 
-收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `orca worktree rm`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
+收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `node scripts/dao.mjs worktree-rm --worktree <卡>`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
 
 issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 issue，合并时当场关闭并引用落点 PR（落地即关）；拍板写进真正对应的 issue/PR，禁止把不相干拍板塞进同一张 issue，没有对应载体宁可开小 issue（拍板归位）；「落点 PR 已 merged 但 issue 未关」的自动闸在 #442 看门狗审计清单。
 

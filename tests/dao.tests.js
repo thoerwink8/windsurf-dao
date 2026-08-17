@@ -630,6 +630,10 @@ async function main() {
     check('#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）',
       /invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
       wdFn.slice(0, 240));
+    check('#586 worker-done 首审新建后用 reviewerDispatchId 投递完工（投失败即停）',
+      /create\.reviewerDispatchId/.test(wdFn) && /hop: '士兵→审官'/.test(wdFn)
+      && /没返回 reviewerDispatchId/.test(wdFn),
+      wdFn.slice(0, 400));
     const reworkPlan = S.planWorkerDone({
       pr: '46',
       runGh: (a) => {
@@ -1074,6 +1078,10 @@ async function main() {
       S.extractWorktreeId(wtLive) === '1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
     check('真 worktree create → extractWorktreePath',
       S.extractWorktreePath(wtLive) === 'C:/Users/Administrator/orca/workspaces/windsurf-dao/_fixture-499-delete-me');
+
+    const sendLive = fx('terminal-send.json');
+    const sent = S.extractTerminalSend(sendLive);
+    check('真 terminal send --json → extractTerminalSend accepted', sent && sent.accepted === true && sent.bytesWritten === 9, JSON.stringify(sent));
 
     const taskLive = fx('task-create.json');
     check('真 task-create → extractTaskId 走 result.task.id',
