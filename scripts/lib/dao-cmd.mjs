@@ -556,13 +556,30 @@ export function argsWorkerRead({ dispatch, source, cursor, limit } = {}) {
   return a;
 }
 
-export function argsOrchestrationReply({ id, body, from } = {}) {
+export function argsOrchestrationReply({ id, body, from, run } = {}) {
   const a = ['orchestration', 'reply'];
   if (id) a.push('--id', id);
   if (body != null) a.push('--body', body);
+  if (run) a.push('--run', run);
   if (from) a.push('--from', from);
   a.push('--json');
   return a;
+}
+
+export function argsOrchestrationCheck({ run, terminal, peek, ack, wait, timeoutMs } = {}) {
+  const a = ['orchestration', 'check'];
+  if (run) a.push('--run', run);
+  if (terminal) a.push('--terminal', terminal);
+  if (peek) a.push('--peek');
+  if (ack) a.push('--ack', ack);
+  if (wait) a.push('--wait');
+  if (timeoutMs != null) a.push('--timeout-ms', String(timeoutMs));
+  a.push('--json');
+  return a;
+}
+
+export function argsRunList() {
+  return ['orchestration', 'run-list', '--json'];
 }
 
 export function argsGateCreate({ task, question, options, from } = {}) {
@@ -705,8 +722,11 @@ export function catalogUsedFlags() {
     argsGateResolve({ id: 'g', resolution: 'r' }),
     argsGateList({ task: 't', status: 'pending' }),
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
+    argsOrchestrationCheck({ run: 'r', terminal: 't', peek: true }),
     argsRunShow({ id: 'r' }),
     argsRunCurrent(),
+    argsRunList(),
+    argsOrchestrationReply({ id: 'm', body: 'b', run: 'r', from: 'h' }),
   ];
   return samples.map(args => ({
     cmd: commandKey(args),
@@ -2380,7 +2400,7 @@ export function probeRecipient(target, orca) {
     return { ok: false, unscanned: true, kind: 'own-run', error: `本终端绑的 Run 没查成: ${text}` };
   }
   const run = r.json?.result?.run;
-  if (!run) return { ok: false, kind: 'own-run', error: '本终端没绑 orchestration Run，省略收件人 = 发进真空' };
+  if (!run) return { ok: false, kind: 'own-run', error: '本终端没绑 orchestration Run（run-current 为 null），省略收件人 = 发进真空。工人/审官用 worker-show 的 dispatch.run_id 写成 --to run:<id>' };
   return { ok: true, kind: 'own-run', id: run.id || null };
 }
 
@@ -2491,10 +2511,11 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'raw',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query',
+  'inbox-collect', 'run-gc', 'ask', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
@@ -2529,7 +2550,10 @@ export const FLAGS_BY_VERB = {
   notify: new Set([
     '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
   ]),
-  reply: new Set(['--id', '--body', '--from', '--json', '--help', '-h']),
+  reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
+  'inbox-collect': new Set(['--peek', '--json', '--help', '-h']),
+  'run-gc': new Set(['--apply', '--json', '--help', '-h']),
+  ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--json', '--help', '-h']),
   'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
   'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
   'gate-list': new Set(['--task', '--status', '--run', '--json', '--help', '-h']),
@@ -2598,13 +2622,21 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
                   # #595：树内 ledger/events 有未进主树的事件文件 → 整树不删，报清是哪几条
+                  # #593：同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）
+  inbox-collect [--peek]
+                  # 按在途单的 Run 收信箱。三态：empty / unscanned / run_not_found。默认 --peek 不标已读
+  run-gc [--apply]
+                  # 列出无在途单对应的 Run；--apply 才关台退役。在途的不许退役
+  ask --question <文> [--options <csv>] [--timeout-ms <n>] [--run <id>]
+                  # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
   worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send --terminal <handle> --text <文> [--enter]
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
-  reply --id <消息id> --body <回答> [--from <handle>]   # 帅回答工人的 ask 提问，回答进编排记录（#559 ③）
+  reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
+                  # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
   gate-resolve --id <gate_id> --resolution <裁定>                          # 帅裁定决议门
   gate-list [--task <task_id>] [--status <状态>]

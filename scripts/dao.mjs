@@ -7,7 +7,7 @@
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { readLedgerEvents, queryLedger } from './lib/ledger-query.mjs';
 import {
@@ -30,6 +30,13 @@ import {
   argsWorkerRead,
   argsWorkerShow,
   argsOrchestrationReply,
+  argsOrchestrationCheck,
+  argsOrchestrationInbox,
+  argsOrchestrationSend,
+  argsRunShow,
+  argsRunCurrent,
+  argsRunList,
+  extractSentMessage,
   argsGateCreate,
   argsGateResolve,
   argsGateList,
@@ -92,6 +99,21 @@ import {
   resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
+import {
+  ASK_TIMEOUT_MARK,
+  planRunGc,
+  resolveRunsForWorktrees,
+  planInboxCollect,
+  classifyMailboxRead,
+  findThreadReply,
+  classifyAskPoll,
+  planStationRetire,
+  applyStationRetire,
+  resolveReplySender,
+  parseAskTimeoutMs,
+  finalizeWorktreeRmLifecycle,
+} from './lib/run-lifecycle.mjs';
+import { defaultLogRel, leasePath, launchFilePath } from './inbox-station.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -234,6 +256,60 @@ function taskCreateOnRun(spec, runId) {
   return last;
 }
 
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function unwrapRuns(json) {
+  return json?.result?.runs || json?.runs || null;
+}
+
+function unwrapWorkers(json) {
+  return json?.result?.workers || null;
+}
+
+function stationFilesFor(runId) {
+  const main = resolveMainWorktreeRoot({ from: ROOT });
+  const base = main.ok ? main.root : ROOT;
+  const logPath = join(base, defaultLogRel(runId));
+  return [leasePath(logPath), launchFilePath(logPath), logPath];
+}
+
+function retireOneRun(runId) {
+  const shown = orca(argsRunShow({ id: runId }));
+  if (!shown.ok) {
+    const text = errText(shown.error);
+    if (/run_not_found/i.test(text)) return { ok: false, state: 'run_not_found', runId, error: text };
+    return { ok: false, unscanned: true, runId, error: text };
+  }
+  const handle = shown.json?.result?.run?.coordinator_handle || null;
+  const plan = planStationRetire({
+    runId,
+    coordinatorHandle: handle,
+    files: stationFilesFor(runId),
+  });
+  return applyStationRetire(plan, {
+    closeTerminal: (h) => orca(argsTerminalClose({ terminal: h, tab: true })),
+    unlink: unlinkSync,
+  });
+}
+
+function loadLifecycleInputs() {
+  const listed = orca(argsWorktreePs());
+  if (!listed.ok) return { ok: false, error: `盘面没查成: ${errText(listed.error)}` };
+  const worktrees = listed.json?.result?.worktrees;
+  if (!Array.isArray(worktrees)) return { ok: false, error: 'worktree ps 没有 result.worktrees' };
+  const wl = orca(argsWorkerList());
+  if (!wl.ok) return { ok: false, error: `worker-list 没查成: ${errText(wl.error)}` };
+  const workers = unwrapWorkers(wl.json);
+  if (!Array.isArray(workers)) return { ok: false, error: 'worker-list 没有 result.workers' };
+  const rl = orca(argsRunList());
+  if (!rl.ok) return { ok: false, error: `run-list 没查成: ${errText(rl.error)}` };
+  const runs = unwrapRuns(rl.json);
+  if (!Array.isArray(runs)) return { ok: false, error: 'run-list 没有 result.runs' };
+  return { ok: true, worktrees, workers, runs };
+}
+
 function runIdFromDispatch(dispatchId) {
   if (!dispatchId) return null;
   const shown = orca(argsWorkerShow({ dispatch: dispatchId }));
@@ -343,7 +419,9 @@ function cmdDispatch(args) {
 
   let taskId = args.task || null;
   if (soldierBook) {
-    const task = orca(argsTaskCreate({ spec: soldierBook }));
+    const bound = orca(argsRunCurrent());
+    const boundRun = bound.ok ? (bound.json?.result?.run?.id || null) : null;
+    const task = taskCreateOnRun(soldierBook, boundRun);
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
       failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
@@ -942,11 +1020,45 @@ function cmdWorktreeRm(args) {
     mainEventsDir: main.ok ? join(main.root, 'ledger', 'events') : null,
   });
   if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
+  const wl = orca(argsWorkerList());
+  if (!wl.ok) fail(`worker-list 没查成，未删任何树: ${errText(wl.error)}`);
+  const workers = unwrapWorkers(wl.json);
+  if (!Array.isArray(workers)) fail('worker-list 没有 result.workers，未删任何树');
+  const rl = orca(argsRunList());
+  if (!rl.ok) fail(`run-list 没查成，未删任何树: ${errText(rl.error)}`);
+  const runs = unwrapRuns(rl.json);
+  if (!Array.isArray(runs)) fail('run-list 没有 result.runs，未删任何树');
+  const mapped = resolveRunsForWorktrees({
+    workers,
+    treeIds: plan.order.map(n => n.id),
+  });
+  if (!mapped.ok) fail(`Run 映射没查成，未删任何树: ${mapped.error}`);
   const applied = applyWorktreeRmPlan(plan, {
     rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
   });
   if (!applied.ok) fail(applied.error, { removed: applied.removed || [] });
-  emit({ ok: true, removed: applied.removed });
+
+  const removedIds = new Set((applied.removed || []).map(n => n.id));
+  const remaining = wts.filter(w => {
+    const id = w.worktreeId || w.id;
+    return id && !removedIds.has(id);
+  });
+  const gc = planRunGc({ runs, workers, worktrees: remaining });
+  if (!gc.ok) fail(`退役名单没查成，树已删: ${gc.error}`, { removed: applied.removed });
+  const retireResults = [];
+  for (const runId of mapped.runIds) {
+    if (!gc.retire.some(r => r.id === runId)) continue;
+    retireResults.push(retireOneRun(runId));
+  }
+  const life = finalizeWorktreeRmLifecycle({ mapped, gc, retireResults });
+  if (!life.ok) {
+    fail(life.error, { removed: applied.removed, runs: life });
+  }
+  emit({
+    ok: true,
+    removed: applied.removed,
+    runs: life,
+  });
 }
 
 function cmdTaskCreate(args) {
@@ -1493,9 +1605,138 @@ function cmdNotify(args) {
 function cmdReply(args) {
   if (!args.id) fail('reply 要 --id（被回答的消息 id）');
   if (args.body == null) fail('reply 要 --body');
-  const r = orca(argsOrchestrationReply({ id: args.id, body: args.body, from: args.from }));
+  let sender;
+  if (args.from && args.run) {
+    sender = { ok: true, from: args.from, runId: args.run };
+  } else {
+    const inbox = orca(argsOrchestrationInbox({ limit: 80, full: true }));
+    const rl = orca(argsRunList());
+    sender = resolveReplySender({
+      messageId: args.id,
+      explicitFrom: args.from || null,
+      explicitRun: args.run || null,
+      inboxOk: inbox.ok,
+      inboxMessages: inbox.ok ? (inbox.json?.result?.messages || []) : null,
+      runListOk: rl.ok,
+      runs: rl.ok ? unwrapRuns(rl.json) : null,
+    });
+  }
+  if (!sender.ok) fail(`reply 定位失败: ${sender.error}`);
+  if (!sender.from) fail('reply 没有信箱台 --from，不许裸发');
+  const r = orca(argsOrchestrationReply({
+    id: args.id, body: args.body, from: sender.from, run: sender.runId,
+  }));
   if (!r.ok) fail(`reply 失败: ${errText(r.error)}`);
-  emit({ ok: true, json: r.json, messageId: args.id });
+  emit({ ok: true, json: r.json, messageId: args.id, from: sender.from, run: sender.runId || null });
+}
+
+function cmdInboxCollect(args) {
+  const src = loadLifecycleInputs();
+  if (!src.ok) fail(src.error);
+  const plan = planInboxCollect(src);
+  if (!plan.ok) fail(plan.error);
+  const inbox = orca(argsOrchestrationInbox({ limit: 100, full: true }));
+  const inboxMessages = inbox.ok ? (inbox.json?.result?.messages || []) : null;
+  const items = [];
+  for (const it of plan.items) {
+    if (it.state === 'run_not_found') {
+      items.push(classifyMailboxRead({
+        ok: false, error: { code: 'run_not_found', message: `Run ${it.runId} was not found.` }, runId: it.runId,
+      }));
+      continue;
+    }
+    let checked = { ok: false, error: 'no-coordinator' };
+    if (it.coordinatorHandle) {
+      checked = orca(argsOrchestrationCheck({
+        run: it.runId,
+        terminal: it.coordinatorHandle,
+        peek: args.peek !== false,
+      }));
+    }
+    const parsed = checked.ok ? (checked.json?.result || {}) : {};
+    items.push(classifyMailboxRead({
+      ok: checked.ok,
+      error: checked.ok ? null : checked.error,
+      messages: parsed.messages,
+      inboxMessages,
+      runId: it.runId,
+    }));
+  }
+  emit({
+    ok: true,
+    items,
+    inboxUnscanned: !inbox.ok,
+    inboxError: inbox.ok ? undefined : errText(inbox.error),
+  });
+}
+
+function cmdRunGc(args) {
+  const src = loadLifecycleInputs();
+  if (!src.ok) fail(src.error);
+  const plan = planRunGc(src);
+  if (!plan.ok) fail(plan.error);
+  const summary = {
+    retire: plan.retire.map(r => r.id),
+    keep: plan.keep.map(r => r.id),
+    skippedLegacy: plan.skippedLegacy.map(r => r.id),
+  };
+  if (!args.apply) {
+    emit({ ok: true, dryRun: true, ...summary });
+  }
+  const retired = [];
+  const failed = [];
+  for (const r of plan.retire) {
+    const one = retireOneRun(r.id);
+    if (one.ok) retired.push(one);
+    else failed.push(one);
+  }
+  emit({ ok: failed.length === 0, retired, failed, ...summary }, failed.length ? 1 : 0);
+}
+
+function cmdAsk(args) {
+  if (!args.question) fail('ask 要 --question');
+  const parsedTimeout = parseAskTimeoutMs(args.timeoutMs);
+  if (!parsedTimeout.ok) fail(parsedTimeout.error);
+  const timeoutMs = parsedTimeout.timeoutMs;
+  let runId = args.run || null;
+  if (!runId) {
+    const cur = orca(argsRunCurrent());
+    if (!cur.ok) fail(`run-current 没查成: ${errText(cur.error)}`);
+    runId = cur.json?.result?.run?.id || null;
+  }
+  if (!runId) {
+    fail('找不到上报 Run：给 --run <id>。工人从 worker-show 的 dispatch.run_id 取。不要用 run-current（工人终端经常是 null）');
+  }
+  const sent = orca(argsOrchestrationSend({
+    to: `run:${runId}`,
+    subject: String(args.question).slice(0, 80),
+    body: args.options ? `${args.question}\n选项：${args.options}` : args.question,
+    type: 'question',
+  }));
+  if (!sent.ok) fail(`ask 发出去失败: ${errText(sent.error)}`);
+  const msg = extractSentMessage(sent.json);
+  if (!msg) fail('ask 发出去了却没回执');
+  const t0 = Date.now();
+  for (;;) {
+    const elapsed = Date.now() - t0;
+    const inbox = orca(argsOrchestrationInbox({ limit: 80, full: true }));
+    const poll = classifyAskPoll({
+      reply: inbox.ok ? findThreadReply(inbox.json?.result?.messages, msg.id) : null,
+      elapsedMs: elapsed,
+      timeoutMs,
+      unscanned: !inbox.ok,
+      error: inbox.ok ? null : errText(inbox.error),
+    });
+    if (poll.state === 'answered') {
+      emit({ ok: true, answer: poll.body, questionId: msg.id, replyId: poll.messageId, runId });
+    }
+    if (poll.state === 'unscanned') fail(`ask 收信没查成: ${poll.error}`);
+    if (poll.state === 'timeout') {
+      console.error(ASK_TIMEOUT_MARK);
+      emit({ ok: false, error: ASK_TIMEOUT_MARK, mark: ASK_TIMEOUT_MARK, questionId: msg.id, runId }, 1);
+    }
+    sleepMs(1000);
+  }
 }
 
 function cmdGateCreate(args) {
@@ -1584,6 +1825,9 @@ function main() {
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);
     case 'reply': return cmdReply(args);
+    case 'inbox-collect': return cmdInboxCollect(args);
+    case 'run-gc': return cmdRunGc(args);
+    case 'ask': return cmdAsk(args);
     case 'gate-create': return cmdGateCreate(args);
     case 'gate-resolve': return cmdGateResolve(args);
     case 'gate-list': return cmdGateList(args);

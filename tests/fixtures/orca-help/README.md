@@ -17,6 +17,8 @@ orca orchestration send --help > tests/fixtures/orca-help/orchestration-send.txt
 orca orchestration inbox --help > tests/fixtures/orca-help/orchestration-inbox.txt
 orca orchestration run-show --help > tests/fixtures/orca-help/orchestration-run-show.txt
 orca orchestration run-current --help > tests/fixtures/orca-help/orchestration-run-current.txt
+orca orchestration run-list --help > tests/fixtures/orca-help/orchestration-run-list.txt
+orca orchestration check --help > tests/fixtures/orca-help/orchestration-check.txt
 ```
 
 自检优先跑 live `--help`；orca 不在 PATH（如 GitHub-hosted CI）才读这里。
