@@ -70,9 +70,10 @@ async function main() {
     check('claude 不走裸 claude', !/\bclaude\b/.test(claude.command.replace(/reclaude/g, '')), claude.command);
 
     const grok = S.resolveLaunch({ provider: 'grok', routing });
-    check('grok 走 shim', /grok-shim\.cmd/.test(grok.command), grok.command);
+    check('grok launch 走 grok', /\bgrok\b/.test(grok.command) && !/grok-shim\.cmd/.test(grok.command), grok.command);
     check('grok launch 带 --effort xhigh', /--effort\s+xhigh/.test(grok.command), grok.command);
-    check('grok launch 带 --permission-mode auto', /--permission-mode\s+auto/.test(grok.command), grok.command);
+    check('grok launch 带 --always-approve', /--always-approve/.test(grok.command), grok.command);
+    check('grok launch 不再用 --permission-mode auto 冒充免确认', !/--permission-mode\s+auto/.test(grok.command), grok.command);
     check('shim 文件在仓里', fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')));
     const shim = fs.readFileSync(path.join(REPO, 'scripts', 'grok-shim.cmd'), 'utf8');
     check('shim 带 HTTPS_PROXY', /HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/.test(shim));
@@ -278,7 +279,7 @@ async function main() {
     check('dry-run 写出审官预建计划', pOk.reviewerCard === '审官·gpt-5.6-sol' && /codex/.test(pOk.reviewerLaunch), JSON.stringify(pOk));
     check('审官 launch 带 danger 旗标', String(pOk.reviewerLaunch || '').includes(S.CODEX_CAPABLE_FLAG), JSON.stringify(pOk));
     check('#546 dry-run 写出审官 base（工人树当前分支）', typeof pOk.reviewerBase === 'string' && pOk.reviewerBase.length > 0, JSON.stringify(pOk));
-    check('dry-run 工人走 grok shim', /grok-shim/.test(pOk.workerLaunch), JSON.stringify(pOk));
+    check('dry-run 工人走 grok --always-approve', /\bgrok\b/.test(pOk.workerLaunch) && /--always-approve/.test(pOk.workerLaunch), JSON.stringify(pOk));
 
     const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);

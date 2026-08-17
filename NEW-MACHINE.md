@@ -161,8 +161,8 @@ grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证
       *) exec "C:/nvm4w/nodejs/grok.cmd" -m grok-4.6 "$@" ;;
     esac
     ```
-    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。
-- auto 模式会硬拦 git push（对外发布闸），协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。
+    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制（`--permission-mode auto` 不是免确认框，见该文件 launch_note）。
+- 宿主对外发布闸仍会硬拦 git push，协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。这和 TUI 确认框不是一层。
 
 ## 7b. command-code 怎么配
 

@@ -1,4 +1,4 @@
-// 完工信号契约检查（#575 ⑥，dao-check 第 ⑮ 项）。
+// 完工信号契约检查（#575 ⑥，dao-check 第 ⑯ 项）。
 //
 // 病：flow 读 PR comment 首行「完工」，worker-brief 只教 worker_done → 自动起审官从未触发。
 // #575 ⑥ 订正：交棒发 issue comment；本检查要求 flow 契约注释与 brief/dispatch 同读 issue。
