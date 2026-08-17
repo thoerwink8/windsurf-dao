@@ -789,6 +789,36 @@ async function main() {
       bookedAnon.action === 'reuse' && bookedAnon.worktreeId === 'wt_aux',
       JSON.stringify(bookedAnon));
 
+    const staleThenLive = S.resolveReviewerReuse({
+      parentId: parent,
+      worktrees: [
+        parentWt,
+        { id: 'wt_rev_mix', parentWorktreeId: parent, createdAt: 10 },
+      ],
+      workers: [
+        {
+          dispatchId: 'ctx_old_done',
+          dispatchStatus: 'completed',
+          workerState: 'succeeded',
+          resource: { worktreeId: 'wt_rev_mix', terminalHandle: 'term_stale' },
+          agentTerminalHandle: 'term_stale',
+        },
+        {
+          dispatchId: 'ctx_new_failed',
+          dispatchStatus: 'failed',
+          workerState: 'failed',
+          resource: { worktreeId: 'wt_rev_mix', terminalHandle: 'term_live' },
+          agentTerminalHandle: 'term_live',
+        },
+      ],
+      terminals: [
+        { handle: 'term_live', worktreeId: 'wt_rev_mix', connected: true, writable: true },
+      ],
+    });
+    check('#586 同树先结算后失败：复用还活着的 handle，不因旧 handle 误判已关',
+      staleThenLive.action === 'reuse' && staleThenLive.handle === 'term_live',
+      JSON.stringify(staleThenLive));
+
     check('#586 worker-done 源码不再用卡名匹配找审官',
       !/\/审官\//.test(wdFn) && /resolveReviewerReuse/.test(wdFn) && /reuseReviewerOnTerminal/.test(wdFn),
       wdFn.slice(0, 280));

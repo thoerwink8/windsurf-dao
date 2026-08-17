@@ -1912,9 +1912,27 @@ function terminalIsLive(handle, terminals) {
   if (!Array.isArray(terminals)) return false;
   const t = terminals.find(x => x && x.handle === handle);
   if (!t) return false;
+  if (t.connected === false || t.writable === false || t.orphaned === true) return false;
   const st = String(t.status || t.state || '').toLowerCase();
   if (!st) return true;
   return !/^(exited|closed|stopped|stale|dead)$/.test(st);
+}
+
+function isActiveDispatch(w) {
+  return w && w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded';
+}
+
+function pickHandleFromHits(hits, terminals) {
+  const prefer = hits.filter(isActiveDispatch);
+  const ordered = prefer.concat(hits.filter(w => !prefer.includes(w)));
+  const seen = [];
+  for (const w of ordered) {
+    const h = reviewerHandleFromWorker(w);
+    if (!h || seen.includes(h)) continue;
+    seen.push(h);
+    if (terminalIsLive(h, terminals)) return { handle: h, live: true };
+  }
+  return { handle: seen[0] || null, live: false };
 }
 
 /**
@@ -1945,11 +1963,11 @@ export function resolveReviewerReuse({
     if (!cid) continue;
     const hits = workers.filter(w => worktreeIdMatches(w?.resource?.worktreeId, cid));
     if (hits.length === 0) continue;
-    const handle = reviewerHandleFromWorker(hits.find(w => reviewerHandleFromWorker(w)) || hits[0]);
+    const picked = pickHandleFromHits(hits, terminals);
     candidates.push({
       worktreeId: cid,
-      handle,
-      live: terminalIsLive(handle, terminals),
+      handle: picked.handle,
+      live: picked.live,
       createdAt: Number(child.createdAt) || 0,
     });
   }
