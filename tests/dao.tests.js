@@ -1235,6 +1235,13 @@ async function main() {
     ] } };
     const foundLive = S.findDispatchForWorktree(wlFx, 'repo::C:/wt/worker');
     check('findDispatchForWorktree 优先活着的 dispatch', foundLive.ok && foundLive.dispatchId === 'ctx_live', JSON.stringify(foundLive));
+    const wlFailedFirst = { result: { workers: [
+      { dispatchId: 'ctx_failed', workerState: 'failed', dispatchStatus: 'failed', resource: { worktreeId: 'repo::C:/wt/rev' } },
+      { dispatchId: 'ctx_ready', workerState: 'ready', dispatchStatus: 'dispatched', resource: { worktreeId: 'repo::C:/wt/rev' } },
+    ] } };
+    const foundReady = S.findDispatchForWorktree(wlFailedFirst, 'repo::C:/wt/rev');
+    check('findDispatchForWorktree 同树优先 ready，不拿已结算 failed',
+      foundReady.ok && foundReady.dispatchId === 'ctx_ready', JSON.stringify(foundReady));
     const foundMiss = S.findDispatchForWorktree(wlFx, 'no-such-tree');
     check('findDispatchForWorktree 查到 0 条不是没查成', foundMiss.ok === false && !foundMiss.unscanned && foundMiss.scanned === 2, JSON.stringify(foundMiss));
     const foundBad = S.findDispatchForWorktree({ result: {} }, 'x');

@@ -440,7 +440,9 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
   }
   const live = hits.filter(w => w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded');
-  const pick = live[0] || hits[0];
+  const ready = live.filter(w => w.workerState === 'ready' || w.workerState === 'working'
+    || w.dispatchStatus === 'dispatched' || w.dispatchStatus === 'running');
+  const pick = ready[0] || live[0] || hits[0];
   if (!pick?.dispatchId) {
     return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
   }
