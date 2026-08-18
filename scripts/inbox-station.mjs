@@ -29,12 +29,17 @@
 //   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
-import { planStationRetire, applyStationRetire } from './lib/run-lifecycle.mjs';
+import {
+  planStationRetire,
+  applyStationRetire,
+  resolveStationCloseTarget,
+  previewHandlesForRun,
+} from './lib/run-lifecycle.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -145,13 +150,15 @@ export function launchFilePath(logPath) {
   return join(dirname(logPath || DEFAULT_LOG_REL), `${logStem(logPath)}.cmd`);
 }
 
-export function formatLease({ pid, runId, ts, ttlMs }) {
-  return `${JSON.stringify({
+export function formatLease({ pid, runId, ts, ttlMs, handle }) {
+  const obj = {
     pid,
     runId: runId ?? null,
     ts,
     ttlMs: ttlMs ?? LEASE_TTL_MS,
-  })}\n`;
+  };
+  if (handle) obj.handle = handle;
+  return `${JSON.stringify(obj)}\n`;
 }
 
 export function parseLease(raw) {
@@ -164,10 +171,12 @@ export function parseLease(raw) {
     const ts = Number(obj?.ts);
     if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ts)) return null;
     const ttlMs = Number(obj?.ttlMs);
+    const handle = typeof obj.handle === 'string' && obj.handle.trim() ? obj.handle.trim() : null;
     return {
       pid,
       ts,
       runId: obj.runId ?? null,
+      handle,
       ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : LEASE_TTL_MS,
     };
   } catch {
@@ -267,7 +276,9 @@ export function finalizeEnsure({
       }),
     };
   }
-  if (!coordinatorHandle || coordinatorHandle !== handle) {
+  // all-alive 秒退：中继活着即可，coordinator 被借走不失败（也不改租约 handle）。
+  // rebuild/restart 仍要夺回，否则新台横幅不在自己手里。
+  if (action !== 'ok' && (!coordinatorHandle || coordinatorHandle !== handle)) {
     return {
       exitCode: 1,
       payload: statusPayload({
@@ -295,7 +306,8 @@ export function decideEnsureAction({ runId, coordinatorHandle, terminals, lease,
   const relayAlive = isStationAlive(lease, runId, { now, ttlMs });
   if (relayAlive) {
     // 中继活着即全活着：coordinator 若被帅临时借走，中继每轮 run-use 会自夺回。
-    return { action: 'ok', reason: 'all-alive', handle: coordTerm?.handle || null };
+    // 返回的 handle 只能是租约里已验证的台，不能是当前 coordinator（#601 审官红：借走时会污染租约）。
+    return { action: 'ok', reason: 'all-alive', handle: (lease && lease.handle) || null };
   }
   // 本 run 的台死了或从没有过。coordinator 可能仍挂在死壳/帅的终端上。
   if (coordTerm) {
@@ -598,13 +610,62 @@ function loadLease(logPath) {
   }
 }
 
+export function mergeLeaseHandle(prev, nextHandle) {
+  const prevH = prev && prev.handle ? prev.handle : null;
+  if (!nextHandle) return prevH;
+  // 已有台 handle 不许被别的 handle（含借走的 coordinator）顶掉
+  if (prevH && prevH !== nextHandle) return prevH;
+  return nextHandle;
+}
+
+/** 租约 handle 只来自创建出来的信箱台。ensure 活着时不得用当前 coordinator 覆写。 */
+export function acceptLeaseHandleStamp({ prevHandle, nextHandle, source } = {}) {
+  if (!nextHandle) return false;
+  if (source === 'rebuild') return true;
+  if (prevHandle && prevHandle === nextHandle) return true;
+  return false;
+}
+
+/**
+ * cmdEnsure 写租约 handle 的唯一决策。all-alive 一律不写——coordinator 可能是帅/工人。
+ * 只有刚 rebuild/restart 出来的台才能盖。
+ */
+export function planEnsureLeaseStamp({ action, leaseHandle, rebuiltHandle } = {}) {
+  if (action === 'rebuild' || action === 'restart') {
+    return {
+      handle: rebuiltHandle || null,
+      stamp: acceptLeaseHandleStamp({
+        prevHandle: leaseHandle || null,
+        nextHandle: rebuiltHandle || null,
+        source: 'rebuild',
+      }),
+    };
+  }
+  return { handle: leaseHandle || null, stamp: false };
+}
+
 function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS) {
+  const prev = loadLease(logPath);
   writeFileSync(leasePath(logPath), formatLease({
     pid: process.pid,
     runId,
     ts: Date.now(),
     ttlMs,
+    handle: prev && prev.handle ? prev.handle : null,
   }), 'utf8');
+}
+
+function stampLeaseHandle(logPath, handle, source = 'ensure') {
+  if (!handle) return false;
+  const prev = loadLease(logPath);
+  if (!prev) return false;
+  if (!acceptLeaseHandleStamp({
+    prevHandle: prev.handle || null,
+    nextHandle: handle,
+    source,
+  })) return false;
+  writeFileSync(leasePath(logPath), formatLease({ ...prev, handle }), 'utf8');
+  return true;
 }
 
 async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } = {}) {
@@ -696,7 +757,7 @@ async function cmdEnsure(args) {
     foreignStation,
   });
 
-  let handle = coordTerm?.handle || null;
+  let handle = (lease && lease.handle) || decision.handle || null;
   let action = decision.action;
   let reason = decision.reason;
 
@@ -726,6 +787,15 @@ async function cmdEnsure(args) {
       process.exit(1);
     }
     handle = rebuilt.handle;
+  }
+  const stampPlan = planEnsureLeaseStamp({
+    action,
+    leaseHandle: (loadLease(logPath) && loadLease(logPath).handle) || (lease && lease.handle) || null,
+    rebuiltHandle: (action === 'rebuild' || action === 'restart') ? handle : null,
+  });
+  if (stampPlan.handle) handle = stampPlan.handle;
+  if (stampPlan.stamp) {
+    stampLeaseHandle(logPath, stampPlan.handle, 'rebuild');
   }
 
   const afterShow = showRun(runId);
@@ -844,9 +914,39 @@ function cmdRetire(args) {
     process.exit(1);
   }
   const logPath = resolveLogPath(args.log, args.run);
+  const listed = listTerminals();
+  if (!listed.ok) {
+    console.log(JSON.stringify({ ok: false, unscanned: true, runId: args.run, error: `terminal list 失败: ${errText(listed.error)}` }));
+    process.exit(1);
+  }
+  const leaseFile = leasePath(logPath);
+  let lease = null;
+  let leaseRead = 'missing';
+  if (existsSync(leaseFile)) {
+    lease = parseLease(readFileSync(leaseFile, 'utf8'));
+    if (!lease) {
+      console.log(JSON.stringify({ ok: false, unscanned: true, runId: args.run, error: `租约坏了 ${leaseFile}` }));
+      process.exit(1);
+    }
+    leaseRead = 'ok';
+  }
+  const pidAlive = lease && lease.pid ? isProcessAlive(lease.pid) : null;
+  const target = resolveStationCloseTarget({
+    runId: args.run,
+    lease,
+    leaseRead,
+    pidAlive,
+    coordinatorHandle: shown.run?.coordinator_handle || null,
+    terminals: listed.terminals,
+    previewHandles: previewHandlesForRun(listed.terminals, args.run),
+  });
+  if (!target.ok) {
+    console.log(JSON.stringify({ ok: false, unscanned: !!target.unscanned, runId: args.run, error: target.error }));
+    process.exit(1);
+  }
   const plan = planStationRetire({
     runId: args.run,
-    coordinatorHandle: shown.run?.coordinator_handle || null,
+    closeHandle: target.closeHandle,
     files: [leasePath(logPath), launchFilePath(logPath), logPath],
   });
   const applied = applyStationRetire(plan, {
@@ -869,7 +969,9 @@ function printUsage() {
           不传 --run 时只认在途 dispatch 的 Run，不认最新墓碑（#593）
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
-  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）`);
+  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
+          关台身份看租约 PID/runId/handle（或 preview 唯一命中），不看 coordinator_handle
+          证不出且 PID 还活着就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
 }
 
 async function main() {

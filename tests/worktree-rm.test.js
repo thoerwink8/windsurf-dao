@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'dao-cmd.mjs');
 const LIB_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
@@ -236,5 +237,61 @@ describe('worktree-rm', () => {
 
     fs.rmSync(workerDir, { recursive: true, force: true });
     fs.rmSync(mainDir, { recursive: true, force: true });
+  });
+
+  it('#601 审官草稿被 gitignore，账本事件仍可见', async (t) => {
+    const S = await LIB_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-601-gi-'));
+    const repoIgnore = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
+    const init = spawnSync('git', ['init'], { cwd: dir, encoding: 'utf8' });
+    await t.test('沙箱 git init', () => {
+      assert.equal(init.status, 0, init.stderr);
+    });
+    fs.writeFileSync(path.join(dir, '.gitignore'), repoIgnore);
+    fs.writeFileSync(path.join(dir, 'review-601.txt'), 'draft');
+    fs.mkdirSync(path.join(dir, '.tmp-review-601'));
+    fs.writeFileSync(path.join(dir, '.tmp-review-601', 'x'), 'x');
+    fs.mkdirSync(path.join(dir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ledger', 'events', 'orphan-601.json'), '{}');
+    const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: dir, encoding: 'utf8',
+    });
+    const lines = (status.stdout || '').split(/\r?\n/).filter(Boolean);
+    await t.test('git status 不列 review-601.txt', () => {
+      assert.ok(!lines.some(l => /review-601\.txt/.test(l)), status.stdout);
+    });
+    await t.test('git status 不列 .tmp-review-601', () => {
+      assert.ok(!lines.some(l => /\.tmp-review-601/.test(l)), status.stdout);
+    });
+    await t.test('git status 仍列账本事件', () => {
+      assert.ok(lines.some(l => /orphan-601\.json/.test(l)), status.stdout);
+    });
+
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-601-w-'));
+    const mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-601-m-'));
+    fs.mkdirSync(path.join(workerDir, 'ledger', 'events'), { recursive: true });
+    fs.mkdirSync(path.join(mainDir, 'ledger', 'events'), { recursive: true });
+    fs.writeFileSync(path.join(workerDir, 'review-601.txt'), 'draft');
+    fs.writeFileSync(path.join(workerDir, 'ledger', 'events', 'orphan-601.json'), '{}');
+    const sample = [
+      wt({ id: 'master', name: 'master', main: true, path: mainDir }),
+      wt({ id: 'w601', name: '#601 - 工人', path: workerDir }),
+    ];
+    const blocked = S.prepareWorktreeRm(sample, 'w601', {
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+    });
+    await t.test('未跟踪账本事件仍拦住', () => {
+      assert.ok(blocked.ok === false && /orphan-601\.json/.test(blocked.error), blocked.error);
+    });
+    fs.unlinkSync(path.join(workerDir, 'ledger', 'events', 'orphan-601.json'));
+    const draftOnly = S.prepareWorktreeRm(sample, 'w601', {
+      mainEventsDir: path.join(mainDir, 'ledger', 'events'),
+    });
+    await t.test('只剩审官草稿时计划放行', () => {
+      assert.ok(draftOnly.ok === true, JSON.stringify(draftOnly));
+    });
+    fs.rmSync(workerDir, { recursive: true, force: true });
+    fs.rmSync(mainDir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
