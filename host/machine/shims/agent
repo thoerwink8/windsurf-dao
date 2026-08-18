@@ -1,0 +1,7 @@
+#!/bin/sh
+# agent shim (Git Bash): same Clash Party proxy as cursor-agent
+export HTTPS_PROXY=http://127.0.0.1:7890
+export HTTP_PROXY=http://127.0.0.1:7890
+export ALL_PROXY=http://127.0.0.1:7890
+export NODE_USE_ENV_PROXY=1
+exec "${LOCALAPPDATA}/cursor-agent/agent.cmd" "$@"
