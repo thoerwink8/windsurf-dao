@@ -45,6 +45,8 @@
 //    两个反例都要过（有差集必红、无差集必绿）；基准 PR 号之后才对照
 // ⑱ strikes 机械闸（#588）：基准后 memory 条目 strikes≥2 且 gate 空 → 红；
 //    存量按文件名豁免；本机 memory 未接 → SKIP 不是绿；红/绿夹具都要有判别力
+// ⑲ 帅操作 issue 走 marshal（#627）：dispatch skill 约定还在；host/skills 不再教裸
+//    `gh issue` 写动作；0 个 skill = 没查成，不是绿
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -56,6 +58,7 @@ import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
+import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1079,6 +1082,7 @@ const openBoard = loadOpenBoard();
 checkOpenIssueCount(openBoard);
 checkReadyQueue(openBoard);
 checkCompletionSignalAlive();
+checkMarshalIssueIdentityAlive();
 checkLedgerGapSamples();
 checkLedgerGapLive();
 checkStrikesSamples();
@@ -1086,6 +1090,12 @@ checkStrikesLive();
 
 function checkCompletionSignalAlive() {
   const r = checkCompletionSignal({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
+
+function checkMarshalIssueIdentityAlive() {
+  const r = checkMarshalIssueIdentity({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
 }

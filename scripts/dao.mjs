@@ -614,12 +614,13 @@ function cmdDispatch(args) {
   // #564 label 自动打：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue（best-effort，
   // 失败只报告不翻转派工结果——label 是校准数据源，但回滚一个成功的派工代价更大；帅合并时
   // 用 pr-sync-labels 从 issue 同步到 PR）。gh 没查成 != 查过没事：失败也要说清楚。
+  // 身份走 marshal：这是帅进程里写 issue（#627），裸 gh 会记成 thoerwink8。
   const labels = stampIssueLabels({
     issue: args.issue,
     model: plan.model,
     role: gate.role,
     reviewer: gate.reviewer,
-    runGh: ghRunner(),
+    runGh: ghRunner({ role: 'marshal' }),
   });
   if (!labels.ok && !labels.skipped) {
     console.error(`[dao] dispatch label 没打上（派工本身成功）：${labels.error}`);
@@ -1275,7 +1276,8 @@ function cmdAmend(args) {
     jobId: target.jobId,
     eventId: written.event && written.event.event_id,
   });
-  const posted = postIssueComment({ issue, body, runGh: ghRunner() });
+  // amend 是帅追加职责，评论走 marshal（#627）。
+  const posted = postIssueComment({ issue, body, runGh: ghRunner({ role: 'marshal' }) });
   if (!posted.ok) fail(`override 已写入但 issue 评论没发出：${posted.error}`, { ledger: written, posted });
   emit({
     ok: true,
