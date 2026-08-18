@@ -51,6 +51,11 @@ export default function (pi) {
     const dir = logDirFor(ctx.cwd);
     // 当前 cwd 下没有 inbox 日志（比如普通工人树）→ 不是协调者会话，不动作。
     if (listInboxLogs(dir).length === 0) return;
+    // /reload 会再触发 session_start：先清旧定时器，避免叠两个轮询。
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
     const pollMs = envNum('PI_DOORBELL_POLL_MS', DEFAULT_POLL_MS);
     const cooldownMs = envNum('PI_DOORBELL_COOLDOWN_MS', DEFAULT_COOLDOWN_MS);
     const text = process.env.PI_DOORBELL_TEXT || DOORBELL_TEXT;
