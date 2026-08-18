@@ -79,7 +79,9 @@
             "model_version": { "type": "string", "description": "派单时该模型版本串（F7 版本折扣）" },
             "terminal": { "type": "string" },
             "price_snapshot": { "type": "object", "description": "派单时刻价目快照（B.2 现算依据）" },
-            "decision_id": { "type": "string", "description": "选型脚本输出的决策票（特征快照哈希，可复算）" }
+            "decision_id": { "type": "string", "description": "选型脚本输出的决策票（特征快照哈希，可复算）" },
+            "split": { "description": "派工 --split 取值：no 或 ≥2 的整数（#611）" },
+            "split_reason": { "type": ["string", "null"], "description": "--split no 的理由；N 时可空（#611）" }
           },
           "required": ["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"],
           "additionalProperties": true

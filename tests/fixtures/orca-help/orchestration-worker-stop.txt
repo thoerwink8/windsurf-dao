@@ -1,0 +1,17 @@
+orca orchestration worker-stop
+
+Usage: orca orchestration worker-stop --dispatch <dispatch_id> [--retry-request <id>] [--json]
+
+Fence one Dispatch and stop its supervised agent terminal
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --dispatch
+  --retry-request
+
+Notes:
+  A Dispatch created by orchestration dispatch is fenced without closing its unsupervised terminal process.
+  Never deletes the worktree, setup terminal, configured tabs, or unrelated processes.

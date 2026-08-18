@@ -2,7 +2,7 @@
 // scripts/dao.mjs —— 统一命令库 CLI（issue #482）
 //
 // 删「帅拼命令字符串」这一层。启动 / 编排走这里；查询类不在本单。
-// CLI 还是约束载体：派工缺 --merge-policy / --model|--role / --reviewer 就跑不起来。
+// CLI 还是约束载体：派工缺 --split / --model|--role / --reviewer 就跑不起来。
 // 启动模板只从 docs/model-routing.toml 读，这里零硬编码。
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
@@ -76,6 +76,11 @@ import {
   probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
+  resolveSplitConstraint,
+  resolveSliceAssignments,
+  planSplitCards,
+  buildSplitRoleSpec,
+  startSplitChildren,
   resolveLaunch,
   reviewerCardName,
   rollbackReport,
@@ -501,6 +506,11 @@ function cmdDispatch(args) {
   if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
   if (!args.name && !args.dryRun) fail('dispatch 要 --name');
 
+  const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
+  if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
+  const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
+  if (!sliceGate.ok) fail(sliceGate.error, { missing: sliceGate.missing || [] });
+
   const now = args.now ? new Date(args.now) : new Date();
   let slatePack;
   try {
@@ -526,17 +536,44 @@ function cmdDispatch(args) {
   const reviewerCap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!reviewerCap.ok) fail(reviewerCap.error);
 
+  const cards = planSplitCards({
+    name: args.name,
+    issue: args.issue,
+    role: '工人',
+    model: gate.model,
+    childCount: splitGate.childCount,
+  });
+  const headSpec = splitGate.childCount > 0
+    ? buildSplitRoleSpec({ spec: args.spec, role: 'head', total: splitGate.childCount })
+    : String(args.spec || '');
+  const childCards = cards.children.map((c, i) => ({
+    ...c,
+    willStart: true,
+    slice: sliceGate.slices[i],
+    spec: buildSplitRoleSpec({
+      spec: args.spec, role: 'child', index: i + 1, total: splitGate.childCount, slice: sliceGate.slices[i],
+    }),
+  }));
+
   const plan = {
     mergePolicy: gate.mergePolicy,
     mergeReason: gate.mergeReason,
     model: startEntry.id,
     reviewer: gate.reviewer,
     issue: args.issue ? String(args.issue).trim() : null,
-    workerCard: assembleCardName({ name: args.name, issue: args.issue, role: '工人', model: gate.model }),
+    split: splitGate.split,
+    splitReason: splitGate.splitReason,
+    workerCard: cards.parent.name,
+    parentCard: { ...cards.parent, role: splitGate.childCount > 0 ? '头工人' : '工人', spec: headSpec },
+    childCards,
     workerLaunch: workerLaunch.command,
     reviewerDeferred: true,
     reviewerLaunchChecked: reviewerLaunch.command,
-    comment: dispatchComment(gate),
+    comment: dispatchComment({
+      ...gate,
+      split: splitGate.split,
+      splitReason: splitGate.splitReason,
+    }),
     slate: slatePack.slate,
     pipeIndex: 0,
   };
@@ -554,7 +591,7 @@ function cmdDispatch(args) {
   }
   if (!args.name) fail('dispatch 要 --name');
 
-  const created = {};
+  const created = { childIds: [], childHandles: [], children: [], dispatchIds: [], taskIds: [] };
 
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
@@ -581,6 +618,26 @@ function cmdDispatch(args) {
   const workerBranch = gitBranchName(created.workerPath);
   if (!workerBranch.ok) failCreated(created, `工人树分支没查成: ${workerBranch.error}`, plan);
 
+  if (splitGate.childCount > 0) {
+    const baseBranch = workerBranch.branch;
+    for (const child of cards.children) {
+      const childWt = orca(argsWorktreeCreate({
+        name: child.name,
+        setup: 'skip',
+        parentWorktree: created.workerId,
+        baseBranch,
+        issue: args.issue,
+        comment: plan.comment,
+      }));
+      if (!childWt.ok) failCreated(created, `子卡 ${child.name} 创建失败: ${errText(childWt.error)}`, plan);
+      const childId = extractWorktreeId(childWt.json);
+      if (!childId) failCreated(created, `子卡 ${child.name} 没返回 id`, plan);
+      const childPath = extractWorktreePath(childWt.json);
+      created.childIds.push(childId);
+      created.children.push({ id: childId, path: childPath, name: child.name });
+    }
+  }
+
   const launched = startWorkerBySlate({
     slate: slatePack.slate,
     startIndex: slatePack.startIndex,
@@ -603,7 +660,7 @@ function cmdDispatch(args) {
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? encodeSendText(buildSoldierInject({ spec: String(args.spec), issue: args.issue }), workerLaunch.provider)
+      ? encodeSendText(buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue }), workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
@@ -632,6 +689,8 @@ function cmdDispatch(args) {
   if (!created.workerDispatchId) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
+  created.dispatchIds.push(created.workerDispatchId);
+  created.taskIds.push(taskId);
 
   // 开工验证：等 worker-read 证明。不再为折叠补回车（#602）。
   const workerInject = verifyStartedPolling({
@@ -643,6 +702,88 @@ function cmdDispatch(args) {
   });
   if (!workerInject.ok) failCreated(created, `注入后开工验证失败: ${workerInject.reason}`, { inject: workerInject, ...plan, taskId });
   const workerProof = workerStartProof(created.workerDispatchId); // 成功后再取一次留档（emit 用）
+
+  if (splitGate.childCount > 0) {
+    const splitKids = startSplitChildren({
+      children: created.children,
+      spec: String(args.spec || ''),
+      slices: sliceGate.slices,
+      startOne: ({ worktreeId, path: childPath, title, spec: childSpec }) => {
+        if (!childPath) return { ok: false, error: `子卡 ${title} 没返回 path` };
+        const env = envProbeWorktree(childPath);
+        if (!env.ok) return { ok: false, error: `子树环境自检失败: ${env.error}` };
+        const ident = applyGitIdentity('worker', { cwd: childPath });
+        if (!ident.ok) return { ok: false, error: `子树 git 身份没设上：${ident.error}` };
+        const scratch = {};
+        const childLaunch = startWorkerBySlate({
+          slate: slatePack.slate,
+          startIndex: slatePack.startIndex,
+          routing,
+          worktreeId,
+          title,
+          created: scratch,
+        });
+        if (!childLaunch.ok) {
+          return { ok: false, error: childLaunch.error || '子工人 TUI 未就绪', handle: scratch.workerHandle };
+        }
+        let childBook;
+        try {
+          childBook = encodeSendText(buildSoldierInject({ spec: childSpec, issue: args.issue }), childLaunch.launch.provider);
+        } catch (e) {
+          return { ok: false, error: `子任务书渲染失败: ${String(e.message || e)}`, handle: childLaunch.handle };
+        }
+        const bound = orca(argsRunCurrent());
+        const boundRun = bound.ok ? (bound.json?.result?.run?.id || null) : null;
+        const childTask = taskCreateOnRun(childBook, boundRun);
+        if (!childTask.ok) {
+          return { ok: false, error: `子 task-create 失败: ${errText(childTask.error)}`, handle: childLaunch.handle };
+        }
+        const childTaskId = extractTaskId(childTask.json);
+        if (!childTaskId) return { ok: false, error: '子 task-create 没拿到 taskId', handle: childLaunch.handle };
+        const childStarted = orca(argsWorkerStart({
+          task: childTaskId,
+          worktree: worktreeId,
+          terminal: childLaunch.handle,
+        }));
+        if (!childStarted.ok) {
+          return { ok: false, error: `子 worker-start 失败: ${errText(childStarted.error)}`, handle: childLaunch.handle };
+        }
+        const childDispatchId = extractDispatchId(childStarted.json);
+        if (!childDispatchId) {
+          return { ok: false, error: '子 worker-start 没拿到 dispatch id', handle: childLaunch.handle };
+        }
+        const childInject = verifyStartedPolling({
+          dispatchId: childDispatchId,
+          readOnce: () => readOnceHandle(childLaunch.handle),
+          proofOnce: workerStartProof,
+          timeoutMs: probeWaitMs(routing, childLaunch.launch.provider),
+          label: `子工人 ${title}`,
+        });
+        if (!childInject.ok) {
+          return {
+            ok: false,
+            error: `子工人开工验证失败: ${childInject.reason}`,
+            handle: childLaunch.handle,
+            dispatchId: childDispatchId,
+            taskId: childTaskId,
+          };
+        }
+        return {
+          ok: true,
+          handle: childLaunch.handle,
+          dispatchId: childDispatchId,
+          taskId: childTaskId,
+        };
+      },
+    });
+    created.childHandles = (splitKids.started || []).map(s => s.handle).filter(Boolean);
+    created.childDispatchIds = (splitKids.started || []).map(s => s.dispatchId).filter(Boolean);
+    created.childTaskIds = (splitKids.started || []).map(s => s.taskId).filter(Boolean);
+    created.childWorkers = splitKids.started || [];
+    created.dispatchIds = [created.workerDispatchId, ...created.childDispatchIds].filter(Boolean);
+    created.taskIds = [taskId, ...created.childTaskIds].filter(Boolean);
+    if (!splitKids.ok) failCreated(created, splitKids.error, { ...plan, taskId, splitKids });
+  }
 
   const comment = afterDispatchComment({
     name: args.name,
@@ -684,6 +825,11 @@ function cmdDispatch(args) {
       dispatch_id: created.workerDispatchId,
       pipe_index: plan.pipeIndex,
       pipe_provider: workerLaunch.provider,
+      split: splitGate.split,
+      split_reason: splitGate.splitReason,
+      ...(created.childDispatchIds && created.childDispatchIds.length
+        ? { child_dispatch_ids: created.childDispatchIds }
+        : {}),
       ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
     },
     });
