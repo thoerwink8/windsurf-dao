@@ -47,6 +47,9 @@
 //    存量按文件名豁免；本机 memory 未接 → SKIP 不是绿；红/绿夹具都要有判别力
 // ⑲ 帅操作 issue 走 marshal（#627）：dispatch skill 约定还在；host/skills 不再教裸
 //    `gh issue` 写动作；0 个 skill = 没查成，不是绿
+// ⑳ 仓外路径闸（#642）：独立扫描 ~/ %USERPROFILE% %APPDATA% %LOCALAPPDATA% $HOME
+//    os.homedir() 等，不读 INDEX 自己的解析器；发现集合必须等于 INDEX∪ignore；
+//    扫到 0 条 = 没查成；夹具红/绿/空都要有判别力
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -59,6 +62,7 @@ import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
+import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1087,6 +1091,52 @@ checkLedgerGapSamples();
 checkLedgerGapLive();
 checkStrikesSamples();
 checkStrikesLive();
+checkMachinePathSamples();
+checkMachinePathLive();
+
+function checkMachinePathSamples() {
+  const root = join(ROOT, 'tests', 'fixtures', 'machine-paths');
+  if (!existsSync(root)) {
+    fail('仓外路径闸样本目录不在', '本次没查成：恢复 tests/fixtures/machine-paths/{red,ok,empty}', root);
+    return;
+  }
+  const kinds = { red: 0, ok: 0, unscanned: 0 };
+  const problems = [];
+  for (const kind of ['red', 'ok', 'empty']) {
+    const dir = join(root, kind);
+    if (!existsSync(dir)) {
+      problems.push(`缺 ${kind}/`);
+      continue;
+    }
+    const r = checkMachinePaths({ root: dir });
+    if (kind === 'red') {
+      if (r.kind !== 'red') problems.push(`red/ 自称该红但判成 ${r.kind}`);
+      else if (!/brand-new-cli/.test((r.fail || []).join(' '))) problems.push('red/ 没点出 ~/.brand-new-cli');
+      else kinds.red += 1;
+    } else if (kind === 'ok') {
+      if (r.kind !== 'ok') problems.push(`ok/ 自称该绿但判成 ${r.kind}：${(r.fail || []).join(' ')}`);
+      else kinds.ok += 1;
+    } else if (kind === 'empty') {
+      if (r.kind !== 'unscanned') problems.push(`empty/ 自称没查成但判成 ${r.kind}`);
+      else kinds.unscanned += 1;
+    }
+  }
+  if (kinds.red === 0 || kinds.ok === 0 || kinds.unscanned === 0) {
+    fail('仓外路径闸样本种类不够', '至少各要一份红（漏写新品类）、一份绿、一份 0 条没查成', `red=${kinds.red} ok=${kinds.ok} empty=${kinds.unscanned}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`仓外路径闸样本对不上 ${problems.length} 处`, '红夹具必须红、绿夹具必须绿、空夹具必须没查成', problems.join(' '));
+    return;
+  }
+  green(`仓外路径闸样本红/绿/空各 ${kinds.red}/${kinds.ok}/${kinds.unscanned}（有判别力）`);
+}
+
+function checkMachinePathLive() {
+  const r = checkMachinePaths({ root: ROOT });
+  if (r.green) green(r.green);
+  else fail(...r.fail);
+}
 
 function checkCompletionSignalAlive() {
   const r = checkCompletionSignal({ root: ROOT });

@@ -1,0 +1,8 @@
+#!/bin/sh
+# cursor-agent shim (Git Bash): Clash Party proxy required (CN IP hides GPT/Claude)
+# real binary: %LOCALAPPDATA%/cursor-agent/cursor-agent.cmd
+export HTTPS_PROXY=http://127.0.0.1:7890
+export HTTP_PROXY=http://127.0.0.1:7890
+export ALL_PROXY=http://127.0.0.1:7890
+export NODE_USE_ENV_PROXY=1
+exec "${LOCALAPPDATA}/cursor-agent/cursor-agent.cmd" "$@"
