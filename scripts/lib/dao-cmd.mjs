@@ -1465,7 +1465,7 @@ export function envProbeWorktree(cwd) {
 
 export function planDispatchRollback({
   workerId, workerHandle, reviewerId, reviewerHandle,
-  childIds, childHandles, dispatchIds, taskIds,
+  childIds, childHandles, dispatchIds, taskIds, handles,
 } = {}) {
   const steps = [];
   for (const id of Array.isArray(dispatchIds) ? dispatchIds : []) {
@@ -1479,12 +1479,155 @@ export function planDispatchRollback({
   for (const handle of Array.isArray(childHandles) ? childHandles : []) {
     if (handle) steps.push(argsTerminalClose({ terminal: handle, tab: true }));
   }
+  const extra = Array.isArray(handles) ? handles.filter(Boolean) : [];
+  const seen = new Set();
+  for (const h of extra.slice().reverse()) {
+    if (seen.has(h) || h === workerHandle || h === reviewerHandle) continue;
+    if (Array.isArray(childHandles) && childHandles.includes(h)) continue;
+    seen.add(h);
+    steps.push(argsTerminalClose({ terminal: h, tab: true }));
+  }
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
   for (const id of Array.isArray(childIds) ? childIds : []) {
     if (id) steps.push(argsWorktreeRm({ worktree: id, force: true }));
   }
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
+}
+
+/** #620：batch JSON → `[{name, spec}, ...]`。数组或 `{workers|items|batch: [...]}` 都收。 */
+export function parseDispatchBatchItems(raw) {
+  if (raw == null) return { ok: false, error: 'batch 文件是空的' };
+  let list = raw;
+  if (!Array.isArray(raw)) {
+    if (!raw || typeof raw !== 'object') return { ok: false, error: 'batch 要 JSON 数组 [{name, spec}, ...]' };
+    list = raw.workers || raw.items || raw.batch;
+  }
+  if (!Array.isArray(list)) return { ok: false, error: 'batch 要 JSON 数组 [{name, spec}, ...]' };
+  if (list.length === 0) return { ok: false, error: 'batch 至少要 1 个工人' };
+  const items = [];
+  for (let i = 0; i < list.length; i++) {
+    const row = list[i];
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return { ok: false, error: `batch[${i}] 不是对象` };
+    }
+    const name = String(row.name ?? '').trim();
+    const spec = String(row.spec ?? '').trim();
+    if (!name) return { ok: false, error: `batch[${i}] 缺 name` };
+    if (!spec) return { ok: false, error: `batch[${i}] 缺 spec` };
+    items.push({ name, spec });
+  }
+  return { ok: true, items };
+}
+
+export function loadDispatchBatchFile(filePath, { readFile } = {}) {
+  const p = String(filePath ?? '').trim();
+  if (!p) return { ok: false, error: 'dispatch --batch 要 JSON 文件路径' };
+  let text;
+  try {
+    text = (readFile || readFileSync)(p, 'utf8');
+  } catch (e) {
+    return { ok: false, error: `batch 文件读不到: ${p}（${String(e.message || e)}）` };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, error: `batch 文件不是合法 JSON: ${String(e.message || e)}` };
+  }
+  return parseDispatchBatchItems(raw);
+}
+
+/** #620：一批只读工人的计划。不调审官，卡名就是 --name，不带 --no-parent。 */
+export function planDispatchBatch({ name, issue, model, items } = {}) {
+  const n = String(name ?? '').trim();
+  const issueText = String(issue ?? '').trim();
+  const modelId = String(model ?? '').trim();
+  if (!n) return { ok: false, error: 'dispatch --batch 要 --name（批卡名）' };
+  if (!issueText) return { ok: false, error: 'dispatch --batch 要 --issue（整批共享）' };
+  if (!modelId) return { ok: false, error: 'dispatch --batch 要 --model' };
+
+  let parsed;
+  if (items && items.ok === true && Array.isArray(items.items)) parsed = items;
+  else parsed = parseDispatchBatchItems(items);
+  if (!parsed.ok) return parsed;
+
+  const cardName = assembleCardName({ name: n, issue: issueText });
+  const workers = parsed.items.map((item, i) => ({
+    index: i,
+    name: item.name,
+    spec: item.spec,
+    handle: `<handle:${i}>`,
+    worktree: cardName,
+  }));
+  return {
+    ok: true,
+    batch: true,
+    cardName,
+    issue: issueText,
+    model: modelId,
+    noParent: false,
+    reviewerCreate: false,
+    workers,
+  };
+}
+
+/**
+ * #620：批量原子编排。effects 由调用方注入（真路径走 orca，单测走假对象）。
+ * 失败不自己回滚——调用方拿 created 走 failCreated / planDispatchRollback。
+ */
+export function runDispatchBatch({ plan, effects } = {}) {
+  const created = { handles: [], workers: [] };
+  if (!plan || !Array.isArray(plan.workers)) {
+    return { ok: false, error: 'runDispatchBatch 要 plan.workers', created, workers: [] };
+  }
+  if (!effects) {
+    return { ok: false, error: 'runDispatchBatch 要 effects', created, workers: [] };
+  }
+  const fail = (error) => ({ ok: false, error, created, workers: created.workers });
+
+  const wt = effects.createWorktree({
+    name: plan.cardName,
+    issue: plan.issue,
+    noParent: false,
+  });
+  if (wt && wt.id) created.workerId = wt.id;
+  if (wt && wt.path) created.workerPath = wt.path;
+  if (!wt || !wt.ok) return fail(`工人卡创建失败: ${(wt && wt.error) || '未知'}`);
+
+  for (const w of plan.workers) {
+    const term = effects.startTerminal({
+      worktree: created.workerId,
+      title: w.name,
+      model: plan.model,
+    });
+    if (term && term.handle) created.handles.push(term.handle);
+    if (!term || !term.ok) return fail(`工人终端创建失败（${w.name}）: ${(term && term.error) || '未知'}`);
+
+    const task = effects.createTask({ spec: w.spec, name: w.name });
+    if (!task || !task.ok) return fail(`task-create 失败（${w.name}）: ${(task && task.error) || '未知'}`);
+
+    const started = effects.startWorker({
+      task: task.taskId,
+      terminal: term.handle,
+      worktree: created.workerId,
+      issue: plan.issue,
+      model: plan.model,
+    });
+    if (!started || !started.ok) {
+      return fail(`worker-start 失败（${w.name}）: ${(started && started.error) || '未知'}`);
+    }
+
+    created.workers.push({
+      index: w.index,
+      name: w.name,
+      spec: w.spec,
+      handle: term.handle,
+      taskId: task.taskId,
+      dispatchId: started.dispatchId,
+    });
+  }
+  return { ok: true, created, workers: created.workers };
 }
 
 /** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
@@ -2869,7 +3012,7 @@ export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
@@ -2961,6 +3104,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
   dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
+                  # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
+                  # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:

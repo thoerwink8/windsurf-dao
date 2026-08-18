@@ -104,6 +104,20 @@ grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #44
 
 多个编辑级小活打包成一单，派一个工人。不因活小而主会话下场。
 
+## 批量派只读工人
+
+N 个只读判定工人要共享 1 张卡、不产 PR 时，走 `dispatch --batch`。不要循环调 `dispatch`——每次都会新建一张孤卡（#620）。
+
+```bash
+node scripts/dao.mjs dispatch --batch workers.json --name "存量27单分流总卡" --issue 600 --model grok-4.6
+```
+
+JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建 1 棵树（不带 `--no-parent`，卡名就是 `--name`），再循环 N 次 `task-create` + `worker-start` 绑到同一张卡。`--dry-run` 只打印 N 条计划（每条的 name / spec / handle 占位），不建任何资源。任一步失败整批回滚：关已建终端、删已建树。
+
+这批工人硬编码跳过审官路径：不调 `reviewer-create`，也不走 `worker-done` 结算。完工方式是各自往共享 issue 发 comment，帅事后逐张核。要进 git / 开 PR 的活不要走这条。
+
+先 `--dry-run` 看计划，再真派。派完 `inbox-station ensure` 把横幅还给信箱台。
+
 ## 阻塞项不排队（#577）
 
 **阻塞项立刻并行派，不等任何 PR 合并。** 判据是「有没有东西正因为它而卡着」，不是「会不会冲突」——冲突是事后便宜处理的（git merge + 打回冲突方自己解），不是事前预测的。**用「可能冲突」推迟派工，等同于用预测替代 git 的本职工作。**
