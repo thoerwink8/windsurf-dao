@@ -447,19 +447,24 @@ describe('ledger', () => {
     });
   });
 
-  it('审读 A 位锁 GPT，撞 UI ban 顺延 Opus', async (t) => {
+  it('审读 A 位顶 KIMI-K3，GPT 暂不可用；撞 UI ban 顺延 Opus', async (t) => {
     const models = [
       { id: 'gpt-5.6-sol', provider: 'gpt' },
+      { id: 'kimi-k3', provider: 'cursor' },
       { id: 'claude-opus', provider: 'claude' },
       { id: 'grok-4.6', provider: 'grok' },
     ];
-    const pinGpt = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus', 'gpt-5.6-sol'] });
-    await t.test('审读 A 位锁 GPT（即使评分第一是别人）', () => {
-      assert.ok(pinGpt.model === 'gpt-5.6-sol' && pinGpt.reason === 'reviewer_default_gpt', '审读 A 位锁 GPT（即使评分第一是别人）  →  ' + JSON.stringify(pinGpt));
+    const pinKimi = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus', 'kimi-k3', 'gpt-5.6-sol'] });
+    await t.test('审读 A 位顶 KIMI-K3（即使评分第一是别人）', () => {
+      assert.ok(pinKimi.model === 'kimi-k3' && pinKimi.reason === 'reviewer_order', '审读 A 位顶 KIMI-K3（即使评分第一是别人）  →  ' + JSON.stringify(pinKimi));
     });
     const pinUi = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus'] });
-    await t.test('GPT 不在门闩集合（UI ban）→ 选型序 Opus', () => {
-      assert.ok(pinUi.model === 'claude-opus' && pinUi.reason === 'reviewer_order', 'GPT 不在门闩集合（UI ban）→ 选型序 Opus  →  ' + JSON.stringify(pinUi));
+    await t.test('KIMI-K3 不在门闩集合（UI ban）→ 选型序 Opus', () => {
+      assert.ok(pinUi.model === 'claude-opus' && pinUi.reason === 'reviewer_order', 'KIMI-K3 不在门闩集合（UI ban）→ 选型序 Opus  →  ' + JSON.stringify(pinUi));
+    });
+    const pinGptAlone = pinReviewerSlotA({ models, passerIds: ['gpt-5.6-sol'] });
+    await t.test('只剩 GPT（暂不可用）→ 不顶 GPT，无人可派', () => {
+      assert.ok(pinGptAlone.model === null && pinGptAlone.reason === 'no_candidate', '只剩 GPT（暂不可用）→ 不顶 GPT，无人可派  →  ' + JSON.stringify(pinGptAlone));
     });
     const pinNone = pinReviewerSlotA({ models, passerIds: [] });
     await t.test('无人可派 → no_candidate', () => {
