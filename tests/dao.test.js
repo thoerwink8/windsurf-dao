@@ -75,6 +75,23 @@ describe('dao', () => {
     await t.test('正常有输出无确认 → 过', () => {
       assert.ok(S.verifyStarted({ text: 'codex ready\nmodel gpt-5.6-sol' }).ok === true, '正常有输出无确认 → 过');
     });
+    const reject = S.verifyStarted({ result: { text: 'Cannot use this model' } });
+    await t.test('#618 返工：拒模文本不能当 TUI 就绪', () => {
+      assert.ok(reject.ok === false && reject.reason === '拒模', '#618 返工：拒模文本不能当 TUI 就绪  →  ' + JSON.stringify(reject));
+    });
+    const rejectWait = S.waitAndVerify({
+      readOnce: () => ({ result: { text: 'Cannot use this model' } }),
+      timeoutMs: 10,
+      intervalMs: 1,
+      sleep: () => {},
+    });
+    await t.test('#618 返工：waitAndVerify 拒模立刻失败（审官复现）', () => {
+      assert.ok(rejectWait.ok === false && rejectWait.reason === '拒模', '#618 返工：waitAndVerify 拒模立刻失败  →  ' + JSON.stringify(rejectWait));
+    });
+    const region = S.verifyStarted({ text: 'This model is not available in your region.' });
+    await t.test('#618 返工：区域不可用也是拒模', () => {
+      assert.ok(region.ok === false && region.reason === '拒模', '#618 返工：区域不可用也是拒模  →  ' + JSON.stringify(region));
+    });
   });
 
   it('启动模板：reclaude / shim / fail-loud', async (t) => {

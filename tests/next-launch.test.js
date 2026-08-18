@@ -11,7 +11,7 @@ const LIB = path.join(REPO, 'scripts', 'lib', 'next-launch.mjs');
 describe('nextLaunch', () => {
   it('夹具四条：瞬时不切 / 2 次硬失败切支路 / 管子尽了换模型 / 名单走完才失败', async (t) => {
     const {
-      nextLaunch, classifyLaunchFailure, advanceLaunchState, normalizePipes, attachPipes, buildSlate, routingSlateIds,
+      nextLaunch, classifyLaunchFailure, advanceLaunchState, normalizePipes, attachPipes, buildSlate, routingSlateIds, resolveDispatchSlate,
     } = await import('file://' + LIB.replace(/\\/g, '/'));
     const doc = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
     assert.ok(Array.isArray(doc.cases) && doc.cases.length >= 4, '夹具至少 4 条');
@@ -95,6 +95,43 @@ describe('nextLaunch', () => {
       };
       const ids = routingSlateIds({ routing, role: '写码', now: '2026-08-18T10:00:00+08:00', model: 'grok-4.6' });
       assert.ok(ids[0] === 'grok-4.6' && ids[1] === 'deepseek-v4-flash', JSON.stringify(ids));
+    });
+
+    await t.test('#618 返工：拒模两次硬失败切支路', () => {
+      const kind = classifyLaunchFailure({ verifyReason: '拒模', text: 'Cannot use this model' });
+      assert.ok(kind === 'hard', '拒模 = hard');
+      const first = advanceLaunchState({
+        slate: doc.slate, modelId: 'kimi-k3', pipeIndex: 0,
+        hardFailsOnThisPipe: 0, kind,
+      });
+      assert.ok(first.action === 'retry' && first.pipeIndex === 0, JSON.stringify(first));
+      const second = advanceLaunchState({
+        slate: doc.slate, modelId: 'kimi-k3', pipeIndex: 0,
+        hardFailsOnThisPipe: first.hardFailsOnThisPipe, kind,
+      });
+      assert.ok(second.action === 'switch_pipe' && second.pipeIndex === 1 && second.modelId === 'kimi-k3', JSON.stringify(second));
+    });
+
+    const routingAll = {
+      models: [
+        { id: 'grok-4.6', provider: 'grok' },
+        { id: 'gpt-5.6-sol', provider: 'gpt' },
+        { id: 'kimi-k3', provider: 'cursor', cli_model: 'kimi-k3-high' },
+      ],
+    };
+    await t.test('#618 返工：选型失败 fail-close，不回退全表', () => {
+      const r = resolveDispatchSlate({
+        live: true, selectOk: false, selectError: 'ENOENT policy/models.yml',
+        routing: routingAll, model: 'grok-4.6',
+      });
+      assert.ok(r.ok === false && r.unscanned === true && !r.slate && /选型没查成/.test(r.error), JSON.stringify(r));
+    });
+    await t.test('#618 返工：live 只接受过门闩的 slate，不含被剔模型', () => {
+      const r = resolveDispatchSlate({
+        live: true, selectOk: true, slateIds: ['grok-4.6'],
+        routing: routingAll, model: 'grok-4.6',
+      });
+      assert.ok(r.ok === true && r.slate.length === 1 && r.slate[0].id === 'grok-4.6', JSON.stringify(r));
     });
   });
 });

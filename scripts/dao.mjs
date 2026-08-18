@@ -13,9 +13,8 @@ import { parseYaml } from './lib/yaml-min.mjs';
 import { select } from './lib/dianjiangtai-core.mjs';
 import {
   advanceLaunchState,
-  attachPipes,
   classifyLaunchFailure,
-  routingSlateIds,
+  resolveDispatchSlate,
 } from './lib/next-launch.mjs';
 import { readLedgerEvents, queryLedger, describeUnclosedJobs } from './lib/ledger-query.mjs';
 import {
@@ -242,7 +241,9 @@ function failCreated(created, error, extra = {}) {
 }
 
 function loadDispatchSlate({ model, role, routing, now, live }) {
-  let ids = null;
+  let selectOk = false;
+  let selectError = null;
+  let slateIds = null;
   if (live) {
     try {
       const models = parseYaml(readFileSync(join(ROOT, 'policy', 'models.yml'), 'utf8')).models;
@@ -259,17 +260,18 @@ function loadDispatchSlate({ model, role, routing, now, live }) {
         workType: role || '写码',
         events, models, bans, weights, routes: routing.routes || [],
       });
-      if (Array.isArray(result.slate) && result.slate.length) ids = result.slate;
-    } catch {
-      ids = null;
+      selectOk = true;
+      slateIds = Array.isArray(result.slate) ? result.slate : [];
+    } catch (e) {
+      selectOk = false;
+      selectError = String(e.message || e);
     }
   }
-  if (!ids || !ids.length) ids = routingSlateIds({ routing, role, now, model });
-  const slate = attachPipes(ids, routing.models);
-  if (!slate.length) throw new Error('slate 是空的（没查成）');
-  const startIndex = model ? slate.findIndex(s => s.id === model) : 0;
-  if (startIndex < 0) throw new Error(`模型 ${model} 不在预计算名单里，禁止现场另点`);
-  return { slate, startIndex };
+  const packed = resolveDispatchSlate({
+    live, selectOk, selectError, slateIds, routing, role, now, model,
+  });
+  if (!packed.ok) throw new Error(packed.error);
+  return packed;
 }
 
 function closeWorkerHandle(handle) {
