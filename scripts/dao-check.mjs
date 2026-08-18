@@ -23,7 +23,7 @@
 // thoerwink8/windsurf-dao-memory」。编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，
 // ⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch）
+// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch + pipes + yml 同源 + nextLaunch 夹具）
 // ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
@@ -325,8 +325,34 @@ function checkModelRouting() {
     if (miss.length) problems.push(`rules[${i}]缺${miss.join('/')}`);
   });
 
-  const usedProviders = [...new Set(models.map(m => m && m.provider).filter(Boolean))];
-  if (usedProviders.length === 0) {
+  const usedProviders = new Set();
+  models.forEach((m, i) => {
+    if (m && m.provider) usedProviders.add(m.provider);
+    const pipes = Array.isArray(m?.pipes) ? m.pipes : null;
+    if (!pipes) return;
+    if (pipes.length === 0) {
+      problems.push(`models[${i}](${m.id}) pipes 是空数组（缺省应省略，不是空）`);
+      return;
+    }
+    const p0 = pipes[0] || {};
+    if (p0.provider !== m.provider) {
+      problems.push(`models[${i}](${m.id}) pipes[0].provider=${JSON.stringify(p0.provider)} ≠ provider=${JSON.stringify(m.provider)}`);
+    }
+    const pipeCli = p0.cli_model == null || p0.cli_model === '' ? '' : String(p0.cli_model);
+    const modelCli = m.cli_model == null || m.cli_model === '' ? '' : String(m.cli_model);
+    if (pipeCli !== modelCli) {
+      problems.push(`models[${i}](${m.id}) pipes[0].cli_model=${JSON.stringify(p0.cli_model)} ≠ cli_model=${JSON.stringify(m.cli_model)}`);
+    }
+    pipes.forEach((p, j) => {
+      if (!p || !p.provider) {
+        problems.push(`models[${i}](${m.id}) pipes[${j}] 缺 provider`);
+        return;
+      }
+      usedProviders.add(p.provider);
+    });
+  });
+
+  if (usedProviders.size === 0) {
     problems.push('没扫到任何带 provider 的模型，providers.launch 没查成');
   } else {
     for (const name of usedProviders) {
@@ -339,11 +365,104 @@ function checkModelRouting() {
     }
   }
 
-  if (problems.length === 0) {
-    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.length} 个 provider 有 launch`);
+  const ymlPath = join(ROOT, 'policy', 'models.yml');
+  if (!existsSync(ymlPath)) {
+    problems.push('policy/models.yml 不在（与 toml 同源没查成）');
   } else {
-    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；被模型引用的 provider 要有 launch', problems.slice(0, 10).join(' '));
+    const ymlIds = scanYmlModelIds(readFileSync(ymlPath, 'utf8'));
+    if (ymlIds.length === 0) {
+      problems.push('policy/models.yml 0 个 id（没扫成，不是齐）');
+    } else {
+      for (const id of modelIds) {
+        if (!ymlIds.includes(id)) problems.push(`toml 模型 ${id} 不在 models.yml`);
+      }
+      for (const id of ymlIds) {
+        if (!modelIds.has(id)) problems.push(`models.yml 模型 ${id} 不在 toml`);
+      }
+    }
   }
+
+  if (problems.length === 0) {
+    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.size} 个 provider 有 launch，yml 同源`);
+  } else {
+    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
+  }
+}
+
+// yml 模型 id：独立扫 `- id:`，不复用 yaml-min / 点将台解析。
+function scanYmlModelIds(text) {
+  const ids = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s+- id:\s*(\S+)\s*$/);
+    if (m) ids.push(m[1]);
+  }
+  return ids;
+}
+
+// nextLaunch 夹具：检查器自己持有决策表，不 import next-launch.mjs（自己查自己查不出错）。
+function oracleNextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe }) {
+  const models = Array.isArray(slate) ? slate : [];
+  const idx = models.findIndex(s => s && s.id === modelId);
+  if (idx < 0) return { action: 'fail' };
+  const pipes = Array.isArray(models[idx].pipes) ? models[idx].pipes : [];
+  const pi = Number(pipeIndex) || 0;
+  const fails = Number(hardFailsOnThisPipe) || 0;
+  if (fails < 2) return { action: 'retry', modelId, pipeIndex: pi };
+  if (pi + 1 < pipes.length) return { action: 'switch_pipe', modelId, pipeIndex: pi + 1 };
+  const next = models[idx + 1];
+  if (next && next.id) return { action: 'switch_model', modelId: next.id, pipeIndex: 0 };
+  return { action: 'fail' };
+}
+
+function checkNextLaunchFixture() {
+  let modelIds = new Set();
+  if (existsSync(ROUTING_FILE)) {
+    try {
+      const doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+      for (const m of Array.isArray(doc.models) ? doc.models : []) {
+        if (m && m.id) modelIds.add(m.id);
+      }
+    } catch { modelIds = new Set(); }
+  }
+  const file = join(ROOT, 'tests', 'fixtures', 'next-launch-cases.json');
+  if (!existsSync(file)) {
+    fail('nextLaunch 夹具不在', '恢复 tests/fixtures/next-launch-cases.json', file);
+    return;
+  }
+  let doc;
+  try { doc = JSON.parse(readFileSync(file, 'utf8')); }
+  catch (e) {
+    fail('nextLaunch 夹具不是 JSON', '按标准 JSON 修文件', String(e.message || e).slice(0, 160));
+    return;
+  }
+  const cases = Array.isArray(doc?.cases) ? doc.cases : [];
+  if (cases.length === 0) {
+    fail('nextLaunch 一套样本都没扫到', '夹具 cases 空了 ⇒ 本次等于没查', file);
+    return;
+  }
+  const problems = [];
+  for (const s of doc.slate || []) {
+    if (s && s.id && modelIds && modelIds.size > 0 && !modelIds.has(s.id)) {
+      problems.push(`slate id ${s.id} 不在 models`);
+    }
+  }
+  for (const c of cases) {
+    const got = oracleNextLaunch({
+      slate: doc.slate,
+      modelId: c.modelId,
+      pipeIndex: c.pipeIndex,
+      hardFailsOnThisPipe: c.hardFailsOnThisPipe,
+    });
+    if (got.action !== c.expect?.action) problems.push(`${c.name}: action ${got.action} ≠ ${c.expect?.action}`);
+    if (c.expect?.modelId != null && got.modelId !== c.expect.modelId) {
+      problems.push(`${c.name}: modelId ${got.modelId} ≠ ${c.expect.modelId}`);
+    }
+    if (c.expect?.pipeIndex != null && got.pipeIndex !== c.expect.pipeIndex) {
+      problems.push(`${c.name}: pipeIndex ${got.pipeIndex} ≠ ${c.expect.pipeIndex}`);
+    }
+  }
+  if (problems.length === 0) green(`nextLaunch 夹具 ${cases.length} 条（瞬时不切 / 2 次硬失败切支路 / 管子尽了换模型 / 名单走完失败）`);
+  else fail(`nextLaunch 夹具 ${problems.length} 处对不上`, '夹具 expect 与检查器自己的决策表必须一致；生产实现由 tests/next-launch.test.js 对同一份夹具核', problems.slice(0, 8).join(' '));
 }
 
 // ── ⑦ 命令库 --help 参数存活（local-only）──────────────────────────
@@ -941,6 +1060,7 @@ checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkModelRouting();
+checkNextLaunchFixture();
 await checkCommandHelp();
 checkModeHookAlive();
 checkDispatchGateAlive();

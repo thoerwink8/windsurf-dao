@@ -17,6 +17,9 @@
 //   F13 速度：仅进月报呈现，不进选型分（设计明示）
 
 import { createHash } from 'node:crypto';
+import { buildSlate } from './next-launch.mjs';
+
+export { buildSlate } from './next-launch.mjs';
 
 export const IDENTITIES = ['帅', '协调者', '工人', '审官'];
 
@@ -604,6 +607,7 @@ export function select({
     choice,
   };
   const decisionId = hashOf(snapshot);
+  const slate = buildSlate({ passers, matchedRoute, quotaTop, byScore });
 
   return {
     decision_id: decisionId,
@@ -611,5 +615,6 @@ export function select({
     inputs: { ts, job_id: jobId, identity, work_type: workType, task_tokens: taskTokens, risk, reversible },
     options: { A, B, C },
     models: details,
+    slate,
   };
 }

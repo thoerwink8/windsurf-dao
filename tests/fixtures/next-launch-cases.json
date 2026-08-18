@@ -1,0 +1,54 @@
+{
+  "slate": [
+    {
+      "id": "kimi-k3",
+      "pipes": [
+        { "provider": "cursor", "cli_model": "kimi-k3-high" },
+        { "provider": "opencode-go", "cli_model": "kimi-k3" }
+      ]
+    },
+    {
+      "id": "grok-4.6",
+      "pipes": [
+        { "provider": "grok", "cli_model": "grok-4.6" }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "transient-stay",
+      "modelId": "kimi-k3",
+      "pipeIndex": 0,
+      "hardFailsOnThisPipe": 0,
+      "expect": { "action": "retry", "modelId": "kimi-k3", "pipeIndex": 0 }
+    },
+    {
+      "name": "one-hard-stay",
+      "modelId": "kimi-k3",
+      "pipeIndex": 0,
+      "hardFailsOnThisPipe": 1,
+      "expect": { "action": "retry", "modelId": "kimi-k3", "pipeIndex": 0 }
+    },
+    {
+      "name": "two-hard-switch-pipe",
+      "modelId": "kimi-k3",
+      "pipeIndex": 0,
+      "hardFailsOnThisPipe": 2,
+      "expect": { "action": "switch_pipe", "modelId": "kimi-k3", "pipeIndex": 1 }
+    },
+    {
+      "name": "pipes-exhausted-next-model",
+      "modelId": "kimi-k3",
+      "pipeIndex": 1,
+      "hardFailsOnThisPipe": 2,
+      "expect": { "action": "switch_model", "modelId": "grok-4.6", "pipeIndex": 0 }
+    },
+    {
+      "name": "slate-exhausted",
+      "modelId": "grok-4.6",
+      "pipeIndex": 0,
+      "hardFailsOnThisPipe": 2,
+      "expect": { "action": "fail" }
+    }
+  ]
+}
