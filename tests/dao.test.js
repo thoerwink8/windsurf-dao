@@ -2136,6 +2136,14 @@ describe('dao', () => {
     await t.test('reviewer-book 走 gh-as reviewer approve（#573）', () => {
       assert.ok(/gh-as\.mjs reviewer/.test(reviewerBook) && /--approve/.test(reviewerBook) && /真 approve/.test(reviewerBook), 'reviewer-book 走 gh-as reviewer approve（#573）  →  ' + reviewerBook.slice(0, 400));
     });
+    await t.test('#625 reviewer-book 合并走 marshal squash，不依赖 GitHub --auto', () => {
+      assert.ok(
+        /gh-as\.mjs marshal -- pr merge <PR号> --squash --delete-branch/.test(reviewerBook)
+          && !/pr merge <PR号> --auto/.test(reviewerBook)
+          && !/服务端 auto-merge/.test(reviewerBook),
+        '#625 reviewer-book 合并走 marshal squash，不依赖 GitHub --auto  →  ' + reviewerBook.slice(reviewerBook.indexOf('merge-policy: auto'), reviewerBook.indexOf('merge-policy: auto') + 280),
+      );
+    });
     const reviewerManual = S.buildReviewerInject({
       spec: '按审官任务书审 PR #1',
       pr: '1',
