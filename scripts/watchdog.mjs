@@ -38,7 +38,8 @@
 //                       ③ 活性否决（#500 一致性）：非 spinner 真实内容在动 = 活，不算空转
 //                          （刚重启正在开 PR / 正在做非 commit 活都不算）。
 //                       真空转（working + 屏面冻结 + 无在途 PR + 非子卡）照旧报。
-//   7. orphan       —— 孤儿树（#492/#476）：无活跃执行者 + 关联 #N 已关（或 无关联且静置超 N）
+//   7. orphan       —— 孤儿树（#492/#476/#630）：无活跃执行者 + 关联 #N 已关（或 无关联且静置超 N）；
+//                       判定后按 --dispose-actions 执行 worktree-rm --force（快照 / off 只打印不真删）
 //   8. naming       —— 任务卡命名不合规（#589：新格式 PR-/ISSUE- + 角色·模型；旧 #N - 仍算合规）。
 //                      是不是任务卡看记账/顶层字段，不看卡名。非任务卡不参与命名校验。
 //   9. flow-stalled / flow-absent / stagnation —— 读 flow 心跳（#497 立约，#580 补写入）：
@@ -87,6 +88,8 @@
 // 矩阵是唯一账本，新事故只加一行。动作在 live 模式经 orca terminal send 真发（Node 直接
 // spawnSync 传参不走 Git Bash，不会把 /branch 转成盘符路径），快照/测试模式只打印动作行。
 // 斜杠命令与重启动作带上下文守卫：非 reclaude 终端不执行 reclaude 系动作，只报不动作。
+// 孤儿树真删（#630）复用同一开关：live + disposeActions 调 dao.mjs worktree-rm --force；
+// 快照 / --dispose-actions off 只打印「将执行 worktree-rm」，不真删。
 //
 // 仓规硬约束：
 //   - 输出必须区分「扫完 0 异常」（打印一行 OK 汇总，含扫描工位数）、
@@ -108,7 +111,7 @@
 //   node scripts/watchdog.mjs --state-window 15  屏面底部状态窗口行数
 //   node scripts/watchdog.mjs --self-worktree <id>  指定监视器自己的工作区 id（live 模式默认自动取）
 //   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 分级排除（可重复）
-//   node scripts/watchdog.mjs --dispose-actions off  处置矩阵动作关掉（只检测不动作）
+//   node scripts/watchdog.mjs --dispose-actions off  处置动作关掉（指纹不动作；孤儿树只打印不真删）
 //   node scripts/watchdog.mjs --heartbeat-file <path> flow 心跳文件路径（默认 _flow/heartbeat.json）
 //   node scripts/watchdog.mjs --sessions-dir <dir> pi 会话日志目录（默认 ~/.pi/agent/sessions；
 //                       快照模式默认 <快照轮目录>/sessions）
@@ -215,7 +218,7 @@ function printUsage() {
   --snapshot-dir <目录> 从录制的 ps/read JSON 快照跑检测（测试/复现用），跑完即退出
   --self-worktree <id> 监视器自己的工作区 id（live 模式默认从 orca worktree current 自动取）
   --exclude-pane <paneKey> 按稳定 pane ID 排除控制端/审官会话（可重复，不维护 displayName 名单）
-  --dispose-actions off  处置矩阵动作关掉（只检测不动作；默认 on）
+  --dispose-actions off  处置动作关掉（指纹矩阵不动作；孤儿树只打印将执行 worktree-rm，不真删；默认 on）
   --heartbeat-file <path> flow 心跳文件路径（默认 _flow/heartbeat.json）
   --sessions-dir <目录> pi 会话日志目录（默认 ~/.pi/agent/sessions；快照模式默认 <快照轮目录>/sessions）
   --now <epochMs>     固定「现在」（测试确定性用）`);
@@ -584,6 +587,49 @@ function executeDispose(target, row, contextText, live, events, notes) {
       events.push({ name: target.name, type: '动作', detail: `${label}：将发送「${shown}」（快照/测试模式打印动作行不真发）` });
     }
   }
+}
+
+// 孤儿树真删（#630）。事件风格跟 executeDispose 同一套：真跑记「已清理/已清理失败」，
+// 干跑记「将执行」。live + disposeActions 调 dao.mjs worktree-rm --force；
+// 快照 / --dispose-actions off 不真删。测试注入 WATCHDOG_ORPHAN_RM（同仓 DAO_GH_FAKE
+// 先例）才能在快照里证明「真的调用了 --force」——默认快照绝不碰真树（夹具 id 长得像本机路径）。
+function executeOrphanRm(w, args, events) {
+  const id = w.worktreeId || w.path || '';
+  const name = w.displayName || id || '?';
+  const hook = process.env.WATCHDOG_ORPHAN_RM;
+  const live = !args.snapshotDir;
+  const really = Boolean(args.disposeActions) && (live || Boolean(hook));
+  if (!id) {
+    events.push({ name, type: '动作', detail: '已清理失败：孤儿树没有 worktreeId/path，未调用 worktree-rm' });
+    return { ok: false, dryRun: false };
+  }
+  if (!really) {
+    events.push({
+      name,
+      type: '动作',
+      detail: `将执行 worktree-rm --worktree ${id} --force（快照/测试模式打印动作行不真删）`,
+    });
+    return { ok: false, dryRun: true };
+  }
+  const cmd = hook
+    ? [process.execPath, hook, '--worktree', id, '--force']
+    : [process.execPath, join(process.cwd(), 'scripts', 'dao.mjs'), 'worktree-rm', '--worktree', id, '--force'];
+  const r = spawnSync(cmd[0], cmd.slice(1), {
+    encoding: 'utf8',
+    cwd: process.cwd(),
+    timeout: 120000,
+    windowsHide: true,
+  });
+  const ok = !r.error && r.status === 0;
+  const err = String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200);
+  events.push({
+    name,
+    type: '动作',
+    detail: ok
+      ? `已清理：worktree-rm --force ${id}`
+      : `已清理失败：worktree-rm --force ${id}——${err}`,
+  });
+  return { ok, dryRun: false };
 }
 
 function sleep(ms) {
@@ -1114,7 +1160,7 @@ function runWorktreePass(source, args, state) {
       notes.push({ name, type: '观察', detail: `terminal list 拉不到（${source.tlError}）——本轮孤儿判定没查成，不是查过没事` });
       continue;
     }
-    if (activeExecutor) { st.fired.delete('orphan'); continue; }
+    if (activeExecutor) { st.fired.delete('orphan'); st.orphanRmDone = false; continue; }
 
     // 次判据：关联单已收口 / 无关联且静置超 N
     const assoc = assocNumber(name);
@@ -1152,8 +1198,13 @@ function runWorktreePass(source, args, state) {
         st.fired.add('orphan');
         events.push({ name, type: 'orphan', detail: `孤儿树候选：${why}——产出收了就 rm（#476 收卷即清树；判断依据如上，误报可见）` });
       }
+      if (!st.orphanRmDone) {
+        const rm = executeOrphanRm(w, args, events);
+        if (rm.dryRun || rm.ok) st.orphanRmDone = true;
+      }
     } else {
       st.fired.delete('orphan');
+      st.orphanRmDone = false;
     }
   }
   return { events, notes };

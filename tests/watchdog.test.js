@@ -6,7 +6,7 @@
 // 自身 / 稳定 pane ID）⑥--once 只跑单轮 ⑦检测不依赖工人自报。
 // #500 换代：⑧停摆判据 = 非 spinner 真实内容连续三轮不变（spinner 重绘/cursor 前进/ps updatedAt
 // 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
-// ⑩孤儿树（活跃执行者判据，跨主帅不误伤）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
+// ⑩孤儿树（活跃执行者判据，跨主帅不误伤；#630 接真删：on 调 --force，off/快照只打印）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
 // #569：⑭空转降噪三类豁免（角色·在途PR·活性否决，各留正控 negative + 真阳对照）⑮权限确认框
 // selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进，
 // 2026-08-17 判据订正：有活终端且查不到 dispatch 记账才报，agents=0 不算数）⑰model-change
@@ -518,6 +518,100 @@ describe('watchdog', () => {
     await t.test('无关联 + 静置 5 分钟：不报 orphan（未超阈值）', () => {
       assert.ok(!/orphan:/.test(rf.out), '无关联 + 静置 5 分钟：不报 orphan（未超阈值）  →  ' + rf.out.trim());
     });
+  });
+
+  it('⑱b #630 孤儿树接真删：dispose on 真调 --force；off/默认快照只打印不真删', async (t) => {
+    const FAKE_RM = path.join(REPO, 'tests', 'fixtures', 'fake-worktree-rm.mjs');
+    const ORPHAN_CLOSED = path.join(FIXTURES, 'orphan-closed');
+    const ORPHAN_OPEN = path.join(FIXTURES, 'orphan-open');
+    const ORPHAN_ID = '1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版';
+
+    function runWithHook(dir, extraArgs = []) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-orphan-rm-'));
+      const mark = path.join(tmp, 'tree');
+      const log = path.join(tmp, 'rm.log');
+      fs.mkdirSync(mark);
+      fs.writeFileSync(path.join(mark, 'keep'), 'x');
+      const r = spawnSync(process.execPath, [WATCHDOG, '--snapshot-dir', dir, '--once', ...extraArgs], {
+        encoding: 'utf8',
+        cwd: REPO,
+        env: {
+          ...process.env,
+          WATCHDOG_ORPHAN_RM: FAKE_RM,
+          WATCHDOG_ORPHAN_RM_LOG: log,
+          WATCHDOG_ORPHAN_RM_MARK: mark,
+        },
+      });
+      return {
+        status: r.status,
+        out: (r.stdout || '') + (r.stderr || ''),
+        markExists: fs.existsSync(mark),
+        log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '',
+        fixtureExists: fs.existsSync(path.join(dir, 'round-1', 'ps.json')),
+        tmp,
+      };
+    }
+
+    const dry = runWatchdog(ORPHAN_CLOSED, ['--once']);
+    await t.test('默认快照：真孤儿打印「将执行 worktree-rm」，不写「已清理」', () => {
+      assert.ok(
+        /动作: 将执行 worktree-rm --worktree .+ --force/.test(dry.out) && !/已清理/.test(dry.out),
+        '默认快照：真孤儿打印「将执行 worktree-rm」，不写「已清理」  →  ' + dry.out.trim(),
+      );
+    });
+    await t.test('默认快照：夹具树还在（没调真 worktree-rm）', () => {
+      assert.ok(
+        fs.existsSync(path.join(ORPHAN_CLOSED, 'round-1', 'ps.json')),
+        '默认快照：夹具树还在（没调真 worktree-rm）  →  夹具丢了',
+      );
+    });
+
+    const hit = runWithHook(ORPHAN_CLOSED);
+    await t.test('真孤儿 + 测试钩：退出码 1 且 events 有「已清理」', () => {
+      assert.ok(
+        hit.status === 1 && /动作: 已清理：worktree-rm --force /.test(hit.out),
+        '真孤儿 + 测试钩：退出码 1 且 events 有「已清理」  →  ' + `status=${hit.status} ${hit.out.trim()}`,
+      );
+    });
+    await t.test('真孤儿 + 测试钩：调用带 --force，标记树被删掉', () => {
+      assert.ok(
+        hit.log.includes(`--worktree ${ORPHAN_ID} --force`) && hit.markExists === false,
+        '真孤儿 + 测试钩：调用带 --force，标记树被删掉  →  ' + JSON.stringify({ log: hit.log, markExists: hit.markExists }),
+      );
+    });
+    await t.test('真孤儿 + 测试钩：快照夹具目录仍在（删的是标记树，不是语料）', () => {
+      assert.ok(hit.fixtureExists, '真孤儿 + 测试钩：快照夹具目录仍在（删的是标记树，不是语料）');
+    });
+    fs.rmSync(hit.tmp, { recursive: true, force: true });
+
+    const miss = runWithHook(ORPHAN_OPEN);
+    await t.test('假孤儿（关联单还开着）：不调 worktree-rm，标记树还在', () => {
+      assert.ok(
+        !/worktree-rm/.test(miss.out) && !/已清理/.test(miss.out) && miss.markExists === true && miss.log === '',
+        '假孤儿（关联单还开着）：不调 worktree-rm，标记树还在  →  ' + JSON.stringify({
+          markExists: miss.markExists,
+          log: miss.log,
+          out: miss.out.trim(),
+        }),
+      );
+    });
+    fs.rmSync(miss.tmp, { recursive: true, force: true });
+
+    const off = runWithHook(ORPHAN_CLOSED, ['--dispose-actions', 'off']);
+    await t.test('--dispose-actions off：只打印将执行，不真删（钩未跑、标记树还在）', () => {
+      assert.ok(
+        /动作: 将执行 worktree-rm/.test(off.out)
+          && !/已清理：/.test(off.out)
+          && off.markExists === true
+          && off.log === '',
+        '--dispose-actions off：只打印将执行，不真删  →  ' + JSON.stringify({
+          markExists: off.markExists,
+          log: off.log,
+          out: off.out.trim(),
+        }),
+      );
+    });
+    fs.rmSync(off.tmp, { recursive: true, force: true });
   });
 
   it('⑲ 命名校验（#476）：任务卡显示名格式', async (t) => {
