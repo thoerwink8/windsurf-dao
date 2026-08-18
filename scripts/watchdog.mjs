@@ -24,7 +24,9 @@
 //   3. fingerprint  —— 屏面底部当前状态窗口命中错误指纹清单，**两连同才报警**；
 //                       报警前活证否决：**非 spinner 真实内容在动** → 降级日志行不唤醒
 //                       （旧否决用 cursor 前进——spinner 重绘也动 cursor，#500 判死）
-//                       命中后按处置矩阵（#471）执行动作 + 连败计数，连败 3 次或 10 分钟报帅
+//                       命中后按处置矩阵（#471）执行动作 + 连败计数，连败 3 次或 10 分钟报帅；
+//                       #646：capacityRetry 指纹（at capacity / try a different model）不走连败计数，
+//                       改走专用续命调度——按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续
 //   4. stall        —— 主判据 = **非 spinner 真实内容连续三轮不变**（spinner 重绘、cursor 前进、
 //                       ps updatedAt 前进都不算活性——#500：spinner 重绘既改屏面又动 cursor）
 //   5. read-failed  —— 被监视工位却读不到屏面（守卫自身失效必须显形，不能静默）
@@ -163,12 +165,15 @@ const ERROR_FINGERPRINTS = [
 // action：keepalive（注入续命）/ reclaude-branch（/branch→继续）/ reclaude-restart（/exit→重启→继续）
 //         / send3（发 3）/ ignore（噪音不动作）；检测命中但矩阵无行 → 报帅（矩阵未命中→上报帅）。
 // requireContext：'reclaude' 系动作只在屏面上下文含 reclaude/Claude 时执行（防把 /exit 打进别的终端）。
+// capacityRetry：true = #646 capacity 指纹（at capacity / try a different model）走专用续命调度——
+//   按 PARAMS.capacityKaIntervalsMs（1/5/10 分钟）各续命一次，共 3 次；第 4 次起报帅不自动续。
+//   不走下方通用 fpLoss 连败逻辑（#471 通用逻辑保留给其它 keepalive 指纹）。
 // 参数与阈值集中 PARAMS 块。注：#471/#476 原要求进 docs/model-routing.toml 参数节（#469 S3），
 // 因 #502 正在改该文件且协调者边界未答，本轮集中在此块，迁移路径见 PR #505 正文。
 const DISPOSE_MATRIX = [
   { fp: 'no serving account',                 action: 'keepalive', label: '注入续命' },
-  { fp: 'at capacity',                        action: 'keepalive', label: '注入续命，错峰退避 120s→300s' },
-  { fp: 'try a different model',              action: 'keepalive', label: '注入续命' },
+  { fp: 'at capacity',                        action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次报帅）', capacityRetry: true },
+  { fp: 'try a different model',              action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次报帅）', capacityRetry: true },
   { fp: 'stream disconnected',                action: 'keepalive', label: '注入续命' },
   { fp: /Reconnecting.*5\/5/i,                action: 'keepalive', label: '注入续命' },
   { fp: 'temporarily limiting requests',      action: 'reclaude-branch', label: '发 /branch → 发「继续」（reclaude 链专属）', requireContext: 'reclaude' },
@@ -195,8 +200,10 @@ const PARAMS = {
     const kind = classifyCardName(name);
     return kind === 'new' || kind === 'legacy';
   },
-  fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471）
+  fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471，非 capacityRetry 指纹）
   fpLossWindowMs: 10 * 60 * 1000, // 或跨 N 分钟报帅
+  capacityKaIntervalsMs: [1 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000], // #646：capacity 指纹续命三次间隔 1/5/10 分钟
+  capacityKaMax: 3,         // #646：capacity 指纹最多自动续命 3 次，第 4 次起报帅不续
   stagnationMs: 30 * 60 * 1000,   // flow 心跳里在途 PR 停留超 N → 停滞态报警（#471 处置矩阵补一行）
   heartbeatStaleMs: 5 * 60 * 1000, // flow 心跳 ts 超 N 未更新 = flow 停摆候选
   retryLoopRounds: 3,       // #580：同一错误行连续 N 轮 = 重试循环（不看屏面是否在滚）
@@ -792,6 +799,7 @@ function stationState(state, key) {
   return state.stations[key] ||= {
     epoch: null, lastHash: null, consecutive: 0, fired: new Set(), prevUpdatedAt: null, prevIncarnation: null,
     fpStreak: 0, fpLoss: { persistCount: 0, firstTs: 0, reported: false },
+    fpKa: null, // #646：capacity 指纹续命状态 { count, lastTs, reported }（非 capacity 指纹为 null）
     selStreak: 0, idleExempt: null,
     retryLine: null, retryStreak: 0,
   };
@@ -896,6 +904,8 @@ function runRound(source, args, state) {
 
     // ③ 错误指纹（只看屏面底部当前状态窗口）——两连同才报警 + 活证否决（真实内容在动）。
     // 处置：首警执行矩阵动作 + 连败计数（#471：恢复即清零，连败 N 轮或跨 N 分钟报帅，报帅后不再自动动作）。
+    // #646：capacityRetry 指纹（at capacity / try a different model）不走通用连败计数，改走专用续命调度——
+    //   按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续（用户 2026-08-19 拍板）。
     if (!graded) {
       const matched = matchFingerprints(bottom);
       if (matched.length > 0) {
@@ -907,9 +917,16 @@ function runRound(source, args, state) {
           } else {
             st.fired.add('fingerprint');
             st.fpLoss.persistCount = 0; st.fpLoss.firstTs = now; st.fpLoss.reported = false;
-            events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
+            st.fpKa = null;
             // #471 处置矩阵：命中 → 动作；矩阵未命中 → 报帅（矩阵是唯一账本，新事故先在矩阵加行）
             const row = matrixRowFor(matched[0]);
+            if (row && row.capacityRetry) {
+              // #646：capacity 指纹续命调度起表——本次动作即第 1 次续命，下次间隔 1 分钟
+              st.fpKa = { count: 1, lastTs: now, reported: false };
+              events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——capacity 指纹按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续（#646；#634 现场：续命一次仍 capacity）` });
+            } else {
+              events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
+            }
             if (args.disposeActions && row) {
               executeDispose(t, row, all, !args.snapshotDir, events, notes);
             } else if (!row) {
@@ -917,17 +934,37 @@ function runRound(source, args, state) {
             }
           }
         } else if (st.fpStreak >= 2 && st.fired.has('fingerprint')) {
-          // 已报警后的连续命中 = 连败（#471：恢复即清零；连败 N 轮或跨 N 分钟报帅，报帅后不再自动动作）
-          st.fpLoss.persistCount += 1;
-          if (!st.fpLoss.reported && (st.fpLoss.persistCount >= PARAMS.fpLossLimit || (now - st.fpLoss.firstTs) > PARAMS.fpLossWindowMs)) {
-            st.fpLoss.reported = true;
-            events.push({ name: t.name, type: '报帅', detail: `指纹「${matched[0]}」连败（连续命中 ${st.fpStreak} 轮）——矩阵动作不再自动重复，上报帅处置（#471 连败阈值：${PARAMS.fpLossLimit} 轮或 ${Math.round(PARAMS.fpLossWindowMs / 60000)} 分钟）` });
+          const row = matrixRowFor(matched[0]);
+          if (row && row.capacityRetry) {
+            // #646：capacity 指纹续命调度——1/5/10 分钟各续命一次（共 3 次），第 4 次报帅不续。
+            // 已报帅（reported）后不再动作也不走通用连败（避免二次报帅）。
+            if (st.fpKa && !st.fpKa.reported) {
+              const idx = Math.min(st.fpKa.count, PARAMS.capacityKaIntervalsMs.length) - 1;
+              const gapMs = PARAMS.capacityKaIntervalsMs[idx];
+              if ((now - st.fpKa.lastTs) >= gapMs) {
+                if (st.fpKa.count < PARAMS.capacityKaMax) {
+                  executeDispose(t, row, all, !args.snapshotDir, events, notes);
+                  st.fpKa.count += 1; st.fpKa.lastTs = now;
+                } else {
+                  st.fpKa.reported = true;
+                  events.push({ name: t.name, type: '报帅', detail: `capacity 指纹已按 1/5/10 分钟各续命一次（共 ${PARAMS.capacityKaMax} 次）仍在线——第 4 次起报帅，不再自动续命（#646）` });
+                }
+              }
+            }
+          } else {
+            // 已报警后的连续命中 = 连败（#471：恢复即清零；连败 N 轮或跨 N 分钟报帅，报帅后不再自动动作）
+            st.fpLoss.persistCount += 1;
+            if (!st.fpLoss.reported && (st.fpLoss.persistCount >= PARAMS.fpLossLimit || (now - st.fpLoss.firstTs) > PARAMS.fpLossWindowMs)) {
+              st.fpLoss.reported = true;
+              events.push({ name: t.name, type: '报帅', detail: `指纹「${matched[0]}」连败（连续命中 ${st.fpStreak} 轮）——矩阵动作不再自动重复，上报帅处置（#471 连败阈值：${PARAMS.fpLossLimit} 轮或 ${Math.round(PARAMS.fpLossWindowMs / 60000)} 分钟）` });
+            }
           }
         }
       } else {
         st.fpStreak = 0;
         st.fired.delete('fingerprint');
         st.fpLoss.persistCount = 0; st.fpLoss.firstTs = 0; st.fpLoss.reported = false;
+        st.fpKa = null; // #646：指纹消失（恢复）即清零续命调度
       }
     }
 
