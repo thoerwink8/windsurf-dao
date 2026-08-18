@@ -398,7 +398,52 @@ describe('watchdog', () => {
       assert.ok(!/idle:/.test(r.out), 'idle-reviewer：不报 idle（审官产出是 review comment 与 notify 不是 commit）  →  ' + r.out.trim());
     });
     await t.test('idle-reviewer：打角色豁免观察行（判据可见）', () => {
-      assert.ok(/\[#455 - 审官·grok-4.6\] 观察: 子卡（审官\/辅助，卡名带 ·）不判 git 空转/.test(r.out), 'idle-reviewer：打角色豁免观察行（判据可见）  →  ' + r.out.trim());
+      assert.ok(/\[#455 - 审官·grok-4.6\] 观察: 子卡（parentWorktreeId 非空）不判 git 空转/.test(r.out), 'idle-reviewer：打角色豁免观察行  →  ' + r.out.trim());
+    });
+  });
+
+  it('⑰a2 #589 判别实验：卡名改成 zzz，四处判定不变', async (t) => {
+    function copyRound(src, dst, mutator) {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const f of fs.readdirSync(src)) {
+        const from = path.join(src, f);
+        const to = path.join(dst, f);
+        if (fs.statSync(from).isDirectory()) continue;
+        if (f === 'ps.json' && mutator) {
+          const doc = JSON.parse(fs.readFileSync(from, 'utf8'));
+          mutator(doc);
+          fs.writeFileSync(to, JSON.stringify(doc, null, 2));
+        } else {
+          fs.copyFileSync(from, to);
+        }
+      }
+    }
+
+    const zzzRev = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-zzz-rev-'));
+    copyRound(path.join(FIXTURES, 'idle-reviewer', 'round-1'), path.join(zzzRev, 'round-1'), (doc) => {
+      for (const w of doc.result.worktrees) {
+        if (w.displayName === '#455 - 审官·grok-4.6') w.displayName = 'zzz';
+      }
+    });
+    const zr = runWatchdog(zzzRev, ['--once', '--now', String(NOW)]);
+    fs.rmSync(zzzRev, { recursive: true, force: true });
+    await t.test('审官卡改名 zzz：仍豁免 git 空转（不读卡名）', () => {
+      assert.ok(zr.status === 0 && !/idle:/.test(zr.out), zr.out.trim());
+    });
+    await t.test('审官卡改名 zzz：豁免观察行还在', () => {
+      assert.ok(/\[zzz\] 观察: 子卡（parentWorktreeId 非空）不判 git 空转/.test(zr.out), zr.out.trim());
+    });
+
+    const zzzWorker = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-zzz-w-'));
+    copyRound(path.join(FIXTURES, 'idle', 'round-1'), path.join(zzzWorker, 'round-1'), (doc) => {
+      for (const w of doc.result.worktrees) {
+        if (w.displayName === '#452 - 看门狗正式版') w.displayName = 'zzz';
+      }
+    });
+    const zw = runWatchdog(zzzWorker, ['--once', '--now', String(NOW)]);
+    fs.rmSync(zzzWorker, { recursive: true, force: true });
+    await t.test('工人卡改名 zzz：仍报 idle（顶层不豁免）', () => {
+      assert.ok(zw.status === 1 && /\[zzz\] idle:/.test(zw.out), zw.out.trim());
     });
   });
 

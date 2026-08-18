@@ -199,6 +199,16 @@ export function argsWorktreeCreate({
   return a;
 }
 
+export function argsWorktreeSet({ worktree, displayName, comment, workspaceStatus } = {}) {
+  const a = ['worktree', 'set'];
+  if (worktree) a.push('--worktree', worktree);
+  if (displayName) a.push('--display-name', displayName);
+  if (comment != null) a.push('--comment', comment);
+  if (workspaceStatus) a.push('--workspace-status', workspaceStatus);
+  a.push('--json');
+  return a;
+}
+
 export function argsWorktreeRm({ worktree, force } = {}) {
   const a = ['worktree', 'rm'];
   if (worktree) a.push('--worktree', worktree);
@@ -729,6 +739,7 @@ export function catalogUsedFlags() {
       name: 'n', noParent: true, setup: 'skip',
       parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559,
     }),
+    argsWorktreeSet({ worktree: 'w', displayName: 'n', comment: 'c', workspaceStatus: 'in-progress' }),
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsWorktreePs(),
     argsTaskCreate({ spec: 's' }),
@@ -1745,17 +1756,41 @@ export function checkIssueDisambiguated({ issue, runGh } = {}) {
   return { ok: true, gated: true, issue: n, hasLabel: true, labels: names };
 }
 
-/** 卡名组装（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
- * 给了 --issue N：`#N - <动宾短语>`（name 已带 #N 前缀则去重）；子卡 `#N - 审官·<模型>`。
- * 没给 --issue：原样返回 name。 */
-export function assembleCardName({ name, issue } = {}) {
+/** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
+ * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
+ * 解析认 `-#?(\d+)`，旧的 `PR-616` / `ISSUE-589` 仍读得懂。
+ * 给了 pr 就升级前缀。没给号则原样返回。这是卡名格式的唯一真相源。 */
+const CARD_ROLE_DOT = /^(工人|审官|辅助)·(\S+)(?:\s+(.*))?$/;
+const CARD_NEW = /^(PR|ISSUE)-#?(\d+)\s+(.*)$/;
+const CARD_OLD = /^#(\d+)\s*[-–—]\s*(.*)$/;
+
+export function assembleCardName({ name, issue, pr, role, model } = {}) {
+  const raw = String(name ?? '').trim();
+  const prText = String(pr ?? '').trim();
   const issueText = String(issue ?? '').trim();
-  if (!issueText || !/^\d+$/.test(issueText)) return String(name ?? '').trim();
-  const n = String(name ?? '').trim();
-  const prefix = `#${issueText}`;
-  let stem = n;
-  if (n.startsWith(prefix)) stem = n.slice(prefix.length).replace(/^\s*[-–—]\s*/, '').trim();
-  return [prefix, stem].filter(Boolean).join(' - ');
+  const kind = /^\d+$/.test(prText) ? 'PR' : (/^\d+$/.test(issueText) ? 'ISSUE' : null);
+  const num = kind === 'PR' ? prText : issueText;
+  let stem = raw;
+  let roleText = String(role ?? '').trim();
+  let modelId = String(model ?? '').trim();
+
+  const asNew = raw.match(CARD_NEW);
+  if (asNew) stem = asNew[3];
+  else {
+    const asOld = raw.match(CARD_OLD);
+    if (asOld) stem = asOld[2];
+  }
+
+  const roleDot = stem.match(CARD_ROLE_DOT);
+  if (roleDot) {
+    if (!roleText) roleText = roleDot[1];
+    if (!modelId) modelId = roleDot[2];
+    stem = (roleDot[3] || '').trim();
+  }
+
+  if (!kind) return raw;
+  const mid = roleText && modelId ? `${roleText}·${modelId}` : (roleText || '');
+  return [`${kind}-#${num}`, mid, stem].filter(Boolean).join(' ');
 }
 
 // ── #564 label 自动打：dispatch 记 issue，帅合并时同步到 PR ─────────
@@ -1820,6 +1855,35 @@ export function pickReviewer(labels) {
   };
 }
 
+const MODEL_LABEL_PREFIX = 'model/';
+
+/** 从 label 列表读出唯一的工人模型。三态同分：一个 / 没有 / 多个。 */
+export function pickModel(labels) {
+  if (labels == null || !Array.isArray(labels)) {
+    return { ok: false, state: 'unscanned', error: 'pickModel 没拿到 label 列表（没查成，不许猜）' };
+  }
+  const hits = labels
+    .map(labelNameOf)
+    .filter(name => name.startsWith(MODEL_LABEL_PREFIX) && name.length > MODEL_LABEL_PREFIX.length);
+  if (hits.length === 0) {
+    return { ok: false, state: 'none', error: '没有 model/* label（扫完 0 条，不许猜一个）' };
+  }
+  if (hits.length > 1) {
+    return {
+      ok: false,
+      state: 'many',
+      labels: hits,
+      error: `有多个 model/* label（${hits.join('、')}，不许猜一个）`,
+    };
+  }
+  return {
+    ok: true,
+    state: 'one',
+    modelId: hits[0].slice(MODEL_LABEL_PREFIX.length),
+    label: hits[0],
+  };
+}
+
 /** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
 export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   if (reviewer && String(reviewer).trim()) {
@@ -1850,8 +1914,8 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
     collected.push(...names);
   }
   const picked = pickReviewer(collected);
-  if (!picked.ok) return { ...picked, source: 'label', refs };
-  return { ...picked, source: 'label', refs };
+  if (!picked.ok) return { ...picked, source: 'label', refs, labels: collected };
+  return { ...picked, source: 'label', refs, labels: collected };
 }
 
 /** 读 PR 上的 review 条数。没查成和「0 条」分开。 */
@@ -1891,6 +1955,7 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
+  const workerPick = pickModel(resolved.labels || []);
   const comment = custom || (round === 'rework'
     ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
     : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
@@ -1904,6 +1969,7 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     issue,
     reviewer: resolved.modelId,
     reviewerSource: resolved.source,
+    workerModel: workerPick.ok ? workerPick.modelId : null,
     comment,
     reviewerCreate: shouldCreate
       ? {
@@ -2706,8 +2772,8 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
 续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
-给了 --issue <issue号> 时卡名自动组装成「#<issue号> - <动宾短语>」（子卡「#<issue号> - 审官·<模型>」），
-并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（#559 追加：派工那一刻 PR 不存在，卡名先带 issue 号）。
+给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
+并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（非 0 退出，fail-close）——
 去该 issue 补消歧记录再打「已消歧」label（dao-project skill 第二节）；gh 查失败单独报「没查成」，不许当有 label 放行。
 dispatch --dry-run 不走门控（不实际派工，disambiguation 只作报告，不影响退出码；#565 返工）。无 --issue 的派工不受门控（辅助终端不经 dispatch）。

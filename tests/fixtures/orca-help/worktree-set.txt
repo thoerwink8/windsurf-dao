@@ -1,0 +1,27 @@
+orca worktree set
+
+Usage: orca worktree set --worktree <selector> [--display-name <name>] [--issue <number|null>] [--linear-issue <identifier-or-url|null>] [--comment <text>] [--workspace-status <id>] [--parent-worktree <selector>|--no-parent] [--json]
+
+Update Orca metadata for a worktree
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --display-name <name>  Override the Orca display name
+  --issue <number|null>  Linked GitHub issue number
+  --linear-issue <id|url|null> Linked Linear issue identifier or URL; null clears on set
+  --comment <text>       Comment stored in Orca metadata
+  --workspace-status <id> Board status id (defaults: todo, in-progress, in-review, completed)
+  --parent-worktree <selector> Parent worktree selector such as id:<repo-id>::<path>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --no-parent            Force no parent lineage for unrelated work
+
+Notes:
+  Workspace status ids match the board columns (defaults: todo, in-progress, in-review, completed); custom statuses use their configured id.
+  Pass --linear-issue null to clear the Linear issue link.
+
+Examples:
+  $ orca worktree set --worktree active --linear-issue STA-335 --json
+  $ orca worktree set --worktree active --linear-issue null --json
