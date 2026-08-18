@@ -7,7 +7,7 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 ## 拓扑
 
-master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 按需起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名给人眼看（`PR-587 工人·grok-4.6 备零件`），程序判据不读卡名。
+master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 按需起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名给人眼看（格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`），程序判据不读卡名。
 
 多块活（能拆成几块、各够一个工人干一阵的）走 `host/skills/dao-project/SKILL.md` 的项化路径（项卡 + 多 worker 子卡 + 各自审官 + 收口官，消歧门门控），本页不复制；单卡场景仍走本页。
 
@@ -153,10 +153,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 ## 命名规矩
 
-- 任务卡给人眼看，判据归字段（#589）。格式：
-  - 未开 PR：`ISSUE-588 工人·grok-4.6 strikes闸`
-  - 已开 PR：`PR-587 工人·grok-4.6 备零件`
-  - 审官：`PR-587 审官·gpt-5.6-sol`
+- 任务卡给人眼看，判据归字段（#589）。格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`，本页不复制。
 - **PR 开出来后改名是机械动作**：挂在 `worker-done`（它本来就有 PR 号），不要做成要人记得的一步。
 - 程序找审官 / 判任务卡 / 判子卡：看 `parentWorktreeId` 和 dispatch 记账，不读卡名，不拿 issue 号去对 PR 号。
 - 终端 / 工人副本：角色·模型（如「审官·GPT」）。默认名不上面板。

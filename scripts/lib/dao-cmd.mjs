@@ -1748,11 +1748,12 @@ export function checkIssueDisambiguated({ issue, runGh } = {}) {
   return { ok: true, gated: true, issue: n, hasLabel: true, labels: names };
 }
 
-/** 卡名给人眼看（#589）：未开 PR 用 ISSUE-，有 PR 用 PR-；角色·模型写在号后面。
- * `ISSUE-588 工人·grok-4.6 strikes闸` / `PR-587 审官·gpt-5.6-sol`
- * 给了 pr 就升级前缀（ISSUE- / 旧 #N 都改成 PR-）。没给号则原样返回。 */
+/** 卡名给人眼看（#589；号前带 #，2026-08-18 拍板）。
+ * 组装只产出 `ISSUE-#589 工人·模型 短语` / `PR-#616 审官·模型`。
+ * 解析认 `-#?(\d+)`，旧的 `PR-616` / `ISSUE-589` 仍读得懂。
+ * 给了 pr 就升级前缀。没给号则原样返回。这是卡名格式的唯一真相源。 */
 const CARD_ROLE_DOT = /^(工人|审官|辅助)·(\S+)(?:\s+(.*))?$/;
-const CARD_NEW = /^(PR|ISSUE)-(\d+)\s+(.*)$/;
+const CARD_NEW = /^(PR|ISSUE)-#?(\d+)\s+(.*)$/;
 const CARD_OLD = /^#(\d+)\s*[-–—]\s*(.*)$/;
 
 export function assembleCardName({ name, issue, pr, role, model } = {}) {
@@ -1781,7 +1782,7 @@ export function assembleCardName({ name, issue, pr, role, model } = {}) {
 
   if (!kind) return raw;
   const mid = roleText && modelId ? `${roleText}·${modelId}` : (roleText || '');
-  return [`${kind}-${num}`, mid, stem].filter(Boolean).join(' ');
+  return [`${kind}-#${num}`, mid, stem].filter(Boolean).join(' ');
 }
 
 // ── #564 label 自动打：dispatch 记 issue，帅合并时同步到 PR ─────────
@@ -2763,7 +2764,7 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
 续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
-给了 --issue <issue号> 时卡名自动组装成「ISSUE-<号> 工人·<模型> <动宾短语>」；审官卡在 worker-done / reviewer-create 时用「PR-<PR号> 审官·<模型>」（#589：卡名归人眼，号对不上也不拿名字当钥匙）。
+给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（非 0 退出，fail-close）——
 去该 issue 补消歧记录再打「已消歧」label（dao-project skill 第二节）；gh 查失败单独报「没查成」，不许当有 label 放行。

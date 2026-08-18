@@ -45,7 +45,7 @@ export function isTaskCard(w, { tracked } = {}) {
 
 export function classifyCardName(name) {
   const n = String(name || '').trim();
-  if (/^(PR|ISSUE)-\d+ (工人|审官|辅助)·\S+/.test(n)) return 'new';
+  if (/^(PR|ISSUE)-#?\d+ (工人|审官|辅助)·\S+/.test(n)) return 'new';
   if (/^#\d+ - /.test(n)) return 'legacy';
   return 'other';
 }
@@ -107,7 +107,7 @@ export function issueNumberFromWorktree(w) {
     if (hit) return Number(hit[1]);
   }
   const name = String(w.displayName || '');
-  const issue = name.match(/ISSUE-(\d+)/);
+  const issue = name.match(/ISSUE-#?(\d+)/);
   if (issue) return Number(issue[1]);
   const old = name.match(/^#(\d+)/);
   if (old) return Number(old[1]);
@@ -120,7 +120,7 @@ export function displayNumberFromWorktree(w) {
   if (issue) return issue;
   if (w && w.linkedPR && typeof w.linkedPR.number === 'number') return w.linkedPR.number;
   const name = String(w?.displayName || '');
-  const pr = name.match(/PR-(\d+)/);
+  const pr = name.match(/PR-#?(\d+)/);
   if (pr) return Number(pr[1]);
   return null;
 }

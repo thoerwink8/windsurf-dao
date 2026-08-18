@@ -1068,7 +1068,7 @@ function runWorktreePass(source, args, state) {
     } else if (name && !PARAMS.namingOk(name)) {
       if (!st.fired.has('naming')) {
         st.fired.add('naming');
-        events.push({ name, type: 'naming', detail: `任务卡命名不合规「${name}」——应为「PR-N 工人·模型 动宾」或「ISSUE-N 工人·模型 动宾」（旧「#N - …」仍算合规，#589）` });
+        events.push({ name, type: 'naming', detail: `任务卡命名不合规「${name}」——格式只认 assembleCardName（旧「#N - …」仍算合规，#589）` });
       }
     } else if (name) {
       st.fired.delete('naming');

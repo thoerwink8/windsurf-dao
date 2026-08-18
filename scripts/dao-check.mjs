@@ -705,7 +705,7 @@ function checkOpenIssueCount(board) {
       : (w.linkedIssue && typeof w.linkedIssue.number === 'number' ? w.linkedIssue.number : null);
     const zone = String(w.comment || '').match(/｜\[([^\]]*)\]/);
     const zoneN = zone && zone[1].match(/#(\d+)/);
-    const issueName = name.match(/ISSUE-(\d+)/);
+    const issueName = name.match(/ISSUE-#?(\d+)/);
     const oldName = name.match(/^#(\d+)/);
     const n = linked || (zoneN ? Number(zoneN[1]) : null) || (issueName ? Number(issueName[1]) : null)
       || (oldName ? Number(oldName[1]) : null);

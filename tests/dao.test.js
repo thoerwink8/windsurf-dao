@@ -418,7 +418,7 @@ describe('dao', () => {
     const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);
     await t.test('#589：dry-run 带 --issue → 工人卡 ISSUE- + 角色·模型（审官卡推迟到 worker-done）', () => {
-      assert.ok(okIssue.status === 0 && pIssue.workerCard === 'ISSUE-565 工人·grok-4.6 修地基' && pIssue.reviewerDeferred === true, '#589：dry-run 带 --issue → 工人卡 ISSUE- + 角色·模型  →  ' + JSON.stringify(pIssue));
+      assert.ok(okIssue.status === 0 && pIssue.workerCard === 'ISSUE-#565 工人·grok-4.6 修地基' && pIssue.reviewerDeferred === true, '#589：dry-run 带 --issue → 工人卡 ISSUE-# + 角色·模型  →  ' + JSON.stringify(pIssue));
     });
     await t.test('#559 追加：dry-run 带 --issue → issue 字段透出', () => {
       assert.ok(pIssue.issue === '565', '#559 追加：dry-run 带 --issue → issue 字段透出  →  ' + JSON.stringify(pIssue));
@@ -1509,17 +1509,23 @@ describe('dao', () => {
     await t.test('#559 追加：worktree create 带 --issue 透传', () => {
       assert.ok(wtIssue.includes('--issue') && wtIssue[wtIssue.indexOf('--issue') + 1] === '559', '#559 追加：worktree create 带 --issue 透传  →  ' + wtIssue.join(' '));
     });
-    await t.test('#589：assembleCardName 拼 ISSUE- + 工人·模型', () => {
-      assert.strictEqual(S.assembleCardName({ name: '修地基', issue: 559, role: '工人', model: 'grok-4.6' }), 'ISSUE-559 工人·grok-4.6 修地基');
+    await t.test('#589：assembleCardName 拼 ISSUE-# + 工人·模型', () => {
+      assert.strictEqual(S.assembleCardName({ name: '修地基', issue: 559, role: '工人', model: 'grok-4.6' }), 'ISSUE-#559 工人·grok-4.6 修地基');
     });
-    await t.test('#589：assembleCardName 见到 PR 号升级前缀', () => {
-      assert.strictEqual(S.assembleCardName({ name: 'ISSUE-559 工人·grok-4.6 修地基', pr: 616 }), 'PR-616 工人·grok-4.6 修地基');
+    await t.test('#589：assembleCardName 见到 PR 号升级成 PR-#', () => {
+      assert.strictEqual(S.assembleCardName({ name: 'ISSUE-#559 工人·grok-4.6 修地基', pr: 616 }), 'PR-#616 工人·grok-4.6 修地基');
     });
-    await t.test('#589：assembleCardName 审官卡用 PR 号', () => {
-      assert.strictEqual(S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), pr: 616, role: '审官', model: 'gpt-5.6-sol' }), 'PR-616 审官·gpt-5.6-sol');
+    await t.test('#589：assembleCardName 审官卡用 PR-#', () => {
+      assert.strictEqual(S.assembleCardName({ name: S.reviewerCardName('gpt-5.6-sol'), pr: 616, role: '审官', model: 'gpt-5.6-sol' }), 'PR-#616 审官·gpt-5.6-sol');
     });
-    await t.test('#589：assembleCardName 旧 #N 前缀升级', () => {
-      assert.strictEqual(S.assembleCardName({ name: '#559 - 修地基', pr: 616, role: '工人', model: 'grok-4.6' }), 'PR-616 工人·grok-4.6 修地基');
+    await t.test('#589：assembleCardName 旧 #N 前缀升级成 PR-#', () => {
+      assert.strictEqual(S.assembleCardName({ name: '#559 - 修地基', pr: 616, role: '工人', model: 'grok-4.6' }), 'PR-#616 工人·grok-4.6 修地基');
+    });
+    await t.test('#589 返工：组装必须带 #（删掉这条里的 # 必须变红）', () => {
+      assert.strictEqual(
+        S.assembleCardName({ name: '卡名归人眼判据归字段', pr: 616, role: '工人', model: 'grok-4.6' }),
+        'PR-#616 工人·grok-4.6 卡名归人眼判据归字段',
+      );
     });
     await t.test('#559 追加：没给号原样返回', () => {
       assert.ok(S.assembleCardName({ name: '审读 #505' }) === '审读 #505' && S.assembleCardName({ name: 'x' }) === 'x', '#559 追加：没给号原样返回');

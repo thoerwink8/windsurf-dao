@@ -13,9 +13,11 @@ const C_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 describe('card-identity', () => {
   it('#589 卡名分类：新格式 / 旧格式 / 其他', async () => {
     const C = await C_LOAD;
-    assert.strictEqual(C.classifyCardName('PR-587 工人·grok-4.6 备零件'), 'new');
-    assert.strictEqual(C.classifyCardName('PR-587 审官·gpt-5.6-sol'), 'new');
-    assert.strictEqual(C.classifyCardName('ISSUE-588 工人·grok-4.6 strikes闸'), 'new');
+    assert.strictEqual(C.classifyCardName('PR-#616 工人·grok-4.6 备零件'), 'new');
+    assert.strictEqual(C.classifyCardName('PR-#616 审官·gpt-5.6-sol'), 'new');
+    assert.strictEqual(C.classifyCardName('ISSUE-#589 工人·grok-4.6 strikes闸'), 'new');
+    assert.strictEqual(C.classifyCardName('PR-616 工人·grok-4.6 x'), 'new');
+    assert.strictEqual(C.classifyCardName('ISSUE-589 工人·x y'), 'new');
     assert.strictEqual(C.classifyCardName('#559 - 修地基'), 'legacy');
     assert.strictEqual(C.classifyCardName('zzz'), 'other');
   });
@@ -77,11 +79,15 @@ describe('card-identity', () => {
 
   it('#589 issue 号不从 PR- 前缀瞎取', async () => {
     const C = await C_LOAD;
-    assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'ISSUE-589 工人·grok-4.6 x' }), 589);
+    assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'ISSUE-#589 工人·grok-4.6 x' }), 589);
+    assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'ISSUE-589 工人·x y' }), 589);
     assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'PR-616 工人·grok-4.6 x', linkedIssue: 589 }), 589);
     assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'PR-616 工人·grok-4.6 x' }), null);
     assert.strictEqual(C.issueNumberFromWorktree({ displayName: '#589 - x' }), 589);
     assert.strictEqual(C.issueNumberFromWorktree({ displayName: 'zzz', comment: '进度｜[#589]' }), 589);
+    assert.strictEqual(C.displayNumberFromWorktree({ displayName: 'PR-616 工人·grok-4.6 x' }), 616);
+    assert.strictEqual(C.displayNumberFromWorktree({ displayName: 'PR-#616 工人·grok-4.6 x' }), 616);
+    assert.strictEqual(C.displayNumberFromWorktree({ displayName: 'ISSUE-589 工人·x y' }), 589);
   });
 
   it('#589 源码钉：四处不再用卡名当判据', () => {
