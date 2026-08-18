@@ -324,7 +324,7 @@ describe('dispatch --batch', () => {
     assert.ok(p.ok && p.dryRun === true && p.batch === true, JSON.stringify(p));
     assert.strictEqual(p.reviewerCreate, false);
     assert.strictEqual(p.noParent, false);
-    assert.strictEqual(p.cardName, '#600 - 存量27单分流总卡');
+    assert.strictEqual(p.cardName, S.assembleCardName({ name: '存量27单分流总卡', issue: '600' }));
     assert.strictEqual(p.workers.length, 4);
     assert.ok(p.workers[0].handle === '<handle:0>' && p.workers[3].handle === '<handle:3>', JSON.stringify(p.workers));
     assert.ok(String(p.workers[0].inject).includes('batch-book.md'), JSON.stringify({ inject: p.workers[0].inject, err: p.err, raw: p.raw, status: r.status, stderr: r.stderr }));
