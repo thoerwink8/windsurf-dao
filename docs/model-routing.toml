@@ -159,7 +159,7 @@ decided = "2026-08-16"
 
 [providers.cursor]
 cli = "cursor-agent"
-launch = "cursor-agent --model {model} --force"
+launch = "cursor-agent --model {model} --force --trust"
 launch_model = "composer-2.5"
 probe_wait_ms = 45000
 launch_note = """
@@ -167,6 +167,10 @@ Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代�
 无代理时选择器只剩 Grok/Composer/Kimi/GLM：见 NEW-MACHINE.md「cursor 怎么配」。
 本机 ~/.local/bin 的 shim 已带 127.0.0.1:7890。不装 pi-cursor-sdk（官方无第三方 chat API；
 撞「pi 不写插件」）。管子不进打分。
+
+#648 返工补丁（2026-08-19）：launch 加 `--trust`——`--force` 只放行命令，不管 Workspace Trust，
+新 worktree 弹 Trust 会让 Orca 报 agent_unconfigured（#649 attach 实证）。
+`--trust` 直接信任当前工作区免弹框；仓内 shim 在带 `--model` 时也会补 `--trust`（合并后本机垫片退役）。
 """
 why = "用户 2026-08-18：SuperGrok Heavy 送 Cursor Ultra。Composer/Kimi/Gemini 走 Cursor CLI；GPT 主路仍 Codex、支路可走本 provider。"
 decided = "2026-08-18"

@@ -1,8 +1,36 @@
 @echo off
-rem cursor-agent shim: Clash Party proxy required (CN IP hides GPT/Claude)
-rem real binary: %LOCALAPPDATA%\cursor-agent\cursor-agent.cmd
+rem cursor-agent shim: proxy + skip official .cmd (that file launches visible powershell)
+rem real binary: %LOCALAPPDATA%\cursor-agent\versions\<latest>\node.exe + index.js
+rem #648: append --trust when --model given (Workspace Trust prompt blocks new worktrees)
 set HTTPS_PROXY=http://127.0.0.1:7890
 set HTTP_PROXY=http://127.0.0.1:7890
 set ALL_PROXY=http://127.0.0.1:7890
 set NODE_USE_ENV_PROXY=1
-"%LOCALAPPDATA%\cursor-agent\cursor-agent.cmd" %*
+set "CURSOR_INVOKED_AS=%~nx0"
+if not defined NODE_COMPILE_CACHE set "NODE_COMPILE_CACHE=%LOCALAPPDATA%\cursor-compile-cache"
+set "CURSOR_HOME=%LOCALAPPDATA%\cursor-agent"
+if not exist "%CURSOR_HOME%\versions\" (
+  echo cursor-agent: missing "%CURSOR_HOME%\versions" >&2
+  exit /b 1
+)
+set "CURSOR_NODE="
+set "CURSOR_INDEX="
+for /f "delims=" %%i in ('dir /b /ad /o-n "%CURSOR_HOME%\versions"') do (
+  if exist "%CURSOR_HOME%\versions\%%i\node.exe" if exist "%CURSOR_HOME%\versions\%%i\index.js" (
+    set "CURSOR_NODE=%CURSOR_HOME%\versions\%%i\node.exe"
+    set "CURSOR_INDEX=%CURSOR_HOME%\versions\%%i\index.js"
+    goto :found
+  )
+)
+:found
+if not defined CURSOR_NODE (
+  echo cursor-agent: no node.exe+index.js under "%CURSOR_HOME%\versions" >&2
+  exit /b 1
+)
+echo %*| findstr /C:"--model" >nul
+if errorlevel 1 (
+  "%CURSOR_NODE%" "%CURSOR_INDEX%" %*
+  exit /b %errorlevel%
+)
+"%CURSOR_NODE%" "%CURSOR_INDEX%" %* --trust
+exit /b %errorlevel%

@@ -738,7 +738,7 @@ describe('dianjiangtai', () => {
         passerIds: ["grok-4.6", "claude-opus", "glm-5.2", "gpt-5.6-sol"],
       }).model === "glm-5.2", 'pinReviewerSlotA 在门闩集合有 GLM-5.2 时顶 GLM-5.2');
     });
-    await t.test('pinReviewerSlotA 只剩 GPT → 不顶 GPT（暂不可用）', () => {
+    await t.test('pinReviewerSlotA 无 GLM-5.2/Opus 时顺延非 GPT 门闩首名', () => {
       assert.ok(pinReviewerSlotA({
         models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
         passerIds: ["grok-4.6", "claude-opus"],
