@@ -269,7 +269,9 @@ export function parseAskTimeoutMs(raw, { defaultMs = 600000 } = {}) {
  * 关台目标必须能证明「这就是本 Run 的信箱台」。
  * coordinator_handle 会被 run-use 临时借走或指到帅的终端，不能单独当身份（#601 审官红 1）。
  * 证明链：租约 runId 对，再加租约 handle 在盘面，或 preview 唯一命中本 run 的 READY 行。
- * PID 还活着却证不出 → 失败，不许只删文件宣告 retired。
+ * 租约过期（now - lease.ts > lease.ttlMs）直接 alreadyGone，不再查 OS 进程表 /
+ * handle / preview 佐证（#635：PID 复用会让「数字还活着」永久假阳性）。
+ * 租约未过期却证不出 → 失败，不许只删文件宣告 retired。
  */
 export function previewHandlesForRun(terminals, runId, mark = 'INBOX_STATION_READY') {
   if (!Array.isArray(terminals) || !runId) return [];
@@ -286,7 +288,7 @@ export function resolveStationCloseTarget({
   runId,
   lease,
   leaseRead,
-  pidAlive,
+  now = Date.now(),
   coordinatorHandle,
   terminals,
   previewHandles,
@@ -298,11 +300,18 @@ export function resolveStationCloseTarget({
   if (!Array.isArray(terminals)) {
     return { ok: false, unscanned: true, error: 'terminal list 没查成，不能关台' };
   }
-  if (lease && pidAlive == null) {
-    return { ok: false, unscanned: true, error: 'PID 没查成，不能关台' };
-  }
   if (lease && lease.runId && lease.runId !== runId) {
     return { ok: false, error: `租约归属 ${lease.runId}，不是 ${runId}，拒关` };
+  }
+
+  // #635：过期只看租约 ts+ttlMs。相等仍算未过期（与 isLeaseFresh 的 age <= ttl 对齐）。
+  if (leaseTtlExpired(lease, now)) {
+    return {
+      ok: true,
+      action: 'alreadyGone',
+      closeHandle: null,
+      reason: 'pid-dead-reused',
+    };
   }
 
   const previews = [...new Set((previewHandles || []).filter(Boolean).map(String))];
@@ -315,25 +324,22 @@ export function resolveStationCloseTarget({
 
   if (leaseHandle) {
     const seen = onBoard.has(leaseHandle);
-    if (pidAlive === true && !seen) {
+    if (!seen) {
       return {
         ok: false,
-        error: `租约 PID 还活着，但 terminal list 找不到 handle ${leaseHandle}，证不出对应关系`,
+        error: `租约未过期，但 terminal list 找不到 handle ${leaseHandle}，证不出对应关系`,
       };
     }
-    if (pidAlive === true || seen) {
-      return {
-        ok: true,
-        action: 'close',
-        closeHandle: leaseHandle,
-        reason: seen ? 'lease-handle' : 'lease-handle-zombie',
-        coordinatorStolen: Boolean(coordinatorHandle && coordinatorHandle !== leaseHandle),
-      };
-    }
-    return { ok: true, action: 'alreadyGone', closeHandle: null, reason: 'pid-dead-no-tab' };
+    return {
+      ok: true,
+      action: 'close',
+      closeHandle: leaseHandle,
+      reason: 'lease-handle',
+      coordinatorStolen: Boolean(coordinatorHandle && coordinatorHandle !== leaseHandle),
+    };
   }
 
-  if (pidAlive === true) {
+  if (lease) {
     if (previews.length === 1) {
       return {
         ok: true,
@@ -348,7 +354,7 @@ export function resolveStationCloseTarget({
     }
     return {
       ok: false,
-      error: '租约 PID 还活着，但没有 handle、preview 也认不出信箱台，拒删文件',
+      error: '租约未过期，但没有 handle、preview 也认不出信箱台，拒删文件',
     };
   }
 
@@ -356,8 +362,19 @@ export function resolveStationCloseTarget({
     ok: true,
     action: 'alreadyGone',
     closeHandle: null,
-    reason: leaseRead === 'missing' || !lease ? 'no-lease' : 'pid-dead',
+    reason: 'no-lease',
   };
+}
+
+/** now - lease.ts > lease.ttlMs 才过期。ts/ttl 读不成则不过期，走未过期的身份证明。 */
+export function leaseTtlExpired(lease, now = Date.now()) {
+  if (!lease) return false;
+  const ts = Number(lease.ts);
+  const ttlMs = Number(lease.ttlMs);
+  if (!Number.isFinite(ts) || !Number.isFinite(now) || !Number.isFinite(ttlMs) || ttlMs <= 0) {
+    return false;
+  }
+  return now - ts > ttlMs;
 }
 
 /**

@@ -130,7 +130,7 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
-import { defaultLogRel, leasePath, launchFilePath, parseLease, isProcessAlive } from './inbox-station.mjs';
+import { defaultLogRel, leasePath, launchFilePath, parseLease } from './inbox-station.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -447,12 +447,10 @@ function retireOneRun(runId) {
     return { ok: false, unscanned: true, runId, error: leaseInfo.error };
   }
   const lease = leaseInfo.lease;
-  const pidAlive = lease && lease.pid ? isProcessAlive(lease.pid) : null;
   const target = resolveStationCloseTarget({
     runId,
     lease,
     leaseRead: leaseInfo.read,
-    pidAlive,
     coordinatorHandle: shown.json?.result?.run?.coordinator_handle || null,
     terminals,
     previewHandles: previewHandlesForRun(terminals, runId),

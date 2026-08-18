@@ -930,12 +930,10 @@ function cmdRetire(args) {
     }
     leaseRead = 'ok';
   }
-  const pidAlive = lease && lease.pid ? isProcessAlive(lease.pid) : null;
   const target = resolveStationCloseTarget({
     runId: args.run,
     lease,
     leaseRead,
-    pidAlive,
     coordinatorHandle: shown.run?.coordinator_handle || null,
     terminals: listed.terminals,
     previewHandles: previewHandlesForRun(listed.terminals, args.run),
@@ -970,8 +968,8 @@ function printUsage() {
   relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
   retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
-          关台身份看租约 PID/runId/handle（或 preview 唯一命中），不看 coordinator_handle
-          证不出且 PID 还活着就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
+          关台身份看租约 TTL/runId/handle（或 preview 唯一命中），不看 coordinator_handle
+          过期直接 alreadyGone；未过期且证不出就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
 }
 
 async function main() {
