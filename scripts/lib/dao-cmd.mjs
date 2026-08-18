@@ -523,6 +523,17 @@ export function argsTaskCreate({ spec, run } = {}) {
   return a;
 }
 
+export function argsTaskUpdate({ id, status, result, run, from } = {}) {
+  const a = ['orchestration', 'task-update'];
+  if (id) a.push('--id', id);
+  if (status) a.push('--status', status);
+  if (result != null) a.push('--result', typeof result === 'string' ? result : JSON.stringify(result));
+  if (run) a.push('--run', run);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
 export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
@@ -577,17 +588,10 @@ export function argsWorkerRelease({ dispatch, retryRequest } = {}) {
   return a;
 }
 
-export function argsWorkerStop({ dispatch } = {}) {
+export function argsWorkerStop({ dispatch, retryRequest } = {}) {
   const a = ['orchestration', 'worker-stop'];
   if (dispatch) a.push('--dispatch', dispatch);
-  a.push('--json');
-  return a;
-}
-
-export function argsTaskUpdate({ id, status } = {}) {
-  const a = ['orchestration', 'task-update'];
-  if (id) a.push('--id', id);
-  if (status) a.push('--status', status);
+  if (retryRequest) a.push('--retry-request', retryRequest);
   a.push('--json');
   return a;
 }
@@ -741,7 +745,7 @@ export function isRunRequired(error) {
 export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——有信箱台在 relay 时它抢不住（台每轮自夺回）；run-use 只在该 Run 还没起信箱台时有效';
 
 export function rollbackErrorAlreadyGone(error) {
-  return /tab_not_found|terminal_handle_stale/i.test(orcaErrorText(error));
+  return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released|task_not_found|already_failed/i.test(orcaErrorText(error));
 }
 
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
@@ -758,11 +762,11 @@ export function catalogUsedFlags() {
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsWorktreePs(),
     argsTaskCreate({ spec: 's' }),
+    argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
     argsWorkerStop({ dispatch: 'd' }),
-    argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
@@ -1463,21 +1467,44 @@ export function envProbeWorktree(cwd) {
   return runCapabilityProbes({ exec: hostProbeExec(cwd) });
 }
 
-export function planDispatchRollback({
-  workerId, workerHandle, reviewerId, reviewerHandle,
-  childIds, childHandles, dispatchIds, taskIds,
+export function unboundTaskIds({ taskIds, workers } = {}) {
+  const bound = new Set((Array.isArray(workers) ? workers : []).map(w => w && w.taskId).filter(Boolean));
+  return (Array.isArray(taskIds) ? taskIds : []).filter(id => id && !bound.has(id));
+}
+
+export function planDispatchFence({ dispatchIds, taskIds, workers } = {}) {
+  const steps = [];
+  const seenId = new Set();
+  for (const id of (Array.isArray(dispatchIds) ? dispatchIds : []).filter(Boolean).slice().reverse()) {
+    if (seenId.has(id)) continue;
+    seenId.add(id);
+    steps.push(argsWorkerStop({ dispatch: id }));
+  }
+  const seenTask = new Set();
+  for (const id of unboundTaskIds({ taskIds, workers }).slice().reverse()) {
+    if (seenTask.has(id)) continue;
+    seenTask.add(id);
+    steps.push(argsTaskUpdate({ id, status: 'failed' }));
+  }
+  return steps;
+}
+
+export function planDispatchDestroy({
+  workerId, workerHandle, reviewerId, reviewerHandle, handles, childIds, childHandles,
 } = {}) {
   const steps = [];
-  for (const id of Array.isArray(dispatchIds) ? dispatchIds : []) {
-    if (id) steps.push(argsWorkerStop({ dispatch: id }));
-  }
-  for (const id of Array.isArray(taskIds) ? taskIds : []) {
-    if (id) steps.push(argsTaskUpdate({ id, status: 'failed' }));
-  }
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
   if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
   for (const handle of Array.isArray(childHandles) ? childHandles : []) {
     if (handle) steps.push(argsTerminalClose({ terminal: handle, tab: true }));
+  }
+  const extra = Array.isArray(handles) ? handles.filter(Boolean) : [];
+  const seen = new Set();
+  for (const h of extra.slice().reverse()) {
+    if (seen.has(h) || h === workerHandle || h === reviewerHandle) continue;
+    if (Array.isArray(childHandles) && childHandles.includes(h)) continue;
+    seen.add(h);
+    steps.push(argsTerminalClose({ terminal: h, tab: true }));
   }
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
   for (const id of Array.isArray(childIds) ? childIds : []) {
@@ -1485,6 +1512,289 @@ export function planDispatchRollback({
   }
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
+}
+
+export function planDispatchRollback(created = {}) {
+  return [...planDispatchFence(created), ...planDispatchDestroy(created)];
+}
+
+export function execRollbackStep(args, exec) {
+  let r = exec(args);
+  const step = {
+    cmd: args.join(' '),
+    ok: !!r.ok,
+    error: r.ok ? undefined : orcaErrorText(r.error),
+  };
+  if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
+    step.ok = true;
+    step.alreadyGone = true;
+    step.error = undefined;
+  } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
+    const retryArgs = args.filter(a => a !== '--tab');
+    const retry = exec(retryArgs);
+    step.retryWithoutTab = {
+      cmd: retryArgs.join(' '),
+      ok: !!retry.ok,
+      error: retry.ok ? undefined : orcaErrorText(retry.error),
+    };
+    if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
+      step.ok = true;
+      step.alreadyGone = !retry.ok;
+      step.recovered = !!retry.ok;
+      step.error = undefined;
+    }
+  }
+  return step;
+}
+
+export function inspectRollbackResidue(created, exec) {
+  const ids = Array.isArray(created?.dispatchIds) ? created.dispatchIds.filter(Boolean) : [];
+  if (ids.length === 0) return { ok: true, leftover: [], skipped: true, unscanned: false };
+  const listed = exec(argsWorkerList());
+  if (!listed || !listed.ok) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: `回滚后 worker-list 没查成：${orcaErrorText(listed && listed.error)}`,
+    };
+  }
+  const workers = listed.json?.result?.workers;
+  return classifyDispatchResidue({ dispatchIds: ids, workers });
+}
+
+/**
+ * 生产回滚：先 fence（worker-stop + 未绑定 task 置 failed），再 worker-list 核残留。
+ * 没查成或仍有活动 Dispatch → fail-visible，不删树。
+ */
+export function applyDispatchRollback(created, { exec } = {}) {
+  if (typeof exec !== 'function') {
+    return {
+      ok: false,
+      rollback: [],
+      rollbackFailed: true,
+      residue: { ok: false, unscanned: true, leftover: [], error: 'applyDispatchRollback 没拿到 exec（没查成）' },
+      alarm: 'applyDispatchRollback 没拿到 exec（没查成）',
+    };
+  }
+  const rollback = [];
+  for (const args of planDispatchFence(created)) {
+    rollback.push(execRollbackStep(args, exec));
+  }
+  const residue = inspectRollbackResidue(created, exec);
+  if (!residue.ok) {
+    for (const args of planDispatchDestroy(created)) {
+      if (args[0] === 'worktree') continue;
+      rollback.push(execRollbackStep(args, exec));
+    }
+    const report = rollbackReport(rollback);
+    const alarm = residue.error || report.alarm;
+    return { ok: false, rollback, rollbackFailed: true, residue, alarm };
+  }
+  for (const args of planDispatchDestroy(created)) {
+    rollback.push(execRollbackStep(args, exec));
+  }
+  const report = rollbackReport(rollback);
+  return {
+    ok: !report.rollbackFailed,
+    rollback,
+    rollbackFailed: report.rollbackFailed,
+    residue,
+    alarm: report.alarm,
+  };
+}
+
+/** #620：batch JSON → `[{name, spec}, ...]`。数组或 `{workers|items|batch: [...]}` 都收。 */
+export function parseDispatchBatchItems(raw) {
+  if (raw == null) return { ok: false, error: 'batch 文件是空的' };
+  let list = raw;
+  if (!Array.isArray(raw)) {
+    if (!raw || typeof raw !== 'object') return { ok: false, error: 'batch 要 JSON 数组 [{name, spec}, ...]' };
+    list = raw.workers || raw.items || raw.batch;
+  }
+  if (!Array.isArray(list)) return { ok: false, error: 'batch 要 JSON 数组 [{name, spec}, ...]' };
+  if (list.length === 0) return { ok: false, error: 'batch 至少要 1 个工人' };
+  const items = [];
+  for (let i = 0; i < list.length; i++) {
+    const row = list[i];
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return { ok: false, error: `batch[${i}] 不是对象` };
+    }
+    const name = String(row.name ?? '').trim();
+    const spec = String(row.spec ?? '').trim();
+    if (!name) return { ok: false, error: `batch[${i}] 缺 name` };
+    if (!spec) return { ok: false, error: `batch[${i}] 缺 spec` };
+    items.push({ name, spec });
+  }
+  return { ok: true, items };
+}
+
+export function loadDispatchBatchFile(filePath, { readFile } = {}) {
+  const p = String(filePath ?? '').trim();
+  if (!p) return { ok: false, error: 'dispatch --batch 要 JSON 文件路径' };
+  let text;
+  try {
+    text = (readFile || readFileSync)(p, 'utf8');
+  } catch (e) {
+    return { ok: false, error: `batch 文件读不到: ${p}（${String(e.message || e)}）` };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, error: `batch 文件不是合法 JSON: ${String(e.message || e)}` };
+  }
+  return parseDispatchBatchItems(raw);
+}
+
+/** #620：一批只读工人的计划。不调审官，卡名就是 --name，不带 --no-parent。 */
+export function planDispatchBatch({ name, issue, model, items } = {}) {
+  const n = String(name ?? '').trim();
+  const issueText = String(issue ?? '').trim();
+  const modelId = String(model ?? '').trim();
+  if (!n) return { ok: false, error: 'dispatch --batch 要 --name（批卡名）' };
+  if (!issueText) return { ok: false, error: 'dispatch --batch 要 --issue（整批共享）' };
+  if (!modelId) return { ok: false, error: 'dispatch --batch 要 --model' };
+
+  let parsed;
+  if (items && items.ok === true && Array.isArray(items.items)) parsed = items;
+  else parsed = parseDispatchBatchItems(items);
+  if (!parsed.ok) return parsed;
+
+  const cardName = assembleCardName({ name: n, issue: issueText });
+  const workers = [];
+  for (let i = 0; i < parsed.items.length; i++) {
+    const item = parsed.items[i];
+    let inject;
+    try {
+      inject = buildBatchInject({ spec: item.spec, issue: issueText });
+    } catch (e) {
+      return { ok: false, error: String(e.message || e) };
+    }
+    workers.push({
+      index: i,
+      name: item.name,
+      spec: item.spec,
+      inject,
+      handle: `<handle:${i}>`,
+      worktree: cardName,
+    });
+  }
+  return {
+    ok: true,
+    batch: true,
+    cardName,
+    issue: issueText,
+    model: modelId,
+    noParent: false,
+    reviewerCreate: false,
+    workers,
+  };
+}
+
+/**
+ * #620：批量原子编排。effects 由调用方注入（真路径走 orca，单测走假对象）。
+ * 失败不自己回滚——调用方拿 created 走 failCreated / planDispatchRollback。
+ */
+export function runDispatchBatch({ plan, effects } = {}) {
+  const created = { handles: [], workers: [], dispatchIds: [], taskIds: [] };
+  if (!plan || !Array.isArray(plan.workers)) {
+    return { ok: false, error: 'runDispatchBatch 要 plan.workers', created, workers: [] };
+  }
+  if (!effects) {
+    return { ok: false, error: 'runDispatchBatch 要 effects', created, workers: [] };
+  }
+  const fail = (error) => ({ ok: false, error, created, workers: created.workers });
+
+  const wt = effects.createWorktree({
+    name: plan.cardName,
+    issue: plan.issue,
+    noParent: false,
+  });
+  if (wt && wt.id) created.workerId = wt.id;
+  if (wt && wt.path) created.workerPath = wt.path;
+  if (!wt || !wt.ok) return fail(`工人卡创建失败: ${(wt && wt.error) || '未知'}`);
+
+  for (const w of plan.workers) {
+    const term = effects.startTerminal({
+      worktree: created.workerId,
+      title: w.name,
+      model: plan.model,
+    });
+    if (term && term.handle) created.handles.push(term.handle);
+    if (!term || !term.ok) return fail(`工人终端创建失败（${w.name}）: ${(term && term.error) || '未知'}`);
+
+    const task = effects.createTask({
+      spec: w.inject || w.spec,
+      name: w.name,
+      issue: plan.issue,
+    });
+    if (!task || !task.ok) return fail(`task-create 失败（${w.name}）: ${(task && task.error) || '未知'}`);
+    if (task.taskId) created.taskIds.push(task.taskId);
+
+    const started = effects.startWorker({
+      task: task.taskId,
+      terminal: term.handle,
+      worktree: created.workerId,
+      issue: plan.issue,
+      model: plan.model,
+    });
+    if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
+    if (!started || !started.ok) {
+      return fail(`worker-start 失败（${w.name}）: ${(started && started.error) || '未知'}`);
+    }
+
+    created.workers.push({
+      index: w.index,
+      name: w.name,
+      spec: w.spec,
+      inject: w.inject || w.spec,
+      handle: term.handle,
+      taskId: task.taskId,
+      dispatchId: started.dispatchId,
+    });
+  }
+  return { ok: true, created, workers: created.workers };
+}
+
+/** 回滚后还剩没有结算的 Dispatch 吗。没查成与「扫完 0 条残留」分开。 */
+export function classifyDispatchResidue({ dispatchIds, workers } = {}) {
+  const ids = (Array.isArray(dispatchIds) ? dispatchIds : []).filter(Boolean).map(String);
+  if (workers == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: 'classifyDispatchResidue 没拿到 worker-list（没查成）',
+    };
+  }
+  if (!Array.isArray(workers)) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: 'classifyDispatchResidue 的 workers 不是数组（没查成）',
+    };
+  }
+  const leftover = [];
+  for (const id of ids) {
+    const hit = workers.find(w => String(w?.dispatchId || '') === id);
+    if (!hit) continue;
+    const status = String(hit.dispatchStatus || '');
+    const state = String(hit.workerState || '');
+    const settled = /^(completed|failed|cancelled|stopped|fenced)$/i.test(status)
+      || /^(succeeded|failed|cancelled|stopped)$/i.test(state);
+    if (!settled) leftover.push({ dispatchId: id, dispatchStatus: status, workerState: state });
+  }
+  if (leftover.length) {
+    return {
+      ok: false,
+      unscanned: false,
+      leftover,
+      error: `回滚后仍有活动 Dispatch：${leftover.map(x => x.dispatchId).join(',')}`,
+    };
+  }
+  return { ok: true, unscanned: false, leftover: [] };
 }
 
 /** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
@@ -2622,6 +2932,16 @@ export function buildSoldierInject({ spec, issue } = {}) {
   return text;
 }
 
+export function buildBatchInject({ spec, issue } = {}) {
+  const text = renderInjectTemplate('batch-inject.md', {
+    SPEC: spec,
+    ISSUE_REF: issue ? ` #${issue}` : '',
+  });
+  const gate = assertInjectText(text, { label: 'batch 注入' });
+  if (!gate.ok) throw new Error(gate.error);
+  return text;
+}
+
 export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason } = {}) {
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
   const text = renderInjectTemplate('reviewer-inject.md', {
@@ -2869,7 +3189,7 @@ export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
@@ -2961,6 +3281,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
   dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
+                  # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
+                  # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:

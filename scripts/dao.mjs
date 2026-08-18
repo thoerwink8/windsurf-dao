@@ -67,12 +67,15 @@ import {
   gitBranchName,
   isRunRequired,
   RUN_REQUIRED_HINT,
-  rollbackErrorAlreadyGone,
+
   fetchHelpPreferLive,
   loadRouting,
   parseArgs,
   parseGhPullFiles,
-  planDispatchRollback,
+  loadDispatchBatchFile,
+  planDispatchBatch,
+  runDispatchBatch,
+  applyDispatchRollback,
   probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
@@ -83,7 +86,7 @@ import {
   startSplitChildren,
   resolveLaunch,
   reviewerCardName,
-  rollbackReport,
+
   renderDispatchTemplate,
   buildSoldierInject,
   buildReviewerInject,
@@ -210,39 +213,9 @@ function constrainDispatch(args, routing) {
 }
 
 function rollbackCreated(created) {
-  const rollback = [];
-  for (const args of planDispatchRollback(created)) {
-    let r = orca(args);
-    const step = {
-      cmd: args.join(' '),
-      ok: !!r.ok,
-      error: r.ok ? undefined : errText(r.error),
-    };
-    if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
-      step.ok = true;
-      step.alreadyGone = true;
-      step.error = undefined;
-    } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
-      const retryArgs = args.filter(a => a !== '--tab');
-      const retry = orca(retryArgs);
-      step.retryWithoutTab = {
-        cmd: retryArgs.join(' '),
-        ok: !!retry.ok,
-        error: retry.ok ? undefined : errText(retry.error),
-      };
-      if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
-        step.ok = true;
-        step.alreadyGone = !retry.ok;
-        step.recovered = !!retry.ok;
-        step.error = undefined;
-        r = retry;
-      }
-    }
-    rollback.push(step);
-  }
-  const report = rollbackReport(rollback);
-  if (report.alarm) console.error(`[dao] ${report.alarm}`);
-  return { rollback, rollbackFailed: report.rollbackFailed };
+  const result = applyDispatchRollback(created, { exec: orca });
+  if (result.alarm) console.error(`[dao] ${result.alarm}`);
+  return result;
 }
 
 function failCreated(created, error, extra = {}) {
@@ -501,6 +474,7 @@ function runIdFromDispatch(dispatchId) {
 }
 
 function cmdDispatch(args) {
+  if (args.batch) return cmdDispatchBatch(args);
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
   if (!args.spec && !args.task) fail('dispatch 要 --spec（工人任务书），或已有 --task');
@@ -858,6 +832,127 @@ function cmdDispatch(args) {
     comment,
     labels,
     ledger,
+  });
+}
+
+function cmdDispatchBatch(args) {
+  if (args.spec) fail('dispatch --batch 时不要再给 --spec（spec 在 JSON 里）');
+  if (!args.name) fail('dispatch --batch 要 --name（批卡名）');
+  if (!args.issue) fail('dispatch --batch 要 --issue（整批共享）');
+  if (!args.model) fail('dispatch --batch 要 --model');
+
+  const loaded = loadDispatchBatchFile(args.batch);
+  if (!loaded.ok) fail(loaded.error);
+
+  const plan = planDispatchBatch({
+    name: args.name,
+    issue: args.issue,
+    model: args.model,
+    items: loaded,
+  });
+  if (!plan.ok) fail(plan.error);
+
+  const routing = loadOrFail();
+  let launch;
+  try {
+    launch = resolveLaunch({ model: args.model, routing, root: ROOT });
+  } catch (e) { fail(String(e.message || e)); }
+  const cap = assertCodexLaunch({ command: launch.command });
+  if (!cap.ok) fail(cap.error);
+  plan.workerLaunch = launch.command;
+
+  const disambiguation = checkIssueDisambiguated({ issue: args.issue, runGh: ghRunner() });
+  if (args.dryRun) {
+    emit({ ok: true, dryRun: true, ...plan, disambiguation });
+  }
+  if (!disambiguation.ok) {
+    fail(disambiguation.error, { disambiguation, ...plan });
+  }
+
+  const effects = {
+    createWorktree({ name, issue }) {
+      const r = orca(argsWorktreeCreate({
+        name,
+        issue,
+        setup: 'skip',
+        comment: `batch · model:${plan.model} · reviewer:skipped · n=${plan.workers.length}`,
+      }));
+      if (!r.ok) return { ok: false, error: errText(r.error) };
+      const id = extractWorktreeId(r.json);
+      const wtPath = extractWorktreePath(r.json);
+      if (!id) return { ok: false, error: '工人卡没返回 id' };
+      if (!wtPath) return { ok: false, id, error: '工人卡没返回 path' };
+      const env = envProbeWorktree(wtPath);
+      if (!env.ok) return { ok: false, id, path: wtPath, error: `工人树环境自检失败: ${env.error}` };
+      const ident = applyGitIdentity('worker', { cwd: wtPath });
+      if (!ident.ok) return { ok: false, id, path: wtPath, error: `工人 git 身份没设上：${ident.error}` };
+      return { ok: true, id, path: wtPath };
+    },
+    startTerminal({ worktree, title }) {
+      const term = orca(argsTerminalCreate({
+        worktree,
+        title,
+        command: launch.command,
+      }));
+      if (!term.ok) return { ok: false, error: errText(term.error) };
+      const handle = extractHandleFromCreate(term.json);
+      if (!handle) return { ok: false, error: '工人终端没返回 handle' };
+      const verify = waitAndVerify({
+        readOnce: () => readOnceHandle(handle),
+        timeoutMs: probeWaitMs(routing, launch.provider),
+      });
+      if (!verify.ok) {
+        return { ok: false, handle, error: `工人 TUI 未就绪: ${verify.reason}` };
+      }
+      return { ok: true, handle };
+    },
+    createTask({ spec }) {
+      const specText = encodeSendText(spec, launch.provider);
+      const bound = orca(argsRunCurrent());
+      const boundRun = bound.ok ? (bound.json?.result?.run?.id || null) : null;
+      const task = taskCreateOnRun(specText, boundRun);
+      if (!task.ok) {
+        if (isRunRequired(task.error)) return { ok: false, error: RUN_REQUIRED_HINT };
+        return { ok: false, error: errText(task.error) };
+      }
+      const taskId = extractTaskId(task.json);
+      if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
+      return { ok: true, taskId };
+    },
+    startWorker({ task, terminal, worktree }) {
+      const started = orca(argsWorkerStart({ task, worktree, terminal }));
+      if (!started.ok) return { ok: false, error: errText(started.error) };
+      const dispatchId = extractDispatchId(started.json);
+      if (!dispatchId) return { ok: false, error: 'worker-start 没拿到 dispatch id' };
+      const inject = verifyStartedPolling({
+        dispatchId,
+        readOnce: () => readOnceHandle(terminal),
+        proofOnce: workerStartProof,
+        timeoutMs: probeWaitMs(routing, launch.provider),
+        label: '工人',
+      });
+      if (!inject.ok) return { ok: false, dispatchId, error: `注入后开工验证失败: ${inject.reason}` };
+      return { ok: true, dispatchId };
+    },
+  };
+
+  const result = runDispatchBatch({ plan, effects });
+  if (!result.ok) failCreated(result.created, result.error, { ...plan, workers: result.workers });
+
+  const comment = afterDispatchComment({
+    name: plan.cardName,
+    issue: plan.issue,
+    worktreeId: result.created.workerId,
+    runOrca: orca,
+  });
+
+  emit({
+    ok: true,
+    ...plan,
+    ...result.created,
+    workers: result.workers,
+    reviewerCreate: false,
+    comment,
   });
 }
 
