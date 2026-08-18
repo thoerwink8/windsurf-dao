@@ -63,6 +63,7 @@ import {
   extractTerminalText,
   findReusableDefaultTerminal,
   looksLikeShellPrompt,
+  planLaunchFallback,
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
@@ -316,12 +317,24 @@ function waitForShellPrompt(handle) {
 
 function launchAgentInWorktree({ worktreeId, title, command }) {
   const found = findDefaultTerminalForLaunch(worktreeId);
-  if (found.handle && waitForShellPrompt(found.handle).ok) {
-    const sent = orca(argsTerminalSend({ terminal: found.handle, text: command, enter: true }));
-    if (sent.ok && extractTerminalSend(sent.json)) {
-      return { ok: true, handle: found.handle, reused: true };
+  let promptReady = false;
+  let sendAccepted = false;
+  if (found.handle) {
+    promptReady = waitForShellPrompt(found.handle).ok;
+    if (promptReady) {
+      const sent = orca(argsTerminalSend({ terminal: found.handle, text: command, enter: true }));
+      sendAccepted = !!(sent.ok && extractTerminalSend(sent.json));
     }
   }
+  const plan = planLaunchFallback({
+    foundHandle: found.handle || null,
+    promptReady,
+    sendAccepted,
+  });
+  if (plan.action === 'reuse') {
+    return { ok: true, handle: found.handle, reused: true };
+  }
+  if (plan.closeHandle) closeWorkerHandle(plan.closeHandle);
   const created = orca(argsTerminalCreate({
     worktree: worktreeId,
     title,
