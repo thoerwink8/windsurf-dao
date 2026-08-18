@@ -133,6 +133,27 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
   ```
   三个场景全绿才算生效；测试用一次性 pi 环境 + 随机端口 fake 上游，不碰本机 `~/.pi/agent`。
 
+## 6c. pi 扩展怎么配（doorbell，issue #645）
+
+doorbell 扩展：协调者（帅）的 pi 会话空闲（输入框空、没在打字）时，工人发完工/上报能叫醒协调者开一轮处理（代按一句「你有来信」再回车）；人在打字绝不占输入框，信的正文本不进输入框、只在对话里。
+
+- 源码在仓内 `host/pi-extensions/doorbell.ts` + `doorbell-core.mjs`（仓库资产，不留在本机自生自灭），换机两条命令装上（两个文件都要，`doorbell.ts` 依赖同目录的 `doorbell-core.mjs`）：
+  ```bash
+  cp host/pi-extensions/doorbell.ts "$HOME/.pi/agent/extensions/"
+  cp host/pi-extensions/doorbell-core.mjs "$HOME/.pi/agent/extensions/"
+  ```
+  验证已生效（新开 pi 会话后扩展自动加载；只对「cwd 下有 `_flow/inbox-*.log`」的会话动作，普通工人树天然不动作）：
+  ```bash
+  ls ~/.pi/agent/extensions/doorbell.ts ~/.pi/agent/extensions/doorbell-core.mjs
+  ```
+- 行为：被动盯信箱台 relay 写入的 `_flow/inbox-*.log`（不加第二个 `check --wait` waiter，不拆信箱台——#525 一个 run 只一个等信者），新消息到达且 pi 空闲 + 输入框空 → `pi.sendUserMessage("你有来信")`。输入框非空（打字中）不响；正文不进输入框，协调者按 dispatch skill 自己 tail 日志 / 查信箱。
+- 可配置环境变量（默认即生产值，一般不用动）：`PI_DOORBELL_LOG_DIR`（日志目录，默认 `<cwd>/_flow`）、`PI_DOORBELL_POLL_MS`（轮询间隔，默认 2000）、`PI_DOORBELL_COOLDOWN_MS`（两次门铃最短间隔，默认 10000）、`PI_DOORBELL_TEXT`（门铃短句，默认「你有来信」）。
+- 回归验收：
+  ```bash
+  node --test tests/doorbell.test.js   # 纯逻辑回归（node 22/24 都过）
+  ```
+  纯逻辑在 `doorbell-core.mjs`（node 22 CI 可直接测），`doorbell.ts` 只做 pi 运行时接线。
+
 ## 7. grok 怎么配
 
 grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
