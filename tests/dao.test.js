@@ -1917,6 +1917,59 @@ describe('dao', () => {
       const createHits = [...src.matchAll(/argsTerminalCreate\(/g)];
       assert.ok(createHits.length === 1, 'dao.mjs 不再在四条起动路径里直接 terminal create  →  ' + createHits.length);
     });
+
+    const promptFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: false, sendAccepted: false });
+    await t.test('提示符未就绪 → 先关空壳再 create', () => {
+      assert.ok(promptFail.action === 'close-then-create' && promptFail.closeHandle === 'term_shell' && promptFail.leftoverIfCreateNow === true,
+        '提示符未就绪 → 先关空壳再 create  →  ' + JSON.stringify(promptFail));
+    });
+    const sendFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: false });
+    await t.test('send 失败 → 先关空壳再 create', () => {
+      assert.ok(sendFail.action === 'close-then-create' && sendFail.closeHandle === 'term_shell' && sendFail.leftoverIfCreateNow === true,
+        'send 失败 → 先关空壳再 create  →  ' + JSON.stringify(sendFail));
+    });
+    const reused = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: true });
+    await t.test('send 成功 → 复用，不关', () => {
+      assert.ok(reused.action === 'reuse' && reused.closeHandle == null && reused.leftoverIfCreateNow === false,
+        'send 成功 → 复用，不关  →  ' + JSON.stringify(reused));
+    });
+    const noShell = S.planLaunchFallback({ foundHandle: null, promptReady: false, sendAccepted: false });
+    await t.test('没有空壳 → 直接 create', () => {
+      assert.ok(noShell.action === 'create' && noShell.closeHandle == null,
+        '没有空壳 → 直接 create  →  ' + JSON.stringify(noShell));
+    });
+    const leaked = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: { action: 'create', closeHandle: null },
+      createdHandle: 'term_agent',
+    });
+    await t.test('故意违规：不关空壳就 create 会留 2 个终端', () => {
+      assert.ok(leaked.length === 2 && leaked.includes('term_shell') && leaked.includes('term_agent'),
+        '故意违规：不关空壳就 create 会留 2 个终端  →  ' + JSON.stringify(leaked));
+    });
+    const afterPromptFail = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: promptFail,
+      createdHandle: 'term_agent',
+    });
+    await t.test('提示符失败走计划后只剩 1 个 agent 终端', () => {
+      assert.ok(afterPromptFail.length === 1 && afterPromptFail[0] === 'term_agent',
+        '提示符失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterPromptFail));
+    });
+    const afterSendFail = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: sendFail,
+      createdHandle: 'term_agent',
+    });
+    await t.test('send 失败走计划后只剩 1 个 agent 终端', () => {
+      assert.ok(afterSendFail.length === 1 && afterSendFail[0] === 'term_agent',
+        'send 失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterSendFail));
+    });
+    await t.test('launchAgentInWorktree 按计划关空壳再 create', () => {
+      const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
+      assert.ok(fn && /planLaunchFallback\(/.test(fn[0]) && /closeWorkerHandle\(plan\.closeHandle\)/.test(fn[0]),
+        'launchAgentInWorktree 按计划关空壳再 create');
+    });
   });
 
   it('#546 #541 审官树自证 / 注入后开工 / 环境自检', async (t) => {

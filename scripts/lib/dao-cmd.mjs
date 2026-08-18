@@ -743,6 +743,29 @@ export function findReusableDefaultTerminal(listJson, { worktreeId } = {}) {
   return { ok: true, unscanned: false, handle: hits[0].handle, terminal: hits[0] };
 }
 
+/**
+ * #633：找到空壳但提示符未就绪 / send 失败时，必须先关空壳再 create。
+ * leftoverIfCreateNow=true 表示「现在直接 create 会留下第二个终端」。
+ */
+export function planLaunchFallback({ foundHandle, promptReady, sendAccepted } = {}) {
+  if (foundHandle && promptReady && sendAccepted) {
+    return { action: 'reuse', closeHandle: null, leftoverIfCreateNow: false };
+  }
+  if (foundHandle) {
+    return { action: 'close-then-create', closeHandle: foundHandle, leftoverIfCreateNow: true };
+  }
+  return { action: 'create', closeHandle: null, leftoverIfCreateNow: false };
+}
+
+/** 按启动计划演算终态 handle 列表。用来证明 close-then-create 不会留第二个终端。 */
+export function terminalsAfterLaunchPlan({ existingHandles, plan, createdHandle } = {}) {
+  const next = new Set(Array.isArray(existingHandles) ? existingHandles : []);
+  if (!plan || plan.action === 'reuse') return [...next];
+  if (plan.closeHandle) next.delete(plan.closeHandle);
+  if (createdHandle) next.add(createdHandle);
+  return [...next];
+}
+
 /** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
  * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
 export function extractTerminalSend(json) {
