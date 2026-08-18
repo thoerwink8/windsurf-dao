@@ -14,6 +14,7 @@ orca worktree rm --help > tests/fixtures/orca-help/worktree-rm.txt
 orca worktree ps --help > tests/fixtures/orca-help/worktree-ps.txt
 orca orchestration task-create --help > tests/fixtures/orca-help/orchestration-task-create.txt
 orca orchestration worker-start --help > tests/fixtures/orca-help/orchestration-worker-start.txt
+orca orchestration worker-stop --help > tests/fixtures/orca-help/orchestration-worker-stop.txt
 orca orchestration send --help > tests/fixtures/orca-help/orchestration-send.txt
 orca orchestration inbox --help > tests/fixtures/orca-help/orchestration-inbox.txt
 orca orchestration run-show --help > tests/fixtures/orca-help/orchestration-run-show.txt

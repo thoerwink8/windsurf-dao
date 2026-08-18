@@ -961,7 +961,7 @@ function cmdDispatchBatch(args) {
         timeoutMs: probeWaitMs(routing, launch.provider),
         label: '工人',
       });
-      if (!inject.ok) return { ok: false, error: `注入后开工验证失败: ${inject.reason}` };
+      if (!inject.ok) return { ok: false, dispatchId, error: `注入后开工验证失败: ${inject.reason}` };
       return { ok: true, dispatchId };
     },
   };

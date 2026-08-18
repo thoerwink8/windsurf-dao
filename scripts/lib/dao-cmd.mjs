@@ -577,9 +577,10 @@ export function argsWorkerRelease({ dispatch, retryRequest } = {}) {
   return a;
 }
 
-export function argsWorkerStop({ dispatch } = {}) {
+export function argsWorkerStop({ dispatch, retryRequest } = {}) {
   const a = ['orchestration', 'worker-stop'];
   if (dispatch) a.push('--dispatch', dispatch);
+  if (retryRequest) a.push('--retry-request', retryRequest);
   a.push('--json');
   return a;
 }
@@ -741,7 +742,7 @@ export function isRunRequired(error) {
 export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——有信箱台在 relay 时它抢不住（台每轮自夺回）；run-use 只在该 Run 还没起信箱台时有效';
 
 export function rollbackErrorAlreadyGone(error) {
-  return /tab_not_found|terminal_handle_stale/i.test(orcaErrorText(error));
+  return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released/i.test(orcaErrorText(error));
 }
 
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
@@ -1468,8 +1469,11 @@ export function planDispatchRollback({
   childIds, childHandles, dispatchIds, taskIds, handles,
 } = {}) {
   const steps = [];
-  for (const id of Array.isArray(dispatchIds) ? dispatchIds : []) {
-    if (id) steps.push(argsWorkerStop({ dispatch: id }));
+  const seenId = new Set();
+  for (const id of (Array.isArray(dispatchIds) ? dispatchIds : []).filter(Boolean).slice().reverse()) {
+    if (seenId.has(id)) continue;
+    seenId.add(id);
+    steps.push(argsWorkerStop({ dispatch: id }));
   }
   for (const id of Array.isArray(taskIds) ? taskIds : []) {
     if (id) steps.push(argsTaskUpdate({ id, status: 'failed' }));
@@ -1553,13 +1557,24 @@ export function planDispatchBatch({ name, issue, model, items } = {}) {
   if (!parsed.ok) return parsed;
 
   const cardName = assembleCardName({ name: n, issue: issueText });
-  const workers = parsed.items.map((item, i) => ({
-    index: i,
-    name: item.name,
-    spec: item.spec,
-    handle: `<handle:${i}>`,
-    worktree: cardName,
-  }));
+  const workers = [];
+  for (let i = 0; i < parsed.items.length; i++) {
+    const item = parsed.items[i];
+    let inject;
+    try {
+      inject = buildBatchInject({ spec: item.spec, issue: issueText });
+    } catch (e) {
+      return { ok: false, error: String(e.message || e) };
+    }
+    workers.push({
+      index: i,
+      name: item.name,
+      spec: item.spec,
+      inject,
+      handle: `<handle:${i}>`,
+      worktree: cardName,
+    });
+  }
   return {
     ok: true,
     batch: true,
@@ -1577,7 +1592,7 @@ export function planDispatchBatch({ name, issue, model, items } = {}) {
  * 失败不自己回滚——调用方拿 created 走 failCreated / planDispatchRollback。
  */
 export function runDispatchBatch({ plan, effects } = {}) {
-  const created = { handles: [], workers: [] };
+  const created = { handles: [], workers: [], dispatchIds: [] };
   if (!plan || !Array.isArray(plan.workers)) {
     return { ok: false, error: 'runDispatchBatch 要 plan.workers', created, workers: [] };
   }
@@ -1604,7 +1619,11 @@ export function runDispatchBatch({ plan, effects } = {}) {
     if (term && term.handle) created.handles.push(term.handle);
     if (!term || !term.ok) return fail(`工人终端创建失败（${w.name}）: ${(term && term.error) || '未知'}`);
 
-    const task = effects.createTask({ spec: w.spec, name: w.name });
+    const task = effects.createTask({
+      spec: w.inject || w.spec,
+      name: w.name,
+      issue: plan.issue,
+    });
     if (!task || !task.ok) return fail(`task-create 失败（${w.name}）: ${(task && task.error) || '未知'}`);
 
     const started = effects.startWorker({
@@ -1614,6 +1633,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       issue: plan.issue,
       model: plan.model,
     });
+    if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
     if (!started || !started.ok) {
       return fail(`worker-start 失败（${w.name}）: ${(started && started.error) || '未知'}`);
     }
@@ -1622,12 +1642,53 @@ export function runDispatchBatch({ plan, effects } = {}) {
       index: w.index,
       name: w.name,
       spec: w.spec,
+      inject: w.inject || w.spec,
       handle: term.handle,
       taskId: task.taskId,
       dispatchId: started.dispatchId,
     });
   }
   return { ok: true, created, workers: created.workers };
+}
+
+/** 回滚后还剩没有结算的 Dispatch 吗。没查成与「扫完 0 条残留」分开。 */
+export function classifyDispatchResidue({ dispatchIds, workers } = {}) {
+  const ids = (Array.isArray(dispatchIds) ? dispatchIds : []).filter(Boolean).map(String);
+  if (workers == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: 'classifyDispatchResidue 没拿到 worker-list（没查成）',
+    };
+  }
+  if (!Array.isArray(workers)) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: 'classifyDispatchResidue 的 workers 不是数组（没查成）',
+    };
+  }
+  const leftover = [];
+  for (const id of ids) {
+    const hit = workers.find(w => String(w?.dispatchId || '') === id);
+    if (!hit) continue;
+    const status = String(hit.dispatchStatus || '');
+    const state = String(hit.workerState || '');
+    const settled = /^(completed|failed|cancelled|stopped|fenced)$/i.test(status)
+      || /^(succeeded|failed|cancelled|stopped)$/i.test(state);
+    if (!settled) leftover.push({ dispatchId: id, dispatchStatus: status, workerState: state });
+  }
+  if (leftover.length) {
+    return {
+      ok: false,
+      unscanned: false,
+      leftover,
+      error: `回滚后仍有活动 Dispatch：${leftover.map(x => x.dispatchId).join(',')}`,
+    };
+  }
+  return { ok: true, unscanned: false, leftover: [] };
 }
 
 /** 回滚步骤跑完后的可见性：失败必须单独叫，不能只埋在返回 JSON 里。 */
@@ -2761,6 +2822,16 @@ export function buildSoldierInject({ spec, issue } = {}) {
     ISSUE_REF: issue ? ` #${issue}` : '',
   });
   const gate = assertInjectText(text, { label: '士兵注入' });
+  if (!gate.ok) throw new Error(gate.error);
+  return text;
+}
+
+export function buildBatchInject({ spec, issue } = {}) {
+  const text = renderInjectTemplate('batch-inject.md', {
+    SPEC: spec,
+    ISSUE_REF: issue ? ` #${issue}` : '',
+  });
+  const gate = assertInjectText(text, { label: 'batch 注入' });
   if (!gate.ok) throw new Error(gate.error);
   return text;
 }

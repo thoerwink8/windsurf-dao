@@ -112,7 +112,7 @@ N 个只读判定工人要共享 1 张卡、不产 PR 时，走 `dispatch --batc
 node scripts/dao.mjs dispatch --batch workers.json --name "存量27单分流总卡" --issue 600 --model grok-4.6
 ```
 
-JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建 1 棵树（不带 `--no-parent`，卡名就是 `--name`），再循环 N 次 `task-create` + `worker-start` 绑到同一张卡。`--dry-run` 只打印 N 条计划（每条的 name / spec / handle 占位），不建任何资源。任一步失败整批回滚：关已建终端、删已建树。
+JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建 1 棵树（不带 `--no-parent`，卡名就是 `--name`），再循环 N 次 `task-create` + `worker-start` 绑到同一张卡。每个工人的任务书走 `batch-book.md`（只读、不产 PR、完工往共享 issue 发首行 `判定：` 的 comment，禁止 `worker-done` / `reviewer-create`）。`--dry-run` 只打印 N 条计划（每条的 name / spec / inject / handle 占位），不建任何资源。任一步失败整批回滚：先按 Dispatch ID `worker-stop`，再关未监督终端、删树。
 
 这批工人硬编码跳过审官路径：不调 `reviewer-create`，也不走 `worker-done` 结算。完工方式是各自往共享 issue 发 comment，帅事后逐张核。要进 git / 开 PR 的活不要走这条。
 
