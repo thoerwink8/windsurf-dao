@@ -121,7 +121,8 @@ const result = select({
   events, models, bans, weights, policyHash, routes,
 });
 
-// #581：审读/审查 A 位锁 GPT；B/C 仍是评分结果。GPT 被 UI ban 剔出门闩集合时按选型序顺延。
+// #581→#648：审读/审查 A 位锁 GLM-5.2（GPT 暂时不可用）；B/C 仍是评分结果。
+// GLM-5.2 被 UI 类 ban 剔出门闩集合时按选型序顺延。
 if (REVIEWER_SELECT_ROLES.has(role)) {
   const pinned = pinReviewerSlotA({
     models,

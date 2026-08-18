@@ -974,14 +974,15 @@ function cmdDispatchBatch(args) {
       return { ok: true, id, path: wtPath };
     },
     startTerminal({ worktree, title }) {
-      const term = orca(argsTerminalCreate({
-        worktree,
+      // #654/#648：batch 起终端也走 launchAgentInWorktree（复用默认空壳 / 注入空壳再 create），
+      // 与 start / dispatch / 审官起动同一条路径，不再直接 argsTerminalCreate。
+      const term = launchAgentInWorktree({
+        worktreeId: worktree,
         title,
         command: launch.command,
-      }));
-      if (!term.ok) return { ok: false, error: errText(term.error) };
-      const handle = extractHandleFromCreate(term.json);
-      if (!handle) return { ok: false, error: '工人终端没返回 handle' };
+      });
+      if (!term.ok) return { ok: false, error: term.error };
+      const handle = term.handle;
       const verify = waitAndVerify({
         readOnce: () => readOnceHandle(handle),
         timeoutMs: probeWaitMs(routing, launch.provider),
@@ -989,7 +990,7 @@ function cmdDispatchBatch(args) {
       if (!verify.ok) {
         return { ok: false, handle, error: `工人 TUI 未就绪: ${verify.reason}` };
       }
-      return { ok: true, handle };
+      return { ok: true, handle, reused: term.reused === true };
     },
     createTask({ spec }) {
       const specText = encodeSendText(spec, launch.provider);

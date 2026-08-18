@@ -1,8 +1,28 @@
 #!/bin/sh
-# cursor-agent shim (Git Bash): Clash Party proxy required (CN IP hides GPT/Claude)
-# real binary: %LOCALAPPDATA%/cursor-agent/cursor-agent.cmd
+# cursor-agent shim (Git Bash): proxy + skip official .cmd (visible powershell)
+# real binary: %LOCALAPPDATA%/cursor-agent/versions/<latest>/node.exe + index.js
+# #648: append --trust when --model given (Workspace Trust prompt blocks new worktrees)
 export HTTPS_PROXY=http://127.0.0.1:7890
 export HTTP_PROXY=http://127.0.0.1:7890
 export ALL_PROXY=http://127.0.0.1:7890
 export NODE_USE_ENV_PROXY=1
-exec "${LOCALAPPDATA}/cursor-agent/cursor-agent.cmd" "$@"
+export CURSOR_INVOKED_AS="${CURSOR_INVOKED_AS:-cursor-agent}"
+[ -n "$NODE_COMPILE_CACHE" ] || export NODE_COMPILE_CACHE="${LOCALAPPDATA}/cursor-compile-cache"
+CURSOR_HOME="${LOCALAPPDATA}/cursor-agent"
+NODE=""
+INDEX=""
+for d in $(ls -1d "$CURSOR_HOME/versions"/* 2>/dev/null | sort -r); do
+  if [ -f "$d/node.exe" ] && [ -f "$d/index.js" ]; then
+    NODE="$d/node.exe"
+    INDEX="$d/index.js"
+    break
+  fi
+done
+if [ -z "$NODE" ]; then
+  echo "cursor-agent: no node.exe+index.js under $CURSOR_HOME/versions" >&2
+  exit 1
+fi
+case " $* " in
+  *' --model '*) exec "$NODE" "$INDEX" "$@" --trust ;;
+  *) exec "$NODE" "$INDEX" "$@" ;;
+esac
