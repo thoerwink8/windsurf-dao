@@ -19,7 +19,14 @@ import { spawnSync } from 'node:child_process';
 export const INDEX_REL = 'host/machine/INDEX.md';
 export const IGNORE_REL = 'host/machine/ignore.md';
 
-const SKIP_RELS = new Set([INDEX_REL, IGNORE_REL]);
+// 目录自己和闸的实现/单测里全是正则与示例，扫进去会把 ~/AppData/i、~/.secret
+// 当成仓外路径。夹具仍扫：红样本 ~/.brand-new-cli 在独立根上验。
+export const SKIP_RELS = new Set([
+  INDEX_REL,
+  IGNORE_REL,
+  'scripts/lib/machine-path-check.mjs',
+  'tests/machine-path.test.js',
+]);
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|zip|7z|gz|exe|dll|pdb|bin|wasm)$/i;
 

@@ -50,6 +50,23 @@ describe('machine-path', () => {
     assert.ok(bad.problems.some(p => /why/.test(p)), 'ignore 缺 why 必须红  →  ' + JSON.stringify(bad));
   });
 
+  it('#642 live 不把实现里的正则/示例当路径', async (t) => {
+    const S = await LIB_LOAD;
+    const live = S.scanRepoPaths({ root: REPO });
+    const ghosts = ['~/i', '~/.secret', '~/AppData/Local/i', '~/AppData/Roaming/i'];
+    await t.test('实现文件已跳过', () => {
+      assert.ok(S.SKIP_RELS.has('scripts/lib/machine-path-check.mjs') && S.SKIP_RELS.has('tests/machine-path.test.js'), '实现文件已跳过');
+    });
+    await t.test('live 不含扫描器自伤钥匙', () => {
+      const hit = ghosts.filter(k => live.keys.has(k));
+      assert.ok(hit.length === 0, 'live 不含扫描器自伤钥匙  →  ' + hit.join(' ') + ' / ' + [...live.keys].sort().join(','));
+    });
+    const stillSees = S.scanText('装到 ~/.brand-new-cli/ 以及 ~/.secret');
+    await t.test('扫描器本身仍能抽出真实路径', () => {
+      assert.ok(stillSees.has('~/.brand-new-cli') && stillSees.has('~/.secret'), '扫描器本身仍能抽出真实路径  →  ' + [...stillSees].join(','));
+    });
+  });
+
   it('#642 本仓对账绿，B 模板禁 EncodedCommand', async (t) => {
     const S = await LIB_LOAD;
     const live = S.checkMachinePaths({ root: REPO });
