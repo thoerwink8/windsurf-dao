@@ -207,13 +207,13 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 
 ## 9. 信箱台
 
-Orca 未读横幅会强制接管输入框（issue #464）。新机一条命令重建哑终端 + 中继 + coordinator 归属：
+Orca 未读横幅会强制接管输入框（issue #464）。新机一条命令重建哑终端 + 中继（#638：**全机只保活一台**，不再一 Run 一台）：
 
 ```bash
 node scripts/inbox-station.mjs ensure
 ```
 
-全活着秒退，stdout 一行 JSON（runId / handle / 日志路径 / action）。身份判据（issue #493 返工）：归属从 `run-show` 的 `coordinator_handle` 取，**标题只出不进**——标题仍带 run 后缀（`信箱台·<run后缀>（勿关）`）但只是给人看，改名/被重置成 pwsh.exe 也不影响认台；默认日志按 run 隔离（`_flow/inbox-<run后缀>.log`，不传 `--log` 也天然安全）。本 run 的台 = coordinator_handle 对应的终端且租约新鲜（活不活看租约+PID）；本 run 台死了是 `action:restart`，撞上别的 run 的台（本 run coordinator 被别的 run 的活台占着）是 `action:reject`（报对方 run id）。帅的派工序是「run-use → 派工 → ensure 归还」——run-use 会夺走 coordinator，中继每轮自夺回，ensure 再跑一次把横幅交回信箱台。#593 / #601：归档走 `dao.mjs worktree-rm`（先退役 Run+关台，再删树）；关台身份看租约 TTL/runId/handle（过期直接 alreadyGone，未过期且证不出就失败，不拿 coordinator_handle 当台）；存量用 `dao.mjs run-gc`（默认列出 pending/tombstones，`--apply` 才关，真关只认 terminal close，墓碑计入本已关）；跨单收信 `dao.mjs inbox-collect`。`ensure` 不传 `--run` 时只认在途 dispatch 的 Run，不给最新墓碑再起一台。
+全活着秒退，stdout 最后一行 JSON（handle / 日志路径 / action / closedExtra / gc）。身份不认标题（#493 返工）：台 = 全局租约 `_flow/inbox.lease`（新鲜 + PID 在 + handle 在盘面）。`action` 三态：`ok`（all-alive 秒退 / closed-extra 顺手关掉旧模型多余活台）、`rebuild`（no-station 无台新建 / no-global-station 只有旧台，全关重建全局台）。旧模型 per-run 台（`_flow/inbox-<run>.lease`）被杀出局，跑一次 ensure 后顶栏只剩 1 个信箱台页签。relay 不再 run-use 抢 coordinator（#634 已证 consumer_fenced），每轮只读 `orchestration inbox` 收全部在途 Run（keep 集 ∪ 活 coordinator 的 Run）的信，去重落盘 `_flow/inbox.log`，跑 #637 可归档闸。ensure 成功后顺手只读 run-gc（#614）：僵尸 Run 数超阈值（默认 5）在 stdout 最前面打一行，`--apply` 仍手动。帅的派工序是「run-use → 派工 → ensure 归还」。#593 / #601：归档走 `dao.mjs worktree-rm`（先退役 Run+关台，再删树）；关台身份看租约 TTL/runId/handle（过期直接 alreadyGone，未过期且证不出就失败，不拿 coordinator_handle 当台）；存量用 `dao.mjs run-gc`（默认只列 pending/tombstones，`--apply` 才关，真关只认 terminal close，墓碑计入本已关）；跨单收信 `dao.mjs inbox-collect`。
 
 ## 10. 接上 memory
 

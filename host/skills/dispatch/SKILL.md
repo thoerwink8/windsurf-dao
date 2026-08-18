@@ -48,7 +48,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）已经守着同一个 run，**帅不要再挂 `check --wait` 门铃**——一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏（#525）。完工信号经信箱台转发到帅对话（`You have N orchestration messages`），外加工位闲置监视、待办队列监视。要手查信箱用一次性 `orca orchestration check --json`（不带 `--wait`）；`--ack` 语义是「确认上一批」，有 `deliveryId` 才带。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。心跳只进信箱供怀疑时 peek，不唤醒——空转实测 ~650 token/轮。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一台**哑终端（#638），轮询全部在途 Run 的信（读 `orchestration inbox`，不 run-use、不抢 coordinator），**帅不要再挂 `check --wait` 门铃**——一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏（#525）。完工信号经信箱台落盘 `_flow/inbox.log` + 帅对话横幅（`You have N orchestration messages`），外加工位闲置监视、待办队列监视。要手查信箱用一次性 `orca orchestration check --json`（不带 `--wait`）或 `orca orchestration inbox --json`；`--ack` 语义是「确认上一批」，有 `deliveryId` 才带。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。心跳只进信箱供怀疑时 peek，不唤醒——空转实测 ~650 token/轮。
 
 完工信号分两层，缺一层就会静默停：
 
@@ -116,7 +116,7 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 
 这批工人硬编码跳过审官路径：不调 `reviewer-create`，也不走 `worker-done` 结算。完工方式是各自往共享 issue 发 comment，帅事后逐张核。要进 git / 开 PR 的活不要走这条。
 
-先 `--dry-run` 看计划，再真派。派完 `inbox-station ensure` 把横幅还给信箱台。
+先 `--dry-run` 看计划，再真派。派完 `inbox-station ensure` 自愈信箱台（#638：全机一台，幂等关多余台）。
 
 ## 阻塞项不排队（#577）
 

@@ -819,7 +819,7 @@ export function isRunRequired(error) {
   return /run_required/i.test(orcaErrorText(error));
 }
 
-export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——有信箱台在 relay 时它抢不住（台每轮自夺回）；run-use 只在该 Run 还没起信箱台时有效';
+export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——Run 都还没建，use 没意义；#638 起信箱台不再 run-use 抢台（根治 consumer_fenced），派工序自己会 run-use 并与确保自愈兼容';
 
 export function rollbackErrorAlreadyGone(error) {
   return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released|task_not_found|already_failed/i.test(orcaErrorText(error));
