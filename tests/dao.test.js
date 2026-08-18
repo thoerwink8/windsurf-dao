@@ -2026,6 +2026,124 @@ describe('dao', () => {
       });
   });
 
+  it('#633 注入复用建卡默认空壳', async (t) => {
+    const S = await S_LOAD;
+    const live = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'terminal-list-default.json'), 'utf8'));
+    const listArgs = S.argsTerminalList({ worktree: 'w' });
+    await t.test('terminal list builder 带 --worktree --json', () => {
+      assert.ok(listArgs.includes('--worktree') && listArgs[listArgs.indexOf('--worktree') + 1] === 'w' && listArgs.includes('--json'),
+        'terminal list builder 带 --worktree --json  →  ' + listArgs.join(' '));
+    });
+    const found = S.findReusableDefaultTerminal(live);
+    await t.test('真 terminal list 默认空壳能拿到 handle', () => {
+      assert.ok(found.ok && found.handle === 'term_21834764-0aab-4188-bacf-651b4f6ae6c6' && found.unscanned === false,
+        '真 terminal list 默认空壳能拿到 handle  →  ' + JSON.stringify(found));
+    });
+    await t.test('title null + PS 提示符算可复用', () => {
+      assert.ok(S.isReusableDefaultTerminal(live.result.terminals[0]) === true, 'title null + PS 提示符算可复用');
+    });
+    await t.test('title Terminal 1 也可复用', () => {
+      assert.ok(S.isReusableDefaultTerminal({ ...live.result.terminals[0], title: 'Terminal 1' }) === true, 'title Terminal 1 也可复用');
+    });
+    const grok = {
+      ...live.result.terminals[0],
+      title: '⠋ Grok',
+      preview: 'Grok Build  1.0.1  always-approve',
+    };
+    await t.test('已是 agent 的终端不复用', () => {
+      assert.ok(S.isReusableDefaultTerminal(grok) === false, '已是 agent 的终端不复用');
+    });
+    const mixed = {
+      ok: true,
+      result: {
+        terminals: [
+          grok,
+          live.result.terminals[0],
+        ],
+      },
+    };
+    const picked = S.findReusableDefaultTerminal(mixed);
+    await t.test('一棵树 agent+空壳 只拿空壳', () => {
+      assert.ok(picked.ok && picked.handle === live.result.terminals[0].handle, '一棵树 agent+空壳 只拿空壳  →  ' + JSON.stringify(picked));
+    });
+    const none = S.findReusableDefaultTerminal({ ok: true, result: { terminals: [grok] } });
+    await t.test('查到 0 个空壳不是没查成', () => {
+      assert.ok(none.ok === true && none.unscanned === false && none.handle === null, '查到 0 个空壳不是没查成  →  ' + JSON.stringify(none));
+    });
+    const bad = S.findReusableDefaultTerminal({ result: {} });
+    await t.test('terminal list 结构不认识 → unscanned', () => {
+      assert.ok(bad.ok === false && bad.unscanned === true, 'terminal list 结构不认识 → unscanned  →  ' + JSON.stringify(bad));
+    });
+    await t.test('PS 提示符认得出来', () => {
+      assert.ok(S.looksLikeShellPrompt(live.result.terminals[0].preview) === true, 'PS 提示符认得出来');
+    });
+    await t.test('TUI 预览不是 shell', () => {
+      assert.ok(S.looksLikeShellPrompt(grok.preview) === false && S.looksLikeAgentPreview(grok.preview) === true, 'TUI 预览不是 shell');
+    });
+    const src = fs.readFileSync(CLI, 'utf8');
+    const calls = src.match(/launchAgentInWorktree\(/g) || [];
+    await t.test('start / dispatch / 审官起动都走 launchAgentInWorktree', () => {
+      assert.ok(calls.length >= 5, 'start / dispatch / 审官起动都走 launchAgentInWorktree  →  ' + calls.length);
+    });
+    await t.test('dao.mjs 不再在四条起动路径里直接 terminal create', () => {
+      const createHits = [...src.matchAll(/argsTerminalCreate\(/g)];
+      assert.ok(createHits.length === 1, 'dao.mjs 不再在四条起动路径里直接 terminal create  →  ' + createHits.length);
+    });
+
+    const promptFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: false, sendAccepted: false });
+    await t.test('提示符未就绪 → 先关空壳再 create', () => {
+      assert.ok(promptFail.action === 'close-then-create' && promptFail.closeHandle === 'term_shell' && promptFail.leftoverIfCreateNow === true,
+        '提示符未就绪 → 先关空壳再 create  →  ' + JSON.stringify(promptFail));
+    });
+    const sendFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: false });
+    await t.test('send 失败 → 先关空壳再 create', () => {
+      assert.ok(sendFail.action === 'close-then-create' && sendFail.closeHandle === 'term_shell' && sendFail.leftoverIfCreateNow === true,
+        'send 失败 → 先关空壳再 create  →  ' + JSON.stringify(sendFail));
+    });
+    const reused = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: true });
+    await t.test('send 成功 → 复用，不关', () => {
+      assert.ok(reused.action === 'reuse' && reused.closeHandle == null && reused.leftoverIfCreateNow === false,
+        'send 成功 → 复用，不关  →  ' + JSON.stringify(reused));
+    });
+    const noShell = S.planLaunchFallback({ foundHandle: null, promptReady: false, sendAccepted: false });
+    await t.test('没有空壳 → 直接 create', () => {
+      assert.ok(noShell.action === 'create' && noShell.closeHandle == null,
+        '没有空壳 → 直接 create  →  ' + JSON.stringify(noShell));
+    });
+    const leaked = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: { action: 'create', closeHandle: null },
+      createdHandle: 'term_agent',
+    });
+    await t.test('故意违规：不关空壳就 create 会留 2 个终端', () => {
+      assert.ok(leaked.length === 2 && leaked.includes('term_shell') && leaked.includes('term_agent'),
+        '故意违规：不关空壳就 create 会留 2 个终端  →  ' + JSON.stringify(leaked));
+    });
+    const afterPromptFail = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: promptFail,
+      createdHandle: 'term_agent',
+    });
+    await t.test('提示符失败走计划后只剩 1 个 agent 终端', () => {
+      assert.ok(afterPromptFail.length === 1 && afterPromptFail[0] === 'term_agent',
+        '提示符失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterPromptFail));
+    });
+    const afterSendFail = S.terminalsAfterLaunchPlan({
+      existingHandles: ['term_shell'],
+      plan: sendFail,
+      createdHandle: 'term_agent',
+    });
+    await t.test('send 失败走计划后只剩 1 个 agent 终端', () => {
+      assert.ok(afterSendFail.length === 1 && afterSendFail[0] === 'term_agent',
+        'send 失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterSendFail));
+    });
+    await t.test('launchAgentInWorktree 按计划关空壳再 create', () => {
+      const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
+      assert.ok(fn && /planLaunchFallback\(/.test(fn[0]) && /closeWorkerHandle\(plan\.closeHandle\)/.test(fn[0]),
+        'launchAgentInWorktree 按计划关空壳再 create');
+    });
+  });
+
   it('#546 #541 审官树自证 / 注入后开工 / 环境自检', async (t) => {
     const S = await S_LOAD;
     const folded = S.verifyInjection({ text: '⚠ MCP failed\n[Pasted Content 4686 chars]\n›' });
