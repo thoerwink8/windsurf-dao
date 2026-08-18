@@ -3,7 +3,7 @@
 //
 // Orca「You have N orchestration messages」横幅强制接管用户输入框：消息到达即注入，
 // ack 速度治不了。已实证的解法是把 Run 的 coordinator 绑到后台哑终端，横幅只注给它；
-// 终端内中继 check --wait → 写日志 → 自动 ack，帅 tail 文件收信。
+// 终端内中继 check --wait → 写日志 → 可归档二次验证闸（#637）→ 自动 ack，帅 tail 文件收信。
 //
 // 本脚本把手工四步收成一条幂等命令。全活着秒退；缺任何一环自动重建。
 // 不用 stdin 注入（防输入污染）：重建走 terminal create --command。
@@ -40,6 +40,11 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
+import {
+  processArchiveNotices,
+  formatArchiveExecLog,
+  parsePrStateOutput,
+} from './lib/archive-exec.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -835,6 +840,75 @@ async function findForeignStation(coordTerm, runId) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// #637 可归档二次验证闸（纯决策在 archive-exec.mjs）
+// ══════════════════════════════════════════════════════════════════════
+
+function queryPrStateLive(pr) {
+  const r = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'state'], {
+    encoding: 'utf8',
+    timeout: 20000,
+    windowsHide: true,
+  });
+  return parsePrStateOutput({
+    status: r.status,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    error: r.error,
+  }, pr);
+}
+
+function removeWorktreeLive(selector) {
+  const r = spawnSync(process.execPath, [
+    join(ROOT, 'scripts', 'dao.mjs'),
+    'worktree-rm',
+    '--worktree',
+    String(selector),
+  ], {
+    encoding: 'utf8',
+    timeout: 120000,
+    windowsHide: true,
+    cwd: ROOT,
+  });
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    return {
+      ok: false,
+      error: String(r.stderr || r.stdout || r.error?.message || `exit ${r.status}`).trim().slice(0, 240),
+    };
+  }
+  return { ok: true };
+}
+
+function escalateArchiveLive({ subject, body }) {
+  return runOrca([
+    'orchestration', 'send',
+    '--type', 'escalation',
+    '--subject', subject,
+    '--body', body,
+    '--json',
+  ]);
+}
+
+function runArchiveReady(messages, logPath) {
+  try {
+    const results = processArchiveNotices(messages, {
+      queryPrState: queryPrStateLive,
+      listWorktrees,
+      removeWorktree: removeWorktreeLive,
+      escalate: escalateArchiveLive,
+      now: new Date(),
+    });
+    if (results.length) {
+      appendFileSync(logPath, `${results.map((row) => formatArchiveExecLog(row)).join('\n')}\n`, 'utf8');
+      console.log(`${READY_MARK} archive=${results.length} ${results.map((row) => row.result).join(',')}`);
+    }
+    return results;
+  } catch (e) {
+    console.error(`${READY_MARK} archive 异常: ${String(e?.message || e).slice(0, 200)}`);
+    return [];
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // relay（跑在哑终端里）
 // ══════════════════════════════════════════════════════════════════════
 
@@ -897,6 +971,8 @@ async function cmdRelay(args) {
     } else {
       console.log(`${READY_MARK} idle`);
     }
+    runArchiveReady(loggable, logPath);
+    persistLease(logPath, runId, leaseTtlMs);
     lastAck = deliveryId || null;
   }
 }
@@ -965,8 +1041,9 @@ function printUsage() {
           action: rebuild(本 run 无台新建) / restart(本 run 台死了重启) / reject(撞上别的 run 的台)
           身份从 run-show 的 coordinator_handle 取，标题只出不进（改名/重置不影响认台）
           不传 --run 时只认在途 dispatch 的 Run，不认最新墓碑（#593）
-  relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → ack
+  relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → 可归档闸（#637）→ ack
           heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
+          「可归档」先查 PR MERGED 再 worktree-rm；闸不过 escalation，不盲删
   retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
           关台身份看租约 TTL/runId/handle（或 preview 唯一命中），不看 coordinator_handle
           过期直接 alreadyGone；未过期且证不出就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
