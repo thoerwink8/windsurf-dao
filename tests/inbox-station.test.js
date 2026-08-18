@@ -180,6 +180,43 @@ describe('inbox-station', () => {
     await t.test('format/parse 租约往返', () => {
       assert.ok(parsed && parsed.pid === 12 && parsed.runId === 'run_x' && parsed.ttlMs === 9000, 'format/parse 租约往返');
     });
+    const withHandle = S.parseLease(S.formatLease({ pid: 12, runId: 'run_x', ts: now, ttlMs: 9000, handle: 'term_s' }));
+    await t.test('租约可带 handle', () => {
+      assert.ok(withHandle && withHandle.handle === 'term_s', '租约可带 handle');
+    });
+    await t.test('旧租约无 handle 仍可读', () => {
+      assert.ok(parsed.handle == null, '旧租约无 handle 仍可读');
+    });
+    await t.test('mergeLeaseHandle 保留旧 handle', () => {
+      assert.ok(S.mergeLeaseHandle({ handle: 'term_old' }, null) === 'term_old', 'mergeLeaseHandle 保留旧 handle');
+    });
+    await t.test('#601 rebuild 可盖新台 handle', () => {
+      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_old', nextHandle: 'term_new', source: 'rebuild' }) === true, 'rebuild 可盖新台 handle');
+    });
+    await t.test('#601 ensure 不得用帅 handle 覆写', () => {
+      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_station', nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 不得用帅 handle 覆写');
+    });
+    await t.test('#601 ensure 没有旧 handle 也不收 coordinator', () => {
+      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: null, nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 没有旧 handle 也不收 coordinator');
+    });
+    const stolenWrite = S.planEnsureLeaseStamp({
+      action: 'ok', leaseHandle: 'term_station', rebuiltHandle: null,
+    });
+    await t.test('#601 生产写入：借走 coordinator 不 stamp', () => {
+      assert.ok(stolenWrite.stamp === false && stolenWrite.handle === 'term_station', '借走 coordinator 不 stamp');
+    });
+    const noLeaseWrite = S.planEnsureLeaseStamp({
+      action: 'ok', leaseHandle: null, rebuiltHandle: null,
+    });
+    await t.test('#601 生产写入：无租约 handle 也不收 coordinator', () => {
+      assert.ok(noLeaseWrite.stamp === false && noLeaseWrite.handle == null, '无租约 handle 也不收 coordinator');
+    });
+    const rebuildWrite = S.planEnsureLeaseStamp({
+      action: 'rebuild', leaseHandle: 'term_old', rebuiltHandle: 'term_new',
+    });
+    await t.test('#601 生产写入：rebuild 才盖新台', () => {
+      assert.ok(rebuildWrite.stamp === true && rebuildWrite.handle === 'term_new', 'rebuild 才盖新台');
+    });
     await t.test('本进程 PID 活', () => {
       assert.ok(S.isProcessAlive(process.pid) === true, '本进程 PID 活');
     });
@@ -207,7 +244,8 @@ describe('inbox-station', () => {
     const S = await SCRIPT_LOAD;
     const now = 2_000_000;
     const RUN = 'run_ev';
-    const freshLease = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const freshLease = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_station' };
+    const freshLease2 = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_station2' };
     const staleLease = { pid: process.pid, runId: RUN, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
     const wrongRunLease = { pid: process.pid, runId: 'run_other', ts: now, ttlMs: S.LEASE_TTL_MS };
     // 审官红1 的现场：台的标题被重置成 pwsh.exe，但 run-show 的 coordinator_handle 仍是它
@@ -232,16 +270,19 @@ describe('inbox-station', () => {
 
     // 正常标题的台同样 ok
     const okDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_station2', terminals: [station], lease: freshLease, now,
+      runId: RUN, coordinatorHandle: 'term_station2', terminals: [station], lease: freshLease2, now,
     });
     await t.test('正常标题 → ok', () => {
       assert.ok(okDec.action === 'ok' && okDec.reason === 'all-alive' && okDec.handle === 'term_station2', '正常标题 → ok');
     });
-    // coordinator 被帅临时借走 + 中继活着 → ok（中继每轮 run-use 自夺回）
+    const stolenDec = S.decideEnsureAction({
+      runId: RUN, coordinatorHandle: 'term_shuai', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
+    });
     await t.test('coordinator 在帅的终端但中继活 → ok', () => {
-      assert.ok(S.decideEnsureAction({
-        runId: RUN, coordinatorHandle: 'term_shuai', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
-      }).action === 'ok', 'coordinator 在帅的终端但中继活 → ok');
+      assert.ok(stolenDec.action === 'ok', 'coordinator 在帅的终端但中继活 → ok');
+    });
+    await t.test('#601 借走时返回租约 handle 不是帅', () => {
+      assert.ok(stolenDec.handle === 'term_station', '借走时返回租约 handle 不是帅');
     });
     // coordinator 还没回来（null）但中继活 → ok
     await t.test('coordinator 暂空但中继活 → ok', () => {
@@ -535,6 +576,13 @@ describe('inbox-station', () => {
     });
     await t.test('finalize 未夺回写出对方 handle', () => {
       assert.ok(stolen.payload.coordinatorHandle === 'term_thief', 'finalize 未夺回写出对方 handle');
+    });
+    const aliveStolen = S.finalizeEnsure({
+      handle: 'term_station', runId: 'run_x', logPath: 'p', action: 'ok', reason: 'all-alive',
+      relayAlive: true, runShowOk: true, coordinatorHandle: 'term_thief',
+    });
+    await t.test('#601 all-alive 时 coordinator 被借走仍秒退', () => {
+      assert.ok(aliveStolen.exitCode === 0 && aliveStolen.payload.ok === true, 'all-alive 时 coordinator 被借走仍秒退');
     });
 
     const okFinal = S.finalizeEnsure({

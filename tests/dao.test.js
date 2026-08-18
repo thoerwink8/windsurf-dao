@@ -1611,6 +1611,31 @@ describe('dao', () => {
     await t.test('#598 红项1：退役失败走 fail 不是 ok:true', () => {
       assert.ok(/finalizeWorktreeRmLifecycle/.test(daoCliSrc) && /if \(!life\.ok\)/.test(daoCliSrc), '#598 红项1：退役失败走 fail 不是 ok:true');
     });
+    const rmFn = daoCliSrc.slice(daoCliSrc.indexOf('function cmdWorktreeRm'), daoCliSrc.indexOf('function cmdTaskCreate'));
+    await t.test('#601 先退役再删树', () => {
+      assert.ok(rmFn.indexOf('finalizeWorktreeRmLifecycle') !== -1
+        && rmFn.indexOf('applyWorktreeRmPlan') !== -1
+        && rmFn.indexOf('finalizeWorktreeRmLifecycle') < rmFn.indexOf('applyWorktreeRmPlan')
+        && /退役名单没查成，未删任何树/.test(rmFn), 'retire/delete 顺序或失败文案不对');
+    });
+    await t.test('#601 run-gc 输出三态', () => {
+      assert.ok(/closedCount/.test(daoCliSrc) && /alreadyGoneCount/.test(daoCliSrc) && /tombstones/.test(daoCliSrc), '#601 run-gc 输出三态');
+    });
+    const retireFn = daoCliSrc.slice(daoCliSrc.indexOf('function retireOneRun'), daoCliSrc.indexOf('function loadLifecycleInputs'));
+    await t.test('#601 退役走租约身份不是 coordinator', () => {
+      assert.ok(/resolveStationCloseTarget/.test(retireFn)
+        && /previewHandlesForRun/.test(retireFn)
+        && /isProcessAlive/.test(retireFn)
+        && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
+    });
+    const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
+    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('async function findForeignStation'));
+    await t.test('#601 cmdEnsure 不得无条件 stampLeaseHandle(coordTerm.handle)', () => {
+      assert.ok(/planEnsureLeaseStamp/.test(ensureFn)
+        && /if \(stampPlan\.stamp\)/.test(ensureFn)
+        && !/stampLeaseHandle\(logPath, handle\)/.test(ensureFn)
+        && !/stampLeaseHandle\(logPath, coordTerm/.test(ensureFn), 'cmdEnsure 仍无条件 stamp coordinator');
+    });
     await t.test('#598 红项2：reply 无 --from 不许裸发', () => {
       assert.ok(/reply 没有信箱台 --from/.test(daoCliSrc) && /resolveReplySender/.test(daoCliSrc), '#598 红项2：reply 无 --from 不许裸发');
     });
