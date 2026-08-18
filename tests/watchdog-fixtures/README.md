@@ -54,10 +54,10 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `idle-pr-exempt/` | **#569 降噪②（在途 PR 豁免）**：同 idle/ 但 ps 改卡名/树 id，pr-evidence 显示关联 PR OPEN 非 draft（reviewDecision=APPROVED） | 退出码 0，`观察: 在途 PR #999…等着别人`；不报 idle（已交付等下一环） |
 | `idle-pr-rework/` | 同 idle-pr-exempt 但 reviewDecision=CHANGES_REQUESTED（PR 要返工，责任仍在本工位） | 退出码 1，`idle:` 照报（真阳不减） |
 | `idle-veto/` | **#569 降噪③（活性否决）**：三轮同 git 空置，真实内容第 2 轮变化、第 3 轮冻结 | 第 1 轮 idle；第 2 轮 `观察: 空转豁免…活性否决`（不算空转）；第 3 轮 idle 再报 |
-| `orphan-closed/` | 真孤儿：无活跃执行者（终端已关）+ 关联 issue 已关 | 退出码 1，`orphan:` 带判断依据（#492 关条件 4） |
-| `orphan-open/` | 关联单还开着（#492 v3：任一开着就不算孤儿） | 不报 orphan |
+| `orphan-closed/` | 真孤儿：无活跃执行者（终端已关）+ 关联 issue 已关 | 退出码 1，`orphan:` 带判断依据（#492 关条件 4）；默认快照再打 `动作: 将执行 worktree-rm`（#630，不真删） |
+| `orphan-open/` | 关联单还开着（#492 v3：任一开着就不算孤儿） | 不报 orphan；不打 worktree-rm 动作（#630 负控） |
 | `orphan-active/` | 另一位主帅的活跃工位（working agent + 合规名） | 退出码 0，不报 orphan（#492 关条件 3） |
-| `orphan-noassoc-stale/` | 无关联 + 静置超 60 分钟 | 退出码 1，`orphan:` 带静置分钟数 |
+| `orphan-noassoc-stale/` | 无关联 + 静置超 60 分钟 | 退出码 1，`orphan:` 带静置分钟数；默认快照同样只打印将执行 worktree-rm（#630） |
 | `orphan-noassoc-fresh/` | 无关联 + 静置 5 分钟（未超阈值） | 不报 orphan（命名不合规另报 naming） |
 | `naming-bad/` | 卡名 `审官·GPT`（另一主帅的卡，终端在跑） | 退出码 1，`naming:`；不报 orphan（活跃执行者判据优先） |
 | `naming-skip/` | **#569 降噪**：基于 idle/，加一条 live 实录形态的 `windsurf-dao` 卡（review-566：0 agent、1 活终端、无 #N 前缀） | 退出码 0，不报 naming（无 agent 且无 #N 前缀的树不是任务卡；有 agent 的误命名卡仍会报，见 naming-bad） |
