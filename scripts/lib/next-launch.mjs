@@ -111,14 +111,20 @@ export function nextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe } = 
 const HARD_RE = /cannot use this model|not available in your region|model[_ ]not[_ ]in[_ ]plan|login rejected|not logged in|unauthori[sz]ed|authentication required|please log in|not authenticated|quota|usage limit|out of credits|insufficient[\s\S]{0,24}(quota|credit)|model is disabled|\b402\b/i;
 const TRANSIENT_RE = /timeout|timed out|econnreset|econnrefused|eai_again|enetunreach|socket|network|temporarily|\b503\b|\b502\b|\b504\b|at capacity|读了是空的|没读成/i;
 
+/** 屏上拒模 / 区域不可用 / 额度见顶 / 登录没了。开工探针必须当失败，不能当 TUI 就绪。 */
+export function isModelRejectText(text) {
+  return HARD_RE.test(String(text || ''));
+}
+
 /**
  * 启动期失败分类。config = 错旗标/待确认，不许拿来换管。
  */
 export function classifyLaunchFailure({ error, verifyReason, text } = {}) {
   if (verifyReason === '有待确认提示') return 'config';
+  if (verifyReason === '拒模') return 'hard';
   const blob = [error, verifyReason, text].filter(Boolean).join('\n');
   if (!blob) return 'hard';
-  if (HARD_RE.test(blob)) return 'hard';
+  if (isModelRejectText(blob)) return 'hard';
   if (verifyReason === '读了是空的' || verifyReason === '没读成') return 'transient';
   if (TRANSIENT_RE.test(blob)) return 'transient';
   return 'hard';
@@ -155,7 +161,42 @@ export function advanceLaunchState({
   return { ...next, hardFailsOnThisPipe: fails, transientFailsOnThisPipe: 0 };
 }
 
-/** 路由第一、其余按表序。dispatch 在没跑 select 时用这份确定性名单。 */
+/**
+ * 派工名单。live=true 时只接受已经过门闩的 slateIds；
+ * 选型没查成必须 fail-close，不许回退到 routingSlateIds 的全表。
+ * dry-run（live=false）才用路由表序做预览。
+ */
+export function resolveDispatchSlate({
+  live, selectOk, selectError, slateIds, routing, role, now, model,
+} = {}) {
+  let ids;
+  if (live) {
+    if (!selectOk) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: selectError
+          ? `选型没查成：${selectError}`
+          : '选型没查成，不许回退到未过门闩的全模型名单',
+      };
+    }
+    if (!Array.isArray(slateIds) || slateIds.length === 0) {
+      return { ok: false, error: '选型 slate 是空的（没查成）' };
+    }
+    ids = slateIds;
+  } else {
+    ids = routingSlateIds({ routing, role, now, model });
+  }
+  const slate = attachPipes(ids, routing?.models);
+  if (!slate.length) return { ok: false, error: 'slate 是空的（没查成）' };
+  const startIndex = model ? slate.findIndex(s => s.id === model) : 0;
+  if (startIndex < 0) {
+    return { ok: false, error: `模型 ${model} 不在预计算名单里，禁止现场另点` };
+  }
+  return { ok: true, slate, startIndex };
+}
+
+/** 路由第一、其余按表序。只给 dry-run 预览用，真派工必须走过门闩的 slate。 */
 export function routingSlateIds({ routing, role, now, model } = {}) {
   const models = Array.isArray(routing?.models) ? routing.models : [];
   const known = new Set(models.map(m => m && m.id).filter(Boolean));

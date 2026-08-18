@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
-import { normalizePipes } from './next-launch.mjs';
+import { isModelRejectText, normalizePipes } from './next-launch.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -918,6 +918,9 @@ export function verifyStarted(readJson) {
     const m = String(text).match(re);
     if (m) return { ok: false, reason: '有待确认提示', evidence: m[0], text, unscanned: false };
   }
+  if (isModelRejectText(text)) {
+    return { ok: false, reason: '拒模', text, unscanned: false };
+  }
   return { ok: true, text, unscanned: false };
 }
 
@@ -928,7 +931,7 @@ export function waitAndVerify({ readOnce, timeoutMs = DEFAULT_PROBE_WAIT_MS, int
   while (Date.now() - t0 < timeoutMs) {
     last = verifyStarted(readOnce());
     if (last.ok) return last;
-    if (last.reason === '有待确认提示' || last.reason === '没读成') return last;
+    if (last.reason === '有待确认提示' || last.reason === '没读成' || last.reason === '拒模') return last;
     sleep(intervalMs);
   }
   return last;
