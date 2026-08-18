@@ -1413,6 +1413,25 @@ describe('dao', () => {
       assert.ok(stillStuck.ok === false && stillStuck.state === 'unsubmitted-paste' && /注入未提交/.test(stillStuck.reason) && stillStuck.text, '提交过仍停在粘贴块 → 超时也报注入未提交，不是环境超时  →  ' + JSON.stringify(stillStuck));
     });
 
+    let lateEnters = 0;
+    let lateReads = 0;
+    const raced = S.verifyStartedPolling({
+      dispatchId: 'ctx_race',
+      readOnce: () => {
+        lateReads += 1;
+        const tail = lateReads === 1 ? [CLEAN] : [MARKER];
+        return { ok: true, result: { terminal: { tail } } };
+      },
+      proofOnce: () => (lateEnters >= 1
+        ? { ok: true, proven: true, source: 'transcript' }
+        : unproven()),
+      sendEnter: () => { lateEnters += 1; return { ok: true }; },
+      timeoutMs: 5000, intervalMs: 5, settleMs: 0, sleep: noopSleep, label: '审官',
+    });
+    await t.test('第一拍读不到粘贴块、第二拍才出现 → 仍提交一次并开工', () => {
+      assert.ok(raced.ok === true && raced.state === 'started' && lateEnters === 1 && lateReads >= 2, '第一拍读不到粘贴块、第二拍才出现 → 仍提交一次并开工  →  ' + JSON.stringify({ raced, lateEnters, lateReads }));
+    });
+
     const handshake = [];
     for (let i = 0; i < 10; i++) {
       let n = 0;
@@ -1541,7 +1560,7 @@ describe('dao', () => {
       assert.ok(/function cmdReviewerCreate[\s\S]*verifyReviewerTree/.test(daoSrc) && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc), '#546 审官卡由 reviewer-create 建完自证（dispatch 不再建）');
     });
     await t.test('#546/#619 注入后验开工走 finishWorkerInject', () => {
-      assert.ok(/finishWorkerInject/.test(daoSrc) && /completePendingPaste/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc), '#546/#619 注入后验开工走 finishWorkerInject');
+      assert.ok(/finishWorkerInject/.test(daoSrc) && /sendEnter:/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc), '#546/#619 注入后验开工走 finishWorkerInject');
     });
     await t.test('R1 dao.mjs 不再裸调 worktree show', () => {
       assert.ok(!/orca\(\['worktree', 'show'/.test(daoSrc), 'R1 dao.mjs 不再裸调 worktree show');

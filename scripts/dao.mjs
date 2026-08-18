@@ -94,7 +94,6 @@ import {
   resolveReviewerReuse,
   postIssueComment,
   postPrComment,
-  completePendingPaste,
   verifyStartedPolling,
   verifyWorkerStarted,
   verifyReviewerFiles,
@@ -385,26 +384,17 @@ function sendEnterHandle(handle) {
   return orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
 }
 
-/** #619：worker-start 之后先完成粘贴提交，再验开工。 */
+/** #619：开工验证里第一次看见未提交粘贴，才补一记 enter。
+ * 不能在 worker-start 返回当下立刻读——粘贴块往往还没画出来。 */
 function finishWorkerInject({ handle, dispatchId, label, timeoutMs }) {
-  const paste = completePendingPaste({
-    readOnce: () => readOnceHandle(handle),
-    sendEnter: () => sendEnterHandle(handle),
-    proofOnce: workerStartProof,
-    dispatchId,
-  });
-  if (!paste.ok) {
-    return { ok: false, ...paste, paste };
-  }
-  const started = verifyStartedPolling({
+  return verifyStartedPolling({
     dispatchId,
     readOnce: () => readOnceHandle(handle),
     proofOnce: workerStartProof,
     timeoutMs,
     label,
-    pasteSubmitted: !!paste.submittedPaste,
+    sendEnter: () => sendEnterHandle(handle),
   });
-  return { ...started, paste };
 }
 
 /** 开工证明（#559 ⑥）：worker-read --source auto 官方 transcript 源优先。

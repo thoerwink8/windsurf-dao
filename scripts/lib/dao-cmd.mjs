@@ -1404,6 +1404,8 @@ export function verifyStartedPolling({
   intervalMs = 400, sleep = sleepSync, label = '',
   stableRoundsNeeded = 3,
   pasteSubmitted = false,
+  sendEnter,
+  settleMs = 200,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1414,6 +1416,7 @@ export function verifyStartedPolling({
   let lastText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
+  let submitted = !!pasteSubmitted;
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
@@ -1424,7 +1427,7 @@ export function verifyStartedPolling({
           proof, reads,
           elapsedMs: Date.now() - t0,
           text: lastText,
-          pasteSubmitted,
+          pasteSubmitted: submitted,
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
@@ -1438,7 +1441,26 @@ export function verifyStartedPolling({
     const text = read && !read.error ? extractTerminalText(read) : '';
     lastText = text;
     const leftover = pastedContentMatch(text);
-    if (leftover && !pasteSubmitted) {
+    if (leftover && !submitted && typeof sendEnter === 'function') {
+      const send = sendEnter();
+      submitted = true;
+      if (send && send.ok === false) {
+        return {
+          ok: false,
+          state: 'submit-failed',
+          reason: `粘贴提交失败: ${send.error || '未知'}`,
+          evidence: leftover,
+          reads,
+          elapsedMs: Date.now() - t0,
+          text,
+          pasteSubmitted: true,
+          send,
+        };
+      }
+      sleep(Math.max(Number(settleMs) || 0, intervalMs));
+      continue;
+    }
+    if (leftover && !submitted) {
       return {
         ok: false,
         state: 'unsubmitted-paste',
@@ -1465,7 +1487,7 @@ export function verifyStartedPolling({
             reads, stableRounds,
             elapsedMs: Date.now() - t0,
             text,
-            pasteSubmitted,
+            pasteSubmitted: submitted,
           };
         }
       }
@@ -1484,7 +1506,7 @@ export function verifyStartedPolling({
       stableRounds,
       elapsedMs: Date.now() - t0,
       text: lastText,
-      pasteSubmitted,
+      pasteSubmitted: submitted,
     };
   }
   return {
@@ -1496,7 +1518,7 @@ export function verifyStartedPolling({
     stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
-    pasteSubmitted,
+    pasteSubmitted: submitted,
   };
 }
 
