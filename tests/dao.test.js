@@ -1458,6 +1458,238 @@ describe('dao', () => {
       assert.ok(/function failCreated[\s\S]*snapshotHandleScreen/.test(daoSrc) && /function snapshotHandleScreen/.test(daoSrc), '回滚前先存屏（failCreated 调 snapshotHandleScreen）');
     });
   });
+
+  it('#651：Cursor 认出 [Pasted text #N +M lines] 与未发出 follow-up（含审红 1/2 返工补样）', async (t) => {
+    const S = await S_LOAD;
+    const CURSOR_STUCK = '[Pasted text #1 +86 lines]\n→ 短摘要：修命令库\n';              // 未提交：粘贴块 + 输入框压着 follow-up
+    const CURSOR_STUCK_FOLLOWUPS = '[Pasted text #1 +86 lines]\n2 follow-ups\n';          // 未提交：follow-ups 计数
+    const CURSOR_WORKING = '[Pasted text #1 +86 lines]\nRunning: reading scripts/lib/dao-cmd.mjs\n'; // 已提交在干活
+    const CURSOR_EMPTY_PROMPT = '[Pasted text #1 +86 lines]\n→\n';                        // 审红1：粘贴块单独 + 空 → 提示
+    const CURSOR_ALONE = '[Pasted text #1 +86 lines]\n';                                  // 审红1：#634 原现场，只有粘贴块
+    const CURSOR_FOLLOWUP_ALONE = '→ 短摘要：修命令库\n';                                   // 第二条指纹：只有 → 行未发
+    const CURSOR_WORK_WORD = '[Pasted text #1 +86 lines]\n→ 短摘要：Reading Cursor 粘贴并提交\n'; // 审红2：follow-up 正文含 Reading
+    const noopSleep = () => {};
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+    const unavailable = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' });
+
+    // 1. 指纹认出：pastedContentMatch / verifyInjection
+    const m1 = S.pastedContentMatch(CURSOR_STUCK);
+    await t.test('pastedContentMatch 认出 Cursor 粘贴块 + 未发 follow-up', () => {
+      assert.ok(m1 === '[Pasted text #1 +86 lines]', 'pastedContentMatch 认出 Cursor 粘贴块  →  ' + m1);
+    });
+    const m2 = S.pastedContentMatch(CURSOR_STUCK_FOLLOWUPS);
+    await t.test('follow-ups 字样也算未提交', () => {
+      assert.ok(m2 === '[Pasted text #1 +86 lines]', 'follow-ups 字样也算未提交  →  ' + m2);
+    });
+    const m3 = S.pastedContentMatch(CURSOR_WORKING);
+    await t.test('已提交在干活（Running/读文件）→ 不当未提交', () => {
+      assert.ok(m3 === null, '已提交在干活 → 不当未提交  →  ' + m3);
+    });
+    const m4 = S.pastedContentMatch(CURSOR_EMPTY_PROMPT);
+    await t.test('审红1：粘贴块单独出现（空 → 提示）也算未提交', () => {
+      assert.ok(m4 === '[Pasted text #1 +86 lines]', '审红1：粘贴块单独出现 → 未提交  →  ' + m4);
+    });
+    const mAlone = S.pastedContentMatch(CURSOR_ALONE);
+    await t.test('审红1：只有 [Pasted text #1 +86 lines] → 未提交', () => {
+      assert.ok(mAlone === '[Pasted text #1 +86 lines]', '审红1：只有粘贴块 → 未提交  →  ' + mAlone);
+    });
+    const mFollowup = S.pastedContentMatch(CURSOR_FOLLOWUP_ALONE);
+    await t.test('第二条指纹：只有 → 行未发 follow-up → 未提交', () => {
+      assert.ok(mFollowup !== null && /→/.test(mFollowup), '第二条指纹：→ 行未发 follow-up → 未提交  →  ' + mFollowup);
+    });
+    const mWorkWord = S.pastedContentMatch(CURSOR_WORK_WORD);
+    await t.test('审红2：follow-up 正文含 Reading/Working 仍红', () => {
+      assert.ok(mWorkWord === '[Pasted text #1 +86 lines]', '审红2：follow-up 正文含 Reading 仍红  →  ' + mWorkWord);
+    });
+
+    const vStuck = S.verifyInjection({ text: CURSOR_STUCK });
+    await t.test('故意违规：Cursor 未提交 → 注入验证红', () => {
+      assert.ok(vStuck.ok === false && /Pasted text/.test(vStuck.reason) && vStuck.evidence === '[Pasted text #1 +86 lines]', '故意违规：Cursor 未提交 → 注入验证红  →  ' + JSON.stringify(vStuck));
+    });
+    const vAlone = S.verifyInjection({ text: CURSOR_ALONE });
+    await t.test('审红1：只有粘贴块 → 注入验证红', () => {
+      assert.ok(vAlone.ok === false && vAlone.evidence === '[Pasted text #1 +86 lines]' && /Pasted text/.test(vAlone.reason), '审红1：只有粘贴块 → 注入验证红  →  ' + JSON.stringify(vAlone));
+    });
+    const vFollowupInj = S.verifyInjection({ text: CURSOR_FOLLOWUP_ALONE });
+    await t.test('第二条指纹：只有 → 行未发 follow-up → 注入验证红', () => {
+      assert.ok(vFollowupInj.ok === false && /follow-up/.test(vFollowupInj.reason), '第二条指纹：→ 行未发 follow-up → 注入验证红  →  ' + JSON.stringify(vFollowupInj));
+    });
+    const vWorkWordInj = S.verifyInjection({ text: CURSOR_WORK_WORD });
+    await t.test('审红2：follow-up 正文含 Reading → 注入验证红', () => {
+      assert.ok(vWorkWordInj.ok === false && /Pasted text/.test(vWorkWordInj.reason), '审红2：follow-up 正文含 Reading → 注入验证红  →  ' + JSON.stringify(vWorkWordInj));
+    });
+    const vWork = S.verifyInjection({ text: CURSOR_WORKING });
+    await t.test('已提交 + 在干活 → 注入验证绿', () => {
+      assert.ok(vWork.ok === true, '已提交 + 在干活 → 注入验证绿  →  ' + JSON.stringify(vWork));
+    });
+    const grokStillRed = S.verifyInjection({ text: '⚠ MCP failed\n[Pasted Content 4686 chars]\n›' });
+    await t.test('Grok Pasted Content 折叠仍然红', () => {
+      assert.ok(grokStillRed.ok === false && grokStillRed.evidence === '[Pasted Content 4686 chars]', 'Grok Pasted Content 折叠仍然红  →  ' + JSON.stringify(grokStillRed));
+    });
+
+    // 2. completePendingPaste：Cursor 补 enter；第二拍已发 → 绿；仍未发 → 红
+    let curEnters = 0;
+    let curReads = 0;
+    const curSubmitted = S.completePendingPaste({
+      readOnce: () => {
+        curReads += 1;
+        return curReads === 1
+          ? { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }
+          : { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', 'Running...'] } } };
+      },
+      sendEnter: () => { curEnters += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_cursor_ok',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('Cursor 未提交 → 补一记 enter；第二拍已发 → 绿', () => {
+      assert.ok(curSubmitted.ok === true && curSubmitted.state === 'submitted-paste' && curSubmitted.submittedPaste === true && curEnters === 1 && curReads === 2, 'Cursor 未提交 → 补一记 enter；第二拍已发 → 绿  →  ' + JSON.stringify(curSubmitted));
+    });
+
+    let curEnters2 = 0;
+    const curStuck = S.completePendingPaste({
+      readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }),
+      sendEnter: () => { curEnters2 += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_cursor_stuck',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('故意违规：Cursor 补 enter 后再读仍未提交 → 红，不许 ok:true', () => {
+      assert.ok(curStuck.ok === false && curStuck.state === 'unsubmitted-paste' && /注入未提交/.test(curStuck.reason) && curEnters2 === 1, '故意违规：Cursor 补 enter 后再读仍未提交 → 红  →  ' + JSON.stringify(curStuck));
+    });
+
+    // 2b. completePendingPaste 审红1：只有 [Pasted text] 原现场
+    let aloneEnters = 0;
+    let aloneReads = 0;
+    const aloneStuck = S.completePendingPaste({
+      readOnce: () => {
+        aloneReads += 1;
+        return { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } };
+      },
+      sendEnter: () => { aloneEnters += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_alone_stuck',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('审红1：只有粘贴块 → 补 enter 后再读仍红，不许 ok:true', () => {
+      assert.ok(aloneStuck.ok === false && aloneStuck.state === 'unsubmitted-paste' && /注入未提交/.test(aloneStuck.reason) && aloneEnters === 1 && aloneReads === 2, '审红1：只有粘贴块 → 补 enter 后再读仍红  →  ' + JSON.stringify(aloneStuck));
+    });
+
+    let aloneOkEnters = 0;
+    let aloneOkReads = 0;
+    const aloneOk = S.completePendingPaste({
+      readOnce: () => {
+        aloneOkReads += 1;
+        return aloneOkReads === 1
+          ? { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } }
+          : { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', 'Running...'] } } };
+      },
+      sendEnter: () => { aloneOkEnters += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_alone_ok',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('审红1：只有粘贴块 → 补 enter 后在干活 → 绿', () => {
+      assert.ok(aloneOk.ok === true && aloneOk.state === 'submitted-paste' && aloneOk.submittedPaste === true && aloneOkEnters === 1, '审红1：只有粘贴块 → 补 enter 后在干活 → 绿  →  ' + JSON.stringify(aloneOk));
+    });
+
+    // 3. verifyStartedPolling：未提交立刻红；补 enter 后仍未发 → 快速失败；已提交+在干活绿
+    const pollStuck = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_stuck',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    await t.test('Cursor 未提交（无 sendEnter）→ 立刻报注入未提交，不等超时', () => {
+      assert.ok(pollStuck.ok === false && pollStuck.state === 'unsubmitted-paste' && /注入未提交/.test(pollStuck.reason) && !/超时/.test(pollStuck.reason) && /Pasted text/.test(pollStuck.evidence), 'Cursor 未提交 → 立刻报注入未提交  →  ' + JSON.stringify(pollStuck));
+    });
+
+    const pollWork = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_work',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', 'Running: reading scripts/lib/dao-cmd.mjs'] } } }),
+      proofOnce: unavailable,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    await t.test('Cursor 已提交 + 在干活 → 不报未提交，屏面稳定判开工', () => {
+      assert.ok(pollWork.ok === true && pollWork.state === 'started' && pollWork.proofFallback === true, 'Cursor 已提交 + 在干活 → 屏面稳定判开工  →  ' + JSON.stringify(pollWork));
+    });
+
+    let fastEnters = 0;
+    let fastReads = 0;
+    const pollFast = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_fast',
+      readOnce: () => {
+        fastReads += 1;
+        return { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } };
+      },
+      proofOnce: unproven,
+      sendEnter: () => { fastEnters += 1; return { ok: true }; },
+      timeoutMs: 5000, intervalMs: 5, settleMs: 0, sleep: noopSleep, label: '审官',
+    });
+    await t.test('Cursor 补 enter 后仍停在未提交 → 快速失败（只补一次）', () => {
+      assert.ok(pollFast.ok === false && pollFast.state === 'unsubmitted-paste' && fastEnters === 1 && fastReads >= 2 && pollFast.pasteSubmitted === true, 'Cursor 补 enter 后仍停在未提交 → 快速失败  →  ' + JSON.stringify(pollFast));
+    });
+
+    let recEnters = 0;
+    let recReads = 0;
+    const pollRecover = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_recover',
+      readOnce: () => {
+        recReads += 1;
+        return recReads === 1
+          ? { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }
+          : { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', 'Running: reading files'] } } };
+      },
+      proofOnce: unavailable,
+      sendEnter: () => { recEnters += 1; return { ok: true }; },
+      timeoutMs: 5000, intervalMs: 5, settleMs: 0, sleep: noopSleep, label: '审官',
+    });
+    await t.test('Cursor 补 enter 后第二拍在干活 → 绿（不死循环）', () => {
+      assert.ok(pollRecover.ok === true && pollRecover.state === 'started' && recEnters === 1, 'Cursor 补 enter 后第二拍在干活 → 绿  →  ' + JSON.stringify(pollRecover));
+    });
+
+    // 3b. verifyStartedPolling 审红1/审红2 补样
+    const pollAlone = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_alone',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    await t.test('审红1：只有粘贴块（无 sendEnter）→ 立刻红，不等超时', () => {
+      assert.ok(pollAlone.ok === false && pollAlone.state === 'unsubmitted-paste' && /注入未提交/.test(pollAlone.reason) && !/超时/.test(pollAlone.reason), '审红1：只有粘贴块 → 立刻红  →  ' + JSON.stringify(pollAlone));
+    });
+
+    let pollAloneEnters = 0;
+    let pollAloneReads = 0;
+    const pollAloneFast = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_alone_fast',
+      readOnce: () => {
+        pollAloneReads += 1;
+        return { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } };
+      },
+      proofOnce: unproven,
+      sendEnter: () => { pollAloneEnters += 1; return { ok: true }; },
+      timeoutMs: 5000, intervalMs: 5, settleMs: 0, sleep: noopSleep, label: '审官',
+    });
+    await t.test('审红1：只有粘贴块 → 补 enter 后再读仍红 → 快速失败（只补一次）', () => {
+      assert.ok(pollAloneFast.ok === false && pollAloneFast.state === 'unsubmitted-paste' && pollAloneEnters === 1 && pollAloneReads >= 2, '审红1：只有粘贴块 → 快速失败  →  ' + JSON.stringify(pollAloneFast));
+    });
+
+    const pollWorkWord = S.verifyStartedPolling({
+      dispatchId: 'ctx_poll_workword',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：Reading Cursor 粘贴并提交'] } } }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    await t.test('审红2：follow-up 正文含 Reading → 屏轮询立刻红', () => {
+      assert.ok(pollWorkWord.ok === false && pollWorkWord.state === 'unsubmitted-paste', '审红2：follow-up 正文含 Reading → 立刻红  →  ' + JSON.stringify(pollWorkWord));
+    });
+  });
+
   it('R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚', async (t) => {
     const S = await S_LOAD;
     const routing = await ROUTING_LOAD;
