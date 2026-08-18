@@ -1374,15 +1374,54 @@ export function parseGhPullFiles(json) {
     .map(f => f.filename);
 }
 
-/** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
+/** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。Grok 形态。 */
 export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
 
+/** #651：Cursor 粘贴块折叠形态（#634 实证屏面）：[Pasted text #N +M lines]。 */
+export const CURSOR_PASTE_RE = /\[Pasted text(?: #\d+)? \+?\d+ lines?\]/i;
+
+/** #651：Cursor 已提交后在干活的屏面形态——只认状态行（行首 Running:/Reading/Thinking 等），
+ * 禁止无锚单词扫任务书正文（审红 2：正文含 Reading/Working 不得当已提交）。 */
+export const CURSOR_WORKING_RE = /(?:^|\n)\s*(?:Running|Reading|Thinking|Working|处理中)[:：\s.…]/i;
+
+/** #651：Cursor 未发出的 follow-up（第二条指纹）：→ 行带字 / N follow-ups。
+ * 不是粘贴块的前置条件（审红 1），单独出现也算未提交。 */
+export const CURSOR_FOLLOWUP_RE = /(?:^|\n)\s*→[^\n]*[^\s\n]|\d+\s*follow-ups?/i;
+
 /** #619：未提交粘贴与「超时/环境」必须分开。 */
-export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content）——worker-start 把 preamble 灌进输入框后没有提交';
+export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——worker-start 把 preamble 灌进输入框后没有提交';
+
+/** #651：Cursor 粘贴块等价 Grok 的 Pasted Content——单独出现且后面没有在干活（状态行）
+ * 就算未提交（审红 1）。已提交（粘贴块后面有干活状态行）不当未提交，避免死循环误杀。 */
+export function cursorUnsubmittedPaste(text) {
+  const t = String(text ?? '');
+  const m = t.match(CURSOR_PASTE_RE);
+  if (!m) return null;
+  const tail = t.slice(m.index + m[0].length);
+  if (CURSOR_WORKING_RE.test(tail)) return null;
+  return m[0];
+}
+
+/** #651：未发出的 follow-up 单独也是未提交指纹；已在干活（状态行）不当未提交。 */
+export function cursorFollowupEvidence(text) {
+  const t = String(text ?? '');
+  if (CURSOR_WORKING_RE.test(t)) return null;
+  const m = t.match(CURSOR_FOLLOWUP_RE);
+  return m ? m[0] : null;
+}
+
+/** #651：Cursor 任一未提交指纹（粘贴块 / follow-up），供补 enter 后快速再读判定。 */
+export function cursorUnsubmittedEvidence(text) {
+  return cursorUnsubmittedPaste(text) || cursorFollowupEvidence(text);
+}
 
 export function pastedContentMatch(text) {
-  const m = String(text ?? '').match(PASTED_CONTENT_RE);
-  return m ? m[0] : null;
+  const t = String(text ?? '');
+  const g = t.match(PASTED_CONTENT_RE);
+  if (g) return g[0];
+  const c = cursorUnsubmittedPaste(t);
+  if (c) return c;
+  return cursorFollowupEvidence(t);
 }
 
 /** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
@@ -1404,12 +1443,32 @@ export function verifyInjection({ text, readError } = {}) {
   if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
   const t = String(text);
   if (!t.trim()) return { ok: false, reason: '注入后屏面是空的', unscanned: false, text: '' };
-  const m = t.match(PASTED_CONTENT_RE);
-  if (m) {
+  const g = t.match(PASTED_CONTENT_RE);
+  if (g) {
     return {
       ok: false,
       reason: '任务书停在输入框（Pasted Content），没有进上下文',
-      evidence: m[0],
+      evidence: g[0],
+      unscanned: false,
+      text: t,
+    };
+  }
+  const cm = cursorUnsubmittedPaste(t);
+  if (cm) {
+    return {
+      ok: false,
+      reason: '任务书停在输入框（Cursor Pasted text 未发出），没有进上下文',
+      evidence: cm,
+      unscanned: false,
+      text: t,
+    };
+  }
+  const cf = cursorFollowupEvidence(t);
+  if (cf) {
+    return {
+      ok: false,
+      reason: '任务书停在输入框（Cursor follow-up 未发出），没有进上下文',
+      evidence: cf,
       unscanned: false,
       text: t,
     };
@@ -1475,6 +1534,23 @@ export function completePendingPaste({
     };
   }
   if (settleMs > 0 && typeof sleep === 'function') sleep(settleMs);
+  // #651：Cursor 补 enter 后立刻再读一次；仍未发出（粘贴块/follow-up）→ 失败，不许 ok:true。
+  if (cursorUnsubmittedEvidence(text)) {
+    const after = readOnce();
+    const afterText = after && !after.error ? extractTerminalText(after) : '';
+    const still = cursorUnsubmittedEvidence(afterText);
+    if (still) {
+      return {
+        ok: false,
+        state: 'unsubmitted-paste',
+        submittedPaste: true,
+        reason: UNSUBMITTED_PASTE_REASON,
+        evidence: still,
+        text: afterText,
+        send,
+      };
+    }
+  }
   return {
     ok: true,
     state: 'submitted-paste',
@@ -1557,6 +1633,24 @@ export function verifyStartedPolling({
         };
       }
       sleep(Math.max(Number(settleMs) || 0, intervalMs));
+      // #651：Cursor 补 enter 后立刻再读一次；仍未发出（粘贴块/follow-up）→ 失败，不许 ok:true。
+      if (cursorUnsubmittedEvidence(text)) {
+        const after = readOnce();
+        const afterText = after && !after.error ? extractTerminalText(after) : '';
+        const still = cursorUnsubmittedEvidence(afterText);
+        if (still) {
+          return {
+            ok: false,
+            state: 'unsubmitted-paste',
+            reason: UNSUBMITTED_PASTE_REASON,
+            evidence: still,
+            reads,
+            elapsedMs: Date.now() - t0,
+            text: afterText,
+            pasteSubmitted: true,
+          };
+        }
+      }
       continue;
     }
     if (leftover && !submitted) {

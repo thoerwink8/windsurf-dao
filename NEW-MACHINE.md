@@ -157,8 +157,8 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 - 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
 - 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
-- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。把 `host/machine/shims/cursor-agent.cmd`、`cursor-agent`、`agent.cmd`、`agent` 拷到 `~/.local/bin/`（覆盖 PATH 第一位，包装 `%LOCALAPPDATA%\cursor-agent\` 下的真实二进制）。注释保持纯 ASCII。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
-- 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force`）。`--force` 是无人值守放行（等同 `--yolo`）。
+- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。把 `host/machine/shims/cursor-agent.cmd`、`cursor-agent`、`agent.cmd`、`agent` 拷到 `~/.local/bin/`（覆盖 PATH 第一位，包装 `%LOCALAPPDATA%\cursor-agent\` 下的真实二进制）。注释保持纯 ASCII。shim 在带 `--model` 时会补 `--trust`（#648：新 worktree 弹 Workspace Trust，`--force` 不管，Orca 报 agent_unconfigured）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
+- 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force --trust`）。`--force` 是无人值守放行（等同 `--yolo`）；`--trust` 免弹 Workspace Trust（#648 返工补丁）。
 - 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
 
 ## 8. 本机工具坑
