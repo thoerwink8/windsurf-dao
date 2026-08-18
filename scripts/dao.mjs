@@ -77,6 +77,7 @@ import {
   recordEscape,
   resolveDispatchConstraints,
   resolveSplitConstraint,
+  resolveSliceAssignments,
   planSplitCards,
   buildSplitRoleSpec,
   startSplitChildren,
@@ -467,6 +468,8 @@ function cmdDispatch(args) {
 
   const splitGate = resolveSplitConstraint({ split: args.split, splitReason: args.splitReason });
   if (!splitGate.ok) fail(splitGate.error, { missing: splitGate.missing || [] });
+  const sliceGate = resolveSliceAssignments({ childCount: splitGate.childCount, slices: args.slice });
+  if (!sliceGate.ok) fail(sliceGate.error, { missing: sliceGate.missing || [] });
 
   const now = args.now ? new Date(args.now) : new Date();
   let slatePack;
@@ -506,7 +509,10 @@ function cmdDispatch(args) {
   const childCards = cards.children.map((c, i) => ({
     ...c,
     willStart: true,
-    spec: buildSplitRoleSpec({ spec: args.spec, role: 'child', index: i + 1, total: splitGate.childCount }),
+    slice: sliceGate.slices[i],
+    spec: buildSplitRoleSpec({
+      spec: args.spec, role: 'child', index: i + 1, total: splitGate.childCount, slice: sliceGate.slices[i],
+    }),
   }));
 
   const plan = {
@@ -545,7 +551,7 @@ function cmdDispatch(args) {
   }
   if (!args.name) fail('dispatch 要 --name');
 
-  const created = { childIds: [], childHandles: [], children: [] };
+  const created = { childIds: [], childHandles: [], children: [], dispatchIds: [], taskIds: [] };
 
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
@@ -643,6 +649,8 @@ function cmdDispatch(args) {
   if (!created.workerDispatchId) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
+  created.dispatchIds.push(created.workerDispatchId);
+  created.taskIds.push(taskId);
 
   // 开工验证：等 worker-read 证明。不再为折叠补回车（#602）。
   const workerInject = verifyStartedPolling({
@@ -659,6 +667,7 @@ function cmdDispatch(args) {
     const splitKids = startSplitChildren({
       children: created.children,
       spec: String(args.spec || ''),
+      slices: sliceGate.slices,
       startOne: ({ worktreeId, path: childPath, title, spec: childSpec }) => {
         if (!childPath) return { ok: false, error: `子卡 ${title} 没返回 path` };
         const env = envProbeWorktree(childPath);
@@ -729,7 +738,10 @@ function cmdDispatch(args) {
     });
     created.childHandles = (splitKids.started || []).map(s => s.handle).filter(Boolean);
     created.childDispatchIds = (splitKids.started || []).map(s => s.dispatchId).filter(Boolean);
+    created.childTaskIds = (splitKids.started || []).map(s => s.taskId).filter(Boolean);
     created.childWorkers = splitKids.started || [];
+    created.dispatchIds = [created.workerDispatchId, ...created.childDispatchIds].filter(Boolean);
+    created.taskIds = [taskId, ...created.childTaskIds].filter(Boolean);
     if (!splitKids.ok) failCreated(created, splitKids.error, { ...plan, taskId, splitKids });
   }
 

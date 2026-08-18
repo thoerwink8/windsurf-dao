@@ -194,7 +194,7 @@ command-code 不能承载需进 git 的 Orca 工人（#514：旁路产出，work
 ## 能不能拆（#611）
 
 `dispatch` 必填 `--split`。判据与取值只认 `node scripts/dao.mjs dispatch --help`，本页不复制。
-`--split no` 必须带 `--split-reason`。`--split N`（N≥2）建父卡 + N 张子卡，父卡工人是头工人。
+`--split no` 必须带 `--split-reason`。`--split N`（N≥2）必须带 N 个 `--slice`，建父卡 + N 张子卡并起独立工人，父卡工人是头工人。
 同分支多工人走这条命令；多 PR 项化仍走 `dao-project`。
 
 ## 开工判据
