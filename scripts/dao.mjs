@@ -78,6 +78,8 @@ import {
   resolveDispatchConstraints,
   resolveSplitConstraint,
   planSplitCards,
+  buildSplitRoleSpec,
+  startSplitChildren,
   resolveLaunch,
   reviewerCardName,
   rollbackReport,
@@ -498,6 +500,14 @@ function cmdDispatch(args) {
     model: gate.model,
     childCount: splitGate.childCount,
   });
+  const headSpec = splitGate.childCount > 0
+    ? buildSplitRoleSpec({ spec: args.spec, role: 'head', total: splitGate.childCount })
+    : String(args.spec || '');
+  const childCards = cards.children.map((c, i) => ({
+    ...c,
+    willStart: true,
+    spec: buildSplitRoleSpec({ spec: args.spec, role: 'child', index: i + 1, total: splitGate.childCount }),
+  }));
 
   const plan = {
     mergePolicy: gate.mergePolicy,
@@ -508,8 +518,8 @@ function cmdDispatch(args) {
     split: splitGate.split,
     splitReason: splitGate.splitReason,
     workerCard: cards.parent.name,
-    parentCard: cards.parent,
-    childCards: cards.children,
+    parentCard: { ...cards.parent, role: splitGate.childCount > 0 ? '头工人' : '工人', spec: headSpec },
+    childCards,
     workerLaunch: workerLaunch.command,
     reviewerDeferred: true,
     reviewerLaunchChecked: reviewerLaunch.command,
@@ -535,7 +545,7 @@ function cmdDispatch(args) {
   }
   if (!args.name) fail('dispatch 要 --name');
 
-  const created = { childIds: [] };
+  const created = { childIds: [], childHandles: [], children: [] };
 
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
@@ -576,7 +586,9 @@ function cmdDispatch(args) {
       if (!childWt.ok) failCreated(created, `子卡 ${child.name} 创建失败: ${errText(childWt.error)}`, plan);
       const childId = extractWorktreeId(childWt.json);
       if (!childId) failCreated(created, `子卡 ${child.name} 没返回 id`, plan);
+      const childPath = extractWorktreePath(childWt.json);
       created.childIds.push(childId);
+      created.children.push({ id: childId, path: childPath, name: child.name });
     }
   }
 
@@ -602,7 +614,7 @@ function cmdDispatch(args) {
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? encodeSendText(buildSoldierInject({ spec: String(args.spec), issue: args.issue }), workerLaunch.provider)
+      ? encodeSendText(buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue }), workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
@@ -642,6 +654,84 @@ function cmdDispatch(args) {
   });
   if (!workerInject.ok) failCreated(created, `注入后开工验证失败: ${workerInject.reason}`, { inject: workerInject, ...plan, taskId });
   const workerProof = workerStartProof(created.workerDispatchId); // 成功后再取一次留档（emit 用）
+
+  if (splitGate.childCount > 0) {
+    const splitKids = startSplitChildren({
+      children: created.children,
+      spec: String(args.spec || ''),
+      startOne: ({ worktreeId, path: childPath, title, spec: childSpec }) => {
+        if (!childPath) return { ok: false, error: `子卡 ${title} 没返回 path` };
+        const env = envProbeWorktree(childPath);
+        if (!env.ok) return { ok: false, error: `子树环境自检失败: ${env.error}` };
+        const ident = applyGitIdentity('worker', { cwd: childPath });
+        if (!ident.ok) return { ok: false, error: `子树 git 身份没设上：${ident.error}` };
+        const scratch = {};
+        const childLaunch = startWorkerBySlate({
+          slate: slatePack.slate,
+          startIndex: slatePack.startIndex,
+          routing,
+          worktreeId,
+          title,
+          created: scratch,
+        });
+        if (!childLaunch.ok) {
+          return { ok: false, error: childLaunch.error || '子工人 TUI 未就绪', handle: scratch.workerHandle };
+        }
+        let childBook;
+        try {
+          childBook = encodeSendText(buildSoldierInject({ spec: childSpec, issue: args.issue }), childLaunch.launch.provider);
+        } catch (e) {
+          return { ok: false, error: `子任务书渲染失败: ${String(e.message || e)}`, handle: childLaunch.handle };
+        }
+        const bound = orca(argsRunCurrent());
+        const boundRun = bound.ok ? (bound.json?.result?.run?.id || null) : null;
+        const childTask = taskCreateOnRun(childBook, boundRun);
+        if (!childTask.ok) {
+          return { ok: false, error: `子 task-create 失败: ${errText(childTask.error)}`, handle: childLaunch.handle };
+        }
+        const childTaskId = extractTaskId(childTask.json);
+        if (!childTaskId) return { ok: false, error: '子 task-create 没拿到 taskId', handle: childLaunch.handle };
+        const childStarted = orca(argsWorkerStart({
+          task: childTaskId,
+          worktree: worktreeId,
+          terminal: childLaunch.handle,
+        }));
+        if (!childStarted.ok) {
+          return { ok: false, error: `子 worker-start 失败: ${errText(childStarted.error)}`, handle: childLaunch.handle };
+        }
+        const childDispatchId = extractDispatchId(childStarted.json);
+        if (!childDispatchId) {
+          return { ok: false, error: '子 worker-start 没拿到 dispatch id', handle: childLaunch.handle };
+        }
+        const childInject = verifyStartedPolling({
+          dispatchId: childDispatchId,
+          readOnce: () => readOnceHandle(childLaunch.handle),
+          proofOnce: workerStartProof,
+          timeoutMs: probeWaitMs(routing, childLaunch.launch.provider),
+          label: `子工人 ${title}`,
+        });
+        if (!childInject.ok) {
+          return {
+            ok: false,
+            error: `子工人开工验证失败: ${childInject.reason}`,
+            handle: childLaunch.handle,
+            dispatchId: childDispatchId,
+            taskId: childTaskId,
+          };
+        }
+        return {
+          ok: true,
+          handle: childLaunch.handle,
+          dispatchId: childDispatchId,
+          taskId: childTaskId,
+        };
+      },
+    });
+    created.childHandles = (splitKids.started || []).map(s => s.handle).filter(Boolean);
+    created.childDispatchIds = (splitKids.started || []).map(s => s.dispatchId).filter(Boolean);
+    created.childWorkers = splitKids.started || [];
+    if (!splitKids.ok) failCreated(created, splitKids.error, { ...plan, taskId, splitKids });
+  }
 
   const comment = afterDispatchComment({
     name: args.name,
@@ -684,6 +774,9 @@ function cmdDispatch(args) {
       pipe_provider: workerLaunch.provider,
       split: splitGate.split,
       split_reason: splitGate.splitReason,
+      ...(created.childDispatchIds && created.childDispatchIds.length
+        ? { child_dispatch_ids: created.childDispatchIds }
+        : {}),
       ...(args.issue ? { issue_number: Number(args.issue) || args.issue } : {}),
     },
     });

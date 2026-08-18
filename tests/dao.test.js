@@ -1529,6 +1529,14 @@ describe('dao', () => {
     await t.test('#611 回滚先删子卡再删父卡', () => {
       assert.ok(kidIdx >= 0 && parentIdx > kidIdx, '#611 回滚先删子卡再删父卡  →  ' + JSON.stringify(stepsKids));
     });
+    const stepsHandles = S.planDispatchRollback({
+      workerId: 'w1', workerHandle: 'th1', childIds: ['c1', 'c2'], childHandles: ['ch1', 'ch2'],
+    });
+    const chIdx = stepsHandles.findIndex(s => s.includes('ch1'));
+    const rmKidIdx = stepsHandles.findIndex(s => s.includes('c1'));
+    await t.test('#611 回滚先关子工人终端再删子卡', () => {
+      assert.ok(chIdx >= 0 && rmKidIdx > chIdx, '#611 回滚先关子工人终端再删子卡  →  ' + JSON.stringify(stepsHandles));
+    });
     const rbOk = S.rollbackReport([{ cmd: 'terminal close x --tab', ok: true }]);
     await t.test('R6 回滚全成功 → 不叫', () => {
       assert.ok(rbOk.rollbackFailed === false && rbOk.alarm == null, 'R6 回滚全成功 → 不叫  →  ' + JSON.stringify(rbOk));
@@ -2514,6 +2522,66 @@ describe('dao', () => {
     });
     await t.test('④ 子卡带 --base-branch', () => {
       assert.ok(kids.every(c => (c.flags || []).includes('--base-branch')) && /--base-branch/.test(kidsText), '④ 子卡带 --base-branch  →  ' + kidsText);
+    });
+    await t.test('④ dry-run 子卡标明 willStart 且带分块职责', () => {
+      assert.ok(kids.every(c => c.willStart === true && /块\d+\/2/.test(c.spec || '')), '④ dry-run 子卡标明 willStart 且带分块职责  →  ' + kidsText);
+    });
+    await t.test('④ dry-run 父卡是头工人', () => {
+      assert.ok(p2.parentCard && p2.parentCard.role === '头工人' && /头工人/.test(p2.parentCard.spec || ''), '④ dry-run 父卡是头工人  →  ' + JSON.stringify(p2.parentCard));
+    });
+
+    const headSpec = S.buildSplitRoleSpec({ spec: '短摘要', role: 'head', total: 2 });
+    const child1 = S.buildSplitRoleSpec({ spec: '短摘要', role: 'child', index: 1, total: 2 });
+    await t.test('分块职责：头工人不独占文件块', () => {
+      assert.ok(/头工人/.test(headSpec) && /不独占/.test(headSpec), '分块职责：头工人不独占文件块  →  ' + headSpec);
+    });
+    await t.test('分块职责：子工人写明第几块', () => {
+      assert.ok(/块1\/2/.test(child1), '分块职责：子工人写明第几块  →  ' + child1);
+    });
+
+    const calls = [];
+    const okStart = S.startSplitChildren({
+      children: [{ id: 'c1', name: 'a · 1' }, { id: 'c2', name: 'a · 2' }],
+      spec: '短摘要',
+      startOne: (req) => {
+        calls.push(req);
+        return { ok: true, handle: `h-${req.index}`, dispatchId: `d-${req.index}`, taskId: `t-${req.index}` };
+      },
+    });
+    await t.test('真路径：--split 2 起父卡之外的 2 个独立子工人', () => {
+      assert.ok(okStart.ok && okStart.started.length === 2 && okStart.started.every(s => s.handle && s.dispatchId), '真路径：--split 2 起 2 个子工人  →  ' + JSON.stringify(okStart));
+    });
+    await t.test('真路径：两个子工人职责不同', () => {
+      assert.ok(calls.length === 2 && /块1\/2/.test(calls[0].spec) && /块2\/2/.test(calls[1].spec) && calls[0].worktreeId === 'c1' && calls[1].worktreeId === 'c2', '真路径：两个子工人职责不同  →  ' + JSON.stringify(calls));
+    });
+
+    const failCalls = [];
+    const failStart = S.startSplitChildren({
+      children: [{ id: 'c1', name: 'a · 1' }, { id: 'c2', name: 'a · 2' }],
+      spec: '短摘要',
+      startOne: (req) => {
+        failCalls.push(req);
+        if (req.index === 2) return { ok: false, error: 'boom', handle: 'h-fail' };
+        return { ok: true, handle: 'h-1', dispatchId: 'd-1', taskId: 't-1' };
+      },
+    });
+    await t.test('真路径：第二子工人失败时保留已起的人供回滚', () => {
+      assert.ok(
+        failStart.ok === false
+        && failStart.started.some(s => s.handle === 'h-1' && s.dispatchId === 'd-1')
+        && failStart.started.some(s => s.handle === 'h-fail'),
+        '真路径：第二子工人失败时保留已起的人供回滚  →  ' + JSON.stringify(failStart),
+      );
+    });
+    const rbFail = S.planDispatchRollback({
+      workerId: 'w1',
+      workerHandle: 'th1',
+      childIds: failStart.started.map(s => s.id).filter(Boolean).concat(['c2']),
+      childHandles: failStart.started.map(s => s.handle).filter(Boolean),
+    });
+    await t.test('真路径：子工人失败回滚含关终端+删子卡+删父卡', () => {
+      const text = JSON.stringify(rbFail);
+      assert.ok(/h-1/.test(text) && /h-fail/.test(text) && /c2/.test(text) && /w1/.test(text), '真路径：子工人失败回滚完整  →  ' + text);
     });
 
     await t.test('FLAGS 登记 --split / --split-reason', () => {

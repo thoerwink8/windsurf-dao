@@ -1446,10 +1446,13 @@ export function envProbeWorktree(cwd) {
   return runCapabilityProbes({ exec: hostProbeExec(cwd) });
 }
 
-export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle, childIds } = {}) {
+export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle, childIds, childHandles } = {}) {
   const steps = [];
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
   if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
+  for (const handle of Array.isArray(childHandles) ? childHandles : []) {
+    if (handle) steps.push(argsTerminalClose({ terminal: handle, tab: true }));
+  }
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
   for (const id of Array.isArray(childIds) ? childIds : []) {
     if (id) steps.push(argsWorktreeRm({ worktree: id, force: true }));
@@ -1791,6 +1794,58 @@ export function planSplitCards({
     parent: { name: parentName, noParent: true },
     children,
   };
+}
+
+/** --split N 时给头工人 / 子工人可执行的分块职责（#613 红项：空卡不算多工人）。 */
+export function buildSplitRoleSpec({ spec, role, index, total } = {}) {
+  const base = String(spec || '').trim();
+  const n = Number(total) || 0;
+  if (role === 'head') {
+    return `${base}｜头工人：协调${n}块，不独占文件块`;
+  }
+  return `${base}｜块${index}/${n}：只做按文件切开后的第${index}块`;
+}
+
+/**
+ * 真路径起 N 个独立子工人。startOne 负责终端/Task/Dispatch/验开工。
+ * 任一子工人失败时返回已起的那些（含已有 handle 的失败者），供完整回滚。
+ */
+export function startSplitChildren({ children, spec, startOne } = {}) {
+  if (typeof startOne !== 'function') {
+    return { ok: false, started: [], error: 'startSplitChildren 没拿到 startOne' };
+  }
+  const list = Array.isArray(children) ? children : [];
+  const total = list.length;
+  const started = [];
+  for (let i = 0; i < total; i++) {
+    const child = list[i] || {};
+    const sliceSpec = buildSplitRoleSpec({ spec, role: 'child', index: i + 1, total });
+    const r = startOne({
+      worktreeId: child.id,
+      path: child.path,
+      title: child.name,
+      spec: sliceSpec,
+      index: i + 1,
+      total,
+    }) || {};
+    const record = {
+      id: child.id,
+      name: child.name,
+      handle: r.handle || null,
+      dispatchId: r.dispatchId || null,
+      taskId: r.taskId || null,
+      spec: sliceSpec,
+    };
+    if (record.handle || record.dispatchId) started.push(record);
+    if (!r.ok) {
+      return {
+        ok: false,
+        started,
+        error: `子工人 ${i + 1}/${total} 没起成: ${r.error || '未知错误'}`,
+      };
+    }
+  }
+  return { ok: true, started };
 }
 
 export function reviewerCardName(reviewerId) {
