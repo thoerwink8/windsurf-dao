@@ -94,7 +94,7 @@ import {
   resolveReviewerReuse,
   postIssueComment,
   postPrComment,
-  verifyInjection,
+  completePendingPaste,
   verifyStartedPolling,
   verifyWorkerStarted,
   verifyReviewerFiles,
@@ -240,9 +240,17 @@ function rollbackCreated(created) {
   return { rollback, rollbackFailed: report.rollbackFailed };
 }
 
+function snapshotHandleScreen(handle) {
+  if (!handle) return { skipped: true, reason: 'no-handle' };
+  const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
+  if (!read.ok) return { ok: false, handle, error: errText(read.error) };
+  return { ok: true, handle, text: extractTerminalText(read.json) };
+}
+
 function failCreated(created, error, extra = {}) {
+  const screen = extra.screen || snapshotHandleScreen(created.reviewerHandle || created.workerHandle);
   const { rollback, rollbackFailed } = rollbackCreated(created);
-  emit({ ok: false, error, rollback, rollbackFailed, ...created, ...extra }, 1);
+  emit({ ok: false, error, screen, rollback, rollbackFailed, ...created, ...extra }, 1);
 }
 
 function loadDispatchSlate({ model, role, routing, now, live }) {
@@ -371,6 +379,32 @@ function readOnceHandle(handle) {
   const read = orca(argsTerminalRead({ terminal: handle, limit: 80 }));
   if (!read.ok) return { error: errText(read.error) };
   return read.json;
+}
+
+function sendEnterHandle(handle) {
+  return orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+}
+
+/** #619：worker-start 之后先完成粘贴提交，再验开工。 */
+function finishWorkerInject({ handle, dispatchId, label, timeoutMs }) {
+  const paste = completePendingPaste({
+    readOnce: () => readOnceHandle(handle),
+    sendEnter: () => sendEnterHandle(handle),
+    proofOnce: workerStartProof,
+    dispatchId,
+  });
+  if (!paste.ok) {
+    return { ok: false, ...paste, paste };
+  }
+  const started = verifyStartedPolling({
+    dispatchId,
+    readOnce: () => readOnceHandle(handle),
+    proofOnce: workerStartProof,
+    timeoutMs,
+    label,
+    pasteSubmitted: !!paste.submittedPaste,
+  });
+  return { ...started, paste };
 }
 
 /** 开工证明（#559 ⑥）：worker-read --source auto 官方 transcript 源优先。
@@ -633,13 +667,12 @@ function cmdDispatch(args) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
 
-  // 开工验证：等 worker-read 证明。不再为折叠补回车（#602）。
-  const workerInject = verifyStartedPolling({
+  // 开工验证：#619 worker-start 第二拍提交粘贴，再等 worker-read 证明。
+  const workerInject = finishWorkerInject({
+    handle: created.workerHandle,
     dispatchId: created.workerDispatchId,
-    readOnce: () => readOnceHandle(created.workerHandle),
-    proofOnce: workerStartProof,
-    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
     label: '工人',
+    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
   });
   if (!workerInject.ok) failCreated(created, `注入后开工验证失败: ${workerInject.reason}`, { inject: workerInject, ...plan, taskId });
   const workerProof = workerStartProof(created.workerDispatchId); // 成功后再取一次留档（emit 用）
@@ -900,12 +933,11 @@ function reuseReviewerOnTerminal({
   try { launch = resolveLaunch({ model: reviewer, routing, root: ROOT }); }
   catch { launch = { provider: 'gpt' }; }
 
-  const reviewerInject = verifyStartedPolling({
+  const reviewerInject = finishWorkerInject({
+    handle,
     dispatchId: reviewerDispatchId,
-    readOnce: () => readOnceHandle(handle),
-    proofOnce: workerStartProof,
-    timeoutMs: probeWaitMs(routing, launch.provider),
     label: '审官',
+    timeoutMs: probeWaitMs(routing, launch.provider),
   });
   if (!reviewerInject.ok) {
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
@@ -1423,9 +1455,12 @@ function cmdWorkerStart(args) {
   if (!r.ok) fail(`worker-start 失败: ${errText(r.error)}`);
   const dispatchId = extractDispatchId(r.json);
   if (!dispatchId) fail('worker-start 成功但没拿到 dispatch id——不是已开工，是没查成（续 Dispatch 需要新身份）', { json: r.json });
-  const read = orca(argsTerminalRead({ terminal: args.terminal, limit: 80 }));
-  if (!read.ok) fail(`worker-start 成功但读屏失败——不是已开工，是没查成: ${errText(read.error)}`);
-  const injected = verifyInjection({ text: extractTerminalText(read.json) });
+  const injected = finishWorkerInject({
+    handle: args.terminal,
+    dispatchId,
+    label: '续派',
+    timeoutMs: probeWaitMs(routing),
+  });
   if (!injected.ok) fail(`注入后开工验证失败: ${injected.reason}`, { inject: injected });
   emit({ ok: true, json: r.json, dispatchId, inject: injected });
 }
@@ -1627,12 +1662,11 @@ function cmdReviewerCreate(args) {
     failCreated(launched, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
 
-  const reviewerInject = verifyStartedPolling({
+  const reviewerInject = finishWorkerInject({
+    handle: launched.reviewerHandle,
     dispatchId: reviewerDispatchId,
-    readOnce: () => readOnceHandle(launched.reviewerHandle),
-    proofOnce: workerStartProof,
-    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     label: '审官',
+    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
   });
   if (!reviewerInject.ok) {
     failCreated(launched, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
@@ -1700,7 +1734,7 @@ function cmdReviewerCreate(args) {
 /**
  * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
  * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
- * verifyStartedPolling（开工证明）。换行按 agent 转码，不禁换行；硬闸只有 UTF-8 字节 ≤500。
+ * finishWorkerInject（提交粘贴 + 开工证明）。换行按 agent 转码，不禁换行；硬闸只量我们那一半。
  * 不碰 raw，所以不会绕过开工验证。
  */
 function cmdReviewerAttach(args) {
@@ -1856,12 +1890,11 @@ function cmdReviewerAttach(args) {
     failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
 
-  const reviewerInject = verifyStartedPolling({
+  const reviewerInject = finishWorkerInject({
+    handle: created.reviewerHandle,
     dispatchId: created.reviewerDispatchId,
-    readOnce: () => readOnceHandle(created.reviewerHandle),
-    proofOnce: workerStartProof,
-    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     label: '审官',
+    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
   });
   if (!reviewerInject.ok) {
     failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
