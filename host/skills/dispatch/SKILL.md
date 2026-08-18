@@ -7,7 +7,7 @@ description: 派工手册：判断派不派、建任务卡、起工人、选型�
 
 ## 拓扑
 
-master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 按需起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名「#PR号 - 动宾短语」，十字上下一眼能扫。
+master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.mjs dispatch` 起（建工人卡+打 `reviewer/*`+起工人；审官由工人完工时 `worker-done` 按需起。用法以 `node scripts/dao.mjs --help` 为准，本页不复制旗标）。卡名给人眼看（格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`），程序判据不读卡名。
 
 多块活（能拆成几块、各够一个工人干一阵的）走 `host/skills/dao-project/SKILL.md` 的项化路径（项卡 + 多 worker 子卡 + 各自审官 + 收口官，消歧门门控），本页不复制；单卡场景仍走本页。
 
@@ -153,7 +153,9 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 ## 命名规矩
 
-- 任务卡：`#<PR号> - <动宾短语>`（PR 开出来立刻改名）。
+- 任务卡给人眼看，判据归字段（#589）。格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`，本页不复制。
+- **PR 开出来后改名是机械动作**：挂在 `worker-done`（它本来就有 PR 号），不要做成要人记得的一步。
+- 程序找审官 / 判任务卡 / 判子卡：看 `parentWorktreeId` 和 dispatch 记账，不读卡名，不拿 issue 号去对 PR 号。
 - 终端 / 工人副本：角色·模型（如「审官·GPT」）。默认名不上面板。
 - 任务卡 / 工人 / 审官归属：卡 comment 末尾定界区 `｜[#N #M]`。`dao.mjs dispatch` 成功后只往**这张任务卡**的 comment 追加单号，人写的叙述原样保留，写完必回读。不要用 `orca terminal rename` 写这类归属（对 grok 等由宿主持续改标题的终端，rename 回 ok 但 list/show 不变）。
 - Claude 主帅终端自己改自己：用 CC 内置 `/rename`（每帅私有，不互相覆盖）。给终端发以 `/` 开头的斜杠命令必须走 PowerShell，或设 `MSYS_NO_PATHCONV=1`——Git Bash/MSYS2 会把 `/rename` 转成 `C:/Program Files/Git/rename`，命令送不到、标题不变，看起来像无效。

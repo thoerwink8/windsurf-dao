@@ -820,8 +820,15 @@ function checkOpenIssueCount(board) {
   for (const w of wt.worktrees) {
     if (!w || w.isMainWorktree || w.isArchived) continue;
     const name = String(w.displayName || '');
-    const m = name.match(/^#(\d+)/);
-    if (m) cards.push(Number(m[1]));
+    const linked = typeof w.linkedIssue === 'number' ? w.linkedIssue
+      : (w.linkedIssue && typeof w.linkedIssue.number === 'number' ? w.linkedIssue.number : null);
+    const zone = String(w.comment || '').match(/｜\[([^\]]*)\]/);
+    const zoneN = zone && zone[1].match(/#(\d+)/);
+    const issueName = name.match(/ISSUE-#?(\d+)/);
+    const oldName = name.match(/^#(\d+)/);
+    const n = linked || (zoneN ? Number(zoneN[1]) : null) || (issueName ? Number(issueName[1]) : null)
+      || (oldName ? Number(oldName[1]) : null);
+    if (n) cards.push(n);
   }
   const inPr = new Set();
   for (const p of prs.array) {

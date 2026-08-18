@@ -27,6 +27,7 @@ import {
   argsTerminalRead,
   argsTerminalSend,
   argsWorktreeCreate,
+  argsWorktreeSet,
   argsWorktreeRm,
   argsWorktreePs,
   applyWorktreeRmPlan,
@@ -491,7 +492,7 @@ function cmdDispatch(args) {
     model: startEntry.id,
     reviewer: gate.reviewer,
     issue: args.issue ? String(args.issue).trim() : null,
-    workerCard: assembleCardName({ name: args.name, issue: args.issue }),
+    workerCard: assembleCardName({ name: args.name, issue: args.issue, role: '工人', model: gate.model }),
     workerLaunch: workerLaunch.command,
     reviewerDeferred: true,
     reviewerLaunchChecked: reviewerLaunch.command,
@@ -726,6 +727,22 @@ function currentWorktreeId() {
   return { ok: true, id };
 }
 
+/** PR 开出来后把工人卡从 ISSUE-/#N 改成 PR-。挂在 worker-done，不靠人记得。 */
+function promoteWorkerCardToPr({ parentId, worktrees, pr, model } = {}) {
+  if (!parentId || !pr) return { ok: true, skipped: true, reason: '没给工人卡或 PR 号' };
+  const wt = (worktrees || []).find(w => {
+    const id = w && (w.id || w.worktreeId);
+    return id && (id === parentId || String(id).endsWith(parentId) || String(parentId).endsWith(id));
+  });
+  if (!wt) return { ok: true, skipped: true, reason: '盘面找不到工人卡' };
+  const current = String(wt.displayName || '');
+  const next = assembleCardName({ name: current || '工人', pr, role: '工人', model });
+  if (!next || next === current) return { ok: true, skipped: true, name: current };
+  const r = orca(argsWorktreeSet({ worktree: parentId, displayName: next }));
+  if (!r.ok) return { ok: false, error: `工人卡改名失败：${errText(r.error)}`, from: current, to: next };
+  return { ok: true, from: current, to: next };
+}
+
 function loadReviewerReuseInputs() {
   const listed = orca(['worktree', 'list', '--json']);
   if (!listed.ok) return { ok: false, error: `worktree list 没查成：${errText(listed.error)}` };
@@ -921,6 +938,7 @@ function cmdWorkerDone(args) {
     action: null,
     reason: null,
   };
+  let reuseInputs = { worktrees: [], workers: [], terminals: [] };
   if (args.dryRun && !parentId) {
     reuse = {
       ok: true,
@@ -933,6 +951,7 @@ function cmdWorkerDone(args) {
   if (parentId) {
     const inputs = loadReviewerReuseInputs();
     if (!inputs.ok) fail(`worker-done 查可复用审官失败：${inputs.error}`, plan);
+    reuseInputs = inputs;
     reuse = resolveReviewerReuse({
       parentId,
       worktrees: inputs.worktrees,
@@ -942,9 +961,35 @@ function cmdWorkerDone(args) {
     if (!reuse.ok) fail(reuse.error, { ...plan, reuse });
   }
 
+  let renamed = { ok: true, skipped: true };
+  if (args.dryRun) {
+    const wt = reuseInputs.worktrees.find(w => (w.id || w.worktreeId) === parentId);
+    const preview = assembleCardName({
+      name: (wt && wt.displayName) || '工人',
+      pr: plan.pr,
+      role: '工人',
+      model: plan.workerModel,
+    });
+    renamed = { ok: true, dryRun: true, to: preview };
+  } else if (parentId) {
+    renamed = promoteWorkerCardToPr({
+      parentId,
+      worktrees: reuseInputs.worktrees,
+      pr: plan.pr,
+      model: plan.workerModel,
+    });
+    if (!renamed.ok) fail(renamed.error, { ...plan, renamed, reuse });
+  }
+
   const shouldCreate = reuse.action === 'create';
   const shouldReuse = reuse.action === 'reuse';
-  const createName = assembleCardName({ name: reviewerCardName(plan.reviewer), issue: plan.issue });
+  // #589：审官卡名用 PR 号。找卡走 parent+记账，不拿 issue 号去对名字。
+  const createName = assembleCardName({
+    name: reviewerCardName(plan.reviewer),
+    pr: plan.pr,
+    role: '审官',
+    model: plan.reviewer,
+  });
   let create = {
     invoked: false,
     skipped: !shouldCreate,
@@ -985,6 +1030,7 @@ function cmdWorkerDone(args) {
       shouldCreate,
       shouldReuse,
       reuse,
+      renamed,
       reviewerCreate: create,
       reviewerReuse: reused,
     });
@@ -1071,6 +1117,7 @@ function cmdWorkerDone(args) {
     shouldCreate,
     shouldReuse,
     reuse,
+    renamed,
     postedIssue,
     postedPr,
     reviewerCreate: create,
@@ -1139,7 +1186,7 @@ function cmdStart(args) {
 function cmdWorktreeCreate(args) {
   if (!args.name && !args.issue) fail('worktree-create 要 --name（或 --issue 组装卡名）');
   const r = orca(argsWorktreeCreate({
-    name: assembleCardName({ name: args.name, issue: args.issue }),
+    name: assembleCardName({ name: args.name, issue: args.issue, role: args.role, model: args.model }),
     noParent: args.noParent,
     setup: args.setup,
     parentWorktree: args.parentWorktree,
@@ -1389,7 +1436,9 @@ function cmdReviewerCreate(args) {
 
   const revName = assembleCardName({
     name: args.name || reviewerCardName(picked.modelId),
-    issue: args.issue,
+    pr: args.pr,
+    role: '审官',
+    model: picked.modelId,
   });
   const plan = {
     pr: String(args.pr),
@@ -1650,7 +1699,9 @@ function cmdReviewerAttach(args) {
 
   const revName = assembleCardName({
     name: args.name || reviewerCardName(args.reviewer),
-    issue: args.issue,
+    pr: args.pr,
+    role: '审官',
+    model: args.reviewer,
   });
   const plan = {
     pr: String(args.pr),

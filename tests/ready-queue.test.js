@@ -131,6 +131,33 @@ describe('ready-queue', () => {
       () => {
         assert.ok(fixes.kind === 'zero', 'Fixes #N 也算已起（本检查自己的正则）  →  ' + JSON.stringify(fixes));
       });
+
+    const issueNamed = Q.inspectReadyQueue({
+      issues: [issue(22, ['已消歧'])],
+      prs: [],
+      worktrees: [{ displayName: 'ISSUE-22 工人·grok-4.6 在干活', isMainWorktree: false }],
+    });
+    await t.test('ISSUE- 前缀的卡算已起', () => {
+      assert.ok(issueNamed.kind === 'zero', JSON.stringify(issueNamed));
+    });
+
+    const linked = Q.inspectReadyQueue({
+      issues: [issue(23, ['已消歧'])],
+      prs: [],
+      worktrees: [{ displayName: 'PR-616 工人·grok-4.6 x', linkedIssue: 23, isMainWorktree: false }],
+    });
+    await t.test('linkedIssue 算已起（卡名是 PR 号也不丢）', () => {
+      assert.ok(linked.kind === 'zero', JSON.stringify(linked));
+    });
+
+    const prOnly = Q.inspectReadyQueue({
+      issues: [issue(24, ['已消歧'])],
+      prs: [],
+      worktrees: [{ displayName: 'PR-616 工人·grok-4.6 x', isMainWorktree: false }],
+    });
+    await t.test('只有 PR- 前缀不算 issue 24 的卡（号对不上）', () => {
+      assert.ok(prOnly.kind === 'ready' && prOnly.ready.join(',') === '24', JSON.stringify(prOnly));
+    });
   });
 
   it('#577 dispatch skill 四件里的规矩原文还在', async (t) => {
