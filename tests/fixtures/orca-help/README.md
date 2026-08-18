@@ -5,6 +5,7 @@
 
 ```
 orca terminal create --help > tests/fixtures/orca-help/terminal-create.txt
+orca terminal list --help > tests/fixtures/orca-help/terminal-list.txt
 orca terminal read --help > tests/fixtures/orca-help/terminal-read.txt
 orca terminal send --help > tests/fixtures/orca-help/terminal-send.txt
 orca terminal close --help > tests/fixtures/orca-help/terminal-close.txt

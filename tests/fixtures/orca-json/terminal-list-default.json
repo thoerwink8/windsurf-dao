@@ -1,0 +1,32 @@
+{
+  "id": "768ddf6d-2d0e-44ba-8db7-61fc9f1df16b",
+  "ok": true,
+  "result": {
+    "terminals": [
+      {
+        "handle": "term_21834764-0aab-4188-bacf-651b4f6ae6c6",
+        "ptyId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_probe-633-delete-me@@725d264b",
+        "incarnationId": "0b7d4fab-a45a-4cdf-a094-fac6fe08858d",
+        "orphaned": false,
+        "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_probe-633-delete-me",
+        "worktreePath": "C:/Users/Administrator/orca/workspaces/windsurf-dao/_probe-633-delete-me",
+        "branch": "refs/heads/thoerwink8/_probe-633-delete-me",
+        "tabId": "cf84b0fc-0619-4ba1-bbb9-d6f21d1c342e",
+        "leafId": "fd7d1f50-908d-42f5-9a2c-1cf95f9a3932",
+        "title": null,
+        "connected": true,
+        "writable": true,
+        "lastOutputAt": 1787032417767,
+        "preview": "PS C:\\Users\\Administrator\\orca\\workspaces\\windsurf-dao\\_probe-633-delete-me>"
+      }
+    ],
+    "topologyRevisions": {
+      "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/_probe-633-delete-me": 4968
+    },
+    "totalCount": 1,
+    "truncated": false
+  },
+  "_meta": {
+    "runtimeId": "5844bcec-6f63-446c-ad2c-afc814f39192"
+  }
+}
