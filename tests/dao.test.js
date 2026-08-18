@@ -1640,7 +1640,8 @@ describe('dao', () => {
     await t.test('#601 退役走租约身份不是 coordinator', () => {
       assert.ok(/resolveStationCloseTarget/.test(retireFn)
         && /previewHandlesForRun/.test(retireFn)
-        && /isProcessAlive/.test(retireFn)
+        && !/isProcessAlive/.test(retireFn)
+        && !/pidAlive/.test(retireFn)
         && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
     });
     const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
