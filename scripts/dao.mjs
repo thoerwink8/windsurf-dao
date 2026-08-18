@@ -974,13 +974,13 @@ function cmdDispatchBatch(args) {
       return { ok: true, id, path: wtPath };
     },
     startTerminal({ worktree, title }) {
-      const term = orca(argsTerminalCreate({
-        worktree,
+      const term = launchAgentInWorktree({
+        worktreeId: worktree,
         title,
         command: launch.command,
-      }));
-      if (!term.ok) return { ok: false, error: errText(term.error) };
-      const handle = extractHandleFromCreate(term.json);
+      });
+      if (!term.ok) return { ok: false, error: term.error };
+      const handle = term.handle;
       if (!handle) return { ok: false, error: '工人终端没返回 handle' };
       const verify = waitAndVerify({
         readOnce: () => readOnceHandle(handle),

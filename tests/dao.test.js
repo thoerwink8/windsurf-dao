@@ -2082,12 +2082,12 @@ describe('dao', () => {
     });
     const src = fs.readFileSync(CLI, 'utf8');
     const calls = src.match(/launchAgentInWorktree\(/g) || [];
-    await t.test('start / dispatch / 审官起动都走 launchAgentInWorktree', () => {
-      assert.ok(calls.length >= 5, 'start / dispatch / 审官起动都走 launchAgentInWorktree  →  ' + calls.length);
+    await t.test('start / dispatch / batch / 审官起动都走 launchAgentInWorktree', () => {
+      assert.ok(calls.length >= 6, 'start / dispatch / batch / 审官起动都走 launchAgentInWorktree  →  ' + calls.length);
     });
-    await t.test('dao.mjs 不再在四条起动路径里直接 terminal create', () => {
+    await t.test('dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create', () => {
       const createHits = [...src.matchAll(/argsTerminalCreate\(/g)];
-      assert.ok(createHits.length === 1, 'dao.mjs 不再在四条起动路径里直接 terminal create  →  ' + createHits.length);
+      assert.ok(createHits.length === 1, 'dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create  →  ' + createHits.length);
     });
 
     const promptFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: false, sendAccepted: false });
