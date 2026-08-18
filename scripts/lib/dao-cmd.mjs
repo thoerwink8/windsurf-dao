@@ -1299,6 +1299,14 @@ export function parseGhPullFiles(json) {
 /** 注入没生效的现场指纹（#543 / #524）：任务书折在输入框里从未提交。 */
 export const PASTED_CONTENT_RE = /\[Pasted Content \d+ chars?\]/i;
 
+/** #619：未提交粘贴与「超时/环境」必须分开。 */
+export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content）——worker-start 把 preamble 灌进输入框后没有提交';
+
+export function pastedContentMatch(text) {
+  const m = String(text ?? '').match(PASTED_CONTENT_RE);
+  return m ? m[0] : null;
+}
+
 /** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
  * 命中这些屏面文本 = TUI 还在加载（MCP servers 0/5 之类），任务书还没渲染——
  * 绝不判绿，稳定轮数归零，继续等 proof/marker。 */
@@ -1332,20 +1340,93 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * 开工验证（#602：保留「token/cursor / transcript 在涨才算开工」，删掉折叠抢救）。
+ * #619：worker-start 的第二拍。
+ * Orca 会把 ~4600 字 preamble 和我们的指针一起灌进 TUI，Codex/Grok 收成
+ * [Pasted Content] 且不提交。看见未提交粘贴、且尚未开工时，补一记 --enter。
+ * 这是注入协议，不是 120s 超时后的抢救；只提交一次。
+ */
+export function completePendingPaste({
+  readOnce, sendEnter, proofOnce, dispatchId,
+  settleMs = 200, sleep = sleepSync,
+} = {}) {
+  if (typeof readOnce !== 'function') {
+    throw new Error('completePendingPaste 要 readOnce');
+  }
+  if (dispatchId && typeof proofOnce === 'function') {
+    const proof = proofOnce(dispatchId);
+    if (proof && proof.ok && proof.proven) {
+      return { ok: true, state: 'already-started', submittedPaste: false, proof };
+    }
+  }
+  const read = readOnce();
+  if (read && read.error) {
+    return {
+      ok: false,
+      state: 'unread',
+      submittedPaste: false,
+      reason: '没读成',
+      error: read.error,
+      unscanned: true,
+    };
+  }
+  const text = extractTerminalText(read);
+  const evidence = pastedContentMatch(text);
+  if (!evidence) {
+    return { ok: true, state: 'no-paste', submittedPaste: false, text };
+  }
+  if (typeof sendEnter !== 'function') {
+    return {
+      ok: false,
+      state: 'unsubmitted-paste',
+      submittedPaste: false,
+      reason: UNSUBMITTED_PASTE_REASON,
+      evidence,
+      text,
+    };
+  }
+  const send = sendEnter();
+  if (send && send.ok === false) {
+    return {
+      ok: false,
+      state: 'submit-failed',
+      submittedPaste: false,
+      reason: `粘贴提交失败: ${send.error || '未知'}`,
+      evidence,
+      text,
+      send,
+    };
+  }
+  if (settleMs > 0 && typeof sleep === 'function') sleep(settleMs);
+  return {
+    ok: true,
+    state: 'submitted-paste',
+    submittedPaste: true,
+    evidence,
+    text,
+    send,
+  };
+}
+
+/**
+ * 开工验证（#602 保留 transcript/屏面稳定；#619 订正 Pasted Content 定性）。
  *
- * 不再轮询 Pasted Content、不再自动补回车。折叠应由注入长度硬上限拦在发之前。
- * 若屏上仍出现 Pasted Content：当场失败（硬上限漏了），不许救活。
+ * #602 以为短指针后折叠物理上不可能，把屏上 Pasted Content 当成显示形态、不提交也不失败。
+ * 实测 Orca preamble 单独就超阈值，未提交粘贴会让 proof 永远不来，再等就是 120s 假超时。
  *
  * 仍轮询的只有开工证明本身：
  *   1. worker-read 官方 transcript（source≠terminal）→ started；
  *   2. TUI 加载期（Starting MCP servers 等）不算绿；
  *   3. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
+ *   4. 未提交粘贴且还没做过第二拍 → 立刻报「注入未提交」，不等超时。
+ *   5. 已经第二拍提交过：粘贴行可能还在，继续等 proof；超时仍带粘贴则报「注入未提交」。
  */
 export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
   stableRoundsNeeded = 3,
+  pasteSubmitted = false,
+  sendEnter,
+  settleMs = 200,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1356,6 +1437,7 @@ export function verifyStartedPolling({
   let lastText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
+  let submitted = !!pasteSubmitted;
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
@@ -1366,6 +1448,7 @@ export function verifyStartedPolling({
           proof, reads,
           elapsedMs: Date.now() - t0,
           text: lastText,
+          pasteSubmitted: submitted,
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
@@ -1378,6 +1461,38 @@ export function verifyStartedPolling({
     if (read && read.error) unscanned = { reason: '没读成', error: read.error };
     const text = read && !read.error ? extractTerminalText(read) : '';
     lastText = text;
+    const leftover = pastedContentMatch(text);
+    if (leftover && !submitted && typeof sendEnter === 'function') {
+      const send = sendEnter();
+      submitted = true;
+      if (send && send.ok === false) {
+        return {
+          ok: false,
+          state: 'submit-failed',
+          reason: `粘贴提交失败: ${send.error || '未知'}`,
+          evidence: leftover,
+          reads,
+          elapsedMs: Date.now() - t0,
+          text,
+          pasteSubmitted: true,
+          send,
+        };
+      }
+      sleep(Math.max(Number(settleMs) || 0, intervalMs));
+      continue;
+    }
+    if (leftover && !submitted) {
+      return {
+        ok: false,
+        state: 'unsubmitted-paste',
+        reason: UNSUBMITTED_PASTE_REASON,
+        evidence: leftover,
+        reads,
+        elapsedMs: Date.now() - t0,
+        text,
+        pasteSubmitted: false,
+      };
+    }
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
       if (TUI_LOADING_RE.test(text)) {
@@ -1393,13 +1508,27 @@ export function verifyStartedPolling({
             reads, stableRounds,
             elapsedMs: Date.now() - t0,
             text,
+            pasteSubmitted: submitted,
           };
         }
       }
     }
-    // #602：屏上 Pasted Content 是 TUI 显示形态，不是开工判据（Orca preamble 也会折）。
-    // 不补回车、不据此失败；只等 worker-read 证明或屏面稳定。
     sleep(intervalMs);
+  }
+  const leftover = pastedContentMatch(lastText);
+  if (leftover) {
+    return {
+      ok: false,
+      state: 'unsubmitted-paste',
+      reason: UNSUBMITTED_PASTE_REASON,
+      evidence: leftover,
+      unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
+      reads,
+      stableRounds,
+      elapsedMs: Date.now() - t0,
+      text: lastText,
+      pasteSubmitted: submitted,
+    };
   }
   return {
     ok: false,
@@ -1410,6 +1539,7 @@ export function verifyStartedPolling({
     stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
+    pasteSubmitted: submitted,
   };
 }
 
@@ -2880,14 +3010,20 @@ export function renderDispatchTemplate(name, vars = {}) {
   return out;
 }
 
-// ── 注入闸（#602）：主约束 = 一行指针。换行按 agent 转码（grok 转 ESC+CR），不禁换行。
+// ── 注入闸（#602 / #619）：主约束 = 一行指针。换行按 agent 转码（grok 转 ESC+CR），不禁换行。
 // 唯一硬闸 = UTF-8 字节 ≤500。模板文件末尾允许一个 EOF 换行，渲染后剥掉。
 // 二分实测（2026-08-17，grok 探针 term + 帅 701 截断）：
 //   orca terminal send 单行 200/350/450/550/650/701 均送达（模型回出末尾标记）
 //   帅经 TUI 输入框提交 701 字节：前半进消息、后半留输入框
 // 安全值取 500：低于 TUI 截断点，高于目标 100，send 路径 550 仍绿。
+//
+// #619：本闸只量我们拼的 spec。Orca worker-start 还会再包一层 preamble（实测约 4600 字节），
+// 那一层不在我们手里，量不到。preamble 单独就会触发 Codex/Grok 粘贴块，所以短指针仍要走提交第二拍。
 export const INJECT_MAX_BYTES = 500;
 export const INJECT_OVER_LIMIT_HINT = '正文挪去仓内文件或 GitHub，注入只给指针';
+export const INJECT_GATE_SCOPE = 'our-spec-only';
+export const ORCA_WORKER_PREAMBLE_BYTES_MEASURED = 4600;
+export const INJECT_GATE_NOTE = '本闸只量我们拼的 spec，量不到 Orca worker-start preamble（实测约 4600 字节）。preamble 单独就会触发 Codex/Grok 粘贴块。';
 
 export function injectUtf8Bytes(text) {
   return Buffer.byteLength(String(text ?? ''), 'utf8');
@@ -2907,10 +3043,22 @@ export function assertInjectText(text, { label } = {}) {
       bytes,
       newlines: /[\r\n]/.test(s),
       limit: INJECT_MAX_BYTES,
-      error: `注入 ${bytes} 字节超过上限 ${INJECT_MAX_BYTES}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}`,
+      scope: INJECT_GATE_SCOPE,
+      note: INJECT_GATE_NOTE,
+      preambleBytesMeasured: ORCA_WORKER_PREAMBLE_BYTES_MEASURED,
+      error: `注入 ${bytes} 字节超过上限 ${INJECT_MAX_BYTES}（${label || 'task spec'}）。${INJECT_OVER_LIMIT_HINT}。${INJECT_GATE_NOTE}`,
     };
   }
-  return { ok: true, length: s.length, bytes, newlines: /[\r\n]/.test(s), limit: INJECT_MAX_BYTES };
+  return {
+    ok: true,
+    length: s.length,
+    bytes,
+    newlines: /[\r\n]/.test(s),
+    limit: INJECT_MAX_BYTES,
+    scope: INJECT_GATE_SCOPE,
+    note: INJECT_GATE_NOTE,
+    preambleBytesMeasured: ORCA_WORKER_PREAMBLE_BYTES_MEASURED,
+  };
 }
 
 /** 兼容旧名：与 assertInjectText 相同，唯一硬闸是 UTF-8 字节上限。 */

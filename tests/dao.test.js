@@ -1183,7 +1183,7 @@ describe('dao', () => {
       });
   });
 
-  it('#602：开工验证保留；折叠抢救删掉；注入闸=禁换行', async (t) => {
+  it('#602：开工验证保留；#619 订正粘贴定性', async (t) => {
     const S = await S_LOAD;
     const MARKER = '› [Pasted Content 7383 chars]\n';
     const CLEAN = '短摘要：修命令库\nThinking...\n';
@@ -1207,8 +1207,8 @@ describe('dao', () => {
       proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('Pasted Content 不挡开工证明，也不补回车', () => {
-      assert.ok(b.ok === true && b.state === 'started', 'Pasted Content 不挡开工证明，也不补回车  →  ' + JSON.stringify(b));
+    await t.test('已有开工证明时 Pasted Content 不挡', () => {
+      assert.ok(b.ok === true && b.state === 'started', '已有开工证明时 Pasted Content 不挡  →  ' + JSON.stringify(b));
     });
 
     const d = S.verifyStartedPolling({
@@ -1272,8 +1272,8 @@ describe('dao', () => {
     await t.test('dao.mjs 不再调用 verifyInjectionPolling', () => {
       assert.ok(!/verifyInjectionPolling\(/.test(daoSrcPoll), 'dao.mjs 不再调用 verifyInjectionPolling');
     });
-    await t.test('dao.mjs 工人/审官/attach 走 verifyStartedPolling', () => {
-      assert.ok((daoSrcPoll.match(/verifyStartedPolling\(\{/g) || []).length >= 3, 'dao.mjs 工人/审官/attach 走 verifyStartedPolling');
+    await t.test('dao.mjs 工人/审官/attach/续派走 finishWorkerInject', () => {
+      assert.ok((daoSrcPoll.match(/finishWorkerInject\(\{/g) || []).length >= 4, 'dao.mjs 工人/审官/attach/续派走 finishWorkerInject  →  ' + (daoSrcPoll.match(/finishWorkerInject\(\{/g) || []).length);
     });
 
     const okLine = S.assertInjectText('读 host/skills/dispatch/templates/soldier-book.md spec=修 X #602', { label: '士兵注入' });
@@ -1287,6 +1287,9 @@ describe('dao', () => {
     const tooLong = S.assertInjectText('x'.repeat(S.INJECT_MAX_BYTES + 1), { label: '士兵注入' });
     await t.test('次闸：超长单行仍拒', () => {
       assert.ok(tooLong.ok === false && /上限/.test(tooLong.error), '次闸：超长单行仍拒  →  ' + JSON.stringify(tooLong));
+    });
+    await t.test('#619 闸明说只量我们那一半', () => {
+      assert.ok(okLine.scope === 'our-spec-only' && /preamble/.test(okLine.note) && tooLong.scope === 'our-spec-only', '#619 闸明说只量我们那一半  →  ' + JSON.stringify({ ok: okLine, tooLong }));
     });
 
     await t.test('grok：\n → ESC+CR', () => {
@@ -1304,6 +1307,155 @@ describe('dao', () => {
     const sent = S.argsTerminalSend({ terminal: 't', text: '一\n二', agent: 'grok' });
     await t.test('argsTerminalSend(grok) 载荷已转码且不含裸 LF', () => {
       assert.ok(sent.includes('一\x1b\r二') && !sent.includes('一\n二'), 'argsTerminalSend(grok) 载荷已转码且不含裸 LF');
+    });
+  });
+
+  it('#619：粘贴提交是注入协议第二拍，不是超时抢救', async (t) => {
+    const S = await S_LOAD;
+    const MARKER = '› [Pasted Content 4700 chars]\n';
+    const CLEAN = '短摘要：审 PR #619\nThinking...\n';
+    const noopSleep = () => {};
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+
+    let enters = 0;
+    const submitted = S.completePendingPaste({
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      sendEnter: () => { enters += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_paste',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('看见 Pasted Content 就提交一记 enter', () => {
+      assert.ok(submitted.ok === true && submitted.state === 'submitted-paste' && submitted.submittedPaste === true && enters === 1, '看见 Pasted Content 就提交一记 enter  →  ' + JSON.stringify(submitted));
+    });
+
+    const noEnter = S.completePendingPaste({
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      proofOnce: unproven,
+      dispatchId: 'ctx_noenter',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('故意不补 enter → 注入未提交（必须红）', () => {
+      assert.ok(noEnter.ok === false && noEnter.state === 'unsubmitted-paste' && /注入未提交/.test(noEnter.reason) && /Pasted Content/.test(noEnter.evidence), '故意不补 enter → 注入未提交（必须红）  →  ' + JSON.stringify(noEnter));
+    });
+
+    let skipped = 0;
+    const clean = S.completePendingPaste({
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [CLEAN] } } }),
+      sendEnter: () => { skipped += 1; return { ok: true }; },
+      proofOnce: unproven,
+      dispatchId: 'ctx_clean',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('屏上无粘贴块 → 不补回车', () => {
+      assert.ok(clean.ok === true && clean.state === 'no-paste' && skipped === 0, '屏上无粘贴块 → 不补回车  →  ' + JSON.stringify(clean));
+    });
+
+    let afterProof = 0;
+    const proven = S.completePendingPaste({
+      readOnce: () => { throw new Error('已开工不该读屏'); },
+      sendEnter: () => { afterProof += 1; return { ok: true }; },
+      proofOnce: () => ({ ok: true, proven: true, source: 'transcript' }),
+      dispatchId: 'ctx_proven',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('已经开工 → 不补回车', () => {
+      assert.ok(proven.ok === true && proven.state === 'already-started' && afterProof === 0, '已经开工 → 不补回车  →  ' + JSON.stringify(proven));
+    });
+
+    const sendFail = S.completePendingPaste({
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      sendEnter: () => ({ ok: false, error: 'pty_gone' }),
+      proofOnce: unproven,
+      dispatchId: 'ctx_fail',
+      settleMs: 0,
+      sleep: noopSleep,
+    });
+    await t.test('提交失败 → submit-failed，不许装成功', () => {
+      assert.ok(sendFail.ok === false && sendFail.state === 'submit-failed' && /pty_gone/.test(sendFail.reason), '提交失败 → submit-failed，不许装成功  →  ' + JSON.stringify(sendFail));
+    });
+
+    const fastFail = S.verifyStartedPolling({
+      dispatchId: 'ctx_fast',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      proofOnce: unproven,
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      pasteSubmitted: false,
+    });
+    await t.test('未提交粘贴立刻报注入未提交，不等 120s 超时', () => {
+      assert.ok(fastFail.ok === false && fastFail.state === 'unsubmitted-paste' && /注入未提交/.test(fastFail.reason) && !/超时/.test(fastFail.reason) && typeof fastFail.text === 'string' && /Pasted Content/.test(fastFail.text), '未提交粘贴立刻报注入未提交，不等 120s 超时  →  ' + JSON.stringify(fastFail));
+    });
+
+    let proofReads = 0;
+    const afterSubmit = S.verifyStartedPolling({
+      dispatchId: 'ctx_after',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      proofOnce: () => {
+        proofReads += 1;
+        return proofReads >= 2
+          ? { ok: true, proven: true, source: 'transcript' }
+          : unproven();
+      },
+      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      pasteSubmitted: true,
+    });
+    await t.test('第二拍已提交后，粘贴行还在也不挡开工证明', () => {
+      assert.ok(afterSubmit.ok === true && afterSubmit.state === 'started', '第二拍已提交后，粘贴行还在也不挡开工证明  →  ' + JSON.stringify(afterSubmit));
+    });
+
+    const stillStuck = S.verifyStartedPolling({
+      dispatchId: 'ctx_stuck',
+      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      proofOnce: unproven,
+      timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '审官',
+      pasteSubmitted: true,
+    });
+    await t.test('提交过仍停在粘贴块 → 超时也报注入未提交，不是环境超时', () => {
+      assert.ok(stillStuck.ok === false && stillStuck.state === 'unsubmitted-paste' && /注入未提交/.test(stillStuck.reason) && stillStuck.text, '提交过仍停在粘贴块 → 超时也报注入未提交，不是环境超时  →  ' + JSON.stringify(stillStuck));
+    });
+
+    let lateEnters = 0;
+    let lateReads = 0;
+    const raced = S.verifyStartedPolling({
+      dispatchId: 'ctx_race',
+      readOnce: () => {
+        lateReads += 1;
+        const tail = lateReads === 1 ? [CLEAN] : [MARKER];
+        return { ok: true, result: { terminal: { tail } } };
+      },
+      proofOnce: () => (lateEnters >= 1
+        ? { ok: true, proven: true, source: 'transcript' }
+        : unproven()),
+      sendEnter: () => { lateEnters += 1; return { ok: true }; },
+      timeoutMs: 5000, intervalMs: 5, settleMs: 0, sleep: noopSleep, label: '审官',
+    });
+    await t.test('第一拍读不到粘贴块、第二拍才出现 → 仍提交一次并开工', () => {
+      assert.ok(raced.ok === true && raced.state === 'started' && lateEnters === 1 && lateReads >= 2, '第一拍读不到粘贴块、第二拍才出现 → 仍提交一次并开工  →  ' + JSON.stringify({ raced, lateEnters, lateReads }));
+    });
+
+    const handshake = [];
+    for (let i = 0; i < 10; i++) {
+      let n = 0;
+      handshake.push(S.completePendingPaste({
+        readOnce: () => ({ ok: true, result: { terminal: { tail: [`[Pasted Content ${4000 + i} chars]`] } } }),
+        sendEnter: () => { n += 1; return { ok: true, n }; },
+        proofOnce: unproven,
+        dispatchId: `ctx_h${i}`,
+        settleMs: 0,
+        sleep: noopSleep,
+      }));
+    }
+    await t.test('连续 10 次粘贴握手：每次都提交且只提交一次', () => {
+      assert.ok(handshake.length === 10 && handshake.every(r => r.ok === true && r.submittedPaste === true && r.send && r.send.n === 1), '连续 10 次粘贴握手：每次都提交且只提交一次  →  ' + JSON.stringify(handshake.map(r => r.state)));
+    });
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    await t.test('回滚前先存屏（failCreated 调 snapshotHandleScreen）', () => {
+      assert.ok(/function failCreated[\s\S]*snapshotHandleScreen/.test(daoSrc) && /function snapshotHandleScreen/.test(daoSrc), '回滚前先存屏（failCreated 调 snapshotHandleScreen）');
     });
   });
   it('R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚', async (t) => {
@@ -1412,8 +1564,8 @@ describe('dao', () => {
     await t.test('#546 审官卡由 reviewer-create 建完自证（dispatch 不再建）', () => {
       assert.ok(/function cmdReviewerCreate[\s\S]*verifyReviewerTree/.test(daoSrc) && /function cmdDispatch[\s\S]*reviewerDeferred: true/.test(daoSrc), '#546 审官卡由 reviewer-create 建完自证（dispatch 不再建）');
     });
-    await t.test('#546 注入后验开工走 verifyInjection', () => {
-      assert.ok(/verifyInjection/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc), '#546 注入后验开工走 verifyInjection');
+    await t.test('#546/#619 注入后验开工走 finishWorkerInject', () => {
+      assert.ok(/finishWorkerInject/.test(daoSrc) && /sendEnter:/.test(daoSrc) && !/DAO_PROBE_/.test(daoSrc), '#546/#619 注入后验开工走 finishWorkerInject');
     });
     await t.test('R1 dao.mjs 不再裸调 worktree show', () => {
       assert.ok(!/orca\(\['worktree', 'show'/.test(daoSrc), 'R1 dao.mjs 不再裸调 worktree show');
