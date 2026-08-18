@@ -43,6 +43,8 @@ export function parseLogLine(line) {
  * 从一批日志行里收集「新的、可响门铃的」消息，按 id 去重。
  * 返回新消息数组；调用方把返回的 id 并入 seenIds（本函数也会就地并入）。
  * 幂等：同一行文本重复喂，第二次不再返回。
+ * 注意：seenIds 只去重「已经解析过」——是否已成功响铃由调用方的
+ * pendingIds（待响集合）独立记账（红 1 修法：未响铃的消息保持待响）。
  */
 export function collectNewMessages(lines, seenIds) {
   const fresh = [];
@@ -95,22 +97,29 @@ export function listInboxLogs(dir) {
 
 /**
  * 轮询一轮：读每个日志从上次偏移起的新行 → 收集新消息 → 决策是否响门铃。
- * 返回 { rang, newCount }（测试可直接调用）。
+ * 返回 { rang, newCount, pending }（测试可直接调用）。
  * ctx 需要：isIdle() / ui.getEditorText()。sendUserMessage 由调用方注入。
- * prime=true 时只建游标 + 进去重集、不响（会话启动首轮语义：存量消息不叫醒，
- * 只把它们的 id 并入 seenIds，之后的新信才会响）。
+ *
+ * 状态三件套（红 1 / 红 2 修法）：
+ *   - seenIds：只去重「解析过」——同一 id 重读（文件截断/轮转）不再重复处理。
+ *   - pendingIds：已解析但**未成功响铃**的消息 id。打字/忙/冷却时来信进这里，
+ *     条件满足后（空闲 + 框空 + 冷却外）响一次并清空。
+ *   - primeFiles：每个日志文件首次见到时，存量全部并入 seenIds（不待响、不响），
+ *     之后的追加行才盯——日志从无到有时（新机/归档清 `_flow`/新 Run 首信）
+ *     不是永久失聪，只是这一批存量不当新信。
  */
 export function pollOnce({
   dir,
   offsets,
   seenIds,
+  pendingIds,
+  primeFiles,
   lastRingAt,
   now,
   cooldownMs,
   ctx,
   sendUserMessage,
   text = DOORBELL_TEXT,
-  prime = false,
 }) {
   const files = listInboxLogs(dir);
   let newCount = 0;
@@ -136,11 +145,18 @@ export function pollOnce({
       continue;
     }
     const lines = raw.split(/\r?\n/);
+    if (!primeFiles.has(file)) {
+      // 首次见到该日志：存量并入 seenIds（不待响、不响），之后的新行才盯。
+      collectNewMessages(lines, seenIds);
+      offsets.set(file, size);
+      primeFiles.add(file);
+      continue;
+    }
     const fresh = collectNewMessages(lines, seenIds);
     newCount += fresh.length;
+    for (const m of fresh) pendingIds.add(m.id);
     offsets.set(file, size);
   }
-  if (prime) return { rang: false, newCount };
   const idle = typeof ctx?.isIdle === 'function' ? ctx.isIdle() : false;
   let editorText = '';
   try {
@@ -149,19 +165,20 @@ export function pollOnce({
     editorText = '';
   }
   const ring = shouldRing({
-    hasFresh: newCount > 0,
+    hasFresh: pendingIds.size > 0,
     idle,
     editorText,
     now,
     lastRingAt,
     cooldownMs,
   });
-  if (!ring) return { rang: false, newCount };
+  if (!ring) return { rang: false, newCount, pending: pendingIds.size };
   try {
     sendUserMessage(text);
   } catch (e) {
     console.error(`[doorbell] 门铃发送失败: ${e?.message || e}`);
-    return { rang: false, newCount };
+    return { rang: false, newCount, pending: pendingIds.size };
   }
-  return { rang: true, newCount };
+  pendingIds.clear();
+  return { rang: true, newCount, pending: 0 };
 }

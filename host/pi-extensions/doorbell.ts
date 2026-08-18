@@ -26,7 +26,6 @@
 import {
   DOORBELL_TEXT,
   logDirFor,
-  listInboxLogs,
   pollOnce,
 } from './doorbell-core.mjs';
 
@@ -42,6 +41,8 @@ export default function (pi) {
   let timer = null;
   let offsets = new Map();
   let seenIds = new Set();
+  let pendingIds = new Set();
+  let primeFiles = new Set();
   let lastRingAt = 0;
 
   pi.on('session_start', (_event, ctx) => {
@@ -49,8 +50,6 @@ export default function (pi) {
     if (ctx.mode !== 'tui') return;
     if (!process.env.ORCA_PANE_KEY) return;
     const dir = logDirFor(ctx.cwd);
-    // 当前 cwd 下没有 inbox 日志（比如普通工人树）→ 不是协调者会话，不动作。
-    if (listInboxLogs(dir).length === 0) return;
     // /reload 会再触发 session_start：先清旧定时器，避免叠两个轮询。
     if (timer) {
       clearInterval(timer);
@@ -60,11 +59,17 @@ export default function (pi) {
     const cooldownMs = envNum('PI_DOORBELL_COOLDOWN_MS', DEFAULT_COOLDOWN_MS);
     const text = process.env.PI_DOORBELL_TEXT || DOORBELL_TEXT;
 
+    // 红 2 修法：不再用「启动瞬间有没有 inbox-*.log」当永久开关——
+    // TUI + ORCA_PANE_KEY 就挂轮询；日志从无到有时（新机 / 归档清 `_flow` /
+    // 新 Run 首信才建日志）由 pollOnce 按文件首次见到做 prime，不会永久失聪。
+    // 工人树里没有 inbox 日志，只是每轮对空目录 readdir，不会误响。
     const tick = () => {
       const r = pollOnce({
         dir,
         offsets,
         seenIds,
+        pendingIds,
+        primeFiles,
         lastRingAt,
         now: Date.now(),
         cooldownMs,
@@ -75,19 +80,7 @@ export default function (pi) {
       if (r.rang) lastRingAt = Date.now();
     };
 
-    // 首轮先 prime：只建游标 + 进去重集，不响（存量消息不叫醒）。
-    pollOnce({
-      dir,
-      offsets,
-      seenIds,
-      lastRingAt,
-      now: Date.now(),
-      cooldownMs,
-      ctx,
-      sendUserMessage: () => {},
-      text,
-      prime: true,
-    });
+    tick();
     timer = setInterval(tick, pollMs);
     if (typeof timer.unref === 'function') timer.unref();
   });
@@ -99,6 +92,8 @@ export default function (pi) {
     }
     offsets = new Map();
     seenIds = new Set();
+    pendingIds = new Set();
+    primeFiles = new Set();
     lastRingAt = 0;
   });
 }
