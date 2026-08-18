@@ -43,13 +43,13 @@ description: 用户发现 AI 承认了错误但当轮没处置时，调用本 sk
 **派优先单**
 
 1. 先过开单三问（`Claude.md`）：说得出做到什么算完、这批会做、不是 memory/docs。过不了就改问「排期」或「不做」，不要硬开。
-2. `gh issue create`。正文写清目标、做到什么算完、grill-ai 那三句（根因 / 该不该 / 删哪层）。用户刚拍了「派」，消歧记录写「用户选派优先单，无未决岔路」，再打 `已消歧`（`dispatch --issue` 读不到这个 label 会拒派）。
+2. `node scripts/gh-as.mjs marshal -- issue create`（帅写 issue 走 marshal，见 dispatch skill「帅操作 issue 的身份约定」）。正文写清目标、做到什么算完、grill-ai 那三句（根因 / 该不该 / 删哪层）。用户刚拍了「派」，消歧记录写「用户选派优先单，无未决岔路」，再 `node scripts/gh-as.mjs marshal -- issue edit <N> --add-label "已消歧"`（`dispatch --issue` 读不到这个 label 会拒派）。
 3. `node scripts/dao.mjs dispatch --issue <N> --name "<动宾短语>" --spec "短摘要：<目标+职责类别>" --model <id> --reviewer <id>`。旗标以 `node scripts/dao.mjs --help` 为准；选谁读 `docs/model-routing.toml` / 点将台，不要默默定。
 4. 派工细节见 `host/skills/dispatch/SKILL.md`，本页不复制。
 
 **排期处理**
 
-只 `gh issue create`（同样要过开单三问）。不 dispatch、不假装已消歧。
+只 `node scripts/gh-as.mjs marshal -- issue create`（同样要过开单三问）。不 dispatch、不假装已消歧。
 
 **记一笔不做**
 

@@ -19,6 +19,22 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
 
+## 帅操作 issue 的身份约定（#627）
+
+PR 侧三个身份已经齐（`dao-worker[bot]` 写码/开 PR、`dao-reviewer[bot]` 批准、`dao-marshal[bot]` 合并）。帅对 issue 的**写**动作（开单 / 评论 / 关单 / 打 label）同样走 marshal，不用裸 `gh issue`。两位帅共用 `thoerwink8` token，裸调用在 GitHub 历史上分不清是用户本人还是哪位帅。权限表见 issue #573：marshal 已有 `issues:write`，不用改权限。
+
+```bash
+node scripts/gh-as.mjs marshal --whoami
+node scripts/gh-as.mjs marshal -- issue create --title "..." --body-file <文件>
+node scripts/gh-as.mjs marshal -- issue comment <N> --body-file <文件>
+node scripts/gh-as.mjs marshal -- issue close <N> --comment "..."
+node scripts/gh-as.mjs marshal -- issue edit <N> --add-label "已消歧"
+```
+
+Windows 上多行 `--body` / `--comment` 会被拆，走 `--body-file`（#573 坑 1）。缺凭据报「这台机器没装」，不许退回本人 `gh` 装成做完。
+
+只读（`issue view` / `issue list`）可以继续裸 `gh`——不落作者。仓内脚本里剩下的裸调用见 #627 落点 PR 清单，全量替换另开（#573「先收敛再铺开」）。
+
 ## 主树常驻 master
 
 主树（帅日常所在的那棵 worktree，见「拓扑」master 卡）只住 master，只做 master 态的活。帅在主树的 git 写操作（memory 例外等）前**先验分支，不是 master 就停手**——#518：主树被切到在途分支后，memory commit 连做两次落地，第三次 commit 落进另一位帅的在途分支、还推成了新远端分支，全程无一步报警（「看起来成功、实际落错地方」）。**在途分支的活一律在自己（或任务）的 worktree 做**，不在主树切分支、不 reset、不强推——主树上可能有另一位帅的未提交改动（#518 实测当时工作区 5 个文件未提交；「同一个 worktree 同时只让一个执行者改文件」同样管两位主帅共用主树）。
