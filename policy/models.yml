@@ -7,7 +7,7 @@
 # 加模型：先改这里，再（若涉及路由/禁令）同步 model-routing.toml。
 # ============================================================================
 
-updated: "2026-08-18"
+updated: "2026-08-19"
 currency: CNY
 fx_usd_per_cny: null      # 待补：汇率拍板后填，并给 fx_verified_at 打时间戳
 fx_verified_at: null
@@ -99,6 +99,28 @@ models:
 
   # opencode Go 新增模型（2026-08-16 接入）。ds-flash/pro 不在这里另立条目——
   # 它们和直连是同一个模型，只是换通道，见文件开头那两条。
+  - id: glm-5.2
+    provider: cursor
+    cli: cursor-agent
+    version: glm-5.2-high
+    context_window: null
+    max_output: null
+    roles: [写码, 判断, 审查]
+    status: 试用
+    retired: false
+    trial_since: "2026-08-19"
+    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用，审官与后续委派凡本会走 GPT 的改走 cursor/glm-5.2-high；roles 含审查顶审官位
+    decided: "2026-08-19"
+    pricing:
+      verified_at: "2026-08-19"
+      subscription:
+        kind: 畅用包月
+        marginal_cost: 0
+        monthly_fee: null
+        included_tokens: null
+        fair_share_jobs: null
+      metered: null
+
   - id: glm-5.3
     provider: opencode-go
     cli: pi --provider opencode-go
@@ -130,7 +152,7 @@ models:
     roles: [审查, 写码, 判断]
     status: 正式
     retired: false
-    why: 审官次选：GPT 优先、Claude(Opus) 次之；UI 类 GPT 禁入时顶位（model-routing.toml）
+    why: 审官次选：GLM-5.2 优先（#648）、Claude(Opus) 次之；GPT 暂时不可用（model-routing.toml）
     decided: "2026-08-14"
     pricing:
       verified_at: null          # 待补

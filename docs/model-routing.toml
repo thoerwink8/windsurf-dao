@@ -7,7 +7,7 @@
 # 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
 # ============================================================================
 
-updated = "2026-08-18"
+updated = "2026-08-19"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
@@ -213,7 +213,7 @@ provider = "claude"
 cli_model = "opus"
 roles = ["审查", "写码", "判断"]
 status = "正式"
-why = "审官次选：GPT 优先、Claude(Opus) 次之；UI 类活 GPT 禁入时顶位。启动命令见 [providers.claude]"
+why = "审官次选：GLM-5.2 优先（#648）、Claude(Opus) 次之；GPT 暂时不可用。启动命令见 [providers.claude]"
 decided = "2026-08-14"
 
 [[models]]
@@ -244,6 +244,16 @@ status = "试用"
 trial_since = "2026-08-16"
 why = "GLM 系主打编码，1M 上下文 / 131K 输出；先进写码+判断候选池，按返工率实测校准再谈定位（用户拍板 2026-08-16）"
 decided = "2026-08-16"
+
+[[models]]
+id = "glm-5.2"
+provider = "cursor"
+cli_model = "glm-5.2-high"
+roles = ["写码", "判断", "审查"]
+status = "试用"
+trial_since = "2026-08-19"
+why = "用户 2026-08-19 拍板（#648）：GPT 暂时不可用，审官与后续委派凡本会走 GPT 的改走 cursor/glm-5.2-high；roles 含审查顶审官位"
+decided = "2026-08-19"
 
 [[models]]
 id = "kimi-k3"
@@ -327,8 +337,8 @@ constraint = "受 gpt 的 UI ban 优先级约束"
 
 [[rules]]
 rule = "审官选型序"
-why = "帅位注意力最稀缺，审官优先用异厂商的 GPT（写码同模型易放水）；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
-decided = "2026-08-14"
+why = "帅位注意力最稀缺，审官优先用异厂商模型（写码同模型易放水）。#648（2026-08-19 拍板）：GPT 暂时不可用，glm-5.2 顶位（cursor/glm-5.2-high），GPT 恢复另拍；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
+decided = "2026-08-19"
 constraint = "受 bans[gpt UI 类].precedence 约束"
 
 # ============================================================================

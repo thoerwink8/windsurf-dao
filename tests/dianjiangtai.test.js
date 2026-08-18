@@ -456,8 +456,8 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 9 个现役模型', () => {
-      assert.ok(models.length === 9, 'models.yml 解析出 9 个现役模型  →  ' + String(models.length));
+    await t.test('models.yml 解析出 10 个现役模型', () => {
+      assert.ok(models.length === 10, 'models.yml 解析出 10 个现役模型（#648 加 glm-5.2）  →  ' + String(models.length));
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
@@ -730,19 +730,19 @@ describe('dianjiangtai', () => {
     fs.rmSync(bfDir, { recursive: true, force: true });
   });
 
-  it('#581 审读 A 位锁 GPT', async (t) => {
+  it('#648 审读 A 位顶 GLM-5.2（GPT 暂不可用）', async (t) => {
     const { pinReviewerSlotA } = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
-    await t.test('pinReviewerSlotA 在门闩集合有 GPT 时锁 GPT', () => {
+    await t.test('pinReviewerSlotA 在门闩集合有 GLM-5.2 时顶 GLM-5.2', () => {
       assert.ok(pinReviewerSlotA({
-        models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
-        passerIds: ["grok-4.6", "claude-opus", "gpt-5.6-sol"],
-      }).model === "gpt-5.6-sol", 'pinReviewerSlotA 在门闩集合有 GPT 时锁 GPT');
+        models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "glm-5.2", provider: "cursor" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
+        passerIds: ["grok-4.6", "claude-opus", "glm-5.2", "gpt-5.6-sol"],
+      }).model === "glm-5.2", 'pinReviewerSlotA 在门闩集合有 GLM-5.2 时顶 GLM-5.2');
     });
-    await t.test('pinReviewerSlotA GPT 被剔后顺延 Opus', () => {
+    await t.test('pinReviewerSlotA 只剩 GPT → 不顶 GPT（暂不可用）', () => {
       assert.ok(pinReviewerSlotA({
         models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
         passerIds: ["grok-4.6", "claude-opus"],
-      }).model === "claude-opus", 'pinReviewerSlotA GPT 被剔后顺延 Opus');
+      }).model === "claude-opus", 'pinReviewerSlotA 只剩 GPT → 不顶 GPT（暂不可用）');
     });
     const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
     function masterProviderOf(modelId) {
@@ -752,18 +752,24 @@ describe('dianjiangtai', () => {
       const m = models.find(x => x && x.id === modelId);
       return m && m.provider ? m.provider : null;
     }
+    // #648：glm-5.2 本单新增，origin/master 尚无此条目，provider 从本地 policy/models.yml 取（CLI 的 models.yml 兜底同源）。
+    function localProviderOf(modelId) {
+      const models = parseYaml(fs.readFileSync(path.join(REPO, "policy", "models.yml"), "utf8")).models;
+      const m = models.find(x => x && x.id === modelId);
+      return m && m.provider ? m.provider : null;
+    }
     const revDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-rev-"));
     const djReview = cliDj(["--role", "审读", "--ts", "2026-08-15T15:00:00+08:00", "--job-id", "rev-pin", "--events-dir", revDir]);
     await t.test('CLI 审读退出码 0', () => {
       assert.ok(djReview.status === 0, 'CLI 审读退出码 0  →  ' + (djReview.stderr || "").slice(0, 240));
     });
     const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
-    const gptProvider = masterProviderOf("gpt-5.6-sol");
-    await t.test('CLI 审读 A = provider/gpt-5.6-sol', () => {
-      assert.ok(!!gptProvider && djReviewOut.options.A.model === `${gptProvider}/gpt-5.6-sol`, 'CLI 审读 A = provider/gpt-5.6-sol  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    const glm52Provider = localProviderOf("glm-5.2");
+    await t.test('CLI 审读 A = provider/glm-5.2（#648 顶位）', () => {
+      assert.ok(!!glm52Provider && djReviewOut.options.A.model === `${glm52Provider}/glm-5.2`, 'CLI 审读 A = provider/glm-5.2（#648 顶位）  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
-    await t.test('CLI 审读 A reason=reviewer_default_gpt', () => {
-      assert.ok(djReviewOut.options.A.reason === "reviewer_default_gpt", 'CLI 审读 A reason=reviewer_default_gpt  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    await t.test('CLI 审读 A reason=reviewer_order', () => {
+      assert.ok(djReviewOut.options.A.reason === "reviewer_order", 'CLI 审读 A reason=reviewer_order  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
     await t.test('CLI 审读 B 仍走评分（集合长度>1）', () => {
       assert.ok(Array.isArray(djReviewOut.options.B.models) && djReviewOut.options.B.models.length > 1, 'CLI 审读 B 仍走评分（集合长度>1）  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.B));
@@ -773,9 +779,9 @@ describe('dianjiangtai', () => {
       assert.ok(djUi.status === 0, 'CLI 审读+UI 退出码 0  →  ' + (djUi.stderr || "").slice(0, 240));
     });
     const djUiOut = djUi.status === 0 ? JSON.parse(djUi.stdout) : { options: { A: {} } };
-    const opusProvider = masterProviderOf("claude-opus");
-    await t.test('CLI 审读撞 UI ban → A = provider/claude-opus', () => {
-      assert.ok(!!opusProvider && djUiOut.options.A.model === `${opusProvider}/claude-opus`, 'CLI 审读撞 UI ban → A = provider/claude-opus  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
+    // #648：glm-5.2 未套 glm-5.3 的 UI 禁令（用户拿它顶审官）→ UI 审查仍顶 glm-5.2，不再是 Opus。
+    await t.test('CLI 审读撞 UI ban → A = provider/glm-5.2（不套 glm-5.3 禁令）', () => {
+      assert.ok(!!glm52Provider && djUiOut.options.A.model === `${glm52Provider}/glm-5.2`, 'CLI 审读撞 UI ban → A = provider/glm-5.2（不套 glm-5.3 禁令）  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
     });
     await t.test('CLI 审读撞 UI ban reason=reviewer_order', () => {
       assert.ok(djUiOut.options.A.reason === "reviewer_order", 'CLI 审读撞 UI ban reason=reviewer_order  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
