@@ -76,6 +76,31 @@ describe('run-lifecycle', () => {
     await t.test('树已不在盘面 → 完成的 dispatch 不保护', () => {
       assert.ok(gone.retire.map(r => r.id).sort().join(',') === 'run_a,run_b', '树已不在盘面 → 完成的 dispatch 不保护  →  ' + JSON.stringify(gone));
     });
+
+    const liveGone = S.planRunGc({
+      runs,
+      workers: [worker({ run: 'run_a', state: 'ready', status: 'dispatched', tree: 'repo::/wt/a' })],
+      worktrees: [wt({ id: 'master', main: true })],
+    });
+    await t.test('#601 活着但树已不在盘面 → 不保护', () => {
+      assert.ok(liveGone.retire.map(r => r.id).includes('run_a'), '#601 活着但树已不在盘面 → 不保护  →  ' + JSON.stringify(liveGone));
+    });
+    const liveOther = S.planRunGc({
+      runs,
+      workers: [worker({ run: 'run_a', state: 'ready', status: 'dispatched', tree: 'repo::/wt/other' })],
+      worktrees: [wt({ id: 'repo::/wt/other' })],
+    });
+    await t.test('#601 其它在途树仍占用 → 保护', () => {
+      assert.ok(liveOther.keep.map(r => r.id).includes('run_a') && !liveOther.retire.map(r => r.id).includes('run_a'), '#601 其它在途树仍占用 → 保护  →  ' + JSON.stringify(liveOther));
+    });
+    const liveNoTree = S.planRunGc({
+      runs,
+      workers: [worker({ run: 'run_a', state: 'ready', status: 'dispatched' })],
+      worktrees: [wt({ id: 'master', main: true })],
+    });
+    await t.test('#601 活着但没有 worktreeId → 保守保护', () => {
+      assert.ok(liveNoTree.keep.map(r => r.id).includes('run_a'), '#601 活着但没有 worktreeId → 保守保护');
+    });
   });
 
   it('没查成 ≠ 查到 0', async (t) => {
@@ -113,6 +138,17 @@ describe('run-lifecycle', () => {
     const bad = S.resolveRunsForWorktrees({ workers: { result: {} }, treeIds: ['x'] });
     await t.test('结构不认识 → unscanned', () => {
       assert.ok(bad.unscanned === true, '结构不认识 → unscanned');
+    });
+    const pathWorkers = [
+      worker({ run: 'run_path', tree: '1770::C:/Users/Administrator/orca/workspaces/windsurf-dao/a' }),
+    ];
+    const hitPath = S.resolveRunsForWorktrees({
+      workers: pathWorkers,
+      treeIds: ['other-shape'],
+      treePaths: ['C:/Users/Administrator/orca/workspaces/windsurf-dao/a'],
+    });
+    await t.test('#601 id 对不上时按 path 命中', () => {
+      assert.ok(hitPath.ok && hitPath.runIds.join(',') === 'run_path', '#601 id 对不上时按 path 命中  →  ' + JSON.stringify(hitPath));
     });
   });
 
@@ -325,6 +361,63 @@ describe('run-lifecycle', () => {
     });
     await t.test('退役成功才 ok', () => {
       assert.ok(lifeOk.ok === true && lifeOk.retired.length === 1, '退役成功才 ok');
+    });
+  });
+
+  it('#601 run-gc：待退 / 墓碑 / 真关三态', async (t) => {
+    const S = await LIB_LOAD;
+    const closedLive = S.classifyRetireOutcome({
+      ok: true, runId: 'run_a',
+      closed: { handle: 'term_s', ok: true, alreadyGone: false },
+      removed: ['inbox-a.lease'],
+    });
+    await t.test('当场关台 = 真关', () => {
+      assert.equal(closedLive.bucket, 'closed');
+    });
+    const filesOnly = S.classifyRetireOutcome({
+      ok: true, runId: 'run_c',
+      closed: { handle: null, ok: true, alreadyGone: true },
+      removed: ['inbox-c.lease'],
+    });
+    await t.test('只删到租约不算真关', () => {
+      assert.equal(filesOnly.bucket, 'alreadyGone');
+    });
+    const withTombs = S.summarizeGcApply({
+      pendingResults: [
+        { ok: true, runId: 'run_a', closed: { handle: 't1', ok: true, alreadyGone: false }, removed: ['a.lease'] },
+      ],
+      tombstones: [run({ id: 'run_tomb' })],
+    });
+    await t.test('墓碑计入本已关', () => {
+      assert.ok(withTombs.closedCount === 1 && withTombs.alreadyGoneCount === 1, '墓碑计入本已关  →  ' + JSON.stringify(withTombs));
+    });
+  });
+
+  it('#601 关台身份不看 coordinator', async (t) => {
+    const S = await LIB_LOAD;
+    const station = { handle: 'term_station', preview: 'INBOX_STATION_READY run=run_a' };
+    const shuai = { handle: 'term_shuai', preview: '主帅' };
+    const lease = { pid: 12, runId: 'run_a', handle: 'term_station' };
+    const stolen = S.resolveStationCloseTarget({
+      runId: 'run_a', lease, leaseRead: 'ok', pidAlive: true,
+      coordinatorHandle: null, terminals: [station, shuai], previewHandles: ['term_station'],
+    });
+    await t.test('coordinator 被借走仍关租约 handle', () => {
+      assert.ok(stolen.ok && stolen.closeHandle === 'term_station' && stolen.action === 'close', JSON.stringify(stolen));
+    });
+    const wrongCoord = S.resolveStationCloseTarget({
+      runId: 'run_a', lease, leaseRead: 'ok', pidAlive: true,
+      coordinatorHandle: 'term_shuai', terminals: [station, shuai], previewHandles: ['term_station'],
+    });
+    await t.test('coordinator 是帅的 tab 也不关帅', () => {
+      assert.ok(wrongCoord.closeHandle === 'term_station' && wrongCoord.coordinatorStolen === true, JSON.stringify(wrongCoord));
+    });
+    const noId = S.resolveStationCloseTarget({
+      runId: 'run_a', lease: { pid: 12, runId: 'run_a' }, leaseRead: 'ok', pidAlive: true,
+      coordinatorHandle: null, terminals: [shuai], previewHandles: [],
+    });
+    await t.test('PID 活着但证不出 → 失败', () => {
+      assert.ok(noId.ok === false && /拒删文件/.test(noId.error), JSON.stringify(noId));
     });
   });
 });
