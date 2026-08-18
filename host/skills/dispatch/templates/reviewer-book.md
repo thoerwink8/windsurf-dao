@@ -61,8 +61,8 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 - **绿**：按注入参数的 merge-policy 收口（#511 帅只感知不做关口；#559 把机器可读落点钉在 PR 上），两条路分开：
 
   - `merge-policy: auto`（默认）：**你自己合并**，不再问帅。审官 App 只有 `contents:read`，合不了；
-    合并走帅身份：`node scripts/gh-as.mjs marshal -- pr merge <PR号> --auto`
-    （服务端 auto-merge，checks 过了自动合；当时合并命令以审读规矩为准）。合并完进第 3 步。
+    合并走帅身份：`node scripts/gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`
+    （marshal 直接合并（checks 已绿才走到这一步，不需要排队）；当时合并命令以审读规矩为准）。合并完进第 3 步。
   - `merge-policy: manual`（例外，派单时带了理由）：**你不许合并**。判绿后先把 PR
     **转 draft**（机器可读的「禁止合并」状态，draft PR 在 GitHub 上无法正常合并，这是 #549 审官
     第二轮忘了 manual 自己合的根治）：若 PR 还不是 draft，
