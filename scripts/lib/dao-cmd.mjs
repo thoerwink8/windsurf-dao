@@ -523,6 +523,17 @@ export function argsTaskCreate({ spec, run } = {}) {
   return a;
 }
 
+export function argsTaskUpdate({ id, status, result, run, from } = {}) {
+  const a = ['orchestration', 'task-update'];
+  if (id) a.push('--id', id);
+  if (status) a.push('--status', status);
+  if (result != null) a.push('--result', typeof result === 'string' ? result : JSON.stringify(result));
+  if (run) a.push('--run', run);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
 export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
@@ -581,14 +592,6 @@ export function argsWorkerStop({ dispatch, retryRequest } = {}) {
   const a = ['orchestration', 'worker-stop'];
   if (dispatch) a.push('--dispatch', dispatch);
   if (retryRequest) a.push('--retry-request', retryRequest);
-  a.push('--json');
-  return a;
-}
-
-export function argsTaskUpdate({ id, status } = {}) {
-  const a = ['orchestration', 'task-update'];
-  if (id) a.push('--id', id);
-  if (status) a.push('--status', status);
   a.push('--json');
   return a;
 }
@@ -742,7 +745,7 @@ export function isRunRequired(error) {
 export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——有信箱台在 relay 时它抢不住（台每轮自夺回）；run-use 只在该 Run 还没起信箱台时有效';
 
 export function rollbackErrorAlreadyGone(error) {
-  return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released/i.test(orcaErrorText(error));
+  return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released|task_not_found|already_failed/i.test(orcaErrorText(error));
 }
 
 /** 库实际会发出的 orca 命令 + 参数。用「全开」调用 builder 扫出来，不另维护清单。 */
@@ -759,11 +762,11 @@ export function catalogUsedFlags() {
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsWorktreePs(),
     argsTaskCreate({ spec: 's' }),
+    argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
     argsWorkerStop({ dispatch: 'd' }),
-    argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
@@ -1464,10 +1467,12 @@ export function envProbeWorktree(cwd) {
   return runCapabilityProbes({ exec: hostProbeExec(cwd) });
 }
 
-export function planDispatchRollback({
-  workerId, workerHandle, reviewerId, reviewerHandle,
-  childIds, childHandles, dispatchIds, taskIds, handles,
-} = {}) {
+export function unboundTaskIds({ taskIds, workers } = {}) {
+  const bound = new Set((Array.isArray(workers) ? workers : []).map(w => w && w.taskId).filter(Boolean));
+  return (Array.isArray(taskIds) ? taskIds : []).filter(id => id && !bound.has(id));
+}
+
+export function planDispatchFence({ dispatchIds, taskIds, workers } = {}) {
   const steps = [];
   const seenId = new Set();
   for (const id of (Array.isArray(dispatchIds) ? dispatchIds : []).filter(Boolean).slice().reverse()) {
@@ -1475,9 +1480,19 @@ export function planDispatchRollback({
     seenId.add(id);
     steps.push(argsWorkerStop({ dispatch: id }));
   }
-  for (const id of Array.isArray(taskIds) ? taskIds : []) {
-    if (id) steps.push(argsTaskUpdate({ id, status: 'failed' }));
+  const seenTask = new Set();
+  for (const id of unboundTaskIds({ taskIds, workers }).slice().reverse()) {
+    if (seenTask.has(id)) continue;
+    seenTask.add(id);
+    steps.push(argsTaskUpdate({ id, status: 'failed' }));
   }
+  return steps;
+}
+
+export function planDispatchDestroy({
+  workerId, workerHandle, reviewerId, reviewerHandle, handles, childIds, childHandles,
+} = {}) {
+  const steps = [];
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
   if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
   for (const handle of Array.isArray(childHandles) ? childHandles : []) {
@@ -1497,6 +1512,96 @@ export function planDispatchRollback({
   }
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
+}
+
+export function planDispatchRollback(created = {}) {
+  return [...planDispatchFence(created), ...planDispatchDestroy(created)];
+}
+
+export function execRollbackStep(args, exec) {
+  let r = exec(args);
+  const step = {
+    cmd: args.join(' '),
+    ok: !!r.ok,
+    error: r.ok ? undefined : orcaErrorText(r.error),
+  };
+  if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
+    step.ok = true;
+    step.alreadyGone = true;
+    step.error = undefined;
+  } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
+    const retryArgs = args.filter(a => a !== '--tab');
+    const retry = exec(retryArgs);
+    step.retryWithoutTab = {
+      cmd: retryArgs.join(' '),
+      ok: !!retry.ok,
+      error: retry.ok ? undefined : orcaErrorText(retry.error),
+    };
+    if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
+      step.ok = true;
+      step.alreadyGone = !retry.ok;
+      step.recovered = !!retry.ok;
+      step.error = undefined;
+    }
+  }
+  return step;
+}
+
+export function inspectRollbackResidue(created, exec) {
+  const ids = Array.isArray(created?.dispatchIds) ? created.dispatchIds.filter(Boolean) : [];
+  if (ids.length === 0) return { ok: true, leftover: [], skipped: true, unscanned: false };
+  const listed = exec(argsWorkerList());
+  if (!listed || !listed.ok) {
+    return {
+      ok: false,
+      unscanned: true,
+      leftover: [],
+      error: `回滚后 worker-list 没查成：${orcaErrorText(listed && listed.error)}`,
+    };
+  }
+  const workers = listed.json?.result?.workers;
+  return classifyDispatchResidue({ dispatchIds: ids, workers });
+}
+
+/**
+ * 生产回滚：先 fence（worker-stop + 未绑定 task 置 failed），再 worker-list 核残留。
+ * 没查成或仍有活动 Dispatch → fail-visible，不删树。
+ */
+export function applyDispatchRollback(created, { exec } = {}) {
+  if (typeof exec !== 'function') {
+    return {
+      ok: false,
+      rollback: [],
+      rollbackFailed: true,
+      residue: { ok: false, unscanned: true, leftover: [], error: 'applyDispatchRollback 没拿到 exec（没查成）' },
+      alarm: 'applyDispatchRollback 没拿到 exec（没查成）',
+    };
+  }
+  const rollback = [];
+  for (const args of planDispatchFence(created)) {
+    rollback.push(execRollbackStep(args, exec));
+  }
+  const residue = inspectRollbackResidue(created, exec);
+  if (!residue.ok) {
+    for (const args of planDispatchDestroy(created)) {
+      if (args[0] === 'worktree') continue;
+      rollback.push(execRollbackStep(args, exec));
+    }
+    const report = rollbackReport(rollback);
+    const alarm = residue.error || report.alarm;
+    return { ok: false, rollback, rollbackFailed: true, residue, alarm };
+  }
+  for (const args of planDispatchDestroy(created)) {
+    rollback.push(execRollbackStep(args, exec));
+  }
+  const report = rollbackReport(rollback);
+  return {
+    ok: !report.rollbackFailed,
+    rollback,
+    rollbackFailed: report.rollbackFailed,
+    residue,
+    alarm: report.alarm,
+  };
 }
 
 /** #620：batch JSON → `[{name, spec}, ...]`。数组或 `{workers|items|batch: [...]}` 都收。 */
@@ -1592,7 +1697,7 @@ export function planDispatchBatch({ name, issue, model, items } = {}) {
  * 失败不自己回滚——调用方拿 created 走 failCreated / planDispatchRollback。
  */
 export function runDispatchBatch({ plan, effects } = {}) {
-  const created = { handles: [], workers: [], dispatchIds: [] };
+  const created = { handles: [], workers: [], dispatchIds: [], taskIds: [] };
   if (!plan || !Array.isArray(plan.workers)) {
     return { ok: false, error: 'runDispatchBatch 要 plan.workers', created, workers: [] };
   }
@@ -1625,6 +1730,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       issue: plan.issue,
     });
     if (!task || !task.ok) return fail(`task-create 失败（${w.name}）: ${(task && task.error) || '未知'}`);
+    if (task.taskId) created.taskIds.push(task.taskId);
 
     const started = effects.startWorker({
       task: task.taskId,

@@ -67,7 +67,7 @@ import {
   gitBranchName,
   isRunRequired,
   RUN_REQUIRED_HINT,
-  rollbackErrorAlreadyGone,
+
   fetchHelpPreferLive,
   loadRouting,
   parseArgs,
@@ -75,7 +75,7 @@ import {
   loadDispatchBatchFile,
   planDispatchBatch,
   runDispatchBatch,
-  planDispatchRollback,
+  applyDispatchRollback,
   probeWaitMs,
   recordEscape,
   resolveDispatchConstraints,
@@ -86,7 +86,7 @@ import {
   startSplitChildren,
   resolveLaunch,
   reviewerCardName,
-  rollbackReport,
+
   renderDispatchTemplate,
   buildSoldierInject,
   buildReviewerInject,
@@ -213,39 +213,9 @@ function constrainDispatch(args, routing) {
 }
 
 function rollbackCreated(created) {
-  const rollback = [];
-  for (const args of planDispatchRollback(created)) {
-    let r = orca(args);
-    const step = {
-      cmd: args.join(' '),
-      ok: !!r.ok,
-      error: r.ok ? undefined : errText(r.error),
-    };
-    if (!r.ok && rollbackErrorAlreadyGone(r.error)) {
-      step.ok = true;
-      step.alreadyGone = true;
-      step.error = undefined;
-    } else if (!r.ok && args[0] === 'terminal' && args[1] === 'close' && args.includes('--tab')) {
-      const retryArgs = args.filter(a => a !== '--tab');
-      const retry = orca(retryArgs);
-      step.retryWithoutTab = {
-        cmd: retryArgs.join(' '),
-        ok: !!retry.ok,
-        error: retry.ok ? undefined : errText(retry.error),
-      };
-      if (retry.ok || rollbackErrorAlreadyGone(retry.error)) {
-        step.ok = true;
-        step.alreadyGone = !retry.ok;
-        step.recovered = !!retry.ok;
-        step.error = undefined;
-        r = retry;
-      }
-    }
-    rollback.push(step);
-  }
-  const report = rollbackReport(rollback);
-  if (report.alarm) console.error(`[dao] ${report.alarm}`);
-  return { rollback, rollbackFailed: report.rollbackFailed };
+  const result = applyDispatchRollback(created, { exec: orca });
+  if (result.alarm) console.error(`[dao] ${result.alarm}`);
+  return result;
 }
 
 function failCreated(created, error, extra = {}) {

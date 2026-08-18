@@ -101,18 +101,18 @@ describe('dispatch --batch', () => {
       items: items(4),
     });
     assert.ok(plan.ok, JSON.stringify(plan));
-    assert.strictEqual(plan.cardName, '#600 - 存量27单分流总卡');
+    assert.strictEqual(plan.cardName, S.assembleCardName({ name: '存量27单分流总卡', issue: '600' }));
     assert.strictEqual(plan.noParent, false);
     assert.strictEqual(plan.reviewerCreate, false);
     assert.strictEqual(plan.workers.length, 4);
-    assert.ok(plan.workers.every((w, i) => (
-      w.name === `判定工${i + 1}`
-      && w.spec.includes(`第 ${i + 1} 单`)
-      && w.handle === `<handle:${i}>`
-      && w.worktree === plan.cardName
-      && /batch-book\.md/.test(w.inject)
-      && /#600/.test(w.inject)
-    )), JSON.stringify(plan.workers));
+    for (const [i, w] of plan.workers.entries()) {
+      assert.strictEqual(w.name, `判定工${i + 1}`);
+      assert.ok(String(w.spec).includes(`第 ${i + 1} 单`), w.spec);
+      assert.strictEqual(w.handle, `<handle:${i}>`);
+      assert.strictEqual(w.worktree, plan.cardName);
+      assert.ok(String(w.inject).includes('batch-book.md'), w.inject);
+      assert.ok(String(w.inject).includes('#600'), w.inject);
+    }
   });
 
   it('batch 任务书：注入含共享 issue，正文禁止 worker-done / 要求判定 comment', async () => {
@@ -187,33 +187,108 @@ describe('dispatch --batch', () => {
     assert.match(String(r.error), /worker-start 失败（判定工3）/);
     assert.deepStrictEqual(r.created.handles, ['term_1', 'term_2', 'term_3']);
     assert.deepStrictEqual(r.created.dispatchIds, ['ctx_task_1', 'ctx_task_2']);
+    assert.deepStrictEqual(r.created.taskIds, ['task_1', 'task_2', 'task_3']);
     assert.strictEqual(r.created.workerId, 'wt_batch');
     assert.strictEqual(r.workers.length, 2);
+    assert.deepStrictEqual(S.unboundTaskIds(r.created), ['task_3']);
 
     const steps = S.planDispatchRollback(r.created);
     const joined = steps.map(s => s.join(' '));
     assert.ok(joined[0].includes('worker-stop') && joined[0].includes('ctx_task_2'), JSON.stringify(joined));
     assert.ok(joined[1].includes('worker-stop') && joined[1].includes('ctx_task_1'), JSON.stringify(joined));
+    assert.ok(joined.some(s => s.includes('task-update') && s.includes('task_3') && s.includes('failed')), JSON.stringify(joined));
     assert.ok(joined.some(s => s.includes('terminal close') && s.includes('term_3')), JSON.stringify(joined));
     assert.ok(joined.some(s => s.includes('terminal close') && s.includes('term_2')), JSON.stringify(joined));
     assert.ok(joined.some(s => s.includes('terminal close') && s.includes('term_1')), JSON.stringify(joined));
     assert.ok(joined[joined.length - 1].includes('worktree rm') && joined[joined.length - 1].includes('wt_batch'), JSON.stringify(joined));
     assert.ok(joined.every(s => !/reviewer-create/.test(s)));
+  });
 
-    const live = r.created.dispatchIds.map(id => ({
-      dispatchId: id, dispatchStatus: 'dispatched', workerState: 'ready',
-    }));
-    const dirty = S.classifyDispatchResidue({ dispatchIds: r.created.dispatchIds, workers: live });
-    assert.ok(!dirty.ok && dirty.leftover.length === 2, JSON.stringify(dirty));
-    const fenced = r.created.dispatchIds.map(id => ({
-      dispatchId: id, dispatchStatus: 'failed', workerState: 'failed',
-    }));
-    const clean = S.classifyDispatchResidue({ dispatchIds: r.created.dispatchIds, workers: fenced });
-    assert.ok(clean.ok && clean.leftover.length === 0, JSON.stringify(clean));
-    const gone = S.classifyDispatchResidue({ dispatchIds: r.created.dispatchIds, workers: [] });
-    assert.ok(gone.ok && gone.leftover.length === 0, JSON.stringify(gone));
-    const miss = S.classifyDispatchResidue({ dispatchIds: r.created.dispatchIds, workers: null });
-    assert.ok(!miss.ok && miss.unscanned === true, JSON.stringify(miss));
+  it('生产 applyDispatchRollback：worker-stop + 未绑定 task 置 failed，再 worker-list 核残留才删树', async () => {
+    const S = await S_LOAD;
+    const plan = S.planDispatchBatch({
+      name: '总卡', issue: '600', model: 'grok-4.6', items: items(4),
+    });
+    const r = S.runDispatchBatch({ plan, effects: makeEffects({ failAt: 'startWorker:task_3' }) });
+    assert.ok(!r.ok, JSON.stringify(r));
+
+    const world = {
+      dispatches: {
+        ctx_task_1: { dispatchId: 'ctx_task_1', dispatchStatus: 'dispatched', workerState: 'ready' },
+        ctx_task_2: { dispatchId: 'ctx_task_2', dispatchStatus: 'dispatched', workerState: 'ready' },
+      },
+      tasks: { task_1: 'dispatched', task_2: 'dispatched', task_3: 'ready' },
+      rm: [],
+    };
+    const exec = (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-stop') {
+        const id = args[args.indexOf('--dispatch') + 1];
+        if (world.dispatches[id]) {
+          world.dispatches[id] = { dispatchId: id, dispatchStatus: 'failed', workerState: 'failed' };
+        }
+        return { ok: true };
+      }
+      if (args[0] === 'orchestration' && args[1] === 'task-update') {
+        const id = args[args.indexOf('--id') + 1];
+        const status = args[args.indexOf('--status') + 1];
+        world.tasks[id] = status;
+        return { ok: true };
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return { ok: true, json: { result: { workers: Object.values(world.dispatches) } } };
+      }
+      if (args[0] === 'terminal' && args[1] === 'close') return { ok: true };
+      if (args[0] === 'worktree' && args[1] === 'rm') {
+        world.rm.push(args[args.indexOf('--worktree') + 1]);
+        return { ok: true };
+      }
+      return { ok: false, error: `unexpected ${args.join(' ')}` };
+    };
+
+    const applied = S.applyDispatchRollback(r.created, { exec });
+    assert.ok(applied.ok, JSON.stringify(applied));
+    assert.strictEqual(world.tasks.task_3, 'failed');
+    assert.strictEqual(world.dispatches.ctx_task_1.dispatchStatus, 'failed');
+    assert.strictEqual(world.dispatches.ctx_task_2.dispatchStatus, 'failed');
+    assert.ok(applied.residue && applied.residue.ok && applied.residue.leftover.length === 0, JSON.stringify(applied.residue));
+    assert.deepStrictEqual(world.rm, ['wt_batch']);
+
+    const daoSrc = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
+    assert.match(daoSrc, /applyDispatchRollback\(created/);
+  });
+
+  it('生产 applyDispatchRollback：worker-stop 没 fence 干净 → fail-visible 且不删树', async () => {
+    const S = await S_LOAD;
+    const created = {
+      workerId: 'wt_batch',
+      handles: ['term_1'],
+      dispatchIds: ['ctx_live'],
+      taskIds: ['task_1'],
+      workers: [{ taskId: 'task_1', dispatchId: 'ctx_live' }],
+    };
+    const cmds = [];
+    const execSticky = (args) => {
+      cmds.push(args.join(' '));
+      if (args[1] === 'worker-list') {
+        return {
+          ok: true,
+          json: { result: { workers: [{ dispatchId: 'ctx_live', dispatchStatus: 'dispatched', workerState: 'ready' }] } },
+        };
+      }
+      return { ok: true };
+    };
+    const dirty = S.applyDispatchRollback(created, { exec: execSticky });
+    assert.ok(!dirty.ok && dirty.rollbackFailed === true, JSON.stringify(dirty));
+    assert.ok(dirty.residue && dirty.residue.ok === false && dirty.residue.leftover.length === 1, JSON.stringify(dirty.residue));
+    assert.ok(cmds.some(c => c.includes('worker-stop') && c.includes('ctx_live')), cmds.join(' | '));
+    assert.ok(!cmds.some(c => c.includes('worktree rm')), cmds.join(' | '));
+
+    const execBlind = (args) => {
+      if (args[1] === 'worker-list') return { ok: false, error: 'worker-list down' };
+      return { ok: true };
+    };
+    const blind = S.applyDispatchRollback(created, { exec: execBlind });
+    assert.ok(!blind.ok && blind.residue && blind.residue.unscanned === true, JSON.stringify(blind));
   });
 
   it('启动成功但验注入失败：仍记下 Dispatch ID，回滚先 worker-stop', async () => {
@@ -252,7 +327,8 @@ describe('dispatch --batch', () => {
     assert.strictEqual(p.cardName, '#600 - 存量27单分流总卡');
     assert.strictEqual(p.workers.length, 4);
     assert.ok(p.workers[0].handle === '<handle:0>' && p.workers[3].handle === '<handle:3>', JSON.stringify(p.workers));
-    assert.ok(/batch-book\.md/.test(p.workers[0].inject) && /#600/.test(p.workers[0].inject), JSON.stringify(p.workers[0]));
+    assert.ok(String(p.workers[0].inject).includes('batch-book.md'), JSON.stringify({ inject: p.workers[0].inject, err: p.err, raw: p.raw, status: r.status, stderr: r.stderr }));
+    assert.ok(String(p.workers[0].inject).includes('#600'), p.workers[0].inject);
     assert.ok(S.FLAGS_BY_VERB.dispatch.has('--batch'));
     const parsed = S.parseArgs([
       'node', 'dao.mjs', 'dispatch', '--batch', file, '--name', 'x', '--issue', '1', '--model', 'grok-4.6',
