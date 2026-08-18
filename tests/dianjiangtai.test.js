@@ -730,19 +730,19 @@ describe('dianjiangtai', () => {
     fs.rmSync(bfDir, { recursive: true, force: true });
   });
 
-  it('#648 审读 A 位顶 GLM-5.2（GPT 暂不可用）', async (t) => {
+  it('#648 审读 A 位顶 KIMI-K3（GPT 暂不可用）', async (t) => {
     const { pinReviewerSlotA } = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
-    await t.test('pinReviewerSlotA 在门闩集合有 GLM-5.2 时顶 GLM-5.2', () => {
+    await t.test('pinReviewerSlotA 在门闩集合有 KIMI-K3 时顶 KIMI-K3', () => {
       assert.ok(pinReviewerSlotA({
-        models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "glm-5.2", provider: "cursor" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
-        passerIds: ["grok-4.6", "claude-opus", "glm-5.2", "gpt-5.6-sol"],
-      }).model === "glm-5.2", 'pinReviewerSlotA 在门闩集合有 GLM-5.2 时顶 GLM-5.2');
+        models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "kimi-k3", provider: "cursor" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
+        passerIds: ["grok-4.6", "claude-opus", "kimi-k3", "gpt-5.6-sol"],
+      }).model === "kimi-k3", 'pinReviewerSlotA 在门闩集合有 KIMI-K3 时顶 KIMI-K3');
     });
-    await t.test('pinReviewerSlotA 无 GLM-5.2/Opus 时顺延非 GPT 门闩首名', () => {
+    await t.test('pinReviewerSlotA 无 KIMI-K3/Opus 时顺延非 GPT 门闩首名', () => {
       assert.ok(pinReviewerSlotA({
         models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
         passerIds: ["grok-4.6", "claude-opus"],
-      }).model === "claude-opus", 'pinReviewerSlotA 只剩 GPT → 不顶 GPT（暂不可用）');
+      }).model === "claude-opus", 'pinReviewerSlotA 无 KIMI-K3/Opus 时顺延非 GPT 门闩首名');
     });
     const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
     function masterProviderOf(modelId) {
@@ -752,7 +752,6 @@ describe('dianjiangtai', () => {
       const m = models.find(x => x && x.id === modelId);
       return m && m.provider ? m.provider : null;
     }
-    // #648：glm-5.2 本单新增，origin/master 尚无此条目，provider 从本地 policy/models.yml 取（CLI 的 models.yml 兜底同源）。
     function localProviderOf(modelId) {
       const models = parseYaml(fs.readFileSync(path.join(REPO, "policy", "models.yml"), "utf8")).models;
       const m = models.find(x => x && x.id === modelId);
@@ -764,9 +763,9 @@ describe('dianjiangtai', () => {
       assert.ok(djReview.status === 0, 'CLI 审读退出码 0  →  ' + (djReview.stderr || "").slice(0, 240));
     });
     const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
-    const glm52Provider = localProviderOf("glm-5.2");
-    await t.test('CLI 审读 A = provider/glm-5.2（#648 顶位）', () => {
-      assert.ok(!!glm52Provider && djReviewOut.options.A.model === `${glm52Provider}/glm-5.2`, 'CLI 审读 A = provider/glm-5.2（#648 顶位）  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    const kimiProvider = localProviderOf("kimi-k3");
+    await t.test('CLI 审读 A = provider/kimi-k3（#648 顶位）', () => {
+      assert.ok(!!kimiProvider && djReviewOut.options.A.model === `${kimiProvider}/kimi-k3`, 'CLI 审读 A = provider/kimi-k3（#648 顶位）  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
     await t.test('CLI 审读 A reason=reviewer_order', () => {
       assert.ok(djReviewOut.options.A.reason === "reviewer_order", 'CLI 审读 A reason=reviewer_order  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
@@ -779,9 +778,9 @@ describe('dianjiangtai', () => {
       assert.ok(djUi.status === 0, 'CLI 审读+UI 退出码 0  →  ' + (djUi.stderr || "").slice(0, 240));
     });
     const djUiOut = djUi.status === 0 ? JSON.parse(djUi.stdout) : { options: { A: {} } };
-    // #648：glm-5.2 未套 glm-5.3 的 UI 禁令（用户拿它顶审官）→ UI 审查仍顶 glm-5.2，不再是 Opus。
-    await t.test('CLI 审读撞 UI ban → A = provider/glm-5.2（不套 glm-5.3 禁令）', () => {
-      assert.ok(!!glm52Provider && djUiOut.options.A.model === `${glm52Provider}/glm-5.2`, 'CLI 审读撞 UI ban → A = provider/glm-5.2（不套 glm-5.3 禁令）  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
+    // #648（2026-08-19 追加）：kimi-k3 未套 glm-5.3 的 UI 禁令（用户拿它顶审官）→ UI 审查仍顶 kimi-k3，不再是 Opus。
+    await t.test('CLI 审读撞 UI ban → A = provider/kimi-k3（不套 glm-5.3 禁令）', () => {
+      assert.ok(!!kimiProvider && djUiOut.options.A.model === `${kimiProvider}/kimi-k3`, 'CLI 审读撞 UI ban → A = provider/kimi-k3（不套 glm-5.3 禁令）  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
     });
     await t.test('CLI 审读撞 UI ban reason=reviewer_order', () => {
       assert.ok(djUiOut.options.A.reason === "reviewer_order", 'CLI 审读撞 UI ban reason=reviewer_order  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));

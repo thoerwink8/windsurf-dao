@@ -109,7 +109,7 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-19"
-    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用，审官与后续委派凡本会走 GPT 的改走 cursor/glm-5.2-high；roles 含审查顶审官位
+    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用备选。登记仍保留、不套 glm-5.3 禁令；评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位
     decided: "2026-08-19"
     pricing:
       verified_at: "2026-08-19"
@@ -166,12 +166,12 @@ models:
     version: kimi-k3
     context_window: null
     max_output: null
-    roles: [写码, 判断]
+    roles: [写码, 判断, 审查]
     status: 试用
     retired: false
     trial_since: "2026-08-16"
-    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）
-    decided: "2026-08-18"
+    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位
+    decided: "2026-08-19"
     pricing:
       verified_at: "2026-08-18"
       subscription:
