@@ -13,7 +13,7 @@ const {
   resolveMainWorktreeRoot, scopeOverridesFor, describeAttribution,
   resolveAmendTarget, formatAmendComment, linkAliasesToSuccessor,
 } = require('../scripts/lib/ledger-job.mjs');
-const { unclosedJobIds, describeUnclosedJobs } = require('../scripts/lib/ledger-query.mjs');
+const { unclosedJobIds, describeUnclosedJobs, readLedgerEvents, queryLedger } = require('../scripts/lib/ledger-query.mjs');
 const { redKindFromClosed, formatRedCell } = require('../scripts/calibrate.mjs');
 const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_HISTORICAL_GAPS, historicalGapNote } = require('../scripts/lib/ledger-gap-check.mjs');
 const { pinReviewerSlotA } = require('../scripts/lib/dianjiangtai-reviewer-slot.mjs');
@@ -74,6 +74,23 @@ describe('ledger', () => {
       assert.ok(c1b.ok && c1b.skipped, '同 job 再写 closed 幂等 skip  →  ' + JSON.stringify(c1b));
     });
     fs.rmSync(dir, { recursive: true, force: true });
+
+    const dir611 = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-611-'));
+    const ctx611 = { dir: dir611, schema, machine: 'TEST-611' };
+    const d611 = writeJobDispatch({
+      ...ctx611, ts, jobId: workerJobId(611), model: 'grok-4.6', identity: '工人',
+      workType: '写码', terminal: 'test', prNumber: 613,
+      extra: { issue_number: 611, split: 'no', split_reason: '同几个文件反复改' },
+    });
+    await t.test('#611 账本写入带 split / split_reason', () => {
+      assert.ok(d611.ok && d611.event && d611.event.split === 'no' && d611.event.split_reason === '同几个文件反复改', '#611 账本写入带 split / split_reason  →  ' + d611.error);
+    });
+    const read611 = readLedgerEvents(dir611);
+    const q611 = queryLedger({ events: read611.events, issue: 611 });
+    await t.test('#611 ledger-query 能读到 split 与 split_reason', () => {
+      assert.ok(q611.kind === 'ok' && q611.events.some(e => e.split === 'no' && e.split_reason === '同几个文件反复改'), '#611 ledger-query 能读到 split 与 split_reason  →  ' + JSON.stringify(q611));
+    });
+    fs.rmSync(dir611, { recursive: true, force: true });
 
     await t.test('beijingIsoFrom(Date) 带 +08:00', () => {
       assert.ok(/[+]08:00$/.test(beijingIsoFrom(new Date('2026-08-17T04:00:00Z'))), 'beijingIsoFrom(Date) 带 +08:00');

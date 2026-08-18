@@ -577,6 +577,21 @@ export function argsWorkerRelease({ dispatch, retryRequest } = {}) {
   return a;
 }
 
+export function argsWorkerStop({ dispatch } = {}) {
+  const a = ['orchestration', 'worker-stop'];
+  if (dispatch) a.push('--dispatch', dispatch);
+  a.push('--json');
+  return a;
+}
+
+export function argsTaskUpdate({ id, status } = {}) {
+  const a = ['orchestration', 'task-update'];
+  if (id) a.push('--id', id);
+  if (status) a.push('--status', status);
+  a.push('--json');
+  return a;
+}
+
 export function argsWorkerRead({ dispatch, source, cursor, limit } = {}) {
   const a = ['orchestration', 'worker-read'];
   if (dispatch) a.push('--dispatch', dispatch);
@@ -746,6 +761,8 @@ export function catalogUsedFlags() {
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
+    argsWorkerStop({ dispatch: 'd' }),
+    argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
@@ -1446,11 +1463,26 @@ export function envProbeWorktree(cwd) {
   return runCapabilityProbes({ exec: hostProbeExec(cwd) });
 }
 
-export function planDispatchRollback({ workerId, workerHandle, reviewerId, reviewerHandle } = {}) {
+export function planDispatchRollback({
+  workerId, workerHandle, reviewerId, reviewerHandle,
+  childIds, childHandles, dispatchIds, taskIds,
+} = {}) {
   const steps = [];
+  for (const id of Array.isArray(dispatchIds) ? dispatchIds : []) {
+    if (id) steps.push(argsWorkerStop({ dispatch: id }));
+  }
+  for (const id of Array.isArray(taskIds) ? taskIds : []) {
+    if (id) steps.push(argsTaskUpdate({ id, status: 'failed' }));
+  }
   if (reviewerHandle) steps.push(argsTerminalClose({ terminal: reviewerHandle, tab: true }));
   if (reviewerId) steps.push(argsWorktreeRm({ worktree: reviewerId, force: true }));
+  for (const handle of Array.isArray(childHandles) ? childHandles : []) {
+    if (handle) steps.push(argsTerminalClose({ terminal: handle, tab: true }));
+  }
   if (workerHandle) steps.push(argsTerminalClose({ terminal: workerHandle, tab: true }));
+  for (const id of Array.isArray(childIds) ? childIds : []) {
+    if (id) steps.push(argsWorktreeRm({ worktree: id, force: true }));
+  }
   if (workerId) steps.push(argsWorktreeRm({ worktree: workerId, force: true }));
   return steps;
 }
@@ -1706,6 +1738,209 @@ export function resolveDispatchConstraints({
     reviewer,
     recommendation,
   };
+}
+
+/** --split 判据的真相源（#611）。skill 只留指针，勿在别处复制一份。 */
+export const SPLIT_CRITERION = '产出物能不能按文件切开？能切 + 块数 ≥2 + 每块够一个工人干 → --split N；切不开（同几个文件反复改）→ --split no + --split-reason';
+
+/**
+ * dispatch --split 硬闸。取值只允许 no 或 ≥2 的整数；缺了就退。
+ * --split no 必须同时给非空 --split-reason（入账本，防仪式化）。
+ */
+export function resolveSplitConstraint({ split, splitReason } = {}) {
+  const raw = split == null ? '' : String(split).trim();
+  if (!raw) {
+    return {
+      ok: false,
+      missing: ['--split'],
+      error: `dispatch 要 --split <no|N>（N≥2）。${SPLIT_CRITERION}`,
+    };
+  }
+  if (/^no$/i.test(raw)) {
+    const reason = String(splitReason || '').trim();
+    if (!reason) {
+      return {
+        ok: false,
+        missing: ['--split-reason'],
+        error: '--split no 必须给 --split-reason（理由入账本，防仪式化）',
+      };
+    }
+    return { ok: true, split: 'no', splitReason: reason, childCount: 0 };
+  }
+  if (!/^\d+$/.test(raw)) {
+    return {
+      ok: false,
+      missing: [],
+      error: `--split 只允许 no 或 ≥2 的整数，实际「${raw}」`,
+    };
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 2) {
+    return {
+      ok: false,
+      missing: [],
+      error: `--split N 必须 ≥2，实际 ${n}（切不开请用 --split no --split-reason）`,
+    };
+  }
+  const reason = String(splitReason || '').trim();
+  return { ok: true, split: n, splitReason: reason || null, childCount: n };
+}
+
+const FILE_TOKEN = /[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+/g;
+
+export function sliceFileTokens(text) {
+  return [...String(text || '').matchAll(FILE_TOKEN)].map(m => m[0].replace(/\\/g, '/').toLowerCase());
+}
+
+/**
+ * --split N 必须给 N 份非空、互不重叠的 --slice。
+ * 重叠：两份原文相同，或抽到的文件路径出现在两块里（a.js / b.js 反例）。
+ */
+export function resolveSliceAssignments({ childCount = 0, slices } = {}) {
+  const list = Array.isArray(slices)
+    ? slices.map(s => String(s == null ? '' : s).trim())
+    : (slices == null || String(slices).trim() === '' ? [] : [String(slices).trim()]);
+  if (!childCount) {
+    if (list.length) {
+      return { ok: false, missing: [], error: '--split no 不要给 --slice' };
+    }
+    return { ok: true, slices: [] };
+  }
+  if (list.length !== childCount) {
+    return {
+      ok: false,
+      missing: ['--slice'],
+      error: `--split ${childCount} 必须给 ${childCount} 个 --slice（每块一份非空分块说明），实际 ${list.length}`,
+    };
+  }
+  if (list.some(s => !s)) {
+    return { ok: false, missing: ['--slice'], error: '--slice 不能为空' };
+  }
+  if (list.some(s => !/[\p{L}\p{N}]/u.test(s))) {
+    return { ok: false, missing: ['--slice'], error: '--slice 必须有实质内容（字母或数字）' };
+  }
+  const seenText = new Set();
+  for (const s of list) {
+    if (seenText.has(s)) {
+      return { ok: false, error: `--slice 边界重叠：两块说明相同「${s}」` };
+    }
+    seenText.add(s);
+  }
+  const owner = new Map();
+  for (let i = 0; i < list.length; i++) {
+    for (const file of sliceFileTokens(list[i])) {
+      if (owner.has(file)) {
+        return {
+          ok: false,
+          error: `--slice 边界重叠：${file} 同时出现在第 ${owner.get(file)} 块和第 ${i + 1} 块`,
+        };
+      }
+      owner.set(file, i + 1);
+    }
+  }
+  return { ok: true, slices: list };
+}
+
+/**
+ * 三单回归用的那条可判定规则（#611）。
+ * 只回答「该不该拆」：能按文件切开且块数≥2 且每块够干 → N；否则 no。
+ * N 由调用方给（#608 是 24 个文件拆 4 工人），函数不猜块怎么切。
+ */
+export function decideSplit({ filesSeparable, chunkCount, eachChunkEnoughWork, n } = {}) {
+  if (filesSeparable === true && Number(chunkCount) >= 2 && eachChunkEnoughWork === true) {
+    const workers = n != null ? Number(n) : Number(chunkCount);
+    if (Number.isInteger(workers) && workers >= 2) return { split: workers };
+  }
+  return { split: 'no' };
+}
+
+export function planSplitCards({
+  name, issue, childCount = 0,
+  role, model,
+  parentSelector = '<父卡>',
+  baseBranch = '<任务分支>',
+} = {}) {
+  const parentName = assembleCardName({ name, issue, role, model });
+  const children = [];
+  const n = Number(childCount) || 0;
+  for (let i = 1; i <= n; i++) {
+    children.push({
+      name: parentName ? `${parentName} · ${i}` : String(i),
+      parentWorktree: parentSelector,
+      baseBranch,
+      flags: ['--parent-worktree', parentSelector, '--base-branch', baseBranch],
+    });
+  }
+  return {
+    parent: { name: parentName, noParent: true },
+    children,
+  };
+}
+
+/** --split N 时给头工人 / 子工人可执行的分块职责。子块必须带调用方给的 --slice 原文。 */
+export function buildSplitRoleSpec({ spec, role, index, total, slice } = {}) {
+  const base = String(spec || '').trim();
+  const n = Number(total) || 0;
+  if (role === 'head') {
+    return `${base}｜头工人：协调${n}块，不独占文件块`;
+  }
+  const part = String(slice || '').trim();
+  if (!part) {
+    throw new Error(`块${index}/${n} 缺 --slice，不能用同一份 spec 冒充分块`);
+  }
+  return `块${index}/${n}：${part}`;
+}
+
+/**
+ * 真路径起 N 个独立子工人。startOne 负责终端/Task/Dispatch/验开工。
+ * 任一子工人失败时返回已起的那些（含已有 handle 的失败者），供完整回滚。
+ */
+export function startSplitChildren({ children, spec, slices, startOne } = {}) {
+  if (typeof startOne !== 'function') {
+    return { ok: false, started: [], error: 'startSplitChildren 没拿到 startOne' };
+  }
+  const list = Array.isArray(children) ? children : [];
+  const parts = Array.isArray(slices) ? slices : [];
+  const total = list.length;
+  if (parts.length !== total) {
+    return { ok: false, started: [], error: `startSplitChildren 要 ${total} 个 slice，实际 ${parts.length}` };
+  }
+  const started = [];
+  for (let i = 0; i < total; i++) {
+    const child = list[i] || {};
+    let sliceSpec;
+    try {
+      sliceSpec = buildSplitRoleSpec({ spec, role: 'child', index: i + 1, total, slice: parts[i] });
+    } catch (e) {
+      return { ok: false, started, error: String(e.message || e) };
+    }
+    const r = startOne({
+      worktreeId: child.id,
+      path: child.path,
+      title: child.name,
+      spec: sliceSpec,
+      slice: parts[i],
+      index: i + 1,
+      total,
+    }) || {};
+    const record = {
+      id: child.id,
+      name: child.name,
+      handle: r.handle || null,
+      dispatchId: r.dispatchId || null,
+      taskId: r.taskId || null,
+      spec: sliceSpec,
+    };
+    if (record.handle || record.dispatchId) started.push(record);
+    if (!r.ok) {
+      return {
+        ok: false,
+        started,
+        error: `子工人 ${i + 1}/${total} 没起成: ${r.error || '未知错误'}`,
+      };
+    }
+  }
+  return { ok: true, started };
 }
 
 export function reviewerCardName(reviewerId) {
@@ -2280,8 +2515,15 @@ export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
 }
 
 
-export function dispatchComment({ mergePolicy, mergeReason, model, reviewer }) {
-  const base = `merge-policy:${mergePolicy} · model:${model} · reviewer:${reviewer}`;
+export function dispatchComment({ mergePolicy, mergeReason, model, reviewer, split, splitReason } = {}) {
+  const parts = [`merge-policy:${mergePolicy}`, `model:${model}`, `reviewer:${reviewer}`];
+  if (split != null && String(split).trim() !== '') {
+    parts.push(`split:${split}`);
+    if (String(split).toLowerCase() === 'no' && splitReason) {
+      parts.push(`split 理由: ${splitReason}`);
+    }
+  }
+  const base = parts.join(' · ');
   if (mergePolicy === 'manual' && mergeReason) {
     return `${base} · manual 理由: ${mergeReason}`;
   }
@@ -2621,11 +2863,12 @@ export const VERBS = [
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek']);
+const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
-    '--name', '--merge-policy', '--merge-reason', '--model', '--role', '--reviewer', '--confirm',
+    '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
     '--spec', '--task', '--issue', '--now', '--dry-run', '--json', '--help', '-h',
   ]),
   'worktree-create': new Set([
@@ -2703,7 +2946,13 @@ export function parseArgs(argv) {
     if (BOOL_FLAGS.has(key)) { args[camelFlag(key)] = true; continue; }
     const val = rest[++i];
     if (val == null || String(val).startsWith('--')) throw new Error(`参数 --${key} 缺值`);
-    args[camelFlag(key)] = val;
+    const ck = camelFlag(key);
+    if (MULTI_FLAGS.has(key)) {
+      if (!Array.isArray(args[ck])) args[ck] = [];
+      args[ck].push(val);
+      continue;
+    }
+    args[ck] = val;
   }
   return args;
 }
@@ -2711,7 +2960,7 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
 编排:
@@ -2768,6 +3017,10 @@ notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
 merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
 理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
+--split 必填（#611）：no 或 ≥2 的整数；两个都不给 → 非零退出。--split no 必须给 --split-reason（理由入账本）。
+--split N 建父卡 + N 张子卡（子卡 --parent-worktree 挂父卡、--base-branch 用任务分支），父卡工人是头工人。
+--split N 必须给 N 个 --slice（每块一份非空、互不重叠的分块说明；抽到的文件路径不得跨块）。失败回滚先 worker-stop / task-update failed，再关终端删树。
+判据：产出物能不能按文件切开？能切 + 块数 ≥2 + 每块够一个工人干 → --split N；切不开（同几个文件反复改）→ --split no + 理由。
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
