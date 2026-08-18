@@ -395,29 +395,102 @@ describe('run-lifecycle', () => {
 
   it('#601 关台身份不看 coordinator', async (t) => {
     const S = await LIB_LOAD;
+    const now = 1_000_000;
+    const ttlMs = 25_000;
     const station = { handle: 'term_station', preview: 'INBOX_STATION_READY run=run_a' };
     const shuai = { handle: 'term_shuai', preview: '主帅' };
-    const lease = { pid: 12, runId: 'run_a', handle: 'term_station' };
+    const lease = { pid: 12, runId: 'run_a', handle: 'term_station', ts: now, ttlMs };
     const stolen = S.resolveStationCloseTarget({
-      runId: 'run_a', lease, leaseRead: 'ok', pidAlive: true,
+      runId: 'run_a', lease, leaseRead: 'ok', now,
       coordinatorHandle: null, terminals: [station, shuai], previewHandles: ['term_station'],
     });
     await t.test('coordinator 被借走仍关租约 handle', () => {
       assert.ok(stolen.ok && stolen.closeHandle === 'term_station' && stolen.action === 'close', JSON.stringify(stolen));
     });
     const wrongCoord = S.resolveStationCloseTarget({
-      runId: 'run_a', lease, leaseRead: 'ok', pidAlive: true,
+      runId: 'run_a', lease, leaseRead: 'ok', now,
       coordinatorHandle: 'term_shuai', terminals: [station, shuai], previewHandles: ['term_station'],
     });
     await t.test('coordinator 是帅的 tab 也不关帅', () => {
       assert.ok(wrongCoord.closeHandle === 'term_station' && wrongCoord.coordinatorStolen === true, JSON.stringify(wrongCoord));
     });
     const noId = S.resolveStationCloseTarget({
-      runId: 'run_a', lease: { pid: 12, runId: 'run_a' }, leaseRead: 'ok', pidAlive: true,
+      runId: 'run_a', lease: { pid: 12, runId: 'run_a', ts: now, ttlMs }, leaseRead: 'ok', now,
       coordinatorHandle: null, terminals: [shuai], previewHandles: [],
     });
-    await t.test('PID 活着但证不出 → 失败', () => {
+    await t.test('租约未过期但证不出 → 失败', () => {
       assert.ok(noId.ok === false && /拒删文件/.test(noId.error), JSON.stringify(noId));
+    });
+  });
+
+  it('#635 退役关台改纯 TTL：过期 / 未过期边界', async (t) => {
+    const S = await LIB_LOAD;
+    const now = 1_000_000;
+    const ttlMs = 25_000;
+    const station = { handle: 'term_station', preview: 'INBOX_STATION_READY run=run_a' };
+    const shuai = { handle: 'term_shuai', preview: '主帅' };
+
+    const atTtl = S.resolveStationCloseTarget({
+      runId: 'run_a',
+      lease: { pid: 24228, runId: 'run_a', ts: now - ttlMs, ttlMs },
+      leaseRead: 'ok',
+      now,
+      coordinatorHandle: null,
+      terminals: [shuai],
+      previewHandles: [],
+    });
+    await t.test('未过期边界：age === ttlMs 仍要身份，证不出则失败', () => {
+      assert.ok(atTtl.ok === false && /拒删文件/.test(atTtl.error), JSON.stringify(atTtl));
+    });
+
+    const expired = S.resolveStationCloseTarget({
+      runId: 'run_a',
+      lease: { pid: 24228, runId: 'run_a', ts: now - ttlMs - 1, ttlMs },
+      leaseRead: 'ok',
+      now,
+      coordinatorHandle: null,
+      terminals: [shuai],
+      previewHandles: [],
+    });
+    await t.test('过期边界：age === ttlMs+1 直接 alreadyGone，不查 handle/preview', () => {
+      assert.ok(
+        expired.ok
+          && expired.action === 'alreadyGone'
+          && expired.reason === 'pid-dead-reused'
+          && expired.closeHandle === null,
+        JSON.stringify(expired),
+      );
+    });
+
+    const expiredEvenWithTab = S.resolveStationCloseTarget({
+      runId: 'run_a',
+      lease: { pid: 24228, runId: 'run_a', ts: now - ttlMs - 1, ttlMs, handle: 'term_station' },
+      leaseRead: 'ok',
+      now,
+      coordinatorHandle: null,
+      terminals: [station, shuai],
+      previewHandles: ['term_station'],
+    });
+    await t.test('过期后有 handle/preview 也不再当佐证去关台', () => {
+      assert.ok(
+        expiredEvenWithTab.ok
+          && expiredEvenWithTab.action === 'alreadyGone'
+          && expiredEvenWithTab.reason === 'pid-dead-reused',
+        JSON.stringify(expiredEvenWithTab),
+      );
+    });
+
+    const freshClose = S.resolveStationCloseTarget({
+      runId: 'run_a',
+      lease: { pid: 12, runId: 'run_a', ts: now, ttlMs, handle: 'term_station' },
+      leaseRead: 'ok',
+      now,
+      coordinatorHandle: null,
+      terminals: [station, shuai],
+      previewHandles: ['term_station'],
+    });
+    await t.test('未过期且 handle 在盘 → 仍关台', () => {
+      assert.ok(freshClose.ok && freshClose.action === 'close' && freshClose.closeHandle === 'term_station', JSON.stringify(freshClose));
     });
   });
 });
