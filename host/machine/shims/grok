@@ -1,0 +1,10 @@
+#!/bin/sh
+# regrok shim (Git Bash): proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
+# real binary: edit GROK_REAL for this machine
+# explicit -m/--model passes through untouched
+GROK_REAL="C:/nvm4w/nodejs/grok.cmd"
+export HTTPS_PROXY=http://127.0.0.1:7890
+case " $* " in
+  *" -m "*|*" --model"*) exec "$GROK_REAL" "$@" ;;
+  *) exec "$GROK_REAL" -m grok-4.6 "$@" ;;
+esac

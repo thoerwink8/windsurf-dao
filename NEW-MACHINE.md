@@ -2,6 +2,8 @@
 
 一台新机器，把 windsurf-dao 的环境恢复到与旧机一致。按顺序做，几步就完。
 
+先读 `host/machine/INDEX.md`：A/B/C/D 告诉你装什么、不拷什么。本页只写装法，不另造第二份说明书。`host/machine/` 只装 B 类模板 + INDEX，**不镜像 `~`**。
+
 ## 1. 拿仓库
 
 ```bash
@@ -136,32 +138,7 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
 grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
 
 - npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
-- regrok shim：在 `~/.local/bin/` 下放两个文件（覆盖 PATH 第一位，包装真实二进制 `C:\nvm4w\nodejs\grok.cmd`；真实二进制路径因机而异，shim 里改对即可）。shim 内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染，不带前缀连不上）并默认追加 `-m grok-4.6`；显式传 `-m/--model` 时原样透传不覆盖。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。
-  - `~/.local/bin/grok.cmd`（Windows cmd 版）：
-    ```bat
-    @echo off
-    rem regrok shim: proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
-    rem real binary: C:\nvm4w\nodejs\grok.cmd ; explicit -m/--model passes through untouched
-    set HTTPS_PROXY=http://127.0.0.1:7890
-    echo %* | findstr /C:"-m " /C:"--model" >nul
-    if %errorlevel%==0 (
-      "C:\nvm4w\nodejs\grok.cmd" %*
-    ) else (
-      "C:\nvm4w\nodejs\grok.cmd" -m grok-4.6 %*
-    )
-    ```
-  - `~/.local/bin/grok`（Git Bash 版）：
-    ```sh
-    #!/bin/sh
-    # regrok shim (Git Bash): proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
-    # real binary: C:/nvm4w/nodejs/grok.cmd ; explicit -m/--model passes through untouched
-    export HTTPS_PROXY=http://127.0.0.1:7890
-    case " $* " in
-      *" -m "*|" --model"*) exec "C:/nvm4w/nodejs/grok.cmd" "$@" ;;
-      *) exec "C:/nvm4w/nodejs/grok.cmd" -m grok-4.6 "$@" ;;
-    esac
-    ```
-    注释保持纯 ASCII（两文件都是，勿写中文注释）。shim 装好后无需再手动加代理前缀——那是 regrok 之前的旧姿势。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制（`--permission-mode auto` 不是免确认框，见该文件 launch_note）。
+- regrok shim：把 `host/machine/shims/grok.cmd` 和 `host/machine/shims/grok` 拷到 `~/.local/bin/`（覆盖 PATH 第一位）。打开模板改 `GROK_REAL`（真实二进制因机而异，例：`C:\nvm4w\nodejs\grok.cmd`）。行为与现机一致：内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染），默认追加 `-m grok-4.6`，显式传 `-m/--model` 时原样透传。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。注释保持纯 ASCII。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制。
 - 宿主对外发布闸仍会硬拦 git push，协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。这和 TUI 确认框不是一层。
 
 ## 7b. command-code 怎么配
@@ -180,29 +157,7 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 - 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
 - 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
-- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。在 `~/.local/bin/` 放两个文件（覆盖 PATH 第一位，包装真实二进制 `%LOCALAPPDATA%\cursor-agent\cursor-agent.cmd`）：
-  - `~/.local/bin/cursor-agent.cmd`（Windows cmd 版）：
-    ```bat
-    @echo off
-    rem cursor-agent shim: Clash Party proxy required (CN IP hides GPT/Claude)
-    rem real binary: %LOCALAPPDATA%\cursor-agent\cursor-agent.cmd
-    set HTTPS_PROXY=http://127.0.0.1:7890
-    set HTTP_PROXY=http://127.0.0.1:7890
-    set ALL_PROXY=http://127.0.0.1:7890
-    set NODE_USE_ENV_PROXY=1
-    "C:\Users\Administrator\AppData\Local\cursor-agent\cursor-agent.cmd" %*
-    ```
-  - `~/.local/bin/cursor-agent`（Git Bash 版）：
-    ```sh
-    #!/bin/sh
-    # cursor-agent shim (Git Bash): Clash Party proxy required (CN IP hides GPT/Claude)
-    export HTTPS_PROXY=http://127.0.0.1:7890
-    export HTTP_PROXY=http://127.0.0.1:7890
-    export ALL_PROXY=http://127.0.0.1:7890
-    export NODE_USE_ENV_PROXY=1
-    exec "/c/Users/Administrator/AppData/Local/cursor-agent/cursor-agent.cmd" "$@"
-    ```
-    注释保持纯 ASCII。`agent` 入口同样要套一层代理（本机 `~/.local/bin/agent.cmd` 已有）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
+- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。把 `host/machine/shims/cursor-agent.cmd`、`cursor-agent`、`agent.cmd`、`agent` 拷到 `~/.local/bin/`（覆盖 PATH 第一位，包装 `%LOCALAPPDATA%\cursor-agent\` 下的真实二进制）。注释保持纯 ASCII。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
 - 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force`）。`--force` 是无人值守放行（等同 `--yolo`）。
 - 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
 
@@ -210,6 +165,26 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。
 - 不可逆红线：覆写正在使用的 `~/.claude/settings.json` 可能触发 401 强制登出，把文件改回去也恢复不了——改它前先备份，AI 不得整文件覆写。
+
+## 8c. 什么不能拷
+
+INDEX 里 D 类一律不拷：`~/.claude/settings.json`、`~/.claude/settings.local.json`、cc-switch DB、`~/.claude/state.json`、本机绝对路径、密钥形态文件。C 类只手带，不进 git。没写进仓库的本机私货闸看不见——新 CLI 只要写进仓就会被扫到，记得补 INDEX。
+
+## 8d. Orca hook 闪屏（禁默认 cursor hook install）
+
+**不要**对 cursor 跑 Orca 默认 `agent hooks on` / cursor hook install。默认会写 PowerShell `EncodedCommand`，每次 hook 闪一个控制台。
+
+正确装法：
+
+1. 把 `host/machine/hooks/orca-cursor-hook.cmd` 拷到 `~/.orca/agent-hooks/orca-cursor-hook.cmd`
+2. 把 `host/machine/hooks/orca-cursor.hooks.json` 的内容合进用户级 `~/.cursor/hooks.json`
+3. 命令行必须是 `conhost.exe --headless ...`，**禁止 EncodedCommand**
+
+Claude / Codex / grok 已装的 `~/.orca/agent-hooks/*.cmd` 保持现状；本条只挡 cursor 那条闪屏默认装法。
+
+## 8e. Cursor 帅缺口
+
+帅位三件套（Run / 收信 / hook）只在 Claude Code 上齐。Cursor 现在缺盘注入（board-hook）、信箱台归属、三态 hook。**不改「帅=CC」政策**——Cursor 只做工人，不要把 dispatch / CLAUDE.md 改成任意终端都能当帅。
 
 ## 8b. git 编辑器/分页器兑底（#500，新机必做）
 
