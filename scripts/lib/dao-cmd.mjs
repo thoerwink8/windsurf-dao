@@ -641,8 +641,11 @@ export function argsGateList({ task, status, run } = {}) {
   return a;
 }
 
-export function argsTerminalList() {
-  return ['terminal', 'list', '--json'];
+export function argsTerminalList({ worktree } = {}) {
+  const a = ['terminal', 'list'];
+  if (worktree) a.push('--worktree', worktree);
+  a.push('--json');
+  return a;
 }
 
 export function argsTerminalClose({ terminal, tab } = {}) {
@@ -689,6 +692,57 @@ export function extractHandleFromCreate(json) {
     || null;
 }
 
+/** #633：worktree create 回包经常没有 startupTerminal，要用 terminal list 找默认空壳。 */
+export function unwrapTerminalList(json) {
+  const list = json?.result?.terminals;
+  if (!Array.isArray(list)) {
+    return { ok: false, unscanned: true, error: 'terminal list 结构不认识', terminals: [] };
+  }
+  return { ok: true, unscanned: false, terminals: list };
+}
+
+export function looksLikeAgentPreview(text) {
+  return /Grok Build|always-approve|ctrl\+q|╭─|╰─/i.test(String(text || ''));
+}
+
+export function looksLikeShellPrompt(text) {
+  const s = String(text || '').trimEnd();
+  if (!s) return false;
+  if (looksLikeAgentPreview(s)) return false;
+  return /(?:^|\n)PS .*>\s*$/.test(s)
+    || /(?:^|\n)[A-Z]:\\[^>\n]*>\s*$/.test(s)
+    || /(?:^|\n)\$\s*$/.test(s);
+}
+
+/** 建卡默认空壳：title 为 null / 空 / "Terminal N"；已是 agent 的不碰。 */
+export function isReusableDefaultTerminal(term) {
+  if (!term || !term.handle) return false;
+  if (term.orphaned) return false;
+  if (term.connected === false || term.writable === false) return false;
+  const title = term.title;
+  const titleOk = title == null || title === '' || /^Terminal\s+\d+$/i.test(String(title).trim());
+  if (!titleOk) return false;
+  const preview = String(term.preview || '');
+  if (preview && looksLikeAgentPreview(preview)) return false;
+  return true;
+}
+
+export function findReusableDefaultTerminal(listJson, { worktreeId } = {}) {
+  const unwrapped = unwrapTerminalList(listJson);
+  if (!unwrapped.ok) {
+    return { ok: false, unscanned: true, error: unwrapped.error, handle: null };
+  }
+  let terms = unwrapped.terminals;
+  if (worktreeId && String(worktreeId).includes('::')) {
+    terms = terms.filter(t => t.worktreeId === worktreeId);
+  }
+  const hits = terms.filter(isReusableDefaultTerminal);
+  if (hits.length === 0) {
+    return { ok: true, unscanned: false, handle: null, reason: '没有可复用的默认空壳终端' };
+  }
+  return { ok: true, unscanned: false, handle: hits[0].handle, terminal: hits[0] };
+}
+
 /** terminal send --json 的回执。真返回在 result.send；accepted=true 才算送达。
  * 不带 --json 的人读回执由 parseOrcaStdout 归一成同一形状（#580）。 */
 export function extractTerminalSend(json) {
@@ -733,6 +787,7 @@ export function rollbackErrorAlreadyGone(error) {
 export function catalogUsedFlags() {
   const samples = [
     argsTerminalCreate({ worktree: 'w', title: 't', command: 'c' }),
+    argsTerminalList({ worktree: 'w' }),
     argsTerminalRead({ terminal: 't', limit: 80, cursor: 1 }),
     argsTerminalSend({ terminal: 't', text: 'x', enter: true }),
     argsWorktreeCreate({
@@ -2714,16 +2769,17 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
+                  # #633：先复用建卡默认空壳（terminal send launch），没有才 terminal create
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
-                  # 建树后起终端 + 注入任务书（#586 阶段二）；--dry-run 只打印选型不建树
+                  # 建树后注入默认空壳（#633）；没有空壳才另起终端；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 原子完工：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端（必须 --worktree）；终端已关才允许新建并写原因；两条路径都 notify（投失败即停）
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
-                  # 给已有工人卡补派审官（#575）：建树+起终端+注入+验开工，一条命令，不碰 raw
+                  # 给已有工人卡补派审官（#575）：建树+注入默认空壳（#633）+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵

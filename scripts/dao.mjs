@@ -59,7 +59,10 @@ import {
   extractHandleFromCreate,
   extractDispatchId,
   extractTaskId,
+  extractTerminalSend,
   extractTerminalText,
+  findReusableDefaultTerminal,
+  looksLikeShellPrompt,
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
@@ -286,6 +289,52 @@ function closeWorkerHandle(handle) {
   orca(argsTerminalClose({ terminal: handle, tab: false }));
 }
 
+/** #633：建卡后先把 launch 打进 Orca 默认空壳，没有空壳才 terminal create。 */
+function findDefaultTerminalForLaunch(worktreeId) {
+  for (let i = 0; i < 5; i++) {
+    const listed = orca(argsTerminalList({ worktree: worktreeId }));
+    if (listed.ok) {
+      const found = findReusableDefaultTerminal(listed.json, { worktreeId });
+      if (found.ok && found.handle) return found;
+    }
+    sleepMs(200);
+  }
+  return { handle: null };
+}
+
+function waitForShellPrompt(handle) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000) {
+    const read = orca(argsTerminalRead({ terminal: handle, limit: 20 }));
+    if (read.ok && looksLikeShellPrompt(extractTerminalText(read.json))) {
+      return { ok: true };
+    }
+    sleepMs(200);
+  }
+  return { ok: false };
+}
+
+function launchAgentInWorktree({ worktreeId, title, command }) {
+  const found = findDefaultTerminalForLaunch(worktreeId);
+  if (found.handle && waitForShellPrompt(found.handle).ok) {
+    const sent = orca(argsTerminalSend({ terminal: found.handle, text: command, enter: true }));
+    if (sent.ok && extractTerminalSend(sent.json)) {
+      return { ok: true, handle: found.handle, reused: true };
+    }
+  }
+  const created = orca(argsTerminalCreate({
+    worktree: worktreeId,
+    title,
+    command,
+  }));
+  if (!created.ok) {
+    return { ok: false, error: `terminal create 失败: ${errText(created.error)}`, reused: false };
+  }
+  const handle = extractHandleFromCreate(created.json);
+  if (!handle) return { ok: false, error: 'terminal create 没返回 handle', reused: false };
+  return { ok: true, handle, reused: false };
+}
+
 function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created }) {
   let modelId = slate[startIndex].id;
   let pipeIndex = 0;
@@ -309,19 +358,19 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const cap = assertCodexLaunch({ command: launch.command });
     if (!cap.ok) return { ok: false, error: cap.error, attempts };
 
-    const term = orca(argsTerminalCreate({
-      worktree: worktreeId,
+    const term = launchAgentInWorktree({
+      worktreeId,
       title,
       command: launch.command,
-    }));
+    });
     if (!term.ok) {
-      const kind = classifyLaunchFailure({ error: errText(term.error) });
-      attempts.push({ modelId, pipeIndex, provider: pipe.provider, kind, error: errText(term.error) });
+      const kind = classifyLaunchFailure({ error: term.error });
+      attempts.push({ modelId, pipeIndex, provider: pipe.provider, kind, error: term.error });
       const next = advanceLaunchState({
         slate, modelId, pipeIndex, hardFailsOnThisPipe, transientFailsOnThisPipe, kind,
       });
       if (next.action === 'abort' || next.action === 'fail') {
-        return { ok: false, error: `工人终端创建失败且名单走完: ${errText(term.error)}`, attempts, exhausted: true };
+        return { ok: false, error: `工人终端创建失败且名单走完: ${term.error}`, attempts, exhausted: true };
       }
       modelId = next.modelId;
       pipeIndex = next.pipeIndex;
@@ -329,7 +378,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       transientFailsOnThisPipe = next.transientFailsOnThisPipe;
       continue;
     }
-    const handle = extractHandleFromCreate(term.json);
+    const handle = term.handle;
     if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
     created.workerHandle = handle;
 
@@ -338,7 +387,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       timeoutMs: probeWaitMs(routing, launch.provider),
     });
     if (verify.ok) {
-      return { ok: true, modelId, pipeIndex, pipe, launch, handle, attempts };
+      return { ok: true, modelId, pipeIndex, pipe, launch, handle, attempts, reused: !!term.reused };
     }
 
     const kind = classifyLaunchFailure({
@@ -1192,14 +1241,14 @@ function cmdStart(args) {
   }
 
   if (!args.worktree) fail('start 要 --worktree');
-  const created = orca(argsTerminalCreate({
-    worktree: args.worktree,
+  const created = launchAgentInWorktree({
+    worktreeId: args.worktree,
     title: args.title,
     command: launch.command,
-  }));
-  if (!created.ok) fail(`terminal create 失败: ${errText(created.error)}`, { command: launch.command });
-  const handle = extractHandleFromCreate(created.json);
-  if (!handle) fail('terminal create 没返回 handle', { command: launch.command });
+  });
+  if (!created.ok) fail(created.error, { command: launch.command });
+  const handle = created.handle;
+  if (!handle) fail('没拿到终端 handle', { command: launch.command });
 
   const verified = waitAndVerify({
     readOnce: () => readOnceHandle(handle),
@@ -1221,6 +1270,7 @@ function cmdStart(args) {
     handle,
     provider: launch.provider,
     command: launch.command,
+    reused: !!created.reused,
     verify: { ok: true },
   });
 }
@@ -1546,16 +1596,16 @@ function cmdReviewerCreate(args) {
   }
 
   const launched = { reviewerId, reviewerHandle: null };
-  const revTerm = orca(argsTerminalCreate({
-    worktree: reviewerId,
+  const revTerm = launchAgentInWorktree({
+    worktreeId: reviewerId,
     title: revName,
     command: reviewerLaunch.command,
-  }));
+  });
   if (!revTerm.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
-    fail(`审官终端创建失败: ${errText(revTerm.error)}`, { ...plan, reviewerId, reviewerPath });
+    fail(`审官终端创建失败: ${revTerm.error}`, { ...plan, reviewerId, reviewerPath });
   }
-  launched.reviewerHandle = extractHandleFromCreate(revTerm.json);
+  launched.reviewerHandle = revTerm.handle;
   if (!launched.reviewerHandle) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail('审官终端没返回 handle', { ...plan, reviewerId, reviewerPath });
@@ -1790,13 +1840,13 @@ function cmdReviewerAttach(args) {
   const align = trialMergeMaster({ cwd: created.reviewerPath });
   if (!align.ok) failCreated(created, `对齐 master 试合失败: ${align.error}`, { align, ...plan });
 
-  const revTerm = orca(argsTerminalCreate({
-    worktree: created.reviewerId,
+  const revTerm = launchAgentInWorktree({
+    worktreeId: created.reviewerId,
     title: revName,
     command: reviewerLaunch.command,
-  }));
-  if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${errText(revTerm.error)}`, plan);
-  created.reviewerHandle = extractHandleFromCreate(revTerm.json);
+  });
+  if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
+  created.reviewerHandle = revTerm.handle;
   if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
 
   const revVerify = waitAndVerify({
