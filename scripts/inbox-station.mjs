@@ -611,7 +611,11 @@ function loadLease(logPath) {
 }
 
 export function mergeLeaseHandle(prev, nextHandle) {
-  return nextHandle || (prev && prev.handle) || null;
+  const prevH = prev && prev.handle ? prev.handle : null;
+  if (!nextHandle) return prevH;
+  // 已有台 handle 不许被别的 handle（含借走的 coordinator）顶掉
+  if (prevH && prevH !== nextHandle) return prevH;
+  return nextHandle;
 }
 
 /** 租约 handle 只来自创建出来的信箱台。ensure 活着时不得用当前 coordinator 覆写。 */
@@ -651,11 +655,17 @@ function persistLease(logPath, runId, ttlMs = LEASE_TTL_MS) {
   }), 'utf8');
 }
 
-function stampLeaseHandle(logPath, handle) {
-  if (!handle) return;
+function stampLeaseHandle(logPath, handle, source = 'ensure') {
+  if (!handle) return false;
   const prev = loadLease(logPath);
-  if (!prev) return;
+  if (!prev) return false;
+  if (!acceptLeaseHandleStamp({
+    prevHandle: prev.handle || null,
+    nextHandle: handle,
+    source,
+  })) return false;
   writeFileSync(leasePath(logPath), formatLease({ ...prev, handle }), 'utf8');
+  return true;
 }
 
 async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } = {}) {
@@ -784,7 +794,9 @@ async function cmdEnsure(args) {
     rebuiltHandle: (action === 'rebuild' || action === 'restart') ? handle : null,
   });
   if (stampPlan.handle) handle = stampPlan.handle;
-  if (stampPlan.stamp) stampLeaseHandle(logPath, stampPlan.handle);
+  if (stampPlan.stamp) {
+    stampLeaseHandle(logPath, stampPlan.handle, 'rebuild');
+  }
 
   const afterShow = showRun(runId);
   const afterList = listTerminals();
