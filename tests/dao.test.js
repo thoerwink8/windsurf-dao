@@ -1633,6 +1633,7 @@ describe('dao', () => {
     await t.test('#601 cmdEnsure 不得无条件 stampLeaseHandle(coordTerm.handle)', () => {
       assert.ok(/planEnsureLeaseStamp/.test(ensureFn)
         && /if \(stampPlan\.stamp\)/.test(ensureFn)
+        && /stampLeaseHandle\(logPath, stampPlan\.handle, 'rebuild'\)/.test(ensureFn)
         && !/stampLeaseHandle\(logPath, handle\)/.test(ensureFn)
         && !/stampLeaseHandle\(logPath, coordTerm/.test(ensureFn), 'cmdEnsure 仍无条件 stamp coordinator');
     });

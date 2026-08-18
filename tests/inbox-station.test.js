@@ -190,6 +190,9 @@ describe('inbox-station', () => {
     await t.test('mergeLeaseHandle 保留旧 handle', () => {
       assert.ok(S.mergeLeaseHandle({ handle: 'term_old' }, null) === 'term_old', 'mergeLeaseHandle 保留旧 handle');
     });
+    await t.test('#601 mergeLeaseHandle 拒用帅 handle 顶掉台', () => {
+      assert.ok(S.mergeLeaseHandle({ handle: 'term_station' }, 'term_shuai') === 'term_station', 'mergeLeaseHandle 拒用帅 handle 顶掉台');
+    });
     await t.test('#601 rebuild 可盖新台 handle', () => {
       assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_old', nextHandle: 'term_new', source: 'rebuild' }) === true, 'rebuild 可盖新台 handle');
     });
