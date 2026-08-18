@@ -456,8 +456,8 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 6 个现役模型', () => {
-      assert.ok(models.length === 6, 'models.yml 解析出 6 个现役模型  →  ' + String(models.length));
+    await t.test('models.yml 解析出 9 个现役模型', () => {
+      assert.ok(models.length === 9, 'models.yml 解析出 9 个现役模型  →  ' + String(models.length));
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
@@ -574,6 +574,12 @@ describe('dianjiangtai', () => {
     });
     await t.test('select+routes：谷时 reason=route_beijing', () => {
       assert.ok(routedValley.options.A.reason === "route_beijing", 'select+routes：谷时 reason=route_beijing  →  ' + routedValley.options.A.reason);
+    });
+    await t.test('slate：峰时第一是 grok，fallback 是下一模型不是管子', () => {
+      assert.ok(Array.isArray(routedPeak.slate) && routedPeak.slate[0] === "grok-4.6" && routedPeak.slate[1] === FLASH, 'slate：峰时第一是 grok，fallback 是下一模型不是管子  →  ' + JSON.stringify(routedPeak.slate));
+    });
+    await t.test('slate：谷时第一是 flash', () => {
+      assert.ok(Array.isArray(routedValley.slate) && routedValley.slate[0] === FLASH, 'slate：谷时第一是 flash  →  ' + JSON.stringify(routedValley.slate));
     });
     await t.test('无 routes 时行为不变：零样本仍 quota_explore', () => {
       assert.ok(run().options.A.reason === "quota_explore", '无 routes 时行为不变：零样本仍 quota_explore');

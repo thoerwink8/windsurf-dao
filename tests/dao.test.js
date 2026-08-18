@@ -75,6 +75,23 @@ describe('dao', () => {
     await t.test('正常有输出无确认 → 过', () => {
       assert.ok(S.verifyStarted({ text: 'codex ready\nmodel gpt-5.6-sol' }).ok === true, '正常有输出无确认 → 过');
     });
+    const reject = S.verifyStarted({ result: { text: 'Cannot use this model' } });
+    await t.test('#618 返工：拒模文本不能当 TUI 就绪', () => {
+      assert.ok(reject.ok === false && reject.reason === '拒模', '#618 返工：拒模文本不能当 TUI 就绪  →  ' + JSON.stringify(reject));
+    });
+    const rejectWait = S.waitAndVerify({
+      readOnce: () => ({ result: { text: 'Cannot use this model' } }),
+      timeoutMs: 10,
+      intervalMs: 1,
+      sleep: () => {},
+    });
+    await t.test('#618 返工：waitAndVerify 拒模立刻失败（审官复现）', () => {
+      assert.ok(rejectWait.ok === false && rejectWait.reason === '拒模', '#618 返工：waitAndVerify 拒模立刻失败  →  ' + JSON.stringify(rejectWait));
+    });
+    const region = S.verifyStarted({ text: 'This model is not available in your region.' });
+    await t.test('#618 返工：区域不可用也是拒模', () => {
+      assert.ok(region.ok === false && region.reason === '拒模', '#618 返工：区域不可用也是拒模  →  ' + JSON.stringify(region));
+    });
   });
 
   it('启动模板：reclaude / shim / fail-loud', async (t) => {
@@ -107,6 +124,34 @@ describe('dao', () => {
     const flash = S.resolveLaunch({ model: 'deepseek-v4-flash', routing });
     await t.test('#602 pi 启动带 provider 前缀，避免裸名歧义', () => {
       assert.ok(flash.command.includes('opencode-go/deepseek-v4-flash'), '#602 pi 启动带 provider 前缀，避免裸名歧义  →  ' + flash.command);
+    });
+    const kimi = S.resolveLaunch({ model: 'kimi-k3', routing });
+    await t.test('#615 kimi 主路走 cursor-agent / kimi-k3-high', () => {
+      assert.ok(/cursor-agent/.test(kimi.command) && /--model\s+kimi-k3-high/.test(kimi.command) && /--force/.test(kimi.command), '#615 kimi 主路走 cursor-agent / kimi-k3-high  →  ' + kimi.command);
+    });
+    const kimiOg = S.resolveLaunch({
+      model: 'kimi-k3',
+      pipe: { provider: 'opencode-go', cli_model: 'kimi-k3' },
+      routing,
+    });
+    await t.test('#615 kimi 支路走 opencode-go/kimi-k3', () => {
+      assert.ok(kimiOg.command.includes('kimi-k3') && /pi\b/.test(kimiOg.command), '#615 kimi 支路走 opencode-go/kimi-k3  →  ' + kimiOg.command);
+    });
+    const gptMain = S.resolveLaunch({ model: 'gpt-5.6-sol', routing });
+    await t.test('#615 gpt 主路仍 Codex', () => {
+      assert.ok(/\bcodex\b/.test(gptMain.command) && gptMain.command.includes(S.CODEX_CAPABLE_FLAG), '#615 gpt 主路仍 Codex  →  ' + gptMain.command);
+    });
+    const gptPipe = S.resolveLaunch({
+      model: 'gpt-5.6-sol',
+      pipe: { provider: 'cursor', cli_model: 'gpt-5.6-sol-high' },
+      routing,
+    });
+    await t.test('#615 gpt 支路走 cursor / gpt-5.6-sol-high', () => {
+      assert.ok(/cursor-agent/.test(gptPipe.command) && /gpt-5\.6-sol-high/.test(gptPipe.command), '#615 gpt 支路走 cursor / gpt-5.6-sol-high  →  ' + gptPipe.command);
+    });
+    const composer = S.resolveLaunch({ model: 'composer-2.5', routing });
+    await t.test('#615 composer 单管 cursor', () => {
+      assert.ok(/cursor-agent/.test(composer.command) && /--model\s+composer-2.5/.test(composer.command), '#615 composer 单管 cursor  →  ' + composer.command);
     });
     await t.test('shim 文件在仓里', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
@@ -371,6 +416,9 @@ describe('dao', () => {
     const p1e = payload(autoExplicit);
     await t.test('显式 auto 无需理由 → 通过', () => {
       assert.ok(autoExplicit.status === 0 && p1e.mergePolicy === 'auto', '显式 auto 无需理由 → 通过  →  ' + JSON.stringify(p1e));
+    });
+    await t.test('#615 dry-run 带 slate 且 grok 在名单里', () => {
+      assert.ok(Array.isArray(p1e.slate) && p1e.slate.some(s => s && s.id === 'grok-4.6' && Array.isArray(s.pipes)), '#615 dry-run 带 slate 且 grok 在名单里  →  ' + JSON.stringify(p1e.slate));
     });
 
     const noModel = dispatch(['--merge-policy', 'auto', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
