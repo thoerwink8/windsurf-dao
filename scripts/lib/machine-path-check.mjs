@@ -324,6 +324,24 @@ function checkBTemplates(root, files) {
     if (/hooks\/orca-cursor-hook\.cmd$/.test(rel) && /powershell[\s\S]{0,80}EncodedCommand/i.test(got.text)) {
       problems.push(`${rel} 禁止 EncodedCommand`);
     }
+    if (/\.cmd$/i.test(rel)) {
+      problems.push(...cmdShimVisibleWindowProblems(rel, got.text));
+    }
+  }
+  return problems;
+}
+
+/** #633：for /f in ('dir') 和 findstr 各开一个可见 cmd。读临时文件的 for /f 不算。rem 注释不算。 */
+export function cmdShimVisibleWindowProblems(rel, text) {
+  const problems = [];
+  const src = String(text || '').split(/\r?\n/)
+    .filter(line => !/^\s*(rem\b|::)/i.test(line))
+    .join('\n');
+  if (/for\s+\/f\b[\s\S]{0,120}in\s*\('/i.test(src)) {
+    problems.push(`${rel} 禁止 for /f in ('...')：子进程会弹可见 cmd`);
+  }
+  if (/\bfindstr\b/i.test(src)) {
+    problems.push(`${rel} 禁止 findstr：管道会弹可见 cmd`);
   }
   return problems;
 }

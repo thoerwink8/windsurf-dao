@@ -744,6 +744,36 @@ describe('dianjiangtai', () => {
         passerIds: ["grok-4.6", "claude-opus"],
       }).model === "claude-opus", 'pinReviewerSlotA 无 GPT（被 UI ban 剔掉）时顶 Opus');
     });
+    const slot = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
+    const models = [
+      { id: "gpt-5.6-sol", provider: "gpt" },
+      { id: "claude-opus", provider: "claude" },
+      { id: "kimi-k3", provider: "cursor" },
+    ];
+    await t.test('GPT 容量满后下一档是 Opus', () => {
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "claude-opus", "kimi-k3"] });
+      assert.ok(n.ok && n.next === "claude-opus", 'GPT 容量满后下一档是 Opus  →  ' + JSON.stringify(n));
+    });
+    await t.test('无 Opus 时 GPT 下一档是 kimi', () => {
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "kimi-k3"] });
+      assert.ok(n.ok && n.next === "kimi-k3", '无 Opus 时 GPT 下一档是 kimi  →  ' + JSON.stringify(n));
+    });
+    await t.test('选型序走完 → 没法再换', () => {
+      const n = slot.nextReviewerAfter({ currentId: "kimi-k3", models, passerIds: ["gpt-5.6-sol", "kimi-k3"] });
+      assert.ok(n.ok === false && n.exhausted === true, '选型序走完 → 没法再换  →  ' + JSON.stringify(n));
+    });
+    await t.test('planCapacitySwitch 认审官卡并换人', () => {
+      const p = slot.planCapacitySwitch({
+        displayName: "PR-#664 审官·gpt-5.6-sol",
+        models,
+        passerIds: ["gpt-5.6-sol", "kimi-k3"],
+      });
+      assert.ok(p.ok && p.action === "switch" && p.to === "kimi-k3" && p.pr === 664, 'planCapacitySwitch 认审官卡并换人  →  ' + JSON.stringify(p));
+    });
+    await t.test('planCapacitySwitch 卡名不是审官 → 报帅', () => {
+      const p = slot.planCapacitySwitch({ displayName: "#452 - 看门狗正式版", models, passerIds: ["gpt-5.6-sol"] });
+      assert.ok(p.ok === false && p.action === "escalate", 'planCapacitySwitch 卡名不是审官 → 报帅  →  ' + JSON.stringify(p));
+    });
     const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
     function masterProviderOf(modelId) {
       const r = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });

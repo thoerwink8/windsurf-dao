@@ -648,6 +648,10 @@ describe('dao', () => {
     await t.test('Fixes 也算署名单号', () => {
       assert.ok(refs2.length === 1 && refs2[0] === 12, 'Fixes 也算署名单号  →  ' + JSON.stringify(refs2));
     });
+    const refs3 = S.linkedIssueNumbers('关联 issue #633。不要 Closes。\n见 #655 现场');
+    await t.test('关联 issue #N 也是署名（不触发 GitHub 自动关单）', () => {
+      assert.ok(refs3.length === 1 && refs3[0] === 633, '关联 issue #N 也是署名  →  ' + JSON.stringify(refs3));
+    });
 
     // dispatch 侧打标：stub runGh 验证调用面（label list → 缺的建 → issue edit --add-label）。
     const calls = [];
@@ -1497,6 +1501,19 @@ describe('dao', () => {
       assert.ok(grokStillRed.ok === false && grokStillRed.evidence === '[Pasted Content 4686 chars]', 'Grok Pasted Content 折叠仍然红  →  ' + JSON.stringify(grokStillRed));
     });
 
+    const leftoverRework = S.leftoverDispatchMatch('【返工指令 · 闭环自动流转 · 第 1 轮】\n[Pasted Content 5711 chars]');
+    await t.test('#633 leftoverDispatchMatch 认出框里返工指令', () => {
+      assert.ok(leftoverRework === '【返工指令', '#633 leftoverDispatchMatch 认出返工  →  ' + leftoverRework);
+    });
+    const leftoverRecheck = S.leftoverDispatchMatch('【复核指令 · 闭环自动流转】');
+    await t.test('#633 leftoverDispatchMatch 认出复核指令', () => {
+      assert.ok(leftoverRecheck === '【复核指令', '#633 leftoverDispatchMatch 认出复核  →  ' + leftoverRecheck);
+    });
+    const leftoverGeneric = S.leftoverDispatchMatch('[Pasted Content 5711 chars]\n›');
+    await t.test('#633 无返工/复核字的粘贴块不算残留派活', () => {
+      assert.ok(leftoverGeneric === null, '#633 普通粘贴块不是残留派活  →  ' + leftoverGeneric);
+    });
+
     // 2. verifyStartedPolling：只贴不发 → 立刻红；垫片没了，没有「补 enter → 绿」这条路。
     //    绿色唯一来源：真 transcript 证明（见上方 #661 块）或屏面稳定（agent 真在干活）。
     let fastReads = 0;
@@ -1869,8 +1886,8 @@ describe('dao', () => {
         'createName 必须传 pr: plan.pr');
     });
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
-    await t.test('worker-start 用 --terminal 不用 --agent', () => {
-      assert.ok(ws.includes('--terminal') && !ws.includes('--agent'), 'worker-start 用 --terminal 不用 --agent');
+    await t.test('续 Dispatch 的 worker-start 用 --terminal', () => {
+      assert.ok(ws.includes('--terminal') && !ws.includes('--agent'), '续 Dispatch 的 worker-start 用 --terminal');
     });
     const wsContinue = S.argsWorkerStart({ task: 't', terminal: 'h' });
     await t.test('#559 续 Dispatch：worker-start 可只给 --task + --terminal（不带 --worktree）', () => {
@@ -2139,8 +2156,9 @@ describe('dao', () => {
       });
   });
 
-  it('#633 注入复用建卡默认空壳', async (t) => {
+  it('#633 空壳先关再 create --command，禁止 send 进 pwsh', async (t) => {
     const S = await S_LOAD;
+    const routing = await ROUTING_LOAD;
     const live = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'terminal-list-default.json'), 'utf8'));
     const listArgs = S.argsTerminalList({ worktree: 'w' });
     await t.test('terminal list builder 带 --worktree --json', () => {
@@ -2152,19 +2170,19 @@ describe('dao', () => {
       assert.ok(found.ok && found.handle === 'term_21834764-0aab-4188-bacf-651b4f6ae6c6' && found.unscanned === false,
         '真 terminal list 默认空壳能拿到 handle  →  ' + JSON.stringify(found));
     });
-    await t.test('title null + PS 提示符算可复用', () => {
-      assert.ok(S.isReusableDefaultTerminal(live.result.terminals[0]) === true, 'title null + PS 提示符算可复用');
+    await t.test('title null + PS 提示符算空壳', () => {
+      assert.ok(S.isReusableDefaultTerminal(live.result.terminals[0]) === true, 'title null + PS 提示符算空壳');
     });
-    await t.test('title Terminal 1 也可复用', () => {
-      assert.ok(S.isReusableDefaultTerminal({ ...live.result.terminals[0], title: 'Terminal 1' }) === true, 'title Terminal 1 也可复用');
+    await t.test('title Terminal 1 也算空壳', () => {
+      assert.ok(S.isReusableDefaultTerminal({ ...live.result.terminals[0], title: 'Terminal 1' }) === true, 'title Terminal 1 也算空壳');
     });
     const grok = {
       ...live.result.terminals[0],
       title: '⠋ Grok',
       preview: 'Grok Build  1.0.1  always-approve',
     };
-    await t.test('已是 agent 的终端不复用', () => {
-      assert.ok(S.isReusableDefaultTerminal(grok) === false, '已是 agent 的终端不复用');
+    await t.test('已是 agent 的终端不当空壳', () => {
+      assert.ok(S.isReusableDefaultTerminal(grok) === false, '已是 agent 的终端不当空壳');
     });
     const mixed = {
       ok: true,
@@ -2176,8 +2194,8 @@ describe('dao', () => {
       },
     };
     const picked = S.findReusableDefaultTerminal(mixed);
-    await t.test('一棵树 agent+空壳 只拿空壳', () => {
-      assert.ok(picked.ok && picked.handle === live.result.terminals[0].handle, '一棵树 agent+空壳 只拿空壳  →  ' + JSON.stringify(picked));
+    await t.test('一棵树 agent+空壳 只拿空壳来关', () => {
+      assert.ok(picked.ok && picked.handle === live.result.terminals[0].handle, '一棵树 agent+空壳 只拿空壳来关  →  ' + JSON.stringify(picked));
     });
     const none = S.findReusableDefaultTerminal({ ok: true, result: { terminals: [grok] } });
     await t.test('查到 0 个空壳不是没查成', () => {
@@ -2203,22 +2221,27 @@ describe('dao', () => {
       assert.ok(createHits.length === 1, 'dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create  →  ' + createHits.length);
     });
 
-    const promptFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: false, sendAccepted: false });
-    await t.test('提示符未就绪 → 先关空壳再 create', () => {
-      assert.ok(promptFail.action === 'close-then-create' && promptFail.closeHandle === 'term_shell' && promptFail.leftoverIfCreateNow === true,
-        '提示符未就绪 → 先关空壳再 create  →  ' + JSON.stringify(promptFail));
+    const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
+    await t.test('launchAgentInWorktree 禁止 terminal send 启动命令', () => {
+      assert.ok(fn && !/argsTerminalSend\(/.test(fn[0]) && !/waitForShellPrompt/.test(fn[0]),
+        'launchAgentInWorktree 禁止 terminal send 启动命令  →  ' + (fn ? fn[0].slice(0, 240) : 'no fn'));
     });
-    const sendFail = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: false });
-    await t.test('send 失败 → 先关空壳再 create', () => {
-      assert.ok(sendFail.action === 'close-then-create' && sendFail.closeHandle === 'term_shell' && sendFail.leftoverIfCreateNow === true,
-        'send 失败 → 先关空壳再 create  →  ' + JSON.stringify(sendFail));
+    await t.test('launchAgentInWorktree 按计划关空壳再 create', () => {
+      assert.ok(fn && /planLaunchFallback\(/.test(fn[0]) && /closeWorkerHandle\(plan\.closeHandle\)/.test(fn[0]),
+        'launchAgentInWorktree 按计划关空壳再 create');
     });
-    const reused = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: true });
-    await t.test('send 成功 → 复用，不关', () => {
-      assert.ok(reused.action === 'reuse' && reused.closeHandle == null && reused.leftoverIfCreateNow === false,
-        'send 成功 → 复用，不关  →  ' + JSON.stringify(reused));
+
+    const withShell = S.planLaunchFallback({ foundHandle: 'term_shell' });
+    await t.test('有空壳 → 先关再 create，不复用', () => {
+      assert.ok(withShell.action === 'close-then-create' && withShell.closeHandle === 'term_shell' && withShell.leftoverIfCreateNow === true,
+        '有空壳 → 先关再 create，不复用  →  ' + JSON.stringify(withShell));
     });
-    const noShell = S.planLaunchFallback({ foundHandle: null, promptReady: false, sendAccepted: false });
+    const ignoredSend = S.planLaunchFallback({ foundHandle: 'term_shell', promptReady: true, sendAccepted: true });
+    await t.test('故意违规：send 成功也不再复用空壳', () => {
+      assert.ok(ignoredSend.action === 'close-then-create' && ignoredSend.closeHandle === 'term_shell',
+        '故意违规：send 成功也不再复用空壳  →  ' + JSON.stringify(ignoredSend));
+    });
+    const noShell = S.planLaunchFallback({ foundHandle: null });
     await t.test('没有空壳 → 直接 create', () => {
       assert.ok(noShell.action === 'create' && noShell.closeHandle == null,
         '没有空壳 → 直接 create  →  ' + JSON.stringify(noShell));
@@ -2232,28 +2255,115 @@ describe('dao', () => {
       assert.ok(leaked.length === 2 && leaked.includes('term_shell') && leaked.includes('term_agent'),
         '故意违规：不关空壳就 create 会留 2 个终端  →  ' + JSON.stringify(leaked));
     });
-    const afterPromptFail = S.terminalsAfterLaunchPlan({
+    const afterClose = S.terminalsAfterLaunchPlan({
       existingHandles: ['term_shell'],
-      plan: promptFail,
+      plan: withShell,
       createdHandle: 'term_agent',
     });
-    await t.test('提示符失败走计划后只剩 1 个 agent 终端', () => {
-      assert.ok(afterPromptFail.length === 1 && afterPromptFail[0] === 'term_agent',
-        '提示符失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterPromptFail));
+    await t.test('关空壳再 create 后只剩 1 个 agent 终端', () => {
+      assert.ok(afterClose.length === 1 && afterClose[0] === 'term_agent',
+        '关空壳再 create 后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterClose));
     });
-    const afterSendFail = S.terminalsAfterLaunchPlan({
-      existingHandles: ['term_shell'],
-      plan: sendFail,
-      createdHandle: 'term_agent',
+
+    const kimi = S.resolveLaunch({ model: 'kimi-k3', routing });
+    const grokLaunch = S.resolveLaunch({ provider: 'grok', routing });
+    const flash = S.resolveLaunch({ model: 'deepseek-v4-flash', routing });
+    const gpt = S.resolveLaunch({ provider: 'gpt', routing });
+    const claude = S.resolveLaunch({ provider: 'claude', routing });
+    await t.test('认识的 agent：cursor / grok / pi / codex 有 id', () => {
+      assert.ok(kimi.agentId === 'cursor' && grokLaunch.agentId === 'grok' && flash.agentId === 'pi' && gpt.agentId === 'codex',
+        '认识的 agent：cursor / grok / pi / codex 有 id  →  ' + JSON.stringify({
+          kimi: kimi.agentId, grok: grokLaunch.agentId, flash: flash.agentId, gpt: gpt.agentId,
+        }));
     });
-    await t.test('send 失败走计划后只剩 1 个 agent 终端', () => {
-      assert.ok(afterSendFail.length === 1 && afterSendFail[0] === 'term_agent',
-        'send 失败走计划后只剩 1 个 agent 终端  →  ' + JSON.stringify(afterSendFail));
+    await t.test('reclaude 不能映射成 --agent claude', () => {
+      assert.ok(claude.agentId == null && /reclaude/.test(claude.command),
+        'reclaude 不能映射成 --agent claude  →  ' + JSON.stringify({ agentId: claude.agentId, command: claude.command }));
     });
-    await t.test('launchAgentInWorktree 按计划关空壳再 create', () => {
-      const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
-      assert.ok(fn && /planLaunchFallback\(/.test(fn[0]) && /closeWorkerHandle\(plan\.closeHandle\)/.test(fn[0]),
-        'launchAgentInWorktree 按计划关空壳再 create');
+    const kimiSpec = S.agentStartSpec(kimi);
+    const gptSpec = S.agentStartSpec(gpt);
+    const grokSpec = S.agentStartSpec(grokLaunch);
+    const claudeSpec = S.agentStartSpec(claude);
+    await t.test('cursor / codex 走 worker-start --agent + --model', () => {
+      assert.ok(kimiSpec.mode === 'agent' && kimiSpec.agentId === 'cursor' && kimiSpec.model === 'kimi-k3-high'
+        && gptSpec.mode === 'agent' && gptSpec.agentId === 'codex',
+        'cursor / codex 走 worker-start --agent + --model  →  ' + JSON.stringify({ kimiSpec, gptSpec }));
+    });
+    await t.test('grok / pi 走 --agent（模型在 shim；orca --model 不认这两家）', () => {
+      assert.ok(grokSpec.mode === 'agent' && grokSpec.agentId === 'grok' && grokSpec.model == null,
+        'grok / pi 走 --agent  →  ' + JSON.stringify(grokSpec));
+    });
+    await t.test('reclaude 仍走 terminal create --command', () => {
+      assert.ok(claudeSpec.mode === 'command' && /reclaude/.test(claude.command),
+        'reclaude 仍走 terminal create --command  →  ' + JSON.stringify(claudeSpec));
+    });
+    const agentStart = S.argsWorkerStart({ task: 't', worktree: 'w', agent: 'cursor', model: 'kimi-k3-high' });
+    await t.test('认识的 agent 的 worker-start 拼 --agent --model，不带 --terminal', () => {
+      assert.ok(agentStart.includes('--agent') && agentStart[agentStart.indexOf('--agent') + 1] === 'cursor'
+        && agentStart.includes('--model') && !agentStart.includes('--terminal'),
+        '认识的 agent 的 worker-start 拼 --agent --model  →  ' + agentStart.join(' '));
+    });
+    const fx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));
+    await t.test('worker-start/show 回包能抽出 agent 终端 handle', () => {
+      assert.ok(S.extractHandleFromWorkerStart(fx) === 'term_e525f71f-29a9-419c-9469-b8ef2a277239',
+        'worker-start/show 回包能抽出 agent 终端 handle  →  ' + S.extractHandleFromWorkerStart(fx));
+    });
+    await t.test('审官起动带 forceCommand（走 --command，不走 worker-start --agent）', () => {
+      const launches = [...src.matchAll(/launchAgentInWorktree\(\{[\s\S]*?\}\)/g)].map(m => m[0]);
+      const reviewer = launches.filter(s => /reviewerLaunch/.test(s));
+      assert.ok(reviewer.length >= 2 && reviewer.every(s => /forceCommand:\s*true/.test(s)),
+        '审官起动带 forceCommand  →  ' + reviewer.join('\n---\n'));
+    });
+  });
+
+  it('#633 consumer_fenced：扫到 0 次和没扫到样本必须分开', async (t) => {
+    const S = await S_LOAD;
+    const missing = S.inspectConsumerFence(undefined);
+    await t.test('没给错误文本 → unscanned（没扫到样本）', () => {
+      assert.ok(missing.unscanned === true && missing.scanned === false && /没扫到样本/.test(missing.error),
+        '没给错误文本 → unscanned  →  ' + JSON.stringify(missing));
+    });
+    const zero = S.inspectConsumerFence('审官 worker-start 失败: spawnSync orca ETIMEDOUT');
+    await t.test('扫到错误但不是 fence → 0 次', () => {
+      assert.ok(zero.unscanned === false && zero.scanned === true && zero.fenced === false && zero.count === 0,
+        '扫到错误但不是 fence → 0 次  →  ' + JSON.stringify(zero));
+    });
+    const hit = S.inspectConsumerFence('orca 报错 consumer_fenced: worker-start requires the coordinator terminal');
+    await t.test('扫到 consumer_fenced → 1 次', () => {
+      assert.ok(hit.unscanned === false && hit.fenced === true && hit.count === 1,
+        '扫到 consumer_fenced → 1 次  →  ' + JSON.stringify(hit));
+    });
+    const none = S.planFenceHeal({ error: '别的错' });
+    await t.test('不是 fence → action none', () => {
+      assert.ok(none.ok === true && none.action === 'none' && none.fences === 0,
+        '不是 fence → action none  →  ' + JSON.stringify(none));
+    });
+    const noRun = S.planFenceHeal({ error: 'consumer_fenced: x' });
+    await t.test('fence 但没 Run id → 不许当成功', () => {
+      assert.ok(noRun.ok === false && noRun.action === 'retire' && /Run id/.test(noRun.error),
+        'fence 但没 Run id → 不许当成功  →  ' + JSON.stringify(noRun));
+    });
+    const healed = S.planFenceHeal({
+      error: 'consumer_fenced: x',
+      runId: 'run_x',
+      retired: { ok: true },
+      retried: { ok: true },
+      ensured: { ok: true },
+    });
+    await t.test('retire+再起+ensure 齐 → healed', () => {
+      assert.ok(healed.ok === true && healed.action === 'healed' && healed.fences === 1,
+        'retire+再起+ensure 齐 → healed  →  ' + JSON.stringify(healed));
+    });
+    const retryFail = S.planFenceHeal({
+      error: 'consumer_fenced: x',
+      runId: 'run_x',
+      retired: { ok: true },
+      retried: { ok: false, error: '还是 fence' },
+      ensured: { ok: true },
+    });
+    await t.test('再起失败 → 不许 ok:true', () => {
+      assert.ok(retryFail.ok === false && retryFail.action === 'retry',
+        '再起失败 → 不许 ok:true  →  ' + JSON.stringify(retryFail));
     });
   });
 
@@ -2635,6 +2745,7 @@ describe('dao', () => {
     const DEAD_RUN = 'run_00000000';
     const LIVE_DISPATCH = 'ctx_live-0001';
     const DEAD_DISPATCH = 'ctx_00000000-0000-0000-0000-000000000000';
+    const DONE_DISPATCH = 'ctx_done-0001';
 
     // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
     function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
@@ -2658,7 +2769,10 @@ describe('dao', () => {
         if (key === 'orchestration worker-show') {
           const d = a[a.indexOf('--dispatch') + 1];
           if (d === LIVE_DISPATCH) {
-            return { ok: true, json: { ok: true, result: { dispatch: { id: d, assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, status: 'dispatched', assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+          }
+          if (d === DONE_DISPATCH) {
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, status: 'completed' }, worker: { state: 'succeeded' } } } };
           }
           return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
         }
@@ -2734,6 +2848,35 @@ describe('dao', () => {
     const okDispatchForm = S.classifyNotifyTarget('dispatch:ctx_x');
     await t.test('dispatch:<id> 形态被认', () => {
       assert.ok(okDispatchForm.kind === 'dispatch' && okDispatchForm.id === 'ctx_x', 'dispatch:<id> 形态被认  →  ' + JSON.stringify(okDispatchForm));
+    });
+
+    await t.test('ready/working/waiting 算活人', () => {
+      assert.ok(S.isLiveDispatchRecipient({ workerState: 'ready' })
+        && S.isLiveDispatchRecipient({ workerState: 'working' })
+        && S.isLiveDispatchRecipient({ workerState: 'waiting' }),
+        'ready/working/waiting 算活人');
+    });
+    await t.test('completed/succeeded/failed 不算活人', () => {
+      assert.ok(!S.isLiveDispatchRecipient({ workerState: 'succeeded', dispatchStatus: 'completed' })
+        && !S.isLiveDispatchRecipient({ workerState: 'failed' })
+        && !S.isLiveDispatchRecipient({ dispatchStatus: 'completed' }),
+        'completed/succeeded/failed 不算活人');
+    });
+    const doneProbe = S.probeRecipient({ kind: 'dispatch', id: DONE_DISPATCH }, fakeOrca());
+    await t.test('probeRecipient 已完工 dispatch → 非零，并写下一步', () => {
+      assert.ok(doneProbe.ok === false && /已完工/.test(doneProbe.error)
+        && /新 task/.test(doneProbe.error) && /新开工人/.test(doneProbe.error),
+        'probeRecipient 已完工 dispatch → 非零，并写下一步  →  ' + JSON.stringify(doneProbe));
+    });
+    const doneSend = S.deliverMessage({
+      to: `dispatch:${DONE_DISPATCH}`,
+      subject: '红项',
+      hop: '审官→士兵(dispatch)',
+      orca: fakeOrca(),
+    });
+    await t.test('notify 已完工 dispatch → 非零，禁止当送达', () => {
+      assert.ok(doneSend.ok === false && doneSend.stage === '收件人' && /已完工/.test(doneSend.error),
+        'notify 已完工 dispatch → 非零  →  ' + JSON.stringify(doneSend));
     });
 
     const wsFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));

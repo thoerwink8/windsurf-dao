@@ -42,5 +42,11 @@
     "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
     "capturedAt": "2026-08-15",
     "note": "实采自 #497 分支 tests/fixtures/orca-returns/worker-show.json（result.dispatch.id 与 result.worker.dispatch_id 双位同值；worker-start 成功返回另有 result.dispatchId，CLI 源码 worker-start 格式化器直接读它——shape 以当时返回为准，本单用耐受提取）"
+  },
+  "extractHandleFromWorkerStart": {
+    "file": "worker-show.json",
+    "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
+    "capturedAt": "2026-08-15",
+    "note": "#633：worker-start --agent 之后从回包抽 agent 终端。worker-show 实采含 result.worker.agent_terminal_handle 与 result.dispatch.assignee_handle"
   }
 }

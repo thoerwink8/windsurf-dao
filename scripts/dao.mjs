@@ -57,13 +57,16 @@ import {
   dispatchComment,
   envProbeWorktree,
   extractHandleFromCreate,
+  extractHandleFromWorkerStart,
   extractDispatchId,
   extractTaskId,
-  extractTerminalSend,
   extractTerminalText,
   findReusableDefaultTerminal,
-  looksLikeShellPrompt,
+  isReusableDefaultTerminal,
   planLaunchFallback,
+  agentStartSpec,
+  inspectConsumerFence,
+  planFenceHeal,
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
@@ -275,51 +278,44 @@ function closeWorkerHandle(handle) {
   orca(argsTerminalClose({ terminal: handle, tab: false }));
 }
 
-/** #633：建卡后先把 launch 打进 Orca 默认空壳，没有空壳才 terminal create。 */
+/** #633：建卡默认空壳只拿来关。认识的 agent 走 worker-start --agent；特殊 argv / reclaude 走 --command。禁止 send 进 pwsh。 */
 function findDefaultTerminalForLaunch(worktreeId) {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     const listed = orca(argsTerminalList({ worktree: worktreeId }));
     if (listed.ok) {
       const found = findReusableDefaultTerminal(listed.json, { worktreeId });
       if (found.ok && found.handle) return found;
     }
-    sleepMs(200);
+    sleepMs(250);
   }
   return { handle: null };
 }
 
-function waitForShellPrompt(handle) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < 5000) {
-    const read = orca(argsTerminalRead({ terminal: handle, limit: 20 }));
-    if (read.ok && looksLikeShellPrompt(extractTerminalText(read.json))) {
-      return { ok: true };
-    }
-    sleepMs(200);
-  }
-  return { ok: false };
+function findAgentTerminalHandle(worktreeId) {
+  const listed = orca(argsTerminalList({ worktree: worktreeId }));
+  if (!listed.ok) return null;
+  const terms = listed.json?.result?.terminals;
+  if (!Array.isArray(terms)) return null;
+  const agents = terms.filter(t => t && t.handle && !isReusableDefaultTerminal(t));
+  return agents[0]?.handle || null;
 }
 
-function launchAgentInWorktree({ worktreeId, title, command }) {
+function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand }) {
+  const spec = agentStartSpec(launch || { command });
   const found = findDefaultTerminalForLaunch(worktreeId);
-  let promptReady = false;
-  let sendAccepted = false;
-  if (found.handle) {
-    promptReady = waitForShellPrompt(found.handle).ok;
-    if (promptReady) {
-      const sent = orca(argsTerminalSend({ terminal: found.handle, text: command, enter: true }));
-      sendAccepted = !!(sent.ok && extractTerminalSend(sent.json));
-    }
-  }
-  const plan = planLaunchFallback({
-    foundHandle: found.handle || null,
-    promptReady,
-    sendAccepted,
-  });
-  if (plan.action === 'reuse') {
-    return { ok: true, handle: found.handle, reused: true };
-  }
+  const plan = planLaunchFallback({ foundHandle: found.handle || null });
   if (plan.closeHandle) closeWorkerHandle(plan.closeHandle);
+  if (spec.mode === 'agent' && !forceCommand) {
+    return {
+      ok: true,
+      handle: null,
+      reused: false,
+      deferred: true,
+      mode: 'agent',
+      agentId: spec.agentId,
+      model: spec.model,
+    };
+  }
   const created = orca(argsTerminalCreate({
     worktree: worktreeId,
     title,
@@ -330,7 +326,28 @@ function launchAgentInWorktree({ worktreeId, title, command }) {
   }
   const handle = extractHandleFromCreate(created.json);
   if (!handle) return { ok: false, error: 'terminal create 没返回 handle', reused: false };
-  return { ok: true, handle, reused: false };
+  return { ok: true, handle, reused: false, mode: 'command' };
+}
+
+function startOrcaWorker({ task, worktree, launched }) {
+  if (launched?.deferred) {
+    const r = orca(argsWorkerStart({
+      task,
+      worktree,
+      agent: launched.agentId,
+      model: launched.model || undefined,
+    }), 180000);
+    if (!r.ok) return { ok: false, error: errText(r.error), json: r.json };
+    const handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
+    if (!handle) {
+      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json };
+    }
+    return { ok: true, json: r.json, handle, dispatchId: extractDispatchId(r.json) };
+  }
+  if (!launched?.handle) return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
+  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle }));
+  if (!r.ok) return { ok: false, error: errText(r.error), json: r.json, handle: launched.handle };
+  return { ok: true, json: r.json, handle: launched.handle, dispatchId: extractDispatchId(r.json) };
 }
 
 function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created }) {
@@ -360,6 +377,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       worktreeId,
       title,
       command: launch.command,
+      launch,
     });
     if (!term.ok) {
       const kind = classifyLaunchFailure({ error: term.error });
@@ -375,6 +393,12 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       hardFailsOnThisPipe = next.hardFailsOnThisPipe;
       transientFailsOnThisPipe = next.transientFailsOnThisPipe;
       continue;
+    }
+    if (term.deferred) {
+      return {
+        ok: true, deferred: true, modelId, pipeIndex, pipe, launch,
+        handle: null, agentId: term.agentId, model: term.model, attempts,
+      };
     }
     const handle = term.handle;
     if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
@@ -735,13 +759,14 @@ function cmdDispatch(args) {
   }
   if (!taskId) failCreated(created, 'dispatch 没拿到 taskId', plan);
 
-  const started = orca(argsWorkerStart({
+  const started = startOrcaWorker({
     task: taskId,
     worktree: created.workerId,
-    terminal: created.workerHandle,
-  }));
-  if (!started.ok) failCreated(created, `worker-start 失败: ${errText(started.error)}`, { ...plan, taskId });
-  created.workerDispatchId = extractDispatchId(started.json);
+    launched,
+  });
+  if (!started.ok) failCreated(created, `worker-start 失败: ${started.error}`, { ...plan, taskId });
+  created.workerHandle = started.handle;
+  created.workerDispatchId = started.dispatchId;
   if (!created.workerDispatchId) {
     failCreated(created, 'worker-start 没拿到 dispatch id（没查成，不能把消息发进真空）', { ...plan, taskId });
   }
@@ -795,21 +820,22 @@ function cmdDispatch(args) {
         }
         const childTaskId = extractTaskId(childTask.json);
         if (!childTaskId) return { ok: false, error: '子 task-create 没拿到 taskId', handle: childLaunch.handle };
-        const childStarted = orca(argsWorkerStart({
+        const childStarted = startOrcaWorker({
           task: childTaskId,
           worktree: worktreeId,
-          terminal: childLaunch.handle,
-        }));
+          launched: childLaunch,
+        });
         if (!childStarted.ok) {
-          return { ok: false, error: `子 worker-start 失败: ${errText(childStarted.error)}`, handle: childLaunch.handle };
+          return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
         }
-        const childDispatchId = extractDispatchId(childStarted.json);
+        const childDispatchId = childStarted.dispatchId;
+        const childHandle = childStarted.handle || childLaunch.handle;
         if (!childDispatchId) {
-          return { ok: false, error: '子 worker-start 没拿到 dispatch id', handle: childLaunch.handle };
+          return { ok: false, error: '子 worker-start 没拿到 dispatch id', handle: childHandle };
         }
         const childInject = verifyStartedPolling({
           dispatchId: childDispatchId,
-          readOnce: () => readOnceHandle(childLaunch.handle),
+          readOnce: () => readOnceHandle(childHandle),
           proofOnce: workerStartProof,
           timeoutMs: probeWaitMs(routing, childLaunch.launch.provider),
           label: `子工人 ${title}`,
@@ -818,14 +844,14 @@ function cmdDispatch(args) {
           return {
             ok: false,
             error: `子工人开工验证失败: ${childInject.reason}`,
-            handle: childLaunch.handle,
+            handle: childHandle,
             dispatchId: childDispatchId,
             taskId: childTaskId,
           };
         }
         return {
           ok: true,
-          handle: childLaunch.handle,
+          handle: childHandle,
           dispatchId: childDispatchId,
           taskId: childTaskId,
         };
@@ -970,14 +996,18 @@ function cmdDispatchBatch(args) {
       return { ok: true, id, path: wtPath };
     },
     startTerminal({ worktree, title }) {
-      // #654/#648：batch 起终端也走 launchAgentInWorktree（复用默认空壳 / 注入空壳再 create），
+      // #654/#633：batch 起终端也走 launchAgentInWorktree（空壳先关再 create --command），
       // 与 start / dispatch / 审官起动同一条路径，不再直接 argsTerminalCreate。
       const term = launchAgentInWorktree({
         worktreeId: worktree,
         title,
         command: launch.command,
+        launch,
       });
       if (!term.ok) return { ok: false, error: term.error };
+      if (term.deferred) {
+        return { ok: true, handle: null, deferred: true, agentId: term.agentId, model: term.model };
+      }
       const handle = term.handle;
       const verify = waitAndVerify({
         readOnce: () => readOnceHandle(handle),
@@ -1001,20 +1031,26 @@ function cmdDispatchBatch(args) {
       if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
       return { ok: true, taskId };
     },
-    startWorker({ task, terminal, worktree }) {
-      const started = orca(argsWorkerStart({ task, worktree, terminal }));
-      if (!started.ok) return { ok: false, error: errText(started.error) };
-      const dispatchId = extractDispatchId(started.json);
+    startWorker({ task, terminal, worktree, agent, model, deferred }) {
+      const started = startOrcaWorker({
+        task,
+        worktree,
+        launched: deferred
+          ? { deferred: true, agentId: agent, model }
+          : { handle: terminal, launch },
+      });
+      if (!started.ok) return { ok: false, error: started.error };
+      const dispatchId = started.dispatchId;
       if (!dispatchId) return { ok: false, error: 'worker-start 没拿到 dispatch id' };
       const inject = verifyStartedPolling({
         dispatchId,
-        readOnce: () => readOnceHandle(terminal),
+        readOnce: () => readOnceHandle(started.handle),
         proofOnce: workerStartProof,
         timeoutMs: probeWaitMs(routing, launch.provider),
         label: '工人',
       });
       if (!inject.ok) return { ok: false, dispatchId, error: `注入后开工验证失败: ${inject.reason}` };
-      return { ok: true, dispatchId };
+      return { ok: true, dispatchId, handle: started.handle };
     },
   };
 
@@ -1042,6 +1078,78 @@ function cmdPrSyncLabels(args) {
   const r = syncPrLabelsFromIssue({ pr: args.pr, runGh: ghRunner() });
   if (!r.ok) fail(r.error, r);
   emit({ ok: true, ...r });
+}
+
+function soldierRunId({ soldierDispatch, parentId } = {}) {
+  if (soldierDispatch) {
+    const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
+    if (shown.ok) {
+      const id = shown.json?.result?.dispatch?.run_id || null;
+      if (id) return { ok: true, runId: id };
+    }
+  }
+  if (parentId) {
+    const wl = orca(argsWorkerList());
+    if (!wl.ok) return { ok: false, error: `worker-list 没查成：${errText(wl.error)}` };
+    const found = findDispatchForWorktree(wl.json, parentId);
+    if (found.ok && found.runId) return { ok: true, runId: found.runId };
+    return { ok: false, error: found.error || '工人卡没有 run id' };
+  }
+  return { ok: false, error: '没 soldier dispatch / 工人卡，找不到 Run' };
+}
+
+function ensureInboxStation() {
+  const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true,
+    timeout: 60000,
+  });
+  let json = null;
+  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { json = null; }
+  if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+    return { ok: false, error: (json && json.error) || String(r.stderr || '').trim() || `inbox-station ensure exit ${r.status}` };
+  }
+  return { ok: true, ...json };
+}
+
+function healReviewerCreateAfterFence(first, opts) {
+  const inspect = inspectConsumerFence(first.ok ? '' : first.error);
+  if (inspect.unscanned) {
+    return { ...first, fenceHeal: inspect };
+  }
+  if (opts.dryRun || first.ok || !inspect.fenced) {
+    return { ...first, fenceHeal: { ...inspect, action: 'none' } };
+  }
+  const run = soldierRunId({
+    soldierDispatch: opts.soldierDispatch,
+    parentId: opts.parentWorktree,
+  });
+  const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
+  const retried = invokeReviewerCreate(opts);
+  const ensured = ensureInboxStation();
+  const plan = planFenceHeal({
+    error: first.error,
+    runId: run.ok ? run.runId : null,
+    retired,
+    retried,
+    ensured,
+  });
+  if (!plan.ok) {
+    return {
+      ok: false,
+      invoked: true,
+      dryRun: !!opts.dryRun,
+      error: plan.error,
+      fenceHeal: { ...inspect, ...plan, retired, retried, ensured },
+    };
+  }
+  return { ...retried, fenceHeal: { ...inspect, ...plan, retired, ensured } };
+}
+
+function invokeReviewerCreateHealed(opts) {
+  return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
 function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun } = {}) {
@@ -1366,7 +1474,7 @@ function cmdWorkerDone(args) {
 
   if (args.dryRun) {
     if (shouldCreate) {
-      create = invokeReviewerCreate({
+      create = invokeReviewerCreateHealed({
         pr: args.pr,
         name: createName,
         parentWorktree: parentId,
@@ -1400,14 +1508,16 @@ function cmdWorkerDone(args) {
   }
 
   if (shouldCreate) {
-    create = invokeReviewerCreate({
+    const createOpts = {
       pr: args.pr,
       name: createName,
       parentWorktree: parentId,
       soldierDispatch: args.soldierDispatch,
       issue: plan.issue,
       dryRun: false,
-    });
+    };
+    create = invokeReviewerCreate(createOpts);
+    create = healReviewerCreateAfterFence(create, createOpts);
     if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
   } else if (shouldReuse) {
     reused = reuseReviewerOnTerminal({
@@ -1419,6 +1529,33 @@ function cmdWorkerDone(args) {
       reviewer: plan.reviewer,
       dryRun: false,
     });
+    const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
+    if (!reused.ok && reuseFence.fenced) {
+      const run = soldierRunId({ soldierDispatch: args.soldierDispatch, parentId });
+      const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
+      const retried = reuseReviewerOnTerminal({
+        pr: args.pr,
+        reviewerWorktreeId: reuse.worktreeId,
+        handle: reuse.handle,
+        parentWorktree: parentId,
+        soldierDispatch: args.soldierDispatch,
+        reviewer: plan.reviewer,
+        dryRun: false,
+      });
+      const ensured = ensureInboxStation();
+      const planHeal = planFenceHeal({
+        error: reused.error,
+        runId: run.ok ? run.runId : null,
+        retired,
+        retried,
+        ensured,
+      });
+      if (planHeal.ok) {
+        reused = { ...retried, fenceHeal: { ...reuseFence, ...planHeal, retired, ensured } };
+      } else {
+        reused = { ...reused, invoked: true, skipped: true, reuseFailed: true, fenceHeal: { ...reuseFence, ...planHeal, retired, retried, ensured } };
+      }
+    }
     // 续 capability 失败不能吞掉返工投递：审官要的是结构化消息，帅会另开复核 Task。
     if (!reused.ok) {
       reused = { ...reused, invoked: true, skipped: true, reuseFailed: true };
@@ -1517,6 +1654,8 @@ function cmdStart(args) {
     worktreeId: args.worktree,
     title: args.title,
     command: launch.command,
+    launch,
+    forceCommand: true,
   });
   if (!created.ok) fail(created.error, { command: launch.command });
   const handle = created.handle;
@@ -1876,23 +2015,27 @@ function cmdReviewerCreate(args) {
     worktreeId: reviewerId,
     title: revName,
     command: reviewerLaunch.command,
+    launch: reviewerLaunch,
+    forceCommand: true,
   });
   if (!revTerm.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail(`审官终端创建失败: ${revTerm.error}`, { ...plan, reviewerId, reviewerPath });
   }
   launched.reviewerHandle = revTerm.handle;
-  if (!launched.reviewerHandle) {
+  if (!revTerm.deferred && !launched.reviewerHandle) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail('审官终端没返回 handle', { ...plan, reviewerId, reviewerPath });
   }
 
-  const revVerify = waitAndVerify({
-    readOnce: () => readOnceHandle(launched.reviewerHandle),
-    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
-  });
-  if (!revVerify.ok) {
-    failCreated(launched, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+  if (!revTerm.deferred) {
+    const revVerify = waitAndVerify({
+      readOnce: () => readOnceHandle(launched.reviewerHandle),
+      timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+    });
+    if (!revVerify.ok) {
+      failCreated(launched, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+    }
   }
 
   let soldierDispatchId = args.soldierDispatch || null;
@@ -1942,13 +2085,16 @@ function cmdReviewerCreate(args) {
   const reviewerTaskId = extractTaskId(revTask.json);
   if (!reviewerTaskId) failCreated(launched, '审官 task-create 没拿到 taskId', plan);
 
-  const revStarted = orca(argsWorkerStart({
+  const revStarted = startOrcaWorker({
     task: reviewerTaskId,
     worktree: reviewerId,
-    terminal: launched.reviewerHandle,
-  }));
-  if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, reviewerTaskId });
-  const reviewerDispatchId = extractDispatchId(revStarted.json);
+    launched: revTerm.deferred
+      ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
+      : { handle: launched.reviewerHandle, launch: reviewerLaunch },
+  });
+  if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
+  launched.reviewerHandle = revStarted.handle;
+  const reviewerDispatchId = revStarted.dispatchId;
   if (!reviewerDispatchId) {
     failCreated(launched, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }
@@ -2119,16 +2265,20 @@ function cmdReviewerAttach(args) {
     worktreeId: created.reviewerId,
     title: revName,
     command: reviewerLaunch.command,
+    launch: reviewerLaunch,
+    forceCommand: true,
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;
-  if (!created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
+  if (!revTerm.deferred && !created.reviewerHandle) failCreated(created, '审官终端没返回 handle', plan);
 
-  const revVerify = waitAndVerify({
-    readOnce: () => readOnceHandle(created.reviewerHandle),
-    timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
-  });
-  if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+  if (!revTerm.deferred) {
+    const revVerify = waitAndVerify({
+      readOnce: () => readOnceHandle(created.reviewerHandle),
+      timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+    });
+    if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
+  }
 
   let soldierDispatchId = args.soldierDispatch || null;
   let soldierRunId = null;
@@ -2170,13 +2320,16 @@ function cmdReviewerAttach(args) {
   const reviewerTaskId = extractTaskId(revTask.json);
   if (!reviewerTaskId) failCreated(created, '审官 task-create 没拿到 taskId', plan);
 
-  const revStarted = orca(argsWorkerStart({
+  const revStarted = startOrcaWorker({
     task: reviewerTaskId,
     worktree: created.reviewerId,
-    terminal: created.reviewerHandle,
-  }));
-  if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${errText(revStarted.error)}`, { ...plan, reviewerTaskId });
-  created.reviewerDispatchId = extractDispatchId(revStarted.json);
+    launched: revTerm.deferred
+      ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
+      : { handle: created.reviewerHandle, launch: reviewerLaunch },
+  });
+  if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
+  created.reviewerHandle = revStarted.handle;
+  created.reviewerDispatchId = revStarted.dispatchId;
   if (!created.reviewerDispatchId) {
     failCreated(created, '审官 worker-start 没拿到 dispatch id（没查成，不是已开工）', { ...plan, reviewerTaskId });
   }

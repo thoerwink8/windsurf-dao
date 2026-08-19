@@ -80,16 +80,22 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `retry-503-progress/` | **#580 追加**：同样 503 重试但 git lastActivity 新鲜 | 不报 retry-loop |
 | `model-change/` | **#569 ②（pi 静默换 provider）**：`sessions/` 下一条手写 jsonl——会话开头初始选型（model_change 前无 message）→ 随后 assistant 报错（errorMessage="503 status code (no body)"）→ 紧接着 model_change 切到 deepseek | 退出码 1，`[pi] model-change: …诱因：503 status code (no body)`；初始选型那条不报（那是正常选型号不是静默切换） |
 | `fp-loss/` | **非 capacityRetry** keepalive 指纹（no serving account）连续 5 轮 | 第 2 轮 fingerprint + 动作行，第 5 轮 `报帅:`（#471 连败阈值，通用 fpLoss 路径） |
-| `capacity-keepalive/` | **#646**：at capacity 指纹连续 5 轮，git-evidence capturedAt 依次 T0 / T0 / T0+1min / T0+6min / T0+16min——把 1/5/10 三个续命间隔走完 | 第 2 轮 fingerprint + 续命 #1 动作行；第 3 轮（+1min）续命 #2；第 4 轮（+6min）续命 #3；第 5 轮（+16min）`报帅:`（第 4 次，不再发续命动作） |
-| `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化**（讨论在推进）——活证否决 | 退出码 0，第 2 轮 `观察:`（不唤醒），无 fingerprint |
+| `capacity-keepalive/` | **#633**：at capacity 连续 6 轮，时间戳 T0 / T0 / +10s / +70s / +250s / +550s | 第 2 轮续命 #1；之后未见 token/Working，残留 at capacity 不连发；第 6 轮等满四档 `报帅:` |
+| `capacity-token-reset/` | **#633**：同屏 at capacity，outputTokens 100/100/200/200/200；第 3 轮（+10s）token 涨了 | 第 2 轮续命 #1；第 3 轮观察「次数清零」不续命；第 4 轮再卡住仍是第一次续命 |
+| `stall-ignores-tokens/` | **#633**：spinner-hang 同源，outputTokens 100→200→300，屏面真实内容不动 | 第 3 轮 `stall:`（停摆主判据不用 token） |
+| `capacity-unsent/` | **#633**：at capacity 两连同，但屏上有 Pasted Content / 等待发送 | 第 2 轮 fingerprint，不发续命（框里有未发出内容禁止 send） |
+| `leftover-rework/` | **#633**：agent=done，框里躺着【返工指令 + `[Pasted Content]` | 退出码 1，`leftover-inject:`，不回车 |
+| `leftover-rework-history/` | **#633**：agent=done，tail 仍有【返工指令但无未提交指纹（已执行过） | 不报 `leftover-inject:`，不回车 |
+| `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化** | 第 2 轮仍 `fingerprint:` + 续命（#633：at capacity 状态行不算活证否决） |
+| `veto-other-fp/` | 同结构但指纹是 `no serving account`（非 capacityRetry） | 退出码 0，第 2 轮 `观察:` 活证否决，无 fingerprint |
 | `veto-stall/` | 两轮底部窗口写入 at capacity 指纹，真实内容两轮相同 | 第 2 轮退出码 1，`fingerprint:`（两连同 + 无活证 → 报警） |
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
 | `read-error-livefallback/` | 基于 read-malformed，read 文件换成 **runOrca 回落形态**（`{ok:false, error:"exit 1"}` 字符串错误，模拟 orca stdout 非 JSON / spawn 失败时 runOrca 返回的形态，不是原始 orca 响应） | 首轮 `read-failed:` 且回落字符串进详情（live 字符串分支的自动化覆盖） |
 | `exclusion/` | master(主,指纹屏面) + #452(自,指纹屏面) + #999(工人,干净屏面) | 见 tests/watchdog.tests.js ⑭（--exclude-pane 已是分级排除：豁免指纹/停摆、保留死活判据） |
 | `no-targets/` | 全部 agent `state=done`，任务卡均为 in-review | 退出码 2，`NO_TARGETS`（待合并盘面不是全员卡死） |
 | `all-idle/` | 同 no-targets，但 `#453` 改为 `in-progress` | 退出码 1，`all-idle:`（有在途卡却零活工位） |
-| `pasted-content/` | **#575**：working 工位屏面写成 `[Pasted Content 5711 chars]`（#574 审官实证形态） | 单轮不报；两轮同屏退出码 1，`pasted-content:` + 补回车动作 |
-| `pasted-idle/` | **#575**：in-progress 卡、agent=done、屏面 Pasted Content（#574 当晚：审官折在输入框、不在 working 集合里） | 单轮 `all-idle:`；两轮再报 `pasted-content:` |
+| `pasted-content/` | **#575/#633**：working 工位屏面写成 `[Pasted Content 5711 chars]`（无返工/复核字） | 不报 `pasted-content:`，不补回车 |
+| `pasted-idle/` | **#575/#633**：in-progress 卡、agent=done、屏面 Pasted Content（无返工/复核字） | 不报 `all-idle:` / `pasted-content:` |
 | `stale-completion/` | **#586**：agent=done 的工人卡 + completion-evidence（head 比最后完工 comment 新） | 退出码 1，`stale-completion:` |
 | `stale-completion-fresh/` | 同结构但完工 comment 不早于 head | 不报 `stale-completion` |
 
