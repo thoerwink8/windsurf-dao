@@ -2295,6 +2295,63 @@ describe('dao', () => {
       assert.ok(S.extractHandleFromWorkerStart(fx) === 'term_e525f71f-29a9-419c-9469-b8ef2a277239',
         'worker-start/show 回包能抽出 agent 终端 handle  →  ' + S.extractHandleFromWorkerStart(fx));
     });
+    await t.test('审官起动带 forceCommand（走 --command，不走 worker-start --agent）', () => {
+      const launches = [...src.matchAll(/launchAgentInWorktree\(\{[\s\S]*?\}\)/g)].map(m => m[0]);
+      const reviewer = launches.filter(s => /reviewerLaunch/.test(s));
+      assert.ok(reviewer.length >= 2 && reviewer.every(s => /forceCommand:\s*true/.test(s)),
+        '审官起动带 forceCommand  →  ' + reviewer.join('\n---\n'));
+    });
+  });
+
+  it('#633 consumer_fenced：扫到 0 次和没扫到样本必须分开', async (t) => {
+    const S = await S_LOAD;
+    const missing = S.inspectConsumerFence(undefined);
+    await t.test('没给错误文本 → unscanned（没扫到样本）', () => {
+      assert.ok(missing.unscanned === true && missing.scanned === false && /没扫到样本/.test(missing.error),
+        '没给错误文本 → unscanned  →  ' + JSON.stringify(missing));
+    });
+    const zero = S.inspectConsumerFence('审官 worker-start 失败: spawnSync orca ETIMEDOUT');
+    await t.test('扫到错误但不是 fence → 0 次', () => {
+      assert.ok(zero.unscanned === false && zero.scanned === true && zero.fenced === false && zero.count === 0,
+        '扫到错误但不是 fence → 0 次  →  ' + JSON.stringify(zero));
+    });
+    const hit = S.inspectConsumerFence('orca 报错 consumer_fenced: worker-start requires the coordinator terminal');
+    await t.test('扫到 consumer_fenced → 1 次', () => {
+      assert.ok(hit.unscanned === false && hit.fenced === true && hit.count === 1,
+        '扫到 consumer_fenced → 1 次  →  ' + JSON.stringify(hit));
+    });
+    const none = S.planFenceHeal({ error: '别的错' });
+    await t.test('不是 fence → action none', () => {
+      assert.ok(none.ok === true && none.action === 'none' && none.fences === 0,
+        '不是 fence → action none  →  ' + JSON.stringify(none));
+    });
+    const noRun = S.planFenceHeal({ error: 'consumer_fenced: x' });
+    await t.test('fence 但没 Run id → 不许当成功', () => {
+      assert.ok(noRun.ok === false && noRun.action === 'retire' && /Run id/.test(noRun.error),
+        'fence 但没 Run id → 不许当成功  →  ' + JSON.stringify(noRun));
+    });
+    const healed = S.planFenceHeal({
+      error: 'consumer_fenced: x',
+      runId: 'run_x',
+      retired: { ok: true },
+      retried: { ok: true },
+      ensured: { ok: true },
+    });
+    await t.test('retire+再起+ensure 齐 → healed', () => {
+      assert.ok(healed.ok === true && healed.action === 'healed' && healed.fences === 1,
+        'retire+再起+ensure 齐 → healed  →  ' + JSON.stringify(healed));
+    });
+    const retryFail = S.planFenceHeal({
+      error: 'consumer_fenced: x',
+      runId: 'run_x',
+      retired: { ok: true },
+      retried: { ok: false, error: '还是 fence' },
+      ensured: { ok: true },
+    });
+    await t.test('再起失败 → 不许 ok:true', () => {
+      assert.ok(retryFail.ok === false && retryFail.action === 'retry',
+        '再起失败 → 不许 ok:true  →  ' + JSON.stringify(retryFail));
+    });
   });
 
   it('#546 #541 审官树自证 / 注入后开工 / 环境自检', async (t) => {

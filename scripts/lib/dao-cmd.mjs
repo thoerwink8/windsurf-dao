@@ -781,6 +781,40 @@ export function extractHandleFromWorkerStart(json) {
     || extractHandleFromCreate(json);
 }
 
+/** worker-done 起审官遇 consumer_fenced：扫到 0 次 和 没扫到样本 必须分开。 */
+export function inspectConsumerFence(error) {
+  if (error === undefined || error === null) {
+    return { unscanned: true, scanned: false, fenced: false, count: null, error: '没给错误文本（没扫到样本，不是扫到 0 次 fence）' };
+  }
+  const text = String(error);
+  const fenced = /consumer_fenced/i.test(text);
+  return { unscanned: false, scanned: true, fenced, count: fenced ? 1 : 0 };
+}
+
+/** retire → 再起 → ensure。起不成不许当成功。 */
+export function planFenceHeal({ error, runId, retired, retried, ensured } = {}) {
+  const inspect = inspectConsumerFence(error);
+  if (inspect.unscanned) {
+    return { ok: false, unscanned: true, action: 'unscanned', fences: null, error: inspect.error };
+  }
+  if (!inspect.fenced) {
+    return { ok: true, unscanned: false, action: 'none', fences: 0 };
+  }
+  if (!runId) {
+    return { ok: false, unscanned: false, action: 'retire', fences: 1, error: 'consumer_fenced 但没 Run id，没法 retire 信箱台' };
+  }
+  if (!retired || (retired.ok !== true && retired.alreadyGone !== true && retired.state !== 'run_not_found')) {
+    return { ok: false, unscanned: false, action: 'retire', fences: 1, error: retired?.error || 'retire 信箱台没做成' };
+  }
+  if (!retried || retried.ok !== true) {
+    return { ok: false, unscanned: false, action: 'retry', fences: 1, error: retried?.error || 'retire 后再起审官失败' };
+  }
+  if (!ensured || ensured.ok !== true) {
+    return { ok: false, unscanned: false, action: 'ensure', fences: 1, error: ensured?.error || '审官已起但 ensure 信箱台失败' };
+  }
+  return { ok: true, unscanned: false, action: 'healed', fences: 1 };
+}
+
 /** 建卡默认空壳：title 为 null / 空 / "Terminal N"；已是 agent 的不碰。
  * 只拿来关，禁止 send 启动命令进去。 */
 export function isReusableDefaultTerminal(term) {

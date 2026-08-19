@@ -25,8 +25,8 @@
 //                       报警前活证否决：**非 spinner 真实内容在动** → 降级日志行不唤醒
 //                       （旧否决用 cursor 前进——spinner 重绘也动 cursor，#500 判死）
 //                       命中后按处置矩阵（#471）执行动作 + 连败计数，连败 3 次或 10 分钟报帅；
-//                       #646：capacityRetry 指纹（at capacity / try a different model）不走连败计数，
-//                       改走专用续命调度——按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续
+//                       #646/#633：capacityRetry 指纹按 1/5/10 分钟各续命一次（共 3 次），
+//                       第 4 次按审官选型序自动换人（不再报帅干等）
 //   4. stall        —— 主判据 = **非 spinner 真实内容连续三轮不变**（spinner 重绘、cursor 前进、
 //                       ps updatedAt 前进都不算活性——#500：spinner 重绘既改屏面又动 cursor）
 //   5. read-failed  —— 被监视工位却读不到屏面（守卫自身失效必须显形，不能静默）
@@ -127,6 +127,8 @@ import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
+import { loadRouting } from './lib/dao-cmd.mjs';
+import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
@@ -166,14 +168,14 @@ const ERROR_FINGERPRINTS = [
 //         / send3（发 3）/ ignore（噪音不动作）；检测命中但矩阵无行 → 报帅（矩阵未命中→上报帅）。
 // requireContext：'reclaude' 系动作只在屏面上下文含 reclaude/Claude 时执行（防把 /exit 打进别的终端）。
 // capacityRetry：true = #646 capacity 指纹（at capacity / try a different model）走专用续命调度——
-//   按 PARAMS.capacityKaIntervalsMs（1/5/10 分钟）各续命一次，共 3 次；第 4 次起报帅不自动续。
+//   按 PARAMS.capacityKaIntervalsMs（1/5/10 分钟）各续命一次，共 3 次；第 4 次按选型序换人。
 //   不走下方通用 fpLoss 连败逻辑（#471 通用逻辑保留给其它 keepalive 指纹）。
 // 参数与阈值集中 PARAMS 块。注：#471/#476 原要求进 docs/model-routing.toml 参数节（#469 S3），
 // 因 #502 正在改该文件且协调者边界未答，本轮集中在此块，迁移路径见 PR #505 正文。
 const DISPOSE_MATRIX = [
   { fp: 'no serving account',                 action: 'keepalive', label: '注入续命' },
-  { fp: 'at capacity',                        action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次报帅）', capacityRetry: true },
-  { fp: 'try a different model',              action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次报帅）', capacityRetry: true },
+  { fp: 'at capacity',                        action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次换人）', capacityRetry: true },
+  { fp: 'try a different model',              action: 'keepalive', label: '注入续命（#646：1/5/10 分钟各一次，共 3 次，第 4 次换人）', capacityRetry: true },
   { fp: 'stream disconnected',                action: 'keepalive', label: '注入续命' },
   { fp: /Reconnecting.*5\/5/i,                action: 'keepalive', label: '注入续命' },
   { fp: 'temporarily limiting requests',      action: 'reclaude-branch', label: '发 /branch → 发「继续」（reclaude 链专属）', requireContext: 'reclaude' },
@@ -203,7 +205,7 @@ const PARAMS = {
   fpLossLimit: 3,           // 同指纹连败 N 次报帅（#471，非 capacityRetry 指纹）
   fpLossWindowMs: 10 * 60 * 1000, // 或跨 N 分钟报帅
   capacityKaIntervalsMs: [1 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000], // #646：capacity 指纹续命三次间隔 1/5/10 分钟
-  capacityKaMax: 3,         // #646：capacity 指纹最多自动续命 3 次，第 4 次起报帅不续
+  capacityKaMax: 3,         // #646/#633：capacity 指纹最多自动续命 3 次，第 4 次换人
   stagnationMs: 30 * 60 * 1000,   // flow 心跳里在途 PR 停留超 N → 停滞态报警（#471 处置矩阵补一行）
   heartbeatStaleMs: 5 * 60 * 1000, // flow 心跳 ts 超 N 未更新 = flow 停摆候选
   retryLoopRounds: 3,       // #580：同一错误行连续 N 轮 = 重试循环（不看屏面是否在滚）
@@ -655,6 +657,59 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function reviewerPasserIds(routing) {
+  return (routing?.models || [])
+    .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+    .map(m => m.id);
+}
+
+function executeCapacitySwitch(target, args, events) {
+  let routing;
+  try { routing = loadRouting(); }
+  catch (e) {
+    events.push({ name: target.name, type: '报帅', detail: `capacity 指纹已续命 3 次，读选型表失败没法换人：${e.message || e}` });
+    return;
+  }
+  const plan = planCapacitySwitch({
+    displayName: target.name,
+    models: routing.models || [],
+    passerIds: reviewerPasserIds(routing),
+  });
+  if (!plan.ok) {
+    events.push({ name: target.name, type: '报帅', detail: `capacity 指纹已按 1/5/10 分钟各续命一次（共 ${PARAMS.capacityKaMax} 次）仍在线——自动换人没做成：${plan.error}` });
+    return;
+  }
+  const live = !args.snapshotDir;
+  const hook = process.env.WATCHDOG_REVIEWER_SWITCH;
+  const really = Boolean(args.disposeActions) && (live || Boolean(hook));
+  if (!really) {
+    events.push({
+      name: target.name,
+      type: '动作',
+      detail: `将换人：${plan.from} → ${plan.to}（PR #${plan.pr}；快照/测试模式打印动作行不真派）`,
+    });
+    return;
+  }
+  const cmd = hook
+    ? [process.execPath, hook, '--pr', String(plan.pr), '--reviewer', plan.to]
+    : [process.execPath, join(process.cwd(), 'scripts', 'dao.mjs'), 'reviewer-create', '--pr', String(plan.pr), '--reviewer', plan.to, ...(target.parentWorktreeId ? ['--parent-worktree', target.parentWorktreeId] : [])];
+  const r = spawnSync(cmd[0], cmd.slice(1), {
+    encoding: 'utf8',
+    cwd: process.cwd(),
+    timeout: 180000,
+    windowsHide: true,
+  });
+  const ok = !r.error && r.status === 0;
+  const err = String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200);
+  events.push({
+    name: target.name,
+    type: '换人',
+    detail: ok
+      ? `已换人：${plan.from} → ${plan.to}（PR #${plan.pr}）`
+      : `换人失败：${plan.from} → ${plan.to}——${err}`,
+  });
+}
+
 // 结构性排除（按 id 判，不碰 displayName）。
 function isExcluded(w, a, args) {
   if (w.isMainWorktree === true) return true;
@@ -880,6 +935,8 @@ function runRound(source, args, state) {
         handle: pane ? pane.handle : undefined,
         incarnationId: pane ? pane.incarnationId : null,
         graded: isGradedExcluded(a, args),
+        worktreeId: w.worktreeId || w.id || null,
+        parentWorktreeId: w.parentWorktreeId || null,
       });
     });
   }
@@ -939,8 +996,7 @@ function runRound(source, args, state) {
 
     // ③ 错误指纹（只看屏面底部当前状态窗口）——两连同才报警 + 活证否决（真实内容在动）。
     // 处置：首警执行矩阵动作 + 连败计数（#471：恢复即清零，连败 N 轮或跨 N 分钟报帅，报帅后不再自动动作）。
-    // #646：capacityRetry 指纹（at capacity / try a different model）不走通用连败计数，改走专用续命调度——
-    //   按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续（用户 2026-08-19 拍板）。
+    // #646/#633：capacityRetry 指纹按 1/5/10 分钟各续命一次（共 3 次），第 4 次按选型序换人。
     if (!graded) {
       const matched = matchFingerprints(bottom);
       if (matched.length > 0) {
@@ -958,7 +1014,7 @@ function runRound(source, args, state) {
             if (row && row.capacityRetry) {
               // #646：capacity 指纹续命调度起表——本次动作即第 1 次续命，下次间隔 1 分钟
               st.fpKa = { count: 1, lastTs: now, reported: false };
-              events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——capacity 指纹按 1/5/10 分钟各续命一次（共 3 次），第 4 次起报帅不自动续（#646；#634 现场：续命一次仍 capacity）` });
+              events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——capacity 指纹按 1/5/10 分钟各续命一次（共 3 次），第 4 次按选型序换人（#633）` });
             } else {
               events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
             }
@@ -971,8 +1027,7 @@ function runRound(source, args, state) {
         } else if (st.fpStreak >= 2 && st.fired.has('fingerprint')) {
           const row = matrixRowFor(matched[0]);
           if (row && row.capacityRetry) {
-            // #646：capacity 指纹续命调度——1/5/10 分钟各续命一次（共 3 次），第 4 次报帅不续。
-            // 已报帅（reported）后不再动作也不走通用连败（避免二次报帅）。
+            // #646/#633：capacity 指纹续命 1/5/10 分钟各一次；第 4 次按选型序换人，认不出审官卡才报帅。
             if (st.fpKa && !st.fpKa.reported) {
               const idx = Math.min(st.fpKa.count, PARAMS.capacityKaIntervalsMs.length) - 1;
               const gapMs = PARAMS.capacityKaIntervalsMs[idx];
@@ -982,7 +1037,7 @@ function runRound(source, args, state) {
                   st.fpKa.count += 1; st.fpKa.lastTs = now;
                 } else {
                   st.fpKa.reported = true;
-                  events.push({ name: t.name, type: '报帅', detail: `capacity 指纹已按 1/5/10 分钟各续命一次（共 ${PARAMS.capacityKaMax} 次）仍在线——第 4 次起报帅，不再自动续命（#646）` });
+                  executeCapacitySwitch(t, args, events);
                 }
               }
             }

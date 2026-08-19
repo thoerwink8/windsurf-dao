@@ -8,7 +8,7 @@
 // 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
 // ⑩孤儿树（活跃执行者判据，跨主帅不误伤；#630 接真删：on 调 --force，off/快照只打印）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
 // #646：⑬b capacity 指纹（at capacity / try a different model）续命走专用调度——按 1/5/10 分钟
-// 各续命一次（共 3 次），第 4 次起报帅不自动续（夹具 capacity-keepalive 证 1/2/3 发、第 4 不发）。
+// 各续命一次（共 3 次），第 4 次按选型序换人；认不出审官卡才报帅。
 // #569：⑭空转降噪三类豁免（角色·在途PR·活性否决，各留正控 negative + 真阳对照）⑮权限确认框
 // selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进，
 // 2026-08-17 判据订正：有活终端且查不到 dispatch 记账才报，agents=0 不算数）⑰model-change
@@ -120,7 +120,7 @@ describe('watchdog', () => {
       assert.ok(!/fingerprint:/.test(seg1), 'at-capacity-450：第一轮不报（streak 1）  →  ' + r2.out.trim());
     });
     await t.test('at-capacity-450：处置矩阵动作行出现（#646：capacity 指纹首警即续命 #1，注入续命）', () => {
-      assert.ok(/动作: 注入续命（#646：1\/5\/10 分钟各一次，共 3 次，第 4 次报帅）：将发送「看门狗续命/.test(r2.out), 'at-capacity-450：处置矩阵动作行出现（#646：capacity 指纹首警即续命 #1，注入续命）  →  ' + r2.out.trim());
+      assert.ok(/动作: 注入续命（#646：1\/5\/10 分钟各一次，共 3 次，第 4 次换人）：将发送「看门狗续命/.test(r2.out), 'at-capacity-450：处置矩阵动作行出现（#646：capacity 指纹首警即续命 #1，注入续命）  →  ' + r2.out.trim());
     });
 
     const r3 = runMultiRounds(path.join(FIXTURES, "real-incidents", "at-capacity"), 2);
@@ -867,7 +867,7 @@ describe('watchdog', () => {
     });
   });
 
-  it('⑳b2 #646 capacity 指纹续命调度：1/5/10 分钟各续命一次（共 3 次），第 4 次报帅不续', async (t) => {
+  it('⑳b2 #646 capacity 指纹续命调度：1/5/10 分钟各续命一次（共 3 次），第 4 次换人', async (t) => {
     // 夹具 capacity-keepalive：round 1-5 同屏 at capacity，git-evidence capturedAt 分别
     // 落在 T0 / T0 / T0+1min / T0+6min / T0+16min——正好把 1/5/10 三个间隔走完：
     //   round 2 首警 → 续命 #1；round 3（+1min）→ 续命 #2；round 4（+6min）→ 续命 #3；
@@ -887,8 +887,8 @@ describe('watchdog', () => {
     await t.test('round 4（+6min）：续命 #3 动作行', () => {
       assert.ok(/动作: 注入续命（#646/.test(seg(4)), 'round 4：续命 #3 动作行  →  ' + seg(4).trim());
     });
-    await t.test('round 5（+16min）：第 4 次只报帅不再续命（无动作行）', () => {
-      assert.ok(/报帅:.*capacity 指纹已按 1\/5\/10 分钟各续命一次/.test(seg(5)), 'round 5：报帅（第 4 次）  →  ' + seg(5).trim());
+    await t.test('round 5（+16min）：第 4 次不续命（卡名不是审官·模型 → 报帅）', () => {
+      assert.ok(/报帅:.*capacity 指纹已按 1\/5\/10 分钟各续命一次/.test(seg(5)), 'round 5：认不出审官卡则报帅  →  ' + seg(5).trim());
       assert.ok(!/动作: 注入续命/.test(seg(5)), 'round 5：第 4 次不发续命动作  →  ' + seg(5).trim());
     });
   });

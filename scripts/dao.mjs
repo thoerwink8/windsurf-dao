@@ -65,6 +65,8 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  inspectConsumerFence,
+  planFenceHeal,
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
@@ -1078,6 +1080,75 @@ function cmdPrSyncLabels(args) {
   emit({ ok: true, ...r });
 }
 
+function soldierRunId({ soldierDispatch, parentId } = {}) {
+  if (soldierDispatch) {
+    const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
+    if (shown.ok) {
+      const id = shown.json?.result?.dispatch?.run_id || null;
+      if (id) return { ok: true, runId: id };
+    }
+  }
+  if (parentId) {
+    const wl = orca(argsWorkerList());
+    if (!wl.ok) return { ok: false, error: `worker-list 没查成：${errText(wl.error)}` };
+    const found = findDispatchForWorktree(wl.json, parentId);
+    if (found.ok && found.runId) return { ok: true, runId: found.runId };
+    return { ok: false, error: found.error || '工人卡没有 run id' };
+  }
+  return { ok: false, error: '没 soldier dispatch / 工人卡，找不到 Run' };
+}
+
+function ensureInboxStation() {
+  const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true,
+    timeout: 60000,
+  });
+  let json = null;
+  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { json = null; }
+  if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+    return { ok: false, error: (json && json.error) || String(r.stderr || '').trim() || `inbox-station ensure exit ${r.status}` };
+  }
+  return { ok: true, ...json };
+}
+
+function invokeReviewerCreateHealed(opts) {
+  const first = invokeReviewerCreate(opts);
+  const inspect = inspectConsumerFence(first.ok ? '' : first.error);
+  if (inspect.unscanned) {
+    return { ...first, fenceHeal: inspect };
+  }
+  if (opts.dryRun || first.ok || !inspect.fenced) {
+    return { ...first, fenceHeal: { ...inspect, action: 'none' } };
+  }
+  const run = soldierRunId({
+    soldierDispatch: opts.soldierDispatch,
+    parentId: opts.parentWorktree,
+  });
+  const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
+  const retried = invokeReviewerCreate(opts);
+  const ensured = ensureInboxStation();
+  const plan = planFenceHeal({
+    error: first.error,
+    runId: run.ok ? run.runId : null,
+    retired,
+    retried,
+    ensured,
+  });
+  if (!plan.ok) {
+    return {
+      ok: false,
+      invoked: true,
+      dryRun: !!opts.dryRun,
+      error: plan.error,
+      fenceHeal: { ...inspect, ...plan, retired, retried, ensured },
+    };
+  }
+  return { ...retried, fenceHeal: { ...inspect, ...plan, retired, ensured } };
+}
+
 function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun } = {}) {
   const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr)];
   if (name) argv.push('--name', String(name));
@@ -1400,7 +1471,7 @@ function cmdWorkerDone(args) {
 
   if (args.dryRun) {
     if (shouldCreate) {
-      create = invokeReviewerCreate({
+      create = invokeReviewerCreateHealed({
         pr: args.pr,
         name: createName,
         parentWorktree: parentId,
@@ -1434,7 +1505,7 @@ function cmdWorkerDone(args) {
   }
 
   if (shouldCreate) {
-    create = invokeReviewerCreate({
+    create = invokeReviewerCreateHealed({
       pr: args.pr,
       name: createName,
       parentWorktree: parentId,
@@ -1453,6 +1524,33 @@ function cmdWorkerDone(args) {
       reviewer: plan.reviewer,
       dryRun: false,
     });
+    const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
+    if (!reused.ok && reuseFence.fenced) {
+      const run = soldierRunId({ soldierDispatch: args.soldierDispatch, parentId });
+      const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
+      const retried = reuseReviewerOnTerminal({
+        pr: args.pr,
+        reviewerWorktreeId: reuse.worktreeId,
+        handle: reuse.handle,
+        parentWorktree: parentId,
+        soldierDispatch: args.soldierDispatch,
+        reviewer: plan.reviewer,
+        dryRun: false,
+      });
+      const ensured = ensureInboxStation();
+      const planHeal = planFenceHeal({
+        error: reused.error,
+        runId: run.ok ? run.runId : null,
+        retired,
+        retried,
+        ensured,
+      });
+      if (planHeal.ok) {
+        reused = { ...retried, fenceHeal: { ...reuseFence, ...planHeal, retired, ensured } };
+      } else {
+        reused = { ...reused, invoked: true, skipped: true, reuseFailed: true, fenceHeal: { ...reuseFence, ...planHeal, retired, retried, ensured } };
+      }
+    }
     // 续 capability 失败不能吞掉返工投递：审官要的是结构化消息，帅会另开复核 Task。
     if (!reused.ok) {
       reused = { ...reused, invoked: true, skipped: true, reuseFailed: true };
@@ -1913,6 +2011,7 @@ function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    forceCommand: true,
   });
   if (!revTerm.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
@@ -2162,6 +2261,7 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    forceCommand: true,
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;
