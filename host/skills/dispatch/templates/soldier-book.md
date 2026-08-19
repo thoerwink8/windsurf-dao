@@ -17,7 +17,7 @@
 
 ## 干完活之后（顺序执行，缺一不可）
 
-1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带 `Closes` 关键词与验收记录。
+1. 确认全部职责完成：跑测试、开 PR（分支 push 到远端）、PR 正文带「署名 issue #N，关单交给 `scripts/close-issues.mjs`」与验收记录。**不要在 PR 正文写 GitHub 的自动关单关键词（写了会触发自动关单）**——关单只认关单脚本（MERGED 且 check 绿才关，见 issue #657）。
 2. **调原子完工命令**——发完工/返工 comment，并按需起审官。不要自己 `issue comment`，不要自己 `notify` 审官：
 
    ```bash

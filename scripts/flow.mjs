@@ -83,8 +83,30 @@ import {
   recordStartupRevision, checkGuardRevision, formatRevisionAlarm, attachRevision,
 } from './lib/guard-revision.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
+import { closeIssueForPr } from './lib/close-issue.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
+
+/** #657 合后钩：PR 退役为 MERGED 时按关单脚本判定关/重开。
+ * 返回人话串（空 = 无动作），追加进退役事件行。 */
+function closeIssueOnMerge(prNumber, dryRun) {
+  const r = runGh(['pr', 'view', String(prNumber), '--json', 'number,title,body,state,statusCheckRollup']);
+  if (!r.ok) return `（关单：读 PR #${prNumber} 失败 ${r.error}）`;
+  // 关/重开是写操作，gh 输出可能不是 JSON——用 runCmd 直接转 wrapper，别复用要求 JSON 的 runGh。
+  const writeGh = (args) => {
+    const w = runCmd('gh', args, GH_TIMEOUT_MS);
+    if (!w.ok) return { ok: false, error: w.error };
+    let json;
+    try { json = JSON.parse(w.out); } catch { return { ok: true, out: w.out }; }
+    return { ok: true, json };
+  };
+  const res = closeIssueForPr({ pr: r.json, runGh: writeGh, dryRun });
+  if (!res.ok) return `（关单失败：${res.error}）`;
+  if (res.action === 'none') return '';
+  const verb = res.action === 'close' ? '关' : '重开';
+  return `（关单：${verb} issue #${res.issue}——${res.reason}）`;
+}
+
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
 const ORCA_TIMEOUT_MS = 30000;
 const GH_TIMEOUT_MS = 30000;
@@ -331,14 +353,14 @@ function unwrap(json, pathKey, topKey) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 完工信号：issue comment 首行命中「完工」或「返工(完成|处置)」。
-// #575 ⑥：读关联 issue（标题 #N 或 Closes #N），不读 PR 会话——工人被 push 闸拦住时仍能交棒。
+// #575 ⑥：读关联 issue（标题 #N 或正文署名 #N），不读 PR 会话——工人被 push 闸拦住时仍能交棒。
 function ticketIssueNumber(pr) {
   const title = String(pr?.title || '');
   const fromTitle = title.match(/#(\d+)/);
   if (fromTitle) return Number(fromTitle[1]);
   const body = String(pr?.body || '');
-  const fromClose = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body);
-  return fromClose ? Number(fromClose[1]) : null;
+  const fromClose = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body);
+  return fromClose ? Number(fromClose[1] ?? fromClose[2]) : null;
 }
 
 function completionSignals(comments) {
@@ -678,7 +700,7 @@ function makeLiveSource(repo) {
       return { ok: true, pr: r.json };
     },
     getComments(number) {
-      // #575 ⑥：number 是关联 issue（标题 #N / Closes #N），不是 PR 号。
+      // #575 ⑥：number 是关联 issue（标题 #N / 正文署名 #N），不是 PR 号。
       // 走 issue comments REST + --paginate；字段映射成 createdAt（完工信号用）。
       const r = runGh(['api', `repos/${repo}/issues/${number}/comments`, '--paginate']);
       if (!r.ok) return { ok: false, error: r.error };
@@ -864,7 +886,8 @@ function processOneRound(source, state, args) {
     if (st === 'MERGED') {
       rec.retired = true;
       const bit = noteWorkerMergedLedger(prView.ok ? prView.pr : null, args.dryRun);
-      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）${bit}`);
+      const closeBit = closeIssueOnMerge(rec.pr, args.dryRun);
+      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）${bit}${closeBit}`);
     } else if (st === 'CLOSED') {
       rec.retired = true;
       events.push(`[flow] 退役：PR #${rec.pr} CLOSED（未合并关闭）`);
