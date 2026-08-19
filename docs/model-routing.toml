@@ -7,7 +7,7 @@
 # 事实（价格等）只作为 why 里的当时快照，本文件不替官网保存会过期的事实。
 # ============================================================================
 
-updated = "2026-08-18"
+updated = "2026-08-19"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
@@ -159,7 +159,7 @@ decided = "2026-08-16"
 
 [providers.cursor]
 cli = "cursor-agent"
-launch = "cursor-agent --model {model} --force"
+launch = "cursor-agent --model {model} --force --trust"
 launch_model = "composer-2.5"
 probe_wait_ms = 45000
 launch_note = """
@@ -167,6 +167,10 @@ Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代�
 无代理时选择器只剩 Grok/Composer/Kimi/GLM：见 NEW-MACHINE.md「cursor 怎么配」。
 本机 ~/.local/bin 的 shim 已带 127.0.0.1:7890。不装 pi-cursor-sdk（官方无第三方 chat API；
 撞「pi 不写插件」）。管子不进打分。
+
+#648 返工补丁（2026-08-19）：launch 加 `--trust`——`--force` 只放行命令，不管 Workspace Trust，
+新 worktree 弹 Trust 会让 Orca 报 agent_unconfigured（#649 attach 实证）。
+`--trust` 直接信任当前工作区免弹框；仓内 shim 在带 `--model` 时也会补 `--trust`（合并后本机垫片退役）。
 """
 why = "用户 2026-08-18：SuperGrok Heavy 送 Cursor Ultra。Composer/Kimi/Gemini 走 Cursor CLI；GPT 主路仍 Codex、支路可走本 provider。"
 decided = "2026-08-18"
@@ -213,7 +217,7 @@ provider = "claude"
 cli_model = "opus"
 roles = ["审查", "写码", "判断"]
 status = "正式"
-why = "审官次选：GPT 优先、Claude(Opus) 次之；UI 类活 GPT 禁入时顶位。启动命令见 [providers.claude]"
+why = "审官次选：GLM-5.2 优先（#648）、Claude(Opus) 次之；GPT 暂时不可用。启动命令见 [providers.claude]"
 decided = "2026-08-14"
 
 [[models]]
@@ -246,14 +250,24 @@ why = "GLM 系主打编码，1M 上下文 / 131K 输出；先进写码+判断候
 decided = "2026-08-16"
 
 [[models]]
+id = "glm-5.2"
+provider = "cursor"
+cli_model = "glm-5.2-high"
+roles = ["写码", "判断", "审查"]
+status = "试用"
+trial_since = "2026-08-19"
+why = "用户 2026-08-19 拍板（#648）：GPT 暂时不可用时的备选回调之一。登记仍保留、不套 glm-5.3 禁令；2026-08-19 评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位"
+decided = "2026-08-19"
+
+[[models]]
 id = "kimi-k3"
 provider = "cursor"
 cli_model = "kimi-k3-high"
-roles = ["写码", "判断"]
+roles = ["写码", "判断", "审查"]
 status = "试用"
 trial_since = "2026-08-16"
-why = "用户 2026-08-18：主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；仍一条记录，战绩不拆。og 侧仍是 2026-08-16 拍板保留的 4 个模型之一"
-decided = "2026-08-18"
+why = "用户 2026-08-18：主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；仍一条记录，战绩不拆。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；glm-5.2 保留登记但不再顶审官位。og 侧仍是 2026-08-16 拍板保留的 4 个模型之一"
+decided = "2026-08-19"
 pipes = [
   { provider = "cursor", cli_model = "kimi-k3-high" },
   { provider = "opencode-go", cli_model = "kimi-k3" },
@@ -327,8 +341,8 @@ constraint = "受 gpt 的 UI ban 优先级约束"
 
 [[rules]]
 rule = "审官选型序"
-why = "帅位注意力最稀缺，审官优先用异厂商的 GPT（写码同模型易放水）；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
-decided = "2026-08-14"
+why = "帅位注意力最稀缺，审官优先用异厂商模型（写码同模型易放水）。#648（2026-08-19 拍板，评论 #6 追改）：GPT 暂时不可用，后续审官一律 kimi-k3（cursor/kimi-k3-high）顶位，GPT 恢复另拍；glm-5.2 保留登记但不再顶审官位；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
+decided = "2026-08-19"
 constraint = "受 bans[gpt UI 类].precedence 约束"
 
 # ============================================================================
