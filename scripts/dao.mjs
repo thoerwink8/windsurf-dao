@@ -334,7 +334,7 @@ function startOrcaWorker({ task, worktree, launched }) {
       worktree,
       agent: launched.agentId,
       model: launched.model || undefined,
-    }));
+    }), 180000);
     if (!r.ok) return { ok: false, error: errText(r.error), json: r.json };
     const handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
     if (!handle) {
