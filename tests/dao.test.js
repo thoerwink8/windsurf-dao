@@ -2048,8 +2048,8 @@ describe('dao', () => {
         && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
     });
     const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
-    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('async function findForeignStation'));
-    await t.test('#601 cmdEnsure 不得无条件 stampLeaseHandle(coordTerm.handle)', () => {
+    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('/// ══════════════════════════════════════════════════════════════════════\n// #637 可归档二次验证闸'));
+    await t.test('#638+#601 cmdEnsure 只经 planEnsureLeaseStamp 盖 handle，绝不无条件 stamp coordinator/终端', () => {
       assert.ok(/planEnsureLeaseStamp/.test(ensureFn)
         && /if \(stampPlan\.stamp\)/.test(ensureFn)
         && /stampLeaseHandle\(logPath, stampPlan\.handle, 'rebuild'\)/.test(ensureFn)

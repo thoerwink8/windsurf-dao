@@ -446,7 +446,7 @@ function workerStartProof(dispatchId) {
   return verifyWorkerStarted(r.json);
 }
 
-/** 信箱台每轮 run-use 会抢走 coordinator。task-create 前当场夺回并带 --run，跟复用审官同一条重试。 */
+/** 派工瞬间其它进程（复用审官/别的帅）可能 run-use 抢走 coordinator。task-create 前当场夺回并带 --run，跟复用审官同一条重试。 */
 function taskCreateOnRun(spec, runId) {
   let last = { ok: false, error: 'task-create 还没跑' };
   for (let i = 0; i < 3; i++) {
