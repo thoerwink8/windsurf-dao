@@ -1,19 +1,32 @@
 // 信箱台幂等脚本 · 纯函数回归（不碰 live orca）
 //
-// 验的层：①参数/选型 ②终端+中继活着判据（租约+PID，不是历史屏面）
-// ③ensure 三岔（秒退/夺回/重建）
-// ④收信分流（heartbeat 不落盘、业务信落盘）⑤check JSON 多形态解析
-// ⑥重建命令串（run-use 由 relay 进程自己做，--command 不走 stdin）
-// ⑦waitReady / finalizeEnsure 故障注入（超时与夺回失败必须 ok:false 非零）
-// 判别力：READY 历史行当活、或超时仍 ok:true，必有一条变红。
+// 验的层：①参数/选型 ②租约/活性判据（新鲜+PID+handle 在盘面，不是历史屏面）
+// ③#638 单台决策（全局台优先/关多余台/旧台全关重建/无台重建/证不出不动）
+// ④收信分流（heartbeat 不落盘、业务信落盘）⑤活跃 Run 集与相关消息过滤
+// ⑥重建命令串（#638：不再 run-use，纯 inbox 轮询）⑦故障注入
+// ⑧#614 只读 gc 阈值行
+// 判别力：READY 历史行当活、或多台并存没被收敛、或只读 gc 超阈值没打行，必有一条变红。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'inbox-station.mjs');
 const SCRIPT_LOAD = import('file://' + SCRIPT.replace(/\\/g, '/'));
+
+function tmpDir(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-test-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  return dir;
+}
+
+function writeLease(dir, name, { pid, runId, ts, ttlMs, handle }) {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, JSON.stringify({ pid, runId, ts, ttlMs, handle: handle ?? null }) + '\n', 'utf8');
+  return file;
+}
 
 describe('inbox-station', () => {
   it('① 参数 / 选型', async (t) => {
@@ -22,12 +35,12 @@ describe('inbox-station', () => {
     await t.test('默认命令 ensure', () => {
       assert.ok(a.cmd === 'ensure', '默认命令 ensure');
     });
-    await t.test('默认 timeout 15s', () => {
-      assert.ok(a.timeoutMs === 15000, '默认 timeout 15s');
+    await t.test('默认 gc 阈值', () => {
+      assert.ok(a.gcThreshold === S.GC_THRESHOLD, '默认 gc 阈值');
     });
-    const b = S.parseArgs(['node', 'x', 'relay', '--run', 'run_abc', '--log', 'x.log', '--timeout-ms', '5000']);
-    await t.test('relay + run/log', () => {
-      assert.ok(b.cmd === 'relay' && b.run === 'run_abc' && b.log === 'x.log' && b.timeoutMs === 5000, 'relay + run/log');
+    const b = S.parseArgs(['node', 'x', 'relay', '--log', 'x.log', '--timeout-ms', '5000', '--gc-threshold', '9']);
+    await t.test('relay + log + 自定义阈值', () => {
+      assert.ok(b.cmd === 'relay' && b.log === 'x.log' && b.timeoutMs === 5000 && b.gcThreshold === 9, 'relay + log + 自定义阈值');
     });
     let threw = false;
     try { S.parseArgs(['node', 'x', 'explode']); } catch { threw = true; }
@@ -39,135 +52,69 @@ describe('inbox-station', () => {
     await t.test('未知参数抛错', () => {
       assert.ok(threw2, '未知参数抛错');
     });
-  });
-
-  it('pickRun 选 run', async (t) => {
-    const S = await SCRIPT_LOAD;
-    const runs = [
-      { id: 'run_legacy_local', legacy: 1, updated_at: '2026-08-20T00:00:00Z' },
-      { id: 'run_old', legacy: 0, updated_at: '2026-08-14T00:00:00Z' },
-      { id: 'run_new', legacy: 0, updated_at: '2026-08-15T06:00:00Z' },
-    ];
-    await t.test('pickRun 跳过 legacy 取最新', () => {
-      assert.ok(S.pickRun(runs).id === 'run_new', 'pickRun 跳过 legacy 取最新');
-    });
-    await t.test('pickRun --run 优先', () => {
-      assert.ok(S.pickRun(runs, { preferredId: 'run_old' }).id === 'run_old', 'pickRun --run 优先');
-    });
-    await t.test('pickRun current 次之', () => {
-      assert.ok(S.pickRun(runs, { currentId: 'run_old' }).id === 'run_old', 'pickRun current 次之');
-    });
-    await t.test('pickRun 空列表空', () => {
-      assert.ok(S.pickRun([]) === null, 'pickRun 空列表空');
-    });
-    await t.test('pickRun 只认在途 allowedIds', () => {
-      assert.ok(S.pickRun(runs, { allowedIds: ['run_old'] }).id === 'run_old', 'pickRun 只认在途 allowedIds');
-    });
-    await t.test('pickRun 无在途 → 空（不认最新墓碑）', () => {
-      assert.ok(S.pickRun(runs, { allowedIds: [] }) === null, 'pickRun 无在途 → 空（不认最新墓碑）');
+    let bad = false;
+    try { S.parseArgs(['node', 'x', 'ensure', '--gc-threshold', '-1']); } catch { bad = true; }
+    await t.test('gc 阈值负数抛错', () => {
+      assert.ok(bad, 'gc 阈值负数抛错');
     });
   });
 
-  it('② 终端 + 中继活着（#493 返工：身份从 coordinator_handle 取，标题只出不进）', async (t) => {
+  it('② 租约 / 活性（#493 返工：身份从租约取，标题只出不进）', async (t) => {
     const S = await SCRIPT_LOAD;
-    const titled = { handle: 'term_a', title: '◑ 信箱台（勿关）', connected: true, preview: 'PS>' };
     await t.test('runShort 去掉 run_ 前缀', () => {
       assert.ok(S.runShort('run_bfd7e4e193ce') === 'bfd7e4e193ce', 'runShort 去掉 run_ 前缀');
     });
-    await t.test('stationTitle 带 run 后缀（输出给人看）', () => {
-      assert.ok(S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）', 'stationTitle 带 run 后缀（输出给人看）');
+    await t.test('stationTitle 带 run 后缀（历史格式保留）', () => {
+      assert.ok(S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）', 'stationTitle 带 run 后缀');
     });
-    await t.test('defaultLogRel 按 run 隔离', () => {
+    await t.test('stationTitle 无 run = 裸标题', () => {
+      assert.ok(S.stationTitle(null) === '信箱台（勿关）', 'stationTitle 无 run = 裸标题');
+    });
+    await t.test('defaultLogRel 按 run 隔离（历史格式）', () => {
       assert.ok(S.defaultLogRel('run_bfd7e4e193ce').replace(/\\/g, '/') === '_flow/inbox-bfd7e4e193ce.log', 'defaultLogRel 按 run 隔离');
     });
-    await t.test('defaultLogRel 无 run 兑底 inbox.log', () => {
-      assert.ok(S.defaultLogRel(null) === S.DEFAULT_LOG_REL, 'defaultLogRel 无 run 兑底 inbox.log');
-    });
-
-    // 身份 = run-show 的 coordinator_handle：标题是 pwsh.exe 也认得；标题是信箱台也认得
-    const reset = { handle: 'term_station', title: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', connected: true };
-    const fancy = { handle: 'term_fancy', title: S.stationTitle('run_ev'), connected: true };
-    await t.test('按 handle 认出被重置标题的台', () => {
-      assert.ok(S.findCoordinatorTerminal([reset, fancy], 'term_station')?.handle === 'term_station', '按 handle 认出被重置标题的台');
-    });
-    await t.test('按 handle 认出正常标题的台', () => {
-      assert.ok(S.findCoordinatorTerminal([reset, fancy], 'term_fancy')?.handle === 'term_fancy', '按 handle 认出正常标题的台');
-    });
-    await t.test('coordinator 空 → null', () => {
-      assert.ok(S.findCoordinatorTerminal([reset], null) === null, 'coordinator 空 → null');
-    });
-    await t.test('handle 不在列表 → null', () => {
-      assert.ok(S.findCoordinatorTerminal([reset], 'term_nope') === null, 'handle 不在列表 → null');
-    });
-    await t.test('非数组 → null', () => {
-      assert.ok(S.findCoordinatorTerminal(null, 'term_a') === null, '非数组 → null');
+    await t.test('defaultLogRel 无 run = 全局 inbox.log', () => {
+      assert.ok(S.defaultLogRel(null) === S.DEFAULT_LOG_REL, 'defaultLogRel 无 run = 全局 inbox.log');
     });
 
     const now = 1_000_000;
-    const liveLease = { pid: process.pid, runId: 'run_ev', ts: now, ttlMs: S.LEASE_TTL_MS };
-    const deadPidLease = { pid: 2147483647, runId: 'run_ev', ts: now, ttlMs: S.LEASE_TTL_MS };
-    const staleLease = { pid: process.pid, runId: 'run_ev', ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
-    const wrongRunLease = { pid: process.pid, runId: 'run_other', ts: now, ttlMs: S.LEASE_TTL_MS };
-    await t.test('isStationAlive 新鲜+PID在+runId对 = 活', () => {
-      assert.ok(S.isStationAlive(liveLease, 'run_ev', { now }) === true, 'isStationAlive 新鲜+PID在+runId对 = 活');
+    const liveLease = { pid: process.pid, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const deadPidLease = { pid: 2147483647, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const staleLease = { pid: process.pid, runId: null, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
+    await t.test('isStationAlive 新鲜+PID在 = 活', () => {
+      assert.ok(S.isStationAlive(liveLease, { now }) === true, 'isStationAlive 新鲜+PID在 = 活');
     });
     await t.test('isStationAlive 死 PID = 死', () => {
-      assert.ok(S.isStationAlive(deadPidLease, 'run_ev', { now }) === false, 'isStationAlive 死 PID = 死');
+      assert.ok(S.isStationAlive(deadPidLease, { now }) === false, 'isStationAlive 死 PID = 死');
     });
     await t.test('isStationAlive 过期租约 = 死', () => {
-      assert.ok(S.isStationAlive(staleLease, 'run_ev', { now }) === false, 'isStationAlive 过期租约 = 死');
-    });
-    await t.test('isStationAlive runId 不对 = 死', () => {
-      assert.ok(S.isStationAlive(wrongRunLease, 'run_ev', { now }) === false, 'isStationAlive runId 不对 = 死');
+      assert.ok(S.isStationAlive(staleLease, { now }) === false, 'isStationAlive 过期租约 = 死');
     });
     await t.test('isStationAlive 无租约 = 死', () => {
-      assert.ok(S.isStationAlive(null, 'run_ev') === false, 'isStationAlive 无租约 = 死');
+      assert.ok(S.isStationAlive(null) === false, 'isStationAlive 无租约 = 死');
     });
 
-    await t.test('未连 = 死', () => {
-      assert.ok(S.isRelayAlive({ ...titled, connected: false }) === false, '未连 = 死');
+    await t.test('isRelayAlive 未连 = 死', () => {
+      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: false }, { lease: liveLease, now }) === false, '未连 = 死');
     });
-    await t.test('孤儿 = 死', () => {
-      assert.ok(S.isRelayAlive({ ...titled, connected: true, orphaned: true }) === false, '孤儿 = 死');
+    await t.test('isRelayAlive 孤儿 = 死', () => {
+      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, orphaned: true }, { lease: liveLease, now }) === false, '孤儿 = 死');
     });
-    await t.test('只有标题没有中继痕迹 = 死', () => {
-      assert.ok(S.isRelayAlive(titled) === false, '只有标题没有中继痕迹 = 死');
+    await t.test('isRelayAlive 只有标题没有租约 = 死', () => {
+      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, preview: S.READY_MARK }) === false, '只有标题没有租约 = 死');
     });
-    await t.test('isRelayAlive 租约 runId 不对 = 死', () => {
-      assert.ok(S.isRelayAlive(reset, { lease: wrongRunLease, runId: 'run_ev', now }) === false, 'isRelayAlive 租约 runId 不对 = 死');
+    await t.test('isRelayAlive 租约新鲜+PID活+已连 = 活', () => {
+      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, preview: S.READY_MARK }, { lease: liveLease, now }) === true, '租约新鲜+PID活+已连 = 活');
     });
-
-    // 审官红1 原样：connected + lastOutputAt:0 + 仅历史 READY preview
-    const residue = {
-      handle: 'term_a',
-      title: S.TITLE,
-      connected: true,
-      lastOutputAt: 0,
-      preview: `${S.READY_MARK} run=x\nnode scripts/inbox-station.mjs relay\norchestration check --wait`,
-    };
-    await t.test('READY 历史行在但 relay 已退出 = 死', () => {
-      assert.ok(S.isRelayAlive(residue) === false, 'READY 历史行在但 relay 已退出 = 死');
-    });
-    await t.test('脚本名/check 历史残留不能当活', () => {
-      assert.ok(S.isRelayAlive({
-        handle: 'term_a', title: S.TITLE, connected: true,
-        preview: 'node scripts/inbox-station.mjs relay',
-      }) === false, '脚本名/check 历史残留不能当活');
+    await t.test('isRelayAlive 过期租约 = 死', () => {
+      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true }, { lease: staleLease, now }) === false, '过期租约 = 死');
     });
 
-    await t.test('新鲜租约 + 本进程 PID = 活', () => {
-      assert.ok(S.isRelayAlive(residue, { lease: liveLease, now }) === true, '新鲜租约 + 本进程 PID = 活');
+    await t.test('isHandleOnBoard 在盘面 = 真', () => {
+      assert.ok(S.isHandleOnBoard('term_a', [{ handle: 'term_a' }, { handle: 'term_b' }]) === true, 'isHandleOnBoard 在盘面 = 真');
     });
-    await t.test('新鲜租约但 PID 已死 = 死', () => {
-      assert.ok(S.isRelayAlive(residue, { lease: deadPidLease, now }) === false, '新鲜租约但 PID 已死 = 死');
-    });
-    await t.test('过期租约 + 活 PID = 死', () => {
-      assert.ok(S.isRelayAlive(residue, { lease: staleLease, now }) === false, '过期租约 + 活 PID = 死');
-    });
-    await t.test('preview 已滚没但租约新鲜+PID 活 = 活', () => {
-      assert.ok(S.isRelayAlive({
-        handle: 'term_a', title: S.TITLE, connected: true, preview: 'PS>',
-      }, { lease: liveLease, now }) === true, 'preview 已滚没但租约新鲜+PID 活 = 活');
+    await t.test('isHandleOnBoard 不在 = 假', () => {
+      assert.ok(S.isHandleOnBoard('term_c', [{ handle: 'term_a' }]) === false, '不在 = 假');
     });
 
     await t.test('parseLease 坏 JSON → null', () => {
@@ -180,174 +127,138 @@ describe('inbox-station', () => {
     await t.test('format/parse 租约往返', () => {
       assert.ok(parsed && parsed.pid === 12 && parsed.runId === 'run_x' && parsed.ttlMs === 9000, 'format/parse 租约往返');
     });
-    const withHandle = S.parseLease(S.formatLease({ pid: 12, runId: 'run_x', ts: now, ttlMs: 9000, handle: 'term_s' }));
+    const withHandle = S.parseLease(S.formatLease({ pid: 12, runId: null, ts: now, ttlMs: 9000, handle: 'term_s' }));
     await t.test('租约可带 handle', () => {
       assert.ok(withHandle && withHandle.handle === 'term_s', '租约可带 handle');
-    });
-    await t.test('旧租约无 handle 仍可读', () => {
-      assert.ok(parsed.handle == null, '旧租约无 handle 仍可读');
     });
     await t.test('mergeLeaseHandle 保留旧 handle', () => {
       assert.ok(S.mergeLeaseHandle({ handle: 'term_old' }, null) === 'term_old', 'mergeLeaseHandle 保留旧 handle');
     });
-    await t.test('#601 mergeLeaseHandle 拒用帅 handle 顶掉台', () => {
-      assert.ok(S.mergeLeaseHandle({ handle: 'term_station' }, 'term_shuai') === 'term_station', 'mergeLeaseHandle 拒用帅 handle 顶掉台');
-    });
-    await t.test('#601 rebuild 可盖新台 handle', () => {
+    await t.test('acceptLeaseHandleStamp rebuild 可盖新台 handle', () => {
       assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_old', nextHandle: 'term_new', source: 'rebuild' }) === true, 'rebuild 可盖新台 handle');
     });
-    await t.test('#601 ensure 不得用帅 handle 覆写', () => {
-      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_station', nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 不得用帅 handle 覆写');
+    await t.test('acceptLeaseHandleStamp ensure 不得覆写', () => {
+      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_station', nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 不得覆写');
     });
-    await t.test('#601 ensure 没有旧 handle 也不收 coordinator', () => {
-      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: null, nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 没有旧 handle 也不收 coordinator');
+    const rebuildWrite = S.planEnsureLeaseStamp({ action: 'rebuild', leaseHandle: 'term_old', rebuiltHandle: 'term_new' });
+    await t.test('rebuild 才 stamp', () => {
+      assert.ok(rebuildWrite.stamp === true && rebuildWrite.handle === 'term_new', 'rebuild 才 stamp');
     });
-    const stolenWrite = S.planEnsureLeaseStamp({
-      action: 'ok', leaseHandle: 'term_station', rebuiltHandle: null,
+    const okWrite = S.planEnsureLeaseStamp({ action: 'ok', leaseHandle: 'term_station', rebuiltHandle: null });
+    await t.test('all-alive 不 stamp', () => {
+      assert.ok(okWrite.stamp === false && okWrite.handle === 'term_station', 'all-alive 不 stamp');
     });
-    await t.test('#601 生产写入：借走 coordinator 不 stamp', () => {
-      assert.ok(stolenWrite.stamp === false && stolenWrite.handle === 'term_station', '借走 coordinator 不 stamp');
+    await t.test('leasePath 落在日志同目录', () => {
+      assert.ok(S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox.lease'), 'leasePath 落在日志同目录');
     });
-    const noLeaseWrite = S.planEnsureLeaseStamp({
-      action: 'ok', leaseHandle: null, rebuiltHandle: null,
-    });
-    await t.test('#601 生产写入：无租约 handle 也不收 coordinator', () => {
-      assert.ok(noLeaseWrite.stamp === false && noLeaseWrite.handle == null, '无租约 handle 也不收 coordinator');
-    });
-    const rebuildWrite = S.planEnsureLeaseStamp({
-      action: 'rebuild', leaseHandle: 'term_old', rebuiltHandle: 'term_new',
-    });
-    await t.test('#601 生产写入：rebuild 才盖新台', () => {
-      assert.ok(rebuildWrite.stamp === true && rebuildWrite.handle === 'term_new', 'rebuild 才盖新台');
-    });
-    await t.test('本进程 PID 活', () => {
-      assert.ok(S.isProcessAlive(process.pid) === true, '本进程 PID 活');
-    });
-    await t.test('非法 PID 死', () => {
-      assert.ok(S.isProcessAlive(0) === false && S.isProcessAlive(-1) === false, '非法 PID 死');
-    });
-    await t.test('leasePath 落在日志同目录且按日志名区分', () => {
-      assert.ok(S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox.lease'), 'leasePath 落在日志同目录且按日志名区分');
-    });
-    await t.test('默认日志的租约按 run 隔离', () => {
-      assert.ok(S.leasePath('D:/repo/_flow/inbox-72d9e54bbf7f.log').replace(/\\/g, '/').endsWith('/_flow/inbox-72d9e54bbf7f.lease'), '默认日志的租约按 run 隔离');
-    });
-    await t.test('显式日志的租约跟随日志名', () => {
-      assert.ok(S.leasePath('D:/repo/_flow/inbox-A.log').replace(/\\/g, '/').endsWith('/_flow/inbox-A.lease'), '显式日志的租约跟随日志名');
-    });
-    await t.test('启动脚本也按日志名区分', () => {
-      assert.ok(S.launchFilePath('D:/repo/_flow/inbox-72d9e54bbf7f.log').replace(/\\/g, '/').endsWith('/_flow/inbox-72d9e54bbf7f.cmd'), '启动脚本也按日志名区分');
-    });
-    await t.test('两条 run 的租约不共用', () => {
-      assert.ok(S.leasePath('D:/repo/_flow/inbox-72d9e54bbf7f.log') !== S.leasePath('D:/repo/_flow/inbox-883935d71262.log'), '两条 run 的租约不共用');
+    await t.test('launchFilePath 按日志名区分', () => {
+      assert.ok(S.launchFilePath('D:/repo/_flow/inbox-A.log').replace(/\\/g, '/').endsWith('/_flow/inbox-A.cmd'), 'launchFilePath 按日志名区分');
     });
   });
 
-  it('③ ensure 判定（#493 返工：coordinator_handle 是身份，标题只出不进）', async (t) => {
+  it('③ #638 单台决策（幂等关多余台 / 无台重建 / 旧台全关重建 / 证不出不动）', async (t) => {
     const S = await SCRIPT_LOAD;
     const now = 2_000_000;
-    const RUN = 'run_ev';
-    const freshLease = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_station' };
-    const freshLease2 = { pid: process.pid, runId: RUN, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_station2' };
-    const staleLease = { pid: process.pid, runId: RUN, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
-    const wrongRunLease = { pid: process.pid, runId: 'run_other', ts: now, ttlMs: S.LEASE_TTL_MS };
-    // 审官红1 的现场：台的标题被重置成 pwsh.exe，但 run-show 的 coordinator_handle 仍是它
-    const resetStation = { handle: 'term_station', title: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', connected: true };
-    const station = { handle: 'term_station2', title: S.stationTitle(RUN), connected: true };
-    const shuaiTerm = { handle: 'term_shuai', title: 'A 主帅（Branch）', connected: true };
 
-    // ★ 判别测试：标题被重置成 pwsh.exe 仍按 coordinator_handle 认出自己的台 → ok / all-alive / handle 不变
-    const resetDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_station', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
-    });
-    await t.test('★ 标题被重置仍认出台 → ok', () => {
-      assert.ok(resetDec.action === 'ok' && resetDec.reason === 'all-alive', '★ 标题被重置仍认出台 → ok');
-    });
-    await t.test('★ 标题被重置 handle 不变', () => {
-      assert.ok(resetDec.handle === 'term_station', '★ 标题被重置 handle 不变');
-    });
-    await t.test('★ 标题被重置不新建不顶替（无 rebuild/restart/reject）',
-      () => {
-        assert.ok(!['rebuild', 'restart', 'reject'].includes(resetDec.action), '★ 标题被重置不新建不顶替（无 rebuild/restart/reject）');
-      });
+    // 全局台 + 旧 per-run 台并存：留全局，关旧台
+    const globalLease = { pid: process.pid, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_global' };
+    const oldLease = { pid: process.pid, runId: 'run_old', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_old' };
+    const oldLease2 = { pid: process.pid, runId: 'run_old2', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_old2' };
+    const globalStation = { stem: 'inbox', runId: null, lease: globalLease, files: ['a.lease', 'a.cmd', 'a.log'] };
+    const oldStation = { stem: 'inbox-old', runId: 'run_old', lease: oldLease, files: ['b.lease', 'b.cmd', 'b.log'] };
+    const oldStation2 = { stem: 'inbox-old2', runId: 'run_old2', lease: oldLease2, files: ['c.lease', 'c.cmd', 'c.log'] };
 
-    // 正常标题的台同样 ok
-    const okDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_station2', terminals: [station], lease: freshLease2, now,
+    const trim = S.planSingleStation({
+      stations: [globalStation, oldStation, oldStation2],
+      terminals: [{ handle: 'term_global' }, { handle: 'term_old' }, { handle: 'term_old2' }],
+      now,
     });
-    await t.test('正常标题 → ok', () => {
-      assert.ok(okDec.action === 'ok' && okDec.reason === 'all-alive' && okDec.handle === 'term_station2', '正常标题 → ok');
+    await t.test('全局台 + 旧台 → ok/closed-extra', () => {
+      assert.ok(trim.action === 'ok' && trim.reason === 'closed-extra', '全局台 + 旧台 → ok/closed-extra  →  ' + JSON.stringify(trim));
     });
-    const stolenDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_shuai', terminals: [resetStation, shuaiTerm], lease: freshLease, now,
+    await t.test('留全局台', () => {
+      assert.ok(trim.keep && trim.keep.stem === 'inbox', '留全局台');
     });
-    await t.test('coordinator 在帅的终端但中继活 → ok', () => {
-      assert.ok(stolenDec.action === 'ok', 'coordinator 在帅的终端但中继活 → ok');
+    await t.test('关掉全部旧台', () => {
+      assert.ok(trim.close.length === 2
+        && trim.close.every((s) => s.stem !== 'inbox')
+        && trim.close.map((s) => s.stem).sort().join(',') === 'inbox-old,inbox-old2', '关掉全部旧台');
     });
-    await t.test('#601 借走时返回租约 handle 不是帅', () => {
-      assert.ok(stolenDec.handle === 'term_station', '借走时返回租约 handle 不是帅');
-    });
-    // coordinator 还没回来（null）但中继活 → ok
-    await t.test('coordinator 暂空但中继活 → ok', () => {
-      assert.ok(S.decideEnsureAction({
-        runId: RUN, coordinatorHandle: null, terminals: [resetStation], lease: freshLease, now,
-      }).action === 'ok', 'coordinator 暂空但中继活 → ok');
+    await t.test('closed-extra 不再触发 rebuild', () => {
+      assert.ok(trim.rebuild === false, 'closed-extra 不再触发 rebuild');
     });
 
-    // 台死了：租约过期 + coordinator 挂在死壳/帅的终端上 → restart（本 run 台死重启，不碰别人）
-    const restartDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_station', terminals: [resetStation], lease: staleLease, now,
+    // 只有全局台活着 → all-alive 秒退
+    const only = S.planSingleStation({
+      stations: [globalStation],
+      terminals: [{ handle: 'term_global' }],
+      now,
     });
-    await t.test('台死 + coordinator 在死壳 → restart', () => {
-      assert.ok(restartDec.action === 'restart' && restartDec.reason === 'relay-dead', '台死 + coordinator 在死壳 → restart');
-    });
-    await t.test('台死 + coordinator 空 → restart', () => {
-      assert.ok(S.decideEnsureAction({
-        runId: RUN, coordinatorHandle: null, terminals: [], lease: staleLease, now,
-      }).action === 'restart', '台死 + coordinator 空 → restart');
+    await t.test('只有全局台 → ok/all-alive', () => {
+      assert.ok(only.action === 'ok' && only.reason === 'all-alive' && only.keep.stem === 'inbox' && only.close.length === 0, '只有全局台 → ok/all-alive');
     });
 
-    // 从没有台：无租约 + 无 coordinator → rebuild（本 run 无台新建）
-    const rebuildDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: null, terminals: [], lease: null, now,
+    // 全局台死了（过期），旧台活着 → 全关 + 重建全局台
+    const staleGlobal = S.planSingleStation({
+      stations: [{ ...globalStation, lease: { pid: process.pid, runId: null, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS, handle: 'term_global' } }, oldStation],
+      terminals: [{ handle: 'term_old' }],
+      now,
     });
-    await t.test('无台无租约 → rebuild', () => {
-      assert.ok(rebuildDec.action === 'rebuild' && rebuildDec.reason === 'no-terminal', '无台无租约 → rebuild');
-    });
-    // coordinator 在帅的终端但无本 run 租约 → rebuild（帅的终端不是台，绝不复用/顶替）
-    await t.test('coordinator 在帅的终端且无租约 → rebuild 不动它', () => {
-      assert.ok(S.decideEnsureAction({
-        runId: RUN, coordinatorHandle: 'term_shuai', terminals: [shuaiTerm], lease: null, now,
-      }).action === 'rebuild', 'coordinator 在帅的终端且无租约 → rebuild 不动它');
-    });
-    // 租约 runId 不对（别人的）→ 当没有
-    await t.test('租约 runId 不对 → 当无台 rebuild', () => {
-      assert.ok(S.decideEnsureAction({
-        runId: RUN, coordinatorHandle: null, terminals: [], lease: wrongRunLease, now,
-      }).action === 'rebuild', '租约 runId 不对 → 当无台 rebuild');
+    await t.test('全局死 + 旧台活 → rebuild/no-global-station + 关旧台', () => {
+      assert.ok(staleGlobal.action === 'rebuild' && staleGlobal.reason === 'no-global-station'
+        && staleGlobal.rebuild === true && staleGlobal.close.length === 1, '全局死 + 旧台活 → rebuild + 关旧台  →  ' + JSON.stringify(staleGlobal));
     });
 
-    // 撞上别的 run 的台：本 run 台死，coordinator 被别的 run 的活台占着 → reject + 报对方 run id
-    const rejectDec = S.decideEnsureAction({
-      runId: RUN, coordinatorHandle: 'term_foreign',
-      terminals: [{ handle: 'term_foreign', title: S.stationTitle('run_other'), connected: true }],
-      lease: staleLease, now,
-      foreignStation: { runId: 'run_other', handle: 'term_foreign' },
+    // 一个活台都没有 → rebuild/no-station，不关任何台
+    const none = S.planSingleStation({
+      stations: [globalStation, oldStation],
+      terminals: [],
+      now: now + S.LEASE_TTL_MS + 1000,
     });
-    await t.test('撞上别的 run 的台 → reject', () => {
-      assert.ok(rejectDec.action === 'reject' && rejectDec.reason === 'foreign-station', '撞上别的 run 的台 → reject');
+    await t.test('无活台 → rebuild/no-station', () => {
+      assert.ok(none.action === 'rebuild' && none.reason === 'no-station' && none.close.length === 0, '无活台 → rebuild/no-station');
     });
-    await t.test('拒绝时报出对方 run id', () => {
-      assert.ok(rejectDec.foreignRunId === 'run_other' && rejectDec.foreignHandle === 'term_foreign', '拒绝时报出对方 run id');
+
+    // 证不出身份（租约无 handle / handle 不在盘面 / 坏租约）→ 不动
+    const noHandle = { stem: 'inbox-x', runId: 'run_x', lease: { pid: process.pid, runId: 'run_x', ts: now, ttlMs: S.LEASE_TTL_MS, handle: null }, files: [] };
+    const offBoard = { stem: 'inbox-y', runId: 'run_y', lease: { pid: process.pid, runId: 'run_y', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_gone' }, files: [] };
+    const badLease = { stem: 'inbox-z', runId: null, lease: null, parseError: true, files: [] };
+    const unproven = S.planSingleStation({
+      stations: [noHandle, offBoard, badLease],
+      terminals: [],
+      now,
     });
-    // 回归反例：任何场景不得再返回 ok:true/rebuild/coordinator-stolen
-    await t.test('回归反例：不再出现 ok:true+rebuild+coordinator-stolen',
-      () => {
-        assert.ok(![resetDec, okDec, restartDec, rebuildDec, rejectDec].some(
-          (d) => d.ok === true && d.action === 'rebuild' && d.reason === 'coordinator-stolen'), '回归反例：不再出现 ok:true+rebuild+coordinator-stolen');
-      });
-    await t.test('回归反例：reject 不带 ok:true', () => {
-      assert.ok(rejectDec.ok !== true, '回归反例：reject 不带 ok:true');
+    await t.test('证不出的租约进 unproven，不关不保', () => {
+      assert.ok(unproven.close.length === 0 && unproven.unproven.length === 3, '证不出的租约进 unproven，不关不保  →  ' + JSON.stringify(unproven));
+    });
+    await t.test('全是证不出 → rebuild（不误关）', () => {
+      assert.ok(unproven.action === 'rebuild' && unproven.reason === 'no-station', '全是证不出 → rebuild');
+    });
+
+    // scanLeaseStations：从目录扫全局 + 旧模型租约
+    const dir = tmpDir(t);
+    writeLease(dir, 'inbox.lease', { pid: process.pid, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_global' });
+    writeLease(dir, 'inbox-abcdef123456.lease', { pid: 999999, runId: 'run_abcdef123456', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_x' });
+    fs.writeFileSync(path.join(dir, 'inbox.cmd'), '@echo off\n');
+    fs.writeFileSync(path.join(dir, 'inbox-abcdef123456.cmd'), '@echo off\n');
+    const scanned = S.scanLeaseStations(dir);
+    await t.test('scanLeaseStations 扫到全局 + 旧台', () => {
+      assert.ok(scanned.length === 2, 'scanLeaseStations 扫到全局 + 旧台  →  ' + JSON.stringify(scanned.map((s) => s.stem)));
+    });
+    await t.test('全局台 stem=inbox 且 runId=null', () => {
+      const g = scanned.find((s) => s.stem === 'inbox');
+      assert.ok(g && g.runId === null && g.lease.handle === 'term_global', '全局台 stem=inbox 且 runId=null');
+    });
+    await t.test('旧台 runId 从租约取', () => {
+      const o = scanned.find((s) => s.stem !== 'inbox');
+      assert.ok(o && o.runId === 'run_abcdef123456', '旧台 runId 从租约取');
+    });
+    await t.test('不扫描非租约文件', () => {
+      assert.ok(scanned.every((s) => s.stem.endsWith('.lease') === false), '不扫描非租约文件');
+    });
+    const badDir = S.scanLeaseStations(path.join(dir, 'nope'));
+    await t.test('目录不存在 → 空数组', () => {
+      assert.ok(badDir.length === 0, '目录不存在 → 空数组');
     });
   });
 
@@ -366,133 +277,106 @@ describe('inbox-station', () => {
     await t.test('两条心跳不落盘', () => {
       assert.ok(heartbeats.length === 2, '两条心跳不落盘');
     });
-    await t.test('heartbeat 判定大小写不敏感', () => {
-      assert.ok(S.shouldLogMessage({ type: 'HeartBeat' }) === false, 'heartbeat 判定大小写不敏感');
-    });
-    await t.test('worker_done 要落盘', () => {
-      assert.ok(S.shouldLogMessage({ type: 'worker_done' }) === true, 'worker_done 要落盘');
-    });
-    await t.test('空 type 当业务信', () => {
-      assert.ok(S.shouldLogMessage({ subject: 'x' }) === true, '空 type 当业务信');
-    });
-
     const line = S.formatLogLine({
-      id: 'm2', type: 'worker_done', from_handle: 'term_w', subject: '完工', body: 'PR #466',
+      id: 'm2', type: 'worker_done', from_handle: 'term_w', subject: '完工', body: 'PR #466', run_id: 'run_x',
     }, new Date('2026-08-15T07:00:00.000Z'));
     const obj = JSON.parse(line);
-    await t.test('日志是一行 JSON', () => {
-      assert.ok(obj.id === 'm2' && obj.type === 'worker_done' && obj.body === 'PR #466', '日志是一行 JSON');
+    await t.test('日志是一行 JSON 且带 run_id', () => {
+      assert.ok(obj.id === 'm2' && obj.type === 'worker_done' && obj.run_id === 'run_x', '日志是一行 JSON 且带 run_id');
     });
     await t.test('日志带 ts', () => {
       assert.ok(obj.ts === '2026-08-15T07:00:00.000Z', '日志带 ts');
     });
-    await t.test('心跳若被 format 也不会当业务（分流在前）', () => {
-      assert.ok(!loggable.some((m) => m.type && m.type.toLowerCase() === 'heartbeat'), '心跳若被 format 也不会当业务（分流在前）');
-    });
   });
 
-  it('⑤ check JSON 多形态', async (t) => {
+  it('⑤ #638 活跃 Run 集与相关消息过滤', async (t) => {
     const S = await SCRIPT_LOAD;
-    const a = S.parseCheckResult({
-      ok: true,
-      result: { delivery_id: 'del_1', messages: [{ id: 'm1', type: 'question' }] },
+    const runs = [
+      { id: 'run_keep', coordinator_handle: null, legacy: 0 },
+      { id: 'run_coord', coordinator_handle: 'term_alive', legacy: 0 },
+      { id: 'run_dead', coordinator_handle: 'term_dead', legacy: 0 },
+      { id: 'run_legacy', legacy: 1 },
+    ];
+    const workers = [
+      { dispatchId: 'ctx_a', runId: 'run_keep', workerState: 'ready', dispatchStatus: 'dispatched', resource: { worktreeId: 'repo::/wt/a' } },
+    ];
+    const worktrees = [{ worktreeId: 'repo::/wt/a', isMainWorktree: false, isArchived: false }];
+    const terminals = [{ handle: 'term_alive' }];
+    const active = S.activeRunIds({ runs, workers, worktrees, terminals });
+    await t.test('keep 集 + 活 coordinator 的 Run 进活跃集', () => {
+      assert.ok(active.has('run_keep') && active.has('run_coord'), 'keep 集 + 活 coordinator 的 Run 进活跃集  →  ' + JSON.stringify([...active]));
     });
-    await t.test('result.delivery_id + messages', () => {
-      assert.ok(a.deliveryId === 'del_1' && a.messages[0].id === 'm1', 'result.delivery_id + messages');
-    });
-
-    const b = S.parseCheckResult({
-      result: { delivery: { id: 'del_2', messages: [{ id: 'm2' }] } },
-    });
-    await t.test('result.delivery.id 嵌套', () => {
-      assert.ok(b.deliveryId === 'del_2' && b.messages[0].id === 'm2', 'result.delivery.id 嵌套');
-    });
-
-    const c = S.parseCheckResult({ messages: [], deliveryId: 'del_3' });
-    await t.test('顶层 deliveryId 空消息', () => {
-      assert.ok(c.deliveryId === 'del_3' && c.messages.length === 0, '顶层 deliveryId 空消息');
-    });
-
-    const d = S.parseCheckResult({ ok: true, result: {} });
-    await t.test('空 result 不炸', () => {
-      assert.ok(d.messages.length === 0 && d.deliveryId === null, '空 result 不炸');
+    await t.test('死 coordinator / legacy 不进集', () => {
+      assert.ok(!active.has('run_dead') && !active.has('run_legacy'), '死 coordinator / legacy 不进集');
     });
 
-    const e = S.parseOrcaStdout('noise\n{"ok":true,"result":{"x":1}}\n');
-    await t.test('stdout 夹杂时取 JSON', () => {
-      assert.ok(e.ok === true && e.json.result.x === 1, 'stdout 夹杂时取 JSON');
+    const msgs = [
+      { id: 'm1', run_id: 'run_keep', type: 'worker_done' },
+      { id: 'm2', run_id: 'run_coord', type: 'status' },
+      { id: 'm3', run_id: 'run_dead', type: 'worker_done' },
+      { id: 'm4', run_id: null, type: 'heartbeat' },
+      { id: 'm5', run_id: 'run_keep', type: 'worker_done' },
+    ];
+    const rel = S.relevantMessages(msgs, active);
+    await t.test('只收活跃 Run 的信', () => {
+      assert.ok(rel.map((m) => m.id).sort().join(',') === 'm1,m2,m5', '只收活跃 Run 的信  →  ' + JSON.stringify(rel.map((m) => m.id)));
     });
-    await t.test('空 stdout 失败', () => {
-      assert.ok(S.parseOrcaStdout('').ok === false, '空 stdout 失败');
+    await t.test('同 id 去重（m1/m5 同 id 只留一条）', () => {
+      assert.ok(rel.filter((m) => m.id === 'm1').length === 1, '同 id 去重');
     });
-    const plain = fs.readFileSync(path.join(__dirname, 'fixtures', 'orca-json', 'terminal-send-plaintext.txt'), 'utf8');
-    const sent = S.parseOrcaStdout(plain);
-    await t.test('Sent N bytes to term_ 判成功（#580 真语料）', () => {
-      assert.ok(sent.ok === true && sent.sentPlaintext === true && sent.bytes === 11, 'Sent N bytes to term_ 判成功（#580 真语料）  →  ' + JSON.stringify(sent));
+    const relSeen = S.relevantMessages(msgs, active, new Set(['m1']));
+    await t.test('seen 集里的不再收', () => {
+      assert.ok(!relSeen.some((m) => m.id === 'm1'), 'seen 集里的不再收');
     });
-    await t.test('Sent N bytes 归一成 result.send.accepted', () => {
-      assert.ok(sent.json?.result?.send?.accepted === true, 'Sent N bytes 归一成 result.send.accepted');
+
+    // readLoggedIds：从日志回读已写 id
+    const dir = tmpDir(t);
+    const logPath = path.join(dir, 'inbox.log');
+    fs.writeFileSync(logPath, JSON.stringify({ id: 'msg_a', type: 'x' }) + '\n' + JSON.stringify({ id: 'msg_b', type: 'y' }) + '\n', 'utf8');
+    const ids = S.readLoggedIds(logPath);
+    await t.test('日志回读已写 id', () => {
+      assert.ok(ids.has('msg_a') && ids.has('msg_b'), '日志回读已写 id  →  ' + JSON.stringify([...ids]));
     });
-    const jsonSend = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'orca-json', 'terminal-send.json'), 'utf8'));
-    const parsedJson = S.parseOrcaStdout(JSON.stringify(jsonSend));
-    await t.test('send --json 信封过解析', () => {
-      assert.ok(parsedJson.ok === true && parsedJson.json.result.send.accepted === true, 'send --json 信封过解析');
+    await t.test('日志不存在 = 空集不失败', () => {
+      assert.ok(S.readLoggedIds(path.join(dir, 'none.log')).size === 0, '日志不存在 = 空集不失败');
     });
   });
 
-  it('⑥ 重建命令串 / 现状 JSON', async (t) => {
+  it('⑥ 重建命令串（#638 不再 run-use）', async (t) => {
     const S = await SCRIPT_LOAD;
     const script = S.buildLaunchScript({
       nodePath: 'C:\\Program Files\\nodejs\\node.exe',
       scriptPath: 'C:\\repo\\scripts\\inbox-station.mjs',
-      runId: 'run_af8',
       logPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox.log',
     });
-    await t.test('启动串先 run-use', () => {
-      assert.ok(/^\s*orca orchestration run-use --id run_af8/m.test(script), '启动串先 run-use');
+    await t.test('启动串不再 run-use（根治 consumer_fenced）', () => {
+      assert.ok(!/run-use/.test(script), '启动串不再 run-use  →  ' + script);
     });
-    await t.test('启动串再进 relay', () => {
-      assert.ok(/inbox-station\.mjs" relay --run run_af8/.test(script), '启动串再进 relay');
+    await t.test('启动串不再带 --run（单台轮询全部）', () => {
+      assert.ok(!/--run/.test(script), '启动串不再带 --run');
     });
-    await t.test('启动串含 --log', () => {
-      assert.ok(script.includes('--log') && script.includes('inbox.log'), '启动串含 --log');
+    await t.test('启动串进 relay 且带全局 --log', () => {
+      assert.ok(/inbox-station\.mjs" relay --log/.test(script) && script.includes('inbox.log'), '启动串进 relay 且带全局 --log');
     });
     const cmd = S.buildRelayCommand({ launchPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox-station.cmd' });
     await t.test('create --command 走 cmd 文件', () => {
       assert.ok(cmd.includes('cmd.exe /c') && cmd.includes('inbox-station.cmd'), 'create --command 走 cmd 文件');
     });
-    await t.test('命令不走 stdin/send', () => {
-      assert.ok(!/terminal send/.test(cmd) && !cmd.includes('--enter'), '命令不走 stdin/send');
-    });
 
-    const st = S.statusPayload({
-      runId: 'run_x', handle: 'term_y', logPath: 'p', action: 'ok', reason: 'all-alive',
-    });
-    await t.test('现状 JSON 三件套', () => {
-      assert.ok(st.runId === 'run_x' && st.handle === 'term_y' && st.logPath === 'p', '现状 JSON 三件套');
-    });
+    const st = S.statusPayload({ handle: 'term_y', logPath: 'p', action: 'ok', reason: 'all-alive' });
     await t.test('现状 JSON ok', () => {
-      assert.ok(st.ok === true && st.action === 'ok', '现状 JSON ok');
+      assert.ok(st.ok === true && st.action === 'ok' && st.reason === 'all-alive', '现状 JSON ok');
     });
-    const stFail = S.statusPayload({
-      ok: false, runId: 'run_x', handle: 'term_y', logPath: 'p',
-      action: 'rebuild', reason: 'relay-not-alive', error: '中继未存活',
+    const stExtra = S.statusPayload({
+      handle: 'term_y', logPath: 'p', action: 'ok', reason: 'closed-extra',
+      closedExtra: [{ runId: 'run_x' }], gc: { zombieCount: 3 },
     });
+    await t.test('现状 JSON 带 closedExtra 与 gc', () => {
+      assert.ok(stExtra.closedExtra.length === 1 && stExtra.gc.zombieCount === 3, '现状 JSON 带 closedExtra 与 gc');
+    });
+    const stFail = S.statusPayload({ ok: false, handle: 'term_y', logPath: 'p', action: 'rebuild', reason: 'relay-not-alive', error: '中继未存活' });
     await t.test('现状 JSON 失败带 ok:false', () => {
       assert.ok(stFail.ok === false && stFail.error === '中继未存活', '现状 JSON 失败带 ok:false');
-    });
-
-    await t.test('标题常量（旧格式裸标题保留作识别用）', () => {
-      assert.ok(S.TITLE === '信箱台（勿关）', '标题常量（旧格式裸标题保留作识别用）');
-    });
-    await t.test('新标题带 run 后缀', () => {
-      assert.ok(S.stationTitle('run_af8fc3144eb7') === '信箱台·af8fc3144eb7（勿关）', '新标题带 run 后缀');
-    });
-    await t.test('unwrap result.key', () => {
-      assert.ok(S.unwrapOrca({ result: { terminals: [1] } }, 'terminals')[0] === 1, 'unwrap result.key');
-    });
-    await t.test('extractHandle 几种形状', () => {
-      assert.ok(S.extractHandle({ result: { handle: 'term_z' } }) === 'term_z', 'extractHandle 几种形状');
     });
     await t.test('findMainWorktree', () => {
       assert.ok(S.findMainWorktree([
@@ -500,103 +384,71 @@ describe('inbox-station', () => {
         { id: 'b', isMainWorktree: true },
       ]).id === 'b', 'findMainWorktree');
     });
+    await t.test('extractHandle 几种形状', () => {
+      assert.ok(S.extractHandle({ result: { handle: 'term_z' } }) === 'term_z', 'extractHandle 几种形状');
+    });
   });
 
-  it('⑦ waitReady / finalizeEnsure 故障注入', async (t) => {
+  it('⑦ waitReady / decideReady / finalizeEnsure 故障注入', async (t) => {
     const S = await SCRIPT_LOAD;
     const now = 2_000_000;
-    const term = { handle: 'term_box', title: S.TITLE, connected: true, preview: S.READY_MARK };
-    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const term = { handle: 'term_box', connected: true, preview: S.READY_MARK };
+    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_box' };
+    const staleLease = { pid: process.pid, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS, handle: 'term_box' };
 
     await t.test('decideReady 全好 → ok', () => {
-      assert.ok(S.decideReady({
-        terminal: term, lease: liveLease, coordinatorHandle: 'term_box', now,
-      }).ok === true, 'decideReady 全好 → ok');
+      assert.ok(S.decideReady({ terminal: term, lease: liveLease, now }).ok === true, 'decideReady 全好 → ok');
     });
     await t.test('decideReady 无终端 → 失败', () => {
-      assert.ok(S.decideReady({
-        terminal: null, lease: liveLease, coordinatorHandle: 'term_box', now,
-      }).ok === false, 'decideReady 无终端 → 失败');
+      assert.ok(S.decideReady({ terminal: null, lease: liveLease, now }).ok === false, 'decideReady 无终端 → 失败');
     });
     await t.test('decideReady 历史 READY 无租约 → relay-not-alive', () => {
-      assert.ok(S.decideReady({
-        terminal: term, lease: null, coordinatorHandle: 'term_box', now,
-      }).error === 'relay-not-alive', 'decideReady 历史 READY 无租约 → relay-not-alive');
+      assert.ok(S.decideReady({ terminal: term, lease: null, now }).error === 'relay-not-alive', 'decideReady 历史 READY 无租约 → relay-not-alive');
     });
-    await t.test('decideReady coordinator 空 → coordinator-not-held', () => {
-      assert.ok(S.decideReady({
-        terminal: term, lease: liveLease, coordinatorHandle: null, now,
-      }).error === 'coordinator-not-held', 'decideReady coordinator 空 → coordinator-not-held');
+    await t.test('decideReady 过期租约 → relay-not-alive', () => {
+      assert.ok(S.decideReady({ terminal: term, lease: staleLease, now }).error === 'relay-not-alive', 'decideReady 过期租约 → relay-not-alive');
     });
-    await t.test('decideReady coordinator 是别人 → coordinator-not-held', () => {
-      assert.ok(S.decideReady({
-        terminal: term, lease: liveLease, coordinatorHandle: 'term_thief', now,
-      }).error === 'coordinator-not-held', 'decideReady coordinator 是别人 → coordinator-not-held');
+    await t.test('acceptRebuildReady 超时不得降级成功', () => {
+      assert.ok(S.acceptRebuildReady({ ok: false, error: 'timeout' }).ok === false, 'acceptRebuildReady 超时不得降级成功');
     });
 
-    await t.test('超时不得降级成功', () => {
-      assert.ok(S.acceptRebuildReady({ ok: false, error: 'timeout' }).ok === false, '超时不得降级成功');
-    });
-    await t.test('超时不得带 warning 当成功', () => {
-      assert.ok(!('warning' in S.acceptRebuildReady({ ok: false, error: 'timeout' })), '超时不得带 warning 当成功');
-    });
-    await t.test('acceptRebuildReady 成功带 handle', () => {
-      assert.ok(S.acceptRebuildReady({
-        ok: true, terminal: term,
-      }).handle === 'term_box', 'acceptRebuildReady 成功带 handle');
-    });
-
-    const base = {
-      handle: 'term_box', runId: 'run_x', logPath: 'p', action: 'rebuild', reason: 'no-terminal',
-    };
-    const deadRelay = S.finalizeEnsure({ ...base, relayAlive: false, runShowOk: true, coordinatorHandle: 'term_box' });
+    const base = { handle: 'term_box', logPath: 'p', action: 'rebuild', reason: 'no-terminal' };
+    const deadRelay = S.finalizeEnsure({ ...base, relayAlive: false });
     await t.test('finalize 中继死 → ok:false 非零', () => {
       assert.ok(deadRelay.exitCode === 1 && deadRelay.payload.ok === false, 'finalize 中继死 → ok:false 非零');
     });
     await t.test('finalize 中继死 reason', () => {
       assert.ok(deadRelay.payload.reason === 'relay-not-alive', 'finalize 中继死 reason');
     });
-
-    const showFail = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: false, coordinatorHandle: null });
-    await t.test('finalize run-show 失败 → ok:false 非零', () => {
-      assert.ok(showFail.exitCode === 1 && showFail.payload.ok === false, 'finalize run-show 失败 → ok:false 非零');
-    });
-    await t.test('finalize run-show 失败 reason', () => {
-      assert.ok(showFail.payload.reason === 'coordinator-unknown', 'finalize run-show 失败 reason');
-    });
-
-    const emptyCoord = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: true, coordinatorHandle: null });
-    await t.test('finalize coordinator 空 → ok:false 非零', () => {
-      assert.ok(emptyCoord.exitCode === 1 && emptyCoord.payload.ok === false, 'finalize coordinator 空 → ok:false 非零');
-    });
-    await t.test('finalize coordinator 空 reason', () => {
-      assert.ok(emptyCoord.payload.reason === 'coordinator-not-held', 'finalize coordinator 空 reason');
-    });
-
-    const stolen = S.finalizeEnsure({ ...base, relayAlive: true, runShowOk: true, coordinatorHandle: 'term_thief' });
-    await t.test('finalize 未夺回 → ok:false 非零', () => {
-      assert.ok(stolen.exitCode === 1 && stolen.payload.ok === false, 'finalize 未夺回 → ok:false 非零');
-    });
-    await t.test('finalize 未夺回写出对方 handle', () => {
-      assert.ok(stolen.payload.coordinatorHandle === 'term_thief', 'finalize 未夺回写出对方 handle');
-    });
-    const aliveStolen = S.finalizeEnsure({
-      handle: 'term_station', runId: 'run_x', logPath: 'p', action: 'ok', reason: 'all-alive',
-      relayAlive: true, runShowOk: true, coordinatorHandle: 'term_thief',
-    });
-    await t.test('#601 all-alive 时 coordinator 被借走仍秒退', () => {
-      assert.ok(aliveStolen.exitCode === 0 && aliveStolen.payload.ok === true, 'all-alive 时 coordinator 被借走仍秒退');
-    });
-
-    const okFinal = S.finalizeEnsure({
-      ...base, action: 'ok', reason: 'all-alive',
-      relayAlive: true, runShowOk: true, coordinatorHandle: 'term_box',
-    });
+    const okFinal = S.finalizeEnsure({ ...base, action: 'ok', reason: 'all-alive', relayAlive: true });
     await t.test('finalize 全好 → ok:true 零退出', () => {
-      assert.ok(okFinal.exitCode === 0 && okFinal.payload.ok === true, 'finalize 全好 → ok:true 零退出');
+      assert.ok(okFinal.exitCode === 0 && okFinal.payload.ok === true && okFinal.payload.handle === 'term_box', 'finalize 全好 → ok:true 零退出');
     });
-    await t.test('finalize 成功不带 error', () => {
-      assert.ok(okFinal.payload.error === undefined, 'finalize 成功不带 error');
+  });
+
+  it('⑧ #614 只读 gc 阈值行', async (t) => {
+    const S = await SCRIPT_LOAD;
+    await t.test('超阈值打一行', () => {
+      const line = S.gcThresholdLine({ zombieCount: 10, threshold: 5, scanned: true });
+      assert.ok(line && /10/.test(line) && /run-gc --apply/.test(line), '超阈值打一行  →  ' + line);
+    });
+    await t.test('等于阈值不打', () => {
+      assert.ok(S.gcThresholdLine({ zombieCount: 5, threshold: 5, scanned: true }) === null, '等于阈值不打');
+    });
+    await t.test('低于阈值不打', () => {
+      assert.ok(S.gcThresholdLine({ zombieCount: 0, threshold: 5, scanned: true }) === null, '低于阈值不打');
+    });
+    await t.test('没扫成（unscanned）不打', () => {
+      assert.ok(S.gcThresholdLine({ zombieCount: 99, threshold: 5, scanned: false }) === null, '没扫成不打');
+    });
+    await t.test('gcSummaryFromPlan 统计', () => {
+      const plan = { ok: true, retire: [{ id: 'a' }, { id: 'b' }], keep: [{ id: 'k' }] };
+      const g = S.gcSummaryFromPlan(plan, 5);
+      assert.ok(g.ok && g.zombieCount === 2 && g.keepCount === 1 && g.threshold === 5, 'gcSummaryFromPlan 统计');
+    });
+    await t.test('gcSummaryFromPlan 没查成 → unscanned', () => {
+      const g = S.gcSummaryFromPlan({ ok: false, error: 'x' }, 5);
+      assert.ok(g.ok === false && g.unscanned === true, 'gcSummaryFromPlan 没查成 → unscanned');
     });
   });
 });

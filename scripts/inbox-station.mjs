@@ -1,35 +1,39 @@
 #!/usr/bin/env node
-// scripts/inbox-station.mjs —— 信箱台幂等保证（issue #464）
+// scripts/inbox-station.mjs —— 信箱台幂等保证（issue #464，#638 改成单台轮询全部在途 Run）
 //
 // Orca「You have N orchestration messages」横幅强制接管用户输入框：消息到达即注入，
 // ack 速度治不了。已实证的解法是把 Run 的 coordinator 绑到后台哑终端，横幅只注给它；
 // 终端内中继 check --wait → 写日志 → 可归档二次验证闸（#637）→ 自动 ack，帅 tail 文件收信。
 //
-// 本脚本把手工四步收成一条幂等命令。全活着秒退；缺任何一环自动重建。
-// 不用 stdin 注入（防输入污染）：重建走 terminal create --command。
+// #638（2026-08-19 拍板）：**不再一 Run 一台**——顶栏只留 1 个信箱台页签。
+//   - ensure：只建/保活**一台**哑终端 + 中继；多余台幂等关掉；
+//     一条 Run 仍是一个 Run（不要把单塞进一个 Run，#634 已证 consumer_fenced），
+//     但不再一人一台。旧模型的 per-run 台（inbox-<run>.lease）会被识别并关掉。
+//   - relay：不再 run-use 抢 coordinator（那是 consumer_fenced 的根因），
+//     改为每轮读 `orchestration inbox`（跨 Run 信箱，不绑 coordinator，
+//     正是 inbox-collect 那种），过滤活跃 Run（在途单 keep 集 ∪ 活跃 coordinator 的 Run），
+//     去重后落盘非 heartbeat，跑 #637 可归档闸。
+//   - 活性判据不认标题：台 = 全局租约 _flow/inbox.lease（新鲜 + PID 在 + handle 在盘面）。
+//   - #614 顺车：ensure 成功后顺手只读 run-gc 扫描，僵尸数超阈值在 stdout 上打一行；
+//     --apply 仍不自动。
 //
-// 关键实证（写进命令之前必须知道）：
-//   - 终端换会话后 Run 绑定丢失（run_required）
-//   - 新帅必须 run-use 才能 task-create，而 run-use 会夺走 coordinator
-//   - 所以帅的派工序是「run-use → 派工 → ensure 归还」乒乓
-//   - 同进程残留绑定可继续 task-create（ensure 夺回横幅后，帅本进程仍能发件）
-//   - 中继每轮 check 前先 run-use 自夺回，防别的帅夺走后 check 变 consumer_fenced
+// 用法（以 --help / README 为准，这里只列结构）：
+//   node scripts/inbox-station.mjs ensure [--log <path>] [--worktree <sel>] [--gc-threshold <n>]
+//   node scripts/inbox-station.mjs relay  [--log <path>] [--timeout-ms <n>]
+//   node scripts/inbox-station.mjs retire --run <id> [--log <path>]
 //
-// 用法：
-//   node scripts/inbox-station.mjs ensure [--run <id>] [--log <path>]
-//   node scripts/inbox-station.mjs relay  [--run <id>] [--log <path>]
+// ensure stdout 最后一行 JSON：{ok, handle, logPath, action, reason, closedExtra, gc, ...}
+// 超阈值提示行打在最前面（board-hook.mjs 只取最后一行 JSON 解析，安全）。
 //
-// ensure stdout 一行 JSON：{ok, runId, handle, logPath, action, reason}
-//
-// 身份判据（issue #493 返工）：终端归属从 run-show 的 coordinator_handle 取得，
-// 标题只出不进——标题仍带 run 后缀（信箱台·<run后缀>（勿关））但只是给人看的显示，
-// ensure 的判定一律不读标题：标题被改名/被重置成 pwsh.exe 也不影响认台。
-//   - 本 run 的台 = run-show(runId).coordinator_handle 对应的终端（租约新鲜+PID在+runId对）
-//   - 撞上别的 run 的台（本 run coordinator 被别的 run 的活台占着）→ 拒绝顶替并报出对方 run id
-//   - 默认日志 = _flow/inbox-<run后缀>.log，不传 --log 也天然按 run 隔离
+// ensure 判定（#638）：
+//   - 全活台扫描 _flow/inbox*.lease；活 = 租约新鲜 + PID 在 + handle 在盘面
+//   - 全局台（inbox.lease）活着 → ok（多余活台顺手关掉 = closed-extra）
+//   - 只有旧模型 per-run 台活着 → 全部关掉 + 重建全局台（旧 relay 不轮询全部 Run）
+//   - 一个活台都没有 → 重建（reason: no-station）
+//   - 租约无 handle / 读不成：证不出就不动，绝不误关别人的终端
 
-import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
@@ -39,6 +43,7 @@ import {
   applyStationRetire,
   resolveStationCloseTarget,
   previewHandlesForRun,
+  planRunGc,
 } from './lib/run-lifecycle.mjs';
 import {
   processArchiveNotices,
@@ -53,29 +58,30 @@ const ORCA_TIMEOUT_MS = 30000;
 const READY_WAIT_MS = 30000;
 const READY_POLL_MS = 1000;
 
-// 旧裸标题（信箱台（勿关））只是历史格式的说明，判定路径一律不读标题（#493 返工：标题只出不进）。
 export const TITLE = '信箱台（勿关）';
 export const READY_MARK = 'INBOX_STATION_READY';
-// 无 run 时的兜底日志（正常路径永远带 run，见 defaultLogRel）
+// 全局台默认日志：_flow/inbox.log（一条 Run 一个台的旧模型日志 inbox-<run>.log 是历史遗留）
 export const DEFAULT_LOG_REL = join('_flow', 'inbox.log');
-// 无租约自带 ttl 时的默认窗口：覆盖默认 check --wait 15s + 余量
+// 无租约自带 ttl 时的默认窗口：覆盖默认轮询间隔 + 余量
 export const LEASE_TTL_MS = 25000;
 export const LEASE_GRACE_MS = 10000;
+// #614：僵尸 Run 阈值，只读 gc 超过它就在 ensure 输出里打一行
+export const GC_THRESHOLD = 5;
+// relay 每轮轮询间隔（毫秒）
+export const RELAY_POLL_MS = 10000;
 
+// 旧模型 per-run 日志按 run 隔离仍保留给 run-gc/retire 用
 export function runShort(runId) {
   return String(runId || '').replace(/^run_/, '');
 }
 
-// 标题只出不进：仍生成带 run 后缀的标题给人看，但没有任何判定路径读标题。
 export function stationTitle(runId) {
-  return `信箱台·${runShort(runId)}（勿关）`;
+  const short = runShort(runId);
+  return short ? `信箱台·${short}（勿关）` : TITLE;
 }
 
-// 默认日志按 run 隔离：_flow/inbox-<run后缀>.log。不传 --log 是这个脚本的最常见用法，
-// 必须天然安全（issue #493：默认写死同一个 inbox.log 是「必混」隐患）。
 export function defaultLogRel(runId) {
-  const short = runShort(runId);
-  return short ? join('_flow', `inbox-${short}.log`) : DEFAULT_LOG_REL;
+  return runShort(runId) ? join('_flow', `inbox-${runShort(runId)}.log`) : DEFAULT_LOG_REL;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -89,6 +95,7 @@ export function parseArgs(argv) {
     log: null,
     worktree: null,
     timeoutMs: 15000,
+    gcThreshold: GC_THRESHOLD,
     help: false,
   };
   const rest = argv.slice(2);
@@ -109,6 +116,12 @@ export function parseArgs(argv) {
         args.timeoutMs = n;
         break;
       }
+      case '--gc-threshold': {
+        const n = Number(rest[++i]);
+        if (!Number.isFinite(n) || n < 0) throw new Error('参数 --gc-threshold 需要非负整数');
+        args.gcThreshold = n;
+        break;
+      }
       case '--help':
       case '-h':
         args.help = true;
@@ -123,24 +136,87 @@ export function parseArgs(argv) {
   return args;
 }
 
-// 身份从 run 层取：run-show(runId).coordinator_handle 指向谁，谁就是本 run 的台。
-// 标题改名/被重置成 pwsh.exe 不影响——handle 是身份，标题是显示（#493 返工）。
 export function findCoordinatorTerminal(terminals, coordinatorHandle) {
   if (!Array.isArray(terminals) || !coordinatorHandle) return null;
   return terminals.find((t) => t?.handle === coordinatorHandle) || null;
 }
 
-// 本 run 的中继活着 = 本 run 的租约新鲜 + PID 在 + runId 对。
-// 与具体终端无关：中继每轮 run-use 自夺回，coordinator 被帅临时借走也会自己回来。
-export function isStationAlive(lease, runId, opts = {}) {
-  if (!lease || lease.runId !== runId) return false;
+export function isHandleOnBoard(handle, terminals) {
+  if (!handle) return false;
+  return (Array.isArray(terminals) ? terminals : []).some((t) => t && t.handle === handle);
+}
+
+// #638 全局台活性：租约新鲜 + PID 在。runId 不再是身份（一 Run 一台已退役）。
+export function isStationAlive(lease, opts = {}) {
+  if (!lease) return false;
   return isLeaseFresh(lease, opts.now, opts.ttlMs) && isProcessAlive(lease.pid);
 }
 
-// 租约/启动脚本都落在日志同目录、按日志名区分：_flow/inbox-<run>.log →
-// _flow/inbox-<run>.lease / _flow/inbox-<run>.cmd。默认日志按 run 隔离后，
-// 这些伴生文件必须也按 run 隔离，否则两条 run 的台共写同一个 lease，
-// 活性判断互相污染（issue #493：身份必须一路贯穿）。
+export function isRelayAlive(terminal, opts = {}) {
+  if (!terminal || terminal.connected === false || terminal.orphaned === true) return false;
+  const lease = opts.lease ?? null;
+  if (!isStationAlive(lease, { now: opts.now, ttlMs: opts.ttlMs })) return false;
+  return true;
+}
+
+export function decideReady({ terminal, lease, now, ttlMs } = {}) {
+  const handle = terminal?.handle || null;
+  if (!handle) return { ok: false, error: 'no-terminal' };
+  if (!isRelayAlive(terminal, { lease, now, ttlMs })) {
+    return { ok: false, error: 'relay-not-alive' };
+  }
+  return { ok: true };
+}
+
+// 建台等就绪：超时不得降成 warning 成功。
+export function acceptRebuildReady(ready) {
+  if (!ready?.ok) {
+    return { ok: false, error: ready?.error || '中继未就绪' };
+  }
+  return { ok: true, handle: ready.handle || ready.terminal?.handle || null };
+}
+
+export function finalizeEnsure({
+  relayAlive,
+  handle,
+  logPath,
+  action,
+  reason,
+  closedExtra = [],
+  closeFailures = [],
+  gc,
+} = {}) {
+  if (!relayAlive) {
+    return {
+      exitCode: 1,
+      payload: statusPayload({
+        ok: false,
+        handle,
+        logPath,
+        action,
+        reason: 'relay-not-alive',
+        error: 'relay-not-alive',
+        closedExtra,
+        closeFailures,
+        gc,
+      }),
+    };
+  }
+  return {
+    exitCode: 0,
+    payload: statusPayload({
+      ok: true,
+      handle,
+      logPath,
+      action,
+      reason,
+      closedExtra,
+      closeFailures,
+      gc,
+    }),
+  };
+}
+
 export function logStem(logPath) {
   const log = String(logPath || DEFAULT_LOG_REL).replace(/\\/g, '/');
   const base = log.split('/').pop() || 'inbox.log';
@@ -203,134 +279,178 @@ export function isProcessAlive(pid) {
     process.kill(n, 0);
     return true;
   } catch (e) {
-    // EPERM：进程在，只是没权限发信号。ESRCH 才是不存在。
     return e && e.code === 'EPERM';
   }
 }
 
-// 活性只认「租约未过期 + PID 仍在 + （给了 runId 时）租约归属对」。
-// READY 行 / 脚本名 / check 字样是历史屏面，relay 退回 shell 后仍会留在 preview，不能当活。
-export function isRelayAlive(terminal, opts = {}) {
-  if (!terminal || terminal.connected === false || terminal.orphaned === true) return false;
-  const lease = opts.lease ?? null;
-  const now = opts.now ?? Date.now();
-  const ttlMs = opts.ttlMs;
-  const runId = opts.runId;
-  if (runId && lease?.runId && lease.runId !== runId) return false;
-  if (!isLeaseFresh(lease, now, ttlMs)) return false;
-  return isProcessAlive(lease.pid);
+// ══════════════════════════════════════════════════════════════════════
+// #638 单台保证：扫描租约 + 关多余台
+// ══════════════════════════════════════════════════════════════════════
+
+const LEASE_FILE_RE = /^inbox(?:-[0-9a-f]+)?\.lease$/i;
+
+/**
+ * 扫 _flow 目录下所有信箱台租约（全局 inbox.lease + 旧模型 inbox-<run>.lease）。
+ * 返回 [{ stem, leaseFile, runId, lease, files }]；读不成的条目 lease 为 null、
+ * parseError 为 true（证不出就不动，绝不误关）。
+ */
+export function scanLeaseStations(flowDir) {
+  if (!flowDir) return [];
+  let names;
+  try {
+    names = readdirSync(flowDir);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    if (!LEASE_FILE_RE.test(name)) continue;
+    const stem = name.replace(/\.lease$/i, '');
+    const leaseFile = join(flowDir, name);
+    const logPath = join(flowDir, `${stem}.log`);
+    let lease = null;
+    let parseError = false;
+    try {
+      lease = parseLease(readFileSync(leaseFile, 'utf8'));
+      if (!lease) parseError = true;
+    } catch {
+      parseError = true;
+    }
+    out.push({
+      stem,
+      leaseFile,
+      runId: lease && lease.runId ? lease.runId : (stem === 'inbox' ? null : stem.replace(/^inbox-/, '')),
+      lease,
+      parseError,
+      files: [leaseFile, join(flowDir, `${stem}.cmd`), logPath],
+    });
+  }
+  return out;
 }
 
-export function decideReady({ terminal, lease, coordinatorHandle, now, ttlMs } = {}) {
-  const handle = terminal?.handle || null;
-  if (!handle) return { ok: false, error: 'no-terminal' };
-  if (!isRelayAlive(terminal, { lease, now, ttlMs })) {
-    return { ok: false, error: 'relay-not-alive' };
-  }
-  if (!coordinatorHandle || coordinatorHandle !== handle) {
-    return { ok: false, error: 'coordinator-not-held' };
-  }
-  return { ok: true };
+/** 台活 = 租约新鲜 + PID 在 + handle 在盘面（#635：PID 复用会让「数字还活着」假阳性，必须 handle 对盘面）。 */
+export function classifyStationLive(station, { terminals = [], now = Date.now() } = {}) {
+  if (!station || !station.lease || station.parseError) return false;
+  if (!isStationAlive(station.lease, { now })) return false;
+  return station.lease.handle ? isHandleOnBoard(station.lease.handle, terminals) : false;
 }
 
-// rebuild 等就绪：超时不得降成 warning 成功。
-export function acceptRebuildReady(ready) {
-  if (!ready?.ok) {
-    return { ok: false, error: ready?.error || '中继未就绪或 coordinator 未夺回' };
+/**
+ * #638 单台决策：
+ *   - 全局台（inbox.lease）活 → ok；其它活台全关（closed-extra）
+ *   - 只有旧模型 per-run 台活 → 全关 + 重建全局台（旧 relay 不轮询全部 Run）
+ *   - 一个活台都没有 → 重建（no-station）
+ *   close 里的每台都必须已经证明（classifyStationLive 过），关的时候再走租约身份。
+ */
+export function planSingleStation({ stations = [], terminals = [], now = Date.now() } = {}) {
+  const live = [];
+  const unproven = [];
+  for (const st of stations) {
+    if (classifyStationLive(st, { terminals, now })) live.push(st);
+    else unproven.push(st);
   }
-  return { ok: true, handle: ready.handle || ready.terminal?.handle || null };
-}
-
-export function finalizeEnsure({
-  runShowOk,
-  coordinatorHandle,
-  handle,
-  relayAlive,
-  runId,
-  logPath,
-  action,
-  reason,
-} = {}) {
-  if (!relayAlive) {
+  const global = live.find((s) => s.stem === 'inbox') || null;
+  if (global) {
+    const close = live.filter((s) => s !== global);
     return {
-      exitCode: 1,
-      payload: statusPayload({
-        ok: false,
-        runId,
-        handle,
-        logPath,
-        action,
-        reason: 'relay-not-alive',
-        error: '中继未存活',
-        coordinatorHandle,
-      }),
+      ok: true,
+      action: 'ok',
+      reason: close.length ? 'closed-extra' : 'all-alive',
+      keep: global,
+      close,
+      unproven,
+      rebuild: false,
     };
   }
-  if (!runShowOk) {
+  if (live.length === 0) {
     return {
-      exitCode: 1,
-      payload: statusPayload({
-        ok: false,
-        runId,
-        handle,
-        logPath,
-        action,
-        reason: 'coordinator-unknown',
-        error: 'run-show 失败',
-        coordinatorHandle: coordinatorHandle || null,
-      }),
-    };
-  }
-  // all-alive 秒退：中继活着即可，coordinator 被借走不失败（也不改租约 handle）。
-  // rebuild/restart 仍要夺回，否则新台横幅不在自己手里。
-  if (action !== 'ok' && (!coordinatorHandle || coordinatorHandle !== handle)) {
-    return {
-      exitCode: 1,
-      payload: statusPayload({
-        ok: false,
-        runId,
-        handle,
-        logPath,
-        action,
-        reason: 'coordinator-not-held',
-        error: coordinatorHandle ? `coordinator 仍是 ${coordinatorHandle}` : 'coordinator 为空',
-        coordinatorHandle: coordinatorHandle || null,
-      }),
+      ok: true,
+      action: 'rebuild',
+      reason: 'no-station',
+      keep: null,
+      close: [],
+      unproven,
+      rebuild: true,
     };
   }
   return {
-    exitCode: 0,
-    payload: statusPayload({ ok: true, runId, handle, logPath, action, reason }),
+    ok: true,
+    action: 'rebuild',
+    reason: 'no-global-station',
+    keep: null,
+    close: live,
+    unproven,
+    rebuild: true,
   };
 }
 
-export function decideEnsureAction({ runId, coordinatorHandle, terminals, lease, foreignStation, now, ttlMs } = {}) {
-  // 身份从 run 层独立取得：本 run 的台 = run-show 的 coordinator_handle 对应的终端，
-  // 活不活看本 run 的租约（新鲜 + PID 在 + runId 对）。判定不读任何标题。
-  const coordTerm = findCoordinatorTerminal(terminals, coordinatorHandle);
-  const relayAlive = isStationAlive(lease, runId, { now, ttlMs });
-  if (relayAlive) {
-    // 中继活着即全活着：coordinator 若被帅临时借走，中继每轮 run-use 会自夺回。
-    // 返回的 handle 只能是租约里已验证的台，不能是当前 coordinator（#601 审官红：借走时会污染租约）。
-    return { action: 'ok', reason: 'all-alive', handle: (lease && lease.handle) || null };
-  }
-  // 本 run 的台死了或从没有过。coordinator 可能仍挂在死壳/帅的终端上。
-  if (coordTerm) {
-    if (foreignStation) {
-      // 本 run 的 coordinator 被别的 run 的活台占着 → 拒绝顶替，报出对方 run id。
-      return {
-        action: 'reject',
-        reason: 'foreign-station',
-        foreignRunId: foreignStation.runId,
-        foreignHandle: foreignStation.handle || coordTerm.handle,
-      };
+// 关一台的收口计划/执行：terminal close（证不出 alreadyGone 也算成功）+ 删 3 件套
+export function planCloseStation(station) {
+  return planStationRetire({
+    runId: station.runId || station.stem || null,
+    closeHandle: station.lease && station.lease.handle ? station.lease.handle : null,
+    files: Array.isArray(station.files) ? station.files : [],
+  });
+}
+
+export function applyCloseStation(station, { closeTerminal, unlink } = {}) {
+  return applyStationRetire(planCloseStation(station), { closeTerminal, unlink });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// relay 活跃集：哪些 Run 的信要收
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * 活跃 Run 集 = 在途单 keep 集（planRunGc 的 protected）∪ 还有活 coordinator 的 Run。
+ * 前者覆盖在途/待收口；后者覆盖「帅值守 Run / 刚派完还没收回 coordinator」的 Run——
+ * planned worker_done 的最后一单完成但树还在盘面（待收口）也仍在 keep 里。
+ */
+export function activeRunIds({ runs, workers, worktrees, terminals } = {}) {
+  const ids = new Set();
+  const plan = planRunGc({ runs, workers, worktrees });
+  if (plan.ok) {
+    for (const r of plan.keep) {
+      if (r && r.id) ids.add(r.id);
     }
-    // coordinator 被非本 run 台的终端占着（帅的终端 / 死壳）：本 run 台死了就重启。
-    if (lease && lease.runId === runId) return { action: 'restart', reason: 'relay-dead' };
-    return { action: 'rebuild', reason: 'no-terminal' };
   }
-  if (lease && lease.runId === runId) return { action: 'restart', reason: 'relay-dead' };
-  return { action: 'rebuild', reason: 'no-terminal' };
+  if (Array.isArray(terminals)) {
+    const onBoard = new Set(terminals.map((t) => t && t.handle).filter(Boolean));
+    for (const r of Array.isArray(runs) ? runs : []) {
+      if (!r || !r.id) continue;
+      if (r.legacy) continue;
+      if (r.coordinator_handle && onBoard.has(r.coordinator_handle)) ids.add(r.id);
+    }
+  }
+  return ids;
+}
+
+/** 只留活跃 Run 的信，按 id 去重（Map 天然去重）。 */
+export function relevantMessages(messages, activeIds, seen = new Set()) {
+  const out = [];
+  const byId = new Map();
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || !m.id) continue;
+    if (seen.has(m.id)) continue;
+    if (!m.run_id || !activeIds.has(m.run_id)) continue;
+    byId.set(m.id, m);
+  }
+  for (const m of byId.values()) out.push(m);
+  return out;
+}
+
+/** 落盘点之前的去重：从日志文件回读已写过的 msg id。 */
+export function readLoggedIds(logPath) {
+  const ids = new Set();
+  try {
+    const text = readFileSync(logPath, 'utf8');
+    const re = /"id"\s*:\s*"([^"]+)"/g;
+    let m;
+    while ((m = re.exec(text))) ids.add(m[1]);
+  } catch {
+    // 日志不存在/读不成 = 没有已写记录，不是失败
+  }
+  return ids;
 }
 
 export function shouldLogMessage(msg) {
@@ -352,6 +472,7 @@ export function formatLogLine(msg, now = new Date()) {
     ts: now.toISOString(),
     id: msg?.id ?? null,
     type: msg?.type ?? null,
+    run_id: msg?.run_id ?? null,
     from: msg?.from_handle ?? msg?.fromHandle ?? null,
     to: msg?.to_handle ?? msg?.toHandle ?? null,
     subject: msg?.subject ?? '',
@@ -421,13 +542,12 @@ export function extractHandle(json) {
     || null;
 }
 
-export function buildLaunchScript({ nodePath, scriptPath, runId, logPath }) {
-  // cmd.exe 脚本：先 run-use 再进中继。避免 pwsh 把带引号路径当表达式（ParserError）。
+// #638 新启动串：不再 run-use（不抢 coordinator，根治 consumer_fenced），relay 自己读 inbox
+export function buildLaunchScript({ nodePath, scriptPath, logPath }) {
   const q = (s) => `"${String(s).replace(/"/g, '')}"`;
   return [
     '@echo off',
-    `orca orchestration run-use --id ${runId} --json`,
-    `${q(nodePath)} ${q(scriptPath)} relay --run ${runId} --log ${q(logPath)}`,
+    `${q(nodePath)} ${q(scriptPath)} relay --log ${q(logPath)}`,
     '',
   ].join('\r\n');
 }
@@ -438,22 +558,49 @@ export function buildRelayCommand({ launchPath }) {
 
 export function statusPayload({
   ok = true,
-  runId,
   handle,
   logPath,
   action,
   reason,
   error,
-  coordinatorHandle,
+  closedExtra,
+  closeFailures,
+  gc,
 } = {}) {
-  const payload = { ok, runId, handle, logPath, action, reason };
+  const payload = { ok, handle, logPath, action, reason };
+  if (Array.isArray(closedExtra) && closedExtra.length) payload.closedExtra = closedExtra;
+  if (Array.isArray(closeFailures) && closeFailures.length) payload.closeFailures = closeFailures;
+  if (gc) payload.gc = gc;
   if (error) payload.error = error;
-  if (coordinatorHandle != null) payload.coordinatorHandle = coordinatorHandle;
   return payload;
 }
 
 export function quoteWin(s) {
   return `"${String(s).replace(/"/g, '\\"')}"`;
+}
+
+// #614 阈值行：僵尸数超过阈值才返回一行提示（否则 null，什么都不打）
+export function gcThresholdLine({ zombieCount, threshold, scanned = true } = {}) {
+  const n = Number(zombieCount);
+  const t = Number(threshold);
+  if (!Number.isFinite(n) || !Number.isFinite(t)) return null;
+  if (scanned !== true) return null;
+  if (n <= t) return null;
+  return `⚠️ run-gc 只读：发现 ${n} 个僵尸 Run（阈值 ${t}），手动清理：node scripts/dao.mjs run-gc --apply`;
+}
+
+/** 从 run-gc 计划汇总只读统计（zwombie = planRunGc 的 retire 数）。 */
+export function gcSummaryFromPlan(plan, threshold = GC_THRESHOLD) {
+  if (!plan || plan.ok !== true) {
+    return { ok: false, unscanned: true, zombieCount: null, keepCount: null, threshold };
+  }
+  return {
+    ok: true,
+    unscanned: false,
+    zombieCount: (plan.retire || []).length,
+    keepCount: (plan.keep || []).length,
+    threshold,
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -484,27 +631,6 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function spawnOrca(cmdArgs, timeout) {
-  return new Promise((resolvePromise) => {
-    const child = spawn('orca', cmdArgs, { windowsHide: true });
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* ignore */ }
-    }, timeout);
-    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { err += d.toString('utf8'); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolvePromise({ code, out, err });
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      resolvePromise({ code: 1, out, err: String(e.message || e) });
-    });
-  });
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // 解析现场
 // ══════════════════════════════════════════════════════════════════════
@@ -518,7 +644,7 @@ function listTerminals() {
 }
 
 function listWorktrees() {
-  const r = runOrca(['worktree', 'list', '--json']);
+  const r = runOrca(['worktree', 'ps', '--json']);
   if (!r.ok) return { ok: false, error: r.error, worktrees: [] };
   const worktrees = unwrapOrca(r.json, 'worktrees') || unwrapOrca(r.json, 'items') || [];
   return { ok: Array.isArray(worktrees), worktrees: Array.isArray(worktrees) ? worktrees : [], error: r.error };
@@ -538,52 +664,21 @@ function listWorkers() {
   return { ok: Array.isArray(workers), workers: Array.isArray(workers) ? workers : [], error: r.error };
 }
 
-function inFlightRunIds(workers) {
-  const ids = new Set();
-  for (const w of Array.isArray(workers) ? workers : []) {
-    if (!w?.runId) continue;
-    const st = w.dispatchStatus;
-    const ws = w.workerState;
-    if (st === 'dispatched' || st === 'running' || ws === 'ready' || ws === 'working' || ws === 'waiting') {
-      ids.add(w.runId);
-    }
-  }
-  return ids;
+function inboxMessages() {
+  const r = runOrca(['orchestration', 'inbox', '--full', '--json']);
+  if (!r.ok) return { ok: false, error: r.error, messages: [] };
+  const messages = r.json?.result?.messages;
+  return { ok: Array.isArray(messages), messages: Array.isArray(messages) ? messages : [], error: r.ok ? null : r.error };
 }
 
-function currentRunId() {
-  const r = runOrca(['orchestration', 'run-current', '--json']);
-  if (!r.ok) return null;
-  const run = unwrapOrca(r.json, 'run');
-  return run?.id || null;
-}
-
-function showRun(runId) {
-  const r = runOrca(['orchestration', 'run-show', '--id', runId, '--json']);
-  if (!r.ok) return { ok: false, error: r.error, run: null };
-  return { ok: true, run: unwrapOrca(r.json, 'run') };
-}
-
-function resolveRunId(preferredId) {
-  const listed = listRuns();
-  if (!listed.ok && preferredId) return { ok: true, runId: preferredId };
-  if (!listed.ok) return { ok: false, error: `run-list 失败: ${errText(listed.error)}` };
-  const workers = preferredId ? { ok: true, workers: [] } : listWorkers();
-  const allowedIds = preferredId ? null : (workers.ok ? inFlightRunIds(workers.workers) : null);
-  const picked = pickRun(listed.runs, {
-    preferredId,
-    currentId: currentRunId(),
-    allowedIds,
-  });
-  if (!picked) {
-    return {
-      ok: false,
-      error: preferredId
-        ? `找不到可绑定的编排 Run（run-list 空或只剩 legacy）`
-        : '没有在途单的 Run，不建台（ensure 不再认最新墓碑，避免实验/孤儿 Run 再起一台）',
-    };
-  }
-  return { ok: true, runId: picked.id };
+function loadBoard() {
+  const runs = listRuns();
+  if (!runs.ok) return { ok: false, error: `run-list 没查成: ${errText(runs.error)}` };
+  const workers = listWorkers();
+  if (!workers.ok) return { ok: false, error: `worker-list 没查成: ${errText(workers.error)}` };
+  const worktrees = listWorktrees();
+  if (!worktrees.ok) return { ok: false, error: `worktree ps 没查成: ${errText(worktrees.error)}` };
+  return { ok: true, runs: runs.runs, workers: workers.workers, worktrees: worktrees.worktrees };
 }
 
 function resolveLogPath(arg, runId) {
@@ -604,7 +699,7 @@ function resolveCreateWorktree(arg) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// ensure / rebuild / reclaim
+// ensure / rebuild
 // ══════════════════════════════════════════════════════════════════════
 
 function loadLease(logPath) {
@@ -618,12 +713,11 @@ function loadLease(logPath) {
 export function mergeLeaseHandle(prev, nextHandle) {
   const prevH = prev && prev.handle ? prev.handle : null;
   if (!nextHandle) return prevH;
-  // 已有台 handle 不许被别的 handle（含借走的 coordinator）顶掉
   if (prevH && prevH !== nextHandle) return prevH;
   return nextHandle;
 }
 
-/** 租约 handle 只来自创建出来的信箱台。ensure 活着时不得用当前 coordinator 覆写。 */
+/** 租约 handle 只来自创建出来的信箱台。ensure 活着时不得用当前终端覆写。 */
 export function acceptLeaseHandleStamp({ prevHandle, nextHandle, source } = {}) {
   if (!nextHandle) return false;
   if (source === 'rebuild') return true;
@@ -631,12 +725,9 @@ export function acceptLeaseHandleStamp({ prevHandle, nextHandle, source } = {}) 
   return false;
 }
 
-/**
- * cmdEnsure 写租约 handle 的唯一决策。all-alive 一律不写——coordinator 可能是帅/工人。
- * 只有刚 rebuild/restart 出来的台才能盖。
- */
+/** 写租约 handle 的唯一决策：只有刚 rebuild 出来的台能盖。 */
 export function planEnsureLeaseStamp({ action, leaseHandle, rebuiltHandle } = {}) {
-  if (action === 'rebuild' || action === 'restart') {
+  if (action === 'rebuild') {
     return {
       handle: rebuiltHandle || null,
       stamp: acceptLeaseHandleStamp({
@@ -673,17 +764,15 @@ function stampLeaseHandle(logPath, handle, source = 'ensure') {
   return true;
 }
 
-async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } = {}) {
+async function waitReady(handle, { logPath, timeoutMs = READY_WAIT_MS } = {}) {
   const t0 = Date.now();
-  let lastError = '中继未就绪或 coordinator 未夺回';
+  let lastError = '中继未就绪';
   while (Date.now() - t0 < timeoutMs) {
     const listed = listTerminals();
     const mine = (listed.terminals || []).find((t) => t.handle === handle) || null;
-    const shown = runId ? showRun(runId) : { ok: false, run: null };
     const ready = decideReady({
       terminal: mine || { handle, connected: true },
       lease: loadLease(logPath),
-      coordinatorHandle: shown.run?.coordinator_handle || null,
     });
     if (ready.ok && mine) return { ok: true, terminal: mine };
     lastError = ready.error || lastError;
@@ -692,29 +781,22 @@ async function waitReady(handle, { runId, logPath, timeoutMs = READY_WAIT_MS } =
   return { ok: false, error: `等 ${timeoutMs}ms ${lastError}` };
 }
 
-function writeLaunchFile(logPath, runId) {
+function writeLaunchFile(logPath) {
   const launchPath = launchFilePath(logPath);
   mkdirSync(dirname(launchPath), { recursive: true });
   writeFileSync(launchPath, buildLaunchScript({
     nodePath: process.execPath,
     scriptPath: SCRIPT_PATH,
-    runId,
     logPath,
   }), 'utf8');
   return launchPath;
 }
 
-async function rebuildStation({ old, runId, logPath, worktree }) {
-  // old 只在调用方能验证归属时才传（本版 ensure 一律传 null：归属从 run-show 取，
-  // 标题只出不进无法反查旧台；新台的启动脚本 run-use 会自行夺回 coordinator，
-  // 死壳/帅的终端留在场上无害，绝不误关不是自己的终端）。
-  if (old?.handle) {
-    runOrca(['terminal', 'close', '--terminal', old.handle, '--tab', '--json']);
-    await sleep(800);
-  }
-  const launchPath = writeLaunchFile(logPath, runId);
+async function rebuildStation({ logPath, worktree }) {
+  // 不 run-use：新台是纯监听者，根治 consumer_fenced（#638）
+  const launchPath = writeLaunchFile(logPath);
   const cmd = buildRelayCommand({ launchPath });
-  const title = stationTitle(runId);
+  const title = TITLE;
   const created = runOrca([
     'terminal', 'create',
     '--worktree', worktree,
@@ -726,18 +808,24 @@ async function rebuildStation({ old, runId, logPath, worktree }) {
   const handle = extractHandle(created.json);
   if (!handle) return { ok: false, error: `terminal create 没返回 handle: ${JSON.stringify(created.json).slice(0, 200)}` };
   runOrca(['terminal', 'rename', '--terminal', handle, '--title', title, '--json']);
-  const ready = await waitReady(handle, { runId, logPath });
+  const ready = await waitReady(handle, { logPath });
   return acceptRebuildReady({ ...ready, handle });
 }
 
+async function gcZombieScan(threshold) {
+  const runs = listRuns();
+  if (!runs.ok) return { ok: false, unscanned: true, error: `run-list 没查成: ${errText(runs.error)}`, threshold };
+  const workers = listWorkers();
+  if (!workers.ok) return { ok: false, unscanned: true, error: `worker-list 没查成: ${errText(workers.error)}`, threshold };
+  const worktrees = listWorktrees();
+  if (!worktrees.ok) return { ok: false, unscanned: true, error: `worktree ps 没查成: ${errText(worktrees.error)}`, threshold };
+  const plan = planRunGc({ runs: runs.runs, workers: workers.workers, worktrees: worktrees.worktrees });
+  if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
+  return gcSummaryFromPlan(plan, threshold);
+}
+
 async function cmdEnsure(args) {
-  const runResolved = resolveRunId(args.run);
-  if (!runResolved.ok) {
-    console.log(JSON.stringify({ ok: false, error: runResolved.error }));
-    process.exit(1);
-  }
-  const runId = runResolved.runId;
-  const logPath = resolveLogPath(args.log, runId);
+  const logPath = resolveLogPath(args.log, null);
   mkdirSync(dirname(logPath), { recursive: true });
 
   const listed = listTerminals();
@@ -745,98 +833,68 @@ async function cmdEnsure(args) {
     console.log(JSON.stringify({ ok: false, error: `terminal list 失败: ${errText(listed.error)}` }));
     process.exit(1);
   }
-  // 身份从 run 层独立取得：本 run 的台 = coordinator_handle 对应的终端；判定不读标题。
-  const shown = showRun(runId);
-  const coordinatorHandle = shown.run?.coordinator_handle || null;
-  const lease = loadLease(logPath);
-  const coordTerm = findCoordinatorTerminal(listed.terminals, coordinatorHandle);
-  const relayAlive = isStationAlive(lease, runId);
-  const foreignStation = !relayAlive && coordTerm
-    ? await findForeignStation(coordTerm, runId)
-    : null;
-  const decision = decideEnsureAction({
-    runId,
-    coordinatorHandle,
-    terminals: listed.terminals,
-    lease,
-    foreignStation,
-  });
+  const stations = scanLeaseStations(dirname(logPath));
+  const plan = planSingleStation({ stations, terminals: listed.terminals });
 
-  let handle = (lease && lease.handle) || decision.handle || null;
-  let action = decision.action;
-  let reason = decision.reason;
-
-  if (decision.action === 'reject') {
-    console.log(JSON.stringify({
-      ok: false,
-      runId,
-      logPath,
-      action: 'reject',
-      reason: 'foreign-station',
-      foreignRunId: decision.foreignRunId,
-      foreignHandle: decision.foreignHandle,
-      error: `本 run 的 coordinator 被别的 run 的信箱台占着（${decision.foreignRunId ?? '未知'}），拒绝顶替`,
-    }));
-    process.exit(1);
+  const closedExtra = [];
+  const closeFailures = [];
+  for (const st of plan.close) {
+    const applied = applyCloseStation(st, {
+      closeTerminal: (h) => runOrca(['terminal', 'close', '--terminal', h, '--tab', '--json']),
+      unlink: unlinkSync,
+    });
+    if (applied.ok) {
+      closedExtra.push({ runId: st.runId || null, handle: st.lease && st.lease.handle ? st.lease.handle : null, result: applied.state || 'retired' });
+    } else {
+      closeFailures.push({ runId: st.runId || null, handle: st.lease && st.lease.handle ? st.lease.handle : null, error: applied.error });
+    }
   }
 
-  if (decision.action === 'rebuild' || decision.action === 'restart') {
-    const rebuilt = await rebuildStation({
-      old: null,
-      runId,
-      logPath,
-      worktree: resolveCreateWorktree(args.worktree),
-    });
+  let handle = (plan.keep && plan.keep.lease && plan.keep.lease.handle) || null;
+  let action = plan.action;
+  let reason = plan.reason;
+
+  if (plan.rebuild === true) {
+    const rebuilt = await rebuildStation({ logPath, worktree: resolveCreateWorktree(args.worktree) });
     if (!rebuilt.ok) {
-      console.log(JSON.stringify({ ok: false, error: rebuilt.error, action, reason }));
+      console.log(JSON.stringify({ ok: false, error: rebuilt.error, action, reason, closedExtra, closeFailures }));
       process.exit(1);
     }
     handle = rebuilt.handle;
   }
+
   const stampPlan = planEnsureLeaseStamp({
     action,
-    leaseHandle: (loadLease(logPath) && loadLease(logPath).handle) || (lease && lease.handle) || null,
-    rebuiltHandle: (action === 'rebuild' || action === 'restart') ? handle : null,
+    leaseHandle: (loadLease(logPath) && loadLease(logPath).handle) || null,
+    rebuiltHandle: plan.rebuild === true ? handle : null,
   });
   if (stampPlan.handle) handle = stampPlan.handle;
   if (stampPlan.stamp) {
     stampLeaseHandle(logPath, stampPlan.handle, 'rebuild');
   }
 
-  const afterShow = showRun(runId);
   const afterList = listTerminals();
-  const afterTerm = (afterList.terminals || []).find((t) => t.handle === handle)
-    || findCoordinatorTerminal(afterList.terminals, afterShow.run?.coordinator_handle || null);
+  const afterLease = loadLease(logPath);
+  const relayAlive = isStationAlive(afterLease, { now: Date.now() })
+    && (handle ? isHandleOnBoard(handle, afterList.terminals || []) : false);
+
+  // #614 顺车：ensure 成功后只读 run-gc 扫描，超阈值打一行（stdout 最前，JSON 在最后一行）
+  const gc = await gcZombieScan(args.gcThreshold);
+  const line = gcThresholdLine({ zombieCount: gc.zombieCount, threshold: gc.threshold, scanned: gc.ok });
+  if (relayAlive && line) console.log(line);
+
   const final = finalizeEnsure({
-    runShowOk: afterShow.ok,
-    coordinatorHandle: afterShow.run?.coordinator_handle || null,
+    relayAlive,
     handle,
-    relayAlive: isRelayAlive(afterTerm, { lease: loadLease(logPath), runId }),
-    runId,
     logPath,
     action,
     reason,
+    closedExtra,
+    closeFailures,
+    gc,
   });
   console.log(JSON.stringify(final.payload));
   if (final.exitCode !== 0) process.exit(final.exitCode);
-}
-
-// 只在「本 run 台死 + coordinator 还挂在某个终端上」时查：那个终端是不是别的 run 的活台。
-// 身份全部从 run-show / 各 run 的租约取，不读标题。
-async function findForeignStation(coordTerm, runId) {
-  if (!coordTerm) return null;
-  const listed = listRuns();
-  if (!listed.ok) return null;
-  for (const r of Array.isArray(listed.runs) ? listed.runs : []) {
-    if (!r?.id || r.id === runId || r.legacy) continue;
-    const shown = showRun(r.id);
-    if (!shown.ok || shown.run?.coordinator_handle !== coordTerm.handle) continue;
-    const yLease = loadLease(resolveLogPath(null, r.id));
-    if (isStationAlive(yLease, r.id)) {
-      return { runId: r.id, handle: coordTerm.handle };
-    }
-  }
-  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -910,71 +968,64 @@ function runArchiveReady(messages, logPath) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// relay（跑在哑终端里）
+// relay（跑在哑终端里，单台轮询全部在途 Run）
 // ══════════════════════════════════════════════════════════════════════
 
-async function waitCheck({ ackId, timeoutMs }) {
-  const args = ['orchestration', 'check', '--wait', '--timeout-ms', String(timeoutMs), '--json'];
-  if (ackId) args.push('--ack', ackId);
-  return spawnOrca(args, timeoutMs + 15000);
-}
-
 async function cmdRelay(args) {
-  const runResolved = resolveRunId(args.run);
-  if (!runResolved.ok) {
-    console.error(`inbox-station relay: ${runResolved.error}`);
-    process.exit(1);
-  }
-  const runId = runResolved.runId;
-  const logPath = resolveLogPath(args.log, runId);
+  const logPath = resolveLogPath(args.log, null);
   mkdirSync(dirname(logPath), { recursive: true });
   const leaseTtlMs = args.timeoutMs + LEASE_GRACE_MS;
+  const pollMs = Math.max(2000, args.timeoutMs);
 
-  console.log(`${READY_MARK} run=${runId} log=${logPath}`);
-  persistLease(logPath, runId, leaseTtlMs);
+  console.log(`${READY_MARK} run=all log=${logPath}`);
+  persistLease(logPath, null, leaseTtlMs);
 
-  let lastAck = null;
+  let seen = new Set();
+  let consecutiveBoardFail = 0;
   for (;;) {
-    persistLease(logPath, runId, leaseTtlMs);
-    const used = runOrca(['orchestration', 'run-use', '--id', runId, '--json']);
-    if (!used.ok) {
-      console.error(`${READY_MARK} run-use 失败: ${errText(used.error)}`);
-      await sleep(2000);
-      continue;
+    try {
+      persistLease(logPath, null, leaseTtlMs);
+      const board = loadBoard();
+      if (!board.ok) {
+        consecutiveBoardFail += 1;
+        console.error(`${READY_MARK} 盘面失败(${consecutiveBoardFail}): ${board.error}`);
+        await sleep(Math.min(30000, 2000 * consecutiveBoardFail));
+        continue;
+      }
+      consecutiveBoardFail = 0;
+      const terminals = listTerminals();
+      const active = activeRunIds({
+        runs: board.runs,
+        workers: board.workers,
+        worktrees: board.worktrees,
+        terminals: terminals.ok ? terminals.terminals : [],
+      });
+      // 日志回读已写 id + 本进程已见过的 id，双保险去重（#638：inbox 无 ack，靠去重防重复落盘/重复归档）
+      seen = new Set([...seen, ...readLoggedIds(logPath)]);
+      const inbox = inboxMessages();
+      persistLease(logPath, null, leaseTtlMs);
+      if (!inbox.ok) {
+        console.error(`${READY_MARK} inbox 失败: ${inbox.error}`);
+        await sleep(pollMs);
+        continue;
+      }
+      const relevant = relevantMessages(inbox.messages, active, seen);
+      const { loggable, heartbeats } = splitMessages(relevant);
+      if (loggable.length) {
+        appendFileSync(logPath, `${loggable.map((m) => formatLogLine(m)).join('\n')}\n`, 'utf8');
+        for (const m of loggable) if (m.id) seen.add(m.id);
+        console.log(`${READY_MARK} logged=${loggable.length} heartbeat=${heartbeats.length} runs=${active.size}`);
+      } else if (heartbeats.length) {
+        console.log(`${READY_MARK} heartbeat=${heartbeats.length} (not logged) runs=${active.size}`);
+      } else {
+        console.log(`${READY_MARK} idle runs=${active.size}`);
+      }
+      runArchiveReady(loggable, logPath);
+      persistLease(logPath, null, leaseTtlMs);
+    } catch (e) {
+      console.error(`${READY_MARK} relay 异常: ${String(e?.message || e).slice(0, 200)}`);
     }
-    console.log(`${READY_MARK} run-use ok run=${runId}`);
-    persistLease(logPath, runId, leaseTtlMs);
-
-    const waited = await waitCheck({ ackId: lastAck, timeoutMs: args.timeoutMs });
-    persistLease(logPath, runId, leaseTtlMs);
-    const parsed = parseOrcaStdout(waited.out);
-    if (!parsed.ok) {
-      // 超时空转也算活着：租约已在 wait 前后续期，PID 仍在即可
-      console.error(`${READY_MARK} check 无 JSON: ${(waited.err || waited.out || '').slice(0, 160)}`);
-      lastAck = null;
-      continue;
-    }
-    if (parsed.json?.ok === false) {
-      const code = parsed.json?.error?.code || '';
-      console.error(`${READY_MARK} check 失败: ${errText(parsed.json.error)}`);
-      if (code === 'consumer_fenced' || code === 'run_required') lastAck = null;
-      await sleep(1000);
-      continue;
-    }
-
-    const { messages, deliveryId } = parseCheckResult(parsed.json);
-    const { loggable, heartbeats } = splitMessages(messages);
-    if (loggable.length) {
-      appendFileSync(logPath, `${loggable.map((m) => formatLogLine(m)).join('\n')}\n`, 'utf8');
-      console.log(`${READY_MARK} logged=${loggable.length} heartbeat=${heartbeats.length}`);
-    } else if (heartbeats.length) {
-      console.log(`${READY_MARK} heartbeat=${heartbeats.length} (acked, not logged)`);
-    } else {
-      console.log(`${READY_MARK} idle`);
-    }
-    runArchiveReady(loggable, logPath);
-    persistLease(logPath, runId, leaseTtlMs);
-    lastAck = deliveryId || null;
+    await sleep(pollMs);
   }
 }
 
@@ -983,7 +1034,7 @@ function cmdRetire(args) {
     console.log(JSON.stringify({ ok: false, error: 'retire 要 --run' }));
     process.exit(1);
   }
-  const shown = showRun(args.run);
+  const shown = runOrca(['orchestration', 'run-show', '--id', args.run, '--json']);
   if (!shown.ok) {
     const text = errText(shown.error);
     const state = /run_not_found/i.test(text) ? 'run_not_found' : 'unscanned';
@@ -1011,7 +1062,7 @@ function cmdRetire(args) {
     runId: args.run,
     lease,
     leaseRead,
-    coordinatorHandle: shown.run?.coordinator_handle || null,
+    coordinatorHandle: shown.json?.result?.run?.coordinator_handle || null,
     terminals: listed.terminals,
     previewHandles: previewHandlesForRun(listed.terminals, args.run),
   });
@@ -1034,20 +1085,19 @@ function cmdRetire(args) {
 
 function printUsage() {
   console.log(`用法：
-  node scripts/inbox-station.mjs ensure [--run <id>] [--log <path>] [--worktree <sel>]
-  node scripts/inbox-station.mjs relay  [--run <id>] [--log <path>] [--timeout-ms <n>]
+  node scripts/inbox-station.mjs ensure [--log <path>] [--worktree <sel>] [--gc-threshold <n>]
+  node scripts/inbox-station.mjs relay  [--log <path>] [--timeout-ms <n>]
   node scripts/inbox-station.mjs retire --run <id> [--log <path>]
 
-  ensure  幂等保证哑终端 + 中继 + coordinator 归属；全活着秒退，stdout 一行 JSON
-          action: rebuild(本 run 无台新建) / restart(本 run 台死了重启) / reject(撞上别的 run 的台)
-          身份从 run-show 的 coordinator_handle 取，标题只出不进（改名/重置不影响认台）
-          不传 --run 时只认在途 dispatch 的 Run，不认最新墓碑（#593）
-  relay   跑在哑终端内：每轮 run-use 自夺回 → check --wait → 写日志 → 可归档闸（#637）→ ack
-          heartbeat 只 ack 不写日志；默认日志 _flow/inbox-<run后缀>.log，按 run 隔离
-          「可归档」先查 PR MERGED 再 worktree-rm；闸不过 escalation，不盲删
-  retire  关该 Run 的信箱台并删租约（orca 没有 run-delete；退役后墓碑仍在 run-list）
-          关台身份看租约 TTL/runId/handle（或 preview 唯一命中），不看 coordinator_handle
-          过期直接 alreadyGone；未过期且证不出就失败，不许只删文件；alreadyGone 看 close 结果不是列表条数`);
+  ensure  #638：只保活一台哑终端 + 中继（全局租约 _flow/inbox.lease，新鲜+PID在+handle在盘面）
+          action: ok(all-alive/closed-extra) / rebuild(no-station / no-global-station)
+          多余活台（旧模型 per-run 台）幂等关掉；证不出身份的租约不动（绝不误关）
+          成功后只读 run-gc（#614）：僵尸数超阈值在 stdout 最前打一行，--apply 仍手动
+  relay  跑在哑终端内：每轮读 orchestration inbox（跨 Run，不绑 coordinator，不 run-use），
+          只收活跃 Run（在途 keep ∪ 活 coordinator）的信，去重落盘非 heartbeat，跑可归档闸
+          默认日志 _flow/inbox.log（单台一张日志）
+  retire  关指定 Run 的信箱台并删租约（run-gc --apply 用；旧模型 per-run 台）
+          关台身份看租约 TTL/handle（过期直接 alreadyGone；未过期证不出就失败）`);
 }
 
 async function main() {
