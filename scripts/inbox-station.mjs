@@ -863,6 +863,7 @@ function removeWorktreeLive(selector) {
     'worktree-rm',
     '--worktree',
     String(selector),
+    '--force',
   ], {
     encoding: 'utf8',
     timeout: 120000,

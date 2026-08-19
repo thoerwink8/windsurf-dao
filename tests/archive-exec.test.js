@@ -253,6 +253,62 @@ describe('archive-exec', () => {
     });
   });
 
+  it('④d #652 父树挂未合 PR 只拆已合 PR 的子卡；卡名 PR-#N 也认', async (t) => {
+    const S = await LIB_LOAD;
+    const io = recorder();
+    io.state.prQuery = { ok: true, state: 'MERGED' };
+    io.state.listed = {
+      ok: true,
+      worktrees: [
+        wt({ id: 'master', name: 'master', main: true }),
+        wt({ id: 'p1', name: 'PR-#200 工人·head', pr: 200, children: ['w1'] }),
+        // 子卡 linkedPR=null 但卡名带 PR-#101（#652：审官/分块子卡常见形态）
+        wt({ id: 'w1', name: 'PR-#101 工人·块1', pr: null, parent: 'p1' }),
+      ],
+    };
+    const results = S.processArchiveNotices([
+      archiveMsg({ subject: '可归档：#101', payload: { worktree: 'w1' } }),
+    ], io);
+    await t.test('父树挂未合 PR → 只拆命中子卡，不碰父树', () => {
+      assert.ok(results[0].removed === true && io.calls.rm.join(',') === 'w1', '只拆命中子卡  →  ' + JSON.stringify({ res: results[0], rm: io.calls.rm }));
+    });
+    await t.test('未合并 PR 的父树不因可归档被删', () => {
+      assert.ok(!io.calls.rm.includes('p1'), '未合并 PR 的父树不因可归档被删  →  ' + JSON.stringify(io.calls.rm));
+    });
+
+    const io2 = recorder();
+    io2.state.prQuery = { ok: true, state: 'MERGED' };
+    io2.state.listed = {
+      ok: true,
+      worktrees: [
+        wt({ id: 'master', name: 'master', main: true }),
+        // 父树没有 linkedPR，只带 ISSUE 号；子卡卡名带 PR-#101
+        wt({ id: 'p0', name: 'ISSUE-#652 工人·head', pr: null, issue: 652, children: ['w3'] }),
+        wt({ id: 'w3', name: 'PR-#101 工人·块2', pr: null, parent: 'p0' }),
+      ],
+    };
+    const res2 = S.processArchiveNotices([archiveMsg({ subject: '可归档：#101' })], io2);
+    await t.test('无 linkedPR 但卡名 PR-#101 也能按号找到（不含父树）', () => {
+      assert.ok(res2[0].removed === true && io2.calls.rm.join(',') === 'w3', '按卡名 PR-#101 找到并删子卡  →  ' + JSON.stringify({ res: res2[0], rm: io2.calls.rm }));
+    });
+
+    const io3 = recorder();
+    io3.state.prQuery = { ok: true, state: 'MERGED' };
+    io3.state.listed = {
+      ok: true,
+      worktrees: [
+        wt({ id: 'master', name: 'master', main: true }),
+        // 根卡带本 PR，但子树里还有别的 PR（分块兄弟未合）
+        wt({ id: 'r1', name: 'PR-#12 工人·head', pr: 12, children: ['r2'] }),
+        wt({ id: 'r2', name: 'PR-#99 工人·块', pr: 99, parent: 'r1' }),
+      ],
+    };
+    const res3 = S.processArchiveNotices([archiveMsg({ payload: { worktree: 'r1' } })], io3);
+    await t.test('根卡子树还挂别的 PR → 未删整树（未合并 PR 的树不因可归档被删）', () => {
+      assert.ok(res3[0].action === 'escalate' && io3.calls.rm.length === 0 && /别的 PR/.test(res3[0].reason), '根卡子树还挂别的 PR → 未删整树  →  ' + JSON.stringify({ res: res3[0], rm: io3.calls.rm }));
+    });
+  });
+
   it('⑤ 同批其它通知类型不进归档闸', async (t) => {
     const S = await LIB_LOAD;
     const io = recorder();
@@ -277,6 +333,9 @@ describe('archive-exec', () => {
     });
     await t.test('审官任务书仍是可归档通知，不自己 rm', () => {
       assert.ok(/--subject "可归档：<PR号>"/.test(reviewerSrc) && /归档动作本身（worktree rm）由帅做/.test(reviewerSrc), '审官任务书仍是可归档通知，不自己 rm');
+    });
+    await t.test('可归档 → 信箱台 worktree-rm 必带 --force（未跟踪文件不挡删，#652）', () => {
+      assert.ok(/\'worktree-rm\',\r?\n\s+\'--worktree\',\r?\n\s+String\(selector\),\r?\n\s+\'--force\'/.test(inboxSrc), '可归档 → 信箱台 worktree-rm 必带 --force  →  ' + inboxSrc.match(/removeWorktreeLive\([\s\S]{0,220}/)?.[0] || '(未找到)');
     });
   });
 });

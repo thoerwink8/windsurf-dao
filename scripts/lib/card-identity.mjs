@@ -124,3 +124,24 @@ export function displayNumberFromWorktree(w) {
   if (pr) return Number(pr[1]);
   return null;
 }
+
+/**
+ * 树的 PR 号：linkedPR.number 优先，其次卡名/路径里的 `PR-#N` / `PR-N`（#652：
+ * 审官子卡常 linkedPR=null 但路径/名字带 PR 号，删树判据要认它，不能只看 linkedPR）。
+ * 找不到返回 null。卡名里的 `#N` 不是 PR 号（是 issue 号，见 issueNumberFromWorktree）。
+ */
+export function prNumberFromWorktree(w) {
+  const lp = w && w.linkedPR;
+  if (lp && typeof lp.number === 'number' && Number.isInteger(lp.number) && lp.number > 0) return lp.number;
+  if (lp && typeof lp.number === 'string' && lp.number.trim()) {
+    const n = Number(lp.number);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  const name = String(w?.displayName || '');
+  const m = name.match(/PR-#?(\d+)/);
+  if (m) return Number(m[1]);
+  const path = String(w?.path || '');
+  const mp = path.match(/PR-#?(\d+)/);
+  if (mp) return Number(mp[1]);
+  return null;
+}

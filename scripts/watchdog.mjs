@@ -129,7 +129,7 @@ import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
-import { isChildWorktree, isTaskCard, classifyCardName } from './lib/card-identity.mjs';
+import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -380,6 +380,18 @@ function liveTicketOpen(n) {
   if (!issue.error && issue.status === 0 && /OPEN/i.test(String(issue.stdout))) return { open: true, kind: 'issue' };
   if (pr.error && issue.error) return { error: `gh 查 #${n} 失败（pr: ${String(pr.error.message).slice(0, 60)} / issue: ${String(issue.error.message).slice(0, 60)}）` };
   return { open: false, kind: null }; // pr/issue 都不 open（含不存在）→ 关联已收口
+}
+
+// #652：PR 关联树的孤儿判据只认 gh PR state（MERGED 才删，OPEN/CLOSED 不删）。
+// 查不到 ≠ 未合并：gh 失败/空输出返回 { error }，调用方记 unscanned note 不删（fail-closed）。
+function livePrState(n) {
+  const r = spawnSync('gh', ['pr', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', timeout: 15000 });
+  if (r.error || r.status !== 0) {
+    return { error: `gh pr view #${n} 失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 160)}` };
+  }
+  const state = String(r.stdout || '').trim().toUpperCase();
+  if (!state) return { error: `gh pr view #${n} 空输出——没查成` };
+  return { state };
 }
 
 // ── terminal read 响应规整（live 与快照共用同一段逻辑）──────────────
@@ -678,6 +690,29 @@ function nowMs(source, args) {
 function assocNumber(name) {
   const m = String(name || '').match(/^#?(\d+)/);
   return m ? Number(m[1]) : null;
+}
+
+// #652：子树里跟根卡不同 PR 关联的树（含根卡自身算同 PR，不算）。
+// 用来挡住「整树删会把别的未合 PR 的树带走」——父树/兄弟树挂别的 PR 时只拆同 PR 的树。
+function subtreeForeignPrs(w, ps) {
+  const rootPr = prNumberFromWorktree(w);
+  const out = [];
+  const seen = new Set();
+  const queue = [w];
+  while (queue.length) {
+    const cur = queue.shift();
+    const cid = worktreeIdOf(cur);
+    if (cid) {
+      if (seen.has(cid)) continue;
+      seen.add(cid);
+    }
+    const n = prNumberFromWorktree(cur);
+    if (n != null && n !== rootPr) {
+      out.push({ pr: n, name: cur?.displayName || cid || cur?.path || '?' });
+    }
+    for (const c of findChildWorktrees(cur, ps)) queue.push(c);
+  }
+  return out;
 }
 
 // ── 在途 PR 证据（#569 降噪 ②：已交付等下一环的工位不算空转）──────────
@@ -1199,45 +1234,91 @@ function runWorktreePass(source, args, state) {
     }
     if (activeExecutor) { st.fired.delete('orphan'); st.orphanRmDone = false; continue; }
 
-    // 次判据：关联单已收口 / 无关联且静置超 N
-    const assoc = assocNumber(name);
+    // 次判据（#652）：有 PR 关联（linkedPR 或卡名/路径 `PR-#N` / `PR-N`）的树只认
+    // gh PR state==MERGED 才判删；OPEN/CLOSED 不删；gh 查不动 → unscanned note 不删（fail-closed）。
+    // 无 PR 关联才走原 issue/静置判据。审官子卡常 linkedPR=null 但名字/路径带 PR 号，
+    // 删树判据认它（prNumberFromWorktree），不能只看 linkedPR。
+    const prNo = prNumberFromWorktree(w);
     let orphan = false;
     let why = '';
-    if (assoc != null) {
-      let open = null;
+    if (prNo != null) {
+      let state = null;
+      let prWhy = `关联 PR #${prNo}`;
       if (args.snapshotDir) {
-        const ev = source.ghEvidence?.[id];
-        open = ev ? !!ev.ticketOpen : null; // null = 证据缺，不猜
-        if (ev && ev.ticket) why = `关联 ${ev.ticket}`;
-        else why = `关联 #${assoc}`;
+        const ev = source.ghEvidence?.[id] || source.ghEvidence?.[w.path];
+        if (ev && ev.prState) {
+          state = String(ev.prState).toUpperCase();
+          if (ev.ticket) prWhy = `关联 ${ev.ticket}`;
+        } else if (ev && ev.ticket) {
+          prWhy = `关联 ${ev.ticket}`;
+        }
       } else {
-        const r = liveTicketOpen(assoc);
-        if (r.error) { notes.push({ name, type: '观察', detail: `${r.error}——孤儿判定跳过（查不到≠孤儿，#492 查不到不当孤儿）` }); continue; }
-        open = r.open;
-        why = r.kind ? `关联 ${r.kind} #${assoc} 还开着` : `关联 #${assoc}（PR/issue 都未开）`;
+        const r = livePrState(prNo);
+        if (r.error) {
+          notes.push({ name, type: '观察', detail: `${r.error}——孤儿判定跳过（查不到≠孤儿，fail-closed，#652）` });
+          continue;
+        }
+        state = r.state;
       }
-      if (open === false) { orphan = true; why = `无活跃执行者 + ${why}`; }
-      // open === true → 不是孤儿；open === null（快照缺证据）→ 不猜，跳过
-    } else {
-      // 无 #N 关联：静置超 N 分钟才算孤儿候选（#476「创建超过 N 分钟」兜新建未开 PR 的树）
-      const ev = gitEvidenceFor(w, source, args);
-      if (ev.missing) { notes.push({ name, type: '观察', detail: 'GIT_EVIDENCE_MISSING: 无关联树没有 git 证据——静置项没查成，不是查过没事' }); continue; }
-      if (ev.error) { notes.push({ name, type: '观察', detail: `git 证据拉不到：${ev.error}——孤儿判定跳过` }); continue; }
-      const idleMins = Math.round((now - ev.lastActivityTs) / 60000);
-      if (ev.lastActivityTs != null && (now - ev.lastActivityTs) > PARAMS.orphanStaleMinutes * 60000) {
-        orphan = true; why = `无活跃执行者 + 无关联 + 静置 ${idleMins} 分钟`;
+      if (state == null) {
+        notes.push({ name, type: '观察', detail: `PR_STATE_UNSCANNED: ${prWhy} 的 gh state 没查成（快照缺 prState 证据）——不删（fail-closed，#652）` });
+        continue;
+      }
+      if (state === 'MERGED') {
+        orphan = true;
+        why = `无活跃执行者 + ${prWhy} 已合并（gh state==MERGED）`;
       } else {
-        why = `无活跃执行者 + 无关联 + 静置 ${idleMins} 分钟（未超阈值，不算）`;
+        why = `无活跃执行者 + ${prWhy} 实际是 ${state}，未合并不删（#652）`;
+      }
+    } else {
+      const assoc = assocNumber(name);
+      if (assoc != null) {
+        let open = null;
+        if (args.snapshotDir) {
+          const ev = source.ghEvidence?.[id] || source.ghEvidence?.[w.path];
+          open = ev ? !!ev.ticketOpen : null; // null = 证据缺，不猜
+          if (ev && ev.ticket) why = `关联 ${ev.ticket}`;
+          else why = `关联 #${assoc}`;
+        } else {
+          const r = liveTicketOpen(assoc);
+          if (r.error) { notes.push({ name, type: '观察', detail: `${r.error}——孤儿判定跳过（查不到≠孤儿，#492 查不到不当孤儿）` }); continue; }
+          open = r.open;
+          why = r.kind ? `关联 ${r.kind} #${assoc} 还开着` : `关联 #${assoc}（PR/issue 都未开）`;
+        }
+        if (open === false) { orphan = true; why = `无活跃执行者 + ${why}`; }
+        // open === true → 不是孤儿；open === null（快照缺证据）→ 不猜，跳过
+      } else {
+        // 无 #N 关联：静置超 N 分钟才算孤儿候选（#476「创建超过 N 分钟」兜新建未开 PR 的树）
+        const ev = gitEvidenceFor(w, source, args);
+        if (ev.missing) { notes.push({ name, type: '观察', detail: 'GIT_EVIDENCE_MISSING: 无关联树没有 git 证据——静置项没查成，不是查过没事' }); continue; }
+        if (ev.error) { notes.push({ name, type: '观察', detail: `git 证据拉不到：${ev.error}——孤儿判定跳过` }); continue; }
+        const idleMins = Math.round((now - ev.lastActivityTs) / 60000);
+        if (ev.lastActivityTs != null && (now - ev.lastActivityTs) > PARAMS.orphanStaleMinutes * 60000) {
+          orphan = true; why = `无活跃执行者 + 无关联 + 静置 ${idleMins} 分钟`;
+        } else {
+          why = `无活跃执行者 + 无关联 + 静置 ${idleMins} 分钟（未超阈值，不算）`;
+        }
       }
     }
     if (orphan) {
-      if (!st.fired.has('orphan')) {
-        st.fired.add('orphan');
-        events.push({ name, type: 'orphan', detail: `孤儿树候选：${why}——产出收了就 rm（#476 收卷即清树；判断依据如上，误报可见）` });
-      }
-      if (!st.orphanRmDone) {
-        const rm = executeOrphanRm(w, args, events);
-        if (rm.dryRun || rm.ok) st.orphanRmDone = true;
+      // #652：删树前看子树有没有别的 PR 关联——父树/兄弟树挂着别的（未合）PR 时
+      // 只拆本 PR 的树，不整树删（未合并 PR 的树不因删树动作被带走）。
+      const foreign = subtreeForeignPrs(w, source.ps);
+      if (foreign.length > 0) {
+        if (!st.fired.has('orphan')) {
+          st.fired.add('orphan');
+          events.push({ name, type: 'orphan', detail: `孤儿树候选：${why}；但子树还挂着别的 PR（${foreign.map(f => `#${f.pr} ${f.name}`).join('、')}）——不整树删，只拆同 PR 的树（#652）` });
+        }
+        st.orphanRmDone = false;
+      } else {
+        if (!st.fired.has('orphan')) {
+          st.fired.add('orphan');
+          events.push({ name, type: 'orphan', detail: `孤儿树候选：${why}——产出收了就 rm（#476 收卷即清树；判断依据如上，误报可见）` });
+        }
+        if (!st.orphanRmDone) {
+          const rm = executeOrphanRm(w, args, events);
+          if (rm.dryRun || rm.ok) st.orphanRmDone = true;
+        }
       }
     } else {
       st.fired.delete('orphan');

@@ -616,6 +616,79 @@ describe('watchdog', () => {
     fs.rmSync(off.tmp, { recursive: true, force: true });
   });
 
+  it('⑱c #652 扫描器按 gh MERGED 关树：有 PR 关联的树只认 MERGED 判删', async (t) => {
+    const FAS_TR = path.join(REPO, 'tests', 'fixtures', 'fake-worktree-rm.mjs');
+    function run(dir) {
+      return runWatchdog(path.join(FIXTURES, dir), ['--once']);
+    }
+    function runWithHook(dir) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-pr-rm-'));
+      const mark = path.join(tmp, 'tree');
+      const log = path.join(tmp, 'rm.log');
+      fs.mkdirSync(mark);
+      fs.writeFileSync(path.join(mark, 'keep'), 'x');
+      const r = spawnSync(process.execPath, [WATCHDOG, '--snapshot-dir', path.join(FIXTURES, dir), '--once'], {
+        encoding: 'utf8', cwd: REPO, env: {
+          ...process.env,
+          WATCHDOG_ORPHAN_RM: FAS_TR,
+          WATCHDOG_ORPHAN_RM_LOG: log,
+          WATCHDOG_ORPHAN_RM_MARK: mark,
+        },
+      });
+      return {
+        out: (r.stdout || '') + (r.stderr || ''),
+        markExists: fs.existsSync(mark),
+        log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '',
+        tmp,
+      };
+    }
+
+    const merged = run('orphan-pr-merged');
+    await t.test('PR MERGED → 退出码 1 且报 orphan（#652 判删）', () => {
+      assert.ok(merged.status === 1 && /orphan:.*已合并（gh state==MERGED）/.test(merged.out), 'PR MERGED → 退出码 1 且报 orphan  →  ' + merged.out.trim());
+    });
+    await t.test('PR MERGED → 打 worktree-rm 动作行（默认快照只打印）', () => {
+      assert.ok(/动作: 将执行 worktree-rm --worktree .+ --force/.test(merged.out), 'PR MERGED → 打 worktree-rm 动作行  →  ' + merged.out.trim());
+    });
+
+    const open = run('orphan-pr-open');
+    await t.test('PR OPEN → 不报 orphan、不打 rm（#652：不是 MERGED 不删）', () => {
+      assert.ok(!/orphan:/.test(open.out) && !/worktree-rm/.test(open.out), 'PR OPEN → 不报 orphan、不打 rm  →  ' + open.out.trim());
+    });
+
+    const closed = run('orphan-pr-closed');
+    await t.test('PR CLOSED（未合）→ 不报 orphan、不打 rm（#652：CLOSED 不算 MERGED）', () => {
+      assert.ok(!/orphan:/.test(closed.out) && !/worktree-rm/.test(closed.out), 'PR CLOSED → 不报 orphan、不打 rm  →  ' + closed.out.trim());
+    });
+
+    const unscanned = run('orphan-pr-unscanned');
+    await t.test('gh 没查成（快照缺 prState）→ PR_STATE_UNSCANNED note，不报 orphan、不打 rm（fail-closed）', () => {
+      assert.ok(/PR_STATE_UNSCANNED/.test(unscanned.out) && !/orphan:/.test(unscanned.out) && !/worktree-rm/.test(unscanned.out), 'gh 没查成 → 不删  →  ' + unscanned.out.trim());
+    });
+
+    const nameonly = run('orphan-pr-nameonly');
+    await t.test('审官子卡 linkedPR=null 但卡名带 PR-#N → 也认 PR 号，MERGED → 判删', () => {
+      assert.ok(/\[PR-#777 审官·grok-4.6\] orphan:.*已合并（gh state==MERGED）/.test(nameonly.out), '审官子卡卡名 PR-#N 也认  →  ' + nameonly.out.trim());
+    });
+
+    const parent = runWithHook('orphan-pr-parent-open-child-merged');
+    await t.test('父树挂未合 PR → 只拆已合子卡，父树不删（#652）', () => {
+      assert.ok(
+        /\[PR-#101 工人·deepseek-v4-flash 分块1\] orphan:.*已合并/.test(parent.out)
+          && !/\[PR-#200 工人·grok-4.6 拆分协调.*orphan:/.test(parent.out),
+        '父树挂未合 PR → 只拆已合子卡  →  ' + parent.out.trim(),
+      );
+    });
+    await t.test('子卡 MERGED → 只对子卡调 worktree-rm，不碰父卡', () => {
+      assert.ok(
+        parent.log.includes('--worktree 1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/101-w1 --force')
+          && !parent.log.includes('200-head'),
+        '子卡 MERGED → 只对子卡调 worktree-rm  →  ' + JSON.stringify({ log: parent.log, markExists: parent.markExists }),
+      );
+    });
+    fs.rmSync(parent.tmp, { recursive: true, force: true });
+  });
+
   it('⑲ 命名校验（#476）：任务卡显示名格式', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "naming-bad"), ["--once"]);
     await t.test('不合规卡名：退出码 1（naming 报警）', () => {
