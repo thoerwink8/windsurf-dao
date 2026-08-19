@@ -1288,7 +1288,9 @@ function runRound(source, args, state) {
   return { noTargets: false, targets, events, notes };
 }
 
-/** #633：done 工位框里躺着返工/复核字 → 只报不回车。working 工位已在主循环扫过。 */
+/** #633：done 工位框里躺着未提交的返工/复核字 → 只报不回车。
+ * 必须有未提交指纹（Pasted Content / [Pasted text] / 未发 follow-up），
+ * 不能只因 transcript 里还留着已执行过的【返工指令】就报警。working 工位已在主循环扫过。 */
 function leftoverInjectPass(source, args, state, events) {
   for (const w of source.ps) {
     if (w.isMainWorktree === true) continue;
@@ -1302,8 +1304,10 @@ function leftoverInjectPass(source, args, state, events) {
       if (!handle) return;
       const read = source.readTerminal(handle);
       if (read.error) return;
-      const leftover = leftoverDispatchMatch(normLines(read.tail));
-      if (!leftover) return;
+      const all = normLines(read.tail);
+      const leftover = leftoverDispatchMatch(all);
+      // 与 working 分支同一闸：无未提交粘贴指纹 = 指令已进 transcript，不是框里残留。
+      if (!leftover || !pastedContentMatch(all)) return;
       const key = `${w.worktreeId || w.path || '?'}|${a.paneKey || i}|leftover`;
       const st = stationState(state, key);
       if (st.fired.has('leftover-inject')) return;

@@ -925,6 +925,16 @@ describe('watchdog', () => {
     });
   });
 
+  it('⑳b7 #633 done 工位历史 transcript 含返工指令、无未提交指纹 → 不报 leftover-inject', async (t) => {
+    const r = runWatchdog(path.join(FIXTURES, "leftover-rework-history"));
+    await t.test('不报 leftover-inject', () => {
+      assert.ok(!/leftover-inject:/.test(r.out), '已提交执行过的指令不算框里残留  →  ' + r.out.trim());
+    });
+    await t.test('不发回车动作', () => {
+      assert.ok(!/动作:.*回车/.test(r.out) && !/将发送「回车」/.test(r.out), '不回车  →  ' + r.out.trim());
+    });
+  });
+
   it('⑳b5 #633 框里已有未发出内容：at capacity 续命禁止再 terminal send', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "capacity-unsent"));
     await t.test('退出码 1（指纹仍报）', () => {

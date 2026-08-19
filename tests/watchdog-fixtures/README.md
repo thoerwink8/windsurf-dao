@@ -84,7 +84,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `capacity-token-reset/` | **#633**：同屏 at capacity，outputTokens 100/100/200/200/200；第 3 轮（+10s）token 涨了 | 第 2 轮续命 #1；第 3 轮观察「次数清零」不续命；第 4 轮再卡住仍是第一次续命 |
 | `stall-ignores-tokens/` | **#633**：spinner-hang 同源，outputTokens 100→200→300，屏面真实内容不动 | 第 3 轮 `stall:`（停摆主判据不用 token） |
 | `capacity-unsent/` | **#633**：at capacity 两连同，但屏上有 Pasted Content / 等待发送 | 第 2 轮 fingerprint，不发续命（框里有未发出内容禁止 send） |
-| `leftover-rework/` | **#633**：agent=done，框里躺着【返工指令 | 退出码 1，`leftover-inject:`，不回车 |
+| `leftover-rework/` | **#633**：agent=done，框里躺着【返工指令 + `[Pasted Content]` | 退出码 1，`leftover-inject:`，不回车 |
+| `leftover-rework-history/` | **#633**：agent=done，tail 仍有【返工指令但无未提交指纹（已执行过） | 不报 `leftover-inject:`，不回车 |
 | `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化** | 第 2 轮仍 `fingerprint:` + 续命（#633：at capacity 状态行不算活证否决） |
 | `veto-other-fp/` | 同结构但指纹是 `no serving account`（非 capacityRetry） | 退出码 0，第 2 轮 `观察:` 活证否决，无 fingerprint |
 | `veto-stall/` | 两轮底部窗口写入 at capacity 指纹，真实内容两轮相同 | 第 2 轮退出码 1，`fingerprint:`（两连同 + 无活证 → 报警） |
