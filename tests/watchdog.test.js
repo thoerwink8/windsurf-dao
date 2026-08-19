@@ -61,7 +61,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|leftover-inject|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -909,6 +909,19 @@ describe('watchdog', () => {
     await t.test('round 4：下次卡住仍是第一次续命（讨论在动也不否决）', () => {
       assert.ok(/动作: 注入续命（#633/.test(seg(4)), 'round 4：第一次续命  →  ' + seg(4).trim());
       assert.ok(!/活证否决/.test(seg(4)), 'round 4：capacity 不被活证否决  →  ' + seg(4).trim());
+    });
+  });
+
+  it('⑳b6 #633 残留返工框：agent=done 只报 leftover-inject，不回车', async (t) => {
+    const r = runWatchdog(path.join(FIXTURES, "leftover-rework"));
+    await t.test('退出码 1', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('报 leftover-inject 且点明不回车', () => {
+      assert.ok(/leftover-inject:.*返工指令/.test(r.out) && /不自动回车/.test(r.out), '残留派活报警  →  ' + r.out.trim());
+    });
+    await t.test('不发回车动作', () => {
+      assert.ok(!/动作:.*回车/.test(r.out) && !/将发送「回车」/.test(r.out), '不回车  →  ' + r.out.trim());
     });
   });
 

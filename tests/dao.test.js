@@ -1501,6 +1501,19 @@ describe('dao', () => {
       assert.ok(grokStillRed.ok === false && grokStillRed.evidence === '[Pasted Content 4686 chars]', 'Grok Pasted Content 折叠仍然红  →  ' + JSON.stringify(grokStillRed));
     });
 
+    const leftoverRework = S.leftoverDispatchMatch('【返工指令 · 闭环自动流转 · 第 1 轮】\n[Pasted Content 5711 chars]');
+    await t.test('#633 leftoverDispatchMatch 认出框里返工指令', () => {
+      assert.ok(leftoverRework === '【返工指令', '#633 leftoverDispatchMatch 认出返工  →  ' + leftoverRework);
+    });
+    const leftoverRecheck = S.leftoverDispatchMatch('【复核指令 · 闭环自动流转】');
+    await t.test('#633 leftoverDispatchMatch 认出复核指令', () => {
+      assert.ok(leftoverRecheck === '【复核指令', '#633 leftoverDispatchMatch 认出复核  →  ' + leftoverRecheck);
+    });
+    const leftoverGeneric = S.leftoverDispatchMatch('[Pasted Content 5711 chars]\n›');
+    await t.test('#633 无返工/复核字的粘贴块不算残留派活', () => {
+      assert.ok(leftoverGeneric === null, '#633 普通粘贴块不是残留派活  →  ' + leftoverGeneric);
+    });
+
     // 2. verifyStartedPolling：只贴不发 → 立刻红；垫片没了，没有「补 enter → 绿」这条路。
     //    绿色唯一来源：真 transcript 证明（见上方 #661 块）或屏面稳定（agent 真在干活）。
     let fastReads = 0;

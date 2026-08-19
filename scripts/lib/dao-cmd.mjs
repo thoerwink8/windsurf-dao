@@ -1493,7 +1493,7 @@ export function cursorFollowupEvidence(text) {
   return m ? m[0] : null;
 }
 
-/** #651：Cursor 任一未提交指纹（粘贴块 / follow-up），供补 enter 后快速再读判定。 */
+/** #651：Cursor 任一未提交指纹（粘贴块 / follow-up）。#633：只当没开工证据，禁止补回车。 */
 export function cursorUnsubmittedEvidence(text) {
   return cursorUnsubmittedPaste(text) || cursorFollowupEvidence(text);
 }
@@ -1505,6 +1505,17 @@ export function pastedContentMatch(text) {
   const c = cursorUnsubmittedPaste(t);
   if (c) return c;
   return cursorFollowupEvidence(t);
+}
+
+/** #633：框里躺着的派活字（返工/复核指令）。看门狗只报不回车。 */
+export const LEFTOVER_DISPATCH_RE = /【返工指令|【复核指令/;
+export function leftoverDispatchMatch(text) {
+  const t = String(text ?? '');
+  const m = t.match(LEFTOVER_DISPATCH_RE);
+  if (m) return m[0];
+  const paste = pastedContentMatch(t);
+  if (paste && /返工|复核/.test(t)) return paste;
+  return null;
 }
 
 /** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
@@ -1560,7 +1571,7 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * #661：退役「补一记回车」垫片（completePendingPaste 已删除）。
+ * #661/#633：退役「补一记回车」垫片（completePendingPaste 已删除）。
  * 往输入框粘贴 ≠ 开工：未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
  * 只证明任务书停在输入框，不证明 agent 真接过它。开工只认外部证据——
  *   - worker-read 官方 transcript（source≠terminal）= 真 session（调 verifyWorkerStarted）；
@@ -1613,7 +1624,7 @@ export function verifyStartedPolling({
     lastText = text;
     const leftover = pastedContentMatch(text);
     if (leftover) {
-      // #661：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
+      // #661/#633：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
       // → 任务书没进上下文，立刻红并交给调用方回滚，不补回车、不假装开工。
       return {
         ok: false,

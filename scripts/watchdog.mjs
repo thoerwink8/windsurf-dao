@@ -129,7 +129,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
-import { loadRouting, pastedContentMatch } from './lib/dao-cmd.mjs';
+import { loadRouting, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
 import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
@@ -1022,6 +1022,8 @@ function runRound(source, args, state) {
   const events = [];
   const notes = []; // 活证否决/守卫降级的观察行：打印但不唤醒
   if (targets.length === 0) {
+    leftoverInjectPass(source, args, state, events);
+    if (events.length > 0) return { noTargets: false, targets, events, notes };
     return { noTargets: true, targets, events, notes };
   }
 
@@ -1063,6 +1065,12 @@ function runRound(source, args, state) {
 
     const all = normLines(read.tail);
     const bottom = normLines(read.tail.slice(-args.stateWindow));
+    const leftover = leftoverDispatchMatch(all);
+    // working 工位：只认未提交粘贴框。已吃进 transcript 的【返工指令】不算残留。
+    if (leftover && pastedContentMatch(all) && !st.fired.has('leftover-inject')) {
+      st.fired.add('leftover-inject');
+      events.push({ name: t.name, type: 'leftover-inject', detail: `框里有残留派活「${leftover}」——只报警，不自动回车（#633：新 task 救，不按回车）` });
+    }
 
     // ── #500 换代：活性只认「非 spinner 真实内容」──────────────────
     // 剔除 chrome（spinner 盲文帧 + TUI 计时行）后的哈希是唯一活性信号：
@@ -1276,7 +1284,37 @@ function runRound(source, args, state) {
     }
   }
 
+  leftoverInjectPass(source, args, state, events);
   return { noTargets: false, targets, events, notes };
+}
+
+/** #633：done 工位框里躺着返工/复核字 → 只报不回车。working 工位已在主循环扫过。 */
+function leftoverInjectPass(source, args, state, events) {
+  for (const w of source.ps) {
+    if (w.isMainWorktree === true) continue;
+    if (args.selfWorktree && w.worktreeId === args.selfWorktree) continue;
+    const agents = Array.isArray(w.agents) ? w.agents : [];
+    agents.forEach((a, i) => {
+      if (a.state === 'working' || a.state === 'waiting') return;
+      if (isExcluded(w, a, args)) return;
+      const pane = a.paneKey ? source.paneByKey.get(a.paneKey) : undefined;
+      const handle = pane ? pane.handle : undefined;
+      if (!handle) return;
+      const read = source.readTerminal(handle);
+      if (read.error) return;
+      const leftover = leftoverDispatchMatch(normLines(read.tail));
+      if (!leftover) return;
+      const key = `${w.worktreeId || w.path || '?'}|${a.paneKey || i}|leftover`;
+      const st = stationState(state, key);
+      if (st.fired.has('leftover-inject')) return;
+      st.fired.add('leftover-inject');
+      events.push({
+        name: w.displayName || '?',
+        type: 'leftover-inject',
+        detail: `框里有残留派活「${leftover}」（agent=${a.state}）——只报警，不自动回车（#633：新 task 救）`,
+      });
+    });
+  }
 }
 
 // ── 树级扫描：孤儿树（#492/#476）+ 命名校验（#476）────────────────────
