@@ -292,4 +292,4 @@ node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer 
       || { echo "gh 读 <PR号> state 失败（$?）——不是查过没事" >&2; exit 1; }
     ```
   - **文件读取 / 审官自证**：审官开工第一步贴出 `git log --oneline -1` 与被审文件存在性检查的**真实输出**（PowerShell `'路径1','路径2' | ForEach-Object { '{0} -> {1}' -f $_, (Test-Path $_) }`；bash `ls 路径1 路径2`——给错 shell 是这次实咬的现场）。任何一个要审的文件读不到 → **停手 escalation**，禁止用 `gh pr diff` 代替本地文件、禁止推测。
-- PR 正文署名多张 issue：**每个编号前面都要有自己的「署名 issue」记号**，连写只认第一个（#527 实证：`Closes #500 #492 #471 #476` 合并后只自动关 #500，其余手工补关——「看起来成功、实际只做了四分之一」，没有任何东西提示漏关）。正例：`署名 issue #500、issue #492、issue #471、issue #476`（关单不靠 GitHub 关键词，靠 `scripts/close-issues.mjs` 读正文摘要，每张都要单独署名才能被关）。多 issue 单选一个主 issue 写全，其余关单评论留「已并入 #X」（#487 拍板）。
+- PR 正文署名多张 issue：**每个编号前面都要有自己的「署名 issue」记号**，连写只认第一个（#527 实证：`Closes #500 #492 #471 #476` 合并后只自动关 #500，其余手工补关——「看起来成功、实际只做了四分之一」，没有任何东西提示漏关）。正例：`署名 issue #500、署名 issue #492、署名 issue #471、署名 issue #476`（关单不靠 GitHub 关键词，靠 `scripts/close-issues.mjs` 读正文摘要，每张都要单独署名才能被关——解析器只认紧跟「署名 issue」的单号，第一张后面的裸 #N 抽不到）。多 issue 单选一个主 issue 写全，其余关单评论留「已并入 #X」（#487 拍板）。
