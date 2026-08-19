@@ -80,8 +80,11 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `retry-503-progress/` | **#580 追加**：同样 503 重试但 git lastActivity 新鲜 | 不报 retry-loop |
 | `model-change/` | **#569 ②（pi 静默换 provider）**：`sessions/` 下一条手写 jsonl——会话开头初始选型（model_change 前无 message）→ 随后 assistant 报错（errorMessage="503 status code (no body)"）→ 紧接着 model_change 切到 deepseek | 退出码 1，`[pi] model-change: …诱因：503 status code (no body)`；初始选型那条不报（那是正常选型号不是静默切换） |
 | `fp-loss/` | **非 capacityRetry** keepalive 指纹（no serving account）连续 5 轮 | 第 2 轮 fingerprint + 动作行，第 5 轮 `报帅:`（#471 连败阈值，通用 fpLoss 路径） |
-| `capacity-keepalive/` | **#646**：at capacity 指纹连续 5 轮，git-evidence capturedAt 依次 T0 / T0 / T0+1min / T0+6min / T0+16min——把 1/5/10 三个续命间隔走完 | 第 2 轮 fingerprint + 续命 #1 动作行；第 3 轮（+1min）续命 #2；第 4 轮（+6min）续命 #3；第 5 轮（+16min）`报帅:`（第 4 次，不再发续命动作） |
-| `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化**（讨论在推进）——活证否决 | 退出码 0，第 2 轮 `观察:`（不唤醒），无 fingerprint |
+| `capacity-keepalive/` | **#633**：at capacity 指纹连续 6 轮，git-evidence capturedAt 依次 T0 / T0 / T0+10s / T0+70s / T0+250s / T0+550s——把 10秒/1分/3分/5分 四档走完 | 第 2 轮 fingerprint + 续命 #1；第 3 轮（+10s）续命 #2；第 4 轮（+70s）续命 #3；第 5 轮（+250s）续命 #4；第 6 轮（+550s）`报帅:`（第 5 次，不再发续命动作） |
+| `capacity-token-reset/` | **#633**：同屏 at capacity，outputTokens 100/100/200/200/200；第 3 轮（+10s）token 涨了 | 第 2 轮续命 #1；第 3 轮观察「次数清零」不续命；第 4 轮再卡住仍是第一次续命 |
+| `stall-ignores-tokens/` | **#633**：spinner-hang 同源，outputTokens 100→200→300，屏面真实内容不动 | 第 3 轮 `stall:`（停摆主判据不用 token） |
+| `veto/` | 两轮底部窗口写入 at capacity 指纹，**真实内容逐轮变化** | 第 2 轮仍 `fingerprint:` + 续命（#633：at capacity 状态行不算活证否决） |
+| `veto-other-fp/` | 同结构但指纹是 `no serving account`（非 capacityRetry） | 退出码 0，第 2 轮 `观察:` 活证否决，无 fingerprint |
 | `veto-stall/` | 两轮底部窗口写入 at capacity 指纹，真实内容两轮相同 | 第 2 轮退出码 1，`fingerprint:`（两连同 + 无活证 → 报警） |
 | `read-malformed/` | read 成功响应缺 `result.terminal` | 首轮 `read-failed:`（fail-closed） |
 | `read-error-livefallback/` | 基于 read-malformed，read 文件换成 **runOrca 回落形态**（`{ok:false, error:"exit 1"}` 字符串错误，模拟 orca stdout 非 JSON / spawn 失败时 runOrca 返回的形态，不是原始 orca 响应） | 首轮 `read-failed:` 且回落字符串进详情（live 字符串分支的自动化覆盖） |

@@ -7,8 +7,8 @@
 // #500 换代：⑧停摆判据 = 非 spinner 真实内容连续三轮不变（spinner 重绘/cursor 前进/ps updatedAt
 // 前进都不算活性——转圈假工人 spinner-hang 样本：旧判据全放行、新判据第 3 轮报）⑨空转（git 证据）
 // ⑩孤儿树（活跃执行者判据，跨主帅不误伤；#630 接真删：on 调 --force，off/快照只打印）⑪命名校验 ⑫flow 心跳/停滞态 ⑬处置矩阵动作行与连败报帅。
-// #646：⑬b capacity 指纹（at capacity / try a different model）续命走专用调度——按 1/5/10 分钟
-// 各续命一次（共 3 次），第 4 次按选型序换人；认不出审官卡才报帅。
+// #646/#633：⑬b capacity 指纹续命走专用调度——按 10秒/1分/3分/5分各续命一次（共 4 次），
+// 第 5 次按选型序换人；认不出审官卡才报帅。续命后输出 token 涨了就清零。停摆不用 token。
 // #569：⑭空转降噪三类豁免（角色·在途PR·活性否决，各留正控 negative + 真阳对照）⑮权限确认框
 // selector 指纹（1/3:select 两连同，不自动替它选）⑯BLIND 隐形工人（垫片 watch-board 并进，
 // 2026-08-17 判据订正：有活终端且查不到 dispatch 记账才报，agents=0 不算数）⑰model-change
@@ -120,7 +120,7 @@ describe('watchdog', () => {
       assert.ok(!/fingerprint:/.test(seg1), 'at-capacity-450：第一轮不报（streak 1）  →  ' + r2.out.trim());
     });
     await t.test('at-capacity-450：处置矩阵动作行出现（#646：capacity 指纹首警即续命 #1，注入续命）', () => {
-      assert.ok(/动作: 注入续命（#646：1\/5\/10 分钟各一次，共 3 次，第 4 次换人）：将发送「看门狗续命/.test(r2.out), 'at-capacity-450：处置矩阵动作行出现（#646：capacity 指纹首警即续命 #1，注入续命）  →  ' + r2.out.trim());
+      assert.ok(/动作: 注入续命（#633：10秒\/1分\/3分\/5分各一次，共 4 次，第 5 次换人）：将发送「看门狗续命/.test(r2.out), 'at-capacity-450：处置矩阵动作行出现（#633：capacity 指纹首警即续命 #1，注入续命）  →  ' + r2.out.trim());
     });
 
     const r3 = runMultiRounds(path.join(FIXTURES, "real-incidents", "at-capacity"), 2);
@@ -867,42 +867,81 @@ describe('watchdog', () => {
     });
   });
 
-  it('⑳b2 #646 capacity 指纹续命调度：1/5/10 分钟各续命一次（共 3 次），第 4 次换人', async (t) => {
-    // 夹具 capacity-keepalive：round 1-5 同屏 at capacity，git-evidence capturedAt 分别
-    // 落在 T0 / T0 / T0+1min / T0+6min / T0+16min——正好把 1/5/10 三个间隔走完：
-    //   round 2 首警 → 续命 #1；round 3（+1min）→ 续命 #2；round 4（+6min）→ 续命 #3；
-    //   round 5（+16min）→ 第 4 次只报帅、不再发续命动作。
+  it('⑳b2 #633 capacity 指纹续命调度：10秒/1分/3分/5分各续命一次（共 4 次），第 5 次换人', async (t) => {
+    // 夹具 capacity-keepalive：round 1-6 同屏 at capacity，git-evidence capturedAt 分别
+    // 落在 T0 / T0 / T0+10s / T0+70s / T0+250s / T0+550s——把 10秒/1分/3分/5分 四档走完：
+    //   round 2 首警 → 续命 #1；round 3（+10s）→ 续命 #2；round 4（+70s）→ 续命 #3；
+    //   round 5（+250s）→ 续命 #4；round 6（+550s）→ 第 5 次只报帅、不再发续命动作。
     const r = runWatchdog(path.join(FIXTURES, "capacity-keepalive"));
-    const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/5([\\s\\S]*?)(?:round |$)`)) || [])[1] || "";
+    const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/6([\\s\\S]*?)(?:round |$)`)) || [])[1] || "";
     await t.test('退出码 1（有报警）', () => {
       assert.ok(r.status === 1, '退出码 1（有报警）  →  ' + `status=${r.status}`);
     });
     await t.test('round 2：fingerprint 首警 + 续命 #1（动作行）', () => {
-      assert.ok(/round 2\/5[\s\S]*fingerprint:.*at capacity/.test(r.out), 'round 2：fingerprint 首警  →  ' + r.out.trim());
-      assert.ok(/round 2\/5[\s\S]*动作: 注入续命（#646/.test(r.out), 'round 2：续命 #1 动作行  →  ' + r.out.trim());
+      assert.ok(/round 2\/6[\s\S]*fingerprint:.*at capacity/.test(r.out), 'round 2：fingerprint 首警  →  ' + r.out.trim());
+      assert.ok(/round 2\/6[\s\S]*动作: 注入续命（#633/.test(r.out), 'round 2：续命 #1 动作行  →  ' + r.out.trim());
     });
-    await t.test('round 3（+1min）：续命 #2 动作行', () => {
-      assert.ok(/动作: 注入续命（#646/.test(seg(3)), 'round 3：续命 #2 动作行  →  ' + seg(3).trim());
+    await t.test('round 3（+10s）：续命 #2 动作行', () => {
+      assert.ok(/动作: 注入续命（#633/.test(seg(3)), 'round 3：续命 #2 动作行  →  ' + seg(3).trim());
     });
-    await t.test('round 4（+6min）：续命 #3 动作行', () => {
-      assert.ok(/动作: 注入续命（#646/.test(seg(4)), 'round 4：续命 #3 动作行  →  ' + seg(4).trim());
+    await t.test('round 4（+70s）：续命 #3 动作行', () => {
+      assert.ok(/动作: 注入续命（#633/.test(seg(4)), 'round 4：续命 #3 动作行  →  ' + seg(4).trim());
     });
-    await t.test('round 5（+16min）：第 4 次不续命（卡名不是审官·模型 → 报帅）', () => {
-      assert.ok(/报帅:.*capacity 指纹已按 1\/5\/10 分钟各续命一次/.test(seg(5)), 'round 5：认不出审官卡则报帅  →  ' + seg(5).trim());
-      assert.ok(!/动作: 注入续命/.test(seg(5)), 'round 5：第 4 次不发续命动作  →  ' + seg(5).trim());
+    await t.test('round 5（+250s）：续命 #4 动作行', () => {
+      assert.ok(/动作: 注入续命（#633/.test(seg(5)), 'round 5：续命 #4 动作行  →  ' + seg(5).trim());
+    });
+    await t.test('round 6（+550s）：第 5 次不续命（卡名不是审官·模型 → 报帅）', () => {
+      assert.ok(/报帅:.*capacity 指纹已按 10秒\/1分\/3分\/5分各一次/.test(seg(6)), 'round 6：认不出审官卡则报帅  →  ' + seg(6).trim());
+      assert.ok(!/动作: 注入续命/.test(seg(6)), 'round 6：第 5 次不发续命动作  →  ' + seg(6).trim());
     });
   });
 
-  it('⑳c 活证否决（#500 换代）：否决只看非 spinner 真实内容在动', async (t) => {
+  it('⑳b3 #633 续命后输出 token 涨了就清零，下次卡住仍是第一次续命', async (t) => {
+    // r1/r2 同屏 token=100 → 续命 #1；r3 仍 at capacity 但 token=200（+10s，若不清算会走续命 #2）。
+    const r = runWatchdog(path.join(FIXTURES, "capacity-token-reset"));
+    const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/5([\\s\\S]*?)(?:round |$)`)) || [])[1] || "";
+    await t.test('退出码 1（有报警）', () => {
+      assert.ok(r.status === 1, '退出码 1（有报警）  →  ' + `status=${r.status}`);
+    });
+    await t.test('round 2：续命 #1', () => {
+      assert.ok(/动作: 注入续命（#633/.test(seg(2)), 'round 2：续命 #1  →  ' + seg(2).trim());
+    });
+    await t.test('round 3：token 涨了清零，不发续命 #2', () => {
+      assert.ok(/输出 token 100→200/.test(seg(3)) && /次数清零/.test(seg(3)), 'round 3：清零观察行  →  ' + seg(3).trim());
+      assert.ok(!/动作: 注入续命/.test(seg(3)), 'round 3：不发续命 #2  →  ' + seg(3).trim());
+    });
+    await t.test('round 4：下次卡住仍是第一次续命（讨论在动也不否决）', () => {
+      assert.ok(/动作: 注入续命（#633/.test(seg(4)), 'round 4：第一次续命  →  ' + seg(4).trim());
+      assert.ok(!/活证否决/.test(seg(4)), 'round 4：capacity 不被活证否决  →  ' + seg(4).trim());
+    });
+  });
+
+  it('⑳b4 #633 停摆主判据不用 token：token 涨了屏面哈希仍冻着 → 第 3 轮照报 stall', async (t) => {
+    const r = runWatchdog(path.join(FIXTURES, "stall-ignores-tokens"));
+    await t.test('退出码 1', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('第 3 轮 stall（token 100→200→300 也不算活性）', () => {
+      assert.ok(/round 3\/3[\s\S]*stall:/.test(r.out), '第 3 轮 stall  →  ' + r.out.trim());
+    });
+  });
+
+  it('⑳c 活证否决：capacity 状态行不算否决；其它指纹仍否决', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "veto"));
-    await t.test('退出码 0（否决 = 不唤醒）', () => {
-      assert.ok(r.status === 0, '退出码 0（否决 = 不唤醒）  →  ' + `status=${r.status}`);
+    await t.test('at capacity + 讨论在动：仍报 fingerprint（#633：capacity 不做活证否决）', () => {
+      assert.ok(r.status === 1, 'at capacity 仍报警  →  ' + `status=${r.status}`);
+      assert.ok(/round 2\/2[\s\S]*fingerprint:.*at capacity/.test(r.out), 'capacity 不被否决  →  ' + r.out.trim());
     });
-    await t.test('打印观察行（活证否决，真实内容在动）', () => {
-      assert.ok(/\[#452 - 看门狗正式版\] 观察: 指纹两连同「at capacity、try a different model」但非 spinner 真实内容在动——活证否决/.test(r.out), '打印观察行（活证否决，真实内容在动）  →  ' + r.out.trim());
+    await t.test('at capacity + 讨论在动：发出续命（10s 第一记）', () => {
+      assert.ok(/动作: 注入续命（#633/.test(r.out), 'capacity 第一记续命  →  ' + r.out.trim());
     });
-    await t.test('不报 fingerprint（被否决）', () => {
-      assert.ok(!/fingerprint:/.test(r.out), '不报 fingerprint（被否决）  →  ' + r.out.trim());
+
+    const other = runWatchdog(path.join(FIXTURES, "veto-other-fp"));
+    await t.test('非 capacity 指纹 + 讨论在动：退出码 0（仍活证否决）', () => {
+      assert.ok(other.status === 0, '非 capacity 否决  →  ' + `status=${other.status}`);
+    });
+    await t.test('非 capacity 指纹：打印活证否决观察行，不报 fingerprint', () => {
+      assert.ok(/活证否决/.test(other.out) && !/fingerprint:/.test(other.out), '其它指纹仍否决  →  ' + other.out.trim());
     });
 
     const rs = runWatchdog(path.join(FIXTURES, "veto-stall"));

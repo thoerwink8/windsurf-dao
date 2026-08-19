@@ -69,7 +69,7 @@ export function parseReviewerCardName(name) {
   return { ok: true, pr: Number(m[1]), model: m[2] };
 }
 
-/** capacity 第 4 次：能换人就换，认不出审官卡才报帅。 */
+/** capacity 四档续命之后：能换人就换，认不出审官卡才报帅。 */
 export function planCapacitySwitch({ displayName, models = [], passerIds = [] } = {}) {
   const parsed = parseReviewerCardName(displayName);
   if (!parsed.ok) {
