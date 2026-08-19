@@ -76,20 +76,33 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 
 ### 3. 收尾（最关键的一条）
 
-判绿且合并完成之后，**由你通知帅「可归档」**：
+判绿且合并完成之后，先通知帅，再结算自己这一跳。两件事不要混。
+
+**① 通知帅「可归档」**（普通告知，投递到 Run 信箱，**不要**加 `--type worker_done`）：
 
 ```bash
 node scripts/dao.mjs notify --hop "审官→帅" --to run:<本单 Run id> \
   --subject "可归档：<PR号>" --body "<判绿依据 + 合并结果>"
 ```
 
-（语义是「这单可以归档了」。Run id 从 `orca orchestration worker-show --dispatch <注入参数里的对方 dispatch> --json` 的 `result.dispatch.run_id` 取，**不要用 `run-current`**——审官终端上它经常是 null。）
+Run id 从 `orca orchestration worker-show --dispatch <注入参数里的对方 dispatch> --json` 的 `result.dispatch.run_id` 取，**不要用 `run-current`**——审官终端上它经常是 null。
 
-**这条是普通告知，不是结算信号**——不要加 `--type worker_done`。它**不会**把你自己的
-Dispatch 结算掉（编排里那条任务不会因此变 completed）；把普通通知伪装成 `worker_done`
-只会让面板显示得像结算了而实际没有，比不发更糟。Dispatch 结算是另一件事，见 **issue #551**。
+**② 结算自己这一跳**（#551）：省略 `--to`，身份从开工 preamble 抄。`notify` 会核 worker-show，Dispatch 没变成 completed 就报「未结算」，不许当发成功。
 
-**确认送达才算收尾**：`notify` 非零 = 帅那边永远等不到这条，本单在面板上会一直挂着——
+```bash
+node scripts/dao.mjs notify --type worker_done --outcome succeeded \
+  --task-id <preamble 的 taskId> --dispatch-id <preamble 的 dispatchId> \
+  --from <preamble 的 --from> --dispatch-capability <preamble 的 capability> \
+  --subject "本跳结束：PR <PR号>" --body "判绿已合并，可归档通知已发"
+```
+
+缺身份 = 未结算。错 pane / 落库但 Dispatch 仍 dispatched = 未结算。
+
+**红项之后也结算这一跳**（#552）：红项 notify 士兵送达后，同样发上面这条 `worker_done`。下一轮复审不是往旧信箱塞消息，是士兵 `worker-done` 用 `worker-start --terminal` 开新 Dispatch 注入你。不要 `check --wait` 等复审——旧身份已经下班，信箱会变 inspect-only。
+
+**禁止**往已结算 dispatch 发工作指令。收到「已完工 / inspect-only / 未结算」就停，升级给帅，不要重发到同一 id。
+
+**确认送达才算收尾**：`notify` 非零 = 没送到或没结算，本单在面板上会一直挂着——
 必须当场报出来并重发，不许把「发过了」当「归档通知到位了」。
 **归档动作本身（worktree rm）由帅做，你不执行也不省略这个通知。**
 

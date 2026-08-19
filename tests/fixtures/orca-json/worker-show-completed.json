@@ -1,0 +1,151 @@
+{
+  "id": "f8b76fd9-0e7c-4e5c-9e82-d6684b32c39e",
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "ctx_adfee0055aef",
+      "run_id": "run_f9a798718ab8",
+      "task_id": "task_4d19869a58bd",
+      "contract_version": 1,
+      "launch_token_hash": "069916d464618a8c86f3094647194269f791670d3fe68986c7563b46722090f3",
+      "assignee_handle": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+      "assignee_pane_key": "0982f45a-6fc8-40ff-80ec-5570e27970e0:8da20e34-11eb-40a5-ac35-f7a1ff89f895",
+      "capability_hash": "67b3f432df3d852d6e97a833262811000675df1fa9a92777a2254b03138aa92f",
+      "process_incarnation": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259@@22beb00e:019d60ca-94b2-4233-917d-63e6d994c69a",
+      "capability_revoked_at": "2026-08-11 16:33:02",
+      "status": "completed",
+      "failure_count": 0,
+      "last_failure": null,
+      "dispatched_at": "2026-08-11 16:12:58",
+      "completed_at": "2026-08-11 16:33:02",
+      "created_at": "2026-08-11 16:12:58",
+      "last_heartbeat_at": null
+    },
+    "worker": {
+      "dispatch_id": "ctx_adfee0055aef",
+      "runtime_epoch": "206af9ce-324c-4aa8-9be4-ca043322ac78",
+      "state": "succeeded",
+      "stage": "settled",
+      "worktree_id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259",
+      "agent_terminal_handle": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+      "setup_state": "running",
+      "effects": [
+        {
+          "kind": "worktree",
+          "action": "created_top_level",
+          "id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259"
+        },
+        {
+          "kind": "terminal",
+          "role": "agent",
+          "action": "reused_agent_terminal",
+          "id": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+          "tabId": "0982f45a-6fc8-40ff-80ec-5570e27970e0",
+          "leafId": "8da20e34-11eb-40a5-ac35-f7a1ff89f895"
+        },
+        {
+          "kind": "terminal",
+          "role": "setup",
+          "action": "created",
+          "id": "term_2cfb6918-8f44-4632-8b57-4eaa41a7c7b9",
+          "tabId": "9132b67a-d76f-4d77-9d03-9f02794a1249",
+          "leafId": "20d6613f-d46b-4b3c-bffd-1c3d20c02c62"
+        },
+        {
+          "kind": "setup",
+          "action": "run",
+          "requested": "run",
+          "effective": "run",
+          "source": "explicit_request",
+          "hookFound": true,
+          "startupPolicy": "start-immediately",
+          "state": "running",
+          "terminalId": "term_2cfb6918-8f44-4632-8b57-4eaa41a7c7b9"
+        },
+        {
+          "kind": "dispatch_input",
+          "role": "agent",
+          "id": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+          "state": "accepted"
+        }
+      ],
+      "residual_resources": "[{\"kind\":\"worktree\",\"action\":\"created_top_level\",\"id\":\"1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259\"},{\"kind\":\"terminal\",\"role\":\"agent\",\"action\":\"reused_agent_terminal\",\"id\":\"term_7e9c479f-36af-45eb-a0de-9c3ab0917d80\",\"tabId\":\"0982f45a-6fc8-40ff-80ec-5570e27970e0\",\"leafId\":\"8da20e34-11eb-40a5-ac35-f7a1ff89f895\"},{\"kind\":\"terminal\",\"role\":\"setup\",\"action\":\"created\",\"id\":\"term_2cfb6918-8f44-4632-8b57-4eaa41a7c7b9\",\"tabId\":\"9132b67a-d76f-4d77-9d03-9f02794a1249\",\"leafId\":\"20d6613f-d46b-4b3c-bffd-1c3d20c02c62\"}]",
+      "start_options": "{\"worktree\":\"new-top-level\",\"resolvedWorktreeId\":null,\"name\":\"issue-259\",\"repo\":\"1770a430-983a-4e86-9277-9f1e5c376b83\",\"baseBranch\":null,\"terminal\":null,\"agent\":\"pi\",\"launch\":{\"requested\":{\"agent\":\"pi\",\"model\":null,\"effort\":null},\"effective\":{\"agent\":\"pi\",\"model\":null,\"effort\":null}},\"timeoutMs\":60000,\"setup\":\"run\",\"setupSource\":\"explicit_request\"}",
+      "last_error": null,
+      "created_at": "2026-08-11 16:12:58",
+      "updated_at": "2026-08-11 16:33:02",
+      "residualResources": [
+        {
+          "kind": "worktree",
+          "action": "created_top_level",
+          "id": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259"
+        },
+        {
+          "kind": "terminal",
+          "role": "agent",
+          "action": "reused_agent_terminal",
+          "id": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+          "tabId": "0982f45a-6fc8-40ff-80ec-5570e27970e0",
+          "leafId": "8da20e34-11eb-40a5-ac35-f7a1ff89f895"
+        },
+        {
+          "kind": "terminal",
+          "role": "setup",
+          "action": "created",
+          "id": "term_2cfb6918-8f44-4632-8b57-4eaa41a7c7b9",
+          "tabId": "9132b67a-d76f-4d77-9d03-9f02794a1249",
+          "leafId": "20d6613f-d46b-4b3c-bffd-1c3d20c02c62"
+        }
+      ],
+      "startOptions": {
+        "worktree": "new-top-level",
+        "resolvedWorktreeId": null,
+        "name": "issue-259",
+        "repo": "1770a430-983a-4e86-9277-9f1e5c376b83",
+        "baseBranch": null,
+        "terminal": null,
+        "agent": "pi",
+        "launch": {
+          "requested": {
+            "agent": "pi",
+            "model": null,
+            "effort": null
+          },
+          "effective": {
+            "agent": "pi",
+            "model": null,
+            "effort": null
+          }
+        },
+        "timeoutMs": 60000,
+        "setup": "run",
+        "setupSource": "explicit_request"
+      }
+    },
+    "terminal": null,
+    "observation": {
+      "status": "missing",
+      "exactWorker": false
+    },
+    "terminalResource": {
+      "id": "wtr_4a041e537851",
+      "ownershipState": "user_owned",
+      "releaseState": "retained",
+      "retainedReason": "user_takeover",
+      "terminalHandle": "term_7e9c479f-36af-45eb-a0de-9c3ab0917d80",
+      "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/issue-259",
+      "originDispatchId": "ctx_adfee0055aef",
+      "ownerDispatchId": "ctx_adfee0055aef",
+      "releaseRequestedAt": null,
+      "releaseCompletedAt": null,
+      "releaseError": null,
+      "archive": {
+        "source": null,
+        "status": null
+      }
+    }
+  },
+  "_meta": {
+    "runtimeId": "5844bcec-6f63-446c-ad2c-afc814f39192"
+  }
+}
