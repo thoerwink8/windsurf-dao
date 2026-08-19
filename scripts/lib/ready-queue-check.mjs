@@ -14,15 +14,16 @@ import { issueNumberFromWorktree } from './card-identity.mjs';
 
 const READY_LABEL = '已消歧';
 
-/** 本检查自己的署名正则，不复用 dao-check ⑭ / dao-cmd。 */
-const CLOSES_RE = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+/** 本检查自己的署名正则，不复用 dao-check ⑭ / dao-cmd。
+ * #657：新规范是「署名 issue #N」（非 GitHub 关单词，不触发自动关单），兼容旧关单词。 */
+const CLOSES_RE = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
 
 export function linkedIssueNumbers(text) {
   const found = [];
   const re = new RegExp(CLOSES_RE.source, CLOSES_RE.flags);
   let m;
   while ((m = re.exec(String(text || '')))) {
-    const n = Number(m[1]);
+    const n = Number(m[1] ?? m[2]);
     if (Number.isInteger(n) && n > 0 && !found.includes(n)) found.push(n);
   }
   return found;

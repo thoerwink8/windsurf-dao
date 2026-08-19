@@ -784,7 +784,7 @@ function liveCompletionEvidence(w, source, args) {
   if (!Number.isFinite(headMs)) return { error: `gh pr view #${prNo} 没有 commits[].committedDate（没查成）` };
   const title = String(meta.title || '');
   const body = String(meta.body || '');
-  const issueNo = (title.match(/#(\d+)/) || /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i.exec(body) || [])[1]
+  const issueNo = (title.match(/#(\d+)/) || /(?:署名\s+issue\s*#?\s*|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/i.exec(body) || [])[1]
     || String(prNo);
   const comments = spawnSync('gh', ['api', `repos/{owner}/{repo}/issues/${issueNo}/comments`, '--paginate'], { encoding: 'utf8', timeout: 15000 });
   if (comments.error || comments.status !== 0) {

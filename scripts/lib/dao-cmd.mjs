@@ -3061,20 +3061,20 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   return { ok: true, issue: n, names, created: ensured.created, labels: names };
 }
 
-/** PR 正文/标题里的署名单号：只认 GitHub 的关闭关键词（Closes/Fixes/Resolves…），
+/** PR 正文/标题里的署名单号：认新规范「署名 issue #N」（非 GitHub 关单词，不触发自动关单）与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。
  * 正文里随手引用的 #单号 不是署名，不许拿去抄 label（会串到别的单的 model/type）。 */
 export function linkedIssueNumbers(text) {
   const found = [];
-  const re = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+  const re = /(?:署名\s+issue\s*#?\s*|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
   let m;
   while ((m = re.exec(String(text || '')))) {
     const t = Number(m[1]);
-    if (!found.includes(t)) found.push(t);
+    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
   }
   return found;
 }
 
-/** 合并侧（帅合并时跑）：PR 正文 Closes 到的 issue 上取 model/* type/* reviewer/* label，抄到 PR。
+/** 合并侧（帅合并时跑）：PR 正文署名的 issue 上取 model/* type/* reviewer/* label，抄到 PR。
  * PR 上没署名 issue / 署名 issue 缺 model/* 或 type/* / gh 没查成——三种都要说清楚，不许静默。
  * reviewer/* 有则抄、没有不挡；但只有 reviewer/*、缺校准标签，不许 pr edit。 */
 export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
@@ -3088,7 +3088,7 @@ export function syncPrLabelsFromIssue({ pr, runGh } = {}) {
   catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
   const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
   if (!refs.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 正文/标题里没有 Closes/Fixes 署名单号——label 无从同步，需人工补` };
+    return { ok: false, unscanned: false, error: `PR #${n} 正文/标题里没有「署名 issue #N」/关单词署名单号——label 无从同步，需人工补` };
   }
   const from = [];
   for (const issueNum of refs) {

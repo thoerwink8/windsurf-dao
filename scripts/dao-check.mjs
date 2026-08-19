@@ -50,6 +50,8 @@
 // ⑳ 仓外路径闸（#642）：独立扫描 ~/ %USERPROFILE% %APPDATA% %LOCALAPPDATA% $HOME
 //    os.homedir() 等，不读 INDEX 自己的解析器；发现集合必须等于 INDEX∪ignore；
 //    扫到 0 条 = 没查成；夹具红/绿/空都要有判别力
+// ㉑ 关单不改走 GitHub 自动关键词（#657）：扫 dispatch 任务书模板，再出现 Closes #/Fixes # 就红；
+//    红/绿样本各一验判别力；live 扫 host/skills/dispatch/templates/*.md，0 个模板 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -757,14 +759,14 @@ function checkCardCommentSamples() {
 
 const OPEN_ISSUE_MAX_DEFAULT = 30;
 
-/** PR/标题/正文里的署名 issue 号（只认 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
+/** PR/标题/正文里的署名 issue 号（新规范「署名 issue #N」+ 旧 GitHub 关闭关键词；本检查自己的正则，不调用 dao-cmd）。 */
 function closesNumbers(text) {
   const found = [];
-  const re = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+  const re = /署名\s+issue\s*#?\s*(\d+)|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
   let m;
   while ((m = re.exec(String(text || '')))) {
-    const t = Number(m[1]);
-    if (!found.includes(t)) found.push(t);
+    const t = Number(m[1] ?? m[2]);
+    if (Number.isInteger(t) && !found.includes(t)) found.push(t);
   }
   return found;
 }
@@ -1069,6 +1071,72 @@ function checkLedgerGapLive() {
   green(r.line);
 }
 
+// ── ㉑ 关单不改走 GitHub 自动关键词（#657）──────────────────────────
+// 删掉 Closes/Fixes 自动关单：关单只走 scripts/close-issues.mjs（MERGED 且 check 绿才关）。
+// 所以凡是会进 PR 正文的 dispatch 任务书模板，再出现 GitHub 关单关键词（Closes # / Fixes #…）就红。
+// 自发现扫 host/skills/dispatch/templates/*.md；样本红/绿各一验判别力。
+
+/** 扫正文里 GitHub 关单关键词带单号的形态（Closes #N / Fixes #N / Resolves #N…）。 */
+function scanCloseKeyword(txt) {
+  const re = /(?:(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)\s*(\d+)/gi;
+  const hits = [];
+  let m;
+  while ((m = re.exec(String(txt || '')))) hits.push(`#${m[1]}`);
+  return hits;
+}
+
+function checkNoAutoCloseSamples() {
+  const root = join(ROOT, 'tests', 'fixtures', 'close-auto');
+  if (!existsSync(root)) {
+    fail('关单关键词样本目录不在', '本次没查成：恢复 tests/fixtures/close-auto/{red,ok}', root);
+    return;
+  }
+  const kinds = { red: 0, ok: 0 };
+  const problems = [];
+  for (const kind of ['red', 'ok']) {
+    const dir = join(root, kind);
+    if (!existsSync(dir)) { problems.push(`缺 ${kind}/`); continue; }
+    const files = readdirSync(dir).filter(f => f.endsWith('.md'));
+    if (files.length === 0) { problems.push(`${kind}: 0 个 md——没查成`); continue; }
+    const anyHit = files.map(f => ({ f, hits: scanCloseKeyword(readFileSync(join(dir, f), 'utf8')) }));
+    if (kind === 'red' && !anyHit.some(h => h.hits.length)) problems.push('red/ 自称该红但扫不到 Closes #/Fixes #（样本没判别力）');
+    if (kind === 'ok' && anyHit.some(h => h.hits.length)) problems.push('ok/ 自称该绿但扫到关单关键词（样本没判别力）');
+    kinds[kind] += 1;
+  }
+  if (kinds.red === 0 || kinds.ok === 0) {
+    fail('关单关键词样本种类不够', '至少各要一份红（带 Closes #）和一份绿（只有「署名 issue #N」）', `red=${kinds.red} ok=${kinds.ok}`);
+    return;
+  }
+  if (problems.length) {
+    fail(`关单关键词样本对不上 ${problems.length} 处`, '红夹具必须红、绿夹具必须绿', problems[0]);
+    return;
+  }
+  green(`关单关键词样本红/绿各 ${kinds.red}/${kinds.ok}（有判别力）`);
+}
+
+function checkNoAutoCloseLive() {
+  const dir = join(ROOT, 'host', 'skills', 'dispatch', 'templates');
+  if (!existsSync(dir)) {
+    fail('dispatch 任务书模板目录不在', '本次没查成：恢复 host/skills/dispatch/templates/', dir);
+    return;
+  }
+  const files = readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+  if (files.length === 0) {
+    fail('dispatch 任务书模板 0 个', '模板清了 ⇒ 本次等于没查（不是扫完 0 违规）', dir);
+    return;
+  }
+  const hits = [];
+  for (const f of files) {
+    const h = scanCloseKeyword(readFileSync(join(dir, f), 'utf8'));
+    if (h.length) hits.push(`${f}: ${h.join(' ')}`);
+  }
+  if (hits.length) {
+    fail(`PR 正文任务书模板出现 GitHub 关单关键词 ${hits.length} 处`, '模板改写「署名 issue #N，关单交给 scripts/close-issues.mjs」，别再用 GitHub 自动关单关键词（关单只认脚本，见 #657）', hits.join('；'));
+    return;
+  }
+  green(`PR 正文任务书模板无 GitHub 关单关键词（${files.length} 个模板）`);
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -1093,6 +1161,8 @@ checkStrikesSamples();
 checkStrikesLive();
 checkMachinePathSamples();
 checkMachinePathLive();
+checkNoAutoCloseSamples();
+checkNoAutoCloseLive();
 
 function checkMachinePathSamples() {
   const root = join(ROOT, 'tests', 'fixtures', 'machine-paths');
