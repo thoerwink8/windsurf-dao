@@ -217,7 +217,7 @@ provider = "claude"
 cli_model = "opus"
 roles = ["审查", "写码", "判断"]
 status = "正式"
-why = "审官次选：GLM-5.2 优先（#648）、Claude(Opus) 次之；GPT 暂时不可用。启动命令见 [providers.claude]"
+why = "审官次选：GPT 顶位被 UI ban 剔掉后 Opus 顶位（#658 2026-08-19 恢复）；启动命令见 [providers.claude]"
 decided = "2026-08-14"
 
 [[models]]
@@ -256,7 +256,7 @@ cli_model = "glm-5.2-high"
 roles = ["写码", "判断", "审查"]
 status = "试用"
 trial_since = "2026-08-19"
-why = "用户 2026-08-19 拍板（#648）：GPT 暂时不可用时的备选回调之一。登记仍保留、不套 glm-5.3 禁令；2026-08-19 评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位"
+why = "用户 2026-08-19 拍板（#648）：GPT 暂时不可用时的备选回调之一。登记仍保留、不套 glm-5.3 禁令；2026-08-19 评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位；#658（2026-08-19）GPT 恢复，glm-5.2 仍只作备选登记、不顶审官位"
 decided = "2026-08-19"
 
 [[models]]
@@ -266,7 +266,7 @@ cli_model = "kimi-k3-high"
 roles = ["写码", "判断", "审查"]
 status = "试用"
 trial_since = "2026-08-16"
-why = "用户 2026-08-18：主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；仍一条记录，战绩不拆。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；glm-5.2 保留登记但不再顶审官位。og 侧仍是 2026-08-16 拍板保留的 4 个模型之一"
+why = "用户 2026-08-18：主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；仍一条记录，战绩不拆。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；glm-5.2 保留登记但不再顶审官位。#658（2026-08-19）：GPT 恢复，kimi-k3 不再顶审官位，保留登记。og 侧仍是 2026-08-16 拍板保留的 4 个模型之一"
 decided = "2026-08-19"
 pipes = [
   { provider = "cursor", cli_model = "kimi-k3-high" },
@@ -341,7 +341,7 @@ constraint = "受 gpt 的 UI ban 优先级约束"
 
 [[rules]]
 rule = "审官选型序"
-why = "帅位注意力最稀缺，审官优先用异厂商模型（写码同模型易放水）。#648（2026-08-19 拍板，评论 #6 追改）：GPT 暂时不可用，后续审官一律 kimi-k3（cursor/kimi-k3-high）顶位，GPT 恢复另拍；glm-5.2 保留登记但不再顶审官位；UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
+why = "帅位注意力最稀缺，审官优先用异厂商模型（写码同模型易放水）。#658（2026-08-19 拍板）：GPT 恢复使用，审官选型序回到 **GPT 顶位 → Opus（UI 时顶）→ 其余**；在途不换（已挂的 kimi-k3 / grok 审官继续跑完）；UI 类（含复审）GPT 禁令不动；kimi-k3 / glm-5.2 条目保留、不再顶审官位（#648 时代的 kimi-k3 顶位作废）。UI 类活 GPT 禁入时 Opus 顶位（拍板 2026-08-14，issue #443）"
 decided = "2026-08-19"
 constraint = "受 bans[gpt UI 类].precedence 约束"
 
