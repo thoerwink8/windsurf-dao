@@ -1869,8 +1869,8 @@ describe('dao', () => {
         'createName 必须传 pr: plan.pr');
     });
     const ws = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h' });
-    await t.test('worker-start 用 --terminal 不用 --agent', () => {
-      assert.ok(ws.includes('--terminal') && !ws.includes('--agent'), 'worker-start 用 --terminal 不用 --agent');
+    await t.test('续 Dispatch 的 worker-start 用 --terminal', () => {
+      assert.ok(ws.includes('--terminal') && !ws.includes('--agent'), '续 Dispatch 的 worker-start 用 --terminal');
     });
     const wsContinue = S.argsWorkerStart({ task: 't', terminal: 'h' });
     await t.test('#559 续 Dispatch：worker-start 可只给 --task + --terminal（不带 --worktree）', () => {
@@ -2263,10 +2263,33 @@ describe('dao', () => {
       assert.ok(claude.agentId == null && /reclaude/.test(claude.command),
         'reclaude 不能映射成 --agent claude  →  ' + JSON.stringify({ agentId: claude.agentId, command: claude.command }));
     });
-    const createArgs = S.argsTerminalCreate({ worktree: 'w', title: 't', command: kimi.command });
-    await t.test('认识的 agent 走 terminal create --command（create 没有 --agent）', () => {
-      assert.ok(createArgs.includes('--command') && createArgs[createArgs.indexOf('--command') + 1] === kimi.command && !createArgs.includes('--agent'),
-        '认识的 agent 走 terminal create --command  →  ' + createArgs.join(' '));
+    const kimiSpec = S.agentStartSpec(kimi);
+    const gptSpec = S.agentStartSpec(gpt);
+    const grokSpec = S.agentStartSpec(grokLaunch);
+    const claudeSpec = S.agentStartSpec(claude);
+    await t.test('cursor / codex 走 worker-start --agent + --model', () => {
+      assert.ok(kimiSpec.mode === 'agent' && kimiSpec.agentId === 'cursor' && kimiSpec.model === 'kimi-k3-high'
+        && gptSpec.mode === 'agent' && gptSpec.agentId === 'codex',
+        'cursor / codex 走 worker-start --agent + --model  →  ' + JSON.stringify({ kimiSpec, gptSpec }));
+    });
+    await t.test('grok / pi 走 --agent（模型在 shim；orca --model 不认这两家）', () => {
+      assert.ok(grokSpec.mode === 'agent' && grokSpec.agentId === 'grok' && grokSpec.model == null,
+        'grok / pi 走 --agent  →  ' + JSON.stringify(grokSpec));
+    });
+    await t.test('reclaude 仍走 terminal create --command', () => {
+      assert.ok(claudeSpec.mode === 'command' && /reclaude/.test(claude.command),
+        'reclaude 仍走 terminal create --command  →  ' + JSON.stringify(claudeSpec));
+    });
+    const agentStart = S.argsWorkerStart({ task: 't', worktree: 'w', agent: 'cursor', model: 'kimi-k3-high' });
+    await t.test('认识的 agent 的 worker-start 拼 --agent --model，不带 --terminal', () => {
+      assert.ok(agentStart.includes('--agent') && agentStart[agentStart.indexOf('--agent') + 1] === 'cursor'
+        && agentStart.includes('--model') && !agentStart.includes('--terminal'),
+        '认识的 agent 的 worker-start 拼 --agent --model  →  ' + agentStart.join(' '));
+    });
+    const fx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));
+    await t.test('worker-start/show 回包能抽出 agent 终端 handle', () => {
+      assert.ok(S.extractHandleFromWorkerStart(fx) === 'term_e525f71f-29a9-419c-9469-b8ef2a277239',
+        'worker-start/show 回包能抽出 agent 终端 handle  →  ' + S.extractHandleFromWorkerStart(fx));
     });
   });
 
@@ -2648,6 +2671,7 @@ describe('dao', () => {
     const DEAD_RUN = 'run_00000000';
     const LIVE_DISPATCH = 'ctx_live-0001';
     const DEAD_DISPATCH = 'ctx_00000000-0000-0000-0000-000000000000';
+    const DONE_DISPATCH = 'ctx_done-0001';
 
     // 假 orca：照抄真实返回形状——send 对死 handle 一样 ok:true / delivered_at:null。
     function fakeOrca({ inboxDrops = false, inboxBroken = false, sentMissingId = false, misroute = null } = {}) {
@@ -2671,7 +2695,10 @@ describe('dao', () => {
         if (key === 'orchestration worker-show') {
           const d = a[a.indexOf('--dispatch') + 1];
           if (d === LIVE_DISPATCH) {
-            return { ok: true, json: { ok: true, result: { dispatch: { id: d, assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, status: 'dispatched', assignee_handle: 'term_live-0001' }, worker: { state: 'ready' } } } };
+          }
+          if (d === DONE_DISPATCH) {
+            return { ok: true, json: { ok: true, result: { dispatch: { id: d, status: 'completed' }, worker: { state: 'succeeded' } } } };
           }
           return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
         }
@@ -2747,6 +2774,35 @@ describe('dao', () => {
     const okDispatchForm = S.classifyNotifyTarget('dispatch:ctx_x');
     await t.test('dispatch:<id> 形态被认', () => {
       assert.ok(okDispatchForm.kind === 'dispatch' && okDispatchForm.id === 'ctx_x', 'dispatch:<id> 形态被认  →  ' + JSON.stringify(okDispatchForm));
+    });
+
+    await t.test('ready/working/waiting 算活人', () => {
+      assert.ok(S.isLiveDispatchRecipient({ workerState: 'ready' })
+        && S.isLiveDispatchRecipient({ workerState: 'working' })
+        && S.isLiveDispatchRecipient({ workerState: 'waiting' }),
+        'ready/working/waiting 算活人');
+    });
+    await t.test('completed/succeeded/failed 不算活人', () => {
+      assert.ok(!S.isLiveDispatchRecipient({ workerState: 'succeeded', dispatchStatus: 'completed' })
+        && !S.isLiveDispatchRecipient({ workerState: 'failed' })
+        && !S.isLiveDispatchRecipient({ dispatchStatus: 'completed' }),
+        'completed/succeeded/failed 不算活人');
+    });
+    const doneProbe = S.probeRecipient({ kind: 'dispatch', id: DONE_DISPATCH }, fakeOrca());
+    await t.test('probeRecipient 已完工 dispatch → 非零，并写下一步', () => {
+      assert.ok(doneProbe.ok === false && /已完工/.test(doneProbe.error)
+        && /新 task/.test(doneProbe.error) && /新开工人/.test(doneProbe.error),
+        'probeRecipient 已完工 dispatch → 非零，并写下一步  →  ' + JSON.stringify(doneProbe));
+    });
+    const doneSend = S.deliverMessage({
+      to: `dispatch:${DONE_DISPATCH}`,
+      subject: '红项',
+      hop: '审官→士兵(dispatch)',
+      orca: fakeOrca(),
+    });
+    await t.test('notify 已完工 dispatch → 非零，禁止当送达', () => {
+      assert.ok(doneSend.ok === false && doneSend.stage === '收件人' && /已完工/.test(doneSend.error),
+        'notify 已完工 dispatch → 非零  →  ' + JSON.stringify(doneSend));
     });
 
     const wsFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));

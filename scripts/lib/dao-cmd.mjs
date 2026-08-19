@@ -536,11 +536,13 @@ export function argsTaskUpdate({ id, status, result, run, from } = {}) {
   return a;
 }
 
-export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
+export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
   if (worktree) a.push('--worktree', worktree);
   if (terminal) a.push('--terminal', terminal);
+  if (agent) a.push('--agent', agent);
+  if (model) a.push('--model', model);
   if (retryOf) a.push('--retry-of', retryOf);
   a.push('--json');
   return a;
@@ -748,6 +750,37 @@ export function orcaKnownAgentId({ provider, command } = {}) {
   return null;
 }
 
+export function launchCliModel(command) {
+  const s = String(command || '');
+  const long = s.match(/--model\s+(\S+)/);
+  if (long) return long[1];
+  const short = s.match(/(?:^|\s)-m\s+(\S+)/);
+  return short ? short[1] : null;
+}
+
+/** 认识的 agent 走 worker-start --agent（.cmd shim 的 --command 进程仍是 cmd，Orca 报 agent_unconfigured）。
+ * reclaude 不能 --agent claude，仍走 terminal create --command。
+ * --model 只传给 Cursor / Codex（orca 只认这几家）。 */
+export function agentStartSpec({ provider, command, agentId } = {}) {
+  const id = agentId || orcaKnownAgentId({ provider, command });
+  const model = launchCliModel(command);
+  if (id === 'cursor' || id === 'codex') {
+    return { mode: 'agent', agentId: id, model };
+  }
+  if (id === 'grok' || id === 'pi') {
+    return { mode: 'agent', agentId: id, model: null };
+  }
+  return { mode: 'command', agentId: id, model, command: command || null };
+}
+
+export function extractHandleFromWorkerStart(json) {
+  return json?.result?.worker?.agent_terminal_handle
+    || json?.result?.dispatch?.assignee_handle
+    || json?.result?.handle
+    || json?.result?.terminal?.handle
+    || extractHandleFromCreate(json);
+}
+
 /** 建卡默认空壳：title 为 null / 空 / "Terminal N"；已是 agent 的不碰。
  * 只拿来关，禁止 send 启动命令进去。 */
 export function isReusableDefaultTerminal(term) {
@@ -855,6 +888,7 @@ export function catalogUsedFlags() {
     argsTaskCreate({ spec: 's' }),
     argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsWorkerStart({ task: 't', worktree: 'w', agent: 'cursor', model: 'kimi-k3-high' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
     argsWorkerStop({ dispatch: 'd' }),
@@ -1915,7 +1949,9 @@ export function runDispatchBatch({ plan, effects } = {}) {
       terminal: term.handle,
       worktree: created.workerId,
       issue: plan.issue,
-      model: plan.model,
+      model: term.model || plan.model,
+      agent: term.agentId,
+      deferred: term.deferred === true,
     });
     if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
     if (!started || !started.ok) {
@@ -1927,7 +1963,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       name: w.name,
       spec: w.spec,
       inject: w.inject || w.spec,
-      handle: term.handle,
+      handle: started.handle || term.handle,
       taskId: task.taskId,
       dispatchId: started.dispatchId,
     });
@@ -3215,6 +3251,17 @@ function orcaErrText(error) {
   return orcaErrorText(error);
 }
 
+/** dispatch 收件人必须还活着。completed/succeeded/failed 不是收件人。 */
+export function isLiveDispatchRecipient({ workerState, dispatchStatus } = {}) {
+  const live = new Set(['ready', 'working', 'waiting']);
+  const dead = new Set(['completed', 'succeeded', 'failed', 'cancelled', 'canceled', 'released', 'stopped']);
+  const w = String(workerState || '').toLowerCase();
+  const d = String(dispatchStatus || '').toLowerCase();
+  if (dead.has(w) || dead.has(d)) return false;
+  if (live.has(w)) return true;
+  return false;
+}
+
 /** 投递前证收件人真的在。拿不到 ≠ 没有：分不开就标 unscanned，一样非零。 */
 export function probeRecipient(target, orca) {
   if (typeof orca !== 'function') throw new Error('probeRecipient 要 orca 执行器');
@@ -3242,9 +3289,26 @@ export function probeRecipient(target, orca) {
     // 活性判据 = worker-show 能查到该 Dispatch（dispatch_not_found = 收件人不在，链断当场炸）。
     const r = orca(argsWorkerShow({ dispatch: target.id }));
     if (r.ok && r.json?.result?.dispatch?.id === target.id) {
+      const workerState = r.json?.result?.worker?.state ?? null;
+      const dispatchStatus = r.json?.result?.dispatch?.status ?? null;
+      if (workerState == null && dispatchStatus == null) {
+        return {
+          ok: false, unscanned: true, kind: 'dispatch', id: target.id,
+          error: `收件人 Dispatch 查到了但没有 state/status（没查成，不许当活人）：${target.id}`,
+        };
+      }
+      if (!isLiveDispatchRecipient({ workerState, dispatchStatus })) {
+        return {
+          ok: false, kind: 'dispatch', id: target.id,
+          status: workerState,
+          dispatchStatus,
+          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往死 dispatch 发。同卡还有活终端 → 新 task 绑回该终端；人走了 → 新开工人。`,
+        };
+      }
       return {
         ok: true, kind: 'dispatch', id: target.id,
-        status: r.json?.result?.worker?.state ?? null,
+        status: workerState,
+        dispatchStatus,
         assigneeHandle: r.json?.result?.dispatch?.assignee_handle ?? null,
       };
     }
@@ -3482,7 +3546,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
-                  # #633：空壳先关，认识的 agent 走 terminal create --command，禁止 send 进 pwsh
+                  # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
@@ -3511,6 +3575,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
                   # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+                  # dispatch: 只发给 ready/working/waiting；已完工非零，并写清下一步（新 task 绑回活终端 / 人走了新开工人）
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
