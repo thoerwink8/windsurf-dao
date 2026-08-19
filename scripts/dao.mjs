@@ -1556,9 +1556,10 @@ function cmdWorkerDone(args) {
         reused = { ...reused, invoked: true, skipped: true, reuseFailed: true, fenceHeal: { ...reuseFence, ...planHeal, retired, retried, ensured } };
       }
     }
-    // 续 capability 失败不能吞掉返工投递：审官要的是结构化消息，帅会另开复核 Task。
     if (!reused.ok) {
-      reused = { ...reused, invoked: true, skipped: true, reuseFailed: true };
+      fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
+        ...plan, reviewerCreate: create, reviewerReuse: { ...reused, invoked: true, reuseFailed: true }, reuse,
+      });
     }
   }
 
@@ -2397,8 +2398,9 @@ function cmdSend(args) {
  * 闭环发信口（#548 红项 1）。裸 orca orchestration send 对不存在的 handle 也 exit 0 + ok:true，
  * 从帅的视角「链断了」和「链走完了」都表现为没有消息——这里把断链变成当场非零 + 升级。
  *
- * 管的是投递，不管结算：ok:true = 消息进了对方信箱，不等于对面读了、也不等于任务变 completed。
- * 结算（worker_done 那类）另有 Dispatch 身份要求，本口不提供，见 issue #551。
+ * 普通通知管投递：ok:true = 消息进了对方信箱。
+ * --type worker_done 管结算（#551）：带身份、省略 --to，核 Dispatch 变 completed；
+ * 落库无结算效力 / 缺身份 / 错 pane 一律非零并报「未结算」。
  */
 function cmdNotify(args) {
   const r = deliverMessage({
@@ -2407,11 +2409,21 @@ function cmdNotify(args) {
     body: args.body ?? '',
     type: args.type,
     outcome: args.outcome,
+    taskId: args.taskId,
+    dispatchId: args.dispatchId,
+    dispatchCapability: args.dispatchCapability,
+    from: args.from,
+    filesModified: args.filesModified,
+    reportPath: args.reportPath,
     hop: args.hop || '闭环通知',
     orca: (a) => orca(a),
   });
   if (!r.ok) {
-    console.error(`[dao notify] 链断，没送到（${r.stage}）：${r.error}`);
+    if (r.stage === '结算' || /未结算/.test(r.error || '')) {
+      console.error(`[dao notify] 未结算（${r.stage}）：${r.error}`);
+    } else {
+      console.error(`[dao notify] 链断，没送到（${r.stage}）：${r.error}`);
+    }
     console.error('[dao notify] 别往下走：确认送达前不许进入下一步，修不好就升级给帅。');
     emit(r, 1);
   }

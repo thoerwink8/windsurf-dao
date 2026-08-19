@@ -567,11 +567,22 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
   if (hits.length === 0) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
   }
-  const live = hits.filter(w => w.dispatchStatus !== 'completed' && w.workerState !== 'succeeded');
+  const live = hits.filter(w => isLiveDispatchRecipient({
+    workerState: w.workerState, dispatchStatus: w.dispatchStatus,
+  }));
   const ready = live.filter(w => w.workerState === 'ready' || w.workerState === 'working'
     || w.dispatchStatus === 'dispatched' || w.dispatchStatus === 'running');
-  const pick = ready[0] || live[0] || hits[0];
-  if (!pick?.dispatchId) {
+  const pick = ready[0] || live[0];
+  if (!pick) {
+    return {
+      ok: false,
+      unscanned: false,
+      error: `worktree=${sel} 只有已结算 dispatch，禁止当收件人（#552：下一跳必须新 Dispatch）`,
+      scanned: workers.length,
+      deadCount: hits.length,
+    };
+  }
+  if (!pick.dispatchId) {
     return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
   }
   return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, runId: pick.runId || null, scanned: workers.length };
@@ -929,6 +940,11 @@ export function catalogUsedFlags() {
     argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
+    argsOrchestrationSend({
+      subject: 's', body: 'b', type: 'worker_done', outcome: 'succeeded',
+      taskId: 't', dispatchId: 'd', dispatchCapability: 'c', from: 'h',
+      filesModified: 'a.js', reportPath: 'r.md',
+    }),
     argsOrchestrationReply({ id: 'm', body: 'b' }),
     argsGateCreate({ task: 't', question: 'q', options: '["a"]' }),
     argsGateResolve({ id: 'g', resolution: 'r' }),
@@ -2837,14 +2853,28 @@ export function completeWorkerDoneNotify({
   return { ok: true, notified: { ...notified, dispatchId: id } };
 }
 
-/** 返工/首审投递目标：新建或复用返回的 id，否则用已有审官树上的活 dispatch。 */
+/**
+ * 返工/首审投递目标：只认新建或复用返回的新 id。
+ * #552：复用失败禁止回退已有 dispatch（可能已结算，信箱 inspect-only）。
+ */
 export function pickWorkerDoneDispatchId({ create, reused, existingDispatchId } = {}) {
   const fromCreate = create && create.reviewerDispatchId ? String(create.reviewerDispatchId).trim() : '';
   if (fromCreate) return { ok: true, reviewerDispatchId: fromCreate, source: 'create' };
   const fromReuse = reused && reused.reviewerDispatchId ? String(reused.reviewerDispatchId).trim() : '';
   if (fromReuse) return { ok: true, reviewerDispatchId: fromReuse, source: 'reuse' };
+  if (reused && reused.reuseFailed) {
+    return {
+      ok: false, reviewerDispatchId: null, source: null,
+      error: '复用审官失败，禁止回退已有 dispatch（可能已结算、信箱 inspect-only）。应重试 worker-start --terminal 开新 Dispatch，或升级给帅。',
+    };
+  }
   const existing = existingDispatchId == null ? '' : String(existingDispatchId).trim();
-  if (existing) return { ok: true, reviewerDispatchId: existing, source: 'existing' };
+  if (existing) {
+    return {
+      ok: false, reviewerDispatchId: null, source: 'existing-blocked',
+      error: `禁止回退已有审官 dispatch ${existing}（#552：可能已结算）。第二轮复审必须新 Dispatch。`,
+    };
+  }
   return { ok: false, reviewerDispatchId: null, source: null, error: '没有审官 dispatch 可投' };
 }
 
@@ -3245,15 +3275,98 @@ export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergeP
 //   run: 信箱    → run-show 报 run_not_found
 // 所以：投递前先证收件人在，投递后核回执与落库，delivered_at 只如实报出、不当唯一判据。
 
-export function argsOrchestrationSend({ to, subject, body, type, outcome } = {}) {
+export function argsOrchestrationSend({
+  to, subject, body, type, outcome,
+  from, taskId, dispatchId, dispatchCapability,
+  filesModified, reportPath, phase, run,
+} = {}) {
   const a = ['orchestration', 'send'];
   if (to) a.push('--to', to);
+  if (from) a.push('--from', from);
+  if (run) a.push('--run', run);
   if (subject != null) a.push('--subject', subject);
   if (body != null) a.push('--body', body);
   if (type) a.push('--type', type);
   if (outcome) a.push('--outcome', outcome);
+  if (taskId) a.push('--task-id', taskId);
+  if (dispatchId) a.push('--dispatch-id', dispatchId);
+  if (dispatchCapability) a.push('--dispatch-capability', dispatchCapability);
+  if (filesModified) a.push('--files-modified', filesModified);
+  if (reportPath) a.push('--report-path', reportPath);
+  if (phase) a.push('--phase', phase);
   a.push('--json');
   return a;
+}
+
+/** #551：worker_done 是 exact-Dispatch 结算口，不是普通投递。 */
+export function planWorkerDoneSend({ type, to, outcome, taskId, dispatchId, from, dispatchCapability } = {}) {
+  const t = type == null ? '' : String(type).trim();
+  if (t !== 'worker_done') {
+    return { ok: true, kind: 'notify', settle: false };
+  }
+  const missing = [];
+  if (!String(taskId || '').trim()) missing.push('task-id');
+  if (!String(dispatchId || '').trim()) missing.push('dispatch-id');
+  const oc = String(outcome || '').trim();
+  if (oc !== 'succeeded' && oc !== 'failed') missing.push('outcome');
+  if (missing.length) {
+    return {
+      ok: false, kind: 'settle', settled: false, unscanned: false,
+      error: `未结算：worker_done 缺 ${missing.join('/')}（exact-Dispatch 信号必须带身份，不能省略）`,
+    };
+  }
+  const dest = to == null ? '' : String(to).trim();
+  if (dest) {
+    return {
+      ok: false, kind: 'settle', settled: false, unscanned: false,
+      error: '未结算：worker_done 不能带 --to（exact-Dispatch 信号须省略 --to，走活动 Dispatch 的 Run 信箱）',
+    };
+  }
+  return {
+    ok: true, kind: 'settle', settle: true, omitTo: true,
+    taskId: String(taskId).trim(),
+    dispatchId: String(dispatchId).trim(),
+    outcome: oc,
+    from: from ? String(from).trim() : null,
+    dispatchCapability: dispatchCapability ? String(dispatchCapability).trim() : null,
+  };
+}
+
+/**
+ * 读 worker-show 判断 Dispatch 是否真的 completed。
+ * 没查成（缺信封/缺 status）和「查到了但未 completed」必须分开。
+ */
+export function readDispatchSettlement(json) {
+  if (!json || typeof json !== 'object') {
+    return { ok: false, unscanned: true, settled: false, error: 'worker-show 返回空（没查成，不许当未结算）' };
+  }
+  const dispatch = json.result && json.result.dispatch;
+  if (!dispatch || typeof dispatch !== 'object') {
+    return { ok: false, unscanned: true, settled: false, error: 'worker-show 没有 result.dispatch（没查成，不许当未结算）' };
+  }
+  const status = dispatch.status == null ? null : String(dispatch.status);
+  const workerState = json.result?.worker?.state == null ? null : String(json.result.worker.state);
+  if (status == null) {
+    return {
+      ok: false, unscanned: true, settled: false,
+      error: 'worker-show 查到了但没有 dispatch.status（没查成，不许当未结算）',
+      dispatchId: dispatch.id || null, workerState,
+    };
+  }
+  const settled = String(status).toLowerCase() === 'completed';
+  return {
+    ok: true, unscanned: false, settled,
+    status, workerState,
+    dispatchId: dispatch.id || null,
+    taskId: dispatch.task_id || null,
+    assigneeHandle: dispatch.assignee_handle || null,
+    completedAt: dispatch.completed_at || null,
+  };
+}
+
+export function isWrongPaneWorkerDoneError(error) {
+  const text = orcaErrorText(error);
+  return /not the Dispatch pane|not_dispatch_pane|caller is not the Dispatch|assignee|exact-Dispatch|stable pane|pane identity/i.test(text);
 }
 
 export function argsOrchestrationInbox({ terminal, limit, full } = {}) {
@@ -3347,7 +3460,7 @@ export function probeRecipient(target, orca) {
           ok: false, kind: 'dispatch', id: target.id,
           status: workerState,
           dispatchStatus,
-          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往死 dispatch 发。同卡还有活终端 → 新 task 绑回该终端；人走了 → 新开工人。`,
+          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往已结算信箱发工作指令（复审会变 inspect-only）。同卡还有活终端 → 新 task 绑回该终端；人走了 → 新开工人。`,
         };
       }
       return {
@@ -3401,17 +3514,30 @@ export function findInboxMessage(inboxJson, messageId) {
  * 闭环一跳的投递：收件人在 → 发 → 有回执 → 落库可查。四关缺一即失败。
  * 失败一律返回 ok:false（调用方非零退出并升级），不许当「发成功了只是还没读」。
  *
- * 边界（别误读）：**四关验的是投递，不是结算**。`ok:true` 只说明这条消息确实进了
- * 收件人的信箱，不代表对面读了、更不代表事情办完了——编排里那条任务不会因为
- * 发过一条消息就变 completed。要「发出即结算」的信号（worker_done 那类）另有一套
- * Dispatch 身份要求，notify 目前不提供，见 issue #551；在那之前不要给 notify 加
- * `--type worker_done` 来假装结算：面板会显示成结算了而实际没有，比不发更糟。
+ * 普通 notify 四关验的是投递，不是结算：ok:true 只说明消息进了收件人信箱。
+ * --type worker_done 是结算口（#551）：必须带 task-id/dispatch-id/outcome、省略 --to，
+ * 发出后核 worker-show Dispatch 为 completed。落库但未 completed、缺身份、错 pane
+ * 一律 ok:false 并报「未结算」。没查成（unscanned）和查到未 completed 分开。
  */
 export function deliverMessage({
   to = null, subject, body = '', type, outcome, hop = '闭环通知', orca, inboxLimit = 50,
+  taskId, dispatchId, dispatchCapability, from, filesModified, reportPath,
 } = {}) {
   if (typeof orca !== 'function') throw new Error('deliverMessage 要 orca 执行器');
   if (!subject) return { ok: false, hop, stage: '参数', error: `${hop}：缺 --subject，没主题的通知等于没通知` };
+
+  const settlePlan = planWorkerDoneSend({ type, to, outcome, taskId, dispatchId, from, dispatchCapability });
+  if (!settlePlan.ok) {
+    return { ok: false, hop, stage: '结算', settled: false, unscanned: !!settlePlan.unscanned, error: `${hop}：${settlePlan.error}` };
+  }
+  if (settlePlan.kind === 'settle') {
+    return settleDispatch({
+      hop, subject, body, outcome: settlePlan.outcome,
+      taskId: settlePlan.taskId, dispatchId: settlePlan.dispatchId,
+      from: settlePlan.from, dispatchCapability: settlePlan.dispatchCapability,
+      filesModified, reportPath, orca,
+    });
+  }
 
   const target = classifyNotifyTarget(to);
   if (target.kind === 'unsupported') return { ok: false, hop, stage: '收件人', error: `${hop}：${target.error}` };
@@ -3468,6 +3594,88 @@ export function deliverMessage({
   };
 }
 
+/** #551：发 worker_done 后必须核 Dispatch 变成 completed，落库无效力 = 未结算。 */
+export function settleDispatch({
+  hop = '闭环结算', subject, body = '', outcome, taskId, dispatchId,
+  from, dispatchCapability, filesModified, reportPath, orca,
+} = {}) {
+  if (typeof orca !== 'function') throw new Error('settleDispatch 要 orca 执行器');
+
+  const shown = orca(argsWorkerShow({ dispatch: dispatchId }));
+  if (!shown.ok) {
+    const text = orcaErrText(shown.error);
+    if (/dispatch_not_found|not_found/i.test(text)) {
+      return { ok: false, hop, stage: '结算', settled: false, error: `${hop}：未结算：Dispatch 不存在（${text}）` };
+    }
+    return {
+      ok: false, hop, stage: '结算', settled: false, unscanned: true,
+      error: `${hop}：未结算：Dispatch 状态没查成（没查成 ≠ 未 completed）：${text}`,
+    };
+  }
+  const before = readDispatchSettlement(shown.json);
+  if (!before.ok) {
+    return { ok: false, hop, stage: '结算', settled: false, unscanned: true, error: `${hop}：未结算：${before.error}` };
+  }
+  if (before.settled) {
+    return {
+      ok: false, hop, stage: '结算', settled: false,
+      error: `${hop}：未结算：Dispatch 已经 completed，不能再发 worker_done`,
+    };
+  }
+  const sender = from || before.assigneeHandle;
+  if (!sender) {
+    return {
+      ok: false, hop, stage: '结算', settled: false,
+      error: `${hop}：未结算：缺 --from，且 worker-show 没有 assignee_handle（错 pane 无法对齐）`,
+    };
+  }
+
+  const sent = orca(argsOrchestrationSend({
+    subject, body, type: 'worker_done', outcome,
+    taskId, dispatchId, dispatchCapability, from: sender,
+    filesModified, reportPath,
+  }));
+  if (!sent.ok) {
+    const text = orcaErrText(sent.error);
+    const pane = isWrongPaneWorkerDoneError(sent.error);
+    return {
+      ok: false, hop, stage: '结算', settled: false, wrongPane: pane,
+      error: `${hop}：未结算：${pane ? '错误 pane 发送（发送方不是 Dispatch 本人）' : 'orca send 失败'}：${text}`,
+    };
+  }
+  const msg = extractSentMessage(sent.json);
+
+  const afterShow = orca(argsWorkerShow({ dispatch: dispatchId }));
+  if (!afterShow.ok) {
+    const text = orcaErrText(afterShow.error);
+    return {
+      ok: false, hop, stage: '结算', settled: false, unscanned: true, messageId: msg?.id || null,
+      error: `${hop}：未结算：发出后 Dispatch 状态没查成（没查成 ≠ 未变 completed）：${text}`,
+    };
+  }
+  const after = readDispatchSettlement(afterShow.json);
+  if (!after.ok) {
+    return {
+      ok: false, hop, stage: '结算', settled: false, unscanned: true, messageId: msg?.id || null,
+      error: `${hop}：未结算：${after.error}`,
+    };
+  }
+  if (!after.settled) {
+    return {
+      ok: false, hop, stage: '结算', settled: false, messageId: msg?.id || null,
+      status: after.status, workerState: after.workerState,
+      error: `${hop}：未结算：消息已落库但 Dispatch 仍是 ${after.status || after.workerState || '非 completed'}（落库无结算效力）`,
+    };
+  }
+  return {
+    ok: true, hop, stage: '已结算', settled: true,
+    messageId: msg?.id || null,
+    dispatchId, taskId, outcome,
+    status: after.status, workerState: after.workerState,
+    from: sender,
+  };
+}
+
 // ── 逃生口留痕 ──────────────────────────────────────────────────────
 
 export function recordEscape({ argv, ts = new Date().toISOString(), cwd = process.cwd() } = {}, logPath = ESCAPE_LOG) {
@@ -3521,7 +3729,10 @@ export const FLAGS_BY_VERB = {
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([
-    '--to', '--subject', '--body', '--type', '--outcome', '--hop', '--json', '--help', '-h',
+    '--to', '--subject', '--body', '--type', '--outcome', '--hop',
+    '--task-id', '--dispatch-id', '--dispatch-capability', '--from',
+    '--files-modified', '--report-path',
+    '--json', '--help', '-h',
   ]),
   reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
   'inbox-collect': new Set(['--peek', '--json', '--help', '-h']),
@@ -3620,7 +3831,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
                   # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
-                  # dispatch: 只发给 ready/working/waiting；已完工非零，并写清下一步（新 task 绑回活终端 / 人走了新开工人）
+                  [--task-id <id> --dispatch-id <id> --from <handle> --dispatch-capability <token>]
+                  # 普通通知：dispatch: 只发给 ready/working/waiting；已完工非零，并写清下一步（新 task 绑回活终端 / 人走了新开工人）
+                  # --type worker_done：省略 --to，必须带 --task-id/--dispatch-id/--outcome；发出后核 Dispatch 变 completed（#551）
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
@@ -3640,8 +3853,10 @@ notify 是闭环三跳（士兵→审官 / 审官→士兵 / 审官→帅）唯�
 收件人形态：dispatch:<id>（官方结构化收件箱，士兵↔审官互发用；#559 ①）、run:…（审官→帅）、
 term_…（低层通道）、省略（自己那条 Run 信箱）。
 delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人也常留 null，当门就是天天假红）。
-notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱，不代表对面读了、
-更不代表编排里那条任务变 completed。别加 --type worker_done 假装结算（见 issue #551）。
+普通 notify 验的是**投递**不是**结算**：ok:true 只说明消息进了收件人信箱。
+--type worker_done 是结算口（#551）：必须带 --task-id/--dispatch-id/--outcome，省略 --to，
+发出后核 worker-show Dispatch 为 completed。缺身份、错 pane、落库但未 completed
+一律非零并报「未结算」。状态没查成标 unscanned，不许当成「查过仍是 dispatched」。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
 派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。

@@ -48,5 +48,11 @@
     "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
     "capturedAt": "2026-08-15",
     "note": "#633：worker-start --agent 之后从回包抽 agent 终端。worker-show 实采含 result.worker.agent_terminal_handle 与 result.dispatch.assignee_handle"
+  },
+  "readDispatchSettlement": {
+    "file": "worker-show-completed.json",
+    "command": "orca orchestration worker-show --dispatch ctx_adfee0055aef --json",
+    "capturedAt": "2026-08-20",
+    "note": "#551 正样本：status=completed、worker.state=succeeded、stage=settled。readDispatchSettlement 不是 extract*，本条只作存档指针。"
   }
 }
