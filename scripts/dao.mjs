@@ -59,10 +59,8 @@ import {
   extractHandleFromCreate,
   extractDispatchId,
   extractTaskId,
-  extractTerminalSend,
   extractTerminalText,
   findReusableDefaultTerminal,
-  looksLikeShellPrompt,
   planLaunchFallback,
   extractWorktreeId,
   extractWorktreePath,
@@ -275,50 +273,22 @@ function closeWorkerHandle(handle) {
   orca(argsTerminalClose({ terminal: handle, tab: false }));
 }
 
-/** #633：建卡后先把 launch 打进 Orca 默认空壳，没有空壳才 terminal create。 */
+/** #633：建卡默认空壳只拿来关。认识的 agent 走 terminal create --command，禁止 send 进 pwsh。 */
 function findDefaultTerminalForLaunch(worktreeId) {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     const listed = orca(argsTerminalList({ worktree: worktreeId }));
     if (listed.ok) {
       const found = findReusableDefaultTerminal(listed.json, { worktreeId });
       if (found.ok && found.handle) return found;
     }
-    sleepMs(200);
+    sleepMs(250);
   }
   return { handle: null };
 }
 
-function waitForShellPrompt(handle) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < 5000) {
-    const read = orca(argsTerminalRead({ terminal: handle, limit: 20 }));
-    if (read.ok && looksLikeShellPrompt(extractTerminalText(read.json))) {
-      return { ok: true };
-    }
-    sleepMs(200);
-  }
-  return { ok: false };
-}
-
 function launchAgentInWorktree({ worktreeId, title, command }) {
   const found = findDefaultTerminalForLaunch(worktreeId);
-  let promptReady = false;
-  let sendAccepted = false;
-  if (found.handle) {
-    promptReady = waitForShellPrompt(found.handle).ok;
-    if (promptReady) {
-      const sent = orca(argsTerminalSend({ terminal: found.handle, text: command, enter: true }));
-      sendAccepted = !!(sent.ok && extractTerminalSend(sent.json));
-    }
-  }
-  const plan = planLaunchFallback({
-    foundHandle: found.handle || null,
-    promptReady,
-    sendAccepted,
-  });
-  if (plan.action === 'reuse') {
-    return { ok: true, handle: found.handle, reused: true };
-  }
+  const plan = planLaunchFallback({ foundHandle: found.handle || null });
   if (plan.closeHandle) closeWorkerHandle(plan.closeHandle);
   const created = orca(argsTerminalCreate({
     worktree: worktreeId,
@@ -970,7 +940,7 @@ function cmdDispatchBatch(args) {
       return { ok: true, id, path: wtPath };
     },
     startTerminal({ worktree, title }) {
-      // #654/#648：batch 起终端也走 launchAgentInWorktree（复用默认空壳 / 注入空壳再 create），
+      // #654/#633：batch 起终端也走 launchAgentInWorktree（空壳先关再 create --command），
       // 与 start / dispatch / 审官起动同一条路径，不再直接 argsTerminalCreate。
       const term = launchAgentInWorktree({
         worktreeId: worktree,

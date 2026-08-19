@@ -177,6 +177,7 @@ Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代�
 `finishWorkerInject` / worker-start / reviewer-attach 一律立刻失败回滚、删审官树，不许留假审官卡。
 Cursor CLI 本版不支持命令行传 prompt（`--single-use` 是 worker pool 别名），继续走 `terminal create --command`
 起 TUI，任务靠 Orca 注入；注入收不到（只贴不发）就诚实失败，由派工/审官路径回滚。
+Windows shim 禁止 `for /f in ('dir')` / `findstr`（#633：会弹可见 cmd）。
 """
 why = "用户 2026-08-18：SuperGrok Heavy 送 Cursor Ultra。Composer/Kimi/Gemini 走 Cursor CLI；GPT 主路仍 Codex、支路可走本 provider。"
 decided = "2026-08-18"

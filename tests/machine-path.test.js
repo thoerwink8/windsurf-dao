@@ -84,4 +84,34 @@ describe('machine-path', () => {
       assert.ok(commands && !/EncodedCommand/i.test(commands) && !/powershell[\s\S]{0,80}EncodedCommand/i.test(hookCmd), 'Orca hook 的 command 禁止 EncodedCommand  →  ' + commands);
     });
   });
+
+  it('#633 .cmd shim 禁止 for /f in (\'dir\') 和 findstr', async (t) => {
+    const S = await LIB_LOAD;
+    const dirHit = S.cmdShimVisibleWindowProblems('host/machine/shims/cursor-agent.cmd',
+      "for /f \"delims=\" %%i in ('dir /b /ad /o-n \"%CURSOR_HOME%\\versions\"') do echo %%i");
+    await t.test('故意违规：for /f in (\'dir\') 红', () => {
+      assert.ok(dirHit.length > 0 && /for \/f/i.test(dirHit.join(' ')),
+        '故意违规：for /f in (\'dir\') 红  →  ' + dirHit.join(' | '));
+    });
+    const findHit = S.cmdShimVisibleWindowProblems('host/machine/shims/grok.cmd',
+      'echo %* | findstr /C:"--model" >nul');
+    await t.test('故意违规：findstr 红', () => {
+      assert.ok(findHit.length > 0 && /findstr/i.test(findHit.join(' ')),
+        '故意违规：findstr 红  →  ' + findHit.join(' | '));
+    });
+    const fileFor = S.cmdShimVisibleWindowProblems('host/machine/shims/cursor-agent.cmd',
+      'for /f "usebackq delims=" %%i in ("%TEMP%\\cursor-agent-ver.txt") do echo %%i');
+    await t.test('读临时文件的 for /f 不红', () => {
+      assert.ok(fileFor.length === 0, '读临时文件的 for /f 不红  →  ' + fileFor.join(' | '));
+    });
+    const cursorCmd = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'cursor-agent.cmd'), 'utf8');
+    const grokCmd = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd'), 'utf8');
+    await t.test('仓内 cursor-agent.cmd / grok.cmd 不闪可见 cmd', () => {
+      const hits = [
+        ...S.cmdShimVisibleWindowProblems('host/machine/shims/cursor-agent.cmd', cursorCmd),
+        ...S.cmdShimVisibleWindowProblems('host/machine/shims/grok.cmd', grokCmd),
+      ];
+      assert.ok(hits.length === 0, '仓内 cursor-agent.cmd / grok.cmd 不闪可见 cmd  →  ' + hits.join(' | '));
+    });
+  });
 });
