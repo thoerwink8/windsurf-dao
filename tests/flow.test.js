@@ -22,7 +22,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, dispatchNewTaskToTerminal, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 function runFlow(dir, extraArgs = []) {
@@ -519,7 +519,7 @@ describe('flow', () => {
     });
   });
 
-  it('⑳ #580 send 纯文本成功 + 注入后验开工/补回车', async (t) => {
+  it('⑳ #633 派活禁止 terminal send / 验开工不认 cursor 增量', async (t) => {
     const plain = fs.readFileSync(path.join(REPO, "tests/fixtures/orca-json/terminal-send-plaintext.txt"), "utf8");
     const parsed = parseOrcaStdout(plain);
     await t.test('Sent N bytes to term_ 判成功', () => {
@@ -546,11 +546,11 @@ describe('flow', () => {
       sleep() {},
     };
     const v = verifyStarted("term_x", "【返工指令", "工人", leftoverIo);
-    await t.test('残留后补回车再看 cursor 增量 → 开工', () => {
-      assert.ok(v.ok === true && /补回车/.test(v.judge), '残留后补回车再看 cursor 增量 → 开工  →  ' + JSON.stringify(v));
+    await t.test('#633 残留未提交 → 没开工，不补回车', () => {
+      assert.ok(v.ok === false && /不补回车/.test(v.error) && /Pasted Content/.test(v.error), '残留未提交没开工  →  ' + JSON.stringify(v));
     });
-    await t.test('补回车走 terminal send --enter --json', () => {
-      assert.ok(sent.some(c => c.includes("--enter") && c.includes("--json")), '补回车走 terminal send --enter --json  →  ' + JSON.stringify(sent));
+    await t.test('#633 验开工禁止 terminal send --enter', () => {
+      assert.ok(!sent.some(c => c.includes("--enter")), '不补回车  →  ' + JSON.stringify(sent));
     });
 
     const sendPlainIo = {
@@ -564,11 +564,11 @@ describe('flow', () => {
     };
     sent.length = 0;
     const inj = injectAndVerify("term_x", "【返工指令 · 测试】请修", "工人", sendPlainIo);
-    await t.test('Sent N bytes 不当失败，注入走进验开工', () => {
-      assert.ok(inj.ok === true, 'Sent N bytes 不当失败，注入走进验开工  →  ' + JSON.stringify(inj));
+    await t.test('#633 派活禁止 terminal send', () => {
+      assert.ok(inj.ok === false && /禁止 terminal send/.test(inj.error), '派活禁止 send  →  ' + JSON.stringify(inj));
     });
-    await t.test('send 带 --json（不再裸 send）', () => {
-      assert.ok(sent[0] && sent[0].includes("--json") && sent[0].includes("--text"), 'send 带 --json（不再裸 send）  →  ' + JSON.stringify(sent[0]));
+    await t.test('#633 injectAndVerify 不再往框里打字', () => {
+      assert.ok(sent.length === 0, '不 send  →  ' + JSON.stringify(sent));
     });
 
     await t.test('返工/复核是流转器活', () => {
@@ -603,14 +603,37 @@ describe('flow', () => {
       sleep() {},
     };
     const early = injectAndVerify("term_x", "【返工指令 · 时序】", "工人", earlyIo);
-    await t.test('send 前先读 cursor：早期输出算增量', () => {
-      assert.ok(early.ok === true && /cursor 增量/.test(early.judge), 'send 前先读 cursor：早期输出算增量  →  ' + JSON.stringify({ early, order }));
+    await t.test('#633 cursor 增量不算开工，injectAndVerify 直接拒', () => {
+      assert.ok(early.ok === false && /禁止 terminal send/.test(early.error), '不认 cursor 增量  →  ' + JSON.stringify({ early, order }));
     });
-    await t.test('时序是 read → send → read-cursor，不先 send', () => {
-      assert.ok(order[0] === "read-full" && order[1] === "send" && order[2] === "read-cursor:10", '时序是 read → send → read-cursor，不先 send  →  ' + JSON.stringify(order));
+    await t.test('#633 拒派活后不读屏不 send', () => {
+      assert.ok(order.length === 0, '不读不发  →  ' + JSON.stringify(order));
     });
-    await t.test('早期输出路径不必补回车', () => {
-      assert.ok(!order.includes("enter"), '早期输出路径不必补回车  →  ' + JSON.stringify(order));
+
+    const dispatched = [];
+    const bindIo = {
+      send(cmd) {
+        dispatched.push(cmd);
+        if (cmd.includes('task-create')) {
+          return { ok: true, json: { ok: true, result: { task: { id: 'task_rework_1' }, id: 'rpc-not-task' } } };
+        }
+        if (cmd.includes('worker-start')) {
+          return { ok: true, json: { ok: true, result: { dispatchId: 'ctx_rework_1' } } };
+        }
+        return { ok: false, error: '不该 terminal send' };
+      },
+      read() { return { ok: true, terminal: { status: 'running', nextCursor: 1, returnedLineCount: 0, tail: [] } }; },
+      sleep() {},
+    };
+    const bound = dispatchNewTaskToTerminal({ spec: '【返工指令 · 测试】', terminal: 'term_worker', io: bindIo });
+    await t.test('#633 返工走 task-create + worker-start，不 terminal send', () => {
+      assert.ok(bound.ok === true && bound.taskId === 'task_rework_1', '绑回成功  →  ' + JSON.stringify(bound));
+      assert.ok(dispatched.some(c => c.includes('task-create') && c.includes('--spec')), '先 task-create  →  ' + JSON.stringify(dispatched));
+      assert.ok(dispatched.some(c => c.includes('worker-start') && c.includes('term_worker') && c.includes('task_rework_1')), '再 worker-start 绑原终端  →  ' + JSON.stringify(dispatched));
+      assert.ok(!dispatched.some(c => c.includes('terminal') && c.includes('send')), '不 terminal send  →  ' + JSON.stringify(dispatched));
+    });
+    await t.test('#633 task-create 只认 result.task.id，不拿 RPC id', () => {
+      assert.ok(bound.taskId !== 'rpc-not-task', '不是 RPC id  →  ' + JSON.stringify(bound));
     });
   });
 

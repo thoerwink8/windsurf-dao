@@ -23,9 +23,8 @@
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
 // 执行注入（③）：
-//   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
-//     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
-//     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
+//   - #633：派活禁止 terminal send。返工/复核走 worker-start 新 task 绑回同一终端。
+//     TUI send 只留给看门狗空闲卡住的一条续命。
 //   - 注入目标确定性定位：返工注入按任务卡 worktree 内唯一候选终端（排除审官句柄
 //     与 shell），选不出唯一目标就报帅，不挑第一个。
 //   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查子卡（parent/child 字段，不读卡名）；全找不到
@@ -84,6 +83,7 @@ import {
 } from './lib/guard-revision.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
+import { argsTaskCreate, argsWorkerStart, extractTaskId, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -485,52 +485,38 @@ function defaultFlowIo() {
   return { read: readTerminalData, send: (cmd) => runOrca(cmd), sleep };
 }
 
-// 验开工：增量判据为主（cursor 前进 = 有新输出 = token 在动），
-// 回显判据为辅且不单独成立——回显命中但 cursor 没动 = 文本还在输入框未提交
-// （#455 输入框残留原场景），第一处置补一记裸回车（不是再注入一遍全文）再判。
-// 观察 3：只有 send 路径（echoHead 非空）才补回车——--prompt 路径活已交出去，
-// 空回车没必要（agent 启动慢时会吃到一记无谓 Enter）。
-// #580：补回车后再读必须带 cursor（read --cursor 有新输出），整屏 returnedLineCount
-// 几乎永远 > 0，不能当增量。
-export function verifyStarted(handle, echoHead, terminalName, io, baselineCursor) {
+// #633：验开工不认 cursor 增量 / 框里多了字；未提交粘贴 = 没开工；禁止补回车。
+export function verifyStarted(handle, echoHead, terminalName, io) {
   const ops = io || defaultFlowIo();
-  let prev = baselineCursor;
-  if (prev == null) {
-    const first = ops.read(handle, null);
-    if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
-    prev = first.terminal.nextCursor;
+  const first = ops.read(handle, null);
+  if (!first.ok) return { ok: false, error: `读终端失败：${first.error}` };
+  const tailText = (first.terminal.tail || []).map((l) => String(l)).join('\n');
+  const leftover = leftoverDispatchMatch(tailText) || pastedContentMatch(tailText);
+  if (leftover) {
+    return { ok: false, error: `未提交粘贴/残留派活（${leftover}）——没开工，不补回车（#633）`, leftover };
   }
-  ops.sleep(VERIFY_WAIT_MS);
-  const second = ops.read(handle, prev);
-  if (second.ok && Number(second.terminal.returnedLineCount || 0) > 0) return { ok: true, judge: 'cursor 增量（有新输出）' };
-  if (!echoHead) {
-    // --prompt 路径：无回显概念，不补回车，直接 fail-visible
-    return { ok: false, error: `注入后无新输出（${terminalName}）——疑似未开工` };
-  }
-  // send 路径：看回显，无论是否回显都补一记裸回车再验增量
-  const all = ops.read(handle, null);
-  const tailText = all.ok ? all.terminal.tail.map(l => String(l)).join('\n') : '';
-  const echoed = tailText.includes(echoHead);
-  const afterEnterBase = second.ok && second.terminal.nextCursor != null ? second.terminal.nextCursor : prev;
-  ops.send(['terminal', 'send', '--terminal', handle, '--enter', '--json']);
-  ops.sleep(VERIFY_WAIT_MS);
-  const third = ops.read(handle, afterEnterBase);
-  const grew3 = third.ok && Number(third.terminal.returnedLineCount || 0) > 0;
-  if (grew3) return { ok: true, judge: echoed ? '回显+补回车（输入框残留提交）' : '补回车后开工' };
-  return { ok: false, error: `注入后无新输出（${terminalName}）——疑似吞注入（${echoed ? '回显命中但回车未提交' : '无回显'}）` };
+  void echoHead;
+  return { ok: false, error: `验开工不认 cursor 增量（${terminalName}）——派活改 worker-start，开工只认 transcript（#633）` };
 }
 
-// 注入 + 验开工（两步走路径：send 任务文本）
-// #580 ④ / 审官红 1：send 前先记 cursor，再 send，再从该 cursor 验增量。
+// #633：派活禁止 terminal send。调用方应走 dispatchNewTaskToTerminal。
 export function injectAndVerify(handle, text, terminalName, io) {
+  void handle; void text; void terminalName; void io;
+  return { ok: false, error: '派活禁止 terminal send（#633：改 worker-start 新 task 绑回原终端）' };
+}
+
+/** #633：派活走新 task 绑回原终端，禁止往输入框 terminal send。 */
+export function dispatchNewTaskToTerminal({ spec, terminal, run, io } = {}) {
   const ops = io || defaultFlowIo();
-  const echoHead = String(text || '').replace(/\r?\n/g, ' ').slice(0, 24).trim();
-  const baseline = ops.read(handle, null);
-  if (!baseline.ok) return { ok: false, error: `读终端失败：${baseline.error}` };
-  const prev = baseline.terminal.nextCursor;
-  const sendR = ops.send(['terminal', 'send', '--terminal', handle, '--text', text, '--json']);
-  if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
-  return verifyStarted(handle, echoHead, terminalName, ops, prev);
+  if (!terminal) return { ok: false, error: 'dispatchNewTaskToTerminal 要 terminal' };
+  if (!spec) return { ok: false, error: 'dispatchNewTaskToTerminal 要 spec' };
+  const created = ops.send(argsTaskCreate({ spec, run }));
+  if (!created.ok) return { ok: false, error: `task-create 失败：${created.error}` };
+  const taskId = extractTaskId(created.json);
+  if (!taskId) return { ok: false, error: 'task-create 成功但没拿到 result.task.id（不能拿顶层 RPC id）' };
+  const started = ops.send(argsWorkerStart({ task: taskId, terminal }));
+  if (!started.ok) return { ok: false, error: `worker-start 失败：${started.error}` };
+  return { ok: true, taskId, judge: 'worker-start 新 task 绑回原终端' };
 }
 
 // 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
@@ -830,9 +816,9 @@ function executeAction(action, pr, source, rec, dryRun) {
     }
     if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
     if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
-    const v = injectAndVerify(target.terminal.handle, instruction, pr.title);
+    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）` };
+    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：新 task ${v.taskId} 已绑回工人终端（${v.judge}）` };
   }
 
   if (action.kind === 'inject-recheck') {
@@ -847,9 +833,9 @@ function executeAction(action, pr, source, rec, dryRun) {
       return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
     if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
-    const v = injectAndVerify(target.terminal.handle, instruction, '审官');
+    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）` };
+    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：新 task ${v.taskId} 已绑回审官终端（${v.judge}）` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };

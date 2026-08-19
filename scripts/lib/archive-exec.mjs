@@ -2,10 +2,11 @@
 // 改这段前必须知道：
 //   1. 不信通知自称的合并状态，只信 gh pr view --json state。
 //   2. 没查成 ≠ 未合并：两者都 escalate、都不删。
-//   3. 审官协议不改：识别靠 subject /^可归档[:：]/；树优先 payload.worktree，否则盘面 linkedPR。
+//   3. 审官协议不改：识别靠 subject /^可归档[:：]/；树优先 payload.worktree，
+//      否则盘面路径 / 卡名 PR-#N / issue 号 / linkedPR 任一即可，不只认 linkedPR。
 //   4. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
 
-import { worktreeIdOf, prNumberFromWorktree } from './card-identity.mjs';
+import { issueNumberFromWorktree, prNumberFromWorktree, worktreeIdOf } from './card-identity.mjs';
 import { resolveWorktreeSelector } from './dao-cmd.mjs';
 
 const ARCHIVE_SUBJECT = /^可归档[:：]\s*(?:PR[#\s-]*)?#?(\d+)/i;
@@ -106,6 +107,12 @@ export function planArchiveNotice({
   };
 }
 
+export function worktreeMatchesArchiveNumber(w, n) {
+  const num = Number(n);
+  if (!Number.isInteger(num) || num <= 0) return false;
+  return archiveNumbersOf(w).has(num);
+}
+
 export function resolveArchiveWorktree({ notice, worktrees } = {}) {
   const list = Array.isArray(worktrees) ? worktrees : [];
   const pr = notice?.pr;
@@ -114,11 +121,9 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
     if (!hit.ok) return { ok: false, error: hit.error };
     const root = walkToRoot(hit.worktree, list);
     if (root?.isMainWorktree) return { ok: false, error: '拒绝删主树' };
-    const rootPr = prNumberOf(root);
-    const hitPr = prNumberOf(hit.worktree);
-    // #652：父树若挂着别的/未合 PR，只拆本 PR 的树（命中卡），不整树删。
-    if (rootPr === pr) {
-      // 根卡就是本 PR 的树：子树里没有别的 PR 关联才整树删（未合并 PR 的树不因可归档被删）。
+    // #652：父树若挂着别的/未合 PR，只拆本号的树（命中卡），不整树删。
+    // #633：认路径 / 卡名 / issue / linkedPR，不只认 linkedPR。
+    if (worktreeMatchesArchiveNumber(root, pr)) {
       const foreign = subtreeForeignPrs(root, list);
       if (foreign.length > 0) {
         return { ok: false, error: `根卡子树还挂着别的 PR（${foreign.map(f => `#${f.pr} ${f.name}`).join('、')}）——未删整树（#652：未合并 PR 的树不因可归档被删）` };
@@ -127,8 +132,7 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
       if (!selector) return { ok: false, error: '任务卡没有 worktree id' };
       return { ok: true, selector, worktree: root };
     }
-    if (hitPr === pr) {
-      // 根卡不带本 PR（父树挂别的/未合 PR 或只是 ISSUE 卡）→ 只拆命中卡，不碰父树。
+    if (worktreeMatchesArchiveNumber(hit.worktree, pr)) {
       const foreign = subtreeForeignPrs(hit.worktree, list);
       if (foreign.length > 0) {
         return { ok: false, error: `命中卡子树还挂着别的 PR（${foreign.map(f => `#${f.pr} ${f.name}`).join('、')}）——未删（#652）` };
@@ -137,14 +141,16 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
       if (!selector) return { ok: false, error: '任务卡没有 worktree id' };
       return { ok: true, selector, worktree: hit.worktree };
     }
+    const rootPr = prNumberOf(root);
+    const hitPr = prNumberOf(hit.worktree);
     if (rootPr != null) {
       return { ok: false, error: `通知里的树根卡（${root.displayName || worktreeIdOf(root) || '?'}）关联 PR #${rootPr}（linkedPR/卡名/路径），不是 #${pr}——父树还挂着别的 PR，未删整树（#652）` };
     }
-    return { ok: false, error: `通知里的树（${hit.worktree?.displayName || '?'}）关联 PR #${hitPr ?? '?'}，不是 #${pr}（#652）` };
+    return { ok: false, error: `通知里的树（${hit.worktree?.displayName || '?'}）关联 PR #${hitPr ?? '?'}，不是 #${pr}（路径/卡名/issue/linkedPR 都不认）` };
   }
-  const hits = list.filter((w) => prNumberOf(w) === pr);
+  const hits = list.filter((w) => worktreeMatchesArchiveNumber(w, pr));
   if (hits.length === 0) {
-    return { ok: false, error: `盘面没有关联 PR #${pr} 的树` };
+    return { ok: false, error: `盘面没有对上 #${pr} 的树（路径/卡名/issue/linkedPR）` };
   }
   // 每棵命中树向上找根：根卡带同一个 PR → 整树是删除单元（子卡同 PR，随根删）；
   // 根卡带别的/不带 PR（父树挂别的未合 PR 的多工人）→ 命中卡自己是删除单元（只拆已合子卡）。
@@ -153,7 +159,7 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
   for (const hit of hits) {
     const root = walkToRoot(hit, list);
     if (root?.isMainWorktree) continue;
-    const unit = prNumberOf(root) === pr ? root : hit;
+    const unit = worktreeMatchesArchiveNumber(root, pr) ? root : hit;
     const uid = worktreeIdOf(unit);
     if (!uid || seenUnit.has(uid)) continue;
     seenUnit.add(uid);
@@ -380,6 +386,18 @@ function subtreeOf(w, worktrees) {
     }
   }
   return out;
+}
+
+function archiveNumbersOf(w) {
+  const nums = new Set();
+  const pr = prNumberFromWorktree(w);
+  if (pr) nums.add(pr);
+  const issue = issueNumberFromWorktree(w);
+  if (issue) nums.add(issue);
+  const path = String(w?.path || w?.git?.path || '').replace(/\\/g, '/');
+  const mi = path.match(/ISSUE-#?(\d+)/i);
+  if (mi) nums.add(Number(mi[1]));
+  return nums;
 }
 
 function walkToRoot(w, worktrees) {

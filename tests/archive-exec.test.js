@@ -203,6 +203,60 @@ describe('archive-exec', () => {
     });
   });
 
+  it('④d linkedPR=null 仍能靠卡名/路径/issue 收到根树', async (t) => {
+    const S = await LIB_LOAD;
+    const forest = [
+      wt({ id: 'master', name: 'master', main: true }),
+      wt({
+        id: 'w655',
+        name: 'PR-#655 工人·pi',
+        issue: 638,
+        path: 'C:/Users/Administrator/orca/workspaces/windsurf-dao/ISSUE-638-一台信箱台',
+        children: ['r655'],
+      }),
+      wt({
+        id: 'r655',
+        name: 'PR-#655 审官·kimi-k3',
+        parent: 'w655',
+        path: 'C:/Users/Administrator/orca/workspaces/windsurf-dao/PR-655-审官-kimi-k3',
+      }),
+    ];
+    const io = recorder();
+    io.state.prQuery = { ok: true, state: 'MERGED' };
+    io.state.listed = { ok: true, worktrees: forest };
+    const results = S.processArchiveNotices([
+      archiveMsg({ subject: '可归档：655' }),
+    ], io);
+    await t.test('可归档：655 不靠 linkedPR 也能对上工人树', () => {
+      assert.ok(results[0].removed === true && io.calls.rm.join(',') === 'w655',
+        '可归档：655 不靠 linkedPR 也能对上工人树  →  ' + JSON.stringify(results[0]));
+    });
+    const named = S.resolveArchiveWorktree({
+      notice: { pr: 655 },
+      worktrees: forest,
+    });
+    await t.test('resolveArchiveWorktree 卡名 PR-#655 命中根树', () => {
+      assert.ok(named.ok && named.selector === 'w655',
+        'resolveArchiveWorktree 卡名 PR-#655 命中根树  →  ' + JSON.stringify(named));
+    });
+    const byIssue = S.resolveArchiveWorktree({
+      notice: { pr: 638 },
+      worktrees: forest,
+    });
+    await t.test('issue 号也能对上（linkedIssue=638）', () => {
+      assert.ok(byIssue.ok && byIssue.selector === 'w655',
+        'issue 号也能对上  →  ' + JSON.stringify(byIssue));
+    });
+    const onlyReviewer = S.resolveArchiveWorktree({
+      notice: { pr: 655 },
+      worktrees: [forest[0], forest[2]],
+    });
+    await t.test('父卡不在盘面时，审官卡（linkedPR=null）自己当根', () => {
+      assert.ok(onlyReviewer.ok && onlyReviewer.selector === 'r655',
+        '父卡不在盘面时审官卡自己当根  →  ' + JSON.stringify(onlyReviewer));
+    });
+  });
+
   it('④b 通知不带树时按 linkedPR 找任务卡', async (t) => {
     const S = await LIB_LOAD;
     const forest = [
@@ -227,8 +281,8 @@ describe('archive-exec', () => {
     const badTree = S.processArchiveNotices([
       archiveMsg({ payload: { worktree: 'other' } }),
     ], mismatch);
-    await t.test('树 linkedPR 对不上该 PR → 不删', () => {
-      assert.ok(badTree[0].action === 'escalate' && mismatch.calls.rm.length === 0 && /linkedPR/.test(badTree[0].reason), '树 linkedPR 对不上该 PR → 不删  →  ' + badTree[0].reason);
+    await t.test('树对不上该 PR → 不删', () => {
+      assert.ok(badTree[0].action === 'escalate' && mismatch.calls.rm.length === 0 && /#99/.test(badTree[0].reason), '树对不上该 PR → 不删  →  ' + badTree[0].reason);
     });
 
     const mainIo = recorder();

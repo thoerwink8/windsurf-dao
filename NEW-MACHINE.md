@@ -159,7 +159,7 @@ doorbell 扩展：协调者（帅）的 pi 会话空闲（输入框空、没在�
 grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
 
 - npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
-- regrok shim：把 `host/machine/shims/grok.cmd` 和 `host/machine/shims/grok` 拷到 `~/.local/bin/`（覆盖 PATH 第一位）。打开模板改 `GROK_REAL`（真实二进制因机而异，例：`C:\nvm4w\nodejs\grok.cmd`）。行为与现机一致：内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染），默认追加 `-m grok-4.6`，显式传 `-m/--model` 时原样透传。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。注释保持纯 ASCII。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制。
+- regrok shim：把 `host/machine/shims/grok.cmd` 和 `host/machine/shims/grok` 拷到 `~/.local/bin/`（覆盖 PATH 第一位）。打开模板改 `GROK_REAL`（真实二进制因机而异，例：`C:\nvm4w\nodejs\grok.cmd`）。行为与现机一致：内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染），默认追加 `-m grok-4.6`，显式传 `-m/--model` 时原样透传。Windows `.cmd` 禁止 `findstr`（#633：用字符串替换判 `-m` / `--model`，不弹可见 cmd）。`--agent grok` 不带 launch 旗标时，shim 补 `--effort xhigh --always-approve`。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。注释保持纯 ASCII。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制。
 - 宿主对外发布闸仍会硬拦 git push，协调者授权词是往终端回一句「推」——与「工人自称被拦先令重试」的判据并列：假拦（网络抖动）=重试即过，真拦（宿主策略）=需授权词。这和 TUI 确认框不是一层。
 
 ## 7b. command-code 怎么配
@@ -178,7 +178,7 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 - 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
 - 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
-- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。把 `host/machine/shims/cursor-agent.cmd`、`cursor-agent`、`agent.cmd`、`agent` 拷到 `~/.local/bin/`（覆盖 PATH 第一位，包装 `%LOCALAPPDATA%\cursor-agent\` 下的真实二进制）。注释保持纯 ASCII。shim 在带 `--model` 时会补 `--trust`（#648：新 worktree 弹 Workspace Trust，`--force` 不管，Orca 报 agent_unconfigured）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
+- 代理 shim：Cursor 在国内 IP 下选择器只剩 Grok / Composer / Kimi / GLM（GPT / Claude / Gemini 被藏）。本机 Clash Party 在 `127.0.0.1:7890`。把 `host/machine/shims/cursor-agent.cmd`、`cursor-agent`、`agent.cmd`、`agent` 拷到 `~/.local/bin/`（覆盖 PATH 第一位，包装 `%LOCALAPPDATA%\cursor-agent\` 下的真实二进制）。注释保持纯 ASCII。Windows `.cmd` 禁止 `for /f in ('dir')` 和 `findstr`（各弹一个可见 cmd；#633：版本目录写临时文件再 `for /f` 读，`--model` 用字符串替换判）。shim 在带 `--model` 时会补 `--trust`（#648：新 worktree 弹 Workspace Trust，`--force` 不管，Orca 报 agent_unconfigured）。验证：`where cursor-agent` 第一位是 `~/.local/bin`；无代理时选择器只有 Grok/Composer/Kimi/GLM，有代理才看得到 GPT/Claude/Gemini。
 - 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force --trust`）。`--force` 是无人值守放行（等同 `--yolo`）；`--trust` 免弹 Workspace Trust（#648 返工补丁）。
 - 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
 

@@ -101,11 +101,13 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
     }
     command = command.split('{model}').join(String(cliModel));
   }
+  const materialized = materializeLaunch(command, root);
   return {
     provider: providerName,
-    command: materializeLaunch(command, root),
+    command: materialized,
     template: String(p.launch).trim(),
     pipe: chosen || null,
+    agentId: orcaKnownAgentId({ provider: providerName, command: materialized }),
   };
 }
 
@@ -534,11 +536,13 @@ export function argsTaskUpdate({ id, status, result, run, from } = {}) {
   return a;
 }
 
-export function argsWorkerStart({ task, worktree, terminal, retryOf } = {}) {
+export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
   if (worktree) a.push('--worktree', worktree);
   if (terminal) a.push('--terminal', terminal);
+  if (agent) a.push('--agent', agent);
+  if (model) a.push('--model', model);
   if (retryOf) a.push('--retry-of', retryOf);
   a.push('--json');
   return a;
@@ -733,7 +737,86 @@ export function looksLikeShellPrompt(text) {
     || /(?:^|\n)\$\s*$/.test(s);
 }
 
-/** 建卡默认空壳：title 为 null / 空 / "Terminal N"；已是 agent 的不碰。 */
+/** Orca `--agent` / worktree create --agent 认识的 id。
+ * terminal create 没有 --agent，有特殊 argv（模型、--force、reclaude）走 --command。
+ * reclaude 不能映射成 claude：`--agent claude` 起官方 claude，凭据不对。 */
+export function orcaKnownAgentId({ provider, command } = {}) {
+  const bin = String(command || '').trim().split(/\s+/)[0].replace(/\\/g, '/').split('/').pop().toLowerCase();
+  const p = String(provider || '').toLowerCase();
+  if (bin === 'cursor-agent' || bin === 'agent' || p === 'cursor') return 'cursor';
+  if (bin === 'grok' || p === 'grok') return 'grok';
+  if (bin === 'pi' || p === 'deepseek' || p === 'opencode-go') return 'pi';
+  if (bin === 'codex' || p === 'gpt') return 'codex';
+  return null;
+}
+
+export function launchCliModel(command) {
+  const s = String(command || '');
+  const long = s.match(/--model\s+(\S+)/);
+  if (long) return long[1];
+  const short = s.match(/(?:^|\s)-m\s+(\S+)/);
+  return short ? short[1] : null;
+}
+
+/** 认识的 agent 走 worker-start --agent（.cmd shim 的 --command 进程仍是 cmd，Orca 报 agent_unconfigured）。
+ * reclaude 不能 --agent claude，仍走 terminal create --command。
+ * --model 只传给 Cursor / Codex（orca 只认这几家）。 */
+export function agentStartSpec({ provider, command, agentId } = {}) {
+  const id = agentId || orcaKnownAgentId({ provider, command });
+  const model = launchCliModel(command);
+  if (id === 'cursor' || id === 'codex') {
+    return { mode: 'agent', agentId: id, model };
+  }
+  if (id === 'grok' || id === 'pi') {
+    return { mode: 'agent', agentId: id, model: null };
+  }
+  return { mode: 'command', agentId: id, model, command: command || null };
+}
+
+export function extractHandleFromWorkerStart(json) {
+  return json?.result?.worker?.agent_terminal_handle
+    || json?.result?.dispatch?.assignee_handle
+    || json?.result?.handle
+    || json?.result?.terminal?.handle
+    || extractHandleFromCreate(json);
+}
+
+/** worker-done 起审官遇 consumer_fenced：扫到 0 次 和 没扫到样本 必须分开。 */
+export function inspectConsumerFence(error) {
+  if (error === undefined || error === null) {
+    return { unscanned: true, scanned: false, fenced: false, count: null, error: '没给错误文本（没扫到样本，不是扫到 0 次 fence）' };
+  }
+  const text = String(error);
+  const fenced = /consumer_fenced/i.test(text);
+  return { unscanned: false, scanned: true, fenced, count: fenced ? 1 : 0 };
+}
+
+/** retire → 再起 → ensure。起不成不许当成功。 */
+export function planFenceHeal({ error, runId, retired, retried, ensured } = {}) {
+  const inspect = inspectConsumerFence(error);
+  if (inspect.unscanned) {
+    return { ok: false, unscanned: true, action: 'unscanned', fences: null, error: inspect.error };
+  }
+  if (!inspect.fenced) {
+    return { ok: true, unscanned: false, action: 'none', fences: 0 };
+  }
+  if (!runId) {
+    return { ok: false, unscanned: false, action: 'retire', fences: 1, error: 'consumer_fenced 但没 Run id，没法 retire 信箱台' };
+  }
+  if (!retired || (retired.ok !== true && retired.alreadyGone !== true && retired.state !== 'run_not_found')) {
+    return { ok: false, unscanned: false, action: 'retire', fences: 1, error: retired?.error || 'retire 信箱台没做成' };
+  }
+  if (!retried || retried.ok !== true) {
+    return { ok: false, unscanned: false, action: 'retry', fences: 1, error: retried?.error || 'retire 后再起审官失败' };
+  }
+  if (!ensured || ensured.ok !== true) {
+    return { ok: false, unscanned: false, action: 'ensure', fences: 1, error: ensured?.error || '审官已起但 ensure 信箱台失败' };
+  }
+  return { ok: true, unscanned: false, action: 'healed', fences: 1 };
+}
+
+/** 建卡默认空壳：title 为 null / 空 / "Terminal N"；已是 agent 的不碰。
+ * 只拿来关，禁止 send 启动命令进去。 */
 export function isReusableDefaultTerminal(term) {
   if (!term || !term.handle) return false;
   if (term.orphaned) return false;
@@ -757,19 +840,16 @@ export function findReusableDefaultTerminal(listJson, { worktreeId } = {}) {
   }
   const hits = terms.filter(isReusableDefaultTerminal);
   if (hits.length === 0) {
-    return { ok: true, unscanned: false, handle: null, reason: '没有可复用的默认空壳终端' };
+    return { ok: true, unscanned: false, handle: null, reason: '没有默认空壳终端' };
   }
   return { ok: true, unscanned: false, handle: hits[0].handle, terminal: hits[0] };
 }
 
 /**
- * #633：找到空壳但提示符未就绪 / send 失败时，必须先关空壳再 create。
+ * #633：空壳一律先关再 create，禁止 send 进 pwsh 当复用。
  * leftoverIfCreateNow=true 表示「现在直接 create 会留下第二个终端」。
  */
-export function planLaunchFallback({ foundHandle, promptReady, sendAccepted } = {}) {
-  if (foundHandle && promptReady && sendAccepted) {
-    return { action: 'reuse', closeHandle: null, leftoverIfCreateNow: false };
-  }
+export function planLaunchFallback({ foundHandle } = {}) {
   if (foundHandle) {
     return { action: 'close-then-create', closeHandle: foundHandle, leftoverIfCreateNow: true };
   }
@@ -842,6 +922,7 @@ export function catalogUsedFlags() {
     argsTaskCreate({ spec: 's' }),
     argsTaskUpdate({ id: 't', status: 'failed' }),
     argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsWorkerStart({ task: 't', worktree: 'w', agent: 'cursor', model: 'kimi-k3-high' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
     argsWorkerStop({ dispatch: 'd' }),
@@ -1412,7 +1493,7 @@ export function cursorFollowupEvidence(text) {
   return m ? m[0] : null;
 }
 
-/** #651：Cursor 任一未提交指纹（粘贴块 / follow-up），供补 enter 后快速再读判定。 */
+/** #651：Cursor 任一未提交指纹（粘贴块 / follow-up）。#633：只当没开工证据，禁止补回车。 */
 export function cursorUnsubmittedEvidence(text) {
   return cursorUnsubmittedPaste(text) || cursorFollowupEvidence(text);
 }
@@ -1424,6 +1505,17 @@ export function pastedContentMatch(text) {
   const c = cursorUnsubmittedPaste(t);
   if (c) return c;
   return cursorFollowupEvidence(t);
+}
+
+/** #633：框里躺着的派活字（返工/复核指令）。看门狗只报不回车。 */
+export const LEFTOVER_DISPATCH_RE = /【返工指令|【复核指令/;
+export function leftoverDispatchMatch(text) {
+  const t = String(text ?? '');
+  const m = t.match(LEFTOVER_DISPATCH_RE);
+  if (m) return m[0];
+  const paste = pastedContentMatch(t);
+  if (paste && /返工|复核/.test(t)) return paste;
+  return null;
 }
 
 /** #565 时序 bug 的 TUI 启动占位态指纹（同款在 scripts/flow.mjs waitTerminalReady）：
@@ -1479,7 +1571,7 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * #661：退役「补一记回车」垫片（completePendingPaste 已删除）。
+ * #661/#633：退役「补一记回车」垫片（completePendingPaste 已删除）。
  * 往输入框粘贴 ≠ 开工：未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
  * 只证明任务书停在输入框，不证明 agent 真接过它。开工只认外部证据——
  *   - worker-read 官方 transcript（source≠terminal）= 真 session（调 verifyWorkerStarted）；
@@ -1532,7 +1624,7 @@ export function verifyStartedPolling({
     lastText = text;
     const leftover = pastedContentMatch(text);
     if (leftover) {
-      // #661：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
+      // #661/#633：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
       // → 任务书没进上下文，立刻红并交给调用方回滚，不补回车、不假装开工。
       return {
         ok: false,
@@ -1902,7 +1994,9 @@ export function runDispatchBatch({ plan, effects } = {}) {
       terminal: term.handle,
       worktree: created.workerId,
       issue: plan.issue,
-      model: plan.model,
+      model: term.model || plan.model,
+      agent: term.agentId,
+      deferred: term.deferred === true,
     });
     if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
     if (!started || !started.ok) {
@@ -1914,7 +2008,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       name: w.name,
       spec: w.spec,
       inject: w.inject || w.spec,
-      handle: term.handle,
+      handle: started.handle || term.handle,
       taskId: task.taskId,
       dispatchId: started.dispatchId,
     });
@@ -2924,11 +3018,11 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   return { ok: true, issue: n, names, created: ensured.created, labels: names };
 }
 
-/** PR 正文/标题里的署名单号：认新规范「署名 issue #N」（非 GitHub 关单词，不触发自动关单）与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。
- * 正文里随手引用的 #单号 不是署名，不许拿去抄 label（会串到别的单的 model/type）。 */
+/** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
+ * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。 */
 export function linkedIssueNumbers(text) {
   const found = [];
-  const re = /(?:署名\s+issue\s*#?\s*|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
+  const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
   let m;
   while ((m = re.exec(String(text || '')))) {
     const t = Number(m[1]);
@@ -3202,6 +3296,17 @@ function orcaErrText(error) {
   return orcaErrorText(error);
 }
 
+/** dispatch 收件人必须还活着。completed/succeeded/failed 不是收件人。 */
+export function isLiveDispatchRecipient({ workerState, dispatchStatus } = {}) {
+  const live = new Set(['ready', 'working', 'waiting']);
+  const dead = new Set(['completed', 'succeeded', 'failed', 'cancelled', 'canceled', 'released', 'stopped']);
+  const w = String(workerState || '').toLowerCase();
+  const d = String(dispatchStatus || '').toLowerCase();
+  if (dead.has(w) || dead.has(d)) return false;
+  if (live.has(w)) return true;
+  return false;
+}
+
 /** 投递前证收件人真的在。拿不到 ≠ 没有：分不开就标 unscanned，一样非零。 */
 export function probeRecipient(target, orca) {
   if (typeof orca !== 'function') throw new Error('probeRecipient 要 orca 执行器');
@@ -3229,9 +3334,26 @@ export function probeRecipient(target, orca) {
     // 活性判据 = worker-show 能查到该 Dispatch（dispatch_not_found = 收件人不在，链断当场炸）。
     const r = orca(argsWorkerShow({ dispatch: target.id }));
     if (r.ok && r.json?.result?.dispatch?.id === target.id) {
+      const workerState = r.json?.result?.worker?.state ?? null;
+      const dispatchStatus = r.json?.result?.dispatch?.status ?? null;
+      if (workerState == null && dispatchStatus == null) {
+        return {
+          ok: false, unscanned: true, kind: 'dispatch', id: target.id,
+          error: `收件人 Dispatch 查到了但没有 state/status（没查成，不许当活人）：${target.id}`,
+        };
+      }
+      if (!isLiveDispatchRecipient({ workerState, dispatchStatus })) {
+        return {
+          ok: false, kind: 'dispatch', id: target.id,
+          status: workerState,
+          dispatchStatus,
+          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往死 dispatch 发。同卡还有活终端 → 新 task 绑回该终端；人走了 → 新开工人。`,
+        };
+      }
       return {
         ok: true, kind: 'dispatch', id: target.id,
-        status: r.json?.result?.worker?.state ?? null,
+        status: workerState,
+        dispatchStatus,
         assigneeHandle: r.json?.result?.dispatch?.assignee_handle ?? null,
       };
     }
@@ -3469,17 +3591,17 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
 启动:
   start --provider <名> | --model <id> --worktree <sel> [--title <名>] [--dry-run]
-                  # #633：先复用建卡默认空壳（terminal send launch），没有才 terminal create
+                  # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
   reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
-                  # 建树后注入默认空壳（#633）；没有空壳才另起终端；--dry-run 只打印选型不建树
+                  # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 原子完工：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端（必须 --worktree）；终端已关才允许新建并写原因；两条路径都 notify（投失败即停）
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
-                  # 给已有工人卡补派审官（#575）：建树+注入默认空壳（#633）+验开工，一条命令，不碰 raw
+                  # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -3498,6 +3620,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
                   # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
+                  # dispatch: 只发给 ready/working/waiting；已完工非零，并写清下一步（新 task 绑回活终端 / 人走了新开工人）
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）
