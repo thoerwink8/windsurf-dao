@@ -230,7 +230,7 @@ function worktreeKey(w) {
   return (w && (w.worktreeId || w.id)) || null;
 }
 
-function occupyingAgents(w) {
+export function occupyingAgents(w) {
   return (Array.isArray(w && w.agents) ? w.agents : [])
     .filter(a => a && (a.state === 'working' || a.state === 'waiting'));
 }

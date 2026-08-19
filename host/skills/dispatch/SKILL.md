@@ -146,7 +146,7 @@ JSON 是 `[{ "name": "工人名", "spec": "任务书" }, ...]`。一次调用建
 
 累计数据触发定位调整信号时，以策略 PR 提案形式摆给用户拍板。一个任务只做一次，不为测评搞对跑或重复实验——校准数据全部来自真实任务流。
 
-合并即归档：PR 合并后当场 `node scripts/dao.mjs worktree-rm --worktree <任务卡>`（一条命令整树收口，含子卡；子卡占用中会拒删并报是哪棵，不会半删）。#637 起快乐路径由信箱台 relay 收「可归档」后先查 PR 真实 MERGED 再自动 `worktree-rm`；闸不过（未合并 / 没查成）转 escalation 升帅，不盲删。#593 起同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）。存量堆积用 `node scripts/dao.mjs run-gc`（默认只列，`--apply` 才关）；跨单收信用 `node scripts/dao.mjs inbox-collect`。分支已进 master，副本无保留价值——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443；递归删 #588）。已判定的孤儿树（无活跃执行者 + 关联单已关 / 无关联且静置超时）现在由 `scripts/watchdog.mjs` 自动 `worktree-rm --force` 兜底，帅不用再手清这类树；合并后立刻清树仍归帅日常动作，watchdog 不是唯一路径（#630）。
+合并即归档：PR 合并后当场 `node scripts/dao.mjs worktree-rm --worktree <任务卡>`（一条命令整树收口，含子卡；子卡占用中会拒删并报是哪棵，不会半删）。#665：扳机是 GitHub MERGED（扫描器每轮收树），「可归档」只加速不是门；idle/done 不算占用，只有 working/waiting 才拒删。归档失败写 GitHub 评论（marshal），不靠信箱台自己 ack 的 escalation。守卫跑 `~/.dao/guard-mirror`（启动 fetch + reset --hard origin/master），落后自停。#593 起同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）。存量堆积用 `node scripts/dao.mjs run-gc`（默认只列，`--apply` 才关）；跨单收信用 `node scripts/dao.mjs inbox-collect`。分支已进 master，副本无保留价值——归档是帅终审动作的一部分，不等用户发现滞留（拍板 2026-08-14，issue #443；递归删 #588）。已判定的孤儿树（无活跃执行者 + 关联单已关 / 无关联且静置超时）现在由 `scripts/watchdog.mjs` 自动 `worktree-rm --force` 兜底，帅不用再手清这类树；合并后立刻清树仍归帅日常动作，watchdog 不是唯一路径（#630）。
 
 收卷即清树：无合并事件的树（实验/盲考/探针类），产出收走的同一动作里 `node scripts/dao.mjs worktree-rm --worktree <卡>`，不留稍后清；有 PR 的照旧合并即归档（拍板 2026-08-15，issue #465）。
 
@@ -164,7 +164,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 - 审官任务书（`host/skills/dispatch/templates/reviewer-book.md`）内嵌**士兵 dispatch id**——`reviewer-create` 先查到士兵真 id 再渲染，结构上不可能出现 `dispatch:undefined`；审官红项 `notify --to dispatch:<士兵 id>` 发回士兵。
 - 闭环三跳（士兵→审官、审官→士兵、审官→帅）的发信口只有 `node scripts/dao.mjs notify` 一个：裸 `orca orchestration send` 对**不存在的收件人**也返回 exit 0 / `ok:true` / `delivered_at:null`，链断和链走完在帅眼里都是「没有消息」。`notify` 先证收件人在（terminal 读的 `terminal_handle_stale` / run-show 的 `run_not_found` / worker-show 的 `dispatch_not_found`）、再发、再核回执与落库，四关缺一即非零退出并打「链断」。`delivered_at` 只报出不当判据。**士兵↔审官互发一律 `--to dispatch:<id>`**（官方结构化收件箱，worker 的下一步 `orchestration check` 会收到）；审官→帅用 `run:<Run id>`。
 - 审官任务书还写：乒乓两轮仍红才上帅（上帅时带士兵 dispatch id，帅换人走 `worker-start --retry-of`）；绿 → 按 merge-policy 收口：auto 自己 `gh-as.mjs marshal -- pr merge <PR号> --squash --delete-branch`；**manual 先把 PR 转 draft（`gh pr ready <PR号> --undo`，机器可读的禁止合并闸，#549 忘了 manual 自合的根治）再通知帅「需人工合并」** → 通知帅「可归档」。
-- 归档由帅侧信箱台自动执行（#637：先查 PR MERGED 再 `worktree-rm`，闸不过 escalation）；审官不能 rm 自己所在的树，只负责把「可归档」通知到帅。
+- 归档由帅侧关卡执行（#665：MERGED 扫描收树；可归档只加速）。审官不能 rm 自己所在的树，只负责把「可归档」通知到帅。
 - 模板是原则 + 「以当时的任务书为准」，不复制会随 #530 过时的具体职责（#507 教训）。
 
 **#559 换上的官方原语（帅侧操作面）**：

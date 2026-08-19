@@ -26,6 +26,7 @@ function wt(partial) {
     linkedPR: partial.pr ? { number: partial.pr, state: partial.prState || 'open' } : null,
     linkedIssue: partial.issue || null,
     path: partial.path || `/tmp/${partial.id}`,
+    agents: partial.agents || [],
   };
 }
 
@@ -390,6 +391,127 @@ describe('archive-exec', () => {
     });
     await t.test('可归档 → 信箱台 worktree-rm 必带 --force（未跟踪文件不挡删，#652）', () => {
       assert.ok(/\'worktree-rm\',\r?\n\s+\'--worktree\',\r?\n\s+String\(selector\),\r?\n\s+\'--force\'/.test(inboxSrc), '可归档 → 信箱台 worktree-rm 必带 --force  →  ' + inboxSrc.match(/removeWorktreeLive\([\s\S]{0,220}/)?.[0] || '(未找到)');
+    });
+    await t.test('#665 relay 每轮跑 MERGED 扫描（可归档不是门）', () => {
+      assert.ok(/processMergedScan/.test(inboxSrc) && /runMergedScan/.test(inboxSrc) && /MERGED_SCAN_UNSCANNED/.test(inboxSrc), 'relay 每轮跑 MERGED 扫描');
+    });
+    await t.test('#665 归档失败走 marshal GitHub 评论', () => {
+      assert.ok(/commentGithubLive/.test(inboxSrc) && /ghAs\('marshal'/.test(inboxSrc), '归档失败走 marshal GitHub 评论');
+    });
+    await t.test('#665 落后自停 + 镜像 boot', () => {
+      assert.ok(/haltIfStale/.test(inboxSrc) && /bootGuardOrHalt/.test(inboxSrc), '落后自停 + 镜像 boot');
+    });
+  });
+
+  it('#665 MERGED 扫描：可归档不是门；idle/done 不算占用；扫到 0 ≠ 没查成', async (t) => {
+    const S = await LIB_LOAD;
+    const forest = [
+      wt({ id: 'master', name: 'master', main: true }),
+      wt({
+        id: 'p664',
+        name: 'PR-#664 工人·grok-4.6',
+        issue: 633,
+        path: 'C:/tmp/ISSUE-633-x',
+        agents: [{ state: 'done' }, { state: 'idle' }],
+      }),
+    ];
+    const io = recorder();
+    io.state.prQuery = { ok: true, state: 'MERGED' };
+    io.comments = [];
+    io.commentGithub = (c) => { io.comments.push(c); return { ok: true }; };
+    const store = new Set();
+    const scan = S.processMergedScan({
+      worktrees: forest,
+      queryPrState: io.queryPrState.bind(io),
+      removeWorktree: io.removeWorktree.bind(io),
+      escalate: io.escalate.bind(io),
+      commentGithub: io.commentGithub,
+      commentStore: store,
+    });
+    await t.test('盘面扫成了（不是没查成）', () => {
+      assert.ok(scan.ok === true && scan.scanned === true && scan.unscanned === false, '盘面扫成了  →  ' + JSON.stringify(scan));
+    });
+    await t.test('linkedPR=null + idle/done 仍收树', () => {
+      assert.ok(scan.results.some((r) => r.removed === true) && io.calls.rm.join(',') === 'p664', 'idle/done 仍收树  →  ' + JSON.stringify({ results: scan.results, rm: io.calls.rm }));
+    });
+
+    const empty = S.planMergedScan({ worktrees: [wt({ id: 'master', name: 'master', main: true })] });
+    await t.test('扫到 0 棵（只有主树）是 scanned，不是没查成', () => {
+      assert.ok(empty.ok && empty.scanned && empty.plans.length === 0 && empty.unscanned === false, '扫到 0  →  ' + JSON.stringify(empty));
+    });
+    const missing = S.planMergedScan({ worktrees: null });
+    await t.test('盘面不是数组 = 没查成', () => {
+      assert.ok(missing.ok === false && missing.unscanned === true && /没查成/.test(missing.error), '盘面没查成  →  ' + JSON.stringify(missing));
+    });
+
+    const notices = S.processArchiveNotices([], {
+      queryPrState: io.queryPrState.bind(io),
+      listWorktrees: () => ({ ok: true, worktrees: forest }),
+      removeWorktree: io.removeWorktree.bind(io),
+    });
+    await t.test('可归档信空了仍能靠扫描收（可归档不是门）', () => {
+      assert.ok(notices.length === 0 && scan.results[0].removed === true, '可归档不是门');
+    });
+  });
+
+  it('#665 working 拒删；gh 没查成 unscanned；失败写 GitHub 评论', async (t) => {
+    const S = await LIB_LOAD;
+    const busy = [
+      wt({ id: 'master', name: 'master', main: true }),
+      wt({ id: 'p1', name: 'PR-#12 工人', pr: 12, agents: [{ state: 'working' }] }),
+    ];
+    const io = recorder();
+    io.state.prQuery = { ok: true, state: 'MERGED' };
+    const refused = S.processMergedScan({
+      worktrees: busy,
+      queryPrState: io.queryPrState.bind(io),
+      removeWorktree: io.removeWorktree.bind(io),
+    });
+    await t.test('working 拒删', () => {
+      assert.ok(refused.results[0].result === 'refused' && io.calls.rm.length === 0 && /working/.test(refused.results[0].reason), 'working 拒删  →  ' + JSON.stringify(refused.results[0]));
+    });
+
+    const waiting = [
+      wt({ id: 'master', name: 'master', main: true }),
+      wt({ id: 'p1', name: 'PR-#12 工人', pr: 12, agents: [{ state: 'waiting' }] }),
+    ];
+    const waitIo = recorder();
+    waitIo.state.prQuery = { ok: true, state: 'MERGED' };
+    const waitScan = S.processMergedScan({
+      worktrees: waiting,
+      queryPrState: waitIo.queryPrState.bind(waitIo),
+      removeWorktree: waitIo.removeWorktree.bind(waitIo),
+    });
+    await t.test('waiting 也拒删', () => {
+      assert.ok(waitScan.results[0].result === 'refused' && waitIo.calls.rm.length === 0, 'waiting 也拒删  →  ' + JSON.stringify(waitScan.results[0]));
+    });
+
+    const badIo = recorder();
+    badIo.state.prQuery = { ok: false, unscanned: true, error: 'gh 读 PR #12 state 失败（1）——不是查过没事' };
+    const comments = [];
+    const store = new Set();
+    const unscanned = S.processMergedScan({
+      worktrees: [wt({ id: 'p1', name: 'PR-#12 工人', pr: 12 })],
+      queryPrState: badIo.queryPrState.bind(badIo),
+      removeWorktree: badIo.removeWorktree.bind(badIo),
+      commentGithub: (c) => { comments.push(c); return { ok: true }; },
+      commentStore: store,
+    });
+    await t.test('gh 没查成 ≠ 扫到 0，不删', () => {
+      assert.ok(unscanned.results[0].result === 'unscanned' && badIo.calls.rm.length === 0, '没查成不删  →  ' + JSON.stringify(unscanned.results[0]));
+    });
+    await t.test('没查成写了 GitHub 评论', () => {
+      assert.ok(comments.length === 1 && comments[0].pr === 12 && /归档失败/.test(comments[0].body), '写了 GitHub 评论  →  ' + JSON.stringify(comments[0]));
+    });
+    const again = S.processMergedScan({
+      worktrees: [wt({ id: 'p1', name: 'PR-#12 工人', pr: 12 })],
+      queryPrState: badIo.queryPrState.bind(badIo),
+      removeWorktree: badIo.removeWorktree.bind(badIo),
+      commentGithub: (c) => { comments.push(c); return { ok: true }; },
+      commentStore: store,
+    });
+    await t.test('同一失败不刷屏评论', () => {
+      assert.ok(comments.length === 1 && again.results[0].commented !== true, '去重  →  ' + comments.length);
     });
   });
 });

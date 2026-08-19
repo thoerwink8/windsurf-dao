@@ -3,7 +3,7 @@
 //
 // Orca「You have N orchestration messages」横幅强制接管用户输入框：消息到达即注入，
 // ack 速度治不了。已实证的解法是把 Run 的 coordinator 绑到后台哑终端，横幅只注给它；
-// 终端内中继 check --wait → 写日志 → 可归档二次验证闸（#637）→ 自动 ack，帅 tail 文件收信。
+// 终端内中继：写日志 → 可归档加速闸 + MERGED 扫描收树（#665）→ 帅 tail 文件收信。
 //
 // #638（2026-08-19 拍板）：**不再一 Run 一台**——顶栏只留 1 个信箱台页签。
 //   - ensure：只建/保活**一台**哑终端 + 中继；多余台幂等关掉；
@@ -12,7 +12,7 @@
 //   - relay：不再 run-use 抢 coordinator（那是 consumer_fenced 的根因），
 //     改为每轮读 `orchestration inbox`（跨 Run 信箱，不绑 coordinator，
 //     正是 inbox-collect 那种），过滤活跃 Run（在途单 keep 集 ∪ 活跃 coordinator 的 Run），
-//     去重后落盘非 heartbeat，跑 #637 可归档闸。
+//     去重后落盘非 heartbeat，跑可归档加速闸 + 每轮 MERGED 扫描（可归档不是门）。
 //   - 活性判据不认标题：台 = 全局租约 _flow/inbox.lease（新鲜 + PID 在 + handle 在盘面）。
 //   - #614 顺车：ensure 成功后顺手只读 run-gc 扫描，僵尸数超阈值在 stdout 上打一行；
 //     --apply 仍不自动。
@@ -47,9 +47,14 @@ import {
 } from './lib/run-lifecycle.mjs';
 import {
   processArchiveNotices,
+  processMergedScan,
   formatArchiveExecLog,
+  formatMergedScanLog,
   parsePrStateOutput,
 } from './lib/archive-exec.mjs';
+import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
+import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
+import { ghAs } from './lib/gh.mjs';
 export { parseOrcaStdout };
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -556,6 +561,13 @@ export function buildRelayCommand({ launchPath }) {
   return `cmd.exe /c ${quoteWin(launchPath)}`;
 }
 
+/** 启动串不指向当前（镜像）脚本 → 旧代码还在跑，ensure 必须重建。 */
+export function launchNeedsRefresh(launchText, expectedScriptPath) {
+  if (!launchText || !expectedScriptPath) return true;
+  const norm = (s) => String(s).replace(/\\/g, '/').toLowerCase();
+  return !norm(launchText).includes(norm(expectedScriptPath));
+}
+
 export function statusPayload({
   ok = true,
   handle,
@@ -834,7 +846,22 @@ async function cmdEnsure(args) {
     process.exit(1);
   }
   const stations = scanLeaseStations(dirname(logPath));
-  const plan = planSingleStation({ stations, terminals: listed.terminals });
+  let plan = planSingleStation({ stations, terminals: listed.terminals });
+  if (!plan.rebuild) {
+    let launchText = '';
+    try { launchText = readFileSync(launchFilePath(logPath), 'utf8'); } catch { launchText = ''; }
+    if (launchNeedsRefresh(launchText, SCRIPT_PATH)) {
+      const closeKeep = plan.keep ? [plan.keep, ...plan.close] : plan.close;
+      plan = {
+        ...plan,
+        rebuild: true,
+        action: 'rebuild',
+        reason: 'stale-guard',
+        keep: null,
+        close: closeKeep,
+      };
+    }
+  }
 
   const closedExtra = [];
   const closeFailures = [];
@@ -947,6 +974,17 @@ function escalateArchiveLive({ subject, body }) {
   ]);
 }
 
+function commentGithubLive({ pr, body }) {
+  if (!pr) return { ok: false, error: '没有 PR 号，无法写 GitHub 评论' };
+  const r = ghAs('marshal', ['pr', 'comment', String(pr), '--body', String(body || '')]);
+  if (!r.ok) {
+    return { ok: false, error: r.error || `gh pr comment exit ${r.status}` };
+  }
+  return { ok: true };
+}
+
+const archiveCommentStore = new Set();
+
 function runArchiveReady(messages, logPath) {
   try {
     const results = processArchiveNotices(messages, {
@@ -954,6 +992,8 @@ function runArchiveReady(messages, logPath) {
       listWorktrees,
       removeWorktree: removeWorktreeLive,
       escalate: escalateArchiveLive,
+      commentGithub: commentGithubLive,
+      commentStore: archiveCommentStore,
       now: new Date(),
     });
     if (results.length) {
@@ -967,6 +1007,40 @@ function runArchiveReady(messages, logPath) {
   }
 }
 
+function runMergedScan(logPath) {
+  const listed = listWorktrees();
+  if (!listed.ok || !Array.isArray(listed.worktrees)) {
+    const err = listed.error || '盘面 worktree 列表没查成';
+    console.error(`${READY_MARK} MERGED_SCAN_UNSCANNED: ${err}——不是扫到 0`);
+    try {
+      appendFileSync(logPath, `${formatMergedScanLog({ ok: false, error: err })}\n`, 'utf8');
+    } catch { /* 日志写失败不能把扫描失败装成扫到 0 */ }
+    return { ok: false, unscanned: true, error: err, results: [] };
+  }
+  try {
+    const scan = processMergedScan({
+      worktrees: listed.worktrees,
+      queryPrState: queryPrStateLive,
+      removeWorktree: removeWorktreeLive,
+      escalate: escalateArchiveLive,
+      commentGithub: commentGithubLive,
+      commentStore: archiveCommentStore,
+      now: new Date(),
+    });
+    appendFileSync(logPath, `${formatMergedScanLog(scan)}\n`, 'utf8');
+    const n = (scan.results || []).length;
+    if (n) {
+      console.log(`${READY_MARK} merged-scan=${n} ${scan.results.map((row) => row.result).join(',')}`);
+    } else {
+      console.log(`${READY_MARK} merged-scan=0 scanned=${scan.trees ?? 0}`);
+    }
+    return scan;
+  } catch (e) {
+    console.error(`${READY_MARK} MERGED_SCAN_UNSCANNED: ${String(e?.message || e).slice(0, 200)}`);
+    return { ok: false, unscanned: true, results: [] };
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // relay（跑在哑终端里，单台轮询全部在途 Run）
 // ══════════════════════════════════════════════════════════════════════
@@ -976,6 +1050,7 @@ async function cmdRelay(args) {
   mkdirSync(dirname(logPath), { recursive: true });
   const leaseTtlMs = args.timeoutMs + LEASE_GRACE_MS;
   const pollMs = Math.max(2000, args.timeoutMs);
+  const startupRev = recordStartupRevision({ cwd: ROOT });
 
   console.log(`${READY_MARK} run=all log=${logPath}`);
   persistLease(logPath, null, leaseTtlMs);
@@ -984,6 +1059,7 @@ async function cmdRelay(args) {
   let consecutiveBoardFail = 0;
   for (;;) {
     try {
+      haltIfStale(checkGuardRevision({ startup: startupRev, cwd: ROOT }), { tag: '[inbox] STALE_CODE' });
       persistLease(logPath, null, leaseTtlMs);
       const board = loadBoard();
       if (!board.ok) {
@@ -1021,6 +1097,7 @@ async function cmdRelay(args) {
         console.log(`${READY_MARK} idle runs=${active.size}`);
       }
       runArchiveReady(loggable, logPath);
+      runMergedScan(logPath);
       persistLease(logPath, null, leaseTtlMs);
     } catch (e) {
       console.error(`${READY_MARK} relay 异常: ${String(e?.message || e).slice(0, 200)}`);
@@ -1094,7 +1171,8 @@ function printUsage() {
           多余活台（旧模型 per-run 台）幂等关掉；证不出身份的租约不动（绝不误关）
           成功后只读 run-gc（#614）：僵尸数超阈值在 stdout 最前打一行，--apply 仍手动
   relay  跑在哑终端内：每轮读 orchestration inbox（跨 Run，不绑 coordinator，不 run-use），
-          只收活跃 Run（在途 keep ∪ 活 coordinator）的信，去重落盘非 heartbeat，跑可归档闸
+          只收活跃 Run（在途 keep ∪ 活 coordinator）的信，去重落盘非 heartbeat，
+          跑可归档加速闸 + 每轮 MERGED 扫描收树（可归档不是门）
           默认日志 _flow/inbox.log（单台一张日志）
   retire  关指定 Run 的信箱台并删租约（run-gc --apply 用；旧模型 per-run 台）
           关台身份看租约 TTL/handle（过期直接 alreadyGone；未过期证不出就失败）`);
@@ -1112,6 +1190,13 @@ async function main() {
   if (args.help) {
     printUsage();
     process.exit(0);
+  }
+  if (args.cmd !== 'retire') {
+    bootGuardOrHalt({
+      repoRoot: ROOT,
+      scriptFile: import.meta.url,
+      argv: process.argv.slice(2),
+    });
   }
   if (args.cmd === 'relay') return cmdRelay(args);
   if (args.cmd === 'retire') return cmdRetire(args);

@@ -61,8 +61,8 @@
 //   15. stale-completion —— #586：工人 agent=done 但 PR head 比最后一条完工/返工 comment 新
 //                        （或根本没有完工 comment）。#584/#585 两次实咬：推了新代码没报。
 //                        子卡（parentWorktreeId 非空）不判——审官产出是 review 不是完工 comment。
-//   16. stale-code    —— #595：启动时记下的 HEAD 落后 origin/master，或版本没查成。
-//                        落后即报，无裕度。查不成不许当最新。heartbeat.revision 同样报。
+//   16. stale-code    —— #595 / #665：启动时记下的 HEAD 落后 origin/master，或版本没查成。
+//                        落后即自停（非零退出），不许继续跑旧代码。heartbeat.revision 同样报。
 //   11. model-change  —— pi 静默换 provider（#569 ②）：扫 ~/.pi/agent/sessions/**/*.jsonl 的
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
@@ -131,7 +131,8 @@ import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import { loadRouting, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
 import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
-import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
+import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
+import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
 
@@ -1414,13 +1415,16 @@ function runWorktreePass(source, args, state) {
       }
     }
 
-    // 孤儿树（#492/#476）主判据：还有没有活跃执行者 = 树内有 terminal 且 agent 活着。
-    // 与「我认不认识它」无关，跨主帅通用。terminal-list 拉不到 = 不知道有没有终端，不判孤儿（fail-visible）。
+    // 孤儿树（#492/#476）主判据：还有没有活跃执行者。
+    // #665：挂了 PR 号的树只认 working/waiting；idle/done 终端不算占用（合了就收树）。
+    // 无 PR 号的树仍把「有终端」当占用，避免刚起的空壳被静置判据误删。
+    // terminal-list 拉不到：无 PR 号时不判孤儿（fail-visible）；有 PR 号时只看 agent。
+    const prNo = prNumberFromWorktree(w);
     const agents = agentsOf;
     const agentAlive = agents.some(a => a.state === 'working' || a.state === 'waiting');
     const hasTerminal = source.terminalsByPath.has(w.path) || source.terminalsByPath.has(id);
-    const activeExecutor = agentAlive || hasTerminal;
-    if (source.tlError && !args.snapshotDir) {
+    const activeExecutor = prNo != null ? agentAlive : (agentAlive || hasTerminal);
+    if (source.tlError && !args.snapshotDir && prNo == null) {
       notes.push({ name, type: '观察', detail: `terminal list 拉不到（${source.tlError}）——本轮孤儿判定没查成，不是查过没事` });
       continue;
     }
@@ -1430,7 +1434,6 @@ function runWorktreePass(source, args, state) {
     // gh PR state==MERGED 才判删；OPEN/CLOSED 不删；gh 查不动 → unscanned note 不删（fail-closed）。
     // 无 PR 关联才走原 issue/静置判据。审官子卡常 linkedPR=null 但名字/路径带 PR 号，
     // 删树判据认它（prNumberFromWorktree），不能只看 linkedPR。
-    const prNo = prNumberFromWorktree(w);
     let orphan = false;
     let why = '';
     if (prNo != null) {
@@ -1782,11 +1785,9 @@ let startupRev = null;
 
 function executeOneRound(source) {
   if (!args.snapshotDir && startupRev) {
-    const rev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
-    if (rev.alarm) {
-      console.log(`[watchdog] stale-code: ${formatRevisionAlarm(rev)}`);
-      anyAlarm = true;
-    }
+    haltIfStale(checkGuardRevision({ startup: startupRev, cwd: process.cwd() }), {
+      tag: '[watchdog] STALE_CODE',
+    });
   }
   const round = runRound(source, args, state);
   const r = printRound(round);
@@ -1811,6 +1812,11 @@ function detectSelfWorktree() {
 }
 
 function liveLoop() {
+  bootGuardOrHalt({
+    repoRoot: resolve(import.meta.dirname, '..'),
+    scriptFile: import.meta.url,
+    argv: process.argv.slice(2),
+  });
   startupRev = recordStartupRevision({ cwd: process.cwd() });
   if (!args.selfWorktree) {
     const self = detectSelfWorktree();

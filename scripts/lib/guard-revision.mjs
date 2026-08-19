@@ -106,10 +106,28 @@ function shortSha(sha) {
 export function formatRevisionAlarm(rev) {
   if (!rev || rev.state === 'current') return '';
   if (rev.state === 'unknown') {
-    return `守卫版本没查成：${rev.reason || '未知'}——查不成不能当最新`;
+    return `守卫版本没查成：${rev.reason || '未知'}——查不成不能当最新，落后自停`;
   }
   const n = rev.behind == null ? '?' : String(rev.behind);
-  return `守卫代码落后 origin/master ${n} 个 commit（启动 HEAD=${shortSha(rev.startupSha)}，origin/master=${shortSha(rev.originSha)}）——在跑旧代码，先 pull 再重启`;
+  return `守卫代码落后 origin/master ${n} 个 commit（启动 HEAD=${shortSha(rev.startupSha)}，origin/master=${shortSha(rev.originSha)}）——落后自停，不许继续跑旧代码`;
+}
+
+export const STALE_EXIT_CODE = 4;
+
+/**
+ * #665：落后或查不成必须非零退出，不许继续跑旧代码。
+ * exit 可注入；测试用收集器代替 process.exit。
+ */
+export function haltIfStale(rev, {
+  log = (msg) => console.error(msg),
+  exit = process.exit,
+  tag = 'STALE_CODE',
+} = {}) {
+  if (!rev || rev.alarm !== true) return { halted: false };
+  const msg = `${tag}：${formatRevisionAlarm(rev)}`;
+  log(msg);
+  exit(STALE_EXIT_CODE);
+  return { halted: true, code: STALE_EXIT_CODE, message: msg };
 }
 
 export function attachRevision(heartbeat, rev) {

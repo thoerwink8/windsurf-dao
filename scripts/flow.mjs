@@ -46,7 +46,7 @@
 // 真相源），可丢可重算：删掉重跑即重新清点。
 // 心跳（#580 补 #497 欠账）：live 每轮写 _flow/heartbeat.json，字段照 watchdog
 // 消费端契约。快照默认不写。三态：新鲜 / 过期 / 从未存在。
-// #595：live 心跳带 revision（current / behind / unknown）。落后或查不成必须报警。
+// #595 / #665：live 心跳带 revision（current / behind / unknown）。落后或查不成必须自停。
 //
 // 退出码（与 watchdog 同口径）：0 扫完 0 需流转 / 1 有动作、报帅或待帅处置 /
 // 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败（gh/orca 拉不到、参数错）。
@@ -79,8 +79,9 @@ import {
 } from './lib/ledger-job.mjs';
 import { readLedgerEvents } from './lib/ledger-query.mjs';
 import {
-  recordStartupRevision, checkGuardRevision, formatRevisionAlarm, attachRevision,
+  recordStartupRevision, checkGuardRevision, attachRevision, haltIfStale,
 } from './lib/guard-revision.mjs';
+import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
 import { argsTaskCreate, argsWorkerStart, extractTaskId, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
@@ -1079,10 +1080,7 @@ function runOneRound(source, state) {
   if (!args.snapshotDir) {
     const rev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
     attachRevision(hb, rev);
-    if (rev.alarm) {
-      console.log(`[flow] STALE_CODE：${formatRevisionAlarm(rev)}`);
-      anyEmitted = true;
-    }
+    haltIfStale(rev, { tag: '[flow] STALE_CODE' });
   }
   try { writeHeartbeat(heartbeatPath(args.stateFile), hb); }
   catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——本轮心跳没写成`); }
@@ -1101,14 +1099,16 @@ function liveLoop() {
     repo = r.json.nameWithOwner;
   }
   console.log(`# flow live：每 ${args.interval}s 一轮（repo=${repo}${args.dryRun ? '，dry-run 不碰 orca 写操作' : ''}）`);
+  bootGuardOrHalt({
+    repoRoot: ROOT,
+    scriptFile: import.meta.url,
+    argv: process.argv.slice(2),
+  });
   startupRev = recordStartupRevision({ cwd: process.cwd() });
   const boot = { ts: new Date().toISOString(), round: 0, lastWakeSource: 'poll', pendingCount: 0, prs: [] };
   const bootRev = checkGuardRevision({ startup: startupRev, cwd: process.cwd() });
   attachRevision(boot, bootRev);
-  if (bootRev.alarm) {
-    console.log(`[flow] STALE_CODE：${formatRevisionAlarm(bootRev)}`);
-    anyEmitted = true;
-  }
+  haltIfStale(bootRev, { tag: '[flow] STALE_CODE' });
   try { writeHeartbeat(heartbeatPath(args.stateFile), boot); }
   catch (e) { console.log(`[flow] HEARTBEAT_WRITE_FAILED：${e && e.message ? e.message : e}——启动心跳没写成`); }
   for (;;) {
