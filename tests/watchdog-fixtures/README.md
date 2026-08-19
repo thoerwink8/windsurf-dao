@@ -59,6 +59,12 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `orphan-active/` | 另一位主帅的活跃工位（working agent + 合规名） | 退出码 0，不报 orphan（#492 关条件 3） |
 | `orphan-noassoc-stale/` | 无关联 + 静置超 60 分钟 | 退出码 1，`orphan:` 带静置分钟数；默认快照同样只打印将执行 worktree-rm（#630） |
 | `orphan-noassoc-fresh/` | 无关联 + 静置 5 分钟（未超阈值） | 不报 orphan（命名不合规另报 naming） |
+| `orphan-pr-merged/` | **#652**：工人卡 linkedPR=652，gh-evidence prState=MERGED，无活跃执行者 | 退出码 1，`orphan:` 打 worktree-rm 动作；可归档只认 MERGED |
+| `orphan-pr-open/` | **#652**：同上去 prState=OPEN | 不报 orphan、不打 rm（不是 MERGED 不删） |
+| `orphan-pr-closed/` | **#652**：同上 prState=CLOSED（未合） | 不报 orphan、不打 rm（CLOSED 不算 MERGED） |
+| `orphan-pr-unscanned/` | **#652**：gh-evidence 缺 prState（查不动） | `PR_STATE_UNSCANNED` note，不删（fail-closed） |
+| `orphan-pr-nameonly/` | **#652**：审官子卡 linkedPR=null 但卡名 `PR-#777`，gh prState=MERGED | 退出码 1，`orphan:`（卡名/路径 PR-#N 也算 PR 关联） |
+| `orphan-pr-parent-open-child-merged/` | **#652**：父树 PR OPEN + 子树 PR MERGED，无活跃执行者 | 只报子卡 orphan 并只对子卡打 rm，父树不删（父树挂未合 PR 只拆已合子卡） |
 | `naming-bad/` | 卡名 `审官·GPT`（另一主帅的卡，终端在跑） | 退出码 1，`naming:`；不报 orphan（活跃执行者判据优先） |
 | `naming-skip/` | **#569 降噪**：基于 idle/，加一条 live 实录形态的 `windsurf-dao` 卡（review-566：0 agent、1 活终端、无 #N 前缀） | 退出码 0，不报 naming（无 agent 且无 #N 前缀的树不是任务卡；有 agent 的误命名卡仍会报，见 naming-bad） |
 | `blind/` | **#569 垫片并进（BLIND，2026-08-17 判据订正）**：加一条 `#555 - 隐形工人测试` 卡，liveTerminalCount=2，worker-list-evidence.json 的记账集合里不含它（从没走 worker-start/dispatch） | 退出码 1，`blind:`（有活终端且查不到 dispatch 记账 = 编排层看不见，只能人工盯） |

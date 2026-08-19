@@ -1,0 +1,45 @@
+{
+  "id": "x",
+  "ok": true,
+  "result": {
+    "worktrees": [
+      {
+        "workspaceKind": "git",
+        "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::D:/frank/windsurf-dao",
+        "repoId": "1770a430-983a-4e86-9277-9f1e5c376b83",
+        "path": "D:/frank/windsurf-dao",
+        "branch": "refs/heads/master",
+        "isArchived": false,
+        "isMainWorktree": true,
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "master",
+        "workspaceStatus": "todo",
+        "linkedIssue": null,
+        "linkedPR": null,
+        "liveTerminalCount": 0,
+        "agents": []
+      },
+      {
+        "workspaceKind": "git",
+        "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/652-merged",
+        "repoId": "1770a430-983a-4e86-9277-9f1e5c376b83",
+        "path": "C:/Users/Administrator/orca/workspaces/windsurf-dao/652-merged",
+        "branch": "refs/heads/t/652-merged",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "PR-#652 工人·deepseek-v4-flash 扫描器按MERGED关树",
+        "workspaceStatus": "in-progress",
+        "linkedIssue": null,
+        "linkedPR": {
+          "number": 652,
+          "state": "open"
+        },
+        "liveTerminalCount": 0,
+        "agents": []
+      }
+    ]
+  }
+}

@@ -90,6 +90,23 @@ describe('card-identity', () => {
     assert.strictEqual(C.displayNumberFromWorktree({ displayName: 'ISSUE-589 工人·x y' }), 589);
   });
 
+  it('#652 PR 号判据：linkedPR 优先，其次卡名/路径 PR-#N / PR-N，issue 号不算', async () => {
+    const C = await C_LOAD;
+    assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: 652 } }), 652);
+    assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: '652' } }), 652);
+    assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: 0 } }), null);
+    assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: -3 } }), null);
+    assert.strictEqual(C.prNumberFromWorktree({ displayName: 'PR-#777 审官·grok-4.6' }), 777);
+    assert.strictEqual(C.prNumberFromWorktree({ displayName: 'PR-777 审官·grok-4.6' }), 777);
+    assert.strictEqual(C.prNumberFromWorktree({ displayName: 'ISSUE-589 工人·x y', path: 'C:/p/PR-#616-w1' }), 616);
+    assert.strictEqual(C.prNumberFromWorktree({ path: 'C:/p/PR-616-w1' }), 616);
+    assert.strictEqual(C.prNumberFromWorktree({ displayName: '#589 - 调研单' }), null);
+    assert.strictEqual(C.prNumberFromWorktree({ displayName: 'ISSUE-589 工人·x y', linkedIssue: 589 }), null);
+    assert.strictEqual(C.prNumberFromWorktree({}), null);
+    // linkedPR 优先于卡名里的 PR 号
+    assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: 100 }, displayName: 'PR-#200 工人' }), 100);
+  });
+
   it('#589 源码钉：四处不再用卡名当判据', () => {
     const flow = fs.readFileSync(FLOW, 'utf8');
     const fn = (flow.match(/function findReviewerTerminal\([\s\S]*?\nfunction /) || [''])[0];

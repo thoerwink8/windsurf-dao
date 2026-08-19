@@ -5,7 +5,7 @@
 //   3. 审官协议不改：识别靠 subject /^可归档[:：]/；树优先 payload.worktree，否则盘面 linkedPR。
 //   4. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
 
-import { worktreeIdOf } from './card-identity.mjs';
+import { worktreeIdOf, prNumberFromWorktree } from './card-identity.mjs';
 import { resolveWorktreeSelector } from './dao-cmd.mjs';
 
 const ARCHIVE_SUBJECT = /^可归档[:：]\s*(?:PR[#\s-]*)?#?(\d+)/i;
@@ -114,20 +114,55 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
     if (!hit.ok) return { ok: false, error: hit.error };
     const root = walkToRoot(hit.worktree, list);
     if (root?.isMainWorktree) return { ok: false, error: '拒绝删主树' };
-    const linked = linkedPrNumber(root) ?? linkedPrNumber(hit.worktree);
-    if (linked != null && linked !== pr) {
-      return { ok: false, error: `通知里的树 linkedPR=#${linked}，不是 #${pr}` };
+    const rootPr = prNumberOf(root);
+    const hitPr = prNumberOf(hit.worktree);
+    // #652：父树若挂着别的/未合 PR，只拆本 PR 的树（命中卡），不整树删。
+    if (rootPr === pr) {
+      // 根卡就是本 PR 的树：子树里没有别的 PR 关联才整树删（未合并 PR 的树不因可归档被删）。
+      const foreign = subtreeForeignPrs(root, list);
+      if (foreign.length > 0) {
+        return { ok: false, error: `根卡子树还挂着别的 PR（${foreign.map(f => `#${f.pr} ${f.name}`).join('、')}）——未删整树（#652：未合并 PR 的树不因可归档被删）` };
+      }
+      const selector = worktreeIdOf(root);
+      if (!selector) return { ok: false, error: '任务卡没有 worktree id' };
+      return { ok: true, selector, worktree: root };
     }
-    const selector = worktreeIdOf(root) || notice.worktree;
-    return { ok: true, selector, worktree: root };
+    if (hitPr === pr) {
+      // 根卡不带本 PR（父树挂别的/未合 PR 或只是 ISSUE 卡）→ 只拆命中卡，不碰父树。
+      const foreign = subtreeForeignPrs(hit.worktree, list);
+      if (foreign.length > 0) {
+        return { ok: false, error: `命中卡子树还挂着别的 PR（${foreign.map(f => `#${f.pr} ${f.name}`).join('、')}）——未删（#652）` };
+      }
+      const selector = worktreeIdOf(hit.worktree);
+      if (!selector) return { ok: false, error: '任务卡没有 worktree id' };
+      return { ok: true, selector, worktree: hit.worktree };
+    }
+    if (rootPr != null) {
+      return { ok: false, error: `通知里的树根卡（${root.displayName || worktreeIdOf(root) || '?'}）关联 PR #${rootPr}（linkedPR/卡名/路径），不是 #${pr}——父树还挂着别的 PR，未删整树（#652）` };
+    }
+    return { ok: false, error: `通知里的树（${hit.worktree?.displayName || '?'}）关联 PR #${hitPr ?? '?'}，不是 #${pr}（#652）` };
   }
-  const hits = list.filter((w) => linkedPrNumber(w) === pr);
+  const hits = list.filter((w) => prNumberOf(w) === pr);
   if (hits.length === 0) {
-    return { ok: false, error: `盘面没有 linkedPR=#${pr} 的树` };
+    return { ok: false, error: `盘面没有关联 PR #${pr} 的树` };
   }
-  const roots = uniqueRoots(hits.map((w) => walkToRoot(w, list)).filter(Boolean));
-  const usable = roots.filter((w) => !w.isMainWorktree);
-  if (usable.length === 0) return { ok: false, error: '对上的树是主树，拒绝删' };
+  // 每棵命中树向上找根：根卡带同一个 PR → 整树是删除单元（子卡同 PR，随根删）；
+  // 根卡带别的/不带 PR（父树挂别的未合 PR 的多工人）→ 命中卡自己是删除单元（只拆已合子卡）。
+  const units = [];
+  const seenUnit = new Set();
+  for (const hit of hits) {
+    const root = walkToRoot(hit, list);
+    if (root?.isMainWorktree) continue;
+    const unit = prNumberOf(root) === pr ? root : hit;
+    const uid = worktreeIdOf(unit);
+    if (!uid || seenUnit.has(uid)) continue;
+    seenUnit.add(uid);
+    const foreign = subtreeForeignPrs(unit, list);
+    if (foreign.length > 0) { /* 子树还挂别的 PR：这个删除单元不能整删，留给帅 */ continue; }
+    units.push(unit);
+  }
+  const usable = units.filter((w) => !w.isMainWorktree);
+  if (usable.length === 0) return { ok: false, error: '对上的树是主树/子树还挂着别的 PR，拒绝删（#652）' };
   if (usable.length !== 1) {
     return {
       ok: false,
@@ -305,11 +340,46 @@ function finishEscalate(plan, { escalate, ts, reason, result }) {
   return next;
 }
 
-function linkedPrNumber(w) {
-  const n = w?.linkedPR?.number;
-  if (n == null || n === '') return null;
-  const num = Number(n);
-  return Number.isInteger(num) && num > 0 ? num : null;
+function prNumberOf(w) {
+  return prNumberFromWorktree(w);
+}
+
+// #652：根卡子树（含后代）里跟根卡不同 PR 关联的树。整树删前必须确认子树没有别的 PR。
+function subtreeForeignPrs(w, worktrees) {
+  const rootPr = prNumberOf(w);
+  const out = [];
+  for (const node of subtreeOf(w, worktrees)) {
+    const n = prNumberOf(node);
+    if (n != null && n !== rootPr) {
+      out.push({ pr: n, name: node.displayName || worktreeIdOf(node) || '?' });
+    }
+  }
+  return out;
+}
+
+function subtreeOf(w, worktrees) {
+  const list = Array.isArray(worktrees) ? worktrees : [];
+  const out = [];
+  const stack = [w];
+  const seen = new Set();
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    const id = worktreeIdOf(cur);
+    if (id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    out.push(cur);
+    if (!id) continue;
+    for (const other of list) {
+      const oid = worktreeIdOf(other);
+      if (oid && !seen.has(oid) && other.parentWorktreeId && idsEqual(other.parentWorktreeId, id)) {
+        stack.push(other);
+      }
+    }
+  }
+  return out;
 }
 
 function walkToRoot(w, worktrees) {
@@ -325,18 +395,6 @@ function walkToRoot(w, worktrees) {
     cur = parent;
   }
   return cur;
-}
-
-function uniqueRoots(items) {
-  const out = [];
-  const seen = new Set();
-  for (const w of items) {
-    const id = worktreeIdOf(w) || '';
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(w);
-  }
-  return out;
 }
 
 function idsEqual(a, b) {
