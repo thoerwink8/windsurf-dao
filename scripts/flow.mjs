@@ -23,9 +23,8 @@
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
 // 执行注入（③）：
-//   - 验开工：增量判据为主（read 记 nextCursor → send → read --cursor，有新输出
-//     = token 在动）；回显判据为辅（TUI 回显注入文本头）。被吞第一处置补一记裸回车
-//     （#455 连带教训：输入框残留，第二遍全文同样堆积），仍无 → fail-visible 报帅。
+//   - #633：派活禁止 terminal send。返工/复核走 worker-start 新 task 绑回同一终端。
+//     TUI send 只留给看门狗空闲卡住的一条续命。
 //   - 注入目标确定性定位：返工注入按任务卡 worktree 内唯一候选终端（排除审官句柄
 //     与 shell），选不出唯一目标就报帅，不挑第一个。
 //   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查子卡（parent/child 字段，不读卡名）；全找不到
@@ -84,6 +83,7 @@ import {
 } from './lib/guard-revision.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
+import { argsTaskCreate, argsWorkerStart, extractTaskId } from './lib/dao-cmd.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -521,6 +521,7 @@ export function verifyStarted(handle, echoHead, terminalName, io, baselineCursor
 }
 
 // 注入 + 验开工（两步走路径：send 任务文本）
+// #633 退役派活用途：返工/复核改 dispatchNewTaskToTerminal。本函数只留给旧单测。
 // #580 ④ / 审官红 1：send 前先记 cursor，再 send，再从该 cursor 验增量。
 export function injectAndVerify(handle, text, terminalName, io) {
   const ops = io || defaultFlowIo();
@@ -531,6 +532,20 @@ export function injectAndVerify(handle, text, terminalName, io) {
   const sendR = ops.send(['terminal', 'send', '--terminal', handle, '--text', text, '--json']);
   if (!sendR.ok) return { ok: false, error: `terminal send 失败：${sendR.error}` };
   return verifyStarted(handle, echoHead, terminalName, ops, prev);
+}
+
+/** #633：派活走新 task 绑回原终端，禁止往输入框 terminal send。 */
+export function dispatchNewTaskToTerminal({ spec, terminal, run, io } = {}) {
+  const ops = io || defaultFlowIo();
+  if (!terminal) return { ok: false, error: 'dispatchNewTaskToTerminal 要 terminal' };
+  if (!spec) return { ok: false, error: 'dispatchNewTaskToTerminal 要 spec' };
+  const created = ops.send(argsTaskCreate({ spec, run }));
+  if (!created.ok) return { ok: false, error: `task-create 失败：${created.error}` };
+  const taskId = extractTaskId(created.json);
+  if (!taskId) return { ok: false, error: 'task-create 成功但没拿到 result.task.id（不能拿顶层 RPC id）' };
+  const started = ops.send(argsWorkerStart({ task: taskId, terminal }));
+  if (!started.ok) return { ok: false, error: `worker-start 失败：${started.error}` };
+  return { ok: true, taskId, judge: 'worker-start 新 task 绑回原终端' };
 }
 
 // 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
@@ -830,9 +845,9 @@ function executeAction(action, pr, source, rec, dryRun) {
     }
     if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
     if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
-    const v = injectAndVerify(target.terminal.handle, instruction, pr.title);
+    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：指令已注入工人终端并验开工（${v.judge}）` };
+    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：新 task ${v.taskId} 已绑回工人终端（${v.judge}）` };
   }
 
   if (action.kind === 'inject-recheck') {
@@ -847,9 +862,9 @@ function executeAction(action, pr, source, rec, dryRun) {
       return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
     }
     if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
-    const v = injectAndVerify(target.terminal.handle, instruction, '审官');
+    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
     if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：复核指令已注入审官终端并验开工（${v.judge}）` };
+    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：新 task ${v.taskId} 已绑回审官终端（${v.judge}）` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };

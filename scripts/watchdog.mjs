@@ -129,7 +129,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
-import { loadRouting } from './lib/dao-cmd.mjs';
+import { loadRouting, pastedContentMatch } from './lib/dao-cmd.mjs';
 import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { recordStartupRevision, checkGuardRevision, formatRevisionAlarm } from './lib/guard-revision.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
@@ -394,6 +394,18 @@ function extractOutputTokens(read, text) {
   return parseOutputTokensFromText(text);
 }
 
+// 最新状态行才算「还在 at capacity」。历史行里的字不能当新事故。
+function latestStatusText(bottom) {
+  const lines = String(bottom || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  return lines.slice(-2).join('\n');
+}
+
+function latestWorkingLive(bottom) {
+  const last = latestStatusText(bottom);
+  if (/at capacity|try a different model/i.test(last)) return false;
+  return /(?:^|\n).*working/i.test(last);
+}
+
 // ── git / gh 证据（live 模式）───────────────────────────────────────
 // 活性强判据（#471 空转）：工作树「最后 git 活动」= max(HEAD commit ts, 未提交文件最新 mtime)。
 // 快照模式从 git-evidence.json 读（字段契约见 loadSnapshotRound）。
@@ -635,11 +647,28 @@ function actionCommands(handle, action) {
 // 执行处置动作：live 模式经 orca terminal send 真发；快照/测试模式只打印动作行。
 // 日志行进 events（跟随指纹报警一起显形）。context 守卫：reclaude 系动作只在屏面
 // 上下文含 reclaude/Claude 时执行——防把 /exit 或 /branch 打进非 reclaude 终端。
+const QUEUE_WAIT_RE = /等待发送/;
+
+/** #633：框里已有未发出内容（Pasted / follow-up / 等待发送）禁止再 terminal send。 */
+function unsentInputEvidence(text) {
+  const pasted = pastedContentMatch(text);
+  if (pasted) return pasted;
+  const q = String(text || '').match(QUEUE_WAIT_RE);
+  return q ? q[0] : null;
+}
+
 function executeDispose(target, row, contextText, live, events, notes) {
   const label = row.label || row.action;
   if (row.action === 'ignore') {
     notes.push({ name: target.name, type: '观察', detail: `处置矩阵命中「${label}」——忽略噪音不动作` });
     return;
+  }
+  if (row.action === 'keepalive') {
+    const unsent = unsentInputEvidence(contextText);
+    if (unsent) {
+      notes.push({ name: target.name, type: '观察', detail: `框里已有未发出内容「${unsent}」——禁止再 terminal send（#633：续命只留给空闲卡住）` });
+      return;
+    }
   }
   if (row.requireContext && !/reclaude|claude/i.test(contextText || '')) {
     notes.push({ name: target.name, type: '观察', detail: `处置矩阵命中「${label}」但屏面上下文不含 reclaude/Claude——不执行 reclaude 系动作，只报不动作（#471 上下文守卫）` });
@@ -1072,7 +1101,7 @@ function runRound(source, args, state) {
             st.fpKa = null;
             // #471 处置矩阵：命中 → 动作；矩阵未命中 → 报帅（矩阵是唯一账本，新事故先在矩阵加行）
             if (row && row.capacityRetry) {
-              st.fpKa = { count: 1, lastTs: now, reported: false, tokensAtKa: tokens };
+              st.fpKa = { count: 1, lastTs: now, reported: false, tokensAtKa: tokens, awaitingRecovery: true };
               events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——capacity 指纹按 ${formatCapacityKaSchedule()}（#633）` });
             } else {
               events.push({ name: t.name, type: 'fingerprint', detail: `屏面底部命中错误指纹「${matched.join('、')}」两连同——报错→原地续命一次，指纹两连同→换人不救（#442 分诊三分支）` });
@@ -1087,15 +1116,23 @@ function runRound(source, args, state) {
           const row = matrixRowFor(matched[0]);
           if (row && row.capacityRetry) {
             if (st.fpKa && !st.fpKa.reported) {
-              const idx = Math.min(st.fpKa.count, PARAMS.capacityKaIntervalsMs.length) - 1;
-              const gapMs = PARAMS.capacityKaIntervalsMs[idx];
-              if ((now - st.fpKa.lastTs) >= gapMs) {
-                if (st.fpKa.count < PARAMS.capacityKaMax) {
-                  executeDispose(t, row, all, !args.snapshotDir, events, notes);
-                  st.fpKa.count += 1; st.fpKa.lastTs = now; st.fpKa.tokensAtKa = tokens;
-                } else {
-                  st.fpKa.reported = true;
-                  executeCapacitySwitch(t, args, events);
+              if (st.fpKa.awaitingRecovery && latestWorkingLive(bottom)) {
+                notes.push({ name: t.name, type: '观察', detail: '续命后已在 Working——这场容量事故结束，次数清零（#633：真 Working 才结束本场）' });
+                st.fpKa = null;
+                st.fired.delete('fingerprint');
+                st.fpStreak = 0;
+              } else {
+                const idx = Math.min(st.fpKa.count, PARAMS.capacityKaIntervalsMs.length) - 1;
+                const gapMs = PARAMS.capacityKaIntervalsMs[idx];
+                if ((now - st.fpKa.lastTs) >= gapMs) {
+                  if (st.fpKa.count < PARAMS.capacityKaMax) {
+                    // 本场未结束（未见 token 涨 / Working）禁止第二记——历史行里的 at capacity 不算新事故。
+                    notes.push({ name: t.name, type: '观察', detail: '本场续命后未见 token 涨/Working——不因屏上残留 at capacity 再发一记（#633）' });
+                    st.fpKa.count += 1; st.fpKa.lastTs = now;
+                  } else {
+                    st.fpKa.reported = true;
+                    executeCapacitySwitch(t, args, events);
+                  }
                 }
               }
             }

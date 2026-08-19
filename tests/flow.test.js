@@ -22,7 +22,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, dispatchNewTaskToTerminal, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 function runFlow(dir, extraArgs = []) {
@@ -611,6 +611,32 @@ describe('flow', () => {
     });
     await t.test('早期输出路径不必补回车', () => {
       assert.ok(!order.includes("enter"), '早期输出路径不必补回车  →  ' + JSON.stringify(order));
+    });
+
+    const dispatched = [];
+    const bindIo = {
+      send(cmd) {
+        dispatched.push(cmd);
+        if (cmd.includes('task-create')) {
+          return { ok: true, json: { ok: true, result: { task: { id: 'task_rework_1' }, id: 'rpc-not-task' } } };
+        }
+        if (cmd.includes('worker-start')) {
+          return { ok: true, json: { ok: true, result: { dispatchId: 'ctx_rework_1' } } };
+        }
+        return { ok: false, error: '不该 terminal send' };
+      },
+      read() { return { ok: true, terminal: { status: 'running', nextCursor: 1, returnedLineCount: 0, tail: [] } }; },
+      sleep() {},
+    };
+    const bound = dispatchNewTaskToTerminal({ spec: '【返工指令 · 测试】', terminal: 'term_worker', io: bindIo });
+    await t.test('#633 返工走 task-create + worker-start，不 terminal send', () => {
+      assert.ok(bound.ok === true && bound.taskId === 'task_rework_1', '绑回成功  →  ' + JSON.stringify(bound));
+      assert.ok(dispatched.some(c => c.includes('task-create') && c.includes('--spec')), '先 task-create  →  ' + JSON.stringify(dispatched));
+      assert.ok(dispatched.some(c => c.includes('worker-start') && c.includes('term_worker') && c.includes('task_rework_1')), '再 worker-start 绑原终端  →  ' + JSON.stringify(dispatched));
+      assert.ok(!dispatched.some(c => c.includes('terminal') && c.includes('send')), '不 terminal send  →  ' + JSON.stringify(dispatched));
+    });
+    await t.test('#633 task-create 只认 result.task.id，不拿 RPC id', () => {
+      assert.ok(bound.taskId !== 'rpc-not-task', '不是 RPC id  →  ' + JSON.stringify(bound));
     });
   });
 

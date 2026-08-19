@@ -867,11 +867,9 @@ describe('watchdog', () => {
     });
   });
 
-  it('⑳b2 #633 capacity 指纹续命调度：10秒/1分/3分/5分各续命一次（共 4 次），第 5 次换人', async (t) => {
-    // 夹具 capacity-keepalive：round 1-6 同屏 at capacity，git-evidence capturedAt 分别
-    // 落在 T0 / T0 / T0+10s / T0+70s / T0+250s / T0+550s——把 10秒/1分/3分/5分 四档走完：
-    //   round 2 首警 → 续命 #1；round 3（+10s）→ 续命 #2；round 4（+70s）→ 续命 #3；
-    //   round 5（+250s）→ 续命 #4；round 6（+550s）→ 第 5 次只报帅、不再发续命动作。
+  it('⑳b2 #633 capacity 续命：本场只发第一记，残留 at capacity 不按 10s 再发', async (t) => {
+    // 夹具 capacity-keepalive：round 1-6 同屏 at capacity。发出续命后必须看到 token/Working
+    // 才结束本场；本场结束前禁止第二记。时间戳仍走 10秒/1分/3分/5分，到点只推进等待，不连发。
     const r = runWatchdog(path.join(FIXTURES, "capacity-keepalive"));
     const seg = (n) => (r.out.match(new RegExp(`round ${n}\\/6([\\s\\S]*?)(?:round |$)`)) || [])[1] || "";
     await t.test('退出码 1（有报警）', () => {
@@ -881,18 +879,16 @@ describe('watchdog', () => {
       assert.ok(/round 2\/6[\s\S]*fingerprint:.*at capacity/.test(r.out), 'round 2：fingerprint 首警  →  ' + r.out.trim());
       assert.ok(/round 2\/6[\s\S]*动作: 注入续命（#633/.test(r.out), 'round 2：续命 #1 动作行  →  ' + r.out.trim());
     });
-    await t.test('round 3（+10s）：续命 #2 动作行', () => {
-      assert.ok(/动作: 注入续命（#633/.test(seg(3)), 'round 3：续命 #2 动作行  →  ' + seg(3).trim());
+    await t.test('round 3（+10s）：不因残留 at capacity 发第二记', () => {
+      assert.ok(!/动作: 注入续命/.test(seg(3)), 'round 3：不发第二记  →  ' + seg(3).trim());
+      assert.ok(/不因屏上残留 at capacity 再发一记/.test(seg(3)), 'round 3：残留闸  →  ' + seg(3).trim());
     });
-    await t.test('round 4（+70s）：续命 #3 动作行', () => {
-      assert.ok(/动作: 注入续命（#633/.test(seg(4)), 'round 4：续命 #3 动作行  →  ' + seg(4).trim());
+    await t.test('round 4/5：本场结束前仍不连发', () => {
+      assert.ok(!/动作: 注入续命/.test(seg(4)) && !/动作: 注入续命/.test(seg(5)), 'round 4/5 不连发  →  ' + (seg(4) + seg(5)).trim());
     });
-    await t.test('round 5（+250s）：续命 #4 动作行', () => {
-      assert.ok(/动作: 注入续命（#633/.test(seg(5)), 'round 5：续命 #4 动作行  →  ' + seg(5).trim());
-    });
-    await t.test('round 6（+550s）：第 5 次不续命（卡名不是审官·模型 → 报帅）', () => {
+    await t.test('round 6（+550s）：等满四档仍未恢复 → 报帅，不发续命', () => {
       assert.ok(/报帅:.*capacity 指纹已按 10秒\/1分\/3分\/5分各一次/.test(seg(6)), 'round 6：认不出审官卡则报帅  →  ' + seg(6).trim());
-      assert.ok(!/动作: 注入续命/.test(seg(6)), 'round 6：第 5 次不发续命动作  →  ' + seg(6).trim());
+      assert.ok(!/动作: 注入续命/.test(seg(6)), 'round 6：不发续命动作  →  ' + seg(6).trim());
     });
   });
 
@@ -913,6 +909,18 @@ describe('watchdog', () => {
     await t.test('round 4：下次卡住仍是第一次续命（讨论在动也不否决）', () => {
       assert.ok(/动作: 注入续命（#633/.test(seg(4)), 'round 4：第一次续命  →  ' + seg(4).trim());
       assert.ok(!/活证否决/.test(seg(4)), 'round 4：capacity 不被活证否决  →  ' + seg(4).trim());
+    });
+  });
+
+  it('⑳b5 #633 框里已有未发出内容：at capacity 续命禁止再 terminal send', async (t) => {
+    const r = runWatchdog(path.join(FIXTURES, "capacity-unsent"));
+    await t.test('退出码 1（指纹仍报）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('round 2 报 fingerprint 但不发续命', () => {
+      assert.ok(/round 2\/2[\s\S]*fingerprint:.*at capacity/.test(r.out), '仍报 fingerprint  →  ' + r.out.trim());
+      assert.ok(!/动作: 注入续命/.test(r.out), '不发续命  →  ' + r.out.trim());
+      assert.ok(/禁止再 terminal send/.test(r.out), '未发内容闸  →  ' + r.out.trim());
     });
   });
 

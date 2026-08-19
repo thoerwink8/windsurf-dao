@@ -1114,8 +1114,7 @@ function ensureInboxStation() {
   return { ok: true, ...json };
 }
 
-function invokeReviewerCreateHealed(opts) {
-  const first = invokeReviewerCreate(opts);
+function healReviewerCreateAfterFence(first, opts) {
   const inspect = inspectConsumerFence(first.ok ? '' : first.error);
   if (inspect.unscanned) {
     return { ...first, fenceHeal: inspect };
@@ -1147,6 +1146,10 @@ function invokeReviewerCreateHealed(opts) {
     };
   }
   return { ...retried, fenceHeal: { ...inspect, ...plan, retired, ensured } };
+}
+
+function invokeReviewerCreateHealed(opts) {
+  return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
 function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun } = {}) {
@@ -1505,14 +1508,16 @@ function cmdWorkerDone(args) {
   }
 
   if (shouldCreate) {
-    create = invokeReviewerCreateHealed({
+    const createOpts = {
       pr: args.pr,
       name: createName,
       parentWorktree: parentId,
       soldierDispatch: args.soldierDispatch,
       issue: plan.issue,
       dryRun: false,
-    });
+    };
+    create = invokeReviewerCreate(createOpts);
+    create = healReviewerCreateAfterFence(create, createOpts);
     if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
   } else if (shouldReuse) {
     reused = reuseReviewerOnTerminal({
