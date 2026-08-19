@@ -109,7 +109,7 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-19"
-    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用备选。登记仍保留、不套 glm-5.3 禁令；评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位
+    why: 用户 2026-08-19 拍板（#648）：GPT 暂时不可用备选。登记仍保留、不套 glm-5.3 禁令；评论 #6 追改：后续审官顶位改 kimi-k3，glm-5.2 不再顶审官位；#658（2026-08-19）GPT 恢复，glm-5.2 仍只作备选登记、不顶审官位
     decided: "2026-08-19"
     pricing:
       verified_at: "2026-08-19"
@@ -152,7 +152,7 @@ models:
     roles: [审查, 写码, 判断]
     status: 正式
     retired: false
-    why: 审官次选：GLM-5.2 优先（#648）、Claude(Opus) 次之；GPT 暂时不可用（model-routing.toml）
+    why: 审官次选：GPT 顶位被 UI ban 剔掉后 Opus 顶位（#658 2026-08-19 恢复，model-routing.toml）
     decided: "2026-08-14"
     pricing:
       verified_at: null          # 待补
@@ -170,7 +170,7 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-16"
-    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位
+    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；#658（2026-08-19）：GPT 恢复，kimi-k3 不再顶审官位，保留登记
     decided: "2026-08-19"
     pricing:
       verified_at: "2026-08-18"
