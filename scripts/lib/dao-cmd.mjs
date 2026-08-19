@@ -2973,11 +2973,11 @@ export function stampIssueLabels({ issue, model, role, reviewer, runGh } = {}) {
   return { ok: true, issue: n, names, created: ensured.created, labels: names };
 }
 
-/** PR 正文/标题里的署名单号：认新规范「署名 issue #N」（非 GitHub 关单词，不触发自动关单）与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。
- * 正文里随手引用的 #单号 不是署名，不许拿去抄 label（会串到别的单的 model/type）。 */
+/** PR 正文/标题里的署名单号：认「署名 issue #N」（#657）、「关联 issue #N」（#633）
+ * 与旧的 GitHub 关闭关键词（Closes/Fixes/Resolves…）。正文随手引用的 #单号 仍不算。 */
 export function linkedIssueNumbers(text) {
   const found = [];
-  const re = /(?:署名\s+issue\s*#?\s*|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
+  const re = /(?:署名\s+issue\s*#?\s*|关联(?:\s*issue)?\s+#|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/gi;
   let m;
   while ((m = re.exec(String(text || '')))) {
     const t = Number(m[1]);

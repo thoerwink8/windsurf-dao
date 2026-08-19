@@ -648,6 +648,10 @@ describe('dao', () => {
     await t.test('Fixes 也算署名单号', () => {
       assert.ok(refs2.length === 1 && refs2[0] === 12, 'Fixes 也算署名单号  →  ' + JSON.stringify(refs2));
     });
+    const refs3 = S.linkedIssueNumbers('关联 issue #633。不要 Closes。\n见 #655 现场');
+    await t.test('关联 issue #N 也是署名（不触发 GitHub 自动关单）', () => {
+      assert.ok(refs3.length === 1 && refs3[0] === 633, '关联 issue #N 也是署名  →  ' + JSON.stringify(refs3));
+    });
 
     // dispatch 侧打标：stub runGh 验证调用面（label list → 缺的建 → issue edit --add-label）。
     const calls = [];
