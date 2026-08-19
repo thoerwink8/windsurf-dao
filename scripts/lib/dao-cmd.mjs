@@ -1388,8 +1388,10 @@ export const CURSOR_WORKING_RE = /(?:^|\n)\s*(?:Running|Reading|Thinking|Working
  * 不是粘贴块的前置条件（审红 1），单独出现也算未提交。 */
 export const CURSOR_FOLLOWUP_RE = /(?:^|\n)\s*→[^\n]*[^\s\n]|\d+\s*follow-ups?/i;
 
-/** #619：未提交粘贴与「超时/环境」必须分开。 */
-export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——worker-start 把 preamble 灌进输入框后没有提交';
+/** #619/#661：未提交粘贴与「超时/环境」必须分开。垫片已退役：
+ * 粘贴进输入框 ≠ 开工，屏幕上有未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
+ * 一律立刻红并回滚，不补回车、不假装开工（#661 拍板）。 */
+export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——任务书停在输入框未发出，禁止粘贴当开工（#661）';
 
 /** #651：Cursor 粘贴块等价 Grok 的 Pasted Content——单独出现且后面没有在干活（状态行）
  * 就算未提交（审红 1）。已提交（粘贴块后面有干活状态行）不当未提交，避免死循环误杀。 */
@@ -1477,110 +1479,25 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * #619：worker-start 的第二拍。
- * Orca 会把 ~4600 字 preamble 和我们的指针一起灌进 TUI，Codex/Grok 收成
- * [Pasted Content] 且不提交。看见未提交粘贴、且尚未开工时，补一记 --enter。
- * 这是注入协议，不是 120s 超时后的抢救；只提交一次。
- */
-export function completePendingPaste({
-  readOnce, sendEnter, proofOnce, dispatchId,
-  settleMs = 200, sleep = sleepSync,
-} = {}) {
-  if (typeof readOnce !== 'function') {
-    throw new Error('completePendingPaste 要 readOnce');
-  }
-  if (dispatchId && typeof proofOnce === 'function') {
-    const proof = proofOnce(dispatchId);
-    if (proof && proof.ok && proof.proven) {
-      return { ok: true, state: 'already-started', submittedPaste: false, proof };
-    }
-  }
-  const read = readOnce();
-  if (read && read.error) {
-    return {
-      ok: false,
-      state: 'unread',
-      submittedPaste: false,
-      reason: '没读成',
-      error: read.error,
-      unscanned: true,
-    };
-  }
-  const text = extractTerminalText(read);
-  const evidence = pastedContentMatch(text);
-  if (!evidence) {
-    return { ok: true, state: 'no-paste', submittedPaste: false, text };
-  }
-  if (typeof sendEnter !== 'function') {
-    return {
-      ok: false,
-      state: 'unsubmitted-paste',
-      submittedPaste: false,
-      reason: UNSUBMITTED_PASTE_REASON,
-      evidence,
-      text,
-    };
-  }
-  const send = sendEnter();
-  if (send && send.ok === false) {
-    return {
-      ok: false,
-      state: 'submit-failed',
-      submittedPaste: false,
-      reason: `粘贴提交失败: ${send.error || '未知'}`,
-      evidence,
-      text,
-      send,
-    };
-  }
-  if (settleMs > 0 && typeof sleep === 'function') sleep(settleMs);
-  // #651：Cursor 补 enter 后立刻再读一次；仍未发出（粘贴块/follow-up）→ 失败，不许 ok:true。
-  if (cursorUnsubmittedEvidence(text)) {
-    const after = readOnce();
-    const afterText = after && !after.error ? extractTerminalText(after) : '';
-    const still = cursorUnsubmittedEvidence(afterText);
-    if (still) {
-      return {
-        ok: false,
-        state: 'unsubmitted-paste',
-        submittedPaste: true,
-        reason: UNSUBMITTED_PASTE_REASON,
-        evidence: still,
-        text: afterText,
-        send,
-      };
-    }
-  }
-  return {
-    ok: true,
-    state: 'submitted-paste',
-    submittedPaste: true,
-    evidence,
-    text,
-    send,
-  };
-}
-
-/**
- * 开工验证（#602 保留 transcript/屏面稳定；#619 订正 Pasted Content 定性）。
- *
- * #602 以为短指针后折叠物理上不可能，把屏上 Pasted Content 当成显示形态、不提交也不失败。
- * 实测 Orca preamble 单独就超阈值，未提交粘贴会让 proof 永远不来，再等就是 120s 假超时。
+ * #661：退役「补一记回车」垫片（completePendingPaste 已删除）。
+ * 往输入框粘贴 ≠ 开工：未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
+ * 只证明任务书停在输入框，不证明 agent 真接过它。开工只认外部证据——
+ *   - worker-read 官方 transcript（source≠terminal）= 真 session（调 verifyWorkerStarted）；
+ *   - GitHub 已有 review（调用方另查，不在这里）；
+ *   - proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮
+ *     （= agent 真在干活：屏上没有未提交粘贴）。
  *
  * 仍轮询的只有开工证明本身：
  *   1. worker-read 官方 transcript（source≠terminal）→ started；
- *   2. TUI 加载期（Starting MCP servers 等）不算绿；
- *   3. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
- *   4. 未提交粘贴且还没做过第二拍 → 立刻报「注入未提交」，不等超时。
- *   5. 已经第二拍提交过：粘贴行可能还在，继续等 proof；超时仍带粘贴则报「注入未提交」。
+ *   2. 任一拍看到未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）→
+ *      立刻红 unsubmitted-paste、pasteSubmitted:false，不许垫片提交、不许假装开工；
+ *   3. TUI 加载期（Starting MCP servers 等）不算绿；
+ *   4. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
  */
 export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
   stableRoundsNeeded = 3,
-  pasteSubmitted = false,
-  sendEnter,
-  settleMs = 200,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1591,7 +1508,6 @@ export function verifyStartedPolling({
   let lastText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
-  let submitted = !!pasteSubmitted;
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
@@ -1602,7 +1518,6 @@ export function verifyStartedPolling({
           proof, reads,
           elapsedMs: Date.now() - t0,
           text: lastText,
-          pasteSubmitted: submitted,
         };
       }
       if (proof && proof.unscanned) unscanned = proof;
@@ -1616,44 +1531,9 @@ export function verifyStartedPolling({
     const text = read && !read.error ? extractTerminalText(read) : '';
     lastText = text;
     const leftover = pastedContentMatch(text);
-    if (leftover && !submitted && typeof sendEnter === 'function') {
-      const send = sendEnter();
-      submitted = true;
-      if (send && send.ok === false) {
-        return {
-          ok: false,
-          state: 'submit-failed',
-          reason: `粘贴提交失败: ${send.error || '未知'}`,
-          evidence: leftover,
-          reads,
-          elapsedMs: Date.now() - t0,
-          text,
-          pasteSubmitted: true,
-          send,
-        };
-      }
-      sleep(Math.max(Number(settleMs) || 0, intervalMs));
-      // #651：Cursor 补 enter 后立刻再读一次；仍未发出（粘贴块/follow-up）→ 失败，不许 ok:true。
-      if (cursorUnsubmittedEvidence(text)) {
-        const after = readOnce();
-        const afterText = after && !after.error ? extractTerminalText(after) : '';
-        const still = cursorUnsubmittedEvidence(afterText);
-        if (still) {
-          return {
-            ok: false,
-            state: 'unsubmitted-paste',
-            reason: UNSUBMITTED_PASTE_REASON,
-            evidence: still,
-            reads,
-            elapsedMs: Date.now() - t0,
-            text: afterText,
-            pasteSubmitted: true,
-          };
-        }
-      }
-      continue;
-    }
-    if (leftover && !submitted) {
+    if (leftover) {
+      // #661：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
+      // → 任务书没进上下文，立刻红并交给调用方回滚，不补回车、不假装开工。
       return {
         ok: false,
         state: 'unsubmitted-paste',
@@ -1680,27 +1560,11 @@ export function verifyStartedPolling({
             reads, stableRounds,
             elapsedMs: Date.now() - t0,
             text,
-            pasteSubmitted: submitted,
           };
         }
       }
     }
     sleep(intervalMs);
-  }
-  const leftover = pastedContentMatch(lastText);
-  if (leftover) {
-    return {
-      ok: false,
-      state: 'unsubmitted-paste',
-      reason: UNSUBMITTED_PASTE_REASON,
-      evidence: leftover,
-      unscanned: unscanned ? { unscanned: true, reason: unscanned.reason || '未记录', error: unscanned.error } : undefined,
-      reads,
-      stableRounds,
-      elapsedMs: Date.now() - t0,
-      text: lastText,
-      pasteSubmitted: submitted,
-    };
   }
   return {
     ok: false,
@@ -1711,7 +1575,6 @@ export function verifyStartedPolling({
     stableRounds,
     elapsedMs: Date.now() - t0,
     text: lastText,
-    pasteSubmitted: submitted,
   };
 }
 

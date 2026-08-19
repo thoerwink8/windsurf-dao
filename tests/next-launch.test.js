@@ -43,6 +43,10 @@ describe('nextLaunch', () => {
     await t.test('classify：待确认 = config', () => {
       assert.ok(classifyLaunchFailure({ verifyReason: '有待确认提示' }) === 'config');
     });
+    await t.test('#661 classify：agent_unconfigured = config（不换管、不重试，立刻失败回滚）', () => {
+      assert.ok(classifyLaunchFailure({ error: 'agent_unconfigured: Workspace Trust not granted' }) === 'config', 'agent_unconfigured → config');
+      assert.ok(classifyLaunchFailure({ error: 'worker-start failed: agent unconfigured' }) === 'config', 'agent unconfigured（空格）→ config');
+    });
 
     await t.test('advance：瞬时第一次不切、不计入 hardFails', () => {
       const r = advanceLaunchState({

@@ -117,13 +117,16 @@ export function isModelRejectText(text) {
 }
 
 /**
- * 启动期失败分类。config = 错旗标/待确认，不许拿来换管。
+ * 启动期失败分类。config = 错旗标/待确认/未配好（agent_unconfigured），不许拿来换管。
+ * #661：agent_unconfigured（#649 实证：Cursor 弹 Workspace Trust 时 Orca 报的状态）
+ * 是「这台机器没配好」，不是瞬时也不是选中错——立刻失败回滚，不试下一根管。
  */
 export function classifyLaunchFailure({ error, verifyReason, text } = {}) {
   if (verifyReason === '有待确认提示') return 'config';
   if (verifyReason === '拒模') return 'hard';
   const blob = [error, verifyReason, text].filter(Boolean).join('\n');
   if (!blob) return 'hard';
+  if (/agent[_ ]unconfigured/.test(blob)) return 'config';
   if (isModelRejectText(blob)) return 'hard';
   if (verifyReason === '读了是空的' || verifyReason === '没读成') return 'transient';
   if (TRANSIENT_RE.test(blob)) return 'transient';
