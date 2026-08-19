@@ -123,10 +123,11 @@ describe('dianjiangtai', () => {
     await t.test('零样本全特征有限（无 NaN/Infinity）', () => {
       assert.ok(Object.values(zf).every(v => typeof v !== "number" || Number.isFinite(v)), '零样本全特征有限（无 NaN/Infinity）');
     });
-    await t.test('零样本 Score 有限', () => {
-      assert.ok(Number.isFinite(zero.models[FLASH].score), '零样本 Score 有限  →  ' + zero.models[FLASH].score);
+    await t.test('零样本 Score 有限（门闩通过模型；#669 flash 写码被 ban）', () => {
+      assert.ok(Number.isFinite(zero.models["grok-4.6"].score), '零样本 Score 有限（门闩通过模型）  →  ' + zero.models["grok-4.6"].score);
     });
     for (const m of Object.keys(zero.models)) {
+      if (zero.models[m].gates.rejected) continue;
       await t.test(`零样本 ${m} score/cost/sigma 均有限`, () => {
         assert.ok(Number.isFinite(zero.models[m].score) && zero.models[m].cost.c !== undefined, `零样本 ${m} score/cost/sigma 均有限  →  ` + JSON.stringify(zero.models[m]));
       });
@@ -268,6 +269,14 @@ describe('dianjiangtai', () => {
     const chz = run({ jobId: "j-chz", workType: "查证" });
     await t.test('F1：deepseek 系对查证被 ban 剔除', () => {
       assert.ok(chz.models[FLASH].gates.rejected && chz.models["deepseek-v4-pro"].gates.rejected, 'F1：deepseek 系对查证被 ban 剔除');
+    });
+    const writeBan = run({ jobId: "j-ds-write", workType: "写码" });
+    await t.test('F1：#669 deepseek 写码也被 ban（全工种额度闸）', () => {
+      assert.ok(writeBan.models[FLASH].gates.rejected && writeBan.models[FLASH].gates.reasons.includes("ban") && writeBan.models["deepseek-v4-pro"].gates.rejected && !writeBan.options.B.models.includes(FLASH), 'F1：#669 deepseek 写码也被 ban  →  ' + JSON.stringify({ flash: writeBan.models[FLASH].gates, B: writeBan.options.B.models }));
+    });
+    const revBan = run({ jobId: "j-ds-rev", workType: "审查" });
+    await t.test('F1：#669 deepseek 审查也被 ban（全工种额度闸）', () => {
+      assert.ok(revBan.models[FLASH].gates.rejected && revBan.models["deepseek-v4-pro"].gates.rejected && !revBan.options.B.models.includes(FLASH) && !revBan.options.B.models.includes("deepseek-v4-pro"), 'F1：#669 deepseek 审查也被 ban  →  ' + JSON.stringify({ flash: revBan.models[FLASH].gates, B: revBan.options.B.models }));
     });
 
     // F14 上下文门闩：任务预算超窗口剔除（flash 窗口 1M）
@@ -475,11 +484,15 @@ describe('dianjiangtai', () => {
     await t.test('models.yml：gpt/claude 价目 verified_at=null（待补）', () => {
       assert.ok(models.find(m => m.id === "gpt-5.6-sol").pricing.verified_at === null && models.find(m => m.id === "claude-opus").pricing.verified_at === null, 'models.yml：gpt/claude 价目 verified_at=null（待补）');
     });
-    await t.test('bans.yml：3 条硬禁令', () => {
-      assert.ok(bans.length === 3, 'bans.yml：3 条硬禁令  →  ' + String(bans.length));
+    await t.test('bans.yml：4 条硬禁令', () => {
+      assert.ok(bans.length === 4, 'bans.yml：4 条硬禁令  →  ' + String(bans.length));
     });
     await t.test('bans.yml：gpt UI ban、deepseek 查证 ban 就位', () => {
       assert.ok(bans.some(b => b.models.includes("gpt-5.6-sol") && b.work_types.includes("UI")) && bans.some(b => b.models.includes(FLASH) && b.work_types.includes("查证")), 'bans.yml：gpt UI ban、deepseek 查证 ban 就位');
+    });
+    await t.test('bans.yml：#669 额度全工种禁令就位（work_types 空）', () => {
+      const quota = bans.find(b => b.id === "ban-deepseek-额度");
+      assert.ok(quota && quota.models.includes(FLASH) && quota.models.includes("deepseek-v4-pro") && Array.isArray(quota.work_types) && quota.work_types.length === 0, 'bans.yml：#669 额度全工种禁令就位  →  ' + JSON.stringify(quota));
     });
     await t.test('weights.yml：λ_risk=1.0 / λ_pref=0.2 / λ_cost=0.15（C.1 默认）', () => {
       assert.ok(weights.weights.lambda_risk === 1.0 && weights.weights.lambda_pref === 0.2 && weights.weights.lambda_cost === 0.15, 'weights.yml：λ_risk=1.0 / λ_pref=0.2 / λ_cost=0.15（C.1 默认）');
@@ -569,17 +582,17 @@ describe('dianjiangtai', () => {
       assert.ok(routedPeak.options.A.reason === "route_beijing", 'select+routes：峰时 reason=route_beijing  →  ' + routedPeak.options.A.reason);
     });
     const routedValley = run({ jobId: "j-route-valley", ts: TS_VALLEY, events: discEvents, routes });
-    await t.test('select+routes：谷时写码 A = deepseek-v4-flash', () => {
-      assert.ok(routedValley.options.A.model === FLASH, 'select+routes：谷时写码 A = deepseek-v4-flash  →  ' + routedValley.options.A.model);
+    await t.test('select+routes：谷时写码 A = grok-4.6（#669 flash 被门闩剔，走 fallback）', () => {
+      assert.ok(routedValley.options.A.model === "grok-4.6", 'select+routes：谷时写码 A = grok-4.6（route_fallback）  →  ' + routedValley.options.A.model);
     });
-    await t.test('select+routes：谷时 reason=route_beijing', () => {
-      assert.ok(routedValley.options.A.reason === "route_beijing", 'select+routes：谷时 reason=route_beijing  →  ' + routedValley.options.A.reason);
+    await t.test('select+routes：谷时 reason=route_fallback', () => {
+      assert.ok(routedValley.options.A.reason === "route_fallback", 'select+routes：谷时 reason=route_fallback  →  ' + routedValley.options.A.reason);
     });
-    await t.test('slate：峰时第一是 grok，fallback 是下一模型不是管子', () => {
-      assert.ok(Array.isArray(routedPeak.slate) && routedPeak.slate[0] === "grok-4.6" && routedPeak.slate[1] === FLASH, 'slate：峰时第一是 grok，fallback 是下一模型不是管子  →  ' + JSON.stringify(routedPeak.slate));
+    await t.test('slate：峰时第一是 grok，flash 不在名单（#669 额度 ban）', () => {
+      assert.ok(Array.isArray(routedPeak.slate) && routedPeak.slate[0] === "grok-4.6" && !routedPeak.slate.includes(FLASH), 'slate：峰时第一是 grok，flash 不在名单  →  ' + JSON.stringify(routedPeak.slate));
     });
-    await t.test('slate：谷时第一是 flash', () => {
-      assert.ok(Array.isArray(routedValley.slate) && routedValley.slate[0] === FLASH, 'slate：谷时第一是 flash  →  ' + JSON.stringify(routedValley.slate));
+    await t.test('slate：谷时第一是 grok（fallback），flash 不在名单', () => {
+      assert.ok(Array.isArray(routedValley.slate) && routedValley.slate[0] === "grok-4.6" && !routedValley.slate.includes(FLASH), 'slate：谷时第一是 grok（fallback）  →  ' + JSON.stringify(routedValley.slate));
     });
     await t.test('无 routes 时行为不变：零样本仍 quota_explore', () => {
       assert.ok(run().options.A.reason === "quota_explore", '无 routes 时行为不变：零样本仍 quota_explore');
@@ -629,8 +642,8 @@ describe('dianjiangtai', () => {
       assert.ok(djPeakOut.options.A.reason === "route_beijing", 'CLI 峰时 reason=route_beijing  →  ' + djPeakOut.options.A.reason);
     });
     const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
-    await t.test('CLI 谷时写码推荐 provider/deepseek-v4-flash（#533，前缀随 master 路由表）', () => {
-      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `${flashProvider}/${FLASH}`, 'CLI 谷时写码推荐 provider/deepseek-v4-flash（#533，前缀随 master 路由表）  →  ' + (djValley.stderr || "").slice(0, 120));
+    await t.test('CLI 谷时写码推荐 provider/grok-4.6（#669 门闩剔 flash 走 fallback）', () => {
+      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `${grokProvider}/grok-4.6`, 'CLI 谷时写码推荐 grok-4.6（route_fallback）  →  ' + (djValley.status === 0 ? JSON.parse(djValley.stdout).options.A.model : (djValley.stderr || "").slice(0, 120)));
     });
     const djNoTs = cliDj(["--role", "写码"]);
     await t.test('CLI 缺 --ts 非 0 退出（禁 Date.now）', () => {
