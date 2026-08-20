@@ -131,6 +131,90 @@ describe('#679 起审官同厂硬闸', () => {
     });
   });
 
+  it('fallback 实际模型与卡名过期：按实际工人闸，不读卡名', async (t) => {
+    const {
+      filterSlateSameVendor, assertLaunchedWorkers, resolveActualWorkerModel, assertCrossVendor,
+    } = await GATE_LOAD;
+    const slot = await SLOT_LOAD;
+    const slate = [
+      { id: 'grok-4.6', pipes: [{ provider: 'grok' }] },
+      { id: 'gpt-5.6-sol', pipes: [{ provider: 'gpt' }] },
+      { id: 'kimi-k3', pipes: [{ provider: 'cursor' }] },
+    ];
+    const filtered = filterSlateSameVendor({
+      slate, reviewerId: 'gpt-5.6-sol', models: MODELS, startIndex: 0,
+    });
+    await t.test('slate 预先剔除与审官同厂的 GPT', () => {
+      assert.ok(filtered.ok === true && filtered.dropped.includes('gpt-5.6-sol'), JSON.stringify(filtered));
+      assert.deepEqual(filtered.slate.map(s => s.id), ['grok-4.6', 'kimi-k3']);
+      assert.ok(filtered.startIndex === 0);
+    });
+    const fallbackSame = assertLaunchedWorkers({
+      workerIds: ['gpt-5.6-sol'], reviewerId: 'gpt-5.6-sol', models: MODELS,
+    });
+    await t.test('请求 grok 后 fallback 到 GPT、审官也是 GPT → 同厂拒绝', () => {
+      assert.ok(fallbackSame.ok === false && fallbackSame.state === 'same_vendor', JSON.stringify(fallbackSame));
+    });
+    const splitSame = assertLaunchedWorkers({
+      workerIds: ['grok-4.6', 'gpt-5.6-sol'], reviewerId: 'gpt-5.6-sol', models: MODELS,
+    });
+    await t.test('split 子工人之一 fallback 到审官同厂 → 拒绝', () => {
+      assert.ok(splitSame.ok === false && splitSame.state === 'same_vendor', JSON.stringify(splitSame));
+    });
+    const splitPass = assertLaunchedWorkers({
+      workerIds: ['grok-4.6', 'kimi-k3'], reviewerId: 'gpt-5.6-sol', models: MODELS,
+    });
+    await t.test('split 子工人都异厂 → 通过', () => {
+      assert.ok(splitPass.ok === true && splitPass.state === 'pass', JSON.stringify(splitPass));
+    });
+    const hole = assertCrossVendor({
+      workerId: 'gpt-5.6-sol', reviewerId: 'gpt-5.6-sol', models: MODELS,
+    });
+    await t.test('未剔除时 fallback 到 GPT 会同厂（回归样本）', () => {
+      assert.ok(hole.state === 'same_vendor');
+    });
+
+    const actual = resolveActualWorkerModel({ dispatchModel: 'kimi-k3' });
+    await t.test('Dispatch 元数据优先于卡名：实际是 kimi', () => {
+      assert.ok(actual.ok && actual.source === 'dispatch' && actual.modelId === 'kimi-k3', JSON.stringify(actual));
+    });
+    const fromLabel = resolveActualWorkerModel({ labels: ['model/kimi-k3', 'type/写码'] });
+    await t.test('无 Dispatch 时认唯一 model/*', () => {
+      assert.ok(fromLabel.ok && fromLabel.source === 'label' && fromLabel.modelId === 'kimi-k3', JSON.stringify(fromLabel));
+    });
+    const unscanned = resolveActualWorkerModel({});
+    await t.test('两边都没有 → 没查成，不许从卡名猜', () => {
+      assert.ok(unscanned.ok === false && unscanned.state === 'unscanned' && /不许从卡名猜|没查成/.test(unscanned.error),
+        JSON.stringify(unscanned));
+    });
+    const none = resolveActualWorkerModel({ labels: ['type/写码'] });
+    await t.test('扫完没有 model/* → none，不是从卡名补', () => {
+      assert.ok(none.ok === false && none.state === 'none' && /不许从卡名猜/.test(none.error), JSON.stringify(none));
+    });
+    const staleCard = slot.parseWorkerModelFromCard('PR-#680 工人·grok-4.6 写闸');
+    await t.test('卡名仍是请求模型 grok（过期）', () => {
+      assert.ok(staleCard.ok && staleCard.model === 'grok-4.6', JSON.stringify(staleCard));
+    });
+    const wrong = slot.planCapacitySwitch({
+      displayName: 'PR-#680 审官·gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
+      workerId: staleCard.model,
+    });
+    await t.test('误读过期卡名 grok → 会换到实际工人同厂的 kimi', () => {
+      assert.ok(wrong.ok && wrong.to === 'kimi-k3', JSON.stringify(wrong));
+    });
+    const right = slot.planCapacitySwitch({
+      displayName: 'PR-#680 审官·gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol', 'kimi-k3'],
+      workerId: actual.modelId,
+    });
+    await t.test('按实际 kimi 换人 → 升级，不换到同厂', () => {
+      assert.ok(right.ok === false && right.action === 'escalate' && /同厂/.test(right.error), JSON.stringify(right));
+    });
+  });
+
   it('不改 pinReviewerSlotA 顶位', async (t) => {
     const slot = await SLOT_LOAD;
     await t.test('门闩有 GPT 仍顶 GPT', () => {

@@ -9,7 +9,11 @@ const GATE_CALL = /assertCrossVendor\s*\(/;
 const REFUSE_CALL = /refuseIfSameVendor\s*\(/;
 const NEXT_WORKER = /nextReviewerAfter\s*\([\s\S]{0,240}workerId/;
 const CAP_WORKER = /planCapacitySwitch\s*\([\s\S]{0,240}workerId/;
-const WD_WORKER = /workerModelId/;
+const FILTER_SLATE = /filterSlateSameVendor\s*\(/;
+const LAUNCHED_MODEL = /launched\.modelId/;
+const CHILD_LAUNCHED = /childLaunch\.modelId/;
+const WD_ACTUAL = /resolveActualWorkerModel\s*\(/;
+const WD_CARD = /parseWorkerModelFromCard/;
 
 function chunk(src, re) {
   const m = String(src || '').match(re);
@@ -67,9 +71,21 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
     problems.push('planCapacitySwitch 换人没带 workerId');
   }
 
+  const dispatch = chunk(daoSrc, /function cmdDispatch\b[\s\S]*?\nfunction cmd/);
+  if (!dispatch) problems.push('找不到 cmdDispatch');
+  else {
+    if (!FILTER_SLATE.test(dispatch)) problems.push('cmdDispatch 没在 slate 里剔除同厂候选');
+    if (!LAUNCHED_MODEL.test(dispatch)) problems.push('cmdDispatch 没按 launched.modelId 过同厂闸');
+    if (!CHILD_LAUNCHED.test(dispatch)) problems.push('cmdDispatch split 子工人没按实际模型过同厂闸');
+    if (!GATE_CALL.test(dispatch) && !REFUSE_CALL.test(dispatch)) {
+      problems.push('cmdDispatch 实际模型没走同厂闸');
+    }
+  }
+
   const exec = chunk(watchdogSrc, /function executeCapacitySwitch\b[\s\S]*?\nfunction /);
   if (!exec) problems.push('找不到 executeCapacitySwitch');
-  else if (!WD_WORKER.test(exec)) problems.push('executeCapacitySwitch 没传 workerModelId');
+  else if (!WD_ACTUAL.test(exec)) problems.push('executeCapacitySwitch 没从 Dispatch/标签读实际工人模型');
+  if (WD_CARD.test(watchdogSrc)) problems.push('watchdog 仍从卡名 parseWorkerModelFromCard 读工人模型');
 
   return { ok: problems.length === 0, unscanned: false, problems };
 }

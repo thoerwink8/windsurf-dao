@@ -152,7 +152,7 @@ import {
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
 import { defaultLogRel, leasePath, launchFilePath, parseLease } from './inbox-station.mjs';
-import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
+import { assertCrossVendor, filterSlateSameVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
@@ -668,6 +668,19 @@ function cmdDispatch(args) {
     });
   } catch (e) { fail(String(e.message || e)); }
 
+  const filteredSlate = filterSlateSameVendor({
+    slate: slatePack.slate,
+    startIndex: slatePack.startIndex,
+    reviewerId: gate.reviewer,
+    models: routing.models,
+  });
+  if (!filteredSlate.ok) fail(filteredSlate.error, { vendorGate: filteredSlate });
+  slatePack = {
+    ...slatePack,
+    slate: filteredSlate.slate,
+    startIndex: filteredSlate.startIndex,
+  };
+
   const startEntry = slatePack.slate[slatePack.startIndex];
   let workerLaunch;
   let reviewerLaunch;
@@ -801,6 +814,25 @@ function cmdDispatch(args) {
   plan.workerLaunch = launched.launch.command;
   plan.launchAttempts = launched.attempts;
 
+  // #679：闸在 dispatch。slate fallback 之后必须按实际 launched.modelId 再过同厂闸。
+  const launchedGate = assertCrossVendor({
+    workerId: launched.modelId,
+    reviewerId: gate.reviewer,
+    models: routing.models,
+  });
+  if (!launchedGate.ok) {
+    const next = nextReviewerAfter({
+      currentId: gate.reviewer,
+      models: routing.models,
+      passerIds: reviewerPasserIds(routing),
+      workerId: launched.modelId,
+    });
+    failCreated(created, formatVendorGateError(launchedGate, next), {
+      vendorGate: { ...launchedGate, next: next.ok ? next.next : null, exhausted: !!next.exhausted },
+      ...plan,
+    });
+  }
+
   // #602：注入只给一行指针 + spec + 参数。换行按 agent 转码（grok 转 ESC+CR），不禁换行；硬闸只有 UTF-8 字节 ≤500。
   let soldierBook = null;
   try {
@@ -872,6 +904,18 @@ function cmdDispatch(args) {
         });
         if (!childLaunch.ok) {
           return { ok: false, error: childLaunch.error || '子工人 TUI 未就绪', handle: scratch.workerHandle };
+        }
+        const childVendor = assertCrossVendor({
+          workerId: childLaunch.modelId,
+          reviewerId: gate.reviewer,
+          models: routing.models,
+        });
+        if (!childVendor.ok) {
+          return {
+            ok: false,
+            error: childVendor.error,
+            handle: childLaunch.handle,
+          };
         }
         let childBook;
         try {

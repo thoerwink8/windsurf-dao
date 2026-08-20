@@ -1,4 +1,5 @@
 function executeCapacitySwitch(target, args, events) {
-  const plan = planCapacitySwitch({ displayName: target.name });
+  const parsed = parseWorkerModelFromCard(parent?.displayName);
+  const plan = planCapacitySwitch({ displayName: target.name, workerId: parsed.model });
 }
 function leftover() {}

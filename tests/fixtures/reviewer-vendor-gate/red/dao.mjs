@@ -1,3 +1,7 @@
+function cmdDispatch(args) {
+  const launched = startWorkerBySlate();
+  plan.model = launched.modelId;
+}
 function cmdReviewerCreate(args) {
   const picked = resolveReviewerFromPr({ pr: args.pr });
 }

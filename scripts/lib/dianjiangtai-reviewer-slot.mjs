@@ -88,6 +88,7 @@ export function parseReviewerCardName(name) {
   return { ok: true, pr: Number(m[1]), model: m[2] };
 }
 
+/** 卡名给人看。程序判据不要用这个读实际工人模型——fallback 后卡名可能停在请求模型。 */
 export function parseWorkerModelFromCard(name) {
   const n = String(name || '').trim();
   const m = n.match(/工人·(\S+)/);

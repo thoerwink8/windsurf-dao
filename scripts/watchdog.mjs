@@ -131,8 +131,9 @@ import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
-import { loadRouting, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
-import { planCapacitySwitch, parseWorkerModelFromCard } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { loadRouting, leftoverDispatchMatch, pastedContentMatch, runGh } from './lib/dao-cmd.mjs';
+import { planCapacitySwitch, parseReviewerCardName } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { resolveActualWorkerModel } from './lib/reviewer-vendor-gate.mjs';
 import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
@@ -576,6 +577,7 @@ function loadSnapshotRound(roundDir) {
   //   heartbeat.json     见 flow.mjs 心跳契约（#497 立约）
   //   flow-signals.json  { prs: [{ number, comments, reviews }] }（#580：心跳缺失时的待流转证据）
   //   worker-list-evidence.json  { worktrees: [ <worktreeId>, ... ] }（#569 BLIND：dispatch 记账集合）
+  //   worker-model-evidence.json { <parentWorktreeId>: { dispatchModel, labels } }（#679：实际工人模型，不读卡名）
   //   completion-evidence.json { <worktreeId>: { headCommittedAt, lastCompletionAt } }（#586）
   const gitEv = readJson('git-evidence.json');
   const ghEv = readJson('gh-evidence.json');
@@ -583,7 +585,15 @@ function loadSnapshotRound(roundDir) {
   const hb = readJson('heartbeat.json');
   const flowSignals = readJson('flow-signals.json');
   const wlEv = readJson('worker-list-evidence.json');
+  const wmEv = readJson('worker-model-evidence.json');
   const compEv = readJson('completion-evidence.json');
+
+  const modelsByWorktree = new Map();
+  if (wlEv && wlEv.models && typeof wlEv.models === 'object') {
+    for (const [id, model] of Object.entries(wlEv.models)) {
+      if (id && model) modelsByWorktree.set(id, String(model));
+    }
+  }
 
   return {
     ps, paneByKey, readTerminal, tlError: null, label: basename(roundDir),
@@ -596,7 +606,10 @@ function loadSnapshotRound(roundDir) {
     heartbeat: hb || null,
     flowSignals: flowSignals || null,
     sessionsDir: join(roundDir, 'sessions'),
-    dispatchTracked: wlEv && Array.isArray(wlEv.worktrees) ? { tracked: new Set(wlEv.worktrees.filter(Boolean)) } : { missing: true },
+    dispatchTracked: wlEv && Array.isArray(wlEv.worktrees)
+      ? { tracked: new Set(wlEv.worktrees.filter(Boolean)), modelsByWorktree }
+      : { missing: true, modelsByWorktree },
+    workerModelEvidence: wmEv || null,
     completionEvidence: compEv || null,
   };
 }
@@ -757,18 +770,60 @@ function pushBaoShuai(events, target, detail, fingerprint) {
   });
 }
 
-function executeCapacitySwitch(target, args, events) {
+function workerModelInputs(source, target, args) {
+  const parentId = target.parentWorktreeId;
+  const snap = source?.workerModelEvidence;
+  if (snap && typeof snap === 'object') {
+    const entry = snap[parentId] || snap.models?.[parentId];
+    if (typeof entry === 'string' && entry.trim()) return { dispatchModel: entry };
+    if (entry && typeof entry === 'object') {
+      return {
+        dispatchModel: entry.dispatchModel || entry.model,
+        labels: entry.labels,
+      };
+    }
+  }
+  const fromMap = source?.dispatchTracked?.modelsByWorktree;
+  if (fromMap && parentId) {
+    const m = typeof fromMap.get === 'function' ? fromMap.get(parentId) : fromMap[parentId];
+    if (m) return { dispatchModel: m };
+  }
+  if (args.snapshotDir) return {};
+  const parent = (source?.ps || []).find(p => (p.worktreeId || p.id) === parentId);
+  const issue = issueNumberFromWorktree(parent);
+  if (!issue) return {};
+  const r = runGh(['issue', 'view', String(issue), '--json', 'labels'], { role: 'watchdog' });
+  if (!r.ok) return {};
+  try {
+    const parsed = JSON.parse(r.out);
+    return { labels: Array.isArray(parsed.labels) ? parsed.labels : [] };
+  } catch {
+    return {};
+  }
+}
+
+function executeCapacitySwitch(target, args, events, source) {
   let routing;
   try { routing = loadRouting(); }
   catch (e) {
     pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——读选型表失败没法换人：${e.message || e}`, 'capacity');
     return;
   }
+  const parsed = parseReviewerCardName(target.name);
+  if (!parsed.ok) {
+    pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${parsed.error}`, 'capacity');
+    return;
+  }
+  const actual = resolveActualWorkerModel(workerModelInputs(source, target, args));
+  if (!actual.ok) {
+    pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${actual.error}`, 'capacity');
+    return;
+  }
   const plan = planCapacitySwitch({
     displayName: target.name,
     models: routing.models || [],
     passerIds: reviewerPasserIds(routing),
-    workerId: target.workerModelId,
+    workerId: actual.modelId,
   });
   if (!plan.ok) {
     pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${plan.error}`, 'capacity');
@@ -973,11 +1028,16 @@ function liveDispatchTracked() {
   const workers = r.json?.result?.workers;
   if (!Array.isArray(workers)) return { error: 'orca orchestration worker-list 返回结构不认识（缺 result.workers 数组）' };
   const tracked = new Set();
+  const modelsByWorktree = new Map();
   for (const wk of workers) {
     const wt = wk?.resource?.worktreeId;
     if (wt) tracked.add(wt);
+    const model = wk?.model || wk?.resource?.model || wk?.dispatch?.model || wk?.task?.model;
+    if (wt && model != null && String(model).trim() !== '') {
+      modelsByWorktree.set(wt, String(model).trim());
+    }
   }
-  return { tracked };
+  return { tracked, modelsByWorktree };
 }
 
 function stationState(state, key) {
@@ -1023,12 +1083,6 @@ function runRound(source, args, state) {
     const multi = mon.length > 1;
     mon.forEach((a, i) => {
       const pane = a.paneKey ? source.paneByKey.get(a.paneKey) : undefined;
-      let workerModelId = null;
-      if (w.parentWorktreeId) {
-        const parent = source.ps.find(p => (p.worktreeId || p.id) === w.parentWorktreeId);
-        const parsed = parseWorkerModelFromCard(parent?.displayName);
-        if (parsed.ok) workerModelId = parsed.model;
-      }
       targets.push({
         key: `${w.worktreeId || w.id || w.path || '?'}|${a.paneKey || i}`,
         name: multi ? `${w.displayName || '?'}#${i + 1}` : (w.displayName || '?'),
@@ -1040,7 +1094,6 @@ function runRound(source, args, state) {
         parentWorktreeId: w.parentWorktreeId || null,
         prNumber: prNumberFromWorktree(w),
         issueNumber: issueNumberFromWorktree(w),
-        workerModelId,
       });
     });
   }
@@ -1166,7 +1219,7 @@ function runRound(source, args, state) {
                     st.fpKa.count += 1; st.fpKa.lastTs = now;
                   } else {
                     st.fpKa.reported = true;
-                    executeCapacitySwitch(t, args, events);
+                    executeCapacitySwitch(t, args, events, source);
                   }
                 }
               }
