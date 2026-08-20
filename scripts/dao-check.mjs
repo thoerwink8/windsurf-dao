@@ -1180,12 +1180,12 @@ function checkNoBannerInboxLive() {
   if (!r.ok) {
     fail(
       `横幅收信整层回潮 ${r.problems.length} 处`,
-      'dao.mjs 用 argsRunUse(--from 信箱台)；SKILL 不教横幅收信；soldier-book 写「心跳不准发」',
+      'dao.mjs 不 run-use；SKILL 不教横幅收信；soldier-book 写「心跳不准发」',
       r.problems.join('；'),
     );
     return;
   }
-  green('横幅收信整层已删（派工 --from 信箱台 / 不教横幅收信 / 心跳不准发）');
+  green('横幅收信整层已删（派工不 run-use / 不教横幅收信 / 心跳不准发）');
 }
 
 runTests();

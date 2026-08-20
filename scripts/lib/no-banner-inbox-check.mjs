@@ -33,7 +33,7 @@ export function inspectNoBannerInboxLive({ daoSrc, skillSrc, soldierSrc } = {}) 
   if (skillSrc == null) return { ok: false, unscanned: true, error: '没给 dispatch SKILL 正文（没查成）' };
   if (soldierSrc == null) return { ok: false, unscanned: true, error: '没给 soldier-book 正文（没查成）' };
   const problems = [];
-  if (!/argsRunUse/.test(daoSrc)) problems.push('dao.mjs 没有 argsRunUse（派工绑台没做成）');
+  if (/argsRunUse\(/.test(daoSrc)) problems.push('dao.mjs 仍调用 argsRunUse（#667 派工不 run-use；--from 不能冒充信箱台）');
   const raw = scanRawRunUseWithoutFrom(daoSrc);
   if (raw.length) problems.push(`dao.mjs 裸 run-use 无 --from：${raw.join('；')}`);
   const banners = scanBannerDeliveryTeach(skillSrc);

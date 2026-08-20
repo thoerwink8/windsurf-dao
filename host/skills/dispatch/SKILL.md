@@ -48,7 +48,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一台**哑终端（#638），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。**人用窗口（帅 / 主帅 / 工人 TUI）永不当 coordinator**（#667）：`dao.mjs dispatch` 用信箱台 `--from` 绑 Run，不从帅窗 `run-use`。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一台**哑终端（#638），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。**人用窗口（帅 / 主帅 / 工人 TUI）永不当 coordinator**（#667）：`dao.mjs dispatch` 不 `run-use` / 不 `run-create`；裸这两条和心跳被派工闸拦住。`--from` 不能冒充信箱台（调用窗 attested 成自己）。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 

@@ -43,8 +43,6 @@ import {
   argsOrchestrationSend,
   argsRunShow,
   argsRunCurrent,
-  argsRunUse,
-  argsRunCreate,
   argsRunList,
   extractRunId,
   extractSentMessage,
@@ -131,7 +129,6 @@ import {
 import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   ASK_TIMEOUT_MARK,
-  planDetachHumanCoordinators,
   planRunGc,
   resolveRunsForWorktrees,
   planInboxCollect,
@@ -333,38 +330,25 @@ function launchAgentInWorktree({ worktreeId, title, command, launch, forceComman
   return { ok: true, handle, reused: false, mode: 'command' };
 }
 
-function startOrcaWorker({ task, worktree, launched, from, run }) {
-  const startOnce = () => {
-    if (launched?.deferred) {
-      return orca(argsWorkerStart({
-        task,
-        worktree,
-        agent: launched.agentId,
-        model: launched.model || undefined,
-        from,
-        run,
-      }), 180000);
-    }
-    if (!launched?.handle) return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
-    return orca(argsWorkerStart({
-      task, worktree, terminal: launched.handle, from, run,
-    }));
-  };
-  let r = startOnce();
-  if (!r.ok && from && run && /consumer_fenced|run_required/i.test(errText(r.error))) {
-    orca(argsRunUse({ id: run, from }));
-    r = startOnce();
-  }
-  if (!r.ok) {
-    return { ok: false, error: errText(r.error), json: r.json, handle: launched?.handle || null };
-  }
+function startOrcaWorker({ task, worktree, launched, run }) {
   if (launched?.deferred) {
+    const r = orca(argsWorkerStart({
+      task,
+      worktree,
+      agent: launched.agentId,
+      model: launched.model || undefined,
+      run,
+    }), 180000);
+    if (!r.ok) return { ok: false, error: errText(r.error), json: r.json };
     const handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json };
     }
     return { ok: true, json: r.json, handle, dispatchId: extractDispatchId(r.json) };
   }
+  if (!launched?.handle) return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
+  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle, run }));
+  if (!r.ok) return { ok: false, error: errText(r.error), json: r.json, handle: launched.handle };
   return { ok: true, json: r.json, handle: launched.handle, dispatchId: extractDispatchId(r.json) };
 }
 
@@ -484,61 +468,23 @@ function workerStartProof(dispatchId) {
   return verifyWorkerStarted(r.json);
 }
 
-/** #667：task-create 经信箱台 --from，不从帅窗 run-use。 */
-function taskCreateOnRun(spec, runId, stationHandle) {
-  if (!stationHandle) {
-    return { ok: false, error: '派工必须 --from 信箱台，不许从帅窗 run-use（#667）' };
-  }
-  let last = { ok: false, error: 'task-create 还没跑' };
-  for (let i = 0; i < 3; i++) {
-    if (runId) orca(argsRunUse({ id: runId, from: stationHandle }));
-    last = orca(argsTaskCreate({ spec, run: runId || undefined, from: stationHandle }));
-    if (last.ok) return last;
-    const why = errText(last.error);
-    if (!/run_required|consumer_fenced/i.test(why)) return last;
-  }
-  return last;
+/**
+ * #667：派工不 run-use。
+ * `--from <信箱台>` 不能冒充：orca 校验证书，调用窗 attested 成自己，
+ * 去 act as 台会 consumer_fenced（本单 worker-done 实证）。
+ * 有 Run 就带 --run；没有就报出来，不许靠帅窗 run-use 救。
+ */
+function taskCreateOnRun(spec, runId) {
+  return orca(argsTaskCreate({ spec, run: runId || undefined }));
 }
 
-function applyDetachHumanCoordinators(stationHandle) {
-  const rl = orca(argsRunList());
-  if (!rl.ok) {
-    return { ok: false, unscanned: true, error: `run-list 没查成，不能夺回人用窗 coordinator：${errText(rl.error)}` };
-  }
-  const plan = planDetachHumanCoordinators({ runs: unwrapRuns(rl.json), stationHandle });
-  if (!plan.ok) return plan;
-  for (const item of plan.steal) {
-    const r = orca(argsRunUse({ id: item.runId, from: stationHandle }));
-    if (!r.ok) {
-      return { ok: false, error: `夺回 Run ${item.runId} coordinator 失败：${errText(r.error)}`, steal: plan.steal };
-    }
-  }
-  return { ok: true, steal: plan.steal };
-}
-
-function resolveStationRun(stationHandle) {
-  const cur = orca(argsRunCurrent({ from: stationHandle }));
-  if (!cur.ok) return { ok: false, error: `信箱台 run-current 没查成：${errText(cur.error)}` };
-  const id = extractRunId(cur.json);
-  if (id) return { ok: true, runId: id, created: false };
-  const created = orca(argsRunCreate({ objective: 'dao-dispatch', from: stationHandle }));
-  if (!created.ok) return { ok: false, error: `run-create --from 信箱台失败：${errText(created.error)}` };
-  const newId = extractRunId(created.json);
-  if (!newId) return { ok: false, error: 'run-create 没返回 result.run.id（没查成）' };
-  return { ok: true, runId: newId, created: true };
-}
-
-/** 信箱台活着 + 人用窗不当 coordinator + 台绑着一条 Run。 */
+/** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。Run 用调用方已有的，不 run-use / 不 run-create。 */
 function bindStation() {
   const ensured = ensureInboxStation();
   if (!ensured.ok) return { ok: false, error: `信箱台 ensure 失败: ${ensured.error}` };
-  const handle = ensured.handle;
-  if (!handle) return { ok: false, error: '信箱台 ensure 没返回 handle（没查成）' };
-  const detached = applyDetachHumanCoordinators(handle);
-  if (!detached.ok) return detached;
-  const run = resolveStationRun(handle);
-  if (!run.ok) return run;
-  return { ok: true, handle, runId: run.runId, created: run.created === true, steal: detached.steal || [] };
+  const cur = orca(argsRunCurrent());
+  if (!cur.ok) return { ok: false, error: `run-current 没查成：${errText(cur.error)}` };
+  return { ok: true, handle: ensured.handle || null, runId: extractRunId(cur.json) };
 }
 
 function sleepMs(ms) {
@@ -813,7 +759,7 @@ function cmdDispatch(args) {
 
   let taskId = args.task || null;
   if (soldierBook) {
-    const task = taskCreateOnRun(soldierBook, station.runId, station.handle);
+    const task = taskCreateOnRun(soldierBook, station.runId);
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
       failCreated(created, `task-create 失败: ${errText(task.error)}`, plan);
@@ -826,7 +772,6 @@ function cmdDispatch(args) {
     task: taskId,
     worktree: created.workerId,
     launched,
-    from: station.handle,
     run: station.runId,
   });
   if (!started.ok) failCreated(created, `worker-start 失败: ${started.error}`, { ...plan, taskId });
@@ -877,7 +822,7 @@ function cmdDispatch(args) {
         } catch (e) {
           return { ok: false, error: `子任务书渲染失败: ${String(e.message || e)}`, handle: childLaunch.handle };
         }
-        const childTask = taskCreateOnRun(childBook, station.runId, station.handle);
+        const childTask = taskCreateOnRun(childBook, station.runId);
         if (!childTask.ok) {
           return { ok: false, error: `子 task-create 失败: ${errText(childTask.error)}`, handle: childLaunch.handle };
         }
@@ -887,8 +832,7 @@ function cmdDispatch(args) {
           task: childTaskId,
           worktree: worktreeId,
           launched: childLaunch,
-          from: station.handle,
-          run: station.runId,
+            run: station.runId,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
@@ -1088,7 +1032,7 @@ function cmdDispatchBatch(args) {
     },
     createTask({ spec }) {
       const specText = encodeSendText(spec, launch.provider);
-      const task = taskCreateOnRun(specText, station.runId, station.handle);
+      const task = taskCreateOnRun(specText, station.runId);
       if (!task.ok) {
         if (isRunRequired(task.error)) return { ok: false, error: RUN_REQUIRED_HINT };
         return { ok: false, error: errText(task.error) };
@@ -1104,7 +1048,6 @@ function cmdDispatchBatch(args) {
         launched: deferred
           ? { deferred: true, agentId: agent, model }
           : { handle: terminal, launch },
-        from: station.handle,
         run: station.runId,
       });
       if (!started.ok) return { ok: false, error: started.error };
@@ -1362,7 +1305,7 @@ function reuseReviewerOnTerminal({
 
   const station = bindStation();
   if (!station.ok) return { ok: false, reused: true, error: station.error };
-  const revTask = taskCreateOnRun(reviewerBook, runId, station.handle);
+  const revTask = taskCreateOnRun(reviewerBook, runId);
   if (!revTask.ok) {
     if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
       return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
@@ -1378,7 +1321,6 @@ function reuseReviewerOnTerminal({
     task: reviewerTaskId,
     worktree: reviewerWorktreeId,
     launched: { handle },
-    from: station.handle,
     run: runId,
   });
   if (!revStarted.ok) {
@@ -1923,7 +1865,7 @@ function cmdTaskCreate(args) {
   if (!gate.ok) fail(gate.error);
   const station = bindStation();
   if (!station.ok) fail(station.error);
-  const r = orca(argsTaskCreate({ spec, run: station.runId, from: station.handle }));
+  const r = orca(argsTaskCreate({ spec, run: station.runId }));
   if (!r.ok) {
     if (isRunRequired(r.error)) fail(RUN_REQUIRED_HINT);
     fail(`task-create 失败: ${errText(r.error)}`);
@@ -1951,7 +1893,6 @@ function cmdWorkerStart(args) {
     worktree: args.worktree || undefined,
     terminal: args.terminal,
     retryOf: args.retryOf,
-    from: station.handle,
     run: station.runId,
   }));
   if (!r.ok) fail(`worker-start 失败: ${errText(r.error)}`);
@@ -2152,7 +2093,7 @@ function cmdReviewerCreate(args) {
   const station = bindStation();
   if (!station.ok) failCreated(launched, station.error, plan);
   const reviewerRunId = soldierRunId || station.runId;
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, station.handle);
+  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId);
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(launched, RUN_REQUIRED_HINT, plan);
     failCreated(launched, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -2166,7 +2107,6 @@ function cmdReviewerCreate(args) {
     launched: revTerm.deferred
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: launched.reviewerHandle, launch: reviewerLaunch },
-    from: station.handle,
     run: reviewerRunId,
   });
   if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
@@ -2392,7 +2332,7 @@ function cmdReviewerAttach(args) {
   const station = bindStation();
   if (!station.ok) failCreated(created, station.error, plan);
   const reviewerRunId = soldierRunId || station.runId;
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, station.handle);
+  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId);
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
     failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -2406,7 +2346,6 @@ function cmdReviewerAttach(args) {
     launched: revTerm.deferred
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
-    from: station.handle,
     run: reviewerRunId,
   });
   if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });

@@ -22,6 +22,8 @@ export function isLegacyRun(run) {
  * 一个终端不能同时当两个 Run 的 coordinator：连续夺回后台只绑最后一条，其余变 null。
  * null coordinator 仍可由 inbox 轮询收信，不算失败。
  * 没给台 handle / runs 不是数组 → unscanned，不许当「没有人用窗」。
+ * 本函数只出计划。从人用窗进程 `run-use --from 台` 会 consumer_fenced
+ * （orca 校验证书，不能冒充其它终端）。派工侧落实是：根本不 run-use。
  */
 export function planDetachHumanCoordinators({ runs, stationHandle } = {}) {
   if (!stationHandle) {
