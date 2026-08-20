@@ -3094,6 +3094,14 @@ describe('dao', () => {
         && !/新 Task 注入本终端/.test(tmplSoldier),
         '#677 士兵任务书交卷不立刻结算  →  ' + tmplSoldier.slice(tmplSoldier.indexOf('不要立刻'), tmplSoldier.indexOf('不要立刻') + 180));
     });
+    await t.test('#677 全局约定与派工手册不得再教交卷即下班', () => {
+      const global = fs.readFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), 'utf8');
+      const skill = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'SKILL.md'), 'utf8');
+      const banned = /发完完工报告就不再收信箱/;
+      assert.ok(!banned.test(global) && !banned.test(skill)
+        && /判定绿/.test(global) && /判定绿/.test(skill) && /#677/.test(global) && /#677/.test(skill),
+        '#677 常驻约定与 SKILL 同一口径  →  global=' + global.includes('判定绿') + ' skill=' + skill.includes('判定绿'));
+    });
     await t.test('notify 文档：普通投递 ≠ 结算；worker_done 才核 completed', () => {
       assert.ok(/投递\*\*不是\*\*结算|普通 notify 验的是\*\*投递\*\*不是\*\*结算/.test(S.USAGE)
         && /未结算/.test(S.USAGE) && /#551/.test(S.USAGE),
