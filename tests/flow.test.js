@@ -118,8 +118,9 @@ describe('flow', () => {
     await t.test('退出码 1（有报帅）', () => {
       assert.ok(r.status === 1, '退出码 1（有报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('复核绿 → 报帅终审', () => {
-      assert.ok(/报帅：终审 #453（复核结论：绿）/.test(r.out), '复核绿 → 报帅终审  →  ' + r.out.trim());
+    await t.test('#686 拍板 2：复核绿不报帅终审，等 MERGED 超时才报帅', () => {
+      assert.ok(/报帅：approved 超时未合：PR #453/.test(r.out) && !/报帅：终审/.test(r.out),
+        '#686 复核绿超时未合报帅  →  ' + r.out.trim());
     });
     await t.test('终审不自动合并（无 动作： 行）', () => {
       assert.ok(!/动作：/.test(r.out), '终审不自动合并（无 动作： 行）  →  ' + r.out.trim());
@@ -227,8 +228,9 @@ describe('flow', () => {
     await t.test('round-3 报帅验收没开成审官下一跳', () => {
       assert.ok(/round-3[\s\S]*报帅：验收没开成审官下一跳/.test(r.out) && !/round-3[\s\S]*复核注入/.test(r.out), 'round-3 观察报帅  →  ' + r.out.trim());
     });
-    await t.test('round-4 报帅终审', () => {
-      assert.ok(/round-4[\s\S]*报帅：终审 #1005/.test(r.out), 'round-4 报帅终审  →  ' + r.out.trim());
+    await t.test('#686 拍板 2：round-4 复核绿超时未合才报帅（不报终审）', () => {
+      assert.ok(/round-4[\s\S]*报帅：approved 超时未合：PR #1005/.test(r.out) && !/round-4[\s\S]*报帅：终审/.test(r.out),
+        'round-4 超时报帅  →  ' + r.out.trim());
     });
     await t.test('复核绿后不再注入任何动作', () => {
       assert.ok(!/round-4[\s\S]*动作：/.test(r.out), '复核绿后不再注入任何动作  →  ' + r.out.trim());
@@ -383,8 +385,8 @@ describe('flow', () => {
       assert.ok(awaitingShuaiReason({ state: "error", redReviews: 0 }, {}, false) === "判定行缺失/格式不符待帅分诊", 'awaitingShuaiReason state 兜底：error 态常驻（四轮复核红 1）');
     });
     const d4 = deriveState(orderedSignals([...done, ...rework], [...red, ...green]));
-    await t.test('复核绿 → approved → report-final', () => {
-      assert.ok(d4.state === "approved" && pendingAction(d4)?.kind === "report-final", '复核绿 → approved → report-final');
+    await t.test('#686 拍板 2：复核绿 → approved → observe-approved-merge（不报帅终审）', () => {
+      assert.ok(d4.state === "approved" && pendingAction(d4)?.kind === "observe-approved-merge", '复核绿 → approved → observe-approved-merge');
     });
     await t.test('制度类识别：正文含「体系类改动」', () => {
       assert.ok(isInstitutional({ body: "## 体系类改动（必答）", title: "x" }) === true, '制度类识别：正文含「体系类改动」');
@@ -619,8 +621,8 @@ describe('flow', () => {
         '完工未起审官 → 观察  →  ' + JSON.stringify(pending));
     });
     const idle = pendingFlowItems([{ number: 579, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [{ id: 2, body: "判定：绿，可合并", submittedAt: "t2" }] }]);
-    await t.test('已绿待帅 → 不是流转器待办', () => {
-      assert.ok(idle.length === 0, '已绿待帅 → 不是流转器待办');
+    await t.test('#686 拍板 2：已绿等合并 → 不是流转器待办（watchdog 不报 flow-absent）', () => {
+      assert.ok(idle.length === 0, '已绿等合并不是流转器待办  →  ' + JSON.stringify(idle));
     });
 
     const order = [];
@@ -736,5 +738,109 @@ describe('flow', () => {
       assert.ok(/attachRevision\(/.test(flowSrc) && /STALE_CODE/.test(flowSrc), 'flow live 心跳带 revision 且落后要报警');
     });
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // #686 flow 判据四件套
+  // ═══════════════════════════════════════════════════════════════
+
+  it('⑳ #686 ① 工人异常死亡检测：dispatch 未结算 + agent done + 无完工 comment → 报帅', async (t) => {
+    const r = runFlow(path.join(FIXTURES, "worker-dead"));
+    await t.test('退出码 1（报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('报帅工人异常死亡', () => {
+      assert.ok(/异常：工人异常死亡：#2008/.test(r.out), '报帅工人异常死亡  →  ' + r.out.trim());
+    });
+    await t.test('含 agent done + dispatch 未结算信息', () => {
+      assert.ok(/agent done/.test(r.out) && /dispatch/.test(r.out), '含详情  →  ' + r.out.trim());
+    });
+    await t.test('待帅处置常驻行', () => {
+      assert.ok(/待帅处置：#2008/.test(r.out), '待帅处置常驻  →  ' + r.out.trim());
+    });
+    await t.test('不 task-create / 不注入', () => {
+      assert.ok(!/task-create/.test(r.out) && !/动作：/.test(r.out), '不 task-create  →  ' + r.out.trim());
+    });
+  });
+
+  it('⑳b #686 ① 不误报：agent working / 有完工 comment / dispatch 已结算', async (t) => {
+    // 负控 1：agent working → 不报死亡
+    const r1 = runFlow(path.join(FIXTURES, "worker-not-dead"));
+    await t.test('agent working → 不报死亡', () => {
+      assert.ok(!/异常/.test(r1.out) && !/工人异常死亡/.test(r1.out), 'agent working 不报  →  ' + r1.out.trim());
+    });
+    await t.test('agent working → 0 需流转', () => {
+      assert.ok(/OK 扫完/.test(r1.out) && r1.status === 0, '0 需流转  →  ' + `status=${r1.status} ` + r1.out.trim());
+    });
+
+    // 负控 2：有完工 comment（state != working）→ 不报死亡
+    const r2 = runFlow(path.join(FIXTURES, "fake-loop"));
+    await t.test('有完工 comment + 红判定 → 不报死亡（正常闭环）', () => {
+      assert.ok(!/工人异常死亡/.test(r2.out), '有完工 comment 不报  →  ' + r2.out.trim());
+    });
+
+    // 负控 3：PR MERGED → 退役，不报死亡
+    const r3 = runFlow(path.join(FIXTURES, "merged"));
+    await t.test('PR MERGED → 退役，不报死亡', () => {
+      assert.ok(!/工人异常死亡/.test(r3.out), 'PR MERGED 不报  →  ' + r3.out.trim());
+    });
+  });
+
+  it('㉑ #686 ② notify 链断自愈：审官 dispatch 已结算 + 红项 + 返工完成 → 自动 reviewer-create', async (t) => {
+    // 预置状态：rec 里有 reviewer.dispatchId，模拟已有审官但 dispatch 已结算
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-selfheal-686-"));
+    const stateFile = path.join(tmp, "state.json");
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1, inventoried: true,
+      records: {
+        "2009": {
+          pr: 2009, seenComments: { 240001: true }, seenReviews: { 340001: true },
+          pendingShuai: null, reportedMalformed: {}, reportedStale: false,
+          actedOn: "awaiting-recheck|1|r:340001",
+          reviewer: { dispatchId: "ctx_reviewer_2009", worktree: null },
+          workerWorktree: null,
+        },
+      },
+    }), "utf8");
+    const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "reviewer-settled"), "--state-file", stateFile, "--dry-run"], {
+      encoding: "utf8", cwd: REPO,
+    });
+    const out = (r.stdout || "") + (r.stderr || "");
+    await t.test('退出码 1（有自愈动作）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('自愈：自动 reviewer-create（dry-run）', () => {
+      assert.ok(/自愈：#2009/.test(out) && /审官 dispatch 已结算/.test(out), '自愈 reviewer-create  →  ' + out.trim());
+    });
+    await t.test('不报帅（自愈不需帅介入）', () => {
+      assert.ok(!/报帅/.test(out) || /自愈/.test(out), '自愈不报帅  →  ' + out.trim());
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('㉒ #686 拍板 2：复核绿不报帅终审，等 MERGED 超时才报帅', async (t) => {
+    // 纯函数测试：approved → observe-approved-merge（不是 report-final）
+    const done = [{ type: "completion", id: "c:1", at: "t0", body: "完工：x" }];
+    const green = [{ type: "review", id: "r:1", at: "t1", body: "复核结论：绿", verdict: { kind: "复核结论", red: null, green: true, malformed: false } }];
+    const d = deriveState([...done, ...green]);
+    await t.test('approved → observe-approved-merge（不再 report-final）', () => {
+      assert.ok(d.state === "approved", 'state = approved');
+      assert.ok(pendingAction(d)?.kind === 'observe-approved-merge', 'observe-approved-merge  →  ' + JSON.stringify(pendingAction(d)));
+    });
+    await t.test('report-final 不再是流转器动作', () => {
+      assert.ok(isFlowWork({ kind: "report-final" }) === false, 'report-final 不是流转器动作');
+    });
+    await t.test('#686 拍板 2：observe-approved-merge 不算流转器待办（同旧 report-final 口径）', () => {
+      assert.ok(isFlowWork({ kind: "observe-approved-merge" }) === false, 'observe-approved-merge 不算流转器活');
+    });
+
+    // flow 快照测试：approved + 超时（fixture 时间远在过去）→ 报帅超时未合
+    const r = runFlow(path.join(FIXTURES, "real-453"));
+    await t.test('approved + 超时未合 → 报帅 approved 超时未合', () => {
+      assert.ok(/报帅：approved 超时未合：PR #453/.test(r.out), '超时报帅  →  ' + r.out.trim());
+    });
+    await t.test('不再报帅终审', () => {
+      assert.ok(!/报帅：终审/.test(r.out), '不报终审  →  ' + r.out.trim());
+    });
   });
 });
