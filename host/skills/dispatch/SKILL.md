@@ -48,7 +48,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一台**哑终端（#638），轮询全部在途 Run 的信（读 `orchestration inbox`，不 run-use、不抢 coordinator），**帅不要再挂 `check --wait` 门铃**——一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏（#525）。完工信号经信箱台落盘 `_flow/inbox.log` + 帅对话横幅（`You have N orchestration messages`），外加工位闲置监视、待办队列监视。要手查信箱用一次性 `orca orchestration check --json`（不带 `--wait`）或 `orca orchestration inbox --json`；`--ack` 语义是「确认上一批」，有 `deliveryId` 才带。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。心跳只进信箱供怀疑时 peek，不唤醒——空转实测 ~650 token/轮。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一台**哑终端（#638），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。**人用窗口（帅 / 主帅 / 工人 TUI）永不当 coordinator**（#667）：`dao.mjs dispatch` 不 `run-use` / 不 `run-create`；裸这两条和心跳被派工闸拦住。`--from` 不能冒充信箱台（调用窗 attested 成自己）。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 
@@ -279,7 +279,7 @@ node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer 
 ## 命令级铁律
 
 - 任务书承运 = `dao.mjs dispatch` 的 `--spec`：必须枚举全部职责类别（短摘要含要点，见「任务书口径」，禁只写技术目标）；逐字大材料按「材料三去处」分流。禁把普通长提示词落文件再 cat 进 `--spec`、禁双引号裸拼长文。
-- 派工走 `dao.mjs dispatch`。裸 `orca orchestration worker-start` / `task-create` 会被闸门拦住；逃生口 `dao.mjs raw --` 必须留痕。
+- 派工走 `dao.mjs dispatch`。裸 `orca orchestration worker-start` / `task-create` / `run-use` / `run-create` / `send --type heartbeat` 会被闸门拦住；逃生口 `dao.mjs raw --` 必须留痕。
 - 命令只信 `--json` 出口：例：`orca orchestration dispatch-show --task <task_id> --json`——字段一律从 JSON 取，不解析人读文本。
 - 路径从 PR 反查，禁手抄：例：`gh pr view <PR号> --json headRefName -q .headRefName`——分支名从 PR 的 JSON 取，不手抄。
 - **拿不到就报出来**（#532 升格为通用原则）：凡是拿不到东西——gh 输出失败、文件读不到、查不到、超时——必须报出来，**不许编、不许当成 0**。「没查成」当「查过没事」不报警，是会出事故的那类错（#532 次级限流让 `gh api` 全线失败拿到空列表；#538 第一轮审官编造执行证据、整轮作废）。两个落点，审官/工人/临时脚本一视同仁：

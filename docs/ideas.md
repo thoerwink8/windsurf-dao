@@ -8,7 +8,7 @@
 - **什么时候清理**：施工轮转第 4 步「重估」时过一遍（#547）；可整段删，不需要告别。
 - 一行一条：想法 + 一句为什么 / 从哪来。不承载任何待办语义——「想做」的标志是把它开成 issue，不是留在这里。
 
-- Orca「You have N orchestration messages」横幅根治：垫片是信箱守门人 Monitor；根治待确认 Orca 桌面 Settings → Experimental 有无通知开关，没有则向上游反馈（来自 #464）
+- Orca 横幅本身（宿主注入输入框）仍在：#667 已删掉「靠它给帅收信」整层（人用窗不当 coordinator，信走 inbox.log / GitHub）。剩下的是上游有没有通知开关——没有则向上游反馈（来自 #464）
 - 工人弹窗自动放行机制：用户已拍全自动化（黑名单兜底：删除类/强推类/动凭据类不自动放、上报），现状仍靠协调者人工见弹放行；reclaude 启动弹窗已有自动放行（#473）作部分垫片（来自 #464）
 - memory 独立仓里 5 处旧目录名/空指针清理：清单见 #474 审官全量扫（真相源已搬 thoerwink8/windsurf-dao-memory，#529），轮到 memory 仓保养时逐条处理
 - command-code 的 orca-cli skill 适配（`--skill` 挂载）：等 Orca 把 command-code 纳入 agent 识别清单后重估是否还需要——主体接入已随 PR #513 落地（来自 #508）

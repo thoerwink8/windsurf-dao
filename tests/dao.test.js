@@ -1723,6 +1723,30 @@ describe('dao', () => {
       && /不要先试 run-use/.test(S.RUN_REQUIRED_HINT)
       && !/或 run-use/.test(S.RUN_REQUIRED_HINT), '#502 未绑 Run 先指 run-create，不并列 run-use  →  ' + S.RUN_REQUIRED_HINT);
     });
+    await t.test('#667 帅窗 dispatch 不 run-use', () => {
+      const chunk = daoSrc.match(/function cmdDispatch\b[\s\S]*?\nfunction /);
+      assert.ok(chunk && !/argsRunUse\(/.test(chunk[0]) && !/\['orchestration',\s*'run-use'/.test(daoSrc),
+        '#667 帅窗 dispatch 不 run-use');
+    });
+    await t.test('#667 argsRunUse 无 from/self 抛错；self 不带 --from', () => {
+      let threw = false;
+      try { S.argsRunUse({ id: 'run_x' }); } catch { threw = true; }
+      const selfBind = S.argsRunUse({ id: 'run_x', self: true });
+      assert.ok(threw && selfBind.includes('--id') && !selfBind.includes('--from'),
+        '#667 argsRunUse self 绑自己  →  ' + selfBind.join(' '));
+    });
+    await t.test('#667 argsRunCreate 必须 --from', () => {
+      let threw = false;
+      try { S.argsRunCreate({ objective: 'x' }); } catch { threw = true; }
+      const withFrom = S.argsRunCreate({ objective: 'x', from: 'term_station' });
+      assert.ok(threw && withFrom.includes('--from'), '#667 argsRunCreate 必须 --from  →  ' + withFrom.join(' '));
+    });
+    await t.test('#667 task-create / worker-start 能带 --from', () => {
+      const t = S.argsTaskCreate({ spec: 's', run: 'r', from: 'h' });
+      const w = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'x', from: 'h', run: 'r' });
+      assert.ok(t.includes('--from') && w.includes('--from') && w.includes('--run'),
+        '#667 task-create / worker-start 能带 --from  →  ' + t.join(' ') + ' | ' + w.join(' '));
+    });
     await t.test('#495 dao.mjs 不走终端 rename', () => {
       assert.ok(!/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc), '#495 dao.mjs 不走终端 rename');
     });
@@ -2172,6 +2196,15 @@ describe('dao', () => {
     await t.test('旧路径 result.id / 顶层 id 都取不到',
       () => {
         assert.ok(S.extractTaskId({ id: 'rpc', result: { id: 'rpc2' } }) === null, '旧路径 result.id / 顶层 id 都取不到');
+      });
+    const runShow = fx('run-show.json');
+    await t.test('#667 真 run-show → extractRunId 走 result.run.id',
+      () => {
+        assert.ok(S.extractRunId(runShow) === 'run_1f15bcf004cb', '#667 真 run-show → extractRunId 走 result.run.id');
+      });
+    await t.test('#667 顶层 id 不是 runId',
+      () => {
+        assert.ok(runShow.id !== S.extractRunId(runShow), '#667 顶层 id 不是 runId');
       });
   });
 
