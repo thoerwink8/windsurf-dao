@@ -1,0 +1,15 @@
+{
+  "id": "y",
+  "ok": true,
+  "result": {
+    "terminals": [
+      {
+        "handle": "term_working",
+        "worktreeId": "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/652-merged",
+        "worktreePath": "C:/Users/Administrator/orca/workspaces/windsurf-dao/652-merged",
+        "title": "工人·pi",
+        "connected": true
+      }
+    ]
+  }
+}

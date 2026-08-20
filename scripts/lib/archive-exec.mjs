@@ -1,13 +1,15 @@
-// 信箱台收到「可归档」后的二次验证闸（#637）。
+// 归档关卡（#637 可归档加速 + #665 MERGED 扫描）。
 // 改这段前必须知道：
 //   1. 不信通知自称的合并状态，只信 gh pr view --json state。
 //   2. 没查成 ≠ 未合并：两者都 escalate、都不删。
-//   3. 审官协议不改：识别靠 subject /^可归档[:：]/；树优先 payload.worktree，
-//      否则盘面路径 / 卡名 PR-#N / issue 号 / linkedPR 任一即可，不只认 linkedPR。
-//   4. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
+//   3. 「可归档」只加速，不是门。扫描器每轮按 GitHub MERGED 收树。
+//   4. 树认路径 / 卡名 PR-#N / issue 号 / linkedPR 任一，不只认 linkedPR。
+//   5. idle / done 不算占用；只有 working / waiting 才拒删。
+//   6. 失败必须写 GitHub 评论（marshal）。orchestration escalation 会被信箱台自己 ack。
+//   7. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
 
 import { issueNumberFromWorktree, prNumberFromWorktree, worktreeIdOf } from './card-identity.mjs';
-import { resolveWorktreeSelector } from './dao-cmd.mjs';
+import { occupyingAgents, resolveWorktreeSelector } from './dao-cmd.mjs';
 
 const ARCHIVE_SUBJECT = /^可归档[:：]\s*(?:PR[#\s-]*)?#?(\d+)/i;
 const SKIP_TYPES = new Set([
@@ -183,16 +185,33 @@ export function resolveArchiveWorktree({ notice, worktrees } = {}) {
 export function applyArchivePlan(plan, {
   removeWorktree,
   escalate,
+  commentGithub,
+  commentStore,
   now = new Date(),
 } = {}) {
   const ts = toIso(now);
-  if (!plan || plan.action === 'ignore') {
-    return { ...plan, ts, removed: false, escalated: false, result: 'ignored' };
+  if (!plan || plan.action === 'ignore' || plan.action === 'skip') {
+    return { ...plan, ts, removed: false, escalated: false, result: plan?.action === 'skip' ? 'skipped' : 'ignored' };
+  }
+  if (plan.action === 'refuse') {
+    return { ...plan, ts, removed: false, escalated: false, result: 'refused' };
+  }
+  if (plan.action === 'unscanned') {
+    return finishEscalate(plan, {
+      escalate,
+      commentGithub,
+      commentStore,
+      ts,
+      reason: plan.reason,
+      result: 'unscanned',
+    });
   }
   if (plan.action === 'rm') {
     if (typeof removeWorktree !== 'function') {
       return finishEscalate(plan, {
         escalate,
+        commentGithub,
+        commentStore,
         ts,
         reason: '没有 worktree-rm 执行器',
         result: 'rm-failed',
@@ -211,17 +230,27 @@ export function applyArchivePlan(plan, {
         result: 'removed',
         removed: true,
         escalated: false,
+        commented: false,
         reason: plan.reason,
       };
     }
     return finishEscalate(plan, {
       escalate,
+      commentGithub,
+      commentStore,
       ts,
       reason: `worktree-rm 失败：${rm?.error || '未知错误'}`,
       result: 'rm-failed',
     });
   }
-  return finishEscalate(plan, { escalate, ts, reason: plan.reason, result: 'escalated' });
+  return finishEscalate(plan, {
+    escalate,
+    commentGithub,
+    commentStore,
+    ts,
+    reason: plan.reason,
+    result: 'escalated',
+  });
 }
 
 export function processArchiveNotices(messages, {
@@ -229,6 +258,8 @@ export function processArchiveNotices(messages, {
   listWorktrees,
   removeWorktree,
   escalate,
+  commentGithub,
+  commentStore,
   now = new Date(),
 } = {}) {
   const results = [];
@@ -276,9 +307,184 @@ export function processArchiveNotices(messages, {
       worktreesOk,
       worktreesError,
     });
-    results.push(applyArchivePlan(plan, { removeWorktree, escalate, now }));
+    results.push(applyArchivePlan(plan, {
+      removeWorktree, escalate, commentGithub, commentStore, now,
+    }));
   }
   return results;
+}
+
+export function archiveFailureComment(plan) {
+  const pr = plan?.pr ? `#${plan.pr}` : '未知';
+  return {
+    pr: plan?.pr ?? null,
+    worktree: plan?.worktree ?? null,
+    body: [
+      `归档失败：PR ${pr}`,
+      `原因：${plan?.reason || '验证未过'}`,
+      `树：${plan?.worktree || '（未解析）'}`,
+      `结果：${plan?.result || plan?.action || 'escalated'}`,
+      '可归档只加速，下一轮 MERGED 扫描仍会收。idle/done 终端不算占用。',
+    ].join('\n'),
+  };
+}
+
+export function commentKey(pr, reason) {
+  return `${pr ?? '?'}::${String(reason || '').slice(0, 120)}`;
+}
+
+export function shouldWriteFailureComment(key, store) {
+  if (!key) return false;
+  if (store && typeof store.has === 'function' && store.has(key)) return false;
+  return true;
+}
+
+export function rememberFailureComment(key, store) {
+  if (key && store && typeof store.add === 'function') store.add(key);
+}
+
+export function subtreeOccupying(w, worktrees) {
+  const out = [];
+  for (const node of subtreeOf(w, worktrees)) {
+    const agents = occupyingAgents(node);
+    if (agents.length) {
+      out.push({
+        name: node.displayName || worktreeIdOf(node) || '?',
+        states: agents.map((a) => a.state),
+      });
+    }
+  }
+  return out;
+}
+
+export function planMergedScan({ worktrees, queryPrState } = {}) {
+  if (!Array.isArray(worktrees)) {
+    return {
+      ok: false,
+      scanned: false,
+      unscanned: true,
+      error: '盘面 worktree 列表没查成——不是扫到 0',
+      plans: [],
+    };
+  }
+  const plans = [];
+  const seen = new Set();
+  for (const w of worktrees) {
+    if (!w || w.isMainWorktree) continue;
+    const pr = prNumberFromWorktree(w);
+    if (pr == null) continue;
+    const root = walkToRoot(w, worktrees);
+    if (root?.isMainWorktree) continue;
+    const unit = worktreeMatchesArchiveNumber(root, pr) ? root : w;
+    const uid = worktreeIdOf(unit);
+    const dedupe = `${uid || '?'}#${pr}`;
+    if (!uid || seen.has(dedupe)) continue;
+    seen.add(dedupe);
+
+    let prQuery;
+    if (typeof queryPrState !== 'function') {
+      prQuery = { ok: false, unscanned: true, error: '没有 gh 执行器，未查成' };
+    } else {
+      try {
+        prQuery = queryPrState(pr);
+      } catch (e) {
+        prQuery = { ok: false, unscanned: true, error: `gh 读 PR #${pr} 抛错：${e?.message || e}` };
+      }
+    }
+    if (!prQuery || prQuery.ok !== true) {
+      plans.push({
+        action: 'unscanned',
+        pr,
+        worktree: uid,
+        reason: prQuery?.error || 'gh 读 PR state 没查成',
+      });
+      continue;
+    }
+    if (String(prQuery.state).toUpperCase() !== 'MERGED') {
+      plans.push({
+        action: 'skip',
+        pr,
+        worktree: uid,
+        reason: `PR #${pr} 实际是 ${prQuery.state}`,
+      });
+      continue;
+    }
+    const foreign = subtreeForeignPrs(unit, worktrees);
+    if (foreign.length > 0) {
+      plans.push({
+        action: 'escalate',
+        pr,
+        worktree: uid,
+        reason: `根卡子树还挂着别的 PR（${foreign.map((f) => `#${f.pr} ${f.name}`).join('、')}）——未删整树`,
+      });
+      continue;
+    }
+    const occ = subtreeOccupying(unit, worktrees);
+    if (occ.length) {
+      plans.push({
+        action: 'refuse',
+        pr,
+        worktree: uid,
+        reason: `占用中（working/waiting）：${occ.map((o) => `${o.name} agent=${o.states.join(',')}`).join('；')}——idle/done 不算占用`,
+      });
+      continue;
+    }
+    plans.push({
+      action: 'rm',
+      pr,
+      worktree: uid,
+      reason: 'PR MERGED，扫描收树（可归档不是门）',
+    });
+  }
+  return {
+    ok: true,
+    scanned: true,
+    unscanned: false,
+    plans,
+    trees: worktrees.length,
+  };
+}
+
+export function processMergedScan({
+  worktrees,
+  queryPrState,
+  removeWorktree,
+  escalate,
+  commentGithub,
+  commentStore,
+  now = new Date(),
+} = {}) {
+  const planned = planMergedScan({ worktrees, queryPrState });
+  if (!planned.ok) return { ...planned, results: [] };
+  const results = planned.plans.map((plan) => applyArchivePlan(plan, {
+    removeWorktree, escalate, commentGithub, commentStore, now,
+  }));
+  return { ...planned, results };
+}
+
+export function formatMergedScanLog(scan, now) {
+  const ts = toIso(now || new Date());
+  if (!scan || scan.ok !== true) {
+    return JSON.stringify({
+      ts,
+      type: 'merged-scan',
+      result: 'unscanned',
+      reason: scan?.error || '盘面没查成',
+      scanned: 0,
+    });
+  }
+  const results = Array.isArray(scan.results) ? scan.results : [];
+  return JSON.stringify({
+    ts,
+    type: 'merged-scan',
+    result: 'scanned',
+    trees: scan.trees ?? null,
+    plans: (scan.plans || []).length,
+    removed: results.filter((r) => r.removed).length,
+    refused: results.filter((r) => r.result === 'refused').length,
+    unscanned: results.filter((r) => r.result === 'unscanned').length,
+    failed: results.filter((r) => r.result === 'rm-failed' || r.result === 'escalated').length,
+  });
 }
 
 export function formatArchiveExecLog(record, now) {
@@ -317,7 +523,7 @@ function escalatePlan(notice, reason) {
   };
 }
 
-function finishEscalate(plan, { escalate, ts, reason, result }) {
+function finishEscalate(plan, { escalate, commentGithub, commentStore, ts, reason, result }) {
   const next = {
     ...plan,
     action: 'escalate',
@@ -326,6 +532,7 @@ function finishEscalate(plan, { escalate, ts, reason, result }) {
     reason,
     removed: false,
     escalated: false,
+    commented: false,
   };
   const text = archiveEscalationText(next);
   if (typeof escalate === 'function') {
@@ -334,13 +541,27 @@ function finishEscalate(plan, { escalate, ts, reason, result }) {
       if (sent && sent.ok === false) {
         next.result = 'escalate-failed';
         next.reason = `${reason}；escalation 也没发出：${sent.error || '未知错误'}`;
-        return next;
+      } else {
+        next.escalated = true;
       }
-      next.escalated = true;
     } catch (e) {
       next.result = 'escalate-failed';
       next.reason = `${reason}；escalation 抛错：${e?.message || e}`;
-      return next;
+    }
+  }
+  const comment = archiveFailureComment(next);
+  const key = commentKey(next.pr, next.reason);
+  if (typeof commentGithub === 'function' && shouldWriteFailureComment(key, commentStore)) {
+    try {
+      const sent = commentGithub(comment);
+      if (sent && sent.ok === false) {
+        next.reason = `${next.reason}；GitHub 评论没写成：${sent.error || '未知错误'}`;
+      } else {
+        next.commented = true;
+        rememberFailureComment(key, commentStore);
+      }
+    } catch (e) {
+      next.reason = `${next.reason}；GitHub 评论抛错：${e?.message || e}`;
     }
   }
   return next;

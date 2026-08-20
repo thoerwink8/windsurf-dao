@@ -651,6 +651,20 @@ describe('watchdog', () => {
       assert.ok(/动作: 将执行 worktree-rm --worktree .+ --force/.test(merged.out), 'PR MERGED → 打 worktree-rm 动作行  →  ' + merged.out.trim());
     });
 
+    const idleTerm = run('orphan-pr-merged-idle-term');
+    await t.test('#665 idle/done 终端不算占用：MERGED 仍报 orphan 并打 rm', () => {
+      assert.ok(
+        idleTerm.status === 1
+          && /orphan:.*已合并（gh state==MERGED）/.test(idleTerm.out)
+          && /动作: 将执行 worktree-rm/.test(idleTerm.out),
+        'idle/done 仍收树  →  ' + idleTerm.out.trim(),
+      );
+    });
+    const stillWorking = run('orphan-pr-merged-working');
+    await t.test('#665 working 才拒删：MERGED 但不报 orphan', () => {
+      assert.ok(!/orphan:/.test(stillWorking.out) && !/worktree-rm/.test(stillWorking.out), 'working 拒删  →  ' + stillWorking.out.trim());
+    });
+
     const open = run('orphan-pr-open');
     await t.test('PR OPEN → 不报 orphan、不打 rm（#652：不是 MERGED 不删）', () => {
       assert.ok(!/orphan:/.test(open.out) && !/worktree-rm/.test(open.out), 'PR OPEN → 不报 orphan、不打 rm  →  ' + open.out.trim());

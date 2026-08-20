@@ -1,18 +1,25 @@
 目标
-- 删掉 GitHub `Closes` 自动关单；关单只走脚本：署名 issue 的 PR 已 MERGED **且** check 全绿才 `issue close`；合进但 check 红的不关（已关的重开）。
-- 关联：署名 issue #657（本单关单交给 `scripts/close-issues.mjs`，不走自动关键词）。
+- 删掉「长驻进程绑死主树当下文件 + 可归档当归档必要门 + 失败只进自己 ack 的信箱」这一层。
+- 守卫（信箱台 / 看门狗 / flow）必须跑 origin/master：落后或查不成即自停；合了就收树；可归档只加速。
+- 关联：署名 issue #665（关单交给 `scripts/close-issues.mjs`，不走自动关键词）。
 
 验收标准
-1. 士兵/审官任务书模板不再教写 `Closes`（改写「署名 issue #N，关单交给关单脚本」），`Claude.md` / dispatch「落地即关」改为指向关单脚本指针。
-2. `dao-check` 扫仓内会进 PR 正文的 dispatch 模板：再出现 `Closes #` / `Fixes #` 就红（含红/绿样本判别）。
-3. 关单脚本/合后钩：`gh pr view --json state,statusCheckRollup` → MERGED 且全部 check 绿（没查成 ≠ 绿）才 `issue close`；若单已关但关它的 PR check 红 → `issue reopen`。
-4. 故意违规：造一条 Closes 模板被拦；造「合进但 check 红」样本被重开。`dao-check` 全绿。
-5. `Claude.md` / dispatch「落地即关」改成指针：关单只认本脚本，不认 Closes。
+1. 启动或每轮若代码落后 origin/master（或查不成），非零退出并写清原因，不许继续跑旧代码。推荐路径：`~/.dao/guard-mirror` 每次启动 fetch + reset --hard origin/master 再 exec；主树落后不影响关卡。
+2. `gh pr view --json state` 为 MERGED 且盘面树对得上（路径 / 卡名 `PR-#N` / issue 号 / `linkedPR` 任一）→ 收根树。idle / done 终端不算占用；只有 working / waiting 才拒删。
+3. 「可归档」只加速，不是门。信已经 ack、信箱台当时没删成，扫描器下一轮仍要收。
+4. 归档失败写 GitHub issue/PR 评论（marshal），不只发会被信箱台自己 ack 掉的 orchestration escalation。
+5. 测试分开「扫到 0」和「没查成」。上线前故意造一份落后样本，被当场拦住。
+6. `node scripts/dao-check.mjs` 过。影响新机启动则同提交更新 NEW-MACHINE.md。
+7. 不要 Closes。
+
+体系类三问
+1. 谁提的，发生在什么场景？2026-08-20 帅会话 /grill-ai。PR #664 已 MERGED、「可归档：664」已送达，盘面两张卡还在。信箱台 / 看门狗 / flow 都在跑未 pull 的主树，#664 里「归档认卡名」没加载；看门狗把树上终端当成占用；失败升信箱，信箱台自己 ack，帅聊天没回执。
+2. 删哪一层能让这个问题不存在？删掉「长驻进程绑死主树当下文件 + 可归档当归档必要门 + 失败只进自己 ack 的信箱」。不要再给 linkedPR 匹配打第 4 层补丁。
+3. 如果从零重做，今天还会造它吗？会造「一个关卡器」，不会造「绑在可能落后的主树、等人手重启才生效」的长驻进程。扳机只有 GitHub MERGED。可归档可留作加速。
 
 进展
-- soldier-book.md 改写「署名 issue #N，关单交给 `scripts/close-issues.mjs`」，明令禁止 GitHub 关单关键词；dispatch SKILL.md「落地即关」改指关单脚本，多 issue 署名规范同步更新。
-- 新建 `scripts/close-issues.mjs`（关单 CLI）/ `scripts/lib/close-issue.mjs`（判定纯函数，可测）：MERGED 且 `statusCheckRollup` 全绿才 `issue close`；合进但 check 红（FAILURE/未完成/无 check/没查成）不关，若单已关而关它的 PR check 红 → `issue reopen`。合后钩接入 `flow.mjs` 的 PR MERGED 退役处理。
-- 各署名解析器（dao-cmd `linkedIssueNumbers` / flow `ticketIssueNumber` / dao-check `closesNumbers` / ready-queue / watchdog）认新规范「署名 issue #N」并兼容旧关单词。
-- `dao-check` 新增 ㉑「关单不改走 GitHub 自动关键词」：红/绿样本判别 + live 扫 dispatch 模板，模板再出现 Closes #/Fixes # 就红。
-- 新测试 `tests/close-issue.test.js`（25 断言）：署名解析、全绿判定、close/reopen 落动作。全套 33 套 / 2043 断言过，0 红。
-- 验收自证：`tests/fixtures/close-auto/red` 造 Closes 模板被㉑拦；`tests/close-issue.test.js` 的「红且单已关→reopen」样本覆盖「合进但 check 红被重开」。`dao-check` 本 PR 相关检查全绿（唯一现存红是 open 单积压超阈值，属仓存量、与 #657 无关）。
+- [x] 开工五步：空提交、draft PR #666、卡状态、标签
+- [x] 落后自停 + `~/.dao/guard-mirror` 只读镜像
+- [x] MERGED 扫描（可归档只加速；idle/done 不算占用）
+- [x] 归档失败写 GitHub 评论（marshal）
+- [x] 测试 + NEW-MACHINE + dao-check（本单相关全绿；仓存量红：open 单积压超阈值，与 #665 无关）

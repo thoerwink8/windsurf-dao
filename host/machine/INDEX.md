@@ -30,6 +30,7 @@
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
+| D | ~/.dao/guard-mirror | NEW-MACHINE §9。守卫只读镜像，启动 fetch + reset --hard origin/master，不要手拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B | ~/AppData/Local/cursor-agent | cursor 真实二进制。shim 包装它，路径因机而异 |
