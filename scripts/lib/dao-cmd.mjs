@@ -1508,8 +1508,48 @@ export const CURSOR_FOLLOWUP_RE = /(?:^|\n)\s*→[^\n]*[^\s\n]|\d+\s*follow-ups?
 
 /** #619/#661/#679：未提交粘贴与「超时/环境」必须分开。垫片已退役：
  * 粘贴进输入框 ≠ 开工。看见 Pasted Content / [Pasted text] 继续等 timeout 或指纹消失且在干活；
- * 超时仍在输入框才 unsubmitted-paste。不补回车、不假装开工（#679 拍板）。 */
+ * 超时仍在输入框才 unsubmitted-paste。不补回车、不假装开工（#679 拍板）。
+ * #680：cursor-agent 的 [Pasted text] 是提交后显示残留（实测 Working 后残留不消失），
+ * 开工探针在 cursor 通道忽略它；Codex [Pasted Content] 仍是未提交。 */
 export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——任务书停在输入框未发出，禁止粘贴当开工（#661）';
+
+export function isCursorStartChannel(provider) {
+  const p = String(provider || '').trim().toLowerCase();
+  return p === 'cursor' || p === 'cursor-agent';
+}
+
+/** 去掉 cursor-agent 提交后残留，才能看见输出在不在动。 */
+export function stripCursorPasteResidue(text) {
+  return String(text ?? '').replace(CURSOR_PASTE_RE, '');
+}
+
+/**
+ * cursor 开工证据：Working/状态行可在粘贴块上方（残留停在输入框底部），
+ * 或去掉 [Pasted text] 后屏面文本在变。
+ */
+export function cursorStartEvidence({ text, prevText } = {}) {
+  const t = String(text ?? '');
+  if (CURSOR_WORKING_RE.test(t)) return { ok: true, kind: 'working' };
+  if (/(?:^|\n)[^\S\n]*Working(?:\b|[….。\s]|$)/im.test(t)) return { ok: true, kind: 'working' };
+  const now = stripCursorPasteResidue(t).replace(/\s+/g, ' ').trim();
+  const prev = stripCursorPasteResidue(prevText).replace(/\s+/g, ' ').trim();
+  if (now && prev && now !== prev) return { ok: true, kind: 'output-moving' };
+  return { ok: false };
+}
+
+/**
+ * 开工探针用的未提交粘贴。cursor 通道忽略 [Pasted text] 残留；
+ * Codex [Pasted Content] 无论通道都算未提交。
+ */
+export function unsubmittedPasteForStart({ text, provider } = {}) {
+  const t = String(text ?? '');
+  const codex = t.match(PASTED_CONTENT_RE);
+  if (codex) return { kind: 'codex', evidence: codex[0] };
+  if (isCursorStartChannel(provider)) return null;
+  const leftover = pastedContentMatch(t);
+  if (!leftover) return null;
+  return { kind: 'legacy', evidence: leftover };
+}
 
 /** #651：Cursor 粘贴块等价 Grok 的 Pasted Content——单独出现且后面没有在干活（状态行）
  * 就算未提交（审红 1）。已提交（粘贴块后面有干活状态行）不当未提交，避免死循环误杀。 */
@@ -1620,13 +1660,15 @@ export function verifyInjection({ text, readError } = {}) {
  *   1. worker-read 官方 transcript（source≠terminal）→ started；
  *   2. 看见未提交粘贴 → 继续等到 timeoutMs，或指纹消失且真在干活。
  *      超时仍在输入框才 unsubmitted-paste、pasteSubmitted:false。禁止补回车；
+ *      #680：cursor 通道忽略 [Pasted text] 残留，改认 Working / 输出在动；
+ *      Codex [Pasted Content] 仍是未提交。
  *   3. TUI 加载期（Starting MCP servers 等）不算绿；
  *   4. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
  */
 export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
-  stableRoundsNeeded = 3,
+  stableRoundsNeeded = 3, provider,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1635,8 +1677,10 @@ export function verifyStartedPolling({
   let reads = 0;
   let unscanned = null;
   let lastText = '';
+  let prevText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
+  const cursor = isCursorStartChannel(provider);
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
@@ -1658,8 +1702,38 @@ export function verifyStartedPolling({
     const read = readOnce();
     if (read && read.error) unscanned = { reason: '没读成', error: read.error };
     const text = read && !read.error ? extractTerminalText(read) : '';
+    const leftover = unsubmittedPasteForStart({ text, provider });
+    if (cursor) {
+      const startEv = cursorStartEvidence({ text, prevText });
+      prevText = text;
+      lastText = text;
+      if (leftover) {
+        stableRounds = 0;
+        sleep(intervalMs);
+        continue;
+      }
+      if (startEv.ok && !TUI_LOADING_RE.test(text)) {
+        stableRounds++;
+        if (stableRounds >= stableRoundsNeeded) {
+          return {
+            ok: true,
+            state: 'started',
+            proofFallback: true,
+            cursorStart: startEv.kind,
+            proof: proofUnavailable || undefined,
+            reads, stableRounds,
+            elapsedMs: Date.now() - t0,
+            text,
+          };
+        }
+        sleep(intervalMs);
+        continue;
+      }
+      stableRounds = 0;
+      sleep(intervalMs);
+      continue;
+    }
     lastText = text;
-    const leftover = pastedContentMatch(text);
     if (leftover) {
       // #679：粘贴后等，不要立刻杀。等 ≠ 补回车。指纹还在输入框就继续轮询。
       stableRounds = 0;
@@ -1687,13 +1761,13 @@ export function verifyStartedPolling({
     }
     sleep(intervalMs);
   }
-  const leftoverAtEnd = pastedContentMatch(lastText);
+  const leftoverAtEnd = unsubmittedPasteForStart({ text: lastText, provider });
   if (leftoverAtEnd) {
     return {
       ok: false,
       state: 'unsubmitted-paste',
       reason: UNSUBMITTED_PASTE_REASON,
-      evidence: leftoverAtEnd,
+      evidence: leftoverAtEnd.evidence,
       reads,
       elapsedMs: Date.now() - t0,
       text: lastText,

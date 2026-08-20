@@ -484,14 +484,16 @@ function readOnceHandle(handle) {
 
 /** #661/#679：开工只认外部证据——worker-read 真 session 或屏上 agent 真在干活。
  * 看见未提交粘贴继续等到 timeoutMs 或指纹消失且在干活；超时仍在框里才红并回滚。
- * 禁止补回车。散步到 worker-start / reviewer-attach / 复用审官。 */
-function finishWorkerInject({ handle, dispatchId, label, timeoutMs }) {
+ * 禁止补回车。散步到 worker-start / reviewer-attach / 复用审官。
+ * #680：cursor 通道忽略 [Pasted text] 残留，改认 Working/输出在动。 */
+function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider }) {
   return verifyStartedPolling({
     dispatchId,
     readOnce: () => readOnceHandle(handle),
     proofOnce: workerStartProof,
     timeoutMs,
     label,
+    provider,
   });
 }
 
@@ -878,6 +880,7 @@ function cmdDispatch(args) {
     dispatchId: created.workerDispatchId,
     label: '工人',
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+    provider: workerLaunch.provider,
   });
   if (!workerInject.ok) failCreated(created, `注入后开工验证失败: ${workerInject.reason}`, { inject: workerInject, ...plan, taskId });
   const workerProof = workerStartProof(created.workerDispatchId); // 成功后再取一次留档（emit 用）
@@ -949,6 +952,7 @@ function cmdDispatch(args) {
           proofOnce: workerStartProof,
           timeoutMs: probeWaitMs(routing, childLaunch.launch.provider),
           label: `子工人 ${title}`,
+          provider: childLaunch.launch.provider,
         });
         if (!childInject.ok) {
           return {
@@ -1160,6 +1164,7 @@ function cmdDispatchBatch(args) {
         proofOnce: workerStartProof,
         timeoutMs: probeWaitMs(routing, launch.provider),
         label: '工人',
+        provider: launch.provider,
       });
       if (!inject.ok) return { ok: false, dispatchId, error: `注入后开工验证失败: ${inject.reason}` };
       return { ok: true, dispatchId, handle: started.handle };
@@ -1445,6 +1450,7 @@ function reuseReviewerOnTerminal({
     dispatchId: reviewerDispatchId,
     label: '审官',
     timeoutMs: probeWaitMs(routing, launch.provider),
+    provider: launch.provider,
   });
   if (!reviewerInject.ok) {
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
@@ -2079,11 +2085,17 @@ function cmdWorkerStart(args) {
   if (!r.ok) fail(`worker-start 失败: ${errText(r.error)}`);
   const dispatchId = extractDispatchId(r.json);
   if (!dispatchId) fail('worker-start 成功但没拿到 dispatch id——不是已开工，是没查成（续 Dispatch 需要新身份）', { json: r.json });
+  let startProvider;
+  if (args.model) {
+    try { startProvider = resolveLaunch({ model: args.model, routing, root: ROOT }).provider; }
+    catch { startProvider = undefined; }
+  }
   const injected = finishWorkerInject({
     handle: args.terminal,
     dispatchId,
     label: '续派',
-    timeoutMs: probeWaitMs(routing),
+    timeoutMs: probeWaitMs(routing, startProvider),
+    provider: startProvider,
   });
   if (!injected.ok) fail(`注入后开工验证失败: ${injected.reason}`, { inject: injected });
   emit({ ok: true, json: r.json, dispatchId, inject: injected });
@@ -2309,6 +2321,7 @@ function cmdReviewerCreate(args) {
     dispatchId: reviewerDispatchId,
     label: '审官',
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+    provider: reviewerLaunch.provider,
   });
   if (!reviewerInject.ok) {
     failCreated(launched, `审官注入后开工验证失败: ${reviewerInject.reason}`, {
@@ -2556,6 +2569,7 @@ function cmdReviewerAttach(args) {
     dispatchId: created.reviewerDispatchId,
     label: '审官',
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
+    provider: reviewerLaunch.provider,
   });
   if (!reviewerInject.ok) {
     failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {

@@ -1670,6 +1670,91 @@ describe('dao', () => {
     });
   });
 
+  it('#680：cursor [Pasted text] 是提交后残留；codex [Pasted Content] 仍是未提交', async (t) => {
+    const S = await S_LOAD;
+    const noopSleep = () => {};
+    const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
+    const PASTE = '[Pasted text #1 +86 lines]';
+    const CODEX = '[Pasted Content 5037 chars]';
+
+    await t.test('cursor 通道：Working 在粘贴块上方 + 残留不消失 → 绿，不是 unsubmitted-paste', () => {
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_cursor_residue',
+        provider: 'cursor',
+        readOnce: () => ({
+          ok: true,
+          result: { terminal: { tail: ['Working', PASTE] } },
+        }),
+        proofOnce: unproven,
+        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      });
+      assert.ok(r.ok === true && r.state === 'started' && r.cursorStart === 'working' && /Pasted text/.test(r.text),
+        'cursor 残留+Working → 绿  →  ' + JSON.stringify(r));
+    });
+
+    await t.test('cursor-agent 通道别名同样认 Working', () => {
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_cursor_agent',
+        provider: 'cursor-agent',
+        readOnce: () => ({
+          ok: true,
+          result: { terminal: { tail: ['Working', PASTE] } },
+        }),
+        proofOnce: unproven,
+        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      });
+      assert.ok(r.ok === true && r.state === 'started', JSON.stringify(r));
+    });
+
+    await t.test('cursor 通道：残留不消失但输出在动 → 绿', () => {
+      let n = 0;
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_cursor_moving',
+        provider: 'cursor',
+        readOnce: () => {
+          n += 1;
+          const body = n === 1 ? '短摘要：修命令库' : `短摘要：修命令库\n已读 ${n} 个文件`;
+          return { ok: true, result: { terminal: { tail: [body, PASTE] } } };
+        },
+        proofOnce: unproven,
+        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '工人',
+      });
+      assert.ok(r.ok === true && r.state === 'started' && r.cursorStart === 'output-moving' && n > 1,
+        'cursor 输出在动 → 绿  →  ' + JSON.stringify({ r, n }));
+    });
+
+    await t.test('codex 通道：[Pasted Content] 等到超时仍拦', () => {
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_codex_stuck',
+        provider: 'gpt',
+        readOnce: () => ({ ok: true, result: { terminal: { tail: [CODEX] } } }),
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      });
+      assert.ok(r.ok === false && r.state === 'unsubmitted-paste' && /Pasted Content/.test(r.evidence || ''),
+        'codex 未提交仍拦  →  ' + JSON.stringify(r));
+    });
+
+    await t.test('未标通道时 Codex Pasted Content 仍拦（默认）', () => {
+      const r = S.verifyStartedPolling({
+        dispatchId: 'ctx_codex_default',
+        readOnce: () => ({ ok: true, result: { terminal: { tail: [CODEX] } } }),
+        proofOnce: unproven,
+        timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+      });
+      assert.ok(r.ok === false && r.state === 'unsubmitted-paste', JSON.stringify(r));
+    });
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    await t.test('finishWorkerInject / 子工人开工探针把 provider 传给 verifyStartedPolling', () => {
+      assert.ok(/provider: workerLaunch\.provider/.test(daoSrc)
+        && /provider: reviewerLaunch\.provider/.test(daoSrc)
+        && /provider: childLaunch\.launch\.provider/.test(daoSrc)
+        && /provider: launch\.provider/.test(daoSrc),
+        'dao.mjs 开工探针要带 provider  →  ' + daoSrc.match(/finishWorkerInject\(\{[\s\S]{0,220}\}\)/g)?.join('\n---\n'));
+    });
+  });
+
   it('R1 R3 R4 R6 探针 / 未知参数 / 读失败分态 / 回滚', async (t) => {
     const S = await S_LOAD;
     const routing = await ROUTING_LOAD;
