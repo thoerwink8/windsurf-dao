@@ -209,7 +209,10 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(!/reviewer-vendor-gate\.mjs/.test(checkSrc.replace(/不 import reviewer-vendor-gate\.mjs/, '')),
         '检查器 import 了被查对象');
     });
-    const { inspectVendorGateFixtures, inspectVendorGateWiring, probeSameVendorDispatch } = await CHECK_LOAD;
+    const {
+      inspectVendorGateFixtures, inspectVendorGateWiring, probeSameVendorDispatch,
+      inspectReviewerNoForceCommand,
+    } = await CHECK_LOAD;
     const fx = inspectVendorGateFixtures(path.join(REPO, 'tests', 'fixtures', 'reviewer-vendor-gate'));
     await t.test('夹具红/绿/空各一份', () => {
       assert.ok(fx.ok === true && fx.kinds.red && fx.kinds.ok && fx.kinds.empty, JSON.stringify(fx));
@@ -221,6 +224,22 @@ describe('#679 起审官同厂硬闸', () => {
     const probe = probeSameVendorDispatch(REPO);
     await t.test('live 故意同厂样本被拦住', () => {
       assert.ok(probe.ok === true, JSON.stringify(probe));
+    });
+    const noForceMiss = inspectReviewerNoForceCommand({});
+    await t.test('审官 forceCommand 扫描缺正文 → 没查成', () => {
+      assert.ok(noForceMiss.unscanned === true && noForceMiss.ok === false, JSON.stringify(noForceMiss));
+    });
+    const noForceLive = inspectReviewerNoForceCommand({
+      daoSrc: require('fs').readFileSync(CLI, 'utf8'),
+    });
+    await t.test('live dao.mjs 审官路径不写 forceCommand', () => {
+      assert.ok(noForceLive.ok === true, JSON.stringify(noForceLive));
+    });
+    const noForceRed = inspectReviewerNoForceCommand({
+      daoSrc: 'function cmdReviewerCreate(args) {\n  forceCommand: true,\n}\nfunction cmdReviewerAttach(args) {\n  launchAgentInWorktree({ forceCommand: true });\n}\nfunction cmdSend() {}\n',
+    });
+    await t.test('故意 forceCommand 样本被扫到', () => {
+      assert.ok(noForceRed.ok === false && noForceRed.problems.length >= 1, JSON.stringify(noForceRed));
     });
   });
 });

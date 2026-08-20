@@ -11,10 +11,13 @@ updated = "2026-08-20"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
+# start = agent | command（#680：worker-start --agent vs terminal create --command）。
+#         agentStartSpec 只读这一处，禁止按二进制名硬编码起法。缺了 fail-loud。
 # {model} 用 --model / launch_model / default_model 替换；缺了 fail-loud。
 
 [providers.deepseek]
 cli = "pi"
+start = "agent"
 default_model = "opencode-go/deepseek-v4-flash"   # #602：裸 model 名跨 provider 歧义；日常通道走 og。拍板 issue #462 默认仍是 flash
 launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
@@ -37,6 +40,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
+start = "agent"
 launch = "grok -m {model} --effort xhigh --always-approve"
 launch_model = "grok-4.6"
 # grok TUI 把 terminal send 当用户消息再跑命令，8s 探针等不到真执行标记（#499/#502 实测）。
@@ -58,6 +62,7 @@ decided = "2026-08-14"
 
 [providers.gpt]
 cli = "codex"
+start = "agent"
 default_model = "gpt-5.6-sol"
 launch = "codex --dangerously-bypass-approvals-and-sandbox -m {model}"
 launch_model = "gpt-5.6-sol"
@@ -67,11 +72,8 @@ probe_wait_ms = 120000
 launch_note = """
 默认模型 gpt-5.6-sol。token 消耗约 3 倍，比价按每件活总成本算，不按单价。
 
-起法（2026-08-15 进程命令行对照实测）：
-- 首选 orca 原生 `--agent codex`（参数由 orca 管，不复制可能过期的值）。
-- 已存在树里只能 terminal create 时：`codex --dangerously-bypass-approvals-and-sandbox`（与 orca 原生一致）。
-- 库默认走第二条，因为帅遇到的都是树已存在。
-- 反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生三条全过。
+起法（#680 拍板）：`start = "agent"`，走 `worker-start --agent codex`。不要 `terminal create --command` 再粘贴——Codex 把粘贴显示成 [Pasted Content] 不发（#680 实证）。
+反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生 `--agent codex` 三条全过。
 
 三层机制（缺一层就查错方向）：
 1. policy 白名单：`~/.codex/rules/default.rules` 是历史上逐条批准过的 prefix_rule。
@@ -83,6 +85,7 @@ launch_note = """
 
 [providers.commandcode]
 cli = "command-code"
+start = "command"
 launch = "command-code -m {model} --skip-onboarding --yolo"
 launch_model = "deepseek/deepseek-v4-flash"
 # 2026-08-16 帅实测：命令发出后需补一记空回车才执行（与 pi/grok 同坑），之后约 20 秒内 TUI 就绪。45s = 20s + 余量。
@@ -122,6 +125,7 @@ decided = "2026-08-16"
 
 [providers.claude]
 cli = "reclaude"
+start = "command"
 launch = "reclaude --model {model}"
 launch_model = "opus"
 launch_note = """
@@ -132,6 +136,7 @@ launch_note = """
 
 [providers.opencode-go]
 cli = "pi"
+start = "agent"
 launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
@@ -159,6 +164,7 @@ decided = "2026-08-16"
 
 [providers.cursor]
 cli = "cursor-agent"
+start = "agent"
 launch = "cursor-agent --model {model} --force --trust"
 launch_model = "composer-2.5"
 probe_wait_ms = 45000

@@ -79,6 +79,7 @@ import {
 } from './lib/design-exam-harvest-check.mjs';
 import {
   inspectVendorGateWiring, inspectVendorGateFixtures, probeSameVendorDispatch,
+  inspectReviewerNoForceCommand,
 } from './lib/reviewer-vendor-gate-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
@@ -376,6 +377,24 @@ function checkModelRouting() {
     });
   });
 
+  let launchProviders = 0;
+  for (const [name, p] of Object.entries(doc.providers || {})) {
+    if (!p || typeof p !== 'object') continue;
+    if (!p.launch || String(p.launch).trim() === '') continue;
+    launchProviders += 1;
+    const start = String(p.start || '').trim();
+    if (start !== 'agent' && start !== 'command') {
+      problems.push(`${name} 缺 start=agent|command`);
+    }
+  }
+  if (launchProviders === 0) {
+    problems.push('没扫到任何带 launch 的 provider，start 没查成');
+  }
+  const gptNote = String(doc.providers?.gpt?.launch_note || '');
+  if (/库默认走第二条|已存在树里只能 terminal create/.test(gptNote)) {
+    problems.push('gpt launch_note 仍教已存在树默认走 command');
+  }
+
   if (usedProviders.size === 0) {
     problems.push('没扫到任何带 provider 的模型，providers.launch 没查成');
   } else {
@@ -409,7 +428,7 @@ function checkModelRouting() {
   if (problems.length === 0) {
     green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.size} 个 provider 有 launch，yml 同源`);
   } else {
-    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
+    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch 和 start=agent|command；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -1292,8 +1311,9 @@ function checkVendorGateLive() {
     );
     return;
   }
+  const daoSrc = readFileSync(daoFile, 'utf8');
   const r = inspectVendorGateWiring({
-    daoSrc: readFileSync(daoFile, 'utf8'),
+    daoSrc,
     cmdSrc: readFileSync(cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
     watchdogSrc: readFileSync(wdFile, 'utf8'),
@@ -1319,7 +1339,20 @@ function checkVendorGateLive() {
     );
     return;
   }
-  green('起审官同厂硬闸还在（接线齐，故意 grok+grok 样本被拦）');
+  const noForce = inspectReviewerNoForceCommand({ daoSrc });
+  if (noForce.unscanned) {
+    fail('审官起法扫描没查成', '给齐 dao.mjs 再扫', noForce.error || '');
+    return;
+  }
+  if (!noForce.ok) {
+    fail(
+      `审官路径仍写死 forceCommand ${noForce.problems.length} 处`,
+      '起法只读 toml start=agent|command；reviewer-create/attach 不要 forceCommand',
+      noForce.problems.join('；'),
+    );
+    return;
+  }
+  green('起审官同厂硬闸还在（接线齐，故意 grok+grok 样本被拦；审官不写死 forceCommand）');
 }
 
 function checkMachinePathSamples() {

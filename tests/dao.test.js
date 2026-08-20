@@ -179,6 +179,25 @@ describe('dao', () => {
     await t.test('未知 provider fail-loud', () => {
       assert.ok(threw3, '未知 provider fail-loud');
     });
+
+    const gptLaunch = S.resolveLaunch({ provider: 'gpt', routing });
+    await t.test('gpt start=agent（读 toml）', () => {
+      assert.ok(gptLaunch.start === 'agent', 'gpt start=agent  →  ' + JSON.stringify(gptLaunch.start));
+    });
+    const noStart = {
+      providers: { gpt: { ...routing.providers.gpt, start: undefined } },
+      models: routing.models,
+    };
+    let threwStart = false;
+    try { S.resolveLaunch({ provider: 'gpt', routing: noStart }); } catch { threwStart = true; }
+    await t.test('缺 start fail-loud', () => {
+      assert.ok(threwStart, '缺 start fail-loud');
+    });
+    const asCmd = S.agentStartSpec({ ...gptLaunch, start: 'command' });
+    await t.test('起法读 start 字段，不按二进制名硬编码', () => {
+      assert.ok(asCmd.mode === 'command' && gptLaunch.agentId === 'codex',
+        'start=command 压过 codex 二进制  →  ' + JSON.stringify(asCmd));
+    });
   });
 
   it('② --submit 不存在（真 --help，禁 mock）', async (t) => {
@@ -2426,26 +2445,20 @@ describe('dao', () => {
     });
     const createChunk = (src.match(/function cmdReviewerCreate\b[\s\S]*?\nfunction /) || [''])[0];
     const attachChunk = (src.match(/function cmdReviewerAttach\b[\s\S]*?\nfunction /) || [''])[0];
-    await t.test('GPT 审官不走无条件 forceCommand: true（走 --agent codex）', () => {
-      assert.ok(!/forceCommand:\s*true/.test(createChunk) && !/forceCommand:\s*true/.test(attachChunk)
-        && /forceCommandForReviewer\(reviewerLaunch\)/.test(createChunk)
-        && /forceCommandForReviewer\(reviewerLaunch\)/.test(attachChunk),
-        'GPT 审官不走无条件 forceCommand  →  create=' + /forceCommand[^\n]*/.exec(createChunk)?.[0]
-        + ' attach=' + /forceCommand[^\n]*/.exec(attachChunk)?.[0]);
+    await t.test('审官路径不写 forceCommand（起法读 toml start）', () => {
+      assert.ok(!/forceCommand/.test(createChunk) && !/forceCommand/.test(attachChunk),
+        '审官路径不写 forceCommand  →  create=' + createChunk.slice(0, 80));
     });
     await t.test('故意 command+paste 路径不再当 GPT 审官起法', () => {
       const gptLaunch = S.resolveLaunch({ provider: 'gpt', routing });
       const gptSpec = S.agentStartSpec(gptLaunch);
-      assert.ok(gptSpec.mode === 'agent' && gptSpec.agentId === 'codex'
-        && S.forceCommandForReviewer(gptLaunch) === false
-        && /forceCommandForReviewer\(reviewerLaunch\)/.test(createChunk)
-        && /forceCommandForReviewer\(reviewerLaunch\)/.test(attachChunk)
-        && !/forceCommand:\s*true/.test(createChunk + attachChunk),
-        'command+paste 不再是 GPT 审官起法  →  ' + JSON.stringify({ gptSpec, force: S.forceCommandForReviewer(gptLaunch) }));
+      assert.ok(gptSpec.mode === 'agent' && gptSpec.agentId === 'codex' && gptLaunch.start === 'agent'
+        && !/forceCommand/.test(createChunk + attachChunk),
+        'command+paste 不再是 GPT 审官起法  →  ' + JSON.stringify(gptSpec));
     });
-    await t.test('reclaude 仍 forceCommand（不能 --agent）', () => {
+    await t.test('reclaude start=command（不能 --agent）', () => {
       const claudeLaunch = S.resolveLaunch({ provider: 'claude', routing });
-      assert.ok(S.agentStartSpec(claudeLaunch).mode === 'command' && S.forceCommandForReviewer(claudeLaunch) === true,
+      assert.ok(claudeLaunch.start === 'command' && S.agentStartSpec(claudeLaunch).mode === 'command',
         'reclaude 仍 command  →  ' + JSON.stringify(S.agentStartSpec(claudeLaunch)));
     });
   });

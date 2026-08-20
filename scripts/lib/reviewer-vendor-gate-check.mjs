@@ -16,6 +16,19 @@ function chunk(src, re) {
   return m ? m[0] : '';
 }
 
+/** #680：审官路径不得写死 forceCommand 起 GPT。检查器自己扫函数块，不 import dao-cmd。 */
+export function inspectReviewerNoForceCommand({ daoSrc } = {}) {
+  if (daoSrc == null) return { ok: false, unscanned: true, error: '没给 dao.mjs 正文（没查成）' };
+  const create = chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
+  const attach = chunk(daoSrc, /function cmdReviewerAttach\b[\s\S]*?\nfunction /);
+  const problems = [];
+  if (!create) problems.push('找不到 cmdReviewerCreate');
+  else if (/forceCommand/.test(create)) problems.push('cmdReviewerCreate 仍写 forceCommand');
+  if (!attach) problems.push('找不到 cmdReviewerAttach');
+  else if (/forceCommand/.test(attach)) problems.push('cmdReviewerAttach 仍写 forceCommand');
+  return { ok: problems.length === 0, unscanned: false, problems };
+}
+
 export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc } = {}) {
   if (daoSrc == null || cmdSrc == null || slotSrc == null || watchdogSrc == null) {
     return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/watchdog 正文（没查成）' };

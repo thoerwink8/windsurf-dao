@@ -94,6 +94,10 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
   if (!p.launch || !String(p.launch).trim()) {
     throw new Error(`providers.${providerName} 缺 launch（启动模板）`);
   }
+  const start = String(p.start || '').trim();
+  if (start !== 'agent' && start !== 'command') {
+    throw new Error(`providers.${providerName} 缺 start=agent|command`);
+  }
 
   let command = String(p.launch).trim();
   if (command.includes('{model}')) {
@@ -110,6 +114,7 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
     template: String(p.launch).trim(),
     pipe: chosen || null,
     agentId: orcaKnownAgentId({ provider: providerName, command: materialized }),
+    start,
   };
 }
 
@@ -136,6 +141,10 @@ export function providerLaunchProblems(doc) {
     const p = doc.providers?.[name];
     if (!p) { problems.push(`${name} 无 providers 节`); continue; }
     if (!p.launch || !String(p.launch).trim()) { problems.push(`${name} 缺 launch`); continue; }
+    const start = String(p.start || '').trim();
+    if (start !== 'agent' && start !== 'command') {
+      problems.push(`${name} 缺 start=agent|command`);
+    }
     if (String(p.launch).includes('{model}') && !p.launch_model && !p.default_model) {
       problems.push(`${name} 的 launch 含 {model} 但缺 launch_model/default_model`);
     }
@@ -774,25 +783,23 @@ export function launchCliModel(command) {
   return short ? short[1] : null;
 }
 
-/** 认识的 agent 走 worker-start --agent（.cmd shim 的 --command 进程仍是 cmd，Orca 报 agent_unconfigured）。
- * reclaude 不能 --agent claude，仍走 terminal create --command。
+/** 起法只读路由表 [providers.*].start（#680）。禁止按二进制名硬编码 agent|command。
  * --model 只传给 Cursor / Codex（orca 只认这几家）。 */
-export function agentStartSpec({ provider, command, agentId } = {}) {
+export function agentStartSpec({ provider, command, agentId, start } = {}) {
+  const mode = String(start || '').trim();
+  if (mode !== 'agent' && mode !== 'command') {
+    throw new Error('agentStartSpec 要 start=agent|command（读路由表 [providers.*].start）');
+  }
   const id = agentId || orcaKnownAgentId({ provider, command });
-  const model = launchCliModel(command);
-  if (id === 'cursor' || id === 'codex') {
+  const cliModel = launchCliModel(command);
+  if (mode === 'agent') {
+    if (!id) {
+      throw new Error(`start=agent 但不知道 Orca --agent id（provider=${provider || '?'}）`);
+    }
+    const model = (id === 'cursor' || id === 'codex') ? cliModel : null;
     return { mode: 'agent', agentId: id, model };
   }
-  if (id === 'grok' || id === 'pi') {
-    return { mode: 'agent', agentId: id, model: null };
-  }
-  return { mode: 'command', agentId: id, model, command: command || null };
-}
-
-/** 审官 GPT/codex 走 --agent，不要 forceCommand 再粘贴（#680：Pasted Content 等 120s 也不发）。
- * reclaude 不能 --agent，才 forceCommand。 */
-export function forceCommandForReviewer(launch) {
-  return agentStartSpec(launch || {}).mode !== 'agent';
+  return { mode: 'command', agentId: id, model: cliModel, command: command || null };
 }
 
 export function extractHandleFromWorkerStart(json) {

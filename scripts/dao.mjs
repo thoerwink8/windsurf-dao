@@ -69,7 +69,6 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
-  forceCommandForReviewer,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -2175,7 +2174,6 @@ function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
-    forceCommand: forceCommandForReviewer(reviewerLaunch),
   });
   if (!revTerm.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
@@ -2438,7 +2436,6 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
-    forceCommand: forceCommandForReviewer(reviewerLaunch),
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;
