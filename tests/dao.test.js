@@ -153,6 +153,10 @@ describe('dao', () => {
     await t.test('#615 composer 单管 cursor', () => {
       assert.ok(/cursor-agent/.test(composer.command) && /--model\s+composer-2.5/.test(composer.command), '#615 composer 单管 cursor  →  ' + composer.command);
     });
+    const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
+    await t.test('#688 devin 走 --command，模型是 flash-max，带 dangerous', () => {
+      assert.ok(/^devin\b/.test(devin.command) && /--model\s+deepseek-v4-flash-max/.test(devin.command) && /--permission-mode\s+dangerous/.test(devin.command) && !/--print/.test(devin.command) && devin.agentId == null, '#688 devin launch  →  ' + JSON.stringify(devin));
+    });
     await t.test('shim 文件在仓里', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
     });
@@ -483,17 +487,17 @@ describe('dao', () => {
     await t.test('峰时只给 --role 不给 --model → 非零（禁静默默认）', () => {
       assert.ok(roleOnly.status !== 0, '峰时只给 --role 不给 --model → 非零（禁静默默认）  →  ' + JSON.stringify(pRole));
     });
-    await t.test('峰时推荐 grok-4.6 不是 ds-flash', () => {
-      assert.ok(pRole.recommendation && pRole.recommendation.model === 'grok-4.6', '峰时推荐 grok-4.6 不是 ds-flash  →  ' + JSON.stringify(pRole));
+    await t.test('写码推荐 devin 通道条目不是 ds-flash', () => {
+      assert.ok(pRole.recommendation && pRole.recommendation.model === 'devin-deepseek-v4-flash-max', '写码推荐 devin 通道条目  →  ' + JSON.stringify(pRole));
     });
-    await t.test('峰时推荐不是 deepseek-v4-flash（误推钉）', () => {
-      assert.ok(!(pRole.recommendation && pRole.recommendation.model === 'deepseek-v4-flash'), '峰时推荐不是 deepseek-v4-flash（误推钉）  →  ' + JSON.stringify(pRole));
+    await t.test('写码推荐不是 deepseek-v4-flash（误推钉）', () => {
+      assert.ok(!(pRole.recommendation && pRole.recommendation.model === 'deepseek-v4-flash'), '写码推荐不是 deepseek-v4-flash（误推钉）  →  ' + JSON.stringify(pRole));
     });
 
     const roleConfirm = dispatch(['--merge-policy', 'auto', '--role', '写码', '--reviewer', 'gpt-5.6-sol', '--now', peak, '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const pConf = payload(roleConfirm);
-    await t.test('--role + --confirm 采用峰时推荐 grok-4.6', () => {
-      assert.ok(roleConfirm.status === 0 && pConf.model === 'grok-4.6', '--role + --confirm 采用峰时推荐 grok-4.6  →  ' + JSON.stringify(pConf));
+    await t.test('--role + --confirm 采用写码推荐 devin', () => {
+      assert.ok(roleConfirm.status === 0 && pConf.model === 'devin-deepseek-v4-flash-max', '--role + --confirm 采用写码推荐 devin  →  ' + JSON.stringify(pConf));
     });
 
     const fnDefault = S.resolveDispatchConstraints({

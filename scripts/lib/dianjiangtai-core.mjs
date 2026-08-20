@@ -524,9 +524,8 @@ export function select({
           || hashOf(`${jobId}|${a.model}`).localeCompare(hashOf(`${jobId}|${b.model}`)))
     : [];
   const quotaTop = quota[0] || null;
-  // 分时路由（docs/model-routing.toml [[routes]]）优先于配额覆盖与最高分：
-  // 峰时写码必须出 grok-4.6 而非 ds-flash（2026-08-15 拍板，人肉两次违例后改机制）。
-  // 路由模型被门闩剔除 → fallback；两者都过不了门闩才退回配额/最高分。
+  // 分时路由（docs/model-routing.toml [[routes]]）优先于配额覆盖与最高分。
+  // 写码 A 位以路由表为准（#688：devin > og > 直连）。路由模型被门闩剔除 → fallback；两者都过不了门闩才退回配额/最高分。
   const matchedRoute = matchBeijingRoute(routes, workType, ts);
   const routedPick = matchedRoute
     ? (passers.find(d => d.model === matchedRoute.model)

@@ -186,6 +186,15 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 - 启动模板只信 `docs/model-routing.toml` `[providers.cursor].launch`（`cursor-agent --model {model} --force --trust`）。`--force` 是无人值守放行（等同 `--yolo`）；`--trust` 免弹 Workspace Trust（#648 返工补丁）。
 - 模型 id 以路由表 `cli_model` 为准（`composer-2.5` / `kimi-k3-high` / `gemini-3.7-flash-high` / `gpt-5.6-sol-high`），不要另造映射。
 
+## 7d. devin 怎么配
+
+Devin CLI 是写码类主通道（#688：优先级 devin > opencode-go > 直连）。路由与启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
+
+- 装机：官方 Devin 安装器（本机二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`）。验证：`where.exe devin` 能找到；`devin models list` 含 `deepseek-v4-flash-max`。
+- 登录只能用户做：`devin auth`。凭据在 `%LOCALAPPDATA%\devin\credentials.toml`（C 类，不进 git）。
+- 非交互冒烟：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。未信任目录必须关 workspace trust 检查，否则没提示可弹、当场失败。`--print` 跑完即退，**不能**当 Orca 工人。
+- 工人 TUI 起法只信路由表 launch（`--permission-mode dangerous` 全放行）。不要另造一份启动命令。
+
 ## 8. 本机工具坑
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。

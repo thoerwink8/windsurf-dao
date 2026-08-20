@@ -34,6 +34,7 @@
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B | ~/AppData/Local/cursor-agent | cursor 真实二进制。shim 包装它，路径因机而异 |
+| B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |
 | B | ~/.orca/agent-hooks | Orca 状态 hook。模板 `host/machine/hooks/` |
 | B | ~/.cursor/hooks.json | 用户级 hook 登记。必须 `conhost --headless`，禁止 EncodedCommand |
