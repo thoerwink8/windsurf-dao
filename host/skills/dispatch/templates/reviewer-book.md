@@ -46,15 +46,17 @@ node scripts/gh-as.mjs reviewer -- pr review <PR号> --request-changes --body-fi
 
 缺凭据会报「这台机器没装」——那是没查成，不许改走本人 `gh` 装成交过卷。
 
-- **红**（有要返工的项）：把红项清单**直接发回士兵**，说清每条的位置/问题/期望，**不上帅**：
+- **红**（有要返工的项）：把红项清单**直接发回士兵**，说清每条的位置/问题/期望，**不上帅**。
+  `--to` 仍用注入参数里的对方 dispatch（士兵可能已经 `worker_done`，id 已完工也照打）。
+  **不要自己拼 `task-create` / `worker-start`**：下一跳由这条 notify 同步开（#675）。
 
   ```bash
   node scripts/dao.mjs notify --hop "审官→士兵" --to dispatch:<注入参数里的对方 dispatch> \
     --subject "红项：<N> 条" --body "<每条：位置 + 问题 + 期望>"
   ```
 
-  **确认送达才算发完**：`notify` 非零 = 没送到，士兵根本不知道要返工，
-  **不许接着等回音**——先修（dispatch 失效就重新取当时的士兵 dispatch id），修不好升级给帅。
+  **确认送达才算发完**：`notify` 非零 = 没送到或没开成下一跳，士兵根本不知道要返工，
+  **不许接着等回音**。成功回传新 Dispatch id。人走了（终端已关）才升级给帅「要新开工人」。
 
 - **乒乓两轮仍红**：才上帅（既有规矩，别改——这是换人信号）。上帅时把士兵的 Dispatch id
   （注入参数「对方 dispatch」）一并报上，帅换人走 `worker-start --task <task> --retry-of <id>`，战绩不断链。
@@ -98,9 +100,9 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 
 缺身份 = 未结算。错 pane / 落库但 Dispatch 仍 dispatched = 未结算。
 
-**红项之后也结算这一跳**（#552）：红项 notify 士兵送达后，同样发上面这条 `worker_done`。下一轮复审不是往旧信箱塞消息，是士兵 `worker-done` 用 `worker-start --terminal` 开新 Dispatch 注入你。不要 `check --wait` 等复审——旧身份已经下班，信箱会变 inspect-only。
+**红项之后也结算这一跳**（#552）：红项 notify 士兵送达（含同步开出的下一跳）后，同样发上面这条 `worker_done`。下一轮复审不是往旧信箱塞消息，是士兵 `worker-done` 用 `worker-start --terminal` 开新 Dispatch 注入你。不要 `check --wait` 等复审——旧身份已经下班，信箱会变 inspect-only。
 
-**禁止**往已结算 dispatch 发工作指令。收到「已完工 / inspect-only / 未结算」就停，升级给帅，不要重发到同一 id。
+**禁止**往**自己**已结算的 dispatch 发工作指令。士兵侧已完工的 id 仍是这条 `notify --hop "审官→士兵"` 的 `--to`——命令自己开下一跳，不要改打别的地址。人走了才升级给帅。
 
 **确认送达才算收尾**：`notify` 非零 = 没送到或没结算，本单在面板上会一直挂着——
 必须当场报出来并重发，不许把「发过了」当「归档通知到位了」。

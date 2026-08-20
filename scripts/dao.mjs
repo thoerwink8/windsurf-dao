@@ -45,6 +45,8 @@ import {
   argsRunCurrent,
   argsRunUse,
   argsRunList,
+  argsRunCreateSelf,
+  planCallerRun,
   extractRunId,
   extractSentMessage,
   argsGateCreate,
@@ -111,6 +113,8 @@ import {
   resolveReviewerReuse,
   postIssueComment,
   postPrComment,
+  classifyReviewerSpawnError,
+  reviewerSpawnFailComment,
   verifyStartedPolling,
   verifyWorkerStarted,
   verifyReviewerFiles,
@@ -485,13 +489,28 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
   return orca(argsTaskCreate({ spec, run: runId }));
 }
 
-/** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。Run 用调用方已有的，不 run-use / 不 run-create。 */
+/** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。
+ * Run：调用方已有的用已有的；run-current 为 null 时本 TUI 自己开（#675 工人 TUI 例外：不 --from 冒充台）。
+ * 只许工人 TUI 走这条；帅窗 run-current 为 null 时不许靠它把自己绑成 coordinator（#667）。
+ * run-current 没查成 ≠ 没有 Run。 */
 function bindStation() {
   const ensured = ensureInboxStation();
   if (!ensured.ok) return { ok: false, error: `信箱台 ensure 失败: ${ensured.error}` };
   const cur = orca(argsRunCurrent());
-  if (!cur.ok) return { ok: false, error: `run-current 没查成：${errText(cur.error)}` };
-  return { ok: true, handle: ensured.handle || null, runId: extractRunId(cur.json) };
+  const plan = planCallerRun({
+    currentOk: cur.ok,
+    currentJson: cur.json,
+    currentError: cur.ok ? null : errText(cur.error),
+  });
+  if (!plan.ok) return { ok: false, unscanned: !!plan.unscanned, error: plan.error };
+  if (!plan.needCreate) {
+    return { ok: true, handle: ensured.handle || null, runId: plan.runId };
+  }
+  const created = orca(argsRunCreateSelf({ objective: 'dao dispatch' }));
+  if (!created.ok) return { ok: false, error: `本窗开 Run 失败：${errText(created.error)}` };
+  const runId = extractRunId(created.json);
+  if (!runId) return { ok: false, error: 'run-create 没拿到 result.run.id（没查成）' };
+  return { ok: true, handle: ensured.handle || null, runId, created: true };
 }
 
 function sleepMs(ms) {
@@ -1521,6 +1540,12 @@ function cmdWorkerDone(args) {
     });
   }
 
+  // #675：交卷证据必须先落到 GitHub。起审官失败不能把完工评论抹掉。
+  const postedIssue = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
+  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue, reuse });
+  const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
+  if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reuse });
+
   if (shouldCreate) {
     const createOpts = {
       pr: args.pr,
@@ -1532,7 +1557,23 @@ function cmdWorkerDone(args) {
     };
     create = invokeReviewerCreate(createOpts);
     create = healReviewerCreateAfterFence(create, createOpts);
-    if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
+    if (!create.ok) {
+      const retried = healReviewerCreateAfterFence(invokeReviewerCreate(createOpts), createOpts);
+      create = { ...retried, retried: true, firstError: create.error };
+    }
+    if (!create.ok) {
+      const cls = classifyReviewerSpawnError(create.error);
+      const failBody = reviewerSpawnFailComment({ error: create.error, retried: true });
+      postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
+      postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
+      if (parentId) {
+        orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+      }
+      fail(create.error, {
+        ...plan, commentPosted: true, postedIssue, postedPr,
+        reviewerCreate: create, reuse, spawnKind: cls.kind,
+      });
+    }
   } else if (shouldReuse) {
     reused = reuseReviewerOnTerminal({
       pr: args.pr,
@@ -1571,9 +1612,31 @@ function cmdWorkerDone(args) {
       }
     }
     if (!reused.ok) {
-      fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
-        ...plan, reviewerCreate: create, reviewerReuse: { ...reused, invoked: true, reuseFailed: true }, reuse,
+      const retriedReuse = reuseReviewerOnTerminal({
+        pr: args.pr,
+        reviewerWorktreeId: reuse.worktreeId,
+        handle: reuse.handle,
+        parentWorktree: parentId,
+        soldierDispatch: args.soldierDispatch,
+        reviewer: plan.reviewer,
+        dryRun: false,
       });
+      if (retriedReuse.ok) {
+        reused = { ...retriedReuse, retried: true };
+      } else {
+        const cls = classifyReviewerSpawnError(reused.error);
+        const failBody = reviewerSpawnFailComment({ error: reused.error, retried: true });
+        postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
+        postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
+        if (parentId) {
+          orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+        }
+        fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
+          ...plan, commentPosted: true, postedIssue, postedPr,
+          reviewerCreate: create, reviewerReuse: { ...reused, invoked: true, reuseFailed: true, retried: true }, reuse,
+          spawnKind: cls.kind,
+        });
+      }
     }
   }
 
@@ -1587,12 +1650,7 @@ function cmdWorkerDone(args) {
     existingDispatchId = found.dispatchId;
   }
   const picked = pickWorkerDoneDispatchId({ create, reused, existingDispatchId });
-  if (!picked.ok) fail(picked.error, { ...plan, reviewerCreate: create, reviewerReuse: reused, reuse });
-
-  const postedIssue = postIssueComment({ issue: plan.issue, body: plan.comment, runGh: gh });
-  if (!postedIssue.ok) fail(postedIssue.error, { ...plan, postedIssue, reviewerCreate: create, reviewerReuse: reused });
-  const postedPr = postPrComment({ pr: plan.pr, body: plan.comment, runGh: gh });
-  if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reviewerCreate: create, reviewerReuse: reused });
+  if (!picked.ok) fail(picked.error, { ...plan, reviewerCreate: create, reviewerReuse: reused, reuse, commentPosted: true, postedIssue, postedPr });
 
   const reviewerDispatchId = picked.reviewerDispatchId;
   const notify = completeWorkerDoneNotify({
@@ -1606,6 +1664,10 @@ function cmdWorkerDone(args) {
   });
   if (!notify.ok) fail(notify.error, { ...plan, postedIssue, postedPr, notified: notify.notified, reviewerCreate: create, reviewerReuse: reused });
   const notified = notify.notified;
+
+  if (parentId) {
+    orca(argsWorktreeSet({ worktree: parentId, comment: '待终审' }));
+  }
 
   let ledgerLink = null;
   try {

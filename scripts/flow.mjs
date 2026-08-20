@@ -16,19 +16,16 @@
 //   ③ PR MERGED 状态
 //
 // 决策规则（②）：
-//   - 工人完工且待审    → 不起审官（#586：worker-done 已按需起）
-//   - 审官红 N 项       → 输出注入工人返工的指令文本（机械转发，不做内容判断）
+//   - 工人完工且待审    → 观察有没有活审官下一跳（#675：没开成报帅，不 task-create）
+//   - 审官红 N 项       → 观察验收是否已开出活下一跳（#675：创建者是 notify，不是 flow）
 //   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
-// 执行注入（③）：
-//   - #633：派活禁止 terminal send。返工/复核走 worker-start 新 task 绑回同一终端。
-//     TUI send 只留给看门狗空闲卡住的一条续命。
-//   - 注入目标确定性定位：返工注入按任务卡 worktree 内唯一候选终端（排除审官句柄
-//     与 shell），选不出唯一目标就报帅，不挑第一个。
-//   - 复核注入：优先记录句柄，其次记录审官卡，兜底反查子卡（parent/child 字段，不读卡名）；全找不到
-//     报「待帅接手复核」。
+// 执行（③）#675：flow 禁止 task-create。返工/复核下一跳由验收动作同步开。
+//   - 已有活 Dispatch → 本轮 0 需流转
+//   - 该开却没开 → 报帅「验收没开成下一跳」
+//   - 没查成（worker-list 失败/结构不认识）≠ 查到 0
 //
 // 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
 // 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
@@ -84,7 +81,7 @@ import {
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
-import { argsTaskCreate, argsWorkerStart, extractTaskId, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
+import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -426,9 +423,9 @@ function deriveState(signals) {
 // pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示（四轮复核红 1）。
 function pendingAction(derived) {
   if (derived.state === 'working') return null;
-  if (derived.state === 'awaiting-review') return null; // #586：审官由 worker-done 按需起
-  if (derived.state === 'awaiting-recheck') return { kind: 'inject-recheck', round: derived.redReviews };
-  if (derived.state === 'rework-needed') return { kind: 'inject-rework', red: derived.lastRed, round: derived.redReviews };
+  if (derived.state === 'awaiting-review') return { kind: 'observe-reviewer-hop' };
+  if (derived.state === 'awaiting-recheck') return { kind: 'observe-recheck-hop', round: derived.redReviews };
+  if (derived.state === 'rework-needed') return { kind: 'observe-rework-hop', red: derived.lastRed, round: derived.redReviews };
   if (derived.state === 'approved') return { kind: 'report-final' };
   if (derived.state === 'pingpong') return { kind: 'report-switch', round: derived.redReviews };
   return null; // error 态由 malformed review 逐条报帅 + 待帅处置常驻行覆盖
@@ -506,24 +503,19 @@ export function injectAndVerify(handle, text, terminalName, io) {
   return { ok: false, error: '派活禁止 terminal send（#633：改 worker-start 新 task 绑回原终端）' };
 }
 
-/** #633：派活走新 task 绑回原终端，禁止往输入框 terminal send。 */
+/** #675：flow 禁止 task-create。下一跳由验收 notify 开。 */
 export function dispatchNewTaskToTerminal({ spec, terminal, run, io } = {}) {
-  const ops = io || defaultFlowIo();
-  if (!terminal) return { ok: false, error: 'dispatchNewTaskToTerminal 要 terminal' };
-  if (!spec) return { ok: false, error: 'dispatchNewTaskToTerminal 要 spec' };
-  const created = ops.send(argsTaskCreate({ spec, run }));
-  if (!created.ok) return { ok: false, error: `task-create 失败：${created.error}` };
-  const taskId = extractTaskId(created.json);
-  if (!taskId) return { ok: false, error: 'task-create 成功但没拿到 result.task.id（不能拿顶层 RPC id）' };
-  const started = ops.send(argsWorkerStart({ task: taskId, terminal }));
-  if (!started.ok) return { ok: false, error: `worker-start 失败：${started.error}` };
-  return { ok: true, taskId, judge: 'worker-start 新 task 绑回原终端' };
+  void spec; void terminal; void run; void io;
+  return { ok: false, error: 'flow 禁止 task-create（#675：下一跳由验收动作开，流转器只观察）' };
 }
 
-// 流转器自己该做的动作（起审官 / 返工注入 / 复核注入）。报帅终审/换人不是流转器活，
-// 心跳缺失时不能拿它们当「有待流转」——那是帅的事（#580 消歧：有条件报）。
+// 流转器自己该做的动作（#675：只观察下一跳，不 task-create）。报帅终审/换人不是流转器活。
 export function isFlowWork(action) {
-  return !!action && (action.kind === 'inject-rework' || action.kind === 'inject-recheck');
+  return !!action && (
+    action.kind === 'observe-rework-hop'
+    || action.kind === 'observe-recheck-hop'
+    || action.kind === 'observe-reviewer-hop'
+  );
 }
 
 // 从 PR 信号列表算出「流转器该做而没人做」的项。watchdog 心跳缺失时用，不猜进程名。
@@ -725,6 +717,15 @@ function makeLiveSource(repo) {
       const terms = unwrap(r.json, 'terminals', 'terminals');
       return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'terminal list 结构不认识' };
     },
+    orcaWorkers() {
+      const r = runOrca(['orchestration', 'worker-list', '--json']);
+      if (!r.ok) return { ok: false, unscanned: true, error: r.error };
+      const workers = r.json?.result?.workers;
+      if (!Array.isArray(workers)) {
+        return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
+      }
+      return { ok: true, json: r.json, workers };
+    },
   };
 }
 
@@ -790,6 +791,19 @@ function makeSnapshotSource(roundDir, repo) {
       const terms = unwrap(r.json, 'terminals', 'terminals');
       return Array.isArray(terms) ? { ok: true, terminals: terms } : { ok: false, error: 'orca-terminals.json 结构不认识' };
     },
+    orcaWorkers() {
+      const file = join(roundDir, 'orca-workers.json');
+      if (!existsSync(file)) {
+        return { ok: true, json: { result: { workers: [] } }, workers: [], missing: true };
+      }
+      const r = readJson(file);
+      if (!r.ok) return { ok: false, unscanned: true, error: r.error };
+      const workers = r.json?.result?.workers;
+      if (!Array.isArray(workers)) {
+        return { ok: false, unscanned: true, error: 'orca-workers.json 结构不认识（缺 result.workers 数组）' };
+      }
+      return { ok: true, json: r.json, workers };
+    },
   };
 }
 
@@ -797,46 +811,66 @@ function makeSnapshotSource(roundDir, repo) {
 // 动作执行（红 1/2/4/5 落点：目标解析走 source，dry-run 也覆盖解析路径）
 // ══════════════════════════════════════════════════════════════════════
 
-function executeAction(action, pr, source, rec, dryRun) {
+/** #675：看验收有没有开出活下一跳。没查成 ≠ 查到 0。 */
+function observeAcceptanceHop({ action, pr, source, rec }) {
+  if (typeof source.orcaWorkers !== 'function') {
+    return { unscanned: true, error: '数据源没有 worker-list（没查成）' };
+  }
+  const workersR = source.orcaWorkers();
+  if (!workersR.ok) return { unscanned: true, error: workersR.error };
+  if (workersR.unscanned) return { unscanned: true, error: workersR.error };
+  const json = workersR.json || { result: { workers: workersR.workers || [] } };
 
-  if (action.kind === 'inject-rework') {
-    const instruction = reworkInstruction(pr, action.red, action.round, action.reviewUrl || null);
-    const wtsR = source.orcaWorktrees();
-    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
-    const wtErr = !wtsR.ok ? wtsR.error : workerWt ? null : `找不到 branch ${pr.headRefName} 的 worktree`;
-    const termsR = source.orcaTerminals();
-    let target = null;
-    if (workerWt && termsR.ok) target = pickUniqueTerminal(termsR.terminals, workerWt.id, rec.reviewer?.handle || null);
-    else if (!termsR.ok) target = { ok: false, error: termsR.error };
-    if (dryRun) {
-      if (target?.ok) {
-        return { ok: true, dry: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）（注入目标：工人终端 ${target.terminal.handle}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
-      }
-      // 观察 1：解析失败不用「动作：」前缀（grep 动作 应只数真实动作），改「预览-阻塞：」
-      return { ok: true, dry: true, line: `[flow] 预览-阻塞：#${pr.number}（返工注入——注入目标解析失败：${target?.error || wtErr || '终端列表不可用'}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
-    }
-    if (!workerWt) return { ok: false, error: `找不到工人终端：${wtErr}` };
-    if (!target?.ok) return { ok: false, error: `找不到工人终端：${target.error}` };
-    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：返工注入 #${pr.number}（第 ${action.round} 轮，红 ${action.red} 项）：新 task ${v.taskId} 已绑回工人终端（${v.judge}）` };
+  const wtsR = source.orcaWorktrees();
+  if (!wtsR.ok) return { unscanned: true, error: wtsR.error };
+  const workerWt = (wtsR.worktrees || []).find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`);
+
+  if (action.kind === 'observe-rework-hop') {
+    if (!workerWt) return { hopOpen: false };
+    const found = findDispatchForWorktree(json, workerWt.id);
+    if (found.unscanned) return { unscanned: true, error: found.error };
+    if (found.ok) return { hopOpen: true, dispatchId: found.dispatchId };
+    return { hopOpen: false };
   }
 
-  if (action.kind === 'inject-recheck') {
-    const instruction = recheckInstruction(pr, action.round, action.reviewerLabel || '审官');
-    const wtsR = source.orcaWorktrees();
-    const workerWt = wtsR.ok ? wtsR.worktrees.find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`) : null;
-    const target = wtsR.ok ? findReviewerTerminal(source, pr, rec, workerWt || undefined) : { ok: false, error: wtsR.error };
-    // 四轮复核红 1：reviewer-unfound 是「待帅接手复核」的结构性卡住，不是预览工件——
-    // dry-run 也走失败路径（写 pendingShuai 常驻），不短路成预览-阻塞
-    if (!target?.ok) return { ok: false, error: target.error, needsReport: 'reviewer-unfound' };
-    if (dryRun) {
-      return { ok: true, dry: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）（复核目标：审官终端 ${target.terminal.handle}${target.via ? '，' + target.via : ''}）` + '\n  ' + instruction.replace(/\n/g, '\n  ') };
+  let reviewerWtId = rec.reviewer?.worktree || null;
+  if (!reviewerWtId && workerWt) {
+    const foundWt = findReviewerWorktree({
+      parent: workerWt,
+      worktrees: wtsR.worktrees,
+      workers: Array.isArray(json?.result?.workers) ? json.result.workers : null,
+    });
+    if (foundWt.ok) reviewerWtId = foundWt.worktreeId;
+  }
+  if (!reviewerWtId) return { hopOpen: false };
+  const found = findDispatchForWorktree(json, reviewerWtId);
+  if (found.unscanned) return { unscanned: true, error: found.error };
+  if (found.ok) return { hopOpen: true, dispatchId: found.dispatchId };
+  return { hopOpen: false };
+}
+
+function executeAction(action, pr, source, rec, dryRun) {
+  void dryRun;
+  if (action.kind === 'observe-rework-hop' || action.kind === 'observe-recheck-hop' || action.kind === 'observe-reviewer-hop') {
+    const obs = observeAcceptanceHop({ action, pr, source, rec });
+    if (obs.unscanned) {
+      return { ok: false, error: `下一跳没查成：${obs.error}` };
     }
-    if (!target?.ok) return { ok: false, error: `找不到审官终端：${target.error}`, needsReport: 'reviewer-unfound' };
-    const v = dispatchNewTaskToTerminal({ spec: instruction, terminal: target.terminal.handle });
-    if (!v.ok) return { ok: false, error: v.error };
-    return { ok: true, line: `[flow] 动作：复核注入 #${pr.number}（第 ${action.round} 轮返工后）：新 task ${v.taskId} 已绑回审官终端（${v.judge}）` };
+    if (obs.hopOpen) {
+      const what = action.kind === 'observe-reviewer-hop' ? '交卷已落地且已有审官下一跳'
+        : action.kind === 'observe-recheck-hop' ? '返工已落地且已有审官下一跳'
+        : '红项已落地且已有下一跳';
+      return {
+        ok: true,
+        idle: true,
+        line: `[flow] 观察：#${pr.number} ${what} ${obs.dispatchId}，不 task-create`,
+      };
+    }
+    if (action.kind === 'observe-reviewer-hop') {
+      return { ok: false, error: '交卷没开成审官下一跳', needsReport: 'hop-missing' };
+    }
+    const who = action.kind === 'observe-recheck-hop' ? '审官下一跳' : '下一跳';
+    return { ok: false, error: `验收没开成${who}`, needsReport: 'hop-missing' };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
@@ -924,8 +958,6 @@ function processOneRound(source, state, args) {
     const lastAt = lastSig?.at ? Date.parse(lastSig.at) : Date.parse(pr.updatedAt || pr.createdAt || '');
     const sinceMs = Number.isFinite(lastAt) ? Math.max(0, now - lastAt) : 0;
     hbPrs.push({ number: pr.number, state: derived.state, sinceMs });
-    if (pendingAction(derived)) pendingCount += 1;
-
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
       // 自愈（三轮复核红 1 + 四轮扩展）：新信号（fp 变化）到来即清除待帅记账给一次重试——
@@ -939,47 +971,48 @@ function processOneRound(source, state, args) {
           events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并${bit}`);
           rec.pendingShuai = { kind: 'report-final', reason: '复核绿待帅终审' };
           rec.actedOn = fp;
+          pendingCount += 1;
         } else if (action.kind === 'report-switch') {
           // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
           const bit = noteJudgmentClosedLedger(pr, reviews, { success: false, dryRun: args.dryRun });
           events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅${bit}`);
           rec.pendingShuai = { kind: 'report-switch', reason: '乒乓两轮仍红待帅换人' };
           rec.actedOn = fp;
+          pendingCount += 1;
         } else {
           const extra = {
-            reviewUrl: action.kind === 'inject-rework' ? lastReviewUrl(reviews) : null,
+            reviewUrl: action.kind === 'observe-rework-hop' ? lastReviewUrl(reviews) : null,
             reviewerHandle: rec.reviewer?.handle || null,
             reviewerWorktree: rec.reviewer?.worktree || null,
             reviewerLabel: rec.reviewer?.label || null,
           };
           const exec = executeAction({ ...action, ...extra }, pr, source, rec, args.dryRun);
           if (exec.ok) {
-            events.push(exec.line);
-            rec.pendingShuai = null; // 动作成功：待帅记账清（四轮复核红 1）
+            if (exec.line) events.push(exec.line);
+            rec.pendingShuai = null;
             rec.actedOn = fp;
-            if (exec.line.startsWith('[flow] 预览-阻塞')) {
-              // dry-run 注入目标解析失败：本轮可见但不落 pendingShuai（三轮复核红 1——
-              // 预览不改变值守状态，否则真跑一次预览会把 PR 永久锁死）
-              thisRoundFailed.add(pr.number);
-            }
-
+            if (!exec.idle) pendingCount += 1;
           } else {
-            // fail-visible：验不过报帅、不重试狂发（#455 连带教训）
             events.push(`[flow] 报帅：${exec.error}——fail-visible，不重试狂发（PR #${pr.number} 待帅处置）`);
-            // 待帅记账独立于注入闸（四轮复核红 1）：注入失败 / reviewer-unfound /
-            // report-unknown 三处都写 pendingShuai（不 gate 注入，闸已由 fp 去重承担）
             rec.pendingShuai = {
               kind: action.kind,
-              reason: exec.needsReport === 'reviewer-unfound' ? '找不到审官终端——待帅接手复核'
+              reason: exec.needsReport === 'hop-missing'
+                ? (action.kind === 'observe-reviewer-hop' ? '交卷没开成审官下一跳'
+                  : action.kind === 'observe-recheck-hop' ? '验收没开成审官下一跳'
+                  : '验收没开成下一跳')
+                : exec.needsReport === 'reviewer-unfound' ? '找不到审官终端——待帅接手复核'
                 : exec.needsReport === 'report-unknown' ? '选不出审官（缺 model/type 标签或路由表无审查模型）——请帅处置'
-                : '注入失败待帅接手（新信号到来自动重试一次）',
+                : '下一跳没查成待帅接手（新信号到来自动重试一次）',
             };
             rec.actedOn = fp;
+            pendingCount += 1;
           }
         }
       } else {
         rec.actedOn = fp; // 无需流转：已扫描该态（防止每轮重复推导输出）
       }
+    } else if (pendingAction(derived) && rec.pendingShuai) {
+      pendingCount += 1;
     }
 
     // 新信号记账（动作失败也记账——fail-visible 后不重发，帅持有）
@@ -1072,7 +1105,7 @@ function runOneRound(source, state) {
   for (const line of round.events) {
     console.log(line);
     if (line.startsWith('[flow] NO_TARGETS')) anyNoTargets = true;
-    else if (!line.startsWith('[flow] OK ')) anyEmitted = true;
+    else if (!line.startsWith('[flow] OK ') && !line.startsWith('[flow] 观察')) anyEmitted = true;
   }
   if (round.infraError) anyInfra = true;
   // #575 ① / #580：每轮写心跳，包括 NO_TARGETS——流转器还在跑，缺的是样本不是进程。

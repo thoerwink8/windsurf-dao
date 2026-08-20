@@ -15,7 +15,8 @@ export const HEARTBEAT_HINT = '心跳不准发到 Run（#667）。活性看 git/
 
 export const COORDINATOR_HINT = [
   '人用窗口永不当 coordinator（#667）。',
-  '派工走 node scripts/dao.mjs dispatch（经信箱台 --from），不要从帅窗 run-use / run-create。',
+  '派工走 node scripts/dao.mjs dispatch。不要从帅窗 run-use / run-create。',
+  '例外（#675）：工人 TUI bindStation 在 run-current 为 null 时对本窗 run-create；帅窗不许走这条。',
 ].join('');
 
 export function normalizeCmd(cmd) {

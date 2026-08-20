@@ -54,6 +54,8 @@
 //    红/绿样本各一验判别力；live 扫 host/skills/dispatch/templates/*.md，0 个模板 = 没查成
 // ㉒ 删横幅收信整层（#667）：dao.mjs 不许裸 run-use 无 --from；dispatch SKILL 不许教横幅收信；
 //    soldier-book 必须写「心跳不准发」；样本红/绿各一验判别力
+// ㉓ 盲考收卷纪律（#675）：design-exam 收卷节必须还在；起考轮盯产物收到完；指针失效要报警
+//    红/绿/空样本各一验判别力；0 个样本 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -70,6 +72,9 @@ import { checkMachinePaths } from './lib/machine-path-check.mjs';
 import {
   inspectNoBannerInboxLive, inspectNoBannerInboxFixtures,
 } from './lib/no-banner-inbox-check.mjs';
+import {
+  inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
+} from './lib/design-exam-harvest-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1216,6 +1221,43 @@ checkNoAutoCloseSamples();
 checkNoAutoCloseLive();
 checkNoBannerInboxSamples();
 checkNoBannerInboxLive();
+checkDesignExamHarvestSamples();
+checkDesignExamHarvestLive();
+
+function checkDesignExamHarvestSamples() {
+  const r = inspectDesignExamHarvestFixtures(join(ROOT, 'tests', 'fixtures', 'design-exam-harvest'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '盲考收卷样本没查成' : '盲考收卷样本对不上',
+      '恢复 tests/fixtures/design-exam-harvest/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`盲考收卷样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkDesignExamHarvestLive() {
+  const skillFile = join(ROOT, 'host', 'skills', 'design-exam', 'SKILL.md');
+  if (!existsSync(skillFile)) {
+    fail('盲考收卷 live 扫描缺文件', '恢复 host/skills/design-exam/SKILL.md；缺文件 = 没查成', skillFile);
+    return;
+  }
+  const r = inspectDesignExamHarvestLive({ skillSrc: readFileSync(skillFile, 'utf8') });
+  if (r.unscanned) {
+    fail('盲考收卷 live 没查成', '给齐 design-exam SKILL 正文再扫', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `盲考收卷纪律丢了 ${r.problems.length} 处`,
+      'design-exam 收卷节写死：起灶的这一轮盯 answer.md 收到完；禁止起完等人问；不把帅对话框当监视器',
+      r.problems.join('；'),
+    );
+    return;
+  }
+  green('盲考收卷纪律还在（起考轮盯产物收到完）');
+}
 
 function checkMachinePathSamples() {
   const root = join(ROOT, 'tests', 'fixtures', 'machine-paths');
