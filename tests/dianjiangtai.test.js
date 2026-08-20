@@ -34,6 +34,7 @@ const TS = "2026-08-15T10:00:00+08:00";            // 北京 10:00 = 峰时（09
 const TS_VALLEY = "2026-08-15T13:00:00+08:00";     // 北京 13:00 = 谷时（12:00-14:00）
 const FLASH = "deepseek-v4-flash";
 const FLASH_VERSION = "DeepSeek-V4-Flash-0731";
+const DEVIN = "devin-deepseek-v4-flash-max";
 
 const schema = JSON.parse(fs.readFileSync(path.join(REPO, "schemas", "events.schema.json"), "utf8"));
 const models = parseYaml(fs.readFileSync(path.join(REPO, "policy", "models.yml"), "utf8")).models;
@@ -123,8 +124,8 @@ describe('dianjiangtai', () => {
     await t.test('零样本全特征有限（无 NaN/Infinity）', () => {
       assert.ok(Object.values(zf).every(v => typeof v !== "number" || Number.isFinite(v)), '零样本全特征有限（无 NaN/Infinity）');
     });
-    await t.test('零样本 Score 有限（门闩通过模型；#669 flash 写码被 ban）', () => {
-      assert.ok(Number.isFinite(zero.models["grok-4.6"].score), '零样本 Score 有限（门闩通过模型）  →  ' + zero.models["grok-4.6"].score);
+    await t.test('零样本 Score 有限（门闩通过模型；#688 后 flash/devin 写码都过门闩）', () => {
+      assert.ok(Number.isFinite(zero.models[FLASH].score) && Number.isFinite(zero.models[DEVIN].score), '零样本 Score 有限（门闩通过模型）  →  ' + `${zero.models[FLASH].score}/${zero.models[DEVIN].score}`);
     });
     for (const m of Object.keys(zero.models)) {
       if (zero.models[m].gates.rejected) continue;
@@ -271,12 +272,12 @@ describe('dianjiangtai', () => {
       assert.ok(chz.models[FLASH].gates.rejected && chz.models["deepseek-v4-pro"].gates.rejected, 'F1：deepseek 系对查证被 ban 剔除');
     });
     const writeBan = run({ jobId: "j-ds-write", workType: "写码" });
-    await t.test('F1：#669 deepseek 写码也被 ban（全工种额度闸）', () => {
-      assert.ok(writeBan.models[FLASH].gates.rejected && writeBan.models[FLASH].gates.reasons.includes("ban") && writeBan.models["deepseek-v4-pro"].gates.rejected && !writeBan.options.B.models.includes(FLASH), 'F1：#669 deepseek 写码也被 ban  →  ' + JSON.stringify({ flash: writeBan.models[FLASH].gates, B: writeBan.options.B.models }));
+    await t.test('F1：#688 推翻额度闸后 deepseek 写码过门闩', () => {
+      assert.ok(!writeBan.models[FLASH].gates.rejected && !writeBan.models["deepseek-v4-pro"].gates.rejected && writeBan.options.B.models.includes(FLASH), 'F1：#688 推翻额度闸后 deepseek 写码过门闩  →  ' + JSON.stringify({ flash: writeBan.models[FLASH].gates, B: writeBan.options.B.models }));
     });
     const revBan = run({ jobId: "j-ds-rev", workType: "审查" });
-    await t.test('F1：#669 deepseek 审查也被 ban（全工种额度闸）', () => {
-      assert.ok(revBan.models[FLASH].gates.rejected && revBan.models["deepseek-v4-pro"].gates.rejected && !revBan.options.B.models.includes(FLASH) && !revBan.options.B.models.includes("deepseek-v4-pro"), 'F1：#669 deepseek 审查也被 ban  →  ' + JSON.stringify({ flash: revBan.models[FLASH].gates, B: revBan.options.B.models }));
+    await t.test('F1：#688 推翻额度闸后 deepseek 审查过门闩（查证仍禁）', () => {
+      assert.ok(!revBan.models[FLASH].gates.rejected && !revBan.models["deepseek-v4-pro"].gates.rejected && revBan.options.B.models.includes(FLASH), 'F1：#688 推翻额度闸后 deepseek 审查过门闩  →  ' + JSON.stringify({ flash: revBan.models[FLASH].gates, B: revBan.options.B.models }));
     });
 
     // F14 上下文门闩：任务预算超窗口剔除（flash 窗口 1M）
@@ -465,8 +466,8 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 10 个现役模型', () => {
-      assert.ok(models.length === 10, 'models.yml 解析出 10 个现役模型（#648 加 glm-5.2）  →  ' + String(models.length));
+    await t.test('models.yml 解析出 11 个现役模型', () => {
+      assert.ok(models.length === 11 && models.some(m => m.id === DEVIN), 'models.yml 解析出 11 个现役模型（#688 加 devin-deepseek-v4-flash-max）  →  ' + String(models.length));
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
@@ -484,15 +485,14 @@ describe('dianjiangtai', () => {
     await t.test('models.yml：gpt/claude 价目 verified_at=null（待补）', () => {
       assert.ok(models.find(m => m.id === "gpt-5.6-sol").pricing.verified_at === null && models.find(m => m.id === "claude-opus").pricing.verified_at === null, 'models.yml：gpt/claude 价目 verified_at=null（待补）');
     });
-    await t.test('bans.yml：4 条硬禁令', () => {
-      assert.ok(bans.length === 4, 'bans.yml：4 条硬禁令  →  ' + String(bans.length));
+    await t.test('bans.yml：3 条硬禁令', () => {
+      assert.ok(bans.length === 3, 'bans.yml：3 条硬禁令  →  ' + String(bans.length));
     });
     await t.test('bans.yml：gpt UI ban、deepseek 查证 ban 就位', () => {
       assert.ok(bans.some(b => b.models.includes("gpt-5.6-sol") && b.work_types.includes("UI")) && bans.some(b => b.models.includes(FLASH) && b.work_types.includes("查证")), 'bans.yml：gpt UI ban、deepseek 查证 ban 就位');
     });
-    await t.test('bans.yml：#669 额度全工种禁令就位（work_types 空）', () => {
-      const quota = bans.find(b => b.id === "ban-deepseek-额度");
-      assert.ok(quota && quota.models.includes(FLASH) && quota.models.includes("deepseek-v4-pro") && Array.isArray(quota.work_types) && quota.work_types.length === 0, 'bans.yml：#669 额度全工种禁令就位  →  ' + JSON.stringify(quota));
+    await t.test('bans.yml：#688 已删额度全工种禁令', () => {
+      assert.ok(!bans.some(b => b.id === "ban-deepseek-额度"), 'bans.yml：#688 已删额度全工种禁令  →  ' + JSON.stringify(bans.map(b => b.id)));
     });
     await t.test('weights.yml：λ_risk=1.0 / λ_pref=0.2 / λ_cost=0.15（C.1 默认）', () => {
       assert.ok(weights.weights.lambda_risk === 1.0 && weights.weights.lambda_pref === 0.2 && weights.weights.lambda_cost === 0.15, 'weights.yml：λ_risk=1.0 / λ_pref=0.2 / λ_cost=0.15（C.1 默认）');
@@ -507,32 +507,31 @@ describe('dianjiangtai', () => {
     });
   });
 
-  it('⑤ 分时路由参与推荐（接线：峰时写码必须 grok-4.6）', async (t) => {
+  it('⑤ 分时路由参与推荐（接线：写码全日 devin，#688）', async (t) => {
     const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
     const routing = parseToml(fs.readFileSync(path.join(REPO, "docs", "model-routing.toml"), "utf8"));
     const routes = routing.routes || [];
-    await t.test('model-routing.toml 读到写码峰/谷两条路由', () => {
-      assert.ok(routes.filter(r => r.role === "写码").length === 2, 'model-routing.toml 读到写码峰/谷两条路由  →  ' + String(routes.length));
+    await t.test('model-routing.toml 读到 1 条写码全日路由', () => {
+      assert.ok(routes.filter(r => r.role === "写码").length === 1, 'model-routing.toml 读到 1 条写码全日路由  →  ' + String(routes.filter(r => r.role === "写码").length));
     });
-    await t.test('matchBeijingRoute：峰时 10:00 写码 → grok-4.6', () => {
-      assert.ok(matchBeijingRoute(routes, "写码", TS).model === "grok-4.6", 'matchBeijingRoute：峰时 10:00 写码 → grok-4.6');
+    await t.test('matchBeijingRoute：峰时 10:00 写码 → devin', () => {
+      assert.ok(matchBeijingRoute(routes, "写码", TS).model === DEVIN, 'matchBeijingRoute：峰时 10:00 写码 → devin  →  ' + (matchBeijingRoute(routes, "写码", TS) && matchBeijingRoute(routes, "写码", TS).model));
     });
-    await t.test('matchBeijingRoute：谷时 13:00 写码 → deepseek-v4-flash', () => {
-      assert.ok(matchBeijingRoute(routes, "写码", TS_VALLEY).model === FLASH, 'matchBeijingRoute：谷时 13:00 写码 → deepseek-v4-flash');
+    await t.test('matchBeijingRoute：谷时 13:00 写码 → devin（各时段一致）', () => {
+      assert.ok(matchBeijingRoute(routes, "写码", TS_VALLEY).model === DEVIN, 'matchBeijingRoute：谷时 13:00 写码 → devin  →  ' + (matchBeijingRoute(routes, "写码", TS_VALLEY) && matchBeijingRoute(routes, "写码", TS_VALLEY).model));
+    });
+    await t.test('matchBeijingRoute：写码 fallback = og flash', () => {
+      assert.ok(matchBeijingRoute(routes, "写码", TS).fallback === FLASH, 'matchBeijingRoute：写码 fallback = og flash');
     });
     await t.test('matchBeijingRoute：审查无分时路由 → null', () => {
       assert.ok(matchBeijingRoute(routes, "审查", TS) === null, 'matchBeijingRoute：审查无分时路由 → null');
     });
 
-    // 红2：四个切换点 + 邻点，表驱动十时刻（M3 开下界 / M4 闭上界会在此红）
-    const SWITCH = [
-      ["00:00", FLASH], ["08:59", FLASH], ["09:00", "grok-4.6"], ["11:59", "grok-4.6"], ["12:00", FLASH],
-      ["13:59", FLASH], ["14:00", "grok-4.6"], ["17:59", "grok-4.6"], ["18:00", FLASH], ["23:59", FLASH],
-    ];
-    for (const [hm, want] of SWITCH) {
+    const SWITCH = ["00:00", "08:59", "09:00", "11:59", "12:00", "13:59", "14:00", "17:59", "18:00", "23:59"];
+    for (const hm of SWITCH) {
       const got = matchBeijingRoute(routes, "写码", `2026-08-15T${hm}:00+08:00`);
-      await t.test(`切换点 ${hm} → ${want === FLASH ? "谷 flash" : "峰 grok"}`, () => {
-        assert.ok(!!got && got.model === want, `切换点 ${hm} → ${want === FLASH ? "谷 flash" : "峰 grok"}  →  ` + (got && got.model));
+      await t.test(`切换点 ${hm} → devin`, () => {
+        assert.ok(!!got && got.model === DEVIN, `切换点 ${hm} → devin  →  ` + (got && got.model));
       });
     }
     const writeRoutes = routes.filter(r => r.role === "写码");
@@ -564,8 +563,8 @@ describe('dianjiangtai', () => {
     await t.test('判别力：不接线（无 routes）A ≠ grok-4.6', () => {
       assert.ok(discBare.options.A.model !== "grok-4.6", '判别力：不接线（无 routes）A ≠ grok-4.6  →  ' + discBare.options.A.model);
     });
-    await t.test('判别力：接线后峰时 A = grok-4.6', () => {
-      assert.ok(discWired.options.A.model === "grok-4.6" && discWired.options.A.model !== FLASH, '判别力：接线后峰时 A = grok-4.6  →  ' + discWired.options.A.model);
+    await t.test('判别力：接线后写码 A = devin（路由压过评分）', () => {
+      assert.ok(discWired.options.A.model === DEVIN && discWired.options.A.model !== FLASH, '判别力：接线后写码 A = devin  →  ' + discWired.options.A.model);
     });
     await t.test('判别力：接线后 reason=route_beijing（与 A.model 同源）', () => {
       assert.ok(discWired.options.A.reason === "route_beijing", '判别力：接线后 reason=route_beijing（与 A.model 同源）  →  ' + discWired.options.A.reason);
@@ -575,42 +574,47 @@ describe('dianjiangtai', () => {
     });
 
     const routedPeak = run({ jobId: "j-route-peak", events: discEvents, routes });
-    await t.test('select+routes：峰时写码 A = grok-4.6（不是 ds-flash）', () => {
-      assert.ok(routedPeak.options.A.model === "grok-4.6" && routedPeak.options.A.model !== FLASH, 'select+routes：峰时写码 A = grok-4.6（不是 ds-flash）  →  ' + routedPeak.options.A.model);
+    await t.test('select+routes：峰时写码 A = devin（不是 ds-flash）', () => {
+      assert.ok(routedPeak.options.A.model === DEVIN && routedPeak.options.A.model !== FLASH, 'select+routes：峰时写码 A = devin  →  ' + routedPeak.options.A.model);
     });
     await t.test('select+routes：峰时 reason=route_beijing', () => {
       assert.ok(routedPeak.options.A.reason === "route_beijing", 'select+routes：峰时 reason=route_beijing  →  ' + routedPeak.options.A.reason);
     });
     const routedValley = run({ jobId: "j-route-valley", ts: TS_VALLEY, events: discEvents, routes });
-    await t.test('select+routes：谷时写码 A = grok-4.6（#669 flash 被门闩剔，走 fallback）', () => {
-      assert.ok(routedValley.options.A.model === "grok-4.6", 'select+routes：谷时写码 A = grok-4.6（route_fallback）  →  ' + routedValley.options.A.model);
+    await t.test('select+routes：谷时写码 A = devin（各时段一致）', () => {
+      assert.ok(routedValley.options.A.model === DEVIN, 'select+routes：谷时写码 A = devin  →  ' + routedValley.options.A.model);
     });
-    await t.test('select+routes：谷时 reason=route_fallback', () => {
-      assert.ok(routedValley.options.A.reason === "route_fallback", 'select+routes：谷时 reason=route_fallback  →  ' + routedValley.options.A.reason);
+    await t.test('select+routes：谷时 reason=route_beijing（不是 fallback）', () => {
+      assert.ok(routedValley.options.A.reason === "route_beijing", 'select+routes：谷时 reason=route_beijing  →  ' + routedValley.options.A.reason);
     });
-    await t.test('slate：峰时第一是 grok，flash 不在名单（#669 额度 ban）', () => {
-      assert.ok(Array.isArray(routedPeak.slate) && routedPeak.slate[0] === "grok-4.6" && !routedPeak.slate.includes(FLASH), 'slate：峰时第一是 grok，flash 不在名单  →  ' + JSON.stringify(routedPeak.slate));
+    await t.test('slate：峰时第一是 devin，og flash 在列', () => {
+      assert.ok(Array.isArray(routedPeak.slate) && routedPeak.slate[0] === DEVIN && routedPeak.slate.includes(FLASH), 'slate：峰时第一是 devin，og flash 在列  →  ' + JSON.stringify(routedPeak.slate));
     });
-    await t.test('slate：谷时第一是 grok（fallback），flash 不在名单', () => {
-      assert.ok(Array.isArray(routedValley.slate) && routedValley.slate[0] === "grok-4.6" && !routedValley.slate.includes(FLASH), 'slate：谷时第一是 grok（fallback）  →  ' + JSON.stringify(routedValley.slate));
+    await t.test('slate：谷时第一是 devin，og flash 在列', () => {
+      assert.ok(Array.isArray(routedValley.slate) && routedValley.slate[0] === DEVIN && routedValley.slate.includes(FLASH), 'slate：谷时第一是 devin，og flash 在列  →  ' + JSON.stringify(routedValley.slate));
     });
     await t.test('无 routes 时行为不变：零样本仍 quota_explore', () => {
       assert.ok(run().options.A.reason === "quota_explore", '无 routes 时行为不变：零样本仍 quota_explore');
     });
 
-    // CLI 的 provider 前缀来自 origin/master 路由表（#533），这里从同一来源派生期望值——
-    // 不硬编码前缀（#519 教训：换通道会咬断言），只钉模型 id 与 provider 的对应关系。
-    function masterProviderOf(modelId) {
-      const r = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });
-      if (r.status !== 0) throw new Error(`git show origin/master 失败: ${(r.stderr || r.stdout || "").slice(0, 200)}`);
-      const models = parseToml(r.stdout).models || [];
-      const m = models.find(x => x && x.id === modelId);
-      return m && m.provider ? m.provider : null;
+    // CLI 读 origin/master 路由表（#533），政策读工作区。期望值用同一对输入复算，
+    // 不硬编码 grok/devin——本单合进 master 前后 CLI A 会变，复算才不会咬。
+    const masterShow = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });
+    if (masterShow.status !== 0) throw new Error(`git show origin/master 失败: ${(masterShow.stderr || masterShow.stdout || "").slice(0, 200)}`);
+    const masterRouting = parseToml(masterShow.stdout);
+    const masterRoutes = masterRouting.routes || [];
+    function renderFromMaster(id) {
+      const hit = (masterRouting.models || []).find(x => x && x.id === id)
+        || models.find(x => x.id === id);
+      const provider = hit && hit.provider ? hit.provider : null;
+      return { provider, rendered: provider ? `${provider}/${id}` : id };
     }
-    const flashProvider = masterProviderOf(FLASH);
-    const grokProvider = masterProviderOf("grok-4.6");
-    await t.test('master 路由表里 flash/grok 都有 provider（前缀期望来源）', () => {
-      assert.ok(!!flashProvider && !!grokProvider, 'master 路由表里 flash/grok 都有 provider（前缀期望来源）  →  ' + `${flashProvider}/${grokProvider}`);
+    const expectPeak = run({ jobId: "wire-peak", events: discEvents, routes: masterRoutes });
+    const expectValley = run({ jobId: "wire-valley", ts: TS_VALLEY, events: discEvents, routes: masterRoutes });
+    const peakWant = renderFromMaster(expectPeak.options.A.model);
+    const valleyWant = renderFromMaster(expectValley.options.A.model);
+    await t.test('master 路由复算能给出峰/谷 A（CLI 期望来源）', () => {
+      assert.ok(!!expectPeak.options.A.model && !!peakWant.provider && !!expectValley.options.A.model, 'master 路由复算能给出峰/谷 A  →  ' + `${expectPeak.options.A.model}/${expectValley.options.A.model}`);
     });
     const discDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-disc-"));
     discEvents.forEach((e, i) => fs.writeFileSync(path.join(discDir, `${i}.json`), JSON.stringify(e)));
@@ -619,14 +623,11 @@ describe('dianjiangtai', () => {
       assert.ok(djPeak.status === 0, 'CLI dianjangtai-select 峰时退出码 0  →  ' + (djPeak.stderr || "").slice(0, 200));
     });
     const djPeakOut = djPeak.status === 0 ? JSON.parse(djPeak.stdout) : { options: { A: {} } };
-    await t.test('CLI 伪造峰时输入：写码推荐 provider/grok-4.6（#533 provider/model 全称）', () => {
-      assert.ok(djPeakOut.options.A.model === `${grokProvider}/grok-4.6`, 'CLI 伪造峰时输入：写码推荐 provider/grok-4.6（#533 provider/model 全称）  →  ' + JSON.stringify(djPeakOut.options && djPeakOut.options.A));
-    });
-    await t.test('CLI 峰时写码不是 ds-flash（钉死分时违例）', () => {
-      assert.ok(djPeakOut.options.A.model !== `${flashProvider}/${FLASH}`, 'CLI 峰时写码不是 ds-flash（钉死分时违例）');
+    await t.test('CLI 峰时 A = master 路由+本地政策复算（#533 provider/model 全称）', () => {
+      assert.ok(djPeakOut.options.A.model === peakWant.rendered, 'CLI 峰时 A = master 复算  →  ' + JSON.stringify({ got: djPeakOut.options && djPeakOut.options.A, want: peakWant }));
     });
     await t.test('CLI 峰时 A 带 provider 字段（#533）', () => {
-      assert.ok(djPeakOut.options.A.provider === grokProvider, 'CLI 峰时 A 带 provider 字段（#533）  →  ' + JSON.stringify(djPeakOut.options.A));
+      assert.ok(djPeakOut.options.A.provider === peakWant.provider, 'CLI 峰时 A 带 provider 字段（#533）  →  ' + JSON.stringify(djPeakOut.options.A));
     });
     await t.test('CLI 峰时 A/B/C 三个选项模型标识都渲染成 provider/model（#533）', () => {
       assert.ok(["A", "B", "C"].every(k => {
@@ -638,12 +639,12 @@ describe('dianjiangtai', () => {
     await t.test('CLI 峰时输出含 decision_id 与三选项', () => {
       assert.ok(!!(djPeakOut.decision_id && djPeakOut.options.A && djPeakOut.options.B && djPeakOut.options.C), 'CLI 峰时输出含 decision_id 与三选项');
     });
-    await t.test('CLI 峰时 reason=route_beijing', () => {
-      assert.ok(djPeakOut.options.A.reason === "route_beijing", 'CLI 峰时 reason=route_beijing  →  ' + djPeakOut.options.A.reason);
+    await t.test('CLI 峰时 reason 与复算一致', () => {
+      assert.ok(djPeakOut.options.A.reason === expectPeak.options.A.reason, 'CLI 峰时 reason 与复算一致  →  ' + `${djPeakOut.options.A.reason} vs ${expectPeak.options.A.reason}`);
     });
     const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
-    await t.test('CLI 谷时写码推荐 provider/grok-4.6（#669 门闩剔 flash 走 fallback）', () => {
-      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === `${grokProvider}/grok-4.6`, 'CLI 谷时写码推荐 grok-4.6（route_fallback）  →  ' + (djValley.status === 0 ? JSON.parse(djValley.stdout).options.A.model : (djValley.stderr || "").slice(0, 120)));
+    await t.test('CLI 谷时 A = master 路由+本地政策复算', () => {
+      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === valleyWant.rendered, 'CLI 谷时 A = master 复算  →  ' + (djValley.status === 0 ? JSON.parse(djValley.stdout).options.A.model : (djValley.stderr || "").slice(0, 120)));
     });
     const djNoTs = cliDj(["--role", "写码"]);
     await t.test('CLI 缺 --ts 非 0 退出（禁 Date.now）', () => {
