@@ -13,7 +13,7 @@
 2. 开 draft PR：`node scripts/gh-as.mjs worker -- pr create --draft`，标题带宿主前缀，正文必须含三段——**目标 / 验收标准 / 进展**——并回链相关 issue。多行正文用 `--body-file`，不要把换行塞进 `--body`。
 3. 切状态：`orca worktree set --worktree active --workspace-status in-progress --json`。卡名由 `dispatch` / `worker-done` 调 `assembleCardName` 写（格式只认那一处），不要手改，更不要用 issue 号去对审官卡。
 4. 给 PR 打标签（不存在先 `node scripts/gh-as.mjs worker -- label create`，幂等）：`node scripts/gh-as.mjs worker -- pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
-5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
+5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review`。**卡备注「待终审」只由 `worker-done` 在审官起来之后写**；审官没起来不许写「待终审」（#675：假待终审会让盘面撒谎）。
 
 ## 干完活之后（顺序执行，缺一不可）
 
@@ -28,7 +28,7 @@
    命令自己看盘面：没有可复用审官终端 → 自读 `reviewer/*` 建审官并投递「完工」；终端还在 → 新 Task 注入老终端（不建第二张卡）；终端已关才允许新建并写原因。有 review 时 comment 用「返工完成」。
    把「完工」和「起审官」绑成一个动作，是为了不靠你记得再做一步（#586）。
 3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，**不许往下走**——先照报错修，修不好就升级给帅。退出码 0 才进下一步。
-4. 发完 `dao.mjs worker-done` 后，用 preamble / `dao.mjs notify --type worker_done` 结算自己这一跳（#551）。不要在旧 Dispatch 上 `check --wait` 等审官——旧身份下班后信箱 inspect-only（#552）。下一轮返工是新 Task 注入本终端，不是旧信箱里的一条消息：
+4. 发完 `dao.mjs worker-done` 后，用 preamble / `dao.mjs notify --type worker_done` 结算自己这一跳（#551）。不要在旧 Dispatch 上 `check --wait` 等审官——旧身份下班后信箱 inspect-only（#552）。下一轮返工是新 Task 注入本终端，不是旧信箱里的一条消息（审官 notify 写下「要改」时同步开这一跳，#675）：
    - 新任务写「红项」→ 逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（带新 PR head）。
    - 审官已合并 / 本单结束 → 收工。
 

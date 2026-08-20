@@ -1,22 +1,31 @@
 ## 目标
 
-第四席 `dao-watchdog[bot]`：看门狗报帅时用独立身份把事故写到 GitHub 评论，不再看过期屏、不再让卡住的人自报。署名 issue #673（关单交给 `scripts/close-issues.mjs`）。
+验收写下「要改」的同一个动作里，长出同一单的下一跳工作身份。士兵已经 `worker_done` 也能续。盲考由起考轮自己收卷。本续跳补「士兵交卷 → 审官身份」对称的洞：交卷动作没长出审官身份时，失败后 GitHub 和机器不得当没事。署名 issue #675（关单交给 `scripts/close-issues.mjs`）。
 
 ## 验收标准
 
-1. `scripts/lib/gh.mjs` 有角色 `watchdog`（`dao-watchdog[bot]`）。缺 `~/.dao/apps/watchdog.{pem,json}` fail-loud「这台机器没装」。权限：`issues:write`、`pull_requests:write`、`contents:read`、`checks:read`；**没有** `contents:write`。
-2. `watchdog.mjs` 发出 `type: 报帅`（含连败阈值、不再自动动作的那一次）时，用 watchdog 身份在对应 PR 评论落盘；没有 PR 号则写关联 issue。正文固定头 `【看门狗】`，带卡名、指纹/原因、时间。同一树+同一指纹已报过不再刷。
-3. snapshot / `--dispose-actions off` 不写 GitHub。
-4. 写失败事件里报「GitHub 没写成」，不许当写成功。没 PR、没凭据、gh 失败分得开；评论列表「扫完 0 条」和「没扫成」分得开。
-5. 测试走假 gh：正样本评论发出；负样本如上。工人不在 GitHub 上创建 App。
-6. NEW-MACHINE 写清：人建 App `dao-watchdog`、装到本仓、pem/json 放到 `~/.dao/apps/`。
-7. 正文不写 GitHub 自动关单词。`node scripts/dao-check.mjs` 过。
+- 故意构造「士兵已结算、终端还在、审官 notify 红项」→ 当场长出新 Dispatch，旧 id 收不到工作指令。
+- 故意构造「终端已关」→ 非零，报人走了，且没有新 Dispatch。
+- `worker-done` 起审官失败时，完工评论仍落到 issue + PR；失败评论写清 terminal create 超时 / 注入未提交 / 没查成。
+- 起审官失败同一命令里重试一次，仍失败才停。
+- flow：有完工、无活审官、无判定行 → 报「交卷没开成审官下一跳」，不 task-create。
+- 看门狗：有 linked PR、工位已下班、**没有审官子卡** → 报警，不是 NO_TARGETS。有审官子卡（agent 不论 working/done）不报「没开成」。
+- 卡备注「待终审」只在审官起来之后写。
+- `dao-check` 本单相关项绿。PR 正文不写 GitHub 自动关单词。
 
 ## 进展
 
-- [x] 开工五步：空提交、draft PR #674、卡状态、标签
-- [x] gh-as 加 watchdog 角色，缺凭据 fail-loud，contents 不许 write
-- [x] 报帅写 GitHub 评论 + 去重 + 失败显形；snapshot / dispose-actions off 不写
-- [x] 测试假 gh（正样本发出；没目标/没凭据/gh 失败分得开；扫完 0 ≠ 没扫成）
-- [x] NEW-MACHINE：人建 App，工人不建
-- [x] 返工：列表没扫成不得发评论；`--paginate --slurp` 展平分页；负向测试覆盖失败/非数组/分页事故键
+- [x] notify 红项同步开士兵下一跳；flow 不再代开；盲考收卷纪律；bindStation 本窗开 Run
+- [x] worker-done：完工评论先落 GitHub；起审官失败三态 + 同一命令重试一次
+- [x] flow 观察交卷没开成审官下一跳
+- [x] 看门狗 missing-reviewer，不是 NO_TARGETS
+- [x] 士兵任务书：待终审不得在审官没起来时写
+- [x] 返工：有审官子卡（含 done）不报没开成；bindStation 写成工人 TUI 例外；正文补体系三问
+
+## 体系类改动
+
+1. 谁提的，发生在什么场景？2026-08-20 值守清仓。用户问无人值守返工会不会自动转；先出盲设计题。两臂写完后帅没感知，用户拷问。当场拍：起考轮自己收卷；下一跳在验收落地时同步开。续跳补交卷失败不留证据、不起审官也不报警。bindStation 这一笔：本机帅窗 `run-current` 经常是 null，派工垫片只能在工人 TUI 自开 Run。
+
+2. 删哪一层能让这个问题不存在？删掉「红项还打进已下班身份」和「流转器/帅窗事后代开」。创建并进验收动作。删掉「起完等人问」这一层感知。删掉「起审官失败就把完工评论一起抹掉」。bindStation：删掉「只读帅窗 Run、null 就派不成」这一层；工人 TUI 自开 Run 是 #667 的显式例外，不从帅窗触发。
+
+3. 如果从零重做，今天还会造它吗？会造「要改和下一跳身份是同一件事」，也会造「交卷必须长出审官身份，失败要留证据并报警」。不会造 flow 代开，也不会造叫醒帅对话框来收盲考。bindStation：会造「工人 TUI 自己开 Run」，不会造从帅窗 `run-create` / 用 `--from` 冒充信箱台。

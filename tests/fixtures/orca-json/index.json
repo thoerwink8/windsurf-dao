@@ -55,6 +55,24 @@
     "capturedAt": "2026-08-15",
     "note": "#633：worker-start --agent 之后从回包抽 agent 终端。worker-show 实采含 result.worker.agent_terminal_handle 与 result.dispatch.assignee_handle"
   },
+  "extractSoldierTerminal": {
+    "file": "worker-show.json",
+    "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
+    "capturedAt": "2026-08-15",
+    "note": "#675：活 Dispatch 的 result.terminal.handle；已完工时常为 null，退到 agent_terminal_handle / assignee_handle（见 worker-show-completed.json）"
+  },
+  "extractDispatchRunId": {
+    "file": "worker-show.json",
+    "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
+    "capturedAt": "2026-08-15",
+    "note": "#675：下一跳 task-create 要旧 Dispatch 的 result.dispatch.run_id"
+  },
+  "extractDispatchWorktreeId": {
+    "file": "worker-show.json",
+    "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",
+    "capturedAt": "2026-08-15",
+    "note": "#675：result.worker.worktree_id；已完工时 result.terminal 可能为 null"
+  },
   "readDispatchSettlement": {
     "file": "worker-show-completed.json",
     "command": "orca orchestration worker-show --dispatch ctx_adfee0055aef --json",

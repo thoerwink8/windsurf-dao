@@ -36,7 +36,7 @@ function runGate(script, command, envExtra = {}) {
 
 describe('dispatch-gate', () => {
   it('函数层：什么算旁路', async (t) => {
-    const { decideGate, isDispatchBypass, runAsHook, extractHookCommand } = await GATE_LOAD;
+    const { decideGate, isDispatchBypass, runAsHook, extractHookCommand, COORDINATOR_HINT } = await GATE_LOAD;
     await t.test('worker-start 是旁路', () => {
       assert.ok(isDispatchBypass('orca orchestration worker-start --task t') === true, 'worker-start 是旁路');
     });
@@ -61,6 +61,10 @@ describe('dispatch-gate', () => {
     const create = decideGate('orca orchestration run-create --objective x');
     await t.test('#667 decideGate 拦帅窗 run-create', () => {
       assert.ok(create.block === true && /coordinator/.test(create.message), '#667 decideGate 拦帅窗 run-create  →  ' + JSON.stringify(create));
+    });
+    await t.test('#675 COORDINATOR_HINT 写清工人 TUI 例外、帅窗不许', () => {
+      assert.ok(/工人 TUI/.test(COORDINATOR_HINT) && /帅窗不许/.test(COORDINATOR_HINT),
+        '#675 COORDINATOR_HINT 例外  →  ' + COORDINATOR_HINT);
     });
     await t.test('dao.mjs dispatch 不是旁路', () => {
       assert.ok(isDispatchBypass('node scripts/dao.mjs dispatch --name x') === false, 'dao.mjs dispatch 不是旁路');
