@@ -159,6 +159,13 @@ describe('worktree-rm', () => {
     await t.test('done 不算占用，可以删', () => {
       assert.ok(S.planWorktreeRm(doneOnly, 'p5').ok === true, 'done 不算占用，可以删  →  ' + JSON.stringify(S.planWorktreeRm(doneOnly, 'p5')));
     });
+    const idleOnly = [
+      wt({ id: 'p6', name: '#5', children: ['c7'] }),
+      wt({ id: 'c7', name: '审', parent: 'p6', agents: [{ state: 'idle' }, { state: 'done' }] }),
+    ];
+    await t.test('#665 idle 不算占用，可以删', () => {
+      assert.ok(S.planWorktreeRm(idleOnly, 'p6').ok === true, 'idle 不算占用  →  ' + JSON.stringify(S.planWorktreeRm(idleOnly, 'p6')));
+    });
   });
 
   it('三层：孙卡先于子卡先于父卡', async (t) => {

@@ -362,6 +362,17 @@ describe('inbox-station', () => {
     await t.test('create --command 走 cmd 文件', () => {
       assert.ok(cmd.includes('cmd.exe /c') && cmd.includes('inbox-station.cmd'), 'create --command 走 cmd 文件');
     });
+    await t.test('#665 启动串不是镜像脚本 → 要刷新', () => {
+      assert.ok(S.launchNeedsRefresh(script, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === true, '旧启动串要刷新');
+    });
+    await t.test('#665 启动串已是镜像脚本 → 不刷新', () => {
+      const fresh = S.buildLaunchScript({
+        nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+        scriptPath: 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs',
+        logPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox.log',
+      });
+      assert.ok(S.launchNeedsRefresh(fresh, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === false, '镜像启动串不刷新');
+    });
 
     const st = S.statusPayload({ handle: 'term_y', logPath: 'p', action: 'ok', reason: 'all-alive' });
     await t.test('现状 JSON ok', () => {
