@@ -4,7 +4,7 @@
 // 何时写：type:报帅（含连败阈值、不再自动动作的那一次）。
 // 何时不写：snapshot / --dispose-actions off（测试钩 WATCHDOG_GH_AS 除外）。
 // 失败：事件里报「GitHub 没写成」，不许当写成功。
-// 去重：同一树 + 同一指纹。评论列表没扫成 ≠ 扫完 0 条。
+// 去重：同一树 + 同一指纹。评论列表没扫成 ≠ 扫完 0 条；没扫成不得发评论。
 
 import { spawnSync } from 'node:child_process';
 import { ghAs, loadRoleCreds } from './gh.mjs';
@@ -70,6 +70,43 @@ export function parseAccidentKeysFromComments(list) {
   return { scanned: true, keys, count: list.length };
 }
 
+/** gh api --paginate --slurp：一页是评论数组，多页是数组的数组。展平后再扫。 */
+export function flattenCommentPages(parsed) {
+  if (!Array.isArray(parsed)) {
+    return { ok: false, error: '评论列表不是数组——不是 0 条，是没扫成' };
+  }
+  if (parsed.length > 0 && parsed.every(p => Array.isArray(p))) {
+    return { ok: true, comments: parsed.flat() };
+  }
+  return { ok: true, comments: parsed };
+}
+
+/** listed = runGh 结果。ok 失败 / 非 JSON / 非数组 = 没扫成，不许当成 0 条。 */
+export function scanCommentsOut(listed) {
+  if (!listed || listed.ok !== true) {
+    return {
+      scanned: false,
+      error: `评论列表没查成：${listed?.error || '未知'}——不是 0 条，是没扫成`,
+      keys: [],
+      count: 0,
+    };
+  }
+  const raw = listed.out;
+  if (raw == null || String(raw).trim() === '') {
+    return { scanned: false, error: '评论列表输出空——不是 0 条，是没扫成', keys: [], count: 0 };
+  }
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch {
+    return { scanned: false, error: '评论列表不是 JSON——不是 0 条，是没扫成', keys: [], count: 0 };
+  }
+  const flat = flattenCommentPages(parsed);
+  if (!flat.ok) {
+    return { scanned: false, error: flat.error, keys: [], count: 0 };
+  }
+  return parseAccidentKeysFromComments(flat.comments);
+}
+
 export function defaultLoadCreds(opts) {
   return loadRoleCreds('watchdog', opts);
 }
@@ -105,19 +142,17 @@ function postOne({ payload, key, now, runGh }) {
   const target = resolveCommentTarget(payload);
   if (!target.ok) return { ok: false, event: failEvent(name, target.error) };
 
-  const listed = runGh(['api', `repos/{owner}/{repo}/issues/${target.number}/comments`, '--paginate']);
-  if (listed.ok) {
-    let parsed;
-    try { parsed = JSON.parse(listed.out || '[]'); }
-    catch { parsed = null; }
-    const scan = parseAccidentKeysFromComments(parsed);
-    if (scan.scanned && scan.keys.includes(key)) {
-      return {
-        ok: true,
-        deduped: true,
-        event: { name, type: '观察', detail: `同一树+同一指纹已报过（${key}），不再刷` },
-      };
-    }
+  const listed = runGh(['api', `repos/{owner}/{repo}/issues/${target.number}/comments`, '--paginate', '--slurp']);
+  const scan = scanCommentsOut(listed);
+  if (!scan.scanned) {
+    return { ok: false, event: failEvent(name, scan.error) };
+  }
+  if (scan.keys.includes(key)) {
+    return {
+      ok: true,
+      deduped: true,
+      event: { name, type: '观察', detail: `同一树+同一指纹已报过（${key}），不再刷` },
+    };
   }
 
   const body = formatWatchdogComment({

@@ -1,5 +1,5 @@
 // #673 看门狗报帅写 GitHub：假 gh。正样本发出；没 PR / 没凭据 / gh 失败分得开；
-// 扫完 0 条 ≠ 没扫成。snapshot / dispose-actions off 不写。
+// 扫完 0 条 ≠ 没扫成。列表没扫成不得发评论。snapshot / dispose-actions off 不写。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -67,6 +67,18 @@ describe('watchdog-report', () => {
     ]);
     await t.test('扫到已有事故键', () => {
       assert.ok(hit.scanned && hit.keys.includes('wt-1|no serving account') && hit.count === 1, '扫到已有事故键  →  ' + JSON.stringify(hit));
+    });
+    await t.test('runGh ok:false = 没扫成', () => {
+      const s = G.scanCommentsOut({ ok: false, error: 'timeout' });
+      assert.ok(s.scanned === false && /没扫成/.test(s.error), 'ok:false 没扫成  →  ' + JSON.stringify(s));
+    });
+    await t.test('输出空字符串 = 没扫成，不是 0', () => {
+      const s = G.scanCommentsOut({ ok: true, out: '' });
+      assert.ok(s.scanned === false && /输出空/.test(s.error), '空输出没扫成  →  ' + JSON.stringify(s));
+    });
+    await t.test('[] 是扫完 0', () => {
+      const s = G.scanCommentsOut({ ok: true, out: '[]' });
+      assert.ok(s.scanned === true && s.count === 0, '[] 扫完 0  →  ' + JSON.stringify(s));
     });
   });
 
@@ -259,26 +271,117 @@ describe('watchdog-report', () => {
     });
   });
 
-  it('列表没扫成仍尝试写（不当成已报过）', async (t) => {
+  it('列表没扫成：GitHub 没写成，不发评论', async (t) => {
     const G = await LIB_LOAD;
-    const calls = [];
-    const events = [bao({ worktreeId: 'wt-x', fingerprint: 'x', prNumber: 11 })];
+
+    function runCase(listReply) {
+      const calls = [];
+      const events = [bao({ worktreeId: 'wt-x', fingerprint: 'x', prNumber: 11 })];
+      G.reportWatchdogGithub({
+        events,
+        args: { disposeActions: true },
+        state: {},
+        loadCreds: () => ({ ok: true }),
+        runGh: (a) => {
+          calls.push(a);
+          if (a[0] === 'api') return listReply;
+          return { ok: true, out: '{}' };
+        },
+      });
+      return { calls, events };
+    }
+
+    const timeout = runCase({ ok: false, error: 'timeout' });
+    await t.test('列表 ok:false 不发 pr comment', () => {
+      assert.ok(!timeout.calls.some(a => a[1] === 'comment'), '列表失败不写  →  ' + JSON.stringify(timeout.calls));
+    });
+    await t.test('列表失败 → GitHub 没写成且含没扫成/没查成', () => {
+      assert.ok(timeout.events.some(e => /GitHub 没写成：/.test(e.detail) && /没扫成|没查成/.test(e.detail)),
+        '没扫成显形  →  ' + JSON.stringify(timeout.events));
+    });
+    await t.test('列表失败不说没装、不说没有 PR', () => {
+      assert.ok(!timeout.events.some(e => /这台机器没装|没有 PR/.test(e.detail)),
+        '口径  →  ' + JSON.stringify(timeout.events));
+    });
+    await t.test('读评论带 --paginate --slurp', () => {
+      const api = timeout.calls.find(a => a[0] === 'api');
+      assert.ok(api && api.includes('--paginate') && api.includes('--slurp'), '要 slurp  →  ' + JSON.stringify(api));
+    });
+
+    const obj = runCase({ ok: true, out: '{}' });
+    await t.test('非数组 JSON 不发评论', () => {
+      assert.ok(!obj.calls.some(a => a[1] === 'comment'), '非数组不写  →  ' + JSON.stringify(obj.calls));
+    });
+    await t.test('非数组 → GitHub 没写成：不是数组', () => {
+      assert.ok(obj.events.some(e => /GitHub 没写成：/.test(e.detail) && /不是数组/.test(e.detail)),
+        '非数组显形  →  ' + JSON.stringify(obj.events));
+    });
+
+    const concat = runCase({ ok: true, out: '[]\n[]' });
+    await t.test('分页未 slurp 的 []\\n[] 是没扫成，不发评论', () => {
+      assert.ok(!concat.calls.some(a => a[1] === 'comment'), 'concat 不写  →  ' + JSON.stringify(concat.calls));
+    });
+    await t.test('[]\\n[] → GitHub 没写成：不是 JSON', () => {
+      assert.ok(concat.events.some(e => /GitHub 没写成：/.test(e.detail) && /不是 JSON/.test(e.detail)),
+        'concat 显形  →  ' + JSON.stringify(concat.events));
+    });
+  });
+
+  it('分页 slurp：展平后认事故键；空页是扫完 0', async (t) => {
+    const G = await LIB_LOAD;
+
+    const pages = G.flattenCommentPages([
+      [],
+      [{ body: '【看门狗】\n事故键：wt-9|at capacity' }],
+    ]);
+    await t.test('两页展平后 1 条', () => {
+      assert.ok(pages.ok && pages.comments.length === 1, '展平  →  ' + JSON.stringify(pages));
+    });
+    const emptyPages = G.scanCommentsOut({ ok: true, out: '[[],[]]' });
+    await t.test('slurp 空页是扫完 0，不是没扫成', () => {
+      assert.ok(emptyPages.scanned === true && emptyPages.count === 0, '空页扫完 0  →  ' + JSON.stringify(emptyPages));
+    });
+
+    const listed = [];
+    const evHit = [bao({ worktreeId: 'wt-9', fingerprint: 'at capacity', prNumber: 8 })];
     G.reportWatchdogGithub({
-      events,
+      events: evHit,
       args: { disposeActions: true },
       state: {},
       loadCreds: () => ({ ok: true }),
       runGh: (a) => {
-        calls.push(a);
-        if (a[0] === 'api') return { ok: false, error: 'timeout' };
+        listed.push(a);
+        if (a[0] === 'api') {
+          return {
+            ok: true,
+            out: JSON.stringify([[], [{ body: '【看门狗】\n事故键：wt-9|at capacity' }]]),
+          };
+        }
         return { ok: true, out: '{}' };
       },
     });
-    await t.test('列表失败后仍然 pr comment', () => {
-      assert.ok(calls.some(a => a[0] === 'pr' && a[1] === 'comment'), '列表失败仍写  →  ' + JSON.stringify(calls));
+    await t.test('事故键在第 2 页 → 不写评论', () => {
+      assert.ok(!listed.some(a => a[1] === 'comment'), '第 2 页去重  →  ' + JSON.stringify(listed));
     });
-    await t.test('不当成去重跳过', () => {
-      assert.ok(events.some(e => /已写 GitHub/.test(e.detail)), '仍已写  →  ' + JSON.stringify(events));
+    await t.test('第 2 页命中 → 观察不再刷', () => {
+      assert.ok(evHit.some(e => e.type === '观察' && /不再刷/.test(e.detail)), '不再刷  →  ' + JSON.stringify(evHit));
+    });
+
+    const wrote = [];
+    const evZero = [bao({ worktreeId: 'wt-z', fingerprint: 'z', prNumber: 12 })];
+    G.reportWatchdogGithub({
+      events: evZero,
+      args: { disposeActions: true },
+      state: {},
+      loadCreds: () => ({ ok: true }),
+      runGh: (a) => {
+        wrote.push(a);
+        if (a[0] === 'api') return { ok: true, out: '[[],[]]' };
+        return { ok: true, out: '{}' };
+      },
+    });
+    await t.test('slurp 空页（扫完 0）仍写评论', () => {
+      assert.ok(wrote.some(a => a[0] === 'pr' && a[1] === 'comment'), '空页仍写  →  ' + JSON.stringify(wrote));
     });
   });
 });

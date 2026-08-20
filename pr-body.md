@@ -19,3 +19,4 @@
 - [x] 报帅写 GitHub 评论 + 去重 + 失败显形；snapshot / dispose-actions off 不写
 - [x] 测试假 gh（正样本发出；没目标/没凭据/gh 失败分得开；扫完 0 ≠ 没扫成）
 - [x] NEW-MACHINE：人建 App，工人不建
+- [x] 返工：列表没扫成不得发评论；`--paginate --slurp` 展平分页；负向测试覆盖失败/非数组/分页事故键
