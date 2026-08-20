@@ -37,8 +37,7 @@
 //                       #569 降噪只减假阳不减真阳，三类豁免（各自的判据，不是名单）：
 //                       ① 子卡（parentWorktreeId 非空）产出是 review comment 与 notify 不是
 //                          commit——git 判据无意义，其停摆由 stall/指纹/selector/waiting 兜底；
-//                       ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的
-//                          PR = 「已交付、正在等下一环」，不算空转（PR 要返工时仍判）；
+//                       ② 在途 OPEN 非 draft PR：等审 / 等红项都不算空转（#677）；
 //                       ③ 活性否决（#500 一致性）：非 spinner 真实内容在动 = 活，不算空转
 //                          （刚重启正在开 PR / 正在做非 commit 活都不算）。
 //                       真空转（working + 屏面冻结 + 无在途 PR + 非子卡）照旧报。
@@ -1252,8 +1251,8 @@ function runRound(source, args, state) {
     //      ① 子卡（parentWorktreeId 非空）：产出是 review comment 与 notify 不是 commit——git 判据
     //         对它们无意义，停摆由 stall/指纹/选择器⑩/waiting 判据兜底（#568 那个卡权限框的
     //         审官就是被这组判据接住的，不是没人看）；
-    //      ② 在途 PR 等别人：本树分支上有 OPEN 非 draft 且非 CHANGES_REQUESTED 的 PR =
-    //         「已交付、正在等下一环」，不算空转（#565 已推 PR 等审实证）；PR 要返工时仍判；
+    //      ② 在途 OPEN 非 draft PR：等审 / 等红项都不算空转（#677；#565 已推 PR 等审实证）。
+    //         返工动手时有 git 活动，不会落到这档；等红项到来也不是真空转。
     //      ③ 活性否决（#500 一致性）：非 spinner 真实内容在动 = 活（弱判据），不算空转——
     //         刚重启正在开 PR（#567 实证）/ 正在做非 commit 活都不算。
     //    git 证据缺失/拉不到 → 显式「没查成」note（查不到 ≠ 查过没事，不猜）。
@@ -1270,7 +1269,7 @@ function runRound(source, args, state) {
         // 豁免判断（按证据、按角色，不是 pane 名单）
         const roleExempt = w ? isChildWorktree(w) : false;
         const prEv = w ? prEvidenceFor(w, source, args) : null;
-        const prExempt = !!(prEv && prEv.open === true && prEv.isDraft !== true && prEv.reviewDecision !== 'CHANGES_REQUESTED');
+        const prExempt = !!(prEv && prEv.open === true && prEv.isDraft !== true);
         const liveVeto = realChanged === true;
         const exempt = roleExempt ? 'role' : prExempt ? 'pr' : liveVeto ? 'live' : null;
         if (exempt) {
@@ -1283,7 +1282,7 @@ function runRound(source, args, state) {
           } else if (changed && exempt === 'pr') {
             const prNo = prEv.number != null ? ` #${prEv.number}` : '';
             const dec = prEv.reviewDecision || '等待评审/合并';
-            notes.push({ name: t.name, type: '观察', detail: `在途 PR${prNo}（OPEN 非 draft，${dec}）等着别人——已交付的工位不算空转（#569），等待环不在本工位` });
+            notes.push({ name: t.name, type: '观察', detail: `在途 PR${prNo}（OPEN 非 draft，${dec}）等审/等红项——不算空转（#677）` });
           } else if (changed && exempt === 'live') {
             notes.push({ name: t.name, type: '观察', detail: '空转豁免：非 spinner 真实内容在动——活性否决（#500 弱判据，刚重启正在开 PR / 正在做非 commit 活），本轮不算空转' });
           }

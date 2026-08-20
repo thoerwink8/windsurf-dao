@@ -17,14 +17,14 @@
 //
 // 决策规则（②）：
 //   - 工人完工且待审    → 观察有没有活审官下一跳（#675：没开成报帅，不 task-create）
-//   - 审官红 N 项       → 观察验收是否已开出活下一跳（#675：创建者是 notify，不是 flow）
+//   - 审官红 N 项       → 观察士兵还活着没有（#677：红项打进这个活身份，不开下一跳）
 //   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //
-// 执行（③）#675：flow 禁止 task-create。返工/复核下一跳由验收动作同步开。
-//   - 已有活 Dispatch → 本轮 0 需流转
-//   - 该开却没开 → 报帅「验收没开成下一跳」
+// 执行（③）#675/#677：flow 禁止 task-create。士兵交卷后身份继续活，红项打进这个 id。
+//   - 士兵 Dispatch 还活着 → 本轮 0 需流转
+//   - 士兵已下班、红项没处可打 → 报帅「验收没开成下一跳」
 //   - 没查成（worker-list 失败/结构不认识）≠ 查到 0
 //
 // 帅保留四类判断不得自动化（④）：报警分诊 / 换人 / 弹窗放行 / 终审合并。
@@ -811,7 +811,7 @@ function makeSnapshotSource(roundDir, repo) {
 // 动作执行（红 1/2/4/5 落点：目标解析走 source，dry-run 也覆盖解析路径）
 // ══════════════════════════════════════════════════════════════════════
 
-/** #675：看验收有没有开出活下一跳。没查成 ≠ 查到 0。 */
+/** #675/#677：看士兵/审官还活着没有。没查成 ≠ 查到 0。士兵活着 = 红项打进这个身份，不开下一跳。 */
 function observeAcceptanceHop({ action, pr, source, rec }) {
   if (typeof source.orcaWorkers !== 'function') {
     return { unscanned: true, error: '数据源没有 worker-list（没查成）' };
@@ -859,7 +859,7 @@ function executeAction(action, pr, source, rec, dryRun) {
     if (obs.hopOpen) {
       const what = action.kind === 'observe-reviewer-hop' ? '交卷已落地且已有审官下一跳'
         : action.kind === 'observe-recheck-hop' ? '返工已落地且已有审官下一跳'
-        : '红项已落地且已有下一跳';
+        : '士兵还活着，红项打进这个身份';
       return {
         ok: true,
         idle: true,
