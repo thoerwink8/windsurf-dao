@@ -36,7 +36,7 @@ describe('gh-as', () => {
   it('角色 / 凭据缺失 fail-loud', async (t) => {
     const G = await LIB_LOAD;
     await t.test('未知角色', () => {
-      assert.ok(G.loadRoleCreds('ghost').ok === false && /reviewer\|worker\|marshal/.test(G.loadRoleCreds('ghost').error), '未知角色');
+      assert.ok(G.loadRoleCreds('ghost').ok === false && /reviewer\|worker\|marshal\|watchdog/.test(G.loadRoleCreds('ghost').error), '未知角色');
     });
     const empty = tmpDir('gh-as-empty-');
     const miss = G.loadRoleCreds('worker', { dir: empty });
@@ -189,6 +189,26 @@ describe('gh-as', () => {
     });
     await t.test('权限 0 条差异（扫完是 0）', () => {
       assert.ok(info.perm.ok && info.perm.unscanned === false && info.perm.mismatches.length === 0, '权限 0 条差异（扫完是 0）  →  ' + JSON.stringify(info.perm));
+    });
+
+    await t.test('watchdog 在角色表', () => {
+      assert.ok(G.ROLES.includes('watchdog') && G.ROLE_META.watchdog.slug === 'dao-watchdog', 'watchdog 在角色表  →  ' + G.ROLES.join(','));
+    });
+    await t.test('watchdog 不许 contents:write', () => {
+      assert.ok(G.ROLE_META.watchdog.expectedPermissions.contents === 'read', 'watchdog contents=read  →  ' + JSON.stringify(G.ROLE_META.watchdog.expectedPermissions));
+    });
+    const dogWrite = G.diffExpectedPermissions('watchdog', {
+      contents: 'write', pull_requests: 'write', issues: 'write', checks: 'read',
+    });
+    await t.test('watchdog 若拿到 contents:write 是扫完有差', () => {
+      assert.ok(dogWrite.unscanned === false && dogWrite.mismatches.some(m => m.key === 'contents'),
+        'watchdog contents:write 有差  →  ' + JSON.stringify(dogWrite));
+    });
+    const empty = tmpDir('gh-as-dog-empty-');
+    const dogMiss = G.loadRoleCreds('watchdog', { dir: empty });
+    await t.test('watchdog 缺凭据 not_installed + 这台机器没装', () => {
+      assert.ok(dogMiss.ok === false && dogMiss.code === 'not_installed' && /这台机器没装/.test(dogMiss.error),
+        'watchdog 缺凭据  →  ' + JSON.stringify(dogMiss));
     });
 
     const noPerm = G.diffExpectedPermissions('reviewer', null);
