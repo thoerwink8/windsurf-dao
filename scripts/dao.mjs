@@ -482,9 +482,9 @@ function readOnceHandle(handle) {
   return read.json;
 }
 
-/** #661：开工只认外部证据——worker-read 真 session 或屏上 agent 真在干活。
- * 未提交粘贴（[Pasted text] / Pasted Content / 未发 follow-up）立刻红并交给调用方回滚，
- * 不再补一记回车把粘贴当开工（垫片退役）。散步到 worker-start / reviewer-attach / 复用审官。 */
+/** #661/#679：开工只认外部证据——worker-read 真 session 或屏上 agent 真在干活。
+ * 看见未提交粘贴继续等到 timeoutMs 或指纹消失且在干活；超时仍在框里才红并回滚。
+ * 禁止补回车。散步到 worker-start / reviewer-attach / 复用审官。 */
 function finishWorkerInject({ handle, dispatchId, label, timeoutMs }) {
   return verifyStartedPolling({
     dispatchId,
@@ -840,7 +840,7 @@ function cmdDispatch(args) {
   created.dispatchIds.push(created.workerDispatchId);
   created.taskIds.push(taskId);
 
-  // 开工验证：#661 开工只认外部证据（真 session / 真在干活）。未提交粘贴 -> 立刻失败回滚。
+  // 开工验证：#661/#679 开工只认外部证据。粘贴后等 timeout 或发出去，超时仍在框里才回滚。
   const workerInject = finishWorkerInject({
     handle: created.workerHandle,
     dispatchId: created.workerDispatchId,
@@ -2334,7 +2334,7 @@ function cmdReviewerCreate(args) {
  * #575 ④：给已有、无审官的工人卡补派审官。一条命令走完 dispatch 里那段审官建法：
  * 建树 → 环境探针 → HEAD==PR head → 起终端 → 验 TUI → task+worker-start →
  * finishWorkerInject（验开工证明）。换行按 agent 转码，不禁换行；硬闸只量我们那一半。
- * 不碰 raw，所以不会绕过开工验证。#661：未提交粘贴不补回车，立刻失败并删审官树。
+ * 不碰 raw，所以不会绕过开工验证。#661/#679：未提交粘贴不补回车；等 timeout 仍在框里才失败并删审官树。
  */
 function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');

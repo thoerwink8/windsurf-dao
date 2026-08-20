@@ -172,9 +172,9 @@ Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代�
 新 worktree 弹 Trust 会让 Orca 报 agent_unconfigured（#649 attach 实证）。
 `--trust` 直接信任当前工作区免弹框；仓内 shim 在带 `--model` 时也会补 `--trust`（合并后本机垫片退役）。
 
-#661（2026-08-19 拍板）：开工只认外部证据（worker-read 真 session / 屏上真在干活 / GitHub 已有 review）。
-`[Pasted text]`/`Pasted Content` 停在输入框 = 未提交 ≠ 开工：不再补一记回车垫片（退役），
-`finishWorkerInject` / worker-start / reviewer-attach 一律立刻失败回滚、删审官树，不许留假审官卡。
+#661（2026-08-19 拍板）+#679（2026-08-20 订正）：开工只认外部证据（worker-read 真 session / 屏上真在干活 / GitHub 已有 review）。
+`[Pasted text]`/`Pasted Content` 停在输入框 = 未提交 ≠ 开工：不再补一记回车垫片（退役）。
+看见粘贴继续等到 timeout 或指纹消失且在干活；超时仍在框里才失败回滚、删审官树。不许留假审官卡。
 Cursor CLI 本版不支持命令行传 prompt（`--single-use` 是 worker pool 别名），继续走 `terminal create --command`
 起 TUI，任务靠 Orca 注入；注入收不到（只贴不发）就诚实失败，由派工/审官路径回滚。
 Windows shim 禁止 `for /f in ('dir')` / `findstr`（#633：会弹可见 cmd）。

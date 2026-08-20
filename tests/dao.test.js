@@ -1358,7 +1358,7 @@ describe('dao', () => {
     });
   });
 
-  it('#661：粘贴不证明开工——未提交一律立刻红，垫片补回车已退役', async (t) => {
+  it('#661/#679：粘贴不证明开工——等 timeout 仍在框里才红，垫片补回车已退役', async (t) => {
     const S = await S_LOAD;
     const MARKER = '› [Pasted Content 4700 chars]\n';
     const CURSOR_ONLY = '[Pasted text #1 +86 lines]\n';
@@ -1369,34 +1369,53 @@ describe('dao', () => {
     const unproven = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'no_hook_report' });
     const unavailable = () => ({ ok: true, proven: false, source: 'terminal', fallbackReason: 'provider_unsupported' });
 
+    let waitReads = 0;
     const fastFail = S.verifyStartedPolling({
       dispatchId: 'ctx_fast',
-      readOnce: () => ({ ok: true, result: { terminal: { tail: [MARKER] } } }),
+      readOnce: () => {
+        waitReads += 1;
+        return { ok: true, result: { terminal: { tail: [MARKER] } } };
+      },
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('未提交粘贴立刻报注入未提交，不等 120s 超时，pasteSubmitted:false', () => {
-      assert.ok(fastFail.ok === false && fastFail.state === 'unsubmitted-paste' && fastFail.pasteSubmitted === false && /注入未提交/.test(fastFail.reason) && /禁止粘贴当开工/.test(fastFail.reason) && !/超时/.test(fastFail.reason) && typeof fastFail.text === 'string' && /Pasted Content/.test(fastFail.text), '未提交粘贴立刻报注入未提交  →  ' + JSON.stringify(fastFail));
+    await t.test('#679：粘贴后等到超时仍在框里才 unsubmitted-paste，不是首拍即杀', () => {
+      assert.ok(fastFail.ok === false && fastFail.state === 'unsubmitted-paste' && fastFail.pasteSubmitted === false && waitReads > 1 && fastFail.elapsedMs >= 40 && /注入未提交/.test(fastFail.reason) && /禁止粘贴当开工/.test(fastFail.reason) && !/超时/.test(fastFail.reason) && typeof fastFail.text === 'string' && /Pasted Content/.test(fastFail.text), '等到超时仍在框里  →  ' + JSON.stringify({ fastFail, waitReads }));
     });
 
     const cursorOnly = S.verifyStartedPolling({
       dispatchId: 'ctx_cursor_only',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CURSOR_ONLY] } } }),
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('故意只贴不发：屏上只有 [Pasted text] → 红，不许当开工', () => {
-      assert.ok(cursorOnly.ok === false && cursorOnly.state === 'unsubmitted-paste' && cursorOnly.pasteSubmitted === false && /禁止粘贴当开工/.test(cursorOnly.reason), '故意只贴不发：屏上只有 [Pasted text] → 红  →  ' + JSON.stringify(cursorOnly));
+    await t.test('故意只贴不发：等到超时仍只有 [Pasted text] → 红，不许当开工', () => {
+      assert.ok(cursorOnly.ok === false && cursorOnly.state === 'unsubmitted-paste' && cursorOnly.pasteSubmitted === false && /禁止粘贴当开工/.test(cursorOnly.reason), '等到超时仍只有 [Pasted text] → 红  →  ' + JSON.stringify(cursorOnly));
     });
 
     const cursorStuck = S.verifyStartedPolling({
       dispatchId: 'ctx_cursor_stuck',
       readOnce: () => ({ ok: true, result: { terminal: { tail: [CURSOR_STUCK] } } }),
       proofOnce: unproven,
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
+    });
+    await t.test('故意违规：粘贴块 + 未发 follow-up，等到超时 → 红，不许假装开工', () => {
+      assert.ok(cursorStuck.ok === false && cursorStuck.state === 'unsubmitted-paste' && cursorStuck.pasteSubmitted === false, '等到超时仍未发  →  ' + JSON.stringify(cursorStuck));
+    });
+
+    let recN = 0;
+    const pasteThenWork = S.verifyStartedPolling({
+      dispatchId: 'ctx_wait_work',
+      readOnce: () => {
+        recN += 1;
+        const tail = recN <= 2 ? [MARKER] : [WORKING];
+        return { ok: true, result: { terminal: { tail } } };
+      },
+      proofOnce: unavailable,
       timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('故意违规：粘贴块 + 未发 follow-up → 红，不许假装开工', () => {
-      assert.ok(cursorStuck.ok === false && cursorStuck.state === 'unsubmitted-paste' && cursorStuck.pasteSubmitted === false, '故意违规：粘贴块 + 未发 follow-up → 红  →  ' + JSON.stringify(cursorStuck));
+    await t.test('#679：粘贴后指纹消失且在干活 → 绿，不是立刻杀', () => {
+      assert.ok(pasteThenWork.ok === true && pasteThenWork.state === 'started' && recN > 2 && pasteThenWork.proofFallback === true, '粘贴后发出去  →  ' + JSON.stringify({ pasteThenWork, recN }));
     });
 
     let proofReads = 0;
@@ -1427,8 +1446,8 @@ describe('dao', () => {
       proofOnce: unproven,
       timeoutMs: 60, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('无证明 + 屏上仍是粘贴块 → 立刻红（不再等超时抳环境）', () => {
-      assert.ok(stillStuck.ok === false && stillStuck.state === 'unsubmitted-paste' && stillStuck.pasteSubmitted === false && /注入未提交/.test(stillStuck.reason) && stillStuck.text, '无证明 + 屏上仍是粘贴块 → 立刻红  →  ' + JSON.stringify(stillStuck));
+    await t.test('无证明 + 等到超时仍是粘贴块 → unsubmitted-paste', () => {
+      assert.ok(stillStuck.ok === false && stillStuck.state === 'unsubmitted-paste' && stillStuck.pasteSubmitted === false && /注入未提交/.test(stillStuck.reason) && stillStuck.text, '等到超时仍是粘贴块  →  ' + JSON.stringify(stillStuck));
     });
 
     const cleanOk = S.verifyStartedPolling({
@@ -1457,7 +1476,7 @@ describe('dao', () => {
         dispatchId: `ctx_h${i}`,
         readOnce: () => ({ ok: true, result: { terminal: { tail: [`[Pasted Content ${4000 + i} chars]`] } } }),
         proofOnce: unproven,
-        timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+        timeoutMs: 40, intervalMs: 5, sleep: noopSleep, label: '审官',
       }));
     }
     await t.test('连续 10 个只贴不发样本：全部红、全部 pasteSubmitted:false、零垫片', () => {
@@ -1558,8 +1577,8 @@ describe('dao', () => {
       assert.ok(leftoverGeneric === null, '#633 普通粘贴块不是残留派活  →  ' + leftoverGeneric);
     });
 
-    // 2. verifyStartedPolling：只贴不发 → 立刻红；垫片没了，没有「补 enter → 绿」这条路。
-    //    绿色唯一来源：真 transcript 证明（见上方 #661 块）或屏面稳定（agent 真在干活）。
+    // 2. verifyStartedPolling：只贴不发等到超时才红；垫片没了，没有「补 enter → 绿」这条路。
+    //    绿色来源：真 transcript、指纹消失且在干活、或屏面稳定。
     let fastReads = 0;
     const pollFast = S.verifyStartedPolling({
       dispatchId: 'ctx_poll_fast',
@@ -1568,10 +1587,10 @@ describe('dao', () => {
         return { ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } };
       },
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('故意只贴不发：粘贴块 + follow-up → 首拍即红，pasteSubmitted:false', () => {
-      assert.ok(pollFast.ok === false && pollFast.state === 'unsubmitted-paste' && fastReads === 1 && pollFast.pasteSubmitted === false, '故意只贴不发：粘贴块 + follow-up → 首拍即红  →  ' + JSON.stringify(pollFast));
+    await t.test('故意只贴不发：粘贴块 + follow-up → 等到超时才红，pasteSubmitted:false', () => {
+      assert.ok(pollFast.ok === false && pollFast.state === 'unsubmitted-paste' && fastReads > 1 && pollFast.pasteSubmitted === false, '等到超时才红  →  ' + JSON.stringify({ pollFast, fastReads }));
     });
 
     // 绿样本（真在干活）：粘贴块从未出现在屏上，只有状态行。
@@ -1593,10 +1612,10 @@ describe('dao', () => {
       dispatchId: 'ctx_poll_stuck',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：修命令库'] } } }),
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('Cursor 未提交（无 sendEnter）→ 立刻报注入未提交，不等超时', () => {
-      assert.ok(pollStuck.ok === false && pollStuck.state === 'unsubmitted-paste' && /注入未提交/.test(pollStuck.reason) && !/超时/.test(pollStuck.reason) && /Pasted text/.test(pollStuck.evidence), 'Cursor 未提交 → 立刻报注入未提交  →  ' + JSON.stringify(pollStuck));
+    await t.test('Cursor 未提交（无 sendEnter）→ 等到超时才报注入未提交', () => {
+      assert.ok(pollStuck.ok === false && pollStuck.state === 'unsubmitted-paste' && /注入未提交/.test(pollStuck.reason) && !/超时/.test(pollStuck.reason) && /Pasted text/.test(pollStuck.evidence), 'Cursor 未提交等到超时  →  ' + JSON.stringify(pollStuck));
     });
 
     const pollWork = S.verifyStartedPolling({
@@ -1609,26 +1628,26 @@ describe('dao', () => {
       assert.ok(pollWork.ok === true && pollWork.state === 'started' && pollWork.proofFallback === true, 'Cursor 已提交 + 在干活 → 屏面稳定判开工  →  ' + JSON.stringify(pollWork));
     });
 
-    // Cursor 只贴不发 / 第二拍恢复的旧样本在上节已按 #661 重写（首拍即红 / 无粘贴才绿），
+    // Cursor 只贴不发 / 粘贴后发出去 的样本在上节已按 #679 重写（等到超时才红 / 指纹消失且干活才绿），
     // 这里只剩「只有粘贴块 → 红」与「follow-up 未发 → 红」两个补样。
     const pollAlone = S.verifyStartedPolling({
       dispatchId: 'ctx_poll_alone',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]'] } } }),
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('审红1：只有粘贴块 → 立刻红，不等超时', () => {
-      assert.ok(pollAlone.ok === false && pollAlone.state === 'unsubmitted-paste' && /注入未提交/.test(pollAlone.reason) && !/超时/.test(pollAlone.reason), '审红1：只有粘贴块 → 立刻红  →  ' + JSON.stringify(pollAlone));
+    await t.test('审红1：只有粘贴块 → 等到超时才红', () => {
+      assert.ok(pollAlone.ok === false && pollAlone.state === 'unsubmitted-paste' && /注入未提交/.test(pollAlone.reason) && !/超时/.test(pollAlone.reason), '审红1：只有粘贴块等到超时  →  ' + JSON.stringify(pollAlone));
     });
 
     const pollWorkWord = S.verifyStartedPolling({
       dispatchId: 'ctx_poll_workword',
       readOnce: () => ({ ok: true, result: { terminal: { tail: ['[Pasted text #1 +86 lines]', '→ 短摘要：Reading Cursor 粘贴并提交'] } } }),
       proofOnce: unproven,
-      timeoutMs: 5000, intervalMs: 5, sleep: noopSleep, label: '审官',
+      timeoutMs: 50, intervalMs: 5, sleep: noopSleep, label: '审官',
     });
-    await t.test('审红2：follow-up 正文含 Reading → 屏轮询立刻红', () => {
-      assert.ok(pollWorkWord.ok === false && pollWorkWord.state === 'unsubmitted-paste', '审红2：follow-up 正文含 Reading → 立刻红  →  ' + JSON.stringify(pollWorkWord));
+    await t.test('审红2：follow-up 正文含 Reading → 等到超时才红', () => {
+      assert.ok(pollWorkWord.ok === false && pollWorkWord.state === 'unsubmitted-paste', '审红2：follow-up 正文含 Reading 等到超时  →  ' + JSON.stringify(pollWorkWord));
     });
   });
 

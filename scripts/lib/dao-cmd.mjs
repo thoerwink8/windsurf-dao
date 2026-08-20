@@ -1493,9 +1493,9 @@ export const CURSOR_WORKING_RE = /(?:^|\n)\s*(?:Running|Reading|Thinking|Working
  * 不是粘贴块的前置条件（审红 1），单独出现也算未提交。 */
 export const CURSOR_FOLLOWUP_RE = /(?:^|\n)\s*→[^\n]*[^\s\n]|\d+\s*follow-ups?/i;
 
-/** #619/#661：未提交粘贴与「超时/环境」必须分开。垫片已退役：
- * 粘贴进输入框 ≠ 开工，屏幕上有未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
- * 一律立刻红并回滚，不补回车、不假装开工（#661 拍板）。 */
+/** #619/#661/#679：未提交粘贴与「超时/环境」必须分开。垫片已退役：
+ * 粘贴进输入框 ≠ 开工。看见 Pasted Content / [Pasted text] 继续等 timeout 或指纹消失且在干活；
+ * 超时仍在输入框才 unsubmitted-paste。不补回车、不假装开工（#679 拍板）。 */
 export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——任务书停在输入框未发出，禁止粘贴当开工（#661）';
 
 /** #651：Cursor 粘贴块等价 Grok 的 Pasted Content——单独出现且后面没有在干活（状态行）
@@ -1595,7 +1595,7 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * #661/#633：退役「补一记回车」垫片（completePendingPaste 已删除）。
+ * #661/#633/#679：退役「补一记回车」垫片（completePendingPaste 已删除）。
  * 往输入框粘贴 ≠ 开工：未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
  * 只证明任务书停在输入框，不证明 agent 真接过它。开工只认外部证据——
  *   - worker-read 官方 transcript（source≠terminal）= 真 session（调 verifyWorkerStarted）；
@@ -1605,8 +1605,8 @@ export function verifyInjection({ text, readError } = {}) {
  *
  * 仍轮询的只有开工证明本身：
  *   1. worker-read 官方 transcript（source≠terminal）→ started；
- *   2. 任一拍看到未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）→
- *      立刻红 unsubmitted-paste、pasteSubmitted:false，不许垫片提交、不许假装开工；
+ *   2. 看见未提交粘贴 → 继续等到 timeoutMs，或指纹消失且真在干活。
+ *      超时仍在输入框才 unsubmitted-paste、pasteSubmitted:false。禁止补回车；
  *   3. TUI 加载期（Starting MCP servers 等）不算绿；
  *   4. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
  */
@@ -1648,18 +1648,10 @@ export function verifyStartedPolling({
     lastText = text;
     const leftover = pastedContentMatch(text);
     if (leftover) {
-      // #661/#633：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
-      // → 任务书没进上下文，立刻红并交给调用方回滚，不补回车、不假装开工。
-      return {
-        ok: false,
-        state: 'unsubmitted-paste',
-        reason: UNSUBMITTED_PASTE_REASON,
-        evidence: leftover,
-        reads,
-        elapsedMs: Date.now() - t0,
-        text,
-        pasteSubmitted: false,
-      };
+      // #679：粘贴后等，不要立刻杀。等 ≠ 补回车。指纹还在输入框就继续轮询。
+      stableRounds = 0;
+      sleep(intervalMs);
+      continue;
     }
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
@@ -1681,6 +1673,19 @@ export function verifyStartedPolling({
       }
     }
     sleep(intervalMs);
+  }
+  const leftoverAtEnd = pastedContentMatch(lastText);
+  if (leftoverAtEnd) {
+    return {
+      ok: false,
+      state: 'unsubmitted-paste',
+      reason: UNSUBMITTED_PASTE_REASON,
+      evidence: leftoverAtEnd,
+      reads,
+      elapsedMs: Date.now() - t0,
+      text: lastText,
+      pasteSubmitted: false,
+    };
   }
   return {
     ok: false,
