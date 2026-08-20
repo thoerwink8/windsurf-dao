@@ -51,8 +51,8 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `idle/` | 空转：ps working + git-evidence 显示 30 分钟无 git 活动（#471） | 首轮退出码 1，`idle:` 带分钟数 |
 | `idle-fresh/` | 5 分钟内有 git 活动 | 退出码 0，不报 idle |
 | `idle-reviewer/` | **#569 降噪①（角色判据）**：同 idle/ 但卡名改为子卡 `#455 - 审官·grok-4.6`（带 ·）——git 空转判据不适用 | 退出码 0，`观察: 子卡…不判 git 空转`；不报 idle（审官产出是 review comment 与 notify 不是 commit） |
-| `idle-pr-exempt/` | **#569 降噪②（在途 PR 豁免）**：同 idle/ 但 ps 改卡名/树 id，pr-evidence 显示关联 PR OPEN 非 draft（reviewDecision=APPROVED） | 退出码 0，`观察: 在途 PR #999…等着别人`；不报 idle（已交付等下一环） |
-| `idle-pr-rework/` | 同 idle-pr-exempt 但 reviewDecision=CHANGES_REQUESTED（PR 要返工，责任仍在本工位） | 退出码 1，`idle:` 照报（真阳不减） |
+| `idle-pr-exempt/` | **#569/#677 降噪②（在途 PR 豁免）**：同 idle/ 但 ps 改卡名/树 id，pr-evidence 显示关联 PR OPEN 非 draft（reviewDecision=APPROVED） | 退出码 0，`观察: 在途 PR #999…等审/等红项`；不报 idle |
+| `idle-pr-rework/` | 同 idle-pr-exempt 但 reviewDecision=CHANGES_REQUESTED（等红项，#677 也不算空转） | 退出码 0，不报 idle |
 | `idle-veto/` | **#569 降噪③（活性否决）**：三轮同 git 空置，真实内容第 2 轮变化、第 3 轮冻结 | 第 1 轮 idle；第 2 轮 `观察: 空转豁免…活性否决`（不算空转）；第 3 轮 idle 再报 |
 | `orphan-closed/` | 真孤儿：无活跃执行者（终端已关）+ 关联 issue 已关 | 退出码 1，`orphan:` 带判断依据（#492 关条件 4）；默认快照再打 `动作: 将执行 worktree-rm`（#630，不真删） |
 | `orphan-open/` | 关联单还开着（#492 v3：任一开着就不算孤儿） | 不报 orphan；不打 worktree-rm 动作（#630 负控） |
@@ -118,7 +118,7 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 
 - `git-evidence.json`：`{ capturedAt, worktrees: { <worktreeId>: { lastActivityTs } } }`（idle 用）
 - `pr-evidence.json`（#569）：`{ <worktreeId>: { number, open, isDraft, reviewDecision } }`（idle 的
-  在途 PR 豁免用；`"CHANGES_REQUESTED"` = PR 要返工，不豁免）
+  在途 PR 豁免用；OPEN 非 draft（含 CHANGES_REQUESTED）等审/等红项都不报 idle，#677）
 - `gh-evidence.json`：孤儿判据的关联单状态
 - `heartbeat.json`：flow 心跳（#497 契约）
 - `sessions/` 子目录（#569）：pi 会话 jsonl 树，model_change 检测用（快照默认读 `<轮目录>/sessions`）

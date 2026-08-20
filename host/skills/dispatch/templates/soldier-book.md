@@ -27,10 +27,19 @@
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头。
    命令自己看盘面：没有可复用审官终端 → 自读 `reviewer/*` 建审官并投递「完工」；终端还在 → 新 Task 注入老终端（不建第二张卡）；终端已关才允许新建并写原因。有 review 时 comment 用「返工完成」。
    把「完工」和「起审官」绑成一个动作，是为了不靠你记得再做一步（#586）。
-3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，**不许往下走**——先照报错修，修不好就升级给帅。退出码 0 才进下一步。
-4. 发完 `dao.mjs worker-done` 后，用 preamble / `dao.mjs notify --type worker_done` 结算自己这一跳（#551）。不要在旧 Dispatch 上 `check --wait` 等审官——旧身份下班后信箱 inspect-only（#552）。下一轮返工是新 Task 注入本终端，不是旧信箱里的一条消息（审官 notify 写下「要改」时同步开这一跳，#675）：
-   - 新任务写「红项」→ 逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（带新 PR head）。
-   - 审官已合并 / 本单结束 → 收工。
+3. **确认送达才算发完**：`worker-done` 退出码非零 = 没做完，**不许往下走**——先照报错修，修不好就升级给帅。退出码 0 才进下一步。`worker-done` **不**结算 Orca 身份（#677）：成功路径只保证 GitHub 有完工、审官已起。
+4. **不要立刻** `notify --type worker_done`。GitHub 完工 + 起审官之后身份继续活；等审不算空转。此时 `worker-show` 必须仍是 ready/waiting，不是 completed。红项打进这个还活着的 dispatch（`notify --to dispatch:<这个 id>`）。不要开下一跳救人，不要因为已经有完工评论就下班。
+   - 等审：用本身份收信。红项到来 → 逐条修 → 改完 commit/push → **回到第 2 步再调一轮 `worker-done`**（首行「返工完成」）。身份继续活。
+   - 判定绿 / 本单结束 → 才允许结算（#551 仍要真结算，只是时刻后移）：
+
+     ```bash
+     node scripts/dao.mjs notify --type worker_done --outcome succeeded \
+       --task-id <preamble 的 taskId> --dispatch-id <preamble 的 dispatchId> \
+       --from <preamble 的 --from> --dispatch-capability <preamble 的 capability> \
+       --subject "本跳结束：PR <PR号>" --body "判定绿，这一轮真结束"
+     ```
+
+     缺身份 = 未结算。错 pane / 落库但 Dispatch 仍 dispatched = 未结算。结算失败不得假装已下班。
 
 文件内容例子（首行以「完工」开头；返工轮首行以「返工完成」开头）：
 
@@ -63,7 +72,7 @@
 6. commit 前缀带宿主标识（`[cc]` / `[pi]` / `[codex]` / `[grok]`）。
 7. PR 正文三段式：目标 / 验收标准 / 进展。
 8. 多工人任务：向**任务分支**发 PR，不要直接打 master。自己的冲突自己解（项化路径见 `dao-project` skill，冲突由收口官统筹）。
-9. 完工发 worker_done 后终端就不再收信（续活走新建任务注入）。
+9. 判定绿之前不要发 worker_done。交卷后身份继续收信。过早结算会让红项打进死人（#677）。
 10. 长产出（盲考 / 大文档 / 多文件重构）边写边存：先建目标文件逐节追加，不最后一次性写盘——中途死亡不留整份产出给看门狗（2026-08-14 拍板，issue #442）。
 11. **心跳不准发到 Run**（#667）：禁止 `orca orchestration send --type heartbeat`。Orca 前言叫你发心跳，不要发。活性看 git/产物/看门狗，不靠 Run 信箱心跳。
 

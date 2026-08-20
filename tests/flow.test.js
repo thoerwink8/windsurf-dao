@@ -53,16 +53,30 @@ describe('flow', () => {
     });
   });
 
-  it('①b #675 红项已落地且已有下一跳 → 不 task-create，0 需流转', async (t) => {
+  it('①b #677 士兵还活着 → 红项打进这个身份，不 task-create，0 需流转', async (t) => {
     const r = runFlow(path.join(FIXTURES, "rework-hop-open"));
-    await t.test('观察已有下一跳且不 task-create', () => {
-      assert.ok(/观察：#999 红项已落地且已有下一跳 ctx_next_999，不 task-create/.test(r.out), '观察已有下一跳  →  ' + r.out.trim());
+    await t.test('观察士兵还活着且不 task-create', () => {
+      assert.ok(/观察：#999 士兵还活着，红项打进这个身份 ctx_next_999，不 task-create/.test(r.out), '观察士兵还活着  →  ' + r.out.trim());
     });
     await t.test('0 需流转', () => {
       assert.ok(/OK 扫完 1 个 PR，0 需流转/.test(r.out) && r.status === 0, '0 需流转  →  ' + `status=${r.status} ` + r.out.trim());
     });
     await t.test('不报帅、不注入', () => {
       assert.ok(!/报帅/.test(r.out) && !/返工注入/.test(r.out) && !/task-create/.test(r.out.replace(/不 task-create/g, '')), '不报帅不注入  →  ' + r.out.trim());
+    });
+  });
+
+  it('①c #677 worker-list 结构不认识 → 没查成，不是查到 0', async (t) => {
+    const r = runFlow(path.join(FIXTURES, "rework-workers-unscanned"));
+    await t.test('报帅下一跳没查成', () => {
+      assert.ok(/报帅：下一跳没查成/.test(r.out) && /结构不认识/.test(r.out),
+        '没查成  →  ' + r.out.trim());
+    });
+    await t.test('不把没查成说成验收没开成（那是查到 0）', () => {
+      assert.ok(!/验收没开成下一跳/.test(r.out), '没查成 ≠ 查到 0  →  ' + r.out.trim());
+    });
+    await t.test('不 task-create', () => {
+      assert.ok(!/task-create/.test(r.out), '不 task-create  →  ' + r.out.trim());
     });
   });
 

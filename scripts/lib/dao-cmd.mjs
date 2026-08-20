@@ -3532,36 +3532,6 @@ function dispatchProbeExtras(showJson) {
   };
 }
 
-/** 从 worker-list 找某终端上、排除旧 id 的活 Dispatch。没查成与查到 0 条分开。 */
-export function findLiveDispatchForTerminal(workerListJson, terminalHandle, { excludeId } = {}) {
-  const workers = workerListJson?.result?.workers;
-  if (!Array.isArray(workers)) {
-    return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
-  }
-  const term = String(terminalHandle || '').trim();
-  if (!term) return { ok: false, error: 'findLiveDispatchForTerminal 没给 terminal' };
-  const live = workers.filter((w) => {
-    const h = String(w?.resource?.terminalHandle || w?.agentTerminalHandle || '');
-    if (h !== term) return false;
-    if (excludeId && w.dispatchId === excludeId) return false;
-    return isLiveDispatchRecipient({ workerState: w.workerState, dispatchStatus: w.dispatchStatus });
-  });
-  if (live.length === 0) {
-    return { ok: false, scanned: workers.length, error: `终端 ${term} 没有活着的下一跳 Dispatch` };
-  }
-  const pick = live[0];
-  if (!pick.dispatchId) {
-    return { ok: false, error: `终端 ${term} 的记账没有 dispatchId`, scanned: workers.length };
-  }
-  return {
-    ok: true,
-    dispatchId: pick.dispatchId,
-    taskId: pick.taskId || null,
-    runId: pick.runId || null,
-    scanned: workers.length,
-  };
-}
-
 /** dispatch 收件人必须还活着。completed/succeeded/failed 不是收件人。 */
 export function isLiveDispatchRecipient({ workerState, dispatchStatus } = {}) {
   const live = new Set(['ready', 'working', 'waiting']);
@@ -3615,7 +3585,7 @@ export function probeRecipient(target, orca) {
           ok: false, kind: 'dispatch', id: target.id,
           status: workerState,
           dispatchStatus,
-          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往已结算信箱发工作指令（复审会变 inspect-only）。同卡还有活终端 → 新 task 绑回该终端；人走了 → 新开工人。`,
+          error: `收件人 Dispatch 已完工（state=${workerState} status=${dispatchStatus}）：禁止往已结算信箱发工作指令（#677：士兵没审完不该下班）。人走了 → 新开工人。`,
           ...extras,
         };
       }
@@ -3667,125 +3637,6 @@ export function findInboxMessage(inboxJson, messageId) {
 }
 
 /**
- * #675：审官写下「要改」的同一条 notify 里开下一跳。
- * 死 Dispatch + 活终端 → task-create + worker-start --terminal --retry-of，红项打进新身份。
- * 终端不在 → 非零「人走了，要新开工人」，不许装做成了。已有活下一跳 → 复用，禁止双开。
- */
-export function openSoldierNextHop({
-  old, subject, body = '', hop = '审官→士兵', orca, inboxLimit = 50,
-} = {}) {
-  if (typeof orca !== 'function') throw new Error('openSoldierNextHop 要 orca 执行器');
-  const oldId = old?.id;
-  if (!oldId) {
-    return { ok: false, hop, stage: '下一跳', error: `${hop}：旧 Dispatch id 缺失（没查成）` };
-  }
-  const terminalHandle = old.terminalHandle;
-  if (!terminalHandle) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId,
-      error: `${hop}：人走了，要新开工人（已完工 Dispatch ${oldId} 没有可绑终端）`,
-    };
-  }
-  const termProbe = probeRecipient({ kind: 'terminal', id: terminalHandle }, orca);
-  if (!termProbe.ok) {
-    if (termProbe.unscanned) {
-      return {
-        ok: false, hop, stage: '下一跳', unscanned: true, oldDispatchId: oldId,
-        error: `${hop}：士兵终端活性没查成（不等于人走了）：${termProbe.error}`,
-      };
-    }
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId,
-      error: `${hop}：人走了，要新开工人（终端 ${terminalHandle} 不在）：${termProbe.error}`,
-    };
-  }
-
-  const listed = orca(argsWorkerList());
-  if (!listed.ok) {
-    return {
-      ok: false, hop, stage: '下一跳', unscanned: true, oldDispatchId: oldId,
-      error: `${hop}：worker-list 没查成，不敢双开：${orcaErrText(listed.error)}`,
-    };
-  }
-  const existing = findLiveDispatchForTerminal(listed.json, terminalHandle, { excludeId: oldId });
-  if (existing.unscanned) {
-    return {
-      ok: false, hop, stage: '下一跳', unscanned: true, oldDispatchId: oldId,
-      error: `${hop}：${existing.error}`,
-    };
-  }
-  if (existing.ok) {
-    const delivered = deliverMessage({
-      to: `dispatch:${existing.dispatchId}`, subject, body, hop, orca, inboxLimit, skipHop: true,
-    });
-    if (!delivered.ok) {
-      return {
-        ...delivered, hopOpened: false, reused: true,
-        nextDispatchId: existing.dispatchId, oldDispatchId: oldId,
-        error: `${hop}：已有下一跳 ${existing.dispatchId} 但红项没打进去：${delivered.error}`,
-      };
-    }
-    return {
-      ...delivered, hopOpened: true, reused: true,
-      nextDispatchId: existing.dispatchId, oldDispatchId: oldId,
-    };
-  }
-
-  const runId = old.runId;
-  if (!runId) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId,
-      error: `${hop}：旧 Dispatch 没有 run_id，task-create 会 run_required（没查成）`,
-    };
-  }
-  const spec = `返工：${subject}`;
-  const created = orca(argsTaskCreate({ spec, run: runId }));
-  if (!created.ok) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId,
-      error: `${hop}：task-create 失败：${orcaErrText(created.error)}`,
-    };
-  }
-  const taskId = extractTaskId(created.json);
-  if (!taskId) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId,
-      error: `${hop}：task-create 成功但没拿到 result.task.id（不能拿顶层 RPC id）`,
-    };
-  }
-  const started = orca(argsWorkerStart({
-    task: taskId, terminal: terminalHandle, retryOf: oldId, run: runId,
-  }));
-  if (!started.ok) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId, nextTaskId: taskId,
-      error: `${hop}：worker-start 失败：${orcaErrText(started.error)}`,
-    };
-  }
-  const nextId = extractDispatchId(started.json);
-  if (!nextId) {
-    return {
-      ok: false, hop, stage: '下一跳', oldDispatchId: oldId, nextTaskId: taskId,
-      error: `${hop}：worker-start 没拿到新 Dispatch id（没查成，不许装做成了）`,
-    };
-  }
-  const delivered = deliverMessage({
-    to: `dispatch:${nextId}`, subject, body, hop, orca, inboxLimit, skipHop: true,
-  });
-  if (!delivered.ok) {
-    return {
-      ...delivered, hopOpened: true, reused: false,
-      nextDispatchId: nextId, nextTaskId: taskId, oldDispatchId: oldId, retryOf: oldId,
-      error: `${hop}：下一跳开了但红项没打进新身份：${delivered.error}`,
-    };
-  }
-  return {
-    ...delivered, hopOpened: true, reused: false,
-    nextDispatchId: nextId, nextTaskId: taskId, oldDispatchId: oldId, retryOf: oldId,
-  };
-}
-
-/**
  * 闭环一跳的投递：收件人在 → 发 → 有回执 → 落库可查。四关缺一即失败。
  * 失败一律返回 ok:false（调用方非零退出并升级），不许当「发成功了只是还没读」。
  *
@@ -3794,12 +3645,11 @@ export function openSoldierNextHop({
  * 发出后核 worker-show Dispatch 为 completed。落库但未 completed、缺身份、错 pane
  * 一律 ok:false 并报「未结算」。没查成（unscanned）和查到未 completed 分开。
  *
- * #675：hop 审官→士兵 且目标 Dispatch 已完工 → 同一命令开下一跳（skipHop 关闭此岔，防递归）。
+ * #677：hop 审官→士兵 打进还活着的 id。已完工 fail-visible，不开下一跳救人。
  */
 export function deliverMessage({
   to = null, subject, body = '', type, outcome, hop = '闭环通知', orca, inboxLimit = 50,
   taskId, dispatchId, dispatchCapability, from, filesModified, reportPath,
-  skipHop = false,
 } = {}) {
   if (typeof orca !== 'function') throw new Error('deliverMessage 要 orca 执行器');
   if (!subject) return { ok: false, hop, stage: '参数', error: `${hop}：缺 --subject，没主题的通知等于没通知` };
@@ -3822,8 +3672,12 @@ export function deliverMessage({
 
   const pre = probeRecipient(target, orca);
   if (!pre.ok) {
-    if (!skipHop && isSoldierReworkHop(hop) && isCompletedDispatchProbe(pre)) {
-      return openSoldierNextHop({ old: pre, subject, body, hop, orca, inboxLimit });
+    if (isSoldierReworkHop(hop) && isCompletedDispatchProbe(pre)) {
+      return {
+        ok: false, hop, stage: '收件人',
+        error: `${hop}：士兵已下班（过早 worker_done），红项打不进活人。不要开下一跳救人（#677）。人走了才升级给帅。`,
+        recipient: pre,
+      };
     }
     return { ok: false, hop, stage: '收件人', unscanned: !!pre.unscanned, error: `${hop}：${pre.error}`, recipient: pre };
   }
@@ -4091,7 +3945,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
-                  # 原子完工：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端（必须 --worktree）；终端已关才允许新建并写原因；两条路径都 notify（投失败即停）
+                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端；终端已关才允许新建并写原因；两条路径都 notify 审官（投失败即停）
+                  # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
@@ -4113,8 +3968,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # grok 发送前把 \\n 转成 ESC+CR（Alt+Enter）；claude/pi 原样；codex 不转（换行留不住）
   notify --subject <文> [--to <term_…|run:…|dispatch:…>] [--body <文>] [--type <类>] [--outcome succeeded|failed] [--hop <跳名>]
                   [--task-id <id> --dispatch-id <id> --from <handle> --dispatch-capability <token>]
-                  # 普通通知：dispatch: 活人直接投递。hop 审官→士兵 且目标已完工：同一命令开下一跳（活终端 task-create+worker-start --retry-of；人走了非零，没有新 Dispatch）
-                  # --type worker_done：省略 --to，必须带 --task-id/--dispatch-id/--outcome；发出后核 Dispatch 变 completed（#551）
+                  # 普通通知：dispatch: 活人直接投递。hop 审官→士兵 打进还活着的 id；已完工 fail-visible，不开下一跳救人（#677）
+                  # --type worker_done：省略 --to，必须带 --task-id/--dispatch-id/--outcome；发出后核 Dispatch 变 completed（#551）。士兵侧判定绿才允许发。
   reply --id <消息id> --body <回答> [--from <handle>] [--run <id>]
                   # 帅回答工人的 ask。不抢信箱台：缺 --from 时自动用该 Run 的 coordinator_handle
   gate-create --task <task_id> --question <问题> [--options <json数组>]   # 上帅裁定建原生决策门（#559 ④）

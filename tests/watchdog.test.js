@@ -451,22 +451,25 @@ describe('watchdog', () => {
 
   it('⑰b #569 降噪②（在途 PR 豁免）：已交付等下一环的工位不算空转', async (t) => {
     const re = runWatchdog(path.join(FIXTURES, "idle-pr-exempt"), ["--once", "--now", String(NOW)]);
-    await t.test('idle-pr-exempt（OPEN 非 draft APPROVED）：退出码 0（在途 PR 等着别人 = 不算空转）', () => {
-      assert.ok(re.status === 0, 'idle-pr-exempt（OPEN 非 draft APPROVED）：退出码 0（在途 PR 等着别人 = 不算空转）  →  ' + `status=${re.status}`);
+    await t.test('idle-pr-exempt（OPEN 非 draft APPROVED）：退出码 0（等审不算空转）', () => {
+      assert.ok(re.status === 0, 'idle-pr-exempt（OPEN 非 draft APPROVED）：退出码 0（等审不算空转）  →  ' + `status=${re.status}`);
     });
     await t.test('idle-pr-exempt：不报 idle', () => {
       assert.ok(!/idle:/.test(re.out), 'idle-pr-exempt：不报 idle  →  ' + re.out.trim());
     });
     await t.test('idle-pr-exempt：打在途 PR 观察行（判据可见）', () => {
-      assert.ok(/观察: 在途 PR #999（OPEN 非 draft，APPROVED）等着别人/.test(re.out), 'idle-pr-exempt：打在途 PR 观察行（判据可见）  →  ' + re.out.trim());
+      assert.ok(/观察: 在途 PR #999（OPEN 非 draft，APPROVED）等审\/等红项/.test(re.out), 'idle-pr-exempt：打在途 PR 观察行（判据可见）  →  ' + re.out.trim());
     });
 
     const rr = runWatchdog(path.join(FIXTURES, "idle-pr-rework"), ["--once", "--now", String(NOW)]);
-    await t.test('idle-pr-rework（CHANGES_REQUESTED 要返工）：退出码 1（责任仍在本工位，真阳不减）', () => {
-      assert.ok(rr.status === 1, 'idle-pr-rework（CHANGES_REQUESTED 要返工）：退出码 1（责任仍在本工位，真阳不减）  →  ' + `status=${rr.status}`);
+    await t.test('idle-pr-rework（CHANGES_REQUESTED 等红项）：退出码 0（不算空转）', () => {
+      assert.ok(rr.status === 0, 'idle-pr-rework（CHANGES_REQUESTED 等红项）：退出码 0（不算空转）  →  ' + `status=${rr.status}`);
     });
-    await t.test('idle-pr-rework：idle 照报', () => {
-      assert.ok(/\[#999 - 返工PR测试\] idle:/.test(rr.out), 'idle-pr-rework：idle 照报  →  ' + rr.out.trim());
+    await t.test('idle-pr-rework：不报 idle', () => {
+      assert.ok(!/idle:/.test(rr.out), 'idle-pr-rework：不报 idle  →  ' + rr.out.trim());
+    });
+    await t.test('idle-pr-rework：打等红项观察行', () => {
+      assert.ok(/观察: 在途 PR #999（OPEN 非 draft，CHANGES_REQUESTED）等审\/等红项/.test(rr.out), 'idle-pr-rework：打等红项观察行  →  ' + rr.out.trim());
     });
   });
 

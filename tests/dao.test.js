@@ -904,6 +904,7 @@ describe('dao', () => {
         && pWd.reviewer === 'gpt-5.6-sol'
         && pWd.reviewerCreate && pWd.reviewerCreate.invoked === true && pWd.reviewerCreate.dryRun === true
         && pWd.reviewerCreate.reviewer === 'gpt-5.6-sol'
+        && pWd.settled === false
         && /^完工/.test(pWd.comment || ''),
         'CLI worker-done --dry-run 首审：wired + shouldCreate + 调 reviewer-create --dry-run  →  ' + `status=${cliWd.status} ${JSON.stringify(pWd)}`);
       });
@@ -917,6 +918,7 @@ describe('dao', () => {
         assert.ok(cliWdRework.status === 0 && pWdRework.ok === true && pWdRework.wired === true
         && pWdRework.round === 'rework' && pWdRework.shouldCreate === false
         && pWdRework.reviewerCreate && pWdRework.reviewerCreate.skipped === true
+        && pWdRework.settled === false
         && /^返工完成/.test(pWdRework.comment || ''),
         'CLI worker-done --dry-run 返工：shouldCreate=false，不起第二个审官  →  ' + `status=${cliWdRework.status} ${JSON.stringify(pWdRework)}`);
       });
@@ -974,6 +976,12 @@ describe('dao', () => {
         && !/plan\.round === 'first' && reviewerDispatchId/.test(wdFn),
         '#586 worker-done 首审/返工都走 completeWorkerDoneNotify（投失败即停）  →  ' + wdFn.slice(0, 400));
       });
+    await t.test('#677 worker-done 成功路径不结算（无 settleDispatch / 无 type worker_done）', () => {
+      assert.ok(/settled: false/.test(wdFn) && !/settleDispatch\(/.test(wdFn)
+        && !/--type['"]?\s*,\s*['"]worker_done['"]/.test(wdFn)
+        && /#677：本命令只交 GitHub 卷/.test(wdFn),
+        '#677 worker-done 不结算  →  ' + wdFn.slice(0, 280));
+    });
     const reworkNotifyCalls = [];
     const reworkNotify = S.completeWorkerDoneNotify({
       round: 'rework',
@@ -984,6 +992,12 @@ describe('dao', () => {
         reworkNotifyCalls.push(opts);
         return { ok: true, messageId: 'msg_rework1', hop: opts.hop };
       },
+    });
+    await t.test('#677 completeWorkerDoneNotify 是投递给审官，不是结算士兵', () => {
+      assert.ok(reworkNotifyCalls.length === 1 && reworkNotifyCalls[0].type !== 'worker_done'
+        && reworkNotifyCalls[0].hop === '士兵→审官'
+        && String(reworkNotifyCalls[0].to).startsWith('dispatch:'),
+        '#677 投递审官不是结算  →  ' + JSON.stringify(reworkNotifyCalls[0]));
     });
     await t.test('#586 返工路径 notified.ok===true（不只是 commentPosted）',
       () => {
@@ -2946,10 +2960,11 @@ describe('dao', () => {
         'completed/succeeded/failed 不算活人');
     });
     const doneProbe = S.probeRecipient({ kind: 'dispatch', id: DONE_DISPATCH }, fakeOrca());
-    await t.test('probeRecipient 已完工 dispatch → 非零，并写下一步', () => {
+    await t.test('probeRecipient 已完工 dispatch → 非零，并写人走了才新开', () => {
       assert.ok(doneProbe.ok === false && /已完工/.test(doneProbe.error)
-        && /新 task/.test(doneProbe.error) && /新开工人/.test(doneProbe.error),
-        'probeRecipient 已完工 dispatch → 非零，并写下一步  →  ' + JSON.stringify(doneProbe));
+        && /#677/.test(doneProbe.error) && /新开工人/.test(doneProbe.error)
+        && !/新 task/.test(doneProbe.error),
+        'probeRecipient 已完工 dispatch → 非零  →  ' + JSON.stringify(doneProbe));
     });
     const doneSendOther = S.deliverMessage({
       to: `dispatch:${DONE_DISPATCH}`,
@@ -2967,9 +2982,11 @@ describe('dao', () => {
       hop: '审官→士兵(dispatch)',
       orca: fakeOrca(),
     });
-    await t.test('#675 审官→士兵 已完工且无终端 → 人走了，不开下一跳', () => {
-      assert.ok(doneSendHop.ok === false && doneSendHop.stage === '下一跳' && /人走了/.test(doneSendHop.error),
-        '#675 审官→士兵 已完工且无终端 → 人走了  →  ' + JSON.stringify(doneSendHop));
+    await t.test('#677 审官→士兵 已完工 → 失败，不开下一跳', () => {
+      assert.ok(doneSendHop.ok === false && doneSendHop.stage === '收件人'
+        && /士兵已下班/.test(doneSendHop.error) && /#677/.test(doneSendHop.error)
+        && /不要开下一跳/.test(doneSendHop.error),
+        '#677 审官→士兵 已完工不开下一跳  →  ' + JSON.stringify(doneSendHop));
     });
 
     const wsFx = JSON.parse(fs.readFileSync(path.join(REPO, 'tests', 'fixtures', 'orca-json', 'worker-show.json'), 'utf8'));
@@ -3068,12 +3085,14 @@ describe('dao', () => {
         '审官任务书写明红项后也结算，复审靠新 Dispatch（#552）');
     });
     await t.test('#675 审官任务书红项只跑 notify，不自己拼 task-create', () => {
-      assert.ok(/不要自己拼/.test(tmplReviewer) && /task-create/.test(tmplReviewer) && /#675/.test(tmplReviewer),
+      assert.ok(/不要自己拼/.test(tmplReviewer) && /task-create/.test(tmplReviewer) && /不要开下一跳/.test(tmplReviewer),
         '#675 审官任务书红项只跑 notify，不自己拼 task-create');
     });
-    await t.test('#675 士兵任务书下一跳是新 Task 不是旧信箱', () => {
-      assert.ok(/新 Task 注入本终端/.test(tmplSoldier) && /旧信箱/.test(tmplSoldier) && /#675/.test(tmplSoldier),
-        '#675 士兵任务书下一跳是新 Task 不是旧信箱');
+    await t.test('#677 士兵任务书：交卷后身份继续活，判定绿才结算', () => {
+      assert.ok(/不要立刻/.test(tmplSoldier) && /判定绿/.test(tmplSoldier)
+        && /还活着/.test(tmplSoldier) && /#677/.test(tmplSoldier)
+        && !/新 Task 注入本终端/.test(tmplSoldier),
+        '#677 士兵任务书交卷不立刻结算  →  ' + tmplSoldier.slice(tmplSoldier.indexOf('不要立刻'), tmplSoldier.indexOf('不要立刻') + 180));
     });
     await t.test('notify 文档：普通投递 ≠ 结算；worker_done 才核 completed', () => {
       assert.ok(/投递\*\*不是\*\*结算|普通 notify 验的是\*\*投递\*\*不是\*\*结算/.test(S.USAGE)
@@ -3086,74 +3105,42 @@ describe('dao', () => {
     });
   });
 
-  it('#675 验收要改同步开下一跳：死 Dispatch+活终端 → 新身份；人走了非零', async (t) => {
+  it('#677 红项打进活身份：waiting 能送达；已完工 fail-visible 不开下一跳', async (t) => {
     const S = await S_LOAD;
+    const LIVE = 'ctx_live-hop-1';
     const DONE = 'ctx_done-hop-1';
-    const NEXT = 'ctx_next-hop-1';
     const LIVE_TERM = 'term_live-0001';
-    const DEAD_TERM = 'term_dead-0001';
     const RUN = 'run_live0001';
 
-    function hopOrca({
-      terminal = LIVE_TERM,
-      list = [],
-      listBroken = false,
-      createBroken = false,
-      startBroken = false,
-      termGone = false,
-    } = {}) {
+    function hopOrca({ dispatchId = LIVE, workerState = 'waiting', dispatchStatus = 'dispatched', showBroken = false } = {}) {
       const calls = [];
       const sent = [];
       let seq = 0;
       const fn = (a) => {
         calls.push(a.slice());
         const key = `${a[0]} ${a[1]}`;
-        if (key === 'terminal read') {
-          const h = a[a.indexOf('--terminal') + 1];
-          if (termGone || h !== LIVE_TERM) {
-            return { ok: false, error: { code: 'terminal_handle_stale', message: 'terminal_handle_stale' } };
-          }
-          return { ok: true, json: { ok: true, result: { terminal: { handle: h, status: 'running' } } } };
-        }
         if (key === 'orchestration worker-show') {
+          if (showBroken) return { ok: false, error: { code: 'timeout', message: 'worker-show timeout' } };
           const d = a[a.indexOf('--dispatch') + 1];
-          if (d === DONE) {
-            return {
-              ok: true,
-              json: {
-                ok: true,
-                result: {
-                  dispatch: { id: d, status: 'completed', assignee_handle: terminal, run_id: RUN },
-                  worker: { state: 'succeeded', agent_terminal_handle: terminal },
-                },
-              },
-            };
+          if (d !== dispatchId) {
+            return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
           }
-          if (d === NEXT || list.some((w) => w.dispatchId === d)) {
-            return {
+          return {
+            ok: true,
+            json: {
               ok: true,
-              json: {
-                ok: true,
-                result: {
-                  dispatch: { id: d, status: 'dispatched', assignee_handle: LIVE_TERM, run_id: RUN },
-                  worker: { state: 'ready' },
-                },
+              result: {
+                dispatch: { id: d, status: dispatchStatus, assignee_handle: LIVE_TERM, run_id: RUN },
+                worker: { state: workerState, agent_terminal_handle: LIVE_TERM },
               },
-            };
-          }
-          return { ok: false, error: { code: 'dispatch_not_found', message: `Worker Dispatch ${d} was not found.` } };
+            },
+          };
         }
         if (key === 'orchestration worker-list') {
-          if (listBroken) return { ok: false, error: { code: 'boom', message: 'worker-list down' } };
-          return { ok: true, json: { ok: true, result: { workers: list } } };
+          return { ok: false, error: { code: 'boom', message: 'worker-list down' } };
         }
-        if (key === 'orchestration task-create') {
-          if (createBroken) return { ok: false, error: { code: 'boom', message: 'task-create fail' } };
-          return { ok: true, json: { ok: true, result: { task: { id: 'task_next-1' }, id: 'rpc-not-task' } } };
-        }
-        if (key === 'orchestration worker-start') {
-          if (startBroken) return { ok: false, error: { code: 'boom', message: 'worker-start fail' } };
-          return { ok: true, json: { ok: true, result: { dispatchId: NEXT } } };
+        if (key === 'orchestration task-create' || key === 'orchestration worker-start') {
+          throw new Error(`#677 不许开下一跳: ${a.join(' ')}`);
         }
         if (key === 'orchestration send') {
           const to = a.includes('--to') ? a[a.indexOf('--to') + 1] : null;
@@ -3172,73 +3159,66 @@ describe('dao', () => {
       return fn;
     }
 
-    const pos = hopOrca();
-    const opened = S.deliverMessage({
-      to: `dispatch:${DONE}`,
+    const liveIo = hopOrca({ workerState: 'waiting' });
+    const delivered = S.deliverMessage({
+      to: `dispatch:${LIVE}`,
       subject: '红项：2 条',
       body: '位置+问题+期望',
       hop: '审官→士兵',
-      orca: pos,
+      orca: liveIo,
     });
-    await t.test('正样本：死 Dispatch + 活终端 → 新 Dispatch 活着', () => {
-      assert.ok(opened.ok === true && opened.nextDispatchId === NEXT && opened.hopOpened === true,
-        '正样本开下一跳  →  ' + JSON.stringify(opened));
+    await t.test('正样本：waiting Dispatch 收到红项', () => {
+      assert.ok(delivered.ok === true && /^msg_/.test(delivered.messageId || ''),
+        'waiting 能送达  →  ' + JSON.stringify(delivered));
     });
-    await t.test('正样本：红项打进新身份，旧 id 收不到工作指令', () => {
-      const tos = pos.sent.map((m) => m.to_handle || m.to_dispatch);
-      assert.ok(tos.some((x) => x === `dispatch:${NEXT}` || x === NEXT), '新身份有信  →  ' + JSON.stringify(tos));
-      assert.ok(!tos.some((x) => x === `dispatch:${DONE}` || x === DONE), '旧 id 没有工作指令  →  ' + JSON.stringify(tos));
-    });
-    await t.test('正样本：worker-start 带 --terminal 和 --retry-of', () => {
-      const ws = pos.calls.find((c) => c[0] === 'orchestration' && c[1] === 'worker-start');
-      assert.ok(ws && ws.includes('--terminal') && ws.includes(LIVE_TERM) && ws.includes('--retry-of') && ws.includes(DONE),
-        'retry-of 旧 id  →  ' + JSON.stringify(ws));
+    await t.test('正样本：红项打进这个活 id，不开 task-create', () => {
+      const tos = liveIo.sent.map((m) => m.to_handle || m.to_dispatch);
+      assert.ok(tos.some((x) => x === `dispatch:${LIVE}` || x === LIVE), '活 id 有信  →  ' + JSON.stringify(tos));
+      assert.ok(!liveIo.calls.some((c) => c[1] === 'task-create' || c[1] === 'worker-start'),
+        '不开下一跳  →  ' + JSON.stringify(liveIo.calls.map((c) => c.slice(0, 2))));
     });
 
-    const gone = hopOrca({ terminal: DEAD_TERM, termGone: true });
+    const readyIo = hopOrca({ workerState: 'ready' });
+    const ready = S.deliverMessage({
+      to: `dispatch:${LIVE}`,
+      subject: '红项：1 条',
+      hop: '审官→士兵',
+      orca: readyIo,
+    });
+    await t.test('正样本：ready Dispatch 也能收到红项', () => {
+      assert.ok(ready.ok === true && /^msg_/.test(ready.messageId || ''),
+        'ready 能送达  →  ' + JSON.stringify(ready));
+    });
+
+    const deadIo = hopOrca({ dispatchId: DONE, workerState: 'succeeded', dispatchStatus: 'completed' });
     const dead = S.deliverMessage({
       to: `dispatch:${DONE}`,
       subject: '红项：1 条',
       hop: '审官→士兵',
-      orca: gone,
+      orca: deadIo,
     });
-    await t.test('负样本：终端已关 → 非零，报人走了', () => {
-      assert.ok(dead.ok === false && /人走了/.test(dead.error), '人走了  →  ' + JSON.stringify(dead));
-    });
-    await t.test('负样本：终端已关 → 没有新 Dispatch（不 task-create）', () => {
-      assert.ok(!gone.calls.some((c) => c[1] === 'task-create') && !dead.nextDispatchId,
-        '不开新 Dispatch  →  ' + JSON.stringify({ dead, calls: gone.calls.map((c) => c.slice(0, 2)) }));
+    await t.test('负样本：已完工 → 非零，报士兵已下班，不开下一跳', () => {
+      assert.ok(dead.ok === false && /士兵已下班/.test(dead.error) && /#677/.test(dead.error)
+        && !deadIo.calls.some((c) => c[1] === 'task-create'),
+        '已完工不开下一跳  →  ' + JSON.stringify({ dead, calls: deadIo.calls.map((c) => c.slice(0, 2)) }));
     });
 
-    const reusedList = [{
-      dispatchId: NEXT, taskId: 'task_exist', runId: RUN,
-      workerState: 'ready', dispatchStatus: 'dispatched',
-      agentTerminalHandle: LIVE_TERM,
-      resource: { terminalHandle: LIVE_TERM },
-    }];
-    const reuseIo = hopOrca({ list: reusedList });
-    const reused = S.deliverMessage({
-      to: `dispatch:${DONE}`,
-      subject: '红项：2 条',
-      hop: '审官→士兵',
-      orca: reuseIo,
-    });
-    await t.test('已有活下一跳 → 复用，禁止双开', () => {
-      assert.ok(reused.ok === true && reused.reused === true && reused.nextDispatchId === NEXT
-        && !reuseIo.calls.some((c) => c[1] === 'task-create'),
-        '复用不双开  →  ' + JSON.stringify({ reused, calls: reuseIo.calls.map((c) => c.slice(0, 2)) }));
-    });
-
-    const listMiss = hopOrca({ listBroken: true });
+    const missIo = hopOrca({ showBroken: true });
     const unscanned = S.deliverMessage({
-      to: `dispatch:${DONE}`,
+      to: `dispatch:${LIVE}`,
       subject: '红项',
       hop: '审官→士兵',
-      orca: listMiss,
+      orca: missIo,
     });
-    await t.test('worker-list 没查成 → unscanned，不开下一跳', () => {
-      assert.ok(unscanned.ok === false && unscanned.unscanned === true && !listMiss.calls.some((c) => c[1] === 'task-create'),
-        '没查成 ≠ 人走了  →  ' + JSON.stringify(unscanned));
+    await t.test('worker-show 没查成 → unscanned，不开下一跳', () => {
+      assert.ok(unscanned.ok === false && unscanned.unscanned === true
+        && !missIo.calls.some((c) => c[1] === 'task-create'),
+        '没查成 ≠ 已完工  →  ' + JSON.stringify(unscanned));
+    });
+
+    await t.test('USAGE：worker-done 不结算；notify 不开下一跳', () => {
+      assert.ok(/#677：成功路径不结算/.test(S.USAGE) && /不开下一跳救人/.test(S.USAGE),
+        'USAGE #677  →  ' + S.USAGE.slice(S.USAGE.indexOf('worker-done --pr'), S.USAGE.indexOf('worker-done --pr') + 280));
     });
 
     await t.test('extractSoldierTerminal：terminal 为 null 时退到 handle', () => {
@@ -3432,10 +3412,10 @@ describe('dao', () => {
       assert.ok(/禁止回退已结算 dispatch/.test(daoSrc) && !/帅会另开复核 Task/.test(daoSrc),
         '#552 worker-done 复用失败当场 fail，不吞掉再投死信箱');
     });
-    await t.test('士兵任务书不再 check --wait 等审官旧信箱', () => {
+    await t.test('#677 士兵任务书判定绿才 worker_done，过早结算会打进死人', () => {
       const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
-      assert.ok(/inspect-only/.test(brief) && /notify --type worker_done/.test(brief) && /新 Task/.test(brief),
-        '士兵任务书不再 check --wait 等审官旧信箱');
+      assert.ok(/判定绿之前不要发 worker_done/.test(brief) && /打进死人/.test(brief) && /#677/.test(brief),
+        '#677 士兵任务书下班时机  →  ' + brief.slice(brief.indexOf('判定绿之前'), brief.indexOf('判定绿之前') + 80));
     });
     await t.test('#675 士兵任务书：待终审只在审官起来之后写', () => {
       const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
