@@ -11,6 +11,8 @@ import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText, normalizePipes } from './next-launch.mjs';
+import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
+import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -2320,6 +2322,27 @@ export function resolveDispatchConstraints({
     return { ok: false, missing: [], error: `审官 --reviewer ${reviewer} 不在路由表` };
   }
 
+  const vendorGate = assertCrossVendor({
+    workerId: resolvedModel,
+    reviewerId: reviewer,
+    models,
+  });
+  if (!vendorGate.ok) {
+    let error = vendorGate.error;
+    if (vendorGate.state === 'same_vendor') {
+      const next = nextReviewerAfter({
+        currentId: reviewer,
+        models,
+        passerIds: models
+          .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+          .map(m => m.id),
+        workerId: resolvedModel,
+      });
+      error = next.ok && next.next ? `${error}；下一位 ${next.next}` : `${error}；${next.error}`;
+    }
+    return { ok: false, missing: [], error, vendorGate };
+  }
+
   return {
     ok: true,
     mergePolicy: policy,
@@ -2328,6 +2351,7 @@ export function resolveDispatchConstraints({
     role: role || null,
     reviewer,
     recommendation,
+    vendorGate,
   };
 }
 
@@ -2710,15 +2734,24 @@ export function pickModel(labels) {
   };
 }
 
-/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
-export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
-  if (reviewer && String(reviewer).trim()) {
-    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+/** 起审官前查工人模型。没拿到列表 ≠ 扫完没有 model/*，两者都拒绝起审官。 */
+export function requireWorkerModel(labels) {
+  const pick = pickModel(labels);
+  if (pick.ok) return pick;
+  if (pick.state === 'unscanned') {
+    return { ...pick, error: '工人模型列表没拿到（没查成），拒绝起审官' };
   }
+  if (pick.state === 'none') {
+    return { ...pick, error: '扫完没有 model/*，拒绝起审官' };
+  }
+  return { ...pick, error: `${pick.error}，拒绝起审官` };
+}
+
+export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
-  if (!n) return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没给 PR 号' };
+  if (!n) return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没给 PR 号' };
   if (typeof runGh !== 'function') {
-    return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没拿到 gh 执行器（没查成，不许猜）' };
+    return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没拿到 gh 执行器（没查成，不许猜）' };
   }
   const view = runGh(['pr', 'view', n, '--json', 'title,body']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
@@ -2727,7 +2760,7 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
   const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
   if (!refs.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
+    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 issue label（没查成，不许猜）` };
   }
   const collected = [];
   for (const issueNum of refs) {
@@ -2739,9 +2772,33 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
     const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
-  const picked = pickReviewer(collected);
-  if (!picked.ok) return { ...picked, source: 'label', refs, labels: collected };
-  return { ...picked, source: 'label', refs, labels: collected };
+  return { ok: true, unscanned: false, refs, labels: collected };
+}
+
+export function resolveWorkerFromPr({ pr, runGh } = {}) {
+  const collected = collectIssueLabelsFromPr({ pr, runGh });
+  if (!collected.ok) return collected;
+  const picked = requireWorkerModel(collected.labels);
+  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+}
+
+/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
+export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
+  if (reviewer && String(reviewer).trim()) {
+    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+  }
+  const collected = collectIssueLabelsFromPr({ pr, runGh });
+  if (!collected.ok) {
+    if (!collected.unscanned && /没有署名单号/.test(collected.error || '')) {
+      const n = String(pr ?? '').trim();
+      return { ...collected, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
+    }
+    return collected;
+  }
+  const picked = pickReviewer(collected.labels);
+  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
 /** 读 PR 上的 review 条数。没查成和「0 条」分开。 */
@@ -2781,7 +2838,10 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
-  const workerPick = pickModel(resolved.labels || []);
+  const workerPick = shouldCreate
+    ? requireWorkerModel(resolved.labels)
+    : pickModel(resolved.labels || []);
+  if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
     ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
     : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
@@ -3944,11 +4004,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
+                  # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端；终端已关才允许新建并写原因；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
+                  # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵

@@ -762,6 +762,7 @@ describe('dianjiangtai', () => {
       { id: "gpt-5.6-sol", provider: "gpt" },
       { id: "claude-opus", provider: "claude" },
       { id: "kimi-k3", provider: "cursor" },
+      { id: "grok-4.6", provider: "grok" },
     ];
     await t.test('GPT 容量满后下一档是 Opus', () => {
       const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "claude-opus", "kimi-k3"] });
@@ -780,6 +781,7 @@ describe('dianjiangtai', () => {
         displayName: "PR-#664 审官·gpt-5.6-sol",
         models,
         passerIds: ["gpt-5.6-sol", "kimi-k3"],
+        workerId: "grok-4.6",
       });
       assert.ok(p.ok && p.action === "switch" && p.to === "kimi-k3" && p.pr === 664, 'planCapacitySwitch 认审官卡并换人  →  ' + JSON.stringify(p));
     });

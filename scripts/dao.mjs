@@ -107,6 +107,7 @@ import {
   stampIssueLabels,
   syncPrLabelsFromIssue,
   resolveReviewerFromPr,
+  resolveWorkerFromPr,
   planWorkerDone,
   completeWorkerDoneNotify,
   pickWorkerDoneDispatchId,
@@ -151,6 +152,8 @@ import {
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
 import { defaultLogRel, leasePath, launchFilePath, parseLease } from './inbox-station.mjs';
+import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
+import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -201,6 +204,34 @@ function fail(error, extra = {}) {
 function loadOrFail() {
   try { return loadRouting(); }
   catch (e) { fail(String(e.message || e)); }
+}
+
+function reviewerPasserIds(routing) {
+  return (routing?.models || [])
+    .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+    .map(m => m.id);
+}
+
+function formatVendorGateError(gate, next) {
+  if (!gate || gate.ok) return null;
+  if (next && next.ok && next.next) return `${gate.error}；下一位 ${next.next}`;
+  if (next && next.error) return `${gate.error}；${next.error}`;
+  return gate.error;
+}
+
+function refuseIfSameVendor({ workerId, reviewerId, routing }) {
+  const models = routing?.models || [];
+  const gate = assertCrossVendor({ workerId, reviewerId, models });
+  if (gate.ok) return gate;
+  const next = nextReviewerAfter({
+    currentId: reviewerId,
+    models,
+    passerIds: reviewerPasserIds(routing),
+    workerId,
+  });
+  fail(formatVendorGateError(gate, next), {
+    vendorGate: { ...gate, next: next.ok ? next.next : null, exhausted: !!next.exhausted },
+  });
 }
 
 function constrainDispatch(args, routing) {
@@ -1189,12 +1220,13 @@ function invokeReviewerCreateHealed(opts) {
   return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
-function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun } = {}) {
+function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer } = {}) {
   const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr)];
   if (name) argv.push('--name', String(name));
   if (parentWorktree) argv.push('--parent-worktree', String(parentWorktree));
   if (soldierDispatch) argv.push('--soldier-dispatch', String(soldierDispatch));
   if (issue) argv.push('--issue', String(issue));
+  if (reviewer) argv.push('--reviewer', String(reviewer));
   if (dryRun) argv.push('--dry-run');
   const r = spawnSync(process.execPath, argv, {
     encoding: 'utf8',
@@ -1489,6 +1521,12 @@ function cmdWorkerDone(args) {
 
   const shouldCreate = reuse.action === 'create';
   const shouldReuse = reuse.action === 'reuse';
+  const routingDone = shouldCreate ? loadOrFail() : null;
+  if (shouldCreate) {
+    refuseIfSameVendor({
+      workerId: plan.workerModel, reviewerId: plan.reviewer, routing: routingDone,
+    });
+  }
   // #589：审官卡名用 PR 号。找卡走 parent+记账，不拿 issue 号去对名字。
   const createName = assembleCardName({
     name: reviewerCardName(plan.reviewer),
@@ -1515,6 +1553,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         issue: plan.issue,
+        reviewer: plan.reviewer,
         dryRun: true,
       });
       if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
@@ -1550,29 +1589,54 @@ function cmdWorkerDone(args) {
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reuse });
 
   if (shouldCreate) {
-    const createOpts = {
-      pr: args.pr,
-      name: createName,
-      parentWorktree: parentId,
-      soldierDispatch: args.soldierDispatch,
-      issue: plan.issue,
-      dryRun: false,
-    };
-    create = invokeReviewerCreate(createOpts);
-    create = healReviewerCreateAfterFence(create, createOpts);
-    if (!create.ok) {
-      const retried = healReviewerCreateAfterFence(invokeReviewerCreate(createOpts), createOpts);
-      create = { ...retried, retried: true, firstError: create.error };
+    const models = routingDone?.models || [];
+    const passerIds = reviewerPasserIds(routingDone);
+    const seen = new Set();
+    let currentReviewer = plan.reviewer;
+    while (currentReviewer && !seen.has(currentReviewer)) {
+      seen.add(currentReviewer);
+      const createOpts = {
+        pr: args.pr,
+        name: assembleCardName({
+          name: reviewerCardName(currentReviewer),
+          pr: plan.pr,
+          role: '审官',
+          model: currentReviewer,
+        }),
+        parentWorktree: parentId,
+        soldierDispatch: args.soldierDispatch,
+        issue: plan.issue,
+        reviewer: currentReviewer,
+        dryRun: false,
+      };
+      create = invokeReviewerCreate(createOpts);
+      create = healReviewerCreateAfterFence(create, createOpts);
+      if (create.ok) {
+        create = { ...create, reviewer: currentReviewer };
+        break;
+      }
+      const nxt = nextReviewerAfter({
+        currentId: currentReviewer, models, passerIds, workerId: plan.workerModel,
+      });
+      if (!nxt.ok) {
+        create = { ...create, exhausted: true, nextError: nxt.error, retried: true };
+        break;
+      }
+      create = { ...create, switchedFrom: currentReviewer, firstError: create.error };
+      currentReviewer = nxt.next;
     }
     if (!create.ok) {
       const cls = classifyReviewerSpawnError(create.error);
-      const failBody = reviewerSpawnFailComment({ error: create.error, retried: true });
+      const failBody = reviewerSpawnFailComment({
+        error: create.nextError ? `${create.error}；${create.nextError}` : create.error,
+        retried: true,
+      });
       postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
       postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
       if (parentId) {
         orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
       }
-      fail(create.error, {
+      fail(create.nextError ? `${create.error}；${create.nextError}` : create.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
         reviewerCreate: create, reuse, spawnKind: cls.kind,
       });
@@ -2029,6 +2093,13 @@ function cmdReviewerCreate(args) {
   const picked = resolveReviewerFromPr({ pr: args.pr, reviewer: args.reviewer, runGh: gh });
   if (!picked.ok) fail(picked.error, { reviewer: picked, pr: String(args.pr) });
 
+  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
+  if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  const routing = loadOrFail();
+  const vendorGate = refuseIfSameVendor({
+    workerId: worker.modelId, reviewerId: picked.modelId, routing,
+  });
+
   const revName = assembleCardName({
     name: args.name || reviewerCardName(picked.modelId),
     pr: args.pr,
@@ -2044,6 +2115,8 @@ function cmdReviewerCreate(args) {
     mergeable,
     reviewer: picked.modelId,
     reviewerSource: picked.source,
+    workerModel: worker.modelId,
+    vendorGate,
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
@@ -2082,7 +2155,6 @@ function cmdReviewerCreate(args) {
   }
 
   // #586 阶段二：既有坑（mergeable / HEAD / 试合）不动，后面补起终端 + 注入。
-  const routing = loadOrFail();
   let reviewerLaunch;
   try {
     reviewerLaunch = resolveLaunch({ model: picked.modelId, routing, root: ROOT });
@@ -2283,7 +2355,8 @@ function cmdReviewerAttach(args) {
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) fail(cap.error);
 
-  const meta = runGh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable'], { role: 'reviewer' });
+  const gh = ghRunner({ role: 'reviewer' });
+  const meta = gh(['pr', 'view', String(args.pr), '--json', 'headRefName,headRefOid,mergeable']);
   if (!meta.ok) fail(`gh 读 PR #${args.pr} 失败（不是没有 PR，是没查成）: ${meta.error}`);
   let head;
   try { head = JSON.parse(meta.out); }
@@ -2294,13 +2367,19 @@ function cmdReviewerAttach(args) {
   const mergeable = assessPrMergeable(head?.mergeable);
   if (!mergeable.ok) fail(mergeable.error, { mergeable, pr: String(args.pr) });
 
-  const fileList = runGh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate'], { role: 'reviewer' });
+  const fileList = gh(['api', `repos/{owner}/{repo}/pulls/${args.pr}/files`, '--paginate']);
   if (!fileList.ok) fail(`gh 读 PR #${args.pr} 文件列表失败（不是没有文件，是没查成）: ${fileList.error}`);
   let fileJson;
   try { fileJson = JSON.parse(fileList.out); }
   catch { fail(`gh 读 PR #${args.pr} 文件列表不是 JSON: ${String(fileList.out).slice(0, 120)}`); }
   const files = parseGhPullFiles(fileJson);
   if (!files) fail(`gh 读 PR #${args.pr} 文件列表形态不对`);
+
+  const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
+  if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+  const vendorGate = refuseIfSameVendor({
+    workerId: worker.modelId, reviewerId: args.reviewer, routing,
+  });
 
   const revName = assembleCardName({
     name: args.name || reviewerCardName(args.reviewer),
@@ -2320,6 +2399,8 @@ function cmdReviewerAttach(args) {
     mergeReason: args.mergeReason || null,
     launch: reviewerLaunch.command,
     mergeable,
+    workerModel: worker.modelId,
+    vendorGate,
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 

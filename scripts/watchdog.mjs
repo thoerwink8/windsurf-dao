@@ -132,7 +132,7 @@ import { isCompletionComment } from './lib/judgment.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import { loadRouting, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
-import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { planCapacitySwitch, parseWorkerModelFromCard } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
@@ -768,6 +768,7 @@ function executeCapacitySwitch(target, args, events) {
     displayName: target.name,
     models: routing.models || [],
     passerIds: reviewerPasserIds(routing),
+    workerId: target.workerModelId,
   });
   if (!plan.ok) {
     pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${plan.error}`, 'capacity');
@@ -1022,6 +1023,12 @@ function runRound(source, args, state) {
     const multi = mon.length > 1;
     mon.forEach((a, i) => {
       const pane = a.paneKey ? source.paneByKey.get(a.paneKey) : undefined;
+      let workerModelId = null;
+      if (w.parentWorktreeId) {
+        const parent = source.ps.find(p => (p.worktreeId || p.id) === w.parentWorktreeId);
+        const parsed = parseWorkerModelFromCard(parent?.displayName);
+        if (parsed.ok) workerModelId = parsed.model;
+      }
       targets.push({
         key: `${w.worktreeId || w.id || w.path || '?'}|${a.paneKey || i}`,
         name: multi ? `${w.displayName || '?'}#${i + 1}` : (w.displayName || '?'),
@@ -1033,6 +1040,7 @@ function runRound(source, args, state) {
         parentWorktreeId: w.parentWorktreeId || null,
         prNumber: prNumberFromWorktree(w),
         issueNumber: issueNumberFromWorktree(w),
+        workerModelId,
       });
     });
   }

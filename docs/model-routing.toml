@@ -349,7 +349,7 @@ precedence = "高于「审查默认换厂商」"
 rule = "审查默认换厂商"
 why = "审查与写码同一模型容易放水；哪个配对出错最少按返工率实测校准，不当公理"
 decided = "2026-08-12"
-constraint = "受 gpt 的 UI ban 优先级约束"
+constraint = "受 gpt 的 UI ban 优先级约束。#679 起审官口硬闸（同厂拒绝），不进点将台打分"
 
 [[rules]]
 rule = "审官选型序"
