@@ -3445,7 +3445,7 @@ export function argsRunCreate({ objective, from } = {}) {
   return a;
 }
 
-/** #675：调用窗自己开 Run（不 --from 信箱台，会 consumer_fenced）。工人 TUI 当 dispatcher 时用。 */
+/** #675：工人 TUI 自己开 Run（不 --from 信箱台，会 consumer_fenced）。帅窗不许走这条。 */
 export function argsRunCreateSelf({ objective } = {}) {
   const a = ['orchestration', 'run-create'];
   if (objective != null) a.push('--objective', objective);

@@ -490,7 +490,8 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
 }
 
 /** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。
- * Run：调用方已有的用已有的；run-current 为 null 时本 TUI 自己开（#675：不依赖帅窗、不 --from 冒充台）。
+ * Run：调用方已有的用已有的；run-current 为 null 时本 TUI 自己开（#675 工人 TUI 例外：不 --from 冒充台）。
+ * 只许工人 TUI 走这条；帅窗 run-current 为 null 时不许靠它把自己绑成 coordinator（#667）。
  * run-current 没查成 ≠ 没有 Run。 */
 function bindStation() {
   const ensured = ensureInboxStation();

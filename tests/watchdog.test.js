@@ -1005,6 +1005,10 @@ describe('watchdog', () => {
     await t.test('有活审官子卡 → 不报 missing-reviewer', () => {
       assert.ok(!/missing-reviewer:/.test(ok.out), '有活审官不报  →  ' + ok.out.trim());
     });
+    const childDone = runWatchdog(path.join(FIXTURES, "missing-reviewer-child-done"));
+    await t.test('审官子卡已下班 → 不报 missing-reviewer', () => {
+      assert.ok(!/missing-reviewer:/.test(childDone.out), '审官 done 仍是子卡，不是没开成  →  ' + childDone.out.trim());
+    });
   });
 
   it('⑳b5 #633 框里已有未发出内容：at capacity 续命禁止再 terminal send', async (t) => {
