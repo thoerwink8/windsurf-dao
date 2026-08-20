@@ -10,6 +10,8 @@
 //    syncMasterTicketZone 在派工/清卡/合并三个事件点全量重写（#684）。不轮询、不 /rename。
 //    长静默期内的手改不会被自动纠正——这是拍板取舍。
 // 5. 盘面没查成不许当成在途 0：ps 失败 / 数组缺失 → 不写，避免把定界区抹空。
+// 6. master 前缀里「各自在途单号见各自终端标题」已过期（终端标题不会自己更新，#545）。
+//    同步时改成「在途单号见定界区」；其余前缀仍保留。
 
 export const TICKET_ZONE_RE = /｜\[((?:#\d+)(?: #\d+)*)?\]$/;
 
@@ -293,8 +295,22 @@ function warnMaster(reason, extra = {}) {
   return { ok: false, action: 'warn', reason, ...extra };
 }
 
+export const STALE_MASTER_TITLE_POINTER = '各自在途单号见各自终端标题';
+export const STALE_MASTER_PREFIX_RE = /（两位主帅共用，各自在途单号见各自终端标题）/;
+export const MASTER_PREFIX_ZONE_POINTER = '（在途单号见定界区）';
+
+/** 过期「见终端标题」指针改成「见定界区」。无关前缀不动。 */
+export function rewriteMasterPrefix(prefix) {
+  const s = String(prefix || '');
+  if (STALE_MASTER_PREFIX_RE.test(s)) return s.replace(STALE_MASTER_PREFIX_RE, MASTER_PREFIX_ZONE_POINTER);
+  if (s.includes(STALE_MASTER_TITLE_POINTER)) {
+    return s.replace(/各自在途单号见各自终端标题/g, '在途单号见定界区');
+  }
+  return s;
+}
+
 /**
- * 全量重写 master 卡定界区。前缀保留。没查成不写。
+ * 全量重写 master 卡定界区。过期「见终端标题」指针改掉，其余前缀保留。没查成不写。
  * dryRun 只算不写。挂点在 dao.mjs / flow.mjs，本函数不自己找挂点。
  */
 export function syncMasterTicketZone({ worktrees, selfRepo, pathHint, runOrca, dryRun } = {}) {
@@ -341,7 +357,7 @@ export function syncMasterTicketZone({ worktrees, selfRepo, pathHint, runOrca, d
     runOrca,
     mutate: (comment) => {
       const { prefix } = parseTicketZone(comment);
-      return formatTitle(prefix, collected.tickets);
+      return formatTitle(rewriteMasterPrefix(prefix), collected.tickets);
     },
   });
   return { ...r, tickets: collected.tickets, scanned: collected.scanned };

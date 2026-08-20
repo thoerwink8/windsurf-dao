@@ -386,6 +386,52 @@ describe('master-title', () => {
       selfRepo: repo,
       runOrca: () => { throw new Error('不该写'); },
     });
+    const liveStale = board([
+      {
+        worktreeId: masterId,
+        isMainWorktree: true,
+        path: '/master',
+        comment: '主会话：对话/派单/终审（两位主帅共用，各自在途单号见各自终端标题）',
+      },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684, comment: '进度｜[#684]' },
+    ]);
+    const rewritten = T.syncMasterTicketZone({
+      worktrees: liveStale.worktrees(),
+      selfRepo: repo,
+      runOrca: liveStale.runOrca,
+    });
+    await t.test('过期「见终端标题」前缀改成「见定界区」，定界区同时写上', () => {
+      assert.ok(rewritten.ok && rewritten.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
+        '前缀替换 + 定界区  →  ' + JSON.stringify(rewritten));
+    });
+    await t.test('替换后不再指向终端标题', () => {
+      assert.ok(!/终端标题/.test(rewritten.comment) && /在途单号见定界区/.test(rewritten.comment),
+        '不再指向终端标题  →  ' + rewritten.comment);
+    });
+
+    const alreadyNew = board([
+      {
+        worktreeId: masterId,
+        isMainWorktree: true,
+        path: '/master',
+        comment: '主会话：对话/派单/终审（在途单号见定界区）｜[#999]',
+      },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684 },
+    ]);
+    const kept = T.syncMasterTicketZone({
+      worktrees: alreadyNew.worktrees(),
+      selfRepo: repo,
+      runOrca: alreadyNew.runOrca,
+    });
+    await t.test('已是「见定界区」的前缀保留，假号收敛', () => {
+      assert.ok(kept.ok && kept.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
+        '已替换前缀保留  →  ' + JSON.stringify(kept));
+    });
+
+    await t.test('rewriteMasterPrefix：无关前缀不动', () => {
+      assert.ok(T.rewriteMasterPrefix('帅位') === '帅位', '无关前缀  →  ' + T.rewriteMasterPrefix('帅位'));
+    });
+
     await t.test('找不到 master 卡 → 报警不写', () => {
       assert.ok(missingMaster.ok === false && /master/.test(missingMaster.reason),
         '无 master  →  ' + JSON.stringify(missingMaster));
