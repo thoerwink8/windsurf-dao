@@ -61,7 +61,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|leftover-inject|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|leftover-inject|missing-reviewer|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -88,13 +88,13 @@ describe('watchdog', () => {
     });
   });
 
-  it('② 真实语料 + 自身排除：全被排除 → NO_TARGETS', async (t) => {
+  it('② 真实语料 + 自身排除：working 被排除后，下班卡有 PR 无审官 → 报警不是 NO_TARGETS', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "live"), ["--self-worktree", SELF_WT]);
-    await t.test('退出码 2（NO_TARGETS）', () => {
-      assert.ok(r.status === 2, '退出码 2（NO_TARGETS）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（有样本）', () => {
+      assert.ok(r.status === 1, '退出码 1（有样本）  →  ' + `status=${r.status}`);
     });
-    await t.test('明确打印 NO_TARGETS', () => {
-      assert.ok(/NO_TARGETS/.test(r.out), '明确打印 NO_TARGETS  →  ' + r.out.trim());
+    await t.test('报 missing-reviewer，不是 NO_TARGETS', () => {
+      assert.ok(/missing-reviewer:/.test(r.out) && !/NO_TARGETS/.test(r.out), '报 missing-reviewer  →  ' + r.out.trim());
     });
   });
 
@@ -239,16 +239,16 @@ describe('watchdog', () => {
     });
   });
 
-  it('⑪ NO_TARGETS 与 OK 的区分（数到 0 ≠ 没看到样本）', async (t) => {
+  it('⑪ 下班卡有 PR 无审官是样本，不是 NO_TARGETS（#675）', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "no-targets"));
-    await t.test('退出码 2（NO_TARGETS）', () => {
-      assert.ok(r.status === 2, '退出码 2（NO_TARGETS）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（看见样本）', () => {
+      assert.ok(r.status === 1, '退出码 1（看见样本）  →  ' + `status=${r.status}`);
     });
-    await t.test('明确打印 NO_TARGETS 警告', () => {
-      assert.ok(/NO_TARGETS/.test(r.out), '明确打印 NO_TARGETS 警告  →  ' + r.out.trim());
+    await t.test('报 missing-reviewer，不是 NO_TARGETS', () => {
+      assert.ok(/missing-reviewer:/.test(r.out) && !/NO_TARGETS/.test(r.out), '报 missing-reviewer  →  ' + r.out.trim());
     });
-    await t.test('不打出 OK 汇总（不能把没查成说成查过没事）', () => {
-      assert.ok(!/OK 扫完/.test(r.out), '不打出 OK 汇总（不能把没查成说成查过没事）  →  ' + r.out.trim());
+    await t.test('不打出 OK 汇总', () => {
+      assert.ok(!/OK 扫完/.test(r.out), '不打出 OK 汇总  →  ' + r.out.trim());
     });
     await t.test('无关联单证据的树不误报孤儿（查不到≠孤儿，#492）', () => {
       assert.ok(!/orphan:/.test(r.out), '无关联单证据的树不误报孤儿（查不到≠孤儿，#492）  →  ' + r.out.trim());
@@ -989,6 +989,24 @@ describe('watchdog', () => {
     });
   });
 
+  it('#675 交卷没开成审官：有 PR、工位已下班、无活审官 → 报警，不是 NO_TARGETS', async (t) => {
+    const r = runWatchdog(path.join(FIXTURES, "missing-reviewer"));
+    await t.test('退出码 1（有报警）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status} ` + r.out.trim());
+    });
+    await t.test('报 missing-reviewer / 交卷没开成审官下一跳', () => {
+      assert.ok(/missing-reviewer:.*交卷没开成审官下一跳/.test(r.out) && /PR #676/.test(r.out),
+        '报交卷没开成审官  →  ' + r.out.trim());
+    });
+    await t.test('不是 NO_TARGETS', () => {
+      assert.ok(!/NO_TARGETS/.test(r.out), '不是 NO_TARGETS  →  ' + r.out.trim());
+    });
+    const ok = runWatchdog(path.join(FIXTURES, "missing-reviewer-has-child"));
+    await t.test('有活审官子卡 → 不报 missing-reviewer', () => {
+      assert.ok(!/missing-reviewer:/.test(ok.out), '有活审官不报  →  ' + ok.out.trim());
+    });
+  });
+
   it('⑳b5 #633 框里已有未发出内容：at capacity 续命禁止再 terminal send', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "capacity-unsent"));
     await t.test('退出码 1（指纹仍报）', () => {
@@ -1174,8 +1192,9 @@ describe('watchdog', () => {
     });
 
     const ra = runWatchdog(path.join(FIXTURES, "all-idle"), ["--once"]);
-    await t.test('原 ALL_IDLE 盘面：回到 NO_TARGETS（exit 2），不打 all-idle', () => {
-      assert.ok(ra.status === 2 && /NO_TARGETS/.test(ra.out) && !/all-idle:/.test(ra.out), '原 ALL_IDLE 盘面：回到 NO_TARGETS（exit 2），不打 all-idle  →  ' + ra.out.trim());
+    await t.test('原 ALL_IDLE 盘面：下班卡有 PR 无审官要报警，不打 all-idle / NO_TARGETS', () => {
+      assert.ok(ra.status === 1 && /missing-reviewer:/.test(ra.out) && !/all-idle:/.test(ra.out) && !/NO_TARGETS/.test(ra.out),
+        'ALL_IDLE 盘面报 missing-reviewer  →  ' + ra.out.trim());
     });
 
     const ri1 = runWatchdog(path.join(FIXTURES, "pasted-idle"), ["--once"]);

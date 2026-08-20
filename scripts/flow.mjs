@@ -16,7 +16,7 @@
 //   ③ PR MERGED 状态
 //
 // 决策规则（②）：
-//   - 工人完工且待审    → 不起审官（#586：worker-done 已按需起）
+//   - 工人完工且待审    → 观察有没有活审官下一跳（#675：没开成报帅，不 task-create）
 //   - 审官红 N 项       → 观察验收是否已开出活下一跳（#675：创建者是 notify，不是 flow）
 //   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
@@ -423,7 +423,7 @@ function deriveState(signals) {
 // pendingShuai 只记账不 gate——它管「有没有人还欠一个动作」的显示（四轮复核红 1）。
 function pendingAction(derived) {
   if (derived.state === 'working') return null;
-  if (derived.state === 'awaiting-review') return null; // #586：审官由 worker-done 按需起
+  if (derived.state === 'awaiting-review') return { kind: 'observe-reviewer-hop' };
   if (derived.state === 'awaiting-recheck') return { kind: 'observe-recheck-hop', round: derived.redReviews };
   if (derived.state === 'rework-needed') return { kind: 'observe-rework-hop', red: derived.lastRed, round: derived.redReviews };
   if (derived.state === 'approved') return { kind: 'report-final' };
@@ -511,7 +511,11 @@ export function dispatchNewTaskToTerminal({ spec, terminal, run, io } = {}) {
 
 // 流转器自己该做的动作（#675：只观察下一跳，不 task-create）。报帅终审/换人不是流转器活。
 export function isFlowWork(action) {
-  return !!action && (action.kind === 'observe-rework-hop' || action.kind === 'observe-recheck-hop');
+  return !!action && (
+    action.kind === 'observe-rework-hop'
+    || action.kind === 'observe-recheck-hop'
+    || action.kind === 'observe-reviewer-hop'
+  );
 }
 
 // 从 PR 信号列表算出「流转器该做而没人做」的项。watchdog 心跳缺失时用，不猜进程名。
@@ -847,18 +851,23 @@ function observeAcceptanceHop({ action, pr, source, rec }) {
 
 function executeAction(action, pr, source, rec, dryRun) {
   void dryRun;
-  if (action.kind === 'observe-rework-hop' || action.kind === 'observe-recheck-hop') {
+  if (action.kind === 'observe-rework-hop' || action.kind === 'observe-recheck-hop' || action.kind === 'observe-reviewer-hop') {
     const obs = observeAcceptanceHop({ action, pr, source, rec });
     if (obs.unscanned) {
       return { ok: false, error: `下一跳没查成：${obs.error}` };
     }
     if (obs.hopOpen) {
-      const what = action.kind === 'observe-recheck-hop' ? '返工已落地且已有审官下一跳' : '红项已落地且已有下一跳';
+      const what = action.kind === 'observe-reviewer-hop' ? '交卷已落地且已有审官下一跳'
+        : action.kind === 'observe-recheck-hop' ? '返工已落地且已有审官下一跳'
+        : '红项已落地且已有下一跳';
       return {
         ok: true,
         idle: true,
         line: `[flow] 观察：#${pr.number} ${what} ${obs.dispatchId}，不 task-create`,
       };
+    }
+    if (action.kind === 'observe-reviewer-hop') {
+      return { ok: false, error: '交卷没开成审官下一跳', needsReport: 'hop-missing' };
     }
     const who = action.kind === 'observe-recheck-hop' ? '审官下一跳' : '下一跳';
     return { ok: false, error: `验收没开成${who}`, needsReport: 'hop-missing' };
@@ -988,7 +997,9 @@ function processOneRound(source, state, args) {
             rec.pendingShuai = {
               kind: action.kind,
               reason: exec.needsReport === 'hop-missing'
-                ? (action.kind === 'observe-recheck-hop' ? '验收没开成审官下一跳' : '验收没开成下一跳')
+                ? (action.kind === 'observe-reviewer-hop' ? '交卷没开成审官下一跳'
+                  : action.kind === 'observe-recheck-hop' ? '验收没开成审官下一跳'
+                  : '验收没开成下一跳')
                 : exec.needsReport === 'reviewer-unfound' ? '找不到审官终端——待帅接手复核'
                 : exec.needsReport === 'report-unknown' ? '选不出审官（缺 model/type 标签或路由表无审查模型）——请帅处置'
                 : '下一跳没查成待帅接手（新信号到来自动重试一次）',

@@ -1042,6 +1042,7 @@ function runRound(source, args, state) {
   const notes = []; // 活证否决/守卫降级的观察行：打印但不唤醒
   if (targets.length === 0) {
     leftoverInjectPass(source, args, state, events);
+    missingReviewerPass(source, args, state, events);
     if (events.length > 0) return { noTargets: false, targets, events, notes };
     return { noTargets: true, targets, events, notes };
   }
@@ -1305,6 +1306,37 @@ function runRound(source, args, state) {
 
   leftoverInjectPass(source, args, state, events);
   return { noTargets: false, targets, events, notes };
+}
+
+/** #675：有 linked PR、工位已不是 working/waiting、无活审官 → 不是 NO_TARGETS，要报警。
+ * 只在主扫描 0 个 working/waiting 时跑（有活人盯着时不扫历史已下班卡）。 */
+function missingReviewerPass(source, args, state, events) {
+  const trees = Array.isArray(source.ps) ? source.ps : [];
+  for (const w of trees) {
+    if (w.isMainWorktree === true) continue;
+    if (args.selfWorktree && w.worktreeId === args.selfWorktree) continue;
+    if (w.parentWorktreeId) continue;
+    const prNo = prNumberFromWorktree(w);
+    if (!prNo) continue;
+    const agents = Array.isArray(w.agents) ? w.agents : [];
+    if (agents.length === 0) continue;
+    if (agents.some(a => a.state === 'working' || a.state === 'waiting')) continue;
+    const children = findChildWorktrees(w, trees);
+    const reviewerLive = children.some((c) => {
+      const ag = Array.isArray(c.agents) ? c.agents : [];
+      return ag.some(a => a.state === 'working' || a.state === 'waiting');
+    });
+    if (reviewerLive) continue;
+    const key = `${w.worktreeId || w.path || '?'}|missing-reviewer`;
+    const st = stationState(state, key);
+    if (st.fired.has('missing-reviewer')) continue;
+    st.fired.add('missing-reviewer');
+    events.push({
+      name: w.displayName || '?',
+      type: 'missing-reviewer',
+      detail: `交卷没开成审官下一跳：linked PR #${prNo}，工位已不是 working/waiting，无活审官——这是样本，要报警（#675）`,
+    });
+  }
 }
 
 /** #633：done 工位框里躺着未提交的返工/复核字 → 只报不回车。

@@ -120,8 +120,11 @@ describe('flow', () => {
     await t.test('完工自报 → flow 不起审官（worker-done 已按需起）', () => {
       assert.ok(!/起审官/.test(r.out), '完工自报 → flow 不起审官（worker-done 已按需起）  →  ' + r.out.trim());
     });
-    await t.test('不打出 动作： 行（待审态无需流转）', () => {
-      assert.ok(!/动作：/.test(r.out), '不打出 动作： 行（待审态无需流转）  →  ' + r.out.trim());
+    await t.test('不打出 动作： 行（不 task-create）', () => {
+      assert.ok(!/动作：/.test(r.out), '不打出 动作： 行  →  ' + r.out.trim());
+    });
+    await t.test('有完工无审官 → 报帅交卷没开成审官下一跳', () => {
+      assert.ok(/报帅：交卷没开成审官下一跳/.test(r.out), '交卷没开成审官  →  ' + r.out.trim());
     });
   });
 
@@ -199,6 +202,10 @@ describe('flow', () => {
     });
     await t.test('round-1 不起审官（#586）', () => {
       assert.ok(/round-1[\s\S]*起审官/.test(r.out) === false, 'round-1 不起审官（#586）  →  ' + r.out.trim());
+    });
+    await t.test('round-1 报帅交卷没开成审官下一跳', () => {
+      assert.ok(/round-1[\s\S]*报帅：交卷没开成审官下一跳/.test(r.out) && !/round-1[\s\S]*task-create/.test(r.out),
+        'round-1 观察报帅  →  ' + r.out.trim());
     });
     await t.test('round-2 报帅验收没开成下一跳（不 task-create）', () => {
       assert.ok(/round-2[\s\S]*报帅：验收没开成下一跳/.test(r.out) && !/round-2[\s\S]*返工注入/.test(r.out), 'round-2 观察报帅  →  ' + r.out.trim());
@@ -326,8 +333,8 @@ describe('flow', () => {
     await t.test('仅完工 → awaiting-review', () => {
       assert.ok(awaiting.state === "awaiting-review", '仅完工 → awaiting-review');
     });
-    await t.test('awaiting-review → pendingAction 为 null（不起审官）', () => {
-      assert.ok(pendingAction(awaiting) === null, 'awaiting-review → pendingAction 为 null（不起审官）');
+    await t.test('awaiting-review → observe-reviewer-hop（不起审官，只观察）', () => {
+      assert.ok(pendingAction(awaiting)?.kind === 'observe-reviewer-hop', 'awaiting-review → observe-reviewer-hop  →  ' + JSON.stringify(pendingAction(awaiting)));
     });
   });
 
@@ -573,6 +580,7 @@ describe('flow', () => {
 
     await t.test('观察下一跳是流转器活；注入不再是', () => {
       assert.ok(isFlowWork({ kind: "observe-rework-hop" }) && isFlowWork({ kind: "observe-recheck-hop" })
+        && isFlowWork({ kind: "observe-reviewer-hop" })
         && isFlowWork({ kind: "inject-rework" }) === false,
         '观察下一跳是流转器活；注入不再是');
     });
@@ -583,8 +591,9 @@ describe('flow', () => {
       assert.ok(isFlowWork({ kind: "report-final" }) === false, '报帅终审不是流转器活');
     });
     const pending = pendingFlowItems([{ number: 580, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [] }]);
-    await t.test('完工未起审官 → 不是流转器待办（worker-done 起）', () => {
-      assert.ok(pending.length === 0, '完工未起审官 → 不是流转器待办（worker-done 起）');
+    await t.test('完工未起审官 → 观察审官下一跳（不 task-create）', () => {
+      assert.ok(pending.length === 1 && pending[0].kind === 'observe-reviewer-hop',
+        '完工未起审官 → 观察  →  ' + JSON.stringify(pending));
     });
     const idle = pendingFlowItems([{ number: 579, comments: [{ id: 1, body: "完工\n好了", createdAt: "t" }], reviews: [{ id: 2, body: "判定：绿，可合并", submittedAt: "t2" }] }]);
     await t.test('已绿待帅 → 不是流转器待办', () => {

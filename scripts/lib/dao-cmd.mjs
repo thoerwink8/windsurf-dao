@@ -2988,6 +2988,28 @@ export function resolveReviewerReuse({
   };
 }
 
+/** #675：起审官失败三态。terminal create 超时 / 注入未提交 / 没查成 必须分开。 */
+export function classifyReviewerSpawnError(error) {
+  const t = String(error || '');
+  if (/Timed out waiting for terminal handle|terminal create 失败|terminal create 超时/i.test(t)) {
+    return { kind: 'terminal-timeout', label: 'terminal create 超时' };
+  }
+  if (/注入未提交|Pasted Content|Pasted text/i.test(t)) {
+    return { kind: 'inject-unsubmitted', label: '注入未提交' };
+  }
+  return { kind: 'unscanned', label: '没查成' };
+}
+
+export function reviewerSpawnFailComment({ error, retried = false } = {}) {
+  const cls = classifyReviewerSpawnError(error);
+  return [
+    `交卷没开成审官下一跳：${cls.label}`,
+    '',
+    `worker-done 起审官失败（${cls.label}）。完工评论已落到 GitHub。${retried ? '同一命令已重试一次仍失败。' : ''}`.trim(),
+    String(error || ''),
+  ].join('\n');
+}
+
 export function postIssueComment({ issue, body, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'postIssueComment 没给合法 issue 号' };

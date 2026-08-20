@@ -949,6 +949,25 @@ describe('dao', () => {
         assert.ok(/invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
           '#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）  →  ' + wdFn.slice(0, 240));
       });
+    await t.test('#675 完工评论在起审官之前（失败也要留交卷证据）', () => {
+      const post = wdFn.indexOf('#675：交卷证据必须先落到 GitHub');
+      const spawn = post >= 0 ? wdFn.indexOf('if (shouldCreate)', post) : -1;
+      assert.ok(post >= 0 && spawn > post && /postIssueComment/.test(wdFn.slice(post, spawn)),
+        '#675 完工评论在起审官之前  →  post=' + post + ' spawn=' + spawn);
+    });
+    await t.test('#675 起审官失败三态分开', () => {
+      const timeout = S.classifyReviewerSpawnError('审官终端创建失败: terminal create 失败: Timed out waiting for terminal handle after creation');
+      const paste = S.classifyReviewerSpawnError('审官注入后开工验证失败: 注入未提交（Pasted Content / Pasted text）');
+      const miss = S.classifyReviewerSpawnError('worker-list 没查成');
+      assert.ok(timeout.kind === 'terminal-timeout' && paste.kind === 'inject-unsubmitted' && miss.kind === 'unscanned',
+        '#675 三态  →  ' + JSON.stringify({ timeout, paste, miss }));
+      assert.ok(timeout.label !== paste.label && paste.label !== miss.label && timeout.label !== miss.label, '三态标签互不相同');
+    });
+    await t.test('#675 失败评论写清种类且不以「完工」打头', () => {
+      const body = S.reviewerSpawnFailComment({ error: '注入未提交（Pasted Content）', retried: true });
+      assert.ok(/^交卷没开成审官下一跳：注入未提交/.test(body) && !/^完工/.test(body) && /已重试一次/.test(body),
+        '#675 失败评论  →  ' + body.slice(0, 200));
+    });
     await t.test('#586 worker-done 首审/返工都走 completeWorkerDoneNotify（投失败即停）',
       () => {
         assert.ok(/create\.reviewerDispatchId/.test(wdFn) && /completeWorkerDoneNotify/.test(wdFn)
@@ -3417,6 +3436,11 @@ describe('dao', () => {
       const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
       assert.ok(/inspect-only/.test(brief) && /notify --type worker_done/.test(brief) && /新 Task/.test(brief),
         '士兵任务书不再 check --wait 等审官旧信箱');
+    });
+    await t.test('#675 士兵任务书：待终审只在审官起来之后写', () => {
+      const brief = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md'), 'utf8');
+      assert.ok(/待终审.*worker-done/.test(brief.replace(/\s+/g, ' ')) && /审官没起来不许写/.test(brief),
+        '#675 待终审纪律  →  ' + brief.slice(brief.indexOf('卡备注'), brief.indexOf('卡备注') + 200));
     });
   });
 

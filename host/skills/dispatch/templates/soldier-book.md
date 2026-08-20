@@ -13,7 +13,7 @@
 2. 开 draft PR：`node scripts/gh-as.mjs worker -- pr create --draft`，标题带宿主前缀，正文必须含三段——**目标 / 验收标准 / 进展**——并回链相关 issue。多行正文用 `--body-file`，不要把换行塞进 `--body`。
 3. 切状态：`orca worktree set --worktree active --workspace-status in-progress --json`。卡名由 `dispatch` / `worker-done` 调 `assembleCardName` 写（格式只认那一处），不要手改，更不要用 issue 号去对审官卡。
 4. 给 PR 打标签（不存在先 `node scripts/gh-as.mjs worker -- label create`，幂等）：`node scripts/gh-as.mjs worker -- pr edit <PR号> --add-label "model/<型号>" --add-label "type/<任务类>"`。这两个标签是校准闭环的数据源，漏打等于这单没有成绩。
-5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review` → 卡备注改「待终审」。
+5. 干活中在关键节点更新卡备注：`orca worktree set --worktree active --comment "<人话进度>" --json`。卡备注面向人读，禁黑话。完成后自查 + `node scripts/dao-check.mjs` 通过 → `node scripts/gh-as.mjs worker -- pr ready` → 同步 `--workspace-status in-review`。**卡备注「待终审」只由 `worker-done` 在审官起来之后写**；审官没起来不许写「待终审」（#675：假待终审会让盘面撒谎）。
 
 ## 干完活之后（顺序执行，缺一不可）
 
