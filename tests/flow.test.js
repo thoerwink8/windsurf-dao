@@ -37,53 +37,64 @@ function runFlow(dir, extraArgs = []) {
 }
 
 describe('flow', () => {
-  it('① 假闭环验收（#455 验收：draft PR + 假判定行 review → 自动注入下一环且帅零介入）', async (t) => {
+  it('① 假闭环验收（#675：红项已落地但下一跳没开 → 报帅，不 task-create）', async (t) => {
     const r = runFlow(path.join(FIXTURES, "fake-loop"));
-    await t.test('退出码 1（有动作）', () => {
-      assert.ok(r.status === 1, '退出码 1（有动作）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('自动注入发生：返工注入 + 注入目标已解析（真通，非预览-阻塞）', () => {
-      assert.ok(/动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), '自动注入发生：返工注入 + 注入目标已解析（真通，非预览-阻塞）  →  ' + r.out.trim());
+    await t.test('报帅验收没开成下一跳', () => {
+      assert.ok(/报帅：验收没开成下一跳/.test(r.out), '报帅验收没开成下一跳  →  ' + r.out.trim());
     });
-    await t.test('返工指令文本含 review 链接', () => {
-      assert.ok(/pull\/999#pullrequestreview-910001/.test(r.out), '返工指令文本含 review 链接  →  review 链接没进指令');
-    });
-    await t.test('帅零介入：无任何 报帅 行（真注入路径下成立，名副其实）', () => {
-      assert.ok(!/报帅/.test(r.out), '帅零介入：无任何 报帅 行（真注入路径下成立，名副其实）  →  ' + r.out.split("\n").filter(l => /报帅/.test(l)).join(" | "));
+    await t.test('禁止 task-create / 返工注入', () => {
+      assert.ok(!/task-create/.test(r.out) && !/返工注入/.test(r.out) && !/动作：/.test(r.out), '禁止 task-create  →  ' + r.out.trim());
     });
     await t.test('不重复起审官（红判定已存在 → 不新建审官）', () => {
       assert.ok(!/起审官/.test(r.out), '不重复起审官（红判定已存在 → 不新建审官）  →  ' + r.out.trim());
     });
   });
 
-  it('② prime 吞存量负控：存量已有完工+红判定，启动即动作（不吞存量）', async (t) => {
+  it('①b #675 红项已落地且已有下一跳 → 不 task-create，0 需流转', async (t) => {
+    const r = runFlow(path.join(FIXTURES, "rework-hop-open"));
+    await t.test('观察已有下一跳且不 task-create', () => {
+      assert.ok(/观察：#999 红项已落地且已有下一跳 ctx_next_999，不 task-create/.test(r.out), '观察已有下一跳  →  ' + r.out.trim());
+    });
+    await t.test('0 需流转', () => {
+      assert.ok(/OK 扫完 1 个 PR，0 需流转/.test(r.out) && r.status === 0, '0 需流转  →  ' + `status=${r.status} ` + r.out.trim());
+    });
+    await t.test('不报帅、不注入', () => {
+      assert.ok(!/报帅/.test(r.out) && !/返工注入/.test(r.out) && !/task-create/.test(r.out.replace(/不 task-create/g, '')), '不报帅不注入  →  ' + r.out.trim());
+    });
+  });
+
+  it('② prime 吞存量负控：存量已有完工+红判定，启动即看见（不吞存量）', async (t) => {
     const r = runFlow(path.join(FIXTURES, "fake-loop"));
-    await t.test('存量信号被识别并自动注入返工（吞存量 = 本轮无动作）', () => {
-      assert.ok(/动作：返工注入 #999（第 1 轮，红 3 项）（注入目标：工人终端 term_worker_999）/.test(r.out), '存量信号被识别并自动注入返工（吞存量 = 本轮无动作）  →  ' + r.out.trim());
+    await t.test('存量信号被识别并报帅验收没开成下一跳（吞存量 = 本轮无输出）', () => {
+      assert.ok(/报帅：验收没开成下一跳/.test(r.out), '存量信号被识别  →  ' + r.out.trim());
     });
     await t.test('打出存量清点标记（先清点再增量）', () => {
       assert.ok(/存量清点/.test(r.out), '打出存量清点标记（先清点再增量）  →  存量清点标记缺失');
     });
   });
 
-  it('③ 重启不重复动作负控：同状态文件重跑 → 零动作', async (t) => {
+  it('③ 重启不重复动作负控：同状态文件重跑 → 不重复报帅，待帅处置常驻', async (t) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-restart-"));
     const stateFile = path.join(tmp, "state.json");
     const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "fake-loop"), "--state-file", stateFile, "--dry-run"];
     const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
     const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+    const out1 = (r1.stdout || "") + (r1.stderr || "");
     const out2 = (r2.stdout || "") + (r2.stderr || "");
-    await t.test('首跑退出码 1（有动作）', () => {
-      assert.ok(r1.status === 1, '首跑退出码 1（有动作）  →  ' + `status=${r1.status}`);
+    await t.test('首跑退出码 1（报帅）', () => {
+      assert.ok(r1.status === 1 && /报帅：验收没开成下一跳/.test(out1), '首跑退出码 1（报帅）  →  ' + `status=${r1.status} ` + out1.trim());
     });
-    await t.test('重跑退出码 0（无动作）', () => {
-      assert.ok(r2.status === 0, '重跑退出码 0（无动作）  →  ' + `status=${r2.status}`);
+    await t.test('重跑仍 exit 1（待帅处置常驻，不能报一次就转绿）', () => {
+      assert.ok(r2.status === 1, '重跑仍 exit 1  →  ' + `status=${r2.status}`);
     });
-    await t.test('重跑打出 OK 扫完（同指纹不重复动作）', () => {
-      assert.ok(/OK 扫完 1 个 PR，0 需流转/.test(out2), '重跑打出 OK 扫完（同指纹不重复动作）  →  ' + out2.trim());
+    await t.test('重跑仍有待帅处置，不打 0 需流转', () => {
+      assert.ok(/待帅处置：#999（验收没开成下一跳）/.test(out2) && !/OK 扫完/.test(out2), '重跑待帅常驻  →  ' + out2.trim());
     });
-    await t.test('重跑无任何 动作/报帅 行', () => {
-      assert.ok(!/动作：|报帅：/.test(out2), '重跑无任何 动作/报帅 行  →  ' + out2.trim());
+    await t.test('重跑不重复报帅：行（闸已落）', () => {
+      assert.ok(!/报帅：/.test(out2) && !/动作：/.test(out2), '重跑不重复报帅  →  ' + out2.trim());
     });
     fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -181,19 +192,19 @@ describe('flow', () => {
     });
   });
 
-  it('⑧ 完整闭环四轮：完工不由 flow 起审官 / 红→返工注入 / 返工完成→复核注入 / 复核绿→报帅终审', async (t) => {
+  it('⑧ 完整闭环四轮：完工不由 flow 起审官 / 红→观察下一跳 / 返工完成→观察审官下一跳 / 复核绿→报帅终审', async (t) => {
     const r = runFlow(path.join(FIXTURES, "recheck-green"));
-    await t.test('退出码 1（有动作/报帅）', () => {
-      assert.ok(r.status === 1, '退出码 1（有动作/报帅）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（有报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（有报帅）  →  ' + `status=${r.status}`);
     });
     await t.test('round-1 不起审官（#586）', () => {
       assert.ok(/round-1[\s\S]*起审官/.test(r.out) === false, 'round-1 不起审官（#586）  →  ' + r.out.trim());
     });
-    await t.test('round-2 返工注入真通（注入目标已解析）', () => {
-      assert.ok(/round-2[\s\S]*动作：返工注入 #1005（第 1 轮，红 2 项）（注入目标：工人终端 term_worker_1005）/.test(r.out), 'round-2 返工注入真通（注入目标已解析）  →  ' + r.out.trim());
+    await t.test('round-2 报帅验收没开成下一跳（不 task-create）', () => {
+      assert.ok(/round-2[\s\S]*报帅：验收没开成下一跳/.test(r.out) && !/round-2[\s\S]*返工注入/.test(r.out), 'round-2 观察报帅  →  ' + r.out.trim());
     });
-    await t.test('round-3 复核注入真通（存量反查找到审官终端）', () => {
-      assert.ok(/round-3[\s\S]*动作：复核注入 #1005（第 1 轮返工后）（复核目标：审官终端 term_reviewer_1005，存量反查（子卡））/.test(r.out), 'round-3 复核注入真通（存量反查找到审官终端）  →  ' + r.out.trim());
+    await t.test('round-3 报帅验收没开成审官下一跳', () => {
+      assert.ok(/round-3[\s\S]*报帅：验收没开成审官下一跳/.test(r.out) && !/round-3[\s\S]*复核注入/.test(r.out), 'round-3 观察报帅  →  ' + r.out.trim());
     });
     await t.test('round-4 报帅终审', () => {
       assert.ok(/round-4[\s\S]*报帅：终审 #1005/.test(r.out), 'round-4 报帅终审  →  ' + r.out.trim());
@@ -203,22 +214,22 @@ describe('flow', () => {
     });
   });
 
-  it('⑨ 乒乓两轮仍红：第 1/2 轮红自动返工，第 3 轮红报帅换人（不再注入）', async (t) => {
+  it('⑨ 乒乓两轮仍红：第 1/2 轮红观察报帅，第 3 轮红报帅换人（不再注入）', async (t) => {
     const r = runFlow(path.join(FIXTURES, "pingpong"));
-    await t.test('退出码 1（有动作/报帅）', () => {
-      assert.ok(r.status === 1, '退出码 1（有动作/报帅）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（有报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（有报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('round-2 返工注入（第 1 轮，红 3 项）', () => {
-      assert.ok(/round-2[\s\S]*返工注入 #1006（第 1 轮，红 3 项）/.test(r.out), 'round-2 返工注入（第 1 轮，红 3 项）  →  ' + r.out.trim());
+    await t.test('round-2 报帅验收没开成下一跳', () => {
+      assert.ok(/round-2[\s\S]*报帅：验收没开成下一跳/.test(r.out), 'round-2 报帅验收没开成下一跳  →  ' + r.out.trim());
     });
-    await t.test('round-4 返工注入（第 2 轮，红 2 项）', () => {
-      assert.ok(/round-4[\s\S]*返工注入 #1006（第 2 轮，红 2 项）/.test(r.out), 'round-4 返工注入（第 2 轮，红 2 项）  →  ' + r.out.trim());
+    await t.test('round-4 报帅验收没开成下一跳', () => {
+      assert.ok(/round-4[\s\S]*报帅：验收没开成下一跳/.test(r.out), 'round-4 报帅验收没开成下一跳  →  ' + r.out.trim());
     });
     await t.test('round-6 报帅换人（乒乓两轮仍红，第 3 次红判定）', () => {
       assert.ok(/round-6[\s\S]*报帅：换人 #1006（乒乓两轮仍红——两轮返工后第 3 次红判定）/.test(r.out), 'round-6 报帅换人（乒乓两轮仍红，第 3 次红判定）  →  ' + r.out.trim());
     });
-    await t.test('第 3 次红不再注入返工', () => {
-      assert.ok(!/round-6[\s\S]*返工注入/.test(r.out), '第 3 次红不再注入返工  →  ' + r.out.trim());
+    await t.test('全程不 task-create / 返工注入', () => {
+      assert.ok(!/返工注入/.test(r.out) && !/task-create/.test(r.out), '全程不注入  →  ' + r.out.trim());
     });
   });
 
@@ -329,11 +340,11 @@ describe('flow', () => {
     await t.test('完工+红判定 → rework-needed，红 1 轮', () => {
       assert.ok(d1.state === "rework-needed" && d1.redReviews === 1 && d1.lastRed === 3, '完工+红判定 → rework-needed，红 1 轮');
     });
-    await t.test('pendingAction → inject-rework', () => {
-      assert.ok(pendingAction(d1)?.kind === "inject-rework", 'pendingAction → inject-rework');
+    await t.test('pendingAction → observe-rework-hop', () => {
+      assert.ok(pendingAction(d1)?.kind === "observe-rework-hop", 'pendingAction → observe-rework-hop');
     });
-    await t.test('pendingShuai 不 gate 注入（待帅记账只管显示，闸已由 fp 去重承担，四轮复核红 1）', () => {
-      assert.ok(pendingAction(d1)?.kind === "inject-rework", 'pendingShuai 不 gate 注入（待帅记账只管显示，闸已由 fp 去重承担，四轮复核红 1）');
+    await t.test('pendingShuai 不 gate 观察（待帅记账只管显示，闸已由 fp 去重承担）', () => {
+      assert.ok(pendingAction(d1)?.kind === "observe-rework-hop", 'pendingShuai 不 gate 观察');
     });
     await t.test('awaitingShuaiReason 读 pendingShuai（reviewer-unfound 常驻）', () => {
       assert.ok(awaitingShuaiReason({ state: "rework-needed", redReviews: 1 }, { pendingShuai: { kind: "inject-recheck", reason: "找不到审官终端——待帅接手复核" } }, false) === "找不到审官终端——待帅接手复核", 'awaitingShuaiReason 读 pendingShuai（reviewer-unfound 常驻）');
@@ -359,54 +370,42 @@ describe('flow', () => {
     });
   });
 
-  it('⑯ 红 2：存量审官反查——帅手起审官、流转器后启动，复核注入仍能找到审官终端', async (t) => {
+  it('⑯ #675 复核态：没有活审官下一跳 → 报帅，不 task-create', async (t) => {
     const r = runFlow(path.join(FIXTURES, "recheck-reviewer"));
-    await t.test('退出码 1（有动作）', () => {
-      assert.ok(r.status === 1, '退出码 1（有动作）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('复核注入动作（存量场景不退化报帅）', () => {
-      assert.ok(/动作：复核注入 #2001（第 1 轮返工后）/ .test(r.out), '复核注入动作（存量场景不退化报帅）  →  ' + r.out.trim());
+    await t.test('报帅验收没开成审官下一跳', () => {
+      assert.ok(/报帅：验收没开成审官下一跳/.test(r.out), '报帅验收没开成审官下一跳  →  ' + r.out.trim());
     });
-    await t.test('通过「审官· 子卡」反查找到审官终端', () => {
-      assert.ok(/复核目标：审官终端 term_reviewer_2001，存量反查（子卡）/.test(r.out), '通过「审官· 子卡」反查找到审官终端  →  ' + r.out.trim());
-    });
-    await t.test('没有报帅（不是当注入失败）', () => {
-      assert.ok(!/报帅：/.test(r.out), '没有报帅（不是当注入失败）  →  ' + r.out.trim());
+    await t.test('不复核注入', () => {
+      assert.ok(!/复核注入/.test(r.out) && !/动作：/.test(r.out), '不复核注入  →  ' + r.out.trim());
     });
   });
 
-  it('⑰ 红 4：同一 worktree 多终端选不出唯一 → 报帅不挑第一个', async (t) => {
+  it('⑰ #675 多终端也不 task-create：没开下一跳就报帅', async (t) => {
     const r = runFlow(path.join(FIXTURES, "multi-terminal"));
-    await t.test('退出码 1（有输出）', () => {
-      assert.ok(r.status === 1, '退出码 1（有输出）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('明确「选不出唯一注入目标——请帅指定，不挑第一个」', () => {
-      assert.ok(/选不出唯一注入目标——请帅指定，不挑第一个/.test(r.out), '明确「选不出唯一注入目标——请帅指定，不挑第一个」  →  ' + r.out.trim());
+    await t.test('报帅验收没开成下一跳', () => {
+      assert.ok(/报帅：验收没开成下一跳/.test(r.out), '报帅验收没开成下一跳  →  ' + r.out.trim());
     });
-    await t.test('没有注入到任一终端（不挑第一个）', () => {
-      assert.ok(!/注入目标：工人终端 term_a_2002/.test(r.out) && !/注入目标：工人终端 term_b_2002/.test(r.out), '没有注入到任一终端（不挑第一个）  →  ' + r.out.trim());
-    });
-    await t.test('解析失败用「预览-阻塞：」前缀而非「动作：」（观察 1）', () => {
-      assert.ok(!/动作：/.test(r.out), '解析失败用「预览-阻塞：」前缀而非「动作：」（观察 1）  →  ' + r.out.trim());
+    await t.test('没有注入到任一终端', () => {
+      assert.ok(!/注入目标：工人终端/.test(r.out) && !/动作：/.test(r.out), '没有注入到任一终端  →  ' + r.out.trim());
     });
   });
 
-  it('⑰b 三轮复核红 1：dry-run 不落 blocked 闸（预览不污染值守状态）——A 实验组 round-2 恢复注入', async (t) => {
+  it('⑰b #675 新红判定到达仍观察、不注入', async (t) => {
     const r = runFlow(path.join(FIXTURES, "blocked-recover"));
-    await t.test('退出码 1（有动作/阻塞）', () => {
-      assert.ok(r.status === 1, '退出码 1（有动作/阻塞）  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（报帅）', () => {
+      assert.ok(r.status === 1, '退出码 1（报帅）  →  ' + `status=${r.status}`);
     });
-    await t.test('round-1 预览-阻塞（选不出唯一）', () => {
-      assert.ok(/round-1[\s\S]*预览-阻塞：#2005（返工注入/.test(r.out), 'round-1 预览-阻塞（选不出唯一）  →  ' + r.out.trim());
+    await t.test('round-1 报帅验收没开成下一跳', () => {
+      assert.ok(/round-1[\s\S]*报帅：验收没开成下一跳/.test(r.out), 'round-1 报帅  →  ' + r.out.trim());
     });
-    await t.test('round-1 本轮待帅确认（可见但不落闸）', () => {
-      assert.ok(/round-1[\s\S]*待帅处置：#2005（注入\/目标解析失败待帅确认（本轮，未落闸））/.test(r.out), 'round-1 本轮待帅确认（可见但不落闸）  →  ' + r.out.trim());
-    });
-    await t.test('round-2 终端修好 + 新红判定 → 恢复注入（第 2 轮，不再被旧阻塞吞掉）', () => {
-      assert.ok(/round-2[\s\S]*动作：返工注入 #2005（第 2 轮，红 2 项）（注入目标：工人终端 term_x_2005）/.test(r.out), 'round-2 终端修好 + 新红判定 → 恢复注入（第 2 轮，不再被旧阻塞吞掉）  →  ' + r.out.trim());
-    });
-    await t.test('round-2 不再有预览-阻塞', () => {
-      assert.ok(!/round-2[\s\S]*预览-阻塞/.test(r.out), 'round-2 不再有预览-阻塞  →  ' + r.out.trim());
+    await t.test('round-2 新红判定仍观察报帅，不返工注入', () => {
+      assert.ok(/round-2[\s\S]*报帅：验收没开成下一跳/.test(r.out) && !/返工注入/.test(r.out), 'round-2 仍观察  →  ' + r.out.trim());
     });
   });
 
@@ -417,15 +416,15 @@ describe('flow', () => {
     fs.writeFileSync(stateFile, JSON.stringify({
       version: 1, inventoried: true,
       records: {
-        "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, pendingShuai: { kind: "inject-rework", reason: "注入失败待帅接手（新信号到来自动重试一次）" }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
+        "2006": { pr: 2006, seenComments: { 240001: true }, seenReviews: { 340001: true }, pendingShuai: { kind: "observe-rework-hop", reason: "验收没开成下一跳" }, reportedMalformed: {}, reportedStale: false, actedOn: "rework-needed|1|r:340001", reviewer: null, workerWorktree: null },
       },
     }), "utf8");
     const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "blocked-selfheal"), "--state-file", stateFile, "--dry-run"], { encoding: "utf8", cwd: REPO });
     const out = (r.stdout || "") + (r.stderr || "");
-    await t.test('新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）', () => {
-      assert.ok(/动作：返工注入 #2006（第 2 轮，红 2 项）（注入目标：工人终端 term_worker_2006）/.test(out), '新红判定到达 → pendingShuai 清除并恢复注入（第 2 轮，红 2 项）  →  ' + out.trim());
+    await t.test('新红判定到达 → 再观察，仍报帅验收没开成下一跳（不注入）', () => {
+      assert.ok(/报帅：验收没开成下一跳/.test(out) && !/返工注入/.test(out), '新红判定到达再观察  →  ' + out.trim());
     });
-    await t.test('不再挂注入失败待帅处置', () => {
+    await t.test('不再挂旧的注入失败待帅处置', () => {
       assert.ok(!/待帅处置：#2006（注入失败/.test(out), '不再挂注入失败待帅处置  →  ' + out.trim());
     });
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -444,17 +443,17 @@ describe('flow', () => {
     await t.test('首跑 exit 1（报帅 + 待帅处置）', () => {
       assert.ok(r1.status === 1, '首跑 exit 1（报帅 + 待帅处置）  →  ' + `status=${r1.status}`);
     });
-    await t.test('首跑报帅找不到审官终端（待帅接手复核）', () => {
-      assert.ok(/报帅：找不到审官终端.*待帅接手复核/.test(out1), '首跑报帅找不到审官终端（待帅接手复核）  →  ' + out1.trim());
+    await t.test('首跑报帅验收没开成审官下一跳', () => {
+      assert.ok(/报帅：验收没开成审官下一跳/.test(out1), '首跑报帅验收没开成审官下一跳  →  ' + out1.trim());
     });
     await t.test('二跑仍 exit 1（常驻不转绿）', () => {
       assert.ok(r2.status === 1, '二跑仍 exit 1（常驻不转绿）  →  ' + `status=${r2.status}`);
     });
-    await t.test('二跑仍有待帅处置（找不到审官终端）', () => {
-      assert.ok(/待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out2), '二跑仍有待帅处置（找不到审官终端）  →  ' + out2.trim());
+    await t.test('二跑仍有待帅处置（验收没开成审官下一跳）', () => {
+      assert.ok(/待帅处置：#2007（验收没开成审官下一跳）/.test(out2), '二跑仍有待帅处置  →  ' + out2.trim());
     });
     await t.test('三跑仍常驻', () => {
-      assert.ok(/待帅处置：#2007（找不到审官终端——待帅接手复核）/.test(out3), '三跑仍常驻  →  ' + out3.trim());
+      assert.ok(/待帅处置：#2007（验收没开成审官下一跳）/.test(out3), '三跑仍常驻  →  ' + out3.trim());
     });
     fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -471,8 +470,9 @@ describe('flow', () => {
 
   it('⑲ 复核红 1：review 链接必须可用（数字锚点 id，不是 GraphQL node id）', async (t) => {
     const r = runFlow(path.join(FIXTURES, "fake-loop"));
-    await t.test('返工指令链接是数字锚点形态（无 PRR_ node-id）', () => {
-      assert.ok(/pull\/999#pullrequestreview-910001/.test(r.out) && !/pull\/999#pullrequestreview-PRR_/.test(r.out), '返工指令链接是数字锚点形态（无 PRR_ node-id）  →  ' + r.out.trim());
+    await t.test('语料 review 链接是数字锚点形态（无 PRR_ node-id）', () => {
+      const reviews = JSON.parse(fs.readFileSync(path.join(FIXTURES, "fake-loop", "pr-999-reviews.json"), "utf8"));
+      assert.ok(reviews[0].id === 910001 && !/PRR_/.test(String(reviews[0].id)), '语料 review 链接是数字锚点  →  ' + JSON.stringify(reviews[0].id));
     });
     // 真实语料夹具改走 gh api 口径（数字 id + html_url），镜像 live 数据形态
     const real453 = JSON.parse(fs.readFileSync(path.join(FIXTURES, "real-453", "pr-453-reviews.json"), "utf8"));
@@ -571,8 +571,10 @@ describe('flow', () => {
       assert.ok(sent.length === 0, '不 send  →  ' + JSON.stringify(sent));
     });
 
-    await t.test('返工/复核是流转器活', () => {
-      assert.ok(isFlowWork({ kind: "inject-rework" }) && isFlowWork({ kind: "inject-recheck" }), '返工/复核是流转器活');
+    await t.test('观察下一跳是流转器活；注入不再是', () => {
+      assert.ok(isFlowWork({ kind: "observe-rework-hop" }) && isFlowWork({ kind: "observe-recheck-hop" })
+        && isFlowWork({ kind: "inject-rework" }) === false,
+        '观察下一跳是流转器活；注入不再是');
     });
     await t.test('起审官不再是流转器活（#586 worker-done）', () => {
       assert.ok(isFlowWork({ kind: "start-reviewer" }) === false, '起审官不再是流转器活（#586 worker-done）');
@@ -626,14 +628,15 @@ describe('flow', () => {
       sleep() {},
     };
     const bound = dispatchNewTaskToTerminal({ spec: '【返工指令 · 测试】', terminal: 'term_worker', io: bindIo });
-    await t.test('#633 返工走 task-create + worker-start，不 terminal send', () => {
-      assert.ok(bound.ok === true && bound.taskId === 'task_rework_1', '绑回成功  →  ' + JSON.stringify(bound));
-      assert.ok(dispatched.some(c => c.includes('task-create') && c.includes('--spec')), '先 task-create  →  ' + JSON.stringify(dispatched));
-      assert.ok(dispatched.some(c => c.includes('worker-start') && c.includes('term_worker') && c.includes('task_rework_1')), '再 worker-start 绑原终端  →  ' + JSON.stringify(dispatched));
-      assert.ok(!dispatched.some(c => c.includes('terminal') && c.includes('send')), '不 terminal send  →  ' + JSON.stringify(dispatched));
+    await t.test('#675 flow 禁止 task-create', () => {
+      assert.ok(bound.ok === false && /禁止 task-create/.test(bound.error), 'flow 禁止 task-create  →  ' + JSON.stringify(bound));
+      assert.ok(dispatched.length === 0, '不发 task-create  →  ' + JSON.stringify(dispatched));
     });
-    await t.test('#633 task-create 只认 result.task.id，不拿 RPC id', () => {
-      assert.ok(bound.taskId !== 'rpc-not-task', '不是 RPC id  →  ' + JSON.stringify(bound));
+    const flowSrc = fs.readFileSync(FLOW, "utf8");
+    const execChunk = flowSrc.slice(flowSrc.indexOf('function executeAction'), flowSrc.indexOf('function processOneRound'));
+    await t.test('#675 executeAction 不调用 task-create', () => {
+      assert.ok(!/argsTaskCreate/.test(execChunk) && !/dispatchNewTaskToTerminal\(/.test(execChunk),
+        '#675 executeAction 不调用 task-create  →  ' + execChunk.slice(0, 200));
     });
   });
 

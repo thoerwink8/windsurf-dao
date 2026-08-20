@@ -45,6 +45,8 @@ import {
   argsRunCurrent,
   argsRunUse,
   argsRunList,
+  argsRunCreateSelf,
+  planCallerRun,
   extractRunId,
   extractSentMessage,
   argsGateCreate,
@@ -485,13 +487,27 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
   return orca(argsTaskCreate({ spec, run: runId }));
 }
 
-/** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。Run 用调用方已有的，不 run-use / 不 run-create。 */
+/** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。
+ * Run：调用方已有的用已有的；run-current 为 null 时本 TUI 自己开（#675：不依赖帅窗、不 --from 冒充台）。
+ * run-current 没查成 ≠ 没有 Run。 */
 function bindStation() {
   const ensured = ensureInboxStation();
   if (!ensured.ok) return { ok: false, error: `信箱台 ensure 失败: ${ensured.error}` };
   const cur = orca(argsRunCurrent());
-  if (!cur.ok) return { ok: false, error: `run-current 没查成：${errText(cur.error)}` };
-  return { ok: true, handle: ensured.handle || null, runId: extractRunId(cur.json) };
+  const plan = planCallerRun({
+    currentOk: cur.ok,
+    currentJson: cur.json,
+    currentError: cur.ok ? null : errText(cur.error),
+  });
+  if (!plan.ok) return { ok: false, unscanned: !!plan.unscanned, error: plan.error };
+  if (!plan.needCreate) {
+    return { ok: true, handle: ensured.handle || null, runId: plan.runId };
+  }
+  const created = orca(argsRunCreateSelf({ objective: 'dao dispatch' }));
+  if (!created.ok) return { ok: false, error: `本窗开 Run 失败：${errText(created.error)}` };
+  const runId = extractRunId(created.json);
+  if (!runId) return { ok: false, error: 'run-create 没拿到 result.run.id（没查成）' };
+  return { ok: true, handle: ensured.handle || null, runId, created: true };
 }
 
 function sleepMs(ms) {
