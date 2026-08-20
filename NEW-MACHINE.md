@@ -39,19 +39,20 @@ node --version
 | 文件 | 里面是什么 | 不带的后果 |
 |---|---|---|
 | `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 写码/判断类派工的主通道是 opencode Go（`docs/model-routing.toml`），缺 key 时工人一起手就挂 |
-| `~/.dao/apps/*.{pem,json}` | 三个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并全断。详 §4b |
+| `~/.dao/apps/*.{pem,json}` | 四个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并、看门狗报事故全断。详 §4b |
 
 新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
 
 ## 4b. GitHub App 身份凭据（#573）
 
-三个 App 的 private key 只此一份，丢了要回 GitHub 重新生成。换机把 `~/.dao/apps/` 整目录拷过来，**不要**进 git。
+四个 App 的 private key 只此一份，丢了要回 GitHub 重新生成。换机把 `~/.dao/apps/` 整目录拷过来，**不要**进 git。
 
 | 文件 | 角色 | App ID | Installation ID |
 |---|---|---|---|
 | `reviewer.{pem,json}` | `dao-reviewer[bot]` 审官 | 4616659 | 154244051 |
 | `worker.{pem,json}` | `dao-worker[bot]` 工人 | 4616929 | 154249581 |
 | `marshal.{pem,json}` | `dao-marshal[bot]` 帅 / 合并 | 4616953 | 154249976 |
+| `watchdog.{pem,json}` | `dao-watchdog[bot]` 事故观察 | 人建完填 json | 人建完填 json |
 
 `*.json` 形态（数字不要加引号）：
 
@@ -61,15 +62,18 @@ node --version
 
 查号（密钥丢了或换机对不上时）：
 
-- App ID：GitHub → Settings → Developer settings → GitHub Apps → `dao-reviewer` / `dao-worker` / `dao-marshal` 页顶的 App ID。
+- App ID：GitHub → Settings → Developer settings → GitHub Apps → `dao-reviewer` / `dao-worker` / `dao-marshal` / `dao-watchdog` 页顶的 App ID。
 - Installation ID：同一 App 页 → Install App → 点进这条安装，URL 末段就是；或用 App JWT 调 `GET /app/installations`。
 
-验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这六份文件，再跑）：
+`dao-watchdog` 要人在 GitHub 建（Settings → Developer settings → GitHub Apps → New GitHub App），工人**不**在 GitHub 上创建 App。装到本仓。权限只要能写评论：**Issues: Read and write**、**Pull requests: Read and write**、**Contents: Read-only**、**Checks: Read-only**。不要 Contents: Write（狗不许推码）。pem + json 放到 `~/.dao/apps/`。
+
+验（按文档在一台没有 `~/.dao` 的环境上：先建目录、拷这八份文件，再跑）：
 
 ```bash
 node scripts/gh-as.mjs reviewer --whoami
 node scripts/gh-as.mjs worker --whoami
 node scripts/gh-as.mjs marshal --whoami
+node scripts/gh-as.mjs watchdog --whoami
 ```
 
 缺文件会报 `缺凭据: ...（不是没配好，是这台机器没装——见 NEW-MACHINE）`，退出码 2。这和 json 缺字段的「配置错了」不是一回事。

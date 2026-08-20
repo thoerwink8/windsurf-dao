@@ -17,7 +17,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-export const ROLES = ['reviewer', 'worker', 'marshal'];
+export const ROLES = ['reviewer', 'worker', 'marshal', 'watchdog'];
 
 // 权限表以 issue #573 正文为准。metadata:read 是 GitHub 给每个 installation token
 // 自动加上的，不算我们声明的权限，比对时忽略。
@@ -59,6 +59,19 @@ export const ROLE_META = {
     email: '4616953+dao-marshal[bot]@users.noreply.github.com',
     expectedPermissions: {
       contents: 'write',
+      pull_requests: 'write',
+      issues: 'write',
+      checks: 'read',
+    },
+  },
+  // App ID / Installation ID 以 ~/.dao/apps/watchdog.json 为准。
+  // 人在 GitHub 建 App，工人不建（#673）。仓库不硬编码未建的号。
+  watchdog: {
+    slug: 'dao-watchdog',
+    name: 'dao-watchdog[bot]',
+    email: 'dao-watchdog[bot]@users.noreply.github.com',
+    expectedPermissions: {
+      contents: 'read',
       pull_requests: 'write',
       issues: 'write',
       checks: 'read',
