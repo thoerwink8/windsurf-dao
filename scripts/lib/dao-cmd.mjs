@@ -789,6 +789,12 @@ export function agentStartSpec({ provider, command, agentId } = {}) {
   return { mode: 'command', agentId: id, model, command: command || null };
 }
 
+/** 审官 GPT/codex 走 --agent，不要 forceCommand 再粘贴（#680：Pasted Content 等 120s 也不发）。
+ * reclaude 不能 --agent，才 forceCommand。 */
+export function forceCommandForReviewer(launch) {
+  return agentStartSpec(launch || {}).mode !== 'agent';
+}
+
 export function extractHandleFromWorkerStart(json) {
   return json?.result?.worker?.agent_terminal_handle
     || json?.result?.dispatch?.assignee_handle

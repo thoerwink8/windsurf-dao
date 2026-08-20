@@ -2424,11 +2424,29 @@ describe('dao', () => {
       assert.ok(S.extractHandleFromWorkerStart(fx) === 'term_e525f71f-29a9-419c-9469-b8ef2a277239',
         'worker-start/show 回包能抽出 agent 终端 handle  →  ' + S.extractHandleFromWorkerStart(fx));
     });
-    await t.test('审官起动带 forceCommand（走 --command，不走 worker-start --agent）', () => {
-      const launches = [...src.matchAll(/launchAgentInWorktree\(\{[\s\S]*?\}\)/g)].map(m => m[0]);
-      const reviewer = launches.filter(s => /reviewerLaunch/.test(s));
-      assert.ok(reviewer.length >= 2 && reviewer.every(s => /forceCommand:\s*true/.test(s)),
-        '审官起动带 forceCommand  →  ' + reviewer.join('\n---\n'));
+    const createChunk = (src.match(/function cmdReviewerCreate\b[\s\S]*?\nfunction /) || [''])[0];
+    const attachChunk = (src.match(/function cmdReviewerAttach\b[\s\S]*?\nfunction /) || [''])[0];
+    await t.test('GPT 审官不走无条件 forceCommand: true（走 --agent codex）', () => {
+      assert.ok(!/forceCommand:\s*true/.test(createChunk) && !/forceCommand:\s*true/.test(attachChunk)
+        && /forceCommandForReviewer\(reviewerLaunch\)/.test(createChunk)
+        && /forceCommandForReviewer\(reviewerLaunch\)/.test(attachChunk),
+        'GPT 审官不走无条件 forceCommand  →  create=' + /forceCommand[^\n]*/.exec(createChunk)?.[0]
+        + ' attach=' + /forceCommand[^\n]*/.exec(attachChunk)?.[0]);
+    });
+    await t.test('故意 command+paste 路径不再当 GPT 审官起法', () => {
+      const gptLaunch = S.resolveLaunch({ provider: 'gpt', routing });
+      const gptSpec = S.agentStartSpec(gptLaunch);
+      assert.ok(gptSpec.mode === 'agent' && gptSpec.agentId === 'codex'
+        && S.forceCommandForReviewer(gptLaunch) === false
+        && /forceCommandForReviewer\(reviewerLaunch\)/.test(createChunk)
+        && /forceCommandForReviewer\(reviewerLaunch\)/.test(attachChunk)
+        && !/forceCommand:\s*true/.test(createChunk + attachChunk),
+        'command+paste 不再是 GPT 审官起法  →  ' + JSON.stringify({ gptSpec, force: S.forceCommandForReviewer(gptLaunch) }));
+    });
+    await t.test('reclaude 仍 forceCommand（不能 --agent）', () => {
+      const claudeLaunch = S.resolveLaunch({ provider: 'claude', routing });
+      assert.ok(S.agentStartSpec(claudeLaunch).mode === 'command' && S.forceCommandForReviewer(claudeLaunch) === true,
+        'reclaude 仍 command  →  ' + JSON.stringify(S.agentStartSpec(claudeLaunch)));
     });
   });
 

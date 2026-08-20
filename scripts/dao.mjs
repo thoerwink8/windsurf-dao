@@ -69,6 +69,7 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  forceCommandForReviewer,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -1800,7 +1801,7 @@ function cmdStart(args) {
     title: args.title,
     command: launch.command,
     launch,
-    forceCommand: true,
+    forceCommand: true, // 裸起 TUI 无 task，不能 --agent
   });
   if (!created.ok) fail(created.error, { command: launch.command });
   const handle = created.handle;
@@ -2174,7 +2175,7 @@ function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
-    forceCommand: true,
+    forceCommand: forceCommandForReviewer(reviewerLaunch),
   });
   if (!revTerm.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
@@ -2437,7 +2438,7 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
-    forceCommand: true,
+    forceCommand: forceCommandForReviewer(reviewerLaunch),
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;
