@@ -56,6 +56,8 @@
 //    soldier-book 必须写「心跳不准发」；样本红/绿各一验判别力
 // ㉓ 盲考收卷纪律（#675）：design-exam 收卷节必须还在；起考轮盯产物收到完；指针失效要报警
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
+// ㉔ 起审官同厂硬闸（#679）：接线扫描不 import 闸自己的解析；故意 grok+grok 样本必须当场拦；
+//    红/绿/空样本各一验判别力；0 个样本 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -75,6 +77,10 @@ import {
 import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
+import {
+  inspectVendorGateWiring, inspectVendorGateFixtures, probeSameVendorDispatch,
+  inspectReviewerNoForceCommand,
+} from './lib/reviewer-vendor-gate-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -371,6 +377,24 @@ function checkModelRouting() {
     });
   });
 
+  let launchProviders = 0;
+  for (const [name, p] of Object.entries(doc.providers || {})) {
+    if (!p || typeof p !== 'object') continue;
+    if (!p.launch || String(p.launch).trim() === '') continue;
+    launchProviders += 1;
+    const start = String(p.start || '').trim();
+    if (start !== 'agent' && start !== 'command') {
+      problems.push(`${name} 缺 start=agent|command`);
+    }
+  }
+  if (launchProviders === 0) {
+    problems.push('没扫到任何带 launch 的 provider，start 没查成');
+  }
+  const gptNote = String(doc.providers?.gpt?.launch_note || '');
+  if (/库默认走第二条|已存在树里只能 terminal create/.test(gptNote)) {
+    problems.push('gpt launch_note 仍教已存在树默认走 command');
+  }
+
   if (usedProviders.size === 0) {
     problems.push('没扫到任何带 provider 的模型，providers.launch 没查成');
   } else {
@@ -404,7 +428,7 @@ function checkModelRouting() {
   if (problems.length === 0) {
     green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.size} 个 provider 有 launch，yml 同源`);
   } else {
-    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
+    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch 和 start=agent|command；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -1223,6 +1247,8 @@ checkNoBannerInboxSamples();
 checkNoBannerInboxLive();
 checkDesignExamHarvestSamples();
 checkDesignExamHarvestLive();
+checkVendorGateSamples();
+checkVendorGateLive();
 
 function checkDesignExamHarvestSamples() {
   const r = inspectDesignExamHarvestFixtures(join(ROOT, 'tests', 'fixtures', 'design-exam-harvest'));
@@ -1257,6 +1283,76 @@ function checkDesignExamHarvestLive() {
     return;
   }
   green('盲考收卷纪律还在（起考轮盯产物收到完）');
+}
+
+function checkVendorGateSamples() {
+  const r = inspectVendorGateFixtures(join(ROOT, 'tests', 'fixtures', 'reviewer-vendor-gate'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '同厂硬闸样本没查成' : '同厂硬闸样本对不上',
+      '恢复 tests/fixtures/reviewer-vendor-gate/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`同厂硬闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkVendorGateLive() {
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  const cmdFile = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
+  const slotFile = join(ROOT, 'scripts', 'lib', 'dianjiangtai-reviewer-slot.mjs');
+  const wdFile = join(ROOT, 'scripts', 'watchdog.mjs');
+  if (![daoFile, cmdFile, slotFile, wdFile].every(existsSync)) {
+    fail(
+      '同厂硬闸 live 扫描缺文件',
+      '恢复 dao.mjs / dao-cmd.mjs / dianjiangtai-reviewer-slot.mjs / watchdog.mjs；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)} cmd=${existsSync(cmdFile)} slot=${existsSync(slotFile)} wd=${existsSync(wdFile)}`,
+    );
+    return;
+  }
+  const daoSrc = readFileSync(daoFile, 'utf8');
+  const r = inspectVendorGateWiring({
+    daoSrc,
+    cmdSrc: readFileSync(cmdFile, 'utf8'),
+    slotSrc: readFileSync(slotFile, 'utf8'),
+    watchdogSrc: readFileSync(wdFile, 'utf8'),
+  });
+  if (r.unscanned) {
+    fail('同厂硬闸 live 没查成', '给齐源文件再扫', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `同厂硬闸接线丢了 ${r.problems.length} 处`,
+      'dispatch/create/attach/worker-done/换人都要走 assertCrossVendor 或 refuseIfSameVendor，换人跳过工人那一厂',
+      r.problems.join('；'),
+    );
+    return;
+  }
+  const probe = probeSameVendorDispatch(ROOT);
+  if (!probe.ok) {
+    fail(
+      probe.unscanned ? '故意同厂样本没查成' : '故意同厂样本没拦住',
+      'dispatch --model grok-4.6 --reviewer grok-4.6 必须非零且话面含同厂；异厂必须过',
+      probe.error || '',
+    );
+    return;
+  }
+  const noForce = inspectReviewerNoForceCommand({ daoSrc });
+  if (noForce.unscanned) {
+    fail('审官起法扫描没查成', '给齐 dao.mjs 再扫', noForce.error || '');
+    return;
+  }
+  if (!noForce.ok) {
+    fail(
+      `审官路径仍写死 forceCommand ${noForce.problems.length} 处`,
+      '起法只读 toml start=agent|command；reviewer-create/attach 不要 forceCommand',
+      noForce.problems.join('；'),
+    );
+    return;
+  }
+  green('起审官同厂硬闸还在（接线齐，故意 grok+grok 样本被拦；审官不写死 forceCommand）');
 }
 
 function checkMachinePathSamples() {

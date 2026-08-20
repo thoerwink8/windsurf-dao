@@ -11,6 +11,8 @@ import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText, normalizePipes } from './next-launch.mjs';
+import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
+import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -92,6 +94,10 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
   if (!p.launch || !String(p.launch).trim()) {
     throw new Error(`providers.${providerName} 缺 launch（启动模板）`);
   }
+  const start = String(p.start || '').trim();
+  if (start !== 'agent' && start !== 'command') {
+    throw new Error(`providers.${providerName} 缺 start=agent|command`);
+  }
 
   let command = String(p.launch).trim();
   if (command.includes('{model}')) {
@@ -108,6 +114,7 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
     template: String(p.launch).trim(),
     pipe: chosen || null,
     agentId: orcaKnownAgentId({ provider: providerName, command: materialized }),
+    start,
   };
 }
 
@@ -134,6 +141,10 @@ export function providerLaunchProblems(doc) {
     const p = doc.providers?.[name];
     if (!p) { problems.push(`${name} 无 providers 节`); continue; }
     if (!p.launch || !String(p.launch).trim()) { problems.push(`${name} 缺 launch`); continue; }
+    const start = String(p.start || '').trim();
+    if (start !== 'agent' && start !== 'command') {
+      problems.push(`${name} 缺 start=agent|command`);
+    }
     if (String(p.launch).includes('{model}') && !p.launch_model && !p.default_model) {
       problems.push(`${name} 的 launch 含 {model} 但缺 launch_model/default_model`);
     }
@@ -772,19 +783,23 @@ export function launchCliModel(command) {
   return short ? short[1] : null;
 }
 
-/** 认识的 agent 走 worker-start --agent（.cmd shim 的 --command 进程仍是 cmd，Orca 报 agent_unconfigured）。
- * reclaude 不能 --agent claude，仍走 terminal create --command。
+/** 起法只读路由表 [providers.*].start（#680）。禁止按二进制名硬编码 agent|command。
  * --model 只传给 Cursor / Codex（orca 只认这几家）。 */
-export function agentStartSpec({ provider, command, agentId } = {}) {
+export function agentStartSpec({ provider, command, agentId, start } = {}) {
+  const mode = String(start || '').trim();
+  if (mode !== 'agent' && mode !== 'command') {
+    throw new Error('agentStartSpec 要 start=agent|command（读路由表 [providers.*].start）');
+  }
   const id = agentId || orcaKnownAgentId({ provider, command });
-  const model = launchCliModel(command);
-  if (id === 'cursor' || id === 'codex') {
+  const cliModel = launchCliModel(command);
+  if (mode === 'agent') {
+    if (!id) {
+      throw new Error(`start=agent 但不知道 Orca --agent id（provider=${provider || '?'}）`);
+    }
+    const model = (id === 'cursor' || id === 'codex') ? cliModel : null;
     return { mode: 'agent', agentId: id, model };
   }
-  if (id === 'grok' || id === 'pi') {
-    return { mode: 'agent', agentId: id, model: null };
-  }
-  return { mode: 'command', agentId: id, model, command: command || null };
+  return { mode: 'command', agentId: id, model: cliModel, command: command || null };
 }
 
 export function extractHandleFromWorkerStart(json) {
@@ -1491,10 +1506,50 @@ export const CURSOR_WORKING_RE = /(?:^|\n)\s*(?:Running|Reading|Thinking|Working
  * 不是粘贴块的前置条件（审红 1），单独出现也算未提交。 */
 export const CURSOR_FOLLOWUP_RE = /(?:^|\n)\s*→[^\n]*[^\s\n]|\d+\s*follow-ups?/i;
 
-/** #619/#661：未提交粘贴与「超时/环境」必须分开。垫片已退役：
- * 粘贴进输入框 ≠ 开工，屏幕上有未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
- * 一律立刻红并回滚，不补回车、不假装开工（#661 拍板）。 */
+/** #619/#661/#679：未提交粘贴与「超时/环境」必须分开。垫片已退役：
+ * 粘贴进输入框 ≠ 开工。看见 Pasted Content / [Pasted text] 继续等 timeout 或指纹消失且在干活；
+ * 超时仍在输入框才 unsubmitted-paste。不补回车、不假装开工（#679 拍板）。
+ * #680：cursor-agent 的 [Pasted text] 是提交后显示残留（实测 Working 后残留不消失），
+ * 开工探针在 cursor 通道忽略它；Codex [Pasted Content] 仍是未提交。 */
 export const UNSUBMITTED_PASTE_REASON = '注入未提交（Pasted Content / Pasted text）——任务书停在输入框未发出，禁止粘贴当开工（#661）';
+
+export function isCursorStartChannel(provider) {
+  const p = String(provider || '').trim().toLowerCase();
+  return p === 'cursor' || p === 'cursor-agent';
+}
+
+/** 去掉 cursor-agent 提交后残留，才能看见输出在不在动。 */
+export function stripCursorPasteResidue(text) {
+  return String(text ?? '').replace(CURSOR_PASTE_RE, '');
+}
+
+/**
+ * cursor 开工证据：Working/状态行可在粘贴块上方（残留停在输入框底部），
+ * 或去掉 [Pasted text] 后屏面文本在变。
+ */
+export function cursorStartEvidence({ text, prevText } = {}) {
+  const t = String(text ?? '');
+  if (CURSOR_WORKING_RE.test(t)) return { ok: true, kind: 'working' };
+  if (/(?:^|\n)[^\S\n]*Working(?:\b|[….。\s]|$)/im.test(t)) return { ok: true, kind: 'working' };
+  const now = stripCursorPasteResidue(t).replace(/\s+/g, ' ').trim();
+  const prev = stripCursorPasteResidue(prevText).replace(/\s+/g, ' ').trim();
+  if (now && prev && now !== prev) return { ok: true, kind: 'output-moving' };
+  return { ok: false };
+}
+
+/**
+ * 开工探针用的未提交粘贴。cursor 通道忽略 [Pasted text] 残留；
+ * Codex [Pasted Content] 无论通道都算未提交。
+ */
+export function unsubmittedPasteForStart({ text, provider } = {}) {
+  const t = String(text ?? '');
+  const codex = t.match(PASTED_CONTENT_RE);
+  if (codex) return { kind: 'codex', evidence: codex[0] };
+  if (isCursorStartChannel(provider)) return null;
+  const leftover = pastedContentMatch(t);
+  if (!leftover) return null;
+  return { kind: 'legacy', evidence: leftover };
+}
 
 /** #651：Cursor 粘贴块等价 Grok 的 Pasted Content——单独出现且后面没有在干活（状态行）
  * 就算未提交（审红 1）。已提交（粘贴块后面有干活状态行）不当未提交，避免死循环误杀。 */
@@ -1593,7 +1648,7 @@ export function verifyInjection({ text, readError } = {}) {
 }
 
 /**
- * #661/#633：退役「补一记回车」垫片（completePendingPaste 已删除）。
+ * #661/#633/#679：退役「补一记回车」垫片（completePendingPaste 已删除）。
  * 往输入框粘贴 ≠ 开工：未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）
  * 只证明任务书停在输入框，不证明 agent 真接过它。开工只认外部证据——
  *   - worker-read 官方 transcript（source≠terminal）= 真 session（调 verifyWorkerStarted）；
@@ -1603,15 +1658,17 @@ export function verifyInjection({ text, readError } = {}) {
  *
  * 仍轮询的只有开工证明本身：
  *   1. worker-read 官方 transcript（source≠terminal）→ started；
- *   2. 任一拍看到未提交粘贴（Pasted Content / [Pasted text] / 未发 follow-up）→
- *      立刻红 unsubmitted-paste、pasteSubmitted:false，不许垫片提交、不许假装开工；
+ *   2. 看见未提交粘贴 → 继续等到 timeoutMs，或指纹消失且真在干活。
+ *      超时仍在输入框才 unsubmitted-paste、pasteSubmitted:false。禁止补回车；
+ *      #680：cursor 通道忽略 [Pasted text] 残留，改认 Working / 输出在动；
+ *      Codex [Pasted Content] 仍是未提交。
  *   3. TUI 加载期（Starting MCP servers 等）不算绿；
  *   4. proof 不可用（provider_unsupported / session_not_reported）时降级到屏面连续稳定轮。
  */
 export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
-  stableRoundsNeeded = 3,
+  stableRoundsNeeded = 3, provider,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1620,8 +1677,10 @@ export function verifyStartedPolling({
   let reads = 0;
   let unscanned = null;
   let lastText = '';
+  let prevText = '';
   let proofUnavailable = null;
   let stableRounds = 0;
+  const cursor = isCursorStartChannel(provider);
   while (Date.now() - t0 < timeoutMs) {
     if (dispatchId && typeof proofOnce === 'function') {
       const proof = proofOnce(dispatchId);
@@ -1643,21 +1702,43 @@ export function verifyStartedPolling({
     const read = readOnce();
     if (read && read.error) unscanned = { reason: '没读成', error: read.error };
     const text = read && !read.error ? extractTerminalText(read) : '';
+    const leftover = unsubmittedPasteForStart({ text, provider });
+    if (cursor) {
+      const startEv = cursorStartEvidence({ text, prevText });
+      prevText = text;
+      lastText = text;
+      if (leftover) {
+        stableRounds = 0;
+        sleep(intervalMs);
+        continue;
+      }
+      if (startEv.ok && !TUI_LOADING_RE.test(text)) {
+        stableRounds++;
+        if (stableRounds >= stableRoundsNeeded) {
+          return {
+            ok: true,
+            state: 'started',
+            proofFallback: true,
+            cursorStart: startEv.kind,
+            proof: proofUnavailable || undefined,
+            reads, stableRounds,
+            elapsedMs: Date.now() - t0,
+            text,
+          };
+        }
+        sleep(intervalMs);
+        continue;
+      }
+      stableRounds = 0;
+      sleep(intervalMs);
+      continue;
+    }
     lastText = text;
-    const leftover = pastedContentMatch(text);
     if (leftover) {
-      // #661/#633：粘贴不等于开工。屏上只有 [Pasted text] / Pasted Content / 未发 follow-up
-      // → 任务书没进上下文，立刻红并交给调用方回滚，不补回车、不假装开工。
-      return {
-        ok: false,
-        state: 'unsubmitted-paste',
-        reason: UNSUBMITTED_PASTE_REASON,
-        evidence: leftover,
-        reads,
-        elapsedMs: Date.now() - t0,
-        text,
-        pasteSubmitted: false,
-      };
+      // #679：粘贴后等，不要立刻杀。等 ≠ 补回车。指纹还在输入框就继续轮询。
+      stableRounds = 0;
+      sleep(intervalMs);
+      continue;
     }
     const v = verifyInjection({ text, readError: read && read.error });
     if (v.ok) {
@@ -1679,6 +1760,19 @@ export function verifyStartedPolling({
       }
     }
     sleep(intervalMs);
+  }
+  const leftoverAtEnd = unsubmittedPasteForStart({ text: lastText, provider });
+  if (leftoverAtEnd) {
+    return {
+      ok: false,
+      state: 'unsubmitted-paste',
+      reason: UNSUBMITTED_PASTE_REASON,
+      evidence: leftoverAtEnd.evidence,
+      reads,
+      elapsedMs: Date.now() - t0,
+      text: lastText,
+      pasteSubmitted: false,
+    };
   }
   return {
     ok: false,
@@ -2320,6 +2414,27 @@ export function resolveDispatchConstraints({
     return { ok: false, missing: [], error: `审官 --reviewer ${reviewer} 不在路由表` };
   }
 
+  const vendorGate = assertCrossVendor({
+    workerId: resolvedModel,
+    reviewerId: reviewer,
+    models,
+  });
+  if (!vendorGate.ok) {
+    let error = vendorGate.error;
+    if (vendorGate.state === 'same_vendor') {
+      const next = nextReviewerAfter({
+        currentId: reviewer,
+        models,
+        passerIds: models
+          .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+          .map(m => m.id),
+        workerId: resolvedModel,
+      });
+      error = next.ok && next.next ? `${error}；下一位 ${next.next}` : `${error}；${next.error}`;
+    }
+    return { ok: false, missing: [], error, vendorGate };
+  }
+
   return {
     ok: true,
     mergePolicy: policy,
@@ -2328,6 +2443,7 @@ export function resolveDispatchConstraints({
     role: role || null,
     reviewer,
     recommendation,
+    vendorGate,
   };
 }
 
@@ -2710,15 +2826,24 @@ export function pickModel(labels) {
   };
 }
 
-/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
-export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
-  if (reviewer && String(reviewer).trim()) {
-    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+/** 起审官前查工人模型。没拿到列表 ≠ 扫完没有 model/*，两者都拒绝起审官。 */
+export function requireWorkerModel(labels) {
+  const pick = pickModel(labels);
+  if (pick.ok) return pick;
+  if (pick.state === 'unscanned') {
+    return { ...pick, error: '工人模型列表没拿到（没查成），拒绝起审官' };
   }
+  if (pick.state === 'none') {
+    return { ...pick, error: '扫完没有 model/*，拒绝起审官' };
+  }
+  return { ...pick, error: `${pick.error}，拒绝起审官` };
+}
+
+export function collectIssueLabelsFromPr({ pr, runGh } = {}) {
   const n = String(pr ?? '').trim();
-  if (!n) return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没给 PR 号' };
+  if (!n) return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没给 PR 号' };
   if (typeof runGh !== 'function') {
-    return { ok: false, unscanned: true, error: 'resolveReviewerFromPr 没拿到 gh 执行器（没查成，不许猜）' };
+    return { ok: false, unscanned: true, error: 'collectIssueLabelsFromPr 没拿到 gh 执行器（没查成，不许猜）' };
   }
   const view = runGh(['pr', 'view', n, '--json', 'title,body']);
   if (!view.ok) return { ok: false, unscanned: true, error: `gh pr view #${n} 失败：${view.error}` };
@@ -2727,7 +2852,7 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
   catch { return { ok: false, unscanned: true, error: `gh pr view #${n} 返回非 JSON：${String(view.out).slice(0, 120)}` }; }
   const refs = linkedIssueNumbers(`${meta.title || ''}\n${meta.body || ''}`);
   if (!refs.length) {
-    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
+    return { ok: false, unscanned: false, error: `PR #${n} 没有署名单号，读不到 issue label（没查成，不许猜）` };
   }
   const collected = [];
   for (const issueNum of refs) {
@@ -2739,9 +2864,33 @@ export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
     const names = (Array.isArray(parsed?.labels) ? parsed.labels : []).map(labelNameOf).filter(Boolean);
     collected.push(...names);
   }
-  const picked = pickReviewer(collected);
-  if (!picked.ok) return { ...picked, source: 'label', refs, labels: collected };
-  return { ...picked, source: 'label', refs, labels: collected };
+  return { ok: true, unscanned: false, refs, labels: collected };
+}
+
+export function resolveWorkerFromPr({ pr, runGh } = {}) {
+  const collected = collectIssueLabelsFromPr({ pr, runGh });
+  if (!collected.ok) return collected;
+  const picked = requireWorkerModel(collected.labels);
+  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+}
+
+/** 读 PR 署名 issue 上的 label，再走 pickReviewer。传了 explicit 就用它（工人路径不传）。 */
+export function resolveReviewerFromPr({ pr, reviewer, runGh } = {}) {
+  if (reviewer && String(reviewer).trim()) {
+    return { ok: true, source: 'flag', modelId: String(reviewer).trim() };
+  }
+  const collected = collectIssueLabelsFromPr({ pr, runGh });
+  if (!collected.ok) {
+    if (!collected.unscanned && /没有署名单号/.test(collected.error || '')) {
+      const n = String(pr ?? '').trim();
+      return { ...collected, error: `PR #${n} 没有署名单号，读不到 reviewer/*（没查成，不许猜）` };
+    }
+    return collected;
+  }
+  const picked = pickReviewer(collected.labels);
+  if (!picked.ok) return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
+  return { ...picked, source: 'label', refs: collected.refs, labels: collected.labels };
 }
 
 /** 读 PR 上的 review 条数。没查成和「0 条」分开。 */
@@ -2781,7 +2930,10 @@ export function planWorkerDone({ pr, body, runGh } = {}) {
     return { ok: false, unscanned: false, error: `worker-done --body 首行必须以「${prefix}」开头（${round === 'rework' ? '已有 review，这是返工轮' : '流转器只认这个'}）` };
   }
   const shouldCreate = round === 'first';
-  const workerPick = pickModel(resolved.labels || []);
+  const workerPick = shouldCreate
+    ? requireWorkerModel(resolved.labels)
+    : pickModel(resolved.labels || []);
+  if (shouldCreate && !workerPick.ok) return { ...workerPick, pr: n, issue, reviewer: resolved.modelId };
   const comment = custom || (round === 'rework'
     ? [`返工完成：PR #${n}`, '', `自读选型：${resolved.modelId}`, '已有 review，不起第二个审官。'].join('\n')
     : [`完工：PR #${n}`, '', `自读选型：${resolved.modelId}`, '将调 reviewer-create 按需起审官。'].join('\n'));
@@ -3944,11 +4096,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
+                  # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端；终端已关才允许新建并写原因；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
+                  # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
