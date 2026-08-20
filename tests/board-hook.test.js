@@ -171,4 +171,10 @@ describe('board-hook', () => {
         assert.ok(commands.length === 1, '盘面与自愈合成一条命令（不挂两条互相拖超时）  →  ' + JSON.stringify(commands));
       });
   });
+
+  it('#684 board-hook 不每轮 sync 帅位定界区（拍板取舍）', () => {
+    const src = require('fs').readFileSync(HOOK, 'utf8');
+    assert.ok(!/syncMasterTicketZone/.test(src) && !/mutateWorktreeComment/.test(src),
+      '#684 board-hook 不写定界区');
+  });
 });

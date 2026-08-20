@@ -124,7 +124,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { afterDispatchComment } from './lib/master-title.mjs';
+import { afterDispatchComment, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
 import {
@@ -199,6 +199,23 @@ function emit(payload, exit = 0) {
 
 function fail(error, extra = {}) {
   emit({ ok: false, error, ...extra }, 1);
+}
+
+/** #684：事件点把在途单号全量重写进 master 卡定界区。失败显形，不翻转主动作。 */
+function rewriteMasterZone(worktrees) {
+  const loaded = Array.isArray(worktrees)
+    ? { ok: true, worktrees }
+    : worktreesFromPs(orca);
+  if (!loaded.ok) {
+    console.error(`[dao] 帅位定界区没查成：${loaded.error}`);
+    return { ok: false, action: 'warn', unscanned: true, reason: loaded.error };
+  }
+  const main = resolveMainWorktreeRoot({ from: ROOT });
+  return syncMasterTicketZone({
+    worktrees: loaded.worktrees,
+    pathHint: main.ok ? main.root : ROOT,
+    runOrca: orca,
+  });
 }
 
 function loadOrFail() {
@@ -986,6 +1003,7 @@ function cmdDispatch(args) {
     worktreeId: created.workerId,
     runOrca: orca,
   });
+  const masterZone = rewriteMasterZone();
 
   // #564 label 自动打：dispatch 成功时把 model/<模型> type/<角色> 打到目标 issue（best-effort，
   // 失败只报告不翻转派工结果——label 是校准数据源，但回滚一个成功的派工代价更大；帅合并时
@@ -1051,6 +1069,7 @@ function cmdDispatch(args) {
     inject: workerInject,
     startProof: workerProof,
     comment,
+    masterZone,
     labels,
     ledger,
   });
@@ -1180,6 +1199,7 @@ function cmdDispatchBatch(args) {
     worktreeId: result.created.workerId,
     runOrca: orca,
   });
+  const masterZone = rewriteMasterZone();
 
   emit({
     ok: true,
@@ -1188,6 +1208,7 @@ function cmdDispatchBatch(args) {
     workers: result.workers,
     reviewerCreate: false,
     comment,
+    masterZone,
   });
 }
 
@@ -2038,10 +2059,12 @@ function cmdWorktreeRm(args) {
     rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: args.force })),
   });
   if (!applied.ok) fail(applied.error, { removed: applied.removed || [], runs: life });
+  const masterZone = rewriteMasterZone(remaining);
   emit({
     ok: true,
     removed: applied.removed,
     runs: life,
+    masterZone,
   });
 }
 

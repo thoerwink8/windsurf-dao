@@ -1874,6 +1874,14 @@ describe('dao', () => {
     await t.test('#495 dao.mjs 派工成功后写任务卡 comment 定界区', () => {
       assert.ok(/afterDispatchComment/.test(daoSrc), '#495 dao.mjs 派工成功后写任务卡 comment 定界区');
     });
+    await t.test('#684 dispatch 成功后全量重写 master 定界区', () => {
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      const rmFn = daoSrc.slice(daoSrc.indexOf('function cmdWorktreeRm'), daoSrc.indexOf('function cmdTaskCreate'));
+      assert.ok(/rewriteMasterZone\(/.test(dispatchFn) && /afterDispatchComment/.test(dispatchFn),
+        '#684 dispatch 挂点  →  ' + dispatchFn.slice(dispatchFn.indexOf('afterDispatchComment'), dispatchFn.indexOf('afterDispatchComment') + 220));
+      assert.ok(/rewriteMasterZone\(remaining\)/.test(rmFn),
+        '#684 worktree-rm 挂点  →  ' + rmFn.slice(rmFn.indexOf('applyWorktreeRmPlan'), rmFn.indexOf('applyWorktreeRmPlan') + 280));
+    });
     await t.test('#502 取 taskId 走 extractTaskId 不猜 result.id', () => {
       assert.ok(/extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc), '#502 取 taskId 走 extractTaskId 不猜 result.id');
     });

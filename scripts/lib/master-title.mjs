@@ -1,12 +1,15 @@
-// scripts/lib/master-title.mjs —— 任务卡 comment 的单号定界区（issue #495）
+// scripts/lib/master-title.mjs —— 任务卡 comment 的单号定界区（issue #495 / #684）
 //
 // 改这段前必须知道：
 // 1. 单号只写在末尾定界区 `｜[#N #M]`，加删只动这个区。不要在整段 comment 里子串找 #N
 //    （#463/#489 用自由中文 + 子串匹配连打四层补丁全部失守）。
-// 2. 落点是任务卡 `orca worktree set --comment`，不是终端标题。
+// 2. 落点是卡 `orca worktree set --comment`，不是终端标题。
 //    带 agent 的终端 rename 回 ok:true 但 list/show 不变（#502 实测）。
 // 3. 写完必回读。投递成功≠送达。
-// 4. 合并侧删号：applyRemoveTicket({ id, worktreeId, runOrca })。本文件不碰 flow.mjs。
+// 4. 任务卡增量：afterDispatchComment / applyRemoveTicket。帅位 master 卡是另一件事：
+//    syncMasterTicketZone 在派工/清卡/合并三个事件点全量重写（#684）。不轮询、不 /rename。
+//    长静默期内的手改不会被自动纠正——这是拍板取舍。
+// 5. 盘面没查成不许当成在途 0：ps 失败 / 数组缺失 → 不写，避免把定界区抹空。
 
 export const TICKET_ZONE_RE = /｜\[((?:#\d+)(?: #\d+)*)?\]$/;
 
@@ -171,4 +174,175 @@ export function applyRemoveTicket({ id, worktreeId, runOrca } = {}) {
     runOrca,
     mutate: (comment) => removeTicket(comment, t),
   });
+}
+
+function normPath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+export function repoPrefixOf(worktreeId) {
+  const id = String(worktreeId || '');
+  const i = id.indexOf('::');
+  return i > 0 ? id.slice(0, i) : null;
+}
+
+export function belongsToRepo(w, selfRepo) {
+  if (!selfRepo) return true;
+  const id = String((w && (w.worktreeId || w.id)) || '');
+  return id === selfRepo || id.startsWith(`${selfRepo}::`) || id.startsWith(selfRepo);
+}
+
+function linkedNumber(field) {
+  if (field == null) return null;
+  if (typeof field === 'number' && Number.isInteger(field) && field > 0) return field;
+  if (typeof field === 'string') {
+    const t = normalizeTicket(field);
+    return t ? Number(t.slice(1)) : null;
+  }
+  if (typeof field === 'object') return linkedNumber(field.number);
+  return null;
+}
+
+/** 从一张卡抽单号：linkedPR ∪ linkedIssue ∪ comment 定界区。卡名不算（#589）。 */
+export function ticketsFromWorktree(w) {
+  const out = [];
+  const add = (raw) => {
+    const t = normalizeTicket(raw);
+    if (t && !out.includes(t)) out.push(t);
+  };
+  add(linkedNumber(w && w.linkedIssue));
+  add(linkedNumber(w && w.linkedPR));
+  const { tickets } = parseTicketZone(w && w.comment);
+  for (const t of tickets) add(t);
+  return out;
+}
+
+export function inferSelfRepo(worktrees, { pathHint } = {}) {
+  const list = Array.isArray(worktrees) ? worktrees : [];
+  const prefixOf = (w) => repoPrefixOf(w && (w.worktreeId || w.id));
+  if (pathHint) {
+    const want = normPath(pathHint);
+    const hit = list.find(w => w && w.isMainWorktree === true && normPath(w.path) === want)
+      || list.find(w => w && normPath(w.path) === want);
+    if (hit) {
+      const p = prefixOf(hit);
+      if (p) return p;
+    }
+  }
+  const mains = [...new Set(list.filter(w => w && w.isMainWorktree === true).map(prefixOf).filter(Boolean))];
+  if (mains.length === 1) return mains[0];
+  const all = [...new Set(list.map(prefixOf).filter(Boolean))];
+  if (all.length === 1) return all[0];
+  return null;
+}
+
+export function findMasterWorktree(worktrees, selfRepo) {
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktrees 不是数组，没查成' };
+  }
+  const hits = worktrees.filter(w => w && w.isMainWorktree === true && belongsToRepo(w, selfRepo));
+  if (hits.length === 0) {
+    return { ok: false, unscanned: false, error: '本仓 master 卡没找到' };
+  }
+  if (hits.length > 1) {
+    return { ok: false, unscanned: false, error: `本仓 master 卡对上 ${hits.length} 张，不写` };
+  }
+  const w = hits[0];
+  return { ok: true, worktree: w, worktreeId: w.worktreeId || w.id };
+}
+
+/**
+ * 非 master、非归档、本仓卡的在途单号。卡名不算。
+ * 多帅无归属真相源 → 写全体在途单（#684 退化行为）。
+ */
+export function collectInFlightTickets(worktrees, selfRepo) {
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktrees 不是数组，没查成', tickets: [], scanned: 0 };
+  }
+  const tickets = [];
+  let scanned = 0;
+  for (const w of worktrees) {
+    if (!w || w.isMainWorktree === true || w.isArchived) continue;
+    if (!belongsToRepo(w, selfRepo)) continue;
+    scanned++;
+    for (const t of ticketsFromWorktree(w)) {
+      if (!tickets.includes(t)) tickets.push(t);
+    }
+  }
+  tickets.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+  return { ok: true, unscanned: false, tickets, scanned };
+}
+
+export function worktreesFromPs(runOrca) {
+  if (typeof runOrca !== 'function') {
+    return { ok: false, unscanned: true, error: '没给 runOrca，盘面没查成' };
+  }
+  const listed = runOrca(['worktree', 'ps', '--json']);
+  if (!listed || !listed.ok) {
+    return { ok: false, unscanned: true, error: `worktree ps 失败：${listed?.error || '无详情'}` };
+  }
+  const wts = listed.json?.result?.worktrees;
+  if (!Array.isArray(wts)) {
+    return { ok: false, unscanned: true, error: 'worktree ps 没有 result.worktrees，没查成' };
+  }
+  return { ok: true, unscanned: false, worktrees: wts };
+}
+
+function warnMaster(reason, extra = {}) {
+  console.error(`[dao] 帅位定界区：${reason}`);
+  return { ok: false, action: 'warn', reason, ...extra };
+}
+
+/**
+ * 全量重写 master 卡定界区。前缀保留。没查成不写。
+ * dryRun 只算不写。挂点在 dao.mjs / flow.mjs，本函数不自己找挂点。
+ */
+export function syncMasterTicketZone({ worktrees, selfRepo, pathHint, runOrca, dryRun } = {}) {
+  if (!Array.isArray(worktrees)) {
+    return warnMaster('worktrees 不是数组，没查成，不定界区', { unscanned: true });
+  }
+  const repo = selfRepo || inferSelfRepo(worktrees, { pathHint });
+  const prefixes = [...new Set(worktrees.map(w => repoPrefixOf(w && (w.worktreeId || w.id))).filter(Boolean))];
+  if (!repo && prefixes.length > 1) {
+    return warnMaster('多仓盘面分不出本仓（无 selfRepo/pathHint），不定界区', {
+      unscanned: true,
+      prefixes,
+    });
+  }
+  const collected = collectInFlightTickets(worktrees, repo);
+  if (!collected.ok) {
+    return warnMaster(collected.error, { unscanned: true, tickets: [] });
+  }
+  const master = findMasterWorktree(worktrees, repo);
+  if (!master.ok) {
+    return warnMaster(master.error, {
+      unscanned: !!master.unscanned,
+      tickets: collected.tickets,
+      scanned: collected.scanned,
+    });
+  }
+  if (dryRun) {
+    return {
+      ok: true,
+      action: 'dry-run',
+      worktreeId: master.worktreeId,
+      tickets: collected.tickets,
+      scanned: collected.scanned,
+    };
+  }
+  if (typeof runOrca !== 'function') {
+    return warnMaster('syncMasterTicketZone 没给 runOrca', {
+      tickets: collected.tickets,
+      worktreeId: master.worktreeId,
+    });
+  }
+  const r = mutateWorktreeComment({
+    worktreeId: master.worktreeId,
+    runOrca,
+    mutate: (comment) => {
+      const { prefix } = parseTicketZone(comment);
+      return formatTitle(prefix, collected.tickets);
+    },
+  });
+  return { ...r, tickets: collected.tickets, scanned: collected.scanned };
 }
