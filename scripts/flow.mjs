@@ -1116,7 +1116,9 @@ function processOneRound(source, state, args) {
           const workers = workersList.workers || [];
           const worker = workers.find(w => w.resource?.worktreeId === workerWt.id);
           if (worker) {
-            const agentDone = String(worker.workerState || '').toLowerCase() === 'done';
+            // 同 dao-cmd.mjs isLiveDispatchRecipient dead-set 对齐
+            const deadStates = new Set(['done', 'succeeded', 'failed', 'cancelled', 'canceled', 'released', 'stopped']);
+            const agentDone = deadStates.has(String(worker.workerState || '').toLowerCase());
             const dispatchSettled = String(worker.dispatchStatus || '').toLowerCase() === 'completed';
             if (agentDone && !dispatchSettled) {
               const sigs = orderedSignals(comments, reviews);
