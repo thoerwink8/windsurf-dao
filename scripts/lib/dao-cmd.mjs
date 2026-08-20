@@ -517,10 +517,11 @@ export function prepareWorktreeRm(worktrees, selector, { mainEventsDir, readdir,
   return plan;
 }
 
-export function argsTaskCreate({ spec, run } = {}) {
+export function argsTaskCreate({ spec, run, from } = {}) {
   const a = ['orchestration', 'task-create'];
   if (spec != null) a.push('--spec', spec);
   if (run) a.push('--run', run);
+  if (from) a.push('--from', from);
   a.push('--json');
   return a;
 }
@@ -536,7 +537,7 @@ export function argsTaskUpdate({ id, status, result, run, from } = {}) {
   return a;
 }
 
-export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model } = {}) {
+export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model, from, run } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
   if (worktree) a.push('--worktree', worktree);
@@ -544,6 +545,8 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, mode
   if (agent) a.push('--agent', agent);
   if (model) a.push('--model', model);
   if (retryOf) a.push('--retry-of', retryOf);
+  if (run) a.push('--run', run);
+  if (from) a.push('--from', from);
   a.push('--json');
   return a;
 }
@@ -910,7 +913,7 @@ export function isRunRequired(error) {
   return /run_required/i.test(orcaErrorText(error));
 }
 
-export const RUN_REQUIRED_HINT = '未绑 orchestration Run：跑 orca orchestration run-create 新建一个。不要先试 run-use——Run 都还没建，use 没意义；#638 起信箱台不再 run-use 抢台（根治 consumer_fenced），派工序自己会 run-use 并与确保自愈兼容';
+export const RUN_REQUIRED_HINT = '未绑 orchestration Run：由 dao.mjs dispatch 经信箱台 --from 调用 run-create。不要先试 run-use（#667：人用窗口永不当 coordinator，派工不从帅窗 run-use）';
 
 export function rollbackErrorAlreadyGone(error) {
   return /tab_not_found|terminal_handle_stale|dispatch_not_found|already_stopped|already_fenced|already_released|task_not_found|already_failed/i.test(orcaErrorText(error));
@@ -930,9 +933,9 @@ export function catalogUsedFlags() {
     argsWorktreeSet({ worktree: 'w', displayName: 'n', comment: 'c', workspaceStatus: 'in-progress' }),
     argsWorktreeRm({ worktree: 'w', force: true }),
     argsWorktreePs(),
-    argsTaskCreate({ spec: 's' }),
+    argsTaskCreate({ spec: 's', run: 'r', from: 'h' }),
     argsTaskUpdate({ id: 't', status: 'failed' }),
-    argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd' }),
+    argsWorkerStart({ task: 't', worktree: 'w', terminal: 'h', retryOf: 'd', from: 'h', run: 'r' }),
     argsWorkerStart({ task: 't', worktree: 'w', agent: 'cursor', model: 'kimi-k3-high' }),
     argsWorkerShow({ dispatch: 'd' }),
     argsWorkerRelease({ dispatch: 'd' }),
@@ -952,7 +955,9 @@ export function catalogUsedFlags() {
     argsOrchestrationInbox({ terminal: 'h', limit: 50, full: true }),
     argsOrchestrationCheck({ run: 'r', terminal: 't', peek: true }),
     argsRunShow({ id: 'r' }),
-    argsRunCurrent(),
+    argsRunCurrent({ from: 'h' }),
+    argsRunUse({ id: 'r', from: 'h' }),
+    argsRunCreate({ objective: 'dao-dispatch', from: 'h' }),
     argsRunList(),
     argsOrchestrationReply({ id: 'm', body: 'b', run: 'r', from: 'h' }),
   ];
@@ -3385,8 +3390,41 @@ export function argsRunShow({ id } = {}) {
   return a;
 }
 
-export function argsRunCurrent() {
-  return ['orchestration', 'run-current', '--json'];
+export function argsRunCurrent({ from } = {}) {
+  const a = ['orchestration', 'run-current'];
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+/**
+ * run-use：`--from` 冒充其它终端会 consumer_fenced（orca 校验证书）。
+ * 省略 --from = 绑调用窗自己。#667 帅窗派工不许走这条；
+ * 工人起审官本终端已解绑时允许 self:true 绑自己。
+ */
+export function argsRunUse({ id, from, self } = {}) {
+  if (!from && !self) {
+    throw new Error('run-use 要 --from（冒充会 fenced）或 self:true 绑调用窗（#667 帅窗派工不许）');
+  }
+  const a = ['orchestration', 'run-use'];
+  if (id) a.push('--id', id);
+  if (from) a.push('--from', from);
+  a.push('--json');
+  return a;
+}
+
+/** run-create 必须带 --from 信箱台，否则新建 Run 会把帅窗绑成 coordinator。 */
+export function argsRunCreate({ objective, from } = {}) {
+  if (!from) throw new Error('run-create 必须 --from 信箱台，不许从帅窗当 coordinator（#667）');
+  const a = ['orchestration', 'run-create'];
+  if (objective != null) a.push('--objective', objective);
+  a.push('--from', from, '--json');
+  return a;
+}
+
+/** 真返回在 result.run.id。顶层 id 是 RPC id，不能当 runId。 */
+export function extractRunId(json) {
+  return json?.result?.run?.id || null;
 }
 
 /** 收件人形态。闭环三跳只有四种合法收件人，其余一律拒发（发出去没人负责 = 静默断链）。

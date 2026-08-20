@@ -43,6 +43,12 @@
     "capturedAt": "2026-08-15",
     "note": "实采自 #497 分支 tests/fixtures/orca-returns/worker-show.json（result.dispatch.id 与 result.worker.dispatch_id 双位同值；worker-start 成功返回另有 result.dispatchId，CLI 源码 worker-start 格式化器直接读它——shape 以当时返回为准，本单用耐受提取）"
   },
+  "extractRunId": {
+    "file": "run-show.json",
+    "command": "orca orchestration run-show --id run_1f15bcf004cb --json",
+    "capturedAt": "2026-08-20",
+    "note": "#667：result.run.id 是 Run id；顶层 id 是 RPC id，不能当 runId"
+  },
   "extractHandleFromWorkerStart": {
     "file": "worker-show.json",
     "command": "orca orchestration worker-show --dispatch <dispatch_id> --json",

@@ -52,6 +52,8 @@
 //    扫到 0 条 = 没查成；夹具红/绿/空都要有判别力
 // ㉑ 关单不改走 GitHub 自动关键词（#657）：扫 dispatch 任务书模板，再出现 Closes #/Fixes # 就红；
 //    红/绿样本各一验判别力；live 扫 host/skills/dispatch/templates/*.md，0 个模板 = 没查成
+// ㉒ 删横幅收信整层（#667）：dao.mjs 不许裸 run-use 无 --from；dispatch SKILL 不许教横幅收信；
+//    soldier-book 必须写「心跳不准发」；样本红/绿各一验判别力
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -65,6 +67,9 @@ import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import {
+  inspectNoBannerInboxLive, inspectNoBannerInboxFixtures,
+} from './lib/no-banner-inbox-check.mjs';
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
@@ -1137,6 +1142,52 @@ function checkNoAutoCloseLive() {
   green(`PR 正文任务书模板无 GitHub 关单关键词（${files.length} 个模板）`);
 }
 
+// ── ㉒ 删横幅收信整层（#667）────────────────────────────────────────
+function checkNoBannerInboxSamples() {
+  const r = inspectNoBannerInboxFixtures(join(ROOT, 'tests', 'fixtures', 'no-banner-inbox'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '横幅收信样本没查成' : '横幅收信样本对不上',
+      '恢复 tests/fixtures/no-banner-inbox/{red,ok}：红夹具必须红、绿夹具必须绿',
+      r.error || '',
+    );
+    return;
+  }
+  green(`横幅收信样本红/绿各 ${r.kinds.red}/${r.kinds.ok}（有判别力）`);
+}
+
+function checkNoBannerInboxLive() {
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  const skillFile = join(ROOT, 'host', 'skills', 'dispatch', 'SKILL.md');
+  const soldierFile = join(ROOT, 'host', 'skills', 'dispatch', 'templates', 'soldier-book.md');
+  if (!existsSync(daoFile) || !existsSync(skillFile) || !existsSync(soldierFile)) {
+    fail(
+      '横幅收信 live 扫描缺文件',
+      '恢复 scripts/dao.mjs、host/skills/dispatch/SKILL.md、templates/soldier-book.md；缺文件 = 没查成',
+      `dao=${existsSync(daoFile)} skill=${existsSync(skillFile)} soldier=${existsSync(soldierFile)}`,
+    );
+    return;
+  }
+  const r = inspectNoBannerInboxLive({
+    daoSrc: readFileSync(daoFile, 'utf8'),
+    skillSrc: readFileSync(skillFile, 'utf8'),
+    soldierSrc: readFileSync(soldierFile, 'utf8'),
+  });
+  if (r.unscanned) {
+    fail('横幅收信 live 没查成', '给齐 dao/SKILL/soldier 正文再扫', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `横幅收信整层回潮 ${r.problems.length} 处`,
+      'dao.mjs 不 run-use；SKILL 不教横幅收信；soldier-book 写「心跳不准发」',
+      r.problems.join('；'),
+    );
+    return;
+  }
+  green('横幅收信整层已删（派工不 run-use / 不教横幅收信 / 心跳不准发）');
+}
+
 runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -1163,6 +1214,8 @@ checkMachinePathSamples();
 checkMachinePathLive();
 checkNoAutoCloseSamples();
 checkNoAutoCloseLive();
+checkNoBannerInboxSamples();
+checkNoBannerInboxLive();
 
 function checkMachinePathSamples() {
   const root = join(ROOT, 'tests', 'fixtures', 'machine-paths');

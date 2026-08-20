@@ -46,9 +46,21 @@ describe('dispatch-gate', () => {
     await t.test('orchestration dispatch 是旁路', () => {
       assert.ok(isDispatchBypass('orca orchestration dispatch --inject') === true, 'orchestration dispatch 是旁路');
     });
-    await t.test('send/check/ask 不是旁路', () => {
+    await t.test('send/check/ask 不是派工旁路（心跳另拦）', () => {
       assert.ok(isDispatchBypass('orca orchestration send --type heartbeat') === false
-        && isDispatchBypass('orca orchestration check --json') === false, 'send/check/ask 不是旁路');
+        && isDispatchBypass('orca orchestration check --json') === false, 'send/check 不是派工旁路');
+    });
+    const hb = decideGate('orca orchestration send --type heartbeat --subject alive');
+    await t.test('#667 decideGate 拦心跳', () => {
+      assert.ok(hb.block === true && /心跳不准发/.test(hb.message), '#667 decideGate 拦心跳  →  ' + JSON.stringify(hb));
+    });
+    const steal = decideGate('orca orchestration run-use --id run_x');
+    await t.test('#667 decideGate 拦帅窗 run-use', () => {
+      assert.ok(steal.block === true && /coordinator/.test(steal.message), '#667 decideGate 拦帅窗 run-use  →  ' + JSON.stringify(steal));
+    });
+    const create = decideGate('orca orchestration run-create --objective x');
+    await t.test('#667 decideGate 拦帅窗 run-create', () => {
+      assert.ok(create.block === true && /coordinator/.test(create.message), '#667 decideGate 拦帅窗 run-create  →  ' + JSON.stringify(create));
     });
     await t.test('dao.mjs dispatch 不是旁路', () => {
       assert.ok(isDispatchBypass('node scripts/dao.mjs dispatch --name x') === false, 'dao.mjs dispatch 不是旁路');
@@ -105,9 +117,17 @@ describe('dispatch-gate', () => {
       await t.test(`${label} 故意违规 echo "dao.mjs raw" && worker-start → exit 2`, () => {
         assert.ok(decoy.status === 2, `${label} 故意违规 echo "dao.mjs raw" && worker-start → exit 2  →  status=${decoy.status} ${decoy.stderr}`);
       });
+      const inbox = runGate(script, 'orca orchestration inbox --json');
+      await t.test(`${label} 普通 inbox → 放行`, () => {
+        assert.ok(inbox.status === 0, `${label} 普通 inbox → 放行  →  status=${inbox.status} ${inbox.stderr}`);
+      });
       const send = runGate(script, 'orca orchestration send --type heartbeat --subject alive');
-      await t.test(`${label} 普通 send → 放行`, () => {
-        assert.ok(send.status === 0, `${label} 普通 send → 放行  →  status=${send.status} ${send.stderr}`);
+      await t.test(`${label} #667 心跳 → exit 2`, () => {
+        assert.ok(send.status === 2 && /心跳不准发/.test(send.stderr || ''), `${label} #667 心跳 → exit 2  →  status=${send.status} ${send.stderr}`);
+      });
+      const runUse = runGate(script, 'orca orchestration run-use --id run_x');
+      await t.test(`${label} #667 裸 run-use → exit 2`, () => {
+        assert.ok(runUse.status === 2, `${label} #667 裸 run-use → exit 2  →  status=${runUse.status} ${runUse.stderr}`);
       });
       const crashed = runGate(script, 'orca orchestration send --type heartbeat', { DISPATCH_GATE_CRASH: '1' });
       await t.test(`${label} 故意崩 → exit 2 不放行`, () => {

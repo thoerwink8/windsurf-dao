@@ -126,9 +126,21 @@ export function checkDispatchGate({ root } = {}) {
       problems.push(`旁路 task-create 应 exit 2，实际 ${taskCreate.status}`);
     }
 
-    const allowed = runScript(script, { command: 'orca orchestration send --type heartbeat --subject alive' });
+    const allowed = runScript(script, { command: 'orca orchestration inbox --json' });
     if (allowed.status !== 0) {
-      problems.push(`普通 orca send 应放行，实际 ${allowed.status} ${String(allowed.stderr || '').slice(0, 80)}`);
+      problems.push(`普通 orca inbox 应放行，实际 ${allowed.status} ${String(allowed.stderr || '').slice(0, 80)}`);
+    }
+
+    const heartbeat = runScript(script, { command: 'orca orchestration send --type heartbeat --subject alive' });
+    if (heartbeat.status !== 2) {
+      problems.push(`心跳发到 Run 应 exit 2，实际 ${heartbeat.status}`);
+    } else if (!/心跳不准发/.test(`${heartbeat.stderr || ''}${heartbeat.stdout || ''}`)) {
+      problems.push('拦住心跳但没写「心跳不准发」');
+    }
+
+    const runUse = runScript(script, { command: 'orca orchestration run-use --id run_x' });
+    if (runUse.status !== 2) {
+      problems.push(`裸 run-use 应 exit 2，实际 ${runUse.status}`);
     }
 
     const raw = runScript(script, { command: 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t' });
@@ -169,7 +181,7 @@ export function checkDispatchGate({ root } = {}) {
     return {
       fail: [
         `派工闸跑不出正确拦截 ${problems.length} 处`,
-        '旁路必须 exit 2、普通 orca 必须放行、崩了必须 exit 2：手跑 node scripts/lib/dispatch-gate-hook.mjs',
+        '旁路/心跳/帅窗 run-use 必须 exit 2、inbox 必须放行、崩了必须 exit 2：手跑 node scripts/lib/dispatch-gate-hook.mjs',
         problems.slice(0, 6).join('；'),
       ],
     };

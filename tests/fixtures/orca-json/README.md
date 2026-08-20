@@ -12,6 +12,8 @@ orca worktree create --name _fixture-recapture --no-parent --setup skip --json
 # create 完立刻 worktree rm --force，不要留孤儿树
 orca orchestration task-create --spec "夹具采集" --json
 # task-create 要已绑 Run；id 在 result.task.id，不是 result.id
+orca orchestration run-show --id $ORCA_RUN_ID --json
+# run id 在 result.run.id，不是顶层 id
 orca terminal send --terminal $ORCA_TERMINAL_HANDLE --text probe-580 --json
 # send --json 在 result.send.{handle,accepted,bytesWritten}；不带 --json 是纯文本 Sent N bytes to term_xxx.
 orca orchestration send --to $ORCA_TERMINAL_HANDLE --subject fixture-capture --body "夹具采集" --json

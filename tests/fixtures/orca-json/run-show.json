@@ -1,0 +1,20 @@
+{
+  "id": "3cc4b1a7-8601-4e34-b1fe-34f82bef7ab9",
+  "ok": true,
+  "result": {
+    "run": {
+      "id": "run_1f15bcf004cb",
+      "objective": "#633 空壳终端根治",
+      "home_database": "this_database",
+      "coordinator_handle": "term_5134c902-c884-4f61-a556-398ac6ec6299",
+      "coordinator_pane_key": "e9aabbb5-ccd8-4003-a1e8-0f0f92247801:c92e76ae-2421-4d49-be97-d32a73ce38f6",
+      "consumer_generation": 173,
+      "legacy": 0,
+      "created_at": "2026-08-18T05:47:27Z",
+      "updated_at": "2026-08-20T01:16:09Z"
+    }
+  },
+  "_meta": {
+    "runtimeId": "5844bcec-6f63-446c-ad2c-afc814f39192"
+  }
+}
