@@ -103,6 +103,9 @@
 //   - 监视对象每轮从 ps 自动枚举 working/waiting 态 agent，无手动名单。
 //   - 读不到屏面一律 fail-visible：读失败 / 成功响应缺字段 / 结构不认识都报 read-failed。
 //   - 检查器输出不落在自己会读取的文件范围内（处置日志打 stdout，不回读）。
+//   - type:报帅（含连败阈值、不再自动动作的那一次）用 dao-watchdog[bot] 写 GitHub
+//     评论（#673）。snapshot / --dispose-actions off 不写。同一树+同一指纹去重。
+//     写失败事件报「GitHub 没写成」。身份见 scripts/lib/gh.mjs 角色 watchdog。
 //
 // 退出码：0 扫完 0 异常（活证否决的观察行不唤醒）/ 1 有报警 / 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败。
 //
@@ -134,7 +137,8 @@ import { planCapacitySwitch } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
-import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
+import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, issueNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
+import { fingerprintFromDetail, reportWatchdogGithub } from './lib/watchdog-report.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -742,11 +746,23 @@ function reviewerPasserIds(routing) {
     .map(m => m.id);
 }
 
+function pushBaoShuai(events, target, detail, fingerprint) {
+  events.push({
+    name: target.name,
+    type: '报帅',
+    detail,
+    worktreeId: target.worktreeId || null,
+    prNumber: target.prNumber ?? null,
+    issueNumber: target.issueNumber ?? null,
+    fingerprint: fingerprint || fingerprintFromDetail(detail),
+  });
+}
+
 function executeCapacitySwitch(target, args, events) {
   let routing;
   try { routing = loadRouting(); }
   catch (e) {
-    events.push({ name: target.name, type: '报帅', detail: `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——读选型表失败没法换人：${e.message || e}` });
+    pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——读选型表失败没法换人：${e.message || e}`, 'capacity');
     return;
   }
   const plan = planCapacitySwitch({
@@ -755,7 +771,7 @@ function executeCapacitySwitch(target, args, events) {
     passerIds: reviewerPasserIds(routing),
   });
   if (!plan.ok) {
-    events.push({ name: target.name, type: '报帅', detail: `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${plan.error}` });
+    pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${plan.error}`, 'capacity');
     return;
   }
   const live = !args.snapshotDir;
@@ -1016,6 +1032,8 @@ function runRound(source, args, state) {
         graded: isGradedExcluded(a, args),
         worktreeId: w.worktreeId || w.id || null,
         parentWorktreeId: w.parentWorktreeId || null,
+        prNumber: prNumberFromWorktree(w),
+        issueNumber: issueNumberFromWorktree(w),
       });
     });
   }
@@ -1118,7 +1136,7 @@ function runRound(source, args, state) {
             if (args.disposeActions && row) {
               executeDispose(t, row, all, !args.snapshotDir, events, notes);
             } else if (!row) {
-              events.push({ name: t.name, type: '报帅', detail: `指纹「${matched[0]}」命中但处置矩阵无此行——上报帅（#471：矩阵未命中→上报帅）` });
+              pushBaoShuai(events, t, `指纹「${matched[0]}」命中但处置矩阵无此行——上报帅（#471：矩阵未命中→上报帅）`, matched[0]);
             }
           }
         } else if (st.fpStreak >= 2 && st.fired.has('fingerprint')) {
@@ -1150,7 +1168,7 @@ function runRound(source, args, state) {
             st.fpLoss.persistCount += 1;
             if (!st.fpLoss.reported && (st.fpLoss.persistCount >= PARAMS.fpLossLimit || (now - st.fpLoss.firstTs) > PARAMS.fpLossWindowMs)) {
               st.fpLoss.reported = true;
-              events.push({ name: t.name, type: '报帅', detail: `指纹「${matched[0]}」连败（连续命中 ${st.fpStreak} 轮）——矩阵动作不再自动重复，上报帅处置（#471 连败阈值：${PARAMS.fpLossLimit} 轮或 ${Math.round(PARAMS.fpLossWindowMs / 60000)} 分钟）` });
+              pushBaoShuai(events, t, `指纹「${matched[0]}」连败（连续命中 ${st.fpStreak} 轮）——矩阵动作不再自动重复，上报帅处置（#471 连败阈值：${PARAMS.fpLossLimit} 轮或 ${Math.round(PARAMS.fpLossWindowMs / 60000)} 分钟）`, matched[0]);
             }
           }
         }
@@ -1761,7 +1779,7 @@ function checkPiSessions(source, args, state) {
 }
 
 function printRound(round) {
-  if (round.noTargets) {
+  if (round.noTargets && !(round.events && round.events.length)) {
     console.log('NO_TARGETS: 本轮没有 working/waiting 工位（结构性排除后）——没查成，不是「扫完 0 异常」（数到 0 和没看到样本不是一回事）');
     return { alarm: false, noTargets: true };
   }
@@ -1790,6 +1808,12 @@ function executeOneRound(source) {
     });
   }
   const round = runRound(source, args, state);
+  reportWatchdogGithub({
+    events: round.events,
+    args,
+    state,
+    now: nowMs(source, args),
+  });
   const r = printRound(round);
   if (r.alarm) anyAlarm = true;
   if (r.noTargets) anyNoTargets = true;

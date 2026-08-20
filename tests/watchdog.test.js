@@ -879,6 +879,46 @@ describe('watchdog', () => {
     await t.test('第 5 轮报帅（连败阈值）', () => {
       assert.ok(/round 5\/5[\s\S]*报帅:.*连败/.test(r.out), '第 5 轮报帅（连败阈值）  →  ' + r.out.trim());
     });
+    await t.test('默认快照不写 GitHub（#673：无钩子就不落评论）', () => {
+      assert.ok(!/已写 GitHub/.test(r.out) && !/GitHub 没写成/.test(r.out), '默认快照不写 GitHub  →  ' + r.out.trim());
+    });
+  });
+
+  it('⑳b-gh #673 报帅写 GitHub：假 gh 正样本发出；off 不写', async (t) => {
+    const FAKE = path.join(REPO, 'tests', 'fixtures', 'fake-watchdog-gh.mjs');
+    const dir = path.join(FIXTURES, 'fp-loss');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-gh-'));
+    const log = path.join(tmp, 'gh.log');
+    const rHook = spawnSync(process.execPath, [WATCHDOG, '--snapshot-dir', dir], {
+      encoding: 'utf8',
+      cwd: REPO,
+      env: { ...process.env, WATCHDOG_GH_AS: FAKE, WATCHDOG_GH_AS_LOG: log },
+    });
+    const out = (rHook.stdout || '') + (rHook.stderr || '');
+    const logTxt = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+    await t.test('钩子下第 5 轮已写 GitHub 评论（issue #452，夹具无 linkedPR）', () => {
+      assert.ok(/已写 GitHub 评论：issue #452/.test(out), '已写 issue #452  →  ' + out.trim());
+    });
+    await t.test('假 gh 日志有 issue-comment、【看门狗】、事故键', () => {
+      assert.ok(/issue-comment/.test(logTxt) && /【看门狗】/.test(logTxt) && /事故键：/.test(logTxt),
+        '日志  →  ' + logTxt);
+    });
+    await t.test('仍保留报帅事件（写评论不是替代报帅）', () => {
+      assert.ok(/报帅:.*连败/.test(out), '仍报帅  →  ' + out.trim());
+    });
+
+    const logOff = path.join(tmp, 'off.log');
+    const rOff = spawnSync(process.execPath, [WATCHDOG, '--snapshot-dir', dir, '--dispose-actions', 'off'], {
+      encoding: 'utf8',
+      cwd: REPO,
+      env: { ...process.env, WATCHDOG_GH_AS: FAKE, WATCHDOG_GH_AS_LOG: logOff },
+    });
+    const outOff = (rOff.stdout || '') + (rOff.stderr || '');
+    await t.test('--dispose-actions off 即使有钩子也不写', () => {
+      assert.ok(!/已写 GitHub/.test(outOff) && !fs.existsSync(logOff),
+        'off 不写  →  ' + outOff.trim() + ' log=' + (fs.existsSync(logOff) ? fs.readFileSync(logOff, 'utf8') : ''));
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   it('⑳b2 #633 capacity 续命：本场只发第一记，残留 at capacity 不按 10s 再发', async (t) => {

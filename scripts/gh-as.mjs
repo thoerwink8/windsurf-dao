@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 以 GitHub App 身份执行 gh。用法见 scripts/lib/gh.mjs。
 //
-//   node scripts/gh-as.mjs <reviewer|worker|marshal> -- <gh 参数...>
+//   node scripts/gh-as.mjs <reviewer|worker|marshal|watchdog> -- <gh 参数...>
 //   node scripts/gh-as.mjs <role> --whoami
 //   node scripts/gh-as.mjs <role> --set-git-identity   给当前工作区写 worktree 级 user.name/email
 
