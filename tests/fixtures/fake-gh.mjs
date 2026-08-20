@@ -22,11 +22,14 @@ const args = process.argv.slice(2);
 //   issue 999 → 模拟 gh 失败（CI 无 GH_TOKEN 场景：必须报「没查成」拒派）；
 //   其余号 → 无 label。
 //   PR 42 正文 Closes #565；PR 43 Closes #568；PR 44 Closes #569；PR 46 Closes #565 且已有 review。
+//   #679：issue 570 无 model/*（PR 45）；issue 571 工人审官都是 grok（PR 47 同厂样本）。
 // 只实现测试用到的调用面；其它 gh 调用一律报错退出（fail-loud，不许静默返回假数据）。
 const ISSUE_LABELS = {
   '565': [{ name: '已消歧' }, { name: '任务' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
   '568': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }],
   '569': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }, { name: 'reviewer/claude-opus' }],
+  '570': [{ name: '已消歧' }, { name: 'type/写码' }, { name: 'reviewer/gpt-5.6-sol' }],
+  '571': [{ name: '已消歧' }, { name: 'model/grok-4.6' }, { name: 'type/写码' }, { name: 'reviewer/grok-4.6' }],
 };
 const REPO_LABELS = ['已消歧', '任务', 'model/grok-4.6', 'type/写码', 'reviewer/gpt-5.6-sol'];
 const PR_HEAD = {
@@ -104,6 +107,24 @@ if (args[0] === 'pr' && args[1] === 'view') {
       title: '返工轮',
       body: 'Closes #565',
       reviews: [{ id: 1, body: '判定：红 1 项' }],
+      ...PR_HEAD,
+    }));
+    process.exit(0);
+  }
+  if (n === '45') {
+    process.stdout.write(JSON.stringify({
+      title: '无工人模型',
+      body: 'Closes #570',
+      reviews: [],
+      ...PR_HEAD,
+    }));
+    process.exit(0);
+  }
+  if (n === '47') {
+    process.stdout.write(JSON.stringify({
+      title: '同厂审官',
+      body: 'Closes #571',
+      reviews: [],
       ...PR_HEAD,
     }));
     process.exit(0);

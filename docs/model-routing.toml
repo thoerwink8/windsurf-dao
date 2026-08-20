@@ -11,10 +11,13 @@ updated = "2026-08-21"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
+# start = agent | command（#680：worker-start --agent vs terminal create --command）。
+#         agentStartSpec 只读这一处，禁止按二进制名硬编码起法。缺了 fail-loud。
 # {model} 用 --model / launch_model / default_model 替换；缺了 fail-loud。
 
 [providers.deepseek]
 cli = "pi"
+start = "agent"
 default_model = "opencode-go/deepseek-v4-flash"   # #602：裸 model 名跨 provider 歧义；日常通道走 og。拍板 issue #462 默认仍是 flash
 launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
@@ -37,6 +40,7 @@ DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding
 
 [providers.grok]
 cli = "grok"
+start = "agent"
 launch = "grok -m {model} --effort xhigh --always-approve"
 launch_model = "grok-4.6"
 # grok TUI 把 terminal send 当用户消息再跑命令，8s 探针等不到真执行标记（#499/#502 实测）。
@@ -58,6 +62,7 @@ decided = "2026-08-14"
 
 [providers.gpt]
 cli = "codex"
+start = "agent"
 default_model = "gpt-5.6-sol"
 launch = "codex --dangerously-bypass-approvals-and-sandbox -m {model}"
 launch_model = "gpt-5.6-sol"
@@ -67,11 +72,8 @@ probe_wait_ms = 120000
 launch_note = """
 默认模型 gpt-5.6-sol。token 消耗约 3 倍，比价按每件活总成本算，不按单价。
 
-起法（2026-08-15 进程命令行对照实测）：
-- 首选 orca 原生 `--agent codex`（参数由 orca 管，不复制可能过期的值）。
-- 已存在树里只能 terminal create 时：`codex --dangerously-bypass-approvals-and-sandbox`（与 orca 原生一致）。
-- 库默认走第二条，因为帅遇到的都是树已存在。
-- 反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生三条全过。
+起法（#680 拍板）：`start = "agent"`，走 `worker-start --agent codex`。不要 `terminal create --command` 再粘贴——Codex 把粘贴显示成 [Pasted Content] 不发（#680 实证）。
+反例：手打 `codex -a never` 把 gh/node/组合命令全拦死；orca 原生 `--agent codex` 三条全过。
 
 三层机制（缺一层就查错方向）：
 1. policy 白名单：`~/.codex/rules/default.rules` 是历史上逐条批准过的 prefix_rule。
@@ -83,6 +85,7 @@ launch_note = """
 
 [providers.commandcode]
 cli = "command-code"
+start = "command"
 launch = "command-code -m {model} --skip-onboarding --yolo"
 launch_model = "deepseek/deepseek-v4-flash"
 # 2026-08-16 帅实测：命令发出后需补一记空回车才执行（与 pi/grok 同坑），之后约 20 秒内 TUI 就绪。45s = 20s + 余量。
@@ -122,6 +125,7 @@ decided = "2026-08-16"
 
 [providers.claude]
 cli = "reclaude"
+start = "command"
 launch = "reclaude --model {model}"
 launch_model = "opus"
 launch_note = """
@@ -132,6 +136,7 @@ launch_note = """
 
 [providers.opencode-go]
 cli = "pi"
+start = "agent"
 launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
@@ -160,6 +165,7 @@ decided = "2026-08-16"
 
 [providers.cursor]
 cli = "cursor-agent"
+start = "agent"
 launch = "cursor-agent --model {model} --force --trust"
 launch_model = "composer-2.5"
 probe_wait_ms = 45000
@@ -173,9 +179,9 @@ Cursor CLI（官方 cursor-agent / agent）。装机、login、Clash Party 代�
 新 worktree 弹 Trust 会让 Orca 报 agent_unconfigured（#649 attach 实证）。
 `--trust` 直接信任当前工作区免弹框；仓内 shim 在带 `--model` 时也会补 `--trust`（合并后本机垫片退役）。
 
-#661（2026-08-19 拍板）：开工只认外部证据（worker-read 真 session / 屏上真在干活 / GitHub 已有 review）。
-`[Pasted text]`/`Pasted Content` 停在输入框 = 未提交 ≠ 开工：不再补一记回车垫片（退役），
-`finishWorkerInject` / worker-start / reviewer-attach 一律立刻失败回滚、删审官树，不许留假审官卡。
+#661（2026-08-19 拍板）+#679（2026-08-20 订正）+#680（2026-08-21）：开工只认外部证据。
+cursor-agent 的 `[Pasted text #N]` 是提交后显示残留（实测 t+1s 已 Working、残留一直不消失），开工探针忽略它，改认 Working / 输出在动。
+Codex `[Pasted Content]` 仍是未提交。不再补一记回车垫片。超时仍没 Working/输出在动才失败回滚。
 Cursor CLI 本版不支持命令行传 prompt（`--single-use` 是 worker pool 别名），继续走 `terminal create --command`
 起 TUI，任务靠 Orca 注入；注入收不到（只贴不发）就诚实失败，由派工/审官路径回滚。
 Windows shim 禁止 `for /f in ('dir')` / `findstr`（#633：会弹可见 cmd）。
@@ -363,7 +369,7 @@ precedence = "高于「审查默认换厂商」"
 rule = "审查默认换厂商"
 why = "审查与写码同一模型容易放水；哪个配对出错最少按返工率实测校准，不当公理"
 decided = "2026-08-12"
-constraint = "受 gpt 的 UI ban 优先级约束"
+constraint = "受 gpt 的 UI ban 优先级约束。#679 起审官口硬闸（同厂拒绝），不进点将台打分"
 
 [[rules]]
 rule = "审官选型序"

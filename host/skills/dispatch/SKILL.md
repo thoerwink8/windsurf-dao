@@ -181,6 +181,8 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
 
+起审官硬闸（#679）：工人与审官不得同厂。闸在 `dispatch` / `reviewer-create` / `worker-done` / `reviewer-attach` / 换人。点将台打分不加这一条。GPT UI 禁令仍优先。注入失败走选型序下一位，跳过工人那一厂；走完仍同厂则升级，不许 attach 成工人那一厂。已开工的审官复用不回溯。
+
 ## 命名规矩
 
 - 任务卡给人眼看，判据归字段（#589）。格式只认 `scripts/lib/dao-cmd.mjs` 的 `assembleCardName`，本页不复制。
