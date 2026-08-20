@@ -36,6 +36,31 @@ function wt(partial) {
 }
 
 describe('run-lifecycle', () => {
+  it('#667 人用窗 coordinator 列入夺回', async (t) => {
+    const S = await LIB_LOAD;
+    const missing = S.planDetachHumanCoordinators({ runs: [run({ id: 'run_a', coord: 'term_shuai' })] });
+    await t.test('没给台 handle → unscanned', () => {
+      assert.ok(missing.ok === false && missing.unscanned === true, '没给台 handle → unscanned  →  ' + JSON.stringify(missing));
+    });
+    const bad = S.planDetachHumanCoordinators({ runs: null, stationHandle: 'term_station' });
+    await t.test('runs 不是数组 → unscanned', () => {
+      assert.ok(bad.ok === false && bad.unscanned === true, 'runs 不是数组 → unscanned  →  ' + JSON.stringify(bad));
+    });
+    const plan = S.planDetachHumanCoordinators({
+      runs: [
+        run({ id: 'run_station', coord: 'term_station' }),
+        run({ id: 'run_shuai', coord: 'term_shuai' }),
+        run({ id: 'run_empty', coord: null }),
+        run({ id: 'run_legacy_local', legacy: 1, coord: 'term_shuai' }),
+      ],
+      stationHandle: 'term_station',
+    });
+    await t.test('只夺回非台 handle', () => {
+      assert.ok(plan.ok && plan.steal.length === 1 && plan.steal[0].runId === 'run_shuai'
+        && plan.steal[0].fromHandle === 'term_shuai', '只夺回非台 handle  →  ' + JSON.stringify(plan));
+    });
+  });
+
   it('③ gc：无在途 → 全列；有在途 → 不许退役', async (t) => {
     const S = await LIB_LOAD;
     const runs = [run({ id: 'run_a' }), run({ id: 'run_b' }), run({ id: 'run_legacy_local', legacy: 1 })];

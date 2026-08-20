@@ -16,6 +16,40 @@ export function isLegacyRun(run) {
   return !run || run.legacy === 1 || run.legacy === true || run.id === 'run_legacy_local';
 }
 
+/**
+ * #667：人用窗口永不当 coordinator。
+ * coordinator_handle 不是信箱台的 Run 列入夺回（run-use --from 台）。
+ * 一个终端不能同时当两个 Run 的 coordinator：连续夺回后台只绑最后一条，其余变 null。
+ * null coordinator 仍可由 inbox 轮询收信，不算失败。
+ * 没给台 handle / runs 不是数组 → unscanned，不许当「没有人用窗」。
+ */
+export function planDetachHumanCoordinators({ runs, stationHandle } = {}) {
+  if (!stationHandle) {
+    return {
+      ok: false,
+      unscanned: true,
+      steal: [],
+      error: '没给信箱台 handle（没查成，不能判谁是人用窗）',
+    };
+  }
+  if (!Array.isArray(runs)) {
+    return {
+      ok: false,
+      unscanned: true,
+      steal: [],
+      error: 'run-list 结构不认识（缺 runs 数组）',
+    };
+  }
+  const steal = [];
+  for (const r of runs) {
+    if (!r || !r.id) continue;
+    if (isLegacyRun(r)) continue;
+    const h = r.coordinator_handle || null;
+    if (h && h !== stationHandle) steal.push({ runId: r.id, fromHandle: h });
+  }
+  return { ok: true, unscanned: false, steal, stationHandle };
+}
+
 export function isLiveDispatch(worker) {
   if (!worker) return false;
   const st = worker.dispatchStatus;

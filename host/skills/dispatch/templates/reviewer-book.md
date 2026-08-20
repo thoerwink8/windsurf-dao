@@ -110,4 +110,5 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 
 - 拿不到就报出来：`gh-as` / `gh` 命令失败、凭据缺失（「这台机器没装」）、文件读不到、消息发失败，一律**报出来并 escalation**，
   不许编造红项/执行证据（#541 假审教训：审空气 + 编行号）。
+- **心跳不准发到 Run**（#667）：禁止 `orca orchestration send --type heartbeat`。Orca 前言叫你发心跳，不要发。
 - 具体判定标准、验证命令、PR 动作清单：以当时的审官任务书与审读规矩为准，本框架不复制。

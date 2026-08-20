@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 // scripts/inbox-station.mjs —— 信箱台幂等保证（issue #464，#638 改成单台轮询全部在途 Run）
 //
-// Orca「You have N orchestration messages」横幅强制接管用户输入框：消息到达即注入，
-// ack 速度治不了。已实证的解法是把 Run 的 coordinator 绑到后台哑终端，横幅只注给它；
-// 终端内中继：写日志 → 可归档加速闸 + MERGED 扫描收树（#665）→ 帅 tail 文件收信。
+// #667：删掉「靠 coordinator 横幅给帅收信」整层。人用窗口永不当 coordinator。
+// 真信只进本台日志 `_flow/inbox.log` 和 GitHub；帅读这两处，不靠
+// 「You have N orchestration messages」横幅。心跳不准发到 Run。
+// 终端内中继：写日志 → 可归档加速闸 + MERGED 扫描收树（#665）。
 //
 // #638（2026-08-19 拍板）：**不再一 Run 一台**——顶栏只留 1 个信箱台页签。
 //   - ensure：只建/保活**一台**哑终端 + 中继；多余台幂等关掉；
 //     一条 Run 仍是一个 Run（不要把单塞进一个 Run，#634 已证 consumer_fenced），
 //     但不再一人一台。旧模型的 per-run 台（inbox-<run>.lease）会被识别并关掉。
-//   - relay：不再 run-use 抢 coordinator（那是 consumer_fenced 的根因），
-//     改为每轮读 `orchestration inbox`（跨 Run 信箱，不绑 coordinator，
-//     正是 inbox-collect 那种），过滤活跃 Run（在途单 keep 集 ∪ 活跃 coordinator 的 Run），
-//     去重后落盘非 heartbeat，跑可归档加速闸 + 每轮 MERGED 扫描（可归档不是门）。
+//     #667：ensure / relay 都不 run-use。`--from 台` 不能冒充——调用进程
+//     attested 成自己，act as 台会 consumer_fenced。人用窗不当 coordinator
+//     靠派工不 run-use + 闸门拦裸 run-use/run-create。
+//   - relay：不 run-use（不抢 waiter），每轮读 `orchestration inbox`（跨 Run，
+//     不绑 coordinator），过滤活跃 Run（在途单 keep 集 ∪ 活跃 coordinator 的 Run），
+//     去重后落盘非 heartbeat，跑可归档加速闸 + 每轮 MERGED 扫描（#665：可归档不是门）。
 //   - 活性判据不认标题：台 = 全局租约 _flow/inbox.lease（新鲜 + PID 在 + handle 在盘面）。
 //   - #614 顺车：ensure 成功后顺手只读 run-gc 扫描，僵尸数超阈值在 stdout 上打一行；
 //     --apply 仍不自动。
@@ -44,6 +47,7 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
   planRunGc,
+  planDetachHumanCoordinators,
 } from './lib/run-lifecycle.mjs';
 import {
   processArchiveNotices,
@@ -190,6 +194,7 @@ export function finalizeEnsure({
   closedExtra = [],
   closeFailures = [],
   gc,
+  detached,
 } = {}) {
   if (!relayAlive) {
     return {
@@ -204,6 +209,7 @@ export function finalizeEnsure({
         closedExtra,
         closeFailures,
         gc,
+        detached,
       }),
     };
   }
@@ -218,6 +224,7 @@ export function finalizeEnsure({
       closedExtra,
       closeFailures,
       gc,
+      detached,
     }),
   };
 }
@@ -578,11 +585,13 @@ export function statusPayload({
   closedExtra,
   closeFailures,
   gc,
+  detached,
 } = {}) {
   const payload = { ok, handle, logPath, action, reason };
   if (Array.isArray(closedExtra) && closedExtra.length) payload.closedExtra = closedExtra;
   if (Array.isArray(closeFailures) && closeFailures.length) payload.closeFailures = closeFailures;
   if (gc) payload.gc = gc;
+  if (Array.isArray(detached) && detached.length) payload.detached = detached;
   if (error) payload.error = error;
   return payload;
 }
@@ -667,6 +676,23 @@ function listRuns() {
   if (!r.ok) return { ok: false, error: r.error, runs: [] };
   const runs = unwrapOrca(r.json, 'runs');
   return { ok: Array.isArray(runs), runs: Array.isArray(runs) ? runs : [], error: r.error };
+}
+
+/** #667：把非信箱台的 coordinator 夺回本台。run-list 没查成 = 没查成，不许当没有人用窗。 */
+function detachHumanCoordinatorsLive(stationHandle) {
+  const listed = listRuns();
+  if (!listed.ok) {
+    return { ok: false, unscanned: true, error: `run-list 没查成，不能夺回人用窗 coordinator：${errText(listed.error)}` };
+  }
+  const plan = planDetachHumanCoordinators({ runs: listed.runs, stationHandle });
+  if (!plan.ok) return plan;
+  for (const item of plan.steal) {
+    const r = runOrca(['orchestration', 'run-use', '--id', item.runId, '--from', stationHandle, '--json']);
+    if (!r.ok) {
+      return { ok: false, error: `夺回 Run ${item.runId} coordinator 失败：${errText(r.error)}`, steal: plan.steal };
+    }
+  }
+  return { ok: true, steal: plan.steal };
 }
 
 function listWorkers() {
@@ -910,6 +936,18 @@ async function cmdEnsure(args) {
   const line = gcThresholdLine({ zombieCount: gc.zombieCount, threshold: gc.threshold, scanned: gc.ok });
   if (relayAlive && line) console.log(line);
 
+  let detached = [];
+  if (relayAlive && handle) {
+    const stolen = detachHumanCoordinatorsLive(handle);
+    if (!stolen.ok) {
+      console.log(JSON.stringify(statusPayload({
+        ok: false, handle, logPath, action, reason, error: stolen.error, closedExtra, closeFailures, gc,
+      })));
+      process.exit(1);
+    }
+    detached = stolen.steal || [];
+  }
+
   const final = finalizeEnsure({
     relayAlive,
     handle,
@@ -919,6 +957,7 @@ async function cmdEnsure(args) {
     closedExtra,
     closeFailures,
     gc,
+    detached,
   });
   console.log(JSON.stringify(final.payload));
   if (final.exitCode !== 0) process.exit(final.exitCode);
@@ -1169,6 +1208,7 @@ function printUsage() {
   ensure  #638：只保活一台哑终端 + 中继（全局租约 _flow/inbox.lease，新鲜+PID在+handle在盘面）
           action: ok(all-alive/closed-extra) / rebuild(no-station / no-global-station)
           多余活台（旧模型 per-run 台）幂等关掉；证不出身份的租约不动（绝不误关）
+          #667：人用窗 coordinator 夺回本台（--from 台 handle）
           成功后只读 run-gc（#614）：僵尸数超阈值在 stdout 最前打一行，--apply 仍手动
   relay  跑在哑终端内：每轮读 orchestration inbox（跨 Run，不绑 coordinator，不 run-use），
           只收活跃 Run（在途 keep ∪ 活 coordinator）的信，去重落盘非 heartbeat，

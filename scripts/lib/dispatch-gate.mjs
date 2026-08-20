@@ -11,6 +11,13 @@ export const GATE_HINT = [
   '逃生口：node scripts/dao.mjs raw -- <命令>（会留痕）。',
 ].join('');
 
+export const HEARTBEAT_HINT = '心跳不准发到 Run（#667）。活性看 git/产物/看门狗，不要 orca orchestration send --type heartbeat。';
+
+export const COORDINATOR_HINT = [
+  '人用窗口永不当 coordinator（#667）。',
+  '派工走 node scripts/dao.mjs dispatch（经信箱台 --from），不要从帅窗 run-use / run-create。',
+].join('');
+
 export function normalizeCmd(cmd) {
   return String(cmd || '').replace(/\s+/g, ' ').trim();
 }
@@ -169,7 +176,54 @@ export function isDispatchBypass(cmd) {
   return false;
 }
 
+/** 裸 `orca orchestration send --type heartbeat`。dao.mjs raw 逃生口不拦。 */
+export function isHeartbeatSend(stmt) {
+  if (isDaoMjsInvocation(stmt)) return false;
+  const toks = tokenizeShell(stmt).map((t) => t.value);
+  let send = false;
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'orchestration') continue;
+    if (toks[i + 2] === 'send') { send = true; break; }
+  }
+  if (!send) return false;
+  for (let i = 0; i < toks.length - 1; i++) {
+    if (toks[i] === '--type' && /^heartbeat$/i.test(toks[i + 1])) return true;
+  }
+  return false;
+}
+
+/** 裸 `orca orchestration run-use|run-create`。会把调用窗绑成 coordinator。 */
+export function isHumanCoordinatorBind(stmt) {
+  if (isDaoMjsInvocation(stmt)) return false;
+  const toks = bareTokens(stmt);
+  for (let i = 0; i < toks.length - 2; i++) {
+    if (!/(^|[\\/])orca(\.exe|\.cmd)?$/i.test(toks[i])) continue;
+    if (toks[i + 1] !== 'orchestration') continue;
+    if (/^(run-use|run-create)$/.test(toks[i + 2])) return true;
+  }
+  return false;
+}
+
 export function decideGate(cmd) {
+  const statements = splitShellStatements(cmd);
+  const parts = statements.length ? statements : [String(cmd || '')];
+  for (const stmt of parts) {
+    if (isHeartbeatSend(stmt)) {
+      return {
+        block: true,
+        command: normalizeCmd(cmd),
+        message: `拦下发到 Run 的心跳：${normalizeCmd(cmd)}\n${HEARTBEAT_HINT}`,
+      };
+    }
+    if (isHumanCoordinatorBind(stmt)) {
+      return {
+        block: true,
+        command: normalizeCmd(cmd),
+        message: `拦下帅窗抢 coordinator：${normalizeCmd(cmd)}\n${COORDINATOR_HINT}`,
+      };
+    }
+  }
   if (!isDispatchBypass(cmd)) return { block: false, command: normalizeCmd(cmd) };
   return {
     block: true,

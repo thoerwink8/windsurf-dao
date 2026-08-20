@@ -1,0 +1,18 @@
+orca orchestration run-use
+
+Usage: orca orchestration run-use --id <run_id> [--from <handle>] [--takeover-legacy] [--json]
+
+Bind this coordinator terminal to an existing Run
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+  --from
+  --takeover-legacy
+  --retry-request
+
+Notes:
+  --takeover-legacy must run in the live coordinator agent terminal it binds; it preserves existing worker assignments.
