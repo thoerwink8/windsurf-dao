@@ -1420,6 +1420,8 @@ function reuseReviewerOnTerminal({
 }
 
 function cmdWorkerDone(args) {
+  // #677：本命令只交 GitHub 卷 + 起审官。Orca 结算（notify --type worker_done）不走这里。
+  // 成功退出后士兵 Dispatch 必须仍是 ready/waiting，不许 completed。失败不得假装已下班。
   if (!args.pr) fail('worker-done 要 --pr');
   let body = args.body;
   if (args.bodyFile) {
@@ -1530,6 +1532,7 @@ function cmdWorkerDone(args) {
     emit({
       ok: true,
       dryRun: true,
+      settled: false,
       ...plan,
       shouldCreate,
       shouldReuse,
@@ -1690,6 +1693,7 @@ function cmdWorkerDone(args) {
   emit({
     ok: true,
     commentPosted: true,
+    settled: false,
     ...plan,
     shouldCreate,
     shouldReuse,
