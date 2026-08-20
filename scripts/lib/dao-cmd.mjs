@@ -3397,12 +3397,19 @@ export function argsRunCurrent({ from } = {}) {
   return a;
 }
 
-/** run-use 必须带 --from 信箱台。省略 = 把调用窗绑成 coordinator，正是 #667 要删的那层。 */
-export function argsRunUse({ id, from } = {}) {
-  if (!from) throw new Error('run-use 必须 --from 信箱台，不许从帅窗抢 coordinator（#667）');
+/**
+ * run-use：`--from` 冒充其它终端会 consumer_fenced（orca 校验证书）。
+ * 省略 --from = 绑调用窗自己。#667 帅窗派工不许走这条；
+ * 工人起审官本终端已解绑时允许 self:true 绑自己。
+ */
+export function argsRunUse({ id, from, self } = {}) {
+  if (!from && !self) {
+    throw new Error('run-use 要 --from（冒充会 fenced）或 self:true 绑调用窗（#667 帅窗派工不许）');
+  }
   const a = ['orchestration', 'run-use'];
   if (id) a.push('--id', id);
-  a.push('--from', from, '--json');
+  if (from) a.push('--from', from);
+  a.push('--json');
   return a;
 }
 

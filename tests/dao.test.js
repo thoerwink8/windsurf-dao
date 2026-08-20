@@ -1723,16 +1723,17 @@ describe('dao', () => {
       && /不要先试 run-use/.test(S.RUN_REQUIRED_HINT)
       && !/或 run-use/.test(S.RUN_REQUIRED_HINT), '#502 未绑 Run 先指 run-create，不并列 run-use  →  ' + S.RUN_REQUIRED_HINT);
     });
-    await t.test('#667 派工不 run-use', () => {
-      assert.ok(!/argsRunUse\(/.test(daoSrc) && !/\['orchestration',\s*'run-use'/.test(daoSrc),
-        '#667 派工不 run-use');
+    await t.test('#667 帅窗 dispatch 不 run-use', () => {
+      const chunk = daoSrc.match(/function cmdDispatch\b[\s\S]*?\nfunction /);
+      assert.ok(chunk && !/argsRunUse\(/.test(chunk[0]) && !/\['orchestration',\s*'run-use'/.test(daoSrc),
+        '#667 帅窗 dispatch 不 run-use');
     });
-    await t.test('#667 argsRunUse 必须 --from', () => {
+    await t.test('#667 argsRunUse 无 from/self 抛错；self 不带 --from', () => {
       let threw = false;
       try { S.argsRunUse({ id: 'run_x' }); } catch { threw = true; }
-      const withFrom = S.argsRunUse({ id: 'run_x', from: 'term_station' });
-      assert.ok(threw && withFrom.includes('--from') && withFrom.includes('term_station'),
-        '#667 argsRunUse 必须 --from  →  ' + withFrom.join(' '));
+      const selfBind = S.argsRunUse({ id: 'run_x', self: true });
+      assert.ok(threw && selfBind.includes('--id') && !selfBind.includes('--from'),
+        '#667 argsRunUse self 绑自己  →  ' + selfBind.join(' '));
     });
     await t.test('#667 argsRunCreate 必须 --from', () => {
       let threw = false;

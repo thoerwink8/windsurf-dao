@@ -43,6 +43,7 @@ import {
   argsOrchestrationSend,
   argsRunShow,
   argsRunCurrent,
+  argsRunUse,
   argsRunList,
   extractRunId,
   extractSentMessage,
@@ -469,13 +470,19 @@ function workerStartProof(dispatchId) {
 }
 
 /**
- * #667：派工不 run-use。
- * `--from <信箱台>` 不能冒充：orca 校验证书，调用窗 attested 成自己，
- * 去 act as 台会 consumer_fenced（本单 worker-done 实证）。
- * 有 Run 就带 --run；没有就报出来，不许靠帅窗 run-use 救。
+ * #667：帅窗派工不 run-use。
+ * `--from <信箱台>` 不能冒充（orca 校验证书）。
+ * 工人侧起审官：本终端已不绑 Run 时，允许 run-use 绑自己（不是帅窗、不是冒充台）。
  */
-function taskCreateOnRun(spec, runId) {
-  return orca(argsTaskCreate({ spec, run: runId || undefined }));
+function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
+  let last = orca(argsTaskCreate({ spec, run: runId || undefined }));
+  if (last.ok) return last;
+  const why = errText(last.error);
+  if (!rebindSelf || !runId || !/consumer_fenced|run_required|no longer bound/i.test(why)) {
+    return last;
+  }
+  orca(argsRunUse({ id: runId, self: true }));
+  return orca(argsTaskCreate({ spec, run: runId }));
 }
 
 /** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。Run 用调用方已有的，不 run-use / 不 run-create。 */
@@ -1305,7 +1312,7 @@ function reuseReviewerOnTerminal({
 
   const station = bindStation();
   if (!station.ok) return { ok: false, reused: true, error: station.error };
-  const revTask = taskCreateOnRun(reviewerBook, runId);
+  const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
       return { ok: false, reused: true, error: `${RUN_REQUIRED_HINT}（${errText(revTask.error)}）` };
@@ -2093,7 +2100,7 @@ function cmdReviewerCreate(args) {
   const station = bindStation();
   if (!station.ok) failCreated(launched, station.error, plan);
   const reviewerRunId = soldierRunId || station.runId;
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId);
+  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(launched, RUN_REQUIRED_HINT, plan);
     failCreated(launched, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -2332,7 +2339,7 @@ function cmdReviewerAttach(args) {
   const station = bindStation();
   if (!station.ok) failCreated(created, station.error, plan);
   const reviewerRunId = soldierRunId || station.runId;
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId);
+  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
     failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
