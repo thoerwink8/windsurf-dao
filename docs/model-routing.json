@@ -1,0 +1,476 @@
+{
+  "updated": "2026-08-22",
+  "工人": {
+    "写码": {
+      "模型": [
+        {
+          "id": "devin-deepseek-v4-flash-max",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-08-21 写码主选（#688）",
+          "拍板": "2026-08-21",
+          "status": "试用",
+          "trial_since": "2026-08-21",
+          "厂商": [
+            {
+              "id": "devin",
+              "cli_model": "deepseek-v4-flash-max",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Devin CLI 写码主通道"
+            }
+          ]
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "写码 og fallback（#688）",
+          "拍板": "2026-08-16",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "opencode-go",
+              "cli_model": "opencode-go/deepseek-v4-flash",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "2026-08-16 主通道 opencode Go 额度池"
+            }
+          ]
+        }
+      ]
+    },
+    "查证": {
+      "模型": [
+        {
+          "id": "grok-4.6",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "查证主选",
+          "拍板": "2026-08-14",
+          "status": "试用",
+          "trial_since": "2026-08-14",
+          "厂商": [
+            {
+              "id": "grok",
+              "cli_model": "grok-4.6",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Grok Build 官方 CLI"
+            }
+          ]
+        },
+        {
+          "id": "gemini-3.7-flash",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "查证试用",
+          "拍板": "2026-08-18",
+          "status": "试用",
+          "trial_since": "2026-08-18",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "gemini-3.7-flash-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor Ultra"
+            }
+          ]
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "codex 查证备选",
+          "拍板": "2026-08-12",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "gpt",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Codex 主路"
+            },
+            {
+              "id": "cursor",
+              "cli_model": "gpt-5.6-sol-high",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "GPT 支路 cursor"
+            }
+          ]
+        }
+      ]
+    },
+    "UI": {
+      "模型": [
+        {
+          "id": "composer-2.5",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "UI 试用主选",
+          "拍板": "2026-08-18",
+          "status": "试用",
+          "trial_since": "2026-08-18",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "composer-2.5",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor 自研"
+            }
+          ]
+        },
+        {
+          "id": "kimi-k3",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "UI 备选",
+          "拍板": "2026-08-19",
+          "status": "试用",
+          "trial_since": "2026-08-16",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "kimi-k3-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "主路 cursor"
+            },
+            {
+              "id": "opencode-go",
+              "cli_model": "kimi-k3",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "支路 og"
+            }
+          ]
+        },
+        {
+          "id": "glm-5.2",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "UI 备选登记",
+          "拍板": "2026-08-19",
+          "status": "试用",
+          "trial_since": "2026-08-19",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "glm-5.2-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor Ultra"
+            }
+          ]
+        },
+        {
+          "id": "gemini-3.7-flash",
+          "顺位": 4,
+          "禁用": false,
+          "理由": "UI 试用",
+          "拍板": "2026-08-18",
+          "status": "试用",
+          "trial_since": "2026-08-18",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "gemini-3.7-flash-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor Ultra"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "审官": {
+    "审查": {
+      "模型": [
+        {
+          "id": "gpt-5.6-sol",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "2026-08-22 审官只用 Codex（GPT 主路）",
+          "拍板": "2026-08-22",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "gpt",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Codex 主路"
+            },
+            {
+              "id": "cursor",
+              "cli_model": "gpt-5.6-sol-high",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "支路"
+            }
+          ]
+        },
+        {
+          "id": "claude-opus",
+          "顺位": null,
+          "禁用": true,
+          "理由": "2026-08-22 审官位暂时禁用",
+          "拍板": "2026-08-14",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "claude",
+              "cli_model": "opus",
+              "顺位": null,
+              "禁用": true,
+              "理由": "禁用名单"
+            }
+          ]
+        },
+        {
+          "id": "kimi-k3",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "备选登记，不顶审官位",
+          "拍板": "2026-08-19",
+          "status": "试用",
+          "trial_since": "2026-08-16",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "kimi-k3-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "主路 cursor"
+            },
+            {
+              "id": "opencode-go",
+              "cli_model": "kimi-k3",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "支路 og"
+            }
+          ]
+        },
+        {
+          "id": "glm-5.2",
+          "顺位": 4,
+          "禁用": false,
+          "理由": "备选登记，不顶审官位",
+          "拍板": "2026-08-19",
+          "status": "试用",
+          "trial_since": "2026-08-19",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "glm-5.2-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor Ultra"
+            }
+          ]
+        },
+        {
+          "id": "grok-4.6",
+          "顺位": 5,
+          "禁用": false,
+          "理由": "备选",
+          "拍板": "2026-08-14",
+          "status": "试用",
+          "trial_since": "2026-08-14",
+          "厂商": [
+            {
+              "id": "grok",
+              "cli_model": "grok-4.6",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Grok Build 官方 CLI"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "帅": {
+    "判断": {
+      "模型": [
+        {
+          "id": "deepseek-v4-pro",
+          "顺位": 1,
+          "禁用": false,
+          "理由": "判断类主选",
+          "拍板": "2026-08-16",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "opencode-go",
+              "cli_model": "opencode-go/deepseek-v4-pro",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "判断类主选 og 通道"
+            }
+          ]
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "顺位": 2,
+          "禁用": false,
+          "理由": "codex 判断备选",
+          "拍板": "2026-08-12",
+          "status": "正式",
+          "厂商": [
+            {
+              "id": "gpt",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Codex 主路"
+            },
+            {
+              "id": "cursor",
+              "cli_model": "gpt-5.6-sol-high",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "GPT 支路 cursor"
+            }
+          ]
+        },
+        {
+          "id": "glm-5.3",
+          "顺位": 3,
+          "禁用": false,
+          "理由": "写码+判断候选池",
+          "拍板": "2026-08-16",
+          "status": "试用",
+          "trial_since": "2026-08-16",
+          "厂商": [
+            {
+              "id": "opencode-go",
+              "cli_model": "glm-5.3",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "og 通道"
+            }
+          ]
+        },
+        {
+          "id": "kimi-k3",
+          "顺位": 4,
+          "禁用": false,
+          "理由": "判断试用",
+          "拍板": "2026-08-19",
+          "status": "试用",
+          "trial_since": "2026-08-16",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "kimi-k3-high",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "主路 cursor"
+            },
+            {
+              "id": "opencode-go",
+              "cli_model": "kimi-k3",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "支路 og"
+            }
+          ]
+        },
+        {
+          "id": "composer-2.5",
+          "顺位": 5,
+          "禁用": false,
+          "理由": "试用写码+判断",
+          "拍板": "2026-08-18",
+          "status": "试用",
+          "trial_since": "2026-08-18",
+          "厂商": [
+            {
+              "id": "cursor",
+              "cli_model": "composer-2.5",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "Cursor 自研"
+            }
+          ]
+        },
+        {
+          "id": "ox-alpha-free",
+          "顺位": 6,
+          "禁用": false,
+          "理由": "og 免费探路试用；不顶判断主路（#718）",
+          "拍板": "2026-08-22",
+          "status": "试用",
+          "trial_since": "2026-08-22",
+          "厂商": [
+            {
+              "id": "opencode-go",
+              "cli_model": "ox-alpha-free",
+              "顺位": 1,
+              "禁用": false,
+              "理由": "og 免费探路 / Unlimited（#718）"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "禁令": [
+    {
+      "id": "ban-deepseek-查证",
+      "模型": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "工种": [
+        "查证"
+      ],
+      "理由": "事实召回差，查证/调研不派它",
+      "拍板": "2026-08-14"
+    },
+    {
+      "id": "ban-glm-未验证工种",
+      "模型": ["glm-5.3"],
+      "工种": ["查证", "审查", "UI"],
+      "理由": "glm-5.3 只进写码+判断候选池",
+      "拍板": "2026-08-16"
+    },
+    {
+      "id": "ban-ox-alpha-free-未验证工种",
+      "模型": ["ox-alpha-free"],
+      "工种": ["查证", "审查", "UI"],
+      "理由": "ox-alpha-free 只进写码+判断试用候选（#718）",
+      "拍板": "2026-08-22"
+    },
+    {
+      "id": "ban-gpt-ui",
+      "模型": [
+        "gpt-5.6-sol"
+      ],
+      "工种": [
+        "UI"
+      ],
+      "优先级": "高于「审查默认换厂商」",
+      "理由": "用户 2026-08-12 体感裁定（UI 类含复审）",
+      "拍板": "2026-08-12"
+    }
+  ],
+  "规则": [
+    {
+      "名称": "审查默认换厂商",
+      "理由": "审查与写码同一模型容易放水",
+      "约束": "受 gpt UI ban 优先级约束；#679 审官口同厂硬闸",
+      "拍板": "2026-08-12"
+    },
+    {
+      "名称": "审官顺位",
+      "理由": "2026-08-22 grill-ai 拍板 A：JSON 三层对齐，顺位路由；审官只用 Codex；Claude 禁用；同厂无人可派报错停手，不许自动 fallback",
+      "约束": "受 bans[gpt UI 类].precedence 约束",
+      "拍板": "2026-08-22"
+    }
+  ]
+}

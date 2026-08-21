@@ -741,7 +741,12 @@ function sleep(ms) {
 function reviewerPasserIds(routing) {
   return (routing?.models || [])
     .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+    .filter(m => !m.reviewerDisabled)
     .map(m => m.id);
+}
+
+function reviewerOrderOf(routing) {
+  return routing?.reviewerOrder || [];
 }
 
 function pushBaoShuai(events, target, detail, fingerprint) {
@@ -810,6 +815,7 @@ function executeCapacitySwitch(target, args, events, source) {
     models: routing.models || [],
     passerIds: reviewerPasserIds(routing),
     workerId: actual.modelId,
+    order: reviewerOrderOf(routing),
   });
   if (!plan.ok) {
     pushBaoShuai(events, target, `capacity 指纹已按 ${formatCapacityKaSchedule()} 仍在线——自动换人没做成：${plan.error}`, 'capacity');
