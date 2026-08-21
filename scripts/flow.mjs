@@ -74,6 +74,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { judgmentFromReview, isCompletionComment } from './lib/judgment.mjs';
 import { classifyPr } from './calibrate.mjs';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   writeJobDispatch, writeJobClosed, workerJobId, reviewerJobId,
   loadLedgerContext, beijingIsoFrom, verdictStatsFromReviews,
@@ -369,13 +371,14 @@ function runGh(args) {
   }
 }
 
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
+// flow 的调用点把 error 直接拼进人读字符串，所以这里把结构化 error 过 orcaErrorText 归一成文本。
 function runOrca(args) {
-  const r = runCmd('orca', args, ORCA_TIMEOUT_MS);
-  if (!r.ok) return { ok: false, error: r.error };
-  const parsed = parseOrcaStdout(r.out);
-  if (!parsed.ok) return parsed;
-  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-  return { ok: true, json: parsed.json, sentPlaintext: !!parsed.sentPlaintext };
+  const r = sharedRunOrca(args, { timeout: ORCA_TIMEOUT_MS });
+  if (!r.ok && r.error != null && typeof r.error !== 'string') {
+    return { ...r, error: orcaErrorText(r.error) };
+  }
+  return r;
 }
 
 function unwrap(json, pathKey, topKey) {

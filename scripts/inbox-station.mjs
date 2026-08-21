@@ -40,6 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlin
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   planStationRetire,
@@ -584,20 +585,9 @@ function errText(e) {
   return orcaErrorText(e);
 }
 
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
 function runOrca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
-  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', timeout, windowsHide: true });
-  if (r.error || (r.status !== 0 && r.status != null)) {
-    if (r.stdout) {
-      const parsed = parseOrcaStdout(r.stdout);
-      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
-      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-    }
-    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
-  }
-  const parsed = parseOrcaStdout(r.stdout);
-  if (!parsed.ok) return parsed;
-  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-  return { ok: true, json: parsed.json };
+  return sharedRunOrca(cmdArgs, { timeout });
 }
 
 function sleep(ms) {
