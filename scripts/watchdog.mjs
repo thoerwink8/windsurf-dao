@@ -1937,14 +1937,31 @@ function liveLoop() {
     else console.log(`[watchdog] SELF_WORKTREE_UNKNOWN: ${self.error}——本轮起不排除自己的工作区，请用 --self-worktree <id> 显式指定`);
   }
   console.log(`# watchdog live：每 ${args.interval}s 一轮（--window ${args.window} / --state-window ${args.stateWindow}${args.selfWorktree ? ' / self-worktree ' + args.selfWorktree.slice(0, 24) + '…' : ''}${args.disposeActions ? '' : ' / dispose-actions off'}）`);
+  let roundNo = 0;
   for (;;) {
-    const source = makeLiveSource(args.window);
-    if (source.infraError) {
-      console.log(`[watchdog] PS_FETCH_FAILED: ${source.infraError}——本轮没查成`);
-      if (args.once) process.exit(3);
-    } else {
-      executeOneRound(source);
-      if (args.once) break;
+    roundNo += 1;
+    // 崩溃隔离：单轮扫描抛异常只记日志、继续下一轮——守卫保活改帥位触发后（#693），
+    // 本循环是最后一道防线，单个检查项的异常不许杀死整个 resident。
+    // 进程级退出路径不受影响：haltIfStale / bootGuardOrHalt 走 process.exit，不经过 catch。
+    // --once（测试/单轮）不吞异常：崩了必须显形（非零退出 + 栈），与快照模式同口径。
+    // WATCHDOG_FAULT_ROUND=every 或轮号：测试故障注入，该轮抛出合成异常（同仓 DAO_GH_FAKE 先例）。
+    try {
+      const fault = process.env.WATCHDOG_FAULT_ROUND;
+      if (fault === 'every' || fault === String(roundNo)) {
+        throw new Error(`WATCHDOG_FAULT_ROUND=${fault} 注入的故意崩溃（验证主循环崩溃隔离）`);
+      }
+      const source = makeLiveSource(args.window);
+      if (source.infraError) {
+        console.log(`[watchdog] PS_FETCH_FAILED: ${source.infraError}——本轮没查成`);
+        if (args.once) process.exit(3);
+      } else {
+        executeOneRound(source);
+        if (args.once) break;
+      }
+    } catch (e) {
+      if (args.once) throw e;
+      const first = String(e && e.stack || e).split('\n').slice(0, 2).join(' ← ');
+      console.error(`[watchdog] ROUND_CRASHED: 第 ${roundNo} 轮扫描抛异常，已隔离、守卫继续跑——${first.slice(0, 300)}`);
     }
     sleep(args.interval * 1000);
   }
