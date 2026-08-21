@@ -615,9 +615,11 @@ function listWorktrees() {
 
 function listRuns() {
   const r = runOrca(['orchestration', 'run-list', '--json']);
-  if (!r.ok) return { ok: false, error: r.error, runs: [] };
+  if (!r.ok) return { ok: false, error: r.error, runs: [], truncated: false };
   const runs = unwrapOrca(r.json, 'runs');
-  return { ok: Array.isArray(runs), runs: Array.isArray(runs) ? runs : [], error: r.error };
+  // #614 验收⑤：nextCursor 非空 = 还有下一页，没扫全
+  const truncated = Boolean(r.json?.result?.nextCursor);
+  return { ok: Array.isArray(runs), runs: Array.isArray(runs) ? runs : [], truncated, error: r.error };
 }
 
 
@@ -784,7 +786,12 @@ async function gcZombieScan(threshold) {
   if (!workers.ok) return { ok: false, unscanned: true, error: `worker-list 没查成: ${errText(workers.error)}`, threshold };
   const worktrees = listWorktrees();
   if (!worktrees.ok) return { ok: false, unscanned: true, error: `worktree ps 没查成: ${errText(worktrees.error)}`, threshold };
-  const plan = planRunGc({ runs: runs.runs, workers: workers.workers, worktrees: worktrees.worktrees });
+  const plan = planRunGc({
+    runs: runs.runs,
+    workers: workers.workers,
+    worktrees: worktrees.worktrees,
+    truncated: runs.truncated,
+  });
   if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
   return gcSummaryFromPlan(plan, threshold);
 }

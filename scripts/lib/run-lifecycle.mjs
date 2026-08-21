@@ -16,6 +16,12 @@ export function isLegacyRun(run) {
   return !run || run.legacy === 1 || run.legacy === true || run.id === 'run_legacy_local';
 }
 
+/** #614：run-create 时打的身份标记。coordinator: 前缀 = 协调者 Run，永不自动退役。 */
+export function isCoordinatorRun(run) {
+  if (!run || typeof run.objective !== 'string') return false;
+  return /^coordinator\s*[:：]/.test(run.objective.trim());
+}
+
 /**
  * #667：人用窗口永不当 coordinator。
  * coordinator_handle 不是信箱台的 Run 列入夺回（run-use --from 台）。
@@ -105,9 +111,18 @@ export function protectedRunIds({ workers, worktrees } = {}) {
   return prot;
 }
 
-export function planRunGc({ runs, workers, worktrees } = {}) {
+export function planRunGc({ runs, workers, worktrees, truncated = false } = {}) {
   if (!Array.isArray(runs)) {
     return { ok: false, unscanned: true, error: 'run-list 结构不认识（缺 runs 数组）', retire: [], keep: [] };
+  }
+  if (truncated) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: 'run-list 截断（nextCursor 非空），没扫全，不许当全量（#614 验收⑤）',
+      retire: [],
+      keep: [],
+    };
   }
   if (!Array.isArray(workers)) {
     return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 workers 数组）', retire: [], keep: [] };
@@ -121,6 +136,11 @@ export function planRunGc({ runs, workers, worktrees } = {}) {
   const skippedLegacy = [];
   for (const run of runs) {
     if (!run?.id) continue;
+    // #614：coordinator Run 永不自动退役（只认显式 retire --run <id>），先于在途单判据
+    if (isCoordinatorRun(run)) {
+      keep.push(run);
+      continue;
+    }
     if (isLegacyRun(run)) {
       skippedLegacy.push(run);
       continue;

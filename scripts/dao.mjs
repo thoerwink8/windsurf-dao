@@ -152,7 +152,10 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
-import { defaultLogRel, leasePath, launchFilePath, parseLease } from './inbox-station.mjs';
+import {
+  defaultLogRel, leasePath, launchFilePath, parseLease,
+  GC_THRESHOLD, gcSummaryFromPlan, gcThresholdLine,
+} from './inbox-station.mjs';
 import { assertCrossVendor, filterSlateSameVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 
@@ -264,6 +267,19 @@ function constrainDispatch(args, routing) {
 
 function rollbackCreated(created) {
   const result = applyDispatchRollback(created, { exec: orca });
+  // #614 验收③：本次派工新建的 Run 一并回收（关台+删租约），堵僵尸来源 1。
+  // 只退「本次新建」的：复用已有 Run（runCreated 非 true）时它还有别的在途单，不许动。
+  if (created && created.runCreated === true && created.runId) {
+    const r = retireOneRun(created.runId);
+    const alreadyGone = r.ok || r.state === 'run_not_found';
+    result.rollback.push({
+      cmd: `retire run ${created.runId}`,
+      ok: alreadyGone,
+      runId: created.runId,
+      error: alreadyGone ? undefined : r.error,
+    });
+    if (!alreadyGone) result.rollbackFailed = true;
+  }
   if (result.alarm) console.error(`[dao] ${result.alarm}`);
   return result;
 }
@@ -532,8 +548,11 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
 /** 保活信箱台（它轮询 inbox 落盘，不靠横幅）。
  * Run：调用方已有的用已有的；run-current 为 null 时本 TUI 自己开（#675 工人 TUI 例外：不 --from 冒充台）。
  * 只许工人 TUI 走这条；帅窗 run-current 为 null 时不许靠它把自己绑成 coordinator（#667）。
- * run-current 没查成 ≠ 没有 Run。 */
-function bindStation() {
+ * run-current 没查成 ≠ 没有 Run。
+ * #614：自开的 Run 打身份标记（objective 前缀 coordinator:/dispatch:）。帅窗派工（cmdDispatch/
+ * cmdDispatchBatch）传 runRole='coordinator'（派工协调 Run 永不自动退役）；其余（工人 TUI）默认
+ * 'dispatch'。 */
+function bindStation({ runRole = 'dispatch' } = {}) {
   const ensured = ensureInboxStation();
   if (!ensured.ok) return { ok: false, error: `信箱台 ensure 失败: ${ensured.error}` };
   const cur = orca(argsRunCurrent());
@@ -546,11 +565,11 @@ function bindStation() {
   if (!plan.needCreate) {
     return { ok: true, handle: ensured.handle || null, runId: plan.runId };
   }
-  const created = orca(argsRunCreateSelf({ objective: 'dao dispatch' }));
+  const created = orca(argsRunCreateSelf({ objective: `${runRole}: dao dispatch` }));
   if (!created.ok) return { ok: false, error: `本窗开 Run 失败：${errText(created.error)}` };
   const runId = extractRunId(created.json);
   if (!runId) return { ok: false, error: 'run-create 没拿到 result.run.id（没查成）' };
-  return { ok: true, handle: ensured.handle || null, runId, created: true };
+  return { ok: true, handle: ensured.handle || null, runId, created: true, runRole };
 }
 
 function sleepMs(ms) {
@@ -640,7 +659,23 @@ function loadLifecycleInputs() {
   if (!rl.ok) return { ok: false, error: `run-list 没查成: ${errText(rl.error)}` };
   const runs = unwrapRuns(rl.json);
   if (!Array.isArray(runs)) return { ok: false, error: 'run-list 没有 result.runs' };
-  return { ok: true, worktrees, workers, runs };
+  // #614 验收⑤：run-list 有 nextCursor = 还有下一页，本次没扫全
+  const runListTruncated = Boolean(rl.json?.result?.nextCursor);
+  return { ok: true, worktrees, workers, runs, runListTruncated };
+}
+
+/** #614 验收④：只读 gc 扫描（不 --apply，不关台）。没查成 → unscanned，不许报 0。 */
+function runGcReadonlyScan(threshold = GC_THRESHOLD) {
+  const src = loadLifecycleInputs();
+  if (!src.ok) return { ok: false, unscanned: true, error: src.error, threshold };
+  const plan = planRunGc({
+    runs: src.runs,
+    workers: src.workers,
+    worktrees: src.worktrees,
+    truncated: src.runListTruncated,
+  });
+  if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
+  return gcSummaryFromPlan(plan, threshold);
 }
 
 function runIdFromDispatch(dispatchId) {
@@ -852,8 +887,11 @@ function cmdDispatch(args) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { ...plan, soldierBook: null });
   }
 
-  const station = bindStation();
+  // #614：帅窗派工的协调 Run 打 coordinator 标记（永不自动退役）；失败回滚时回收本次新建的 Run。
+  const station = bindStation({ runRole: 'coordinator' });
   if (!station.ok) failCreated(created, station.error, plan);
+  created.runId = station.runId || null;
+  created.runCreated = station.created === true;
 
   let taskId = args.task || null;
   if (soldierBook) {
@@ -1044,11 +1082,19 @@ function cmdDispatch(args) {
     console.error(`[dao] dispatch 账本没写上（派工本身成功）：${ledger.error}`);
   }
 
+  // #614 验收④：dispatch 成功后顺带只读 run-gc 扫描，僵尸数超阈值在 stdout 打一行；
+  // 扫描没查成也打 stderr（不许把「没扫成」当「查过没事」）。派工本身已成功，扫描失败不翻转。
+  const gc = runGcReadonlyScan();
+  const gcLine = gcThresholdLine({ zombieCount: gc.zombieCount, threshold: gc.threshold, scanned: gc.ok });
+  if (gcLine) console.log(gcLine);
+  else if (!gc.ok) console.error(`[dao] dispatch 后 run-gc 只读扫描没查成（派工成功）：${gc.error}`);
+
   emit({
     ok: true,
     ...plan,
     ...created,
     taskId,
+    gc,
     loop: {
       soldierBook: !!soldierBook,
       reviewerDeferred: true,
@@ -1099,8 +1145,10 @@ function cmdDispatchBatch(args) {
     fail(disambiguation.error, { disambiguation, ...plan });
   }
 
-  const station = bindStation();
+  // #614：批派工的协调 Run 也打 coordinator 标记；失败回滚时回收本次新建的 Run。
+  const station = bindStation({ runRole: 'coordinator' });
   if (!station.ok) fail(station.error, { ...plan });
+  const batchRun = { runId: station.runId || null, runCreated: station.created === true };
 
   const effects = {
     createWorktree({ name, issue }) {
@@ -1181,7 +1229,18 @@ function cmdDispatchBatch(args) {
   };
 
   const result = runDispatchBatch({ plan, effects });
-  if (!result.ok) failCreated(result.created, result.error, { ...plan, workers: result.workers });
+  if (!result.ok) {
+    // #614 验收③：批派工失败同样回收本次新建的 Run（created 在 runDispatchBatch 内部，这里注入）
+    result.created.runId = batchRun.runId;
+    result.created.runCreated = batchRun.runCreated;
+    failCreated(result.created, result.error, { ...plan, workers: result.workers });
+  }
+
+  // #614 验收④：批派工成功后同样顺带只读 gc 扫描（不翻转派工结果）
+  const gc = runGcReadonlyScan();
+  const gcLine = gcThresholdLine({ zombieCount: gc.zombieCount, threshold: gc.threshold, scanned: gc.ok });
+  if (gcLine) console.log(gcLine);
+  else if (!gc.ok) console.error(`[dao] dispatch --batch 后 run-gc 只读扫描没查成（派工成功）：${gc.error}`);
 
   const comment = afterDispatchComment({
     name: plan.cardName,
@@ -1197,6 +1256,7 @@ function cmdDispatchBatch(args) {
     ...result.created,
     workers: result.workers,
     reviewerCreate: false,
+    gc,
     comment,
     masterZone,
   });
@@ -2744,7 +2804,12 @@ function cmdInboxCollect(args) {
 function cmdRunGc(args) {
   const src = loadLifecycleInputs();
   if (!src.ok) fail(src.error);
-  const plan = planRunGc(src);
+  const plan = planRunGc({
+    runs: src.runs,
+    workers: src.workers,
+    worktrees: src.worktrees,
+    truncated: src.runListTruncated,
+  });
   if (!plan.ok) fail(plan.error);
   const parts = partitionGcTargets(plan.retire, {
     leaseExistsFor: (runId) => stationFilesFor(runId).some((f) => existsSync(f)),

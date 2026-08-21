@@ -1921,6 +1921,38 @@ describe('dao', () => {
       assert.ok(need.ok && need.needCreate === true && !need.runId, '要自开  →  ' + JSON.stringify(need));
       assert.ok(!miss.ok && miss.unscanned === true, '没查成  →  ' + JSON.stringify(miss));
     });
+    await t.test('#614 bindStation 自开 Run 打身份标记（coordinator/dispatch）', () => {
+      const stationFn = daoSrc.slice(daoSrc.indexOf('function bindStation'), daoSrc.indexOf('function sleepMs'));
+      assert.ok(/objective: `\$\{runRole\}: dao dispatch`/.test(stationFn), 'run-create 带身份前缀  →  ' + stationFn.slice(stationFn.indexOf('argsRunCreateSelf'), stationFn.indexOf('argsRunCreateSelf') + 120));
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      assert.ok(/bindStation\(\{ runRole: 'coordinator' \}\)/.test(dispatchFn) && /bindStation\(\{ runRole: 'coordinator' \}\)/.test(batchFn),
+        '#614 帅窗派工（含批）的协调 Run 标 coordinator');
+    });
+    await t.test('#614 dispatch 回滚退役本次新建的 Run（只退 runCreated 的）', () => {
+      const rollbackFn = daoSrc.slice(daoSrc.indexOf('function rollbackCreated'), daoSrc.indexOf('function snapshotHandleScreen'));
+      assert.ok(/created\.runCreated === true && created\.runId/.test(rollbackFn), '只退本次新建的  →  ' + rollbackFn.slice(0, 200));
+      assert.ok(/retireOneRun\(created\.runId\)/.test(rollbackFn), '回滚路径退役 Run  →  ' + rollbackFn.slice(0, 200));
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/created\.runId = station\.runId/.test(dispatchFn) && /created\.runCreated = station\.created === true/.test(dispatchFn),
+        '派工记录新建 Run 供回滚  →  ' + dispatchFn.slice(dispatchFn.indexOf('const station'), dispatchFn.indexOf('const station') + 200));
+      const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
+        '批派工失败同样回收 Run');
+    });
+    await t.test('#614 dispatch 成功后顺带只读 gc + 阈值行 + emit 带 gc', () => {
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/runGcReadonlyScan\(\)/.test(dispatchFn) && /gcThresholdLine\(/.test(dispatchFn) && /const gc = runGcReadonlyScan/.test(dispatchFn),
+        'dispatch 成功路径顺带只读 gc  →  ' + dispatchFn.slice(dispatchFn.indexOf('runGcReadonlyScan'), dispatchFn.indexOf('runGcReadonlyScan') + 160));
+      assert.ok(/\r?\n    gc,\r?\n/.test(dispatchFn), 'emit 带 gc 字段');
+      const scanFn = daoSrc.slice(daoSrc.indexOf('function runGcReadonlyScan'), daoSrc.indexOf('function runIdFromDispatch'));
+      assert.ok(/truncated: src\.runListTruncated/.test(scanFn), '只读扫描认截断  →  ' + scanFn.slice(0, 200));
+    });
+    await t.test('#614 run-list 截断检测挂点（nextCursor → truncated → unscanned）', () => {
+      assert.ok(/runListTruncated = Boolean\(rl\.json\?\.result\?\.nextCursor\)/.test(daoSrc), 'loadLifecycleInputs 截断检测');
+      const gcFn = daoSrc.slice(daoSrc.indexOf('function cmdRunGc'), daoSrc.indexOf('function cmdAsk'));
+      assert.ok(/truncated: src\.runListTruncated/.test(gcFn), 'cmdRunGc 传 truncated  →  ' + gcFn.slice(0, 200));
+    });
     await t.test('#667 task-create / worker-start 能带 --from', () => {
       const t = S.argsTaskCreate({ spec: 's', run: 'r', from: 'h' });
       const w = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'x', from: 'h', run: 'r' });

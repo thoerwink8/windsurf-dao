@@ -145,6 +145,51 @@ describe('run-lifecycle', () => {
     });
   });
 
+  it('#614 coordinator Run 永不自动退役（只认显式 retire --run）', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [
+      run({ id: 'run_coord', objective: 'coordinator: dao dispatch' }),
+      run({ id: 'run_dispatch', objective: 'dispatch: dao dispatch' }),
+      run({ id: 'run_old' }), // 旧 Run 无前缀
+    ];
+    const plan = S.planRunGc({ runs, workers: [], worktrees: [] });
+    await t.test('coordinator 无在途单也在 keep，不进 retire', () => {
+      assert.ok(plan.keep.map(r => r.id).includes('run_coord'), 'coordinator 进 keep  →  ' + JSON.stringify(plan));
+      assert.ok(!plan.retire.map(r => r.id).includes('run_coord'), 'coordinator 不进 retire  →  ' + JSON.stringify(plan));
+    });
+    await t.test('dispatch 身份与旧 Run 无在途单仍可退役', () => {
+      assert.ok(plan.retire.map(r => r.id).sort().join(',') === 'run_dispatch,run_old', 'dispatch/旧 Run 照旧  →  ' + JSON.stringify(plan));
+    });
+    const marked = S.planRunGc({
+      runs: [run({ id: 'run_c2', objective: 'coordinator：中文冒号带空格' })],
+      workers: [],
+      worktrees: [],
+    });
+    await t.test('中文冒号/空格前缀也认', () => {
+      assert.ok(marked.keep.map(r => r.id).includes('run_c2'), '中文冒号也认  →  ' + JSON.stringify(marked));
+    });
+    await t.test('isCoordinatorRun 判据', () => {
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'coordinator: x' }) === true, '英文冒号');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: ' coordinator : x' }) === true, '前缀空格容错');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'dispatch: x' }) === false, 'dispatch 不认');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'xcoordinator: y' }) === false, '前缀必须开头');
+      assert.ok(S.isCoordinatorRun({ id: 'r' }) === false, '无 objective 不认');
+    });
+  });
+
+  it('#614 run-list 截断（nextCursor 非空）→ unscanned，不许当全量', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [run({ id: 'run_a' }), run({ id: 'run_b' })];
+    const trunc = S.planRunGc({ runs, workers: [], worktrees: [], truncated: true });
+    await t.test('截断 → ok:false + unscanned:true', () => {
+      assert.ok(trunc.ok === false && trunc.unscanned === true && trunc.retire.length === 0, '截断 → unscanned  →  ' + JSON.stringify(trunc));
+    });
+    await t.test('不传 truncated → 原行为（不破坏旧调用方）', () => {
+      const plain = S.planRunGc({ runs, workers: [], worktrees: [] });
+      assert.ok(plain.ok && plain.retire.length === 2, '不传截断照旧  →  ' + JSON.stringify(plain));
+    });
+  });
+
   it('删树反查 Run', async (t) => {
     const S = await LIB_LOAD;
     const workers = [
