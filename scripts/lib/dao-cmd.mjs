@@ -454,10 +454,10 @@ function samePath(a, b) {
 
 export function formatStrayLedgerError(stray) {
   const list = (stray || []).map(s => s.file).join('、') || '（未列出文件名）';
-  return `删树前拦住：树内有未进主树的账本事件（${list}）——先把它们拷回主树 ledger/events/ 再删`;
+  return `删树前拦住：树内有未进本机账本的账本事件（${list}）——先把它们拷进 ~/.dao/ledger/events/ 再删`;
 }
 
-/** 工人树 ledger/events 里有、主树没有的事件文件。读失败 = 没查成，不许当 0。 */
+/** 工人树 ledger/events 里有、本机账本（~/.dao/ledger/events）没有的事件文件。读失败 = 没查成，不许当 0。 */
 export function listStrayLedgerEvents({ treePaths, mainEventsDir, readdir = readdirSync, exists = existsSync } = {}) {
   if (!mainEventsDir) {
     return { ok: false, unscanned: true, stray: [], error: '主树账本目录没给，兜底没查成' };
@@ -4106,7 +4106,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
-                  # #595：树内 ledger/events 有未进主树的事件文件 → 整树不删，报清是哪几条
+                  # 树内 ledger/events 有未进本机账本（~/.dao/ledger/events）的事件文件 → 整树不删，报清是哪几条
                   # #593：同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）
   inbox-collect [--peek]
                   # 按在途单的 Run 收信箱。三态：empty / unscanned / run_not_found。默认 --peek 不标已读

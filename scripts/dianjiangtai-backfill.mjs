@@ -15,6 +15,7 @@ import {
   reconstructJob, writeReconstructedJobs, isClosedOnDate,
 } from './lib/dianjiangtai-backfill.mjs';
 import { parseYaml } from './lib/yaml-min.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -26,7 +27,7 @@ function arg(name, def) {
 function usageAndExit(msg) {
   process.stderr.write(`${msg}\n`);
   process.stderr.write(
-    '用法: node scripts/dianjiangtai-backfill.mjs --date YYYY-MM-DD [--prs 460,461] [--source-json path] [--events-dir ledger/events]\n',
+    '用法: node scripts/dianjiangtai-backfill.mjs --date YYYY-MM-DD [--prs 460,461] [--source-json path] [--events-dir <目录>（默认本机 ~/.dao/ledger/events）]\n',
   );
   process.exit(1);
 }
@@ -82,7 +83,7 @@ const extraPrs = (arg('prs') || '')
   .map(s => Number(s.trim()))
   .filter(n => Number.isInteger(n) && n > 0);
 const sourceJson = arg('source-json');
-const eventsDir = resolve(ROOT, arg('events-dir', 'ledger/events'));
+const eventsDir = arg('events-dir') ? resolve(ROOT, arg('events-dir')) : ensureLocalLedger({ root: ROOT }).dir;
 const schemaPath = resolve(ROOT, arg('schema', 'schemas/events.schema.json'));
 const modelsPath = resolve(ROOT, arg('models', 'policy/models.yml'));
 const machine = arg('machine', 'backfill');

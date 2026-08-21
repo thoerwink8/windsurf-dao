@@ -1,7 +1,8 @@
 // scripts/lib/event-writer.mjs —— 点将台事件写入辅助（设计 A.2 三铁律）
 //
-// 一事件一文件：ledger/events/<ulid>-<machine>.json；写一次即不可变（已存在/同内容均拒绝，
-// 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，git merge 等于求并集。
+// 一事件一文件：<账本目录>/<ulid>-<machine>.json（默认落点本机 ~/.dao/ledger/events，
+// 不进 git，见 ledger-home.mjs）；写一次即不可变（已存在/同内容均拒绝，
+// 纠错另立 attr.retract 不覆盖历史）；文件名 ULID 时间序 + 机器名，汇聚等于求并集。
 // 事件类型闭集与必填字段一律派生自 schemas/events.schema.json（唯一权威），不另抄清单。
 // 写入即校验：类型在闭集内、必填字段齐、attr 责任向量不变量（份额和=1 或全 0 且低置信）。
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
@@ -136,7 +137,7 @@ function scanJobType(dir, type, jobId) {
 }
 
 /**
- * 写一事件一文件：ledger/events/<ulid>-<machine>.json。
+ * 写一事件一文件：<dir>/<ulid>-<machine>.json。
  * 三铁律守卫：①已存在同文件拒绝（写一次即不可变）；②同 event_id 已入账拒绝（防重复）。
  * 文件名确定性：熵取事件内容哈希（同一事件重跑得同一文件名，天然幂等报错）。
  */

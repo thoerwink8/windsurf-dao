@@ -24,6 +24,7 @@ import { parseYaml } from './lib/yaml-min.mjs';
 import { select, hashOf, EVENT_ORDER_KEY } from './lib/dianjiangtai-core.mjs';
 import { pinReviewerSlotA, REVIEWER_SELECT_ROLES } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { attachPipes } from './lib/next-launch.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -70,7 +71,7 @@ const risk = arg('risk', '低');
 const reversible = arg('reversible', 'true') !== 'false';
 
 const policyDir = resolve(ROOT, arg('policy-dir', 'policy'));
-const eventsDir = resolve(ROOT, arg('events-dir', 'ledger/events'));
+const eventsDir = arg('events-dir') ? resolve(ROOT, arg('events-dir')) : ensureLocalLedger({ root: ROOT }).dir;
 // 路由真相源只读 master 版本（issue #533 拍板）：选型结果不许取决于主树碰巧切在谁的分支上。
 // 工作区可能在途分支（如改过 provider 的 #519）时，读工作区 = 拿一条还没生效的规则出推荐。
 // 读不到 master 版本 = 本次没查成，拒绝出推荐，绝不静默回退工作区（同 [[routes]] 为 0 条的写法）。

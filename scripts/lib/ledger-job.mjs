@@ -4,14 +4,16 @@
 // 定 job_id、把「已有同 job 事件」收成幂等 skip。
 // 工人 job_id = gh-pr-N（与回填同口径）；审官 job_id = gh-pr-N-review
 // （一 job 只能一条 job.dispatch / job.closed）。
-// #595：默认落点是主树 ledger/events（git-common-dir），不随调用者所在树漂移。
-// 测试或显式覆盖走 eventsDir / LEDGER_EVENTS_DIR。落点查不成必须抛，不许退回工人树。
+// 默认落点 = 本机 ~/.dao/ledger/events/（ledger 本机化拍板：事件不进 git），
+// 首次使用把仓内 ledger/events 的已合并历史事件种子过来（幂等，同名跳过，见 ledger-home.mjs）。
+// 测试或显式覆盖走 eventsDir / LEDGER_EVENTS_DIR（覆盖时不播种子）。
 
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { writeEvent, nextSeq } from './event-writer.mjs';
+import { ensureLocalLedger } from './ledger-home.mjs';
 import { hashOf } from './dianjiangtai-core.mjs';
 import { toBeijingIso } from './dianjiangtai-backfill.mjs';
 import { judgmentFromReview } from './judgment.mjs';
@@ -69,17 +71,13 @@ export function isDuplicateWriteError(err) {
   return /已存在|已入账|已有/.test(String(err && err.message ? err.message : err));
 }
 
-export function loadLedgerContext({ root = DEFAULT_ROOT, eventsDir, schemaPath, machine, git } = {}) {
-  const explicit = eventsDir || process.env.LEDGER_EVENTS_DIR || '';
+export function loadLedgerContext({ root = DEFAULT_ROOT, eventsDir, schemaPath, machine, home, env } = {}) {
+  const explicit = eventsDir || (env || process.env).LEDGER_EVENTS_DIR || '';
   let dir;
   if (explicit) {
     dir = resolve(root, explicit);
   } else {
-    const main = resolveMainWorktreeRoot({ from: root, git });
-    if (!main.ok) {
-      throw new Error(`账本落点没查成：${main.error}——不许退回调用者所在树`);
-    }
-    dir = join(main.root, 'ledger', 'events');
+    dir = ensureLocalLedger({ root, home, env: env || process.env }).dir;
   }
   const schemaFile = resolve(root, schemaPath || 'schemas/events.schema.json');
   if (!existsSync(schemaFile)) throw new Error(`事件 schema 不在：${schemaFile}`);
