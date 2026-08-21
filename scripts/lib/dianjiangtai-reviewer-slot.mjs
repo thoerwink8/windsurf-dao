@@ -1,6 +1,6 @@
 // scripts/lib/dianjiangtai-reviewer-slot.mjs —— 审读/审查 A 位按 JSON 选型序
 //
-// 2026-08-22：审官选型序真相源 docs/model-routing.json（职责.审官.审查.选型序）。
+// 2026-08-22：审官顺位真相源 docs/model-routing.json（审官.审查.模型）。
 // 本模块只决定 A 位模型与换人顺序，不改 B/C，不写账。
 // #679：换人跳过工人那一厂。
 
@@ -23,10 +23,17 @@ function orderedPasserIds({ models = [], passerIds = [], order = [] } = {}) {
  * @param {{ models: Array<{id:string,provider?:string}>, passerIds: string[], order?: string[] }} input
  * @returns {{ model: string|null, reason: 'reviewer_order'|'no_candidate' }}
  */
-export function pinReviewerSlotA({ models = [], passerIds = [], order = [] } = {}) {
+export function pinReviewerSlotA({ models = [], passerIds = [], order = [], workerId = null } = {}) {
   const ids = orderedPasserIds({ models, passerIds, order });
   if (ids.length === 0) return { model: null, reason: 'no_candidate' };
-  return { model: ids[0], reason: 'reviewer_order' };
+  const top = ids[0];
+  if (workerId != null && String(workerId).trim() !== '') {
+    const gate = assertCrossVendor({ workerId, reviewerId: top, models });
+    if (gate.state === 'same_vendor') {
+      return { model: null, reason: 'same_vendor_blocked', error: gate.error };
+    }
+  }
+  return { model: top, reason: 'reviewer_order' };
 }
 
 export const REVIEWER_SELECT_ROLES = new Set(['审读', '审查']);

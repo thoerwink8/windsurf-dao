@@ -73,9 +73,9 @@ const schemaPath = resolve(ROOT, arg('schema', 'schemas/events.schema.json'));
 const models = parseYaml(readFileSync(join(policyDir, 'models.yml'), 'utf8')).models;
 const weights = parseYaml(readFileSync(join(policyDir, 'weights.yml'), 'utf8'));
 const policy = loadRoutingPolicy();
-const routes = policy.routes || [];
+const rankOrder = policy.rankOrderFor(identity, workType);
 const bans = policy.policyBans || [];
-const policyHash = hashOf({ models, bans, weights, routes });
+const policyHash = hashOf({ models, bans, weights, rankOrder });
 
 const events = existsSync(eventsDir)
   ? readdirSync(eventsDir)
@@ -86,7 +86,7 @@ events.sort(EVENT_ORDER_KEY);
 
 const result = select({
   ts, jobId, identity, workType, taskTokens, risk, reversible,
-  events, models, bans, weights, availability, policyHash, routes,
+  events, models, bans, weights, availability, policyHash, rankOrder,
 });
 
 // ── --commit：按写权矩阵把选中项落账 ─────────────────────────────────

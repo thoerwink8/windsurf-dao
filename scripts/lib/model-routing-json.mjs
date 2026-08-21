@@ -1,12 +1,14 @@
-// scripts/lib/model-routing-json.mjs —— 选型真相源 JSON 加载与 legacy 转换
+// scripts/lib/model-routing-json.mjs —— 选型真相源 JSON（职责树）
 //
-// 2026-08-22 拍板：用户自维护 docs/model-routing.json，读工作区本地文件即生效。
-// 启动模板仍在 docs/model-routing.toml [providers.*]。
+// 2026-08-22 拍板：算法每次读工作区 docs/model-routing.json，本地改即生效。
+// TOML 只留 [providers.*].launch；禁止 JSON↔TOML 双写选型段。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 
 export const ROUTING_JSON = join(resolve(import.meta.dirname, '..', '..'), 'docs', 'model-routing.json');
+export const DUTIES = ['帅', '工人', '审官'];
 
 export function loadRoutingJsonRaw(file = ROUTING_JSON) {
   if (!existsSync(file)) throw new Error(`选型 JSON 不在: ${file}`);
@@ -20,6 +22,18 @@ export function loadRoutingJsonRaw(file = ROUTING_JSON) {
   return doc;
 }
 
+export function sortByRank(entries) {
+  return [...entries].sort((a, b) => {
+    const ra = a.顺位 == null ? Infinity : Number(a.顺位);
+    const rb = b.顺位 == null ? Infinity : Number(b.顺位);
+    return ra - rb || String(a.id).localeCompare(String(b.id));
+  });
+}
+
+export function pickEnabledVendor(vendors) {
+  return sortByRank((vendors || []).filter(v => v && v.禁用 !== true))[0] || null;
+}
+
 function pipeFromVendor(v) {
   if (!v || !v.id) return null;
   const out = { provider: String(v.id) };
@@ -27,54 +41,95 @@ function pipeFromVendor(v) {
   return out;
 }
 
-export function modelsFromJson(doc) {
-  const registry = doc?.模型;
-  if (!registry || typeof registry !== 'object') return [];
-  const out = [];
-  for (const [id, entry] of Object.entries(registry)) {
-    if (!entry || typeof entry !== 'object') continue;
-    const vendors = Array.isArray(entry.厂商) ? entry.厂商 : [];
-    const pipes = vendors.map(pipeFromVendor).filter(Boolean);
-    const p0 = pipes[0] || {};
-    const legacy = {
-      id,
-      provider: p0.provider || '',
-      roles: Array.isArray(entry.roles) ? entry.roles : [],
-      status: entry.status || '',
-      why: entry.理由 || entry.why || '',
-      decided: entry.拍板 || entry.decided || '',
-      reviewerDisabled: entry.禁用 === true,
-    };
-    if (p0.cli_model) legacy.cli_model = p0.cli_model;
-    if (pipes.length > 1) legacy.pipes = pipes;
-    else if (pipes.length === 1 && pipes[0].cli_model) legacy.cli_model = pipes[0].cli_model;
-    if (entry.trial_since) legacy.trial_since = entry.trial_since;
-    out.push(legacy);
+function mergeVendors(a, b) {
+  const byId = new Map();
+  for (const v of [...(a || []), ...(b || [])]) {
+    if (!v?.id) continue;
+    const prev = byId.get(v.id);
+    byId.set(v.id, prev ? { ...prev, ...v, 顺位: v.顺位 ?? prev.顺位 } : { ...v });
   }
-  return out;
+  return sortByRank([...byId.values()]);
 }
 
-export function routesFromJson(doc) {
-  const duties = doc?.职责;
-  if (!duties || typeof duties !== 'object') return [];
-  const routes = [];
-  for (const workTypes of Object.values(duties)) {
+export function dutyForIdentity(identity, workType) {
+  if (identity === '审官' || workType === '审查') return '审官';
+  if (identity === '帅' || identity === '协调者') return '帅';
+  if (identity === '工人') return '工人';
+  return null;
+}
+
+export function rankListFromTree(doc, duty, workType) {
+  const list = doc?.[duty]?.[workType]?.模型;
+  if (!Array.isArray(list)) return [];
+  return sortByRank(list.filter(m => m && m.id && m.禁用 !== true));
+}
+
+export function rankOrderFromTree(doc, duty, workType) {
+  return rankListFromTree(doc, duty, workType).map(m => String(m.id));
+}
+
+export function rankOrderFor(doc, identity, workType) {
+  const duty = dutyForIdentity(identity, workType);
+  if (!duty) return [];
+  return rankOrderFromTree(doc, duty, workType);
+}
+
+export function reviewerSelectOrder(doc) {
+  return rankOrderFromTree(doc, '审官', '审查');
+}
+
+function toLegacyModel(entry, roles) {
+  const vendors = entry.厂商 || [];
+  const primary = pickEnabledVendor(vendors) || vendors[0];
+  const pipes = vendors.map(pipeFromVendor).filter(Boolean);
+  const legacy = {
+    id: entry.id,
+    provider: primary?.id ? String(primary.id) : (pipes[0]?.provider || ''),
+    roles,
+    status: entry.status || '',
+    why: entry.理由 || '',
+    decided: entry.拍板 || '',
+    reviewerDisabled: entry.禁用 === true,
+  };
+  if (primary?.cli_model) legacy.cli_model = String(primary.cli_model);
+  if (pipes.length > 1) legacy.pipes = pipes;
+  else if (pipes.length === 1 && pipes[0].cli_model) legacy.cli_model = pipes[0].cli_model;
+  if (entry.trial_since) legacy.trial_since = entry.trial_since;
+  return legacy;
+}
+
+/** 从职责树合并模型登记（供 pipes / 同厂闸 / yml 同源校验）。 */
+export function modelsFromJson(doc) {
+  const byId = new Map();
+  const rolesById = new Map();
+  for (const duty of DUTIES) {
+    const workTypes = doc?.[duty];
     if (!workTypes || typeof workTypes !== 'object') continue;
     for (const [workType, cfg] of Object.entries(workTypes)) {
-      for (const r of Array.isArray(cfg?.分时路由) ? cfg.分时路由 : []) {
-        if (!r || !r.模型) continue;
-        routes.push({
-          role: workType,
-          beijing: r.北京时间,
-          model: r.模型,
-          fallback: r.fallback,
-          why: r.理由 || '',
-          decided: r.拍板 || '',
+      for (const m of Array.isArray(cfg?.模型) ? cfg.模型 : []) {
+        if (!m?.id) continue;
+        const id = String(m.id);
+        if (!rolesById.has(id)) rolesById.set(id, new Set());
+        rolesById.get(id).add(workType);
+        const prev = byId.get(id);
+        byId.set(id, {
+          id,
+          厂商: mergeVendors(prev?.厂商, m.厂商),
+          status: m.status || prev?.status || '正式',
+          理由: m.理由 || prev?.理由 || '',
+          拍板: m.拍板 || prev?.拍板 || '',
+          trial_since: m.trial_since || prev?.trial_since,
+          禁用: m.禁用 === true || prev?.禁用 === true,
         });
       }
     }
   }
-  return routes;
+  return [...byId.values()].map(entry => toLegacyModel(entry, [...(rolesById.get(entry.id) || [])]));
+}
+
+/** @deprecated 顺位树取代分时路由；保留导出名供旧调用方，恒返回 []。 */
+export function routesFromJson(_doc) {
+  return [];
 }
 
 export function bansFromJson(doc) {
@@ -117,34 +172,99 @@ export function rulesFromJson(doc) {
   })).filter(r => r.rule);
 }
 
-export function reviewerSelectOrder(doc) {
-  const slots = doc?.职责?.审官?.审查?.选型序;
-  if (!Array.isArray(slots)) return [];
-  const ordered = [];
-  for (const slot of slots) {
-    if (!slot || typeof slot !== 'object' || slot.禁用 === true) continue;
-    if (slot.模型) ordered.push(String(slot.模型));
+function isPolicyBanned(modelId, workType, identity, policyBans) {
+  return (policyBans || []).some(b =>
+    (b.models || []).includes(modelId)
+    && (!b.work_types || b.work_types.length === 0 || b.work_types.includes(workType))
+    && (!b.identities || b.identities.length === 0 || b.identities.includes(identity)),
+  );
+}
+
+/**
+ * 从职责树按顺位取 A 位（跳过禁用；可选门闩 passerIds；审官可过同厂硬闸）。
+ */
+export function pickRankedSlotA({
+  doc,
+  duty,
+  workType,
+  passerIds = null,
+  workerId = null,
+  models = [],
+  policyBans = [],
+  identity = null,
+} = {}) {
+  const list = doc?.[duty]?.[workType]?.模型;
+  if (!Array.isArray(list)) return { model: null, reason: 'no_rank_list' };
+
+  for (const m of sortByRank(list)) {
+    if (!m?.id || m.禁用 === true) continue;
+    const id = String(m.id);
+    if (identity && isPolicyBanned(id, workType, identity, policyBans)) continue;
+    if (passerIds && !passerIds.includes(id)) continue;
+    const vendor = pickEnabledVendor(m.厂商);
+    if (!vendor) continue;
+
+    if (workerId != null && String(workerId).trim() !== '' && duty === '审官') {
+      const gate = assertCrossVendor({ workerId, reviewerId: id, models });
+      if (gate.state === 'same_vendor') {
+        return { model: null, reason: 'same_vendor_blocked', error: gate.error };
+      }
+    }
+
+    return {
+      model: id,
+      provider: String(vendor.id),
+      cli_model: vendor.cli_model != null ? String(vendor.cli_model) : undefined,
+      reason: duty === '审官' ? 'reviewer_order' : 'rank_order',
+      vendor,
+    };
   }
-  return ordered;
+  return { model: null, reason: 'no_candidate' };
 }
 
 export function loadRoutingPolicy(file = ROUTING_JSON) {
   const raw = loadRoutingJsonRaw(file);
   const models = modelsFromJson(raw);
-  const routes = routesFromJson(raw);
   const { legacy: bans, policy: policyBans } = bansFromJson(raw);
   const rules = rulesFromJson(raw);
-  if (models.length === 0 && routes.length === 0 && bans.length === 0 && rules.length === 0) {
-    throw new Error('选型 JSON 里模型/路由/禁令/规则都没扫到——0 条 = 本次等于没查');
+  const tree = { 帅: raw.帅, 工人: raw.工人, 审官: raw.审官 };
+
+  let dutyModelCount = 0;
+  for (const duty of DUTIES) {
+    for (const cfg of Object.values(raw?.[duty] || {})) {
+      if (Array.isArray(cfg?.模型)) dutyModelCount += cfg.模型.length;
+    }
   }
+
+  if (models.length === 0 && dutyModelCount === 0 && bans.length === 0 && rules.length === 0) {
+    throw new Error('选型 JSON 里职责树/禁令/规则都没扫到——0 条 = 本次等于没查');
+  }
+
   return {
     updated: raw.updated || null,
     models,
-    routes,
+    routes: [],
     bans,
     rules,
     policyBans,
     reviewerOrder: reviewerSelectOrder(raw),
+    tree,
     raw,
+    rankOrderFor(identity, workType) {
+      return rankOrderFor(raw, identity, workType);
+    },
+    pickRanked(identity, workType, opts = {}) {
+      const duty = dutyForIdentity(identity, workType);
+      if (!duty) return { model: null, reason: 'no_duty' };
+      return pickRankedSlotA({
+        doc: raw,
+        duty,
+        workType,
+        identity,
+        models,
+        policyBans,
+        ...opts,
+      });
+    },
   };
 }

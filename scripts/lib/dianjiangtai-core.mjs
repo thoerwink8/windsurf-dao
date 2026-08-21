@@ -90,6 +90,15 @@ export function isInWindows(minute, windows) {
  * beijing 字段是 "HH:MM-HH:MM,..." 逗号列表（与 dao-check validBeijingWindows 同口径）。
  * 命中第一条 role + 北京墙钟窗口的路由；无命中返回 null。纯函数，禁 Date.now。
  */
+function pickFromRankOrder(rankOrder, passers) {
+  if (!Array.isArray(rankOrder) || rankOrder.length === 0) return null;
+  const byModel = Object.fromEntries(passers.map(d => [d.model, d]));
+  for (const id of rankOrder) {
+    if (byModel[id]) return byModel[id];
+  }
+  return null;
+}
+
 export function matchBeijingRoute(routes, workType, ts) {
   if (!Array.isArray(routes) || routes.length === 0 || !workType) return null;
   const minute = beijingMinutes(ts);
@@ -423,13 +432,15 @@ export function checkGates({ model, identity, workType, bans, taskTokens, availa
  * @param {object} [args.availability] 模型 → 空闲/忙/离线
  * @param {object} [args.usageByModel] F17 套餐用量：modelId → { days_to_reset, utilization }
  * @param {string|null} [args.policyHash] 政策内容哈希（决策票可复算依据）
- * @param {object[]} [args.routes] model-routing.toml [[routes]]（分时路由，参与 A 推荐）
+ * @param {string[]} [args.rankOrder] docs/model-routing.json 职责树顺位（参与 A 推荐）
+ * @param {object[]} [args.routes] @deprecated 分时路由；顺位树取代后忽略
  */
 export function select({
   ts, jobId, identity, workType,
   taskTokens = null, risk = '低', reversible = true,
   events = [], models = [], bans = [], weights = {},
   availability = {}, usageByModel = {}, policyHash = null,
+  rankOrder = [],
   routes = [],
 }) {
   if (!IDENTITIES.includes(identity)) {
@@ -524,22 +535,23 @@ export function select({
           || hashOf(`${jobId}|${a.model}`).localeCompare(hashOf(`${jobId}|${b.model}`)))
     : [];
   const quotaTop = quota[0] || null;
-  // 分时路由（docs/model-routing.toml [[routes]]）优先于配额覆盖与最高分。
-  // 写码 A 位以路由表为准（#688：devin > og > 直连）。路由模型被门闩剔除 → fallback；两者都过不了门闩才退回配额/最高分。
-  const matchedRoute = matchBeijingRoute(routes, workType, ts);
+  // JSON 职责树顺位优先于配额覆盖与最高分（2026-08-22：顺位取代分时路由）。
+  const rankedPick = pickFromRankOrder(rankOrder, passers);
+  const matchedRoute = rankOrder.length === 0 ? matchBeijingRoute(routes, workType, ts) : null;
   const routedPick = matchedRoute
     ? (passers.find(d => d.model === matchedRoute.model)
       || passers.find(d => d.model === matchedRoute.fallback)
       || null)
     : null;
-  const defaultPick = routedPick || quotaTop || byScore[0] || null;
-  // reason 从 defaultPick 反推（与 A.model 同源）：拆掉 routedPick 接线时 reason 不能再谎称 route_beijing。
-  const routedApplied = Boolean(defaultPick && routedPick && defaultPick === routedPick);
-  const choiceReason = routedApplied
-    ? (defaultPick.model === matchedRoute.model ? 'route_beijing' : 'route_fallback')
-    : defaultPick && defaultPick === quotaTop ? 'quota_explore'
-    : defaultPick ? 'highest_score'
-    : 'no_candidate';
+  const defaultPick = rankedPick || routedPick || quotaTop || byScore[0] || null;
+  const rankedApplied = Boolean(defaultPick && rankedPick && defaultPick === rankedPick);
+  const routedApplied = Boolean(!rankedApplied && defaultPick && routedPick && defaultPick === routedPick);
+  const choiceReason = rankedApplied ? 'rank_order'
+    : routedApplied
+      ? (defaultPick.model === matchedRoute.model ? 'route_beijing' : 'route_fallback')
+      : defaultPick && defaultPick === quotaTop ? 'quota_explore'
+      : defaultPick ? 'highest_score'
+      : 'no_candidate';
 
   const choice = {
     model: defaultPick ? defaultPick.model : null,
@@ -587,6 +599,7 @@ export function select({
     task_tokens: taskTokens, risk, reversible, availability,
     policy_hash: policyHash,
     events_hash: hashOf(cutoffEvents),
+    rank_order_hash: rankOrder.length ? hashOf(rankOrder) : null,
     routes_hash: routes.length ? hashOf(routes) : null,
     models: Object.fromEntries(Object.keys(details).sort().map(id => {
       const d = details[id];
@@ -606,7 +619,7 @@ export function select({
     choice,
   };
   const decisionId = hashOf(snapshot);
-  const slate = buildSlate({ passers, matchedRoute, quotaTop, byScore });
+  const slate = buildSlate({ passers, rankOrder, matchedRoute, quotaTop, byScore });
 
   return {
     decision_id: decisionId,

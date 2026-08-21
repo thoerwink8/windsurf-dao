@@ -306,14 +306,29 @@ function validBeijingWindows(s) {
   });
 }
 
+function scanTomlSelectionSections(text) {
+  const found = [];
+  for (const name of ['models', 'routes', 'bans', 'rules']) {
+    if (new RegExp(`^\\[\\[${name}\\]\\]`, 'm').test(String(text || ''))) found.push(name);
+  }
+  return found;
+}
+
 function checkRoutingProvidersToml() {
   if (!existsSync(ROUTING_FILE)) {
     fail('docs/model-routing.toml 不在', '路由 provider 模板缺失 ⇒ 本次等于没查；恢复文件', ROUTING_FILE);
     return;
   }
+  let rawText;
+  try {
+    rawText = readFileSync(ROUTING_FILE, 'utf8');
+  } catch (e) {
+    fail('docs/model-routing.toml 读失败', '恢复文件', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
   let doc;
   try {
-    doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
+    doc = parseToml(rawText);
   } catch (e) {
     fail('docs/model-routing.toml 不是合法 TOML', '按标准 TOML 解析器报的错修文件', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
     return;
@@ -321,6 +336,11 @@ function checkRoutingProvidersToml() {
 
   const problems = [];
   if (!doc.updated) problems.push('顶层缺 updated');
+
+  const straySections = scanTomlSelectionSections(rawText);
+  if (straySections.length > 0) {
+    problems.push(`TOML 仍含已迁 JSON 的选型段 [[${straySections.join(']]/[[')}]]`);
+  }
 
   let launchProviders = 0;
   for (const [name, p] of Object.entries(doc.providers || {})) {
@@ -340,13 +360,13 @@ function checkRoutingProvidersToml() {
     problems.push('gpt launch_note 仍教已存在树默认走 command');
   }
 
-  const stray = ['models', 'routes', 'bans', 'rules'].filter(k => Array.isArray(doc[k]) && doc[k].length > 0);
-  if (stray.length) problems.push(`TOML 仍含已迁 JSON 的节：${stray.join('/')}`);
+  const strayParsed = ['models', 'routes', 'bans', 'rules'].filter(k => Array.isArray(doc[k]) && doc[k].length > 0);
+  if (strayParsed.length) problems.push(`TOML 解析仍含选型数组：${strayParsed.join('/')}`);
 
   if (problems.length === 0) {
-    green(`provider 启动模板 ${launchProviders} 个有 launch，TOML 只留 providers`);
+    green(`provider 启动模板 ${launchProviders} 个有 launch；TOML 选型段 0 条（[[models]]/[[routes]]/[[bans]]/[[rules]] 均无）`);
   } else {
-    fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；模型/路由/禁令/规则只许在 docs/model-routing.json', problems.slice(0, 10).join(' '));
+    fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；选型只许 docs/model-routing.json；TOML 禁止 [[models]]/[[routes]]/[[bans]]/[[rules]]', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -364,44 +384,64 @@ function checkRoutingPolicyJson() {
   }
 
   let models;
-  let routes;
   let bans;
   let rules;
   let reviewerOrder;
+  let rankSlots;
   try {
-    const { modelsFromJson, routesFromJson, bansFromJson, reviewerSelectOrder } = require('./lib/model-routing-json.mjs');
+    const {
+      modelsFromJson, bansFromJson, rulesFromJson, reviewerSelectOrder, rankOrderFromTree,
+    } = require('./lib/model-routing-json.mjs');
     models = modelsFromJson(doc);
-    routes = routesFromJson(doc);
     bans = bansFromJson(doc).legacy;
-    rules = (Array.isArray(doc?.规则) ? doc.规则 : []).map(r => ({
-      rule: r.名称 || r.rule || '',
-      why: r.理由 || r.why || '',
-      decided: r.拍板 || r.decided || '',
-    })).filter(r => r.rule);
+    rules = rulesFromJson(doc);
     reviewerOrder = reviewerSelectOrder(doc);
+    rankSlots = {
+      写码: rankOrderFromTree(doc, '工人', '写码'),
+      审查: rankOrderFromTree(doc, '审官', '审查'),
+      判断: rankOrderFromTree(doc, '帅', '判断'),
+    };
   } catch (e) {
     fail('选型 JSON 转换失败', '修 JSON 结构或 model-routing-json.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
     return;
   }
 
-  if (models.length === 0 && routes.length === 0 && bans.length === 0 && rules.length === 0) {
-    fail('选型 JSON 里一条模型/路由/禁令/规则都没扫到', '0 条 = 本次等于没查；按 schema 补条目', ROUTING_POLICY_FILE);
+  if (models.length === 0 && bans.length === 0 && rules.length === 0
+    && rankSlots.写码.length === 0 && rankSlots.审查.length === 0 && rankSlots.判断.length === 0) {
+    fail('选型 JSON 里职责树/禁令/规则都没扫到', '0 条 = 本次等于没查；按 schema 补条目', ROUTING_POLICY_FILE);
     return;
   }
 
   const problems = [];
   const modelIds = new Set(models.map(m => m.id).filter(Boolean));
   if (!doc.updated) problems.push('顶层缺 updated');
+  if (!doc.帅 && !doc.工人 && !doc.审官) problems.push('顶层缺 帅/工人/审官 职责树');
+
+  for (const duty of ['帅', '工人', '审官']) {
+    const workTypes = doc[duty];
+    if (!workTypes || typeof workTypes !== 'object') continue;
+    for (const [workType, cfg] of Object.entries(workTypes)) {
+      const list = cfg?.模型;
+      if (!Array.isArray(list) || list.length === 0) {
+        problems.push(`${duty}.${workType} 模型 空或未扫到`);
+        continue;
+      }
+      list.forEach((m, i) => {
+        if (!m?.id) problems.push(`${duty}.${workType}.模型[${i}] 缺 id`);
+        if (m?.禁用 !== true && m?.顺位 == null) problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 未禁用但缺 顺位`);
+        const vendors = Array.isArray(m?.厂商) ? m.厂商 : [];
+        if (vendors.length === 0) problems.push(`${duty}.${workType}.模型[${i}](${m?.id}) 厂商 空`);
+        vendors.forEach((v, j) => {
+          if (!v?.id) problems.push(`${duty}.${workType}.模型[${i}].厂商[${j}] 缺 id`);
+          if (v?.禁用 !== true && v?.顺位 == null) problems.push(`${duty}.${workType}.模型[${i}].厂商[${j}](${v?.id}) 未禁用但缺 顺位`);
+        });
+      });
+    }
+  }
+
   models.forEach((m, i) => {
     const miss = missingKeys(m, ['id', 'provider', 'roles', 'status', 'why', 'decided']);
-    if (miss.length) problems.push(`models[${i}]缺${miss.join('/')}`);
-  });
-  routes.forEach((r, i) => {
-    const miss = missingKeys(r, ['role', 'beijing', 'model', 'fallback', 'why', 'decided']);
-    if (miss.length) problems.push(`routes[${i}]缺${miss.join('/')}`);
-    if (r.model && !modelIds.has(r.model)) problems.push(`routes[${i}].model 幽灵引用 ${JSON.stringify(r.model)}`);
-    if (r.fallback && !modelIds.has(r.fallback)) problems.push(`routes[${i}].fallback 幽灵引用 ${JSON.stringify(r.fallback)}`);
-    if (r.beijing && !validBeijingWindows(r.beijing)) problems.push(`routes[${i}].beijing 格式不对 ${JSON.stringify(r.beijing)}`);
+    if (miss.length) problems.push(`registry[${i}]缺${miss.join('/')}`);
   });
   bans.forEach((b, i) => {
     const miss = missingKeys(b, ['scope', 'why', 'decided']);
@@ -478,9 +518,9 @@ function checkRoutingPolicyJson() {
   }
 
   if (problems.length === 0) {
-    green(`选型 JSON ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，审官序 ${reviewerOrder.length} 档，yml 同源`);
+    green(`选型 JSON ${models.length} 模型/${bans.length} 禁令/${rules.length} 规则；写码顺位 ${rankSlots.写码.length} 审官 ${reviewerOrder.length} 判断 ${rankSlots.判断.length}；yml 同源`);
   } else {
-    fail(`选型 JSON 校验不过 ${problems.length} 处`, '模型/路由/禁令/规则字段齐；pipes 与 provider 一致；model/fallback 指向 models[].id；yml 与 JSON 模型 id 同源', problems.slice(0, 10).join(' '));
+    fail(`选型 JSON 校验不过 ${problems.length} 处`, '职责树 模型/厂商/顺位 齐；pipes 与 provider 一致；yml 与 JSON 模型 id 同源', problems.slice(0, 10).join(' '));
   }
 }
 

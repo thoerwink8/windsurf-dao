@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // scripts/dianjiangtai-select.mjs —— 点将台接线 CLI（包装 dianjiangtai-core）
 //
-// 协调者派新工位时跑这一条，把 stdout 三选项转述给帅拍板。不替代 scripts/select.mjs
-// （后者带 --commit 落账）；本入口只出推荐，并把 docs/model-routing.json 分时路由
+// 帅派新工位时跑这一条，把 stdout 三选项转述给帅拍板。不替代 scripts/select.mjs
+// （后者带 --commit 落账）；本入口只出推荐，并把 docs/model-routing.json 职责树顺位
 // 送进核心参与 A 位计算。
 //
 // 用法：
@@ -10,7 +10,7 @@
 //   node scripts/dianjiangtai-select.mjs --role 审读 --ts 2026-08-15T15:00:00+08:00 --job-id dj-002
 //
 // 纪律：选型时刻必须 --ts 传入，禁 Date.now（决策票按它复算）。
-// 路由/禁令/审官序读工作区 docs/model-routing.json（2026-08-22 迁 JSON），本地改即生效。
+// 顺位/禁令/审官序读工作区 docs/model-routing.json（2026-08-22），本地改即生效。
 // 三选项模型标识渲染成 provider/model（#533），可直接拷进 pi --model。
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -28,7 +28,7 @@ const ROLE_MAP = {
   写码: { workType: '写码', identity: '工人' },
   审读: { workType: '审查', identity: '审官' },
   审查: { workType: '审查', identity: '审官' },
-  判断: { workType: '判断', identity: '协调者' },
+  判断: { workType: '判断', identity: '帅' },
   查证: { workType: '查证', identity: '工人' },
   UI: { workType: 'UI', identity: '工人' },
 };
@@ -41,7 +41,7 @@ function arg(name, def) {
 function usageAndExit(msg) {
   process.stderr.write(`${msg}\n`);
   process.stderr.write(
-    '用法: node scripts/dianjiangtai-select.mjs --role <写码|审读|审查|判断|查证|UI> --ts <ISO8601> [--job-id <id>] [--identity 帅|协调者|工人|审官] [--task-tokens N] [--risk 低|中|高]\n',
+    '用法: node scripts/dianjiangtai-select.mjs --role <写码|审读|审查|判断|查证|UI> --ts <ISO8601> [--job-id <id>] [--identity 帅|协调者|工人|审官] [--worker-model <id>] [--task-tokens N] [--risk 低|中|高]\n',
   );
   process.exit(1);
 }
@@ -55,7 +55,9 @@ const mapped = ROLE_MAP[role];
 if (!mapped) usageAndExit(`未知角色「${role}」（允许 ${Object.keys(ROLE_MAP).join('/')}）`);
 
 const workType = arg('work-type', mapped.workType);
-const identity = arg('identity', mapped.identity);
+let identity = arg('identity', mapped.identity);
+if (identity === '协调者') identity = '帅';
+const workerModel = arg('worker-model');
 const jobId = arg('job-id', `preview-${role}`);
 const taskTokens = arg('task-tokens') != null ? Number(arg('task-tokens')) : null;
 if (taskTokens !== null && !Number.isFinite(taskTokens)) usageAndExit(`--task-tokens 必须为数字，实际 ${arg('task-tokens')}`);
@@ -72,16 +74,17 @@ try {
   process.stderr.write(`选型 JSON 读失败——本次等于没查到路由规则，拒绝出推荐：${String(e.message || e).split(/\r?\n/)[0]}\n`);
   process.exit(1);
 }
-const routes = policy.routes || [];
-if (routes.length === 0) {
-  process.stderr.write('docs/model-routing.json 里 0 条分时路由——本次等于没读到路由，拒绝出推荐（没查成 ≠ 查过没事）。\n');
+
+const rankOrder = policy.rankOrderFor(identity, workType);
+if (rankOrder.length === 0 && !REVIEWER_SELECT_ROLES.has(role)) {
+  process.stderr.write(`docs/model-routing.json 里 ${identity}.${workType} 没扫到顺位模型——拒绝出推荐（没查成 ≠ 查过没事）。\n`);
   process.exit(1);
 }
 
 const models = parseYaml(readFileSync(join(policyDir, 'models.yml'), 'utf8')).models;
 const bans = policy.policyBans || [];
 const weights = parseYaml(readFileSync(join(policyDir, 'weights.yml'), 'utf8'));
-const policyHash = hashOf({ models, bans, weights, routes });
+const policyHash = hashOf({ models, bans, weights, rankOrder });
 
 const providerByModel = new Map();
 for (const m of policy.models || []) {
@@ -101,15 +104,20 @@ events.sort(EVENT_ORDER_KEY);
 
 const result = select({
   ts, jobId, identity, workType, taskTokens, risk, reversible,
-  events, models, bans, weights, policyHash, routes,
+  events, models, bans, weights, policyHash, rankOrder,
 });
 
 if (REVIEWER_SELECT_ROLES.has(role)) {
   const pinned = pinReviewerSlotA({
-    models,
+    models: policy.models || [],
     passerIds: result.options.B.models || [],
     order: policy.reviewerOrder,
+    workerId: workerModel,
   });
+  if (pinned.reason === 'same_vendor_blocked') {
+    process.stderr.write(`${pinned.error || '审官与工人同厂，不许自动 fallback'}\n`);
+    process.exit(1);
+  }
   if (pinned.model) {
     const detail = result.snapshot && result.snapshot.models
       ? result.snapshot.models[pinned.model]
