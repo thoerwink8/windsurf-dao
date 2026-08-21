@@ -132,6 +132,11 @@ async function main() {
     JSON.stringify({ defaultProvider: "fake-go", defaultModel: "deepseek-v4-flash" }, null, 2)
   );
   fs.copyFileSync(EXT, path.join(AGENT, "extensions", "go-fallback.ts"));
+  // go-fallback.ts import 同目录的 go-fallback-core.mjs（纯决策层），必须一起拷
+  fs.copyFileSync(
+    path.join(REPO, "host", "pi-extensions", "go-fallback-core.mjs"),
+    path.join(AGENT, "extensions", "go-fallback-core.mjs")
+  );
 
   // 起 fake 上游（随机端口，进程级隔离）
   const server = spawn(process.execPath, [SERVER], {
