@@ -155,7 +155,7 @@ describe('dao', () => {
     });
     const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
     await t.test('#688 devin 走 --command，模型是 flash-max，带 dangerous', () => {
-      assert.ok(/^devin\b/.test(devin.command) && /--model\s+deepseek-v4-flash-max/.test(devin.command) && /--permission-mode\s+dangerous/.test(devin.command) && !/--print/.test(devin.command) && devin.agentId == null, '#688 devin launch  →  ' + JSON.stringify(devin));
+      assert.ok(/^devin\b/.test(devin.command) && /--model\s+deepseek-v4-flash-max/.test(devin.command) && /--permission-mode\s+dangerous/.test(devin.command) && /--respect-workspace-trust\s+false/.test(devin.command) && !/--print/.test(devin.command) && devin.agentId == null, '#708 devin launch  →  ' + JSON.stringify(devin));
     });
     await t.test('shim 文件在仓里', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
