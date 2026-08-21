@@ -136,6 +136,7 @@ import { planCapacitySwitch, parseReviewerCardName } from './lib/dianjiangtai-re
 import { resolveActualWorkerModel } from './lib/reviewer-vendor-gate.mjs';
 import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
+import { defaultGuardDir, writeGuardHeartbeat, WATCHDOG_HEARTBEAT_NAME } from './lib/guard-keepalive.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
 import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, issueNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
 import { fingerprintFromDetail, reportWatchdogGithub } from './lib/watchdog-report.mjs';
@@ -1922,9 +1923,18 @@ function liveLoop() {
     else console.log(`[watchdog] SELF_WORKTREE_UNKNOWN: ${self.error}——本轮起不排除自己的工作区，请用 --self-worktree <id> 显式指定`);
   }
   console.log(`# watchdog live：每 ${args.interval}s 一轮（--window ${args.window} / --state-window ${args.stateWindow}${args.selfWorktree ? ' / self-worktree ' + args.selfWorktree.slice(0, 24) + '…' : ''}${args.disposeActions ? '' : ' / dispose-actions off'}）`);
+  // #699：自身心跳——keepalive 只查「进程在不在」查不出「活但卡死」（事件循环阻塞实证：
+  // 卡死一个多小时零信号）。每轮开头写一次：事件循环活着就必到这里；卡住即停更，
+  // keepalive 超阈值（WATCHDOG_HEARTBEAT_STALE_MS）杀掉重启。写失败只显形不吞。
+  const ownHeartbeatPath = join(defaultGuardDir({ env: process.env, homedir: homedir() }), WATCHDOG_HEARTBEAT_NAME);
   let roundNo = 0;
   for (;;) {
     roundNo += 1;
+    try {
+      writeGuardHeartbeat(ownHeartbeatPath, { ts: new Date().toISOString(), round: roundNo, pid: process.pid });
+    } catch (e) {
+      console.error(`[watchdog] HEARTBEAT_WRITE_FAILED: ${String(e && e.message || e).slice(0, 160)}——本轮自身心跳没写成（不停更就会被 keepalive 当卡死，必须显形）`);
+    }
     // 崩溃隔离：单轮扫描抛异常只记日志、继续下一轮——守卫保活改帥位触发后（#693），
     // 本循环是最后一道防线，单个检查项的异常不许杀死整个 resident。
     // 进程级退出路径不受影响：haltIfStale / bootGuardOrHalt 走 process.exit，不经过 catch。
