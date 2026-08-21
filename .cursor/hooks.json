@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "command": "node scripts/lib/cursor-context-hook.mjs guard-session-hook.mjs",
+        "timeout": 60
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "type": "command",
+        "command": "node scripts/lib/cursor-context-hook.mjs board-hook.mjs",
+        "timeout": 60
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "type": "command",
+        "command": "node scripts/lib/cursor-dispatch-gate-hook.mjs",
+        "timeout": 8,
+        "failClosed": true
+      }
+    ]
+  }
+}
