@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // scripts/event-write.mjs —— 点将台事件写入工具（派单/结单/归因/政策/套餐等）
 //
-// 一事件一文件：ledger/events/<ulid>-<machine>.json；写一次即不可变（已存在/同内容均拒绝，
+// 一事件一文件：<账本目录>/<ulid>-<machine>.json（默认本机 ~/.dao/ledger/events，不进 git）；
+// 写一次即不可变（已存在/同内容均拒绝，
 // 纠错另立 attr.retract）。类型闭集与必填字段派生自 schemas/events.schema.json（唯一权威）。
 // 事件类型闭集（schema 派生，非抄清单）：job.opened / job.dispatch / job.meter / job.handoff /
 //   job.closed / job.override / job.explore / attr.rule / attr.llm / attr.human / attr.retract /
@@ -20,13 +21,14 @@
 //       --token-in 12000 --token-out 3000 --cache-hit 4000 --usd-cash 0.05 --ts ...
 //   node scripts/event-write.mjs --type policy.patch --summary "..." --changed-files '["policy/models.yml"]' --ts ...
 //
-// 选项：--dir <目录>（默认 ledger/events）--machine <机器名>（默认本机 hostname）
+// 选项：--dir <目录>（默认本机 ~/.dao/ledger/events）--machine <机器名>（默认本机 hostname）
 //       --seq N（默认自动：本机最大 seq + 1）--schema <schema 路径>
 
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import os from 'node:os';
 import { writeEvent, nextSeq } from './lib/event-writer.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -50,7 +52,7 @@ if (!type) {
   process.stderr.write('缺 --type（事件类型，见 schema oneOf 闭集）\n');
   process.exit(1);
 }
-const dir = resolve(ROOT, valueOf('dir') || 'ledger/events');
+const dir = valueOf('dir') ? resolve(ROOT, valueOf('dir')) : ensureLocalLedger({ root: ROOT }).dir;
 const machine = valueOf('machine') || os.hostname();
 const ts = valueOf('ts');
 if (!ts) {

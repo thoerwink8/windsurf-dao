@@ -7,7 +7,8 @@
 //       [--risk 低] [--reversible true] [--availability gpt-5.6-sol=忙]
 //
 // 纯函数纪律：无 Date.now / Math.random；选型时刻由 --ts 传入（决策票按它复算）。
-// 读：policy/{models,bans,weights}.yml + ledger/events/*.json；不写任何物化文件。
+// 读：policy/{models,bans,weights}.yml + 本机账本 ~/.dao/ledger/events/*.json（事件不进 git，
+// 仓内历史首次使用自动种子过来）；不写任何物化文件。
 // 输出：单个 JSON 到 stdout（A.4 PR 围栏块直接贴整份 stdout，含 decision_id）。
 // --commit A|B|C：按写权矩阵（A.3 在线选型脚本只追加 job.opened/dispatch/handoff/
 //   override/explore）把选中项落账：A → job.opened + job.dispatch；
@@ -23,6 +24,7 @@ import { createRequire } from 'node:module';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select, hashOf, EVENT_ORDER_KEY } from './lib/dianjiangtai-core.mjs';
 import { writeEvent, nextSeq } from './lib/event-writer.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./lib/smol-toml.cjs');
@@ -68,7 +70,7 @@ for (const kv of (arg('availability') || '').split(',')) {
 }
 
 const policyDir = resolve(ROOT, arg('policy-dir', 'policy'));
-const eventsDir = resolve(ROOT, arg('events-dir', 'ledger/events'));
+const eventsDir = arg('events-dir') ? resolve(ROOT, arg('events-dir')) : ensureLocalLedger({ root: ROOT }).dir;
 const schemaPath = resolve(ROOT, arg('schema', 'schemas/events.schema.json'));
 
 const models = parseYaml(readFileSync(join(policyDir, 'models.yml'), 'utf8')).models;
