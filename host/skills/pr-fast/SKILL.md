@@ -94,7 +94,9 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 
 - 开出 draft 后，帅窗只读 diff / CI / `dao-check` 结果，不在帅窗补 commit / push。
 - 执行面自查通过、帅窗确认验收后：`marshal -- pr ready <N>`。
-- 合并与归档仍按 dispatch 帅侧规矩（#709 等现行拍板）；快路**不**省略终审，只省略 issue + 派工仪式。合并走 `marshal -- pr merge … --squash --delete-branch`。
+- **用户在触发快路时已拍板要做的活** ⇒ 执行面 push 后，帅窗 marshal 开 draft → 自查/`dao-check` → ready → **终审通过即** `pr merge --squash --delete-branch`，**不要**再问用户「要不要合」/「要合的话说一声」。
+- **例外才停手问用户**：CI 红、本单 `dao-check` 新红、体系类、或用户当轮明说「先别合」。
+- 快路**不**省略终审，只省略 issue + 派工仪式；合并一律走 marshal（#709 等现行拍板）。
 
 ### 5. 接力
 
