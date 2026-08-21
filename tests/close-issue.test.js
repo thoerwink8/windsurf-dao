@@ -226,3 +226,98 @@ describe('close-issue 基线化（相对绿）', () => {
     });
   });
 });
+
+describe('close-issue 祖父条款（CI 建立前合并的无 check PR 豁免 reopen）', () => {
+  // 祖父线 2026-08-11T21:38:02+08:00 = 2026-08-11T13:38:02Z（首个 workflow 经 PR #307 合入 master）。
+  const BEFORE = '2026-08-10T00:00:00Z';
+  const AT = '2026-08-11T13:38:02Z';
+  const AFTER = '2026-08-20T00:00:00Z';
+
+  it('grandfatherExempt：祖父线前/恰在祖父线 + 确认无 check → 豁免；其余形态一律从严', async (t) => {
+    const C = await LOAD;
+    await t.test('祖父线前 + 空 rollup → 豁免', () => {
+      assert.ok(C.grandfatherExempt({ mergedAt: BEFORE, statusCheckRollup: [] }).exempt);
+    });
+    await t.test('恰在祖父线（同一刻合入，CI 来不及跑）→ 豁免', () => {
+      assert.ok(C.grandfatherExempt({ mergedAt: AT, statusCheckRollup: [] }).exempt);
+    });
+    await t.test('祖父线后 + 空 rollup → 不豁免（没查成 ≠ 绿）', () => {
+      assert.ok(!C.grandfatherExempt({ mergedAt: AFTER, statusCheckRollup: [] }).exempt);
+    });
+    await t.test('mergedAt 缺失/不可解析 → 不豁免（从严）', () => {
+      assert.ok(!C.grandfatherExempt({ statusCheckRollup: [] }).exempt);
+      assert.ok(!C.grandfatherExempt({ mergedAt: 'not-a-date', statusCheckRollup: [] }).exempt);
+    });
+    await t.test('rollup 缺失（字段没查成）→ 不豁免', () => {
+      assert.ok(!C.grandfatherExempt({ mergedAt: BEFORE }).exempt);
+    });
+    await t.test('有 check → 不归祖父管', () => {
+      assert.ok(!C.grandfatherExempt({ mergedAt: BEFORE, statusCheckRollup: rollup('SUCCESS') }).exempt);
+    });
+  });
+
+  it('closeDecision：祖父前无 check → close；祖父后无 check → reopen；祖父前有 check FAILURE → 仍 reopen', async (t) => {
+    const C = await LOAD;
+    await t.test('祖父前无 check → close（理由带祖父条款）', () => {
+      const d = C.closeDecision({ state: 'MERGED', mergedAt: BEFORE, statusCheckRollup: [] });
+      assert.ok(d.action === 'close' && /祖父条款/.test(d.reason), '祖父豁免 close  →  ' + d.reason);
+    });
+    await t.test('祖父后无 check → reopen（时代特征不背锅，从严）', () => {
+      const d = C.closeDecision({ state: 'MERGED', mergedAt: AFTER, statusCheckRollup: [] });
+      assert.strictEqual(d.action, 'reopen');
+    });
+    await t.test('祖父前有 check 且 FAILURE → 仍 reopen（祖父条款不赦免真失败）', () => {
+      const d = C.closeDecision({ state: 'MERGED', mergedAt: BEFORE, statusCheckRollup: rollup('FAILURE') });
+      assert.strictEqual(d.action, 'reopen');
+    });
+  });
+
+  it('closeIssueForPr 祖父豁免落动作：单开着 → issue close，且不花 api 取基线', async (t) => {
+    const C = await LOAD;
+    const calls = [];
+    const gh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN', url: 'https://x/issue/21' } };
+      return { ok: true, json: {} };
+    };
+    await t.test('祖父前无 check + 单 OPEN → issue close', () => {
+      const r = C.closeIssueForPr({ pr: { number: 20, title: 'x', body: '署名 issue #21', state: 'MERGED', mergedAt: BEFORE, statusCheckRollup: [] }, runGh: gh });
+      assert.ok(r.ok && r.action === 'close' && r.issue === 21 && /祖父条款/.test(r.reason), '祖父豁免 close  →  ' + JSON.stringify(r));
+      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'close' && a[2] === '21'), '应调 issue close #21  →  ' + JSON.stringify(calls));
+      assert.ok(!calls.some(a => a[0] === 'api'), '祖父豁免不该花 api 取基线  →  ' + JSON.stringify(calls));
+    });
+    calls.length = 0;
+    await t.test('祖父前无 check + 单已关 → none（绝不 reopen）', () => {
+      const ghClosed = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'CLOSED', url: 'https://x/issue/22' } };
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 20, title: 'x', body: '署名 issue #22', state: 'MERGED', mergedAt: BEFORE, statusCheckRollup: [] }, runGh: ghClosed });
+      assert.ok(r.ok && r.action === 'none' && !calls.some(a => a[0] === 'issue' && (a[1] === 'close' || a[1] === 'reopen')), '已关不动  →  ' + JSON.stringify(r));
+    });
+  });
+
+  it('#305 类署名误中：目标是 PR / 单不存在 → 清晰跳过不污染 exit code；网络失败 → 仍算失败', async (t) => {
+    const C = await LOAD;
+    const redPr = { number: 307, title: 'x（原 #305 重开版）', body: '', state: 'MERGED', mergedAt: AFTER, statusCheckRollup: rollup('FAILURE') };
+    await t.test('署名目标是 PR（url 含 /pull/）→ ok 跳过，reason 说清是 PR', () => {
+      const gh = (args) => {
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'CLOSED', url: 'https://github.com/x/y/pull/305' } };
+        return { ok: true, json: {} };
+      };
+      const r = C.closeIssueForPr({ pr: redPr, runGh: gh });
+      assert.ok(r.ok && r.action === 'none' && /是 PR 不是 issue/.test(r.reason), 'PR 误中跳过  →  ' + JSON.stringify(r));
+    });
+    await t.test('署名目标不存在 → ok 跳过，reason 说清单不存在', () => {
+      const gh = () => ({ ok: false, error: 'GraphQL: Could not resolve to an issue with the number of 9999.' });
+      const r = C.closeIssueForPr({ pr: { ...redPr, title: 'x', body: '署名 issue #9999' }, runGh: gh });
+      assert.ok(r.ok && r.action === 'none' && /不存在/.test(r.reason), '单不存在跳过  →  ' + JSON.stringify(r));
+    });
+    await t.test('网络/权限失败 → ok:false（真失败保留给 exit code）', () => {
+      const gh = () => ({ ok: false, error: 'connect ETIMEDOUT api.github.com:443' });
+      const r = C.closeIssueForPr({ pr: { ...redPr, title: 'x', body: '署名 issue #30' }, runGh: gh });
+      assert.ok(!r.ok && /网络\/权限/.test(r.error), '网络失败算真失败  →  ' + JSON.stringify(r));
+    });
+  });
+});
