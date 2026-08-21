@@ -4,17 +4,17 @@
 // 删掉 GitHub `Closes`/`Fixes` 自动关单。关单只认这里：署名 issue 的 PR 已 MERGED
 // **且** check 全绿才 `issue close`；合进但 check 红（FAILURE/未完成/无 check/没查成）
 // 的不关，若单已关而关它的 PR check 红 → `issue reopen`。没查成 ≠ 绿。
-// 相对绿：PR 硬红项全属「合并时 master 基线硬红」（基线确实查成）也视为可关，
-// 判定细节在 scripts/lib/close-issue.mjs 头注。
+// 判定细节在 scripts/lib/close-issue.mjs。
 //
-// 可手动跑，也可由合后钩 / watchdog 定期挂（本仓 production 合后钩在
-// scripts/flow.mjs 的 MERGED 退役处理里调用 closeIssueForPr）。
+// 生产唯一入口：scripts/flow.mjs 合后钩 per-PR（closeIssueForPr）。
+// 全量 sweep 制度：docs/decisions/2026-08-21-close-issue-from-zero.md
 //
 // 用法：
-//   node scripts/close-issues.mjs --pr <N>         对单个 PR 判定并关/重开
-//   node scripts/close-issues.mjs                  扫已合并 PR 逐一判定（默认 --sweep）
-//   node scripts/close-issues.mjs --sweep --limit 200 --dry-run  预览，不动 issue
-//   node scripts/close-issues.mjs --json           输出 JSON 便于脚本消费
+//   node scripts/close-issues.mjs --pr <N>              对单个 PR 判定并关/重开（运维/调试）
+//   node scripts/close-issues.mjs [--sweep]             扫已合并 PR，默认 dry-run（不改 issue）
+//   node scripts/close-issues.mjs --sweep --i-know-what-im-doing  实跑 sweep（须留痕说明原因）
+//   node scripts/close-issues.mjs --sweep --dry-run     显式预览
+//   node scripts/close-issues.mjs --json                输出 JSON 便于脚本消费
 //
 // 退出码：0 = 全部查成（即使有关/重开动作）；非 0 = 有操作失败（ok:false），要报出来。
 
@@ -23,6 +23,7 @@ import { pathToFileURL } from 'node:url';
 import { closeIssueForPr } from './lib/close-issue.mjs';
 
 const ROOT = process.cwd();
+const DECISION = 'docs/decisions/2026-08-21-close-issue-from-zero.md';
 
 function runGh(args) {
   const r = spawnSync('gh', args, { encoding: 'utf8', cwd: ROOT, timeout: 30000 });
@@ -34,8 +35,8 @@ function runGh(args) {
   return { ok: true, json };
 }
 
-function parseArgs(argv) {
-  const a = { sweep: false, dryRun: false, json: false, pr: null, limit: 200 };
+export function parseArgs(argv) {
+  const a = { sweep: false, dryRun: false, json: false, pr: null, limit: 200, iKnowWhatImDoing: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--pr') a.pr = argv[++i];
@@ -43,8 +44,23 @@ function parseArgs(argv) {
     else if (v === '--dry-run') a.dryRun = true;
     else if (v === '--json') a.json = true;
     else if (v === '--limit') a.limit = Number(argv[++i]);
+    else if (v === '--i-know-what-im-doing') a.iKnowWhatImDoing = true;
   }
   return a;
+}
+
+/** sweep 模式 dry-run 强制：无 --i-know-what-im-doing 时禁止实跑改 issue 状态。 */
+export function enforceSweepPolicy(args) {
+  if (args.pr) return { args, notice: null };
+  const out = { ...args, sweep: true };
+  if (!out.iKnowWhatImDoing) {
+    out.dryRun = true;
+    return {
+      args: out,
+      notice: `close-issues: sweep 默认 dry-run（不改 issue 状态）。实跑须 --i-know-what-im-doing。见 ${DECISION}`,
+    };
+  }
+  return { args: out, notice: null };
 }
 
 function fetchPr(number) {
@@ -53,8 +69,9 @@ function fetchPr(number) {
   return { ok: true, pr: r.json };
 }
 
-function main(argv) {
-  const args = parseArgs(argv);
+export function main(argv) {
+  const { args, notice } = enforceSweepPolicy(parseArgs(argv));
+  if (notice && !args.json) console.error(notice);
   const results = [];
   let failed = 0;
 
@@ -90,7 +107,7 @@ function main(argv) {
     const verb = res.action === 'close' ? 'close' : 'reopen';
     console.log(`  ${res.dryRun ? '[DRY] ' : ''}PR #${res.pr} ${verb} issue #${res.issue}（${res.reason}）`);
   }
-  if (args.json) process.stdout.write(JSON.stringify({ results, failed }, null, 2) + '\n');
+  if (args.json) process.stdout.write(JSON.stringify({ results, failed, dryRun: args.dryRun, sweep: !args.pr }, null, 2) + '\n');
   return failed ? 1 : 0;
 }
 
