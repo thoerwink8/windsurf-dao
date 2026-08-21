@@ -193,12 +193,12 @@ decided = "2026-08-18"
 cli = "devin"
 start = "command"
 default_model = "deepseek-v4-flash-max"
-launch = "devin --model {model} --permission-mode dangerous"
+launch = "devin --model {model} --permission-mode dangerous --respect-workspace-trust false"
 launch_model = "deepseek-v4-flash-max"
 probe_wait_ms = 45000
 launch_note = """
 Devin CLI。Orca 不认 --agent devin，派工走 terminal create --command（与 reclaude 同形态）。
-工人 TUI 起法即本节 launch：`--permission-mode dangerous` 全放行工具（无人值守）。
+工人 TUI 起法即本节 launch：`--permission-mode dangerous` 全放行工具（无人值守）；2026-08-21 起含 `--respect-workspace-trust false`（#708：新 worktree 未信任，弹框卡死就绪探针）。
 非交互冒烟（不是工人起法，跑完即退）：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。
 `--print` 不能当 Orca 工人：一次提示就退出。未信任目录的非交互要关 workspace trust 检查，否则没提示可弹、当场失败。
 模型 id 以 `devin models list` 为准；写码主选 `deepseek-v4-flash-max`。装机见 NEW-MACHINE.md「devin 怎么配」。
