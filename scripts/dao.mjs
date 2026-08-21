@@ -695,7 +695,9 @@ function listAllRuns(limit = 100) {
   return { ok: false, unscanned: true, error: 'run-list 分页超过 20 页，放弃（没扫成）' };
 }
 
-/** #614 验收④：只读 gc 扫描（不 --apply，不关台）。没查成 → unscanned，不许报 0。 */
+/** #614 验收④：只读 gc 扫描（不 --apply，不关台）。没查成 → unscanned，不许报 0。
+ * zombieCount 只数活僵尸（有租约 pending）：墓碑清不掉（orca 无 run-delete），
+ * 计入会让提示行永远响（狼来了）。 */
 function runGcReadonlyScan(threshold = GC_THRESHOLD) {
   const src = loadLifecycleInputs();
   if (!src.ok) return { ok: false, unscanned: true, error: src.error, threshold };
@@ -705,7 +707,18 @@ function runGcReadonlyScan(threshold = GC_THRESHOLD) {
     worktrees: src.worktrees,
   });
   if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
-  return gcSummaryFromPlan(plan, threshold);
+  const parts = partitionGcTargets(plan.retire, {
+    leaseExistsFor: (runId) => stationFilesFor(runId).some((f) => existsSync(f)),
+  });
+  if (!parts.ok) return { ok: false, unscanned: true, error: parts.error, threshold };
+  return {
+    ok: true,
+    unscanned: false,
+    zombieCount: parts.pending.length,
+    keepCount: plan.keep.length,
+    tombstoneCount: parts.tombstones.length,
+    threshold,
+  };
 }
 
 function runIdFromDispatch(dispatchId) {
