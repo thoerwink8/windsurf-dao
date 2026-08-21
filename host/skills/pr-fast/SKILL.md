@@ -1,11 +1,13 @@
 ---
 name: pr-fast
-description: 小活直开 draft PR、不走 issue。用户说「快速模式」「极速模式」「pr-fast」「直开PR」「快单」时读。Cursor Desktop 必须在新建 Agent 会话里动 git；当前帅窗只写任务书、验收、指 PR 链接。
+description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全走 marshal；写码仍在执行面。用户说「快速模式」「极速模式」「pr-fast」「直开PR」「快单」时读。
 ---
 
 # 快速模式 / 极速模式（pr-fast）
 
 **承重层已是 PR-first**（`docs/decisions/2026-08-14-rules-retirement-native-mechanisms.md`）：任务 = draft PR，跨会话接力 = `gh pr list --draft`（见 `host/skills/resume/SKILL.md`）。本 skill 只补**显性入口**和**执行面路由**，不造脚本、不造 `_flow` 状态、不开 issue。
+
+快路 PR 作者是 **`dao-marshal[bot]`**（帅窗用 marshal 开 PR；用户已接受）。
 
 ## 何时触发
 
@@ -26,15 +28,14 @@ description: 小活直开 draft PR、不走 issue。用户说「快速模式」�
 
 ## 帅窗 vs 执行面（硬规矩）
 
-`host/skills/dispatch/SKILL.md` 主会话红线：**帅窗不碰 git**（branch / commit / push / 开 PR 都算）。
+主会话红线精神保留：**帅窗禁止 git 写**（`commit` / `push` 等）。快路例外见 `host/skills/dispatch/SKILL.md`「主会话红线」旁指针——开 PR 等 GitHub 写动作走 **marshal**，不算「手碰 git」。
 
-| 环境 | 动 git 的执行面 |
-| --- | --- |
-| **Cursor Desktop** | **新建 Agent 会话**（同项目）。当前会话只写任务书、贴验收、收 PR 链接。 |
-| Claude Code 帅位 | 新开终端，或 `node scripts/dao.mjs dispatch`（可无 `--issue`，仍走工人+审官）。 |
-| 只读查证、不进 git | 帅窗可直接做，不必开快路。 |
+| 谁 | 做什么 | 禁止 |
+| --- | --- | --- |
+| **执行面** | `checkout -b` → 改码 → `dao-check` → `push` | **`gh pr create`**、worker 开 PR、裸 `gh` 退路 |
+| **帅窗** | `gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | git 写（commit/push）；**裸 `gh`**（必须 marshal） |
 
-**Cursor Desktop 禁止**：在当前帅会话里 `git commit` / `gh pr create`——即使用户催，也先说明「请新开 Agent 会话执行下面任务书」。
+**Cursor Desktop**：写码仍在**新建 Agent 会话**；`create` / `ready` / `comment` / `merge` 在**帅窗**用 marshal。当前帅会话禁止 `git commit` / `git push`——即使用户催，也先说明「请新开 Agent 会话执行下面任务书」；GitHub 文书留在帅窗走 marshal。
 
 ## 流程（按序）
 
@@ -58,7 +59,7 @@ description: 小活直开 draft PR、不走 issue。用户说「快速模式」�
 - **Cursor**：请用户新开 Agent 会话，把任务书 + 本 skill 路径 `host/skills/pr-fast/SKILL.md` 一并附上（或 `@` 引用）。
 - **CC / 终端**：在新终端执行；要审官闭环时用 `dispatch`，不要假装是快路。
 
-### 3. 执行面：branch → 改 → 检 → draft PR
+### 3. 执行面：branch → 改 → 检 → push（不开 PR）
 
 在**执行面**（不是帅窗）：
 
@@ -69,22 +70,31 @@ git checkout -b thoerwink8/<短名>
 # 改完
 node scripts/dao-check.mjs
 
-# draft PR（多行正文用 --body-file）
-node scripts/gh-as.mjs worker -- pr create --draft --title "[cursor] <标题>" --body-file <文件>
-# 无 worker 凭据时：gh pr create --draft …（PR 仍须含 目标/验收/进展 三段）
-
 git push -u origin HEAD
 ```
 
-PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致）。**不写 issue 号、不署名 issue**——本路没有 issue；关单脚本不适用。
-
 commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 
-### 4. 帅窗：验收与收口
+执行面**只**做到 push；**禁止**执行面 `gh pr create`、禁止 `gh-as.mjs worker -- pr create`、禁止裸 `gh` 开 PR 退路。推完把分支名回报帅窗。
 
-- 执行面回报 PR 号后，帅窗只读 diff / CI / `dao-check` 结果，不在帅窗补 commit。
-- 执行面自查通过后：`gh pr ready <N>`（或 `gh-as.mjs worker -- pr ready <N>`）。
-- 合并与归档仍按 dispatch 帅侧规矩（#709 等现行拍板）；快路**不**省略终审，只省略 issue + 派工仪式。
+### 4. 帅窗：marshal 开 draft PR → 验收 → 收口
+
+分支已在远端后，**帅窗**用 marshal（多行 body 用 `--body-file`；若当前在 master，加 `--head <branch> --base master`）：
+
+```bash
+node scripts/gh-as.mjs marshal -- pr create --draft --title "[cursor] <标题>" --body-file <文件> --head <branch> --base master
+node scripts/gh-as.mjs marshal -- pr ready <N>
+node scripts/gh-as.mjs marshal -- pr comment <N> --body-file <文件>
+node scripts/gh-as.mjs marshal -- pr merge <N> --squash --delete-branch
+```
+
+命令以 `gh-as` / `gh` 实际能力为准。缺 marshal 凭据报「这台机器没装」，**不许**退回裸 `gh` 或 worker 装成做完。
+
+PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致）。**不写 issue 号、不署名 issue**——本路没有 issue；关单脚本不适用。作者应为 **`dao-marshal[bot]`**。
+
+- 开出 draft 后，帅窗只读 diff / CI / `dao-check` 结果，不在帅窗补 commit / push。
+- 执行面自查通过、帅窗确认验收后：`marshal -- pr ready <N>`。
+- 合并与归档仍按 dispatch 帅侧规矩（#709 等现行拍板）；快路**不**省略终审，只省略 issue + 派工仪式。合并走 `marshal -- pr merge … --squash --delete-branch`。
 
 ### 5. 接力
 
@@ -94,7 +104,7 @@ commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 
 | skill | 干什么 |
 | --- | --- |
-| **pr-fast（本页）** | 小活、无 issue、直 draft PR、执行面分离 |
+| **pr-fast（本页）** | 小活、无 issue、直 draft PR；写码在执行面，GitHub 写走 marshal |
 | **resume** | 查在途 draft PR / issue / 工人 |
 | **dispatch** | 要工人+审官、要 `--issue`、体系类、大块活 |
 | **dao-project** | 多块相关活项化 |
@@ -103,6 +113,7 @@ commit 标题带宿主标识；Cursor 执行面用 **`[cursor]`** 前缀。
 ## 不要做的
 
 - 不要为快路加 hook、dao-check 新项、租约文件、接力状态。
-- 不要在帅窗（Cursor 当前会话）里动 git。
+- 不要在帅窗里 `git commit` / `git push`。
+- 不要在执行面开 PR（含 worker / 裸 `gh`）；不要用裸 `gh` 做 create/ready/comment/merge。
 - 不要把体系类改动包装成「极速模式」绕过 manual merge 与 PR 三问。
 - 不要开 issue「为了有个号」——要么真走开单三问，要么 PR 正文自洽。
