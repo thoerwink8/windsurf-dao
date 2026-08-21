@@ -265,7 +265,8 @@ pipes = [
 
 # opencode Go 新增模型（2026-08-16 接入，拍板见 [providers.opencode-go].why）。
 # ds-flash/pro 不在这里另立条目——它们和直连是同一个模型，只是换通道，见上面两条。
-# 用户 2026-08-16 拍板 og 通道只留 4 个模型：deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3；
+# 用户 2026-08-16 拍板 og 通道主留：deepseek-v4-flash / deepseek-v4-pro / kimi-k3 / glm-5.3；
+# 2026-08-22 追加：ox-alpha-free（免费探路 / Unlimited）进试用候选——其它新模型一律不加。
 # 2026-08-16 实测通过：kimi-k3 正常返回；glm-5.2 / minimax-m3 / grok-4.5 已随拍板移出 og 通道，不入表；
 # gpt-5.6-luna 被上游按区域 403 拒（"not available in your region"），不入表；
 # deepseek-v4-flash-free 属 Zen 侧且已被服务端禁用（"Model is disabled"），不入表。
@@ -279,6 +280,16 @@ status = "试用"
 trial_since = "2026-08-16"
 why = "GLM 系主打编码，1M 上下文 / 131K 输出；先进写码+判断候选池，按返工率实测校准再谈定位（用户拍板 2026-08-16）"
 decided = "2026-08-16"
+
+[[models]]
+id = "ox-alpha-free"
+provider = "opencode-go"
+cli_model = "ox-alpha-free"
+roles = ["写码", "判断"]
+status = "试用"
+trial_since = "2026-08-22"
+why = "og 免费探路 / Unlimited；只进写码+判断试用候选，不改写码 fallback 链、不顶判断主路（仍 ds-pro）。质量不稳，按返工率实测再谈定位（用户 2026-08-22 拍板：只加本 id，A–E/G/H 等其它新模型一律不加）"
+decided = "2026-08-22"
 
 [[models]]
 id = "glm-5.2"
@@ -357,6 +368,11 @@ decided = "2026-08-14"
 scope = "glm-5.3 的查证 / 审查 / UI"
 why = "用户拍板它只进「写码+判断」候选池，但 roles 字段不参与选型门闩（dianjiangtai-core 不读 roles；实测新模型靠 quota_explore 抢下了这三类活的 A 位），只有 policy/bans.yml 拦得住。垫片，正解是让 roles 真正生效，届时本条退役"
 decided = "2026-08-16"
+
+[[bans]]
+scope = "ox-alpha-free 的查证 / 审查 / UI"
+why = "用户拍板它只进「写码+判断」试用候选（免费探路），roles 不参与选型门闩，只有 bans 拦得住查证/审查/UI；垫片同 glm-5.3"
+decided = "2026-08-22"
 
 [[bans]]
 scope = "gpt UI 类（含复审）"

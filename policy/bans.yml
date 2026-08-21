@@ -7,7 +7,7 @@
 # 事实来源：docs/model-routing.toml [[bans]]（唯一真相），此处是它在点将台政策层的镜像。
 # ============================================================================
 
-updated: "2026-08-21"
+updated: "2026-08-22"
 
 bans:
   - id: ban-deepseek-查证
@@ -23,6 +23,13 @@ bans:
     identities: null
     why: 用户拍板 glm-5.3 只进「写码+判断」候选池，但 roles 不参与选型门闩（core 不读 roles，实测新模型靠 quota_explore 抢下这三类 A 位），只有 bans 拦得住；垫片，正解是让 roles 生效后本条退役（model-routing.toml）
     decided: "2026-08-16"
+
+  - id: ban-ox-alpha-free-未验证工种
+    models: [ox-alpha-free]
+    work_types: [查证, 审查, UI]
+    identities: null
+    why: 用户拍板 ox-alpha-free 只进「写码+判断」试用候选（免费探路）；roles 不参与选型门闩，只有 bans 拦查证/审查/UI（model-routing.toml）
+    decided: "2026-08-22"
 
   - id: ban-gpt-ui
     models: [gpt-5.6-sol]
