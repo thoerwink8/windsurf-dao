@@ -148,6 +148,7 @@ import {
   parseAskTimeoutMs,
   finalizeWorktreeRmLifecycle,
   partitionGcTargets,
+  partitionCoordinatorRuns,
   summarizeGcApply,
   resolveStationCloseTarget,
   previewHandlesForRun,
@@ -2842,11 +2843,19 @@ function cmdRunGc(args) {
   const leaseExistsFor = (runId) => stationFilesFor(runId).some((f) => existsSync(f));
   const parts = partitionGcTargets(plan.retire, { leaseExistsFor });
   if (!parts.ok) fail(parts.error);
-  // #614：coordinator 豁免只认「还活着」（有租约）的；已退役（无租约）归墓碑，不许永久假活。
-  // 租约查不成 → unscanned fail-close：不许当豁免 keep，也不许退役。
-  const coordParts = partitionGcTargets(plan.coordinator, { leaseExistsFor });
+  // #614：coordinator 豁免分桶（永不自动退役，显示分真假）。判据 = 在途单 / 协调终端还在盘面
+  // （#638 全局台后无 per-run 租约，租约判据会把活协调 Run 误判墓碑）。查不成 → unscanned。
+  const listed = orca(argsTerminalList());
+  if (!listed.ok) fail(`terminal list 没查成（coordinator 活性判不了）: ${errText(listed.error)}`);
+  const terminals = listed.json?.result?.terminals;
+  if (!Array.isArray(terminals)) fail('terminal list 结构不认识（coordinator 活性判不了）');
+  const onBoard = new Set(terminals.map(t => t && t.handle).filter(Boolean));
+  const coordParts = partitionCoordinatorRuns(plan.coordinator, {
+    protectedIds: new Set(plan.protected),
+    handleOnBoard: (h) => onBoard.has(h),
+  });
   if (!coordParts.ok) fail(coordParts.error);
-  const keepCoord = coordParts.pending;
+  const keepCoord = coordParts.keep;
   const tombCoord = coordParts.tombstones;
   const summary = {
     pending: parts.pending.map(r => r.id),
@@ -2858,7 +2867,7 @@ function cmdRunGc(args) {
     pendingCount: parts.pending.length,
     tombstoneCount: parts.tombstones.length + tombCoord.length,
     keepCount: plan.keep.length + keepCoord.length,
-    note: 'orca 没有 run-delete；tombstones = 已退但墓碑仍在 run-list。真关只认 terminal close 掉活台，不认删租约。',
+    note: 'orca 没有 run-delete；tombstones = 已退但墓碑仍在 run-list。真关只认 terminal close 掉活台，不认删租约。coordinator 标记的 Run 永不自动退役，只能显式 retire --run。',
   };
   if (!args.apply) {
     emit({ ok: true, dryRun: true, ...summary });

@@ -1948,9 +1948,10 @@ describe('dao', () => {
       const scanFn = daoSrc.slice(daoSrc.indexOf('function runGcReadonlyScan'), daoSrc.indexOf('function runIdFromDispatch'));
       assert.ok(/unscanned: true, error: src\.error/.test(scanFn), '只读扫描没查成 → unscanned  →  ' + scanFn.slice(0, 200));
     });
-    await t.test('#614 coordinator 豁免只认活 Run（有租约 keep / 无租约墓碑，查不成 fail-close）', () => {
+    await t.test('#614 coordinator 豁免分桶（在途单/协调终端在盘面 keep，查不成 fail-close）', () => {
       const gcFn = daoSrc.slice(daoSrc.indexOf('function cmdRunGc'), daoSrc.indexOf('function cmdAsk'));
-      assert.ok(/coordParts = partitionGcTargets\(plan\.coordinator/.test(gcFn), 'coordinator 也过租约分桶  →  ' + gcFn.slice(0, 200));
+      assert.ok(/partitionCoordinatorRuns\(plan\.coordinator/.test(gcFn), 'coordinator 走 handle 分桶  →  ' + gcFn.slice(0, 200));
+      assert.ok(/argsTerminalList\(\)/.test(gcFn) && /onBoard = new Set/.test(gcFn), '活性判据 = terminal list 盘面  →  ' + gcFn.slice(0, 200));
       assert.ok(/coordinatorKeep/.test(gcFn) && /coordinatorTombstones/.test(gcFn), '输出活豁免/墓碑两桶');
     });
     await t.test('#614 run-list 分页扫全（nextCursor 循环，页失败 → unscanned 不许当全量）', () => {

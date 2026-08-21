@@ -153,6 +153,47 @@ export function planRunGc({ runs, workers, worktrees } = {}) {
   };
 }
 
+/**
+ * #614：coordinator 豁免分桶。永不自动退役（不进 pending，apply 够不到），但显示要分真假：
+ * 有在途单（protectedIds）或 coordinator_handle 还在盘面（#638 全局台后无 per-run 租约，
+ * 租约判据会把活协调 Run 误判墓碑；活协调 Run 的证据 = 协调终端还在盘面，与 relay 活跃集
+ * activeRunIds 同一判据）→ 豁免 keep；否则（协调终端已消失/从未有）→ 墓碑。
+ * handle 判据没给 / 查不成 → unscanned fail-close：不许当豁免 keep，也不许退役。
+ */
+export function partitionCoordinatorRuns(runs, { protectedIds, handleOnBoard } = {}) {
+  if (!Array.isArray(runs)) {
+    return { ok: false, unscanned: true, error: 'coordinator 名单结构不认识', keep: [], tombstones: [] };
+  }
+  if (typeof handleOnBoard !== 'function') {
+    return { ok: false, unscanned: true, error: '没给 coordinator 活性判据（没查成）', keep: [], tombstones: [] };
+  }
+  const keep = [];
+  const tombstones = [];
+  for (const run of runs) {
+    if (!run?.id) continue;
+    if (protectedIds && protectedIds.has(run.id)) {
+      keep.push(run);
+      continue;
+    }
+    const h = run.coordinator_handle || null;
+    let onBoard;
+    try {
+      onBoard = h ? handleOnBoard(h) : false;
+    } catch (e) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `coordinator 活性没查成 ${run.id}：${e && e.message ? e.message : e}`,
+        keep: [],
+        tombstones: [],
+      };
+    }
+    if (h && onBoard) keep.push(run);
+    else tombstones.push(run);
+  }
+  return { ok: true, unscanned: false, keep, tombstones };
+}
+
 function pathMatches(workerTreeId, paths) {
   if (!workerTreeId || !paths || paths.size === 0) return false;
   const norm = String(workerTreeId).replace(/\\/g, '/').toLowerCase();

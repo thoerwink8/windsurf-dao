@@ -178,6 +178,33 @@ describe('run-lifecycle', () => {
     });
   });
 
+  it('#614 partitionCoordinatorRuns：在途单 / 协调终端在盘面 → 豁免 keep，否则墓碑，判据缺失 unscanned', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [
+      run({ id: 'run_live', coord: 'term_shuai', objective: 'coordinator: x' }),
+      run({ id: 'run_prot', coord: 'term_gone', objective: 'coordinator: x' }),
+      run({ id: 'run_dead', coord: null, objective: 'coordinator: x' }),
+      run({ id: 'run_noHandle', coord: 'term_gone', objective: 'coordinator: x' }),
+    ];
+    const board = S.partitionCoordinatorRuns(runs, {
+      protectedIds: new Set(['run_prot']),
+      handleOnBoard: (h) => h === 'term_shuai',
+    });
+    await t.test('活协调终端 → keep', () => {
+      assert.ok(board.ok && board.keep.map(r => r.id).includes('run_live'), '活协调终端 keep  →  ' + JSON.stringify(board));
+    });
+    await t.test('在途单保护优先于 handle → keep', () => {
+      assert.ok(board.keep.map(r => r.id).includes('run_prot'), '在途单保护 keep  →  ' + JSON.stringify(board));
+    });
+    await t.test('无 handle / handle 不在盘面 → 墓碑', () => {
+      assert.ok(board.tombstones.map(r => r.id).sort().join(',') === 'run_dead,run_noHandle', '墓碑  →  ' + JSON.stringify(board));
+    });
+    await t.test('判据缺失 / 名单结构不认识 → unscanned', () => {
+      assert.ok(S.partitionCoordinatorRuns(null, { handleOnBoard: () => true }).unscanned === true, 'runs 不是数组 → unscanned');
+      assert.ok(S.partitionCoordinatorRuns([], {}).unscanned === true, '没给 handle 判据 → unscanned');
+    });
+  });
+
   it('#614 run-list 截断：分页扫全（listAllRuns 负责），页失败 → unscanned', async (t) => {
     const S = await LIB_LOAD;
     const runs = [run({ id: 'run_a' }), run({ id: 'run_b' })];
