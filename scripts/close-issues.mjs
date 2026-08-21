@@ -4,6 +4,8 @@
 // 删掉 GitHub `Closes`/`Fixes` 自动关单。关单只认这里：署名 issue 的 PR 已 MERGED
 // **且** check 全绿才 `issue close`；合进但 check 红（FAILURE/未完成/无 check/没查成）
 // 的不关，若单已关而关它的 PR check 红 → `issue reopen`。没查成 ≠ 绿。
+// 相对绿：PR 硬红项全属「合并时 master 基线硬红」（基线确实查成）也视为可关，
+// 判定细节在 scripts/lib/close-issue.mjs 头注。
 //
 // 可手动跑，也可由合后钩 / watchdog 定期挂（本仓 production 合后钩在
 // scripts/flow.mjs 的 MERGED 退役处理里调用 closeIssueForPr）。
@@ -46,7 +48,7 @@ function parseArgs(argv) {
 }
 
 function fetchPr(number) {
-  const r = runGh(['pr', 'view', String(number), '--json', 'number,title,body,state,statusCheckRollup']);
+  const r = runGh(['pr', 'view', String(number), '--json', 'number,title,body,state,statusCheckRollup,mergeCommit']);
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, pr: r.json };
 }
