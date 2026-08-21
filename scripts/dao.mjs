@@ -74,6 +74,9 @@ import {
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
+  verifyReviewerAttachTree,
+  planAttachSoldierDispatch,
+  isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
   isRunRequired,
@@ -2557,6 +2560,29 @@ function cmdReviewerAttach(args) {
 
   const worker = resolveWorkerFromPr({ pr: args.pr, runGh: gh });
   if (!worker.ok) fail(worker.error, { worker, pr: String(args.pr) });
+
+  // #631：树→PR 归属校验。树↔dispatch 是 issue 派工时绑死的，PR 号是后开出来的——
+  // issue 号 ≠ PR 号是常态（issue #N 派工 → PR #M），所以校验的是「这棵树是不是这个 PR 的工人树」
+  // （树的 issue 号 ∈ PR 署名 + 树分支 == PR head），不是「dispatch 关联号 == --pr」。
+  // 对不上当场拒，不许硬塞——串号会让审官等错 id 烧 600s 再误诊「实属别的单」（#631）。
+  // dry-run 不建资源，worktree list 没查成只记进 plan 不拦（CI 无 orca 时 dry-run 仍能出计划）。
+  const wtList = orca(['worktree', 'list', '--json']);
+  const treeVerified = (() => {
+    if (!wtList.ok) {
+      const err = `worktree list 没查成，树→PR 归属校验做不了: ${errText(wtList.error)}`;
+      if (args.dryRun) return { ok: true, verified: false, unscanned: true, error: err };
+      fail(err, { worker, pr: String(args.pr) });
+    }
+    const v = verifyReviewerAttachTree({
+      prIssueNumbers: worker.refs,
+      headRefName: baseBranch,
+      worktrees: wtList.json?.result?.worktrees || wtList.json?.worktrees,
+      worktreeSel: args.worktree,
+    });
+    if (!v.ok && !args.dryRun) fail(v.error, { worker, treeVerified: v, pr: String(args.pr) });
+    return v;
+  })();
+
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: args.reviewer, routing,
   });
@@ -2581,6 +2607,7 @@ function cmdReviewerAttach(args) {
     mergeable,
     workerModel: worker.modelId,
     vendorGate,
+    treeVerified,
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
@@ -2630,17 +2657,44 @@ function cmdReviewerAttach(args) {
     if (!revVerify.ok) failCreated(created, '审官 TUI 未就绪', { verify: revVerify, ...plan });
   }
 
+  // #631：树→dispatch 映射是 issue 派工时写的（dispatch 绑 issue 树），
+  // 它「是谁的工人」没问题，但「还会不会发完工」要另验——#625 事故里 worker-list 还显示活、
+  // worker-show 已结算（capability 已吊销），审官按树映射的 id 等完工白烧 600s 再误诊「实属 #625」。
+  // 注入前用 worker-show 真读复核活性；已结算禁止当收件人（#552）；worker-done 失败后补审官
+  // 不再等完工 → --skip-wait（跳过等待，d 有就给红项去处，没有就红项上帅）。
   let soldierDispatchId = args.soldierDispatch || null;
   let soldierRunId = null;
-  if (!soldierDispatchId && !args.spec) {
-    const wl = orca(argsWorkerList());
-    if (!wl.ok) failCreated(created, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
-    const found = findDispatchForWorktree(wl.json, args.worktree);
-    if (!found.ok) failCreated(created, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch，或确认工人卡走过 worker-start`, { found, ...plan });
-    soldierDispatchId = found.dispatchId;
-    soldierRunId = found.runId || null;
+  let soldierPlan = null;
+  // --spec 是帅自定义整条注入，士兵 dispatch 与等待契约都不适用，不拦
+  if (!args.spec) {
+    let foundDispatch = null;
+    if (!soldierDispatchId) {
+      const wl = orca(argsWorkerList());
+      if (!wl.ok && !args.skipWait) failCreated(created, `worker-list 没查成，给 --soldier-dispatch 或 --skip-wait：${errText(wl.error)}`, plan);
+      if (wl.ok) foundDispatch = findDispatchForWorktree(wl.json, args.worktree);
+    }
+    const probeId = soldierDispatchId || (foundDispatch?.ok ? foundDispatch.dispatchId : null);
+    let dispatchLive = null;
+    if (probeId) {
+      const shown = orca(argsWorkerShow({ dispatch: probeId }));
+      if (shown.ok) {
+        const d = shown.json?.result?.dispatch || {};
+        const w = shown.json?.result?.worker || {};
+        dispatchLive = isLiveDispatchRecipient({ workerState: w.state || d.status, dispatchStatus: d.status });
+      }
+    }
+    soldierPlan = planAttachSoldierDispatch({
+      explicitDispatch: soldierDispatchId,
+      found: foundDispatch,
+      dispatchLive,
+      skipWait: !!args.skipWait,
+    });
+    if (!soldierPlan.ok) failCreated(created, soldierPlan.error, { found: foundDispatch, soldierPlan, ...plan });
+    soldierDispatchId = soldierPlan.soldierDispatchId || null;
+    if (soldierPlan.runId) soldierRunId = soldierPlan.runId;
+    if (!soldierRunId && soldierDispatchId) soldierRunId = runIdFromDispatch(soldierDispatchId);
+    if (soldierPlan.deadWarning) console.error(`[dao] 注意：${soldierPlan.deadWarning}`);
   }
-  if (!soldierRunId && soldierDispatchId) soldierRunId = runIdFromDispatch(soldierDispatchId);
 
   let reviewerBook = null;
   try {
@@ -2654,9 +2708,11 @@ function cmdReviewerAttach(args) {
         spec: `按审官任务书审 PR #${args.pr}`,
         issue: args.issue,
         pr: String(args.pr),
-        soldierDispatchId: String(soldierDispatchId),
+        // #631：skip-wait 无收件人时传 ''（渲染成 d=，任务书认空 = 红项上帅），不许传 null（渲染硬闸）
+        soldierDispatchId: soldierDispatchId ? String(soldierDispatchId) : '',
         mergePolicy: policy,
         mergeReason: args.mergeReason,
+        skipWait: soldierPlan?.skipWait || false,
       }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
@@ -2725,6 +2781,7 @@ function cmdReviewerAttach(args) {
     ...created,
     reviewerTaskId,
     soldierDispatchId,
+    soldierPlan,
     heads,
     filesChecked: filesOk.checked,
     probes: env,

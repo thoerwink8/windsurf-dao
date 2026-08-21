@@ -14,6 +14,7 @@ import { isModelRejectText, normalizePipes } from './next-launch.mjs';
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
+import { issueNumberFromWorktree } from './card-identity.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -586,6 +587,138 @@ export function argsWorkerList() {
   return ['orchestration', 'worker-list', '--json'];
 }
 
+/** 树选择符匹配：全等 / `id::<sel>` 后缀 / 末段后缀（worker-list 与 worktree list 同款 id 形态）。 */
+export function worktreeSelMatches(id, sel) {
+  const s = String(sel || '').trim();
+  const i = String(id || '');
+  if (!s || !i) return false;
+  return i === s || i.endsWith(`::${s}`) || i.endsWith(s);
+}
+
+/** 从 worktree list 数组里找选择符对应的树。找不到返回 null（不是没查成）。 */
+export function findWorktreeBySel(worktrees, sel) {
+  if (!Array.isArray(worktrees)) return null;
+  const s = String(sel || '').trim();
+  if (!s) return null;
+  return worktrees.find(w => {
+    if (!w) return false;
+    return worktreeSelMatches(w.id || w.worktreeId, s) || worktreeSelMatches(w.path, s);
+  }) || null;
+}
+
+/**
+ * #631：reviewer-attach 树→dispatch 映射的归属校验。
+ * 树↔dispatch 是 issue 派工时绑死的（dispatch 绑 issue 树），PR 号是后开出来的——
+ * issue 号 ≠ PR 号是常态（issue #N 派工 → PR #M），所以这里不比对「dispatch 关联号 == --pr」，
+ * 只校验「传进来的树是不是这个 PR 的工人树」：
+ *   1) 树上的 issue 号（linkedIssue/卡名）必须 ∈ PR 署名 issue 号（title+body 的 Closes/署名 issue）；
+ *   2) 树分支必须 == refs/heads/<PR headRefName>（flow.mjs 同款判据）。
+ * 两条都查不到（树不在盘面/已归档）→ verified:false，不硬拦，交给后续 dispatch 查找与活性闸。
+ * 查到任何一条对不上 → ok:false，不许硬塞（#631：串号会烧掉审官 600s 再误诊成「实属别的单」）。
+ */
+export function verifyReviewerAttachTree({ prIssueNumbers, headRefName, worktrees, worktreeSel } = {}) {
+  if (!Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktree list 没查成，树→PR 归属校验做不了（不许硬塞）' };
+  }
+  const wt = findWorktreeBySel(worktrees, worktreeSel);
+  if (!wt) {
+    return { ok: true, verified: false, reason: '盘面查不到该树（已归档或选择符不对），归属校验无样本' };
+  }
+  const via = [];
+  const refs = Array.isArray(prIssueNumbers) ? prIssueNumbers.map(Number).filter(Number.isInteger) : [];
+  const wtIssue = issueNumberFromWorktree(wt);
+  if (wtIssue && refs.length > 0) {
+    if (!refs.includes(wtIssue)) {
+      return {
+        ok: false, verified: false,
+        error: `树关联 issue #${wtIssue}，PR 署名的是 #${refs.join('/#')}——树→PR 对不上（传错树？）`,
+        wtIssue, prIssueNumbers: refs,
+      };
+    }
+    via.push(`issue #${wtIssue} ∈ PR 署名`);
+  }
+  const branch = wt?.branch || wt?.git?.branch || null;
+  const want = headRefName ? `refs/heads/${headRefName}` : null;
+  if (branch && want) {
+    if (branch !== want) {
+      return {
+        ok: false, verified: false,
+        error: `树分支 ${branch} ≠ PR head 分支 ${want}——树→PR 对不上（传错树？）`,
+        branch, want,
+      };
+    }
+    via.push('分支 == PR head');
+  }
+  return { ok: true, verified: via.length > 0, via };
+}
+
+/**
+ * #631：审官要等的「士兵完工」只可能来自 worker-done 自己建的审官（完工消息由 worker-done 投递）。
+ * reviewer-attach 是 worker-done 失败后的手动补派——工人那边不会再发完工，硬等 = 烧 600s 再误诊。
+ * 决策矩阵（纯函数，判别性测试钉死）：
+ *   没 --skip-wait：必须有活着的士兵 dispatch（显式给或树映射来），否则拒（#552：已结算禁止当收件人）。
+ *   有 --skip-wait：不要求 dispatch；但 `d=` 只给 worker-show 确认活的 dispatch——显式 id 同闸
+ *     （#631 返工：显式 id 不得绕过活性复核；已结算 → 清空 + deadWarning 红项上帅；
+ *     worker-show 没查成 → fail-close，不许把没查成当可投递）。
+ */
+export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLive, skipWait } = {}) {
+  const explicit = String(explicitDispatch || '').trim() || null;
+  const foundId = found && found.ok ? String(found.dispatchId || '').trim() || null : null;
+  if (!skipWait) {
+    if (explicit) {
+      if (dispatchLive === false) {
+        return { ok: false, error: `--soldier-dispatch ${explicit} 已结算（worker-show 复核），禁止当收件人（#552）。工人确定不会再发完工 → 加 --skip-wait 补审官` };
+      }
+      if (dispatchLive == null) {
+        return { ok: false, unscanned: true, error: `--soldier-dispatch ${explicit} 给了，但 worker-show 没查成（不许当活人）` };
+      }
+      return { ok: true, soldierDispatchId: explicit, skipWait: false };
+    }
+    if (!found || !found.ok) {
+      return {
+        ok: false,
+        unscanned: !!found?.unscanned,
+        error: `找不到士兵 dispatch（${found?.error || '没查'}）。工人确定不会再发完工 → 加 --skip-wait；或显式给 --soldier-dispatch`,
+      };
+    }
+    if (dispatchLive === false) {
+      return { ok: false, error: `树映射到的士兵 dispatch ${foundId} 已结算（worker-show 复核），禁止当收件人（#552）。工人确定不会再发完工 → 加 --skip-wait 补审官` };
+    }
+    if (dispatchLive == null) {
+      return { ok: false, unscanned: true, error: `树映射到的士兵 dispatch ${foundId} 但 worker-show 没查成（不许当活人）` };
+    }
+    return { ok: true, soldierDispatchId: foundId, runId: found.runId || null, skipWait: false };
+  }
+  const probeTarget = explicit || foundId;
+  if (!probeTarget) {
+    return { ok: true, soldierDispatchId: null, runId: null, skipWait: true, reason: 'none' };
+  }
+  if (dispatchLive === false) {
+    return {
+      ok: true,
+      soldierDispatchId: null,
+      runId: found?.ok ? found.runId || null : null,
+      skipWait: true,
+      reason: explicit ? 'explicit-dead' : 'tree-mapped-dead',
+      deadWarning: `士兵 dispatch ${probeTarget} 已结算：不注入 d=，红项按任务书直接上帅转达`,
+    };
+  }
+  if (dispatchLive == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: `士兵 dispatch ${probeTarget} 的 worker-show 没查成（不许当活人）：skip-wait 下不注入 d=，红项上帅。重试或确认 id`,
+    };
+  }
+  return {
+    ok: true,
+    soldierDispatchId: probeTarget,
+    runId: found?.ok ? found.runId || null : null,
+    skipWait: true,
+    reason: explicit ? 'explicit' : 'tree-mapped',
+  };
+}
+
 /** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。 */
 export function findDispatchForWorktree(workerListJson, worktreeSel) {
   const workers = workerListJson?.result?.workers;
@@ -596,7 +729,7 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
   if (!sel) return { ok: false, error: 'findDispatchForWorktree 没给 worktree' };
   const hits = workers.filter(w => {
     const id = String(w?.resource?.worktreeId || '');
-    return id === sel || id.endsWith(`::${sel}`) || id.endsWith(sel);
+    return worktreeSelMatches(id, sel);
   });
   if (hits.length === 0) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
@@ -3448,15 +3581,18 @@ export function buildBatchInject({ spec, issue } = {}) {
   return text;
 }
 
-export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason } = {}) {
+export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait } = {}) {
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
   const text = renderInjectTemplate('reviewer-inject.md', {
     SPEC: spec,
     ISSUE_REF: issue ? ` #${issue}` : '',
     PR: pr,
+    // #631：skip-wait（帅手动补审官）时 d 可以空——调用方显式传 ''（渲染成 `d=`，任务书认空 = 红项上帅）；
+    // undefined/null 仍抛（dispatch:undefined 硬闸，worker-done 路径不许丢）。
     SOLDIER_DISPATCH_ID: soldierDispatchId,
     MERGE_POLICY: policy,
     MERGE_REASON_REF: policy === 'manual' && mergeReason ? ` r=${mergeReason}` : '',
+    SKIP_WAIT_REF: skipWait ? ' s=1' : '',
   });
   const gate = assertInjectText(text, { label: '审官注入' });
   if (!gate.ok) throw new Error(gate.error);
@@ -4001,7 +4137,7 @@ export const VERBS = [
   'inbox-collect', 'run-gc', 'ask', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait']);
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
@@ -4031,7 +4167,7 @@ export const FLAGS_BY_VERB = {
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
-    '--merge-policy', '--merge-reason', '--comment', '--issue', '--dry-run', '--json', '--help', '-h',
+    '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([
@@ -4119,9 +4255,13 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端；终端已关才允许新建并写原因；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
-  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>]
+  reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
+                  # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
+                  # #631：--skip-wait 显式跳过等完工——worker-done 失败后补审官时工人不会再发完工，硬等烧 600s；
+                  #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
+                  #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
