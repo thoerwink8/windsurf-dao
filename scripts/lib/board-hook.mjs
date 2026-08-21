@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-// 盘面摘要 + 信箱台自愈 hook（issue #564 第 1 条 + comment 追加的信箱台自愈）。
+// 盘面摘要 + 信箱台自愈 + 守卫兜底 hook（issue #564 第 1 条 + comment 追加的信箱台自愈 + #693 守卫兜底）。
 // 挂在仓内 .claude/settings.json 的 UserPromptSubmit：每轮输出一行 [盘] 摘要，
-// 顺带把信箱台 ensure 一遍（全活着秒退一行 JSON；死了当场自愈重建）。
+// 顺带把信箱台 ensure 一遍（全活着秒退一行 JSON；死了当场自愈重建）；
+// 帥位会话再顺手 ensure 一遍守卫（#693：会话中途 watchdog/flow 死了，下一轮提示时拉起）。
 //
 // 改这个文件前必须知道的四条：
 //   1. 只报不拦：永远 exit 0。UserPromptSubmit hook 的输出只是进上下文，绝不挡住用户输入
@@ -20,6 +21,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { displayNumberFromWorktree } from './card-identity.mjs';
+import { judgeSeat } from './guard-seat.mjs';
+import { onceResultBits } from './guard-keepalive.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CLAUDE_PROJECT_DIR
@@ -30,6 +33,7 @@ const CACHE_TTL_MS = 60 * 1000;
 const ORCA_TIMEOUT_MS = 15000;
 const INBOX_TIMEOUT_MS = 45000; // READY_WAIT_MS(30s) + 余量；健康时秒退
 const INBOX_SCRIPT = join(ROOT, 'scripts', 'inbox-station.mjs');
+const GUARD_ONCE_TIMEOUT_MS = 25000; // 健康时一次 CIM 查询秒级；与信箱台共享 60s hook 预算
 
 function cardRef(w) {
   const name = String(w.displayName || '');
@@ -169,10 +173,49 @@ export function inboxInjection({ script = INBOX_SCRIPT, exec = null } = {}) {
   return null;
 }
 
+/** 守卫兜底 ensure（#693）：帥位会话每轮顺手跑 --once。健康 = 无输出（[盘] 行的存在
+ * 就是活证）；拉起/失败留痕；只报不拦。非帥位（工人树、别的分支）静默。
+ * 帥位判不出来时不猜：注入可辨认的「没查成」行（≠ 已查）。
+ * judge / exec 可注入（测试用假判定与假 spawn，不碰真机）。 */
+export function guardInjection({ root = ROOT, judge = null, exec = null } = {}) {
+  const seat = judge ? judge({ projectDir: root }) : judgeSeat({ projectDir: root });
+  if (!seat.ok) {
+    return `[卫] 帥位判定没查成：${seat.error}（守卫 ensure 这轮没跑，≠ 已查）`;
+  }
+  if (seat.seat !== 'shuai') return null;
+  const script = join(root, 'scripts', 'guard-keepalive.mjs');
+  const r = exec
+    ? exec(script)
+    : spawnSync(process.execPath, [script, '--once'], {
+        // cwd 钉在判定的项目上：--once 用 cwd 的 git worktree list 定主树（心跳/状态文件落主树 _flow）
+        encoding: 'utf8', cwd: root, timeout: GUARD_ONCE_TIMEOUT_MS, windowsHide: true,
+      });
+  const out = String(r.stdout || '').trim();
+  if (r.error || (r.status !== 0 && r.status != null)) {
+    const tail = String(r.stderr || '').trim() || out.slice(-120);
+    return `[卫] 守卫 ensure 没查成：${r.error?.message || `exit ${r.status}`}${tail ? `（${tail.slice(-120)}）` : ''}（只报不拦，≠ 查过没事）`;
+  }
+  let doc = null;
+  try { doc = JSON.parse(out.split(/\r?\n/).filter(Boolean).pop() || '{}'); } catch { doc = null; }
+  if (!doc || !Array.isArray(doc.results)) {
+    return `[卫] 守卫 ensure 输出没查成：--once 末行不是结果 JSON（≠ 查过没事）`;
+  }
+  const bits = onceResultBits(doc);
+  if (bits.failed.length) {
+    return `[卫] 守卫拉起没成：${bits.all.join(' ')}（只报不拦，≠ 查过没事）`;
+  }
+  if (bits.started.length) {
+    return `[卫] 守卫已拉起：${bits.all.join(' ')}`;
+  }
+  return null; // 全 already：静音
+}
+
 function main() {
   const lines = [boardInjection()];
   const inbox = inboxInjection();
   if (inbox) lines.push(inbox);
+  const guard = guardInjection();
+  if (guard) lines.push(guard);
   process.stdout.write(`${lines.join('\n')}\n`);
   process.exit(0);
 }
