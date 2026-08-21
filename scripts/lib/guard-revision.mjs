@@ -6,6 +6,7 @@
 // git 执行器可注入，测试不得打真远程。
 
 import { spawnSync } from 'node:child_process';
+import { notifyGuardHalt } from './guard-halt.mjs';
 
 function defaultGit(args, { cwd } = {}) {
   const r = spawnSync('git', args, {
@@ -116,18 +117,25 @@ export const STALE_EXIT_CODE = 4;
 
 /**
  * #665：落后或查不成必须非零退出，不许继续跑旧代码。
+ * #683：exit 前落盘 + 报帅（notify 可注入；测试默认不打网）。
  * exit 可注入；测试用收集器代替 process.exit。
  */
 export function haltIfStale(rev, {
   log = (msg) => console.error(msg),
   exit = process.exit,
   tag = 'STALE_CODE',
+  notify = notifyGuardHalt,
 } = {}) {
   if (!rev || rev.alarm !== true) return { halted: false };
   const msg = `${tag}：${formatRevisionAlarm(rev)}`;
   log(msg);
+  const record = { at: new Date().toISOString(), tag, message: msg, rev, pid: process.pid };
+  if (typeof notify === 'function') {
+    try { notify(record); }
+    catch (e) { log(`HALT_NOTIFY_FAILED：${e && e.message ? e.message : e}`); }
+  }
   exit(STALE_EXIT_CODE);
-  return { halted: true, code: STALE_EXIT_CODE, message: msg };
+  return { halted: true, code: STALE_EXIT_CODE, message: msg, record };
 }
 
 export function attachRevision(heartbeat, rev) {
