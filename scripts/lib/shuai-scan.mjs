@@ -3,7 +3,9 @@
 // 采集与判定分离：tests 注入 fixture/mock，CLI 只负责 IO。
 // 「扫完 0 条」与「没扫成」必须不同形——任何 unscanned 维度整轮 fail-loud。
 
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { allChecksGreen } from './close-issue.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
@@ -18,6 +20,15 @@ import {
 
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
 export const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
+export const DEFAULT_STATE_BASENAME = 'shuai-scan-last.json';
+
+const DEFAULT_TITLE_TEMPLATES = {
+  P0: '帅·#{number} CI红',
+  P1: '帅·#{number} 待合并',
+  P2: '帅·#{number} 待派工',
+  异常: '帅·{摘要}',
+};
+const DEFAULT_TITLE_MAX = 36;
 
 export const GITHUB_GRAPHQL = `
 query($owner: String!, $name: String!) {
@@ -350,14 +361,119 @@ export function buildRecommendations({ rules, github, orca } = {}) {
   return { ok: true, items: merged };
 }
 
-export function shouldWake({ anomalies, recommendations } = {}) {
+/** 盘面有 P0/P1/P2 或异常即「有内容可报」（去重前）。P3 alone 不算。 */
+export function hasReportableContent({ anomalies, recommendations } = {}) {
   const an = anomalies?.anomalies || [];
   if (an.length > 0) return true;
   const items = recommendations?.items || [];
   return items.some((i) => i.priority === 'P0' || i.priority === 'P1' || i.priority === 'P2');
 }
 
-export function formatSummary({ anomalies, recommendations, topN = 5 } = {}) {
+/** 去重键：异常清单 + 推荐序（P0–P2，不含 P3）。 */
+export function normalizeScanState({ anomalies, recommendations } = {}) {
+  const anList = (anomalies?.ok ? (anomalies.anomalies || []) : []).slice().sort();
+  const recItems = (recommendations?.ok ? (recommendations.items || []) : [])
+    .filter((i) => i.priority === 'P0' || i.priority === 'P1' || i.priority === 'P2')
+    .map((i) => ({ p: i.priority, k: i.kind, n: i.number, t: i.title || '' }))
+    .sort((a, b) => {
+      const po = { P0: 0, P1: 1, P2: 2 };
+      const d = (po[a.p] ?? 9) - (po[b.p] ?? 9);
+      if (d !== 0) return d;
+      return (a.n || 0) - (b.n || 0);
+    });
+  return { anomalies: anList, recommendations: recItems };
+}
+
+export function hashScanState(state) {
+  const body = JSON.stringify(state ?? { anomalies: [], recommendations: [] });
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+export function defaultStatePath() {
+  return join(tmpdir(), DEFAULT_STATE_BASENAME);
+}
+
+/** 读不到/坏 JSON/缺 hash → firstRun（fail-open 于报）。 */
+export function readLastState(path) {
+  if (!path) return { ok: false, firstRun: true, reason: 'no-path' };
+  try {
+    const raw = readFileSync(path, 'utf8');
+    const doc = JSON.parse(raw);
+    if (!doc || typeof doc.hash !== 'string' || !doc.hash) {
+      return { ok: false, firstRun: true, reason: 'bad-shape' };
+    }
+    return {
+      ok: true,
+      hash: doc.hash,
+      at: doc.at || null,
+      summary: typeof doc.summary === 'string' ? doc.summary : null,
+    };
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'ENOENT') return { ok: false, firstRun: true, reason: 'absent' };
+    return { ok: false, firstRun: true, reason: 'corrupt', error: String(e.message || e).slice(0, 120) };
+  }
+}
+
+export function writeLastState(path, { hash, summary, at = new Date().toISOString() } = {}) {
+  if (!path || !hash) return { ok: false, error: 'writeLastState 缺 path/hash' };
+  try {
+    writeFileSync(path, JSON.stringify({ hash, at, summary: summary || '' }, null, 0), 'utf8');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `落盘失败：${String(e.message || e).slice(0, 120)}` };
+  }
+}
+
+/** 与上一轮哈希一致 → 静默；读不到/坏掉 → 视为变化（fail-open 报）。 */
+export function shouldReportByDedup(currentHash, lastState) {
+  if (!lastState?.ok) return true;
+  return lastState.hash !== currentHash;
+}
+
+function truncateTitle(s, max) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function applyTitleTemplate(tpl, vars) {
+  return String(tpl || '')
+    .replace(/\{number\}/g, vars.number != null ? String(vars.number) : '?')
+    .replace(/\{摘要\}/g, vars.summary || '?')
+    .replace(/\{title\}/g, vars.title || '?');
+}
+
+export function suggestChatTitle({ rules, anomalies, recommendations } = {}) {
+  const cfg = rules?.['帅位标题建议'] || {};
+  const templates = { ...DEFAULT_TITLE_TEMPLATES, ...(cfg['模板'] || {}) };
+  const maxLen = Number(cfg['标题最大长度']) || DEFAULT_TITLE_MAX;
+  const items = (recommendations?.ok ? (recommendations.items || []) : [])
+    .filter((i) => i.priority === 'P0' || i.priority === 'P1' || i.priority === 'P2');
+  const order = { P0: 0, P1: 1, P2: 2 };
+  items.sort((a, b) => (order[a.priority] ?? 9) - (order[b.priority] ?? 9) || (a.number || 0) - (b.number || 0));
+  if (items.length) {
+    const top = items[0];
+    const tpl = templates[top.priority] || DEFAULT_TITLE_TEMPLATES[top.priority];
+    return truncateTitle(applyTitleTemplate(tpl, {
+      number: top.number,
+      title: top.title,
+      summary: top.title,
+    }), maxLen);
+  }
+  const an = anomalies?.ok ? (anomalies.anomalies || []) : [];
+  if (!an.length) return null;
+  const first = an[0];
+  const m = first.match(/#(\d+)/);
+  const short = m ? `#${m[1]}` : truncateTitle(first.replace(/^[^:]+:\s*/, ''), maxLen - 3);
+  return truncateTitle(applyTitleTemplate(templates['异常'] || DEFAULT_TITLE_TEMPLATES['异常'], {
+    summary: short,
+    number: m ? m[1] : null,
+    title: short,
+  }), maxLen);
+}
+
+export function formatSummary({ anomalies, recommendations, topN = 5, titleSuggestion = null } = {}) {
   const lines = [];
   const an = anomalies?.ok ? (anomalies.anomalies || []) : [];
   if (an.length) {
@@ -374,6 +490,10 @@ export function formatSummary({ anomalies, recommendations, topN = 5 } = {}) {
   } else {
     for (const item of rec.slice(0, topN)) lines.push(`- ${item.line}`);
   }
+  if (titleSuggestion) {
+    lines.push('');
+    lines.push(`帅位标题建议：${titleSuggestion}`);
+  }
   return lines.join('\n');
 }
 
@@ -382,14 +502,32 @@ export function evaluateScan({ rules, orca, github } = {}) {
   if (!anomalies.ok) return { ok: false, error: anomalies.error, wake: false };
   const recommendations = buildRecommendations({ rules, github, orca });
   if (!recommendations.ok) return { ok: false, error: recommendations.error, wake: false };
-  const wake = shouldWake({ anomalies, recommendations });
+  const hasContent = hasReportableContent({ anomalies, recommendations });
+  const normalizedState = normalizeScanState({ anomalies, recommendations });
+  const stateHash = hashScanState(normalizedState);
+  const titleSuggestion = hasContent ? suggestChatTitle({ rules, anomalies, recommendations }) : null;
+  const summary = formatSummary({ anomalies, recommendations, titleSuggestion });
   return {
     ok: true,
-    wake,
+    wake: hasContent,
+    hasContent,
+    stateHash,
+    normalizedState,
+    titleSuggestion,
     anomalies,
     recommendations,
-    summary: formatSummary({ anomalies, recommendations }),
+    summary,
   };
+}
+
+/** CLI：有内容且相对上一轮有变化才输出。 */
+export function decideOutput({ result, lastState } = {}) {
+  if (!result?.ok) return { ok: false, error: result?.error || '扫描失败', emit: false };
+  if (!result.hasContent) return { ok: true, emit: false, reason: 'empty' };
+  if (!shouldReportByDedup(result.stateHash, lastState)) {
+    return { ok: true, emit: false, reason: 'unchanged' };
+  }
+  return { ok: true, emit: true, reason: lastState?.ok ? 'changed' : 'first-run' };
 }
 
 export function buildGithubGraphqlArgs(repo) {
