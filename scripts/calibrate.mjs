@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // 模型校准 v4 口径（#581）：
-//   1. 样本 = ledger/events 里成对的 job.dispatch + job.closed（一事件一模型，
+//   1. 样本 = 本机账本（~/.dao/ledger/events）里成对的 job.dispatch + job.closed（一事件一模型，
 //      审官 identity=审官 / work_type=审查 第一次进战绩）。
 //   2. 返工轮数优先读 closed.worker_rework（已扣除帅追加需求的判定行）；
 //      否则 closed.verdict_rounds - 1 - marshal_rounds；再否则 boolean rework。
@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { redFlagsFromReviewBodies, judgmentFromReview } from './lib/judgment.mjs';
 import { describeUnclosedJobs, formatUnclosedDetails, unclosedJobIds } from './lib/ledger-query.mjs';
 import { describeAttribution, scopeOverridesFor } from './lib/ledger-job.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 
 export { redFlagsFromReviewBodies } from './lib/judgment.mjs';
 
@@ -27,19 +28,21 @@ export const TASK_TYPES = ['写码', '判断', '查证', '审查', 'UI'];
 
 const ROOT = resolve(import.meta.dirname, '..');
 
-export function loadLedgerEvents(dir = join(ROOT, 'ledger/events')) {
-  if (!existsSync(dir)) return { ok: false, error: `账本目录不在：${dir}`, events: [] };
-  const files = readdirSync(dir).filter(f => f.endsWith('.json'));
+// 默认落点 = 本机 ~/.dao/ledger/events（ledger 本机化：事件不进 git，仓内历史自动种子过来）
+export function loadLedgerEvents(dir) {
+  const eventsDir = dir || ensureLocalLedger({ root: ROOT }).dir;
+  if (!existsSync(eventsDir)) return { ok: false, error: `账本目录不在：${eventsDir}`, events: [] };
+  const files = readdirSync(eventsDir).filter(f => f.endsWith('.json'));
   const events = [];
   const bad = [];
   for (const f of files) {
-    try { events.push(JSON.parse(readFileSync(join(dir, f), 'utf8'))); }
+    try { events.push(JSON.parse(readFileSync(join(eventsDir, f), 'utf8'))); }
     catch { bad.push(f); }
   }
   if (bad.length) {
     return { ok: false, error: `账本 ${bad.length} 个文件不是 JSON：${bad.slice(0, 3).join(',')}`, events };
   }
-  return { ok: true, events, emptyDir: files.length === 0 };
+  return { ok: true, events, emptyDir: files.length === 0, dir: eventsDir };
 }
 
 export function reworkFromClosed(closed) {
@@ -160,7 +163,7 @@ export function samplesFromEvents(events) {
 }
 
 export function describeNoEvents(prNumber) {
-  return `没有事件（没查成）：ledger/events 里 PR #${prNumber} 一条 job.dispatch/job.closed 都没有——不是 0 红，是没查成`;
+  return `没有事件（没查成）：本机账本（~/.dao/ledger/events）里 PR #${prNumber} 一条 job.dispatch/job.closed 都没有——不是 0 红，是没查成`;
 }
 
 function labelNames(pr) {
@@ -389,7 +392,7 @@ export function main(argv = process.argv.slice(2)) {
   const taskTypes = [...new Set([...TASK_TYPES, ...samples.map(s => s.taskType).filter(Boolean)])];
 
   if (args.pr === null) {
-    console.log(renderFullReport(buildRows(samples, models, taskTypes), openCount, 'ledger/events', unclosedRows));
+    console.log(renderFullReport(buildRows(samples, models, taskTypes), openCount, loaded.dir || 'ledger/events', unclosedRows));
     return;
   }
 

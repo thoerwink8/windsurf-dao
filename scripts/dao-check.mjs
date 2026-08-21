@@ -84,7 +84,7 @@ import {
 import {
   inspectLedgerGap, readClosedPrNumbers, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_NEWEST_BUFFER,
 } from './lib/ledger-gap-check.mjs';
-import { resolveMainWorktreeRoot } from './lib/ledger-job.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import {
   inspectStrikes, listMemoryEntries, loadStrikesBaseline, resolveMemoryDir,
 } from './lib/memory-strikes-check.mjs';
@@ -1080,11 +1080,11 @@ function checkLedgerGapLive() {
     fail('账本断流没查成', 'gh pr list 输出形态不对（要 number 对象数组）', `拿到 ${typeof prs.array[0]}`);
     return;
   }
-  const main = resolveMainWorktreeRoot({ from: ROOT });
-  const eventsDir = main.ok ? join(main.root, 'ledger', 'events') : join(ROOT, 'ledger', 'events');
+  // 账本在本机 ~/.dao/ledger/events（不进 git）；ensureLocalLedger 会把仓内历史事件种子过来
+  const eventsDir = ensureLocalLedger({ root: ROOT }).dir;
   const closed = readClosedPrNumbers(eventsDir);
   if (closed.unscanned) {
-    fail('账本断流没查成', 'ledger/events 读失败，不是差集空', closed.error);
+    fail('账本断流没查成', '本机账本目录（~/.dao/ledger/events）读失败，不是差集空', closed.error);
     return;
   }
   const r = inspectLedgerGap({
