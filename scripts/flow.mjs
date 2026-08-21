@@ -352,7 +352,7 @@ function sleep(ms) {
 }
 
 function runCmd(cmd, args, timeout = 30000) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout });
   if (r.error || r.status !== 0) {
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 300) };
   }
