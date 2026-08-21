@@ -24,6 +24,12 @@
 （发信同理，走 `node scripts/dao.mjs notify`——裸 `orca orchestration send` 对不存在的 handle
 也返回 exit 0 / `ok:true`，链断和没消息分不开。）
 
+**注入参数带 `s=1`（skip-wait）→ 跳过等待直接开审**：帅手动补审官（`reviewer-attach --skip-wait`，
+典型场景是 worker-done 失败后补派）时，士兵不会再发完工，帅的动作本身就是开工信号。
+**对方 dispatch（`d=`）关联的是派工时的 issue 号，不等于 PR 号是常态**（issue #N 派工产出的 PR 是 #M）——
+「issue 号 ≠ PR 号」不构成串号，不要据此 escalation。
+**`d=` 为空（没有对方 dispatch）→ 红项直接上帅，不打士兵**（skip-wait 补审官时士兵可能已结算/不在）。
+
 ### 2. 判红 / 判绿
 
 **判定行的落法（格式写死，scripts/lib/judgment.mjs 的单一解析器，歪了流转器当场停）**：
