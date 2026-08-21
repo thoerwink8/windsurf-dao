@@ -8,9 +8,38 @@
 // 确定性：同一 (type, ts, machine, seq, payload) 恒产出同一 event_id 与同一文件名。
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalStringify, sha256Hex } from './dianjiangtai-core.mjs';
+
+// 进程内目录索引：事件写一次即不可变（三铁律①），解析结果按文件名缓存；
+// 每轮 readdir 只用来发现新文件/已删文件，新增才 readFileSync+parse。
+// 修复前 scanEventId/scanJobType/nextSeq 每次都全量解析目录——批量写 N 个事件
+// 总解析量 O(N²)；缓存后 = 冷启动一次全量 + 每事件一次增量，O(N)。
+// 外部改已有文件内容违反不可变纪律，由 audit 独立冷扫负责，本缓存不重读。
+const dirIndexes = new Map(); // dir -> Map<filename, event|null（损坏）>
+
+function dirIndex(dir) {
+  let idx = dirIndexes.get(dir);
+  if (!idx) {
+    idx = new Map();
+    dirIndexes.set(dir, idx);
+  }
+  const names = existsSync(dir) ? readdirSync(dir) : [];
+  const live = new Set(names);
+  for (const name of idx.keys()) {
+    if (!live.has(name)) idx.delete(name); // 外部删了 → 缓存跟着删
+  }
+  for (const f of names) {
+    if (!f.endsWith('.json') || idx.has(f)) continue;
+    try {
+      idx.set(f, JSON.parse(readFileSync(join(dir, f), 'utf8')));
+    } catch {
+      idx.set(f, null); // 损坏文件交给 audit 查，不阻断写入
+    }
+  }
+  return idx;
+}
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const RESERVED = ['type', 'schema_version', 'ts', 'machine', 'seq', 'event_id'];
@@ -110,12 +139,8 @@ export function buildEvent({ type, ts, machine, seq, payload = {}, schema }) {
 
 function scanEventId(dir, eventId) {
   if (!existsSync(dir)) return null;
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      const e = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-      if (e.event_id === eventId) return f;
-    } catch { /* 损坏文件交给 audit 查，不阻断写入 */ }
+  for (const [f, e] of dirIndex(dir)) {
+    if (e && e.event_id === eventId) return f;
   }
   return null;
 }
@@ -126,12 +151,8 @@ const ONE_PER_JOB = new Set(['job.opened', 'job.dispatch', 'job.closed', 'job.ov
 
 function scanJobType(dir, type, jobId) {
   if (!existsSync(dir)) return null;
-  for (const f of readdirSync(dir)) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      const e = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-      if (e.type === type && e.job_id === jobId) return f;
-    } catch { /* 损坏文件交给 audit 查 */ }
+  for (const [f, e] of dirIndex(dir)) {
+    if (e && e.type === type && e.job_id === jobId) return f;
   }
   return null;
 }
@@ -163,7 +184,13 @@ export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }
     throw new Error(`该 job 已有 ${event.type} 事件（${jobDup}）；每 job 一次，防重复计账——重复派单请另立 job_id`);
   }
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(event, null, 2) + '\n', 'utf8');
+  // 原子写：先写同目录临时文件再 rename——进程中途崩溃留的是 .tmp 残件
+  // （不以 .json 结尾，扫描器天然跳过），不会留半个 JSON 占事件位。
+  // tmp 名带 pid+随机熵防同机并发撞名；rename 在同目录内是元数据操作。
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  writeFileSync(tmp, JSON.stringify(event, null, 2) + '\n', 'utf8');
+  renameSync(tmp, path);
+  dirIndex(dir).set(filename, event); // 登记进缓存，后续扫描不再重读
   return { path, event };
 }
 
@@ -171,12 +198,8 @@ export function writeEvent({ dir, type, ts, machine, seq, payload = {}, schema }
 export function nextSeq(dir, machine) {
   let max = -1;
   if (existsSync(dir)) {
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const e = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-        if (e.machine === machine && typeof e.seq === 'number') max = Math.max(max, e.seq);
-      } catch { /* 损坏文件交给 audit 查 */ }
+    for (const e of dirIndex(dir).values()) {
+      if (e && e.machine === machine && typeof e.seq === 'number') max = Math.max(max, e.seq);
     }
   }
   return max + 1;
