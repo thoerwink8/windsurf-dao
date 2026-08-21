@@ -84,6 +84,8 @@ test "$(git branch --show-current)" = master \
 
 派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.toml 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）；帅没收到时靠看门狗兜底（`scripts/watchdog.mjs` 检测矩阵第 9 项已在 master）。
 
+**帅位无人值守（2026-08-21 用户拍板）**：合并动作全归帅——终审通过（diff 亲看、CI 绿、dao-check 红项均为既有治理项）后 marshal 直接 `pr merge --squash --delete-branch`，不再等用户手动合并（此前「用户手动合并」是制度默认，不是技术限制）。决策权分配不变：选型 / 体系类 / 花钱仍用户拍板，拍板后合并动作同样归帅执行，PR 正文留拍板原话与时间。Cursor 帅位与 CC 帅位同此规矩。首单 #709。
+
 ## 设计注记
 
 设计拓扑时把盘面全部角色过一遍（执行者、审官、临时诊断工），防止只想到主角。
