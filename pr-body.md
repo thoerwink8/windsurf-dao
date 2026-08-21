@@ -20,7 +20,19 @@
 - [x] 循环死 → halt.jsonl `LOOP_DEAD`；本机无 dao-watchdog 凭据，jsonl 记「这台机器没装」
 - [x] 测试 `tests/guard-keepalive.test.js` 53 项绿
 - [x] NEW-MACHINE.md §9b
-- [ ] dao-check
+- [x] dao-check：本单 keepalive 测试 53 绿；全仓 4 红与本单无关（devin 缺 start、open 超阈、账本断流、dao.test 跟路由）
+
+## 故意构造记录
+
+杀循环（pid 56148）后 `~/.dao/guard/halt.jsonl`：
+
+```
+{"at":"2026-08-21T03:08:59.350Z","tag":"[keepalive] LOOP_DEAD","message":"keepalive 循环进程已死（pid 56148）","pid":56148,"key":"guard-halt|keepalive|dead|pid-gone","rev":{"state":"dead","reason":"pid-gone"},"github":{"ok":false,"error":"缺凭据: C:\\Users\\Administrator\\.dao\\apps\\watchdog.json（不是没配好，是这台机器没装——见 NEW-MACHINE）","number":null,"deduped":false}}
+```
+
+本机无 dao-watchdog 凭据，jsonl 记「这台机器没装」，不许当报成功（与 #683 同口径）。
+
+守卫回归：`taskkill` watchdog 35000 → `node scripts/guard-keepalive.mjs --once` 拉起 47344。本机 `timeout.exe` 进程数 0。
 
 ## 体系类改动
 
