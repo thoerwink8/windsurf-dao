@@ -13,6 +13,11 @@
 // PR 自己有 check 未完成/无结论同样不可赦免。粒度是 check（job）名：同 job 内新增
 // 失败会被同名基线红掩盖，窗口仅限基线红期间——master 转绿后新 PR 的红全是自己的。
 //
+// 祖父条款：CI 建立前合并的 PR 没有 CI 可跑，「无 check」是时代特征不是违规——
+// mergedAt 不晚于 GRANDFATHER_NO_CHECK_BEFORE 且确认无任何 check → 豁免（视为可关，
+// 绝不 reopen）。之后合并仍无 check 的不适用：没查成 ≠ 绿，保持从严。有 check 的
+// 按 check 说话，FAILURE 不赦免。
+//
 // 纯函数 + 注入 runGh，可被 tests 用假 gh 单独验；不依赖 orca / 真网络。
 // runGh(args) 契约：接收 gh 参数数组，返回 { ok, json?, out?, error? }（json 为解析后的对象）。
 
@@ -38,6 +43,26 @@ export function attributedIssueNumber(pr) {
 }
 
 const HARD_RED = new Set(['FAILURE', 'CANCELLED', 'ACTION_REQUIRED', 'TIMED_OUT', 'STALE', 'STARTUP_FAILURE']);
+
+// 祖父线：CI 引入 master 的时刻。首个 workflow（.github/workflows/ci-sweep.yml）由
+// commit 2ecb935a「[pi] feat(ci): issue #306 云审水位线制落地」（2026-08-11T20:43:42+08:00）
+// 引入，经 PR #307 于 2026-08-11T21:38:02+08:00 合入 master（merge commit 43221139）。
+// 不晚于此刻合并的 PR 没有 CI 可跑；之后才合并却仍无 check 的，没查成 ≠ 绿，从严。
+export const GRANDFATHER_NO_CHECK_BEFORE = '2026-08-11T21:38:02+08:00';
+
+/**
+ * 祖父豁免：mergedAt 不晚于祖父线 且 statusCheckRollup 确认为空数组（真·无 check，
+ * 不是字段缺失的没查成）→ 视为可关。mergedAt 缺失/不可解析、rollup 缺失一律从严
+ * 不豁免；有 check 的不归这里管（按 check 判定，FAILURE 不赦免）。
+ */
+export function grandfatherExempt(pr) {
+  const rollup = pr && pr.statusCheckRollup;
+  if (!Array.isArray(rollup) || rollup.length > 0) return { exempt: false };
+  const t = Date.parse((pr && pr.mergedAt) || '');
+  if (!Number.isFinite(t)) return { exempt: false };
+  if (t > Date.parse(GRANDFATHER_NO_CHECK_BEFORE)) return { exempt: false };
+  return { exempt: true, reason: `MERGED 于 CI 引入前（mergedAt ${pr.mergedAt} ≤ 祖父线 ${GRANDFATHER_NO_CHECK_BEFORE}）且无任何 check——时代特征非违规，祖父条款豁免` };
+}
 
 /** 单条 check 是否「已完成且硬红」（commits check-runs 返回小写、PR rollup 返回大写，统一大写再比）。 */
 function isHardRed(c) {
@@ -117,12 +142,14 @@ function relativeGreen(pr, baseline) {
   return { green: true, reason: `MERGED 且相对绿：PR 失败项（${failed.join('、')}）全属合并时 master 基线红（基线 ${String(baseline.base || '').slice(0, 7)} 已查成）` };
 }
 
-/** 判定：非 MERGED → none；MERGED 且全绿（含相对绿）→ close；否则 → reopen（不许关）。 */
+/** 判定：非 MERGED → none；MERGED 且全绿（含祖父豁免、相对绿）→ close；否则 → reopen（不许关）。 */
 export function closeDecision(pr, { baseline } = {}) {
   const state = String((pr && pr.state) || '').toUpperCase();
   if (state !== 'MERGED') return { action: 'none', reason: `state=${(pr && pr.state) || '?'} 非 MERGED` };
   const checks = allChecksGreen(pr);
   if (checks.green) return { action: 'close', reason: 'MERGED 且 check 全绿' };
+  const gf = grandfatherExempt(pr);
+  if (gf.exempt) return { action: 'close', reason: gf.reason };
   const rel = relativeGreen(pr, baseline);
   if (rel.green) return { action: 'close', reason: rel.reason };
   return { action: 'reopen', reason: `MERGED 但 check 不绿(${checks.reason})${rel.reason}——不许自动关，若已关须重开` };
@@ -142,11 +169,22 @@ export function closeIssueForPr({ pr, runGh, dryRun = false } = {}) {
     dec = closeDecision(pr, { baseline: baselineRedChecks({ pr, runGh }) });
   }
   if (dec.action === 'none') return { ok: true, action: 'none', reason: dec.reason, pr: number };
-  const iv = runGh(['issue', 'view', String(issue), '--json', 'state']);
-  if (!iv.ok) return { ok: false, action: dec.action, error: `gh issue view #${issue} 失败：${iv.error}`, issue, pr: number };
-  let issueState;
-  try { issueState = (iv.json || {}).state; } catch { return { ok: false, error: `gh issue view #${issue} 非 JSON`, issue, pr: number }; }
+  const iv = runGh(['issue', 'view', String(issue), '--json', 'state,url']);
+  if (!iv.ok) {
+    const msg = String(iv.error || '');
+    // 署名目标不存在：署名解析误中（标题/正文随手引用 #N），不是关单失败——跳过不污染 exit code。
+    if (/could not resolve|not found|NOT_FOUND/i.test(msg)) {
+      return { ok: true, action: 'none', reason: `署名目标 #${issue} 不存在（署名解析误中？），跳过`, issue, pr: number };
+    }
+    return { ok: false, action: dec.action, error: `gh issue view #${issue} 失败（网络/权限？）：${iv.error}`, issue, pr: number };
+  }
+  let issueState, issueUrl;
+  try { ({ state: issueState, url: issueUrl } = iv.json || {}); } catch { return { ok: false, error: `gh issue view #${issue} 非 JSON`, issue, pr: number }; }
   if (issueState == null) return { ok: false, error: `gh issue view #${issue} 没读到 state（没查成）`, issue, pr: number };
+  // 署名目标其实是 PR（gh issue view 对 PR 号也答得出，url 才是照妖镜）：跳过不污染 exit code。
+  if (typeof issueUrl === 'string' && issueUrl.includes('/pull/')) {
+    return { ok: true, action: 'none', reason: `署名目标 #${issue} 是 PR 不是 issue（标题/正文引用误中），跳过`, issue, pr: number };
+  }
   const expectOpen = dec.action === 'close';
   if (expectOpen && String(issueState).toUpperCase() === 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 已关`, issue, pr: number };
   if (!expectOpen && String(issueState).toUpperCase() !== 'CLOSED') return { ok: true, action: 'none', reason: `issue #${issue} 未关(${issueState})，无需重开`, issue, pr: number };
