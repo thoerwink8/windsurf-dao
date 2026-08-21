@@ -7,7 +7,7 @@
 # 加模型：先改这里，再（若涉及路由/禁令）同步 model-routing.toml。
 # ============================================================================
 
-updated: "2026-08-21"
+updated: "2026-08-22"
 currency: CNY
 fx_usd_per_cny: null      # 待补：汇率拍板后填，并给 fx_verified_at 打时间戳
 fx_verified_at: null
@@ -135,6 +135,28 @@ models:
     decided: "2026-08-16"
     pricing:
       verified_at: "2026-08-16"
+      subscription:
+        kind: 额度包月
+        marginal_cost: 0
+        monthly_fee: null
+        included_tokens: null
+        fair_share_jobs: null
+      metered: null
+
+  - id: ox-alpha-free
+    provider: opencode-go
+    cli: pi --provider opencode-go
+    version: ox-alpha-free      # 版本串待官方核（暂以 id 代）
+    context_window: 1000000
+    max_output: 131072
+    roles: [写码, 判断]
+    status: 试用
+    retired: false
+    trial_since: "2026-08-22"
+    why: og 免费探路 / Unlimited；只进写码+判断试用候选，不改写码 fallback、不顶判断主路。质量不稳风险，按返工率实测再谈定位（用户 2026-08-22 拍板：只加本 id）
+    decided: "2026-08-22"
+    pricing:
+      verified_at: "2026-08-22"
       subscription:
         kind: 额度包月
         marginal_cost: 0
