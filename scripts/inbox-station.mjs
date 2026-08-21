@@ -144,11 +144,6 @@ export function parseArgs(argv) {
   return args;
 }
 
-export function findCoordinatorTerminal(terminals, coordinatorHandle) {
-  if (!Array.isArray(terminals) || !coordinatorHandle) return null;
-  return terminals.find((t) => t?.handle === coordinatorHandle) || null;
-}
-
 export function isHandleOnBoard(handle, terminals) {
   if (!handle) return false;
   return (Array.isArray(terminals) ? terminals : []).some((t) => t && t.handle === handle);
@@ -490,48 +485,6 @@ export function formatLogLine(msg, now = new Date()) {
     body: msg?.body ?? '',
     payload: msg?.payload ?? null,
   });
-}
-
-export function parseCheckResult(json) {
-  const result = json?.result ?? json ?? {};
-  const messages =
-    result.messages
-    ?? result.delivery?.messages
-    ?? result.batch?.messages
-    ?? (Array.isArray(result) ? result : []);
-  const deliveryId =
-    result.delivery_id
-    ?? result.deliveryId
-    ?? result.delivery?.id
-    ?? result.batch?.id
-    ?? result.ack
-    ?? json?.delivery_id
-    ?? null;
-  return {
-    messages: Array.isArray(messages) ? messages : [],
-    deliveryId: deliveryId || null,
-  };
-}
-
-export function pickRun(runs, { preferredId, currentId, allowedIds } = {}) {
-  const list = Array.isArray(runs) ? runs : [];
-  const alive = (r) => r && r.legacy !== 1 && r.legacy !== true && r.id !== 'run_legacy_local';
-  const allowed = allowedIds == null
-    ? null
-    : (allowedIds instanceof Set ? allowedIds : new Set(allowedIds));
-  const allow = (r) => !allowed || allowed.has(r.id);
-  if (preferredId) {
-    const hit = list.find((r) => r.id === preferredId);
-    if (hit) return hit;
-  }
-  if (currentId) {
-    const hit = list.find((r) => r.id === currentId && alive(r) && allow(r));
-    if (hit) return hit;
-  }
-  return list
-    .filter((r) => alive(r) && allow(r))
-    .slice()
-    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null;
 }
 
 export function findMainWorktree(worktrees) {
