@@ -657,7 +657,9 @@ export function verifyReviewerAttachTree({ prIssueNumbers, headRefName, worktree
  * reviewer-attach 是 worker-done 失败后的手动补派——工人那边不会再发完工，硬等 = 烧 600s 再误诊。
  * 决策矩阵（纯函数，判别性测试钉死）：
  *   没 --skip-wait：必须有活着的士兵 dispatch（显式给或树映射来），否则拒（#552：已结算禁止当收件人）。
- *   有 --skip-wait：不要求 dispatch；d 有就给（红项有去处），已结算的树映射 id 不注入（红项上帅）。
+ *   有 --skip-wait：不要求 dispatch；但 `d=` 只给 worker-show 确认活的 dispatch——显式 id 同闸
+ *     （#631 返工：显式 id 不得绕过活性复核；已结算 → 清空 + deadWarning 红项上帅；
+ *     worker-show 没查成 → fail-close，不许把没查成当可投递）。
  */
 export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLive, skipWait } = {}) {
   const explicit = String(explicitDispatch || '').trim() || null;
@@ -687,18 +689,33 @@ export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLiv
     }
     return { ok: true, soldierDispatchId: foundId, runId: found.runId || null, skipWait: false };
   }
-  const id = explicit || (foundId && dispatchLive !== false ? foundId : null);
+  const probeTarget = explicit || foundId;
+  if (!probeTarget) {
+    return { ok: true, soldierDispatchId: null, runId: null, skipWait: true, reason: 'none' };
+  }
+  if (dispatchLive === false) {
+    return {
+      ok: true,
+      soldierDispatchId: null,
+      runId: found?.ok ? found.runId || null : null,
+      skipWait: true,
+      reason: explicit ? 'explicit-dead' : 'tree-mapped-dead',
+      deadWarning: `士兵 dispatch ${probeTarget} 已结算：不注入 d=，红项按任务书直接上帅转达`,
+    };
+  }
+  if (dispatchLive == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: `士兵 dispatch ${probeTarget} 的 worker-show 没查成（不许当活人）：skip-wait 下不注入 d=，红项上帅。重试或确认 id`,
+    };
+  }
   return {
     ok: true,
-    soldierDispatchId: id,
+    soldierDispatchId: probeTarget,
     runId: found?.ok ? found.runId || null : null,
     skipWait: true,
-    reason: explicit ? 'explicit' : (id ? 'tree-mapped' : 'none'),
-    deadWarning: dispatchLive === false
-      ? (id
-        ? `士兵 dispatch ${id} 已结算：红项发不进士兵，审官会按任务书直接上帅转达`
-        : '树映射的士兵 dispatch 已结算：红项发不进士兵，审官会按任务书直接上帅转达')
-      : null,
+    reason: explicit ? 'explicit' : 'tree-mapped',
   };
 }
 
@@ -4243,7 +4260,8 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
                   # #631：树→PR 归属校验（树的 issue/分支对不上 PR 当场拒）；士兵 dispatch 注入前 worker-show 复核活性，已结算禁止当收件人（#552）
                   # #631：--skip-wait 显式跳过等完工——worker-done 失败后补审官时工人不会再发完工，硬等烧 600s；
-                  #       跳过时 d 有就给（红项有去处），没有就空（红项上帅，见 reviewer-book 第 1 步）
+                  #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
+                  #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵

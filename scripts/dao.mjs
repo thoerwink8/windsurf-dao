@@ -2462,15 +2462,23 @@ function cmdReviewerAttach(args) {
   // issue 号 ≠ PR 号是常态（issue #N 派工 → PR #M），所以校验的是「这棵树是不是这个 PR 的工人树」
   // （树的 issue 号 ∈ PR 署名 + 树分支 == PR head），不是「dispatch 关联号 == --pr」。
   // 对不上当场拒，不许硬塞——串号会让审官等错 id 烧 600s 再误诊「实属别的单」（#631）。
+  // dry-run 不建资源，worktree list 没查成只记进 plan 不拦（CI 无 orca 时 dry-run 仍能出计划）。
   const wtList = orca(['worktree', 'list', '--json']);
-  if (!wtList.ok) fail(`worktree list 没查成，树→PR 归属校验做不了（不许硬塞）: ${errText(wtList.error)}`, { worker, pr: String(args.pr) });
-  const treeVerified = verifyReviewerAttachTree({
-    prIssueNumbers: worker.refs,
-    headRefName: baseBranch,
-    worktrees: wtList.json?.result?.worktrees || wtList.json?.worktrees,
-    worktreeSel: args.worktree,
-  });
-  if (!treeVerified.ok) fail(treeVerified.error, { worker, treeVerified, pr: String(args.pr) });
+  const treeVerified = (() => {
+    if (!wtList.ok) {
+      const err = `worktree list 没查成，树→PR 归属校验做不了: ${errText(wtList.error)}`;
+      if (args.dryRun) return { ok: true, verified: false, unscanned: true, error: err };
+      fail(err, { worker, pr: String(args.pr) });
+    }
+    const v = verifyReviewerAttachTree({
+      prIssueNumbers: worker.refs,
+      headRefName: baseBranch,
+      worktrees: wtList.json?.result?.worktrees || wtList.json?.worktrees,
+      worktreeSel: args.worktree,
+    });
+    if (!v.ok && !args.dryRun) fail(v.error, { worker, treeVerified: v, pr: String(args.pr) });
+    return v;
+  })();
 
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: args.reviewer, routing,

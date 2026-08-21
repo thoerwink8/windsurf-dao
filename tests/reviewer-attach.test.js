@@ -170,11 +170,24 @@ describe('planAttachSoldierDispatch（#631 活性闸 + skip-wait 决策矩阵）
     assert.ok(r.ok && r.skipWait === true && r.soldierDispatchId === null && r.reason === 'none', '无 d 的 skip-wait → ' + JSON.stringify(r));
   });
 
-  it('--skip-wait + 显式 id（即使死）→ d 保留（帅断言，投递仍 fail-visible）', async () => {
+  it('#631 返工：--skip-wait + 显式 id 已结算 → d 置空 + deadWarning（显式 id 不得绕过活性复核，红项上帅）', async () => {
     const S = await S_LOAD;
     const r = S.planAttachSoldierDispatch({ explicitDispatch: 'ctx_dead', found: null, dispatchLive: false, skipWait: true });
-    assert.ok(r.ok && r.soldierDispatchId === 'ctx_dead', '显式断言保留 → ' + JSON.stringify(r));
+    assert.ok(r.ok && r.skipWait === true && r.soldierDispatchId === null, '显式死 id 不注入 d= → ' + JSON.stringify(r));
     assert.ok(/已结算/.test(r.deadWarning || ''), '附警告 → ' + JSON.stringify(r));
+  });
+
+  it('#631 返工：--skip-wait + 显式 id 的 worker-show 没查成 → fail-close unscanned（不许当活人）', async () => {
+    const S = await S_LOAD;
+    const r = S.planAttachSoldierDispatch({ explicitDispatch: 'ctx_unverified', found: null, dispatchLive: null, skipWait: true });
+    assert.ok(r.ok === false && r.unscanned === true, '没查成 → fail-close → ' + JSON.stringify(r));
+    assert.ok(/worker-show 没查成/.test(r.error), '点名没查成 → ' + r.error);
+  });
+
+  it('#631 返工：--skip-wait + 树映射 id 的 worker-show 没查成 → fail-close unscanned', async () => {
+    const S = await S_LOAD;
+    const r = S.planAttachSoldierDispatch({ found: foundLive, dispatchLive: null, skipWait: true });
+    assert.ok(r.ok === false && r.unscanned === true, '没查成 → fail-close → ' + JSON.stringify(r));
   });
 });
 

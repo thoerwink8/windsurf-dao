@@ -185,7 +185,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 
 人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
 
-补派铁律（#631）：`reviewer-attach` 先做树→PR 归属校验（树的 issue/分支对不上 PR 当场拒），士兵 dispatch 注入前 `worker-show` 复核活性，已结算禁止当收件人（#552）——此时审官等不到完工（完工只由 `worker-done` 投递，它失败才需要补派），补派加 `--skip-wait` 跳过等完工：审官直接开审，红项仍有 `d=` 就发士兵、没有就上帅。issue 派工产出的 PR 号 ≠ issue 号是常态，不是串号。
+补派铁律（#631）：`reviewer-attach` 先做树→PR 归属校验（树的 issue/分支对不上 PR 当场拒），士兵 dispatch 注入前 `worker-show` 复核活性，已结算禁止当收件人（#552）——此时审官等不到完工（完工只由 `worker-done` 投递，它失败才需要补派），补派加 `--skip-wait` 跳过等完工：审官直接开审；红项 `d=` 只给 worker-show 确认活的 dispatch（显式 `--soldier-dispatch` 同闸，已结算/没查成都不注入）→ 没有 `d=` 就红项上帅。issue 派工产出的 PR 号 ≠ issue 号是常态，不是串号。
 
 起审官硬闸（#679）：工人与审官不得同厂。闸在 `dispatch` / `reviewer-create` / `worker-done` / `reviewer-attach` / 换人。点将台打分不加这一条。GPT UI 禁令仍优先。注入失败走选型序下一位，跳过工人那一厂；走完仍同厂则升级，不许 attach 成工人那一厂。已开工的审官复用不回溯。
 
