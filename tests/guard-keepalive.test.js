@@ -1,4 +1,4 @@
-// #683 OS 保活：认 watchdog.mjs / flow.mjs；列表没查成不许当 0；安装计划可打印。
+// #683/#693 守卫保活：认 watchdog.mjs / flow.mjs；列表没查成不许当 0；#693 起只留 --once 入口（帥位触发）。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -131,44 +131,47 @@ describe('guard-keepalive', () => {
     });
   });
 
-  it('安装计划：任务名、2 分钟、cmd 优先镜像', async (t) => {
-    const K = await LIB_LOAD;
-    const cmd = K.buildKeepaliveCmd({
-      nodePath: 'C:\\\\nvm4w\\\\nodejs\\\\node.exe',
-      mirrorScript: 'C:\\\\Users\\\\u\\\\.dao\\\\guard-mirror\\\\scripts\\\\guard-keepalive.mjs',
-      hereScript: 'C:\\\\wt\\\\scripts\\\\guard-keepalive.mjs',
-      mainScript: 'D:\\\\frank\\\\windsurf-dao\\\\scripts\\\\guard-keepalive.mjs',
-    });
-    await t.test('cmd 先 if exist MIRROR', () => {
-      assert.ok(/set "MIRROR=/.test(cmd) && /if exist "%MIRROR%"/.test(cmd) && /--once/.test(cmd), 'cmd  →  ' + cmd);
-    });
-    const args = K.buildSchtasksArgs({ cmdPath: 'C:\\\\Users\\\\u\\\\.dao\\\\guard\\\\keepalive.cmd' });
-    await t.test('schtasks 每 2 分钟 /F', () => {
-      assert.ok(args.includes('dao-guard-keepalive') && args.includes('MINUTE') && args.includes('2') && args.includes('/F'),
-        'args  →  ' + args.join(' '));
-    });
-    const loop = K.buildKeepaliveLoopCmd({ onceCmdPath: 'C:\\\\u\\\\.dao\\\\guard\\\\keepalive.cmd', intervalSec: 120 });
-    await t.test('拒绝访问时的循环调 keepalive.cmd，不是第二只狗', () => {
-      assert.ok(/call ".*keepalive\.cmd"/.test(loop) && /timeout \/t 120/.test(loop) && /goto loop/.test(loop),
-        'loop  →  ' + loop);
-    });
-    await t.test('Access Denied / 拒绝访问 都认', () => {
-      assert.ok(K.isAccessDenied('ERROR: Access is denied.') && K.isAccessDenied('错误: 拒绝访问。'), 'denied');
-    });
-  });
-
-  it('--print-install 不注册 schtasks，打印 cmd', async (t) => {
-    const r = spawnSync(process.execPath, [CLI, '--print-install'], {
+  it('#693 自研保活入口已删：--install/--print-install/--status 一律拒绝', async (t) => {
+    for (const flag of ['--install', '--print-install', '--status']) {
+      const r = spawnSync(process.execPath, [CLI, flag], {
+        encoding: 'utf8',
+        cwd: path.resolve(__dirname, '..'),
+        windowsHide: true,
+      });
+      await t.test(`${flag} → exit 3 未知参数`, () => {
+        assert.ok(r.status === 3 && /未知参数/.test(r.stderr || ''), `${flag}  →  status=${r.status} ${(r.stderr || '').slice(0, 120)}`);
+      });
+    }
+    const help = spawnSync(process.execPath, [CLI, '--help'], {
       encoding: 'utf8',
       cwd: path.resolve(__dirname, '..'),
       windowsHide: true,
     });
-    const out = (r.stdout || '') + (r.stderr || '');
-    await t.test('退出码 0', () => {
-      assert.ok(r.status === 0, 'exit  →  ' + `status=${r.status} ${out.slice(0, 200)}`);
+    await t.test('--help 退出码 0 且只讲 --once', () => {
+      assert.ok(help.status === 0 && /--once/.test(help.stdout || ''), 'help  →  ' + (help.stdout || '').slice(0, 200));
     });
-    await t.test('含 keepalive.cmd 生成内容和 schtasks', () => {
-      assert.ok(/@echo off/.test(out) && /dao-guard-keepalive/.test(out) && /MINUTE/.test(out), '打印  →  ' + out.slice(0, 400));
+  });
+
+  it('onceResultBits：两个 hook 共用的 --once 结果读取口', async (t) => {
+    const K = await LIB_LOAD;
+    const bits = K.onceResultBits({
+      ok: true,
+      results: [
+        { name: 'watchdog', action: 'already', pid: 7 },
+        { name: 'flow', action: 'started', pid: 99 },
+      ],
+    });
+    await t.test('started/failed/all 各归各', () => {
+      assert.ok(bits.started.length === 1 && bits.failed.length === 0
+        && bits.all.join(',') === 'watchdog=already(7),flow=started(99)', 'bits  →  ' + JSON.stringify(bits));
+    });
+    const bad = K.onceResultBits({ results: [{ name: 'flow', action: 'start-failed', error: 'x' }] });
+    await t.test('start-failed 进 failed', () => {
+      assert.ok(bad.failed.length === 1 && bad.started.length === 0, 'bad  →  ' + JSON.stringify(bad));
+    });
+    await t.test('doc 不是对象也不炸', () => {
+      const empty = K.onceResultBits(null);
+      assert.ok(empty.all.length === 0 && empty.started.length === 0 && empty.failed.length === 0, 'null  →  ' + JSON.stringify(empty));
     });
   });
 
