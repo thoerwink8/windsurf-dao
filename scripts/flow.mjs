@@ -18,9 +18,12 @@
 // 决策规则（②）：
 //   - 工人完工且待审    → 观察有没有活审官下一跳（#675：没开成报帅，不 task-create）
 //   - 审官红 N 项       → 观察士兵还活着没有（#677：红项打进这个活身份，不开下一跳）
-//   - 复核绿            → 报帅终审（终审+校准+合并归档归帅，不自动合并）
+//   - 复核绿            → 等 MERGED（拍板 2：超时未合才报帅，不自动合并）
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
+//   - 工人异常死亡      → 报帅（#686 ①：dispatch 未结算 + agent done + 无完工 comment）
+//   - notify 链断        → 自愈（#686 ②：新 push + 红项 + 审官 dispatch 已结算 → reviewer-create）
+//   - 待帅处置          → 落 GitHub（#686 ③：经 gh pr comment 写评论）
 //
 // 执行（③）#675/#677：flow 禁止 task-create。士兵交卷后身份继续活，红项打进这个 id。
 //   - 士兵 Dispatch 还活着 → 本轮 0 需流转
@@ -31,10 +34,12 @@
 // 「新工位问、闭环内不问」：自动注入只覆盖闭环内流转；新工位（无完工信号）
 // 不出任何自动动作。
 //
-// 待帅处置常驻行（对抗审红 3）：有待帅事项（复核绿待终审 / 判定行缺失待分诊 /
-// 乒乓仍红待换人 / 注入失败待接手 / 找不到审官待接手 / 选不出审官）的 PR，每轮都
+// 待帅处置常驻行（对抗审红 3）：有待帅事项（approved 超时未合 / 判定行缺失待分诊 /
+// 乒乓仍红待换人 / 注入失败待接手 / 找不到审官待接手 / 选不出审官 /
+// 工人异常死亡 / notify 链断自愈失败）的 PR，每轮都
 // 输出「[flow] 待帅处置：#N（原因）」且 exit 1——「0 需流转」只允许用在真没有待办时；
 // 待办不能因报过一次就转绿。记账字段 = rec.pendingShuai（四轮复核红 1，独立于注入闸）。
+// #686 ③：待帅事项同时经 gh pr comment 写 GitHub 评论（任何会话可见）。
 //
 // 存量清点（#455 的 prime 吞存量教训）：本脚本不做「只监听新事件」——
 // 每轮对每个在途 PR 重放全部信号（comments+reviews）推导当前态；首次启动
@@ -81,7 +86,7 @@ import {
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
-import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
+import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch, readDispatchSettlement } from './lib/dao-cmd.mjs';
 import { syncMasterTicketZone } from './lib/master-title.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -143,6 +148,7 @@ const ORCA_TIMEOUT_MS = 30000;
 const GH_TIMEOUT_MS = 30000;
 const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
+const APPROVED_TIMEOUT_MS = 30 * 60 * 1000; // #686 拍板 2：approved 超时未合才报帅
 
 let _ledgerCtx = null;
 function ledgerCtx() {
@@ -459,7 +465,7 @@ function pendingAction(derived) {
   if (derived.state === 'awaiting-review') return { kind: 'observe-reviewer-hop' };
   if (derived.state === 'awaiting-recheck') return { kind: 'observe-recheck-hop', round: derived.redReviews };
   if (derived.state === 'rework-needed') return { kind: 'observe-rework-hop', red: derived.lastRed, round: derived.redReviews };
-  if (derived.state === 'approved') return { kind: 'report-final' };
+  if (derived.state === 'approved') return { kind: 'observe-approved-merge' }; // #686 拍板 2：复核绿不报帅，等 MERGED
   if (derived.state === 'pingpong') return { kind: 'report-switch', round: derived.redReviews };
   return null; // error 态由 malformed review 逐条报帅 + 待帅处置常驻行覆盖
 }
@@ -471,7 +477,7 @@ function pendingAction(derived) {
 // thisRoundFailed = 本轮 dry-run 解析失败（预览的本轮量，不落盘）。
 function awaitingShuaiReason(derived, rec, thisRoundFailed) {
   if (rec.pendingShuai) return rec.pendingShuai.reason;
-  if (derived.state === 'approved') return '复核绿待帅终审';
+  // #686 拍板 2：approved 不再默认待帅——等 MERGED，超时才报帅
   if (derived.state === 'error') return '判定行缺失/格式不符待帅分诊';
   if (derived.state === 'pingpong') return '乒乓两轮仍红待帅换人';
   if (thisRoundFailed) return '注入/目标解析失败待帅确认（本轮，未落闸）';
@@ -548,6 +554,9 @@ export function isFlowWork(action) {
     action.kind === 'observe-rework-hop'
     || action.kind === 'observe-recheck-hop'
     || action.kind === 'observe-reviewer-hop'
+    || action.kind === 'auto-reviewer-create' // #686 拍板 1：notify 链断自愈
+    // observe-approved-merge 不算流转器待办（#686 拍板 2：approved 等 MERGED，
+    // 与旧 report-final 同口径——绿待帅不是流转器活，watchdog 不报 flow-absent）
   );
 }
 
@@ -759,6 +768,17 @@ function makeLiveSource(repo) {
       }
       return { ok: true, json: r.json, workers };
     },
+    // #686 ①：worker-show 拿单个 dispatch 详情（agent state / 结算状态）
+    workerShow(dispatchId) {
+      const r = runOrca(['orchestration', 'worker-show', '--dispatch', dispatchId, '--json']);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, json: r.json };
+    },
+    // #686 ②：runDao 调 dao.mjs 命令（reviewer-create 等）
+    runDao(argv) {
+      const r = runCmd(process.execPath, [join(ROOT, 'scripts', 'dao.mjs'), ...argv], GH_TIMEOUT_MS);
+      return r;
+    },
   };
 }
 
@@ -837,6 +857,22 @@ function makeSnapshotSource(roundDir, repo) {
       }
       return { ok: true, json: r.json, workers };
     },
+    // #686 ①：快照模式 worker-show——从 orca-worker-show-<dispatchId>.json 读
+    workerShow(dispatchId) {
+      const file = join(roundDir, `orca-worker-show-${dispatchId}.json`);
+      if (!existsSync(file)) return { ok: false, error: `缺 worker-show 快照 ${file}` };
+      return readJson(file);
+    },
+    // #686 ②：快照模式 runDao——从 dao-<verb>-<pr>.json 读结果
+    runDao(argv) {
+      const verb = argv[0] || 'unknown';
+      const prIdx = argv.indexOf('--pr');
+      const prNum = prIdx >= 0 ? argv[prIdx + 1] : '0';
+      const file = join(roundDir, `dao-${verb}-${prNum}.json`);
+      if (!existsSync(file)) return { ok: false, error: `缺 dao 快照 ${file}` };
+      const r = readJson(file);
+      return r.ok ? { ok: true, out: JSON.stringify(r.json) } : r;
+    },
   };
 }
 
@@ -904,6 +940,21 @@ function executeAction(action, pr, source, rec, dryRun) {
     }
     const who = action.kind === 'observe-recheck-hop' ? '审官下一跳' : '下一跳';
     return { ok: false, error: `验收没开成${who}`, needsReport: 'hop-missing' };
+  }
+
+  // #686 拍板 2：approved 等 MERGED，超时未合才报帅
+  if (action.kind === 'observe-approved-merge') {
+    if (action.merged) {
+      return { ok: true, idle: true, line: `[flow] 观察：#${pr.number} approved 且已 MERGED，等退役分支收口` };
+    }
+    if (action.timedOut) {
+      return {
+        ok: false,
+        error: `approved 超时未合：PR #${pr.number} 复核绿已 ${Math.round(action.sinceMs / 60000)}min 未 MERGED`,
+        needsReport: 'approved-timeout',
+      };
+    }
+    return { ok: true, idle: true, line: `[flow] 观察：#${pr.number} approved 等合并（${Math.round(action.sinceMs / 60000)}min，${Math.round(APPROVED_TIMEOUT_MS / 60000)}min 超时）` };
   }
 
   return { ok: false, error: `未知动作 ${action.kind}` };
@@ -992,6 +1043,7 @@ function processOneRound(source, state, args) {
     const lastAt = lastSig?.at ? Date.parse(lastSig.at) : Date.parse(pr.updatedAt || pr.createdAt || '');
     const sinceMs = Number.isFinite(lastAt) ? Math.max(0, now - lastAt) : 0;
     hbPrs.push({ number: pr.number, state: derived.state, sinceMs });
+
     // 动作去重：同一指纹只动作一次（重启后存量重放同指纹不重复动作）
     if (rec.actedOn !== fp) {
       // 自愈（三轮复核红 1 + 四轮扩展）：新信号（fp 变化）到来即清除待帅记账给一次重试——
@@ -999,14 +1051,7 @@ function processOneRound(source, state, args) {
       if (rec.pendingShuai) rec.pendingShuai = null;
       const action = pendingAction(derived);
       if (action) {
-        if (action.kind === 'report-final') {
-          // 复核绿 → 报帅终审（终审 + 校准 + 合并归档归帅，本脚本不自动合并）
-          const bit = noteJudgmentClosedLedger(pr, reviews, { success: true, dryRun: args.dryRun });
-          events.push(`[flow] 报帅：终审 #${pr.number}（复核结论：绿）——终审 + 校准 + 合并归档归帅，本脚本不自动合并${bit}`);
-          rec.pendingShuai = { kind: 'report-final', reason: '复核绿待帅终审' };
-          rec.actedOn = fp;
-          pendingCount += 1;
-        } else if (action.kind === 'report-switch') {
+        if (action.kind === 'report-switch') {
           // 乒乓两轮仍红 → 报帅换人（换人决策归帅）
           const bit = noteJudgmentClosedLedger(pr, reviews, { success: false, dryRun: args.dryRun });
           events.push(`[flow] 报帅：换人 #${pr.number}（乒乓两轮仍红——两轮返工后第 ${action.round} 次红判定）——换人决策归帅${bit}`);
@@ -1019,6 +1064,10 @@ function processOneRound(source, state, args) {
             reviewerHandle: rec.reviewer?.handle || null,
             reviewerWorktree: rec.reviewer?.worktree || null,
             reviewerLabel: rec.reviewer?.label || null,
+            // #686 拍板 2：approved 等 MERGED 所需字段
+            merged: pr.state === 'MERGED' || !!pr.mergedAt,
+            timedOut: sinceMs > APPROVED_TIMEOUT_MS,
+            sinceMs,
           };
           const exec = executeAction({ ...action, ...extra }, pr, source, rec, args.dryRun);
           if (exec.ok) {
@@ -1036,6 +1085,7 @@ function processOneRound(source, state, args) {
                   : '验收没开成下一跳')
                 : exec.needsReport === 'reviewer-unfound' ? '找不到审官终端——待帅接手复核'
                 : exec.needsReport === 'report-unknown' ? '选不出审官（缺 model/type 标签或路由表无审查模型）——请帅处置'
+                : exec.needsReport === 'approved-timeout' ? 'approved 超时未合待帅处置'
                 : '下一跳没查成待帅接手（新信号到来自动重试一次）',
             };
             rec.actedOn = fp;
@@ -1053,9 +1103,77 @@ function processOneRound(source, state, args) {
     for (const c of comments) if (c && c.id != null) rec.seenComments[c.id] = true;
     for (const rv of reviews) if (rv && rv.id != null) rec.seenReviews[rv.id] = true;
 
+    // ═══ #686 ① 工人异常死亡检测（放在 action handling 之后，避免被 self-heal 清除） ═══
+    // dispatch 未结算 + agent done + 无完工 comment → 报帅
+    if (derived.state === 'working' && !rec.pendingShuai?.kind?.startsWith('dead-')) {
+      const wtsList = source.orcaWorktrees?.() || { ok: false };
+      const workerWt = wtsList.ok ? (wtsList.worktrees || []).find(
+        w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`
+      ) : null;
+      if (workerWt) {
+        const workersList = source.orcaWorkers?.() || { ok: false };
+        if (workersList.ok) {
+          const workers = workersList.workers || [];
+          const worker = workers.find(w => w.resource?.worktreeId === workerWt.id);
+          if (worker) {
+            // 同 dao-cmd.mjs isLiveDispatchRecipient dead-set 对齐
+            const deadStates = new Set(['done', 'succeeded', 'failed', 'cancelled', 'canceled', 'released', 'stopped']);
+            const agentDone = deadStates.has(String(worker.workerState || '').toLowerCase());
+            const dispatchSettled = String(worker.dispatchStatus || '').toLowerCase() === 'completed';
+            if (agentDone && !dispatchSettled) {
+              const sigs = orderedSignals(comments, reviews);
+              if (sigs.length === 0) {
+                const reason = `工人异常死亡：#${pr.number}（agent done, dispatch ${worker.dispatchStatus || 'unsettled'}, 无完工 comment）`;
+                events.push(`[flow] 异常：${reason}——请帅 worker-start --task <taskId> --terminal <handle> 续活，红项从 PR review 读`);
+                rec.pendingShuai = { kind: 'dead-worker', reason };
+                pendingCount += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ═══ #686 ② notify 链断自愈（放在 action handling 之后） ═══
+    if ((derived.state === 'awaiting-recheck' || derived.state === 'rework-needed')
+        && rec.reviewer?.dispatchId && !rec.pendingShuai?.kind?.startsWith('selfheal-')
+        && typeof source.runDao === 'function') {
+      const showR = source.workerShow(rec.reviewer.dispatchId);
+      if (showR.ok) {
+        const rSettlement = readDispatchSettlement(showR.json);
+        if (rSettlement.ok && rSettlement.settled) {
+          if (!args.dryRun) {
+            const createR = source.runDao(['reviewer-create', '--pr', String(pr.number)]);
+            if (createR.ok) {
+              events.push(`[flow] 自愈：#${pr.number} 审官 dispatch 已结算，自动 reviewer-create 起新审官（notify 链断自愈）`);
+              rec.reviewer.selfHealed = true;
+            } else {
+              events.push(`[flow] 自愈失败：#${pr.number} reviewer-create 失败 ${createR.error}——请帅处置`);
+            }
+          } else {
+            events.push(`[flow] 自愈：#${pr.number}（dry-run）审官 dispatch 已结算，将自动 reviewer-create`);
+          }
+          pendingCount += 1;
+        }
+      }
+    }
+
     // 待帅处置常驻行（红 3）：pendingShuai/approved/error/pingpong/本轮失败每轮显形
     const reason = awaitingShuaiReason(derived, rec, thisRoundFailed.has(pr.number));
-    if (reason) awaitingShuai.push({ pr: pr.number, reason });
+    if (reason) {
+      awaitingShuai.push({ pr: pr.number, reason });
+      // #686 ③：待帅处置落 GitHub——经 gh 写 PR comment，任何会话可见
+      const ghKey = reason;
+      if (!rec.ghNotified || !rec.ghNotified.has(ghKey)) {
+        if (!args.dryRun) {
+          const ghC = runGh(['pr', 'comment', String(pr.number), '--body', `[flow] 待帅处置：#${pr.number}（${reason}）`]);
+          if (ghC.ok) {
+            if (!rec.ghNotified) rec.ghNotified = new Set();
+            rec.ghNotified.add(ghKey);
+          }
+        }
+      }
+    }
 
     // 制度类 PR 停留超 24h 提醒一声（S5 拍板；正文含「体系类改动」段 = 制度类；
     // 用 updatedAt 算停留——天天在推的长战线 PR 不算「停留」，对抗审观察 7）
@@ -1078,7 +1196,7 @@ function processOneRound(source, state, args) {
   }
 
   const scanned = open.length;
-  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置'));
+  const acted = events.some(e => e.startsWith('[flow] 动作') || e.startsWith('[flow] 预览-阻塞') || e.startsWith('[flow] 报帅') || e.startsWith('[flow] 提醒') || e.startsWith('[flow] 退役') || e.startsWith('[flow] 待帅处置') || e.startsWith('[flow] 异常') || e.startsWith('[flow] 自愈'));
   if (!acted && !noTargets) {
     events.push(`[flow] OK 扫完 ${scanned} 个 PR，0 需流转`);
   }
