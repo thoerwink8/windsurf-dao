@@ -1921,6 +1921,46 @@ describe('dao', () => {
       assert.ok(need.ok && need.needCreate === true && !need.runId, '要自开  →  ' + JSON.stringify(need));
       assert.ok(!miss.ok && miss.unscanned === true, '没查成  →  ' + JSON.stringify(miss));
     });
+    await t.test('#614 bindStation 自开 Run 打身份标记（coordinator/dispatch）', () => {
+      const stationFn = daoSrc.slice(daoSrc.indexOf('function bindStation'), daoSrc.indexOf('function sleepMs'));
+      assert.ok(/objective: `\$\{runRole\}: dao dispatch`/.test(stationFn), 'run-create 带身份前缀  →  ' + stationFn.slice(stationFn.indexOf('argsRunCreateSelf'), stationFn.indexOf('argsRunCreateSelf') + 120));
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      assert.ok(/bindStation\(\{ runRole: 'coordinator' \}\)/.test(dispatchFn) && /bindStation\(\{ runRole: 'coordinator' \}\)/.test(batchFn),
+        '#614 帅窗派工（含批）的协调 Run 标 coordinator');
+    });
+    await t.test('#614 dispatch 回滚退役本次新建的 Run（只退 runCreated 的）', () => {
+      const rollbackFn = daoSrc.slice(daoSrc.indexOf('function rollbackCreated'), daoSrc.indexOf('function snapshotHandleScreen'));
+      assert.ok(/created\.runCreated === true && created\.runId/.test(rollbackFn), '只退本次新建的  →  ' + rollbackFn.slice(0, 200));
+      assert.ok(/retireOneRun\(created\.runId\)/.test(rollbackFn), '回滚路径退役 Run  →  ' + rollbackFn.slice(0, 200));
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/created\.runId = station\.runId/.test(dispatchFn) && /created\.runCreated = station\.created === true/.test(dispatchFn),
+        '派工记录新建 Run 供回滚  →  ' + dispatchFn.slice(dispatchFn.indexOf('const station'), dispatchFn.indexOf('const station') + 200));
+      const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
+        '批派工失败同样回收 Run');
+    });
+    await t.test('#614 dispatch 成功后顺带只读 gc + 阈值行 + emit 带 gc', () => {
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/runGcReadonlyScan\(\)/.test(dispatchFn) && /gcThresholdLine\(/.test(dispatchFn) && /const gc = runGcReadonlyScan/.test(dispatchFn),
+        'dispatch 成功路径顺带只读 gc  →  ' + dispatchFn.slice(dispatchFn.indexOf('runGcReadonlyScan'), dispatchFn.indexOf('runGcReadonlyScan') + 160));
+      assert.ok(/\r?\n    gc,\r?\n/.test(dispatchFn), 'emit 带 gc 字段');
+      const scanFn = daoSrc.slice(daoSrc.indexOf('function runGcReadonlyScan'), daoSrc.indexOf('function runIdFromDispatch'));
+      assert.ok(/unscanned: true, error: src\.error/.test(scanFn), '只读扫描没查成 → unscanned  →  ' + scanFn.slice(0, 200));
+    });
+    await t.test('#614 coordinator 豁免分桶（在途单/协调终端在盘面 keep，查不成 fail-close）', () => {
+      const gcFn = daoSrc.slice(daoSrc.indexOf('function cmdRunGc'), daoSrc.indexOf('function cmdAsk'));
+      assert.ok(/partitionCoordinatorRuns\(plan\.coordinator/.test(gcFn), 'coordinator 走 handle 分桶  →  ' + gcFn.slice(0, 200));
+      assert.ok(/argsTerminalList\(\)/.test(gcFn) && /onBoard = new Set/.test(gcFn), '活性判据 = terminal list 盘面  →  ' + gcFn.slice(0, 200));
+      assert.ok(/coordinatorKeep/.test(gcFn) && /coordinatorTombstones/.test(gcFn), '输出活豁免/墓碑两桶');
+    });
+    await t.test('#614 run-list 分页扫全（nextCursor 循环，页失败 → unscanned 不许当全量）', () => {
+      const listFn = daoSrc.slice(daoSrc.indexOf('function listAllRuns'), daoSrc.indexOf('function runGcReadonlyScan'));
+      assert.ok(/nextCursor/.test(listFn) && /游标不前进/.test(listFn), '分页扫全 + 游标不前进保护  →  ' + listFn.slice(0, 200));
+      assert.ok(/分页超过 20 页，放弃（没扫成）/.test(listFn), '超页数放弃 → 没扫成');
+      const loadFn = daoSrc.slice(daoSrc.indexOf('function loadLifecycleInputs'), daoSrc.indexOf('function listAllRuns'));
+      assert.ok(/const rl = listAllRuns\(\)/.test(loadFn), 'loadLifecycleInputs 走分页扫全  →  ' + loadFn.slice(0, 200));
+    });
     await t.test('#667 task-create / worker-start 能带 --from', () => {
       const t = S.argsTaskCreate({ spec: 's', run: 'r', from: 'h' });
       const w = S.argsWorkerStart({ task: 't', worktree: 'w', terminal: 'x', from: 'h', run: 'r' });

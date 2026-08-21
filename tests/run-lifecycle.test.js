@@ -145,6 +145,75 @@ describe('run-lifecycle', () => {
     });
   });
 
+  it('#614 coordinator Run 永不自动退役（只认显式 retire --run）', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [
+      run({ id: 'run_coord', objective: 'coordinator: dao dispatch' }),
+      run({ id: 'run_dispatch', objective: 'dispatch: dao dispatch' }),
+      run({ id: 'run_old' }), // 旧 Run 无前缀
+    ];
+    const plan = S.planRunGc({ runs, workers: [], worktrees: [] });
+    await t.test('coordinator 独立列出（不进 retire，也不冒充 keep）', () => {
+      assert.ok(plan.coordinator.map(r => r.id).includes('run_coord'), 'coordinator 进 coordinator 字段  →  ' + JSON.stringify(plan));
+      assert.ok(!plan.retire.map(r => r.id).includes('run_coord'), 'coordinator 不进 retire  →  ' + JSON.stringify(plan));
+      assert.ok(!plan.keep.map(r => r.id).includes('run_coord'), 'coordinator 不冒充 keep（活/墓碑由调用方按租约分）  →  ' + JSON.stringify(plan));
+    });
+    await t.test('dispatch 身份与旧 Run 无在途单仍可退役', () => {
+      assert.ok(plan.retire.map(r => r.id).sort().join(',') === 'run_dispatch,run_old', 'dispatch/旧 Run 照旧  →  ' + JSON.stringify(plan));
+    });
+    const marked = S.planRunGc({
+      runs: [run({ id: 'run_c2', objective: 'coordinator：中文冒号带空格' })],
+      workers: [],
+      worktrees: [],
+    });
+    await t.test('中文冒号/空格前缀也认', () => {
+      assert.ok(marked.coordinator.map(r => r.id).includes('run_c2'), '中文冒号也认  →  ' + JSON.stringify(marked));
+    });
+    await t.test('isCoordinatorRun 判据', () => {
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'coordinator: x' }) === true, '英文冒号');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: ' coordinator : x' }) === true, '前缀空格容错');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'dispatch: x' }) === false, 'dispatch 不认');
+      assert.ok(S.isCoordinatorRun({ id: 'r', objective: 'xcoordinator: y' }) === false, '前缀必须开头');
+      assert.ok(S.isCoordinatorRun({ id: 'r' }) === false, '无 objective 不认');
+    });
+  });
+
+  it('#614 partitionCoordinatorRuns：在途单 / 协调终端在盘面 → 豁免 keep，否则墓碑，判据缺失 unscanned', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [
+      run({ id: 'run_live', coord: 'term_shuai', objective: 'coordinator: x' }),
+      run({ id: 'run_prot', coord: 'term_gone', objective: 'coordinator: x' }),
+      run({ id: 'run_dead', coord: null, objective: 'coordinator: x' }),
+      run({ id: 'run_noHandle', coord: 'term_gone', objective: 'coordinator: x' }),
+    ];
+    const board = S.partitionCoordinatorRuns(runs, {
+      protectedIds: new Set(['run_prot']),
+      handleOnBoard: (h) => h === 'term_shuai',
+    });
+    await t.test('活协调终端 → keep', () => {
+      assert.ok(board.ok && board.keep.map(r => r.id).includes('run_live'), '活协调终端 keep  →  ' + JSON.stringify(board));
+    });
+    await t.test('在途单保护优先于 handle → keep', () => {
+      assert.ok(board.keep.map(r => r.id).includes('run_prot'), '在途单保护 keep  →  ' + JSON.stringify(board));
+    });
+    await t.test('无 handle / handle 不在盘面 → 墓碑', () => {
+      assert.ok(board.tombstones.map(r => r.id).sort().join(',') === 'run_dead,run_noHandle', '墓碑  →  ' + JSON.stringify(board));
+    });
+    await t.test('判据缺失 / 名单结构不认识 → unscanned', () => {
+      assert.ok(S.partitionCoordinatorRuns(null, { handleOnBoard: () => true }).unscanned === true, 'runs 不是数组 → unscanned');
+      assert.ok(S.partitionCoordinatorRuns([], {}).unscanned === true, '没给 handle 判据 → unscanned');
+    });
+  });
+
+  it('#614 run-list 截断：分页扫全（listAllRuns 负责），页失败 → unscanned', async (t) => {
+    const S = await LIB_LOAD;
+    const runs = [run({ id: 'run_a' }), run({ id: 'run_b' })];
+    const plain = S.planRunGc({ runs, workers: [], worktrees: [] });
+    await t.test('全量数据照常计划（分页在 listAllRuns 侧完成）', () => {
+      assert.ok(plain.ok && plain.retire.length === 2, '全量照常  →  ' + JSON.stringify(plain));
+    });
+  });
+
   it('删树反查 Run', async (t) => {
     const S = await LIB_LOAD;
     const workers = [

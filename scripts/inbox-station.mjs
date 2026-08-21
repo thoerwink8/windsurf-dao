@@ -48,6 +48,7 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
   planRunGc,
+  partitionGcTargets,
 } from './lib/run-lifecycle.mjs';
 import {
   processArchiveNotices,
@@ -613,11 +614,37 @@ function listWorktrees() {
   return { ok: Array.isArray(worktrees), worktrees: Array.isArray(worktrees) ? worktrees : [], error: r.error };
 }
 
-function listRuns() {
-  const r = runOrca(['orchestration', 'run-list', '--json']);
-  if (!r.ok) return { ok: false, error: r.error, runs: [] };
-  const runs = unwrapOrca(r.json, 'runs');
-  return { ok: Array.isArray(runs), runs: Array.isArray(runs) ? runs : [], error: r.error };
+// #614 验收⑤：run-list 分页扫全（nextCursor 循环）。页失败 / 游标不前进 = 没扫成。
+function listRuns(limit = 100) {
+  const all = [];
+  const seen = new Set();
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const args = ['orchestration', 'run-list', '--limit', String(limit)];
+    if (cursor) args.push('--cursor', cursor);
+    args.push('--json');
+    const r = runOrca(args);
+    if (!r.ok) {
+      return { ok: false, unscanned: true, error: `run-list 分页没查成: ${errText(r.error)}`, runs: [] };
+    }
+    const runs = unwrapOrca(r.json, 'runs');
+    if (!Array.isArray(runs)) {
+      return { ok: false, unscanned: true, error: 'run-list 分页结构不认识', runs: [] };
+    }
+    for (const run of runs) {
+      if (run && run.id && !seen.has(run.id)) {
+        seen.add(run.id);
+        all.push(run);
+      }
+    }
+    const next = r.json?.result?.nextCursor || null;
+    if (!next) return { ok: true, runs: all };
+    if (next === cursor) {
+      return { ok: false, unscanned: true, error: 'run-list 游标不前进，分页扫全失败（没扫成）', runs: [] };
+    }
+    cursor = next;
+  }
+  return { ok: false, unscanned: true, error: 'run-list 分页超过 20 页，放弃（没扫成）', runs: [] };
 }
 
 
@@ -784,9 +811,28 @@ async function gcZombieScan(threshold) {
   if (!workers.ok) return { ok: false, unscanned: true, error: `worker-list 没查成: ${errText(workers.error)}`, threshold };
   const worktrees = listWorktrees();
   if (!worktrees.ok) return { ok: false, unscanned: true, error: `worktree ps 没查成: ${errText(worktrees.error)}`, threshold };
-  const plan = planRunGc({ runs: runs.runs, workers: workers.workers, worktrees: worktrees.worktrees });
+  const plan = planRunGc({
+    runs: runs.runs,
+    workers: workers.workers,
+    worktrees: worktrees.worktrees,
+  });
   if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
-  return gcSummaryFromPlan(plan, threshold);
+  // #614：只数活僵尸（有租约 pending），墓碑计入会让提示行永远响（狼来了）
+  const parts = partitionGcTargets(plan.retire, {
+    leaseExistsFor: (runId) => {
+      const logPath = resolveLogPath(null, runId);
+      return [leasePath(logPath), launchFilePath(logPath), logPath].some((f) => existsSync(f));
+    },
+  });
+  if (!parts.ok) return { ok: false, unscanned: true, error: parts.error, threshold };
+  return {
+    ok: true,
+    unscanned: false,
+    zombieCount: parts.pending.length,
+    keepCount: plan.keep.length,
+    tombstoneCount: parts.tombstones.length,
+    threshold,
+  };
 }
 
 async function cmdEnsure(args) {
