@@ -191,6 +191,7 @@ decided = "2026-08-18"
 
 [providers.devin]
 cli = "devin"
+start = "command"
 default_model = "deepseek-v4-flash-max"
 launch = "devin --model {model} --permission-mode dangerous"
 launch_model = "deepseek-v4-flash-max"
