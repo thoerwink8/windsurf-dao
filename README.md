@@ -14,7 +14,8 @@
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `templates/` | 新项目起点：`base/` 公共底座 + `node-app/` / `expo-mobile/` / `docs-vault/` 三份薄层。用法：把 `base/` 全部拷进新仓库根目录，再按项目类型拷一份薄层，按文件头部说明填空改名；详细说明见 `templates/README.md` |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
-| `scripts/watchdog.mjs` | 事故路径停摆看门狗（issue #442）：轮询 `orca worktree ps` 自动枚举 working/waiting 工位，检测终端 exited / ps waiting / 屏面错误指纹 / 整屏哈希三轮不变。结构性排除主工作区（master）、监视器自己的工作区与稳定 pane ID，不对协调者/审官自误报。协调者用 Monitor 挂载：`node scripts/watchdog.mjs`（默认每 30s 一轮，一行一事件）；`--once` 跑单轮；`--snapshot-dir` 用快照复现/测试；`--exclude-pane` 排除控制端会话 |
+| `scripts/watchdog.mjs` | 事故路径停摆看门狗（issue #442）：轮询 `orca worktree ps` 自动枚举 working/waiting 工位，检测终端 exited / ps waiting / 屏面错误指纹 / 整屏哈希三轮不变。结构性排除主工作区（master）、监视器自己的工作区与稳定 pane ID，不对协调者/审官自误报。生产保活走计划任务（#683，`scripts/guard-keepalive.mjs --install`），不要靠人记得 Monitor 挂载。`--once` 跑单轮；`--snapshot-dir` 用快照复现/测试；`--exclude-pane` 排除控制端会话 |
+| `scripts/guard-keepalive.mjs` | #683：Windows 计划任务每 2 分钟检查 watchdog + flow，不在则从 `~/.dao/guard-mirror` 拉起。`--install` 写本机 cmd + 注册 schtasks；进程列表没查成不许当 0 个。 |
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
 | `tests/watchdog.test.js` | 看门狗回归网：真实语料负向对照 + 真实事故实录（at-capacity 两起 / terminal_handle_stale）+ 违规样本逐一被拦（语料在 `tests/watchdog-fixtures/`）。跑法（写死，别按直觉敲 `node --test tests/`）：单套回归 `node --test tests/watchdog.test.js`；全仓自检（自发现 `tests/*.test.js` 逐套跑）`node scripts/dao-check.mjs`。⚠️ `node --test tests/` 在 Node 24 下把 `tests/` 当模块报 MODULE_NOT_FOUND，不要用它 |
 | `docs/classics/` | 三部经文原文，精神源头 |
