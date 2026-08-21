@@ -655,13 +655,43 @@ function loadLifecycleInputs() {
   if (!wl.ok) return { ok: false, error: `worker-list 没查成: ${errText(wl.error)}` };
   const workers = unwrapWorkers(wl.json);
   if (!Array.isArray(workers)) return { ok: false, error: 'worker-list 没有 result.workers' };
-  const rl = orca(argsRunList());
-  if (!rl.ok) return { ok: false, error: `run-list 没查成: ${errText(rl.error)}` };
-  const runs = unwrapRuns(rl.json);
-  if (!Array.isArray(runs)) return { ok: false, error: 'run-list 没有 result.runs' };
-  // #614 验收⑤：run-list 有 nextCursor = 还有下一页，本次没扫全
-  const runListTruncated = Boolean(rl.json?.result?.nextCursor);
-  return { ok: true, worktrees, workers, runs, runListTruncated };
+  // #614 验收⑤：run-list 分页扫全（nextCursor 循环）。分页失败 = 没扫全，不许当全量。
+  const rl = listAllRuns();
+  if (!rl.ok) return { ok: false, error: rl.error };
+  return { ok: true, worktrees, workers, runs: rl.runs };
+}
+
+/** #614 验收⑤：run-list 分页扫全。游标不前进 / 超页数 = 没扫成（unscanned）。 */
+function listAllRuns(limit = 100) {
+  const all = [];
+  const seen = new Set();
+  let cursor = null;
+  for (let page = 0; page < 20; page++) {
+    const args = ['orchestration', 'run-list', '--limit', String(limit)];
+    if (cursor) args.push('--cursor', cursor);
+    args.push('--json');
+    const r = orca(args);
+    if (!r.ok) {
+      return { ok: false, unscanned: true, error: `run-list 分页没查成: ${errText(r.error)}` };
+    }
+    const runs = unwrapRuns(r.json);
+    if (!Array.isArray(runs)) {
+      return { ok: false, unscanned: true, error: 'run-list 分页结构不认识（缺 runs 数组）' };
+    }
+    for (const run of runs) {
+      if (run && run.id && !seen.has(run.id)) {
+        seen.add(run.id);
+        all.push(run);
+      }
+    }
+    const next = r.json?.result?.nextCursor || null;
+    if (!next) return { ok: true, runs: all, pages: page + 1 };
+    if (next === cursor) {
+      return { ok: false, unscanned: true, error: 'run-list 游标不前进，分页扫全失败（没扫成）' };
+    }
+    cursor = next;
+  }
+  return { ok: false, unscanned: true, error: 'run-list 分页超过 20 页，放弃（没扫成）' };
 }
 
 /** #614 验收④：只读 gc 扫描（不 --apply，不关台）。没查成 → unscanned，不许报 0。 */
@@ -672,7 +702,6 @@ function runGcReadonlyScan(threshold = GC_THRESHOLD) {
     runs: src.runs,
     workers: src.workers,
     worktrees: src.worktrees,
-    truncated: src.runListTruncated,
   });
   if (!plan.ok) return { ok: false, unscanned: true, error: plan.error, threshold };
   return gcSummaryFromPlan(plan, threshold);
@@ -2808,28 +2837,34 @@ function cmdRunGc(args) {
     runs: src.runs,
     workers: src.workers,
     worktrees: src.worktrees,
-    truncated: src.runListTruncated,
   });
   if (!plan.ok) fail(plan.error);
-  const parts = partitionGcTargets(plan.retire, {
-    leaseExistsFor: (runId) => stationFilesFor(runId).some((f) => existsSync(f)),
-  });
+  const leaseExistsFor = (runId) => stationFilesFor(runId).some((f) => existsSync(f));
+  const parts = partitionGcTargets(plan.retire, { leaseExistsFor });
   if (!parts.ok) fail(parts.error);
+  // #614：coordinator 豁免只认「还活着」（有租约）的；已退役（无租约）归墓碑，不许永久假活。
+  // 租约查不成 → unscanned fail-close：不许当豁免 keep，也不许退役。
+  const coordParts = partitionGcTargets(plan.coordinator, { leaseExistsFor });
+  if (!coordParts.ok) fail(coordParts.error);
+  const keepCoord = coordParts.pending;
+  const tombCoord = coordParts.tombstones;
   const summary = {
     pending: parts.pending.map(r => r.id),
-    tombstones: parts.tombstones.map(r => r.id),
-    keep: plan.keep.map(r => r.id),
+    tombstones: [...parts.tombstones.map(r => r.id), ...tombCoord.map(r => r.id)],
+    keep: [...plan.keep.map(r => r.id), ...keepCoord.map(r => r.id)],
+    coordinatorKeep: keepCoord.map(r => r.id),
+    coordinatorTombstones: tombCoord.map(r => r.id),
     skippedLegacy: plan.skippedLegacy.map(r => r.id),
     pendingCount: parts.pending.length,
-    tombstoneCount: parts.tombstones.length,
-    keepCount: plan.keep.length,
+    tombstoneCount: parts.tombstones.length + tombCoord.length,
+    keepCount: plan.keep.length + keepCoord.length,
     note: 'orca 没有 run-delete；tombstones = 已退但墓碑仍在 run-list。真关只认 terminal close 掉活台，不认删租约。',
   };
   if (!args.apply) {
     emit({ ok: true, dryRun: true, ...summary });
   }
   const results = parts.pending.map((r) => retireOneRun(r.id));
-  const tallied = summarizeGcApply({ pendingResults: results, tombstones: parts.tombstones });
+  const tallied = summarizeGcApply({ pendingResults: results, tombstones: [...parts.tombstones, ...tombCoord] });
   emit({
     ok: tallied.failedCount === 0,
     closedCount: tallied.closedCount,

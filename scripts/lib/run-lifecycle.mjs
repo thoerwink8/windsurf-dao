@@ -111,18 +111,9 @@ export function protectedRunIds({ workers, worktrees } = {}) {
   return prot;
 }
 
-export function planRunGc({ runs, workers, worktrees, truncated = false } = {}) {
+export function planRunGc({ runs, workers, worktrees } = {}) {
   if (!Array.isArray(runs)) {
     return { ok: false, unscanned: true, error: 'run-list 结构不认识（缺 runs 数组）', retire: [], keep: [] };
-  }
-  if (truncated) {
-    return {
-      ok: false,
-      unscanned: true,
-      error: 'run-list 截断（nextCursor 非空），没扫全，不许当全量（#614 验收⑤）',
-      retire: [],
-      keep: [],
-    };
   }
   if (!Array.isArray(workers)) {
     return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 workers 数组）', retire: [], keep: [] };
@@ -133,12 +124,15 @@ export function planRunGc({ runs, workers, worktrees, truncated = false } = {}) 
   const prot = protectedRunIds({ workers, worktrees });
   const retire = [];
   const keep = [];
+  const coordinator = [];
   const skippedLegacy = [];
   for (const run of runs) {
     if (!run?.id) continue;
-    // #614：coordinator Run 永不自动退役（只认显式 retire --run <id>），先于在途单判据
+    // #614：coordinator Run 永不自动退役（只认显式 retire --run <id>），先于在途单判据。
+    // 单独列进 coordinator：调用方按租约分「活豁免 keep」/「已退役墓碑」（#614 实跑发现的坑：
+    // 退役后的 coordinator 若直接 keep 会永久假活）。
     if (isCoordinatorRun(run)) {
-      keep.push(run);
+      coordinator.push(run);
       continue;
     }
     if (isLegacyRun(run)) {
@@ -153,6 +147,7 @@ export function planRunGc({ runs, workers, worktrees, truncated = false } = {}) 
     unscanned: false,
     retire,
     keep,
+    coordinator,
     skippedLegacy,
     protected: [...prot],
   };
