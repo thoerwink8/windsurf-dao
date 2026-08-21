@@ -189,7 +189,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 - **PR 开出来后改名是机械动作**：挂在 `worker-done`（它本来就有 PR 号），不要做成要人记得的一步。
 - 程序找审官 / 判任务卡 / 判子卡：看 `parentWorktreeId` 和 dispatch 记账，不读卡名，不拿 issue 号去对 PR 号。
 - 终端 / 工人副本：角色·模型（如「审官·GPT」）。默认名不上面板。
-- 任务卡 / 工人 / 审官归属：卡 comment 末尾定界区 `｜[#N #M]`。`dao.mjs dispatch` 成功后只往**这张任务卡**的 comment 追加单号，人写的叙述原样保留，写完必回读。不要用 `orca terminal rename` 写这类归属（对 grok 等由宿主持续改标题的终端，rename 回 ok 但 list/show 不变）。
+- 任务卡 / 工人 / 审官归属：卡 comment 末尾定界区 `｜[#N #M]`。`dao.mjs dispatch` 成功后写**这张任务卡**的定界区（人写叙述原样保留，写完必回读）。同时把全体在途单全量重写进 **master 卡**定界区（#684；清卡 / 合并同钩）。多帅无法分辨归属时定界区写全体在途单。不要用 `orca terminal rename`（对 grok 等由宿主持续改标题的终端，rename 回 ok 但 list/show 不变）。不走 watchdog 轮询、不注入 `/rename`、board-hook 每轮不 sync——长静默期内手改不会被自动纠正。
 - Claude 主帅终端自己改自己：用 CC 内置 `/rename`（每帅私有，不互相覆盖）。给终端发以 `/` 开头的斜杠命令必须走 PowerShell，或设 `MSYS_NO_PATHCONV=1`——Git Bash/MSYS2 会把 `/rename` 转成 `C:/Program Files/Git/rename`，命令送不到、标题不变，看起来像无效。
 
 ## 通道判据

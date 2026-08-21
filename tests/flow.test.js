@@ -281,6 +281,15 @@ describe('flow', () => {
     await t.test('round-2 退役（MERGED 收口，终审+归档归帅）', () => {
       assert.ok(/round-2[\s\S]*退役：PR #1004 MERGED/.test(r.out), 'round-2 退役（MERGED 收口，终审+归档归帅）  →  ' + r.out.trim());
     });
+    await t.test('#684 round-2 合并钩重写帅位定界区（树已不在 → 空区）', () => {
+      assert.ok(/round-2[\s\S]*帅位定界区/.test(r.out) && /将写 \(空\)/.test(r.out),
+        '#684 合并钩  →  ' + r.out.trim());
+    });
+    const flowSrc = fs.readFileSync(FLOW, 'utf8');
+    await t.test('#684 flow MERGED 退役调用 syncMasterTicketZone', () => {
+      assert.ok(/noteMasterZoneOnMerge/.test(flowSrc) && /syncMasterTicketZone/.test(flowSrc),
+        '#684 flow 挂点');
+    });
   });
 
   it('⑫ 完工 comment 识别变体（真实语料）', async (t) => {
