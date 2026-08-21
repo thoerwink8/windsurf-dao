@@ -157,6 +157,59 @@ describe('board-hook', () => {
       });
   });
 
+  it('#693 守卫兜底：帥位才 ensure；健康静音 / 拉起留痕 / 没查成可辨认', async (t) => {
+    const H = await H_LOAD;
+    const shuai = () => ({ ok: true, seat: 'shuai' });
+    const other = () => ({ ok: true, seat: 'other', reason: 'not-main-worktree' });
+    const unknown = () => ({ ok: false, error: 'detached HEAD，判不出当前分支名' });
+    const okOnce = (doc) => () => ({ status: 0, stdout: JSON.stringify(doc) + '\n', stderr: '' });
+
+    const silent = H.guardInjection({
+      root: 'X', judge: shuai,
+      exec: okOnce({ ok: true, results: [{ name: 'watchdog', action: 'already', pid: 1 }, { name: 'flow', action: 'already', pid: 2 }] }),
+    });
+    await t.test('帥位 + 守卫全活着 → 静音（[盘] 行的存在就是活证）',
+      () => {
+        assert.ok(silent === null, '全 already → 静音  →  ' + String(silent));
+      });
+
+    const healed = H.guardInjection({
+      root: 'X', judge: shuai,
+      exec: okOnce({ ok: true, results: [{ name: 'watchdog', action: 'started', pid: 42 }, { name: 'flow', action: 'already', pid: 2 }] }),
+    });
+    await t.test('帥位 + 守卫死了被拉起 → 留痕「已拉起」',
+      () => {
+        assert.ok(healed !== null && /已拉起/.test(healed) && /watchdog=started\(42\)/.test(healed), '拉起留痕  →  ' + String(healed));
+      });
+
+    const failed = H.guardInjection({
+      root: 'X', judge: shuai,
+      exec: () => ({ status: 2, stdout: '', stderr: '进程列表没查成：timeout' }),
+    });
+    await t.test('帥位 + ensure 没查成 → 可辨认错误串（≠ 查过没事）',
+      () => {
+        assert.ok(failed !== null && /没查成/.test(failed) && /只报不拦/.test(failed), '没查成  →  ' + String(failed));
+      });
+
+    const notShuai = H.guardInjection({
+      root: 'X', judge: other,
+      exec: () => { throw new Error('非帥位不许跑 --once'); },
+    });
+    await t.test('非帥位（工人树）→ 静默且不碰 --once',
+      () => {
+        assert.ok(notShuai === null, '非帥位  →  ' + String(notShuai));
+      });
+
+    const seatUnknown = H.guardInjection({
+      root: 'X', judge: unknown,
+      exec: () => { throw new Error('判不出不许跑 --once'); },
+    });
+    await t.test('帥位判不出 → 注「没查成」行（不猜、不静默跳过）',
+      () => {
+        assert.ok(seatUnknown !== null && /帥位判定没查成/.test(seatUnknown) && /没跑，≠ 已查/.test(seatUnknown), '判不出  →  ' + String(seatUnknown));
+      });
+  });
+
   it('#564 接线：settings.json UserPromptSubmit 只挂一条命令（盘面+自愈合一）', async (t) => {
     const H = await H_LOAD;
     const settings = JSON.parse(require('fs').readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));

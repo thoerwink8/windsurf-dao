@@ -109,7 +109,7 @@
 // 退出码：0 扫完 0 异常（活证否决的观察行不唤醒）/ 1 有报警 / 2 NO_TARGETS（本轮没查成）/ 3 基础设施失败。
 //
 // 用法：
-//   node scripts/watchdog.mjs                    轮询模式（默认每 30s 一轮；生产由 guard-keepalive 计划任务拉起，#683）
+//   node scripts/watchdog.mjs                    轮询模式（默认每 30s 一轮；生产由 guard-keepalive --once 帥位触发拉起，#693）
 //   node scripts/watchdog.mjs --once             跑单轮后退出（给测试用）
 //   node scripts/watchdog.mjs --snapshot-dir <dir>  从录制的 ps/read JSON 快照跑检测（测试/复现用）
 //   node scripts/watchdog.mjs --interval 20      轮询间隔秒数

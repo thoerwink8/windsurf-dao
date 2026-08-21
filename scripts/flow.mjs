@@ -55,7 +55,7 @@
 //
 // 用法：
 //   node scripts/flow.mjs                     轮询模式（默认每 300s 一轮——备份通道；
-//                                             首发完工由门铃 check --wait 接管；生产由 guard-keepalive 拉起，#683）
+//                                             首发完工由门铃 check --wait 接管；生产由 guard-keepalive --once 帥位触发拉起，#693）
 //   node scripts/flow.mjs --once              跑单轮后退出（给测试用）
 //   node scripts/flow.mjs --interval 300      轮询间隔秒数
 //   node scripts/flow.mjs --state-file <path> 状态文件位置（默认 _flow/state.json）
