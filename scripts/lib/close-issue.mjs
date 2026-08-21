@@ -44,11 +44,14 @@ export function attributedIssueNumber(pr) {
 
 const HARD_RED = new Set(['FAILURE', 'CANCELLED', 'ACTION_REQUIRED', 'TIMED_OUT', 'STALE', 'STARTUP_FAILURE']);
 
-// 祖父线：CI 引入 master 的时刻。首个 workflow（.github/workflows/ci-sweep.yml）由
-// commit 2ecb935a「[pi] feat(ci): issue #306 云审水位线制落地」（2026-08-11T20:43:42+08:00）
-// 引入，经 PR #307 于 2026-08-11T21:38:02+08:00 合入 master（merge commit 43221139）。
-// 不晚于此刻合并的 PR 没有 CI 可跑；之后才合并却仍无 check 的，没查成 ≠ 绿，从严。
-export const GRANDFATHER_NO_CHECK_BEFORE = '2026-08-11T21:38:02+08:00';
+// 祖父线：PR check 引入 master 的时刻。首个在 PR 上产生 check-run 的 workflow
+// （.github/workflows/check.yml，job「check」，on: pull_request）由 commit dd103bca
+// 「[pi] 新世界四份基础文件草案」引入，经 PR #428 于 2026-08-14T02:57:51+08:00 合入
+// master（merge commit 7d0e0258）。更早的 ci-sweep.yml（2ecb935a，8/11 经 PR #307 合入）
+// 是 workflow_dispatch 云审对账，不在 PR 上跑 check——8/11~8/14 合并的 PR 同样没有
+// PR check 可跑。不晚于此刻合并的 PR「无 check」是时代特征；之后才合并却仍无 check
+// 的，没查成 ≠ 绿，从严。
+export const GRANDFATHER_NO_CHECK_BEFORE = '2026-08-14T02:57:51+08:00';
 
 /**
  * 祖父豁免：mergedAt 不晚于祖父线 且 statusCheckRollup 确认为空数组（真·无 check，

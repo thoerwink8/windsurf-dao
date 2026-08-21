@@ -228,15 +228,19 @@ describe('close-issue 基线化（相对绿）', () => {
 });
 
 describe('close-issue 祖父条款（CI 建立前合并的无 check PR 豁免 reopen）', () => {
-  // 祖父线 2026-08-11T21:38:02+08:00 = 2026-08-11T13:38:02Z（首个 workflow 经 PR #307 合入 master）。
+  // 祖父线 2026-08-14T02:57:51+08:00 = 2026-08-13T18:57:51Z（首个 PR check workflow
+  // check.yml 经 PR #428 合入 master；更早的 ci-sweep.yml 是云审对账，不在 PR 上跑 check）。
   const BEFORE = '2026-08-10T00:00:00Z';
-  const AT = '2026-08-11T13:38:02Z';
+  const AT = '2026-08-13T18:57:51Z';
   const AFTER = '2026-08-20T00:00:00Z';
 
   it('grandfatherExempt：祖父线前/恰在祖父线 + 确认无 check → 豁免；其余形态一律从严', async (t) => {
     const C = await LOAD;
     await t.test('祖父线前 + 空 rollup → 豁免', () => {
       assert.ok(C.grandfatherExempt({ mergedAt: BEFORE, statusCheckRollup: [] }).exempt);
+    });
+    await t.test('ci-sweep 时代（8/11~8/14，云审已建但 PR check 未建）合并 + 空 rollup → 仍豁免', () => {
+      assert.ok(C.grandfatherExempt({ mergedAt: '2026-08-12T00:00:00Z', statusCheckRollup: [] }).exempt);
     });
     await t.test('恰在祖父线（同一刻合入，CI 来不及跑）→ 豁免', () => {
       assert.ok(C.grandfatherExempt({ mergedAt: AT, statusCheckRollup: [] }).exempt);
