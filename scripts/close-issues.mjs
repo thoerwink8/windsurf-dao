@@ -48,7 +48,7 @@ function parseArgs(argv) {
 }
 
 function fetchPr(number) {
-  const r = runGh(['pr', 'view', String(number), '--json', 'number,title,body,state,statusCheckRollup,mergeCommit']);
+  const r = runGh(['pr', 'view', String(number), '--json', 'number,title,body,state,statusCheckRollup,mergeCommit,mergedAt']);
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, pr: r.json };
 }
@@ -82,7 +82,11 @@ function main(argv) {
 
   for (const res of results) {
     if (!res.ok) { failed += 1; console.error(`  X ${res.error || '操作失败'}`); continue; }
-    if (res.action === 'none') continue;
+    if (res.action === 'none') {
+      // 署名误中（目标是 PR / 单不存在）不算失败，但要显形——静默跳过会让误中永远藏在水下。
+      if (res.reason && /跳过/.test(res.reason)) console.log(`  - PR #${res.pr} ${res.reason}`);
+      continue;
+    }
     const verb = res.action === 'close' ? 'close' : 'reopen';
     console.log(`  ${res.dryRun ? '[DRY] ' : ''}PR #${res.pr} ${verb} issue #${res.issue}（${res.reason}）`);
   }
