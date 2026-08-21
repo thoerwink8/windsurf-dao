@@ -287,7 +287,7 @@ function parseArgs(argv) {
 // ── orca 采集（live 模式）───────────────────────────────────────────
 
 function runOrca(cmdArgs) {
-  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', timeout: ORCA_TIMEOUT_MS });
+  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', windowsHide: true, timeout: ORCA_TIMEOUT_MS });
   if (r.error || r.status !== 0) {
     // orca 的非零退出把结构化错误 JSON 打在 stdout（实测：terminal_handle_stale 的
     // {ok:false, error:{code,message}} 在 stdout 上、stderr 为空）——先试解析，
@@ -416,12 +416,12 @@ function latestWorkingLive(bottom) {
 // 快照模式从 git-evidence.json 读（字段契约见 loadSnapshotRound）。
 
 function liveGitEvidence(path) {
-  const log = spawnSync('git', ['-C', path, 'log', '-1', '--format=%ct'], { encoding: 'utf8', timeout: 10000 });
+  const log = spawnSync('git', ['-C', path, 'log', '-1', '--format=%ct'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
   if (log.error || log.status !== 0) {
     return { error: `git log 失败：${String(log.error?.message || log.stderr || `exit ${log.status}`).trim().slice(0, 160)}` };
   }
   let lastActivityTs = Number(String(log.stdout).trim()) * 1000;
-  const st = spawnSync('git', ['-C', path, 'status', '--porcelain', '-z'], { encoding: 'utf8', timeout: 10000 });
+  const st = spawnSync('git', ['-C', path, 'status', '--porcelain', '-z'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
   if (!st.error && st.status === 0) {
     // -z 输出 "XY <path>\0"；重命名 "XY old\0new\0" 的第二段无前缀，stat 失败会跳过（边缘可接受）
     for (const e of String(st.stdout).split('\0')) {
@@ -440,9 +440,9 @@ function liveGitEvidence(path) {
 // 关联单是否还开着（#492 v3：open PR 或 open issue 任一开着就不算孤儿）。
 // 查不到 ≠ 关了：gh 失败返回 { error }，调用方跳过孤儿判定（fail-visible，不猜）。
 function liveTicketOpen(n) {
-  const pr = spawnSync('gh', ['pr', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', timeout: 15000 });
+  const pr = spawnSync('gh', ['pr', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (!pr.error && pr.status === 0 && /OPEN/i.test(String(pr.stdout))) return { open: true, kind: 'pr' };
-  const issue = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', timeout: 15000 });
+  const issue = spawnSync('gh', ['issue', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (!issue.error && issue.status === 0 && /OPEN/i.test(String(issue.stdout))) return { open: true, kind: 'issue' };
   if (pr.error && issue.error) return { error: `gh 查 #${n} 失败（pr: ${String(pr.error.message).slice(0, 60)} / issue: ${String(issue.error.message).slice(0, 60)}）` };
   return { open: false, kind: null }; // pr/issue 都不 open（含不存在）→ 关联已收口
@@ -451,7 +451,7 @@ function liveTicketOpen(n) {
 // #652：PR 关联树的孤儿判据只认 gh PR state（MERGED 才删，OPEN/CLOSED 不删）。
 // 查不到 ≠ 未合并：gh 失败/空输出返回 { error }，调用方记 unscanned note 不删（fail-closed）。
 function livePrState(n) {
-  const r = spawnSync('gh', ['pr', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync('gh', ['pr', 'view', String(n), '--json', 'state', '-q', '.state'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (r.error || r.status !== 0) {
     return { error: `gh pr view #${n} 失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 160)}` };
   }
@@ -924,7 +924,7 @@ function subtreeForeignPrs(w, ps) {
 // 一轮一次批量 `gh pr list`（按 head 分支名匹配各工作树），不逐个查。
 // 快照模式从 pr-evidence.json 读：{ <worktreeId>: { number, open, isDraft, reviewDecision } }。
 function livePrEvidence() {
-  const r = spawnSync('gh', ['pr', 'list', '--json', 'number,headRefName,state,isDraft,reviewDecision', '--limit', '100'], { encoding: 'utf8', timeout: 15000 });
+  const r = spawnSync('gh', ['pr', 'list', '--json', 'number,headRefName,state,isDraft,reviewDecision', '--limit', '100'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (r.error || r.status !== 0) {
     return { error: `gh pr list 失败：${String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 160)}` };
   }
@@ -976,7 +976,7 @@ function liveCompletionEvidence(w, source, args) {
   const prEv = prEvidenceFor(w, source, args);
   const prNo = prEv?.number || w.linkedPR?.number || assocNumber(w.displayName);
   if (!prNo) return { missing: true };
-  const view = spawnSync('gh', ['pr', 'view', String(prNo), '--json', 'commits,title,body'], { encoding: 'utf8', timeout: 15000 });
+  const view = spawnSync('gh', ['pr', 'view', String(prNo), '--json', 'commits,title,body'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (view.error || view.status !== 0) {
     return { error: `gh pr view #${prNo} 失败：${String(view.error?.message || view.stderr || `exit ${view.status}`).trim().slice(0, 160)}` };
   }
@@ -991,7 +991,7 @@ function liveCompletionEvidence(w, source, args) {
   const body = String(meta.body || '');
   const issueNo = (title.match(/#(\d+)/) || /(?:署名\s+issue\s*#?\s*|(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#)(\d+)/i.exec(body) || [])[1]
     || String(prNo);
-  const comments = spawnSync('gh', ['api', `repos/{owner}/{repo}/issues/${issueNo}/comments`, '--paginate'], { encoding: 'utf8', timeout: 15000 });
+  const comments = spawnSync('gh', ['api', `repos/{owner}/{repo}/issues/${issueNo}/comments`, '--paginate'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (comments.error || comments.status !== 0) {
     return { error: `gh 读 issue #${issueNo} 评论失败：${String(comments.error?.message || comments.stderr || `exit ${comments.status}`).trim().slice(0, 160)}` };
   }
@@ -1665,7 +1665,7 @@ function mapGhReviews(raw) {
 }
 
 function scanPendingFlowLive() {
-  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body'], { encoding: 'utf8', timeout: 20000 });
+  const list = spawnSync('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,body'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
   if (list.error || list.status !== 0) {
     return { scanned: false, items: [], why: `gh pr list 失败：${String(list.error?.message || list.stderr || `exit ${list.status}`).trim().slice(0, 120)}` };
   }
@@ -1674,7 +1674,7 @@ function scanPendingFlowLive() {
   catch (e) { return { scanned: false, items: [], why: `gh pr list 不是 JSON：${e.message}` }; }
   if (!Array.isArray(prs)) return { scanned: false, items: [], why: 'gh pr list 不是数组' };
 
-  const repoR = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], { encoding: 'utf8', timeout: 15000 });
+  const repoR = spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   if (repoR.error || repoR.status !== 0) {
     return { scanned: false, items: [], why: `gh repo view 失败：${String(repoR.error?.message || repoR.stderr || `exit ${repoR.status}`).trim().slice(0, 120)}` };
   }
@@ -1686,11 +1686,11 @@ function scanPendingFlowLive() {
   const packed = [];
   for (const pr of prs) {
     const ticket = ticketIssueNumber(pr) || pr.number;
-    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${ticket}/comments`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    const c = spawnSync('gh', ['api', `repos/${repo}/issues/${ticket}/comments`, '--paginate'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
     if (c.error || c.status !== 0) {
       return { scanned: false, items: [], why: `读 issue #${ticket} comments 失败（PR #${pr.number} 署名单）` };
     }
-    const r = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'], { encoding: 'utf8', timeout: 20000 });
+    const r = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
     if (r.error || r.status !== 0) {
       return { scanned: false, items: [], why: `读 PR #${pr.number} reviews 失败` };
     }
