@@ -1278,6 +1278,9 @@ describe('watchdog', () => {
       // boot 版本闸查的是脚本所在仓的 HEAD vs origin/master——分支开发期必然自停、
       // 到不了主循环，测试用它跳过 boot 闸（轮内闸在临时仓 HEAD==origin/master 下照跑）。
       DAO_GUARD_SKIP_REVISION: "1",
+      // #699 自身心跳必须落沙箱：写真 ~/.dao/guard 会污染 keepalive 的停更判据
+      // （测试进程死后留下新鲜心跳残迹，活守卫反被判停更/真停更被残迹掩盖）。
+      DAO_GUARD_HALT_DIR: path.join(tmp, "guard"),
       WATCHDOG_FAULT_ROUND: "every",
     };
     const child = spawn(process.execPath, [WATCHDOG, "--interval", "1", "--self-worktree", "wt-self"], {
