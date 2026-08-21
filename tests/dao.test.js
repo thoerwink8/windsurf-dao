@@ -161,8 +161,8 @@ describe('dao', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
     });
     const shim = fs.readFileSync(path.join(REPO, 'scripts', 'grok-shim.cmd'), 'utf8');
-    await t.test('shim 带 HTTPS_PROXY', () => {
-      assert.ok(/HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/.test(shim), 'shim 带 HTTPS_PROXY');
+    await t.test('shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）', () => {
+      assert.ok(/if not defined DAO_PROXY set "DAO_PROXY=http:\/\/127\.0\.0\.1:7890"/.test(shim) && /set "HTTPS_PROXY=%DAO_PROXY%"/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
     });
 
     let threw = false;
