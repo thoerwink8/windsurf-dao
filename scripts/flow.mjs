@@ -96,7 +96,7 @@ const ROOT = resolve(import.meta.dirname, '..');
 /** #657 合后钩：PR 退役为 MERGED 时按关单脚本判定关/重开。
  * 返回人话串（空 = 无动作），追加进退役事件行。 */
 function closeIssueOnMerge(prNumber, dryRun) {
-  const r = runGh(['pr', 'view', String(prNumber), '--json', 'number,title,body,state,statusCheckRollup']);
+  const r = runGh(['pr', 'view', String(prNumber), '--json', 'number,title,body,state,statusCheckRollup,mergeCommit']);
   if (!r.ok) return `（关单：读 PR #${prNumber} 失败 ${r.error}）`;
   // 关/重开是写操作，gh 输出可能不是 JSON——用 runCmd 直接转 wrapper，别复用要求 JSON 的 runGh。
   const writeGh = (args) => {

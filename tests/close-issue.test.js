@@ -120,3 +120,109 @@ describe('close-issue 判定', () => {
     });
   });
 });
+
+describe('close-issue 基线化（相对绿）', () => {
+  const MERGE = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111';
+  const PARENT = 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222';
+  const named = (name, conclusion, status = 'COMPLETED') => ({ name, status, conclusion });
+  /** 假 gh：merge commit → 首父；首父 check-runs 里 check 硬红、notify 绿、build 在跑。 */
+  const ghBaseline = (args) => {
+    if (args[0] === 'api' && args[1].includes(`/commits/${MERGE}`) && !args[1].includes('check-runs')) {
+      return { ok: true, json: { parents: [{ sha: PARENT }, { sha: 'cccc' }] } };
+    }
+    if (args[0] === 'api' && args[1].includes(`/commits/${PARENT}/check-runs`)) {
+      return { ok: true, json: { check_runs: [
+        { name: 'check', status: 'completed', conclusion: 'failure' },
+        { name: 'notify', status: 'completed', conclusion: 'success' },
+        { name: 'build', status: 'in_progress', conclusion: null },
+      ] } };
+    }
+    return { ok: true, json: {} };
+  };
+
+  it('baselineRedChecks：取 merge commit 首父的硬红 check 名集合', async (t) => {
+    const C = await LOAD;
+    await t.test('正常：硬红收编，绿的与没跑完的不收', () => {
+      const r = C.baselineRedChecks({ pr: { mergeCommit: { oid: MERGE } }, runGh: ghBaseline });
+      assert.ok(r.ok && r.red.has('check') && !r.red.has('notify') && !r.red.has('build') && r.base === PARENT, '基线红集合  →  ' + JSON.stringify({ ok: r.ok, red: r.red && [...r.red], base: r.base, reason: r.reason }));
+    });
+    await t.test('无 mergeCommit → 没查成', () => {
+      assert.strictEqual(C.baselineRedChecks({ pr: {}, runGh: ghBaseline }).ok, false);
+    });
+    await t.test('读 merge commit 失败 → 没查成', () => {
+      const r = C.baselineRedChecks({ pr: { mergeCommit: { oid: MERGE } }, runGh: () => ({ ok: false, error: 'boom' }) });
+      assert.ok(!r.ok && /读 merge commit 失败/.test(r.reason), 'reason 要带失败点  →  ' + r.reason);
+    });
+    await t.test('无父 commit → 没查成', () => {
+      const gh = () => ({ ok: true, json: { parents: [] } });
+      assert.strictEqual(C.baselineRedChecks({ pr: { mergeCommit: { oid: MERGE } }, runGh: gh }).ok, false);
+    });
+    await t.test('基线 0 条 check → 没查成 ≠ 基线全绿', () => {
+      const gh = (args) => args[1].includes('check-runs')
+        ? { ok: true, json: { check_runs: [] } }
+        : { ok: true, json: { parents: [{ sha: PARENT }] } };
+      const r = C.baselineRedChecks({ pr: { mergeCommit: { oid: MERGE } }, runGh: gh });
+      assert.ok(!r.ok && /没查成/.test(r.reason), '空基线必须报没查成  →  ' + r.reason);
+    });
+    await t.test('读 check-runs 失败 → 没查成', () => {
+      const gh = (args) => args[1].includes('check-runs')
+        ? { ok: false, error: 'api down' }
+        : { ok: true, json: { parents: [{ sha: PARENT }] } };
+      assert.strictEqual(C.baselineRedChecks({ pr: { mergeCommit: { oid: MERGE } }, runGh: gh }).ok, false);
+    });
+  });
+
+  it('closeDecision 相对绿：失败项全属基线红 → close；否则维持 reopen', async (t) => {
+    const C = await LOAD;
+    const baseline = { ok: true, red: new Set(['check']), base: PARENT };
+    await t.test('PR 硬红=check 且基线红=check → close（相对绿）', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [named('check', 'FAILURE'), named('notify', 'SUCCESS')] }, { baseline });
+      assert.ok(d.action === 'close' && /相对绿/.test(d.reason), '相对绿 close  →  ' + d.reason);
+    });
+    await t.test('失败项超出基线（notify 红但基线 notify 绿）→ reopen', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [named('check', 'FAILURE'), named('notify', 'FAILURE')] }, { baseline });
+      assert.ok(d.action === 'reopen' && /超出合并时基线/.test(d.reason), '超出基线不许关  →  ' + d.reason);
+    });
+    await t.test('基线没查成 → reopen 从严', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [named('check', 'FAILURE')] }, { baseline: { ok: false, reason: 'api down' } });
+      assert.ok(d.action === 'reopen' && /基线没查成/.test(d.reason), '基线没查成从严  →  ' + d.reason);
+    });
+    await t.test('不传基线（旧调用形态）→ reopen 从严', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [named('check', 'FAILURE')] });
+      assert.ok(d.action === 'reopen' && /基线没查成/.test(d.reason), '旧形态从严  →  ' + d.reason);
+    });
+    await t.test('PR 有 check 未完成 → 相对绿不适用（没查成 ≠ 绿）', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [{ name: 'check', status: 'IN_PROGRESS', conclusion: null }] }, { baseline });
+      assert.ok(d.action === 'reopen' && /未完成/.test(d.reason), 'PR 没查完不可赦免  →  ' + d.reason);
+    });
+    await t.test('绝对绿不需要基线 → close', () => {
+      const d = C.closeDecision({ state: 'MERGED', statusCheckRollup: [named('check', 'SUCCESS')] }, { baseline: { ok: false, reason: 'x' } });
+      assert.strictEqual(d.action, 'close');
+    });
+  });
+
+  it('closeIssueForPr 相对绿落动作：红 PR + 基线同名红 + 单未关 → issue close', async (t) => {
+    const C = await LOAD;
+    const calls = [];
+    const gh = (args) => {
+      calls.push(args.slice());
+      if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+      return ghBaseline(args);
+    };
+    await t.test('相对绿 → issue close，理由带相对绿', async () => {
+      const r = C.closeIssueForPr({ pr: { number: 700, title: 'x', body: '署名 issue #699', state: 'MERGED', mergeCommit: { oid: MERGE }, statusCheckRollup: [named('check', 'FAILURE'), named('notify', 'SUCCESS')] }, runGh: gh });
+      assert.ok(r.ok && r.action === 'close' && r.issue === 699 && /相对绿/.test(r.reason), '相对绿 close  →  ' + JSON.stringify(r));
+      assert.ok(calls.some(a => a[0] === 'issue' && a[1] === 'close' && a[2] === '699'), '应调 issue close #699  →  ' + JSON.stringify(calls));
+    });
+    calls.length = 0;
+    await t.test('基线没查成 → 维持 reopen 判定（单没关则不动）', async () => {
+      const ghNoBase = (args) => {
+        calls.push(args.slice());
+        if (args[0] === 'issue' && args[1] === 'view') return { ok: true, json: { state: 'OPEN' } };
+        return { ok: false, error: 'api down' };
+      };
+      const r = C.closeIssueForPr({ pr: { number: 700, title: 'x', body: '署名 issue #699', state: 'MERGED', mergeCommit: { oid: MERGE }, statusCheckRollup: [named('check', 'FAILURE')] }, runGh: ghNoBase });
+      assert.ok(r.ok && r.action === 'none' && !calls.some(a => a[0] === 'issue' && (a[1] === 'close' || a[1] === 'reopen')), '基线没查成不许关  →  ' + JSON.stringify(r));
+    });
+  });
+});
