@@ -1,67 +1,38 @@
 ## 目标
 
-删 2026-08-20 的 deepseek 全工种额度禁令，把 deepseek-v4-flash/pro 加回门闩名单；新增 Devin CLI 通道，写码路由优先级 **devin > opencode-go > 官方直连**。署名 issue #688（关单交给 `scripts/close-issues.mjs`）。
+master 卡 comment 的定界区在派工 / 清卡 / 合并三个事件点全量重写为当前在途单号（写时即对）。复用 `mutateWorktreeComment`，不走 watchdog 轮询、不注入 `/rename`。署名 issue #684（关单交给 `scripts/close-issues.mjs`）。
 
 ## 验收标准
 
-- [x] 门闩名单（写码）首位 = `devin-deepseek-v4-flash-max`，og flash 在列
-- [x] devin 非交互冒烟输出（贴）
-- [x] og 冒烟输出（贴）
-- [x] `node scripts/dao-check.mjs` 本单相关绿（不新增红项）
-- [x] 2026-08-20 bans 已删、git 记录可见
+- [x] 造新增：盘面多一张带单号的卡 → master 定界区出现该号
+- [x] 造删除：卡从盘面消失 → 该号从定界区消失
+- [x] 造假号：手改 master 定界区塞不存在的号 → 下一次事件后收敛
+- [x] 造多帅：无法分辨归属，定界区写全体在途单（退化行为有测试钉）
+- [x] 盘面没查成 ≠ 在途 0：ps 失败不许把定界区抹空
+- [x] 卡名里的 `#N` 不算判据（#589）；外仓卡不算（#492）
+- [x] 过期前缀「各自在途单号见各自终端标题」改为「在途单号见定界区」
+- [x] `node --test tests/master-title.test.js tests/dao.test.js tests/flow.test.js tests/board-hook.test.js` 相关绿
+- [x] `node scripts/dao-check.mjs` 不新增红项（全仓两项红：open 未在做超阈、账本断流，本单未动）
 - [x] PR 正文不写 GitHub 自动关单词
 
 ## 进展
 
-- [x] 删 toml `[[bans]]` 额度全工种条 + `policy/bans.yml` 镜像 `ban-deepseek-额度`
-- [x] 加 `[providers.devin]`（launch = TUI `devin --model {model} --permission-mode dangerous`，`start=command`；`--print` 只作冒烟）
-- [x] 加模型 `devin-deepseek-v4-flash-max`；写码路由全日 `00:00-24:00`：model=devin，fallback=og flash
-- [x] 直连保持应急语义，不进自动换管（撞顶报用户，见 `[providers.opencode-go].why`）
-- [x] NEW-MACHINE「devin 怎么配」+ INDEX `~/AppData/Local/devin`
-- [x] 点将台/派工测试从 #669 额度闸与峰谷 grok 切到新路由
-
-### 门闩名单（工作区路由，本单生效后的真相）
-
-`select({ workType: 写码, routes: 工作区 toml })`：
-
-```
-A: devin-deepseek-v4-flash-max
-reason: route_beijing
-fallback: deepseek-v4-flash
-slate[0]: devin-deepseek-v4-flash-max
-slate 含: deepseek-v4-flash
-```
-
-`dianjiangtai-select.mjs` 仍读 `origin/master` 路由（#533），合进 master 之前 A 仍是 grok；B 自选位已能看到 `devin/devin-deepseek-v4-flash-max` 和 `opencode-go/deepseek-v4-flash`（政策读工作区）。合后 CLI A 才会切到 devin。
-
-### 冒烟
-
-devin 非交互（14.4s，exit 0）：
-
-```
-devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"
-OK
-```
-
-og（6.8s，exit 0）：
-
-```
-pi --no-tools --no-session --model opencode-go/deepseek-v4-flash -p "只回复：OK"
-OK
-```
-
-### dao-check
-
-本单相关绿。全仓两项红未动、不是本单引入：open 未在做超阈；账本断流 #671 #672 #674 #676。
-
-### 起法说明（不改派工代码）
-
-Orca 不认 `--agent devin`，走 `terminal create --command`（与 reclaude 同形态）。`--print` 跑完即退，不能当工人；工人 TUI 用 launch 里的 `--permission-mode dangerous`。
+- [x] 空提交撑分支、开 draft PR #685
+- [x] `syncMasterTicketZone`：全量重写 + 回读
+- [x] 挂点：`dao.mjs dispatch` / `worktree-rm` / `flow.mjs` MERGED
+- [x] 四条故意构造样本 + 没查成负控
+- [x] 文档：dispatch skill 命名条补 master 卡钩子
+- [x] 返工：过期前缀改为在途单号见定界区
+- [x] rebase 到 origin/master（#680/#689 已合）
 
 ## 体系类改动
 
-1. 谁提的，发生在什么场景？2026-08-21 用户拍板：推翻 8/20「两通道没额度停派」，加回 deepseek，且 Devin CLI 跑 deepseek-v4-flash-max（$0.14/MTok）优先于 og / 直连。
+1. 谁提的，发生在什么场景？2026-08-21 用户拍板。#545「watchdog 轮询 + 注入 /rename 纠正帅位标题」被 grill-ai 从零拷问推翻：同一目标第 2 层补丁、检测-纠正式、抢输入框（#644）、且 watchdog 已停摆（#683）。要的是面板上的在途单号在事件发生时就是对的。
 
-2. 删哪一层能让这个问题不存在？删掉 8/20 那条全工种额度禁令。通道优先级落在路由表，不另造选型逻辑。
+2. 删哪一层能让这个问题不存在？删掉「写错了再巡检纠正」这一层。单号只在三个会改变盘面的事件点从 `worktree ps` 全量重写进 master 卡定界区。没有事件就没有纠偏——长静默期内的手改是拍板取舍，不另造轮询。
 
-3. 如果从零重做，今天还会造它吗？会造「一条路由 + 三通道优先级」这一层。不会造「额度空了就把模型整条禁掉、恢复还要再开单」的门闩。
+3. 如果从零重做，今天还会造它吗？会造「事件点全量重写定界区」。不会造 watchdog 轮询、不会造终端 `/rename`，也不会造 board-hook 每轮 sync。
+
+## 设计阶段
+
+issue #684 已消歧（grill-ai 推翻 #545 后用户点事件钩子）。解空间已收敛，本单不重出盲设计题。

@@ -227,4 +227,214 @@ describe('master-title', () => {
       assert.ok(empty.unscanned === true && empty.ok === false, '一个 extract* 都没有 → 没查成  →  ' + JSON.stringify(empty));
     });
   });
+
+  it('#684 帅位定界区：事件点全量重写', async (t) => {
+    const T = await T_LOAD;
+    const repo = 'self';
+    const other = 'other';
+    const masterId = `${repo}::/master`;
+    function board(cards) {
+      const comments = Object.fromEntries(cards.map(c => {
+        const id = c.worktreeId || c.id;
+        return [id, c.comment || ''];
+      }));
+      const worktrees = () => cards.map(c => ({ ...c, comment: comments[c.worktreeId || c.id] }));
+      const runOrca = (args) => {
+        if (args[0] === 'worktree' && args[1] === 'ps') {
+          return { ok: true, json: { result: { worktrees: worktrees() } } };
+        }
+        const id = args[args.indexOf('--worktree') + 1];
+        if (args[1] === 'show') {
+          return { ok: true, json: { result: { worktree: { comment: comments[id] || '' } } } };
+        }
+        if (args[1] === 'set') {
+          comments[id] = args[args.indexOf('--comment') + 1];
+          return { ok: true, json: { ok: true } };
+        }
+        return { ok: false, error: `unexpected ${args.join(' ')}` };
+      };
+      return { runOrca, worktrees, comments };
+    }
+
+    const afterAdd = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '主会话：对话/派单/终审' },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684, comment: '进度｜[#684]' },
+      { worktreeId: `${repo}::/495`, isMainWorktree: false, linkedPR: { number: 495 }, linkedIssue: { number: 490 } },
+    ]);
+    const added = T.syncMasterTicketZone({
+      worktrees: afterAdd.worktrees(),
+      selfRepo: repo,
+      runOrca: afterAdd.runOrca,
+    });
+    await t.test('造新增：派一单 → master 定界区出现该号', () => {
+      assert.ok(added.ok && added.action === 'updated' && added.comment === '主会话：对话/派单/终审｜[#490 #495 #684]',
+        '造新增  →  ' + JSON.stringify(added));
+    });
+
+    const afterRm = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '主会话：对话/派单/终审｜[#490 #495 #684]' },
+      { worktreeId: `${repo}::/495`, isMainWorktree: false, linkedPR: { number: 495 }, linkedIssue: { number: 490 } },
+    ]);
+    const removed = T.syncMasterTicketZone({
+      worktrees: afterRm.worktrees(),
+      selfRepo: repo,
+      runOrca: afterRm.runOrca,
+    });
+    await t.test('造删除：清卡 → 单号从定界区消失', () => {
+      assert.ok(removed.ok && removed.comment === '主会话：对话/派单/终审｜[#490 #495]',
+        '造删除  →  ' + JSON.stringify(removed));
+    });
+
+    const fake = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '主会话｜[#999 #684]' },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684, comment: '｜[#684]' },
+    ]);
+    const converged = T.syncMasterTicketZone({
+      worktrees: fake.worktrees(),
+      selfRepo: repo,
+      runOrca: fake.runOrca,
+    });
+    await t.test('造假号：手改塞 #999 → 下一次事件收敛', () => {
+      assert.ok(converged.ok && converged.comment === '主会话｜[#684]' && !/#999/.test(converged.comment),
+        '造假号  →  ' + JSON.stringify(converged));
+    });
+
+    const twoMarshals = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '帅位' },
+      { worktreeId: `${repo}::/a`, isMainWorktree: false, linkedIssue: 611, comment: '甲在做｜[#611]' },
+      { worktreeId: `${repo}::/b`, isMainWorktree: false, linkedIssue: 622, comment: '乙在做｜[#622]' },
+    ]);
+    const all = T.syncMasterTicketZone({
+      worktrees: twoMarshals.worktrees(),
+      selfRepo: repo,
+      runOrca: twoMarshals.runOrca,
+    });
+    await t.test('造多帅：无归属真相源 → 定界区写全体在途单', () => {
+      assert.ok(all.ok && all.comment === '帅位｜[#611 #622]' && all.tickets.join(',') === '#611,#622',
+        '造多帅  →  ' + JSON.stringify(all));
+    });
+
+    await t.test('卡名里的 #N 不算判据（#589）', () => {
+      const named = T.ticketsFromWorktree({
+        displayName: '#999 工人·x',
+        comment: '叙述里也有 #888',
+        linkedIssue: 684,
+      });
+      assert.ok(named.join(',') === '#684', '卡名井号不算  →  ' + named.join(','));
+    });
+
+    const otherRepo = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '帅位｜[#684]' },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684 },
+      { worktreeId: `${other}::/1`, isMainWorktree: false, linkedIssue: 1, comment: '｜[#1]' },
+      { worktreeId: `${other}::/master`, isMainWorktree: true, path: '/other', comment: '外仓帅' },
+    ]);
+    const scoped = T.syncMasterTicketZone({
+      worktrees: otherRepo.worktrees(),
+      selfRepo: repo,
+      runOrca: otherRepo.runOrca,
+    });
+    await t.test('外仓卡不进本仓定界区（#492）', () => {
+      assert.ok(scoped.ok && scoped.comment === '帅位｜[#684]' && !/#1/.test(scoped.comment),
+        '外仓  →  ' + JSON.stringify(scoped));
+    });
+
+    const psFail = T.worktreesFromPs(() => ({ ok: false, error: 'ECONNREFUSED' }));
+    await t.test('ps 失败 = 没查成，不是在途 0', () => {
+      assert.ok(psFail.ok === false && psFail.unscanned === true && /没查成|失败/.test(psFail.error),
+        'ps 失败  →  ' + JSON.stringify(psFail));
+    });
+
+    let setCalled = false;
+    const noWrite = T.syncMasterTicketZone({
+      worktrees: null,
+      runOrca: (args) => {
+        if (args[1] === 'set') setCalled = true;
+        return { ok: true, json: {} };
+      },
+    });
+    await t.test('worktrees 不是数组 → 不写（没查成 ≠ 空盘）', () => {
+      assert.ok(noWrite.ok === false && noWrite.unscanned === true && setCalled === false,
+        '没查成不写  →  ' + JSON.stringify(noWrite));
+    });
+
+    const emptyBoard = board([
+      { worktreeId: masterId, isMainWorktree: true, path: '/master', comment: '帅位｜[#684]' },
+    ]);
+    const cleared = T.syncMasterTicketZone({
+      worktrees: emptyBoard.worktrees(),
+      selfRepo: repo,
+      runOrca: emptyBoard.runOrca,
+    });
+    await t.test('扫完 0 张在途卡 → 定界区消失、前缀还在', () => {
+      assert.ok(cleared.ok && cleared.comment === '帅位' && cleared.scanned === 0,
+        '扫完 0  →  ' + JSON.stringify(cleared));
+    });
+
+    const archived = T.collectInFlightTickets([
+      { worktreeId: `${repo}::/m`, isMainWorktree: true },
+      { worktreeId: `${repo}::/old`, isMainWorktree: false, isArchived: true, linkedIssue: 100 },
+      { worktreeId: `${repo}::/live`, isMainWorktree: false, linkedIssue: 684 },
+    ], repo);
+    await t.test('归档卡不进在途集合', () => {
+      assert.ok(archived.ok && archived.tickets.join(',') === '#684' && archived.scanned === 1,
+        '归档  →  ' + JSON.stringify(archived));
+    });
+
+    const missingMaster = T.syncMasterTicketZone({
+      worktrees: [{ worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684 }],
+      selfRepo: repo,
+      runOrca: () => { throw new Error('不该写'); },
+    });
+    const liveStale = board([
+      {
+        worktreeId: masterId,
+        isMainWorktree: true,
+        path: '/master',
+        comment: '主会话：对话/派单/终审（两位主帅共用，各自在途单号见各自终端标题）',
+      },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684, comment: '进度｜[#684]' },
+    ]);
+    const rewritten = T.syncMasterTicketZone({
+      worktrees: liveStale.worktrees(),
+      selfRepo: repo,
+      runOrca: liveStale.runOrca,
+    });
+    await t.test('过期「见终端标题」前缀改成「见定界区」，定界区同时写上', () => {
+      assert.ok(rewritten.ok && rewritten.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
+        '前缀替换 + 定界区  →  ' + JSON.stringify(rewritten));
+    });
+    await t.test('替换后不再指向终端标题', () => {
+      assert.ok(!/终端标题/.test(rewritten.comment) && /在途单号见定界区/.test(rewritten.comment),
+        '不再指向终端标题  →  ' + rewritten.comment);
+    });
+
+    const alreadyNew = board([
+      {
+        worktreeId: masterId,
+        isMainWorktree: true,
+        path: '/master',
+        comment: '主会话：对话/派单/终审（在途单号见定界区）｜[#999]',
+      },
+      { worktreeId: `${repo}::/684`, isMainWorktree: false, linkedIssue: 684 },
+    ]);
+    const kept = T.syncMasterTicketZone({
+      worktrees: alreadyNew.worktrees(),
+      selfRepo: repo,
+      runOrca: alreadyNew.runOrca,
+    });
+    await t.test('已是「见定界区」的前缀保留，假号收敛', () => {
+      assert.ok(kept.ok && kept.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]',
+        '已替换前缀保留  →  ' + JSON.stringify(kept));
+    });
+
+    await t.test('rewriteMasterPrefix：无关前缀不动', () => {
+      assert.ok(T.rewriteMasterPrefix('帅位') === '帅位', '无关前缀  →  ' + T.rewriteMasterPrefix('帅位'));
+    });
+
+    await t.test('找不到 master 卡 → 报警不写', () => {
+      assert.ok(missingMaster.ok === false && /master/.test(missingMaster.reason),
+        '无 master  →  ' + JSON.stringify(missingMaster));
+    });
+  });
 });

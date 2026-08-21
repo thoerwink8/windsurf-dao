@@ -82,6 +82,7 @@ import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
 import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch } from './lib/dao-cmd.mjs';
+import { syncMasterTicketZone } from './lib/master-title.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -103,6 +104,38 @@ function closeIssueOnMerge(prNumber, dryRun) {
   if (res.action === 'none') return '';
   const verb = res.action === 'close' ? '关' : '重开';
   return `（关单：${verb} issue #${res.issue}——${res.reason}）`;
+}
+
+/** #684：合并退役时全量重写 master 卡定界区。没查成显形，不把空盘当 0。
+ * live 走 worktree ps；快照走 source.orcaWorktrees（不打真 orca）。 */
+function noteMasterZoneOnMerge(source, flowArgs) {
+  let worktrees;
+  if (flowArgs.snapshotDir) {
+    const wtsR = typeof source.orcaWorktrees === 'function'
+      ? source.orcaWorktrees()
+      : { ok: false, error: '数据源没有 worktree 列表' };
+    if (!wtsR.ok) return `（帅位定界区没查成：${wtsR.error}）`;
+    if (!Array.isArray(wtsR.worktrees)) return `（帅位定界区没查成：worktrees 不是数组）`;
+    worktrees = wtsR.worktrees;
+  } else {
+    const listed = runOrca(['worktree', 'ps', '--json']);
+    if (!listed.ok) return `（帅位定界区没查成：${listed.error}）`;
+    const wts = listed.json?.result?.worktrees;
+    if (!Array.isArray(wts)) return `（帅位定界区没查成：worktree ps 没有 result.worktrees）`;
+    worktrees = wts;
+  }
+  const r = syncMasterTicketZone({
+    worktrees,
+    pathHint: ROOT,
+    runOrca: (cmd) => runOrca(cmd),
+    dryRun: !!flowArgs.dryRun,
+  });
+  if (r.unscanned) return `（帅位定界区没查成：${r.reason}）`;
+  if (!r.ok) return `（帅位定界区写失败：${r.reason}）`;
+  const zone = (r.tickets && r.tickets.length) ? r.tickets.join(' ') : '(空)';
+  if (r.action === 'dry-run') return `（帅位定界区 dry-run 将写 ${zone}）`;
+  if (r.action === 'noop') return `（帅位定界区已是 ${zone}）`;
+  return `（帅位定界区 ${zone}）`;
 }
 
 const DEFAULT_STATE = join(ROOT, '_flow', 'state.json');
@@ -908,7 +941,8 @@ function processOneRound(source, state, args) {
       rec.retired = true;
       const bit = noteWorkerMergedLedger(prView.ok ? prView.pr : null, args.dryRun);
       const closeBit = closeIssueOnMerge(rec.pr, args.dryRun);
-      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）${bit}${closeBit}`);
+      const zoneBit = noteMasterZoneOnMerge(source, args);
+      events.push(`[flow] 退役：PR #${rec.pr} MERGED——完工闭环收口（终审+校准+归档归帅）${bit}${closeBit}${zoneBit}`);
     } else if (st === 'CLOSED') {
       rec.retired = true;
       events.push(`[flow] 退役：PR #${rec.pr} CLOSED（未合并关闭）`);
