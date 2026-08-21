@@ -5,7 +5,9 @@ rem explicit -m/--model passes through untouched
 rem --agent grok 不带 launch 旗标，这里补 --effort xhigh --always-approve
 rem Do NOT use echo|findstr — that spawns a visible cmd window.
 set "GROK_REAL=C:\nvm4w\nodejs\grok.cmd"
-set HTTPS_PROXY=http://127.0.0.1:7890
+rem proxy: set DAO_PROXY to override (default keeps legacy 7890 behavior)
+if not defined DAO_PROXY set "DAO_PROXY=http://127.0.0.1:7890"
+set "HTTPS_PROXY=%DAO_PROXY%"
 set "GROK_ARGS=%*"
 set "GROK_EXTRA="
 if "%GROK_ARGS%"=="%GROK_ARGS:--effort=%" set "GROK_EXTRA=%GROK_EXTRA% --effort xhigh"

@@ -63,6 +63,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { runOrcaRaw } from './lib/orca-run.mjs';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
@@ -815,13 +816,10 @@ function runGhJson(args) {
   return { array: doc };
 }
 
+// spawn 唯一真源在 scripts/lib/orca-run.mjs（收编前本拷贝两条路径都缺 windowsHide、
+// 无 timeout——#695 同款弹窗隐患）。raw 结果由本函数自己解析。
 function runOrcaWorktrees() {
-  const win = process.platform === 'win32';
-  const direct = spawnSync(win ? 'orca.exe' : 'orca', ['worktree', 'list', '--json'], { encoding: 'utf8', cwd: ROOT });
-  const r = direct.error ? (() => {
-    const line = ['orca', 'worktree', 'list', '--json'].map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
-    return spawnSync(line, { encoding: 'utf8', shell: true, cwd: ROOT });
-  })() : direct;
+  const r = runOrcaRaw(['worktree', 'list', '--json'], { cwd: ROOT, timeout: 30000 });
   if (r.error || r.status !== 0) return { unscanned: true, error: r.error?.code || `exit ${r.status}` };
   let doc;
   try { doc = JSON.parse(r.stdout || ''); } catch { return { unscanned: true, error: 'orca worktree list 输出不是 JSON' }; }

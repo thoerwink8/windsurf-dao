@@ -126,7 +126,7 @@ import {
 } from './lib/dao-cmd.mjs';
 import { afterDispatchComment, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
-import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
   loadLedgerContext, beijingIsoFrom, dispatchJobId, reviewerJobId, writeJobDispatch,
   writeJobOverride, resolveAmendTarget, formatAmendComment, workerJobId,
@@ -162,20 +162,9 @@ function errText(e) {
   return orcaErrorText(e);
 }
 
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
-  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', timeout, windowsHide: true });
-  if (r.error || (r.status !== 0 && r.status != null)) {
-    if (r.stdout) {
-      const parsed = parseOrcaStdout(r.stdout);
-      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
-      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-    }
-    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
-  }
-  const parsed = parseOrcaStdout(r.stdout);
-  if (!parsed.ok) return parsed;
-  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-  return { ok: true, json: parsed.json };
+  return sharedRunOrca(cmdArgs, { timeout });
 }
 
 /** gh 执行器。测试注入：DAO_GH_FAKE 指向假 gh 脚本时用它——

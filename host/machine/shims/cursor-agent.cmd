@@ -3,9 +3,11 @@ rem cursor-agent shim: proxy + skip official .cmd (that file launches visible po
 rem real binary: %LOCALAPPDATA%\cursor-agent\versions\<latest>\node.exe + index.js
 rem Do NOT use for /f in ('dir') or echo|findstr — those spawn a visible cmd window.
 rem #648: append --trust when --model given (Workspace Trust prompt blocks new worktrees)
-set HTTPS_PROXY=http://127.0.0.1:7890
-set HTTP_PROXY=http://127.0.0.1:7890
-set ALL_PROXY=http://127.0.0.1:7890
+rem proxy: set DAO_PROXY to override (default keeps legacy 7890 behavior)
+if not defined DAO_PROXY set "DAO_PROXY=http://127.0.0.1:7890"
+set "HTTPS_PROXY=%DAO_PROXY%"
+set "HTTP_PROXY=%DAO_PROXY%"
+set "ALL_PROXY=%DAO_PROXY%"
 set NODE_USE_ENV_PROXY=1
 set "CURSOR_INVOKED_AS=%~nx0"
 if not defined NODE_COMPILE_CACHE set "NODE_COMPILE_CACHE=%LOCALAPPDATA%\cursor-compile-cache"

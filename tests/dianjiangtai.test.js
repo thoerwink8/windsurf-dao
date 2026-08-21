@@ -465,6 +465,52 @@ describe('dianjiangtai', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('writeEvent 原子写 + 目录索引缓存（审查修复：崩溃不留半个 JSON、批量写 O(N²)→O(N)）', async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "djt-atomic-"));
+    const mk = (jobId, decisionId) => ({ job_id: jobId, model: FLASH, identity: "协调者", work_type: "写码", model_version: FLASH_VERSION, terminal: "pi", price_snapshot: {}, decision_id: decisionId });
+    const w = writeEvent({ dir: tmp, type: "job.dispatch", ts: TS, machine: "TEST", seq: 0, payload: mk("dj-at", "at1"), schema });
+
+    await t.test('原子写：rename 后目录无 .tmp 残件，内容完整可解析', () => {
+      const names = fs.readdirSync(tmp);
+      assert.ok(!names.some(f => f.includes(".tmp")), '原子写：rename 后目录无 .tmp 残件  →  ' + names.join(","));
+      const back = JSON.parse(fs.readFileSync(w.path, "utf8"));
+      assert.ok(back.event_id === w.event.event_id && back.job_id === "dj-at", '原子写：内容完整可解析');
+    });
+
+    await t.test('原子写：崩溃残留的 .tmp（半个 JSON）不被扫描器当事件', () => {
+      // 模拟中途崩溃：半个 JSON 的 .tmp 残件——不以 .json 结尾，扫描必须跳过
+      fs.writeFileSync(path.join(tmp, "01JDEADBEEF0000000000000-TEST.json.tmp-1-abcd"), '{"type":"job.dispatch"', "utf8");
+      assert.ok(nextSeq(tmp, "TEST") === 1, '.tmp 残件不进 nextSeq 扫描  →  ' + nextSeq(tmp, "TEST"));
+      assert.ok(!throws(() => writeEvent({ dir: tmp, type: "job.dispatch", ts: TS, machine: "TEST", seq: 1, payload: mk("dj-at2", "at2"), schema })), '.tmp 残件不阻断新事件写入');
+    });
+
+    await t.test('缓存：批量写 5 个事件 nextSeq 依次正确（索引不错乱）', () => {
+      for (let i = 0; i < 5; i++) {
+        const seq = nextSeq(tmp, "TEST");
+        writeEvent({ dir: tmp, type: "job.dispatch", ts: TS, machine: "TEST", seq, payload: mk(`dj-batch-${i}`, `b${i}`), schema });
+      }
+      assert.ok(nextSeq(tmp, "TEST") === 7, '批量写后 nextSeq = 已有 2 + 5  →  ' + nextSeq(tmp, "TEST"));
+    });
+
+    await t.test('缓存：外部新增文件被 readdir 增量发现（跨进程汇聚不瞎）', () => {
+      const alien = { type: "job.closed", schema_version: 1, ts: TS, machine: "TEST", seq: 99, job_id: "dj-alien", success: true, rework: false, usd_cash: 0, usd_economic: 0, merged_by: FLASH, event_id: "f".repeat(64) };
+      fs.writeFileSync(path.join(tmp, "01JDEADBEE10000000000000-TEST.json"), JSON.stringify(alien), "utf8");
+      assert.ok(nextSeq(tmp, "TEST") === 100, '外部新增 seq=99 后 nextSeq=100  →  ' + nextSeq(tmp, "TEST"));
+    });
+
+    await t.test('缓存：外部删除文件缓存跟着删（不幻影计数）', () => {
+      fs.unlinkSync(path.join(tmp, "01JDEADBEE10000000000000-TEST.json"));
+      assert.ok(nextSeq(tmp, "TEST") === 7, '删掉 seq=99 后 nextSeq 回落 7  →  ' + nextSeq(tmp, "TEST"));
+    });
+
+    await t.test('缓存路径下三铁律仍硬：同 event_id 拒绝、同 job 二次 dispatch 拒绝', () => {
+      assert.ok(throws(() => writeEvent({ dir: tmp, type: "job.dispatch", ts: TS, machine: "TEST", seq: 0, payload: mk("dj-at", "at1"), schema })), '同 event_id 重写拒绝（走缓存也要拦）');
+      assert.ok(throws(() => writeEvent({ dir: tmp, type: "job.dispatch", ts: TS, machine: "TEST", seq: 8, payload: mk("dj-at", "at9"), schema })), '同 job 二次 dispatch 拒绝（走缓存也要拦）');
+    });
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
     await t.test('models.yml 解析出 11 个现役模型', () => {
       assert.ok(models.length === 11 && models.some(m => m.id === DEVIN), 'models.yml 解析出 11 个现役模型（#688 加 devin-deepseek-v4-flash-max）  →  ' + String(models.length));

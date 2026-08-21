@@ -26,7 +26,7 @@ const assert = require('node:assert');
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawnSync, spawn } = require("child_process");
 
 const REPO = path.resolve(__dirname, "..");
 const WATCHDOG = path.join(REPO, "scripts", "watchdog.mjs");
@@ -1256,5 +1256,68 @@ describe('watchdog', () => {
     await t.test('缺 completion-evidence：不猜、不报 stale-completion（没查成 ≠ 查过有事）', () => {
       assert.ok(!/stale-completion:/.test(none.out), '缺 completion-evidence：不猜、不报 stale-completion（没查成 ≠ 查过有事）  →  ' + none.out.trim());
     });
+  });
+
+  it('㉘ 主循环崩溃隔离：单轮抛异常不杀死 resident（WATCHDOG_FAULT_ROUND 注入）', async (t) => {
+    // live 模式从分支 checkout 跑会被版本闸（#665）自停，所以给子进程造一个
+    // HEAD == origin/master 的本地临时仓当 cwd（纯本地 git，不打网络）。
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-live-"));
+    const git = (args, cwd) => {
+      const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+      assert.ok(!r.error && r.status === 0, `git ${args.join(" ")} 失败: ${r.stderr || r.error?.message}`);
+    };
+    git(["init", "--bare", "-b", "master", "origin.git"], tmp);
+    git(["clone", "origin.git", "work"], tmp);
+    const work = path.join(tmp, "work");
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"], work);
+    git(["push", "origin", "master"], work);
+
+    const env = {
+      ...process.env,
+      DAO_GUARD_SKIP_MIRROR: "1", // 测试不打真镜像（guard-mirror 单测覆盖），只验主循环隔离
+      // boot 版本闸查的是脚本所在仓的 HEAD vs origin/master——分支开发期必然自停、
+      // 到不了主循环，测试用它跳过 boot 闸（轮内闸在临时仓 HEAD==origin/master 下照跑）。
+      DAO_GUARD_SKIP_REVISION: "1",
+      WATCHDOG_FAULT_ROUND: "every",
+    };
+    const child = spawn(process.execPath, [WATCHDOG, "--interval", "1", "--self-worktree", "wt-self"], {
+      cwd: work, env,
+    });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    // Windows 上子进程启动约 1-2s，之后每 1s 崩一轮；
+    // 观察窗放宽到 8s，≥2 轮 ROUND_CRASHED 即证明「崩了还继续跑」。
+    const exitedEarly = await Promise.race([
+      new Promise((r) => child.on("exit", (code) => r({ exited: true, code }))),
+      new Promise((r) => setTimeout(() => r({ exited: false }), 8000)),
+    ]);
+    const crashes = (out.match(/ROUND_CRASHED/g) || []).length;
+    // 进程可能已自己退出（比如闸没跳过）：exit 事件已发过，再 on("exit") 会永久挂——
+    // 只在还活着时 kill，等待带超时兜底。
+    if (!exitedEarly.exited) {
+      child.kill();
+      await Promise.race([
+        new Promise((r) => child.on("exit", r)),
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
+    }
+
+    await t.test('每轮都崩：8s 后进程仍存活（异常被隔离，resident 不死）', () => {
+      assert.ok(!exitedEarly.exited, `watchdog 应在 8s 后仍存活，实际已退出 code=${exitedEarly.code}\n${out}`);
+    });
+    await t.test('每轮崩溃都记 ROUND_CRASHED 日志（≥2 轮 = 崩了还继续跑）', () => {
+      assert.ok(crashes >= 2, `应至少 2 轮 ROUND_CRASHED，实际 ${crashes}\n${out}`);
+    });
+
+    await t.test('--once 不吞异常：崩溃显形（非零退出 + 注入异常上屏）', () => {
+      const r = spawnSync(process.execPath, [WATCHDOG, "--once", "--self-worktree", "wt-self"], {
+        cwd: work, encoding: "utf8", env, timeout: 30000,
+      });
+      const o = (r.stdout || "") + (r.stderr || "");
+      assert.ok(r.status !== 0, `--once 崩溃应非零退出，实际 status=${r.status}\n${o}`);
+      assert.ok(/WATCHDOG_FAULT_ROUND/.test(o), `--once 崩溃应带注入异常显形\n${o}`);
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

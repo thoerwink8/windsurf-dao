@@ -129,7 +129,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
 import { isCompletionComment } from './lib/judgment.mjs';
-import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import { loadRouting, leftoverDispatchMatch, pastedContentMatch, runGh } from './lib/dao-cmd.mjs';
 import { planCapacitySwitch, parseReviewerCardName } from './lib/dianjiangtai-reviewer-slot.mjs';
@@ -285,25 +285,10 @@ function parseArgs(argv) {
 }
 
 // ── orca 采集（live 模式）───────────────────────────────────────────
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
 
 function runOrca(cmdArgs) {
-  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', windowsHide: true, timeout: ORCA_TIMEOUT_MS });
-  if (r.error || r.status !== 0) {
-    // orca 的非零退出把结构化错误 JSON 打在 stdout（实测：terminal_handle_stale 的
-    // {ok:false, error:{code,message}} 在 stdout 上、stderr 为空）——先试解析，
-    // 拿到 error 就原样透传（live 与快照同形态、错误码不丢，审读红 ② 返工）；
-    // 拿不到（spawn 失败/超时/stdout 不是 JSON）再回落 stderr/exit N 字符串。
-    if (r.stdout) {
-      const parsed = parseOrcaStdout(r.stdout);
-      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
-      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-    }
-    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200) };
-  }
-  const parsed = parseOrcaStdout(r.stdout);
-  if (!parsed.ok) return parsed;
-  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-  return { ok: true, json: parsed.json };
+  return sharedRunOrca(cmdArgs, { timeout: ORCA_TIMEOUT_MS });
 }
 
 // 错误详情转可读文本（runOrca 对 orca JSON 错误原样透传结构化 error）。
@@ -1937,14 +1922,31 @@ function liveLoop() {
     else console.log(`[watchdog] SELF_WORKTREE_UNKNOWN: ${self.error}——本轮起不排除自己的工作区，请用 --self-worktree <id> 显式指定`);
   }
   console.log(`# watchdog live：每 ${args.interval}s 一轮（--window ${args.window} / --state-window ${args.stateWindow}${args.selfWorktree ? ' / self-worktree ' + args.selfWorktree.slice(0, 24) + '…' : ''}${args.disposeActions ? '' : ' / dispose-actions off'}）`);
+  let roundNo = 0;
   for (;;) {
-    const source = makeLiveSource(args.window);
-    if (source.infraError) {
-      console.log(`[watchdog] PS_FETCH_FAILED: ${source.infraError}——本轮没查成`);
-      if (args.once) process.exit(3);
-    } else {
-      executeOneRound(source);
-      if (args.once) break;
+    roundNo += 1;
+    // 崩溃隔离：单轮扫描抛异常只记日志、继续下一轮——守卫保活改帥位触发后（#693），
+    // 本循环是最后一道防线，单个检查项的异常不许杀死整个 resident。
+    // 进程级退出路径不受影响：haltIfStale / bootGuardOrHalt 走 process.exit，不经过 catch。
+    // --once（测试/单轮）不吞异常：崩了必须显形（非零退出 + 栈），与快照模式同口径。
+    // WATCHDOG_FAULT_ROUND=every 或轮号：测试故障注入，该轮抛出合成异常（同仓 DAO_GH_FAKE 先例）。
+    try {
+      const fault = process.env.WATCHDOG_FAULT_ROUND;
+      if (fault === 'every' || fault === String(roundNo)) {
+        throw new Error(`WATCHDOG_FAULT_ROUND=${fault} 注入的故意崩溃（验证主循环崩溃隔离）`);
+      }
+      const source = makeLiveSource(args.window);
+      if (source.infraError) {
+        console.log(`[watchdog] PS_FETCH_FAILED: ${source.infraError}——本轮没查成`);
+        if (args.once) process.exit(3);
+      } else {
+        executeOneRound(source);
+        if (args.once) break;
+      }
+    } catch (e) {
+      if (args.once) throw e;
+      const first = String(e && e.stack || e).split('\n').slice(0, 2).join(' ← ');
+      console.error(`[watchdog] ROUND_CRASHED: 第 ${roundNo} 轮扫描抛异常，已隔离、守卫继续跑——${first.slice(0, 300)}`);
     }
     sleep(args.interval * 1000);
   }

@@ -91,6 +91,3 @@ export function isCompletionComment(body) {
   const stripped = firstLine.replace(/^#+\s*/, '');
   return /^完工/.test(stripped) || /返工(?:完成|处置)/.test(stripped);
 }
-
-// 供测试与 calibrate.mjs 引用正则本身（calibrate.tests.js 语义依赖）
-export const JUDGMENT_LINE_RE_EXPORT = JUDGMENT_LINE_RE;
