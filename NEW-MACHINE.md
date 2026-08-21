@@ -87,6 +87,13 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 
 `dao-worker` 的 `pull_requests` 现在是 write，因为自动开 PR 的 workflow 还没写（#480）。workflow 上线后降回 read——不做这一步，权限隔离是装饰。
 
+## 4c. 账本事件（~/.dao/ledger/events/）
+
+点将台事件账**不进 git**：每台机器写自己的 `~/.dao/ledger/events/`（一事件一文件，只增不改）。新机不用手动建目录——任何账本命令（`dao.mjs` / `flow.mjs` / `event-write.mjs` / `select.mjs` / `calibrate.mjs` 等）第一次跑会自动建目录，并把仓内 `ledger/events/` 里已合并的历史事件复制过去当种子（幂等，同名跳过，再跑不重复）。
+
+- 仓内 `ledger/events/` 只保留已合并历史，**不要再往那里写新事件**；`LEDGER_EVENTS_DIR=<目录>` 可临时改落点（测试用，覆盖时不播种子）。
+- 本机产生的新事件只在本机。跨机汇聚的方向是 dao-hub 按需拉取（已拍板，机制未实现）；汇聚上线前要带走旧机事件，就手动拷 `~/.dao/ledger/events/`——文件名由事件内容决定，同名即同一事件，直接合并拷贝安全。
+
 ## 5. 模型配置
 
 pi / Codex 各自的模型配置（API key、模型列表、中转站等）跟本仓库无关，照各自官方文档在本地配置：

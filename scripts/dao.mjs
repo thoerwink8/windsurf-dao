@@ -132,6 +132,7 @@ import {
   writeJobOverride, resolveAmendTarget, formatAmendComment, workerJobId,
   linkAliasesToSuccessor, resolveMainWorktreeRoot,
 } from './lib/ledger-job.mjs';
+import { ensureLocalLedger } from './lib/ledger-home.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   ASK_TIMEOUT_MARK,
@@ -1921,7 +1922,7 @@ function cmdLedgerQuery(args) {
   if (args.recent == null && args.issue == null && !args.unclosed) {
     fail('ledger-query 要 --recent <n> 或 --issue <号> 或 --unclosed');
   }
-  const listed = readLedgerEvents(join(ROOT, 'ledger', 'events'));
+  const listed = readLedgerEvents(ensureLocalLedger({ root: ROOT }).dir);
   if (listed.unscanned) fail(`账本没查成：${listed.error}`);
   const r = queryLedger({
     events: listed.events,
@@ -2018,9 +2019,9 @@ function cmdWorktreeRm(args) {
   if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
   const wts = listed.json?.result?.worktrees;
   if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
-  const main = resolveMainWorktreeRoot({ from: ROOT });
+  // 账本孤本闸的对照集合 = 本机账本（~/.dao/ledger/events，ledger 本机化后事件不进任何 git 树）
   const plan = prepareWorktreeRm(wts, args.worktree, {
-    mainEventsDir: main.ok ? join(main.root, 'ledger', 'events') : null,
+    mainEventsDir: ensureLocalLedger({ root: ROOT }).dir,
   });
   if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
   const wl = orca(argsWorkerList());

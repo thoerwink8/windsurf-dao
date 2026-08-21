@@ -100,60 +100,57 @@ describe('ledger', () => {
     });
   });
 
-  it('#595 ② 工人树里写，事件必须进主树', async (t) => {
-    const worker = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-w-'));
-    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-m-'));
+  it('ledger 本机化：默认落点 ~/.dao/ledger/events，事件不进任何 git 树', async (t) => {
+    const worker = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-home-w-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-home-h-'));
     fs.mkdirSync(path.join(worker, 'schemas'), { recursive: true });
     fs.copyFileSync(path.join(REPO, 'schemas', 'events.schema.json'), path.join(worker, 'schemas', 'events.schema.json'));
-    const git = (args) => {
-      if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) {
-        return { ok: true, out: path.join(main, '.git') };
-      }
-      return { ok: false, error: `unexpected git ${args.join(' ')}` };
-    };
-    const ctx = loadLedgerContext({ root: worker, machine: 'T595', git });
-    await t.test('落点是主树 ledger/events', () => {
-      assert.ok(path.resolve(ctx.dir) === path.resolve(path.join(main, 'ledger', 'events')), '落点是主树 ledger/events  →  ' + ctx.dir);
+    // 仓内已合并历史事件 = 种子源
+    const repoEvents = path.join(worker, 'ledger', 'events');
+    fs.mkdirSync(repoEvents, { recursive: true });
+    fs.writeFileSync(
+      path.join(repoEvents, '01HISTORICAL0000000000-SEED.json'),
+      JSON.stringify({ type: 'job.closed', job_id: 'gh-pr-1', pr_number: 1, ts, machine: 'SEED', seq: 0, event_id: 'seed-1' }) + '\n',
+    );
+
+    const wantDir = path.join(home, '.dao', 'ledger', 'events');
+    const ctx = loadLedgerContext({ root: worker, machine: 'T595', home });
+    await t.test('落点是本机 ~/.dao/ledger/events', () => {
+      assert.ok(path.resolve(ctx.dir) === path.resolve(wantDir), '落点是本机 ~/.dao/ledger/events  →  ' + ctx.dir);
+    });
+    await t.test('仓内历史事件种子到本机（再 load 不重复）', () => {
+      assert.ok(fs.existsSync(path.join(wantDir, '01HISTORICAL0000000000-SEED.json')), '种子文件在本机落点');
+      loadLedgerContext({ root: worker, machine: 'T595', home });
+      const names = fs.readdirSync(wantDir).filter(f => f.endsWith('.json'));
+      assert.ok(names.length === 1, '再 load 不重复种子  →  ' + names.join(','));
     });
     const w = writeJobDispatch({
       ...ctx, ts, jobId: workerJobId(595), model: 'grok-4.6', identity: '工人',
       workType: '写码', terminal: 'test', prNumber: 595,
     });
-    await t.test('写入成功', () => {
-      assert.ok(w.ok && w.path && fs.existsSync(w.path), '写入成功  →  ' + w.error);
+    await t.test('写入成功且文件落在本机', () => {
+      assert.ok(w.ok && w.path && w.path.startsWith(path.resolve(wantDir)), '写入成功且文件落在本机  →  ' + (w.error || w.path));
     });
-    await t.test('文件在主树', () => {
-      assert.ok(w.path && w.path.startsWith(path.resolve(main)), '文件在主树  →  ' + w.path);
+    await t.test('git 树没有新事件（工人树只剩那颗种子）', () => {
+      const inTree = fs.readdirSync(repoEvents).filter(f => f.endsWith('.json'));
+      assert.ok(inTree.length === 1 && inTree[0].startsWith('01HISTORICAL'), 'git 树没有新事件  →  ' + inTree.join(','));
     });
-    const workerEvents = path.join(worker, 'ledger', 'events');
-    const orphan = fs.existsSync(workerEvents) && fs.readdirSync(workerEvents).filter(f => f.endsWith('.json'));
-    await t.test('工人树没有孤本', () => {
-      assert.ok(!orphan || orphan.length === 0, '工人树没有孤本  →  ' + JSON.stringify(orphan));
-    });
-
-    let threw = null;
-    try {
-      loadLedgerContext({
-        root: worker,
-        machine: 'T595',
+    await t.test('落点不依赖 git（查不成也照写本机）', () => {
+      const ctx2 = loadLedgerContext({
+        root: worker, machine: 'T595', home,
         git: () => ({ ok: false, error: 'not a git repository' }),
       });
-    } catch (e) { threw = e; }
-    await t.test('落点查不成不许退回工人树', () => {
-      assert.ok(threw && /没查成/.test(threw.message), '落点查不成不许退回工人树  →  ' + (threw && threw.message));
+      assert.ok(path.resolve(ctx2.dir) === path.resolve(wantDir), '落点不依赖 git  →  ' + ctx2.dir);
     });
 
-    const override = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-595-e-'));
+    const override = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-home-e-'));
     const prev = process.env.LEDGER_EVENTS_DIR;
     process.env.LEDGER_EVENTS_DIR = override;
     try {
-      const over = loadLedgerContext({
-        root: worker,
-        machine: 'T595',
-        git: () => ({ ok: false, error: 'should not call git' }),
-      });
-      await t.test('LEDGER_EVENTS_DIR 仍可覆盖', () => {
+      const over = loadLedgerContext({ root: worker, machine: 'T595', home });
+      await t.test('LEDGER_EVENTS_DIR 仍可覆盖（且不播种子）', () => {
         assert.ok(path.resolve(over.dir) === path.resolve(override), 'LEDGER_EVENTS_DIR 仍可覆盖  →  ' + over.dir);
+        assert.ok(fs.readdirSync(override).filter(f => f.endsWith('.json')).length === 0, '覆盖时不播种子');
       });
     } finally {
       if (prev == null) delete process.env.LEDGER_EVENTS_DIR;
@@ -161,7 +158,7 @@ describe('ledger', () => {
       fs.rmSync(override, { recursive: true, force: true });
     }
     fs.rmSync(worker, { recursive: true, force: true });
-    fs.rmSync(main, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
 
     await t.test('resolveMainWorktreeRoot 认出本仓主树', () => {
       assert.ok((() => {
