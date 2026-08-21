@@ -251,7 +251,7 @@ node scripts/inbox-station.mjs ensure
 
 **守卫必须跑 origin/master（#665）**：信箱台 / 看门狗 / flow 启动时把代码 sync 到 `%USERPROFILE%\.dao\guard-mirror`（`git fetch` + `reset --hard origin/master`）再 exec，主树落后不影响关卡。启动或每轮若仍落后 / 查不成 → 非零退出（落后自停），不许继续跑旧代码。日志 / 租约仍落主树 `_flow/`（`resolveLogPath` 认主卡）。合入本改动后**重启一次**信箱台（`node scripts/inbox-station.mjs ensure`）和看门狗 / flow，之后落后会自停、ensure 按镜像重建。归档失败写 GitHub PR 评论（marshal），不只进 orchestration 信箱。ensure 成功后顺手只读 run-gc（#614）：僵尸 Run 数超阈值（默认 5）在 stdout 最前面打一行，`--apply` 仍手动。#667：ensure/派工都不 `run-use`（`--from` 不能冒充信箱台，会 consumer_fenced）。人用窗口不当 coordinator：闸门拦裸 `run-use`/`run-create`。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；帅窗不许触发。心跳不准发到 Run。帅读 `_flow/inbox.log` 和 GitHub 知道完工/升级，不靠输入框横幅。#593 / #601：归档走 `dao.mjs worktree-rm`（先退役 Run+关台，再删树）；关台身份看租约 TTL/runId/handle（过期直接 alreadyGone，未过期且证不出就失败，不拿 coordinator_handle 当台）；存量用 `dao.mjs run-gc`（默认只列 pending/tombstones，`--apply` 才关，真关只认 terminal close，墓碑计入本已关）；跨单收信 `dao.mjs inbox-collect`。
 
-## 9b. 守卫 OS 保活（#683）
+## 9b. 守卫 OS 保活（#683 / #693）
 
 不要靠人记得 Monitor 挂 watchdog / flow。Windows 计划任务是非 AI 终点（#652：不造看门狗的看门狗）。换机在**主仓根**跑一次：
 
@@ -261,18 +261,23 @@ node scripts/guard-keepalive.mjs --install
 
 它会：写 `%USERPROFILE%\.dao\guard\keepalive.cmd`（本机资产，不进 git）→ `schtasks /Create /TN dao-guard-keepalive /SC MINUTE /MO 2 /F` → 立刻 `--once` 拉起缺的进程。cmd 优先跑镜像里的脚本，镜像还没有时回退到安装时的本仓路径。
 
-本机若 `schtasks` 拒绝访问：`--install` 不装成失败装没装——改写 `keepalive-loop.cmd`（每 120 秒调一次 `--once`）拷进用户启动文件夹（Win+R `shell:startup`），并当场拉起循环。仍是 OS 定时，不是第二只狗。有权限时优先 schtasks。
+本机若 `schtasks` 拒绝访问：`--install` 不装成失败装没装——写 `%USERPROFILE%\.dao\guard\loop-resident.mjs` / `wait-resident.mjs`（`Atomics.wait` 阻塞循环，无 `timeout /t` 窗口）和 `start-residents.ps1`（`Win32_Process Create` 拉起，跳出派工命令的 Job，避免命令一结束孩子被杀），拷 `dao-guard-keepalive.vbs` 进启动文件夹。循环 8 秒内没写出活 pid 就非零退出，不许当装成功。`--install` 会删掉旧的 `dao-guard-keepalive.cmd` / `keepalive-loop.cmd`。仍是 OS 定时，不是第二只狗。有权限时优先 schtasks。
 
-验（不是「已创建」，是 kill 后会回来）：
+`--loop` 每 2 分钟跑一次 `--once`，心跳每 2 秒写到 `%USERPROFILE%\.dao\guard\loop-heartbeat.json`（Win11 隐藏进程久无 I/O 会被收掉）。`--loop-wait` 只看这个循环还活着没有：循环进程死了或心跳停了 → `%USERPROFILE%\.dao\guard\halt.jsonl` 留痕，并经 `dao-watchdog[bot]` 上报「【看门狗】守卫自停」台账。没装 watchdog 凭据会在 jsonl 里记「这台机器没装」，不许当报成功。它不盯 watchdog / flow，不造看门狗的看门狗。恢复路径：重新登录（启动文件夹会再拉起）或再跑 `--install`。合入后若安装时的工作树已删，在**主仓根**再跑一次 `--install` 刷新 VBS 路径。
+
+验（不是「已创建」，是 kill 后会回来 / 循环死会响）：
 
 ```bash
 schtasks /Query /TN dao-guard-keepalive
 node scripts/guard-keepalive.mjs --status
-# 故意 kill 后 ≤2 分钟内 pid 变新：
+# 故意 kill 守卫后 ≤2 分钟内 pid 变新：
 #   记下 watchdog pid → taskkill /PID <pid> /F → 等任务/循环 或立刻 node scripts/guard-keepalive.mjs --once
+# 故意杀循环（fallback 路径）后报警出现：
+#   记下 --status 里 loop.pid → taskkill /PID <pid> /F → 等 ≤15s 或立刻 node scripts/guard-keepalive.mjs --check-loop
+#   应在 halt.jsonl 看到 LOOP_DEAD；然后 --install 把循环拉回来
 ```
 
-自停 / 查不成写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并经 `dao-watchdog[bot]` 在 GitHub 开/评「【看门狗】守卫自停」台账（同一事故键不刷）。没装 watchdog 凭据会在 jsonl 里记「这台机器没装」，不许当报成功——凭据装法见 §4b。`~/.dao/guard` 换机重建，不要拷。
+自停 / 查不成 / 循环死亡写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并经 `dao-watchdog[bot]` 在 GitHub 开/评「【看门狗】守卫自停」台账（同一事故键不刷）。没装 watchdog 凭据会在 jsonl 里记「这台机器没装」，不许当报成功——凭据装法见 §4b。`~/.dao/guard` 换机重建，不要拷。
 
 ## 10. 接上 memory
 

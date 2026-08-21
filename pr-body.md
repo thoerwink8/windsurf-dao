@@ -1,38 +1,35 @@
 ## 目标
 
-master 卡 comment 的定界区在派工 / 清卡 / 合并三个事件点全量重写为当前在途单号（写时即对）。复用 `mutateWorktreeComment`，不走 watchdog 轮询、不注入 `/rename`。署名 issue #684（关单交给 `scripts/close-issues.mjs`）。
+保活循环改隐藏启动，并补上循环自己死时的检测与报警（halt.jsonl + dao-watchdog[bot] GitHub）。不造看门狗的看门狗，不改守卫进程，不改 #665 自停判据。署名 issue #693（关单交给 `scripts/close-issues.mjs`）。
 
 ## 验收标准
 
-- [x] 造新增：盘面多一张带单号的卡 → master 定界区出现该号
-- [x] 造删除：卡从盘面消失 → 该号从定界区消失
-- [x] 造假号：手改 master 定界区塞不存在的号 → 下一次事件后收敛
-- [x] 造多帅：无法分辨归属，定界区写全体在途单（退化行为有测试钉）
-- [x] 盘面没查成 ≠ 在途 0：ps 失败不许把定界区抹空
-- [x] 卡名里的 `#N` 不算判据（#589）；外仓卡不算（#492）
-- [x] 过期前缀「各自在途单号见各自终端标题」改为「在途单号见定界区」
-- [x] `node --test tests/master-title.test.js tests/dao.test.js tests/flow.test.js tests/board-hook.test.js` 相关绿
-- [x] `node scripts/dao-check.mjs` 不新增红项（全仓两项红：open 未在做超阈、账本断流，本单未动）
+- [x] 故意杀 keepalive 循环 → halt.jsonl 留痕 + dao-watchdog[bot] 上报（贴输出）
+- [x] 无 `timeout /t` 可见窗口（VBS `Run ..., 0` + `Atomics.wait` 常驻，本机 timeout.exe=0）
+- [ ] `node scripts/dao-check.mjs` 不新增红项
+- [x] 守卫拉起链路回归：kill watchdog → `--once` 拉起新 pid
+- [x] 登录即启仍在（启动文件夹 `dao-guard-keepalive.vbs`）；循环死可被检测到
+- [x] NEW-MACHINE.md §9b 装法与本机资产同步更新
 - [x] PR 正文不写 GitHub 自动关单词
 
 ## 进展
 
-- [x] 空提交撑分支、开 draft PR #685
-- [x] `syncMasterTicketZone`：全量重写 + 回读
-- [x] 挂点：`dao.mjs dispatch` / `worktree-rm` / `flow.mjs` MERGED
-- [x] 四条故意构造样本 + 没查成负控
-- [x] 文档：dispatch skill 命名条补 master 卡钩子
-- [x] 返工：过期前缀改为在途单号见定界区
-- [x] rebase 到 origin/master（#680/#689 已合）
+- [x] 空提交撑分支、开 draft PR #694
+- [x] schtasks 被拒 fallback：`loop-resident.mjs` / `wait-resident.mjs`（`Atomics.wait`，无 timeout 窗口）
+- [x] 用 `Win32_Process Create` 拉起，跳出派工命令 Job（node spawn 的隐藏进程会随命令结束被杀）
+- [x] 循环死 → halt.jsonl `LOOP_DEAD`；本机无 dao-watchdog 凭据，jsonl 记「这台机器没装」
+- [x] 测试 `tests/guard-keepalive.test.js` 53 项绿
+- [x] NEW-MACHINE.md §9b
+- [ ] dao-check
 
 ## 体系类改动
 
-1. 谁提的，发生在什么场景？2026-08-21 用户拍板。#545「watchdog 轮询 + 注入 /rename 纠正帅位标题」被 grill-ai 从零拷问推翻：同一目标第 2 层补丁、检测-纠正式、抢输入框（#644）、且 watchdog 已停摆（#683）。要的是面板上的在途单号在事件发生时就是对的。
+1. 谁提的，发生在什么场景？2026-08-21 巡检发现 keepalive 循环已死 ≥5.5 小时无人知。#683 验收只覆盖「kill 守卫拉起」，没覆盖「循环自己死」。Windows 11 默认终端下 `windowsHide` 失效，循环窗口可见。
 
-2. 删哪一层能让这个问题不存在？删掉「写错了再巡检纠正」这一层。单号只在三个会改变盘面的事件点从 `worktree ps` 全量重写进 master 卡定界区。没有事件就没有纠偏——长静默期内的手改是拍板取舍，不另造轮询。
+2. 删哪一层能让这个问题不存在？删掉 cmd `timeout /t` 循环这一层（它不是 OS 级保活，还会弹窗、会死）。有 schtasks 权限时仍走计划任务；没权限时改成隐藏的 node 常驻 + 循环心跳，死亡走已有 halt 台账，不另造一只狗。
 
-3. 如果从零重做，今天还会造它吗？会造「事件点全量重写定界区」。不会造 watchdog 轮询、不会造终端 `/rename`，也不会造 board-hook 每轮 sync。
+3. 如果从零重做，今天还会造它吗？会造「OS 定时（schtasks）优先，fallback 必须隐藏且死了要响」。不会造看门狗的看门狗，也不会保留可见 timeout 窗口。
 
 ## 设计阶段
 
-issue #684 已消歧（grill-ai 推翻 #545 后用户点事件钩子）。解空间已收敛，本单不重出盲设计题。
+issue #693 已消歧（帅评论，用户拍板优先）。解空间已收敛：改 `scripts/guard-keepalive.mjs`（隐藏启动 + 循环心跳/活性文件 + 报警）+ NEW-MACHINE.md。本单不重出盲设计题。

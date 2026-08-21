@@ -122,7 +122,7 @@ export function parseHaltIssueList(listed) {
 export function haltIssueBody() {
   return [
     COMMENT_HEAD,
-    '守卫落后自停 / 查不成的台账。新事故在本 issue 留评论，同一事故键不刷。',
+    '守卫落后自停 / 查不成 / keepalive 循环死亡的台账。新事故在本 issue 留评论，同一事故键不刷。',
     '本机留痕：~/.dao/guard/halt.jsonl',
     '不要关这张单：关了下一次自停会再开一张。',
   ].join('\n');
