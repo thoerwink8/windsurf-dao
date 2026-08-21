@@ -41,6 +41,15 @@ export function skipGuardMirror({ env = process.env } = {}) {
   return v === '1' || v === 'true';
 }
 
+// 测试旁路（同 DAO_GUARD_SKIP_MIRROR 一级）：subprocess 级 live 测试里脚本仓的 HEAD
+// 是未推送的分支 commit，boot 版本闸必然自停、根本到不了主循环——设
+// DAO_GUARD_SKIP_REVISION=1 跳过 boot 闸。生产不设；轮内闸（每轮 checkGuardRevision）
+// 不受影响，仍在跑。
+export function skipGuardRevision({ env = process.env } = {}) {
+  const v = env && env.DAO_GUARD_SKIP_REVISION;
+  return v === '1' || v === 'true';
+}
+
 export function isPathInside(child, parent) {
   const c = resolve(String(child || '')).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   const p = resolve(String(parent || '')).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -186,6 +195,9 @@ export function bootGuardOrHalt({
     return plan;
   }
   const cwd = plan.mirrorPath || repoRoot;
+  if (skipGuardRevision({ env })) {
+    return { ...plan, startup: null, rev: null, revisionSkipped: true };
+  }
   const startup = recordStartupRevision({ git, cwd });
   const rev = checkGuardRevision({ startup, git, cwd, fetch: plan.action !== 'run' });
   haltIfStale(rev, { log, exit });

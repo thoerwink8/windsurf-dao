@@ -32,7 +32,11 @@
  *   PI_GO_FALLBACK_PROVIDER  降级目标 provider（直连），默认 "deepseek"
  *   PI_GO_FALLBACK_MODEL     降级目标默认模型（同 id 不存在时兜底），默认 "deepseek-v4-flash"
  *   PI_GO_FALLBACK_TRANSIENT_AFTER  transient 错误连续失败几次后降级，默认 2
+ *
+ * 纯逻辑（恢复决策）在 go-fallback-core.mjs（node 22 可测），本文件只做运行时接线。
  */
+
+import { planRestore } from "./go-fallback-core.mjs";
 
 const PRIMARY = process.env.PI_GO_FALLBACK_PRIMARY || "opencode-go";
 const FALLBACK_PROVIDER = process.env.PI_GO_FALLBACK_PROVIDER || "deepseek";
@@ -67,8 +71,10 @@ const TRANSIENT = [
 let consecutiveErrors = 0;
 let lastSignature = "";
 
-// 降级后待恢复的原默认值；agent_settled / session_shutdown 时补刀恢复
-let pendingRestore = null; // { path, provider, model }
+// 降级后待恢复的原默认值；agent_settled / session_shutdown 时补刀恢复。
+// fallbackProvider/fallbackModel 是 setModel 试图写入的降级值——恢复决策靠它区分
+// 「降级写已落盘」（该写回原值）和「降级写还没落盘」（当前还是原值，必须留 pending 等补刀）。
+let pendingRestore = null; // { path, provider, model, fallbackProvider, fallbackModel }
 
 function classify(text) {
   if (HARD_LIMIT.some((re) => re.test(text))) return "hard";
@@ -103,7 +109,11 @@ function readDefaults() {
 
 /**
  * 把 settings.json 的 defaultProvider/defaultModel 恢复成 pendingRestore 里的原值。
- * 只改这两个字段；文件当前默认已经不是降级目标时才不写（避免覆盖用户在降级后的手动修改）。
+ * 只改这两个字段。恢复决策（planRestore）的三个分支：
+ * - 当前值 == 降级值 → 写回原值（降级写已落盘，必须还原，否则后续按默认启动的 worker 静默变直连）。
+ * - 当前值 == 原值 → 不写、保留 pendingRestore 等补刀（降级写可能还没落盘——旧逻辑在此误清
+ *   pending，落盘后补刀变 no-op，settings.json 永远停在降级通道）。
+ * - 当前值是其它值 → 用户在降级后手动改了默认，尊重用户，清 pending 不再补刀。
  */
 function restoreDefaults() {
   const pending = pendingRestore;
@@ -112,17 +122,25 @@ function restoreDefaults() {
     const fs = require("fs");
     const p = settingsPath();
     const data = JSON.parse(fs.readFileSync(p, "utf8"));
-    const currentProvider = data.defaultProvider;
-    const currentModel = data.defaultModel;
-    if (currentProvider === pending.provider && currentModel === pending.model) {
+    const plan = planRestore({
+      pending,
+      current: { provider: data.defaultProvider, model: data.defaultModel },
+    });
+    if (plan.action === "wait") return;
+    if (plan.action === "respect-user") {
       pendingRestore = null;
-      return; // 已经恢复过了（或本来就是原值）
+      console.error(
+        `[go-fallback] settings.json 默认已是 ${plan.from.provider}/${plan.from.model}（非降级值），尊重修改、不再恢复`
+      );
+      return;
     }
     data.defaultProvider = pending.provider;
     data.defaultModel = pending.model;
     fs.writeFileSync(p, JSON.stringify(data, null, 2) + "\n", "utf8");
     pendingRestore = null;
-    console.error(`[go-fallback] 已恢复 settings.json 默认 ${pending.provider}/${pending.model}（原值 ${currentProvider}/${currentModel}）`);
+    console.error(
+      `[go-fallback] 已恢复 settings.json 默认 ${pending.provider}/${pending.model}（降级值 ${plan.from.provider}/${plan.from.model}）`
+    );
   } catch (e) {
     console.error(`[go-fallback] 恢复 settings.json 默认值失败: ${e.message}`);
   }
@@ -180,12 +198,15 @@ export default function (pi) {
     }
 
     // 记下降级前的默认值，降级后恢复（setModel 会异步改写 settings.json 默认）。
+    // 同时记下降级写入值：恢复决策要靠它区分「降级写已落盘」与「还没落盘」。
     const original = readDefaults();
     if (original) {
       pendingRestore = {
         path: settingsPath(),
         provider: original.provider,
         model: original.model,
+        fallbackProvider: fallback.provider,
+        fallbackModel: fallback.id,
       };
     }
 

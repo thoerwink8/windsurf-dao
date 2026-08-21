@@ -20,6 +20,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { runOrcaRaw } from './orca-run.mjs';
 import { displayNumberFromWorktree } from './card-identity.mjs';
 import { judgeSeat } from './guard-seat.mjs';
 import { onceResultBits } from './guard-keepalive.mjs';
@@ -103,14 +104,10 @@ export function boardLine(summary) {
   return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit}`;
 }
 
+// spawn 唯一真源在 scripts/lib/orca-run.mjs——raw 结果由本文件调用点自己解析。
+// （收编前本拷贝的 shell 回落缺 windowsHide: true，#695 同款弹窗隐患。）
 function runOrca(args) {
-  const win = process.platform === 'win32';
-  const direct = spawnSync(win ? 'orca.exe' : 'orca', args, {
-    encoding: 'utf8', timeout: ORCA_TIMEOUT_MS, windowsHide: true,
-  });
-  if (!direct.error) return direct;
-  const line = ['orca', ...args.map(a => `"${String(a).replace(/"/g, '\\"')}"`)].join(' ');
-  return spawnSync(line, { encoding: 'utf8', shell: true, timeout: ORCA_TIMEOUT_MS });
+  return runOrcaRaw(args, { timeout: ORCA_TIMEOUT_MS });
 }
 
 function loadCache() {

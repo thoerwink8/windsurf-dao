@@ -40,6 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlin
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseOrcaStdout } from './lib/orca-stdout.mjs';
+import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   planStationRetire,
@@ -142,11 +143,6 @@ export function parseArgs(argv) {
     throw new Error(`未知命令: ${args.cmd}（只要 ensure / relay / retire）`);
   }
   return args;
-}
-
-export function findCoordinatorTerminal(terminals, coordinatorHandle) {
-  if (!Array.isArray(terminals) || !coordinatorHandle) return null;
-  return terminals.find((t) => t?.handle === coordinatorHandle) || null;
 }
 
 export function isHandleOnBoard(handle, terminals) {
@@ -492,48 +488,6 @@ export function formatLogLine(msg, now = new Date()) {
   });
 }
 
-export function parseCheckResult(json) {
-  const result = json?.result ?? json ?? {};
-  const messages =
-    result.messages
-    ?? result.delivery?.messages
-    ?? result.batch?.messages
-    ?? (Array.isArray(result) ? result : []);
-  const deliveryId =
-    result.delivery_id
-    ?? result.deliveryId
-    ?? result.delivery?.id
-    ?? result.batch?.id
-    ?? result.ack
-    ?? json?.delivery_id
-    ?? null;
-  return {
-    messages: Array.isArray(messages) ? messages : [],
-    deliveryId: deliveryId || null,
-  };
-}
-
-export function pickRun(runs, { preferredId, currentId, allowedIds } = {}) {
-  const list = Array.isArray(runs) ? runs : [];
-  const alive = (r) => r && r.legacy !== 1 && r.legacy !== true && r.id !== 'run_legacy_local';
-  const allowed = allowedIds == null
-    ? null
-    : (allowedIds instanceof Set ? allowedIds : new Set(allowedIds));
-  const allow = (r) => !allowed || allowed.has(r.id);
-  if (preferredId) {
-    const hit = list.find((r) => r.id === preferredId);
-    if (hit) return hit;
-  }
-  if (currentId) {
-    const hit = list.find((r) => r.id === currentId && alive(r) && allow(r));
-    if (hit) return hit;
-  }
-  return list
-    .filter((r) => alive(r) && allow(r))
-    .slice()
-    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null;
-}
-
 export function findMainWorktree(worktrees) {
   const list = Array.isArray(worktrees) ? worktrees : [];
   return list.find((w) => w.isMainWorktree || w.git?.isMainWorktree) || null;
@@ -631,20 +585,9 @@ function errText(e) {
   return orcaErrorText(e);
 }
 
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
 function runOrca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
-  const r = spawnSync('orca', cmdArgs, { encoding: 'utf8', timeout, windowsHide: true });
-  if (r.error || (r.status !== 0 && r.status != null)) {
-    if (r.stdout) {
-      const parsed = parseOrcaStdout(r.stdout);
-      if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
-      if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-    }
-    return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
-  }
-  const parsed = parseOrcaStdout(r.stdout);
-  if (!parsed.ok) return parsed;
-  if (parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
-  return { ok: true, json: parsed.json };
+  return sharedRunOrca(cmdArgs, { timeout });
 }
 
 function sleep(ms) {
