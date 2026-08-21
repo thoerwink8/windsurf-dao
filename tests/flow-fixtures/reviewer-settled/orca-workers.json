@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "result": {
+    "workers": [
+      {
+        "dispatchId": "ctx_worker_2009",
+        "taskId": "task_worker_2009",
+        "runId": "run_2009",
+        "workerState": "working",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_worker_2009",
+        "resource": {
+          "terminalHandle": "term_worker_2009",
+          "worktreeId": "wt::worker-2009"
+        }
+      }
+    ]
+  }
+}
