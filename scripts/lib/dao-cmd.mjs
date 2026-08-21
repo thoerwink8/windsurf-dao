@@ -13,12 +13,14 @@ import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText, normalizePipes } from './next-launch.mjs';
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
+import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
 
 export const ROOT = resolve(import.meta.dirname, '..', '..');
 export const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
+export const ROUTING_POLICY_FILE = ROUTING_JSON;
 export const ESCAPE_LOG = join(ROOT, '_flow', 'cmd-escape.jsonl');
 export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
 
@@ -61,7 +63,7 @@ export const CONFIRM_PATTERNS = [
 
 // ── 路由表 ──────────────────────────────────────────────────────────
 
-export function loadRouting(file = ROUTING_FILE) {
+export function loadRoutingProviders(file = ROUTING_FILE) {
   if (!existsSync(file)) throw new Error(`路由表不在: ${file}`);
   let doc;
   try {
@@ -73,6 +75,21 @@ export function loadRouting(file = ROUTING_FILE) {
     throw new Error('路由表缺 [providers] 节');
   }
   return doc;
+}
+
+export function loadRouting(file = ROUTING_FILE) {
+  const providersDoc = loadRoutingProviders(file);
+  const policy = loadRoutingPolicy();
+  return {
+    ...providersDoc,
+    updated: policy.updated || providersDoc.updated,
+    models: policy.models,
+    routes: policy.routes,
+    bans: policy.bans,
+    rules: policy.rules,
+    reviewerOrder: policy.reviewerOrder,
+    policyBans: policy.policyBans,
+  };
 }
 
 export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = {}) {
@@ -2427,8 +2444,10 @@ export function resolveDispatchConstraints({
         models,
         passerIds: models
           .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+          .filter(m => !m.reviewerDisabled)
           .map(m => m.id),
         workerId: resolvedModel,
+        order: routing?.reviewerOrder,
       });
       error = next.ok && next.next ? `${error}；下一位 ${next.next}` : `${error}；${next.error}`;
     }

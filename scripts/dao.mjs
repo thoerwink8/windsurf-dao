@@ -216,7 +216,12 @@ function loadOrFail() {
 function reviewerPasserIds(routing) {
   return (routing?.models || [])
     .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+    .filter(m => !m.reviewerDisabled)
     .map(m => m.id);
+}
+
+function reviewerOrderOf(routing) {
+  return routing?.reviewerOrder || [];
 }
 
 function formatVendorGateError(gate, next) {
@@ -235,6 +240,7 @@ function refuseIfSameVendor({ workerId, reviewerId, routing }) {
     models,
     passerIds: reviewerPasserIds(routing),
     workerId,
+    order: reviewerOrderOf(routing),
   });
   fail(formatVendorGateError(gate, next), {
     vendorGate: { ...gate, next: next.ok ? next.next : null, exhausted: !!next.exhausted },
@@ -835,6 +841,7 @@ function cmdDispatch(args) {
       models: routing.models,
       passerIds: reviewerPasserIds(routing),
       workerId: launched.modelId,
+      order: reviewerOrderOf(routing),
     });
     failCreated(created, formatVendorGateError(launchedGate, next), {
       vendorGate: { ...launchedGate, next: next.ok ? next.next : null, exhausted: !!next.exhausted },
@@ -1678,6 +1685,7 @@ function cmdWorkerDone(args) {
       }
       const nxt = nextReviewerAfter({
         currentId: currentReviewer, models, passerIds, workerId: plan.workerModel,
+        order: reviewerOrderOf(routingDone),
       });
       if (!nxt.ok) {
         create = { ...create, exhausted: true, nextError: nxt.error, retried: true };

@@ -20,14 +20,11 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import os from 'node:os';
-import { createRequire } from 'node:module';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select, hashOf, EVENT_ORDER_KEY } from './lib/dianjiangtai-core.mjs';
 import { writeEvent, nextSeq } from './lib/event-writer.mjs';
 import { ensureLocalLedger } from './lib/ledger-home.mjs';
-
-const require = createRequire(import.meta.url);
-const { parse: parseToml } = require('./lib/smol-toml.cjs');
+import { loadRoutingPolicy } from './lib/model-routing-json.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -74,11 +71,11 @@ const eventsDir = arg('events-dir') ? resolve(ROOT, arg('events-dir')) : ensureL
 const schemaPath = resolve(ROOT, arg('schema', 'schemas/events.schema.json'));
 
 const models = parseYaml(readFileSync(join(policyDir, 'models.yml'), 'utf8')).models;
-const bans = parseYaml(readFileSync(join(policyDir, 'bans.yml'), 'utf8')).bans || [];
 const weights = parseYaml(readFileSync(join(policyDir, 'weights.yml'), 'utf8'));
-const policyHash = hashOf({ models, bans, weights });
-const routingPath = resolve(ROOT, arg('routing', 'docs/model-routing.toml'));
-const routes = existsSync(routingPath) ? (parseToml(readFileSync(routingPath, 'utf8')).routes || []) : [];
+const policy = loadRoutingPolicy();
+const routes = policy.routes || [];
+const bans = policy.policyBans || [];
+const policyHash = hashOf({ models, bans, weights, routes });
 
 const events = existsSync(eventsDir)
   ? readdirSync(eventsDir)

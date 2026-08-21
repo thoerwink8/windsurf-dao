@@ -22,6 +22,15 @@ const {
 } = require("../scripts/lib/dianjiangtai-core.mjs");
 const { parseYaml } = require("../scripts/lib/yaml-min.mjs");
 const { buildEvent, writeEvent, schemaMeta, nextSeq, ulidFromMs } = require("../scripts/lib/event-writer.mjs");
+const POLICY_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/'));
+let _routingPolicy;
+async function routingPolicy() {
+  if (!_routingPolicy) {
+    const { loadRoutingPolicy } = await POLICY_LOAD;
+    _routingPolicy = loadRoutingPolicy();
+  }
+  return _routingPolicy;
+}
 
 function throws(fn) {
   try { fn(); return false; } catch { return true; }
@@ -554,11 +563,10 @@ describe('dianjiangtai', () => {
   });
 
   it('⑤ 分时路由参与推荐（接线：写码全日 devin，#688）', async (t) => {
-    const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
-    const routing = parseToml(fs.readFileSync(path.join(REPO, "docs", "model-routing.toml"), "utf8"));
-    const routes = routing.routes || [];
-    await t.test('model-routing.toml 读到 1 条写码全日路由', () => {
-      assert.ok(routes.filter(r => r.role === "写码").length === 1, 'model-routing.toml 读到 1 条写码全日路由  →  ' + String(routes.filter(r => r.role === "写码").length));
+    const policy = await routingPolicy();
+    const routes = policy.routes || [];
+    await t.test('model-routing.json 读到 1 条写码全日路由', () => {
+      assert.ok(routes.filter(r => r.role === "写码").length === 1, 'model-routing.json 读到 1 条写码全日路由  →  ' + String(routes.filter(r => r.role === "写码").length));
     });
     await t.test('matchBeijingRoute：峰时 10:00 写码 → devin', () => {
       assert.ok(matchBeijingRoute(routes, "写码", TS).model === DEVIN, 'matchBeijingRoute：峰时 10:00 写码 → devin  →  ' + (matchBeijingRoute(routes, "写码", TS) && matchBeijingRoute(routes, "写码", TS).model));
@@ -596,9 +604,8 @@ describe('dianjiangtai', () => {
   });
 
   it('判别力账本 / select+routes 接线（红3）', async (t) => {
-    const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
-    const routing = parseToml(fs.readFileSync(path.join(REPO, "docs", "model-routing.toml"), "utf8"));
-    const routes = routing.routes || [];
+    const policy = await routingPolicy();
+    const routes = policy.routes || [];
     // 红3：判别力账本——不接线则 highest_score 不是 grok（flash 5 正 + grok 6 负，配额已满）
     const discEvents = [
       ...manyJobs(models.filter(m => m.id !== "grok-4.6"), 5),
@@ -643,23 +650,18 @@ describe('dianjiangtai', () => {
       assert.ok(run().options.A.reason === "quota_explore", '无 routes 时行为不变：零样本仍 quota_explore');
     });
 
-    // CLI 读 origin/master 路由表（#533），政策读工作区。期望值用同一对输入复算，
-    // 不硬编码 grok/devin——本单合进 master 前后 CLI A 会变，复算才不会咬。
-    const masterShow = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });
-    if (masterShow.status !== 0) throw new Error(`git show origin/master 失败: ${(masterShow.stderr || masterShow.stdout || "").slice(0, 200)}`);
-    const masterRouting = parseToml(masterShow.stdout);
-    const masterRoutes = masterRouting.routes || [];
-    function renderFromMaster(id) {
-      const hit = (masterRouting.models || []).find(x => x && x.id === id)
+    // CLI 读工作区 JSON 路由（2026-08-22），政策读工作区。期望值用同一对输入复算。
+    function renderFromPolicy(id) {
+      const hit = (policy.models || []).find(x => x && x.id === id)
         || models.find(x => x.id === id);
       const provider = hit && hit.provider ? hit.provider : null;
       return { provider, rendered: provider ? `${provider}/${id}` : id };
     }
-    const expectPeak = run({ jobId: "wire-peak", events: discEvents, routes: masterRoutes });
-    const expectValley = run({ jobId: "wire-valley", ts: TS_VALLEY, events: discEvents, routes: masterRoutes });
-    const peakWant = renderFromMaster(expectPeak.options.A.model);
-    const valleyWant = renderFromMaster(expectValley.options.A.model);
-    await t.test('master 路由复算能给出峰/谷 A（CLI 期望来源）', () => {
+    const expectPeak = run({ jobId: "wire-peak", events: discEvents, routes });
+    const expectValley = run({ jobId: "wire-valley", ts: TS_VALLEY, events: discEvents, routes });
+    const peakWant = renderFromPolicy(expectPeak.options.A.model);
+    const valleyWant = renderFromPolicy(expectValley.options.A.model);
+    await t.test('JSON 路由复算能给出峰/谷 A（CLI 期望来源）', () => {
       assert.ok(!!expectPeak.options.A.model && !!peakWant.provider && !!expectValley.options.A.model, 'master 路由复算能给出峰/谷 A  →  ' + `${expectPeak.options.A.model}/${expectValley.options.A.model}`);
     });
     const discDir = fs.mkdtempSync(path.join(os.tmpdir(), "djt-disc-"));
@@ -669,8 +671,8 @@ describe('dianjiangtai', () => {
       assert.ok(djPeak.status === 0, 'CLI dianjangtai-select 峰时退出码 0  →  ' + (djPeak.stderr || "").slice(0, 200));
     });
     const djPeakOut = djPeak.status === 0 ? JSON.parse(djPeak.stdout) : { options: { A: {} } };
-    await t.test('CLI 峰时 A = master 路由+本地政策复算（#533 provider/model 全称）', () => {
-      assert.ok(djPeakOut.options.A.model === peakWant.rendered, 'CLI 峰时 A = master 复算  →  ' + JSON.stringify({ got: djPeakOut.options && djPeakOut.options.A, want: peakWant }));
+    await t.test('CLI 峰时 A = JSON 路由+本地政策复算（#533 provider/model 全称）', () => {
+      assert.ok(djPeakOut.options.A.model === peakWant.rendered, 'CLI 峰时 A = JSON 复算  →  ' + JSON.stringify({ got: djPeakOut.options && djPeakOut.options.A, want: peakWant }));
     });
     await t.test('CLI 峰时 A 带 provider 字段（#533）', () => {
       assert.ok(djPeakOut.options.A.provider === peakWant.provider, 'CLI 峰时 A 带 provider 字段（#533）  →  ' + JSON.stringify(djPeakOut.options.A));
@@ -689,8 +691,8 @@ describe('dianjiangtai', () => {
       assert.ok(djPeakOut.options.A.reason === expectPeak.options.A.reason, 'CLI 峰时 reason 与复算一致  →  ' + `${djPeakOut.options.A.reason} vs ${expectPeak.options.A.reason}`);
     });
     const djValley = cliDj(["--role", "写码", "--identity", "协调者", "--ts", TS_VALLEY, "--job-id", "wire-valley", "--events-dir", discDir]);
-    await t.test('CLI 谷时 A = master 路由+本地政策复算', () => {
-      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === valleyWant.rendered, 'CLI 谷时 A = master 复算  →  ' + (djValley.status === 0 ? JSON.parse(djValley.stdout).options.A.model : (djValley.stderr || "").slice(0, 120)));
+    await t.test('CLI 谷时 A = JSON 路由+本地政策复算', () => {
+      assert.ok(djValley.status === 0 && JSON.parse(djValley.stdout).options.A.model === valleyWant.rendered, 'CLI 谷时 A = JSON 复算  →  ' + (djValley.status === 0 ? JSON.parse(djValley.stdout).options.A.model : (djValley.stderr || "").slice(0, 120)));
     });
     const djNoTs = cliDj(["--role", "写码"]);
     await t.test('CLI 缺 --ts 非 0 退出（禁 Date.now）', () => {
@@ -790,19 +792,23 @@ describe('dianjiangtai', () => {
     fs.rmSync(bfDir, { recursive: true, force: true });
   });
 
-  it('#658 审读 A 位锁 GPT（2026-08-19 恢复顶位）', async (t) => {
+  it('#658 审读 A 位锁 GPT（2026-08-22 JSON 选型序）', async (t) => {
+    const policy = await routingPolicy();
+    const REVIEWER_ORDER = policy.reviewerOrder || [];
     const { pinReviewerSlotA } = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
-    await t.test('pinReviewerSlotA 门闩集合有 GPT 时顶 GPT（#658 恢复）', () => {
+    await t.test('pinReviewerSlotA 门闩集合有 GPT 时顶 GPT', () => {
       assert.ok(pinReviewerSlotA({
         models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "kimi-k3", provider: "cursor" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
         passerIds: ["grok-4.6", "claude-opus", "kimi-k3", "gpt-5.6-sol"],
-      }).model === "gpt-5.6-sol", 'pinReviewerSlotA 门闩集合有 GPT 时顶 GPT（#658 恢复）');
+        order: REVIEWER_ORDER,
+      }).model === "gpt-5.6-sol", 'pinReviewerSlotA 门闩集合有 GPT 时顶 GPT');
     });
-    await t.test('pinReviewerSlotA 无 GPT（被 UI ban 剔掉）时顶 Opus', () => {
+    await t.test('pinReviewerSlotA 无 GPT（被 UI ban 剔掉）时顶 grok', () => {
       assert.ok(pinReviewerSlotA({
         models: [{ id: "gpt-5.6-sol", provider: "gpt" }, { id: "claude-opus", provider: "claude" }, { id: "grok-4.6", provider: "grok" }],
         passerIds: ["grok-4.6", "claude-opus"],
-      }).model === "claude-opus", 'pinReviewerSlotA 无 GPT（被 UI ban 剔掉）时顶 Opus');
+        order: REVIEWER_ORDER,
+      }).model === "grok-4.6", 'pinReviewerSlotA 无 GPT（被 UI ban 剔掉）时顶 grok');
     });
     const slot = require("../scripts/lib/dianjiangtai-reviewer-slot.mjs");
     const models = [
@@ -811,16 +817,16 @@ describe('dianjiangtai', () => {
       { id: "kimi-k3", provider: "cursor" },
       { id: "grok-4.6", provider: "grok" },
     ];
-    await t.test('GPT 容量满后下一档是 Opus', () => {
-      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "claude-opus", "kimi-k3"] });
-      assert.ok(n.ok && n.next === "claude-opus", 'GPT 容量满后下一档是 Opus  →  ' + JSON.stringify(n));
+    await t.test('GPT 容量满后下一档是 kimi（JSON 序，Opus 禁用）', () => {
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "claude-opus", "kimi-k3"], order: REVIEWER_ORDER });
+      assert.ok(n.ok && n.next === "kimi-k3", 'GPT 容量满后下一档是 kimi  →  ' + JSON.stringify(n));
     });
-    await t.test('无 Opus 时 GPT 下一档是 kimi', () => {
-      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "kimi-k3"] });
-      assert.ok(n.ok && n.next === "kimi-k3", '无 Opus 时 GPT 下一档是 kimi  →  ' + JSON.stringify(n));
+    await t.test('无 kimi 时 GPT 下一档是 grok', () => {
+      const n = slot.nextReviewerAfter({ currentId: "gpt-5.6-sol", models, passerIds: ["gpt-5.6-sol", "grok-4.6"], order: REVIEWER_ORDER });
+      assert.ok(n.ok && n.next === "grok-4.6", '无 kimi 时 GPT 下一档是 grok  →  ' + JSON.stringify(n));
     });
     await t.test('选型序走完 → 没法再换', () => {
-      const n = slot.nextReviewerAfter({ currentId: "kimi-k3", models, passerIds: ["gpt-5.6-sol", "kimi-k3"] });
+      const n = slot.nextReviewerAfter({ currentId: "kimi-k3", models, passerIds: ["gpt-5.6-sol", "kimi-k3"], order: REVIEWER_ORDER });
       assert.ok(n.ok === false && n.exhausted === true, '选型序走完 → 没法再换  →  ' + JSON.stringify(n));
     });
     await t.test('planCapacitySwitch 认审官卡并换人', () => {
@@ -829,19 +835,16 @@ describe('dianjiangtai', () => {
         models,
         passerIds: ["gpt-5.6-sol", "kimi-k3"],
         workerId: "grok-4.6",
+        order: REVIEWER_ORDER,
       });
       assert.ok(p.ok && p.action === "switch" && p.to === "kimi-k3" && p.pr === 664, 'planCapacitySwitch 认审官卡并换人  →  ' + JSON.stringify(p));
     });
     await t.test('planCapacitySwitch 卡名不是审官 → 报帅', () => {
-      const p = slot.planCapacitySwitch({ displayName: "#452 - 看门狗正式版", models, passerIds: ["gpt-5.6-sol"] });
+      const p = slot.planCapacitySwitch({ displayName: "#452 - 看门狗正式版", models, passerIds: ["gpt-5.6-sol"], order: REVIEWER_ORDER });
       assert.ok(p.ok === false && p.action === "escalate", 'planCapacitySwitch 卡名不是审官 → 报帅  →  ' + JSON.stringify(p));
     });
-    const { parse: parseToml } = require("../scripts/lib/smol-toml.cjs");
-    function masterProviderOf(modelId) {
-      const r = spawnSync("git", ["show", "origin/master:docs/model-routing.toml"], { encoding: "utf8", cwd: REPO });
-      if (r.status !== 0) throw new Error(`git show origin/master 失败: ${(r.stderr || r.stdout || "").slice(0, 200)}`);
-      const models = parseToml(r.stdout).models || [];
-      const m = models.find(x => x && x.id === modelId);
+    function policyProviderOf(modelId) {
+      const m = (policy.models || []).find(x => x && x.id === modelId);
       return m && m.provider ? m.provider : null;
     }
     function localProviderOf(modelId) {
@@ -856,8 +859,8 @@ describe('dianjiangtai', () => {
     });
     const djReviewOut = djReview.status === 0 ? JSON.parse(djReview.stdout) : { options: { A: {} } };
     const gptProvider = localProviderOf("gpt-5.6-sol");
-    await t.test('CLI 审读 A = provider/gpt-5.6-sol（#658 顶位）', () => {
-      assert.ok(!!gptProvider && djReviewOut.options.A.model === `${gptProvider}/gpt-5.6-sol`, 'CLI 审读 A = provider/gpt-5.6-sol（#658 顶位）  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
+    await t.test('CLI 审读 A = provider/gpt-5.6-sol（GPT 顶位）', () => {
+      assert.ok(!!gptProvider && djReviewOut.options.A.model === `${gptProvider}/gpt-5.6-sol`, 'CLI 审读 A = provider/gpt-5.6-sol  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
     });
     await t.test('CLI 审读 A reason=reviewer_order', () => {
       assert.ok(djReviewOut.options.A.reason === "reviewer_order", 'CLI 审读 A reason=reviewer_order  →  ' + JSON.stringify(djReviewOut.options && djReviewOut.options.A));
@@ -870,10 +873,10 @@ describe('dianjiangtai', () => {
       assert.ok(djUi.status === 0, 'CLI 审读+UI 退出码 0  →  ' + (djUi.stderr || "").slice(0, 240));
     });
     const djUiOut = djUi.status === 0 ? JSON.parse(djUi.stdout) : { options: { A: {} } };
-    // #658（2026-08-19 恢复）：UI 类 GPT 禁令不动 → 审读撞 UI ban 时 GPT 被剔出门闩集合，A 位顺延 Opus。
-    const opusProvider = localProviderOf("claude-opus");
-    await t.test('CLI 审读撞 UI ban → A = provider/claude-opus（GPT 被剔，Opus 顶位）', () => {
-      assert.ok(!!opusProvider && djUiOut.options.A.model === `${opusProvider}/claude-opus`, 'CLI 审读撞 UI ban → A = provider/claude-opus（GPT 被剔，Opus 顶位）  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
+    const grokProvider = policyProviderOf("grok-4.6") || localProviderOf("grok-4.6");
+    const kimiProvider = policyProviderOf("kimi-k3") || localProviderOf("kimi-k3");
+    await t.test('CLI 审读撞 UI ban → A = provider/kimi-k3（GPT 被剔，JSON 序 kimi 顶位）', () => {
+      assert.ok(!!kimiProvider && djUiOut.options.A.model === `${kimiProvider}/kimi-k3`, 'CLI 审读撞 UI ban → A = provider/kimi-k3  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));
     });
     await t.test('CLI 审读撞 UI ban reason=reviewer_order', () => {
       assert.ok(djUiOut.options.A.reason === "reviewer_order", 'CLI 审读撞 UI ban reason=reviewer_order  →  ' + JSON.stringify(djUiOut.options && djUiOut.options.A));

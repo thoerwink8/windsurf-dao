@@ -23,7 +23,7 @@
 // thoerwink8/windsurf-dao-memory」。编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，
 // ⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
-// ⑤模型路由表（TOML 可解析 + 必填字段 + providers.launch + pipes + yml 同源 + nextLaunch 夹具）
+// ⑤模型路由（TOML providers.launch + JSON 政策 + yml 同源 + nextLaunch 夹具）
 // ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
 //   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
 //   不许静默跳过——SKIP 和 ok 必须能分开）。
@@ -280,6 +280,7 @@ function checkResidentBudget() {
 // 自发现：文件在不在、条目数是不是 0，都单独报红——不把「没扫到」当「扫完 0 违规」。
 
 const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
+const ROUTING_POLICY_FILE = join(ROOT, 'docs', 'model-routing.json');
 
 function missingKeys(entry, keys) {
   return keys.filter(k => {
@@ -305,9 +306,9 @@ function validBeijingWindows(s) {
   });
 }
 
-function checkModelRouting() {
+function checkRoutingProvidersToml() {
   if (!existsSync(ROUTING_FILE)) {
-    fail('docs/model-routing.toml 不在', '路由真相源文件缺失 ⇒ 本次等于没查；恢复文件', ROUTING_FILE);
+    fail('docs/model-routing.toml 不在', '路由 provider 模板缺失 ⇒ 本次等于没查；恢复文件', ROUTING_FILE);
     return;
   }
   let doc;
@@ -318,13 +319,73 @@ function checkModelRouting() {
     return;
   }
 
-  const models = Array.isArray(doc.models) ? doc.models : [];
-  const routes = Array.isArray(doc.routes) ? doc.routes : [];
-  const bans = Array.isArray(doc.bans) ? doc.bans : [];
-  const rules = Array.isArray(doc.rules) ? doc.rules : [];
+  const problems = [];
+  if (!doc.updated) problems.push('顶层缺 updated');
+
+  let launchProviders = 0;
+  for (const [name, p] of Object.entries(doc.providers || {})) {
+    if (!p || typeof p !== 'object') continue;
+    if (!p.launch || String(p.launch).trim() === '') continue;
+    launchProviders += 1;
+    const start = String(p.start || '').trim();
+    if (start !== 'agent' && start !== 'command') {
+      problems.push(`${name} 缺 start=agent|command`);
+    }
+  }
+  if (launchProviders === 0) {
+    problems.push('没扫到任何带 launch 的 provider，start 没查成');
+  }
+  const gptNote = String(doc.providers?.gpt?.launch_note || '');
+  if (/库默认走第二条|已存在树里只能 terminal create/.test(gptNote)) {
+    problems.push('gpt launch_note 仍教已存在树默认走 command');
+  }
+
+  const stray = ['models', 'routes', 'bans', 'rules'].filter(k => Array.isArray(doc[k]) && doc[k].length > 0);
+  if (stray.length) problems.push(`TOML 仍含已迁 JSON 的节：${stray.join('/')}`);
+
+  if (problems.length === 0) {
+    green(`provider 启动模板 ${launchProviders} 个有 launch，TOML 只留 providers`);
+  } else {
+    fail(`provider 模板校验不过 ${problems.length} 处`, 'launch/start 齐；模型/路由/禁令/规则只许在 docs/model-routing.json', problems.slice(0, 10).join(' '));
+  }
+}
+
+function checkRoutingPolicyJson() {
+  if (!existsSync(ROUTING_POLICY_FILE)) {
+    fail('docs/model-routing.json 不在', '选型 JSON 缺失 ⇒ 本次等于没查；恢复文件', ROUTING_POLICY_FILE);
+    return;
+  }
+  let doc;
+  try {
+    doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+  } catch (e) {
+    fail('docs/model-routing.json 不是合法 JSON', '按标准 JSON 修文件', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
+
+  let models;
+  let routes;
+  let bans;
+  let rules;
+  let reviewerOrder;
+  try {
+    const { modelsFromJson, routesFromJson, bansFromJson, reviewerSelectOrder } = require('./lib/model-routing-json.mjs');
+    models = modelsFromJson(doc);
+    routes = routesFromJson(doc);
+    bans = bansFromJson(doc).legacy;
+    rules = (Array.isArray(doc?.规则) ? doc.规则 : []).map(r => ({
+      rule: r.名称 || r.rule || '',
+      why: r.理由 || r.why || '',
+      decided: r.拍板 || r.decided || '',
+    })).filter(r => r.rule);
+    reviewerOrder = reviewerSelectOrder(doc);
+  } catch (e) {
+    fail('选型 JSON 转换失败', '修 JSON 结构或 model-routing-json.mjs', String(e.message || e).split(/\r?\n/)[0].slice(0, 160));
+    return;
+  }
 
   if (models.length === 0 && routes.length === 0 && bans.length === 0 && rules.length === 0) {
-    fail('路由表里一条模型/路由/禁令/规则都没扫到', '0 条 = 本次等于没查；按 schema 补条目', ROUTING_FILE);
+    fail('选型 JSON 里一条模型/路由/禁令/规则都没扫到', '0 条 = 本次等于没查；按 schema 补条目', ROUTING_POLICY_FILE);
     return;
   }
 
@@ -378,58 +439,48 @@ function checkModelRouting() {
     });
   });
 
-  let launchProviders = 0;
-  for (const [name, p] of Object.entries(doc.providers || {})) {
-    if (!p || typeof p !== 'object') continue;
-    if (!p.launch || String(p.launch).trim() === '') continue;
-    launchProviders += 1;
-    const start = String(p.start || '').trim();
-    if (start !== 'agent' && start !== 'command') {
-      problems.push(`${name} 缺 start=agent|command`);
-    }
-  }
-  if (launchProviders === 0) {
-    problems.push('没扫到任何带 launch 的 provider，start 没查成');
-  }
-  const gptNote = String(doc.providers?.gpt?.launch_note || '');
-  if (/库默认走第二条|已存在树里只能 terminal create/.test(gptNote)) {
-    problems.push('gpt launch_note 仍教已存在树默认走 command');
-  }
-
   if (usedProviders.size === 0) {
-    problems.push('没扫到任何带 provider 的模型，providers.launch 没查成');
-  } else {
-    for (const name of usedProviders) {
-      const p = doc.providers?.[name];
-      if (!p) { problems.push(`${name} 无 providers 节`); continue; }
-      if (!p.launch || String(p.launch).trim() === '') { problems.push(`${name} 缺 launch`); continue; }
-      if (String(p.launch).includes('{model}') && !p.launch_model && !p.default_model) {
-        problems.push(`${name} 的 launch 含 {model} 但缺 launch_model/default_model`);
+    problems.push('没扫到任何带 provider 的模型');
+  } else if (existsSync(ROUTING_FILE)) {
+    let provDoc;
+    try { provDoc = parseToml(readFileSync(ROUTING_FILE, 'utf8')); } catch { provDoc = null; }
+    if (provDoc) {
+      for (const name of usedProviders) {
+        const p = provDoc.providers?.[name];
+        if (!p) { problems.push(`${name} 无 TOML providers 节`); continue; }
+        if (!p.launch || String(p.launch).trim() === '') { problems.push(`${name} 缺 launch`); continue; }
+        if (String(p.launch).includes('{model}') && !p.launch_model && !p.default_model) {
+          problems.push(`${name} 的 launch 含 {model} 但缺 launch_model/default_model`);
+        }
       }
     }
   }
 
+  if (!Array.isArray(reviewerOrder) || reviewerOrder.length === 0) {
+    problems.push('审官选型序空（没查成）');
+  }
+
   const ymlPath = join(ROOT, 'policy', 'models.yml');
   if (!existsSync(ymlPath)) {
-    problems.push('policy/models.yml 不在（与 toml 同源没查成）');
+    problems.push('policy/models.yml 不在（与 JSON 同源没查成）');
   } else {
     const ymlIds = scanYmlModelIds(readFileSync(ymlPath, 'utf8'));
     if (ymlIds.length === 0) {
       problems.push('policy/models.yml 0 个 id（没扫成，不是齐）');
     } else {
       for (const id of modelIds) {
-        if (!ymlIds.includes(id)) problems.push(`toml 模型 ${id} 不在 models.yml`);
+        if (!ymlIds.includes(id)) problems.push(`JSON 模型 ${id} 不在 models.yml`);
       }
       for (const id of ymlIds) {
-        if (!modelIds.has(id)) problems.push(`models.yml 模型 ${id} 不在 toml`);
+        if (!modelIds.has(id)) problems.push(`models.yml 模型 ${id} 不在 JSON`);
       }
     }
   }
 
   if (problems.length === 0) {
-    green(`模型路由表 ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，字段与引用齐，${usedProviders.size} 个 provider 有 launch，yml 同源`);
+    green(`选型 JSON ${models.length} 模型/${routes.length} 路由/${bans.length} 禁令/${rules.length} 规则，审官序 ${reviewerOrder.length} 档，yml 同源`);
   } else {
-    fail(`模型路由表校验不过 ${problems.length} 处`, '模型要 id/provider/roles/status/why/decided；有 pipes 时 pipes[0] 必须等于该条 provider/cli_model，且每根管子的 provider 要有 launch 和 start=agent|command；路由要 role/beijing/model/fallback/why/decided，且 model/fallback 必须指向 models[].id、beijing 要是 HH:MM-HH:MM 逗号列表；禁令要 scope/why/decided；规则要 rule/why/decided；policy/models.yml 与 toml 模型 id 同源', problems.slice(0, 10).join(' '));
+    fail(`选型 JSON 校验不过 ${problems.length} 处`, '模型/路由/禁令/规则字段齐；pipes 与 provider 一致；model/fallback 指向 models[].id；yml 与 JSON 模型 id 同源', problems.slice(0, 10).join(' '));
   }
 }
 
@@ -460,10 +511,11 @@ function oracleNextLaunch({ slate, modelId, pipeIndex, hardFailsOnThisPipe }) {
 
 function checkNextLaunchFixture() {
   let modelIds = new Set();
-  if (existsSync(ROUTING_FILE)) {
+  if (existsSync(ROUTING_POLICY_FILE)) {
     try {
-      const doc = parseToml(readFileSync(ROUTING_FILE, 'utf8'));
-      for (const m of Array.isArray(doc.models) ? doc.models : []) {
+      const doc = JSON.parse(readFileSync(ROUTING_POLICY_FILE, 'utf8'));
+      const { modelsFromJson } = require('./lib/model-routing-json.mjs');
+      for (const m of modelsFromJson(doc)) {
         if (m && m.id) modelIds.add(m.id);
       }
     } catch { modelIds = new Set(); }
@@ -1219,7 +1271,8 @@ runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
-checkModelRouting();
+checkRoutingProvidersToml();
+checkRoutingPolicyJson();
 checkNextLaunchFixture();
 await checkCommandHelp();
 checkModeHookAlive();

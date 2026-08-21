@@ -23,8 +23,17 @@ const MODELS = [
   { id: 'claude-opus', provider: 'claude', roles: ['审查'] },
   { id: 'kimi-k3', provider: 'cursor', roles: ['审查'] },
 ];
+const POLICY_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/'));
 
 describe('#679 起审官同厂硬闸', () => {
+  let REVIEWER_ORDER;
+  async function reviewerOrder() {
+    if (!REVIEWER_ORDER) {
+      const { loadRoutingPolicy } = await POLICY_LOAD;
+      REVIEWER_ORDER = loadRoutingPolicy().reviewerOrder || [];
+    }
+    return REVIEWER_ORDER;
+  }
   it('纯函数三态：通过 / 同厂拒绝 / 没查成', async (t) => {
     const { assertCrossVendor } = await GATE_LOAD;
     const pass = assertCrossVendor({ workerId: 'grok-4.6', reviewerId: 'gpt-5.6-sol', models: MODELS });
@@ -79,12 +88,13 @@ describe('#679 起审官同厂硬闸', () => {
 
   it('注入失败换人跳过工人那一厂；走完仍同厂则升级', async (t) => {
     const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
     const passerIds = ['gpt-5.6-sol', 'claude-opus', 'kimi-k3'];
     const grokWorker = slot.nextReviewerAfter({
-      currentId: 'gpt-5.6-sol', models: MODELS, passerIds, workerId: 'grok-4.6',
+      currentId: 'gpt-5.6-sol', models: MODELS, passerIds, workerId: 'grok-4.6', order,
     });
-    await t.test('工人 grok、当前 GPT → 下一位 Opus，不是 grok', () => {
-      assert.ok(grokWorker.ok && grokWorker.next === 'claude-opus' && grokWorker.next !== 'grok-4.6',
+    await t.test('工人 grok、当前 GPT → 下一位 kimi，不是 grok', () => {
+      assert.ok(grokWorker.ok && grokWorker.next === 'kimi-k3' && grokWorker.next !== 'grok-4.6',
         JSON.stringify(grokWorker));
     });
     const skipKimi = slot.nextReviewerAfter({
@@ -92,6 +102,7 @@ describe('#679 起审官同厂硬闸', () => {
       models: MODELS,
       passerIds: ['gpt-5.6-sol', 'kimi-k3'],
       workerId: 'kimi-k3',
+      order,
     });
     await t.test('选型序走完仍同厂 → 升级，不落到工人那一厂', () => {
       assert.ok(skipKimi.ok === false && skipKimi.exhausted === true && /同厂/.test(skipKimi.error),
@@ -101,6 +112,7 @@ describe('#679 起审官同厂硬闸', () => {
 
   it('容量换人同一条：跳过工人那一厂；没查成工人则升级', async (t) => {
     const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
     const models = MODELS;
     const passerIds = ['gpt-5.6-sol', 'kimi-k3'];
     const ok = slot.planCapacitySwitch({
@@ -108,6 +120,7 @@ describe('#679 起审官同厂硬闸', () => {
       models,
       passerIds,
       workerId: 'grok-4.6',
+      order,
     });
     await t.test('工人 grok 时 GPT 下一档仍是 kimi', () => {
       assert.ok(ok.ok && ok.action === 'switch' && ok.to === 'kimi-k3' && ok.pr === 664, JSON.stringify(ok));
@@ -117,6 +130,7 @@ describe('#679 起审官同厂硬闸', () => {
       models,
       passerIds,
       workerId: 'kimi-k3',
+      order,
     });
     await t.test('下一档就是工人那一厂 → 升级，不换过去', () => {
       assert.ok(same.ok === false && same.action === 'escalate' && /同厂/.test(same.error), JSON.stringify(same));
@@ -125,6 +139,7 @@ describe('#679 起审官同厂硬闸', () => {
       displayName: 'PR-#664 审官·gpt-5.6-sol',
       models,
       passerIds,
+      order,
     });
     await t.test('没查成工人模型 → 升级不许换人', () => {
       assert.ok(miss.ok === false && miss.action === 'escalate' && miss.unscanned === true, JSON.stringify(miss));
@@ -132,6 +147,7 @@ describe('#679 起审官同厂硬闸', () => {
   });
 
   it('fallback 实际模型与卡名过期：按实际工人闸，不读卡名', async (t) => {
+    const order = await reviewerOrder();
     const {
       filterSlateSameVendor, assertLaunchedWorkers, resolveActualWorkerModel, assertCrossVendor,
     } = await GATE_LOAD;
@@ -200,6 +216,7 @@ describe('#679 起审官同厂硬闸', () => {
       models: MODELS,
       passerIds: ['gpt-5.6-sol', 'kimi-k3'],
       workerId: staleCard.model,
+      order,
     });
     await t.test('误读过期卡名 grok → 会换到实际工人同厂的 kimi', () => {
       assert.ok(wrong.ok && wrong.to === 'kimi-k3', JSON.stringify(wrong));
@@ -209,6 +226,7 @@ describe('#679 起审官同厂硬闸', () => {
       models: MODELS,
       passerIds: ['gpt-5.6-sol', 'kimi-k3'],
       workerId: actual.modelId,
+      order,
     });
     await t.test('按实际 kimi 换人 → 升级，不换到同厂', () => {
       assert.ok(right.ok === false && right.action === 'escalate' && /同厂/.test(right.error), JSON.stringify(right));
@@ -217,19 +235,22 @@ describe('#679 起审官同厂硬闸', () => {
 
   it('不改 pinReviewerSlotA 顶位', async (t) => {
     const slot = await SLOT_LOAD;
+    const order = await reviewerOrder();
     await t.test('门闩有 GPT 仍顶 GPT', () => {
       const p = slot.pinReviewerSlotA({
         models: MODELS,
         passerIds: ['grok-4.6', 'claude-opus', 'kimi-k3', 'gpt-5.6-sol'],
+        order,
       });
       assert.ok(p.model === 'gpt-5.6-sol', JSON.stringify(p));
     });
-    await t.test('无 GPT 仍顶 Opus', () => {
+    await t.test('无 GPT 按 JSON 序顶 grok', () => {
       const p = slot.pinReviewerSlotA({
         models: MODELS,
         passerIds: ['grok-4.6', 'claude-opus'],
+        order,
       });
-      assert.ok(p.model === 'claude-opus', JSON.stringify(p));
+      assert.ok(p.model === 'grok-4.6', JSON.stringify(p));
     });
   });
 
