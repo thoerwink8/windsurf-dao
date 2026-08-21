@@ -4,7 +4,7 @@
 # 匹配规则：bans 条目命中 (model, work_types?, identities?) —— models 必填，
 # work_types / identities 为空或缺失 = 不限（(m,*) 全工种/全身份禁）。
 # 自选（job.override）与尝鲜（job.explore）也不可绕过禁令；用户改禁令需改本文件。
-# 事实来源：docs/model-routing.toml [[bans]]（唯一真相），此处是它在点将台政策层的镜像。
+# 事实来源：docs/model-routing.json 禁令（唯一真相），此处是它在点将台政策层的镜像。
 # ============================================================================
 
 updated: "2026-08-22"

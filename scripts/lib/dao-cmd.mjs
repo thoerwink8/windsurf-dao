@@ -13,12 +13,14 @@ import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText, normalizePipes } from './next-launch.mjs';
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
+import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
 
 export const ROOT = resolve(import.meta.dirname, '..', '..');
 export const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
+export const ROUTING_POLICY_FILE = ROUTING_JSON;
 export const ESCAPE_LOG = join(ROOT, '_flow', 'cmd-escape.jsonl');
 export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
 
@@ -61,7 +63,7 @@ export const CONFIRM_PATTERNS = [
 
 // ── 路由表 ──────────────────────────────────────────────────────────
 
-export function loadRouting(file = ROUTING_FILE) {
+export function loadRoutingProviders(file = ROUTING_FILE) {
   if (!existsSync(file)) throw new Error(`路由表不在: ${file}`);
   let doc;
   try {
@@ -73,6 +75,24 @@ export function loadRouting(file = ROUTING_FILE) {
     throw new Error('路由表缺 [providers] 节');
   }
   return doc;
+}
+
+export function loadRouting(file = ROUTING_FILE) {
+  const providersDoc = loadRoutingProviders(file);
+  const policy = loadRoutingPolicy();
+  return {
+    ...providersDoc,
+    updated: policy.updated || providersDoc.updated,
+    models: policy.models,
+    routes: policy.routes,
+    bans: policy.bans,
+    rules: policy.rules,
+    reviewerOrder: policy.reviewerOrder,
+    policyBans: policy.policyBans,
+    rankOrderFor: policy.rankOrderFor.bind(policy),
+    pickRanked: policy.pickRanked.bind(policy),
+    raw: policy.raw,
+  };
 }
 
 export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = {}) {
@@ -2330,28 +2350,25 @@ export function windowContains(beijing, minutes) {
 export function recommendModel({ role, routing, now = new Date() } = {}) {
   if (!role) return { ok: false, error: 'recommendModel 要 role' };
   if (!routing) return { ok: false, error: 'recommendModel 要 routing' };
-  const routes = (Array.isArray(routing.routes) ? routing.routes : []).filter(r => r && r.role === role);
-  if (routes.length === 0) {
-    return { ok: false, error: `角色 ${role} 没有分时路由，请显式 --model` };
-  }
-  const mins = minutesInBeijing(now);
-  const hit = routes.find(r => windowContains(r.beijing, mins));
-  if (!hit) {
-    return { ok: false, error: `角色 ${role} 此刻没有匹配的分时路由，请显式 --model` };
+  const order = typeof routing.rankOrderFor === 'function'
+    ? routing.rankOrderFor('工人', role)
+    : [];
+  if (order.length === 0) {
+    return { ok: false, error: `角色 ${role} 没在 docs/model-routing.json 职责树里扫到顺位，请显式 --model` };
   }
   return {
     ok: true,
-    model: hit.model,
-    fallback: hit.fallback,
+    model: order[0],
+    fallback: order[1] || null,
     role,
-    beijing: hit.beijing,
-    why: hit.why || '',
+    rank: 1,
+    why: 'JSON 职责树顺位',
   };
 }
 
 /**
  * 派工约束硬闸。缺一即失败，并列出缺什么。
- * --role 而无 --model：读分时路由给推荐，必须 --confirm，禁静默默认。
+ * --role 而无 --model：读 JSON 职责树顺位给推荐，必须 --confirm，禁静默默认。
  * --merge-policy 默认 auto（拍板 issue #511：帅不再是合并关口）；选 manual 必须
  * 同时给 --merge-reason（例外留痕，理由为空即退出，不靠记性）。
  */
@@ -2401,7 +2418,7 @@ export function resolveDispatchConstraints({
         needsConfirm: true,
         missing: ['--confirm'],
         recommendation,
-        error: `分时路由推荐 ${recommendation.model}（角色 ${role}，北京 ${recommendation.beijing}）。加 --confirm 采用，或显式 --model。禁静默默认`,
+        error: `JSON 顺位推荐 ${recommendation.model}（角色 ${role}，顺位 ${recommendation.rank || 1}）。加 --confirm 采用，或显式 --model。禁静默默认`,
       };
     }
     resolvedModel = recommendation.model;
@@ -2427,8 +2444,10 @@ export function resolveDispatchConstraints({
         models,
         passerIds: models
           .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
+          .filter(m => !m.reviewerDisabled)
           .map(m => m.id),
         workerId: resolvedModel,
+        order: routing?.reviewerOrder,
       });
       error = next.ok && next.next ? `${error}；下一位 ${next.next}` : `${error}；${next.error}`;
     }

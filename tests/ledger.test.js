@@ -17,6 +17,7 @@ const { unclosedJobIds, describeUnclosedJobs, readLedgerEvents, queryLedger } = 
 const { redKindFromClosed, formatRedCell } = require('../scripts/calibrate.mjs');
 const { inspectLedgerGap, LEDGER_GAP_BASELINE_PR, LEDGER_GAP_HISTORICAL_GAPS, historicalGapNote } = require('../scripts/lib/ledger-gap-check.mjs');
 const { pinReviewerSlotA } = require('../scripts/lib/dianjiangtai-reviewer-slot.mjs');
+const POLICY_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'model-routing-json.mjs').replace(/\\/g, '/'));
 const { samplesFromEvents, reworkFromClosed, describeNoEvents } = require('../scripts/calibrate.mjs');
 
 const schema = JSON.parse(fs.readFileSync(path.join(REPO, 'schemas/events.schema.json'), 'utf8'));
@@ -444,26 +445,28 @@ describe('ledger', () => {
     });
   });
 
-  it('审读 A 位锁 GPT（#658 恢复）；撞 UI ban 顺延 Opus', async (t) => {
+  it('审读 A 位锁 GPT（2026-08-22 JSON 序）；撞 UI ban 顺延 grok/kimi', async (t) => {
+    const { loadRoutingPolicy } = await POLICY_LOAD;
+    const REVIEWER_ORDER = loadRoutingPolicy().reviewerOrder || [];
     const models = [
       { id: 'gpt-5.6-sol', provider: 'gpt' },
       { id: 'kimi-k3', provider: 'cursor' },
       { id: 'claude-opus', provider: 'claude' },
       { id: 'grok-4.6', provider: 'grok' },
     ];
-    const pinGpt = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus', 'kimi-k3', 'gpt-5.6-sol'] });
+    const pinGpt = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus', 'kimi-k3', 'gpt-5.6-sol'], order: REVIEWER_ORDER });
     await t.test('审读 A 位顶 GPT（即使评分第一是别人）', () => {
       assert.ok(pinGpt.model === 'gpt-5.6-sol' && pinGpt.reason === 'reviewer_order', '审读 A 位顶 GPT（即使评分第一是别人）  →  ' + JSON.stringify(pinGpt));
     });
-    const pinUi = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus'] });
-    await t.test('GPT 不在门闩集合（UI ban）→ 选型序 Opus', () => {
-      assert.ok(pinUi.model === 'claude-opus' && pinUi.reason === 'reviewer_order', 'GPT 不在门闩集合（UI ban）→ 选型序 Opus  →  ' + JSON.stringify(pinUi));
+    const pinUi = pinReviewerSlotA({ models, passerIds: ['grok-4.6', 'claude-opus'], order: REVIEWER_ORDER });
+    await t.test('GPT 不在门闩集合（UI ban）→ JSON 序 grok', () => {
+      assert.ok(pinUi.model === 'grok-4.6' && pinUi.reason === 'reviewer_order', 'GPT 不在门闩集合（UI ban）→ JSON 序 grok  →  ' + JSON.stringify(pinUi));
     });
-    const pinGptAlone = pinReviewerSlotA({ models, passerIds: ['gpt-5.6-sol'] });
+    const pinGptAlone = pinReviewerSlotA({ models, passerIds: ['gpt-5.6-sol'], order: REVIEWER_ORDER });
     await t.test('只剩 GPT → 顶 GPT（#658 恢复）', () => {
       assert.ok(pinGptAlone.model === 'gpt-5.6-sol' && pinGptAlone.reason === 'reviewer_order', '只剩 GPT → 顶 GPT（#658 恢复）  →  ' + JSON.stringify(pinGptAlone));
     });
-    const pinNone = pinReviewerSlotA({ models, passerIds: [] });
+    const pinNone = pinReviewerSlotA({ models, passerIds: [], order: REVIEWER_ORDER });
     await t.test('无人可派 → no_candidate', () => {
       assert.ok(pinNone.model === null && pinNone.reason === 'no_candidate', '无人可派 → no_candidate');
     });

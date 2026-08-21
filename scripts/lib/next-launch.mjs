@@ -40,16 +40,18 @@ export function attachPipes(ids, routingModels) {
 }
 
 /**
- * 过门闩后的模型序：路由第一（含 fallback 作名单下一模型），否则配额/最高分那条队列。
+ * 过门闩后的模型序：JSON 顺位第一，否则配额/最高分那条队列。
  * 返回裸 id 数组；管子由 attachPipes 另钉。
  */
-export function buildSlate({ passers, matchedRoute, quotaTop, byScore } = {}) {
+export function buildSlate({ passers, rankOrder, matchedRoute, quotaTop, byScore } = {}) {
   const passerIds = new Set((passers || []).map(d => d && d.model).filter(Boolean));
   const ordered = [];
   const push = (id) => {
     if (id && passerIds.has(id) && !ordered.includes(id)) ordered.push(id);
   };
-  if (matchedRoute) {
+  if (Array.isArray(rankOrder) && rankOrder.length > 0) {
+    for (const id of rankOrder) push(id);
+  } else if (matchedRoute) {
     push(matchedRoute.model);
     push(matchedRoute.fallback);
   }

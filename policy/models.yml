@@ -1,10 +1,10 @@
 # ============================================================================
 # 点将台模型目录（registry）——政策层，人类独占写（设计 docs/dianjiangtai-design.md A.1/A.3）
-# 事实来源：docs/model-routing.toml（路由真相源）与 issue #438 拍板。
-# 价格单位：元/百万 tokens（DeepSeek 官方价目注记 2026-08-14 誊抄，见 model-routing.toml 末尾）。
+# 事实来源：docs/model-routing.json（路由/模型登记）与 issue #438 拍板。
+# 价格单位：元/百万 tokens（DeepSeek 官方价目注记 2026-08-14 誊抄，见 model-routing.json）。
 # 美元折算：设计 B.2 要求全部折算美元，但 CNY→USD 汇率未拍板 → fx 待补；
 # 未核价模型的 pricing.verified_at 为 null，选型对其成本记「价目待补」，不参与 min-max 极值。
-# 加模型：先改这里，再（若涉及路由/禁令）同步 model-routing.toml。
+# 加模型：先改 JSON 真相源，再同步本 registry。
 # ============================================================================
 
 updated: "2026-08-22"
