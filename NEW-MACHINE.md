@@ -346,9 +346,18 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 
 ## 11. 接上 skills
 
-skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
+仓内真相源是 `host/skills/<name>/SKILL.md`。**Cursor Desktop 不会读 `host/skills`**，也不读 Claude 的 `~/.claude/skills`；各自宿主只扫自己的目录：
 
-建 SymbolicLink 需要开发者模式或管理员权限（Windows）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只警告不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。
+| 宿主 | 发现路径 | 备注 |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/<name>/` | 本机 symlink → 仓内 `host/skills/<name>` |
+| Cursor Desktop | `~/.cursor/skills/<name>/`（用户级）或项目 `.cursor/skills/<name>/` | 同上；**不要**往 `~/.cursor/skills-cursor/` 写（系统内置区） |
+
+skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。建 SymbolicLink 需要开发者模式或管理员权限（Windows）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只警告不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。
+
+### 11.1 Claude Code：`~/.claude/skills`
+
+在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
 
 ```powershell
 & {
@@ -376,7 +385,7 @@ skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本�
 }
 ```
 
-验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`admit-push` 在 = 承认即派入口随机器带走了（#583：用户调用后走 issue / dispatch / park，不加账本）。
+验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`admit-push` 在 = 承认即派入口随机器带走了（#583：用户调用后走 issue / dispatch / park，不加账本）。`pr-fast` 在 = 快速/极速模式入口随机器带走了。
 
 `dao-project`（项化派工，含消歧门）由上面循环自动接上，无需单独动作；要单条建链（或循环没覆盖时手动补）：
 
@@ -386,6 +395,48 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\da
 ```
 
 建链是本机动作、不进 git（#565 消歧记录：symlink 归帅建）；验证 `ls ~/.claude/skills/dao-project` 能看到 `SKILL.md`。
+
+### 11.2 Cursor Desktop：`~/.cursor/skills`
+
+同一套循环，把 `$dstRoot` 换成 Cursor 用户级目录即可（也可整段重跑，只改这一行）：
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $src = Join-Path (Resolve-Path .).Path 'host\skills'
+  if (-not (Test-Path -LiteralPath $src)) { throw "host/skills 不在: $src" }
+  $dstRoot = Join-Path $env:USERPROFILE '.cursor\skills'   # Cursor，不是 .claude
+  New-Item -ItemType Directory -Path $dstRoot -Force | Out-Null
+  foreach ($s in Get-ChildItem -LiteralPath $src -Directory) {
+    $want = $s.FullName
+    $dst = Join-Path $dstRoot $s.Name
+    $item = Get-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
+      $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
+      if ($got -eq $want) { Write-Host "ok   $($s.Name)"; continue }
+      $item.Delete()
+    } elseif ($item) {
+      Write-Warning "跳过 $($s.Name)：本机是真目录，先移走再重跑"
+      continue
+    }
+    New-Item -ItemType SymbolicLink -Path $dst -Target $want | Out-Null
+    Write-Host "link $($s.Name) -> $want"
+  }
+}
+```
+
+只补 `pr-fast` 一条时：
+
+```powershell
+$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.cursor\skills" | Out-Null
+New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.cursor\skills\pr-fast" -Target "$repo\host\skills\pr-fast" | Out-Null
+```
+
+验证：`Test-Path $env:USERPROFILE\.cursor\skills\pr-fast\SKILL.md` 为 True。
+
+**怎么触发（Cursor）**：slash 菜单靠 frontmatter 的 `name`（如 `pr-fast` → 可出现 `/pr-fast`）；口语触发词以 skill 正文为准——`快速模式` / `极速模式` / `pr-fast` / `直开PR` / `快单`。装完 symlink 后**新开 Agent 会话**再试（已开会话不一定立刻扫到新链）。项目级 `.cursor/skills/` 亦可，但本仓默认用用户级 symlink，与 Claude 装法对称、不进 git。
 
 ## 12. Orca 快捷命令：从零拷问
 
