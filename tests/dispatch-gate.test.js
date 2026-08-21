@@ -12,6 +12,7 @@ const { spawnSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const GATE = path.join(REPO, 'scripts', 'lib', 'dispatch-gate.mjs');
 const HOOK = path.join(REPO, 'scripts', 'lib', 'dispatch-gate-hook.mjs'); // 随仓 .claude/settings.json 挂的入口（#553）
+const CURSOR_HOOK = path.join(REPO, 'scripts', 'lib', 'cursor-dispatch-gate-hook.mjs'); // 随仓 .cursor/hooks.json 挂的入口（#707）
 const CHECK = path.join(REPO, 'scripts', 'lib', 'dispatch-gate-check.mjs');
 const GATE_LOAD = import('file://' + GATE.replace(/\\/g, '/'));
 const CHECK_LOAD = import('file://' + CHECK.replace(/\\/g, '/'));
@@ -24,6 +25,18 @@ function payload(command) {
   });
 }
 
+// Cursor beforeShellExecution 的 stdin 形（#707 实测：command 在顶层，见 Cursor 文档/源码）。
+function cursorPayload(command) {
+  return JSON.stringify({
+    conversation_id: 'c1',
+    generation_id: 'g1',
+    command,
+    cwd: '',
+    hook_event_name: 'beforeShellExecution',
+    workspace_roots: ['C:/repo'],
+  });
+}
+
 function runGate(script, command, envExtra = {}) {
   return spawnSync(process.execPath, [script], {
     encoding: 'utf8',
@@ -32,6 +45,21 @@ function runGate(script, command, envExtra = {}) {
     windowsHide: true,
     env: { ...process.env, ...envExtra },
   });
+}
+
+function runCursorGate(script, command, envExtra = {}) {
+  return spawnSync(process.execPath, [script], {
+    encoding: 'utf8',
+    input: cursorPayload(command),
+    timeout: 15000,
+    windowsHide: true,
+    env: { ...process.env, ...envExtra },
+  });
+}
+
+/** 从 Cursor 钩子 stdout 抽响应 JSON（适配层永远 exit 0，结果全在 stdout）。 */
+function cursorResponse(r) {
+  try { return JSON.parse(String(r.stdout || '').trim()); } catch { return null; }
 }
 
 describe('dispatch-gate', () => {
@@ -148,6 +176,53 @@ describe('dispatch-gate', () => {
     });
   });
 
+  it('Cursor 形 stdin fixture：#707 判定与 Claude 形一致', async (t) => {
+    const { extractHookCommand } = await GATE_LOAD;
+    const cursor = JSON.parse(cursorPayload('orca orchestration worker-start --task t'));
+    await t.test('extractHookCommand 抽得出 Cursor 顶层 command 字段', () => {
+      assert.ok(extractHookCommand(cursor) === 'orca orchestration worker-start --task t',
+        'extractHookCommand 抽得出 Cursor 顶层 command 字段  →  ' + extractHookCommand(cursor));
+    });
+
+    // Claude 形入口（.claude/settings.json 挂的 dispatch-gate-hook.mjs）吃 Cursor 形 stdin 也应拦
+    const rawBlocked = runCursorGate(HOOK, 'orca orchestration worker-start --task t --worktree w');
+    await t.test('Claude 形入口吃 Cursor 形载荷：裸 worker-start → exit 2', () => {
+      assert.ok(rawBlocked.status === 2, 'Claude 形入口吃 Cursor 形载荷：裸 worker-start → exit 2  →  status=' + rawBlocked.status);
+    });
+
+    // Cursor 形入口（.cursor/hooks.json 挂的 cursor-dispatch-gate-hook.mjs）：exit 恒 0，结果在 stdout JSON
+    const cases = [
+      ['放行 dao.mjs dispatch', 'node scripts/dao.mjs dispatch --name x', 'allow', null],
+      ['拦裸 worker-start', 'orca orchestration worker-start --task t --worktree w', 'deny', /dao\.mjs dispatch/],
+      ['拦心跳', 'orca orchestration send --type heartbeat --subject alive', 'deny', /心跳不准发/],
+      ['拦 run-use', 'orca orchestration run-use --id run_x', 'deny', /coordinator/],
+      ['放行普通 inbox', 'orca orchestration inbox --json', 'allow', null],
+      ['放行逃生口 raw', 'node scripts/dao.mjs raw -- orca orchestration worker-start --task t', 'allow', null],
+    ];
+    for (const [label, cmd, expect, re] of cases) {
+      const r = runCursorGate(CURSOR_HOOK, cmd);
+      const resp = cursorResponse(r);
+      await t.test(`Cursor 形入口：${label}`, () => {
+        assert.ok(r.status === 0, `Cursor 形入口：${label} 应 exit 0（Windows 包装吞退出码，协议全靠 stdout JSON）  →  status=${r.status} ${r.stderr}`);
+        assert.ok(resp && resp.permission === expect, `Cursor 形入口：${label} 应 permission=${expect}  →  ` + JSON.stringify(resp));
+        if (re) assert.ok(re.test(JSON.stringify(resp)), `Cursor 形入口：${label} 应带提示  →  ` + JSON.stringify(resp));
+      });
+    }
+
+    const crashed = runCursorGate(CURSOR_HOOK, 'orca orchestration send --type heartbeat', { DISPATCH_GATE_CRASH: '1' });
+    const crashResp = cursorResponse(crashed);
+    await t.test('Cursor 形入口：故意崩 → deny JSON（fail-closed 不丢）', () => {
+      assert.ok(crashed.status === 0 && crashResp && crashResp.permission === 'deny' && /fail-closed|崩/.test(crashResp.user_message || ''),
+        'Cursor 形入口：故意崩 → deny JSON（fail-closed 不丢）  →  ' + JSON.stringify(crashResp));
+    });
+
+    const decoy = runCursorGate(CURSOR_HOOK, 'echo "dao.mjs raw" && orca orchestration worker-start --task t --worktree w');
+    const decoyResp = cursorResponse(decoy);
+    await t.test('Cursor 形入口：#575 假象命令仍 deny', () => {
+      assert.ok(decoyResp && decoyResp.permission === 'deny', 'Cursor 形入口：#575 假象命令仍 deny  →  ' + JSON.stringify(decoyResp));
+    });
+  });
+
   it('检查器：零样本 vs 真闸', async (t) => {
     const { checkDispatchGate } = await CHECK_LOAD;
     const live = checkDispatchGate({ root: REPO });
@@ -187,6 +262,53 @@ describe('dispatch-gate', () => {
     const ghost = checkDispatchGate({ root: ghostRoot });
     await t.test('闸门指向的脚本不存在 → 报没跑成/指向空气', () => {
       assert.ok(!!ghost.fail && /脚本都没跑成|指向空气/.test(ghost.fail[0]), '闸门指向的脚本不存在 → 报没跑成/指向空气  →  ' + JSON.stringify(ghost));
+    });
+
+    // #707：.claude 正常但 .cursor 挂载面缺失 → 红（Cursor 帅位是主挂载面）
+    const claudeOnlyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-claudeonly-'));
+    fs.mkdirSync(path.join(claudeOnlyRoot, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(claudeOnlyRoot, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] },
+    }), 'utf8');
+    const claudeOnly = checkDispatchGate({ root: claudeOnlyRoot });
+    await t.test('.claude 在但 .cursor/hooks.json 不在 → 报没查成', () => {
+      assert.ok(!!claudeOnly.fail && /\.cursor\/hooks\.json 不在/.test(claudeOnly.fail[0] + claudeOnly.fail[2]),
+        '.claude 在但 .cursor/hooks.json 不在 → 报没查成  →  ' + JSON.stringify(claudeOnly));
+    });
+
+    // #707：.cursor 有派工闸条目但没 failClosed:true → 红（Windows 包装吞退出码，超时/崩溃靠它兜底）
+    const noFailClosedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-nofailclosed-'));
+    fs.mkdirSync(path.join(noFailClosedRoot, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(noFailClosedRoot, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] },
+    }), 'utf8');
+    fs.mkdirSync(path.join(noFailClosedRoot, '.cursor'), { recursive: true });
+    fs.writeFileSync(path.join(noFailClosedRoot, '.cursor', 'hooks.json'), JSON.stringify({
+      version: 1,
+      hooks: { beforeShellExecution: [{ type: 'command', command: `node "${CURSOR_HOOK}"`, timeout: 8 }] },
+    }), 'utf8');
+    const noFailClosed = checkDispatchGate({ root: noFailClosedRoot });
+    await t.test('.cursor 派工闸条目缺 failClosed:true → 报红', () => {
+      assert.ok(!!noFailClosed.fail && /failClosed/.test(noFailClosed.fail[2] + noFailClosed.fail[0]),
+        '.cursor 派工闸条目缺 failClosed:true → 报红  →  ' + JSON.stringify(noFailClosed));
+    });
+
+    // #707：.cursor 面直挂 Claude 形入口（dispatch-gate-hook.mjs，exit 2 协议）→ 红
+    // （Cursor 吃不到 exit 2，必须走 cursor-dispatch-gate-hook.mjs 的 JSON 协议）
+    const wrongEntryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-gate-wrongentry-'));
+    fs.mkdirSync(path.join(wrongEntryRoot, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(wrongEntryRoot, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: `node "${HOOK}"` }] }] },
+    }), 'utf8');
+    fs.mkdirSync(path.join(wrongEntryRoot, '.cursor'), { recursive: true });
+    fs.writeFileSync(path.join(wrongEntryRoot, '.cursor', 'hooks.json'), JSON.stringify({
+      version: 1,
+      hooks: { beforeShellExecution: [{ type: 'command', command: `node "${HOOK}"`, timeout: 8, failClosed: true }] },
+    }), 'utf8');
+    const wrongEntry = checkDispatchGate({ root: wrongEntryRoot });
+    await t.test('.cursor 面直挂 exit 2 协议入口 → 报红', () => {
+      assert.ok(!!wrongEntry.fail && /Cursor 面/.test(wrongEntry.fail[0] + wrongEntry.fail[2]),
+        '.cursor 面直挂 exit 2 协议入口 → 报红  →  ' + JSON.stringify(wrongEntry));
     });
   });
 });

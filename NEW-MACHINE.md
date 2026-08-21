@@ -281,6 +281,27 @@ node scripts/lib/guard-session-hook.mjs
 
 自停 / 查不成写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并经 `dao-watchdog[bot]` 在 GitHub 开/评「【看门狗】守卫自停」台账（同一事故键不刷）。没装 watchdog 凭据会在 jsonl 里记「这台机器没装」，不许当报成功——凭据装法见 §4b。`~/.dao/guard` 换机重建，不要拷。
 
+## 9c. Cursor 帅位挂载与派工闸口（#707）
+
+帅位搬进 Cursor 后，保活 / 盘面 / 派工闸在 Cursor 侧由随仓 `.cursor/hooks.json` 挂载（**随仓生效，无装机动作**；Cursor 对 hooks.json 有文件 watcher，保存即自动重载，已开着的会话不用重开；clone 即带）：
+
+- `sessionStart` → `node scripts/lib/cursor-context-hook.mjs guard-session-hook.mjs`：会话启动判定帥位并 ensure 守卫（逻辑与 §9b 的 SessionStart 同一份 `guard-session-hook.mjs`）。
+- `beforeSubmitPrompt` → `node scripts/lib/cursor-context-hook.mjs board-hook.mjs`：每轮盘面 + 信箱台自愈 + 守卫兜底（同一份 `board-hook.mjs`）。
+- `beforeShellExecution` → `node scripts/lib/cursor-dispatch-gate-hook.mjs`（timeout 8 + `failClosed: true`）：派工闸，判定逻辑唯一一份在 `dispatch-gate.mjs`，本文件只做协议翻译。
+
+**为什么盘面/守卫要包一层适配层（#707 实测）**：Cursor 钩子只认 stdout JSON——纯文本输出被当 invalid JSON 丢弃，`[盘]`/`[卫]` 行进不了会话上下文。适配层把子脚本输出原样包进 JSON 的 `additional_context` 字段（Cursor 唯一能注入上下文的通道），永远 `continue: true`（只报不拦）。**为什么派工闸也要适配层**：Cursor 在 Windows 上用 PowerShell 包装执行钩子（`Get-Content payload -Raw | & { $input | <hook> }`），脚本块调用会把子进程退出码吞成 0——exit 2 语义到不了宿主；且 `failClosed: true` + 空 stdout 会把「放行」也拦掉。所以 Cursor 面必须 exit 恒 0，拦/放全靠 stdout JSON 的 `permission`（deny/allow），`failClosed: true` 兜超时与崩溃。
+
+**Cursor 帅位的派工闸口**：`dao.mjs dispatch` / `worker-start` 要求调用进程有 Orca 终端身份（worker-start 校验 Task Run 的 coordinator 终端，非 Orca 终端报 `consumer_fenced`）。Cursor 的 shell 不是 Orca 终端，所以 Cursor 帅位派工要经 **master 卡的「派工闸口（勿关）」哑终端**：`orca terminal send --terminal <闸口 handle> --text '<dispatch 命令>' --enter`，结果用 `orca terminal read` 读回。闸口与信箱台/看门狗哑终端同 pattern，不跑 AI、不花 token。其余帅位动作（notify 发信、收信、关单、监控）Cursor 直接做，不需要闸口。
+
+Cursor 面验（进程级，等于宿主协议的一次复刻）：
+
+```bash
+# 派工闸：Cursor 形 stdin 载荷 → 拦裸 worker-start（deny JSON、exit 0）
+'{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs
+# 盘面适配层：输出应是一行 {"continue":true,"additional_context":"[盘] ..."} 的 JSON
+node scripts/lib/cursor-context-hook.mjs board-hook.mjs
+```
+
 ## 10. 接上 memory
 
 memory 住在**独立仓** `thoerwink8/windsurf-dao-memory`（私有，clone 需有权限）。本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`，是一个指向那个仓 clone 的 Junction。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。
