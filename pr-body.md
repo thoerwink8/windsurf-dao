@@ -1,38 +1,26 @@
 ## 目标
 
-master 卡 comment 的定界区在派工 / 清卡 / 合并三个事件点全量重写为当前在途单号（写时即对）。复用 `mutateWorktreeComment`，不走 watchdog 轮询、不注入 `/rename`。署名 issue #684（关单交给 `scripts/close-issues.mjs`）。
+#682 微通道：几行改动 20 秒合完。做 `scripts/quick-fix.mjs` 原子脚本（一步完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步 attach 异厂审官；任一步失败整体回滚并留痕），#679 同厂硬闸在微通道口照走（`--model` 必须显式声明，查不到 / 同厂拒绝起审官），dispatch SKILL 主会话红线加微通道唯一例外。
 
 ## 验收标准
 
-- [x] 造新增：盘面多一张带单号的卡 → master 定界区出现该号
-- [x] 造删除：卡从盘面消失 → 该号从定界区消失
-- [x] 造假号：手改 master 定界区塞不存在的号 → 下一次事件后收敛
-- [x] 造多帅：无法分辨归属，定界区写全体在途单（退化行为有测试钉）
-- [x] 盘面没查成 ≠ 在途 0：ps 失败不许把定界区抹空
-- [x] 卡名里的 `#N` 不算判据（#589）；外仓卡不算（#492）
-- [x] 过期前缀「各自在途单号见各自终端标题」改为「在途单号见定界区」
-- [x] `node --test tests/master-title.test.js tests/dao.test.js tests/flow.test.js tests/board-hook.test.js` 相关绿
-- [x] `node scripts/dao-check.mjs` 不新增红项（全仓两项红：open 未在做超阈、账本断流，本单未动）
-- [x] PR 正文不写 GitHub 自动关单词
+- [ ] `scripts/quick-fix.mjs` 存在且原子：一步完成 分支 → commit → push → PR → label → attach 审官；任一步失败整体退出并留痕（fail-visible），不留半成品分支
+- [ ] 审官 attach 的 #679 闸生效：主会话模型未声明 / 与审官同厂 / 模型查不到 → 非零退出
+- [ ] 人的操作 = 1 个命令 + 确认（实测计时写入 PR 正文）
+- [ ] 故意构造「几行改动」跑一遍，20 秒内产出 PR，审官异步起；构造「同厂审官」样本被当场拦
+- [ ] dispatch SKILL 红线处已改并注明例外；`node scripts/dao-check.mjs` 全绿
 
 ## 进展
 
-- [x] 空提交撑分支、开 draft PR #685
-- [x] `syncMasterTicketZone`：全量重写 + 回读
-- [x] 挂点：`dao.mjs dispatch` / `worktree-rm` / `flow.mjs` MERGED
-- [x] 四条故意构造样本 + 没查成负控
-- [x] 文档：dispatch skill 命名条补 master 卡钩子
-- [x] 返工：过期前缀改为在途单号见定界区
-- [x] rebase 到 origin/master（#680/#689 已合）
+- [x] 开工：空提交撑分支 + draft PR（本页）
+- [ ] `scripts/lib/quick-fix.mjs` 纯函数层（闸计划 / 审官解析 / 分支名 / label / PR 正文）
+- [ ] `scripts/quick-fix.mjs` CLI（preflight → 闸 → 分支 → commit → push → PR → label → 壳卡 → 异步审官 → 回滚）
+- [ ] dispatch SKILL 主会话红线加微通道例外
+- [ ] `scripts/lib/quick-fix-check.mjs` + dao-check 注册 + 红/绿/空样本
+- [ ] `tests/quick-fix.test.js`（纯函数 + CLI 故意同厂样本）
+- [ ] 实跑验收：同厂样本被拦 + 真 quick-fix 20 秒产出 PR + 审官异步起
+- [ ] dao-check 全绿 → ready
 
-## 体系类改动
+署名 issue #682，关单交给 `scripts/close-issues.mjs`。
 
-1. 谁提的，发生在什么场景？2026-08-21 用户拍板。#545「watchdog 轮询 + 注入 /rename 纠正帅位标题」被 grill-ai 从零拷问推翻：同一目标第 2 层补丁、检测-纠正式、抢输入框（#644）、且 watchdog 已停摆（#683）。要的是面板上的在途单号在事件发生时就是对的。
-
-2. 删哪一层能让这个问题不存在？删掉「写错了再巡检纠正」这一层。单号只在三个会改变盘面的事件点从 `worktree ps` 全量重写进 master 卡定界区。没有事件就没有纠偏——长静默期内的手改是拍板取舍，不另造轮询。
-
-3. 如果从零重做，今天还会造它吗？会造「事件点全量重写定界区」。不会造 watchdog 轮询、不会造终端 `/rename`，也不会造 board-hook 每轮 sync。
-
-## 设计阶段
-
-issue #684 已消歧（grill-ai 推翻 #545 后用户点事件钩子）。解空间已收敛，本单不重出盲设计题。
+体系类改动（改协作约定：主会话红线例外 + 新通道），合门 merge-policy: manual。
