@@ -320,6 +320,8 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 
 **事前拦截**（含一层子目录，`-Recurse`）：本机是真目录时，脚本先核对本机每个文件是否都在 memory 仓里。本机有、memory 仓没有的文件会直接 throw，**不会改名、不会建 Junction**。同名但内容不同的只警告列出，仍会接上——接上后本机这几条变成仓内版本，旧内容留在改名备份目录里，需要就去比对。已是正确 Junction（目标 = 你的 memory 仓）则什么都不做、原地返回。接上之后 Claude 每写一条 memory，memory 仓 `git status` 就会多一条未提交变更，随手提交，别攒，也别 `git stash` 把记忆藏起来。
 
+**自动同步**（2026-08-22 起）：`guard-keepalive --once` 尾部顺带跑 `scripts/memory-sync.mjs --once`——有未提交改动自动 commit、有未推送自动 push、远端领先先 `pull --rebase`（冲突只报不合、push 被拒不强推）。时间门 30 分钟，高频触发无害；手动立刻同步用 `node scripts/memory-sync.mjs --force`。新机不用额外装东西，接上 memory + 守卫保活后就自动有了。
+
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
