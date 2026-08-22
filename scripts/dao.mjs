@@ -3,7 +3,8 @@
 //
 // 删「帅拼命令字符串」这一层。启动 / 编排走这里；查询类不在本单。
 // CLI 还是约束载体：派工缺 --split / --model|--role / --reviewer 就跑不起来。
-// 启动模板只从 docs/model-routing.toml 读，这里零硬编码。
+// 起 agent：先问 orca-agent-cmds（Orca Desktop 启动覆盖），再回落 model-routing.toml。
+// 这里零硬编码。
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
@@ -170,6 +171,13 @@ const ORCA_TIMEOUT_MS = 30000;
 
 function errText(e) {
   return orcaErrorText(e);
+}
+
+/** Orca 桌面覆盖启动时，routing 模板的保命旗标被丢要显形（#737 审读发现：静默丢会卡框叫醒帅）。 */
+function noteDroppedFlags(launch) {
+  if (launch && Array.isArray(launch.droppedFlags) && launch.droppedFlags.length) {
+    console.error(`[dao] Orca 启动命令缺 routing 模板的旗标：${launch.droppedFlags.join(' ')}——有意去掉请忽略，否则在 Orca 桌面该智能体的 defaultArgs 里补齐`);
+  }
 }
 
 // spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
@@ -458,6 +466,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     } catch (e) {
       return { ok: false, error: String(e.message || e), attempts };
     }
+    noteDroppedFlags(launch);
     const cap = assertCodexLaunch({ command: launch.command });
     if (!cap.ok) return { ok: false, error: cap.error, attempts };
 
@@ -801,6 +810,8 @@ function cmdDispatch(args) {
     workerLaunch = resolveLaunch({ model: startEntry.id, pipe: startEntry.pipes[0], routing, root: ROOT });
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
+  noteDroppedFlags(workerLaunch);
+  noteDroppedFlags(reviewerLaunch);
 
   const workerCap = assertCodexLaunch({ command: workerLaunch.command });
   if (!workerCap.ok) fail(workerCap.error);
@@ -1203,6 +1214,7 @@ function cmdDispatchBatch(args) {
   try {
     launch = resolveLaunch({ model: args.model, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
+  noteDroppedFlags(launch);
   const cap = assertCodexLaunch({ command: launch.command });
   if (!cap.ok) fail(cap.error);
   plan.workerLaunch = launch.command;
@@ -1991,6 +2003,7 @@ function cmdStart(args) {
       root: ROOT,
     });
   } catch (e) { fail(String(e.message || e)); }
+  noteDroppedFlags(launch);
 
   const startCap = assertCodexLaunch({ command: launch.command });
   if (!startCap.ok) fail(startCap.error);
@@ -2375,6 +2388,7 @@ function cmdReviewerCreate(args) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
     fail(String(e.message || e), { ...plan, reviewerId, reviewerPath });
   }
+  noteDroppedFlags(reviewerLaunch);
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) {
     orca(argsWorktreeRm({ worktree: reviewerId, force: true }));
@@ -2565,6 +2579,7 @@ function cmdReviewerAttach(args) {
   try {
     reviewerLaunch = resolveLaunch({ model: args.reviewer, routing, root: ROOT });
   } catch (e) { fail(String(e.message || e)); }
+  noteDroppedFlags(reviewerLaunch);
   const cap = assertCodexLaunch({ command: reviewerLaunch.command });
   if (!cap.ok) fail(cap.error);
 
