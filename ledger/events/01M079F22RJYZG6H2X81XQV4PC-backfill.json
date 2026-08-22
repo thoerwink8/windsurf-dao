@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T15:20:07+08:00",
+  "machine": "backfill",
+  "seq": 204,
+  "job_id": "gh-pr-592",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #592；[grok] #586 审官按需起阶段二：接线拆旧路；判定行红 2 项",
+  "pr_number": 592,
+  "source": "github-backfill",
+  "event_id": "7364bde30e78aaf9a70610ba1790fed517a20ac17b1dddc07aafdc05ecad1abc"
+}

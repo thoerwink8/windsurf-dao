@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-17T12:19:08+08:00",
+  "machine": "backfill",
+  "seq": 185,
+  "job_id": "gh-pr-582",
+  "model": "grok-4.6",
+  "identity": "工人",
+  "work_type": "写码",
+  "model_version": "grok-4.6",
+  "terminal": "grok",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "b777aa8d1deb34118dfd028cf1028a3f1eb3704fc5a3136bd7ed024fa3e3918e",
+  "pr_number": 582,
+  "source": "github-backfill",
+  "event_id": "fee1b2c23a5c87e7f86ec67a848c801241966701c5666b1d57eb9901254bbfa6"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T02:17:25+08:00",
+  "machine": "backfill",
+  "seq": 304,
+  "job_id": "gh-pr-653",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #653；[pi] #651 认出 Cursor [Pasted text #N +M lines] 与未发出 follow-up；判定行红 2 项",
+  "pr_number": 653,
+  "source": "github-backfill",
+  "event_id": "6c51f5c96d611c0977640ef3f39856ad23c2609ebf67fdc35ddf2ac372b6dedb"
+}

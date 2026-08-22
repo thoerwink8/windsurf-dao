@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T12:05:53+08:00",
+  "machine": "backfill",
+  "seq": 412,
+  "job_id": "gh-pr-730",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #730；[devin] #682 微通道：quick-fix 原子脚本 + #679 闸 + 红线例外；判定行红 2 项",
+  "pr_number": 730,
+  "source": "github-backfill",
+  "event_id": "489e862f65a0d1c969927b740ad046dd21e9939f18da74cbc25146c7f68b34d3"
+}

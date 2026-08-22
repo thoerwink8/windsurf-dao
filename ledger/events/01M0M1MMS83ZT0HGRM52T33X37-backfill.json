@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-22T14:13:29+08:00",
+  "machine": "backfill",
+  "seq": 437,
+  "job_id": "gh-pr-740",
+  "model": "devin-deepseek-v4-flash-max",
+  "identity": "工人",
+  "work_type": "微修",
+  "model_version": "deepseek-v4-flash-max",
+  "terminal": "devin",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "0f45feb5d24bbafce5e01e0338bb2ca797826661135b317136ed92ec7b2f4264",
+  "pr_number": 740,
+  "source": "github-backfill",
+  "event_id": "18fa42f353039d701a7dc68945afdef7aa8b6f806c946c76f8a363d02403e9ea"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T07:21:26+08:00",
+  "machine": "backfill",
+  "seq": 248,
+  "job_id": "gh-pr-618",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #618；[grok] Cursor 接入：管子层 + Composer/Kimi/Gemini；判定行红 2 项",
+  "pr_number": 618,
+  "source": "github-backfill",
+  "event_id": "7495a63be07175c3fad050d4580d0c7395064d13ed5146e4e9e589db2cdfc249"
+}

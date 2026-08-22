@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T12:00:57+08:00",
+  "machine": "backfill",
+  "seq": 320,
+  "job_id": "gh-pr-660",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #660；[pi] #658 审官选型序恢复 GPT 顶位（在途不换）；判定行红 1 项",
+  "pr_number": 660,
+  "source": "github-backfill",
+  "event_id": "7339ce9306b591d81d8f4653e99e8d2868d050aeb5d1b166d804c702cdd248f8"
+}

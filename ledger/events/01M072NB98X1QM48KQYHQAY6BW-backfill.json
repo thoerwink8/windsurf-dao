@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T13:21:13+08:00",
+  "machine": "backfill",
+  "seq": 192,
+  "job_id": "gh-pr-585",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #585；[grok] #583 承认即派：用户调用后走现有派单；判定行红 2 项",
+  "pr_number": 585,
+  "source": "github-backfill",
+  "event_id": "f2cf0c225b6fe5cf35a153ad709a427a20b9f0164ce99907b0c51c822d8d2bd8"
+}
