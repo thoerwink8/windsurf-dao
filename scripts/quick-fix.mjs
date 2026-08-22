@@ -297,7 +297,7 @@ function cmdAttach(args) {
     logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
     emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
   }
-  const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle], { timeout: 60000 });
+  const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle, '--json'], { timeout: 60000 });
   const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
   if (!runCreated.ok || !runId) {
     const error = `审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`;
