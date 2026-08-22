@@ -223,19 +223,26 @@ function rollback(created) {
   return steps;
 }
 
-/** 信箱台 ensure：返回常驻台 handle（微通道建 Run 用它当 coordinator，worker-start 才不 fenced）。 */
+/** 信箱台 ensure：返回常驻台 handle（微通道建 Run 用它当 coordinator，worker-start 才不 fenced）。
+ * 台在重启/忙时 ensure 可能超过 60s（实测掐断），重试三次兜住偶发。 */
 function ensureStation() {
-  const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
-    encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: 60000,
-  });
-  let json = null;
-  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
-  catch { json = null; }
-  if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
-    return { ok: false, error: (json && json.error) || String(r.stderr || '').trim() || `inbox-station ensure exit ${r.status}` };
+  let last = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
+      encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: 120000,
+    });
+    let json = null;
+    try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+    catch { json = null; }
+    if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+      last = { ok: false, error: (json && json.error) || String(r.stderr || '').trim() || `inbox-station ensure exit ${r.status}` };
+      if (attempt < 3) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+      continue;
+    }
+    if (!json.handle) return { ok: false, error: 'inbox-station ensure 没返回 handle（没查成）' };
+    return { ok: true, handle: json.handle };
   }
-  if (!json.handle) return { ok: false, error: 'inbox-station ensure 没返回 handle（没查成）' };
-  return { ok: true, handle: json.handle };
+  return last || { ok: false, error: 'inbox-station ensure 三次都失败（没查成）' };
 }
 
 function attachLog(issue) {
@@ -248,7 +255,22 @@ function logLine(file, line) {
   catch { /* 日志写不上不阻塞主流程 */ }
 }
 
-/** 异步子命令：建壳卡 → 验分支 → 真调 reviewer-attach，失败清理壳卡 + PR 留痕。 */
+/** 失败清理：删壳卡 + 删 orca 从 remote 建的本地微修分支（否则下次 attach 会撞派生分支）。 */
+function cleanupShell(worktreeId, branch, log) {
+  const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
+  logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
+  let branchClean = { ok: true, skipped: true };
+  if (branch) {
+    const cur = git(['branch', '--show-current'], { cwd: ROOT });
+    if (cur.ok && cur.out !== branch) {
+      const del = git(['branch', '-D', branch]);
+      branchClean = del.ok ? { ok: true } : { ok: false, error: del.error };
+      logLine(log, `本地分支清理: ${del.ok ? 'ok' : `失败 ${del.error}`}`);
+    }
+  }
+  return { rm, branchClean };
+}
+
 function cmdAttach(args) {
   const log = String(args.log || '').trim() || attachLog(args.issue);
   const branch = String(args.branch || '').trim();
@@ -271,6 +293,10 @@ function cmdAttach(args) {
   if (!wt.ok || !worktreeId) {
     const error = `壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`;
     logLine(log, `attach 失败: ${error}`);
+    if (branch) {
+      const del = git(['branch', '-D', branch]);
+      logLine(log, `本地分支清理: ${del.ok ? 'ok' : `失败 ${del.error}`}`);
+    }
     emit({ ok: false, error, attachLog: log, cleaned: false, posted: false });
   }
   logLine(log, `壳卡已建 worktree=${worktreeId}`);
@@ -281,9 +307,8 @@ function cmdAttach(args) {
     if (!cur.ok || cur.out !== branch) {
       const error = `壳卡分支没切成 ${branch}（实际 ${cur.out || cur.error}）——reviewer-attach 的树→PR 归属校验会拒`;
       logLine(log, `attach 失败: ${error}`);
-      const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
-      logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
-      emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+      cleanupShell(worktreeId, branch, log);
+      emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
     }
   }
 
@@ -293,18 +318,16 @@ function cmdAttach(args) {
   if (!station.ok) {
     const error = `信箱台 ensure 失败：${station.error}`;
     logLine(log, `attach 失败: ${error}`);
-    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
-    logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
-    emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+    cleanupShell(worktreeId, branch, log);
+    emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
   }
   const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle, '--json'], { timeout: 60000 });
   const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
   if (!runCreated.ok || !runId) {
     const error = `审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`;
     logLine(log, `attach 失败: ${error}`);
-    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
-    logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
-    emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+    cleanupShell(worktreeId, branch, log);
+    emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
   }
   logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
 
@@ -341,12 +364,11 @@ function cmdAttach(args) {
     logLine(log, `attach 失败: ${error}`);
     const rawTail = String(r.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ');
     if (rawTail && !error.includes(rawTail)) logLine(log, `reviewer-attach 输出尾部: ${rawTail.slice(0, 300)}`);
-    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
-    logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
+    const cleaned = cleanupShell(worktreeId, branch, log);
     const body = [
       `微修审官没起来（quick-fix 异步 attach 失败）：${error.slice(0, 400)}`,
       '',
-      `壳卡已清理：${rm.ok ? '是' : `否（${rm.error}）`}。日志：${log}`,
+      `壳卡已清理：${cleaned.rm.ok ? '是' : `否（${cleaned.rm.error}）`}。日志：${log}`,
       '红项按审官任务书上帅；本 PR 无审官，需人工处置。',
     ].join('\n');
     // Windows 上多行 --body 会被拆（#573 坑 1），评论一律走 --body-file。
@@ -356,7 +378,7 @@ function cmdAttach(args) {
     const posted = workerGh(['pr', 'comment', String(args.pr), '--body-file', commentFile]);
     rmSync(commentFile, { force: true });
     logLine(log, `PR 留痕: ${posted.ok ? 'ok' : `失败 ${posted.error}`}`);
-    emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: posted.ok });
+    emit({ ok: false, error, attachLog: log, cleaned: cleaned.rm.ok, posted: posted.ok });
   }
   logLine(log, `attach 成功 reviewerDispatchId=${json.reviewerDispatchId || '?'} reviewerId=${json.reviewerId || '?'}`);
   emit({ ok: true, pr: Number(args.pr), reviewerDispatchId: json.reviewerDispatchId, attachLog: log });
