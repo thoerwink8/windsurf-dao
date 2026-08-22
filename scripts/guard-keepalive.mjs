@@ -4,7 +4,8 @@
 // 改这段前必须知道：本进程自己不是守卫、不跑检测矩阵，也没有 OS 级定时器了——
 // #693 拍板删掉自研保活层（schtasks / 启动文件夹 VBS / resident 循环），唯一入口是
 // --once：查进程、缺了从镜像拉起、写 ~/.dao/guard/keepalive.jsonl。触发点：
-//   · 随仓 .claude/settings.json 的 SessionStart hook（主树 master 会话启动时）
+//   · 随仓 .claude/settings.json 的 SessionStart hook（主树会话启动时；2026-08-22 起
+//     不再要求 master——主树在本仓就触发，master 只管帅位展示）
 //   · board-hook（UserPromptSubmit）每轮兜底：会话中途守卫死了，下一轮提示时拉起
 // #699：进程在不算完——同时读守卫心跳，停更超阈值（活但卡死）杀掉再拉起。
 // 用法：

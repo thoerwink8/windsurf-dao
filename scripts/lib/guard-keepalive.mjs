@@ -1,7 +1,8 @@
 // 守卫保活计划（#652 / #683 计划任务版 → #693 起改「帥位触发」→ #699 补心跳停更判定）。
 //
 // 改这段前必须知道：活性终点不再是 Windows 计划任务，也不是任何自研循环——
-// 是随仓 .claude/settings.json 的 SessionStart hook（主树 master 会话启动时）与
+// 是随仓 .claude/settings.json 的 SessionStart hook（主树会话启动时；2026-08-22 起
+// 不再要求 master，拉起闸在 guard-seat.mjs 的 guardLaunchGate）与
 // board-hook（UserPromptSubmit，每轮兜底）调本库的 --once。不要再造 OS 级定时器。
 // --once 查 watchdog.mjs / flow.mjs 进程在不在，不在则从 ~/.dao/guard-mirror 拉起；
 // 进程在但心跳停更超阈值 = 「活但卡死」（#699 实证卡死一个多小时零信号），杀掉再拉起。

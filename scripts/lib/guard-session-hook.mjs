@@ -3,10 +3,11 @@
 //
 // 改这个文件前必须知道的三条：
 //   1. 只报不拦：永远 exit 0。SessionStart hook 崩了/非零，在宿主眼里可能弄坏会话启动。
-//   2. 判定是机械的（guard-seat.mjs）：主树 + master 才幂等拉起守卫；别的会话（工人树、
-//      别的分支）静默退出。判不出来不猜、不静默跳过——往上下文注入醒目提示，请帅用
-//      AskUserQuestion 问用户要不要拉起。
-//   3. 输出区分「查过」和「没查成」：帥位上跑完 --once 必有一行结果（在位/已拉起）；
+//   2. 拉起闸是 guardLaunchGate（guard-seat.mjs）：主树在本仓就幂等拉起守卫——分支是不是
+//      master 只管「谁是帅位」展示，不管「要不要拉起」（2026-08-22 拍板：主树不在 master
+//      全灭过一次，15 小时无人知）。工人树（非主树）静默退出。判不出来不猜、不静默跳过——
+//      往上下文注入醒目提示，请帅用 AskUserQuestion 问用户要不要拉起。
+//   3. 输出区分「查过」和「没查成」：主树上跑完 --once 必有一行结果（在位/已拉起）；
 //      没查成是另一形（≠ 查过没事）。
 //
 // 拉起动作本身在 scripts/guard-keepalive.mjs --once（幂等：已在不拉，缺了才拉）。
@@ -14,7 +15,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { judgeSeat } from './guard-seat.mjs';
+import { judgeSeat, guardLaunchGate } from './guard-seat.mjs';
 import { onceResultBits } from './guard-keepalive.mjs';
 
 // 必须小于 .claude/settings.json 里 SessionStart 的 timeout(60s)：宁可 hook 自己先报
@@ -45,13 +46,14 @@ export function onceLine(doc) {
  */
 export function sessionHookLines({ projectDir, judge = judgeSeat, runOnce } = {}) {
   const seat = judge({ projectDir });
-  if (!seat.ok) {
+  const gate = guardLaunchGate(seat);
+  if (gate.unknown) {
     return [
-      `[卫] 帥位判定没查成：${seat.error}——不知道本会话是不是主树 master，没敢动守卫。`
+      `[卫] 帥位判定没查成：${gate.error}——不知道本会话是不是主树，没敢动守卫。`
       + '若要拉起 watchdog/flow，请用 AskUserQuestion 问用户，用户点头后跑：node scripts/guard-keepalive.mjs --once',
     ];
   }
-  if (seat.seat !== 'shuai') return [];
+  if (!gate.launch) return [];
   const r = runOnce(projectDir);
   if (r.error || (r.status !== 0 && r.status != null)) {
     return [`[卫] 守卫 ensure 没查成：${r.error?.message || `exit ${r.status}`}${tailOf(r)}（≠ 查过没事；只报不拦）`];
@@ -60,7 +62,9 @@ export function sessionHookLines({ projectDir, judge = judgeSeat, runOnce } = {}
   let doc = null;
   try { doc = JSON.parse(lines.pop() || '{}'); } catch { doc = null; }
   const line = onceLine(doc);
-  return [line || `[卫] 守卫 ensure 输出没查成：--once 末行不是结果 JSON${tailOf(r)}（≠ 查过没事）`];
+  const result = line || `[卫] 守卫 ensure 输出没查成：--once 末行不是结果 JSON${tailOf(r)}（≠ 查过没事）`;
+  // 主树非 master：守卫照拉，但把「这不是帅位展示口径的 master」显形，防盘面误读。
+  return gate.shuai ? [result] : [`${result}（主树在 ${gate.branch}，非 master——守卫照拉，帅位展示仍认 master）`];
 }
 
 function main() {

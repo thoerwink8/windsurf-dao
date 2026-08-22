@@ -1,8 +1,11 @@
-// 守卫自停留痕（#683）。
+// 守卫自停留痕（#683；2026-08-22 补 marshal 兜底）。
 //
 // 改这段前必须知道：#665 落后自停是正确 fail-close，但原来只 stderr 就 exit 4，
 // 三台守卫可以全静默死掉。本层在 halt 当时写 ~/.dao/guard/halt.jsonl，再经
 // dao-watchdog[bot] 报 GitHub。没凭据 / 评论列表没扫成 = 落盘记失败，不许当报成功。
+// 2026-08-22 拍板（守卫死 15 小时无人知现场：watchdog App 没装，自停全哑）：
+// watchdog 凭据缺失时兜底用本机已装的 marshal App 留可读记录——不伪造凭据、
+// 不现场造 secret；marshal 也没装才记失败。记录带 via 字段标明实际用的身份。
 // 测试默认不写本机、不打网（NODE_TEST_CONTEXT）；夹具设 DAO_GUARD_HALT_DIR。
 
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
@@ -17,6 +20,7 @@ import {
   defaultLoadCreds,
   defaultRunGh,
 } from './watchdog-report.mjs';
+import { ghAs, loadRoleCreds } from './gh.mjs';
 
 export const HALT_ISSUE_TITLE = '【看门狗】守卫自停';
 export const HALT_FILE_NAME = 'halt.jsonl';
@@ -157,27 +161,43 @@ function postHaltComment({ record, number, key, now, runGh }) {
   return { ok: true, number, posted: true };
 }
 
+/** 兜底凭据：watchdog App 没装时用本机已装的 marshal（2026-08-22 拍板；可注入，测试不碰真凭据）。 */
+export function defaultLoadFallbackCreds(opts) {
+  return loadRoleCreds('marshal', opts);
+}
+
 /**
  * 找到或创建「【看门狗】守卫自停」台账 issue，再按事故键去重写评论。
  * 列表没扫成不得 create（会重复开单）。
+ * 凭据：watchdog 优先；没装就兜底 marshal（via 字段标明实际身份）。测试注入了自己的
+ * loadCreds 且没给 loadFallbackCreds 时不兜底——失败形态要能被直接验到。
  */
 export function reportGuardHalt(record, {
   env = process.env,
   now = Date.now(),
-  runGh = defaultRunGh,
+  runGh,
   loadCreds,
+  loadFallbackCreds,
 } = {}) {
   if (!shouldReportHalt({ env })) return { skipped: 'gate' };
 
+  let via = 'watchdog';
+  let gh = runGh || defaultRunGh;
   const creds = loadCreds
     ? loadCreds()
     : (env.WATCHDOG_GH_AS ? { ok: true } : defaultLoadCreds());
   if (!creds.ok) {
-    return { ok: false, error: creds.error || '缺凭据' };
+    const mayFallback = !loadCreds || typeof loadFallbackCreds === 'function';
+    const fb = mayFallback ? (loadFallbackCreds || defaultLoadFallbackCreds)() : { ok: false, error: '（测试未注入兜底凭据）' };
+    if (!fb.ok) {
+      return { ok: false, error: `${creds.error || '缺凭据'}；marshal 兜底也没装：${fb.error}` };
+    }
+    via = 'marshal-fallback';
+    if (!runGh) gh = (ghArgs) => ghAs('marshal', ghArgs);
   }
 
   const key = haltAccidentKey(record);
-  const listed = runGh([
+  const listed = gh([
     'issue', 'list',
     '--search', `${HALT_ISSUE_TITLE} in:title`,
     '--state', 'open',
@@ -191,7 +211,7 @@ export function reportGuardHalt(record, {
 
   let number = scan.issues[0]?.number;
   if (!number) {
-    const created = runGh([
+    const created = gh([
       'issue', 'create',
       '--title', HALT_ISSUE_TITLE,
       '--body', haltIssueBody(),
@@ -205,9 +225,9 @@ export function reportGuardHalt(record, {
     }
   }
 
-  const posted = postHaltComment({ record, number, key, now, runGh });
+  const posted = postHaltComment({ record, number, key, now, runGh: gh });
   if (!posted.ok) return posted;
-  return { ok: true, key, ...posted };
+  return { ok: true, key, via, ...posted };
 }
 
 /** haltIfStale 的默认副作用：报 GitHub（可跳过）再落盘；失败写进同一条 jsonl，不另起一行。 */
@@ -225,6 +245,7 @@ export function notifyGuardHalt(record, opts = {}) {
         error: github.error || null,
         number: github.number || null,
         deduped: !!github.deduped,
+        via: github.via || null,
       }
       : null,
   }, opts);

@@ -157,7 +157,7 @@ describe('board-hook', () => {
       });
   });
 
-  it('#693 守卫兜底：帥位才 ensure；健康静音 / 拉起留痕 / 没查成可辨认', async (t) => {
+  it('#693 守卫兜底：主树才 ensure（2026-08-22 起不认 master）；健康静音 / 拉起留痕 / 没查成可辨认', async (t) => {
     const H = await H_LOAD;
     const shuai = () => ({ ok: true, seat: 'shuai' });
     const other = () => ({ ok: true, seat: 'other', reason: 'not-main-worktree' });
@@ -193,20 +193,79 @@ describe('board-hook', () => {
 
     const notShuai = H.guardInjection({
       root: 'X', judge: other,
-      exec: () => { throw new Error('非帥位不许跑 --once'); },
+      exec: () => { throw new Error('非主树不许跑 --once'); },
     });
-    await t.test('非帥位（工人树）→ 静默且不碰 --once',
+    await t.test('非主树（工人树）→ 静默且不碰 --once',
       () => {
-        assert.ok(notShuai === null, '非帥位  →  ' + String(notShuai));
+        assert.ok(notShuai === null, '非主树  →  ' + String(notShuai));
+      });
+
+    const notMaster = H.guardInjection({
+      root: 'X',
+      judge: () => ({ ok: true, seat: 'other', reason: 'not-master', branch: 'thoerwink8/og-keep-ds-ox-alpha' }),
+      exec: okOnce({ ok: true, results: [{ name: 'watchdog', action: 'started', pid: 42 }, { name: 'flow', action: 'already', pid: 2 }] }),
+    });
+    await t.test('主树非 master → 照拉且显形分支（2026-08-22 拍板：保活不认 master）',
+      () => {
+        assert.ok(notMaster !== null && /已拉起/.test(notMaster) && /非 master/.test(notMaster)
+          && /og-keep-ds-ox-alpha/.test(notMaster), '主树非 master 照拉  →  ' + String(notMaster));
       });
 
     const seatUnknown = H.guardInjection({
       root: 'X', judge: unknown,
       exec: () => { throw new Error('判不出不许跑 --once'); },
     });
-    await t.test('帥位判不出 → 注「没查成」行（不猜、不静默跳过）',
+    await t.test('主树判定不出 → 注「没查成」行（不猜、不静默跳过）',
       () => {
         assert.ok(seatUnknown !== null && /帥位判定没查成/.test(seatUnknown) && /没跑，≠ 已查/.test(seatUnknown), '判不出  →  ' + String(seatUnknown));
+      });
+  });
+
+  it('守卫自停可见：近 24h 未上报显形；已上报/从没自停静音；读不出是没查成', async (t) => {
+    const H = await H_LOAD;
+    const now = Date.parse('2026-08-22T20:00:00.000Z');
+    const rec = (extra = {}) => ({
+      at: '2026-08-22T04:13:00.000Z', tag: '[watchdog] STALE_CODE', github: null, ...extra,
+    });
+
+    const missing = H.haltInjection({ now, loadLog: () => ({ scanned: true, records: [], count: 0, missing: true }) });
+    await t.test('台账不存在（从没自停过）→ 静音（扫完 0）',
+      () => {
+        assert.ok(missing === null, '缺文件  →  ' + String(missing));
+      });
+
+    const unreported = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 2, records: [rec(), rec({ at: '2026-08-22T04:14:00.000Z', github: { ok: false, error: '缺凭据: watchdog.json' } })] }),
+    });
+    await t.test('近 24h 有未上报 → 显形一行带条数与最近一条',
+      () => {
+        assert.ok(unreported !== null && /自停 2 条近 24h 未上报/.test(unreported) && /STALE_CODE/.test(unreported)
+          && /halt\.jsonl/.test(unreported), '未上报显形  →  ' + String(unreported));
+      });
+
+    const reported = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 1, records: [rec({ github: { ok: true, number: 700, via: 'marshal-fallback' } })] }),
+    });
+    await t.test('近 24h 的自停都已报 GitHub → 静音',
+      () => {
+        assert.ok(reported === null, '已上报  →  ' + String(reported));
+      });
+
+    const old = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 1, records: [rec({ at: '2026-08-20T00:00:00.000Z', github: { ok: false, error: 'x' } })] }),
+    });
+    await t.test('超过 24h 的未上报 → 静音（历史账不刷屏）',
+      () => {
+        assert.ok(old === null, '超窗  →  ' + String(old));
+      });
+
+    const corrupt = H.haltInjection({ now, loadLog: () => ({ scanned: false, error: 'halt.jsonl 有不是 JSON 的行——没查成', records: [], count: 0 }) });
+    await t.test('台账读不出 → 没查成行（≠ 查过没事）',
+      () => {
+        assert.ok(corrupt !== null && /没查成/.test(corrupt), '读不出  →  ' + String(corrupt));
       });
   });
 
