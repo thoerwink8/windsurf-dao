@@ -866,9 +866,8 @@ describe('flow', () => {
     });
   });
 
-  it('㉑ #686 ② notify 链断自愈：审官 dispatch 已结算 + 红项 + 返工完成 → 自动 reviewer-create', async (t) => {
-    // 预置状态：rec 里有 reviewer.dispatchId，模拟已有审官但 dispatch 已结算
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-selfheal-686-"));
+  it('㉑ 审官 dispatch 已结算：报帅，不自动 reviewer-create', async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-settled-no-recreate-"));
     const stateFile = path.join(tmp, "state.json");
     fs.writeFileSync(stateFile, JSON.stringify({
       version: 1, inventoried: true,
@@ -886,14 +885,15 @@ describe('flow', () => {
       encoding: "utf8", cwd: REPO,
     });
     const out = (r.stdout || "") + (r.stderr || "");
-    await t.test('退出码 1（有自愈动作）', () => {
-      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    await t.test('退出码 1（待帅处置）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status} ${out.trim()}`);
     });
-    await t.test('自愈：自动 reviewer-create（dry-run）', () => {
-      assert.ok(/自愈：#2009/.test(out) && /审官 dispatch 已结算/.test(out), '自愈 reviewer-create  →  ' + out.trim());
+    await t.test('报帅且不造第二张', () => {
+      assert.ok(/报帅：#2009/.test(out) && /不自动 reviewer-create/.test(out), '报帅不造卡  →  ' + out.trim());
     });
-    await t.test('不报帅（自愈不需帅介入）', () => {
-      assert.ok(!/报帅/.test(out) || /自愈/.test(out), '自愈不报帅  →  ' + out.trim());
+    await t.test('换厂/自愈造卡路径不再被调用', () => {
+      assert.ok(!/将自动 reviewer-create/.test(out) && !/自动 reviewer-create 起新审官/.test(out)
+        && !/nextReviewerAfter/.test(out), '仍在造卡/换厂  →  ' + out.trim());
     });
     fs.rmSync(tmp, { recursive: true, force: true });
   });

@@ -11,7 +11,7 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 多块活（能拆成几块、各够一个工人干一阵的）走 `host/skills/dao-project/SKILL.md` 的项化路径（项卡 + 多 worker 子卡 + 各自审官 + 收口官，消歧门门控），本页不复制；单卡场景仍走本页。
 
-审官卡走 `node scripts/dao.mjs reviewer-create --pr <N>`：base 从 PR 推导，建完自证 HEAD 与被审文件，对不上就拒绝起 agent。不要手填 `--base-branch`。任务归档整树收口（`node scripts/dao.mjs worktree-rm --worktree <任务卡>` 一条命令，含子卡），辅助卡不要飘成顶层。
+审官卡走 `node scripts/dao.mjs reviewer-create --pr <N>`：base 从 PR 推导，建完自证 HEAD 与被审文件，对不上就拒绝起 agent。不要手填 `--base-branch`。一 PR 一审官：create 遇已有则复用。任务归档整树收口（`node scripts/dao.mjs worktree-rm --worktree <任务卡>` 一条命令，含子卡），辅助卡不要飘成顶层。
 
 ## 主会话红线
 
@@ -185,11 +185,11 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 2. 必须上帅：① 审官质疑拍板/规格本身；② 乒乓两轮仍有红项（换人信号）；③ 归档动作——归档由帅执行，审官只发「可归档」通知。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
-人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
+人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。attach 是**人工例外**：不过「一张 PR 只许一个审官」闸——用前先看盘上已有审官卡是死了才补，不许拿它造第二个审官或换厂（那是洞，不是自愈）。
 
 补派铁律（#631）：`reviewer-attach` 先做树→PR 归属校验（树的 issue/分支对不上 PR 当场拒），士兵 dispatch 注入前 `worker-show` 复核活性，已结算禁止当收件人（#552）——此时审官等不到完工（完工只由 `worker-done` 投递，它失败才需要补派），补派加 `--skip-wait` 跳过等完工：审官直接开审；红项 `d=` 只给 worker-show 确认活的 dispatch（显式 `--soldier-dispatch` 同闸，已结算/没查成都不注入）→ 没有 `d=` 就红项上帅。issue 派工产出的 PR 号 ≠ issue 号是常态，不是串号。
 
-起审官硬闸（#679）：工人与审官不得同厂。闸在 `dispatch` / `reviewer-create` / `worker-done` / `reviewer-attach` / 换人。点将台打分不加这一条。GPT UI 禁令仍优先。注入失败走选型序下一位，跳过工人那一厂；走完仍同厂则升级，不许 attach 成工人那一厂。已开工的审官复用不回溯。
+起审官硬闸（#679）：工人与审官不得同厂。闸在 `dispatch` / `reviewer-create` / `worker-done` / `reviewer-attach` / 换人。点将台打分不加这一条。GPT UI 禁令仍优先。失败停手报，不许自动换厂；走完仍同厂则升级，不许 attach 成工人那一厂。已开工的审官复用不回溯。
 
 ## 命名规矩
 
@@ -215,7 +215,7 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 `dispatch` 内部已经做完：选型闸、建工人卡、打 `reviewer/*`、起工人终端、等 TUI 就绪、**注入一行指针后再验开工**（含换行或超实测上限当场拒）、失败回滚。**不建审官卡**（#586：工人完工 `worker-done` 才起）。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`，它调 `reviewer-create`（自读 `reviewer/*`、建树、起终端、注入审官任务书；审官任务书内嵌士兵真 id，杜绝 dispatch:undefined）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`：没有审官卡才 `reviewer-create`；已有则复用，终端已关/dispatch 已结算也禁止再造。flow 不再在审官结算后自动 `reviewer-create`（#730：那是洞，不是自愈）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人仍在约束载体内；给已有 PR 补审官走 `reviewer-attach`，不要再拼五步 + `raw`：
 

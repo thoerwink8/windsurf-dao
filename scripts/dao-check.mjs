@@ -58,6 +58,8 @@
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
 // ㉔ 起审官同厂硬闸（#679）：接线扫描不 import 闸自己的解析；故意 grok+grok 样本必须当场拦；
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
+// ㉕ 删掉审官结算后再造卡/换厂（#735）：检查器不 import flow/dao-cmd 解析；故意违规夹具必须红；
+//    红/绿/空样本各一验判别力；0 个样本 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -82,6 +84,9 @@ import {
   inspectVendorGateWiring, inspectVendorGateFixtures, probeSameVendorDispatch,
   inspectReviewerNoForceCommand,
 } from './lib/reviewer-vendor-gate-check.mjs';
+import {
+  inspectNoReviewerRecreate, inspectNoReviewerRecreateFixtures,
+} from './lib/no-reviewer-recreate-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -1346,6 +1351,51 @@ checkVendorGateSamples();
 checkVendorGateLive();
 checkQuickFixSamples();
 checkQuickFixLive();
+checkNoReviewerRecreateSamples();
+checkNoReviewerRecreateLive();
+
+function checkNoReviewerRecreateSamples() {
+  const r = inspectNoReviewerRecreateFixtures(join(ROOT, 'tests', 'fixtures', 'no-reviewer-recreate'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '再造审官闸样本没查成' : '再造审官闸样本对不上',
+      '恢复 tests/fixtures/no-reviewer-recreate/{red,ok,empty}：红夹具必须红、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`再造审官闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkNoReviewerRecreateLive() {
+  const flowFile = join(ROOT, 'scripts', 'flow.mjs');
+  const daoFile = join(ROOT, 'scripts', 'dao.mjs');
+  if (![flowFile, daoFile].every(existsSync)) {
+    fail(
+      '再造审官闸 live 扫描缺文件',
+      '恢复 scripts/flow.mjs 与 scripts/dao.mjs；缺文件 = 没查成',
+      `flow=${existsSync(flowFile)} dao=${existsSync(daoFile)}`,
+    );
+    return;
+  }
+  const r = inspectNoReviewerRecreate({
+    flowSrc: readFileSync(flowFile, 'utf8'),
+    daoSrc: readFileSync(daoFile, 'utf8'),
+  });
+  if (r.unscanned) {
+    fail('再造审官闸 live 没查成', '给齐 flow.mjs / dao.mjs 再扫', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `再造审官闸接线丢了 ${r.problems.length} 处`,
+      'flow 不许结算后 runDao reviewer-create；worker-done 不许 nextReviewerAfter 换厂再造',
+      r.problems.join('；'),
+    );
+  } else {
+    green('再造审官闸还在（结算后不造卡、失败不换厂）');
+  }
+}
 
 function checkDesignExamHarvestSamples() {
   const r = inspectDesignExamHarvestFixtures(join(ROOT, 'tests', 'fixtures', 'design-exam-harvest'));

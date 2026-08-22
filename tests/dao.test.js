@@ -1164,11 +1164,12 @@ describe('dao', () => {
       }],
       terminals: [{ handle: 'term_dead', worktreeId: 'wt_rev_dead', status: 'exited' }],
     });
-    await t.test('#586 样本② 老审官终端已关闭才允许新建并写原因',
+    await t.test('#586 样本② 老审官终端已关闭 → 拒绝新建，不许再 create',
       () => {
-        assert.ok(closed.action === 'create' && /已关闭|不存在/.test(closed.reason || '')
+        assert.ok(closed.action === 'refuse' && closed.outcome === 'refused-existing'
+        && /拒绝新建/.test(closed.error || closed.reason || '')
         && Array.isArray(closed.closedWorktrees) && closed.closedWorktrees.includes('wt_rev_dead'),
-        '#586 样本② 老审官终端已关闭才允许新建并写原因  →  ' + JSON.stringify(closed));
+        '#586 样本② 老审官终端已关闭 → 拒绝新建  →  ' + JSON.stringify(closed));
       });
 
     const secondPr = S.resolveReviewerReuse({
