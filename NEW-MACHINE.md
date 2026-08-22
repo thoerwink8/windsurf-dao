@@ -264,9 +264,9 @@ node scripts/inbox-station.mjs ensure
 
 新机制**随仓生效，无装机动作**（clone 即带，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook）：
 
-- 随仓 `.claude/settings.json` 的 SessionStart hook：会话启动时机械判定 cwd 是主树（`git worktree list` 第一棵）且分支是 master（=帥位），是则幂等跑 `node scripts/guard-keepalive.mjs --once`——查 watchdog/flow 进程，缺才从 `~/.dao/guard-mirror` 拉起（detached + windowsHide）；进程在但心跳停更超阈值（watchdog 5 分钟 / flow 10 分钟，#699「活但卡死」）杀掉再拉起。watchdog 自身心跳写 `%USERPROFILE%\.dao\guard\watchdog-heartbeat.json`，flow 心跳写主树 `_flow/heartbeat.json`。
-- 同一份 settings.json 的 board-hook（UserPromptSubmit）在帥位会话里每轮顺手再 ensure 一遍：会话中途守卫死了，帅下一轮提示时拉起。
-- 帥位判不出来（git 失败 / detached HEAD / 分支读不出）不猜、不静默：hook 往上下文注入醒目行，由帅问用户后再手动拉起。
+- 随仓 `.claude/settings.json` 的 SessionStart hook：会话启动时机械判定 cwd 是主树（`git worktree list` 第一棵）——是主树就幂等跑 `node scripts/guard-keepalive.mjs --once`（2026-08-22 拍板：不再要求分支是 master；主树停非 master 分支时保活全灭过一次，守卫死 15 小时无人知。master 只管「谁是帅位」展示，不管「要不要拉起」）——查 watchdog/flow 进程，缺才从 `~/.dao/guard-mirror` 拉起（detached + windowsHide）；进程在但心跳停更超阈值（watchdog 5 分钟 / flow 10 分钟，#699「活但卡死」）杀掉再拉起。watchdog 自身心跳写 `%USERPROFILE%\.dao\guard\watchdog-heartbeat.json`，flow 心跳写主树 `_flow/heartbeat.json`。
+- 同一份 settings.json 的 board-hook（UserPromptSubmit）在主树会话里每轮顺手再 ensure 一遍：会话中途守卫死了，帅下一轮提示时拉起。
+- 主树判定不出来（git 失败 / detached HEAD / 分支读不出）不猜、不静默：hook 往上下文注入醒目行，由帅问用户后再手动拉起。工人树（非主树）两个 hook 都静默不拉——防多树双拉。
 
 验（不是「已装」，是 kill 后会回来）：
 
@@ -279,7 +279,7 @@ node scripts/lib/guard-session-hook.mjs
 
 手动拉起/排查：`node scripts/guard-keepalive.mjs --once`（幂等；进程列表没查成不许当 0 个、不乱拉起；心跳没查成不乱杀）。
 
-自停 / 查不成写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并经 `dao-watchdog[bot]` 在 GitHub 开/评「【看门狗】守卫自停」台账（同一事故键不刷）。没装 watchdog 凭据会在 jsonl 里记「这台机器没装」，不许当报成功——凭据装法见 §4b。`~/.dao/guard` 换机重建，不要拷。
+自停 / 查不成写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并报 GitHub「【看门狗】守卫自停」台账（同一事故键不刷）：优先 `dao-watchdog[bot]`，watchdog 凭据没装时兜底用已装的 `dao-marshal[bot]`（2026-08-22 拍板，记录带 `via` 字段标明实际身份）；两个都没装才在 jsonl 里记失败，不许当报成功——凭据装法见 §4b。此外 board-hook 每轮读本机 halt.jsonl：近 24h 有没报成 GitHub 的自停就往会话上下文注一行（纯本地读，不打网）。`~/.dao/guard` 换机重建，不要拷。
 
 ## 9c. Cursor 帅位挂载与派工闸口（#707）
 
