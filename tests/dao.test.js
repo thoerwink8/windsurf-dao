@@ -129,13 +129,8 @@ describe('dao', () => {
     await t.test('#615 kimi 主路走 cursor-agent / kimi-k3-high', () => {
       assert.ok(/cursor-agent/.test(kimi.command) && /--model\s+kimi-k3-high/.test(kimi.command) && /--force/.test(kimi.command), '#615 kimi 主路走 cursor-agent / kimi-k3-high  →  ' + kimi.command);
     });
-    const kimiOg = S.resolveLaunch({
-      model: 'kimi-k3',
-      pipe: { provider: 'opencode-go', cli_model: 'kimi-k3' },
-      routing,
-    });
-    await t.test('#615 kimi 支路走 opencode-go/kimi-k3', () => {
-      assert.ok(kimiOg.command.includes('kimi-k3') && /pi\b/.test(kimiOg.command), '#615 kimi 支路走 opencode-go/kimi-k3  →  ' + kimiOg.command);
+    await t.test('kimi 不再挂 opencode-go 支路', () => {
+      assert.ok(/cursor-agent/.test(kimi.command) && !/opencode-go\/kimi-k3/.test(kimi.command), 'kimi 默认启动不走 og  →  ' + kimi.command);
     });
     const gptMain = S.resolveLaunch({ model: 'gpt-5.6-sol', routing });
     await t.test('#615 gpt 主路仍 Codex', () => {
@@ -572,6 +567,11 @@ describe('dao', () => {
     const no1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghNone });
     await t.test('消歧门：查成但没 label → 拒派并点名缺什么', () => {
       assert.ok(no1.ok === false && no1.hasLabel === false && /已消歧/.test(no1.error) && /补消歧记录|label/.test(no1.error), '消歧门：查成但没 label → 拒派并点名缺什么  →  ' + JSON.stringify(no1));
+    });
+    const ghSynonym = () => ({ ok: true, out: JSON.stringify({ labels: [{ name: '已拍板' }, { name: '已澄清' }, { name: 'disambiguated' }, { name: '待拍板' }] }) });
+    const syn1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghSynonym });
+    await t.test('消歧门：近义标不算已消歧 → 拒派（不是没查成）', () => {
+      assert.ok(syn1.ok === false && syn1.hasLabel === false && syn1.unscanned !== true && /已消歧/.test(syn1.error), '消歧门：近义标不算已消歧 → 拒派（不是没查成）  →  ' + JSON.stringify(syn1));
     });
     await t.test('消歧门：没 label ≠ 没查成（两态分开）', () => {
       assert.ok(no1.unscanned !== true, '消歧门：没 label ≠ 没查成（两态分开）  →  ' + JSON.stringify(no1));
