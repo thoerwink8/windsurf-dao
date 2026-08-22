@@ -128,6 +128,40 @@ describe('一 PR 一审官闸', () => {
     assert.ok(miss.error !== empty.error);
   });
 
+  it('结算后再造：报帅且 create/换厂都是 false；没查成 ≠ 未结算', async () => {
+    const S = await S_LOAD;
+    const miss = S.planAfterSettledReviewer({});
+    const bad = S.planAfterSettledReviewer({ settlement: { ok: false, unscanned: true, error: 'worker-show 失败' } });
+    const settled = S.planAfterSettledReviewer({ settlement: { ok: true, settled: true, unscanned: false } });
+    const live = S.planAfterSettledReviewer({ settlement: { ok: true, settled: false, unscanned: false } });
+    assert.ok(miss.unscanned === true && miss.create === false && miss.switchVendor === false
+      && /没查成/.test(miss.error), JSON.stringify(miss));
+    assert.ok(bad.unscanned === true && bad.create === false && /没查成/.test(bad.error), JSON.stringify(bad));
+    assert.ok(settled.ok === true && settled.action === 'report' && settled.create === false
+      && settled.switchVendor === false && /不自动 reviewer-create/.test(settled.reason), JSON.stringify(settled));
+    assert.ok(live.ok === true && live.action === 'none' && live.create === false, JSON.stringify(live));
+    assert.ok(miss.unscanned !== live.unscanned && miss.error !== live.reason);
+  });
+
+  it('故意违规样本能被拦住；检查器不 import 被查对象解析', async () => {
+    const checkPath = path.join(REPO, 'scripts', 'lib', 'no-reviewer-recreate-check.mjs');
+    const C = await import('file://' + checkPath.replace(/\\/g, '/'));
+    const root = path.join(REPO, 'tests', 'fixtures', 'no-reviewer-recreate');
+    const samples = C.inspectNoReviewerRecreateFixtures(root);
+    assert.ok(samples.ok === true && samples.unscanned === false
+      && samples.kinds.red === 1 && samples.kinds.ok === 1 && samples.kinds.empty === 1, JSON.stringify(samples));
+    const red = C.inspectNoReviewerRecreate({
+      flowSrc: fs.readFileSync(path.join(root, 'red', 'flow.mjs'), 'utf8'),
+      daoSrc: fs.readFileSync(path.join(root, 'red', 'dao.mjs'), 'utf8'),
+    });
+    assert.ok(red.ok === false && red.unscanned === false && red.problems.length >= 1, JSON.stringify(red));
+    const none = C.inspectNoReviewerRecreate({});
+    assert.ok(none.unscanned === true && /没查成/.test(none.error), JSON.stringify(none));
+    const src = fs.readFileSync(checkPath, 'utf8');
+    assert.ok(!/from '\.\/dao-cmd\.mjs'|from '\.\/flow\.mjs'|planAfterSettledReviewer/.test(src),
+      '检查器复用了被查对象解析');
+  });
+
   it('worker-done 失败路径不再调 nextReviewerAfter；create 先过闸', () => {
     const daoSrc = fs.readFileSync(DAO, 'utf8');
     const wdFn = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];

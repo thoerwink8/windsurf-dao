@@ -22,7 +22,7 @@
 //   - 乒乓两轮仍红      → 报帅换人（换人决策归帅）
 //   - 判定行缺失/格式不符 → 报帅分诊（「没查成」≠「无需流转」）
 //   - 工人异常死亡      → 报帅（#686 ①：dispatch 未结算 + agent done + 无完工 comment）
-//   - notify 链断        → 自愈（#686 ②：新 push + 红项 + 审官 dispatch 已结算 → reviewer-create）
+//   - 审官 dispatch 已结算 → 报帅，不自动 reviewer-create / 不换厂（#730：结算后再造是洞）
 //   - 待帅处置          → 落 GitHub（#686 ③：经 gh pr comment 写评论）
 //
 // 执行（③）#675/#677：flow 禁止 task-create。士兵交卷后身份继续活，红项打进这个 id。
@@ -36,7 +36,7 @@
 //
 // 待帅处置常驻行（对抗审红 3）：有待帅事项（approved 超时未合 / 判定行缺失待分诊 /
 // 乒乓仍红待换人 / 注入失败待接手 / 找不到审官待接手 / 选不出审官 /
-// 工人异常死亡 / notify 链断自愈失败）的 PR，每轮都
+// 工人异常死亡 / 审官已结算不造卡）的 PR，每轮都
 // 输出「[flow] 待帅处置：#N（原因）」且 exit 1——「0 需流转」只允许用在真没有待办时；
 // 待办不能因报过一次就转绿。记账字段 = rec.pendingShuai（四轮复核红 1，独立于注入闸）。
 // #686 ③：待帅事项同时经 gh pr comment 写 GitHub 评论（任何会话可见）。
@@ -88,7 +88,7 @@ import {
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
-import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch, readDispatchSettlement } from './lib/dao-cmd.mjs';
+import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch, planAfterSettledReviewer, readDispatchSettlement } from './lib/dao-cmd.mjs';
 import { repoPrefixOf, syncMasterTicketZone } from './lib/master-title.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -585,7 +585,6 @@ export function isFlowWork(action) {
     action.kind === 'observe-rework-hop'
     || action.kind === 'observe-recheck-hop'
     || action.kind === 'observe-reviewer-hop'
-    || action.kind === 'auto-reviewer-create' // #686 拍板 1：notify 链断自愈
     // observe-approved-merge 不算流转器待办（#686 拍板 2：approved 等 MERGED，
     // 与旧 report-final 同口径——绿待帅不是流转器活，watchdog 不报 flow-absent）
   );
@@ -805,11 +804,6 @@ function makeLiveSource(repo) {
       if (!r.ok) return { ok: false, error: r.error };
       return { ok: true, json: r.json };
     },
-    // #686 ②：runDao 调 dao.mjs 命令（reviewer-create 等）
-    runDao(argv) {
-      const r = runCmd(process.execPath, [join(ROOT, 'scripts', 'dao.mjs'), ...argv], GH_TIMEOUT_MS);
-      return r;
-    },
   };
 }
 
@@ -893,16 +887,6 @@ function makeSnapshotSource(roundDir, repo) {
       const file = join(roundDir, `orca-worker-show-${dispatchId}.json`);
       if (!existsSync(file)) return { ok: false, error: `缺 worker-show 快照 ${file}` };
       return readJson(file);
-    },
-    // #686 ②：快照模式 runDao——从 dao-<verb>-<pr>.json 读结果
-    runDao(argv) {
-      const verb = argv[0] || 'unknown';
-      const prIdx = argv.indexOf('--pr');
-      const prNum = prIdx >= 0 ? argv[prIdx + 1] : '0';
-      const file = join(roundDir, `dao-${verb}-${prNum}.json`);
-      if (!existsSync(file)) return { ok: false, error: `缺 dao 快照 ${file}` };
-      const r = readJson(file);
-      return r.ok ? { ok: true, out: JSON.stringify(r.json) } : r;
     },
   };
 }
@@ -1165,25 +1149,26 @@ function processOneRound(source, state, args) {
       }
     }
 
-    // ═══ #686 ② notify 链断自愈（放在 action handling 之后） ═══
+    // 审官 dispatch 已结算：报帅，不自动 reviewer-create（#730：结算后再造是洞，不是自愈）
     if ((derived.state === 'awaiting-recheck' || derived.state === 'rework-needed')
-        && rec.reviewer?.dispatchId && !rec.pendingShuai?.kind?.startsWith('selfheal-')
-        && typeof source.runDao === 'function') {
-      const showR = source.workerShow(rec.reviewer.dispatchId);
-      if (showR.ok) {
-        const rSettlement = readDispatchSettlement(showR.json);
-        if (rSettlement.ok && rSettlement.settled) {
-          if (!args.dryRun) {
-            const createR = source.runDao(['reviewer-create', '--pr', String(pr.number)]);
-            if (createR.ok) {
-              events.push(`[flow] 自愈：#${pr.number} 审官 dispatch 已结算，自动 reviewer-create 起新审官（notify 链断自愈）`);
-              rec.reviewer.selfHealed = true;
-            } else {
-              events.push(`[flow] 自愈失败：#${pr.number} reviewer-create 失败 ${createR.error}——请帅处置`);
-            }
-          } else {
-            events.push(`[flow] 自愈：#${pr.number}（dry-run）审官 dispatch 已结算，将自动 reviewer-create`);
-          }
+        && rec.reviewer?.dispatchId && !String(rec.pendingShuai?.kind || '').startsWith('settled-reviewer')) {
+      if (typeof source.workerShow !== 'function') {
+        const plan = planAfterSettledReviewer({ settlement: null });
+        events.push(`[flow] 报帅：#${pr.number} ${plan.error}——同卡重拉是人做的，不自动 reviewer-create、不换厂`);
+        rec.pendingShuai = { kind: 'settled-reviewer-unscanned', reason: plan.error };
+        pendingCount += 1;
+      } else {
+        const showR = source.workerShow(rec.reviewer.dispatchId);
+        const settlement = showR.ok
+          ? readDispatchSettlement(showR.json)
+          : { ok: false, unscanned: true, settled: false, error: showR.error || 'worker-show 失败' };
+        const plan = planAfterSettledReviewer({ settlement });
+        if (plan.action === 'report' || plan.action === 'unscanned') {
+          events.push(`[flow] 报帅：#${pr.number} ${plan.reason || plan.error}——同卡重拉是人做的，不自动 reviewer-create、不换厂`);
+          rec.pendingShuai = {
+            kind: plan.unscanned ? 'settled-reviewer-unscanned' : 'settled-reviewer',
+            reason: plan.reason || plan.error,
+          };
           pendingCount += 1;
         }
       }

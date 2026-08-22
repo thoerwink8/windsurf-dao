@@ -3484,6 +3484,48 @@ export function assertReviewerSeat({ reviewerId, routing } = {}) {
   return { ok: true, modelId: seat.modelId };
 }
 
+/** 审官 dispatch 已结算：报帅，不许自动 reviewer-create / 换厂再造。没查成 ≠ 未结算。 */
+export function planAfterSettledReviewer({ settlement } = {}) {
+  if (settlement == null) {
+    return {
+      ok: false,
+      unscanned: true,
+      create: false,
+      switchVendor: false,
+      action: 'unscanned',
+      error: '审官结算没查成（没查成，不许当没有审官、不许再造卡）',
+    };
+  }
+  if (settlement.unscanned || settlement.ok === false) {
+    return {
+      ok: false,
+      unscanned: true,
+      create: false,
+      switchVendor: false,
+      action: 'unscanned',
+      error: settlement.error
+        ? `${settlement.error}（没查成，不许当没有审官、不许再造卡）`
+        : '审官结算没查成（没查成，不许当没有审官、不许再造卡）',
+    };
+  }
+  if (settlement.settled) {
+    return {
+      ok: true,
+      create: false,
+      switchVendor: false,
+      action: 'report',
+      reason: '审官 dispatch 已结算，报帅，不自动 reviewer-create（同卡重拉是人做的）',
+    };
+  }
+  return {
+    ok: true,
+    create: false,
+    switchVendor: false,
+    action: 'none',
+    reason: '审官未结算，不造卡',
+  };
+}
+
 /** 起审官失败停手报，不许选下一个厂商再起。 */
 export function planReviewerCreateAfterFail({ error } = {}) {
   return {

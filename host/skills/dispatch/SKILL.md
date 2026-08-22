@@ -213,7 +213,7 @@ node scripts/dao.mjs dispatch --name "<卡名>" --reviewer <模型id> --spec "�
 
 `dispatch` 内部已经做完：选型闸、建工人卡、打 `reviewer/*`、起工人终端、等 TUI 就绪、**注入一行指针后再验开工**（含换行或超实测上限当场拒）、失败回滚。**不建审官卡**（#586：工人完工 `worker-done` 才起）。环境自检在建 worktree 时用 shell 跑一次，不经 agent。
 
-**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`，它调 `reviewer-create`（自读 `reviewer/*`、建树、起终端、注入审官任务书；审官任务书内嵌士兵真 id，杜绝 dispatch:undefined）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
+**闭环接线（#546 追加第五件 → #559 换官方原语 → #586 审官按需起）**：`dispatch` 只起士兵。士兵完工调 `worker-done`：没有审官卡才 `reviewer-create`；已有则复用，终端已关/dispatch 已结算也禁止再造。flow 不再在审官结算后自动 `reviewer-create`（#730：那是洞，不是自愈）。审官「可归档」是**普通告知不是结算信号**，不带 `--type worker_done`——`notify` 验的是投递不是结算，发过不等于审官自己那条 Dispatch 变 completed（结算另说，见 issue #551；#559 ⑤ 收尾由帅 `worker-release` 或 `worker-start --terminal` 转移所有权）。模板在 `host/skills/dispatch/templates/`，不硬编码进代码。
 
 多工人仍在约束载体内；给已有 PR 补审官走 `reviewer-attach`，不要再拼五步 + `raw`：
 
