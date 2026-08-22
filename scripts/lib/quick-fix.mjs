@@ -85,17 +85,33 @@ export function quickFixCommitMessage({ issue, message } = {}) {
   return `${QUICK_FIX_COMMIT_PREFIX} 微修 #${issue}：${msg}`;
 }
 
+/** 从正文抽「署名 issue #N」的单号。只认首个；没抽到返回 null（与抽到分开）。 */
+export function signedIssueNumber(text) {
+  const m = String(text || '').match(/署名\s+issue\s*#?\s*(\d+)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isInteger(n) ? n : null;
+}
+
 /**
  * PR 正文三段式（目标 / 验收标准 / 进展）+ 署名 issue（关单脚本解析源）。
- * custom 给整段正文（必须自带「署名 issue #N」，否则流转/关单读不到）。
+ * custom 给整段正文（必须自带「署名 issue #N」且 N 必须等于本次 issue——否则关单与
+ * pr-sync-labels 会关联错单，破坏数据契约）。
  */
 export function buildQuickFixPrBody({ issue, message, files, seconds, custom } = {}) {
   const customText = String(custom ?? '').trim();
   if (customText) {
-    if (!/署名\s+issue\s*#?\s*/.test(customText)) {
+    const signed = signedIssueNumber(customText);
+    if (signed === null) {
       return {
         ok: false,
         error: `--body-file 正文必须含「署名 issue #${issue}」行（关单与 label 同步都读它）`,
+      };
+    }
+    if (signed !== Number(issue)) {
+      return {
+        ok: false,
+        error: `--body-file 正文署名的是 issue #${signed}，不是本次 issue #${issue}——不许关错单`,
       };
     }
     return { ok: true, body: customText, custom: true };
@@ -124,6 +140,47 @@ export function buildQuickFixPrBody({ issue, message, files, seconds, custom } =
     `署名 issue #${issue}，关单交给 \`scripts/close-issues.mjs\`。`,
   ].join('\n');
   return { ok: true, body, custom: false };
+}
+
+/**
+ * attach 失败的整体回滚计划（#682 验收契约：attach 也是原子步骤，任一步失败
+ * 不留半成品分支/PR）。纯函数，执行与日志由调用方注入。
+ * 顺序：先删壳卡（它占着微修分支），再关 PR（连带删远端分支），最后删本地分支。
+ */
+export function planAttachFailureRollback({ pr, branch, worktreeId } = {}) {
+  const steps = [];
+  if (worktreeId) steps.push({ cmd: `worktree-rm --worktree ${worktreeId} --force`, kind: 'worktree-rm' });
+  if (pr) {
+    steps.push({ cmd: `pr close ${pr} --delete-branch`, kind: 'pr-close' });
+  } else if (branch) {
+    steps.push({ cmd: `push origin --delete ${branch}`, kind: 'branch-delete-remote' });
+  }
+  if (branch) steps.push({ cmd: `branch -D ${branch}`, kind: 'branch-delete-local' });
+  return { ok: true, steps };
+}
+
+/** 执行回滚计划；exec 注入（测试传假执行器），每步结果与失败都显式留痕。 */
+export function runAttachFailureRollback(plan, { exec, log } = {}) {
+  if (!plan || !Array.isArray(plan.steps)) {
+    return { ok: false, unscanned: true, error: '回滚计划没查成', results: [] };
+  }
+  if (typeof exec !== 'function') {
+    return { ok: false, unscanned: true, error: '回滚没拿到执行器（没查成）', results: [] };
+  }
+  const results = [];
+  for (const step of plan.steps) {
+    const r = exec(step.cmd);
+    const out = { ...step, ok: !!r.ok, error: r.ok ? undefined : r.error };
+    results.push(out);
+    if (typeof log === 'function') log(`回滚 ${out.cmd} -> ${out.ok ? 'ok' : `失败 ${out.error}`}`);
+  }
+  const failed = results.filter((r) => !r.ok);
+  return {
+    ok: failed.length === 0,
+    results,
+    failed,
+    error: failed.length ? `回滚失败 ${failed.length} 步：${failed.map((f) => f.error).join('；')}` : undefined,
+  };
 }
 
 /**

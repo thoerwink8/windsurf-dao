@@ -27,12 +27,14 @@ import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   QUICK_FIX_TYPE_LABEL,
   buildQuickFixPrBody,
+  planAttachFailureRollback,
   planIssueLabelStamps,
   planQuickFixGate,
   quickFixBranchName,
   quickFixCommitMessage,
   quickFixLabels,
   resolveQuickFixReviewer,
+  runAttachFailureRollback,
 } from './lib/quick-fix.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -256,20 +258,62 @@ function logLine(file, line) {
   catch { /* 日志写不上不阻塞主流程 */ }
 }
 
-/** 失败清理：删壳卡 + 删 orca 从 remote 建的本地微修分支（否则下次 attach 会撞派生分支）。 */
-function cleanupShell(worktreeId, branch, log) {
-  const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
-  logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
-  let branchClean = { ok: true, skipped: true };
-  if (branch) {
-    const cur = git(['branch', '--show-current'], { cwd: ROOT });
-    if (cur.ok && cur.out !== branch) {
-      const del = git(['branch', '-D', branch]);
-      branchClean = del.ok ? { ok: true } : { ok: false, error: del.error };
-      logLine(log, `本地分支清理: ${del.ok ? 'ok' : `失败 ${del.error}`}`);
-    }
+/** 回滚执行器：把计划步骤映射到真实命令。测试注入假执行器验计划本身。 */
+function rollbackExec(cmd) {
+  if (cmd.startsWith('worktree-rm ')) {
+    const m = cmd.match(/--worktree (\S+)/);
+    const r = daoRun(['worktree-rm', '--worktree', m ? m[1] : '', '--force']);
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
   }
-  return { rm, branchClean };
+  if (cmd.startsWith('pr close ')) {
+    const m = cmd.match(/pr close (\d+)/);
+    const r = m ? workerGh(['pr', 'close', m[1], '--delete-branch', '--comment', 'quick-fix attach 失败，整体回滚']) : { ok: false, error: 'pr close 参数没查成' };
+    return r.ok ? { ok: true } : { ok: false, error: r.error || `pr close exit ${r.status}` };
+  }
+  if (cmd.startsWith('push origin --delete ')) {
+    const name = cmd.slice('push origin --delete '.length);
+    const r = git(['push', 'origin', '--delete', name]);
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  }
+  if (cmd.startsWith('branch -D ')) {
+    const name = cmd.slice('branch -D '.length);
+    const exists = git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
+    if (!exists.ok) return { ok: true, skipped: true, error: '本地分支已不在（gh pr close 或前面步骤已删）' };
+    const r = git(['branch', '-D', name]);
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  }
+  return { ok: false, error: `回滚计划步骤不认识: ${cmd}` };
+}
+
+/**
+ * attach 失败的整体处置：先执行回滚计划（删壳卡 → 关 PR+删远端分支 → 删本地分支），
+ * 再在 PR 上留痕（回滚结果显式写进评论），最后非零退出。任何一步回滚失败也照发留痕。
+ */
+function failAttach(error, { pr, branch, worktreeId, log } = {}) {
+  logLine(log, `attach 失败: ${error}`);
+  const plan = planAttachFailureRollback({ pr, branch, worktreeId });
+  const rolled = runAttachFailureRollback(plan, {
+    exec: rollbackExec,
+    log: (line) => logLine(log, line),
+  });
+  logLine(log, `回滚结论: ${rolled.ok ? 'ok' : rolled.error}`);
+  const body = [
+    `微修审官没起来（quick-fix 异步 attach 失败）：${String(error || '').slice(0, 400)}`,
+    '',
+    '整体回滚结果：',
+    ...(rolled.results || []).map((s) => `- ${s.cmd}：${s.ok ? 'ok' : `失败 ${s.error}`}`),
+    '',
+    `回滚${rolled.ok ? '完成' : `失败（${rolled.error}）`}。日志：${log}`,
+    '红项按审官任务书上帅；如需重试，清理残留后重跑 quick-fix。',
+  ].join('\n');
+  // Windows 上多行 --body 会被拆（#573 坑 1），评论一律走 --body-file。
+  const commentFile = join(ROOT, '_tmp', `quickfix-attach-fail-${pr}.md`);
+  mkdirSync(join(ROOT, '_tmp'), { recursive: true });
+  writeFileSync(commentFile, body, 'utf8');
+  const posted = pr ? workerGh(['pr', 'comment', String(pr), '--body-file', commentFile]) : { ok: false, error: '没 PR 号' };
+  rmSync(commentFile, { force: true });
+  logLine(log, `PR 留痕: ${posted.ok ? 'ok' : `失败 ${posted.error}`}`);
+  emit({ ok: false, error, attachLog: log, rollback: rolled, posted: posted.ok });
 }
 
 function cmdAttach(args) {
@@ -292,13 +336,9 @@ function cmdAttach(args) {
   const worktreeId = wt.ok ? (wt.json?.result?.worktree?.id || wt.json?.worktreeId || null) : null;
   const worktreePath = wt.ok ? (wt.json?.result?.worktree?.path || wt.json?.worktreePath || null) : null;
   if (!wt.ok || !worktreeId) {
-    const error = `壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`;
-    logLine(log, `attach 失败: ${error}`);
-    if (branch) {
-      const del = git(['branch', '-D', branch]);
-      logLine(log, `本地分支清理: ${del.ok ? 'ok' : `失败 ${del.error}`}`);
-    }
-    emit({ ok: false, error, attachLog: log, cleaned: false, posted: false });
+    failAttach(`壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`, {
+      pr: args.pr, branch, log,
+    });
   }
   logLine(log, `壳卡已建 worktree=${worktreeId}`);
 
@@ -306,10 +346,9 @@ function cmdAttach(args) {
   if (worktreePath) {
     const cur = git(['branch', '--show-current'], { cwd: worktreePath });
     if (!cur.ok || cur.out !== branch) {
-      const error = `壳卡分支没切成 ${branch}（实际 ${cur.out || cur.error}）——reviewer-attach 的树→PR 归属校验会拒`;
-      logLine(log, `attach 失败: ${error}`);
-      cleanupShell(worktreeId, branch, log);
-      emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
+      failAttach(`壳卡分支没切成 ${branch}（实际 ${cur.out || cur.error}）——reviewer-attach 的树→PR 归属校验会拒`, {
+        pr: args.pr, branch, worktreeId, log,
+      });
     }
   }
 
@@ -317,18 +356,14 @@ function cmdAttach(args) {
   //    用信箱台当 coordinator 建 Run（#638 常驻台），显式 --run 传给 reviewer-attach。
   const station = ensureStation();
   if (!station.ok) {
-    const error = `信箱台 ensure 失败：${station.error}`;
-    logLine(log, `attach 失败: ${error}`);
-    cleanupShell(worktreeId, branch, log);
-    emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
+    failAttach(`信箱台 ensure 失败：${station.error}`, { pr: args.pr, branch, worktreeId, log });
   }
   const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle, '--json'], { timeout: 60000 });
   const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
   if (!runCreated.ok || !runId) {
-    const error = `审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`;
-    logLine(log, `attach 失败: ${error}`);
-    cleanupShell(worktreeId, branch, log);
-    emit({ ok: false, error, attachLog: log, cleaned: true, posted: false });
+    failAttach(`审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`, {
+      pr: args.pr, branch, worktreeId, log,
+    });
   }
   logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
 
@@ -365,24 +400,9 @@ function cmdAttach(args) {
   }
   if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
     const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
-    logLine(log, `attach 失败: ${error}`);
     const rawTail = String(r.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ');
     if (rawTail && !error.includes(rawTail)) logLine(log, `reviewer-attach 输出尾部: ${rawTail.slice(0, 300)}`);
-    const cleaned = cleanupShell(worktreeId, branch, log);
-    const body = [
-      `微修审官没起来（quick-fix 异步 attach 失败）：${error.slice(0, 400)}`,
-      '',
-      `壳卡已清理：${cleaned.rm.ok ? '是' : `否（${cleaned.rm.error}）`}。日志：${log}`,
-      '红项按审官任务书上帅；本 PR 无审官，需人工处置。',
-    ].join('\n');
-    // Windows 上多行 --body 会被拆（#573 坑 1），评论一律走 --body-file。
-    const commentFile = join(ROOT, '_tmp', `quickfix-attach-fail-${args.pr}.md`);
-    mkdirSync(join(ROOT, '_tmp'), { recursive: true });
-    writeFileSync(commentFile, body, 'utf8');
-    const posted = workerGh(['pr', 'comment', String(args.pr), '--body-file', commentFile]);
-    rmSync(commentFile, { force: true });
-    logLine(log, `PR 留痕: ${posted.ok ? 'ok' : `失败 ${posted.error}`}`);
-    emit({ ok: false, error, attachLog: log, cleaned: cleaned.rm.ok, posted: posted.ok });
+    failAttach(error, { pr: args.pr, branch, worktreeId, log });
   }
   logLine(log, `attach 成功 reviewerDispatchId=${json.reviewerDispatchId || '?'} reviewerId=${json.reviewerId || '?'}`);
   emit({ ok: true, pr: Number(args.pr), reviewerDispatchId: json.reviewerDispatchId, attachLog: log });

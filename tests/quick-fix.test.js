@@ -124,12 +124,60 @@ describe('#682 微通道 quick-fix', () => {
     await t.test('自定义正文缺署名 issue → 拒', () => {
       assert.ok(badCustom.ok === false && /署名 issue/.test(badCustom.error), JSON.stringify(badCustom));
     });
+    const wrongIssue = L.buildQuickFixPrBody({ issue: '682', message: 'x', custom: '## 目标\nx\n\n署名 issue #999，关单交给 scripts/close-issues.mjs。' });
+    await t.test('自定义正文署名别的 issue → 拒（不许关错单）', () => {
+      assert.ok(wrongIssue.ok === false && /#999/.test(wrongIssue.error) && /#682/.test(wrongIssue.error),
+        JSON.stringify(wrongIssue));
+    });
     const goodCustom = L.buildQuickFixPrBody({
       issue: '682', message: 'x',
       custom: '## 目标\nx\n\n署名 issue #682，关单交给 scripts/close-issues.mjs。',
     });
     await t.test('自定义正文含署名 → 放行', () => {
       assert.ok(goodCustom.ok && goodCustom.custom === true, JSON.stringify(goodCustom));
+    });
+    const noHash = L.buildQuickFixPrBody({ issue: '682', message: 'x', custom: '署名 issue 682' });
+    await t.test('署名 issue 682（无 #）也认', () => {
+      assert.ok(noHash.ok === true, JSON.stringify(noHash));
+    });
+    await t.test('signedIssueNumber 抽号：抽到 / 没抽到分开', () => {
+      assert.ok(L.signedIssueNumber('署名 issue #682 x') === 682);
+      assert.ok(L.signedIssueNumber('署名 issue 999') === 999);
+      assert.ok(L.signedIssueNumber('没有署名') === null);
+    });
+  });
+
+  it('planAttachFailureRollback：attach 失败必须关 PR + 删远端分支；执行与留痕', async (t) => {
+    const L = await LIB_LOAD;
+    const withPr = L.planAttachFailureRollback({ pr: '42', branch: 'thoerwink8/quickfix-1-x', worktreeId: 'wt_1' });
+    await t.test('有 PR → 计划含 删壳卡 → 关 PR（连带删远端）→ 删本地分支', () => {
+      assert.ok(withPr.ok === true, JSON.stringify(withPr));
+      assert.deepEqual(withPr.steps.map((s) => s.kind), ['worktree-rm', 'pr-close', 'branch-delete-local']);
+      assert.ok(/pr close 42 --delete-branch/.test(withPr.steps[1].cmd), JSON.stringify(withPr.steps[1]));
+    });
+    const noPr = L.planAttachFailureRollback({ branch: 'thoerwink8/quickfix-1-x' });
+    await t.test('没 PR（前台未成）→ 计划含 删远端分支', () => {
+      assert.ok(noPr.steps.some((s) => s.kind === 'branch-delete-remote'), JSON.stringify(noPr));
+    });
+    const allOk = L.runAttachFailureRollback(withPr, {
+      exec: () => ({ ok: true }),
+      log: () => {},
+    });
+    await t.test('执行器全过 → ok + 每步留痕', () => {
+      assert.ok(allOk.ok === true && allOk.results.length === 3 && allOk.failed.length === 0, JSON.stringify(allOk));
+    });
+    let failOnce = 0;
+    const oneFail = L.runAttachFailureRollback(withPr, {
+      exec: () => ({ ok: failOnce++ !== 1 }),
+      log: () => {},
+    });
+    await t.test('任一步失败 → 整体非零 + failed 显式列出', () => {
+      assert.ok(oneFail.ok === false && oneFail.failed.length === 1 && /失败 1 步/.test(oneFail.error),
+        JSON.stringify(oneFail));
+    });
+    const unscanned = L.runAttachFailureRollback(null, {});
+    await t.test('计划没查成 → 没查成，不是 ok', () => {
+      assert.ok(unscanned.ok === false && unscanned.unscanned === true, JSON.stringify(unscanned));
     });
   });
 
