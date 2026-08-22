@@ -74,24 +74,43 @@ function fmtCards(list, withStatus) {
   }).join(' ');
 }
 
+/** 盘面清单短名：有号用 #N+状态（#729审中）；无号用卡名首段，丢掉 · 后的模型尾巴。 */
+export function shortCardLabel(c) {
+  if (!c) return '?';
+  if (c.number != null) return c.status ? `#${c.number}${c.status}` : `#${c.number}`;
+  const raw = String(c.name || '').trim();
+  if (!raw) return '?';
+  const noModel = raw.split('·')[0].trim();
+  const token = noModel.split(/\s+/)[0] || '?';
+  return token.length > 24 ? token.slice(0, 24) : token;
+}
+
+function fmtOnBoard(list) {
+  if (!Array.isArray(list) || list.length === 0) return '无';
+  return list.map(shortCardLabel).join(' ');
+}
+
 /** 从 orca worktree ps 的 JSON 算盘面（纯函数，测试喂 fixture 不碰 orca）。
  * 口径（不打 GitHub；#588 起带单号和状态，不再只报计数）：
  *   在途 = 顶层任务卡里还在做 / 在审的（做中、审中）。
  *   待收口 = 顶层任务卡已做完、等帅合并/归档。
  *   待消歧 = 建了卡但 status=todo、还没有 agent。
+ *   盘面 = 顶层非主树、非归档卡的真实名单（含无 cardStatus 的非正式空卡）。
  * 子卡（审官等，有 parentWorktreeId）并进父卡，不单独占一行。
- * master 主树与 archived 卡不算。 */
+ * 主树（isMainWorktree）明确排除，不进在途、不进盘面清单。
+ * archived 卡不算。不计算「预期该留谁」，不自动删卡。 */
 export function summarizeBoard(psJson) {
   const wts = Array.isArray(psJson?.result?.worktrees) ? psJson.result.worktrees : null;
   if (!wts) return { unscanned: true, error: 'worktree ps 返回没有 result.worktrees 数组' };
-  const out = { inFlight: [], closing: [], todo: [], scanned: 0, unscanned: false };
+  const out = { inFlight: [], closing: [], todo: [], onBoard: [], scanned: 0, unscanned: false };
   for (const w of wts) {
     if (!w || w.isMainWorktree || w.isArchived) continue;
     out.scanned++;
     if (w.parentWorktreeId) continue;
     const status = cardStatus(w);
-    if (!status) continue;
     const card = { ...cardRef(w), status };
+    out.onBoard.push(card);
+    if (!status) continue;
     if (status === '待消歧') out.todo.push(card);
     else if (status === '待收口') out.closing.push(card);
     else out.inFlight.push(card);
@@ -104,11 +123,12 @@ export function boardLine(summary) {
   if (!summary || summary.unscanned) {
     return `[盘] 没查成：${summary?.error || '摘要没算出来'}（≠ 扫完是空的）`;
   }
-  if (!Array.isArray(summary.inFlight) || !Array.isArray(summary.closing) || !Array.isArray(summary.todo)) {
+  if (!Array.isArray(summary.inFlight) || !Array.isArray(summary.closing)
+    || !Array.isArray(summary.todo) || !Array.isArray(summary.onBoard)) {
     return `[盘] 没查成：缓存还是旧计数形，作废重算（≠ 扫完是空的）`;
   }
   const todoBit = summary.todo.length ? ` · 待消歧 ${fmtCards(summary.todo, false)}` : '';
-  return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit}`;
+  return `[盘] 在途 ${fmtCards(summary.inFlight, true)} · 待收口 ${fmtCards(summary.closing, false)}${todoBit} · 盘面 ${fmtOnBoard(summary.onBoard)}`;
 }
 
 // spawn 唯一真源在 scripts/lib/orca-run.mjs——raw 结果由本文件调用点自己解析。
@@ -121,7 +141,7 @@ function loadCache() {
   try {
     const doc = JSON.parse(readFileSync(CACHE_FILE, 'utf8'));
     if (doc && typeof doc.ts === 'number' && doc.summary && !doc.summary.unscanned
-      && Array.isArray(doc.summary.inFlight)) return doc;
+      && Array.isArray(doc.summary.inFlight) && Array.isArray(doc.summary.onBoard)) return doc;
   } catch { /* 缓存不在/坏了 = 重算 */ }
   return null;
 }
