@@ -437,8 +437,15 @@ async function main(argv) {
     '--comment', `微修 #${issue} 壳卡：quick-fix 起审官用，无工人终端`,
   ]);
   const worktreeId = wt.ok ? (wt.json?.result?.worktree?.id || wt.json?.worktreeId || null) : null;
+  const worktreePath = wt.ok ? (wt.json?.result?.worktree?.path || wt.json?.worktreePath || null) : null;
   if (!wt.ok || !worktreeId) failWithRollback(`壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`);
   created.worktreeId = worktreeId;
+  // orca 建树会给新卡起同名分支；reviewer-attach 的树→PR 归属校验要求壳卡分支 == PR head，
+  // 所以在壳卡内切到微修分支（git 不许两棵 worktree 同分支，源树已回 master，这里能切）。
+  if (worktreePath) {
+    const wtCheckout = git(['checkout', branch], { cwd: worktreePath });
+    if (!wtCheckout.ok) failWithRollback(`壳卡切到微修分支失败：${wtCheckout.error}`);
+  }
 
   // 6. 异步 attach 异厂审官（#679 闸已过；后台起，不阻塞 20 秒主线）
   const attachLogFile = attachLog(issue);
