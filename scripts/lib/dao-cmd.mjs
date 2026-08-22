@@ -4167,7 +4167,8 @@ export const FLAGS_BY_VERB = {
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
-    '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--dry-run', '--json', '--help', '-h',
+    '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
+    '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([

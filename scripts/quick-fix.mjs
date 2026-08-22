@@ -22,6 +22,8 @@ import readline from 'node:readline';
 import { ROLE_META, ghAs } from './lib/gh.mjs';
 import { loadRoutingPolicy } from './lib/model-routing-json.mjs';
 import { assembleCardName, ensureRepoLabels, runGh } from './lib/dao-cmd.mjs';
+import { runOrca } from './lib/orca-run.mjs';
+import { orcaErrorText } from './lib/orca-error.mjs';
 import {
   QUICK_FIX_TYPE_LABEL,
   buildQuickFixPrBody,
@@ -221,6 +223,21 @@ function rollback(created) {
   return steps;
 }
 
+/** 信箱台 ensure：返回常驻台 handle（微通道建 Run 用它当 coordinator，worker-start 才不 fenced）。 */
+function ensureStation() {
+  const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: 60000,
+  });
+  let json = null;
+  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+  catch { json = null; }
+  if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+    return { ok: false, error: (json && json.error) || String(r.stderr || '').trim() || `inbox-station ensure exit ${r.status}` };
+  }
+  if (!json.handle) return { ok: false, error: 'inbox-station ensure 没返回 handle（没查成）' };
+  return { ok: true, handle: json.handle };
+}
+
 function attachLog(issue) {
   mkdirSync(QUICK_FIX_LOG_DIR, { recursive: true });
   return join(QUICK_FIX_LOG_DIR, `quickfix-${issue}.log`);
@@ -270,13 +287,35 @@ function cmdAttach(args) {
     }
   }
 
-  // 3. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
+  // 3. detached 进程自开 Run 没有 coordinator 终端，worker-start 会 consumer_fenced——
+  //    用信箱台当 coordinator 建 Run（#638 常驻台），显式 --run 传给 reviewer-attach。
+  const station = ensureStation();
+  if (!station.ok) {
+    const error = `信箱台 ensure 失败：${station.error}`;
+    logLine(log, `attach 失败: ${error}`);
+    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
+    logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
+    emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+  }
+  const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle], { timeout: 60000 });
+  const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
+  if (!runCreated.ok || !runId) {
+    const error = `审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`;
+    logLine(log, `attach 失败: ${error}`);
+    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
+    logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
+    emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+  }
+  logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
+
+  // 4. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
   const r = spawnSync(process.execPath, [
     DAO_CLI, 'reviewer-attach',
     '--pr', String(args.pr),
     '--worktree', worktreeId,
     '--reviewer', String(args.reviewer),
     '--issue', String(args.issue),
+    '--run', runId,
     '--skip-wait',
     '--merge-policy', 'auto',
   ], { encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: ATTACH_TIMEOUT_MS });

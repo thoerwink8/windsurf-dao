@@ -2718,9 +2718,15 @@ function cmdReviewerAttach(args) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
 
-  const station = bindStation();
-  if (!station.ok) failCreated(created, station.error, plan);
-  const reviewerRunId = soldierRunId || station.runId;
+  // #682 微通道：quick-fix 的异步 attach 是 detached 进程，bindStation 自开的 Run 没有
+  // coordinator 终端，worker-start 会 consumer_fenced。微通道子进程显式 --run（--from 信箱台
+  // 建的 Run，coordinator 是常驻信箱台）；其余路径照旧走 bindStation。
+  let reviewerRunId = args.run ? String(args.run).trim() : null;
+  if (!reviewerRunId) {
+    const station = bindStation();
+    if (!station.ok) failCreated(created, station.error, plan);
+    reviewerRunId = station.runId;
+  }
   const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
