@@ -4135,7 +4135,7 @@ export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
-  'inbox-collect', 'run-gc', 'ask', 'raw',
+  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait']);
@@ -4181,6 +4181,8 @@ export const FLAGS_BY_VERB = {
   reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
   'inbox-collect': new Set(['--peek', '--json', '--help', '-h']),
   'run-gc': new Set(['--apply', '--json', '--help', '-h']),
+  'board-archive': new Set(['--out', '--json', '--help', '-h']),
+  'board-reset': new Set(['--apply', '--out', '--json', '--help', '-h']),
   ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--json', '--help', '-h']),
   'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
   'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
@@ -4274,6 +4276,14 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 按在途单的 Run 收信箱。三态：empty / unscanned / run_not_found。默认 --peek 不标已读
   run-gc [--apply]
                   # 列出无在途单对应的 Run；--apply 才关台退役。在途的不许退役
+盘面（重测派单前的存档与清盘；存档只留本机 ~/.dao/board-archive/，不进 git）：
+  board-archive [--out <目录>]
+                  # 全量存档（卡片/终端/workers/Run/信箱）→ board-<时间戳>.{json,md}
+                  # 任何一节没查成：存档照写（标 unscanned）但非零退出——没查成 ≠ 扫完是空的
+  board-reset [--apply] [--out <目录>]
+                  # 默认 dry-run 只列将删/将跳过的卡，不改态
+                  # --apply：先存档再逐卡整树删（复用 worktree-rm 的占用闸与账本孤本闸）+ 收尾 run-gc
+                  # 硬闸：任何一节盘面没查成 → 一张都不删；主树永不删；占用中的卡跳过并列清原因
   ask --question <文> [--options <csv>] [--timeout-ms <n>] [--run <id>]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
