@@ -286,6 +286,8 @@ function cmdAttach(args) {
   if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
     const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
     logLine(log, `attach 失败: ${error}`);
+    const rawTail = String(r.stdout || '').trim().split(/\r?\n/).slice(-3).join(' | ');
+    if (rawTail && !error.includes(rawTail)) logLine(log, `reviewer-attach 输出尾部: ${rawTail.slice(0, 300)}`);
     const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
     logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
     const body = [
