@@ -402,11 +402,11 @@ async function main(argv) {
   mkdirSync(join(ROOT, '_tmp'), { recursive: true });
   writeFileSync(bodyFile, bodyPlan.body, 'utf8');
 
-  // 3. 非 draft PR（dao-worker[bot]）
-  const prCreate = workerGh(['pr', 'create', '--title', `[qf] ${message}`, '--body-file', bodyFile, '--head', branch, '--base', 'master', '--json', 'number']);
+  // 3. 非 draft PR（dao-worker[bot]）。本机 gh 的 pr create 不支持 --json，从输出的 URL 取 PR 号。
+  const prCreate = workerGh(['pr', 'create', '--title', `[qf] ${message}`, '--body-file', bodyFile, '--head', branch, '--base', 'master']);
   let prNumber = null;
-  try { prNumber = prCreate.ok ? JSON.parse(prCreate.out)?.number : null; }
-  catch { prNumber = null; }
+  const urlMatch = String(prCreate.out || '').match(/pull\/(\d+)/);
+  if (prCreate.ok && urlMatch) prNumber = Number(urlMatch[1]);
   rmSync(bodyFile, { force: true });
   if (!prCreate.ok || !prNumber) failWithRollback(`开 PR 失败：${prCreate.error || '没返回 PR 号（没查成）'}`);
   created.pr = prNumber;
