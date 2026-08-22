@@ -22,7 +22,7 @@ const { spawnSync } = require("child_process");
 const REPO = path.resolve(__dirname, "..");
 const FLOW = path.join(REPO, "scripts", "flow.mjs");
 const FIXTURES = path.join(REPO, "tests", "flow-fixtures");
-const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, dispatchNewTaskToTerminal, isFlowWork, pendingFlowItems, ticketIssueNumber } = require("../scripts/flow.mjs");
+const { deriveState, pendingAction, orderedSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, verifyStarted, injectAndVerify, dispatchNewTaskToTerminal, isFlowWork, pendingFlowItems, ticketIssueNumber, loadState, saveState } = require("../scripts/flow.mjs");
 const { judgmentFromReview, isCompletionComment, redFlagsFromReviewBodies } = require("../scripts/lib/judgment.mjs");
 
 function runFlow(dir, extraArgs = []) {
@@ -109,6 +109,51 @@ describe('flow', () => {
     });
     await t.test('重跑不重复报帅：行（闸已落）', () => {
       assert.ok(!/报帅：/.test(out2) && !/动作：/.test(out2), '重跑不重复报帅  →  ' + out2.trim());
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('③b 待帅处置去重 JSON 往返（#730 刷屏回归：Set 序列化落成 {} → .has 崩/去重落空）', async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-ghnotified-"));
+    const stateFile = path.join(tmp, "state.json");
+    await t.test('旧版 Set 序列化形态（{}）回读不崩，归一成 plain object', () => {
+      // 旧代码 ghNotified 是 Set：JSON.stringify(Set) === '{}'，回读后 .has is not a function
+      fs.writeFileSync(stateFile, JSON.stringify({
+        version: 1, inventoried: true, round: 3,
+        records: { 730: { pr: 730, seenComments: {}, seenReviews: {}, ghNotified: {} } },
+      }));
+      const s = loadState(stateFile);
+      assert.ok(s.records[730] && typeof s.records[730].ghNotified === 'object' && !Array.isArray(s.records[730].ghNotified),
+        '旧形态 {} 归一成 plain object  →  ' + JSON.stringify(s.records[730]));
+    });
+    await t.test('坏形态（数组/null/标量）归一，不崩', () => {
+      for (const bad of [[], null, 'x', 7]) {
+        fs.writeFileSync(stateFile, JSON.stringify({
+          version: 1, inventoried: true, round: 1,
+          records: { 730: { pr: 730, seenComments: {}, seenReviews: {}, ghNotified: bad } },
+        }));
+        const s = loadState(stateFile);
+        assert.deepStrictEqual(s.records[730].ghNotified, {}, `坏形态 ${JSON.stringify(bad)} 归一  →  ` + JSON.stringify(s.records[730].ghNotified));
+      }
+    });
+    await t.test('去重标记 JSON 往返后存活（同一 reason 不重复发）', () => {
+      const s = loadState(stateFile);
+      s.records[730].ghNotified['approved 超时未合待帅处置'] = true;
+      saveState(stateFile, s);
+      const s2 = loadState(stateFile);
+      assert.strictEqual(s2.records[730].ghNotified['approved 超时未合待帅处置'], true,
+        '去重标记往返后存活  →  ' + JSON.stringify(s2.records[730].ghNotified));
+    });
+    await t.test('端到端：旧 {} 形态状态文件 + 有待帅处置的盘面 → 不 TypeError 崩', () => {
+      // fake-loop 产出「待帅处置：#999」；旧代码此时 rec.ghNotified={} → .has 抛 TypeError 整轮崩掉
+      fs.writeFileSync(stateFile, JSON.stringify({
+        version: 1, inventoried: true, round: 5,
+        records: { 999: { pr: 999, seenComments: {}, seenReviews: {}, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, workerWorktree: null, ghNotified: {} } },
+      }));
+      const r = spawnSync(process.execPath, [FLOW, "--snapshot-dir", path.join(FIXTURES, "fake-loop"), "--state-file", stateFile, "--dry-run"], { encoding: "utf8", cwd: REPO });
+      const out = (r.stdout || "") + (r.stderr || "");
+      assert.ok(!/is not a function/.test(out) && !/TypeError/.test(out), '不得 TypeError 崩  →  ' + out.trim());
+      assert.ok(/待帅处置：#999/.test(out), '待帅处置仍常驻  →  ' + out.trim());
     });
     fs.rmSync(tmp, { recursive: true, force: true });
   });

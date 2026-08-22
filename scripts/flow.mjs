@@ -682,6 +682,14 @@ function loadState(path) {
   try {
     const s = JSON.parse(readFileSync(path, 'utf8'));
     if (!s.records || typeof s.records !== 'object') throw new Error('records 缺失');
+    // ghNotified 必须是可 JSON 往返的 plain object；旧文件里 Set 序列化留下的 {} 天然兼容，
+    // 其它形态（数组/null/标量）一律归一成 {}——宁可补发一次，不许 .has 崩掉或去重落空。
+    for (const rec of Object.values(s.records)) {
+      if (!rec || typeof rec !== 'object') continue;
+      if (!rec.ghNotified || typeof rec.ghNotified !== 'object' || Array.isArray(rec.ghNotified)) {
+        rec.ghNotified = {};
+      }
+    }
     return { version: 1, inventoried: !!s.inventoried, records: s.records, round: Number(s.round) || 0 };
   } catch (e) {
     return { version: 1, inventoried: false, records: {}, round: 0, loadError: String(e.message) };
@@ -727,7 +735,7 @@ function heartbeatFromState(state) {
 }
 
 function freshRecord(pr) {
-  return { pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, workerWorktree: null };
+  return { pr, seenComments: {}, seenReviews: {}, pendingShuai: null, reportedMalformed: {}, reportedStale: false, actedOn: null, reviewer: null, workerWorktree: null, ghNotified: {} };
 }
 
 function fingerprint(derived) {
@@ -1194,13 +1202,14 @@ function processOneRound(source, state, args) {
     if (reason) {
       awaitingShuai.push({ pr: pr.number, reason });
       // #686 ③：待帅处置落 GitHub——经 gh 写 PR comment，任何会话可见
+      // ghNotified 是 plain object（不是 Set）：Set 经 JSON 往返变 {}，去重落空每轮刷屏（#730 实证 8 连）。
       const ghKey = reason;
-      if (!rec.ghNotified || !rec.ghNotified.has(ghKey)) {
+      if (!rec.ghNotified || typeof rec.ghNotified !== 'object' || Array.isArray(rec.ghNotified)) rec.ghNotified = {};
+      if (!rec.ghNotified[ghKey]) {
         if (!args.dryRun) {
           const ghC = runGh(['pr', 'comment', String(pr.number), '--body', `[flow] 待帅处置：#${pr.number}（${reason}）`]);
           if (ghC.ok) {
-            if (!rec.ghNotified) rec.ghNotified = new Set();
-            rec.ghNotified.add(ghKey);
+            rec.ghNotified[ghKey] = true;
           }
         }
       }
@@ -1267,7 +1276,7 @@ function isInstitutional(pr) {
 // ══════════════════════════════════════════════════════════════════════
 
 // 纯函数导出（供 tests/flow.tests.js 单测；import 时不执行主流程）
-export { deriveState, pendingAction, orderedSignals, completionSignals, reviewSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, ticketIssueNumber };
+export { deriveState, pendingAction, orderedSignals, completionSignals, reviewSignals, isInstitutional, awaitingShuaiReason, parseOrcaStdout, ticketIssueNumber, loadState, saveState };
 
 let args = null;
 let anyEmitted = false;
