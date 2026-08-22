@@ -169,8 +169,9 @@ function workingTreeFiles() {
   }
   return {
     ok: true,
-    // porcelain 行 = 两位状态列 + 空格 + 路径；重命名是 "R  old -> new"，展示层保留。
-    files: lines.map((l) => l.slice(3).trim()).filter(Boolean),
+    // porcelain 行 = 一到两位状态列 + 空格 + 路径（实测有 "M host" 与 " M host" 两种形态）；
+    // 重命名是 "R  old -> new"，展示层保留。
+    files: lines.map((l) => l.replace(/^[ MADRCU?!]{1,2} /, '').trim()).filter(Boolean),
     raw: lines,
   };
 }
