@@ -21,7 +21,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import readline from 'node:readline';
 import { ROLE_META, ghAs } from './lib/gh.mjs';
 import { loadRoutingPolicy } from './lib/model-routing-json.mjs';
-import { ensureRepoLabels, runGh } from './lib/dao-cmd.mjs';
+import { assembleCardName, ensureRepoLabels, runGh } from './lib/dao-cmd.mjs';
 import {
   QUICK_FIX_TYPE_LABEL,
   buildQuickFixPrBody,
@@ -425,12 +425,11 @@ async function main(argv) {
   }
 
   // 5. 壳卡（审官父卡，挂在 PR 分支上，供 reviewer-attach 树→PR 归属校验）
+  const shellCardName = assembleCardName({ name: '微修壳卡', issue, role: '工人', model });
   const wt = daoRun([
     'worktree-create',
     '--issue', issue,
-    '--role', '工人',
-    '--model', model,
-    '--name', '微修壳卡',
+    '--name', shellCardName,
     '--no-parent',
     '--setup', 'skip',
     '--base-branch', branch,
