@@ -1,6 +1,6 @@
 ---
 name: pr-fast
-description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全走 marshal；写码仍在执行面。用户说「快速模式」「极速模式」「pr-fast」「直开PR」「快单」时读。
+description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全走 marshal；写码在执行面（可派后台子代理，不必新开聊天）。用户说「快速模式」「极速模式」「pr-fast」「直开PR」「快单」时读。
 ---
 
 # 快速模式 / 极速模式（pr-fast）
@@ -30,18 +30,20 @@ description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全�
 
 主会话红线精神保留：**帅窗禁止 git 写**（`commit` / `push` 等）。快路例外见 `host/skills/dispatch/SKILL.md`「主会话红线」旁指针——开 PR 等 GitHub 写动作走 **marshal**，不算「手碰 git」。
 
+**执行面可以是后台子代理。** 帅窗（当前协调会话，含 Cursor Multitask）写完任务书后，直接派后台子代理干活。不要把「请用户新开 Agent 会话」当成唯一或必经路径。
+
 | 谁 | 做什么 | 禁止 |
 | --- | --- | --- |
-| **执行面** | `checkout -b` → 改码 → `dao-check` → `push` | **`gh pr create`**、worker 开 PR、裸 `gh` 退路 |
-| **帅窗** | `gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | git 写（commit/push）；**裸 `gh`**（必须 marshal） |
+| **执行面**（后台子代理；兜底才是新会话/新终端） | `checkout -b` → 改码 → `dao-check` → `push` | **`gh pr create`**、worker 开 PR、裸 `gh` 退路 |
+| **帅窗** | 写任务书、派执行面；`gh-as.mjs marshal`：`pr create` / `pr ready` / `pr comment` / `pr merge` | 自己动手 git 写（commit/push）；**裸 `gh`**（必须 marshal） |
 
-**Cursor Desktop**：写码仍在**新建 Agent 会话**；`create` / `ready` / `comment` / `merge` 在**帅窗**用 marshal。当前帅会话禁止 `git commit` / `git push`——即使用户催，也先说明「请新开 Agent 会话执行下面任务书」；GitHub 文书留在帅窗走 marshal。
+帅窗自己仍然禁止 `git commit` / `git push`——即使用户催，也不在帅窗手碰 git；派后台子代理当执行面去做。`create` / `ready` / `comment` / `merge` 留在帅窗走 marshal。不要把用户支去新开一个聊天窗口。
 
 ## 流程（按序）
 
 ### 1. 帅窗：写任务书（不进 git）
 
-用下面模板跟用户对齐，或写入 `_flow/` 临时 md 再交给新会话——**不要**把任务书当 git 产物提交：
+用下面模板跟用户对齐，再交给执行面（后台子代理，或兜底时的新会话）——**不要**把任务书当 git 产物提交，也不要为此造 `_flow` 状态：
 
 ```markdown
 ## 目标
@@ -56,12 +58,15 @@ description: 小活直开 draft PR、不走 issue。快路 GitHub 写动作全�
 
 ### 2. 开执行面
 
-- **Cursor**：请用户新开 Agent 会话，把任务书 + 本 skill 路径 `host/skills/pr-fast/SKILL.md` 一并附上（或 `@` 引用）。
+按宿主选路，**不要默认让用户新开聊天**：
+
+- **Cursor Multitask / 协调器（有子代理能力）**：写完任务书后，直接派**后台子代理**当执行面。把任务书 + 本 skill 路径 `host/skills/pr-fast/SKILL.md` 注入给子代理。子代理就是执行面：由它 `commit` / `push`。
+- **用户不在 Multitask、也没有子代理能力（兜底）**：才退回「新开 Agent 会话或新终端」。把任务书 + 本 skill 一并附上（或 `@` 引用）。
 - **CC / 终端**：在新终端执行；要审官闭环时用 `dispatch`，不要假装是快路。
 
 ### 3. 执行面：branch → 改 → 检 → push（不开 PR）
 
-在**执行面**（不是帅窗）：
+在**执行面**（后台子代理或兜底会话；不是帅窗）：
 
 ```bash
 # 先验不在 master 上直接改（在途分支上干）
@@ -106,7 +111,7 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 
 | skill | 干什么 |
 | --- | --- |
-| **pr-fast（本页）** | 小活、无 issue、直 draft PR；写码在执行面，GitHub 写走 marshal |
+| **pr-fast（本页）** | 小活、无 issue、直 draft PR；写码在执行面（子代理优先），GitHub 写走 marshal |
 | **resume** | 查在途 draft PR / issue / 工人 |
 | **dispatch** | 要工人+审官、要 `--issue`、体系类、大块活 |
 | **dao-project** | 多块相关活项化 |
@@ -115,7 +120,8 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 ## 不要做的
 
 - 不要为快路加 hook、dao-check 新项、租约文件、接力状态。
-- 不要在帅窗里 `git commit` / `git push`。
+- 不要在帅窗里 `git commit` / `git push`；要写 git 就派执行面（后台子代理）。
+- 不要把用户支去新开聊天当必经路径；有子代理就派子代理。
 - 不要在执行面开 PR（含 worker / 裸 `gh`）；不要用裸 `gh` 做 create/ready/comment/merge。
 - 不要把体系类改动包装成「极速模式」绕过 manual merge 与 PR 三问。
 - 不要开 issue「为了有个号」——要么真走开单三问，要么 PR 正文自洽。
