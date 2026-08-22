@@ -1014,6 +1014,18 @@ describe('watchdog', () => {
     });
   });
 
+  it('#675c 钉住现状：忙盘面不查 missing-reviewer 是承重墙，不是盲区（2026-08-22 实证）', async (t) => {
+    // 曾尝试摘除「全盘 0 working/waiting 才跑」前置：live 实录里 #450/#449 这类
+    // 「下班卡 + PR 开着 + 无子卡」是正常终态（审完卡已收 / PR 等合并），摘除后 18 个
+    // 实录夹具误报。树结构判不出「审官没起来」与「审完了卡收了」——那要 GitHub review 态。
+    // 本测试钉住：忙盘面（有 working 卡）+ 下班卡 → 不报 missing-reviewer。
+    // 谁要摘前置，先给本检查接上 PR review 态数据源，再来改本测试。
+    const r = runMultiRounds(path.join(FIXTURES, "live"), 2);
+    await t.test('忙盘面两轮也不报 missing-reviewer', () => {
+      assert.ok(!/missing-reviewer:/.test(r.out), '忙盘面不报 missing-reviewer  →  ' + r.out.trim());
+    });
+  });
+
   it('⑳b5 #633 框里已有未发出内容：at capacity 续命禁止再 terminal send', async (t) => {
     const r = runWatchdog(path.join(FIXTURES, "capacity-unsent"));
     await t.test('退出码 1（指纹仍报）', () => {
