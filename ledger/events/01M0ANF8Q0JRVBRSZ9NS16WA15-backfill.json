@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T22:47:40+08:00",
+  "machine": "backfill",
+  "seq": 284,
+  "job_id": "gh-pr-643",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #643；[grok] #642 换机地图 host/machine + 仓外路径闸；判定行红 1 项",
+  "pr_number": 643,
+  "source": "github-backfill",
+  "event_id": "5fe4770a19c6f6ccc976f0e6edcf8c0ed458e17553fb71f6248d7ce7895a7952"
+}

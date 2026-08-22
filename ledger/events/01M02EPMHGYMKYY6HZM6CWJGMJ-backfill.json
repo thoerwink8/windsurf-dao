@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T18:15:26+08:00",
+  "machine": "backfill",
+  "seq": 172,
+  "job_id": "gh-pr-485",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #485；[grok] feat: 建统一命令库 CLI；判定行红 0 项",
+  "pr_number": 485,
+  "source": "github-backfill",
+  "event_id": "58be93bb25e91c53a5e1d1b346f723ed29c88d92d17c58b12a29bc23c9d3083a"
+}

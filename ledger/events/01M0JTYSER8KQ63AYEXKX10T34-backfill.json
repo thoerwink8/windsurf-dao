@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T02:57:27+08:00",
+  "machine": "backfill",
+  "seq": 392,
+  "job_id": "gh-pr-721",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #721；[devin] #631 reviewer-attach 树→dispatch 映射串号根治；判定行红 1 项",
+  "pr_number": 721,
+  "source": "github-backfill",
+  "event_id": "35235bc32b0c0452dd0ed6aa16b796a3d5521f1f911b0076237a3eac0ad990cb"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T11:26:04+08:00",
+  "machine": "backfill",
+  "seq": 400,
+  "job_id": "gh-pr-725",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #725；[devin] #684 余量：修多仓盘面定界区认不出本仓；判定行红 1 项",
+  "pr_number": 725,
+  "source": "github-backfill",
+  "event_id": "9bc3e3a0d69ba1e93feda1649920f5e9c11b42a7989356c94e76cc555378c62b"
+}

@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-21T14:23:44+08:00",
+  "machine": "backfill",
+  "seq": 383,
+  "job_id": "gh-pr-694",
+  "model": "grok-4.6",
+  "model_share": 0,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.5,
+  "why": "L0：未合并关闭且判不出主责，待定 unknown（#694）",
+  "evidence": [
+    "github:pr-694"
+  ],
+  "pr_number": 694,
+  "source": "github-backfill",
+  "event_id": "382f82a374487f7c82229b4fb08dd892683533d7b5fbd57879a77d678ff93467"
+}

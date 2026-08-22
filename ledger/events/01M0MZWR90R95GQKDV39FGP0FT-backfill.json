@@ -1,0 +1,17 @@
+{
+  "type": "job.closed",
+  "schema_version": 1,
+  "ts": "2026-08-22T23:02:12+08:00",
+  "machine": "backfill",
+  "seq": 442,
+  "job_id": "gh-pr-742",
+  "success": true,
+  "rework": false,
+  "usd_cash": 0,
+  "usd_economic": 0,
+  "merged_by": "kimi-k3",
+  "pr_number": 742,
+  "red_flags": null,
+  "source": "github-backfill",
+  "event_id": "0643bd98a294d0a107a4fd7538a84659237587c84be4ce8025f475678d9bd3c7"
+}

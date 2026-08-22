@@ -1,0 +1,17 @@
+{
+  "type": "job.closed",
+  "schema_version": 1,
+  "ts": "2026-08-22T22:58:01+08:00",
+  "machine": "backfill",
+  "seq": 406,
+  "job_id": "gh-pr-727",
+  "success": true,
+  "rework": false,
+  "usd_cash": 0,
+  "usd_economic": 0,
+  "merged_by": "devin-deepseek-v4-flash-max",
+  "pr_number": 727,
+  "red_flags": 0,
+  "source": "github-backfill",
+  "event_id": "5a2c6e95b23ab5c41e5c45a1e87f4ee8a3fdfbc646c2cf0c1a915d0d3dbcf6f1"
+}

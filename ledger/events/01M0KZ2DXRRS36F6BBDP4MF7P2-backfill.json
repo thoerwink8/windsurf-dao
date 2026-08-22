@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T13:28:35+08:00",
+  "machine": "backfill",
+  "seq": 432,
+  "job_id": "gh-pr-739",
+  "task_class": "回填",
+  "work_type": "微修",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #739；[qf] pr-fast 分工表补 quick-fix 指针；无审读",
+  "pr_number": 739,
+  "source": "github-backfill",
+  "event_id": "d11ba3e954d0273be590f8e22a9332872062fbc9d5bc309df82d4255940cc2cf"
+}

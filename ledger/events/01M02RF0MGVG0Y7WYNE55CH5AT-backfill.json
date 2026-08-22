@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T21:06:02+08:00",
+  "machine": "backfill",
+  "seq": 176,
+  "job_id": "gh-pr-496",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #496；[pi] 信箱台身份判据：身份改用 run-show coordinator_handle（标题只出不进），拒绝顶替（#493）；判定行红 1 项",
+  "pr_number": 496,
+  "source": "github-backfill",
+  "event_id": "dd53e6d8657b85cc3241c2e70f63d9562ad956103ce9150320926d0befb37b8d"
+}

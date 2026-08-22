@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T13:12:35+08:00",
+  "machine": "backfill",
+  "seq": 268,
+  "job_id": "gh-pr-632",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #632；[grok] #630 watchdog 孤儿树检测接真删；判定行红 0 项",
+  "pr_number": 632,
+  "source": "github-backfill",
+  "event_id": "9998204ccc6fe9f216127dca42007c3c5cb745bf3c769a9c28fc04e55f6d1a13"
+}

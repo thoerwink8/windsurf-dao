@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-17T19:00:27+08:00",
+  "machine": "backfill",
+  "seq": 219,
+  "job_id": "gh-pr-597",
+  "model": "grok-4.6",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#597，无审读）",
+  "evidence": [
+    "github:pr-597"
+  ],
+  "pr_number": 597,
+  "source": "github-backfill",
+  "event_id": "dae7919bc256b9ab0ed4a57d56747bb18e21f76b3012bb959834bbf0573f4d4a"
+}

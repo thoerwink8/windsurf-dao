@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T20:17:44+08:00",
+  "machine": "backfill",
+  "seq": 352,
+  "job_id": "gh-pr-678",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #678；[grok] #677 没审完别 worker_done；判定行红 1 项",
+  "pr_number": 678,
+  "source": "github-backfill",
+  "event_id": "0e472d37eb8e88cf0b5f0c2ea1f122c723a68fead7d3a71384b2f31c314f5707"
+}

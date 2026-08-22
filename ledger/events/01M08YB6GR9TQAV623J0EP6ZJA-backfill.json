@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T06:44:15+08:00",
+  "machine": "backfill",
+  "seq": 244,
+  "job_id": "gh-pr-616",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #616；[grok] 卡名归人眼、判据归字段；判定行红 0 项",
+  "pr_number": 616,
+  "source": "github-backfill",
+  "event_id": "5b585ebd7cf1f67bbd9166261b876afa905a0e110382fd3179ad972f4534564d"
+}

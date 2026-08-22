@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T18:03:32+08:00",
+  "machine": "backfill",
+  "seq": 168,
+  "job_id": "gh-pr-484",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "claude-opus"
+  ],
+  "selected": "claude-opus",
+  "why": "回填自 GitHub PR #484；[cc] grill-ai skill：从零拷问兜底令入仓（#483）；判定行红 0 项",
+  "pr_number": 484,
+  "source": "github-backfill",
+  "event_id": "abe770d369bcbead7968e331377ed4bd4e201a9f1b66982da6036f48fa93fef0"
+}

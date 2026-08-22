@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T06:21:59+08:00",
+  "machine": "backfill",
+  "seq": 240,
+  "job_id": "gh-pr-613",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #613；[grok] 给 dispatch 加 --split 必填参数；判定行红 2 项",
+  "pr_number": 613,
+  "source": "github-backfill",
+  "event_id": "26bb1f76776ce466d49fe4725e1cc434ce81ffe82112300df7186a3772d0906d"
+}

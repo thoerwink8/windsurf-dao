@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T03:16:14+08:00",
+  "machine": "backfill",
+  "seq": 336,
+  "job_id": "gh-pr-671",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #671；[grok] #669 DeepSeek 两通道停派：全工种路由闸；判定行红 0 项",
+  "pr_number": 671,
+  "source": "github-backfill",
+  "event_id": "c2fbf4aeccf2c209a78a223c1e570886f26914376b472c2145687f52ee61ea31"
+}

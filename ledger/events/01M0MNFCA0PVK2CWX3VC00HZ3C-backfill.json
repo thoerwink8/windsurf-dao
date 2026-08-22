@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T20:00:08+08:00",
+  "machine": "backfill",
+  "seq": 440,
+  "job_id": "gh-pr-742",
+  "task_class": "回填",
+  "work_type": "体系",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "kimi-k3"
+  ],
+  "selected": "kimi-k3",
+  "why": "回填自 GitHub PR #742；[cursor] 守卫救援：保活不再只认 master，自停留可读记录；无审读",
+  "pr_number": 742,
+  "source": "github-backfill",
+  "event_id": "965e6e42a612c90489bba99f5b2a021106d71ecd72e03954da2f7df03f25e24e"
+}

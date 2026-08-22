@@ -1,0 +1,17 @@
+{
+  "type": "job.closed",
+  "schema_version": 1,
+  "ts": "2026-08-19T02:54:21+08:00",
+  "machine": "backfill",
+  "seq": 302,
+  "job_id": "gh-pr-650",
+  "success": true,
+  "rework": true,
+  "usd_cash": 0,
+  "usd_economic": 0,
+  "merged_by": "deepseek-v4-flash",
+  "pr_number": 650,
+  "red_flags": 1,
+  "source": "github-backfill",
+  "event_id": "cc5c423c8bef2fd27bec58e9b4bf4e4920c09487aa68bd639b680e34e4018348"
+}
