@@ -129,13 +129,8 @@ describe('dao', () => {
     await t.test('#615 kimi 主路走 cursor-agent / kimi-k3-high', () => {
       assert.ok(/cursor-agent/.test(kimi.command) && /--model\s+kimi-k3-high/.test(kimi.command) && /--force/.test(kimi.command), '#615 kimi 主路走 cursor-agent / kimi-k3-high  →  ' + kimi.command);
     });
-    const kimiOg = S.resolveLaunch({
-      model: 'kimi-k3',
-      pipe: { provider: 'opencode-go', cli_model: 'kimi-k3' },
-      routing,
-    });
-    await t.test('#615 kimi 支路走 opencode-go/kimi-k3', () => {
-      assert.ok(kimiOg.command.includes('kimi-k3') && /pi\b/.test(kimiOg.command), '#615 kimi 支路走 opencode-go/kimi-k3  →  ' + kimiOg.command);
+    await t.test('kimi 不再挂 opencode-go 支路', () => {
+      assert.ok(/cursor-agent/.test(kimi.command) && !/opencode-go\/kimi-k3/.test(kimi.command), 'kimi 默认启动不走 og  →  ' + kimi.command);
     });
     const gptMain = S.resolveLaunch({ model: 'gpt-5.6-sol', routing });
     await t.test('#615 gpt 主路仍 Codex', () => {
