@@ -179,6 +179,9 @@ const GH_TIMEOUT_MS = 30000;
 const VERIFY_WAIT_MS = 2500;      // 注入后等待新输出的静默时间
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 const APPROVED_TIMEOUT_MS = 30 * 60 * 1000; // #686 拍板 2：approved 超时未合才报帅
+// 红项/返工悬置超时：对齐 shuai-scan-rules「工人超时未报完工分钟」120 拍板草案。
+// dispatch 开着 ≠ 活着（#729：红项发出 7h 工人零产出，hop 观察一路绿灯）。
+const REWORK_TIMEOUT_MS = 120 * 60 * 1000;
 
 let _ledgerCtx = null;
 function ledgerCtx() {
@@ -341,11 +344,12 @@ function printUsage() {
   --state-file <path> 状态文件位置（默认 _flow/state.json）
   --dry-run           只输出动作与将执行的命令，不碰 orca 写操作（目标解析仍跑）
   --snapshot-dir <目录> 从录制的 gh/orca JSON 快照跑（测试/复现用），跑完即退出
-  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）`);
+  --repo <nameWithOwner> 显式指定仓库（默认 gh repo view 推断）
+  --rework-timeout-min <分钟> 红项/返工悬置超时（默认 120）；测试用静态旧夹具时可调大关掉`);
 }
 
 function parseArgs(argv) {
-  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null };
+  const args = { once: false, interval: 300, stateFile: DEFAULT_STATE, dryRun: false, snapshotDir: null, repo: null, reworkTimeoutMs: REWORK_TIMEOUT_MS };
   const take = (i, name) => {
     const v = Number(argv[i + 1]);
     if (!Number.isFinite(v) || v <= 0) {
@@ -363,6 +367,7 @@ function parseArgs(argv) {
       case '--dry-run': args.dryRun = true; break;
       case '--snapshot-dir': args.snapshotDir = resolve(process.cwd(), argv[++i] || ''); break;
       case '--repo': args.repo = argv[++i] || ''; break;
+      case '--rework-timeout-min': args.reworkTimeoutMs = take(i++, '--rework-timeout-min') * 60 * 1000; break;
       case '--help': printUsage(); process.exit(0); break;
       default:
         console.error(`未知参数: ${a}`);
@@ -1144,7 +1149,8 @@ function processOneRound(source, state, args) {
 
     // ═══ #686 ① 工人异常死亡检测（放在 action handling 之后，避免被 self-heal 清除） ═══
     // dispatch 未结算 + agent done + 无完工 comment → 报帅
-    if (derived.state === 'working' && !rec.pendingShuai?.kind?.startsWith('dead-')) {
+    // 2026-08-22 扩到 rework-needed：红项已落地、工人 agent done 且 dispatch 未结算 = 红项没人接（#729 实证挂 7h）
+    if ((derived.state === 'working' || derived.state === 'rework-needed') && !rec.pendingShuai?.kind?.startsWith('dead-')) {
       const wtsList = source.orcaWorktrees?.() || { ok: false };
       const workerWt = wtsList.ok ? (wtsList.worktrees || []).find(
         w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`
@@ -1161,8 +1167,11 @@ function processOneRound(source, state, args) {
             const dispatchSettled = String(worker.dispatchStatus || '').toLowerCase() === 'completed';
             if (agentDone && !dispatchSettled) {
               const sigs = orderedSignals(comments, reviews);
-              if (sigs.length === 0) {
-                const reason = `工人异常死亡：#${pr.number}（agent done, dispatch ${worker.dispatchStatus || 'unsettled'}, 无完工 comment）`;
+              const deadRework = derived.state === 'rework-needed';
+              if (sigs.length === 0 || deadRework) {
+                const reason = deadRework
+                  ? `工人异常死亡：#${pr.number}（agent done, dispatch ${worker.dispatchStatus || 'unsettled'}，红项发出后无人返工）`
+                  : `工人异常死亡：#${pr.number}（agent done, dispatch ${worker.dispatchStatus || 'unsettled'}, 无完工 comment）`;
                 events.push(`[flow] 异常：${reason}——请帅 worker-start --task <taskId> --terminal <handle> 续活，红项从 PR review 读`);
                 rec.pendingShuai = { kind: 'dead-worker', reason };
                 pendingCount += 1;
@@ -1194,6 +1203,29 @@ function processOneRound(source, state, args) {
           }
           pendingCount += 1;
         }
+      }
+    }
+
+    // ═══ 红项/返工悬置超时升级（#729：红项发出 7h 工人零产出——dispatch 开着 ≠ 活着） ═══
+    // hop 没开（起审官失败/找不到终端）由既有 hop-missing 通道覆盖；这里只管 hop 开着但时间拖长。
+    // 放在 action handling 之后：pendingShuai 已有记账的不重复报；新信号到来自愈清除后可再报一次。
+    if ((derived.state === 'rework-needed' || derived.state === 'awaiting-recheck')
+        && sinceMs > args.reworkTimeoutMs
+        && !rec.pendingShuai) {
+      const hop = observeAcceptanceHop({
+        action: { kind: derived.state === 'rework-needed' ? 'observe-rework-hop' : 'observe-recheck-hop' },
+        pr, source, rec,
+      });
+      if (hop.unscanned) {
+        events.push(`[flow] 超时升级没查成：#${pr.number} ${hop.error}——不是查过没事`);
+      } else if (hop.hopOpen) {
+        const hours = (sinceMs / 3600000).toFixed(1);
+        const what = derived.state === 'rework-needed'
+          ? `红项悬置 ${hours}h 无返工（工人 dispatch ${hop.dispatchId} 还开着——开着 ≠ 活着）`
+          : `返工落地 ${hours}h 审官未复核（审官 dispatch ${hop.dispatchId} 还开着——开着 ≠ 活着）`;
+        events.push(`[flow] 报帅：超时未流转 #${pr.number}（${what}）——请帅处置（催活/换人）`);
+        rec.pendingShuai = { kind: 'stale-timeout', reason: `超时未流转：${what}` };
+        pendingCount += 1;
       }
     }
 

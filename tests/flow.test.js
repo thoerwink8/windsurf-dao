@@ -54,7 +54,8 @@ describe('flow', () => {
   });
 
   it('①b #677 士兵还活着 → 红项打进这个身份，不 task-create，0 需流转', async (t) => {
-    const r = runFlow(path.join(FIXTURES, "rework-hop-open"));
+    // 夹具时间静止在 2026-08-15（永远「超期」）；本用例验 hop 检测不验超时，故把超时阈值调到约 1000 年关掉
+    const r = runFlow(path.join(FIXTURES, "rework-hop-open"), ["--rework-timeout-min", "525600000"]);
     await t.test('观察士兵还活着且不 task-create', () => {
       assert.ok(/观察：#999 士兵还活着，红项打进这个身份 ctx_next_999，不 task-create/.test(r.out), '观察士兵还活着  →  ' + r.out.trim());
     });
@@ -63,6 +64,40 @@ describe('flow', () => {
     });
     await t.test('不报帅、不注入', () => {
       assert.ok(!/报帅/.test(r.out) && !/返工注入/.test(r.out) && !/task-create/.test(r.out.replace(/不 task-create/g, '')), '不报帅不注入  →  ' + r.out.trim());
+    });
+  });
+
+  it('①d 红项悬置超时升级（#729：dispatch 开着 ≠ 活着，hop 开着但 7h 无返工 → 报帅）', async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-stale-"));
+    const stateFile = path.join(tmp, "state.json");
+    // 同一夹具，阈值 1 分钟：静止夹具必超期
+    const args = [FLOW, "--snapshot-dir", path.join(FIXTURES, "rework-hop-open"), "--state-file", stateFile, "--dry-run", "--rework-timeout-min", "1"];
+    const r1 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+    const out1 = (r1.stdout || "") + (r1.stderr || "");
+    await t.test('hop 开着仍观察士兵活着（不 task-create）', () => {
+      assert.ok(/观察：#999 士兵还活着/.test(out1) && !/动作：/.test(out1), 'hop 观察不变  →  ' + out1.trim());
+    });
+    await t.test('超时报帅：红项悬置无返工（开着 ≠ 活着）', () => {
+      assert.ok(/报帅：超时未流转 #999（红项悬置 [\d.]+h 无返工（工人 dispatch ctx_next_999 还开着/.test(out1), '超时报帅  →  ' + out1.trim());
+    });
+    await t.test('退出码 1 + 待帅处置常驻', () => {
+      assert.ok(r1.status === 1 && /待帅处置：#999（超时未流转/.test(out1), 'exit 1 + 常驻  →  ' + `status=${r1.status} ` + out1.trim());
+    });
+    await t.test('重跑不重复报帅（pendingShuai 持有），待帅处置仍常驻', () => {
+      const r2 = spawnSync(process.execPath, args, { encoding: "utf8", cwd: REPO });
+      const out2 = (r2.stdout || "") + (r2.stderr || "");
+      assert.ok(!/报帅：超时未流转/.test(out2) && /待帅处置：#999（超时未流转/.test(out2), '重跑收敛  →  ' + out2.trim());
+    });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('①e 死亡检测扩到 rework-needed（#729：红项已落地，工人 agent done 且 dispatch 未结算）', async (t) => {
+    const r = runFlow(path.join(FIXTURES, "worker-dead-rework"));
+    await t.test('报工人异常死亡：红项发出后无人返工', () => {
+      assert.ok(/异常：工人异常死亡：#2009（agent done, dispatch dispatched，红项发出后无人返工）/.test(r.out), 'rework 死亡报警  →  ' + r.out.trim());
+    });
+    await t.test('待帅处置常驻 + 退出码 1', () => {
+      assert.ok(r.status === 1 && /待帅处置：#2009（工人异常死亡/.test(r.out), '常驻 + exit 1  →  ' + `status=${r.status} ` + r.out.trim());
     });
   });
 
