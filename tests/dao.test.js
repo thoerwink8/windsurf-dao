@@ -375,12 +375,22 @@ describe('dao', () => {
     const oldSec = (Date.now() - 3.5 * 3600 * 1000) / 1000;
     fs.utimesSync(app, oldSec, oldSec);
     fs.utimesSync(path.join(tmp, '.gitignore'), oldSec, oldSec);
-    spawnSync('powershell', [
-      '-NoProfile', '-Command',
-      `$i=Get-Item -LiteralPath '${state.replace(/'/g, "''")}'; $t=(Get-Date).AddHours(-3.5); $i.CreationTime=$t; $i.LastWriteTime=(Get-Date).AddSeconds(-12)`,
-    ], { encoding: 'utf8' });
+    if (process.platform === 'win32') {
+      spawnSync('powershell', [
+        '-NoProfile', '-Command',
+        `$i=Get-Item -LiteralPath '${state.replace(/'/g, "''")}'; $t=(Get-Date).AddHours(-3.5); $i.CreationTime=$t; $i.LastWriteTime=(Get-Date).AddSeconds(-12)`,
+      ], { encoding: 'utf8' });
+    } else {
+      // 非 Windows 没有可写的 CreationTime，活性判定只读 mtime；utimes 等价模拟「进程文件 12 秒前动过」
+      const recentSec = (Date.now() - 12_000) / 1000;
+      fs.utimesSync(state, recentSec, recentSec);
+    }
     const scanned = S.assessWorktreeLiveness(tmp);
-    await t.test('真实目录+git：pi 假活 → fake-alive', () => {
+    // fake-alive 判定靠 processStartedMs=文件 birthtime；birthtime 在非 Windows 不可写，
+    // 集成形态只能在 Windows 验（verdict 判定逻辑本身由本套件纯函数用例覆盖，Linux 上不失网）
+    await t.test('真实目录+git：pi 假活 → fake-alive', {
+      skip: process.platform !== 'win32' ? 'birthtime 非 Windows 不可写，集成形态只在 Windows 验' : false,
+    }, () => {
       assert.ok(scanned.verdict === 'fake-alive', '真实目录+git：pi 假活 → fake-alive  →  ' + JSON.stringify(scanned));
     });
     await t.test('真实目录+git：processAlive 且无产出', () => {

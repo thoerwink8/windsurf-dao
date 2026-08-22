@@ -1,23 +1,30 @@
 name: dao-check
 
-# issue #567：master 上不跑 dao-check——push 不触发，盘面上显示「绿」的是 notify job，
-# 跟代码健康无关，而且永远绿。比没有守卫更坏：它长得像有守卫。
-# 修法：push 到 master 也触发同一套 check。合并本 PR 之后，master 每次被推都会当场跑
-# dao-check，带病进 master 不再无人报警。
+# 2026-08-22 省量改造（Actions 免费额度 8-22 被烧穿：本月 923 run、check.yml 557 次
+# Windows 2 倍率 ≈ 2200 计费分钟，超出免费 2000 分钟）：
+#   1. windows-latest → ubuntu-latest：计费倍率 2x → 1x，同样分钟数直接减半。
+#      仓内脚本全是跨平台 Node；Windows 专属行为（conhost hook 等）的验证回归
+#      换机时人工，CI 不再承担「验 Windows 装机文档」的 fidelity。
+#   2. push master 触发 → 每日 cron：#567 的保护（master 带病不能无人报警）保留，
+#      但从「每次推 master 都跑」降为「每天对 master 跑一次」+ PR 闸不变。
+#      每个合并从 2 run 降为 1 run。
+#   3. concurrency 同 ref 取消在途旧 run：连续 push 不再排队烧分钟。
 #
-# GH_TOKEN 口径（#567 顺带确认，必须显式选一种并注明理由，不能默认沉默）：给。
+# GH_TOKEN 口径（#567，必须显式选一种并注明理由，不能默认沉默）：给。
 #   1. ⑭ open 单数量阈值靠 gh issue list——不给 token 它在 CI 永远 SKIP（SKIP 是
 #      「没查成」的显式标记，不是绿），一个核心检查永远没查成，等于这个闸不存在。
-#   2. 两个触发面（pull_request / push）共用同一份 workflow、同一组 steps、同一个
-#      github.token——给 token 后两边的检查是同一套行为，两边的绿是同一个意思
-#      （#567 审读硬判据②的顺带确认项，验收时对照的是同一份日志形态）。
-#   3. 先例：blocked-notify.yml 的 GH_TOKEN: ${{ github.token }} 同款用法。
+#   2. 先例：blocked-notify.yml 的 GH_TOKEN: ${{ github.token }} 同款用法。
 # 权限按最小化给：checkout 要 contents: read，gh issue list 要 issues: read。
 
 on:
   pull_request:
-  push:
-    branches: [master]
+  schedule:
+    - cron: '0 1 * * *'   # 每日 09:00（UTC+8）对 master 跑一次，接替 #567 的 push 触发
+  workflow_dispatch:
+
+concurrency:
+  group: dao-check-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -25,7 +32,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,30 +43,28 @@ jobs:
           node-version: 22
 
       # dao check 第 ⑦ 项验的是「自带 hook 的 skill 在这台机器上装没装、还跑不跑得动」，
-      # 干净 runner 上当然没装。所以这里照 NEW-MACHINE.md 第 12 节的装法真装一遍——
-      # 顺带让每个 PR 都验一次那份装机文档还灵不灵（文档过期会在这一步炸，不会等到换机那天）。
-      - name: 照 NEW-MACHINE 第 12 节装自带 hook 的 skill
-        shell: pwsh
+      # 干净 runner 上当然没装。所以这里按 NEW-MACHINE.md 第 12 节的装法语义真装一遍
+      # （Linux 等价：ln -s，建不了链接退拷贝）——顺带让每个 PR 都验一次装载语义还灵不灵。
+      - name: 装自带 hook 的 skill（Linux 等价装法）
+        shell: bash
         run: |
-          $skills = Join-Path $env:USERPROFILE '.claude\skills'
-          New-Item -ItemType Directory -Force $skills | Out-Null
-          Get-ChildItem 'host\skills' -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName 'hooks\hooks.json') } |
-            ForEach-Object {
-              $link = Join-Path $skills $_.Name
-              try {
-                New-Item -ItemType SymbolicLink -Force -Path $link -Target $_.FullName -ErrorAction Stop | Out-Null
-                "linked  $link -> $($_.FullName)"
-              } catch {
-                # runner 建不了 SymbolicLink 时退到拷贝：插件面只看目录内容，装载效果一样。
-                Copy-Item -Recurse -Force $_.FullName $link
-                "copied  $link  （这台机器建不了 SymbolicLink：$($_.Exception.Message)）"
-              }
-            }
+          set -e
+          mkdir -p "$HOME/.claude/skills"
+          for d in host/skills/*/; do
+            if [ -f "$d/hooks/hooks.json" ]; then
+              name=$(basename "$d")
+              link="$HOME/.claude/skills/$name"
+              if ln -sfn "$GITHUB_WORKSPACE/${d%/}" "$link" 2>/dev/null; then
+                echo "linked  $link -> $GITHUB_WORKSPACE/${d%/}"
+              else
+                cp -r "$d" "$link"
+                echo "copied  $link （这台机器建不了符号链接）"
+              fi
+            fi
+          done
 
       - run: node scripts/dao-check.mjs
         env:
           # #567：不给 token 时 gh 在 Actions 里必报「set the GH_TOKEN environment variable」，
-          # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。给了之后 pull_request 与
-          # push 两个触发面行为一致，两边的绿是同一个意思。
+          # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。
           GH_TOKEN: ${{ github.token }}
