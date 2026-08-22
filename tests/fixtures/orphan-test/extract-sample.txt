@@ -1,0 +1,5 @@
+const a = require('../scripts/lib/x.mjs');
+import b from './local-helper.js';
+const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'y.mjs');
+const LIB_LOAD = import('file://' + LIB);
+const FIX = join(__dirname, 'fixtures', 'z');

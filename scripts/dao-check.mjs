@@ -59,11 +59,14 @@
 // ㉔ 起审官同厂硬闸（#679）：接线扫描不 import 闸自己的解析；故意 grok+grok 样本必须当场拦；
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
 // ㉕ 删掉审官结算后再造卡/换厂（#735）：检查器不 import flow/dao-cmd 解析；故意违规夹具必须红；
+// ㉖ 孤儿测试闸（2026-08-22 Q5 拍板）：test 引用的仓内目标不存在 = 机制删了测试没同删；
+//    退役靠判断不靠 CI 自动删，CI 只拦孤儿；红/绿/空样本各一验判别力；0 个测试 = 没查成
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { cpus } from 'node:os';
 import { createRequire } from 'node:module';
 import { runOrcaRaw } from './lib/orca-run.mjs';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
@@ -87,6 +90,9 @@ import {
 import {
   inspectNoReviewerRecreate, inspectNoReviewerRecreateFixtures,
 } from './lib/no-reviewer-recreate-check.mjs';
+import {
+  inspectOrphanTests, inspectOrphanTestFixtures,
+} from './lib/orphan-test-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -158,7 +164,34 @@ function parseTapSummary(output) {
 // node --test 跑（目录参数在本机 Node 上不可靠，逐文件等价且保持逐套粒度），
 // .tests.ps1 仍走 powershell（历史兼容，当前无此类文件）。
 
-function runTests() {
+// 2026-08-22 并行化（Q5 拍板：速度是真优化点）：串行 46+ 套约 40s，进程池后约 10s 级。
+// 池宽 6：再大收益递减且增加临时目录/端口互相踩踏的概率。输出仍按文件名序打印，与串行时代一致。
+const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
+
+function runOneSuite(dir, f) {
+  return new Promise((resolveOne) => {
+    const p = join(dir, f);
+    const isPs1 = f.toLowerCase().endsWith('.ps1');
+    const cmd = isPs1 ? 'powershell' : process.execPath;
+    const args = isPs1
+      ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p]
+      : ['--test', '--test-reporter=tap', p];
+    let out = '';
+    let child;
+    try {
+      child = spawn(cmd, args, { cwd: ROOT, windowsHide: true });
+    } catch (e) {
+      resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
+      return;
+    }
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('error', (e) => resolveOne({ f, status: 1, out: out + String(e && e.message ? e.message : e) }));
+    child.on('close', (code) => resolveOne({ f, status: code == null ? 1 : code, out }));
+  });
+}
+
+async function runTests() {
   const dir = join(ROOT, 'tests');
   if (!existsSync(dir)) {
     fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
@@ -169,14 +202,19 @@ function runTests() {
     fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
   }
-  for (const f of suites) {
-    const p = join(dir, f);
-    const r = f.toLowerCase().endsWith('.ps1')
-      ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p], { encoding: 'utf8', cwd: ROOT })
-      : spawnSync(process.execPath, ['--test', '--test-reporter=tap', p], { encoding: 'utf8', cwd: ROOT });
-    const out = (r.stdout || '') + (r.stderr || '');
+  const results = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < suites.length) {
+      const f = suites[cursor++];
+      results.push(await runOneSuite(dir, f));
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(TEST_POOL, suites.length) }, worker));
+  results.sort((a, b) => (a.f < b.f ? -1 : 1));
+  for (const { f, status, out } of results) {
     const tap = parseTapSummary(out);
-    if (r.status === 0) {
+    if (status === 0) {
       // 零样本报红：node --test 跑了但一条测试都没扫到 = 本次没查成，不是绿。
       if (tap.tests === 0 || tap.tests == null) {
         fail(`测试没查成：${f}`, 'node --test 跑了但 0 条测试（发现规则/文件形态变了）', out.slice(0, 200));
@@ -1316,7 +1354,7 @@ function checkNoBannerInboxLive() {
   green('横幅收信整层已删（派工不 run-use / 不教横幅收信 / 心跳不准发）');
 }
 
-runTests();
+await runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
 checkResidentBudget();
@@ -1353,6 +1391,50 @@ checkQuickFixSamples();
 checkQuickFixLive();
 checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
+checkOrphanTestSamples();
+checkOrphanTestLive();
+
+function checkOrphanTestSamples() {
+  const r = inspectOrphanTestFixtures(join(ROOT, 'tests', 'fixtures', 'orphan-test'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '孤儿测试闸样本没查成' : '孤儿测试闸样本对不上',
+      '恢复 tests/fixtures/orphan-test/{red,ok,empty}：红夹具必须抓出孤儿、绿夹具必须绿、空=没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`孤儿测试闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkOrphanTestLive() {
+  const testsDir = join(ROOT, 'tests');
+  if (!existsSync(testsDir)) {
+    fail('孤儿测试闸 live 没查成', 'tests/ 目录不在', testsDir);
+    return;
+  }
+  const files = readdirSync(testsDir)
+    .filter(f => /\.test\.(js|mjs|cjs)$/i.test(f))
+    .map(f => `tests/${f}`);
+  const r = inspectOrphanTests({
+    files,
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+    exists: (rel) => existsSync(join(ROOT, rel)),
+  });
+  if (r.unscanned) {
+    fail('孤儿测试闸 live 没查成', 'tests/ 里要有测试文件；读失败单独报', r.error || '');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      `孤儿测试 ${r.orphans.length} 处（机制已删，测试没同删）`,
+      '删掉这些测试，或把目标文件恢复——退役机制必须同 PR 删测试',
+      r.orphans.map(o => `${o.test} → ${o.ref}`).join('；'),
+    );
+    return;
+  }
+  green(`孤儿测试闸：${r.scanned} 套测试 ${r.scannedRefs} 处仓内引用全健在`);
+}
 
 function checkNoReviewerRecreateSamples() {
   const r = inspectNoReviewerRecreateFixtures(join(ROOT, 'tests', 'fixtures', 'no-reviewer-recreate'));
