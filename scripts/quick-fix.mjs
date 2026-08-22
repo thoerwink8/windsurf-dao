@@ -40,7 +40,7 @@ const QUICK_FIX_LOG_DIR = join(homedir(), '.dao', 'quickfix');
 const ATTACH_TIMEOUT_MS = 600000;
 
 const FLAGS = new Set([
-  '--issue', '--model', '--reviewer', '--message', '--body-file',
+  '--issue', '--model', '--reviewer', '--message', '--body-file', '--branch',
   '--yes', '--dry-run', '--attach', '--pr', '--worktree', '--log', '--json', '--help', '-h',
 ]);
 const BOOL = new Set(['yes', 'dry-run', 'attach', 'json', 'help']);
@@ -145,9 +145,17 @@ function currentBranch() {
   return { ok: true, branch: r.out };
 }
 
+/** 本地分支是否存在（残留/在用都算）。 */
 function branchExists(name) {
   const r = git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   return r.ok;
+}
+
+/** 远端分支是否存在（真碰撞：上次没回滚干净或别人在用）。 */
+function remoteBranchExists(name) {
+  const r = git(['ls-remote', 'origin', `refs/heads/${name}`], { timeout: 30000 });
+  if (!r.ok) return { ok: false, unscanned: true, error: `ls-remote 没查成：${r.error}` };
+  return { ok: true, exists: String(r.out || '').trim().length > 0 };
 }
 
 function workingTreeFiles() {
@@ -223,14 +231,50 @@ function logLine(file, line) {
   catch { /* 日志写不上不阻塞主流程 */ }
 }
 
-/** 异步子命令：真调 reviewer-attach，失败清理壳卡 + PR 留痕。 */
+/** 异步子命令：建壳卡 → 验分支 → 真调 reviewer-attach，失败清理壳卡 + PR 留痕。 */
 function cmdAttach(args) {
   const log = String(args.log || '').trim() || attachLog(args.issue);
-  logLine(log, `attach 开始 pr=${args.pr} worktree=${args.worktree} reviewer=${args.reviewer}`);
+  const branch = String(args.branch || '').trim();
+  logLine(log, `attach 开始 pr=${args.pr} reviewer=${args.reviewer} branch=${branch}`);
+
+  // 1. 壳卡（审官父卡，供 reviewer-attach 树→PR 归属校验）。
+  //    前台已删本地微修分支，orca 见本地缺失会从远端建本地分支并直接 checkout。
+  const shellCardName = assembleCardName({ name: '微修壳卡', issue: args.issue, role: '工人', model: args.model });
+  const wt = daoRun([
+    'worktree-create',
+    '--issue', String(args.issue),
+    '--name', shellCardName,
+    '--no-parent',
+    '--setup', 'skip',
+    '--base-branch', branch,
+    '--comment', `微修 #${args.issue} 壳卡：quick-fix 起审官用，无工人终端`,
+  ]);
+  const worktreeId = wt.ok ? (wt.json?.result?.worktree?.id || wt.json?.worktreeId || null) : null;
+  const worktreePath = wt.ok ? (wt.json?.result?.worktree?.path || wt.json?.worktreePath || null) : null;
+  if (!wt.ok || !worktreeId) {
+    const error = `壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`;
+    logLine(log, `attach 失败: ${error}`);
+    emit({ ok: false, error, attachLog: log, cleaned: false, posted: false });
+  }
+  logLine(log, `壳卡已建 worktree=${worktreeId}`);
+
+  // 2. 验壳卡真的挂在微修分支上（orca 元数据可能滞后，以 live git 为准）。
+  if (worktreePath) {
+    const cur = git(['branch', '--show-current'], { cwd: worktreePath });
+    if (!cur.ok || cur.out !== branch) {
+      const error = `壳卡分支没切成 ${branch}（实际 ${cur.out || cur.error}）——reviewer-attach 的树→PR 归属校验会拒`;
+      logLine(log, `attach 失败: ${error}`);
+      const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
+      logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
+      emit({ ok: false, error, attachLog: log, cleaned: rm.ok, posted: false });
+    }
+  }
+
+  // 3. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
   const r = spawnSync(process.execPath, [
     DAO_CLI, 'reviewer-attach',
     '--pr', String(args.pr),
-    '--worktree', String(args.worktree),
+    '--worktree', worktreeId,
     '--reviewer', String(args.reviewer),
     '--issue', String(args.issue),
     '--skip-wait',
@@ -242,7 +286,7 @@ function cmdAttach(args) {
   if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
     const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
     logLine(log, `attach 失败: ${error}`);
-    const rm = daoRun(['worktree-rm', '--worktree', String(args.worktree), '--force']);
+    const rm = daoRun(['worktree-rm', '--worktree', worktreeId, '--force']);
     logLine(log, `壳卡清理: ${rm.ok ? 'ok' : `失败 ${rm.error}`}`);
     const body = [
       `微修审官没起来（quick-fix 异步 attach 失败）：${error.slice(0, 400)}`,
@@ -272,8 +316,8 @@ async function main(argv) {
     process.exit(0);
   }
   if (args.attach) {
-    if (!args.pr || !args.worktree || !args.reviewer || !args.issue) {
-      fail('--attach 要 --pr --worktree --reviewer --issue', {}, 2);
+    if (!args.pr || !args.reviewer || !args.issue || !args.model || !args.branch) {
+      fail('--attach 要 --pr --reviewer --issue --model --branch', {}, 2);
     }
     cmdAttach(args);
     return;
@@ -359,7 +403,10 @@ async function main(argv) {
   const filesCheck = workingTreeFiles();
   if (!filesCheck.ok) fail(filesCheck.error);
   plan.files = filesCheck.files;
-  if (branchExists(branch)) fail(`分支已存在：${branch}（同题已有微修？先合掉旧 PR 再开）`);
+  const remoteHit = remoteBranchExists(branch);
+  if (!remoteHit.ok) fail(remoteHit.error);
+  if (remoteHit.exists) fail(`远端已有分支 ${branch}（同题已有微修或上次没回滚干净）——先处理旧 PR，或换 --message 起新分支`);
+  if (branchExists(branch)) fail(`本地残留分支 ${branch}（远端没有，可能是中断残留）——先 git branch -D 清理`);
   const cur = currentBranch();
   if (!cur.ok) fail(cur.error);
   if (cur.branch !== 'master') {
@@ -388,6 +435,10 @@ async function main(argv) {
   created.pushed = true;
   const back = git(['checkout', created.origBranch]);
   if (!back.ok) failWithRollback(`回 master 失败：${back.error}`);
+  // 壳卡要由 orca 直接 checkout 微修分支：本地分支在场时 orca 会改建同名派生分支（树→PR 归属校验不过）。
+  // 删本地 ref（提交与远端都在），orca 见本地缺失会从远端建本地分支并直接 checkout。
+  const dropLocal = git(['branch', '-D', branch]);
+  if (!dropLocal.ok) failWithRollback(`删本地分支失败：${dropLocal.error}`);
 
   // 2. PR 正文（三段式 + 署名 issue）
   const bodyPlan = buildQuickFixPrBody({
@@ -424,38 +475,16 @@ async function main(argv) {
     if (!issueEdit.ok) failWithRollback(`issue #${issue} 打 label 失败：${issueEdit.error}`);
   }
 
-  // 5. 壳卡（审官父卡，挂在 PR 分支上，供 reviewer-attach 树→PR 归属校验）
-  const shellCardName = assembleCardName({ name: '微修壳卡', issue, role: '工人', model });
-  const wt = daoRun([
-    'worktree-create',
-    '--issue', issue,
-    '--name', shellCardName,
-    '--no-parent',
-    '--setup', 'skip',
-    '--base-branch', branch,
-    '--comment', `微修 #${issue} 壳卡：quick-fix 起审官用，无工人终端`,
-  ]);
-  const worktreeId = wt.ok ? (wt.json?.result?.worktree?.id || wt.json?.worktreeId || null) : null;
-  const worktreePath = wt.ok ? (wt.json?.result?.worktree?.path || wt.json?.worktreePath || null) : null;
-  if (!wt.ok || !worktreeId) failWithRollback(`壳卡创建失败：${wt.error || '没返回 worktree id（没查成）'}`);
-  created.worktreeId = worktreeId;
-  // orca 建树会给新卡起同名分支；reviewer-attach 的树→PR 归属校验要求壳卡分支 == PR head，
-  // 所以在壳卡内切到微修分支（git 不许两棵 worktree 同分支，源树已回 master，这里能切）。
-  if (worktreePath) {
-    const wtCheckout = git(['checkout', branch], { cwd: worktreePath });
-    if (!wtCheckout.ok) failWithRollback(`壳卡切到微修分支失败：${wtCheckout.error}`);
-  }
-
-  // 6. 异步 attach 异厂审官（#679 闸已过；后台起，不阻塞 20 秒主线）
+  // 5. 异步 attach 异厂审官（#679 闸已过；壳卡 + reviewer-attach 全在后台跑，不阻塞 20 秒主线）
   const attachLogFile = attachLog(issue);
   const child = spawn(process.execPath, [
     process.argv[1],
     '--attach',
     '--pr', String(prNumber),
-    '--worktree', worktreeId,
     '--reviewer', reviewer.modelId,
     '--issue', issue,
     '--model', model,
+    '--branch', branch,
     '--log', attachLogFile,
   ], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true });
   child.unref();
@@ -467,7 +496,6 @@ async function main(argv) {
     reviewer: reviewer.modelId,
     reviewerSource: reviewer.source,
     branch,
-    worktreeId,
     labels: labelNames,
     issueStampAdd: stamps.add,
     attachLog: attachLogFile,
