@@ -17,6 +17,8 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 凡开 branch/PR 必派。主会话手不碰 git，无例外——空提交开 PR 的文书也归工人。
 
+微通道例外（#682）：`scripts/quick-fix.mjs` 是唯一例外——bot 身份（dao-worker[bot]）、原子操作（一步完成 分支→commit→push→PR→label→异步审官，任一步失败整体回滚）、有闸（#679 同厂硬闸：`--model` 必须显式声明，查不到 / 同厂 / issue model/* 与声明不一致 → 拒绝起审官）。其余照旧。
+
 快路例外（`host/skills/pr-fast/SKILL.md`）：branch/commit/push 仍不在帅窗；开 PR 等 GitHub 写走 marshal，不算「手碰 git」。
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
