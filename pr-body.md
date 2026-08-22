@@ -32,7 +32,7 @@
 ### 返工记录（审官判定：红 2 项 → 已修）
 
 1. **红项：attach 失败留半成品 PR/远端分支** → `failAttach` 整体回滚：删壳卡 → 关 PR（`--delete-branch` 连带删远端分支）→ 删本地分支，回滚每步结果显式写进 PR 评论与日志；纯函数 `planAttachFailureRollback` + 执行器 `runAttachFailureRollback`（注入式，可测），回归测试断言「有 PR 必含 pr-close、任一步失败整体非零 + failed 显式列出」。
-2. **红项：自定义正文只查「署名 issue」字样不查号码** → `signedIssueNumber` 精确抽号，`buildQuickFixPrBody` 校验号码必须等于本次 issue（`署名 issue #999` 对 issue 682 当场拒），补测试「正文署名其他 issue 必须拒绝」「无 # 也认」「抽到/没抽到分开」。
+2. **红项：自定义正文只查「署名 issue」字样不查号码** → `signedIssueNumber` 精确抽号，`buildQuickFixPrBody` 校验号码必须等于本次 issue（正文署名其他单号时当场拒），补测试「正文署名其他 issue 必须拒绝」「无 # 也认」「抽到/没抽到分开」。
 
 返工后：`node --test tests/quick-fix.test.js` 59/59 过；`node scripts/dao-check.mjs` 75 绿，仅余既有 #711 账本断流红。
 
