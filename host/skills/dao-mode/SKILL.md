@@ -11,6 +11,8 @@ description: 切专注/值守/常态三态。用户说「进入专注」「我�
 
 **承重的不是这一页字，是 UserPromptSubmit hook。** 这页只在用户调用的那一轮进上下文，之后随对话滚走；让二十轮后的 AI 仍知道自己被锁着的，是每轮注入的那段态文本。所以本 skill 的唯一职责是：把用户的意图变成 `state.json` 里的字段，别的都别做。
 
+#607 起注入的是**结论不是原料**：每轮只有 态 + 该不该问退出的结论 + 一行指针；授权清单全文留在 `state.json` 里，要看自己读（`status --json`）。「该不该问」是纯函数（`hooks/should-ask-exit.mjs`），不用 AI 记得去算。
+
 状态的唯一读写入口是 `~/.claude/skills/dao-mode/hooks/dao-mode.mjs`（仓内真相源 `host/skills/dao-mode/hooks/dao-mode.mjs`）。**不要自己去读写 state.json**——绕过入口写的字段，hook 那边不认。
 
 ## 第一步：先问机器现在是什么态
@@ -72,9 +74,17 @@ node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs standby --decide "选型；改
 # 带焦点（「今晚只把 #488 干完」）再加：--what "#488 状态机"
 ```
 
+**值守期间任何自己拍板，先登记再做（#607）**——拍板生效之前落账，不许靠「记得补记」：
+
+```bash
+node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs selfie --what "拍了什么" --category "归为哪一类" --basis "依据授权清单哪一条"
+```
+
+登记是「可追溯」不是「可判定」：分类对不对仍是你自己说了算，但必须显式写出来，用户退出值守时能逐条对账。该不该问退出的判定不需要你记得——UserPromptSubmit hook 每轮把**结论**注入上下文（阈值默认：值守满 8 小时 / 用户发满 3 条消息 / 连续偏离 2 次，环境变量 `DAO_EXIT_HOURS` / `DAO_EXIT_MESSAGES` / `DAO_EXIT_OFFTOPIC` 可配）。
+
 ### 退出值守
 
-跑 `node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs normal`，然后按全局 CLAUDE.md 已有的那行格式吐批量三行摘要（干到哪 / 要决定什么 / 推荐哪个）——**格式不要另造**，暂存队列里的条目也一并回放。
+跑 `node ~/.claude/skills/dao-mode/hooks/dao-mode.mjs normal`，然后按全局 CLAUDE.md 已有的那行格式吐批量三行摘要（干到哪 / 要决定什么 / 推荐哪个）——**格式不要另造**，暂存队列里的条目也一并回放。`normal` 命令会顺带打印值守期间的自拍登记回放；若期间有偏离却 0 条登记，它会报警对账。
 
 ## 违背检测（AI 自己遵守，判据每轮由 hook 注入）
 
