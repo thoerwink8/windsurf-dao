@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T20:41:38+08:00",
+  "machine": "backfill",
+  "seq": 232,
+  "job_id": "gh-pr-604",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #604；[grok] 拆提示词整层：注入只给指针，删三层折叠补丁；判定行红 1 项",
+  "pr_number": 604,
+  "source": "github-backfill",
+  "event_id": "03acb9d99b11b438a2e0454a9af5a9fb3a945684510a0e9c17ecf6edfa788a5a"
+}

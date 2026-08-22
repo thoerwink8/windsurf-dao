@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T14:33:05+08:00",
+  "machine": "backfill",
+  "seq": 280,
+  "job_id": "gh-pr-640",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #640；[grok] #637 自动归档执行器带验证闸；判定行红 0 项",
+  "pr_number": 640,
+  "source": "github-backfill",
+  "event_id": "cf88be4114d305fc5fdf4ca48148ec4faa10722f45a5902f837932db0a54542f"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T15:02:22+08:00",
+  "machine": "backfill",
+  "seq": 200,
+  "job_id": "gh-pr-590",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #590；[grok] #588 strikes 机械闸 + [盘] 扩容 + worktree-rm 递归删；判定行红 3 项",
+  "pr_number": 590,
+  "source": "github-backfill",
+  "event_id": "b3bd6bc377bd1ad721f36564f4956f8b29aa60c1e6a259edb0e37c811f15f2ee"
+}

@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-22T20:00:08+08:00",
+  "machine": "backfill",
+  "seq": 441,
+  "job_id": "gh-pr-742",
+  "model": "kimi-k3",
+  "identity": "工人",
+  "work_type": "体系",
+  "model_version": "kimi-k3",
+  "terminal": "cursor-agent",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "67a5502f94db3e51fab85c310aefdcffb3991f5001d5838ee6cdd874323a7df2",
+  "pr_number": 742,
+  "source": "github-backfill",
+  "event_id": "503bbeef9d6ababf922de505a7b52a418e76411a9c2fde930177c5974c5dc557"
+}

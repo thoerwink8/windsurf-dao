@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T10:08:52+08:00",
+  "machine": "backfill",
+  "seq": 256,
+  "job_id": "gh-pr-624",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #624；[grok] #623 docs/ideas.md 追加7条；判定行红 0 项",
+  "pr_number": 624,
+  "source": "github-backfill",
+  "event_id": "5c513feaa88cc4d173b03048f8e19658f340d49fbb5de3a4d846239ff3122c30"
+}

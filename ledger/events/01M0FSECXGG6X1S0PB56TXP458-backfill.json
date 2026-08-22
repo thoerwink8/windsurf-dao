@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T22:33:18+08:00",
+  "machine": "backfill",
+  "seq": 356,
+  "job_id": "gh-pr-680",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #680；[grok] #679 起审官同厂硬闸；判定行红 2 项",
+  "pr_number": 680,
+  "source": "github-backfill",
+  "event_id": "7da4b2cf6f7f63e488a9f9e8129a67c12d077ca4f72b7a7eb687e414853dc912"
+}

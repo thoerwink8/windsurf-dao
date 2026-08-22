@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-19T16:15:37+08:00",
+  "machine": "backfill",
+  "seq": 315,
+  "job_id": "gh-pr-655",
+  "model": "deepseek-v4-flash",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#655，红 0 项）",
+  "evidence": [
+    "github:pr-655"
+  ],
+  "pr_number": 655,
+  "source": "github-backfill",
+  "event_id": "6148e3d5291c97c0da8c79aad61127e3b0fd17046f2b386f98ba3c5de2fb0f55"
+}

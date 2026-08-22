@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-21T01:08:32+08:00",
+  "machine": "backfill",
+  "seq": 360,
+  "job_id": "gh-pr-685",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #685；[grok] #684 事件钩子同步帅位定界区；判定行红 1 项",
+  "pr_number": 685,
+  "source": "github-backfill",
+  "event_id": "b290127e0c63e7e581fba6903bf8c290f2717fc5b364dc78fcf6d94c8c944cf1"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T09:37:14+08:00",
+  "machine": "backfill",
+  "seq": 340,
+  "job_id": "gh-pr-672",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #672；[grok] #667 删掉靠横幅给帅收信整层；判定行红 0 项",
+  "pr_number": 672,
+  "source": "github-backfill",
+  "event_id": "4356d096936e46652c45a434027a6a3d9dbb1b4b98a0c391bb34df9d21b4501f"
+}

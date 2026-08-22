@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T20:38:00+08:00",
+  "machine": "backfill",
+  "seq": 228,
+  "job_id": "gh-pr-603",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #603；[grok] #601 补归档收口与草稿闸；判定行红 3 项",
+  "pr_number": 603,
+  "source": "github-backfill",
+  "event_id": "1571d1c9a3a3161c21b094baa4fcee032c3294f1fe9a69ba9ea149c57069d073"
+}
