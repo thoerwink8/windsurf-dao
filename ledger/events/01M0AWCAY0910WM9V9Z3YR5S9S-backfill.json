@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T00:48:24+08:00",
+  "machine": "backfill",
+  "seq": 292,
+  "job_id": "gh-pr-647",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #647；[pi] #645 空闲短门铃叫醒；判定行红 2 项",
+  "pr_number": 647,
+  "source": "github-backfill",
+  "event_id": "c42f1654d1556eabd8817e748ddb9d0e378eb335493acb485fff0d9a2997ed92"
+}

@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-22T14:09:55+08:00",
+  "machine": "backfill",
+  "seq": 435,
+  "job_id": "gh-pr-739",
+  "model": "devin-deepseek-v4-flash-max",
+  "model_share": 0,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.5,
+  "why": "L0：未合并关闭且判不出主责，待定 unknown（#739）",
+  "evidence": [
+    "github:pr-739"
+  ],
+  "pr_number": 739,
+  "source": "github-backfill",
+  "event_id": "0b139ab7c96c5e27aa785a9c7d9b60e4fad1ed4556e99145a8758f1921b57e3a"
+}

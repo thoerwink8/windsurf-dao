@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T14:32:45+08:00",
+  "machine": "backfill",
+  "seq": 276,
+  "job_id": "gh-pr-639",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #639；[grok] #619 粘贴卡死根治；判定行红 0 项",
+  "pr_number": 639,
+  "source": "github-backfill",
+  "event_id": "e94d7466c2d43a73d35b7d4cd7c12bc59759d7116cccd233ee9ad596d8bc01de"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T13:56:16+08:00",
+  "machine": "backfill",
+  "seq": 196,
+  "job_id": "gh-pr-587",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #587；[grok] #586 审官按需起阶段一：备零件；判定行红 1 项",
+  "pr_number": 587,
+  "source": "github-backfill",
+  "event_id": "7bc5f9e0c312a9597da6621581d34b9913ba6397f081a279a1f0ed1382ac3565"
+}

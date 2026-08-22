@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T23:02:39+08:00",
+  "machine": "backfill",
+  "seq": 180,
+  "job_id": "gh-pr-504",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #504；[pi] 救 memory 断链：本机与 host/memory 合一 + dao-check ⑨ Junction 断链检查（#503）；判定行红 1 项",
+  "pr_number": 504,
+  "source": "github-backfill",
+  "event_id": "2c3688b171c4bf73becf73224082ebc862b2e3b3e1ce3596de1acf93eb62fc6c"
+}

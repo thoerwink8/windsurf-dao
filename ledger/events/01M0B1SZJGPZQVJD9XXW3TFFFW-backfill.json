@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T02:23:14+08:00",
+  "machine": "backfill",
+  "seq": 308,
+  "job_id": "gh-pr-654",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #654；[grok] #633 CI：batch 起终端也复用默认空壳；无审读",
+  "pr_number": 654,
+  "source": "github-backfill",
+  "event_id": "d32f59f06decc9aa5d7846b7406eff549b4f78e7c4d65bc198c3cb518100a976"
+}

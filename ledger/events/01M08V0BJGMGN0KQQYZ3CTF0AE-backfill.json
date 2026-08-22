@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T05:45:54+08:00",
+  "machine": "backfill",
+  "seq": 236,
+  "job_id": "gh-pr-609",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #609；[pi] tests/ 迁到 node:test（删自造 check() runner）；判定行红 3 项",
+  "pr_number": 609,
+  "source": "github-backfill",
+  "event_id": "da64297290bdace5dba9855dedadadcbd8fec0efa1b045deb7200cc84a80a2ce"
+}

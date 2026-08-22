@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T15:57:12+08:00",
+  "machine": "backfill",
+  "seq": 208,
+  "job_id": "gh-pr-594",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #594；[grok] #588 返工：calibrate 去废行 + ledger-query + baselineAt；判定行红 1 项",
+  "pr_number": 594,
+  "source": "github-backfill",
+  "event_id": "5e31cb08f2d9c9cc8fe93fbeefd7e182c17742a09f0a8ed5fa1f7458cfb48910"
+}

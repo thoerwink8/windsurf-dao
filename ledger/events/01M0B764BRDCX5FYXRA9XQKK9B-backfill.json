@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T03:57:15+08:00",
+  "machine": "backfill",
+  "seq": 316,
+  "job_id": "gh-pr-656",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #656；[pi] #652 扫描器按 gh MERGED+盘面树关树（可归档只加速；未跟踪文件不挡删）；判定行红 0 项",
+  "pr_number": 656,
+  "source": "github-backfill",
+  "event_id": "ea380c03c403af83e0a7b685e170d6d2b4b040f94f340676eba26b56f2558ff6"
+}

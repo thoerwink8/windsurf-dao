@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-21T01:53:00+08:00",
+  "machine": "backfill",
+  "seq": 364,
+  "job_id": "gh-pr-689",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #689；[grok] #688 deepseek 加回 + devin 通道优先；判定行红 0 项",
+  "pr_number": 689,
+  "source": "github-backfill",
+  "event_id": "8e5a6c3e3ae333b4ba6555a7495f408c7c9c8422e86a401e052cce8440d619e9"
+}

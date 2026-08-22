@@ -1,0 +1,21 @@
+{
+  "type": "job.dispatch",
+  "schema_version": 1,
+  "ts": "2026-08-15T18:03:32+08:00",
+  "machine": "backfill",
+  "seq": 169,
+  "job_id": "gh-pr-484",
+  "model": "claude-opus",
+  "identity": "工人",
+  "work_type": "写码",
+  "model_version": "claude-opus",
+  "terminal": "reclaude --model opus",
+  "price_snapshot": {
+    "source": "github-backfill",
+    "note": "回填无当时价目，空快照"
+  },
+  "decision_id": "beb0c3c23d0d7ec16d565ad01d60bd6d8a1a9961b4f58b20b1e3daaea142d32a",
+  "pr_number": 484,
+  "source": "github-backfill",
+  "event_id": "d12b0e9aae9726de43972bc478f9fd27342ab1ab2f489924608a8554e555c6ec"
+}

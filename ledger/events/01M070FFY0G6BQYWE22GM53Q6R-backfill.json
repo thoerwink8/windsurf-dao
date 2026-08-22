@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T12:43:04+08:00",
+  "machine": "backfill",
+  "seq": 188,
+  "job_id": "gh-pr-584",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #584；[grok] #581 校准数据源换成账本；判定行红 1 项",
+  "pr_number": 584,
+  "source": "github-backfill",
+  "event_id": "28cda9ced2596b2977a2efd2139c18086ba2f5bcec678bb3c80a607aa3e16810"
+}

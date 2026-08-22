@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T12:05:02+08:00",
+  "machine": "backfill",
+  "seq": 408,
+  "job_id": "gh-pr-729",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #729；[devin] #607 值守退出侦测：shouldAskExit 纯函数 + hook 注入结论 + 自拍登记 + 注入瘦身 [chain:standby-state#1]；判定行红 1 项",
+  "pr_number": 729,
+  "source": "github-backfill",
+  "event_id": "36aa8254b42bedff9d0785b0ab14b11881fab6efce34b5640f66cf4fe7e25068"
+}

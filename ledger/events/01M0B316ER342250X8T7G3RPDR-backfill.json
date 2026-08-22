@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T02:44:39+08:00",
+  "machine": "backfill",
+  "seq": 312,
+  "job_id": "gh-pr-655",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #655；[pi] #638 信箱台单台轮询全部在途 Run（+ #614 只读 gc 阈值行）；判定行红 0 项",
+  "pr_number": 655,
+  "source": "github-backfill",
+  "event_id": "f7ba0225041b7777f3a9bae0aa83286d5fd7af2c31485147b8df5aea0cc90b9d"
+}

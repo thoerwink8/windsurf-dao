@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-18T14:06:18+08:00",
+  "machine": "backfill",
+  "seq": 272,
+  "job_id": "gh-pr-636",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #636；[grok] #635 租约退役改纯TTL判断；判定行红 0 项",
+  "pr_number": 636,
+  "source": "github-backfill",
+  "event_id": "192163f00af8e08893277e3c44ae30a1a87f233cc4e418cb4ee29f808c2f8d31"
+}

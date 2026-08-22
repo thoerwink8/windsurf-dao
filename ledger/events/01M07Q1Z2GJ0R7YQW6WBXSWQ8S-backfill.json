@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T19:17:38+08:00",
+  "machine": "backfill",
+  "seq": 224,
+  "job_id": "gh-pr-599",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #599；[grok] 修返工归因与账本三态；判定行红 1 项",
+  "pr_number": 599,
+  "source": "github-backfill",
+  "event_id": "26ec2e101e896e377af128d00dc1e592280e8465a38e4ce732c10b6d9b4fda11"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T17:25:08+08:00",
+  "machine": "backfill",
+  "seq": 348,
+  "job_id": "gh-pr-676",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #676；[grok] #675 验收要改时同步开下一跳；判定行红 3 项",
+  "pr_number": 676,
+  "source": "github-backfill",
+  "event_id": "5695427496c06d37a0ddc59f07d1c45f586a9d64aba7f847d110926b185f701e"
+}

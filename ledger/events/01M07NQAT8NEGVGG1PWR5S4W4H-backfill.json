@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T18:54:21+08:00",
+  "machine": "backfill",
+  "seq": 216,
+  "job_id": "gh-pr-597",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #597；[grok] 改对 RUN_REQUIRED_HINT：勿先试 run-use；无审读",
+  "pr_number": 597,
+  "source": "github-backfill",
+  "event_id": "fbb87b520049fda846b455146d46fe3d1837bd9a3a0dff6a5f5b461327666dc7"
+}

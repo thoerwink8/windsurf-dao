@@ -21,6 +21,10 @@ export const LEDGER_GAP_BASELINE_PR = 590;
 export const LEDGER_GAP_NEWEST_BUFFER = 1;
 /** 推 baseline 收进去的存量缺口。不对照，但输出必须点名，不许静默消失。 */
 export const LEDGER_GAP_HISTORICAL_GAPS = [585, 587, 590];
+/** 基准之上但确认无法回填的存量（2026-08-22 清零收口核定）：这些单的 model/* 标签写的是
+ *  工具/未注册模型（pi、cursor、composer-2.5-fast），backfill「不落幽灵账」设计性跳过；
+ *  改标签=伪造历史记录，不取。豁免进差集，但输出必须点名，不许静默消失。 */
+export const LEDGER_GAP_UNBACKFILLABLE = [659, 662, 709, 711, 741];
 
 export function labelNames(pr) {
   return (pr && pr.labels ? pr.labels : []).map(l => (typeof l === 'string' ? l : l && l.name)).filter(Boolean);
@@ -90,6 +94,7 @@ export function inspectLedgerGap({
   closedNumbers,
   baselinePr = LEDGER_GAP_BASELINE_PR,
   newestBuffer = LEDGER_GAP_NEWEST_BUFFER,
+  unbackfillable = LEDGER_GAP_UNBACKFILLABLE,
 } = {}) {
   const labeled = [...new Set(labeledMergedNumbers(githubPrs))].sort((a, b) => a - b);
   const afterBaseline = labeled.filter(n => n > baselinePr);
@@ -107,7 +112,13 @@ export function inspectLedgerGap({
   const buf = Number.isInteger(newestBuffer) && newestBuffer > 0 ? newestBuffer : 0;
   const checked = buf > 0 ? afterBaseline.slice(0, Math.max(0, afterBaseline.length - buf)) : afterBaseline;
   const closed = closedNumbers instanceof Set ? closedNumbers : new Set(closedNumbers || []);
-  const missing = checked.filter(n => !closed.has(n));
+  const exempt = new Set(unbackfillable || []);
+  const missingAll = checked.filter(n => !closed.has(n));
+  const exempted = missingAll.filter(n => exempt.has(n));
+  const missing = missingAll.filter(n => !exempt.has(n));
+  const exemptBit = exempted.length
+    ? `；豁免点名 ${exempted.map(n => `#${n}`).join(' ')}（标签写工具/未注册模型，不落幽灵账不回填）`
+    : '';
   if (checked.length === 0) {
     return {
       kind: 'ok',
@@ -122,18 +133,20 @@ export function inspectLedgerGap({
     return {
       kind: 'gap',
       missing,
+      exempted,
       checked,
       labeled,
       historicalNote: note,
-      line: `账本断流：已合并带标但无 job.closed：${missing.map(n => `#${n}`).join(' ')}（对照 ${checked.length} 个，缓冲最新 ${buf} 个）`,
+      line: `账本断流：已合并带标但无 job.closed：${missing.map(n => `#${n}`).join(' ')}（对照 ${checked.length} 个，缓冲最新 ${buf} 个）${exemptBit}`,
     };
   }
   return {
     kind: 'ok',
     missing: [],
+    exempted,
     checked,
     labeled,
     historicalNote: note,
-    line: `账本断流：对照 ${checked.length} 个已合并带标 PR，差集空（基准 #${baselinePr}，缓冲最新 ${buf} 个）`,
+    line: `账本断流：对照 ${checked.length} 个已合并带标 PR，差集空（基准 #${baselinePr}，缓冲最新 ${buf} 个）${exemptBit}`,
   };
 }
