@@ -219,9 +219,13 @@ export function ticketsFromWorktree(w) {
   return out;
 }
 
-export function inferSelfRepo(worktrees, { pathHint } = {}) {
+export function inferSelfRepo(worktrees, { pathHint, repoId, repoName } = {}) {
   const list = Array.isArray(worktrees) ? worktrees : [];
   const prefixOf = (w) => repoPrefixOf(w && (w.worktreeId || w.id));
+  // repoId（worktreeId 的 :: 前缀，实测是 uuid）与 path 无关：master 卡在另一盘位
+  // （实测 D:/frank 的 master 卡 vs 主树根 C:/...）或守卫镜像里跑时 pathHint 必然失配，
+  // 显式 repoId 仍能定本仓（#684 余量）。
+  if (repoId) return repoId;
   if (pathHint) {
     const want = normPath(pathHint);
     const hit = list.find(w => w && w.isMainWorktree === true && normPath(w.path) === want)
@@ -230,6 +234,15 @@ export function inferSelfRepo(worktrees, { pathHint } = {}) {
       const p = prefixOf(hit);
       if (p) return p;
     }
+  }
+  // repoName：worktree ps 每条卡自带 repo 字段（仓库名）。守卫镜像里 git remote
+  // get-url origin 也能取到仓库名，pathHint 失配时兜底。同名多仓不猜，只认唯一。
+  if (repoName) {
+    const byName = list.filter(w => w && String(w.repo) === repoName);
+    const mainP = [...new Set(byName.filter(w => w.isMainWorktree === true).map(prefixOf).filter(Boolean))];
+    if (mainP.length === 1) return mainP[0];
+    const allP = [...new Set(byName.map(prefixOf).filter(Boolean))];
+    if (allP.length === 1) return allP[0];
   }
   const mains = [...new Set(list.filter(w => w && w.isMainWorktree === true).map(prefixOf).filter(Boolean))];
   if (mains.length === 1) return mains[0];
@@ -313,14 +326,14 @@ export function rewriteMasterPrefix(prefix) {
  * 全量重写 master 卡定界区。过期「见终端标题」指针改掉，其余前缀保留。没查成不写。
  * dryRun 只算不写。挂点在 dao.mjs / flow.mjs，本函数不自己找挂点。
  */
-export function syncMasterTicketZone({ worktrees, selfRepo, pathHint, runOrca, dryRun } = {}) {
+export function syncMasterTicketZone({ worktrees, selfRepo, repoId, repoName, pathHint, runOrca, dryRun } = {}) {
   if (!Array.isArray(worktrees)) {
     return warnMaster('worktrees 不是数组，没查成，不定界区', { unscanned: true });
   }
-  const repo = selfRepo || inferSelfRepo(worktrees, { pathHint });
+  const repo = selfRepo || inferSelfRepo(worktrees, { repoId, repoName, pathHint });
   const prefixes = [...new Set(worktrees.map(w => repoPrefixOf(w && (w.worktreeId || w.id))).filter(Boolean))];
   if (!repo && prefixes.length > 1) {
-    return warnMaster('多仓盘面分不出本仓（无 selfRepo/pathHint），不定界区', {
+    return warnMaster('多仓盘面分不出本仓（无 selfRepo/repoId/repoName/pathHint），不定界区', {
       unscanned: true,
       prefixes,
     });

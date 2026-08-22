@@ -437,4 +437,95 @@ describe('master-title', () => {
         '无 master  →  ' + JSON.stringify(missingMaster));
     });
   });
+
+  it('#684 余量：多仓盘面认本仓（repoId/repoName，pathHint 失配不再瞎）', async (t) => {
+    const T = await T_LOAD;
+    // 仿真实盘面：worktreeId = repoId(uuid)::path，卡带 repo 字段；master 卡与主树不同盘位。
+    const SELF = '11111111-aaaa-4bbb-8ccc-000000000001';
+    const OTHER = '22222222-bbbb-4ccc-8ddd-000000000002';
+    const masterId = `${SELF}::D:/frank/windsurf-dao`;
+    const missPath = 'C:/Users/Administrator/orca/workspaces/windsurf-dao'; // 主树根，盘上没有这张卡
+    function board(cards) {
+      const comments = Object.fromEntries(cards.map(c => {
+        const id = c.worktreeId || c.id;
+        return [id, c.comment || ''];
+      }));
+      const worktrees = () => cards.map(c => ({ ...c, comment: comments[c.worktreeId || c.id] }));
+      const runOrca = (args) => {
+        if (args[0] === 'worktree' && args[1] === 'ps') {
+          return { ok: true, json: { result: { worktrees: worktrees() } } };
+        }
+        const id = args[args.indexOf('--worktree') + 1];
+        if (args[1] === 'show') {
+          return { ok: true, json: { result: { worktree: { comment: comments[id] || '' } } } };
+        }
+        if (args[1] === 'set') {
+          comments[id] = args[args.indexOf('--comment') + 1];
+          return { ok: true, json: { ok: true } };
+        }
+        return { ok: false, error: `unexpected ${args.join(' ')}` };
+      };
+      return { runOrca, worktrees, comments };
+    }
+    const multi = board([
+      { worktreeId: masterId, isMainWorktree: true, repo: 'windsurf-dao', path: 'D:/frank/windsurf-dao', comment: '主会话：对话/派单/终审（在途单号见定界区）' },
+      { worktreeId: `${SELF}::C:/Users/Administrator/orca/workspaces/windsurf-dao/ISSUE-684-工人`, isMainWorktree: false, repo: 'windsurf-dao', linkedIssue: 684, comment: '｜[#684]' },
+      { worktreeId: `${OTHER}::C:/Users/Administrator/orca/exam-arena`, isMainWorktree: true, repo: 'exam-arena', path: 'C:/Users/Administrator/orca/exam-arena', comment: '外仓帅' },
+      { worktreeId: `${OTHER}::C:/Users/Administrator/orca/exam-arena/ISSUE-1`, isMainWorktree: false, repo: 'exam-arena', linkedIssue: 1, comment: '｜[#1]' },
+    ]);
+    const byRepoId = T.syncMasterTicketZone({
+      worktrees: multi.worktrees(),
+      repoId: SELF,
+      pathHint: missPath,
+      runOrca: multi.runOrca,
+    });
+    await t.test('pathHint 失配 + repoId 显式 → 认本仓、外仓不进（#492）', () => {
+      assert.ok(byRepoId.ok && byRepoId.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]' && !/#1/.test(byRepoId.comment),
+        'repoId 认本仓  →  ' + JSON.stringify(byRepoId));
+    });
+    const byRepoName = T.syncMasterTicketZone({
+      worktrees: multi.worktrees(),
+      repoName: 'windsurf-dao',
+      pathHint: missPath,
+      runOrca: multi.runOrca,
+    });
+    await t.test('mirror 场景：无 repoId、repoName 认本仓（git remote 兜底）', () => {
+      assert.ok(byRepoName.ok && byRepoName.comment === '主会话：对话/派单/终审（在途单号见定界区）｜[#684]' && !/#1/.test(byRepoName.comment),
+        'repoName 认本仓  →  ' + JSON.stringify(byRepoName));
+    });
+    const noHint = T.syncMasterTicketZone({
+      worktrees: multi.worktrees(),
+      pathHint: missPath,
+      runOrca: multi.runOrca,
+    });
+    await t.test('三个手段都没有 + 多仓 → 仍报警不写（没查成 ≠ 空盘）', () => {
+      assert.ok(noHint.ok === false && noHint.unscanned === true && /分不出本仓/.test(noHint.reason),
+        '多仓无手段  →  ' + JSON.stringify(noHint));
+    });
+    const twin = board([
+      { worktreeId: `${SELF}::D:/frank/windsurf-dao`, isMainWorktree: true, repo: 'windsurf-dao' },
+      { worktreeId: `${OTHER}::C:/clone/windsurf-dao`, isMainWorktree: true, repo: 'windsurf-dao' },
+    ]);
+    await t.test('同名两仓（不同 repoId）→ 不猜，返回 null', () => {
+      assert.ok(T.inferSelfRepo(twin.worktrees(), { repoName: 'windsurf-dao' }) === null,
+        '同名歧义不猜  →  ' + T.inferSelfRepo(twin.worktrees(), { repoName: 'windsurf-dao' }));
+    });
+    const single = board([
+      { worktreeId: masterId, isMainWorktree: true, repo: 'windsurf-dao', path: 'D:/frank/windsurf-dao', comment: '帅位' },
+      { worktreeId: `${SELF}::/684`, isMainWorktree: false, repo: 'windsurf-dao', linkedIssue: 684 },
+    ]);
+    const singleOk = T.syncMasterTicketZone({
+      worktrees: single.worktrees(),
+      pathHint: missPath,
+      runOrca: single.runOrca,
+    });
+    await t.test('单仓 + pathHint 失配 → 单仓兜底照旧（不回归）', () => {
+      assert.ok(singleOk.ok && singleOk.comment === '帅位｜[#684]',
+        '单仓兜底  →  ' + JSON.stringify(singleOk));
+    });
+    await t.test('repoId 优先于 pathHint（pathHint 若误配也不覆盖）', () => {
+      const got = T.inferSelfRepo(multi.worktrees(), { repoId: SELF, pathHint: 'C:/Users/Administrator/orca/exam-arena' });
+      assert.ok(got === SELF, 'repoId 优先  →  ' + got);
+    });
+  });
 });

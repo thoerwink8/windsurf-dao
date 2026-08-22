@@ -89,7 +89,7 @@ import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { findReviewerWorktree, worktreeIdOf } from './lib/card-identity.mjs';
 import { closeIssueForPr } from './lib/close-issue.mjs';
 import { findDispatchForWorktree, leftoverDispatchMatch, pastedContentMatch, readDispatchSettlement } from './lib/dao-cmd.mjs';
-import { syncMasterTicketZone } from './lib/master-title.mjs';
+import { repoPrefixOf, syncMasterTicketZone } from './lib/master-title.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -113,8 +113,27 @@ function closeIssueOnMerge(prNumber, dryRun) {
   return `（关单：${verb} issue #${res.issue}——${res.reason}）`;
 }
 
+/** 本仓 repo 名（worktree ps 的 repo 字段）：git remote get-url origin 的 basename 去 .git。
+ * 守卫镜像里 worktree current 打不到（selector_not_found 实测），remote 名兜底（#684 余量）。 */
+function repoNameOf(cwd) {
+  const r = runCmd('git', ['-C', cwd, 'remote', 'get-url', 'origin'], 10000);
+  if (!r.ok || !r.out) return null;
+  const base = String(r.out).trim().split(/[/\\]/).pop() || '';
+  return base.replace(/\.git$/i, '');
+}
+
+function currentRepoId() {
+  const r = runOrca(['worktree', 'current', '--json']);
+  if (!r.ok) return { ok: false, error: String(r.error || '') };
+  const wt = r.json?.result?.worktree;
+  const repoId = wt && (wt.repoId || repoPrefixOf(wt.id));
+  if (!repoId) return { ok: false, error: 'worktree current 没返回 repoId' };
+  return { ok: true, repoId };
+}
+
 /** #684：合并退役时全量重写 master 卡定界区。没查成显形，不把空盘当 0。
- * live 走 worktree ps；快照走 source.orcaWorktrees（不打真 orca）。 */
+ * live 走 worktree ps；快照走 source.orcaWorktrees（不打真 orca）。
+ * 本仓识别优先级：worktree current 的 repoId > git remote 仓库名 > pathHint。 */
 function noteMasterZoneOnMerge(source, flowArgs) {
   let worktrees;
   if (flowArgs.snapshotDir) {
@@ -131,8 +150,17 @@ function noteMasterZoneOnMerge(source, flowArgs) {
     if (!Array.isArray(wts)) return `（帅位定界区没查成：worktree ps 没有 result.worktrees）`;
     worktrees = wts;
   }
+  let repoId;
+  let repoName;
+  if (!flowArgs.snapshotDir) {
+    const cur = currentRepoId();
+    if (cur.ok) repoId = cur.repoId;
+  }
+  if (!repoId) repoName = repoNameOf(ROOT);
   const r = syncMasterTicketZone({
     worktrees,
+    repoId,
+    repoName,
     pathHint: ROOT,
     runOrca: (cmd) => runOrca(cmd),
     dryRun: !!flowArgs.dryRun,
