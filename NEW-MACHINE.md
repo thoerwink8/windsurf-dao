@@ -223,6 +223,10 @@ INDEX 里 D 类一律不拷：`~/.claude/settings.json`、`~/.claude/settings.lo
 
 Claude / Codex / grok 已装的 `~/.orca/agent-hooks/*.cmd` 保持现状；本条只挡 cursor 那条闪屏默认装法。
 
+## 8f. Orca 桌面启动命令
+
+派工起 agent 先读 Orca Desktop 的启动覆盖，不把仓内 launch 当唯一源。文件在 `%APPDATA%\orca\profiles\local-default\orca-data.json`（可用 `ORCA_HOME` 或 `ORCA_DATA_JSON` 改路径）：`settings.agentCmdOverrides`（命令覆盖，本机 Claude=`reclaude`）和 `settings.agentDefaultArgs`（参数，本机 Codex=`--dangerously-bypass-approvals-and-sandbox`）。仓内 `docs/model-routing.toml` 的 `[providers.*.launch]` 是兜底——文件不在才回落。这是 D 类本机状态：**不要拷、不要改**；新机装好 Orca Desktop 并在设置里配好各智能体即可。
+
 ## 8e. Cursor 帅缺口
 
 帅位三件套（Run / 收信 / hook）只在 Claude Code 上齐。Cursor 现在缺盘注入（board-hook）、信箱台归属、三态 hook。**不改「帅=CC」政策**——Cursor 只做工人，不要把 dispatch / CLAUDE.md 改成任意终端都能当帅。

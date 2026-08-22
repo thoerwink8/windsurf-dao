@@ -1,7 +1,10 @@
 // scripts/lib/dao-cmd.mjs —— 统一命令库的纯函数层（issue #482）
 //
-// 改这段前必须知道：启动命令模板只存在 docs/model-routing.toml 的 [providers.*].launch，
-// 这里禁止写死 codex / reclaude / grok 的参数。读表失败必须抛，不许静默回退。
+// 改这段前必须知道：起 agent 先问 scripts/lib/orca-agent-cmds.mjs（Orca Desktop
+// settings.agentCmdOverrides / agentDefaultArgs）。文件在且读到了就用 Orca。
+// docs/model-routing.toml 的 [providers.*].launch 是兜底。禁止在这里写死
+// codex / reclaude / grok 的参数。Orca 没查成（坏 JSON / 没扫到 settings）必须抛，
+// 不许当成「Orca 没有覆盖」。文件不在才回落 routing。
 // --help 自检的比对函数不调用 orca 自己的 schema（agent-context），只解析 --help 文本。
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -15,6 +18,7 @@ import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
 import { issueNumberFromWorktree, prNumberFromWorktree } from './card-identity.mjs';
+import { applyOrcaAgentCmds, loadOrcaAgentCmds } from './orca-agent-cmds.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -96,7 +100,9 @@ export function loadRouting(file = ROUTING_FILE) {
   };
 }
 
-export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = {}) {
+export function resolveLaunch({
+  provider, model, routing, root = ROOT, pipe, orca, orcaFile, skipOrca, env,
+} = {}) {
   if (!routing) throw new Error('resolveLaunch 没给 routing（读表失败应在 loadRouting 就抛）');
   const providers = routing.providers;
   if (!providers || typeof providers !== 'object') throw new Error('路由表缺 [providers] 节');
@@ -121,22 +127,31 @@ export function resolveLaunch({ provider, model, routing, root = ROOT, pipe } = 
   }
 
   let command = String(p.launch).trim();
+  let cliModel = null;
   if (command.includes('{model}')) {
-    const cliModel = (chosen && chosen.cli_model) || (hit && hit.cli_model) || model || p.launch_model || p.default_model;
+    cliModel = (chosen && chosen.cli_model) || (hit && hit.cli_model) || model || p.launch_model || p.default_model;
     if (!cliModel) {
       throw new Error(`providers.${providerName}.launch 含 {model} 但没给模型（--model / launch_model / default_model）`);
     }
     command = command.split('{model}').join(String(cliModel));
   }
   const materialized = materializeLaunch(command, root);
-  return {
+  const routingLaunch = {
     provider: providerName,
     command: materialized,
     template: String(p.launch).trim(),
     pipe: chosen || null,
     agentId: orcaKnownAgentId({ provider: providerName, command: materialized }),
     start,
+    launchSource: 'routing',
   };
+  if (skipOrca) return routingLaunch;
+  const orcaCmds = orca !== undefined ? orca : loadOrcaAgentCmds({ file: orcaFile, env });
+  return applyOrcaAgentCmds(routingLaunch, orcaCmds, {
+    cliModel,
+    root,
+    materialize: materializeLaunch,
+  });
 }
 
 export function materializeLaunch(command, root = ROOT) {

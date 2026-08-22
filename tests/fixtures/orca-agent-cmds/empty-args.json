@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "settings": {
+    "agentCmdOverrides": {
+      "claude": "reclaude"
+    },
+    "agentDefaultArgs": {
+      "claude": ""
+    }
+  }
+}
