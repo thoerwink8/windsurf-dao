@@ -7,10 +7,12 @@
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select } from './lib/dianjiangtai-core.mjs';
+import { nextInjection } from './lib/board-hook.mjs';
 import {
   advanceLaunchState,
   classifyLaunchFailure,
@@ -165,6 +167,7 @@ import {
 } from './inbox-station.mjs';
 import { assertCrossVendor, filterSlateSameVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
+import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
 
@@ -405,7 +408,17 @@ function launchAgentInWorktree({ worktreeId, title, command, launch, forceComman
   return { ok: true, handle, reused: false, mode: 'command' };
 }
 
-function startOrcaWorker({ task, worktree, launched, run }) {
+/** worker-start 失败时把 result.lastError/failedStage 带进错误话面（实测 exit 1 + ok:true + lastError 藏在 JSON 里）。 */
+function workerStartFailText(r) {
+  const base = errText(r?.error);
+  const last = r?.json?.result?.lastError || r?.json?.lastError || null;
+  const stage = r?.json?.result?.failedStage || null;
+  if (!last && !stage) return base;
+  const hint = [stage, last].filter(Boolean).join(' / ');
+  return base.includes(hint) ? base : `${base}（${hint}）`;
+}
+
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs }) {
   if (launched?.deferred) {
     const r = orca(argsWorkerStart({
       task,
@@ -413,8 +426,9 @@ function startOrcaWorker({ task, worktree, launched, run }) {
       agent: launched.agentId,
       model: launched.model || undefined,
       run,
+      timeoutMs,
     }), 180000);
-    if (!r.ok) return { ok: false, error: errText(r.error), json: r.json };
+    if (!r.ok) return { ok: false, error: workerStartFailText(r), json: r.json };
     const handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json };
@@ -422,8 +436,8 @@ function startOrcaWorker({ task, worktree, launched, run }) {
     return { ok: true, json: r.json, handle, dispatchId: extractDispatchId(r.json) };
   }
   if (!launched?.handle) return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
-  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle, run }));
-  if (!r.ok) return { ok: false, error: errText(r.error), json: r.json, handle: launched.handle };
+  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs }));
+  if (!r.ok) return { ok: false, error: workerStartFailText(r), json: r.json, handle: launched.handle };
   return { ok: true, json: r.json, handle: launched.handle, dispatchId: extractDispatchId(r.json) };
 }
 
@@ -2771,9 +2785,15 @@ function cmdReviewerAttach(args) {
     failCreated(created, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
 
-  const station = bindStation();
-  if (!station.ok) failCreated(created, station.error, plan);
-  const reviewerRunId = soldierRunId || station.runId;
+  // #682 微通道：quick-fix 的异步 attach 是 detached 进程，bindStation 自开的 Run 没有
+  // coordinator 终端，worker-start 会 consumer_fenced。微通道子进程显式 --run（--from 信箱台
+  // 建的 Run，coordinator 是常驻信箱台）；其余路径照旧走 bindStation。
+  let reviewerRunId = args.run ? String(args.run).trim() : null;
+  if (!reviewerRunId) {
+    const station = bindStation();
+    if (!station.ok) failCreated(created, station.error, plan);
+    reviewerRunId = station.runId;
+  }
   const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
@@ -2789,6 +2809,9 @@ function cmdReviewerAttach(args) {
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
+    // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
+    // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
+    timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,
   });
   if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   created.reviewerHandle = revStarted.handle;
@@ -3018,6 +3041,133 @@ function cmdRunGc(args) {
   }, tallied.failedCount ? 1 : 0);
 }
 
+// ── 盘面存档 / 清盘（重测派单前用；存档只留本机，不进 git）──────────────
+
+/** 全量采盘面：卡片/终端/workers/Run（分页扫全）/信箱。每节独立标 ok/没查成。 */
+function collectBoardSnapshot() {
+  const sections = {};
+  const listed = orca(argsWorktreePs());
+  if (!listed.ok) sections.worktrees = { ok: false, error: errText(listed.error) };
+  else {
+    const wts = listed.json?.result?.worktrees;
+    sections.worktrees = Array.isArray(wts) ? { ok: true, data: wts } : { ok: false, error: 'worktree ps 没有 result.worktrees' };
+  }
+  const tl = orca(argsTerminalList());
+  if (!tl.ok) sections.terminals = { ok: false, error: errText(tl.error) };
+  else {
+    const terms = tl.json?.result?.terminals;
+    sections.terminals = Array.isArray(terms) ? { ok: true, data: terms } : { ok: false, error: 'terminal list 没有 result.terminals' };
+  }
+  const wl = orca(argsWorkerList());
+  if (!wl.ok) sections.workers = { ok: false, error: errText(wl.error) };
+  else {
+    const workers = unwrapWorkers(wl.json);
+    sections.workers = Array.isArray(workers) ? { ok: true, data: workers } : { ok: false, error: 'worker-list 没有 result.workers' };
+  }
+  const rl = listAllRuns();
+  sections.runs = rl.ok ? { ok: true, data: rl.runs } : { ok: false, error: rl.error };
+  const ib = orca(argsOrchestrationInbox({ limit: 80 }));
+  if (!ib.ok) sections.inbox = { ok: false, error: errText(ib.error) };
+  else {
+    const messages = ib.json?.result?.messages;
+    sections.inbox = Array.isArray(messages) ? { ok: true, data: messages } : { ok: false, error: 'inbox 没有 result.messages' };
+  }
+  const ok = Object.values(sections).every((s) => s.ok);
+  return { ok, ts: new Date().toISOString(), sections };
+}
+
+function sectionCounts(sections) {
+  return Object.fromEntries(Object.entries(sections).map(([k, s]) => [
+    k, s.ok ? (Array.isArray(s.data) ? s.data.length : 0) : `没查成: ${s.error}`,
+  ]));
+}
+
+function boardArchivePaths(args, ts) {
+  const dir = String(args.out || '').trim() || join(homedir(), '.dao', 'board-archive');
+  const stamp = String(ts).replace(/[:.]/g, '-');
+  return { dir, jsonPath: join(dir, `board-${stamp}.json`), mdPath: join(dir, `board-${stamp}.md`) };
+}
+
+function writeBoardArchive(snap, args) {
+  const paths = boardArchivePaths(args, snap.ts);
+  mkdirSync(paths.dir, { recursive: true });
+  writeFileSync(paths.jsonPath, JSON.stringify(snap, null, 2), 'utf8');
+  writeFileSync(paths.mdPath, formatBoardArchiveMd(snap), 'utf8');
+  return paths;
+}
+
+function cmdBoardArchive(args) {
+  const snap = collectBoardSnapshot();
+  let paths;
+  try { paths = writeBoardArchive(snap, args); }
+  catch (e) { fail(`存档写盘失败：${e.message || e}`); }
+  const bad = Object.entries(snap.sections).filter(([, s]) => !s.ok).map(([k, s]) => `${k}: ${s.error}`);
+  emit({
+    ok: snap.ok,
+    ...paths,
+    sections: sectionCounts(snap.sections),
+    ...(snap.ok ? {} : { error: `有 ${bad.length} 节没查成（存档已写并标 unscanned，≠ 扫完是空的）：${bad.join('；')}` }),
+  }, snap.ok ? 0 : 1);
+}
+
+/** 清盘收尾 run-gc：卡删完后无在途树保护的 Run 退役。复用 cmdRunGc 的纯函数，不碰 coordinator（永不自动退）。 */
+function boardResetGc() {
+  const src = loadLifecycleInputs();
+  if (!src.ok) return { ok: false, error: `收尾 run-gc 盘面没查成: ${src.error}` };
+  const plan = planRunGc({ runs: src.runs, workers: src.workers, worktrees: src.worktrees });
+  if (!plan.ok) return { ok: false, error: `收尾 run-gc 名单没查成: ${plan.error}` };
+  const leaseExistsFor = (runId) => stationFilesFor(runId).some((f) => existsSync(f));
+  const parts = partitionGcTargets(plan.retire, { leaseExistsFor });
+  if (!parts.ok) return { ok: false, error: `收尾 run-gc 分桶没查成: ${parts.error}` };
+  const results = parts.pending.map((r) => retireOneRun(r.id));
+  const tallied = summarizeGcApply({ pendingResults: results, tombstones: parts.tombstones });
+  return { ok: tallied.failedCount === 0, ...tallied };
+}
+
+function cmdBoardReset(args) {
+  const snap = collectBoardSnapshot();
+  if (!snap.ok) {
+    const bad = Object.entries(snap.sections).filter(([, s]) => !s.ok).map(([k, s]) => `${k}: ${s.error}`);
+    fail(`盘面没查成，未删任何树（${bad.join('；')}）`, { sections: sectionCounts(snap.sections) });
+  }
+  const planned = planBoardTargets(snap.sections.worktrees.data);
+  if (!planned.ok) fail(planned.error);
+  const mainEventsDir = ensureLocalLedger({ root: ROOT }).dir;
+  // 逐卡过既有闸（占用 / 账本孤本 / 子卡齐不齐），dry-run 同样只读不改态
+  const entries = planned.targets.map((t) => {
+    const plan = prepareWorktreeRm(snap.sections.worktrees.data, t.id, { mainEventsDir });
+    return plan.ok
+      ? { id: t.id, name: t.name, plan }
+      : { id: t.id, name: t.name, plan: null, reason: plan.error };
+  });
+  if (!args.apply) {
+    emit({
+      ok: true,
+      dryRun: true,
+      guarded: planned.guarded,
+      remove: entries.filter((e) => e.plan).map((e) => ({ id: e.id, name: e.name, trees: e.plan.order.map((n) => n.id) })),
+      skip: entries.filter((e) => !e.plan).map((e) => ({ id: e.id, name: e.name, reason: e.reason })),
+    });
+  }
+  // --apply：先存档（写盘失败一张都不删），再逐卡整树删，最后收尾 run-gc
+  let archive;
+  try { archive = writeBoardArchive(snap, args); }
+  catch (e) { fail(`清盘前存档写盘失败，未删任何树：${e.message || e}`); }
+  const removed = [];
+  const skipped = [];
+  for (const e of entries) {
+    if (!e.plan) { skipped.push({ id: e.id, name: e.name, reason: e.reason }); continue; }
+    const applied = applyWorktreeRmPlan(e.plan, {
+      rm: (node) => orca(argsWorktreeRm({ worktree: node.id, force: true })),
+    });
+    if (applied.ok) removed.push({ id: e.id, name: e.name, trees: applied.removed.map((n) => n.id) });
+    else skipped.push({ id: e.id, name: e.name, reason: applied.error, partialRemoved: (applied.removed || []).map((n) => n.id) });
+  }
+  const gc = boardResetGc();
+  const verdict = boardResetVerdict({ removed, skipped, gc });
+  emit({ ok: verdict.ok, archive, removed, skipped, gc, line: verdict.line }, verdict.ok ? 0 : 1);
+}
+
 function cmdAsk(args) {
   if (!args.question) fail('ask 要 --question');
   const parsedTimeout = parseAskTimeoutMs(args.timeoutMs);
@@ -3097,6 +3247,16 @@ function cmdLiveness(args) {
   }
 }
 
+/** #576：盘面动作候选一行（只读本地文件，零 GitHub；永不拦 exit 0）。 */
+function cmdNext() {
+  try {
+    process.stdout.write(`${nextInjection()}\n`);
+  } catch (e) {
+    process.stdout.write(`[盘] 没查成：${String(e.message || e).slice(0, 120)}（≠ 扫完是空的）\n`);
+  }
+  process.exit(0);
+}
+
 function cmdCheckHelp() {
   const sources = new Set();
   const report = checkHelpLiveness({
@@ -3152,6 +3312,8 @@ function main() {
     case 'reply': return cmdReply(args);
     case 'inbox-collect': return cmdInboxCollect(args);
     case 'run-gc': return cmdRunGc(args);
+    case 'board-archive': return cmdBoardArchive(args);
+    case 'board-reset': return cmdBoardReset(args);
     case 'ask': return cmdAsk(args);
     case 'gate-create': return cmdGateCreate(args);
     case 'gate-resolve': return cmdGateResolve(args);
@@ -3161,6 +3323,7 @@ function main() {
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
     case 'ledger-query': return cmdLedgerQuery(args);
     case 'amend': return cmdAmend(args);
+    case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);
     default:
       console.error(`未知动词: ${args.verb}`);

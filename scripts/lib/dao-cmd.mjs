@@ -569,7 +569,7 @@ export function argsTaskUpdate({ id, status, result, run, from } = {}) {
   return a;
 }
 
-export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model, from, run } = {}) {
+export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model, from, run, timeoutMs } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
   if (worktree) a.push('--worktree', worktree);
@@ -579,6 +579,7 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, mode
   if (retryOf) a.push('--retry-of', retryOf);
   if (run) a.push('--run', run);
   if (from) a.push('--from', from);
+  if (timeoutMs != null && Number(timeoutMs) > 0) a.push('--timeout-ms', String(Number(timeoutMs)));
   a.push('--json');
   return a;
 }
@@ -2811,7 +2812,7 @@ export function reviewerCardName(reviewerId) {
 // dispatch / worker-start 带 --issue 时，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
 // 三态必须分得开（#565 硬约束）：查成且有 label / 查成但没 label / 没查成（gh 失败）。
 // 没查成不许当有 label 放行——「没查成」当「查过没事」是事故类（#532 通用原则）。
-export const DISAMBIGUATED_LABEL = '已消歧';
+export const DISAMBIGUATED_LABEL = '已消歧'; // 只认这一张；近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门（#565）
 export function checkIssueDisambiguated({ issue, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!n) return { ok: true, gated: false, issue: null };
@@ -4378,8 +4379,8 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
-  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend',
-  'inbox-collect', 'run-gc', 'ask', 'raw',
+  'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
+  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
 ];
 
 const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait']);
@@ -4412,7 +4413,8 @@ export const FLAGS_BY_VERB = {
   ]),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
-    '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--dry-run', '--json', '--help', '-h',
+    '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
+    '--start-timeout-ms', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([
@@ -4424,6 +4426,8 @@ export const FLAGS_BY_VERB = {
   reply: new Set(['--id', '--body', '--from', '--run', '--json', '--help', '-h']),
   'inbox-collect': new Set(['--peek', '--json', '--help', '-h']),
   'run-gc': new Set(['--apply', '--json', '--help', '-h']),
+  'board-archive': new Set(['--out', '--json', '--help', '-h']),
+  'board-reset': new Set(['--apply', '--out', '--json', '--help', '-h']),
   ask: new Set(['--question', '--options', '--timeout-ms', '--run', '--json', '--help', '-h']),
   'gate-create': new Set(['--task', '--question', '--options', '--from', '--json', '--help', '-h']),
   'gate-resolve': new Set(['--id', '--resolution', '--from', '--json', '--help', '-h']),
@@ -4433,6 +4437,7 @@ export const FLAGS_BY_VERB = {
   'pr-sync-labels': new Set(['--pr', '--json', '--help', '-h']),
   'ledger-query': new Set(['--recent', '--issue', '--unclosed', '--json', '--help', '-h']),
   amend: new Set(['--issue', '--pr', '--why', '--by', '--model', '--dry-run', '--json', '--help', '-h']),
+  next: new Set(['--help', '-h']),
 };
 
 export function verbFlagGaps(verbs = VERBS, table = FLAGS_BY_VERB) {
@@ -4517,6 +4522,14 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 按在途单的 Run 收信箱。三态：empty / unscanned / run_not_found。默认 --peek 不标已读
   run-gc [--apply]
                   # 列出无在途单对应的 Run；--apply 才关台退役。在途的不许退役
+盘面（重测派单前的存档与清盘；存档只留本机 ~/.dao/board-archive/，不进 git）：
+  board-archive [--out <目录>]
+                  # 全量存档（卡片/终端/workers/Run/信箱）→ board-<时间戳>.{json,md}
+                  # 任何一节没查成：存档照写（标 unscanned）但非零退出——没查成 ≠ 扫完是空的
+  board-reset [--apply] [--out <目录>]
+                  # 默认 dry-run 只列将删/将跳过的卡，不改态
+                  # --apply：先存档再逐卡整树删（复用 worktree-rm 的占用闸与账本孤本闸）+ 收尾 run-gc
+                  # 硬闸：任何一节盘面没查成 → 一张都不删；主树永不删；占用中的卡跳过并列清原因
   ask --question <文> [--options <csv>] [--timeout-ms <n>] [--run <id>]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
@@ -4537,6 +4550,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 其他:
   liveness [--path <工作树>]
   check-help
+  next                        # 盘面动作候选一行（#576）：只读本地文件零 GitHub；standby 态不含「待消歧」
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
   amend --issue <号> --why <一句话> [--pr <号>] [--by 帅|用户] [--model <id>]

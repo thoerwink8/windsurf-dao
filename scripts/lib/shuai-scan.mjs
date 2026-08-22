@@ -258,6 +258,12 @@ export function prApprovedReady(pr) {
   return String(pr.mergeable || '').toUpperCase() === 'MERGEABLE';
 }
 
+/** 判绿但卡在 draft（manual 合门的制度类 PR 按制度就是 draft）——最需要拍板的一类，不许隐形（#730 实证）。 */
+export function prApprovedDraft(pr) {
+  if (!pr || !pr.isDraft) return false;
+  return String(pr.reviewDecision || '').toUpperCase() === 'APPROVED';
+}
+
 export function detectAnomalies({ rules, orca, github, now = Date.now() } = {}) {
   const out = [];
   const crit = rules?.['异常判据'] || {};
@@ -300,6 +306,9 @@ export function detectAnomalies({ rules, orca, github, now = Date.now() } = {}) 
     if (approvedOn && prApprovedReady(pr)) {
       out.push(`GitHub：PR #${pr.number} 审官已绿待合并（APPROVED + MERGEABLE）`);
     }
+    if (approvedOn && prApprovedDraft(pr)) {
+      out.push(`GitHub：PR #${pr.number} 判绿待拍板（draft，manual 合门）`);
+    }
   }
 
   void now;
@@ -321,6 +330,8 @@ export function buildRecommendations({ rules, github, orca } = {}) {
   for (const pr of prs) {
     if (prApprovedReady(pr)) {
       items.push({ priority: 'P1', kind: 'pr', number: pr.number, title: pr.title, line: `P1 PR #${pr.number} 判绿待合并：${pr.title}` });
+    } else if (prApprovedDraft(pr)) {
+      items.push({ priority: 'P1', kind: 'pr', number: pr.number, title: pr.title, line: `P1 PR #${pr.number} 判绿待拍板（draft，manual 合门）：${pr.title}` });
     }
   }
 

@@ -1,38 +1,41 @@
 ## 目标
 
-master 卡 comment 的定界区在派工 / 清卡 / 合并三个事件点全量重写为当前在途单号（写时即对）。复用 `mutateWorktreeComment`，不走 watchdog 轮询、不注入 `/rename`。署名 issue #684（关单交给 `scripts/close-issues.mjs`）。
+#682 微通道：几行改动 20 秒合完。做 `scripts/quick-fix.mjs` 原子脚本（一步完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步 attach 异厂审官；任一步失败整体回滚并留痕），#679 同厂硬闸在微通道口照走（`--model` 必须显式声明，查不到 / 同厂拒绝起审官），dispatch SKILL 主会话红线加微通道唯一例外。
 
 ## 验收标准
 
-- [x] 造新增：盘面多一张带单号的卡 → master 定界区出现该号
-- [x] 造删除：卡从盘面消失 → 该号从定界区消失
-- [x] 造假号：手改 master 定界区塞不存在的号 → 下一次事件后收敛
-- [x] 造多帅：无法分辨归属，定界区写全体在途单（退化行为有测试钉）
-- [x] 盘面没查成 ≠ 在途 0：ps 失败不许把定界区抹空
-- [x] 卡名里的 `#N` 不算判据（#589）；外仓卡不算（#492）
-- [x] 过期前缀「各自在途单号见各自终端标题」改为「在途单号见定界区」
-- [x] `node --test tests/master-title.test.js tests/dao.test.js tests/flow.test.js tests/board-hook.test.js` 相关绿
-- [x] `node scripts/dao-check.mjs` 不新增红项（全仓两项红：open 未在做超阈、账本断流，本单未动）
-- [x] PR 正文不写 GitHub 自动关单词
+- [x] `scripts/quick-fix.mjs` 存在且原子：一步完成 分支 → commit → push → PR → label → attach 审官；任一步失败整体退出并留痕（fail-visible），不留半成品分支
+- [x] 审官 attach 的 #679 闸生效：主会话模型未声明 / 与审官同厂 / 模型查不到 → 非零退出
+- [x] 人的操作 = 1 个命令 + 确认（实测计时写入 PR 正文）
+- [x] 故意构造「几行改动」跑一遍，20 秒内产出 PR，审官异步起；构造「同厂审官」样本被当场拦
+- [x] dispatch SKILL 红线处已改并注明例外；`node scripts/dao-check.mjs` 全绿（仅余既有 #711 账本断流红，本单未动）
 
 ## 进展
 
-- [x] 空提交撑分支、开 draft PR #685
-- [x] `syncMasterTicketZone`：全量重写 + 回读
-- [x] 挂点：`dao.mjs dispatch` / `worktree-rm` / `flow.mjs` MERGED
-- [x] 四条故意构造样本 + 没查成负控
-- [x] 文档：dispatch skill 命名条补 master 卡钩子
-- [x] 返工：过期前缀改为在途单号见定界区
-- [x] rebase 到 origin/master（#680/#689 已合）
+- [x] 开工：空提交撑分支 + draft PR
+- [x] `scripts/lib/quick-fix.mjs` 纯函数层（闸计划 / 审官解析 / 分支名 / label / PR 正文 / issue 补标）
+- [x] `scripts/quick-fix.mjs` CLI：preflight（分支碰撞预检 / master 前置）→ #679 闸 → 分支 → commit（dao-worker[bot]）→ push → 删本地分支 → PR → label → 异步 attach（壳卡 + 信箱台 Run + reviewer-attach + 冷启动重试）→ 失败整体回滚 + PR 留痕
+- [x] dispatch SKILL 主会话红线加微通道例外
+- [x] `scripts/lib/quick-fix-check.mjs` + dao-check 注册（㉕）+ 红/绿/空样本
+- [x] `tests/quick-fix.test.js`（50 断言：纯函数三态 + CLI 故意同厂/缺 model/gh 失败/不一致 + 检查器判别力）
+- [x] 实跑验收（issue #732 样本，见下方验收记录）
+- [x] dao-check 全绿（仅余既有 #711）→ ready
 
-## 体系类改动
+### 实跑验收记录（issue #732，样本 PR #740）
 
-1. 谁提的，发生在什么场景？2026-08-21 用户拍板。#545「watchdog 轮询 + 注入 /rename 纠正帅位标题」被 grill-ai 从零拷问推翻：同一目标第 2 层补丁、检测-纠正式、抢输入框（#644）、且 watchdog 已停摆（#683）。要的是面板上的在途单号在事件发生时就是对的。
+- **同厂样本当场拦**：`quick-fix --dry-run --model grok-4.6 --reviewer grok-4.6` → exit 1 + 「同厂（grok），审查必须换厂商」。
+- **20 秒内产出 PR**：`quick-fix --issue 732 --model devin-deepseek-v4-flash-max --reviewer gpt-5.6-sol --yes` → PR #740 落地 15.5s（脚本自测 14.8s），label 齐（model/devin-deepseek-v4-flash-max、type/微修、reviewer/gpt-5.6-sol）。
+- **审官异步起**：attach 子进程建壳卡（挂在微修分支）→ 信箱台 Run（coordinator=常驻台）→ `reviewer-attach --skip-wait` → Codex 审官 dispatch `ctx_726074414ac8`，审官卡 PR-#740 审官·gpt-5.6-sol 在盘。日志 `~/.dao/quickfix/quickfix-732.log`。
+- **原子回滚实测**：验收调试中多次中途失败（PR create 旗标 / 壳卡派生分支 / 审官 Run / codex 冷启动），每次失败均：删远端分支 / 关 PR / 删壳卡 / 回 master / 删本地分支，无半成品残留。
+- **环境教训（写进 PR 给后人）**：codex TUI 冷启动注入会落在「model: loading」窗口导致 `agent_prompt_stalled`；本机实测与残留 codex 进程堆积强相关（全清后首启必成，堆叠后连败）。attach 子进程已做 5 次重试 + 30s 间隔兜底；根治需 orca/codex 侧（注入等 TUI 就绪）。
 
-2. 删哪一层能让这个问题不存在？删掉「写错了再巡检纠正」这一层。单号只在三个会改变盘面的事件点从 `worktree ps` 全量重写进 master 卡定界区。没有事件就没有纠偏——长静默期内的手改是拍板取舍，不另造轮询。
+### 返工记录（审官判定：红 2 项 → 已修）
 
-3. 如果从零重做，今天还会造它吗？会造「事件点全量重写定界区」。不会造 watchdog 轮询、不会造终端 `/rename`，也不会造 board-hook 每轮 sync。
+1. **红项：attach 失败留半成品 PR/远端分支** → `failAttach` 整体回滚：删壳卡 → 关 PR（`--delete-branch` 连带删远端分支）→ 删本地分支，回滚每步结果显式写进 PR 评论与日志；纯函数 `planAttachFailureRollback` + 执行器 `runAttachFailureRollback`（注入式，可测），回归测试断言「有 PR 必含 pr-close、任一步失败整体非零 + failed 显式列出」。
+2. **红项：自定义正文只查「署名 issue」字样不查号码** → `signedIssueNumber` 精确抽号，`buildQuickFixPrBody` 校验号码必须等于本次 issue（正文署名其他单号时当场拒），补测试「正文署名其他 issue 必须拒绝」「无 # 也认」「抽到/没抽到分开」。
 
-## 设计阶段
+返工后：`node --test tests/quick-fix.test.js` 59/59 过；`node scripts/dao-check.mjs` 75 绿，仅余既有 #711 账本断流红。
 
-issue #684 已消歧（grill-ai 推翻 #545 后用户点事件钩子）。解空间已收敛，本单不重出盲设计题。
+署名 issue #682，关单交给 `scripts/close-issues.mjs`。
+
+体系类改动（改协作约定：主会话红线例外 + 新通道），合门 merge-policy: manual。

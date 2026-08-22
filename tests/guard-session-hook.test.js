@@ -1,7 +1,9 @@
 // #693 帥位触发：judgeSeat 机械判定 + SessionStart hook 行为 + settings.json 接线。
+// 2026-08-22 追加：guardLaunchGate 保活闸（主树即拉，不认 master；判不出/非主树不拉）。
 //
 // 验的层：① judgeSeat 七态（主树 master / 非主树 / 非 master / detached / git 失败 ×2 / 主树路径解析失败）
-// ② sessionHookLines 五态（非帥位静默 / 判不出注入问用户 / 在位 / 已拉起 / 没查成两形分得开）
+// ② sessionHookLines 五态（非主树静默 / 判不出注入问用户 / 在位 / 已拉起 / 没查成两形分得开）
+//        + 主树非 master 仍拉起且显形分支
 // ③ hook 直跑永远 exit 0（不弄坏会话启动）——含非 git 目录的判不出路径
 // ④ settings.json SessionStart 只挂一条命令且脚本真存在
 
@@ -84,20 +86,53 @@ describe('guard-seat（帥位判定）', () => {
       assert.ok(noMain.ok === false && /主树路径/.test(noMain.error), '无主树  →  ' + JSON.stringify(noMain));
     });
   });
+
+  it('guardLaunchGate：主树即拉（不认 master），判不出/非主树不拉', async (t) => {
+    const S = await SEAT_LOAD;
+    const shuai = S.guardLaunchGate({ ok: true, seat: 'shuai', branch: 'master' });
+    await t.test('帅位 → 拉', () => {
+      assert.ok(shuai.launch === true && shuai.shuai === true, '帅位  →  ' + JSON.stringify(shuai));
+    });
+    const notMaster = S.guardLaunchGate({ ok: true, seat: 'other', reason: 'not-master', branch: 'thoerwink8/x' });
+    await t.test('主树非 master → 拉（2026-08-22 拍板），shuai=false', () => {
+      assert.ok(notMaster.launch === true && notMaster.shuai === false && notMaster.branch === 'thoerwink8/x', '主树非 master  →  ' + JSON.stringify(notMaster));
+    });
+    const notMain = S.guardLaunchGate({ ok: true, seat: 'other', reason: 'not-main-worktree' });
+    await t.test('工人树 → 不拉（防多树双拉）', () => {
+      assert.ok(notMain.launch === false && notMain.unknown === false, '工人树  →  ' + JSON.stringify(notMain));
+    });
+    const unknown = S.guardLaunchGate({ ok: false, error: 'detached HEAD，判不出当前分支名' });
+    await t.test('判不出 → 不拉且 unknown（fail-close）', () => {
+      assert.ok(unknown.launch === false && unknown.unknown === true && /detached/.test(unknown.error), '判不出  →  ' + JSON.stringify(unknown));
+    });
+  });
 });
 
 describe('guard-session-hook（SessionStart 面）', () => {
   const okOnce = (doc) => () => ({ status: 0, stdout: JSON.stringify(doc) + '\n', stderr: '' });
 
-  it('非帥位 → 静默（空行组）', async (t) => {
+  it('非主树（工人树）→ 静默（空行组）', async (t) => {
     const H = await HOOK_LOAD;
     const lines = H.sessionHookLines({
       projectDir: 'C:\\wt\\x',
       judge: () => ({ ok: true, seat: 'other', reason: 'not-main-worktree' }),
-      runOnce: () => { throw new Error('非帥位不许跑 --once'); },
+      runOnce: () => { throw new Error('非主树不许跑 --once'); },
     });
     await t.test('空行组且没碰 --once', () => {
       assert.ok(Array.isArray(lines) && lines.length === 0, '静默  →  ' + JSON.stringify(lines));
+    });
+  });
+
+  it('主树非 master → 仍跑 --once 拉起，行尾显形分支（2026-08-22 拍板）', async (t) => {
+    const H = await HOOK_LOAD;
+    const lines = H.sessionHookLines({
+      projectDir: 'D:\\frank\\windsurf-dao',
+      judge: () => ({ ok: true, seat: 'other', reason: 'not-master', branch: 'thoerwink8/og-keep-ds-ox-alpha' }),
+      runOnce: okOnce({ ok: true, results: [{ name: 'watchdog', action: 'started', pid: 42 }, { name: 'flow', action: 'already', pid: 2 }] }),
+    });
+    await t.test('一行「已拉起」且带「非 master」与分支名', () => {
+      assert.ok(lines.length === 1 && /已拉起/.test(lines[0]) && /watchdog=started\(42\)/.test(lines[0])
+        && /非 master/.test(lines[0]) && /og-keep-ds-ox-alpha/.test(lines[0]), '主树非 master 照拉  →  ' + lines[0]);
     });
   });
 

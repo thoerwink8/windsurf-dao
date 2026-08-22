@@ -1,7 +1,7 @@
 // 盘面摘要 hook 纯函数回归（issue #564 第 1 条 + comment 追加的信箱台自愈）。
 //
-// 验的层：① summarizeBoard 从 orca worktree ps 快照算三数（master/archived 不计）
-// ② boardLine 两形分得开——扫完是空的（全 0）≠ 这次没扫到（没查成）
+// 验的层：① summarizeBoard 从 orca worktree ps 快照算在途/待收口/待消歧 + 盘面真实卡
+// ② boardLine 两形分得开——扫完是空的（盘面 无）≠ 这次没扫到（没查成）
 // ③ inboxInjection 三态：健康静音 / 自愈留痕 / 失败可辨认（只报不拦）
 // ④ 真实 hook 端到端留到手工验收（本套不碰 orca）
 
@@ -25,15 +25,17 @@ describe('board-hook', () => {
           { isMainWorktree: false, displayName: '#2', agents: [{ state: 'working' }] },       // 在途
           { isMainWorktree: false, displayName: '#3', agents: [{ state: 'done' }] },          // 待收口
           { isMainWorktree: false, displayName: '#4', agents: [], workspaceStatus: 'todo' },  // 待消歧（todo 卡）
-          { isMainWorktree: false, displayName: '#5', agents: [], workspaceStatus: 'in-progress' }, // 无 agent 的壳卡：不算
+          { isMainWorktree: false, displayName: '#5', agents: [], workspaceStatus: 'in-progress' }, // 无 agent 的壳卡：不进在途，进盘面
           { isMainWorktree: false, isArchived: true, displayName: '#6', agents: [{ state: 'done' }] }, // archived：不算
         ],
       },
     };
     const s = H.summarizeBoard(fixture);
-    await t.test('口径：master/archived/壳卡不计，在途/待收口/待消歧各归各',
+    await t.test('口径：master/archived 不计在途；壳卡不进在途但进盘面',
       () => {
-        assert.ok(s.scanned === 5 && s.inFlight.length === 2 && s.closing.length === 1 && s.todo.length === 1, '口径：master/archived/壳卡不计，在途/待收口/待消歧各归各  →  ' + JSON.stringify(s));
+        assert.ok(s.scanned === 5 && s.inFlight.length === 2 && s.closing.length === 1 && s.todo.length === 1
+          && s.onBoard.length === 5 && s.onBoard.some(c => c.number === 5 && !c.status),
+          '口径：master/archived 不计在途；壳卡不进在途但进盘面  →  ' + JSON.stringify(s));
       });
     await t.test('在途带单号和做中',
       () => {
@@ -62,11 +64,12 @@ describe('board-hook', () => {
 
   it('#564 盘面摘要：两形分得开（扫完真空 ≠ 没扫到）', async (t) => {
     const H = await H_LOAD;
-    const emptyLine = H.boardLine({ inFlight: [], closing: [], todo: [], scanned: 3, unscanned: false });
+    const emptyLine = H.boardLine({ inFlight: [], closing: [], todo: [], onBoard: [], scanned: 3, unscanned: false });
     const unscanLine = H.boardLine({ unscanned: true, error: 'orca worktree ps 失败（exit 1）' });
-    await t.test('扫完全空 → 「在途 无 · 待收口 无」',
+    await t.test('扫完全空 → 「在途 无 · 待收口 无 · 盘面 无」',
       () => {
-        assert.ok(/在途 无 · 待收口 无/.test(emptyLine) && !/待消歧/.test(emptyLine), '扫完全空 → 「在途 无 · 待收口 无」  →  ' + emptyLine);
+        assert.ok(/在途 无 · 待收口 无 · 盘面 无/.test(emptyLine) && !/待消歧/.test(emptyLine) && !/没查成/.test(emptyLine),
+          '扫完全空 → 「在途 无 · 待收口 无 · 盘面 无」  →  ' + emptyLine);
       });
     await t.test('没扫到 → 「[盘] 没查成：…」不是全空形',
       () => {
@@ -76,6 +79,76 @@ describe('board-hook', () => {
     await t.test('旧计数缓存 → 没查成（不作全空）',
       () => {
         assert.ok(/没查成/.test(stale), '旧计数缓存 → 没查成（不作全空）  →  ' + stale);
+      });
+    const staleNoBoard = H.boardLine({ inFlight: [], closing: [], todo: [], scanned: 3, unscanned: false });
+    await t.test('旧摘要缺 onBoard → 没查成（不作盘面 无）',
+      () => {
+        assert.ok(/没查成/.test(staleNoBoard) && staleNoBoard !== emptyLine, '旧摘要缺 onBoard → 没查成  →  ' + staleNoBoard);
+      });
+  });
+
+  it('[盘] 列出盘上真实卡名：无状态非正式卡也要出现', async (t) => {
+    const H = await H_LOAD;
+    const fixture = {
+      result: {
+        worktrees: [
+          { isMainWorktree: true, displayName: 'master', agents: [] },
+          {
+            displayName: 'PR-#729 工人·cursor-grok-4.6-xhigh-fast 扩盘面',
+            workspaceStatus: 'in-review',
+            parentWorktreeId: null,
+            worktreeId: 'parent-729',
+            linkedPR: { number: 729 },
+            agents: [{ state: 'working' }],
+          },
+          {
+            displayName: 'PR-#729 审官·gpt-5.6-sol',
+            parentWorktreeId: 'parent-729',
+            worktreeId: 'child-729',
+            agents: [{ state: 'working' }],
+          },
+          { isMainWorktree: false, displayName: 'debug-fresh-ws', agents: [] },
+          { isMainWorktree: false, displayName: '微修样本-空卡', agents: [] },
+          { isMainWorktree: false, displayName: 'exam-arena', agents: [] },
+        ],
+      },
+    };
+    const s = H.summarizeBoard(fixture);
+    await t.test('无状态非正式卡进 onBoard，不进在途',
+      () => {
+        assert.ok(s.unscanned === false && s.inFlight.length === 1 && s.inFlight[0].number === 729
+          && s.onBoard.length === 4
+          && s.onBoard.some(c => c.name === 'debug-fresh-ws' && !c.status)
+          && s.onBoard.some(c => c.name === '微修样本-空卡' && !c.status)
+          && s.onBoard.some(c => c.name === 'exam-arena' && !c.status),
+          '无状态非正式卡进 onBoard  →  ' + JSON.stringify(s.onBoard));
+      });
+    await t.test('审官子卡不进盘面清单',
+      () => {
+        assert.ok(!s.onBoard.some(c => /审官/.test(c.name)), '审官子卡不进盘面清单  →  ' + JSON.stringify(s.onBoard));
+      });
+    await t.test('主树不进盘面清单',
+      () => {
+        assert.ok(!s.onBoard.some(c => c.name === 'master'), '主树不进盘面清单  →  ' + JSON.stringify(s.onBoard));
+      });
+    const line = H.boardLine(s);
+    await t.test('盘面短名：#729审中 + 非正式名；不塞整段模型名',
+      () => {
+        assert.ok(/盘面 #729审中 debug-fresh-ws 微修样本-空卡 exam-arena/.test(line)
+          && !/cursor-grok-4\.6-xhigh-fast/.test(line)
+          && /在途 #729\(审中\)/.test(line),
+          '盘面短名  →  ' + line);
+      });
+    await t.test('shortCardLabel 喂返回值：有号拼状态，无号取首段',
+      () => {
+        assert.ok(H.shortCardLabel({ number: 729, status: '审中' }) === '#729审中'
+          && H.shortCardLabel({ name: 'debug-fresh-ws' }) === 'debug-fresh-ws'
+          && H.shortCardLabel({ name: 'PR-#729 工人·cursor-grok-4.6-xhigh-fast 扩盘面' }) === 'PR-#729',
+          'shortCardLabel  →  ' + [
+            H.shortCardLabel({ number: 729, status: '审中' }),
+            H.shortCardLabel({ name: 'debug-fresh-ws' }),
+            H.shortCardLabel({ name: 'PR-#729 工人·cursor-grok-4.6-xhigh-fast 扩盘面' }),
+          ].join(' | '));
       });
   });
 
@@ -122,7 +195,8 @@ describe('board-hook', () => {
     const line = H.boardLine(s);
     await t.test('一行能读出单号和状态',
       () => {
-        assert.ok(/在途 #588\(做中\) #582\(审中\)/.test(line) && /待收口 无/.test(line), '一行能读出单号和状态  →  ' + line);
+        assert.ok(/在途 #588\(做中\) #582\(审中\)/.test(line) && /待收口 无/.test(line) && /盘面 #588做中 #582审中/.test(line),
+          '一行能读出单号和状态  →  ' + line);
       });
     await t.test('待消歧为空时不占位',
       () => {
@@ -157,7 +231,7 @@ describe('board-hook', () => {
       });
   });
 
-  it('#693 守卫兜底：帥位才 ensure；健康静音 / 拉起留痕 / 没查成可辨认', async (t) => {
+  it('#693 守卫兜底：主树才 ensure（2026-08-22 起不认 master）；健康静音 / 拉起留痕 / 没查成可辨认', async (t) => {
     const H = await H_LOAD;
     const shuai = () => ({ ok: true, seat: 'shuai' });
     const other = () => ({ ok: true, seat: 'other', reason: 'not-main-worktree' });
@@ -193,20 +267,79 @@ describe('board-hook', () => {
 
     const notShuai = H.guardInjection({
       root: 'X', judge: other,
-      exec: () => { throw new Error('非帥位不许跑 --once'); },
+      exec: () => { throw new Error('非主树不许跑 --once'); },
     });
-    await t.test('非帥位（工人树）→ 静默且不碰 --once',
+    await t.test('非主树（工人树）→ 静默且不碰 --once',
       () => {
-        assert.ok(notShuai === null, '非帥位  →  ' + String(notShuai));
+        assert.ok(notShuai === null, '非主树  →  ' + String(notShuai));
+      });
+
+    const notMaster = H.guardInjection({
+      root: 'X',
+      judge: () => ({ ok: true, seat: 'other', reason: 'not-master', branch: 'thoerwink8/og-keep-ds-ox-alpha' }),
+      exec: okOnce({ ok: true, results: [{ name: 'watchdog', action: 'started', pid: 42 }, { name: 'flow', action: 'already', pid: 2 }] }),
+    });
+    await t.test('主树非 master → 照拉且显形分支（2026-08-22 拍板：保活不认 master）',
+      () => {
+        assert.ok(notMaster !== null && /已拉起/.test(notMaster) && /非 master/.test(notMaster)
+          && /og-keep-ds-ox-alpha/.test(notMaster), '主树非 master 照拉  →  ' + String(notMaster));
       });
 
     const seatUnknown = H.guardInjection({
       root: 'X', judge: unknown,
       exec: () => { throw new Error('判不出不许跑 --once'); },
     });
-    await t.test('帥位判不出 → 注「没查成」行（不猜、不静默跳过）',
+    await t.test('主树判定不出 → 注「没查成」行（不猜、不静默跳过）',
       () => {
         assert.ok(seatUnknown !== null && /帥位判定没查成/.test(seatUnknown) && /没跑，≠ 已查/.test(seatUnknown), '判不出  →  ' + String(seatUnknown));
+      });
+  });
+
+  it('守卫自停可见：近 24h 未上报显形；已上报/从没自停静音；读不出是没查成', async (t) => {
+    const H = await H_LOAD;
+    const now = Date.parse('2026-08-22T20:00:00.000Z');
+    const rec = (extra = {}) => ({
+      at: '2026-08-22T04:13:00.000Z', tag: '[watchdog] STALE_CODE', github: null, ...extra,
+    });
+
+    const missing = H.haltInjection({ now, loadLog: () => ({ scanned: true, records: [], count: 0, missing: true }) });
+    await t.test('台账不存在（从没自停过）→ 静音（扫完 0）',
+      () => {
+        assert.ok(missing === null, '缺文件  →  ' + String(missing));
+      });
+
+    const unreported = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 2, records: [rec(), rec({ at: '2026-08-22T04:14:00.000Z', github: { ok: false, error: '缺凭据: watchdog.json' } })] }),
+    });
+    await t.test('近 24h 有未上报 → 显形一行带条数与最近一条',
+      () => {
+        assert.ok(unreported !== null && /自停 2 条近 24h 未上报/.test(unreported) && /STALE_CODE/.test(unreported)
+          && /halt\.jsonl/.test(unreported), '未上报显形  →  ' + String(unreported));
+      });
+
+    const reported = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 1, records: [rec({ github: { ok: true, number: 700, via: 'marshal-fallback' } })] }),
+    });
+    await t.test('近 24h 的自停都已报 GitHub → 静音',
+      () => {
+        assert.ok(reported === null, '已上报  →  ' + String(reported));
+      });
+
+    const old = H.haltInjection({
+      now,
+      loadLog: () => ({ scanned: true, count: 1, records: [rec({ at: '2026-08-20T00:00:00.000Z', github: { ok: false, error: 'x' } })] }),
+    });
+    await t.test('超过 24h 的未上报 → 静音（历史账不刷屏）',
+      () => {
+        assert.ok(old === null, '超窗  →  ' + String(old));
+      });
+
+    const corrupt = H.haltInjection({ now, loadLog: () => ({ scanned: false, error: 'halt.jsonl 有不是 JSON 的行——没查成', records: [], count: 0 }) });
+    await t.test('台账读不出 → 没查成行（≠ 查过没事）',
+      () => {
+        assert.ok(corrupt !== null && /没查成/.test(corrupt), '读不出  →  ' + String(corrupt));
       });
   });
 

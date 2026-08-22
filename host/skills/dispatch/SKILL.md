@@ -17,6 +17,8 @@ master 卡只住主会话，永远零工人。每个任务用 `node scripts/dao.
 
 凡开 branch/PR 必派。主会话手不碰 git，无例外——空提交开 PR 的文书也归工人。
 
+微通道例外（#682）：`scripts/quick-fix.mjs` 是唯一例外——bot 身份（dao-worker[bot]）、原子操作（一步完成 分支→commit→push→PR→label→异步审官，任一步失败整体回滚）、有闸（#679 同厂硬闸：`--model` 必须显式声明，查不到 / 同厂 / issue model/* 与声明不一致 → 拒绝起审官）。其余照旧。
+
 快路例外（`host/skills/pr-fast/SKILL.md`）：branch/commit/push 仍不在帅窗；开 PR 等 GitHub 写走 marshal，不算「手碰 git」。
 
 不进 git 的活（调查、回答、评审意见）主会话可自己干。
@@ -183,7 +185,7 @@ issue 卫生（拍板 2026-08-14，issue #443）：对策进了 merged PR 的 is
 2. 必须上帅：① 审官质疑拍板/规格本身；② 乒乓两轮仍有红项（换人信号）；③ 归档动作——归档由帅执行，审官只发「可归档」通知。
 3. 记录不减：内部返工轮数与原因照落 PR comment（点将台返工特征的数据源），闭环不变黑箱。
 
-人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。
+人工补起审官（给已有 PR 补审官）走 **一条** `dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`：建树、起终端、注入一行指针、验开工。不碰 `raw`。正常路径是工人调 `worker-done`，它再调 `reviewer-create`（自读选型，工人不传模型）。attach 是**人工例外**：不过「一张 PR 只许一个审官」闸——用前先看盘上已有审官卡是死了才补，不许拿它造第二个审官或换厂（那是洞，不是自愈）。
 
 补派铁律（#631）：`reviewer-attach` 先做树→PR 归属校验（树的 issue/分支对不上 PR 当场拒），士兵 dispatch 注入前 `worker-show` 复核活性，已结算禁止当收件人（#552）——此时审官等不到完工（完工只由 `worker-done` 投递，它失败才需要补派），补派加 `--skip-wait` 跳过等完工：审官直接开审；红项 `d=` 只给 worker-show 确认活的 dispatch（显式 `--soldier-dispatch` 同闸，已结算/没查成都不注入）→ 没有 `d=` 就红项上帅。issue 派工产出的 PR 号 ≠ issue 号是常态，不是串号。
 
