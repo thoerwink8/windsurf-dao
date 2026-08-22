@@ -3,7 +3,8 @@
 //
 // 删「帅拼命令字符串」这一层。启动 / 编排走这里；查询类不在本单。
 // CLI 还是约束载体：派工缺 --split / --model|--role / --reviewer 就跑不起来。
-// 启动模板只从 docs/model-routing.toml 读，这里零硬编码。
+// 起 agent：先问 orca-agent-cmds（Orca Desktop 启动覆盖），再回落 model-routing.toml。
+// 这里零硬编码。
 // 逃生口 raw 必须留痕，否则库会因绕过而死亡。
 
 import { spawnSync } from 'node:child_process';

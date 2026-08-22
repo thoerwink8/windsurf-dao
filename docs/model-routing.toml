@@ -8,7 +8,8 @@
 updated = "2026-08-22"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
-# launch = 完整启动命令模板（issue #482）。脚本只读这一字段，禁止硬编码参数。
+# launch = 完整启动命令模板（issue #482）。Orca Desktop orca-data.json 读到了就用 Orca
+# （scripts/lib/orca-agent-cmds.mjs）；本表是兜底。脚本禁止硬编码参数。
 # start = agent | command（#680：worker-start --agent vs terminal create --command）。
 #         agentStartSpec 只读这一处，禁止按二进制名硬编码起法。缺了 fail-loud。
 # {model} 用 --model / launch_model / default_model 替换；缺了 fail-loud。

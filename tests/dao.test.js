@@ -25,6 +25,8 @@ const { spawnSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..');
 const CLI = path.join(REPO, 'scripts', 'dao.mjs');
 const LIB = path.join(REPO, 'scripts', 'lib', 'dao-cmd.mjs');
+// 本套验 routing 兜底，不读本机真 Orca 文件。Orca 叠层在 tests/orca-agent-cmds.test.js。
+process.env.ORCA_DATA_JSON = path.join(__dirname, 'fixtures', 'orca-agent-cmds', 'empty-overrides.json');
 const S_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 const ROUTING_LOAD = S_LOAD.then(m => m.loadRouting());
 
