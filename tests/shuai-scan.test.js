@@ -96,6 +96,31 @@ describe('shuai-scan 判定层', () => {
     const ev = S.evaluateScan({ rules, orca, github });
     assert.ok(ev.ok && !ev.hasContent);
   });
+
+  it('draft + APPROVED 判绿待拍板不隐形（#730 实证：manual 合门制度类 PR 按制度就是 draft）', async () => {
+    const S = await LOAD;
+    const rules = { 异常判据: {}, 推荐排序: {}, 帅位标题建议: { 模板: {} } };
+    const github = {
+      ok: true,
+      issues: [],
+      prs: [
+        { number: 730, title: '制度类 PR', isDraft: true, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', statusCheckRollup: rollup('SUCCESS') },
+        { number: 740, title: '普通判绿 PR', isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE', statusCheckRollup: rollup('SUCCESS') },
+        { number: 729, title: '红项 PR', isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', statusCheckRollup: rollup('SUCCESS') },
+      ],
+    };
+    const orca = { ok: true, plan: { retire: [] }, workers: [], worktrees: [], pendingInboxCount: 0 };
+    const an = S.detectAnomalies({ rules, orca, github });
+    assert.ok(an.ok && an.anomalies.some((l) => /PR #730 判绿待拍板（draft，manual 合门）/.test(l)),
+      'draft 判绿进异常面  →  ' + JSON.stringify(an.anomalies));
+    assert.ok(an.anomalies.some((l) => /PR #740 审官已绿待合并/.test(l)), '非 draft 判绿仍报待合并');
+    assert.ok(!an.anomalies.some((l) => /#729/.test(l)), '红项 PR 不报判绿');
+    const rec = S.buildRecommendations({ rules, github, orca });
+    assert.ok(rec.ok && rec.items.some((i) => i.priority === 'P1' && /PR #730 判绿待拍板/.test(i.line)),
+      'draft 判绿进推荐序 P1  →  ' + JSON.stringify(rec.items));
+    const ev = S.evaluateScan({ rules, orca, github });
+    assert.ok(ev.ok && ev.hasContent, 'draft 判绿算有内容可报（不被去重吞掉）');
+  });
 });
 
 describe('shuai-scan 状态去重', () => {
