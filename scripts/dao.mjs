@@ -11,6 +11,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseYaml } from './lib/yaml-min.mjs';
 import { select } from './lib/dianjiangtai-core.mjs';
+import { nextInjection } from './lib/board-hook.mjs';
 import {
   advanceLaunchState,
   classifyLaunchFailure,
@@ -3044,6 +3045,16 @@ function cmdLiveness(args) {
   }
 }
 
+/** #576：盘面动作候选一行（只读本地文件，零 GitHub；永不拦 exit 0）。 */
+function cmdNext() {
+  try {
+    process.stdout.write(`${nextInjection()}\n`);
+  } catch (e) {
+    process.stdout.write(`[盘] 没查成：${String(e.message || e).slice(0, 120)}（≠ 扫完是空的）\n`);
+  }
+  process.exit(0);
+}
+
 function cmdCheckHelp() {
   const sources = new Set();
   const report = checkHelpLiveness({
@@ -3108,6 +3119,7 @@ function main() {
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
     case 'ledger-query': return cmdLedgerQuery(args);
     case 'amend': return cmdAmend(args);
+    case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);
     default:
       console.error(`未知动词: ${args.verb}`);
