@@ -12,6 +12,7 @@
 
 import { issueNumberFromWorktree } from './card-identity.mjs';
 
+// 只认正向「已消歧」（#565）。近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门。
 const READY_LABEL = '已消歧';
 
 /** 本检查自己的署名正则，不复用 dao-check ⑭ / dao-cmd。

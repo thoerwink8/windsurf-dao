@@ -2812,7 +2812,7 @@ export function reviewerCardName(reviewerId) {
 // dispatch / worker-start 带 --issue 时，目标 issue 必须已打「已消歧」label，读不到拒派（fail-close）。
 // 三态必须分得开（#565 硬约束）：查成且有 label / 查成但没 label / 没查成（gh 失败）。
 // 没查成不许当有 label 放行——「没查成」当「查过没事」是事故类（#532 通用原则）。
-export const DISAMBIGUATED_LABEL = '已消歧';
+export const DISAMBIGUATED_LABEL = '已消歧'; // 只认这一张；近义标（已拍板 / 已澄清 / disambiguated / 待拍板）不算过门（#565）
 export function checkIssueDisambiguated({ issue, runGh } = {}) {
   const n = String(issue ?? '').trim();
   if (!n) return { ok: true, gated: false, issue: null };
