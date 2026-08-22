@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "settings": {
+    "agentCmdOverrides": {
+      "claude": "reclaude"
+    },
+    "agentDefaultArgs": {
+      "claude": "",
+      "codex": "--dangerously-bypass-approvals-and-sandbox"
+    }
+  }
+}
