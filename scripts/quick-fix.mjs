@@ -332,10 +332,12 @@ function cmdAttach(args) {
   logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
 
   // 4. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
-  //    Codex TUI 冷启动（MCP 初始化 ~84s）会 agent_prompt_stalled，放宽 --start-timeout-ms 再重试一次。
+  //    Codex TUI 冷启动时 orca 的注入会落在「model: loading」窗口里，paste 未提交 → agent_prompt_stalled
+  //    （实测 1/8 成功，成功的那次是 codex 就绪后才收到注入）。每次重试 = 全新 codex TUI，缓存渐热；
+  //    间隔 30s 给上一条 TUI 留出就绪时间。非 stall 类失败不重试（那是结构性问题）。
   let r = null;
   let json = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     r = spawnSync(process.execPath, [
       DAO_CLI, 'reviewer-attach',
       '--pr', String(args.pr),
@@ -353,8 +355,9 @@ function cmdAttach(args) {
     if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
       const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
       const stalled = /stalled|agent_prompt/i.test(error) || /stalled|agent_prompt/i.test(String(r.stdout || ''));
-      logLine(log, `attach 第 ${attempt} 次失败: ${error}${stalled ? '（agent_prompt_stalled，冷启动超时，重试）' : ''}`);
-      if (!stalled || attempt === 2) break;
+      logLine(log, `attach 第 ${attempt} 次失败: ${error}${stalled ? '（agent_prompt_stalled，codex 冷启动注入未提交，重试）' : ''}`);
+      if (!stalled || attempt === 5) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
       continue;
     }
     break;
