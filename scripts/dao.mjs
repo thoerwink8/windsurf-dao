@@ -1343,11 +1343,13 @@ function soldierRunId({ soldierDispatch, parentId } = {}) {
 }
 
 function ensureInboxStation() {
+  // 超时是防挂死闸不是性能闸：ensure 内部 run-list 分页 + worker-list + ps + gc 多次
+  // orca 调用，Orca 变慢时实测 60-100s，60s 必误杀（#684 余量实测 2026-08-22）。
   const r = spawnSync(process.execPath, [join(ROOT, 'scripts', 'inbox-station.mjs'), 'ensure'], {
     encoding: 'utf8',
     cwd: ROOT,
     windowsHide: true,
-    timeout: 60000,
+    timeout: 200000,
   });
   let json = null;
   try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
