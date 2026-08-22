@@ -573,6 +573,11 @@ describe('dao', () => {
     await t.test('消歧门：查成但没 label → 拒派并点名缺什么', () => {
       assert.ok(no1.ok === false && no1.hasLabel === false && /已消歧/.test(no1.error) && /补消歧记录|label/.test(no1.error), '消歧门：查成但没 label → 拒派并点名缺什么  →  ' + JSON.stringify(no1));
     });
+    const ghSynonym = () => ({ ok: true, out: JSON.stringify({ labels: [{ name: '已拍板' }, { name: '已澄清' }, { name: 'disambiguated' }, { name: '待拍板' }] }) });
+    const syn1 = S.checkIssueDisambiguated({ issue: '559', runGh: ghSynonym });
+    await t.test('消歧门：近义标不算已消歧 → 拒派（不是没查成）', () => {
+      assert.ok(syn1.ok === false && syn1.hasLabel === false && syn1.unscanned !== true && /已消歧/.test(syn1.error), '消歧门：近义标不算已消歧 → 拒派（不是没查成）  →  ' + JSON.stringify(syn1));
+    });
     await t.test('消歧门：没 label ≠ 没查成（两态分开）', () => {
       assert.ok(no1.unscanned !== true, '消歧门：没 label ≠ 没查成（两态分开）  →  ' + JSON.stringify(no1));
     });
