@@ -108,6 +108,19 @@ describe('#679 起审官同厂硬闸', () => {
       assert.ok(skipKimi.ok === false && skipKimi.exhausted === true && /同厂/.test(skipKimi.error),
         JSON.stringify(skipKimi));
     });
+    const noNext = slot.nextReviewerAfter({
+      currentId: 'gpt-5.6-sol',
+      models: MODELS,
+      passerIds: ['gpt-5.6-sol'],
+      workerId: 'kimi-k3',
+      order,
+    });
+    await t.test('没有下一位 ≠ 仍同厂（#729/#730 排障被误导实证：候选池空了不许报成厂商冲突）', () => {
+      assert.ok(noNext.ok === false && noNext.exhausted === true
+        && /没有下一位/.test(noNext.error) && /候选池空/.test(noNext.error)
+        && !/仍同厂/.test(noNext.error),
+      JSON.stringify(noNext));
+    });
   });
 
   it('容量换人同一条：跳过工人那一厂；没查成工人则升级', async (t) => {

@@ -50,8 +50,10 @@ export function nextReviewerAfter({ currentId, models = [], passerIds = [], work
   const cur = String(currentId || '');
   const i = list.indexOf(cur);
   const start = i < 0 ? -1 : i;
+  let checked = 0;
   for (let k = start + 1; k < list.length; k++) {
     const cand = list[k];
+    checked += 1;
     if (workerId != null && String(workerId).trim() !== '') {
       const gate = assertCrossVendor({ workerId, reviewerId: cand, models });
       if (gate.state === 'unscanned') {
@@ -61,12 +63,22 @@ export function nextReviewerAfter({ currentId, models = [], passerIds = [], work
     }
     return { ok: true, next: cand, from: cur || null };
   }
+  // 文案分态（2026-08-22 #729/#730 排障被误导实证）：「没有下一位」≠「剩余全同厂」。
+  // 循环没跑过 = 候选池空了，报同厂是把排障引向不存在的厂商冲突。
+  if (checked === 0) {
+    return {
+      ok: false,
+      unscanned: false,
+      exhausted: true,
+      error: `审官选型序没有下一位可换（当前 ${cur || '未知'}，序内共 ${list.length} 位）——候选池空了，不是厂商冲突`,
+    };
+  }
   if (workerId != null && String(workerId).trim() !== '') {
     return {
       ok: false,
       unscanned: false,
       exhausted: true,
-      error: '选型序走完仍同厂，没法再换（不许降级同厂）',
+      error: `选型序剩余 ${checked} 位全部与工人同厂，没法再换（不许降级同厂）`,
     };
   }
   return { ok: false, unscanned: false, exhausted: true, error: '审官选型序走完，没法再换' };

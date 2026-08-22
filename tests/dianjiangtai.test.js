@@ -521,8 +521,8 @@ describe('dianjiangtai', () => {
   });
 
   it('政策 YAML 解析 / canonicalStringify', async (t) => {
-    await t.test('models.yml 解析出 12 个现役模型', () => {
-      assert.ok(models.length === 12 && models.some(m => m.id === DEVIN) && models.some(m => m.id === 'ox-alpha-free'), 'models.yml 解析出 12 个现役模型（含 #688 devin-deepseek-v4-flash-max + ox-alpha-free 试用）  →  ' + String(models.length));
+    await t.test('models.yml 解析出 11 个现役模型', () => {
+      assert.ok(models.length === 11 && models.some(m => m.id === DEVIN) && models.some(m => m.id === 'ox-alpha-free') && !models.some(m => m.id === 'glm-5.3'), 'models.yml 解析出 11 个现役模型（og 只留 ds 与 ox-alpha-free，已撤 glm-5.3）  →  ' + String(models.length));
     });
     const flash = models.find(m => m.id === FLASH);
     // 2026-08-16：ds-flash/pro 主通道换成 opencode Go（同一模型换计费通道，条目仍只有一条）。
@@ -540,8 +540,8 @@ describe('dianjiangtai', () => {
     await t.test('models.yml：gpt/claude 价目 verified_at=null（待补）', () => {
       assert.ok(models.find(m => m.id === "gpt-5.6-sol").pricing.verified_at === null && models.find(m => m.id === "claude-opus").pricing.verified_at === null, 'models.yml：gpt/claude 价目 verified_at=null（待补）');
     });
-    await t.test('bans.yml：4 条硬禁令', () => {
-      assert.ok(bans.length === 4 && bans.some(b => b.models.includes('ox-alpha-free')), 'bans.yml：4 条硬禁令（含 ox-alpha-free 查证/审查/UI）  →  ' + String(bans.length));
+    await t.test('bans.yml：3 条硬禁令', () => {
+      assert.ok(bans.length === 3 && bans.some(b => b.models.includes('ox-alpha-free')) && !bans.some(b => b.id === 'ban-glm-未验证工种'), 'bans.yml：3 条硬禁令（含 ox-alpha-free；glm-5.3 已撤）  →  ' + String(bans.length));
     });
     await t.test('bans.yml：gpt UI ban、deepseek 查证 ban 就位', () => {
       assert.ok(bans.some(b => b.models.includes("gpt-5.6-sol") && b.work_types.includes("UI")) && bans.some(b => b.models.includes(FLASH) && b.work_types.includes("查证")), 'bans.yml：gpt UI ban、deepseek 查证 ban 就位');

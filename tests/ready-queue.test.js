@@ -107,6 +107,29 @@ describe('ready-queue', () => {
       });
   });
 
+  it('近义标不算已消歧：扫完 0，不是没查成', async (t) => {
+    const Q = await LIB_LOAD;
+    const r = Q.inspectReadyQueue({
+      issues: [
+        issue(31, ['已拍板']),
+        issue(32, ['已澄清']),
+        issue(33, ['disambiguated']),
+        issue(34, ['待拍板']),
+        issue(35, ['任务']),
+      ],
+      prs: [],
+      worktrees: [],
+    });
+    await t.test('近义/其它标 → kind=zero，不是 ready',
+      () => {
+        assert.ok(r.kind === 'zero' && r.ready && r.ready.length === 0, '近义/其它标 → kind=zero，不是 ready  →  ' + JSON.stringify(r));
+      });
+    await t.test('近义标扫完 0 的形不是没查成',
+      () => {
+        assert.ok(/可立即起 0 个/.test(r.line) && !/可立即起：没查成/.test(r.line), '近义标扫完 0 的形不是没查成  →  ' + r.line);
+      });
+  });
+
   it('#577 卡面 / 署名边界', async (t) => {
     const Q = await LIB_LOAD;
     const archived = Q.inspectReadyQueue({

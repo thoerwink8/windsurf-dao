@@ -97,8 +97,6 @@ models:
       metered: null
       subscription: null
 
-  # opencode Go 新增模型（2026-08-16 接入）。ds-flash/pro 不在这里另立条目——
-  # 它们和直连是同一个模型，只是换通道，见文件开头那两条。
   - id: glm-5.2
     provider: cursor
     cli: cursor-agent
@@ -115,28 +113,6 @@ models:
       verified_at: "2026-08-19"
       subscription:
         kind: 畅用包月
-        marginal_cost: 0
-        monthly_fee: null
-        included_tokens: null
-        fair_share_jobs: null
-      metered: null
-
-  - id: glm-5.3
-    provider: opencode-go
-    cli: pi --provider opencode-go
-    version: glm-5.3            # 版本串待官方核（暂以 id 代）
-    context_window: 1000000
-    max_output: 131072
-    roles: [写码, 判断]
-    status: 试用
-    retired: false
-    trial_since: "2026-08-16"
-    why: GLM 系主打编码；先进写码+判断候选池，按返工率实测校准再谈定位（用户拍板 2026-08-16）
-    decided: "2026-08-16"
-    pricing:
-      verified_at: "2026-08-16"
-      subscription:
-        kind: 额度包月
         marginal_cost: 0
         monthly_fee: null
         included_tokens: null
@@ -192,7 +168,7 @@ models:
     status: 试用
     retired: false
     trial_since: "2026-08-16"
-    why: 主路 cursor/kimi-k3-high，支路 opencode-go/kimi-k3；先进写码+判断候选池（#615）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；#658（2026-08-19）：GPT 恢复，kimi-k3 不再顶审官位，保留登记
+    why: 单管 cursor/kimi-k3-high（2026-08-22 拍板：og 只留 ds 与 ox-alpha-free）。2026-08-19 追加拍板（#648 评论 #6）：后续审官一律 kimi-k3，roles 含审查顶审官位；#658（2026-08-19）：GPT 恢复，kimi-k3 不再顶审官位，保留登记
     decided: "2026-08-19"
     pricing:
       verified_at: "2026-08-18"

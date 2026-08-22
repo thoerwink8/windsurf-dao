@@ -111,7 +111,7 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --model opencode-go/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。
+- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --model opencode-go/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
   - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
 - **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
   - 这条止血本身没被验证过——`scripts/watchdog.mjs` 的 model-change 检测（#569 ②，扫 `~/.pi/agent/sessions/**/*.jsonl` 的 model_change 事件）就是验证手段：下次真 503 是当场报错（止血生效）还是又切了（止血失效，检测会报出诱因）。
@@ -518,6 +518,9 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
 
 同一份随仓 `.claude/settings.json` 还挂 `UserPromptSubmit` → `scripts/lib/board-hook.mjs`（#564，#588 扩容）：每轮往上下文注入一行 `[盘]` 摘要（带单号和做中/审中，orca 本地状态 + 60s TTL 缓存，不打 GitHub），并顺手跑 `inbox-station.mjs ensure` 自愈信箱台（只报不拦，永远 exit 0）。随仓生效，无需装机动作。
+
+微通道（#682）：几行改动走 `node scripts/quick-fix.mjs --issue <N> --model <主会话模型> [--yes]`——一条命令原子完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步审官，20 秒内落地；任一步失败整体回滚。`--model` 必须显式声明（#679 同厂闸），审官默认读 issue 的 `reviewer/*` label。异步审官日志在 `~/.dao/quickfix/quickfix-<issue>.log`。无新装依赖（复用 gh / orca / 三身份凭据）。
+
 ## 自检
 
 做完跑一遍：
