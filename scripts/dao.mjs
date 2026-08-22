@@ -118,6 +118,9 @@ import {
   completeWorkerDoneNotify,
   pickWorkerDoneDispatchId,
   resolveReviewerReuse,
+  gateReviewerCreate,
+  assertReviewerSeat,
+  planReviewerCreateAfterFail,
   postIssueComment,
   postPrComment,
   classifyReviewerSpawnError,
@@ -1448,6 +1451,7 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
       ok: false,
       invoked: true,
       dryRun: !!dryRun,
+      outcome: (json && json.outcome) || 'failed',
       error: (json && json.error) || String(r.stderr || '').trim() || `reviewer-create exit ${r.status}`,
     };
   }
@@ -1455,13 +1459,15 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
     ok: true,
     invoked: true,
     dryRun: !!dryRun,
+    outcome: json.outcome || (json.reused ? 'reused' : 'created'),
+    reused: !!json.reused,
     verb: 'reviewer-create',
     pr: String(pr),
     reviewer: json.reviewer,
     reviewerSource: json.reviewerSource,
     reviewerId: json.reviewerId || null,
     reviewerDispatchId: json.reviewerDispatchId || null,
-    reason: dryRun ? 'dry-run：只打印选型不建树' : '已调 reviewer-create 起审官',
+    reason: json.reason || (dryRun ? 'dry-run：只打印选型不建树' : '已调 reviewer-create 起审官'),
   };
 }
 
@@ -1711,6 +1717,7 @@ function cmdWorkerDone(args) {
       worktrees: inputs.worktrees,
       workers: inputs.workers,
       terminals: inputs.terminals,
+      pr: plan.pr,
     });
     if (!reuse.ok) fail(reuse.error, { ...plan, reuse });
   }
@@ -1805,57 +1812,34 @@ function cmdWorkerDone(args) {
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr, reuse });
 
   if (shouldCreate) {
-    const models = routingDone?.models || [];
-    const passerIds = reviewerPasserIds(routingDone);
-    const seen = new Set();
-    let currentReviewer = plan.reviewer;
-    while (currentReviewer && !seen.has(currentReviewer)) {
-      seen.add(currentReviewer);
-      const createOpts = {
-        pr: args.pr,
-        name: assembleCardName({
-          name: reviewerCardName(currentReviewer),
-          pr: plan.pr,
-          role: '审官',
-          model: currentReviewer,
-        }),
-        parentWorktree: parentId,
-        soldierDispatch: args.soldierDispatch,
-        issue: plan.issue,
-        reviewer: currentReviewer,
-        dryRun: false,
-      };
-      create = invokeReviewerCreate(createOpts);
-      create = healReviewerCreateAfterFence(create, createOpts);
-      if (create.ok) {
-        create = { ...create, reviewer: currentReviewer };
-        break;
-      }
-      const nxt = nextReviewerAfter({
-        currentId: currentReviewer, models, passerIds, workerId: plan.workerModel,
-        order: reviewerOrderOf(routingDone),
-      });
-      if (!nxt.ok) {
-        create = { ...create, exhausted: true, nextError: nxt.error, retried: true };
-        break;
-      }
-      create = { ...create, switchedFrom: currentReviewer, firstError: create.error };
-      currentReviewer = nxt.next;
-    }
-    if (!create.ok) {
+    const seat = assertReviewerSeat({ reviewerId: plan.reviewer, routing: routingDone });
+    if (!seat.ok) fail(seat.error, { reviewerSeat: seat, ...plan, reuse });
+    const createOpts = {
+      pr: args.pr,
+      name: createName,
+      parentWorktree: parentId,
+      soldierDispatch: args.soldierDispatch,
+      issue: plan.issue,
+      reviewer: plan.reviewer,
+      dryRun: false,
+    };
+    create = invokeReviewerCreate(createOpts);
+    create = healReviewerCreateAfterFence(create, createOpts);
+    if (create.ok) {
+      create = { ...create, reviewer: plan.reviewer };
+    } else {
+      const stop = planReviewerCreateAfterFail({ error: create.error });
       const cls = classifyReviewerSpawnError(create.error);
-      const failBody = reviewerSpawnFailComment({
-        error: create.nextError ? `${create.error}；${create.nextError}` : create.error,
-        retried: true,
-      });
+      const failBody = reviewerSpawnFailComment({ error: create.error, retried: true });
       postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
       postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
       if (parentId) {
         orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
       }
-      fail(create.nextError ? `${create.error}；${create.nextError}` : create.error, {
+      fail(stop.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
         reviewerCreate: create, reuse, spawnKind: cls.kind,
+        switchVendor: false, outcome: 'stop',
       });
     }
   } else if (shouldReuse) {
@@ -1922,6 +1906,18 @@ function cmdWorkerDone(args) {
         });
       }
     }
+  } else if (reuse.action === 'refuse') {
+    const refuseErr = reuse.error || reuse.reason || '已有审官树/审官卡，拒绝新建';
+    const failBody = reviewerSpawnFailComment({ error: refuseErr, retried: false });
+    postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
+    postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
+    if (parentId) {
+      orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+    }
+    fail(refuseErr, {
+      ...plan, commentPosted: true, postedIssue, postedPr,
+      outcome: 'refused-existing', reuse, reviewerCreate: create,
+    });
   }
 
   let existingDispatchId = null;
@@ -2325,6 +2321,8 @@ function cmdReviewerCreate(args) {
   const vendorGate = refuseIfSameVendor({
     workerId: worker.modelId, reviewerId: picked.modelId, routing,
   });
+  const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
+  if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
 
   const revName = assembleCardName({
     name: args.name || reviewerCardName(picked.modelId),
@@ -2343,8 +2341,45 @@ function cmdReviewerCreate(args) {
     reviewerSource: picked.source,
     workerModel: worker.modelId,
     vendorGate,
+    reviewerSeat: seat,
   };
-  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
+
+  const inputs = loadReviewerReuseInputs();
+  const oneReviewerGate = inputs.ok
+    ? gateReviewerCreate({
+      pr: args.pr,
+      parentId: args.parentWorktree,
+      worktrees: inputs.worktrees,
+      workers: inputs.workers,
+      terminals: inputs.terminals,
+    })
+    : { ok: false, outcome: 'unscanned', unscanned: true, error: inputs.error };
+
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan, oneReviewerGate });
+
+  if (oneReviewerGate.outcome === 'unscanned') {
+    fail(oneReviewerGate.error, { outcome: 'unscanned', oneReviewerGate, ...plan });
+  }
+  if (oneReviewerGate.outcome === 'reused') {
+    emit({
+      ok: true,
+      outcome: 'reused',
+      reused: true,
+      reviewerId: oneReviewerGate.worktreeId,
+      reviewerHandle: oneReviewerGate.handle,
+      oneReviewerGate,
+      reason: oneReviewerGate.reason,
+      ...plan,
+    });
+  }
+  if (oneReviewerGate.outcome === 'refused-existing') {
+    fail(oneReviewerGate.error, {
+      outcome: 'refused-existing',
+      oneReviewerGate,
+      reviewerId: oneReviewerGate.worktreeId,
+      ...plan,
+    });
+  }
 
   const created = orca(argsWorktreeCreate({
     name: revName,
@@ -2539,6 +2574,7 @@ function cmdReviewerCreate(args) {
 
   emit({
     ok: true,
+    outcome: 'created',
     ...plan,
     reviewerId,
     reviewerPath,
@@ -2554,6 +2590,7 @@ function cmdReviewerCreate(args) {
     startProof: reviewerProof,
     identity,
     ledger,
+    oneReviewerGate,
   });
 }
 

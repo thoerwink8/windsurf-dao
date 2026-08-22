@@ -58,7 +58,7 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
   if (!done) problems.push('找不到 cmdWorkerDone');
   else {
     if (!REFUSE_CALL.test(done) && !GATE_CALL.test(done)) problems.push('cmdWorkerDone 没走同厂闸');
-    if (!NEXT_WORKER.test(done)) problems.push('cmdWorkerDone 注入失败换人没带 workerId');
+    if (NEXT_WORKER.test(done)) problems.push('cmdWorkerDone 失败仍换厂（不许自动换厂）');
   }
 
   const nextFn = chunk(slotSrc, /export function nextReviewerAfter\b[\s\S]*?\nexport function /);
