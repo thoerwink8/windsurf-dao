@@ -160,6 +160,30 @@ export function mergeOrcaLaunch(hit, { template, cliModel } = {}) {
   return command;
 }
 
+const FLAG_RE = /(?:^|\s)(--[a-z][a-z0-9-]*|-m)(?=\s|$)/gi;
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * routing 模板里有、Orca 启动串里没有的旗标（{model} 占位与模型旗标不算——
+ * 模型由 mergeOrcaLaunch 单独接）。grok 的 --always-approve、cursor 的 --force --trust、
+ * devin 的 --permission-mode 这类保命旗标被静默丢掉时会卡框叫醒帅，必须显形。
+ */
+export function droppedRoutingFlags({ template, launch } = {}) {
+  const tmpl = String(template || '').replace(/\{model\}/g, ' ');
+  const cmd = String(launch || '');
+  const dropped = [];
+  for (const m of tmpl.matchAll(FLAG_RE)) {
+    const flag = m[1];
+    if (flag === '--model' || flag === '-m') continue;
+    if (dropped.includes(flag)) continue;
+    if (!new RegExp(`(?:^|\\s)${escapeRe(flag)}(?=\\s|$)`).test(cmd)) dropped.push(flag);
+  }
+  return dropped;
+}
+
 /**
  * 把已解析的 routing launch 叠上 Orca。
  * 文件不在 → 回落 routing（CI / 没装 Orca）。
@@ -180,6 +204,7 @@ export function applyOrcaAgentCmds(launch, orcaCmds, { cliModel, root, materiali
     return { ...launch, launchSource: 'routing', orcaReason: 'no-agent', orcaAgent: key };
   }
   const merged = mergeOrcaLaunch(hit, { template: launch.template, cliModel });
+  const dropped = droppedRoutingFlags({ template: launch.template, launch: merged });
   const command = typeof materialize === 'function' ? materialize(merged, root) : merged;
   return {
     ...launch,
@@ -187,5 +212,6 @@ export function applyOrcaAgentCmds(launch, orcaCmds, { cliModel, root, materiali
     launchSource: 'orca',
     orcaAgent: key,
     orcaLaunch: hit.launch,
+    ...(dropped.length ? { droppedFlags: dropped } : {}),
   };
 }

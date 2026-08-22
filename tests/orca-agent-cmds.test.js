@@ -136,4 +136,70 @@ describe('orca-agent-cmds', () => {
         'skipOrca  →  ' + skip.command);
     });
   });
+
+  it('droppedRoutingFlags：routing 保命旗标被 Orca 覆盖丢掉时显形', async (t) => {
+    const S = await LIB_LOAD;
+
+    const grok = S.droppedRoutingFlags({
+      template: 'grok -m {model} --effort xhigh --always-approve',
+      launch: 'grok',
+    });
+    await t.test('裸命令丢两个旗标', () => {
+      assert.ok(grok.join(',') === '--effort,--always-approve', '裸命令  →  ' + grok.join(','));
+    });
+
+    const full = S.droppedRoutingFlags({
+      template: 'grok -m {model} --effort xhigh --always-approve',
+      launch: 'grok --effort xhigh --always-approve',
+    });
+    await t.test('带齐旗标就不报', () => {
+      assert.ok(full.length === 0, '带齐  →  ' + JSON.stringify(full));
+    });
+
+    const modelOnly = S.droppedRoutingFlags({
+      template: 'codex --model {model}',
+      launch: 'codex',
+    });
+    await t.test('模型旗标不算丢（mergeOrcaLaunch 会接）', () => {
+      assert.ok(modelOnly.length === 0, '模型旗标  →  ' + JSON.stringify(modelOnly));
+    });
+
+    const dup = S.droppedRoutingFlags({
+      template: 'x --force --trust --force',
+      launch: 'x',
+    });
+    await t.test('重复旗标只报一次', () => {
+      assert.ok(dup.join(',') === '--force,--trust', '去重  →  ' + dup.join(','));
+    });
+  });
+
+  it('applyOrcaAgentCmds：Orca 覆盖丢旗标时结果带 droppedFlags', async (t) => {
+    const S = await LIB_LOAD;
+    const orcaCmds = {
+      ok: true, unscanned: false, reason: 'ok', error: null, file: null,
+      overrides: { grok: 'grok' }, defaultArgs: {},
+      agents: { grok: { command: 'grok', args: '', launch: 'grok', overridden: true } },
+      overrideCount: 1, agentCount: 1,
+    };
+    const hit = S.applyOrcaAgentCmds(
+      { provider: 'grok', command: 'grok -m grok-4.6 --effort xhigh --always-approve', template: 'grok -m {model} --effort xhigh --always-approve', start: 'command' },
+      orcaCmds,
+      { cliModel: 'grok-4.6' },
+    );
+    await t.test('launchSource=orca 且 droppedFlags 显形', () => {
+      assert.ok(hit.launchSource === 'orca' && Array.isArray(hit.droppedFlags)
+        && hit.droppedFlags.join(',') === '--effort,--always-approve',
+        'droppedFlags  →  ' + JSON.stringify({ source: hit.launchSource, dropped: hit.droppedFlags }));
+    });
+
+    const clean = S.applyOrcaAgentCmds(
+      { provider: 'gpt', command: 'codex --dangerously-bypass-approvals-and-sandbox', template: 'codex --dangerously-bypass-approvals-and-sandbox', start: 'command' },
+      orcaCmds,
+      {},
+    );
+    await t.test('routing 回落不带 droppedFlags 字段', () => {
+      assert.ok(clean.launchSource === 'routing' && !('droppedFlags' in clean),
+        'routing 回落  →  ' + JSON.stringify(clean));
+    });
+  });
 });
