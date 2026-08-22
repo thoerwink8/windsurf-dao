@@ -44,8 +44,11 @@ export function runOrca(cmdArgs, { timeout = 30000, cwd, errorSlice = 240 } = {}
   if (r.error || r.status !== 0) {
     if (r.stdout) {
       const parsed = parseOrcaStdout(r.stdout);
+      // 实测 orca 有 exit 1 + JSON ok:true + result.lastError 的形态（worker-start agent_prompt_stalled）——
+      // JSON 必须带上，上层靠 result.lastError/failedStage 说话，只留「exit 1」等于没查成。
       if (parsed.ok && parsed.json?.error) return { ok: false, error: parsed.json.error, json: parsed.json };
       if (parsed.ok && parsed.json?.ok === false) return { ok: false, error: parsed.json.error || parsed.json, json: parsed.json };
+      if (parsed.ok && parsed.json) return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, errorSlice), json: parsed.json };
     }
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, errorSlice) };
   }
