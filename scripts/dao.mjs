@@ -399,7 +399,17 @@ function launchAgentInWorktree({ worktreeId, title, command, launch, forceComman
   return { ok: true, handle, reused: false, mode: 'command' };
 }
 
-function startOrcaWorker({ task, worktree, launched, run }) {
+/** worker-start 失败时把 result.lastError/failedStage 带进错误话面（实测 exit 1 + ok:true + lastError 藏在 JSON 里）。 */
+function workerStartFailText(r) {
+  const base = errText(r?.error);
+  const last = r?.json?.result?.lastError || r?.json?.lastError || null;
+  const stage = r?.json?.result?.failedStage || null;
+  if (!last && !stage) return base;
+  const hint = [stage, last].filter(Boolean).join(' / ');
+  return base.includes(hint) ? base : `${base}（${hint}）`;
+}
+
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs }) {
   if (launched?.deferred) {
     const r = orca(argsWorkerStart({
       task,
@@ -407,8 +417,9 @@ function startOrcaWorker({ task, worktree, launched, run }) {
       agent: launched.agentId,
       model: launched.model || undefined,
       run,
+      timeoutMs,
     }), 180000);
-    if (!r.ok) return { ok: false, error: errText(r.error), json: r.json };
+    if (!r.ok) return { ok: false, error: workerStartFailText(r), json: r.json };
     const handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json };
@@ -416,8 +427,8 @@ function startOrcaWorker({ task, worktree, launched, run }) {
     return { ok: true, json: r.json, handle, dispatchId: extractDispatchId(r.json) };
   }
   if (!launched?.handle) return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
-  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle, run }));
-  if (!r.ok) return { ok: false, error: errText(r.error), json: r.json, handle: launched.handle };
+  const r = orca(argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs }));
+  if (!r.ok) return { ok: false, error: workerStartFailText(r), json: r.json, handle: launched.handle };
   return { ok: true, json: r.json, handle: launched.handle, dispatchId: extractDispatchId(r.json) };
 }
 
@@ -2742,6 +2753,9 @@ function cmdReviewerAttach(args) {
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
+    // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
+    // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
+    timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,
   });
   if (!revStarted.ok) failCreated(created, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   created.reviewerHandle = revStarted.handle;

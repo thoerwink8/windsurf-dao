@@ -569,7 +569,7 @@ export function argsTaskUpdate({ id, status, result, run, from } = {}) {
   return a;
 }
 
-export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model, from, run } = {}) {
+export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, model, from, run, timeoutMs } = {}) {
   const a = ['orchestration', 'worker-start'];
   if (task) a.push('--task', task);
   if (worktree) a.push('--worktree', worktree);
@@ -579,6 +579,7 @@ export function argsWorkerStart({ task, worktree, terminal, retryOf, agent, mode
   if (retryOf) a.push('--retry-of', retryOf);
   if (run) a.push('--run', run);
   if (from) a.push('--from', from);
+  if (timeoutMs != null && Number(timeoutMs) > 0) a.push('--timeout-ms', String(Number(timeoutMs)));
   a.push('--json');
   return a;
 }
@@ -4168,7 +4169,7 @@ export const FLAGS_BY_VERB = {
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--dry-run', '--json', '--help', '-h',
+    '--start-timeout-ms', '--dry-run', '--json', '--help', '-h',
   ]),
   send: new Set(['--terminal', '--text', '--enter', '--agent', '--json', '--help', '-h']),
   notify: new Set([

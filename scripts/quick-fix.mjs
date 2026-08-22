@@ -309,19 +309,33 @@ function cmdAttach(args) {
   logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
 
   // 4. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
-  const r = spawnSync(process.execPath, [
-    DAO_CLI, 'reviewer-attach',
-    '--pr', String(args.pr),
-    '--worktree', worktreeId,
-    '--reviewer', String(args.reviewer),
-    '--issue', String(args.issue),
-    '--run', runId,
-    '--skip-wait',
-    '--merge-policy', 'auto',
-  ], { encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: ATTACH_TIMEOUT_MS });
+  //    Codex TUI 冷启动（MCP 初始化 ~84s）会 agent_prompt_stalled，放宽 --start-timeout-ms 再重试一次。
+  let r = null;
   let json = null;
-  try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
-  catch { json = null; }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    r = spawnSync(process.execPath, [
+      DAO_CLI, 'reviewer-attach',
+      '--pr', String(args.pr),
+      '--worktree', worktreeId,
+      '--reviewer', String(args.reviewer),
+      '--issue', String(args.issue),
+      '--run', runId,
+      '--skip-wait',
+      '--merge-policy', 'auto',
+      '--start-timeout-ms', '180000',
+    ], { encoding: 'utf8', cwd: ROOT, windowsHide: true, timeout: ATTACH_TIMEOUT_MS });
+    json = null;
+    try { json = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); }
+    catch { json = null; }
+    if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
+      const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
+      const stalled = /stalled|agent_prompt/i.test(error) || /stalled|agent_prompt/i.test(String(r.stdout || ''));
+      logLine(log, `attach 第 ${attempt} 次失败: ${error}${stalled ? '（agent_prompt_stalled，冷启动超时，重试）' : ''}`);
+      if (!stalled || attempt === 2) break;
+      continue;
+    }
+    break;
+  }
   if ((r.status !== 0 && r.status != null) || !json || json.ok !== true) {
     const error = (json && json.error) || String(r.stderr || '').trim() || `reviewer-attach exit ${r.status}`;
     logLine(log, `attach 失败: ${error}`);
