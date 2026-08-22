@@ -11,7 +11,7 @@ git clone git@github.com:thoerwink8/windsurf-dao.git
 cd windsurf-dao
 ```
 
-克隆完即得全部内容：AI 协作约定（`CLAUDE.md`）、项目模板（`templates/`）、自检命令（`scripts/dao-check.mjs`）、道德经源文本（`docs/classics/`）。
+克隆完即得全部内容：AI 协作约定（`CLAUDE.md`）、自检命令（`scripts/dao-check.mjs`）。历史文档（含旧项目模板、道德经源文本）2026-08-22 起归档在 memory 仓 `docs-archive/`，接上 memory（本文 §10）后即可读。
 
 ## 2. 装 Node
 

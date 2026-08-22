@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "example-filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./data"],
-      "description": "示例：给 AI 一个只读/可控的本地目录。改成你项目真正需要的 server"
-    }
-  }
-}
