@@ -127,7 +127,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { afterDispatchComment, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
+import { afterDispatchComment, repoPrefixOf, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
@@ -208,8 +208,11 @@ function rewriteMasterZone(worktrees) {
     return { ok: false, action: 'warn', unscanned: true, reason: loaded.error };
   }
   const main = resolveMainWorktreeRoot({ from: ROOT });
+  // repoId 优先：master 卡与主树不同盘位时 pathHint 失配（#684 余量实测）。
+  const cur = currentRepoId();
   return syncMasterTicketZone({
     worktrees: loaded.worktrees,
+    repoId: cur.ok ? cur.repoId : undefined,
     pathHint: main.ok ? main.root : ROOT,
     runOrca: orca,
   });
@@ -1439,6 +1442,16 @@ function currentWorktreeId() {
   const id = r.json?.result?.worktree?.id;
   if (!id) return { ok: false, error: 'worktree current 没返回 id' };
   return { ok: true, id };
+}
+
+/** 本仓 repoId（worktreeId 的 :: 前缀，实测为 uuid）：定界区多仓盘面认本仓的权威源（#684 余量）。 */
+function currentRepoId() {
+  const r = orca(['worktree', 'current', '--json']);
+  if (!r.ok) return { ok: false, error: errText(r.error) };
+  const wt = r.json?.result?.worktree;
+  const repoId = wt && (wt.repoId || repoPrefixOf(wt.id));
+  if (!repoId) return { ok: false, error: 'worktree current 没返回 repoId' };
+  return { ok: true, repoId };
 }
 
 /** PR 开出来后把工人卡从 ISSUE-/#N 改成 PR-。挂在 worker-done，不靠人记得。 */
