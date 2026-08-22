@@ -14,7 +14,7 @@ import { isModelRejectText, normalizePipes } from './next-launch.mjs';
 import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
-import { issueNumberFromWorktree } from './card-identity.mjs';
+import { issueNumberFromWorktree, prNumberFromWorktree } from './card-identity.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -3227,16 +3227,174 @@ function pickHandleFromHits(hits, terminals) {
   return { handle: seen[0] || null, live: false };
 }
 
+export const REVIEWER_CREATE_OUTCOMES = {
+  reused: 'reused',
+  created: 'created',
+  refusedExisting: 'refused-existing',
+  unscanned: 'unscanned',
+  create: 'create',
+};
+
+const REFUSE_EXISTING_REVIEWER = '已有审官树/审官卡，拒绝新建（不许 Orca -2/-3）';
+
 /**
- * 找可复用审官：工人卡子卡（parentWorktreeId）∩ dispatch 记账。
- * 不看卡名、不看 PR 号。终端还在 → reuse；没有子卡或终端已关 → create 并写明原因。
+ * 按 PR 收已有审官卡：工人卡子卡 ∩ dispatch 记账，或子卡/工人卡带该 PR 号。
+ * 没拿到列表 → unscanned，和「扫完 0 张」分开。
+ */
+export function collectReviewerCardsForPr({ pr, parentId, worktrees, workers } = {}) {
+  if (worktrees == null || !Array.isArray(worktrees)) {
+    return { ok: false, unscanned: true, error: 'worktree list 没查成（没查成，不许猜有没有审官卡）' };
+  }
+  if (workers == null || !Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 没查成（没查成，不许猜 dispatch 记账）' };
+  }
+  const n = Number(pr);
+  if (!Number.isInteger(n) || n <= 0) {
+    return { ok: false, unscanned: true, error: 'collectReviewerCardsForPr 没给合法 PR 号（没查成）' };
+  }
+
+  const cards = [];
+  const seen = new Set();
+  function add(w, via) {
+    const id = w && (w.id || w.worktreeId);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    cards.push({
+      worktreeId: id,
+      worktree: w,
+      via,
+      createdAt: Number(w.createdAt) || 0,
+    });
+  }
+
+  if (parentId) {
+    for (const child of worktrees.filter(w => (w.parentWorktreeId || null) === parentId)) {
+      const cid = child.id || child.worktreeId;
+      if (!cid) continue;
+      const booked = workers.some(w => worktreeIdMatches(w?.resource?.worktreeId, cid));
+      if (booked) add(child, 'parent+dispatch');
+    }
+  }
+
+  for (const w of worktrees) {
+    if (!w || !w.parentWorktreeId) continue;
+    if (prNumberFromWorktree(w) === n) add(w, 'pr+child');
+  }
+
+  const workerParents = worktrees.filter(w => w && !w.parentWorktreeId && prNumberFromWorktree(w) === n);
+  for (const parent of workerParents) {
+    const pid = parent.id || parent.worktreeId;
+    if (!pid) continue;
+    for (const child of worktrees.filter(w => (w.parentWorktreeId || null) === pid)) {
+      const cid = child.id || child.worktreeId;
+      if (!cid) continue;
+      const booked = workers.some(x => worktreeIdMatches(x?.resource?.worktreeId, cid));
+      if (booked) add(child, 'pr-worker+dispatch');
+    }
+  }
+
+  return { ok: true, unscanned: false, cards, count: cards.length };
+}
+
+/**
+ * 一张 PR 只许一个审官。四态必须分开：复用已有 / 允许新建 / 已有所以拒绝新建 / 没查成。
+ */
+export function gateReviewerCreate({ pr, parentId, worktrees, workers, terminals } = {}) {
+  const listed = collectReviewerCardsForPr({ pr, parentId, worktrees, workers });
+  if (!listed.ok) {
+    return { ok: false, outcome: 'unscanned', unscanned: true, error: listed.error };
+  }
+  if (terminals == null || !Array.isArray(terminals)) {
+    return {
+      ok: false,
+      outcome: 'unscanned',
+      unscanned: true,
+      error: 'terminal list 没查成（没查成，不许猜终端死活）',
+    };
+  }
+  if (listed.count === 0) {
+    return {
+      ok: true,
+      outcome: 'create',
+      action: 'create',
+      reason: '扫完没有该 PR 的审官树/审官卡',
+    };
+  }
+
+  const withHandles = listed.cards.map(c => {
+    const hits = workers.filter(w => worktreeIdMatches(w?.resource?.worktreeId, c.worktreeId));
+    const picked = pickHandleFromHits(hits, terminals);
+    return { ...c, handle: picked.handle, live: picked.live };
+  });
+  const live = withHandles.filter(c => c.live && c.handle).sort((a, b) => b.createdAt - a.createdAt);
+  if (live.length) {
+    const pick = live[0];
+    return {
+      ok: true,
+      outcome: 'reused',
+      action: 'reuse',
+      worktreeId: pick.worktreeId,
+      handle: pick.handle,
+      existingCount: listed.count,
+      reason: '复用已有审官（该 PR 已有审官树/审官卡，禁止再 create）',
+    };
+  }
+
+  const pick = withHandles.slice().sort((a, b) => b.createdAt - a.createdAt)[0];
+  return {
+    ok: false,
+    outcome: 'refused-existing',
+    action: 'refuse',
+    worktreeId: pick.worktreeId,
+    handle: pick.handle || null,
+    existingCount: listed.count,
+    closedWorktrees: withHandles.map(c => c.worktreeId),
+    error: REFUSE_EXISTING_REVIEWER,
+    reason: '已有所以拒绝新建',
+  };
+}
+
+/**
+ * 找可复用审官。给了 pr 走一 PR 一审官闸。
+ * 已有审官卡（含终端已关）→ 复用或拒绝新建，不许再 create。
  */
 export function resolveReviewerReuse({
   parentId,
   worktrees,
   workers,
   terminals,
+  pr,
 } = {}) {
+  if (pr != null && String(pr).trim() !== '') {
+    const gate = gateReviewerCreate({ pr, parentId, worktrees, workers, terminals });
+    if (gate.outcome === 'unscanned') {
+      return { ok: false, unscanned: true, outcome: 'unscanned', error: gate.error };
+    }
+    if (gate.outcome === 'reused') {
+      return {
+        ok: true,
+        action: 'reuse',
+        outcome: 'reused',
+        worktreeId: gate.worktreeId,
+        handle: gate.handle,
+        reason: gate.reason,
+      };
+    }
+    if (gate.outcome === 'refused-existing') {
+      return {
+        ok: true,
+        action: 'refuse',
+        outcome: 'refused-existing',
+        worktreeId: gate.worktreeId,
+        handle: gate.handle || null,
+        closedWorktrees: gate.closedWorktrees,
+        error: gate.error,
+        reason: gate.reason,
+      };
+    }
+    return { ok: true, action: 'create', outcome: 'create', reason: gate.reason };
+  }
+
   if (!parentId) return { ok: false, unscanned: true, error: 'resolveReviewerReuse 没给工人卡 id' };
   if (!Array.isArray(worktrees)) {
     return { ok: false, unscanned: true, error: 'worktree list 没查成（没查成，不许猜有没有审官卡）' };
@@ -3286,9 +3444,54 @@ export function resolveReviewerReuse({
 
   return {
     ok: true,
-    action: 'create',
-    reason: '老审官终端已关闭/不存在，允许新建',
+    action: 'refuse',
+    outcome: 'refused-existing',
+    reason: '已有所以拒绝新建',
+    error: REFUSE_EXISTING_REVIEWER,
     closedWorktrees: candidates.map(c => c.worktreeId),
+    worktreeId: candidates[0].worktreeId,
+  };
+}
+
+/** 路由表当前审官位（审官.审查 A 位，现为 Codex gpt-5.6-sol）。没查成 ≠ 扫完没有。 */
+export function currentReviewerSeat(routing) {
+  if (routing == null) {
+    return { ok: false, outcome: 'unscanned', unscanned: true, error: '审官位路由表没拿到（没查成，不许猜）' };
+  }
+  if (!Array.isArray(routing.reviewerOrder)) {
+    return { ok: false, outcome: 'unscanned', unscanned: true, error: '审官选型序没查成（没查成，不许猜审官位）' };
+  }
+  if (routing.reviewerOrder.length === 0) {
+    return { ok: false, outcome: 'none', error: '扫完没有可用审官位' };
+  }
+  return { ok: true, modelId: routing.reviewerOrder[0] };
+}
+
+/** 审官位只许当前 Codex 那条。换厂到 kimi/glm/grok 当场拒。 */
+export function assertReviewerSeat({ reviewerId, routing } = {}) {
+  const seat = currentReviewerSeat(routing);
+  if (!seat.ok) return seat;
+  const got = reviewerId == null ? '' : String(reviewerId).trim();
+  if (!got) return { ok: false, error: '没给审官模型' };
+  if (got !== String(seat.modelId)) {
+    return {
+      ok: false,
+      error: `审官位只许 ${seat.modelId}（路由表当前审官 Codex），不许换厂到 ${got}`,
+      seat: seat.modelId,
+      requested: got,
+    };
+  }
+  return { ok: true, modelId: seat.modelId };
+}
+
+/** 起审官失败停手报，不许选下一个厂商再起。 */
+export function planReviewerCreateAfterFail({ error } = {}) {
+  return {
+    ok: false,
+    retry: false,
+    switchVendor: false,
+    outcome: 'stop',
+    error: `审官起败，停手报，不许换厂${error ? `：${error}` : ''}`,
   };
 }
 
@@ -4252,8 +4455,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
+                  # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
-                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；有卡且终端还在则新 task 注入老终端；终端已关才允许新建并写原因；两条路径都 notify 审官（投失败即停）
+                  # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw

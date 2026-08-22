@@ -10,5 +10,6 @@ function cmdReviewerAttach(args) {
 }
 function cmdWorkerDone(args) {
   invokeReviewerCreate({ pr: args.pr, dryRun: false });
+  nextReviewerAfter({ currentId, models, passerIds, workerId });
 }
 function cmdNotify() {}
