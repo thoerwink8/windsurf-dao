@@ -15,7 +15,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   defaultGuardDir,
@@ -121,7 +121,21 @@ function cmdOnce({ dryRun }) {
   try { appendKeepaliveLog(p.dir, applied); } catch (e) {
     console.error(`keepalive.jsonl 没写成：${e.message}`);
   }
-  console.log(JSON.stringify(applied));
+  // memory 仓定期同步（2026-08-22 拍板）：挂在保活尾部顺带触发。只报不拦——
+  // detached 拉起就走（同步要联网 fetch/push，同步等会把调用方 board-hook 的
+  // 25s 预算烧穿）；结果由 memory-sync 自己落 ~/.dao/guard/memory-sync.jsonl。
+  let memorySync = null;
+  try {
+    const r = startDetached({
+      execPath: nodePath(),
+      script: join(dirname(HERE), 'memory-sync.mjs'),
+      extraArgs: ['--once'],
+    });
+    memorySync = r && r.error ? `没拉成：${r.error}` : `detached pid=${r.pid}`;
+  } catch (e) {
+    memorySync = `没拉成：${String(e.message || e).slice(0, 120)}`;
+  }
+  console.log(JSON.stringify({ ...applied, memorySync }));
   const startedNames = new Set(applied.results.filter((r) => r.action === 'started' || r.action === 'restarted').map((r) => r.name));
   const liveOk = !applied.observed
     || applied.observed.ok === false
