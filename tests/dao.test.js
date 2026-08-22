@@ -647,6 +647,16 @@ describe('dao', () => {
     await t.test('dao.mjs dispatch 与 worker-start 都调消歧门', () => {
       assert.ok((daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, 'dao.mjs dispatch 与 worker-start 都调消歧门  →  ' + daoSrc565.slice(0, 60));
     });
+
+    // #684 审官红项：ensureInboxStation 超时若低于现场样本（帅方记录 ~210s）等于没修。
+    const ensureTimeout = (() => {
+      const m = daoSrc565.match(/function ensureInboxStation\(\)\s*\{[\s\S]*?timeout:\s*(\d+)/);
+      return m ? Number(m[1]) : null;
+    })();
+    await t.test('ensureInboxStation 超时 ≥ 240s（覆盖帅方 210s 样本 + 余量）', () => {
+      assert.ok(ensureTimeout !== null && ensureTimeout >= 240000,
+        'ensureInboxStation 超时边界  →  ' + (ensureTimeout === null ? '没扫到超时常量' : `${ensureTimeout}ms < 240000ms`));
+    });
   });
 
   it('#564 label 自动打：dispatch 记 issue + pr-sync-labels 合并侧同步到 PR', async (t) => {
