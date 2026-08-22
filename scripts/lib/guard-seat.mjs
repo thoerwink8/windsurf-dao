@@ -1,9 +1,13 @@
-// scripts/lib/guard-seat.mjs —— 帥位判定（#693）
+// scripts/lib/guard-seat.mjs —— 帥位判定（#693；2026-08-22 起保活闸与帅位展示分离）
 //
 // 改这段前必须知道：判定是机械的——projectDir 是主树（git worktree list 第一棵）
 // 且分支是 master 才是帥位。判不出来（git 失败 / 主树路径解析失败 / detached HEAD /
 // 分支读不出）不猜、不静默放行、也不静默跳过：返回 ok:false，由调用方往会话上下文
 // 注入醒目提示问用户。git 可注入，测试不得碰真仓库。
+//
+// 2026-08-22 拍板（守卫死 15 小时无人知现场）：master 判定只用于「谁是帅位」展示，
+// 不再用于「要不要拉起守卫」——主树在本仓（不管当前分支）就允许 keepalive。
+// 拉起闸统一走 guardLaunchGate，两个 hook（SessionStart / board-hook）不要各判各的。
 
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -59,4 +63,21 @@ export function judgeSeat({ projectDir, git = defaultGit } = {}) {
     return { ok: true, seat: 'other', reason: 'not-master', mainPath, branch };
   }
   return { ok: true, seat: 'shuai', mainPath, branch };
+}
+
+/**
+ * 保活拉起闸（2026-08-22 拍板：保活不再只认 master）。
+ * 入参是 judgeSeat 的结果：
+ *   - ok:false（判不出）→ launch:false, unknown:true——fail-close，不许乱拉；
+ *   - 主树在本仓（shuai 或 not-master）→ launch:true——主树分支不是 master 也拉；
+ *   - 非主树（工人树/别的仓，reason=not-main-worktree）→ launch:false——防多树双拉。
+ */
+export function guardLaunchGate(seat) {
+  if (!seat || seat.ok !== true) {
+    return { launch: false, unknown: true, error: (seat && seat.error) || 'judgeSeat 没给出结果' };
+  }
+  if (seat.seat === 'shuai' || seat.reason === 'not-master') {
+    return { launch: true, unknown: false, branch: seat.branch, shuai: seat.seat === 'shuai' };
+  }
+  return { launch: false, unknown: false, reason: seat.reason || 'not-main-worktree' };
 }

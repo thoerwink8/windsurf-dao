@@ -139,7 +139,7 @@ describe('guard-halt', () => {
     });
   });
 
-  it('没凭据 fail-loud，含「这台机器没装」', async () => {
+  it('没凭据 fail-loud，含「这台机器没装」（注入 loadCreds 不给兜底 = 直验失败形）', async () => {
     const H = await LIB_LOAD;
     const r = H.reportGuardHalt(rec(), {
       env: { NODE_TEST_CONTEXT: '1', DAO_GUARD_FORCE_HALT_NOTIFY: '1' },
@@ -147,6 +147,71 @@ describe('guard-halt', () => {
       runGh: () => ({ ok: true, out: '[]' }),
     });
     assert.ok(r.ok === false && /这台机器没装/.test(r.error), '没凭据  →  ' + JSON.stringify(r));
+  });
+
+  it('watchdog 没装 → marshal 兜底留可读记录，via 标明身份；兜底也没装才失败', async (t) => {
+    const H = await LIB_LOAD;
+    const env = { NODE_TEST_CONTEXT: '1', DAO_GUARD_FORCE_HALT_NOTIFY: '1' };
+    const noWatchdog = () => ({ ok: false, error: '缺凭据: watchdog.json（这台机器没装）' });
+
+    const calls = [];
+    const r = H.reportGuardHalt(rec(), {
+      env,
+      now: 1_700_000_000_000,
+      loadCreds: noWatchdog,
+      loadFallbackCreds: () => ({ ok: true, role: 'marshal' }),
+      runGh: (a) => {
+        calls.push(a);
+        if (a[0] === 'issue' && a[1] === 'list') return { ok: true, out: '[]' };
+        if (a[0] === 'issue' && a[1] === 'create') return { ok: true, out: 'https://github.com/thoerwink8/windsurf-dao/issues/700' };
+        if (a[0] === 'api') return { ok: true, out: '[]' };
+        if (a[0] === 'issue' && a[1] === 'comment') return { ok: true, out: '{"id":1}' };
+        return { ok: false, error: `unexpected ${a.join(' ')}` };
+      },
+    });
+    await t.test('兜底写成，via=marshal-fallback', () => {
+      assert.ok(r.ok && r.posted && r.via === 'marshal-fallback' && r.number === 700, '兜底  →  ' + JSON.stringify(r));
+    });
+    await t.test('评论正文仍是【看门狗】+ 事故键（身份可辨认）', () => {
+      const comment = calls.find((a) => a[0] === 'issue' && a[1] === 'comment');
+      const body = comment[comment.indexOf('--body') + 1];
+      assert.ok(body.startsWith('【看门狗】') && /事故键：guard-halt\|/.test(body), '正文  →  ' + body);
+    });
+
+    const both = H.reportGuardHalt(rec(), {
+      env,
+      loadCreds: noWatchdog,
+      loadFallbackCreds: () => ({ ok: false, error: '缺凭据: marshal.json（这台机器没装）' }),
+      runGh: () => ({ ok: true, out: '[]' }),
+    });
+    await t.test('watchdog 与 marshal 都没装 → 失败且两个错误都带上', () => {
+      assert.ok(both.ok === false && /watchdog\.json/.test(both.error) && /marshal\.json/.test(both.error), '双缺  →  ' + JSON.stringify(both));
+    });
+  });
+
+  it('notifyGuardHalt 落盘的 github 块带 via（marshal 兜底可辨认）', async (t) => {
+    const H = await LIB_LOAD;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-halt-via-'));
+    t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+    const env = { NODE_TEST_CONTEXT: '1', DAO_GUARD_HALT_DIR: dir, DAO_GUARD_FORCE_HALT_NOTIFY: '1' };
+    H.notifyGuardHalt(rec(), {
+      env,
+      loadCreds: () => ({ ok: false, error: '缺凭据: watchdog.json（这台机器没装）' }),
+      loadFallbackCreds: () => ({ ok: true, role: 'marshal' }),
+      runGh: (a) => {
+        if (a[0] === 'issue' && a[1] === 'list') return { ok: true, out: '[]' };
+        if (a[0] === 'issue' && a[1] === 'create') return { ok: true, out: 'https://github.com/thoerwink8/windsurf-dao/issues/700' };
+        if (a[0] === 'api') return { ok: true, out: '[]' };
+        if (a[0] === 'issue' && a[1] === 'comment') return { ok: true, out: '{"id":1}' };
+        return { ok: false, error: `unexpected ${a.join(' ')}` };
+      },
+    });
+    const log = H.readHaltLog(path.join(dir, 'halt.jsonl'));
+    await t.test('jsonl 里 github.ok=true 且 via=marshal-fallback', () => {
+      assert.ok(log.scanned && log.count === 1 && log.records[0].github
+        && log.records[0].github.ok === true && log.records[0].github.via === 'marshal-fallback',
+      '落盘  →  ' + JSON.stringify(log.records[0]?.github));
+    });
   });
 
   it('haltIfStale 会调用 notify；测试默认不写本机 halt.jsonl', async (t) => {
