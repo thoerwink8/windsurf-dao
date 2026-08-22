@@ -112,6 +112,7 @@ PR 正文必须含 **目标 / 验收标准 / 进展**（与 `CLAUDE.md` 一致�
 | skill | 干什么 |
 | --- | --- |
 | **pr-fast（本页）** | 小活、无 issue、直 draft PR；写码在执行面（子代理优先），GitHub 写走 marshal |
+| **quick-fix（#682）** | 微修：有 issue、几行改动，一条命令原子开非 draft PR + 异步异厂审官 |
 | **resume** | 查在途 draft PR / issue / 工人 |
 | **dispatch** | 要工人+审官、要 `--issue`、体系类、大块活 |
 | **dao-project** | 多块相关活项化 |
