@@ -80,7 +80,10 @@ function declaredHookSkills(root) {
     if (r.broken) { list.push({ name, hooksFile, broken: r.broken, scripts: [], commands: [] }); continue; }
     const commands = promptCommands(r.doc);
     if (commands.length === 0) continue;
-    const scripts = readdirSync(join(skillDir, 'hooks')).filter(f => f.endsWith('.mjs'));
+    // 只认「被 command 引用的 .mjs」：同目录的辅助模块（#607 的 should-ask-exit.mjs 是纯函数，
+    // 由 dao-mode.mjs import）不是 hook 脚本，混进 scripts 会把「没被任何装载面点到」误报成红。
+    const scripts = readdirSync(join(skillDir, 'hooks'))
+      .filter(f => f.endsWith('.mjs') && commands.some(c => c.includes(f)));
     list.push({ name, hooksFile, scripts, commands });
   }
   return { list };
