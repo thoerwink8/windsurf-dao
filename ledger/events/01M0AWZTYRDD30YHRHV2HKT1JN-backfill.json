@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-19T00:59:03+08:00",
+  "machine": "backfill",
+  "seq": 296,
+  "job_id": "gh-pr-649",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #649；[grok] #646 capacity 指纹续命改 1/5/10 分试三次，第 4 次报帅不续；判定行红 0 项",
+  "pr_number": 649,
+  "source": "github-backfill",
+  "event_id": "24e4fb134d56fe4fcec791ce1383c074515e47a894c10c9740f03238e5e5bff4"
+}

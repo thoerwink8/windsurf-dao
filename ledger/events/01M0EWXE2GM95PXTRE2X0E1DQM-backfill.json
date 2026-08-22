@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-20T14:14:42+08:00",
+  "machine": "backfill",
+  "seq": 344,
+  "job_id": "gh-pr-674",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #674；[grok] #673 第四席 dao-watchdog：事故写 GitHub；判定行红 1 项",
+  "pr_number": 674,
+  "source": "github-backfill",
+  "event_id": "5a603b6358859444f0f2f7d7aa23ba57f759f629e2609ab3fc1dee3e9319a106"
+}

@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-18T17:36:16+08:00",
+  "machine": "backfill",
+  "seq": 279,
+  "job_id": "gh-pr-639",
+  "model": "grok-4.6",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#639，红 0 项）",
+  "evidence": [
+    "github:pr-639"
+  ],
+  "pr_number": 639,
+  "source": "github-backfill",
+  "event_id": "2821481b7ae7e07085235c038ee661c83450fc085cb4fd655df5d0c62076dfc6"
+}

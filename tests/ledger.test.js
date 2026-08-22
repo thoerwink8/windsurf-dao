@@ -414,6 +414,33 @@ describe('ledger', () => {
       assert.ok(beforeBase.kind === 'empty-github', '基准之前的单不对照 → empty-github  →  ' + JSON.stringify(beforeBase));
     });
 
+    // 2026-08-22 清零收口：基准之上但标签写工具/未注册模型的 5 单确认无法回填，
+    // 豁免进差集但必须点名（不落幽灵账，也不许静默消失）
+    const onlyExempt = inspectLedgerGap({
+      githubPrs: [{ number: 659, labels: ['model/pi', 'type/体系'] }],
+      closedNumbers: new Set(),
+      baselinePr: 590,
+      newestBuffer: 0,
+    });
+    await t.test('全是豁免单 → 转绿但点名', () => {
+      assert.ok(onlyExempt.kind === 'ok' && /#659/.test(onlyExempt.line) && /豁免点名/.test(onlyExempt.line),
+        '全是豁免单  →  ' + onlyExempt.line);
+    });
+    const mixed = inspectLedgerGap({
+      githubPrs: [
+        { number: 659, labels: ['model/pi', 'type/体系'] },
+        { number: 700, labels: ['model/x', 'type/写码'] },
+      ],
+      closedNumbers: new Set(),
+      baselinePr: 590,
+      newestBuffer: 0,
+    });
+    await t.test('豁免单 + 真缺口 → 仍红且两批都点名', () => {
+      assert.ok(mixed.kind === 'gap' && mixed.missing.includes(700) && !mixed.missing.includes(659)
+        && /#700/.test(mixed.line) && /豁免点名 #659/.test(mixed.line),
+        '混合  →  ' + mixed.line);
+    });
+
     const labeled = n => ({ number: n, labels: ['model/x', 'type/写码'] });
     const currentShape = inspectLedgerGap({
       githubPrs: [585, 587, 590, 592, 594, 596, 597].map(labeled),

@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-15T21:29:20+08:00",
+  "machine": "backfill",
+  "seq": 175,
+  "job_id": "gh-pr-485",
+  "model": "grok-4.6",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#485，红 0 项）",
+  "evidence": [
+    "github:pr-485"
+  ],
+  "pr_number": 485,
+  "source": "github-backfill",
+  "event_id": "5819cdfd6f5ec7f3d1b81244ca708f94034b5af8b479acd98a0ee89f96435c70"
+}

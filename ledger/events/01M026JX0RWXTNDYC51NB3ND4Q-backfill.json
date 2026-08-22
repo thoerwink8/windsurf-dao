@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-15T15:53:35+08:00",
+  "machine": "backfill",
+  "seq": 164,
+  "job_id": "gh-pr-468",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #468；[grok] 点将台接线：分时选型 CLI + 今日事件回填；判定行红 3 项",
+  "pr_number": 468,
+  "source": "github-backfill",
+  "event_id": "a61e310ee4e35858d69a16227b9fb0fc41204904ca296cbcc4b24ea7ab5d31df"
+}

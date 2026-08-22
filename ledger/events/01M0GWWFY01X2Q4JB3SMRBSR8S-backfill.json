@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-21T08:52:40+08:00",
+  "machine": "backfill",
+  "seq": 371,
+  "job_id": "gh-pr-690",
+  "model": "grok-4.6",
+  "model_share": 0,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.5,
+  "why": "L0：未合并关闭且判不出主责，待定 unknown（#690）",
+  "evidence": [
+    "github:pr-690"
+  ],
+  "pr_number": 690,
+  "source": "github-backfill",
+  "event_id": "d436921ebf0cc3b450b302c879e4a3c929783f1807795dfb8bfe448f73b1d1d7"
+}

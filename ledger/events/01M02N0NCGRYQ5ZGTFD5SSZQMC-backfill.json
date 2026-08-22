@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-15T20:05:46+08:00",
+  "machine": "backfill",
+  "seq": 171,
+  "job_id": "gh-pr-484",
+  "model": "claude-opus",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#484，红 0 项）",
+  "evidence": [
+    "github:pr-484"
+  ],
+  "pr_number": 484,
+  "source": "github-backfill",
+  "event_id": "e1531a9689af7bc3d2bbeff27594187c63d1ae38f90e10ec8dad2bad68b6a556"
+}

@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-21T03:06:27+08:00",
+  "machine": "backfill",
+  "seq": 376,
+  "job_id": "gh-pr-692",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #692；[pi] #686 flow 判据四件套：工人死亡检测 / notify自愈 / pendingShuai落GH / 复核绿不报帅；判定行红 1 项",
+  "pr_number": 692,
+  "source": "github-backfill",
+  "event_id": "11e7e52c0d10925a736914936d65059b3643c376f833342e3dbdced7edb089b4"
+}

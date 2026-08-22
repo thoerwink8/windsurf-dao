@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-22T23:02:12+08:00",
+  "machine": "backfill",
+  "seq": 443,
+  "job_id": "gh-pr-742",
+  "model": "kimi-k3",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#742，无审读）",
+  "evidence": [
+    "github:pr-742"
+  ],
+  "pr_number": 742,
+  "source": "github-backfill",
+  "event_id": "525f16d7a6db817b2dc396d89e8621e94aebc9dd2823b06c3738b93a97bd05bc"
+}

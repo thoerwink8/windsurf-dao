@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-17T12:19:08+08:00",
+  "machine": "backfill",
+  "seq": 184,
+  "job_id": "gh-pr-582",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "grok-4.6"
+  ],
+  "selected": "grok-4.6",
+  "why": "回填自 GitHub PR #582；[grok] #580 补 flow 心跳与守卫判据；判定行红 2 项",
+  "pr_number": 582,
+  "source": "github-backfill",
+  "event_id": "a95ba7ae7beefd68c715063317dda72ed595026a35359b54df4f1c524d272d05"
+}

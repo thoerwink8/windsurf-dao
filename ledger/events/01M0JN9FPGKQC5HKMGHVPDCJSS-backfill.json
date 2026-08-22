@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-22T01:18:26+08:00",
+  "machine": "backfill",
+  "seq": 388,
+  "job_id": "gh-pr-719",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #719；[devin] #707 Cursor 帅位适配：.cursor/hooks.json 三钩子（保活/盘面/派工闸）；判定行红 1 项",
+  "pr_number": 719,
+  "source": "github-backfill",
+  "event_id": "0d3862786244547e2d9d6bb56ec9896ade664ebddafd9fa03e5469f93597c09a"
+}
