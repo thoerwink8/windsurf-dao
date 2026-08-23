@@ -293,6 +293,54 @@ describe('guard-keepalive', () => {
     });
   });
 
+  // 接缝测（不许两边各自造夹具）：租约由 inbox-station 的 formatLease 真写，
+  // 心跳由 readGuardHeartbeat 真读。两边 ts 写法不同（租约 epoch 毫秒 / 守卫 ISO 串）时，
+  // 活着的台会被判「心跳损坏」，每轮杀掉重拉——单看任一边的夹具都发现不了。
+  it('接缝：inbox-station 真写的租约，guard-keepalive 读得出新鲜心跳', async (t) => {
+    const K = await LIB_LOAD;
+    const STATION = path.join(__dirname, '..', 'scripts', 'inbox-station.mjs');
+    const S = await import('file://' + STATION.replace(/\\/g, '/'));
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'ka-lease-'));
+    fs.mkdirSync(path.join(main, '_flow'), { recursive: true });
+    const leaseFile = K.inboxLeasePath({ mainPath: main });
+    const now = Date.now();
+    fs.writeFileSync(leaseFile, S.formatLease({ pid: 4321, runId: null, ts: now }), 'utf8');
+
+    const hb = K.readGuardHeartbeat(leaseFile);
+    await t.test('真租约读成 ok，不是 corrupt', () => {
+      assert.ok(hb.state === 'ok' && Math.abs(hb.ts - now) < 1000, '真租约  →  ' + JSON.stringify(hb));
+    });
+    await t.test('inbox-station 自己也认这份租约（两边同一份文件）', () => {
+      const lease = S.parseLease(fs.readFileSync(leaseFile, 'utf8'));
+      assert.ok(lease && lease.pid === 4321 && S.isLeaseFresh(lease, now), 'parseLease  →  ' + JSON.stringify(lease));
+    });
+    await t.test('活 relay + 真租约 → already，不是 heartbeat-corrupt 重拉', () => {
+      const p = K.planKeepalive({
+        listed: { ok: true, processes: [{ pid: 4321, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 }] },
+        scripts: { watchdog: { exists: false }, flow: { exists: false }, inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay'] } },
+        heartbeats: { inbox: K.readGuardHeartbeat(leaseFile) },
+        now,
+      });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      assert.ok(i.action === 'already' && i.heartbeat.state === 'fresh', 'already  →  ' + JSON.stringify(i));
+    });
+    await t.test('租约停更超 90s 仍照常重拉（修的是格式，不是阈值）', () => {
+      fs.writeFileSync(leaseFile, S.formatLease({ pid: 4321, runId: null, ts: now - 200_000 }), 'utf8');
+      const p = K.planKeepalive({
+        listed: { ok: true, processes: [{ pid: 4321, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 }] },
+        scripts: { watchdog: { exists: false }, flow: { exists: false }, inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay'] } },
+        heartbeats: { inbox: K.readGuardHeartbeat(leaseFile) },
+        now,
+      });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      assert.ok(i.action === 'restart' && i.reason === 'heartbeat-stale', 'restart  →  ' + JSON.stringify(i));
+    });
+    await t.test('ts 不可解析仍是 corrupt（没放宽成什么都认）', () => {
+      fs.writeFileSync(leaseFile, JSON.stringify({ pid: 1, ts: 'not-a-time' }), 'utf8');
+      assert.ok(K.readGuardHeartbeat(leaseFile).state === 'corrupt', 'corrupt');
+    });
+  });
+
   it('#699 计划：心跳新鲜不动；停更/缺失/损坏杀掉重启；没查成不乱杀', async (t) => {
     const K = await LIB_LOAD;
     const now = 1_800_000_000_000;

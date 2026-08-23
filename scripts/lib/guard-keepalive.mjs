@@ -209,6 +209,13 @@ export function writeGuardHeartbeat(path, payload, {
 
 /** 读心跳原始态：unchecked（不知道读哪）/ missing / corrupt / ok（带 ts）。
  * 新鲜/过期不在这里判——判要 now 与阈值，留在 planKeepalive（纯函数可测）。 */
+/** 两种在用的 ts 写法都认：守卫心跳写 ISO 串，信箱台租约写 epoch 毫秒数（parseLease 既有契约）。
+ * 只认一种会把活着的台当「心跳损坏」，每轮杀掉重拉。 */
+function parseHeartbeatTs(raw) {
+  if (typeof raw === 'number') return Number.isFinite(raw) && raw > 0 ? raw : NaN;
+  return Date.parse(raw);
+}
+
 export function readGuardHeartbeat(path, {
   exists = existsSync,
   read = readFileSync,
@@ -218,7 +225,7 @@ export function readGuardHeartbeat(path, {
   let doc;
   try { doc = JSON.parse(read(path, 'utf8')); }
   catch (e) { return { state: 'corrupt', path, error: `心跳文件不是 JSON：${String(e && e.message || e).slice(0, 120)}` }; }
-  const ts = Date.parse(doc && doc.ts);
+  const ts = parseHeartbeatTs(doc && doc.ts);
   if (!Number.isFinite(ts)) return { state: 'corrupt', path, error: '心跳文件缺 ts 或 ts 不可解析' };
   return { state: 'ok', path, ts };
 }
