@@ -13,6 +13,7 @@
 |---|---|
 | `CLAUDE.md` | AI 协作约定，一页纸 |
 | `scripts/dao-check.mjs` | 唯一的自检命令；配套 `scripts/lib/redact.js`（密钥脱敏库）与 `scripts/dao-redact.mjs`（脱敏命令行） |
+| `scripts/dao.mjs` | 派工闭环的命令入口；盘面子命令 `board-archive` / `board-reset`（重测派单前的存档与清盘）：`board-archive` 全量存档卡片/终端/workers/Run/信箱到本机 `~/.dao/board-archive/`（不进 git），`board-reset` 默认 dry-run 只列将删的卡，加 `--apply` 先存档再删盘 |
 | `scripts/watchdog.mjs` | 事故路径停摆看门狗（issue #442）：轮询 `orca worktree ps` 自动枚举 working/waiting 工位，检测终端 exited / ps waiting / 屏面错误指纹 / 整屏哈希三轮不变。结构性排除主工作区（master）、监视器自己的工作区与稳定 pane ID，不对协调者/审官自误报。生产保活走帥位触发（#693：随仓 SessionStart hook + board-hook 兜底，幂等调 `scripts/guard-keepalive.mjs --once`），不要靠人记得 Monitor 挂载。`--once` 跑单轮；`--snapshot-dir` 用快照复现/测试；`--exclude-pane` 排除控制端会话 |
 | `scripts/guard-keepalive.mjs` | #693 帥位触发：主树 master 会话启动（SessionStart hook）与每轮提示（board-hook 兜底）时幂等检查 watchdog + flow，不在则从 `~/.dao/guard-mirror` 拉起。唯一入口 `--once`；进程列表没查成不许当 0 个。 |
 | `tests/redact.test.js` | 脱敏能力的回归测试，dao-check 每次都会跑它 |
