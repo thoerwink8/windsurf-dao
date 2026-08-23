@@ -85,55 +85,87 @@ describe('orca-agent-cmds', () => {
     });
   });
 
-  it('resolveLaunch：先问 Orca，再回落 routing', async (t) => {
+  it('resolveLaunch：派工只听仓内，Orca 桌面只比较不盖 argv', async (t) => {
     const S = await LIB_LOAD;
     const D = await DAO_LOAD;
     const routing = D.loadRouting();
     const orca = S.loadOrcaAgentCmds({ file: path.join(FIX, 'with-overrides.json') });
+    const routingGpt = D.resolveLaunch({ provider: 'gpt', routing, skipOrca: true });
 
     const gpt = D.resolveLaunch({ provider: 'gpt', routing, orca });
-    await t.test('gpt 用 Orca 的 Codex 手试串，并带上模型', () => {
-      assert.ok(gpt.launchSource === 'orca' && gpt.orcaLaunch === 'codex --dangerously-bypass-approvals-and-sandbox'
+    await t.test('gpt 启动 argv 仍是仓内 launch，不换成 Orca 串', () => {
+      assert.ok(gpt.launchSource === 'routing' && gpt.command === routingGpt.command
+        && gpt.orcaLaunch === 'codex --dangerously-bypass-approvals-and-sandbox'
         && gpt.command.includes('--dangerously-bypass-approvals-and-sandbox')
         && /\bcodex\b/.test(gpt.command) && /(?:^|\s)-m\s+\S+/.test(gpt.command),
-        'gpt Orca  →  ' + JSON.stringify({ command: gpt.command, source: gpt.launchSource, orca: gpt.orcaLaunch }));
+        'gpt 仓内  →  ' + JSON.stringify({ command: gpt.command, source: gpt.launchSource, orca: gpt.orcaLaunch }));
     });
 
     const claude = D.resolveLaunch({ provider: 'claude', routing, orca });
-    await t.test('claude 用 Orca 的 reclaude，并带上 --model', () => {
-      assert.ok(claude.launchSource === 'orca' && claude.orcaLaunch === 'reclaude'
+    const routingClaude = D.resolveLaunch({ provider: 'claude', routing, skipOrca: true });
+    await t.test('claude 启动 argv 仍是仓内 reclaude --model，Orca 覆盖不当命令', () => {
+      assert.ok(claude.launchSource === 'routing' && claude.command === routingClaude.command
+        && claude.orcaLaunch === 'reclaude'
         && /^reclaude\b/.test(claude.command) && /--model\s+\S+/.test(claude.command),
-        'claude Orca  →  ' + JSON.stringify({ command: claude.command, source: claude.launchSource }));
+        'claude 仓内  →  ' + JSON.stringify({ command: claude.command, source: claude.launchSource }));
     });
 
     const missing = S.loadOrcaAgentCmds({ file: path.join(FIX, 'no-such-orca-data.json') });
     const gptFallback = D.resolveLaunch({ provider: 'gpt', routing, orca: missing });
-    await t.test('文件不在：回落 routing，不把没查成当成 0 条覆盖', () => {
+    await t.test('文件不在：走仓内，不把没查成当成 0 条覆盖', () => {
       assert.ok(gptFallback.launchSource === 'routing' && gptFallback.orcaReason === 'missing-file'
         && gptFallback.command.includes('codex'),
-        '缺文件回落  →  ' + JSON.stringify({ command: gptFallback.command, source: gptFallback.launchSource, reason: gptFallback.orcaReason }));
+        '缺文件  →  ' + JSON.stringify({ command: gptFallback.command, source: gptFallback.launchSource, reason: gptFallback.orcaReason }));
     });
 
     const zero = S.loadOrcaAgentCmds({ file: path.join(FIX, 'empty-overrides.json') });
     const gptZero = D.resolveLaunch({ provider: 'gpt', routing, orca: zero });
-    await t.test('读到 0 条覆盖：这智能体不在表里，回落 routing', () => {
+    await t.test('读到 0 条覆盖：走仓内', () => {
       assert.ok(zero.unscanned === false && gptZero.launchSource === 'routing',
-        '0 条回落  →  ' + JSON.stringify({ overrideCount: zero.overrideCount, source: gptZero.launchSource }));
+        '0 条  →  ' + JSON.stringify({ overrideCount: zero.overrideCount, source: gptZero.launchSource }));
     });
 
     const bad = S.loadOrcaAgentCmds({ file: path.join(FIX, 'bad.json') });
     let threw = false;
-    let err = '';
-    try { D.resolveLaunch({ provider: 'gpt', routing, orca: bad }); }
-    catch (e) { threw = true; err = String(e.message || e); }
-    await t.test('坏 JSON：resolveLaunch 抛，不许当没有覆盖', () => {
-      assert.ok(threw && /没查成/.test(err), '坏 JSON 抛  →  ' + err);
+    let badLaunch = null;
+    try { badLaunch = D.resolveLaunch({ provider: 'gpt', routing, orca: bad }); }
+    catch (e) { threw = true; }
+    await t.test('坏 JSON：仍按仓内起，只记没查成，不许挡派工', () => {
+      assert.ok(!threw && badLaunch && badLaunch.launchSource === 'routing'
+        && badLaunch.command === routingGpt.command && /没查成|bad-json/.test(String(badLaunch.orcaReason || '')),
+        '坏 JSON 不挡  →  ' + JSON.stringify({ threw, launch: badLaunch }));
     });
 
     const skip = D.resolveLaunch({ provider: 'gpt', routing, skipOrca: true });
     await t.test('skipOrca 仍走 routing（给只验 toml 的测试）', () => {
       assert.ok(skip.launchSource === 'routing' && skip.command.includes('codex'),
         'skipOrca  →  ' + skip.command);
+    });
+
+    const desktop = S.loadOrcaAgentCmds({ file: path.join(FIX, 'devin-desktop.json') });
+    const routingDevin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, skipOrca: true });
+    const devin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, orca: desktop });
+    await t.test('Devin：桌面缺信任旗标也不得盖掉仓内 argv', () => {
+      assert.ok(devin.launchSource === 'routing' && devin.command === routingDevin.command
+        && /--respect-workspace-trust\s+false/.test(devin.command)
+        && /--permission-mode\s+dangerous/.test(devin.command)
+        && !/--permission-mode\s+bypass/.test(devin.command),
+        'Devin 仓内  →  ' + JSON.stringify({ command: devin.command, source: devin.launchSource, orca: devin.orcaLaunch }));
+    });
+    await t.test('Devin：桌面多的旗标只提示，不写进本次 argv', () => {
+      assert.ok(Array.isArray(devin.extraDesktopFlags) && devin.extraDesktopFlags.includes('--experimental')
+        && !/--experimental/.test(devin.command),
+        '桌面多旗标  →  ' + JSON.stringify({ extra: devin.extraDesktopFlags, command: devin.command }));
+    });
+    await t.test('Devin：仓内有、桌面无的旗标只报不删', () => {
+      assert.ok(Array.isArray(devin.droppedFlags) && devin.droppedFlags.includes('--respect-workspace-trust'),
+        '桌面少旗标  →  ' + JSON.stringify(devin.droppedFlags));
+    });
+    await t.test('Devin：同旗标不同值（dangerous vs bypass）报差异，不统一', () => {
+      const diffs = Array.isArray(devin.desktopFlagDiffs) ? devin.desktopFlagDiffs : [];
+      const perm = diffs.find(d => d && d.flag === '--permission-mode');
+      assert.ok(perm && perm.routing === 'dangerous' && perm.desktop === 'bypass',
+        '同旗标不同值  →  ' + JSON.stringify(devin.desktopFlagDiffs));
     });
   });
 
@@ -173,8 +205,9 @@ describe('orca-agent-cmds', () => {
     });
   });
 
-  it('applyOrcaAgentCmds：Orca 覆盖丢旗标时结果带 droppedFlags', async (t) => {
+  it('applyOrcaAgentCmds：比较桌面，不改仓内 argv', async (t) => {
     const S = await LIB_LOAD;
+    const routingCmd = 'grok -m grok-4.6 --effort xhigh --always-approve';
     const orcaCmds = {
       ok: true, unscanned: false, reason: 'ok', error: null, file: null,
       overrides: { grok: 'grok' }, defaultArgs: {},
@@ -182,14 +215,15 @@ describe('orca-agent-cmds', () => {
       overrideCount: 1, agentCount: 1,
     };
     const hit = S.applyOrcaAgentCmds(
-      { provider: 'grok', command: 'grok -m grok-4.6 --effort xhigh --always-approve', template: 'grok -m {model} --effort xhigh --always-approve', start: 'command' },
+      { provider: 'grok', command: routingCmd, template: 'grok -m {model} --effort xhigh --always-approve', start: 'command' },
       orcaCmds,
       { cliModel: 'grok-4.6' },
     );
-    await t.test('launchSource=orca 且 droppedFlags 显形', () => {
-      assert.ok(hit.launchSource === 'orca' && Array.isArray(hit.droppedFlags)
+    await t.test('launchSource=routing，command 仍是仓内，droppedFlags 显形', () => {
+      assert.ok(hit.launchSource === 'routing' && hit.command === routingCmd
+        && Array.isArray(hit.droppedFlags)
         && hit.droppedFlags.join(',') === '--effort,--always-approve',
-        'droppedFlags  →  ' + JSON.stringify({ source: hit.launchSource, dropped: hit.droppedFlags }));
+        'droppedFlags  →  ' + JSON.stringify({ source: hit.launchSource, command: hit.command, dropped: hit.droppedFlags }));
     });
 
     const clean = S.applyOrcaAgentCmds(
@@ -197,9 +231,23 @@ describe('orca-agent-cmds', () => {
       orcaCmds,
       {},
     );
-    await t.test('routing 回落不带 droppedFlags 字段', () => {
-      assert.ok(clean.launchSource === 'routing' && !('droppedFlags' in clean),
-        'routing 回落  →  ' + JSON.stringify(clean));
+    await t.test('桌面没这个智能体：走仓内，不带比较字段', () => {
+      assert.ok(clean.launchSource === 'routing' && clean.command === 'codex --dangerously-bypass-approvals-and-sandbox'
+        && !clean.droppedFlags?.length && !clean.extraDesktopFlags?.length,
+        '无智能体  →  ' + JSON.stringify(clean));
+    });
+
+    const notes = S.formatDesktopLaunchNotes({
+      droppedFlags: ['--respect-workspace-trust'],
+      extraDesktopFlags: ['--experimental'],
+      desktopFlagDiffs: [{ flag: '--permission-mode', routing: 'dangerous', desktop: 'bypass' }],
+    });
+    await t.test('桌面差异话面：少的只报、多的建议补仓内、不同值不覆盖', () => {
+      const blob = notes.join('\n');
+      assert.ok(/少这些旗标/.test(blob) && /不删桌面/.test(blob)
+        && /多这些旗标/.test(blob) && /补进仓内/.test(blob)
+        && /没改桌面/.test(blob) && /dangerous/.test(blob) && /bypass/.test(blob),
+        '话面  →  ' + blob);
     });
   });
 });

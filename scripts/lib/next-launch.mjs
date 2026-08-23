@@ -169,7 +169,8 @@ export function advanceLaunchState({
 /**
  * 派工名单。live=true 时只接受已经过门闩的 slateIds；
  * 选型没查成必须 fail-close，不许回退到 routingSlateIds 的全表。
- * dry-run（live=false）才用路由表序做预览。
+ * live=false 走路由表序：dry-run 预览用它；2026-08-23 async-launch 起显式 --model 的
+ * 真派工也用它（打分整层删，bans 门闩过滤由调用方补）。--role 真派工必须 live:true。
  */
 export function resolveDispatchSlate({
   live, selectOk, selectError, slateIds, routing, role, now, model,
@@ -201,7 +202,7 @@ export function resolveDispatchSlate({
   return { ok: true, slate, startIndex };
 }
 
-/** 路由第一、其余按表序。只给 dry-run 预览用，真派工必须走过门闩的 slate。 */
+/** 路由第一、其余按表序。dry-run 预览与显式 --model 真派工用它（async-launch）；--role 真派工必须走过门闩的 slate。 */
 export function routingSlateIds({ routing, role, now, model } = {}) {
   const models = Array.isArray(routing?.models) ? routing.models : [];
   const known = new Set(models.map(m => m && m.id).filter(Boolean));

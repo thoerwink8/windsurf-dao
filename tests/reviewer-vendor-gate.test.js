@@ -267,7 +267,7 @@ describe('#679 起审官同厂硬闸', () => {
     });
   });
 
-  it('CLI：故意同厂样本被拦；异厂通过', async (t) => {
+  it('CLI：dispatch 预检不再闸同厂（2026-08-23 拍板），闸在 reviewer-attach/create', async (t) => {
     function dispatch(model, reviewer) {
       return spawnSync(process.execPath, [
         CLI, 'dispatch', '--model', model, '--reviewer', reviewer,
@@ -276,8 +276,9 @@ describe('#679 起审官同厂硬闸', () => {
     }
     const same = dispatch('grok-4.6', 'grok-4.6');
     const pSame = payload(same);
-    await t.test('dispatch grok+grok 非零且话面含同厂', () => {
-      assert.ok(same.status !== 0 && /同厂/.test(String(pSame.error || '')), JSON.stringify(pSame));
+    await t.test('dispatch grok+grok dry-run 放行（审官不存在时查空气的闸已删）', () => {
+      assert.ok(same.status === 0 && pSame.ok === true,
+        `dispatch 同厂 dry-run 该过  →  status=${same.status} ` + JSON.stringify(pSame).slice(0, 240));
     });
     const pass = dispatch('grok-4.6', 'gpt-5.6-sol');
     const pPass = payload(pass);
@@ -328,7 +329,7 @@ describe('#679 起审官同厂硬闸', () => {
         '检查器 import 了被查对象');
     });
     const {
-      inspectVendorGateFixtures, inspectVendorGateWiring, probeSameVendorDispatch,
+      inspectVendorGateFixtures, inspectVendorGateWiring,
       inspectReviewerNoForceCommand,
     } = await CHECK_LOAD;
     const fx = inspectVendorGateFixtures(path.join(REPO, 'tests', 'fixtures', 'reviewer-vendor-gate'));
@@ -338,10 +339,6 @@ describe('#679 起审官同厂硬闸', () => {
     const empty = inspectVendorGateWiring({});
     await t.test('缺正文 → 没查成，不是绿', () => {
       assert.ok(empty.unscanned === true && empty.ok === false, JSON.stringify(empty));
-    });
-    const probe = probeSameVendorDispatch(REPO);
-    await t.test('live 故意同厂样本被拦住', () => {
-      assert.ok(probe.ok === true, JSON.stringify(probe));
     });
     const noForceMiss = inspectReviewerNoForceCommand({});
     await t.test('审官 forceCommand 扫描缺正文 → 没查成', () => {

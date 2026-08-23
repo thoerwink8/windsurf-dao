@@ -1,11 +1,11 @@
 // 信箱台幂等脚本 · 纯函数回归（不碰 live orca）
 //
-// 验的层：①参数/选型 ②租约/活性判据（新鲜+PID+handle 在盘面，不是历史屏面）
-// ③#638 单台决策（全局台优先/关多余台/旧台全关重建/无台重建/证不出不动）
+// 验的层：①参数/选型 ②租约/活性判据（新鲜+PID 在；detached 台加命令行核对防 PID 复用）
+// ③#638+2026-08-23 单台决策（detached 全局台优先/关多余台/旧式终端台迁移重建/无台重建/证不出不动）
 // ④收信分流（heartbeat 不落盘、业务信落盘）⑤活跃 Run 集与相关消息过滤
-// ⑥重建命令串（#638：不再 run-use，纯 inbox 轮询）⑦故障注入
+// ⑥detached 拉起形态（无终端、无启动文件；stale-guard 比进程命令行）⑦故障注入
 // ⑧#614 只读 gc 阈值行
-// 判别力：READY 历史行当活、或多台并存没被收敛、或只读 gc 超阈值没打行，必有一条变红。
+// 判别力：租约过期当活、多台并存没收敛、PID 复用没核对、或只读 gc 超阈值没打行，必有一条变红。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -64,12 +64,6 @@ describe('inbox-station', () => {
     await t.test('runShort 去掉 run_ 前缀', () => {
       assert.ok(S.runShort('run_bfd7e4e193ce') === 'bfd7e4e193ce', 'runShort 去掉 run_ 前缀');
     });
-    await t.test('stationTitle 带 run 后缀（历史格式保留）', () => {
-      assert.ok(S.stationTitle('run_bfd7e4e193ce') === '信箱台·bfd7e4e193ce（勿关）', 'stationTitle 带 run 后缀');
-    });
-    await t.test('stationTitle 无 run = 裸标题', () => {
-      assert.ok(S.stationTitle(null) === '信箱台（勿关）', 'stationTitle 无 run = 裸标题');
-    });
     await t.test('defaultLogRel 按 run 隔离（历史格式）', () => {
       assert.ok(S.defaultLogRel('run_bfd7e4e193ce').replace(/\\/g, '/') === '_flow/inbox-bfd7e4e193ce.log', 'defaultLogRel 按 run 隔离');
     });
@@ -94,20 +88,11 @@ describe('inbox-station', () => {
       assert.ok(S.isStationAlive(null) === false, 'isStationAlive 无租约 = 死');
     });
 
-    await t.test('isRelayAlive 未连 = 死', () => {
-      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: false }, { lease: liveLease, now }) === false, '未连 = 死');
+    await t.test('pidIsRelay 命令行核对：在进程列表 = 真', () => {
+      assert.ok(S.pidIsRelay(123, [{ pid: 123 }, { pid: 456 }]) === true, 'pidIsRelay 在列表 = 真');
     });
-    await t.test('isRelayAlive 孤儿 = 死', () => {
-      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, orphaned: true }, { lease: liveLease, now }) === false, '孤儿 = 死');
-    });
-    await t.test('isRelayAlive 只有标题没有租约 = 死', () => {
-      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, preview: S.READY_MARK }) === false, '只有标题没有租约 = 死');
-    });
-    await t.test('isRelayAlive 租约新鲜+PID活+已连 = 活', () => {
-      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true, preview: S.READY_MARK }, { lease: liveLease, now }) === true, '租约新鲜+PID活+已连 = 活');
-    });
-    await t.test('isRelayAlive 过期租约 = 死', () => {
-      assert.ok(S.isRelayAlive({ handle: 'term_a', connected: true }, { lease: staleLease, now }) === false, '过期租约 = 死');
+    await t.test('pidIsRelay 不在 = 假（防 PID 复用误认/误杀）', () => {
+      assert.ok(S.pidIsRelay(999, [{ pid: 123 }]) === false && S.pidIsRelay(NaN, [{ pid: 123 }]) === false, 'pidIsRelay 不在 = 假');
     });
 
     await t.test('isHandleOnBoard 在盘面 = 真', () => {
@@ -128,25 +113,12 @@ describe('inbox-station', () => {
       assert.ok(parsed && parsed.pid === 12 && parsed.runId === 'run_x' && parsed.ttlMs === 9000, 'format/parse 租约往返');
     });
     const withHandle = S.parseLease(S.formatLease({ pid: 12, runId: null, ts: now, ttlMs: 9000, handle: 'term_s' }));
-    await t.test('租约可带 handle', () => {
+    await t.test('租约可带 handle（旧式终端台迁移判据靠它）', () => {
       assert.ok(withHandle && withHandle.handle === 'term_s', '租约可带 handle');
     });
-    await t.test('mergeLeaseHandle 保留旧 handle', () => {
-      assert.ok(S.mergeLeaseHandle({ handle: 'term_old' }, null) === 'term_old', 'mergeLeaseHandle 保留旧 handle');
-    });
-    await t.test('acceptLeaseHandleStamp rebuild 可盖新台 handle', () => {
-      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_old', nextHandle: 'term_new', source: 'rebuild' }) === true, 'rebuild 可盖新台 handle');
-    });
-    await t.test('acceptLeaseHandleStamp ensure 不得覆写', () => {
-      assert.ok(S.acceptLeaseHandleStamp({ prevHandle: 'term_station', nextHandle: 'term_shuai', source: 'ensure' }) === false, 'ensure 不得覆写');
-    });
-    const rebuildWrite = S.planEnsureLeaseStamp({ action: 'rebuild', leaseHandle: 'term_old', rebuiltHandle: 'term_new' });
-    await t.test('rebuild 才 stamp', () => {
-      assert.ok(rebuildWrite.stamp === true && rebuildWrite.handle === 'term_new', 'rebuild 才 stamp');
-    });
-    const okWrite = S.planEnsureLeaseStamp({ action: 'ok', leaseHandle: 'term_station', rebuiltHandle: null });
-    await t.test('all-alive 不 stamp', () => {
-      assert.ok(okWrite.stamp === false && okWrite.handle === 'term_station', 'all-alive 不 stamp');
+    await t.test('detached 租约不带 handle', () => {
+      const noHandle = S.parseLease(S.formatLease({ pid: 12, runId: null, ts: now, ttlMs: 9000 }));
+      assert.ok(noHandle && noHandle.handle === null, 'detached 租约不带 handle');
     });
     await t.test('leasePath 落在日志同目录', () => {
       assert.ok(S.leasePath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox.lease'), 'leasePath 落在日志同目录');
@@ -156,25 +128,27 @@ describe('inbox-station', () => {
     });
   });
 
-  it('③ #638 单台决策（幂等关多余台 / 无台重建 / 旧台全关重建 / 证不出不动）', async (t) => {
+  it('③ #638+2026-08-23 单台决策（detached 判活 / 旧式台迁移 / 关多余台 / 证不出不动）', async (t) => {
     const S = await SCRIPT_LOAD;
     const now = 2_000_000;
 
-    // 全局台 + 旧 per-run 台并存：留全局，关旧台
-    const globalLease = { pid: process.pid, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_global' };
+    // detached 全局台（无 handle，PID 核对过）+ 旧 per-run 终端台并存：留全局，关旧台
+    const globalLease = { pid: process.pid, runId: null, ts: now, ttlMs: S.LEASE_TTL_MS };
     const oldLease = { pid: process.pid, runId: 'run_old', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_old' };
     const oldLease2 = { pid: process.pid, runId: 'run_old2', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_old2' };
     const globalStation = { stem: 'inbox', runId: null, lease: globalLease, files: ['a.lease', 'a.cmd', 'a.log'] };
     const oldStation = { stem: 'inbox-old', runId: 'run_old', lease: oldLease, files: ['b.lease', 'b.cmd', 'b.log'] };
     const oldStation2 = { stem: 'inbox-old2', runId: 'run_old2', lease: oldLease2, files: ['c.lease', 'c.cmd', 'c.log'] };
+    const pidAlive = (pid) => pid === process.pid;
 
     const trim = S.planSingleStation({
       stations: [globalStation, oldStation, oldStation2],
-      terminals: [{ handle: 'term_global' }, { handle: 'term_old' }, { handle: 'term_old2' }],
+      terminals: [{ handle: 'term_old' }, { handle: 'term_old2' }],
       now,
+      pidAlive,
     });
-    await t.test('全局台 + 旧台 → ok/closed-extra', () => {
-      assert.ok(trim.action === 'ok' && trim.reason === 'closed-extra', '全局台 + 旧台 → ok/closed-extra  →  ' + JSON.stringify(trim));
+    await t.test('detached 全局台 + 旧台 → ok/closed-extra', () => {
+      assert.ok(trim.action === 'ok' && trim.reason === 'closed-extra', 'detached 全局台 + 旧台 → ok/closed-extra  →  ' + JSON.stringify(trim));
     });
     await t.test('留全局台', () => {
       assert.ok(trim.keep && trim.keep.stem === 'inbox', '留全局台');
@@ -188,51 +162,80 @@ describe('inbox-station', () => {
       assert.ok(trim.rebuild === false, 'closed-extra 不再触发 rebuild');
     });
 
-    // 只有全局台活着 → all-alive 秒退
+    // 只有 detached 全局台活着 → all-alive 秒退
     const only = S.planSingleStation({
       stations: [globalStation],
-      terminals: [{ handle: 'term_global' }],
+      terminals: [],
       now,
+      pidAlive,
     });
-    await t.test('只有全局台 → ok/all-alive', () => {
-      assert.ok(only.action === 'ok' && only.reason === 'all-alive' && only.keep.stem === 'inbox' && only.close.length === 0, '只有全局台 → ok/all-alive');
+    await t.test('只有 detached 全局台 → ok/all-alive（不需要任何终端）', () => {
+      assert.ok(only.action === 'ok' && only.reason === 'all-alive' && only.keep.stem === 'inbox' && only.close.length === 0, '只有 detached 全局台 → ok/all-alive');
     });
 
-    // 全局台死了（过期），旧台活着 → 全关 + 重建全局台
+    // 旧式终端台当全局台（租约带 handle 且在盘面）→ detached-migration 迁移重建
+    const legacyGlobal = { stem: 'inbox', runId: null, lease: { ...globalLease, handle: 'term_global' }, files: ['a.lease', 'a.cmd', 'a.log'] };
+    const migration = S.planSingleStation({
+      stations: [legacyGlobal],
+      terminals: [{ handle: 'term_global' }],
+      now,
+      pidAlive,
+    });
+    await t.test('旧式终端台当全局台 → rebuild/detached-migration', () => {
+      assert.ok(migration.action === 'rebuild' && migration.reason === 'detached-migration'
+        && migration.rebuild === true && migration.close.length === 1
+        && migration.close[0].stem === 'inbox', '旧式全局台 → 迁移重建  →  ' + JSON.stringify(migration));
+    });
+
+    // detached 全局台死了（PID 核对不过），旧台活着 → 全关 + 重建全局台
     const staleGlobal = S.planSingleStation({
-      stations: [{ ...globalStation, lease: { pid: process.pid, runId: null, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS, handle: 'term_global' } }, oldStation],
+      stations: [globalStation, oldStation],
       terminals: [{ handle: 'term_old' }],
       now,
+      pidAlive: () => false,
     });
-    await t.test('全局死 + 旧台活 → rebuild/no-global-station + 关旧台', () => {
+    await t.test('全局死（PID 核对不过）+ 旧台活 → rebuild/no-global-station + 关旧台', () => {
       assert.ok(staleGlobal.action === 'rebuild' && staleGlobal.reason === 'no-global-station'
         && staleGlobal.rebuild === true && staleGlobal.close.length === 1, '全局死 + 旧台活 → rebuild + 关旧台  →  ' + JSON.stringify(staleGlobal));
     });
 
-    // 一个活台都没有 → rebuild/no-station，不关任何台
-    const none = S.planSingleStation({
-      stations: [globalStation, oldStation],
+    // 租约过期 = 死（TTL 兜底，PID 核对不到过期租约头上）
+    const expired = S.planSingleStation({
+      stations: [globalStation],
       terminals: [],
       now: now + S.LEASE_TTL_MS + 1000,
+      pidAlive,
     });
-    await t.test('无活台 → rebuild/no-station', () => {
-      assert.ok(none.action === 'rebuild' && none.reason === 'no-station' && none.close.length === 0, '无活台 → rebuild/no-station');
+    await t.test('租约过期 → rebuild/no-station', () => {
+      assert.ok(expired.action === 'rebuild' && expired.reason === 'no-station' && expired.close.length === 0, '租约过期 → rebuild/no-station');
     });
 
-    // 证不出身份（租约无 handle / handle 不在盘面 / 坏租约）→ 不动
-    const noHandle = { stem: 'inbox-x', runId: 'run_x', lease: { pid: process.pid, runId: 'run_x', ts: now, ttlMs: S.LEASE_TTL_MS, handle: null }, files: [] };
-    const offBoard = { stem: 'inbox-y', runId: 'run_y', lease: { pid: process.pid, runId: 'run_y', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_gone' }, files: [] };
+    // 证不出身份（PID 核对没查成 / 坏租约）→ 不动：没查成的台不当死（不多开），坏租约不关
     const badLease = { stem: 'inbox-z', runId: null, lease: null, parseError: true, files: [] };
-    const unproven = S.planSingleStation({
-      stations: [noHandle, offBoard, badLease],
+    const unscannedPid = S.planSingleStation({
+      stations: [globalStation, badLease],
       terminals: [],
       now,
+      pidAlive: () => null, // 进程列表没查成 = 证不出 = 当活不动
     });
-    await t.test('证不出的租约进 unproven，不关不保', () => {
-      assert.ok(unproven.close.length === 0 && unproven.unproven.length === 3, '证不出的租约进 unproven，不关不保  →  ' + JSON.stringify(unproven));
+    await t.test('PID 核对没查成 → 证不出就不动（当活，不多开）', () => {
+      assert.ok(unscannedPid.action === 'ok' && unscannedPid.reason === 'all-alive'
+        && unscannedPid.unproven.length === 1 && unscannedPid.unproven[0].stem === 'inbox-z',
+        'PID 没查成 → 不动  →  ' + JSON.stringify(unscannedPid));
     });
-    await t.test('全是证不出 → rebuild（不误关）', () => {
-      assert.ok(unproven.action === 'rebuild' && unproven.reason === 'no-station', '全是证不出 → rebuild');
+
+    // 旧式台 handle 不在盘面 = 死（#635 旧判据保留给迁移期）
+    const offBoard = { stem: 'inbox-y', runId: 'run_y', lease: { pid: process.pid, runId: 'run_y', ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_gone' }, files: [] };
+    const offBoardPlan = S.planSingleStation({
+      stations: [globalStation, offBoard],
+      terminals: [],
+      now,
+      pidAlive,
+    });
+    await t.test('旧式台 handle 不在盘面 = 死，进不了 live（全局 detached 台在 → closed-extra 名单不含它）', () => {
+      assert.ok(offBoardPlan.action === 'ok' && offBoardPlan.close.length === 0
+        && offBoardPlan.unproven.some((s) => s.stem === 'inbox-y'),
+        '旧式台 handle 不在盘面  →  ' + JSON.stringify(offBoardPlan));
     });
 
     // scanLeaseStations：从目录扫全局 + 旧模型租约
@@ -342,50 +345,46 @@ describe('inbox-station', () => {
     });
   });
 
-  it('⑥ 重建命令串（#638 不再 run-use）', async (t) => {
+  it('⑥ detached 拉起形态（2026-08-23：无终端、无启动文件；stale-guard 比进程命令行）', async (t) => {
     const S = await SCRIPT_LOAD;
-    const script = S.buildLaunchScript({
-      nodePath: 'C:\\Program Files\\nodejs\\node.exe',
-      scriptPath: 'C:\\repo\\scripts\\inbox-station.mjs',
-      logPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox.log',
+
+    await t.test('不再有终端台启动件（buildLaunchScript/buildRelayCommand/extractHandle 已删）', () => {
+      assert.ok(typeof S.buildLaunchScript === 'undefined'
+        && typeof S.buildRelayCommand === 'undefined'
+        && typeof S.extractHandle === 'undefined',
+        'detached 化后不该再有终端台启动件');
     });
-    await t.test('启动串不再 run-use（根治 consumer_fenced）', () => {
-      assert.ok(!/run-use/.test(script), '启动串不再 run-use  →  ' + script);
+    await t.test('relayOutPath 落在日志同目录（inbox.out.log）', () => {
+      assert.ok(S.relayOutPath('D:/repo/_flow/inbox.log').replace(/\\/g, '/').endsWith('/_flow/inbox.out.log'),
+        'relayOutPath  →  ' + S.relayOutPath('D:/repo/_flow/inbox.log'));
     });
-    await t.test('启动串不再带 --run（单台轮询全部）', () => {
-      assert.ok(!/--run/.test(script), '启动串不再带 --run');
+    await t.test('#665 stale-guard：relay 进程命令行不是镜像脚本 → 要刷新', () => {
+      const oldCmd = '"C:\\nvm4w\\nodejs\\node.exe" "C:\\repo\\scripts\\inbox-station.mjs" relay --log "D:\\x\\inbox.log"';
+      assert.ok(S.launchNeedsRefresh(oldCmd, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === true,
+        '旧进程命令行要刷新');
     });
-    await t.test('启动串进 relay 且带全局 --log', () => {
-      assert.ok(/inbox-station\.mjs" relay --log/.test(script) && script.includes('inbox.log'), '启动串进 relay 且带全局 --log');
+    await t.test('#665 stale-guard：命令行已是镜像脚本 → 不刷新', () => {
+      const freshCmd = '"C:\\nvm4w\\nodejs\\node.exe" "C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs" relay --log "D:\\x\\inbox.log"';
+      assert.ok(S.launchNeedsRefresh(freshCmd, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === false,
+        '镜像进程命令行不刷新');
     });
-    const cmd = S.buildRelayCommand({ launchPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox-station.cmd' });
-    await t.test('create --command 走 cmd 文件', () => {
-      assert.ok(cmd.includes('cmd.exe /c') && cmd.includes('inbox-station.cmd'), 'create --command 走 cmd 文件');
-    });
-    await t.test('#665 启动串不是镜像脚本 → 要刷新', () => {
-      assert.ok(S.launchNeedsRefresh(script, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === true, '旧启动串要刷新');
-    });
-    await t.test('#665 启动串已是镜像脚本 → 不刷新', () => {
-      const fresh = S.buildLaunchScript({
-        nodePath: 'C:\\Program Files\\nodejs\\node.exe',
-        scriptPath: 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs',
-        logPath: 'D:\\frank\\windsurf-dao\\_flow\\inbox.log',
-      });
-      assert.ok(S.launchNeedsRefresh(fresh, 'C:\\Users\\Administrator\\.dao\\guard-mirror\\scripts\\inbox-station.mjs') === false, '镜像启动串不刷新');
+    await t.test('stale-guard：空命令行/空期望 → 刷新（证不出就重建）', () => {
+      assert.ok(S.launchNeedsRefresh('', 'C:\\x\\inbox-station.mjs') === true
+        && S.launchNeedsRefresh('node x', '') === true, '空输入 → 刷新');
     });
 
-    const st = S.statusPayload({ handle: 'term_y', logPath: 'p', action: 'ok', reason: 'all-alive' });
-    await t.test('现状 JSON ok', () => {
-      assert.ok(st.ok === true && st.action === 'ok' && st.reason === 'all-alive', '现状 JSON ok');
+    const st = S.statusPayload({ handle: null, logPath: 'p', action: 'ok', reason: 'all-alive' });
+    await t.test('现状 JSON ok（detached：handle 为 null）', () => {
+      assert.ok(st.ok === true && st.action === 'ok' && st.reason === 'all-alive' && st.handle === null, '现状 JSON ok');
     });
     const stExtra = S.statusPayload({
-      handle: 'term_y', logPath: 'p', action: 'ok', reason: 'closed-extra',
+      handle: null, logPath: 'p', action: 'ok', reason: 'closed-extra',
       closedExtra: [{ runId: 'run_x' }], gc: { zombieCount: 3 },
     });
     await t.test('现状 JSON 带 closedExtra 与 gc', () => {
       assert.ok(stExtra.closedExtra.length === 1 && stExtra.gc.zombieCount === 3, '现状 JSON 带 closedExtra 与 gc');
     });
-    const stFail = S.statusPayload({ ok: false, handle: 'term_y', logPath: 'p', action: 'rebuild', reason: 'relay-not-alive', error: '中继未存活' });
+    const stFail = S.statusPayload({ ok: false, handle: null, logPath: 'p', action: 'rebuild', reason: 'relay-not-alive', error: '中继未存活' });
     await t.test('现状 JSON 失败带 ok:false', () => {
       assert.ok(stFail.ok === false && stFail.error === '中继未存活', '现状 JSON 失败带 ok:false');
     });
@@ -395,35 +394,33 @@ describe('inbox-station', () => {
         { id: 'b', isMainWorktree: true },
       ]).id === 'b', 'findMainWorktree');
     });
-    await t.test('extractHandle 几种形状', () => {
-      assert.ok(S.extractHandle({ result: { handle: 'term_z' } }) === 'term_z', 'extractHandle 几种形状');
-    });
   });
 
-  it('⑦ waitReady / decideReady / finalizeEnsure 故障注入', async (t) => {
+  it('⑦ decideReady / finalizeEnsure 故障注入（detached：就绪 = 租约新鲜 + pid 对得上）', async (t) => {
     const S = await SCRIPT_LOAD;
     const now = 2_000_000;
-    const term = { handle: 'term_box', connected: true, preview: S.READY_MARK };
-    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS, handle: 'term_box' };
-    const staleLease = { pid: process.pid, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS, handle: 'term_box' };
+    const liveLease = { pid: process.pid, ts: now, ttlMs: S.LEASE_TTL_MS };
+    const staleLease = { pid: process.pid, ts: now - S.LEASE_TTL_MS - 1, ttlMs: S.LEASE_TTL_MS };
 
-    await t.test('decideReady 全好 → ok', () => {
-      assert.ok(S.decideReady({ terminal: term, lease: liveLease, now }).ok === true, 'decideReady 全好 → ok');
+    await t.test('decideReady 租约新鲜 → ok', () => {
+      assert.ok(S.decideReady({ lease: liveLease, now }).ok === true, 'decideReady 租约新鲜 → ok');
     });
-    await t.test('decideReady 无终端 → 失败', () => {
-      assert.ok(S.decideReady({ terminal: null, lease: liveLease, now }).ok === false, 'decideReady 无终端 → 失败');
-    });
-    await t.test('decideReady 历史 READY 无租约 → relay-not-alive', () => {
-      assert.ok(S.decideReady({ terminal: term, lease: null, now }).error === 'relay-not-alive', 'decideReady 历史 READY 无租约 → relay-not-alive');
+    await t.test('decideReady 无租约 → relay-not-alive', () => {
+      assert.ok(S.decideReady({ lease: null, now }).error === 'relay-not-alive', 'decideReady 无租约 → relay-not-alive');
     });
     await t.test('decideReady 过期租约 → relay-not-alive', () => {
-      assert.ok(S.decideReady({ terminal: term, lease: staleLease, now }).error === 'relay-not-alive', 'decideReady 过期租约 → relay-not-alive');
+      assert.ok(S.decideReady({ lease: staleLease, now }).error === 'relay-not-alive', 'decideReady 过期租约 → relay-not-alive');
     });
-    await t.test('acceptRebuildReady 超时不得降级成功', () => {
-      assert.ok(S.acceptRebuildReady({ ok: false, error: 'timeout' }).ok === false, 'acceptRebuildReady 超时不得降级成功');
+    await t.test('decideReady 租约 pid 不是刚拉起的 → 失败', () => {
+      assert.ok(S.decideReady({ lease: liveLease, now, pid: 999999 }).ok === false,
+        'decideReady pid 不符 → 失败');
+    });
+    await t.test('decideReady 租约 pid 对得上 → ok', () => {
+      assert.ok(S.decideReady({ lease: liveLease, now, pid: process.pid }).ok === true,
+        'decideReady pid 对得上 → ok');
     });
 
-    const base = { handle: 'term_box', logPath: 'p', action: 'rebuild', reason: 'no-terminal' };
+    const base = { handle: null, logPath: 'p', action: 'rebuild', reason: 'no-station' };
     const deadRelay = S.finalizeEnsure({ ...base, relayAlive: false });
     await t.test('finalize 中继死 → ok:false 非零', () => {
       assert.ok(deadRelay.exitCode === 1 && deadRelay.payload.ok === false, 'finalize 中继死 → ok:false 非零');
@@ -432,8 +429,8 @@ describe('inbox-station', () => {
       assert.ok(deadRelay.payload.reason === 'relay-not-alive', 'finalize 中继死 reason');
     });
     const okFinal = S.finalizeEnsure({ ...base, action: 'ok', reason: 'all-alive', relayAlive: true });
-    await t.test('finalize 全好 → ok:true 零退出', () => {
-      assert.ok(okFinal.exitCode === 0 && okFinal.payload.ok === true && okFinal.payload.handle === 'term_box', 'finalize 全好 → ok:true 零退出');
+    await t.test('finalize 全好 → ok:true 零退出（handle:null）', () => {
+      assert.ok(okFinal.exitCode === 0 && okFinal.payload.ok === true && okFinal.payload.handle === null, 'finalize 全好 → ok:true 零退出');
     });
   });
 

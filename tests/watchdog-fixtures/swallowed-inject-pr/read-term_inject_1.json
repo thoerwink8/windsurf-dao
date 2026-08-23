@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_inject_1",
+      "status": "running",
+      "tail": [
+        "Ask Devin to build features, fix bugs, or work on your code",
+        "短摘要：#752 README 导览补一行。职责全类=开工五步+写码+交卷等审",
+        "（任务书粘在输入框，两分钟没消化）"
+      ]
+    }
+  }
+}

@@ -1,17 +1,15 @@
 // dao-check ㉔（#679）：起审官同厂硬闸还在。
+// 2026-08-23 delete-all-ceremony 拍板：dispatch 预检的同厂闸已删（审官不存在时查空气），
+// 闸只钉在审官真正落地的路径：reviewer-create / reviewer-attach / worker-done / 换人。
 // 检查器自己持有正则，不 import reviewer-vendor-gate.mjs——自己查自己查不出错。
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 const GATE_CALL = /assertCrossVendor\s*\(/;
 const REFUSE_CALL = /refuseIfSameVendor\s*\(/;
 const NEXT_WORKER = /nextReviewerAfter\s*\([\s\S]{0,240}workerId/;
 const CAP_WORKER = /planCapacitySwitch\s*\([\s\S]{0,240}workerId/;
-const FILTER_SLATE = /filterSlateSameVendor\s*\(/;
-const LAUNCHED_MODEL = /launched\.modelId/;
-const CHILD_LAUNCHED = /childLaunch\.modelId/;
 const WD_ACTUAL = /resolveActualWorkerModel\s*\(/;
 const WD_CARD = /parseWorkerModelFromCard/;
 
@@ -38,9 +36,9 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
     return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/watchdog 正文（没查成）' };
   }
   const problems = [];
+  // dispatch 预检不再钉同厂闸（delete-all-ceremony）：cmdSrc 只要求 resolveDispatchConstraints 还在。
   const constraints = chunk(cmdSrc, /export function resolveDispatchConstraints\b[\s\S]*?\nexport function /);
   if (!constraints) problems.push('找不到 resolveDispatchConstraints');
-  else if (!GATE_CALL.test(constraints)) problems.push('resolveDispatchConstraints 没调 assertCrossVendor');
 
   const create = chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
   if (!create) problems.push('找不到 cmdReviewerCreate');
@@ -69,17 +67,6 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
   if (!capFn) problems.push('找不到 planCapacitySwitch');
   else if (!CAP_WORKER.test(capFn) && !/workerId/.test(capFn)) {
     problems.push('planCapacitySwitch 换人没带 workerId');
-  }
-
-  const dispatch = chunk(daoSrc, /function cmdDispatch\b[\s\S]*?\nfunction cmd/);
-  if (!dispatch) problems.push('找不到 cmdDispatch');
-  else {
-    if (!FILTER_SLATE.test(dispatch)) problems.push('cmdDispatch 没在 slate 里剔除同厂候选');
-    if (!LAUNCHED_MODEL.test(dispatch)) problems.push('cmdDispatch 没按 launched.modelId 过同厂闸');
-    if (!CHILD_LAUNCHED.test(dispatch)) problems.push('cmdDispatch split 子工人没按实际模型过同厂闸');
-    if (!GATE_CALL.test(dispatch) && !REFUSE_CALL.test(dispatch)) {
-      problems.push('cmdDispatch 实际模型没走同厂闸');
-    }
   }
 
   const exec = chunk(watchdogSrc, /function executeCapacitySwitch\b[\s\S]*?\nfunction /);
@@ -159,37 +146,4 @@ export function inspectVendorGateFixtures(root) {
   }
   if (problems.length) return { ok: false, unscanned: false, error: problems[0], kinds, problems };
   return { ok: true, unscanned: false, kinds };
-}
-
-export function probeSameVendorDispatch(root) {
-  if (!root) return { ok: false, unscanned: true, error: '没给仓库根' };
-  const cli = join(root, 'scripts', 'dao.mjs');
-  if (!existsSync(cli)) return { ok: false, unscanned: true, error: 'scripts/dao.mjs 不在' };
-  const common = ['--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '同厂样本', '--dry-run'];
-  const same = spawnSync(process.execPath, [cli, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'grok-4.6', ...common], {
-    encoding: 'utf8', cwd: root, timeout: 30000, windowsHide: true,
-  });
-  let sameJson = {};
-  try { sameJson = JSON.parse(String(same.stdout || '').trim().split(/\r?\n/).pop()); } catch { sameJson = {}; }
-  const sameErr = String(sameJson.error || same.stderr || '');
-  if (same.status === 0 || !/同厂/.test(sameErr)) {
-    return {
-      ok: false,
-      unscanned: false,
-      error: `故意同厂样本没拦住 status=${same.status} ${sameErr.slice(0, 180)}`,
-    };
-  }
-  const pass = spawnSync(process.execPath, [cli, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', ...common], {
-    encoding: 'utf8', cwd: root, timeout: 30000, windowsHide: true,
-  });
-  if (pass.status !== 0) {
-    let passJson = {};
-    try { passJson = JSON.parse(String(pass.stdout || '').trim().split(/\r?\n/).pop()); } catch { passJson = {}; }
-    return {
-      ok: false,
-      unscanned: false,
-      error: `异厂样本被误拦 status=${pass.status} ${String(passJson.error || pass.stderr || '').slice(0, 180)}`,
-    };
-  }
-  return { ok: true, unscanned: false };
 }

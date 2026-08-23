@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/guard-keepalive.mjs —— 帥位触发保活 watchdog + flow（#683 计划任务版 → #693 改 hook 触发 → #699 补心跳停更）
+// scripts/guard-keepalive.mjs —— 帥位触发保活 watchdog + flow + 信箱台 relay（#683 计划任务版 → #693 改 hook 触发 → #699 补心跳停更 → 2026-08-23 信箱台 detached 纳入）
 //
 // 改这段前必须知道：本进程自己不是守卫、不跑检测矩阵，也没有 OS 级定时器了——
 // #693 拍板删掉自研保活层（schtasks / 启动文件夹 VBS / resident 循环），唯一入口是
@@ -8,6 +8,8 @@
 //     不再要求 master——主树在本仓就触发，master 只管帅位展示）
 //   · board-hook（UserPromptSubmit）每轮兜底：会话中途守卫死了，下一轮提示时拉起
 // #699：进程在不算完——同时读守卫心跳，停更超阈值（活但卡死）杀掉再拉起。
+// 信箱台（inbox）：detached relay 进程，心跳 = 租约 _flow/inbox.lease（relay 每轮续写）；
+//   保活归这里之后，dao 派工路不再跑 inbox-station ensure（2026-08-23 拍板）。
 // 用法：
 //   node scripts/guard-keepalive.mjs --once           检查并按需拉起/重启（唯一入口；也是无旗标默认）
 //   node scripts/guard-keepalive.mjs --dry-run        只打印计划，不 spawn 不杀
@@ -30,6 +32,7 @@ import {
   appendKeepaliveLog,
   watchdogHeartbeatPath,
   flowHeartbeatPath,
+  inboxLeasePath,
   readGuardHeartbeat,
 } from './lib/guard-keepalive.mjs';
 
@@ -87,6 +90,8 @@ function cmdOnce({ dryRun }) {
   const heartbeats = {
     watchdog: readGuardHeartbeat(watchdogHeartbeatPath({ env: process.env, homedir: p.home })),
     flow: readGuardHeartbeat(flowHeartbeatPath({ mainPath: p.mainPath, flowSpec: scripts.flow })),
+    // 信箱台（2026-08-23 起纳入保活）：心跳 = relay 租约（主树 _flow/inbox.lease）。
+    inbox: readGuardHeartbeat(inboxLeasePath({ mainPath: p.mainPath })),
   };
   const plan = planKeepalive({ listed, scripts, heartbeats, now: Date.now() });
   if (dryRun) {
@@ -113,6 +118,7 @@ function cmdOnce({ dryRun }) {
       applied.observed = {
         watchdog: live.watchdog.map((x) => x.pid),
         flow: live.flow.map((x) => x.pid),
+        inbox: live.inbox.map((x) => x.pid),
       };
     } else {
       applied.observed = { ok: false, error: again.error };
@@ -140,7 +146,8 @@ function cmdOnce({ dryRun }) {
   const liveOk = !applied.observed
     || applied.observed.ok === false
     || ((!startedNames.has('watchdog') || (applied.observed.watchdog || []).length > 0)
-      && (!startedNames.has('flow') || (applied.observed.flow || []).length > 0));
+      && (!startedNames.has('flow') || (applied.observed.flow || []).length > 0)
+      && (!startedNames.has('inbox') || (applied.observed.inbox || []).length > 0));
   return applied.ok && liveOk ? 0 : 1;
 }
 

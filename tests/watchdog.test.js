@@ -61,7 +61,7 @@ function runMultiRounds(dir, n, extraArgs = []) {
   return r;
 }
 
-const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|leftover-inject|missing-reviewer|报帅|动作):/m;
+const EVENT_RE = /^\[.+\] (exited|waiting|fingerprint|stall|read-failed|idle|orphan|naming|flow-stalled|flow-absent|stagnation|selector|blind|model-change|retry-loop|stale-completion|stale-code|leftover-inject|missing-reviewer|swallowed-inject|报帅|动作):/m;
 const SELF_WT = "1770a430-983a-4e86-9277-9f1e5c376b83::C:/Users/Administrator/orca/workspaces/windsurf-dao/看门狗正式版";
 const NOW = 1786800000000;
 
@@ -1012,6 +1012,80 @@ describe('watchdog', () => {
     await t.test('审官子卡已下班 → 不报 missing-reviewer', () => {
       assert.ok(!/missing-reviewer:/.test(childDone.out), '审官 done 仍是子卡，不是没开成  →  ' + childDone.out.trim());
     });
+    await t.test('默认快照打印「将自动起审官」，不写「已起审官」', () => {
+      assert.ok(
+        /动作: 将自动起审官：gpt-5\.6-sol（PR #676/.test(r.out) && !/已起审官/.test(r.out),
+        '默认快照只打印将起审官  →  ' + r.out.trim(),
+      );
+    });
+  });
+
+  it('#675d delete-ack-layer：missing-reviewer 按 dispose 自动起审官；Devin agents=[] 要记账+in-review', async (t) => {
+    const FAKE = path.join(REPO, 'tests', 'fixtures', 'fake-reviewer-create.mjs');
+    const MISSING = path.join(FIXTURES, 'missing-reviewer');
+
+    function runWithHook(dir, extraArgs = []) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-reviewer-create-'));
+      const log = path.join(tmp, 'create.log');
+      const mark = path.join(tmp, 'created.mark');
+      const r = spawnSync(process.execPath, [WATCHDOG, '--snapshot-dir', dir, '--once', ...extraArgs], {
+        encoding: 'utf8',
+        cwd: REPO,
+        env: {
+          ...process.env,
+          WATCHDOG_REVIEWER_CREATE: FAKE,
+          WATCHDOG_REVIEWER_CREATE_LOG: log,
+          WATCHDOG_REVIEWER_CREATE_MARK: mark,
+        },
+      });
+      return {
+        status: r.status,
+        out: (r.stdout || '') + (r.stderr || ''),
+        log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '',
+        mark: fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8') : '',
+        tmp,
+      };
+    }
+
+    const hit = runWithHook(MISSING);
+    await t.test('测试钩：退出码 1 且打印「已起审官」', () => {
+      assert.ok(
+        hit.status === 1 && /动作: 已起审官：gpt-5\.6-sol（PR #676）/.test(hit.out),
+        '测试钩已起审官  →  ' + `status=${hit.status} ${hit.out.trim()}`,
+      );
+    });
+    await t.test('测试钩：带 --pr 676 --reviewer gpt-5.6-sol --parent-worktree', () => {
+      assert.ok(
+        /--pr 676 --reviewer gpt-5\.6-sol --parent-worktree wt::worker-676/.test(hit.log),
+        '钩参数对  →  ' + hit.log,
+      );
+    });
+
+    const off = runWithHook(MISSING, ['--dispose-actions', 'off']);
+    await t.test('dispose off：只打印将起，不调钩', () => {
+      assert.ok(
+        /动作: 将自动起审官：gpt-5\.6-sol（PR #676/.test(off.out) && !off.log,
+        'dispose off 不调钩  →  ' + `log=${off.log} ${off.out.trim()}`,
+      );
+    });
+
+    const devin = runWatchdog(path.join(FIXTURES, 'missing-reviewer-devin'));
+    await t.test('Devin agents=[] + in-review + 记账 → 报 missing-reviewer', () => {
+      assert.ok(
+        /missing-reviewer:.*交卷没开成审官下一跳/.test(devin.out) && /PR #676/.test(devin.out),
+        'Devin 空 agent 下班也报  →  ' + devin.out.trim(),
+      );
+    });
+
+    const mid = runWatchdog(path.join(FIXTURES, 'missing-reviewer-devin-in-progress'));
+    await t.test('Devin agents=[] + in-progress + 已有 PR → 不报（开工第二步就会开 PR）', () => {
+      assert.ok(!/missing-reviewer:/.test(mid.out), '干活中刚开 PR 不起审官  →  ' + mid.out.trim());
+    });
+
+    const untracked = runWatchdog(path.join(FIXTURES, 'missing-reviewer-devin-untracked'));
+    await t.test('Devin agents=[] + in-review 但无记账 → 不报（查不到不猜）', () => {
+      assert.ok(!/missing-reviewer:/.test(untracked.out), '无记账不猜下班  →  ' + untracked.out.trim());
+    });
   });
 
   it('#675c 钉住现状：忙盘面不查 missing-reviewer 是承重墙，不是盲区（2026-08-22 实证）', async (t) => {
@@ -1162,6 +1236,32 @@ describe('watchdog', () => {
     const rm = runWatchdog(path.join(FIXTURES, "live"), ["--once"]);
     await t.test('缺记账证据：显式 DISPATCH_BOOKKEEPING_MISSING（不是静默放过）', () => {
       assert.ok(/DISPATCH_BOOKKEEPING_MISSING/.test(rm.out), '缺记账证据：显式 DISPATCH_BOOKKEEPING_MISSING（不是静默放过）  →  ' + rm.out.trim());
+    });
+  });
+
+  it('㉒b 吞注入（2026-08-23 fire-and-forget 配套）：ps 不报 agent 的工人，屏面 3 轮不动 → 报', async (t) => {
+    // Devin 实证 agents=[]：工位级 stall 枚举不到。树级同口径判据（非 spinner 真实内容不变）
+    // 在「有记账 + 活终端 + 无 linked PR + 非子卡」的卡上补位——这正是派工后到开 PR 前的窗口。
+    const r = runMultiRounds(path.join(FIXTURES, "swallowed-inject"), 3);
+    await t.test('三轮同屏：退出码 1（吞注入要显形）', () => {
+      assert.ok(r.status === 1, '退出码 1  →  ' + `status=${r.status}`);
+    });
+    await t.test('报 swallowed-inject 且带判据（fire-and-forget 确认位）', () => {
+      assert.ok(/\[ISSUE-#752 工人·devin-deepseek-v4-flash-max 补 README\] swallowed-inject: 派工送字后屏面非 spinner 真实内容连续 3 轮不变/.test(r.out),
+        'swallowed-inject 事件  →  ' + r.out.trim());
+    });
+    await t.test('不误报 blind（有记账）也不误报 orphan（有活终端）', () => {
+      assert.ok(!/blind:/.test(r.out) && !/orphan:/.test(r.out), '不误报 blind/orphan  →  ' + r.out.trim());
+    });
+
+    const rp = runMultiRounds(path.join(FIXTURES, "swallowed-inject-pr"), 3);
+    await t.test('负控·有 linked PR：不报（已归 flow 锚住）', () => {
+      assert.ok(!/swallowed-inject:/.test(rp.out), '有 PR 不报  →  ' + rp.out.trim());
+    });
+
+    const rmv = runWatchdog(path.join(FIXTURES, "swallowed-inject-moving"));
+    await t.test('负控·屏面在动：不报（活证否决，与 stall 同源）', () => {
+      assert.ok(!/swallowed-inject:/.test(rmv.out), '屏面在动不报  →  ' + rmv.out.trim());
     });
   });
 

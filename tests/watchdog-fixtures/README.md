@@ -98,6 +98,12 @@ returnedLineCount 与 tail 行数自洽），其余字段零改写。时间、�
 | `pasted-idle/` | **#575/#633**：in-progress 卡、agent=done、屏面 Pasted Content（无返工/复核字） | 不报 `all-idle:` / `pasted-content:` |
 | `stale-completion/` | **#586**：agent=done 的工人卡 + completion-evidence（head 比最后完工 comment 新） | 退出码 1，`stale-completion:` |
 | `stale-completion-fresh/` | 同结构但完工 comment 不早于 head | 不报 `stale-completion` |
+| `missing-reviewer/` | **#675**：顶层工人卡 linked PR #676、agent=done、无审官子卡 | 退出码 1，`missing-reviewer:`；默认快照再打 `动作: 将自动起审官`（delete-ack-layer，不真派） |
+| `missing-reviewer-has-child/` | 同结构但有活审官子卡 | 不报 missing-reviewer |
+| `missing-reviewer-child-done/` | 审官子卡已 done | 不报 missing-reviewer（子卡还在 ≠ 没开成） |
+| `missing-reviewer-devin/` | Devin 形态：agents=[]、卡 `in-review`、worker-list 有记账 | 退出码 1，`missing-reviewer:`（空 agent 也算下班） |
+| `missing-reviewer-devin-in-progress/` | 同 Devin 但卡仍 `in-progress`（开工第二步已开 PR） | 不报 missing-reviewer |
+| `missing-reviewer-devin-untracked/` | 同 Devin 但无 worker-list-evidence | 不报 missing-reviewer（查不到记账不猜） |
 
 ## 原始录制底稿（根目录）
 

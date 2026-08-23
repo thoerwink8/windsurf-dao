@@ -84,7 +84,7 @@ import {
   inspectDesignExamHarvestLive, inspectDesignExamHarvestFixtures,
 } from './lib/design-exam-harvest-check.mjs';
 import {
-  inspectVendorGateWiring, inspectVendorGateFixtures, probeSameVendorDispatch,
+  inspectVendorGateWiring, inspectVendorGateFixtures,
   inspectReviewerNoForceCommand,
 } from './lib/reviewer-vendor-gate-check.mjs';
 import {
@@ -1554,17 +1554,8 @@ function checkVendorGateLive() {
   if (!r.ok) {
     fail(
       `同厂硬闸接线丢了 ${r.problems.length} 处`,
-      'dispatch/create/attach/worker-done/换人都要走 assertCrossVendor 或 refuseIfSameVendor，换人跳过工人那一厂',
+      'create/attach/worker-done/换人都要走 assertCrossVendor 或 refuseIfSameVendor，换人跳过工人那一厂（dispatch 预检闸 2026-08-23 已删：审官不存在时查空气）',
       r.problems.join('；'),
-    );
-    return;
-  }
-  const probe = probeSameVendorDispatch(ROOT);
-  if (!probe.ok) {
-    fail(
-      probe.unscanned ? '故意同厂样本没查成' : '故意同厂样本没拦住',
-      'dispatch --model grok-4.6 --reviewer grok-4.6 必须非零且话面含同厂；异厂必须过',
-      probe.error || '',
     );
     return;
   }
@@ -1581,7 +1572,7 @@ function checkVendorGateLive() {
     );
     return;
   }
-  green('起审官同厂硬闸还在（接线齐，故意 grok+grok 样本被拦；审官不写死 forceCommand）');
+  green('起审官同厂硬闸还在（create/attach/worker-done/换人接线齐；dispatch 预检闸已删；审官不写死 forceCommand）');
 }
 
 function checkQuickFixSamples() {

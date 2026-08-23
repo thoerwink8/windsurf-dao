@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "result": {
+    "terminals": [
+      {
+        "handle": "term_inject_1",
+        "worktreeId": "repo_x::C:/wt/inject-752",
+        "worktreePath": "C:/wt/inject-752",
+        "title": "ISSUE-#752 工人",
+        "connected": true,
+        "orphaned": false
+      }
+    ]
+  }
+}

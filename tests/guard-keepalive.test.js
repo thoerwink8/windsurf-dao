@@ -1,4 +1,5 @@
-// #683/#693 守卫保活：认 watchdog.mjs / flow.mjs；列表没查成不许当 0；#693 起只留 --once 入口（帥位触发）。
+// #683/#693 守卫保活：认 watchdog.mjs / flow.mjs / inbox-station.mjs relay（2026-08-23 信箱台 detached 纳入）；
+// 列表没查成不许当 0；#693 起只留 --once 入口（帥位触发）。
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -34,6 +35,16 @@ describe('guard-keepalive', () => {
     await t.test('tests/watchdog.test.js 不是', () => {
       assert.ok(K.classifyCommandLine('node --test tests/watchdog.test.js') == null, 'test file');
     });
+    await t.test('inbox-station.mjs relay 命中 inbox（2026-08-23 信箱台纳入保活）', () => {
+      assert.ok(K.classifyCommandLine('"C:\\\\nvm4w\\\\nodejs\\\\node.exe" "C:\\\\Users\\\\Administrator\\\\.dao\\\\guard-mirror\\\\scripts\\\\inbox-station.mjs" relay --log "D:\\\\x\\\\_flow\\\\inbox.log"') === 'inbox',
+        'inbox-station relay');
+    });
+    await t.test('inbox-station.mjs ensure 不算（短命调用，不是守卫）', () => {
+      assert.ok(K.classifyCommandLine('node scripts/inbox-station.mjs ensure') == null, 'ensure 不算');
+    });
+    await t.test('inbox-station.mjs 裸名（无 relay）不算', () => {
+      assert.ok(K.classifyCommandLine('node scripts/inbox-station.mjs') == null, '裸名不算');
+    });
   });
 
   it('进程列表：空输出是扫完 0；坏 JSON 是没查成', async (t) => {
@@ -57,14 +68,16 @@ describe('guard-keepalive', () => {
     const scripts = {
       watchdog: { script: 'W', cwd: 'C', exists: true, extraArgs: ['--heartbeat-file', 'h'] },
       flow: { script: 'F', cwd: 'C', exists: true, extraArgs: ['--state-file', 's'] },
+      inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay', '--log', 'l'] },
     };
     const fail = K.planKeepalive({ listed: { ok: false, error: 'timeout' }, scripts });
     await t.test('列表失败 ok=false 且无 start', () => {
       assert.ok(fail.ok === false && /没查成/.test(fail.error) && fail.actions.length === 0, '失败  →  ' + JSON.stringify(fail));
     });
     const none = K.planKeepalive({ listed: { ok: true, processes: [] }, scripts });
-    await t.test('0 个进程 → 两个 start', () => {
-      assert.ok(none.ok && none.actions.every((a) => a.action === 'start') && none.actions.length === 2,
+    await t.test('0 个进程 → 三个 start（watchdog/flow/inbox）', () => {
+      assert.ok(none.ok && none.actions.every((a) => a.action === 'start') && none.actions.length === 3
+        && none.actions.some((a) => a.name === 'inbox' && a.script === 'I'),
         '全 start  →  ' + JSON.stringify(none.actions));
     });
     const live = K.planKeepalive({
@@ -73,6 +86,7 @@ describe('guard-keepalive', () => {
         processes: [
           { pid: 9, commandLine: 'node scripts/watchdog.mjs' },
           { pid: 8, commandLine: 'node scripts/flow.mjs' },
+          { pid: 7, commandLine: 'node scripts/inbox-station.mjs relay --log l' },
         ],
       },
       scripts,
@@ -83,7 +97,7 @@ describe('guard-keepalive', () => {
     });
     const missing = K.planKeepalive({
       listed: { ok: true, processes: [] },
-      scripts: { watchdog: { exists: false }, flow: { exists: false } },
+      scripts: { watchdog: { exists: false }, flow: { exists: false }, inbox: { exists: false } },
     });
     await t.test('脚本不在 → missing-script，不是 already', () => {
       assert.ok(missing.ok && missing.actions.every((a) => a.action === 'missing-script'),
@@ -191,6 +205,13 @@ describe('guard-keepalive', () => {
       assert.ok(scripts.watchdog.extraArgs.includes('--heartbeat-file') && /_flow[\\/]heartbeat\.json/.test(scripts.watchdog.extraArgs.join(' ')),
         'hb  →  ' + scripts.watchdog.extraArgs.join(' '));
     });
+    await t.test('inbox 用镜像脚本，relay --log 指主树 _flow/inbox.log', () => {
+      const s = scripts.inbox.script.replace(/\\/g, '/');
+      assert.ok(scripts.inbox.exists && /M\/scripts\/inbox-station\.mjs$/.test(s)
+        && scripts.inbox.extraArgs[0] === 'relay'
+        && /_flow[\\/]inbox\.log/.test(scripts.inbox.extraArgs.join(' ')),
+        'inbox  →  ' + s + ' ' + scripts.inbox.extraArgs.join(' '));
+    });
   });
 
   it('worktree porcelain 第一棵是主树', async () => {
@@ -263,6 +284,61 @@ describe('guard-keepalive', () => {
     await t.test('两边都不知道 → null（不乱杀）', () => {
       assert.ok(K.flowHeartbeatPath({ mainPath: null, flowSpec: null }) === null, 'null');
     });
+    await t.test('inbox 心跳 = 主树 _flow/inbox.lease（relay 租约）', () => {
+      const p = K.inboxLeasePath({ mainPath: '/m' }).replace(/\\/g, '/');
+      assert.ok(p === '/m/_flow/inbox.lease', 'path  →  ' + p);
+    });
+    await t.test('inbox 无 mainPath → null（没查成，不乱杀）', () => {
+      assert.ok(K.inboxLeasePath({ mainPath: null }) === null, 'null');
+    });
+  });
+
+  // 接缝测（不许两边各自造夹具）：租约由 inbox-station 的 formatLease 真写，
+  // 心跳由 readGuardHeartbeat 真读。两边 ts 写法不同（租约 epoch 毫秒 / 守卫 ISO 串）时，
+  // 活着的台会被判「心跳损坏」，每轮杀掉重拉——单看任一边的夹具都发现不了。
+  it('接缝：inbox-station 真写的租约，guard-keepalive 读得出新鲜心跳', async (t) => {
+    const K = await LIB_LOAD;
+    const STATION = path.join(__dirname, '..', 'scripts', 'inbox-station.mjs');
+    const S = await import('file://' + STATION.replace(/\\/g, '/'));
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), 'ka-lease-'));
+    fs.mkdirSync(path.join(main, '_flow'), { recursive: true });
+    const leaseFile = K.inboxLeasePath({ mainPath: main });
+    const now = Date.now();
+    fs.writeFileSync(leaseFile, S.formatLease({ pid: 4321, runId: null, ts: now }), 'utf8');
+
+    const hb = K.readGuardHeartbeat(leaseFile);
+    await t.test('真租约读成 ok，不是 corrupt', () => {
+      assert.ok(hb.state === 'ok' && Math.abs(hb.ts - now) < 1000, '真租约  →  ' + JSON.stringify(hb));
+    });
+    await t.test('inbox-station 自己也认这份租约（两边同一份文件）', () => {
+      const lease = S.parseLease(fs.readFileSync(leaseFile, 'utf8'));
+      assert.ok(lease && lease.pid === 4321 && S.isLeaseFresh(lease, now), 'parseLease  →  ' + JSON.stringify(lease));
+    });
+    await t.test('活 relay + 真租约 → already，不是 heartbeat-corrupt 重拉', () => {
+      const p = K.planKeepalive({
+        listed: { ok: true, processes: [{ pid: 4321, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 }] },
+        scripts: { watchdog: { exists: false }, flow: { exists: false }, inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay'] } },
+        heartbeats: { inbox: K.readGuardHeartbeat(leaseFile) },
+        now,
+      });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      assert.ok(i.action === 'already' && i.heartbeat.state === 'fresh', 'already  →  ' + JSON.stringify(i));
+    });
+    await t.test('租约停更超 90s 仍照常重拉（修的是格式，不是阈值）', () => {
+      fs.writeFileSync(leaseFile, S.formatLease({ pid: 4321, runId: null, ts: now - 200_000 }), 'utf8');
+      const p = K.planKeepalive({
+        listed: { ok: true, processes: [{ pid: 4321, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 }] },
+        scripts: { watchdog: { exists: false }, flow: { exists: false }, inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay'] } },
+        heartbeats: { inbox: K.readGuardHeartbeat(leaseFile) },
+        now,
+      });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      assert.ok(i.action === 'restart' && i.reason === 'heartbeat-stale', 'restart  →  ' + JSON.stringify(i));
+    });
+    await t.test('ts 不可解析仍是 corrupt（没放宽成什么都认）', () => {
+      fs.writeFileSync(leaseFile, JSON.stringify({ pid: 1, ts: 'not-a-time' }), 'utf8');
+      assert.ok(K.readGuardHeartbeat(leaseFile).state === 'corrupt', 'corrupt');
+    });
   });
 
   it('#699 计划：心跳新鲜不动；停更/缺失/损坏杀掉重启；没查成不乱杀', async (t) => {
@@ -271,17 +347,26 @@ describe('guard-keepalive', () => {
     const scripts = {
       watchdog: { script: 'W', cwd: 'C', exists: true, extraArgs: [] },
       flow: { script: 'F', cwd: 'C', exists: true, extraArgs: [] },
+      inbox: { script: 'I', cwd: 'C', exists: true, extraArgs: ['relay'] },
     };
     const procs = [
       { pid: 9, commandLine: 'node scripts/watchdog.mjs', startedMs: now - 3600_000 },
       { pid: 8, commandLine: 'node scripts/flow.mjs', startedMs: now - 3600_000 },
+      { pid: 7, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 },
     ];
     const plan = (heartbeats) => K.planKeepalive({ listed: { ok: true, processes: procs }, scripts, heartbeats, now });
 
     await t.test('心跳新鲜 → already 不动', () => {
-      const p = plan({ watchdog: { state: 'ok', ts: now - 30_000 }, flow: { state: 'ok', ts: now - 100_000 } });
+      const p = plan({ watchdog: { state: 'ok', ts: now - 30_000 }, flow: { state: 'ok', ts: now - 100_000 }, inbox: { state: 'ok', ts: now - 10_000 } });
       assert.ok(p.ok && p.actions.every((a) => a.action === 'already')
         && p.actions.every((a) => a.heartbeat && a.heartbeat.state === 'fresh'), 'fresh  →  ' + JSON.stringify(p.actions));
+    });
+    await t.test('inbox 租约停更超 90s → restart 带 killPids（信箱台卡死同口径）', () => {
+      const p = plan({ watchdog: { state: 'ok', ts: now - 10_000 }, flow: { state: 'ok', ts: now - 100_000 }, inbox: { state: 'ok', ts: now - 200_000 } });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      const w = p.actions.find((a) => a.name === 'watchdog');
+      assert.ok(i.action === 'restart' && i.reason === 'heartbeat-stale' && i.killPids.join() === '7' && i.script === 'I'
+        && w.action === 'already', 'inbox stale  →  ' + JSON.stringify(p.actions));
     });
     await t.test('watchdog 停更超 5 分钟 → restart 带 killPids；flow 新鲜不受影响', () => {
       const p = plan({ watchdog: { state: 'ok', ts: now - 6 * 60_000 }, flow: { state: 'ok', ts: now - 100_000 } });
@@ -309,10 +394,11 @@ describe('guard-keepalive', () => {
       const young = [
         { pid: 9, commandLine: 'node scripts/watchdog.mjs', startedMs: now - 60_000 },
         { pid: 8, commandLine: 'node scripts/flow.mjs', startedMs: now - 60_000 },
+        { pid: 7, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 60_000 },
       ];
       const p = K.planKeepalive({
         listed: { ok: true, processes: young }, scripts, now,
-        heartbeats: { watchdog: { state: 'ok', ts: now - 3600_000 }, flow: { state: 'missing' } },
+        heartbeats: { watchdog: { state: 'ok', ts: now - 3600_000 }, flow: { state: 'missing' }, inbox: { state: 'missing' } },
       });
       assert.ok(p.actions.every((a) => a.action === 'already' && a.heartbeat && a.heartbeat.grace === true),
         'grace  →  ' + JSON.stringify(p.actions));
@@ -332,6 +418,23 @@ describe('guard-keepalive', () => {
         heartbeats: { watchdog: { state: 'ok', ts: now - 3600_000 }, flow: { state: 'missing' } },
       });
       assert.ok(p.actions.every((a) => a.action === 'start'), 'start  →  ' + JSON.stringify(p.actions));
+    });
+    await t.test('多开收敛：同名进程多于 1 个 → 全杀再拉起（2026-08-23 一台 8 relay 实证）', () => {
+      const dup = [
+        { pid: 9, commandLine: 'node scripts/watchdog.mjs', startedMs: now - 3600_000 },
+        { pid: 8, commandLine: 'node scripts/flow.mjs', startedMs: now - 3600_000 },
+        { pid: 7, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3600_000 },
+        { pid: 71, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 3000_000 },
+        { pid: 72, commandLine: 'node scripts/inbox-station.mjs relay', startedMs: now - 2000_000 },
+      ];
+      const p = K.planKeepalive({
+        listed: { ok: true, processes: dup }, scripts, now,
+        heartbeats: { watchdog: { state: 'ok', ts: now - 10_000 }, flow: { state: 'ok', ts: now - 100_000 }, inbox: { state: 'ok', ts: now - 5000 } },
+      });
+      const i = p.actions.find((a) => a.name === 'inbox');
+      const w = p.actions.find((a) => a.name === 'watchdog');
+      assert.ok(i.action === 'restart' && /multi-instance/.test(i.reason) && i.killPids.join(',') === '7,71,72'
+        && w.action === 'already', '多开收敛  →  ' + JSON.stringify(p.actions));
     });
   });
 

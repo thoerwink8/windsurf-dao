@@ -7,9 +7,19 @@
 //   5. idle / done 不算占用；只有 working / waiting 才拒删。
 //   6. 失败必须写 GitHub 评论（marshal）。orchestration escalation 会被信箱台自己 ack。
 //   7. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
+//   8. 2026-08-23（PR #758 教训）：错误文本一律过 errText——Error/结构化对象直接拼
+//      字符串会变 [object Object]，真因全丢；失败评论按「PR+失败类别」去重（key 不带
+//      易变错误详情），worktree-rm 连败限量后转只升级不重试。
 
 import { issueNumberFromWorktree, prNumberFromWorktree, worktreeIdOf } from './card-identity.mjs';
 import { occupyingAgents, resolveWorktreeSelector } from './dao-cmd.mjs';
+import { orcaErrorText } from './orca-error.mjs';
+
+/** 任何错误形态 → 可读文本。对象/Error 直接拼字符串 = [object Object]（PR #758 实证）。 */
+export function errText(e) {
+  const t = orcaErrorText(e);
+  return t || '未知错误';
+}
 
 const ARCHIVE_SUBJECT = /^可归档[:：]\s*(?:PR[#\s-]*)?#?(\d+)/i;
 const SKIP_TYPES = new Set([
@@ -187,6 +197,7 @@ export function applyArchivePlan(plan, {
   escalate,
   commentGithub,
   commentStore,
+  rmAttemptStore,
   now = new Date(),
 } = {}) {
   const ts = toIso(now);
@@ -217,13 +228,27 @@ export function applyArchivePlan(plan, {
         result: 'rm-failed',
       });
     }
+    // PR #758：rm 连败限量。超过 RM_ATTEMPT_MAX 不再自动重试（file watcher 不退这类
+    // 结构性失败重试无用），转只升级一次（评论按类别去重，不刷屏）。
+    const attemptKey = commentKey(plan.pr ?? plan.worktree, 'rm');
+    if (!shouldAttemptRm(attemptKey, rmAttemptStore)) {
+      return finishEscalate(plan, {
+        escalate,
+        commentGithub,
+        commentStore,
+        ts,
+        reason: `worktree-rm 连败已达 ${RM_ATTEMPT_MAX} 次，不再自动重试（结构性失败要人看）`,
+        result: 'rm-gave-up',
+      });
+    }
     let rm;
     try {
       rm = removeWorktree(plan.worktree);
     } catch (e) {
-      rm = { ok: false, error: String(e?.message || e) };
+      rm = { ok: false, error: errText(e) };
     }
     if (rm && rm.ok === true) {
+      clearRmAttempts(attemptKey, rmAttemptStore);
       return {
         ...plan,
         ts,
@@ -234,12 +259,13 @@ export function applyArchivePlan(plan, {
         reason: plan.reason,
       };
     }
+    noteRmAttempt(attemptKey, rmAttemptStore);
     return finishEscalate(plan, {
       escalate,
       commentGithub,
       commentStore,
       ts,
-      reason: `worktree-rm 失败：${rm?.error || '未知错误'}`,
+      reason: `worktree-rm 失败：${errText(rm?.error)}`,
       result: 'rm-failed',
     });
   }
@@ -260,6 +286,7 @@ export function processArchiveNotices(messages, {
   escalate,
   commentGithub,
   commentStore,
+  rmAttemptStore,
   now = new Date(),
 } = {}) {
   const results = [];
@@ -308,7 +335,7 @@ export function processArchiveNotices(messages, {
       worktreesError,
     });
     results.push(applyArchivePlan(plan, {
-      removeWorktree, escalate, commentGithub, commentStore, now,
+      removeWorktree, escalate, commentGithub, commentStore, rmAttemptStore, now,
     }));
   }
   return results;
@@ -452,12 +479,13 @@ export function processMergedScan({
   escalate,
   commentGithub,
   commentStore,
+  rmAttemptStore,
   now = new Date(),
 } = {}) {
   const planned = planMergedScan({ worktrees, queryPrState });
   if (!planned.ok) return { ...planned, results: [] };
   const results = planned.plans.map((plan) => applyArchivePlan(plan, {
-    removeWorktree, escalate, commentGithub, commentStore, now,
+    removeWorktree, escalate, commentGithub, commentStore, rmAttemptStore, now,
   }));
   return { ...planned, results };
 }
@@ -523,6 +551,25 @@ function escalatePlan(notice, reason) {
   };
 }
 
+/** worktree-rm 连败上限（PR #758：连挂 6 次每次刷评论）。超过就不再自动 rm，只升级。 */
+export const RM_ATTEMPT_MAX = 3;
+
+/** rm 限量判据：store 是 Map（key→次数）；没给 store = 老调用方，不限量。 */
+export function shouldAttemptRm(key, store, max = RM_ATTEMPT_MAX) {
+  if (!store || typeof store.get !== 'function') return true;
+  return (Number(store.get(key)) || 0) < max;
+}
+
+export function noteRmAttempt(key, store) {
+  if (!store || typeof store.set !== 'function' || typeof store.get !== 'function') return;
+  store.set(key, (Number(store.get(key)) || 0) + 1);
+}
+
+export function clearRmAttempts(key, store) {
+  if (!store || typeof store.delete !== 'function') return;
+  store.delete(key);
+}
+
 function finishEscalate(plan, { escalate, commentGithub, commentStore, ts, reason, result }) {
   const next = {
     ...plan,
@@ -540,28 +587,30 @@ function finishEscalate(plan, { escalate, commentGithub, commentStore, ts, reaso
       const sent = escalate(text);
       if (sent && sent.ok === false) {
         next.result = 'escalate-failed';
-        next.reason = `${reason}；escalation 也没发出：${sent.error || '未知错误'}`;
+        next.reason = `${reason}；escalation 也没发出：${errText(sent.error)}`;
       } else {
         next.escalated = true;
       }
     } catch (e) {
       next.result = 'escalate-failed';
-      next.reason = `${reason}；escalation 抛错：${e?.message || e}`;
+      next.reason = `${reason}；escalation 抛错：${errText(e)}`;
     }
   }
   const comment = archiveFailureComment(next);
-  const key = commentKey(next.pr, next.reason);
+  // PR #758：评论 key 用「PR + 失败类别」（result 是稳定枚举），不带易变错误详情——
+  // 否则每轮错误文本略变就刷一条新评论（6 连刷实证）。
+  const key = commentKey(next.pr, next.result);
   if (typeof commentGithub === 'function' && shouldWriteFailureComment(key, commentStore)) {
     try {
       const sent = commentGithub(comment);
       if (sent && sent.ok === false) {
-        next.reason = `${next.reason}；GitHub 评论没写成：${sent.error || '未知错误'}`;
+        next.reason = `${next.reason}；GitHub 评论没写成：${errText(sent.error)}`;
       } else {
         next.commented = true;
         rememberFailureComment(key, commentStore);
       }
     } catch (e) {
-      next.reason = `${next.reason}；GitHub 评论抛错：${e?.message || e}`;
+      next.reason = `${next.reason}；GitHub 评论抛错：${errText(e)}`;
     }
   }
   return next;
