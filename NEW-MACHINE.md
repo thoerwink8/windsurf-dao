@@ -348,6 +348,28 @@ orca account add --help
 # ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
 ```
 
+### 两条部署前必须先定的（踩过就晚了）
+
+**① checkout 必须落在服务用户的家目录，不是 root 家目录。** orca 拒绝以 root 运行（Electron 直接 `FATAL: Running as root without --no-sandbox is not supported`），所以常驻服务跑在专用用户下；而 `/root` 默认 0700，服务用户读不进去。落点用 `/home/<服务用户>/windsurf-dao`——**目录名必须以 `windsurf-dao` 结尾**，否则 `ledger.test.js` 的主树断言恒红。
+
+```bash
+sudo useradd --system --create-home --shell /bin/bash orca   # 要能跑 agent CLI，别用 nologin
+sudo -u orca git clone https://github.com/thoerwink8/windsurf-dao.git /home/orca/windsurf-dao
+```
+
+**② `serve` 的监听绑 `0.0.0.0`，`--pairing-address` 只是「广告给客户端的地址」，不改绑定。** 公网 IP 的机器上等于把一个能控制这台机器的 WebSocket 挂到公网。配对有设备令牌，但不要拿它当边界。两条路选一条：
+
+```bash
+# A（推荐）：Tailscale，pairing 用 100.x 地址，6768 只对 tailscale0 开
+sudo tailscale up && tailscale ip -4
+sudo ufw allow in on tailscale0 to any port 6768 proto tcp
+sudo ufw deny 6768/tcp
+
+# B：只走 SSH 隧道，6768 一律不对外；客户端本地转发后 pairing 广告 ws://127.0.0.1:6768
+sudo ufw deny 6768/tcp
+ssh -N -L 6768:127.0.0.1:6768 <用户>@<服务器>
+```
+
 ### 验收：一条命令
 
 ```bash
