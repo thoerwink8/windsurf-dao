@@ -370,6 +370,19 @@ sudo ufw deny 6768/tcp
 ssh -N -L 6768:127.0.0.1:6768 <用户>@<服务器>
 ```
 
+### 无头机上的交互式登录（各家 CLI 首登）
+
+`orca account add` 与 Grok / Devin / OpenCode / cursor-agent 首登都要浏览器，无头机上这是最容易卡整晚的一步（#708 的「新 worktree 弹信任目录对话框」是同类）。两种流程分开对付：
+
+- **device-code 流**（CLI 打印一个 URL + 配对码）：在**任何**有浏览器的地方打开那个 URL 认证即可，令牌回落到服务器上的 CLI。
+- **localhost-callback 流**（CLI 在服务器上监听某端口等回调）：浏览器必须能访问到**服务器的** localhost。从带浏览器的机器开隧道再在本地开：
+
+```bash
+ssh -N -L <回调端口>:127.0.0.1:<回调端口> <用户>@<服务器>   # 然后浏览器开 http://localhost:<回调端口>
+```
+
+判据：CLI 提示里出现配对码 = device-code 流；提示 "waiting for browser" 且给的是 `http://localhost:...` = callback 流，要隧道。这一步只能由能操作浏览器、且持有用户登录态的执行体做——无头 agent 只会在这儿空转。
+
 ### 验收：一条命令
 
 ```bash
