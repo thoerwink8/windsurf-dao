@@ -30,6 +30,20 @@ process.env.ORCA_DATA_JSON = path.join(__dirname, 'fixtures', 'orca-agent-cmds',
 const S_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 const ROUTING_LOAD = S_LOAD.then(m => m.loadRouting());
 
+// async-launch：dispatch 热路只受理，拒派/失败落 <id>.out.json。等执行体结果落盘。
+function waitForOutJson(resultPath, { timeoutMs = 60000, stepMs = 250 } = {}) {
+  if (!resultPath) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.existsSync(resultPath)) return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    } catch { /* 写一半的瞬态，下一轮再读 */ }
+    const wait = Math.min(stepMs, Math.max(0, deadline - Date.now()));
+    if (wait > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+  }
+  return null;
+}
+
 describe('dao', () => {
   it('① R2 起 codex 必须带 danger 旗标（#468 实测换路）', async (t) => {
     const S = await S_LOAD;
@@ -625,17 +639,24 @@ describe('dao', () => {
       assert.ok(/消歧记录|label/.test(String(pNo.disambiguation && pNo.disambiguation.error || '')), '消歧门：dry-run 报告仍说清去哪补  →  ' + String(pNo.disambiguation && pNo.disambiguation.error || ''));
     });
 
-    // 真派工（非 dry-run）：门在碰 orca / 建卡之前拦——被拦下时什么都不会创建（#565 硬约束）。
-    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    // 真派工（非 dry-run）：async-launch 后热路只受理，消歧门在后台执行体里拦——
+    // 拒派证据从退出码挪到 <id>.out.json（ok:false）。门仍在碰 orca / 建卡之前（#565 硬约束）。
+    // 队列/账本都指临时目录：不许把真派工单和记账写进本仓 _flow/ 和本机账本。
+    const realQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-queue-'));
+    const realLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-ledger-'));
+    const realEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: realQueue, LEDGER_EVENTS_DIR: realLedger };
+    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
     const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('消歧门：真派工 --issue 559（无 label）→ 非 0 当场拦下', () => {
-      assert.ok(cliReal.status !== 0 && /已消歧/.test(String(pReal.error || '')), '消歧门：真派工 --issue 559（无 label）→ 非 0 当场拦下  →  ' + `status=${cliReal.status} ${JSON.stringify(pReal)}`);
+    const rReal = waitForOutJson(pReal.resultPath) || {};
+    await t.test('消歧门：真派工 --issue 559（无 label）→ 热路受理，执行体结果 ok:false 拒派', () => {
+      assert.ok(cliReal.status === 0 && pReal.queued === true, '热路受理  →  ' + `status=${cliReal.status} ${JSON.stringify(pReal).slice(0, 240)}`);
+      assert.ok(rReal.ok === false && /已消歧/.test(String(rReal.error || '')), '执行体拒派  →  ' + JSON.stringify(rReal).slice(0, 300));
     });
     await t.test('消歧门：真派工被拦时错误说清去哪补', () => {
-      assert.ok(/消歧记录|label/.test(String(pReal.error || '')), '消歧门：真派工被拦时错误说清去哪补  →  ' + String(pReal.error || ''));
+      assert.ok(/消歧记录|label/.test(String(rReal.error || '')), '消歧门：真派工被拦时错误说清去哪补  →  ' + String(rReal.error || ''));
     });
     await t.test('消歧门：真派工被拦发生在建卡前（disambiguation.hasLabel=false，无 workerId）', () => {
-      assert.ok((pReal.disambiguation || {}).hasLabel === false && !pReal.workerId, '消歧门：真派工被拦发生在建卡前（disambiguation.hasLabel=false，无 workerId）  →  ' + JSON.stringify(pReal));
+      assert.ok((rReal.disambiguation || {}).hasLabel === false && !rReal.workerId, '消歧门：真派工被拦发生在建卡前（disambiguation.hasLabel=false，无 workerId）  →  ' + JSON.stringify(rReal).slice(0, 300));
     });
 
     // worker-start 带 --issue 同样受门控：559 无 label → 在碰 orca 之前就被拦（非 0）。
@@ -649,10 +670,12 @@ describe('dao', () => {
     });
 
     // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
-    await t.test('消歧门：gh 失败（CI 无 token）真派工 → 非 0 且报「没查成」', () => {
-      assert.ok(cliFail.status !== 0 && /没查成/.test(String(pFail.error || '')) && (pFail.disambiguation || {}).unscanned === true, '消歧门：gh 失败（CI 无 token）真派工 → 非 0 且报「没查成」  →  ' + `status=${cliFail.status} ${JSON.stringify(pFail)}`);
+    const rFail = waitForOutJson(pFail.resultPath) || {};
+    await t.test('消歧门：gh 失败（CI 无 token）真派工 → 执行体结果报「没查成」拒派', () => {
+      assert.ok(rFail.ok === false && /没查成/.test(String(rFail.error || '')) && (rFail.disambiguation || {}).unscanned === true,
+        '消歧门：gh 失败（CI 无 token）真派工 → 执行体结果报「没查成」拒派  →  ' + JSON.stringify(rFail).slice(0, 300));
     });
 
     const daoSrc565 = fs.readFileSync(CLI, 'utf8');
