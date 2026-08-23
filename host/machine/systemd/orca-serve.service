@@ -1,0 +1,49 @@
+# /etc/systemd/system/orca-serve.service
+#
+# Orca 无头运行时（2026-08-24 拍板：运行时搬 Linux 服务器）。
+# 这个单元就是 #652「OS 是非 AI 终点」要的那个终点——Windows 上 schtasks 被系统拒了，
+# 退到会自己死的启动文件夹循环，才长出后来那五层判活（#683 #693 #699 #742 #743）。
+# systemd 顶掉之后，那五层没有存在理由。
+#
+# 装：
+#   sudo useradd --system --create-home --shell /usr/sbin/nologin orca
+#   sudo install -m 644 host/machine/systemd/orca-serve.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now orca-serve.service
+#   sudo journalctl -u orca-serve.service -o cat \
+#     | jq -Rrc 'fromjson? | select(.type == "orca_server_ready" and .schemaVersion == 1)'
+#
+# 改这个文件前先知道两条（2026-08-24 在 Ubuntu 24.04 实测踩过）：
+#  · 必须非 root。root 跑 Electron 直接 FATAL：
+#    "Running as root without --no-sandbox is not supported"。别加 --no-sandbox 绕，换用户。
+#  · exit 3 = 另一个进程已占住这个 userData profile（单实例锁 ~/.config/orca/SingletonLock）。
+#    重启多少次都不会成功，所以 RestartPreventExitStatus=3 让它停下等人处理；
+#    清法是先 pkill -f 'orca-id[e]'（**注意进程名是 orca-ide 不是 orca**，Linux 上
+#    裸 orca 与屏幕阅读器撞名），再删 SingletonLock/SingletonSocket/SingletonCookie。
+
+[Unit]
+Description=Orca runtime server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=orca
+WorkingDirectory=/home/orca
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+# --pairing-address 换成客户端能连到的地址（LAN / Tailscale / 反代 URL）。
+# 它只是「广告给客户端的地址」，不改监听绑定；* 0.0.0.0 :: 不许广告。
+# 容器/无 FUSE 环境把 ExecStart 换成解包后的 AppRun：
+#   /opt/orca/squashfs-root/AppRun serve --port 6768 --pairing-address <addr>
+ExecStart=/opt/orca/orca-linux.AppImage serve --port 6768 --pairing-address 100.64.1.20
+StandardOutput=journal
+StandardError=journal
+# 优雅停只打主进程，让 orca 自己收掉它拥有的 Xvfb；超时才 cgroup 级 SIGKILL
+KillMode=mixed
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

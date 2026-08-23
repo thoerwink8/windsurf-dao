@@ -306,6 +306,77 @@ Cursor 面验（进程级，等于宿主协议的一次复刻）：
 node scripts/lib/cursor-context-hook.mjs board-hook.mjs
 ```
 
+## 9d. Linux 服务器起 Orca 无头运行时（2026-08-24 拍板）
+
+拍板见 `docs/decisions/2026-08-24-linux-server-runtime-from-zero.md`：运行时搬 Linux 服务器，Windows 本机转人工派单。**下面每条都在 Ubuntu 24.04.4 + glibc 2.39 上真跑过**（orca 1.4.188 / Electron 43.1.0，AppImage 196MB，ready 契约 4～10s 出）。官方文档：`stablyai/orca` 的 `docs/reference/headless-linux-server.md`。
+
+支持面：Ubuntu 20.04 / 22.04 / 24.04 与 Debian stable（glibc ≥ 2.31）。
+
+```bash
+# ① 前置。24.04 是 libfuse2t64，22.04 是 libfuse2
+sudo apt-get update && sudo apt-get install -y curl file jq xvfb zlib1g-dev
+sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+
+# ② 取 AppImage（目录 root 拥有，服务用户只许读+执行，不许替换）
+sudo mkdir -p /opt/orca
+sudo curl -fL https://github.com/stablyai/orca/releases/latest/download/orca-linux.AppImage \
+  -o /opt/orca/orca-linux.AppImage
+sudo chmod +x /opt/orca/orca-linux.AppImage
+
+# ③ 无 FUSE（容器常见）走解包路。解包出来是 0700 root，要放开读+执行位
+cd /opt/orca && sudo ./orca-linux.AppImage --appimage-extract
+sudo chmod -R a+rX /opt/orca/squashfs-root
+
+# ④ 先前台起一次拿 ready 契约（**非 root**）。无 DISPLAY 时 orca 自起 Xvfb
+LIBGL_ALWAYS_SOFTWARE=1 /opt/orca/squashfs-root/AppRun serve --port 6768 --json
+# 期望：一行 {"type":"orca_server_ready","schemaVersion":1,...}
+
+# ⑤ serve 会自己装 CLI，PATH 必须带上（否则 dao.mjs 调 orca 全 ENOENT）
+export PATH="$HOME/.local/bin:$PATH"   # 落进 ~/.bashrc
+command -v orca                        # → ~/.local/bin/orca
+
+# ⑥ 注册本仓，否则 worktree create 报 Missing repo selector（#762 同款坑）
+orca repo add --path /path/to/windsurf-dao --json
+
+# ⑦ 挂 skills（Linux 软链不需要开发者模式，这是搬家红利之一）
+mkdir -p ~/.claude/skills
+for d in host/skills/*/; do n=$(basename "$d"); ln -sfn "$PWD/host/skills/$n" ~/.claude/skills/"$n"; done
+
+# ⑧ 上账号（没账号派工起得来终端也登不上）
+orca account add --help
+
+# ⑨ 常驻交给 systemd —— 单元在 host/machine/systemd/orca-serve.service，装法见文件头注释
+```
+
+### 验收：一条命令
+
+```bash
+node scripts/server-check.mjs           # 人读
+node scripts/server-check.mjs --json    # 给循环/差分
+```
+
+退出码三态，**没查成不许当通过**：`0` 全通 / `1` 有真红 / `2` 有没查成。调通期整晚侦测：
+
+```bash
+while :; do node scripts/server-check.mjs --json --out; sleep 300; done
+# 落 ~/.dao/server-check/checks.jsonl（仓外，不会成为下一轮输入）
+```
+
+### 坑（都是实测踩的，别重踩）
+
+- **进程名是 `orca-ide`，不是 `orca`**（裸 `orca` 在 Linux 与屏幕阅读器撞名，orca 另装一个 dispatcher）。所以 `pkill -f 'orca-id[e]'`——按 `AppRun` 或 `orca` 去 pkill 会全打空，残留进程占着单实例锁。
+- **不要用 `orca --version` 探活**：它会拉起整个 app 并占住 userData profile 的单实例锁，后续 `serve` 直接 exit 3。探活用 `orca status --json`。
+- **exit 3 = 单实例锁冲突**，重启无用（单元里 `RestartPreventExitStatus=3` 就为这个）。清法：先 `pkill -f 'orca-id[e]'`，再删 `~/.config/orca/SingletonLock`（连带 `SingletonSocket` / `SingletonCookie`）。
+- **必须非 root**：root 跑 Electron 直接 `FATAL: Running as root without --no-sandbox is not supported`。用专用服务用户，不要加 `--no-sandbox` 绕。
+- **`orca status --json` 恒返回 `ok:true`**，真信号在 `result.runtime.reachable`。只看 `ok` 会在 orca 已经死掉时报绿（2026-08-24 故意样本当场抓到）。
+- **`ok:false` 时退出码仍是 0**——退出码不是信号，只认 JSON。
+- orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
+- 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
+
+### 搬过去之后本仓的红项变化（实测）
+
+orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
+
 ## 10. 接上 memory
 
 memory 住在**独立仓** `thoerwink8/windsurf-dao-memory`（私有，clone 需有权限）。本机 Claude 项目 memory 写在 `~/.claude/projects/<编码后的仓库路径>/memory/`，是一个指向那个仓 clone 的 Junction。编码规则：路径里**所有非 `[a-zA-Z0-9]` 字符一律换成 `-`**（点、空格、下划线、中文都算），不是只换盘符和斜杠。反例：`...\468-审官-gpt-5.6-sol` → `...-468----gpt-5-6-sol`（本机 `~/.claude/projects/` 下有这条真目录）。
