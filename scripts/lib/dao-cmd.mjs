@@ -1,10 +1,10 @@
 // scripts/lib/dao-cmd.mjs —— 统一命令库的纯函数层（issue #482）
 //
-// 改这段前必须知道：起 agent 先问 scripts/lib/orca-agent-cmds.mjs（Orca Desktop
-// settings.agentCmdOverrides / agentDefaultArgs）。文件在且读到了就用 Orca。
-// docs/model-routing.toml 的 [providers.*].launch 是兜底。禁止在这里写死
-// codex / reclaude / grok 的参数。Orca 没查成（坏 JSON / 没扫到 settings）必须抛，
-// 不许当成「Orca 没有覆盖」。文件不在才回落 routing。
+// 改这段前必须知道：派工启动 argv 只听 docs/model-routing.toml 的
+// [providers.*].launch。scripts/lib/orca-agent-cmds.mjs 只读 Orca Desktop
+// 做比较（多的建议补仓内、少的只报不删桌面），不得盖掉仓内旗标。
+// 禁止在这里写死 codex / reclaude / grok 的参数。
+// Orca 没查成（坏 JSON / 没扫到 settings）仍按仓内起，带 orcaReason；不挡派工。
 // --help 自检的比对函数不调用 orca 自己的 schema（agent-context），只解析 --help 文本。
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -14,11 +14,10 @@ import { createRequire } from 'node:module';
 import { ghAs } from './gh.mjs';
 import { orcaErrorText } from './orca-error.mjs';
 import { isModelRejectText, normalizePipes } from './next-launch.mjs';
-import { assertCrossVendor } from './reviewer-vendor-gate.mjs';
-import { nextReviewerAfter } from './dianjiangtai-reviewer-slot.mjs';
 import { loadRoutingPolicy, ROUTING_JSON } from './model-routing-json.mjs';
 import { issueNumberFromWorktree, prNumberFromWorktree } from './card-identity.mjs';
 import { applyOrcaAgentCmds, loadOrcaAgentCmds } from './orca-agent-cmds.mjs';
+export { formatDesktopLaunchNotes } from './orca-agent-cmds.mjs';
 
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
@@ -37,6 +36,11 @@ export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
  * #559：waitAndVerify 原默认 8000ms 硬编码，pi 启动加载 skills 常常超过，
  * 派工连续死在这里——默认改为本常量，调用方再按 provider 的 probe_wait_ms 显式覆盖。 */
 export const DEFAULT_PROBE_WAIT_MS = 120000;
+/** worker-start 调用的物理上限（2026-08-23 fire-and-forget 拍板）：这不是认账钟——
+ * orca 到点报 agent_prompt_stalled 只代表「没等到 agent 认账」，字已进终端
+ * （763 实证：报 stalled 的工人其实在跑）。15s 盖住注入 + orca 返回；
+ * 认账确认不在派工路做，交给 watchdog / flow / inbox.log。 */
+export const WORKER_START_SEND_TIMEOUT_MS = 15000;
 
 export function probeWaitMs(routing, provider) {
   const raw = routing?.providers?.[provider]?.probe_wait_ms;
@@ -233,6 +237,46 @@ export function argsTerminalSend({ terminal, text, enter, agent } = {}) {
   return a;
 }
 
+/**
+ * worker-start 送字结果三分类（2026-08-23 fire-and-forget 拍板）：
+ *   confirmed        —— orca 报 ready（exit 0）。认账到了，最好的情形。
+ *   sent-unconfirmed —— 认账类假阴性（agent_prompt_stalled / outcome_unknown /
+ *                       dispatch_input 阶段 stall）：字已进终端，orca 没等到 agent 认账。
+ *                       763 实证：报 stalled 的工人其实在跑。派工路当成功，确认交 watchdog。
+ *   transport-failed —— 明确的传输错误（终端死 / agent 未配置 / task 不存在 / Run 问题
+ *                       / 调用本身没查成）：同步报错，调用方回滚。
+ * 保守方向：不认识的错误一律 transport-failed（同步显形），只有实测认得的假阴性码
+ * 才进 sent-unconfirmed——新错误码不许静默吞进「已派未确认」。
+ */
+export function classifyWorkerStartSend({ ok, error, json } = {}) {
+  if (ok) return { kind: 'confirmed' };
+  const text = [
+    orcaErrorText(error),
+    json?.result?.lastError, json?.result?.failedStage,
+    json?.lastError, json?.failedStage,
+  ].filter(Boolean).join(' | ');
+  if (/agent_prompt_stalled|outcome_unknown|dispatch_input/i.test(text)) {
+    return { kind: 'sent-unconfirmed', reason: text };
+  }
+  return { kind: 'transport-failed', reason: text || 'worker-start 失败' };
+}
+
+/** stalled 响应没带 dispatchId 时的兜底：worker-list 按 taskId 精确找回。
+ * 763 实证：stalled 的 worker-start 照样落了 dispatch 记账（taskId 对上）。
+ * 同 taskId 理论只有一条；防御取数组尾（最新）。 */
+export function findDispatchForTask(workerListJson, taskId) {
+  const workers = workerListJson?.result?.workers;
+  if (!Array.isArray(workers)) {
+    return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
+  }
+  const want = String(taskId || '').trim();
+  if (!want) return { ok: false, error: 'findDispatchForTask 没给 taskId' };
+  const hits = workers.filter(w => w && w.taskId === want && w.dispatchId);
+  if (hits.length === 0) {
+    return { ok: false, error: `worker-list 里找不到 task=${want} 的 dispatch 记账`, scanned: workers.length };
+  }
+  return { ok: true, dispatchId: hits[hits.length - 1].dispatchId, scanned: workers.length };
+}
 export function argsWorktreeCreate({
   name, noParent, setup, parentWorktree, baseBranch, comment, issue,
 } = {}) {
@@ -2580,28 +2624,8 @@ export function resolveDispatchConstraints({
     return { ok: false, missing: [], error: `审官 --reviewer ${reviewer} 不在路由表` };
   }
 
-  const vendorGate = assertCrossVendor({
-    workerId: resolvedModel,
-    reviewerId: reviewer,
-    models,
-  });
-  if (!vendorGate.ok) {
-    let error = vendorGate.error;
-    if (vendorGate.state === 'same_vendor') {
-      const next = nextReviewerAfter({
-        currentId: reviewer,
-        models,
-        passerIds: models
-          .filter(m => m && Array.isArray(m.roles) && m.roles.some(r => r === '审查' || r === '审读'))
-          .filter(m => !m.reviewerDisabled)
-          .map(m => m.id),
-        workerId: resolvedModel,
-        order: routing?.reviewerOrder,
-      });
-      error = next.ok && next.next ? `${error}；下一位 ${next.next}` : `${error}；${next.error}`;
-    }
-    return { ok: false, missing: [], error, vendorGate };
-  }
+  // 同厂闸不在派工预检（2026-08-23 delete-all-ceremony 拍板）：dispatch 时审官还不存在，
+  // 闸是查空气。真闸在审官落地时：reviewer-create / reviewer-attach / worker-done / 换人。
 
   return {
     ok: true,
@@ -2611,7 +2635,6 @@ export function resolveDispatchConstraints({
     role: role || null,
     reviewer,
     recommendation,
-    vendorGate,
   };
 }
 
@@ -3362,6 +3385,9 @@ export function gateReviewerCreate({ pr, parentId, worktrees, workers, terminals
     outcome: 'refused-existing',
     action: 'refuse',
     worktreeId: pick.worktreeId,
+    // PR #758：半成功卡（建了卡没起成）要能续跑——把路径带出去，消费端可复用该卡
+    // 重开终端续跑，而不是拒绝后死循环。
+    worktreePath: pick.worktree?.path || null,
     handle: pick.handle || null,
     existingCount: listed.count,
     closedWorktrees: withHandles.map(c => c.worktreeId),
@@ -3593,6 +3619,42 @@ export function postPrComment({ pr, body, runGh } = {}) {
   const r = runGh(['pr', 'comment', n, '--body', String(body)]);
   if (!r.ok) return { ok: false, error: `PR #${n} 发评论失败：${r.error}` };
   return { ok: true, pr: n };
+}
+
+/** PR #758 教训：完工评论被重试刷了三遍一模一样。发前先查「同款发过了没」。
+ * 比对口径 = trim 后全同（完工评论默认无时间戳，同文即重发）。 */
+export function commentAlreadyPosted(comments, body) {
+  const want = String(body ?? '').trim();
+  if (!want) return false;
+  const list = Array.isArray(comments) ? comments : [];
+  return list.some(c => String(c && c.body || '').trim() === want);
+}
+
+/** 拉 issue/PR 评论列表。没查成 = ok:false unscanned（不许当「没发过」放行）。 */
+export function listComments({ kind, number, runGh } = {}) {
+  const n = String(number ?? '').trim();
+  if (!/^\d+$/.test(n)) return { ok: false, unscanned: true, error: 'listComments 没给合法号码' };
+  if (typeof runGh !== 'function') return { ok: false, unscanned: true, error: 'listComments 没拿到 gh 执行器' };
+  const r = runGh([kind === 'pr' ? 'pr' : 'issue', 'view', n, '--json', 'comments']);
+  if (!r.ok) return { ok: false, unscanned: true, error: `评论列表没查成：${r.error}` };
+  try {
+    const doc = JSON.parse(r.out);
+    return { ok: true, comments: Array.isArray(doc.comments) ? doc.comments : [] };
+  } catch {
+    return { ok: false, unscanned: true, error: '评论列表不是 JSON（没查成）' };
+  }
+}
+
+/** 幂等发评论：同款已发过就跳过。拉取没查成 → ok:false unscanned（不瞎发也不瞎跳）。 */
+export function postCommentOnce({ kind, number, body, runGh } = {}) {
+  const listed = listComments({ kind, number, runGh });
+  if (!listed.ok) return { ok: false, unscanned: true, error: listed.error };
+  if (commentAlreadyPosted(listed.comments, body)) {
+    return { ok: true, skipped: true, alreadyPosted: true, [kind === 'pr' ? 'pr' : 'issue']: String(number) };
+  }
+  const post = kind === 'pr' ? postPrComment : postIssueComment;
+  const r = post({ pr: number, issue: number, body, runGh });
+  return { ...r, alreadyPosted: false };
 }
 
 /** 仓内现有 label 名。没查成返回 null（不许当「没有」去瞎建）。 */
@@ -4392,21 +4454,22 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 // ── CLI 参数 ────────────────────────────────────────────────────────
 
 export const VERBS = [
-  'dispatch', 'start', 'worktree-create', 'worktree-rm', 'task-create',
+  'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup']);
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--json', '--help', '-h',
   ]),
+  'dispatch-exec': new Set(['--order', '--json', '--help', '-h']),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
     '--issue', '--comment', '--json', '--help', '-h',
@@ -4503,7 +4566,12 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run] [--allow-dup]
+                  # 异步发射（2026-08-23 async-launch 拍板）：热路只做参数校验+写派工单到 _flow/queue/+拉起 detached 执行体，<1s 返回「已受理」；
+                  # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
+                  # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
+  dispatch-exec --order <派工单路径>
+                  # 内部动词：dispatch 拉起的后台执行体；也可手动前台重跑某一单（结果仍落 <id>.out.json）
   dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
                   # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）
@@ -4596,7 +4664,8 @@ worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（work
 续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
-dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（非 0 退出，fail-close）——
+dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——
 去该 issue 补消歧记录再打「已消歧」label（dao-project skill 第二节）；gh 查失败单独报「没查成」，不许当有 label 放行。
+dispatch 的消歧门在后台执行体里（async-launch）：被拦 = <id>.out.json 落 ok:false，热路退出码只管「受没受理」。
 dispatch --dry-run 不走门控（不实际派工，disambiguation 只作报告，不影响退出码；#565 返工）。无 --issue 的派工不受门控（辅助终端不经 dispatch）。
 `;

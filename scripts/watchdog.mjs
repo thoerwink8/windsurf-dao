@@ -66,6 +66,13 @@
 //                        model_change 事件。pi 遇 provider 瞬时失败 1ms 内切「同 model id 别的
 //                        provider」（og 503→deepseek 直连实证，成本跃迁账单外零信号），诱因 = 切换前
 //                        最近 message 的 errorMessage；新会话开头的初始选型（无前序 message）不报
+//   17. missing-reviewer —— #675：全盘 0 个 working/waiting 时，顶层工人卡有 linked PR、
+//                        工位已下班、没有审官子卡 → 报警。2026-08-23 delete-ack-layer：
+//                        同时按 --dispose-actions 自动 reviewer-create（快照 / off 只打印
+//                        动作行）。Devin 实证 agents=[] 会被旧「无 agent 就跳过」漏掉——
+//                        有 dispatch 记账且卡已 in-review 也算下班（不能只因有 draft PR
+//                        就起审官：开工五步第 2 步就会开 PR）。假 stall 吊销 capability
+//                        后 worker-done 起不了审官，本项是交卷权威的仓内补位。
 //   BLIND          —— 编排层隐形工人（#569 垫片 watch-board.mjs 并进；2026-08-17 判据订正）：
 //                        树级判据 = 有活终端（>1）且**查不到 dispatch 记账**（orca orchestration
 //                        worker-list 的 resource.worktreeId 里没有它）——从没走 worker-start/
@@ -91,8 +98,8 @@
 // 矩阵是唯一账本，新事故只加一行。动作在 live 模式经 orca terminal send 真发（Node 直接
 // spawnSync 传参不走 Git Bash，不会把 /branch 转成盘符路径），快照/测试模式只打印动作行。
 // 斜杠命令与重启动作带上下文守卫：非 reclaude 终端不执行 reclaude 系动作，只报不动作。
-// 孤儿树真删（#630）复用同一开关：live + disposeActions 调 dao.mjs worktree-rm --force；
-// 快照 / --dispose-actions off 只打印「将执行 worktree-rm」，不真删。
+// 孤儿树真删（#630）与交卷没开成审官自动起（delete-ack-layer）复用同一开关：
+// live + disposeActions 调 dao.mjs；快照 / --dispose-actions off 只打印动作行。
 //
 // 仓规硬约束：
 //   - 输出必须区分「扫完 0 异常」（打印一行 OK 汇总，含扫描工位数）、
@@ -117,7 +124,7 @@
 //   node scripts/watchdog.mjs --state-window 15  屏面底部状态窗口行数
 //   node scripts/watchdog.mjs --self-worktree <id>  指定监视器自己的工作区 id（live 模式默认自动取）
 //   node scripts/watchdog.mjs --exclude-pane <paneKey>  按稳定 pane ID 分级排除（可重复）
-//   node scripts/watchdog.mjs --dispose-actions off  处置动作关掉（指纹不动作；孤儿树只打印不真删）
+//   node scripts/watchdog.mjs --dispose-actions off  处置动作关掉（指纹不动作；孤儿树/自动起审官只打印不真做）
 //   node scripts/watchdog.mjs --heartbeat-file <path> flow 心跳文件路径（默认 _flow/heartbeat.json）
 //   node scripts/watchdog.mjs --sessions-dir <dir> pi 会话日志目录（默认 ~/.pi/agent/sessions；
 //                       快照模式默认 <快照轮目录>/sessions）
@@ -138,7 +145,7 @@ import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/gu
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
 import { defaultGuardDir, writeGuardHeartbeat, WATCHDOG_HEARTBEAT_NAME } from './lib/guard-keepalive.mjs';
 import { commentsForPendingScan, pendingFlowItems, ticketIssueNumber } from './flow.mjs';
-import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, issueNumberFromWorktree, findChildWorktrees, worktreeIdOf } from './lib/card-identity.mjs';
+import { isChildWorktree, isTaskCard, classifyCardName, prNumberFromWorktree, issueNumberFromWorktree, findChildWorktrees, worktreeIdOf, isDispatchTracked } from './lib/card-identity.mjs';
 import { fingerprintFromDetail, reportWatchdogGithub } from './lib/watchdog-report.mjs';
 
 const ORCA_TIMEOUT_MS = 30000;
@@ -1360,9 +1367,63 @@ function runRound(source, args, state) {
   return { noTargets: false, targets, events, notes };
 }
 
-/** #675：有 linked PR、工位已不是 working/waiting、没有审官子卡 → 不是 NO_TARGETS，要报警。
+function defaultReviewerId() {
+  try {
+    const order = reviewerOrderOf(loadRouting());
+    if (order[0]) return order[0];
+  } catch { /* 选型表读不到仍用默认，不挡自动起 */ }
+  return 'gpt-5.6-sol';
+}
+
+/** 工位已下班：有 agent 且都不是 working/waiting；或 Devin agents=[] 且卡已 in-review 且有 dispatch 记账。
+ * 不能只看 linked PR——开工五步第 2 步就会开 PR。 */
+function workerOffDuty(w, source) {
+  const agents = Array.isArray(w.agents) ? w.agents : [];
+  if (agents.some(a => a.state === 'working' || a.state === 'waiting')) return false;
+  if (agents.length > 0) return true;
+  if (w.workspaceStatus !== 'in-review') return false;
+  return isDispatchTracked(w, trackedSet(source));
+}
+
+function executeMissingReviewerCreate(w, prNo, args, events) {
+  const name = w.displayName || '?';
+  const reviewer = defaultReviewerId();
+  const hook = process.env.WATCHDOG_REVIEWER_CREATE || process.env.WATCHDOG_REVIEWER_SWITCH;
+  const live = !args.snapshotDir;
+  const really = Boolean(args.disposeActions) && (live || Boolean(hook));
+  const parentId = w.worktreeId || w.id || '';
+  if (!really) {
+    events.push({
+      name,
+      type: '动作',
+      detail: `将自动起审官：${reviewer}（PR #${prNo}；快照/测试模式打印动作行不真派）`,
+    });
+    return;
+  }
+  const cmd = hook
+    ? [process.execPath, hook, '--pr', String(prNo), '--reviewer', reviewer, ...(parentId ? ['--parent-worktree', parentId] : [])]
+    : [process.execPath, join(process.cwd(), 'scripts', 'dao.mjs'), 'reviewer-create', '--pr', String(prNo), '--reviewer', reviewer, ...(parentId ? ['--parent-worktree', parentId] : [])];
+  const r = spawnSync(cmd[0], cmd.slice(1), {
+    encoding: 'utf8',
+    cwd: process.cwd(),
+    timeout: 180000,
+    windowsHide: true,
+  });
+  const ok = !r.error && r.status === 0;
+  const err = String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200);
+  events.push({
+    name,
+    type: '动作',
+    detail: ok
+      ? `已起审官：${reviewer}（PR #${prNo}）`
+      : `起审官失败：${reviewer}（PR #${prNo}）——${err}`,
+  });
+}
+
+/** #675：有 linked PR、工位已下班、没有审官子卡 → 不是 NO_TARGETS，要报警。
  * 有审官子卡就不报「没开成」（agent 不论 working/done——审完等 manual 合也是子卡还在）。
- * 没开成 = 工人卡下没有子卡。只在主扫描 0 个 working/waiting 时跑。 */
+ * 没开成 = 工人卡下没有子卡。只在主扫描 0 个 working/waiting 时跑。
+ * delete-ack-layer：报警同时按 --dispose-actions 自动 reviewer-create。 */
 function missingReviewerPass(source, args, state, events) {
   const trees = Array.isArray(source.ps) ? source.ps : [];
   for (const w of trees) {
@@ -1371,9 +1432,7 @@ function missingReviewerPass(source, args, state, events) {
     if (w.parentWorktreeId) continue;
     const prNo = prNumberFromWorktree(w);
     if (!prNo) continue;
-    const agents = Array.isArray(w.agents) ? w.agents : [];
-    if (agents.length === 0) continue;
-    if (agents.some(a => a.state === 'working' || a.state === 'waiting')) continue;
+    if (!workerOffDuty(w, source)) continue;
     const children = findChildWorktrees(w, trees);
     if (children.length > 0) continue;
     const key = `${w.worktreeId || w.path || '?'}|missing-reviewer`;
@@ -1385,6 +1444,7 @@ function missingReviewerPass(source, args, state, events) {
       type: 'missing-reviewer',
       detail: `交卷没开成审官下一跳：linked PR #${prNo}，工位已不是 working/waiting，没有审官子卡——这是样本，要报警（#675）`,
     });
+    executeMissingReviewerCreate(w, prNo, args, events);
   }
 }
 
@@ -1466,6 +1526,54 @@ function runWorktreePass(source, args, state) {
       }
     } else {
       st.fired.delete('blind');
+    }
+
+    // 吞注入（2026-08-23 fire-and-forget 配套）：ps 不报 agent 的工人（Devin 实证 agents=[]），
+    // 工位级 stall 枚举不到——树级补一条同口径判据。枚举 = 有 dispatch 记账 + 无 working/waiting
+    // agent + 非子卡（审官产出不是屏面）+ 无 linked PR（有 PR 的已被 flow 锚住）+ 该树有活终端。
+    // 判据与 stall 同源：屏面非 spinner 真实内容连续 stallRounds 轮不变 =「该发生的没发生」
+    // （派工送字后 ≈T+2 分钟屏面不动）。活证否决同款：内容在动即清零。读屏失败/记账没查成
+    // 一律显式 note，不猜。
+    const trk = source.dispatchTracked;
+    const busy = agentsOf.some(a => a.state === 'working' || a.state === 'waiting');
+    if (!busy && !isChildWorktree(w) && prNumberFromWorktree(w) == null) {
+      if (trk?.error) {
+        notes.push({ name, type: '观察', detail: `DISPATCH_BOOKKEEPING_UNSCANNED: ${trk.error}——吞注入判据没查成，不是查过没事` });
+      } else if (!trk?.tracked) {
+        notes.push({ name, type: '观察', detail: 'DISPATCH_BOOKKEEPING_MISSING: 本轮没有 dispatch 记账证据（快照缺 worker-list-evidence.json）——吞注入判据没查成，不是查过没事' });
+      } else if (trk.tracked.has(id) || trk.tracked.has(w.path)) {
+        const term = (Array.isArray(source.terminals) ? source.terminals : [])
+          .find(t => t && t.handle && (t.worktreeId === id || t.worktreePath === w.path));
+        if (!term) {
+          // 没活终端：归孤儿/exited 判据管，这里不重复
+          st.fired.delete('swallowed-inject');
+          st.injectConsecutive = 0; st.injectHash = null;
+        } else {
+          const read = source.readTerminal(term.handle);
+          if (read.error) {
+            notes.push({ name, type: '观察', detail: `吞注入判据读屏失败：${read.error}——没查成，不是查过没事` });
+          } else if (read.status === 'exited') {
+            st.fired.delete('swallowed-inject');
+            st.injectConsecutive = 0; st.injectHash = null;
+          } else {
+            const hash = sha256(stripChrome(normLines(read.tail)));
+            if (st.injectHash != null && hash === st.injectHash) {
+              st.injectConsecutive = (st.injectConsecutive || 0) + 1;
+            } else {
+              st.injectHash = hash;
+              st.injectConsecutive = 1;
+              st.fired.delete('swallowed-inject');
+            }
+            if (st.injectConsecutive >= PARAMS.stallRounds && !st.fired.has('swallowed-inject')) {
+              st.fired.add('swallowed-inject');
+              events.push({ name, type: 'swallowed-inject', detail: `派工送字后屏面非 spinner 真实内容连续 ${PARAMS.stallRounds} 轮不变——吞注入/停摆候选（fire-and-forget 确认位：ps 不报 agent 的工人，工位级 stall 枚举不到，Devin 实证 agents=[]；该发生的没发生 ≈T+2 分钟），读屏分诊` });
+            }
+          }
+        }
+      }
+    } else {
+      st.fired.delete('swallowed-inject');
+      st.injectConsecutive = 0; st.injectHash = null;
     }
 
     // 命名校验（#476）：任务卡显示名格式。只查本仓（selfWorktree 的 repo 前缀），

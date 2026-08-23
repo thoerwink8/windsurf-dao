@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
-// 盘面摘要 + 信箱台自愈 + 守卫兜底 hook（issue #564 第 1 条 + comment 追加的信箱台自愈 + #693 守卫兜底）。
-// 挂在仓内 .claude/settings.json 的 UserPromptSubmit：每轮输出一行 [盘] 摘要，
-// 顺带把信箱台 ensure 一遍（全活着秒退一行 JSON；死了当场自愈重建）；
-// 主树会话再顺手 ensure 一遍守卫（#693：会话中途 watchdog/flow 死了，下一轮提示时拉起；
+// 盘面摘要 + 守卫兜底 hook（issue #564 第 1 条 + #693 守卫兜底；2026-08-23 起信箱台保活也归守卫）。
+// 挂在仓内 .claude/settings.json 的 UserPromptSubmit：每轮输出一行 [盘] 摘要；
+// 主树会话顺手 ensure 一遍守卫（#693：会话中途 watchdog/flow/信箱台 relay 死了，下一轮提示时拉起；
 // 2026-08-22 起主树即拉，不再要求 master——master 只管帅位展示）+ 把未上报的守卫自停显形。
 //
 // 改这个文件前必须知道的四条：
@@ -41,9 +40,7 @@ const ROOT = process.env.CLAUDE_PROJECT_DIR
 const CACHE_FILE = join(ROOT, '_flow', 'board-summary.json');
 const CACHE_TTL_MS = 60 * 1000;
 const ORCA_TIMEOUT_MS = 15000;
-const INBOX_TIMEOUT_MS = 45000; // READY_WAIT_MS(30s) + 余量；健康时秒退
-const INBOX_SCRIPT = join(ROOT, 'scripts', 'inbox-station.mjs');
-const GUARD_ONCE_TIMEOUT_MS = 25000; // 健康时一次 CIM 查询秒级；与信箱台共享 60s hook 预算
+const GUARD_ONCE_TIMEOUT_MS = 25000; // 健康时一次 CIM 查询秒级；hook 预算内
 
 function cardRef(w) {
   const name = String(w.displayName || '');
@@ -306,33 +303,9 @@ export function nextInjection({ root = ROOT, git = defaultGit, read = readFileSy
   return nextLine({ board: boardSummary({ orca, cache }), flowHb, wdHb, mode, now: at });
 }
 
-/** 信箱台自愈：ensure 一遍。健康 = 无输出（[盘] 行的存在就是活证）；
- * 自愈动作（restart/rebuild）留痕；失败 = 可辨认的错误串，只报不拦。
- * exec 可注入（测试用假 spawn，不真建台）；默认 spawnSync 跑真 ensure。 */
-export function inboxInjection({ script = INBOX_SCRIPT, exec = null } = {}) {
-  const r = exec
-    ? exec(script)
-    : spawnSync(process.execPath, [script, 'ensure'], {
-        encoding: 'utf8', timeout: INBOX_TIMEOUT_MS, windowsHide: true,
-      });
-  const out = String(r.stdout || '').trim();
-  if (r.error || r.status !== 0) {
-    const tail = (() => {
-      try {
-        const doc = JSON.parse(out.split(/\r?\n/).pop() || '{}');
-        return doc.error || doc.reason || out.slice(0, 80) || '(无输出)';
-      } catch { return out.slice(0, 80) || '(无输出)'; }
-    })();
-    return `[台] 信箱台自愈失败：${tail}（只报不拦，继续用）`;
-  }
-  try {
-    const doc = JSON.parse(out.split(/\r?\n/).pop() || '{}');
-    if (doc.action === 'restart' || doc.action === 'rebuild') {
-      return `[台] 信箱台已自愈：${doc.action}（${doc.reason || 'relay 死了'}）`;
-    }
-  } catch { /* 输出不成 JSON：就当活着但把原文留痕？健康态不回显，失败态上面已处理 */ }
-  return null;
-}
+/** 2026-08-23 拍板：信箱台 detached 化，保活归 guard-keepalive（本 hook 的 [卫] 行
+ * 会显形 inbox=started/restarted）。这里不再每轮跑 inbox-station ensure——
+ * 派工路也不跑（ensure 最慢 300s 是派工分钟级大头）。 */
 
 /** 守卫兜底 ensure（#693）：主树会话每轮顺手跑 --once。健康 = 无输出（[盘] 行的存在
  * 就是活证）；拉起/失败留痕；只报不拦。非主树（工人树、别的仓）静默。
@@ -400,8 +373,6 @@ export function haltInjection({ now = Date.now(), loadLog = null } = {}) {
 
 function main() {
   const lines = [nextInjection()];
-  const inbox = inboxInjection();
-  if (inbox) lines.push(inbox);
   const guard = guardInjection();
   if (guard) lines.push(guard);
   const halt = haltInjection();

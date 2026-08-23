@@ -190,6 +190,16 @@ describe('flow', () => {
       assert.ok(!/is not a function/.test(out) && !/TypeError/.test(out), '不得 TypeError 崩  →  ' + out.trim());
       assert.ok(/待帅处置：#999/.test(out), '待帅处置仍常驻  →  ' + out.trim());
     });
+    await t.test('PR #758：去重 key 归一化数字（「悬置 6.8h」与「悬置 7.1h」是同一原因）', () => {
+      // 旧 key 直接是 reason 原文：hours 每轮变 → ghNotified 永远兜不住 → 8 连刷。
+      // 新 key 把数字归一成 N；正文仍带真实数字。源码钉住这条回归。
+      const flowSrc = fs.readFileSync(FLOW, 'utf8');
+      assert.ok(/ghKey = reason\.replace\(\/\\d\+\(\?:\\\.\\d\+\)\?\/g, 'N'\)/.test(flowSrc),
+        'flow.mjs 的 ghKey 要归一化数字');
+      const norm = (s) => s.replace(/\d+(?:\.\d+)?/g, 'N');
+      assert.ok(norm('红项悬置 6.8h 无返工') === norm('红项悬置 7.1h 无返工'), '数字归一后同 key');
+      assert.ok(norm('红项悬置 6.8h 无返工') !== norm('验收没开成下一跳'), '不同原因不同 key');
+    });
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 

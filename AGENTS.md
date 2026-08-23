@@ -1,5 +1,15 @@
 闭环框架：工人读 `host/skills/dispatch/templates/soldier-book.md`，审官读 `host/skills/dispatch/templates/reviewer-book.md`。注入只给一行指针；pi/codex 未测，指针仍是兜底。
 
+## 提问必须标推荐位
+
+每次 `AskUserQuestion`（以及同等的多选提问）三处都要写，不是三选一：
+
+1. **标题**：写明推荐哪一条，人扫一眼就知道荐什么。
+2. **选项**：推荐项放第一项，label 末尾写 `(Recommended)`。
+3. **介绍**：用大白话讲来龙去脉——今晚怎么走到这一问、为什么荐这条。不许只甩术语，也不许只写「我推荐第一项」。
+
+反例：选项有 `(Recommended)` 但介绍全是内部词；或推荐只写在聊天里、题干/标题没有。
+
 ## Cursor Cloud specific instructions
 
 这是一个**纯 Node.js 工具仓**：没有 `package.json`、没有 `node_modules`、无第三方依赖（所有 import 都是 `node:` 内置模块）。只要 Node ≥ 20.11（CI 用 22，云 VM 已装 22）即可跑，**无需 `npm install`**——更新脚本因此是空跑。

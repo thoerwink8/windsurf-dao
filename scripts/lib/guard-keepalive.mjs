@@ -31,6 +31,9 @@ export const LOG_NAME = 'keepalive.jsonl';
 export const WATCHDOG_HEARTBEAT_NAME = 'watchdog-heartbeat.json';
 export const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 export const FLOW_HEARTBEAT_STALE_MS = 10 * 60 * 1000;
+// 2026-08-23：信箱台（detached relay）纳入保活。它的心跳就是租约 _flow/inbox.lease
+// （relay 每轮 ~10s 续写）。90s 不写 = 卡死（覆盖最慢轮次：一轮里多次 orca/gh 调用）。
+export const INBOX_HEARTBEAT_STALE_MS = 90 * 1000;
 
 export function defaultGuardDir({ env = process.env, homedir: home = homedir() } = {}) {
   if (env.DAO_GUARD_HALT_DIR) return env.DAO_GUARD_HALT_DIR;
@@ -43,11 +46,13 @@ export function classifyCommandLine(cmd) {
   // watchdog.mjs 不能当 watchdog-report.mjs 的前缀命中（后面必须是空白/"/结尾）。
   if (/(?:^|[\\/\s"])watchdog\.mjs(?:[\s"]|$)/i.test(s)) return 'watchdog';
   if (/(?:^|[\\/\s"])flow\.mjs(?:[\s"]|$)/i.test(s)) return 'flow';
+  // 信箱台只认 relay（长驻进程）；ensure 是短命调用，不当守卫。
+  if (/(?:^|[\\/\s"])inbox-station\.mjs["']?\s+relay(?:[\s"]|$)/i.test(s)) return 'inbox';
   return null;
 }
 
 export function findRunningGuards(processes) {
-  const found = { watchdog: [], flow: [] };
+  const found = { watchdog: [], flow: [], inbox: [] };
   for (const p of processes || []) {
     const kind = classifyCommandLine(p.commandLine);
     if (kind) found[kind].push({ pid: p.pid, commandLine: p.commandLine, startedMs: p.startedMs ?? null });
@@ -84,7 +89,7 @@ export function parseProcessJson(raw) {
 export function listNodeProcesses({ spawn = spawnSync } = {}) {
   const r = spawn('powershell.exe', [
     '-NoProfile', '-NonInteractive', '-Command',
-    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'watchdog\\.mjs|flow\\.mjs' } | Select-Object ProcessId,CommandLine,@{N='StartedMs';E={[DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds()}} | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'watchdog\\.mjs|flow\\.mjs|inbox-station\\.mjs' } | Select-Object ProcessId,CommandLine,@{N='StartedMs';E={[DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds()}} | ConvertTo-Json -Compress",
   ], {
     encoding: 'utf8',
     windowsHide: true,
@@ -147,6 +152,7 @@ export function resolveGuardScripts({
   };
   const watchdog = pick('watchdog.mjs');
   const flow = pick('flow.mjs');
+  const inbox = pick('inbox-station.mjs');
   if (watchdog.exists && mainPath) {
     watchdog.extraArgs = ['--heartbeat-file', join(mainPath, '_flow', 'heartbeat.json')];
   } else {
@@ -157,7 +163,15 @@ export function resolveGuardScripts({
   } else {
     flow.extraArgs = [];
   }
-  return { watchdog, flow };
+  // 信箱台 relay：日志落主树 _flow/inbox.log（resolveLogPath 自己也认主卡，显式给更稳）。
+  if (inbox.exists) {
+    inbox.extraArgs = mainPath
+      ? ['relay', '--log', join(mainPath, '_flow', 'inbox.log')]
+      : ['relay'];
+  } else {
+    inbox.extraArgs = [];
+  }
+  return { watchdog, flow, inbox };
 }
 
 /** watchdog 自身心跳路径：守卫状态目录（~/.dao/guard 或 DAO_GUARD_HALT_DIR）下。 */
@@ -171,6 +185,13 @@ export function watchdogHeartbeatPath({ env = process.env, homedir: home = homed
 export function flowHeartbeatPath({ mainPath, flowSpec } = {}) {
   if (mainPath) return join(mainPath, '_flow', 'heartbeat.json');
   if (flowSpec && flowSpec.cwd) return join(flowSpec.cwd, '_flow', 'heartbeat.json');
+  return null;
+}
+
+/** 信箱台心跳 = relay 租约（主树 _flow/inbox.lease，relay 每轮续写 ts）。
+ * mainPath 没解出来 → null（没查成，不许乱杀）。 */
+export function inboxLeasePath({ mainPath } = {}) {
+  if (mainPath) return join(mainPath, '_flow', 'inbox.lease');
   return null;
 }
 
@@ -227,11 +248,22 @@ export function planKeepalive({ listed, scripts, heartbeats, now, staleMs }) {
   const stale = {
     watchdog: Number(staleMs?.watchdog) || WATCHDOG_HEARTBEAT_STALE_MS,
     flow: Number(staleMs?.flow) || FLOW_HEARTBEAT_STALE_MS,
+    inbox: Number(staleMs?.inbox) || INBOX_HEARTBEAT_STALE_MS,
   };
   const running = findRunningGuards(listed.processes);
   const actions = [];
-  for (const name of ['watchdog', 'flow']) {
+  for (const name of ['watchdog', 'flow', 'inbox']) {
     const live = running[name] || [];
+    // 2026-08-23（一台 8 relay 实证）：多开也是事故——同名进程多于 1 个就收敛到 1 个
+    // （先全杀再拉起；杀不掉不拉，防双重守卫双份报警）。
+    if (live.length > 1) {
+      actions.push({
+        name, action: 'restart', killPids: live.map((p) => p.pid),
+        script: scripts?.[name]?.script, cwd: scripts?.[name]?.cwd, extraArgs: scripts?.[name]?.extraArgs || [],
+        reason: `multi-instance(${live.length})`,
+      });
+      continue;
+    }
     if (live.length > 0) {
       // #699：进程在不算完，心跳也得在动。缺失/损坏按停更处理——心跳是活性唯一证据，
       // 「文件没了但进程在」与「卡死」在可观测面上不可区分；健康守卫启动即写心跳，

@@ -307,7 +307,8 @@ describe('dispatch --batch', () => {
     assert.ok(joined.some(s => s.includes('worker-stop') && s.includes('ctx_task_2')), JSON.stringify(joined));
     assert.ok(joined.some(s => s.includes('worker-stop') && s.includes('ctx_task_1')), JSON.stringify(joined));
     const src = fs.readFileSync(path.join(REPO, 'scripts', 'dao.mjs'), 'utf8');
-    assert.match(src, /if \(!inject\.ok\) return \{ ok: false, dispatchId/);
+    // 2026-08-23 fire-and-forget：batch 不再有注入后验证；失败仍要带回 dispatchId 供回滚 worker-stop。
+    assert.match(src, /if \(!started\.ok\) return \{ ok: false, error: started\.error, dispatchId: started\.dispatchId \|\| null \}/);
   });
 
   it('CLI --batch --dry-run：N 条计划、跳过审官、不要求 --spec/--reviewer', async () => {

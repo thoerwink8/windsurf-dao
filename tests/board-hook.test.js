@@ -204,30 +204,22 @@ describe('board-hook', () => {
       });
   });
 
-  it('#564 信箱台自愈：健康静音 / 自愈留痕 / 失败可辨认', async (t) => {
+  it('2026-08-23：信箱台保活归 guard-keepalive（inboxInjection 已删，[卫] 行显形 inbox）', async (t) => {
     const H = await H_LOAD;
-    const healthy = H.inboxInjection({ script: 'x', exec: () => ({ status: 0, stdout: '{"ok":true,"action":"noop"}\n' }) });
-    await t.test('台全活着 → 静音（不刷屏；[盘] 行的存在就是活证）',
+    await t.test('inboxInjection 已删除（不再每轮跑 inbox-station ensure）',
       () => {
-        assert.ok(healthy === null, '台全活着 → 静音（不刷屏；[盘] 行的存在就是活证）  →  ' + String(healthy));
+        assert.ok(typeof H.inboxInjection === 'undefined', 'inboxInjection 不该再存在');
       });
 
-    const healed = H.inboxInjection({ script: 'x', exec: () => ({ status: 0, stdout: '{"ok":true,"action":"restart","reason":"relay-dead"}\n' }) });
-    await t.test('台死了被 ensure 自愈 → 留痕「已自愈」',
+    const shuai = () => ({ ok: true, seat: 'shuai' });
+    const withInbox = H.guardInjection({
+      root: 'X', judge: shuai,
+      exec: () => ({ status: 0, stdout: JSON.stringify({ ok: true, results: [{ name: 'watchdog', action: 'already', pid: 1 }, { name: 'flow', action: 'already', pid: 2 }, { name: 'inbox', action: 'started', pid: 43 }] }) + '\n', stderr: '' }),
+    });
+    await t.test('信箱台被 keepalive 拉起 → [卫] 行显形 inbox=started',
       () => {
-        assert.ok(healed !== null && /已自愈/.test(healed), '台死了被 ensure 自愈 → 留痕「已自愈」  →  ' + String(healed));
-      });
-
-    const failed = H.inboxInjection({ script: 'x', exec: () => ({ status: 1, stdout: '{"ok":false,"error":"terminal list 失败"}\n' }) });
-    await t.test('自愈失败 → 可辨认错误串，不是空',
-      () => {
-        assert.ok(failed !== null && /自愈失败/.test(failed) && /terminal list 失败/.test(failed), '自愈失败 → 可辨认错误串，不是空  →  ' + String(failed));
-      });
-
-    const crashed = H.inboxInjection({ script: 'x', exec: () => ({ error: { message: 'ENOENT' }, status: null }) });
-    await t.test('ensure 直接崩 → 报「自愈失败」(无输出也不许吞)',
-      () => {
-        assert.ok(crashed !== null && /自愈失败/.test(crashed), 'ensure 直接崩 → 报「自愈失败」(无输出也不许吞)  →  ' + String(crashed));
+        assert.ok(withInbox !== null && /已拉起/.test(withInbox) && /inbox=started\(43\)/.test(withInbox),
+          'inbox 拉起显形  →  ' + String(withInbox));
       });
   });
 

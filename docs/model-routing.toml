@@ -8,8 +8,9 @@
 updated = "2026-08-22"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
-# launch = 完整启动命令模板（issue #482）。Orca Desktop orca-data.json 读到了就用 Orca
-# （scripts/lib/orca-agent-cmds.mjs）；本表是兜底。脚本禁止硬编码参数。
+# launch = 完整启动命令模板（issue #482）。派工启动 argv 只听本表。
+# Orca Desktop orca-data.json 只作比较（多的建议补进本表，少的只报不删桌面），不得盖掉仓内旗标。
+# 脚本禁止硬编码参数。
 # start = agent | command（#680：worker-start --agent vs terminal create --command）。
 #         agentStartSpec 只读这一处，禁止按二进制名硬编码起法。缺了 fail-loud。
 # {model} 用 --model / launch_model / default_model 替换；缺了 fail-loud。
@@ -194,9 +195,11 @@ start = "command"
 default_model = "deepseek-v4-flash-max"
 launch = "devin --model {model} --permission-mode dangerous --respect-workspace-trust false"
 launch_model = "deepseek-v4-flash-max"
-probe_wait_ms = 45000
+probe_wait_ms = 120000
 launch_note = """
-Devin CLI。Orca 不认 --agent devin，派工走 terminal create --command（与 reclaude 同形态）。
+Devin CLI。Orca 不认 --agent devin。写码主选走拆步起（#753 今晚拍板）：
+`terminal create --command`（本节 launch）→ `terminal wait --for tui-idle` → `worker-start --terminal` 送任务书。
+`probe_wait_ms` 是等就绪问句的上限，不是固定睡满再注入。tui-idle 过了但屏上仍是转圈/unknown 必须继续等，没有问句不许 worker-start。
 工人 TUI 起法即本节 launch：`--permission-mode dangerous` 全放行工具（无人值守）；2026-08-21 起含 `--respect-workspace-trust false`（#708：新 worktree 未信任，弹框卡死就绪探针）。
 非交互冒烟（不是工人起法，跑完即退）：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。
 `--print` 不能当 Orca 工人：一次提示就退出。未信任目录的非交互要关 workspace trust 检查，否则没提示可弹、当场失败。

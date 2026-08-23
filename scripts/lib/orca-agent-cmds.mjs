@@ -1,12 +1,13 @@
 // scripts/lib/orca-agent-cmds.mjs —— 读 Orca Desktop 的智能体启动命令
 //
-// 真相源是本机 orca-data.json 的 settings.agentCmdOverrides / agentDefaultArgs。
-// 最终启动 ≈ override ?? 内置名（键本身）+ defaultArgs。
-// 不复用 Orca 自己的解析，不写回这份文件。
+// 派工启动 argv 只听仓内 docs/model-routing.toml 的 [providers.*].launch。
+// 本文件只读本机 orca-data.json（settings.agentCmdOverrides / agentDefaultArgs）
+// 做比较：桌面多的建议补进仓内，少的只报不删桌面。不写回这份文件。
+// 不复用 Orca 自己的解析。
 //
 // 没查成（文件不在 / JSON 坏 / 没扫到 settings）和「读到 0 条覆盖」必须分开：
 // 前者 unscanned=true、overrideCount=null；后者 unscanned=false、overrideCount=0。
-// 没查成不许当成「Orca 没有覆盖」。
+// 没查成不许当成「已经比过」；派工仍按仓内 launch 起，不挡。
 
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -161,6 +162,7 @@ export function mergeOrcaLaunch(hit, { template, cliModel } = {}) {
 }
 
 const FLAG_RE = /(?:^|\s)(--[a-z][a-z0-9-]*|-m)(?=\s|$)/gi;
+const SKIP_COMPARE_FLAGS = new Set(['--model', '-m']);
 
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -184,34 +186,96 @@ export function droppedRoutingFlags({ template, launch } = {}) {
   return dropped;
 }
 
+/** 把启动串拆成旗标+值。模型旗标不算进比较。 */
+export function parseLaunchFlagPairs(command) {
+  const tokens = String(command || '').trim().split(/\s+/).filter(Boolean);
+  const pairs = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (i === 0 && !t.startsWith('-')) continue;
+    if (!(t.startsWith('--') || t === '-m' || /^-[A-Za-z]$/.test(t))) continue;
+    let flag = t;
+    let value = true;
+    const eq = t.indexOf('=');
+    if (eq > 1) {
+      flag = t.slice(0, eq);
+      value = t.slice(eq + 1);
+    } else if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
+      value = tokens[++i];
+    }
+    if (SKIP_COMPARE_FLAGS.has(flag)) continue;
+    pairs.push({ flag, value });
+  }
+  return pairs;
+}
+
+/** 仓内 argv vs 桌面 argv：多的 / 少的 / 同旗标不同值。不改任何一边。 */
+export function compareLaunchFlags({ routingCommand, desktopCommand } = {}) {
+  const routingBy = new Map();
+  for (const p of parseLaunchFlagPairs(routingCommand)) {
+    if (!routingBy.has(p.flag)) routingBy.set(p.flag, p.value);
+  }
+  const desktopBy = new Map();
+  for (const p of parseLaunchFlagPairs(desktopCommand)) {
+    if (!desktopBy.has(p.flag)) desktopBy.set(p.flag, p.value);
+  }
+  const extraDesktopFlags = [];
+  const droppedFlags = [];
+  const desktopFlagDiffs = [];
+  for (const [flag, value] of routingBy) {
+    if (!desktopBy.has(flag)) droppedFlags.push(flag);
+    else if (String(desktopBy.get(flag)) !== String(value)) {
+      desktopFlagDiffs.push({ flag, routing: String(value), desktop: String(desktopBy.get(flag)) });
+    }
+  }
+  for (const [flag] of desktopBy) {
+    if (!routingBy.has(flag)) extraDesktopFlags.push(flag);
+  }
+  return { extraDesktopFlags, droppedFlags, desktopFlagDiffs };
+}
+
+export function formatDesktopLaunchNotes(launch = {}) {
+  const lines = [];
+  if (Array.isArray(launch.droppedFlags) && launch.droppedFlags.length) {
+    lines.push(`Orca 桌面比仓内少这些旗标（只报，不删桌面）：${launch.droppedFlags.join(' ')}。派工已按仓内 launch 起。`);
+  }
+  if (Array.isArray(launch.extraDesktopFlags) && launch.extraDesktopFlags.length) {
+    lines.push(`Orca 桌面比仓内多这些旗标（建议补进仓内 docs/model-routing.toml）：${launch.extraDesktopFlags.join(' ')}。派工仍按仓内起，没改桌面文件。`);
+  }
+  if (Array.isArray(launch.desktopFlagDiffs) && launch.desktopFlagDiffs.length) {
+    const bits = launch.desktopFlagDiffs.map((d) => `${d.flag} 仓内=${d.routing} 桌面=${d.desktop}`);
+    lines.push(`Orca 桌面与仓内同旗标不同值（不覆盖仓内）：${bits.join('；')}。`);
+  }
+  return lines;
+}
+
 /**
- * 把已解析的 routing launch 叠上 Orca。
- * 文件不在 → 回落 routing（CI / 没装 Orca）。
- * JSON 坏 / 没扫到 settings → 抛，不许当「没有覆盖」。
+ * 比较桌面启动串，不改仓内 argv。
+ * 文件不在 / JSON 坏 / 没扫到 settings → 仍走仓内，带 orcaReason；不挡派工。
  */
 export function applyOrcaAgentCmds(launch, orcaCmds, { cliModel, root, materialize } = {}) {
   if (!launch) throw new Error('applyOrcaAgentCmds 没给 launch');
   if (!orcaCmds) return { ...launch, launchSource: 'routing' };
   if (orcaCmds.unscanned) {
-    if (orcaCmds.reason === 'missing-file') {
-      return { ...launch, launchSource: 'routing', orcaReason: 'missing-file' };
-    }
-    throw new Error(`Orca 启动命令没查成: ${orcaCmds.error || orcaCmds.reason}（没查成不许当没有覆盖）`);
+    return { ...launch, launchSource: 'routing', orcaReason: orcaCmds.reason || 'unscanned' };
   }
   const key = orcaAgentKey(launch);
   const hit = key ? orcaCmds.agents?.[key] : null;
   if (!hit) {
     return { ...launch, launchSource: 'routing', orcaReason: 'no-agent', orcaAgent: key };
   }
-  const merged = mergeOrcaLaunch(hit, { template: launch.template, cliModel });
-  const dropped = droppedRoutingFlags({ template: launch.template, launch: merged });
-  const command = typeof materialize === 'function' ? materialize(merged, root) : merged;
+  const compared = compareLaunchFlags({
+    routingCommand: launch.command,
+    desktopCommand: hit.launch,
+  });
   return {
     ...launch,
-    command,
-    launchSource: 'orca',
+    launchSource: 'routing',
+    orcaCompared: true,
     orcaAgent: key,
     orcaLaunch: hit.launch,
-    ...(dropped.length ? { droppedFlags: dropped } : {}),
+    extraDesktopFlags: compared.extraDesktopFlags,
+    droppedFlags: compared.droppedFlags,
+    desktopFlagDiffs: compared.desktopFlagDiffs,
   };
 }

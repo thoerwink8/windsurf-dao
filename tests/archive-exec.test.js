@@ -514,4 +514,69 @@ describe('archive-exec', () => {
       assert.ok(comments.length === 1 && again.results[0].commented !== true, '去重  →  ' + comments.length);
     });
   });
+
+  it('PR #758 教训：错误不产 [object Object]；评论按类别去重；rm 连败限量', async (t) => {
+    const S = await LIB_LOAD;
+
+    await t.test('errText：Error 对象/结构化对象/字符串都出可读文本', () => {
+      assert.ok(S.errText(new Error('watcher 不退')) === 'watcher 不退', 'Error  →  message');
+      assert.ok(/selector_not_found/.test(S.errText({ code: 'selector_not_found', message: '树找不到' })), '结构化对象  →  code+message');
+      assert.ok(S.errText('plain') === 'plain', '字符串原样');
+      assert.ok(!/\[object Object\]/.test(S.errText({ weird: true })), '畸形对象不许产 [object Object]');
+    });
+
+    // 失败评论 key = PR + 失败类别（result），不带易变错误详情：
+    // 同一 PR 两次 rm 失败、错误文本不同（watcher 不退 / selector_not_found）也只评一条。
+    const io = recorder();
+    io.state.prQuery = { ok: true, state: 'MERGED' };
+    const comments = [];
+    const store = new Set();
+    const rmAttempts = new Map();
+    let failText = 'file watcher 不退';
+    const failingRm = (sel) => { io.calls.rm.push(sel); const e = failText; return { ok: false, error: e }; };
+    const runOnce = () => S.processMergedScan({
+      worktrees: [wt({ id: 'p1', name: 'PR-#12 工人', pr: 12 })],
+      queryPrState: io.queryPrState.bind(io),
+      removeWorktree: failingRm,
+      escalate: io.escalate.bind(io),
+      commentGithub: (c) => { comments.push(c); return { ok: true }; },
+      commentStore: store,
+      rmAttemptStore: rmAttempts,
+    });
+    const first = runOnce();
+    await t.test('第一次 rm 失败：评一条 + 计数 1', () => {
+      assert.ok(first.results[0].result === 'rm-failed' && comments.length === 1 && rmAttempts.get('12::rm') === 1,
+        '第一次  →  ' + JSON.stringify({ result: first.results[0].result, comments: comments.length, attempts: rmAttempts.get('12::rm') }));
+    });
+    failText = 'selector_not_found'; // 第二轮错误详情变了
+    const second = runOnce();
+    await t.test('第二次 rm 失败（错误详情不同）：不再评（按类别去重）+ 计数 2', () => {
+      assert.ok(second.results[0].result === 'rm-failed' && comments.length === 1 && rmAttempts.get('12::rm') === 2,
+        '第二次  →  ' + JSON.stringify({ comments: comments.length, attempts: rmAttempts.get('12::rm') }));
+    });
+    runOnce(); // 第三次失败，计数到上限
+    const fourth = runOnce(); // 第四次：超上限，不再 rm
+    await t.test('连败超限量：不再调 rm，转 rm-gave-up 只升级', () => {
+      assert.ok(fourth.results[0].result === 'rm-gave-up' && io.calls.rm.length === 3,
+        '限量  →  ' + JSON.stringify({ result: fourth.results[0].result, rmCalls: io.calls.rm.length }));
+    });
+    await t.test('rm-gave-up 的评论与 rm-failed 不同类别，可再评一条（总量封顶两条）', () => {
+      assert.ok(comments.length === 2 && /不再自动重试/.test(comments[1].body), '评论  →  ' + comments.length);
+    });
+
+    await t.test('escalate 失败的 reason 不产 [object Object]（PR #758 实证被吞）', () => {
+      const escFail = S.processMergedScan({
+        worktrees: [wt({ id: 'p2', name: 'PR-#34 工人', pr: 34 })],
+        queryPrState: () => ({ ok: true, state: 'MERGED' }),
+        removeWorktree: () => ({ ok: false, error: 'rm 挂' }),
+        escalate: () => ({ ok: false, error: { code: 'send_failed', message: '信箱不可达' } }),
+        commentGithub: () => ({ ok: true }),
+        commentStore: new Set(),
+        rmAttemptStore: new Map(),
+      });
+      const reason = String(escFail.results[0].reason || '');
+      assert.ok(!/\[object Object\]/.test(reason) && /send_failed|信箱不可达/.test(reason),
+        'escalation 失败详情要序列化  →  ' + reason);
+    });
+  });
 });

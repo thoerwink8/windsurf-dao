@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "settings": {
+    "agentCmdOverrides": {},
+    "agentDefaultArgs": {
+      "devin": "--permission-mode bypass --experimental"
+    }
+  }
+}

@@ -24,6 +24,8 @@
    node scripts/dao.mjs worker-done --pr <PR号> --body-file <文件>
    ```
 
+   **不要**用 `orca orchestration send --type worker_done` 代替上面这条交卷——Orca 假 stall 会吊销 capability，原生结算失败，审官下一跳就断了。仓内 `worker-done` 不走 Orca 结算（#677）。判定绿之后的身份结算仍用下面第 4 步的 `notify --type worker_done`。
+
    `--body-file` 首行：首次必须「完工」打头；返工必须「返工完成」打头。
    命令自己看盘面：没有可复用审官终端 → 自读 `reviewer/*` 建审官并投递「完工」；终端还在 → 新 Task 注入老终端（不建第二张卡）；已有审官卡则复用，终端已关也不许再建。有 review 时 comment 用「返工完成」。
    把「完工」和「起审官」绑成一个动作，是为了不靠你记得再做一步（#586）。

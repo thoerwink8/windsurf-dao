@@ -660,14 +660,83 @@ describe('dao', () => {
       assert.ok((daoSrc565.match(/checkIssueDisambiguated/g) || []).length >= 2, 'dao.mjs dispatch 与 worker-start 都调消歧门  →  ' + daoSrc565.slice(0, 60));
     });
 
-    // #684 审官红项：ensureInboxStation 超时若低于现场样本（帅方记录 ~210s）等于没修。
-    const ensureTimeout = (() => {
-      const m = daoSrc565.match(/function ensureInboxStation\(\)\s*\{[\s\S]*?timeout:\s*(\d+)/);
-      return m ? Number(m[1]) : null;
-    })();
-    await t.test('ensureInboxStation 超时 ≥ 240s（覆盖帅方 210s 样本 + 余量）', () => {
-      assert.ok(ensureTimeout !== null && ensureTimeout >= 240000,
-        'ensureInboxStation 超时边界  →  ' + (ensureTimeout === null ? '没扫到超时常量' : `${ensureTimeout}ms < 240000ms`));
+    // 2026-08-23 fire-and-forget 拍板：信箱台 ensure 挪出派工路（一次 ensure 最慢 300s，
+    // 是派工分钟级耗时大头）。dao.mjs 不再有 ensureInboxStation；台保活归 guard-keepalive。
+    await t.test('dao.mjs 不再有 ensureInboxStation（ensure 挪出派工路，保活归 guard-keepalive）', () => {
+      assert.ok(!/function ensureInboxStation/.test(daoSrc565) && !/ensureInboxStation\(/.test(daoSrc565),
+        'dao.mjs 不该再有 ensureInboxStation');
+    });
+  });
+
+  it('PR #758 教训：完工评论幂等（重试不重发）+ 半成功审官卡续跑', async (t) => {
+    const S = await S_LOAD;
+
+    await t.test('commentAlreadyPosted：同文（trim 后）= 已发过', () => {
+      const comments = [{ body: '完工：PR #758\n\n自读选型：x\n' }];
+      assert.ok(S.commentAlreadyPosted(comments, '完工：PR #758\n\n自读选型：x') === true, '同文命中');
+      assert.ok(S.commentAlreadyPosted(comments, '完工：PR #758\n\n自读选型：y') === false, '不同文不命中');
+      assert.ok(S.commentAlreadyPosted([], 'x') === false && S.commentAlreadyPosted(null, 'x') === false, '空列表不命中');
+    });
+
+    await t.test('postCommentOnce：同款已发过 → 跳过不再发', () => {
+      const posted = [];
+      const runGh = (argv) => {
+        if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [{ body: '完工：PR #758' }] }) };
+        posted.push(argv.join(' '));
+        return { ok: true, out: '' };
+      };
+      const r = S.postCommentOnce({ kind: 'pr', number: '758', body: '完工：PR #758', runGh });
+      assert.ok(r.ok === true && r.skipped === true && r.alreadyPosted === true && posted.length === 0,
+        '已发过跳过  →  ' + JSON.stringify(r));
+    });
+
+    await t.test('postCommentOnce：没发过 → 真发', () => {
+      const posted = [];
+      const runGh = (argv) => {
+        if (argv[1] === 'view') return { ok: true, out: JSON.stringify({ comments: [] }) };
+        posted.push(argv.join(' '));
+        return { ok: true, out: '' };
+      };
+      const r = S.postCommentOnce({ kind: 'issue', number: '752', body: '完工：PR #758', runGh });
+      assert.ok(r.ok === true && !r.skipped && posted.length === 1 && /issue comment 752/.test(posted[0]),
+        '没发过真发  →  ' + JSON.stringify({ r, posted }));
+    });
+
+    await t.test('postCommentOnce：评论列表没查成 → ok:false unscanned（不许当没发过放行）', () => {
+      const runGh = () => ({ ok: false, error: 'gh down' });
+      const r = S.postCommentOnce({ kind: 'pr', number: '758', body: 'x', runGh });
+      assert.ok(r.ok === false && r.unscanned === true, '没查成  →  ' + JSON.stringify(r));
+    });
+
+    await t.test('gateReviewerCreate：refused-existing 带 worktreePath（续跑要路）', () => {
+      const r = S.gateReviewerCreate({
+        pr: '758',
+        parentId: 'wt_parent',
+        worktrees: [
+          { id: 'wt_parent', worktreeId: 'wt_parent', displayName: 'PR-#758 工人', parentWorktreeId: null },
+          { id: 'wt_rev', worktreeId: 'wt_rev', displayName: 'PR-#758 审官', parentWorktreeId: 'wt_parent', path: 'C:/wt/rev' },
+        ],
+        workers: [{ resource: { worktreeId: 'wt_rev' }, dispatchId: 'ctx_1' }],
+        terminals: [],
+      });
+      assert.ok(r.outcome === 'refused-existing' && r.worktreeId === 'wt_rev' && r.worktreePath === 'C:/wt/rev',
+        'refuse 带 path  →  ' + JSON.stringify(r));
+    });
+
+    const daoSrc = fs.readFileSync(CLI, 'utf8');
+    await t.test('cmdWorkerDone 完工评论走 postCommentOnce（幂等）', () => {
+      const i = daoSrc.indexOf('function cmdWorkerDone(');
+      const seg = daoSrc.slice(i, i + 6000);
+      assert.ok(/postCommentOnce\(\{ kind: 'issue'/.test(seg) && /postCommentOnce\(\{ kind: 'pr'/.test(seg),
+        'worker-done 完工评论要幂等');
+    });
+    await t.test('cmdReviewerCreate：refused-existing 转续跑（resumedFromExisting），不再直接 fail', () => {
+      const i = daoSrc.indexOf('function cmdReviewerCreate(');
+      const seg = daoSrc.slice(i, i + 9000);
+      assert.ok(/resumedFromExisting/.test(seg) && /oneReviewerGate\.worktreePath/.test(seg),
+        'reviewer-create 要能续跑半成功卡');
+      assert.ok(!/if \(oneReviewerGate\.outcome === 'refused-existing'\) \{\s*fail\(/.test(seg),
+        'refused-existing 不该再直接 fail 死循环');
     });
   });
 
@@ -996,11 +1065,11 @@ describe('dao', () => {
         assert.ok(/invokeReviewerCreate\(/.test(wdFn) && /dryRun: false/.test(wdFn) && !/argsWorktreeCreate/.test(wdFn),
           '#586 worker-done 首审真调 reviewer-create（不带 --dry-run 才建树）  →  ' + wdFn.slice(0, 240));
       });
-    await t.test('#675 完工评论在起审官之前（失败也要留交卷证据）', () => {
+    await t.test('#675 完工评论在起审官之前（失败也要留交卷证据；PR #758 起幂等走 postCommentOnce）', () => {
       const post = wdFn.indexOf('#675：交卷证据必须先落到 GitHub');
       const spawn = post >= 0 ? wdFn.indexOf('if (shouldCreate)', post) : -1;
-      assert.ok(post >= 0 && spawn > post && /postIssueComment/.test(wdFn.slice(post, spawn)),
-        '#675 完工评论在起审官之前  →  post=' + post + ' spawn=' + spawn);
+      assert.ok(post >= 0 && spawn > post && /postCommentOnce/.test(wdFn.slice(post, spawn)),
+        '#675 完工评论在起审官之前（幂等）  →  post=' + post + ' spawn=' + spawn);
     });
     await t.test('#675 起审官失败三态分开', () => {
       const timeout = S.classifyReviewerSpawnError('审官终端创建失败: terminal create 失败: Timed out waiting for terminal handle after creation');
@@ -1773,12 +1842,14 @@ describe('dao', () => {
     });
 
     const daoSrc = fs.readFileSync(CLI, 'utf8');
-    await t.test('finishWorkerInject / 子工人开工探针把 provider 传给 verifyStartedPolling', () => {
-      assert.ok(/provider: workerLaunch\.provider/.test(daoSrc)
-        && /provider: reviewerLaunch\.provider/.test(daoSrc)
-        && /provider: childLaunch\.launch\.provider/.test(daoSrc)
-        && /provider: launch\.provider/.test(daoSrc),
-        'dao.mjs 开工探针要带 provider  →  ' + daoSrc.match(/finishWorkerInject\(\{[\s\S]{0,220}\}\)/g)?.join('\n---\n'));
+    await t.test('审官路开工探针把 provider 传给 verifyStartedPolling（工人派工路已 fire-and-forget 不验）', () => {
+      // 2026-08-23：派工主路（cmdDispatch/cmdDispatchBatch）删掉注入后开工验证；
+      // 审官路（worker-done 复用/续派/reviewer-create/reviewer-attach）保留真认账。
+      const calls = daoSrc.match(/finishWorkerInject\(\{[\s\S]{0,220}\}\)/g) || [];
+      assert.ok(/provider: reviewerLaunch\.provider/.test(daoSrc)
+        && /provider: launch\.provider/.test(daoSrc)
+        && calls.every(c => !/workerLaunch|childLaunch/.test(c)),
+        'dao.mjs 审官路开工探针要带 provider，工人派工路不再验  →  ' + calls.join('\n---\n'));
     });
   });
 
@@ -1894,16 +1965,13 @@ describe('dao', () => {
     await t.test('R1 dao.mjs 不再裸调 worktree show', () => {
       assert.ok(!/orca\(\['worktree', 'show'/.test(daoSrc), 'R1 dao.mjs 不再裸调 worktree show');
     });
-    await t.test('#495 dao.mjs 派工成功后写任务卡 comment 定界区', () => {
-      assert.ok(/afterDispatchComment/.test(daoSrc), '#495 dao.mjs 派工成功后写任务卡 comment 定界区');
-    });
-    await t.test('#684 dispatch 成功后全量重写 master 定界区', () => {
+    await t.test('#684 master 定界区重写只剩清卡/合并钩（dispatch 同步看板 2026-08-23 已删）', () => {
       const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
       const rmFn = daoSrc.slice(daoSrc.indexOf('function cmdWorktreeRm'), daoSrc.indexOf('function cmdTaskCreate'));
-      assert.ok(/rewriteMasterZone\(/.test(dispatchFn) && /afterDispatchComment/.test(dispatchFn),
-        '#684 dispatch 挂点  →  ' + dispatchFn.slice(dispatchFn.indexOf('afterDispatchComment'), dispatchFn.indexOf('afterDispatchComment') + 220));
+      assert.ok(!/rewriteMasterZone\(/.test(dispatchFn) && !/afterDispatchComment/.test(dispatchFn),
+        'dispatch 热路不再同步看板（delete-all-ceremony）');
       assert.ok(/rewriteMasterZone\(remaining\)/.test(rmFn),
-        '#684 worktree-rm 挂点  →  ' + rmFn.slice(rmFn.indexOf('applyWorktreeRmPlan'), rmFn.indexOf('applyWorktreeRmPlan') + 280));
+        '#684 worktree-rm 挂点保留  →  ' + rmFn.slice(rmFn.indexOf('applyWorktreeRmPlan'), rmFn.indexOf('applyWorktreeRmPlan') + 280));
     });
     await t.test('#502 取 taskId 走 extractTaskId 不猜 result.id', () => {
       assert.ok(/extractTaskId/.test(daoSrc) && !/result\?\.id/.test(daoSrc), '#502 取 taskId 走 extractTaskId 不猜 result.id');
@@ -1963,13 +2031,11 @@ describe('dao', () => {
       assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
         '批派工失败同样回收 Run');
     });
-    await t.test('#614 dispatch 成功后顺带只读 gc + 阈值行 + emit 带 gc', () => {
-      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
-      assert.ok(/runGcReadonlyScan\(\)/.test(dispatchFn) && /gcThresholdLine\(/.test(dispatchFn) && /const gc = runGcReadonlyScan/.test(dispatchFn),
-        'dispatch 成功路径顺带只读 gc  →  ' + dispatchFn.slice(dispatchFn.indexOf('runGcReadonlyScan'), dispatchFn.indexOf('runGcReadonlyScan') + 160));
-      assert.ok(/\r?\n    gc,\r?\n/.test(dispatchFn), 'emit 带 gc 字段');
-      const scanFn = daoSrc.slice(daoSrc.indexOf('function runGcReadonlyScan'), daoSrc.indexOf('function runIdFromDispatch'));
-      assert.ok(/unscanned: true, error: src\.error/.test(scanFn), '只读扫描没查成 → unscanned  →  ' + scanFn.slice(0, 200));
+    await t.test('#614 dispatch 不再顺带只读 gc（2026-08-23 删顺车；自动扫描留在 inbox-station ensure）', () => {
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
+      assert.ok(!/runGcReadonlyScan/.test(dispatchFn) && !/gcThresholdLine/.test(dispatchFn),
+        'dispatch 热路不该再有 gc 顺车');
+      assert.ok(!/function runGcReadonlyScan/.test(daoSrc), 'runGcReadonlyScan 函数本体已删');
     });
     await t.test('#614 coordinator 豁免分桶（在途单/协调终端在盘面 keep，查不成 fail-close）', () => {
       const gcFn = daoSrc.slice(daoSrc.indexOf('function cmdRunGc'), daoSrc.indexOf('function cmdAsk'));
@@ -1978,7 +2044,7 @@ describe('dao', () => {
       assert.ok(/coordinatorKeep/.test(gcFn) && /coordinatorTombstones/.test(gcFn), '输出活豁免/墓碑两桶');
     });
     await t.test('#614 run-list 分页扫全（nextCursor 循环，页失败 → unscanned 不许当全量）', () => {
-      const listFn = daoSrc.slice(daoSrc.indexOf('function listAllRuns'), daoSrc.indexOf('function runGcReadonlyScan'));
+      const listFn = daoSrc.slice(daoSrc.indexOf('function listAllRuns'), daoSrc.indexOf('function precheckDispatchDup'));
       assert.ok(/nextCursor/.test(listFn) && /游标不前进/.test(listFn), '分页扫全 + 游标不前进保护  →  ' + listFn.slice(0, 200));
       assert.ok(/分页超过 20 页，放弃（没扫成）/.test(listFn), '超页数放弃 → 没扫成');
       const loadFn = daoSrc.slice(daoSrc.indexOf('function loadLifecycleInputs'), daoSrc.indexOf('function listAllRuns'));
@@ -1994,7 +2060,10 @@ describe('dao', () => {
       assert.ok(!/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc), '#495 dao.mjs 不走终端 rename');
     });
     await t.test('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', () => {
-      assert.ok(/probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc) && /function cmdReviewerCreate[\s\S]*probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc), '#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）  →  waitAndVerify 要按 provider 覆盖 timeoutMs');
+      // 2026-08-23：派工主路已 fire-and-forget（不就绪探针），probeWaitMs 只剩审官/调试路。
+      assert.ok(/function cmdReviewerCreate[\s\S]*probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc)
+        && !/probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc),
+        '#559 waitAndVerify 超时按 provider 的 probe_wait_ms（审官路保留；派工路已删探针）');
     });
     await t.test('#559 waitAndVerify 默认超时不再是 8000ms', () => {
       assert.ok(!/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')), '#559 waitAndVerify 默认超时不再是 8000ms');
@@ -2224,13 +2293,18 @@ describe('dao', () => {
         && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
     });
     const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
-    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('/// ══════════════════════════════════════════════════════════════════════\n// #637 可归档二次验证闸'));
-    await t.test('#638+#601 cmdEnsure 只经 planEnsureLeaseStamp 盖 handle，绝不无条件 stamp coordinator/终端', () => {
-      assert.ok(/planEnsureLeaseStamp/.test(ensureFn)
-        && /if \(stampPlan\.stamp\)/.test(ensureFn)
-        && /stampLeaseHandle\(logPath, stampPlan\.handle, 'rebuild'\)/.test(ensureFn)
-        && !/stampLeaseHandle\(logPath, handle\)/.test(ensureFn)
-        && !/stampLeaseHandle\(logPath, coordTerm/.test(ensureFn), 'cmdEnsure 仍无条件 stamp coordinator');
+    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('// #637 可归档二次验证闸'));
+    await t.test('2026-08-23 detached：cmdEnsure 不再 stamp handle，rebuild 走 spawnDetachedRelay 不起终端', () => {
+      assert.ok(ensureFn.length > 0, 'cmdEnsure 段要切得到');
+      assert.ok(!/stampLeaseHandle|planEnsureLeaseStamp/.test(ensureFn)
+        && !/terminal', 'create'/.test(ensureFn)
+        && /planSingleStation/.test(ensureFn)
+        && /pidAlive/.test(ensureFn),
+        'cmdEnsure 该是 detached 形态（无 handle stamp、无 terminal create）  →  ' + ensureFn.slice(0, 200));
+    });
+    await t.test('2026-08-23 detached：信箱台没有终端台概念残留（无哑终端标题/启动文件）', () => {
+      assert.ok(!/buildLaunchScript|buildRelayCommand|writeLaunchFile|acceptRebuildReady/.test(inboxSrc),
+        'inbox-station.mjs 不该再有终端台启动件');
     });
     await t.test('#598 红项2：reply 无 --from 不许裸发', () => {
       assert.ok(/reply 没有信箱台 --from/.test(daoCliSrc) && /resolveReplySender/.test(daoCliSrc), '#598 红项2：reply 无 --from 不许裸发');

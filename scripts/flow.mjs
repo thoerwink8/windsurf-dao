@@ -1220,7 +1220,9 @@ function processOneRound(source, state, args) {
       awaitingShuai.push({ pr: pr.number, reason });
       // #686 ③：待帅处置落 GitHub——经 gh 写 PR comment，任何会话可见
       // ghNotified 是 plain object（不是 Set）：Set 经 JSON 往返变 {}，去重落空每轮刷屏（#730 实证 8 连）。
-      const ghKey = reason;
+      // PR #758 续修：reason 含易变数字（「悬置 6.8h」每轮变）→ key 归一化去掉数字，
+      // 同一原因只报一次；评论正文仍带真实数字（信息不丢）。
+      const ghKey = reason.replace(/\d+(?:\.\d+)?/g, 'N');
       if (!rec.ghNotified || typeof rec.ghNotified !== 'object' || Array.isArray(rec.ghNotified)) rec.ghNotified = {};
       if (!rec.ghNotified[ghKey]) {
         if (!args.dryRun) {

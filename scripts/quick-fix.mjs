@@ -226,7 +226,9 @@ function rollback(created) {
   return steps;
 }
 
-/** 信箱台 ensure：返回常驻台 handle（微通道建 Run 用它当 coordinator，worker-start 才不 fenced）。
+/** 信箱台 ensure：确认收信中继活着（完工/红项信靠它落 _flow/inbox.log）。
+ * 2026-08-23 起台是 detached 后台进程，没有终端 handle——微通道的 Run 协调终端
+ * 改为壳卡上的哑终端（见 cmdAttach 第 3 步），不再 --from 信箱台。
  * 台在重启/忙时 ensure 可能超过 60s（实测掐断），重试三次兜住偶发。 */
 function ensureStation() {
   let last = null;
@@ -242,8 +244,7 @@ function ensureStation() {
       if (attempt < 3) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
       continue;
     }
-    if (!json.handle) return { ok: false, error: 'inbox-station ensure 没返回 handle（没查成）' };
-    return { ok: true, handle: json.handle };
+    return { ok: true, pid: json.pid ?? null };
   }
   return last || { ok: false, error: 'inbox-station ensure 三次都失败（没查成）' };
 }
@@ -352,20 +353,31 @@ function cmdAttach(args) {
     }
   }
 
-  // 3. detached 进程自开 Run 没有 coordinator 终端，worker-start 会 consumer_fenced——
-  //    用信箱台当 coordinator 建 Run（#638 常驻台），显式 --run 传给 reviewer-attach。
+  // 3. detached 进程自开 Run 没有 coordinator 终端，worker-start 会 consumer_fenced（#682）。
+  //    2026-08-23：信箱台改 detached 后台进程（没有终端 handle 了）——微通道协调改为
+  //    在壳卡上起一个哑终端当 Run coordinator（随壳卡收树一起关，不多开）。
+  //    先 ensure 信箱台（确认收信中继活着），再建协调终端，再建 Run。
   const station = ensureStation();
   if (!station.ok) {
     failAttach(`信箱台 ensure 失败：${station.error}`, { pr: args.pr, branch, worktreeId, log });
   }
-  const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', station.handle, '--json'], { timeout: 60000 });
-  const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
-  if (!runCreated.ok || !runId) {
-    failAttach(`审官 Run 没建成（--from 信箱台）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`, {
+  const coord = runOrca(['terminal', 'create', '--worktree', worktreeId, '--title', '微通道协调（勿关）', '--json'], { timeout: 60000 });
+  const coordHandle = coord.ok
+    ? (coord.json?.result?.handle || coord.json?.result?.terminal?.handle || null)
+    : null;
+  if (!coord.ok || !coordHandle) {
+    failAttach(`微通道协调终端没建成：${orcaErrorText(coord.error) || '没返回 handle（没查成）'}`, {
       pr: args.pr, branch, worktreeId, log,
     });
   }
-  logLine(log, `审官 Run 已建 run=${runId}（coordinator=信箱台）`);
+  const runCreated = runOrca(['orchestration', 'run-create', '--objective', `dispatch: quick-fix PR #${args.pr}`, '--from', coordHandle, '--json'], { timeout: 60000 });
+  const runId = runCreated.ok ? (runCreated.json?.result?.run?.id || null) : null;
+  if (!runCreated.ok || !runId) {
+    failAttach(`审官 Run 没建成（--from 壳卡哑终端）：${orcaErrorText(runCreated.error) || '没返回 run id（没查成）'}`, {
+      pr: args.pr, branch, worktreeId, log,
+    });
+  }
+  logLine(log, `审官 Run 已建 run=${runId}（coordinator=壳卡哑终端 ${coordHandle}）`);
 
   // 4. 真调 reviewer-attach（--skip-wait：微修没有士兵 dispatch，审官跳过等完工直接开审）。
   //    Codex TUI 冷启动时 orca 的注入会落在「model: loading」窗口里，paste 未提交 → agent_prompt_stalled

@@ -225,7 +225,7 @@ Claude / Codex / grok 已装的 `~/.orca/agent-hooks/*.cmd` 保持现状；本�
 
 ## 8f. Orca 桌面启动命令
 
-派工起 agent 先读 Orca Desktop 的启动覆盖，不把仓内 launch 当唯一源。文件在 `%APPDATA%\orca\profiles\local-default\orca-data.json`（可用 `ORCA_HOME` 或 `ORCA_DATA_JSON` 改路径）：`settings.agentCmdOverrides`（命令覆盖，本机 Claude=`reclaude`）和 `settings.agentDefaultArgs`（参数，本机 Codex=`--dangerously-bypass-approvals-and-sandbox`）。仓内 `docs/model-routing.toml` 的 `[providers.*.launch]` 是兜底——文件不在才回落。这是 D 类本机状态：**不要拷、不要改**；新机装好 Orca Desktop 并在设置里配好各智能体即可。
+派工启动 argv **只听仓内** `docs/model-routing.toml` 的 `[providers.*.launch]`。本机 `%APPDATA%\orca\profiles\local-default\orca-data.json`（可用 `ORCA_HOME` 或 `ORCA_DATA_JSON` 改路径）的 `settings.agentCmdOverrides` / `settings.agentDefaultArgs` 只拿来比较：桌面多的建议补进仓内，少的只报不删桌面。这是 D 类本机状态：**不要拷、不要改**（Orca 开着会回写冲掉）；新机装好 Orca Desktop 即可，派工不靠桌面旗标救命。
 
 ## 8e. Cursor 帅缺口
 
@@ -252,13 +252,13 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 
 ## 9. 信箱台
 
-#667 起不再靠 coordinator 横幅给帅收信：人用窗口永不当 coordinator，真信进 `_flow/inbox.log` 和 GitHub。新机一条命令重建哑终端 + 中继（#638：**全机只保活一台**，不再一 Run 一台）：
+#667 起不再靠 coordinator 横幅给帅收信：人用窗口永不当 coordinator，真信进 `_flow/inbox.log` 和 GitHub。新机一条命令重建中继（#638：**全机只保活一台**；2026-08-23 拍板改 **detached 后台进程**，面板 0 占用，不再占顶栏页签）：
 
 ```bash
 node scripts/inbox-station.mjs ensure
 ```
 
-全活着秒退，stdout 最后一行 JSON（handle / 日志路径 / action / closedExtra / gc）。身份不认标题（#493 返工）：台 = 全局租约 `_flow/inbox.lease`（新鲜 + PID 在 + handle 在盘面）。`action` 三态：`ok`（all-alive 秒退 / closed-extra 顺手关掉旧模型多余活台）、`rebuild`（no-station 无台新建 / no-global-station 只有旧台，全关重建全局台 / stale-guard 启动串不是镜像脚本）。旧模型 per-run 台（`_flow/inbox-<run>.lease`）被杀出局，跑一次 ensure 后顶栏只剩 1 个信箱台页签。relay 不 run-use 抢 waiter（#634 已证 consumer_fenced），每轮只读 `orchestration inbox` 收全部在途 Run（keep 集 ∪ 活 coordinator 的 Run）的信，去重落盘 `_flow/inbox.log`，跑可归档加速闸 + MERGED 扫描收树（#665：可归档不是门）。
+全活着秒退，stdout 最后一行 JSON（handle 恒 null / pid / 日志路径 / action / closedExtra / gc）。身份 = 全局租约 `_flow/inbox.lease`（新鲜 + PID 在 + PID 命令行是本脚本 relay——命令行核对防 #635 的 PID 复用假活）。`action` 两态：`ok`（all-alive 秒退 / closed-extra 顺手关掉多余活台）、`rebuild`（no-station 无台新建 / no-global-station 只有旧台，全关重建全局台 / stale-guard 在跑的不是镜像脚本 / detached-migration 旧式终端台迁移）。旧模型 per-run 台（`_flow/inbox-<run>.lease`）与旧式终端台都会被杀出局（关台双杀：关终端 + 杀 PID——实证终端没了 relay 进程还在，一台攒出 8 个同写一张日志）。relay 是 detached 进程（spawn detached + windowsHide，诊断输出落 `_flow/inbox.out.log`），不 run-use 抢 waiter（#634 已证 consumer_fenced），每轮只读 `orchestration inbox` 收全部在途 Run（keep 集 ∪ 活 coordinator 的 Run）的信，去重落盘 `_flow/inbox.log`，跑可归档加速闸 + MERGED 扫描收树（#665：可归档不是门）。**台保活归 guard-keepalive**（2026-08-23：租约即心跳，停更 90s 杀掉重拉）；dao 派工路不再跑 ensure（一次 ensure 最慢 300s，是派工分钟级耗时大头）。
 
 **守卫必须跑 origin/master（#665）**：信箱台 / 看门狗 / flow 启动时把代码 sync 到 `%USERPROFILE%\.dao\guard-mirror`（`git fetch` + `reset --hard origin/master`）再 exec，主树落后不影响关卡。启动或每轮若仍落后 / 查不成 → 非零退出（落后自停），不许继续跑旧代码。日志 / 租约仍落主树 `_flow/`（`resolveLogPath` 认主卡）。合入本改动后**重启一次**信箱台（`node scripts/inbox-station.mjs ensure`）和看门狗 / flow，之后落后会自停、ensure 按镜像重建。归档失败写 GitHub PR 评论（marshal），不只进 orchestration 信箱。ensure 成功后顺手只读 run-gc（#614）：僵尸 Run 数超阈值（默认 5）在 stdout 最前面打一行，`--apply` 仍手动。#667：ensure/派工都不 `run-use`（`--from` 不能冒充信箱台，会 consumer_fenced）。人用窗口不当 coordinator：闸门拦裸 `run-use`/`run-create`。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；帅窗不许触发。心跳不准发到 Run。帅读 `_flow/inbox.log` 和 GitHub 知道完工/升级，不靠输入框横幅。#593 / #601：归档走 `dao.mjs worktree-rm`（先退役 Run+关台，再删树）；关台身份看租约 TTL/runId/handle（过期直接 alreadyGone，未过期且证不出就失败，不拿 coordinator_handle 当台）；存量用 `dao.mjs run-gc`（默认只列 pending/tombstones，`--apply` 才关，真关只认 terminal close，墓碑计入本已关）；跨单收信 `dao.mjs inbox-collect`。
 
@@ -269,7 +269,7 @@ node scripts/inbox-station.mjs ensure
 新机制**随仓生效，无装机动作**（clone 即带，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook）：
 
 - 随仓 `.claude/settings.json` 的 SessionStart hook：会话启动时机械判定 cwd 是主树（`git worktree list` 第一棵）——是主树就幂等跑 `node scripts/guard-keepalive.mjs --once`（2026-08-22 拍板：不再要求分支是 master；主树停非 master 分支时保活全灭过一次，守卫死 15 小时无人知。master 只管「谁是帅位」展示，不管「要不要拉起」）——查 watchdog/flow 进程，缺才从 `~/.dao/guard-mirror` 拉起（detached + windowsHide）；进程在但心跳停更超阈值（watchdog 5 分钟 / flow 10 分钟，#699「活但卡死」）杀掉再拉起。watchdog 自身心跳写 `%USERPROFILE%\.dao\guard\watchdog-heartbeat.json`，flow 心跳写主树 `_flow/heartbeat.json`。
-- 同一份 settings.json 的 board-hook（UserPromptSubmit）在主树会话里每轮顺手再 ensure 一遍：会话中途守卫死了，帅下一轮提示时拉起。
+- 同一份 settings.json 的 board-hook（UserPromptSubmit）在主树会话里每轮顺手再 ensure 一遍：会话中途守卫死了，帅下一轮提示时拉起。2026-08-23 起信箱台 relay 也在保活列（第三个被保活进程，心跳 = 主树 `_flow/inbox.lease`，停更 90s 杀掉重拉）。
 - 主树判定不出来（git 失败 / detached HEAD / 分支读不出）不猜、不静默：hook 往上下文注入醒目行，由帅问用户后再手动拉起。工人树（非主树）两个 hook 都静默不拉——防多树双拉。
 
 验（不是「已装」，是 kill 后会回来）：
