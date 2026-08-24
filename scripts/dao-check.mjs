@@ -1541,9 +1541,11 @@ function checkVendorGateLive() {
     return;
   }
   const daoSrc = readFileSync(daoFile, 'utf8');
+  // #762 拆分：resolveDispatchConstraints 已移到 dispatch/constraints.mjs，检查器扫它的真相源。
+  const constraintsFile = join(ROOT, 'scripts', 'lib', 'dispatch', 'constraints.mjs');
   const r = inspectVendorGateWiring({
     daoSrc,
-    cmdSrc: readFileSync(cmdFile, 'utf8'),
+    cmdSrc: readFileSync(existsSync(constraintsFile) ? constraintsFile : cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
     watchdogSrc: readFileSync(wdFile, 'utf8'),
   });
