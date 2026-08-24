@@ -21,10 +21,11 @@ worker-start --agent codex --model gpt-5.6-sol   # orca 管就绪 + 协议发送
 - **正解**：必须走 agent 型（`launchAgentInWorktree` 对 start=agent 返回 deferred，worker-start 用 `--agent codex`）。实测 agent 型由 orca 管就绪，不需要手动 wait tui-idle。
 - **识别**：屏面见 `[Pasted Content N chars]` = 粘贴没发送，不是开工证据（#661）。
 
-### 坑 2：冷启动慢（MCP 初始化 ~84s）
+### 坑 2：`--agent codex` 时 codex 屏面是 PS 提示符、dispatch 报 agent_prompt_stalled
 
-- **现象**：`probe_wait_ms = 120000`（2026-08-16 实测：第一项写探针 84s，MCP 还在初始化）。
-- **正解**：agent 型由 orca 管就绪；送字窗口要 ≥ probe_wait_ms（dispatch_input 窗口不够会 stalled，quick-fix 放宽到 180s）。
+- **现象**（2026-08-25 实测）：deferred（`--agent codex`）时 codex 终端屏面是 `PS C:\...>`（PowerShell 提示符），codex 进程没起来，120s 后 `agent_prompt_stalled`。
+- **原因**：不是冷启动慢（`codex exec` 冒烟秒起，MCP 不需要等完就能继续）——是 **orca 的 `--agent codex` 注入方式有问题**（codex 在等 stdin / 或 ca 的 agent 协议没对接上）。
+- **正解**：需要实验确认 orca `--agent codex` 的正确注入通道（可能要先起 codex TUI 等就绪，或换注入方式）。**不要把"等更久"当解**——codex 秒起，stalled 是送达问题不是超时问题（同 devin 教训）。
 
 ### 坑 3：`-a never` 单用比不给还严
 

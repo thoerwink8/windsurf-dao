@@ -7,6 +7,10 @@
 
 以派工注入文本里的「本单 spec」为准（权威范围）。本文件不复制每单不同的职责。
 
+## 派工前读 CLI 教学（#762）
+
+你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`（如 devin.md / codex.md / grok.md / pi.md / cursor.md / claude.md）。开工前先读它——每个 CLI 的正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：devin 要 wait tui-idle、codex 要 --agent，文档早有，现场重推浪费 1 小时）。
+
 ## 开工五步（进 git 的活，先做这个再干活）
 
 1. 空提交撑分支并推送：`git commit --allow-empty -m "[宿主] chore: 起<任务>分支"`，然后 `git push -u origin HEAD`。先 `git log -1 --format='%an <%ae>'` 确认作者是 `dao-worker[bot]`（dispatch 会写 worktree 级身份；已有树补一句 `node scripts/gh-as.mjs worker --set-git-identity`）。不是 bot 就停手——PR 页和 git log 会对不上。
