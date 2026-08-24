@@ -20,6 +20,7 @@ orca orchestration send --to $ORCA_TERMINAL_HANDLE --subject fixture-capture --b
 # send 的消息 id 在 result.message.id；注意 delivered_at 对活着的收件人也是 null
 ```
 
-`index.json` 把 `scripts/lib/dao-cmd.mjs` 里每个 `export function extract*` 映射到一份语料。
+`index.json` 把 `scripts/lib/dao-cmd.mjs` 与 `scripts/lib/dispatch/*.mjs`（#762 按域拆分后
+extract* 散在各域文件）里每个 `export function extract*` 映射到一份语料。
 dao-check 扫源码里的 extract*，缺映射或缺文件就红。
 检查器自己读 JSON 信封（`ok` + `result`），不调用 extract*——自己查自己查不出形状漂了。
