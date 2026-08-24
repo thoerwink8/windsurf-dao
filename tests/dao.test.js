@@ -3399,9 +3399,9 @@ describe('dao', () => {
     await t.test('真语料：send 对活收件人 delivered_at 也是 null', () => {
       assert.ok(fx.ok === true && fx.result.message.delivered_at === null, '真语料：send 对活收件人 delivered_at 也是 null  →  ' + JSON.stringify(fx.result?.message?.delivered_at));
     });
-    const libSrc = fs.readFileSync(LIB, 'utf8');
+    const deliverSrc = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'deliver.mjs'), 'utf8');
     await t.test('deliverMessage 不拿 delivered_at 当门（只报出）', () => {
-      assert.ok(!/delivered_at[^\n]*\?\s*[^:]*:\s*\{\s*ok:\s*false/.test(libSrc) && /deliveredAt: found\.message/.test(libSrc), 'deliverMessage 不拿 delivered_at 当门（只报出）');
+      assert.ok(!/delivered_at[^\n]*\?\s*[^:]*:\s*\{\s*ok:\s*false/.test(deliverSrc) && /deliveredAt: found\.message/.test(deliverSrc), 'deliverMessage 不拿 delivered_at 当门（只报出）');
     });
 
     // CLI 接线：动词登记 + 失败非零
@@ -3474,7 +3474,7 @@ describe('dao', () => {
         'notify 文档：普通投递 ≠ 结算；worker_done 才核 completed  →  ' + S.USAGE.slice(-500));
     });
     await t.test('deliverMessage 注释点明普通 ok:true ≠ 结算，worker_done 核 completed', () => {
-      assert.ok(/不是结算/.test(libSrc) && /未结算/.test(libSrc) && /#551/.test(libSrc) && /completed/.test(libSrc),
+      assert.ok(/不是结算/.test(deliverSrc) && /未结算/.test(deliverSrc) && /#551/.test(deliverSrc) && /completed/.test(deliverSrc),
         'deliverMessage 注释点明普通 ok:true ≠ 结算，worker_done 核 completed');
     });
   });
