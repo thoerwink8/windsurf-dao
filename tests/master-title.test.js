@@ -206,8 +206,17 @@ describe('master-title', () => {
 
   it('真语料规矩：缺存档必须被拦', async (t) => {
     const F = await F_LOAD;
+    // #768 按域拆分后 extract* 散在 dao-cmd.mjs + scripts/lib/dispatch/*.mjs，一并扫
+    const libDir = path.join(REPO, 'scripts', 'lib');
+    const texts = [fs.readFileSync(DAO_CMD, 'utf8')];
+    const dispatchDir = path.join(libDir, 'dispatch');
+    if (fs.existsSync(dispatchDir)) {
+      for (const name of fs.readdirSync(dispatchDir).filter(n => n.endsWith('.mjs')).sort()) {
+        texts.push(fs.readFileSync(path.join(dispatchDir, name), 'utf8'));
+      }
+    }
     const live = F.checkOrcaJsonFixtures({
-      daoCmdText: fs.readFileSync(DAO_CMD, 'utf8'),
+      daoCmdText: texts.join('\n'),
       fixtureDir: path.join(REPO, 'tests', 'fixtures', 'orca-json'),
     });
     await t.test('仓内 extract* 都有真语料', () => {
