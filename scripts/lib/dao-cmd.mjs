@@ -22,53 +22,21 @@ export { formatDesktopLaunchNotes } from './orca-agent-cmds.mjs';
 const require = createRequire(import.meta.url);
 const { parse: parseToml } = require('./smol-toml.cjs');
 
-export const ROOT = resolve(import.meta.dirname, '..', '..');
-export const ROUTING_FILE = join(ROOT, 'docs', 'model-routing.toml');
-export const ROUTING_POLICY_FILE = ROUTING_JSON;
-export const ESCAPE_LOG = join(ROOT, '_flow', 'cmd-escape.jsonl');
-export const HELP_FIXTURE_DIR = join(ROOT, 'tests', 'fixtures', 'orca-help');
-
-export const DEFAULT_THINK_GRACE_MS = 20 * 60 * 1000;
-export const DEFAULT_PROCESS_ALIVE_MS = 2 * 60 * 1000;
-/** 探针等屏默认值。一个所有已知情况都不成立的缺省值是陷阱：
- * grok 配 45s、codex 第一项实测 84s，没有任何 TUI 能在 8s 内跑完第一项。
- * 120s 盖住目前最慢的实测；表上仍给各 provider 显式值。
- * #559：waitAndVerify 原默认 8000ms 硬编码，pi 启动加载 skills 常常超过，
- * 派工连续死在这里——默认改为本常量，调用方再按 provider 的 probe_wait_ms 显式覆盖。 */
-export const DEFAULT_PROBE_WAIT_MS = 120000;
-/** worker-start 调用的物理上限（2026-08-23 fire-and-forget 拍板）：这不是认账钟——
- * orca 到点报 agent_prompt_stalled 只代表「没等到 agent 认账」，字已进终端
- * （763 实证：报 stalled 的工人其实在跑）。15s 盖住注入 + orca 返回；
- * 认账确认不在派工路做，交给 watchdog / flow / inbox.log。 */
-export const WORKER_START_SEND_TIMEOUT_MS = 15000;
-
-export function probeWaitMs(routing, provider) {
-  const raw = routing?.providers?.[provider]?.probe_wait_ms;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return n;
-  return DEFAULT_PROBE_WAIT_MS;
-}
+// #768 拆分：共享常量/纯工具移到 scripts/lib/dispatch/constants.mjs（对外 API 不变）
+import {
+  CONFIRM_PATTERNS, DEFAULT_PROCESS_ALIVE_MS, DEFAULT_PROBE_WAIT_MS, DEFAULT_THINK_GRACE_MS,
+  ESCAPE_LOG, HELP_FIXTURE_DIR, ROOT, ROUTING_FILE,
+} from './dispatch/constants.mjs';
+export {
+  CONFIRM_PATTERNS, DEFAULT_PROCESS_ALIVE_MS, DEFAULT_PROBE_WAIT_MS, DEFAULT_THINK_GRACE_MS,
+  ESCAPE_LOG, HELP_FIXTURE_DIR, ROUTING_FILE, ROUTING_POLICY_FILE, ROOT,
+  WORKER_START_SEND_TIMEOUT_MS, probeWaitMs,
+} from './dispatch/constants.mjs';
 
 const SKIP_DIRS = new Set([
   '.git', 'node_modules', '_flow', '_tmp', '_scratch', '.codegraph',
   '__pycache__', 'derived', '.playwright-mcp',
 ]);
-
-// 漏 -a never 时 codex 会停在确认条。验开工认这些屏面，不靠「看起来在干活」。
-export const CONFIRM_PATTERNS = [
-  /allow this command/i,
-  /allow command\??/i,
-  /approval required/i,
-  /ask for approval/i,
-  /waiting for approval/i,
-  /do you want to (allow|approve|run)/i,
-  /run this command\??/i,
-  /always allow/i,
-  /\[y\/n\]/i,
-  /待确认/,
-  /批准这次/,
-  /允许执行/,
-];
 
 // ── 路由表 ──────────────────────────────────────────────────────────
 
