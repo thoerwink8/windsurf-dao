@@ -7,7 +7,7 @@
 // Orca 没查成（坏 JSON / 没扫到 settings）仍按仓内起，带 orcaReason；不挡派工。
 // --help 自检的比对函数不调用 orca 自己的 schema（agent-context），只解析 --help 文本。
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -277,8 +277,85 @@ export function findDispatchForTask(workerListJson, taskId) {
   }
   return { ok: true, dispatchId: hits[hits.length - 1].dispatchId, scanned: workers.length };
 }
+/** #762：worktree create 带 --repo 选择符，避免 Orca 从外部主树建卡报 Missing repo selector。 */
+export function argsRepoList() {
+  return ['repo', 'list', '--json'];
+}
+
+/** 归一化 git remote URL：去协议前缀 / 尾 .git / 大小写，用于与 orca repo 的 gitRemoteIdentity 对。 */
+export function normalizeRepoRemote(url) {
+  return String(url || '')
+    .trim()
+    .replace(/^[a-z]+:\/\//i, '')
+    .replace(/^git@/, '')
+    .replace(/\.git$/i, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+/**
+ * #762：从 orca repo list 解析本仓选择符（`id:<repoId>`）。
+ * 0 条 / 多条 / 没查成必须分开报（不许把「没查成」当「没注册」）。
+ * 匹配优先用 git remote URL（执行体可能在任意 worktree 跑，路径匹配会失配）；
+ * remote 没给 / 没命中时 fallback 路径 realpath 匹配。remote 与路径各命中一条 → 冲突，不许猜。
+ */
+export function resolveRepoSelector({ repos, root, remoteUrl } = {}) {
+  if (!Array.isArray(repos)) {
+    return { ok: false, unscanned: true, error: 'repo list 结构不认识（缺 result.repos 数组）' };
+  }
+  if (repos.length === 0) {
+    return { ok: false, error: 'orca repo list 是空数组——本仓没注册进 orca，worktree create 会报 Missing repo selector（#762 同款）' };
+  }
+  const wantRemote = normalizeRepoRemote(remoteUrl);
+  const here = root || ROOT;
+  const byRemote = [];
+  const byPath = [];
+  for (const x of repos) {
+    const id = x && x.id;
+    if (!id) continue;
+    const ident = x && x.gitRemoteIdentity;
+    const repoRemote = normalizeRepoRemote(ident && (ident.remoteUrl || ident.canonicalKey));
+    if (wantRemote && repoRemote && (repoRemote === wantRemote || repoRemote.endsWith(`/${wantRemote}`) || wantRemote.endsWith(`/${repoRemote}`))) {
+      byRemote.push(x);
+      continue;
+    }
+    const p = x && (x.path || x.rootPath || x.localPath);
+    if (!p) continue;
+    let same = false;
+    try { same = realpathSync(p) === realpathSync(here); } catch { /* 路径读不到不算命中 */ }
+    if (same) byPath.push(x);
+  }
+  const remoteHits = byRemote.length;
+  const pathHits = byPath.length;
+  if (remoteHits > 0 && pathHits > 0) {
+    return {
+      ok: false,
+      error: `本仓 remote 命中 ${remoteHits} 条、路径命中 ${pathHits} 条——两种判据冲突，不许猜`,
+      remoteIds: byRemote.map(x => x.id),
+      pathIds: byPath.map(x => x.id),
+    };
+  }
+  const hits = remoteHits > 0 ? byRemote : byPath;
+  if (hits.length === 0) {
+    return {
+      ok: false,
+      error: `本仓（${wantRemote || here}）没匹配到已注册 repo（共 ${repos.length} 条）——worktree create 会报 Missing repo selector（#762 同款）`,
+    };
+  }
+  if (hits.length > 1) {
+    return {
+      ok: false,
+      error: `本仓匹配到 ${hits.length} 条 repo（${hits.map(h => h.id).join('、')}）——选择符没法唯一确定，不许猜`,
+      hits: hits.map(h => h.id),
+    };
+  }
+  const id = hits[0].id;
+  if (!id) return { ok: false, unscanned: true, error: '命中的 repo 没给 id（契约变了）' };
+  return { ok: true, repoId: id, selector: `id:${id}`, matchedBy: remoteHits > 0 ? 'remote' : 'path' };
+}
+
 export function argsWorktreeCreate({
-  name, noParent, setup, parentWorktree, baseBranch, comment, issue,
+  name, noParent, setup, parentWorktree, baseBranch, comment, issue, repo,
 } = {}) {
   const a = ['worktree', 'create'];
   if (name) a.push('--name', name);
@@ -288,6 +365,7 @@ export function argsWorktreeCreate({
   if (baseBranch) a.push('--base-branch', baseBranch);
   if (issue != null && String(issue).trim() !== '') a.push('--issue', String(issue).trim());
   if (comment) a.push('--comment', comment);
+  if (repo) a.push('--repo', repo);
   a.push('--json');
   return a;
 }
@@ -917,6 +995,18 @@ export function argsTerminalClose({ terminal, tab } = {}) {
   return a;
 }
 
+/** #762/#753：等 command 型 TUI 就绪（devin 起法：create → wait tui-idle → worker-start）。
+ * wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底。 */
+export function argsTerminalWait({ terminal, for: forWhat, timeoutMs } = {}) {
+  const a = ['terminal', 'wait'];
+  if (terminal) a.push('--terminal', terminal);
+  const target = forWhat === 'exit' ? 'exit' : 'tui-idle';
+  a.push('--for', target);
+  if (timeoutMs != null && Number(timeoutMs) > 0) a.push('--timeout-ms', String(Number(timeoutMs)));
+  a.push('--json');
+  return a;
+}
+
 function flagsOf(args) {
   return args.filter(x => typeof x === 'string' && x.startsWith('--'));
 }
@@ -1534,6 +1624,15 @@ export function gitBranchName(cwd) {
   return { ok: true, branch: r.out };
 }
 
+/** #762：git remote get-url origin，用于 repo 选择符匹配（执行体可能跑在任意 worktree）。 */
+export function gitRemoteOriginUrl(cwd) {
+  const r = gitCapture(cwd, ['remote', 'get-url', 'origin']);
+  if (!r.ok) return r;
+  const out = String(r.out || '').trim();
+  if (!out) return { ok: false, error: 'git remote get-url origin 返回空（没查成）' };
+  return { ok: true, url: out };
+}
+
 /**
  * #575 ⑦：审官开审前对齐 master。
  * rebase 会改 commit sha → review.commit_id != headRefOid → APPROVED 当场失效
@@ -1822,11 +1921,17 @@ export function proofUnavailableReason(p) {
   return /provider_unsupported|session_not_reported/.test(reason) ? reason : null;
 }
 
-export function verifyInjection({ text, readError } = {}) {
+export function verifyInjection({ text, readError, expect } = {}) {
   if (readError) return { ok: false, reason: '没读成', error: readError, unscanned: true };
   if (text == null) return { ok: false, reason: '没读成', error: '注入后读屏结果为空', unscanned: true };
   const t = String(text);
   if (!t.trim()) return { ok: false, reason: '注入后屏面是空的', unscanned: false, text: '' };
+  // #762：屏面非空 ≠ 注入成功。降级判绿前必须见任务书指纹（expect）——否则 PS 提示符/空转
+  // 也会被 3 轮稳定判绿，把「注入没发生」当成「已开工」（2026-08-25 审官实测）。
+  const want = String(expect ?? '').trim();
+  if (want && !t.includes(want)) {
+    return { ok: false, reason: `任务书指纹（${want.slice(0, 24)}…）没出现在屏面——注入可能没发生`, unscanned: false, text: t };
+  }
   const g = t.match(PASTED_CONTENT_RE);
   if (g) {
     return {
@@ -1881,7 +1986,7 @@ export function verifyInjection({ text, readError } = {}) {
 export function verifyStartedPolling({
   dispatchId, readOnce, proofOnce, timeoutMs,
   intervalMs = 400, sleep = sleepSync, label = '',
-  stableRoundsNeeded = 3, provider,
+  stableRoundsNeeded = 3, provider, expect,
 } = {}) {
   if (typeof readOnce !== 'function') {
     throw new Error('verifyStartedPolling 要 readOnce');
@@ -1953,7 +2058,7 @@ export function verifyStartedPolling({
       sleep(intervalMs);
       continue;
     }
-    const v = verifyInjection({ text, readError: read && read.error });
+    const v = verifyInjection({ text, readError: read && read.error, expect });
     if (v.ok) {
       if (TUI_LOADING_RE.test(text)) {
         stableRounds = 0;

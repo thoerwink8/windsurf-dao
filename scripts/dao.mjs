@@ -51,10 +51,13 @@ import {
   argsTerminalList,
   argsTerminalRead,
   argsTerminalSend,
+  argsTerminalWait,
   argsWorktreeCreate,
   argsWorktreeSet,
   argsWorktreeRm,
   argsWorktreePs,
+  argsRepoList,
+  resolveRepoSelector,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
   assembleCardName,
@@ -105,8 +108,10 @@ import {
   isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
+  gitRemoteOriginUrl,
   isRunRequired,
   RUN_REQUIRED_HINT,
+  collectReviewerCardsForPr,
 
   fetchHelpPreferLive,
   loadRouting,
@@ -494,15 +499,15 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
     startArgs = argsWorkerStart({
-      task, worktree, agent: launched.agentId, model: launched.model || undefined, run, timeoutMs: sendTimeout,
+      task, worktree, agent: launched.agentId, model: launched.model || undefined, run, timeoutMs: sendTimeout, from,
     });
   } else if (launched?.handle) {
-    startArgs = argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs: sendTimeout });
+    startArgs = argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs: sendTimeout, from });
   } else {
     return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
   }
@@ -610,6 +615,15 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     // fire-and-forget（2026-08-23）：terminal create 成功即收，不再跑 TUI 就绪探针。
     // 探针误杀能干活的工人（758-763 实证）；起没起来的确认交 watchdog。
     // 传输层失败（终端死 / agent 未配置）由 startOrcaWorker 同步报错兜底。
+    // #762/#753：command 型 TUI（devin）起法 = create → wait tui-idle → worker-start。
+    // wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底；不等就绪就送字会
+    // agent_prompt_stalled（devin 未就绪不接受 dispatch_input）。agent 型由 orca 管就绪。
+    if (launch?.start === 'command') {
+      const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, pipe.provider) }));
+      if (!ready.ok) {
+        return { ok: false, error: `工人 TUI 等就绪失败：${errText(ready.error)}`, handle, attempts };
+      }
+    }
     return { ok: true, modelId, pipeIndex, pipe, launch, handle, attempts, reused: !!term.reused };
   }
   return { ok: false, error: '启动序步数用尽', attempts };
@@ -624,8 +638,9 @@ function readOnceHandle(handle) {
 /** #661/#679：开工只认外部证据——worker-read 真 session 或屏上 agent 真在干活。
  * 看见未提交粘贴继续等到 timeoutMs 或指纹消失且在干活；超时仍在框里才红并回滚。
  * 禁止补回车。散步到 worker-start / reviewer-attach / 复用审官。
- * #680：cursor 通道忽略 [Pasted text] 残留，改认 Working/输出在动。 */
-function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider }) {
+ * #680：cursor 通道忽略 [Pasted text] 残留，改认 Working/输出在动。
+ * #762：expect 是任务书指纹，降级判绿前必须见它（否则 PS 提示符也会被当成开工）。 */
+function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider, expect }) {
   return verifyStartedPolling({
     dispatchId,
     readOnce: () => readOnceHandle(handle),
@@ -633,7 +648,15 @@ function finishWorkerInject({ handle, dispatchId, label, timeoutMs, provider }) 
     timeoutMs,
     label,
     provider,
+    expect,
   });
+}
+
+/** #762：任务书指纹（纯函数）。取 spec 前 24 个非空白字符——任务书进屏面必现，用于降级判绿前校验注入真发生。 */
+function reviewerExpectFingerprint(spec) {
+  const s = String(spec ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  return s.slice(0, 24);
 }
 
 /** 开工证明（#559 ⑥）：worker-read --source auto 官方 transcript 源优先。
@@ -650,15 +673,15 @@ function workerStartProof(dispatchId) {
  * `--from <信箱台>` 不能冒充（orca 校验证书）。
  * 工人侧起审官：本终端已不绑 Run 时，允许 run-use 绑自己（不是帅窗、不是冒充台）。
  */
-function taskCreateOnRun(spec, runId, { rebindSelf = false } = {}) {
-  let last = orca(argsTaskCreate({ spec, run: runId || undefined }));
+function taskCreateOnRun(spec, runId, { rebindSelf = false, from } = {}) {
+  let last = orca(argsTaskCreate({ spec, run: runId || undefined, from }));
   if (last.ok) return last;
   const why = errText(last.error);
   if (!rebindSelf || !runId || !/consumer_fenced|run_required|no longer bound/i.test(why)) {
     return last;
   }
   orca(argsRunUse({ id: runId, self: true }));
-  return orca(argsTaskCreate({ spec, run: runId }));
+  return orca(argsTaskCreate({ spec, run: runId, from }));
 }
 
 /** 绑 orchestration Run（供 task-create / worker-start）。
@@ -1217,12 +1240,29 @@ function runDispatchExecution(order, { queueDir } = {}) {
 
   const created = { childIds: [], childHandles: [], children: [], dispatchIds: [], taskIds: [] };
 
+  // #762：worktree create 一律带 --repo id:<本仓>，避免从外部主树建卡报 Missing repo selector。
+  // 匹配按 git remote URL（执行体可能跑在任意 worktree，路径匹配会失配）；remote 没查成再 fallback 路径。
+  // repo list 没查成 / 0 条 / 多条 → 分开报（不许把「没查成」当「没注册」）。
+  const repoListed = orca(argsRepoList());
+  const repoRemote = gitRemoteOriginUrl(ROOT);
+  const repoResolved = repoListed.ok
+    ? resolveRepoSelector({
+        repos: repoListed.json?.result?.repos,
+        remoteUrl: repoRemote.ok ? repoRemote.url : undefined,
+      })
+    : { ok: false, unscanned: true, error: `orca repo list 没查成：${errText(repoListed.error)}` };
+  if (!repoResolved.ok) {
+    fail(`本仓 repo 选择符没解析成：${repoResolved.error}`, { orderId: order.id, ...plan, repoResolved, repoRemote: repoRemote.ok ? repoRemote.url : repoRemote.error });
+  }
+  created.repoSelector = repoResolved.selector;
+
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
     noParent: true,
     setup: 'skip',
     issue: args.issue,
     comment: plan.comment,
+    repo: repoResolved.selector,
   }));
   if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, { orderId: order.id, ...plan });
   created.workerId = extractWorktreeId(workerWt.json);
@@ -1252,6 +1292,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
         baseBranch,
         issue: args.issue,
         comment: plan.comment,
+        repo: created.repoSelector,
       }));
       if (!childWt.ok) failCreated(created, `子卡 ${child.name} 创建失败: ${errText(childWt.error)}`, { orderId: order.id, ...plan });
       const childId = extractWorktreeId(childWt.json);
@@ -1315,7 +1356,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
 
   let taskId = args.task || null;
   if (soldierBook) {
-    const task = taskCreateOnRun(soldierBook, runId);
+    const task = taskCreateOnRun(soldierBook, runId, { from: coordHandle });
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, { orderId: order.id, ...plan });
       failCreated(created, `task-create 失败: ${errText(task.error)}`, { orderId: order.id, ...plan });
@@ -1325,12 +1366,16 @@ function runDispatchExecution(order, { queueDir } = {}) {
   if (!taskId) failCreated(created, 'dispatch 没拿到 taskId', { orderId: order.id, ...plan });
 
   // fire-and-forget（2026-08-23 拍板）：送字后不等认账。传输错误同步报错回滚；
-  // agent_prompt_stalled 类认账假阴性当「已送未确认」，开工/死亡确认交 watchdog。
+  // agent_prompt_stalled 类认账假阴性当「已送未确认」（763 实证），开工/死亡确认交 watchdog。
+  // #762：--timeout-ms 是 orca 等 dispatch_input 的窗口（command 型 TUI 冷启动要几十秒），
+  // 不是帅等 2 分钟——热路已返回，执行体在后台等。窗口不够 codex/devin 会 agent_prompt_stalled。
   const started = startOrcaWorker({
     task: taskId,
     worktree: created.workerId,
     launched,
     run: runId,
+    from: coordHandle,
+    timeoutMs: probeWaitMs(routing, workerLaunch.provider),
   });
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
@@ -1378,7 +1423,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
         } catch (e) {
           return { ok: false, error: `子任务书渲染失败: ${String(e.message || e)}`, handle: childLaunch.handle };
         }
-        const childTask = taskCreateOnRun(childBook, runId);
+        const childTask = taskCreateOnRun(childBook, runId, { from: coordHandle });
         if (!childTask.ok) {
           return { ok: false, error: `子 task-create 失败: ${errText(childTask.error)}`, handle: childLaunch.handle };
         }
@@ -1390,6 +1435,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           worktree: worktreeId,
           launched: childLaunch,
           run: runId,
+          from: coordHandle,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
@@ -2773,10 +2819,28 @@ function cmdReviewerCreate(args) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
   }
 
-  const station = bindStation();
-  if (!station.ok) failCreated(launched, station.error, plan);
-  const reviewerRunId = soldierRunId || station.runId;
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
+  // #762：detached 起审官同工人路——起「派工协调（勿关）」哑终端当 coordinator，
+  // run-create --from 它，worker-start 带 --from + wait tui-idle（command 型 TUI 就绪即送）。
+  // bindStation 自开 Run 在 detached 无 coordinator 终端，worker-start 会 no_active_sender/consumer_fenced。
+  const revCoordTerm = orca(argsTerminalCreate({ worktree: reviewerId, title: '派工协调（勿关）' }));
+  if (!revCoordTerm.ok) failCreated(launched, `审官协调终端没建成：${errText(revCoordTerm.error)}`, plan);
+  const revCoordHandle = extractHandleFromCreate(revCoordTerm.json);
+  if (!revCoordHandle) failCreated(launched, '审官协调终端没返回 handle（没查成）', plan);
+  launched.reviewerCoordHandle = revCoordHandle;
+  launched.handles = [...(Array.isArray(launched.handles) ? launched.handles : []), revCoordHandle];
+  const revCoordRun = orca(argsRunCreate({ objective: 'coordinator: dao review', from: revCoordHandle }));
+  if (!revCoordRun.ok) failCreated(launched, `审官协调 Run 没建成（--from 哑终端）：${errText(revCoordRun.error)}`, plan);
+  const revRunId = extractRunId(revCoordRun.json);
+  if (!revRunId) failCreated(launched, '审官协调 Run 没拿到 id（没查成）', plan);
+
+  // #762：wait 按「实际 command 型起的」（revTerm 非 deferred 且给了 handle），不按 launch.start——
+  // codex 配 start=agent 但 launchAgentInWorktree 常退成 command 型（有 handle），冷启动要等就绪。
+  if (!revTerm.deferred && launched.reviewerHandle) {
+    const ready = orca(argsTerminalWait({ terminal: launched.reviewerHandle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, reviewerLaunch.provider) }));
+    if (!ready.ok) failCreated(launched, `审官 TUI 等就绪失败：${errText(ready.error)}`, plan);
+  }
+
+  const revTask = taskCreateOnRun(reviewerBook, revRunId, { rebindSelf: true, from: revCoordHandle });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(launched, RUN_REQUIRED_HINT, plan);
     failCreated(launched, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -2790,7 +2854,8 @@ function cmdReviewerCreate(args) {
     launched: revTerm.deferred
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: launched.reviewerHandle, launch: reviewerLaunch },
-    run: reviewerRunId,
+    run: revRunId,
+    from: revCoordHandle,
   });
   if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   launched.reviewerHandle = revStarted.handle;
@@ -2971,6 +3036,32 @@ function cmdReviewerAttach(args) {
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
+  // #762：重派审官前先销毁该 PR 已有审官卡——残留的审官卡/终端会干扰新建
+  // （实测 attach 误读旧卡 handle，且旧 codex 可能还停在输入框）。查不成不许当 0 张。
+  const reviewWorkers = orca(argsWorkerList());
+  const reviewTrees = orca(argsWorktreePs());
+  const oldCards = (reviewWorkers.ok && reviewTrees.ok)
+    ? collectReviewerCardsForPr({
+        pr: args.pr,
+        parentId: args.worktree,
+        worktrees: reviewTrees.json?.result?.worktrees,
+        workers: reviewWorkers.json?.result?.workers,
+      })
+    : { ok: false, unscanned: true, error: `盘面没查成：${!reviewWorkers.ok ? errText(reviewWorkers.error) : ''}${!reviewTrees.ok ? errText(reviewTrees.error) : ''}`.trim() };
+  if (!oldCards.ok) {
+    fail(`查该 PR 已有审官卡没查成（不许猜有没有）：${oldCards.error}`, { ...plan, oldCards });
+  }
+  const doomed = (oldCards.cards || []).map(c => c.worktreeId).filter(Boolean);
+  for (const id of doomed) {
+    const rm = orca(argsWorktreeRm({ worktree: id, force: true }));
+    if (!rm.ok && !/not_found|not registered/i.test(errText(rm.error))) {
+      fail(`销毁旧审官卡 ${id} 失败：${errText(rm.error)}`, { ...plan, oldCards, rm });
+    }
+  }
+  if (doomed.length > 0) {
+    console.error(`[dao] 已销毁旧审官卡 ${doomed.length} 张（重派前清理）`);
+  }
+
   const created = {};
   const revWt = orca(argsWorktreeCreate({
     name: revName,
@@ -3079,15 +3170,31 @@ function cmdReviewerAttach(args) {
   }
 
   // #682 微通道：quick-fix 的异步 attach 是 detached 进程，bindStation 自开的 Run 没有
-  // coordinator 终端，worker-start 会 consumer_fenced。微通道子进程显式 --run（--from 信箱台
-  // 建的 Run，coordinator 是常驻信箱台）；其余路径照旧走 bindStation。
+  // coordinator 终端，worker-start 会 consumer_fenced/no_active_sender。微通道子进程显式
+  // --run（--from 信箱台建的 Run，coordinator 是常驻信箱台）已通；没给 --run 的 detached
+  // 补审官照 #762 起哑终端 + run-create --from（与工人路同源）。
   let reviewerRunId = args.run ? String(args.run).trim() : null;
+  let reviewerFrom = null;
   if (!reviewerRunId) {
-    const station = bindStation();
-    if (!station.ok) failCreated(created, station.error, plan);
-    reviewerRunId = station.runId;
+    const revCoordTerm = orca(argsTerminalCreate({ worktree: created.reviewerId, title: '派工协调（勿关）' }));
+    if (!revCoordTerm.ok) failCreated(created, `审官协调终端没建成：${errText(revCoordTerm.error)}`, plan);
+    const revCoordHandle = extractHandleFromCreate(revCoordTerm.json);
+    if (!revCoordHandle) failCreated(created, '审官协调终端没返回 handle（没查成）', plan);
+    created.reviewerCoordHandle = revCoordHandle;
+    created.handles = [...(Array.isArray(created.handles) ? created.handles : []), revCoordHandle];
+    const revCoordRun = orca(argsRunCreate({ objective: 'coordinator: dao review', from: revCoordHandle }));
+    if (!revCoordRun.ok) failCreated(created, `审官协调 Run 没建成（--from 哑终端）：${errText(revCoordRun.error)}`, plan);
+    reviewerRunId = extractRunId(revCoordRun.json);
+    if (!reviewerRunId) failCreated(created, '审官协调 Run 没拿到 id（没查成）', plan);
+    reviewerFrom = revCoordHandle;
   }
-  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true });
+  // #762：wait 按「实际 command 型起的」（revTerm 非 deferred 且给了 handle），不按 launch.start——
+  // codex 配 start=agent 但 launchAgentInWorktree 常退成 command 型（有 handle），冷启动要等就绪。
+  if (!revTerm.deferred && created.reviewerHandle && !args.skipWait) {
+    const ready = orca(argsTerminalWait({ terminal: created.reviewerHandle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, reviewerLaunch.provider) }));
+    if (!ready.ok) failCreated(created, `审官 TUI 等就绪失败：${errText(ready.error)}`, plan);
+  }
+  const revTask = taskCreateOnRun(reviewerBook, reviewerRunId, { rebindSelf: true, from: reviewerFrom });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error)) failCreated(created, RUN_REQUIRED_HINT, plan);
     failCreated(created, `审官 task-create 失败: ${errText(revTask.error)}`, plan);
@@ -3102,6 +3209,7 @@ function cmdReviewerAttach(args) {
       ? { deferred: true, agentId: revTerm.agentId, model: revTerm.model, launch: reviewerLaunch }
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
+    from: reviewerFrom,
     // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
     // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
     timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,
@@ -3119,6 +3227,7 @@ function cmdReviewerAttach(args) {
     label: '审官',
     timeoutMs: probeWaitMs(routing, reviewerLaunch.provider),
     provider: reviewerLaunch.provider,
+    expect: reviewerExpectFingerprint(reviewerBook),
   });
   if (!reviewerInject.ok) {
     failCreated(created, `审官注入后开工验证失败: ${reviewerInject.reason}`, {

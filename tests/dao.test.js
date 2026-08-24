@@ -2052,6 +2052,38 @@ describe('dao', () => {
         '#762 记录新建 Run 供回滚  →  ' + execFn.slice(0, 400));
       assert.ok(/created\.handles = \[\.\.\.\(Array\.isArray\(created\.handles\)/.test(execFn),
         '#762 协调哑终端登记进 handles 随回滚关');
+      assert.ok(/taskCreateOnRun\(soldierBook, runId, \{ from: coordHandle \}\)/.test(execFn)
+        && /startOrcaWorker\(\{[\s\S]*?from: coordHandle/.test(execFn),
+        '#762 task-create / worker-start 都带 --from 协调哑终端（detached 无发送者终端）  →  ' + execFn.slice(0, 900));
+    });
+    await t.test('#762 worktree create 带 --repo id:<本仓>（外部主树不再 Missing repo selector）', () => {
+      const execFn = daoSrc.slice(daoSrc.indexOf('function runDispatchExecution'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/argsRepoList\(\)/.test(execFn) && /resolveRepoSelector\(\{/.test(execFn) && /gitRemoteOriginUrl\(ROOT\)/.test(execFn),
+        '#762 执行体解析 repo 选择符（remote 匹配）  →  ' + execFn.slice(0, 500));
+      assert.ok(/repo: repoResolved\.selector/.test(execFn) && /repo: created\.repoSelector/.test(execFn),
+        '#762 工人卡与子卡都带 --repo  →  ' + execFn.slice(0, 600));
+    });
+    await t.test('#762 resolveRepoSelector：remote 命中 / 路径兜底 / 冲突 / 0 条 / 多条 / 没查成 分开报', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-repo-sel-'));
+      const ident = (url) => ({ gitRemoteIdentity: { remoteUrl: url } });
+      const one = S.resolveRepoSelector({ repos: [{ id: 'r1', ...ident('https://github.com/thoerwink8/windsurf-dao.git') }], remoteUrl: 'https://github.com/thoerwink8/windsurf-dao.git' });
+      assert.ok(one.ok && one.selector === 'id:r1' && one.matchedBy === 'remote', 'remote 命中  →  ' + JSON.stringify(one));
+      const pathOnly = S.resolveRepoSelector({ repos: [{ id: 'r2', path: root }], root });
+      assert.ok(pathOnly.ok && pathOnly.selector === 'id:r2' && pathOnly.matchedBy === 'path', '路径兜底  →  ' + JSON.stringify(pathOnly));
+      const conflict = S.resolveRepoSelector({ repos: [{ id: 'r1', ...ident('https://github.com/thoerwink8/windsurf-dao.git') }, { id: 'r2', path: root }], root, remoteUrl: 'https://github.com/thoerwink8/windsurf-dao.git' });
+      assert.ok(!conflict.ok && /冲突/.test(conflict.error), '不同 repo 各命中 remote/路径 → 冲突  →  ' + JSON.stringify(conflict));
+      const none = S.resolveRepoSelector({ repos: [], remoteUrl: 'x' });
+      assert.ok(!none.ok && !none.unscanned && /没注册/.test(none.error), '0 条 → 没注册  →  ' + JSON.stringify(none));
+      const many = S.resolveRepoSelector({ repos: [{ id: 'r1', ...ident('https://github.com/thoerwink8/windsurf-dao.git') }, { id: 'r2', ...ident('https://github.com/thoerwink8/windsurf-dao.git') }], remoteUrl: 'https://github.com/thoerwink8/windsurf-dao.git' });
+      assert.ok(!many.ok && /2 条 repo/.test(many.error), '多条 → 不许猜  →  ' + JSON.stringify(many));
+      const miss = S.resolveRepoSelector({ remoteUrl: 'x' });
+      assert.ok(!miss.ok && miss.unscanned === true && /结构不认识/.test(miss.error), '没查成（无 repos）→ unscanned  →  ' + JSON.stringify(miss));
+    });
+    await t.test('#762 argsWorktreeCreate 带 repo 时透传 --repo', () => {
+      const withRepo = S.argsWorktreeCreate({ name: 'n', repo: 'id:r1' });
+      assert.ok(withRepo.includes('--repo') && withRepo.includes('id:r1'), '#762 透传 --repo  →  ' + withRepo.join(' '));
+      const without = S.argsWorktreeCreate({ name: 'n' });
+      assert.ok(!without.includes('--repo'), '无 repo 不带 --repo');
     });
     await t.test('#614 dispatch 回滚退役本次新建的 Run（只退 runCreated 的）', () => {
       const rollbackFn = daoSrc.slice(daoSrc.indexOf('function rollbackCreated'), daoSrc.indexOf('function snapshotHandleScreen'));
@@ -2093,10 +2125,15 @@ describe('dao', () => {
       assert.ok(!/afterDispatchSuccess/.test(daoSrc) && !/terminal', 'rename'/.test(daoSrc), '#495 dao.mjs 不走终端 rename');
     });
     await t.test('#559 waitAndVerify 超时按 provider 的 probe_wait_ms（不再 8s 硬编码）', () => {
-      // 2026-08-23：派工主路已 fire-and-forget（不就绪探针），probeWaitMs 只剩审官/调试路。
+      // 2026-08-23：派工主路已 fire-and-forget（不就绪轮询探针），waitAndVerify 只剩审官/调试路。
+      // #762/#753：command 型 TUI（devin）起法 = create → wait tui-idle（就绪即返回）→ worker-start；
+      // 不等就绪就送字会 agent_prompt_stalled。agent 型由 orca 管就绪。
+      const startWorkerFn = daoSrc.slice(daoSrc.indexOf('function startOrcaWorker'), daoSrc.indexOf('function startWorkerBySlate'));
       assert.ok(/function cmdReviewerCreate[\s\S]*probeWaitMs\(routing, reviewerLaunch\.provider\)/.test(daoSrc)
-        && !/probeWaitMs\(routing, workerLaunch\.provider\)/.test(daoSrc),
-        '#559 waitAndVerify 超时按 provider 的 probe_wait_ms（审官路保留；派工路已删探针）');
+        && !/probeWaitMs/.test(startWorkerFn),
+        '#559 waitAndVerify 超时按 provider 的 probe_wait_ms（审官路保留；派工路已删轮询探针）');
+      assert.ok(/argsTerminalWait\(\{ terminal: handle, for: 'tui-idle'/.test(daoSrc),
+        '#762/#753 派工路 command 型 TUI 等 tui-idle（就绪即返回，防 stalled）');
     });
     await t.test('#559 waitAndVerify 默认超时不再是 8000ms', () => {
       assert.ok(!/timeoutMs = 8000/.test(fs.readFileSync(LIB, 'utf8')), '#559 waitAndVerify 默认超时不再是 8000ms');
@@ -2620,9 +2657,9 @@ describe('dao', () => {
     });
     await t.test('dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create；#762 派工协调哑终端是例外', () => {
       const createHits = [...src.matchAll(/argsTerminalCreate\(/g)];
-      assert.ok(createHits.length === 2, 'agent 在 launchAgentInWorktree + #762 协调哑终端  →  ' + createHits.length);
-      const coordHit = createHits.find(h => /派工协调（勿关）/.test(src.slice(h.index, h.index + 200)));
-      assert.ok(coordHit, '两处之一必须是 #762 派工协调哑终端（不起 agent）');
+      assert.ok(createHits.length >= 4, 'agent 在 launchAgentInWorktree + #762 工人/审官协调哑终端  →  ' + createHits.length);
+      const coordHits = createHits.filter(h => /派工协调（勿关）/.test(src.slice(h.index, h.index + 200)));
+      assert.ok(coordHits.length >= 3, '#762 工人 + 审官 create/attach 的协调哑终端（不起 agent）  →  ' + coordHits.length);
     });
 
     const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
@@ -2803,6 +2840,16 @@ describe('dao', () => {
     const landed = S.verifyInjection({ text: '短摘要：修命令库\nThinking...\n' });
     await t.test('屏上无 Pasted Content → 注入验证绿', () => {
       assert.ok(landed.ok === true, '屏上无 Pasted Content → 注入验证绿  →  ' + JSON.stringify(landed));
+    });
+    // #762 故意违规样本：expect 给了但屏面不含任务书指纹 → 必须红。
+    // 2026-08-25 审官实测：屏面只有 PS 提示符（注入没发生）被 3 轮稳定判绿——纯函数漏洞。
+    const noFingerprint = S.verifyInjection({ text: 'PS C:\\repo>', expect: '按审官任务书审 PR' });
+    await t.test('#762 故意违规：expect 给了但屏面无任务书指纹 → 注入验证红（防 PS 提示符假绿）', () => {
+      assert.ok(noFingerprint.ok === false && /任务书指纹/.test(noFingerprint.reason), '#762 expect 校验 → 红  →  ' + JSON.stringify(noFingerprint));
+    });
+    const withFingerprint = S.verifyInjection({ text: '按审官任务书审 PR #767\nReading...', expect: '按审官任务书审 PR' });
+    await t.test('#762 expect 出现在屏面 → 注入验证绿', () => {
+      assert.ok(withFingerprint.ok === true, '#762 expect 命中 → 绿  →  ' + JSON.stringify(withFingerprint));
     });
 
     // #559 ⑥：判开工优先 worker-read --source auto（官方可证明 transcript 源）
