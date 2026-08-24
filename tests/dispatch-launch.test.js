@@ -470,7 +470,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: dir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 
@@ -549,7 +549,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 

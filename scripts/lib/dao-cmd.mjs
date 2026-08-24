@@ -888,7 +888,7 @@ export function parseArgs(argv) {
 export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
 
 派工（约束载体，缺一即退；merge-policy 默认 auto）：
-  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色> [--confirm]) [--dry-run] [--allow-dup]
+  dispatch --name <动宾短语> [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --split <no|N> [--split-reason <文>] [--slice <分块>]... --reviewer <模型id> --spec <文> (--model <id> | --role <角色>) [--confirm] [--dry-run] [--allow-dup]
                   # 异步发射（2026-08-23 async-launch 拍板）：热路只做参数校验+写派工单到 _flow/queue/+拉起 detached 执行体，<1s 返回「已受理」；
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
@@ -938,7 +938,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   ask --question <文> [--options <csv>] [--timeout-ms <n>] [--run <id>]
                   # 替代 orca orchestration ask：超时打 ASK_TIMEOUT 非零退出，不许空转
   task-create --spec <文>
-  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色> [--confirm]) [--retry-of <id>]
+  worker-start --task <id> --terminal <handle> [--worktree <sel>] [--issue <issue号>] [--merge-policy auto|manual] [--merge-reason <文>] --reviewer <id> (--model <id> | --role <角色>) [--confirm] [--retry-of <id>]
   worker-release --dispatch <id>   # 结算后收尾：release 或转移所有权（#559 ⑤），不 release 会留孤儿工位
   worker-read --dispatch <id> [--source auto|transcript|terminal] [--limit <n>]   # 读工人输出/开工证明（#559 ⑥）
   send --terminal <handle> --text <文> [--enter] [--agent grok|claude|pi|codex]
@@ -973,7 +973,7 @@ delivered_at 只如实报出，不当判据（本机 Orca 对活着的收件人�
 一律非零并报「未结算」。状态没查成标 unscanned，不许当成「查过仍是 dispatched」。
 
 启动模板只读 docs/model-routing.toml [providers.*].launch，读失败非零退出。
-派工不给 --model 时只推荐、要 --confirm，禁静默默认。未知 --参数 一律非零。
+派工不给 --model 时只推荐、要 --confirm，禁静默默认；手写 --model 偏离该工种（默认写码）顺位 1 也要 --confirm（#754）。未知 --参数 一律非零。
 merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 manual 必须给 --merge-reason，
 理由写进任务卡 comment 留痕，只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类。
 --split 必填（#611）：no 或 ≥2 的整数；两个都不给 → 非零退出。--split no 必须给 --split-reason（理由入账本）。

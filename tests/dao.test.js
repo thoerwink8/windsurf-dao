@@ -14,6 +14,7 @@
 //   4. merge-policy 默认 auto（#511：帅只感知不再是关口）；选 manual 必须给 --merge-reason
 //   5. 缺 --model/--role（峰时误推 ds-flash：不给则只推荐、禁静默）
 //   6. 缺 --reviewer（现建现起造成流转断点）
+//   7. 手写 --model 偏离该工种（默认写码）顺位 1 也要 --confirm（#754，与 --role 同一条旗标）
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -431,7 +432,7 @@ describe('dao', () => {
       catch { return { raw: r.stdout, err: r.stderr }; }
     }
 
-    const noMerge = dispatch(['--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const noMerge = dispatch(['--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const p1 = payload(noMerge);
     await t.test('缺 --merge-policy → 默认 auto 通过', () => {
       assert.ok(noMerge.status === 0 && p1.mergePolicy === 'auto', '缺 --merge-policy → 默认 auto 通过  →  ' + JSON.stringify(p1));
@@ -446,7 +447,7 @@ describe('dao', () => {
       assert.ok(p1b.error && String(p1b.error).includes('--merge-reason'), 'manual 无 --merge-reason → 打印缺什么  →  ' + JSON.stringify(p1b));
     });
 
-    const withReason = dispatch(['--merge-policy', 'manual', '--merge-reason', '改协作约定 CLAUDE.md', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const withReason = dispatch(['--merge-policy', 'manual', '--merge-reason', '改协作约定 CLAUDE.md', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const p1c = payload(withReason);
     await t.test('manual 带理由 → 通过且理由落 comment', () => {
       assert.ok(withReason.status === 0 && p1c.mergePolicy === 'manual' && /manual 理由: 改协作约定/.test(p1c.comment), 'manual 带理由 → 通过且理由落 comment  →  ' + JSON.stringify(p1c));
@@ -461,7 +462,7 @@ describe('dao', () => {
       assert.ok(emptyReason.status !== 0 && /--merge-reason/.test(p1d.error || ''), 'manual 理由为空白 → 非零（理由为空即退出）  →  ' + JSON.stringify(p1d));
     });
 
-    const autoExplicit = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const autoExplicit = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
     const p1e = payload(autoExplicit);
     await t.test('显式 auto 无需理由 → 通过', () => {
       assert.ok(autoExplicit.status === 0 && p1e.mergePolicy === 'auto', '显式 auto 无需理由 → 通过  →  ' + JSON.stringify(p1e));
@@ -488,7 +489,7 @@ describe('dao', () => {
       assert.ok(p3.error && String(p3.error).includes('--reviewer'), '缺 --reviewer → 打印缺什么  →  ' + JSON.stringify(p3));
     });
 
-    const noSpec = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--dry-run']);
+    const noSpec = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--dry-run']);
     const pSpec = payload(noSpec);
     await t.test('R5 缺 --spec → 非零', () => {
       assert.ok(noSpec.status !== 0, 'R5 缺 --spec → 非零  →  ' + `status=${noSpec.status}`);
@@ -497,7 +498,7 @@ describe('dao', () => {
       assert.ok(pSpec.error && String(pSpec.error).includes('--spec'), 'R5 缺 --spec → 打印缺什么  →  ' + JSON.stringify(pSpec));
     });
 
-    const ok = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要：修命令库', '--dry-run']);
+    const ok = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要：修命令库', '--dry-run']);
     const pOk = payload(ok);
     await t.test('三参数齐 + --spec → dry-run 过', () => {
       assert.ok(ok.status === 0 && pOk.ok === true, '三参数齐 + --spec → dry-run 过  →  ' + JSON.stringify(pOk));
@@ -512,7 +513,7 @@ describe('dao', () => {
       assert.ok(/\bgrok\b/.test(pOk.workerLaunch) && /--always-approve/.test(pOk.workerLaunch), 'dry-run 工人走 grok --always-approve  →  ' + JSON.stringify(pOk));
     });
 
-    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
+    const okIssue = dispatch(['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--dry-run']);
     const pIssue = payload(okIssue);
     await t.test('#589：dry-run 带 --issue → 工人卡 ISSUE- + 角色·模型（审官卡推迟到 worker-done）', () => {
       assert.ok(okIssue.status === 0 && pIssue.workerCard === 'ISSUE-#565 工人·grok-4.6 修地基' && pIssue.reviewerDeferred === true, '#589：dry-run 带 --issue → 工人卡 ISSUE-# + 角色·模型  →  ' + JSON.stringify(pIssue));
@@ -540,8 +541,72 @@ describe('dao', () => {
       assert.ok(roleConfirm.status === 0 && pConf.model === 'devin-deepseek-v4-flash-max', '--role + --confirm 采用写码推荐 devin  →  ' + JSON.stringify(pConf));
     });
 
+    // #754 偏离闸：手写 --model 偏离该工种顺位 1（默认写码；给了 --role 按那个工种），
+    // 与 --role 走同一条 --confirm，禁第三种确认旗标。
+    const fnDeviation = S.resolveDispatchConstraints({
+      model: 'deepseek-v4-flash', reviewer: 'gpt-5.6-sol', routing,
+    });
+    await t.test('函数层：#754 写码 --model deepseek-v4-flash 偏离 1 号 → 失败要 --confirm', () => {
+      assert.ok(fnDeviation.ok === false && fnDeviation.needsConfirm === true && (fnDeviation.missing || []).includes('--confirm'),
+        '偏离 1 号 → 失败要 --confirm  →  ' + JSON.stringify(fnDeviation));
+    });
+    await t.test('函数层：偏离话面点名 1 号模型、手写模型与 --confirm', () => {
+      assert.ok(/devin-deepseek-v4-flash-max/.test(fnDeviation.error) && /deepseek-v4-flash/.test(fnDeviation.error) && /--confirm/.test(fnDeviation.error),
+        '话面点名 1 号/手写/--confirm  →  ' + fnDeviation.error);
+    });
+    const fnDeviationConfirm = S.resolveDispatchConstraints({
+      model: 'deepseek-v4-flash', reviewer: 'gpt-5.6-sol', confirm: true, routing,
+    });
+    await t.test('函数层：偏离 1 号带 --confirm → 放行', () => {
+      assert.ok(fnDeviationConfirm.ok === true && fnDeviationConfirm.model === 'deepseek-v4-flash',
+        '偏离 1 号带 --confirm → 放行  →  ' + JSON.stringify(fnDeviationConfirm));
+    });
+    const fnRankOne = S.resolveDispatchConstraints({
+      model: 'devin-deepseek-v4-flash-max', reviewer: 'gpt-5.6-sol', routing,
+    });
+    await t.test('函数层：--model 正是顺位 1 → 不用 confirm', () => {
+      assert.ok(fnRankOne.ok === true && fnRankOne.model === 'devin-deepseek-v4-flash-max',
+        '--model 正是顺位 1 → 不用 confirm  →  ' + JSON.stringify(fnRankOne));
+    });
+    const fnRoleDeviation = S.resolveDispatchConstraints({
+      model: 'gpt-5.6-sol', role: '查证', reviewer: 'gpt-5.6-sol', routing,
+    });
+    await t.test('函数层：#754 给了 --role 按那个工种对账（查证 1 号 grok，gpt 偏离要 --confirm）', () => {
+      assert.ok(fnRoleDeviation.ok === false && fnRoleDeviation.needsConfirm === true && /查证配置单顺位 1 是 grok-4\.6/.test(fnRoleDeviation.error),
+        '按 --role 工种对账  →  ' + JSON.stringify(fnRoleDeviation));
+    });
+    const fnRoleRankOne = S.resolveDispatchConstraints({
+      model: 'grok-4.6', role: '查证', reviewer: 'gpt-5.6-sol', routing,
+    });
+    await t.test('函数层：--role 工种顺位 1 的 --model → 不用 confirm', () => {
+      assert.ok(fnRoleRankOne.ok === true && fnRoleRankOne.model === 'grok-4.6',
+        '查证 1 号 grok 直接过  →  ' + JSON.stringify(fnRoleRankOne));
+    });
+
+    const devFlash = dispatch(['--merge-policy', 'auto', '--model', 'deepseek-v4-flash', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const pDevFlash = payload(devFlash);
+    await t.test('#754 dispatch --dry-run：写码 --model deepseek-v4-flash 无 --confirm → 非零', () => {
+      assert.ok(devFlash.status !== 0, '#754 无 --confirm → 非零  →  ' + `status=${devFlash.status} ${JSON.stringify(pDevFlash)}`);
+    });
+    await t.test('#754 dispatch --dry-run：错误点名 1 号 / 手写 / --confirm', () => {
+      assert.ok(/devin-deepseek-v4-flash-max/.test(pDevFlash.error || '') && /deepseek-v4-flash/.test(pDevFlash.error || '') && /--confirm/.test(pDevFlash.error || ''),
+        '错误点名  →  ' + JSON.stringify(pDevFlash));
+    });
+    const devFlashConf = dispatch(['--merge-policy', 'auto', '--model', 'deepseek-v4-flash', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const pDevFlashConf = payload(devFlashConf);
+    await t.test('#754 dispatch --dry-run：写码 --model deepseek-v4-flash 带 --confirm → 过', () => {
+      assert.ok(devFlashConf.status === 0 && pDevFlashConf.ok === true && pDevFlashConf.model === 'deepseek-v4-flash',
+        '#754 带 --confirm → 过  →  ' + JSON.stringify(pDevFlashConf));
+    });
+    const rankOne = dispatch(['--merge-policy', 'auto', '--model', 'devin-deepseek-v4-flash-max', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run']);
+    const pRankOne = payload(rankOne);
+    await t.test('#754 dispatch --dry-run：--model devin-deepseek-v4-flash-max（顺位 1）不用 confirm', () => {
+      assert.ok(rankOne.status === 0 && pRankOne.ok === true && pRankOne.model === 'devin-deepseek-v4-flash-max',
+        '顺位 1 直接过  →  ' + JSON.stringify(pRankOne));
+    });
+
     const fnDefault = S.resolveDispatchConstraints({
-      model: 'grok-4.6', reviewer: 'gpt-5.6-sol', routing,
+      model: 'devin-deepseek-v4-flash-max', reviewer: 'gpt-5.6-sol', routing,
     });
     await t.test('函数层不给 mergePolicy → 默认 auto', () => {
       assert.ok(fnDefault.ok === true && fnDefault.mergePolicy === 'auto', '函数层不给 mergePolicy → 默认 auto  →  ' + JSON.stringify(fnDefault));
@@ -624,13 +689,13 @@ describe('dao', () => {
     // #565 返工：--dry-run 不实际派工，门控对预览无意义——disambiguation 只作报告，不影响退出码。
     const FAKE_GH = path.join(REPO, 'tests', 'fixtures', 'fake-gh.mjs');
     const cliEnv = { ...process.env, DAO_GH_FAKE: FAKE_GH };
-    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliHas = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', '修地基', '--issue', '565', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pHas = (() => { try { return JSON.parse((cliHas.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿', () => {
       assert.ok(cliHas.status === 0 && pHas.disambiguation && pHas.disambiguation.ok === true, '消歧门：dispatch --issue 565（有 label）--dry-run 过且报告为绿  →  ' + `status=${cliHas.status} ${String(pHas.error || '')}`);
     });
 
-    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const cliNo = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分', '--dry-run'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pNo = (() => { try { return JSON.parse((cliNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）', () => {
       assert.ok(cliNo.status === 0 && pNo.disambiguation && pNo.disambiguation.ok === false && pNo.disambiguation.hasLabel === false, '消歧门：dry-run --issue 559（无 label）→ exit 0，报告 hasLabel:false（门控不影响预览）  →  ' + `status=${cliNo.status} ${JSON.stringify(pNo)}`);
@@ -645,7 +710,7 @@ describe('dao', () => {
     const realQueue = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-queue-'));
     const realLedger = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-565-ledger-'));
     const realEnv = { ...cliEnv, DAO_DISPATCH_QUEUE_DIR: realQueue, LEDGER_EVENTS_DIR: realLedger };
-    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
+    const cliReal = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '559', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
     const pReal = (() => { try { return JSON.parse((cliReal.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rReal = waitForOutJson(pReal.resultPath) || {};
     await t.test('消歧门：真派工 --issue 559（无 label）→ 热路受理，执行体结果 ok:false 拒派', () => {
@@ -660,7 +725,7 @@ describe('dao', () => {
     });
 
     // worker-start 带 --issue 同样受门控：559 无 label → 在碰 orca 之前就被拦（非 0）。
-    const wsNo = spawnSync(process.execPath, [CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
+    const wsNo = spawnSync(process.execPath, [CLI, 'worker-start', '--task', 't', '--worktree', 'w', '--terminal', 'h', '--issue', '559', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm'], { encoding: 'utf8', cwd: REPO, env: cliEnv });
     const pWsNo = (() => { try { return JSON.parse((wsNo.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     await t.test('消歧门：worker-start --issue 559（无 label）→ 非 0 拒派', () => {
       assert.ok(wsNo.status !== 0 && /已消歧/.test(String(pWsNo.error || '')), '消歧门：worker-start --issue 559（无 label）→ 非 0 拒派  →  ' + `status=${wsNo.status} ${JSON.stringify(pWsNo)}`);
@@ -670,7 +735,7 @@ describe('dao', () => {
     });
 
     // CI 场景（无 GH_TOKEN → gh 失败）：真派工必须报「没查成」拒派，不许放行（#565 硬约束）。
-    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
+    const cliFail = spawnSync(process.execPath, [CLI, 'dispatch', '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--issue', '999', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测默认：不测拆分'], { encoding: 'utf8', cwd: REPO, env: realEnv });
     const pFail = (() => { try { return JSON.parse((cliFail.stdout || '').trim().split(/\r?\n/).pop()); } catch { return {}; } })();
     const rFail = waitForOutJson(pFail.resultPath) || {};
     await t.test('消歧门：gh 失败（CI 无 token）真派工 → 执行体结果报「没查成」拒派', () => {
@@ -3807,7 +3872,7 @@ describe('dao', () => {
       try { return JSON.parse((r.stdout || '').trim().split(/\r?\n/).pop()); }
       catch { return { raw: r.stdout, err: r.stderr }; }
     }
-    const base = ['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--name', 'x', '--spec', '短摘要', '--dry-run'];
+    const base = ['--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm', '--name', 'x', '--spec', '短摘要', '--dry-run'];
 
     const noSplit = dispatchRaw(base);
     const pNo = payload(noSplit);
@@ -3870,7 +3935,7 @@ describe('dao', () => {
           '--slice', 'tests/a.test.js', '--slice', 'tests/b.test.js',
           '--slice', 'tests/c.test.js', '--slice', 'tests/d.test.js'];
       const r = dispatchRaw([
-        '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+        '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
         '--name', c.title, '--issue', String(c.issue), '--spec', `短摘要：#${c.issue}`,
         ...flags, '--dry-run',
       ]);
@@ -3889,14 +3954,14 @@ describe('dao', () => {
     });
 
     const noSlice = dispatchRaw([
-      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', '并行两块', '--spec', '改 a.js 和 b.js', '--split', '2', '--dry-run',
     ]);
     await t.test('--split 2 不给 --slice → 非零', () => {
       assert.ok(noSlice.status !== 0 && /--slice/.test(payload(noSlice).error || ''), '--split 2 不给 --slice → 非零  →  ' + JSON.stringify(payload(noSlice)));
     });
     const overlap = dispatchRaw([
-      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', '并行两块', '--spec', '改 a.js 和 b.js', '--split', '2',
       '--slice', '改 a.js', '--slice', '也改 a.js', '--dry-run',
     ]);
@@ -3905,7 +3970,7 @@ describe('dao', () => {
     });
 
     const split2 = dispatchRaw([
-      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      '--merge-policy', 'auto', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', '并行两块', '--spec', '改 a.js 和 b.js', '--split', '2',
       '--slice', '改 a.js', '--slice', '改 b.js', '--dry-run',
     ]);

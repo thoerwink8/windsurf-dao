@@ -5,6 +5,7 @@
 // --split 判据的真相源是 SPLIT_CRITERION（#611），skill 只留指针。
 
 import { assembleCardName } from './card.mjs';
+import { DEFAULT_DISPATCH_TYPE } from './worker-done.mjs';
 
 export const MERGE_POLICIES = ['auto', 'manual'];
 export const DISPATCH_VERBS = ['dispatch', 'worker-start'];
@@ -60,6 +61,8 @@ export function recommendModel({ role, routing, now = new Date() } = {}) {
 /**
  * 派工约束硬闸。缺一即失败，并列出缺什么。
  * --role 而无 --model：读 JSON 职责树顺位给推荐，必须 --confirm，禁静默默认。
+ * 手写 --model：偏离该工种（默认写码；给了 --role 按那个工种）顺位 1 同样必须 --confirm
+ * （#754，与 --role 的确认是同一个 --confirm，禁第三种旗标）。
  * --merge-policy 默认 auto（拍板 issue #511：帅不再是合并关口）；选 manual 必须
  * 同时给 --merge-reason（例外留痕，理由为空即退出，不靠记性）。
  */
@@ -120,6 +123,25 @@ export function resolveDispatchConstraints({
   }
   if (reviewer && !models.some(m => m && m.id === reviewer)) {
     return { ok: false, missing: [], error: `审官 --reviewer ${reviewer} 不在路由表` };
+  }
+
+  // #754：手写 --model 只要偏离该工种顺位 1，就与 --role 走同一个 --confirm 闸。
+  // 工种缺省写码（dispatch 默认写码类派工）；给了 --role 按那个工种对账。
+  if (model) {
+    const workType = role || DEFAULT_DISPATCH_TYPE;
+    const order = typeof routing.rankOrderFor === 'function'
+      ? routing.rankOrderFor('工人', workType)
+      : [];
+    const primary = order[0] || null;
+    if (primary && model !== primary && !confirm) {
+      return {
+        ok: false,
+        needsConfirm: true,
+        missing: ['--confirm'],
+        recommendation: { ok: true, model: primary, fallback: order[1] || null, role: workType, rank: 1, why: 'JSON 职责树顺位' },
+        error: `${workType}配置单顺位 1 是 ${primary}，你手写 --model ${model} 偏离了 1 号。偏离主选要 --confirm 才放行`,
+      };
+    }
   }
 
   // 同厂闸不在派工预检（2026-08-23 delete-all-ceremony 拍板）：dispatch 时审官还不存在，
