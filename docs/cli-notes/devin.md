@@ -36,10 +36,10 @@ worker-start --terminal <handle>      # 就绪后再送任务书
 - **原因**：屏面"3 轮稳定"判绿是伪证据（PS 提示符也稳定）。proofUnavailable（session_not_reported）降级判绿前必须见任务书指纹。
 - **正解**：开工验证带 `expect`（任务书指纹），屏面出现任务书内容才算注入成功；没出现 → fail-close，不许报 ok=true。
 
-### 坑 4：重派/重试前不销毁旧卡
+### 坑 4：重派/重试造成审官卡堆积
 
-- **现象**：多次 attach 失败重试，旧审官卡/终端残留，干扰新卡（误读旧 handle）。
-- **正解**：重派前先 `worktree-rm` 销毁该 PR 已有审官卡（`collectReviewerCardsForPr` 查 + 删），查不成不许当 0 张。
+- **现象**：多次 attach 失败重试，旧审官卡/终端残留（`PR-767-审官-gpt-5.6-sol`、`-2` 后缀叠出），干扰新卡。
+- **正解**：审官单例（#575 一 PR 一审官）——已有审官卡**复用**（resolveReviewerReuse / reuseReviewerOnTerminal），不销毁重建、不反复 attach。残留卡多了说明在反复重试，停下来查根因（通常是注入/就绪问题），不是继续换卡。
 
 ## 判活
 

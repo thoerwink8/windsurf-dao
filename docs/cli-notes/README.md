@@ -17,7 +17,7 @@
 1. **detached 进程调 worker-start/task-create 必须带 `--from 活终端`**（哑终端 coordinator），否则 `no_active_sender_terminal` / `consumer_fenced`。照 #682 微通道：起「派工协调（勿关）」哑终端 + `run-create --from`。
 2. **command 型 TUI（devin/claude）必须先 `wait --for tui-idle` 就绪再送字**，否则 `agent_prompt_stalled`；wait 就绪即返回，不是等满超时。
 3. **屏面稳定 ≠ 开工**：开工验证带任务书指纹（expect），见指纹才算注入成功；`[Pasted Content]` / `[Pasted text]` 停在输入框 = 未提交（#661）。
-4. **重派/重试前先销毁旧卡**（`collectReviewerCardsForPr` 查 + `worktree-rm`），残留卡干扰新卡。
+4. **审官单例（#575 一 PR 一审官）**：已有审官卡复用，不销毁重建、不反复 attach。残留卡多了说明在反复重试——停下来查根因（注入/就绪），不是继续换卡。
 5. **worker-start 快**：stalled 是"送达失败"不是"等不够久"，别加长超时硬等——修送达（等就绪/走 agent 协议）。
 
 ## 原材料

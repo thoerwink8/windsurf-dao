@@ -3036,32 +3036,8 @@ function cmdReviewerAttach(args) {
   };
   if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
 
-  // #762：重派审官前先销毁该 PR 已有审官卡——残留的审官卡/终端会干扰新建
-  // （实测 attach 误读旧卡 handle，且旧 codex 可能还停在输入框）。查不成不许当 0 张。
-  const reviewWorkers = orca(argsWorkerList());
-  const reviewTrees = orca(argsWorktreePs());
-  const oldCards = (reviewWorkers.ok && reviewTrees.ok)
-    ? collectReviewerCardsForPr({
-        pr: args.pr,
-        parentId: args.worktree,
-        worktrees: reviewTrees.json?.result?.worktrees,
-        workers: reviewWorkers.json?.result?.workers,
-      })
-    : { ok: false, unscanned: true, error: `盘面没查成：${!reviewWorkers.ok ? errText(reviewWorkers.error) : ''}${!reviewTrees.ok ? errText(reviewTrees.error) : ''}`.trim() };
-  if (!oldCards.ok) {
-    fail(`查该 PR 已有审官卡没查成（不许猜有没有）：${oldCards.error}`, { ...plan, oldCards });
-  }
-  const doomed = (oldCards.cards || []).map(c => c.worktreeId).filter(Boolean);
-  for (const id of doomed) {
-    const rm = orca(argsWorktreeRm({ worktree: id, force: true }));
-    if (!rm.ok && !/not_found|not registered/i.test(errText(rm.error))) {
-      fail(`销毁旧审官卡 ${id} 失败：${errText(rm.error)}`, { ...plan, oldCards, rm });
-    }
-  }
-  if (doomed.length > 0) {
-    console.error(`[dao] 已销毁旧审官卡 ${doomed.length} 张（重派前清理）`);
-  }
-
+  // #762：审官单例（一 PR 一审官，#575）。已有审官卡 → 复用（resolveReviewerReuse/reuseReviewerOnTerminal），
+  // 不销毁重建。attach 的复用接线见 cmdReviewerAttach 后续（当前先保持新建，单例复用另单落地）。
   const created = {};
   const revWt = orca(argsWorktreeCreate({
     name: revName,
