@@ -2038,18 +2038,28 @@ describe('dao', () => {
     await t.test('#614 bindStation 自开 Run 打身份标记（coordinator/dispatch）', () => {
       const stationFn = daoSrc.slice(daoSrc.indexOf('function bindStation'), daoSrc.indexOf('function sleepMs'));
       assert.ok(/objective: `\$\{runRole\}: dao dispatch`/.test(stationFn), 'run-create 带身份前缀  →  ' + stationFn.slice(stationFn.indexOf('argsRunCreateSelf'), stationFn.indexOf('argsRunCreateSelf') + 120));
-      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
       const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
-      assert.ok(/bindStation\(\{ runRole: 'coordinator' \}\)/.test(dispatchFn) && /bindStation\(\{ runRole: 'coordinator' \}\)/.test(batchFn),
-        '#614 帅窗派工（含批）的协调 Run 标 coordinator');
+      assert.ok(/bindStation\(\{ runRole: 'coordinator' \}\)/.test(batchFn),
+        '#614 批派工的协调 Run 标 coordinator');
+    });
+    await t.test('#762 派工执行体改哑终端 coordinator（不再 bindStation 自开 Run）', () => {
+      const execFn = daoSrc.slice(daoSrc.indexOf('function runDispatchExecution'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/派工协调（勿关）/.test(execFn) && /argsRunCreate\(\{/.test(execFn) && /from: coordHandle/.test(execFn),
+        '#762 起哑终端 + run-create --from  →  ' + execFn.slice(0, 400));
+      assert.ok(!/bindStation\(\{ runRole: 'coordinator' \}\)/.test(execFn),
+        '#762 执行体不再 bindStation 自开 Run（detached 无 coordinator 必 fenced）');
+      assert.ok(/created\.runId = runId/.test(execFn) && /created\.runCreated = true/.test(execFn),
+        '#762 记录新建 Run 供回滚  →  ' + execFn.slice(0, 400));
+      assert.ok(/created\.handles = \[\.\.\.\(Array\.isArray\(created\.handles\)/.test(execFn),
+        '#762 协调哑终端登记进 handles 随回滚关');
     });
     await t.test('#614 dispatch 回滚退役本次新建的 Run（只退 runCreated 的）', () => {
       const rollbackFn = daoSrc.slice(daoSrc.indexOf('function rollbackCreated'), daoSrc.indexOf('function snapshotHandleScreen'));
       assert.ok(/created\.runCreated === true && created\.runId/.test(rollbackFn), '只退本次新建的  →  ' + rollbackFn.slice(0, 200));
       assert.ok(/retireOneRun\(created\.runId\)/.test(rollbackFn), '回滚路径退役 Run  →  ' + rollbackFn.slice(0, 200));
-      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdDispatchBatch'));
-      assert.ok(/created\.runId = station\.runId/.test(dispatchFn) && /created\.runCreated = station\.created === true/.test(dispatchFn),
-        '派工记录新建 Run 供回滚  →  ' + dispatchFn.slice(dispatchFn.indexOf('const station'), dispatchFn.indexOf('const station') + 200));
+      const dispatchFn = daoSrc.slice(daoSrc.indexOf('function runDispatchExecution'), daoSrc.indexOf('function cmdDispatchBatch'));
+      assert.ok(/created\.runId = runId/.test(dispatchFn) && /created\.runCreated = true/.test(dispatchFn),
+        '派工记录新建 Run 供回滚  →  ' + dispatchFn.slice(dispatchFn.indexOf('const runId'), dispatchFn.indexOf('const runId') + 200));
       const batchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatchBatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
       assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
         '批派工失败同样回收 Run');
@@ -2608,9 +2618,11 @@ describe('dao', () => {
     await t.test('start / dispatch / batch / 审官起动都走 launchAgentInWorktree', () => {
       assert.ok(calls.length >= 6, 'start / dispatch / batch / 审官起动都走 launchAgentInWorktree  →  ' + calls.length);
     });
-    await t.test('dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create', () => {
+    await t.test('dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create；#762 派工协调哑终端是例外', () => {
       const createHits = [...src.matchAll(/argsTerminalCreate\(/g)];
-      assert.ok(createHits.length === 1, 'dao.mjs 起 agent 只在 launchAgentInWorktree 里 terminal create  →  ' + createHits.length);
+      assert.ok(createHits.length === 2, 'agent 在 launchAgentInWorktree + #762 协调哑终端  →  ' + createHits.length);
+      const coordHit = createHits.find(h => /派工协调（勿关）/.test(src.slice(h.index, h.index + 200)));
+      assert.ok(coordHit, '两处之一必须是 #762 派工协调哑终端（不起 agent）');
     });
 
     const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);

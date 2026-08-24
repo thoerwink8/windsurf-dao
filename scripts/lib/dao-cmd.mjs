@@ -4066,9 +4066,9 @@ export function argsRunUse({ id, from, self } = {}) {
   return a;
 }
 
-/** run-create 必须带 --from 信箱台，否则新建 Run 会把帅窗绑成 coordinator。 */
+/** run-create 必须带 --from 一个活终端（信箱台 / 派工协调哑终端），不许把帅窗绑成 coordinator（#667 #762）。 */
 export function argsRunCreate({ objective, from } = {}) {
-  if (!from) throw new Error('run-create 必须 --from 信箱台，不许从帅窗当 coordinator（#667）');
+  if (!from) throw new Error('run-create 必须 --from 活终端（信箱台或派工协调哑终端），不许从帅窗当 coordinator（#667 #762）');
   const a = ['orchestration', 'run-create'];
   if (objective != null) a.push('--objective', objective);
   a.push('--from', from, '--json');
@@ -4571,7 +4571,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # 消歧门/账本查重（索引增量读，不再全量扫账本）/建卡/起终端/送字/记账都在后台执行体，结果落 _flow/queue/<id>.out.json；
                   # 10 分钟内同 issue 已有未结派工 → 执行体拒派（防 #759 重复建卡；队列内在途单也算）；确要重派加 --allow-dup
   dispatch-exec --order <派工单路径>
-                  # 内部动词：dispatch 拉起的后台执行体；也可手动前台重跑某一单（结果仍落 <id>.out.json）
+                  # 内部动词：dispatch 拉起的后台执行体；结果落 <id>.out.json（派工失败请重派，不要手动重跑——复用旧 Run 会 consumer_fenced，见 #762）
   dispatch --batch <file.json> --name <批名> --issue <号> --model <id> [--dry-run]
                   # 一批只读工人共享 1 张卡：建 1 棵树，循环 N 次 task-create + worker-start
                   # 不产 PR，硬编码跳过审官与 --split；--dry-run 只打印 N 条计划（name/spec/handle 占位）

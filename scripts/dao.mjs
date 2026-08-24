@@ -70,6 +70,7 @@ import {
   argsRunCurrent,
   argsRunUse,
   argsRunList,
+  argsRunCreate,
   argsRunCreateSelf,
   planCallerRun,
   extractRunId,
@@ -678,7 +679,17 @@ function bindStation({ runRole = 'dispatch' } = {}) {
   });
   if (!plan.ok) return { ok: false, unscanned: !!plan.unscanned, error: plan.error };
   if (!plan.needCreate) {
-    return { ok: true, runId: plan.runId };
+    // #762 P2：复用前校验 Run 还活着（coordinator 终端在）。退役的 Run coordinator 变 null，
+    // 复用会让 worker-start consumer_fenced（2026-08-24 前台重跑复用已退役 Run 实测）。
+    // run-show 没查成 ≠ 没有 Run：报出来，不许静默当 0。
+    const shown = orca(argsRunShow({ id: plan.runId }));
+    if (!shown.ok) {
+      return { ok: false, unscanned: true, runId: plan.runId, error: `复用前 run-show ${plan.runId} 没查成：${errText(shown.error)}` };
+    }
+    if (shown.json?.result?.run?.coordinator_handle) {
+      return { ok: true, runId: plan.runId, reused: true };
+    }
+    // coordinator 为空（退役/墓碑）→ 不当复用，走自开。
   }
   const created = orca(argsRunCreateSelf({ objective: `${runRole}: dao dispatch` }));
   if (!created.ok) return { ok: false, error: `本窗开 Run 失败：${errText(created.error)}` };
@@ -1040,14 +1051,15 @@ function cmdDispatch(args) {
     cwd: ROOT,
   });
   if (!spawned.ok) {
-    fail(`派工执行体没拉起来：${spawned.error}（派工单已留 ${written.paths.order}，可手动 node scripts/dao.mjs dispatch-exec --order 重跑）`, { orderId: id, orderPath: written.paths.order });
+    fail(`派工执行体没拉起来：${spawned.error}（派工单已留 ${written.paths.order}，重派请用 dispatch，不要手动 dispatch-exec 重跑——复用旧 Run 会 consumer_fenced，见 #762）`, { orderId: id, orderPath: written.paths.order });
   }
   emit({ ...queued, pid: spawned.pid });
 }
 
 /**
- * 派工执行体入口（内部动词）：dispatch 热路拉起的 detached 后台进程跑这里；
- * 也可手动前台重跑某一单（结果照样落 <id>.out.json）。
+ * 派工执行体入口（内部动词）：dispatch 热路拉起的 detached 后台进程跑这里。
+ * 不要手动前台重跑（#762：detached 自开 Run 无 coordinator，重跑复用旧 Run 也 consumer_fenced；
+ * 失败就重派 dispatch，别拿 dispatch-exec 当兜底）。
  * emit 结果槽保证每个出口（含 failCreated 回滚路径）都落结果文件、删 running 标记；
  * 崩在 emit 之外的补一份 crashed 结果，不让单卡死成 pending 假象。
  */
@@ -1278,15 +1290,32 @@ function runDispatchExecution(order, { queueDir } = {}) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { orderId: order.id, ...plan, soldierBook: null });
   }
 
-  // #614：帅窗派工的协调 Run 打 coordinator 标记（永不自动退役）；失败回滚时回收本次新建的 Run。
-  const station = bindStation({ runRole: 'coordinator' });
-  if (!station.ok) failCreated(created, station.error, { orderId: order.id, ...plan });
-  created.runId = station.runId || null;
-  created.runCreated = station.created === true;
+  // #762：detached 执行体自开 Run 没有 coordinator 终端，worker-start 会 consumer_fenced
+  // （2026-08-24 三连败实证）。照 #682 微通道已验证方案：在工人卡上起一个「派工协调（勿关）」
+  // 哑终端当 Run coordinator，run-create --from 它，worker-start 用这个 Run。
+  // 哑终端随 worker 卡收树一起关（handles 登记），不多开；失败回滚时回收本次新建的 Run。
+  const coordTerm = orca(argsTerminalCreate({
+    worktree: created.workerId,
+    title: '派工协调（勿关）',
+  }));
+  if (!coordTerm.ok) failCreated(created, `派工协调终端没建成：${errText(coordTerm.error)}`, { orderId: order.id, ...plan });
+  const coordHandle = extractHandleFromCreate(coordTerm.json);
+  if (!coordHandle) failCreated(created, '派工协调终端没返回 handle（没查成）', { orderId: order.id, ...plan });
+  created.coordHandle = coordHandle;
+  created.handles = [...(Array.isArray(created.handles) ? created.handles : []), coordHandle];
+  const coordRun = orca(argsRunCreate({
+    objective: 'coordinator: dao dispatch',
+    from: coordHandle,
+  }));
+  if (!coordRun.ok) failCreated(created, `派工协调 Run 没建成（--from 哑终端）：${errText(coordRun.error)}`, { orderId: order.id, ...plan });
+  const runId = extractRunId(coordRun.json);
+  if (!runId) failCreated(created, '派工协调 Run 没拿到 id（没查成）', { orderId: order.id, ...plan });
+  created.runId = runId;
+  created.runCreated = true;
 
   let taskId = args.task || null;
   if (soldierBook) {
-    const task = taskCreateOnRun(soldierBook, station.runId);
+    const task = taskCreateOnRun(soldierBook, runId);
     if (!task.ok) {
       if (isRunRequired(task.error)) failCreated(created, RUN_REQUIRED_HINT, { orderId: order.id, ...plan });
       failCreated(created, `task-create 失败: ${errText(task.error)}`, { orderId: order.id, ...plan });
@@ -1301,7 +1330,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     task: taskId,
     worktree: created.workerId,
     launched,
-    run: station.runId,
+    run: runId,
   });
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
@@ -1349,7 +1378,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
         } catch (e) {
           return { ok: false, error: `子任务书渲染失败: ${String(e.message || e)}`, handle: childLaunch.handle };
         }
-        const childTask = taskCreateOnRun(childBook, station.runId);
+        const childTask = taskCreateOnRun(childBook, runId);
         if (!childTask.ok) {
           return { ok: false, error: `子 task-create 失败: ${errText(childTask.error)}`, handle: childLaunch.handle };
         }
@@ -1360,7 +1389,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           task: childTaskId,
           worktree: worktreeId,
           launched: childLaunch,
-          run: station.runId,
+          run: runId,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
