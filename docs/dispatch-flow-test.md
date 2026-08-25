@@ -7,7 +7,7 @@
 - [x] ③ 工人读 `soldier-book.md` + `docs/cli-notes/pi.md` 开工
 - [x] ④ 开工五步：空提交撑分支推送 / draft PR #772 / 卡切 in-progress / 打 model+type 标签
 - [x] ⑤ 写码：新增本文件 docs/dispatch-flow-test.md
-- [ ] ⑥ 自检：`node scripts/dao-check.mjs`
-- [ ] ⑦ `pr ready` + 卡切 in-review
+- [x] ⑥ 自检：`node scripts/dao-check.mjs` 全绿（89 项 ok，2 项环境 SKIP）
+- [x] ⑦ `pr ready` + 卡切 in-review
 - [ ] ⑧ `dao.mjs worker-done` 起审官（gpt-5.6-sol）
 - [ ] ⑨ 审官判定绿 → 合并 → 帅归档
