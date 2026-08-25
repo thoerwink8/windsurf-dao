@@ -5,6 +5,10 @@
 
 本单参数（PR / 对方 dispatch / merge-policy / merge-reason）以**派工注入文本**为准，不要手抄、不要猜。
 
+## 开工前读 CLI 教学（#762）
+
+你的宿主 CLI 的踩坑教学在 `docs/cli-notes/<provider>.md`（审官默认 codex → codex.md）。开工前先读它——正确起法、已知坑、判活证据都记在那里，**不许现场重新踩**（2026-08-25 教训：codex 要 --agent 不是粘贴，文档早有）。
+
 ## 你的角色
 
 - 你审**士兵**（Dispatch id 见注入参数「对方 dispatch」）的产出。士兵在你开工后才做完活、发完工消息给你。

@@ -270,7 +270,7 @@ describe('#679 起审官同厂硬闸', () => {
   it('CLI：dispatch 预检不再闸同厂（2026-08-23 拍板），闸在 reviewer-attach/create', async (t) => {
     function dispatch(model, reviewer) {
       return spawnSync(process.execPath, [
-        CLI, 'dispatch', '--model', model, '--reviewer', reviewer,
+        CLI, 'dispatch', '--model', model, '--reviewer', reviewer, '--confirm',
         '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--dry-run',
       ], { encoding: 'utf8', cwd: REPO });
     }

@@ -140,12 +140,15 @@ describe('dispatch-launch（async-launch）', () => {
     const gone = [
       'waitForDevinInputBox', 'classifyDevinScreen', 'allowDevinWorkerStart',
       'interpretTuiIdleWait', 'planWorkerStart', 'usesSplitStart', 'hasDevinReadyPrompt',
-      'classifyInjectFailure', 'argsTerminalWait',
+      'classifyInjectFailure',
       'DEVIN_WORKER_START_TIMEOUT_MS', 'DEVIN_PROBE_WAIT_MS', 'DEVIN_FIRST_READ_MS',
     ];
     for (const sym of gone) {
       assert.ok(!new RegExp(`\\b${sym}\\b`).test(libSrc), `dao-cmd.mjs 不该再有 ${sym}`);
     }
+    // #762：argsTerminalWait 保留——command 型 TUI（devin/claude）起法 = wait tui-idle 就绪即送，
+    // 是一次性等就绪（不是轮询探针）。见 docs/cli-notes/devin.md。
+    assert.ok(new RegExp('\\bargsTerminalWait\\b').test(libSrc), 'dao-cmd.mjs 缺 argsTerminalWait（#762 command 型 TUI 就绪）');
     const kept = ['classifyWorkerStartSend', 'findDispatchForTask', 'WORKER_START_SEND_TIMEOUT_MS'];
     for (const sym of kept) {
       assert.ok(new RegExp(`\\b${sym}\\b`).test(libSrc), `dao-cmd.mjs 缺 ${sym}`);
@@ -156,13 +159,14 @@ describe('dispatch-launch（async-launch）', () => {
     const daoSrc = fs.readFileSync(CLI, 'utf8');
     const gone = [
       'waitForDevinInputBox', 'classifyDevinScreen', 'allowDevinWorkerStart',
-      'interpretTuiIdleWait', 'planWorkerStart', 'usesSplitStart', 'argsTerminalWait',
+      'interpretTuiIdleWait', 'planWorkerStart', 'usesSplitStart',
       'DEVIN_WORKER_START_TIMEOUT_MS', 'DEVIN_PROBE_WAIT_MS', 'DEVIN_FIRST_READ_MS',
       'ensureInboxStation',
     ];
     for (const sym of gone) {
       assert.ok(!new RegExp(`\\b${sym}\\b`).test(daoSrc), `dao.mjs 不该再有 ${sym}`);
     }
+    // #762：argsTerminalWait 保留（command 型 TUI 一次性等就绪，非轮询探针）。
 
     // 热路段 = cmdDispatch 本体（到 cmdDispatchExec 为止）。
     const hi = daoSrc.indexOf('function cmdDispatch(');
@@ -466,7 +470,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: dir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 
@@ -545,7 +549,7 @@ describe('dispatch-launch（async-launch）', () => {
       LEDGER_EVENTS_DIR: ledgerDir, DAO_DISPATCH_QUEUE_DIR: queueDir,
     };
     const base = [
-      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol',
+      CLI, 'dispatch', '--model', 'grok-4.6', '--reviewer', 'gpt-5.6-sol', '--confirm',
       '--name', 'x', '--spec', '短摘要', '--split', 'no', '--split-reason', '单测', '--issue', '565',
     ];
 

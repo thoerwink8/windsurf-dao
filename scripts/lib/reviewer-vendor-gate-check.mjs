@@ -36,9 +36,12 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
     return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/watchdog 正文（没查成）' };
   }
   const problems = [];
-  // dispatch 预检不再钉同厂闸（delete-all-ceremony）：cmdSrc 只要求 resolveDispatchConstraints 还在。
-  const constraints = chunk(cmdSrc, /export function resolveDispatchConstraints\b[\s\S]*?\nexport function /);
-  if (!constraints) problems.push('找不到 resolveDispatchConstraints');
+  // dispatch 预检不再钉同厂闸（delete-all-ceremony）：只要求 resolveDispatchConstraints 还在。
+  // #762 拆分：函数已从 dao-cmd.mjs 移到 dispatch/constraints.mjs，检查器跟随真相源。
+  // 只验「存在」不验函数体结构（fixture 样本是紧凑单行，真实源码是多行）。
+  if (!/export function resolveDispatchConstraints\b/.test(cmdSrc)) {
+    problems.push('找不到 resolveDispatchConstraints');
+  }
 
   const create = chunk(daoSrc, /function cmdReviewerCreate\b[\s\S]*?\nfunction /);
   if (!create) problems.push('找不到 cmdReviewerCreate');

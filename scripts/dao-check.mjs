@@ -783,22 +783,30 @@ function checkMemoryLinkAlive() {
 }
 
 // ── ⑩ extract* 必须有 orca 真语料 ──────────────────────────────────
-// 自发现：扫 dao-cmd.mjs 的 export function extract*，不手写函数名单。
-// 检查器只验信封（ok+result），不调用 extract*。
+// 自发现：扫 dao-cmd.mjs + scripts/lib/dispatch/*.mjs（#762 按域拆分后 extract* 散在各域文件）
+// 的 export function extract*，不手写函数名单。检查器只验信封（ok+result），不调用 extract*。
 // 零样本：一个 extract* 都扫不到 / 语料目录不在 / index 不在 → 没查成。
 
 function checkExtractFixtures() {
-  const daoCmdPath = join(ROOT, 'scripts', 'lib', 'dao-cmd.mjs');
+  const libDir = join(ROOT, 'scripts', 'lib');
+  const daoCmdPath = join(libDir, 'dao-cmd.mjs');
   if (!existsSync(daoCmdPath)) {
     fail('dao-cmd.mjs 不在', '本次没查成：恢复 scripts/lib/dao-cmd.mjs', daoCmdPath);
     return;
   }
+  const texts = [readFileSync(daoCmdPath, 'utf8')];
+  const dispatchDir = join(libDir, 'dispatch');
+  if (existsSync(dispatchDir)) {
+    for (const name of readdirSync(dispatchDir).filter(n => n.endsWith('.mjs')).sort()) {
+      texts.push(readFileSync(join(dispatchDir, name), 'utf8'));
+    }
+  }
   const report = checkOrcaJsonFixtures({
-    daoCmdText: readFileSync(daoCmdPath, 'utf8'),
+    daoCmdText: texts.join('\n'),
     fixtureDir: join(ROOT, 'tests', 'fixtures', 'orca-json'),
   });
   if (report.unscanned) {
-    fail('orca 真语料检查没查成', 'tests/fixtures/orca-json/ 要有 index.json，且 dao-cmd 要有 extract* 导出', report.error);
+    fail('orca 真语料检查没查成', 'tests/fixtures/orca-json/ 要有 index.json，且 dao-cmd/dispatch 要有 extract* 导出', report.error);
     return;
   }
   if (!report.ok) {
@@ -1541,9 +1549,11 @@ function checkVendorGateLive() {
     return;
   }
   const daoSrc = readFileSync(daoFile, 'utf8');
+  // #762 拆分：resolveDispatchConstraints 已移到 dispatch/constraints.mjs，检查器扫它的真相源。
+  const constraintsFile = join(ROOT, 'scripts', 'lib', 'dispatch', 'constraints.mjs');
   const r = inspectVendorGateWiring({
     daoSrc,
-    cmdSrc: readFileSync(cmdFile, 'utf8'),
+    cmdSrc: readFileSync(existsSync(constraintsFile) ? constraintsFile : cmdFile, 'utf8'),
     slotSrc: readFileSync(slotFile, 'utf8'),
     watchdogSrc: readFileSync(wdFile, 'utf8'),
   });
