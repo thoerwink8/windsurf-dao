@@ -1,0 +1,6 @@
+在当前目录创建文件 smoke-devin-p.md，内容为 OK。然后依次执行：
+git add .
+git commit -m "[devin-p] smoke test"
+git push -u origin HEAD
+gh pr create --title "devin-p smoke" --body "smoke test"
+完成后回复 DONE
