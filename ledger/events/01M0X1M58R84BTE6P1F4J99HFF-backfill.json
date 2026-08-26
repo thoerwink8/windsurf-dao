@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-26T02:06:23+08:00",
+  "machine": "backfill",
+  "seq": 448,
+  "job_id": "gh-pr-772",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #772；[pi] #771 派单链路实战验证：worker 卡新增 dispatch-flow-test.md；无审读",
+  "pr_number": 772,
+  "source": "github-backfill",
+  "event_id": "25662b7be786667384d2207da6b7bc8dabd7c66bc21885b037738ace273dbefe"
+}

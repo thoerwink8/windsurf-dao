@@ -499,7 +499,7 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book }) {
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
@@ -541,9 +541,51 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
 
   let handle = launched?.handle || null;
   if (launched?.deferred) {
-    handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
+    // #771：devin agent 型 worker-start 响应里的 handle 可能是 --from 的派工协调终端（PowerShell），
+    // 补粘任务书会敲进 PowerShell（2026-08-26 实测）。terminal list 找非默认终端（agent 终端）优先。
+    handle = (launched?.launch?.provider === 'devin' ? findAgentTerminalHandle(worktree) : null)
+      || extractHandleFromWorkerStart(r.json)
+      || findAgentTerminalHandle(worktree);
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
+    }
+  }
+  // codex 坑 2 修复（2026-08-26 实测）：worker-start --agent codex 的任务书显示 [Pasted Content]
+  // 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象），补一记回车提交。devin 不补（任务书已由
+  // --prompt-file 送达，补回车会误触发；devin 的 stalled 是假阴性，工人实际在跑）。
+  if (send.kind === 'sent-unconfirmed' && launched?.launch?.provider === 'gpt' && handle) {
+    const sent = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+    if (sent.ok) {
+      sleepMs(3000);
+      const read = orca(argsTerminalRead({ terminal: handle, limit: 5 }));
+      if (read.ok) {
+        const text = extractTerminalText(read.json);
+        if (text && !/\[Pasted Content/i.test(text)) {
+          send.kind = 'confirmed';
+          send.reason = 'codex [Pasted Content] 补回车已提交';
+        }
+      }
+    }
+  }
+  // devin 交互形态修复（2026-08-26 实测）：worker-start --agent devin 的注入根本不送达
+  // （任务书没进输入框，屏面停在 Ask Devin to build...，dispatch 报 agent_prompt_stalled），
+  // 补回车无效——需要补粘任务书 + 回车两步提交。非交互形态（--prompt-file）不补（任务书已由文件送达）。
+  if (send.kind === 'sent-unconfirmed' && launched?.launch?.provider === 'devin' && handle && book) {
+    const pasted = orca(argsTerminalSend({ terminal: handle, text: book, agent: 'devin' }));
+    if (pasted.ok) {
+      sleepMs(2000);
+      const entered = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+      if (entered.ok) {
+        sleepMs(5000);
+        const read = orca(argsTerminalRead({ terminal: handle, limit: 8 }));
+        if (read.ok) {
+          const text = extractTerminalText(read.json);
+          if (text && !/Ask Devin to build/.test(text)) {
+            send.kind = 'confirmed';
+            send.reason = 'devin 补粘任务书+回车已提交';
+          }
+        }
+      }
     }
   }
   return {
@@ -557,7 +599,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
   };
 }
 
-function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created }) {
+function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile }) {
   let modelId = slate[startIndex].id;
   let pipeIndex = 0;
   let hardFailsOnThisPipe = 0;
@@ -573,7 +615,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const pipe = entry.pipes[pipeIndex];
     let launch;
     try {
-      launch = resolveLaunch({ model: modelId, pipe, routing, root: ROOT });
+      launch = resolveLaunch({ model: modelId, pipe, routing, root: ROOT, promptFile });
     } catch (e) {
       return { ok: false, error: String(e.message || e), attempts };
     }
@@ -618,7 +660,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     // #762/#753：command 型 TUI（devin）起法 = create → wait tui-idle → worker-start。
     // wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底；不等就绪就送字会
     // agent_prompt_stalled（devin 未就绪不接受 dispatch_input）。agent 型由 orca 管就绪。
-    if (launch?.start === 'command') {
+    if (launch?.start === 'command' && launch.provider !== 'devin') {
       const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, pipe.provider) }));
       if (!ready.ok) {
         return { ok: false, error: `工人 TUI 等就绪失败：${errText(ready.error)}`, handle, attempts };
@@ -908,7 +950,13 @@ function buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routin
   let workerLaunch;
   let reviewerLaunch;
   try {
-    workerLaunch = resolveLaunch({ model: startEntry.id, pipe: startEntry.pipes[0], routing, root: ROOT });
+    workerLaunch = resolveLaunch({
+      model: startEntry.id,
+      pipe: startEntry.pipes[0],
+      routing,
+      root: ROOT,
+      promptFile: startEntry.id === 'devin-deepseek-v4-flash-max' ? '_prompt.txt' : undefined,
+    });
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { return { ok: false, error: String(e.message || e) }; }
   noteDroppedFlags(workerLaunch);
@@ -1303,6 +1351,24 @@ function runDispatchExecution(order, { queueDir } = {}) {
     }
   }
 
+  // devin 交互形态（2026-08-26 拍板）：worker-start --agent devin 起 TUI，注入不送达，
+  // startOrcaWorker 补粘任务书 + 回车（book 参数）。_prompt.txt 仍写进工人卡（devin 干活可参考；
+  // 非交互形态 -p --prompt-file 时 launch 的 {prompt_file} 占位符引用它，备用通道保留）。
+  const isDevinWorker = slatePack.slate[slatePack.startIndex]?.id === 'devin-deepseek-v4-flash-max';
+  let promptFile = null;
+  let injectText = null;
+  if (args.spec) {
+    injectText = buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue });
+  }
+  if (isDevinWorker && injectText) {
+    try {
+      promptFile = join(created.workerPath, '_prompt.txt');
+      writeFileSync(promptFile, `${injectText}\n完成后运行：node scripts/dao.mjs worker-done --pr <PR号> --body-file <完工说明文件>（PR 号用 gh pr view --json number -q .number 查）`, 'utf8');
+    } catch (e) {
+      failCreated(created, `devin 任务书写文件失败: ${String(e.message || e)}`, { orderId: order.id, ...plan });
+    }
+  }
+
   const launched = startWorkerBySlate({
     slate: slatePack.slate,
     startIndex: slatePack.startIndex,
@@ -1310,6 +1376,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     worktreeId: created.workerId,
     title: args.name,
     created,
+    promptFile,
   });
   if (!launched.ok) {
     failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, orderId: order.id, ...plan });
@@ -1325,7 +1392,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? encodeSendText(buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue }), workerLaunch.provider)
+      ? encodeSendText(injectText, workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { orderId: order.id, ...plan, soldierBook: null });
@@ -1376,6 +1443,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     run: runId,
     from: coordHandle,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+    book: injectText,
   });
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
@@ -1669,6 +1737,16 @@ function cmdPrSyncLabels(args) {
   emit({ ok: true, ...r });
 }
 
+/** #781：worker-list 项没有 last_failure 字段，findDispatchForWorktree 对 failed 候选
+ * 用这个回调调 worker-show 取真实 last_failure（result.dispatch.last_failure）。
+ * 没查成返回 null → 调用方 fail-close 判死（不许因没查成当活人，#552）。 */
+function resolveDispatchLastFailure(dispatchId) {
+  if (!dispatchId) return null;
+  const r = orca(argsWorkerShow({ dispatch: dispatchId }));
+  if (!r.ok) return null;
+  return r.json?.result?.dispatch?.last_failure ?? null;
+}
+
 function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (soldierDispatch) {
     const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
@@ -1680,7 +1758,7 @@ function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (parentId) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) return { ok: false, error: `worker-list 没查成：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentId);
+    const found = findDispatchForWorktree(wl.json, parentId, resolveDispatchLastFailure);
     if (found.ok && found.runId) return { ok: true, runId: found.runId };
     return { ok: false, error: found.error || '工人卡没有 run id' };
   }
@@ -1854,7 +1932,7 @@ function reuseReviewerOnTerminal({
   if (parentWorktree) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) return { ok: false, reused: true, error: `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentWorktree);
+    const found = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
     if (!found.ok && !soldierDispatchId) {
       return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
     }
@@ -2225,7 +2303,7 @@ function cmdWorkerDone(args) {
   if (needExisting && reuse.worktreeId) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) fail(`已有审官树但 worker-list 没查成：${errText(wl.error)}`, { ...plan, reviewerCreate: create, reviewerReuse: reused });
-    const found = findDispatchForWorktree(wl.json, reuse.worktreeId);
+    const found = findDispatchForWorktree(wl.json, reuse.worktreeId, resolveDispatchLastFailure);
     if (!found.ok) fail(`已有审官树但找不到 dispatch：${found.error}`, { ...plan, reviewerCreate: create, reviewerReuse: reused, found });
     existingDispatchId = found.dispatchId;
   }
@@ -2786,7 +2864,7 @@ function cmdReviewerCreate(args) {
     const wl = orca(argsWorkerList());
     if (!wl.ok && !soldierDispatchId) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
     if (wl.ok) {
-      const found = findDispatchForWorktree(wl.json, args.parentWorktree);
+      const found = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
       if (!found.ok && !soldierDispatchId) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
       if (found.ok) {
         if (!soldierDispatchId) soldierDispatchId = found.dispatchId;
@@ -3098,7 +3176,7 @@ function cmdReviewerAttach(args) {
     if (!soldierDispatchId) {
       const wl = orca(argsWorkerList());
       if (!wl.ok && !args.skipWait) failCreated(created, `worker-list 没查成，给 --soldier-dispatch 或 --skip-wait：${errText(wl.error)}`, plan);
-      if (wl.ok) foundDispatch = findDispatchForWorktree(wl.json, args.worktree);
+      if (wl.ok) foundDispatch = findDispatchForWorktree(wl.json, args.worktree, resolveDispatchLastFailure);
     }
     const probeId = soldierDispatchId || (foundDispatch?.ok ? foundDispatch.dispatchId : null);
     let dispatchLive = null;
@@ -3107,7 +3185,7 @@ function cmdReviewerAttach(args) {
       if (shown.ok) {
         const d = shown.json?.result?.dispatch || {};
         const w = shown.json?.result?.worker || {};
-        dispatchLive = isLiveDispatchRecipient({ workerState: w.state || d.status, dispatchStatus: d.status });
+        dispatchLive = isLiveDispatchRecipient({ workerState: w.state || d.status, dispatchStatus: d.status, lastFailure: d.last_failure });
       }
     }
     soldierPlan = planAttachSoldierDispatch({

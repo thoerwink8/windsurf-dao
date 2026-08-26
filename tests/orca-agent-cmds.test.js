@@ -145,10 +145,9 @@ describe('orca-agent-cmds', () => {
     const desktop = S.loadOrcaAgentCmds({ file: path.join(FIX, 'devin-desktop.json') });
     const routingDevin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, skipOrca: true });
     const devin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, orca: desktop });
-    await t.test('Devin：桌面缺信任旗标也不得盖掉仓内 argv', () => {
+    await t.test('#771 Devin：仓内 launch 裸 devin（交互 TUI 形态），桌面覆盖不当命令', () => {
       assert.ok(devin.launchSource === 'routing' && devin.command === routingDevin.command
-        && /--respect-workspace-trust\s+false/.test(devin.command)
-        && /--permission-mode\s+dangerous/.test(devin.command)
+        && devin.command === 'devin'
         && !/--permission-mode\s+bypass/.test(devin.command),
         'Devin 仓内  →  ' + JSON.stringify({ command: devin.command, source: devin.launchSource, orca: devin.orcaLaunch }));
     });
@@ -157,14 +156,12 @@ describe('orca-agent-cmds', () => {
         && !/--experimental/.test(devin.command),
         '桌面多旗标  →  ' + JSON.stringify({ extra: devin.extraDesktopFlags, command: devin.command }));
     });
-    await t.test('Devin：仓内有、桌面无的旗标只报不删', () => {
-      assert.ok(Array.isArray(devin.droppedFlags) && devin.droppedFlags.includes('--respect-workspace-trust'),
+    await t.test('#771 Devin：仓内无旗标，桌面少旗标不报（dropped 空）', () => {
+      assert.ok(Array.isArray(devin.droppedFlags) && devin.droppedFlags.length === 0,
         '桌面少旗标  →  ' + JSON.stringify(devin.droppedFlags));
     });
-    await t.test('Devin：同旗标不同值（dangerous vs bypass）报差异，不统一', () => {
-      const diffs = Array.isArray(devin.desktopFlagDiffs) ? devin.desktopFlagDiffs : [];
-      const perm = diffs.find(d => d && d.flag === '--permission-mode');
-      assert.ok(perm && perm.routing === 'dangerous' && perm.desktop === 'bypass',
+    await t.test('#771 Devin：仓内无同旗标，无差异可报（diffs 空）', () => {
+      assert.ok(Array.isArray(devin.desktopFlagDiffs) && devin.desktopFlagDiffs.length === 0,
         '同旗标不同值  →  ' + JSON.stringify(devin.desktopFlagDiffs));
     });
   });

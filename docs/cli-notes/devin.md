@@ -4,50 +4,54 @@
 
 ## 一句话特性
 
-Devin CLI 是 **command 型** TUI（`start = "command"`）：`terminal create --command` 起，TUI 就绪很慢（加载 MCP/skills），**没就绪就送任务书必丢**。
+**2026-08-26 实测：交互 TUI 形态可用**（`worker-start --agent devin` + startOrcaWorker 补粘任务书 + 回车）。devin CLI 已登录（Devin Pro）。Orca 的 stdin 注入对 devin **不送达**（任务书没进输入框），dispatch 报 `agent_prompt_stalled` 是假 stalled（工人实际在跑）；worker-done 起审官需补 `reviewer-attach --skip-wait`（#631 路径）。
 
-## 正确起法（#753 拍板，2026-08-25 实战验证）
+## 本机三件套（2026-08-26 查实）
+
+- **CLI**：`C:\Users\Administrator\AppData\Local\devin\cli\bin\devin.exe`（PATH 上这个）——**已登录**（`devin auth status` → Logged in (via Devin)，Devin Pro，credentials.toml 在 devin 用户配置目录）。
+- **桌面端**：`D:\Windsurf\Devin.exe`（Windsurf 内置，v1.126.0，user-data-dir `%APPDATA%\Devin`）——已登录 Pro 账户，默认模型 GLM-5.2 Max。
+- **Windsurf 集成**：Windsurf IDE 用 `devin acp`（ACP 协议 stdio server）驱动 Devin——那是 IDE 自己的集成，Orca 的 agent schema 里没有 devin/ACP。
+
+## 正确起法（2026-08-26 交互形态拍板）
 
 ```
-terminal create --command "devin --model deepseek-v4-flash-max --permission-mode dangerous --respect-workspace-trust false"
-terminal wait --for tui-idle          # 等就绪问句出现，就绪即返回（不是固定睡满）
-worker-start --terminal <handle>      # 就绪后再送任务书
+worker-start --agent devin（launch 模板 = 裸 devin，agent 型拒收 --model）
 ```
 
-## 踩过的坑（按时间顺序）
+- **交互 TUI**：Orca 起 Devin CLI TUI（v3000.5.20，bypass permissions on），工人可交互式干活、实时看屏。
+- **注入不送达**：Orca 的 stdin 注入对 devin 无效（任务书没进输入框，屏面停在 Ask Devin to build...）——`startOrcaWorker` 对 devin 补粘任务书 + 回车提交（2026-08-26 实测：`terminal send` 文本 + 回车 = 提交成功，devin 响应开工）。
+- **模型**：agent 型拒收 `--model`（`invalid_argument`，2026-08-26 复测确认）→ 模型 = Devin 账户默认（路由意图在 agent 型上失效，选型只锁厂商）。
+- **完工契约**：devin 不认 Orca worker 协议，dispatch 的 failed 状态不影响干活；完工 = git 产出 + PR + comment。
+- **备用通道**：非交互形态（`-p --prompt-file`，可指定 `--model deepseek-v4-flash-max`）2026-08-26 凌晨全链验证过（PR #776 MERGED），需要指定模型时切回它。
 
-### 坑 1：detached 执行体自开 Run → worker-start 必 `consumer_fenced`（#762 根因）
+## 踩过的坑
 
-- **现象**：`worker-start` 报 `consumer_fenced: worker-start requires the coordinator terminal currently bound to the Task Run`。
-- **原因**：async-launch 派工执行体是 detached 进程，`run-create` 自开 Run 没有 coordinator 终端。orca 硬性要求 worker-start 的 Task Run 绑定一个活终端。
-- **正解**：照 #682 微通道——在工人卡上起「派工协调（勿关）」哑终端，`run-create --from 哑终端`，worker-start 用这个 Run + `--from 哑终端`。
-- **验证**：2026-08-25 实战假测验，派工全链跑通，工人真实开工。
+### 坑 1：agent 型 `worker-start --agent devin` 注入不送达（假 stalled）
 
-### 坑 2：没等 TUI 就绪就 worker-start → `agent_prompt_stalled`
+- **现象**（2026-08-26 复测）：Orca 起 Devin TUI，但任务书**根本没进输入框**（屏面停在 Ask Devin to build...，无 `[Pasted text]`），worker-start 返回 `agent_prompt_stalled`。昨晚记录过 `[Pasted text #N +M lines]` 停在输入框（注入时机差异），同样不提交。
+- **正解**：`startOrcaWorker` 对 devin 补粘任务书（`terminal send --text <任务书>`）+ 回车提交（2026-08-26 直改，与 codex 的补回车并列）。补回车单独无效（输入框无内容），必须补粘 + 回车两步。
+- **识别**：屏面停在 Ask Devin to build... = 注入没送达；手动 send 文本后回车 = 提交成功（devin 响应）。
 
-- **现象**：worker-start 9 秒返回 `agent_prompt_stalled`（dispatch 标 failed，capability 吊销），屏面停在 Devin 启动画面，任务书没到。
-- **原因**：Devin TUI 冷启动慢（MCP/skills 加载），worker-start 的 dispatch_input 落在启动窗口，devin 没接受。
-- **正解**：worker-start **之前** `terminal wait --for tui-idle`——**就绪即返回**（实测已就绪终端 wait 立即 `satisfied: true`），不是等满超时。就绪后再送字必成功。
-- **反例**：把 wait 做成"等 2 分钟超时"是错的（用户两次点破：worker-start 快，不是等的问题）——wait 的 timeoutMs 只是上限兜底，正常路径就绪即放行。
+### 坑 2：dispatch 报 `agent_prompt_stalled` 是假 stalled（工人实际在跑）
 
-### 坑 3：任务书注入后屏面稳定 ≠ 开工（#661/#679/#762 升级）
+- **现象**（2026-08-26 实测）：devin 的 dispatch 会被 Orca 判 `failed`（`agent_prompt_stalled`），但工人实际在跑（屏面有输出、git 有产出）。worker-done 起审官时按「已结算」找不到活的士兵 dispatch。
+- **正解**：`isLiveDispatchRecipient` 对 `last_failure=agent_prompt_stalled` 的 failed 放宽为活（2026-08-26 直改）；`findDispatchForWorktree` 对 failed + `terminalState=retained` 保留为候选。worker-done 起审官失败时走 `reviewer-attach --skip-wait` 补审官（#631 设计）。
+- **识别**：worker-read 屏面有输出但 dispatch 状态 failed = 假 stalled，不是工人死了。
 
-- **现象**：worker-start 返回成功、dispatchId 存在，但 devin 停在 "Ask Devin to build..."，工人卡无 git 提交——**任务书没进 devin**。
-- **原因**：屏面"3 轮稳定"判绿是伪证据（PS 提示符也稳定）。proofUnavailable（session_not_reported）降级判绿前必须见任务书指纹。
-- **正解**：开工验证带 `expect`（任务书指纹），屏面出现任务书内容才算注入成功；没出现 → fail-close，不许报 ok=true。
+### 坑 3：`--agent codex` 的任务书 `[Pasted Content]` 停在输入框（审官通道）
 
-### 坑 4：重派/重试造成审官卡堆积
+- **现象**（2026-08-26 实测）：`worker-start --agent codex` 的任务书显示 `[Pasted Content N chars]` 停在输入框（codex 不自动 enter），120s 后 `agent_prompt_stalled`。
+- **正解**：worker-start 返回 stalled 且 provider 是 gpt（codex）时，补一记回车提交（2026-08-26 直改 startOrcaWorker）。devin 不补回车（注入没送达，补了也无效，要补粘+回车）。
+- **识别**：屏面见 `[Pasted Content N chars]` = 粘贴没提交，补回车后任务书全文显示、codex 开始干活。
 
-- **现象**：多次 attach 失败重试，旧审官卡/终端残留（`PR-767-审官-gpt-5.6-sol`、`-2` 后缀叠出），干扰新卡。
-- **正解**：审官单例（#575 一 PR 一审官）——已有审官卡**复用**（resolveReviewerReuse / reuseReviewerOnTerminal），不销毁重建、不反复 attach。残留卡多了说明在反复重试，停下来查根因（通常是注入/就绪问题），不是继续换卡。
+## 教训
 
-## 判活
-
-- 开工证明：worker-read 官方 transcript（source≠terminal）→ 真证明；source=terminal → 降级屏面 + **必须见任务书指纹**。
-- 完工：worker-done 发 issue comment 首行「完工」+ 开 PR；PR 存在是裁决器。
+- 上一版结论「派工通道不可用」只验证了 TUI 起不来/不提交，没试 **补粘 + 回车**。CLI 登录后（Devin Pro）交互 TUI 形态实测可用。
+- worker-start 返回 ok:true ≠ 开工。开工只认：任务书指纹消失 + 官方 transcript（source≠terminal）/ token 增长 / git 产出。
+- 不许在 Devin TUI 里手补回车提交任务书（2026-08-26 拍板：派单直接拍到 Orca，不在 Devin Desktop 手派）。startOrcaWorker 的补粘+回车是注入修复，不是手派。
 
 ## 相关
 
-- 启动模板唯一真源：`docs/model-routing.toml [providers.devin]`
-- 派工链路修复：#762
-- 微通道哑终端方案：#682
+- 启动模板唯一真源：`docs/model-routing.toml [providers.devin]`（start=agent，launch 裸 devin）
+- 选型：`docs/model-routing.json` 写码模型 devin-deepseek-v4-flash-max（#771 实测后恢复可用）
+- 派工链路修复：#762；#771 全链实测拍板交互形态

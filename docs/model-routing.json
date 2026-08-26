@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-22",
+  "updated": "2026-08-26",
   "工人": {
     "写码": {
       "模型": [
@@ -7,17 +7,17 @@
           "id": "devin-deepseek-v4-flash-max",
           "顺位": 1,
           "禁用": false,
-          "理由": "2026-08-21 写码主选（#688）",
-          "拍板": "2026-08-21",
-          "status": "试用",
-          "trial_since": "2026-08-21",
+          "理由": "2026-08-26 #771 全链实测恢复：devin CLI 已登录（Pro），非交互形态（-p --prompt-file）派单→开工→写码→开 PR→完工 comment→补审官→审官判绿合并全通。dispatch 报 agent_prompt_stalled 是假 stalled（工人实际在跑），worker-done 起审官失败走 reviewer-attach --skip-wait 补审官（#631）。",
+          "拍板": "2026-08-26",
+          "status": "正式",
+          "禁用时间": null,
           "厂商": [
             {
               "id": "devin",
               "cli_model": "deepseek-v4-flash-max",
               "顺位": 1,
               "禁用": false,
-              "理由": "Devin CLI 写码主通道"
+              "理由": "2026-08-26 #771 实测：devin -p --prompt-file 非交互通道可用（任务书文件送达，不依赖 TUI 粘贴）"
             }
           ]
         },

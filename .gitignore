@@ -36,3 +36,7 @@ __pycache__/
 config-sync/**
 *.pem
 *.token
+
+# devin 交互形态任务书（dao.mjs 写进工人树，--prompt-file 备用通道；
+# 不进 git——脏树会挡 orca worktree rm，内容是内部指令不该进 PR）
+_prompt.txt
