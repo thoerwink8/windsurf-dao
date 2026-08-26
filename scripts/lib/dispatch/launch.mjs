@@ -199,3 +199,18 @@ export function agentStartSpec({ provider, command, agentId, start } = {}) {
   }
   return { mode: 'command', agentId: id, model: cliModel, command: command || null };
 }
+
+/**
+ * #633 agent-first 安全门：只在 launch.command 是裸 agent 名（无任何参数）时返回 true。
+ * `orca worktree create --agent <id>` 只有 --agent/--prompt，无法表达 -m/--model/permission-mode 等。
+ * 若 launch.command 带参数（所有当前已知 agent 都带），worktree create --agent 会静默丢掉这些参数，
+ * 卡名/label/账本仍记录所选模型但实际跑原生配置 → 不可见执行偏差。
+ * 带参数时返回 false → 走能执行完整 launch.command 的 fallback（close-then-create）。
+ */
+export function agentFirstSafe(launch) {
+  if (!launch?.command) return false;
+  const parts = String(launch.command).trim().split(/\s+/).filter(Boolean);
+  // 裸 agent 名（只有一个 token）= 路由命令与 --agent <id> 等价，安全。
+  // 两个或以上 token = 带模型/权限参数，worktree create --agent 表达不了 → 不安全。
+  return parts.length <= 1;
+}

@@ -98,6 +98,7 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  agentFirstSafe,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -1329,8 +1330,11 @@ function runDispatchExecution(order, { queueDir } = {}) {
 
   // #633 agent-first：slate 第一个候选若 start=agent 且 orcaKnownAgentId 认得，
   // 建树带 --agent，空壳从源头不出生，第一个终端就是 agent。
-  // 不满足（command 型 / 不认识 agent）→ 不带 --agent，走原 close-then-create fallback。
-  const workerAgentId = (workerLaunch?.start === 'agent' && workerLaunch?.agentId) ? workerLaunch.agentId : null;
+  // 安全门（审官 #788 CHANGES_REQUESTED）：worktree create --agent 只有 --agent/--prompt，
+  // 无法表达 -m/--model/permission-mode 等。agentFirstSafe 只在 launch.command 是裸 agent 名
+  // （无参数）时放行；带参数的（所有当前已知 agent）走原 close-then-create fallback，
+  // 保住 resolveLaunch 解析出的模型与权限参数。
+  const workerAgentId = (workerLaunch?.start === 'agent' && workerLaunch?.agentId && agentFirstSafe(workerLaunch)) ? workerLaunch.agentId : null;
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
     noParent: true,
@@ -1683,7 +1687,8 @@ function cmdDispatchBatch(args) {
   const effects = {
     createWorktree({ name, issue }) {
       // #633 agent-first：batch 认识的 agent 建树带 --agent，first terminal 是 agent，空壳不出生。
-      const batchAgentId = (launch?.start === 'agent' && launch?.agentId) ? launch.agentId : null;
+      // 安全门：agentFirstSafe 只在 launch.command 是裸 agent 名时放行（带参数的走 fallback 保住模型/权限）。
+      const batchAgentId = (launch?.start === 'agent' && launch?.agentId && agentFirstSafe(launch)) ? launch.agentId : null;
       const r = orca(argsWorktreeCreate({
         name,
         issue,
@@ -2815,11 +2820,12 @@ function cmdReviewerCreate(args) {
   let reviewerPreexistingHandle = null;
   if (!resumedFromExisting) {
     // #633 agent-first：审官认识的 agent 建树带 --agent，空壳不出生。
+    // 安全门：agentFirstSafe 只在 launch.command 是裸 agent 名时放行（同工人路径）。
     // resolveLaunch 可能抛（路由表问题）——best-effort 取 agentId，失败走原 fallback。
     let reviewerAgentId = null;
     try {
       const probe = resolveLaunch({ model: picked.modelId, routing, root: ROOT });
-      if (probe?.start === 'agent' && probe?.agentId) reviewerAgentId = probe.agentId;
+      if (probe?.start === 'agent' && probe?.agentId && agentFirstSafe(probe)) reviewerAgentId = probe.agentId;
     } catch { /* 完整 resolve 在建树后做，这里只取 agentId */ }
     const created = orca(argsWorktreeCreate({
       name: revName,
@@ -3171,7 +3177,8 @@ function cmdReviewerAttach(args) {
   // 不销毁重建。attach 的复用接线见 cmdReviewerAttach 后续（当前先保持新建，单例复用另单落地）。
   const created = {};
   // #633 agent-first：审官认识的 agent 建树带 --agent，空壳不出生。reviewerLaunch 已在建树前 resolve。
-  const reviewerAgentId = (reviewerLaunch?.start === 'agent' && reviewerLaunch?.agentId) ? reviewerLaunch.agentId : null;
+  // 安全门：agentFirstSafe 只在 launch.command 是裸 agent 名时放行（带参数的走 fallback 保住模型/权限）。
+  const reviewerAgentId = (reviewerLaunch?.start === 'agent' && reviewerLaunch?.agentId && agentFirstSafe(reviewerLaunch)) ? reviewerLaunch.agentId : null;
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',

@@ -53,6 +53,7 @@ export {
   orcaKnownAgentId,
   launchCliModel,
   agentStartSpec,
+  agentFirstSafe,
 } from './dispatch/launch.mjs';
 
 // ── orca 参数表（从 builder 扫，不另抄清单） ────────────────────────
