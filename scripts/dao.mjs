@@ -546,6 +546,23 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
     }
   }
+  // codex 坑 2 修复（2026-08-26 实测）：worker-start --agent codex 的任务书显示 [Pasted Content]
+  // 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象），补一记回车提交。devin 不补（任务书已由
+  // --prompt-file 送达，补回车会误触发；devin 的 stalled 是假阴性，工人实际在跑）。
+  if (send.kind === 'sent-unconfirmed' && launched?.launch?.provider === 'gpt' && handle) {
+    const sent = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+    if (sent.ok) {
+      sleepMs(3000);
+      const read = orca(argsTerminalRead({ terminal: handle, limit: 5 }));
+      if (read.ok) {
+        const text = extractTerminalText(read.json);
+        if (text && !/\[Pasted Content/i.test(text)) {
+          send.kind = 'confirmed';
+          send.reason = 'codex [Pasted Content] 补回车已提交';
+        }
+      }
+    }
+  }
   return {
     ok: true,
     json: r.json,
@@ -557,7 +574,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
   };
 }
 
-function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created }) {
+function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile }) {
   let modelId = slate[startIndex].id;
   let pipeIndex = 0;
   let hardFailsOnThisPipe = 0;
@@ -573,7 +590,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const pipe = entry.pipes[pipeIndex];
     let launch;
     try {
-      launch = resolveLaunch({ model: modelId, pipe, routing, root: ROOT });
+      launch = resolveLaunch({ model: modelId, pipe, routing, root: ROOT, promptFile });
     } catch (e) {
       return { ok: false, error: String(e.message || e), attempts };
     }
@@ -618,7 +635,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     // #762/#753：command 型 TUI（devin）起法 = create → wait tui-idle → worker-start。
     // wait 就绪即返回（不是固定睡满），timeoutMs 只是上限兜底；不等就绪就送字会
     // agent_prompt_stalled（devin 未就绪不接受 dispatch_input）。agent 型由 orca 管就绪。
-    if (launch?.start === 'command') {
+    if (launch?.start === 'command' && launch.provider !== 'devin') {
       const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: probeWaitMs(routing, pipe.provider) }));
       if (!ready.ok) {
         return { ok: false, error: `工人 TUI 等就绪失败：${errText(ready.error)}`, handle, attempts };
@@ -908,7 +925,13 @@ function buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routin
   let workerLaunch;
   let reviewerLaunch;
   try {
-    workerLaunch = resolveLaunch({ model: startEntry.id, pipe: startEntry.pipes[0], routing, root: ROOT });
+    workerLaunch = resolveLaunch({
+      model: startEntry.id,
+      pipe: startEntry.pipes[0],
+      routing,
+      root: ROOT,
+      promptFile: startEntry.id === 'devin-deepseek-v4-flash-max' ? '_prompt.txt' : undefined,
+    });
     reviewerLaunch = resolveLaunch({ model: gate.reviewer, routing, root: ROOT });
   } catch (e) { return { ok: false, error: String(e.message || e) }; }
   noteDroppedFlags(workerLaunch);
@@ -1303,6 +1326,20 @@ function runDispatchExecution(order, { queueDir } = {}) {
     }
   }
 
+  // devin 非交互形态（2026-08-26 拍板）：任务书不走 worker-start 注入（Orca stdin 对 devin -p 无效），
+  // 提前写 worker 卡目录 _prompt.txt，launch 的 {prompt_file} 占位符引用；其余通道照旧走注入。
+  const isDevinWorker = slatePack.slate[slatePack.startIndex]?.id === 'devin-deepseek-v4-flash-max';
+  let promptFile = null;
+  if (isDevinWorker && args.spec) {
+    try {
+      const injectText = buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue });
+      promptFile = join(created.workerPath, '_prompt.txt');
+      writeFileSync(promptFile, `${injectText}\n完成后运行：node scripts/dao.mjs worker-done --pr <PR号> --body-file <完工说明文件>（PR 号用 gh pr view --json number -q .number 查）`, 'utf8');
+    } catch (e) {
+      failCreated(created, `devin 任务书写文件失败: ${String(e.message || e)}`, { orderId: order.id, ...plan });
+    }
+  }
+
   const launched = startWorkerBySlate({
     slate: slatePack.slate,
     startIndex: slatePack.startIndex,
@@ -1310,6 +1347,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     worktreeId: created.workerId,
     title: args.name,
     created,
+    promptFile,
   });
   if (!launched.ok) {
     failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, orderId: order.id, ...plan });
@@ -3107,7 +3145,7 @@ function cmdReviewerAttach(args) {
       if (shown.ok) {
         const d = shown.json?.result?.dispatch || {};
         const w = shown.json?.result?.worker || {};
-        dispatchLive = isLiveDispatchRecipient({ workerState: w.state || d.status, dispatchStatus: d.status });
+        dispatchLive = isLiveDispatchRecipient({ workerState: w.state || d.status, dispatchStatus: d.status, lastFailure: d.last_failure });
       }
     }
     soldierPlan = planAttachSoldierDispatch({

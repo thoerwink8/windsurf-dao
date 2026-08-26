@@ -143,8 +143,8 @@ describe('orca-agent-cmds', () => {
     });
 
     const desktop = S.loadOrcaAgentCmds({ file: path.join(FIX, 'devin-desktop.json') });
-    const routingDevin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, skipOrca: true });
-    const devin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, orca: desktop });
+    const routingDevin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, skipOrca: true, promptFile: 'C:/tmp/_prompt.txt' });
+    const devin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, orca: desktop, promptFile: 'C:/tmp/_prompt.txt' });
     await t.test('Devin：桌面缺信任旗标也不得盖掉仓内 argv', () => {
       assert.ok(devin.launchSource === 'routing' && devin.command === routingDevin.command
         && /--respect-workspace-trust\s+false/.test(devin.command)

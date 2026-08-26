@@ -191,21 +191,27 @@ decided = "2026-08-18"
 
 [providers.devin]
 cli = "devin"
+# 2026-08-26 复测拍板：devin 走**非交互工人形态**（--print/--prompt-file，完工=进程退出+git 产出）。
+# 实测链路（2026-08-26 凌晨帅位复测，devin CLI 已登录 Devin Pro）： 
+#   terminal create --command "devin -p --prompt-file <任务书> --model ..." → worker-start --terminal
+#   （devin -p 跑长任务期间 Orca 能过 agent 识别；worker-start 返回 agent_prompt_stalled 是假阴性——
+#   任务书已由 --prompt-file 送达，Orca 的 stdin 注入是多余的，classifyWorkerStartSend 容忍为 sent-unconfirmed）。
+# 三条旧死路（agent 型 TUI 不提交 / command 型 TUI 认不出 / --agent 拒收 --model）已由本形态绕过。
+# 任务书由 dao.mjs dispatch 写 worker 卡目录 _prompt.txt，launch 的 {prompt_file} 占位符引用。
 start = "command"
 default_model = "deepseek-v4-flash-max"
-launch = "devin --model {model} --permission-mode dangerous --respect-workspace-trust false"
+launch = "devin -p --prompt-file {prompt_file} --model {model} --permission-mode dangerous --respect-workspace-trust false"
 launch_model = "deepseek-v4-flash-max"
 probe_wait_ms = 120000
 launch_note = """
-Devin CLI。Orca 不认 --agent devin。写码主选走拆步起（#753 今晚拍板）：
-`terminal create --command`（本节 launch）→ `terminal wait --for tui-idle` → `worker-start --terminal` 送任务书。
-`probe_wait_ms` 是等就绪问句的上限，不是固定睡满再注入。tui-idle 过了但屏上仍是转圈/unknown 必须继续等，没有问句不许 worker-start。
-工人 TUI 起法即本节 launch：`--permission-mode dangerous` 全放行工具（无人值守）；2026-08-21 起含 `--respect-workspace-trust false`（#708：新 worktree 未信任，弹框卡死就绪探针）。
-非交互冒烟（不是工人起法，跑完即退）：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`。
-`--print` 不能当 Orca 工人：一次提示就退出。未信任目录的非交互要关 workspace trust 检查，否则没提示可弹、当场失败。
-模型 id 以 `devin models list` 为准；写码主选 `deepseek-v4-flash-max`。装机见 NEW-MACHINE.md「devin 怎么配」。
+Devin CLI（本机 PATH = AppData\\Local\\devin\\cli\\bin\\devin.exe；桌面端 = D:\\Windsurf\\Devin.exe）。
+**2026-08-26 实测：派工通道不可用，选型已禁用。** 详见上方注释三条死路与 docs/model-routing.json。
+`--agent devin` 的 TUI 投递 = Orca 的通用 TUI agent 支持（promptInjectionMode: stdin-after-start），
+Devin TUI 没有可编程提交机制（粘贴≠送达）。Windsurf IDE 驱动 Devin 走 ACP（`devin acp`），Orca 的 agent schema 里没有 devin/ACP。
+`--permission-mode dangerous` 全放行工具（无人值守）；`--respect-workspace-trust false`（#708：新 worktree 未信任，弹框卡死就绪探针）。
+非交互冒烟（不是工人起法，跑完即退）：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`——CLI 需先 `devin auth login`。
 """
-why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连。Devin 侧 deepseek-v4-flash-max 比 og/直连便宜（issue #688）。"
+why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连（#688）；2026-08-26 实测 devin 派工通道三条路全死，选型禁用，写码落回 opencode-go（#771 换通道拍板）。"
 decided = "2026-08-21"
 
 [providers.minimax-h3]

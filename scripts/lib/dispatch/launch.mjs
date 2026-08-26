@@ -62,7 +62,7 @@ export function loadRouting(file = ROUTING_FILE) {
 }
 
 export function resolveLaunch({
-  provider, model, routing, root = ROOT, pipe, orca, orcaFile, skipOrca, env,
+  provider, model, routing, root = ROOT, pipe, orca, orcaFile, skipOrca, env, promptFile,
 } = {}) {
   if (!routing) throw new Error('resolveLaunch 没给 routing（读表失败应在 loadRouting 就抛）');
   const providers = routing.providers;
@@ -95,6 +95,12 @@ export function resolveLaunch({
       throw new Error(`providers.${providerName}.launch 含 {model} 但没给模型（--model / launch_model / default_model）`);
     }
     command = command.split('{model}').join(String(cliModel));
+  }
+  if (command.includes('{prompt_file}')) {
+    if (!promptFile) {
+      throw new Error(`providers.${providerName}.launch 含 {prompt_file} 但没给任务书文件路径（devin 非交互形态）`);
+    }
+    command = command.split('{prompt_file}').join(String(promptFile));
   }
   const materialized = materializeLaunch(command, root);
   const routingLaunch = {
@@ -159,6 +165,9 @@ export function orcaKnownAgentId({ provider, command } = {}) {
   if (bin === 'grok' || p === 'grok') return 'grok';
   if (bin === 'pi' || p === 'deepseek' || p === 'opencode-go') return 'pi';
   if (bin === 'codex' || p === 'gpt') return 'codex';
+  // 2026-08-26 实测：Orca 原生支持 `--agent devin`（worktree create --agent devin 成功），
+  // 不再走 command 型 --command + worker-start --terminal（会 agent_unconfigured）。
+  if (bin === 'devin' || p === 'devin') return 'devin';
   return null;
 }
 
@@ -183,6 +192,8 @@ export function agentStartSpec({ provider, command, agentId, start } = {}) {
     if (!id) {
       throw new Error(`start=agent 但不知道 Orca --agent id（provider=${provider || '?'}）`);
     }
+    // 2026-08-26：devin 不透传 cli_model——Orca 实测报「Agent devin does not support launch-time model selection」。
+    // devin 的模型由 Orca 侧 devin agent 配置决定（默认 deepseek-v4-flash-max，见 NEW-MACHINE.md「devin 怎么配」）。
     const model = (id === 'cursor' || id === 'codex') ? cliModel : null;
     return { mode: 'agent', agentId: id, model };
   }
