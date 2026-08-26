@@ -1,0 +1,22 @@
+{
+  "type": "attr.rule",
+  "schema_version": 1,
+  "ts": "2026-08-23T18:12:57+08:00",
+  "machine": "backfill",
+  "seq": 447,
+  "job_id": "gh-pr-758",
+  "model": "devin-deepseek-v4-flash-max",
+  "model_share": 1,
+  "brief_share": 0,
+  "coord_share": 0,
+  "env_share": 0,
+  "overrun_attr": null,
+  "confidence": 0.9,
+  "why": "L0：成功合并直记正样本（#758，红 0 项）",
+  "evidence": [
+    "github:pr-758"
+  ],
+  "pr_number": 758,
+  "source": "github-backfill",
+  "event_id": "ebfd17fef2dc10f2f4da28e6707bf0701ae2908966c3ee8bd4023f303afb608a"
+}
