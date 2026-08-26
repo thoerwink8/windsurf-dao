@@ -550,19 +550,31 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
     }
   }
-  // codex 坑 2 修复（2026-08-26 实测）：worker-start --agent codex 的任务书显示 [Pasted Content]
-  // 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象），补一记回车提交。devin 不补（任务书已由
-  // --prompt-file 送达，补回车会误触发；devin 的 stalled 是假阴性，工人实际在跑）。
-  if (send.kind === 'sent-unconfirmed' && launched?.launch?.provider === 'gpt' && handle) {
-    const sent = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
-    if (sent.ok) {
-      sleepMs(3000);
-      const read = orca(argsTerminalRead({ terminal: handle, limit: 5 }));
-      if (read.ok) {
-        const text = extractTerminalText(read.json);
-        if (text && !/\[Pasted Content/i.test(text)) {
-          send.kind = 'confirmed';
-          send.reason = 'codex [Pasted Content] 补回车已提交';
+  // codex 坑 2 修复（2026-08-26 实测，#785 兜底加宽）：worker-start --agent codex 的任务书显示
+  // [Pasted Content] 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象）。原来只在
+  // send.kind === 'sent-unconfirmed' 时补，但审官复用路 worker-start 可能返回 confirmed 而
+  // [Pasted Content] 仍停输入框（2026-08-27 实测两次审官卡住）。改成不依赖 send.kind：只要
+  // provider=gpt 且 handle 存在，先读屏查 [Pasted Content]，有才补回车（屏面干净不补，避免
+  // confirmed 时误触发）。devin 不走这里（任务书已由 --prompt-file 送达，补回车会误触发；
+  // devin 的 stalled 是假阴性，工人实际在跑）。provider 取 launched.launch.provider，
+  // 兜底 launched.provider（复用路只传 handle+launch 或 handle+provider）。
+  const codexProvider = launched?.launch?.provider || launched?.provider;
+  if (codexProvider === 'gpt' && handle) {
+    const preRead = orca(argsTerminalRead({ terminal: handle, limit: 5 }));
+    if (preRead.ok) {
+      const preText = extractTerminalText(preRead.json);
+      if (preText && /\[Pasted Content/i.test(preText)) {
+        const sent = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+        if (sent.ok) {
+          sleepMs(3000);
+          const read = orca(argsTerminalRead({ terminal: handle, limit: 5 }));
+          if (read.ok) {
+            const text = extractTerminalText(read.json);
+            if (text && !/\[Pasted Content/i.test(text)) {
+              send.kind = 'confirmed';
+              send.reason = 'codex [Pasted Content] 补回车已提交';
+            }
+          }
         }
       }
     }
@@ -1972,10 +1984,19 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: '复用审官 task-create 没拿到 taskId（要 result.task.id，不是最外层 id）' };
   }
 
+  // routing/launch 提前解析：startOrcaWorker 的 codex 补回车兜底（#785）要靠 launch.provider
+  // 判断走不走，复用路原来只传 { handle }，provider 拿不到 → codex 审官卡 [Pasted Content] 不补。
+  let routing;
+  try { routing = loadRouting(); }
+  catch (e) { return { ok: false, reused: true, error: String(e.message || e) }; }
+  let launch;
+  try { launch = resolveLaunch({ model: reviewer, routing, root: ROOT }); }
+  catch { launch = { provider: 'gpt' }; }
+
   const revStarted = startOrcaWorker({
     task: reviewerTaskId,
     worktree: reviewerWorktreeId,
-    launched: { handle },
+    launched: { handle, launch },
     run: runId,
   });
   if (!revStarted.ok) {
@@ -1985,13 +2006,6 @@ function reuseReviewerOnTerminal({
   if (!reviewerDispatchId) {
     return { ok: false, reused: true, error: '复用审官 worker-start 没拿到 dispatch id（没查成，不是已开工）' };
   }
-
-  let routing;
-  try { routing = loadRouting(); }
-  catch (e) { return { ok: false, reused: true, error: String(e.message || e) }; }
-  let launch;
-  try { launch = resolveLaunch({ model: reviewer, routing, root: ROOT }); }
-  catch { launch = { provider: 'gpt' }; }
 
   const reviewerInject = finishWorkerInject({
     handle,
