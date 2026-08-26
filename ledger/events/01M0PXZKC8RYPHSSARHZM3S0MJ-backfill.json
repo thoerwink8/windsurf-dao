@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-23T17:07:17+08:00",
+  "machine": "backfill",
+  "seq": 444,
+  "job_id": "gh-pr-758",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #758；[devin] README 目录导览补 dao.mjs board-archive / board-reset 条目 (#752)；判定行红 0 项",
+  "pr_number": 758,
+  "source": "github-backfill",
+  "event_id": "b8d6a8b2deac21c143d2353901a60a05eec36c19b3cbddc37b2db255b699e31a"
+}
