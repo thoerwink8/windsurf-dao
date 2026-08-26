@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-26T02:13:50+08:00",
+  "machine": "backfill",
+  "seq": 452,
+  "job_id": "gh-pr-773",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "deepseek-v4-flash"
+  ],
+  "selected": "deepseek-v4-flash",
+  "why": "回填自 GitHub PR #773；[pi] #771 派单链路实战验证：docs/dispatch-flow-test.md 链路环节清单；无审读",
+  "pr_number": 773,
+  "source": "github-backfill",
+  "event_id": "619f12eaabf863d4c5af89ea3ddf0eb6020c81684c01414d59445483c25beb0e"
+}

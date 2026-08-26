@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-26T10:18:22+08:00",
+  "machine": "backfill",
+  "seq": 460,
+  "job_id": "gh-pr-778",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #778；[devin] #777 devin 交互形态验证通过；无审读",
+  "pr_number": 778,
+  "source": "github-backfill",
+  "event_id": "ff6b40f37a92fcc9a123bab371bdead97f148966f2f6f9812570479d0309f92d"
+}

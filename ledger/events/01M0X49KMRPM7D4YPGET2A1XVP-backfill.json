@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-26T02:53:03+08:00",
+  "machine": "backfill",
+  "seq": 456,
+  "job_id": "gh-pr-776",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #776；[devin] docs: #771 派单链路实战验证记录；判定行红 0 项",
+  "pr_number": 776,
+  "source": "github-backfill",
+  "event_id": "85d3adbaa87211931dac2c18c73d82e6c6cecca885a3fcec39e06e03ee54163b"
+}

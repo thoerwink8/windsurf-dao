@@ -1,0 +1,23 @@
+{
+  "type": "job.opened",
+  "schema_version": 1,
+  "ts": "2026-08-26T10:21:43+08:00",
+  "machine": "backfill",
+  "seq": 464,
+  "job_id": "gh-pr-779",
+  "task_class": "回填",
+  "work_type": "写码",
+  "identity": "工人",
+  "scale": "未知",
+  "risk": "低",
+  "reversible": true,
+  "task_tokens": null,
+  "candidate_models": [
+    "devin-deepseek-v4-flash-max"
+  ],
+  "selected": "devin-deepseek-v4-flash-max",
+  "why": "回填自 GitHub PR #779；[devin] #777 devin 交互形态验证；判定行红 1 项",
+  "pr_number": 779,
+  "source": "github-backfill",
+  "event_id": "9beadb82c82b0b38fcb570d16778a64b904735f24cc4f57e280ec8e91c32cef0"
+}
