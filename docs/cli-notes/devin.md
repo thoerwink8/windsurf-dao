@@ -15,7 +15,7 @@
 ## 正确起法（2026-08-26 交互形态拍板）
 
 ```
-worker-start --agent devin（launch 模板 = 裸 devin，agent 型拒收 --model）
+worker-start --agent devin（launch 模板 = devin --permission-mode dangerous --respect-workspace-trust false，agent 型拒收 --model）
 ```
 
 - **交互 TUI**：Orca 起 Devin CLI TUI（v3000.5.20，bypass permissions on），工人可交互式干活、实时看屏。
@@ -44,6 +44,12 @@ worker-start --agent devin（launch 模板 = 裸 devin，agent 型拒收 --model
 - **正解**：worker-start 返回 stalled 且 provider 是 gpt（codex）时，补一记回车提交（2026-08-26 直改 startOrcaWorker）。devin 不补回车（注入没送达，补了也无效，要补粘+回车）。
 - **识别**：屏面见 `[Pasted Content N chars]` = 粘贴没提交，补回车后任务书全文显示、codex 开始干活。
 
+### 坑 4：launch 没带权限旗标 → 工人每跑外部命令弹窗，帅被绑在终端前（#782）
+
+- **现象**：launch 裸 `devin` 时，Devin TUI 对每个外部工具调用（gh/git/python 等）弹权限确认窗，帅得逐个手动放行——工人无法无人值守。
+- **正解**：`docs/model-routing.toml [providers.devin].launch` 带 `--permission-mode dangerous --respect-workspace-trust false`（#782 拍板）：前者自动批准所有工具（与 codex `--dangerously-bypass-approvals-and-sandbox` 对齐），后者跳过工作区信任弹窗。
+- **识别**：TUI 起来后不再弹权限窗 = 旗标生效；仍弹 = launch 没带上，或被桌面覆盖吞掉（看 `droppedFlags`/`desktopFlagDiffs` 提示）。
+
 ## 教训
 
 - 上一版结论「派工通道不可用」只验证了 TUI 起不来/不提交，没试 **补粘 + 回车**。CLI 登录后（Devin Pro）交互 TUI 形态实测可用。
@@ -52,6 +58,6 @@ worker-start --agent devin（launch 模板 = 裸 devin，agent 型拒收 --model
 
 ## 相关
 
-- 启动模板唯一真源：`docs/model-routing.toml [providers.devin]`（start=agent，launch 裸 devin）
+- 启动模板唯一真源：`docs/model-routing.toml [providers.devin]`（start=agent，launch 带 dangerous+trust 旗标，#782）
 - 选型：`docs/model-routing.json` 写码模型 devin-deepseek-v4-flash-max（#771 实测后恢复可用）
 - 派工链路修复：#762；#771 全链实测拍板交互形态

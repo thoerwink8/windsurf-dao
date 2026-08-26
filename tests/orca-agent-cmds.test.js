@@ -145,9 +145,9 @@ describe('orca-agent-cmds', () => {
     const desktop = S.loadOrcaAgentCmds({ file: path.join(FIX, 'devin-desktop.json') });
     const routingDevin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, skipOrca: true });
     const devin = D.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, orca: desktop });
-    await t.test('#771 Devin：仓内 launch 裸 devin（交互 TUI 形态），桌面覆盖不当命令', () => {
+    await t.test('#782 Devin：仓内 launch 带 dangerous+trust 旗标（交互 TUI 形态），桌面 bypass 不混进 argv', () => {
       assert.ok(devin.launchSource === 'routing' && devin.command === routingDevin.command
-        && devin.command === 'devin'
+        && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false'
         && !/--permission-mode\s+bypass/.test(devin.command),
         'Devin 仓内  →  ' + JSON.stringify({ command: devin.command, source: devin.launchSource, orca: devin.orcaLaunch }));
     });
@@ -156,12 +156,16 @@ describe('orca-agent-cmds', () => {
         && !/--experimental/.test(devin.command),
         '桌面多旗标  →  ' + JSON.stringify({ extra: devin.extraDesktopFlags, command: devin.command }));
     });
-    await t.test('#771 Devin：仓内无旗标，桌面少旗标不报（dropped 空）', () => {
-      assert.ok(Array.isArray(devin.droppedFlags) && devin.droppedFlags.length === 0,
+    await t.test('#782 Devin：仓内 trust 旗标桌面没有，droppedFlags 显形（不静默吞保命旗标）', () => {
+      assert.ok(Array.isArray(devin.droppedFlags) && devin.droppedFlags.length === 1
+        && devin.droppedFlags[0] === '--respect-workspace-trust',
         '桌面少旗标  →  ' + JSON.stringify(devin.droppedFlags));
     });
-    await t.test('#771 Devin：仓内无同旗标，无差异可报（diffs 空）', () => {
-      assert.ok(Array.isArray(devin.desktopFlagDiffs) && devin.desktopFlagDiffs.length === 0,
+    await t.test('#782 Devin：--permission-mode 仓内 dangerous 桌面 bypass，diffs 报差异（不覆盖仓内）', () => {
+      assert.ok(Array.isArray(devin.desktopFlagDiffs) && devin.desktopFlagDiffs.length === 1
+        && devin.desktopFlagDiffs[0].flag === '--permission-mode'
+        && devin.desktopFlagDiffs[0].routing === 'dangerous'
+        && devin.desktopFlagDiffs[0].desktop === 'bypass',
         '同旗标不同值  →  ' + JSON.stringify(devin.desktopFlagDiffs));
     });
   });

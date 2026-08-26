@@ -201,7 +201,7 @@ cli = "devin"
 # worker-done 起审官失败走 reviewer-attach --skip-wait 补审官（#631）。
 start = "agent"
 default_model = "deepseek-v4-flash-max"
-launch = "devin"
+launch = "devin --permission-mode dangerous --respect-workspace-trust false"
 launch_model = "deepseek-v4-flash-max"
 probe_wait_ms = 120000
 launch_note = """
