@@ -1,0 +1,22 @@
+派工执行体：补 --repo + 接 #682 哑终端 coordinator
+---
+## 谁提的，什么场景
+
+2026-08-24 用 #759 测刚合的 fire-and-forget / async-launch（PR #761）。热路几秒返回「已受理」，执行体两处当场死：
+
+1. 从 Cursor 主树（`orca/workspaces/windsurf-dao/master`）建卡：`Missing repo selector`。Orca 只认 `D:\frank\windsurf-dao\windsurf-dao`，这棵 master 是外部 worktree。
+2. 从 Orca 认的树再派：建卡 / 身份 / 终端 / Run / task-create 都过了，`worker-start` 报 `consumer_fenced`。detached 执行体用 `argsRunCreateSelf` 开的 Run 没有 coordinator 终端。回滚干净。
+
+#682 微通道已经用壳卡哑终端 `--from` 修过同类坑，派工执行体没接。
+
+## 做到什么算做完
+
+1. `orca worktree create` 一律带 `--repo id:<本仓>`（用 `orca repo list` 对 git remote，0 条 / 多条 / 没查成分开报）。从 Cursor 主树 `dao.mjs dispatch` 能建卡。
+2. `dispatch-exec` 在工人卡上起「派工协调（勿关）」哑终端，`run-create --from` 它，再 `worker-start --run/--from`。不再 `bindStation` + `argsRunCreateSelf`。
+3. 失败回滚关掉协调终端；`node scripts/dao-check.mjs` 过；有故意样本：`--repo` 编进 argv、执行体源码不再走 `bindStation`。
+4. 用 #759 再测一发：热路已受理 + 执行体 `ok:true`（或工人卡在盘上）。README 行已在 master 的话工人按原 spec 不要空开 PR。
+
+## 删哪一层
+
+不删 async-launch。补两处漏接：`--repo` 选择符，以及 #682 已有的哑终端 coordinator。
+

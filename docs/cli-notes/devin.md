@@ -44,6 +44,14 @@ worker-start --agent devin（launch 模板 = 裸 devin，agent 型拒收 --model
 - **正解**：worker-start 返回 stalled 且 provider 是 gpt（codex）时，补一记回车提交（2026-08-26 直改 startOrcaWorker）。devin 不补回车（注入没送达，补了也无效，要补粘+回车）。
 - **识别**：屏面见 `[Pasted Content N chars]` = 粘贴没提交，补回车后任务书全文显示、codex 开始干活。
 
+### 坑 4：launch 没带权限旗标 → 工人每跑一个外部命令就弹窗，帅被绑在终端前手动放行
+
+- **现象**（2026-08-26 实测）：`worker-start --agent devin` 起来后，devin 每跑一个非 read-only 命令（`gh pr view`、`python`、`git` 等）就弹权限确认窗（1=Approve once / 2=allow 这类 / 3=工作区总是允许 / 4=所有项目总是允许 / 7=No），停在选择菜单等帅手动放行。帅不选就卡死，看起来像"工人没动静"。
+- **根因**：仓内 launch 配置（`docs/model-routing.toml [providers.devin]`）是裸 `devin`，没带 `--permission-mode` 旗标。devin 默认 `--permission-mode auto`（只自动批准 read-only 工具），工人干活的 `gh`/`git`/`python` 都不是 read-only → 每个都弹窗。对比 codex 的 launch 已带 `--dangerously-bypass-approvals-and-sandbox`，devin 没对齐。
+- **正解**：launch 加 `--permission-mode dangerous --respect-workspace-trust false`。`dangerous` = 自动批准所有工具（含 gh/git/python），`--respect-workspace-trust false` = 跳过工作区信任弹窗。与 codex 的 `--dangerously-bypass-approvals-and-sandbox` 同等级别。
+- **识别**：devin 屏面停在 `↑↓ select · ↵ confirm · esc cancel` 权限菜单 = 在等帅放行，不是工人卡死。
+- **grill-ai 判定**（2026-08-26）：帅手动放行是给「launch 没带旗标」打补丁（第 1 层），方向错了——该修 launch 配置（删掉整层），不是当人肉权限放行器。用户拍板加 `dangerous + trust false`。
+
 ## 教训
 
 - 上一版结论「派工通道不可用」只验证了 TUI 起不来/不提交，没试 **补粘 + 回车**。CLI 登录后（Devin Pro）交互 TUI 形态实测可用。
