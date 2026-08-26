@@ -1737,6 +1737,16 @@ function cmdPrSyncLabels(args) {
   emit({ ok: true, ...r });
 }
 
+/** #781：worker-list 项没有 last_failure 字段，findDispatchForWorktree 对 failed 候选
+ * 用这个回调调 worker-show 取真实 last_failure（result.dispatch.last_failure）。
+ * 没查成返回 null → 调用方 fail-close 判死（不许因没查成当活人，#552）。 */
+function resolveDispatchLastFailure(dispatchId) {
+  if (!dispatchId) return null;
+  const r = orca(argsWorkerShow({ dispatch: dispatchId }));
+  if (!r.ok) return null;
+  return r.json?.result?.dispatch?.last_failure ?? null;
+}
+
 function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (soldierDispatch) {
     const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
@@ -1748,7 +1758,7 @@ function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (parentId) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) return { ok: false, error: `worker-list 没查成：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentId);
+    const found = findDispatchForWorktree(wl.json, parentId, resolveDispatchLastFailure);
     if (found.ok && found.runId) return { ok: true, runId: found.runId };
     return { ok: false, error: found.error || '工人卡没有 run id' };
   }
@@ -1922,7 +1932,7 @@ function reuseReviewerOnTerminal({
   if (parentWorktree) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) return { ok: false, reused: true, error: `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentWorktree);
+    const found = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
     if (!found.ok && !soldierDispatchId) {
       return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
     }
@@ -2293,7 +2303,7 @@ function cmdWorkerDone(args) {
   if (needExisting && reuse.worktreeId) {
     const wl = orca(argsWorkerList());
     if (!wl.ok) fail(`已有审官树但 worker-list 没查成：${errText(wl.error)}`, { ...plan, reviewerCreate: create, reviewerReuse: reused });
-    const found = findDispatchForWorktree(wl.json, reuse.worktreeId);
+    const found = findDispatchForWorktree(wl.json, reuse.worktreeId, resolveDispatchLastFailure);
     if (!found.ok) fail(`已有审官树但找不到 dispatch：${found.error}`, { ...plan, reviewerCreate: create, reviewerReuse: reused, found });
     existingDispatchId = found.dispatchId;
   }
@@ -2854,7 +2864,7 @@ function cmdReviewerCreate(args) {
     const wl = orca(argsWorkerList());
     if (!wl.ok && !soldierDispatchId) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
     if (wl.ok) {
-      const found = findDispatchForWorktree(wl.json, args.parentWorktree);
+      const found = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
       if (!found.ok && !soldierDispatchId) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
       if (found.ok) {
         if (!soldierDispatchId) soldierDispatchId = found.dispatchId;
@@ -3166,7 +3176,7 @@ function cmdReviewerAttach(args) {
     if (!soldierDispatchId) {
       const wl = orca(argsWorkerList());
       if (!wl.ok && !args.skipWait) failCreated(created, `worker-list 没查成，给 --soldier-dispatch 或 --skip-wait：${errText(wl.error)}`, plan);
-      if (wl.ok) foundDispatch = findDispatchForWorktree(wl.json, args.worktree);
+      if (wl.ok) foundDispatch = findDispatchForWorktree(wl.json, args.worktree, resolveDispatchLastFailure);
     }
     const probeId = soldierDispatchId || (foundDispatch?.ok ? foundDispatch.dispatchId : null);
     let dispatchLive = null;

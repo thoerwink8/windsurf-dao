@@ -1,10 +1,11 @@
-// #780 修复回归：isLiveDispatchRecipient / findDispatchForWorktree 死信箱判据
+// #780/#781 修复回归：isLiveDispatchRecipient / findDispatchForWorktree 死信箱判据
 //
 // 验的层：
-// ① isLiveDispatchRecipient：completed/succeeded 是死信箱，agent_prompt_stalled 不复活
+// ① isLiveDispatchRecipient：completed/succeeded/cancelled/... 是死信箱，agent_prompt_stalled 不复活
 // ② isLiveDispatchRecipient：failed + agent_prompt_stalled 仍当活（devin 假阴性例外）
-// ③ findDispatchForWorktree：failed + retained 不再无条件下放为活（需 lastFailure 配合）
-// ④ findDispatchForWorktree：completed/succeeded 不当收件人
+// ③ isLiveDispatchRecipient：混合态 completed/failed、succeeded/failed、failed/completed、failed/succeeded 全判死（#781）
+// ④ findDispatchForWorktree：不从 worker-list 项读 last_failure（字段不存在），用 resolveLastFailure 回调取真实值
+// ⑤ findDispatchForWorktree：completed/succeeded 不当收件人
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -88,6 +89,26 @@ describe('#780 isLiveDispatchRecipient 死信箱判据', () => {
       );
     }
   });
+
+  it('#781 混合态 completed/succeeded + failed 全判死（不许因一边 failed 复活已结算信箱）', async () => {
+    const { isLiveDispatchRecipient } = await DELIVER_LOAD;
+
+    // 四种混合态：一边终态成功、另一边 failed，且 lastFailure 带 agent_prompt_stalled。
+    // 旧实现 `(w === 'failed' || d === 'failed')` 只要一边 failed 就放行 → 全部错误返回 true。
+    const mixed = [
+      { workerState: 'completed', dispatchStatus: 'failed', lastFailure: 'agent_prompt_stalled' },
+      { workerState: 'succeeded', dispatchStatus: 'failed', lastFailure: 'agent_prompt_stalled' },
+      { workerState: 'failed', dispatchStatus: 'completed', lastFailure: 'agent_prompt_stalled' },
+      { workerState: 'failed', dispatchStatus: 'succeeded', lastFailure: 'agent_prompt_stalled' },
+    ];
+    for (const c of mixed) {
+      assert.strictEqual(
+        isLiveDispatchRecipient(c),
+        false,
+        `${c.workerState}/${c.dispatchStatus} + agent_prompt_stalled → 死（终态成功在场，例外不生效）`
+      );
+    }
+  });
 });
 
 describe('#780 findDispatchForWorktree 死信箱判据', () => {
@@ -156,9 +177,11 @@ describe('#780 findDispatchForWorktree 死信箱判据', () => {
     assert.strictEqual(found.ok, false, 'failed + retained 无 lastFailure → 死');
   });
 
-  it('failed + retained + lastFailure=agent_prompt_stalled → 活', async () => {
+  it('failed + retained + worker-show last_failure=agent_prompt_stalled → 活（真实路径）', async () => {
     const { findDispatchForWorktree } = await DAO_CMD_LOAD;
 
+    // #781：worker-list 项没有 last_failure 字段，真实 last_failure 来自 worker-show。
+    // 这里用 resolveLastFailure 回调模拟 worker-show 返回 agent_prompt_stalled。
     const wl = {
       result: {
         workers: [
@@ -166,7 +189,6 @@ describe('#780 findDispatchForWorktree 死信箱判据', () => {
             workerState: 'failed',
             dispatchStatus: 'failed',
             terminalState: 'retained',
-            lastFailure: 'agent_prompt_stalled',
             dispatchId: 'd4',
             taskId: 't4',
             runId: 'r4',
@@ -175,8 +197,9 @@ describe('#780 findDispatchForWorktree 死信箱判据', () => {
         ],
       },
     };
-    const found = findDispatchForWorktree(wl, 'wt-4');
-    assert.strictEqual(found.ok, true, 'failed + retained + agent_prompt_stalled → 活');
+    const resolveLastFailure = (id) => (id === 'd4' ? 'agent_prompt_stalled' : null);
+    const found = findDispatchForWorktree(wl, 'wt-4', resolveLastFailure);
+    assert.strictEqual(found.ok, true, 'failed + retained + worker-show agent_prompt_stalled → 活');
     assert.strictEqual(found.dispatchId, 'd4', 'dispatchId 正确');
   });
 
@@ -200,5 +223,39 @@ describe('#780 findDispatchForWorktree 死信箱判据', () => {
     const found = findDispatchForWorktree(wl, 'wt-5');
     assert.strictEqual(found.ok, true, 'ready → 活');
     assert.strictEqual(found.dispatchId, 'd5', 'dispatchId 正确');
+  });
+
+  it('#781 真实 worker-list 字段形状（无 lastFailure/last_failure）failed 不靠不存在字段', async () => {
+    const { findDispatchForWorktree } = await DAO_CMD_LOAD;
+
+    // 真实 orca orchestration worker-list --json 项没有 lastFailure/last_failure 字段
+    // （审官扫本机 303 个 failed Dispatch 确认）。钉死形状：故意不写这两个键，
+    // 确认函数不读它们、无回调时 failed fail-close 判死。
+    const wl = {
+      result: {
+        workers: [
+          {
+            dispatchId: 'd_real',
+            workerState: 'failed',
+            dispatchStatus: 'failed',
+            terminalState: 'retained',
+            taskId: 't_real',
+            runId: 'r_real',
+            resource: { worktreeId: 'wt-real' },
+          },
+        ],
+      },
+    };
+    // 无回调：failed fail-close 判死（不是没查成）
+    const foundNoCb = findDispatchForWorktree(wl, 'wt-real');
+    assert.strictEqual(foundNoCb.ok, false, '无 resolveLastFailure → failed fail-close 判死');
+    assert.strictEqual(foundNoCb.unscanned, false, '不是没查成，是查到死');
+    assert.ok(/已结算/.test(foundNoCb.error), 'error 含「已结算」');
+    // 回调返回非 stalled → 仍死
+    const foundNotStalled = findDispatchForWorktree(wl, 'wt-real', () => 'crashed');
+    assert.strictEqual(foundNotStalled.ok, false, 'worker-show last_failure 非 stalled → 死');
+    // 回调返回 null（worker-show 没查成）→ fail-close 死，不许当活人
+    const foundNull = findDispatchForWorktree(wl, 'wt-real', () => null);
+    assert.strictEqual(foundNull.ok, false, 'worker-show 没查成 → fail-close 死');
   });
 });

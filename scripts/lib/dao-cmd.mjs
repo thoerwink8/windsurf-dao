@@ -221,8 +221,11 @@ export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLiv
   };
 }
 
-/** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。 */
-export function findDispatchForWorktree(workerListJson, worktreeSel) {
+/** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。
+ * #781：worker-list 项没有 last_failure 字段（生产数据确认，审官扫 303 个 failed Dispatch），
+ * agent_prompt_stalled 例外只能用 resolveLastFailure 回调调 worker-show/dispatch-show 取真实
+ * last_failure 来判；不传回调 / 查失败 → failed 候选 fail-close 判死（不许因没查成当活人，#552）。 */
+export function findDispatchForWorktree(workerListJson, worktreeSel, resolveLastFailure) {
   const workers = workerListJson?.result?.workers;
   if (!Array.isArray(workers)) {
     return { ok: false, unscanned: true, error: 'worker-list 结构不认识（缺 result.workers 数组）' };
@@ -236,30 +239,53 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
   if (hits.length === 0) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
   }
-  const live = hits.filter(w => {
-    if (isLiveDispatchRecipient({
-      workerState: w.workerState,
-      dispatchStatus: w.dispatchStatus,
-      lastFailure: w.lastFailure ?? w.last_failure ?? null,
-    })) return true;
-    return false;
+
+  const isReadyLike = w => w.workerState === 'ready' || w.workerState === 'working'
+    || w.dispatchStatus === 'dispatched' || w.dispatchStatus === 'running';
+  const pickFrom = live => {
+    const ready = live.filter(isReadyLike);
+    const pick = ready[0] || live[0];
+    if (!pick) return null;
+    if (!pick.dispatchId) {
+      return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
+    }
+    return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, runId: pick.runId || null, scanned: workers.length };
+  };
+  const deadResult = () => ({
+    ok: false, unscanned: false,
+    error: `worktree=${sel} 只有已结算 dispatch，禁止当收件人（#552：下一跳必须新 Dispatch）`,
+    scanned: workers.length, deadCount: hits.length,
   });
-  const ready = live.filter(w => w.workerState === 'ready' || w.workerState === 'working'
-    || w.dispatchStatus === 'dispatched' || w.dispatchStatus === 'running');
-  const pick = ready[0] || live[0];
-  if (!pick) {
-    return {
-      ok: false,
-      unscanned: false,
-      error: `worktree=${sel} 只有已结算 dispatch，禁止当收件人（#552：下一跳必须新 Dispatch）`,
-      scanned: workers.length,
-      deadCount: hits.length,
-    };
+
+  // Pass 1：状态本身判活（ready/working/waiting + 非 failed dispatch）——不需 last_failure。
+  const clearlyLive = hits.filter(w => isLiveDispatchRecipient({
+    workerState: w.workerState, dispatchStatus: w.dispatchStatus, lastFailure: null,
+  }));
+  if (clearlyLive.length > 0) {
+    const r = pickFrom(clearlyLive);
+    if (r) return r;
   }
-  if (!pick.dispatchId) {
-    return { ok: false, error: `worktree=${sel} 的记账没有 dispatchId`, scanned: workers.length };
+
+  // Pass 2：仅当没有状态判活的候选，才对 failed 候选用 resolveLastFailure 取真实 last_failure
+  // （worker-list 项没这字段）。非 failed 死态（completed/succeeded/...）无条件死，不查。
+  if (typeof resolveLastFailure !== 'function') return deadResult();
+  const stalledLive = [];
+  for (const w of hits) {
+    const wLow = String(w.workerState || '').toLowerCase();
+    const dLow = String(w.dispatchStatus || '').toLowerCase();
+    if (wLow !== 'failed' && dLow !== 'failed') continue;
+    const lastFailure = resolveLastFailure(w.dispatchId);
+    if (isLiveDispatchRecipient({
+      workerState: w.workerState, dispatchStatus: w.dispatchStatus, lastFailure,
+    })) {
+      stalledLive.push(w);
+    }
   }
-  return { ok: true, dispatchId: pick.dispatchId, taskId: pick.taskId || null, runId: pick.runId || null, scanned: workers.length };
+  if (stalledLive.length > 0) {
+    const r = pickFrom(stalledLive);
+    if (r) return r;
+  }
+  return deadResult();
 }
 
 export function extractWorktreeId(json) {

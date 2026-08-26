@@ -918,13 +918,24 @@ function observeAcceptanceHop({ action, pr, source, rec }) {
   if (workersR.unscanned) return { unscanned: true, error: workersR.error };
   const json = workersR.json || { result: { workers: workersR.workers || [] } };
 
+  // #781：worker-list 项没 last_failure 字段，failed 候选用 worker-show 取真实 last_failure。
+  // source 没 workerShow（旧快照）→ 不传回调，failed fail-close 判死（与改前同形）。
+  const resolveLastFailure = typeof source.workerShow === 'function'
+    ? (id) => {
+        if (!id) return null;
+        const r = source.workerShow(id);
+        if (!r.ok) return null;
+        return r.json?.result?.dispatch?.last_failure ?? null;
+      }
+    : undefined;
+
   const wtsR = source.orcaWorktrees();
   if (!wtsR.ok) return { unscanned: true, error: wtsR.error };
   const workerWt = (wtsR.worktrees || []).find(w => (w.branch || w.git?.branch) === `refs/heads/${pr.headRefName}`);
 
   if (action.kind === 'observe-rework-hop') {
     if (!workerWt) return { hopOpen: false };
-    const found = findDispatchForWorktree(json, workerWt.id);
+    const found = findDispatchForWorktree(json, workerWt.id, resolveLastFailure);
     if (found.unscanned) return { unscanned: true, error: found.error };
     if (found.ok) return { hopOpen: true, dispatchId: found.dispatchId };
     return { hopOpen: false };
@@ -940,7 +951,7 @@ function observeAcceptanceHop({ action, pr, source, rec }) {
     if (foundWt.ok) reviewerWtId = foundWt.worktreeId;
   }
   if (!reviewerWtId) return { hopOpen: false };
-  const found = findDispatchForWorktree(json, reviewerWtId);
+  const found = findDispatchForWorktree(json, reviewerWtId, resolveLastFailure);
   if (found.unscanned) return { unscanned: true, error: found.error };
   if (found.ok) return { hopOpen: true, dispatchId: found.dispatchId };
   return { hopOpen: false };
