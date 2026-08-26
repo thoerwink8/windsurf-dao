@@ -444,7 +444,13 @@ function findAgentTerminalHandle(worktreeId) {
   return agents[0]?.handle || null;
 }
 
-function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand }) {
+function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand, preexistingHandle }) {
+  // #633 agent-first：建树时已带 --agent，first terminal 就是 agent，
+  // handle 由调用方从 worktree create 回包（agentTerminalHandle/startupTerminal.handle）传入。
+  // 不再 findDefaultTerminalForLaunch + close-then-create：空壳根本没出生，直接用这个 handle。
+  if (preexistingHandle) {
+    return { ok: true, handle: preexistingHandle, reused: true, mode: 'agent-first', deferred: false };
+  }
   const spec = agentStartSpec(launch || { command });
   const found = findDefaultTerminalForLaunch(worktreeId);
   const plan = planLaunchFallback({ foundHandle: found.handle || null });
@@ -611,13 +617,16 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   };
 }
 
-function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile }) {
+function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, created, promptFile, preexistingHandle }) {
   let modelId = slate[startIndex].id;
   let pipeIndex = 0;
   let hardFailsOnThisPipe = 0;
   let transientFailsOnThisPipe = 0;
   const attempts = [];
   const maxSteps = 24;
+  // #633 agent-first：preexistingHandle 只在第一次循环用（建树时带的那个 agent）。
+  // fallback 到别的 model 时 first terminal 已是别的 agent，preexistingHandle 不再适用 → 置 null 走原 fallback。
+  let usedPreexisting = false;
 
   for (let step = 0; step < maxSteps; step++) {
     const entry = slate.find(s => s.id === modelId);
@@ -640,6 +649,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       title,
       command: launch.command,
       launch,
+      ...(preexistingHandle && !usedPreexisting ? { preexistingHandle } : {}),
     });
     if (!term.ok) {
       const kind = classifyLaunchFailure({ error: term.error });
@@ -654,6 +664,7 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       pipeIndex = next.pipeIndex;
       hardFailsOnThisPipe = next.hardFailsOnThisPipe;
       transientFailsOnThisPipe = next.transientFailsOnThisPipe;
+      usedPreexisting = true; // #633：preexistingHandle 用过了，fallback 走原 close-then-create
       continue;
     }
     if (term.deferred) {
@@ -1316,6 +1327,10 @@ function runDispatchExecution(order, { queueDir } = {}) {
   }
   created.repoSelector = repoResolved.selector;
 
+  // #633 agent-first：slate 第一个候选若 start=agent 且 orcaKnownAgentId 认得，
+  // 建树带 --agent，空壳从源头不出生，第一个终端就是 agent。
+  // 不满足（command 型 / 不认识 agent）→ 不带 --agent，走原 close-then-create fallback。
+  const workerAgentId = (workerLaunch?.start === 'agent' && workerLaunch?.agentId) ? workerLaunch.agentId : null;
   const workerWt = orca(argsWorktreeCreate({
     name: plan.workerCard,
     noParent: true,
@@ -1323,12 +1338,16 @@ function runDispatchExecution(order, { queueDir } = {}) {
     issue: args.issue,
     comment: plan.comment,
     repo: repoResolved.selector,
+    ...(workerAgentId ? { agent: workerAgentId } : {}),
   }));
   if (!workerWt.ok) fail(`工人卡创建失败: ${errText(workerWt.error)}`, { orderId: order.id, ...plan });
   created.workerId = extractWorktreeId(workerWt.json);
   created.workerPath = extractWorktreePath(workerWt.json);
   if (!created.workerId) fail('工人卡没返回 id', { orderId: order.id, ...plan });
   if (!created.workerPath) failCreated(created, '工人卡没返回 path', { orderId: order.id, ...plan });
+  // agent-first：建树带 --agent 时回包里有 first terminal handle（agentTerminalHandle/startupTerminal.handle）。
+  // 传给 launchAgentInWorktree 当 preexistingHandle，跳过 close-then-create。
+  const workerPreexistingHandle = workerAgentId ? extractHandleFromCreate(workerWt.json) : null;
 
   // 每单环境自检已删（2026-08-23 delete-all-ceremony 拍板）：建树后不再跑 shell 探针，
   // 环境类毛病的证据归 watchdog / 工人开工报。
@@ -1389,6 +1408,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     title: args.name,
     created,
     promptFile,
+    preexistingHandle: workerPreexistingHandle,
   });
   if (!launched.ok) {
     failCreated(created, launched.error || '工人 TUI 未就绪', { verify: launched.verify, attempts: launched.attempts, orderId: order.id, ...plan });
@@ -1662,11 +1682,14 @@ function cmdDispatchBatch(args) {
 
   const effects = {
     createWorktree({ name, issue }) {
+      // #633 agent-first：batch 认识的 agent 建树带 --agent，first terminal 是 agent，空壳不出生。
+      const batchAgentId = (launch?.start === 'agent' && launch?.agentId) ? launch.agentId : null;
       const r = orca(argsWorktreeCreate({
         name,
         issue,
         setup: 'skip',
         comment: `batch · model:${plan.model} · reviewer:skipped · n=${plan.workers.length}`,
+        ...(batchAgentId ? { agent: batchAgentId } : {}),
       }));
       if (!r.ok) return { ok: false, error: errText(r.error) };
       const id = extractWorktreeId(r.json);
@@ -1676,16 +1699,20 @@ function cmdDispatchBatch(args) {
       // 每单环境自检已删（2026-08-23 delete-all-ceremony 拍板），证据归 watchdog。
       const ident = applyGitIdentity('worker', { cwd: wtPath });
       if (!ident.ok) return { ok: false, id, path: wtPath, error: `工人 git 身份没设上：${ident.error}` };
-      return { ok: true, id, path: wtPath };
+      // agent-first：first terminal handle 给第一个 worker 复用，后续 worker 走原 fallback。
+      const firstTerminalHandle = batchAgentId ? extractHandleFromCreate(r.json) : null;
+      return { ok: true, id, path: wtPath, firstTerminalHandle };
     },
-    startTerminal({ worktree, title }) {
+    startTerminal({ worktree, title, preexistingHandle }) {
       // #654/#633：batch 起终端也走 launchAgentInWorktree（空壳先关再 create --command），
       // 与 start / dispatch / 审官起动同一条路径，不再直接 argsTerminalCreate。
+      // #633 agent-first：第一个 worker 传 preexistingHandle（建树 first terminal），复用不另起。
       const term = launchAgentInWorktree({
         worktreeId: worktree,
         title,
         command: launch.command,
         launch,
+        ...(preexistingHandle ? { preexistingHandle } : {}),
       });
       if (!term.ok) return { ok: false, error: term.error };
       if (term.deferred) {
@@ -2785,7 +2812,15 @@ function cmdReviewerCreate(args) {
     reviewerPath = oneReviewerGate.worktreePath;
   }
 
+  let reviewerPreexistingHandle = null;
   if (!resumedFromExisting) {
+    // #633 agent-first：审官认识的 agent 建树带 --agent，空壳不出生。
+    // resolveLaunch 可能抛（路由表问题）——best-effort 取 agentId，失败走原 fallback。
+    let reviewerAgentId = null;
+    try {
+      const probe = resolveLaunch({ model: picked.modelId, routing, root: ROOT });
+      if (probe?.start === 'agent' && probe?.agentId) reviewerAgentId = probe.agentId;
+    } catch { /* 完整 resolve 在建树后做，这里只取 agentId */ }
     const created = orca(argsWorktreeCreate({
       name: revName,
       setup: 'skip',
@@ -2793,11 +2828,14 @@ function cmdReviewerCreate(args) {
       baseBranch,
       issue: args.issue,
       comment: args.comment,
+      ...(reviewerAgentId ? { agent: reviewerAgentId } : {}),
     }));
     if (!created.ok) fail(`审官卡创建失败: ${errText(created.error)}`, plan);
     reviewerId = extractWorktreeId(created.json);
     reviewerPath = extractWorktreePath(created.json);
     if (!reviewerId || !reviewerPath) fail('审官卡没返回 id/path', { ...plan, reviewerId, reviewerPath });
+    // agent-first：建树带 --agent 时回包里有 first terminal handle，传给 launchAgentInWorktree。
+    if (reviewerAgentId) reviewerPreexistingHandle = extractHandleFromCreate(created.json);
   }
 
   // PR #758：续跑已有卡时，校验/启动失败不删卡（卡是半成功的现场，删了下轮还是
@@ -2851,6 +2889,7 @@ function cmdReviewerCreate(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    ...(reviewerPreexistingHandle ? { preexistingHandle: reviewerPreexistingHandle } : {}),
   });
   if (!revTerm.ok) {
     rmReviewerCard();
@@ -3131,6 +3170,8 @@ function cmdReviewerAttach(args) {
   // #762：审官单例（一 PR 一审官，#575）。已有审官卡 → 复用（resolveReviewerReuse/reuseReviewerOnTerminal），
   // 不销毁重建。attach 的复用接线见 cmdReviewerAttach 后续（当前先保持新建，单例复用另单落地）。
   const created = {};
+  // #633 agent-first：审官认识的 agent 建树带 --agent，空壳不出生。reviewerLaunch 已在建树前 resolve。
+  const reviewerAgentId = (reviewerLaunch?.start === 'agent' && reviewerLaunch?.agentId) ? reviewerLaunch.agentId : null;
   const revWt = orca(argsWorktreeCreate({
     name: revName,
     setup: 'skip',
@@ -3138,6 +3179,7 @@ function cmdReviewerAttach(args) {
     baseBranch,
     issue: args.issue,
     comment: args.comment,
+    ...(reviewerAgentId ? { agent: reviewerAgentId } : {}),
   }));
   if (!revWt.ok) fail(`审官卡创建失败: ${errText(revWt.error)}`, plan);
   created.reviewerId = extractWorktreeId(revWt.json);
@@ -3145,6 +3187,8 @@ function cmdReviewerAttach(args) {
   if (!created.reviewerId || !created.reviewerPath) {
     failCreated(created, '审官卡没返回 id/path', plan);
   }
+  // agent-first：建树带 --agent 时拿 first terminal handle 给 launchAgentInWorktree 当 preexistingHandle。
+  const reviewerPreexistingHandle = reviewerAgentId ? extractHandleFromCreate(revWt.json) : null;
 
   const env = envProbeWorktree(created.reviewerPath);
   if (!env.ok) failCreated(created, `审官树环境自检失败: ${env.error}`, { probes: env, ...plan });
@@ -3163,6 +3207,7 @@ function cmdReviewerAttach(args) {
     title: revName,
     command: reviewerLaunch.command,
     launch: reviewerLaunch,
+    ...(reviewerPreexistingHandle ? { preexistingHandle: reviewerPreexistingHandle } : {}),
   });
   if (!revTerm.ok) failCreated(created, `审官终端创建失败: ${revTerm.error}`, plan);
   created.reviewerHandle = revTerm.handle;

@@ -119,12 +119,17 @@ export function runDispatchBatch({ plan, effects } = {}) {
   if (wt && wt.path) created.workerPath = wt.path;
   if (!wt || !wt.ok) return fail(`工人卡创建失败: ${(wt && wt.error) || '未知'}`);
 
+  // #633 agent-first：第一个 worker 复用建树 first terminal（agent-first），后续走原 fallback。
+  let firstTerminalUsed = false;
   for (const w of plan.workers) {
+    const preexisting = (wt && wt.firstTerminalHandle && !firstTerminalUsed) ? wt.firstTerminalHandle : null;
     const term = effects.startTerminal({
       worktree: created.workerId,
       title: w.name,
       model: plan.model,
+      ...(preexisting ? { preexistingHandle: preexisting } : {}),
     });
+    if (preexisting) firstTerminalUsed = true;
     if (term && term.handle) created.handles.push(term.handle);
     if (!term || !term.ok) return fail(`工人终端创建失败（${w.name}）: ${(term && term.error) || '未知'}`);
 

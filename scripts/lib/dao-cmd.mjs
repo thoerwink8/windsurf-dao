@@ -471,7 +471,7 @@ export function catalogUsedFlags() {
     argsTerminalSend({ terminal: 't', text: 'x', enter: true }),
     argsWorktreeCreate({
       name: 'n', noParent: true, setup: 'skip',
-      parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559,
+      parentWorktree: 'p', baseBranch: 'b', comment: 'c', issue: 559, agent: 'devin',
     }),
     argsWorktreeSet({ worktree: 'w', displayName: 'n', comment: 'c', workspaceStatus: 'in-progress' }),
     argsWorktreeRm({ worktree: 'w', force: true }),

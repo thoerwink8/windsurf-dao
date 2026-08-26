@@ -74,7 +74,7 @@ export function classifyWorkerStartSend({ ok, error, json } = {}) {
 }
 
 export function argsWorktreeCreate({
-  name, noParent, setup, parentWorktree, baseBranch, comment, issue, repo,
+  name, noParent, setup, parentWorktree, baseBranch, comment, issue, repo, agent,
 } = {}) {
   const a = ['worktree', 'create'];
   if (name) a.push('--name', name);
@@ -85,6 +85,9 @@ export function argsWorktreeCreate({
   if (issue != null && String(issue).trim() !== '') a.push('--issue', String(issue).trim());
   if (comment) a.push('--comment', comment);
   if (repo) a.push('--repo', repo);
+  // #633 agent-first：认识的 agent 建树时带 --agent，空壳从源头不出生，
+  // 第一个终端就是 agent（result.agentTerminalHandle / startupTerminal.handle）。
+  if (agent) a.push('--agent', agent);
   a.push('--json');
   return a;
 }

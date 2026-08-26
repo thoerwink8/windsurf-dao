@@ -2834,6 +2834,86 @@ describe('dao', () => {
     });
   });
 
+  it('#633 agent-first：worktree create --agent 从源头消灭空壳', async (t) => {
+    const S = await S_LOAD;
+    const routing = await ROUTING_LOAD;
+    // argsWorktreeCreate 带 --agent
+    const withAgent = S.argsWorktreeCreate({ name: 'n', agent: 'devin' });
+    await t.test('argsWorktreeCreate 带 --agent 透传', () => {
+      assert.ok(withAgent.includes('--agent') && withAgent[withAgent.indexOf('--agent') + 1] === 'devin',
+        'argsWorktreeCreate 带 --agent  →  ' + withAgent.join(' '));
+    });
+    const withoutAgent = S.argsWorktreeCreate({ name: 'n' });
+    await t.test('不传 agent 不带 --agent（走原 fallback）', () => {
+      assert.ok(!withoutAgent.includes('--agent'),
+        '不传 agent 不带 --agent  →  ' + withoutAgent.join(' '));
+    });
+    // 认识的 agent（start=agent）才有 agentId，可走 agent-first；command 型（reclaude）不走
+    const devinLaunch = S.resolveLaunch({ provider: 'devin', routing });
+    const claudeLaunch = S.resolveLaunch({ provider: 'claude', routing });
+    await t.test('devin start=agent 有 agentId 可走 agent-first', () => {
+      assert.ok(devinLaunch.start === 'agent' && devinLaunch.agentId === 'devin',
+        'devin agent-first 条件  →  ' + JSON.stringify({ start: devinLaunch.start, agentId: devinLaunch.agentId }));
+    });
+    await t.test('reclaude start=command 不走 agent-first', () => {
+      assert.ok(claudeLaunch.start === 'command' && !(claudeLaunch.start === 'agent' && claudeLaunch.agentId),
+        'reclaude 不走 agent-first  →  ' + JSON.stringify({ start: claudeLaunch.start, agentId: claudeLaunch.agentId }));
+    });
+    // extractHandleFromCreate 认 worktree create --agent 回包的 agentTerminalHandle / startupTerminal.handle
+    const agentFirstResp = {
+      ok: true,
+      result: {
+        worktree: { id: 'w::p', path: 'p' },
+        agentTerminalHandle: 'term_agent_first',
+        startupTerminal: { handle: 'term_agent_first', spawned: true },
+      },
+    };
+    await t.test('extractHandleFromCreate 认 agent-first 回包 handle', () => {
+      assert.ok(S.extractHandleFromCreate(agentFirstResp) === 'term_agent_first',
+        'extractHandleFromCreate 认 agent-first  →  ' + S.extractHandleFromCreate(agentFirstResp));
+    });
+    // dao.mjs 源码：launchAgentInWorktree 有 preexistingHandle 短路（agent-first）
+    const src = fs.readFileSync(CLI, 'utf8');
+    const fn = src.match(/function launchAgentInWorktree[\s\S]*?\nfunction /);
+    await t.test('launchAgentInWorktree 有 preexistingHandle 短路', () => {
+      assert.ok(fn && /preexistingHandle/.test(fn[0]) && /mode: 'agent-first'/.test(fn[0]),
+        'launchAgentInWorktree preexistingHandle 短路  →  ' + (fn ? fn[0].slice(0, 200) : 'no fn'));
+    });
+    // cmdDispatchExec 建树带 --agent（认识的 agent）。cmdDispatchExec 函数体很长（含嵌套函数），
+    // 正则 \nfunction 会断在嵌套函数 → 用 indexOf 取到下一个 cmd 函数。
+    const dIdx = src.indexOf('function cmdDispatchExec');
+    const dEnd = src.indexOf('function cmdReviewerCreate', dIdx);
+    const dispatchChunk = dIdx >= 0 && dEnd > dIdx ? src.slice(dIdx, dEnd) : '';
+    await t.test('cmdDispatchExec 建树按 agentId 带 --agent', () => {
+      assert.ok(/workerAgentId/.test(dispatchChunk) && /argsWorktreeCreate\(/.test(dispatchChunk)
+        && /workerPreexistingHandle/.test(dispatchChunk),
+        'cmdDispatchExec agent-first  →  ' + dispatchChunk.slice(0, 200));
+    });
+    // startWorkerBySlate 接 preexistingHandle，第一次用后置 usedPreexisting
+    const sIdx = src.indexOf('function startWorkerBySlate');
+    const sEnd = src.indexOf('function readOnceHandle', sIdx);
+    const slateFn = sIdx >= 0 && sEnd > sIdx ? src.slice(sIdx, sEnd) : '';
+    await t.test('startWorkerBySlate 接 preexistingHandle + fallback 置 usedPreexisting', () => {
+      assert.ok(/preexistingHandle/.test(slateFn) && /usedPreexisting/.test(slateFn),
+        'startWorkerBySlate preexistingHandle  →  ' + slateFn.slice(0, 200));
+    });
+    // 审官两路径同样 agent-first
+    const cIdx = src.indexOf('function cmdReviewerCreate');
+    const cEnd = src.indexOf('function cmdReviewerAttach', cIdx);
+    const createChunk = cIdx >= 0 && cEnd > cIdx ? src.slice(cIdx, cEnd) : '';
+    const aIdx = src.indexOf('function cmdReviewerAttach');
+    const aEnd = src.indexOf('function ', aIdx + 10);
+    const attachChunk = aIdx >= 0 && aEnd > aIdx ? src.slice(aIdx, aEnd) : '';
+    await t.test('cmdReviewerCreate 建树带 --agent + preexistingHandle', () => {
+      assert.ok(/reviewerAgentId/.test(createChunk) && /reviewerPreexistingHandle/.test(createChunk),
+        'cmdReviewerCreate agent-first  →  ' + createChunk.slice(0, 200));
+    });
+    await t.test('cmdReviewerAttach 建树带 --agent + preexistingHandle', () => {
+      assert.ok(/reviewerAgentId/.test(attachChunk) && /reviewerPreexistingHandle/.test(attachChunk),
+        'cmdReviewerAttach agent-first  →  ' + attachChunk.slice(0, 200));
+    });
+  });
+
   it('#633 consumer_fenced：扫到 0 次和没扫到样本必须分开', async (t) => {
     const S = await S_LOAD;
     const missing = S.inspectConsumerFence(undefined);
