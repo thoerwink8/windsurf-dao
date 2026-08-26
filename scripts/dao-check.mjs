@@ -62,6 +62,9 @@
 // ㉖ 孤儿测试闸（2026-08-22 Q5 拍板）：test 引用的仓内目标不存在 = 机制删了测试没同删；
 //    退役靠判断不靠 CI 自动删，CI 只拦孤儿；红/绿/空样本各一验判别力；0 个测试 = 没查成
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
+// ㉗ 版本号载体闸（#787）：载体存在时变化必须合法、不倒退；不判该不该 bump。
+//    检查器自持 semver，不 import bump.mjs；红/绿/空（无载体=SKIP 不是绿）各一验判别力；
+//    无载体 live SKIP；git 探头失败 = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -93,6 +96,9 @@ import {
 import {
   inspectOrphanTests, inspectOrphanTestFixtures,
 } from './lib/orphan-test-check.mjs';
+import {
+  inspectVersionCarrierFixtures, inspectLiveAt,
+} from './lib/version-carrier-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -1401,6 +1407,42 @@ checkNoReviewerRecreateSamples();
 checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
 checkOrphanTestLive();
+checkVersionCarrierSamples();
+checkVersionCarrierLive();
+
+function checkVersionCarrierSamples() {
+  const r = inspectVersionCarrierFixtures(join(ROOT, 'tests', 'fixtures', 'version-carrier'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '版本号载体闸样本没查成' : '版本号载体闸样本对不上',
+      '恢复 tests/fixtures/version-carrier/{red,ok,empty}：红=倒退必须拦、绿必须过、空=无载体 SKIP 不是绿',
+      r.error || '',
+    );
+    return;
+  }
+  green(`版本号载体闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力；空=SKIP）`);
+}
+
+function checkVersionCarrierLive() {
+  const r = inspectLiveAt(ROOT);
+  if (r.unscanned) {
+    fail('版本号载体闸 live 没查成', 'git merge-base / git show 要能跑；失败不是没问题', r.error || '');
+    return;
+  }
+  if (r.skip) {
+    skip('本仓无版本号载体（package.json / VERSION），本项跳过');
+    return;
+  }
+  if (!r.ok) {
+    fail(
+      '版本号变化不合法或倒退',
+      '载体必须是 X.Y.Z，且不得比 merge-base 上的号小（不判该不该 bump）',
+      (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`版本号载体闸：${r.scanned} 个载体变化合法、不倒退`);
+}
 
 function checkOrphanTestSamples() {
   const r = inspectOrphanTestFixtures(join(ROOT, 'tests', 'fixtures', 'orphan-test'));
