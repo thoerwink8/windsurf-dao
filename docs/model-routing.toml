@@ -191,28 +191,31 @@ decided = "2026-08-18"
 
 [providers.devin]
 cli = "devin"
-# 2026-08-26 复测拍板：devin 走**非交互工人形态**（--print/--prompt-file，完工=进程退出+git 产出）。
-# 实测链路（2026-08-26 凌晨帅位复测，devin CLI 已登录 Devin Pro）： 
-#   terminal create --command "devin -p --prompt-file <任务书> --model ..." → worker-start --terminal
-#   （devin -p 跑长任务期间 Orca 能过 agent 识别；worker-start 返回 agent_prompt_stalled 是假阴性——
-#   任务书已由 --prompt-file 送达，Orca 的 stdin 注入是多余的，classifyWorkerStartSend 容忍为 sent-unconfirmed）。
-# 三条旧死路（agent 型 TUI 不提交 / command 型 TUI 认不出 / --agent 拒收 --model）已由本形态绕过。
-# 任务书由 dao.mjs dispatch 写 worker 卡目录 _prompt.txt，launch 的 {prompt_file} 占位符引用。
-start = "command"
+# 2026-08-26 复测拍板：devin 走**交互 TUI 形态**（worker-start --agent devin，Orca 起 Devin CLI TUI）。
+# 实测链路（2026-08-26 帅位复测，devin CLI 已登录 Devin Pro）：
+#   worker-start --agent devin → Devin TUI 起来（v3000.5.20，bypass permissions on），但 Orca 的
+#   stdin 注入**不送达**（任务书没进输入框，dispatch 报 agent_prompt_stalled 是假阴性）——
+#   startOrcaWorker 对 devin 补粘任务书 + 回车提交（2026-08-26 实测：terminal send 文本 + 回车 = 提交成功）。
+# agent 型不支持 --model（invalid_argument，2026-08-26 复测确认）→ launch 不带 {model}，模型 = Devin 账户默认。
+# 完工契约 = git 产出 + PR + comment（devin 不认 Orca worker 协议，dispatch 的 failed 状态不影响干活）；
+# worker-done 起审官失败走 reviewer-attach --skip-wait 补审官（#631）。
+start = "agent"
 default_model = "deepseek-v4-flash-max"
-launch = "devin -p --prompt-file {prompt_file} --model {model} --permission-mode dangerous --respect-workspace-trust false"
+launch = "devin"
 launch_model = "deepseek-v4-flash-max"
 probe_wait_ms = 120000
 launch_note = """
 Devin CLI（本机 PATH = AppData\\Local\\devin\\cli\\bin\\devin.exe；桌面端 = D:\\Windsurf\\Devin.exe）。
-**2026-08-26 实测：派工通道不可用，选型已禁用。** 详见上方注释三条死路与 docs/model-routing.json。
+**2026-08-26 实测：交互 TUI 形态可用**（worker-start --agent devin + 补粘任务书 + 回车）。
 `--agent devin` 的 TUI 投递 = Orca 的通用 TUI agent 支持（promptInjectionMode: stdin-after-start），
-Devin TUI 没有可编程提交机制（粘贴≠送达）。Windsurf IDE 驱动 Devin 走 ACP（`devin acp`），Orca 的 agent schema 里没有 devin/ACP。
-`--permission-mode dangerous` 全放行工具（无人值守）；`--respect-workspace-trust false`（#708：新 worktree 未信任，弹框卡死就绪探针）。
-非交互冒烟（不是工人起法，跑完即退）：`devin --print --model deepseek-v4-flash-max --respect-workspace-trust false --permission-mode dangerous -- "只回复：OK"`——CLI 需先 `devin auth login`。
+Devin TUI 没有可编程提交机制（注入不送达）；startOrcaWorker 补粘任务书 + 回车是实测正解。
+agent 型拒收 --model（invalid_argument）→ 模型 = Devin 账户默认（路由意图在 agent 型上失效，选型只锁厂商）。
+Windsurf IDE 驱动 Devin 走 ACP（`devin acp`），Orca 的 agent schema 里没有 devin/ACP。
+非交互形态（-p --prompt-file，可指定 --model）2026-08-26 凌晨全链验证过（PR #776 MERGED），
+保留在 docs/cli-notes/devin.md 作为备用通道；本表默认交互形态（用户拍板 2026-08-26）。
 """
-why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连（#688）；2026-08-26 实测 devin 派工通道三条路全死，选型禁用，写码落回 opencode-go（#771 换通道拍板）。"
-decided = "2026-08-21"
+why = "用户 2026-08-21 拍板：写码通道优先级 devin > opencode-go > 官方直连（#688）；2026-08-26 实测交互 TUI 形态可用（补粘+回车），选型恢复 devin（#771 全链实测）。"
+decided = "2026-08-26"
 
 [providers.minimax-h3]
 note = "AI 带货视频候选（远期），未接入，无路由。"

@@ -165,12 +165,9 @@ describe('dao', () => {
     await t.test('#615 composer 单管 cursor', () => {
       assert.ok(/cursor-agent/.test(composer.command) && /--model\s+composer-2.5/.test(composer.command), '#615 composer 单管 cursor  →  ' + composer.command);
     });
-    const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing, promptFile: 'C:/tmp/_prompt.txt' });
-    await t.test('#771 devin 走非交互形态（-p --prompt-file），模型是 flash-max，带 dangerous', () => {
-      assert.ok(/^devin\b/.test(devin.command) && /-p\b/.test(devin.command) && /--prompt-file\s+C:\/tmp\/_prompt\.txt/.test(devin.command) && /--model\s+deepseek-v4-flash-max/.test(devin.command) && /--permission-mode\s+dangerous/.test(devin.command) && /--respect-workspace-trust\s+false/.test(devin.command) && devin.start === 'command', '#771 devin launch  →  ' + JSON.stringify(devin));
-    });
-    await t.test('#771 devin 缺任务书文件路径 fail-loud', () => {
-      assert.throws(() => S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing }), /prompt_file/, '#771 缺 prompt_file 要抛  →  ');
+    const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
+    await t.test('#771 devin 走交互 TUI 形态（start=agent，launch 裸 devin，不带 --model）', () => {
+      assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin' && devin.start === 'agent' && devin.agentId === 'devin', '#771 devin launch  →  ' + JSON.stringify(devin));
     });
     await t.test('shim 文件在仓里', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');

@@ -499,7 +499,7 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book }) {
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
@@ -541,7 +541,11 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
 
   let handle = launched?.handle || null;
   if (launched?.deferred) {
-    handle = extractHandleFromWorkerStart(r.json) || findAgentTerminalHandle(worktree);
+    // #771：devin agent 型 worker-start 响应里的 handle 可能是 --from 的派工协调终端（PowerShell），
+    // 补粘任务书会敲进 PowerShell（2026-08-26 实测）。terminal list 找非默认终端（agent 终端）优先。
+    handle = (launched?.launch?.provider === 'devin' ? findAgentTerminalHandle(worktree) : null)
+      || extractHandleFromWorkerStart(r.json)
+      || findAgentTerminalHandle(worktree);
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
     }
@@ -559,6 +563,27 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from }) {
         if (text && !/\[Pasted Content/i.test(text)) {
           send.kind = 'confirmed';
           send.reason = 'codex [Pasted Content] 补回车已提交';
+        }
+      }
+    }
+  }
+  // devin 交互形态修复（2026-08-26 实测）：worker-start --agent devin 的注入根本不送达
+  // （任务书没进输入框，屏面停在 Ask Devin to build...，dispatch 报 agent_prompt_stalled），
+  // 补回车无效——需要补粘任务书 + 回车两步提交。非交互形态（--prompt-file）不补（任务书已由文件送达）。
+  if (send.kind === 'sent-unconfirmed' && launched?.launch?.provider === 'devin' && handle && book) {
+    const pasted = orca(argsTerminalSend({ terminal: handle, text: book, agent: 'devin' }));
+    if (pasted.ok) {
+      sleepMs(2000);
+      const entered = orca(argsTerminalSend({ terminal: handle, text: '', enter: true }));
+      if (entered.ok) {
+        sleepMs(5000);
+        const read = orca(argsTerminalRead({ terminal: handle, limit: 8 }));
+        if (read.ok) {
+          const text = extractTerminalText(read.json);
+          if (text && !/Ask Devin to build/.test(text)) {
+            send.kind = 'confirmed';
+            send.reason = 'devin 补粘任务书+回车已提交';
+          }
         }
       }
     }
@@ -1326,13 +1351,17 @@ function runDispatchExecution(order, { queueDir } = {}) {
     }
   }
 
-  // devin 非交互形态（2026-08-26 拍板）：任务书不走 worker-start 注入（Orca stdin 对 devin -p 无效），
-  // 提前写 worker 卡目录 _prompt.txt，launch 的 {prompt_file} 占位符引用；其余通道照旧走注入。
+  // devin 交互形态（2026-08-26 拍板）：worker-start --agent devin 起 TUI，注入不送达，
+  // startOrcaWorker 补粘任务书 + 回车（book 参数）。_prompt.txt 仍写进工人卡（devin 干活可参考；
+  // 非交互形态 -p --prompt-file 时 launch 的 {prompt_file} 占位符引用它，备用通道保留）。
   const isDevinWorker = slatePack.slate[slatePack.startIndex]?.id === 'devin-deepseek-v4-flash-max';
   let promptFile = null;
-  if (isDevinWorker && args.spec) {
+  let injectText = null;
+  if (args.spec) {
+    injectText = buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue });
+  }
+  if (isDevinWorker && injectText) {
     try {
-      const injectText = buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue });
       promptFile = join(created.workerPath, '_prompt.txt');
       writeFileSync(promptFile, `${injectText}\n完成后运行：node scripts/dao.mjs worker-done --pr <PR号> --body-file <完工说明文件>（PR 号用 gh pr view --json number -q .number 查）`, 'utf8');
     } catch (e) {
@@ -1363,7 +1392,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
   let soldierBook = null;
   try {
     soldierBook = args.spec
-      ? encodeSendText(buildSoldierInject({ spec: headSpec || String(args.spec), issue: args.issue }), workerLaunch.provider)
+      ? encodeSendText(injectText, workerLaunch.provider)
       : null;
   } catch (e) {
     failCreated(created, `任务书模板渲染失败: ${String(e.message || e)}`, { orderId: order.id, ...plan, soldierBook: null });
@@ -1414,6 +1443,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
     run: runId,
     from: coordHandle,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
+    book: injectText,
   });
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
