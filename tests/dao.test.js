@@ -166,8 +166,8 @@ describe('dao', () => {
       assert.ok(/cursor-agent/.test(composer.command) && /--model\s+composer-2.5/.test(composer.command), '#615 composer 单管 cursor  →  ' + composer.command);
     });
     const devin = S.resolveLaunch({ model: 'devin-deepseek-v4-flash-max', routing });
-    await t.test('#771 devin 走交互 TUI 形态（start=agent，launch 裸 devin，不带 --model）', () => {
-      assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin' && devin.start === 'agent' && devin.agentId === 'devin', '#771 devin launch  →  ' + JSON.stringify(devin));
+    await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {
+      assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false' && devin.start === 'agent' && devin.agentId === 'devin', '#782 devin launch  →  ' + JSON.stringify(devin));
     });
     await t.test('shim 文件在仓里', () => {
       assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
