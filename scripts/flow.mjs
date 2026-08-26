@@ -1226,7 +1226,9 @@ function processOneRound(source, state, args) {
       if (!rec.ghNotified || typeof rec.ghNotified !== 'object' || Array.isArray(rec.ghNotified)) rec.ghNotified = {};
       if (!rec.ghNotified[ghKey]) {
         if (!args.dryRun) {
-          const ghC = runGh(['pr', 'comment', String(pr.number), '--body', `[flow] 待帅处置：#${pr.number}（${reason}）`]);
+          // gh pr comment 返回 URL 字符串（非 JSON），runGh 会 JSON.parse 失败 → ok:false →
+          // ghNotified 永远不记 → 每轮重复发评论（#780 实证 22 连）。用 runCmd 直转。
+          const ghC = runCmd('gh', ['pr', 'comment', String(pr.number), '--body', `[flow] 待帅处置：#${pr.number}（${reason}）`], GH_TIMEOUT_MS);
           if (ghC.ok) {
             rec.ghNotified[ghKey] = true;
           }
