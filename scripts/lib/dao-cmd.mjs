@@ -237,10 +237,11 @@ export function findDispatchForWorktree(workerListJson, worktreeSel) {
     return { ok: false, error: `worker-list 里找不到 worktree=${sel} 的士兵 dispatch`, scanned: workers.length };
   }
   const live = hits.filter(w => {
-    if (isLiveDispatchRecipient({ workerState: w.workerState, dispatchStatus: w.dispatchStatus })) return true;
-    // devin 假 stalled（2026-08-26）：dispatch failed 但终端 retained（工人还在跑，任务书已由
-    // --prompt-file 送达）。保留为候选，活性由调用方 worker-show 的 last_failure 例外判。
-    if (/failed/i.test(String(w.dispatchStatus || '')) && /retained/i.test(String(w.terminalState || ''))) return true;
+    if (isLiveDispatchRecipient({
+      workerState: w.workerState,
+      dispatchStatus: w.dispatchStatus,
+      lastFailure: w.lastFailure ?? w.last_failure ?? null,
+    })) return true;
     return false;
   });
   const ready = live.filter(w => w.workerState === 'ready' || w.workerState === 'working'

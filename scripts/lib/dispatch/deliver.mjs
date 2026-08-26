@@ -161,14 +161,16 @@ function dispatchProbeExtras(showJson) {
 /** dispatch 收件人必须还活着。completed/succeeded/failed 不是收件人。
  * devin 假 stalled 例外（2026-08-26 实测）：devin -p 非交互形态的 dispatch 会被 Orca 判
  * failed（agent_prompt_stalled 是 stdin 注入假阴性，任务书已由 --prompt-file 送达，工人实际在跑），
- * 这类 failed 当活收件人——真 stalled 由 watchdog 用 git 证据/产物判，不在这里误杀。 */
+ * 这类 failed 当活收件人——真 stalled 由 watchdog 用 git 证据/产物判，不在这里误杀。
+ * #780 修复：例外只对 failed 生效。completed/succeeded 是终态成功，历史里的 stalled
+ * 不改变已完工事实——死信箱就是死信箱，不许因 lastFailure 复活。 */
 export function isLiveDispatchRecipient({ workerState, dispatchStatus, lastFailure } = {}) {
   const live = new Set(['ready', 'working', 'waiting']);
   const dead = new Set(['completed', 'succeeded', 'failed', 'cancelled', 'canceled', 'released', 'stopped']);
   const w = String(workerState || '').toLowerCase();
   const d = String(dispatchStatus || '').toLowerCase();
   if (dead.has(w) || dead.has(d)) {
-    if (/agent_prompt_stalled/i.test(String(lastFailure || ''))) return true;
+    if ((w === 'failed' || d === 'failed') && /agent_prompt_stalled/i.test(String(lastFailure || ''))) return true;
     return false;
   }
   if (live.has(w)) return true;
