@@ -21,6 +21,7 @@ description: 提交时按 conventional commits 判断语义、调用 bump.mjs �
 4. **该 bump 就跟代码同一个 commit** 把载体写成 `to`。不要单独开「chore: bump version」。非语义 commit 不动版本号。
 
 判据：`feat`→minor，`fix`→patch，`breaking`→major，其他→不 bump。
+版本号是 SemVer 2.0.0（可带可选 `v` 前缀）：`1.2.3-beta.1` / `1.2.3+build.7` 合法；核心段前导零、空标识符、数字预发布前导零非法。
 
 ## 双通道
 

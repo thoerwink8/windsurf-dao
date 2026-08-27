@@ -75,8 +75,22 @@ describe('dao-commit-bump', () => {
       assert.equal(r.bumpType, 'major');
       assert.equal(r.to, '2.0.0');
     });
+    await t.test('prerelease / build 合法，bump 输出正式号', async () => {
+      const { parseSemver } = await LOAD;
+      assert.ok(parseSemver('1.2.3-beta.1'));
+      assert.ok(parseSemver('1.2.3+build.7'));
+      assert.ok(parseSemver('1.2.3-beta.1+exp.sha.5114f85'));
+      assert.deepStrictEqual(bump('1.2.3-beta.1', 'feat').to, '1.3.0');
+      assert.deepStrictEqual(bump('1.2.3+build.7', 'fix').to, '1.2.4');
+    });
     await t.test('非法 semver 不 throw，error 字段', () => {
-      for (const bad of ['abc', '1.2', '1', '', '1.2.3.4', 'banana']) {
+      for (const bad of [
+        'abc', '1.2', '1', '', '1.2.3.4', 'banana',
+        '01.2.3', '1.02.3', '1.2.03',
+        '1.2.3-', '1.2.3-.', '1.2.3-alpha.', '1.2.3-.alpha', '1.2.3-alpha..1',
+        '1.2.3+', '1.2.3+.', '1.2.3+build.',
+        '1.2.3-01', '1.2.3-beta.01',
+      ]) {
         const r = bump(bad, 'feat');
         assert.equal(r.shouldBump, false, bad);
         assert.equal(r.to, null, bad);

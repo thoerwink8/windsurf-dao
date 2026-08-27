@@ -1436,7 +1436,7 @@ function checkVersionCarrierLive() {
   if (!r.ok) {
     fail(
       '版本号变化不合法或倒退',
-      '载体必须是 X.Y.Z，且不得比 merge-base 上的号小（不判该不该 bump）',
+      '载体必须是合法 SemVer（含 prerelease/build），且不得比 merge-base 上的号小（不判该不该 bump）',
       (r.problems || []).join('；'),
     );
     return;

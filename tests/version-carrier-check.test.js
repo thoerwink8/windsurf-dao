@@ -46,6 +46,86 @@ describe('version-carrier-check', () => {
     });
   });
 
+  it('SemVer 契约：prerelease/build 合法，前导零/空标识/数字预发布前导零非法', async (t) => {
+    const S = await LOAD;
+    const { parseSemver } = await import('file://' + path.join(REPO, 'host', 'skills', 'dao-commit', 'bump.mjs').replace(/\\/g, '/'));
+
+    const valid = ['0.0.0', '1.2.3', '1.2.3-beta.1', '1.2.3+build.7', '1.2.3-beta.1+exp.sha.5114f85', 'v1.2.3', '1.0.0-0', '1.0.0-alpha-1', '1.2.3+01'];
+    const invalid = [
+      '01.2.3', '1.02.3', '1.2.03',
+      '1.2.3-', '1.2.3-.', '1.2.3-alpha.', '1.2.3-.alpha', '1.2.3-alpha..1',
+      '1.2.3+', '1.2.3+.', '1.2.3+build.',
+      '1.2.3-01', '1.2.3-beta.01',
+      'abc', '1.2', '1.2.3.4',
+    ];
+
+    for (const v of valid) {
+      await t.test(`合法 ${v}`, () => {
+        assert.ok(S.parseCarrierVersion(v), 'check 应接受  →  ' + v);
+        assert.ok(parseSemver(v), 'bump 应接受  →  ' + v);
+      });
+    }
+    for (const v of invalid) {
+      await t.test(`非法 ${v}`, () => {
+        assert.equal(S.parseCarrierVersion(v), null, 'check 应拒绝  →  ' + v);
+        assert.equal(parseSemver(v), null, 'bump 应拒绝  →  ' + v);
+      });
+    }
+
+    await t.test('审官复现：1.2.3-beta.1 不变绿', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3-beta.1', newRaw: '1.2.3-beta.1' });
+      assert.ok(r.ok && !r.skip, JSON.stringify(r));
+    });
+    await t.test('审官复现：1.2.3+build.7 不变绿', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3+build.7', newRaw: '1.2.3+build.7' });
+      assert.ok(r.ok && !r.skip, JSON.stringify(r));
+    });
+    await t.test('审官复现：01.2.3 非法红', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3', newRaw: '01.2.3' });
+      assert.ok(!r.ok && /非法/.test((r.problems || []).join(' ')), JSON.stringify(r));
+    });
+  });
+
+  it('prerelease 顺序符合 SemVer 2.0.0（build 不参与）', async (t) => {
+    const S = await LOAD;
+    const order = [
+      '1.0.0-alpha',
+      '1.0.0-alpha.1',
+      '1.0.0-alpha.beta',
+      '1.0.0-beta',
+      '1.0.0-beta.2',
+      '1.0.0-beta.11',
+      '1.0.0-rc.1',
+      '1.0.0',
+    ];
+    for (let i = 0; i < order.length; i++) {
+      for (let j = 0; j < order.length; j++) {
+        const cmp = S.compareCarrierVersion(order[i], order[j]);
+        const expect = i === j ? 0 : i < j ? -1 : 1;
+        const got = cmp === 0 ? 0 : cmp < 0 ? -1 : 1;
+        await t.test(`${order[i]} ${expect < 0 ? '<' : expect > 0 ? '>' : '='} ${order[j]}`, () => {
+          assert.equal(got, expect, `cmp=${cmp}`);
+        });
+      }
+    }
+    await t.test('build 元数据不改变优先级', () => {
+      assert.equal(S.compareCarrierVersion('1.2.3+aaa', '1.2.3+bbb'), 0);
+      assert.equal(S.compareCarrierVersion('1.2.3+build.7', '1.2.3'), 0);
+    });
+    await t.test('正式版降到预发布 = 倒退', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3', newRaw: '1.2.3-rc.1' });
+      assert.ok(!r.ok && /倒退/.test((r.problems || []).join(' ')), JSON.stringify(r));
+    });
+    await t.test('预发布升到正式版绿', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3-beta.1', newRaw: '1.2.3' });
+      assert.ok(r.ok, JSON.stringify(r));
+    });
+    await t.test('预发布号倒退红', () => {
+      const r = S.inspectVersionChange({ oldRaw: '1.2.3-beta.2', newRaw: '1.2.3-beta.1' });
+      assert.ok(!r.ok && /倒退/.test((r.problems || []).join(' ')), JSON.stringify(r));
+    });
+  });
+
   it('没给清单 = 没查成，不是没有问题', async () => {
     const S = await LOAD;
     const r = S.inspectCarriers({});

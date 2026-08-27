@@ -1,9 +1,13 @@
 // dao-check ㉗：版本号载体存在时，变化必须合法、不倒退。
 //
-// 只拦「乱 bump」（新号不是 X.Y.Z，或比基线小）。不判「该不该 bump」——
+// 只拦「乱 bump」（新号不是合法 SemVer，或比基线小）。不判「该不该 bump」——
 // 语义判断是 AI 职责（#787 拍板 Q9=C）。
 //
-// 检查器自持 semver 比较，不复用 bump 纯函数（自己查自己查不出错）。
+// 语法契约与 bump.mjs 相同（SemVer 2.0.0 + 可选 v 前缀），检查器自持实现，
+// 不 import bump（自己查自己查不出错）：
+// 合法：1.2.3 / 1.2.3-beta.1 / 1.2.3+build.7
+// 非法：01.2.3（核心段前导零）/ 1.2.3-（空标识）/ 1.2.3-01（数字预发布前导零）
+// 比较：SemVer 2.0.0 优先级（预发布低于同核心正式版；build 元数据不参与比较）。
 //
 // 三态必须分得开：
 //   skip      —— 扫完确认无载体（package.json version / VERSION），本项不查变化
@@ -20,18 +24,99 @@ const CARRIERS = [
   { rel: 'VERSION', kind: 'VERSION' },
 ];
 
-/** 独立解析：只认可选 v 前缀的 X.Y.Z，不复用 bump.mjs。 */
+function numericId(s) {
+  if (s === '0') return 0;
+  if (!/^[1-9][0-9]*$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+function prereleaseId(s) {
+  if (s === '') return null;
+  if (/^[0-9]+$/.test(s)) {
+    const n = numericId(s);
+    if (n === null) return null;
+    return { kind: 'n', n };
+  }
+  if (!/^[0-9A-Za-z-]+$/.test(s)) return null;
+  return { kind: 's', s };
+}
+
+function buildId(s) {
+  return s !== '' && /^[0-9A-Za-z-]+$/.test(s);
+}
+
+/** 独立解析：SemVer 2.0.0 + 可选 v 前缀。不 import bump.mjs。 */
 export function parseCarrierVersion(input) {
-  const raw = String(input ?? '').trim().replace(/^v/i, '');
-  const m = raw.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const raw = String(input ?? '').trim();
+  const core = raw.replace(/^v/i, '');
+  const m = core.match(/^(\d+)\.(\d+)\.(\d+)(.*)$/);
   if (!m) return null;
-  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), raw };
+  const major = numericId(m[1]);
+  const minor = numericId(m[2]);
+  const patch = numericId(m[3]);
+  if (major === null || minor === null || patch === null) return null;
+  let rest = m[4];
+  const prerelease = [];
+  const build = [];
+  if (rest.startsWith('-')) {
+    const plus = rest.indexOf('+');
+    const pre = plus === -1 ? rest.slice(1) : rest.slice(1, plus);
+    rest = plus === -1 ? '' : rest.slice(plus);
+    if (pre === '') return null;
+    for (const id of pre.split('.')) {
+      const p = prereleaseId(id);
+      if (!p) return null;
+      prerelease.push(p);
+    }
+  }
+  if (rest.startsWith('+')) {
+    const meta = rest.slice(1);
+    if (meta === '') return null;
+    for (const id of meta.split('.')) {
+      if (!buildId(id)) return null;
+      build.push(id);
+    }
+  } else if (rest !== '') return null;
+  return { major, minor, patch, prerelease, build, raw };
+}
+
+function cmpPre(a, b) {
+  const an = a.prerelease.length;
+  const bn = b.prerelease.length;
+  if (an === 0 && bn === 0) return 0;
+  if (an === 0) return 1;
+  if (bn === 0) return -1;
+  const n = Math.max(an, bn);
+  for (let i = 0; i < n; i++) {
+    if (i >= an) return -1;
+    if (i >= bn) return 1;
+    const x = a.prerelease[i];
+    const y = b.prerelease[i];
+    if (x.kind === 'n' && y.kind === 'n') {
+      if (x.n !== y.n) return x.n - y.n;
+      continue;
+    }
+    if (x.kind === 'n') return -1;
+    if (y.kind === 'n') return 1;
+    if (x.s !== y.s) return x.s < y.s ? -1 : 1;
+  }
+  return 0;
+}
+
+/** SemVer 2.0.0 优先级：build 不参与。任一侧非法返回 null。 */
+export function compareCarrierVersion(left, right) {
+  const a = typeof left === 'object' && left && 'major' in left ? left : parseCarrierVersion(left);
+  const b = typeof right === 'object' && right && 'major' in right ? right : parseCarrierVersion(right);
+  if (!a || !b) return null;
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  if (a.patch !== b.patch) return a.patch - b.patch;
+  return cmpPre(a, b);
 }
 
 function cmpVer(a, b) {
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
+  return compareCarrierVersion(a, b);
 }
 
 /**
