@@ -50,7 +50,7 @@ describe('version-carrier-check', () => {
     const S = await LOAD;
     const { parseSemver } = await import('file://' + path.join(REPO, 'host', 'skills', 'dao-commit', 'bump.mjs').replace(/\\/g, '/'));
 
-    const valid = ['0.0.0', '1.2.3', '1.2.3-beta.1', '1.2.3+build.7', '1.2.3-beta.1+exp.sha.5114f85', 'v1.2.3', '1.0.0-0', '1.0.0-alpha-1', '1.2.3+01'];
+    const valid = ['0.0.0', '1.2.3', '1.2.3-beta.1', '1.2.3+build.7', '1.2.3-beta.1+exp.sha.5114f85', 'v1.2.3', '1.0.0-0', '1.0.0-alpha-1', '1.2.3+01', '9007199254740992.0.0', '1.0.0-9007199254740992'];
     const invalid = [
       '01.2.3', '1.02.3', '1.2.03',
       '1.2.3-', '1.2.3-.', '1.2.3-alpha.', '1.2.3-.alpha', '1.2.3-alpha..1',
@@ -123,6 +123,38 @@ describe('version-carrier-check', () => {
     await t.test('预发布号倒退红', () => {
       const r = S.inspectVersionChange({ oldRaw: '1.2.3-beta.2', newRaw: '1.2.3-beta.1' });
       assert.ok(!r.ok && /倒退/.test((r.problems || []).join(' ')), JSON.stringify(r));
+    });
+  });
+
+  it('超过 MAX_SAFE_INTEGER 的数字标识符合法且可比较', async (t) => {
+    const S = await LOAD;
+    const { parseSemver, bump } = await import('file://' + path.join(REPO, 'host', 'skills', 'dao-commit', 'bump.mjs').replace(/\\/g, '/'));
+    const core = '9007199254740992.0.0';
+    const pre = '1.0.0-9007199254740992';
+    const preNext = '1.0.0-9007199254740993';
+    const coreNext = '9007199254740993.0.0';
+
+    await t.test('两套解析器都接受超大核心段', () => {
+      assert.ok(S.parseCarrierVersion(core));
+      assert.ok(parseSemver(core));
+    });
+    await t.test('两套解析器都接受超大数字预发布', () => {
+      assert.ok(S.parseCarrierVersion(pre));
+      assert.ok(parseSemver(pre));
+    });
+    await t.test('超大预发布顺序', () => {
+      const cmp = S.compareCarrierVersion(pre, preNext);
+      assert.ok(cmp < 0, String(cmp));
+    });
+    await t.test('超大核心段升级绿，倒退红', () => {
+      const up = S.inspectVersionChange({ oldRaw: core, newRaw: coreNext });
+      const down = S.inspectVersionChange({ oldRaw: coreNext, newRaw: core });
+      assert.ok(up.ok, JSON.stringify(up));
+      assert.ok(!down.ok && /倒退/.test((down.problems || []).join(' ')), JSON.stringify(down));
+    });
+    await t.test('bump 超大核心段加一', () => {
+      assert.equal(bump(core, 'breaking').to, coreNext);
+      assert.equal(bump(core, 'fix').to, '9007199254740992.0.1');
     });
   });
 

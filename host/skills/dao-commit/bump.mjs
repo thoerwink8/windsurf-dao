@@ -5,14 +5,26 @@
 // breaking 与 feat 同现取 major。非法 semver 不 throw，error 字段说明。
 //
 // 语法契约（SemVer 2.0.0 + 可选 v 前缀；检查器自持同一套，不 import 本文件）：
-// 合法：1.2.3 / 1.2.3-beta.1 / 1.2.3+build.7
+// 合法：1.2.3 / 1.2.3-beta.1 / 1.2.3+build.7 / 9007199254740992.0.0
 // 非法：01.2.3（核心段前导零）/ 1.2.3-（空标识）/ 1.2.3-01（数字预发布前导零）
+// 数字标识符无上限：规范化十进制字符串（不转 Number，不限 MAX_SAFE_INTEGER）。
 
 function numericId(s) {
-  if (s === '0') return 0;
+  if (s === '0') return '0';
   if (!/^[1-9][0-9]*$/.test(s)) return null;
-  const n = Number(s);
-  return Number.isSafeInteger(n) ? n : null;
+  return s;
+}
+
+function incDec(s) {
+  const d = String(s).split('');
+  for (let i = d.length - 1; i >= 0; i--) {
+    if (d[i] !== '9') {
+      d[i] = String(Number(d[i]) + 1);
+      return d.join('');
+    }
+    d[i] = '0';
+  }
+  return `1${d.join('')}`;
 }
 
 function prereleaseId(s) {
@@ -97,14 +109,14 @@ export function bump(currentVersion, semanticType) {
   }
   let { major, minor, patch } = parsed;
   if (bumpType === 'major') {
-    major += 1;
-    minor = 0;
-    patch = 0;
+    major = incDec(major);
+    minor = '0';
+    patch = '0';
   } else if (bumpType === 'minor') {
-    minor += 1;
-    patch = 0;
+    minor = incDec(minor);
+    patch = '0';
   } else {
-    patch += 1;
+    patch = incDec(patch);
   }
   return { shouldBump: true, bumpType, from: parsed.raw, to: `${major}.${minor}.${patch}` };
 }

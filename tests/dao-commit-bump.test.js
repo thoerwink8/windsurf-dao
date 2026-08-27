@@ -107,6 +107,16 @@ describe('dao-commit-bump', () => {
       assert.equal(r.shouldBump, true);
       assert.equal(r.to, '1.2.4');
     });
+    await t.test('超过 MAX_SAFE_INTEGER 的核心段可解析且能加一', async () => {
+      const { parseSemver } = await LOAD;
+      const big = '9007199254740992.0.0';
+      assert.ok(parseSemver(big), big);
+      assert.ok(parseSemver('1.0.0-9007199254740992'));
+      assert.equal(bump(big, 'fix').to, '9007199254740992.0.1');
+      assert.equal(bump(big, 'feat').to, '9007199254740992.1.0');
+      assert.equal(bump(big, 'breaking').to, '9007199254740993.0.0');
+      assert.equal(bump('999.0.0', 'breaking').to, '1000.0.0');
+    });
   });
 
   it('CLI：node bump.mjs 打出 JSON', () => {

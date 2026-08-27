@@ -5,9 +5,10 @@
 //
 // 语法契约与 bump.mjs 相同（SemVer 2.0.0 + 可选 v 前缀），检查器自持实现，
 // 不 import bump（自己查自己查不出错）：
-// 合法：1.2.3 / 1.2.3-beta.1 / 1.2.3+build.7
+// 合法：1.2.3 / 1.2.3-beta.1 / 1.2.3+build.7 / 9007199254740992.0.0
 // 非法：01.2.3（核心段前导零）/ 1.2.3-（空标识）/ 1.2.3-01（数字预发布前导零）
 // 比较：SemVer 2.0.0 优先级（预发布低于同核心正式版；build 元数据不参与比较）。
+// 数字标识符无上限：规范化十进制字符串按长度再字典序，不转 Number。
 //
 // 三态必须分得开：
 //   skip      —— 扫完确认无载体（package.json version / VERSION），本项不查变化
@@ -25,10 +26,17 @@ const CARRIERS = [
 ];
 
 function numericId(s) {
-  if (s === '0') return 0;
+  if (s === '0') return '0';
   if (!/^[1-9][0-9]*$/.test(s)) return null;
-  const n = Number(s);
-  return Number.isSafeInteger(n) ? n : null;
+  return s;
+}
+
+function cmpDec(a, b) {
+  const x = String(a);
+  const y = String(b);
+  if (x.length !== y.length) return x.length - y.length;
+  if (x === y) return 0;
+  return x < y ? -1 : 1;
 }
 
 function prereleaseId(s) {
@@ -94,7 +102,8 @@ function cmpPre(a, b) {
     const x = a.prerelease[i];
     const y = b.prerelease[i];
     if (x.kind === 'n' && y.kind === 'n') {
-      if (x.n !== y.n) return x.n - y.n;
+      const c = cmpDec(x.n, y.n);
+      if (c !== 0) return c;
       continue;
     }
     if (x.kind === 'n') return -1;
@@ -109,9 +118,12 @@ export function compareCarrierVersion(left, right) {
   const a = typeof left === 'object' && left && 'major' in left ? left : parseCarrierVersion(left);
   const b = typeof right === 'object' && right && 'major' in right ? right : parseCarrierVersion(right);
   if (!a || !b) return null;
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  if (a.patch !== b.patch) return a.patch - b.patch;
+  const maj = cmpDec(a.major, b.major);
+  if (maj !== 0) return maj;
+  const min = cmpDec(a.minor, b.minor);
+  if (min !== 0) return min;
+  const pat = cmpDec(a.patch, b.patch);
+  if (pat !== 0) return pat;
   return cmpPre(a, b);
 }
 
