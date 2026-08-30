@@ -76,3 +76,27 @@ describe('go-fallback-core planRestore', () => {
     }
   });
 });
+
+describe('go-fallback-core classifyFallbackError', () => {
+  it('识别 GLM 网关过载、Grok 超时/连接中断为 transient', async () => {
+    const C = await CORE_LOAD;
+    for (const text of [
+      '503 new_api_error: system cpu overloaded',
+      'Request timed out.',
+      'Connection error.',
+      'This operation was aborted',
+      'fetch failed: ECONNRESET',
+    ]) assert.strictEqual(C.classifyFallbackError(text), 'transient', text);
+  });
+
+  it('识别余额/5 小时额度耗尽为 hard', async () => {
+    const C = await CORE_LOAD;
+    assert.strictEqual(C.classifyFallbackError('402: Insufficient Balance'), 'hard');
+    assert.strictEqual(C.classifyFallbackError("You've reached your 5-hour usage limit"), 'hard');
+  });
+
+  it('未知错误不触发回退', async () => {
+    const C = await CORE_LOAD;
+    assert.strictEqual(C.classifyFallbackError('Invalid message role'), null);
+  });
+});

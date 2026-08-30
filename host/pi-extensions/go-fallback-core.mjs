@@ -29,3 +29,28 @@ export function planRestore({ pending, current }) {
   if (atOriginal) return { action: "wait" };
   return { action: "respect-user", from };
 }
+
+/**
+ * 判断一次 agent 错误是否值得进入备用通道。
+ * 这是纯逻辑，供扩展和回归测试复用；只把明确的额度/认证失败视为 hard，
+ * 把网关过载、超时、连接中断和 5xx 视为 transient。
+ */
+export function classifyFallbackError(text) {
+  const value = String(text || "");
+  const hard = [
+    /GoUsageLimitError/i, /FreeUsageLimitError/i, /Monthly usage limit/i,
+    /insufficient[_ ]quota/i, /insufficient balance/i, /available balance/i,
+    /quota exceeded/i, /out of budget/i, /billing/i, /usage limit reached/i,
+    /5-hour usage limit/i, /cloud credit is spent/i,
+  ];
+  if (hard.some((re) => re.test(value))) return "hard";
+  const transient = [
+    /overloaded/i, /rate.?limit/i, /too many requests/i, /(^|[^0-9])429([^0-9]|$)/i,
+    /(^|[^0-9])5[0-9][0-9]([^0-9]|$)/i, /service.?unavailable/i, /server.?error/i,
+    /internal.?error/i, /request timed out/i, /timed out/i, /timeout/i,
+    /connection error/i, /connection reset/i, /econn(reset|refused|aborted)/i,
+    /operation was aborted/i, /this operation was aborted/i,
+    /fetch failed/i, /socket hang up/i, /no_events/i,
+  ];
+  return transient.some((re) => re.test(value)) ? "transient" : null;
+}

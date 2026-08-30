@@ -28,45 +28,25 @@
  *   （进上下文 + 上屏）+ stderr 日志，否则「切过了」和「本来就没限流」分不开。
  *
  * 配置（默认即生产值，测试环境可用环境变量覆盖）：
- *   PI_GO_FALLBACK_PRIMARY   主通道 provider，默认 "opencode-go"
- *   PI_GO_FALLBACK_PROVIDER  降级目标 provider（直连），默认 "deepseek"
+ *   PI_GO_FALLBACK_PRIMARIES / PI_GO_FALLBACK_PRIMARY
+ *     主通道 provider 列表（逗号分隔），默认 "opencode-go,mirasim,gw,grok,xai"
+ *   PI_GO_FALLBACK_PROVIDERS / PI_GO_FALLBACK_PROVIDER
+ *     降级目标 provider 列表（逗号分隔），默认 "deepseek,opencode-go,gw,xai"
  *   PI_GO_FALLBACK_MODEL     降级目标默认模型（同 id 不存在时兜底），默认 "deepseek-v4-flash"
  *   PI_GO_FALLBACK_TRANSIENT_AFTER  transient 错误连续失败几次后降级，默认 2
  *
  * 纯逻辑（恢复决策）在 go-fallback-core.mjs（node 22 可测），本文件只做运行时接线。
  */
 
-import { planRestore } from "./go-fallback-core.mjs";
+import { planRestore, classifyFallbackError } from "./go-fallback-core.mjs";
 
-const PRIMARY = process.env.PI_GO_FALLBACK_PRIMARY || "opencode-go";
-const FALLBACK_PROVIDER = process.env.PI_GO_FALLBACK_PROVIDER || "deepseek";
+// 可用逗号分隔多个主通道；默认覆盖原 Go、Mirasim 注入通道和本地 gw 扩展。
+const PRIMARIES = (process.env.PI_GO_FALLBACK_PRIMARIES || process.env.PI_GO_FALLBACK_PRIMARY || "opencode-go,mirasim,gw,grok,xai")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+const FALLBACK_PROVIDERS = (process.env.PI_GO_FALLBACK_PROVIDERS || process.env.PI_GO_FALLBACK_PROVIDER || "deepseek,opencode-go,gw,xai")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 const FALLBACK_MODEL = process.env.PI_GO_FALLBACK_MODEL || "deepseek-v4-flash";
 const TRANSIENT_AFTER = Number(process.env.PI_GO_FALLBACK_TRANSIENT_AFTER || 2);
-
-// 额度耗尽类（pi 判定 non-retryable，重试也没用，首次命中就降级）
-const HARD_LIMIT = [
-  /GoUsageLimitError/i,
-  /FreeUsageLimitError/i,
-  /Monthly usage limit/i,
-  /available balance/i,
-  /insufficient_quota/i,
-  /quota exceeded/i,
-  /out of budget/i,
-  /billing/i,
-  /usage limit reached/i,
-];
-
-// 瞬时类（pi 会内置重试，连续失败到阈值才降级）
-const TRANSIENT = [
-  /overloaded/i,
-  /rate.?limit/i,
-  /too many requests/i,
-  /\b429\b/i,
-  /\b5\d\d\b/i,
-  /service.?unavailable/i,
-  /server.?error/i,
-  /internal.?error/i,
-];
 
 let consecutiveErrors = 0;
 let lastSignature = "";
@@ -75,12 +55,6 @@ let lastSignature = "";
 // fallbackProvider/fallbackModel 是 setModel 试图写入的降级值——恢复决策靠它区分
 // 「降级写已落盘」（该写回原值）和「降级写还没落盘」（当前还是原值，必须留 pending 等补刀）。
 let pendingRestore = null; // { path, provider, model, fallbackProvider, fallbackModel }
-
-function classify(text) {
-  if (HARD_LIMIT.some((re) => re.test(text))) return "hard";
-  if (TRANSIENT.some((re) => re.test(text))) return "transient";
-  return null;
-}
 
 function agentDir() {
   if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
@@ -150,7 +124,7 @@ export default function (pi) {
   pi.on("agent_end", async (event, ctx) => {
     // 只在主通道（Go）上动作；切过去之后 provider 变了，天然不会循环。
     const model = ctx.model;
-    if (!model || model.provider !== PRIMARY) return;
+    if (!model || !PRIMARIES.includes(model.provider)) return;
 
     const msgs = Array.isArray(event.messages) ? event.messages : [];
     let errMsg = null;
@@ -167,7 +141,7 @@ export default function (pi) {
     }
 
     const text = String(errMsg.errorMessage);
-    const kind = classify(text);
+    const kind = classifyFallbackError(text);
     if (!kind) {
       consecutiveErrors = 0;
       return;
@@ -185,15 +159,19 @@ export default function (pi) {
     }
 
     // 找降级模型：同 id 优先，找不到用默认兜底模型。
-    const fallback =
-      ctx.modelRegistry.find(FALLBACK_PROVIDER, model.id) ||
-      ctx.modelRegistry.find(FALLBACK_PROVIDER, FALLBACK_MODEL);
+    let fallback = null;
+    for (const provider of FALLBACK_PROVIDERS) {
+      if (provider === model.provider) continue;
+      fallback = ctx.modelRegistry.find(provider, model.id) ||
+        ctx.modelRegistry.find(provider, FALLBACK_MODEL);
+      if (fallback && fallback.provider !== model.provider) break;
+    }
     if (!fallback) {
       ctx.ui.notify(
-        `go-fallback: 直连 ${FALLBACK_PROVIDER} 无可用模型（${model.id}/${FALLBACK_MODEL}），无法降级`,
+        `go-fallback: 无可用备用模型（${FALLBACK_PROVIDERS.join(",")}；${model.id}/${FALLBACK_MODEL}），无法降级`,
         "error"
       );
-      console.error(`[go-fallback] 无降级模型: ${FALLBACK_PROVIDER} ${model.id}/${FALLBACK_MODEL}`);
+      console.error(`[go-fallback] 无降级模型: ${FALLBACK_PROVIDERS.join(",")} ${model.id}/${FALLBACK_MODEL}`);
       return;
     }
 
@@ -219,10 +197,10 @@ export default function (pi) {
     }
     if (!switched) {
       ctx.ui.notify(
-        `go-fallback: 直连 ${FALLBACK_PROVIDER} 凭据缺失，无法降级（当前任务将因限流失败）`,
+        `go-fallback: 备用通道凭据缺失，无法降级（${fallback.provider}/${fallback.id}）`,
         "error"
       );
-      console.error(`[go-fallback] ${FALLBACK_PROVIDER} 凭据缺失，降级失败`);
+      console.error(`[go-fallback] ${fallback.provider} 凭据缺失，降级失败`);
       pendingRestore = null;
       return;
     }
