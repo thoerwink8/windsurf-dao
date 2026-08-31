@@ -325,3 +325,19 @@ node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer 
 - 怀疑工人越权时，先读它自己的会话记录（~/.claude/projects/<项目>/<会话>/subagents/agent-*.jsonl，用户中途插话有固定签名 "The user sent a new message while you were working"）；找到证据前不回滚、不指控。
 - 凡要开 branch/PR 的改动一律派工人，主会话手不碰 git。
 - 起工人的完整启动序和判断工人是否完成的方法见 dispatch skill；纲领是：注入前先证终端就绪，注入后回读，确认任务书完整显示在屏上；**开工与活性判据只用「该发生的事有没有发生」**（worker-start receipt、产物/提交出现），不用 token 计数/cursor 增量/屏面指纹——spinner 重绘会骗过全部屏面指标（#500）。
+
+## 编排态工作法（2026-08-31 自 CLAUDE.md 迁入；服务器编排落地后整体回岗）
+
+停派工态下本节不生效；恢复编排后，凡产出要进 git 的活按此工作：
+
+- 所有改动都从 draft PR 开始，不直接改主分支——任何要进 git 的改动都走这条路，不进仓库的临时草稿不需要。
+- PR 正文写清目标、验收标准和进展；每次 push 都留下可查看的记录。
+- 改完运行 `node scripts/dao-check.mjs`。检查通过并完成自查后，用 `gh pr ready` 表示可以评审。
+
+### 开新单三问（#556：issue 只装排得上队的待办）
+
+开 issue 前三问，全 yes 才开：
+
+1. 说得出「做到什么算做完」吗？
+2. 这一批或下一批会做吗？说不出什么时候做 ⇒ 不开，写进 `docs/ideas.md`。
+3. 它不属于 memory / docs 吗？
