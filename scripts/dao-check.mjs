@@ -1368,6 +1368,15 @@ function checkNoBannerInboxLive() {
   green('横幅收信整层已删（派工不 run-use / 不教横幅收信 / 心跳不准发）');
 }
 
+// 停派工态门（2026-08-31 dbfa323 / docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
+// ⑦⑭⑮⑰-live 四项是**派工节奏与外部盘面的活探**（orca --help、gh 盘面、账本对 GitHub），
+// 守的是「正在编排」这件事；本机停派工后它们只贡献网络抖动和耗时。默认不跑，
+// `--full` 跑全量（编排回岗 / 服务器上把 --full 设为常态）。
+// 「停派工态未跑」是第三种形：不是绿（没查）、也不是没查成（是故意不查），话面写明原因与开关。
+// 离线的样本/接线检查（夹具判别力、模板扫描）全部保留——它们不花网络，且守的约定还在仓里。
+const FULL = process.argv.includes('--full');
+const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 node scripts/dao-check.mjs --full）`);
+
 await runTests();
 checkSkillFrontmatter();
 checkSecretsNotTracked();
@@ -1375,20 +1384,25 @@ checkResidentBudget();
 checkRoutingProvidersToml();
 checkRoutingPolicyJson();
 checkNextLaunchFixture();
-await checkCommandHelp();
+if (FULL) await checkCommandHelp(); else parked('命令库 --help 参数存活');
 checkModeHookAlive();
 checkDispatchGateAlive();
 checkMemoryLinkAlive();
 checkExtractFixtures();
 checkMasterTitleSamples();
 checkCardCommentSamples();
-const openBoard = loadOpenBoard();
-checkOpenIssueCount(openBoard);
-checkReadyQueue(openBoard);
+if (FULL) {
+  const openBoard = loadOpenBoard();
+  checkOpenIssueCount(openBoard);
+  checkReadyQueue(openBoard);
+} else {
+  parked('open 单数量阈值');
+  parked('可立即起但没起');
+}
 checkCompletionSignalAlive();
 checkMarshalIssueIdentityAlive();
 checkLedgerGapSamples();
-checkLedgerGapLive();
+if (FULL) checkLedgerGapLive(); else parked('账本断流差集 live');
 checkStrikesSamples();
 checkStrikesLive();
 checkMachinePathSamples();
