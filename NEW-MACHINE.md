@@ -648,6 +648,8 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 
 ### 分支卫生：一条命令，不设规矩
 
+**日常收工直接用 `node scripts/land.mjs`**（2026-08-31 起，本节两条命令 + 推主分支 + 拆已合并 worktree 已合成它的一部分，带六道安全闸，任何 git 仓可用；决策见 `docs/decisions/2026-08-31-land-check-slim-review-standard.md`）。下面保留原始命令，供 land 不可用或在别的机器上手搓时用。
+
 **先知道哪些是自动的，别重复造**：GitHub 的 `delete_branch_on_merge` 已开，**PR 合并后远端分支自动删**（2026-08-31 抽查最近 6 个 merged PR，分支全没了）。它**只认 merge**——PR 被 close、或压根没开过 PR 的分支不触发；本地分支引用 git 也从不自动删。所以残留只有这两种，量很小（790+ PR 沉了 27 条，3.4%），不值得为它立规矩或加检查（2026-08-31 拍板：不立制度，只留命令）。
 
 想起来就跑，任何时候都安全：
