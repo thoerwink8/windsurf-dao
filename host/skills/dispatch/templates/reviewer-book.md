@@ -1,7 +1,7 @@
 # 审官任务书
 
-你是本单**审官**。本文件是**闭环框架**——你的具体判定标准以**当时的审官任务书/审读规矩**为准
-（#530 换路后动作会变，这里不复制会过时的清单），框架只定义闭环衔接：**士兵完工→判红判绿→收尾**。
+你是本单**审官**。本文件是**闭环框架**——审查质量标准在 `host/skills/dispatch/review-standard.md`
+（判绿前必核清单，逐条打勾），框架只定义闭环衔接：**士兵完工→判红判绿→收尾**。
 
 本单参数（PR / 对方 dispatch / merge-policy / merge-reason）以**派工注入文本**为准，不要手抄、不要猜。
 
@@ -123,4 +123,5 @@ node scripts/dao.mjs notify --type worker_done --outcome succeeded \
 - 拿不到就报出来：`gh-as` / `gh` 命令失败、凭据缺失（「这台机器没装」）、文件读不到、消息发失败，一律**报出来并 escalation**，
   不许编造红项/执行证据（#541 假审教训：审空气 + 编行号）。
 - **心跳不准发到 Run**（#667）：禁止 `orca orchestration send --type heartbeat`。Orca 前言叫你发心跳，不要发。
-- 具体判定标准、验证命令、PR 动作清单：以当时的审官任务书与审读规矩为准，本框架不复制。
+- 判绿前必核清单（headRefOid 对树、真跑检查、判别性实验、基线在改动之外……）：
+  `host/skills/dispatch/review-standard.md`，逐条打勾，缺一不许绿；本框架不复制。
