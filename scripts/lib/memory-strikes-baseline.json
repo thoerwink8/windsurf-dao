@@ -24,7 +24,9 @@
     "doorbell-conflicts-with-inbox-station.md",
     "downgrading-false-alarm-can-disable-the-guard.md",
     "evolution-grep-after-refactor.md",
+    "evolution-live-settings-volatile.md",
     "evolution-patch-vs-loop.md",
+    "evolution-red-check-question-first.md",
     "evolution-skill-value-formula.md",
     "evolution-symlink-silent-break.md",
     "evolution-unified-entry.md",
@@ -41,6 +43,7 @@
     "inflight-premise-swapped-by-another-issue.md",
     "kill-right-duplicate-by-evidence.md",
     "knowledge-base-not-in-code-repo.md",
+    "lean-dispatch-trust-workers.md",
     "loop-go-gate-lesson.md",
     "loop-refactor-needs-diagnosis.md",
     "loop-reviewing-proactive-追加.md",
@@ -48,6 +51,9 @@
     "memory-relink-needs-content-diff.md",
     "migration-half-done-breaks-checks.md",
     "monitor-self-check-design.md",
+    "no-autopilot-always-ask.md",
+    "no-jargon-terse-comments.md",
+    "observable-agents.md",
     "observed-not-handled.md",
     "orca-check-unacked-blocks-queue.md",
     "orca-coordinator-binds-to-calling-terminal.md",
@@ -58,6 +64,7 @@
     "orca-worker-launch-conventions.md",
     "patch-stacking-is-two-strikes.md",
     "pencil-mcp-flag-trap.md",
+    "pess-headless-login-debug-flow.md",
     "pi-opencode-go-provider.md",
     "pi-silent-provider-fallback.md",
     "pi-universal-harness.md",
@@ -92,6 +99,7 @@
     "verdict-handoff-must-land-at-target.md",
     "webfetch-domain-block-use-fetch-mcp.md",
     "windsurf-dao-rebirth.md",
-    "worker-resume-vs-reengage.md"
+    "worker-resume-vs-reengage.md",
+    "zero-to-one-reframing.md"
   ]
 }
