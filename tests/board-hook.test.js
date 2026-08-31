@@ -335,19 +335,13 @@ describe('board-hook', () => {
       });
   });
 
-  it('#564 接线：settings.json UserPromptSubmit 只挂一条命令（盘面+自愈合一）', async (t) => {
-    const H = await H_LOAD;
+  // 2026-08-31 停派工归零（docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
+  // 盘面注入随本机编排一起停，挂点摘除；恢复 = revert 那个 commit。
+  // 上面的纯函数测试全部保留——代码死缓不删，逻辑仍要能测。
+  it('停派工态：settings.json 不挂 UserPromptSubmit（盘面注入已摘除）', () => {
     const settings = JSON.parse(require('fs').readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
-    const ups = settings.hooks?.UserPromptSubmit || [];
-    const commands = ups.flatMap(g => (g.hooks || []).map(h => h.command));
-    await t.test('UserPromptSubmit 是数组且挂了 board-hook',
-      () => {
-        assert.ok(commands.length >= 1 && commands.some(c => c.includes('board-hook.mjs')), 'UserPromptSubmit 是数组且挂了 board-hook  →  ' + JSON.stringify(commands));
-      });
-    await t.test('盘面与自愈合成一条命令（不挂两条互相拖超时）',
-      () => {
-        assert.ok(commands.length === 1, '盘面与自愈合成一条命令（不挂两条互相拖超时）  →  ' + JSON.stringify(commands));
-      });
+    assert.ok(!settings.hooks?.UserPromptSubmit,
+      'UserPromptSubmit 应已摘除  →  ' + JSON.stringify(settings.hooks));
   });
 
   it('#684 board-hook 不每轮 sync 帅位定界区（拍板取舍）', () => {

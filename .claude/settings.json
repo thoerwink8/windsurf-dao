@@ -1,16 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/guard-session-hook.mjs\"",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -18,17 +7,6 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/dispatch-gate-hook.mjs\"",
             "timeout": 8
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/lib/board-hook.mjs\"",
-            "timeout": 60
           }
         ]
       }

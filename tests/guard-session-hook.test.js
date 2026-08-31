@@ -222,19 +222,11 @@ describe('guard-session-hook（SessionStart 面）', () => {
     });
   });
 
-  it('settings.json SessionStart 只挂一条命令且脚本真存在', async (t) => {
+  // 2026-08-31 停派工归零：守卫拉起随本机编排一起停，挂点摘除；恢复 = revert 那个 commit。
+  it('停派工态：settings.json 不挂 SessionStart（守卫拉起已摘除），脚本死缓仍在', () => {
     const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
-    const ss = settings.hooks?.SessionStart || [];
-    const commands = ss.flatMap(g => (g.hooks || []).map(h => h.command));
-    await t.test('SessionStart 挂了 guard-session-hook', () => {
-      assert.ok(commands.length === 1 && commands[0].includes('guard-session-hook.mjs'), 'SessionStart  →  ' + JSON.stringify(commands));
-    });
-    await t.test('指向的脚本真存在', () => {
-      assert.ok(fs.existsSync(HOOK), '脚本在  →  ' + HOOK);
-    });
-    await t.test('timeout 大于 --once 内部预算（50s）', () => {
-      const timeout = ss.flatMap(g => (g.hooks || []))[0].timeout;
-      assert.ok(typeof timeout === 'number' && timeout > 50, 'timeout  →  ' + timeout);
-    });
+    assert.ok(!settings.hooks?.SessionStart,
+      'SessionStart 应已摘除  →  ' + JSON.stringify(settings.hooks));
+    assert.ok(fs.existsSync(HOOK), '脚本死缓仍在  →  ' + HOOK);
   });
 });
