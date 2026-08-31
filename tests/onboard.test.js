@@ -96,8 +96,17 @@ describe('onboard', () => {
       assert.ok(got.includes('memory-unlinked') && got.includes('creds-missing'), JSON.stringify(got));
     });
     await t.test('linked worktree（.git 是文件）不报 memory-unlinked——不许每会话刷噪音', async () => {
-      const { home } = mkHome('wtquiet'); mkCreds(home); // REPO 就是 linked worktree，不接 memory
-      const got = await ids(home);
+      // 不拿 REPO 当样本：本仓在主 clone（.git 是目录）上跑时形态就变了，
+      // 断言不得依赖测试仓自己的形态——造一个 .git 是文件的合成 worktree 根。
+      const wtRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-wtroot-'));
+      fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ../elsewhere/.git/worktrees/x\n');
+      fs.mkdirSync(path.join(wtRoot, 'docs'), { recursive: true });
+      fs.copyFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), path.join(wtRoot, 'docs', 'global-CLAUDE.md'));
+      fs.mkdirSync(path.join(wtRoot, 'host', 'skills', 'dispatch'), { recursive: true });
+      fs.writeFileSync(path.join(wtRoot, 'host', 'skills', 'dispatch', 'SKILL.md'), 'stub');
+      const { home } = mkHome('wtquiet', { root: wtRoot }); mkCreds(home); // 不接 memory
+      const S2 = await LIB_LOAD;
+      const got = S2.checkOnboard({ root: wtRoot, home }).problems.map(p => p.id);
       assert.ok(!got.includes('memory-unlinked'), JSON.stringify(got));
     });
   });

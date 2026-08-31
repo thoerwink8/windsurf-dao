@@ -78,7 +78,9 @@ describe('watchdog', () => {
       assert.ok(r.out.includes("#452 - 看门狗正式版"), '被监视工位：#452 - 看门狗正式版在列  →  无 #452 - 看门狗正式版');
     });
     await t.test('主工作区 master 不在监视集合（结构性排除）', () => {
-      assert.ok(!r.out.includes("master"), '主工作区 master 不在监视集合（结构性排除）  →  ' + r.out.trim());
+      // 只认工位标签 [master]，不裸搜 "master"——观察行会打印仓内绝对路径，
+      // 本仓 checkout 目录名恰为 master（mirasim worktree）时裸搜必假红（断言不得依赖 checkout 自身形态）。
+      assert.ok(!r.out.includes("[master]"), '主工作区 master 不在监视集合（结构性排除）  →  ' + r.out.trim());
     });
     await t.test('屏面上部叙述里的指纹字样不误报（v0 教训）', () => {
       assert.ok(!EVENT_RE.test(r.out), '屏面上部叙述里的指纹字样不误报（v0 教训）  →  ' + r.out.split("\n").filter(l => EVENT_RE.test(l)).join(" | "));
