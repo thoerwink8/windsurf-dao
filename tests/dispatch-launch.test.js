@@ -456,7 +456,7 @@ describe('dispatch-launch（async-launch）', () => {
     });
   });
 
-  it('派工去重 CLI（async-launch）：热路 <1s 受理；命中由执行体拒派落结果文件', async (t) => {
+  it('派工去重 CLI（async-launch）：热路秒级受理；命中由执行体拒派落结果文件', async (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dedup-'));
     const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dao-dq-cli-'));
     const seed = {
@@ -486,21 +486,24 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(dryMs < 15000, `dry-run 耗时 ${dryMs}ms，超过 15s——事前层又厚了`);
     });
 
-    // async-launch 核心断言一：热路 <1s 返回「已受理」（NO_SPAWN 隔掉 spawn，纯热路计时）。
+    // async-launch 核心断言一：热路秒级返回「已受理」（NO_SPAWN 隔掉 spawn，纯热路计时）。
+    // 阈值 3s 不是 1s：计时含 node 冷启动，dao-check 的 6 宽测试池挤压下实测到过 1027ms
+    //（单跑 ~600ms）；要防的「同步脊长回来」是数秒到数十秒级（orca 往返/读全量账本），
+    // 3s 对它照样红，对池挤压不再误伤——墙钟断言的余量要按最吵的运行环境给。
     const t1 = Date.now();
     const noSpawn = spawnSync(process.execPath, [...base, '--now', '2026-08-23T12:06:00+08:00'], {
       encoding: 'utf8', cwd: REPO, env: { ...env, DAO_DISPATCH_NO_SPAWN: '1' },
     });
     const hotMs = Date.now() - t1;
     const pNoSpawn = payload(noSpawn);
-    await t.test(`热路 <1s 返回（实测 ${hotMs}ms）：queued/async/orderId 齐，派工单落队列目录`, () => {
+    await t.test(`热路 <3s 返回（实测 ${hotMs}ms）：queued/async/orderId 齐，派工单落队列目录`, () => {
       assert.ok(noSpawn.status === 0 && pNoSpawn.ok === true && pNoSpawn.queued === true && pNoSpawn.async === true,
         '受理回执  →  ' + JSON.stringify(pNoSpawn).slice(0, 300));
       assert.ok(typeof pNoSpawn.orderId === 'string' && /^dq-/.test(pNoSpawn.orderId), 'orderId  →  ' + pNoSpawn.orderId);
       assert.ok(pNoSpawn.spawnSkipped === true, 'NO_SPAWN 测试口要透出 spawnSkipped');
       assert.ok(String(pNoSpawn.orderPath).startsWith(queueDir), '派工单必须落 DAO_DISPATCH_QUEUE_DIR（隔真仓）  →  ' + pNoSpawn.orderPath);
       assert.ok(fs.existsSync(pNoSpawn.orderPath), '派工单文件在');
-      assert.ok(hotMs < 1000, `热路耗时 ${hotMs}ms，超过 1s——同步脊又长回来了`);
+      assert.ok(hotMs < 3000, `热路耗时 ${hotMs}ms，超过 3s——同步脊又长回来了`);
     });
 
     // async-launch 核心断言二：执行体后台跑，查重命中 → 结果文件落 ok:false（拦在 orca 之前）。
