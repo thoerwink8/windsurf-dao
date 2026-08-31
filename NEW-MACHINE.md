@@ -4,6 +4,18 @@
 
 先读 `host/machine/INDEX.md`：A/B/C/D 告诉你装什么、不拷什么。本页只写装法，不另造第二份说明书。`host/machine/` 只装 B 类模板 + INDEX，**不镜像 `~`**。
 
+## 0. 一条命令（先跑这个）
+
+clone 完先跑：
+
+```bash
+node scripts/onboard.mjs            # 幂等接线：全局约定 / skills 链接 / memory；--dry-run 只看不动
+```
+
+它把 §3/§10/§11 的接线全代劳（能修的修、危险的拒绝并指路）；剩下只有**手动带凭据**（§4）。
+日后哪根链接断了、约定漂移了，重跑同一条命令即修复；SessionStart 哨兵发现未接线会注入一行提醒
+（绿=零输出）。来历见 docs/decisions/2026-08-31-local-guards-retire-with-server.md。
+
 ## 1. 拿仓库
 
 ```bash

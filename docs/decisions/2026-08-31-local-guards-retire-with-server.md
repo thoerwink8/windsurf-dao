@@ -53,3 +53,18 @@
 - 全面恢复本机编排：`git revert` 本 commit。
 - 服务器落地：不要 revert——直接按 NEW-MACHINE §9d 起服务器 runtime，守卫用 systemd/automations 原生件，
   然后按 orchestration-linux-only 文档第 3 步删本机编排层代码（含本文死缓名单）。
+
+## 同日补充：onboard 哨兵（不是守卫还魂）
+
+用户随后问「公司老机器拿到仓，怎么最少动作拥有全部能力、坏了怎么直接修复」。落地：
+
+- `node scripts/onboard.mjs`——幂等接线命令：同步全局约定（先备份）、补 skills 逐个链接、
+  接 memory（仅在找到 origin 对得上的 clone 且落点无内容时；有内容的真目录拒绝自动接，
+  防 memory-relink-needs-content-diff 那类静默丢失）；凭据永远只报不修。`--dry-run` 只看不动。
+- SessionStart 挂回一个**哨兵**（`onboard-session-hook.mjs`）：纯本地 stat/hash、不起进程、
+  不打网络、绿=零输出；发现未接线只注入一行指路，修复必须过用户确认。
+  与被归零的守卫不同层：守卫守派工闭环（拉三个常驻进程），哨兵守配置完整性
+  （全局约定「察觉不到违反的规则要配自动检查」点名的那类）。多 checkout 静音规则：
+  skills 指向别的 checkout 只要是活的 skills 树即绿；linked worktree（.git 是文件）不报 memory 未接。
+
+换机两步：`git clone` + `node scripts/onboard.mjs`；剩下只有手动带凭据（~/.dao/apps 等 C 类）。

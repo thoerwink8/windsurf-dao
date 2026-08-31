@@ -1,0 +1,150 @@
+// 换机接线自检 + onboard 幂等命令（2026-08-31）。
+// 铁律照旧：绿要能证明是查过的绿（假 HOME 全绿样本）；每类违规要有故意样本被拦住；
+// 「没查成」与「查过没事」不同形；哨兵绿 = 零输出。
+const { describe, it, before } = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const REPO = path.resolve(__dirname, '..');
+const LIB_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'onboard-check.mjs').replace(/\\/g, '/'));
+const MEM_LOAD = import('file://' + path.join(REPO, 'scripts', 'lib', 'dao-memory-link-check.mjs').replace(/\\/g, '/'));
+
+/** 假 HOME：三处接线全对 + 凭据在（全绿基线，每个用例各拆一处）。 */
+function mkHome(tag, { root = REPO } = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `onboard-${tag}-`));
+  const dotClaude = path.join(home, '.claude');
+  fs.mkdirSync(dotClaude, { recursive: true });
+  fs.copyFileSync(path.join(root, 'docs', 'global-CLAUDE.md'), path.join(dotClaude, 'CLAUDE.md'));
+  fs.symlinkSync(path.join(root, 'host', 'skills'), path.join(dotClaude, 'skills'), 'junction');
+  // 假 memory clone：origin 指向正牌 memory 仓
+  const clone = path.join(home, 'fake-memory-clone');
+  fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(clone, '.git', 'config'),
+    '[remote "origin"]\n\turl = git@github.com:thoerwink8/windsurf-dao-memory.git\n');
+  return { home, clone };
+}
+async function linkMemory(home, clone, root) {
+  const M = await MEM_LOAD;
+  const memDir = path.join(home, '.claude', 'projects', M.encodeProjectDir(root), 'memory');
+  fs.mkdirSync(path.dirname(memDir), { recursive: true });
+  fs.symlinkSync(clone, memDir, 'junction');
+  return memDir;
+}
+const mkCreds = (home) => fs.mkdirSync(path.join(home, '.dao', 'apps'), { recursive: true });
+
+describe('onboard', () => {
+  it('全绿基线：0 问题，哨兵零输出（绿≠碰巧没扫）', async () => {
+    const S = await LIB_LOAD;
+    const { home, clone } = mkHome('green');
+    await linkMemory(home, clone, REPO);
+    mkCreds(home);
+    const r = S.checkOnboard({ root: REPO, home });
+    assert.deepEqual(r.unscanned, [], '不该没查成  →  ' + JSON.stringify(r.unscanned));
+    assert.equal(r.problems.length, 0, '全绿  →  ' + JSON.stringify(r.problems));
+    assert.equal(S.onboardNoticeLine(r), '', '哨兵绿必须零输出');
+  });
+
+  it('故意违规逐类被拦', async (t) => {
+    const S = await LIB_LOAD;
+    const ids = async (home) => (S.checkOnboard({ root: REPO, home })).problems.map(p => p.id);
+
+    await t.test('全局约定漂移', async () => {
+      const { home, clone } = mkHome('drift'); await linkMemory(home, clone, REPO); mkCreds(home);
+      fs.appendFileSync(path.join(home, '.claude', 'CLAUDE.md'), '\n本机私改一行\n');
+      assert.ok((await ids(home)).includes('global-drift'));
+    });
+    await t.test('skills 链接不在', async () => {
+      const { home, clone } = mkHome('noskill'); await linkMemory(home, clone, REPO); mkCreds(home);
+      fs.rmSync(path.join(home, '.claude', 'skills'));
+      assert.ok((await ids(home)).includes('skills-missing'));
+    });
+    await t.test('skills/dispatch 是拷贝的真目录 → skills-not-link 只报不修', async () => {
+      const { home, clone } = mkHome('dirskill'); await linkMemory(home, clone, REPO); mkCreds(home);
+      const p = path.join(home, '.claude', 'skills');
+      fs.rmSync(p); fs.mkdirSync(path.join(p, 'dispatch'), { recursive: true });
+      fs.writeFileSync(path.join(p, 'dispatch', 'SKILL.md'), '拷贝残留');
+      assert.ok((await ids(home)).includes('skills-not-link'));
+    });
+    await t.test('skills 目录在但缺链接 → skills-partial（可修）', async () => {
+      const { home, clone } = mkHome('partial'); await linkMemory(home, clone, REPO); mkCreds(home);
+      const p = path.join(home, '.claude', 'skills');
+      fs.rmSync(p); fs.mkdirSync(p);
+      assert.ok((await ids(home)).includes('skills-partial'));
+    });
+    await t.test('逐个链接形态（现行部署）→ 绿', async () => {
+      const { home, clone } = mkHome('perskill'); await linkMemory(home, clone, REPO); mkCreds(home);
+      const p = path.join(home, '.claude', 'skills');
+      fs.rmSync(p); fs.mkdirSync(p);
+      fs.symlinkSync(path.join(REPO, 'host', 'skills', 'dispatch'), path.join(p, 'dispatch'), 'junction');
+      assert.equal((await ids(home)).length, 0, '逐个链接应绿');
+    });
+    await t.test('memory 未接 / 凭据缺失 一起报（主 clone 形态：.git 是目录）', async () => {
+      // 本测试仓自己是 linked worktree（.git 是文件），会命中「worktree 不报 memory」的抑制；
+      // 造一个 .git 为目录的合成主 clone 根来验「换机没接」这条真的会响。
+      const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-mainclone-'));
+      fs.mkdirSync(path.join(fakeRoot, '.git'));
+      fs.mkdirSync(path.join(fakeRoot, 'docs'), { recursive: true });
+      fs.copyFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), path.join(fakeRoot, 'docs', 'global-CLAUDE.md'));
+      fs.mkdirSync(path.join(fakeRoot, 'host', 'skills', 'dispatch'), { recursive: true });
+      fs.writeFileSync(path.join(fakeRoot, 'host', 'skills', 'dispatch', 'SKILL.md'), 'stub');
+      const { home } = mkHome('nomem', { root: fakeRoot }); // 不接 memory、不放凭据
+      const S2 = await LIB_LOAD;
+      const got = S2.checkOnboard({ root: fakeRoot, home }).problems.map(p => p.id);
+      assert.ok(got.includes('memory-unlinked') && got.includes('creds-missing'), JSON.stringify(got));
+    });
+    await t.test('linked worktree（.git 是文件）不报 memory-unlinked——不许每会话刷噪音', async () => {
+      const { home } = mkHome('wtquiet'); mkCreds(home); // REPO 就是 linked worktree，不接 memory
+      const got = await ids(home);
+      assert.ok(!got.includes('memory-unlinked'), JSON.stringify(got));
+    });
+  });
+
+  it('没查成与绿不同形：真相源不在 → unscanned，哨兵行说「没查成」', async () => {
+    const S = await LIB_LOAD;
+    const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-noroot-'));
+    const { home } = mkHome('unscanned');
+    const r = S.checkOnboard({ root: fakeRoot, home });
+    assert.ok(r.unscanned.length >= 1, '必须落 unscanned  →  ' + JSON.stringify(r));
+    const line = S.onboardNoticeLine(r);
+    assert.ok(/没查成/.test(line) && !/未就绪/.test(line), '形要分开  →  ' + line);
+  });
+
+  it('onboard.mjs e2e：dry-run 不动，实跑修复漂移并留备份', async (t) => {
+    const { home, clone } = mkHome('e2e'); await linkMemory(home, clone, REPO); mkCreds(home);
+    const live = path.join(home, '.claude', 'CLAUDE.md');
+    fs.appendFileSync(live, '\n漂移标记\n');
+    const drifted = fs.readFileSync(live, 'utf8');
+    const env = { ...process.env, USERPROFILE: home, HOME: home };
+    const run = (args) => spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs'), ...args], { env, encoding: 'utf8' });
+
+    await t.test('dry-run：exit 1 且文件原样', () => {
+      const r = run(['--dry-run']);
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.equal(fs.readFileSync(live, 'utf8'), drifted, 'dry-run 不许动文件');
+    });
+    await t.test('实跑：exit 0、内容归位、备份在', () => {
+      const r = run([]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const truth = fs.readFileSync(path.join(REPO, 'docs', 'global-CLAUDE.md'), 'utf8');
+      assert.equal(fs.readFileSync(live, 'utf8'), truth, '应与真相源一致');
+      const baks = fs.readdirSync(path.dirname(live)).filter(f => f.startsWith('CLAUDE.md.bak-'));
+      assert.ok(baks.length === 1, '备份要在  →  ' + JSON.stringify(baks));
+    });
+    await t.test('幂等：再跑一遍还是 0 且不再多备份', () => {
+      const r = run([]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const baks = fs.readdirSync(path.dirname(live)).filter(f => f.startsWith('CLAUDE.md.bak-'));
+      assert.equal(baks.length, 1, '全绿不该再备份');
+    });
+  });
+
+  it('接线：settings.json SessionStart 只挂 onboard 哨兵（守卫已归零不许回来）', () => {
+    const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
+    const cmds = (settings.hooks?.SessionStart || []).flatMap(g => (g.hooks || []).map(h => h.command));
+    assert.ok(cmds.length === 1 && cmds[0].includes('onboard-session-hook.mjs'), JSON.stringify(cmds));
+    assert.ok(!cmds.some(c => c.includes('guard-session-hook')), '守卫不许借尸还魂');
+  });
+});

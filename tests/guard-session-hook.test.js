@@ -222,11 +222,12 @@ describe('guard-session-hook（SessionStart 面）', () => {
     });
   });
 
-  // 2026-08-31 停派工归零：守卫拉起随本机编排一起停，挂点摘除；恢复 = revert 那个 commit。
-  it('停派工态：settings.json 不挂 SessionStart（守卫拉起已摘除），脚本死缓仍在', () => {
-    const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
-    assert.ok(!settings.hooks?.SessionStart,
-      'SessionStart 应已摘除  →  ' + JSON.stringify(settings.hooks));
-    assert.ok(fs.existsSync(HOOK), '脚本死缓仍在  →  ' + HOOK);
+  // 2026-08-31 停派工归零：守卫拉起已摘；SessionStart 现在只许挂 onboard 哨兵
+  // （换机接线自检，绿=零输出，见 tests/onboard.test.js 的接线用例）。守卫脚本死缓仍在。
+  it("停派工态：SessionStart 无守卫（onboard 哨兵除外），守卫脚本死缓仍在", () => {
+    const settings = JSON.parse(fs.readFileSync(path.join(REPO, ".claude", "settings.json"), "utf8"));
+    const cmds = (settings.hooks?.SessionStart || []).flatMap(g => (g.hooks || []).map(h => h.command));
+    assert.ok(!cmds.some(c => c.includes("guard-session-hook")), "守卫不许回来  →  " + JSON.stringify(cmds));
+    assert.ok(fs.existsSync(HOOK), "脚本死缓仍在  →  " + HOOK);
   });
 });
