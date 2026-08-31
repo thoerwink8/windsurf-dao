@@ -634,6 +634,31 @@ node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4
 
 微通道（#682）：几行改动走 `node scripts/quick-fix.mjs --issue <N> --model <主会话模型> [--yes]`——一条命令原子完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步审官，20 秒内落地；任一步失败整体回滚。`--model` 必须显式声明（#679 同厂闸），审官默认读 issue 的 `reviewer/*` label。异步审官日志在 `~/.dao/quickfix/quickfix-<issue>.log`。无新装依赖（复用 gh / orca / 三身份凭据）。
 
+### 分支卫生：一条命令，不设规矩
+
+**先知道哪些是自动的，别重复造**：GitHub 的 `delete_branch_on_merge` 已开，**PR 合并后远端分支自动删**（2026-08-31 抽查最近 6 个 merged PR，分支全没了）。它**只认 merge**——PR 被 close、或压根没开过 PR 的分支不触发；本地分支引用 git 也从不自动删。所以残留只有这两种，量很小（790+ PR 沉了 27 条，3.4%），不值得为它立规矩或加检查（2026-08-31 拍板：不立制度，只留命令）。
+
+想起来就跑，任何时候都安全：
+
+```bash
+git fetch --prune                                                   # 清掉指向已删远端的本地引用
+git branch --merged master --format='%(refname:short)' \
+  | grep -v '^master$' | xargs -r git branch -d                     # 删已合并的本地分支
+```
+
+`-d`（不是 `-D`）是安全网：未合并的、别的 worktree 正签出的，它会拒绝而不是照删。
+
+远端残留只**列出来给人看**，不自动删——删掉后那些 PR 页的 diff 会失效：
+
+```bash
+gh pr list --state open --json headRefName --jq '.[].headRefName' > /tmp/open.txt
+git ls-remote --heads origin | sed 's|.*refs/heads/||' \
+  | grep -vxF -f /tmp/open.txt | grep -v '^master$'                 # 无开放 PR 的远端分支
+```
+
+删本地前先看一眼有没有**只在本地**的活（`git branch -vv` 里没有上游、或 `未推 > 0`）——那种删了就真没了，`-d` 拦不住已合并但未推的情况。
+
+
 ## 自检
 
 做完跑一遍：
