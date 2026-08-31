@@ -23,6 +23,14 @@ describe('land 决策层', () => {
     assert.equal(decideShip({ ...base, branch: 'master', hasOrigin: false }).action, 'local-only');
   });
 
+  it('landNoticeLine：只在默认分支确有未推提交时出一行，其余零输出', async () => {
+    const { landNoticeLine } = await CORE;
+    assert.match(landNoticeLine({ branch: 'master', defaultBranch: 'master', ahead: 2 }), /领先远端 2/);
+    assert.equal(landNoticeLine({ branch: 'master', defaultBranch: 'master', ahead: 0 }), '');
+    assert.equal(landNoticeLine({ branch: 'feat', defaultBranch: 'master', ahead: 3 }), '', '派生分支不提醒（进主分支另有路）');
+    assert.equal(landNoticeLine({ branch: 'master', defaultBranch: 'master', ahead: NaN }), '', '探不出=沉默不是报警');
+  });
+
   it('decideBranchDelete：只删已合并；默认/当前/被树占用/未合并全拦', async () => {
     const { decideBranchDelete } = await CORE;
     const del = (o) => decideBranchDelete({ merged: true, isDefault: false, isCurrent: false, checkedOutAt: '', ...o }).del;

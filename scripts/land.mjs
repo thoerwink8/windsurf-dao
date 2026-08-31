@@ -148,7 +148,7 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
 }
 
 const staleRemote = git(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)']).out
-  .split(/\r?\n/).filter(b => b && b !== `origin/${defaultBranch}` && !b.endsWith('/HEAD'));
+  .split(/\r?\n/).filter(b => b && b.includes('/') && b !== `origin/${defaultBranch}` && !b.endsWith('/HEAD')); // 无 / 的是 origin/HEAD 缩写出的 origin，不是分支
 if (staleRemote.length) say(`[收工] 远端已合并未删的分支（只列不删）：${staleRemote.join(' ')}`);
 
 say(unfinished ? '[收工] 没收完，见上面的原因' : '[收工] 净');

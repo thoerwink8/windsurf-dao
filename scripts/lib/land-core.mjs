@@ -7,6 +7,13 @@
 //      worktree 还要求树干净 + 非主树 + 非当前树 + 不挂默认分支 + orca 没在管。
 //   3. 本地与远端发散 → 停手报告，不自动 rebase/merge（auto-merge-races 教训：追加会跟合并赛跑）。
 
+/** 哨兵那一行（收工提醒，非守卫）：只在默认分支确有未推提交时给一行；其余零输出。 */
+export function landNoticeLine({ branch, defaultBranch, ahead }) {
+  if (!branch || branch !== defaultBranch) return '';
+  if (!Number.isFinite(ahead) || ahead <= 0) return '';
+  return `[收工] ${defaultBranch} 领先远端 ${ahead} 个提交——收工跑 node scripts/land.mjs`;
+}
+
 /** 运不运、怎么运。ahead/behind 相对 origin/<defaultBranch>。 */
 export function decideShip({ branch, defaultBranch, ahead, behind, hasOrigin }) {
   if (!branch || branch === 'HEAD') {
