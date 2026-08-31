@@ -49,6 +49,8 @@
 
 ## 恢复路径（写给搬家那天的人）
 
+> 买到机器那天从 `docs/decisions/SERVER-LANDING-CHECKLIST.md` 开始（带顺序的落地清单，本节是它第 4 步的依据）。
+
 - 临时想在本机派一单：读 dispatch skill（约定都在），手动 `node scripts/dao.mjs ...`——闸还在，照拦旁路。
 - 全面恢复本机编排：`git revert` 本 commit。
 - 服务器落地：不要 revert——直接按 NEW-MACHINE §9d 起服务器 runtime，守卫用 systemd/automations 原生件，
