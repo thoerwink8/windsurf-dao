@@ -229,20 +229,26 @@ function parseTableRows(text) {
 /** 目录解析：只读表格，不扫仓库。 */
 export function parseIndex(text) {
   const keys = new Set();
+  // E 类（他仓真相源）：本仓不写它的装法，仓里正常扫不到这条路径。它照样进 keys
+  //（仓里万一提到不算漏登记），但不参与 stale 反查——否则「登记了必须仓里出现」
+  // 会把 E 类的存在意义直接判红。
+  const softKeys = new Set();
   const problems = [];
-  if (text == null) return { missing: true, keys, problems };
+  if (text == null) return { missing: true, keys, softKeys, problems };
   for (const cells of parseTableRows(text)) {
     const klass = cells[0] || '';
+    const isSoft = klass.replace(/s/g, '').split('/').includes('E');
     const raw = (cells[1] || '').replace(/^`|`$/g, '').trim();
     if (!raw) continue;
-    if (!/^[A-D](?:\/[A-D])*$/.test(klass.replace(/\s/g, ''))) {
+    if (!/^[A-E](?:\/[A-E])*$/.test(klass.replace(/\s/g, ''))) {
       problems.push(`INDEX 类不合法: ${klass} (${raw})`);
     }
     const key = normalizeKey(raw);
     if (!key || !isCatalogKey(key)) continue;
     keys.add(key);
+    if (isSoft) softKeys.add(key);
   }
-  return { keys, problems };
+  return { keys, softKeys, problems };
 }
 
 export function parseIgnore(text) {
@@ -267,7 +273,7 @@ export function parseIgnore(text) {
   return { keys, problems };
 }
 
-export function inspectMachinePaths({ found, indexKeys, ignoreKeys, catalogProblems } = {}) {
+export function inspectMachinePaths({ found, indexKeys, ignoreKeys, softKeys, catalogProblems } = {}) {
   const problems = [...(catalogProblems || [])];
   const foundSet = found instanceof Set ? found : new Set(found || []);
   const indexSet = indexKeys instanceof Set ? indexKeys : new Set(indexKeys || []);
@@ -279,7 +285,8 @@ export function inspectMachinePaths({ found, indexKeys, ignoreKeys, catalogProbl
   }
 
   const leaks = [...foundSet].filter(k => !declared.has(k)).sort();
-  const stale = [...declared].filter(k => !foundSet.has(k)).sort();
+  const softSet = softKeys instanceof Set ? softKeys : new Set(softKeys || []);
+  const stale = [...declared].filter(k => !foundSet.has(k) && !softSet.has(k)).sort();
   if (leaks.length) problems.push(`仓里有、目录没有: ${leaks.join(' ')}`);
   if (stale.length) problems.push(`目录有、仓里没有: ${stale.join(' ')}`);
 
@@ -392,6 +399,7 @@ export function checkMachinePaths({ root, files, tracked } = {}) {
     found: scan.keys,
     indexKeys: index.keys,
     ignoreKeys: ignore.keys,
+    softKeys: index.softKeys,
     catalogProblems,
   });
 

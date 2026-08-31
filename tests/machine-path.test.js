@@ -44,6 +44,45 @@ describe('machine-path', () => {
     });
   });
 
+  // E 类（他仓真相源）：登记「这个落点归哪个仓」，本仓不写装法，所以仓里扫不到它。
+  // 它必须免掉 stale 反查，但**不能因此变成万能豁免**——下面四小项分别验这两面。
+  it('E 类：免 stale 反查，但不给非法类和漏登记开口子', async (t) => {
+    const S = await LIB_LOAD;
+    const NL = String.fromCharCode(10);
+    const head = ['| 类 | 路径 | 看 |', '|---|---|---|', ''].join(NL);
+    const cat = S.parseIndex(head + ['| E | ~/.mirasim | 归 ai-gateway-stack |', '| B | ~/.local/bin | shim |', ''].join(NL));
+
+    await t.test('E 行进 keys 也进 softKeys，B 行不进 softKeys', () => {
+      assert.ok(cat.problems.length === 0, 'E 类应合法  →  ' + JSON.stringify(cat.problems));
+      assert.ok(cat.keys.has('~/.mirasim') && cat.softKeys.has('~/.mirasim'), 'E 行两边都要有  →  ' + [...cat.softKeys].join(','));
+      assert.ok(!cat.softKeys.has('~/.local/bin'), 'B 行不该进 softKeys  →  ' + [...cat.softKeys].join(','));
+    });
+
+    await t.test('绿：E 路径仓里没出现，不判 stale', () => {
+      const r = S.inspectMachinePaths({
+        found: new Set(['~/.local/bin']),
+        indexKeys: cat.keys, softKeys: cat.softKeys, ignoreKeys: new Set(), catalogProblems: [],
+      });
+      assert.ok(r.kind !== 'red', '仓里没出现的 E 路径不该判红  →  ' + JSON.stringify(r.problems || []));
+    });
+
+    // 违规样本①：E 类不得把「仓里有、目录没有」也一起豁免掉
+    await t.test('红：仓里冒出没登记的路径，照样 leak', () => {
+      const r = S.inspectMachinePaths({
+        found: new Set(['~/.local/bin', '~/.brand-new-cli']),
+        indexKeys: cat.keys, softKeys: cat.softKeys, ignoreKeys: new Set(), catalogProblems: [],
+      });
+      assert.equal(r.kind, 'red', '漏登记必须红  →  ' + JSON.stringify(r));
+      assert.ok((r.leaks || []).includes('~/.brand-new-cli'), 'leak 要点名  →  ' + JSON.stringify(r.leaks));
+    });
+
+    // 违规样本②：放宽到 E 之后，越界字母仍必须判非法
+    await t.test('红：类字母越界（F）仍判非法', () => {
+      const bad = S.parseIndex(head + ['| F | ~/.whatever | 乱写 |', ''].join(NL));
+      assert.ok(bad.problems.some(x => /类不合法/.test(x)), 'F 必须红  →  ' + JSON.stringify(bad.problems));
+    });
+  });
+
   it('#642 ignore 缺 why 必须红', async () => {
     const S = await LIB_LOAD;
     const bad = S.parseIgnore('| 路径 | why |\n|---|---|\n| ~/.secret |  |\n');

@@ -12,6 +12,7 @@
 | B | 本机模板：从 `host/machine/` 拷出去，再改本机路径 |
 | C | 密钥 / 凭据：不进 git，换机手动带 |
 | D | 禁拷：不要拷、不要进 git、不要整文件覆写 |
+| E | 他仓真相源：本仓不写装法，只登记「这个落点归哪个仓」。**只写仓名不写文件路径**——文件会挪，仓名不会，跨仓的指针本仓也配不了报警 |
 
 ## 路径
 
@@ -36,6 +37,7 @@
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；本机新增事件要带走就手动拷（同名即同一事件，合并拷安全） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | B | ~/.local/bin | shim。模板在 `host/machine/shims/` |
+| E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
 | B | ~/AppData/Local/cursor-agent | cursor 真实二进制。shim 包装它，路径因机而异 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
@@ -43,6 +45,7 @@
 | B | ~/.orca/agent-hooks | Orca 状态 hook。模板 `host/machine/hooks/` |
 | D | ~/AppData/Roaming/orca | Orca Desktop 本机画像。派工启动听仓内 launch；这份文件只拿来比较，禁拷、禁改、不进 git |
 | D | ~/AppData/Roaming/Devin | Devin 桌面端 user-data-dir。派工走 CLI 非交互形态，桌面端不参与 |
+| E | ~/AppData/Roaming/mihomo-party | 归 `ai-gateway-stack`。Clash Party 覆写里有按 IP 写死的网关直连规则，换 VPS 要跟着改；覆写只在启动时读盘，改完必须重启 |
 | A | ~/.cursor/skills | NEW-MACHINE §11.2。链到 `host/skills`（Cursor Desktop；与 `~/.claude/skills` 对称） |
 | D | ~/.cursor/skills-cursor | Cursor 系统内置 skills，禁手写；装机只链 `~/.cursor/skills` |
 | B | ~/.cursor/hooks.json | 用户级 hook 登记。必须 `conhost --headless`，禁止 EncodedCommand |

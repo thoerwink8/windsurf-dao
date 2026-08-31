@@ -96,10 +96,11 @@ git log -1 --format="%an <%ae>"    # 应回 dao-worker[bot] <4616929+dao-worker[
 
 ## 5. 模型配置
 
-pi / Codex 各自的模型配置（API key、模型列表、中转站等）跟本仓库无关，照各自官方文档在本地配置：
+模型配置（API key、模型列表、网关地址、**代理分流**）不在本仓，真相源是 `ai-gateway-stack` 仓——
+客户端怎么接、换 VPS 要改哪几处，都是它自带的手册。本页不复制那边的步骤，也不记会过期的网关地址。
 
-- pi CLI：见其官方文档
-- Codex CLI：见其官方文档
+- 各 CLI 的**工具本身**怎么装，见下面 §6 / §7；**连哪个模型、走哪个网关**归 `ai-gateway-stack`。
+- 机器上开了梯子的话，网关必须配直连分流，否则流量会绕代理节点出海再绕回来（实测慢 35 倍，且不报错）。
 
 Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50%，低于 100k 不收），且 cc-switch DB `common_config_claude` 同落，防下发覆盖；effortLevel 基准 high（以 live 为准，2026-08-14 拍板，issue #443）。
 
