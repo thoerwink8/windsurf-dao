@@ -677,6 +677,39 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 `Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
 真判据是 `claude mcp list` 的握手耗时。
 
+## 13.1 「模型好慢」先分段，别先查网络
+
+2026-09-01 两台机同一天各栽一次：用户报「模型好慢」，两边都先去查网关、查 Clash、查节点，
+查了几个小时才发现**请求根本还没发出去**——慢在本地 harness 冷启动。网关侧计时看不到这段，
+Mirasim 的 turn timing 也只给一个笼统的 `prep`。没有分段数字就只能猜，方向一错就是半天。
+
+```bash
+node scripts/agent-latency.mjs --cwd <项目目录> -n 4 --ab
+```
+
+四段：`init`（会话就绪＝CLI＋MCP 握手＋skills/CLAUDE.md）→ `msgStart`（上游开始回包）
+→ `firstTok`（真首字）→ `done`。`init` 大 = 本机的事（回 §13 钉 MCP）；`firstTok - msgStart`
+大 = 上游思考（`effortLevel` 买的），本机压不动。
+
+**`msgStart - init` 两边都占**，别一看它大就判给网络：它 = 链路 RTT + 上游处理提示词，
+而提示词多大是本机决定的。本机实测挂 4 个 MCP 时 92 个工具、上下文 70k tok，
+关掉全部 MCP 掉到 33 个工具、52k tok——**首字快 1.6s**，其中只有 0.6s 是 init，
+另外 1s 就落在这一段。多出来的工具定义即便全是 `cache_read`，上游读它照样要时间。
+所以浏览器类 MCP 用 `-s project`（§13 第二条）省的不只是启动，是每一轮的首字。
+
+四条测量纪律（都是踩出来的）：
+
+- **stdin 必须关掉**。`claude -p` 没有 TTY 时会等管道输入干等 3 秒——不关就凭空多出 3s，
+  会被误判成「本地慢」。脚本里 `stdio[0]='ignore'`；命令行手测要 `< /dev/null`。
+- **n 至少 5**。上游抖动 ±1.5s：同一个 A/B，n=3 测出「MCP 只花 60ms」，n=5 测出 1614ms——
+  小样本会把真实差异整个淹掉，然后你据此做出错误的「不用优化」判断。
+- **报中位并把每次原值打出来**，均值会把离群点糊进结论。
+- **`duration_api_ms` 不是首字**，那是整段 API。真首字要 `--output-format stream-json
+  --include-partial-messages`，取第一个 `content_block_delta` 的时刻。
+
+本机基线（2026-09-01，opus + effort high，n=5，仅供对照——各机链路不同，别照搬）：
+首字 6.1s = 本地就绪 1.47s + 上游首包 2.88s + 思考 1.76s；本地占 24%。
+
 ## 统一命令库
 
 起终端和编排不要手拼 orca 命令（手打 `codex -a never` 会把 gh/node 拦死、写不存在的 `--submit` 都在这里栽过）。走：
