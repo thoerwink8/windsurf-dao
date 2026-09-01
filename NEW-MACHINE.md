@@ -628,6 +628,35 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\da
 
 状态文件是 `~/.claude/state.json`，跨会话跨工作区唯一，由 `dao-mode.mjs` 独家读写，不要手改。
 
+## 13. MCP 服务器：别用 `npx ...@latest` 装
+
+MCP 服务器的命令行**每开一个会话就执行一次**。写成 `npx -y 某包@latest` 意味着每次都去
+npm registry 现场解析 + 解包：2026-09-01 本机实测三个这样的服务器，冷启动多花约 19 秒
+（playwright 6.6s、chrome-devtools 7.0s、context7 5.4s）。用户看到的症状是「模型好慢」，
+而实际上请求根本还没发出去——网关侧计时里看不到这段，很难往这儿想。
+
+**装法**：先装到本地，再让配置指向本地命令。
+
+```powershell
+npm install -g @playwright/mcp @upstash/context7-mcp chrome-devtools-mcp
+$bin = npm prefix -g            # 例：C:\Users\<you>\AppData\Local\Programs\nodejs
+claude mcp remove context7 -s user
+claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
+```
+
+三条要点：
+
+- **改配置走 `claude mcp add/remove`，别手改 `~/.claude.json`** —— 那是宿主自有文件，
+  手改会被运行实例的内存态覆写（同第 8 条那类坑）。
+- **只在全局放到处都用的**（本机是 codegraph / fetch / context7）；浏览器类
+  （playwright、chrome-devtools）用 `-s project` 放进真正用它的项目，其余项目的会话不必付这份钱。
+- 代价：版本钉住不自动追新，升级手动 `npm update -g`。
+
+**验**：`node scripts/onboard.mjs --dry-run` 的第 ④ 项会扫 `~/.claude.json`，发现 `npx`/`uvx`
+现场解包型就报 `mcp-slow-boot`（只报不修——那是用户自己的文件）。测单个 server 的启动耗时别用
+`Measure-Command { ... --help }`：flag 不识别时 server 会起来等 stdin，量出来是假大数；
+真判据是 `claude mcp list` 的握手耗时。
+
 ## 统一命令库
 
 起终端和编排不要手拼 orca 命令（手打 `codex -a never` 会把 gh/node 拦死、写不存在的 `--submit` 都在这里栽过）。走：

@@ -10,7 +10,7 @@
 //   memory-unlinked/broken  → 只在能找到合法 clone（origin 对得上）且落点无内容时才接；
 //                             落点是有内容的普通目录 = 拒绝并指路人工并回
 //                             （memory-relink-needs-content-diff 教训：方向判反=静默丢记忆）
-//   skills-not-link / skills-elsewhere / creds-missing → 永远只报不修
+//   skills-not-link / skills-elsewhere / creds-missing / mcp-slow-boot → 永远只报不修
 //
 // exit 0 = 修完复查全绿；exit 1 = 还有剩（含 dry-run 查出问题）。
 

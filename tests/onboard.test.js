@@ -111,6 +111,63 @@ describe('onboard', () => {
     });
   });
 
+  describe('④ MCP 冷启动开销', () => {
+    const writeMcp = (home, servers) =>
+      fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: servers }));
+
+    it('没有 ~/.claude.json 不算问题（没配过 MCP 的机器）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-none');
+      assert.deepEqual(S.checkMcpBootCost({ home }), {});
+    });
+
+    it('npx @latest 型被拦住，报 mcp-slow-boot 且点名是哪几个', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-slow');
+      writeMcp(home, {
+        playwright: { command: 'cmd', args: ['/c', 'npx', '-y', '@playwright/mcp@latest'] },
+        context7: { command: 'npx', args: ['-y', '@upstash/context7-mcp@latest'] },
+        fast: { command: 'cmd', args: ['/c', 'C:\\bin\\context7-mcp.cmd'] },
+      });
+      const r = S.checkMcpBootCost({ home });
+      assert.equal(r.problem?.id, 'mcp-slow-boot', JSON.stringify(r));
+      assert.match(r.problem.msg, /playwright/);
+      assert.match(r.problem.msg, /context7/);
+      assert.ok(!/fast/.test(r.problem.msg), '钉到本地的不该被算慢  →  ' + r.problem.msg);
+    });
+
+    it('全部钉到本地命令 = 绿（证明绿是查过的绿）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-pinned');
+      writeMcp(home, {
+        context7: { command: 'cmd', args: ['/c', 'C:\\Users\\x\\nodejs\\context7-mcp.cmd'] },
+        codegraph: { command: 'cmd', args: ['/c', 'C:/tools/node.exe', 'C:/tools/codegraph.js', 'serve'] },
+      });
+      assert.deepEqual(S.checkMcpBootCost({ home }), {});
+    });
+
+    it('读得到但解析不了 → unscanned，不是「查过没事」', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-broken');
+      fs.writeFileSync(path.join(home, '.claude.json'), '{ 这不是 JSON');
+      const r = S.checkMcpBootCost({ home });
+      assert.ok(r.unscanned, JSON.stringify(r));
+      assert.ok(!r.problem, '没查成不许当成问题报  →  ' + JSON.stringify(r));
+    });
+
+    it('onboard.mjs 只报不修：不碰用户的 ~/.claude.json', async () => {
+      const { home, clone } = mkHome('mcp-e2e');
+      await linkMemory(home, clone, REPO); mkCreds(home);
+      const cfg = path.join(home, '.claude.json');
+      writeMcp(home, { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] } });
+      const before = fs.readFileSync(cfg, 'utf8');
+      const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')],
+        { env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: 'utf8' });
+      assert.match(r.stdout, /只报不修.*mcp-slow-boot/, r.stdout + r.stderr);
+      assert.equal(fs.readFileSync(cfg, 'utf8'), before, 'onboard 不许改用户的 MCP 配置');
+    });
+  });
+
   it('没查成与绿不同形：真相源不在 → unscanned，哨兵行说「没查成」', async () => {
     const S = await LIB_LOAD;
     const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'onboard-noroot-'));

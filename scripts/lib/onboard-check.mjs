@@ -8,6 +8,10 @@
 //      也算绿（多 clone 常态，worktree 会话不许每轮报噪音）。
 //   ③ 本项目 memory 链接（复用 dao-memory-link-check 的判据，不重写）。linked worktree
 //      （.git 是文件）没有自己的 memory 目录是常态，不报；主 clone 上缺才是「换机没接」。
+//   ④ ~/.claude.json 里 `npx ...@latest` 型 MCP 服务器——每开一个会话都现场查 registry，
+//      2026-09-01 实测三个这样的服务器让冷启动多花约 19 秒（钉到本地后全部握手 3.5 秒）。
+//      只报不修：那是用户自己的文件，改法走 `claude mcp add/remove`（宿主 CLI），
+//      手改会被运行实例的内存态覆写（memory evolution-live-settings-volatile）。
 // 凭据（~/.dao/apps 等 C 类）只报缺失，永远不碰——修复动作不进任何自动化。
 //
 // 与 2026-08-31 守卫归零的关系（docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
@@ -82,6 +86,7 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
 
   take(checkGlobalClaude({ root, home }));
   take(checkSkillsLink({ root, home }));
+  take(checkMcpBootCost({ home }));
 
   const mem = checkMemoryLink({ root, home });
   if (mem.fail) problems.push({ id: 'memory-broken', msg: `memory 断链：${mem.fail[0]}` });
@@ -98,6 +103,32 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
     problems.push({ id: 'creds-missing', msg: '~/.dao/apps 凭据不在（手动带，git 不带、onboard 不碰）' });
   }
   return { problems, unscanned };
+}
+
+/** ④ 慢启动的 MCP 服务器：命令是 npx/uvx 且带 @latest（或裸包名）——每次开会话现场解包。
+ *  配置文件不在不算问题（没装过 Claude Code 的机器也跑这检查）；读得到但解析不了才是没查成。
+ *  只报不修（id: mcp-slow-boot），修法在 msg 里指路。 */
+export function checkMcpBootCost({ home }) {
+  const path = join(home, '.claude.json');
+  if (!existsSync(path)) return {};           // 没这文件 = 没配过 MCP，不是问题
+  let cfg;
+  try { cfg = JSON.parse(readFileSync(path, 'utf8')); }
+  catch (e) { return { unscanned: `~/.claude.json 解析不了：${e.message.slice(0, 60)}` }; }
+  const servers = cfg.mcpServers;
+  if (!servers || typeof servers !== 'object') return {};  // 一个都没配，没得慢
+  const slow = [];
+  for (const [name, v] of Object.entries(servers)) {
+    const cmdline = [v?.command, ...(Array.isArray(v?.args) ? v.args : [])].filter(Boolean).join(' ');
+    // npx/uvx 现场解包才慢；已经指到本地路径（.cmd/.js/绝对路径）的不算
+    if (/\b(npx|uvx)\b/.test(cmdline) && !/[\\/](?:[\w.@-]+)\.(?:cmd|exe|js|mjs)\b/.test(cmdline)) slow.push(name);
+  }
+  if (!slow.length) return {};
+  return { problem: {
+    id: 'mcp-slow-boot',
+    // 实测幅度：npx @latest 每个 5~7 秒，uvx 约 2 秒（2026-09-01 本机）
+    msg: `${slow.length} 个 MCP 每次开会话现场解包（${slow.join(' ')}）——冷启动每个多花数秒；` +
+         '装到本地后用 claude mcp remove/add 改指本地命令',
+  } };
 }
 
 /** 哨兵那一行。绿 = 空串（零输出）；有问题 = 一行指路；没查成 = 一行不同形。 */

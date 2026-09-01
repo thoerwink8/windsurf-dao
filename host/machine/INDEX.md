@@ -27,6 +27,7 @@
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
 | A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |
+| D | ~/.claude.json | MCP 服务器清单等。NEW-MACHINE §13（装 MCP 别用 `npx @latest`）。改走 `claude mcp` 子命令，手改会被内存态覆写 |
 | D | ~/.codex/rules | 本机批准过的 prefix_rule。不进 git |
 | C | ~/.commandcode/auth.json | NEW-MACHINE §7b。登录态，只能用户在真 TTY 登 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
