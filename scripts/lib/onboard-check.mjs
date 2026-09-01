@@ -12,6 +12,8 @@
 //      2026-09-01 实测三个这样的服务器让冷启动多花约 19 秒（钉到本地后全部握手 3.5 秒）。
 //      只报不修：那是用户自己的文件，改法走 `claude mcp add/remove`（宿主 CLI），
 //      手改会被运行实例的内存态覆写（memory evolution-live-settings-volatile）。
+//      项目级 mcpServers 一并看（claude mcp add 默认落项目域）；uvx 型再看本机有没有
+//      uv 托管 Python——没有就不是慢而是握手必失败，两种话术要分开。
 // 凭据（~/.dao/apps 等 C 类）只报缺失，永远不碰——修复动作不进任何自动化。
 //
 // 与 2026-08-31 守卫归零的关系（docs/decisions/2026-08-31-local-guards-retire-with-server.md）：
@@ -23,7 +25,7 @@
 //   problems  —— 查成了且有问题（每条带 id，onboard.mjs 按 id 决定修法）
 //   unscanned —— 没查成（读不了/真相源不在），与「查过没事」不同形
 
-import { lstatSync, realpathSync, readFileSync, existsSync } from 'node:fs';
+import { lstatSync, realpathSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkMemoryLink, defaultHome } from './dao-memory-link-check.mjs';
@@ -33,6 +35,10 @@ export function repoRootOfThisFile() {
 }
 
 const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
+
+/** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），
+ *  别各写各的：一边算修不了、另一边还让它把退出码染红，就成了永远红的报警。 */
+export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot']);
 
 /** ① 全局约定漂移。真相源读不到 = 没查成（不是绿）。 */
 export function checkGlobalClaude({ root, home }) {
@@ -114,20 +120,35 @@ export function checkMcpBootCost({ home }) {
   let cfg;
   try { cfg = JSON.parse(readFileSync(path, 'utf8')); }
   catch (e) { return { unscanned: `~/.claude.json 解析不了：${e.message.slice(0, 60)}` }; }
-  const servers = cfg.mcpServers;
-  if (!servers || typeof servers !== 'object') return {};  // 一个都没配，没得慢
-  const slow = [];
-  for (const [name, v] of Object.entries(servers)) {
+  // user 级 + 每个 project 级一起看：项目级条目一样在开会话时解包，
+  // 而且 `claude mcp add` 默认就落 local(项目)域——漏掉它等于漏掉最容易配歪的那半。
+  const entries = Object.entries(cfg.mcpServers || {});
+  for (const [proj, pc] of Object.entries(cfg.projects || {}))
+    for (const [name, v] of Object.entries((pc && pc.mcpServers) || {}))
+      entries.push([name + '@' + proj.split(/[\\/]/).filter(Boolean).pop(), v]);
+  if (!entries.length) return {};                          // 一个都没配，没得慢
+  const slow = [], uvx = [];
+  for (const [name, v] of entries) {
     const cmdline = [v?.command, ...(Array.isArray(v?.args) ? v.args : [])].filter(Boolean).join(' ');
     // npx/uvx 现场解包才慢；已经指到本地路径（.cmd/.js/绝对路径）的不算
-    if (/\b(npx|uvx)\b/.test(cmdline) && !/[\\/](?:[\w.@-]+)\.(?:cmd|exe|js|mjs)\b/.test(cmdline)) slow.push(name);
+    if (!/\b(npx|uvx)\b/.test(cmdline) || /[\\/](?:[\w.@-]+)\.(?:cmd|exe|js|mjs)\b/.test(cmdline)) continue;
+    slow.push(name);
+    if (/\buvx\b/.test(cmdline)) uvx.push(name);
   }
   if (!slow.length) return {};
+  // uvx 还要看本机有没有 uv 托管的 Python：没有的话它不是「慢几秒」而是握手直接
+  // CONNECTION_CLOSED，冷启动一路卡到超时（2026-09-01 另一台机实咬，被当成网络问题查了半天）。
+  // 只 stat 目录，不起进程、不打网络。
+  const noPy = uvx.length && ![join(home, 'AppData', 'Roaming', 'uv', 'python'),
+                               join(home, '.local', 'share', 'uv', 'python')]
+    .some(d => { try { return readdirSync(d).length > 0; } catch { return false; } });
   return { problem: {
     id: 'mcp-slow-boot',
     // 实测幅度：npx @latest 每个 5~7 秒，uvx 约 2 秒（2026-09-01 本机）
     msg: `${slow.length} 个 MCP 每次开会话现场解包（${slow.join(' ')}）——冷启动每个多花数秒；` +
-         '装到本地后用 claude mcp remove/add 改指本地命令',
+         '装到本地后用 claude mcp remove/add 改指本地命令' +
+         (noPy ? `。另：${uvx.join(' ')} 走 uvx 但本机没有 uv 托管 Python——`
+               + '这几个不是慢，是握手必 CONNECTION_CLOSED，先 `uv python install 3.12`' : ''),
   } };
 }
 
@@ -135,6 +156,13 @@ export function checkMcpBootCost({ home }) {
 export function onboardNoticeLine({ problems, unscanned } = { problems: [], unscanned: [] }) {
   if (unscanned && unscanned.length) return `[链] 换机自检没查成：${unscanned[0]}（≠ 查过没事）`;
   if (!problems || !problems.length) return '';
-  const ids = problems.map(p => p.id).join(' ');
-  return `[链] 换机接线 ${problems.length} 处未就绪（${ids}）——先问用户，同意后跑 node scripts/onboard.mjs（--dry-run 只看不动）`;
+  // onboard.mjs 修不了的那几类（要人在真 TTY，或只能走宿主自家 CLI）单独出一行：
+  // 指向 onboard.mjs 会让人白跑一趟，报警指错路比不报还糟。
+  const fixable = problems.filter(p => !ONBOARD_REPORT_ONLY.has(p.id));
+  if (!fixable.length) {
+    return `[链] ${problems.map(p => p.id).join(' ')}——onboard 修不了，`
+         + '修法见 node scripts/onboard.mjs --dry-run 打印的那行';
+  }
+  const ids = fixable.map(p => p.id).join(' ');
+  return `[链] 换机接线 ${fixable.length} 处未就绪（${ids}）——先问用户，同意后跑 node scripts/onboard.mjs（--dry-run 只看不动）`;
 }

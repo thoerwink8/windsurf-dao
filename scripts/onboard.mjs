@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { checkOnboard, repoRootOfThisFile } from './lib/onboard-check.mjs';
+import { checkOnboard, repoRootOfThisFile, ONBOARD_REPORT_ONLY } from './lib/onboard-check.mjs';
 import { checkMemoryLink, defaultHome, encodeProjectDir, originUrlFromConfig, repoSlugFromUrl, MEMORY_REPO_SLUG } from './lib/dao-memory-link-check.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -99,13 +99,13 @@ for (const p of before.problems) {
 if (DRY) { say('[链] dry-run 结束，什么都没动'); process.exit(before.problems.length ? 1 : 0); }
 
 const after = checkOnboard({ root, home });
-const rest = after.problems.filter(p => p.id !== 'creds-missing');
-const creds = after.problems.find(p => p.id === 'creds-missing');
-if (creds) say(`[链] 提醒：${creds.msg}`);
+const rest = after.problems.filter(p => !ONBOARD_REPORT_ONLY.has(p.id));
+
+for (const p of after.problems.filter(p => ONBOARD_REPORT_ONLY.has(p.id))) say(`[链] 提醒：${p.msg}`);
 if (after.unscanned.length || rest.length) {
   for (const u of after.unscanned) say(`[链] 复查没查成：${u}`);
   for (const p of rest) say(`[链] 复查仍在：${p.id}: ${p.msg}`);
   process.exit(1);
 }
-say('[链] 复查全绿（凭据除外，见上）');
+say('[链] 复查全绿（只报不修项除外，见上）');
 process.exit(0);

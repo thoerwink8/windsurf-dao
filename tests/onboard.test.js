@@ -166,6 +166,49 @@ describe('onboard', () => {
       assert.match(r.stdout, /只报不修.*mcp-slow-boot/, r.stdout + r.stderr);
       assert.equal(fs.readFileSync(cfg, 'utf8'), before, 'onboard 不许改用户的 MCP 配置');
     });
+
+    it('项目级 mcpServers 也算（claude mcp add 默认就落这儿）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-proj');
+      fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+        mcpServers: {},
+        projects: { 'C:/some/proj': { mcpServers: { foo: { command: 'npx', args: ['-y', 'foo@latest'] } } } },
+      }));
+      const r = S.checkMcpBootCost({ home });
+      assert.equal(r.problem?.id, 'mcp-slow-boot', JSON.stringify(r));
+      assert.match(r.problem.msg, /foo@proj/, '要点名是哪个项目的  →  ' + r.problem.msg);
+    });
+
+    it('uvx 且本机没有 uv 托管 Python → 说清是握手必失败，不是慢', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-uvx-nopy');
+      writeMcp(home, { fetch: { command: 'uvx', args: ['--with', 'mcp<2', 'mcp-server-fetch'] } });
+      const r = S.checkMcpBootCost({ home });
+      assert.match(r.problem.msg, /CONNECTION_CLOSED/, '慢与必失败要分开  →  ' + r.problem.msg);
+    });
+
+    it('uvx 但有 uv 托管 Python → 只说慢，不喊必失败', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('mcp-uvx-py');
+      fs.mkdirSync(path.join(home, 'AppData', 'Roaming', 'uv', 'python', 'cpython-3.12'), { recursive: true });
+      writeMcp(home, { fetch: { command: 'uvx', args: ['mcp-server-fetch'] } });
+      const r = S.checkMcpBootCost({ home });
+      assert.equal(r.problem?.id, 'mcp-slow-boot');
+      assert.ok(!/CONNECTION_CLOSED/.test(r.problem.msg), r.problem.msg);
+    });
+
+    it('只剩只报不修项时：哨兵不指去跑 onboard，onboard 自己也不红', async () => {
+      const S = await LIB_LOAD;
+      const { home, clone } = mkHome('mcp-quiet');
+      await linkMemory(home, clone, REPO); mkCreds(home);
+      writeMcp(home, { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] } });
+      const line = S.onboardNoticeLine(S.checkOnboard({ root: REPO, home }));
+      assert.match(line, /mcp-slow-boot/, line);
+      assert.ok(!/同意后跑/.test(line), '修不了就别把人指过去  →  ' + line);
+      const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')],
+        { env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: 'utf8' });
+      assert.equal(r.status, 0, '只报不修项不该让 onboard 永远红  →  ' + r.stdout + r.stderr);
+    });
   });
 
   it('没查成与绿不同形：真相源不在 → unscanned，哨兵行说「没查成」', async () => {
