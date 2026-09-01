@@ -644,6 +644,21 @@ claude mcp remove context7 -s user
 claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 ```
 
+装出来的 bin 名不等于包名，装完 `ls $bin\*.cmd` 对一眼再写路径
+（`@playwright/mcp` → `playwright-mcp.cmd`，`chrome-devtools-mcp` → 同名）。
+
+两个执行坑（2026-09-01 本机各栽一次）：
+
+- **`claude mcp add` 必须在 PowerShell 里跑，别在 Git Bash**。Git Bash 会把 `/c`
+  当路径转成 `C:/`，命令行照样"添加成功"，装出来的却是坏的。
+- **子进程 flag 以 `--` 开头时 `claude mcp add` 收不了**（`--browserUrl=...` 会被它
+  当成自己的选项报 `unknown option`，`--` 分隔符也挡不住）。改用 `claude mcp add-json`：
+
+  ```powershell
+  $json = '{"type":"stdio","command":"cmd","args":["/c","<bin>\\chrome-devtools-mcp.cmd","--browserUrl=http://127.0.0.1:9222"]}'
+  claude mcp add-json chrome-devtools -s user $json
+  ```
+
 三条要点：
 
 - **改配置走 `claude mcp add/remove`，别手改 `~/.claude.json`** —— 那是宿主自有文件，
@@ -651,6 +666,11 @@ claude mcp add context7 -s user -- cmd /c "$bin\context7-mcp.cmd"
 - **只在全局放到处都用的**（本机是 codegraph / fetch / context7）；浏览器类
   （playwright、chrome-devtools）用 `-s project` 放进真正用它的项目，其余项目的会话不必付这份钱。
 - 代价：版本钉住不自动追新，升级手动 `npm update -g`。
+
+**省多少要看本机 registry 快不快**：2026-09-01 两台机同样钉三个包，一台省 19s
+（registry 每包 5~7s），另一台只省 1.5s（`claude mcp list` 3.08s → 1.54s，registry 每包
+0.4s，四个 server 摊下来一个约 0.4s，剩下的是进程启动+握手，钉不掉）。所以别拿别人的
+数字当预期，钉之前先量一次 `claude mcp list` 的中位数，钉完再量一次。
 
 **验**：`node scripts/onboard.mjs --dry-run` 的第 ④ 项会扫 `~/.claude.json`，发现 `npx`/`uvx`
 现场解包型就报 `mcp-slow-boot`（只报不修——那是用户自己的文件）。测单个 server 的启动耗时别用
