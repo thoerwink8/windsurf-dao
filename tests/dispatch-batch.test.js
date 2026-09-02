@@ -137,6 +137,9 @@ describe('dispatch --batch', () => {
     assert.strictEqual(taskCall[1].spec, plan.workers[0].inject);
     assert.strictEqual(taskCall[1].issue, '600');
     assert.ok(fx.log.some(row => row[0] === 'startWorker' && row[1].issue === '600'));
+    const startCall = fx.log.find(row => row[0] === 'startWorker');
+    assert.ok(startCall[1].book && String(startCall[1].book).includes('batch-book.md'),
+      '#802 startWorker 必须带 inject 任务书  →  ' + JSON.stringify(startCall[1]));
   });
 
   it('N=1 正常路径：1 棵树 + 1 次 start/task/worker-start，不回滚', async () => {

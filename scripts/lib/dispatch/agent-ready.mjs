@@ -168,3 +168,50 @@ export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAge
     reason: 'worktree 上没有 agentIdentity 终端',
   };
 }
+
+/** 校准 / 回退 --command 必须重送任务书。没 book 不许记 resend-ok / fallback-ok。 */
+export function requireBookForRepair({ action, book } = {}) {
+  const act = String(action || '');
+  const needed = act === 'calibrate' || act === 'fallback-command' || act === 'fallback';
+  if (!needed) return { ok: true, needed: false };
+  const text = String(book || '').trim();
+  if (text) return { ok: true, needed: true, book: text };
+  return {
+    ok: false,
+    needed: true,
+    error: '校准/回退需要重送任务书，但没传 book（不许把没送到任务的 agent 当成已派）',
+  };
+}
+
+/**
+ * 校准/回退要按序做的动作。纯函数，不跑 orca。
+ * calibrate → 只重送 book；fallback-command 且屏面是壳 → command、等 TUI、再送 book。
+ * 缺 book 直接 fail，sends 为空，调用方不得记 fallback-ok。
+ */
+export function planRepairSends({ action, book, screen, command } = {}) {
+  const act = String(action || '');
+  if (act === 'calibrate') {
+    const bookGate = requireBookForRepair({ action: 'calibrate', book });
+    if (!bookGate.ok) {
+      return { action: 'fail', kind: 'book-missing', error: bookGate.error, sends: [] };
+    }
+    return { action: 'resend', book: bookGate.book, sends: ['book'] };
+  }
+  if (act === 'fallback-command' || act === 'fallback') {
+    const plan = planAgentScreenFallback({ screen, command });
+    if (plan.action !== 'fallback') {
+      return { action: plan.action, error: plan.error, sends: [], screen: plan.screen };
+    }
+    const bookGate = requireBookForRepair({ action: 'fallback-command', book });
+    if (!bookGate.ok) {
+      return { action: 'fail', kind: 'book-missing', error: bookGate.error, sends: [] };
+    }
+    return {
+      action: 'fallback',
+      command: plan.command,
+      book: bookGate.book,
+      sends: ['command', 'wait-tui', 'book'],
+    };
+  }
+  return { action: act || 'keep', sends: [] };
+}

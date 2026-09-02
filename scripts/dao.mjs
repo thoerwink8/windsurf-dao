@@ -99,10 +99,10 @@ import {
   planLaunchFallback,
   agentStartSpec,
   classifyAgentScreen,
-  planAgentScreenFallback,
   launchAttempt,
   pickAgentTerminal,
   planInjectTarget,
+  planRepairSends,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -585,9 +585,17 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send, attempts: rows };
     }
 
-    if (target.action === 'calibrate' && book) {
+    if (target.action === 'calibrate') {
+      const repair = planRepairSends({ action: 'calibrate', book });
+      if (repair.action === 'fail') {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'agent', kind: repair.kind || 'book-missing',
+          agentId: launched.agentId, error: repair.error,
+        }));
+        return { ok: false, error: repair.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
       const injected = orca(argsTerminalSend({
-        terminal: handle, text: book, enter: true,
+        terminal: handle, text: repair.book, enter: true,
         agent: launched.agentId || launched?.launch?.provider,
       }));
       rows.push(launchAttempt({
@@ -600,23 +608,42 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
       }
       send.kind = 'confirmed';
       send.reason = `已校准到 agentIdentity=${target.agentIdentity} 并重送任务书`;
-    } else if (target.action === 'fallback-command') {
+    } else if (target.action === 'fallback-command' || target.action === 'unscanned') {
       const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
       const screen = pre.ok
         ? classifyAgentScreen(extractTerminalText(pre.json))
         : { kind: 'unread', reason: errText(pre.error) };
-      const plan = planAgentScreenFallback({ screen, command: launched?.launch?.command });
-      if (plan.action === 'fail') {
-        return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      if (target.action === 'unscanned') {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
+          agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
+        }));
       }
-      if (plan.action === 'fallback') {
-        const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
+      const repair = planRepairSends({
+        action: 'fallback-command',
+        book,
+        screen,
+        command: launched?.launch?.command,
+      });
+      if (repair.action === 'fail') {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command',
+          kind: repair.kind || 'repair-fail',
+          agentId: launched.agentId, error: repair.error,
+        }));
+        return { ok: false, error: repair.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      if (repair.action === 'fallback') {
+        const sentCmd = orca(argsTerminalSend({ terminal: handle, text: repair.command, enter: true }));
         if (!sentCmd.ok) {
           rows.push(launchAttempt({
             provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
             agentId: launched.agentId, error: errText(sentCmd.error),
           }));
-          return { ok: false, error: `没有 agent 终端，回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+          const prefix = target.action === 'unscanned'
+            ? 'agentIdentity 没查成且屏面是壳，回退 --command 失败'
+            : '没有 agent 终端，回退 --command 失败';
+          return { ok: false, error: `${prefix}：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
         }
         const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
         const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
@@ -627,61 +654,25 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
           }));
           return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
         }
-        if (book) {
-          const injected = orca(argsTerminalSend({
-            terminal: handle, text: book, enter: true,
-            agent: launched.agentId || launched?.launch?.provider,
+        const injected = orca(argsTerminalSend({
+          terminal: handle, text: repair.book, enter: true,
+          agent: launched.agentId || launched?.launch?.provider,
+        }));
+        if (!injected.ok) {
+          rows.push(launchAttempt({
+            provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
+            agentId: launched.agentId, error: errText(injected.error),
           }));
-          if (!injected.ok) {
-            rows.push(launchAttempt({
-              provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
-              agentId: launched.agentId, error: errText(injected.error),
-            }));
-            return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-          }
+          return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
         }
         rows.push(launchAttempt({
           provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
           agentId: launched.agentId,
         }));
         send.kind = 'confirmed';
-        send.reason = `没有 agentIdentity 终端，已回退 --command（${plan.command}）并重送任务书`;
-        fellBackToCommand = true;
-      }
-    } else if (target.action === 'unscanned' && handle) {
-      const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
-      const screen = pre.ok
-        ? classifyAgentScreen(extractTerminalText(pre.json))
-        : { kind: 'unread', reason: errText(pre.error) };
-      rows.push(launchAttempt({
-        provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
-        agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
-      }));
-      const plan = planAgentScreenFallback({ screen, command: launched?.launch?.command });
-      if (plan.action === 'fail') {
-        return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
-      }
-      if (plan.action === 'fallback') {
-        const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
-        if (!sentCmd.ok) {
-          return { ok: false, error: `agentIdentity 没查成且屏面是壳，回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-        }
-        const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
-        const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
-        if (!ready.ok) {
-          return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-        }
-        if (book) {
-          const injected = orca(argsTerminalSend({
-            terminal: handle, text: book, enter: true,
-            agent: launched.agentId || launched?.launch?.provider,
-          }));
-          if (!injected.ok) {
-            return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-          }
-        }
-        send.kind = 'confirmed';
-        send.reason = 'agentIdentity 没查成，屏面是壳，已回退 --command 并重送任务书';
+        send.reason = target.action === 'unscanned'
+          ? 'agentIdentity 没查成，屏面是壳，已回退 --command 并重送任务书'
+          : `没有 agentIdentity 终端，已回退 --command（${repair.command}）并重送任务书`;
         fellBackToCommand = true;
       }
     }
@@ -1671,6 +1662,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           launched: childLaunch,
           run: runId,
           from: coordHandle,
+          book: childBook,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
@@ -1861,7 +1853,7 @@ function cmdDispatchBatch(args) {
       if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
       return { ok: true, taskId };
     },
-    startWorker({ task, terminal, worktree, agent, model, deferred }) {
+    startWorker({ task, terminal, worktree, agent, model, deferred, book }) {
       // fire-and-forget（2026-08-23）：送字即收，不等认账；确认交 watchdog。
       const started = startOrcaWorker({
         task,
@@ -1870,6 +1862,7 @@ function cmdDispatchBatch(args) {
           ? { deferred: true, agentId: agent, model, launch }
           : { handle: terminal, launch },
         run: station.runId,
+        book,
       });
       if (!started.ok) return { ok: false, error: started.error, dispatchId: started.dispatchId || null };
       const dispatchId = started.dispatchId;
@@ -2153,6 +2146,7 @@ function reuseReviewerOnTerminal({
     worktree: reviewerWorktreeId,
     launched: { handle, launch },
     run: runId,
+    book: reviewerBook,
   });
   if (!revStarted.ok) {
     return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${revStarted.error}（必须带 --worktree 指审官树）` };
@@ -3103,6 +3097,7 @@ function cmdReviewerCreate(args) {
       : { handle: launched.reviewerHandle, launch: reviewerLaunch },
     run: revRunId,
     from: revCoordHandle,
+    book: reviewerBook,
   });
   if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   launched.reviewerHandle = revStarted.handle;
@@ -3433,6 +3428,7 @@ function cmdReviewerAttach(args) {
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
     from: reviewerFrom,
+    book: reviewerBook,
     // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
     // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
     timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,

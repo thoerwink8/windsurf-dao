@@ -144,6 +144,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       model: term.model || plan.model,
       agent: term.agentId,
       deferred: term.deferred === true,
+      book: w.inject || w.spec,
     });
     if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
     if (!started || !started.ok) {

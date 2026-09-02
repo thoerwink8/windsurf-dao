@@ -133,19 +133,109 @@ describe('dispatch-agent-ready（#802）', () => {
     });
   });
 
+  it('requireBookForRepair / planRepairSends：缺任务书不能记 fallback-ok', async (t) => {
+    const S = await S_LOAD;
+    const ate = S.classifyAgentScreen('读: command not found');
+    const book = '读 host/skills/dispatch/templates/soldier-book.md spec=短摘要';
+
+    await t.test('calibrate 没 book → fail，sends 空', () => {
+      const r = S.requireBookForRepair({ action: 'calibrate', book: '' });
+      assert.ok(!r.ok && /没传 book/.test(r.error), JSON.stringify(r));
+      const p = S.planRepairSends({ action: 'calibrate', book: '   ' });
+      assert.ok(p.action === 'fail' && p.kind === 'book-missing' && p.sends.length === 0, JSON.stringify(p));
+    });
+    await t.test('calibrate 有 book → 只重送 book', () => {
+      const p = S.planRepairSends({ action: 'calibrate', book });
+      assert.ok(p.action === 'resend' && p.book === book && p.sends.join(',') === 'book', JSON.stringify(p));
+    });
+    await t.test('故意违规：裸 shell 回退但没 book → fail，不是 fallback-ok', () => {
+      const p = S.planRepairSends({
+        action: 'fallback-command', screen: ate, command: 'pi --model gw-dspool/deepseek-v4-flash', book: '',
+      });
+      assert.ok(p.action === 'fail' && p.kind === 'book-missing' && p.sends.length === 0, JSON.stringify(p));
+    });
+    await t.test('裸 shell + command + book → command、等 TUI、再送书', () => {
+      const p = S.planRepairSends({
+        action: 'fallback-command', screen: ate, command: 'pi --model x', book,
+      });
+      assert.ok(p.action === 'fallback' && p.sends.join(',') === 'command,wait-tui,book' && p.book === book,
+        JSON.stringify(p));
+    });
+    await t.test('keep 不要求 book（worker-start 已注入）', () => {
+      const r = S.requireBookForRepair({ action: 'keep', book: '' });
+      assert.ok(r.ok && r.needed === false, JSON.stringify(r));
+    });
+    await t.test('屏面已是 TUI → keep，空 book 也不回退', () => {
+      const p = S.planRepairSends({
+        action: 'fallback-command',
+        screen: S.classifyAgentScreen('Grok Build  1.0.1  always-approve'),
+        command: 'grok -m grok-4.6',
+        book: '',
+      });
+      assert.ok(p.action === 'keep' && p.sends.length === 0, JSON.stringify(p));
+    });
+    await t.test('裸 shell 但没 launch.command → fail 不是 book-missing', () => {
+      const p = S.planRepairSends({ action: 'fallback-command', screen: ate, command: '', book });
+      assert.ok(p.action === 'fail' && p.kind !== 'book-missing' && /launch\.command/.test(p.error), JSON.stringify(p));
+    });
+  });
+
   it('dao.mjs 接线：校准 agentIdentity 再注入；startWorkerBySlate 成功也记 attempts', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     const startFn = src.match(/function startOrcaWorker[\s\S]*?\nfunction startWorkerBySlate/);
     assert.ok(startFn, '定位 startOrcaWorker');
     assert.ok(/planInjectTarget\(/.test(startFn[0]), 'startOrcaWorker 要按 agentIdentity 校准 handle');
+    assert.ok(/planRepairSends\(/.test(startFn[0]), '校准/回退按 planRepairSends 决定送什么');
     assert.ok(/kind: injected\.ok \? 'resend-ok'/.test(startFn[0]), '校准后重送任务书到 agent 终端');
     assert.ok(/action === 'fallback-command'/.test(startFn[0]), '没有 agent 终端才回退 --command');
     assert.ok(/fellBackToCommand/.test(startFn[0]), '回退后跳过补粘/补回车');
+    assert.ok(/repair\.kind/.test(startFn[0]) && /book-missing/.test(fs.readFileSync(LIB, 'utf8')),
+      '缺任务书记 book-missing，不许 fallback-ok');
+    assert.ok(!/if \(book\)/.test(startFn[0]), '回退/校准不得 if (book) 跳过重送');
+    assert.ok(/repair\.book/.test(startFn[0]) && /repair\.command/.test(startFn[0]),
+      '回退路径要先送 launch.command 再送 repair.book');
+    const cmdSendAt = startFn[0].indexOf('text: repair.command');
+    const injectBookAt = startFn[0].lastIndexOf('text: repair.book');
+    const fallbackOkAt = startFn[0].indexOf("kind: 'fallback-ok'");
+    assert.ok(cmdSendAt > 0 && injectBookAt > cmdSendAt && fallbackOkAt > injectBookAt,
+      '回退顺序必须是 command → 重送任务书 → 才记 fallback-ok');
 
     const slateFn = src.match(/function startWorkerBySlate[\s\S]*?\nfunction readOnceHandle/);
     assert.ok(slateFn, '定位 startWorkerBySlate');
     assert.ok(/kind: 'deferred'/.test(slateFn[0]) && /kind: 'created'/.test(slateFn[0]),
       '成功路径也要 push launchAttempt，launchAttempts 不许再是空数组');
     assert.ok(!/waitAndVerify/.test(slateFn[0]), 'startWorkerBySlate 不把旧就绪探针请回来');
+  });
+
+  it('每个 startOrcaWorker 调用点都传 book（审官红：子工人/批派/审官入口漏传）', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const needle = 'startOrcaWorker({';
+    const calls = [];
+    let from = 0;
+    while (true) {
+      const i = src.indexOf(needle, from);
+      if (i < 0) break;
+      const isDef = src.slice(Math.max(0, i - 9), i) === 'function ';
+      let depth = 0;
+      let j = i + needle.length - 1;
+      for (; j < src.length; j++) {
+        if (src[j] === '{') depth++;
+        else if (src[j] === '}') {
+          depth--;
+          if (depth === 0) {
+            j++;
+            break;
+          }
+        }
+      }
+      const block = src.slice(i, j);
+      if (!isDef) calls.push({ index: i, block });
+      from = i + needle.length;
+    }
+    assert.ok(calls.length >= 6, '至少 6 个调用点（主派/子工人/批派/复用审官/create/attach），实际 ' + calls.length);
+    for (const c of calls) {
+      assert.ok(/\bbook\s*:/.test(c.block) || /(^|[,\s])book\s*[,}]/.test(c.block),
+        '调用点没传 book：' + c.block.slice(0, 280));
+    }
   });
 });
