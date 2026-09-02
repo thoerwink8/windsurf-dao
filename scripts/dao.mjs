@@ -101,8 +101,7 @@ import {
   classifyAgentScreen,
   launchAttempt,
   pickAgentTerminal,
-  planInjectTarget,
-  planRepairSends,
+  planDeferredRepair,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -556,46 +555,57 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
     const listed = orca(argsTerminalList({ worktree }));
     const terms = listed.ok ? listed.json?.result?.terminals : null;
     const claimed = extractHandleFromWorkerStart(r.json);
-    const target = planInjectTarget({
+    const repairArgs = {
       claimedHandle: claimed,
       terminals: terms,
       worktreeId: worktree,
       wantAgentId: launched.agentId,
-    });
-    if (target.action === 'unscanned') {
-      handle = claimed || findAgentTerminalHandle(worktree, launched.agentId);
-      rows.push(launchAttempt({
-        provider: launched?.launch?.provider, mode: 'agent', kind: 'unscanned',
-        agentId: launched.agentId, error: target.error,
-      }));
-    } else if (target.action === 'calibrate' || target.action === 'keep') {
-      handle = target.handle;
-      rows.push(launchAttempt({
-        provider: launched?.launch?.provider, mode: 'agent', kind: target.action,
-        agentId: launched.agentId, error: target.reason,
-      }));
-    } else {
-      handle = claimed || target.handle;
-      rows.push(launchAttempt({
-        provider: launched?.launch?.provider, mode: 'agent', kind: target.action,
-        agentId: launched.agentId, error: target.reason,
-      }));
+      book,
+      command: launched?.launch?.command,
+    };
+    let plan = planDeferredRepair(repairArgs);
+    handle = plan.handle || claimed || null;
+    rows.push(launchAttempt({
+      provider: launched?.launch?.provider, mode: 'agent',
+      kind: plan.kind || plan.action,
+      agentId: launched.agentId, error: plan.error || plan.reason,
+    }));
+    if (!plan.ok) {
+      return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+    }
+    if (plan.action === 'unscanned' && !handle) {
+      handle = findAgentTerminalHandle(worktree, launched.agentId);
     }
     if (!handle) {
       return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send, attempts: rows };
     }
 
-    if (target.action === 'calibrate') {
-      const repair = planRepairSends({ action: 'calibrate', book });
-      if (repair.action === 'fail') {
+    if (plan.needsScreen) {
+      const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
+      const screen = pre.ok
+        ? classifyAgentScreen(extractTerminalText(pre.json))
+        : { kind: 'unread', reason: errText(pre.error) };
+      if (plan.action === 'unscanned') {
         rows.push(launchAttempt({
-          provider: launched?.launch?.provider, mode: 'agent', kind: repair.kind || 'book-missing',
-          agentId: launched.agentId, error: repair.error,
+          provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
+          agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
         }));
-        return { ok: false, error: repair.error, json: r.json, handle, send, dispatchId, attempts: rows };
       }
+      plan = planDeferredRepair({ ...repairArgs, screen });
+      if (!plan.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command',
+          kind: plan.kind || 'repair-fail',
+          agentId: launched.agentId, error: plan.error,
+        }));
+        return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+    }
+
+    if (plan.action === 'calibrate') {
+      handle = plan.handle;
       const injected = orca(argsTerminalSend({
-        terminal: handle, text: repair.book, enter: true,
+        terminal: handle, text: plan.book, enter: true,
         agent: launched.agentId || launched?.launch?.provider,
       }));
       rows.push(launchAttempt({
@@ -607,74 +617,43 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
         return { ok: false, error: `校准到 agent 终端后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
       }
       send.kind = 'confirmed';
-      send.reason = `已校准到 agentIdentity=${target.agentIdentity} 并重送任务书`;
-    } else if (target.action === 'fallback-command' || target.action === 'unscanned') {
-      const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
-      const screen = pre.ok
-        ? classifyAgentScreen(extractTerminalText(pre.json))
-        : { kind: 'unread', reason: errText(pre.error) };
-      if (target.action === 'unscanned') {
+      send.reason = `已校准到 agentIdentity=${plan.agentIdentity} 并重送任务书`;
+    } else if (plan.action === 'fallback') {
+      const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
+      if (!sentCmd.ok) {
         rows.push(launchAttempt({
-          provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
-          agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
+          agentId: launched.agentId, error: errText(sentCmd.error),
         }));
+        return { ok: false, error: `没有目标 agent 终端，回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
       }
-      const repair = planRepairSends({
-        action: 'fallback-command',
-        book,
-        screen,
-        command: launched?.launch?.command,
-      });
-      if (repair.action === 'fail') {
+      const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
+      const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
+      if (!ready.ok) {
         rows.push(launchAttempt({
-          provider: launched?.launch?.provider, mode: 'command',
-          kind: repair.kind || 'repair-fail',
-          agentId: launched.agentId, error: repair.error,
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-wait-fail',
+          agentId: launched.agentId, error: errText(ready.error),
         }));
-        return { ok: false, error: repair.error, json: r.json, handle, send, dispatchId, attempts: rows };
+        return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
       }
-      if (repair.action === 'fallback') {
-        const sentCmd = orca(argsTerminalSend({ terminal: handle, text: repair.command, enter: true }));
-        if (!sentCmd.ok) {
-          rows.push(launchAttempt({
-            provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
-            agentId: launched.agentId, error: errText(sentCmd.error),
-          }));
-          const prefix = target.action === 'unscanned'
-            ? 'agentIdentity 没查成且屏面是壳，回退 --command 失败'
-            : '没有 agent 终端，回退 --command 失败';
-          return { ok: false, error: `${prefix}：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-        }
-        const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
-        const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
-        if (!ready.ok) {
-          rows.push(launchAttempt({
-            provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-wait-fail',
-            agentId: launched.agentId, error: errText(ready.error),
-          }));
-          return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-        }
-        const injected = orca(argsTerminalSend({
-          terminal: handle, text: repair.book, enter: true,
-          agent: launched.agentId || launched?.launch?.provider,
-        }));
-        if (!injected.ok) {
-          rows.push(launchAttempt({
-            provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
-            agentId: launched.agentId, error: errText(injected.error),
-          }));
-          return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
-        }
+      const injected = orca(argsTerminalSend({
+        terminal: handle, text: plan.book, enter: true,
+        agent: launched.agentId || launched?.launch?.provider,
+      }));
+      if (!injected.ok) {
         rows.push(launchAttempt({
-          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
-          agentId: launched.agentId,
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
+          agentId: launched.agentId, error: errText(injected.error),
         }));
-        send.kind = 'confirmed';
-        send.reason = target.action === 'unscanned'
-          ? 'agentIdentity 没查成，屏面是壳，已回退 --command 并重送任务书'
-          : `没有 agentIdentity 终端，已回退 --command（${repair.command}）并重送任务书`;
-        fellBackToCommand = true;
+        return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
       }
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
+        agentId: launched.agentId,
+      }));
+      send.kind = 'confirmed';
+      send.reason = `没有目标 agentIdentity 终端，已回退 --command（${plan.command}）并重送任务书`;
+      fellBackToCommand = true;
     }
   }
 

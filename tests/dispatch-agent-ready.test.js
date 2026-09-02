@@ -119,6 +119,26 @@ describe('dispatch-agent-ready（#802）', () => {
       });
       assert.ok(p.action === 'fallback-command', JSON.stringify(p));
     });
+    await t.test('故意违规：要 pi、同树只有 grok → mismatch，不 calibrate 到 grok', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_shell', terminals: [shell, grok], worktreeId: wt, wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'mismatch' && !/term_grok/.test(String(p.handle)), JSON.stringify(p));
+      const picked = S.pickAgentTerminal([shell, grok], { worktreeId: wt, wantAgentId: 'pi' });
+      assert.ok(picked.ok === false && picked.mismatch === true && picked.handle == null, JSON.stringify(picked));
+    });
+    await t.test('claimed 是 grok、要 pi、两台都在 → calibrate 到 pi', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_grok', terminals: [shell, grok, pi], worktreeId: wt, wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'calibrate' && p.handle === 'term_pi', JSON.stringify(p));
+    });
+    await t.test('claimed 已是 grok、要 pi、没有 pi → mismatch，不 keep', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_grok', terminals: [shell, grok], worktreeId: wt, wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'mismatch', JSON.stringify(p));
+    });
     await t.test('老回包没 agentIdentity → unscanned，不是当成 0 个 agent', () => {
       const p = S.planInjectTarget({
         claimedHandle: 'term_x',
@@ -180,22 +200,68 @@ describe('dispatch-agent-ready（#802）', () => {
     });
   });
 
+  it('planDeferredRepair：每个 deferred 入口 claimed=空壳 必须把对应 book 送到目标 agent', async (t) => {
+    const S = await S_LOAD;
+    const wt = 'repo::/work';
+    const shell = { handle: 'term_shell', worktreeId: wt, agentIdentity: null };
+    const pi = { handle: 'term_pi', worktreeId: wt, agentIdentity: 'pi' };
+    const grok = { handle: 'term_grok', worktreeId: wt, agentIdentity: 'grok' };
+    const ate = S.classifyAgentScreen('读: command not found');
+    const entries = [
+      { name: '子工人', book: '读 soldier-book.md spec=子块A' },
+      { name: '批派工', book: '读 batch-book.md spec=只读判定' },
+      { name: 'reviewer-create', book: '读 reviewer-book.md spec=审 PR' },
+      { name: 'reviewer-attach', book: '读 reviewer-book.md spec=补派审官' },
+    ];
+    for (const e of entries) {
+      await t.test(`${e.name}：空壳旁边有 pi → 把这份 book 送到 term_pi`, () => {
+        const p = S.planDeferredRepair({
+          claimedHandle: 'term_shell', terminals: [shell, pi], worktreeId: wt,
+          wantAgentId: 'pi', book: e.book,
+        });
+        assert.ok(p.ok && p.action === 'calibrate' && p.handle === 'term_pi'
+          && p.book === e.book && p.sends.join(',') === 'book', JSON.stringify(p));
+      });
+      await t.test(`${e.name}：缺 book 不能 ok`, () => {
+        const p = S.planDeferredRepair({
+          claimedHandle: 'term_shell', terminals: [shell, pi], worktreeId: wt,
+          wantAgentId: 'pi', book: '',
+        });
+        assert.ok(p.ok === false && p.kind === 'book-missing' && p.sends.length === 0, JSON.stringify(p));
+      });
+      await t.test(`${e.name}：只有空壳 → command、等 TUI、再送这份 book`, () => {
+        const p = S.planDeferredRepair({
+          claimedHandle: 'term_shell', terminals: [shell], worktreeId: wt,
+          wantAgentId: 'pi', book: e.book, screen: ate, command: 'pi --model x',
+        });
+        assert.ok(p.ok && p.action === 'fallback' && p.sends.join(',') === 'command,wait-tui,book'
+          && p.book === e.book, JSON.stringify(p));
+      });
+    }
+    await t.test('要 pi、只有 grok → 失败，不把 book 送给 grok', () => {
+      const p = S.planDeferredRepair({
+        claimedHandle: 'term_shell', terminals: [shell, grok], worktreeId: wt,
+        wantAgentId: 'pi', book: 'pi 的任务书',
+      });
+      assert.ok(p.ok === false && p.action === 'mismatch' && p.sends.length === 0
+        && p.handle !== 'term_grok', JSON.stringify(p));
+    });
+  });
+
   it('dao.mjs 接线：校准 agentIdentity 再注入；startWorkerBySlate 成功也记 attempts', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     const startFn = src.match(/function startOrcaWorker[\s\S]*?\nfunction startWorkerBySlate/);
     assert.ok(startFn, '定位 startOrcaWorker');
-    assert.ok(/planInjectTarget\(/.test(startFn[0]), 'startOrcaWorker 要按 agentIdentity 校准 handle');
-    assert.ok(/planRepairSends\(/.test(startFn[0]), '校准/回退按 planRepairSends 决定送什么');
+    assert.ok(/planDeferredRepair\(/.test(startFn[0]), 'startOrcaWorker 要按 agentIdentity 校准 handle');
     assert.ok(/kind: injected\.ok \? 'resend-ok'/.test(startFn[0]), '校准后重送任务书到 agent 终端');
-    assert.ok(/action === 'fallback-command'/.test(startFn[0]), '没有 agent 终端才回退 --command');
+    assert.ok(/plan\.action === 'fallback'/.test(startFn[0]), '没有目标 agent 终端才回退 --command');
     assert.ok(/fellBackToCommand/.test(startFn[0]), '回退后跳过补粘/补回车');
-    assert.ok(/repair\.kind/.test(startFn[0]) && /book-missing/.test(fs.readFileSync(LIB, 'utf8')),
-      '缺任务书记 book-missing，不许 fallback-ok');
+    assert.ok(/identity-mismatch|plan\.kind/.test(startFn[0]), 'identity 对不上要 fail-loud');
     assert.ok(!/if \(book\)/.test(startFn[0]), '回退/校准不得 if (book) 跳过重送');
-    assert.ok(/repair\.book/.test(startFn[0]) && /repair\.command/.test(startFn[0]),
-      '回退路径要先送 launch.command 再送 repair.book');
-    const cmdSendAt = startFn[0].indexOf('text: repair.command');
-    const injectBookAt = startFn[0].lastIndexOf('text: repair.book');
+    assert.ok(/plan\.book/.test(startFn[0]) && /plan\.command/.test(startFn[0]),
+      '回退路径要先送 launch.command 再送 plan.book');
+    const cmdSendAt = startFn[0].indexOf('text: plan.command');
+    const injectBookAt = startFn[0].lastIndexOf('text: plan.book');
     const fallbackOkAt = startFn[0].indexOf("kind: 'fallback-ok'");
     assert.ok(cmdSendAt > 0 && injectBookAt > cmdSendAt && fallbackOkAt > injectBookAt,
       '回退顺序必须是 command → 重送任务书 → 才记 fallback-ok');

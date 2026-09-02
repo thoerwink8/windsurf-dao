@@ -124,7 +124,22 @@ export function pickAgentTerminal(terminals, { worktreeId, wantAgentId } = {}) {
     return { ok: true, unscanned: false, handle: null, scanned: inTree.length, agentIdentity: null };
   }
   const want = wantAgentId ? String(wantAgentId).trim() : '';
-  const chosen = (want && agents.find(a => a.agentIdentity === want)) || agents[0];
+  if (want) {
+    const chosen = agents.find(a => a.agentIdentity === want);
+    if (!chosen) {
+      const seen = agents.map(a => a.agentIdentity);
+      return {
+        ok: false, unscanned: false, mismatch: true, handle: null,
+        scanned: inTree.length, count: agents.length, seen,
+        error: `要 agentIdentity=${want}，同树只有 ${seen.join(',') || '无'}（不许退选别的 agent）`,
+      };
+    }
+    return {
+      ok: true, unscanned: false, handle: chosen.handle,
+      agentIdentity: chosen.agentIdentity, scanned: inTree.length, count: agents.length,
+    };
+  }
+  const chosen = agents[0];
   return {
     ok: true, unscanned: false, handle: chosen.handle,
     agentIdentity: chosen.agentIdentity, scanned: inTree.length, count: agents.length,
@@ -136,6 +151,14 @@ export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAge
   const picked = pickAgentTerminal(terminals, { worktreeId, wantAgentId });
   if (!picked.ok && picked.unscanned) {
     return { action: 'unscanned', handle: claimedHandle || null, error: picked.error };
+  }
+  if (!picked.ok && picked.mismatch) {
+    return {
+      action: 'mismatch',
+      handle: claimedHandle || null,
+      error: picked.error,
+      seen: picked.seen,
+    };
   }
   if (picked.handle) {
     if (claimedHandle && claimedHandle === picked.handle) {
@@ -214,4 +237,106 @@ export function planRepairSends({ action, book, screen, command } = {}) {
     };
   }
   return { action: act || 'keep', sends: [] };
+}
+
+/**
+ * deferred 入口的注入计划。纯函数，不跑 orca。
+ * 子工人 / 批派 / 审官 create/attach 共用：claimed 空壳 + 目标 agent → 把同一份 book 送到该终端；
+ * 只有空壳 → command、等 TUI、再送书；缺 book / 目标 identity 对不上 → fail，sends 空。
+ */
+export function planDeferredRepair({
+  claimedHandle, terminals, worktreeId, wantAgentId, book, screen, command,
+} = {}) {
+  const target = planInjectTarget({ claimedHandle, terminals, worktreeId, wantAgentId });
+  if (target.action === 'mismatch') {
+    return {
+      ok: false,
+      action: 'mismatch',
+      kind: 'identity-mismatch',
+      handle: target.handle || claimedHandle || null,
+      error: target.error,
+      seen: target.seen,
+      sends: [],
+    };
+  }
+  if (target.action === 'keep') {
+    return {
+      ok: true,
+      action: 'keep',
+      handle: target.handle,
+      agentIdentity: target.agentIdentity,
+      sends: [],
+    };
+  }
+  if (target.action === 'calibrate') {
+    const repair = planRepairSends({ action: 'calibrate', book });
+    if (repair.action === 'fail') {
+      return {
+        ok: false,
+        action: 'fail',
+        kind: repair.kind,
+        handle: target.handle,
+        agentIdentity: target.agentIdentity,
+        fromHandle: target.fromHandle,
+        error: repair.error,
+        sends: [],
+      };
+    }
+    return {
+      ok: true,
+      action: 'calibrate',
+      handle: target.handle,
+      agentIdentity: target.agentIdentity,
+      fromHandle: target.fromHandle,
+      book: repair.book,
+      sends: repair.sends,
+    };
+  }
+  if (target.action === 'fallback-command' || target.action === 'unscanned') {
+    if (screen == null) {
+      return {
+        ok: true,
+        action: target.action,
+        handle: target.handle || claimedHandle || null,
+        error: target.error,
+        reason: target.reason,
+        sends: [],
+        needsScreen: true,
+      };
+    }
+    const repair = planRepairSends({ action: 'fallback-command', book, screen, command });
+    if (repair.action === 'fail') {
+      return {
+        ok: false,
+        action: 'fail',
+        kind: repair.kind || 'repair-fail',
+        handle: target.handle || claimedHandle || null,
+        error: repair.error,
+        sends: [],
+      };
+    }
+    if (repair.action === 'fallback') {
+      return {
+        ok: true,
+        action: 'fallback',
+        handle: target.handle || claimedHandle || null,
+        command: repair.command,
+        book: repair.book,
+        sends: repair.sends,
+      };
+    }
+    return {
+      ok: true,
+      action: 'keep',
+      handle: target.handle || claimedHandle || null,
+      sends: [],
+      screen: repair.screen,
+    };
+  }
+  return {
+    ok: true,
+    action: target.action || 'keep',
+    handle: target.handle || claimedHandle || null,
+    sends: [],
+  };
 }

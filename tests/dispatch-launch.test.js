@@ -272,8 +272,7 @@ describe('dispatch-launch（async-launch）', () => {
       const sj = daoSrc.indexOf('function startWorkerBySlate(');
       assert.ok(si > 0 && sj > si, 'startOrcaWorker 段定位');
       const sseg = daoSrc.slice(si, sj);
-      assert.ok(/planInjectTarget\(/.test(sseg), 'startOrcaWorker 要校准注入目标');
-      assert.ok(/planRepairSends\(/.test(sseg), '校准/回退缺 book 要 fail-loud');
+      assert.ok(/planDeferredRepair\(/.test(sseg), 'startOrcaWorker 要校准注入目标且缺 book fail-loud');
       assert.ok(!/finishWorkerInject|verifyStartedPolling/.test(sseg),
         '校准不是把开工验证轮询请回来');
     });

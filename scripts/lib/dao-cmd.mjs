@@ -67,6 +67,7 @@ export {
   planInjectTarget,
   requireBookForRepair,
   planRepairSends,
+  planDeferredRepair,
 } from './dispatch/agent-ready.mjs';
 
 // ── orca 参数表（从 builder 扫，不另抄清单） ────────────────────────
