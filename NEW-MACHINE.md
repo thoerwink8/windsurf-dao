@@ -355,6 +355,7 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 - **`ok:false` 时退出码仍是 0**——退出码不是信号，只认 JSON。
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
+- **#802**：`server-check` 第⑫项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。
 
 ### 搬过去之后本仓的红项变化（实测）
 

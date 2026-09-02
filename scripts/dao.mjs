@@ -98,6 +98,9 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  classifyAgentScreen,
+  planAgentScreenFallback,
+  launchAttempt,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -499,7 +502,8 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book, attempts }) {
+  const rows = Array.isArray(attempts) ? attempts : [];
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
@@ -509,7 +513,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   } else if (launched?.handle) {
     startArgs = argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs: sendTimeout, from });
   } else {
-    return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
+    return { ok: false, error: 'worker-start 要 --terminal 或 --agent', attempts: rows };
   }
   // orca 进程级调用上限比 --timeout-ms 宽 15s：stall 到点是 orca 正常返回，不是调用挂死。
   const r = orca(startArgs, sendTimeout + 15000);
@@ -517,7 +521,10 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   if (send.kind === 'transport-failed') {
     // 传输失败也可能已落记账（worker-start 先建 dispatch 再注入）——带上让回滚能 worker-stop，
     // 不留 workerState=failed 的僵尸记账（762 残留实证）。
-    return { ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send, dispatchId: extractDispatchId(r.json) || null };
+    return {
+      ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send,
+      dispatchId: extractDispatchId(r.json) || null, attempts: rows,
+    };
   }
 
   let dispatchId = extractDispatchId(r.json);
@@ -536,6 +543,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
       json: r.json,
       handle: launched?.handle,
       send,
+      attempts: rows,
     };
   }
 
@@ -547,9 +555,76 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
       || extractHandleFromWorkerStart(r.json)
       || findAgentTerminalHandle(worktree);
     if (!handle) {
-      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
+      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send, attempts: rows };
     }
   }
+
+  // #802：agent 型 worker-start 在无头 Linux 可能落成裸 bash，任务书被当命令执行。
+  // 只在屏面给出裸 shell / command not found 实证时回退；空屏/spinner 不当回退。
+  // 回退 = 往已有终端送 launch 命令（现场垫片），不是再 worker-start --terminal。
+  let fellBackToCommand = false;
+  if (launched?.deferred && handle) {
+    const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
+    const screen = pre.ok
+      ? classifyAgentScreen(extractTerminalText(pre.json))
+      : { kind: 'unread', reason: errText(pre.error) };
+    rows.push(launchAttempt({
+      provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
+      agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
+    }));
+    const plan = planAgentScreenFallback({ screen, command: launched?.launch?.command });
+    if (plan.action === 'fail') {
+      return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+    }
+    if (plan.action === 'fallback') {
+      const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
+      if (!sentCmd.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
+          agentId: launched.agentId, error: errText(sentCmd.error),
+        }));
+        return { ok: false, error: `裸 shell 回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
+      const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
+      if (!ready.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-wait-fail',
+          agentId: launched.agentId, error: errText(ready.error),
+        }));
+        return { ok: false, error: `裸 shell 回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      if (book) {
+        const injected = orca(argsTerminalSend({
+          terminal: handle, text: book, enter: true,
+          agent: launched.agentId || launched?.launch?.provider,
+        }));
+        if (!injected.ok) {
+          rows.push(launchAttempt({
+            provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
+            agentId: launched.agentId, error: errText(injected.error),
+          }));
+          return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+        }
+      }
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
+        agentId: launched.agentId,
+      }));
+      send.kind = 'confirmed';
+      send.reason = `agent 落裸 shell，已回退 --command（${plan.command}）并重送任务书`;
+      fellBackToCommand = true;
+    }
+  }
+
+  // 回退已经重送任务书，不要再走下面的补粘/补回车（会打进刚起来的 TUI）。
+  if (fellBackToCommand) {
+    return {
+      ok: true, json: r.json, handle, dispatchId,
+      confirmed: true, send, dispatchIdRecovered, attempts: rows, fallback: 'command',
+    };
+  }
+
   // codex 坑 2 修复（2026-08-26 实测，#785 兜底加宽）：worker-start --agent codex 的任务书显示
   // [Pasted Content] 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象）。原来只在
   // send.kind === 'sent-unconfirmed' 时补，但审官复用路 worker-start 可能返回 confirmed 而
@@ -608,6 +683,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
     confirmed: send.kind === 'confirmed',
     send,
     dispatchIdRecovered,
+    attempts: rows,
   };
 }
 
@@ -657,6 +733,10 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       continue;
     }
     if (term.deferred) {
+      attempts.push(launchAttempt({
+        modelId, pipeIndex, provider: pipe.provider, mode: 'agent', kind: 'deferred',
+        agentId: term.agentId,
+      }));
       return {
         ok: true, deferred: true, modelId, pipeIndex, pipe, launch,
         handle: null, agentId: term.agentId, model: term.model, attempts,
@@ -665,6 +745,9 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const handle = term.handle;
     if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
     created.workerHandle = handle;
+    attempts.push(launchAttempt({
+      modelId, pipeIndex, provider: pipe.provider, mode: 'command', kind: 'created',
+    }));
 
     // fire-and-forget（2026-08-23）：terminal create 成功即收，不再跑 TUI 就绪探针。
     // 探针误杀能干活的工人（758-763 实证）；起没起来的确认交 watchdog。
@@ -1456,7 +1539,9 @@ function runDispatchExecution(order, { queueDir } = {}) {
     from: coordHandle,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
     book: injectText,
+    attempts: launched.attempts,
   });
+  if (Array.isArray(started.attempts)) plan.launchAttempts = started.attempts;
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
     if (started.dispatchId) created.dispatchIds.push(started.dispatchId);

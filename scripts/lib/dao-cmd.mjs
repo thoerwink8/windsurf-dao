@@ -55,6 +55,14 @@ export {
   agentStartSpec,
 } from './dispatch/launch.mjs';
 
+// #802：start=agent 落裸 shell 的屏面分类 / 回退计划 / launchAttempts 行
+export {
+  classifyAgentScreen,
+  shouldFallbackToCommand,
+  planAgentScreenFallback,
+  launchAttempt,
+} from './dispatch/agent-ready.mjs';
+
 // ── orca 参数表（从 builder 扫，不另抄清单） ────────────────────────
 
 // #762 拆分：orca 参数构造域移到 scripts/lib/dispatch/args.mjs（保持对外 API 不变）

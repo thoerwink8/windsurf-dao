@@ -265,6 +265,17 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(si > 0 && sj > si, 'startWorkerBySlate 段定位');
       const sseg = daoSrc.slice(si, sj);
       assert.ok(!/waitAndVerify/.test(sseg), 'startWorkerBySlate 不该再有 waitAndVerify');
+      assert.ok(/kind: 'deferred'/.test(sseg), '#802 成功 agent 路也要记 launchAttempt');
+    });
+    await t.test('#802 startOrcaWorker 探屏：裸 shell 才回退，不是旧开工验证', () => {
+      const si = daoSrc.indexOf('function startOrcaWorker(');
+      const sj = daoSrc.indexOf('function startWorkerBySlate(');
+      assert.ok(si > 0 && sj > si, 'startOrcaWorker 段定位');
+      const sseg = daoSrc.slice(si, sj);
+      assert.ok(/classifyAgentScreen\(/.test(sseg) && /planAgentScreenFallback\(/.test(sseg),
+        'startOrcaWorker 要探屏');
+      assert.ok(!/finishWorkerInject|verifyStartedPolling/.test(sseg),
+        '探屏不是把开工验证轮询请回来');
     });
     await t.test('runGcReadonlyScan 函数本体已删（gc 顺车整层删，手动走 run-gc）', () => {
       assert.ok(!/function runGcReadonlyScan/.test(daoSrc), 'dao.mjs 不该再有 runGcReadonlyScan');

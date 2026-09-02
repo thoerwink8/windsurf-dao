@@ -157,7 +157,9 @@ export function providerLaunchProblems(doc) {
 
 /** Orca `--agent` / worktree create --agent 认识的 id。
  * terminal create 没有 --agent，有特殊 argv（模型、--force、reclaude）走 --command。
- * reclaude 不能映射成 claude：`--agent claude` 起官方 claude，凭据不对。 */
+ * reclaude 不能映射成 claude：`--agent claude` 起官方 claude，凭据不对。
+ * #802：id 在目录里 ≠ agent 真起来了。无头 Linux 上 pi/devin 会落成裸 bash，
+ * 派工在 startOrcaWorker 读屏回退（见 agent-ready.mjs），不要把 toml start 改成 command。 */
 export function orcaKnownAgentId({ provider, command } = {}) {
   const bin = String(command || '').trim().split(/\s+/)[0].replace(/\\/g, '/').split('/').pop().toLowerCase();
   const p = String(provider || '').toLowerCase();
