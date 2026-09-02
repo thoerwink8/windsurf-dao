@@ -45,9 +45,16 @@
 import { readdirSync, lstatSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 
-/** 比较用的归一化：反斜杠换正斜杠、去尾斜杠、小写（Windows/macOS 文件系统大小写不敏感）。 */
+/** 文件系统大小写语义：NTFS 约定大小写不敏感（junction/symlink 的目标大小写五花八门），
+ *  POSIX（Linux/macOS）大小写敏感——RepoA 与 repoa 是不同目录，不许 lower 后相等。
+ *  两侧都过 realpath（拿到盘上真实大小写）后，POSIX 直接比，win32 lower 再比。 */
+const CASE_INSENSITIVE = process.platform === 'win32';
+
+/** 比较用的归一化：反斜杠换正斜杠、去尾斜杠；仅 win32 小写（其余平台大小写敏感）。 */
 function norm(p) {
-  return String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  let s = String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  if (CASE_INSENSITIVE) s = s.toLowerCase();
+  return s;
 }
 
 /** 门 1：realpath 之后必须落在 `.../host/skills/<名>` 上（任何 checkout 都认）。 */
@@ -117,11 +124,18 @@ export function checkSkillLinks({ root, home, isCi = false }) {
     return { fail: ['一个 skill 都没扫到', 'host/skills 空了 ⇒ 本次等于没查', skillsDir] };
   }
 
-  // 门 2 的本仓侧依据：root 的 common-dir。解不出来 = 归属校验没依据，本次没查成（不许
-  // 退回纯后缀放行——那会把无关仓库误认成仓内，见 #793 审官红 2）。
-  const rootCommon = resolveGitCommonDir(resolve(root));
+  // 门 2 的本仓侧依据：root 的 common-dir。先 realpath（拿盘上真实大小写——POSIX 大小写敏感
+  // 比较的前提），解不出来 = 归属校验没依据，本次没查成（不许退回纯后缀放行——那会把无关仓库
+  // 误认成仓内，见 #793 审官红 2）。
+  let rootReal;
+  try {
+    rootReal = realpathSync(resolve(root));
+  } catch (e) {
+    return { fail: ['本仓 root 探测不了', '本次没查成：确认在 git 仓内跑 dao-check', `${resolve(root)}: ${String(e.message || e).slice(0, 120)}`] };
+  }
+  const rootCommon = resolveGitCommonDir(rootReal);
   if (!rootCommon) {
-    return { fail: ['本仓 git 归属探测不了', '本次没查成：确认在 git 仓内跑 dao-check（链接归属校验需要 common-dir）', resolve(root)] };
+    return { fail: ['本仓 git 归属探测不了', '本次没查成：确认在 git 仓内跑 dao-check（链接归属校验需要 common-dir）', rootReal] };
   }
 
   const face = join(home, '.claude', 'skills');

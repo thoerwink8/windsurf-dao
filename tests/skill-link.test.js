@@ -210,6 +210,26 @@ describe('skill-link', () => {
       });
     }
 
+    // ── ⑧c 红样本：POSIX 大小写敏感——RepoA 与 repoa 是两个不同目录（不同仓），
+    //    链接指向 repoa 的 host/skills/<名>，root 是 RepoA ⇒ 必须红（不许 lower 后相等）。
+    //    Windows 上文件系统本身大小写不敏感，两个路径是同一个目录，该样本无意义 ⇒ 跳过。──
+    if (process.platform !== 'win32') {
+      const RepoA = path.join(OUTSIDE, "case-RepoA");
+      const repoa = path.join(OUTSIDE, "case-repoa");
+      for (const r of [RepoA, repoa]) {
+        fs.mkdirSync(path.join(r, ".git"), { recursive: true });
+        fs.mkdirSync(path.join(r, "host", "skills", "dispatch"), { recursive: true });
+      }
+      const home = makeHome("case-home");
+      linkSkill(home, "dispatch", path.join(repoa, "host", "skills", "dispatch"));
+      const r = checkSkillLinks({ root: RepoA, home });
+      await t.test('POSIX 大小写不同目录（RepoA vs repoa）⇒ 报红（大小写敏感比较）', () => {
+        assert.ok(!!r.fail && /指错/.test(r.fail[2]), 'POSIX 大小写不同目录 ⇒ 报红  →  ' + JSON.stringify(r).slice(0, 200));
+      });
+    } else {
+      await t.test('⑧c POSIX 大小写样本（跳过：Windows 文件系统大小写不敏感，无此区分）', { skip: true }, () => {});
+    }
+
     // ── ⑧b 红样本：目标不在任何 git 仓内（普通拷贝，放仓外）⇒ 报「不是本仓 checkout」──
     {
       const root = makeRoot("no-git-target");
