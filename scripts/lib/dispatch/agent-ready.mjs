@@ -172,10 +172,10 @@ export function pickAgentTerminal(terminals, { worktreeId, wantAgentId, knownHan
     }
     if (matching.length === 1) {
       return {
-        ok: true, unscanned: false, stale: true, handle: matching[0].handle,
+        ok: false, unscanned: false, stale: true, handle: matching[0].handle,
         agentIdentity: matching[0].agentIdentity,
         scanned: inTree.length, count: 1,
-        error: `worker-start 后没有新的 agentIdentity=${label} 终端（已有 1 张旧的）`,
+        error: `worker-start 后没有新的 agentIdentity=${label} 终端（已有 1 张旧的 ${matching[0].handle}，不许复用）`,
       };
     }
     return {
@@ -229,12 +229,6 @@ export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAge
     };
   }
   if (picked.stale) {
-    if (claimedHandle && claimedHandle === picked.handle) {
-      return {
-        action: 'keep', handle: picked.handle, agentIdentity: picked.agentIdentity,
-        reason: '记账 handle 已是唯一旧 agent 终端',
-      };
-    }
     return {
       action: 'ambiguous',
       handle: claimedHandle || null,

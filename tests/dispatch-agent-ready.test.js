@@ -174,6 +174,26 @@ describe('dispatch-agent-ready（#802）', () => {
       });
       assert.ok(p.action === 'calibrate' && p.handle === 'term_pi_new', JSON.stringify(p));
     });
+    await t.test('故意违规：差集为零且 claimed 等于旧 pi → 必须失败，不许 keep', () => {
+      const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_pi_old',
+        terminals: [shell, piOld],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        knownHandles: ['term_shell', 'term_pi_old'],
+      });
+      assert.ok(p.action !== 'keep' && p.action === 'ambiguous' && /term_pi_old/.test(p.error), JSON.stringify(p));
+      const d = S.planDeferredRepair({
+        claimedHandle: 'term_pi_old',
+        terminals: [shell, piOld],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        book: 'BOOK_FOR_SECOND_WORKER',
+        knownHandles: ['term_shell', 'term_pi_old'],
+      });
+      assert.ok(d.ok === false && d.action === 'ambiguous' && d.sends.length === 0, JSON.stringify(d));
+    });
   });
 
   it('requireBookForRepair / planRepairSends：缺任务书不能记 fallback-ok', async (t) => {
