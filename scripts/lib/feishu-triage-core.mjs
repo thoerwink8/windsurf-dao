@@ -121,7 +121,9 @@ async function triageInner(inbound, deps) {
     }
 
     const rendered = await runRender(inbound, thread, deps);
-    const gate = deps.allowOpenIds.includes(inbound.senderOpenId) ? GATE_ALLOWED : GATE_PENDING;
+    // 两档放行按「话题发起人」定（审官实证点）：名单内的人补答三问 ≠ 认可外人的需求；
+    // 只有发起人自己在名单里，建单才直接 已消歧。
+    const gate = deps.allowOpenIds.includes(thread.originOpenId) ? GATE_ALLOWED : GATE_PENDING;
     const title = `[飞书] ${rendered.title}`;
     const created = await deps.ghCreateIssue(repo, {
       title,
@@ -140,7 +142,7 @@ async function triageInner(inbound, deps) {
         number: created.number,
         url: created.url,
         title,
-        from: inbound.senderName || inbound.senderOpenId,
+        from: thread.originName || thread.originOpenId,
       });
     }
     return { replies: [{ rootId, text: createdReply(created, rendered.title, gate) }], actions, state: next };
@@ -332,6 +334,8 @@ function freshThread(inbound) {
     dedup: null,
     answers: null,
     issue: null,
+    originOpenId: inbound.senderOpenId,
+    originName: inbound.senderName || '',
     createdTs: inbound.ts,
     updatedAt: inbound.ts,
   };

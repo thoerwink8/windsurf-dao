@@ -271,6 +271,29 @@ describe('feishu-triage-core（#801 块 B）', () => {
       assert.strictEqual(out2.actions.length, 1);
       assert.strictEqual(out2.actions[0].gate, '已消歧');
     });
+
+    // 审官实证点：外人发起话题，名单内的人补答三问 → 放行仍按发起人（待拍板），不许被补答者带成已消歧
+    const { deps: deps3, calls: calls3 } = makeDeps({
+      allowOpenIds: [USER_OPEN_ID],
+      searchResult: [],
+      llm: scriptedLlm([
+        { verdicts: [], summary: '新需求' },
+        { answers: { done: { answered: false, text: '' }, batch: { answered: false, text: '' }, docs: { answered: false, text: '' } }, questions: ['这批做还是以后做？'] },
+        { ...FULL_ANSWERS },
+        { title: '加群映射', sections: { 现象: 'x', 复现或来源: 'y', 期望: 'z' } },
+      ]),
+    });
+    const out3a = await S.triage(inbound({ senderOpenId: OTHER_OPEN_ID, senderName: '客户甲' }), deps3);
+    assert.strictEqual(out3a.state.get('om_root1').phase, 'asking', '外人发起 → 先追问');
+    deps3.state = out3a.state;
+    const out3b = await S.triage(inbound({ messageId: 'om_msg2', senderOpenId: USER_OPEN_ID, senderName: '用户', text: '这批做' }), deps3);
+    await t.test('外人发起 + 名单内补答：仍待拍板 + hub_card（放行按发起人）', () => {
+      assert.deepStrictEqual(calls3.create[0].arg.labels, ['任务', '待拍板']);
+      assert.strictEqual(out3b.actions.length, 2);
+      assert.strictEqual(out3b.actions[0].gate, '待拍板');
+      assert.strictEqual(out3b.actions[1].type, 'hub_card');
+      assert.strictEqual(out3b.actions[1].from, '客户甲', '卡片署名发起人，不是补答者');
+    });
   });
 
   it('issue 正文固定段：现象/复现或来源/期望/三问答案/来源消息，不贴聊天全文', async (t) => {
