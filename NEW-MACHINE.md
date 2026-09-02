@@ -117,7 +117,7 @@ Claude Code（帅位）装机必设：`autoCompactWindow=500k`（1M 窗口的 50
 
 pi 是 DeepSeek 系工人的 CLI。装与验：
 
-- npm 包名 `@mariozechner/pi-coding-agent`，命令是 `pi`；`@mariozechner/pi` 是另一个 vLLM 管理工具，别装错。
+- npm 包名 `@earendil-works/pi-coding-agent`（Mirasim 认的分支，`host/pi-extensions/test/e2e.mjs` 也只找它），命令是 `pi`。**别装上游 `@mariozechner/pi-coding-agent`**：两包争同一个 `pi` 命令，装了上游后 Mirasim 装分支必报 EEXIST，且上游版 `pi --version` 在 stdin 关闭时一个字不印，Mirasim 探测判「无法运行」（2026-09-02 本机实咬）。已装错就 `npm uninstall -g @mariozechner/pi-coding-agent` 再装分支。`@mariozechner/pi` 是另一个 vLLM 管理工具，同样别装。
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。

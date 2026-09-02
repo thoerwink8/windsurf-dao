@@ -22,7 +22,7 @@ default_model = "opencode-go/deepseek-v4-flash"   # #602：裸 model 名跨 prov
 launch = "pi --model {model}"
 launch_model = "opencode-go/deepseek-v4-flash"
 launch_note = """
-DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @mariozechner/pi-coding-agent，别装成 @mariozechner/pi）。
+DeepSeek 系工人的 CLI。启动命令即 pi（npm 包 @earendil-works/pi-coding-agent；别装上游 @mariozechner/pi-coding-agent，装法与坑见 NEW-MACHINE.md §6）。
 派单默认模型 deepseek-v4-flash（拍板 issue #462，本文件 [providers.deepseek].default_model 为固化点）。
 峰谷计费 2026-08-17 北京时间 0 点生效，精确价目见文件末尾「DeepSeek 价目注记」。
 

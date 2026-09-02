@@ -297,6 +297,31 @@ describe('onboard', () => {
     });
   });
 
+  describe('⑦ PATH 上的 pi 是哪个包（上游包与 Mirasim 认的分支争同一个命令）', () => {
+    const shim = (pkg) => `@ECHO off\r\n"%_prog%"  "%dp0%\\node_modules\\${pkg.replace('/', '\\')}\\dist\\cli.js" %*\r\n`;
+    const mkPath = (tag, pkg) => { const { home } = mkHome(tag); const dir = path.join(home, 'bin'); fs.mkdirSync(dir); if (pkg) fs.writeFileSync(path.join(dir, 'pi.cmd'), shim(pkg)); return dir; };
+    it('PATH 上没 pi → 不算问题', async () => {
+      const S = await LIB_LOAD;
+      assert.deepEqual(S.checkPiPackage({ pathDirs: [mkPath('pi-pkg-none'), ''] }), {});
+    });
+    it('分支包 → 绿', async () => {
+      const S = await LIB_LOAD;
+      assert.deepEqual(S.checkPiPackage({ pathDirs: [mkPath('pi-pkg-ok', S.PI_PACKAGE)] }), {});
+    });
+    it('上游包 → pi-wrong-package，msg 给出卸装两步', async () => {
+      const S = await LIB_LOAD;
+      const r = S.checkPiPackage({ pathDirs: [mkPath('pi-pkg-bad', S.PI_WRONG_PACKAGE)] });
+      assert.equal(r.problem?.id, 'pi-wrong-package', JSON.stringify(r));
+      assert.match(r.problem.msg, /npm uninstall -g @mariozechner\/pi-coding-agent/);
+      assert.match(r.problem.msg, /npm install -g @earendil-works\/pi-coding-agent/);
+      assert.ok(S.ONBOARD_REPORT_ONLY.has('pi-wrong-package'), '修要联网，只能报');
+    });
+    it('PATH 前面是分支、后面才是上游 → 绿（shell 只认第一个）', async () => {
+      const S = await LIB_LOAD;
+      assert.deepEqual(S.checkPiPackage({ pathDirs: [mkPath('pi-pkg-first', S.PI_PACKAGE), mkPath('pi-pkg-second', S.PI_WRONG_PACKAGE)] }), {});
+    });
+  });
+
   it('接线：settings.json SessionStart 只挂 onboard 哨兵（守卫已归零不许回来）', () => {
     const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
     const cmds = (settings.hooks?.SessionStart || []).flatMap(g => (g.hooks || []).map(h => h.command));

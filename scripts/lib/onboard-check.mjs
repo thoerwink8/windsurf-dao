@@ -38,7 +38,7 @@ const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
 
 /** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），
  *  别各写各的：一边算修不了、另一边还让它把退出码染红，就成了永远红的报警。 */
-export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot', 'statusline-dangling']);
+export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot', 'statusline-dangling', 'pi-wrong-package']);
 
 /** ① 全局约定漂移。真相源读不到 = 没查成（不是绿）。 */
 export function checkGlobalClaude({ root, home }) {
@@ -95,6 +95,7 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
   take(checkMcpBootCost({ home }));
   take(checkStatusLine({ home }));
   take(checkPiExtensions({ root, home }));
+  take(checkPiPackage({}));
 
   const mem = checkMemoryLink({ root, home });
   if (mem.fail) problems.push({ id: 'memory-broken', msg: `memory 断链：${mem.fail[0]}` });
@@ -161,6 +162,32 @@ export function checkPiExtensions({ root, home }) {
     msg: `~/.pi/agent/extensions 缺 ${missing.join(' ')}（go-fallback：og 撞顶时明着报，不静默换通道）` } };
   if (drift.length) return { problem: { id: 'pi-ext-drift',
     msg: `~/.pi/agent/extensions/${drift.join(' ')} 与仓里 host/pi-extensions 不一致（仓更新了没装，或本机手改）` } };
+  return {};
+}
+
+/** ⑦ PATH 上的 pi 是哪个包。要的是 Mirasim 认的分支 @earendil-works/pi-coding-agent；上游
+ *  @mariozechner/pi-coding-agent 与它争同一个 `pi` 命令——装了上游，Mirasim 装分支必报 EEXIST，
+ *  且上游版 `pi --version` 在 stdin 关闭时一个字不印，Mirasim 探测判「无法运行」，界面只剩一个
+ *  永远失败的「重新安装」（2026-09-02 本机实咬，NEW-MACHINE 此前还叫人装上游）。
+ *  判据零子进程：读 PATH 里第一个 pi 命令的 npm shim（pi.cmd / pi），看它 require 的包路径。
+ *  PATH 上没 pi = 没装，不算问题；shim 读不了 = 没查成。只报不修（修要 npm 联网）。 */
+export const PI_PACKAGE = '@earendil-works/pi-coding-agent';
+export const PI_WRONG_PACKAGE = '@mariozechner/pi-coding-agent';
+export function checkPiPackage({ pathDirs = String(process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':') } = {}) {
+  for (const dir of pathDirs) {
+    if (!dir) continue;
+    for (const name of ['pi.cmd', 'pi']) {
+      const shim = join(dir, name);
+      if (!existsSync(shim)) continue;
+      let text;
+      try { text = readFileSync(shim, 'utf8'); }
+      catch (e) { return { unscanned: `${shim} 读不了：${e.code || e.message}` }; }
+      const pkg = text.match(/node_modules[\\/](@[^\\/\s"']+[\\/][^\\/\s"']+)/)?.[1]?.replace(/\\/g, '/');
+      if (pkg === PI_WRONG_PACKAGE) return { problem: { id: 'pi-wrong-package',
+        msg: `PATH 上的 pi 是上游 ${PI_WRONG_PACKAGE}（Mirasim 装不上、探测判无法运行）——\`npm uninstall -g ${PI_WRONG_PACKAGE}\` 再 \`npm install -g ${PI_PACKAGE}\`` } };
+      return {};   // 第一个命中的 pi 说了算，后面的 PATH 项不看（和 shell 一样）
+    }
+  }
   return {};
 }
 
