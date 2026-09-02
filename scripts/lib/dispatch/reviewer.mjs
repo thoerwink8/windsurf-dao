@@ -310,6 +310,117 @@ export function assertReviewerSeat({ reviewerId, routing } = {}) {
   return { ok: true, modelId: seat.modelId };
 }
 
+/**
+ * #799：从工人 job.dispatch 事件读 merge-policy。
+ * 匹配优先级：dispatch_id / job_id=dispatch-<id> > issue_number > pr_number。
+ * 同档取 ts 最新。字段缺失与「没有匹配事件」分开，都不猜成 auto。
+ */
+export function pickMergePolicyFromLedger({ events, issue, pr, dispatchId } = {}) {
+  if (events == null) {
+    return { ok: false, unscanned: true, state: 'unscanned', error: '账本事件没拿到（没查成）' };
+  }
+  if (!Array.isArray(events)) {
+    return { ok: false, unscanned: true, state: 'unscanned', error: '账本事件不是数组（没查成）' };
+  }
+  const issueN = issue != null && String(issue).trim() !== '' ? Number(issue) : null;
+  const prN = pr != null && String(pr).trim() !== '' ? Number(pr) : null;
+  const wantDispatch = String(dispatchId || '').trim() || null;
+
+  const scoreOf = (e) => {
+    if (!e || e.type !== 'job.dispatch') return 0;
+    if (e.identity && e.identity !== '工人') return 0;
+    if (wantDispatch && (
+      String(e.dispatch_id || '') === wantDispatch
+      || String(e.job_id || '') === `dispatch-${wantDispatch}`
+    )) return 3;
+    if (issueN && Number.isInteger(issueN) && (
+      Number(e.issue_number) === issueN || Number(e.issue) === issueN
+    )) return 2;
+    if (prN && Number.isInteger(prN) && Number(e.pr_number) === prN) return 1;
+    return 0;
+  };
+
+  const ranked = [];
+  for (const e of events) {
+    const s = scoreOf(e);
+    if (s > 0) ranked.push({ e, s });
+  }
+  if (ranked.length === 0) {
+    return { ok: false, state: 'none', error: '账本没有匹配的工人 job.dispatch' };
+  }
+  ranked.sort((a, b) => {
+    if (a.s !== b.s) return a.s - b.s;
+    return String(a.e.ts || '').localeCompare(String(b.e.ts || ''));
+  });
+  const ev = ranked[ranked.length - 1].e;
+  const policy = ev.merge_policy || ev.mergePolicy || null;
+  const reason = ev.merge_reason || ev.mergeReason || null;
+  if (policy !== 'auto' && policy !== 'manual') {
+    return { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy', event: ev };
+  }
+  return {
+    ok: true,
+    state: 'one',
+    mergePolicy: policy,
+    mergeReason: reason ? String(reason) : null,
+    source: 'ledger',
+    event: ev,
+  };
+}
+
+/**
+ * #799：审官任务书的 merge-policy。
+ * 显式旗标 > 账本 > 卡备注；都读不到才回退 auto，并带 fallbackReason 写进任务书。
+ */
+export function resolveReviewerMergePolicy({
+  explicitPolicy, explicitReason, ledger, comment,
+} = {}) {
+  const explicit = String(explicitPolicy || '').trim();
+  if (explicit) {
+    if (explicit !== 'auto' && explicit !== 'manual') {
+      return { ok: false, error: `--merge-policy 只允许 auto|manual，实际 ${explicit}` };
+    }
+    if (explicit === 'manual' && !String(explicitReason || '').trim()) {
+      return { ok: false, error: '--merge-policy manual 必须给 --merge-reason' };
+    }
+    return {
+      ok: true,
+      mergePolicy: explicit,
+      mergeReason: explicit === 'manual' ? String(explicitReason).trim() : null,
+      source: 'flag',
+    };
+  }
+
+  if (ledger && ledger.ok && (ledger.mergePolicy === 'auto' || ledger.mergePolicy === 'manual')) {
+    return {
+      ok: true,
+      mergePolicy: ledger.mergePolicy,
+      mergeReason: ledger.mergeReason || null,
+      source: 'ledger',
+    };
+  }
+
+  const fromComment = comment && (comment.mergePolicy === 'auto' || comment.mergePolicy === 'manual')
+    ? comment
+    : null;
+  if (fromComment) {
+    return {
+      ok: true,
+      mergePolicy: fromComment.mergePolicy,
+      mergeReason: fromComment.mergeReason || null,
+      source: 'comment',
+    };
+  }
+
+  return {
+    ok: true,
+    mergePolicy: 'auto',
+    mergeReason: null,
+    source: 'fallback',
+    fallbackReason: (ledger && ledger.unscanned) ? '读不到派工记账' : '账本无mergePolicy',
+  };
+}
+
 /** 审官 dispatch 已结算：报帅，不许自动 reviewer-create / 换厂再造。没查成 ≠ 未结算。 */
 export function planAfterSettledReviewer({ settlement } = {}) {
   if (settlement == null) {

@@ -125,7 +125,7 @@ export function buildBatchInject({ spec, issue } = {}) {
   return text;
 }
 
-export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait } = {}) {
+export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergePolicy, mergeReason, skipWait, fallbackReason } = {}) {
   const policy = mergePolicy == null ? mergePolicy : String(mergePolicy);
   const text = renderInjectTemplate('reviewer-inject.md', {
     SPEC: spec,
@@ -137,6 +137,7 @@ export function buildReviewerInject({ spec, issue, pr, soldierDispatchId, mergeP
     MERGE_POLICY: policy,
     MERGE_REASON_REF: policy === 'manual' && mergeReason ? ` r=${mergeReason}` : '',
     SKIP_WAIT_REF: skipWait ? ' s=1' : '',
+    FALLBACK_REF: fallbackReason ? ` fb=${fallbackReason}` : '',
   });
   const gate = assertInjectText(text, { label: '审官注入' });
   if (!gate.ok) throw new Error(gate.error);
