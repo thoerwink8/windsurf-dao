@@ -163,7 +163,7 @@ export function orcaKnownAgentId({ provider, command } = {}) {
   const p = String(provider || '').toLowerCase();
   if (bin === 'cursor-agent' || bin === 'agent' || p === 'cursor') return 'cursor';
   if (bin === 'grok' || p === 'grok') return 'grok';
-  if (bin === 'pi' || p === 'deepseek' || p === 'opencode-go') return 'pi';
+  if (bin === 'pi' || p === 'deepseek' || p === 'opencode-go' || p === 'gw') return 'pi';
   if (bin === 'codex' || p === 'gpt') return 'codex';
   // 2026-08-26 实测：Orca 原生支持 `--agent devin`（worktree create --agent devin 成功），
   // 不再走 command 型 --command + worker-start --terminal（会 agent_unconfigured）。

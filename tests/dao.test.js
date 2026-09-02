@@ -139,8 +139,8 @@ describe('dao', () => {
       assert.ok(!/--permission-mode\s+auto/.test(grok.command), 'grok launch 不再用 --permission-mode auto 冒充免确认  →  ' + grok.command);
     });
     const flash = S.resolveLaunch({ model: 'deepseek-v4-flash', routing });
-    await t.test('#602 pi 启动带 provider 前缀，避免裸名歧义', () => {
-      assert.ok(flash.command.includes('opencode-go/deepseek-v4-flash'), '#602 pi 启动带 provider 前缀，避免裸名歧义  →  ' + flash.command);
+    await t.test('#602 / #797 pi 启动走 gw-dspool 前缀，避免裸名歧义', () => {
+      assert.ok(flash.provider === 'gw' && flash.command.includes('gw-dspool/deepseek-v4-flash'), '#602 / #797 pi 启动走 gw-dspool  →  ' + flash.command);
     });
     const kimi = S.resolveLaunch({ model: 'kimi-k3', routing });
     await t.test('#615 kimi 主路走 cursor-agent / kimi-k3-high', () => {
@@ -2781,6 +2781,10 @@ describe('dao', () => {
         '认识的 agent：cursor / grok / pi / codex 有 id  →  ' + JSON.stringify({
           kimi: kimi.agentId, grok: grokLaunch.agentId, flash: flash.agentId, gpt: gpt.agentId,
         }));
+    });
+    await t.test('#797 gw provider 映射到 --agent pi（不靠 launch 二进制名）', () => {
+      assert.ok(S.orcaKnownAgentId({ provider: 'gw' }) === 'pi',
+        '#797 gw → pi  →  ' + S.orcaKnownAgentId({ provider: 'gw' }));
     });
     await t.test('reclaude 不能映射成 --agent claude', () => {
       assert.ok(claude.agentId == null && /reclaude/.test(claude.command),
