@@ -19,7 +19,7 @@
 3. **屏面稳定 ≠ 开工**：开工验证带任务书指纹（expect），见指纹才算注入成功；`[Pasted Content]` / `[Pasted text]` 停在输入框 = 未提交（#661）。
 4. **审官单例（#575 一 PR 一审官）**：已有审官卡复用，不销毁重建、不反复 attach。残留卡多了说明在反复重试——停下来查根因（注入/就绪），不是继续换卡。
 5. **worker-start 快**：stalled 是"送达失败"不是"等不够久"，别加长超时硬等——修送达（等就绪/走 agent 协议）。
-6. **`--agent` 成功 ≠ agent 在跑**（#802）：无头 Linux 上 pi/devin 会落成裸 bash，任务书被 shell 执行。派工读屏见裸 shell / `command not found` 才回退 `--command`；空屏/spinner 不当回退。
+6. **`--agent` 回的 handle ≠ agent 终端**（#802）：无头 Linux 上 agent 起在另一张终端（`agentIdentity`），记账 handle 常是空壳，任务书打进 bash。派工按 `agentIdentity` 校准再注入；title 不可靠。
 
 ## 原材料
 

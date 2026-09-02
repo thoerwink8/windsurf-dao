@@ -14,7 +14,7 @@ describe('dispatch-agent-ready（#802）', () => {
     const S = await S_LOAD;
 
     await t.test('故意违规：读: command not found → shell-ate-inject', () => {
-      const r = S.classifyAgentScreen('读: command not found\norca@host:~/w$ ');
+      const r = S.classifyAgentScreen('读: command not found\norca@host:~$ ');
       assert.ok(r.kind === 'shell-ate-inject', 'command not found  →  ' + JSON.stringify(r));
     });
     await t.test('bash: 读: command not found 同样算注入被吃', () => {
@@ -85,14 +85,61 @@ describe('dispatch-agent-ready（#802）', () => {
     assert.ok(!('error' in emptyErr), '空 error 不写进行  →  ' + JSON.stringify(emptyErr));
   });
 
-  it('dao.mjs 接线：startOrcaWorker 探屏回退；startWorkerBySlate 成功也记 attempts', () => {
+  it('agentIdentity：校准到 agent 终端，不许把空壳当注入目标', async (t) => {
+    const S = await S_LOAD;
+    const wt = 'repo::/work';
+    const shell = { handle: 'term_shell', worktreeId: wt, title: 'Terminal 1', agentIdentity: null, preview: 'user@host:~$ ' };
+    const coord = { handle: 'term_coord', worktreeId: wt, title: '派工协调（勿关）', agentIdentity: null };
+    const pi = { handle: 'term_pi', worktreeId: wt, title: 'pi session', agentIdentity: 'pi', preview: 'pi ready' };
+    const grok = { handle: 'term_grok', worktreeId: wt, title: 'Grok', agentIdentity: 'grok' };
+
+    await t.test('字段在但空 = shell；有值 = agent；字段不在 = unknown', () => {
+      assert.ok(S.classifyTerminalRole(shell).kind === 'shell', JSON.stringify(S.classifyTerminalRole(shell)));
+      assert.ok(S.classifyTerminalRole(pi).kind === 'agent' && S.classifyTerminalRole(pi).agentIdentity === 'pi');
+      assert.ok(S.classifyTerminalRole({ handle: 'term_old', title: 'Grok' }).kind === 'unknown');
+    });
+    await t.test('故意违规：claimed 是空壳、旁边有 pi → calibrate，不往壳送 launch', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_shell',
+        terminals: [shell, coord, pi],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'calibrate' && p.handle === 'term_pi' && p.fromHandle === 'term_shell', JSON.stringify(p));
+    });
+    await t.test('claimed 已是 agent → keep', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_grok', terminals: [shell, grok], worktreeId: wt, wantAgentId: 'grok',
+      });
+      assert.ok(p.action === 'keep' && p.handle === 'term_grok', JSON.stringify(p));
+    });
+    await t.test('只有空壳 → fallback-command', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_shell', terminals: [shell, coord], worktreeId: wt, wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'fallback-command', JSON.stringify(p));
+    });
+    await t.test('老回包没 agentIdentity → unscanned，不是当成 0 个 agent', () => {
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_x',
+        terminals: [{ handle: 'term_x', worktreeId: wt, title: 'Terminal 1' }],
+        worktreeId: wt,
+      });
+      assert.ok(p.action === 'unscanned', JSON.stringify(p));
+    });
+    await t.test('list 不是数组 → unscanned', () => {
+      const p = S.planInjectTarget({ claimedHandle: 'term_x', terminals: null });
+      assert.ok(p.action === 'unscanned', JSON.stringify(p));
+    });
+  });
+
+  it('dao.mjs 接线：校准 agentIdentity 再注入；startWorkerBySlate 成功也记 attempts', () => {
     const src = fs.readFileSync(CLI, 'utf8');
     const startFn = src.match(/function startOrcaWorker[\s\S]*?\nfunction startWorkerBySlate/);
     assert.ok(startFn, '定位 startOrcaWorker');
-    assert.ok(/classifyAgentScreen\(/.test(startFn[0]) && /planAgentScreenFallback\(/.test(startFn[0]),
-      'startOrcaWorker 要探屏并走回退计划');
-    assert.ok(/argsTerminalSend\(/.test(startFn[0]) && /argsTerminalWait\(/.test(startFn[0]),
-      '回退要往已有终端送 launch 命令并 wait tui-idle');
+    assert.ok(/planInjectTarget\(/.test(startFn[0]), 'startOrcaWorker 要按 agentIdentity 校准 handle');
+    assert.ok(/kind: injected\.ok \? 'resend-ok'/.test(startFn[0]), '校准后重送任务书到 agent 终端');
+    assert.ok(/action === 'fallback-command'/.test(startFn[0]), '没有 agent 终端才回退 --command');
     assert.ok(/fellBackToCommand/.test(startFn[0]), '回退后跳过补粘/补回车');
 
     const slateFn = src.match(/function startWorkerBySlate[\s\S]*?\nfunction readOnceHandle/);

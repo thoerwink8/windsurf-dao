@@ -16,7 +16,7 @@
 
 ```
 worker-start --agent devin（launch 模板 = devin --permission-mode dangerous --respect-workspace-trust false，agent 型拒收 --model）
-- **无头 Linux**：`--agent devin` 可能落成裸 bash（#802 与 pi 同晚现场）。dispatch 读屏见裸 shell 就回退送 launch 命令，不要改 toml `start=command`（Windows 上 command+`--terminal` 会 `agent_unconfigured`）。
+- **无头 Linux**：`--agent devin` 同样可能把 agent 起在另一张终端、handle 仍指向空壳（#802）。dispatch 按 `agentIdentity` 校准再注入，不要改 toml `start=command`。
 ```
 
 - **交互 TUI**：Orca 起 Devin CLI TUI（v3000.5.20，bypass permissions on），工人可交互式干活、实时看屏。
