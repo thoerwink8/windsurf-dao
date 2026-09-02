@@ -1830,7 +1830,7 @@ function cmdDispatchBatch(args) {
       }
       const taskId = extractTaskId(task.json);
       if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
-      return { ok: true, taskId };
+      return { ok: true, taskId, specText };
     },
     startWorker({ task, terminal, worktree, agent, model, deferred, book }) {
       // fire-and-forget（2026-08-23）：送字即收，不等认账；确认交 watchdog。

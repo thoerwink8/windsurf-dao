@@ -304,4 +304,25 @@ describe('dispatch-agent-ready（#802）', () => {
         '调用点没传 book：' + c.block.slice(0, 280));
     }
   });
+
+  it('deferred 入口 task-create 与 startOrcaWorker 用同一份编码任务书（不要只扫重送分支）', () => {
+    const src = fs.readFileSync(CLI, 'utf8');
+    const batchLib = fs.readFileSync(path.join(REPO, 'scripts', 'lib', 'dispatch', 'batch.mjs'), 'utf8');
+    const childSeg = src.slice(src.indexOf('startSplitChildren'), src.indexOf('function cmdDispatchBatch'));
+    assert.ok(/taskCreateOnRun\(childBook/.test(childSeg) && /book: childBook/.test(childSeg),
+      '子工人：task-create 和 startOrcaWorker 必须同用 childBook');
+    const batchSeg = src.slice(src.indexOf('function cmdDispatchBatch'), src.indexOf('function cmdPrSyncLabels'));
+    assert.ok(/return \{ ok: true, taskId, specText \}/.test(batchSeg),
+      '批派工 createTask 必须把 encodeSendText 后的 specText 带回去');
+    assert.ok(/book: task\.specText/.test(batchLib) || /const book = String\(task\.specText/.test(batchLib),
+      '批派工 startWorker 必须用 createTask 的 specText，不是 w.inject');
+    assert.ok(!/book: w\.inject \|\| w\.spec/.test(batchLib),
+      '批派工不得再把未编码 inject 当 book');
+    const createSeg = src.slice(src.indexOf('function cmdReviewerCreate'), src.indexOf('function cmdReviewerAttach'));
+    assert.ok(/taskCreateOnRun\(reviewerBook/.test(createSeg) && /book: reviewerBook/.test(createSeg),
+      'reviewer-create：task-create 和 startOrcaWorker 必须同用 reviewerBook');
+    const attachSeg = src.slice(src.indexOf('function cmdReviewerAttach'), src.indexOf('function cmdSend'));
+    assert.ok(/taskCreateOnRun\(reviewerBook/.test(attachSeg) && /book: reviewerBook/.test(attachSeg),
+      'reviewer-attach：task-create 和 startOrcaWorker 必须同用 reviewerBook');
+  });
 });

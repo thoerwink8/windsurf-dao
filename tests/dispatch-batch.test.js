@@ -44,7 +44,8 @@ function makeEffects({ failAt } = {}) {
       log.push(['createTask', p]);
       const n = ++taskSeq;
       if (failAt === `createTask:${n}`) return { ok: false, error: `task fail ${n}` };
-      return { ok: true, taskId: `task_${n}` };
+      if (failAt === 'createTask:no-specText') return { ok: true, taskId: `task_${n}` };
+      return { ok: true, taskId: `task_${n}`, specText: `ENCODED:${p.spec}` };
     },
     startWorker(p) {
       log.push(['startWorker', p]);
@@ -138,8 +139,17 @@ describe('dispatch --batch', () => {
     assert.strictEqual(taskCall[1].issue, '600');
     assert.ok(fx.log.some(row => row[0] === 'startWorker' && row[1].issue === '600'));
     const startCall = fx.log.find(row => row[0] === 'startWorker');
-    assert.ok(startCall[1].book && String(startCall[1].book).includes('batch-book.md'),
-      '#802 startWorker 必须带 inject 任务书  →  ' + JSON.stringify(startCall[1]));
+    assert.strictEqual(startCall[1].book, `ENCODED:${taskCall[1].spec}`,
+      '#802 startWorker 必须用 createTask 带回的 specText，不是未编码 inject  →  ' + JSON.stringify(startCall[1]));
+  });
+
+  it('#802 createTask 没带回 specText → fail-loud，不拿 inject 当已派', async () => {
+    const S = await S_LOAD;
+    const plan = S.planDispatchBatch({
+      name: '总卡', issue: '600', model: 'grok-4.6', items: items(1),
+    });
+    const r = S.runDispatchBatch({ plan, effects: makeEffects({ failAt: 'createTask:no-specText' }) });
+    assert.ok(!r.ok && /specText/.test(r.error), JSON.stringify(r));
   });
 
   it('N=1 正常路径：1 棵树 + 1 次 start/task/worker-start，不回滚', async () => {
