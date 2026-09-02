@@ -1,0 +1,14 @@
+{
+  "oc_live1live1live1live1live1aaaaaa": { "ok": true, "identity": "bot", "data": { "name": "alpha", "chat_status": "normal" } },
+  "oc_dead1dead1dead1dead1dead1dddddd": {
+    "ok": false,
+    "identity": "bot",
+    "error": {
+      "type": "api",
+      "subtype": "unknown",
+      "code": 99992356,
+      "message": "The request you send is not a valid {open_chat_id} or not exists. Invalid ids: [oc_dead1dead1dead1dead1dead1dddddd]"
+    }
+  },
+  "oc_hub2hub2hub2hub2hub2hub2hhhhhh": { "ok": true, "identity": "bot", "data": { "name": "hub", "chat_status": "normal" } }
+}

@@ -9,13 +9,15 @@ description: 飞书机器人日常。加群↔仓映射、改放行名单、用 
 
 ## 群↔仓映射：加一行
 
-表随 #801 PR #806 入仓。本树未合入，先别改文件。合入后加一行用这个形状：
+仓内 `host/machine/feishu-groups.json` 是占位模板（真实 chat_id 不进仓）。实机映射在 `~/.mirasim/keys/feishu-groups.json`（600，与凭据同目录，换机手动带）。加一行用这个形状：
 
 - key = 群 `chat_id`（`oc_` 开头）
 - 项目群：`{ "repo": "owner/name", "kind": "project" }`
 - 总控群：`{ "kind": "hub" }`（不填 repo）
 - `_` 开头的键是注释，不参与映射
 - 占位 key 等真实 `chat_id` 下来再替换
+
+dao-check 的 feishu-groups 项优先读实机映射，用 `lark-cli im chats get --as bot` 确认群还在；没有实机映射则 SKIP「本机未接飞书」。红了改实机那份：把失效 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`），或删掉已解散的那一行。
 
 改完重启才吃到：`sudo systemctl restart feishu-triage`。
 
@@ -35,7 +37,7 @@ lark-cli im +messages-send --as bot --chat-id oc_xxx --text "<正文>"
 ## 出问题先看
 
 1. `journalctl -u feishu-triage -e`（stdout 是 JSONL：`inbound` / `reply` / `action` / `done`；诊断在 stderr）
-2. 映射表是否缺这一群、`chat_id` 是否还是占位（表在 #801 PR #806）
+2. 实机映射是否缺这一群、`chat_id` 是否还是占位（`~/.mirasim/keys/feishu-groups.json`；仓内 `host/machine/feishu-groups.json` 只是占位）
 3. 凭据文件是否在、权限是否 600
 4. `lark-cli` 是否用了 `--as bot`
 
