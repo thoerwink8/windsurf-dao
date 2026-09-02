@@ -345,6 +345,28 @@ describe('feishu-triage-core（#801 块 B）', () => {
       assert.strictEqual(out.replies[0].text, '机器人暂时没法判断，稍后重试。');
       assert.strictEqual(calls.create.length, 0);
     });
+
+    await t.test('已有话题：失败不得污染入参 state（#801 审官实证点）', async () => {
+      // 第一跳：判重未命中 → asking，状态落在 deps.state 里。
+      const { deps, calls } = makeDeps({
+        searchResult: [],
+        llm: scriptedLlm([
+          { verdicts: [], summary: '新需求' },
+          { answers: { done: { answered: false, text: '' }, batch: { answered: false, text: '' }, docs: { answered: false, text: '' } }, questions: ['做到什么算做完？'] },
+          boom,
+        ]),
+      });
+      const out1 = await S.triage(inbound(), deps);
+      assert.strictEqual(out1.state.get('om_root1').msgs.length, 1);
+      deps.state = out1.state;
+      const snapshot = JSON.stringify([...out1.state.entries()]);
+
+      // 第二跳：同话题新消息，三问 llm 抛错 → 兜底回复，且入参 state 原样（不许带回滚外的痕迹）。
+      const out2 = await S.triage(inbound({ messageId: 'om_msg2', text: '这批做' }), deps);
+      assert.strictEqual(out2.replies[0].text, '机器人暂时没法判断，稍后重试。');
+      assert.strictEqual(calls.create.length, 0);
+      assert.strictEqual(JSON.stringify([...out2.state.entries()]), snapshot, '失败后 state 必须与失败前逐字节一致（消息没追加、时间戳没动）');
+    });
   });
 
   it('hub 群（repo=null）：不建单不判重，只指路', async (t) => {

@@ -77,7 +77,9 @@ async function triageInner(inbound, deps) {
   }
 
   const next = new Map(deps.state);
-  const thread = next.get(rootId) ?? freshThread(inbound);
+  // #801 审官实证点：new Map 是浅拷贝，已有话题的 thread 对象与 deps.state 共享引用——
+  // 直接改会在后续 deps 失败时污染入参（失败必须不留痕，测试「已有话题失败回滚」）。
+  const thread = next.get(rootId) ? cloneThread(next.get(rootId)) : freshThread(inbound);
   next.set(rootId, thread);
   thread.msgs.push({
     messageId: inbound.messageId,
@@ -330,6 +332,30 @@ function freshThread(inbound) {
     createdTs: inbound.ts,
     updatedAt: inbound.ts,
   };
+}
+
+/** 深拷 ThreadState：triage 只改自己的副本，失败时入参 Map 原样归还（不污染）。 */
+function cloneThread(t) {
+  if (!t || typeof t !== 'object') return freshThread({ repo: null, chatId: null, ts: 0 });
+  const clone = { ...t, msgs: [], dedup: null, answers: null, issue: null };
+  clone.msgs = Array.isArray(t.msgs) ? t.msgs.map(m => ({ ...m })) : [];
+  if (t.dedup) {
+    clone.dedup = {
+      ...t.dedup,
+      verdicts: Array.isArray(t.dedup.verdicts) ? t.dedup.verdicts.map(v => ({ ...v })) : [],
+      matched: Array.isArray(t.dedup.matched) ? t.dedup.matched.map(v => ({ ...v })) : [],
+      related: Array.isArray(t.dedup.related) ? t.dedup.related.map(v => ({ ...v })) : [],
+    };
+  }
+  if (t.answers) {
+    clone.answers = {};
+    for (const q of THREE_QUESTIONS) {
+      const a = t.answers[q.key];
+      clone.answers[q.key] = a ? { answered: !!a.answered, text: String(a.text ?? '') } : { answered: false, text: '' };
+    }
+  }
+  if (t.issue) clone.issue = { ...t.issue };
+  return clone;
 }
 
 function transcriptOf(thread) {
