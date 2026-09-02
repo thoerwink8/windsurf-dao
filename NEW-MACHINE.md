@@ -438,7 +438,7 @@ Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员
 
 ### 11.1 Claude Code：`~/.claude/skills`
 
-`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。
+`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
