@@ -24,7 +24,7 @@ node scripts/server-check.mjs           # 人读
 node scripts/server-check.mjs --json    # 给循环
 ```
 
-退出码：`0` 全通 / `1` 有真红 / `2` 有没查成。没查成不许当通过。`--json --out` 落仓外 `~/.dao/server-check/`。
+退出码：`0` 全通 / `1` 有真红 / `2` 有没查成。没查成不许当通过。`--json --out` 落仓外 `~/.dao/server-check/`。脚本在 `scripts/server-check.mjs`。
 
 ## 密钥目录（只写路径，不写值）
 
@@ -40,7 +40,7 @@ node scripts/server-check.mjs --json    # 给循环
 ## 飞书
 
 - CLI：`lark-cli`，机器人身份加 `--as bot`。日常两条见 `feishu-ops`。
-- 适配器：`feishu-triage.service`。启停 `sudo systemctl start|stop|restart feishu-triage`；日志 `journalctl -u feishu-triage`。单元模板 `host/machine/systemd/feishu-triage.service`（#801）。
+- 适配器单元名 `feishu-triage`（模板随 #801 PR #806 入仓，本树未合入）。启停：`sudo systemctl start|stop|restart feishu-triage`。日志：`journalctl -u feishu-triage`。
 
 ## 改之前再看一眼
 
