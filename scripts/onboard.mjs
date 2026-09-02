@@ -10,13 +10,15 @@
 //   memory-unlinked/broken  → 只在能找到合法 clone（origin 对得上）且落点无内容时才接；
 //                             落点是有内容的普通目录 = 拒绝并指路人工并回
 //                             （memory-relink-needs-content-diff 教训：方向判反=静默丢记忆）
-//   skills-not-link / skills-elsewhere / creds-missing / mcp-slow-boot → 永远只报不修
+//   pi-ext-missing/drift    → 把 host/pi-extensions 里 go-fallback 两个文件重拷到 ~/.pi/agent/extensions
+//                             （只在装了 pi 的机器上；本机那份若被手改过，先备份 .bak-<ts>）
+//   skills-not-link / skills-elsewhere / creds-missing / mcp-slow-boot / statusline-dangling → 永远只报不修
 //
 // exit 0 = 修完复查全绿；exit 1 = 还有剩（含 dry-run 查出问题）。
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, symlinkSync, unlinkSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { checkOnboard, repoRootOfThisFile, ONBOARD_REPORT_ONLY } from './lib/onboard-check.mjs';
+import { checkOnboard, repoRootOfThisFile, ONBOARD_REPORT_ONLY, PI_EXTENSIONS } from './lib/onboard-check.mjs';
 import { checkMemoryLink, defaultHome, encodeProjectDir, originUrlFromConfig, repoSlugFromUrl, MEMORY_REPO_SLUG } from './lib/dao-memory-link-check.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -81,6 +83,19 @@ function fixMemory(id) {
   });
 }
 
+/** pi 扩展：从仓里重拷（NEW-MACHINE §6b）。手改过的本机副本先备份，仓是真相源。 */
+function fixPiExt() {
+  const dst = join(home, '.pi', 'agent', 'extensions');
+  act(`重拷 pi 扩展 ${dst} ← host/pi-extensions（${PI_EXTENSIONS.join(' ')}）`, () => {
+    mkdirSync(dst, { recursive: true });
+    for (const f of PI_EXTENSIONS) {
+      const live = join(dst, f);
+      if (existsSync(live)) copyFileSync(live, `${live}.bak-${Date.now()}`);
+      copyFileSync(join(root, 'host', 'pi-extensions', f), live);
+    }
+  });
+}
+
 // ── 主流程：查 → 修 → 复查 ─────────────────────────────────────────
 const before = checkOnboard({ root, home });
 if (before.unscanned.length) { for (const u of before.unscanned) say(`[链] 没查成：${u}`); process.exit(1); }
@@ -93,6 +108,7 @@ for (const p of before.problems) {
   if (p.id === 'global-missing' || p.id === 'global-drift') fixGlobal();
   else if (p.id === 'skills-missing' || p.id === 'skills-partial' || p.id === 'skills-dangling') fixSkills();
   else if (p.id === 'memory-unlinked' || p.id === 'memory-broken') fixMemory(p.id);
+  else if (p.id === 'pi-ext-missing' || p.id === 'pi-ext-drift') fixPiExt();
   else say(`  [只报不修] ${p.id}: ${p.msg}`);
 }
 

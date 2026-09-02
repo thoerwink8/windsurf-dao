@@ -136,13 +136,10 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 
 go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSeek，当前会话接着把活做完（不是重启、不是从头来）。
 
-- 源码在仓内 `host/pi-extensions/go-fallback.ts`（仓库资产，不留在本机自生自灭），换机一条命令装上：
-  ```bash
-  cp host/pi-extensions/go-fallback.ts "$HOME/.pi/agent/extensions/"
-  ```
+- 源码在仓内 `host/pi-extensions/go-fallback.ts` + 它 import 的 `go-fallback-core.mjs`（仓库资产，不留在本机自生自灭；**两个文件都要**——2026-09-02 前本节只叫拷 .ts，装上就是坏的）。装了 pi 的机器由 §0 的 `onboard.mjs` 拷到 `~/.pi/agent/extensions/`；仓里更新了没装、或本机手改，哨兵报 `pi-ext-drift`，重跑 onboard 重拷（手改的留 `.bak-<ts>`）。
   验证已生效（新开 pi 会话后扩展自动加载，对所有 pi 工人生效，不用改 orca 派工链路）：
   ```bash
-  ls ~/.pi/agent/extensions/go-fallback.ts   # 文件在即生效（pi 每次启动扫 extensions/ 目录）
+  ls ~/.pi/agent/extensions/go-fallback.ts ~/.pi/agent/extensions/go-fallback-core.mjs   # 都在即生效（pi 每次启动扫 extensions/ 目录）
   ```
 - 行为：只在主通道（`opencode-go`）上动作；命中额度耗尽类错误（`GoUsageLimitError` / `FreeUsageLimitError` / `Monthly usage limit` / quota / billing 等）首次失败即切；命中瞬时类错误（429 / rate limit / overloaded / 5xx）连续第 2 次失败才切（给 pi 内置 auto-retry 一次机会）。切到直连后 `pi.setModel` + followUp 续跑，会话上下文完整保留。直连凭据缺失时明确报错，不静默降级。切换有可见记录（appendEntry 会话条目 + TUI 提示 + 上下文消息 + stderr 日志）。
 - 可配置环境变量（默认即生产值，一般不用动）：`PI_GO_FALLBACK_PRIMARY`（主通道，默认 `opencode-go`）、`PI_GO_FALLBACK_PROVIDER`（直连目标，默认 `deepseek`）、`PI_GO_FALLBACK_MODEL`（兜底模型，默认 `deepseek-v4-flash`）、`PI_GO_FALLBACK_TRANSIENT_AFTER`（瞬时错误连续几次后切，默认 2）。

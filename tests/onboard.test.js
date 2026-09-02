@@ -250,6 +250,53 @@ describe('onboard', () => {
     });
   });
 
+  describe('⑥ pi 扩展 go-fallback（仓是真相源，本机是拷贝）', () => {
+    const ext = (home) => path.join(home, '.pi', 'agent', 'extensions');
+    const truth = (f) => fs.readFileSync(path.join(REPO, 'host', 'pi-extensions', f), 'utf8');
+    const installAll = (home) => { fs.mkdirSync(ext(home), { recursive: true }); for (const f of ['go-fallback.ts', 'go-fallback-core.mjs']) fs.writeFileSync(path.join(ext(home), f), truth(f)); };
+
+    it('没装 pi（~/.pi/agent 不在）→ 不算问题', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('pi-none');
+      assert.deepEqual(S.checkPiExtensions({ root: REPO, home }), {});
+    });
+    it('两个文件都与仓一致 → 绿（证明绿是查过的绿）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('pi-ok'); installAll(home);
+      assert.deepEqual(S.checkPiExtensions({ root: REPO, home }), {});
+    });
+    it('只拷了 .ts 漏了它 import 的 core（NEW-MACHINE 旧装法）→ pi-ext-missing 点名 core', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('pi-missing'); installAll(home);
+      fs.rmSync(path.join(ext(home), 'go-fallback-core.mjs'));
+      const r = S.checkPiExtensions({ root: REPO, home });
+      assert.equal(r.problem?.id, 'pi-ext-missing', JSON.stringify(r));
+      assert.match(r.problem.msg, /go-fallback-core\.mjs/);
+    });
+    it('本机副本与仓不一致 → pi-ext-drift', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('pi-drift'); installAll(home);
+      fs.appendFileSync(path.join(ext(home), 'go-fallback.ts'), '\n// 本机手改\n');
+      assert.equal(S.checkPiExtensions({ root: REPO, home }).problem?.id, 'pi-ext-drift');
+    });
+    it('onboard.mjs e2e：缺/漂都重拷，手改的留备份，再跑幂等', async () => {
+      const { home, clone } = mkHome('pi-e2e'); await linkMemory(home, clone, REPO); mkCreds(home);
+      installAll(home);
+      fs.rmSync(path.join(ext(home), 'go-fallback-core.mjs'));
+      fs.appendFileSync(path.join(ext(home), 'go-fallback.ts'), '\n// 本机手改\n');
+      const env = { ...process.env, USERPROFILE: home, HOME: home };
+      const run = () => spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')], { env, encoding: 'utf8' });
+      let r = run();
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      for (const f of ['go-fallback.ts', 'go-fallback-core.mjs'])
+        assert.equal(fs.readFileSync(path.join(ext(home), f), 'utf8'), truth(f), `${f} 应与仓一致`);
+      assert.ok(fs.readdirSync(ext(home)).some(f => f.startsWith('go-fallback.ts.bak-')), '手改过的要留备份');
+      r = run();
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /全绿：/, '再跑应全绿  →  ' + r.stdout);
+    });
+  });
+
   it('接线：settings.json SessionStart 只挂 onboard 哨兵（守卫已归零不许回来）', () => {
     const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
     const cmds = (settings.hooks?.SessionStart || []).flatMap(g => (g.hooks || []).map(h => h.command));

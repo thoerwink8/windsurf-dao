@@ -94,6 +94,7 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
   take(checkSkillsLink({ root, home }));
   take(checkMcpBootCost({ home }));
   take(checkStatusLine({ home }));
+  take(checkPiExtensions({ root, home }));
 
   const mem = checkMemoryLink({ root, home });
   if (mem.fail) problems.push({ id: 'memory-broken', msg: `memory 断链：${mem.fail[0]}` });
@@ -133,6 +134,34 @@ export function checkStatusLine({ home }) {
   if (existsSync(file)) return {};
   return { problem: { id: 'statusline-dangling',
     msg: `~/.claude/settings.json 的 statusLine.command 指向不存在的 ${m[1]}——仓搬了家或换机没改；手改那一行（别整文件覆写）` } };
+}
+
+/** ⑥ pi 扩展 go-fallback：仓内 host/pi-extensions 是真相源，本机 ~/.pi/agent/extensions 是拷贝
+ *  （pi 只扫那个目录，文件链接在 Windows 要管理员，所以是拷贝）。拷贝就会漂：仓更新了没装、
+ *  或本机手改——2026-09-02 审计时这台机一份都没装，NEW-MACHINE 还只叫拷 .ts 漏了它 import 的 core。
+ *  没装 pi（~/.pi/agent 不在）的机器不算问题。可修 id：pi-ext-missing / pi-ext-drift（onboard 重拷）。 */
+export const PI_EXTENSIONS = ['go-fallback.ts', 'go-fallback-core.mjs'];
+export function checkPiExtensions({ root, home }) {
+  const agent = join(home, '.pi', 'agent');
+  if (!existsSync(agent)) return {};
+  const missing = [], drift = [];
+  for (const f of PI_EXTENSIONS) {
+    const truthPath = join(root, 'host', 'pi-extensions', f);
+    let truth;
+    try { truth = readFileSync(truthPath, 'utf8'); }
+    catch { return { unscanned: `真相源读不到：${truthPath}` }; }
+    const live = join(agent, 'extensions', f);
+    if (!existsSync(live)) { missing.push(f); continue; }
+    let got;
+    try { got = readFileSync(live, 'utf8'); }
+    catch (e) { return { unscanned: `${live} 读不了：${e.code || e.message}` }; }
+    if (norm(truth) !== norm(got)) drift.push(f);
+  }
+  if (missing.length) return { problem: { id: 'pi-ext-missing',
+    msg: `~/.pi/agent/extensions 缺 ${missing.join(' ')}（go-fallback：og 撞顶时明着报，不静默换通道）` } };
+  if (drift.length) return { problem: { id: 'pi-ext-drift',
+    msg: `~/.pi/agent/extensions/${drift.join(' ')} 与仓里 host/pi-extensions 不一致（仓更新了没装，或本机手改）` } };
+  return {};
 }
 
 /** ④ 慢启动的 MCP 服务器：命令是 npx/uvx 且带 @latest（或裸包名）——每次开会话现场解包。
