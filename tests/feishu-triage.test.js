@@ -256,7 +256,7 @@ export async function triage(inbound, deps) {
     const M = await MOD;
     const dir = tmpdir();
     const keyFile = path.join(dir, 'grok.key');
-    fs.writeFileSync(keyFile, 'key_test_value\n');
+    fs.writeFileSync(keyFile, 'k123\n');
     const calls = [];
     const fetchImpl = async (url, init) => {
       calls.push({ url, init });
@@ -272,7 +272,7 @@ export async function triage(inbound, deps) {
     assert.equal(text, '{"a":1}', '非 json 模式原样返回文本');
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, 'https://gw.example/v1/chat/completions', '网关 + /v1/chat/completions');
-    assert.equal(calls[0].init.headers.authorization, 'Bearer key_test_value', 'key 文件内容作 Bearer');
+    assert.equal(calls[0].init.headers.authorization, 'Bearer k123', 'key 文件内容作 Bearer');
     const body = JSON.parse(calls[0].init.body);
     assert.equal(body.model, 'grok-4.6', 'model 固定 grok-4.6');
     assert.equal(body.messages[0].content, 's');

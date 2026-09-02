@@ -17,8 +17,8 @@
 #   sudo systemctl daemon-reload && sudo systemctl enable --now feishu-triage.service
 #   journalctl -u feishu-triage.service -f
 #
-# 凭据：~/.mirasim/keys/feishu-app.json（600，不进 git，换机手动带）：
-#   { "appId": "...", "appSecret": "...", "hubChatId": "...", "allowOpenIds": [] }
+# 凭据：~/.mirasim/keys/feishu-app.json（600，不进 git，换机手动带）——
+#   含 appId、appSecret、hubChatId、allowOpenIds 四项（appSecret 是飞书 App 的 secret）
 # 状态：~/.dao/feishu-threads.json（话题状态，运行时自建，可丢可重算）
 # 群映射：/home/orca/windsurf-dao/host/machine/feishu-groups.json
 #

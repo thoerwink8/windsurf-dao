@@ -150,14 +150,14 @@ export function loadCredentials(file) {
   } catch (e) {
     throw new Error(`凭据读不了（${file}）：${e.message}`);
   }
-  for (const k of ['appId', 'appSecret']) {
-    if (typeof j?.[k] !== 'string' || !j[k]) throw new Error(`凭据缺 ${k}`);
-  }
+  const { appId, appSecret, hubChatId, allowOpenIds } = j || {};
+  if (typeof appId !== 'string' || !appId) throw new Error('凭据缺 appId');
+  if (typeof appSecret !== 'string' || !appSecret) throw new Error('凭据缺 appSecret');
   return {
-    appId: j.appId,
-    appSecret: j.appSecret,
-    hubChatId: typeof j.hubChatId === 'string' ? j.hubChatId : '',
-    allowOpenIds: Array.isArray(j.allowOpenIds) ? j.allowOpenIds : [],
+    appId,
+    appSecret,
+    hubChatId: typeof hubChatId === 'string' ? hubChatId : '',
+    allowOpenIds: Array.isArray(allowOpenIds) ? allowOpenIds : [],
   };
 }
 
@@ -237,12 +237,11 @@ export function makeLlm({ gateway, keyPath = GROK_KEY, fetchImpl = fetch, timeou
     if (!key) throw new Error('grok key 为空');
     let resp;
     try {
+      const headers = { 'content-type': 'application/json' };
+      headers.authorization = `Bearer ${key}`;
       resp = await fetchImpl(`${gateway}/v1/chat/completions`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${key}`,
-        },
+        headers,
         body: JSON.stringify({
           model: 'grok-4.6',
           messages: [
@@ -351,9 +350,10 @@ export function loadSdk({ sdkRoot = process.env.FEISHU_SDK_ROOT || SDK_DIR } = {
 
 export function makeFeishuClient(sdk, creds) {
   const lark = sdk;
+  const { appId, appSecret } = creds;
   const client = new lark.Client({
-    appId: creds.appId,
-    appSecret: creds.appSecret,
+    appId,
+    appSecret,
     appType: lark.AppType.SelfBuild,
     domain: lark.Domain.Feishu,
   });
