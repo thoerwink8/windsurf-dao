@@ -269,6 +269,32 @@ describe('dispatch-agent-ready（#802）', () => {
       assert.ok(p.ok === false && p.action === 'mismatch' && p.sends.length === 0
         && p.handle !== 'term_grok', JSON.stringify(p));
     });
+    await t.test('故意违规：缺 agentIdentity + 屏面有 TUI 指纹 → 必须报错不 keep', () => {
+      const tui = S.classifyAgentScreen('Grok Build  1.0.1  always-approve');
+      const noField = { handle: 'term_x', worktreeId: wt, title: 'Terminal 1' };
+      const p = S.planDeferredRepair({
+        claimedHandle: 'term_x',
+        terminals: [noField],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        book: '读 soldier-book.md spec=短摘要',
+        screen: tui,
+        command: 'pi --model x',
+      });
+      assert.ok(p.ok === false && p.action !== 'keep' && p.kind === 'identity-unconfirmed'
+        && p.sends.length === 0 && /term_x/.test(p.error), JSON.stringify(p));
+      const pShell = S.planDeferredRepair({
+        claimedHandle: 'term_shell',
+        terminals: [shell],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        book: '读 soldier-book.md spec=短摘要',
+        screen: tui,
+        command: 'pi --model x',
+      });
+      assert.ok(pShell.ok === false && pShell.action !== 'keep' && /term_shell/.test(pShell.error),
+        JSON.stringify(pShell));
+    });
   });
 
   it('dao.mjs 接线：校准 agentIdentity 再注入；startWorkerBySlate 成功也记 attempts', () => {

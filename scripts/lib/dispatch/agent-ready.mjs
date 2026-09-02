@@ -397,12 +397,13 @@ export function planDeferredRepair({
       };
     }
     const repair = planRepairSends({ action: 'fallback-command', book, screen, command });
+    const handle = target.handle || claimedHandle || null;
     if (repair.action === 'fail') {
       return {
         ok: false,
         action: 'fail',
         kind: repair.kind || 'repair-fail',
-        handle: target.handle || claimedHandle || null,
+        handle,
         error: repair.error,
         sends: [],
       };
@@ -411,16 +412,19 @@ export function planDeferredRepair({
       return {
         ok: true,
         action: 'fallback',
-        handle: target.handle || claimedHandle || null,
+        handle,
         command: repair.command,
         book: repair.book,
         sends: repair.sends,
       };
     }
+    const screenKind = (screen && screen.kind) || (repair.screen && repair.screen.kind) || 'unknown';
     return {
-      ok: true,
-      action: 'keep',
-      handle: target.handle || claimedHandle || null,
+      ok: false,
+      action: 'fail',
+      kind: 'identity-unconfirmed',
+      handle,
+      error: `终端 ${handle || '(无 handle)'} 列表没有确认的 agentIdentity，无法消歧（屏面=${screenKind}）。不许因 TUI 指纹 keep`,
       sends: [],
       screen: repair.screen,
     };
