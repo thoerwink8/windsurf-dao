@@ -3262,7 +3262,21 @@ describe('dao', () => {
       assert.ok(/soldierDoneVia: 'worker-done'/.test(daoSrc) && /reviewerDeferred: true/.test(daoSrc), 'dao.mjs dispatch 完工走 worker-done（不再预填 soldierDoneTo）');
     });
     await t.test('审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染', () => {
-      assert.ok(/function cmdReviewerCreate[\s\S]*soldierDispatchId: String\(soldierDispatchId\)/.test(daoSrc), '审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染  →  渲染落点检查');
+      assert.ok(/function cmdReviewerCreate[\s\S]*planCreateSoldierDispatch/.test(daoSrc)
+        && /function cmdReviewerCreate[\s\S]*soldierDispatchId/.test(daoSrc),
+        '审官红项修正：审官任务书在 reviewer-create 里用士兵真 id 渲染  →  渲染落点检查');
+    });
+    await t.test('#799 reviewer-create/attach 继承 merge-policy，结算态士兵走 planCreateSoldierDispatch', () => {
+      assert.ok(/function cmdReviewerCreate[\s\S]*lookupReviewerMergePolicy/.test(daoSrc)
+        && /function cmdReviewerAttach[\s\S]*lookupReviewerMergePolicy/.test(daoSrc)
+        && /function cmdReviewerCreate[\s\S]*planCreateSoldierDispatch/.test(daoSrc),
+        '#799 create/attach 接线  →  create/attach 必须走 lookup + create 必须走 planCreate');
+    });
+    await t.test('#799 worker-done 写进度不整段覆盖 merge-policy 载体', () => {
+      const wd = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
+      assert.ok(/setWorkerCardProgress/.test(wd) && /progressDispatchComment/.test(daoSrc)
+        && !/comment: '待终审'/.test(wd) && !/comment: '交卷了，审官没起来'/.test(wd),
+        '#799 worker-done 不得整段覆盖卡备注  →  ' + wd.slice(wd.indexOf('setWorkerCardProgress'), wd.indexOf('setWorkerCardProgress') + 80));
     });
     await t.test('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', () => {
       assert.ok(/审官身份/.test(daoSrc) && /identity/.test(daoSrc), '审官红项修正：审官身份消息发进士兵收件箱（四关确认）');
