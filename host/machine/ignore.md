@@ -12,3 +12,4 @@
 | ~/.dao/server-check | server-check（NEW-MACHINE §9d）落盘目录，运行时自建，非产品配置；刻意在仓外——检查器的输出不许落进它自己会读的范围 |
 | ~/.dao/feishu-threads.json | 飞书适配器话题状态，运行时自建，可丢可重算，非产品配置 |
 | ~/.bashrc | NEW-MACHINE §9d 只叫人往里加一行 PATH（~/.local/bin），本机 shell 配置，不拷不进 git，非 dao 品类 |
+| ~/.profile | NEW-MACHINE §9d 记「Orca 终端不吃 login shell」的事实，本机 shell 配置，不拷不进 git，非 dao 品类 |

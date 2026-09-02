@@ -355,6 +355,10 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 - **`ok:false` 时退出码仍是 0**——退出码不是信号，只认 JSON。
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
+- **2026-09-02 Contabo 实测续坑**（命令、包名、env 路径全文在 PR #796，当时未合；本条不抄值）：
+  1. **systemd drop-in 注入 agent 的网关 env 与 PATH**。Orca `terminal create` 的壳不继承服务环境；`worktree create --agent` 起的 agent 继承。只改单元 drop-in，值不进仓（`host/skills/server-ops/SKILL.md`，INDEX E 类）。
+  2. **Claude Code 无头信任框**：`IS_SANDBOX=1` 这版不认。要在 `~/.claude.json` 的 `projects` 里给工位树**父目录**写信任标记——它会向上找祖先，预置一次即可。
+  3. **Orca 终端不吃 login shell 的 `~/.profile` / `~/.bashrc`**。人开的壳要自己补 PATH；agent 靠上一条 drop-in。
 
 ### 搬过去之后本仓的红项变化（实测）
 
