@@ -38,7 +38,7 @@ const norm = (s) => String(s ?? '').replace(/\r\n/g, '\n');
 
 /** onboard.mjs 修不了、只能报的 id。一张表两处用（哨兵那行 + onboard 的退出判定），
  *  别各写各的：一边算修不了、另一边还让它把退出码染红，就成了永远红的报警。 */
-export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot']);
+export const ONBOARD_REPORT_ONLY = new Set(['creds-missing', 'mcp-slow-boot', 'statusline-dangling']);
 
 /** ① 全局约定漂移。真相源读不到 = 没查成（不是绿）。 */
 export function checkGlobalClaude({ root, home }) {
@@ -93,6 +93,7 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
   take(checkGlobalClaude({ root, home }));
   take(checkSkillsLink({ root, home }));
   take(checkMcpBootCost({ home }));
+  take(checkStatusLine({ home }));
 
   const mem = checkMemoryLink({ root, home });
   if (mem.fail) problems.push({ id: 'memory-broken', msg: `memory 断链：${mem.fail[0]}` });
@@ -109,6 +110,29 @@ export function checkOnboard({ root = repoRootOfThisFile(), home = defaultHome()
     problems.push({ id: 'creds-missing', msg: '~/.dao/apps 凭据不在（手动带，git 不带、onboard 不碰）' });
   }
   return { problems, unscanned };
+}
+
+/** ⑤ 状态栏脚本路径。~/.claude/settings.json 的 statusLine.command 是这个 D 类文件里唯一指向本仓的
+ *  本机绝对路径（形如 `node C:/…/windsurf-dao/host/statusline.js`）。仓搬家 / 换机克隆到别的盘，
+ *  状态栏静默消失——Claude Code 不报错，人只会觉得「状态栏怎么没了」（2026-09-02 两仓审计点名的
+ *  「每台机器目录不一样」漂移，剩下的最后一处）。只报不修：settings.json 是红线文件
+ *  （NEW-MACHINE §8：整文件覆写可能 401），修法是手改那一行。
+ *  没有 settings.json / 没配 statusLine / 命令里认不出脚本路径 → 不算问题（不猜）；解析不了 → 没查成。 */
+export function checkStatusLine({ home }) {
+  const p = join(home, '.claude', 'settings.json');
+  if (!existsSync(p)) return {};
+  let cfg;
+  try { cfg = JSON.parse(readFileSync(p, 'utf8')); }
+  catch (e) { return { unscanned: `~/.claude/settings.json 解析不了：${e.message.slice(0, 60)}` }; }
+  const cmd = cfg?.statusLine?.command;
+  if (typeof cmd !== 'string') return {};
+  // 命令行里第一个像脚本文件的绝对路径（盘符 / ~ / posix 根），扩展名限脚本类；认不出就不猜
+  const m = cmd.match(/"?((?:[A-Za-z]:[\\/]|~[\\/]|\/)[^"\s]*?\.(?:mjs|cjs|js|cmd|ps1|sh))"?(?=\s|$)/i);
+  if (!m) return {};
+  const file = m[1].startsWith('~') ? join(home, m[1].slice(2)) : m[1];
+  if (existsSync(file)) return {};
+  return { problem: { id: 'statusline-dangling',
+    msg: `~/.claude/settings.json 的 statusLine.command 指向不存在的 ${m[1]}——仓搬了家或换机没改；手改那一行（别整文件覆写）` } };
 }
 
 /** ④ 慢启动的 MCP 服务器：命令是 npx/uvx 且带 @latest（或裸包名）——每次开会话现场解包。

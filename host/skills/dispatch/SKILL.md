@@ -88,7 +88,7 @@ test "$(git branch --show-current)" = master \
 2. 需要用户本人拍板的
 3. 它判断帅给的前提可能是错的——先问，别照做后发现（#511 当天两次错误前提都是照做后才发现的代价样本）
 
-派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.toml 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）；帅没收到时靠看门狗兜底（`scripts/watchdog.mjs` 检测矩阵第 9 项已在 master）。
+派单给任务官时，`--merge-policy` 默认 auto；例外（改协作约定 / 改 model-routing.json 决策字段 / 花钱）走 manual 且必须 `--merge-reason` 留痕。任务官合并后的通知走流转器门铃（`worker_done` / 结构化消息，见「非阻塞」）；帅没收到时靠看门狗兜底（`scripts/watchdog.mjs` 检测矩阵第 9 项已在 master）。
 
 **帅位无人值守（2026-08-21 用户拍板）**：合并动作全归帅——终审通过（diff 亲看、CI 绿、dao-check 红项均为既有治理项）后 marshal 直接 `pr merge --squash --delete-branch`，不再等用户手动合并（此前「用户手动合并」是制度默认，不是技术限制）。决策权分配不变：选型 / 体系类 / 花钱仍用户拍板，拍板后合并动作同样归帅执行，PR 正文留拍板原话与时间。Cursor 帅位与 CC 帅位同此规矩。首单 #709。
 
@@ -98,9 +98,9 @@ test "$(git branch --show-current)" = master \
 
 ## 选型
 
-派工前读 `docs/model-routing.toml`。新工位派单前出三选项问用户（AskUserQuestion：推荐+备选，含工人数/做法/模型）；已批闭环内的返工/复核流转不重复问。选型上面板可见：终端名带角色·模型。用户可随时改派。全新任务类型或高危选型走「重大决策一事一问」。
+派工前读 `docs/model-routing.json`（选型只认 JSON，2026-08-22 拍板；启动模板才在 toml）。新工位派单前出三选项问用户（AskUserQuestion：推荐+备选，含工人数/做法/模型）；已批闭环内的返工/复核流转不重复问。选型上面板可见：终端名带角色·模型。用户可随时改派。全新任务类型或高危选型走「重大决策一事一问」。
 
-审官选型序与 Claude 族启动命令见 `docs/model-routing.toml`（[[rules]] 审官选型序 / [providers.claude]）——路由决策只存在那里，本页只留指针。pi 派单默认 deepseek-v4-flash（拍板 issue #462，model-routing.toml [providers.deepseek].default_model 固化），ds-pro 仅限重型任务。
+审官选型序见 `docs/model-routing.json`（rules），Claude 族启动命令见 `docs/model-routing.toml` [providers.claude]——路由决策只存在那里，本页只留指针。pi 派单默认 deepseek-v4-flash（拍板 issue #462，model-routing.toml [providers.deepseek].default_model 固化），ds-pro 仅限重型任务。
 
 grok 单统一走 Grok Build（pi-grok 已退役，拍板 2026-08-14，issue #443）；2026-08-15 起经 regrok shim（~/.local/bin，内置 HTTPS_PROXY + 默认 -m grok-4.6）已是普通 agent，`--agent grok` 直接可用，装机见 NEW-MACHINE.md「grok 怎么配」；Grok Build auto 模式会硬拦 git push（对外发布闸），授权词是往终端回一句「推」——假拦（网络抖动）重试即过，真拦（宿主策略）需授权词。
 

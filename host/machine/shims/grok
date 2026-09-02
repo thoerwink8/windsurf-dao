@@ -2,9 +2,15 @@
 # regrok shim (Git Bash): proxy required (auth endpoint DNS-poisoned) + pin default model grok-4.6
 # real binary: edit GROK_REAL for this machine
 # explicit -m/--model passes through untouched
+# --agent grok carries no launch flags: add --effort xhigh --always-approve unless given (mirrors grok.cmd)
+# proxy: set DAO_PROXY to override (default keeps legacy 7890 behavior)
 GROK_REAL="C:/nvm4w/nodejs/grok.cmd"
-export HTTPS_PROXY=http://127.0.0.1:7890
+: "${DAO_PROXY:=http://127.0.0.1:7890}"
+export HTTPS_PROXY="$DAO_PROXY"
+extra=""
+case " $* " in *" --effort"*) ;; *) extra="$extra --effort xhigh" ;; esac
+case " $* " in *" --always-approve"*) ;; *) extra="$extra --always-approve" ;; esac
 case " $* " in
-  *" -m "*|*" --model"*) exec "$GROK_REAL" "$@" ;;
-  *) exec "$GROK_REAL" -m grok-4.6 "$@" ;;
+  *" -m "*|*" --model"*) exec "$GROK_REAL" $extra "$@" ;;
+  *) exec "$GROK_REAL" -m grok-4.6 $extra "$@" ;;
 esac

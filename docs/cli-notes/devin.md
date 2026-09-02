@@ -8,7 +8,7 @@
 
 ## 本机三件套（2026-08-26 查实）
 
-- **CLI**：`C:\Users\Administrator\AppData\Local\devin\cli\bin\devin.exe`（PATH 上这个）——**已登录**（`devin auth status` → Logged in (via Devin)，Devin Pro，credentials.toml 在 devin 用户配置目录）。
+- **CLI**：`%LOCALAPPDATA%\devin\cli\bin\devin.exe`（PATH 上这个；用户名因机而异，别写死）——**已登录**（`devin auth status` → Logged in (via Devin)，Devin Pro，credentials.toml 在 devin 用户配置目录）。
 - **桌面端**：`D:\Windsurf\Devin.exe`（Windsurf 内置，v1.126.0，user-data-dir `%APPDATA%\Devin`）——已登录 Pro 账户，默认模型 GLM-5.2 Max。
 - **Windsurf 集成**：Windsurf IDE 用 `devin acp`（ACP 协议 stdio server）驱动 Devin——那是 IDE 自己的集成，Orca 的 agent schema 里没有 devin/ACP。
 

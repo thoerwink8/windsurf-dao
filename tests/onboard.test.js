@@ -256,4 +256,56 @@ describe('onboard', () => {
     assert.ok(cmds.length === 1 && cmds[0].includes('onboard-session-hook.mjs'), JSON.stringify(cmds));
     assert.ok(!cmds.some(c => c.includes('guard-session-hook')), '守卫不许借尸还魂');
   });
+
+  it('接线：.cursor/hooks.json 只挂派工闸（守卫归零时漏摘的 Cursor 面，2026-09-02 补）', () => {
+    const hooks = JSON.parse(fs.readFileSync(path.join(REPO, '.cursor', 'hooks.json'), 'utf8')).hooks || {};
+    assert.deepEqual(Object.keys(hooks), ['beforeShellExecution'], JSON.stringify(Object.keys(hooks)));
+    const cmds = JSON.stringify(hooks);
+    assert.ok(!/guard-session-hook|board-hook/.test(cmds), '守卫/盘面不许借尸还魂  →  ' + cmds);
+  });
+
+  describe('⑤ 状态栏脚本路径（settings.json 里唯一指向本仓的本机绝对路径）', () => {
+    const writeSettings = (home, obj) => fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify(obj));
+
+    it('没有 settings.json / 没配 statusLine → 不算问题（不猜）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('sl-none');
+      assert.deepEqual(S.checkStatusLine({ home }), {});
+      writeSettings(home, { model: 'sonnet' });
+      assert.deepEqual(S.checkStatusLine({ home }), {});
+    });
+
+    it('指向仓里真在的 host/statusline.js → 绿（证明绿是查过的绿）', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('sl-ok');
+      writeSettings(home, { statusLine: { type: 'command', command: `node ${path.join(REPO, 'host', 'statusline.js').replace(/\\/g, '/')}` } });
+      assert.deepEqual(S.checkStatusLine({ home }), {});
+    });
+
+    it('指向别台机器的路径（仓搬家/换盘）→ statusline-dangling，只报不修、不碰 settings.json', async () => {
+      const S = await LIB_LOAD;
+      const { home, clone } = mkHome('sl-dangling'); await linkMemory(home, clone, REPO); mkCreds(home);
+      writeSettings(home, { statusLine: { type: 'command', command: 'node D:/elsewhere/windsurf-dao/host/statusline.js' } });
+      const r = S.checkStatusLine({ home });
+      assert.equal(r.problem?.id, 'statusline-dangling', JSON.stringify(r));
+      assert.match(r.problem.msg, /D:\/elsewhere/, '要点名指到哪去了  →  ' + r.problem.msg);
+      const line = S.onboardNoticeLine(S.checkOnboard({ root: REPO, home }));
+      assert.match(line, /statusline-dangling/, line);
+      assert.ok(!/同意后跑/.test(line), '修不了就别把人指去跑 onboard  →  ' + line);
+      const cfg = path.join(home, '.claude', 'settings.json');
+      const before = fs.readFileSync(cfg, 'utf8');
+      const run = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'onboard.mjs')],
+        { env: { ...process.env, USERPROFILE: home, HOME: home }, encoding: 'utf8' });
+      assert.equal(run.status, 0, '只报不修项不该让 onboard 红  →  ' + run.stdout + run.stderr);
+      assert.equal(fs.readFileSync(cfg, 'utf8'), before, 'onboard 不许碰 settings.json（红线文件）');
+    });
+
+    it('settings.json 解析不了 → unscanned，不是「查过没事」', async () => {
+      const S = await LIB_LOAD;
+      const { home } = mkHome('sl-broken');
+      fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{ 坏的');
+      const r = S.checkStatusLine({ home });
+      assert.ok(r.unscanned && !r.problem, JSON.stringify(r));
+    });
+  });
 });

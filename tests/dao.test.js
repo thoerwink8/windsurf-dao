@@ -170,9 +170,9 @@ describe('dao', () => {
       assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false' && devin.start === 'agent' && devin.agentId === 'devin', '#782 devin launch  →  ' + JSON.stringify(devin));
     });
     await t.test('shim 文件在仓里', () => {
-      assert.ok(fs.existsSync(path.join(REPO, 'scripts', 'grok-shim.cmd')), 'shim 文件在仓里');
+      assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd')), 'shim 文件在仓里');
     });
-    const shim = fs.readFileSync(path.join(REPO, 'scripts', 'grok-shim.cmd'), 'utf8');
+    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd'), 'utf8');
     await t.test('shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）', () => {
       assert.ok(/if not defined DAO_PROXY set "DAO_PROXY=http:\/\/127\.0\.0\.1:7890"/.test(shim) && /set "HTTPS_PROXY=%DAO_PROXY%"/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
     });

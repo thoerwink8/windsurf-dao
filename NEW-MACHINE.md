@@ -35,12 +35,9 @@ node --version
 
 ## 3. 放全局协作约定
 
-`docs/global-CLAUDE.md` 是用户级 `~/.claude/CLAUDE.md` 的真相源副本。换机时手动放置（git 不带机器配置）：
+`docs/global-CLAUDE.md` 是用户级 `~/.claude/CLAUDE.md` 的真相源副本（git 不带机器配置）。§0 的 `onboard.mjs` 会把它拷到位（先备份现文件）；漂移时 SessionStart 哨兵报 `global-drift`，重跑 onboard 即修。
 
-- Windows：把 `docs/global-CLAUDE.md` 的内容放到 `%USERPROFILE%\.claude\CLAUDE.md`
-- macOS / Linux：放到 `~/.claude/CLAUDE.md`
-
-以后要改全局约定，改仓库里的 `docs/global-CLAUDE.md`，再同步到各机器。
+以后要改全局约定，只改仓库里的 `docs/global-CLAUDE.md`，各机器重跑 onboard 同步。
 
 ## 4. 密钥类文件手动带
 
@@ -50,7 +47,7 @@ node --version
 
 | 文件 | 里面是什么 | 不带的后果 |
 |---|---|---|
-| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 写码/判断类派工的主通道是 opencode Go（`docs/model-routing.toml`），缺 key 时工人一起手就挂 |
+| `~/.pi/agent/auth.json` | pi 各 provider 的 API key，含 **`opencode-go`**（opencode Go 订阅）与 `deepseek`（应急直连） | 派工选型见 `docs/model-routing.json`；走 og 通道的工人缺 key 一起手就挂 |
 | `~/.dao/apps/*.{pem,json}` | 四个 GitHub App 的私钥和安装号（**不进 git**，只此一份） | `gh-as` 报「这台机器没装」：审官 approve、工人开 PR、帅合并、看门狗报事故全断。详 §4b |
 
 新机拿到 key 的路径：登录 https://opencode.ai/auth → 订阅 Go → 复制 key，填进 `~/.pi/agent/auth.json` 的 `opencode-go` 键（**不是 `opencode`**，那是 Zen，两个是独立 provider，填错会路由到 Zen 且 Go 额度用不上）。
@@ -124,7 +121,7 @@ pi 是 DeepSeek 系工人的 CLI。装与验：
 - `models.json` / `settings.json` 在 `~/.pi/agent/` 下：网关地址写占位（api key 只留占位，不进 git）；`supportsDeveloperRole: false` 是兼容项要留。
 - `contextWindow` 故意声明得更小：pi 没有百分比压缩阈值，触发公式是「已用 > contextWindow − reserveTokens」，声明太大等于把压缩触发点推远。
 - `deepseek-v4-flash` 勿用 `--tools` 裁掉 bash：裁掉后模型仍会幻觉调用 bash，把模型的工具调用标记当文本吐。
-- **opencode Go 是 ds-flash/pro 的主通道**（2026-08-16 起，见 `docs/model-routing.toml`）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --model opencode-go/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
+- **ds 系走 opencode Go 通道**（选型顺位以 `docs/model-routing.json` 为准）：凭据填 `~/.pi/agent/auth.json` 的 `opencode-go` 键，取 key 的路径见 §4。派工写法 `pi --model opencode-go/deepseek-v4-flash`（#602：裸 model 名跨 provider 歧义）；应急直连见 `docs/model-routing.toml` `[providers.deepseek]`。2026-08-22 起路由只登记 ds 与 `ox-alpha-free`（后者有工种 ban），kimi/glm 等不再走 og。
   - Go 是账户级共享的美元额度硬顶，撞顶 pi 当场报错、工人挂掉（自动降级见 issue #520），并发派多个工人前先掂量。
 - **models-store.json 的 `-direct` 止血（#569，换机必做）**：本机 `~/.pi/agent/models-store.json` 里 `deepseek` provider 的两条 model id 已改成 `-direct` 后缀（`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`），**换机后 pi 重新拉取会覆盖，要再改一次**。用途：断掉 pi 内置「同 model id 找别的 provider」的 fallback 去路——opencode Go 瞬时报错时 pi 会在 1ms 内静默切到 deepseek 直连（2026-08-16 实证：og 503 → ds 直连，成本从 ¥0.05 级跃到 $10 级，除账单外零信号）。验证（不是「已改过」，是实测生效）：`pi --list-models` 里 deepseek provider 只剩 `-direct` 两条。
   - 这条止血本身没被验证过——`scripts/watchdog.mjs` 的 model-change 检测（#569 ②，扫 `~/.pi/agent/sessions/**/*.jsonl` 的 model_change 事件）就是验证手段：下次真 503 是当场报错（止血生效）还是又切了（止血失效，检测会报出诱因）。
@@ -157,30 +154,13 @@ go-fallback 扩展：opencode Go 通道限流/额度顶时自动切直连 DeepSe
   ```
   三个场景全绿才算生效；测试用一次性 pi 环境 + 随机端口 fake 上游，不碰本机 `~/.pi/agent`。
 
-## 6c. pi 扩展怎么配（doorbell，issue #645）
+## 6c. pi 扩展 doorbell（冻结，新机不装）
 
-doorbell 扩展：协调者（帅）的 pi 会话空闲（输入框空、没在打字）时，工人发完工/上报能叫醒协调者开一轮处理（代按一句「你有来信」再回车）；人在打字绝不占输入框，信的正文本不进输入框、只在对话里。
-
-- 源码在仓内 `host/pi-extensions/doorbell.ts` + `doorbell-core.mjs`（仓库资产，不留在本机自生自灭），换机两条命令装上（两个文件都要，`doorbell.ts` 依赖同目录的 `doorbell-core.mjs`）：
-  ```bash
-  cp host/pi-extensions/doorbell.ts "$HOME/.pi/agent/extensions/"
-  cp host/pi-extensions/doorbell-core.mjs "$HOME/.pi/agent/extensions/"
-  ```
-  验证已生效（新开 pi 会话后扩展自动加载；只对「cwd 下有 `_flow/inbox-*.log`」的会话动作，普通工人树天然不动作）：
-  ```bash
-  ls ~/.pi/agent/extensions/doorbell.ts ~/.pi/agent/extensions/doorbell-core.mjs
-  ```
-- 行为：被动盯信箱台 relay 写入的 `_flow/inbox-*.log`（不加第二个 `check --wait` waiter，不拆信箱台——#525 一个 run 只一个等信者），新消息到达且 pi 空闲 + 输入框空 → `pi.sendUserMessage("你有来信")`。输入框非空（打字中）不响；正文不进输入框，协调者按 dispatch skill 自己 tail 日志 / 查信箱。
-- 可配置环境变量（默认即生产值，一般不用动）：`PI_DOORBELL_LOG_DIR`（日志目录，默认 `<cwd>/_flow`）、`PI_DOORBELL_POLL_MS`（轮询间隔，默认 2000）、`PI_DOORBELL_COOLDOWN_MS`（两次门铃最短间隔，默认 10000）、`PI_DOORBELL_TEXT`（门铃短句，默认「你有来信」）。
-- 回归验收：
-  ```bash
-  node --test tests/doorbell.test.js   # 纯逻辑回归（node 22/24 都过）
-  ```
-  纯逻辑在 `doorbell-core.mjs`（node 22 CI 可直接测），`doorbell.ts` 只做 pi 运行时接线。
+doorbell 是给信箱台（§9）配的门铃：协调者 pi 空闲时代按一句「你有来信」。信箱台随 2026-08-31 本机守卫栈归零一起冻结，门铃没有信可响，**新机不装**。源码留仓 `host/pi-extensions/doorbell.ts` + `doorbell-core.mjs`（`node --test tests/doorbell.test.js` 照跑），去留随 §9 一起定。
 
 ## 7. grok 怎么配
 
-grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，路由见 `docs/model-routing.toml`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
+grok（Grok Build，X 系的官方 CLI）是本仓写码类峰时主选、查证/外网信息类的试用模型，选型见 `docs/model-routing.json`，启动模板见 `docs/model-routing.toml` `[providers.grok].launch`。**grok 单统一走 Grok Build，pi-grok 已退役**（2026-08-14 拍板，issue #443）：pi 的 xai provider 走公网 api.x.ai + auth.x.ai 刷 OAuth，整链依赖本机 clash，点将台盲考两次断线；Grok Build 走专用端点 cli-chat-proxy.grok.com（带客户端头、给免费额度）。2026-08-15 起装 regrok shim 后，`--agent grok` 直接可用（shim 把代理前缀和默认模型 grok-4.6 都包进去了），装机三条：
 
 - npm 必须钉版本：`npm install -g @xai-official/grok@1.0.1`——`latest` 标签停在仅 macOS 的 0.1.4，不钉版本会装错。验证：`grok --version` 应回 `1.0.1`。
 - regrok shim：把 `host/machine/shims/grok.cmd` 和 `host/machine/shims/grok` 拷到 `~/.local/bin/`（覆盖 PATH 第一位）。打开模板改 `GROK_REAL`（真实二进制因机而异，例：`C:\nvm4w\nodejs\grok.cmd`）。行为与现机一致：内置 `HTTPS_PROXY=http://127.0.0.1:7890`（grok CLI 不认 Windows 系统代理，auth.x.ai 有 DNS 污染；代理地址可设环境变量 `DAO_PROXY` 覆盖，不设回退 7890），默认追加 `-m grok-4.6`，显式传 `-m/--model` 时原样透传。Windows `.cmd` 禁止 `findstr`（#633：用字符串替换判 `-m` / `--model`，不弹可见 cmd）。`--agent grok` 不带 launch 旗标时，shim 补 `--effort xhigh --always-approve`。验证：`where grok` 第一位应是 `~/.local/bin`，裸起 `grok` 服务端确认默认 4.6。注释保持纯 ASCII。命令库 `docs/model-routing.toml` 的 `[providers.grok].launch` 走这层 PATH。默认旗标只信那一处 launch，本节不复制。
@@ -198,7 +178,7 @@ command-code（Command Code 官方 CLI）本仓用途 = **非交互查证/测速
 
 ## 7c. cursor 怎么配
 
-Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主路仍 Codex）。路由与管子见 `docs/model-routing.toml` `[providers.cursor]`。**不装 pi-cursor-sdk**（官方无第三方 chat API；撞「pi 不写插件」）。
+Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主路仍 Codex）。选型见 `docs/model-routing.json`，启动模板见 `docs/model-routing.toml` `[providers.cursor]`。**不装 pi-cursor-sdk**（官方无第三方 chat API；撞「pi 不写插件」）。
 
 - 装机（Windows PowerShell）：`irm 'https://cursor.com/install?win32=true' | iex`。macOS / Linux / WSL：`curl https://cursor.com/install -fsS | bash`。验证：`cursor-agent --version`（`agent` 是同一套入口）。
 - 登录必须真 TTY：`cursor-agent login`（浏览器交互，只能用户做）。验证：`cursor-agent status` / `cursor-agent whoami` 应回已登录。
@@ -208,7 +188,7 @@ Cursor CLI 是 Composer / Kimi / Gemini 的主路，也是 GPT 的支路（主�
 
 ## 7d. devin 怎么配
 
-Devin CLI 是写码类主通道（#688：优先级 devin > opencode-go > 直连）。路由与启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
+Devin CLI 的选型顺位见 `docs/model-routing.json`；启动模板只信 `docs/model-routing.toml` `[providers.devin].launch`。Orca 不认 `--agent devin`，派工走 `terminal create --command`。
 
 - 装机：官方 Devin 安装器（本机二进制 `%LOCALAPPDATA%\devin\cli\bin\devin.exe`）。验证：`where.exe devin` 能找到；`devin models list` 含 `deepseek-v4-flash-max`。
 - 登录只能用户做：`devin auth`。凭据在 `%LOCALAPPDATA%\devin\credentials.toml`（C 类，不进 git）。
@@ -218,6 +198,7 @@ Devin CLI 是写码类主通道（#688：优先级 devin > opencode-go > 直连�
 ## 8. 本机工具坑
 
 - playwright MCP 报 "Browser is already in use" 时：杀掉 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-chrome-*` 对应的 chrome 进程，并删该目录下的 lockfile。
+- `~/.claude/settings.json` 的 `statusLine.command` 指本仓 `host/statusline.js`，是这个 D 类文件里唯一一处本机绝对路径：仓搬了家、或换机克隆到别的盘，状态栏会**静默消失**（Claude Code 不报错）。onboard 哨兵报 `statusline-dangling`，只报不修——手改那一行，别整文件覆写（见下条红线）。
 - 不可逆红线：覆写正在使用的 `~/.claude/settings.json` 可能触发 401 强制登出，把文件改回去也恢复不了——改它前先备份，AI 不得整文件覆写。
 
 ## 8c. 什么不能拷
@@ -263,60 +244,17 @@ git -C <任意 worktree> var GIT_EDITOR   # worktree 继承主仓配置
 
 取舍说明：仓库级配置影响真人在同一仓库的手工 git 操作——无 `-m` 的 `git commit` 会快速中止而不是进编辑器（想要编辑器时显式 `git -c core.editor=... commit` 或设 `GIT_EDITOR` 临时覆盖）。本机是 AI 协作机器，挂死比空中止贵得多，选仓库级全覆盖；同域命令一并扫过：`git commit`（无 `-m`）、`git merge`、`git tag -a`、`git rebase -i`（todo 表用默认 pick 直接执行）、`gh pr create`（无 `--body`）都不再挂死。
 
-## 9. 信箱台
+## 9. 信箱台 / 守卫保活 / Cursor 帅位挂载（冻结，新机不装）
 
-#667 起不再靠 coordinator 横幅给帅收信：人用窗口永不当 coordinator，真信进 `_flow/inbox.log` 和 GitHub。新机一条命令重建中继（#638：**全机只保活一台**；2026-08-23 拍板改 **detached 后台进程**，面板 0 占用，不再占顶栏页签）：
+这三节原来写本机守卫栈：信箱台 relay、看门狗 + flow 保活、盘面注入，以及 Cursor 侧的同一套挂载。**2026-08-31 拍板整体归零**（`docs/decisions/2026-08-31-local-guards-retire-with-server.md`）：它们是「Windows 冒充无人值守运行时」的脚手架，服务器上由 systemd + orca automations 原生顶替。当前状态：
 
-```bash
-node scripts/inbox-station.mjs ensure
-```
-
-全活着秒退，stdout 最后一行 JSON（handle 恒 null / pid / 日志路径 / action / closedExtra / gc）。身份 = 全局租约 `_flow/inbox.lease`（新鲜 + PID 在 + PID 命令行是本脚本 relay——命令行核对防 #635 的 PID 复用假活）。`action` 两态：`ok`（all-alive 秒退 / closed-extra 顺手关掉多余活台）、`rebuild`（no-station 无台新建 / no-global-station 只有旧台，全关重建全局台 / stale-guard 在跑的不是镜像脚本 / detached-migration 旧式终端台迁移）。旧模型 per-run 台（`_flow/inbox-<run>.lease`）与旧式终端台都会被杀出局（关台双杀：关终端 + 杀 PID——实证终端没了 relay 进程还在，一台攒出 8 个同写一张日志）。relay 是 detached 进程（spawn detached + windowsHide，诊断输出落 `_flow/inbox.out.log`），不 run-use 抢 waiter（#634 已证 consumer_fenced），每轮只读 `orchestration inbox` 收全部在途 Run（keep 集 ∪ 活 coordinator 的 Run）的信，去重落盘 `_flow/inbox.log`，跑可归档加速闸 + MERGED 扫描收树（#665：可归档不是门）。**台保活归 guard-keepalive**（2026-08-23：租约即心跳，停更 90s 杀掉重拉）；dao 派工路不再跑 ensure（一次 ensure 最慢 300s，是派工分钟级耗时大头）。
-
-**守卫必须跑 origin/master（#665）**：信箱台 / 看门狗 / flow 启动时把代码 sync 到 `%USERPROFILE%\.dao\guard-mirror`（`git fetch` + `reset --hard origin/master`）再 exec，主树落后不影响关卡。启动或每轮若仍落后 / 查不成 → 非零退出（落后自停），不许继续跑旧代码。日志 / 租约仍落主树 `_flow/`（`resolveLogPath` 认主卡）。合入本改动后**重启一次**信箱台（`node scripts/inbox-station.mjs ensure`）和看门狗 / flow，之后落后会自停、ensure 按镜像重建。归档失败写 GitHub PR 评论（marshal），不只进 orchestration 信箱。ensure 成功后顺手只读 run-gc（#614）：僵尸 Run 数超阈值（默认 5）在 stdout 最前面打一行，`--apply` 仍手动。#667：ensure/派工都不 `run-use`（`--from` 不能冒充信箱台，会 consumer_fenced）。人用窗口不当 coordinator：闸门拦裸 `run-use`/`run-create`。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；帅窗不许触发。心跳不准发到 Run。帅读 `_flow/inbox.log` 和 GitHub 知道完工/升级，不靠输入框横幅。#593 / #601：归档走 `dao.mjs worktree-rm`（先退役 Run+关台，再删树）；关台身份看租约 TTL/runId/handle（过期直接 alreadyGone，未过期且证不出就失败，不拿 coordinator_handle 当台）；存量用 `dao.mjs run-gc`（默认只列 pending/tombstones，`--apply` 才关，真关只认 terminal close，墓碑计入本已关）；跨单收信 `dao.mjs inbox-collect`。
-
-## 9b. 守卫保活：帥位触发（#693）
-
-不要靠人记得 Monitor 挂 watchdog / flow，也不要再造 OS 级定时器或自研循环（#683 的计划任务 + #693 前身的 resident 循环都已拍板删除：schtasks 被拒后长出的自研保活层死了 5.5 小时无人知，见 #693）。
-
-新机制**随仓生效，无装机动作**（clone 即带，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook）：
-
-- 随仓 `.claude/settings.json` 的 SessionStart hook：会话启动时机械判定 cwd 是主树（`git worktree list` 第一棵）——是主树就幂等跑 `node scripts/guard-keepalive.mjs --once`（2026-08-22 拍板：不再要求分支是 master；主树停非 master 分支时保活全灭过一次，守卫死 15 小时无人知。master 只管「谁是帅位」展示，不管「要不要拉起」）——查 watchdog/flow 进程，缺才从 `~/.dao/guard-mirror` 拉起（detached + windowsHide）；进程在但心跳停更超阈值（watchdog 5 分钟 / flow 10 分钟，#699「活但卡死」）杀掉再拉起。watchdog 自身心跳写 `%USERPROFILE%\.dao\guard\watchdog-heartbeat.json`，flow 心跳写主树 `_flow/heartbeat.json`。
-- 同一份 settings.json 的 board-hook（UserPromptSubmit）在主树会话里每轮顺手再 ensure 一遍：会话中途守卫死了，帅下一轮提示时拉起。2026-08-23 起信箱台 relay 也在保活列（第三个被保活进程，心跳 = 主树 `_flow/inbox.lease`，停更 90s 杀掉重拉）。
-- 主树判定不出来（git 失败 / detached HEAD / 分支读不出）不猜、不静默：hook 往上下文注入醒目行，由帅问用户后再手动拉起。工人树（非主树）两个 hook 都静默不拉——防多树双拉。
-
-验（不是「已装」，是 kill 后会回来）：
+- 挂点已摘：随仓 `.claude/settings.json` 只剩 PreToolUse 派工闸 + SessionStart onboard 哨兵；随仓 `.cursor/hooks.json` 只剩 beforeShellExecution 派工闸（2026-09-02 补摘——归零那天只摘了 Claude 面，Cursor 面还在拉守卫、注盘面）。
+- 代码死缓：`scripts/inbox-station.mjs`、`watchdog.mjs`、`flow.mjs`、`guard-keepalive.mjs`、`scripts/lib/guard-*`、`board-hook.mjs`、`cursor-context-hook.mjs` 原样留仓、测试照跑，不修不加不移植；服务器落地后按 `docs/decisions/SERVER-LANDING-CHECKLIST.md` 第 4 步删。
+- 想看当年怎么装：读 2026-09-02 之前版本的本文件（`git log --oneline -- NEW-MACHINE.md`）。
+- 派工闸仍活着（停派工期防手滑）：Claude 面 exit 2 拦裸 `orca orchestration worker-start`；Cursor 面 `scripts/lib/cursor-dispatch-gate-hook.mjs` 以 stdout JSON 的 `permission: deny` 拦——Cursor 在 Windows 上用 PowerShell 包装钩子会吞子进程退出码，所以 Cursor 面 exit 恒 0，`failClosed: true` 兜超时与崩溃。验：
 
 ```bash
-# 主树 master 的 cwd 下手动模拟一次 SessionStart hook：
-node scripts/lib/guard-session-hook.mjs
-# 故意 kill 后立刻重跑，pid 应变新：
-#   记下 watchdog pid → taskkill /PID <pid> /F → node scripts/lib/guard-session-hook.mjs
-```
-
-手动拉起/排查：`node scripts/guard-keepalive.mjs --once`（幂等；进程列表没查成不许当 0 个、不乱拉起；心跳没查成不乱杀）。
-
-自停 / 查不成写 `%USERPROFILE%\.dao\guard\halt.jsonl`，并报 GitHub「【看门狗】守卫自停」台账（同一事故键不刷）：优先 `dao-watchdog[bot]`，watchdog 凭据没装时兜底用已装的 `dao-marshal[bot]`（2026-08-22 拍板，记录带 `via` 字段标明实际身份）；两个都没装才在 jsonl 里记失败，不许当报成功——凭据装法见 §4b。此外 board-hook 每轮读本机 halt.jsonl：近 24h 有没报成 GitHub 的自停就往会话上下文注一行（纯本地读，不打网）。`~/.dao/guard` 换机重建，不要拷。
-
-## 9c. Cursor 帅位挂载与派工闸口（#707）
-
-帅位搬进 Cursor 后，保活 / 盘面 / 派工闸在 Cursor 侧由随仓 `.cursor/hooks.json` 挂载（**随仓生效，无装机动作**；Cursor 对 hooks.json 有文件 watcher，保存即自动重载，已开着的会话不用重开；clone 即带）：
-
-- `sessionStart` → `node scripts/lib/cursor-context-hook.mjs guard-session-hook.mjs`：会话启动判定帥位并 ensure 守卫（逻辑与 §9b 的 SessionStart 同一份 `guard-session-hook.mjs`）。
-- `beforeSubmitPrompt` → `node scripts/lib/cursor-context-hook.mjs board-hook.mjs`：每轮盘面 + 信箱台自愈 + 守卫兜底（同一份 `board-hook.mjs`）。
-- `beforeShellExecution` → `node scripts/lib/cursor-dispatch-gate-hook.mjs`（timeout 8 + `failClosed: true`）：派工闸，判定逻辑唯一一份在 `dispatch-gate.mjs`，本文件只做协议翻译。
-
-**为什么盘面/守卫要包一层适配层（#707 实测）**：Cursor 钩子只认 stdout JSON——纯文本输出被当 invalid JSON 丢弃，`[盘]`/`[卫]` 行进不了会话上下文。适配层把子脚本输出原样包进 JSON 的 `additional_context` 字段（Cursor 唯一能注入上下文的通道），永远 `continue: true`（只报不拦）。**为什么派工闸也要适配层**：Cursor 在 Windows 上用 PowerShell 包装执行钩子（`Get-Content payload -Raw | & { $input | <hook> }`），脚本块调用会把子进程退出码吞成 0——exit 2 语义到不了宿主；且 `failClosed: true` + 空 stdout 会把「放行」也拦掉。所以 Cursor 面必须 exit 恒 0，拦/放全靠 stdout JSON 的 `permission`（deny/allow），`failClosed: true` 兜超时与崩溃。
-
-**Cursor 帅位的派工闸口**：`dao.mjs dispatch` / `worker-start` 要求调用进程有 Orca 终端身份（worker-start 校验 Task Run 的 coordinator 终端，非 Orca 终端报 `consumer_fenced`）。Cursor 的 shell 不是 Orca 终端，所以 Cursor 帅位派工要经 **master 卡的「派工闸口（勿关）」哑终端**：`orca terminal send --terminal <闸口 handle> --text '<dispatch 命令>' --enter`，结果用 `orca terminal read` 读回。闸口与信箱台/看门狗哑终端同 pattern，不跑 AI、不花 token。其余帅位动作（notify 发信、收信、关单、监控）Cursor 直接做，不需要闸口。
-
-Cursor 面验（进程级，等于宿主协议的一次复刻）：
-
-```bash
-# 派工闸：Cursor 形 stdin 载荷 → 拦裸 worker-start（deny JSON、exit 0）
-'{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs
-# 盘面适配层：输出应是一行 {"continue":true,"additional_context":"[盘] ..."} 的 JSON
-node scripts/lib/cursor-context-hook.mjs board-hook.mjs
+'{"hook_event_name":"beforeShellExecution","command":"orca orchestration worker-start --task t"}' | node scripts/lib/cursor-dispatch-gate-hook.mjs   # 应出 deny JSON、exit 0
 ```
 
 ## 9d. Linux 服务器起 Orca 无头运行时（2026-08-24 拍板）
@@ -499,48 +437,11 @@ git clone git@github.com:thoerwink8/windsurf-dao-memory.git
 | Claude Code | `~/.claude/skills/<name>/` | 本机 symlink → 仓内 `host/skills/<name>` |
 | Cursor Desktop | `~/.cursor/skills/<name>/`（用户级）或项目 `.cursor/skills/<name>/` | 同上；**不要**往 `~/.cursor/skills-cursor/` 写（系统内置区） |
 
-skills 是逐个 SymbolicLink 直连 `host/skills/<name>`，没有自愈脚本（`dao.ps1` 已随 #425 退役）。建 SymbolicLink 需要开发者模式或管理员权限（Windows）。本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只警告不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。
+Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员/开发者模式）：缺的补、悬空的重建；本机同名的**真目录**（插件自带的 skill，如 `orca-cli`）只报 `skills-not-link` 不动——脚本绝不删本机目录，要换成仓内版本得自己先移走。Cursor 侧 onboard 不管，按 §11.2 手动接。
 
 ### 11.1 Claude Code：`~/.claude/skills`
 
-在**主仓根**执行，把仓内每个 skill 接到 `~/.claude/skills/`：
-
-```powershell
-& {
-  $ErrorActionPreference = 'Stop'
-  $src = Join-Path (Resolve-Path .).Path 'host\skills'
-  if (-not (Test-Path -LiteralPath $src)) { throw "host/skills 不在: $src" }
-  $dstRoot = Join-Path $env:USERPROFILE '.claude\skills'
-  New-Item -ItemType Directory -Path $dstRoot -Force | Out-Null
-  foreach ($s in Get-ChildItem -LiteralPath $src -Directory) {
-    $want = $s.FullName
-    $dst = Join-Path $dstRoot $s.Name
-    $item = Get-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue
-    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-      $t = $item.Target; if ($t -is [array]) { $t = $t[0] }
-      $got = if ($t) { try { [IO.Path]::GetFullPath([string]$t) } catch { [string]$t } } else { $null }
-      if ($got -eq $want) { Write-Host "ok   $($s.Name)"; continue }
-      $item.Delete()
-    } elseif ($item) {
-      Write-Warning "跳过 $($s.Name)：本机是真目录（可能是插件自带），先移走再重跑"
-      continue
-    }
-    New-Item -ItemType SymbolicLink -Path $dst -Target $want | Out-Null
-    Write-Host "link $($s.Name) -> $want"
-  }
-}
-```
-
-验证：`ls ~/.claude/skills` 里每个仓内 skill 都在；`grill-ai` 在 = 从零拷问兜底令随机器带走了。`admit-push` 在 = 承认即派入口随机器带走了（#583：用户调用后走 issue / dispatch / park，不加账本）。`pr-fast` 在 = 快速/极速模式入口随机器带走了。
-
-`dao-project`（项化派工，含消歧门）由上面循环自动接上，无需单独动作；要单条建链（或循环没覆盖时手动补）：
-
-```powershell
-$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
-New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\dao-project" -Target "$repo\host\skills\dao-project" | Out-Null
-```
-
-建链是本机动作、不进 git（#565 消歧记录：symlink 归帅建）；验证 `ls ~/.claude/skills/dao-project` 能看到 `SKILL.md`。
+`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
@@ -596,25 +497,16 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.cursor\skills\pr
 用户觉得当前做法不对劲。立即停下手头动作，读 grill-ai skill 并按它的五条清单逐条自查回答。
 ```
 
-## 12. 专注/值守态注入（hook + `/dao-mode` skill）
+## 12b. 专注/值守态注入（hook + `/dao-mode` skill）
 
 三态开关（常态 / 专注 / 值守）靠两件东西：`/dao-mode` skill 负责切，UserPromptSubmit hook 负责**每轮把当前态注入上下文**。
 承重的是 hook——skill 的字只在调用那一轮进上下文，不装 hook 等于「我说我专注了」。设计与拍板记录见 issue #488。
 
-**① 一条 SymbolicLink，装完就齐**。`host/skills/dao-mode/` 同时是一个 Claude Code 插件（自带
+**① 一条链接，装完就齐**。`host/skills/dao-mode/` 同时是一个 Claude Code 插件（自带
 `.claude-plugin/plugin.json` 与 `hooks/hooks.json`），链到 `~/.claude/skills/` 下之后宿主会自动加载成
-`dao-mode@skills-dir`，skill 和 hook 一起生效：
-
-```powershell
-$repo = 'D:\frank\windsurf-dao'   # 换成本机主仓路径
-New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\dao-mode" -Target "$repo\host\skills\dao-mode" | Out-Null
-```
-
+`dao-mode@skills-dir`，skill 和 hook 一起生效。这条链接由 §0 的 `onboard.mjs` 随其它 skill 一起建
+（node 原生 junction，Windows PowerShell 5.1 / pwsh 7 都不需要管理员），不用单独动手。
 下次开 Claude Code 生效（当前会话里可以 `/reload-plugins`）。
-
-**这条命令必须用 PowerShell 7（`pwsh`）跑**：同一条 `New-Item -ItemType SymbolicLink` 在 Windows PowerShell 5.1
-（`powershell.exe`，双击默认打开的那个）会报 `Administrator privilege required for this operation` 而失败，pwsh 7 下正常。
-2026-08-15 实测，装机脚本里也别用 5.1 建这条链。
 
 **② 不要去改 `settings.json`**。2026-08-15 实测过三条路，结论：
 
@@ -624,7 +516,7 @@ New-Item -ItemType SymbolicLink -Force -Path "$env:USERPROFILE\.claude\skills\da
 
 **③ 验**：`node scripts/dao-check.mjs` 第 ⑧ 项会把装载面上那条命令真跑四次（四种状态文件各一次：读到且常态 /
 读到且非常态 / 文件不在 / 文件坏了），四种输出两两同形、跑不动、或哪个装载面都点不到，都报红。
-链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 ① 即可。
+链接断了（比如仓库换了位置、worktree 被删）就是这么被抓出来的——重跑 `node scripts/onboard.mjs` 即可。
 
 状态文件是 `~/.claude/state.json`，跨会话跨工作区唯一，由 `dao-mode.mjs` 独家读写，不要手改。
 
@@ -775,11 +667,9 @@ node scripts/dao.mjs start --provider gpt --worktree active --dry-run
 node scripts/dao.mjs dispatch --name "卡名" --merge-policy auto --model grok-4.6 --reviewer gpt-5.6-sol --split no --split-reason "新机自检单卡" --spec "短摘要" --dry-run
 ```
 
-派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.toml 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
+派工默认 `merge-policy: auto`（#511 拍板：帅只感知不再是关口）；选 `manual` 必须带 `--merge-reason <理由>`（只限改协作约定 / 改 model-routing.json 决策字段 / 花钱三类），理由写进任务卡 comment 留痕。另必须带 `--model` 或 `--role`、`--reviewer`、`--spec`、`--split`，缺一就停。`--split no` 必须带 `--split-reason`；`--split N` 必须带 N 个 `--slice`。启动模板只在 `docs/model-routing.toml` 的 `[providers.*].launch`。
 
 派工闸挂在**随仓 `.claude/settings.json`**（#553 从 plugin 换挂法，`host/skills/dispatch/` 已不再自带插件层）：`PreToolUse` 指向 `scripts/lib/dispatch-gate-hook.mjs`（逻辑在 `scripts/lib/dispatch-gate.mjs` 唯一一份）。**闸门随仓生效，无需装机动作**——clone 即带上，cc-switch 覆盖不到；已开着的会话重开一次才加载新 hook。裸 `orca orchestration worker-start` / `task-create` 会被 exit 2 拦住（#546 #517）。dao-check 第 ⑬ 项每次重跑闸门：装载面在、脚本在、旁路必须拦、逃生口必须过、崩了必须也拦。逃生口 `node scripts/dao.mjs raw -- <命令>` 会记一笔到 `_flow/cmd-escape.jsonl`（记账走 stderr，stdout 保持子进程原样）。给已有 PR 补审官用 `node scripts/dao.mjs reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型>`（一条命令：建树 + 起终端 + 注入 + 验开工）。`reviewer-create --pr <N>` 只建树。
-
-同一份随仓 `.claude/settings.json` 还挂 `UserPromptSubmit` → `scripts/lib/board-hook.mjs`（#564，#588 扩容）：每轮往上下文注入一行 `[盘]` 摘要（带单号和做中/审中，orca 本地状态 + 60s TTL 缓存，不打 GitHub），并顺手跑 `inbox-station.mjs ensure` 自愈信箱台（只报不拦，永远 exit 0）。随仓生效，无需装机动作。
 
 微通道（#682）：几行改动走 `node scripts/quick-fix.mjs --issue <N> --model <主会话模型> [--yes]`——一条命令原子完成 分支 → dao-worker[bot] commit → push → 非 draft PR → label → 异步审官，20 秒内落地；任一步失败整体回滚。`--model` 必须显式声明（#679 同厂闸），审官默认读 issue 的 `reviewer/*` label。异步审官日志在 `~/.dao/quickfix/quickfix-<issue>.log`。无新装依赖（复用 gh / orca / 三身份凭据）。
 

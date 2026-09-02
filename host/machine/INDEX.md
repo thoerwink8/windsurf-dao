@@ -23,7 +23,7 @@
 | A | ~/.claude | 产品根。子项见下行，不要整目录镜像 |
 | A | ~/.claude/CLAUDE.md | NEW-MACHINE §3。真相源 `docs/global-CLAUDE.md` |
 | A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的 Junction |
-| D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git |
+| D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git。其中 `statusLine.command` 指本仓 `host/statusline.js` 的**本机绝对路径**（仓搬家/换机要手改）——onboard 哨兵 `statusline-dangling` 报断 |
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
 | A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
 | D | ~/.claude/state.json | dao-mode 状态。不要手改，不要当配置拷 |

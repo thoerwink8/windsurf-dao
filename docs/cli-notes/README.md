@@ -22,4 +22,4 @@
 
 ## 原材料
 
-各 CLI 的启动模板与选型坑唯一真源：`docs/model-routing.toml`（本目录只做教学提炼 + 本次实战新增，不复制会过期的值）。
+各 CLI 的启动模板唯一真源：`docs/model-routing.toml`；选型（谁干什么、顺位、禁令）唯一真源：`docs/model-routing.json`（本目录只做教学提炼 + 本次实战新增，不复制会过期的值）。
