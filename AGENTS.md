@@ -24,7 +24,7 @@
 
 - `dao.test.js`：`live orca --help 可跑`（缺 `orca` 二进制，ENOENT）、`真实目录+git：pi 假活 → fake-alive`（用 `powershell` 回填文件时间戳，Linux 无 powershell）。
 - `ledger.test.js`：`resolveMainWorktreeRoot 认出本仓主树`（断言 checkout 目录名以 `windsurf-dao` 结尾，云上是 `/workspace`）。
-- `dao-check.mjs` 另会红「命令库 --help 自检没查成（orca ENOENT）」「态注入 hook 一个装载面都没点到（无 `~/.claude/skills` 软链）」「账本断流（无 `~/.dao` 历史账本）」，并把依赖 `gh issue list` 的项标 SKIP（云上 gh token 无 issues 权限）。
+- `dao-check.mjs` 另会红「命令库 --help 自检没查成（orca ENOENT）」「态注入 hook 一个装载面都没点到（无 `~/.claude/skills` 软链）」「账本断流（无 `~/.dao` 历史账本）」，并把依赖 `gh issue list` 的项标 SKIP（云上 gh token 无 issues 权限）。飞书群有效性无实机映射（`~/.mirasim/keys/feishu-groups.json`）/ 无 lark-cli / 无凭据 → SKIP（不是绿）。
 
 判断真回归：先在**未改动**基线上 `node --test tests/*.test.js`，只有上述 3 条 leaf 红（会连带 2 个父套 + 顶层套共约 6 条）；多出的红才是你引入的。
 

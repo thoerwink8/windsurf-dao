@@ -1,0 +1,6 @@
+{
+  "oc_aaa111aaa111aaa111aaa111aaaaaa": { "ok": true, "identity": "bot", "data": { "name": "alpha", "chat_status": "normal" } },
+  "oc_bbb222bbb222bbb222bbb222bbbbbb": { "ok": true, "identity": "bot", "data": { "name": "beta", "chat_status": "normal" } },
+  "oc_ccc333ccc333ccc333ccc333cccccc": { "ok": true, "identity": "bot", "data": { "name": "gamma", "chat_status": "normal" } },
+  "oc_hub444hub444hub444hub444hhhhhh": { "ok": true, "identity": "bot", "data": { "name": "hub", "chat_status": "normal" } }
+}

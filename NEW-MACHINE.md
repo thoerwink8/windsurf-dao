@@ -705,4 +705,4 @@ git ls-remote --heads origin | sed 's|.*refs/heads/||' \
 node scripts/dao-check.mjs
 ```
 
-退出码 0 = 环境就绪。
+退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。

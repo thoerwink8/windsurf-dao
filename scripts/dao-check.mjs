@@ -65,6 +65,11 @@
 // ㉗ 版本号载体闸（#787）：载体存在时变化必须合法、不倒退；不判该不该 bump。
 //    检查器自持 semver，不 import bump.mjs；红/绿/空（无载体=SKIP 不是绿）各一验判别力；
 //    无载体 live SKIP；git 探头失败 = 没查成
+// ㉘ 飞书群有效性（#813）：仓内 host/machine/feishu-groups.json 是占位模板（缺=没查成）；
+//    live 优先读 ~/.mirasim/keys/feishu-groups.json，用 lark-cli im chats get --as bot
+//    逐个确认还在；查不到/已解散报红并写出群名；全都在为绿；无实机映射 / 无 lark-cli /
+//    无凭据（CI）SKIP 不是绿；0 个 chat_id = 没查成。
+//    检查器自持解析，不 import feishu-triage.loadGroups；红/绿/空夹具验判别力
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -99,6 +104,9 @@ import {
 import {
   inspectVersionCarrierFixtures, inspectLiveAt,
 } from './lib/version-carrier-check.mjs';
+import {
+  inspectFeishuGroupsFixtures, checkFeishuGroups,
+} from './lib/feishu-groups-check.mjs';
 import {
   inspectQuickFixSource, inspectDispatchRedLine, probeQuickFixGate,
   inspectQuickFixFixtures,
@@ -1423,6 +1431,38 @@ checkOrphanTestSamples();
 checkOrphanTestLive();
 checkVersionCarrierSamples();
 checkVersionCarrierLive();
+checkFeishuGroupsSamples();
+checkFeishuGroupsLive();
+
+function checkFeishuGroupsSamples() {
+  const r = inspectFeishuGroupsFixtures(join(ROOT, 'tests', 'fixtures', 'feishu-groups-check'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '飞书群有效性样本没查成' : '飞书群有效性样本对不上',
+      '恢复 tests/fixtures/feishu-groups-check/{red,ok,empty}：红=查不到必须拦并点名群、绿必须过、空=0 个 chat_id 没查成',
+      r.error || '',
+    );
+    return;
+  }
+  green(`飞书群有效性样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function checkFeishuGroupsLive() {
+  const r = checkFeishuGroups({
+    root: ROOT,
+    home: process.env.HOME || process.env.USERPROFILE || '',
+    isCi: process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true',
+  });
+  if (r.skip) {
+    skip(r.skip);
+    return;
+  }
+  if (r.green) {
+    green(r.green);
+    return;
+  }
+  fail(...(r.fail || ['飞书群有效性没查成', '见 scripts/lib/feishu-groups-check.mjs', '']));
+}
 
 function checkVersionCarrierSamples() {
   const r = inspectVersionCarrierFixtures(join(ROOT, 'tests', 'fixtures', 'version-carrier'));
