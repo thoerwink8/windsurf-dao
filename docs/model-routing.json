@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-26",
+  "updated": "2026-09-03",
   "工人": {
     "写码": {
       "模型": [
@@ -25,16 +25,23 @@
           "id": "deepseek-v4-flash",
           "顺位": 2,
           "禁用": false,
-          "理由": "写码 og fallback（#688）",
+          "理由": "写码 fallback（#688）；2026-09-03 通道改 gw-dspool 优先",
           "拍板": "2026-08-16",
           "status": "正式",
           "厂商": [
             {
-              "id": "opencode-go",
-              "cli_model": "opencode-go/deepseek-v4-flash",
+              "id": "gw",
+              "cli_model": "gw-dspool/deepseek-v4-flash",
               "顺位": 1,
               "禁用": false,
-              "理由": "2026-08-16 主通道 opencode Go 额度池"
+              "理由": "2026-09-03 拍板：能用 pi 的用 pi，走自建中转站；服务器实测通"
+            },
+            {
+              "id": "opencode-go",
+              "cli_model": "opencode-go/deepseek-v4-flash",
+              "顺位": 2,
+              "禁用": false,
+              "理由": "2026-09-03 服务器实测 403 RegionError，需 opencode 后台 opt-in"
             }
           ]
         }

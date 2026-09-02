@@ -132,7 +132,7 @@ export function orcaAgentKey({ provider, command, cli } = {}) {
   if (p === 'cursor') return 'cursor';
   if (p === 'commandcode' || p === 'command-code') return 'command-code';
   if (p === 'devin') return 'devin';
-  if (p === 'deepseek' || p === 'opencode-go') return 'pi';
+  if (p === 'deepseek' || p === 'opencode-go' || p === 'gw') return 'pi';
   const bin = String(cli || command || '').trim().split(/\s+/)[0]
     .replace(/\\/g, '/').split('/').pop().toLowerCase();
   if (bin === 'codex') return 'codex';

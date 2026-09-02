@@ -5,7 +5,7 @@
 # 本文件只保留 [providers.*].launch 等启动模板；改 launch 仍改这里。
 # ============================================================================
 
-updated = "2026-08-22"
+updated = "2026-09-03"
 
 # ── provider：每个模型厂商的启动方式与坑 ──────────────────────────────────
 # launch = 完整启动命令模板（issue #482）。派工启动 argv 只听本表。
@@ -153,15 +153,30 @@ Zen 与 Go 在 pi 里是两个独立 provider（`opencode` / `opencode-go`），
 限额与折算价见 https://opencode.ai/docs/go/ 与账号控制台，本文件不复制会过期的数字。
 """
 why = """
-opencode-go 是 ds-flash/pro 模型条目的日常通道（用户 2026-08-16 追加拍板，本字段为 **og vs 直连** 规则唯一权威落点）：
-**deepseek flash/pro 不分峰谷一律走本节（opencode-go）**，[providers.deepseek] 直连只在用户拍板时启用——
+本字段仍是 **og vs 直连** 规则的权威落点（用户 2026-08-16 拍板）：[providers.deepseek] 直连只在用户拍板时启用——
 撞额度顶后必须报给用户，由用户在「等恢复 / 充值 / 换模型 / 停单 / 手动切直连」之间决定，**AI 不得自行切换到直连**。
-写码 A 位是另一条通道（Devin CLI 的 flash-max，#688），见 [[routes]]；本节是那条路由的 fallback。
+2026-09-03：ds-flash 写码日常通道改 gw-dspool（本节降为顺位 2；服务器实测 403 RegionError，需 opencode 后台 opt-in）；ds-pro 判断仍走本节。
+写码 A 位是另一条通道（Devin CLI 的 flash-max，#688），见 JSON 顺位；本节是 flash 的 fallback 之一。
 判例（2026-08-16 og 402 成本跃迁）：og 撞顶报 402 后，擅自先切 ds 直连、再换 claude-opus，成本从 ¥0.05 级
 跃到 $10 级——「AI 自行切换」的代价样本，故立此规。
 与直连 deepseek 是同一模型、能力相同、无质量风险，额度池比按量便宜（官方口径 $10/月买 6 倍价值额度）。
 """
 decided = "2026-08-16"
+
+[providers.gw]
+cli = "pi"
+start = "agent"
+launch = "pi --model {model}"
+launch_model = "gw-dspool/deepseek-v4-flash"
+launch_note = """
+pi 走自建中转站（pi-gateway 扩展，provider id gw-dspool）。
+用户 2026-09-03 拍板：能用 pi 的用 pi，成本最小。
+服务器（Contabo）实测 `pi --provider gw-dspool --model deepseek-v4-flash` 无工具/带工具均通。
+派工写法 `pi --model gw-dspool/deepseek-v4-flash`（#602：裸名跨 provider 歧义）。
+网关装法归 ai-gateway-stack（INDEX E 类），本仓只登记启动模板。
+"""
+why = "2026-09-03 拍板：自建中转站最大的用处就是能用 pi 的用 pi。opencode-go 在服务器上 403 RegionError，需后台 opt-in，降为 flash 写码顺位 2。"
+decided = "2026-09-03"
 
 [providers.cursor]
 cli = "cursor-agent"

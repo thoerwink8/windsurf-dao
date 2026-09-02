@@ -1,10 +1,10 @@
 # CLI 踩坑教学：pi / opencode-go（模型 deepseek-v4-flash / pro，写码通道）
 
-> 提炼自 `docs/model-routing.toml [providers.opencode-go]` + `[providers.deepseek]`。
+> 提炼自 `docs/model-routing.toml [providers.gw]` + `[providers.opencode-go]` + `[providers.deepseek]`。
 
 ## 一句话特性
 
-agent 型（`start = "agent"`），日常通道走 **opencode-go**（`pi --model opencode-go/deepseek-v4-flash`）。写码顺位 2（顺位 1 = devin）。
+agent 型（`start = "agent"`），ds-flash 写码日常通道走 **gw-dspool**（`pi --model gw-dspool/deepseek-v4-flash`，2026-09-03 拍板）。`opencode-go` 是顺位 2（服务器 403 RegionError）。写码模型顺位 2（顺位 1 = devin）。
 
 ## 坑
 
