@@ -459,7 +459,7 @@ export async function executeAction(client, creds, action) {
 // ---------------------------------------------------------------------------
 // 事件处理主链：归一化 → triage → replies 回话题 → actions 逐条执行 → 状态落盘
 // 返回 null = 事件不处理；否则返回 { inbound, replies, actions }（fixture 计数用）。
-export async function handleEvent(event, { groups, store, deps, triage, client }) {
+export async function handleEvent(event, { groups, store, deps, triage, client, creds = null }) {
   const inbound = normalizeInbound(event, groups);
   if (!inbound) return null;
   if (client?.userName && !inbound.senderName) {
@@ -474,7 +474,7 @@ export async function handleEvent(event, { groups, store, deps, triage, client }
     else log({ type: 'reply', rootId: r.rootId || inbound.rootId, text: r.text });
   }
   for (const a of actions) {
-    if (client) await executeAction(client, deps._creds, a);
+    if (client) await executeAction(client, creds, a);
     else log({ type: 'action', action: a });
   }
   if (out.state instanceof Map && out.state !== store.map) store.map = out.state;
@@ -506,7 +506,7 @@ export async function runFixture({ file, groups, store, deps, triage }) {
       skipped += 1;
       continue;
     }
-    const res = await handleEvent(event, { groups, store, deps, triage, client: null });
+    const res = await handleEvent(event, { groups, store, deps, triage, client: null, creds: null });
     if (!res) {
       log({ type: 'skip', reason: 'normalize-failed' });
       skipped += 1;
@@ -549,7 +549,7 @@ export async function runLive({ groups, store, deps, creds, triage, coreSource }
   let chain = Promise.resolve();
   client.onEvent((event) => {
     chain = chain
-      .then(() => handleEvent(event, { groups, store, deps, triage, client }))
+      .then(() => handleEvent(event, { groups, store, deps, triage, client, creds }))
       .catch((e) => log({ type: 'error', message: String(e.message || e) }));
   });
 
@@ -651,7 +651,6 @@ export async function main(argv = process.argv.slice(2)) {
 
   const core = await loadCore();
   const deps = buildDeps({ creds, store });
-  deps._creds = creds;
 
   if (opts.fixture) {
     return runFixture({ file: opts.fixture, groups, store, deps, triage: core.triage });
