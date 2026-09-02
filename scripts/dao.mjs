@@ -108,8 +108,14 @@ import {
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
+  findWorktreeBySel,
   verifyReviewerAttachTree,
   planAttachSoldierDispatch,
+  planCreateSoldierDispatch,
+  parseDispatchComment,
+  progressDispatchComment,
+  pickMergePolicyFromLedger,
+  resolveReviewerMergePolicy,
   isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
@@ -171,7 +177,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
+import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
@@ -1719,6 +1725,8 @@ function runDispatchExecution(order, { queueDir } = {}) {
       pipe_provider: workerLaunch.provider,
       split: splitGate.split,
       split_reason: splitGate.splitReason,
+      merge_policy: plan.mergePolicy,
+      ...(plan.mergeReason ? { merge_reason: plan.mergeReason } : {}),
       ...(created.childDispatchIds && created.childDispatchIds.length
         ? { child_dispatch_ids: created.childDispatchIds }
         : {}),
@@ -1897,6 +1905,56 @@ function resolveDispatchLastFailure(dispatchId) {
   return r.json?.result?.dispatch?.last_failure ?? null;
 }
 
+/** #799：审官 create/attach/reuse 继承派工 merge-policy。账本没查成 ≠ 没有字段，都回退 auto 并写原因。 */
+function lookupReviewerMergePolicy({
+  explicitPolicy, explicitReason, issue, pr, dispatchId, worktreeSel, worktrees,
+} = {}) {
+  let ledger = { ok: false, unscanned: true, state: 'unscanned', error: '账本未读' };
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    if (listed.unscanned) {
+      ledger = { ok: false, unscanned: true, state: 'unscanned', error: listed.error };
+    } else {
+      ledger = pickMergePolicyFromLedger({
+        events: listed.events,
+        issue,
+        pr,
+        dispatchId,
+      });
+    }
+  } catch (e) {
+    ledger = { ok: false, unscanned: true, state: 'unscanned', error: String(e.message || e) };
+  }
+  let trees = worktrees;
+  if (worktreeSel && !Array.isArray(trees)) {
+    const listed = orca(['worktree', 'list', '--json']);
+    if (listed.ok) trees = listed.json?.result?.worktrees || listed.json?.worktrees;
+  }
+  const wt = worktreeSel && Array.isArray(trees) ? findWorktreeBySel(trees, worktreeSel) : null;
+  const comment = parseDispatchComment(wt && wt.comment);
+  return resolveReviewerMergePolicy({
+    explicitPolicy,
+    explicitReason,
+    ledger,
+    comment,
+  });
+}
+
+/** #799：写人话进度时保留卡上 merge-policy 前缀。show 失败则用盘面列表里的旧 comment 兜底。 */
+function setWorkerCardProgress(parentId, progress, worktrees) {
+  if (!parentId) return { ok: true, skipped: true };
+  const mutated = mutateWorktreeComment({
+    worktreeId: parentId,
+    runOrca: (a) => orca(a),
+    mutate: (comment) => progressDispatchComment(comment, progress),
+  });
+  if (mutated.ok) return mutated;
+  const wt = Array.isArray(worktrees) ? findWorktreeBySel(worktrees, parentId) : null;
+  const next = progressDispatchComment(wt && wt.comment, progress);
+  return orca(argsWorktreeSet({ worktree: parentId, comment: next }));
+}
+
 function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (soldierDispatch) {
     const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
@@ -2051,7 +2109,7 @@ function loadReviewerReuseInputs() {
 }
 
 function reuseReviewerOnTerminal({
-  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun,
+  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue,
 } = {}) {
   if (dryRun) {
     return {
@@ -2077,32 +2135,63 @@ function reuseReviewerOnTerminal({
   const mergeable = assessPrMergeable(head?.mergeable);
   if (!mergeable.ok) return { ok: false, reused: true, error: mergeable.error, mergeable };
 
-  let soldierDispatchId = soldierDispatch || null;
+  let foundDispatch = null;
   let runId = null;
   if (parentWorktree) {
     const wl = orca(argsWorkerList());
-    if (!wl.ok) return { ok: false, reused: true, error: `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
-    if (!found.ok && !soldierDispatchId) {
-      return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
+    if (!wl.ok) {
+      foundDispatch = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(wl.error)}` };
+    } else {
+      foundDispatch = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
+      if (foundDispatch.ok) runId = foundDispatch.runId || null;
     }
-    if (!soldierDispatchId && found.ok) soldierDispatchId = found.dispatchId;
-    if (found.ok) runId = found.runId || null;
+  } else if (!soldierDispatch) {
+    foundDispatch = { ok: false, error: '没给 --soldier-dispatch 或 --parent-worktree' };
   }
-  if (!soldierDispatchId) {
-    return { ok: false, reused: true, error: '复用审官没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）' };
+  const probeId = String(soldierDispatch || '').trim()
+    || (foundDispatch && foundDispatch.ok ? String(foundDispatch.dispatchId || '').trim() : '');
+  let dispatchLive = null;
+  if (probeId) {
+    const shown = orca(argsWorkerShow({ dispatch: probeId }));
+    if (shown.ok) {
+      const d = shown.json?.result?.dispatch || {};
+      const w = shown.json?.result?.worker || {};
+      dispatchLive = isLiveDispatchRecipient({
+        workerState: w.state || d.status,
+        dispatchStatus: d.status,
+        lastFailure: d.last_failure,
+      });
+      if (!runId) runId = d.run_id || d.runId || null;
+    }
   }
-  if (!runId) {
-    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
+  const soldierPlan = planCreateSoldierDispatch({
+    explicitDispatch: soldierDispatch,
+    found: foundDispatch,
+    dispatchLive: probeId ? dispatchLive : undefined,
+  });
+  if (!soldierPlan.ok) {
+    return { ok: false, reused: true, error: soldierPlan.error, found: foundDispatch, soldierPlan };
   }
+  const soldierDispatchId = soldierPlan.soldierDispatchId || '';
+  if (soldierPlan.deadWarning) console.error(`[dao] 注意：${soldierPlan.deadWarning}`);
+
+  const policyPlan = lookupReviewerMergePolicy({
+    issue,
+    pr,
+    dispatchId: soldierDispatchId || probeId || null,
+    worktreeSel: parentWorktree,
+  });
+  if (!policyPlan.ok) return { ok: false, reused: true, error: policyPlan.error, policyPlan };
 
   let reviewerBook;
   try {
     reviewerBook = encodeSendText(buildReviewerInject({
       spec: `复用审官终端审 PR #${pr}`,
       pr: String(pr),
-      soldierDispatchId: String(soldierDispatchId),
-      mergePolicy: 'auto',
+      soldierDispatchId,
+      mergePolicy: policyPlan.mergePolicy,
+      mergeReason: policyPlan.mergeReason,
+      fallbackReason: policyPlan.fallbackReason,
     }), reviewer);
   } catch (e) {
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
@@ -2110,6 +2199,10 @@ function reuseReviewerOnTerminal({
 
   const station = bindStation();
   if (!station.ok) return { ok: false, reused: true, error: station.error };
+  if (!runId) runId = station.runId || null;
+  if (!runId) {
+    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
+  }
   const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
@@ -2157,15 +2250,18 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
   }
 
-  const identity = deliverMessage({
-    to: `dispatch:${soldierDispatchId}`,
-    subject: `审官身份：${reviewerDispatchId}`,
-    body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
-    hop: 'worker-done→士兵（复用审官身份）',
-    orca: (a) => orca(a),
-  });
-  if (!identity.ok) {
-    return { ok: false, reused: true, error: `复用审官身份消息没送到士兵: ${identity.error}`, identity };
+  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
+  if (soldierDispatchId) {
+    identity = deliverMessage({
+      to: `dispatch:${soldierDispatchId}`,
+      subject: `审官身份：${reviewerDispatchId}`,
+      body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
+      hop: 'worker-done→士兵（复用审官身份）',
+      orca: (a) => orca(a),
+    });
+    if (!identity.ok) {
+      return { ok: false, reused: true, error: `复用审官身份消息没送到士兵: ${identity.error}`, identity };
+    }
   }
 
   let ledger = null;
@@ -2317,6 +2413,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: true,
       });
     }
@@ -2364,7 +2461,7 @@ function cmdWorkerDone(args) {
       postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
       postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
       if (parentId) {
-        orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+        setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
       }
       fail(stop.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2380,6 +2477,7 @@ function cmdWorkerDone(args) {
       parentWorktree: parentId,
       soldierDispatch: args.soldierDispatch,
       reviewer: plan.reviewer,
+      issue: plan.issue,
       dryRun: false,
     });
     const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
@@ -2393,6 +2491,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: false,
       });
       // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路——保活归 guard-keepalive。
@@ -2418,6 +2517,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: false,
       });
       if (retriedReuse.ok) {
@@ -2428,7 +2528,7 @@ function cmdWorkerDone(args) {
         postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
         postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
         if (parentId) {
-          orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+          setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
         }
         fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
           ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2443,7 +2543,7 @@ function cmdWorkerDone(args) {
     postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
     postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
     if (parentId) {
-      orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+      setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
     }
     fail(refuseErr, {
       ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2477,7 +2577,7 @@ function cmdWorkerDone(args) {
   const notified = notify.notified;
 
   if (parentId) {
-    orca(argsWorktreeSet({ worktree: parentId, comment: '待终审' }));
+    setWorkerCardProgress(parentId, '待终审', reuseInputs.worktrees);
   }
 
   let ledgerLink = null;
@@ -3011,30 +3111,55 @@ function cmdReviewerCreate(args) {
     }
   }
 
-  let soldierDispatchId = args.soldierDispatch || null;
+  let foundDispatch = null;
   let soldierRunId = null;
   if (args.parentWorktree) {
     const wl = orca(argsWorkerList());
-    if (!wl.ok && !soldierDispatchId) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
-    if (wl.ok) {
-      const found = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
-      if (!found.ok && !soldierDispatchId) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
-      if (found.ok) {
-        if (!soldierDispatchId) soldierDispatchId = found.dispatchId;
-        soldierRunId = found.runId || null;
-      }
+    if (!wl.ok) {
+      foundDispatch = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(wl.error)}` };
+    } else {
+      foundDispatch = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
+      if (foundDispatch.ok) soldierRunId = foundDispatch.runId || null;
+    }
+  } else if (!args.soldierDispatch) {
+    foundDispatch = { ok: false, error: '没给 --soldier-dispatch 或 --parent-worktree' };
+  }
+  const probeId = String(args.soldierDispatch || '').trim()
+    || (foundDispatch && foundDispatch.ok ? String(foundDispatch.dispatchId || '').trim() : '');
+  let dispatchLive = null;
+  if (probeId) {
+    const shown = orca(argsWorkerShow({ dispatch: probeId }));
+    if (shown.ok) {
+      const d = shown.json?.result?.dispatch || {};
+      const w = shown.json?.result?.worker || {};
+      dispatchLive = isLiveDispatchRecipient({
+        workerState: w.state || d.status,
+        dispatchStatus: d.status,
+        lastFailure: d.last_failure,
+      });
+      if (!soldierRunId) soldierRunId = d.run_id || d.runId || null;
     }
   }
-  if (!soldierDispatchId) {
-    failCreated(launched, 'reviewer-create 没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）', plan);
-  }
-  if (!soldierRunId) soldierRunId = runIdFromDispatch(soldierDispatchId);
+  const soldierPlan = planCreateSoldierDispatch({
+    explicitDispatch: args.soldierDispatch,
+    found: foundDispatch,
+    dispatchLive: probeId ? dispatchLive : undefined,
+  });
+  if (!soldierPlan.ok) failCreated(launched, soldierPlan.error, { found: foundDispatch, soldierPlan, ...plan });
+  const soldierDispatchId = soldierPlan.soldierDispatchId || '';
+  if (soldierPlan.deadWarning) console.error(`[dao] 注意：${soldierPlan.deadWarning}`);
+  if (!soldierRunId && soldierDispatchId) soldierRunId = runIdFromDispatch(soldierDispatchId);
 
-  const policy = args.mergePolicy || 'auto';
-  if (policy !== 'auto' && policy !== 'manual') failCreated(launched, `--merge-policy 只允许 auto|manual，实际 ${policy}`, plan);
-  if (policy === 'manual' && !String(args.mergeReason || '').trim()) {
-    failCreated(launched, '--merge-policy manual 必须给 --merge-reason', plan);
-  }
+  const policyPlan = lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue: args.issue,
+    pr: args.pr,
+    dispatchId: soldierDispatchId || probeId || null,
+    worktreeSel: args.parentWorktree,
+    worktrees: inputs.ok ? inputs.worktrees : undefined,
+  });
+  if (!policyPlan.ok) failCreated(launched, policyPlan.error, { policyPlan, ...plan });
 
   let reviewerBook = null;
   try {
@@ -3042,9 +3167,10 @@ function cmdReviewerCreate(args) {
       spec: `按审官任务书审 PR #${args.pr}`,
       issue: args.issue,
       pr: String(args.pr),
-      soldierDispatchId: String(soldierDispatchId),
-      mergePolicy: policy,
-      mergeReason: args.mergeReason,
+      soldierDispatchId,
+      mergePolicy: policyPlan.mergePolicy,
+      mergeReason: policyPlan.mergeReason,
+      fallbackReason: policyPlan.fallbackReason,
     }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
@@ -3110,18 +3236,21 @@ function cmdReviewerCreate(args) {
   }
   const reviewerProof = workerStartProof(reviewerDispatchId);
 
-  const identity = deliverMessage({
-    to: `dispatch:${soldierDispatchId}`,
-    subject: `审官身份：${reviewerDispatchId}`,
-    body: `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
+  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
+  if (soldierDispatchId) {
+    identity = deliverMessage({
+      to: `dispatch:${soldierDispatchId}`,
+      subject: `审官身份：${reviewerDispatchId}`,
+      body: `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
 先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
-    hop: 'reviewer-create→士兵（审官身份）',
-    orca: (a) => orca(a),
-  });
-  if (!identity.ok) {
-    failCreated(launched, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
-      ...plan, reviewerTaskId, identity,
+      hop: 'reviewer-create→士兵（审官身份）',
+      orca: (a) => orca(a),
     });
+    if (!identity.ok) {
+      failCreated(launched, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
+        ...plan, reviewerTaskId, identity,
+      });
+    }
   }
 
   let ledger = null;
@@ -3157,6 +3286,10 @@ function cmdReviewerCreate(args) {
     reviewerDispatchId,
     reviewerTaskId,
     soldierDispatchId,
+    soldierPlan,
+    mergePolicy: policyPlan.mergePolicy,
+    mergeReason: policyPlan.mergeReason,
+    mergePolicySource: policyPlan.source,
     heads,
     filesChecked: filesOk.checked,
     probes: env,
@@ -3179,12 +3312,6 @@ function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');
   if (!args.worktree) fail('reviewer-attach 要 --worktree（工人卡）');
   if (!args.reviewer) fail('reviewer-attach 要 --reviewer（审官模型 id）');
-
-  const policy = args.mergePolicy || 'auto';
-  if (policy !== 'auto' && policy !== 'manual') fail(`--merge-policy 只允许 auto|manual，实际 ${policy}`);
-  if (policy === 'manual' && !String(args.mergeReason || '').trim()) {
-    fail('--merge-policy manual 必须给 --merge-reason');
-  }
 
   const routing = loadOrFail();
   let reviewerLaunch;
@@ -3244,6 +3371,18 @@ function cmdReviewerAttach(args) {
     workerId: worker.modelId, reviewerId: args.reviewer, routing,
   });
 
+  const trees = wtList.ok ? (wtList.json?.result?.worktrees || wtList.json?.worktrees) : undefined;
+  const policyPlan = lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue: args.issue || (Array.isArray(worker.refs) ? worker.refs[0] : null),
+    pr: args.pr,
+    dispatchId: args.soldierDispatch || null,
+    worktreeSel: args.worktree,
+    worktrees: trees,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, pr: String(args.pr) });
+
   const revName = assembleCardName({
     name: args.name || reviewerCardName(args.reviewer),
     pr: args.pr,
@@ -3258,8 +3397,10 @@ function cmdReviewerAttach(args) {
     baseBranch,
     expectedOid,
     files,
-    mergePolicy: policy,
-    mergeReason: args.mergeReason || null,
+    mergePolicy: policyPlan.mergePolicy,
+    mergeReason: policyPlan.mergeReason || null,
+    mergePolicySource: policyPlan.source,
+    fallbackReason: policyPlan.fallbackReason || null,
     launch: reviewerLaunch.command,
     mergeable,
     workerModel: worker.modelId,
@@ -3369,8 +3510,9 @@ function cmdReviewerAttach(args) {
         pr: String(args.pr),
         // #631：skip-wait 无收件人时传 ''（渲染成 d=，任务书认空 = 红项上帅），不许传 null（渲染硬闸）
         soldierDispatchId: soldierDispatchId ? String(soldierDispatchId) : '',
-        mergePolicy: policy,
-        mergeReason: args.mergeReason,
+        mergePolicy: policyPlan.mergePolicy,
+        mergeReason: policyPlan.mergeReason,
+        fallbackReason: policyPlan.fallbackReason,
         skipWait: soldierPlan?.skipWait || false,
       }), reviewerLaunch.provider);
   } catch (e) {

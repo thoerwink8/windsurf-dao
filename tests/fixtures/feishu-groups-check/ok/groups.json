@@ -1,0 +1,7 @@
+{
+  "_comment": "绿夹具：四个群都在。_ 注释键不得被当成 chat_id 去查。",
+  "oc_aaa111aaa111aaa111aaa111aaaaaa": { "repo": "org/alpha", "kind": "project" },
+  "oc_bbb222bbb222bbb222bbb222bbbbbb": { "repo": "org/beta", "kind": "project" },
+  "oc_ccc333ccc333ccc333ccc333cccccc": { "repo": "org/gamma", "kind": "project" },
+  "oc_hub444hub444hub444hub444hhhhhh": { "kind": "hub" }
+}

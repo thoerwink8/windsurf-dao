@@ -12,6 +12,7 @@ import {
   classifyOrcaStdout,
   classifyRuntimeStatus,
   classifyAccountsResult,
+  classifyFeishuTriage,
   UNPROBEABLE_CODES,
   parseStartAgentProviders,
   parseTuiAgentDisplayNames,
@@ -198,6 +199,31 @@ test('server-check 判别力', async (t) => {
         knownUnscanned: false,
       });
       assert.equal(r.state, 'ok');
+    });
+  });
+
+  await t.test('classifyFeishuTriage（⑫ #801）', async (t) => {
+    await t.test('active → ok', () => {
+      const r = classifyFeishuTriage({ probed: true, code: 0, stdout: 'active' });
+      assert.equal(r.state, 'ok');
+    });
+
+    await t.test('inactive / failed → red，且带怎么起', () => {
+      for (const s of ['inactive', 'failed']) {
+        const r = classifyFeishuTriage({ probed: true, code: 3, stdout: s });
+        assert.equal(r.state, 'red');
+        assert.match(r.detail, /systemctl start/);
+      }
+    });
+
+    await t.test('systemctl 探不到（Windows/无 systemd）→ unknown，不当绿', () => {
+      const r = classifyFeishuTriage({ probed: false, reason: 'spawn 失败：ENOENT' });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('输出不认识（契约变了）→ unknown', () => {
+      const r = classifyFeishuTriage({ probed: true, code: 0, stdout: 'weird-state' });
+      assert.equal(r.state, 'unknown');
     });
   });
 });

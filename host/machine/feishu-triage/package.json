@@ -1,0 +1,9 @@
+{
+  "name": "feishu-triage-runtime",
+  "private": true,
+  "version": "0.0.1",
+  "description": "飞书适配器块A（#801）live 长连接模式的 SDK 依赖。只装服务器，测试/CI 不装（纯 Node 工具仓纪律）；scripts/feishu-triage.mjs 惰性加载，fixture 模式不碰。",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.10.0"
+  }
+}

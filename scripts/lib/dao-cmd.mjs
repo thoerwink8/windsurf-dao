@@ -237,6 +237,75 @@ export function planAttachSoldierDispatch({ explicitDispatch, found, dispatchLiv
   };
 }
 
+/**
+ * #799：reviewer-create / worker-done 起审官时的士兵 dispatch 决策。
+ * 与 planAttachSoldierDispatch 的差别：create 没有 --skip-wait，完工消息仍由
+ * worker-done 投给新审官；已结算只影响「d= 当收件人」，整跳必须继续。
+ *
+ * 活 dispatch → 注入 d=id，身份消息可投。
+ * 已结算（#552）→ 不当收件人，但整跳继续：d= 留空，红项上帅，跳过身份投递。
+ * worker-show 没查成 → 拒（不许把没查成当已结算）。
+ * 找不到且无显式 id → 拒（给 --soldier-dispatch / --parent-worktree）。
+ */
+export function planCreateSoldierDispatch({ explicitDispatch, found, dispatchLive } = {}) {
+  const explicit = String(explicitDispatch || '').trim() || null;
+  const foundId = found && found.ok ? String(found.dispatchId || '').trim() || null : null;
+  const foundSettled = Boolean(
+    found && found.ok === false && !found.unscanned && /已结算/.test(String(found.error || '')),
+  );
+
+  const continueDead = (id, reason) => ({
+    ok: true,
+    soldierDispatchId: '',
+    skipIdentity: true,
+    reason,
+    deadWarning: id
+      ? `士兵 dispatch ${id} 已结算：不注入 d=，红项按任务书直接上帅转达（#799）`
+      : '士兵 dispatch 已结算：不注入 d=，红项按任务书直接上帅转达（#799）',
+  });
+
+  if (explicit) {
+    if (dispatchLive === false) return continueDead(explicit, 'explicit-dead');
+    if (dispatchLive == null) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `--soldier-dispatch ${explicit} 给了，但 worker-show 没查成（不许当活人，也不许当已结算）`,
+      };
+    }
+    return { ok: true, soldierDispatchId: explicit, skipIdentity: false, reason: 'explicit' };
+  }
+
+  if (found && found.unscanned) {
+    return { ok: false, unscanned: true, error: found.error || '士兵 dispatch 没查成（不许猜）' };
+  }
+
+  if (foundId) {
+    if (dispatchLive === false) return continueDead(foundId, 'tree-mapped-dead');
+    if (dispatchLive == null) {
+      return {
+        ok: false,
+        unscanned: true,
+        error: `树映射到的士兵 dispatch ${foundId} 但 worker-show 没查成（不许当活人）`,
+      };
+    }
+    return {
+      ok: true,
+      soldierDispatchId: foundId,
+      runId: found.runId || null,
+      skipIdentity: false,
+      reason: 'tree-mapped',
+    };
+  }
+
+  if (foundSettled) return continueDead(null, 'tree-only-settled');
+
+  return {
+    ok: false,
+    error: `找不到士兵 dispatch（${found?.error || '没查'}）。给 --soldier-dispatch 或 --parent-worktree`,
+  };
+}
+
 /** 从 worker-list JSON 里找某棵树的士兵 dispatch。没查成与查到 0 条分开。
  * #781：worker-list 项没有 last_failure 字段（生产数据确认，审官扫 303 个 failed Dispatch），
  * agent_prompt_stalled 例外只能用 resolveLastFailure 回调调 worker-show/dispatch-show 取真实
@@ -755,20 +824,24 @@ import {
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
   currentReviewerSeat, assertReviewerSeat, planAfterSettledReviewer, planReviewerCreateAfterFail,
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
+  pickMergePolicyFromLedger, resolveReviewerMergePolicy,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
 import {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
+  parseDispatchComment, progressDispatchComment,
 } from './dispatch/card.mjs';
 export {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
+  parseDispatchComment, progressDispatchComment,
 } from './dispatch/card.mjs';
 import {
   DISPATCH_TEMPLATE_DIR, listDispatchTemplates, readDispatchTemplate, renderDispatchTemplate,
@@ -955,6 +1028,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
+                  # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
   worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
@@ -965,6 +1039,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #631：--skip-wait 显式跳过等完工——worker-done 失败后补审官时工人不会再发完工，硬等烧 600s；
                   #       d= 只给 worker-show 确认活的 dispatch（显式 --soldier-dispatch 同闸）：已结算 → 红项上帅；
                   #       worker-show 没查成 → 拒（不许当活人）；没有 → 空（红项上帅，见 reviewer-book 第 1 步）
+                  # #799：merge-policy 继承派工记账（账本 / 卡备注）；读不到才回退 auto，任务书 fb= 写明回退原因
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
@@ -1030,7 +1105,7 @@ merge-policy 默认 auto（#511 拍板：帅只感知不再是关口）；选 ma
 worker-start 的 --worktree 可省略：复用已存在终端续 Dispatch（worker_done 后同一终端绑到新 Task，
 #559 ②）时工作区由终端决定；新开工人位仍建议显式给 --worktree。
 换人（乒乓两轮仍红）走 worker-start --task <同单> --retry-of <旧 dispatch id>，不重开一单（#559 ⑦）。
-续活/审官场景的 merge-policy 约束：新开派工语义；flow.mjs 内部与 reviewer-create 不归本动词管，见 dispatch skill。
+续活/审官场景的 merge-policy 约束：新开派工语义。reviewer-create / reviewer-attach 继承派工记账的 merge-policy（#799）；读不到记账才回退默认 auto，并在任务书 fb= 写明原因。flow.mjs 内部不归本动词管，见 dispatch skill。
 给了 --issue 时卡名走 assembleCardName（#589：格式只认那一处，本页不复制；号对不上也不拿名字当钥匙）。
 并把 --issue 透传给 orca worktree create 把卡链到 GitHub issue（派工那一刻 PR 不存在，卡名先带 ISSUE-）。
 dispatch / worker-start 带 --issue 时走消歧门（#565）：目标 issue 缺「已消歧」label 拒派（fail-close）——

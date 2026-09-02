@@ -1,0 +1,7 @@
+{
+  "_comment": "群映射占位模板（真实 chat_id 不进仓）。dao-check 的 feishu-groups 项优先读 ~/.mirasim/keys/feishu-groups.json（实机映射，600，换机手动带），用 lark-cli im chats get --as bot 逐个确认群还在；查不到或已解散会报红并写出群名。没有实机映射则 SKIP「本机未接飞书」。红了：改实机那份，把失效 chat_id 换成还活着的群（lark-cli im +chat-list --as bot），或删掉已解散的那一行。_ 开头的键是注释，不参与映射。加项目只加一行；占位 key 等建好群后写进实机映射，不要写进本文件。hub 群由凭据 hubChatId 兜底。",
+  "oc_PLACEHOLDER_windsurf_dao": { "repo": "thoerwink8/windsurf-dao", "kind": "project" },
+  "oc_PLACEHOLDER_ai_gateway_stack": { "repo": "thoerwink8/ai-gateway-stack", "kind": "project" },
+  "oc_PLACEHOLDER_miraquota_win": { "repo": "thoerwink8/miraquota-win", "kind": "project" },
+  "oc_PLACEHOLDER_hub": { "kind": "hub" }
+}

@@ -11,6 +11,7 @@
 | Cursor | [cursor.md](cursor.md) | agent 型，`[Pasted text]` 是提交后残留不算未提交 |
 | Command Code | [commandcode.md](commandcode.md) | command 型，只做非交互查证，需补空回车 |
 | Claude (reclaude) | [claude.md](claude.md) | command 型，必须 `--command` 读 launch，抢跑注入必被吞 |
+| 飞书 (`lark-cli`) | [feishu.md](feishu.md) | 运维 CLI，不是工人；`--as bot` 发消息，话题群≠线性群 |
 
 ## 跨 CLI 通用教训（#762 实战，2026-08-25）
 
