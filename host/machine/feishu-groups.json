@@ -1,0 +1,7 @@
+{
+  "_comment": "群映射表（#801 块A）：群 chat_id → 仓库。加项目只加一行。占位 key 等用户建好群后替换成真实 chat_id（oc_ 开头）；hub 群由凭据 hubChatId 兜底。",
+  "oc_PLACEHOLDER_windsurf_dao": { "repo": "thoerwink8/windsurf-dao", "kind": "project" },
+  "oc_PLACEHOLDER_ai_gateway_stack": { "repo": "thoerwink8/ai-gateway-stack", "kind": "project" },
+  "oc_PLACEHOLDER_miraquota_win": { "repo": "thoerwink8/miraquota-win", "kind": "project" },
+  "oc_PLACEHOLDER_hub": { "kind": "hub" }
+}

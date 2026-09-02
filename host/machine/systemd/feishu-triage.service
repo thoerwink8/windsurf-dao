@@ -1,0 +1,47 @@
+# /etc/systemd/system/feishu-triage.service
+#
+# 飞书适配器 块A（issue #801 Phase 2）：长连接常驻，群消息 → triage → 建单。
+#
+# 装（服务器，orca 用户）：
+#   # 1) SDK 依赖（live 长连接才要；测试/CI 不装。装一次即可）
+#   cd /home/orca/windsurf-dao/host/machine/feishu-triage && npm install --omit=dev
+#   # 2) 单元
+#   sudo install -m 644 host/machine/systemd/feishu-triage.service /etc/systemd/system/
+#   # 3) 网关（补充2：与 claude 同一网关，OpenAI 兼容路径。不要写进本文件）
+#   sudo mkdir -p /etc/systemd/system/feishu-triage.service.d
+#   sudo tee /etc/systemd/system/feishu-triage.service.d/override.conf >/dev/null <<'EOF'
+#   [Service]
+#   Environment=ANTHROPIC_BASE_URL=https://<网关>
+#   EOF
+#   # 4) 起
+#   sudo systemctl daemon-reload && sudo systemctl enable --now feishu-triage.service
+#   journalctl -u feishu-triage.service -f
+#
+# 凭据：~/.mirasim/keys/feishu-app.json（600，不进 git，换机手动带）：
+#   { "appId": "...", "appSecret": "...", "hubChatId": "...", "allowOpenIds": [] }
+# 状态：~/.dao/feishu-threads.json（话题状态，运行时自建，可丢可重算）
+# 群映射：/home/orca/windsurf-dao/host/machine/feishu-groups.json
+#
+# 行为：Restart=always —— kill -9 后 systemd 自动拉起（#801 验收 1）。
+# 正常 `systemctl stop` 不会重启（显式停止不算失败）。
+
+[Unit]
+Description=Feishu triage adapter (long connection, issue #801)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=orca
+WorkingDirectory=/home/orca/windsurf-dao
+ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/feishu-triage.mjs
+Restart=always
+RestartSec=5
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

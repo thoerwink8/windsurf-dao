@@ -19,7 +19,7 @@
 //   node scripts/server-check.mjs --self-test     故意造违规样本，验探测器真能拦（不碰真环境）
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -206,6 +206,49 @@ function checkRepoSelfCheck() {
   return { state: OK, detail: 'dao-check 退出 0' };
 }
 
+// —— ⑫ 飞书适配器（#801 块A）——
+// 「在跑 + 凭据文件在（600）」。systemctl 探不到（Windows/无 systemd）= unknown 不当绿；
+// 凭据不在/权限不对 = 真红（适配器起不来）。
+const FEISHU_CREDS = () => join(homedir(), '.mirasim', 'keys', 'feishu-app.json');
+
+/** 纯函数：`systemctl is-active feishu-triage.service` 的 stdout 判三态。 */
+export function classifyFeishuTriage({ probed, reason, code, stdout = '', stderr = '' } = {}) {
+  if (!probed) return { state: UNKNOWN, detail: reason || '没探到 systemctl（本平台无 systemd？）' };
+  const text = String(stdout).trim();
+  if (text === 'active') return { state: OK, detail: 'feishu-triage.service active' };
+  if (['inactive', 'failed', 'activating', 'deactivating', 'reloading'].includes(text)) {
+    return { state: RED, detail: `feishu-triage.service 没在跑（${text}）——sudo systemctl start feishu-triage.service` };
+  }
+  return { state: UNKNOWN, detail: `is-active 输出不认识（exit=${code}）：${text || stderr}`.slice(0, 160) };
+}
+
+function checkFeishuCreds() {
+  const file = FEISHU_CREDS();
+  if (!existsSync(file)) {
+    return { state: RED, detail: `凭据不在：${file}（飞书 App 待用户给，见 #801 用户待给）` };
+  }
+  if (process.platform !== 'win32') {
+    try {
+      const mode = statSync(file).mode & 0o777;
+      if (mode !== 0o600) return { state: RED, detail: `凭据权限 ${mode.toString(8)}，应为 600：${file}` };
+    } catch (e) {
+      return { state: UNKNOWN, detail: `凭据 stat 没查成：${e.message}` };
+    }
+  }
+  return { state: OK, detail: `凭据在（${file}）` };
+}
+
+function checkFeishuTriage() {
+  const svc = classifyFeishuTriage(run('systemctl', ['is-active', 'feishu-triage.service'], { timeout: 10000 }));
+  const creds = checkFeishuCreds();
+  const parts = [];
+  if (svc.state !== OK) parts.push(svc.detail);
+  if (creds.state !== OK) parts.push(creds.detail);
+  if (!parts.length) return { state: OK, detail: '飞书适配器在跑 + 凭据文件在（600）' };
+  const state = svc.state === RED || creds.state === RED ? RED : UNKNOWN;
+  return { state, detail: parts.join('；') };
+}
+
 const CHECKS = [
   ['① orca 在 PATH', checkOrcaOnPath],
   ['② 非 root 运行', checkNotRoot],
@@ -218,6 +261,7 @@ const CHECKS = [
   ['⑨ 本仓已注册进 orca', checkRepoRegistered],
   ['⑩ 托管账号可用', checkAccounts],
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
+  ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
 ];
 
 function outPath() {
