@@ -199,3 +199,14 @@ export function dispatchComment({ mergePolicy, mergeReason, model, reviewer, spl
   }
   return base;
 }
+
+/** 从任务卡 comment 读回 dispatchComment 写下的 merge-policy。无样本返回 null，不猜。 */
+export function parseDispatchComment(comment) {
+  const text = String(comment || '');
+  const policyHit = text.match(/merge-policy:(auto|manual)\b/);
+  const reasonHit = text.match(/manual 理由:\s*([^｜]+)/);
+  return {
+    mergePolicy: policyHit ? policyHit[1] : null,
+    mergeReason: reasonHit ? reasonHit[1].trim() : null,
+  };
+}

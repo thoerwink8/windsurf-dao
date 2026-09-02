@@ -81,7 +81,9 @@
             "price_snapshot": { "type": "object", "description": "派单时刻价目快照（B.2 现算依据）" },
             "decision_id": { "type": "string", "description": "选型脚本输出的决策票（特征快照哈希，可复算）" },
             "split": { "description": "派工 --split 取值：no 或 ≥2 的整数（#611）" },
-            "split_reason": { "type": ["string", "null"], "description": "--split no 的理由；N 时可空（#611）" }
+            "split_reason": { "type": ["string", "null"], "description": "--split no 的理由；N 时可空（#611）" },
+            "merge_policy": { "enum": ["auto", "manual"], "description": "派工 merge-policy（#799：审官 create/attach 继承）" },
+            "merge_reason": { "type": ["string", "null"], "description": "merge-policy=manual 的理由" }
           },
           "required": ["job_id", "model", "identity", "work_type", "model_version", "terminal", "price_snapshot", "decision_id"],
           "additionalProperties": true
