@@ -376,5 +376,44 @@ describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）
     assert.ok(r.ok && r.mergePolicy === 'auto' && r.source === 'flag',
       '旗标优先 → ' + JSON.stringify(r));
   });
-});
 
+  it('#798 生命周期：旧账本无字段 → worker-done 覆盖进度后 attach 仍注入 m=manual', async () => {
+    const S = await S_LOAD;
+    const original = 'merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol · manual 理由: 改 model-routing 决策字段｜[#798]';
+    const afterFailure = S.progressDispatchComment(original, '交卷了，审官没起来');
+    assert.ok(/merge-policy:manual/.test(afterFailure) && /交卷了，审官没起来/.test(afterFailure)
+      && /｜\[#798\]/.test(afterFailure),
+      '进度覆盖后结构化前缀和定界区还在 → ' + afterFailure);
+    const parsed = S.parseDispatchComment(afterFailure);
+    assert.strictEqual(parsed.mergePolicy, 'manual', '不得把理由/进度拼进 policy → ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.mergeReason, '改 model-routing 决策字段', '理由不得吞掉进度 → ' + JSON.stringify(parsed));
+    const ledgerMissing = { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' };
+    const before = S.resolveReviewerMergePolicy({
+      ledger: ledgerMissing,
+      comment: S.parseDispatchComment(original),
+    });
+    const after = S.resolveReviewerMergePolicy({ ledger: ledgerMissing, comment: parsed });
+    assert.ok(before.mergePolicy === 'manual' && before.source === 'comment',
+      '覆盖前 comment 源是 manual → ' + JSON.stringify(before));
+    assert.ok(after.mergePolicy === 'manual' && after.source === 'comment',
+      '覆盖后仍是 comment/manual，不得 fallback auto → ' + JSON.stringify(after));
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #798', pr: '798',
+      soldierDispatchId: '', mergePolicy: after.mergePolicy, mergeReason: after.mergeReason, skipWait: true,
+    });
+    assert.ok(/m=manual/.test(inject) && /r=改 model-routing 决策字段/.test(inject) && !/m=auto/.test(inject),
+      'attach 注入仍是 m=manual → ' + inject);
+  });
+
+  it('无 merge-policy 的备注被覆盖 → 仍回退 auto（判别：有前缀才保住）', async () => {
+    const S = await S_LOAD;
+    const after = S.progressDispatchComment('人写的进度', '待终审');
+    assert.strictEqual(after, '待终审', '没有结构化前缀就只留进度 → ' + after);
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'none', error: '账本没有匹配的工人 job.dispatch' },
+      comment: S.parseDispatchComment(after),
+    });
+    assert.ok(r.source === 'fallback' && r.mergePolicy === 'auto',
+      '无载体才回退 → ' + JSON.stringify(r));
+  });
+});

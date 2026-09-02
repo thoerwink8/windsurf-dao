@@ -200,13 +200,53 @@ export function dispatchComment({ mergePolicy, mergeReason, model, reviewer, spl
   return base;
 }
 
-/** 从任务卡 comment 读回 dispatchComment 写下的 merge-policy。无样本返回 null，不猜。 */
-export function parseDispatchComment(comment) {
+const TICKET_ZONE_TAIL = /｜\[(?:#\d+(?: #\d+)*)?\]$/;
+
+function isDispatchMetaPart(part) {
+  const p = String(part || '').trim();
+  if (!p) return false;
+  return /^(merge-policy:(auto|manual)|model:\S+|reviewer:\S+|split:\S+)$/.test(p)
+    || /^split 理由:\s*\S/.test(p)
+    || /^manual 理由:\s*\S/.test(p);
+}
+
+function splitCommentBody(comment) {
   const text = String(comment || '');
-  const policyHit = text.match(/merge-policy:(auto|manual)\b/);
-  const reasonHit = text.match(/manual 理由:\s*([^｜]+)/);
-  return {
-    mergePolicy: policyHit ? policyHit[1] : null,
-    mergeReason: reasonHit ? reasonHit[1].trim() : null,
-  };
+  const zoneHit = text.match(TICKET_ZONE_TAIL);
+  const zone = zoneHit ? text.slice(zoneHit.index) : '';
+  const prefix = zoneHit ? text.slice(0, zoneHit.index) : text;
+  const parts = prefix.split(/\s*·\s*/).map(s => s.trim()).filter(Boolean);
+  const meta = [];
+  const rest = [];
+  for (const p of parts) {
+    if (isDispatchMetaPart(p)) meta.push(p);
+    else rest.push(p);
+  }
+  return { meta, rest, zone };
+}
+
+/** 从任务卡 comment 读回 dispatchComment 写下的 merge-policy。无样本返回 null，不猜。
+ * 按 ` · ` 分段，不让后面的人话进度吞掉 manual 理由。 */
+export function parseDispatchComment(comment) {
+  const { meta } = splitCommentBody(comment);
+  let mergePolicy = null;
+  let mergeReason = null;
+  for (const p of meta) {
+    const pol = p.match(/^merge-policy:(auto|manual)$/);
+    if (pol) mergePolicy = pol[1];
+    const reason = p.match(/^manual 理由:\s*(.+)$/);
+    if (reason) mergeReason = reason[1].trim();
+  }
+  return { mergePolicy, mergeReason };
+}
+
+/**
+ * #799：写人话进度时保留派工结构化前缀（merge-policy / model / reviewer / 理由）和定界区。
+ * worker-done 不得把唯一策略载体盖成「待终审」——旧账本无 merge_policy 时 attach 全靠这段 comment。
+ */
+export function progressDispatchComment(existing, progress) {
+  const { meta, zone } = splitCommentBody(existing);
+  const next = String(progress || '').trim();
+  const body = [...meta, next].filter(Boolean).join(' · ');
+  return `${body}${zone}`;
 }

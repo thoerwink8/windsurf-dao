@@ -3272,6 +3272,12 @@ describe('dao', () => {
         && /function cmdReviewerCreate[\s\S]*planCreateSoldierDispatch/.test(daoSrc),
         '#799 create/attach 接线  →  create/attach 必须走 lookup + create 必须走 planCreate');
     });
+    await t.test('#799 worker-done 写进度不整段覆盖 merge-policy 载体', () => {
+      const wd = (daoSrc.match(/function cmdWorkerDone\([\s\S]*?\nfunction /) || [''])[0];
+      assert.ok(/setWorkerCardProgress/.test(wd) && /progressDispatchComment/.test(daoSrc)
+        && !/comment: '待终审'/.test(wd) && !/comment: '交卷了，审官没起来'/.test(wd),
+        '#799 worker-done 不得整段覆盖卡备注  →  ' + wd.slice(wd.indexOf('setWorkerCardProgress'), wd.indexOf('setWorkerCardProgress') + 80));
+    });
     await t.test('审官红项修正：审官身份消息发进士兵收件箱（四关确认）', () => {
       assert.ok(/审官身份/.test(daoSrc) && /identity/.test(daoSrc), '审官红项修正：审官身份消息发进士兵收件箱（四关确认）');
     });

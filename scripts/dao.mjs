@@ -108,6 +108,7 @@ import {
   planAttachSoldierDispatch,
   planCreateSoldierDispatch,
   parseDispatchComment,
+  progressDispatchComment,
   pickMergePolicyFromLedger,
   resolveReviewerMergePolicy,
   isLiveDispatchRecipient,
@@ -171,7 +172,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
+import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
@@ -1802,6 +1803,20 @@ function lookupReviewerMergePolicy({
   });
 }
 
+/** #799：写人话进度时保留卡上 merge-policy 前缀。show 失败则用盘面列表里的旧 comment 兜底。 */
+function setWorkerCardProgress(parentId, progress, worktrees) {
+  if (!parentId) return { ok: true, skipped: true };
+  const mutated = mutateWorktreeComment({
+    worktreeId: parentId,
+    runOrca: (a) => orca(a),
+    mutate: (comment) => progressDispatchComment(comment, progress),
+  });
+  if (mutated.ok) return mutated;
+  const wt = Array.isArray(worktrees) ? findWorktreeBySel(worktrees, parentId) : null;
+  const next = progressDispatchComment(wt && wt.comment, progress);
+  return orca(argsWorktreeSet({ worktree: parentId, comment: next }));
+}
+
 function soldierRunId({ soldierDispatch, parentId } = {}) {
   if (soldierDispatch) {
     const shown = orca(argsWorkerShow({ dispatch: soldierDispatch }));
@@ -2307,7 +2322,7 @@ function cmdWorkerDone(args) {
       postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
       postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
       if (parentId) {
-        orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+        setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
       }
       fail(stop.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2374,7 +2389,7 @@ function cmdWorkerDone(args) {
         postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
         postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
         if (parentId) {
-          orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+          setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
         }
         fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
           ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2389,7 +2404,7 @@ function cmdWorkerDone(args) {
     postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
     postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
     if (parentId) {
-      orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+      setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
     }
     fail(refuseErr, {
       ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2423,7 +2438,7 @@ function cmdWorkerDone(args) {
   const notified = notify.notified;
 
   if (parentId) {
-    orca(argsWorktreeSet({ worktree: parentId, comment: '待终审' }));
+    setWorkerCardProgress(parentId, '待终审', reuseInputs.worktrees);
   }
 
   let ledgerLink = null;

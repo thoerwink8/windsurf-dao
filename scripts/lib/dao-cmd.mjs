@@ -821,11 +821,11 @@ export {
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
 import {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
-  parseDispatchComment,
+  parseDispatchComment, progressDispatchComment,
 } from './dispatch/card.mjs';
 export {
   ghLabelNames, ensureRepoLabels, stampIssueLabels, syncPrLabelsFromIssue, dispatchComment,
-  parseDispatchComment,
+  parseDispatchComment, progressDispatchComment,
 } from './dispatch/card.mjs';
 import {
   DISPATCH_TEMPLATE_DIR, listDispatchTemplates, readDispatchTemplate, renderDispatchTemplate,
