@@ -104,12 +104,14 @@ describe('dispatch-agent-ready（#802）', () => {
         terminals: [shell, coord, pi],
         worktreeId: wt,
         wantAgentId: 'pi',
+        knownHandles: ['term_shell', 'term_coord'],
       });
       assert.ok(p.action === 'calibrate' && p.handle === 'term_pi' && p.fromHandle === 'term_shell', JSON.stringify(p));
     });
     await t.test('claimed 已是 agent → keep', () => {
       const p = S.planInjectTarget({
         claimedHandle: 'term_grok', terminals: [shell, grok], worktreeId: wt, wantAgentId: 'grok',
+        knownHandles: ['term_shell'],
       });
       assert.ok(p.action === 'keep' && p.handle === 'term_grok', JSON.stringify(p));
     });
@@ -130,6 +132,7 @@ describe('dispatch-agent-ready（#802）', () => {
     await t.test('claimed 是 grok、要 pi、两台都在 → calibrate 到 pi', () => {
       const p = S.planInjectTarget({
         claimedHandle: 'term_grok', terminals: [shell, grok, pi], worktreeId: wt, wantAgentId: 'pi',
+        knownHandles: ['term_shell', 'term_grok'],
       });
       assert.ok(p.action === 'calibrate' && p.handle === 'term_pi', JSON.stringify(p));
     });
@@ -193,6 +196,19 @@ describe('dispatch-agent-ready（#802）', () => {
         knownHandles: ['term_shell', 'term_pi_old'],
       });
       assert.ok(d.ok === false && d.action === 'ambiguous' && d.sends.length === 0, JSON.stringify(d));
+    });
+    await t.test('故意违规：缺差集基线 + 启动后只有既存 term_pi_old → 不得发送 BOOK_FOR_NEW_WORKER', () => {
+      const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+      const p = S.planDeferredRepair({
+        claimedHandle: 'term_shell',
+        terminals: [shell, piOld],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        book: 'BOOK_FOR_NEW_WORKER',
+        knownHandles: null,
+      });
+      assert.ok(p.ok === false && p.action === 'need-baseline' && p.sends.length === 0
+        && p.book !== 'BOOK_FOR_NEW_WORKER' && !p.sends.includes('book'), JSON.stringify(p));
     });
   });
 
@@ -260,7 +276,7 @@ describe('dispatch-agent-ready（#802）', () => {
       await t.test(`${e.name}：空壳旁边有 pi → 把这份 book 送到 term_pi`, () => {
         const p = S.planDeferredRepair({
           claimedHandle: 'term_shell', terminals: [shell, pi], worktreeId: wt,
-          wantAgentId: 'pi', book: e.book,
+          wantAgentId: 'pi', book: e.book, knownHandles: ['term_shell'],
         });
         assert.ok(p.ok && p.action === 'calibrate' && p.handle === 'term_pi'
           && p.book === e.book && p.sends.join(',') === 'book', JSON.stringify(p));
@@ -268,7 +284,7 @@ describe('dispatch-agent-ready（#802）', () => {
       await t.test(`${e.name}：缺 book 不能 ok`, () => {
         const p = S.planDeferredRepair({
           claimedHandle: 'term_shell', terminals: [shell, pi], worktreeId: wt,
-          wantAgentId: 'pi', book: '',
+          wantAgentId: 'pi', book: '', knownHandles: ['term_shell'],
         });
         assert.ok(p.ok === false && p.kind === 'book-missing' && p.sends.length === 0, JSON.stringify(p));
       });
@@ -325,7 +341,9 @@ describe('dispatch-agent-ready（#802）', () => {
     assert.ok(/knownHandles/.test(startFn[0]), '校准要带启动前 handle 差集');
     const listAt = startFn[0].indexOf('argsTerminalList');
     const startAt = startFn[0].indexOf('orca(startArgs');
+    const baselineAt = startFn[0].indexOf('缺差集基线');
     assert.ok(listAt > 0 && startAt > listAt, 'worker-start 前要 list 做差集');
+    assert.ok(baselineAt > 0 && baselineAt < startAt, '启动前 list 失败必须 fail-loud 且不 worker-start');
     assert.ok(/kind: injected\.ok \? 'resend-ok'/.test(startFn[0]), '校准后重送任务书到 agent 终端');
     assert.ok(/plan\.action === 'fallback'/.test(startFn[0]), '没有目标 agent 终端才回退 --command');
     assert.ok(/fellBackToCommand/.test(startFn[0]), '回退后跳过补粘/补回车');

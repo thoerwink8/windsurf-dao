@@ -186,6 +186,14 @@ export function pickAgentTerminal(terminals, { worktreeId, wantAgentId, knownHan
     };
   }
   if (matching.length === 1) {
+    if (want) {
+      return {
+        ok: false, unscanned: false, needBaseline: true, handle: matching[0].handle,
+        agentIdentity: matching[0].agentIdentity, scanned: inTree.length, count: 1,
+        seen: [matching[0].handle],
+        error: `要 agentIdentity=${label}，缺启动前差集基线，不能把启动后唯一匹配 ${matching[0].handle} 当成本次新建`,
+      };
+    }
     return {
       ok: true, unscanned: false, handle: matching[0].handle,
       agentIdentity: matching[0].agentIdentity, scanned: inTree.length, count: 1,
@@ -223,6 +231,14 @@ export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAge
   if (!picked.ok && picked.ambiguous) {
     return {
       action: 'ambiguous',
+      handle: claimedHandle || null,
+      error: picked.error,
+      seen: picked.seen,
+    };
+  }
+  if (!picked.ok && picked.needBaseline) {
+    return {
+      action: 'need-baseline',
       handle: claimedHandle || null,
       error: picked.error,
       seen: picked.seen,
@@ -339,6 +355,17 @@ export function planDeferredRepair({
       ok: false,
       action: 'ambiguous',
       kind: 'identity-ambiguous',
+      handle: target.handle || claimedHandle || null,
+      error: target.error,
+      seen: target.seen,
+      sends: [],
+    };
+  }
+  if (target.action === 'need-baseline') {
+    return {
+      ok: false,
+      action: 'need-baseline',
+      kind: 'need-baseline',
       handle: target.handle || claimedHandle || null,
       error: target.error,
       seen: target.seen,

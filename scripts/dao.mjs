@@ -523,13 +523,33 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
     return { ok: false, error: 'worker-start 要 --terminal 或 --agent', attempts: rows };
   }
   // #802 批派工：同树多张相同 identity 时，用启动前 handle 集合做差集认新终端。
+  // 快照没查成 → 直接 fail-loud，不启动；缺差集基线不许用启动后唯一匹配放行。
   let knownHandles = null;
-  if (launched?.deferred && worktree) {
-    const listedBefore = orca(argsTerminalList({ worktree }));
-    if (listedBefore.ok) {
-      const snap = terminalHandles(listedBefore.json?.result?.terminals, { worktreeId: worktree });
-      if (snap.ok) knownHandles = snap.handles;
+  if (launched?.deferred) {
+    if (!worktree) {
+      return { ok: false, error: 'worker-start --agent 缺 worktree，无法做启动前快照（缺差集基线，不启动）', attempts: rows };
     }
+    const listedBefore = orca(argsTerminalList({ worktree }));
+    if (!listedBefore.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: errText(listedBefore.error),
+      }));
+      return {
+        ok: false,
+        error: `worker-start 前 terminal list 没查成，缺差集基线，不启动：${errText(listedBefore.error)}`,
+        attempts: rows,
+      };
+    }
+    const snap = terminalHandles(listedBefore.json?.result?.terminals, { worktreeId: worktree });
+    if (!snap.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: snap.error,
+      }));
+      return { ok: false, error: `worker-start 前终端快照没查成，缺差集基线，不启动：${snap.error}`, attempts: rows };
+    }
+    knownHandles = snap.handles;
   }
   // orca 进程级调用上限比 --timeout-ms 宽 15s：stall 到点是 orca 正常返回，不是调用挂死。
   const r = orca(startArgs, sendTimeout + 15000);
