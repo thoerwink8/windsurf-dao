@@ -19,7 +19,7 @@
 //   node scripts/server-check.mjs --self-test     故意造违规样本，验探测器真能拦（不碰真环境）
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -206,6 +206,162 @@ function checkRepoSelfCheck() {
   return { state: OK, detail: 'dao-check 退出 0' };
 }
 
+/** #802：检查器自己扫 TOML 文本，不 import launch.mjs / agent-ready.mjs。 */
+export function parseStartAgentProviders(tomlText) {
+  const text = String(tomlText || '');
+  if (!text.trim()) return { unscanned: true, providers: null, error: '路由表空' };
+  if (!/^\[providers\./m.test(text)) {
+    return { unscanned: true, providers: null, error: '没扫到 [providers.*] 节' };
+  }
+  const providers = [];
+  let current = null;
+  let inTriple = false;
+  for (const line of text.split(/\r?\n/)) {
+    const triples = (line.match(/"""/g) || []).length;
+    if (inTriple) {
+      if (triples % 2 === 1) inTriple = false;
+      continue;
+    }
+    if (triples % 2 === 1) {
+      inTriple = true;
+      continue;
+    }
+    const sec = line.match(/^\[providers\.([^\]]+)\]\s*$/);
+    if (sec) {
+      current = sec[1];
+      continue;
+    }
+    if (current && /^\s*start\s*=\s*["']agent["']\s*$/.test(line)) {
+      providers.push({ name: current, start: 'agent' });
+    }
+  }
+  return { unscanned: false, providers };
+}
+
+/** 检查器自持的 provider → --agent id。不调用 orcaKnownAgentId。 */
+export function providerToAgentId(name) {
+  const p = String(name || '').toLowerCase();
+  if (p === 'gpt') return 'codex';
+  if (p === 'cursor') return 'cursor';
+  if (p === 'grok') return 'grok';
+  if (p === 'devin') return 'devin';
+  if (p === 'deepseek' || p === 'opencode-go' || p === 'gw') return 'pi';
+  return null;
+}
+
+/** 独立解析 Orca 的 TUI_AGENT_DISPLAY_NAMES。0 个 id = 没查成，不是空目录。 */
+export function parseTuiAgentDisplayNames(source) {
+  const text = String(source || '');
+  if (!text.trim()) return { unscanned: true, ids: null, error: '目录文本空' };
+  const start = text.search(/TUI_AGENT_DISPLAY_NAMES\s*=/);
+  if (start < 0) return { unscanned: true, ids: null, error: '没扫到 TUI_AGENT_DISPLAY_NAMES' };
+  const brace = text.indexOf('{', start);
+  if (brace < 0) return { unscanned: true, ids: null, error: 'TUI_AGENT_DISPLAY_NAMES 不是对象' };
+  let depth = 0;
+  let end = -1;
+  for (let i = brace; i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) return { unscanned: true, ids: null, error: 'TUI_AGENT_DISPLAY_NAMES 对象没闭合' };
+  const ids = [];
+  for (const line of text.slice(brace + 1, end).split(/\r?\n/)) {
+    const m = line.match(/^\s*['"]?([A-Za-z][A-Za-z0-9-]*)['"]?\s*:/);
+    if (m) ids.push(m[1]);
+  }
+  if (ids.length === 0) {
+    return { unscanned: true, ids: null, error: 'TUI_AGENT_DISPLAY_NAMES 0 个 id（没查成，不是空目录）' };
+  }
+  return { unscanned: false, ids };
+}
+
+export function classifyRequiredAgents({ requiredIds, knownIds, knownUnscanned, knownError } = {}) {
+  if (knownUnscanned || !Array.isArray(knownIds)) {
+    return { state: UNKNOWN, detail: knownError || '没扫到 Orca TUI agent 目录（没查成，不是 0 个）' };
+  }
+  if (!Array.isArray(requiredIds)) {
+    return { state: UNKNOWN, detail: '没扫到路由表 start=agent 需求（没查成）' };
+  }
+  if (requiredIds.length === 0) {
+    return { state: UNKNOWN, detail: '路由表没扫到任何 start=agent（没查成，不是 0 个要认的 id）' };
+  }
+  const known = new Set(knownIds);
+  const uniq = [...new Set(requiredIds)];
+  const missing = uniq.filter((id) => !known.has(id));
+  if (missing.length) {
+    return {
+      state: RED,
+      missing,
+      detail: `本构建不认 --agent ${missing.join('、')}（路由表 start=agent 要用）`,
+    };
+  }
+  return { state: OK, missing: [], detail: `认 --agent ${uniq.join('、')}` };
+}
+
+const TUI_AGENT_CATALOG_REL = join('resources', 'app.asar.unpacked', 'out', 'shared', 'tui-agent-display-names.js');
+
+function candidateTuiCatalogPaths(env = process.env) {
+  const roots = [
+    env.ORCA_TUI_AGENT_CATALOG,
+    env.ORCA_APP_ROOT && join(env.ORCA_APP_ROOT, TUI_AGENT_CATALOG_REL),
+    join('/opt/orca/squashfs-root', TUI_AGENT_CATALOG_REL),
+    join('/opt/orca', TUI_AGENT_CATALOG_REL),
+  ].filter(Boolean);
+  return roots;
+}
+
+function loadTuiAgentCatalog({ env = process.env, readFile } = {}) {
+  const paths = candidateTuiCatalogPaths(env);
+  const reader = typeof readFile === 'function'
+    ? readFile
+    : (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
+  for (const p of paths) {
+    let text;
+    try {
+      text = reader(p);
+    } catch (e) {
+      return { unscanned: true, ids: null, error: `读目录失败：${String(e.message).slice(0, 120)}`, file: p };
+    }
+    if (text == null) continue;
+    const parsed = parseTuiAgentDisplayNames(text);
+    return { ...parsed, file: p };
+  }
+  return { unscanned: true, ids: null, error: '没找到 tui-agent-display-names.js（没查成，不是 0 个 agent）', file: null };
+}
+
+function checkOrcaAgentIds() {
+  const routingPath = join(REPO_ROOT, 'docs', 'model-routing.toml');
+  if (!existsSync(routingPath)) {
+    return { state: UNKNOWN, detail: 'docs/model-routing.toml 不在（没查成）' };
+  }
+  let tomlText;
+  try {
+    tomlText = readFileSync(routingPath, 'utf8');
+  } catch (e) {
+    return { state: UNKNOWN, detail: `路由表读失败：${String(e.message).slice(0, 120)}` };
+  }
+  const parsed = parseStartAgentProviders(tomlText);
+  if (parsed.unscanned) return { state: UNKNOWN, detail: parsed.error };
+  const requiredIds = [];
+  for (const p of parsed.providers) {
+    const id = providerToAgentId(p.name);
+    if (id && !requiredIds.includes(id)) requiredIds.push(id);
+  }
+  const catalog = loadTuiAgentCatalog();
+  return classifyRequiredAgents({
+    requiredIds,
+    knownIds: catalog.ids,
+    knownUnscanned: catalog.unscanned,
+    knownError: catalog.error,
+  });
+}
+
 // —— ⑫ 飞书适配器（#801 块A）——
 // 「在跑 + 凭据文件在（600）」。systemctl 探不到（Windows/无 systemd）= unknown 不当绿；
 // 凭据不在/权限不对 = 真红（适配器起不来）。
@@ -262,6 +418,7 @@ const CHECKS = [
   ['⑩ 托管账号可用', checkAccounts],
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
   ['⑫ 飞书适配器在跑且凭据文件在', checkFeishuTriage],
+  ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds],
 ];
 
 function outPath() {
@@ -289,6 +446,25 @@ function selfTest() {
   if (emptyList.state !== OK || emptyList.count !== 0) {
     // 上面这条会真跑 orca --version（可能没装），只在能跑通时断言
     if (emptyList.state !== UNKNOWN) failures.push(`空列表判成了 ${emptyList.state}，应为 ok/count=0`);
+  }
+
+  // #802：故意造「目录里没有 pi」——必须判红，不能当绿。
+  const missingPi = classifyRequiredAgents({
+    requiredIds: ['pi', 'devin', 'grok'],
+    knownIds: ['grok', 'codex', 'devin'],
+    knownUnscanned: false,
+  });
+  if (missingPi.state !== RED || !Array.isArray(missingPi.missing) || !missingPi.missing.includes('pi')) {
+    failures.push(`故意缺 pi 应判红，实际 ${missingPi.state} missing=${JSON.stringify(missingPi.missing)}`);
+  }
+  const noCatalog = classifyRequiredAgents({
+    requiredIds: ['pi'],
+    knownIds: null,
+    knownUnscanned: true,
+    knownError: '没扫到 Orca TUI agent 目录（没查成，不是 0 个）',
+  });
+  if (noCatalog.state !== UNKNOWN) {
+    failures.push(`没扫到目录应判 unknown，实际 ${noCatalog.state}`);
   }
 
   if (failures.length) {
@@ -352,4 +528,7 @@ function main(argv = process.argv.slice(2)) {
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === HERE;
 if (isDirectRun) main();
 
-export { CHECKS, orcaJson, checkListSurface, UNPROBEABLE_CODES };
+export {
+  CHECKS, orcaJson, checkListSurface, UNPROBEABLE_CODES,
+  loadTuiAgentCatalog, candidateTuiCatalogPaths,
+};

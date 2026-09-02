@@ -16,6 +16,7 @@
 
 ```
 worker-start --agent devin（launch 模板 = devin --permission-mode dangerous --respect-workspace-trust false，agent 型拒收 --model）
+- **无头 Linux**：`--agent devin` 同样可能把 agent 起在另一张终端、handle 仍指向空壳（#802）。dispatch 按 `agentIdentity` 校准再注入，不要改 toml `start=command`。
 ```
 
 - **交互 TUI**：Orca 起 Devin CLI TUI（v3000.5.20，bypass permissions on），工人可交互式干活、实时看屏。

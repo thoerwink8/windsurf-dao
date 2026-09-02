@@ -359,6 +359,7 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
   1. **systemd drop-in 注入 agent 的网关 env 与 PATH**。Orca `terminal create` 的壳不继承服务环境；`worktree create --agent` 起的 agent 继承。只改单元 drop-in，值不进仓（`host/skills/server-ops/SKILL.md`，INDEX E 类）。
   2. **Claude Code 无头信任框**：`IS_SANDBOX=1` 这版不认。要在 `~/.claude.json` 的 `projects` 里给工位树**父目录**写信任标记——它会向上找祖先，预置一次即可。
   3. **Orca 终端不吃 login shell 的 `~/.profile` / `~/.bashrc`**。人开的壳要自己补 PATH；agent 靠上一条 drop-in。
+- **#802**：`server-check` 第⑬项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。
 
 ### 搬过去之后本仓的红项变化（实测）
 

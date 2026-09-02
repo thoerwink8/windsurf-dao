@@ -98,6 +98,11 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  classifyAgentScreen,
+  launchAttempt,
+  pickAgentTerminal,
+  terminalHandles,
+  planDeferredRepair,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
@@ -441,13 +446,12 @@ function findDefaultTerminalForLaunch(worktreeId) {
   return { handle: null };
 }
 
-function findAgentTerminalHandle(worktreeId) {
+function findAgentTerminalHandle(worktreeId, wantAgentId) {
   const listed = orca(argsTerminalList({ worktree: worktreeId }));
   if (!listed.ok) return null;
-  const terms = listed.json?.result?.terminals;
-  if (!Array.isArray(terms)) return null;
-  const agents = terms.filter(t => t && t.handle && !isReusableDefaultTerminal(t));
-  return agents[0]?.handle || null;
+  const picked = pickAgentTerminal(listed.json?.result?.terminals, { worktreeId, wantAgentId });
+  if (!picked.ok || picked.unscanned) return null;
+  return picked.handle || null;
 }
 
 function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand }) {
@@ -505,7 +509,8 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book, attempts }) {
+  const rows = Array.isArray(attempts) ? attempts : [];
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
@@ -515,7 +520,36 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   } else if (launched?.handle) {
     startArgs = argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs: sendTimeout, from });
   } else {
-    return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
+    return { ok: false, error: 'worker-start 要 --terminal 或 --agent', attempts: rows };
+  }
+  // #802 批派工：同树多张相同 identity 时，用启动前 handle 集合做差集认新终端。
+  // 快照没查成 → 直接 fail-loud，不启动；缺差集基线不许用启动后唯一匹配放行。
+  let knownHandles = null;
+  if (launched?.deferred) {
+    if (!worktree) {
+      return { ok: false, error: 'worker-start --agent 缺 worktree，无法做启动前快照（缺差集基线，不启动）', attempts: rows };
+    }
+    const listedBefore = orca(argsTerminalList({ worktree }));
+    if (!listedBefore.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: errText(listedBefore.error),
+      }));
+      return {
+        ok: false,
+        error: `worker-start 前 terminal list 没查成，缺差集基线，不启动：${errText(listedBefore.error)}`,
+        attempts: rows,
+      };
+    }
+    const snap = terminalHandles(listedBefore.json?.result?.terminals, { worktreeId: worktree });
+    if (!snap.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: snap.error,
+      }));
+      return { ok: false, error: `worker-start 前终端快照没查成，缺差集基线，不启动：${snap.error}`, attempts: rows };
+    }
+    knownHandles = snap.handles;
   }
   // orca 进程级调用上限比 --timeout-ms 宽 15s：stall 到点是 orca 正常返回，不是调用挂死。
   const r = orca(startArgs, sendTimeout + 15000);
@@ -523,7 +557,10 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   if (send.kind === 'transport-failed') {
     // 传输失败也可能已落记账（worker-start 先建 dispatch 再注入）——带上让回滚能 worker-stop，
     // 不留 workerState=failed 的僵尸记账（762 残留实证）。
-    return { ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send, dispatchId: extractDispatchId(r.json) || null };
+    return {
+      ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send,
+      dispatchId: extractDispatchId(r.json) || null, attempts: rows,
+    };
   }
 
   let dispatchId = extractDispatchId(r.json);
@@ -542,20 +579,129 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
       json: r.json,
       handle: launched?.handle,
       send,
+      attempts: rows,
     };
   }
 
   let handle = launched?.handle || null;
+  let fellBackToCommand = false;
   if (launched?.deferred) {
-    // #771：devin agent 型 worker-start 响应里的 handle 可能是 --from 的派工协调终端（PowerShell），
-    // 补粘任务书会敲进 PowerShell（2026-08-26 实测）。terminal list 找非默认终端（agent 终端）优先。
-    handle = (launched?.launch?.provider === 'devin' ? findAgentTerminalHandle(worktree) : null)
-      || extractHandleFromWorkerStart(r.json)
-      || findAgentTerminalHandle(worktree);
+    // #802：worker-start --agent 起的是另一张 agent 终端，回的 handle 常是空壳。
+    // 只认 list 的 agentIdentity，不认 title。校准后把任务书送到 agent 终端。
+    const listed = orca(argsTerminalList({ worktree }));
+    const terms = listed.ok ? listed.json?.result?.terminals : null;
+    const claimed = extractHandleFromWorkerStart(r.json);
+    const repairArgs = {
+      claimedHandle: claimed,
+      terminals: terms,
+      worktreeId: worktree,
+      wantAgentId: launched.agentId,
+      book,
+      command: launched?.launch?.command,
+      knownHandles,
+    };
+    let plan = planDeferredRepair(repairArgs);
+    handle = plan.handle || claimed || null;
+    rows.push(launchAttempt({
+      provider: launched?.launch?.provider, mode: 'agent',
+      kind: plan.kind || plan.action,
+      agentId: launched.agentId, error: plan.error || plan.reason,
+    }));
+    if (!plan.ok) {
+      return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+    }
+    if (plan.action === 'unscanned' && !handle) {
+      handle = findAgentTerminalHandle(worktree, launched.agentId);
+    }
     if (!handle) {
-      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
+      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send, attempts: rows };
+    }
+
+    if (plan.needsScreen) {
+      const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
+      const screen = pre.ok
+        ? classifyAgentScreen(extractTerminalText(pre.json))
+        : { kind: 'unread', reason: errText(pre.error) };
+      if (plan.action === 'unscanned') {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
+          agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
+        }));
+      }
+      plan = planDeferredRepair({ ...repairArgs, screen });
+      if (!plan.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command',
+          kind: plan.kind || 'repair-fail',
+          agentId: launched.agentId, error: plan.error,
+        }));
+        return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+    }
+
+    if (plan.action === 'calibrate') {
+      handle = plan.handle;
+      const injected = orca(argsTerminalSend({
+        terminal: handle, text: plan.book, enter: true,
+        agent: launched.agentId || launched?.launch?.provider,
+      }));
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent',
+        kind: injected.ok ? 'resend-ok' : 'resend-fail',
+        agentId: launched.agentId, error: injected.ok ? undefined : errText(injected.error),
+      }));
+      if (!injected.ok) {
+        return { ok: false, error: `校准到 agent 终端后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      send.kind = 'confirmed';
+      send.reason = `已校准到 agentIdentity=${plan.agentIdentity} 并重送任务书`;
+    } else if (plan.action === 'fallback') {
+      const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
+      if (!sentCmd.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
+          agentId: launched.agentId, error: errText(sentCmd.error),
+        }));
+        return { ok: false, error: `没有目标 agent 终端，回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
+      const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
+      if (!ready.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-wait-fail',
+          agentId: launched.agentId, error: errText(ready.error),
+        }));
+        return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      const injected = orca(argsTerminalSend({
+        terminal: handle, text: plan.book, enter: true,
+        agent: launched.agentId || launched?.launch?.provider,
+      }));
+      if (!injected.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
+          agentId: launched.agentId, error: errText(injected.error),
+        }));
+        return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
+        agentId: launched.agentId,
+      }));
+      send.kind = 'confirmed';
+      send.reason = `没有目标 agentIdentity 终端，已回退 --command（${plan.command}）并重送任务书`;
+      fellBackToCommand = true;
     }
   }
+
+  // 回退已经重送任务书，不要再走下面的补粘/补回车（会打进刚起来的 TUI）。
+  if (fellBackToCommand) {
+    return {
+      ok: true, json: r.json, handle, dispatchId,
+      confirmed: true, send, dispatchIdRecovered, attempts: rows, fallback: 'command',
+    };
+  }
+
   // codex 坑 2 修复（2026-08-26 实测，#785 兜底加宽）：worker-start --agent codex 的任务书显示
   // [Pasted Content] 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象）。原来只在
   // send.kind === 'sent-unconfirmed' 时补，但审官复用路 worker-start 可能返回 confirmed 而
@@ -614,6 +760,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
     confirmed: send.kind === 'confirmed',
     send,
     dispatchIdRecovered,
+    attempts: rows,
   };
 }
 
@@ -663,6 +810,10 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       continue;
     }
     if (term.deferred) {
+      attempts.push(launchAttempt({
+        modelId, pipeIndex, provider: pipe.provider, mode: 'agent', kind: 'deferred',
+        agentId: term.agentId,
+      }));
       return {
         ok: true, deferred: true, modelId, pipeIndex, pipe, launch,
         handle: null, agentId: term.agentId, model: term.model, attempts,
@@ -671,6 +822,9 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const handle = term.handle;
     if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
     created.workerHandle = handle;
+    attempts.push(launchAttempt({
+      modelId, pipeIndex, provider: pipe.provider, mode: 'command', kind: 'created',
+    }));
 
     // fire-and-forget（2026-08-23）：terminal create 成功即收，不再跑 TUI 就绪探针。
     // 探针误杀能干活的工人（758-763 实证）；起没起来的确认交 watchdog。
@@ -1462,7 +1616,9 @@ function runDispatchExecution(order, { queueDir } = {}) {
     from: coordHandle,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
     book: injectText,
+    attempts: launched.attempts,
   });
+  if (Array.isArray(started.attempts)) plan.launchAttempts = started.attempts;
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
     if (started.dispatchId) created.dispatchIds.push(started.dispatchId);
@@ -1522,6 +1678,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           launched: childLaunch,
           run: runId,
           from: coordHandle,
+          book: childBook,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
@@ -1712,9 +1869,9 @@ function cmdDispatchBatch(args) {
       }
       const taskId = extractTaskId(task.json);
       if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
-      return { ok: true, taskId };
+      return { ok: true, taskId, specText };
     },
-    startWorker({ task, terminal, worktree, agent, model, deferred }) {
+    startWorker({ task, terminal, worktree, agent, model, deferred, book }) {
       // fire-and-forget（2026-08-23）：送字即收，不等认账；确认交 watchdog。
       const started = startOrcaWorker({
         task,
@@ -1723,6 +1880,7 @@ function cmdDispatchBatch(args) {
           ? { deferred: true, agentId: agent, model, launch }
           : { handle: terminal, launch },
         run: station.runId,
+        book,
       });
       if (!started.ok) return { ok: false, error: started.error, dispatchId: started.dispatchId || null };
       const dispatchId = started.dispatchId;
@@ -2091,6 +2249,7 @@ function reuseReviewerOnTerminal({
     worktree: reviewerWorktreeId,
     launched: { handle, launch },
     run: runId,
+    book: reviewerBook,
   });
   if (!revStarted.ok) {
     return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${revStarted.error}（必须带 --worktree 指审官树）` };
@@ -3074,6 +3233,7 @@ function cmdReviewerCreate(args) {
       : { handle: launched.reviewerHandle, launch: reviewerLaunch },
     run: revRunId,
     from: revCoordHandle,
+    book: reviewerBook,
   });
   if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   launched.reviewerHandle = revStarted.handle;
@@ -3420,6 +3580,7 @@ function cmdReviewerAttach(args) {
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
     from: reviewerFrom,
+    book: reviewerBook,
     // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
     // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
     timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,

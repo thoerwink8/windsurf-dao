@@ -12,7 +12,8 @@ agent 型（`start = "agent"`），ds-flash 写码日常通道走 **gw-dspool**�
 - **Zen 与 Go 是两个独立 provider**：共用 OPENCODE_API_KEY，键填成 `opencode` 会路由到 Zen，Go 额度用不上。
 - **ds-flash/pro 是同一模型两条通道**：模型条目只有一条，战绩记一处。
 - **直连（-direct 后缀）只在用户拍板时启用**：`deepseek-v4-flash-direct` / `deepseek-v4-pro-direct`，防 pi 静默 fallback 换 provider。
+- **无头 Linux 上 `--agent pi` 起在另一张终端**（#802 帅 2026-09-03 订正）：agent 真起来了（`terminal list` 的 `agentIdentity=pi`，标题 `π - …`），但记账 handle 指向 worktree 空壳，任务书打进 bash（`读: command not found`）。dispatch 按 `agentIdentity` 校准 handle 再注入。title 不可靠（Linux bash 标题是 `user@host:path`）。不要改 toml `start=command`。
 
 ## 正确起法
 
-`pi --model {model}`（launch 模板），agent 型走 `worker-start --agent pi`。
+`pi --model {model}`（launch 模板），agent 型走 `worker-start --agent pi`；无头 Linux 若落成裸 shell，派工自动回退 `--command`。

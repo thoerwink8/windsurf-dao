@@ -44,7 +44,8 @@ function makeEffects({ failAt } = {}) {
       log.push(['createTask', p]);
       const n = ++taskSeq;
       if (failAt === `createTask:${n}`) return { ok: false, error: `task fail ${n}` };
-      return { ok: true, taskId: `task_${n}` };
+      if (failAt === 'createTask:no-specText') return { ok: true, taskId: `task_${n}` };
+      return { ok: true, taskId: `task_${n}`, specText: `ENCODED:${p.spec}` };
     },
     startWorker(p) {
       log.push(['startWorker', p]);
@@ -137,6 +138,56 @@ describe('dispatch --batch', () => {
     assert.strictEqual(taskCall[1].spec, plan.workers[0].inject);
     assert.strictEqual(taskCall[1].issue, '600');
     assert.ok(fx.log.some(row => row[0] === 'startWorker' && row[1].issue === '600'));
+    const startCall = fx.log.find(row => row[0] === 'startWorker');
+    assert.strictEqual(startCall[1].book, `ENCODED:${taskCall[1].spec}`,
+      '#802 startWorker 必须用 createTask 带回的 specText，不是未编码 inject  →  ' + JSON.stringify(startCall[1]));
+  });
+
+  it('#802 同树两个同 identity deferred：第二份 book 送到第二张终端', async () => {
+    const S = await S_LOAD;
+    const wt = 'wt_batch';
+    const shell = { handle: 'term_shell', worktreeId: wt, agentIdentity: null };
+    const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+    const piNew = { handle: 'term_pi_new', worktreeId: wt, agentIdentity: 'pi' };
+    const first = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_1',
+      knownHandles: ['term_shell'],
+    });
+    assert.ok(first.ok && first.handle === 'term_pi_old' && first.book === 'BOOK_1', JSON.stringify(first));
+    const second = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld, piNew],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_FOR_SECOND_WORKER',
+      knownHandles: ['term_shell', 'term_pi_old'],
+    });
+    assert.ok(second.ok && second.action === 'calibrate' && second.handle === 'term_pi_new'
+      && second.book === 'BOOK_FOR_SECOND_WORKER' && second.sends.join(',') === 'book',
+      JSON.stringify(second));
+    assert.notStrictEqual(second.handle, first.handle);
+    const noDiff = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld, piNew],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_FOR_SECOND_WORKER',
+    });
+    assert.ok(noDiff.ok === false && noDiff.action === 'ambiguous' && noDiff.sends.length === 0
+      && noDiff.handle !== 'term_pi_old', JSON.stringify(noDiff));
+  });
+
+  it('#802 createTask 没带回 specText → fail-loud，不拿 inject 当已派', async () => {
+    const S = await S_LOAD;
+    const plan = S.planDispatchBatch({
+      name: '总卡', issue: '600', model: 'grok-4.6', items: items(1),
+    });
+    const r = S.runDispatchBatch({ plan, effects: makeEffects({ failAt: 'createTask:no-specText' }) });
+    assert.ok(!r.ok && /specText/.test(r.error), JSON.stringify(r));
   });
 
   it('N=1 正常路径：1 棵树 + 1 次 start/task/worker-start，不回滚', async () => {

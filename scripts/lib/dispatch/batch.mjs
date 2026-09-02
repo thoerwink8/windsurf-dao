@@ -135,6 +135,10 @@ export function runDispatchBatch({ plan, effects } = {}) {
     });
     if (!task || !task.ok) return fail(`task-create 失败（${w.name}）: ${(task && task.error) || '未知'}`);
     if (task.taskId) created.taskIds.push(task.taskId);
+    const book = String(task.specText || '').trim();
+    if (!book) {
+      return fail(`worker-start 失败（${w.name}）：createTask 没带回编码后的 specText（不许拿未编码 inject 当任务书）`);
+    }
 
     const started = effects.startWorker({
       task: task.taskId,
@@ -144,6 +148,7 @@ export function runDispatchBatch({ plan, effects } = {}) {
       model: term.model || plan.model,
       agent: term.agentId,
       deferred: term.deferred === true,
+      book,
     });
     if (started && started.dispatchId) created.dispatchIds.push(started.dispatchId);
     if (!started || !started.ok) {

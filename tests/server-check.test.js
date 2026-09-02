@@ -7,12 +7,17 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import {
   classifyOrcaStdout,
   classifyRuntimeStatus,
   classifyAccountsResult,
   classifyFeishuTriage,
   UNPROBEABLE_CODES,
+  parseStartAgentProviders,
+  parseTuiAgentDisplayNames,
+  classifyRequiredAgents,
+  providerToAgentId,
 } from '../scripts/server-check.mjs';
 
 test('server-check 判别力', async (t) => {
@@ -117,6 +122,83 @@ test('server-check 判别力', async (t) => {
       assert.equal(classifyAccountsResult({}).state, 'unknown');
       assert.equal(classifyAccountsResult({ claude: { accts: [] } }).state, 'unknown');
       assert.equal(classifyAccountsResult(null).state, 'unknown');
+    });
+  });
+
+  await t.test('#802 本构建是否认 --agent id', async (t) => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const here = path.dirname(fileURLToPath(import.meta.url));
+
+    await t.test('provider → agent id 自持映射（不 import launch.mjs）', () => {
+      assert.equal(providerToAgentId('gw'), 'pi');
+      assert.equal(providerToAgentId('deepseek'), 'pi');
+      assert.equal(providerToAgentId('opencode-go'), 'pi');
+      assert.equal(providerToAgentId('devin'), 'devin');
+      assert.equal(providerToAgentId('grok'), 'grok');
+      assert.equal(providerToAgentId('gpt'), 'codex');
+      assert.equal(providerToAgentId('claude'), null);
+    });
+
+    await t.test('TOML start=agent 扫得出 gw/devin，不把 launch_note 里的字当字段', () => {
+      const toml = [
+        '[providers.gw]',
+        'cli = "pi"',
+        'start = "agent"',
+        'launch_note = """',
+        'start = "agent"',
+        '"""',
+        '[providers.claude]',
+        'start = "command"',
+        '[providers.devin]',
+        'start = "agent"',
+      ].join('\n');
+      const r = parseStartAgentProviders(toml);
+      assert.equal(r.unscanned, false);
+      assert.deepEqual(r.providers.map((p) => p.name), ['gw', 'devin']);
+    });
+
+    await t.test('没 [providers.*] → unscanned，不是 0 个', () => {
+      const r = parseStartAgentProviders('updated = "2026-09-03"\n');
+      assert.equal(r.unscanned, true);
+    });
+
+    await t.test('目录夹具含 pi/devin/grok → 扫得出', () => {
+      const text = fs.readFileSync(path.join(here, 'fixtures/orca-tui-agents/ok.js'), 'utf8');
+      const r = parseTuiAgentDisplayNames(text);
+      assert.equal(r.unscanned, false);
+      assert.ok(r.ids.includes('pi') && r.ids.includes('devin') && r.ids.includes('grok'), JSON.stringify(r.ids));
+    });
+
+    await t.test('故意违规：目录缺 pi，路由要 pi → 红', () => {
+      const text = fs.readFileSync(path.join(here, 'fixtures/orca-tui-agents/missing-pi.js'), 'utf8');
+      const known = parseTuiAgentDisplayNames(text);
+      const r = classifyRequiredAgents({
+        requiredIds: ['pi', 'devin', 'grok'],
+        knownIds: known.ids,
+        knownUnscanned: known.unscanned,
+      });
+      assert.equal(r.state, 'red');
+      assert.ok(r.missing.includes('pi'), JSON.stringify(r));
+    });
+
+    await t.test('目录扫不到 → unknown，不许当绿', () => {
+      const r = classifyRequiredAgents({
+        requiredIds: ['pi'],
+        knownIds: null,
+        knownUnscanned: true,
+        knownError: '没扫到',
+      });
+      assert.equal(r.state, 'unknown');
+    });
+
+    await t.test('目录齐 → ok', () => {
+      const r = classifyRequiredAgents({
+        requiredIds: ['pi', 'devin', 'grok'],
+        knownIds: ['pi', 'devin', 'grok', 'codex'],
+        knownUnscanned: false,
+      });
+      assert.equal(r.state, 'ok');
     });
   });
 
