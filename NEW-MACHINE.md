@@ -400,6 +400,13 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 真发版留给合并后 timer 首次触发；人工只该跑到 `plan` 与 `release --dry-run`（别在真仓手打 tag / 建 Release，会污染版本历史）。触发阈值/发布日/档位表都在 `docs/release-policy.json`，改动走 PR。
 
+- **AppImage 解包后 Electron 共享库可能缺**（2026-09-02 Contabo Ubuntu 24.04 干净机实测：`orca-ide: error while loading shared libraries: libatk-1.0.so.0`，前台 serve 直接 exit 127、永远等不到 ready）。装 `libatk1.0-0t64 libatk-bridge2.0-0t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libcups2t64 libxkbcommon0 libatspi2.0-0t64 libxss1 libgl1`，验收 `ldd /opt/orca/squashfs-root/orca-ide | grep "not found"` 为空再起。
+- **`orca` 服务用户下 `git clone` 公开仓可能报 `could not read Username` / `expected flush after ref listing`**，同一时刻 root 下 `ls-remote` 正常（原因未查清）。绕法：root clone 到 `/home/orca/windsurf-dao` 再 `chown -R orca:orca`，并给 orca 加 `git config --global --add safe.directory /home/orca/windsurf-dao`。
+- **Orca 终端不继承 orca-serve 的环境，也不 source `~/.bashrc`**（实测 `terminal create` 起的 shell 里 `ANTHROPIC_*` 与 `~/.local/bin` 全空，`command -v orca` 为空）；但 **`worktree create --agent` 起的 agent 继承服务环境**。所以给 agent 的网关/凭据变量放 systemd drop-in：`/etc/systemd/system/orca-serve.service.d/10-env.conf` 写 `EnvironmentFile=/home/orca/.config/ai-gateway/claude.env`（**KEY=VALUE 字面值**，systemd 不展开 `$(cat ...)`，文件 600）+ `Environment=PATH=/home/orca/.local/bin:/usr/local/bin:/usr/bin:/bin`。
+- **Claude Code 在无头 agent 终端里有三道会卡死的门**，`--agent claude --prompt` 之前全部预置好（都在 orca 用户家目录）：① 首运行主题选择：`~/.claude.json` 写 `hasCompletedOnboarding:true`；② 「Is this a project you trust?」：`IS_SANDBOX=1` 这版（2.1.258）**不认**，要在 `~/.claude.json` 的 `projects` 里给**工位树父目录** `/home/orca/orca/workspaces` 写 `hasTrustDialogAccepted:true`——它会向上找祖先目录，预置一次父目录即可，不用每棵树都写；③ Bypass Permissions 免责页：`~/.claude.json` 写 `bypassPermissionsModeAccepted:true` 且 `~/.claude/settings.json` 写 `skipDangerousModePermissionPrompt:true`。三道齐了实测 `--agent claude --prompt "写 hello.txt"` 19 秒落盘。
+- **`terminal wait --for exit` 对 `--command` 起的终端会超时**（命令跑完 shell 还活着），要等 agent 用 `--for tui-idle`，等脚本直接 `terminal read` 找标记串。
+- 服务器落地清单第 1 步的判据（kill 后自动回来）2026-09-02 在 Contabo Cloud VPS 6（6C/12G，EU）上实测达成：`kill -9` 主进程后 15 秒 `systemctl is-active` 回 active、`NRestarts=1`、`runtime.reachable=true`。
+
 ### 搬过去之后本仓的红项变化（实测）
 
 orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
