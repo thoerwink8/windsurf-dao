@@ -162,6 +162,22 @@ describe('skill-link', () => {
       });
     }
 
+    // ── ⑧b SKIP：CI 环境（GITHUB_ACTIONS/CI 置真）⇒ SKIP 不是绿不是红，
+    //    即使 ~/.claude/skills 存在且缺链（CI 只为 ⑧ 装带 hook 的 skill，发现面非全量）──
+    {
+      const root = makeRoot("ci-env");
+      const home = makeHome("ci-env-home");
+      for (const s of SKILLS.slice(1)) linkSkill(home, s, path.join(root, "host", "skills", s));  // 故意缺 dispatch
+      const r = checkSkillLinks({ root, home, isCi: true });
+      await t.test('CI 置真且缺链 ⇒ SKIP 不是红（CI 装不了全量发现面）', () => {
+        assert.ok(!!r.skip && !r.fail && !r.green, 'CI 置真且缺链 ⇒ SKIP 不是红  →  ' + JSON.stringify(r).slice(0, 200));
+      });
+      const r2 = checkSkillLinks({ root, home });   // 同一台机器不标 CI ⇒ 必须红
+      await t.test('同一缺链不标 CI ⇒ 红（判别力：CI 标志不能掩盖真机缺链）', () => {
+        assert.ok(!!r2.fail && /缺链/.test(r2.fail[2]), '同一缺链不标 CI ⇒ 红  →  ' + JSON.stringify(r2).slice(0, 200));
+      });
+    }
+
     // ── ⑨ 红样本：~/.claude/skills 存在但是文件（发现面坏了）⇒ 报红 ──
     {
       const root = makeRoot("face-file");

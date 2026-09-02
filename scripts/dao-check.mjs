@@ -801,7 +801,11 @@ function checkMemoryLinkAlive() {
 // 单独验判别力，不必跑整个 dao-check（那会递归）。
 
 function checkSkillLinksAlive() {
-  const r = checkSkillLinks({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  const r = checkSkillLinks({
+    root: ROOT,
+    home: process.env.USERPROFILE || process.env.HOME || '',
+    isCi: process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true',
+  });
   if (r.green) green(r.green);
   else if (r.skip) skip(r.skip);
   else fail(...r.fail);

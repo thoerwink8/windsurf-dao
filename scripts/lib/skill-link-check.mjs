@@ -14,8 +14,10 @@
 // 新增 skill 忘了建链，dao-check 照样全绿——本项堵的就是这个洞。
 //
 // 判据：
-//   SKIP —— 本机没有 `~/.claude/skills` 目录（CI / 新机）。与绿不同形：SKIP 在输出里打印，
-//           且不计入绿——SKIP 与绿分不开，CI 就会永远绿而本机永远没人查。
+//   SKIP —— CI 环境（GITHUB_ACTIONS/CI 置真：CI 只为 ⑧ 态注入 hook 装带 hooks.json 的 skill，
+//            发现面从来不是全量，本项无法验证，不是绿）；或本机没有 `~/.claude/skills` 目录
+//            （新机未建链）。与绿不同形：SKIP 在输出里打印，且不计入绿——SKIP 与绿分不开，
+//            CI 就会永远绿而本机永远没人查。
 //   RED  —— 链接缺失（缺链）/ 存在但不是链接（普通目录或普通文件）/ 链接悬空（目标不存在）/
 //            指错（realpath 落点不以 `host/skills/<名>` 结尾——含指到别的 skill、指到别的仓）。
 //   GREEN—— 每个 skill 的链接都在，且 realpath 落点以 `host/skills/<名>` 结尾。
@@ -48,12 +50,16 @@ function suffixOk(target, name) {
 }
 
 /**
- * @param {{root: string, home: string}} opts root=仓库根（host/skills 真相源），
- *        home=放 .claude/ 的那个目录（USERPROFILE 或 HOME）
+ * @param {{root: string, home: string, isCi?: boolean}} opts root=仓库根（host/skills 真相源），
+ *        home=放 .claude/ 的那个目录（USERPROFILE 或 HOME），isCi=CI 环境标记
+ *        （GITHUB_ACTIONS/CI 置真；CI 只为 ⑧ 装带 hook 的 skill，发现面非全量 ⇒ SKIP 不是绿）
  * @returns {{green?: string, skip?: string, fail?: [string, string, string]}} 状态与 dao-check 的
  *          green()/skip()/fail() 对齐；skip 与 green 必须能被输出格式分开（SKIP 前缀 + 不计绿）。
  */
-export function checkSkillLinks({ root, home }) {
+export function checkSkillLinks({ root, home, isCi = false }) {
+  if (isCi) {
+    return { skip: 'CI 环境：~/.claude/skills 发现面只在操作者机器上建链（CI 只为 ⑧ 装带 hook 的 skill），本项无法验证（SKIP 不是绿）' };
+  }
   if (!home) {
     return { fail: ['本机 home 探测不了', 'USERPROFILE/HOME 没设，无法定位宿主发现面 ~/.claude/skills', `home=${home}`] };
   }
