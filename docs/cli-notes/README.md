@@ -11,6 +11,7 @@
 | Cursor | [cursor.md](cursor.md) | agent 型，`[Pasted text]` 是提交后残留不算未提交 |
 | Command Code | [commandcode.md](commandcode.md) | command 型，只做非交互查证，需补空回车 |
 | Claude (reclaude) | [claude.md](claude.md) | command 型，必须 `--command` 读 launch，抢跑注入必被吞 |
+| 飞书 (`lark-cli`) | [feishu.md](feishu.md) | 运维 CLI，不是工人；`--as bot` 发消息，话题群≠线性群 |
 
 ## 跨 CLI 通用教训（#762 实战，2026-08-25）
 
@@ -19,6 +20,7 @@
 3. **屏面稳定 ≠ 开工**：开工验证带任务书指纹（expect），见指纹才算注入成功；`[Pasted Content]` / `[Pasted text]` 停在输入框 = 未提交（#661）。
 4. **审官单例（#575 一 PR 一审官）**：已有审官卡复用，不销毁重建、不反复 attach。残留卡多了说明在反复重试——停下来查根因（注入/就绪），不是继续换卡。
 5. **worker-start 快**：stalled 是"送达失败"不是"等不够久"，别加长超时硬等——修送达（等就绪/走 agent 协议）。
+6. **`--agent` 回的 handle ≠ agent 终端**（#802）：无头 Linux 上 agent 起在另一张终端（`agentIdentity`），记账 handle 常是空壳，任务书打进 bash。派工按 `agentIdentity` 校准再注入；title 不可靠。
 
 ## 原材料
 

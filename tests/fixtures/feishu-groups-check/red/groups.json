@@ -1,0 +1,6 @@
+{
+  "_comment": "红夹具：其中一个群查不到。故意违规样本必须被拦住。",
+  "oc_live1live1live1live1live1aaaaaa": { "repo": "org/alpha", "kind": "project" },
+  "oc_dead1dead1dead1dead1dead1dddddd": { "repo": "org/dissolved-sample", "kind": "project" },
+  "oc_hub2hub2hub2hub2hub2hub2hhhhhh": { "kind": "hub" }
+}

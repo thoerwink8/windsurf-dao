@@ -27,6 +27,9 @@ __pycache__/
 *.pyc
 .codegraph/
 
+# 飞书适配器（#801）live 模式的 SDK 依赖（服务器 npm install 产物，测试/CI 不装）
+host/machine/feishu-triage/node_modules/
+
 # 审官草稿（#601）：判定正文进 GitHub review，树里这份只会挡住 orca worktree rm
 # 收窄到根目录；不许靠「删树时按白名单删文件」
 /review-*.txt

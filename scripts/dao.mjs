@@ -98,13 +98,24 @@ import {
   isReusableDefaultTerminal,
   planLaunchFallback,
   agentStartSpec,
+  classifyAgentScreen,
+  launchAttempt,
+  pickAgentTerminal,
+  terminalHandles,
+  planDeferredRepair,
   inspectConsumerFence,
   planFenceHeal,
   extractWorktreeId,
   extractWorktreePath,
   findDispatchForWorktree,
+  findWorktreeBySel,
   verifyReviewerAttachTree,
   planAttachSoldierDispatch,
+  planCreateSoldierDispatch,
+  parseDispatchComment,
+  progressDispatchComment,
+  pickMergePolicyFromLedger,
+  resolveReviewerMergePolicy,
   isLiveDispatchRecipient,
   argsWorkerList,
   gitBranchName,
@@ -166,7 +177,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
-import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs } from './lib/master-title.mjs';
+import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
 import {
@@ -435,13 +446,12 @@ function findDefaultTerminalForLaunch(worktreeId) {
   return { handle: null };
 }
 
-function findAgentTerminalHandle(worktreeId) {
+function findAgentTerminalHandle(worktreeId, wantAgentId) {
   const listed = orca(argsTerminalList({ worktree: worktreeId }));
   if (!listed.ok) return null;
-  const terms = listed.json?.result?.terminals;
-  if (!Array.isArray(terms)) return null;
-  const agents = terms.filter(t => t && t.handle && !isReusableDefaultTerminal(t));
-  return agents[0]?.handle || null;
+  const picked = pickAgentTerminal(listed.json?.result?.terminals, { worktreeId, wantAgentId });
+  if (!picked.ok || picked.unscanned) return null;
+  return picked.handle || null;
 }
 
 function launchAgentInWorktree({ worktreeId, title, command, launch, forceCommand }) {
@@ -499,7 +509,8 @@ function recoverDispatchIdByTask(taskId) {
  * 两档成功都必须有 dispatchId：响应没带就按 taskId 从 worker-list 找回；
  * 找不回 = 没查成（没记账的工人 watchdog 看不见），报错回滚，不把消息发进真空。
  */
-function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book }) {
+function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book, attempts }) {
+  const rows = Array.isArray(attempts) ? attempts : [];
   const sendTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : WORKER_START_SEND_TIMEOUT_MS;
   let startArgs = null;
   if (launched?.deferred) {
@@ -509,7 +520,36 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   } else if (launched?.handle) {
     startArgs = argsWorkerStart({ task, worktree, terminal: launched.handle, run, timeoutMs: sendTimeout, from });
   } else {
-    return { ok: false, error: 'worker-start 要 --terminal 或 --agent' };
+    return { ok: false, error: 'worker-start 要 --terminal 或 --agent', attempts: rows };
+  }
+  // #802 批派工：同树多张相同 identity 时，用启动前 handle 集合做差集认新终端。
+  // 快照没查成 → 直接 fail-loud，不启动；缺差集基线不许用启动后唯一匹配放行。
+  let knownHandles = null;
+  if (launched?.deferred) {
+    if (!worktree) {
+      return { ok: false, error: 'worker-start --agent 缺 worktree，无法做启动前快照（缺差集基线，不启动）', attempts: rows };
+    }
+    const listedBefore = orca(argsTerminalList({ worktree }));
+    if (!listedBefore.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: errText(listedBefore.error),
+      }));
+      return {
+        ok: false,
+        error: `worker-start 前 terminal list 没查成，缺差集基线，不启动：${errText(listedBefore.error)}`,
+        attempts: rows,
+      };
+    }
+    const snap = terminalHandles(listedBefore.json?.result?.terminals, { worktreeId: worktree });
+    if (!snap.ok) {
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent', kind: 'need-baseline',
+        agentId: launched.agentId, error: snap.error,
+      }));
+      return { ok: false, error: `worker-start 前终端快照没查成，缺差集基线，不启动：${snap.error}`, attempts: rows };
+    }
+    knownHandles = snap.handles;
   }
   // orca 进程级调用上限比 --timeout-ms 宽 15s：stall 到点是 orca 正常返回，不是调用挂死。
   const r = orca(startArgs, sendTimeout + 15000);
@@ -517,7 +557,10 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
   if (send.kind === 'transport-failed') {
     // 传输失败也可能已落记账（worker-start 先建 dispatch 再注入）——带上让回滚能 worker-stop，
     // 不留 workerState=failed 的僵尸记账（762 残留实证）。
-    return { ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send, dispatchId: extractDispatchId(r.json) || null };
+    return {
+      ok: false, error: workerStartFailText(r), json: r.json, handle: launched?.handle, send,
+      dispatchId: extractDispatchId(r.json) || null, attempts: rows,
+    };
   }
 
   let dispatchId = extractDispatchId(r.json);
@@ -536,20 +579,129 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
       json: r.json,
       handle: launched?.handle,
       send,
+      attempts: rows,
     };
   }
 
   let handle = launched?.handle || null;
+  let fellBackToCommand = false;
   if (launched?.deferred) {
-    // #771：devin agent 型 worker-start 响应里的 handle 可能是 --from 的派工协调终端（PowerShell），
-    // 补粘任务书会敲进 PowerShell（2026-08-26 实测）。terminal list 找非默认终端（agent 终端）优先。
-    handle = (launched?.launch?.provider === 'devin' ? findAgentTerminalHandle(worktree) : null)
-      || extractHandleFromWorkerStart(r.json)
-      || findAgentTerminalHandle(worktree);
+    // #802：worker-start --agent 起的是另一张 agent 终端，回的 handle 常是空壳。
+    // 只认 list 的 agentIdentity，不认 title。校准后把任务书送到 agent 终端。
+    const listed = orca(argsTerminalList({ worktree }));
+    const terms = listed.ok ? listed.json?.result?.terminals : null;
+    const claimed = extractHandleFromWorkerStart(r.json);
+    const repairArgs = {
+      claimedHandle: claimed,
+      terminals: terms,
+      worktreeId: worktree,
+      wantAgentId: launched.agentId,
+      book,
+      command: launched?.launch?.command,
+      knownHandles,
+    };
+    let plan = planDeferredRepair(repairArgs);
+    handle = plan.handle || claimed || null;
+    rows.push(launchAttempt({
+      provider: launched?.launch?.provider, mode: 'agent',
+      kind: plan.kind || plan.action,
+      agentId: launched.agentId, error: plan.error || plan.reason,
+    }));
+    if (!plan.ok) {
+      return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+    }
+    if (plan.action === 'unscanned' && !handle) {
+      handle = findAgentTerminalHandle(worktree, launched.agentId);
+    }
     if (!handle) {
-      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send };
+      return { ok: false, error: 'worker-start --agent 成功但没拿到终端 handle（没查成）', json: r.json, send, attempts: rows };
+    }
+
+    if (plan.needsScreen) {
+      const pre = orca(argsTerminalRead({ terminal: handle, limit: 40 }));
+      const screen = pre.ok
+        ? classifyAgentScreen(extractTerminalText(pre.json))
+        : { kind: 'unread', reason: errText(pre.error) };
+      if (plan.action === 'unscanned') {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'agent', kind: screen.kind,
+          agentId: launched.agentId, error: screen.kind === 'agent-ready' ? undefined : screen.reason,
+        }));
+      }
+      plan = planDeferredRepair({ ...repairArgs, screen });
+      if (!plan.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command',
+          kind: plan.kind || 'repair-fail',
+          agentId: launched.agentId, error: plan.error,
+        }));
+        return { ok: false, error: plan.error, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+    }
+
+    if (plan.action === 'calibrate') {
+      handle = plan.handle;
+      const injected = orca(argsTerminalSend({
+        terminal: handle, text: plan.book, enter: true,
+        agent: launched.agentId || launched?.launch?.provider,
+      }));
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'agent',
+        kind: injected.ok ? 'resend-ok' : 'resend-fail',
+        agentId: launched.agentId, error: injected.ok ? undefined : errText(injected.error),
+      }));
+      if (!injected.ok) {
+        return { ok: false, error: `校准到 agent 终端后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      send.kind = 'confirmed';
+      send.reason = `已校准到 agentIdentity=${plan.agentIdentity} 并重送任务书`;
+    } else if (plan.action === 'fallback') {
+      const sentCmd = orca(argsTerminalSend({ terminal: handle, text: plan.command, enter: true }));
+      if (!sentCmd.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-send-fail',
+          agentId: launched.agentId, error: errText(sentCmd.error),
+        }));
+        return { ok: false, error: `没有目标 agent 终端，回退 --command 失败：${errText(sentCmd.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      const waitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120000;
+      const ready = orca(argsTerminalWait({ terminal: handle, for: 'tui-idle', timeoutMs: waitMs }));
+      if (!ready.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-wait-fail',
+          agentId: launched.agentId, error: errText(ready.error),
+        }));
+        return { ok: false, error: `回退 --command 后 TUI 未就绪：${errText(ready.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      const injected = orca(argsTerminalSend({
+        terminal: handle, text: plan.book, enter: true,
+        agent: launched.agentId || launched?.launch?.provider,
+      }));
+      if (!injected.ok) {
+        rows.push(launchAttempt({
+          provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-inject-fail',
+          agentId: launched.agentId, error: errText(injected.error),
+        }));
+        return { ok: false, error: `回退 --command 后重送任务书失败：${errText(injected.error)}`, json: r.json, handle, send, dispatchId, attempts: rows };
+      }
+      rows.push(launchAttempt({
+        provider: launched?.launch?.provider, mode: 'command', kind: 'fallback-ok',
+        agentId: launched.agentId,
+      }));
+      send.kind = 'confirmed';
+      send.reason = `没有目标 agentIdentity 终端，已回退 --command（${plan.command}）并重送任务书`;
+      fellBackToCommand = true;
     }
   }
+
+  // 回退已经重送任务书，不要再走下面的补粘/补回车（会打进刚起来的 TUI）。
+  if (fellBackToCommand) {
+    return {
+      ok: true, json: r.json, handle, dispatchId,
+      confirmed: true, send, dispatchIdRecovered, attempts: rows, fallback: 'command',
+    };
+  }
+
   // codex 坑 2 修复（2026-08-26 实测，#785 兜底加宽）：worker-start --agent codex 的任务书显示
   // [Pasted Content] 停在输入框（粘贴不自动提交，codex.md 坑 1 同现象）。原来只在
   // send.kind === 'sent-unconfirmed' 时补，但审官复用路 worker-start 可能返回 confirmed 而
@@ -608,6 +760,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book 
     confirmed: send.kind === 'confirmed',
     send,
     dispatchIdRecovered,
+    attempts: rows,
   };
 }
 
@@ -657,6 +810,10 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
       continue;
     }
     if (term.deferred) {
+      attempts.push(launchAttempt({
+        modelId, pipeIndex, provider: pipe.provider, mode: 'agent', kind: 'deferred',
+        agentId: term.agentId,
+      }));
       return {
         ok: true, deferred: true, modelId, pipeIndex, pipe, launch,
         handle: null, agentId: term.agentId, model: term.model, attempts,
@@ -665,6 +822,9 @@ function startWorkerBySlate({ slate, startIndex, routing, worktreeId, title, cre
     const handle = term.handle;
     if (!handle) return { ok: false, error: '工人终端没返回 handle', attempts };
     created.workerHandle = handle;
+    attempts.push(launchAttempt({
+      modelId, pipeIndex, provider: pipe.provider, mode: 'command', kind: 'created',
+    }));
 
     // fire-and-forget（2026-08-23）：terminal create 成功即收，不再跑 TUI 就绪探针。
     // 探针误杀能干活的工人（758-763 实证）；起没起来的确认交 watchdog。
@@ -1456,7 +1616,9 @@ function runDispatchExecution(order, { queueDir } = {}) {
     from: coordHandle,
     timeoutMs: probeWaitMs(routing, workerLaunch.provider),
     book: injectText,
+    attempts: launched.attempts,
   });
+  if (Array.isArray(started.attempts)) plan.launchAttempts = started.attempts;
   if (!started.ok) {
     // 失败但记账已落的（响应里带出 dispatchId）：记进 created，回滚先 worker-stop 不留僵尸。
     if (started.dispatchId) created.dispatchIds.push(started.dispatchId);
@@ -1516,6 +1678,7 @@ function runDispatchExecution(order, { queueDir } = {}) {
           launched: childLaunch,
           run: runId,
           from: coordHandle,
+          book: childBook,
         });
         if (!childStarted.ok) {
           return { ok: false, error: `子 worker-start 失败: ${childStarted.error}`, handle: childStarted.handle || childLaunch.handle };
@@ -1582,6 +1745,8 @@ function runDispatchExecution(order, { queueDir } = {}) {
       pipe_provider: workerLaunch.provider,
       split: splitGate.split,
       split_reason: splitGate.splitReason,
+      merge_policy: plan.mergePolicy,
+      ...(plan.mergeReason ? { merge_reason: plan.mergeReason } : {}),
       ...(created.childDispatchIds && created.childDispatchIds.length
         ? { child_dispatch_ids: created.childDispatchIds }
         : {}),
@@ -1704,9 +1869,9 @@ function cmdDispatchBatch(args) {
       }
       const taskId = extractTaskId(task.json);
       if (!taskId) return { ok: false, error: 'task-create 没拿到 taskId' };
-      return { ok: true, taskId };
+      return { ok: true, taskId, specText };
     },
-    startWorker({ task, terminal, worktree, agent, model, deferred }) {
+    startWorker({ task, terminal, worktree, agent, model, deferred, book }) {
       // fire-and-forget（2026-08-23）：送字即收，不等认账；确认交 watchdog。
       const started = startOrcaWorker({
         task,
@@ -1715,6 +1880,7 @@ function cmdDispatchBatch(args) {
           ? { deferred: true, agentId: agent, model, launch }
           : { handle: terminal, launch },
         run: station.runId,
+        book,
       });
       if (!started.ok) return { ok: false, error: started.error, dispatchId: started.dispatchId || null };
       const dispatchId = started.dispatchId;
@@ -1757,6 +1923,56 @@ function resolveDispatchLastFailure(dispatchId) {
   const r = orca(argsWorkerShow({ dispatch: dispatchId }));
   if (!r.ok) return null;
   return r.json?.result?.dispatch?.last_failure ?? null;
+}
+
+/** #799：审官 create/attach/reuse 继承派工 merge-policy。账本没查成 ≠ 没有字段，都回退 auto 并写原因。 */
+function lookupReviewerMergePolicy({
+  explicitPolicy, explicitReason, issue, pr, dispatchId, worktreeSel, worktrees,
+} = {}) {
+  let ledger = { ok: false, unscanned: true, state: 'unscanned', error: '账本未读' };
+  try {
+    const ctx = loadLedgerContext({ root: ROOT });
+    const listed = readLedgerEvents(ctx.dir);
+    if (listed.unscanned) {
+      ledger = { ok: false, unscanned: true, state: 'unscanned', error: listed.error };
+    } else {
+      ledger = pickMergePolicyFromLedger({
+        events: listed.events,
+        issue,
+        pr,
+        dispatchId,
+      });
+    }
+  } catch (e) {
+    ledger = { ok: false, unscanned: true, state: 'unscanned', error: String(e.message || e) };
+  }
+  let trees = worktrees;
+  if (worktreeSel && !Array.isArray(trees)) {
+    const listed = orca(['worktree', 'list', '--json']);
+    if (listed.ok) trees = listed.json?.result?.worktrees || listed.json?.worktrees;
+  }
+  const wt = worktreeSel && Array.isArray(trees) ? findWorktreeBySel(trees, worktreeSel) : null;
+  const comment = parseDispatchComment(wt && wt.comment);
+  return resolveReviewerMergePolicy({
+    explicitPolicy,
+    explicitReason,
+    ledger,
+    comment,
+  });
+}
+
+/** #799：写人话进度时保留卡上 merge-policy 前缀。show 失败则用盘面列表里的旧 comment 兜底。 */
+function setWorkerCardProgress(parentId, progress, worktrees) {
+  if (!parentId) return { ok: true, skipped: true };
+  const mutated = mutateWorktreeComment({
+    worktreeId: parentId,
+    runOrca: (a) => orca(a),
+    mutate: (comment) => progressDispatchComment(comment, progress),
+  });
+  if (mutated.ok) return mutated;
+  const wt = Array.isArray(worktrees) ? findWorktreeBySel(worktrees, parentId) : null;
+  const next = progressDispatchComment(wt && wt.comment, progress);
+  return orca(argsWorktreeSet({ worktree: parentId, comment: next }));
 }
 
 function soldierRunId({ soldierDispatch, parentId } = {}) {
@@ -1913,7 +2129,7 @@ function loadReviewerReuseInputs() {
 }
 
 function reuseReviewerOnTerminal({
-  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun,
+  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue,
 } = {}) {
   if (dryRun) {
     return {
@@ -1939,32 +2155,63 @@ function reuseReviewerOnTerminal({
   const mergeable = assessPrMergeable(head?.mergeable);
   if (!mergeable.ok) return { ok: false, reused: true, error: mergeable.error, mergeable };
 
-  let soldierDispatchId = soldierDispatch || null;
+  let foundDispatch = null;
   let runId = null;
   if (parentWorktree) {
     const wl = orca(argsWorkerList());
-    if (!wl.ok) return { ok: false, reused: true, error: `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}` };
-    const found = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
-    if (!found.ok && !soldierDispatchId) {
-      return { ok: false, reused: true, error: `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch` };
+    if (!wl.ok) {
+      foundDispatch = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(wl.error)}` };
+    } else {
+      foundDispatch = findDispatchForWorktree(wl.json, parentWorktree, resolveDispatchLastFailure);
+      if (foundDispatch.ok) runId = foundDispatch.runId || null;
     }
-    if (!soldierDispatchId && found.ok) soldierDispatchId = found.dispatchId;
-    if (found.ok) runId = found.runId || null;
+  } else if (!soldierDispatch) {
+    foundDispatch = { ok: false, error: '没给 --soldier-dispatch 或 --parent-worktree' };
   }
-  if (!soldierDispatchId) {
-    return { ok: false, reused: true, error: '复用审官没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）' };
+  const probeId = String(soldierDispatch || '').trim()
+    || (foundDispatch && foundDispatch.ok ? String(foundDispatch.dispatchId || '').trim() : '');
+  let dispatchLive = null;
+  if (probeId) {
+    const shown = orca(argsWorkerShow({ dispatch: probeId }));
+    if (shown.ok) {
+      const d = shown.json?.result?.dispatch || {};
+      const w = shown.json?.result?.worker || {};
+      dispatchLive = isLiveDispatchRecipient({
+        workerState: w.state || d.status,
+        dispatchStatus: d.status,
+        lastFailure: d.last_failure,
+      });
+      if (!runId) runId = d.run_id || d.runId || null;
+    }
   }
-  if (!runId) {
-    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
+  const soldierPlan = planCreateSoldierDispatch({
+    explicitDispatch: soldierDispatch,
+    found: foundDispatch,
+    dispatchLive: probeId ? dispatchLive : undefined,
+  });
+  if (!soldierPlan.ok) {
+    return { ok: false, reused: true, error: soldierPlan.error, found: foundDispatch, soldierPlan };
   }
+  const soldierDispatchId = soldierPlan.soldierDispatchId || '';
+  if (soldierPlan.deadWarning) console.error(`[dao] 注意：${soldierPlan.deadWarning}`);
+
+  const policyPlan = lookupReviewerMergePolicy({
+    issue,
+    pr,
+    dispatchId: soldierDispatchId || probeId || null,
+    worktreeSel: parentWorktree,
+  });
+  if (!policyPlan.ok) return { ok: false, reused: true, error: policyPlan.error, policyPlan };
 
   let reviewerBook;
   try {
     reviewerBook = encodeSendText(buildReviewerInject({
       spec: `复用审官终端审 PR #${pr}`,
       pr: String(pr),
-      soldierDispatchId: String(soldierDispatchId),
-      mergePolicy: 'auto',
+      soldierDispatchId,
+      mergePolicy: policyPlan.mergePolicy,
+      mergeReason: policyPlan.mergeReason,
+      fallbackReason: policyPlan.fallbackReason,
     }), reviewer);
   } catch (e) {
     return { ok: false, reused: true, error: `复用审官任务书渲染失败: ${String(e.message || e)}` };
@@ -1972,6 +2219,10 @@ function reuseReviewerOnTerminal({
 
   const station = bindStation();
   if (!station.ok) return { ok: false, reused: true, error: station.error };
+  if (!runId) runId = station.runId || null;
+  if (!runId) {
+    return { ok: false, reused: true, error: '复用审官没拿到士兵 run id，task-create 会 run_required（没查成）' };
+  }
   const revTask = taskCreateOnRun(reviewerBook, runId, { rebindSelf: true });
   if (!revTask.ok) {
     if (isRunRequired(revTask.error) || /consumer_fenced/i.test(errText(revTask.error))) {
@@ -1998,6 +2249,7 @@ function reuseReviewerOnTerminal({
     worktree: reviewerWorktreeId,
     launched: { handle, launch },
     run: runId,
+    book: reviewerBook,
   });
   if (!revStarted.ok) {
     return { ok: false, reused: true, error: `复用审官 worker-start 失败: ${revStarted.error}（必须带 --worktree 指审官树）` };
@@ -2018,15 +2270,18 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
   }
 
-  const identity = deliverMessage({
-    to: `dispatch:${soldierDispatchId}`,
-    subject: `审官身份：${reviewerDispatchId}`,
-    body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
-    hop: 'worker-done→士兵（复用审官身份）',
-    orca: (a) => orca(a),
-  });
-  if (!identity.ok) {
-    return { ok: false, reused: true, error: `复用审官身份消息没送到士兵: ${identity.error}`, identity };
+  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
+  if (soldierDispatchId) {
+    identity = deliverMessage({
+      to: `dispatch:${soldierDispatchId}`,
+      subject: `审官身份：${reviewerDispatchId}`,
+      body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
+      hop: 'worker-done→士兵（复用审官身份）',
+      orca: (a) => orca(a),
+    });
+    if (!identity.ok) {
+      return { ok: false, reused: true, error: `复用审官身份消息没送到士兵: ${identity.error}`, identity };
+    }
   }
 
   let ledger = null;
@@ -2178,6 +2433,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: true,
       });
     }
@@ -2225,7 +2481,7 @@ function cmdWorkerDone(args) {
       postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
       postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
       if (parentId) {
-        orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+        setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
       }
       fail(stop.error, {
         ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2241,6 +2497,7 @@ function cmdWorkerDone(args) {
       parentWorktree: parentId,
       soldierDispatch: args.soldierDispatch,
       reviewer: plan.reviewer,
+      issue: plan.issue,
       dryRun: false,
     });
     const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
@@ -2254,6 +2511,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: false,
       });
       // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路——保活归 guard-keepalive。
@@ -2279,6 +2537,7 @@ function cmdWorkerDone(args) {
         parentWorktree: parentId,
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
+        issue: plan.issue,
         dryRun: false,
       });
       if (retriedReuse.ok) {
@@ -2289,7 +2548,7 @@ function cmdWorkerDone(args) {
         postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
         postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
         if (parentId) {
-          orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+          setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
         }
         fail(`复用审官失败，禁止回退已结算 dispatch（#552）：${reused.error}`, {
           ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2304,7 +2563,7 @@ function cmdWorkerDone(args) {
     postIssueComment({ issue: plan.issue, body: failBody, runGh: gh });
     postPrComment({ pr: plan.pr, body: failBody, runGh: gh });
     if (parentId) {
-      orca(argsWorktreeSet({ worktree: parentId, comment: '交卷了，审官没起来' }));
+      setWorkerCardProgress(parentId, '交卷了，审官没起来', reuseInputs.worktrees);
     }
     fail(refuseErr, {
       ...plan, commentPosted: true, postedIssue, postedPr,
@@ -2338,7 +2597,7 @@ function cmdWorkerDone(args) {
   const notified = notify.notified;
 
   if (parentId) {
-    orca(argsWorktreeSet({ worktree: parentId, comment: '待终审' }));
+    setWorkerCardProgress(parentId, '待终审', reuseInputs.worktrees);
   }
 
   let ledgerLink = null;
@@ -2872,30 +3131,55 @@ function cmdReviewerCreate(args) {
     }
   }
 
-  let soldierDispatchId = args.soldierDispatch || null;
+  let foundDispatch = null;
   let soldierRunId = null;
   if (args.parentWorktree) {
     const wl = orca(argsWorkerList());
-    if (!wl.ok && !soldierDispatchId) failCreated(launched, `worker-list 没查成，给 --soldier-dispatch：${errText(wl.error)}`, plan);
-    if (wl.ok) {
-      const found = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
-      if (!found.ok && !soldierDispatchId) failCreated(launched, `找不到士兵 dispatch（${found.error}）。给 --soldier-dispatch`, { found, ...plan });
-      if (found.ok) {
-        if (!soldierDispatchId) soldierDispatchId = found.dispatchId;
-        soldierRunId = found.runId || null;
-      }
+    if (!wl.ok) {
+      foundDispatch = { ok: false, unscanned: true, error: `worker-list 没查成：${errText(wl.error)}` };
+    } else {
+      foundDispatch = findDispatchForWorktree(wl.json, args.parentWorktree, resolveDispatchLastFailure);
+      if (foundDispatch.ok) soldierRunId = foundDispatch.runId || null;
+    }
+  } else if (!args.soldierDispatch) {
+    foundDispatch = { ok: false, error: '没给 --soldier-dispatch 或 --parent-worktree' };
+  }
+  const probeId = String(args.soldierDispatch || '').trim()
+    || (foundDispatch && foundDispatch.ok ? String(foundDispatch.dispatchId || '').trim() : '');
+  let dispatchLive = null;
+  if (probeId) {
+    const shown = orca(argsWorkerShow({ dispatch: probeId }));
+    if (shown.ok) {
+      const d = shown.json?.result?.dispatch || {};
+      const w = shown.json?.result?.worker || {};
+      dispatchLive = isLiveDispatchRecipient({
+        workerState: w.state || d.status,
+        dispatchStatus: d.status,
+        lastFailure: d.last_failure,
+      });
+      if (!soldierRunId) soldierRunId = d.run_id || d.runId || null;
     }
   }
-  if (!soldierDispatchId) {
-    failCreated(launched, 'reviewer-create 没拿到士兵 dispatch id（给 --soldier-dispatch 或 --parent-worktree）', plan);
-  }
-  if (!soldierRunId) soldierRunId = runIdFromDispatch(soldierDispatchId);
+  const soldierPlan = planCreateSoldierDispatch({
+    explicitDispatch: args.soldierDispatch,
+    found: foundDispatch,
+    dispatchLive: probeId ? dispatchLive : undefined,
+  });
+  if (!soldierPlan.ok) failCreated(launched, soldierPlan.error, { found: foundDispatch, soldierPlan, ...plan });
+  const soldierDispatchId = soldierPlan.soldierDispatchId || '';
+  if (soldierPlan.deadWarning) console.error(`[dao] 注意：${soldierPlan.deadWarning}`);
+  if (!soldierRunId && soldierDispatchId) soldierRunId = runIdFromDispatch(soldierDispatchId);
 
-  const policy = args.mergePolicy || 'auto';
-  if (policy !== 'auto' && policy !== 'manual') failCreated(launched, `--merge-policy 只允许 auto|manual，实际 ${policy}`, plan);
-  if (policy === 'manual' && !String(args.mergeReason || '').trim()) {
-    failCreated(launched, '--merge-policy manual 必须给 --merge-reason', plan);
-  }
+  const policyPlan = lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue: args.issue,
+    pr: args.pr,
+    dispatchId: soldierDispatchId || probeId || null,
+    worktreeSel: args.parentWorktree,
+    worktrees: inputs.ok ? inputs.worktrees : undefined,
+  });
+  if (!policyPlan.ok) failCreated(launched, policyPlan.error, { policyPlan, ...plan });
 
   let reviewerBook = null;
   try {
@@ -2903,9 +3187,10 @@ function cmdReviewerCreate(args) {
       spec: `按审官任务书审 PR #${args.pr}`,
       issue: args.issue,
       pr: String(args.pr),
-      soldierDispatchId: String(soldierDispatchId),
-      mergePolicy: policy,
-      mergeReason: args.mergeReason,
+      soldierDispatchId,
+      mergePolicy: policyPlan.mergePolicy,
+      mergeReason: policyPlan.mergeReason,
+      fallbackReason: policyPlan.fallbackReason,
     }), reviewerLaunch.provider);
   } catch (e) {
     failCreated(launched, `审官任务书渲染失败: ${String(e.message || e)}`, plan);
@@ -2948,6 +3233,7 @@ function cmdReviewerCreate(args) {
       : { handle: launched.reviewerHandle, launch: reviewerLaunch },
     run: revRunId,
     from: revCoordHandle,
+    book: reviewerBook,
   });
   if (!revStarted.ok) failCreated(launched, `审官 worker-start 失败: ${revStarted.error}`, { ...plan, reviewerTaskId });
   launched.reviewerHandle = revStarted.handle;
@@ -2970,18 +3256,21 @@ function cmdReviewerCreate(args) {
   }
   const reviewerProof = workerStartProof(reviewerDispatchId);
 
-  const identity = deliverMessage({
-    to: `dispatch:${soldierDispatchId}`,
-    subject: `审官身份：${reviewerDispatchId}`,
-    body: `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
+  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
+  if (soldierDispatchId) {
+    identity = deliverMessage({
+      to: `dispatch:${soldierDispatchId}`,
+      subject: `审官身份：${reviewerDispatchId}`,
+      body: `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
 先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
-    hop: 'reviewer-create→士兵（审官身份）',
-    orca: (a) => orca(a),
-  });
-  if (!identity.ok) {
-    failCreated(launched, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
-      ...plan, reviewerTaskId, identity,
+      hop: 'reviewer-create→士兵（审官身份）',
+      orca: (a) => orca(a),
     });
+    if (!identity.ok) {
+      failCreated(launched, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
+        ...plan, reviewerTaskId, identity,
+      });
+    }
   }
 
   let ledger = null;
@@ -3017,6 +3306,10 @@ function cmdReviewerCreate(args) {
     reviewerDispatchId,
     reviewerTaskId,
     soldierDispatchId,
+    soldierPlan,
+    mergePolicy: policyPlan.mergePolicy,
+    mergeReason: policyPlan.mergeReason,
+    mergePolicySource: policyPlan.source,
     heads,
     filesChecked: filesOk.checked,
     probes: env,
@@ -3039,12 +3332,6 @@ function cmdReviewerAttach(args) {
   if (!args.pr) fail('reviewer-attach 要 --pr');
   if (!args.worktree) fail('reviewer-attach 要 --worktree（工人卡）');
   if (!args.reviewer) fail('reviewer-attach 要 --reviewer（审官模型 id）');
-
-  const policy = args.mergePolicy || 'auto';
-  if (policy !== 'auto' && policy !== 'manual') fail(`--merge-policy 只允许 auto|manual，实际 ${policy}`);
-  if (policy === 'manual' && !String(args.mergeReason || '').trim()) {
-    fail('--merge-policy manual 必须给 --merge-reason');
-  }
 
   const routing = loadOrFail();
   let reviewerLaunch;
@@ -3104,6 +3391,18 @@ function cmdReviewerAttach(args) {
     workerId: worker.modelId, reviewerId: args.reviewer, routing,
   });
 
+  const trees = wtList.ok ? (wtList.json?.result?.worktrees || wtList.json?.worktrees) : undefined;
+  const policyPlan = lookupReviewerMergePolicy({
+    explicitPolicy: args.mergePolicy,
+    explicitReason: args.mergeReason,
+    issue: args.issue || (Array.isArray(worker.refs) ? worker.refs[0] : null),
+    pr: args.pr,
+    dispatchId: args.soldierDispatch || null,
+    worktreeSel: args.worktree,
+    worktrees: trees,
+  });
+  if (!policyPlan.ok) fail(policyPlan.error, { policyPlan, pr: String(args.pr) });
+
   const revName = assembleCardName({
     name: args.name || reviewerCardName(args.reviewer),
     pr: args.pr,
@@ -3118,8 +3417,10 @@ function cmdReviewerAttach(args) {
     baseBranch,
     expectedOid,
     files,
-    mergePolicy: policy,
-    mergeReason: args.mergeReason || null,
+    mergePolicy: policyPlan.mergePolicy,
+    mergeReason: policyPlan.mergeReason || null,
+    mergePolicySource: policyPlan.source,
+    fallbackReason: policyPlan.fallbackReason || null,
     launch: reviewerLaunch.command,
     mergeable,
     workerModel: worker.modelId,
@@ -3229,8 +3530,9 @@ function cmdReviewerAttach(args) {
         pr: String(args.pr),
         // #631：skip-wait 无收件人时传 ''（渲染成 d=，任务书认空 = 红项上帅），不许传 null（渲染硬闸）
         soldierDispatchId: soldierDispatchId ? String(soldierDispatchId) : '',
-        mergePolicy: policy,
-        mergeReason: args.mergeReason,
+        mergePolicy: policyPlan.mergePolicy,
+        mergeReason: policyPlan.mergeReason,
+        fallbackReason: policyPlan.fallbackReason,
         skipWait: soldierPlan?.skipWait || false,
       }), reviewerLaunch.provider);
   } catch (e) {
@@ -3278,6 +3580,7 @@ function cmdReviewerAttach(args) {
       : { handle: created.reviewerHandle, launch: reviewerLaunch },
     run: reviewerRunId,
     from: reviewerFrom,
+    book: reviewerBook,
     // #682 微通道：Codex TUI 冷启动（MCP 初始化 ~84s）会超默认 60s 的 dispatch_input 窗口
     // 报 agent_prompt_stalled，微通道子进程显式放宽到 180s。
     timeoutMs: args.startTimeoutMs ? Number(args.startTimeoutMs) : undefined,

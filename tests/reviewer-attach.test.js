@@ -246,3 +246,174 @@ describe('findWorktreeBySel / worktreeSelMatches（#631 选择符匹配）', () 
     assert.strictEqual(S.findWorktreeBySel(null, 'x'), null, '列表没查成 → null');
   });
 });
+
+describe('#799 planCreateSoldierDispatch（结算态士兵仍起审官）', () => {
+  const foundLive = { ok: true, dispatchId: 'ctx_797_live', runId: 'run_797', scanned: 1 };
+  const foundSettled = {
+    ok: false, unscanned: false,
+    error: 'worktree=wt-797 只有已结算 dispatch，禁止当收件人（#552：下一跳必须新 Dispatch）',
+    scanned: 1, deadCount: 1,
+  };
+  const foundMiss = { ok: false, error: 'worker-list 里找不到 worktree=wt-797 的士兵 dispatch', scanned: 2 };
+  const foundUnscanned = { ok: false, unscanned: true, error: 'worker-list 没查成' };
+
+  it('#797 实况：士兵重注入后只有已结算 dispatch → 整跳继续，d= 留空，红项上帅', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundSettled, dispatchLive: undefined });
+    assert.ok(r.ok === true, '已结算不得整跳失败 → ' + JSON.stringify(r));
+    assert.strictEqual(r.soldierDispatchId, '', 'd= 留空');
+    assert.ok(r.skipIdentity === true, '跳过身份投递（#552 不当收件人）');
+    assert.ok(/已结算/.test(r.deadWarning || ''), '附警告 → ' + JSON.stringify(r));
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #797', pr: '797',
+      soldierDispatchId: r.soldierDispatchId, mergePolicy: 'auto',
+    });
+    assert.ok(/d= /.test(inject) || /d= m=/.test(inject) || /d=$/.test(inject.replace(/ m=.*$/, '')),
+      '注入空 d= → ' + inject);
+  });
+
+  it('活士兵 → 注入真 id，身份可投（#552 闸对活人仍走）', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundLive, dispatchLive: true });
+    assert.ok(r.ok && r.soldierDispatchId === 'ctx_797_live' && r.skipIdentity === false,
+      '活人走原路 → ' + JSON.stringify(r));
+  });
+
+  it('树映射活 id 但 worker-show 复核已结算 → 继续起审官，d= 留空', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundLive, dispatchLive: false });
+    assert.ok(r.ok && r.soldierDispatchId === '' && r.skipIdentity === true,
+      'worker-show 死 ≠ 整跳失败 → ' + JSON.stringify(r));
+  });
+
+  it('worker-show 没查成 → 拒（不许把没查成当已结算）', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundLive, dispatchLive: null });
+    assert.ok(r.ok === false && r.unscanned === true, '没查成 fail-close → ' + JSON.stringify(r));
+  });
+
+  it('找不到且无显式 id → 仍拒（#797 只放行「已结算」，不放行没查到）', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundMiss });
+    assert.ok(r.ok === false && /找不到士兵 dispatch/.test(r.error), '找不到仍拒 → ' + JSON.stringify(r));
+  });
+
+  it('worker-list 没查成 → 拒', async () => {
+    const S = await S_LOAD;
+    const r = S.planCreateSoldierDispatch({ found: foundUnscanned });
+    assert.ok(r.ok === false && r.unscanned === true, '没查成 ≠ 已结算 → ' + JSON.stringify(r));
+  });
+});
+
+describe('#799 resolveReviewerMergePolicy（attach/create 继承 merge-policy）', () => {
+  it('#798 实况：派工记账 mergePolicy:manual → 审官任务书 m=manual，不回退 auto', async () => {
+    const S = await S_LOAD;
+    const ledger = S.pickMergePolicyFromLedger({
+      events: [{
+        type: 'job.dispatch', identity: '工人', issue_number: 798,
+        dispatch_id: 'ctx_798', merge_policy: 'manual',
+        merge_reason: '改 model-routing 决策字段', ts: '2026-09-03T17:00:00+08:00',
+      }],
+      issue: 798,
+    });
+    assert.ok(ledger.ok && ledger.mergePolicy === 'manual', '账本读出 manual → ' + JSON.stringify(ledger));
+    const r = S.resolveReviewerMergePolicy({ ledger });
+    assert.ok(r.ok && r.mergePolicy === 'manual' && r.source === 'ledger' && !r.fallbackReason,
+      '继承 manual 不回退 → ' + JSON.stringify(r));
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #798', pr: '798',
+      soldierDispatchId: 'ctx_798',
+      mergePolicy: r.mergePolicy, mergeReason: r.mergeReason,
+    });
+    assert.ok(/m=manual/.test(inject) && /r=改 model-routing 决策字段/.test(inject),
+      '注入 m=manual + 理由 → ' + inject);
+    assert.ok(!/m=auto/.test(inject), '不得渲染成 auto → ' + inject);
+  });
+
+  it('读不到记账 → 回退 auto，任务书 fb= 写明原因', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'none', error: '账本没有匹配的工人 job.dispatch' },
+      comment: { mergePolicy: null, mergeReason: null },
+    });
+    assert.ok(r.ok && r.mergePolicy === 'auto' && r.source === 'fallback' && /账本无mergePolicy/.test(r.fallbackReason || ''),
+      '回退必须带原因 → ' + JSON.stringify(r));
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #798', pr: '798',
+      soldierDispatchId: '', mergePolicy: r.mergePolicy, fallbackReason: r.fallbackReason,
+    });
+    assert.ok(/m=auto/.test(inject) && /fb=账本无mergePolicy/.test(inject),
+      '任务书写明回退原因 → ' + inject);
+  });
+
+  it('账本没查成 → 回退 auto，原因是读不到（与「没有字段」分开）', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, unscanned: true, state: 'unscanned', error: '账本目录不在' },
+    });
+    assert.ok(r.source === 'fallback' && /读不到派工记账/.test(r.fallbackReason || ''),
+      '没查成话面不同 → ' + JSON.stringify(r));
+  });
+
+  it('卡备注 merge-policy:manual 在账本无字段时顶上（#798 旧账本兜底）', async () => {
+    const S = await S_LOAD;
+    const comment = S.parseDispatchComment('merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol · manual 理由: 改 model-routing 决策字段');
+    assert.strictEqual(comment.mergePolicy, 'manual');
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' },
+      comment,
+    });
+    assert.ok(r.ok && r.mergePolicy === 'manual' && r.source === 'comment',
+      '卡备注兜底 → ' + JSON.stringify(r));
+  });
+
+  it('显式 --merge-policy auto 压过账本 manual', async () => {
+    const S = await S_LOAD;
+    const r = S.resolveReviewerMergePolicy({
+      explicitPolicy: 'auto',
+      ledger: { ok: true, mergePolicy: 'manual', mergeReason: '改协作约定' },
+    });
+    assert.ok(r.ok && r.mergePolicy === 'auto' && r.source === 'flag',
+      '旗标优先 → ' + JSON.stringify(r));
+  });
+
+  it('#798 生命周期：旧账本无字段 → worker-done 覆盖进度后 attach 仍注入 m=manual', async () => {
+    const S = await S_LOAD;
+    const original = 'merge-policy:manual · model:grok-4.6 · reviewer:gpt-5.6-sol · manual 理由: 改 model-routing 决策字段｜[#798]';
+    const afterFailure = S.progressDispatchComment(original, '交卷了，审官没起来');
+    assert.ok(/merge-policy:manual/.test(afterFailure) && /交卷了，审官没起来/.test(afterFailure)
+      && /｜\[#798\]/.test(afterFailure),
+      '进度覆盖后结构化前缀和定界区还在 → ' + afterFailure);
+    const parsed = S.parseDispatchComment(afterFailure);
+    assert.strictEqual(parsed.mergePolicy, 'manual', '不得把理由/进度拼进 policy → ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.mergeReason, '改 model-routing 决策字段', '理由不得吞掉进度 → ' + JSON.stringify(parsed));
+    const ledgerMissing = { ok: false, state: 'missing-field', error: '派工记账无 mergePolicy' };
+    const before = S.resolveReviewerMergePolicy({
+      ledger: ledgerMissing,
+      comment: S.parseDispatchComment(original),
+    });
+    const after = S.resolveReviewerMergePolicy({ ledger: ledgerMissing, comment: parsed });
+    assert.ok(before.mergePolicy === 'manual' && before.source === 'comment',
+      '覆盖前 comment 源是 manual → ' + JSON.stringify(before));
+    assert.ok(after.mergePolicy === 'manual' && after.source === 'comment',
+      '覆盖后仍是 comment/manual，不得 fallback auto → ' + JSON.stringify(after));
+    const inject = S.buildReviewerInject({
+      spec: '按审官任务书审 PR #798', pr: '798',
+      soldierDispatchId: '', mergePolicy: after.mergePolicy, mergeReason: after.mergeReason, skipWait: true,
+    });
+    assert.ok(/m=manual/.test(inject) && /r=改 model-routing 决策字段/.test(inject) && !/m=auto/.test(inject),
+      'attach 注入仍是 m=manual → ' + inject);
+  });
+
+  it('无 merge-policy 的备注被覆盖 → 仍回退 auto（判别：有前缀才保住）', async () => {
+    const S = await S_LOAD;
+    const after = S.progressDispatchComment('人写的进度', '待终审');
+    assert.strictEqual(after, '待终审', '没有结构化前缀就只留进度 → ' + after);
+    const r = S.resolveReviewerMergePolicy({
+      ledger: { ok: false, state: 'none', error: '账本没有匹配的工人 job.dispatch' },
+      comment: S.parseDispatchComment(after),
+    });
+    assert.ok(r.source === 'fallback' && r.mergePolicy === 'auto',
+      '无载体才回退 → ' + JSON.stringify(r));
+  });
+});

@@ -355,6 +355,11 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 - **`ok:false` 时退出码仍是 0**——退出码不是信号，只认 JSON。
 - orca 停掉时各面返回 `error.code=runtime_unavailable`：这是**没查成**，不是真红。混成红会把「orca 没起」这个根因埋进一片假红里。
 - 日志里这两类报错**无害**：`Failed to connect to the bus`（文档明说不需要独立 D-Bus session）、`[codex-trust-grant] ... spawn codex ENOENT`（没装 codex CLI）。
+- **2026-09-02 Contabo 实测续坑**（命令、包名、env 路径全文在 PR #796，当时未合；本条不抄值）：
+  1. **systemd drop-in 注入 agent 的网关 env 与 PATH**。Orca `terminal create` 的壳不继承服务环境；`worktree create --agent` 起的 agent 继承。只改单元 drop-in，值不进仓（`host/skills/server-ops/SKILL.md`，INDEX E 类）。
+  2. **Claude Code 无头信任框**：`IS_SANDBOX=1` 这版不认。要在 `~/.claude.json` 的 `projects` 里给工位树**父目录**写信任标记——它会向上找祖先，预置一次即可。
+  3. **Orca 终端不吃 login shell 的 `~/.profile` / `~/.bashrc`**。人开的壳要自己补 PATH；agent 靠上一条 drop-in。
+- **#802**：`server-check` 第⑬项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。
 
 ### 搬过去之后本仓的红项变化（实测）
 
@@ -438,7 +443,7 @@ Claude 侧由 §0 的 `onboard.mjs` 接（node 原生 junction，无需管理员
 
 ### 11.1 Claude Code：`~/.claude/skills`
 
-`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。
+`node scripts/onboard.mjs` 即可。验证：`ls ~/.claude/skills` 里每个仓内 skill 都在（`grill-ai` / `admit-push` / `pr-fast` / `dao-project` / `dao-mode` / `server-ops` / `feishu-ops` 都是这一步带上的）；哨兵报 `skills-partial` / `skills-dangling` 就重跑。桌面 `webview-debug` 已删（#808），不要从旧快照搬回。
 
 ### 11.2 Cursor Desktop：`~/.cursor/skills`
 
@@ -705,4 +710,4 @@ git ls-remote --heads origin | sed 's|.*refs/heads/||' \
 node scripts/dao-check.mjs
 ```
 
-退出码 0 = 环境就绪。
+退出码 0 = 环境就绪。dao-check 的 feishu-groups 项优先读 `~/.mirasim/keys/feishu-groups.json`（实机映射，600，换机手动带）；没有这份文件会 SKIP「本机未接飞书」。仓内 `host/machine/feishu-groups.json` 只有占位（真实 chat_id 不进仓）。红了：把实机那份里失效的 chat_id 换成还活着的（`lark-cli im +chat-list --as bot`）或删掉已解散的那一行。无 lark-cli / 无凭据（CI）也是 SKIP，不是绿。
