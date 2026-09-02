@@ -101,6 +101,7 @@ import {
   classifyAgentScreen,
   launchAttempt,
   pickAgentTerminal,
+  terminalHandles,
   planDeferredRepair,
   inspectConsumerFence,
   planFenceHeal,
@@ -515,6 +516,15 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
   } else {
     return { ok: false, error: 'worker-start 要 --terminal 或 --agent', attempts: rows };
   }
+  // #802 批派工：同树多张相同 identity 时，用启动前 handle 集合做差集认新终端。
+  let knownHandles = null;
+  if (launched?.deferred && worktree) {
+    const listedBefore = orca(argsTerminalList({ worktree }));
+    if (listedBefore.ok) {
+      const snap = terminalHandles(listedBefore.json?.result?.terminals, { worktreeId: worktree });
+      if (snap.ok) knownHandles = snap.handles;
+    }
+  }
   // orca 进程级调用上限比 --timeout-ms 宽 15s：stall 到点是 orca 正常返回，不是调用挂死。
   const r = orca(startArgs, sendTimeout + 15000);
   const send = classifyWorkerStartSend({ ok: r.ok, error: r.error, json: r.json });
@@ -562,6 +572,7 @@ function startOrcaWorker({ task, worktree, launched, run, timeoutMs, from, book,
       wantAgentId: launched.agentId,
       book,
       command: launched?.launch?.command,
+      knownHandles,
     };
     let plan = planDeferredRepair(repairArgs);
     handle = plan.handle || claimed || null;

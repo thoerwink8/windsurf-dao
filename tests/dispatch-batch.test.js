@@ -143,6 +143,44 @@ describe('dispatch --batch', () => {
       '#802 startWorker 必须用 createTask 带回的 specText，不是未编码 inject  →  ' + JSON.stringify(startCall[1]));
   });
 
+  it('#802 同树两个同 identity deferred：第二份 book 送到第二张终端', async () => {
+    const S = await S_LOAD;
+    const wt = 'wt_batch';
+    const shell = { handle: 'term_shell', worktreeId: wt, agentIdentity: null };
+    const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+    const piNew = { handle: 'term_pi_new', worktreeId: wt, agentIdentity: 'pi' };
+    const first = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_1',
+      knownHandles: ['term_shell'],
+    });
+    assert.ok(first.ok && first.handle === 'term_pi_old' && first.book === 'BOOK_1', JSON.stringify(first));
+    const second = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld, piNew],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_FOR_SECOND_WORKER',
+      knownHandles: ['term_shell', 'term_pi_old'],
+    });
+    assert.ok(second.ok && second.action === 'calibrate' && second.handle === 'term_pi_new'
+      && second.book === 'BOOK_FOR_SECOND_WORKER' && second.sends.join(',') === 'book',
+      JSON.stringify(second));
+    assert.notStrictEqual(second.handle, first.handle);
+    const noDiff = S.planDeferredRepair({
+      claimedHandle: 'term_shell',
+      terminals: [shell, piOld, piNew],
+      worktreeId: wt,
+      wantAgentId: 'pi',
+      book: 'BOOK_FOR_SECOND_WORKER',
+    });
+    assert.ok(noDiff.ok === false && noDiff.action === 'ambiguous' && noDiff.sends.length === 0
+      && noDiff.handle !== 'term_pi_old', JSON.stringify(noDiff));
+  });
+
   it('#802 createTask 没带回 specText → fail-loud，不拿 inject 当已派', async () => {
     const S = await S_LOAD;
     const plan = S.planDispatchBatch({

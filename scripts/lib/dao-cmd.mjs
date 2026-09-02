@@ -64,6 +64,7 @@ export {
   terminalAgentIdentity,
   classifyTerminalRole,
   pickAgentTerminal,
+  terminalHandles,
   planInjectTarget,
   requireBookForRepair,
   planRepairSends,

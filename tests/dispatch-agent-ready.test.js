@@ -151,6 +151,29 @@ describe('dispatch-agent-ready（#802）', () => {
       const p = S.planInjectTarget({ claimedHandle: 'term_x', terminals: null });
       assert.ok(p.action === 'unscanned', JSON.stringify(p));
     });
+    await t.test('故意违规：同 identity 两张、没差集 → 不许取第一张', () => {
+      const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+      const piNew = { handle: 'term_pi_new', worktreeId: wt, agentIdentity: 'pi' };
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_shell',
+        terminals: [shell, piOld, piNew],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+      });
+      assert.ok(p.action === 'ambiguous' && p.handle !== 'term_pi_old', JSON.stringify(p));
+    });
+    await t.test('启动前后差集：第二张 pi 才是本次新建', () => {
+      const piOld = { handle: 'term_pi_old', worktreeId: wt, agentIdentity: 'pi' };
+      const piNew = { handle: 'term_pi_new', worktreeId: wt, agentIdentity: 'pi' };
+      const p = S.planInjectTarget({
+        claimedHandle: 'term_shell',
+        terminals: [shell, piOld, piNew],
+        worktreeId: wt,
+        wantAgentId: 'pi',
+        knownHandles: ['term_shell', 'term_pi_old'],
+      });
+      assert.ok(p.action === 'calibrate' && p.handle === 'term_pi_new', JSON.stringify(p));
+    });
   });
 
   it('requireBookForRepair / planRepairSends：缺任务书不能记 fallback-ok', async (t) => {
@@ -253,6 +276,10 @@ describe('dispatch-agent-ready（#802）', () => {
     const startFn = src.match(/function startOrcaWorker[\s\S]*?\nfunction startWorkerBySlate/);
     assert.ok(startFn, '定位 startOrcaWorker');
     assert.ok(/planDeferredRepair\(/.test(startFn[0]), 'startOrcaWorker 要按 agentIdentity 校准 handle');
+    assert.ok(/knownHandles/.test(startFn[0]), '校准要带启动前 handle 差集');
+    const listAt = startFn[0].indexOf('argsTerminalList');
+    const startAt = startFn[0].indexOf('orca(startArgs');
+    assert.ok(listAt > 0 && startAt > listAt, 'worker-start 前要 list 做差集');
     assert.ok(/kind: injected\.ok \? 'resend-ok'/.test(startFn[0]), '校准后重送任务书到 agent 终端');
     assert.ok(/plan\.action === 'fallback'/.test(startFn[0]), '没有目标 agent 终端才回退 --command');
     assert.ok(/fellBackToCommand/.test(startFn[0]), '回退后跳过补粘/补回车');

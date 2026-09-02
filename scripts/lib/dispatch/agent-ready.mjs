@@ -93,7 +93,25 @@ export function classifyTerminalRole(term) {
   return { kind: 'shell', handle: term.handle, reason: 'agentIdentity 空' };
 }
 
-export function pickAgentTerminal(terminals, { worktreeId, wantAgentId } = {}) {
+function asHandleSet(knownHandles) {
+  if (knownHandles == null) return null;
+  if (knownHandles instanceof Set) return knownHandles;
+  if (Array.isArray(knownHandles)) return new Set(knownHandles.filter(Boolean).map(String));
+  return null;
+}
+
+/** list 快照里的 handle。供启动前后差集用。 */
+export function terminalHandles(terminals, { worktreeId } = {}) {
+  if (!Array.isArray(terminals)) {
+    return { ok: false, unscanned: true, handles: [], error: 'terminal list 不是数组（没查成）' };
+  }
+  const inTree = (worktreeId
+    ? terminals.filter(t => t && t.worktreeId === worktreeId)
+    : terminals.filter(Boolean));
+  return { ok: true, handles: inTree.filter(t => t && t.handle).map(t => t.handle) };
+}
+
+export function pickAgentTerminal(terminals, { worktreeId, wantAgentId, knownHandles } = {}) {
   if (!Array.isArray(terminals)) {
     return {
       ok: false, unscanned: true, handle: null,
@@ -124,31 +142,73 @@ export function pickAgentTerminal(terminals, { worktreeId, wantAgentId } = {}) {
     return { ok: true, unscanned: false, handle: null, scanned: inTree.length, agentIdentity: null };
   }
   const want = wantAgentId ? String(wantAgentId).trim() : '';
-  if (want) {
-    const chosen = agents.find(a => a.agentIdentity === want);
-    if (!chosen) {
-      const seen = agents.map(a => a.agentIdentity);
+  const matching = want ? agents.filter(a => a.agentIdentity === want) : agents;
+  if (matching.length === 0) {
+    const seen = agents.map(a => a.agentIdentity);
+    return {
+      ok: false, unscanned: false, mismatch: true, handle: null,
+      scanned: inTree.length, count: agents.length, seen,
+      error: `要 agentIdentity=${want}，同树只有 ${seen.join(',') || '无'}（不许退选别的 agent）`,
+    };
+  }
+  const label = want || matching[0].agentIdentity;
+  const known = asHandleSet(knownHandles);
+  if (known) {
+    const fresh = matching.filter(a => !known.has(a.handle));
+    if (fresh.length === 1) {
       return {
-        ok: false, unscanned: false, mismatch: true, handle: null,
-        scanned: inTree.length, count: agents.length, seen,
-        error: `要 agentIdentity=${want}，同树只有 ${seen.join(',') || '无'}（不许退选别的 agent）`,
+        ok: true, unscanned: false, handle: fresh[0].handle,
+        agentIdentity: fresh[0].agentIdentity, via: 'diff',
+        scanned: inTree.length, count: matching.length,
+      };
+    }
+    if (fresh.length > 1) {
+      return {
+        ok: false, unscanned: false, ambiguous: true, handle: null,
+        scanned: inTree.length, count: matching.length,
+        seen: fresh.map(a => a.handle),
+        error: `同 agentIdentity=${label} 新建了 ${fresh.length} 张终端，无法消歧`,
+      };
+    }
+    if (matching.length === 1) {
+      return {
+        ok: true, unscanned: false, stale: true, handle: matching[0].handle,
+        agentIdentity: matching[0].agentIdentity,
+        scanned: inTree.length, count: 1,
+        error: `worker-start 后没有新的 agentIdentity=${label} 终端（已有 1 张旧的）`,
       };
     }
     return {
-      ok: true, unscanned: false, handle: chosen.handle,
-      agentIdentity: chosen.agentIdentity, scanned: inTree.length, count: agents.length,
+      ok: false, unscanned: false, ambiguous: true, handle: null,
+      scanned: inTree.length, count: matching.length,
+      seen: matching.map(a => a.handle),
+      error: `worker-start 后没有新的 agentIdentity=${label} 终端，同树已有 ${matching.length} 张，无法消歧`,
     };
   }
-  const chosen = agents[0];
+  if (matching.length === 1) {
+    return {
+      ok: true, unscanned: false, handle: matching[0].handle,
+      agentIdentity: matching[0].agentIdentity, scanned: inTree.length, count: 1,
+    };
+  }
+  if (!want) {
+    const chosen = matching[0];
+    return {
+      ok: true, unscanned: false, handle: chosen.handle,
+      agentIdentity: chosen.agentIdentity, scanned: inTree.length, count: matching.length,
+    };
+  }
   return {
-    ok: true, unscanned: false, handle: chosen.handle,
-    agentIdentity: chosen.agentIdentity, scanned: inTree.length, count: agents.length,
+    ok: false, unscanned: false, ambiguous: true, handle: null,
+    scanned: inTree.length, count: matching.length,
+    seen: matching.map(a => a.handle),
+    error: `同树有 ${matching.length} 张 agentIdentity=${label}，没做启动前后差集，不能任选第一张`,
   };
 }
 
 /** 注入目标：有 agent 终端就校准过去，不许往空壳送字。 */
-export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAgentId } = {}) {
-  const picked = pickAgentTerminal(terminals, { worktreeId, wantAgentId });
+export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAgentId, knownHandles } = {}) {
+  const picked = pickAgentTerminal(terminals, { worktreeId, wantAgentId, knownHandles });
   if (!picked.ok && picked.unscanned) {
     return { action: 'unscanned', handle: claimedHandle || null, error: picked.error };
   }
@@ -158,6 +218,27 @@ export function planInjectTarget({ claimedHandle, terminals, worktreeId, wantAge
       handle: claimedHandle || null,
       error: picked.error,
       seen: picked.seen,
+    };
+  }
+  if (!picked.ok && picked.ambiguous) {
+    return {
+      action: 'ambiguous',
+      handle: claimedHandle || null,
+      error: picked.error,
+      seen: picked.seen,
+    };
+  }
+  if (picked.stale) {
+    if (claimedHandle && claimedHandle === picked.handle) {
+      return {
+        action: 'keep', handle: picked.handle, agentIdentity: picked.agentIdentity,
+        reason: '记账 handle 已是唯一旧 agent 终端',
+      };
+    }
+    return {
+      action: 'ambiguous',
+      handle: claimedHandle || null,
+      error: picked.error || '没有新的目标 agent 终端，不能把任务书送到已有的同 identity 工人',
     };
   }
   if (picked.handle) {
@@ -245,14 +326,25 @@ export function planRepairSends({ action, book, screen, command } = {}) {
  * 只有空壳 → command、等 TUI、再送书；缺 book / 目标 identity 对不上 → fail，sends 空。
  */
 export function planDeferredRepair({
-  claimedHandle, terminals, worktreeId, wantAgentId, book, screen, command,
+  claimedHandle, terminals, worktreeId, wantAgentId, book, screen, command, knownHandles,
 } = {}) {
-  const target = planInjectTarget({ claimedHandle, terminals, worktreeId, wantAgentId });
+  const target = planInjectTarget({ claimedHandle, terminals, worktreeId, wantAgentId, knownHandles });
   if (target.action === 'mismatch') {
     return {
       ok: false,
       action: 'mismatch',
       kind: 'identity-mismatch',
+      handle: target.handle || claimedHandle || null,
+      error: target.error,
+      seen: target.seen,
+      sends: [],
+    };
+  }
+  if (target.action === 'ambiguous') {
+    return {
+      ok: false,
+      action: 'ambiguous',
+      kind: 'identity-ambiguous',
       handle: target.handle || claimedHandle || null,
       error: target.error,
       seen: target.seen,
