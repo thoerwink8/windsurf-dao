@@ -65,6 +65,9 @@
 // ㉗ 版本号载体闸（#787）：载体存在时变化必须合法、不倒退；不判该不该 bump。
 //    检查器自持 semver，不 import bump.mjs；红/绿/空（无载体=SKIP 不是绿）各一验判别力；
 //    无载体 live SKIP；git 探头失败 = 没查成
+// ㉘ skill 发现面符号链接（#793）：扫 host/skills/*/ 每个目录，断言本机 ~/.claude/skills/<名>
+//    存在且是指向仓内 host/skills/<名> 的符号链接；缺链/指错报红，不自动建链（#565 symlink 归帅建）；
+//    本机无 ~/.claude/skills → SKIP 不是绿；0 个 skill = 没查成
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -75,6 +78,7 @@ import { runOrcaRaw } from './lib/orca-run.mjs';
 import { checkOrcaJsonFixtures } from './lib/orca-json-fixtures.mjs';
 import { checkModeHook } from './lib/dao-mode-hook-check.mjs';
 import { checkMemoryLink } from './lib/dao-memory-link-check.mjs';
+import { checkSkillLinks } from './lib/skill-link-check.mjs';
 import { checkDispatchGate } from './lib/dispatch-gate-check.mjs';
 import { inspectReadyQueue } from './lib/ready-queue-check.mjs';
 import { checkCompletionSignal } from './lib/completion-signal-check.mjs';
@@ -788,6 +792,21 @@ function checkMemoryLinkAlive() {
   else fail(...r.fail);
 }
 
+// ── ㉘ skill 发现面符号链接（local-only，issue #793）────────────────────
+// 仓内 host/skills/<名>/ 每个 skill，在本机宿主发现面 ~/.claude/skills/<名> 必须是指向仓内
+// host/skills/<名> 的符号链接（NEW-MACHINE §11；建链是手动动作，#565 拍板 symlink 归帅建，
+// 本检查只报警不自动建链）。#789 实咬：/dao-commit 终端不可见，根因之一是链接缺失。
+// 实现放 scripts/lib/skill-link-check.mjs，让 tests/skill-link.test.js 拿假 root + 假 HOME 造
+// 违规样本（缺链/普通目录/悬空/指错=红，全链齐=绿，无 ~/.claude/skills=SKIP，空 host/skills=没查成）
+// 单独验判别力，不必跑整个 dao-check（那会递归）。
+
+function checkSkillLinksAlive() {
+  const r = checkSkillLinks({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
+  else fail(...r.fail);
+}
+
 // ── ⑩ extract* 必须有 orca 真语料 ──────────────────────────────────
 // 自发现：扫 dao-cmd.mjs + scripts/lib/dispatch/*.mjs（#762 按域拆分后 extract* 散在各域文件）
 // 的 export function extract*，不手写函数名单。检查器只验信封（ok+result），不调用 extract*。
@@ -1379,6 +1398,7 @@ const parked = (name) => skip(`停派工态未跑：${name}（编排回岗后 no
 
 await runTests();
 checkSkillFrontmatter();
+checkSkillLinksAlive();
 checkSecretsNotTracked();
 checkResidentBudget();
 checkRoutingProvidersToml();
