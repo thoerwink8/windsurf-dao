@@ -7,12 +7,9 @@
 #   cd /home/orca/windsurf-dao/host/machine/feishu-triage && npm install --omit=dev
 #   # 2) 单元
 #   sudo install -m 644 host/machine/systemd/feishu-triage.service /etc/systemd/system/
-#   # 3) 网关（补充2：与 claude 同一网关，OpenAI 兼容路径。不要写进本文件）
-#   sudo mkdir -p /etc/systemd/system/feishu-triage.service.d
-#   sudo tee /etc/systemd/system/feishu-triage.service.d/override.conf >/dev/null <<'EOF'
-#   [Service]
-#   Environment=ANTHROPIC_BASE_URL=https://<网关>
-#   EOF
+#   # 3) 网关（补充2：与 claude 同一网关，OpenAI 兼容路径）。llm 网关来自 ANTHROPIC_BASE_URL，
+#   #    由 EnvironmentFile 注入（实咬：不注入 llm 不可用，只回兜底话，日志一片安静）
+#   sudo install -m 644 /home/orca/.config/ai-gateway/claude.env /etc/feishu-triage.env  # 若文件可被非 root 读
 #   # 4) 起
 #   sudo systemctl daemon-reload && sudo systemctl enable --now feishu-triage.service
 #   journalctl -u feishu-triage.service -f
@@ -35,6 +32,9 @@ StartLimitBurst=10
 [Service]
 Type=simple
 User=orca
+# 帅 2026-09-03 实况：llm 网关来自 ANTHROPIC_BASE_URL（补充2），不注入 llm 只回兜底话。
+# 服务器上把 claude 的 env 拷到 /etc/feishu-triage.env（600 root:root，systemd 以 root 读）
+EnvironmentFile=/etc/feishu-triage.env
 WorkingDirectory=/home/orca/windsurf-dao
 ExecStart=/usr/bin/node /home/orca/windsurf-dao/scripts/feishu-triage.mjs
 Restart=always

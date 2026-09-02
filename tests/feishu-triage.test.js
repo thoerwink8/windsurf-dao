@@ -668,8 +668,8 @@ describe('#801 块A 飞书适配器', () => {
     assert.ok(types.includes('inbound'), '有 inbound 记录');
     const done = lines.find((l) => l.type === 'done');
     assert.ok(done, '有 done 记录');
-    assert.equal(done.lines, 5);
-    assert.equal(done.processed, 4, '3 条群消息 + 1 条未知群（app 自消息跳过）');
+    assert.equal(done.lines, 7);
+    assert.equal(done.processed, 6, '5 条群消息（含扁平 SDK 样本）+ 1 条未知群（app 自消息跳过）');
     assert.equal(done.skipped, 1, '机器人自消息跳过');
     assert.equal(done.replies, 0, '空桩无回执');
     assert.equal(done.actions, 0, '空桩无动作');
@@ -698,13 +698,13 @@ export async function triage(inbound, deps) {
     assert.equal(r.status, 0, `exit=${r.status} stderr=${r.stderr}`);
     const lines = parseLines(r.stdout);
     const done = lines.find((l) => l.type === 'done');
-    assert.equal(done.processed, 4);
-    assert.equal(done.replies, 4, '每个 inbound 一条回执');
-    assert.equal(done.actions, 4, '项目群 2 条 issue_created + hub/未知群 2 条 hub_card');
+    assert.equal(done.processed, 6);
+    assert.equal(done.replies, 6, '每个 inbound 一条回执');
+    assert.equal(done.actions, 6, '项目群 4 条 issue_created + hub/未知群 2 条 hub_card');
 
     const issueCreated = lines.filter((l) => l.type === 'action' && l.action.type === 'issue_created');
     const hubCards = lines.filter((l) => l.type === 'action' && l.action.type === 'hub_card');
-    assert.equal(issueCreated.length, 2);
+    assert.equal(issueCreated.length, 4);
     assert.equal(hubCards.length, 2);
 
     const replies = lines.filter((l) => l.type === 'reply');
@@ -806,5 +806,107 @@ export async function triage(inbound, deps) {
     assert.equal(card.header.template, 'orange');
     assert.match(card.elements[0].text.content, /小明/);
     assert.equal(card.elements[1].actions[0].url, 'https://x/42');
+  });
+
+  // —— 返工轮契约测试（审官红①+红②、帅实况 1/2/5）——
+
+  it('normalizeInbound：扁平 SDK 事件样本（WSClient 长连接推的就是这个形）', async () => {
+    const M = await MOD;
+    const groups = M.loadGroups(GROUPS_FIXTURE);
+    // 真 SDK：WSClient → EventDispatcher 注册的 handler 收到的是扁平数据（无 {event:{...}} 壳）
+    const flat = {
+      schema: '2.0',
+      event_type: 'im.message.receive_v1',
+      sender: { sender_id: { open_id: 'ou_flat' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_flat_1', chat_id: 'oc_windsurf_dao', chat_type: 'group',
+        message_type: 'text', content: '{"text":"扁平事件"}', create_time: '1725000005000',
+      },
+    };
+    const inbound = M.normalizeInbound(flat, groups);
+    assert.ok(inbound, '扁平结构必须归一化成功（实咬：只认 webhook 壳时长连接事件全被静默丢弃）');
+    assert.equal(inbound.chatId, 'oc_windsurf_dao');
+    assert.equal(inbound.rootId, 'om_flat_1');
+    assert.equal(inbound.text, '扁平事件');
+    assert.equal(inbound.repo, 'thoerwink8/windsurf-dao');
+  });
+
+  it('normalizeInbound：@_user_N 占位符剥掉，多空格归一', async () => {
+    const M = await MOD;
+    const groups = M.loadGroups(GROUPS_FIXTURE);
+    const flat = {
+      schema: '2.0', event_type: 'im.message.receive_v1',
+      sender: { sender_id: { open_id: 'ou_at' }, sender_type: 'user' },
+      message: {
+        message_id: 'om_at_1', chat_id: 'oc_windsurf_dao', chat_type: 'group',
+        message_type: 'text', content: '{"text":"@_user_1 @_user_2  帮我看看 802 单"}', create_time: '1725000006000',
+      },
+    };
+    const inbound = M.normalizeInbound(flat, groups);
+    assert.equal(inbound.text, '帮我看看 802 单', '@_user_N 占位符剥掉、多空格归一');
+  });
+
+  it('ghCreateIssue 契约：不带 --json，stdout URL 取号；假 gh 遇未知参数失败', async () => {
+    const M = await MOD;
+    const nodeRun = (bin, args, opts) => M.runGh(process.execPath, [bin, ...args], opts);
+    const deps = M.makeGhDeps({ ghBin: FAKE_GH, run: nodeRun });
+
+    const created = await deps.ghCreateIssue('thoerwink8/windsurf-dao', { title: 't', body: 'b', labels: ['任务'] });
+    assert.equal(created.number, 9001);
+    assert.equal(created.url, 'https://github.com/thoerwink8/windsurf-dao/issues/9001');
+
+    // 判别性：真 gh issue create 收到 --json 报 unknown flag，假 gh 必须同样失败（审官红①）
+    const withJson = M.runGh(process.execPath, [FAKE_GH, 'issue', 'create', '--repo', 'thoerwink8/x', '--title', 't', '--body', 'b', '--json', 'number,url']);
+    assert.equal(withJson.ok, false, '假 gh 必须拦下 --json');
+    assert.match(withJson.stderr, /--json/);
+    assert.equal(withJson.code, 2);
+  });
+
+  it('aliases 归根：机器人回复消息 id 映射回原话题根，随状态落盘', async () => {
+    const M = await MOD;
+    const dir = tmpdir();
+    const stateFile = path.join(dir, 'state.json');
+    const store = M.createStateStore(stateFile);
+
+    // 机器人回了一条，飞书网页端另开话题：root_id 变成机器人消息 id om_bot_1
+    store.aliases.om_bot_1 = 'om_root_orig';
+    assert.equal(store.canonicalRoot('om_bot_1'), 'om_root_orig', '别名归到原根');
+    assert.equal(store.canonicalRoot('om_bot_1', 'om_x'), 'om_root_orig', '多个候选优先走别名');
+    assert.equal(store.canonicalRoot('om_unknown'), 'om_unknown', '无别名原样返回');
+    assert.equal(store.canonicalRoot('', 'om_y'), 'om_y', '空 id 跳过');
+    // 环保护：a→b→a 最多 5 跳不死循环
+    store.aliases.om_a = 'om_b';
+    store.aliases.om_b = 'om_a';
+    assert.equal(typeof store.canonicalRoot('om_a'), 'string');
+    store.save();
+
+    // 落盘后重载，别名还在（网页端追答跨重启仍能归根）
+    const again = M.createStateStore(stateFile);
+    assert.equal(again.aliases.om_bot_1, 'om_root_orig');
+    assert.equal(again.canonicalRoot('om_bot_1'), 'om_root_orig');
+  });
+
+  it('handleEvent：别名归根端到端（预置别名，网页端另开话题的追答归回原根）', async () => {
+    const M = await MOD;
+    const dir = tmpdir();
+    const stateFile = path.join(dir, 'state.json');
+    const coreFile = path.join(dir, 'alias-core.mjs');
+    fs.writeFileSync(coreFile, `
+export async function triage(inbound, deps) {
+  deps.state.set(inbound.rootId, { seen: (deps.state.get(inbound.rootId)?.seen || 0) + 1 });
+  return { replies: [{ rootId: inbound.rootId, text: '收到' }], actions: [], state: deps.state };
+}
+`);
+    // 预置别名：机器人回过的消息 om_bot_reply_1 → 原话题根 om_1（帅实况 5：网页端对机器人那条
+    // 「回复」会另开话题，root_id 变成机器人消息 id，不归回原根就把追答当新需求重问）
+    fs.writeFileSync(stateFile, JSON.stringify({ version: 1, threads: {}, aliases: { om_bot_reply_1: 'om_1' } }));
+    const r = runCli(['--fixture', EVENTS_FIXTURE, '--groups', GROUPS_FIXTURE, '--state', stateFile], { FEISHU_CORE_MODULE: coreFile });
+    assert.equal(r.status, 0, r.stderr);
+
+    const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    // 事件 1（om_1）+ 事件 2（root=om_1）+ 事件 7（root=om_bot_reply_1 → 别名归 om_1）= 3
+    assert.equal(persisted.threads.om_1.seen, 3, '追答经别名归回原根，om_1 累计 3 条');
+    assert.equal(persisted.threads.om_bot_reply_1, undefined, '不产生孤儿新话题');
+    assert.equal(persisted.aliases.om_bot_reply_1, 'om_1', '别名随状态落盘');
   });
 });

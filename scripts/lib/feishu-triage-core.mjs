@@ -61,8 +61,10 @@ const MAX_DEDUP_CANDIDATES = 10;
 export async function triage(inbound, deps) {
   try {
     return await triageInner(inbound, deps);
-  } catch {
+  } catch (e) {
     // 任何失败（llm/gh 抛错、JSON 不合法）→ 不编造，回兜底话；状态不动，下条消息重试。
+    // 错误本身要留痕，不然只能猜（2026-09-03 实咬：--json 不存在、env 没带，日志都一片安静）。
+    console.log(JSON.stringify({ type: 'error', where: 'triage', rootId: inbound.rootId, message: String(e?.message || e) }));
     return {
       replies: [{ rootId: inbound.rootId, text: LLM_DOWN_REPLY }],
       actions: [],

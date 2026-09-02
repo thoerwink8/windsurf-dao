@@ -80,7 +80,9 @@ function warn(msg) {
 // 群映射表填 repo（hub 群 / 未映射群为 null）。返回 null = 本事件不处理
 // （机器人自己的消息 / 非文本 / 空文本 / 缺关键字段）。
 export function normalizeInbound(event, groups = {}) {
-  const ev = event && typeof event === 'object' ? event.event || {} : {};
+  // webhook 结构 {schema,header,event:{message,sender}}；SDK WSClient 长连接推的是扁平 {schema,event_type,message,sender}
+  // （2026-09-03 实咬：只认前者时长连接事件全被静默丢弃，日志一片安静）
+  const ev = event && typeof event === 'object' ? (event.event || (event.message ? event : {})) : {};
   const sender = ev.sender || {};
   const senderId = sender.sender_id || {};
   const msg = ev.message || {};
@@ -93,7 +95,7 @@ export function normalizeInbound(event, groups = {}) {
   if (msg.message_type !== 'text') return null;
   let text = '';
   try {
-    text = String(JSON.parse(msg.content || '{}').text || '').trim();
+    text = String(JSON.parse(msg.content || '{}').text || '').replace(/@_user_[0-9]+/g, ' ').replace(/ {2,}/g, ' ').trim();
   } catch {
     text = '';
   }
@@ -103,6 +105,7 @@ export function normalizeInbound(event, groups = {}) {
   return {
     chatId,
     rootId: msg.root_id || messageId,
+    parentId: msg.parent_id || '',
     messageId,
     senderOpenId: senderId.open_id || '',
     senderName: String(sender.sender_name || '').trim(),
@@ -166,22 +169,38 @@ export function loadCredentials(file) {
 // 块B 直接读写 map（deps.state 就是它）；本文件每次事件后落盘（tmp+rename 防半写）。
 export function createStateStore(file) {
   let map = new Map();
+  // aliases：机器人回过的每条消息 id → 原话题根 id。飞书网页端对机器人那条「回复」会另开话题
+  // （root_id 变成机器人消息），不建这张表状态机就把追答当成新需求重问（2026-09-03 实咬）。
+  let aliases = {};
   if (existsSync(file)) {
     try {
       const j = JSON.parse(readFileSync(file, 'utf8'));
       const threads = (j && typeof j === 'object' && j.threads) || {};
       for (const [k, v] of Object.entries(threads)) map.set(k, v);
+      if (j && typeof j.aliases === 'object' && j.aliases) aliases = j.aliases;
     } catch (e) {
       warn(`状态文件读不了（${file}），从空开始：${e.message}`);
     }
   }
   const store = {
     map,
+    aliases,
+    // 把消息 id 顺着别名表归到原话题根（最多走 5 跳，防环）
+    canonicalRoot(...ids) {
+      for (const id0 of ids) {
+        if (!id0) continue;
+        let id = id0;
+        for (let i = 0; i < 5 && store.aliases[id]; i++) id = store.aliases[id];
+        if (id !== id0 || store.map.has(id)) return id;
+      }
+      return ids.find(Boolean) || '';
+    },
     save() {
       const payload = {
         version: 1,
         updatedAt: new Date().toISOString(),
         threads: Object.fromEntries(store.map),
+        aliases: store.aliases,
       };
       const dir = dirname(file);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -301,14 +320,14 @@ export function makeGhDeps({ ghBin = process.env.FEISHU_GH || 'gh', run = runGh 
   async function ghCreateIssue(repo, { title, body, labels = [] } = {}) {
     const args = ['issue', 'create', '--repo', repo, '--title', String(title ?? ''), '--body', String(body ?? '')];
     for (const l of labels) args.push('--label', String(l));
-    args.push('--json', 'number,url');
+    // gh issue create 没有 --json（gh 2.99 实测 unknown flag）：stdout 最后一行是 issue URL，从里面取号
     const r = await run(ghBin, args);
     if (!r.ok) throw new Error(`gh issue create 失败：${r.reason || r.stderr || r.code}`);
-    try {
-      return JSON.parse(r.stdout);
-    } catch (e) {
-      throw new Error(`gh issue create 输出不是 JSON：${e.message}`);
-    }
+    const lines = String(r.stdout || '').trim().split(String.fromCharCode(10)).map((l) => l.trim()).filter(Boolean);
+    const url = lines.pop() || '';
+    const m = url.match(new RegExp('/issues/([0-9]+)$'));
+    if (!m) throw new Error(`gh issue create 输出里没有 issue URL：${url.slice(0, 200)}`);
+    return { number: Number(m[1]), url };
   }
 
   async function ghComment(repo, number, body) {
@@ -327,7 +346,9 @@ export function buildDeps({ creds = null, store, gateway = process.env.ANTHROPIC
   return {
     ...gh,
     now: () => new Date(),
-    state: store.map,
+    // getter 不是快照：handleEvent 会把 store.map 换成 core 返回的新 Map，快照会让下一条消息读到旧状态
+    // （2026-09-03 实咬：三问答过的又被重问）。
+    get state() { return store.map; },
     allowOpenIds: Array.isArray(creds?.allowOpenIds) ? creds.allowOpenIds : [],
     llm: makeLlm({ gateway, fetchImpl }),
   };
@@ -359,19 +380,16 @@ export function makeFeishuClient(sdk, creds) {
   });
   const nameCache = new Map();
   return {
+    // node-sdk：长连接是独立的 WSClient，事件经 EventDispatcher 注册（帅 2026-09-03 实况热修；正式修复见 PR #806 红项）
+    _handler: null,
     async start() {
-      await client.wsClient.start({
-        eventSubscription: {
-          schemaVersion: 2,
-          eventList: ['im.message.receive_v1'],
-        },
-        loggerLevel: lark.LoggerLevel.INFO,
-        autoReconnect: true,
+      const ws = new lark.WSClient({ appId, appSecret, loggerLevel: lark.LoggerLevel.info, domain: lark.Domain.Feishu });
+      const dispatcher = new lark.EventDispatcher({}).register({
+        'im.message.receive_v1': async (data) => { if (this._handler) await this._handler(data); },
       });
+      await ws.start({ eventDispatcher: dispatcher });
     },
-    onEvent(handler) {
-      client.wsClient.on('event', handler);
-    },
+    onEvent(handler) { this._handler = handler; },
     // 回同一话题：reply 到话题根消息（rootId）
     async reply(rootId, text) {
       const r = await client.im.v1.message.reply({
@@ -379,6 +397,7 @@ export function makeFeishuClient(sdk, creds) {
         data: { content: JSON.stringify({ text }), msg_type: 'text' },
       });
       if (r.code !== 0) throw new Error(`im.v1.message.reply 失败：code=${r.code} msg=${r.msg}`);
+      return r.data?.message_id || '';
     },
     // 总控群卡片（hub_card action）
     async sendCard(chatId, card) {
@@ -461,17 +480,27 @@ export async function executeAction(client, creds, action) {
 // 返回 null = 事件不处理；否则返回 { inbound, replies, actions }（fixture 计数用）。
 export async function handleEvent(event, { groups, store, deps, triage, client, creds = null }) {
   const inbound = normalizeInbound(event, groups);
-  if (!inbound) return null;
+  if (!inbound) {
+    if (client) log({ type: 'skip', reason: 'normalize-null', eventType: event?.event_type || event?.header?.event_type || '', chatId: event?.message?.chat_id || event?.event?.message?.chat_id || '' });
+    return null;
+  }
   if (client?.userName && !inbound.senderName) {
     inbound.senderName = await client.userName(inbound.senderOpenId);
+  }
+  if (store?.canonicalRoot) {
+    const canon = store.canonicalRoot(inbound.rootId, inbound.parentId);
+    if (canon && canon !== inbound.rootId) { inbound.aliasedFrom = inbound.rootId; inbound.rootId = canon; }
   }
   log({ type: 'inbound', inbound });
   const out = await triage(inbound, deps);
   const replies = out.replies || [];
   const actions = out.actions || [];
   for (const r of replies) {
-    if (client) await client.reply(r.rootId || inbound.rootId, r.text);
-    else log({ type: 'reply', rootId: r.rootId || inbound.rootId, text: r.text });
+    const root = r.rootId || inbound.rootId;
+    if (client) {
+      const botMsgId = await client.reply(root, r.text);
+      if (botMsgId && store?.aliases) store.aliases[botMsgId] = root;
+    } else log({ type: 'reply', rootId: root, text: r.text });
   }
   for (const a of actions) {
     if (client) await executeAction(client, creds, a);
