@@ -54,6 +54,8 @@ const MAX_RELATED_LISTED = 3;
 const MAX_RELATED_ON_MISS = 2;
 const MAX_QUERY_LEN = 300;
 const MAX_SUMMARY_LEN = 60;
+/** 消歧记录：判重候选 = gh search 返回的「前 10 条」。块 B 自己再截一道，A 多返回也不越界。 */
+const MAX_DEDUP_CANDIDATES = 10;
 
 /** 块 A 入口：一次入站消息 → 回复 + 动作 + 新状态。 */
 export async function triage(inbound, deps) {
@@ -162,7 +164,8 @@ async function triageInner(inbound, deps) {
 // ── 判重 ──────────────────────────────────────────────────────────────
 
 async function runDedup(inbound, deps) {
-  const candidates = await deps.ghSearch(inbound.repo, searchQuery(inbound.text));
+  const candidates = (await deps.ghSearch(inbound.repo, searchQuery(inbound.text)))
+    .slice(0, MAX_DEDUP_CANDIDATES);
   const data = await llmJson(() => deps.llm({
     system: PERSONA,
     user: dedupPrompt(inbound, candidates),

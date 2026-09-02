@@ -52,10 +52,12 @@ const FULL_ANSWERS = {
 
 function makeDeps(over = {}) {
   const calls = { search: [], create: [], comment: [], llm: [] };
+  const { llm: llmOverride, llmResult, ...rest } = over;
+  const llmImpl = llmOverride || (async () => llmResult);
   const deps = {
     ghSearch: async (repo, query) => {
       calls.search.push({ repo, query });
-      return over.searchResult ?? [];
+      return rest.searchResult ?? [];
     },
     ghCreateIssue: async (repo, arg) => {
       calls.create.push({ repo, arg });
@@ -66,12 +68,12 @@ function makeDeps(over = {}) {
     },
     llm: async (arg) => {
       calls.llm.push(arg);
-      return over.llmResult;
+      return llmImpl(arg);
     },
     now: () => 1700000100,
     state: new Map(),
     allowOpenIds: [USER_OPEN_ID],
-    ...over,
+    ...rest,
   };
   return { deps, calls };
 }
@@ -366,6 +368,29 @@ describe('feishu-triage-core（#801 块 B）', () => {
       assert.strictEqual(out2.replies[0].text, '机器人暂时没法判断，稍后重试。');
       assert.strictEqual(calls.create.length, 0);
       assert.strictEqual(JSON.stringify([...out2.state.entries()]), snapshot, '失败后 state 必须与失败前逐字节一致（消息没追加、时间戳没动）');
+    });
+  });
+
+  it('判重候选只取前 10 条（消歧记录「前 10 条」）', async (t) => {
+    const S = await LIB_LOAD;
+    const many = Array.from({ length: 13 }, (_, i) => ({
+      number: 100 + i, title: `候选 ${i}`, url: `u${i}`,
+    }));
+    const { deps, calls } = makeDeps({
+      searchResult: many,
+      llm: scriptedLlm([{
+        verdicts: many.slice(0, 10).map(c => ({ number: c.number, verdict: '无关' })),
+        summary: '新需求',
+      }]),
+    });
+    await S.triage(inbound(), deps);
+    await t.test('llm 只看到前 10 条（prompt 不含第 11+ 条）', () => {
+      assert.ok(calls.llm.length >= 1, 'llm 至少被调一次');
+      const user = calls.llm[0].user;
+      assert.ok(user.includes('#100 候选 0'), '第 1 条要在 → ' + user.slice(0, 200));
+      assert.ok(user.includes('#109 候选 9'), '第 10 条要在 → ' + user.slice(0, 300));
+      assert.ok(!user.includes('#110'), '第 11 条不许进 prompt → ' + user.slice(0, 400));
+      assert.ok(!user.includes('候选 12'), '第 13 条不许进 prompt');
     });
   });
 
