@@ -54,3 +54,9 @@ export function decideWorktreeRemove({ branch, merged, dirty, isMain, isCurrent,
   if (!merged) return { remove: false, reason: `分支 ${branch} 未合并` };
   return { remove: true, reason: `分支 ${branch} 已合并且树干净` };
 }
+
+/** precheck「有没有活」（#829）：有可运/可清 → true。判断只认上面三个 decide* 的结论，不另写闸。 */
+export function hasLandWork({ shipAction, removeCount, deleteCount }) {
+  if (shipAction === 'push' || shipAction === 'ff') return true;
+  return (Number(removeCount) > 0) || (Number(deleteCount) > 0);
+}

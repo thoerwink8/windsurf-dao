@@ -18,6 +18,7 @@ import {
   parseTuiAgentDisplayNames,
   classifyRequiredAgents,
   providerToAgentId,
+  classifyLandAutomation,
 } from '../scripts/server-check.mjs';
 
 test('server-check 判别力', async (t) => {
@@ -224,6 +225,39 @@ test('server-check 判别力', async (t) => {
     await t.test('输出不认识（契约变了）→ unknown', () => {
       const r = classifyFeishuTriage({ probed: true, code: 0, stdout: 'weird-state' });
       assert.equal(r.state, 'unknown');
+    });
+  });
+
+  await t.test('#829 land automation 在册且启用', async (t) => {
+    await t.test('没有这条 → red，带安装命令', () => {
+      const r = classifyLandAutomation([]);
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /install-land-automation/);
+    });
+    await t.test('在册但 enabled=false → red（判别性：disable 必须变红）', () => {
+      const r = classifyLandAutomation([{ name: 'land', enabled: false, id: 'x' }]);
+      assert.equal(r.state, 'red');
+      assert.match(r.detail, /enabled/);
+    });
+    await t.test('在册且 enabled=true → ok', () => {
+      const r = classifyLandAutomation([{ name: 'land', enabled: true, id: 'abc' }]);
+      assert.equal(r.state, 'ok');
+      assert.match(r.detail, /abc/);
+    });
+    await t.test('同名两条 → red（幂等坏了）', () => {
+      const r = classifyLandAutomation([
+        { name: 'land', enabled: true, id: 'a' },
+        { name: 'land', enabled: true, id: 'b' },
+      ]);
+      assert.equal(r.state, 'red');
+    });
+    await t.test('不是数组 → unknown，不许当绿', () => {
+      assert.equal(classifyLandAutomation(null).state, 'unknown');
+      assert.equal(classifyLandAutomation(undefined).state, 'unknown');
+    });
+    await t.test('别的名字在册不算这条', () => {
+      const r = classifyLandAutomation([{ name: 'other', enabled: true, id: 'z' }]);
+      assert.equal(r.state, 'red');
     });
   });
 });
