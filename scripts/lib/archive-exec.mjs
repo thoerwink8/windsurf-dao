@@ -5,6 +5,7 @@
 //   3. 「可归档」只加速，不是门。扫描器每轮按 GitHub MERGED 收树。
 //   4. 树认路径 / 卡名 PR-#N / issue 号 / linkedPR 任一，不只认 linkedPR。
 //   5. idle / done 不算占用；只有 working / waiting 才拒删。
+//      #826：PR 已合并且审官已 approve 时，working/waiting 也不挡（审官 d= 空无法结算的兜底）。
 //   6. 失败必须写 GitHub 评论（marshal）。orchestration escalation 会被信箱台自己 ack。
 //   7. escalation subject 不得再以「可归档」开头，否则 relay 会回环。
 //   8. 2026-08-23（PR #758 教训）：错误文本一律过 errText——Error/结构化对象直接拼
@@ -80,6 +81,34 @@ export function parsePrStateOutput({ status, stdout, stderr, error } = {}, pr) {
     return { ok: false, unscanned: true, error: `gh 读 PR #${n} 没给 state` };
   }
   return { ok: true, state: String(state).trim() };
+}
+
+/** #826：gh pr view --json reviews 的解析。没查成 / 缺数组 / 扫完 0 条必须分开。 */
+export function parsePrReviewsOutput({ status, stdout, stderr, error } = {}, pr) {
+  const n = pr == null ? '?' : pr;
+  if (error || (status !== 0 && status != null)) {
+    const detail = String(error?.message || stderr || stdout || `exit ${status}`).trim().slice(0, 160);
+    return {
+      ok: false,
+      unscanned: true,
+      reviews: [],
+      error: `gh 读 PR #${n} reviews 失败（${status ?? 'error'}）——不是查过没事：${detail}`,
+    };
+  }
+  const text = String(stdout || '').trim();
+  if (!text) {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} reviews 空输出——不是查过没事` };
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} reviews 返回非 JSON` };
+  }
+  if (!Array.isArray(json?.reviews)) {
+    return { ok: false, unscanned: true, reviews: [], error: `gh 读 PR #${n} 缺 reviews 数组（没查成，不许当已 approve）` };
+  }
+  return { ok: true, unscanned: false, reviews: json.reviews, count: json.reviews.length };
 }
 
 export function planArchiveNotice({
@@ -384,7 +413,7 @@ export function subtreeOccupying(w, worktrees) {
   return out;
 }
 
-export function planMergedScan({ worktrees, queryPrState } = {}) {
+export function planMergedScan({ worktrees, queryPrState, queryPrReviews } = {}) {
   if (!Array.isArray(worktrees)) {
     return {
       ok: false,
@@ -448,6 +477,38 @@ export function planMergedScan({ worktrees, queryPrState } = {}) {
     }
     const occ = subtreeOccupying(unit, worktrees);
     if (occ.length) {
+      let approved = false;
+      if (typeof queryPrReviews === 'function') {
+        let reviews;
+        try { reviews = queryPrReviews(pr); }
+        catch (e) {
+          reviews = { ok: false, unscanned: true, error: `gh 读 PR #${pr} reviews 抛错：${e?.message || e}` };
+        }
+        if (!reviews || reviews.ok !== true) {
+          plans.push({
+            action: 'unscanned',
+            pr,
+            worktree: uid,
+            reason: reviews?.error || `占用中且 PR #${pr} reviews 没查成，不许当已 approve`,
+          });
+          continue;
+        }
+        const list = Array.isArray(reviews.reviews) ? reviews.reviews : [];
+        approved = list.some((r) => {
+          const s = String(r?.state || r?.verdict || '').toUpperCase();
+          return s === 'APPROVED' || s === 'APPROVE';
+        });
+      }
+      if (approved) {
+        plans.push({
+          action: 'rm',
+          pr,
+          worktree: uid,
+          waivedOccupancy: true,
+          reason: 'PR MERGED 且审官已 approve，working/waiting 不挡归档（#826）',
+        });
+        continue;
+      }
       plans.push({
         action: 'refuse',
         pr,
@@ -475,6 +536,7 @@ export function planMergedScan({ worktrees, queryPrState } = {}) {
 export function processMergedScan({
   worktrees,
   queryPrState,
+  queryPrReviews,
   removeWorktree,
   escalate,
   commentGithub,
@@ -482,7 +544,7 @@ export function processMergedScan({
   rmAttemptStore,
   now = new Date(),
 } = {}) {
-  const planned = planMergedScan({ worktrees, queryPrState });
+  const planned = planMergedScan({ worktrees, queryPrState, queryPrReviews });
   if (!planned.ok) return { ...planned, results: [] };
   const results = planned.plans.map((plan) => applyArchivePlan(plan, {
     removeWorktree, escalate, commentGithub, commentStore, rmAttemptStore, now,

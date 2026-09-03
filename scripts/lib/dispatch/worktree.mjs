@@ -121,8 +121,10 @@ function childrenOf(w, byId, all) {
 /**
  * 整树后序删除计划：先查占用，再给出叶子→根的顺序。
  * 占用中 / 子卡失踪 / 主树 → ok:false，调用方不得开删。
+ * #826：PR 已 MERGED 且审官已 APPROVED 时，working/waiting 不再挡删（审官 d= 空无法结算，树永远 working）。
+ * archive 没查成 ≠ 可归档：unscanned 仍拦占用。
  */
-export function planWorktreeRm(worktrees, selector) {
+export function planWorktreeRm(worktrees, selector, { archive } = {}) {
   if (!Array.isArray(worktrees)) {
     return { ok: false, error: '盘面没查成（不是数组），未删任何树', order: [], occupied: [] };
   }
@@ -181,6 +183,26 @@ export function planWorktreeRm(worktrees, selector) {
     };
   }
   if (occupied.length) {
+    if (archive && archive.unscanned) {
+      return {
+        ok: false,
+        error: `占用中且归档状态没查成，未删任何树：${archive.error || '没查成'}`,
+        order: [],
+        occupied,
+        archive,
+      };
+    }
+    if (archive && archive.ok && archive.merged && archive.approved) {
+      return {
+        ok: true,
+        order,
+        occupied,
+        waivedOccupancy: true,
+        archive,
+        root: { id: worktreeKey(root), name: root.displayName || worktreeKey(root) },
+        reason: 'PR 已合并且审官已 approve，working/waiting 不挡归档（#826）',
+      };
+    }
     const detail = occupied.map(o => `${o.name}（agent=${o.states.join(',')}）`).join('；');
     return {
       ok: false,
@@ -258,8 +280,8 @@ export function listStrayLedgerEvents({ treePaths, mainEventsDir, readdir = read
 }
 
 /** 计划 + 账本孤本闸。占用/缺 path/落点没查成/有孤本 → 整树不删。 */
-export function prepareWorktreeRm(worktrees, selector, { mainEventsDir, readdir, exists } = {}) {
-  const plan = planWorktreeRm(worktrees, selector);
+export function prepareWorktreeRm(worktrees, selector, { mainEventsDir, readdir, exists, archive } = {}) {
+  const plan = planWorktreeRm(worktrees, selector, { archive });
   if (!plan.ok) return plan;
   const paths = [];
   for (const node of plan.order) {

@@ -60,6 +60,7 @@ import {
   resolveRepoSelector,
   applyWorktreeRmPlan,
   prepareWorktreeRm,
+  resolveWorktreeSelector,
   assembleCardName,
   argsWorkerStart,
   argsWorkerRelease,
@@ -128,6 +129,8 @@ import {
   checkoutOriginRef,
   pickDispatchAgentTerminal,
   resolveSendTarget,
+  resolveIdentitySender,
+  planIdentityKeep,
   reviewPendingDir,
   buildReviewPendingTicket,
   writeReviewPending,
@@ -173,6 +176,7 @@ import {
   planWorkerDone,
   completeWorkerDoneNotify,
   pickWorkerDoneDispatchId,
+  planReviewerDone,
   resolveReviewerReuse,
   gateReviewerCreate,
   assertReviewerSeat,
@@ -190,6 +194,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
+import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
 import { runOrca as sharedRunOrca } from './lib/orca-run.mjs';
@@ -2082,13 +2087,14 @@ function invokeReviewerCreateHealed(opts) {
   return healReviewerCreateAfterFence(invokeReviewerCreate(opts), opts);
 }
 
-function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer } = {}) {
+function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue, dryRun, reviewer, from } = {}) {
   const argv = [process.argv[1], 'reviewer-create', '--pr', String(pr)];
   if (name) argv.push('--name', String(name));
   if (parentWorktree) argv.push('--parent-worktree', String(parentWorktree));
   if (soldierDispatch) argv.push('--soldier-dispatch', String(soldierDispatch));
   if (issue) argv.push('--issue', String(issue));
   if (reviewer) argv.push('--reviewer', String(reviewer));
+  if (from) argv.push('--from', String(from));
   if (dryRun) argv.push('--dry-run');
   const r = spawnSync(process.execPath, argv, {
     encoding: 'utf8',
@@ -2191,6 +2197,47 @@ function reviewerFetchCwd({ parentSel, worktrees } = {}) {
   return ROOT;
 }
 
+/** #826：身份消息带 --from；失败不回滚，只记红项。 */
+function deliverReviewerIdentity({ soldierDispatchId, reviewerDispatchId, hop, body, from, fallbackHandle, worktreeId } = {}) {
+  if (!soldierDispatchId) {
+    return { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
+  }
+  let terminals = null;
+  let listedOk = true;
+  let listedError = null;
+  if (!String(from || '').trim() && !String(fallbackHandle || '').trim()) {
+    const listed = orca(argsTerminalList({ worktree: worktreeId }));
+    listedOk = listed.ok;
+    listedError = listed.ok ? null : errText(listed.error);
+    terminals = listed.ok ? (listed.json?.result?.terminals || listed.json?.terminals) : null;
+  }
+  const sender = listedOk
+    ? resolveIdentitySender({ explicitFrom: from, fallbackHandle, terminals, worktreeId })
+    : { ok: false, unscanned: true, error: `terminal list 没查成：${listedError}` };
+  const identity = deliverMessage({
+    to: `dispatch:${soldierDispatchId}`,
+    subject: `审官身份：${reviewerDispatchId}`,
+    body: body || `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
+先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
+    hop,
+    from: sender.ok ? sender.from : undefined,
+    orca: (a) => orca(a),
+  });
+  if (identity.ok) return { ...identity, sender };
+  const keep = planIdentityKeep({ identityOk: false, identityError: identity.error });
+  console.error(`[dao] ${keep.warning}`);
+  return {
+    ok: false,
+    identityFailed: true,
+    keep: true,
+    rollback: false,
+    warning: keep.warning,
+    error: identity.error,
+    sender,
+    hop,
+  };
+}
+
 function loadReviewerReuseInputs() {
   const listed = orca(['worktree', 'list', '--json']);
   if (!listed.ok) return { ok: false, error: `worktree list 没查成：${errText(listed.error)}` };
@@ -2211,7 +2258,7 @@ function loadReviewerReuseInputs() {
 }
 
 function reuseReviewerOnTerminal({
-  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue,
+  pr, reviewerWorktreeId, handle, parentWorktree, soldierDispatch, reviewer, dryRun, issue, from,
 } = {}) {
   if (dryRun) {
     return {
@@ -2352,19 +2399,14 @@ function reuseReviewerOnTerminal({
     return { ok: false, reused: true, error: `复用审官注入后开工验证失败: ${reviewerInject.reason}`, reviewerInject };
   }
 
-  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
-  if (soldierDispatchId) {
-    identity = deliverMessage({
-      to: `dispatch:${soldierDispatchId}`,
-      subject: `审官身份：${reviewerDispatchId}`,
-      body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
-      hop: 'worker-done→士兵（复用审官身份）',
-      orca: (a) => orca(a),
-    });
-    if (!identity.ok) {
-      return { ok: false, reused: true, error: `复用审官身份消息没送到士兵: ${identity.error}`, identity };
-    }
-  }
+  const identity = deliverReviewerIdentity({
+    soldierDispatchId,
+    reviewerDispatchId,
+    hop: 'worker-done→士兵（复用审官身份）',
+    body: `复用原审官终端。新 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。`,
+    from,
+    worktreeId: reviewerWorktreeId,
+  });
 
   let ledger = null;
   try {
@@ -2504,6 +2546,7 @@ function cmdWorkerDone(args) {
         soldierDispatch: args.soldierDispatch,
         issue: plan.issue,
         reviewer: plan.reviewer,
+        from: args.from,
         dryRun: true,
       });
       if (!create.ok) fail(create.error, { ...plan, reviewerCreate: create, reuse });
@@ -2516,6 +2559,7 @@ function cmdWorkerDone(args) {
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
         issue: plan.issue,
+        from: args.from,
         dryRun: true,
       });
     }
@@ -2550,6 +2594,7 @@ function cmdWorkerDone(args) {
       soldierDispatch: args.soldierDispatch,
       issue: plan.issue,
       reviewer: plan.reviewer,
+      from: args.from,
       dryRun: false,
     };
     create = invokeReviewerCreate(createOpts);
@@ -2585,6 +2630,7 @@ function cmdWorkerDone(args) {
       soldierDispatch: args.soldierDispatch,
       reviewer: plan.reviewer,
       issue: plan.issue,
+      from: args.from,
       dryRun: false,
     });
     const reuseFence = inspectConsumerFence(reused.ok ? '' : reused.error);
@@ -2599,6 +2645,7 @@ function cmdWorkerDone(args) {
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
         issue: plan.issue,
+        from: args.from,
         dryRun: false,
       });
       // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路——保活归 guard-keepalive。
@@ -2625,6 +2672,7 @@ function cmdWorkerDone(args) {
         soldierDispatch: args.soldierDispatch,
         reviewer: plan.reviewer,
         issue: plan.issue,
+        from: args.from,
         dryRun: false,
       });
       if (retriedReuse.ok) {
@@ -2910,17 +2958,47 @@ function cmdAmend(args) {
   });
 }
 
+/** #826：PR 已合 + 审官已 approve → worktree-rm 豁免 working 占用。没查成 ≠ 可归档。 */
+function lookupArchiveWaiver(worktrees, selector) {
+  const found = resolveWorktreeSelector(worktrees, selector);
+  if (!found.ok) return { ok: false, unscanned: false, merged: false, approved: false, error: found.error };
+  const pr = prNumberFromWorktree(found.worktree);
+  if (!pr) return { ok: false, unscanned: false, merged: false, approved: false, error: '卡上读不到 PR 号，占用豁免不做' };
+  const gh = ghRunner();
+  const view = gh(['pr', 'view', String(pr), '--json', 'state,reviews']);
+  if (!view.ok) {
+    return { ok: false, unscanned: true, merged: false, approved: false, error: `gh 读 PR #${pr} 失败：${view.error}` };
+  }
+  let json;
+  try { json = JSON.parse(view.out); }
+  catch {
+    return { ok: false, unscanned: true, merged: false, approved: false, error: `gh 读 PR #${pr} 不是 JSON` };
+  }
+  const merged = String(json?.state || '').toUpperCase() === 'MERGED';
+  const reviews = Array.isArray(json?.reviews) ? json.reviews : null;
+  if (!Array.isArray(json?.reviews)) {
+    return { ok: false, unscanned: true, merged, approved: false, error: `gh 读 PR #${pr} 缺 reviews 数组` };
+  }
+  const approved = reviews.some((r) => {
+    const s = String(r?.state || r?.verdict || '').toUpperCase();
+    return s === 'APPROVED' || s === 'APPROVE';
+  });
+  return { ok: true, unscanned: false, pr, merged, approved };
+}
+
 function cmdWorktreeRm(args) {
   if (!args.worktree) fail('worktree-rm 要 --worktree');
   const listed = orca(argsWorktreePs());
   if (!listed.ok) fail(`盘面没查成，未删任何树: ${errText(listed.error)}`);
   const wts = listed.json?.result?.worktrees;
   if (!Array.isArray(wts)) fail('worktree ps 没有 result.worktrees，未删任何树');
+  const archive = lookupArchiveWaiver(wts, args.worktree);
   // 账本孤本闸的对照集合 = 本机账本（~/.dao/ledger/events，ledger 本机化后事件不进任何 git 树）
   const plan = prepareWorktreeRm(wts, args.worktree, {
     mainEventsDir: ensureLocalLedger({ root: ROOT }).dir,
+    archive,
   });
-  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [] });
+  if (!plan.ok) fail(plan.error, { occupied: plan.occupied || [], stray: plan.stray || [], archive });
   const wl = orca(argsWorkerList());
   if (!wl.ok) fail(`worker-list 没查成，未删任何树: ${errText(wl.error)}`);
   const workers = unwrapWorkers(wl.json);
@@ -3377,22 +3455,14 @@ function cmdReviewerCreate(args) {
   }
   const reviewerProof = workerStartProof(reviewerDispatchId);
 
-  let identity = { ok: true, skipped: true, reason: '士兵 dispatch 已结算或不在，跳过身份投递（#799）' };
-  if (soldierDispatchId) {
-    identity = deliverMessage({
-      to: `dispatch:${soldierDispatchId}`,
-      subject: `审官身份：${reviewerDispatchId}`,
-      body: `你的审官 dispatch id = ${reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
-先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
-      hop: 'reviewer-create→士兵（审官身份）',
-      orca: (a) => orca(a),
-    });
-    if (!identity.ok) {
-      failCreated(launched, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
-        ...plan, reviewerTaskId, identity,
-      });
-    }
-  }
+  const identity = deliverReviewerIdentity({
+    soldierDispatchId,
+    reviewerDispatchId,
+    hop: 'reviewer-create→士兵（审官身份）',
+    from: args.from,
+    fallbackHandle: launched.reviewerCoordHandle || revCoordHandle,
+    worktreeId: reviewerId,
+  });
 
   let ledger = null;
   try {
@@ -3438,6 +3508,7 @@ function cmdReviewerCreate(args) {
     inject: reviewerInject,
     startProof: reviewerProof,
     identity,
+    identityFailed: !!identity.identityFailed,
     ledger,
     oneReviewerGate,
   });
@@ -3584,6 +3655,7 @@ function cmdReviewerAttach(args) {
       soldierDispatch: args.soldierDispatch,
       reviewer: args.reviewer,
       issue: args.issue || (Array.isArray(worker.refs) ? worker.refs[0] : null),
+      from: args.from,
       dryRun: false,
     });
     if (!reused.ok) fail(reused.error, { reused, reusePlan, ...plan });
@@ -3786,22 +3858,14 @@ function cmdReviewerAttach(args) {
   }
   const reviewerProof = workerStartProof(created.reviewerDispatchId);
 
-  let identity = null;
-  if (soldierDispatchId && created.reviewerDispatchId) {
-    identity = deliverMessage({
-      to: `dispatch:${soldierDispatchId}`,
-      subject: `审官身份：${created.reviewerDispatchId}`,
-      body: `你的审官 dispatch id = ${created.reviewerDispatchId}（士兵→审官 完工通知 --to dispatch:<这个 id>）。
-先收这封信记下它，再发完工通知；收不到就 escalation，不许手抄/猜。`,
-      hop: '补派审官→士兵（审官身份）',
-      orca: (a) => orca(a),
-    });
-    if (!identity.ok) {
-      failCreated(created, `审官身份消息没送到士兵收件箱: ${identity.error}`, {
-        ...plan, reviewerTaskId, identity,
-      });
-    }
-  }
+  const identity = deliverReviewerIdentity({
+    soldierDispatchId,
+    reviewerDispatchId: created.reviewerDispatchId,
+    hop: '补派审官→士兵（审官身份）',
+    from: args.from,
+    fallbackHandle: created.reviewerCoordHandle || reviewerFrom,
+    worktreeId: created.reviewerId,
+  });
 
   emit({
     ok: true,
@@ -3816,7 +3880,34 @@ function cmdReviewerAttach(args) {
     inject: reviewerInject,
     startProof: reviewerProof,
     identity,
+    identityFailed: !!(identity && identity.identityFailed),
     align,
+  });
+}
+
+function cmdReviewerDone(args) {
+  if (!args.pr) fail('reviewer-done 要 --pr');
+  const gh = ghRunner({ role: 'reviewer' });
+  const view = gh(['pr', 'view', String(args.pr), '--json', 'state,reviews']);
+  if (!view.ok) fail(`gh 读 PR #${args.pr} 失败：${view.error}`);
+  let json;
+  try { json = JSON.parse(view.out); }
+  catch { fail(`gh 读 PR #${args.pr} 不是 JSON`); }
+  const prState = json?.state == null
+    ? { ok: false, unscanned: true, error: `PR #${args.pr} 没给 state` }
+    : { ok: true, state: json.state };
+  const reviews = Array.isArray(json?.reviews)
+    ? { ok: true, reviews: json.reviews, count: json.reviews.length }
+    : { ok: false, unscanned: true, error: `PR #${args.pr} 缺 reviews 数组` };
+  const plan = planReviewerDone({ pr: args.pr, prState, reviews });
+  if (!plan.ok) fail(plan.error, plan);
+  if (args.dryRun) emit({ ok: true, dryRun: true, ...plan });
+  emit({
+    ok: true,
+    ...plan,
+    settled: true,
+    needsRunId: false,
+    reason: plan.reason,
   });
 }
 
@@ -4317,6 +4408,7 @@ function main() {
     case 'reviewer-create': return cmdReviewerCreate(args);
     case 'worker-done': return cmdWorkerDone(args);
     case 'reviewer-attach': return cmdReviewerAttach(args);
+    case 'reviewer-done': return cmdReviewerDone(args);
     case 'review-pending-drain': return cmdReviewPendingDrain(args);
     case 'send': return cmdSend(args);
     case 'notify': return cmdNotify(args);

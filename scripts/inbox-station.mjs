@@ -60,6 +60,7 @@ import {
   formatArchiveExecLog,
   formatMergedScanLog,
   parsePrStateOutput,
+  parsePrReviewsOutput,
 } from './lib/archive-exec.mjs';
 import { recordStartupRevision, checkGuardRevision, haltIfStale } from './lib/guard-revision.mjs';
 import { bootGuardOrHalt } from './lib/guard-mirror.mjs';
@@ -952,6 +953,21 @@ function queryPrStateLive(pr) {
   }, pr);
 }
 
+/** #826：生产归档轮询读 reviews。失败 unscanned，不许当已 approve。 */
+export function queryPrReviewsLive(pr) {
+  const r = spawnSync('gh', ['pr', 'view', String(pr), '--json', 'reviews'], {
+    encoding: 'utf8',
+    timeout: 20000,
+    windowsHide: true,
+  });
+  return parsePrReviewsOutput({
+    status: r.status,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    error: r.error,
+  }, pr);
+}
+
 function removeWorktreeLive(selector) {
   const r = spawnSync(process.execPath, [
     join(ROOT, 'scripts', 'dao.mjs'),
@@ -1020,6 +1036,39 @@ function runArchiveReady(messages, logPath) {
   }
 }
 
+/** #826：生产归档扫描。queryPrReviews 必传——缺了 working/waiting 永远验不到 APPROVED。 */
+export function runMergedScanWith({
+  worktrees,
+  queryPrState,
+  queryPrReviews,
+  removeWorktree,
+  escalate,
+  commentGithub,
+  commentStore,
+  rmAttemptStore,
+  now = new Date(),
+} = {}) {
+  if (typeof queryPrReviews !== 'function') {
+    return {
+      ok: false,
+      unscanned: true,
+      error: 'runMergedScan 没给 queryPrReviews（没查成，不许当已 approve）',
+      results: [],
+    };
+  }
+  return processMergedScan({
+    worktrees,
+    queryPrState,
+    queryPrReviews,
+    removeWorktree,
+    escalate,
+    commentGithub,
+    commentStore,
+    rmAttemptStore,
+    now,
+  });
+}
+
 function runMergedScan(logPath) {
   const listed = listWorktrees();
   if (!listed.ok || !Array.isArray(listed.worktrees)) {
@@ -1031,9 +1080,10 @@ function runMergedScan(logPath) {
     return { ok: false, unscanned: true, error: err, results: [] };
   }
   try {
-    const scan = processMergedScan({
+    const scan = runMergedScanWith({
       worktrees: listed.worktrees,
       queryPrState: queryPrStateLive,
+      queryPrReviews: queryPrReviewsLive,
       removeWorktree: removeWorktreeLive,
       escalate: escalateArchiveLive,
       commentGithub: commentGithubLive,

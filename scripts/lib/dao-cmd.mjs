@@ -834,6 +834,7 @@ import {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  planReviewerDone,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
@@ -841,6 +842,7 @@ export {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
+  planReviewerDone,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
@@ -883,6 +885,8 @@ import {
   extractDispatchWorktreeId, isSoldierReworkHop, isCompletedDispatchProbe,
   isLiveDispatchRecipient, probeRecipient, extractSentMessage, findInboxMessage,
   deliverMessage, settleDispatch, pickDispatchAgentTerminal, resolveSendTarget,
+  COORDINATOR_TITLE, isCoordinatorTerminal, pickCoordinatorHandle, resolveIdentitySender,
+  planIdentityKeep,
 } from './dispatch/deliver.mjs';
 export {
   planWorkerDoneSend, readDispatchSettlement, isWrongPaneWorkerDoneError, planCallerRun,
@@ -890,6 +894,8 @@ export {
   extractDispatchWorktreeId, isSoldierReworkHop, isCompletedDispatchProbe,
   isLiveDispatchRecipient, probeRecipient, extractSentMessage, findInboxMessage,
   deliverMessage, settleDispatch, pickDispatchAgentTerminal, resolveSendTarget,
+  COORDINATOR_TITLE, isCoordinatorTerminal, pickCoordinatorHandle, resolveIdentitySender,
+  planIdentityKeep,
 } from './dispatch/deliver.mjs';
 
 export {
@@ -913,7 +919,7 @@ export function recordEscape({ argv, ts = new Date().toISOString(), cwd = proces
 export const VERBS = [
   'dispatch', 'dispatch-exec', 'start', 'worktree-create', 'worktree-rm', 'task-create',
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
-  'review-pending-drain', 'send', 'notify', 'reply',
+  'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
   'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
 ];
@@ -941,16 +947,18 @@ export const FLAGS_BY_VERB = {
   'worker-release': new Set(['--dispatch', '--retry-request', '--json', '--help', '-h']),
   'worker-read': new Set(['--dispatch', '--source', '--cursor', '--limit', '--json', '--help', '-h']),
   'worker-done': new Set([
-    '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--dry-run', '--json', '--help', '-h',
+    '--pr', '--body', '--body-file', '--parent-worktree', '--soldier-dispatch', '--from',
+    '--dry-run', '--json', '--help', '-h',
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
-    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--dry-run', '--json', '--help', '-h',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--json', '--help', '-h',
   ]),
+  'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--model', '--dry-run', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--from', '--dry-run', '--json', '--help', '-h',
   ]),
   'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--json', '--help', '-h']),
@@ -1039,16 +1047,22 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #633：空壳先关；认识的 agent 走 worker-start --agent；reclaude 走 --command；禁止 send 进 pwsh
 编排:
   worktree-create --name <动宾短语> [--issue <issue号>] [--no-parent] [--setup skip] [--parent-worktree <sel>] [--base-branch <ref>] [--comment <文>]
-  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--dry-run]
+  reviewer-create --pr <N> [--name <名>] [--reviewer <模型id>] [--parent-worktree <sel>] [--comment <文>] [--issue <号>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
                   # 不传 --reviewer 时自读署名 issue 的 reviewer/*（#586）；工人路径不传模型
                   # 建树后空壳先关再 create --command（#633）；--dry-run 只打印选型不建树
                   # #575 ⑦：mergeable!=MERGEABLE 拒建树；建树后试合 master 再 abort，HEAD 仍停在 PR head
                   # #679：工人审官同厂当场拒；工人模型没查成 / 扫完没有 model/* 都拒绝起审官
                   # 一 PR 一审官：已有审官树/卡则复用或拒绝新建，不许再 create（防 Orca -2/-3）；失败停手报，不许换厂
                   # #799：士兵 dispatch 已结算 → d= 留空仍起审官（红项上帅），整跳不败；merge-policy 继承派工记账，读不到才回退 auto 并 fb= 写原因
-  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--dry-run]
+                  # #826：身份消息失败不整树回滚（树与终端保留，只记红项并提示 notify --from 补发）
+                  # #826：--from 显式发信人；读不到时自动取该树「派工协调（勿关）」终端。--skip-wait 是 reviewer-attach 的旗标，本动词没有
+  worker-done --pr <N> [--body <文> | --body-file <文件>] [--parent-worktree <工人卡>] [--soldier-dispatch <id>] [--from <handle>] [--dry-run]
                   # 交卷：发完工/返工 comment；无审官卡才 reviewer-create；已有则复用；终端已关也不许再建；失败停手不许换厂；两条路径都 notify 审官（投失败即停）
                   # #677：成功路径不结算士兵 Dispatch。判定绿才允许 notify --type worker_done。失败不得假装已下班。
+                  # #826：身份消息失败不整树回滚；--from 与 reviewer-create 同口径
+  reviewer-done --pr <N> [--dry-run]
+                  # #826：审官合法收口，不需要 Run id / task-id / dispatch-id。PR 已合 + 审官已 approve 即过
+                  # 给帅手起的审官、或士兵已结算（d= 空）一条不伪造身份的下班路径
   reviewer-attach --pr <N> --worktree <工人卡> --reviewer <模型id> [--name <名>] [--soldier-dispatch <id>] [--spec <文>] [--skip-wait] [--model <工人模型>]
                   # 给已有工人卡补派审官（#575）：建树+空壳先关再 create --command（#633）+验开工，一条命令，不碰 raw
                   # #679：与工人同厂当场拒（#678 实咬的口），不许 attach 成工人那一厂
@@ -1065,6 +1079,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   pr-sync-labels --pr <N>   # 合并前把署名 issue 的 model/* type/* reviewer/* label 同步到 PR（#564 + #586）
   worktree-rm --worktree <sel> [--force]
                   # 一条命令整树后序删（子卡先于父卡）。任一棵有 working/waiting agent 则整树不删，报清是哪棵
+                  # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）
                   # 树内 ledger/events 有未进本机账本（~/.dao/ledger/events）的事件文件 → 整树不删，报清是哪几条
                   # #593：同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）
   inbox-collect [--peek]

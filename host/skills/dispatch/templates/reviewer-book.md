@@ -105,7 +105,15 @@ node scripts/dao.mjs notify --hop "审官→帅" --to run:<本单 Run id> \
 
 Run id 从 `orca orchestration worker-show --dispatch <注入参数里的对方 dispatch> --json` 的 `result.dispatch.run_id` 取，**不要用 `run-current`**——审官终端上它经常是 null。
 
-**② 结算自己这一跳**（#551）：省略 `--to`，身份从开工 preamble 抄。`notify` 会核 worker-show，Dispatch 没变成 completed 就报「未结算」，不许当发成功。
+**`d=` 为空、preamble 没有 task/dispatch、或 worker-show 拿不到 Run id**（#826：帅手起的审官、或士兵已结算）→ **不要伪造身份**。走合法收口：
+
+```bash
+node scripts/dao.mjs reviewer-done --pr <PR号>
+```
+
+这条不需要 Run id。前提是 PR 已合并且本单有 APPROVED review。归档仍由帅 `worktree-rm`；`worktree-rm` 认「已合 + 已 approve」可归档，不再被 working agent 挡住。
+
+**② 结算自己这一跳**（#551）：省略 `--to`，身份从开工 preamble 抄。`notify` 会核 worker-show，Dispatch 没变成 completed 就报「未结算」，不许当发成功。有 preamble 身份才走这条；没有就走上面的 `reviewer-done`。
 
 ```bash
 node scripts/dao.mjs notify --type worker_done --outcome succeeded \
