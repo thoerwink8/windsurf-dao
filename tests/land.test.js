@@ -41,6 +41,18 @@ describe('land 决策层', () => {
     assert.equal(del({ checkedOutAt: 'C:/somewhere' }), false);
   });
 
+  it('hasLandWork：只认 decide* 的结论，push/ff 或可清才算有活', async () => {
+    const { hasLandWork } = await CORE;
+    assert.equal(hasLandWork({ shipAction: 'push', removeCount: 0, deleteCount: 0 }), true);
+    assert.equal(hasLandWork({ shipAction: 'ff', removeCount: 0, deleteCount: 0 }), true);
+    assert.equal(hasLandWork({ shipAction: 'clean', removeCount: 1, deleteCount: 0 }), true);
+    assert.equal(hasLandWork({ shipAction: 'clean', removeCount: 0, deleteCount: 1 }), true);
+    assert.equal(hasLandWork({ shipAction: 'clean', removeCount: 0, deleteCount: 0 }), false, '净盘必须没活');
+    assert.equal(hasLandWork({ shipAction: 'refuse', removeCount: 0, deleteCount: 0 }), false, '派生分支拒绝不算有活');
+    assert.equal(hasLandWork({ shipAction: 'stop-diverged', removeCount: 0, deleteCount: 0 }), false, '发散停手不算有活');
+    assert.equal(hasLandWork({ shipAction: 'local-only', removeCount: 0, deleteCount: 0 }), false);
+  });
+
   it('decideWorktreeRemove：六道闸每道单独拦得住', async () => {
     const { decideWorktreeRemove } = await CORE;
     const ok = { branch: 'f', merged: true, dirty: false, isMain: false, isCurrent: false, isDefaultBranch: false, orcaManaged: false, detached: false };
@@ -88,6 +100,34 @@ describe('land e2e（真 git 临时仓）', () => {
     assert.ok(!fs.existsSync(path.join(tmp, 'wt-m')), '干净+已合并的树要拆');
     assert.ok(fs.existsSync(path.join(tmp, 'wt-dirty', 'half.txt')), '脏树一根毛都不许动');
     assert.match(r.stdout, /留树 .*wt-dirty/, '留脏树要说原因');
+  });
+
+  it('--has-work：有已合并支 → 0 且不删；净盘 → 非 0', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'land-hw-'));
+    const g = (dir, ...args) => {
+      const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+      assert.equal(r.status, 0, `git ${args.join(' ')}\n${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const bare = path.join(tmp, 'origin.git');
+    fs.mkdirSync(bare);
+    g(tmp, 'init', '--bare', '-b', 'master', bare);
+    const work = path.join(tmp, 'work');
+    g(tmp, 'clone', bare, work);
+    spawnSync('git', ['-C', work, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'c1'], { encoding: 'utf8' });
+    g(work, 'push', '-u', 'origin', 'master');
+    g(work, 'branch', 'merged-b');
+    const land = path.join(REPO, 'scripts', 'land.mjs');
+    const has = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
+    assert.equal(has.status, 0, has.stdout + has.stderr);
+    assert.match(has.stdout, /有活/);
+    const branches = g(work, 'for-each-ref', 'refs/heads', '--format=%(refname:short)').split(/\r?\n/);
+    assert.ok(branches.includes('merged-b'), 'precheck 不许真删：' + branches);
+    const gone = spawnSync('git', ['-C', work, 'branch', '-d', 'merged-b'], { encoding: 'utf8' });
+    assert.equal(gone.status, 0, gone.stderr);
+    const none = spawnSync(process.execPath, [land, '--has-work', work], { encoding: 'utf8' });
+    assert.notEqual(none.status, 0, none.stdout);
+    assert.match(none.stdout, /没活/);
   });
 
   it('派生分支上拒绝且 exit 1（不代劳进主分支）', () => {

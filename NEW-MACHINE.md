@@ -345,6 +345,18 @@ while :; do node scripts/server-check.mjs --json --out; sleep 300; done
 # 落 ~/.dao/server-check/checks.jsonl（仓外，不会成为下一轮输入）
 ```
 
+### land automation（#829）
+
+合并后自动清理走 `orca automations` 调同一条 `node scripts/land.mjs`，不另写服务器版。换机 / 重跑：
+
+```bash
+node scripts/install-land-automation.mjs            # 幂等：同名 0 条 create、1 条 edit，不造第二条
+node scripts/install-land-automation.mjs --dry-run  # 只看不动
+```
+
+hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspace-mode existing`（不许 new-per-run）。
+`server-check` 第⑧项认这条：不在 / disable = 红；list 没查成 = 没查成。
+
 ### 坑（都是实测踩的，别重踩）
 
 - **进程名是 `orca-ide`，不是 `orca`**（裸 `orca` 在 Linux 与屏幕阅读器撞名，orca 另装一个 dispatcher）。所以 `pkill -f 'orca-id[e]'`——按 `AppRun` 或 `orca` 去 pkill 会全打空，残留进程占着单实例锁。

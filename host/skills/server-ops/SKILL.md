@@ -24,7 +24,7 @@ node scripts/server-check.mjs           # 人读
 node scripts/server-check.mjs --json    # 给循环
 ```
 
-退出码：`0` 全通 / `1` 有真红 / `2` 有没查成。没查成不许当通过。`--json --out` 落仓外 `~/.dao/server-check/`。脚本在 `scripts/server-check.mjs`。
+退出码：`0` 全通 / `1` 有真红 / `2` 有没查成。没查成不许当通过。`--json --out` 落仓外 `~/.dao/server-check/`。脚本在 `scripts/server-check.mjs`。第⑧项认 land automation 在册且启用；缺了跑 `node scripts/install-land-automation.mjs`（NEW-MACHINE「land automation（#829）」）。
 
 ## 密钥目录（只写路径，不写值）
 

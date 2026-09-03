@@ -23,6 +23,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, stat
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LAND_AUTOMATION_NAME } from './lib/land-automation.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -133,6 +134,41 @@ function checkListSurface(name, args, pick) {
     return { state: UNKNOWN, detail: `${name} 契约变了：拿不到数组（result 键=${Object.keys(r.payload?.result || {}).join(',')}）` };
   }
   return { state: OK, detail: `${name} 扫完 ${list.length} 条`, count: list.length };
+}
+
+/** 纯函数：land automation 在册且 enabled。不在=红；契约不对=没查成。 */
+export function classifyLandAutomation(list, name = LAND_AUTOMATION_NAME) {
+  if (!Array.isArray(list)) {
+    return { state: UNKNOWN, detail: 'automations 不是数组（没查成）' };
+  }
+  const hits = list.filter((a) => a && a.name === name);
+  if (hits.length === 0) {
+    return {
+      state: RED,
+      detail: `没有名为 ${name} 的 automation（不在 = 红）——跑 node scripts/install-land-automation.mjs`,
+    };
+  }
+  if (hits.length > 1) {
+    return { state: RED, detail: `名为 ${name} 的 automation 有 ${hits.length} 条（幂等坏了，先手工删到一条）` };
+  }
+  const hit = hits[0];
+  if (hit.enabled !== true) {
+    return { state: RED, detail: `${name} 在册但 enabled=${hit.enabled}（应为 true）` };
+  }
+  return { state: OK, detail: `${name} 在册且启用 id=${hit.id || '未给'}`, count: list.length };
+}
+
+function checkLandAutomation() {
+  const r = orcaJson(['automations', 'list', '--json']);
+  if (r.state !== OK) return { ...r, detail: `automations list：${r.detail || ''}` };
+  const list = r.payload?.result?.automations;
+  if (!Array.isArray(list)) {
+    return {
+      state: UNKNOWN,
+      detail: `automations list 契约变了：拿不到数组（result 键=${Object.keys(r.payload?.result || {}).join(',')}）`,
+    };
+  }
+  return classifyLandAutomation(list);
 }
 
 function checkRepoRegistered() {
@@ -413,7 +449,7 @@ const CHECKS = [
   ['⑤ worktree 面', () => checkListSurface('worktree ps', ['worktree', 'ps', '--json'], (x) => x?.worktrees)],
   ['⑥ terminal 面', () => checkListSurface('terminal list', ['terminal', 'list', '--json'], (x) => x?.terminals)],
   ['⑦ orchestration 面', () => checkListSurface('run-list', ['orchestration', 'run-list', '--json'], (x) => x?.runs)],
-  ['⑧ automations 面', () => checkListSurface('automations list', ['automations', 'list', '--json'], (x) => x?.automations)],
+  ['⑧ automations 面（land 在册且启用）', checkLandAutomation],
   ['⑨ 本仓已注册进 orca', checkRepoRegistered],
   ['⑩ 托管账号可用', checkAccounts],
   ['⑪ 仓库自检 dao-check', checkRepoSelfCheck],
@@ -466,6 +502,16 @@ function selfTest() {
   if (noCatalog.state !== UNKNOWN) {
     failures.push(`没扫到目录应判 unknown，实际 ${noCatalog.state}`);
   }
+
+  // #829：故意造「没有 land automation」——必须判红，不能当绿；查不成才是 unknown。
+  const noLand = classifyLandAutomation([]);
+  if (noLand.state !== RED) failures.push(`没有 land 应判红，实际 ${noLand.state}`);
+  const disabledLand = classifyLandAutomation([{ name: LAND_AUTOMATION_NAME, enabled: false, id: 'x' }]);
+  if (disabledLand.state !== RED) failures.push(`disable 应判红，实际 ${disabledLand.state}`);
+  const okLand = classifyLandAutomation([{ name: LAND_AUTOMATION_NAME, enabled: true, id: 'x' }]);
+  if (okLand.state !== OK) failures.push(`在册且启用应判 ok，实际 ${okLand.state}`);
+  const badShape = classifyLandAutomation(null);
+  if (badShape.state !== UNKNOWN) failures.push(`契约不对应判 unknown，实际 ${badShape.state}`);
 
   if (failures.length) {
     console.error('self-test 红：\n  - ' + failures.join('\n  - '));

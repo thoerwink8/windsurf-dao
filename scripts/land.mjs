@@ -2,6 +2,7 @@
 // land —— 收工一条命令（2026-08-31 拍板；跑几遍都安全，本机和 Linux 服务器同一条）。
 //
 //   node scripts/land.mjs [--dry-run] [仓路径]     # 在任何 git 仓里可用，不限本仓
+//   node scripts/land.mjs --has-work [仓路径]     # precheck：有可运/可清 → 0；没活 → 非 0（#829）
 //
 // 干什么：① 在默认分支上：有检查跑检查（发现 scripts/dao-check.mjs 才跑），绿了 push；
 //         ② 清理：fetch --prune → 删「已合并进默认分支」的本地分支 →
@@ -12,14 +13,17 @@
 // 为什么不是 post-commit hook：rebase/amend/cherry-pick 也触发 post-commit，会把中间态推上主分支；
 //   工人在编排树里的 commit 也会触发，等于绕过审官。收工是「一段活的结尾」，不是「每个 commit」。
 // 退出码：0 = 收工净（该运的运了、没有可清而未清的）；1 = 有事没收完（发散/检查红/在派生分支）。
+// --has-work：0 = 有可运（push/ff）或可清（拆树/删支）；非 0 = 没活（给 automations precheck 记 skipped）。
 
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { decideShip, decideBranchDelete, decideWorktreeRemove } from './lib/land-core.mjs';
+import { decideShip, decideBranchDelete, decideWorktreeRemove, hasLandWork } from './lib/land-core.mjs';
 
+const FLAGS = new Set(['--dry-run', '--has-work']);
 const DRY = process.argv.includes('--dry-run');
-const argPath = process.argv.slice(2).filter(a => a !== '--dry-run')[0];
+const HAS_WORK = process.argv.includes('--has-work');
+const argPath = process.argv.slice(2).filter(a => !FLAGS.has(a))[0];
 const cwd = resolve(argPath || process.cwd());
 const say = (s) => process.stdout.write(s + '\n');
 
@@ -56,12 +60,12 @@ say(`[收工] ${root} · 分支 ${branch}（默认 ${defaultBranch}）→ ${ship
 
 let unfinished = false;
 if (ship.action === 'refuse' || ship.action === 'stop-diverged') unfinished = true;
-if (ship.action === 'ff' && !DRY) {
+if (!HAS_WORK && ship.action === 'ff' && !DRY) {
   const r = git(['merge', '--ff-only', `origin/${defaultBranch}`]);
   say(r.status === 0 ? '[收工] 已快进到远端' : `[收工] 快进失败：${r.err.slice(0, 120)}`);
   if (r.status !== 0) unfinished = true;
 }
-if (ship.action === 'push') {
+if (!HAS_WORK && ship.action === 'push') {
   const checkFile = join(root, 'scripts', 'dao-check.mjs');
   if (existsSync(checkFile)) {
     if (DRY) say('[收工] [拟] 跑检查 node scripts/dao-check.mjs');
@@ -108,6 +112,7 @@ const worktrees = wtBlocks.map((b) => {
   return { path, branch: wtBranch, detached: /^detached$/m.test(b) };
 }).filter(w => w.path);
 
+let removeCount = 0;
 for (let i = 0; i < worktrees.length; i++) {
   const w = worktrees[i];
   const abs = resolve(w.path);
@@ -122,6 +127,8 @@ for (let i = 0; i < worktrees.length; i++) {
     detached: w.detached,
   });
   if (!d.remove) { if (i > 0) say(`[收工] 留树 ${w.path}：${d.reason}`); continue; }
+  removeCount += 1;
+  if (HAS_WORK) { say(`[收工] 有活：拆树 ${w.path}（${d.reason}）`); continue; }
   if (DRY) { say(`[收工] [拟] 拆树 ${w.path}（${d.reason}）`); continue; }
   const r = git(['worktree', 'remove', w.path]);
   say(r.status === 0 ? `[收工] 拆树 ${w.path}（${d.reason}）` : `[收工] 拆树失败 ${w.path}：${r.err.slice(0, 120)}`);
@@ -133,6 +140,7 @@ for (const b of git(['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n|\
   const br = (b.match(/^branch refs\/heads\/(.+)$/m) || [])[1];
   if (p && br) checkedOut.set(br, p);
 }
+let deleteCount = 0;
 for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)']).out.split(/\r?\n/).filter(Boolean)) {
   const d = decideBranchDelete({
     name,
@@ -142,9 +150,17 @@ for (const name of git(['for-each-ref', 'refs/heads', '--format=%(refname:short)
     checkedOutAt: checkedOut.get(name) !== undefined && resolve(checkedOut.get(name)).toLowerCase() !== resolve(root).toLowerCase() ? checkedOut.get(name) : '',
   });
   if (!d.del) { if (!d.reason.includes('默认分支') && !d.reason.includes('当前分支')) say(`[收工] 留支 ${name}：${d.reason}`); continue; }
+  deleteCount += 1;
+  if (HAS_WORK) { say(`[收工] 有活：删支 ${name}`); continue; }
   if (DRY) { say(`[收工] [拟] 删支 ${name}`); continue; }
   const r = git(['branch', '-d', name]); // -d：git 自己再拦一道未合并
   say(r.status === 0 ? `[收工] 删支 ${name}` : `[收工] 删支失败 ${name}：${r.err.slice(0, 120)}`);
+}
+
+if (HAS_WORK) {
+  const work = hasLandWork({ shipAction: ship.action, removeCount, deleteCount });
+  say(work ? `[收工] 有活（运=${ship.action} 拆树=${removeCount} 删支=${deleteCount}）` : '[收工] 没活');
+  process.exit(work ? 0 : 2);
 }
 
 const staleRemote = git(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)']).out
