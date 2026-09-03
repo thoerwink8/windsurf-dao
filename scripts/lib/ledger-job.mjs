@@ -123,9 +123,11 @@ function reviewColor(rv) {
   const state = normalizeReviewState(rv);
   if (state === 'APPROVED') return 'green';
   if (state === 'CHANGES_REQUESTED') return 'red';
+  // 旧判定行回退（#807 前的历史 review）：只认「判定：/复核结论：」打头的行，
+  // 裸 /绿/ 会把「别判绿」这类白话误判成绿（#857 审官 Q5）。
   const body = String(rv && rv.body || '');
-  if (/绿/.test(body) && !/红\s*\d+\s*项/.test(body)) return 'green';
-  if (/红\s*\d+\s*项/.test(body)) return 'red';
+  if (/^\s*(?:[>*]\s*)*(判定|复核结论)[:：].*红\s*\d+\s*项/m.test(body)) return 'red';
+  if (/^\s*(?:[>*]\s*)*(判定|复核结论)[:：].*绿/m.test(body) && !/红\s*\d+\s*项/.test(body)) return 'green';
   return null;
 }
 
