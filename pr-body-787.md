@@ -11,7 +11,7 @@
 - [x] 故意违规样本当场拦下：`tests/fixtures/version-carrier/red/` 基线 `1.2.3` → 当前 `1.2.2`；`inspectVersionCarrierFixtures` kinds `{red:1,ok:1,empty:1}`
 - [x] `CLAUDE.md` L9 有 dao-commit 按需指针，不常驻注入
 - [x] 提交标题带宿主前缀（本跳 `[pi]`；原实现 #789 为 `[grok]`）
-- [x] `node scripts/dao-check.mjs` 退出码 0：104 项绿 / 7 项跳过（停派工态 + 本 worktree 未接 memory + 本仓无版本号载体 SKIP）
+- [x] `node scripts/dao-check.mjs` 在工人树 PR head 复跑（本返工轮，head 将随本提交更新）：退出码 0，末行 `dao check: 好的（104 项，7 项跳过，56.5s）`。CI check 已绿（run 33803575961）。审官树同 head 复跑亦退出码 0、末行 `dao check: 好的（104 项，7 项跳过，55.6s）`。审官当时在同 SHA 上看到 `不好（2 项红 / 102 项绿 / 7 项跳过）`（`dao-mode.test.js` 8 红 + `redact.test.js` 1 红）；这两套用仓内 `_tmp/` 沙箱，dao-check 池宽 6 并行，偶发踩踏可解释当时红、现在绿。返工后工人树/审官树/CI 三处均为绿，不以当时瞬时红冒充当前结果。
 
 ## 进展
 
@@ -22,6 +22,7 @@
 - [x] 核对 #787 六条落地清单与三条验收（证据见上）
 - [x] 顺手修挡交卷的既有红：`CHANGELOG.md` 历史路径 `~/.codex/skills` 未进 INDEX/ignore（master 同样红）。补 `host/machine/ignore.md` 一条 why，闸齐 50/39/12。这不是 #787 方向性改动，是 dao-check 交卷门。
 - [x] dao-check 绿 → `gh pr ready` → 卡切 `in-review` → `worker-done`
+- [x] 返工：审官红 1（验收写退出码 0，当时审官复跑为 2 红）。已在工人树 + 审官树同 SHA 复跑，当前均为退出码 0；CI 亦绿。PR 正文改为贴真实末行，并写明审官当时瞬时红与并行沙箱的关系，不以当时红冒充现在绿。
 
 ### 体系类改动三问（grill-me 拍板浓缩；本跳无新机制）
 
