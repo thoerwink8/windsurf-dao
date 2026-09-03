@@ -25,6 +25,8 @@ import {
   parseEnabledAgentIds,
   classifyRetiredClis,
   RETIRED_WORKER_CLIS,
+  whichOnPath,
+  isExecutableEntry,
 } from '../scripts/server-check.mjs';
 
 test('server-check 判别力', async (t) => {
@@ -262,6 +264,85 @@ test('server-check 判别力', async (t) => {
         assert.ok(RETIRED_WORKER_CLIS.includes(n), n);
       }
       assert.ok(!RETIRED_WORKER_CLIS.includes('pi') && !RETIRED_WORKER_CLIS.includes('codex'));
+    });
+  });
+
+  await t.test('#822 whichOnPath 只认可执行入口（审官红：同名目录/不可执行文件不许当命中）', async (t) => {
+    const posixDir = '/tmp/bin/grok';
+    const posixFile = '/tmp/bin/grok';
+    const winDir = 'C:\\Tools\\grok.exe';
+
+    await t.test('POSIX 同名目录 → 不命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/tmp/bin',
+        exists: (p) => p === posixDir,
+        stat: () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, null, JSON.stringify(r));
+    });
+
+    await t.test('POSIX 不可执行文件（无 execute bit）→ 不命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/tmp/bin',
+        exists: (p) => p === posixFile,
+        stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o644 }),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, null, JSON.stringify(r));
+    });
+
+    await t.test('POSIX 真正可执行文件 → 命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'linux',
+        pathEnv: '/tmp/bin',
+        exists: (p) => p === posixFile,
+        stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o755 }),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, posixFile, JSON.stringify(r));
+    });
+
+    await t.test('Windows 同名目录 → 不命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'win32',
+        pathEnv: 'C:\\Tools',
+        exists: (p) => p.replace(/\\/g, '/') === 'C:/Tools/grok.exe' || p === winDir,
+        stat: () => ({ isDirectory: () => true, isFile: () => false }),
+      });
+      assert.equal(r.probed, true);
+      assert.equal(r.hit, null, JSON.stringify(r));
+    });
+
+    await t.test('Windows .exe 是文件 → 命中', () => {
+      const r = whichOnPath('grok', {
+        platform: 'win32',
+        pathEnv: 'C:\\Tools',
+        exists: (p) => String(p).includes('grok.exe'),
+        stat: () => ({ isDirectory: () => false, isFile: () => true }),
+      });
+      assert.equal(r.probed, true);
+      assert.ok(r.hit && String(r.hit).includes('grok.exe'), JSON.stringify(r));
+    });
+
+    await t.test('isExecutableEntry：目录 / 无 x 位 / 有 x 位', () => {
+      assert.equal(isExecutableEntry('/x', {
+        platform: 'linux',
+        exists: () => true,
+        stat: () => ({ isDirectory: () => true, isFile: () => false, mode: 0o755 }),
+      }), false);
+      assert.equal(isExecutableEntry('/x', {
+        platform: 'linux',
+        exists: () => true,
+        stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o644 }),
+      }), false);
+      assert.equal(isExecutableEntry('/x', {
+        platform: 'linux',
+        exists: () => true,
+        stat: () => ({ isDirectory: () => false, isFile: () => true, mode: 0o111 }),
+      }), true);
     });
   });
 

@@ -456,22 +456,40 @@ export function classifyRetiredClis({ probed, reason, found } = {}) {
   };
 }
 
-function whichOnPath(name) {
+/** POSIX：不是目录且 mode 至少一个 execute bit。Windows：候选必须是文件，不是目录。 */
+export function isExecutableEntry(p, { platform, exists, stat } = {}) {
+  const win = (platform || process.platform) === 'win32';
+  const existsFn = typeof exists === 'function' ? exists : existsSync;
+  const statFn = typeof stat === 'function' ? stat : statSync;
+  try {
+    if (!existsFn(p)) return false;
+    const st = statFn(p);
+    if (!st || typeof st.isDirectory !== 'function' || st.isDirectory()) return false;
+    if (win) {
+      return typeof st.isFile === 'function' ? st.isFile() : true;
+    }
+    const mode = st.mode;
+    if (typeof mode !== 'number') return false;
+    return (mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+export function whichOnPath(name, opts = {}) {
   // `command -v` 是 shell 内置，spawnSync 会 EACCES。自扫 PATH，不 spawn 子进程。
-  const pathEnv = process.env.PATH;
+  const pathEnv = opts.pathEnv ?? process.env.PATH;
+  const platform = opts.platform ?? process.platform;
   if (!pathEnv) return { probed: false, reason: 'PATH 空（没查成）', hit: null };
-  const segs = pathEnv.split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
+  const win = platform === 'win32';
+  const segs = String(pathEnv).split(win ? ';' : ':').filter(Boolean);
   if (segs.length === 0) return { probed: false, reason: 'PATH 分段 0 个（没查成）', hit: null };
-  const win = process.platform === 'win32';
   const candidates = win ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
+  const entryOpts = { platform, exists: opts.exists, stat: opts.stat };
   for (const dir of segs) {
     for (const file of candidates) {
       const p = join(dir, file);
-      try {
-        if (existsSync(p)) return { probed: true, hit: p };
-      } catch {
-        /* 单段读失败继续扫，整表扫完才算没查成 */
-      }
+      if (isExecutableEntry(p, entryOpts)) return { probed: true, hit: p };
     }
   }
   return { probed: true, hit: null };
