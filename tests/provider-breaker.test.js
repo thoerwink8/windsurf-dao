@@ -214,6 +214,61 @@ describe('全部 open → 报帅 + 总控群', () => {
     assert.equal(issues.length, 1);
     assert.match(issues[0].title, /全部路径 open/);
   });
+
+  // PR #851 审官红项：recordEvent 先盖 6h 戳、runBreakerCommand 再 escalate → 撞自己的去重，首次全 open 一条都没发。
+  it('两个 target 先后 trip：首次全 open 必发一次，6h 内第二次不重发，过 6h 再发', async () => {
+    const { runBreakerCommand, loadBreakerDoc } = await import(LIB);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'breaker-allopen-'));
+    const hubs = [];
+    const issues = [];
+    const inj = {
+      hubSay: (t) => { hubs.push(t); return { ok: true }; },
+      openIssue: (x) => { issues.push(x); return { ok: true, number: 1 }; },
+    };
+    const first = runBreakerCommand({ action: 'trip', key: 'a', hours: 24 }, { home, now: T0, policy: POL, ...inj });
+    assert.equal(first.escalate.sent, false, '单条 open 不报');
+    assert.equal(hubs.length, 0);
+
+    const second = runBreakerCommand({ action: 'trip', key: 'b', hours: 24 }, { home, now: T0 + 1000, policy: POL, ...inj });
+    assert.equal(second.escalate.sent, true, '首次全 open 必发');
+    assert.equal(hubs.length, 1);
+    assert.equal(issues.length, 1);
+    assert.equal(loadBreakerDoc({ home }).doc.allOpenAlertedAt, new Date(T0 + 1000).toISOString(), '发成后才盖戳');
+
+    const third = runBreakerCommand({ action: 'trip', key: 'a', hours: 24 }, { home, now: T0 + HOUR, policy: POL, ...inj });
+    assert.equal(third.escalate.sent, false);
+    assert.match(third.escalate.reason, /6 小时内已报过/);
+    assert.equal(hubs.length, 1, '6h 内不重发');
+
+    const fourth = runBreakerCommand({ action: 'trip', key: 'a', hours: 24 }, { home, now: T0 + 7 * HOUR, policy: POL, ...inj });
+    assert.equal(fourth.escalate.sent, true, '过 6h 仍全 open 再报一次');
+    assert.equal(hubs.length, 2);
+  });
+
+  it('hub-say 没发成不盖戳，下次还会再试；dry-run 预演也不盖戳', async () => {
+    const { runBreakerCommand, loadBreakerDoc } = await import(LIB);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'breaker-allopen-fail-'));
+    let hubOk = false;
+    const hubs = [];
+    const inj = {
+      hubSay: (t) => { hubs.push(t); return hubOk ? { ok: true } : { ok: false, error: 'hub-say exit 1' }; },
+      openIssue: () => ({ ok: true, number: 1 }),
+    };
+    runBreakerCommand({ action: 'trip', key: 'a', hours: 24 }, { home, now: T0, policy: POL, ...inj });
+    const failed = runBreakerCommand({ action: 'trip', key: 'b', hours: 24 }, { home, now: T0 + 1000, policy: POL, ...inj });
+    assert.equal(failed.escalate.sent, false);
+    assert.equal(loadBreakerDoc({ home }).doc.allOpenAlertedAt, undefined, '没发成不盖戳');
+
+    const dry = runBreakerCommand({ action: 'trip', key: 'b', hours: 24 }, { home, now: T0 + 2000, policy: POL, ...inj, dryRun: true });
+    assert.equal(dry.escalate.dryRun, true);
+    assert.equal(loadBreakerDoc({ home }).doc.allOpenAlertedAt, undefined, 'dry-run 不盖戳');
+
+    hubOk = true;
+    const retried = runBreakerCommand({ action: 'trip', key: 'b', hours: 24 }, { home, now: T0 + 3000, policy: POL, ...inj });
+    assert.equal(retried.escalate.sent, true, '通道恢复后补发');
+    assert.equal(hubs.length, 2);
+    assert.equal(loadBreakerDoc({ home }).doc.allOpenAlertedAt, new Date(T0 + 3000).toISOString());
+  });
 });
 
 describe('ingest 三路只记事件', () => {

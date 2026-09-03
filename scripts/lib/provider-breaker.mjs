@@ -338,19 +338,33 @@ export function saveBreakerDoc(doc, { home = os.homedir(), write = writeFileSync
 }
 
 /**
- * 读-改-写。now 必填。返回 { doc, target, alert }；alert.alert 时调用方负责报帅 / 总控群。
+ * 全部 open 的报警结算：先发、发成了才盖 6h 去重戳；没发成不盖，下次还会再试。
+ * 不再全 open 时清戳。dry-run 只预演不盖戳（否则预演会把真报压掉 6 小时）。
+ * 所有改熔断表的入口（recordEvent / ingest-health / ingest-stall）都必须走这里，
+ * 别在外面另写一份「先 stamp 再 escalate」——那正是 PR #851 审官咬出来的洞。
+ */
+export function settleAllOpen(doc, { now, hubSay, openIssue, dryRun = false } = {}) {
+  const ms = nowMs(now);
+  const escalate = escalateAllOpen({ doc, now: ms, hubSay, openIssue, dryRun });
+  let next = doc;
+  if (escalate.sent && !escalate.dryRun) next = stampAllOpenAlert(doc, ms, true);
+  else if (!allTargetsOpen(doc, ms) && doc && doc.allOpenAlertedAt) next = stampAllOpenAlert(doc, ms, false);
+  return { doc: next, alert: escalate.plan, escalate };
+}
+
+/**
+ * 读-改-写。now 必填。返回 { doc, target, alert, escalate }。
+ * 全部 open 的通知在这里面发（hubSay / openIssue 可注入，夹具不碰真通道）。
  */
 export function recordEvent(event, {
-  home = os.homedir(), now, policy, read, exists, write, rename,
+  home = os.homedir(), now, policy, read, exists, write, rename, hubSay, openIssue, dryRun = false,
 } = {}) {
   const loaded = loadBreakerDoc({ home, read, exists });
-  let doc = applyEvent(loaded.doc, event, policy, now);
-  const plan = planAllOpenAlert(doc, now);
-  if (plan.alert) doc = stampAllOpenAlert(doc, now, true);
-  else if (!allTargetsOpen(doc, now) && doc.allOpenAlertedAt) doc = stampAllOpenAlert(doc, now, false);
+  const applied = applyEvent(loaded.doc, event, policy, now);
+  const { doc, alert, escalate } = settleAllOpen(applied, { now, hubSay, openIssue, dryRun });
   saveBreakerDoc(doc, { home, write, rename });
   const key = event && event.target != null ? String(event.target) : null;
-  return { ok: true, doc, target: key ? doc.targets[key] : null, alert: plan, path: breakerPath(home) };
+  return { ok: true, doc, target: key ? doc.targets[key] : null, alert, escalate, path: breakerPath(home) };
 }
 
 export function defaultHubSay(text) {
@@ -378,7 +392,7 @@ export function escalateAllOpen({
   const plan = planAllOpenAlert(doc, now);
   if (!plan.alert) return { sent: false, reason: plan.reason || '并非全部 open', plan };
   const text = plan.text;
-  if (dryRun) return { sent: true, dryRun: true, text, hub: { ok: true, dryRun: true }, issue: { ok: true, dryRun: true } };
+  if (dryRun) return { sent: true, dryRun: true, text, hub: { ok: true, dryRun: true }, issue: { ok: true, dryRun: true }, plan };
   const hub = hubSay(text);
   const issue = openIssue({
     title: '[待拍板] 编排层熔断：全部路径 open',
@@ -440,32 +454,30 @@ export function runBreakerCommand(args = {}, {
     if (!Number.isFinite(hours) || hours < 0.25 || hours > 168) {
       return { ok: false, error: `breaker trip 要 --hours N（0.25~168，实际 ${args.hours}）` };
     }
-    const rec = recordEvent({ type: 'trip', target: key, hours, why: `手动熔断 ${hours}h` }, { home, now: ms, policy: pol, read, exists, write, rename });
-    const esc = escalateAllOpen({ doc: rec.doc, now: ms, hubSay, openIssue, dryRun });
-    return { ok: true, action: 'trip', key, hours, target: rec.target, doc: rec.doc, path: rec.path, alert: rec.alert, escalate: esc };
+    const rec = recordEvent(
+      { type: 'trip', target: key, hours, why: `手动熔断 ${hours}h` },
+      { home, now: ms, policy: pol, read, exists, write, rename, hubSay, openIssue, dryRun },
+    );
+    return { ok: true, action: 'trip', key, hours, target: rec.target, doc: rec.doc, path: rec.path, alert: rec.alert, escalate: rec.escalate };
   }
   if (action === 'ingest-health') {
     const h = healthDocFromHome(home, read, exists);
     if (!h.present) return { ok: true, action: 'ingest-health', skipped: true, reason: '健康表不在' };
     if (!h.doc) return { ok: false, error: `健康表读不了：${h.error || '不是对象'}` };
-    let doc = ingestHealthTable(h.doc, loaded.doc, pol, ms);
-    const plan = planAllOpenAlert(doc, ms);
-    if (plan.alert) doc = stampAllOpenAlert(doc, ms, true);
+    const ingested = ingestHealthTable(h.doc, loaded.doc, pol, ms);
+    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, dryRun });
     saveBreakerDoc(doc, { home, write, rename });
-    const esc = escalateAllOpen({ doc, now: ms, hubSay, openIssue, dryRun });
-    return { ok: true, action: 'ingest-health', doc, path: breakerPath(home), alert: plan, escalate: esc };
+    return { ok: true, action: 'ingest-health', doc, path: breakerPath(home), alert, escalate };
   }
   if (action === 'ingest-stall') {
     const s = stallDocFromHome(home, read, exists);
     if (!s.present) return { ok: true, action: 'ingest-stall', skipped: true, reason: '撞死指纹文件不在' };
     if (s.error) return { ok: false, error: `撞死指纹读不了：${s.error}` };
     const resolve = resolveTarget || ((term, info) => stallTargetOf(term, info));
-    let doc = ingestStall(s.strikes, loaded.doc, pol, ms, { resolveTarget: resolve });
-    const plan = planAllOpenAlert(doc, ms);
-    if (plan.alert) doc = stampAllOpenAlert(doc, ms, true);
+    const ingested = ingestStall(s.strikes, loaded.doc, pol, ms, { resolveTarget: resolve });
+    const { doc, alert, escalate } = settleAllOpen(ingested, { now: ms, hubSay, openIssue, dryRun });
     saveBreakerDoc(doc, { home, write, rename });
-    const esc = escalateAllOpen({ doc, now: ms, hubSay, openIssue, dryRun });
-    return { ok: true, action: 'ingest-stall', doc, path: breakerPath(home), alert: plan, escalate: esc };
+    return { ok: true, action: 'ingest-stall', doc, path: breakerPath(home), alert, escalate };
   }
   return { ok: false, error: `未知 breaker 动作: ${action}（只要 reset / trip / ingest-health / ingest-stall）` };
 }

@@ -13,7 +13,7 @@ import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { probeLanding, probeTargetOf } from './provider-probe.mjs';
 import { availabilityFor } from './provider-health.mjs';
-import { BREAKER_DEFAULTS, inspectAvailability, recordEvent, escalateAllOpen, loadBreakerDoc } from './provider-breaker.mjs';
+import { BREAKER_DEFAULTS, inspectAvailability, recordEvent, loadBreakerDoc } from './provider-breaker.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..', '..');
 
@@ -173,11 +173,8 @@ function landingOf(entry) {
 function defaultRecordBreaker(event, { home, now, policy }) {
   if (process.env.NODE_TEST_CONTEXT) return { ok: true, skipped: 'test' };
   try {
-    const rec = recordEvent(event, { home, now, policy: policy && policy.breaker });
-    if (rec.alert && rec.alert.alert) {
-      rec.escalate = escalateAllOpen({ doc: rec.doc, now });
-    }
-    return rec;
+    // 全部 open 的报警在 recordEvent 里面发、发成才盖戳；这里别再补一刀 escalateAllOpen（会撞 6h 去重）。
+    return recordEvent(event, { home, now, policy: policy && policy.breaker });
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
