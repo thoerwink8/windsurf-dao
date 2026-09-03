@@ -62,6 +62,8 @@ export {
   shouldPrefixDaoTrace,
   prefixLaunchWithDaoTrace,
   applyDaoTraceToLaunch,
+  preflightWorkerSlate,
+  preflightStopReport,
 } from './dispatch/launch.mjs';
 
 // #802：start=agent 落裸 shell 的屏面分类 / 回退计划 / launchAttempts 行
@@ -834,7 +836,7 @@ import {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone,
+  planReviewerDone, preflightReviewer,
 } from './dispatch/reviewer.mjs';
 export {
   reviewerCardName, collectReviewerCardsForPr, gateReviewerCreate, resolveReviewerReuse,
@@ -842,7 +844,7 @@ export {
   classifyReviewerSpawnError, reviewerSpawnFailComment, postIssueComment, postPrComment,
   commentAlreadyPosted, listComments, postCommentOnce, REVIEWER_CREATE_OUTCOMES,
   pickMergePolicyFromLedger, resolveReviewerMergePolicy, planReviewerAttachReuse,
-  planReviewerDone,
+  planReviewerDone, preflightReviewer,
 } from './dispatch/reviewer.mjs';
 
 // #762 拆分：卡名/消歧门/label 域与任务书模板域移到 dispatch/card.mjs + dispatch/template.mjs
@@ -921,18 +923,19 @@ export const VERBS = [
   'worker-start', 'worker-release', 'worker-read', 'worker-done', 'reviewer-create', 'reviewer-attach',
   'reviewer-done', 'review-pending-drain', 'send', 'notify', 'reply',
   'gate-create', 'gate-resolve', 'gate-list', 'liveness', 'check-help', 'pr-sync-labels', 'ledger-query', 'amend', 'next',
-  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'raw',
+  'inbox-collect', 'run-gc', 'ask', 'board-archive', 'board-reset', 'preflight', 'raw',
 ];
 
-const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup']);
+const BOOL_FLAGS = new Set(['no-parent', 'force', 'enter', 'dry-run', 'json', 'confirm', 'unclosed', 'apply', 'peek', 'skip-wait', 'allow-dup', 'no-preflight']);
 const MULTI_FLAGS = new Set(['slice']);
 
 export const FLAGS_BY_VERB = {
   start: new Set(['--provider', '--model', '--worktree', '--title', '--dry-run', '--json', '--help', '-h']),
   dispatch: new Set([
     '--name', '--merge-policy', '--merge-reason', '--split', '--split-reason', '--slice', '--model', '--role', '--reviewer', '--confirm',
-    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--json', '--help', '-h',
+    '--spec', '--task', '--issue', '--now', '--batch', '--dry-run', '--allow-dup', '--no-preflight', '--json', '--help', '-h',
   ]),
+  preflight: new Set(['--model', '--json', '--help', '-h']),
   'dispatch-exec': new Set(['--order', '--json', '--help', '-h']),
   'worktree-create': new Set([
     '--name', '--no-parent', '--setup', '--parent-worktree', '--base-branch',
@@ -952,13 +955,13 @@ export const FLAGS_BY_VERB = {
   ]),
   'reviewer-create': new Set([
     '--pr', '--name', '--reviewer', '--parent-worktree', '--comment', '--issue',
-    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--json', '--help', '-h',
+    '--soldier-dispatch', '--merge-policy', '--merge-reason', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
   'reviewer-done': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   'reviewer-attach': new Set([
     '--pr', '--worktree', '--reviewer', '--name', '--soldier-dispatch', '--spec',
     '--merge-policy', '--merge-reason', '--comment', '--issue', '--skip-wait', '--run',
-    '--start-timeout-ms', '--model', '--from', '--dry-run', '--json', '--help', '-h',
+    '--start-timeout-ms', '--model', '--from', '--dry-run', '--no-preflight', '--json', '--help', '-h',
   ]),
   'review-pending-drain': new Set(['--pr', '--dry-run', '--json', '--help', '-h']),
   send: new Set(['--terminal', '--dispatch', '--text', '--enter', '--agent', '--json', '--help', '-h']),
@@ -1118,6 +1121,9 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
   next                        # 盘面动作候选一行（#576）：只读本地文件零 GitHub；standby 态不含「待消歧」
   ledger-query (--recent <n> | --issue <号> | --unclosed)
                   # 按事件 ts 查账本，不按文件 mtime、不 grep 数字。查到 0 条 ≠ 没查成
+  preflight --model <id> [--json]
+                  # 派前探一针（#842）：同路径流式探一次，输出与 ~/.dao/preflight ndjson 同形（只读，不建卡不起终端）
+                  # 派工/审官起终端前自动探（红换下一位、全红报帅停手）；单次跳过用 dispatch/reviewer-create 的 --no-preflight
   amend --issue <号> --why <一句话> [--pr <号>] [--by 帅|用户] [--model <id>]
                   # 帅追加职责：写 job.override(scope) 并往 issue 发正文。不靠「记得记一条」
   raw -- <任意命令...>     逃生口，必须留痕

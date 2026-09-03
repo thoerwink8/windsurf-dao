@@ -1,0 +1,10 @@
+{
+  "updated": "2026-09-03",
+  "说明": "派工运行期策略。派前探一针（#842）：起 agent 前用同路径流式探一次，红了换下一位。真相源，改动后 dao-check 校验取值范围。",
+  "preflight": {
+    "enabled": true,
+    "timeoutMs": 5000,
+    "maxCandidates": 4,
+    "useHealthTable": true
+  }
+}

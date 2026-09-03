@@ -157,6 +157,8 @@ import {
   buildSplitRoleSpec,
   startSplitChildren,
   resolveLaunch,
+  preflightWorkerSlate,
+  preflightReviewer,
   DEFAULT_DAO_REPO,
   shouldPrefixDaoTrace,
   applyDaoTraceToLaunch,
@@ -194,6 +196,7 @@ import {
   trialMergeMaster,
   waitAndVerify,
 } from './lib/dao-cmd.mjs';
+import { runPreflightCommand, loadDispatchPolicy } from './lib/preflight.mjs';
 import { prNumberFromWorktree } from './lib/card-identity.mjs';
 import { repoPrefixOf, syncMasterTicketZone, worktreesFromPs, mutateWorktreeComment } from './lib/master-title.mjs';
 import { applyGitIdentity } from './lib/gh.mjs';
@@ -1237,7 +1240,7 @@ function buildDispatchPlan({ args, gate, splitGate, sliceGate, slatePack, routin
  *   4. 返回「已受理」（结果落 _flow/queue/<id>.out.json；开工/死亡确认交 watchdog 与 inbox.log）
  * 消歧门、账本查重、建 worktree、terminal create、送字、记账全在执行体（判断逻辑不变，只换执行位置）。
  */
-function cmdDispatch(args) {
+async function cmdDispatch(args) {
   if (args.batch) return cmdDispatchBatch(args);
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
@@ -1278,7 +1281,15 @@ function cmdDispatch(args) {
       allowDup: args.allowDup === true,
       now,
     });
-    emit({ ok: true, dryRun: true, ...plan, disambiguation, dup });
+    // #842 派前探一针预览：起终端前按健康表排序 + 逐位真探（红换下一位 / 全红报帅停手）。
+    let preflight = null;
+    try {
+      preflight = await preflightWorkerSlate({
+        slate: slatePack.slate, startIndex: slatePack.startIndex,
+        noPreflight: args.noPreflight === true, dispatchId: null, now,
+      });
+    } catch (e) { preflight = { ok: false, error: String(e.message || e) }; }
+    emit({ ok: true, dryRun: true, ...plan, disambiguation, dup, preflight });
   }
 
   const queueDir = dispatchQueueDir({ root: ROOT });
@@ -1302,6 +1313,7 @@ function cmdDispatch(args) {
       splitReason: args.splitReason,
       slice: Array.isArray(args.slice) ? args.slice : undefined,
       allowDup: args.allowDup === true,
+      noPreflight: args.noPreflight === true,
       now: args.now,
     },
     plan,
@@ -1351,7 +1363,7 @@ function cmdDispatch(args) {
  * emit 结果槽保证每个出口（含 failCreated 回滚路径）都落结果文件、删 running 标记；
  * 崩在 emit 之外的补一份 crashed 结果，不让单卡死成 pending 假象。
  */
-function cmdDispatchExec(args) {
+async function cmdDispatchExec(args) {
   if (!args.order) fail('dispatch-exec 要 --order <派工单路径>');
   const read = readDispatchOrder(args.order);
   if (!read.ok) fail(read.error);
@@ -1365,7 +1377,7 @@ function cmdDispatchExec(args) {
     fail(`执行体开工标记写不了：${String(e.message || e)}`, { orderId: order.id });
   }
   try {
-    runDispatchExecution(order, { queueDir });
+    await runDispatchExecution(order, { queueDir });
   } catch (e) {
     try {
       writeFileSync(paths.result, JSON.stringify({
@@ -1427,7 +1439,7 @@ function precheckQueueDup({ queueDir, selfId, issue, terminal, name, allowDup, n
  * → 消歧门 → 账本索引查重 + 队列在途查重 → 建卡 + git 身份 → 起终端 → task-create →
  * worker-start 送字（fire-and-forget 三分类不变）→ 打 label → 落账本。
  */
-function runDispatchExecution(order, { queueDir } = {}) {
+async function runDispatchExecution(order, { queueDir } = {}) {
   const args = { ...order.args };
   const routing = loadOrFail();
   const gate = constrainDispatch(args, routing);
@@ -1584,6 +1596,24 @@ function runDispatchExecution(order, { queueDir } = {}) {
     } catch (e) {
       failCreated(created, `devin 任务书写文件失败: ${String(e.message || e)}`, { orderId: order.id, ...plan });
     }
+  }
+
+  // #842 派前探一针：起终端前按健康表排序 + 逐位真探。红换下一位（改 startIndex）；
+  // 全红/全拦 → 报帅停手，一个 agent 都不起（回滚已建的工人卡）。--no-preflight 跳过且记账。
+  try {
+    const pf = await preflightWorkerSlate({
+      slate: slatePack.slate, startIndex: slatePack.startIndex,
+      noPreflight: args.noPreflight === true, dispatchId: order.id, now,
+    });
+    if (pf.stop) {
+      failCreated(created, `派前探一针：工人候选全红/全拦，停手不起 agent。\n${pf.report || ''}`, { orderId: order.id, preflight: pf, ...plan });
+    }
+    if (pf.chosen && Number.isInteger(pf.startIndex) && pf.startIndex >= 0) {
+      slatePack = { ...slatePack, startIndex: pf.startIndex };
+    }
+  } catch (e) {
+    // 探针框架自身抛错不拦派工（fail-open 到原路起，不因探针 bug 停摆）；留痕。
+    console.error(`[dao] 派前探一针异常（放行原路起）：${String(e.message || e)}`);
   }
 
   const launched = startWorkerBySlate({
@@ -3120,7 +3150,7 @@ function cmdWorkerRead(args) {
   emit({ ok: true, json: r.json, dispatchId: args.dispatch, proof });
 }
 
-function cmdReviewerCreate(args) {
+async function cmdReviewerCreate(args) {
   if (!args.pr) fail('reviewer-create 要 --pr');
 
   const gh = ghRunner({ role: 'reviewer' });
@@ -3157,11 +3187,31 @@ function cmdReviewerCreate(args) {
   const seat = assertReviewerSeat({ reviewerId: picked.modelId, routing });
   if (!seat.ok) fail(seat.error, { reviewerSeat: seat, vendorGate, pr: String(args.pr) });
 
+  // #842 派前探一针：审官起终端前，按顺位（同厂闸不放宽）逐位真探，红换下一位，全红报帅停手。
+  // 换位由探红授权（顺位内换、异厂），下游用 reviewerModel；seat 锁只管「请求位=Codex」。
+  // dry-run 是纯规划（只打印选型不建树），不探网络——审官 preflight 只在真起时生效（判据是工人侧）。
+  let reviewerModel = picked.modelId;
+  let reviewerPreflight = null;
+  if (!args.dryRun) {
+    try {
+      reviewerPreflight = await preflightReviewer({
+        order: routing.reviewerOrder || [], models: routing.models || [],
+        workerId: worker.modelId, noPreflight: args.noPreflight === true, dispatchId: null,
+      });
+      if (reviewerPreflight.stop) {
+        fail(`派前探一针：审官候选全红/全拦，停手报帅（一个审官都不起）。\n${reviewerPreflight.report || ''}`, { reviewerPreflight, vendorGate, pr: String(args.pr) });
+      }
+      if (reviewerPreflight.chosen) reviewerModel = reviewerPreflight.chosen;
+    } catch (e) {
+      console.error(`[dao] 审官派前探异常（放行原路起）：${String(e.message || e)}`);
+    }
+  }
+
   const revName = assembleCardName({
-    name: args.name || reviewerCardName(picked.modelId),
+    name: args.name || reviewerCardName(reviewerModel),
     pr: args.pr,
     role: '审官',
-    model: picked.modelId,
+    model: reviewerModel,
   });
   const plan = {
     pr: String(args.pr),
@@ -3170,11 +3220,13 @@ function cmdReviewerCreate(args) {
     files,
     name: revName,
     mergeable,
-    reviewer: picked.modelId,
+    reviewer: reviewerModel,
+    reviewerRequested: picked.modelId,
     reviewerSource: picked.source,
     workerModel: worker.modelId,
     vendorGate,
     reviewerSeat: seat,
+    reviewerPreflight,
   };
 
   const inputs = loadReviewerReuseInputs();
@@ -3282,7 +3334,7 @@ function cmdReviewerCreate(args) {
   // #586 阶段二：既有坑（mergeable / HEAD / 试合）不动，后面补起终端 + 注入。
   let reviewerLaunch;
   try {
-    reviewerLaunch = resolveLaunch({ model: picked.modelId, routing, root: ROOT });
+    reviewerLaunch = resolveLaunch({ model: reviewerModel, routing, root: ROOT });
   } catch (e) {
     rmReviewerCard();
     fail(String(e.message || e), { ...plan, reviewerId, reviewerPath });
@@ -3305,7 +3357,7 @@ function cmdReviewerCreate(args) {
     launch: reviewerLaunch,
     daoTrace: daoTraceFor({
       role: 'reviewer',
-      model: picked.modelId,
+      model: reviewerModel,
       issue: args.issue || (Array.isArray(worker.refs) && worker.refs[0]) || null,
       pr: args.pr,
     }),
@@ -3471,7 +3523,7 @@ function cmdReviewerCreate(args) {
       ...ctx,
       ts: beijingIsoFrom(new Date()),
       jobId: reviewerJobId(args.pr),
-      model: picked.modelId,
+      model: reviewerModel,
       identity: '审官',
       workType: '审查',
       terminal: reviewerLaunch.provider || 'dao',
@@ -4384,6 +4436,14 @@ function cmdRaw(args) {
   process.exit(r.status == null ? 1 : r.status);
 }
 
+/** #842 派前探只读动词：探一个模型（同路径流式），输出与 ndjson 同形。一行分发到 lib/preflight.mjs。 */
+async function cmdPreflight(args) {
+  const routing = loadOrFail();
+  const r = await runPreflightCommand(args, { routingModels: routing.models });
+  if (!r.ok) fail(r.error, { model: args.model || null });
+  emit({ ok: true, ...r });
+}
+
 function main() {
   let args;
   try { args = parseArgs(process.argv); }
@@ -4425,6 +4485,7 @@ function main() {
     case 'check-help': return cmdCheckHelp();
     case 'pr-sync-labels': return cmdPrSyncLabels(args);
     case 'ledger-query': return cmdLedgerQuery(args);
+    case 'preflight': return cmdPreflight(args);
     case 'amend': return cmdAmend(args);
     case 'next': return cmdNext(args);
     case 'raw': return cmdRaw(args);

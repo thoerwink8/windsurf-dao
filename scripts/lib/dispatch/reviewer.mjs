@@ -7,6 +7,11 @@
 
 import { prNumberFromWorktree } from '../card-identity.mjs';
 import { extractSoldierTerminal, isLiveDispatchRecipient, readDispatchSettlement } from './deliver.mjs';
+import { assertCrossVendor } from '../reviewer-vendor-gate.mjs';
+import { normalizePipes } from '../next-launch.mjs';
+import { availabilityFor } from '../provider-health.mjs';
+import { loadDispatchPolicy, runPreflight } from '../preflight.mjs';
+import { preflightStopReport } from './launch.mjs';
 
 export function reviewerCardName(reviewerId) {
   return `审官·${reviewerId}`;
@@ -699,4 +704,67 @@ export function postCommentOnce({ kind, number, body, runGh } = {}) {
   const post = kind === 'pr' ? postPrComment : postIssueComment;
   const r = post({ pr: number, issue: number, body, runGh });
   return { ...r, alreadyPosted: false };
+}
+
+// ── 派前探一针：审官起终端前（#842）──────────────────────────────────────
+//
+// 审官顺位（reviewerOrder）里，先剔同厂（#679 同厂闸不放宽），再按健康表排序、逐位真探，
+// 红换下一位，全红 → stop 报帅停手。逻辑在 lib/preflight.mjs。--no-preflight 跳过且记账。
+//
+// @param {object} args
+// @param {string[]} args.order   审官顺位 id 列表（routing.reviewerOrder）
+// @param {Array}  args.models    routing 模型（含 provider/cli_model，算落地与厂商）
+// @param {string} args.workerId  工人模型 id（同厂闸）
+// @param {boolean} [args.noPreflight]
+// @param {string|null} [args.dispatchId]
+// @param {function} [args.probe] 注入探针（测试用）
+// @param {object} [args.policy] / [args.availabilityResult] / [args.now] 注入
+// @returns {Promise<{ok,stop,chosen,switched,probed,hardBlocked,notes,skipped,report}>}
+export async function preflightReviewer({
+  order = [], models = [], workerId = null, noPreflight = false, dispatchId = null,
+  probe, policy, availabilityResult, now = new Date(), root, home,
+} = {}) {
+  const byId = new Map((models || []).map(m => [m.id, m]));
+  // 同厂闸：顺位里与工人同厂的当场剔除，不放宽。
+  const vendorFiltered = [];
+  for (const id of order || []) {
+    const m = byId.get(id);
+    if (!m) continue;
+    if (workerId != null && String(workerId).trim() !== '') {
+      const gate = assertCrossVendor({ workerId, reviewerId: id, models });
+      if (gate.state === 'same_vendor') continue;
+      // unscanned（查不出厂商）：保守当同厂剔除，不放宽（#679 拿不准不降级）。
+      if (gate.state === 'unscanned') continue;
+    }
+    const pipe = normalizePipes(m)[0];
+    if (!pipe || !pipe.provider) continue;
+    vendorFiltered.push({ id, landing: pipe });
+  }
+  if (vendorFiltered.length === 0) {
+    return {
+      ok: false, stop: true, chosen: null, switched: false, probed: [], hardBlocked: [],
+      notes: ['审官顺位里没有可用候选（同厂全剔 / 顺位空）'], skipped: false,
+      report: '派前探一针：审官顺位无异厂候选，停手报帅。',
+    };
+  }
+  const pol = policy || loadDispatchPolicy(root ? { root } : {});
+  const avail = availabilityResult
+    || (pol.useHealthTable ? availabilityFor(vendorFiltered, { home, now: now instanceof Date ? now.getTime() : now }) : undefined);
+  const r = await runPreflight({
+    candidates: vendorFiltered, policy: pol, noPreflight, role: '审官', dispatchId,
+    availabilityResult: avail, probe, now, home,
+  });
+  const top = vendorFiltered[0] ? vendorFiltered[0].id : null;
+  return {
+    ok: r.ok,
+    stop: r.stop,
+    chosen: r.chosen,
+    switched: !!(r.chosen && top && r.chosen !== top),
+    probed: r.probed,
+    hardBlocked: r.hardBlocked,
+    notes: r.notes,
+    skipped: r.skipped,
+    unscannedFallback: !!r.unscannedFallback,
+    report: r.stop ? preflightStopReport({ role: '审官', probed: r.probed, hardBlocked: r.hardBlocked }) : null,
+  };
 }
