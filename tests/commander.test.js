@@ -439,3 +439,34 @@ describe('辅助纯函数', () => {
     assert.equal(analyzeReviews(['审官判定：绿']).green, false, '近义变体不算绿');
   });
 });
+
+describe('异步派工的真结果（2026-09-04 实咬：#787 派工失败，指挥官报「跑完」+群里发「已自动派单」）', () => {
+  it('resultPathOf：从「已受理」输出里取结果文件路径；取不到回 null', async () => {
+    const M = await import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    assert.equal(M.resultPathOf('{"ok":true,"queued":true,"resultPath":"/tmp/x.out.json"}'), '/tmp/x.out.json');
+    assert.equal(M.resultPathOf('前面有诊断行\n{"resultPath":"/tmp/y.json"}'), '/tmp/y.json');
+    assert.equal(M.resultPathOf('不是 JSON'), null);
+    assert.equal(M.resultPathOf('{"ok":true}'), null, '没有 resultPath 字段 = 拿不到');
+  });
+
+  it('classifyDispatchResult：成/败/没落盘三态分得开，受理不当成功', async () => {
+    const M = await import('file://' + path.join(__dirname, '..', 'scripts', 'commander.mjs').replace(/\\/g, '/'));
+    const good = M.classifyDispatchResult({ present: true, doc: { ok: true, workerCard: 'ISSUE-#815 工人' }, waitedMs: 5000 });
+    assert.equal(good.ok, true);
+    assert.match(good.card, /ISSUE-#815/);
+
+    // 实咬那条：工人 TUI 等就绪失败
+    const bad = M.classifyDispatchResult({ present: true, doc: { ok: false, error: '工人 TUI 等就绪失败：exit null' }, waitedMs: 60000 });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.unscanned, false, '执行体明说失败 = 真失败，不是没查成');
+    assert.match(bad.error, /TUI 等就绪失败/);
+
+    const pending = M.classifyDispatchResult({ present: false, doc: null, waitedMs: 240000 });
+    assert.equal(pending.ok, false);
+    assert.equal(pending.unscanned, true, '还没落盘 = 没查成，既不算成也不算败');
+    assert.match(pending.error, /没查成/);
+
+    const garbage = M.classifyDispatchResult({ present: true, doc: null, waitedMs: 1000 });
+    assert.equal(garbage.unscanned, true, '结果文件坏了也是没查成');
+  });
+});
