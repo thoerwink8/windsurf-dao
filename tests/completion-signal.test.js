@@ -16,8 +16,8 @@ describe('completion-signal', () => {
     const { checkCompletionSignal } = await CHECK_LOAD;
 
     const live = checkCompletionSignal({ root: REPO });
-    await t.test('本仓契约：#807 删 flow 后检查器仍能跑（绿留给 C 改检查器）', () => {
-      assert.ok(!!live.green || !!live.fail, '检查器必须给出绿或红，不许空  →  ' + JSON.stringify(live));
+    await t.test('本仓契约必须是绿（三处都在钉着同一句「完工」）', () => {
+      assert.ok(!!live.green && !live.fail, '本仓自身必须过完工信号契约  →  ' + JSON.stringify(live));
     });
 
     const empty = checkCompletionSignal({ root: path.join(REPO, 'tests', 'fixtures', 'no-such-root') });
