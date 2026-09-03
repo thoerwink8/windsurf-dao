@@ -193,6 +193,42 @@ describe('version-carrier-check', () => {
     });
   });
 
+  it('溯源（#800）：非发布提交动版本号红 / release 提交或 tag 上动绿 / 未变 skip / 没查成', async (t) => {
+    const S = await LOAD;
+    await t.test('isReleaseCommit：release: 前缀（含宿主标）认，普通提交不认', () => {
+      assert.ok(S.isReleaseCommit('release: v1.3.0'));
+      assert.ok(S.isReleaseCommit('[cc] release: v1.3.0'));
+      assert.ok(S.isReleaseCommit('release(train): v1.3.0'));
+      assert.ok(!S.isReleaseCommit('[cc] feat: 顺手 bump'));
+      assert.ok(!S.isReleaseCommit('fix: 修个 bug'));
+    });
+    await t.test('非发布提交动版本号 → 红', () => {
+      const r = S.inspectCarrierProvenance({ oldRaw: '1.2.3', newRaw: '1.3.0', changingCommits: [{ subject: '[cc] feat: x', tagged: false }] });
+      assert.ok(!r.ok && !r.skip && !r.unscanned && /非发布提交/.test((r.problems || []).join(' ')), JSON.stringify(r));
+    });
+    await t.test('release 提交上动 → 绿', () => {
+      const r = S.inspectCarrierProvenance({ oldRaw: '1.2.3', newRaw: '1.3.0', changingCommits: [{ subject: 'release: v1.3.0', tagged: false }] });
+      assert.ok(r.ok && !r.skip, JSON.stringify(r));
+    });
+    await t.test('被 tag 指到的提交上动 → 绿', () => {
+      const r = S.inspectCarrierProvenance({ oldRaw: '1.2.3', newRaw: '1.3.0', changingCommits: [{ subject: '[cc] feat: x', tagged: true }] });
+      assert.ok(r.ok && !r.skip, JSON.stringify(r));
+    });
+    await t.test('载体未变 → skip（正常提交不动版本号是常态）', () => {
+      const r = S.inspectCarrierProvenance({ oldRaw: '1.2.3', newRaw: '1.2.3', changingCommits: null });
+      assert.ok(r.ok && r.skip, JSON.stringify(r));
+    });
+    await t.test('变了却没给改动提交清单 → 没查成', () => {
+      const r = S.inspectCarrierProvenance({ oldRaw: '1.2.3', newRaw: '1.3.0', changingCommits: null });
+      assert.ok(r.unscanned && /没查成/.test(r.error), JSON.stringify(r));
+    });
+    await t.test('夹具判别力：nonrelease-red 红 / release-ok 绿 / unchanged-skip skip', () => {
+      const r = S.inspectCarrierProvenanceFixtures(path.join(__dirname, 'fixtures', 'version-carrier-provenance'));
+      assert.ok(r.ok === true, JSON.stringify(r));
+      assert.ok(r.kinds.red === 1 && r.kinds.ok === 1 && r.kinds.skip === 1, JSON.stringify(r.kinds));
+    });
+  });
+
   it('live 探头：无载体 skip；git 失败没查成；倒退红', async (t) => {
     const S = await LOAD;
     await t.test('无载体 skip', () => {
