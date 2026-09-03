@@ -15,7 +15,7 @@ const INV_MARKER = '[commander-inventory]';
 const STALE_PR_DAYS = 14;
 
 function sh(cmd, args, timeout = 20000) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
   if (r.error) return { ok: false, error: r.error.code || r.error.message };
   return { ok: true, code: r.status, out: String(r.stdout || ''), err: String(r.stderr || '') };
 }

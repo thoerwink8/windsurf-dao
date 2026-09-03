@@ -32,7 +32,7 @@ const REPO_DEFAULT = resolve(__dirname, '..');
 
 // ── git 探头（只读，plan 全程不写） ────────────────────────────────
 function git(cwd, args) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true });
+  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
   return { status: r.status ?? 1, out: String(r.stdout || '').trim(), err: String(r.stderr || '').trim() };
 }
 
@@ -197,7 +197,7 @@ export function doRelease(repo, { now = new Date(), dryRun = false, force = fals
   if (dryRun) {
     say(`[发布列车] [拟] gh release create ${tag} --title ${tag} --notes <CHANGELOG 段>`);
   } else {
-    const gh = spawnSync('gh', ['release', 'create', tag, '--title', tag, '--notes', notes], { cwd: repo, encoding: 'utf8', windowsHide: true });
+    const gh = spawnSync('gh', ['release', 'create', tag, '--title', tag, '--notes', notes], { cwd: repo, encoding: 'utf8' });
     if ((gh.status ?? 1) !== 0) {
       say(`[发布列车] gh release 失败：${String(gh.stderr || gh.stdout || '').slice(0, 200)}`);
     }
@@ -208,7 +208,7 @@ export function doRelease(repo, { now = new Date(), dryRun = false, force = fals
   if (dryRun) {
     say(`[发布列车] [拟] hub-say：${line}`);
   } else {
-    const hub = spawnSync('/home/orca/bin/hub-say', [line], { encoding: 'utf8', windowsHide: true });
+    const hub = spawnSync('/home/orca/bin/hub-say', [line], { encoding: 'utf8' });
     if ((hub.status ?? 1) !== 0) say(`[发布列车] hub-say 失败（不阻断发版）：${String(hub.stderr || hub.stdout || '').slice(0, 160)}`);
   }
 
@@ -276,8 +276,8 @@ export function installUnits(repo, { user = 'orca', at = '04:00', unitDir = '/et
   // 只有真装到系统目录、且非 dry-run 时才碰 systemctl（幂等）
   const isSystem = resolve(unitDir) === resolve('/etc/systemd/system');
   if (!dryRun && isSystem) {
-    spawnSync('systemctl', ['daemon-reload'], { encoding: 'utf8', windowsHide: true });
-    spawnSync('systemctl', ['enable', '--now', 'release-train.timer'], { encoding: 'utf8', windowsHide: true });
+    spawnSync('systemctl', ['daemon-reload'], { encoding: 'utf8' });
+    spawnSync('systemctl', ['enable', '--now', 'release-train.timer'], { encoding: 'utf8' });
     say('[发布列车] systemctl daemon-reload + enable --now release-train.timer');
   } else if (!isSystem) {
     say(`[发布列车] 单元写到 ${unitDir}（非系统目录，不碰 systemctl）——装到系统：sudo cp ${unitDir}/release-train.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now release-train.timer`);

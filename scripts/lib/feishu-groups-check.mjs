@@ -24,7 +24,7 @@ export const GROUPS_REL = 'host/machine/feishu-groups.json';
 export const RUNTIME_GROUPS_REL = '.mirasim/keys/feishu-groups.json';
 const FIX_RUNTIME = '把 ~/.mirasim/keys/feishu-groups.json 里失效的 chat_id 换成还活着的群（lark-cli im +chat-list --as bot），或删掉已解散的那一行';
 
-const SPAWN_OPTS = { encoding: 'utf8', timeout: 20000, windowsHide: true };
+const SPAWN_OPTS = { encoding: 'utf8', timeout: 20000 };
 
 function firstJson(text) {
   const s = String(text || '').trim();

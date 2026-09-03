@@ -625,7 +625,7 @@ export function isCiEnv(env = process.env) {
 }
 
 export function orcaHelpAvailable(spawn = spawnSync) {
-  const r = spawn('orca', ['--help'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+  const r = spawn('orca', ['--help'], { encoding: 'utf8', timeout: 15000 });
   if (r.error) {
     const msg = r.error.message || String(r.error);
     const missing = r.error.code === 'ENOENT' || /ENOENT/i.test(msg);
@@ -637,22 +637,22 @@ export function orcaHelpAvailable(spawn = spawnSync) {
 }
 
 /**
- * --help 自检是 local-only：真跑 orca --help。
- * CI 无 orca → SKIP（可见，不计失败）；本机无 orca → FAIL（不许悄悄跳过）。
- * 静默跳过会把「没查成」当成「查过没事」；直接 FAIL 会让 CI 永远红。
+ * --help 自检：有 orca 必须真跑；orca 不在 PATH（CI / 云 VM / 未装）→ SKIP 不是绿。
+ * #807：不再把「本机无 orca」当红——Linux 服务器 PATH 与 Windows 本机不是同一套。
+ * orca 在但 --help 空/坏 → FAIL（装了却查不成，不是「没装」）。
  */
 export function helpCheckPolicy({ ci, orca } = {}) {
   if (orca && orca.ok) return { action: 'run' };
-  if (ci && orca && orca.missing) {
-    return { action: 'skip', reason: '本项需本机 orca，CI 无法验证' };
+  if (orca && orca.missing) {
+    return { action: 'skip', reason: 'orca 不在 PATH，--help 自检本次无法验证' };
   }
-  return { action: 'fail', reason: (orca && orca.error) || '本机 orca 不在 PATH，--help 自检没查成' };
+  return { action: 'fail', reason: (orca && orca.error) || 'orca --help 没查成' };
 }
 
 export function fetchOrcaHelp(cmd, spawn = spawnSync) {
   const parts = String(cmd).trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) throw new Error('fetchOrcaHelp 没给命令');
-  const r = spawn('orca', [...parts, '--help'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  const r = spawn('orca', [...parts, '--help'], { encoding: 'utf8', timeout: 20000 });
   if (r.error) throw new Error(r.error.message || 'spawn orca 失败');
   const text = `${r.stdout || ''}${r.stderr || ''}`;
   if (!String(text).trim()) throw new Error(`orca ${cmd} --help 无输出`);

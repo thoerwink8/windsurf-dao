@@ -1,7 +1,4 @@
 #!/bin/sh
-# agent shim (Git Bash): same Clash Party proxy as cursor-agent
-# proxy: set DAO_PROXY to override (default keeps legacy 7890 behavior)
-: "${DAO_PROXY:=http://127.0.0.1:7890}"
-export HTTPS_PROXY="$DAO_PROXY" HTTP_PROXY="$DAO_PROXY" ALL_PROXY="$DAO_PROXY"
-export NODE_USE_ENV_PROXY=1
-exec "${LOCALAPPDATA}/cursor-agent/agent.cmd" "$@"
+# agent shim leftover after #807: cursor-agent 已从选型移除，本 shim 不再包装 Windows 二进制。
+echo "agent shim retired (#807/#822): use pi, not cursor-agent" >&2
+exit 1

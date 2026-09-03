@@ -24,7 +24,6 @@ function defaultGit(args, { cwd } = {}) {
   const r = spawnSync('git', args, {
     encoding: 'utf8',
     cwd,
-    windowsHide: true,
     timeout: 30000,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {

@@ -289,8 +289,8 @@ describe('dao-mode', () => {
 
     {
       const r = checkModeHook({ root: REPO, home: fakeHome("bare") });
-      await t.test('一个装载面都没有（没装/被删）⇒ 报红并给装法', () => {
-        assert.ok(!!r.fail && /一个装载面都没点到/.test(r.fail[0]), '一个装载面都没有（没装/被删）⇒ 报红并给装法  →  ' + JSON.stringify(r).slice(0, 160));
+      await t.test('一个装载面都没有（没装 Claude Code）⇒ SKIP 不是绿', () => {
+        assert.ok(!!r.skip && !r.green && !r.fail, '一个装载面都没有（没装 Claude Code）⇒ SKIP 不是绿  →  ' + JSON.stringify(r).slice(0, 160));
       });
     }
     {

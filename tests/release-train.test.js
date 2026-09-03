@@ -12,7 +12,7 @@ const CLI = path.join(REPO, 'scripts', 'release-train.mjs');
 const LOAD = import(CORE);
 
 function git(cwd, args, env) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...env }, windowsHide: true });
+  return spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...env } });
 }
 
 // 造一个真 git 临时仓：v0.1.0 tag + 若干 squash-merge 风格提交。
@@ -146,7 +146,7 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
       '[grok] fix: 修边界 (#903)',
     ]);
     try {
-      const plan = spawnSync(process.execPath, [CLI, 'plan', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const plan = spawnSync(process.execPath, [CLI, 'plan', '--repo', dir], { encoding: 'utf8' });
       assert.equal(plan.status, 0, plan.stderr);
       const j = JSON.parse(plan.stdout);
       assert.equal(j.lastTag, 'v0.1.0', JSON.stringify(j));
@@ -164,21 +164,21 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
 
       // fail-closed：未到发布点，release（非 dry-run）拒发、退非零、不打 tag、不写 CHANGELOG
       // ——这就是审官在 956f8a2 上做的判别性实验的自动化版本。
-      const rel = spawnSync(process.execPath, [CLI, 'release', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const rel = spawnSync(process.execPath, [CLI, 'release', '--repo', dir], { encoding: 'utf8' });
       assert.notEqual(rel.status, 0, '未到发布点 release 必须非零退出，实际 status=' + rel.status + ' out=' + rel.stdout);
       assert.ok(/未到发布点/.test(rel.stdout), rel.stdout);
       assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0'], '未到发布点不该打 tag');
       assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')), '未到发布点不该写 CHANGELOG');
 
       // dry-run 也一样如实报「未到发布点，不发」、非零、不写盘
-      const dry = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const dry = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8' });
       assert.notEqual(dry.status, 0, dry.stdout);
       assert.ok(/未到发布点/.test(dry.stdout), dry.stdout);
       assert.deepEqual(git(dir, ['tag', '--list']).stdout.trim().split(/\s+/), ['v0.1.0']);
       assert.ok(!fs.existsSync(path.join(dir, 'CHANGELOG.md')));
 
       // --force 才强发；--dry-run --force 预演出正确 tag，仍不写盘
-      const forced = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--force', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const forced = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--force', '--repo', dir], { encoding: 'utf8' });
       assert.equal(forced.status, 0, forced.stderr);
       assert.ok(/v0\.2\.0/.test(forced.stdout), forced.stdout);
       assert.ok(/--force/.test(forced.stdout), forced.stdout);
@@ -196,10 +196,10 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
       '[cc] fix: d (#4)', '[grok] chore: e', '[cc] fix: f (#7)',
     ]);
     try {
-      const plan = JSON.parse(spawnSync(process.execPath, [CLI, 'plan', '--repo', dir], { encoding: 'utf8', windowsHide: true }).stdout);
+      const plan = JSON.parse(spawnSync(process.execPath, [CLI, 'plan', '--repo', dir], { encoding: 'utf8' }).stdout);
       assert.equal(plan.mergedCount, 6);
       assert.equal(plan.shouldRelease.release, true, JSON.stringify(plan.shouldRelease));
-      const rel = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const rel = spawnSync(process.execPath, [CLI, 'release', '--dry-run', '--repo', dir], { encoding: 'utf8' });
       assert.equal(rel.status, 0, rel.stderr);
       assert.ok(/v0\.2\.0/.test(rel.stdout), rel.stdout);
       assert.ok(/拟/.test(rel.stdout), rel.stdout);
@@ -213,7 +213,7 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
   it('should-run：3 个合并未到阈值 → 退非 0', () => {
     const dir = makeRepo(['[grok] feat: a (#1)', '[cc] fix: b (#2)', 'chore: c']);
     try {
-      const r = spawnSync(process.execPath, [CLI, 'should-run', '--repo', dir], { encoding: 'utf8', windowsHide: true });
+      const r = spawnSync(process.execPath, [CLI, 'should-run', '--repo', dir], { encoding: 'utf8' });
       // 周中运行时应非 0；若恰逢本周期未发过版的周日则为 0——两种都是合法态，断言退出码与话面一致
       const releasedByOutput = /^到发布点/.test(r.stdout.trim());
       assert.equal(r.status === 0, releasedByOutput, `退出码与话面不一致：status=${r.status} out=${r.stdout}`);
@@ -225,7 +225,7 @@ describe('release-train CLI（真 git 临时仓 e2e）', () => {
   it('install：幂等——连跑两遍单元文件不变、不重复', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-units-'));
     try {
-      const run = () => spawnSync(process.execPath, [CLI, 'install', '--unit-dir', dir, '--user', 'orca', '--at', '04:00'], { encoding: 'utf8', windowsHide: true });
+      const run = () => spawnSync(process.execPath, [CLI, 'install', '--unit-dir', dir, '--user', 'orca', '--at', '04:00'], { encoding: 'utf8' });
       const a = run();
       assert.equal(a.status, 0, a.stderr);
       const svc1 = fs.readFileSync(path.join(dir, 'release-train.service'), 'utf8');

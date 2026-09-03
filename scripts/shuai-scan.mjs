@@ -55,7 +55,6 @@ function runGh(args) {
   const r = spawnSync(ghExecutable(), args, {
     encoding: 'utf8',
     cwd: ROOT,
-    windowsHide: true,
     timeout: 45000,
     env: process.env,
   });

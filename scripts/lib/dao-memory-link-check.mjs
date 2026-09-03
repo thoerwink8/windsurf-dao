@@ -5,12 +5,12 @@
 //
 // 被检查的是什么（NEW-MACHINE §10 定义的正确状态）：本机
 // `~/.claude/projects/<编码后的仓库路径>/memory` 必须是**指向 windsurf-dao-memory 这个独立仓
-// 的 clone 的 Junction**。memory 已自 #518 从主仓搬进独立仓
+// 的 clone 的符号链接**（#807：Linux 服务器用 symlink，不再认 Windows Junction）。memory 已自 #518 从主仓搬进独立仓
 // thoerwink8/windsurf-dao-memory（#529 把主仓那一半拆掉），接上之后 Claude 每写一条 memory，
 // memory 仓 `git status` 就多一条未提交变更，记忆才真正活着。
 //
 // #529 的新判据（不硬编码任何本机路径，换机成立）：
-//   Junction 目标必须是一个 git 仓库，且它的 `origin` remote 指向
+//   链接目标必须是一个 git 仓库，且它的 `origin` remote 指向
 //   `thoerwink8/windsurf-dao-memory`——从 URL 里抽 owner/repo 再比，SSH
 //   （git@github.com:owner/repo.git）与 HTTPS（https://github.com/owner/repo.git）两种形式都认，
 //   容忍结尾 .git 与尾斜杠（换机用 HTTPS clone 时不能假红）。
@@ -81,7 +81,7 @@ export function checkMemoryLink({ root, home }) {
     return { fail: ['本机 memory 目录探测不了', '确认 ~/.claude/projects 可读，或重跑 NEW-MACHINE §10 的脚本', `${local}: ${String(e.message || e).slice(0, 120)}`] };
   }
 
-  // 是链接（Junction 在 Windows 上 lstat 也报 isSymbolicLink）→ 验目标
+  // 是符号链接 → 验目标（#807：POSIX symlink；旧 Junction 在 Windows 上 lstat 也报 isSymbolicLink）
   if (st.isSymbolicLink()) {
     let got;
     try {
@@ -93,7 +93,7 @@ export function checkMemoryLink({ root, home }) {
   }
 
   if (st.isDirectory()) {
-    return { fail: ['本机 memory 是普通目录，不是指向 memory 仓的 Junction', '先关掉所有 Claude Code 窗口，再在**主仓根**跑 NEW-MACHINE §10 的脚本（会把本机目录改名备份并建 Junction）', local] };
+    return { fail: ['本机 memory 是普通目录，不是指向 memory 仓的符号链接', '删掉这个目录后把 ~/.claude/projects/<编码>/memory 链到 windsurf-dao-memory 的 clone（NEW-MACHINE §10）', local] };
   }
 
   return { fail: ['本机 memory 既不是链接也不是目录', '重跑 NEW-MACHINE §10 的脚本重建', `${local}（mode=${st.mode}）`] };
@@ -108,7 +108,7 @@ function checkMemoryTarget(target, local) {
   try {
     st = lstatSync(dotGit);
   } catch (e) {
-    return { fail: ['本机 memory 指向的不是 windsurf-dao-memory 仓', `重跑 NEW-MACHINE §10：先 clone thoerwink8/windsurf-dao-memory，再把 Junction 指到那个 clone`, `${local} → ${target}（无 .git，不是 git 仓库——含搬家前指向主仓旧 memory 目录的形态）`] };
+    return { fail: ['本机 memory 指向的不是 windsurf-dao-memory 仓', `重跑 NEW-MACHINE §10：先 clone thoerwink8/windsurf-dao-memory，再把符号链接指到那个 clone`, `${local} → ${target}（无 .git，不是 git 仓库——含搬家前指向主仓旧 memory 目录的形态）`] };
   }
   if (st.isDirectory()) {
     gitDir = dotGit;
@@ -142,12 +142,12 @@ function checkMemoryTarget(target, local) {
   }
   const slug = repoSlugFromUrl(origin);
   if (!slug || slug.toLowerCase() !== MEMORY_REPO_SLUG.toLowerCase()) {
-    return { fail: ['本机 memory 指向的仓 origin 不是 windsurf-dao-memory', '重跑 NEW-MACHINE §10：把 Junction 指到 windsurf-dao-memory 的 clone', `${local} → ${target}（origin=${origin}）`] };
+    return { fail: ['本机 memory 指向的仓 origin 不是 windsurf-dao-memory', '重跑 NEW-MACHINE §10：把符号链接指到 windsurf-dao-memory 的 clone', `${local} → ${target}（origin=${origin}）`] };
   }
   return { green: `本机 memory 已接：${local} → ${target}（origin=${MEMORY_REPO_SLUG}，新写的 memory 落在独立仓）` };
 }
 
-/** dao-check 侧拿到的宿主目录：USERPROFILE（Windows）或 HOME（POSIX）。 */
+/** dao-check 侧拿到的宿主目录：HOME（POSIX / Linux 服务器）；USERPROFILE 只当别名。 */
 export function defaultHome(env = process.env) {
-  return env.USERPROFILE || env.HOME || '';
+  return env.HOME || env.USERPROFILE || '';
 }

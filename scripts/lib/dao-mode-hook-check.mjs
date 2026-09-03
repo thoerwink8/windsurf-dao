@@ -135,11 +135,9 @@ export function checkModeHook({ root, home }) {
   }
 
   if (candidates.length === 0) {
-    return { fail: [
-      '态注入 hook 一个装载面都没点到',
-      `装：把 host/skills/<名> 用 SymbolicLink 链到 ${join(home, '.claude', 'skills')}\\<名>（插件面自动加载，不用改 settings.json），详见 NEW-MACHINE.md`,
-      `找过：${join(home, '.claude', 'skills')} 下的插件面${anySettingsFace ? ' + settings 面' : '（settings 面也没有）'}`,
-    ] };
+    // #807：Linux 服务器上可以没有 Claude Code。没装载面 = 本次无法验证，SKIP 不是绿。
+    // 有 settings / 插件面却点不到本仓脚本，仍走下面的红（装了但断了）。
+    return { skip: `态注入 hook 本机未接 Claude Code（${join(home, '.claude', 'skills')} 无插件面${anySettingsFace ? '' : '、settings 面也没有'}）⇒ 本项无法验证` };
   }
 
   const unregistered = scripts.filter(f => !candidates.some(c => c.command.includes(f)));

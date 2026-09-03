@@ -34,7 +34,7 @@ const UNKNOWN = 'unknown';
 
 /** 跑一条命令，永不抛：拿不到就 unknown，不许当 0 条。 */
 function run(cmd, args, { timeout = 30000 } = {}) {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, windowsHide: true });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout });
   if (r.error) return { probed: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { probed: false, reason: `被信号打断：${r.signal}（可能超时 ${timeout}ms）` };
   return { probed: true, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };

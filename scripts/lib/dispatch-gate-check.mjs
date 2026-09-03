@@ -87,7 +87,6 @@ function runScript(script, { command, envExtra = {}, cursor = false } = {}) {
     encoding: 'utf8',
     input: cursor ? cursorPayload(command) : payload(command),
     timeout: 15000,
-    windowsHide: true,
     env: { ...process.env, ...envExtra },
   });
 }
