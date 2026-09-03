@@ -51,7 +51,7 @@ export const GATE_PENDING = '待拍板';
 export const LLM_DOWN_REPLY = '机器人暂时没法判断，稍后重试。';
 export const HUB_GUIDANCE = '这里是总控群，需求请发到项目群。';
 /** #852：拍板意图但定位不到单号时问清，不猜。 */
-export const HUB_DECISION_ASK = '要拍板哪张单？给我编号（#N 或 issue/PR 链接），我把结论写回去。';
+export const HUB_DECISION_ASK = '要拍板哪张单？回我编号（比如 #846）或那张单的链接，我把结论记上去。';
 /** #852：hub 对话意图集合（LLM 分类只认这四个，其余归 other）。 */
 export const HUB_INTENTS = ['situation', 'decision', 'new_request', 'other'];
 
@@ -202,11 +202,11 @@ async function triageHub(inbound, deps) {
     || (inbound.threadRoot?.fromBot ? extractIssueRef(inbound.threadRoot.text) : null);
   if (pending?.repo && pending?.number) {
     if (!allowed('decision')) {
-      return reply('拍板回写未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 decision）。', { intent: 'decision' });
+      return reply('总控群现在不收拍板，请直接到那张单下面留言。', { intent: 'decision' });
     }
     await deps.ghComment(pending.repo, pending.number, hubDecisionComment(inbound));
     return reply(
-      `拍板已写回 ${pending.repo}#${pending.number}：${sentence(oneSentence(inbound.text))}`,
+      `已记到 #${pending.number}（${shortRepo(pending.repo)}）：${sentence(oneSentence(inbound.text))}`,
       { intent: 'decision', landedTo: `${pending.repo}#${pending.number}` },
     );
   }
@@ -224,7 +224,7 @@ async function triageHub(inbound, deps) {
 
   if (intent === 'decision') {
     if (!allowed('decision')) {
-      return reply('拍板回写未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 decision）。', { intent });
+      return reply('总控群现在不收拍板，请直接到那张单下面留言。', { intent });
     }
     const fallbackRepo = context.projects?.[0]?.repo || null;
     const ref = extractIssueRef(inbound.text, fallbackRepo)
@@ -233,14 +233,14 @@ async function triageHub(inbound, deps) {
     if (!ref) return reply(HUB_DECISION_ASK, { intent });
     await deps.ghComment(ref.repo, ref.number, hubDecisionComment(inbound));
     return reply(
-      `拍板已写回 ${ref.repo}#${ref.number}：${sentence(oneSentence(inbound.text))}`,
+      `已记到 #${ref.number}（${shortRepo(ref.repo)}）：${sentence(oneSentence(inbound.text))}`,
       { intent, landedTo: `${ref.repo}#${ref.number}` },
     );
   }
 
   // situation / other：聚合盘面作答（只读，不新增动词——#852 后台管理接线③）。
   if (!allowed('situation')) {
-    return reply('盘面问答未开放（docs/dispatch-policy.json hubChat.allowedActions 缺 situation）。', { intent });
+    return reply('总控群现在不答盘面。', { intent });
   }
   const answer = await deps.llm({
     system: PERSONA, user: hubAnswerPrompt(inbound, buildHubContextBlock(context)), daoTask: 'hub-chat',
@@ -273,10 +273,17 @@ function hubChatRecord(inbound, deps, { intent, reply, landedTo = null }) {
   };
 }
 
+/** 回执里 owner/ 前缀是黑话（2026-09-04 说人话）：只留仓名。 */
+function shortRepo(repo) {
+  const s = String(repo || '');
+  return s.includes('/') ? s.split('/').pop() : s;
+}
+
 function hubDecisionComment(inbound) {
+  // 溯源（chat_id/message_id）进 HTML 注释：留痕不刷屏（2026-09-04 说人话审官项 9）。
   return [
     `【飞书拍板】${inbound.senderName || inbound.senderOpenId}：${inbound.text}`,
-    `（来源：总控群 chat_id ${inbound.chatId} / message_id ${inbound.messageId}）`,
+    `<!-- feishu chat_id ${inbound.chatId} / message_id ${inbound.messageId} -->`,
   ].join('\n');
 }
 
@@ -302,7 +309,9 @@ function hubAnswerPrompt(inbound, contextBlock) {
     '机读盘面（聚合自各项目指挥官态势 + 供应商健康表 + 熔断表）：',
     contextBlock,
     '',
-    '用盘面数据回答；数据里没有的就说没查到，不编造。提到单子带编号。一条回复 ≤ 8 行。',
+    '用盘面数据回答；数据里没有的就说没查到，不编造。提到单子带编号。',
+    '说人话（对方是老板不是运维）：三段式——出了什么事 / 对他有什么影响 / 打算怎么办（要不要他拍）。',
+    '不出现路径、命令、pid、timer、gw:/leg:/direct: 这类内部代号；供应商线路用日常叫法（如「grok 模型池」「codex 审官直连」）。一条回复 ≤ 8 行。',
   ].join('\n');
 }
 
@@ -336,7 +345,7 @@ export function buildHubContextBlock(context = {}) {
     } else {
       lines.push(`github 面没查成：${gh?.error || '未扫'}`);
     }
-    for (const [key, label] of [['orca', 'orca'], ['reviewPending', '复审队列'], ['stall', '撞死指纹']]) {
+    for (const [key, label] of [['orca', '工人树'], ['reviewPending', '复审队列'], ['stall', '卡死探测']]) {
       const sec = s[key];
       if (sec && sec.scanned === false) lines.push(`${label} 面没查成：${sec.error || ''}`);
     }
