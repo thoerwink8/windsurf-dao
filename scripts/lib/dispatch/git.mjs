@@ -12,7 +12,7 @@ import { ghAs } from '../gh.mjs';
 export function gitCapture(cwd, args) {
   if (!cwd) return { ok: false, error: 'git 没给工作区路径' };
   const r = spawnSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8', windowsHide: true, timeout: 15000,
+    encoding: 'utf8', timeout: 15000,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {
     return { ok: false, error: String(r.error?.message || r.stderr || `git exit ${r.status}`).trim().slice(0, 200) };
@@ -315,7 +315,7 @@ export function runGh(args, { cwd, role } = {}) {
   // role 有值 → 走 GitHub App 身份（#573）。其余裸调用先保持本人 gh，全量替换另开单。
   if (role) return ghAs(role, args, { cwd });
   const r = spawnSync('gh', args, {
-    encoding: 'utf8', windowsHide: true, timeout: 30000, cwd,
+    encoding: 'utf8', timeout: 30000, cwd,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {
     return { ok: false, error: String(r.error?.message || r.stderr || `gh exit ${r.status}`).trim().slice(0, 240) };

@@ -52,7 +52,7 @@ test "$(git branch --show-current)" = master \
 
 ## 非阻塞
 
-派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一个** detached 后台进程（2026-08-23 拍板：从哑终端改成 spawn detached + windowsHide，面板 0 占用；活性看租约 `_flow/inbox.lease` 新鲜 + PID 在 + 命令行核对），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。台保活归 `guard-keepalive`（hook 触发 --once，租约即心跳，停更 90s 杀掉重拉）；派工路不再跑 ensure。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；**帅窗不许触发这条**。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
+派完即回对话态，帅不前台长等。本机信箱台（`scripts/inbox-station.mjs relay`）是**全机唯一一个** detached 后台进程（2026-08-23 拍板：从哑终端改成 spawn detached，面板 0 占用；活性看租约 `_flow/inbox.lease` 新鲜 + PID 在 + 命令行核对），轮询全部在途 Run 的信（读 `orchestration inbox`，不抢 waiter）。台保活归 `guard-keepalive`（hook 触发 --once，租约即心跳，停更 90s 杀掉重拉）；派工路不再跑 ensure。**人用窗口（帅 / 主帅）永不当 coordinator**（#667）：裸 `run-use` / `run-create` 和心跳被派工闸拦住。`dao.mjs dispatch` 不 `run-use`。例外（#675）：工人 TUI 上 `bindStation` 在 `run-current` 为 null 时对本窗 `run-create`（不 `--from` 信箱台）；**帅窗不许触发这条**。真信只进 `_flow/inbox.log` 和 GitHub；帅读这两处知道完工/升级，不靠输入框横幅，也不挂 `check --wait`（一个 run 只允许一个 actionable waiter，再挂会 `waiter_exists` 刷屏，#525）。要手查用一次性 `orca orchestration inbox --json` 或读日志。心跳不准发到 Run（#667）；活性看 git/产物/看门狗。循环跑外部命令的监视脚本必须让「同一条错误连续出现」收敛（计数/退避/自杀），否则一个稳定失败就是刷屏机器。
 
 完工信号分两层，缺一层就会静默停：
 

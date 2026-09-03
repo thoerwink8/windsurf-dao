@@ -22,7 +22,7 @@
 |---|---|---|
 | A | ~/.claude | 产品根。子项见下行，不要整目录镜像 |
 | A | ~/.claude/CLAUDE.md | NEW-MACHINE §3。真相源 `docs/global-CLAUDE.md` |
-| A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的 Junction |
+| A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的符号链接 |
 | D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git。其中 `statusLine.command` 指本仓 `host/statusline.js` 的**本机绝对路径**（仓搬家/换机要手改）——onboard 哨兵 `statusline-dangling` 报断 |
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
 | A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
@@ -49,7 +49,7 @@
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
-| B | ~/AppData/Local/cursor-agent | cursor 真实二进制。shim 包装它，路径因机而异 |
+| B | ~/AppData/Local/cursor-agent | 历史 Windows 二进制落点（#807 已删 shim；NEW-MACHINE 仍记装机史） |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |
 | B | ~/.orca/agent-hooks | Orca 状态 hook。模板 `host/machine/hooks/` |
@@ -58,4 +58,4 @@
 | E | ~/AppData/Roaming/mihomo-party | 归 `ai-gateway-stack`。Clash Party 覆写里有按 IP 写死的网关直连规则，换 VPS 要跟着改；覆写只在启动时读盘，改完必须重启 |
 | A | ~/.cursor/skills | NEW-MACHINE §11.2。链到 `host/skills`（Cursor Desktop；与 `~/.claude/skills` 对称） |
 | D | ~/.cursor/skills-cursor | Cursor 系统内置 skills，禁手写；装机只链 `~/.cursor/skills` |
-| B | ~/.cursor/hooks.json | 用户级 hook 登记。必须 `conhost --headless`，禁止 EncodedCommand |
+| B | ~/.cursor/hooks.json | 用户级 hook 登记 |

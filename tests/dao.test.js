@@ -173,12 +173,12 @@ describe('dao', () => {
     await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {
       assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false' && devin.start === 'agent' && devin.agentId === 'devin', '#782 devin launch  →  ' + JSON.stringify(devin));
     });
-    await t.test('shim 文件在仓里', () => {
-      assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd')), 'shim 文件在仓里');
+    await t.test('POSIX grok shim 在仓里', () => {
+      assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok')), 'POSIX grok shim 在仓里');
     });
-    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd'), 'utf8');
+    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok'), 'utf8');
     await t.test('shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）', () => {
-      assert.ok(/if not defined DAO_PROXY set "DAO_PROXY=http:\/\/127\.0\.0\.1:7890"/.test(shim) && /set "HTTPS_PROXY=%DAO_PROXY%"/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
+      assert.ok(/DAO_PROXY:=http:\/\/127\.0\.0\.1:7890/.test(shim) && /HTTPS_PROXY/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
     });
 
     let threw = false;
@@ -286,11 +286,15 @@ describe('dao', () => {
 
     const skipCi = S.helpCheckPolicy({ ci: true, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
     await t.test('CI 无 orca → SKIP（不计失败）', () => {
-      assert.ok(skipCi.action === 'skip' && /本项需本机 orca/.test(skipCi.reason), 'CI 无 orca → SKIP（不计失败）  →  ' + JSON.stringify(skipCi));
+      assert.ok(skipCi.action === 'skip' && /不在 PATH/.test(skipCi.reason), 'CI 无 orca → SKIP（不计失败）  →  ' + JSON.stringify(skipCi));
     });
-    const failLocal = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
-    await t.test('本机无 orca → FAIL（不许悄悄跳过）', () => {
-      assert.ok(failLocal.action === 'fail', '本机无 orca → FAIL（不许悄悄跳过）  →  ' + JSON.stringify(failLocal));
+    const skipLocal = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
+    await t.test('本机无 orca → SKIP（#807 不再当红）', () => {
+      assert.ok(skipLocal.action === 'skip', '本机无 orca → SKIP（#807 不再当红）  →  ' + JSON.stringify(skipLocal));
+    });
+    const failBroken = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: false, error: 'orca --help 无输出' } });
+    await t.test('orca 在但 --help 空 → FAIL', () => {
+      assert.ok(failBroken.action === 'fail', 'orca 在但 --help 空 → FAIL  →  ' + JSON.stringify(failBroken));
     });
     const runLive = S.helpCheckPolicy({ ci: true, orca: { ok: true, missing: false } });
     await t.test('有 orca 时 CI 也必须真跑', () => {

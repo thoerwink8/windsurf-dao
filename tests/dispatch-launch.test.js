@@ -450,7 +450,7 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(bad.ok === false && bad.unscanned === true, '没给数组 = 没查成');
     });
 
-    await t.test('spawnDispatchExecutor：detached + windowsHide + stdio 进日志 + unref', () => {
+    await t.test('spawnDispatchExecutor：detached + stdio 进日志 + unref', () => {
       const calls = [];
       const fakeSpawn = (exe, argv, opts) => {
         calls.push({ exe, argv, opts });
@@ -466,7 +466,7 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(calls.length === 1, 'spawnFn 调一次');
       const c = calls[0];
       assert.ok(c.argv.includes('dispatch-exec') && c.argv.includes('--order'), 'argv 带 dispatch-exec --order  →  ' + c.argv.join(' '));
-      assert.ok(c.opts.detached === true && c.opts.windowsHide === true, 'detached + windowsHide');
+      assert.ok(c.opts.detached === true && c.opts.windowsHide !== true, 'detached，不再传 windowsHide');
       assert.ok(Array.isArray(c.opts.stdio) && c.opts.stdio[1] !== 'ignore' && c.opts.stdio[2] !== 'ignore',
         'stdout/stderr 进日志 fd');
       assert.ok(fs.existsSync(logPath), '日志文件已开');

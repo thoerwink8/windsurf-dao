@@ -19,17 +19,17 @@
 // 检查项随之删除；之后按对抗审意见恢复了「跑 tests/ 下测试」的检查（脱敏回归网回来）。
 // 2026-08-16 拆旧（issue #529）：memory 整体搬到独立仓 thoerwink8/windsurf-dao-memory（#518），
 // ⑥ 主仓 memory 索引双向齐随检查对象删除（索引齐的价值转到新仓自己的 gen-index.mjs --check）；
-// ⑨ 判据从「Junction 指向仓内 memory 真相源」改为「Junction 目标仓的 origin ==
-// thoerwink8/windsurf-dao-memory」。编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，
-// ⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
+// ⑨ 判据从「Junction 指向仓内 memory 真相源」改为「符号链接目标仓的 origin ==
+// thoerwink8/windsurf-dao-memory」（#807：Linux 服务器形态，不再认 Windows Junction）。
+// 编号不复位：⑥ 的坑位消失，⑦~⑫ 保持原号，⑨ 的引用在 NEW-MACHINE / tests / skills 里按 ⑨ 记账。
 // 当前检查：①跑 tests/ 下所有测试 ②skill 装载 ③密钥不进 git 追踪面 ④常驻文件 token 预算
 // ⑤模型路由（TOML providers.launch + JSON 政策 + yml 同源 + nextLaunch 夹具）
-// ⑦命令库 --help 参数存活（local-only：本机必须真跑 orca --help；
-//   CI 无 orca 输出 SKIP「本项需本机 orca，CI 无法验证」，不计失败。
-//   不许静默跳过——SKIP 和 ok 必须能分开）。
-// ⑧态注入 hook 装载面点得到且真跑得动（issue #488），全部扫描自发现。
-// ⑨本机 memory 是否指向 windsurf-dao-memory 仓的 Junction（local-only，#503 判据改写 #529）：
-//   Junction 目标必须是 git 仓且 origin remote 指向 thoerwink8/windsurf-dao-memory（从 URL 抽
+// ⑦命令库 --help 参数存活（#807：orca 不在 PATH 一律 SKIP，不再把「本机无 orca」当红；
+//   有 orca 必须真跑。SKIP 和 ok 必须能分开）。
+// ⑧态注入 hook 装载面点得到且真跑得动（issue #488）；#807：本机未接 Claude Code
+//   （无 ~/.claude/skills 且无 settings 面）SKIP 不是绿，有装载面仍必须真跑。
+// ⑨本机 memory 是否指向 windsurf-dao-memory 仓的符号链接（local-only，#503/#529/#807）：
+//   链接目标必须是 git 仓且 origin remote 指向 thoerwink8/windsurf-dao-memory（从 URL 抽
 //   owner/repo 再比，SSH/HTTPS 两种形式都认）；普通目录/悬空/目标不是 memory 仓/无 origin/
 //   origin 不对均红；本机无该项目 memory 目录（CI/新机/未接 worktree）出 SKIP 不是绿。
 // ⑩ extract* 解析外部 JSON 必须有真语料存档（#499）
@@ -47,8 +47,8 @@
 //    存量按文件名豁免；本机 memory 未接 → SKIP 不是绿；红/绿夹具都要有判别力
 // ⑲ 帅操作 issue 走 marshal（#627）：dispatch skill 约定还在；host/skills 不再教裸
 //    `gh issue` 写动作；0 个 skill = 没查成，不是绿
-// ⑳ 仓外路径闸（#642）：独立扫描 ~/ %USERPROFILE% %APPDATA% %LOCALAPPDATA% $HOME
-//    os.homedir() 等，不读 INDEX 自己的解析器；发现集合必须等于 INDEX∪ignore；
+// ⑳ 仓外路径闸（#642 / #807）：独立扫描 ~/ $HOME os.homedir()（Windows 环境变量只当别名归一，
+//    不再要求 conhost / EncodedCommand）；不读 INDEX 自己的解析器；发现集合必须等于 INDEX∪ignore；
 //    扫到 0 条 = 没查成；夹具红/绿/空都要有判别力
 // ㉑ 关单不改走 GitHub 自动关键词（#657）：扫 dispatch 任务书模板，再出现 Closes #/Fixes # 就红；
 //    红/绿样本各一验判别力；live 扫 host/skills/dispatch/templates/*.md，0 个模板 = 没查成
@@ -194,8 +194,8 @@ function parseTapSummary(output) {
 // 自发现：tests/ 下的每一套都跑，没有清单可以漏登记。
 // #608：26 套从自造 check() runner 迁到 node --test（node:test + node:assert），
 // 文件名 *.test.js 即 node --test 默认发现规则；此处按同一规则扫文件、逐套用
-// node --test 跑（目录参数在本机 Node 上不可靠，逐文件等价且保持逐套粒度），
-// .tests.ps1 仍走 powershell（历史兼容，当前无此类文件）。
+// node --test 跑（目录参数在本机 Node 上不可靠，逐文件等价且保持逐套粒度）。
+// #807：不再跑 .ps1 / powershell。
 
 // 2026-08-22 并行化（Q5 拍板：速度是真优化点）：串行 46+ 套约 40s，进程池后约 10s 级。
 // 池宽 6：再大收益递减且增加临时目录/端口互相踩踏的概率。输出仍按文件名序打印，与串行时代一致。
@@ -204,15 +204,12 @@ const TEST_POOL = Math.min(6, Math.max(2, (cpus() || []).length || 2));
 function runOneSuite(dir, f) {
   return new Promise((resolveOne) => {
     const p = join(dir, f);
-    const isPs1 = f.toLowerCase().endsWith('.ps1');
-    const cmd = isPs1 ? 'powershell' : process.execPath;
-    const args = isPs1
-      ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', p]
-      : ['--test', '--test-reporter=tap', p];
+    const cmd = process.execPath;
+    const args = ['--test', '--test-reporter=tap', p];
     let out = '';
     let child;
     try {
-      child = spawn(cmd, args, { cwd: ROOT, windowsHide: true });
+      child = spawn(cmd, args, { cwd: ROOT });
     } catch (e) {
       resolveOne({ f, status: 1, out: String(e && e.message ? e.message : e) });
       return;
@@ -230,7 +227,7 @@ async function runTests() {
     fail('tests/ 目录不在', '恢复 tests/，或改 dao-check.mjs 的约定', dir);
     return;
   }
-  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f) || /\.tests\.ps1$/i.test(f)).sort();
+  const suites = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f)).sort();
   if (suites.length === 0) {
     fail('一套测试都没扫到', 'tests/ 空了 ⇒ 本次等于没查；补回测试', dir);
     return;
@@ -764,14 +761,16 @@ async function checkCommandHelp() {
 //         这是「读到了且是常态」「读到了且非常态」「压根没读到」三形不得同形那条硬规矩的常驻闸
 //         （第四形「读到了但坏了」一并单列：没读到和读坏了是两件事，处置不一样）。
 // 自发现：期望集合从 host/skills/ 扫出来，没有手写清单可以漏登记。
-// 零样本：skills 目录不在 / 没有任何 hook 声明 / 声明了但脚本没了 / 一个装载面都点不到，全部单独报红。
+// 零样本：skills 目录不在 / 没有任何 hook 声明 / 声明了但脚本没了，全部单独报红。
+// #807：本机未接 Claude Code（无插件面也无 settings 面）SKIP 不是绿。
 
 // 实现在 scripts/lib/dao-mode-hook-check.mjs（那里能被 tests/dao-mode.tests.js 拿假 HOME 造违规
 // 样本单独验，不必跑整个 dao-check——dao-check 会跑 tests/，tests 再跑 dao-check 就递归了）。
 
 function checkModeHookAlive() {
-  const r = checkModeHook({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  const r = checkModeHook({ root: ROOT, home: process.env.HOME || process.env.USERPROFILE || '' });
   if (r.green) green(r.green);
+  else if (r.skip) skip(r.skip);
   else fail(...r.fail);
 }
 
@@ -781,12 +780,12 @@ function checkDispatchGateAlive() {
   else fail(...r.fail);
 }
 
-// ── ⑨ 本机 memory 断链检查（local-only，issue #503 / 判据改写 #529）───────────────────
+// ── ⑨ 本机 memory 断链检查（local-only，issue #503 / 判据改写 #529 / #807）─────────────
 // 正确状态（NEW-MACHINE §10）：本机 `~/.claude/projects/<编码>/memory` 是指向
-// **windsurf-dao-memory 独立仓 clone** 的 Junction（memory 已自 #518 搬出主仓），
+// **windsurf-dao-memory 独立仓 clone** 的符号链接（memory 已自 #518 搬出主仓），
 // Claude 每写一条 memory，memory 仓 git status 就多一条未提交变更。
 // #529 之前的判据是「Junction 必须指向仓内 memory 真相源」，memory 搬家后本机必红——
-// 判据改为：Junction 目标必须是一个 git 仓库，且它的 origin remote 指向
+// 判据改为：链接目标必须是一个 git 仓库，且它的 origin remote 指向
 // thoerwink8/windsurf-dao-memory（从 URL 抽 owner/repo 再比，SSH/HTTPS 两种形态都认），
 // 不硬编码本机路径，换机成立。
 // #503 的病：本机 memory 是**普通目录**，与真相源完全漂移——今天写的每条教训
@@ -798,7 +797,7 @@ function checkDispatchGateAlive() {
 // 正确 Junction=绿，SSH/HTTPS 两种 origin 形式都验，无目录=SKIP）单独验判别力。
 
 function checkMemoryLinkAlive() {
-  const r = checkMemoryLink({ root: ROOT, home: process.env.USERPROFILE || process.env.HOME || '' });
+  const r = checkMemoryLink({ root: ROOT, home: process.env.HOME || process.env.USERPROFILE || '' });
   if (r.green) green(r.green);
   else if (r.skip) skip(r.skip);
   else fail(...r.fail);
@@ -815,7 +814,7 @@ function checkMemoryLinkAlive() {
 function checkSkillLinksAlive() {
   const r = checkSkillLinks({
     root: ROOT,
-    home: process.env.USERPROFILE || process.env.HOME || '',
+    home: process.env.HOME || process.env.USERPROFILE || '',
     isCi: process.env.GITHUB_ACTIONS === 'true' || process.env.CI === 'true',
   });
   if (r.green) green(r.green);
@@ -1004,8 +1003,7 @@ function runGhJson(args) {
   return { array: doc };
 }
 
-// spawn 唯一真源在 scripts/lib/orca-run.mjs（收编前本拷贝两条路径都缺 windowsHide、
-// 无 timeout——#695 同款弹窗隐患）。raw 结果由本函数自己解析。
+// spawn 唯一真源在 scripts/lib/orca-run.mjs。raw 结果由本函数自己解析。
 function runOrcaWorktrees() {
   const r = runOrcaRaw(['worktree', 'list', '--json'], { cwd: ROOT, timeout: 30000 });
   if (r.error || r.status !== 0) return { unscanned: true, error: r.error?.code || `exit ${r.status}` };

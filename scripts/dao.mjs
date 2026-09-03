@@ -253,7 +253,7 @@ function noteDroppedFlags(launch) {
   }
 }
 
-// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（timeout、结构化错误透传都在那）。
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
   return sharedRunOrca(cmdArgs, { timeout });
 }
@@ -265,7 +265,7 @@ function ghRunner(opts = {}) {
   const fake = process.env.DAO_GH_FAKE;
   if (!fake) return (args) => runGh(args, opts);
   return (args) => {
-    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', timeout: 30000 });
     if (r.error || (r.status !== 0 && r.status != null)) {
       return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
     }
@@ -2204,7 +2204,6 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
     encoding: 'utf8',
     cwd: ROOT,
     env: process.env,
-    windowsHide: true,
     timeout: dryRun ? 60000 : 180000,
   });
   let json = null;
@@ -4065,7 +4064,6 @@ function cmdReviewPendingDrain(args) {
       const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], {
         encoding: 'utf8',
         cwd: ROOT,
-        windowsHide: true,
         timeout: 600000,
       });
       let json = null;
@@ -4521,7 +4519,7 @@ function cmdRaw(args) {
   // #575 ②：记账只走 stderr，且压成一行——多行 spec 不能把 JSON 拆碎。
   const oneLine = argv.map(a => String(a).replace(/\s+/g, ' ')).join(' ');
   console.error(`[dao raw] 已记账 ${logPath}: ${oneLine}`);
-  const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit', windowsHide: true });
+  const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit' });
   process.exit(r.status == null ? 1 : r.status);
 }
 

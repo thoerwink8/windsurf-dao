@@ -48,7 +48,6 @@ export function wrapChild({ child, exec = null } = {}) {
           CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR || ROOT,
         },
         timeout: CHILD_TIMEOUT_MS,
-        windowsHide: true,
       });
   if (r.error || (r.status !== 0 && r.status != null)) {
     const timedOut = String(r.error?.code || r.error?.message || '').includes('TIMEDOUT') || String(r.error?.message || '').toLowerCase().includes('timed out');

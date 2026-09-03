@@ -14,7 +14,7 @@
 //
 // 全部在 _tmp/memlink-sandbox 里造假 root + 假 HOME + 假 git 仓（.git/config 手写出来，
 // 检查器读配置不 shell 出 git，测试也不用依赖本机有没有 git 命令）。
-// Junction 只在 Windows 上能建；非 Windows 平台跳过依赖 Junction 的样本（部署目标是 Windows）。
+// #807：部署目标是 Linux 服务器，样本用 POSIX 符号链接（不再跳过非 Windows）。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -50,7 +50,7 @@ function junctionFor(home, root, encodeProjectDirFn, target) {
   const mem = path.join(home, ".claude", "projects", encoded, "memory");
   fs.mkdirSync(path.dirname(mem), { recursive: true });
   fs.rmSync(mem, { recursive: true, force: true });
-  fs.symlinkSync(target, mem, "junction");
+  fs.symlinkSync(target, mem);
   return mem;
 }
 
@@ -103,23 +103,18 @@ describe('memory-link', () => {
       assert.ok(!r2.green && !r2.skip, '普通目录 ⇒ 不是绿也不是 SKIP  →  ' + JSON.stringify(r2).slice(0, 120));
     });
 
-    // ── ③ 正样本：正确 Junction（目标仓 origin = windsurf-dao-memory，SSH 形式）⇒ 必须绿 ──
-    if (process.platform === 'win32') {
-      fs.rmSync(mem, { recursive: true, force: true });
-      const memRepo = path.join(SANDBOX, "repos", "windsurf-dao-memory");
-      writeGitRepo(memRepo, "git@github.com:thoerwink8/windsurf-dao-memory.git");
-      const want = memRepo;
-      fs.symlinkSync(want, mem, "junction");
-      const r3 = checkMemoryLink({ root, home: projHome });
-      await t.test('正确 Junction ⇒ 绿且点名 memory 仓', () => {
-        assert.ok(!!r3.green && /已接/.test(r3.green) && r3.green.includes("windsurf-dao-memory"), '正确 Junction ⇒ 绿且点名 memory 仓  →  ' + JSON.stringify(r3).slice(0, 200));
-      });
-    } else {
-      await t.test('③ 正样本：正确 Junction（跳过：非 Windows 平台建不了 Junction，部署目标 Windows）', { skip: true }, () => {});
-    }
+    // ── ③ 正样本：正确符号链接（目标仓 origin = windsurf-dao-memory，SSH 形式）⇒ 必须绿 ──
+    fs.rmSync(mem, { recursive: true, force: true });
+    const memRepo = path.join(SANDBOX, "repos", "windsurf-dao-memory");
+    writeGitRepo(memRepo, "git@github.com:thoerwink8/windsurf-dao-memory.git");
+    fs.symlinkSync(memRepo, mem);
+    const r3 = checkMemoryLink({ root, home: projHome });
+    await t.test('正确符号链接 ⇒ 绿且点名 memory 仓', () => {
+      assert.ok(!!r3.green && /已接/.test(r3.green) && r3.green.includes("windsurf-dao-memory"), '正确符号链接 ⇒ 绿且点名 memory 仓  →  ' + JSON.stringify(r3).slice(0, 200));
+    });
 
     // ── ③b origin 用 HTTPS 形式（换机 clone 的默认形态）⇒ 仍必须绿 ──
-    if (process.platform === 'win32') {
+    {
       const memRepoH = path.join(SANDBOX, "repos", "windsurf-dao-memory-https");
       writeGitRepo(memRepoH, "https://github.com/thoerwink8/windsurf-dao-memory.git/");
       junctionFor(projHome, root, encodeProjectDir, memRepoH);
@@ -127,12 +122,10 @@ describe('memory-link', () => {
       await t.test('HTTPS origin + 尾斜杠 ⇒ 绿', () => {
         assert.ok(!!r3b.green, 'HTTPS origin + 尾斜杠 ⇒ 绿  →  ' + JSON.stringify(r3b).slice(0, 200));
       });
-    } else {
-      await t.test('③b HTTPS origin 样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ④ 故意断开：删掉目标 ⇒ 链接悬空报红（仓规：断开必须当场被拦）──
-    if (process.platform === 'win32') {
+    {
       const t4 = path.join(SANDBOX, "repos", "windsurf-dao-memory");
       junctionFor(projHome, root, encodeProjectDir, t4);
       fs.rmSync(t4, { recursive: true, force: true });
@@ -140,13 +133,10 @@ describe('memory-link', () => {
       await t.test('目标被删 ⇒ 报「悬空」', () => {
         assert.ok(!!r4.fail && /悬空/.test(r4.fail[0]), '目标被删 ⇒ 报「悬空」  →  ' + JSON.stringify(r4).slice(0, 160));
       });
-    } else {
-      await t.test('④ 悬空样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ⑤ 红样本：指向主仓旧的 memory 目录（搬家前状态，#529 必须红）──
-    if (process.platform === 'win32') {
-      // 主仓旧真相源：普通目录、不是 git 仓——搬家前 Junction 指向它，现在必须报红
+    {
       const oldHostMem = path.join(SANDBOX, "roots", "old-hosts", "oldproj", "host", "memory");
       fs.mkdirSync(oldHostMem, { recursive: true });
       fs.writeFileSync(path.join(oldHostMem, "x.md"), "# x", "utf8");
@@ -155,12 +145,10 @@ describe('memory-link', () => {
       await t.test('指向主仓旧 memory 目录 ⇒ 报「不是 windsurf-dao-memory 仓」', () => {
         assert.ok(!!r5.fail && /windsurf-dao-memory/.test(r5.fail[0]), '指向主仓旧 memory 目录 ⇒ 报「不是 windsurf-dao-memory 仓」  →  ' + JSON.stringify(r5).slice(0, 200));
       });
-    } else {
-      await t.test('⑤ 旧 memory 目录样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ⑥ 红样本：指向一个 git 仓但 origin 不是 windsurf-dao-memory ⇒ 报红 ──
-    if (process.platform === 'win32') {
+    {
       const wrong = path.join(SANDBOX, "repos", "some-other-repo");
       writeGitRepo(wrong, "git@github.com:thoerwink8/some-other-repo.git");
       junctionFor(projHome, root, encodeProjectDir, wrong);
@@ -168,12 +156,10 @@ describe('memory-link', () => {
       await t.test('origin 是别的仓 ⇒ 报「origin 不是 windsurf-dao-memory」并带真实 origin', () => {
         assert.ok(!!r6.fail && /origin 不是|origin/.test(r6.fail[0]) && r6.fail[2].includes("some-other-repo"), 'origin 是别的仓 ⇒ 报「origin 不是 windsurf-dao-memory」并带真实 origin  →  ' + JSON.stringify(r6).slice(0, 200));
       });
-    } else {
-      await t.test('⑥ 别的仓样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ⑦ 红样本：是 git 仓但没有 origin remote ⇒ 报红 ──
-    if (process.platform === 'win32') {
+    {
       const noOrigin = path.join(SANDBOX, "repos", "no-origin-repo");
       writeGitRepo(noOrigin, null);
       junctionFor(projHome, root, encodeProjectDir, noOrigin);
@@ -181,20 +167,16 @@ describe('memory-link', () => {
       await t.test('无 [remote origin] ⇒ 报「没有 origin remote」', () => {
         assert.ok(!!r7.fail && /没有 origin remote/.test(r7.fail[0]), '无 [remote origin] ⇒ 报「没有 origin remote」  →  ' + JSON.stringify(r7).slice(0, 200));
       });
-    } else {
-      await t.test('⑦ 无 origin 样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ⑧ 绿样本：.git 是文件（worktree 形态，gitdir + commondir 指向主 git 目录）⇒ 仍绿 ──
-    if (process.platform === 'win32') {
-      // 真实 worktree 布局：worktree/.git 是文件(gitdir: → 主仓 .git/worktrees/<名>)；
-      // 那个 gitdir 里的 commondir 再指向主仓 .git；config 只住主仓 .git/config
+    {
       const mainRepo = path.join(SANDBOX, "repos", "wt-main");
       const mainGit = path.join(mainRepo, ".git");
       fs.mkdirSync(path.join(mainGit, "worktrees", "wk"), { recursive: true });
       fs.writeFileSync(path.join(mainGit, "config"),
         `[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = git@github.com:thoerwink8/windsurf-dao-memory.git\n`, "utf8");
-      fs.writeFileSync(path.join(mainGit, "worktrees", "wk", "commondir"), "..\\..\n", "utf8");
+      fs.writeFileSync(path.join(mainGit, "worktrees", "wk", "commondir"), "../..\n", "utf8");
       const wk = path.join(SANDBOX, "repos", "wt-worktree");
       fs.mkdirSync(wk, { recursive: true });
       fs.writeFileSync(path.join(wk, ".git"), `gitdir: ${path.join(mainGit, "worktrees", "wk").replace(/\\/g, "/")}\n`, "utf8");
@@ -203,8 +185,6 @@ describe('memory-link', () => {
       await t.test('.git 文件形态(gitdir+commondir) ⇒ 绿', () => {
         assert.ok(!!r8.green, '.git 文件形态(gitdir+commondir) ⇒ 绿  →  ' + JSON.stringify(r8).slice(0, 200));
       });
-    } else {
-      await t.test('⑧ worktree 形态样本（跳过：非 Windows 平台，部署目标 Windows）', { skip: true }, () => {});
     }
 
     // ── ⑨ SKIP 与绿必须分开：没有该项目 memory 目录 ⇒ SKIP 不是绿 ──

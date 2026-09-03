@@ -118,7 +118,7 @@ export function hostProbeExec(cwd = process.cwd()) {
     }
     if (name === 'node') {
       const r = spawnSync(process.execPath, ['-e', "process.stdout.write('ok')"], {
-        cwd, encoding: 'utf8', windowsHide: true, timeout: 15000,
+        cwd, encoding: 'utf8', timeout: 15000,
       });
       return {
         ok: !r.error && r.status === 0 && /ok/.test(r.stdout || ''),
@@ -127,7 +127,7 @@ export function hostProbeExec(cwd = process.cwd()) {
     }
     if (name === 'gh') {
       const r = spawnSync('gh', ['--version'], {
-        cwd, encoding: 'utf8', windowsHide: true, timeout: 15000,
+        cwd, encoding: 'utf8', timeout: 15000,
       });
       const out = `${r.stdout || ''}${r.stderr || ''}`;
       return {

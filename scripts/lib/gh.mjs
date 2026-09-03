@@ -181,7 +181,6 @@ function defaultFetchSync(url, { method = 'GET', headers = {}, body } = {}) {
   `], {
     encoding: 'utf8',
     input: spec,
-    windowsHide: true,
     timeout: 30000,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {
@@ -256,7 +255,6 @@ export function spawnGh(args, { token, cwd, inherit = false, spawnImpl } = {}) {
   const exe = ghExecutable();
   const opts = {
     cwd,
-    windowsHide: true,
     env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: token },
   };
   if (inherit) opts.stdio = 'inherit';
@@ -349,7 +347,7 @@ export function formatWhoami(info) {
 function gitRun(cwd, args, gitImpl) {
   if (gitImpl) return gitImpl(args);
   const r = spawnSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf8', windowsHide: true, timeout: 15000,
+    encoding: 'utf8', timeout: 15000,
   });
   if (r.error || (r.status !== 0 && r.status != null)) {
     return { ok: false, out: String(r.stdout || '').trim(), error: String(r.error?.message || r.stderr || `git exit ${r.status}`).trim().slice(0, 200) };

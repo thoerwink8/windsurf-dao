@@ -16,7 +16,6 @@ function runAdapter(args, envExtra = {}) {
   return spawnSync(process.execPath, [ADAPTER, ...args], {
     encoding: 'utf8',
     timeout: 15000,
-    windowsHide: true,
     env: { ...process.env, ...envExtra },
   });
 }
