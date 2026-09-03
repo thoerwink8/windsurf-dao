@@ -396,12 +396,11 @@ function cmdAct(argv) {
       if (r.sent || r.ok) { state.lastHeartbeatAt = nowIso(); log.push(`  心跳已发（${hb.reason}）`); }
     }
   }
-  saveState(state);
+  if (!dryRun) saveState(state); // dry-run 无副作用：不落 state（hubSeen/wakeCounts/回收登记都不持久化）
   const digest = actionsDigest(actions);
   console.log(JSON.stringify({ at: situation.at, dryRun, situationFile: file,
     unscanned: situationHealth(situation).unscanned, actions: actions.map(summarizeAction), digest }, null, 2));
-  if (!dryRun) console.error(log.join('\n'));
-  else console.error(log.join('\n'));
+  console.error(log.join('\n'));
   process.exit(0);
 }
 function summarizeAction(a) {
