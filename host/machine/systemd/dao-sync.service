@@ -1,0 +1,20 @@
+# /etc/systemd/system/dao-sync.service
+#
+# 服务器主树跟 origin/master + 机器人吃新码（脚本 scripts/server-sync.sh，落地清单第 9 步）。
+# 跑 root：只有 restart feishu-triage 需要；git 动作脚本内以 orca 身份执行。
+#
+# 装（服务器）：sudo bash scripts/install-dao-sync.sh
+#   等价于：install -m 644 host/machine/systemd/dao-sync.{service,timer} /etc/systemd/system/
+#           systemctl daemon-reload && systemctl enable --now dao-sync.timer
+# 验：systemctl list-timers | grep dao-sync；journalctl -u dao-sync -n 5
+
+[Unit]
+Description=windsurf-dao 主树跟主分支 + 飞书机器人吃新码
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/orca/windsurf-dao/scripts/server-sync.sh
+StandardOutput=journal
+StandardError=journal

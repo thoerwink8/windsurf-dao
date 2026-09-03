@@ -660,6 +660,8 @@ export async function handleEvent(event, { groups, store, deps, triage, client, 
     if (client) {
       const botMsgId = await client.reply(root, r.text);
       if (botMsgId && store?.aliases) store.aliases[botMsgId] = root;
+      // live 也记一行：不然「机器人到底回了没」只能猜（2026-09-04 实咬：总控群两条提问，日志里只有 inbound）
+      log({ type: 'reply', rootId: root, botMsgId: botMsgId || null, text: String(r.text).slice(0, 200) });
     } else log({ type: 'reply', rootId: root, text: r.text });
   }
   for (const a of actions) {

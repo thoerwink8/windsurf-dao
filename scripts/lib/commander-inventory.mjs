@@ -11,8 +11,10 @@ import { existsSync, readFileSync, readdirSync, readlinkSync, statSync, writeFil
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { dispatchQueueDir, reapStaleDispatchRunning } from './dispatch-queue.mjs';
+import { ensurePlain, threeLines } from './plain-words.mjs';
 
 const INV_MARKER = '[commander-inventory]';
+// 每项 red 带两份话：detail 给 issue/日志（技术细节），plain 给总控群（说人话，三行体）。
 const STALE_PR_DAYS = 14;
 
 function sh(cmd, args, timeout = 20000) {
@@ -40,7 +42,18 @@ function checkOrphanDeletedCwd() {
     if (!/^(node|pi|codex|grok|python|cursor|devin)/i.test(comm)) continue;
     hits.push(`pid=${pid} comm=${comm} cwd=${target}`);
   }
-  if (hits.length) return { state: 'red', detail: `孤儿进程 cwd 已删 ${hits.length} 个：${hits.slice(0, 5).join('；')}`, key: 'orphan-cwd' };
+  if (hits.length) {
+    const posts = [...new Set(hits.map((h) => (h.match(/(ISSUE|PR)-(\d+)/) || [])[2]).filter(Boolean))].map((n) => '#' + n);
+    return {
+      state: 'red', key: 'orphan-cwd',
+      detail: `孤儿进程 cwd 已删 ${hits.length} 个：${hits.slice(0, 5).join('；')}`,
+      plain: {
+        what: `有 ${hits.length} 个干活的程序还在跑，但它们的工位已经拆了${posts.length ? `（${posts.join('、')} 的旧工位）` : ''}`,
+        impact: '白占服务器资源，可能反复报错',
+        plan: '开一张待拍板单，你放行后我把它们关掉',
+      },
+    };
+  }
   return { state: 'ok', detail: '无 cwd 已删的 agent 进程', key: 'orphan-cwd' };
 }
 
@@ -57,7 +70,15 @@ function checkTerminalVsAgents({ runOrca, ROOT }) {
   const liveAgents = workers.filter((w) => w && ['ready', 'working', 'waiting'].includes(String(w.state || '').toLowerCase())).length;
   // 只在 agent 数明显超过终端数时报（agent 无所依附的终端 = 幽灵）；反向（空终端多）是常态不报。
   if (liveAgents > terminals.length) {
-    return { state: 'red', detail: `live agent ${liveAgents} 个 > 终端 ${terminals.length} 个（登记对不上，#633）`, key: 'term-vs-agent' };
+    return {
+      state: 'red', key: 'term-vs-agent',
+      detail: `live agent ${liveAgents} 个 > 终端 ${terminals.length} 个（登记对不上，#633）`,
+      plain: {
+        what: `登记在册的工人有 ${liveAgents} 个，但真正开着的工作窗口只有 ${terminals.length} 个`,
+        impact: '多出来的是「幽灵工人」，占名额不干活',
+        plan: '开一张待拍板单，你放行后我清掉',
+      },
+    };
   }
   return { state: 'ok', detail: `终端 ${terminals.length} / live agent ${liveAgents}（对得上）`, key: 'term-vs-agent' };
 }
@@ -73,7 +94,17 @@ function checkTimers() {
     const st = r.out.trim();
     if (st !== 'enabled') bad.push(`${t}=${st || 'unknown'}`);
   }
-  if (bad.length) return { state: 'red', detail: `指挥官 timer 未 enabled：${bad.join('、')}——node scripts/commander.mjs install`, key: 'timers' };
+  if (bad.length) {
+    return {
+      state: 'red', key: 'timers',
+      detail: `指挥官 timer 未 enabled：${bad.join('、')}——node scripts/commander.mjs install`,
+      plain: {
+        what: `指挥官的定时任务有 ${bad.length} 个是关着的${bad.some((b) => b.startsWith('commander-act')) ? '（含自动派单）' : ''}`,
+        impact: '关着期间新单不会自动派出去，只能人手动派',
+        plan: '如果是我们故意关的（修东西期间）就不用管；不是的话我开单请你放行重开',
+      },
+    };
+  }
   return { state: 'ok', detail: `指挥官 timer 齐（${want.join('、')} enabled）`, key: 'timers' };
 }
 
@@ -91,7 +122,17 @@ function checkProbeJournal() {
     if (/(红|FAIL|失败|error|exceeded)/i.test(lines[i])) streak++;
     else if (/(通|绿|OK|ok:true|成功)/i.test(lines[i])) break;
   }
-  if (streak >= 3) return { state: 'red', detail: `探针 journal 结尾连红 ${streak} 行`, key: 'probe-red' };
+  if (streak >= 3) {
+    return {
+      state: 'red', key: 'probe-red',
+      detail: `探针 journal 结尾连红 ${streak} 行`,
+      plain: {
+        what: `网关探活最近连续 ${streak} 次报红`,
+        impact: '走网关的模型可能不通，工人和审官会卡住',
+        plan: '具体哪条线路不通看探活自己发的那条消息；我先开单记着',
+      },
+    };
+  }
   return { state: 'ok', detail: `探针 journal 无连红（结尾红 ${streak} 行）`, key: 'probe-red' };
 }
 
@@ -103,7 +144,18 @@ function checkStalePrs({ runGh, REPO }) {
   try { arr = JSON.parse(r.out || '[]'); } catch (e) { return { state: 'unknown', detail: `pr list 输出不是 JSON：${e.message}`, key: 'stale-pr' }; }
   const cutoff = Date.now() - STALE_PR_DAYS * 86400000;
   const stale = arr.filter((p) => (Date.parse(p.updatedAt || '') || Date.now()) < cutoff);
-  if (stale.length) return { state: 'red', detail: `超龄 PR ${stale.length} 张（>${STALE_PR_DAYS}天未动）：${stale.slice(0, 5).map((p) => '#' + p.number).join(' ')}`, key: 'stale-pr' };
+  if (stale.length) {
+    const list = stale.slice(0, 5).map((p) => '#' + p.number).join(' ');
+    return {
+      state: 'red', key: 'stale-pr',
+      detail: `超龄 PR ${stale.length} 张（>${STALE_PR_DAYS}天未动）：${list}`,
+      plain: {
+        what: `有 ${stale.length} 张 PR 超过 ${STALE_PR_DAYS} 天没人动：${list}`,
+        impact: '越拖越难合，还占着分支',
+        plan: '开单请你拍：继续做还是关掉',
+      },
+    };
+  }
   return { state: 'ok', detail: `无超龄 PR（阈值 ${STALE_PR_DAYS} 天）`, key: 'stale-pr' };
 }
 
@@ -124,7 +176,18 @@ function checkLandingChecklist({ ROOT }) {
     // 末列当状态列：空 = 未填
     if (cells[cells.length - 1] === '') empties.push(cells[0] || '(空首列)');
   }
-  if (empties.length) return { state: 'red', detail: `落地清单状态列空 ${empties.length} 行：${empties.slice(0, 5).join('、')}`, key: 'landing-empty' };
+  if (empties.length) {
+    const list = empties.slice(0, 5).join('、');
+    return {
+      state: 'red', key: 'landing-empty',
+      detail: `落地清单状态列空 ${empties.length} 行：${list}`,
+      plain: {
+        what: `服务器落地清单有 ${empties.length} 步的状态栏还空着（第 ${list} 步）`,
+        impact: '进度看不清',
+        plan: '开单记着，等做的人回填',
+      },
+    };
+  }
   return { state: 'ok', detail: '落地清单无空状态行', key: 'landing-empty' };
 }
 
@@ -148,6 +211,14 @@ function checkStaleDispatchRunning({ ROOT, dryRun }) {
 
 function fmt(err) { return typeof err === 'string' ? err.slice(0, 120) : (err?.message || err?.code || JSON.stringify(err) || '').slice(0, 120); }
 
+/** 总控群一轮只发一条（不刷屏）：N 处不对，每处三行体。纯函数，测试盯它不说黑话。 */
+export function buildInventoryHubText(reds, { everyHours = 6 } = {}) {
+  const items = reds.map((c) => threeLines(c.plain || { what: c.detail }));
+  const head = `指挥官盘点（每 ${everyHours} 小时一次）发现 ${reds.length} 处不对：`;
+  if (reds.length === 1) return `${head}\n${items[0]}`;
+  return [head, ...items.map((t, i) => `${i + 1}）${t.replace(/\n/g, '\n   ')}`)].join('\n');
+}
+
 // ── inventory 子命令 ──
 export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubOnce, openEscalationIssue, loadState, saveState }) {
   const dryRun = rest.includes('--dry-run');
@@ -166,13 +237,18 @@ export function runInventory({ rest, ROOT, REPO, STATE_DIR, runGh, runOrca, hubO
   const log = [];
   for (const c of checks) log.push(`  ${c.state === 'ok' ? '✓' : c.state === 'red' ? 'X' : '?'} ${c.key} —— ${c.detail}`);
 
+  // 群里一轮一条（去重键 = 红项集合；集合变了才再说一次），issue 仍逐项开。
+  if (reds.length) {
+    const text = ensurePlain(buildInventoryHubText(reds), 'commander-inventory');
+    const r = hubOnce({ state, key: `inv:${reds.map((c) => c.key).sort().join('+')}`, text, dryRun });
+    log.push(`  群：${r.sent ? (r.dryRun ? '[dry] ' : '') + '一条合并消息' : '略（' + (r.reason || r.error) + '）'}`);
+  }
   for (const c of reds) {
     const key = `inventory/${c.key}`;
     const marker = `${INV_MARKER} ${key}`;
     const found = runGh(['search', 'issues', '--repo', REPO, '--state', 'open', '--match', 'body', marker, '--json', 'number', '--limit', '3'], 30000);
     let existing = null;
     if (found.ok) { try { const a = JSON.parse(found.out || '[]'); if (a.length) existing = a[0].number; } catch { /* ignore */ } }
-    hubOnce({ state, key: `inv:${c.key}`, text: `[指挥官·盘点] ${c.detail}`, dryRun });
     if (existing) { log.push(`  报帅（待拍板 #${existing} 已在，不重开）：${c.key}`); continue; }
     if (dryRun) { log.push(`  [dry] 开待拍板单：${c.key}（marker=${marker}）`); continue; }
     const body = [`指挥官盘点体检发现异常（#800，只开单不自修）：`, ``, `- 项：${c.key}`, `- 详情：${c.detail}`, ``,

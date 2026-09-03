@@ -482,6 +482,15 @@ export function classifyAgentStallWatch({
   return { state: OK, detail: 'dao-agent-stall.timer 在册，垫片已退役' };
 }
 
+// ⑯ 主树跟主分支 + 机器人吃新码（scripts/server-sync.sh，落地清单第 9 步）。没这个 timer，合并了的代码到不了运行中的机器人。
+function checkDaoSync() {
+  const r = run('systemctl', ['is-enabled', 'dao-sync.timer'], { timeout: 10000 });
+  if (!r.probed) return { state: UNKNOWN, detail: `systemctl 没跑成：${r.reason}` };
+  const st = String(r.stdout || '').trim();
+  if (st === 'enabled') return { state: OK, detail: 'dao-sync.timer 在册（主树每 5 分钟跟主分支，机器人代码变了自动重启）' };
+  return { state: RED, detail: `dao-sync.timer=${st || 'unknown'}——sudo bash scripts/install-dao-sync.sh` };
+}
+
 function checkAgentStallWatch() {
   const timers = run('systemctl', ['list-timers', '--all'], { timeout: 10000 });
   let padExists = null;
@@ -516,6 +525,7 @@ const CHECKS = [
   ['⑬ start=agent 的 --agent id 本构建是否认识', checkOrcaAgentIds],
   ['⑭ 指挥官自检（commander status，#800）', () => { const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'commander.mjs'), 'status'], { timeout: 60000 }); return !r.probed ? { state: UNKNOWN, detail: `commander status 没跑成：${r.reason}` } : r.code === 0 ? { state: OK, detail: '指挥官 timer 在册且 enabled' } : r.code === 2 ? { state: UNKNOWN, detail: '指挥官自检：没查成（本平台无 systemd）' } : { state: RED, detail: `指挥官自检红（exit ${r.code}）——node scripts/commander.mjs install` }; }],
   ['⑮ 撞限流探测 timer 在册且垫片已退役', checkAgentStallWatch],
+  ['⑯ 主树跟主分支 timer 在册（机器人吃新码）', checkDaoSync],
 ];
 
 function outPath() {

@@ -286,7 +286,7 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
   assert.match(switched, /--pr 664/);
   assert.match(switched, /--reviewer kimi-k3/);
   const said = readFileSync(sayLog, 'utf8');
-  assert.match(said, /已换人|将换人|命中/);
+  assert.match(said, /已换成|想换成|卡在上游限流/); // 群里说人话（2026-09-04），技术行在 stdout
 
   rmSync(dir, { recursive: true, force: true });
 });
@@ -357,6 +357,6 @@ appendFileSync(process.env.SAY_LOG, process.argv.slice(2).join('\\n') + '\\n');
   try { switched = readFileSync(log, 'utf8'); } catch { switched = ''; }
   assert.equal(switched, '');
   const said = readFileSync(sayLog, 'utf8');
-  assert.match(said, /报帅停手/);
+  assert.match(said, /先停手等你拍/); // 「报帅停手」是内部说法，群里改人话（2026-09-04）
   rmSync(dir, { recursive: true, force: true });
 });
