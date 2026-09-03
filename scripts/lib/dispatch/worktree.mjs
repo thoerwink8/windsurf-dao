@@ -3,10 +3,16 @@
 // 改这段前必须知道：worktree-rm 一条命令整树后序删（子卡先于父卡）。
 // 占用中 / 子卡失踪 / 主树 → ok:false，调用方不得开删。
 // 树内 ledger/events 有未进本机账本的事件文件 → 整树不删（删树前闸）。
+// #835：闸过后再收该树 agent 进程（先 terminal stop，不退则 SIGTERM）；
+// 收不掉报 pid 非零，不许静默留下。占用闸一条都不放宽。
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { orcaErrorText } from '../orca-error.mjs';
+
+export const REAP_POLL_MS = 200;
+export const REAP_STOP_WAIT_MS = 2000;
+export const REAP_TERM_WAIT_MS = 2000;
 
 function worktreeKey(w) {
   return (w && (w.worktreeId || w.id)) || null;
@@ -338,4 +344,245 @@ export function findWorktreeBySel(worktrees, sel) {
     if (!w) return false;
     return worktreeSelMatches(w.id || w.worktreeId, s) || worktreeSelMatches(w.path, s);
   }) || null;
+}
+
+function stripDeletedSuffix(p) {
+  return String(p || '').replace(/\s*\(deleted\)\s*$/i, '');
+}
+
+/** cwd 是否就是这棵树（含 Linux `(deleted)` 后缀）。不匹配父路径。 */
+export function cwdBelongsToTree(cwd, treePath) {
+  const c = normPath(stripDeletedSuffix(cwd));
+  const t = normPath(treePath);
+  return Boolean(c && t && c === t);
+}
+
+function asPidList(result) {
+  return (result && Array.isArray(result.pids) ? result.pids : [])
+    .map(p => (typeof p === 'number' ? p : Number(p && p.pid)))
+    .filter(pid => Number.isFinite(pid) && pid > 0);
+}
+
+/** 扫 /proc 找 cwd 落在这棵树上的 pid。没有 /proc（Windows）= 本平台不可用，不是没查成。 */
+export function pidsOnTreePath(treePath, {
+  procDir = '/proc',
+  readdir = readdirSync,
+  readlink = readlinkSync,
+  exists = existsSync,
+  selfPid = process.pid,
+} = {}) {
+  if (!treePath) return { ok: false, error: '缺 tree path，进程没查成', pids: [], details: [] };
+  if (!exists(procDir)) return { ok: true, available: false, pids: [], details: [] };
+  let names;
+  try { names = readdir(procDir); }
+  catch (e) {
+    return {
+      ok: false,
+      unscanned: true,
+      error: `读 ${procDir} 失败：${e && e.message ? e.message : e}`,
+      pids: [],
+      details: [],
+    };
+  }
+  const details = [];
+  for (const name of names) {
+    if (!/^\d+$/.test(String(name))) continue;
+    const pid = Number(name);
+    if (pid === selfPid) continue;
+    let cwd;
+    try { cwd = readlink(join(procDir, String(pid), 'cwd')); }
+    catch { continue; }
+    if (!cwdBelongsToTree(cwd, treePath)) continue;
+    details.push({ pid, cwd: String(cwd) });
+  }
+  return { ok: true, available: true, pids: details.map(d => d.pid), details };
+}
+
+export function formatReapPidError({ pids, node } = {}) {
+  const list = (pids || []).join(',') || '（未列出 pid）';
+  const name = (node && (node.name || node.id)) || '?';
+  return `收不掉 agent 进程，未删树：pid ${list}（${name}）`;
+}
+
+function snapshotReapState({ listTerminals, listPids, node }) {
+  const listed = listTerminals(node.id);
+  if (!listed || listed.ok !== true) {
+    return { ok: false, error: (listed && listed.error) || 'terminal list 没查成' };
+  }
+  if (!Array.isArray(listed.terminals)) {
+    return { ok: false, error: 'terminal list 没有 terminals 数组，没查成' };
+  }
+  const agentHandles = listed.terminals
+    .filter(t => t && t.agentIdentity)
+    .map(t => t.handle || t.ptyId || '?');
+  const pidsRes = listPids(node.path);
+  if (!pidsRes || pidsRes.ok !== true) {
+    return { ok: false, error: (pidsRes && pidsRes.error) || '进程没查成' };
+  }
+  const pids = asPidList(pidsRes);
+  const available = pidsRes.available !== false;
+  const gone = (available ? pids.length === 0 : true) && agentHandles.length === 0;
+  return {
+    ok: true,
+    gone,
+    pids,
+    available,
+    agentHandles,
+    terminalCount: listed.terminals.length,
+  };
+}
+
+function waitForGone(io, { timeoutMs, pollMs, now, sleep }) {
+  const t0 = now();
+  let last = snapshotReapState(io);
+  if (!last.ok || last.gone) return last;
+  while (now() - t0 < timeoutMs) {
+    sleep(pollMs);
+    last = snapshotReapState(io);
+    if (!last.ok || last.gone) return last;
+  }
+  return last;
+}
+
+/**
+ * 占用闸已经放行之后：先 terminal stop，确认 agent/pid 退出；
+ * 没退再 SIGTERM。收不掉报 pid（或 agent handle）非零。
+ * 空壳终端不在这里当失败——删树后另核对本树登记有没有跟着掉。
+ */
+export function reapWorktreeAgents({
+  node,
+  stop,
+  listTerminals,
+  listPids,
+  killPid,
+  sleep = () => {},
+  now = () => Date.now(),
+  stopWaitMs = REAP_STOP_WAIT_MS,
+  termWaitMs = REAP_TERM_WAIT_MS,
+  pollMs = REAP_POLL_MS,
+} = {}) {
+  const evidence = [];
+  if (!node || !node.id) return { ok: false, error: '收进程缺 worktree id', evidence, killed: [] };
+  if (typeof stop !== 'function') return { ok: false, error: 'reapWorktreeAgents 没给 stop', evidence, killed: [] };
+  if (typeof listTerminals !== 'function') return { ok: false, error: 'reapWorktreeAgents 没给 listTerminals', evidence, killed: [] };
+  if (typeof listPids !== 'function') return { ok: false, error: 'reapWorktreeAgents 没给 listPids', evidence, killed: [] };
+  if (typeof killPid !== 'function') return { ok: false, error: 'reapWorktreeAgents 没给 killPid', evidence, killed: [] };
+
+  const io = { listTerminals, listPids, node };
+  const before = snapshotReapState(io);
+  if (!before.ok) return { ok: false, error: `收进程前没查成，未删树：${before.error}`, evidence, killed: [] };
+  evidence.push({
+    step: 'before',
+    pids: before.pids,
+    agentHandles: before.agentHandles,
+    terminalCount: before.terminalCount,
+  });
+
+  const stopped = stop(node.id);
+  evidence.push({
+    step: 'terminal-stop',
+    ok: !!(stopped && stopped.ok),
+    error: (stopped && stopped.error) || null,
+  });
+
+  const afterStop = waitForGone(io, { timeoutMs: stopWaitMs, pollMs, now, sleep });
+  if (!afterStop.ok) return { ok: false, error: `收进程时没查成，未删树：${afterStop.error}`, evidence, killed: [] };
+  evidence.push({
+    step: 'after-stop',
+    gone: afterStop.gone,
+    pids: afterStop.pids,
+    agentHandles: afterStop.agentHandles,
+    terminalCount: afterStop.terminalCount,
+  });
+  if (afterStop.gone) return { ok: true, evidence, killed: [] };
+
+  const leftoverPids = afterStop.pids || [];
+  const killed = [];
+  if (leftoverPids.length) {
+    for (const pid of leftoverPids) {
+      const k = killPid(pid);
+      killed.push({ pid, ok: !!(k && k.ok), alreadyGone: !!(k && k.alreadyGone), error: (k && k.error) || null });
+      if (!k || (k.ok !== true && !k.alreadyGone)) {
+        return {
+          ok: false,
+          error: `SIGTERM pid ${pid} 失败：${(k && k.error) || '未知'}`,
+          pids: leftoverPids,
+          evidence,
+          killed,
+        };
+      }
+    }
+    evidence.push({ step: 'sigterm', killed: killed.map(k => k.pid) });
+    const afterTerm = waitForGone(io, { timeoutMs: termWaitMs, pollMs, now, sleep });
+    if (!afterTerm.ok) return { ok: false, error: `SIGTERM 后没查成，未删树：${afterTerm.error}`, evidence, killed };
+    evidence.push({
+      step: 'after-term',
+      gone: afterTerm.gone,
+      pids: afterTerm.pids,
+      agentHandles: afterTerm.agentHandles,
+      terminalCount: afterTerm.terminalCount,
+    });
+    if (afterTerm.gone) return { ok: true, evidence, killed };
+    if ((afterTerm.pids || []).length) {
+      return {
+        ok: false,
+        error: formatReapPidError({ pids: afterTerm.pids, node }),
+        pids: afterTerm.pids,
+        evidence,
+        killed,
+      };
+    }
+    if ((afterTerm.agentHandles || []).length) {
+      return {
+        ok: false,
+        error: `收不掉 agent 终端，未删树：${afterTerm.agentHandles.join(',')}（${node.name || node.id}）`,
+        handles: afterTerm.agentHandles,
+        evidence,
+        killed,
+      };
+    }
+    return { ok: true, evidence, killed };
+  }
+
+  if ((afterStop.agentHandles || []).length) {
+    const stopHint = stopped && stopped.ok === false && stopped.error
+      ? `；terminal stop：${stopped.error}`
+      : '';
+    return {
+      ok: false,
+      error: `收不掉 agent 终端，未删树：${afterStop.agentHandles.join(',')}（${node.name || node.id}）${stopHint}`,
+      handles: afterStop.agentHandles,
+      evidence,
+      killed,
+    };
+  }
+
+  // 只剩空壳：本单不清全局空壳（#633），删树后核对本树登记。
+  return { ok: true, evidence, killed };
+}
+
+/** 删树后核对本树终端登记是否跟着掉。list 报找不到树 = 已掉。 */
+export function verifyWorktreeTerminalsGone({ node, listTerminals } = {}) {
+  if (!node || !node.id) return { ok: false, error: '核对终端缺 worktree id' };
+  if (typeof listTerminals !== 'function') return { ok: false, error: 'verifyWorktreeTerminalsGone 没给 listTerminals' };
+  const listed = listTerminals(node.id);
+  if (!listed || listed.ok !== true) {
+    const err = String((listed && listed.error) || '');
+    if (/not found|找不到|unknown worktree|no such|selector_not_found/i.test(err)) {
+      return { ok: true, gone: true, missingWorktree: true };
+    }
+    return { ok: false, error: `删树后 terminal list 没查成：${(listed && listed.error) || '未知'}` };
+  }
+  if (!Array.isArray(listed.terminals)) {
+    return { ok: false, error: '删树后 terminal list 没有 terminals 数组，没查成' };
+  }
+  if (listed.terminals.length) {
+    const handles = listed.terminals.map(t => (t && (t.handle || t.ptyId)) || '?');
+    return {
+      ok: false,
+      error: `删树后终端登记还在：${handles.join(',')}（${node.name || node.id}）`,
+      handles,
+    };
+  }
+  return { ok: true, gone: true };
 }

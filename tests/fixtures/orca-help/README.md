@@ -9,6 +9,7 @@ orca terminal list --help > tests/fixtures/orca-help/terminal-list.txt
 orca terminal read --help > tests/fixtures/orca-help/terminal-read.txt
 orca terminal send --help > tests/fixtures/orca-help/terminal-send.txt
 orca terminal close --help > tests/fixtures/orca-help/terminal-close.txt
+orca terminal stop --help > tests/fixtures/orca-help/terminal-stop.txt
 orca worktree create --help > tests/fixtures/orca-help/worktree-create.txt
 orca worktree set --help > tests/fixtures/orca-help/worktree-set.txt
 orca worktree rm --help > tests/fixtures/orca-help/worktree-rm.txt

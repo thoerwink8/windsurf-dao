@@ -89,7 +89,7 @@ import {
   argsTaskCreate, argsTaskUpdate, argsWorkerStart, argsWorkerList,
   argsWorkerShow, argsWorkerRelease, argsWorkerStop, argsWorkerRead,
   argsOrchestrationReply, argsOrchestrationCheck, argsRunList, argsGateCreate, argsGateResolve, argsGateList,
-  argsTerminalList, argsTerminalClose, argsTerminalWait, commandKey, flagsOf,
+  argsTerminalList, argsTerminalClose, argsTerminalStop, argsTerminalWait, commandKey, flagsOf,
   argsOrchestrationSend, argsOrchestrationInbox, argsRunShow, argsRunCurrent, argsRunUse, argsRunCreate, argsRunCreateSelf,
 } from './dispatch/args.mjs';
 export {
@@ -98,7 +98,7 @@ export {
   argsTaskCreate, argsTaskUpdate, argsWorkerStart, argsWorkerList,
   argsWorkerShow, argsWorkerRelease, argsWorkerStop, argsWorkerRead,
   argsOrchestrationReply, argsOrchestrationCheck, argsRunList, argsGateCreate, argsGateResolve, argsGateList,
-  argsTerminalList, argsTerminalClose, argsTerminalWait, commandKey, flagsOf,
+  argsTerminalList, argsTerminalClose, argsTerminalStop, argsTerminalWait, commandKey, flagsOf,
   argsOrchestrationSend, argsOrchestrationInbox, argsRunShow, argsRunCurrent, argsRunUse, argsRunCreate, argsRunCreateSelf,
 } from './dispatch/args.mjs';
 
@@ -126,11 +126,13 @@ import {
   findWorktreeBySel, worktreeSelMatches,
   planWorktreeRm, applyWorktreeRmPlan, prepareWorktreeRm,
   formatStrayLedgerError, listStrayLedgerEvents, occupyingAgents, resolveWorktreeSelector,
+  cwdBelongsToTree, pidsOnTreePath, formatReapPidError, reapWorktreeAgents, verifyWorktreeTerminalsGone,
 } from './dispatch/worktree.mjs';
 export {
   resolveWorktreeSelector, planWorktreeRm, applyWorktreeRmPlan,
   formatStrayLedgerError, listStrayLedgerEvents, prepareWorktreeRm,
   worktreeSelMatches, findWorktreeBySel, occupyingAgents,
+  cwdBelongsToTree, pidsOnTreePath, formatReapPidError, reapWorktreeAgents, verifyWorktreeTerminalsGone,
 } from './dispatch/worktree.mjs';
 
 /**
@@ -579,6 +581,7 @@ export function catalogUsedFlags() {
     argsWorkerStop({ dispatch: 'd' }),
     argsWorkerRead({ dispatch: 'd', source: 'auto', limit: 50 }),
     argsTerminalClose({ terminal: 't', tab: true }),
+    argsTerminalStop({ worktree: 'w' }),
     argsOrchestrationSend({ to: 'h', subject: 's', body: 'b', type: 'status', outcome: 'succeeded' }),
     argsOrchestrationSend({
       subject: 's', body: 'b', type: 'worker_done', outcome: 'succeeded',
@@ -1082,6 +1085,7 @@ export const USAGE = `用法: node scripts/dao.mjs <verb> [args]
                   # #826：PR 已合并且审官已 approve 时，working/waiting 不挡归档（审官 d= 空无法结算的兜底）
                   # 树内 ledger/events 有未进本机账本（~/.dao/ledger/events）的事件文件 → 整树不删，报清是哪几条
                   # #593：同一动作退役该单不再被其它在途树占用的 Run（关信箱台 + 删租约）
+                  # #835：闸过后再收该树 agent 进程（先 terminal stop，不退则 SIGTERM）；收不掉报 pid 非零
   inbox-collect [--peek]
                   # 按在途单的 Run 收信箱。三态：empty / unscanned / run_not_found。默认 --peek 不标已读
   run-gc [--apply]
