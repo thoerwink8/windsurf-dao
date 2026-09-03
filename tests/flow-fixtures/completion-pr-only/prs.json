@@ -1,1 +1,0 @@
-[{"number":996,"title":"[grok] #575 完工只在 PR 会话","isDraft":true,"state":"OPEN","createdAt":"2026-08-17T01:00:00Z","updatedAt":"2026-08-17T02:00:00Z","mergedAt":null,"headRefName":"thoerwink8/575-completion-pr-only","labels":[{"name":"model/grok-4.6"},{"name":"type/写码"}],"body":"## 目标\n验收：关联 issue 对得上时，PR 会话上的「完工」不得触发起审官。\n"}]

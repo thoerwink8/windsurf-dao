@@ -155,7 +155,6 @@ describe('一 PR 一审官闸', () => {
     assert.ok(samples.ok === true && samples.unscanned === false
       && samples.kinds.red === 1 && samples.kinds.ok === 1 && samples.kinds.empty === 1, JSON.stringify(samples));
     const red = C.inspectNoReviewerRecreate({
-      flowSrc: fs.readFileSync(path.join(root, 'red', 'flow.mjs'), 'utf8'),
       daoSrc: fs.readFileSync(path.join(root, 'red', 'dao.mjs'), 'utf8'),
     });
     assert.ok(red.ok === false && red.unscanned === false && red.problems.length >= 1, JSON.stringify(red));

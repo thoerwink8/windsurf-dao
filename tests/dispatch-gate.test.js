@@ -42,7 +42,6 @@ function runGate(script, command, envExtra = {}) {
     encoding: 'utf8',
     input: payload(command),
     timeout: 15000,
-    windowsHide: true,
     env: { ...process.env, ...envExtra },
   });
 }
@@ -52,7 +51,6 @@ function runCursorGate(script, command, envExtra = {}) {
     encoding: 'utf8',
     input: cursorPayload(command),
     timeout: 15000,
-    windowsHide: true,
     env: { ...process.env, ...envExtra },
   });
 }

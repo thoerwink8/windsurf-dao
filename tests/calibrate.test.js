@@ -29,7 +29,6 @@ const assert = require('node:assert');
 const fs = require("fs");
 const path = require("path");
 const { redFlagsFromReviewBodies, buildRows, renderRow, renderFullReport, countVerdictLines, reworkFromVerdictLines, describeRework, samplesFromEvents, describeNoEvents } = require("../scripts/calibrate.mjs");
-const { malformedJudgmentLines } = require("../scripts/lib/judgment.mjs");
 
 const REPO = path.resolve(__dirname, "..");
 const fixture = name => JSON.parse(fs.readFileSync(path.join(REPO, "tests", "fixtures", name), "utf8"));
@@ -211,36 +210,17 @@ describe('calibrate', () => {
     await t.test('三态①：1 条判定行 → 「0 轮（审过一次，零返工）」', () => {
       assert.ok(describeRework(0).startsWith("0 轮") && describeRework(0).includes("零返工"), '三态①：1 条判定行 → 「0 轮（审过一次，零返工）」');
     });
-    await t.test('三态②：2 条判定行 → 「1 轮（判定行 2 条）」', () => {
-      assert.ok(describeRework(1).startsWith("1 轮") && describeRework(1).includes("判定行 2 条"), '三态②：2 条判定行 → 「1 轮（判定行 2 条）」');
+    await t.test('三态②：2 条判别态 → 「1 轮」', () => {
+      assert.ok(describeRework(1).startsWith("1 轮") && describeRework(1).includes("判别态 2 条"), '三态②：2 条判别态 → 「1 轮」');
     });
-    await t.test('三态③：0 条判定行 → 「无判定行（本项没测成）」，不是 0 轮', () => {
-      assert.ok(describeRework(null).includes("无判定行") && describeRework(null).includes("没测成") && !describeRework(null).startsWith("0 轮"), '三态③：0 条判定行 → 「无判定行（本项没测成）」，不是 0 轮');
+    await t.test('三态③：0 条判别态 → 「无审读（本项没测成）」，不是 0 轮', () => {
+      assert.ok(describeRework(null).includes("无审读") && describeRework(null).includes("没测成") && !describeRework(null).startsWith("0 轮"), '三态③：0 条判别态 → 「无审读」，不是 0 轮');
     });
   });
 
-  it('#559 A：近义变体判定行必须报「没查成」而不是「无判定」——战绩记错、流转器看不见的根因', async (t) => {
-    await t.test('不合规判定行1：审官第 3 轮返工复核：绿 → malformed（没查成）', () => {
-      assert.ok(malformedJudgmentLines(["审官第 3 轮返工复核：绿\n红 1 项逐条验证：…"]).length === 1, '不合规判定行1：审官第 3 轮返工复核：绿 → malformed（没查成）  →  ' + JSON.stringify(malformedJudgmentLines(["审官第 3 轮返工复核：绿"])));
-    });
-    await t.test('不合规判定行2：审官判定：绿 → malformed（没查成）', () => {
-      assert.ok(malformedJudgmentLines(["审官判定：绿"]).length === 1, '不合规判定行2：审官判定：绿 → malformed（没查成）');
-    });
-    await t.test('合规判定行不误伤 → malformed 空', () => {
-      assert.ok(malformedJudgmentLines(["判定：绿，可合并", "**复核结论：红 2 项**"]).length === 0, '合规判定行不误伤 → malformed 空');
-    });
-    await t.test('叙述讨论不误伤：语料样本判定：红 5 项——这条是讨论 → 不算 malformed', () => {
-      assert.ok(malformedJudgmentLines(["语料样本判定：红 5 项——这条是讨论不是判定"]).length === 0, '叙述讨论不误伤：语料样本判定：红 5 项——这条是讨论 → 不算 malformed');
-    });
-    await t.test('真语料 446/440 判定行不误伤为 malformed', () => {
-      assert.ok(malformedJudgmentLines([...bodies446, ...bodies440]).length === 0, '真语料 446/440 判定行不误伤为 malformed');
-    });
-    await t.test('判定行不合规 → describeRework 报「没查成」不是「无判定」', () => {
-      assert.ok(describeRework(null, [{ attempt: "审官判定：绿" }]).includes("判定行不合规（没查成）") && !describeRework(null, [{ attempt: "审官判定：绿" }]).includes("无判定行"), '判定行不合规 → describeRework 报「没查成」不是「无判定」');
-    });
-    const malformedSample = buildRows([{ model: "m", taskType: "写码", rework: null, redFlags: 2, judgmentMalformed: [{ attempt: "审官判定：绿" }], number: 9, mergedAt: "2026-01-09T00:00:00Z" }], [], ["写码"]);
-    await t.test('累计表趋势：判定不合规样本记「判定不合规」非「无判定」', () => {
-      assert.ok(renderRow(malformedSample[0]).includes("判定不合规"), '累计表趋势：判定不合规样本记「判定不合规」非「无判定」');
+  it('#807：判定行协议退役，近义变体不再当 malformed 闸', async (t) => {
+    await t.test('无审读 describeRework 说没测成', () => {
+      assert.ok(describeRework(null).includes('无审读') && describeRework(null).includes('没测成'));
     });
   });
 
@@ -249,8 +229,8 @@ describe('calibrate', () => {
     await t.test('全组无判定行 ⇒ 平均返工=null', () => {
       assert.ok(noVerdict[0].averageRework === null, '全组无判定行 ⇒ 平均返工=null');
     });
-    await t.test('无判定行渲染为「无判定行」非 0.0', () => {
-      assert.ok(renderRow(noVerdict[0]).includes("无判定行"), '无判定行渲染为「无判定行」非 0.0');
+    await t.test('无审读渲染为「无审读」非 0.0', () => {
+      assert.ok(renderRow(noVerdict[0]).includes("无审读"), '无审读渲染为「无审读」非 0.0');
     });
     await t.test('无判定行趋势记「无判定」非 0', () => {
       assert.ok(renderRow(noVerdict[0]).includes("无判定/无审"), '无判定行趋势记「无判定」非 0');

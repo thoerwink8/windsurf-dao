@@ -22,7 +22,7 @@
 |---|---|---|
 | A | ~/.claude | 产品根。子项见下行，不要整目录镜像 |
 | A | ~/.claude/CLAUDE.md | NEW-MACHINE §3。真相源 `docs/global-CLAUDE.md` |
-| A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的 Junction |
+| A | ~/.claude/projects | NEW-MACHINE §10。memory 是指向独立仓的符号链接 |
 | D | ~/.claude/settings.json | NEW-MACHINE §8。覆写可能 401，禁整文件进 git。其中 `statusLine.command` 指本仓 `host/statusline.js` 的**本机绝对路径**（仓搬家/换机要手改）——onboard 哨兵 `statusline-dangling` 报断 |
 | D | ~/.claude/settings.local.json | 用户级 hooks 段宿主不读。不要当装机源 |
 | A | ~/.claude/skills | NEW-MACHINE §11。链到 `host/skills` |
@@ -37,8 +37,8 @@
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | C | ~/.dao | GitHub App 凭据根 |
 | C | ~/.dao/apps | NEW-MACHINE §4b。六份 pem/json，丢了要回 GitHub 再生成 |
-| D | ~/.dao/guard-mirror | NEW-MACHINE §9。守卫只读镜像，启动 fetch + reset --hard origin/master，不要手拷 |
-| D | ~/.dao/guard | NEW-MACHINE §9b。保活日志 / 自停留痕。换机重建，不要拷 |
+| D | ~/.dao/memory-sync.json | memory-sync 状态文件，运行时自建，换机不拷 |
+| D | ~/.dao/memory-sync.jsonl | memory-sync 日志，运行时自建，换机不拷 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；本机新增事件要带走就手动拷（同名即同一事件，合并拷安全） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
 | D | ~/.dao/locks | 指挥官建树串行锁（#849）。`scripts/lib/dispatch-lock.mjs` 在此建 O_EXCL 锁文件，内容是持锁 pid，持锁进程死了自动拆。运行态残留，换机不拷、不要手删（正在建树时删掉等于放锁） |
@@ -51,13 +51,11 @@
 | E | ~/.mirasim | 归 `ai-gateway-stack`。模型供应商配置，以及 `setting.json` 的 `networkProxy`（代理分流，不配会慢 35 倍）。本仓不写装法 |
 | E | ~/.mirasim/keys | 归 `ai-gateway-stack`。飞书凭据与网关 token 落点（#801/#823），600 不进 git/聊天；本仓不写装法、不写值 |
 | C/D | ~/.pi/agent | NEW-MACHINE §4 / §6。auth.json 是 C；sessions 不拷；models-store 止血换机要再做 |
-| B | ~/AppData/Local/cursor-agent | cursor 真实二进制。shim 包装它，路径因机而异 |
 | B/C | ~/AppData/Local/devin | NEW-MACHINE「devin 怎么配」。cli/bin 是二进制；credentials.toml 是 C，不进 git |
 | D | ~/AppData/Local/ms-playwright-mcp | 浏览器锁 / 缓存。不拷；坏了按 NEW-MACHINE §8 清 |
-| B | ~/.orca/agent-hooks | Orca 状态 hook。模板 `host/machine/hooks/` |
+| B | ~/.orca/agent-hooks | Orca 状态 hook。现机已装的保持现状；模板已随 #807 删（cursor hook 那份，cursor-agent 退出选型） |
 | D | ~/AppData/Roaming/orca | Orca Desktop 本机画像。派工启动听仓内 launch；这份文件只拿来比较，禁拷、禁改、不进 git |
 | D | ~/AppData/Roaming/Devin | Devin 桌面端 user-data-dir。派工走 CLI 非交互形态，桌面端不参与 |
 | E | ~/AppData/Roaming/mihomo-party | 归 `ai-gateway-stack`。Clash Party 覆写里有按 IP 写死的网关直连规则，换 VPS 要跟着改；覆写只在启动时读盘，改完必须重启 |
 | A | ~/.cursor/skills | NEW-MACHINE §11.2。链到 `host/skills`（Cursor Desktop；与 `~/.claude/skills` 对称） |
 | D | ~/.cursor/skills-cursor | Cursor 系统内置 skills，禁手写；装机只链 `~/.cursor/skills` |
-| B | ~/.cursor/hooks.json | 用户级 hook 登记。必须 `conhost --headless`，禁止 EncodedCommand |

@@ -235,9 +235,6 @@ import {
   resolveStationCloseTarget,
   previewHandlesForRun,
 } from './lib/run-lifecycle.mjs';
-import {
-  defaultLogRel, leasePath, launchFilePath, parseLease,
-} from './inbox-station.mjs';
 import { assertCrossVendor } from './lib/reviewer-vendor-gate.mjs';
 import { nextReviewerAfter } from './lib/dianjiangtai-reviewer-slot.mjs';
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
@@ -255,7 +252,7 @@ function noteDroppedFlags(launch) {
   }
 }
 
-// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（#695 windowsHide、结构化错误透传都在那）。
+// spawn/归一化唯一真源在 scripts/lib/orca-run.mjs（timeout、结构化错误透传都在那）。
 function orca(cmdArgs, timeout = ORCA_TIMEOUT_MS) {
   return sharedRunOrca(cmdArgs, { timeout });
 }
@@ -267,7 +264,7 @@ function ghRunner(opts = {}) {
   const fake = process.env.DAO_GH_FAKE;
   if (!fake) return (args) => runGh(args, opts);
   return (args) => {
-    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    const r = spawnSync(process.execPath, [fake, ...args], { encoding: 'utf8', timeout: 30000 });
     if (r.error || (r.status !== 0 && r.status != null)) {
       return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 240) };
     }
@@ -962,7 +959,7 @@ function taskCreateOnRun(spec, runId, { rebindSelf = false, from } = {}) {
  * cmdDispatchBatch）传 runRole='coordinator'（派工协调 Run 永不自动退役）；其余（工人 TUI）默认
  * 'dispatch'。
  * 2026-08-23 拍板：信箱台 ensure 挪出派工路——这里不再 ensure（一次 ensure 最慢 300s，
- * 是派工分钟级耗时的大头）。台的保活归 guard-keepalive（detached relay + 租约心跳）。 */
+ * 是派工分钟级耗时的大头）。#807 起本机守卫保活已删。 */
 function bindStation({ runRole = 'dispatch' } = {}) {
   const cur = orca(argsRunCurrent());
   const plan = planCallerRun({
@@ -1050,11 +1047,42 @@ function unwrapWorkers(json) {
   return json?.result?.workers || null;
 }
 
+function stationLogRel(runId) {
+  const short = String(runId || '').replace(/^run_/, '');
+  return short ? join('_flow', `inbox-${short}.log`) : join('_flow', 'inbox.log');
+}
+
 function stationFilesFor(runId) {
   const main = resolveMainWorktreeRoot({ from: ROOT });
   const base = main.ok ? main.root : ROOT;
-  const logPath = join(base, defaultLogRel(runId));
-  return [leasePath(logPath), launchFilePath(logPath), logPath];
+  const logPath = join(base, stationLogRel(runId));
+  const baseName = String(logPath).split('/').pop() || 'inbox.log';
+  const stem = (baseName.split('\\').pop() || baseName).replace(/\.log$/i, '') || 'inbox';
+  const dir = dirname(logPath);
+  return [join(dir, `${stem}.lease`), join(dir, `${stem}.cmd`), logPath];
+}
+
+function parseStationLease(raw) {
+  if (raw == null) return null;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text) return null;
+  try {
+    const obj = JSON.parse(text);
+    const pid = Number(obj?.pid);
+    const ts = Number(obj?.ts);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ts)) return null;
+    const ttlMs = Number(obj?.ttlMs);
+    const handle = typeof obj.handle === 'string' && obj.handle.trim() ? obj.handle.trim() : null;
+    return {
+      pid,
+      ts,
+      runId: obj.runId ?? null,
+      handle,
+      ttlMs: Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : 25000,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function readStationLease(runId) {
@@ -1062,7 +1090,7 @@ function readStationLease(runId) {
   const [leaseFile] = files;
   try {
     if (!existsSync(leaseFile)) return { read: 'missing', lease: null, files };
-    const lease = parseLease(readFileSync(leaseFile, 'utf8'));
+    const lease = parseStationLease(readFileSync(leaseFile, 'utf8'));
     if (!lease) return { read: 'unscanned', lease: null, files, error: `租约坏了 ${leaseFile}` };
     return { read: 'ok', lease, files };
   } catch (e) {
@@ -1966,7 +1994,7 @@ async function runDispatchExecution(order, { queueDir } = {}) {
   }
 
   // gc 顺车已删（2026-08-23 delete-all-ceremony 拍板）：派工热路不再顺带只读 run-gc。
-  // 自动扫描仍在 inbox-station ensure（#614 顺车在那保留）；手动清用 dao.mjs run-gc。
+  // 手动清用 dao.mjs run-gc。
 
   emit({
     ok: true,
@@ -2102,7 +2130,7 @@ function cmdDispatchBatch(args) {
   }
 
   // gc 顺车 + 同步看板已删（2026-08-23 delete-all-ceremony 拍板）：批派工热路同样不背。
-  // 自动 gc 扫描在 inbox-station ensure；master 定界区在 worktree-rm / 合并时重写。
+  // master 定界区在 worktree-rm / 合并时重写。
 
   emit({
     ok: true,
@@ -2211,8 +2239,8 @@ function healReviewerCreateAfterFence(first, opts) {
   });
   const retired = run.ok ? retireOneRun(run.runId) : { ok: false, error: run.error };
   const retried = invokeReviewerCreate(opts);
-  // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路（含 fence 自愈）——保活归 guard-keepalive。
-  const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（信箱台保活归 guard-keepalive）' };
+  // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路（含 fence 自愈）。#807 起本机守卫保活已删。
+  const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（本机守卫保活 #807 已删）' };
   const plan = planFenceHeal({
     error: first.error,
     runId: run.ok ? run.runId : null,
@@ -2249,7 +2277,6 @@ function invokeReviewerCreate({ pr, name, parentWorktree, soldierDispatch, issue
     encoding: 'utf8',
     cwd: ROOT,
     env: process.env,
-    windowsHide: true,
     timeout: dryRun ? 60000 : 180000,
   });
   let json = null;
@@ -2797,8 +2824,8 @@ function cmdWorkerDone(args) {
         from: args.from,
         dryRun: false,
       });
-      // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路——保活归 guard-keepalive。
-      const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（信箱台保活归 guard-keepalive）' };
+      // 2026-08-23 拍板：信箱台 ensure 挪出 dao 全路。#807 起本机守卫保活已删。
+      const ensured = { ok: true, skipped: true, reason: 'ensure 已挪出 dao（本机守卫保活 #807 已删）' };
       const planHeal = planFenceHeal({
         error: reused.error,
         runId: run.ok ? run.runId : null,
@@ -4116,7 +4143,6 @@ function cmdReviewPendingDrain(args) {
       const spawned = spawnSync(process.execPath, [self, ...plan.argv, '--json'], {
         encoding: 'utf8',
         cwd: ROOT,
-        windowsHide: true,
         timeout: 600000,
       });
       let json = null;
@@ -4572,7 +4598,7 @@ function cmdRaw(args) {
   // #575 ②：记账只走 stderr，且压成一行——多行 spec 不能把 JSON 拆碎。
   const oneLine = argv.map(a => String(a).replace(/\s+/g, ' ')).join(' ');
   console.error(`[dao raw] 已记账 ${logPath}: ${oneLine}`);
-  const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit', windowsHide: true });
+  const r = spawnSync(argv[0], argv.slice(1), { stdio: 'inherit' });
   process.exit(r.status == null ? 1 : r.status);
 }
 

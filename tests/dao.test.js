@@ -173,12 +173,12 @@ describe('dao', () => {
     await t.test('#782 devin 走交互 TUI 形态（start=agent，launch 带 dangerous+trust 旗标，不带 --model）', () => {
       assert.ok(/^devin\b/.test(devin.command) && devin.command === 'devin --permission-mode dangerous --respect-workspace-trust false' && devin.start === 'agent' && devin.agentId === 'devin', '#782 devin launch  →  ' + JSON.stringify(devin));
     });
-    await t.test('shim 文件在仓里', () => {
-      assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd')), 'shim 文件在仓里');
+    await t.test('POSIX grok shim 在仓里', () => {
+      assert.ok(fs.existsSync(path.join(REPO, 'host', 'machine', 'shims', 'grok')), 'POSIX grok shim 在仓里');
     });
-    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok.cmd'), 'utf8');
+    const shim = fs.readFileSync(path.join(REPO, 'host', 'machine', 'shims', 'grok'), 'utf8');
     await t.test('shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）', () => {
-      assert.ok(/if not defined DAO_PROXY set "DAO_PROXY=http:\/\/127\.0\.0\.1:7890"/.test(shim) && /set "HTTPS_PROXY=%DAO_PROXY%"/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
+      assert.ok(/DAO_PROXY:=http:\/\/127\.0\.0\.1:7890/.test(shim) && /HTTPS_PROXY/.test(shim), 'shim 带 HTTPS_PROXY（DAO_PROXY 未设时回退 7890）  →  ' + shim.replace(/\r?\n/g, ' | '));
     });
 
     let threw = false;
@@ -286,11 +286,15 @@ describe('dao', () => {
 
     const skipCi = S.helpCheckPolicy({ ci: true, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
     await t.test('CI 无 orca → SKIP（不计失败）', () => {
-      assert.ok(skipCi.action === 'skip' && /本项需本机 orca/.test(skipCi.reason), 'CI 无 orca → SKIP（不计失败）  →  ' + JSON.stringify(skipCi));
+      assert.ok(skipCi.action === 'skip' && /不在 PATH/.test(skipCi.reason), 'CI 无 orca → SKIP（不计失败）  →  ' + JSON.stringify(skipCi));
     });
-    const failLocal = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
-    await t.test('本机无 orca → FAIL（不许悄悄跳过）', () => {
-      assert.ok(failLocal.action === 'fail', '本机无 orca → FAIL（不许悄悄跳过）  →  ' + JSON.stringify(failLocal));
+    const skipLocal = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: true, error: 'spawnSync orca ENOENT' } });
+    await t.test('本机无 orca → SKIP（#807 不再当红）', () => {
+      assert.ok(skipLocal.action === 'skip', '本机无 orca → SKIP（#807 不再当红）  →  ' + JSON.stringify(skipLocal));
+    });
+    const failBroken = S.helpCheckPolicy({ ci: false, orca: { ok: false, missing: false, error: 'orca --help 无输出' } });
+    await t.test('orca 在但 --help 空 → FAIL', () => {
+      assert.ok(failBroken.action === 'fail', 'orca 在但 --help 空 → FAIL  →  ' + JSON.stringify(failBroken));
     });
     const runLive = S.helpCheckPolicy({ ci: true, orca: { ok: true, missing: false } });
     await t.test('有 orca 时 CI 也必须真跑', () => {
@@ -753,8 +757,8 @@ describe('dao', () => {
     });
 
     // 2026-08-23 fire-and-forget 拍板：信箱台 ensure 挪出派工路（一次 ensure 最慢 300s，
-    // 是派工分钟级耗时大头）。dao.mjs 不再有 ensureInboxStation；台保活归 guard-keepalive。
-    await t.test('dao.mjs 不再有 ensureInboxStation（ensure 挪出派工路，保活归 guard-keepalive）', () => {
+    // 是派工分钟级耗时大头）。dao.mjs 不再有 ensureInboxStation。#807 起本机守卫保活已删。
+    await t.test('dao.mjs 不再有 ensureInboxStation（ensure 挪出派工路）', () => {
       assert.ok(!/function ensureInboxStation/.test(daoSrc565) && !/ensureInboxStation\(/.test(daoSrc565),
         'dao.mjs 不该再有 ensureInboxStation');
     });
@@ -2167,7 +2171,7 @@ describe('dao', () => {
       assert.ok(/result\.created\.runId = batchRun\.runId/.test(batchFn) && /result\.created\.runCreated = batchRun\.runCreated/.test(batchFn),
         '批派工失败同样回收 Run');
     });
-    await t.test('#614 dispatch 不再顺带只读 gc（2026-08-23 删顺车；自动扫描留在 inbox-station ensure）', () => {
+    await t.test('#614 dispatch 不再顺带只读 gc（2026-08-23 删顺车；自动扫描已删）', () => {
       const dispatchFn = daoSrc.slice(daoSrc.indexOf('function cmdDispatch'), daoSrc.indexOf('function cmdPrSyncLabels'));
       assert.ok(!/runGcReadonlyScan/.test(dispatchFn) && !/gcThresholdLine/.test(dispatchFn),
         'dispatch 热路不该再有 gc 顺车');
@@ -2432,20 +2436,6 @@ describe('dao', () => {
         && !/isProcessAlive/.test(retireFn)
         && !/pidAlive/.test(retireFn)
         && !/coordinatorHandle: handle/.test(retireFn), 'retireOneRun 仍把 coordinator 当关台目标');
-    });
-    const inboxSrc = fs.readFileSync(path.join(REPO, 'scripts', 'inbox-station.mjs'), 'utf8');
-    const ensureFn = inboxSrc.slice(inboxSrc.indexOf('async function cmdEnsure'), inboxSrc.indexOf('// #637 可归档二次验证闸'));
-    await t.test('2026-08-23 detached：cmdEnsure 不再 stamp handle，rebuild 走 spawnDetachedRelay 不起终端', () => {
-      assert.ok(ensureFn.length > 0, 'cmdEnsure 段要切得到');
-      assert.ok(!/stampLeaseHandle|planEnsureLeaseStamp/.test(ensureFn)
-        && !/terminal', 'create'/.test(ensureFn)
-        && /planSingleStation/.test(ensureFn)
-        && /pidAlive/.test(ensureFn),
-        'cmdEnsure 该是 detached 形态（无 handle stamp、无 terminal create）  →  ' + ensureFn.slice(0, 200));
-    });
-    await t.test('2026-08-23 detached：信箱台没有终端台概念残留（无哑终端标题/启动文件）', () => {
-      assert.ok(!/buildLaunchScript|buildRelayCommand|writeLaunchFile|acceptRebuildReady/.test(inboxSrc),
-        'inbox-station.mjs 不该再有终端台启动件');
     });
     await t.test('#598 红项2：reply 无 --from 不许裸发', () => {
       assert.ok(/reply 没有信箱台 --from/.test(daoCliSrc) && /resolveReplySender/.test(daoCliSrc), '#598 红项2：reply 无 --from 不许裸发');

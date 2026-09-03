@@ -1,10 +1,11 @@
-// #576 next 动作候选行回归（issue #576 项一余量）。
+// #576 next 动作候选行回归（issue #576 项一余量；#807 删本机 flow/watchdog 后瘦身）。
 //
-// 验的层：① nextLine 纯函数从本地文件产物（盘面摘要 / flow、watchdog 心跳 / dao-mode 态）
+// 验的层：① nextLine 纯函数从本地文件产物（盘面摘要 / dao-mode 态）
 //         算出「现在该干什么」一行，按谁在等谁排
-//         ② 「扫完是空的」与「这次没扫到」不同形：心跳损坏 ≠ 未在跑；盘面没扫到 ≠ 全空
+//         ② 「扫完是空的」与「这次没扫到」不同形：盘面没扫到 ≠ 全空
 //         ③ standby 态（复用 dao-mode 的 state.json）不输出「待消歧」（⑤）
-//         ④ nextInjection 读侧喂 fixture（假 git/read/exists/orca/cache），不碰 orca / GitHub / 真文件
+//         ④ nextInjection 读侧喂 fixture（假 read/exists/orca/cache），不碰 orca / GitHub / 真文件
+// #807 起 flow/watchdog 心跳不再进这一行（本机守卫栈整层删，派工节奏归服务器指挥官）。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
@@ -13,11 +14,6 @@ const path = require('path');
 const REPO = path.resolve(__dirname, '..');
 const HOOK = path.join(REPO, 'scripts', 'lib', 'board-hook.mjs');
 const H_LOAD = import('file://' + HOOK.replace(/\\/g, '/'));
-
-const MIN = 60 * 1000;
-const NOW = Date.parse('2026-08-22T00:00:00.000Z');
-const FLOW_STALE = 10 * MIN;   // 与 guard-keepalive FLOW_HEARTBEAT_STALE_MS 同口径
-const WD_STALE = 5 * MIN;      // 与 guard-keepalive WATCHDOG_HEARTBEAT_STALE_MS 同口径
 
 const boardFixture = {
   inFlight: [{ number: 588, status: '做中' }],
@@ -48,84 +44,37 @@ function withEnv(name, value, fn) {
   }
 }
 
-function freshHb(msAgo = 60 * 1000) {
-  return { ts: new Date(NOW - msAgo).toISOString() };
-}
-
 describe('next', () => {
-  it('#576 nextLine：全部新鲜且无候选 → 无事可动形（≠ 没查成）', async (t) => {
+  it('#576 nextLine：无候选 → 无事可动形（≠ 没查成）', async (t) => {
     const H = await H_LOAD;
     const line = H.nextLine({
       board: { inFlight: [], closing: [], todo: [], scanned: 3, unscanned: false },
-      flowHb: freshHb(),
-      wdHb: freshHb(30 * 1000),
       mode: { mode: 'normal' },
-      now: NOW,
     });
     await t.test('有 [盘] 行且明说是扫完',
       () => {
         assert.ok(/^\[盘\] 无事可动/.test(line) && /扫完是空的/.test(line), '有 [盘] 行且明说是扫完  →  ' + line);
       });
-    await t.test('心跳新鲜不占位（无「未在跑」，也不是没查成形）',
+    await t.test('无候选时不是没查成形，也无 #807 已删的心跳位',
       () => {
-        assert.ok(!/未在跑/.test(line) && !/^\[盘\] 没查成/.test(line), '心跳新鲜不占位  →  ' + line);
+        assert.ok(!/未在跑/.test(line) && !/^\[盘\] 没查成/.test(line), '无心跳位、非没查成形  →  ' + line);
       });
   });
 
-  it('#576 nextLine：动作候选按「谁在等谁」排（待帅处置→待收口→监控→待消歧→在途）', async (t) => {
+  it('#576 nextLine：动作候选按「谁在等谁」排（待收口→待消歧→在途），无 flow/watchdog 位', async (t) => {
     const H = await H_LOAD;
     const line = H.nextLine({
       board: boardFixture,
-      flowHb: { ...freshHb(), prs: [{ number: 571, state: '判定行缺失/格式不符待帅分诊' }] },
-      wdHb: freshHb(30 * 1000),
       mode: { mode: 'normal' },
-      now: NOW,
     });
     await t.test('一行能读出全部候选与顺序',
       () => {
-        const want = '待帅处置 #571（判定行缺失/格式不符待帅分诊） · 待收口 #575 · 待消歧 #4 · 在途 #588(做中)';
-        assert.ok(line === `[盘] ${want}`, '顺序：待帅处置→待收口→待消歧→在途  →  ' + line);
+        const want = '待收口 #575 · 待消歧 #4 · 在途 #588(做中)';
+        assert.ok(line === `[盘] ${want}`, '顺序：待收口→待消歧→在途  →  ' + line);
       });
-  });
-
-  it('#576 nextLine：监控自己没跑三态分得开（缺失/过期 = 未在跑；损坏 = 没查成）', async (t) => {
-    const H = await H_LOAD;
-    const base = { board: boardFixture, wdHb: freshHb(30 * 1000), mode: { mode: 'normal' }, now: NOW };
-
-    await t.test('flow 心跳缺失 → flow 未在跑',
+    await t.test('#807 起不再有 flow/watchdog「未在跑」占位',
       () => {
-        const line = H.nextLine({ ...base, flowHb: { missing: true } });
-        assert.ok(/flow 未在跑/.test(line) && !/watchdog/.test(line), 'flow 未在跑  →  ' + line);
-      });
-    await t.test('watchdog 心跳缺失 → watchdog 未在跑',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: freshHb(), wdHb: { missing: true } });
-        assert.ok(/watchdog 未在跑/.test(line), 'watchdog 未在跑  →  ' + line);
-      });
-    await t.test('flow 心跳过期超阈值 → flow 未在跑（带分钟数）',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: { ts: new Date(NOW - FLOW_STALE - 60 * 1000).toISOString() } });
-        assert.ok(/flow 未在跑（心跳过期 11 分钟）/.test(line), '过期带分钟数  →  ' + line);
-      });
-    await t.test('watchdog 心跳过期超阈值 → watchdog 未在跑（带分钟数）',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: freshHb(), wdHb: { ts: new Date(NOW - WD_STALE - 60 * 1000).toISOString() } });
-        assert.ok(/watchdog 未在跑（心跳过期 6 分钟）/.test(line), '过期带分钟数  →  ' + line);
-      });
-    await t.test('心跳损坏 → 没查成形，不是未在跑',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: { unscanned: true, error: 'flow 心跳损坏' } });
-        assert.ok(/flow 没查成（flow 心跳损坏，≠ 未在跑）/.test(line), '损坏 ≠ 未在跑  →  ' + line);
-      });
-    await t.test('心跳 ts 不可解析 → 没查成形',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: { ts: '不是时间' } });
-        assert.ok(/flow 没查成（心跳 ts 不可解析，≠ 未在跑）/.test(line), 'ts 不可解析  →  ' + line);
-      });
-    await t.test('心跳在阈值内 → 不占位',
-      () => {
-        const line = H.nextLine({ ...base, flowHb: { ts: new Date(NOW - FLOW_STALE + 60 * 1000).toISOString() } });
-        assert.ok(!/flow/.test(line), '新鲜不占位  →  ' + line);
+        assert.ok(!/flow/.test(line) && !/watchdog/.test(line) && !/未在跑/.test(line), '无心跳位  →  ' + line);
       });
   });
 
@@ -133,10 +82,7 @@ describe('next', () => {
     const H = await H_LOAD;
     const input = {
       board: boardFixture,
-      flowHb: freshHb(),
-      wdHb: freshHb(30 * 1000),
       mode: { mode: 'standby' },
-      now: NOW,
     };
     await t.test('standby → 无待消歧',
       () => {
@@ -164,10 +110,7 @@ describe('next', () => {
     const H = await H_LOAD;
     const line = H.nextLine({
       board: { unscanned: true, error: 'orca worktree ps 失败（exit 1）' },
-      flowHb: freshHb(),
-      wdHb: freshHb(30 * 1000),
       mode: { mode: 'normal' },
-      now: NOW,
     });
     await t.test('没查成形且不带任何候选',
       () => {
@@ -175,38 +118,13 @@ describe('next', () => {
       });
   });
 
-  it('#576 nextLine：待帅处置 reason 超长截断，不给上下文灌长行', async (t) => {
-    const H = await H_LOAD;
-    const line = H.nextLine({
-      board: { inFlight: [], closing: [], todo: [], scanned: 1, unscanned: false },
-      flowHb: { ...freshHb(), prs: [{ number: 571, state: '这是一条特别长的待帅处置原因，应该被截断到二十四字以内' }] },
-      wdHb: freshHb(30 * 1000),
-      mode: { mode: 'normal' },
-      now: NOW,
-    });
-    await t.test('reason 截到 24 字',
-      () => {
-        assert.ok(line.length < 120, '行不膨胀  →  ' + line);
-      });
-  });
-
-  it('#576 nextInjection：读侧喂 fixture（假 git/read/exists/orca/cache），不碰真机', async (t) => {
+  it('#576 nextInjection：读侧喂 fixture（假 read/exists/orca/cache），不碰真机', async (t) => {
     const H = await H_LOAD;
     const stateFile = 'C:/fake/dao/state.json';
-    const guardDir = 'C:/fake/dao/guard';
-    const mainPath = 'C:/fake/main';
-    const flowPath = path.join(mainPath, '_flow', 'heartbeat.json');
-    const wdPath = path.join(guardDir, 'watchdog-heartbeat.json');
 
     const files = {
-      [flowPath]: JSON.stringify({
-        ts: new Date(NOW - 60 * 1000).toISOString(),
-        prs: [{ number: 571, state: '判定行缺失' }],
-      }),
-      [wdPath]: JSON.stringify({ ts: new Date(NOW - 30 * 1000).toISOString() }),
       [stateFile]: JSON.stringify({ mode: 'normal' }),
     };
-    const git = () => ({ ok: true, out: `worktree ${mainPath}\nworktree ${path.join('C:/fake/worker')} ${''}` });
     const read = (p) => {
       if (Object.prototype.hasOwnProperty.call(files, p)) return files[p];
       throw new Error(`没喂这个文件的 fixture：${p}`);
@@ -215,63 +133,39 @@ describe('next', () => {
     const orca = () => ({ status: 0, stdout: JSON.stringify(psJson) });
     const cache = { load: () => null, save: () => {} };
 
-    await withEnv('DAO_STATE_FILE', stateFile, () => withEnv('DAO_GUARD_HALT_DIR', guardDir, () => {
-      const line = H.nextInjection({ root: 'C:/fake/root', git, read, exists, orca, cache, now: NOW });
-      t.test('全 fixture → 动作候选齐全', () => {
-        const want = '[盘] 待帅处置 #571（判定行缺失） · 待收口 #575 · 待消歧 #4 · 在途 #588(做中)';
+    await withEnv('DAO_STATE_FILE', stateFile, () => {
+      const line = H.nextInjection({ read, exists, orca, cache });
+      t.test('全 fixture → 动作候选齐全（无 flow/watchdog 位）', () => {
+        const want = '[盘] 待收口 #575 · 待消歧 #4 · 在途 #588(做中)';
         assert.ok(line === want, '全 fixture 一行  →  ' + line);
       });
-    }));
+    });
   });
 
-  it('#576 nextInjection：主树路径没解出来 / 心跳损坏 / standby，各成其形', async (t) => {
+  it('#576 nextInjection：standby 态 fixture → 行里无待消歧', async (t) => {
     const H = await H_LOAD;
     const stateFile = 'C:/fake/dao/state.json';
-    const guardDir = 'C:/fake/dao/guard';
-    const mainPath = 'C:/fake/main';
-    const flowPath = path.join(mainPath, '_flow', 'heartbeat.json');
-    const wdPath = path.join(guardDir, 'watchdog-heartbeat.json');
     const orca = () => ({ status: 0, stdout: JSON.stringify(psJson) });
     const cache = { load: () => null, save: () => {} };
 
-    await t.test('git 失败 → flow 没查成（不是未在跑），盘面照常',
-      () => withEnv('DAO_STATE_FILE', stateFile, () => withEnv('DAO_GUARD_HALT_DIR', guardDir, () => {
-        const git = () => ({ ok: false, error: 'git 不在' });
+    await t.test('standby → 无待消歧、待收口照常',
+      () => withEnv('DAO_STATE_FILE', stateFile, () => {
+        const files = { [stateFile]: JSON.stringify({ mode: 'standby' }) };
+        const read = (p) => {
+          if (Object.prototype.hasOwnProperty.call(files, p)) return files[p];
+          throw new Error(`没喂这个文件的 fixture：${p}`);
+        };
+        const exists = (p) => Object.prototype.hasOwnProperty.call(files, p);
+        const line = H.nextInjection({ read, exists, orca, cache });
+        assert.ok(!/待消歧/.test(line) && /待收口 #575/.test(line), 'standby 无待消歧  →  ' + line);
+      }));
+
+    await t.test('mode 文件不在 → 按常态（有待消歧）',
+      () => withEnv('DAO_STATE_FILE', stateFile, () => {
         const read = () => { throw new Error('不应读文件'); };
         const exists = () => false;
-        const line = H.nextInjection({ root: 'C:/fake/root', git, read, exists, orca, cache, now: NOW });
-        assert.ok(/flow 没查成（主树路径没解出来，flow 心跳没查成，≠ 未在跑）/.test(line)
-          && /待收口 #575/.test(line) && /watchdog 未在跑/.test(line), 'flow 没查成 + 盘面照常  →  ' + line);
-      })));
-
-    await t.test('flow 心跳文件坏了 → flow 没查成（≠ 未在跑）',
-      () => withEnv('DAO_STATE_FILE', stateFile, () => withEnv('DAO_GUARD_HALT_DIR', guardDir, () => {
-        const git = () => ({ ok: true, out: `worktree ${mainPath}` });
-        const files = { [flowPath]: '不是 JSON', [stateFile]: JSON.stringify({ mode: 'normal' }) };
-        const read = (p) => {
-          if (Object.prototype.hasOwnProperty.call(files, p)) return files[p];
-          throw new Error(`没喂这个文件的 fixture：${p}`);
-        };
-        const exists = (p) => Object.prototype.hasOwnProperty.call(files, p);
-        const line = H.nextInjection({ root: 'C:/fake/root', git, read, exists, orca, cache, now: NOW });
-        assert.ok(/flow 没查成（flow 心跳损坏，≠ 未在跑）/.test(line), 'flow 心跳损坏  →  ' + line);
-      })));
-
-    await t.test('standby 态 fixture → 行里无待消歧',
-      () => withEnv('DAO_STATE_FILE', stateFile, () => withEnv('DAO_GUARD_HALT_DIR', guardDir, () => {
-        const git = () => ({ ok: true, out: `worktree ${mainPath}` });
-        const files = {
-          [flowPath]: JSON.stringify({ ts: new Date(NOW - 60 * 1000).toISOString() }),
-          [wdPath]: JSON.stringify({ ts: new Date(NOW - 30 * 1000).toISOString() }),
-          [stateFile]: JSON.stringify({ mode: 'standby' }),
-        };
-        const read = (p) => {
-          if (Object.prototype.hasOwnProperty.call(files, p)) return files[p];
-          throw new Error(`没喂这个文件的 fixture：${p}`);
-        };
-        const exists = (p) => Object.prototype.hasOwnProperty.call(files, p);
-        const line = H.nextInjection({ root: 'C:/fake/root', git, read, exists, orca, cache, now: NOW });
-        assert.ok(!/待消歧/.test(line) && /待收口 #575/.test(line), 'standby 无待消歧  →  ' + line);
-      })));
+        const line = H.nextInjection({ read, exists, orca, cache });
+        assert.ok(/待消歧 #4/.test(line), 'mode 缺按常态  →  ' + line);
+      }));
   });
 });

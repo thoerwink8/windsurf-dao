@@ -31,9 +31,9 @@ export function inspectReviewerNoForceCommand({ daoSrc } = {}) {
   return { ok: problems.length === 0, unscanned: false, problems };
 }
 
-export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc } = {}) {
-  if (daoSrc == null || cmdSrc == null || slotSrc == null || watchdogSrc == null) {
-    return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/watchdog 正文（没查成）' };
+export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, stallSrc } = {}) {
+  if (daoSrc == null || cmdSrc == null || slotSrc == null || stallSrc == null) {
+    return { ok: false, unscanned: true, error: '没给齐 dao/dao-cmd/slot/agent-stall-watch 正文（没查成）' };
   }
   const problems = [];
   // dispatch 预检不再钉同厂闸（delete-all-ceremony）：只要求 resolveDispatchConstraints 还在。
@@ -72,10 +72,14 @@ export function inspectVendorGateWiring({ daoSrc, cmdSrc, slotSrc, watchdogSrc }
     problems.push('planCapacitySwitch 换人没带 workerId');
   }
 
-  const exec = chunk(watchdogSrc, /function executeCapacitySwitch\b[\s\S]*?\nfunction /);
-  if (!exec) problems.push('找不到 executeCapacitySwitch');
-  else if (!WD_ACTUAL.test(exec)) problems.push('executeCapacitySwitch 没从 Dispatch/标签读实际工人模型');
-  if (WD_CARD.test(watchdogSrc)) problems.push('watchdog 仍从卡名 parseWorkerModelFromCard 读工人模型');
+  const exec = chunk(stallSrc, /function switchReviewer\b[\s\S]*?\nfunction /);
+  if (!exec) problems.push('找不到 switchReviewer');
+  const workerFn = chunk(stallSrc, /function workerModelOf\b[\s\S]*?\nfunction /);
+  if (!workerFn) problems.push('找不到 workerModelOf');
+  else if (!WD_ACTUAL.test(workerFn) && !WD_ACTUAL.test(stallSrc)) {
+    problems.push('agent-stall-watch 没从 Dispatch/标签读实际工人模型');
+  }
+  if (WD_CARD.test(stallSrc)) problems.push('agent-stall-watch 仍从卡名 parseWorkerModelFromCard 读工人模型');
 
   return { ok: problems.length === 0, unscanned: false, problems };
 }
@@ -91,7 +95,7 @@ export function inspectVendorGateFixtures(root) {
       daoSrc: join(dir, 'dao.mjs'),
       cmdSrc: join(dir, 'dao-cmd.mjs'),
       slotSrc: join(dir, 'slot.mjs'),
-      watchdogSrc: join(dir, 'watchdog.mjs'),
+      stallSrc: join(dir, 'agent-stall-watch.mjs'),
     };
     const out = {};
     let present = 0;

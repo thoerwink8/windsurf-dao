@@ -64,11 +64,11 @@ export function scanWorktreeTimes(root) {
 }
 
 export function readGitTimes(cwd) {
-  const log = spawnSync('git', ['log', '-1', '--format=%ct'], { cwd, encoding: 'utf8', windowsHide: true });
+  const log = spawnSync('git', ['log', '-1', '--format=%ct'], { cwd, encoding: 'utf8' });
   if (log.error || log.status !== 0) {
     throw new Error(`git log 失败: ${String(log.stderr || log.error?.message || `exit ${log.status}`).trim()}`);
   }
-  const status = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', windowsHide: true });
+  const status = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
   if (status.error || status.status !== 0) {
     throw new Error(`git status 失败: ${String(status.stderr || status.error?.message || `exit ${status.status}`).trim()}`);
   }

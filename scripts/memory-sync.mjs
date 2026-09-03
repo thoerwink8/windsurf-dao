@@ -5,7 +5,7 @@
 // 随写随改，但「改了没 push」换机就丢。本脚本：有未提交改动 → add+commit；
 // 有未推送提交 → push；远端领先 → 先 pull --rebase（冲突只报不合）。
 //
-// 触发：挂在 guard-keepalive --once 的尾部（帅位 hook 每轮兜底时顺带），
+// 触发：本机手动 `node scripts/memory-sync.mjs --once` / `--force`（#807 起不再挂守卫保活）。
 // 时间门在 planMemorySync 里（默认 30 分钟），高频调用无害。
 // 只报不拦：任何失败打印 + 非零退出，但不拦调用方主流程。
 //
@@ -22,13 +22,12 @@ import { homedir } from 'node:os';
 import { planMemorySync, parseAheadBehind } from './lib/memory-sync.mjs';
 import { resolveMemoryDir } from './lib/memory-strikes-check.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
-import { resolveMainPath } from './lib/guard-keepalive.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = join(dirname(HERE), '..');
 
 function statePath() {
-  return join(homedir(), '.dao', 'guard', 'memory-sync.json');
+  return join(homedir(), '.dao', 'memory-sync.json');
 }
 
 function readState() {
@@ -45,7 +44,7 @@ function writeState(patch) {
 }
 
 function git(dir, args, timeout = 20000) {
-  const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true, timeout });
+  const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8', timeout });
   if (r.error || r.status !== 0) {
     return { ok: false, error: String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200) };
   }
@@ -57,7 +56,7 @@ function emit(payload, code = 0) {
   console.log(line);
   // detached 运行时 stdout 没人读：结果同时落 jsonl，失败可查可见
   try {
-    const logFile = join(homedir(), '.dao', 'guard', 'memory-sync.jsonl');
+    const logFile = join(homedir(), '.dao', 'memory-sync.jsonl');
     mkdirSync(dirname(logFile), { recursive: true });
     appendFileSync(logFile, line + '\n');
   } catch { /* 落痕失败不挡主流程 */ }
@@ -70,10 +69,7 @@ function main() {
   const dryRun = argv.includes('--dry-run');
 
   const home = defaultHome(process.env);
-  // memory Junction 挂在「主仓 checkout 路径」的项目slug下；从守卫镜像里跑时
-  // 脚本自身路径是镜像不是主仓，必须先解主仓路径（解不出才退回脚本所在仓）。
-  const mainPath = resolveMainPath({ env: process.env, exists: existsSync }) || REPO_ROOT;
-  const mem = resolveMemoryDir({ root: mainPath, home });
+  const mem = resolveMemoryDir({ root: REPO_ROOT, home });
   if (mem.skip) {
     emit({ ok: true, action: 'skip', reason: `memory 未接：${mem.error}（SKIP 不是绿也不是错）` });
   }

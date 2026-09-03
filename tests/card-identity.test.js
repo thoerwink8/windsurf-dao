@@ -6,8 +6,6 @@ const fs = require('fs');
 const path = require('path');
 
 const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'card-identity.mjs');
-const FLOW = path.join(__dirname, '..', 'scripts', 'flow.mjs');
-const WATCH = path.join(__dirname, '..', 'scripts', 'watchdog.mjs');
 const C_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 
 describe('card-identity', () => {
@@ -107,16 +105,9 @@ describe('card-identity', () => {
     assert.strictEqual(C.prNumberFromWorktree({ linkedPR: { number: 100 }, displayName: 'PR-#200 工人' }), 100);
   });
 
-  it('#589 源码钉：四处不再用卡名当判据', () => {
-    const flow = fs.readFileSync(FLOW, 'utf8');
-    const fn = (flow.match(/function findReviewerTerminal\([\s\S]*?\nfunction /) || [''])[0];
-    assert.ok(/findReviewerWorktree/.test(fn) && !/\/审官\//.test(fn), fn.slice(0, 200));
-    const watch = fs.readFileSync(WATCH, 'utf8');
-    assert.ok(!/function isTaskCard\(w\) \{\s*return \/\^#\\d\+/.test(watch)
-      && /from '\.\/lib\/card-identity\.mjs'/.test(watch));
-    assert.ok(/roleExempt = w \? isChildWorktree\(w\)/.test(watch)
-      && !/roleExempt = w \? \/\·\//.test(watch));
-    assert.ok(/!isChildWorktree\(w\)/.test(watch)
-      && !/!\/\\·\/\.test\(String\(name/.test(watch));
+  it('#589 源码钉：卡名分类仍走 card-identity，不读卡名当判据', async () => {
+    const C = await C_LOAD;
+    assert.strictEqual(C.classifyCardName('zzz'), 'other');
+    assert.strictEqual(C.isTaskCard({ displayName: 'zzz', parentWorktreeId: null, agents: [{ state: 'working' }] }), true);
   });
 });

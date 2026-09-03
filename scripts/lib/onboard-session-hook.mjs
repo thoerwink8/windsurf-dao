@@ -19,7 +19,7 @@ if (line) process.stdout.write(line + '\n');
 // 这是提醒不是守卫/闸——探不出（无 origin、git 不在、游离 HEAD）就沉默，不打「没查成」。
 // 起的是一次性 git 子进程读本地 refs，不打网络，与哨兵「绿则零输出」纪律一致。
 try {
-  const g = (args) => String(spawnSync('git', args, { encoding: 'utf8', windowsHide: true, timeout: 5000 }).stdout || '').trim();
+  const g = (args) => String(spawnSync('git', args, { encoding: 'utf8', timeout: 5000 }).stdout || '').trim();
   const branch = g(['rev-parse', '--abbrev-ref', 'HEAD']);
   const def = (g(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, '')) || 'master';
   const ahead = Number(g(['rev-list', '--count', `origin/${def}..HEAD`]));

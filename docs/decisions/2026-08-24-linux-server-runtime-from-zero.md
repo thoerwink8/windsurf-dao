@@ -95,7 +95,7 @@
 | 五层判活链（guard-keepalive / mirror / revision / halt / seat，约 1429 行） | 删 | systemd `Restart=on-failure` 顶掉 |
 | `flow.mjs` 常驻轮询 1404 行 | 删 | `orca automations` + `--precheck` 顶掉 |
 | `watchdog.mjs` 2091 行 | 瘦，不删 | 进程死活归 systemd；「agent 撞限流 / 卡在弹窗」systemd 看不出来，这部分留 |
-| `inbox-station.mjs` 1242 行 + 租约 | 先留，实测再定 | 服务器常开后中继是否仍需保活未实测 |
+| `inbox-station.mjs` 1242 行 + 租约 | 已删（#807） | 服务器实测（Contabo）无 inbox 进程、中继无需保活，整层删 |
 | 80 处 `windowsHide` + 6 个 powershell 依赖点 | 删 | Linux 上不存在；powershell 依赖：`lib/guard-keepalive.mjs`（`Get-CimInstance Win32_Process`）、`inbox-station.mjs`、`dao-check.mjs`、`lib/machine-path-check.mjs`、两个 cursor-agent shim |
 | 保活类 hook（SessionStart / UserPromptSubmit） | 删 | 保活不再靠人敲键盘触发 |
 | `quick-fix.mjs` 微通道 620 行 | 删 | 它是让细单变便宜的补贴，已决定回到大需求 |
@@ -139,7 +139,7 @@
 - [ ] 删 80 处 `windowsHide` 与 6 处 powershell 依赖
 - [ ] 删 `quick-fix.mjs` 微通道、判定行协议与 `judgment.mjs`
 - [ ] 开单改命令化（强制填三问，填不出不给建）
-- [ ] `inbox-station.mjs` 实测后再定去留
+- [x] `inbox-station.mjs` 服务器实测后已定：删（#807）
 - [ ] `dao-check` 25 项按服务器形态筛一遍
 - [ ] README 与 `NEW-MACHINE.md` 定位改窄
 - [ ] 拍板过夜闸：夜里的 automations 只做已过夜的单

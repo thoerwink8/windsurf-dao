@@ -410,7 +410,7 @@ export function makeLlm({
 // 适配器进程本身不持 GitHub 凭据——shell 出去的 gh 用本机登录态（#801 记录）。
 export function runGh(ghBin, args, { timeout = 60000 } = {}) {
   // 不 shell:true：Windows 上 cmd 会把带换行的 --body 拆开（#573 教训）
-  const r = spawnSync(ghBin, args, { encoding: 'utf8', timeout, windowsHide: true, shell: false });
+  const r = spawnSync(ghBin, args, { encoding: 'utf8', timeout, shell: false });
   if (r.error) return { ok: false, reason: `spawn 失败：${r.error.code || r.error.message}` };
   if (r.signal) return { ok: false, reason: `被信号打断：${r.signal}` };
   return { ok: r.status === 0, code: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };

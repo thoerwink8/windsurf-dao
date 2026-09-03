@@ -12,7 +12,6 @@ const fs = require('fs');
 const path = require('path');
 
 const LIB = path.resolve(__dirname, '..', 'scripts', 'lib', 'archive-exec.mjs');
-const INBOX = path.resolve(__dirname, '..', 'scripts', 'inbox-station.mjs');
 const REVIEWER = path.resolve(__dirname, '..', 'host', 'skills', 'dispatch', 'templates', 'reviewer-book.md');
 const LIB_LOAD = import('file://' + LIB.replace(/\\/g, '/'));
 
@@ -380,33 +379,10 @@ describe('archive-exec', () => {
     });
   });
 
-  it('⑥ relay 接了闸，审官协议未改', async (t) => {
-    const inboxSrc = fs.readFileSync(INBOX, 'utf8');
+  it('⑥ 审官协议仍是可归档通知，不自己 rm', async (t) => {
     const reviewerSrc = fs.readFileSync(REVIEWER, 'utf8');
-    await t.test('relay 调用 processArchiveNotices', () => {
-      assert.ok(/processArchiveNotices/.test(inboxSrc) && /archive-exec/.test(inboxSrc), 'relay 调用 processArchiveNotices');
-    });
     await t.test('审官任务书仍是可归档通知，不自己 rm', () => {
       assert.ok(/--subject "可归档：<PR号>"/.test(reviewerSrc) && /归档动作本身（worktree rm）由帅做/.test(reviewerSrc), '审官任务书仍是可归档通知，不自己 rm');
-    });
-    await t.test('可归档 → 信箱台 worktree-rm 必带 --force（未跟踪文件不挡删，#652）', () => {
-      assert.ok(/\'worktree-rm\',\r?\n\s+\'--worktree\',\r?\n\s+String\(selector\),\r?\n\s+\'--force\'/.test(inboxSrc), '可归档 → 信箱台 worktree-rm 必带 --force  →  ' + inboxSrc.match(/removeWorktreeLive\([\s\S]{0,220}/)?.[0] || '(未找到)');
-    });
-    await t.test('#665 relay 每轮跑 MERGED 扫描（可归档不是门）', () => {
-      assert.ok(/processMergedScan/.test(inboxSrc) && /runMergedScan/.test(inboxSrc) && /MERGED_SCAN_UNSCANNED/.test(inboxSrc), 'relay 每轮跑 MERGED 扫描');
-    });
-    await t.test('#826 生产 runMergedScan 必传 queryPrReviewsLive', () => {
-      assert.ok(/queryPrReviewsLive/.test(inboxSrc) && /queryPrReviews:\s*queryPrReviewsLive/.test(inboxSrc),
-        '生产接线必须把 queryPrReviewsLive 传进扫描  →  ' + (inboxSrc.match(/runMergedScanWith\(\{[\s\S]{0,420}/)?.[0] || '(未找到)'));
-      assert.ok(/function queryPrReviewsLive|export function queryPrReviewsLive/.test(inboxSrc)
-        && /--json', 'reviews'/.test(inboxSrc),
-        'queryPrReviewsLive 必须真查 reviews');
-    });
-    await t.test('#665 归档失败走 marshal GitHub 评论', () => {
-      assert.ok(/commentGithubLive/.test(inboxSrc) && /ghAs\('marshal'/.test(inboxSrc), '归档失败走 marshal GitHub 评论');
-    });
-    await t.test('#665 落后自停 + 镜像 boot', () => {
-      assert.ok(/haltIfStale/.test(inboxSrc) && /bootGuardOrHalt/.test(inboxSrc), '落后自停 + 镜像 boot');
     });
   });
 
@@ -601,8 +577,8 @@ describe('archive-exec', () => {
     });
   });
 
-  it('#826 生产 runMergedScan 接线：working/waiting + MERGED + APPROVED 必删；reviews 失败或无 APPROVED 必拒', async (t) => {
-    const Inbox = await import('file://' + INBOX.replace(/\\/g, '/'));
+  it('#826 MERGED + APPROVED 占用豁免走 archive-exec', async (t) => {
+    const S = await LIB_LOAD;
     const busy = [
       wt({ id: 'master', name: 'master', main: true }),
       wt({ id: 'p1', name: 'PR-#12 工人', pr: 12, agents: [{ state: 'working' }] }),
@@ -611,10 +587,9 @@ describe('archive-exec', () => {
       wt({ id: 'master', name: 'master', main: true }),
       wt({ id: 'p1', name: 'PR-#12 工人', pr: 12, agents: [{ state: 'waiting' }] }),
     ];
-
     const approvedIo = recorder();
     approvedIo.state.prQuery = { ok: true, state: 'MERGED' };
-    const approved = Inbox.runMergedScanWith({
+    const approved = S.processMergedScan({
       worktrees: busy,
       queryPrState: approvedIo.queryPrState.bind(approvedIo),
       queryPrReviews: () => ({ ok: true, reviews: [{ state: 'APPROVED' }] }),
@@ -624,10 +599,9 @@ describe('archive-exec', () => {
       assert.ok(approved.results[0].removed === true && approvedIo.calls.rm.join(',') === 'p1',
         '生产接线放行  →  ' + JSON.stringify(approved.results[0]));
     });
-
     const waitIo = recorder();
     waitIo.state.prQuery = { ok: true, state: 'MERGED' };
-    const waitOk = Inbox.runMergedScanWith({
+    const waitOk = S.processMergedScan({
       worktrees: waiting,
       queryPrState: waitIo.queryPrState.bind(waitIo),
       queryPrReviews: () => ({ ok: true, reviews: [{ state: 'APPROVE' }] }),
@@ -637,10 +611,9 @@ describe('archive-exec', () => {
       assert.ok(waitOk.results[0].removed === true && waitIo.calls.rm.join(',') === 'p1',
         'waiting 占用豁免  →  ' + JSON.stringify(waitOk.results[0]));
     });
-
     const failIo = recorder();
     failIo.state.prQuery = { ok: true, state: 'MERGED' };
-    const failed = Inbox.runMergedScanWith({
+    const failed = S.processMergedScan({
       worktrees: busy,
       queryPrState: failIo.queryPrState.bind(failIo),
       queryPrReviews: () => ({ ok: false, unscanned: true, error: 'gh 读 PR #12 reviews 失败' }),
@@ -650,10 +623,9 @@ describe('archive-exec', () => {
       assert.ok(failed.results[0].result === 'unscanned' && failIo.calls.rm.length === 0,
         '没查成不许当已 approve  →  ' + JSON.stringify(failed.results[0]));
     });
-
     const noneIo = recorder();
     noneIo.state.prQuery = { ok: true, state: 'MERGED' };
-    const none = Inbox.runMergedScanWith({
+    const none = S.processMergedScan({
       worktrees: busy,
       queryPrState: noneIo.queryPrState.bind(noneIo),
       queryPrReviews: () => ({ ok: true, reviews: [{ state: 'COMMENTED' }] }),
@@ -663,28 +635,27 @@ describe('archive-exec', () => {
       assert.ok(none.results[0].result === 'refused' && noneIo.calls.rm.length === 0 && /占用/.test(none.results[0].reason),
         '无 approve 仍占用  →  ' + JSON.stringify(none.results[0]));
     });
-
-    const missing = Inbox.runMergedScanWith({
+    const missing = S.processMergedScan({
       worktrees: busy,
       queryPrState: () => ({ ok: true, state: 'MERGED' }),
       removeWorktree: () => ({ ok: true }),
     });
-    await t.test('缺 queryPrReviews 当场 unscanned', () => {
-      assert.ok(missing.ok === false && missing.unscanned === true && /queryPrReviews/.test(missing.error),
-        '缺接线不许当已 approve  →  ' + JSON.stringify(missing));
+    await t.test('缺 queryPrReviews 占用中不删', () => {
+      assert.ok(missing.ok === true && missing.results[0].removed !== true,
+        '缺接线不许当已 approve  →  ' + JSON.stringify(missing.results[0]));
     });
-
-    const parsedFail = (await LIB_LOAD).parsePrReviewsOutput({ status: 1, stderr: 'HTTP 401' }, 12);
+    const parsedFail = S.parsePrReviewsOutput({ status: 1, stderr: 'HTTP 401' }, 12);
     await t.test('parsePrReviewsOutput 失败带 unscanned', () => {
       assert.ok(parsedFail.ok === false && parsedFail.unscanned === true, JSON.stringify(parsedFail));
     });
-    const parsedMiss = (await LIB_LOAD).parsePrReviewsOutput({ status: 0, stdout: '{"state":"MERGED"}' }, 12);
+    const parsedMiss = S.parsePrReviewsOutput({ status: 0, stdout: '{"state":"MERGED"}' }, 12);
     await t.test('成功但缺 reviews 数组也是没查成', () => {
       assert.ok(parsedMiss.ok === false && parsedMiss.unscanned === true && /缺 reviews/.test(parsedMiss.error), JSON.stringify(parsedMiss));
     });
-    const parsedOk = (await LIB_LOAD).parsePrReviewsOutput({ status: 0, stdout: '{"reviews":[{"state":"APPROVED"}]}' }, 12);
+    const parsedOk = S.parsePrReviewsOutput({ status: 0, stdout: '{"reviews":[{"state":"APPROVED"}]}' }, 12);
     await t.test('成功读到 reviews', () => {
       assert.ok(parsedOk.ok === true && parsedOk.reviews[0].state === 'APPROVED', JSON.stringify(parsedOk));
     });
   });
+
 });

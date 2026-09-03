@@ -7,7 +7,7 @@
 //   <id>.json      派工单本体（热路写完即不可变）
 //   <id>.running   执行体开工标记（pid + ts；结果落盘即删——还在 = 在跑或崩了）
 //   <id>.out.json  执行结果（emit 结果槽写；ok:true=已派 / ok:false=拒派或失败回滚）
-//   <id>.out.log   执行体 stdio（detached 没有屏面，同 inbox-station relay 的 .out.log）
+//   <id>.out.log   执行体 stdio（detached 没有屏面）
 //
 // 队列目录可被 DAO_DISPATCH_QUEUE_DIR 覆盖（测试隔真仓，同 LEDGER_EVENTS_DIR 的思路）。
 
@@ -95,9 +95,8 @@ export function readDispatchOrder(orderPath) {
 }
 
 /**
- * detached 拉起执行体（信箱台同款，2026-08-23 已验证能跑）：
-   * spawn detached + windowsHide + stdio 进 <id>.out.log（append）+ unref。
- * 父进程（dispatch 热路）退出后执行体照跑。
+ * detached 拉起执行体：spawn detached + stdio 进 <id>.out.log（append）+ unref。
+ * 父进程（dispatch 热路）退出后执行体照跑。#807：不再传 windowsHide。
  */
 export function spawnDispatchExecutor({ scriptPath, orderPath, logPath, cwd, spawnFn = spawn, env } = {}) {
   if (!scriptPath) return { ok: false, error: 'spawn 执行体没给 scriptPath' };
@@ -117,7 +116,6 @@ export function spawnDispatchExecutor({ scriptPath, orderPath, logPath, cwd, spa
       cwd: cwd || process.cwd(),
       env: env || process.env,
       detached: true,
-      windowsHide: true,
       stdio: ['ignore', fd == null ? 'ignore' : fd, fd == null ? 'ignore' : fd],
     });
   } catch (e) {

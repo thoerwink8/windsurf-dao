@@ -27,7 +27,7 @@
 | 删 | `.claude/settings.json` 的 SessionStart（拉守卫）与 UserPromptSubmit（盘面行+信箱台自愈）两个挂点 |
 | 移 | `docs/global-CLAUDE.md`「## 派工时」13 条 → dispatch skill 尾部收编（常驻注入面 -16 行 ≈ -23%） |
 | 留 | PreToolUse 派工闸（停派工期防手滑，零成本）；dispatch/dao-project/worker-brief skills；dao-check 的 SKIP 语义 |
-| 死缓 | scripts/watchdog.mjs、flow.mjs、inbox-station.mjs、guard-*、board-hook.mjs 代码与测试原样留仓，不跑 |
+| 死缓 | scripts/watchdog.mjs、flow.mjs、inbox-station.mjs、guard-*、board-hook.mjs 代码与测试原样留仓，不跑。（#807 后记：watchdog/flow/inbox-station/guard-* 已删；board-hook 与 cursor-context-hook 保留——只报不拦、零 GitHub，`dao.mjs next` 还在用） |
 
 本机 `~/.claude/CLAUDE.md` 已手动同步（顺带修掉 4 处历史漂移——全局约定没有自动下发机制，
 真相源在本仓 `docs/global-CLAUDE.md`，换机/改后手动放置，见 NEW-MACHINE §3）。

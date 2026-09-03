@@ -384,7 +384,7 @@ export function inspectCarrierProvenanceFixtures(root) {
 
 function gitMergeBase(cwd) {
   for (const ref of ['origin/master', 'master']) {
-    const r = spawnSync('git', ['merge-base', 'HEAD', ref], { encoding: 'utf8', cwd, windowsHide: true });
+    const r = spawnSync('git', ['merge-base', 'HEAD', ref], { encoding: 'utf8', cwd });
     if (r.status === 0 && String(r.stdout || '').trim()) return String(r.stdout).trim();
   }
   return null;
@@ -392,7 +392,7 @@ function gitMergeBase(cwd) {
 
 function gitShowFile(cwd, sha, rel) {
   const spec = `${sha}:${String(rel).replace(/\\/g, '/')}`;
-  const r = spawnSync('git', ['show', spec], { encoding: 'utf8', cwd, windowsHide: true });
+  const r = spawnSync('git', ['show', spec], { encoding: 'utf8', cwd });
   if (r.status === 0) return r.stdout;
   const err = String(r.stderr || r.stdout || '');
   if (/does not exist|exists on disk, but not in|not in the working tree|bad object/i.test(err)) return null;
@@ -431,13 +431,13 @@ export function inspectLiveVersionCarriers({ root, gitShow, mergeBaseSha } = {})
 /** merge-base..HEAD 里改过 rel 的提交（含是否被 tag 指到）。git 失败返回 {error}。 */
 function gitLogTouching(cwd, base, rel) {
   const path = String(rel).replace(/\\/g, '/');
-  const r = spawnSync('git', ['-C', cwd, 'log', `${base}..HEAD`, '--format=%H%x1f%s', '--', path], { encoding: 'utf8', windowsHide: true });
+  const r = spawnSync('git', ['-C', cwd, 'log', `${base}..HEAD`, '--format=%H%x1f%s', '--', path], { encoding: 'utf8' });
   if (r.status !== 0) return { error: String(r.stderr || r.stdout || `git log exit ${r.status}`).trim().slice(0, 160) };
   const lines = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const out = [];
   for (const line of lines) {
     const [sha, subject] = line.split('\x1f');
-    const t = spawnSync('git', ['-C', cwd, 'tag', '--points-at', sha], { encoding: 'utf8', windowsHide: true });
+    const t = spawnSync('git', ['-C', cwd, 'tag', '--points-at', sha], { encoding: 'utf8' });
     const tagged = t.status === 0 && String(t.stdout || '').trim().length > 0;
     out.push({ sha, subject: subject || '', tagged });
   }

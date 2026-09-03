@@ -7,7 +7,7 @@
 // interpretTuiIdleWait/tui-idle 等待）、Devin 拆步（planWorkerStart/usesSplitStart）、
 // 认账钟（DEVIN_WORKER_START_TIMEOUT_MS）、注入后开工验证（派工路的 finishWorkerInject）、
 // 同厂闸（审官不存在时查空气；真闸在 reviewer-create/attach/worker-done）、每单环境自检、
-// 同步看板（卡 comment 定界区 + master 全量重写）、gc 顺车（自动扫描留在 inbox-station ensure）、
+// 同步看板（卡 comment 定界区 + master 全量重写）、gc 顺车（已删）、
 // 热路全量 slate 打分（挪执行体，仅 --role 选型打；显式 --model 路由表序 + bans 门闩）、
 // 热路全量账本查重（换 .dispatch-index 增量读，也在执行体）。
 // 纯函数层：送字分类、dispatchId 找回、账本去重判定、派工单队列。不真起工人。
@@ -453,7 +453,7 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(bad.ok === false && bad.unscanned === true, '没给数组 = 没查成');
     });
 
-    await t.test('spawnDispatchExecutor：detached + windowsHide + stdio 进日志 + unref', () => {
+    await t.test('spawnDispatchExecutor：detached + stdio 进日志 + unref', () => {
       const calls = [];
       const fakeSpawn = (exe, argv, opts) => {
         calls.push({ exe, argv, opts });
@@ -469,7 +469,7 @@ describe('dispatch-launch（async-launch）', () => {
       assert.ok(calls.length === 1, 'spawnFn 调一次');
       const c = calls[0];
       assert.ok(c.argv.includes('dispatch-exec') && c.argv.includes('--order'), 'argv 带 dispatch-exec --order  →  ' + c.argv.join(' '));
-      assert.ok(c.opts.detached === true && c.opts.windowsHide === true, 'detached + windowsHide');
+      assert.ok(c.opts.detached === true && c.opts.windowsHide !== true, 'detached，不再传 windowsHide');
       assert.ok(Array.isArray(c.opts.stdio) && c.opts.stdio[1] !== 'ignore' && c.opts.stdio[2] !== 'ignore',
         'stdout/stderr 进日志 fd');
       assert.ok(fs.existsSync(logPath), '日志文件已开');

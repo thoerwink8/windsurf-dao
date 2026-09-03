@@ -16,8 +16,8 @@ describe('completion-signal', () => {
     const { checkCompletionSignal } = await CHECK_LOAD;
 
     const live = checkCompletionSignal({ root: REPO });
-    await t.test('本仓契约绿', () => {
-      assert.ok(!!live.green && !live.fail, '本仓契约绿  →  ' + JSON.stringify(live));
+    await t.test('本仓契约必须是绿（三处都在钉着同一句「完工」）', () => {
+      assert.ok(!!live.green && !live.fail, '本仓自身必须过完工信号契约  →  ' + JSON.stringify(live));
     });
 
     const empty = checkCompletionSignal({ root: path.join(REPO, 'tests', 'fixtures', 'no-such-root') });
@@ -38,14 +38,14 @@ describe('completion-signal', () => {
       assert.ok(!!mutated.fail && /对不上|已完成|完工/.test(mutated.fail.join(' ')), '把 soldier-book 的「完工」改成「已完成」→ 必须报红  →  ' + JSON.stringify(mutated));
     });
 
-    const flow = fs.readFileSync(path.join(REPO, 'scripts', 'flow.mjs'), 'utf8');
-    const flowBroken = flow.replace('完工信号：issue comment 首行命中「完工」', '完工信号：issue comment 首行命中「已完成」');
-    const flowMut = checkCompletionSignal({
+    const skill = fs.readFileSync(path.join(REPO, 'host', 'skills', 'dispatch', 'SKILL.md'), 'utf8');
+    const skillBroken = skill.replace('交棒发到 **issue comment**', '交棒发到 **编排层 worker_done**');
+    const skillMut = checkCompletionSignal({
       root: REPO,
-      files: { 'scripts/flow.mjs': flowBroken },
+      files: { 'host/skills/dispatch/SKILL.md': skillBroken },
     });
-    await t.test('改坏 flow.mjs 契约注释 → 必须报红', () => {
-      assert.ok(!!flowMut.fail, '改坏 flow.mjs 契约注释 → 必须报红  →  ' + JSON.stringify(flowMut));
+    await t.test('改坏 dispatch skill 契约注释 → 必须报红', () => {
+      assert.ok(!!skillMut.fail, '改坏 dispatch skill 契约注释 → 必须报红  →  ' + JSON.stringify(skillMut));
     });
   });
 });

@@ -31,14 +31,8 @@ export const SKIP_RELS = new Set([
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot|zip|7z|gz|exe|dll|pdb|bin|wasm)$/i;
 
 const B_TEMPLATES = [
-  'host/machine/shims/grok.cmd',
   'host/machine/shims/grok',
-  'host/machine/shims/cursor-agent.cmd',
-  'host/machine/shims/cursor-agent',
-  'host/machine/shims/agent.cmd',
   'host/machine/shims/agent',
-  'host/machine/hooks/orca-cursor-hook.cmd',
-  'host/machine/hooks/orca-cursor.hooks.json',
 ];
 
 /** 把各种家目录写法收成同一把钥匙。扫描器和目录解析共用这一步，但不共用「去哪找字」。 */
@@ -311,29 +305,7 @@ function checkBTemplates(root, files) {
   const problems = [];
   for (const rel of B_TEMPLATES) {
     const got = readRel(root || '', rel, files);
-    if (got.missing || got.text == null) {
-      problems.push(`缺 B 模板 ${rel}`);
-      continue;
-    }
-    if (/hooks\/orca-cursor\.hooks\.json$/.test(rel)) {
-      const commands = [...got.text.matchAll(/"command"\s*:\s*"([^"]+)"/g)].map(x => x[1]);
-      if (!commands.length) {
-        problems.push(`${rel} 没有 command`);
-      } else {
-        if (commands.some(c => /EncodedCommand/i.test(c))) {
-          problems.push(`${rel} 的 command 禁止 EncodedCommand`);
-        }
-        if (!commands.every(c => /conhost/i.test(c) && /--headless/i.test(c))) {
-          problems.push(`${rel} 的 command 必须 conhost --headless`);
-        }
-      }
-    }
-    if (/hooks\/orca-cursor-hook\.cmd$/.test(rel) && /powershell[\s\S]{0,80}EncodedCommand/i.test(got.text)) {
-      problems.push(`${rel} 禁止 EncodedCommand`);
-    }
-    if (/\.cmd$/i.test(rel)) {
-      problems.push(...cmdShimVisibleWindowProblems(rel, got.text));
-    }
+    if (got.missing || got.text == null) problems.push(`缺 B 模板 ${rel}`);
   }
   return problems;
 }
@@ -415,7 +387,7 @@ export function checkMachinePaths({ root, files, tracked } = {}) {
     return {
       fail: [
         `仓外路径闸红 ${all.length} 处`,
-        '仓里出现的 ~/ %USERPROFILE% %APPDATA% %LOCALAPPDATA% $HOME os.homedir() 必须进 INDEX 或带 why 的 ignore；B 模板必须在，Orca hook 必须 conhost --headless、禁止 EncodedCommand',
+        '仓里出现的 ~/ $HOME os.homedir() 必须进 INDEX 或带 why 的 ignore；B 模板（POSIX shim）必须在',
         all.slice(0, 8).join('；'),
       ],
       kind: 'red',

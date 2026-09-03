@@ -10,13 +10,6 @@ import { join } from 'node:path';
 import { allChecksGreen } from './close-issue.mjs';
 import { inspectReadyQueue } from './ready-queue-check.mjs';
 import { planRunGc, isLiveDispatch } from './run-lifecycle.mjs';
-import {
-  activeRunIds,
-  relevantMessages,
-  readLoggedIds,
-  splitMessages,
-  DEFAULT_LOG_REL,
-} from '../inbox-station.mjs';
 
 export const SENTINEL = 'AGENT_LOOP_TICK_PANMIAN';
 export const DEFAULT_REPO = 'thoerwink8/windsurf-dao';
@@ -175,7 +168,26 @@ function parseWorkerAgeMinutes(worker) {
   return (Date.now() - ms) / 60000;
 }
 
-export function collectOrcaBoard({ runOrca, root = process.cwd(), logRel = DEFAULT_LOG_REL } = {}) {
+function activeRunIds({ runs, workers, worktrees, terminals } = {}) {
+  const ids = new Set();
+  const plan = planRunGc({ runs, workers, worktrees });
+  if (plan.ok) {
+    for (const r of plan.keep) {
+      if (r && r.id) ids.add(r.id);
+    }
+  }
+  if (Array.isArray(terminals)) {
+    const onBoard = new Set(terminals.map((t) => t && t.handle).filter(Boolean));
+    for (const r of Array.isArray(runs) ? runs : []) {
+      if (!r || !r.id) continue;
+      if (r.legacy) continue;
+      if (r.coordinator_handle && onBoard.has(r.coordinator_handle)) ids.add(r.id);
+    }
+  }
+  return ids;
+}
+
+export function collectOrcaBoard({ runOrca } = {}) {
   if (typeof runOrca !== 'function') {
     return { ok: false, error: 'collectOrcaBoard 缺 runOrca——没扫成' };
   }
@@ -207,9 +219,11 @@ export function collectOrcaBoard({ runOrca, root = process.cwd(), logRel = DEFAU
   if (!plan.ok) return { ok: false, error: plan.error || 'run-gc 计划没算成——没扫成' };
 
   const active = activeRunIds({ runs, workers, worktrees, terminals });
-  const seen = readLoggedIds(join(root, logRel));
-  const relevant = relevantMessages(messages, active, seen);
-  const { loggable } = splitMessages(relevant);
+  const pendingInboxCount = messages.filter((m) => {
+    if (!m || !m.id) return false;
+    if (String(m.type || '').toLowerCase() === 'heartbeat') return false;
+    return m.run_id && active.has(m.run_id);
+  }).length;
 
   return {
     ok: true,
@@ -219,7 +233,7 @@ export function collectOrcaBoard({ runOrca, root = process.cwd(), logRel = DEFAU
     terminals,
     messages,
     plan,
-    pendingInboxCount: loggable.length,
+    pendingInboxCount,
     activeRunCount: active.size,
   };
 }

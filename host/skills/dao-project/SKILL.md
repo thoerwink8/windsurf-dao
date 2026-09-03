@@ -93,7 +93,7 @@ description: 把一批相关的活组织成「项」来派——项卡 + 多个 
 
 **输入 = 判绿了的 PR 队列**，所以只要有 PR 判绿它就有活，不会像"审整体"那样大半时间空转。
 
-**边界**：合并前仍要核对四条（审官判定行绿 / CI 全绿 / merge-policy / `review.commit_id == headRefOid`）。四条任一不过就打回，不自行放行。
+**边界**：合并前仍要核对四条（审官 APPROVED / CI 全绿 / merge-policy / `review.commit_id == headRefOid`）。四条任一不过就打回，不自行放行。
 
 ## 五、归档
 

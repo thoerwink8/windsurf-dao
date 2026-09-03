@@ -59,11 +59,38 @@ describe('decide：自己做（确定性）', () => {
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 910: { bodies: ['判定：绿，可合并'] } } },
+      prReviews: { scanned: true, byPr: { 910: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 1);
     assert.equal(byKind(r, 'land').length, 1, '合并后调 land（幂等）');
     assert.ok(byKind(r, 'notify-hub').some((a) => a.moment === 'merged'));
+  });
+
+  it('真 APPROVED + 白话正文（无判定行）→ merge，不误报 approved-without-review（#857 红 1 判别）', async () => {
+    const { decide } = await CORE;
+    const pr = {
+      number: 912, title: 'Y', isDraft: false, reviewDecision: 'APPROVED', mergeable: 'MERGEABLE',
+      statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], body: '',
+    };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      // reviewer-book #807 起不写「判定：」行——只看 bodies 会把这条判成 COMMENTED
+      prReviews: { scanned: true, byPr: { 912: { reviews: [{ state: 'APPROVED', body: '看过 diff，逻辑对，可合并' }], bodies: ['看过 diff，逻辑对，可合并'] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 1, '真 approve 白话正文必须走 merge');
+    assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'approved-without-review'), '不许误报 approved-without-review');
+  });
+
+  it('两条 CHANGES_REQUESTED + 白话正文（无判定行）→ escalate(two-red)，不是 noop（#857 红 1 判别）', async () => {
+    const { decide } = await CORE;
+    const pr = { number: 913, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
+    const r = decide(baseSituation({
+      github: { scanned: true, issues: [], prs: [pr] },
+      prReviews: { scanned: true, byPr: { 913: { reviews: [{ state: 'CHANGES_REQUESTED', body: '这里不对' }, { state: 'CHANGES_REQUESTED', body: '还是不对' }], bodies: ['这里不对', '还是不对'] } } },
+    }));
+    assert.equal(byKind(r, 'merge').length, 0);
+    assert.equal(byKind(r, 'wake-brain').length, 0, '两轮红不唤大脑');
+    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'two-red'), '两轮真 request-changes 必须 two-red 报帅');
   });
 
   it('判绿但 CI 红 → 不 merge，报帅 + 卡壳回流', async () => {
@@ -74,7 +101,7 @@ describe('decide：自己做（确定性）', () => {
     };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 911: { bodies: ['判定：绿，可合并'] } } },
+      prReviews: { scanned: true, byPr: { 911: { reviews: [{ state: 'APPROVED', body: '看过 diff，可合并' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0, 'CI 红绝不合');
     assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'approved-but-ci-red'));
@@ -105,7 +132,7 @@ describe('decide：报帅停手（永不自动）', () => {
     const pr = { number: 930, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 930: { bodies: ['判定：红 3 项', '复核结论：红 2 项'] } } },
+      prReviews: { scanned: true, byPr: { 930: { reviews: [{ state: 'CHANGES_REQUESTED', body: '三处要改' }, { state: 'CHANGES_REQUESTED', body: '还有两处' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0, '两轮红绝不合');
     assert.equal(byKind(r, 'wake-brain').length, 0, '两轮红不再唤大脑，直接报帅');
@@ -113,15 +140,15 @@ describe('decide：报帅停手（永不自动）', () => {
     assert.ok(e.some((a) => a.reason === 'two-red'), '要有 two-red 报帅');
   });
 
-  it('判定行歪了（近义变体）→ escalate malformed，绝不当判绿/判红', async () => {
+  it('COMMENT 近义变体不算判别态，不 escalate malformed', async () => {
     const { decide } = await CORE;
     const pr = { number: 931, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 931: { bodies: ['审官判定：绿'] } } }, // 行首不规范 = malformed
+      prReviews: { scanned: true, byPr: { 931: { reviews: [{ state: 'COMMENTED', body: '看着还行' }] } } },
     }));
     assert.equal(byKind(r, 'merge').length, 0);
-    assert.ok(byKind(r, 'escalate').some((a) => a.reason === 'malformed-judgment'));
+    assert.ok(!byKind(r, 'escalate').some((a) => a.reason === 'malformed-judgment'));
   });
 
   it('同单已唤大脑 WAKE_LIMIT 次仍没闭环 → 转报帅，不再唤', async () => {
@@ -129,7 +156,7 @@ describe('decide：报帅停手（永不自动）', () => {
     const pr = { number: 932, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 932: { bodies: ['判定：红 1 项'] } } },
+      prReviews: { scanned: true, byPr: { 932: { reviews: [{ state: 'CHANGES_REQUESTED', body: '一处要改' }] } } },
       wakeCounts: { 'pr:932': WAKE_LIMIT },
     }));
     assert.equal(byKind(r, 'wake-brain').length, 0);
@@ -143,7 +170,7 @@ describe('decide：唤大脑（要判断）', () => {
     const pr = { number: 940, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 940: { bodies: ['判定：红 2 项'] } } },
+      prReviews: { scanned: true, byPr: { 940: { reviews: [{ state: 'CHANGES_REQUESTED', body: '两处要改' }] } } },
     }));
     const w = byKind(r, 'wake-brain');
     assert.equal(w.length, 1, '一轮红要唤大脑');
@@ -212,7 +239,7 @@ describe('decide：没查成 ≠ 空态势（红样本 + 入口总闸 fail-close
     const pr = { number: 2, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' };
     const r = decide(baseSituation({
       github: { scanned: true, issues: [], prs: [pr] },
-      prReviews: { scanned: true, byPr: { 2: { bodies: ['判定：红 1 项'] } } },
+      prReviews: { scanned: true, byPr: { 2: { reviews: [{ state: 'CHANGES_REQUESTED', body: '一处要改' }] } } },
       stall: { scanned: false, error: '撞死指纹读不到' },
     }));
     assert.equal(byKind(r, 'wake-brain').length, 0, 'stall 没查成时 wake-brain 一律不产');
@@ -264,9 +291,9 @@ describe('decide：自动路径边界（审官建议）', () => {
           { number: 23, isDraft: false, reviewDecision: 'CHANGES_REQUESTED', mergeable: 'MERGEABLE', body: '' },
         ] },
       prReviews: { scanned: true, byPr: {
-        20: { bodies: ['判定：绿，可合并'] },
-        22: { bodies: ['判定：红 1 项'] },
-        23: { bodies: ['判定：红 3 项', '复核结论：红 2 项'] },
+        20: { reviews: [{ state: 'APPROVED', body: '可以合' }] },
+        22: { reviews: [{ state: 'CHANGES_REQUESTED', body: '一处要改' }] },
+        23: { reviews: [{ state: 'CHANGES_REQUESTED', body: '三处' }, { state: 'CHANGES_REQUESTED', body: '两处' }] },
       } },
       reviewPending: { scanned: true, items: [{ pr: 30, reviewer: 'gpt-5.6-sol', worker: 'wt' }] },
       stall: { scanned: true, strikes: { term_z: { strikes: 2 } } },
@@ -409,6 +436,6 @@ describe('辅助纯函数', () => {
     assert.equal(analyzeReviews(null).scanned, false);
     assert.equal(analyzeReviews(['判定：红 3 项', '复核结论：红 1 项']).redRounds, 2);
     assert.equal(analyzeReviews(['判定：绿，可合并']).green, true);
-    assert.equal(analyzeReviews(['审官判定：绿']).malformed, true, '近义变体 = 歪了');
+    assert.equal(analyzeReviews(['审官判定：绿']).green, false, '近义变体不算绿');
   });
 });

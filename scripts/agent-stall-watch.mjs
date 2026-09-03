@@ -55,7 +55,6 @@ function spawnJson(cmd, args, { timeout = 30000 } = {}) {
   const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     timeout,
-    windowsHide: true,
     maxBuffer: 32 << 20,
   });
   if (r.error) return { ok: false, error: `spawn 失败：${r.error.code || r.error.message}` };
@@ -116,14 +115,14 @@ function saveState(path, state) {
 function say(text) {
   const hook = process.env.AGENT_STALL_SAY;
   if (hook) {
-    const r = spawnSync(process.execPath, [hook, text], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    const r = spawnSync(process.execPath, [hook, text], { encoding: 'utf8', timeout: 15000 });
     if (r.status !== 0) console.error(`报帅钩子失败：${String(r.stderr || r.status).slice(0, 160)}`);
     console.log(text);
     return;
   }
   const hub = '/home/orca/bin/hub-say';
   if (existsSync(hub)) {
-    const r = spawnSync(hub, [text], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+    const r = spawnSync(hub, [text], { encoding: 'utf8', timeout: 20000 });
     if (r.error || r.status !== 0) {
       console.error(`hub-say 失败：${String(r.error?.message || r.stderr || r.status).slice(0, 200)}`);
     }
@@ -198,7 +197,6 @@ function switchReviewer({ pr, reviewer, parentWorktree, dryRun }) {
     encoding: 'utf8',
     cwd: REPO_ROOT,
     timeout: 180000,
-    windowsHide: true,
   });
   const ok = !r.error && r.status === 0;
   const err = String(r.error?.message || r.stderr || `exit ${r.status}`).trim().slice(0, 200);
@@ -208,7 +206,7 @@ function switchReviewer({ pr, reviewer, parentWorktree, dryRun }) {
 function warnPadStillThere() {
   const bits = [];
   if (existsSync(PAD_SCRIPT)) bits.push(PAD_SCRIPT);
-  const r = spawnSync('systemctl', ['list-timers', '--all'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+  const r = spawnSync('systemctl', ['list-timers', '--all'], { encoding: 'utf8', timeout: 8000 });
   if (!r.error && String(r.stdout || '').includes(PAD_TIMER)) bits.push(PAD_TIMER);
   if (bits.length) {
     console.error(`影子制度：垫片还在（${bits.join('；')}）。正式探测已接管，落地即删。`);
