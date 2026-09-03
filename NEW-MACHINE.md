@@ -373,6 +373,19 @@ hourly + `--precheck`（`land.mjs --has-work`，没活记 skipped）+ `--workspa
   3. **Orca 终端不吃 login shell 的 `~/.profile` / `~/.bashrc`**。人开的壳要自己补 PATH；agent 靠上一条 drop-in。
 - **#802**：`server-check` 第⑬项探本构建是否认路由表 `start=agent` 的 `--agent id`（读 AppImage 里的 `tui-agent-display-names.js`，不 import 仓内 launch 解析）。扫不到目录 = 没查成（exit 2），不是绿。id 在目录里仍可能落成裸 shell——那是派工读屏回退 `--command` 的事，不是这一项。第⑫项是飞书适配器（#801）。
 
+### 发布列车 timer（#800，服务器上装）
+
+合并只进列车，版本号只由发布动作产生：到周日或攒够 `docs/release-policy.json` 的 `version.train.min_merged` 个合并就切一版（tag + GitHub Release + CHANGELOG 段 + 总控群一句）。装一次幂等 timer（每天一次跑 `should-run && release`，连跑不重复）：
+
+```bash
+cd /home/orca/windsurf-dao
+node scripts/release-train.mjs plan            # 先看现状：档位/下一个版本号，什么都不写
+sudo node scripts/release-train.mjs install    # 写 /etc/systemd/system/release-train.{service,timer} + enable --now
+systemctl list-timers release-train.timer      # 在册且 enabled
+```
+
+真发版留给合并后 timer 首次触发；人工只该跑到 `plan` 与 `release --dry-run`（别在真仓手打 tag / 建 Release，会污染版本历史）。触发阈值/发布日/档位表都在 `docs/release-policy.json`，改动走 PR。
+
 ### 搬过去之后本仓的红项变化（实测）
 
 orca 一进 PATH，AGENTS.md 记的那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。

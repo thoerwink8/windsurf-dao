@@ -10,7 +10,7 @@
   "version": {
     "scheme": "semver",
     "bump_by_commit_type": { "fix": "patch", "docs": "patch", "chore": "patch", "refactor": "patch", "perf": "patch", "feat": "minor", "feat!": "major", "BREAKING CHANGE": "major" },
-    "train": { "min_merged": 3, "max_wait_h": 24, "cut_when": "min_merged 达到 或 max_wait_h 到期，取先到者" }
+    "train": { "min_merged": 5, "cadence": "weekly", "weekday": "sunday", "cut_when": "攒够 min_merged 个合并 或 到 weekday（每周一版）提前发，取先到者（#800 发布列车定形，替换 #817 的 max_wait_h：阈值防积压、定时防遗忘）" }
   },
   "rollback": {
     "strategy": "回到上一个发布 tag（脚本仓 revert 合并提交；服务器配置重跑上一版部署脚本；桌面程序回发上一版安装包）",

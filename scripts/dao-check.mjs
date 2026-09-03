@@ -62,9 +62,12 @@
 // ㉖ 孤儿测试闸（2026-08-22 Q5 拍板）：test 引用的仓内目标不存在 = 机制删了测试没同删；
 //    退役靠判断不靠 CI 自动删，CI 只拦孤儿；红/绿/空样本各一验判别力；0 个测试 = 没查成
 //    红/绿/空样本各一验判别力；0 个样本 = 没查成
-// ㉗ 版本号载体闸（#787）：载体存在时变化必须合法、不倒退；不判该不该 bump。
+// ㉗ 版本号载体闸（#787，#800 加溯源）：载体存在时变化必须合法、不倒退；不判该不该 bump。
 //    检查器自持 semver，不 import bump.mjs；红/绿/空（无载体=SKIP 不是绿）各一验判别力；
-//    无载体 live SKIP；git 探头失败 = 没查成
+//    无载体 live SKIP；git 探头失败 = 没查成。
+//    溯源（#800 发布列车）：合并只进列车，版本号只由发布动作产生——载体的任何变化只允许
+//    出现在 release: 前缀提交 / 打了 tag 的提交上；非发布提交动了版本号 = 红（新口径的「乱 bump」）。
+//    夹具 nonrelease-red/release-ok/unchanged-skip 各一；本仓无载体，live 溯源随 ㉗ SKIP。
 // ㉘ 飞书群有效性（#813）：仓内 host/machine/feishu-groups.json 是占位模板（缺=没查成）；
 //    live 优先读 ~/.mirasim/keys/feishu-groups.json，用 lark-cli im chats get --as bot
 //    逐个确认还在；查不到/已解散报红并写出群名；全都在为绿；无实机映射 / 无 lark-cli /
@@ -109,7 +112,7 @@ import {
   inspectOrphanTests, inspectOrphanTestFixtures,
 } from './lib/orphan-test-check.mjs';
 import {
-  inspectVersionCarrierFixtures, inspectLiveAt,
+  inspectVersionCarrierFixtures, inspectLiveAt, inspectCarrierProvenanceFixtures,
 } from './lib/version-carrier-check.mjs';
 import {
   inspectFeishuGroupsFixtures, checkFeishuGroups,
@@ -1449,6 +1452,7 @@ checkNoReviewerRecreateLive();
 checkOrphanTestSamples();
 checkOrphanTestLive();
 checkVersionCarrierSamples();
+checkVersionCarrierProvenanceSamples();
 checkVersionCarrierLive();
 checkFeishuGroupsSamples();
 checkFeishuGroupsLive();
@@ -1530,6 +1534,19 @@ function checkVersionCarrierSamples() {
     return;
   }
   green(`版本号载体闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力；空=SKIP）`);
+}
+
+function checkVersionCarrierProvenanceSamples() {
+  const r = inspectCarrierProvenanceFixtures(join(ROOT, 'tests', 'fixtures', 'version-carrier-provenance'));
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '版本号载体溯源样本没查成' : '版本号载体溯源样本对不上',
+      '恢复 tests/fixtures/version-carrier-provenance/{nonrelease-red,release-ok,unchanged-skip}：非发布提交动版本号必须红、发布提交/tag 上动绿、未变 skip（#800 发布列车）',
+      r.error || '',
+    );
+    return;
+  }
+  green(`版本号载体溯源样本红/绿/skip 各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.skip}（非发布提交动版本号被拦）`);
 }
 
 function checkVersionCarrierLive() {

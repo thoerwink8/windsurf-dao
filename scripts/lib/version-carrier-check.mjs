@@ -277,6 +277,111 @@ export function inspectVersionCarrierFixtures(root) {
   return { ok: true, unscanned: false, kinds };
 }
 
+// ── 溯源（#800 发布列车）：新规则下「乱 bump」= 在非发布提交上动版本号 ──────────
+// 合并只进列车，版本号只由发布动作产生。载体真变了，改动它的每个提交都必须是
+// release 提交（release: 前缀）或被 tag 指到，否则红。老的「不倒退/合法」校验照旧。
+
+/** 提交是不是发布提交：剥掉开头的宿主标 [cc] 等，核心以 release: / release(scope): 开头。 */
+export function isReleaseCommit(subject) {
+  const core = String(subject ?? '').trim().replace(/^(?:\[[^\]]*\]\s*)+/, '');
+  return /^release[:(]/i.test(core);
+}
+
+/**
+ * 载体从 oldRaw 变到 newRaw：改动它的提交必须全是发布提交或带 tag。
+ * changingCommits: [{subject, tagged}]，merge-base..HEAD 里改过该载体的提交。
+ *   null/undefined = 没查成（载体变了却拿不到改动提交，不当没问题）。
+ * 载体没变 = skip（正常提交不该动版本号，这是常态）。
+ */
+export function inspectCarrierProvenance({ oldRaw, newRaw, changingCommits } = {}) {
+  const changed = String(oldRaw ?? '') !== String(newRaw ?? '');
+  if (!changed) return { ok: true, skip: true, unscanned: false, reason: '载体未变' };
+  if (changingCommits == null) {
+    return { ok: false, skip: false, unscanned: true, error: '载体变了但没给改动提交清单（没查成）' };
+  }
+  const list = Array.isArray(changingCommits) ? changingCommits : [];
+  const offenders = list.filter((c) => c && !c.tagged && !isReleaseCommit(c.subject));
+  if (offenders.length) {
+    return {
+      ok: false,
+      skip: false,
+      unscanned: false,
+      problems: offenders.map((c) => `非发布提交动了版本号：${String(c.subject || '').slice(0, 80)}`),
+    };
+  }
+  return { ok: true, skip: false, unscanned: false, scanned: list.length };
+}
+
+/** 溯源夹具单目录：从 VERSION/base/VERSION 取 old→new，从 commits.json 取改动提交。 */
+export function inspectProvenanceDir(dir) {
+  if (!dir || !existsSync(dir)) return { ok: false, skip: false, unscanned: true, error: `目录不在：${dir}` };
+  const cur = loadCarriers(dir);
+  if (cur.length === 0) return { ok: false, skip: false, unscanned: true, error: '夹具无载体' };
+  const one = cur[0];
+  const newExtracted = extractVersion(one.text, one.kind);
+  const newRaw = newExtracted && typeof newExtracted === 'object' ? null : newExtracted;
+  const baseDir = join(dir, 'base');
+  let oldRaw = null;
+  if (existsSync(baseDir)) {
+    const prev = loadCarriers(baseDir).find((p) => p.rel === one.rel);
+    if (prev) {
+      const oldExtracted = extractVersion(prev.text, prev.kind);
+      oldRaw = oldExtracted && typeof oldExtracted === 'object' ? null : oldExtracted;
+    }
+  }
+  const cjson = join(dir, 'commits.json');
+  let commits = null;
+  if (existsSync(cjson)) {
+    try {
+      commits = JSON.parse(readFileSync(cjson, 'utf8'));
+    } catch {
+      commits = null;
+    }
+  }
+  return inspectCarrierProvenance({ oldRaw, newRaw, changingCommits: commits });
+}
+
+/**
+ * 溯源夹具判别力（三态）：
+ *   nonrelease-red —— 载体前进但被非发布提交改动 → 红
+ *   release-ok     —— 载体前进且改动全在发布提交/tag 上 → 绿
+ *   unchanged-skip —— 载体未变 → skip（正常提交不动版本号）
+ */
+export function inspectCarrierProvenanceFixtures(root) {
+  if (!root) return { ok: false, unscanned: true, error: '没给样本根目录' };
+  if (!existsSync(root)) return { ok: false, unscanned: true, error: `样本目录不在：${root}` };
+  const kinds = { red: 0, ok: 0, skip: 0 };
+  const problems = [];
+  const specs = [
+    ['nonrelease-red', 'red'],
+    ['release-ok', 'ok'],
+    ['unchanged-skip', 'skip'],
+  ];
+  for (const [name, expect] of specs) {
+    const dir = join(root, name);
+    if (!existsSync(dir)) {
+      problems.push(`缺 ${name}/`);
+      continue;
+    }
+    const r = inspectProvenanceDir(dir);
+    if (expect === 'red') {
+      if (r.unscanned || r.skip || r.ok) problems.push(`${name}/ 该红但判成 ${JSON.stringify({ ok: r.ok, skip: r.skip, unscanned: r.unscanned })}`);
+      else kinds.red += 1;
+    } else if (expect === 'ok') {
+      if (r.unscanned || r.skip || !r.ok) problems.push(`${name}/ 该绿但判成 ${JSON.stringify({ ok: r.ok, skip: r.skip, unscanned: r.unscanned, problems: r.problems })}`);
+      else kinds.ok += 1;
+    } else {
+      if (r.unscanned || !r.skip) problems.push(`${name}/ 该 skip（未变）但判成 ${JSON.stringify({ ok: r.ok, skip: r.skip, unscanned: r.unscanned })}`);
+      else kinds.skip += 1;
+    }
+  }
+  if (kinds.red === 0 || kinds.ok === 0 || kinds.skip === 0) {
+    return { ok: false, unscanned: true, error: `样本种类不够 red=${kinds.red} ok=${kinds.ok} skip=${kinds.skip}`, kinds, problems };
+  }
+  if (problems.length) return { ok: false, unscanned: false, error: problems[0], kinds, problems };
+  return { ok: true, unscanned: false, kinds };
+}
+
 function gitMergeBase(cwd) {
   for (const ref of ['origin/master', 'master']) {
     const r = spawnSync('git', ['merge-base', 'HEAD', ref], { encoding: 'utf8', cwd, windowsHide: true });
@@ -323,10 +428,50 @@ export function inspectLiveVersionCarriers({ root, gitShow, mergeBaseSha } = {})
   return inspectCarriers({ current, previous });
 }
 
+/** merge-base..HEAD 里改过 rel 的提交（含是否被 tag 指到）。git 失败返回 {error}。 */
+function gitLogTouching(cwd, base, rel) {
+  const path = String(rel).replace(/\\/g, '/');
+  const r = spawnSync('git', ['-C', cwd, 'log', `${base}..HEAD`, '--format=%H%x1f%s', '--', path], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) return { error: String(r.stderr || r.stdout || `git log exit ${r.status}`).trim().slice(0, 160) };
+  const lines = String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  for (const line of lines) {
+    const [sha, subject] = line.split('\x1f');
+    const t = spawnSync('git', ['-C', cwd, 'tag', '--points-at', sha], { encoding: 'utf8', windowsHide: true });
+    const tagged = t.status === 0 && String(t.stdout || '').trim().length > 0;
+    out.push({ sha, subject: subject || '', tagged });
+  }
+  return out;
+}
+
 export function inspectLiveAt(root) {
-  return inspectLiveVersionCarriers({
+  const base = inspectLiveVersionCarriers({
     root,
     mergeBaseSha: () => gitMergeBase(root),
     gitShow: (sha, rel) => gitShowFile(root, sha, rel),
   });
+  // 无载体 / 没查成 / 已经红了：溯源不再叠加，直接回。
+  if (base.skip || base.unscanned || !base.ok) return base;
+  // 载体在且合法：再核溯源——载体的任何变化只允许出现在发布提交/tag 上。
+  const mb = gitMergeBase(root);
+  if (!mb) return { ok: false, skip: false, unscanned: true, error: '溯源 merge-base 没查成' };
+  for (const c of loadCarriers(root)) {
+    const oldText = gitShowFile(root, mb, c.rel);
+    if (oldText && typeof oldText === 'object' && oldText.error) {
+      return { ok: false, skip: false, unscanned: true, error: `溯源 git show ${c.rel} 失败：${oldText.error}` };
+    }
+    const oldRaw = typeof oldText === 'string' ? extractVersion(oldText, c.kind) : null;
+    const newRaw = extractVersion(c.text, c.kind);
+    const oldStr = oldRaw && typeof oldRaw === 'object' ? null : oldRaw;
+    const newStr = newRaw && typeof newRaw === 'object' ? null : newRaw;
+    if (String(oldStr ?? '') === String(newStr ?? '')) continue;
+    const commits = gitLogTouching(root, mb, c.rel);
+    if (commits && typeof commits === 'object' && commits.error) {
+      return { ok: false, skip: false, unscanned: true, error: `溯源 git log ${c.rel} 失败：${commits.error}` };
+    }
+    const prov = inspectCarrierProvenance({ oldRaw: oldStr, newRaw: newStr, changingCommits: commits });
+    if (prov.unscanned) return { ok: false, skip: false, unscanned: true, error: `${c.rel}: ${prov.error}` };
+    if (!prov.ok) return { ok: false, skip: false, unscanned: false, problems: (prov.problems || []).map((p) => `${c.rel}: ${p}`) };
+  }
+  return base;
 }
